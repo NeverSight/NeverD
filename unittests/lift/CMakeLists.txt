@@ -2508,6 +2508,7 @@ set(X86_64_TEST_SOURCES
   x86_64/test_debug_records.c
   x86_64/test_debug_params.c
   x86_64/test_jumptable_enhanced.c
+  x86_64/test_jumptable_recursive.c
   x86_64/test_jumptable_inclusive_postload_clobber.s
   x86_64/test_jumptable_inclusive_postload_unrelated.s
   x86_64/test_jumptable_inclusive_preload_alias.s
@@ -2848,6 +2849,9 @@ foreach(src ${X86_64_TEST_SOURCES})
     # by a spill/reload relay (the shared multi-site dispatch the const-base
     # absolute resolver recovers); -O1 would inline the load into the branch.
     set(extra_flags -O0)
+  elseif(src MATCHES "test_jumptable_recursive")
+    # A position-independent table, whose offsets carry no relocation.
+    set(extra_flags -O1 -fPIC)
   elseif(src MATCHES "test_switch|test_jumptable")
     set(extra_flags -O1)
   elseif(src MATCHES "test_bmi")

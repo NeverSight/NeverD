@@ -40,6 +40,7 @@
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/MachO/DarwinRuntimeCalls.h"
 #include "neverd/loader/StringLiteralSymbols.h"
+#include "neverd/loader/SymbolDecoration.h"
 
 #include "llvm/ADT/APFloat.h"
 #include "llvm/ADT/StringExtras.h"
@@ -277,6 +278,8 @@ void HighCWriter::prepareFunctionIdentifiers(
   FunctionIdentifiersBySourceName.clear();
   ExternalFunctionIdentifiers.clear();
   ExternalCallSources.clear();
+  StdcallImportPops = Opts.Image ? c_library::stdcallImportPops(*Opts.Image)
+                                 : c_library::ImportPops();
   ExternalSourceIdentifiers.clear();
   DefinedFuncs.clear();
   DefinedFunctionsByIdentifier.clear();
@@ -2155,12 +2158,22 @@ void HighCWriter::writeForwardDecls(const std::vector<HighFunc> &Funcs) {
       DeclareSyntheticThis(Identifier);
       OS << debugExternPrototype(FunctionSym{}, Identifier) << ";\n";
     } else if (!ConflictingSourceNativeSignatures.count(Name)) {
-      // The calls print as many arguments (debugCallArgLimit).
+      // The calls print as many arguments (debugCallArgLimit).  Calls
+      // through an i386 stdcall thunk and its slot (`_Validate@8`,
+      // `__imp__Validate@8`) name one routine, which pops what both spell.
       const auto Sources = ExternalCallSources.find(Name);
-      const llvm::StringRef Symbol =
-          Sources != ExternalCallSources.end() && Sources->second.size() == 1
-              ? llvm::StringRef(*Sources->second.begin())
-              : llvm::StringRef(Name);
+      llvm::StringRef Symbol = Name;
+      if (Sources != ExternalCallSources.end() && !Sources->second.empty()) {
+        const llvm::StringRef First = *Sources->second.begin();
+        const std::optional<unsigned> Pops =
+            stdcallArgumentBytes(First, Opts.Format, Opts.TheArch);
+        if (Sources->second.size() == 1 ||
+            (Pops && llvm::all_of(Sources->second, [&](const auto &Source) {
+               return stdcallArgumentBytes(Source, Opts.Format, Opts.TheArch) ==
+                      Pops;
+             })))
+          Symbol = First;
+      }
       // A routine no header declares takes the prototype the C library tables
       // give it; its calls convert their arguments to its parameter types.
       if (const libc::LibCPrototype *Prototype = prototypeForSymbol(Symbol)) {
@@ -2180,8 +2193,18 @@ void HighCWriter::writeForwardDecls(const std::vector<HighFunc> &Funcs) {
                                        ? typeToC(Floating->second)
                                    : WholeRegister ? Register
                                                    : "int";
-        OS << "extern " << Return << " " << Declared << "(";
-        if (auto Arity = knownArity(Symbol, Name);
+        // A stdcall routine pops the arguments its calls push: C compiled
+        // from the output leaves them to it, where its parameters fill the
+        // slots its decoration spells.
+        const auto Known = knownArity(Symbol, Name);
+        const std::optional<unsigned> Pops = stdcallPops(Symbol, Name);
+        const bool Stdcall = Known && Known->FpArgs == 0 &&
+                             Known->IntArgs >= 0 && Pops &&
+                             *Pops == static_cast<unsigned>(Known->IntArgs) *
+                                          pointerBytes(Opts.TheArch);
+        OS << "extern " << (Stdcall ? "__attribute__((stdcall)) " : "")
+           << Return << " " << Declared << "(";
+        if (auto Arity = Known;
             Arity && Arity->FpArgs == 0 && Arity->IntArgs >= 0) {
           // Each argument fills one integer register: an int64_t on a 32-bit
           // target would take two, and the arguments after it would move.

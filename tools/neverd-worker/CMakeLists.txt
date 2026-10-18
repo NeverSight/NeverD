@@ -106,6 +106,10 @@ if(BUILD_TESTING OR NEVERD_BUILD_TESTS)
       COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/source_cache_test.py"
               "$<TARGET_FILE:neverd-worker-test-server>")
     set_tests_properties(NeverDWorkerSourceCache PROPERTIES TIMEOUT 40)
+    add_test(NAME NeverDWorkerWarmFunctions
+      COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/warm_functions_test.py"
+              "$<TARGET_FILE:neverd-worker-test-server>")
+    set_tests_properties(NeverDWorkerWarmFunctions PROPERTIES TIMEOUT 60)
     add_test(NAME NeverDWorkerMakeCode
       COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/make_code_test.py"
               "$<TARGET_FILE:neverd-worker-test-server>")

@@ -87,6 +87,8 @@ LinuxServices::handle(ServiceKind Kind, const ProcessServiceEvent &Event,
     return Files.extendedAttribute(Kind, Event, Options.LinuxKernel, Result);
   case ServiceKind::PPoll:
     return Files.poll(Event, Options.LinuxKernel, Result);
+  case ServiceKind::PSelect:
+    return Files.select(Event, Result);
   case ServiceKind::Getdents64:
   case ServiceKind::Open:
   case ServiceKind::OpenAt:

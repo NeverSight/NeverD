@@ -178,6 +178,24 @@ NEVERD_API int neverd_prepare_function_view(neverd_session_t Sess,
                                             neverd_va_t FuncEntry,
                                             const char *Representation);
 
+/// Prepare later neverd_prepare_function calls for the functions from
+/// FirstEntry on, in entry order, at most MaxFunctions (clamped to
+/// 1..4096): build the control-flow graphs those calls would otherwise build
+/// on demand, for them to reuse.  The results of later calls are unchanged,
+/// and nothing already prepared is discarded.  Returns
+/// {"available":bool,"prepared":int,"full":bool,"next_entry":"0x..."|null}:
+/// "prepared" counts the functions the session now holds prepared, "full"
+/// says it refused one for lack of room, so further calls prepare nothing
+/// new.  "available" is false where calls keep no such state: images other
+/// than x86-64, PE images (whose preparation discovers exception handlers
+/// first), and sessions whose analysis already covers other entries.  NULL
+/// with an error when no binary is loaded or a build fails.  Like every
+/// session call, this must not run concurrently with another call on the
+/// session.
+NEVERD_API const char *neverd_warm_functions_json(neverd_session_t Sess,
+                                                  neverd_va_t FirstEntry,
+                                                  int MaxFunctions);
+
 NEVERD_API const char *neverd_decompile(neverd_session_t Sess,
                                         neverd_va_t FuncEntry);
 

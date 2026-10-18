@@ -7,6 +7,8 @@
 
 #include "neverd/emulation/CPU.h"
 
+#include "llvm/Support/Endian.h"
+
 namespace neverd::emulation::android_model {
 llvm::Error Bionic::access(uint64_t Address, uint64_t Size,
                            unsigned Permissions) {
@@ -90,6 +92,37 @@ BionicResult Bionic::compareMemory(const NativeCallEvent &Call) {
   for (uint64_t I = 0; I < Size; ++I)
     if (Left[I] != Right[I])
       return value(static_cast<uint32_t>(int(Left[I]) - int(Right[I])));
+  return value(0);
+}
+
+BionicResult Bionic::descriptorSet(const NativeCallEvent &Call) {
+  // Bionic LP64: 1024 descriptor bits in sixteen little-endian 64-bit words.
+  // FORTIFY validates the signed int index and the declared object size before
+  // touching memory. This is a memory operation, not a descriptor lookup.
+  const auto &A = Call.Arguments;
+  const int32_t FD = static_cast<int32_t>(A[0]);
+  if (FD < 0 || FD >= 1024)
+    return failure("FORTIFY fd_set descriptor out of range: " + Call.Name);
+  if (A[2] < 128)
+    return failure("FORTIFY fd_set object extent too small: " + Call.Name);
+  const uint64_t Offset = (FD / 64) * 8;
+  if (A[1] > UINT64_MAX - Offset)
+    return failure(diagnostic::GuestPointer);
+  const uint64_t Address = A[1] + Offset;
+  const bool Query = Call.Name == symbol::FDIsSetChk;
+  if (auto E = access(Address, 8, Query ? Read : Read | Write))
+    return std::move(E);
+  uint8_t Bytes[8];
+  if (auto E = CPU.read(Address, Bytes))
+    return std::move(E);
+  const uint64_t Bits = llvm::support::endian::read64le(Bytes);
+  const uint64_t Mask = uint64_t(1) << (FD % 64);
+  if (Query)
+    return value((Bits & Mask) != 0);
+  llvm::support::endian::write64le(
+      Bytes, Call.Name == symbol::FDSetChk ? Bits | Mask : Bits & ~Mask);
+  if (auto E = CPU.write(Address, Bytes))
+    return std::move(E);
   return value(0);
 }
 

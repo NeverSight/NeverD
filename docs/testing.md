@@ -4,6 +4,21 @@
 
 # Testing NeverD
 
+`AndroidFDSet.*` checks Bionic checked descriptor bitmaps at O0/O2 with ordinary,
+packed and RELR relocations on available CPU backends. Independent byte oracles
+cover word boundaries, untouched canaries, boolean queries, full-width extents,
+signed-int narrowing, read-only and partial-page access, overflow, FORTIFY error
+priority and dynamic provider closure. The bitmap-only cases do not establish
+readiness or execute host networking.
+
+`LinuxSelect.*` checks the common x64/AArch64 `pselect6` owner with independent
+bitmap, alias and stream-cursor assertions. It covers non-consuming TCP/UDP
+readiness, EOF and empty datagrams, gated/absent inputs, wrapper/timeout/mask
+error order, closed descriptors, ordered and partial output faults, aliased
+timeout output and explicit unsupported waits. `AndroidFDSet.RawAndBionicPselect*`
+executes actual AArch64 SVC and Bionic `syscall` callers, checking errno separation
+against the same regular-file description.
+
 `AArch64SIMD.RegisterShifts*` checks baseline USHL/SSHL scalar D and fixed
 vectors against independent bit selection, including signed low-byte amounts,
 oversized shifts, destination aliases, cleared upper lanes, complete register

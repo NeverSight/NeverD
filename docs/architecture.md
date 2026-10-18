@@ -7789,3 +7789,10 @@ validators as C++ sessions. Neither layer invokes a host resolver or transport.
 Send prerequisites gate receive input availability; application acknowledgement
 state remains owned by guest code, never inferred by an OS send result.
 See [offline network contracts](linux-network-contracts.md).
+
+`LinuxSelect` owns LP64 `pselect6` admission and ordered user copies. Its socket
+readiness query borrows the same `LinuxFiles` descriptions and receive/send
+cursors as transfers; it does not consume input or create a parallel socket
+registry. Unsupported blocking waits do not advance the shared virtual clock.
+Android's raw and variadic syscall routes reuse this kernel owner; checked
+Bionic bitmap helpers own only guest memory operations and FORTIFY checks.

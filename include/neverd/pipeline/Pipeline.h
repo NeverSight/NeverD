@@ -63,6 +63,14 @@ class LLVMSourceMap;
 /// Additive CodeRefTargets publication is allowed, as for the raw graph cache.
 /// Use from one pipeline invocation at a time; its internal workers join
 /// before run() returns. Other architectures and whole-image runs stay local.
+/// What Pipeline::warmAnalysisCache left in a session's analysis cache.
+struct AnalysisCacheWarmup {
+  /// The functions whose bodies the cache holds for later runs.
+  size_t Prepared = 0;
+  /// The cache refused a body it could hold only by evicting one.
+  bool Full = false;
+};
+
 class PipelineAnalysisCache {
 public:
   PipelineAnalysisCache() = default;
@@ -352,6 +360,15 @@ public:
   /// recognitions; callers may copy those into a private result for a variant.
   void rebuildHighIR(const BinaryImage &Img, const PipelineOptions &Opts,
                      PipelineResult &Result, DebugContext *Dbg = nullptr);
+
+  /// Build into Opts.AnalysisCache the bodies that selected-function runs on
+  /// \p Img would build on demand for \p Functions, so that those runs read
+  /// them instead; the runs' results are unchanged.  Nothing the cache holds
+  /// is evicted.  None when the cache does not apply: not an x86-64 image, no
+  /// cache, or a cache that the session's runs keep for other entries.
+  std::optional<AnalysisCacheWarmup>
+  warmAnalysisCache(const BinaryImage &Img, const PipelineOptions &Opts,
+                    DebugContext *Dbg, llvm::ArrayRef<va_t> Functions);
 
   /// Complete deferred HighIR from this image's prepared source MedIR. This
   /// preserves LowIR, MedIR and LLVM module identities and contains failures

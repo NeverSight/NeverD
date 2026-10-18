@@ -5420,6 +5420,14 @@ void CFGBuilder::multiStageResolve(const BinaryImage &Img, Decoder &Dec,
     // re-entry audit, which cannot certify an unstable graph.
     if (HasRelativeTable && !ReachedFixedPoint)
       RevokePublishedTables = true;
+    // The resolver flow graph models calls by their fallthrough.  A known call
+    // target in this same decoded function is another entry with potentially
+    // different selector state.  A call to the function's own entry is a
+    // recursive invocation instead: it enters where every caller enters, so it
+    // reaches a dispatch only through the code an ordinary call runs.
+    auto EntersFunctionInterior = [&](va_t Target) {
+      return Target != CurrentFuncEntry && Insns.count(Target) != 0;
+    };
     // The first scan is a cheap negative gate.  Most switch functions have no
     // unknown target or direct call into this function and pay no graph-copy/
     // reachability cost here.
@@ -5433,15 +5441,12 @@ void CFGBuilder::multiStageResolve(const BinaryImage &Img, Decoder &Dec,
           HasUnknownTransfer = CanReenterAtUnknownAddress(Rec);
           if (!HasUnknownTransfer && Rec.IsCall && !Rec.IsIndirect &&
               Rec.Immediate) {
-            // The resolver flow graph models calls by their fallthrough.  A
-            // known call target in this same decoded function is another
-            // entry with potentially different selector state.
             if (Insns.size() == std::numeric_limits<size_t>::max() ||
                 !DebitClosure(Insns.size() + 1)) {
               RevokePublishedTables = true;
               break;
             }
-            HasUnknownTransfer = Insns.count(*Rec.Immediate) != 0;
+            HasUnknownTransfer = EntersFunctionInterior(*Rec.Immediate);
           }
           if (HasUnknownTransfer)
             break;
@@ -5496,7 +5501,7 @@ void CFGBuilder::multiStageResolve(const BinaryImage &Img, Decoder &Dec,
           if (Open != Insns.end() && Open->second.IsCall &&
               !Open->second.IsIndirect && Open->second.Immediate) {
             if (!DebitClosure(Insns.size() + 1) ||
-                Insns.count(*Open->second.Immediate) != 0) {
+                EntersFunctionInterior(*Open->second.Immediate)) {
               RevokePublishedTables = true;
               break;
             }

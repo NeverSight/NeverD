@@ -138,6 +138,18 @@ private:
   /// Whether idle time analyzes the open file: function discovery and the
   /// reference index.  A cross-reference request still builds the index.
   bool backgroundAnalysis_ = true;
+  /// Whether idle time then prepares each function's analysis
+  /// (neverd_warm_functions_json), so that its first decompile reuses it.
+  /// Any change to the project starts over: the engine may have dropped it.
+  bool warmFunctions_ = false;
+  enum class WarmState { Off, Pending, Running, Complete, Full, Unavailable };
+  WarmState warmState_ = WarmState::Off;
+  std::uint64_t warmCursor_ = 0;
+  std::size_t warmPrepared_ = 0;
+  std::string warmError_;
+  void restartWarming();
+  void warmStep();
+  Json warmJson() const;
   std::uintmax_t loadedSize_ = 0;
   std::filesystem::file_time_type loadedTime_;
   /// neverd_strings_ex_json options as JSON text, empty for the defaults; a

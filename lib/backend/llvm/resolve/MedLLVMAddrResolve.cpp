@@ -17,6 +17,7 @@
 #include "neverd/Limits.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/ir/TargetRegInfo.h"
+#include "neverd/ir/X86FPState.h"
 #include "neverd/loader/ReadOnlyBytes.h"
 #include "neverd/support/Diagnostic.h"
 
@@ -3157,9 +3158,25 @@ bool MedLLVMEmitter::valueIsStableAddressOffsetImpl(const MedVar &V,
                 continue;
               DomainInvalid = true;
             }
+            // An x86 floating-state memory operand is a source the operation
+            // reads as a LOAD would (`addss -0x54(%ebp), %xmm0`); only the
+            // F16C store writes through its address.
+            bool ReadsAddressOperand = false;
+            if (Write.Opcode == NdOp::INTRINSIC &&
+                (TargetArch == Arch::X86 || TargetArch == Arch::X64) &&
+                Write.NumInputs >= 2 && Write.Inputs[0].isConst() &&
+                Write.MemoryAddressSpace == NdMemoryAddressSpace::Default &&
+                Write.MemoryOrdering == NdMemoryOrdering::None) {
+              const auto Id = static_cast<Intrinsic>(Write.Inputs[0].ConstVal);
+              ReadsAddressOperand =
+                  Write.Inputs[0].ConstVal == static_cast<uint64_t>(Id) &&
+                  isX86FPStateMemoryIntrinsic(Id) &&
+                  Id != Intrinsic::X86F16CStoreState;
+            }
             if (Write.Opcode == NdOp::INTRINSIC)
               for (uint8_t I = 1; I < Write.NumInputs; ++I)
-                if (sameOrUnknownFrameRoot(Write.Inputs[I]))
+                if (!(I == 1 && ReadsAddressOperand) &&
+                    sameOrUnknownFrameRoot(Write.Inputs[I]))
                   DomainInvalid = true;
           }
         }

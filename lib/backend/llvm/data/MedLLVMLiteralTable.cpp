@@ -359,10 +359,16 @@ llvm::Value *MedLLVMEmitter::tryResolveSelectMergeTable(
     // negative addend (`table - 1`) so a subsequent one-based index lands on
     // the first element.  The owner, not the adjusted numeric value, selects
     // the rebuilt run.  Admit at most one native word of look-behind; larger
-    // cross-object arithmetic still needs an explicit complete-domain proof.
+    // cross-object arithmetic still needs an explicit complete-domain proof,
+    // unless the loader authenticated an i386 GOTOFF base that the compiler
+    // biased further before its read-only owner (clang selects between
+    // `T + 0x14` and `T - 0x20` for `T[(j + 5) % 13]`).
     const uint64_t PointerSize = getTargetRegInfo(TargetArch).PointerSize;
     const uint64_t LowerBound = Begin > PointerSize ? Begin - PointerSize : 0;
-    if (Size > InvalidVA - Begin || VA < LowerBound || VA > Begin + Size)
+    if (Size > InvalidVA - Begin)
+      return false;
+    if ((VA < LowerBound || VA > Begin + Size) &&
+        !Img->relocatedI386GOTOFFTargetBelongsToOwner(VA, OwnerVA))
       return false;
 
     bool HasReadOnlySectionEvidence = false;

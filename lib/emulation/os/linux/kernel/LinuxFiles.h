@@ -71,6 +71,8 @@ public:
   llvm::Expected<std::optional<uint64_t>>
   poll(const ProcessServiceEvent &Event,
        const std::optional<LinuxKernelOptions> &Kernel, ProcessResult &Result);
+  llvm::Expected<std::optional<uint64_t>>
+  select(const ProcessServiceEvent &Event, ProcessResult &Result);
 
 private:
   enum class Stream { Input, Output, Error };
@@ -130,6 +132,9 @@ private:
     bool Failed = false;
     int64_t ReceiveTimeoutSeconds = 0, SendTimeoutSeconds = 0;
   };
+  std::optional<unsigned> socketReadiness(const OpenSocket &Socket,
+                                          unsigned Wanted,
+                                          ProcessResult &Result) const;
   size_t NextConnection = 0;
   size_t NextDatagramConnection = 0;
   std::optional<uint64_t> receiveSocketError(OpenSocket &Socket,

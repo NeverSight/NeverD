@@ -15,6 +15,7 @@
 #include "neverd/backend/llvm/LLVMSourceMap.h"
 #include "neverd/ir/SourceABI.h"
 #include "neverd/ir/X87Context.h"
+#include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/lift/X86Regs.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/pipeline/Pipeline.h"
@@ -319,6 +320,87 @@ TEST(PipelineOutcome, AnalysisCacheSeparatesImagesAndSkipsWholeImageRuns) {
   const auto Whole = Pipeline().run(SecondImage, Context, Options);
   EXPECT_TRUE(Whole.Success) << Whole.Error;
   EXPECT_EQ(PipelineTestPeer::analysisFacts(Cache), nullptr);
+}
+
+TEST(PipelineOutcome, WarmedAnalysisCacheLeavesSelectedRunsUnchanged) {
+  for (unsigned Count : {1u, 4u}) {
+    ScopedThreadCount Threads(Count);
+    for (bool Floating : {false, true}) {
+      SCOPED_TRACE(Count);
+      SCOPED_TRACE(Floating);
+      const BinaryImage Image = selectionCacheImage(Floating);
+      std::vector<va_t> Functions;
+      for (const auto &Sym : Image.Symbols)
+        if (Sym.IsFunc)
+          Functions.push_back(Sym.Addr);
+      PipelineAnalysisCache Cache;
+      PipelineOptions Options;
+      Options.AnalysisCache = &Cache;
+      const auto Warmup =
+          Pipeline().warmAnalysisCache(Image, Options, nullptr, Functions);
+      ASSERT_TRUE(Warmup);
+      EXPECT_FALSE(Warmup->Full);
+      // The floating callee's own x87 stack keeps its body out of the cache.
+      EXPECT_EQ(Warmup->Prepared,
+                Floating ? Functions.size() - 1 : Functions.size());
+      const auto Facts = PipelineTestPeer::analysisFacts(Cache);
+      ASSERT_NE(Facts, nullptr);
+      for (va_t Entry : Functions) {
+        PipelineResult Kept, Cold;
+        PipelineTestPeer::buildLowIR(Image, Kept, {Entry}, &Cache);
+        PipelineTestPeer::buildLowIR(Image, Cold, {Entry});
+        // A selected symbol start shares the warmed state.
+        EXPECT_EQ(PipelineTestPeer::analysisFacts(Cache), Facts);
+        expectSameSelection(Kept, Cold);
+      }
+    }
+  }
+}
+
+TEST(PipelineOutcome, WarmingKeepsAnalysisKeptForOtherEntries) {
+  const BinaryImage Image = selectionCacheImage(false);
+  PipelineAnalysisCache Cache;
+  PipelineResult Selected;
+  // 0x1200 starts no symbol, so its run knows one more entry.
+  PipelineTestPeer::buildLowIR(Image, Selected, {0x1200}, &Cache);
+  const auto Facts = PipelineTestPeer::analysisFacts(Cache);
+  ASSERT_NE(Facts, nullptr);
+  PipelineOptions Options;
+  Options.AnalysisCache = &Cache;
+  EXPECT_FALSE(Pipeline().warmAnalysisCache(Image, Options, nullptr, {0x1000}));
+  EXPECT_EQ(PipelineTestPeer::analysisFacts(Cache), Facts);
+  // Without a cache, or on another architecture, nothing is kept to warm.
+  EXPECT_FALSE(Pipeline().warmAnalysisCache(Image, PipelineOptions(), nullptr,
+                                            {0x1000}));
+  BinaryImage Narrow = selectionCacheImage(false);
+  Narrow.Arch = Arch::X86;
+  Narrow.Bits = Bitness::Bits32;
+  PipelineAnalysisCache NarrowCache;
+  Options.AnalysisCache = &NarrowCache;
+  EXPECT_FALSE(
+      Pipeline().warmAnalysisCache(Narrow, Options, nullptr, {0x1000}));
+  EXPECT_EQ(PipelineTestPeer::analysisFacts(NarrowCache), nullptr);
+}
+
+TEST(PipelineOutcome, WarmingStopsAtTheCacheBoundWithoutEvicting) {
+  const BinaryImage Image = selectionCacheImage(false);
+  const std::set<va_t> Entries = {0x1000, 0x1100, 0x1800, 0x2000};
+  const auto Cache = createX87CallGraphCache(
+      nullptr, nullptr, /*RetainCallRegisterBodies=*/true,
+      {/*Entries=*/2, 8 * 1024 * 1024, 32 * 1024 * 1024});
+  const auto Warm = [&](std::vector<va_t> Functions) {
+    return CFGBuilder::warmCallGraphs(Cache, Image, Functions, &Entries,
+                                      nullptr, nullptr, nullptr, nullptr, 1);
+  };
+  const auto First = Warm({0x2000, 0x1800});
+  EXPECT_EQ(First.Retained, 2u);
+  EXPECT_FALSE(First.Full);
+  const auto Second = Warm({0x1000, 0x1100});
+  EXPECT_EQ(Second.Retained, 0u);
+  EXPECT_TRUE(Second.Full);
+  // What the cache held before stays there.
+  EXPECT_TRUE(CFGBuilder::cachedCallRegisterBody(
+      Cache, Image, 0x2000, &Entries, nullptr, nullptr, nullptr, nullptr));
 }
 
 TEST(PipelineOutcome, ParallelCalleeFrontiersPreserveEveryRegisterSummary) {

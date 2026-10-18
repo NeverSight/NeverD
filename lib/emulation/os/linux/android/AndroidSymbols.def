@@ -87,6 +87,9 @@ NEVERD_ANDROID_CALL(MemmoveChk, "__memmove_chk", copyMemory)
 NEVERD_ANDROID_CALL(Memset, "memset", setMemory)
 NEVERD_ANDROID_CALL(MemsetChk, "__memset_chk", setMemory)
 NEVERD_ANDROID_CALL(Memcmp, "memcmp", compareMemory)
+NEVERD_ANDROID_CALL(FDSetChk, "__FD_SET_chk", descriptorSet)
+NEVERD_ANDROID_CALL(FDClrChk, "__FD_CLR_chk", descriptorSet)
+NEVERD_ANDROID_CALL(FDIsSetChk, "__FD_ISSET_chk", descriptorSet)
 NEVERD_ANDROID_CALL(Strlen, "strlen", stringLength)
 NEVERD_ANDROID_CALL(Strnlen, "strnlen", stringLength)
 NEVERD_ANDROID_CALL(Atoi, "atoi", decimalInteger)
@@ -105,8 +108,8 @@ NEVERD_ANDROID_CALL(SystemPropertyFindNth, "__system_property_find_nth",
 NEVERD_ANDROID_CALL(SystemPropertyRead, "__system_property_read", readProperty)
 NEVERD_ANDROID_CALL(SystemPropertySerial, "__system_property_serial",
                     propertySerial)
-NEVERD_ANDROID_CALL(SystemPropertyReadCallback, "__system_property_read_callback",
-                    readPropertyCallback)
+NEVERD_ANDROID_CALL(SystemPropertyReadCallback,
+                    "__system_property_read_callback", readPropertyCallback)
 NEVERD_ANDROID_CALL(SystemPropertyForEach, "__system_property_foreach",
                     forEachProperty)
 NEVERD_ANDROID_CALL(Malloc, "malloc", malloc)

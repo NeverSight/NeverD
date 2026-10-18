@@ -203,6 +203,7 @@ NEVERD_LINUX_SERVICE(GetTimeOfDay, 96, 169, 2)
 NEVERD_LINUX_SERVICE(ClockGetTime, 228, 113, 2)
 NEVERD_LINUX_SERVICE(Nanosleep, 35, 101, 2)
 NEVERD_LINUX_SERVICE(PPoll, 271, 73, 5)
+NEVERD_LINUX_SERVICE(PSelect, 270, 72, 6)
 NEVERD_LINUX_SERVICE(Exit, 60, 93, 1)
 NEVERD_LINUX_SERVICE(ExitGroup, 231, 94, 1)
 NEVERD_LINUX_SERVICE(GetPriority, 140, 141, 2)
@@ -241,8 +242,9 @@ NEVERD_LINUX_DIAGNOSTIC(KernelOptions,
                         "invalid Linux kernel availability input")
 NEVERD_LINUX_DIAGNOSTIC(PidFDTargetMissing,
                         "pidfd_open target process is not modeled")
-NEVERD_LINUX_DIAGNOSTIC(PidFDThreadLifetime,
-                        "pidfd_open guest-thread descriptor lifetime is unmodeled")
+NEVERD_LINUX_DIAGNOSTIC(
+    PidFDThreadLifetime,
+    "pidfd_open guest-thread descriptor lifetime is unmodeled")
 NEVERD_LINUX_DIAGNOSTIC(PriorityOptions, "invalid Linux priority input")
 NEVERD_LINUX_DIAGNOSTIC(
     PriorityInputsMissing,
@@ -277,27 +279,31 @@ NEVERD_LINUX_DIAGNOSTIC(DeviceOptions,
                         "invalid linux_files device transaction contract")
 NEVERD_LINUX_DIAGNOSTIC(DeviceOperation,
                         "Linux device operation has no explicit contract")
-NEVERD_LINUX_DIAGNOSTIC(DeviceOpenMode,
-                        "Linux device open access mode differs from its contract")
+NEVERD_LINUX_DIAGNOSTIC(
+    DeviceOpenMode, "Linux device open access mode differs from its contract")
 NEVERD_LINUX_DIAGNOSTIC(DeviceIoctlMissing,
                         "Linux ioctl has no matching next device transaction")
-NEVERD_LINUX_DIAGNOSTIC(DeviceIoctlMemory,
-                        "Linux ioctl memory does not satisfy its explicit contract")
+NEVERD_LINUX_DIAGNOSTIC(
+    DeviceIoctlMemory,
+    "Linux ioctl memory does not satisfy its explicit contract")
 NEVERD_LINUX_DIAGNOSTIC(DeviceMappingMissing,
                         "Linux mmap has no matching read-only device pages")
 NEVERD_LINUX_DIAGNOSTIC(DeviceMappingAdvice,
                         "Linux device mapping advice is unmodeled")
 NEVERD_LINUX_DIAGNOSTIC(
-    XAttrKernel, "extended attribute queries require explicit released GKI input")
+    XAttrKernel,
+    "extended attribute queries require explicit released GKI input")
 NEVERD_LINUX_DIAGNOSTIC(
-    XAttrObservation, "extended attributes for this catalogue object are unmodeled")
+    XAttrObservation,
+    "extended attributes for this catalogue object are unmodeled")
 NEVERD_LINUX_DIAGNOSTIC(FileDirectIO,
                         "direct I/O for this catalogue file is unmodeled")
 NEVERD_LINUX_DIAGNOSTIC(FilePathForm, "unsupported Linux memory-file path form")
-NEVERD_LINUX_DIAGNOSTIC(FileLinkTarget,
-                        "linux_files symbolic links require nonempty NUL-free targets")
-NEVERD_LINUX_DIAGNOSTIC(FileLinkTraversal,
-                        "Linux symbolic-link traversal or metadata is unmodeled")
+NEVERD_LINUX_DIAGNOSTIC(
+    FileLinkTarget,
+    "linux_files symbolic links require nonempty NUL-free targets")
+NEVERD_LINUX_DIAGNOSTIC(
+    FileLinkTraversal, "Linux symbolic-link traversal or metadata is unmodeled")
 NEVERD_LINUX_DIAGNOSTIC(FileLinkDescriptor,
                         "Linux descriptor-backed symbolic links are unmodeled")
 NEVERD_LINUX_DIAGNOSTIC(FileLinkPartialOutput,
@@ -379,10 +385,11 @@ NEVERD_LINUX_DIAGNOSTIC(UnexpectedExit,
                         "CPU stopped without a modeled process continuation")
 NEVERD_LINUX_DIAGNOSTIC(TimePartialOutput,
                         "partial Linux time output fault is unmodeled")
-NEVERD_LINUX_DIAGNOSTIC(TimeClockOption,
-                        "linux_time requires distinct supported Linux clock IDs")
+NEVERD_LINUX_DIAGNOSTIC(
+    TimeClockOption, "linux_time requires distinct supported Linux clock IDs")
 NEVERD_LINUX_DIAGNOSTIC(TimeCPUObservation,
-                        "Linux process CPU clocks require consistent GKI task observations and nonnegative seconds")
+                        "Linux process CPU clocks require consistent GKI task "
+                        "observations and nonnegative seconds")
 NEVERD_LINUX_DIAGNOSTIC(TimeCPUTargetMissing,
                         "CPU clock target process is not modeled")
 NEVERD_LINUX_DIAGNOSTIC(TimeThreadCPUClock,
@@ -407,9 +414,9 @@ NEVERD_LINUX_DIAGNOSTIC(TimeDynamicClock,
                         "dynamic and encoded Linux clocks are unmodeled")
 NEVERD_LINUX_DIAGNOSTIC(TimezoneMissing,
                         "Linux timezone has no explicit linux_time input")
-NEVERD_LINUX_DIAGNOSTIC(
-    TimeAdvanceClock,
-    "advance_on_idle supports realtime, monotonic, boottime and fixed process CPU clocks only")
+NEVERD_LINUX_DIAGNOSTIC(TimeAdvanceClock,
+                        "advance_on_idle supports realtime, monotonic, "
+                        "boottime and fixed process CPU clocks only")
 NEVERD_LINUX_DIAGNOSTIC(
     TimeAdvanceOverflow,
     "Linux virtual clock advancement exceeds its modeled range")

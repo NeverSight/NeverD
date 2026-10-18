@@ -368,6 +368,10 @@ class X87CallGraphCache {
     size_t Bytes;
   };
   bool RetainCallRegisterBodies;
+  // While set (warmCallGraphs), admission refuses what it could hold only by
+  // evicting another entry, and records the refusal.
+  bool KeepResident = false;
+  bool RefusedResident = false;
   std::optional<Context> SummaryInputs;
   std::list<SummaryEntry> Summaries;
   std::unordered_map<va_t, std::list<SummaryEntry>::iterator> SummaryIndex;
@@ -573,6 +577,12 @@ private:
       if (const auto Found = SummaryIndex.find(Address);
           Found != SummaryIndex.end()) {
         Summaries.splice(Summaries.begin(), Summaries, Found->second);
+        return;
+      }
+      const bool NeedsRoom = Summaries.size() >= MaxGraphs ||
+                             *Bytes > MaxSummaryBytes - SummaryBytes;
+      if (NeedsRoom && KeepResident) {
+        RefusedResident = true;
         return;
       }
       while (!Summaries.empty() && (Summaries.size() >= MaxGraphs ||
@@ -845,6 +855,11 @@ private:
         Found != GraphIndex.end()) {
       Graphs.splice(Graphs.begin(), Graphs, Found->second);
       return Graphs.front().Value;
+    }
+    if ((Graphs.size() >= MaxGraphs || *Bytes > MaxBytes - RetainedBytes) &&
+        KeepResident) {
+      RefusedResident = true;
+      return Graph;
     }
     while (!Graphs.empty() &&
            (Graphs.size() >= MaxGraphs || *Bytes > MaxBytes - RetainedBytes)) {
@@ -1479,6 +1494,66 @@ X87CallGraphCache::validatedSummary(
       return {};
   }
   return Facts;
+}
+
+CFGBuilder::CallGraphWarmup CFGBuilder::warmCallGraphs(
+    const std::shared_ptr<X87CallGraphCache> &Cache, const BinaryImage &Img,
+    llvm::ArrayRef<va_t> Functions, const std::set<va_t> *Entries,
+    const libc::NoReturnTargetIndex *NoReturnTargets,
+    const NoReturnCalleeProver *NoReturnCallees,
+    const detail::AbsoluteRelocationRootIndex *RelocationRoots,
+    const ExecutableCodeOwnerIndex *CodeOwners, unsigned MaxThreads) {
+  CallGraphWarmup Result;
+  if (!Cache || Img.Arch != Arch::X64 || Functions.empty())
+    return Result;
+  // The settings a pipeline build hands its call proofs, so that each graph
+  // and body is the one such a proof would build and publish itself.
+  CFGBuilder Settings;
+  Settings.CurrentImg = &Img;
+  Settings.setKnownFuncEntries(Entries);
+  Settings.setNoReturnTargetIndex(NoReturnTargets);
+  Settings.setNoReturnCalleeProver(NoReturnCallees);
+  Settings.setAbsoluteRelocationRootIndex(RelocationRoots);
+  Settings.setExecutableCodeOwnerIndex(CodeOwners);
+  Settings.setX87CallGraphCache(Cache);
+  {
+    std::lock_guard<std::mutex> Lock(Cache->Mutex);
+    Cache->KeepResident = true;
+    Cache->RefusedResident = false;
+  }
+  const llvm::scope_exit Release([&] {
+    std::lock_guard<std::mutex> Lock(Cache->Mutex);
+    Cache->KeepResident = false;
+  });
+  std::vector<uint64_t> Weights(Functions.size(), 0);
+  for (size_t I = 0; I < Functions.size(); ++I) {
+    const va_t End = Img.getFunctionMetadataEnd(Functions[I], CodeOwners);
+    if (End != InvalidVA && End > Functions[I])
+      Weights[I] = std::min<uint64_t>(End - Functions[I], 1u << 20);
+  }
+  std::vector<std::exception_ptr> Failures(Functions.size());
+  parallelForEachWeighted(
+      Weights,
+      [&](auto Claim, size_t N) {
+        X87CallEffectIndex Worker(Settings);
+        for (size_t I; (I = Claim()) < N;)
+          try {
+            (void)Worker.graph(Functions[I]);
+          } catch (...) {
+            Failures[I] = std::current_exception();
+          }
+      },
+      1, std::max(1u, std::min(MaxThreads, 4u)));
+  // As prepareCalls does, every worker joins before the first failure is
+  // reported.
+  for (const std::exception_ptr &Failure : Failures)
+    if (Failure)
+      std::rethrow_exception(Failure);
+  for (va_t Function : Functions)
+    Result.Retained += Cache->summary(Settings, Function) != nullptr;
+  std::lock_guard<std::mutex> Lock(Cache->Mutex);
+  Result.Full = Cache->RefusedResident;
+  return Result;
 }
 
 std::shared_ptr<const CallRegisterBody> CFGBuilder::cachedCallRegisterBody(

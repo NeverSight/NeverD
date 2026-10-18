@@ -17,6 +17,7 @@
 
 #include "neverd/backend/c/CEmitterOptions.h"
 #include "neverd/backend/c/HighC/HighCEmitter.h"
+#include "neverd/backend/c/LLVMC/LLVMCEmitter.h"
 #include "neverd/ir/med/MedABIPass.h"
 #include "neverd/lift/X86Regs.h"
 #include "neverd/pipeline/Pipeline.h"
@@ -215,12 +216,13 @@ BinaryImage imageWithStdcallThunk(std::vector<uint8_t> Code) {
   return Img;
 }
 
-/// The HighC of `wrap` in \p Img.
-std::string wrapSource(const BinaryImage &Img) {
+/// The HighC of `wrap` in \p Img, its declarations included, or its LLVM-C.
+std::string emitSource(const BinaryImage &Img, bool LLVMC = false) {
   llvm::LLVMContext Ctx;
   PipelineOptions Opts;
   Opts.EmitDumpOutput = false;
   Opts.OnlyFunctionEntries = {Text};
+  Opts.LiftMode = LLVMC;
   const PipelineResult Result = Pipeline().run(Img, Ctx, Opts);
   EXPECT_TRUE(Result.Success) << Result.Error;
   std::string Source;
@@ -229,7 +231,19 @@ std::string wrapSource(const BinaryImage &Img) {
   Options.TheArch = Img.Arch;
   Options.Format = Img.Format;
   Options.Image = &Img;
-  EXPECT_TRUE(HighCEmitter().emit(Result.HighFuncs, OS, Options));
+  if (!LLVMC)
+    EXPECT_TRUE(HighCEmitter().emit(Result.HighFuncs, OS, Options));
+  else if (!Result.LlvmModule)
+    ADD_FAILURE() << "no LLVM module";
+  else
+    EXPECT_TRUE(
+        LLVMCEmitter().emit(*Result.LlvmModule, OS, Options, nullptr, &Img));
+  return Source;
+}
+
+/// The HighC of `wrap` in \p Img.
+std::string wrapSource(const BinaryImage &Img) {
+  const std::string Source = emitSource(Img);
   return Source.substr(std::min(Source.size(), Source.find(" wrap(")));
 }
 } // namespace
@@ -269,6 +283,29 @@ TEST(I386CallContract, AStdcallImportPopsItsArguments) {
   EXPECT_NE(Result.find("arg0"), std::string::npos) << Source;
   EXPECT_EQ(Result.find("+ 7"), std::string::npos) << Source;
   EXPECT_EQ(Source.find("unknown"), std::string::npos) << Source;
+}
+
+TEST(I386CallContract, AStdcallImportIsDeclaredToPopItsArguments) {
+  // C compiled from the output leaves the two slots Validate pops to it
+  // only by a stdcall declaration: HighC's counts the slots its thunk's
+  // name spells, LLVM-C's types them as its call passes them.
+  const BinaryImage Img =
+      imageWithStdcallThunk({0x6A, 0x07,             // push 7
+                             0xFF, 0x74, 0x24, 0x08, // push [esp+8]
+                             0xE8, 0x05, 0x00, 0x00,
+                             0x00,                   // call Text + 0x10
+                             0x03, 0x44, 0x24, 0x04, // add eax, [esp+4]
+                             0xC3});                 // ret
+  const std::string HighC = emitSource(Img);
+  EXPECT_NE(HighC.find("extern __attribute__((stdcall)) int "
+                       "Validate(int32_t, int32_t);"),
+            std::string::npos)
+      << HighC;
+  const std::string LLVMC = emitSource(Img, /*LLVMC=*/true);
+  EXPECT_NE(LLVMC.find("__attribute__((stdcall)) uint64_t "
+                       "Validate(uint32_t, uint32_t);"),
+            std::string::npos)
+      << LLVMC;
 }
 
 TEST(I386CallContract, ArgumentsStoredBelowOneAdjustmentAreAllPassed) {

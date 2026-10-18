@@ -1236,17 +1236,74 @@ Listing &Engine::listing() {
   return *listing_;
 }
 bool Engine::hasIdleWork() const {
-  return backgroundAnalysis_ && listing_ &&
-         neverd_session_is_loaded(session_) && listing_->hasIdleWork();
+  if (!backgroundAnalysis_ || !listing_ || !neverd_session_is_loaded(session_))
+    return false;
+  return listing_->hasIdleWork() || warmState_ == WarmState::Pending ||
+         warmState_ == WarmState::Running;
 }
 void Engine::idleStep() {
-  if (hasIdleWork())
+  if (!hasIdleWork())
+    return;
+  // The listing and its reference index come first; preparing functions
+  // only shortens later decompiles.
+  if (listing_->hasIdleWork())
     listing_->idleStep();
+  else
+    warmStep();
+}
+void Engine::restartWarming() {
+  warmState_ = warmFunctions_ ? WarmState::Pending : WarmState::Off;
+  warmCursor_ = 0;
+  warmPrepared_ = 0;
+  warmError_.clear();
+}
+void Engine::warmStep() {
+  using WarmFunction = const char *(*)(neverd_session_t, neverd_va_t, int);
+  static const auto warm =
+      engineSymbol<WarmFunction>("neverd_warm_functions_json");
+  if (!warm) {
+    warmState_ = WarmState::Unavailable;
+    return;
+  }
+  warmState_ = WarmState::Running;
+  // A step holds the session until its builds finish, so it takes only as
+  // many functions as the engine builds at once.
+  constexpr int WarmStepFunctions = 4;
+  const char *raw = warm(session_, warmCursor_, WarmStepFunctions);
+  if (!raw) {
+    warmState_ = WarmState::Unavailable;
+    warmError_ = error();
+    return;
+  }
+  const auto page = backendJson(raw);
+  if (!page.value("available", false)) {
+    warmState_ = WarmState::Unavailable;
+    return;
+  }
+  warmPrepared_ += page.value("prepared", std::size_t{0});
+  const auto next = page.value("next_entry", Json());
+  if (page.value("full", false))
+    warmState_ = WarmState::Full;
+  else if (next.is_string())
+    warmCursor_ = parseAddress(next.get<std::string>());
+  else
+    warmState_ = WarmState::Complete;
+}
+Json Engine::warmJson() const {
+  static constexpr const char *Names[] = {"off",      "pending", "running",
+                                          "complete", "full",    "unavailable"};
+  Json state = {{"state", Names[static_cast<int>(warmState_)]},
+                {"prepared", warmPrepared_}};
+  if (!warmError_.empty())
+    state["error"] = warmError_;
+  return state;
 }
 Json Engine::backgroundState() const {
   if (!listing_)
     return nullptr;
-  return listing_->indexState();
+  auto state = listing_->indexState();
+  state["warm"] = warmJson();
+  return state;
 }
 Json Engine::backendJson(const char *owned, bool checkError) const {
   const auto text = ownedString(owned);
@@ -1603,6 +1660,16 @@ Json Engine::execute(const std::string &operation, const Json &p) {
 
 Engine::Reply Engine::executeResponse(const std::string &operation,
                                       const Json &p) {
+  // A change to the project can drop the engine's prepared functions.
+  const auto before = revision_;
+  struct RestartOnChange {
+    Engine &engine;
+    std::uint64_t before;
+    ~RestartOnChange() {
+      if (engine.revision_ != before)
+        engine.restartWarming();
+    }
+  } restart{*this, before};
   Reply reply;
   reply.value = executeImpl(operation, p, &reply.encoded);
   return reply;
@@ -1957,6 +2024,8 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
     symbolsInput_ = symbolsDeclined ? Json{{"mode", "none"}} : Json(nullptr);
     pdbDisplayNames_ = Json::array();
     backgroundAnalysis_ = p.value("analysis", true);
+    warmFunctions_ = p.value("warm", false);
+    restartWarming();
     dirty_ = false;
     analyzed_ = false;
     loadedSize_ = fileSize;

@@ -715,6 +715,25 @@ public:
   /// No-return decisions are replayed at depth zero and every skipped x87
   /// normalization must be proved to make no change. Null requests the usual
   /// independent build. This cannot supply a normalized/output LowFunc.
+  /// What warmCallGraphs left in its cache.
+  struct CallGraphWarmup {
+    /// The functions whose bodies the cache holds for later builds.
+    size_t Retained = 0;
+    /// The cache refused a graph or body it could hold only by evicting one.
+    bool Full = false;
+  };
+  /// Builds into \p Cache the raw graphs and bodies of \p Functions that the
+  /// call proofs of a build configured with these indexes would build on
+  /// demand, with at most \p MaxThreads builders at once, and without
+  /// evicting anything the cache holds.  Later builds read them instead; their
+  /// results are unchanged.
+  static CallGraphWarmup warmCallGraphs(
+      const std::shared_ptr<X87CallGraphCache> &Cache, const BinaryImage &Img,
+      llvm::ArrayRef<va_t> Functions, const std::set<va_t> *Entries,
+      const libc::NoReturnTargetIndex *NoReturnTargets,
+      const NoReturnCalleeProver *NoReturnCallees,
+      const detail::AbsoluteRelocationRootIndex *RelocationRoots,
+      const ExecutableCodeOwnerIndex *CodeOwners, unsigned MaxThreads);
   static std::shared_ptr<const CallRegisterBody> cachedCallRegisterBody(
       const std::shared_ptr<X87CallGraphCache> &Cache, const BinaryImage &Img,
       va_t Entry, const std::set<va_t> *Entries,

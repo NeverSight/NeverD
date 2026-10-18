@@ -18,6 +18,7 @@
 #include "../CSourceRecorder.h"
 #include "../DebugParamBinding.h"
 #include "../FloatConversion.h"
+#include "../StdcallImportPops.h"
 
 #include "neverd/backend/c/CEmitterOptions.h"
 #include "neverd/backend/c/pass/HighC/HighCPasses.h"
@@ -569,9 +570,16 @@ public:
   /// pointer/string/fill source and drops leftover register clobbers.
   size_t debugCallArgLimit(const HighExpr &E) const;
   /// The fixed arity of the known function \p Symbol, which the C name
-  /// \p Identifier reads; a C++ stem is no name the tables know.
-  static std::optional<libc::LibCArity> knownArity(llvm::StringRef Symbol,
-                                                   llvm::StringRef Identifier);
+  /// \p Identifier reads; a C++ stem is no name the tables know.  An i386
+  /// stdcall routine's names spell it (stdcallPops): a 32-bit argument for
+  /// each four bytes the routine pops.
+  std::optional<libc::LibCArity> knownArity(llvm::StringRef Symbol,
+                                            llvm::StringRef Identifier) const;
+  /// The bytes the i386 stdcall routine \p Symbol, which the C name
+  /// \p Identifier reads, pops: as its own name spells them (`_Validate@8`)
+  /// or the names the image imports it by (StdcallImportPops).
+  std::optional<unsigned> stdcallPops(llvm::StringRef Symbol,
+                                      llvm::StringRef Identifier) const;
   /// How many arguments the plain declaration of the external function \p E
   /// calls gives it (writeForwardDecls), when its arity is known.
   std::optional<size_t> plainDeclarationArity(const HighExpr &E) const;
@@ -875,6 +883,9 @@ public:
   // carry source names. Keep their mapping separate when both _foo and __foo
   // occur in one function.
   std::map<std::string, std::set<std::string>> ExternalCallSources;
+  /// What each i386 stdcall routine the image imports pops, by its import
+  /// name (c_library::stdcallImportPops).
+  c_library::ImportPops StdcallImportPops;
   /// Callees with a call that never returns (HighExpr::DoesNotReturn); their
   /// declarations say so, as for a routine the name list knows.
   std::set<std::string> NoReturnCallTargets;

@@ -3782,6 +3782,37 @@ struct PipelineAnalysisCache::Impl {
   }
 };
 
+std::optional<AnalysisCacheWarmup>
+Pipeline::warmAnalysisCache(const BinaryImage &Img, const PipelineOptions &Opts,
+                            DebugContext *Dbg, llvm::ArrayRef<va_t> Functions) {
+  if (!Opts.AnalysisCache || Img.Arch != Arch::X64)
+    return std::nullopt;
+  // The entries a selected-function run of a symbol start knows (buildLowIR
+  // below): its own entry adds nothing to them, so its run shares this state.
+  const std::set<va_t> BoundaryGuesses = Img.boundaryGuessFunctionStarts();
+  std::set<va_t> CandidateEntries;
+  for (const auto &Sym : Img.Symbols)
+    if (Sym.IsFunc && !BoundaryGuesses.count(Sym.Addr))
+      CandidateEntries.insert(Sym.Addr);
+  PipelineAnalysisCache &Cache = *Opts.AnalysisCache;
+  if (!Cache.Facts) {
+    Cache.Facts = std::make_shared<PipelineAnalysisCache::Impl>(
+        Img, Dbg, std::move(CandidateEntries), /*RetainBodies=*/true);
+  } else if (!Cache.Facts->matches(Img, Dbg, CandidateEntries)) {
+    // The session's own runs keep this state for other entries; replacing it
+    // would discard what they built.
+    return std::nullopt;
+  } else {
+    Cache.Facts->Callees.clearMemoizedProofs();
+    Cache.Facts->Targets.clearMemoizedNames();
+  }
+  const auto &Facts = *Cache.Facts;
+  const auto Warmup = CFGBuilder::warmCallGraphs(
+      Facts.Graphs, Img, Functions, &Facts.Entries, &Facts.Targets,
+      &Facts.Callees, &Facts.Roots, &Facts.Owners, workerThreadCount());
+  return AnalysisCacheWarmup{Warmup.Retained, Warmup.Full};
+}
+
 void Pipeline::buildLowIR(
     const BinaryImage &Img,
     const std::vector<std::pair<va_t, std::string>> &Candidates,

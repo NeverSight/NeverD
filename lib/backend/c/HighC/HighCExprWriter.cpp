@@ -30,6 +30,7 @@
 #include "neverd/libc/LibCNames.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/StringLiteralSymbols.h"
+#include "neverd/loader/SymbolDecoration.h"
 #include "neverd/support/BinaryEncoding.h"
 #include "neverd/support/IntegerLiterals.h"
 
@@ -2934,10 +2935,30 @@ size_t HighCWriter::debugCallArgLimit(const HighExpr &E) const {
 }
 
 std::optional<libc::LibCArity>
-HighCWriter::knownArity(llvm::StringRef Symbol, llvm::StringRef Identifier) {
+HighCWriter::knownArity(llvm::StringRef Symbol,
+                        llvm::StringRef Identifier) const {
   if (auto Arity = libc::libcArityForSymbol(Symbol))
     return Arity;
-  return libc::libcArity(Identifier);
+  if (auto Arity = libc::libcArity(Identifier))
+    return Arity;
+  // Where the tables know none, as the call analysis takes it: the slots
+  // the call pushes, a 64-bit argument's two included.
+  if (const std::optional<unsigned> Bytes = stdcallPops(Symbol, Identifier);
+      Bytes && *Bytes % 4 == 0)
+    return libc::LibCArity{static_cast<int>(*Bytes / 4)};
+  return std::nullopt;
+}
+
+std::optional<unsigned>
+HighCWriter::stdcallPops(llvm::StringRef Symbol,
+                         llvm::StringRef Identifier) const {
+  if (const std::optional<unsigned> Bytes =
+          stdcallArgumentBytes(Symbol, Opts.Format, Opts.TheArch))
+    return Bytes;
+  if (const auto Imported = StdcallImportPops.find(Identifier);
+      Imported != StdcallImportPops.end())
+    return Imported->second;
+  return std::nullopt;
 }
 
 std::optional<size_t>

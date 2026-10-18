@@ -276,6 +276,7 @@ private:
   BionicResult copyMemory(const NativeCallEvent &Call);
   BionicResult setMemory(const NativeCallEvent &Call);
   BionicResult compareMemory(const NativeCallEvent &Call);
+  BionicResult descriptorSet(const NativeCallEvent &Call);
   BionicResult stringLength(const NativeCallEvent &Call);
   BionicResult decimalInteger(const NativeCallEvent &Call);
   llvm::Expected<std::optional<uint64_t>>

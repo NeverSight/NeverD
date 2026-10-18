@@ -17,6 +17,7 @@
 
 #include "../FloatConversion.h"
 #include "../LibraryPrototype.h"
+#include "../StdcallImportPops.h"
 #include "../UnalignedMemory.h"
 #include "../VariadicImportStub.h"
 #include "../pass/LLVMC/LLVMCBitTests.h"
@@ -1518,9 +1519,16 @@ std::string LLVMCWriter::callResult(const llvm::CallBase &Call,
 }
 
 void LLVMCWriter::writeImportCalleeDecls(llvm::Module &Mod) {
-  // Each import with the type its calls return; one whose calls disagree is
-  // left to them.
-  std::map<std::string, std::optional<std::string>> Imports;
+  const c_library::ImportPops StdcallPops =
+      Img ? c_library::stdcallImportPops(*Img) : c_library::ImportPops();
+  // Each import with the type its calls return, and for a stdcall one the
+  // types they pass; one whose calls disagree is left to them.
+  struct ImportCalls {
+    std::optional<std::string> Return;
+    std::optional<std::vector<std::string>> Params;
+  };
+  std::map<std::string, ImportCalls> Imports;
+  const llvm::DataLayout &Layout = Mod.getDataLayout();
   // Each routine the runtime's tables type, with their prototype.
   std::map<std::string, const libc::LibCPrototype *> Typed;
   // The imports a weak reference names, whose null address the code tests
@@ -1555,9 +1563,31 @@ void LLVMCWriter::writeImportCalleeDecls(llvm::Module &Mod) {
           continue;
         }
         const std::string Return = typeToCLLVM(Call->getType());
-        const auto [Import, Added] = Imports.emplace(Name, Return);
-        if (!Added && Import->second && *Import->second != Return)
-          Import->second.reset();
+        // A stdcall routine pops the arguments its calls push, which a C
+        // compiler leaves to it only by its declaration: the call's, where
+        // they fill the slots its name spells.
+        std::optional<std::vector<std::string>> Params;
+        if (const auto Pops = StdcallPops.find(Name);
+            Pops != StdcallPops.end() && Pops->second) {
+          uint64_t Pushed = 0;
+          Params.emplace();
+          for (const llvm::Use &Argument : Call->args()) {
+            Pushed += llvm::alignTo(
+                Layout.getTypeStoreSize(Argument->getType()).getFixedValue(),
+                4);
+            Params->push_back(typeToCLLVM(Argument->getType()));
+          }
+          if (Pushed != *Pops->second)
+            Params.reset();
+        }
+        const auto [Import, Added] =
+            Imports.try_emplace(Name, ImportCalls{Return, Params});
+        if (Added)
+          continue;
+        if (Import->second.Return && *Import->second.Return != Return)
+          Import->second.Return.reset();
+        if (Import->second.Params != Params)
+          Import->second.Params.reset();
       }
   }
   auto Extern = [&](const std::string &Name) {
@@ -1566,10 +1596,20 @@ void LLVMCWriter::writeImportCalleeDecls(llvm::Module &Mod) {
   for (const auto &[Name, Prototype] : Typed)
     OS << Extern(Name) << c_library::declaration(*Prototype, Name, Opts.TheArch)
        << ";\n";
-  // Unprototyped, the declaration takes the arguments the machine passed.
-  for (const auto &[Name, Return] : Imports)
-    if (Return)
-      OS << Extern(Name) << *Return << " " << Name << "();\n";
+  for (const auto &[Name, Calls] : Imports) {
+    if (!Calls.Return)
+      continue;
+    // Unprototyped, the declaration takes the arguments the machine passed.
+    if (!Calls.Params) {
+      OS << Extern(Name) << *Calls.Return << " " << Name << "();\n";
+      continue;
+    }
+    OS << Extern(Name) << "__attribute__((stdcall)) " << *Calls.Return << " "
+       << Name << "(";
+    for (size_t I = 0; I < Calls.Params->size(); ++I)
+      OS << (I ? ", " : "") << (*Calls.Params)[I];
+    OS << (Calls.Params->empty() ? "void" : "") << ");\n";
+  }
 }
 
 void LLVMCWriter::collectImageDataUses(llvm::Module &Mod) {
@@ -1645,7 +1685,25 @@ LLVMCWriter::sourceFunctionDeclaration(const llvm::Function &Fn,
   return Result + ")";
 }
 
+/// The stack bytes the first \p Params parameters of \p Fn (all without)
+/// take on i386, each a multiple of four.
+static uint64_t argumentSlotBytes(const llvm::Function &Fn,
+                                  std::optional<unsigned> Params) {
+  const llvm::DataLayout &Layout = Fn.getParent()->getDataLayout();
+  const unsigned Count = std::min(Params.value_or(Fn.arg_size()),
+                                  static_cast<unsigned>(Fn.arg_size()));
+  uint64_t Bytes = 0;
+  for (unsigned I = 0; I < Count; ++I)
+    Bytes += llvm::alignTo(
+        Layout.getTypeStoreSize(Fn.getFunctionType()->getParamType(I))
+            .getFixedValue(),
+        4);
+  return Bytes;
+}
+
 void LLVMCWriter::writeForwardDecls(llvm::Module &Mod) {
+  const c_library::ImportPops StdcallPops =
+      Img ? c_library::stdcallImportPops(*Img) : c_library::ImportPops();
   for (auto &Fn : Mod) {
     if (OnlyFunction) {
       // Selected fragments need declarations for their referenced providers,
@@ -1707,7 +1765,16 @@ void LLVMCWriter::writeForwardDecls(llvm::Module &Mod) {
 
     // Calls the callee's prototype decides pass as many arguments as it
     // takes (printedCallArgLimit), which the declaration takes too.
-    OS << sourceFunctionDeclaration(Fn, Name, prototypedParamCount(Fn));
+    const std::optional<unsigned> Params = prototypedParamCount(Fn);
+    // An i386 stdcall routine pops the arguments its calls push, which a C
+    // compiler leaves to it only by its declaration: where its parameters
+    // fill the slots its names spell (c_library::stdcallImportPops).
+    if (Fn.isDeclaration())
+      if (const auto Pops = StdcallPops.find(Name);
+          Pops != StdcallPops.end() && Pops->second &&
+          *Pops->second == argumentSlotBytes(Fn, Params))
+        OS << "__attribute__((stdcall)) ";
+    OS << sourceFunctionDeclaration(Fn, Name, Params);
     // An import whose identifier is not its symbol links by the symbol, which
     // a comment spells as its language does.
     std::string Comment;

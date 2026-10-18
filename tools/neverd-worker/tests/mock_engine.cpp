@@ -116,6 +116,8 @@ struct MockSession {
   /// and refuse graph/IR reads against a different restricted pipeline.
   std::uint64_t preparedEntry = 0;
   unsigned sourcePrepares = 0, sourcePages = 0, sourceRenders = 0;
+  /// The functions the current neverd_warm_functions_json pass prepared.
+  int warmed = 0;
   std::string preparedView;
   bool rejectedPreparation = false;
   bool wholeProgramPrepared = false;
@@ -904,6 +906,43 @@ const char *neverd_disasm_json_ex(neverd_session_t s, neverd_va_t address,
   return copy(fixtureInstructions(address, count, options & NEVERD_DISASM_FLOW,
                                   options & NEVERD_DISASM_STACK,
                                   session(s)->path.ends_with("local-types.bin"))
+                  .dump());
+}
+const char *neverd_warm_functions_json(neverd_session_t s,
+                                       neverd_va_t firstEntry,
+                                       int maxFunctions) {
+  auto &state = *session(s);
+  state.error.clear();
+  maxFunctions = std::clamp(maxFunctions, 1, 4096);
+  if (state.path.find("warm-unavailable") != std::string::npos)
+    return copy(Json{
+        {"available", false},
+        {"prepared", 0},
+        {"full", false},
+        {"next_entry",
+         nullptr}}.dump());
+  if (firstEntry == 0)
+    state.warmed = 0;
+  // warm-slow.bin takes long enough per step for heartbeats to show a pass.
+  if (state.path.find("warm-slow") != std::string::npos)
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  auto next = std::lower_bound(state.functions.begin(), state.functions.end(),
+                               firstEntry);
+  int prepared = 0;
+  for (; next != state.functions.end() && prepared < maxFunctions; ++next)
+    ++prepared;
+  // warm-full.bin holds eight prepared functions.
+  const bool full = state.path.find("warm-full") != std::string::npos &&
+                    state.warmed + prepared > 8;
+  if (full)
+    prepared = 8 - state.warmed;
+  state.warmed += prepared;
+  return copy(Json{{"available", true},
+                   {"prepared", prepared},
+                   {"full", full},
+                   {"next_entry", next == state.functions.end()
+                                      ? Json(nullptr)
+                                      : Json(hexAddress(*next))}}
                   .dump());
 }
 const char *neverd_code_refs_json(neverd_session_t s, neverd_va_t firstEntry,

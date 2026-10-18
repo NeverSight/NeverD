@@ -147,6 +147,34 @@ model. Symbol versions are not used to select alternate implementations.
 The supported Bionic subset is:
 
 - `memcpy`, `memmove`, `memset`, `memcmp`, `strlen`, `strnlen`, `strcmp`, `strncmp`.
+- `__FD_SET_chk`, `__FD_CLR_chk`, `__FD_ISSET_chk`, using the Bionic LP64
+  1024-bit descriptor bitmap. The signed low 32-bit descriptor must be 0..1023,
+  then the full-width object extent must be at least 128 bytes. Invalid values
+  stop with a non-returning FORTIFY `runtime_failure` before touching the bitmap;
+  signal delivery is not modeled. Valid calls access only the selected eight-byte
+  word, preserve other bits and errno, and do not require an open descriptor.
+  Queries return 0 or 1 and accept read-only memory; mutations require read/write
+  access. Guest-pointer and wrapping-address failures remain explicit. These
+  rules follow the pinned API 28 [checks](https://github.com/aosp-mirror/platform_bionic/blob/android-9.0.0_r1/libc/private/bionic_fortify.h)
+  and [bitmap ABI](https://github.com/aosp-mirror/platform_bionic/blob/android-9.0.0_r1/libc/include/sys/select.h).
+  Raw `pselect6` and its variadic `syscall` route use the shared Linux readiness
+  subset below; Bionic `select`/`pselect` wrappers are not yet modeled.
+- LP64 raw `pselect6`, for immediate completion within the initial 64-descriptor
+  word. It captures all input sets before ordered output, counts ready bits
+  across sets, checks unopened descriptors, and preserves the raw errno/libc
+  errno boundary. Regular files and declared live pidfds share the existing
+  descriptor owner. Connected offline sockets can be readable from supplied
+  data, queued empty UDP datagrams or explicit TCP EOF; remaining declared sends
+  can establish immediate write readiness. Queries never consume a packet,
+  completion error or stream byte. Missing input, gated input, exceptional data
+  and exhausted send contracts retain an unsupported observation boundary.
+  Zero timeouts do not change time. A nonzero timeout requires the explicit
+  virtual idle-time policy and can complete only when immediately ready; its
+  remaining-time copy follows bitmap output, including aliases and ordinary
+  errors. Entirely read-only timeout output is ignored as in Linux. Partial
+  output faults, larger descriptor-table history, temporary signal masks and
+  actual blocking waits remain explicit unsupported cases. No host polling is
+  used. Admission and copy ordering follow [Linux v4.14](https://github.com/torvalds/linux/blob/v4.14/fs/select.c).
 - `strchr`, `strrchr`, `__strchr_chk`, `__strrchr_chk`, with byte-width character
   conversion, NUL matches, full-width object extents and unchanged errno. The
   first search can return before reaching a terminator; reverse search must

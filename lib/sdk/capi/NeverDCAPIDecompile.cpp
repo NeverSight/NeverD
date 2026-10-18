@@ -328,6 +328,58 @@ static int prepareFunction(neverd_session_t Sess, neverd_va_t FuncEntry,
   return 0;
 }
 
+const char *neverd_warm_functions_json(neverd_session_t Sess,
+                                       neverd_va_t FirstEntry,
+                                       int MaxFunctions) {
+  auto *S = toSession(Sess);
+  if (!S)
+    return nullptr;
+  S->clearError();
+  try {
+    if (!S->Loaded) {
+      S->setError("no binary loaded");
+      return nullptr;
+    }
+    std::optional<AnalysisCacheWarmup> Warmup;
+    std::optional<va_t> Next;
+    // A PE function's preparation discovers exception handlers and drops
+    // this state (prepareFunction), so nothing kept here would survive.
+    if (S->Img.Format != BinaryFormat::COFF && S->Img.Arch == Arch::X64 &&
+        S->synchronizeFunctions()) {
+      // ensurePipeline drops analysis state from before the current
+      // signature feature generation.  The state built here belongs to the
+      // current one, so record it as ensurePipeline would after a run.
+      if (S->PipelineFeatureGeneration != S->SigDB.featureGeneration()) {
+        S->clearPipeline();
+        S->PipelineFeatureGeneration = S->SigDB.featureGeneration();
+      }
+      const FunctionPage Page = functionPage(*S, FirstEntry, MaxFunctions);
+      std::vector<va_t> Entries;
+      Entries.reserve(Page.Functions.size());
+      for (const FuncInfo *F : Page.Functions)
+        Entries.push_back(F->Entry);
+      PipelineOptions Opts;
+      S->applyAnalysisOptions(Opts);
+      Opts.AnalysisCache = &S->AnalysisCache;
+      Warmup = Pipeline().warmAnalysisCache(S->Img, Opts, S->decompileDebug(),
+                                            Entries);
+      Next = Page.NextEntry;
+    }
+    llvm::json::Object Result;
+    Result["available"] = Warmup.has_value();
+    Result["prepared"] = static_cast<int64_t>(Warmup ? Warmup->Prepared : 0);
+    Result["full"] = Warmup && Warmup->Full;
+    Result["next_entry"] =
+        Warmup && Next ? llvm::json::Value(vaHex(*Next)) : nullptr;
+    return dupStr(jsonToString(llvm::json::Value(std::move(Result))));
+  } catch (const std::exception &Error) {
+    S->setError(std::string("function preparation failed: ") + Error.what());
+  } catch (...) {
+    S->setError("unexpected function preparation failure");
+  }
+  return nullptr;
+}
+
 int neverd_prepare_function(neverd_session_t Sess, neverd_va_t FuncEntry) {
   return prepareFunction(Sess, FuncEntry, /*NeedHighIR=*/true);
 }
