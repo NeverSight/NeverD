@@ -350,6 +350,10 @@ public:
             Emitter.AddressProvenanceWork.FrameSlotCacheHits};
   }
 
+  static uint64_t frameSlotReplays(const MedLLVMEmitter &Emitter) {
+    return Emitter.AddressProvenanceWork.FrameSlotReplays;
+  }
+
   static std::optional<std::pair<std::pair<int, int>, int64_t>>
   defaultFrameSlot(
       MedLLVMEmitter &Emitter, const MedFunc &Func, Arch TargetArch,
@@ -23326,6 +23330,101 @@ TEST(LLVMFrameSlotProof, ClosedQueryReuseRetainsContextAndBudgetBoundaries) {
   }
 }
 
+// A shared-budget proof that completed replays with the nodes it used: the
+// answer and the remaining budget match a fresh walk, including a budget that
+// is exactly enough and one that is one node short.
+TEST(LLVMFrameSlotProof, SharedBudgetProofsReplayTheirNodes) {
+  for (Arch TargetArch : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64}) {
+    SCOPED_TRACE(static_cast<int>(TargetArch));
+    FrameSlotProofFixture Fixture(TargetArch);
+    Fixture.diamonds(20);
+    auto query = [&](MedLLVMEmitter &Emitter, size_t Budget) {
+      const auto Slot = MedLLVMProvenanceTestPeer::defaultFrameSlot(
+          Emitter, Fixture.Func, TargetArch, Fixture.Address, false, nullptr,
+          &Budget);
+      return std::make_pair(Slot, Budget);
+    };
+    MedLLVMEmitter Emitter;
+    // The first walk builds the function's feasible edges, a new generation
+    // that keeps the walk from publishing its proof.
+    query(Emitter, 8192);
+    const auto [Fresh, Left] = query(Emitter, 8192);
+    ASSERT_TRUE(Fresh);
+    const size_t Nodes = 8192 - Left;
+    ASSERT_GT(Nodes, 1u);
+    EXPECT_EQ(MedLLVMProvenanceTestPeer::frameSlotReplays(Emitter), 0u);
+    const uint64_t NodesBefore =
+        MedLLVMProvenanceTestPeer::frameSlotWork(Emitter).first;
+    EXPECT_EQ(query(Emitter, 8192), std::make_pair(Fresh, Left));
+    EXPECT_EQ(MedLLVMProvenanceTestPeer::frameSlotWork(Emitter).first,
+              NodesBefore + Nodes);
+    EXPECT_EQ(MedLLVMProvenanceTestPeer::frameSlotReplays(Emitter), 1u);
+    for (const bool Fits : {true, false}) {
+      SCOPED_TRACE(Fits);
+      const size_t Budget = Nodes - !Fits;
+      MedLLVMEmitter Unused;
+      const uint64_t ReplaysBefore =
+          MedLLVMProvenanceTestPeer::frameSlotReplays(Emitter);
+      // A budget covering the recorded nodes replays the walk; a smaller one
+      // replays its running out.
+      EXPECT_EQ(query(Emitter, Budget), query(Unused, Budget));
+      EXPECT_EQ(MedLLVMProvenanceTestPeer::frameSlotReplays(Emitter),
+                ReplaysBefore + 1);
+      EXPECT_EQ(query(Emitter, Budget).first.has_value(), Fits);
+    }
+    // A walk that ran out only shows it needs more than its budget: smaller
+    // budgets replay, larger ones walk afresh.
+    MedLLVMEmitter Short;
+    query(Short, 8192);
+    const auto ShortRun = query(Short, Nodes - 1);
+    EXPECT_FALSE(ShortRun.first);
+    EXPECT_EQ(ShortRun.second, 0u);
+    const uint64_t ShortReplays =
+        MedLLVMProvenanceTestPeer::frameSlotReplays(Short);
+    MedLLVMEmitter Unused;
+    EXPECT_EQ(query(Short, Nodes / 2), query(Unused, Nodes / 2));
+    EXPECT_EQ(MedLLVMProvenanceTestPeer::frameSlotReplays(Short),
+              ShortReplays + 1);
+    EXPECT_EQ(query(Short, Nodes), std::make_pair(Fresh, size_t{0}));
+    EXPECT_EQ(MedLLVMProvenanceTestPeer::frameSlotReplays(Short),
+              ShortReplays + 1);
+  }
+}
+
+// A bound query's answer is reused only for the same bindings.
+TEST(LLVMFrameSlotProof, BoundQueriesReuseOnlyTheirBindings) {
+  for (Arch TargetArch : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64}) {
+    SCOPED_TRACE(static_cast<int>(TargetArch));
+    FrameSlotProofFixture Fixture(TargetArch);
+    const MedVar Index = Fixture.temp(), Address = Fixture.temp();
+    Fixture.op(0, NdOp::INT_ADD, Address, {Fixture.SP, Index});
+    MedLLVMEmitter Emitter;
+    const std::vector<std::pair<MedVar, uint64_t>> Bind32 = {{Index, 32}},
+                                                   Bind16 = {{Index, 16}},
+                                                   Unrelated = {{Address, 16}};
+    for (unsigned Round = 0; Round != 2; ++Round) {
+      SCOPED_TRACE(Round);
+      const uint64_t NodesBefore =
+          MedLLVMProvenanceTestPeer::frameSlotWork(Emitter).first;
+      const auto At32 = MedLLVMProvenanceTestPeer::defaultFrameSlot(
+          Emitter, Fixture.Func, TargetArch, Address, false, &Bind32);
+      ASSERT_TRUE(At32);
+      EXPECT_EQ(At32->second, 32);
+      if (Round)
+        EXPECT_EQ(MedLLVMProvenanceTestPeer::frameSlotWork(Emitter).first,
+                  NodesBefore);
+      const auto At16 = MedLLVMProvenanceTestPeer::defaultFrameSlot(
+          Emitter, Fixture.Func, TargetArch, Address, false, &Bind16);
+      ASSERT_TRUE(At16);
+      EXPECT_EQ(At16->second, 16);
+      EXPECT_FALSE(MedLLVMProvenanceTestPeer::defaultFrameSlot(
+          Emitter, Fixture.Func, TargetArch, Address, false, &Unrelated));
+      EXPECT_FALSE(MedLLVMProvenanceTestPeer::defaultFrameSlot(
+          Emitter, Fixture.Func, TargetArch, Address));
+    }
+  }
+}
+
 TEST(LLVMFrameSlotProof, RebuiltFeasibleGraphAndFunctionDropClosedQueries) {
   for (Arch TargetArch : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64}) {
     SCOPED_TRACE(static_cast<int>(TargetArch));
@@ -23341,11 +23440,19 @@ TEST(LLVMFrameSlotProof, RebuiltFeasibleGraphAndFunctionDropClosedQueries) {
         Emitter, Fixture.Func, TargetArch, Fixture.Address));
     ASSERT_TRUE(MedLLVMProvenanceTestPeer::defaultFrameSlot(
         Emitter, Fixture.Func, TargetArch, Fixture.Address));
+    size_t Budget = 8192;
+    ASSERT_TRUE(MedLLVMProvenanceTestPeer::defaultFrameSlot(
+        Emitter, Fixture.Func, TargetArch, Fixture.Address, false, nullptr,
+        &Budget));
     Fixture.Func.Blocks[2].Ops.front().Inputs[1] =
         MedVar::makeConst(8, Fixture.Width);
     MedLLVMProvenanceTestPeer::invalidateFeasibleEdgeDependentCaches(Emitter);
     EXPECT_FALSE(MedLLVMProvenanceTestPeer::defaultFrameSlot(
         Emitter, Fixture.Func, TargetArch, Fixture.Address));
+    Budget = 8192;
+    EXPECT_FALSE(MedLLVMProvenanceTestPeer::defaultFrameSlot(
+        Emitter, Fixture.Func, TargetArch, Fixture.Address, false, nullptr,
+        &Budget));
 
     FrameSlotProofFixture Other(TargetArch);
     Other.diamonds(1);

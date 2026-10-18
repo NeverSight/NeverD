@@ -56,6 +56,8 @@ void MedLLVMEmitter::ensureAddrPredCache() const {
   AddrPredCacheFor = CurMedFunc;
   SlotAddressEscapesCache.clear();
   SlotMatchingKeyLoadCache.clear();
+  EscapingSlotKeys.reset();
+  LoadedSlotKeys.reset();
   SlotReloadUsedLocallyCache.clear();
   WritableDataSegCache.clear();
   PtrTableUniqueSegCache.clear();
@@ -80,31 +82,22 @@ bool MedLLVMEmitter::stackSlotAddressEscapes(const MedVar &SlotAddr) const {
   if (auto It = SlotAddressEscapesCache.find(*Target);
       It != SlotAddressEscapesCache.end())
     return It->second;
-  bool Result = false;
   // The slot's address passed as a call argument: a callee may write an
   // already- symbolized pointer through it (the escaping output-pointer shape,
-  // #475).
-  for (const auto &CI : CurMedFunc->CallInfos) {
-    for (const auto &Arg : CI.Args)
-      if (auto K = keyOf(Arg); K && *K == *Target) {
-        Result = true;
-        break;
-      }
-    if (Result)
-      break;
-  }
-  // The slot's address stored to memory escapes the same way.
-  if (!Result)
-    for (const auto &Blk : CurMedFunc->Blocks) {
+  // #475). The slot's address stored to memory escapes the same way.
+  if (!EscapingSlotKeys) {
+    EscapingSlotKeys.emplace();
+    for (const auto &CI : CurMedFunc->CallInfos)
+      for (const auto &Arg : CI.Args)
+        if (auto K = keyOf(Arg))
+          EscapingSlotKeys->insert(*K);
+    for (const auto &Blk : CurMedFunc->Blocks)
       for (const auto &Op : Blk.Ops)
         if (Op.Opcode == NdOp::STORE && Op.NumInputs >= 2)
-          if (auto K = keyOf(Op.Inputs[1]); K && *K == *Target) {
-            Result = true;
-            break;
-          }
-      if (Result)
-        break;
-    }
+          if (auto K = keyOf(Op.Inputs[1]))
+            EscapingSlotKeys->insert(*K);
+  }
+  const bool Result = EscapingSlotKeys->count(*Target) != 0;
   SlotAddressEscapesCache[*Target] = Result;
   return Result;
 }
@@ -125,18 +118,16 @@ bool MedLLVMEmitter::frameSlotHasMatchingKeyLoad(
   if (auto It = SlotMatchingKeyLoadCache.find(*SK);
       It != SlotMatchingKeyLoadCache.end())
     return It->second;
-  bool Result = false;
-  for (const auto &Blk : CurMedFunc->Blocks) {
-    for (const auto &Op : Blk.Ops)
-      if (Op.Opcode == NdOp::LOAD && Op.NumInputs >= 1 &&
-          Op.MemoryAddressSpace == NdMemoryAddressSpace::Default)
-        if (auto LK = keyOf(Op.Inputs[0]); LK && *LK == *SK) {
-          Result = true;
-          break;
-        }
-    if (Result)
-      break;
+  if (!LoadedSlotKeys) {
+    LoadedSlotKeys.emplace();
+    for (const auto &Blk : CurMedFunc->Blocks)
+      for (const auto &Op : Blk.Ops)
+        if (Op.Opcode == NdOp::LOAD && Op.NumInputs >= 1 &&
+            Op.MemoryAddressSpace == NdMemoryAddressSpace::Default)
+          if (auto LK = keyOf(Op.Inputs[0]))
+            LoadedSlotKeys->insert(*LK);
   }
+  const bool Result = LoadedSlotKeys->count(*SK) != 0;
   SlotMatchingKeyLoadCache[*SK] = Result;
   return Result;
 }

@@ -8,6 +8,7 @@ A(Intrinsic::Hvc,          "hvc");
 A(Intrinsic::Smc,          "smc");
 A(Intrinsic::Brk,          "brk");
 A(Intrinsic::Hlt_A64,      "hlt");
+A(Intrinsic::Udf_A64,      "udf");
 A(Intrinsic::Mrs,          "mrs");
 A(Intrinsic::Msr,          "msr");
 A(Intrinsic::Dc,           "dc");

@@ -1368,6 +1368,7 @@
           "neverd types --pdb",
           "neverd types --pdb-unverified",
           "neverd types --prototypes",
+          "neverd types --record-abi",
           "neverd types --spelling",
           "neverd types --symbol-path",
           "neverd types --type",

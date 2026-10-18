@@ -204,3 +204,7 @@ A64_AtomicSmax, A64_AtomicSmin, A64_AtomicUmax, A64_AtomicUmin,
 // A Linux supervisor call: the number in x8, the arguments in x0-x5 and the
 // result in x0 (MedSyscallConvention.h).
 A64LinuxSyscall,
+
+// A permanently undefined instruction (UDF #imm16): an undefined-instruction
+// exception, where BRK raises a breakpoint one.
+Udf_A64,

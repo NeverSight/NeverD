@@ -163,7 +163,12 @@ bool liftSysMisc(AArch64Lifter &L, AArch64Lifter::LiftState &S,
     break;
   }
   case AARCH64_INS_UDF:
-    S.emitIntrinsic(Intrinsic::Brk);
+    // An undefined-instruction exception, with the code the C writers print.
+    if (const std::optional<uint64_t> Code = exceptionCode(ARM64))
+      S.emitIntrinsic(Intrinsic::Udf_A64, NdVar::reg(a64reg::X0, 8),
+                      {NdVar::cst(*Code, 2)});
+    else
+      S.emitIntrinsic(Intrinsic::Udf_A64);
     break;
 
   // ========================================================================

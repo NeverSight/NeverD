@@ -6,10 +6,10 @@
 
 #include "gtest/gtest.h"
 
+#include "neverd/libc/LibCNames.h"
 #include "neverd/types/HeaderLibrary.h"
 #include "neverd/types/TypeParse.h"
-
-#include "llvm/ADT/StringSet.h"
+#include "neverd/types/TypeRender.h"
 
 using namespace neverd::types;
 
@@ -87,7 +87,7 @@ TEST(HeaderLibrary, EveryLibraryReadsLaidOutForItsDataModel) {
   // A pointer, and a SIZE_T, take what each data model gives them: a 32-bit
   // library's handles and records are a 32-bit program's.
   const HeaderLibrary Libraries[] = {
-#define NEVERD_HEADER_LIBRARY(Id, Name, File, Model, Spelling)                 \
+#define NEVERD_HEADER_LIBRARY(Id, Name, File, Model, ABI, Spelling)            \
   HeaderLibrary::Id,
 #include "neverd/types/HeaderLibraries.def"
   };
@@ -97,12 +97,18 @@ TEST(HeaderLibrary, EveryLibraryReadsLaidOutForItsDataModel) {
     const TypeLibrary *Types = headerLibrary(Library, &Error);
     ASSERT_NE(Types, nullptr) << Error;
     EXPECT_EQ(Types->dataModel(), headerLibraryModel(Library));
-    EXPECT_GT(Types->size(), 3000u);
+    EXPECT_EQ(Types->recordABI(), headerLibraryRecordABI(Library));
+    EXPECT_GT(Types->size(), 500u);
     EXPECT_GT(Types->prototypes().size(), 1500u);
     const bool Wide = headerLibraryModel(Library) != DataModel::ILP32;
-    EXPECT_EQ(sizeOf(*Types, "HANDLE"), Wide ? 8u : 4u);
-    EXPECT_EQ(sizeOf(*Types, "SIZE_T"), Wide ? 8u : 4u);
-    EXPECT_EQ(sizeOf(*Types, "_UNICODE_STRING"), Wide ? 16u : 8u);
+    if (headerLibrarySpelling(Library) == BuiltinSpelling::Windows) {
+      EXPECT_EQ(sizeOf(*Types, "HANDLE"), Wide ? 8u : 4u);
+      EXPECT_EQ(sizeOf(*Types, "SIZE_T"), Wide ? 8u : 4u);
+      EXPECT_EQ(sizeOf(*Types, "_UNICODE_STRING"), Wide ? 16u : 8u);
+    } else {
+      EXPECT_EQ(sizeOf(*Types, "size_t"), Wide ? 8u : 4u);
+      EXPECT_EQ(sizeOf(*Types, "sockaddr_in"), 16u);
+    }
   }
 }
 
@@ -110,12 +116,8 @@ TEST(HeaderLibrary, TheNoReturnTablesHoldEveryNoReturnRoutine) {
   // Function discovery and the call analysis read the tables, before any
   // header: a routine the headers declare noreturn ends the code that calls
   // it with or without them.
-  llvm::StringSet<> Tables;
-#define LIBC_NO_RETURN_SYMBOL(Name) Tables.insert(Name);
-#include "neverd/libc/WindowsNoReturn.inc"
-#undef LIBC_NO_RETURN_SYMBOL
   const HeaderLibrary Libraries[] = {
-#define NEVERD_HEADER_LIBRARY(Id, Name, File, Model, Spelling)                 \
+#define NEVERD_HEADER_LIBRARY(Id, Name, File, Model, ABI, Spelling)            \
   HeaderLibrary::Id,
 #include "neverd/types/HeaderLibraries.def"
   };
@@ -124,7 +126,7 @@ TEST(HeaderLibrary, TheNoReturnTablesHoldEveryNoReturnRoutine) {
     ASSERT_NE(Types, nullptr);
     for (const auto &Prototype : Types->prototypes())
       if (Prototype.getValue()->NoReturn)
-        EXPECT_TRUE(Tables.contains(Prototype.getKey()))
+        EXPECT_TRUE(neverd::libc::isNoReturnFunction(Prototype.getKey()))
             << headerLibraryName(Library).str() << " "
             << Prototype.getKey().str();
   }
@@ -179,6 +181,61 @@ TEST(HeaderLibrary, TheUserLibrariesDeclareNtdllsNativeAPI) {
     TypeLibrary Layout = *Types;
     const ParseResult Laid = parseCTypes(Assertions, Layout);
     EXPECT_TRUE(Laid.Problems.empty()) << Laid.Problems.front().Message;
+  }
+}
+
+TEST(HeaderLibrary, TheLinuxLibrariesLayRecordsOutAsGlibcDoes) {
+  // glibc's records as each architecture's compilers lay them out, as clang
+  // measures them against the same headers: i386's System V ABI aligns
+  // FILE's 64-bit _offset to four and AAPCS32 to eight, and a 32-bit
+  // program's time_t is 32 bits.
+  struct Expected {
+    HeaderLibrary Library;
+    uint64_t Stat, StatSize, Timespec, Mutex, File, FileOffset, Sigaction,
+        Dirent;
+  };
+  const Expected Libraries[] = {
+      {HeaderLibrary::LinuxX64, 144, 48, 16, 40, 216, 144, 152, 280},
+      {HeaderLibrary::LinuxX86, 88, 44, 8, 24, 148, 76, 140, 268},
+      {HeaderLibrary::LinuxARM64, 128, 48, 16, 48, 216, 144, 152, 280},
+      {HeaderLibrary::LinuxARM, 88, 44, 8, 24, 152, 80, 140, 268},
+  };
+  for (const Expected &E : Libraries) {
+    SCOPED_TRACE(headerLibraryName(E.Library).str());
+    std::string Error;
+    const TypeLibrary *Types = headerLibrary(E.Library, &Error);
+    ASSERT_NE(Types, nullptr) << Error;
+    const auto Check = [](const char *What, uint64_t Value) {
+      return "_Static_assert(" + std::string(What) +
+             " == " + std::to_string(Value) + ", \"" + What + "\");\n";
+    };
+    const std::string Assertions =
+        Check("sizeof(struct stat)", E.Stat) +
+        Check("__builtin_offsetof(struct stat, st_size)", E.StatSize) +
+        Check("sizeof(struct timespec)", E.Timespec) +
+        Check("sizeof(pthread_mutex_t)", E.Mutex) +
+        Check("sizeof(FILE)", E.File) +
+        Check("__builtin_offsetof(FILE, _offset)", E.FileOffset) +
+        Check("sizeof(struct sigaction)", E.Sigaction) +
+        Check("sizeof(struct dirent)", E.Dirent);
+    // A copy, which the assertions read without changing the library.
+    TypeLibrary Layout = *Types;
+    const ParseResult Laid = parseCTypes(Assertions, Layout);
+    EXPECT_TRUE(Laid.Problems.empty()) << Laid.Problems.front().Message;
+
+    const FunctionDef *Read = Types->findPrototype("read");
+    ASSERT_NE(Read, nullptr);
+    ASSERT_EQ(Read->Params.size(), 3u);
+    EXPECT_EQ(Read->Params[2].Name, "__nbytes");
+    // glibc 2.38 names strtol __isoc23_strtol for _GNU_SOURCE: a program
+    // imports that name.
+    for (const char *Name : {"strtol", "__isoc23_strtol"}) {
+      const FunctionDef *Number = Types->findPrototype(Name);
+      ASSERT_NE(Number, nullptr) << Name;
+      EXPECT_EQ(Number->Params.size(), 3u) << Name;
+    }
+    ASSERT_NE(Types->findPrototype("exit"), nullptr);
+    EXPECT_TRUE(Types->findPrototype("exit")->NoReturn);
   }
 }
 

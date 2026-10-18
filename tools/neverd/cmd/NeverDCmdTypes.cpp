@@ -457,6 +457,8 @@ int runTypesConvert() {
   json::Object Request{{"dataModel", TypesDataModel.getValue()},
                        {"declarations", std::move(Declarations)},
                        {"keepGoing", TypesKeepGoing.getValue()}};
+  if (!TypesRecordABI.empty())
+    Request["recordABI"] = TypesRecordABI.getValue();
   const bool Renders = TypesAll || !TypeNames.empty();
   if (Renders) {
     json::Array Names;

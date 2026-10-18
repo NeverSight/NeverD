@@ -5422,11 +5422,27 @@ void CFGBuilder::multiStageResolve(const BinaryImage &Img, Decoder &Dec,
       RevokePublishedTables = true;
     // The resolver flow graph models calls by their fallthrough.  A known call
     // target in this same decoded function is another entry with potentially
-    // different selector state.  A call to the function's own entry is a
-    // recursive invocation instead: it enters where every caller enters, so it
-    // reaches a dispatch only through the code an ordinary call runs.
+    // different selector state.  Two targets are not:
+    // - the function's own entry: a recursive invocation enters where every
+    //   caller enters, so it reaches a dispatch only through the code an
+    //   ordinary call runs;
+    // - another function's entry that this graph reaches as a tail call. The
+    //   walk models that edge as `call entry; ret` at the entry, a record that
+    //   holds none of this function's code: a call there runs that function.
+    auto TailCallsItsOwnAddress = [](const InsnRecord &Rec) {
+      if (!Rec.IsCall || !Rec.IsRet || Rec.IsIndirect)
+        return false;
+      for (const LowOp &Op : Rec.Ops)
+        if (Op.Opcode == NdOp::CALL)
+          return Op.NumInputs >= 1 && Op.Inputs[0].isConst() &&
+                 Op.Inputs[0].Offset == Rec.Addr;
+      return false;
+    };
     auto EntersFunctionInterior = [&](va_t Target) {
-      return Target != CurrentFuncEntry && Insns.count(Target) != 0;
+      if (Target == CurrentFuncEntry)
+        return false;
+      const auto It = Insns.find(Target);
+      return It != Insns.end() && !TailCallsItsOwnAddress(It->second);
     };
     // The first scan is a cheap negative gate.  Most switch functions have no
     // unknown target or direct call into this function and pay no graph-copy/

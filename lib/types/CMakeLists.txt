@@ -3,7 +3,7 @@
 # (HeaderLibrarySource.cpp.in): the largest compiles in about 5 s and 0.6 GB.
 set(NEVERD_HEADER_LIBRARIES
   WindowsKernelX64 WindowsUserX64 WindowsKernelX86 WindowsUserX86
-  WindowsUserARM64)
+  WindowsUserARM64 LinuxX64 LinuxX86 LinuxARM64 LinuxARM)
 set(NEVERD_HEADER_LIBRARY_SOURCES)
 foreach(NEVERD_HEADER_LIBRARY IN LISTS NEVERD_HEADER_LIBRARIES)
   set(Source "${CMAKE_CURRENT_SOURCE_DIR}/headers/${NEVERD_HEADER_LIBRARY}.h")

@@ -26,6 +26,7 @@
 #include "neverd/lift/AArch64Lifter.h"
 
 #include <capstone/capstone.h>
+#include <optional>
 
 namespace neverd {
 
@@ -49,6 +50,29 @@ inline bool isFPLaneSize(unsigned LaneSz) {
 /// the complex (FCADD/FCMLA) per-pair lifting.  Returns 0 for
 /// non-FP/unknown.  Defined in AArch64LiftSIMDExt.cpp.
 unsigned complexElemSize(AArch64Layout_VectorLayout Vas);
+
+/// The code an exception-generating instruction carries (`brk #0x3e8`,
+/// `hvc #imm16`), which its intrinsic keeps as its first input.
+inline std::optional<uint64_t> exceptionCode(const cs_aarch64 &ARM64) {
+  if (ARM64.op_count >= 1 && ARM64.operands[0].type == AARCH64_OP_IMM)
+    return static_cast<uint64_t>(ARM64.operands[0].imm) & 0xFFFF;
+  return std::nullopt;
+}
+
+/// The option field (CRm) of a DMB, DSB or ISB: `ish` is 0xB, and an ISB
+/// written without one is SY, 0xF.  None for a form without the field, as
+/// a DSB with the nXS qualifier.
+inline std::optional<uint64_t> barrierOption(const cs_aarch64 &ARM64) {
+  if (ARM64.op_count == 0)
+    return 0xF;
+  const cs_aarch64_op &Op = ARM64.operands[0];
+  if (Op.type == AARCH64_OP_IMM)
+    return static_cast<uint64_t>(Op.imm) & 0xF;
+  if (Op.type == AARCH64_OP_SYSALIAS && (Op.sysop.sub_type == AARCH64_OP_DB ||
+                                         Op.sysop.sub_type == AARCH64_OP_ISB))
+    return static_cast<uint64_t>(Op.sysop.alias.raw_val) & 0xF;
+  return std::nullopt;
+}
 
 /// The immediate `mov Rd, #imm` writes to \p Dst.  Capstone gives the
 /// bitmask immediate of the ORR alias sign-extended to 64 bits; a W register

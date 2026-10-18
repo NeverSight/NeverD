@@ -669,7 +669,7 @@ void HighCWriter::writeStmtImpl(const HighStmt &Stmt, int Indent) {
       if (ResultUsed)
         throw std::invalid_argument("HighC cannot render a live SVC result");
       emitIndent(Indent);
-      OS << statementCallText(*Stmt.Val) << ";\n";
+      OS << callStatementText(*Stmt.Val) << "\n";
       break;
     }
     // A callee declared to return nothing leaves no value in the result
@@ -678,7 +678,7 @@ void HighCWriter::writeStmtImpl(const HighStmt &Stmt, int Indent) {
     if (knownVoidCall(*Stmt.Val) &&
         (Stmt.Dst->Kind == ExprKind::Var || Stmt.Dst->Kind == ExprKind::Phi)) {
       emitIndent(Indent);
-      OS << statementCallText(*Stmt.Val) << ";\n";
+      OS << callStatementText(*Stmt.Val) << "\n";
       const std::string Dest = varName(Stmt.Dst->Var);
       const std::string Printed = printedForwardedVar(Dest, 0);
       if (!Analysis.OmittedCallResults.count(&Stmt) &&
@@ -701,7 +701,7 @@ void HighCWriter::writeStmtImpl(const HighStmt &Stmt, int Indent) {
          !DeclaredCNames.count(
              printedForwardedVar(varName(Stmt.Dst->Var), 0)))) {
       emitIndent(Indent);
-      OS << statementCallText(*Stmt.Val) << ";\n";
+      OS << callStatementText(*Stmt.Val) << "\n";
       break;
     }
     bool DeadIntrinsicResult = Stmt.Dst->Kind == ExprKind::Var &&
@@ -724,7 +724,7 @@ void HighCWriter::writeStmtImpl(const HighStmt &Stmt, int Indent) {
         (isSideeffectIntrinsic(Stmt.Val->IntrinsicId) ||
          !intrinsicCName(Stmt.Val->IntrinsicId))) {
       emitIndent(Indent);
-      OS << statementCallText(*Stmt.Val) << ";\n";
+      OS << callStatementText(*Stmt.Val) << "\n";
       break;
     }
     if (Stmt.Dst->Kind == ExprKind::Load && !Stmt.Dst->Operands.empty()) {
@@ -1293,7 +1293,7 @@ void HighCWriter::writeStmtImpl(const HighStmt &Stmt, int Indent) {
       }
     }
     emitIndent(Indent);
-    OS << statementCallText(*Stmt.CallExpr) << ";\n";
+    OS << callStatementText(*Stmt.CallExpr) << "\n";
     break;
 
   case StmtKind::Return:
@@ -1310,7 +1310,7 @@ void HighCWriter::writeStmtImpl(const HighStmt &Stmt, int Indent) {
       // all the same.
       if (const HighExpr *Call =
               Stmt.RetVal ? returnedCall(*Stmt.RetVal) : nullptr) {
-        OS << statementCallText(*Call) << ";\n";
+        OS << callStatementText(*Call) << "\n";
         emitIndent(Indent);
       }
       OS << "return;\n";
@@ -1495,7 +1495,7 @@ void HighCWriter::writeStmtImpl(const HighStmt &Stmt, int Indent) {
       OS << (Stmt.Val->Kind == ExprKind::Store
                  ? statementText(exprStr(*Stmt.Val))
                  : exprStr(*Stmt.Val))
-         << ";\n";
+         << ";" << intrinsicInstructionComment(*Stmt.Val) << "\n";
     }
     break;
 

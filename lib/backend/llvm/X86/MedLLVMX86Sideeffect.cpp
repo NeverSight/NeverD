@@ -17,6 +17,7 @@
 #include "neverd/backend/llvm/LLVMX86StackEffects.h"
 #include "neverd/backend/llvm/LLVMX86X87StateAsm.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
+#include "neverd/backend/llvm/MedLLVMInstructionText.h"
 
 #define DEBUG_TYPE "neverd-med-llvm-x86-sideeffect"
 #include "neverd/ir/intrinsics/Intrinsics.h"
@@ -108,7 +109,8 @@ bool MedLLVMEmitter::emitX86DebugTrap(const MedOp &Op, Intrinsic IC,
   case I::Ud1: {
     auto *Fn =
         llvm::Intrinsic::getOrInsertDeclaration(Mod, llvm::Intrinsic::trap);
-    Builder.CreateCall(Fn, {});
+    // A UD1 a sanitizer raised carries the check it names.
+    markInstructionText(*Builder.CreateCall(Fn, {}), Op, IC);
     return true;
   }
   default:

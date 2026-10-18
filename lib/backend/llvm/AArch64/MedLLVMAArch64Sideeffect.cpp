@@ -14,6 +14,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
+#include "neverd/backend/llvm/MedLLVMInstructionText.h"
 
 #define DEBUG_TYPE "neverd-med-llvm-aarch64-sideeffect"
 #include "neverd/ir/intrinsics/Intrinsics.h"
@@ -29,24 +30,27 @@ namespace neverd {
 // Memory barriers (DMB, DSB, ISB)
 //===----------------------------------------------------------------------===//
 
-bool MedLLVMEmitter::emitAArch64Barrier(const MedOp & /*Op*/, Intrinsic IC,
+bool MedLLVMEmitter::emitAArch64Barrier(const MedOp &Op, Intrinsic IC,
                                         llvm::IRBuilder<> &Builder) {
   using I = Intrinsic;
   switch (IC) {
   case I::Dmb:
-    Builder.CreateFence(llvm::AtomicOrdering::SequentiallyConsistent);
+    // The strongest fence orders what any DMB option does; the option is
+    // the text it carries (`dmb ishld`).
+    markInstructionText(
+        *Builder.CreateFence(llvm::AtomicOrdering::SequentiallyConsistent), Op,
+        IC);
     return true;
-  case I::Dsb: {
-    auto *VoidTy = llvm::Type::getVoidTy(*Ctx);
-    auto *AsmFnTy = llvm::FunctionType::get(VoidTy, {}, false);
-    auto *IA = llvm::InlineAsm::get(AsmFnTy, "dsb ish", "~{memory}", true);
-    Builder.CreateCall(IA, {});
-    return true;
-  }
+  case I::Dsb:
   case I::Isb: {
+    // A DSB or ISB runs with its own option: `dsb sy` waits for more than
+    // `dsb ish` does.  A lift that kept none ran the inner-shareable one.
+    std::string Text = intrinsicInstructionText(IC, instructionOperand(Op));
+    if (Text.empty())
+      Text = IC == I::Dsb ? "dsb ish" : "isb";
     auto *VoidTy = llvm::Type::getVoidTy(*Ctx);
     auto *AsmFnTy = llvm::FunctionType::get(VoidTy, {}, false);
-    auto *IA = llvm::InlineAsm::get(AsmFnTy, "isb", "~{memory}", true);
+    auto *IA = llvm::InlineAsm::get(AsmFnTy, Text, "~{memory}", true);
     Builder.CreateCall(IA, {});
     return true;
   }
@@ -92,13 +96,16 @@ bool MedLLVMEmitter::emitAArch64Exception(const MedOp &Op, Intrinsic IC,
   using I = Intrinsic;
   switch (IC) {
   case I::Brk:
-  case I::Hlt_A64: {
+  case I::Hlt_A64:
+  case I::Udf_A64: {
     // These instructions raise a synchronous exception and do not have an
     // architectural fallthrough path.  Use the noreturn trap intrinsic rather
     // than debugtrap; EH lowering removes the CFG's conservative fallthrough
     // edge after block emission, once any edge-copy bookkeeping is complete.
-    Builder.CreateIntrinsic(llvm::Type::getVoidTy(*Ctx), llvm::Intrinsic::trap,
-                            {});
+    // The trap carries the instruction and its code (`brk #0x3E8`).
+    markInstructionText(*Builder.CreateIntrinsic(llvm::Type::getVoidTy(*Ctx),
+                                                 llvm::Intrinsic::trap, {}),
+                        Op, IC);
     return true;
   }
   case I::Svc:
@@ -112,7 +119,11 @@ bool MedLLVMEmitter::emitAArch64Exception(const MedOp &Op, Intrinsic IC,
           Imm = Op.Inputs[K].ConstVal;
           break;
         }
-      std::string AsmStr = std::string(Mn) + " #" + std::to_string(Imm);
+      // The instruction with its code (`udf #0xFE`); a supervisor call keeps
+      // the decimal number it has always printed.
+      std::string AsmStr = intrinsicInstructionText(IC, Imm);
+      if (AsmStr.empty())
+        AsmStr = std::string(Mn) + " #" + std::to_string(Imm);
       auto *VoidTy = llvm::Type::getVoidTy(*Ctx);
       auto *AsmFnTy = llvm::FunctionType::get(VoidTy, {}, false);
       auto *IA = llvm::InlineAsm::get(AsmFnTy, AsmStr, "~{memory}", true);

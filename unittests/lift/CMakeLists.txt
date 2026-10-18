@@ -1712,6 +1712,17 @@ if(NEVERD_TEST_CLANG_EXECUTABLE)
     NEVERD_TEST_CLANG="${NEVERD_TEST_CLANG_EXECUTABLE}")
 endif()
 
+# The operand a trap, a breakpoint or a barrier keeps through the lift and
+# both C routes (IntrinsicInstructionText.h).
+add_neverd_unittest(NeverDMachineInstructionTextTests
+  core/MachineInstructionTextTests.cpp
+  LINK_COMPONENTS Decode Lift BackendC
+)
+target_include_directories(NeverDMachineInstructionTextTests PRIVATE
+  ${CMAKE_SOURCE_DIR}/include
+  ${LLVM_INCLUDE_DIRS}
+)
+
 add_neverd_unittest(NeverDLLVMCValueTests
   core/LLVMCValueTests.cpp
   LINK_COMPONENTS BackendC
@@ -2509,6 +2520,8 @@ set(X86_64_TEST_SOURCES
   x86_64/test_debug_params.c
   x86_64/test_jumptable_enhanced.c
   x86_64/test_jumptable_recursive.c
+  x86_64/test_jumptable_rbp_base.s
+  x86_64/test_jumptable_tail_stub.s
   x86_64/test_jumptable_inclusive_postload_clobber.s
   x86_64/test_jumptable_inclusive_postload_unrelated.s
   x86_64/test_jumptable_inclusive_preload_alias.s
@@ -2971,6 +2984,21 @@ add_custom_command(
   DEPENDS ${i386_adjacent_twotable_src}
   COMMENT "Assembling three-run i386 GOTOFF tables")
 list(APPEND TEST_OBJECTS ${i386_three_switch_loops_o2_obj})
+
+# A GOT spill beside a masked byte ring: mask 15 misses the slot, 31 may not.
+set(i386_ring_spill_src "${CMAKE_CURRENT_SOURCE_DIR}/x86_32/test_i386_ring_spill.S")
+foreach(ring_mask 15 31)
+  set(i386_ring_spill_obj
+      "${CMAKE_CURRENT_BINARY_DIR}/test_i386_ring_spill_${ring_mask}.o")
+  add_custom_command(
+    OUTPUT ${i386_ring_spill_obj}
+    COMMAND ${CLANG_EXEC} -target i386-linux-gnu -nostdlib -nostdlibinc -c
+            -DRING_MASK=${ring_mask} ${i386_ring_spill_src}
+            -o ${i386_ring_spill_obj}
+    DEPENDS ${i386_ring_spill_src}
+    COMMENT "Assembling the i386 GOT spill beside a ring of mask ${ring_mask}")
+  list(APPEND TEST_OBJECTS ${i386_ring_spill_obj})
+endforeach()
 
 set(i386_adjacent_function_pointer_src
     "${CMAKE_CURRENT_SOURCE_DIR}/x86_32/test_i386_adjacent_function_pointer_runs.S")

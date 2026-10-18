@@ -1230,6 +1230,10 @@ void MedLLVMEmitter::invalidateFeasibleEdgeDependentCaches() const {
   StableOffsetCache.clear();
   ClosedFrameSlotCacheFor = nullptr;
   ClosedFrameSlotCache.clear();
+  SharedBudgetFrameSlotCacheFor = nullptr;
+  SharedBudgetFrameSlotCache.clear();
+  BoundFrameSlotCacheFor = nullptr;
+  BoundFrameSlotCache.clear();
   IndexedGlobalBaseCacheFor = nullptr;
   IndexedGlobalBaseCache.clear();
   InductionBasesFor = nullptr;

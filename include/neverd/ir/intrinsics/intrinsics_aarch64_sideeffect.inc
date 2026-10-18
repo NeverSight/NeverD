@@ -17,6 +17,7 @@ SIDEEFFECT(Intrinsic::Sevl);
 // traps / system
 SIDEEFFECT(Intrinsic::Brk);
 SIDEEFFECT(Intrinsic::Hlt_A64);
+SIDEEFFECT(Intrinsic::Udf_A64);
 SIDEEFFECT(Intrinsic::Svc);
 SIDEEFFECT(Intrinsic::Hvc);
 SIDEEFFECT(Intrinsic::Smc);

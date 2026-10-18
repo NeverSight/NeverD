@@ -94,6 +94,8 @@ class Checker:
         command = [self.arguments.neverd, "types"]
         if self.arguments.declare:
             command += ["--data-model", self.arguments.data_model]
+            if self.arguments.record_abi:
+                command += ["--record-abi", self.arguments.record_abi]
             for path in self.arguments.declare:
                 command += ["--declare", path]
         else:
@@ -274,6 +276,12 @@ def main():
     parser.add_argument("--data-model", default="LLP64",
                         choices=sorted(TARGETS),
                         help="the data model --declare files lay out for")
+    parser.add_argument("--record-abi", default=None,
+                        choices=("microsoft", "itanium", "i386-sysv",
+                                 "aapcs32"),
+                        help="the record ABI --declare files lay out by "
+                             "(default: the data model's), as a 32-bit Linux "
+                             "library's i386-sysv")
     parser.add_argument("--clang", default="clang",
                         help="the clang driver C and C++ compile with")
     parser.add_argument("--tsc", default="tsc",
@@ -298,6 +306,8 @@ def main():
         checker = Checker(arguments, work)
         if arguments.declare:
             model = arguments.data_model
+            if arguments.record_abi in TARGETS:
+                model = arguments.record_abi
             names = checker.neverd().splitlines()
             types = sum(line.startswith("type ") for line in names)
             prototypes = sum(line.startswith("prototype ") for line in names)

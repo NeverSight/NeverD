@@ -15,6 +15,7 @@
 #include "neverd/sdk/NeverDCAPI.h"
 #include "neverd/support/ProjectWriteLock.h"
 
+#include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/AsmParser/Parser.h"
 #include "llvm/BinaryFormat/ELF.h"
@@ -4227,17 +4228,21 @@ TEST_F(SessionCAPITest, ObjectsTakeTheirLocalTypesFromTheirDWARF) {
   ASSERT_TRUE(Root);
   EXPECT_EQ(Root->getString("source"), "dwarf");
   EXPECT_EQ(Root->getString("dataModel"), "LP64");
+  // The DWARF's types, and glibc's where the object has none of the name:
+  // a Linux object joins the headers of its C library.
   std::set<std::string> Names;
   if (const llvm::json::Array *Types = Root->getArray("types"))
     for (const llvm::json::Value &Type : *Types)
       if (const llvm::json::Object *Entry = Type.getAsObject())
-        if (std::optional<llvm::StringRef> Name = Entry->getString("name")) {
+        if (std::optional<llvm::StringRef> Name = Entry->getString("name");
+            Name && Entry->getString("origin") == "dwarf")
           Names.insert(Name->str());
-          EXPECT_EQ(Entry->getString("origin"), "dwarf") << Name->str();
-        }
   for (const char *Name : {"device", "flags", "value", "pair_t", "color",
                            "mode_t_", "packed", "forward_only"})
     EXPECT_TRUE(Names.count(Name)) << Name;
+  const llvm::json::Array *Headers = Root->getArray("headers");
+  ASSERT_TRUE(Headers && Headers->size() == 1u);
+  EXPECT_EQ((*Headers)[0].getAsObject()->getString("name"), "linux-x64");
 
   // GCC packs the bit-fields after kind, into the bytes of their types'
   // units that hold them, and tail follows them.
@@ -4949,6 +4954,71 @@ TEST_F(SessionCAPITest, ARM64ImportsPassWhatTheirPrototypesCount) {
                         "(HINSTANCE__*)(uintptr_t)arg1, 0);"),
             std::string::npos)
       << Window;
+}
+
+TEST_F(SessionCAPITest, LinuxProgramsJoinTheirGlibcLibrary) {
+  // A Linux program on glibc joins its architecture's library, laid out as
+  // its compilers lay records out: stat takes glibc's prototype, and the
+  // local whose address it takes is glibc's struct stat, spelled by its tag
+  // beside the function of its name.
+  struct Program {
+    const char *File, *Library, *Model, *ABI;
+    int64_t Stat;
+    // Whether LLVM-C declares the frame slot stat fills as the record (an
+    // i386 call's stack slots stay bytes).
+    bool StatLocal;
+  };
+  const Program Programs[] = {
+      {"linux_libc_calls_x64", "linux-x64", "LP64", "itanium", 144, true},
+      {"linux_libc_calls_x86", "linux-x86", "ILP32", "i386-sysv", 88, false},
+      {"linux_libc_calls_arm64", "linux-arm64", "LP64", "itanium", 128, true},
+      {"linux_libc_calls_arm", "linux-arm", "ILP32", "aapcs32", 88, true},
+  };
+  const auto Fixtures =
+      std::filesystem::path(__FILE__).parent_path() / "types" / "fixtures";
+  for (const Program &P : Programs) {
+    SCOPED_TRACE(P.File);
+    std::ifstream Input(Fixtures / P.File, std::ios::binary);
+    const std::string Path =
+        write(P.File, std::string(std::istreambuf_iterator<char>(Input), {}));
+    neverd_session_t Linux = neverd_session_create();
+    ASSERT_NE(Linux, nullptr);
+    const auto Destroy =
+        llvm::make_scope_exit([&] { neverd_session_destroy(Linux); });
+    ASSERT_EQ(neverd_session_load(Linux, Path.c_str()), 1)
+        << takeString(neverd_last_error(Linux));
+    ASSERT_GE(neverd_session_discover_functions(Linux), 0)
+        << takeString(neverd_last_error(Linux));
+    auto Parsed =
+        llvm::json::parse(takeString(neverd_local_types_json(Linux, nullptr)));
+    ASSERT_TRUE(static_cast<bool>(Parsed));
+    const llvm::json::Object &Types = *Parsed->getAsObject();
+    EXPECT_EQ(Types.getString("dataModel"), P.Model);
+    EXPECT_EQ(Types.getString("recordABI"), P.ABI);
+    const llvm::json::Array *Headers = Types.getArray("headers");
+    ASSERT_TRUE(Headers && Headers->size() == 1u);
+    EXPECT_EQ((*Headers)[0].getAsObject()->getString("name"), P.Library);
+    auto Stat = llvm::json::parse(
+        takeString(neverd_local_type_json(Linux, "stat", nullptr)));
+    ASSERT_TRUE(static_cast<bool>(Stat));
+    EXPECT_EQ(Stat->getAsObject()->getInteger("size"), P.Stat);
+
+    const int Index = neverd_func_find_by_name(Linux, "Size");
+    ASSERT_GE(Index, 0);
+    const neverd_va_t Entry = neverd_func_entry(Linux, Index);
+    // stat's path is glibc's const char *; the record it fills is reached
+    // through void *, which converts to <sys/stat.h>'s struct stat *.
+    const std::string HighC = takeString(neverd_decompile(Linux, Entry));
+    EXPECT_NE(HighC.find("stat((char*)(uintptr_t)arg0, (void*)&"),
+              std::string::npos)
+        << HighC;
+    const std::string LLVMC = takeString(neverd_decompile_llvm(Linux, Entry));
+    EXPECT_EQ(LLVMC.find("    stat var_"), std::string::npos) << LLVMC;
+    if (P.StatLocal) {
+      EXPECT_NE(LLVMC.find("struct stat var_"), std::string::npos) << LLVMC;
+      EXPECT_NE(LLVMC.find(".st_size"), std::string::npos) << LLVMC;
+    }
+  }
 }
 
 TEST_F(SessionCAPIKernelInputs, KernelFunctionsHoldTheRecordsTheyName) {

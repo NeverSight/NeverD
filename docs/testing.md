@@ -461,9 +461,17 @@ does the same on the image read without its PDB, of a type the user
 declares, and checks that another function's text stays as it was.
 
 `TypeParse.SizesAMemberReachedThroughANullPointer` reads
-`sizeof(((T *)0)->Member)`, as phnt's `RTL_FIELD_SIZE` spells it.
-`HeaderLibrary.*` reads the embedded Windows libraries and checks how a
-header library joins a program's types;
+`sizeof(((T *)0)->Member)`, as phnt's `RTL_FIELD_SIZE` spells it, and
+`TypeParse.ARoutineTakesItsPrototypeUnderItsAssemblerName` reads glibc's
+`__REDIRECT` (`__isoc23_strtol`) and C99's qualified parameter arrays.
+`HeaderLibrary.*` reads the embedded libraries and checks how a header
+library joins a program's types;
+`HeaderLibrary.TheLinuxLibrariesLayRecordsOutAsGlibcDoes` checks the sizes
+and offsets clang measures for glibc's `stat`, `timespec`,
+`pthread_mutex_t`, `FILE`, `sigaction` and `dirent` on each architecture, and
+`SessionCAPITest.LinuxImportsTakeGlibcsPrototypes` decompiles
+`unittests/types/fixtures/linux_libc_calls_{x64,x86,arm64,arm}`, built as
+`linux_libc_calls.c` says;
 `HeaderLibrary.TheUserLibrariesDeclareNtdllsNativeAPI` checks phnt's
 routines and the PEB, TEB and loader records each user mode library lays
 out. The user mode libraries read a checkout of
@@ -482,6 +490,32 @@ python3 scripts/check_type_renders.py --neverd build/bin/neverd \
 python3 scripts/check_type_renders.py --neverd build/bin/neverd \
   --declare lib/types/headers/WindowsUserARM64.h --data-model LLP64
 ```
+
+The Linux libraries read glibc's headers as each architecture's toolchain
+installs them: the host's for x64 and x86 (libc6-dev, libc6-dev-i386),
+`/usr/aarch64-linux-gnu` for ARM64 and `/usr/arm-linux-gnueabihf` for ARM
+(libc6-dev-arm64-cross, libc6-dev-armhf-cross), or another sysroot:
+`scripts/generate_linux_types.py --sysroot linux-arm=<directory>`. Check
+the x64 and x86 ones with their record ABIs:
+
+```sh
+python3 scripts/check_type_renders.py --neverd build/bin/neverd \
+  --declare lib/types/headers/LinuxX64.h --data-model LP64
+python3 scripts/check_type_renders.py --neverd build/bin/neverd \
+  --declare lib/types/headers/LinuxX86.h --data-model ILP32 \
+  --record-abi i386-sysv
+```
+
+Their C in the keywords spelling, which the libraries name builtins in,
+compiles, as do Go, JavaScript and, for x64, Rust and Python. Their portable
+and windows spellings and their C++ do not compile against a glibc host's
+own headers, which declare glibc's reserved `__` types as well: `__off_t` is
+`long` there, `int32_t` in the portable spelling, and C++ takes the
+`struct __fsid_t` a typedef of glibc's anonymous record names. On x64 the
+prototypes unit warns where it redeclares `vprintf` and its kin, whose
+va_list the library passes as the address it is. The checker builds for
+x86's targets only: `HeaderLibrary.TheLinuxLibrariesLayRecordsOutAsGlibcDoes`
+checks the ARM libraries' layouts against clang's.
 
 With `NEVERD_TYPES_NTOSKRNL` and `NEVERD_TYPES_NTKRNLMP` pointing at
 ntoskrnl.exe and its PDB,
@@ -1128,6 +1162,13 @@ cmake --build build-release --target NeverDX86EncodingAccuracyTests
 ctest --test-dir build-release -L '^NeverDX86EncodingAccuracyTests$' \
   --output-on-failure
 ```
+
+`NeverDMachineInstructionTextTests` lifts AArch64 `brk` (clang's `#1` and
+GCC's `#0x3e8`), `udf`, `hlt`, `hvc`, `smc` and barriers, ARM's `trap`,
+`bkpt` and barriers, and x86's sanitizer `ud1`, and checks the operand each
+intrinsic keeps and the instruction text both C routes print: beside a
+builtin, as an `asm` statement, and as the ACLE value of a barrier's own
+option.
 
 ## LLVMC parameter names and CPU queries
 
@@ -5963,6 +6004,9 @@ their four WHP contract/base variants; other driver methods retain their
 existing limits. The created-regular-attributes and created-directory-filesystem
 Darwin differentials use the same twenty-second guest allowance as the other
 semantic batches, including repeated complete filesystem record copies.
+Their whole-method CTest allowances cover all eight directory guests (180
+seconds) and twenty attribute guests (420 seconds), including host setup and
+teardown. The policy applies to those two methods across their transports.
 Instruction bounds, public defaults and all result assertions remain unchanged.
 
 The four `SessionCAPIKernelInputs` checks require developer-supplied kernel/PDB
@@ -7258,7 +7302,7 @@ range must retain separate owners; a damaged prefix supplies no new entry.
 
 `OrdinaryInternalReturnsRetainTheParentsReturnPC` and `OrdinaryInternalWritesCanUseTheParentsPrivateAllocation` check parent-PC corruption and disjoint parent-local writes on PE, ELF and Mach-O x64 and ELF i386. An intact callee PC alone cannot authorize an ordinary call.
 
-`LLVMFrameSlotProof.RepeatedClosedQueriesDoNotRepeatProofWork` bounds repeated positive and negative query work across x86, x64, ARM and AArch64. The context tests retain bound-value, entry-SP, width and zero-budget refusals, and discard answers across provisional/rebuilt feasible graphs and function changes.
+`LLVMFrameSlotProof.RepeatedClosedQueriesDoNotRepeatProofWork` bounds repeated positive and negative query work across x86, x64, ARM and AArch64. `SharedBudgetProofsReplayTheirNodes` checks that a replayed shared-budget proof leaves the same answer and remaining budget as a fresh walk, for an exactly sufficient budget, one node short and half the nodes, and that a walk that ran out replays only for budgets no larger than its own; `BoundQueriesReuseOnlyTheirBindings` keeps answers for different bindings apart. The context tests retain bound-value, entry-SP, width and zero-budget refusals, and discard answers across provisional/rebuilt feasible graphs and function changes.
 
 `RegistrationState.LocalUnwindRetiresLevelsAfterCheckedFinallyEffects` also checks early stopping below a bound, sentinel exits, enclosing links that skip the requested index and joins with distinct stopping levels. Missing finally bodies must still be rejected when actually traversed; a skipped cleanup must not lend a frame-write effect.
 

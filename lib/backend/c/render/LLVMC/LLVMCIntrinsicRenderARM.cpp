@@ -11,7 +11,9 @@
 //===----------------------------------------------------------------------===//
 
 #include "neverd/backend/c/render/LLVMC/LLVMCIntrinsicRender.h"
+#include "neverd/ir/intrinsics/IntrinsicInstructionText.h"
 
+#include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/AtomicOrdering.h"
 
 #include <cstring>
@@ -48,11 +50,30 @@ InlineAsmRender renderARMInlineAsm(const std::string &AsmStr,
     return {Result, true};
   }
 
+  // A barrier runs as the ACLE intrinsic of its own option: `dsb ishst` is
+  // `__dsb(0xA)`, not the mnemonic's default.
+  if (Mnemonic == "dmb" || Mnemonic == "dsb" || Mnemonic == "isb") {
+    const llvm::StringRef Option =
+        llvm::StringRef(AsmStr).drop_front(Mnemonic.size()).trim();
+    const std::optional<uint64_t> CRm = Option.empty()
+                                            ? std::optional<uint64_t>(0xF)
+                                            : armBarrierOptionValue(Option);
+    if (CRm && Args.empty())
+      return {"__" + Mnemonic + "(0x" + llvm::utohexstr(*CRm) + ");" +
+                  (Option.empty() ? "" : " /* " + AsmStr + " */") + "\n",
+              true};
+  }
   const char *ArmC = lookupArmAsmToC(AsmStr.c_str());
-  if (!ArmC)
+  // A trap or a breakpoint builtin takes no code: the instruction it was
+  // lifted from goes beside it (`__builtin_trap(); /* udf #0xFE */`).
+  std::string Comment;
+  if (!ArmC) {
     ArmC = lookupArmAsmToC(Mnemonic.c_str());
+    if (ArmC && AsmStr != Mnemonic)
+      Comment = " /* " + AsmStr + " */";
+  }
   if (ArmC)
-    return {std::string(ArmC) + ";\n", true};
+    return {std::string(ArmC) + ";" + Comment + "\n", true};
 
   std::string Result = "__asm__ volatile(\"" + AsmStr + "\"";
   if (!Args.empty()) {

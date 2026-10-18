@@ -356,6 +356,7 @@ extern llvm::cl::list<std::string> TypesDeclare;
 extern llvm::cl::opt<std::string> TypesInput;
 extern llvm::cl::opt<std::string> TypesOrigin;
 extern llvm::cl::opt<std::string> TypesDataModel;
+extern llvm::cl::opt<std::string> TypesRecordABI;
 extern llvm::cl::opt<bool> TypesKeepGoing;
 extern llvm::cl::opt<bool> TypesPrototypes;
 extern llvm::cl::opt<bool> TypesFit;

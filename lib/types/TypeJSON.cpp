@@ -174,6 +174,14 @@ std::optional<DataModel> dataModelNamed(llvm::StringRef Name) {
   return std::nullopt;
 }
 
+std::optional<RecordABI> recordABINamed(llvm::StringRef Name) {
+#define NEVERD_RECORD_ABI(Id, Spelling, Rules, ScalarAlignLimit)               \
+  if (Name == Spelling)                                                        \
+    return RecordABI::Id;
+#include "neverd/types/RecordABIs.def"
+  return std::nullopt;
+}
+
 llvm::json::Array typeListJSON(const TypeLibrary &Library) {
   llvm::json::Array Out;
   for (const LocalType *Type : Library.types()) {

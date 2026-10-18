@@ -113,7 +113,7 @@ public:
   /// (CEmitterOptions::RecordDefinitions), and the typedefs of their tags
   /// it spells them by; a record only a pointer names, which they do not
   /// define, is declared incomplete.
-  void writeRecordDefinitions(llvm::StringRef Text);
+  void writeRecordDefinitions(std::string &Text);
   /// A pointer to \p Record, by its tag, which the unit then declares; empty
   /// when the record has no C name.
   std::string recordPointerSpelling(const NdType &Record);

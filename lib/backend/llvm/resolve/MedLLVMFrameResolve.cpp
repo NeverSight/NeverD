@@ -23,6 +23,7 @@
 #include "neverd/ir/med/MedDispatchSlots.h"
 #include "neverd/ir/med/MedDynamicStack.h"
 
+#include "llvm/ADT/Hashing.h"
 #include "llvm/ADT/ScopeExit.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/IRBuilder.h"
@@ -31,16 +32,26 @@
 
 #include <algorithm>
 #include <bit>
+#include <cassert>
 #include <cstdint>
 #include <functional>
 #include <map>
 #include <optional>
 #include <set>
+#include <unordered_map>
+#include <unordered_set>
 #include <utility>
 
 namespace neverd {
 
 namespace {
+// Hashes the query-local keys of canonicalFrameSlotKey's walks. They are
+// only probed, inserted and erased, so their order cannot reach an answer.
+struct FrameProofKeyHash {
+  template <typename Key> size_t operator()(const Key &K) const {
+    return llvm::hash_value(K);
+  }
+};
 // {(Id<<32)|SSAVer, Kind} key for the per-function frame-derived memo, matching
 // the DefIndex/PhiIndex scheme (lossless for 32-bit Id/SSAVer; the small Kind
 // enum never collides with DenseMap's int sentinels).
@@ -297,6 +308,59 @@ std::optional<med_llvm::SlotKey> MedLLVMEmitter::canonicalFrameSlotKey(
       return It->second;
     }
   }
+  // The walk reads the budget only to stop when it is spent, and once it is
+  // spent every step fails and so does the query. A shared-budget walk thus
+  // repeats with the same charge under any budget covering its nodes, and runs
+  // out under any smaller one. A bound query has its own budget, so its
+  // bindings fix its answer.
+  const bool SharedBudgetReplayable =
+      !Bindings && SharedProofBudget &&
+      FeasibleEdgeState != FeasibleEdgeCacheState::Building;
+  if (SharedBudgetReplayable) {
+    if (SharedBudgetFrameSlotCacheFor != CurMedFunc) {
+      SharedBudgetFrameSlotCacheFor = CurMedFunc;
+      SharedBudgetFrameSlotCache.clear();
+    }
+    if (auto It = SharedBudgetFrameSlotCache.find(QueryKey);
+        It != SharedBudgetFrameSlotCache.end()) {
+      const SharedBudgetFrameSlotProof &Known = It->second;
+      if (Known.Complete && Known.Nodes <= *SharedProofBudget) {
+        *SharedProofBudget -= Known.Nodes;
+        AddressProvenanceWork.FrameSlotNodes += Known.Nodes;
+        AddressProvenanceWork.FrameSlotCacheHits += Known.CacheHits;
+        ++AddressProvenanceWork.FrameSlotReplays;
+        return Known.Slot;
+      }
+      // A complete walk needs Nodes; one that ran out needs more than Nodes.
+      // The cache hits counted before running out are not kept.
+      if (Known.Complete ? *SharedProofBudget < Known.Nodes
+                         : *SharedProofBudget <= Known.Nodes) {
+        AddressProvenanceWork.FrameSlotNodes += *SharedProofBudget;
+        *SharedProofBudget = 0;
+        ++AddressProvenanceWork.FrameSlotReplays;
+        return std::nullopt;
+      }
+    }
+  }
+  std::optional<BoundFrameSlotQuery> BoundKey;
+  if (Bindings && !SharedProofBudget && !FrameProofBudgetForTesting &&
+      FeasibleEdgeState != FeasibleEdgeCacheState::Building) {
+    if (BoundFrameSlotCacheFor != CurMedFunc) {
+      BoundFrameSlotCacheFor = CurMedFunc;
+      BoundFrameSlotCache.clear();
+    }
+    std::vector<std::pair<AddressProvenanceVarKey, uint64_t>> Bound;
+    Bound.reserve(Bindings->size());
+    for (const auto &[Value, Bits] : *Bindings)
+      Bound.emplace_back(addressProvenanceVarKey(Value), Bits);
+    BoundKey.emplace(QueryKey.first, RequireEntryStackPointer,
+                     std::move(Bound));
+    if (auto It = BoundFrameSlotCache.find(*BoundKey);
+        It != BoundFrameSlotCache.end()) {
+      ++AddressProvenanceWork.FrameSlotCacheHits;
+      return It->second;
+    }
+  }
   // Building/publishing feasible edges invalidates dependent proofs, including
   // queries already in progress. Do not publish a result from that generation.
   const uint64_t Generation = FrameReloadCacheGeneration;
@@ -304,21 +368,30 @@ std::optional<med_llvm::SlotKey> MedLLVMEmitter::canonicalFrameSlotKey(
   const uint64_t SpOff = TRI.StackPointer;
   const uint64_t FpOff = TRI.FramePointer;
   const unsigned PointerSize = TRI.PointerSize;
-  std::set<AddressProvenanceVarKey> Active;
+  std::unordered_set<AddressProvenanceVarKey, FrameProofKeyHash> Active;
   // Both walks share one saturating budget. The recurrence proof used to run
   // outside the slot budget and copied its visited set down every PHI/select
   // arm, re-expanding shared DAGs exponentially.
   size_t OwnProofBudget = FrameProofBudgetForTesting.value_or(8192);
   size_t &RemainingSlotProofNodes =
       SharedProofBudget ? *SharedProofBudget : OwnProofBudget;
+  const size_t StartingBudget = RemainingSlotProofNodes;
+  size_t ConsumedNodes = 0;
+  bool RanOut = false;
+  const uint64_t CacheHitsBefore = AddressProvenanceWork.FrameSlotCacheHits;
   auto consumeNode = [&] {
-    if (RemainingSlotProofNodes == 0)
+    if (RemainingSlotProofNodes == 0) {
+      RanOut = true;
       return false;
+    }
     --RemainingSlotProofNodes;
+    ++ConsumedNodes;
     ++AddressProvenanceWork.FrameSlotNodes;
     return true;
   };
-  std::map<AddressProvenanceVarKey, med_llvm::SlotKey> ProvenSlots;
+  std::unordered_map<AddressProvenanceVarKey, med_llvm::SlotKey,
+                     FrameProofKeyHash>
+      ProvenSlots;
   auto sameVar = [](const MedVar &A, const MedVar &B) {
     return !A.isConst() && !B.isConst() && A.Kind == B.Kind && A.Id == B.Id &&
            A.SSAVer == B.SSAVer;
@@ -379,8 +452,9 @@ std::optional<med_llvm::SlotKey> MedLLVMEmitter::canonicalFrameSlotKey(
   using AffinePair =
       std::pair<AddressProvenanceVarKey, AddressProvenanceVarKey>;
   using AffineMemoKey = std::pair<AffinePair, int>;
-  std::set<AffinePair> ActiveAffine;
-  std::map<AffineMemoKey, std::optional<int64_t>> AffineMemo;
+  std::unordered_set<AffinePair, FrameProofKeyHash> ActiveAffine;
+  std::unordered_map<AffineMemoKey, std::optional<int64_t>, FrameProofKeyHash>
+      AffineMemo;
   std::function<std::optional<int64_t>(const MedVar &, const MedVar &, int)>
       affineDeltaTo = [&](const MedVar &Start, const MedVar &Target,
                           int Depth) -> std::optional<int64_t> {
@@ -606,10 +680,25 @@ std::optional<med_llvm::SlotKey> MedLLVMEmitter::canonicalFrameSlotKey(
     return Proof;
   };
   auto Result = rec(V, 0);
-  if (Cacheable && ClosedFrameSlotCacheFor == CurMedFunc &&
-      Generation == FrameReloadCacheGeneration &&
-      FeasibleEdgeState != FeasibleEdgeCacheState::Building)
+  // Every step charges a node first and fails without one, and every failing
+  // step fails its query.
+  assert((!RanOut || !Result) && "a frame-slot walk that ran out succeeded");
+  const bool Published = Generation == FrameReloadCacheGeneration &&
+                         FeasibleEdgeState != FeasibleEdgeCacheState::Building;
+  if (Cacheable && ClosedFrameSlotCacheFor == CurMedFunc && Published)
     ClosedFrameSlotCache.emplace(QueryKey, Result);
+  if (SharedBudgetReplayable && SharedBudgetFrameSlotCacheFor == CurMedFunc &&
+      Published) {
+    SharedBudgetFrameSlotProof &Known = SharedBudgetFrameSlotCache[QueryKey];
+    if (!RanOut)
+      Known = {Result, ConsumedNodes,
+               AddressProvenanceWork.FrameSlotCacheHits - CacheHitsBefore,
+               /*Complete=*/true};
+    else if (!Known.Complete)
+      Known.Nodes = std::max(Known.Nodes, StartingBudget);
+  }
+  if (BoundKey && BoundFrameSlotCacheFor == CurMedFunc && Published)
+    BoundFrameSlotCache.emplace(std::move(*BoundKey), Result);
   return Result;
 }
 

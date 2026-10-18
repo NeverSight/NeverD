@@ -1,0 +1,33 @@
+//===- ARMBarrierOptions.def - DMB/DSB/ISB option names ---------*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
+// ARM_BARRIER_OPTION(CRM, NAME)
+//
+//   CRM   The 4-bit option field of an AArch64 or AArch32 DMB, DSB or ISB
+//         (the instruction's CRm), as the Arm ARM encodes it.
+//   NAME  The option as the assembler spells it.  A value without a name
+//         prints as its immediate (`dmb #0x4`).
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef ARM_BARRIER_OPTION
+#error "Define ARM_BARRIER_OPTION before including ARMBarrierOptions.def"
+#endif
+
+ARM_BARRIER_OPTION(0x1, "oshld")
+ARM_BARRIER_OPTION(0x2, "oshst")
+ARM_BARRIER_OPTION(0x3, "osh")
+ARM_BARRIER_OPTION(0x5, "nshld")
+ARM_BARRIER_OPTION(0x6, "nshst")
+ARM_BARRIER_OPTION(0x7, "nsh")
+ARM_BARRIER_OPTION(0x9, "ishld")
+ARM_BARRIER_OPTION(0xA, "ishst")
+ARM_BARRIER_OPTION(0xB, "ish")
+ARM_BARRIER_OPTION(0xD, "ld")
+ARM_BARRIER_OPTION(0xE, "st")
+ARM_BARRIER_OPTION(0xF, "sy")
+
+#undef ARM_BARRIER_OPTION

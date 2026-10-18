@@ -124,11 +124,13 @@ NEVERD_API const char *neverd_local_types_declare(neverd_session_t Sess,
 NEVERD_API const char *neverd_local_types_forget(neverd_session_t Sess,
                                                  const char *NamesJson);
 /// Converts declarations between C, C++, Rust and Go without a program.
-/// \p RequestJson is {"dataModel":"LLP64"|"LP64"|"ILP32","declarations":
+/// \p RequestJson is {"dataModel":"LLP64"|"LP64"|"ILP32","recordABI"?:
+/// "microsoft"|"itanium"|"i386-sysv"|"aapcs32","declarations":
 /// [{"language":"c"|"cpp"|"rust"|"go","source"},...],"keepGoing"?:bool,
 /// "render"?:{...as neverd_local_types_source's options, and
 /// "prototypes":bool}}: the declarations read in order into one library
-/// laid out for the data model, then render as asked.  Returns {"types",
+/// laid out for the data model, as the record ABI lays records out (the
+/// data model's own unless named), then render as asked.  Returns {"types",
 /// "prototypes","problems":[{"declaration","line","column","message"},...],
 /// "source"?}: with a problem nothing renders unless "keepGoing" keeps the
 /// C and C++ declarations that read.  {"error"} when the request is

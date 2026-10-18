@@ -17,6 +17,7 @@
 
 #include "neverd/debug/DWARFLoader.h"
 #include "neverd/debug/PDBLoader.h"
+#include "neverd/loader/ELF/ELFOperatingSystem.h"
 #include "neverd/support/FilePath.h"
 #include "neverd/support/ProjectFiles.h"
 #include "neverd/support/ProjectWriteLock.h"
@@ -112,6 +113,12 @@ std::optional<HeaderImageKind> headerImageKind(const Session &S) {
     return HeaderImageKind::Kind;
 #include "neverd/types/HeaderLibraryImages.def"
     }
+  if (const std::optional<LinuxLibC> LibC = linuxLibC(S.Img)) {
+#define NEVERD_HEADER_LINUX_LIBC(Library, Kind)                                \
+  if (*LibC == LinuxLibC::Library)                                             \
+    return HeaderImageKind::Kind;
+#include "neverd/types/HeaderLibraryImages.def"
+  }
   return std::nullopt;
 }
 
@@ -123,7 +130,8 @@ void joinHeaders(Session &S) {
   if (!Kind)
     return;
   const auto join = [&](types::HeaderLibrary Library) {
-    if (types::headerLibraryModel(Library) != S.LocalTypes->dataModel())
+    if (types::headerLibraryModel(Library) != S.LocalTypes->dataModel() ||
+        types::headerLibraryRecordABI(Library) != S.LocalTypes->recordABI())
       return;
     Session::JoinedHeaders Joined{Library, {}, {}};
     if (const types::TypeLibrary *Headers =
@@ -916,12 +924,22 @@ const char *neverd_types_convert(const char *RequestJson) {
       ModelName ? types::dataModelNamed(*ModelName) : std::nullopt;
   if (!Model)
     return refuse("\"dataModel\" must be LLP64, LP64 or ILP32");
+  std::optional<types::RecordABI> ABI;
+  if (const llvm::json::Value *Named = Request->get("recordABI")) {
+    std::optional<llvm::StringRef> Name = Named->getAsString();
+    ABI = Name ? types::recordABINamed(*Name) : std::nullopt;
+    if (!ABI)
+      return refuse("\"recordABI\" must be microsoft, itanium, i386-sysv or "
+                    "aapcs32");
+  }
   bool KeepGoing = false;
   std::string Error;
   if (!readFlag(*Request, "keepGoing", KeepGoing, Error))
     return refuse(Error);
 
   types::TypeLibrary Library(*Model);
+  if (ABI)
+    Library.setRecordABI(*ABI);
   llvm::json::Array Types, Prototypes, Problems;
   const llvm::json::Array *Declarations = Request->getArray("declarations");
   if (!Declarations)

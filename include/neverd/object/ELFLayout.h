@@ -446,6 +446,9 @@ inline uint64_t elfNoteAlign(uint32_t Val) {
 namespace elf_notes {
 constexpr uint32_t GnuBuildId = 3;
 constexpr const char *GnuOwner = "GNU";
+/// The NDK's .note.android.ident: the Android API level the image targets.
+constexpr uint32_t AndroidIdent = 1;
+constexpr const char *AndroidOwner = "Android";
 } // namespace elf_notes
 
 } // namespace neverd

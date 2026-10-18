@@ -60,10 +60,18 @@ llvm::Error buildSegments(const llvm::object::ELFFile<ELFT> &ELF,
   auto &Metadata = *Img.ELFMetadata;
   Metadata.HeaderSize = Header.e_ehsize;
   Metadata.ProgramHeaders.reserve(PhdrsOr->size());
-  for (const Elf_Phdr &PH : *PhdrsOr)
+  for (const Elf_Phdr &PH : *PhdrsOr) {
     Metadata.ProgramHeaders.push_back({PH.p_type, PH.p_flags, PH.p_offset,
                                        PH.p_vaddr, PH.p_filesz, PH.p_memsz,
                                        PH.p_align});
+    // The dynamic linker's path, its terminator dropped.
+    if (PH.p_type == PT_INTERP && PH.p_filesz > 0 &&
+        rangeInBounds(PH.p_offset, PH.p_filesz, Size)) {
+      const llvm::StringRef Path(
+          reinterpret_cast<const char *>(Data) + PH.p_offset, PH.p_filesz);
+      Metadata.Interpreter = Path.take_until([](char C) { return C == 0; });
+    }
+  }
 
   for (const Elf_Phdr &PH : *PhdrsOr) {
     if (PH.p_type != PT_LOAD)

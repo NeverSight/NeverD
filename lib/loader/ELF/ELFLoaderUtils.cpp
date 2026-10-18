@@ -585,6 +585,16 @@ void parseNotes(const llvm::object::ELFFile<ELFT> &ELF, const uint8_t *Data,
         Img.DynInfo.PDBPath = (kBuildIdPrefix + BuildId).str();
         LLVM_DEBUG(llvm::dbgs() << "elf: build-id = " << BuildId << "\n");
       }
+      // The NDK's identification note leads with the API level.
+      if (NoteNameRef == elf_notes::AndroidOwner &&
+          NH.Type == elf_notes::AndroidIdent && NH.DescSz >= 4 &&
+          Img.ELFMetadata) {
+        const uint8_t *Desc =
+            P + sizeof(ELFNoteHeader) + static_cast<size_t>(NameAlign);
+        Img.ELFMetadata->AndroidApiLevel =
+            uint32_t(Desc[0]) | uint32_t(Desc[1]) << 8 |
+            uint32_t(Desc[2]) << 16 | uint32_t(Desc[3]) << 24;
+      }
 
       P += static_cast<size_t>(TotalSize);
     }

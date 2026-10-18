@@ -7,6 +7,14 @@ foreach(_neverd_darwin_test IN LISTS NeverDDarwinProcessTests_TESTS)
   elseif(_neverd_darwin_test MATCHES
       "^Transports/DarwinProcess\\.SymbolicFileSystemsKeepOwnSnapshotAndFollowedTargetSeparate/")
     set_tests_properties("${_neverd_darwin_test}" PROPERTIES TIMEOUT 240)
+  elseif(_neverd_darwin_test MATCHES
+      "^Transports/DarwinProcess\\.CreatedDirectoryFileSystemsKeepActualParentAndHeldLifetime/")
+    # Eight separately bounded twenty-second guests, plus host setup/teardown.
+    set_tests_properties("${_neverd_darwin_test}" PROPERTIES TIMEOUT 180)
+  elseif(_neverd_darwin_test MATCHES
+      "^Transports/DarwinProcess\\.CreatedRegularAttributesKeepIndependentProvidersAndObjectState/")
+    # Twenty separately bounded twenty-second guests, plus host setup/teardown.
+    set_tests_properties("${_neverd_darwin_test}" PROPERTIES TIMEOUT 420)
   endif()
 endforeach()
 unset(_neverd_darwin_test)

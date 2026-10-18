@@ -17,6 +17,10 @@
 /// NEVERD_HEADER_PE_SUBSYSTEM(Subsystem, Kind)
 ///   A PE image of the subsystem (IMAGE_SUBSYSTEM_*) is of the kind.
 ///
+/// NEVERD_HEADER_LINUX_LIBC(LibC, Kind)
+///   An ELF image under Linux that runs on the C library (LinuxLibC,
+///   ELFOperatingSystem.h) is of the kind.
+///
 /// NEVERD_HEADER_LIBRARY_IMAGE(Kind, Arch, Library)
 ///   An image of the kind and architecture joins the library, after the
 ///   rows above for the same image, where the library's data model is the
@@ -30,6 +34,9 @@
 #ifndef NEVERD_HEADER_PE_SUBSYSTEM
 #define NEVERD_HEADER_PE_SUBSYSTEM(Subsystem, Kind)
 #endif
+#ifndef NEVERD_HEADER_LINUX_LIBC
+#define NEVERD_HEADER_LINUX_LIBC(LibC, Kind)
+#endif
 #ifndef NEVERD_HEADER_LIBRARY_IMAGE
 #define NEVERD_HEADER_LIBRARY_IMAGE(Kind, Arch, Library)
 #endif
@@ -38,10 +45,15 @@
 NEVERD_HEADER_IMAGE_KIND(WindowsKernel)
 // Windows programs and the libraries they load.
 NEVERD_HEADER_IMAGE_KIND(WindowsUser)
+// Linux programs and libraries on the GNU C Library.
+NEVERD_HEADER_IMAGE_KIND(GNULinux)
 
 NEVERD_HEADER_PE_SUBSYSTEM(1, WindowsKernel) // IMAGE_SUBSYSTEM_NATIVE
 NEVERD_HEADER_PE_SUBSYSTEM(2, WindowsUser)   // IMAGE_SUBSYSTEM_WINDOWS_GUI
 NEVERD_HEADER_PE_SUBSYSTEM(3, WindowsUser)   // IMAGE_SUBSYSTEM_WINDOWS_CUI
+
+// Neither bionic nor musl lays records out as glibc does on 32-bit targets.
+NEVERD_HEADER_LINUX_LIBC(GNU, GNULinux)
 
 NEVERD_HEADER_LIBRARY_IMAGE(WindowsKernel, X64, WindowsKernelX64)
 NEVERD_HEADER_LIBRARY_IMAGE(WindowsUser, X64, WindowsUserX64)
@@ -55,7 +67,12 @@ NEVERD_HEADER_LIBRARY_IMAGE(WindowsUser, X86, WindowsKernelX86)
 // x64 kernel's records (CONTEXT, the trap and processor control blocks) are
 // x64's.
 NEVERD_HEADER_LIBRARY_IMAGE(WindowsUser, AArch64, WindowsUserARM64)
+NEVERD_HEADER_LIBRARY_IMAGE(GNULinux, X64, LinuxX64)
+NEVERD_HEADER_LIBRARY_IMAGE(GNULinux, X86, LinuxX86)
+NEVERD_HEADER_LIBRARY_IMAGE(GNULinux, AArch64, LinuxARM64)
+NEVERD_HEADER_LIBRARY_IMAGE(GNULinux, ARM, LinuxARM)
 
 #undef NEVERD_HEADER_IMAGE_KIND
 #undef NEVERD_HEADER_PE_SUBSYSTEM
+#undef NEVERD_HEADER_LINUX_LIBC
 #undef NEVERD_HEADER_LIBRARY_IMAGE

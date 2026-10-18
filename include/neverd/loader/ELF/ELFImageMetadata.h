@@ -7,6 +7,8 @@
 #define NEVERD_LOADER_ELF_ELFIMAGEMETADATA_H
 
 #include <cstdint>
+#include <optional>
+#include <string>
 #include <vector>
 
 namespace neverd {
@@ -26,6 +28,13 @@ struct ELFImageMetadata {
   std::vector<ELFProgramHeader> ProgramHeaders;
   /// e_ehsize: the file header's own size.
   uint16_t HeaderSize = 0;
+  /// The dynamic linker PT_INTERP asks for, empty for none: which C
+  /// library a Linux program runs on (/lib64/ld-linux-x86-64.so.2,
+  /// /system/bin/linker64, /lib/ld-musl-x86_64.so.1).
+  std::string Interpreter;
+  /// The Android API level an NDK-built image's identification note
+  /// names, none without the note.
+  std::optional<uint32_t> AndroidApiLevel;
 };
 } // namespace neverd
 #endif

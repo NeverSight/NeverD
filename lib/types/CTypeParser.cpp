@@ -558,8 +558,12 @@ private:
     return builtinKeyword(Word) || builtinWords().count(Word) ||
            Library.find(Word) || Word == "size_t" || Word == "ptrdiff_t" ||
            Word == "intptr_t" || Word == "uintptr_t" || Word == "ssize_t" ||
-           ((Word == "__builtin_va_list" || Word == "va_list") &&
-            !Library.find(Word));
+           (vaListWord(Word) && !Library.find(Word));
+  }
+  /// The compiler's va_list, as <stdarg.h> and glibc name it.
+  static bool vaListWord(llvm::StringRef Word) {
+    return Word == "__builtin_va_list" || Word == "va_list" ||
+           Word == "__gnuc_va_list";
   }
   /// Whether the token at \p Ahead may begin a declaration's type.
   bool startsType(size_t Ahead = 0) const {
@@ -633,6 +637,10 @@ private:
     uint32_t Alignment = 0;
     bool Packed = false;
     bool NoReturn = false;
+    /// The name an assembler label gives the declaration's symbol, which a
+    /// program imports it by: glibc's __REDIRECT names strtol's
+    /// __isoc23_strtol.
+    std::string AsmName;
   };
 
   struct Specifiers {
@@ -737,6 +745,11 @@ private:
         }
         Library.definePrototype(Name, Type->Function);
         note(Result.Prototypes, NotedPrototypes, Name);
+        // A program that calls the routine imports its assembler name.
+        if (!Declared.AsmName.empty() && Declared.AsmName != Name) {
+          Library.definePrototype(Declared.AsmName, Type->Function);
+          note(Result.Prototypes, NotedPrototypes, Declared.AsmName);
+        }
         // A definition's body holds no declarations this reads.
         if (isPunct("{")) {
           skipBody();
@@ -977,16 +990,21 @@ private:
         take();
         if (auto Found = builtinWords().find(W); Found != builtinWords().end())
           Spec.Type = makeBuiltin(Found->second);
-        else if ((W == "__builtin_va_list" || W == "va_list") &&
-                 !Library.find(W)) {
+        else if (vaListWord(W) && !Library.find(W)) {
           // Windows and i386 pass the variable arguments' address; other
-          // targets a record of their own.
-          if (Library.dataModel() == DataModel::LP64) {
+          // targets a record of their own, which a parameter passes as its
+          // address too: x86-64's decays from an array, and AAPCS64 passes
+          // a record that large by reference.
+          if (Library.dataModel() == DataModel::LP64 && !InParameter) {
             fail(T, "__builtin_va_list of an LP64 target is a record local "
                     "types do not know");
             return false;
           }
           Spec.Type = makePointer(makeBuiltin(Builtin::Char), pointerSize());
+        } else if (Library.find(W)) {
+          // A typedef the declarations made, such as glibc's size_t, keeps
+          // its name.
+          Spec.Type = named(W);
         } else if (W == "size_t" || W == "uintptr_t")
           Spec.Type = makeBuiltin(pointerSize() == 8 ? Builtin::ULongLong
                                                      : Builtin::UInt);
@@ -1100,14 +1118,18 @@ private:
       if (!expect("(", "after " + Word.str()))
         return false;
       if (Word == "__asm__" || Word == "__asm") {
-        // The symbol's name in the object file says nothing of its type.
+        // The symbol's name in the object file, its quoted parts joined.
+        std::string Name;
         while (!Failed && !accept(")")) {
           if (peek().Kind == TokenKind::End) {
             fail(At, "an assembler name does not end");
             return false;
           }
-          take();
+          const Token Part = take();
+          if (Part.Kind == TokenKind::String)
+            Name += Part.Text;
         }
+        Read.AsmName = std::move(Name);
         continue;
       }
       if (Word == "DECLSPEC_ALIGN" || Word == "alignas" || Word == "_Alignas") {
@@ -1549,6 +1571,18 @@ private:
       if (accept("[")) {
         Suffix S;
         S.Array = true;
+        // C99 lets a parameter's array qualify the pointer it adjusts to and
+        // promise its least size ([restrict], [static 4]), which change no
+        // layout local types hold.
+        while (isWord("restrict") || isWord("__restrict") ||
+               isWord("__restrict__") || isWord("const") ||
+               isWord("volatile") || isWord("static"))
+          take();
+        // A parameter's array adjusts to a pointer, so its size may name
+        // another parameter (C99's regexec takes `__pmatch[__nmatch]`).
+        if (InParameter && peek().Kind == TokenKind::Word &&
+            !Enumerators.count(peek().Text) && isPunct("]", 1))
+          take();
         if (!isPunct("]")) {
           const Token At = peek();
           std::optional<int64_t> Count = constant();
@@ -1639,6 +1673,10 @@ private:
         expect(")", "after '...'");
         return Function;
       }
+      // The parameter's type and declarator are a parameter's.
+      const bool Enclosing = InParameter;
+      InParameter = true;
+      auto Leave = llvm::make_scope_exit([&] { InParameter = Enclosing; });
       Specifiers Spec;
       if (!specifiers(Spec))
         return Function;
@@ -2006,6 +2044,8 @@ private:
   std::optional<CallingConvention> PendingConvention;
   /// What the attributes of the declarator being read say.
   Attributes Declared;
+  /// Whether the declarator being read is a parameter's.
+  bool InParameter = false;
   const std::function<TypeExprRef(TypeExprRef)> Identity = [](TypeExprRef T) {
     return T;
   };

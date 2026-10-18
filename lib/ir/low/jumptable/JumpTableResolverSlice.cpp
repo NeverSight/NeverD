@@ -6216,6 +6216,182 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
     return Walk(Address, Before, 0);
   };
 
+  // A frame store through a bounded index (`ring[i & 15] = v`) writes only
+  // within [frame + c, frame + c + max + size).  An index is bounded when every
+  // definition reaching the store bounds it: an AND with a constant mask or a
+  // zero extension from at most two bytes, optionally scaled by a small
+  // constant.  A path back to a root, a partial or predicated write, or a call
+  // on the way leaves the index unbounded.
+  auto boundedFrameStoreRange =
+      [&](int Block, int Before, const NdVar &Address,
+          uint16_t StoreSize) -> std::optional<std::pair<int64_t, int64_t>> {
+    if (Block < 0 || Block >= static_cast<int>(Graph.Blocks.size()) ||
+        StoreSize == 0)
+      return std::nullopt;
+    using Occurrence = std::pair<int, int>;
+    // Collects the definitions of V that reach the point after Ops[From] of
+    // Blk.  A block entered again adds nothing: its other entries supply the
+    // value that flows around the cycle.
+    std::function<bool(int, int, const NdVar &, std::set<int> &,
+                       std::vector<Occurrence> &)>
+        reachingDefs = [&](int Blk, int From, const NdVar &V,
+                           std::set<int> &Visited,
+                           std::vector<Occurrence> &Defs) -> bool {
+      const std::vector<LowOp> &Ops = Graph.Blocks[Blk].Ops;
+      for (int I = std::min(From, static_cast<int>(Ops.size()) - 1); I >= 0;
+           --I) {
+        if (!consumeEvidence())
+          return false;
+        const LowOp &Op = Ops[I];
+        if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL ||
+            Op.Opcode == NdOp::INTRINSIC)
+          return false;
+        const NdVar &Out = Op.Output;
+        if (Out.Space != V.Space || Out.Size == 0 ||
+            Out.Offset >= V.Offset + V.Size ||
+            V.Offset >= Out.Offset + Out.Size)
+          continue;
+        const std::optional<bool> Guarded = instructionIsGuarded(Op.Addr);
+        if (Out.Offset != V.Offset || Out.Size != V.Size || !Guarded ||
+            *Guarded || Defs.size() >= 16)
+          return false;
+        Defs.emplace_back(Blk, I);
+        return true;
+      }
+      if (IsRootBlock[Blk] || Graph.Blocks[Blk].Preds.empty() ||
+          !consumeEvidence(orderedSetLookupWork(Visited.size()) + 2))
+        return false;
+      if (!Visited.insert(Blk).second)
+        return true;
+      for (int Pred : Graph.Blocks[Blk].Preds)
+        if (Pred < 0 || Pred >= static_cast<int>(Graph.Blocks.size()) ||
+            !reachingDefs(Pred,
+                          static_cast<int>(Graph.Blocks[Pred].Ops.size()) - 1,
+                          V, Visited, Defs))
+          return false;
+      return true;
+    };
+    // An index span far below the address width keeps the interval exact
+    // under modular address arithmetic.
+    constexpr uint64_t MaxIndexSpan = uint64_t{1} << 20;
+    auto numeric = [](const NdVar &V) -> std::optional<int64_t> {
+      if (!V.isConst() || V.Size == 0 || V.Size > 8 ||
+          isAddressProvenance(V.Provenance))
+        return std::nullopt;
+      return V.Size == 8 ? static_cast<int64_t>(V.Offset)
+                         : llvm::SignExtend64(V.Offset, V.Size * 8);
+    };
+    std::function<std::optional<uint64_t>(const NdVar &, int, int, unsigned)>
+        indexMax = [&](const NdVar &V, int Blk, int From,
+                       unsigned Depth) -> std::optional<uint64_t> {
+      if (Depth >= limits::kMaxQuasiCopyDepth || (!V.isReg() && !V.isTemp()))
+        return std::nullopt;
+      std::set<int> Visited;
+      std::vector<Occurrence> Defs;
+      if (!reachingDefs(Blk, From, V, Visited, Defs) || Defs.empty())
+        return std::nullopt;
+      uint64_t Bound = 0;
+      for (const auto &[DefBlock, DefIdx] : Defs) {
+        const LowOp &Def = Graph.Blocks[DefBlock].Ops[DefIdx];
+        std::optional<uint64_t> Max;
+        if (Def.NumInputs >= 1) {
+          switch (Def.Opcode) {
+          case NdOp::COPY:
+            if (Def.Inputs[0].Size == V.Size)
+              Max = indexMax(Def.Inputs[0], DefBlock, DefIdx - 1, Depth + 1);
+            break;
+          case NdOp::INT_ZEXT:
+            if (Def.Inputs[0].Size != 0 && Def.Inputs[0].Size <= 2)
+              Max = (uint64_t{1} << (Def.Inputs[0].Size * 8)) - 1;
+            else if (Def.Inputs[0].Size != 0)
+              Max = indexMax(Def.Inputs[0], DefBlock, DefIdx - 1, Depth + 1);
+            break;
+          case NdOp::INT_AND:
+            for (unsigned K = 0; K < 2 && K < Def.NumInputs && !Max; ++K)
+              if (const auto Mask = numeric(Def.Inputs[K]);
+                  Mask && *Mask >= 0 &&
+                  static_cast<uint64_t>(*Mask) < MaxIndexSpan)
+                Max = static_cast<uint64_t>(*Mask);
+            break;
+          case NdOp::INT_MULT:
+            for (unsigned K = 0; K < 2 && K < Def.NumInputs && !Max; ++K)
+              if (const auto Scale = numeric(Def.Inputs[K]);
+                  Scale && *Scale > 0 && *Scale <= 16)
+                if (const auto Factor = indexMax(Def.Inputs[1 - K], DefBlock,
+                                                 DefIdx - 1, Depth + 1);
+                    Factor && *Factor < MaxIndexSpan)
+                  Max = *Factor * static_cast<uint64_t>(*Scale);
+            break;
+          default:
+            break;
+          }
+        }
+        if (!Max)
+          return std::nullopt;
+        Bound = std::max(Bound, *Max);
+      }
+      return Bound;
+    };
+    // The address itself is formed by the store's own instruction.
+    const std::vector<LowOp> &Ops = Graph.Blocks[Block].Ops;
+    auto localDef = [&](int From, const NdVar &V) {
+      std::set<int> Visited;
+      std::vector<Occurrence> Defs;
+      Visited.insert(Block);
+      if (!reachingDefs(Block, From, V, Visited, Defs) || Defs.size() != 1 ||
+          Defs.front().first != Block)
+        return -1;
+      return Defs.front().second;
+    };
+    struct Terms {
+      bool Frame = false;
+      int64_t Offset = 0;
+      uint64_t Span = 0;
+    };
+    std::function<std::optional<Terms>(const NdVar &, int, unsigned)> split =
+        [&](const NdVar &V, int From, unsigned Depth) -> std::optional<Terms> {
+      if (Depth >= limits::kMaxQuasiCopyDepth)
+        return std::nullopt;
+      if (const auto Constant = numeric(V))
+        return Terms{false, *Constant, 0};
+      if (!V.isReg() && !V.isTemp())
+        return std::nullopt;
+      uint64_t FrameBase = InvalidVA;
+      int64_t FrameOffset = 0;
+      if (canonicalFrameSlotKey(Block, From, V, FrameBase, FrameOffset))
+        return Terms{true, FrameOffset, 0};
+      if (const int D = localDef(From, V); D >= 0) {
+        const LowOp &Def = Ops[D];
+        // COPY and the 32-to-64-bit address zero extension transport the
+        // address; a narrower zero extension is an index term below.
+        if ((Def.Opcode == NdOp::COPY ||
+             (Def.Opcode == NdOp::INT_ZEXT && Def.NumInputs >= 1 &&
+              Def.Inputs[0].Size >= 4)) &&
+            Def.NumInputs >= 1)
+          return split(Def.Inputs[0], D - 1, Depth + 1);
+        if (Def.Opcode == NdOp::INT_ADD && Def.NumInputs >= 2) {
+          const auto Left = split(Def.Inputs[0], D - 1, Depth + 1);
+          const auto Right =
+              Left ? split(Def.Inputs[1], D - 1, Depth + 1) : std::nullopt;
+          if (!Left || !Right || (Left->Frame && Right->Frame) ||
+              Left->Span + Right->Span > MaxIndexSpan)
+            return std::nullopt;
+          return Terms{Left->Frame || Right->Frame,
+                       Left->Offset + Right->Offset, Left->Span + Right->Span};
+        }
+      }
+      if (const auto Max = indexMax(V, Block, From, Depth + 1))
+        return Terms{false, 0, *Max};
+      return std::nullopt;
+    };
+    const auto Store = split(Address, Before, 0);
+    if (!Store || !Store->Frame || Store->Span > MaxIndexSpan)
+      return std::nullopt;
+    return std::make_pair(Store->Offset, Store->Offset +
+                                             static_cast<int64_t>(Store->Span) +
+                                             static_cast<int64_t>(StoreSize));
+  };
+
   // Calls obey the platform ABI: without a current-frame-derived argument,
   // stored pointer, or returned pointer, an ordinary callee cannot name a
   // private caller-frame cell.  Track that narrow provenance fact directly in
@@ -6747,11 +6923,22 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
         // An unknown pointer, a SELECT/PHI with any unproved arm, or another
         // unsupported address form may alias the queried frame slot.  Only an
         // occurrence-local exact non-frame address plus scalar arithmetic is
-        // disjoint evidence; everything else kills the reaching spill.
+        // disjoint evidence, as is a bounded-index frame store whose whole
+        // interval misses the slot; everything else kills the reaching spill.
         if (!definitelyNonFrameAddress(B.Ops, I - 1, Address)) {
-          Found = true;
-          Result = resolverInvalid();
-          break;
+          const uint16_t WriteSize =
+              IsStore ? (Op.NumInputs >= 3 ? Op.Inputs[2] : Op.Inputs[1]).Size
+                      : Op.Output.Size;
+          const auto Written =
+              boundedFrameStoreRange(Block, I - 1, Address, WriteSize);
+          const std::optional<int64_t> SlotEnd =
+              stackCheckedOffset(SlotOffset, static_cast<int64_t>(Size), false);
+          if (!Written || !SlotEnd ||
+              (Written->second > SlotOffset && *SlotEnd > Written->first)) {
+            Found = true;
+            Result = resolverInvalid();
+            break;
+          }
         }
         continue;
       }

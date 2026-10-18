@@ -246,6 +246,44 @@ bool CFGBuilder::detectUnscaledRelocTableLoad(
 // tryCrossInstrRelativeTable — table base materialized in a prior instruction
 //===----------------------------------------------------------------------===//
 
+// Whether Ops[Def] computes a constant: it copies, zero-extends, adds or
+// subtracts values that are constants or are computed that way earlier in
+// Ops. Only temporaries and Reg's own lanes are followed (`mov $imm,%ebp`
+// writes RBP's low lane before widening it).
+static bool computesConstant(const std::vector<LowOp> &Ops, int Def,
+                             uint64_t Reg, int Depth) {
+  const LowOp &Op = Ops[Def];
+  auto isConstant = [&](const NdVar &Input) {
+    if (Input.isConst())
+      return true;
+    if (Depth + 1 >= limits::kMaxQuasiCopyDepth ||
+        !(Input.isTemp() || (Input.isReg() && Input.Offset == Reg)))
+      return false;
+    const int InputDef = reachingDefIdx(Ops, Def - 1, Input);
+    return InputDef >= 0 && computesConstant(Ops, InputDef, Reg, Depth + 1);
+  };
+  switch (Op.Opcode) {
+  case NdOp::COPY:
+  case NdOp::INT_ZEXT:
+    return Op.NumInputs >= 1 && isConstant(Op.Inputs[0]);
+  case NdOp::INT_ADD:
+  case NdOp::INT_SUB:
+    return Op.NumInputs >= 2 && isConstant(Op.Inputs[0]) &&
+           isConstant(Op.Inputs[1]);
+  default:
+    return false;
+  }
+}
+
+// Whether the last write to register Reg before Ops[Before] sets the whole
+// register to a constant (`lea table(%rip),%rbp`).
+static bool lastWriteMakesConstant(const std::vector<LowOp> &Ops, int Before,
+                                   uint64_t Reg, uint16_t RegSize) {
+  const int Def = reachingDefIdx(Ops, Before - 1, NdVar::reg(Reg, RegSize));
+  return Def >= 0 && Ops[Def].Output.Size == RegSize &&
+         computesConstant(Ops, Def, Reg, 0);
+}
+
 bool CFGBuilder::tryCrossInstrRelativeTable(const BinaryImage &Img,
                                             const InsnRecord &Rec,
                                             JumpTableInfo &Info) {
@@ -463,8 +501,16 @@ bool CFGBuilder::tryCrossInstrRelativeTable(const BinaryImage &Img,
   // data segment.  (A genuine non-frame GOT-base table keeps GotOff
   // regardless.)
   const TargetRegInfo &TRIcg = getTargetRegInfo(Img.Arch);
-  bool BaseIsFrame = BaseReg != InvalidVA && TRIcg.isFrameReg(BaseReg);
-  if (!BaseIsFrame) {
+  // A base register this block sets to a constant before the table read
+  // holds that constant there, not a frame address, even when it is a frame
+  // register: optimized x86-64 code keeps RBP as an ordinary register (`lea
+  // table(%rip),%rbp`).
+  const bool BaseHoldsConstant =
+      BaseReg != InvalidVA && LoadIdx > 0 &&
+      lastWriteMakesConstant(BlockOps, LoadIdx, BaseReg, Img.getPointerSize());
+  bool BaseIsFrame =
+      BaseReg != InvalidVA && !BaseHoldsConstant && TRIcg.isFrameReg(BaseReg);
+  if (!BaseIsFrame && !BaseHoldsConstant) {
     // AArch64/ARM commonly materialise a local table base in a scratch
     // register (`add x8, sp, #off`) before combining it with the scaled index.
     // This preflight only decides whether the full all-path stack-table

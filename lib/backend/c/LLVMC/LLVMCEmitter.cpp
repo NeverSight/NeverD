@@ -442,7 +442,38 @@ std::string LLVMCWriter::recordPointerSpelling(const NdType &Record) {
   return Tag + "*";
 }
 
-void LLVMCWriter::writeRecordDefinitions(llvm::StringRef Text) {
+/// \p Text with each use of \p Tag as a type (a declaration's, a cast's)
+/// spelled with its keyword: `struct stat buf`, where a function of the
+/// same name hides the bare one.
+static void spellTagUses(std::string &Text, llvm::StringRef Tag,
+                         llvm::StringRef Keyword) {
+  const auto Identifier = [](char C) { return llvm::isAlnum(C) || C == '_'; };
+  for (size_t At = Text.find(Tag.data(), 0, Tag.size());
+       At != std::string::npos; At = Text.find(Tag.data(), At, Tag.size())) {
+    const size_t End = At + Tag.size();
+    size_t Before = At;
+    while (Before > 0 && Text[Before - 1] == ' ')
+      --Before;
+    size_t After = End;
+    while (After < Text.size() && Text[After] == ' ')
+      ++After;
+    const bool Word = (At == 0 || !Identifier(Text[At - 1])) &&
+                      (End == Text.size() || !Identifier(Text[End]));
+    const bool Member =
+        Before > 0 && (Text[Before - 1] == '.' || Text[Before - 1] == '>');
+    const bool Tagged =
+        llvm::StringRef(Text).take_front(Before).ends_with(Keyword.str());
+    const bool Type =
+        After < Text.size() && (Text[After] == '*' || Identifier(Text[After]));
+    if (Word && !Member && !Tagged && Type) {
+      Text.insert(At, Keyword.str() + " ");
+      At += Keyword.size() + 1;
+    }
+    At += Tag.size();
+  }
+}
+
+void LLVMCWriter::writeRecordDefinitions(std::string &Text) {
   if (!Opts.EmitIncludes)
     return;
   // A record only pointers name, which no definition below completes, is
@@ -475,7 +506,7 @@ void LLVMCWriter::writeRecordDefinitions(llvm::StringRef Text) {
     while (End < Text.size() && (llvm::isAlnum(Text[End]) || Text[End] == '_'))
       ++End;
     if (I == 0 || (!llvm::isAlnum(Text[I - 1]) && Text[I - 1] != '_'))
-      Words.insert(Text.substr(I, End - I).str());
+      Words.insert(Text.substr(I, End - I));
     I = End;
   }
   std::vector<TypeRef> Named;
@@ -498,13 +529,21 @@ void LLVMCWriter::writeRecordDefinitions(llvm::StringRef Text) {
     if (Words.count(Name))
       Enumerations.push_back(Name);
   // A name the definitions declare that the unit gives a function or an
-  // object of its own leaves them out: one name would mean both.
+  // object of its own leaves them out: one name would mean both.  A record
+  // the text spells by such a name is spelled by its tag, as a header the
+  // unit includes may define it (glibc's `struct stat` beside `stat`).
   std::vector<std::string> Declared = Definitions.Identifiers;
   llvm::append_range(Declared, Spelled);
   llvm::append_range(Declared, Enumerations);
+  const auto Held = [&](const std::string &Name) {
+    return GlobalIdentifierAllocator.holds(Name) ||
+           EmittedGlobalNames.count(Name);
+  };
   for (const std::string &Name : Declared)
-    if (GlobalIdentifierAllocator.holds(Name) ||
-        EmittedGlobalNames.count(Name)) {
+    if (Held(Name)) {
+      for (const std::string &Tag : Spelled)
+        if (Held(Tag))
+          spellTagUses(Text, Tag, Definitions.Tags[Tag] ? "union" : "struct");
       OS << "/* The local types' definitions are left out: " << Name
          << " names one of the unit's functions or objects too. */\n\n";
       DeclareIncomplete({});

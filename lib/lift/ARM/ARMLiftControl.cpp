@@ -11,6 +11,8 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "ARMLiftDetail.h"
+
 #include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/lift/ARMLifter.h"
 
@@ -97,33 +99,47 @@ bool ARMLifter::liftControl(LiftState &S, const cs_insn *Insn,
       S.emitIntrinsic(Intrinsic::ArmSvc);
     break;
   }
+  // The call number or the code is the intrinsic's first input: the C
+  // writers print it, and a recompiled HVC, SMC, BKPT or HLT carries it.
   case ARM_INS_HVC:
-    S.emitIntrinsic(Intrinsic::ArmHvc);
-    break;
   case ARM_INS_SMC:
-    S.emitIntrinsic(Intrinsic::ArmSmc);
-    break;
   case ARM_INS_BKPT:
-    S.emitIntrinsic(Intrinsic::ArmBkpt);
+  case ARM_INS_HLT: {
+    const Intrinsic Id = Insn->id == ARM_INS_HVC    ? Intrinsic::ArmHvc
+                         : Insn->id == ARM_INS_SMC  ? Intrinsic::ArmSmc
+                         : Insn->id == ARM_INS_BKPT ? Intrinsic::ArmBkpt
+                                                    : Intrinsic::ArmHlt;
+    if (const std::optional<uint64_t> Code = exceptionCode(Insn, ARM))
+      S.emitIntrinsic(Id, NdVar::reg(armreg::R0, 4), {NdVar::cst(*Code, 2)});
+    else
+      S.emitIntrinsic(Id);
     break;
-  case ARM_INS_HLT:
-    S.emitIntrinsic(Intrinsic::ArmHlt);
-    break;
+  }
   case ARM_INS_UDF:
   case ARM_INS_TRAP:
     // An undefined instruction raises an exception and writes no register:
     // a debugger break resumes with r0 as it was.
-    S.emitVoidIntrinsic(Intrinsic::ArmUdf);
+    if (const std::optional<uint64_t> Code = exceptionCode(Insn, ARM))
+      S.emitVoidIntrinsic(Intrinsic::ArmUdf, {NdVar::cst(*Code, 2)});
+    else
+      S.emitVoidIntrinsic(Intrinsic::ArmUdf);
     break;
+  // Memory barriers, with their option (`dmb ish`, `dsb sy`).
   case ARM_INS_DMB:
-    S.emitVoidIntrinsic(Intrinsic::ArmDmb);
-    break;
   case ARM_INS_DSB:
-    S.emitVoidIntrinsic(Intrinsic::ArmDsb);
+  case ARM_INS_ISB: {
+    const Intrinsic Id = Insn->id == ARM_INS_DMB   ? Intrinsic::ArmDmb
+                         : Insn->id == ARM_INS_DSB ? Intrinsic::ArmDsb
+                                                   : Intrinsic::ArmIsb;
+    // Capstone reports no option for an ISB, which only has SY.
+    if (ARM.mem_barrier != ARM_MB_RESERVED_0)
+      S.emitVoidIntrinsic(Id, {NdVar::cst(ARM.mem_barrier & 0xF, 1)});
+    else if (Id == Intrinsic::ArmIsb)
+      S.emitVoidIntrinsic(Id, {NdVar::cst(0xF, 1)});
+    else
+      S.emitVoidIntrinsic(Id);
     break;
-  case ARM_INS_ISB:
-    S.emitVoidIntrinsic(Intrinsic::ArmIsb);
-    break;
+  }
   case ARM_INS_CLREX:
     S.emitVoidIntrinsic(Intrinsic::ArmClrex);
     break;

@@ -454,6 +454,59 @@ TEST(TypeParse, AnEnumerationOfNoValuesReadsBackWithItsType) {
   }
 }
 
+TEST(TypeParse, ARoutineTakesItsPrototypeUnderItsAssemblerName) {
+  // glibc's __REDIRECT gives strtol the name a program built with
+  // _GNU_SOURCE imports it by, and C99 qualifies a parameter's array.
+  TypeLibrary Library(DataModel::LP64);
+  ASSERT_TRUE(
+      parseCTypes(
+          "extern long strtol(const char *__restrict __nptr, char "
+          "**__restrict __endptr, int __base) __asm__ (\"\" "
+          "\"__isoc23_strtol\") __attribute__ ((__nothrow__ , __leaf__));\n"
+          "extern int getaddrinfo_a(int __mode, void *__list[__restrict], "
+          "int __ent, void *__restrict __sig);\n"
+          "extern int regexec(const void *__preg, const char *__String, "
+          "unsigned long __nmatch, int __pmatch[__restrict __nmatch], "
+          "int __eflags);",
+          Library)
+          .ok());
+  for (const char *Name : {"strtol", "__isoc23_strtol"}) {
+    const FunctionDef *Function = Library.findPrototype(Name);
+    ASSERT_NE(Function, nullptr) << Name;
+    ASSERT_EQ(Function->Params.size(), 3u) << Name;
+    EXPECT_EQ(Function->Params[2].Name, "__base") << Name;
+  }
+  const FunctionDef *Lookup = Library.findPrototype("getaddrinfo_a");
+  ASSERT_NE(Lookup, nullptr);
+  ASSERT_EQ(Lookup->Params.size(), 4u);
+  EXPECT_EQ(Library.sizeOf(*Lookup->Params[1].Type), 8u);
+  // A parameter's array sized by another parameter is a pointer.
+  const FunctionDef *Match = Library.findPrototype("regexec");
+  ASSERT_NE(Match, nullptr);
+  ASSERT_EQ(Match->Params.size(), 5u);
+  EXPECT_EQ(Library.sizeOf(*Match->Params[3].Type), 8u);
+}
+
+TEST(TypeParse, ATypedefOfSizeTKeepsItsName) {
+  // size_t names the builtin of a pointer's width until the declarations
+  // define it, as glibc's headers do; then a prototype names the typedef.
+  TypeLibrary Library(DataModel::ILP32);
+  ASSERT_TRUE(parseCTypes("void *early(size_t n);\n"
+                          "typedef unsigned int size_t;\n"
+                          "typedef int ssize_t;\n"
+                          "ssize_t read(int fd, void *buf, size_t nbytes);",
+                          Library)
+                  .ok());
+  const FunctionDef *Early = Library.findPrototype("early");
+  ASSERT_NE(Early, nullptr);
+  EXPECT_EQ(Early->Params[0].Type->Kind, TypeExprKind::Builtin);
+  const FunctionDef *Read = Library.findPrototype("read");
+  ASSERT_NE(Read, nullptr);
+  EXPECT_EQ(Read->Return->Name, "ssize_t");
+  EXPECT_EQ(Read->Params[2].Type->Name, "size_t");
+  EXPECT_EQ(Library.sizeOf(*Read->Params[2].Type), 4u);
+}
+
 TEST(TypeParse, ConvertsWithoutAProgram) {
   // A C header read and rendered as Rust and Go, and back.
   TypeLibrary Library;

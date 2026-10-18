@@ -11,6 +11,8 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "AArch64LiftDetail.h"
+
 #include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/lift/AArch64Lifter.h"
 
@@ -210,33 +212,37 @@ bool AArch64Lifter::liftControl(LiftState &S, const cs_insn *Insn,
       S.emitIntrinsic(Id);
     break;
   }
+  // --- HVC / SMC, BRK (software breakpoint), HLT (debug halt) ---
+  // The call number or the code is the intrinsic's first input: the C
+  // writers print it, and a recompiled HVC or SMC makes the same call.
   case AARCH64_INS_HVC:
-    S.emitIntrinsic(Intrinsic::Hvc);
-    break;
   case AARCH64_INS_SMC:
-    S.emitIntrinsic(Intrinsic::Smc);
-    break;
-
-  // --- BRK (software breakpoint) ---
   case AARCH64_INS_BRK:
-    S.emitIntrinsic(Intrinsic::Brk);
+  case AARCH64_INS_HLT: {
+    const Intrinsic Id = Insn->id == AARCH64_INS_HVC   ? Intrinsic::Hvc
+                         : Insn->id == AARCH64_INS_SMC ? Intrinsic::Smc
+                         : Insn->id == AARCH64_INS_BRK ? Intrinsic::Brk
+                                                       : Intrinsic::Hlt_A64;
+    if (const std::optional<uint64_t> Code = exceptionCode(ARM64))
+      S.emitIntrinsic(Id, NdVar::reg(a64reg::X0, 8), {NdVar::cst(*Code, 2)});
+    else
+      S.emitIntrinsic(Id);
     break;
+  }
 
-  // --- HLT (debug halt) ---
-  case AARCH64_INS_HLT:
-    S.emitIntrinsic(Intrinsic::Hlt_A64);
-    break;
-
-  // --- Memory barriers ---
+  // --- Memory barriers, with their option (`dmb ishld`, `dsb sy`) ---
   case AARCH64_INS_DMB:
-    S.emitVoidIntrinsic(Intrinsic::Dmb);
-    break;
   case AARCH64_INS_DSB:
-    S.emitVoidIntrinsic(Intrinsic::Dsb);
+  case AARCH64_INS_ISB: {
+    const Intrinsic Id = Insn->id == AARCH64_INS_DMB   ? Intrinsic::Dmb
+                         : Insn->id == AARCH64_INS_DSB ? Intrinsic::Dsb
+                                                       : Intrinsic::Isb;
+    if (const std::optional<uint64_t> Option = barrierOption(ARM64))
+      S.emitVoidIntrinsic(Id, {NdVar::cst(*Option, 1)});
+    else
+      S.emitVoidIntrinsic(Id);
     break;
-  case AARCH64_INS_ISB:
-    S.emitVoidIntrinsic(Intrinsic::Isb);
-    break;
+  }
 
   // --- System register access ---
   case AARCH64_INS_MRS: {

@@ -22,6 +22,7 @@ inline bool intrinsicNeverReturns(Intrinsic Id,
   switch (Id) {
   case Intrinsic::Brk:
   case Intrinsic::Hlt_A64:
+  case Intrinsic::Udf_A64:
     return true;
   case Intrinsic::IntN:
     return Operand && isX86NoReturnInterrupt(*Operand);

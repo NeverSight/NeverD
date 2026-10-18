@@ -29,8 +29,33 @@
 #include "neverd/lift/ARMLifter.h"
 
 #include <capstone/capstone.h>
+#include <cstdint>
+#include <optional>
 
 namespace neverd {
+
+/// The code an exception-generating instruction carries (`bkpt #1`,
+/// `udf #0xfe`, `hvc #imm16`), which its intrinsic keeps as its first input.
+/// Capstone spells the UDF a compiler's trap uses as `trap` without an
+/// operand; its code is in the encoding: imm8 in Thumb's 16-bit `0xdefe`,
+/// imm12:imm4 in ARM's `0xe7ffdefe`.
+inline std::optional<uint64_t> exceptionCode(const cs_insn *Insn,
+                                             const cs_arm &ARM) {
+  if (ARM.op_count >= 1 && ARM.operands[0].type == ARM_OP_IMM)
+    return static_cast<uint64_t>(ARM.operands[0].imm) & 0xFFFF;
+  if (Insn->id != ARM_INS_TRAP)
+    return std::nullopt;
+  if (Insn->size == 2)
+    return Insn->bytes[0];
+  if (Insn->size == 4) {
+    const uint32_t Word = static_cast<uint32_t>(Insn->bytes[0]) |
+                          static_cast<uint32_t>(Insn->bytes[1]) << 8 |
+                          static_cast<uint32_t>(Insn->bytes[2]) << 16 |
+                          static_cast<uint32_t>(Insn->bytes[3]) << 24;
+    return ((Word >> 8) & 0xFFF) << 4 | (Word & 0xF);
+  }
+  return std::nullopt;
+}
 
 //===----------------------------------------------------------------------===//
 // Helpers shared by more than one handler translation unit

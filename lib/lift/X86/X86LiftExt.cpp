@@ -51,8 +51,7 @@ uint32_t readImmediate32(const uint8_t *Bytes) {
 
 bool hasCanonicalRegisterOnlyDetail(const cs_x86 &X86) {
   return X86.encoding.disp_offset == 0 && X86.encoding.disp_size == 0 &&
-         X86.disp == 0 && X86.sib == 0 &&
-         X86.sib_base == X86_REG_INVALID &&
+         X86.disp == 0 && X86.sib == 0 && X86.sib_base == X86_REG_INVALID &&
          X86.sib_index == X86_REG_INVALID && X86.sib_scale == 0;
 }
 
@@ -62,10 +61,9 @@ bool hasCanonicalRegisterOnlyDetail(const cs_x86 &X86) {
 /// environment can own feature, XCR0, CPL, bitmap, interception, validation,
 /// and exception-order semantics.
 std::optional<X86MsrAccessKind>
-classifyExplicitMsr(const cs_insn *Insn, const cs_x86 &X86,
-                    Arch TargetArch) {
-  if (!Insn || !Insn->detail || TargetArch != Arch::X64 ||
-      Insn->size == 0 || Insn->size > 15 || X86.op_count != 2 ||
+classifyExplicitMsr(const cs_insn *Insn, const cs_x86 &X86, Arch TargetArch) {
+  if (!Insn || !Insn->detail || TargetArch != Arch::X64 || Insn->size == 0 ||
+      Insn->size > 15 || X86.op_count != 2 ||
       !hasCanonicalRegisterOnlyDetail(X86))
     return std::nullopt;
 
@@ -89,8 +87,8 @@ classifyExplicitMsr(const cs_insn *Insn, const cs_x86 &X86,
         (ImmediateForm && (Encoding.ModRM & 0x38) != 0))
       return std::nullopt;
 
-    BNumber = ((~Encoding.P0 & 0x20) >> 2) |
-              ((Encoding.P0 & 0x08) << 1) | (Encoding.ModRM & 7);
+    BNumber = ((~Encoding.P0 & 0x20) >> 2) | ((Encoding.P0 & 0x08) << 1) |
+              (Encoding.ModRM & 7);
     if (ImmediateForm) {
       if (!validateCanonicalEvexRegisterTail(Insn, X86, Encoding, 4) ||
           X86.encoding.imm_offset != Encoding.Offset + 6 ||
@@ -101,8 +99,7 @@ classifyExplicitMsr(const cs_insn *Insn, const cs_x86 &X86,
       if (Encoding.Opcode == 0xf6) {
         Kind = Write ? X86MsrAccessKind::WrmsrnsImmediate
                      : X86MsrAccessKind::RdmsrImmediate;
-      } else if (Encoding.Opcode == 0xf8 &&
-                 (Encoding.P1 & 0x80) == 0) {
+      } else if (Encoding.Opcode == 0xf8 && (Encoding.P1 & 0x80) == 0) {
         Kind = Write ? X86MsrAccessKind::UwrmsrEvexImmediate
                      : X86MsrAccessKind::UrdmsrEvexImmediate;
       } else {
@@ -113,8 +110,8 @@ classifyExplicitMsr(const cs_insn *Insn, const cs_x86 &X86,
           !validateCanonicalEvexRegisterTail(Insn, X86, Encoding) ||
           X86.encoding.imm_offset != 0 || X86.encoding.imm_size != 0)
         return std::nullopt;
-      RNumber = ((~Encoding.P0 & 0x80) >> 4) |
-                (~Encoding.P0 & 0x10) | ((Encoding.ModRM >> 3) & 7);
+      RNumber = ((~Encoding.P0 & 0x80) >> 4) | (~Encoding.P0 & 0x10) |
+                ((Encoding.ModRM >> 3) & 7);
       Kind = Write ? X86MsrAccessKind::UwrmsrEvexRegister
                    : X86MsrAccessKind::UrdmsrEvexRegister;
     }
@@ -122,8 +119,7 @@ classifyExplicitMsr(const cs_insn *Insn, const cs_x86 &X86,
     CanonicalVex3EncodingInfo Encoding;
     if (!parseCanonicalVex3EncodingInfo(Insn, X86, TargetArch, Encoding) ||
         (Encoding.P0 & 0x1f) != 7 || Encoding.Opcode != 0xf8 ||
-        (Encoding.P1 & 0xfc) != 0x78 ||
-        (Encoding.ModRM & 0xf8) != 0xc0 ||
+        (Encoding.P1 & 0xfc) != 0x78 || (Encoding.ModRM & 0xf8) != 0xc0 ||
         !validateCanonicalVex3RegisterTail(Insn, X86, Encoding, 4) ||
         X86.encoding.imm_offset != Encoding.Offset + 5 ||
         X86.encoding.imm_size != 4)
@@ -143,8 +139,7 @@ classifyExplicitMsr(const cs_insn *Insn, const cs_x86 &X86,
     uint8_t Rex = 0;
     bool OperandSize = false;
     bool AddressSize = false;
-    while (OpcodeOffset < Insn->size &&
-           Insn->bytes[OpcodeOffset] != 0x0f) {
+    while (OpcodeOffset < Insn->size && Insn->bytes[OpcodeOffset] != 0x0f) {
       const uint8_t Prefix = Insn->bytes[OpcodeOffset];
       switch (Prefix) {
       case 0x26:
@@ -184,19 +179,16 @@ classifyExplicitMsr(const cs_insn *Insn, const cs_x86 &X86,
 
     if (MandatoryPrefix != 0xf2 && MandatoryPrefix != 0xf3)
       return std::nullopt;
-    if (Rex != 0 &&
-        (OpcodeOffset == 0 || Insn->bytes[OpcodeOffset - 1] != Rex))
+    if (Rex != 0 && (OpcodeOffset == 0 || Insn->bytes[OpcodeOffset - 1] != Rex))
       return std::nullopt;
-    if (OpcodeOffset + 4 != Insn->size ||
-        Insn->bytes[OpcodeOffset] != 0x0f ||
+    if (OpcodeOffset + 4 != Insn->size || Insn->bytes[OpcodeOffset] != 0x0f ||
         Insn->bytes[OpcodeOffset + 1] != 0x38 ||
         Insn->bytes[OpcodeOffset + 2] != 0xf8 ||
         (Insn->bytes[OpcodeOffset + 3] & 0xc0) != 0xc0)
       return std::nullopt;
 
     const uint8_t ModRM = Insn->bytes[OpcodeOffset + 3];
-    if (X86.prefix[0] != MandatoryPrefix ||
-        X86.prefix[1] != SegmentPrefix ||
+    if (X86.prefix[0] != MandatoryPrefix || X86.prefix[1] != SegmentPrefix ||
         X86.prefix[2] != (OperandSize ? 0x66 : 0) ||
         X86.prefix[3] != (AddressSize ? 0x67 : 0) || X86.rex != Rex ||
         X86.opcode[0] != 0x0f || X86.opcode[1] != 0x38 ||
@@ -208,9 +200,8 @@ classifyExplicitMsr(const cs_insn *Insn, const cs_x86 &X86,
 
     BNumber = (ModRM & 7) | ((Rex & 1) ? 8 : 0);
     RNumber = ((ModRM >> 3) & 7) | ((Rex & 4) ? 8 : 0);
-    Kind = MandatoryPrefix == 0xf3
-               ? X86MsrAccessKind::UwrmsrLegacyRegister
-               : X86MsrAccessKind::UrdmsrLegacyRegister;
+    Kind = MandatoryPrefix == 0xf3 ? X86MsrAccessKind::UwrmsrLegacyRegister
+                                   : X86MsrAccessKind::UrdmsrLegacyRegister;
   }
 
   if (!Kind)
@@ -219,8 +210,7 @@ classifyExplicitMsr(const cs_insn *Insn, const cs_x86 &X86,
   const bool ImmediateForm = x86MsrAccessHasImmediateSelector(*Kind);
   const cs_x86_op &BOperand = X86.operands[Write ? 1 : 0];
   const cs_x86_op &Selector = X86.operands[Write ? 0 : 1];
-  if (!isExactGpr64Operand(BOperand, BNumber,
-                           Write ? CS_AC_READ : CS_AC_WRITE))
+  if (!isExactGpr64Operand(BOperand, BNumber, Write ? CS_AC_READ : CS_AC_WRITE))
     return std::nullopt;
   if (ImmediateForm) {
     if (Selector.type != X86_OP_IMM || Selector.size != 4 ||
@@ -231,9 +221,8 @@ classifyExplicitMsr(const cs_insn *Insn, const cs_x86 &X86,
     return std::nullopt;
   }
 
-  const bool Privileged =
-      *Kind == X86MsrAccessKind::RdmsrImmediate ||
-      *Kind == X86MsrAccessKind::WrmsrnsImmediate;
+  const bool Privileged = *Kind == X86MsrAccessKind::RdmsrImmediate ||
+                          *Kind == X86MsrAccessKind::WrmsrnsImmediate;
   if (Privileged) {
     if (Insn->detail->groups_count != 1 ||
         Insn->detail->groups[0] != X86_GRP_PRIVILEGE)
@@ -366,10 +355,29 @@ bool X86Lifter::liftExt(LiftState &S, const cs_insn *Insn, const cs_x86 &X86) {
     break;
 
   // --- UD0 / UD1 ---
+  // clang's trapping sanitizers raise #UD with `ud1 eax, [eax + kind]`
+  // (llvm.ubsantrap), whose displacement names the check that failed: keep
+  // it as the code the C writers print, as a breakpoint's.
   case X86_INS_UD0:
-  case X86_INS_UD1:
-    S.emitIntrinsic(InsnId == X86_INS_UD0 ? Intrinsic::Ud0 : Intrinsic::Ud1);
+  case X86_INS_UD1: {
+    const Intrinsic Id =
+        InsnId == X86_INS_UD0 ? Intrinsic::Ud0 : Intrinsic::Ud1;
+    const bool SanitizerForm =
+        X86.op_count == 2 && X86.operands[0].type == X86_OP_REG &&
+        X86.operands[0].reg == X86_REG_EAX &&
+        X86.operands[1].type == X86_OP_MEM &&
+        X86.operands[1].mem.base == X86_REG_EAX &&
+        X86.operands[1].mem.index == X86_REG_INVALID &&
+        X86.operands[1].mem.segment == X86_REG_INVALID &&
+        X86.operands[1].mem.disp >= 0 && X86.operands[1].mem.disp <= 0xFF;
+    if (SanitizerForm)
+      S.emitIntrinsic(
+          Id, NdVar::reg(x86reg::RAX, 8),
+          {NdVar::cst(static_cast<uint64_t>(X86.operands[1].mem.disp), 1)});
+    else
+      S.emitIntrinsic(Id);
     break;
+  }
 
   // --- INSD / OUTSD ---
   case X86_INS_INSD:
@@ -443,8 +451,7 @@ bool X86Lifter::liftExt(LiftState &S, const cs_insn *Insn, const cs_x86 &X86) {
       Id = Intrinsic::Invlpg;
       break;
     }
-    if (X86.op_count < 1 ||
-        !S.emitMemoryIntrinsic(Id, X86.operands[0]))
+    if (X86.op_count < 1 || !S.emitMemoryIntrinsic(Id, X86.operands[0]))
       return false;
     break;
   }
@@ -613,15 +620,14 @@ bool X86Lifter::liftExt(LiftState &S, const cs_insn *Insn, const cs_x86 &X86) {
         ImmediateForm
             ? NdVar::scalar(static_cast<uint32_t>(SelectorOperand.imm), 4)
             : operandRead(S, SelectorOperand);
-    const NdVar KindValue =
-        NdVar::scalar(static_cast<uint64_t>(*Kind), 1);
+    const NdVar KindValue = NdVar::scalar(static_cast<uint64_t>(*Kind), 1);
     if (Write) {
       const NdVar Value = operandRead(S, X86.operands[1]);
       S.emitIntrinsic(Intrinsic::X86MsrAccess, NdVar(),
                       {KindValue, Selector, Value});
     } else {
-      const RegInfo Destination = mapCapstoneReg(
-          static_cast<x86_reg>(X86.operands[0].reg));
+      const RegInfo Destination =
+          mapCapstoneReg(static_cast<x86_reg>(X86.operands[0].reg));
       S.emitIntrinsic(Intrinsic::X86MsrAccess,
                       NdVar::reg(Destination.Offset, Destination.Size),
                       {KindValue, Selector});

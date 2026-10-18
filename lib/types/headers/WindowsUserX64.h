@@ -20340,7 +20340,7 @@ typedef ULONGLONG size_t;
 
 typedef LONGLONG ssize_t;
 
-typedef ULONGLONG rsize_t;
+typedef size_t rsize_t;
 
 typedef LONGLONG intptr_t;
 
@@ -43068,7 +43068,7 @@ typedef struct _CRYPT_CSP_PROVIDER CRYPT_CSP_PROVIDER;
 
 typedef struct _CRYPT_CSP_PROVIDER *PCRYPT_CSP_PROVIDER;
 
-typedef LPVOID (*PFN_CRYPT_ALLOC)(ULONGLONG cbSize);
+typedef LPVOID (*PFN_CRYPT_ALLOC)(size_t cbSize);
 
 typedef VOID (*PFN_CRYPT_FREE)(LPVOID pv);
 
@@ -44765,7 +44765,7 @@ typedef struct _CMSG_CTRL_DEL_SIGNER_UNAUTH_ATTR_PARA CMSG_CTRL_DEL_SIGNER_UNAUT
 
 typedef struct _CMSG_CTRL_DEL_SIGNER_UNAUTH_ATTR_PARA *PCMSG_CTRL_DEL_SIGNER_UNAUTH_ATTR_PARA;
 
-typedef VOID *(*PFN_CMSG_ALLOC)(ULONGLONG cb);
+typedef VOID *(*PFN_CMSG_ALLOC)(size_t cb);
 
 typedef VOID (*PFN_CMSG_FREE)(VOID *pv);
 
@@ -46445,7 +46445,7 @@ struct NEVERD_MS_STRUCT _MIDL_STUB_MESSAGE
     ULONG_PTR MaxCount;
     ULONG Offset;
     ULONG ActualCount;
-    VOID *(*pfnAllocate)(ULONGLONG);
+    VOID *(*pfnAllocate)(size_t);
     VOID (*pfnFree)(VOID *);
     UCHAR *StackTop;
     UCHAR *pPresentedType;
@@ -46539,7 +46539,7 @@ typedef struct _XMIT_ROUTINE_QUINTUPLE XMIT_ROUTINE_QUINTUPLE;
 #pragma pack(push, 8)
 struct _MALLOC_FREE_STRUCT
 {
-    VOID *(*pfnAllocate)(ULONGLONG);
+    VOID *(*pfnAllocate)(size_t);
     VOID (*pfnFree)(VOID *);
 };
 #pragma pack(pop)
@@ -46632,7 +46632,7 @@ typedef struct _NDR_EXPR_DESC NDR_EXPR_DESC;
 struct _MIDL_STUB_DESC
 {
     VOID *RpcInterfaceInformation;
-    VOID *(*pfnAllocate)(ULONGLONG);
+    VOID *(*pfnAllocate)(size_t);
     VOID (*pfnFree)(VOID *);
     union
     {
@@ -46958,7 +46958,7 @@ struct IRpcStubBuffer
 
 typedef VOID *RPC_SS_THREAD_HANDLE;
 
-typedef VOID *RPC_CLIENT_ALLOC(ULONGLONG Size);
+typedef VOID *RPC_CLIENT_ALLOC(size_t Size);
 
 typedef VOID RPC_CLIENT_FREE(VOID *Ptr);
 
@@ -46968,7 +46968,7 @@ struct _NDR_USER_MARSHAL_INFO_LEVEL1
 {
     VOID *Buffer;
     ULONG BufferSize;
-    VOID *(*pfnAllocate)(ULONGLONG);
+    VOID *(*pfnAllocate)(size_t);
     VOID (*pfnFree)(VOID *);
     struct IRpcChannelBuffer *pRpcChannelBuffer;
     ULONG_PTR Reserved[5];
@@ -61990,7 +61990,7 @@ struct addrinfo
     INT ai_family;
     INT ai_socktype;
     INT ai_protocol;
-    ULONGLONG ai_addrlen;
+    size_t ai_addrlen;
     CHAR *ai_canonname;
     struct sockaddr *ai_addr;
     struct addrinfo *ai_next;
@@ -62007,7 +62007,7 @@ struct addrinfoW
     INT ai_family;
     INT ai_socktype;
     INT ai_protocol;
-    ULONGLONG ai_addrlen;
+    size_t ai_addrlen;
     PWSTR ai_canonname;
     struct sockaddr *ai_addr;
     struct addrinfoW *ai_next;
@@ -62333,11 +62333,11 @@ struct addrinfoexA
     INT ai_family;
     INT ai_socktype;
     INT ai_protocol;
-    ULONGLONG ai_addrlen;
+    size_t ai_addrlen;
     LPCSTR ai_canonname;
     struct sockaddr *ai_addr;
     VOID *ai_blob;
-    ULONGLONG ai_bloblen;
+    size_t ai_bloblen;
     LPGUID ai_provider;
     struct addrinfoexA *ai_next;
 };
@@ -62353,11 +62353,11 @@ struct addrinfoexW
     INT ai_family;
     INT ai_socktype;
     INT ai_protocol;
-    ULONGLONG ai_addrlen;
+    size_t ai_addrlen;
     LPCWSTR ai_canonname;
     struct sockaddr *ai_addr;
     VOID *ai_blob;
-    ULONGLONG ai_bloblen;
+    size_t ai_bloblen;
     LPGUID ai_provider;
     struct addrinfoexW *ai_next;
 };
@@ -97013,7 +97013,7 @@ struct tagMCGRIDINFO
     SYSTEMTIME stEnd;
     RECT rc;
     PWSTR pszName;
-    ULONGLONG cchName;
+    size_t cchName;
 };
 
 typedef struct tagMCGRIDINFO MCGRIDINFO;
@@ -124378,7 +124378,7 @@ struct _EVT_VARIANT
         LPCSTR AnsiStringVal;
         PBYTE BinaryVal;
         PSID SidVal;
-        ULONGLONG SizeTVal;
+        size_t SizeTVal;
         EVT_HANDLE EvtHandleVal;
         BOOL *BooleanArr;
         INT8 *SByteArr;
@@ -124397,7 +124397,7 @@ struct _EVT_VARIANT
         LPWSTR *StringArr;
         LPSTR *AnsiStringArr;
         PSID *SidArr;
-        ULONGLONG *SizeTArr;
+        size_t *SizeTArr;
         LPCWSTR XmlVal;
         LPCWSTR *XmlValArr;
     };
@@ -127904,7 +127904,7 @@ WINBOOL ImpersonateSelf(SECURITY_IMPERSONATION_LEVEL ImpersonationLevel);
 WINBOOL ImportPrivacySettings(PCWSTR pszFilename, WINBOOL *pfParsePrivacyPreferences, WINBOOL *pfParsePerSiteRules);
 WINBOOL InSendMessage(void);
 DWORD InSendMessageEx(LPVOID lpReserved);
-LPCWSTR InetNtopW(INT Family, LPCVOID pAddr, LPWSTR pStringBuf, ULONGLONG StringBufSIze);
+LPCWSTR InetNtopW(INT Family, LPCVOID pAddr, LPWSTR pStringBuf, size_t StringBufSIze);
 INT InetPtonW(INT Family, LPCWSTR pStringBuf, PVOID pAddr);
 WINBOOL InflateRect(LPRECT lprc, INT dx, INT dy);
 WINBOOL InheritWindowMonitor(HWND hwnd, HWND hwndInherit);
@@ -128115,8 +128115,8 @@ WINBOOL IsUserAnAdmin(void);
 WINBOOL IsUserCetAvailableInEnvironment(DWORD UserCetEnvironment);
 WINBOOL IsValidAcl(PACL pAcl);
 WINBOOL IsValidCodePage(UINT CodePage);
-WINBOOL IsValidDevmodeA(PDEVMODEA pDevmode, ULONGLONG DevmodeSize);
-WINBOOL IsValidDevmodeW(PDEVMODEW pDevmode, ULONGLONG DevmodeSize);
+WINBOOL IsValidDevmodeA(PDEVMODEA pDevmode, size_t DevmodeSize);
+WINBOOL IsValidDevmodeW(PDEVMODEW pDevmode, size_t DevmodeSize);
 WINBOOL IsValidDpiAwarenessContext(DPI_AWARENESS_CONTEXT value);
 WINBOOL IsValidLanguageGroup(LGRPID LanguageGroup, DWORD dwFlags);
 WINBOOL IsValidLocale(LCID Locale, DWORD dwFlags);
@@ -128399,7 +128399,7 @@ NTSTATUS LsaSetTrustedDomainInfoByName(LSA_HANDLE PolicyHandle, PLSA_UNICODE_STR
 NTSTATUS LsaSetTrustedDomainInformation(LSA_HANDLE PolicyHandle, PSID TrustedDomainSid, TRUSTED_INFORMATION_CLASS InformationClass, PVOID Buffer);
 NTSTATUS LsaStorePrivateData(LSA_HANDLE PolicyHandle, PLSA_UNICODE_STRING KeyName, PLSA_UNICODE_STRING PrivateData);
 NTSTATUS LsaUnregisterPolicyChangeNotification(POLICY_NOTIFICATION_INFORMATION_CLASS InformationClass, HANDLE NotificationEventHandle);
-VOID *MIDL_user_allocate(ULONGLONG);
+VOID *MIDL_user_allocate(size_t);
 VOID MIDL_user_free(VOID *);
 WINBOOL MakeAbsoluteSD(PSECURITY_DESCRIPTOR pSelfRelativeSecurityDescriptor, PSECURITY_DESCRIPTOR pAbsoluteSecurityDescriptor, LPDWORD lpdwAbsoluteSecurityDescriptorSize, PACL pDacl, LPDWORD lpdwDaclSize, PACL pSacl, LPDWORD lpdwSaclSize, PSID pOwner, LPDWORD lpdwOwnerSize, PSID pPrimaryGroup, LPDWORD lpdwPrimaryGroupSize);
 WINBOOL MakeDragList(HWND hLB);
@@ -128637,7 +128637,7 @@ VOID Ndr64AsyncServerCallAll(PRPC_MESSAGE pRpcMsg);
 LONG Ndr64AsyncStubCall(struct IRpcStubBuffer *pThis, struct IRpcChannelBuffer *pChannel, PRPC_MESSAGE pRpcMsg, ULONG *pdwStubPhase);
 CLIENT_CALL_RETURN Ndr64DcomAsyncClientCall(MIDL_STUBLESS_PROXY_INFO *pProxyInfo, ULONG nProcNum, VOID *pReturnValue, ...);
 LONG Ndr64DcomAsyncStubCall(struct IRpcStubBuffer *pThis, struct IRpcChannelBuffer *pChannel, PRPC_MESSAGE pRpcMsg, ULONG *pdwStubPhase);
-VOID *NdrAllocate(PMIDL_STUB_MESSAGE pStubMsg, ULONGLONG Len);
+VOID *NdrAllocate(PMIDL_STUB_MESSAGE pStubMsg, size_t Len);
 CLIENT_CALL_RETURN NdrAsyncClientCall(PMIDL_STUB_DESC pStubDescriptor, PFORMAT_STRING pFormat, ...);
 VOID NdrAsyncServerCall(PRPC_MESSAGE pRpcMsg);
 LONG NdrAsyncStubCall(struct IRpcStubBuffer *pThis, struct IRpcChannelBuffer *pChannel, PRPC_MESSAGE pRpcMsg, ULONG *pdwStubPhase);
@@ -128744,7 +128744,7 @@ ULONG NdrNonEncapsulatedUnionMemorySize(PMIDL_STUB_MESSAGE pStubMsg, PFORMAT_STR
 UCHAR *NdrNonEncapsulatedUnionUnmarshall(PMIDL_STUB_MESSAGE pStubMsg, UCHAR **ppMemory, PFORMAT_STRING pFormat, UCHAR fMustAlloc);
 UCHAR *NdrNsGetBuffer(PMIDL_STUB_MESSAGE pStubMsg, ULONG BufferLength, RPC_BINDING_HANDLE Handle);
 UCHAR *NdrNsSendReceive(PMIDL_STUB_MESSAGE pStubMsg, UCHAR *pBufferEnd, RPC_BINDING_HANDLE *pAutoHandle);
-VOID *NdrOleAllocate(ULONGLONG Size);
+VOID *NdrOleAllocate(size_t Size);
 VOID NdrOleFree(VOID *NodeToFree);
 VOID NdrPartialIgnoreClientBufferSize(PMIDL_STUB_MESSAGE pStubMsg, VOID *pMemory);
 VOID NdrPartialIgnoreClientMarshall(PMIDL_STUB_MESSAGE pStubMsg, VOID *pMemory);
@@ -128756,10 +128756,10 @@ UCHAR *NdrPointerMarshall(PMIDL_STUB_MESSAGE pStubMsg, UCHAR *pMemory, PFORMAT_S
 ULONG NdrPointerMemorySize(PMIDL_STUB_MESSAGE pStubMsg, PFORMAT_STRING pFormat);
 UCHAR *NdrPointerUnmarshall(PMIDL_STUB_MESSAGE pStubMsg, UCHAR **ppMemory, PFORMAT_STRING pFormat, UCHAR fMustAlloc);
 UCHAR *NdrRangeUnmarshall(PMIDL_STUB_MESSAGE pStubMsg, UCHAR **ppMemory, PFORMAT_STRING pFormat, UCHAR fMustAlloc);
-VOID *NdrRpcSmClientAllocate(ULONGLONG Size);
+VOID *NdrRpcSmClientAllocate(size_t Size);
 VOID NdrRpcSmClientFree(VOID *NodeToFree);
 VOID NdrRpcSmSetClientToOsf(PMIDL_STUB_MESSAGE pMessage);
-VOID *NdrRpcSsDefaultAllocate(ULONGLONG Size);
+VOID *NdrRpcSsDefaultAllocate(size_t Size);
 VOID NdrRpcSsDefaultFree(VOID *NodeToFree);
 VOID NdrRpcSsDisableAllocate(PMIDL_STUB_MESSAGE pMessage);
 VOID NdrRpcSsEnableAllocate(PMIDL_STUB_MESSAGE pMessage);
@@ -130561,9 +130561,9 @@ VOID RpcErrorClearInformation(void);
 RPC_STATUS RpcErrorEndEnumeration(RPC_ERROR_ENUM_HANDLE *EnumHandle);
 RPC_STATUS RpcErrorGetNextRecord(RPC_ERROR_ENUM_HANDLE *EnumHandle, WINBOOL CopyStrings, RPC_EXTENDED_ERROR_INFO *ErrorInfo);
 RPC_STATUS RpcErrorGetNumberOfRecords(RPC_ERROR_ENUM_HANDLE *EnumHandle, INT *Records);
-RPC_STATUS RpcErrorLoadErrorInfo(PVOID ErrorBlob, ULONGLONG BlobSize, RPC_ERROR_ENUM_HANDLE *EnumHandle);
+RPC_STATUS RpcErrorLoadErrorInfo(PVOID ErrorBlob, size_t BlobSize, RPC_ERROR_ENUM_HANDLE *EnumHandle);
 RPC_STATUS RpcErrorResetEnumeration(RPC_ERROR_ENUM_HANDLE *EnumHandle);
-RPC_STATUS RpcErrorSaveErrorInfo(RPC_ERROR_ENUM_HANDLE *EnumHandle, PVOID *ErrorBlob, ULONGLONG *BlobSize);
+RPC_STATUS RpcErrorSaveErrorInfo(RPC_ERROR_ENUM_HANDLE *EnumHandle, PVOID *ErrorBlob, size_t *BlobSize);
 RPC_STATUS RpcErrorStartEnumeration(RPC_ERROR_ENUM_HANDLE *EnumHandle);
 RPC_STATUS RpcFreeAuthorizationContext(PVOID *pAuthzClientContext);
 RPC_STATUS RpcGetAuthorizationContextForClient(RPC_BINDING_HANDLE ClientBinding, WINBOOL ImpersonateOnReturn, PVOID Reserved1, PLARGE_INTEGER pExpirationTime, LUID Reserved2, DWORD Reserved3, PVOID Reserved4, PVOID *pAuthzClientContext);
@@ -130695,7 +130695,7 @@ RPC_STATUS RpcServerUseProtseqIfExW(RPC_WSTR Protseq, UINT MaxCalls, RPC_IF_HAND
 RPC_STATUS RpcServerUseProtseqIfW(RPC_WSTR Protseq, UINT MaxCalls, RPC_IF_HANDLE IfSpec, VOID *SecurityDescriptor);
 RPC_STATUS RpcServerUseProtseqW(RPC_WSTR Protseq, UINT MaxCalls, VOID *SecurityDescriptor);
 VOID RpcServerYield(void);
-VOID *RpcSmAllocate(ULONGLONG Size, RPC_STATUS *pStatus);
+VOID *RpcSmAllocate(size_t Size, RPC_STATUS *pStatus);
 RPC_STATUS RpcSmClientFree(VOID *pNodeToFree);
 RPC_STATUS RpcSmDestroyClientContext(VOID **ContextHandle);
 RPC_STATUS RpcSmDisableAllocate(void);
@@ -130705,7 +130705,7 @@ RPC_SS_THREAD_HANDLE RpcSmGetThreadHandle(RPC_STATUS *pStatus);
 RPC_STATUS RpcSmSetClientAllocFree(RPC_CLIENT_ALLOC *ClientAlloc, RPC_CLIENT_FREE *ClientFree);
 RPC_STATUS RpcSmSetThreadHandle(RPC_SS_THREAD_HANDLE Id);
 RPC_STATUS RpcSmSwapClientAllocFree(RPC_CLIENT_ALLOC *ClientAlloc, RPC_CLIENT_FREE *ClientFree, RPC_CLIENT_ALLOC **OldClientAlloc, RPC_CLIENT_FREE **OldClientFree);
-VOID *RpcSsAllocate(ULONGLONG Size);
+VOID *RpcSsAllocate(size_t Size);
 RPC_STATUS RpcSsContextLockExclusive(RPC_BINDING_HANDLE ServerBindingHandle, PVOID UserContext);
 RPC_STATUS RpcSsContextLockShared(RPC_BINDING_HANDLE ServerBindingHandle, PVOID UserContext);
 VOID RpcSsDestroyClientContext(VOID **ContextHandle);
@@ -130857,8 +130857,8 @@ NTSTATUS RtlCopySid(ULONG DestinationSidLength, PSID DestinationSid, PSID Source
 NTSTATUS RtlCopySidAndAttributesArray(ULONG Count, PSID_AND_ATTRIBUTES Src, ULONG SidAreaSize, PSID_AND_ATTRIBUTES Dest, PSID SidArea, PSID *RemainingSidArea, PULONG RemainingSidAreaSize);
 VOID RtlCopyString(PSTRING DestinationString, PSTRING SourceString);
 VOID RtlCopyUnicodeString(PCUNICODE_STRING DestinationString, PCUNICODE_STRING SourceString);
-ULONG RtlCrc32(const VOID *Buffer, ULONGLONG Size, ULONG InitialCrc);
-ULONGLONG RtlCrc64(const VOID *Buffer, ULONGLONG Size, ULONGLONG InitialCrc);
+ULONG RtlCrc32(const VOID *Buffer, size_t Size, ULONG InitialCrc);
+ULONGLONG RtlCrc64(const VOID *Buffer, size_t Size, ULONGLONG InitialCrc);
 NTSTATUS RtlCreateAcl(PACL Acl, ULONG AclLength, ULONG AclRevision);
 NTSTATUS RtlCreateActivationContext(ULONG Flags, PACTIVATION_CONTEXT_DATA ActivationContextData, ULONG ExtraBytes, PACTIVATION_CONTEXT_NOTIFY_ROUTINE NotificationRoutine, PVOID NotificationContext, PACTIVATION_CONTEXT *ActivationContext);
 NTSTATUS RtlCreateAndSetSD(PRTL_ACE_DATA AceData, ULONG AceCount, PSID OwnerSid, PSID GroupSid, PSECURITY_DESCRIPTOR *NewSecurityDescriptor);
@@ -134361,7 +134361,7 @@ PCHAR if_indextoname(NET_IFINDEX InterfaceIndex, PCHAR InterfaceName);
 NET_IFINDEX if_nametoindex(PCSTR InterfaceName);
 ULONG inet_addr(const CHAR *cp);
 CHAR *inet_ntoa(struct in_addr in);
-LPCSTR inet_ntop(INT Family, LPCVOID pAddr, LPSTR pStringBuf, ULONGLONG StringBufSize);
+LPCSTR inet_ntop(INT Family, LPCVOID pAddr, LPSTR pStringBuf, size_t StringBufSize);
 INT inet_pton(INT Family, LPCSTR pStringBuf, PVOID pAddr);
 INT ioctlsocket(SOCKET s, LONG cmd, u_long *argp);
 MMRESULT joyConfigChanged(DWORD dwFlags);
@@ -134517,7 +134517,7 @@ INT ua_lstrlenW(LPCUWSTR String);
 PUWSTR_C ua_wcschr(PCUWSTR String, WCHAR Character);
 PUWSTR ua_wcscpy(PUWSTR Destination, PCUWSTR Source);
 INT ua_wcsicmp(LPCUWSTR String1, LPCUWSTR String2);
-ULONGLONG ua_wcslen(PCUWSTR String);
+size_t ua_wcslen(PCUWSTR String);
 PUWSTR_C ua_wcsrchr(PCUWSTR String, WCHAR Character);
 LPUWSTR uaw_CharUpperW(LPUWSTR String);
 INT uaw_lstrcmpW(PCUWSTR String1, PCUWSTR String2);
@@ -134526,7 +134526,7 @@ INT uaw_lstrlenW(LPCUWSTR String);
 PUWSTR uaw_wcschr(PCUWSTR String, WCHAR Character);
 PUWSTR uaw_wcscpy(PUWSTR Destination, PCUWSTR Source);
 INT uaw_wcsicmp(PCUWSTR String1, PCUWSTR String2);
-ULONGLONG uaw_wcslen(PCUWSTR String);
+size_t uaw_wcslen(PCUWSTR String);
 PUWSTR uaw_wcsrchr(PCUWSTR String, WCHAR Character);
 ULONG vDbgPrintEx(ULONG ComponentId, ULONG Level, PCCH Format, CHAR *arglist);
 ULONG vDbgPrintExWithPrefix(PCCH Prefix, ULONG ComponentId, ULONG Level, PCCH Format, CHAR *arglist);

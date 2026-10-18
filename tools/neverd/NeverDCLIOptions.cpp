@@ -972,6 +972,12 @@ cl::opt<std::string> TypesDataModel(
     cl::desc("Without a binary, lay the --declare files out for LLP64 "
              "(Windows x64), LP64 or ILP32"),
     cl::init(""), cl::value_desc("model"), cl::sub(TypesCmd));
+cl::opt<std::string> TypesRecordABI(
+    "record-abi",
+    cl::desc("With --data-model, lay records out as microsoft, itanium, "
+             "i386-sysv or aapcs32 compilers do (default: the data model's: "
+             "Itanium's for LP64, Microsoft's otherwise)"),
+    cl::init(""), cl::value_desc("abi"), cl::sub(TypesCmd));
 cl::opt<bool> TypesKeepGoing(
     "keep-going",
     cl::desc("Keep the C and C++ declarations that read when others do not, "

@@ -28,7 +28,7 @@
 namespace neverd::types {
 
 enum class HeaderLibrary : uint8_t {
-#define NEVERD_HEADER_LIBRARY(Id, Name, File, Model, Spelling) Id,
+#define NEVERD_HEADER_LIBRARY(Id, Name, File, Model, ABI, Spelling) Id,
 #include "neverd/types/HeaderLibraries.def"
 };
 
@@ -37,6 +37,9 @@ llvm::StringRef headerLibraryName(HeaderLibrary Library);
 
 /// The data model the library is laid out for.
 DataModel headerLibraryModel(HeaderLibrary Library);
+
+/// The record ABI the library's records are laid out by.
+RecordABI headerLibraryRecordABI(HeaderLibrary Library);
 
 /// The library's declarations as C, as NeverD embeds them.
 llvm::StringRef headerLibrarySource(HeaderLibrary Library);

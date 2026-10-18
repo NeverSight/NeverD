@@ -82,8 +82,10 @@ inline bool terminalBrk(const LowBlock &Block) {
   if (!Block.Succs.empty() || Block.Ops.size() != 1)
     return false;
   const auto &Op = Block.Ops.front();
+  // The BRK's code is its second input, when the lift kept it.
   return Block.EndAddr == Op.Addr + 4 && Op.Seq == 0 &&
-         Op.Opcode == NdOp::INTRINSIC && Op.NumInputs == 1 &&
+         Op.Opcode == NdOp::INTRINSIC &&
+         (Op.NumInputs == 1 || (Op.NumInputs == 2 && Op.Inputs[1].isConst())) &&
          Op.Inputs[0].isConst() && Op.Inputs[0].Size == 2 &&
          Op.Inputs[0].Offset == static_cast<uint64_t>(Intrinsic::Brk) &&
          Op.Output ==

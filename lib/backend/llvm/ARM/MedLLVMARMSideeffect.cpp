@@ -14,6 +14,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
+#include "neverd/backend/llvm/MedLLVMInstructionText.h"
 
 #define DEBUG_TYPE "neverd-med-llvm-arm-sideeffect"
 #include "neverd/ir/intrinsics/Intrinsics.h"
@@ -28,24 +29,27 @@ namespace neverd {
 // Memory barriers (DMB, DSB, ISB)
 //===----------------------------------------------------------------------===//
 
-bool MedLLVMEmitter::emitARMBarrier(const MedOp & /*Op*/, Intrinsic IC,
+bool MedLLVMEmitter::emitARMBarrier(const MedOp &Op, Intrinsic IC,
                                     llvm::IRBuilder<> &Builder) {
   using I = Intrinsic;
   switch (IC) {
   case I::ArmDmb:
-    Builder.CreateFence(llvm::AtomicOrdering::SequentiallyConsistent);
+    // The strongest fence orders what any DMB option does; the option is
+    // the text it carries (`dmb ishst`).
+    markInstructionText(
+        *Builder.CreateFence(llvm::AtomicOrdering::SequentiallyConsistent), Op,
+        IC);
     return true;
-  case I::ArmDsb: {
-    auto *VoidTy = llvm::Type::getVoidTy(*Ctx);
-    auto *AsmFnTy = llvm::FunctionType::get(VoidTy, {}, false);
-    auto *IA = llvm::InlineAsm::get(AsmFnTy, "dsb ish", "~{memory}", true);
-    Builder.CreateCall(IA, {});
-    return true;
-  }
+  case I::ArmDsb:
   case I::ArmIsb: {
+    // A DSB or ISB runs with its own option: `dsb sy` waits for more than
+    // `dsb ish` does.  A lift that kept none ran the inner-shareable one.
+    std::string Text = intrinsicInstructionText(IC, instructionOperand(Op));
+    if (Text.empty())
+      Text = IC == I::ArmDsb ? "dsb ish" : "isb";
     auto *VoidTy = llvm::Type::getVoidTy(*Ctx);
     auto *AsmFnTy = llvm::FunctionType::get(VoidTy, {}, false);
-    auto *IA = llvm::InlineAsm::get(AsmFnTy, "isb", "~{memory}", true);
+    auto *IA = llvm::InlineAsm::get(AsmFnTy, Text, "~{memory}", true);
     Builder.CreateCall(IA, {});
     return true;
   }
@@ -76,7 +80,11 @@ bool MedLLVMEmitter::emitARMException(const MedOp &Op, Intrinsic IC,
           Imm = Op.Inputs[K].ConstVal;
           break;
         }
-      std::string AsmStr = std::string(Mn) + " #" + std::to_string(Imm);
+      // The instruction with its code (`udf #0xFE`); a supervisor call keeps
+      // the decimal number it has always printed.
+      std::string AsmStr = intrinsicInstructionText(IC, Imm);
+      if (AsmStr.empty())
+        AsmStr = std::string(Mn) + " #" + std::to_string(Imm);
       auto *VoidTy = llvm::Type::getVoidTy(*Ctx);
       auto *AsmFnTy = llvm::FunctionType::get(VoidTy, {}, false);
       auto *IA = llvm::InlineAsm::get(AsmFnTy, AsmStr, "~{memory}", true);

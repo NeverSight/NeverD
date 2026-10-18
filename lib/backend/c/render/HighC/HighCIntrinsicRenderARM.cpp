@@ -15,6 +15,7 @@
 #include "neverd/support/IntegerLiterals.h"
 
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/Support/raw_ostream.h"
@@ -971,13 +972,25 @@ std::string renderARMIntrinsicCall(Intrinsic Id,
   }
   case I::Dmb:
   case I::ArmDmb:
-    return "__dmb(0xF)";
   case I::Dsb:
   case I::ArmDsb:
-    return "__dsb(0xB)";
   case I::Isb:
-  case I::ArmIsb:
-    return "__isb(0xF)";
+  case I::ArmIsb: {
+    // The barrier's own option, which the lift keeps (`dsb sy` is
+    // `__dsb(0xF)`); a lift that kept none ran these.
+    const bool Dmb = Id == I::Dmb || Id == I::ArmDmb;
+    const bool Dsb = Id == I::Dsb || Id == I::ArmDsb;
+    std::string Option = Dsb ? "0xB" : "0xF";
+    uint64_t Value = 0;
+    if (!Ops.empty())
+      Option = llvm::StringRef(Ops[0]).getAsInteger(0, Value)
+                   ? Ops[0]
+                   : "0x" + llvm::utohexstr(Value);
+    return std::string(Dmb   ? "__dmb("
+                       : Dsb ? "__dsb("
+                             : "__isb(") +
+           Option + ")";
+  }
   case I::A64_Clrex:
   case I::ArmClrex:
     HasCIntrinsics = true;

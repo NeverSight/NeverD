@@ -34,6 +34,8 @@ llvm::StringRef originName(TypeOrigin Origin);
 llvm::StringRef dataModelName(DataModel Model);
 /// The data model \p Name names (LLP64, LP64, ILP32), or none.
 std::optional<DataModel> dataModelNamed(llvm::StringRef Name);
+/// The record ABI \p Name names as recordABIName spells it, or none.
+std::optional<RecordABI> recordABINamed(llvm::StringRef Name);
 
 /// Every type in brief, in ordinal order:
 /// `{"ordinal", "name", "kind", "size", "members", "origin"}`, where size is

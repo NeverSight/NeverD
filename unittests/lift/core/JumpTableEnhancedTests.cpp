@@ -536,6 +536,40 @@ int spilled_got_float(int input) {
   EXPECT_TRUE(Lifted.Result.Success) << Lifted.Result.Error;
 }
 
+static neverd::LowFunc buildI386RingSpill(unsigned RingMask) {
+  auto ImageOrErr = neverd::loadBinary(
+      fs::path(TEST_OBJ_DIR) /
+      ("test_i386_ring_spill_" + std::to_string(RingMask) + ".o"));
+  if (!ImageOrErr) {
+    ADD_FAILURE() << llvm::toString(ImageOrErr.takeError());
+    return {};
+  }
+  const neverd::Symbol *Function = ImageOrErr->findSymbol("i386_ring_spill");
+  neverd::Decoder Decoder;
+  if (!Function || !Decoder.init(ImageOrErr->Arch, ImageOrErr->Mode)) {
+    ADD_FAILURE() << "i386_ring_spill cannot be decoded";
+    return {};
+  }
+  neverd::CFGBuilder Builder;
+  return Builder.build(*ImageOrErr, Decoder, Function->Addr, Function->Name);
+}
+
+TEST_F(JTE_X86_32, MaskedRingStoreLeavesTheSpilledGOTBase) {
+  // `movb %bl, 0x10(%esp,%edx,1)` with edx = x & 15 writes 0x10..0x1f; the
+  // GOT base spilled at 0x20 reaches its reload, so the table resolves.
+  const neverd::LowFunc Low = buildI386RingSpill(15);
+  ASSERT_EQ(Low.JumpTables.size(), 1u);
+  EXPECT_EQ(Low.JumpTables.front().Targets.size(), 4u);
+  EXPECT_TRUE(Low.UnsafeIndirectBranchAddresses.empty());
+}
+
+TEST_F(JTE_X86_32, WiderRingStoreMayOverwriteTheSpilledGOTBase) {
+  // With edx = x & 31 the same write may cover 0x20, so the reload no longer
+  // proves the GOT base and the dispatch stays unresolved.
+  const neverd::LowFunc Low = buildI386RingSpill(31);
+  EXPECT_TRUE(Low.JumpTables.empty());
+}
+
 TEST_F(JTE_X86_32, O0ThreeSwitchLoopsReuseCanonicalFrameSpill) {
   auto ImageOrErr = neverd::loadBinary(fs::path(TEST_OBJ_DIR) /
                                        "test_i386_three_switch_loops.o");
@@ -3568,6 +3602,95 @@ static fs::path jteX64Obj() {
 
 static fs::path recursiveSwitchX64Obj() {
   return fs::path(TEST_OBJ_DIR) / "test_jumptable_recursive.o";
+}
+
+static fs::path rbpTableBaseX64Obj() {
+  return fs::path(TEST_OBJ_DIR) / "test_jumptable_rbp_base.o";
+}
+
+// `rbp_dispatch` loads RBP with the table address before the read. A frame
+// register that holds a constant there is no frame base, so the stack-table
+// probe never runs: even with no stack-table budget, the table is the plain
+// relative table whose offsets start .rodata.
+TEST_F(JTE_X86_64, RBPLoadedWithATableAddressIsNoFrameBase) {
+  auto ImageOrErr = neverd::loadBinary(rbpTableBaseX64Obj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  neverd::BinaryImage &Image = *ImageOrErr;
+  const neverd::Symbol *Function = Image.findSymbol("rbp_dispatch");
+  ASSERT_NE(Function, nullptr);
+  const neverd::Section *Rodata = nullptr;
+  for (const neverd::Section &Section : Image.Sections)
+    if (Section.Name == ".rodata")
+      Rodata = &Section;
+  ASSERT_NE(Rodata, nullptr);
+  std::vector<neverd::va_t> Expected;
+  for (size_t Case = 0; Case < 6; ++Case) {
+    const uint8_t *Bytes = Image.readVA(Rodata->VA + Case * 4, 4);
+    ASSERT_NE(Bytes, nullptr);
+    int32_t Entry = 0;
+    std::memcpy(&Entry, Bytes, sizeof(Entry));
+    Expected.push_back(Rodata->VA + static_cast<int64_t>(Entry));
+  }
+
+  for (size_t Budget :
+       {size_t{0}, size_t{neverd::limits::kMaxJumpTableStackEvidenceWork}}) {
+    SCOPED_TRACE(Budget);
+    neverd::Decoder Decoder;
+    ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+    neverd::CFGBuilder Builder;
+    Builder.setStackTableEvidenceBudgetForTesting(Budget);
+    const neverd::LowFunc Low =
+        Builder.build(Image, Decoder, Function->Addr, Function->Name);
+    ASSERT_EQ(Low.JumpTables.size(), 1u);
+    EXPECT_EQ(Low.JumpTables.front().BaseAddr, Rodata->VA);
+    EXPECT_EQ(Low.JumpTables.front().Targets, Expected);
+    EXPECT_TRUE(Low.UnsafeIndirectBranchAddresses.empty());
+  }
+}
+
+static fs::path tailStubX64Obj() {
+  return fs::path(TEST_OBJ_DIR) / "test_jumptable_tail_stub.o";
+}
+
+// `cleanup_dispatch` jumps past its end, where padding falls into `helper`,
+// and it also calls `helper`. The graph models the edge into `helper` as a
+// tail call at helper's entry; that record holds none of this function's
+// code, so the call does not enter this function and its table stays.
+TEST_F(JTE_X86_64, CallsToATailCalledEntryKeepTheRelativeTable) {
+  auto ImageOrErr = neverd::loadBinary(tailStubX64Obj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  neverd::BinaryImage &Image = *ImageOrErr;
+  const neverd::Symbol *Function = Image.findSymbol("cleanup_dispatch");
+  ASSERT_NE(Function, nullptr);
+  const neverd::Symbol *Helper = Image.findSymbol("helper");
+  ASSERT_NE(Helper, nullptr);
+  const neverd::Section *Rodata = nullptr;
+  for (const neverd::Section &Section : Image.Sections)
+    if (Section.Name == ".rodata")
+      Rodata = &Section;
+  ASSERT_NE(Rodata, nullptr);
+  std::vector<neverd::va_t> Expected;
+  for (size_t Case = 0; Case < 6; ++Case) {
+    const uint8_t *Bytes = Image.readVA(Rodata->VA + Case * 4, 4);
+    ASSERT_NE(Bytes, nullptr);
+    int32_t Entry = 0;
+    std::memcpy(&Entry, Bytes, sizeof(Entry));
+    Expected.push_back(Rodata->VA + static_cast<int64_t>(Entry));
+  }
+
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+  neverd::CFGBuilder Builder;
+  const std::set<neverd::va_t> FunctionEntries{Function->Addr, Helper->Addr};
+  Builder.setKnownFuncEntries(&FunctionEntries);
+  const neverd::LowFunc Low =
+      Builder.build(Image, Decoder, Function->Addr, Function->Name);
+  ASSERT_EQ(Low.JumpTables.size(), 1u);
+  EXPECT_EQ(Low.JumpTables.front().BaseAddr, Rodata->VA);
+  EXPECT_EQ(Low.JumpTables.front().Targets, Expected);
+  EXPECT_TRUE(Low.UnsafeIndirectBranchAddresses.empty());
 }
 
 // Every case of `evaluate` calls `evaluate`. Such a call enters at the

@@ -9,6 +9,7 @@ add_neverd_unittest(NeverDTypesTests
   TypeRenderTests.cpp
 
   LINK_COMPONENTS
+  LibC
   Types
 )
 
