@@ -253,6 +253,10 @@ private:
       return Printed{text(E->Begin, E->Ops.front()->Begin) +
                          expr(E->Ops.front()).Text + ")",
                      PrecAtom};
+    case ExprKind::VaArg:
+      return Printed{"va_arg(" + expr(E->Ops.front()).Text +
+                         text(E->Ops.front()->End, E->End),
+                     PrecAtom};
     }
     return Printed{"", PrecAtom};
   }

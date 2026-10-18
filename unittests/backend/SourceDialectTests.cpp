@@ -25,6 +25,7 @@
 
 #include <cstdlib>
 #include <map>
+#include <set>
 
 using namespace neverd;
 
@@ -88,6 +89,88 @@ TEST(SourceDialect, CxxUsesQualifiedNamesAndExactLibraryAliases) {
   EXPECT_EQ(
       readableCxxTypeName("ATL::CStringT<wchar_t, ATL::StrTraitATL<wchar_t>>"),
       "ATL::CStringT<wchar_t, ATL::StrTraitATL<wchar_t>>");
+}
+
+TEST(SourceDialect, CxxOverloadsShareTheirName) {
+  // The two __do_deallocate_handle_size overloads of the NDK's libc++, which
+  // C names `handle` and `handle_2`, are both the one C++ name, as IDA prints
+  // them; each still links its own symbol.
+  const char *C = "int handle(int p, int n, int a);\n"
+                  "int handle_2(int p, int n);\n"
+                  "int count;\n"
+                  "int count_2(void);\n"
+                  "int helper(void);\n"
+                  "int helper_2(void);\n"
+                  "int work(int p) {\n"
+                  "    return handle(p, 1, 2) + handle_2(p, 1) + count + "
+                  "count_2() + helper() + helper_2();\n"
+                  "}\n";
+  std::vector<CSourceName> Names = {
+      {CSourceName::Kind::Function, "handle",
+       "_ZNSt6__ndk117_DeallocateCaller27__do_deallocate_handle_sizeEPvjSt11"
+       "align_val_t",
+       0x64930},
+      {CSourceName::Kind::Function, "handle_2",
+       "_ZNSt6__ndk117_DeallocateCaller27__do_deallocate_handle_sizeEPvj",
+       0x64980},
+      // A variable and a function of one name would name neither.
+      {CSourceName::Kind::Object, "count", "_ZN4Demo5countE", 0x80000},
+      {CSourceName::Kind::Function, "count_2", "_ZN4Demo5countEv", 0x1000},
+      // Two files' static helpers of one symbol are two functions.
+      {CSourceName::Kind::Function, "helper", "_ZN12_GLOBAL__N_16helperEv",
+       0x2000},
+      {CSourceName::Kind::Function, "helper_2", "_ZN12_GLOBAL__N_16helperEv",
+       0x3000}};
+  const auto Cpp = spell(C, SourceDialect::Cpp, Names);
+  EXPECT_TRUE(Cpp.Unread.empty());
+  const std::string Shared =
+      "std::_DeallocateCaller::__do_deallocate_handle_size";
+  EXPECT_NE(Cpp.Text.find(Shared + "(p, 1, 2)"), std::string::npos) << Cpp.Text;
+  EXPECT_NE(Cpp.Text.find(Shared + "(p, 1)"), std::string::npos) << Cpp.Text;
+  EXPECT_EQ(Cpp.Text.find("handle_2"), std::string::npos) << Cpp.Text;
+  EXPECT_NE(Cpp.Text.find("+ count + count_2() + helper() + helper_2()"),
+            std::string::npos)
+      << Cpp.Text;
+  std::set<va_t> Linked;
+  for (const auto &Name : Cpp.Names)
+    if (Cpp.Text.substr(Name.Begin, Name.End - Name.Begin) == Shared &&
+        Name.Address)
+      Linked.insert(*Name.Address);
+  EXPECT_EQ(Linked, (std::set<va_t>{0x64930, 0x64980}));
+}
+
+TEST(SourceDialect, ReadsTheDeclarationsHighCWrites) {
+  // A typedef name a declaration declares again, or a block's own variable
+  // of a typedef's name (which hides the type to the block's end), a C23
+  // enumeration's fixed type, and va_list with va_arg's type operand all
+  // read; the C++ view of such a unit is no C shown as is.
+  const char *C =
+      "typedef uint32_t size_t;\n"
+      "typedef struct addrinfo addrinfo;\n"
+      "enum _Unwind_Reason_Code : uint32_t { _URC_NO_REASON = 0 };\n"
+      "int fcntl(int fd, int command, ...);\n"
+      "int vlog(int arg0, int arg1, ...) {\n"
+      "    va_list arguments;\n"
+      "    va_start(arguments, arg1);\n"
+      "    void *argument2 = va_arg(arguments, void *);\n"
+      "    va_end(arguments);\n"
+      "    return fcntl(arg0, arg1, argument2);\n"
+      "}\n"
+      "int resolve(int32_t size_t) {\n"
+      "    int32_t addrinfo;\n"
+      "    addrinfo = size_t + _URC_NO_REASON;\n"
+      "    return addrinfo;\n"
+      "}\n"
+      "int typed(addrinfo *list) { return list != 0; }\n";
+  for (SourceDialect Dialect : {SourceDialect::C, SourceDialect::Cpp}) {
+    const auto Text = spell(C, Dialect);
+    EXPECT_TRUE(Text.Unread.empty()) << Text.Text;
+    EXPECT_EQ(Text.Text.find("shown as C"), std::string::npos) << Text.Text;
+    EXPECT_NE(Text.Text.find(": uint32_t"), std::string::npos) << Text.Text;
+    EXPECT_NE(Text.Text.find("va_arg(arguments, void *)"), std::string::npos)
+        << Text.Text;
+  }
+  EXPECT_EQ(tokens(spell(C, SourceDialect::C).Text), tokens(C));
 }
 
 TEST(SourceDialect, CxxSymbolsAreValidatedAndKeepOperatorsAndTemplates) {
@@ -1768,6 +1851,7 @@ int32_t loop_sum(int32_t n) {
     }
     return s;
 }
+int64_t through_copy(int64_t v) { return *&(int64_t){v + 1} + v; }
 )C";
   const char *Calls[] = {"promote(200, 100)",
                          "promote(255, 255)",
@@ -1780,7 +1864,8 @@ int32_t loop_sum(int32_t n) {
                          "loop_sum(0)",
                          "loop_sum(1)",
                          "loop_sum(8)",
-                         "loop_sum(100)"};
+                         "loop_sum(100)",
+                         "through_copy(20)"};
   SourceDialectText Go = spell(C, SourceDialect::Go);
   ASSERT_TRUE(Go.Unread.empty()) << Go.Text;
   std::string CSource =
@@ -1822,7 +1907,7 @@ int32_t loop_sum(int32_t n) {
   ASSERT_TRUE(bool(CResult)) << llvm::toString(CResult.takeError());
   ASSERT_TRUE(bool(GoResult)) << llvm::toString(GoResult.takeError());
   EXPECT_EQ(normalizeLineEndings(*CResult),
-            "300\n510\n44\n254\n0\n1\n-128\n128\n0\n1\n36\n5050\n");
+            "300\n510\n44\n254\n0\n1\n-128\n128\n0\n1\n36\n5050\n41\n");
   EXPECT_EQ(normalizeLineEndings(*GoResult), normalizeLineEndings(*CResult))
       << Go.Text;
   llvm::sys::fs::remove_directories(Dir);

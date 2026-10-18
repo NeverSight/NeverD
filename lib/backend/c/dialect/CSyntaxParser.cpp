@@ -308,7 +308,14 @@ private:
             true)
         .Case("enum", true)
         .Cases({"__attribute__", "_Atomic", "_Complex"}, true)
-        .Default(TypedefNames.contains(Tok.Text));
+        .Default(TypedefNames.contains(Tok.Text) && !shadowed(Tok.Text));
+  }
+  /// Whether a block declares typedef name \p Name as an ordinary identifier,
+  /// which hides the type to the end of that block.
+  bool shadowed(llvm::StringRef Name) const {
+    return llvm::any_of(ShadowScopes, [&](const llvm::StringSet<> &Scope) {
+      return Scope.contains(Name);
+    });
   }
   bool isDeclarationStart() const {
     if (isTypeNameStart())
@@ -480,6 +487,14 @@ private:
           return fail("expected an enumeration name");
         Named = T.Types.enumeration(tok().Text);
         ++Pos;
+        // C23's fixed underlying type (`enum E : uint32_t`), which the
+        // enumeration's spelling keeps as written.
+        if (isPunct(":") && (isTypeNameStart(1) || isIdent("unsigned", 1))) {
+          ++Pos;
+          Specifiers Underlying;
+          if (!parseSpecifiers(Underlying))
+            return false;
+        }
         if (isPunct("{")) {
           if (!EnumerationsDefined)
             return fail("an enumeration defined within another declaration");
@@ -711,7 +726,12 @@ private:
         return false;
       D.Name = Inner->Name;
       D.NameOffset = Inner->NameOffset;
-    } else if (tok().Kind == TokenKind::Identifier && !isTypeNameStart() &&
+    } else if (tok().Kind == TokenKind::Identifier &&
+               // Specifiers that name a type come first, so a typedef name
+               // here is what the declaration declares (`int32_t addrinfo;`,
+               // `typedef uint32_t size_t;`).
+               (!isTypeNameStart() ||
+                (!Abstract && TypedefNames.contains(tok().Text))) &&
                !isIdent("__asm__") && !isIdent("__asm") &&
                !isIdent("__attribute__")) {
       if (Abstract)
@@ -894,6 +914,11 @@ private:
     if (Kind == DeclKind::Typedef && !D.Name.empty()) {
       TypedefNames.insert(D.Name);
       Typedefs[D.Name] = T.Types.spelled(Ty, D.Name);
+      if (!ShadowScopes.empty())
+        ShadowScopes.back().erase(D.Name);
+    } else if (!D.Name.empty() && !ShadowScopes.empty() &&
+               TypedefNames.contains(D.Name)) {
+      ShadowScopes.back().insert(D.Name);
     }
     return Result;
   }
@@ -1054,10 +1079,16 @@ private:
     Decl *First = declaratorDecl(S, D);
     if (First->Kind == DeclKind::Function && D.DeclaresFunction &&
         isPunct("{")) {
-      for (Decl *P : First->Params)
+      ShadowScopes.emplace_back();
+      for (Decl *P : First->Params) {
         if (P->Name.empty())
-          return fail("a definition's parameters need names"), Item;
+          return ShadowScopes.pop_back(),
+                 fail("a definition's parameters need names"), Item;
+        if (TypedefNames.contains(P->Name))
+          ShadowScopes.back().insert(P->Name);
+      }
       First->Body = parseCompound();
+      ShadowScopes.pop_back();
       if (!First->Body)
         return Item;
       First->End = lastEnd();
@@ -1096,6 +1127,11 @@ private:
     Stmt *S = T.newStmt(StmtKind::Compound, offset());
     if (!expect("{"))
       return nullptr;
+    ShadowScopes.emplace_back();
+    struct PopScope {
+      std::vector<llvm::StringSet<>> &Scopes;
+      ~PopScope() { Scopes.pop_back(); }
+    } Pop{ShadowScopes};
     while (true) {
       for (const Comment &C : takeCommentsBefore(Pos)) {
         Stmt *Note = T.newStmt(StmtKind::Comment, C.Offset);
@@ -1691,6 +1727,19 @@ private:
       attachTrailing(E);
       return E;
     }
+    if (W == "va_arg" && isPunct("(", 1)) {
+      ++Pos;
+      Expr *E = T.newExpr(ExprKind::VaArg, Begin);
+      ++Pos;
+      Expr *List = parseAssignment();
+      if (!List || !expect(",") || !(E->Written = parseTypeName()) ||
+          !expect(")"))
+        return nullptr;
+      E->Ops.push_back(List);
+      E->End = lastEnd();
+      attachTrailing(E);
+      return E;
+    }
     if ((W == "__asm__" || W == "__asm") &&
         (isIdent("volatile", 1) || isPunct("(", 1))) {
       // `__asm__` where the emitter wrote it as a value.
@@ -1742,6 +1791,9 @@ private:
   std::string Error;
   llvm::StringSet<> TypedefNames;
   llvm::StringMap<const CType *> Typedefs;
+  /// Per block, from the outermost: the typedef names its declarations
+  /// declare as ordinary identifiers.
+  std::vector<llvm::StringSet<>> ShadowScopes;
 };
 
 } // namespace

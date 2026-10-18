@@ -459,6 +459,9 @@ private:
       return statementExpr(E);
     case ExprKind::BitCast:
       return bitCast(E);
+    case ExprKind::VaArg:
+      unsupported("va_arg");
+      return Printed{"_", PrecAtom};
     case ExprKind::Asm:
       return Printed{E->Text.str(), PrecAtom};
     }
@@ -509,11 +512,22 @@ private:
     if (O == "&") {
       if (Op->Ty->isFunction())
         return raw(Op);
-      // `&(T){0}`: a new zero T.
+      // `&(T){0}`: a new zero T; `&(T){v}`: a new T holding v, the one
+      // element of a slice made of it, which Go can take the address of.
       const Expr *Literal = skipParens(Op);
       if (Literal->Kind == ExprKind::CompoundLiteral &&
-          Literal->Written->isScalar() && isZeroInitializer(Literal->Ops[0]))
-        return Printed{"new(" + type(Literal->Written) + ")", PrecAtom};
+          Literal->Written->isScalar()) {
+        if (isZeroInitializer(Literal->Ops[0]))
+          return Printed{"new(" + type(Literal->Written) + ")", PrecAtom};
+        const Expr *Init = Literal->Ops[0];
+        if (Init->Kind == ExprKind::InitList && Init->Ops.size() == 1)
+          Init = Init->Ops[0];
+        if (Init->Kind != ExprKind::InitList &&
+            Init->Kind != ExprKind::Designated)
+          return Printed{"&[]" + type(Literal->Written) + "{" +
+                             value(Init, Literal->Written).Text + "}[0]",
+                         PrecUnary};
+      }
       return Printed{"&" + paren(place(Op), PrecAtom), PrecUnary};
     }
     if (O == "*") {

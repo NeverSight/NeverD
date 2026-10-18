@@ -61,6 +61,7 @@ NEVERD_C_HEADER_INTEGER("wchar_t", 32, true)
 // <stdio.h>, <setjmp.h>, <link.h>, intrinsic vectors.
 NEVERD_C_HEADER_NAMED_TYPE("FILE", 0)
 NEVERD_C_HEADER_NAMED_TYPE("jmp_buf", 0)
+NEVERD_C_HEADER_NAMED_TYPE("va_list", 0)
 NEVERD_C_HEADER_NAMED_TYPE("__m64", 64)
 NEVERD_C_HEADER_NAMED_TYPE("__m128", 128)
 NEVERD_C_HEADER_NAMED_TYPE("__m128d", 128)

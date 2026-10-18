@@ -11,6 +11,7 @@
 #include "llvm/ADT/StringExtras.h"
 
 #include <map>
+#include <set>
 
 using namespace neverd;
 using namespace neverd::csyntax;
@@ -19,20 +20,38 @@ DialectPrinter::DialectPrinter(const Tree &T, const SourceDialectOptions &Opts)
     : T(T), Opts(Opts) {}
 
 SourceDialectText DialectPrinter::run() {
-  // A source name two identifiers share would name neither; those keep
-  // their C identifiers.
-  std::map<std::string, std::vector<llvm::StringRef>> ByName;
+  // A source name two identifiers share would name neither, so those keep
+  // their C identifiers, unless they are functions of distinct symbols: C++
+  // overloads share their name (`std::_DeallocateCaller::
+  // __do_deallocate_handle_size` takes (void*, unsigned) and (void*,
+  // unsigned, std::align_val_t)), and each identifier still links its own
+  // symbol.  An object or a type has no such name to share, and two
+  // functions of one symbol (a `static` helper of two files) are no
+  // overloads: only their C identifiers tell them apart.
+  struct Sharers {
+    std::set<llvm::StringRef> Identifiers;
+    std::set<llvm::StringRef> Symbols;
+    bool AllFunctions = true;
+  };
+  std::map<std::string, Sharers> ByName;
   for (const CSourceName &Name : Opts.Names) {
     if (Name.Symbol.empty())
       continue;
     if (auto Spelled = Name.TheKind == CSourceName::Kind::Type
                            ? sourceTypeName(Name.Symbol)
-                           : sourceName(Name.Symbol))
-      ByName[*Spelled].push_back(Name.Identifier);
+                           : sourceName(Name.Symbol)) {
+      Sharers &Sharing = ByName[*Spelled];
+      Sharing.Identifiers.insert(Name.Identifier);
+      Sharing.Symbols.insert(Name.Symbol);
+      Sharing.AllFunctions &= Name.TheKind == CSourceName::Kind::Function;
+    }
   }
-  for (auto &[Spelled, Identifiers] : ByName)
-    if (Identifiers.size() == 1)
-      SourceNames[Identifiers.front()] = Spelled;
+  for (auto &[Spelled, Sharing] : ByName)
+    if (Sharing.Identifiers.size() == 1 ||
+        (Sharing.AllFunctions &&
+         Sharing.Symbols.size() == Sharing.Identifiers.size()))
+      for (llvm::StringRef Identifier : Sharing.Identifiers)
+        SourceNames[Identifier] = Spelled;
   for (const CSourceName &Name : Opts.Names)
     if (SourceNames.contains(Name.Identifier))
       NameEntries[Name.Identifier] = &Name;

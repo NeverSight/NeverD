@@ -531,7 +531,13 @@ NEVERD_SOURCE_DIALECT=go \
 
 `NeverDSourceDialectTests` checks C++ symbol validation, STL aliases, preserved
 custom template arguments, ATL names, and the C exception projection's native
-calls and handlers. `ReadsTheDefinitionsOfTheProgramsTypes` reads a unit's
+calls and handlers. `CxxOverloadsShareTheirName` reads two numbered overloads by
+their one C++ name and keeps C identifiers for an object and a function of one
+name and for two functions of one symbol; `ReadsTheDeclarationsHighCWrites`
+reads a typedef name declared again, a block's variable of a typedef's name, a
+C23 enumeration's type and `va_arg` without showing C, and
+`GoViewComputesWhatCComputes` runs a pointer to a copy (`&(int64_t){v}`) in Go.
+`ReadsTheDefinitionsOfTheProgramsTypes` reads a unit's
 local types definitions back in C as written, whole in C++, and in Rust and
 Go as far as their structures lay them out, saying why for the rest.
 `TheProgramsTypesSpellTheirRecordsAndTheirMembers` gives Rust and Go the

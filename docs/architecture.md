@@ -1000,8 +1000,10 @@ runtime reads as C++ whatever its name. The C++ printer uses the shared symbol
 spelling rules for namespaces, STL aliases and qualified ATL types; non-default
 template arguments and explicit ABI arguments remain visible. DWARF record
 identities supply type spellings, not guessed layouts or implicit member-call
-conventions. The GUI offers a separate C choice for non-C images and omits it
-when only C is offered.
+conventions. Overloads that C numbers apart (`f` and `f_2`) read by their one
+C++ name, each linking its own symbol; two functions of one symbol, or a
+function and an object of one name, keep their C identifiers. The GUI offers a
+separate C choice for non-C images and omits it when only C is offered.
 
 The reader reads the definitions a unit holds of the program's local types:
 unions, anonymous structures and unions, bit-fields, enumerations,

@@ -494,6 +494,9 @@ private:
       return statementExpr(E);
     case ExprKind::BitCast:
       return bitCast(E);
+    case ExprKind::VaArg:
+      unsupported("va_arg");
+      return Printed{"_", PrecAtom};
     case ExprKind::Asm:
       return Printed{E->Text.str(), PrecAtom};
     }

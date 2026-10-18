@@ -392,6 +392,10 @@ private:
         return false;
       return setType(E, Types.unqualified(E->Written));
     }
+    case ExprKind::VaArg:
+      if (!value(E->Ops.front()))
+        return false;
+      return setType(E, Types.unqualified(E->Written));
     case ExprKind::Asm:
       return setType(E, Types.unknownType());
     }

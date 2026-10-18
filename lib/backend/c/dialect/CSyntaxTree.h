@@ -230,6 +230,8 @@ enum class ExprKind : uint8_t {
   /// `__builtin_offsetof(T, field)`, or `offsetof` as `<stddef.h>` spells
   /// it.
   Offsetof,
+  /// `va_arg(ap, T)`, whose operand is the list and whose type is written.
+  VaArg,
   /// `__asm__(...)` where the emitter wrote it as a value; kept as written.
   Asm,
 };
