@@ -29,8 +29,9 @@ llvm::Error checkBufferRange(uint64_t Address, uint64_t Size) {
 }
 llvm::Error writeBytes(GuestMemory &Memory, uint64_t Address, uint64_t Size,
                        uint8_t Value) {
-  if (auto E = checkBufferRange(Address, Size))
-    return E;
+  if (Size > profile::MaxKernelArenaSize ||
+      (Size && (!Address || Size - 1 > UINT64_MAX - Address)))
+    return modelError("invalid internal RAM initialization range");
   if (!Size)
     return llvm::Error::success();
   return Memory.write(Address, std::vector<uint8_t>(Size, Value));
@@ -60,6 +61,17 @@ KernelModel::isResidentKernelAddress(uint64_t Address) const {
   for (const auto &[Base, Size] : FreedRanges)
     if (Contains(Base, Size))
       return modelError("MmIsAddressValid does not model retired allocations");
+  if (Version || DebuggerReference) {
+    auto Resident = Memory.canAccess(Address, 1, Read);
+    if (!Resident)
+      return Resident.takeError();
+    if (!*Resident)
+      return uint64_t(0);
+    auto Storage = Memory.pinBacking(Address, 1);
+    if (!Storage)
+      return Storage.takeError();
+    return uint64_t(1);
+  }
   auto Arena = ArenaAllocations.upper_bound(Address);
   if (Arena != ArenaAllocations.begin())
     --Arena;
@@ -131,7 +143,15 @@ llvm::Expected<uint64_t> KernelModel::memoryCall(KernelAPIKind Kind,
           exceptions::StatusAccessViolation);
     return llvm::Error::success();
   };
-  if (auto E = runtime::checkBufferRange(A[0], Size))
+  auto Check = [&](uint64_t Address) -> llvm::Error {
+    if (!Version)
+      return runtime::checkBufferRange(Address, Size);
+    if (Size > KernelMemoryBytes ||
+        (Size && (!Address || Size - 1 > UINT64_MAX - Address)))
+      return modelError("invalid or oversized native memory operation");
+    return llvm::Error::success();
+  };
+  if (auto E = Check(A[0]))
     return E;
   if (Zero || Fill || Kind == KernelAPIKind::memset) {
     const uint8_t Value = Zero ? 0 : static_cast<uint8_t>(Fill ? A[2] : A[1]);
@@ -143,7 +163,7 @@ llvm::Expected<uint64_t> KernelModel::memoryCall(KernelAPIKind Kind,
       return E;
     return Kind == KernelAPIKind::memset ? A[0] : 0;
   }
-  if (auto E = runtime::checkBufferRange(A[1], Size))
+  if (auto E = Check(A[1]))
     return E;
   if ((Kind == KernelAPIKind::memcpy || Kind == KernelAPIKind::RtlCopyMemory) &&
       Size && (A[0] < A[1] ? A[1] - A[0] < Size : A[0] - A[1] < Size))

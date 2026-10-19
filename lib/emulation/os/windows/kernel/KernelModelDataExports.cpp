@@ -27,10 +27,19 @@ llvm::Error KernelModel::initializeDataExports(const DriverOptions &Options) {
       LoadedModules.begin(), LoadedModules.end(), [](const auto &Module) {
         return Module.Base == profile::KernelModuleBase;
       });
-  if (!HasKernel)
+  const bool HasData = std::any_of(
+      Exports->entries().begin(), Exports->entries().end(), [](const auto &E) {
+        return E.second.Kind == KernelExportRegistry::ExportKind::ModuleData;
+      });
+  if (!HasData || (!HasKernel && !DebuggerReference))
     return llvm::Error::success();
   const uint64_t Base =
       profile::KernelModuleBase + profile::KernelModuleDataRVA;
+  // A reference image replaces the synthetic PE, while modeled data retains
+  // its separate owner. Map only those slots, without inventing a second PE.
+  if (!HasKernel)
+    if (auto E = Memory.map(Base, profile::KernelModuleDataSize, Read | Write))
+      return E;
   if (auto E =
           Memory.protect(Base, profile::KernelModuleDataSize, Read | Write))
     return E;

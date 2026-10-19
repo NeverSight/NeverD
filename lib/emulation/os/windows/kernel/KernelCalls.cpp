@@ -58,6 +58,9 @@ llvm::Expected<uint64_t> KernelModel::dispatchKernelCall(
     const std::string &Name, llvm::ArrayRef<uint64_t> A,
     llvm::function_ref<llvm::Expected<uint64_t>(unsigned)> ReadArgument,
     const KernelContextCapture *Context) {
+  APICallDetail.clear();
+  if (auto E = validateServiceCallContext(Name))
+    return E;
   const auto *API = lookupKernelAPI(Name);
   if (!API || A.size() != API->Arity)
     return modelError("unknown API or incorrect argument count: " + Name);
@@ -165,8 +168,36 @@ llvm::Expected<uint64_t> KernelModel::dispatchKernelCall(
       Kind != KernelAPIKind::IoGetStackLimits &&
       Kind != KernelAPIKind::MmUnmapLockedPages &&
       Kind != KernelAPIKind::RtlCopyMemory &&
-      Kind != KernelAPIKind::RtlMoveMemory)
-    return modelError("process attachment permits only bounded user-memory "
+      Kind != KernelAPIKind::RtlMoveMemory &&
+      Kind != KernelAPIKind::PsIsThreadTerminating &&
+      Kind != KernelAPIKind::wcsrchr && Kind != KernelAPIKind::RtlUpperChar &&
+      Kind != KernelAPIKind::RtlAnsiCharToUnicodeChar &&
+      Kind != KernelAPIKind::PsGetThreadProcessId &&
+      Kind != KernelAPIKind::RtlInt64ToUnicodeString &&
+      Kind != KernelAPIKind::RtlIntegerToUnicodeString &&
+      !(Version &&
+        (Kind == KernelAPIKind::PsGetProcessSectionBaseAddress ||
+         Kind == KernelAPIKind::PsGetProcessExitStatus ||
+         Kind == KernelAPIKind::PsGetProcessPeb ||
+         Kind == KernelAPIKind::PsGetProcessImageFileName ||
+         Kind == KernelAPIKind::PsGetThreadProcessId ||
+         Kind == KernelAPIKind::PsIsThreadTerminating ||
+         Kind == KernelAPIKind::MmIsAddressValid ||
+         Kind == KernelAPIKind::memcpy || Kind == KernelAPIKind::memmove ||
+         Kind == KernelAPIKind::memset || Kind == KernelAPIKind::memcmp ||
+         Kind == KernelAPIKind::RtlUpperChar ||
+         Kind == KernelAPIKind::RtlInt64ToUnicodeString ||
+         Kind == KernelAPIKind::RtlIntegerToUnicodeString ||
+         Kind == KernelAPIKind::ZwQueryVirtualMemory ||
+         Kind == KernelAPIKind::ZwMapViewOfSection ||
+         Kind == KernelAPIKind::ZwUnmapViewOfSection ||
+         Kind == KernelAPIKind::ZwClose ||
+         Kind == KernelAPIKind::IoAllocateMdl ||
+         Kind == KernelAPIKind::IoFreeMdl ||
+         Kind == KernelAPIKind::MmUnlockPages ||
+         Kind == KernelAPIKind::ObfDereferenceObject)))
+    return modelError(Name +
+                      ": process attachment permits only bounded user-memory "
                       "operations before detach");
   if ((Kind == KernelAPIKind::KeInitializeDpc ||
        Kind == KernelAPIKind::KeInitializeEvent ||
@@ -176,7 +207,148 @@ llvm::Expected<uint64_t> KernelModel::dispatchKernelCall(
        Kind == KernelAPIKind::KeInitializeTimerEx) &&
       WaitReferences.count(A[0]))
     return modelError("cannot reinitialize an object with outstanding waits");
+  if ((Kind == KernelAPIKind::ZwReadFile ||
+       Kind == KernelAPIKind::ZwWriteFile ||
+       Kind == KernelAPIKind::ZwQueryInformationFile ||
+       Kind == KernelAPIKind::ZwSetInformationFile ||
+       Kind == KernelAPIKind::ObReferenceObjectByHandle) &&
+      SectionHandles.contains(A[0])) {
+    const auto &H = SectionHandles.at(A[0]);
+    return canAccessHandle(H.Attributes, H.ProcessID) ? StatusObjectTypeMismatch
+                                                      : StatusInvalidHandle;
+  }
+  if (FiniteFileSystem &&
+      Kind == KernelAPIKind::IoGetBaseFileSystemDeviceObject)
+    return finiteFileSystemDevice(A[0]);
+  if (FiniteFileSystem) {
+    switch (Kind) {
+#define NEVERD_KERNEL_FINITE_FILE_API(Symbol, Arity) case KernelAPIKind::Symbol:
+#include "KernelFiniteFileAPIs.def"
+#undef NEVERD_KERNEL_FINITE_FILE_API
+      return fileCall(Name, A);
+    default:
+      break;
+    }
+  }
   switch (Kind) {
+#define NEVERD_KERNEL_SECTION_API(Name, Arity, IRQL, Operation)                \
+  case KernelAPIKind::Name:                                                    \
+    return Operation;
+#include "KernelSectionAPIs.def"
+#undef NEVERD_KERNEL_SECTION_API
+  case KernelAPIKind::IoCreateFileSpecifyDeviceObjectHint:
+  case KernelAPIKind::ZwDeleteFile:
+    return modelError(
+        "this file API requires an explicit finite_filesystem provider");
+#define NEVERD_KERNEL_AVL_API(Symbol, Arity)                                   \
+  case KernelAPIKind::Symbol:                                                  \
+    return callAvl(#Symbol, A);
+#include "KernelAvlAPIs.def"
+#undef NEVERD_KERNEL_AVL_API
+#define NEVERD_KERNEL_SERVICE_API(Symbol)                                      \
+  case KernelAPIKind::Symbol:                                                  \
+    return callDriverService(#Symbol, A[0]);
+#include "KernelServiceAPIs.def"
+#undef NEVERD_KERNEL_SERVICE_API
+  case KernelAPIKind::KeBugCheck:
+  case KernelAPIKind::KeBugCheckEx: {
+    DriverBugCheck Request;
+    Request.Code = uint32_t(A[0]);
+    if (Kind == KernelAPIKind::KeBugCheckEx)
+      Request.Parameters = std::array<uint64_t, 4>{A[1], A[2], A[3], A[4]};
+    return llvm::make_error<KernelGuestBugCheck>(Request);
+  }
+  case KernelAPIKind::KeQueryActiveProcessorCountEx:
+    return uint64_t(uint16_t(A[0]) == 0xffff ||
+                            uint16_t(A[0]) < processor::GroupCount
+                        ? processor::ActiveCount
+                        : 0);
+  case KernelAPIKind::KeGetProcessorNumberFromIndex:
+    return processorNumber(A[1], true, uint32_t(A[0]));
+  case KernelAPIKind::PsSetCreateThreadNotifyRoutine:
+    return setThreadNotify(A[0], false);
+  case KernelAPIKind::PsRemoveCreateThreadNotifyRoutine:
+    return setThreadNotify(A[0], true);
+  case KernelAPIKind::ZwQueryVirtualMemory:
+  case KernelAPIKind::NtQueryVirtualMemory:
+    return queryVirtualMemory(A, Kind == KernelAPIKind::ZwQueryVirtualMemory);
+  case KernelAPIKind::VslGetSecurePciEnabled:
+    return querySecurePciEnabled();
+#define NEVERD_KERNEL_CLOCK_API(Name, Arity, IRQL, Operation)                  \
+  case KernelAPIKind::Name:                                                    \
+    return Operation;
+#include "KernelClockAPIs.def"
+#undef NEVERD_KERNEL_CLOCK_API
+#define NEVERD_KERNEL_HAL_API(Name, Arity, IRQL, Operation)                    \
+  case KernelAPIKind::Name:                                                    \
+    return Operation;
+#include "KernelHALAPIs.def"
+#undef NEVERD_KERNEL_HAL_API
+#define NEVERD_KERNEL_CALLBACK_API(Name, Arity, IRQL, Operation)               \
+  case KernelAPIKind::Name:                                                    \
+    return Operation;
+#include "KernelCallbackAPIs.def"
+#undef NEVERD_KERNEL_CALLBACK_API
+#define NEVERD_KERNEL_CRT_API(Symbol, Arity, Operation, Scoped)                \
+  case KernelAPIKind::Symbol:                                                  \
+    if (Scoped && (!Version || Version->Major != 10 || Version->Minor != 0 ||  \
+                   Version->Build != 19041))                                   \
+      return modelError(                                                       \
+          #Symbol " requires the Windows 10.0.19041 kernel CRT profile");      \
+    return runtime::crtStringOperation(                                        \
+        *this, Memory, runtime::CrtStringOperation::Operation, A);
+#include "KernelCrtAPIs.def"
+#undef NEVERD_KERNEL_CRT_API
+  case KernelAPIKind::KeCapturePersistentThreadState:
+    return capturePersistentState(A);
+  case KernelAPIKind::ZwQueryInformationThread:
+    if (auto H = SectionHandles.find(A[0]); H != SectionHandles.end())
+      return canAccessHandle(H->second.Attributes, H->second.ProcessID)
+                 ? StatusObjectTypeMismatch
+                 : StatusInvalidHandle;
+    return queryThreadInformation(A);
+  case KernelAPIKind::PsGetProcessImageFileName:
+    return processImageFileName(A[0]);
+  case KernelAPIKind::PsGetProcessSectionBaseAddress:
+    return processSectionBaseAddress(A[0]);
+  case KernelAPIKind::PsGetProcessPeb:
+    return processPeb(A[0]);
+  case KernelAPIKind::IoGetDeviceProperty:
+    return queryDeviceProperty(A);
+  case KernelAPIKind::PsGetProcessExitStatus:
+    return processExitStatus(A[0]);
+
+  case KernelAPIKind::IoBuildDeviceIoControlRequest:
+    return buildDeviceIoControlRequest(A);
+  case KernelAPIKind::MmAllocateContiguousMemory:
+    return allocateContiguousMemory(A[0], A[1]);
+  case KernelAPIKind::MmFreeContiguousMemory:
+    return freeContiguousMemory(A[0]);
+  case KernelAPIKind::MmAllocateMappingAddress:
+    return allocateMappingAddress(A[0], uint32_t(A[1]));
+  case KernelAPIKind::MmFreeMappingAddress:
+    return freeMappingAddress(A[0], uint32_t(A[1]));
+  case KernelAPIKind::MmMapLockedPagesWithReservedMapping:
+    return mapReservedMapping(A);
+  case KernelAPIKind::MmUnmapReservedMapping:
+    return unmapReservedMapping(A);
+  case KernelAPIKind::RtlUpperString:
+    return runtime::upperAnsiString(*this, Memory, A);
+  case KernelAPIKind::RtlUpperChar:
+    return runtime::upperAnsiByte(uint8_t(A[0]));
+  case KernelAPIKind::RtlAppendStringToString:
+    return runtime::appendAnsiString(*this, Memory, A);
+  case KernelAPIKind::RtlAnsiCharToUnicodeChar:
+    return runtime::ansiCharToUnicode(*this, Memory, A[0]);
+  case KernelAPIKind::RtlCharToInteger:
+    return runtime::charToInteger(*this, Memory, A);
+  case KernelAPIKind::RtlxAnsiStringToUnicodeSize:
+    return runtime::ansiUnicodeSize(*this, Memory, A[0]);
+  case KernelAPIKind::IoRegisterShutdownNotification:
+    return shutdownNotification(A[0], true);
+  case KernelAPIKind::IoUnregisterShutdownNotification:
+    return shutdownNotification(A[0], false);
+
   case KernelAPIKind::ExRaiseStatus:
     return llvm::make_error<KernelGuestException>(uint32_t(A[0]));
   case KernelAPIKind::ExRaiseAccessViolation:
@@ -199,7 +371,10 @@ llvm::Expected<uint64_t> KernelModel::dispatchKernelCall(
     return querySystemInformation(
         A, Kind == KernelAPIKind::ZwQuerySystemInformation);
   case KernelAPIKind::RtlGetVersion:
-    return queryVersion(A[0]);
+    if (!Version && !VersionQuery)
+      return modelError("version_query is not declared; supply windows_version "
+                        "or version_query");
+    return Version ? getVersion(A[0]) : queryVersion(A[0]);
   case KernelAPIKind::RtlPcToFileHeader:
     return pcToFileHeader(A[0], A[1]);
   case KernelAPIKind::RtlCaptureContext:
@@ -355,8 +530,12 @@ llvm::Expected<uint64_t> KernelModel::dispatchKernelCall(
 #include "KernelRegistryAPIs.def"
 #undef NEVERD_KERNEL_REGISTRY_API
     if (Kind == KernelAPIKind::ZwClose)
-      return closeHandle(A[0]);
-    return Registry.call(Name, A);
+      return (RegistryCallback || !RegistryNotifications.empty()) &&
+                     Registry.ownsHandle(A[0])
+                 ? registryOperation(Name, A)
+                 : closeHandle(A[0]);
+    return RegistryCallback ? registryOperation(Name, A)
+                            : Registry.call(Name, A);
   case KernelAPIKind::MmGetSystemRoutineAddress:
     return resolveRoutine(A[0]);
   case KernelAPIKind::MmGetPhysicalMemoryRanges:

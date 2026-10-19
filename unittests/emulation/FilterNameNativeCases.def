@@ -1,0 +1,24 @@
+// Original FltParseFileNameInformation. JSON SHA256:
+// 4452eac70bc5321ccea8239e8e327eec9a525cc3f37a2f43fb319a5cf8a7f4df
+NEVERD_FLT_PARSE_NATIVE_CASE(1, "\\", 0, -1, 0, -1, 0, -1, 2, 46)
+NEVERD_FLT_PARSE_NATIVE_CASE(1, "\\file", 0, -1, 0, -1, 8, 48, 2, 46)
+NEVERD_FLT_PARSE_NATIVE_CASE(1, "\\file.txt", 6, 58, 0, -1, 16, 48, 2, 46)
+NEVERD_FLT_PARSE_NATIVE_CASE(1, "\\.hidden", 12, 50, 0, -1, 14, 48, 2, 46)
+NEVERD_FLT_PARSE_NATIVE_CASE(1, "\\file.", 0, 58, 0, -1, 10, 48, 2, 46)
+NEVERD_FLT_PARSE_NATIVE_CASE(1, "\\file..txt", 6, 60, 0, -1, 18, 48, 2, 46)
+NEVERD_FLT_PARSE_NATIVE_CASE(1, "\\dir\\file.TXT", 6, 66, 0, -1, 16, 56, 10, 46)
+NEVERD_FLT_PARSE_NATIVE_CASE(1, "\\dir\\.x", 2, 58, 0, -1, 4, 56, 10, 46)
+NEVERD_FLT_PARSE_NATIVE_CASE(1, "\\a.b\\name", 0, -1, 0, -1, 8, 56, 10, 46)
+NEVERD_FLT_PARSE_NATIVE_CASE(1, "\\unicode-\u4e2d\u6587.txt", 6, 70, 0, -1, 28,
+                             48, 2, 46)
+NEVERD_FLT_PARSE_NATIVE_CASE(2, "\\", 0, -1, 0, -1, 0, -1, 2, 46)
+NEVERD_FLT_PARSE_NATIVE_CASE(2, "\\file", 0, -1, 0, -1, 8, 48, 2, 46)
+NEVERD_FLT_PARSE_NATIVE_CASE(2, "\\file.txt", 6, 58, 0, -1, 16, 48, 2, 46)
+NEVERD_FLT_PARSE_NATIVE_CASE(2, "\\.hidden", 12, 50, 0, -1, 14, 48, 2, 46)
+NEVERD_FLT_PARSE_NATIVE_CASE(2, "\\file.", 0, 58, 0, -1, 10, 48, 2, 46)
+NEVERD_FLT_PARSE_NATIVE_CASE(2, "\\file..txt", 6, 60, 0, -1, 18, 48, 2, 46)
+NEVERD_FLT_PARSE_NATIVE_CASE(2, "\\dir\\file.TXT", 6, 66, 0, -1, 16, 56, 10, 46)
+NEVERD_FLT_PARSE_NATIVE_CASE(2, "\\dir\\.x", 2, 58, 0, -1, 4, 56, 10, 46)
+NEVERD_FLT_PARSE_NATIVE_CASE(2, "\\a.b\\name", 0, -1, 0, -1, 8, 56, 10, 46)
+NEVERD_FLT_PARSE_NATIVE_CASE(2, "\\unicode-\u4e2d\u6587.txt", 6, 70, 0, -1, 28,
+                             48, 2, 46)

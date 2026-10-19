@@ -1,13 +1,10 @@
 //===- KernelRegistryValues.def - Registry protocol values ----------------===//
 //
 // NeverD Decompiler
-//
 //===----------------------------------------------------------------------===//
 ///
 /// \file
 /// Microsoft WDK public registry contracts and key-value structure offsets.
-///
-//===----------------------------------------------------------------------===//
 
 NEVERD_REGISTRY_VALUE(Success, 0)
 NEVERD_REGISTRY_VALUE(InvalidHandle, 0xc0000008)
@@ -20,14 +17,24 @@ NEVERD_REGISTRY_VALUE(InsufficientResources, 0xc000009a)
 NEVERD_REGISTRY_VALUE(CannotDelete, 0xc0000121)
 NEVERD_REGISTRY_VALUE(KeyDeleted, 0xc000017c)
 NEVERD_REGISTRY_VALUE(ChildMustBeVolatile, 0xc0000181)
-NEVERD_REGISTRY_VALUE(BufferOverflow, 0x80000005)
 NEVERD_REGISTRY_VALUE(NoMoreEntries, 0x8000001a)
+NEVERD_REGISTRY_VALUE(BufferOverflow, 0x80000005)
 NEVERD_REGISTRY_VALUE(DatatypeMisalignment, 0x80000002)
 NEVERD_REGISTRY_VALUE(QueryValueAccess, 0x0001)
 NEVERD_REGISTRY_VALUE(SetValueAccess, 0x0002)
 NEVERD_REGISTRY_VALUE(CreateSubKeyAccess, 0x0004)
 NEVERD_REGISTRY_VALUE(EnumerateSubKeysAccess, 0x0008)
 NEVERD_REGISTRY_VALUE(DeleteAccess, 0x00010000)
+NEVERD_REGISTRY_VALUE(AllAccess, 0x000f003f)
+NEVERD_REGISTRY_VALUE(ReadAccess, 0x00020019)
+NEVERD_REGISTRY_VALUE(WriteAccess, 0x00020006)
+// Native Key GenericExecute includes KEY_CREATE_LINK, unlike KEY_EXECUTE.
+// Matched Windows 19041 CmpCreateObjectTypes and native object-type query.
+NEVERD_REGISTRY_VALUE(ExecuteAccess, 0x00020039)
+NEVERD_REGISTRY_VALUE(GenericRead, 0x80000000)
+NEVERD_REGISTRY_VALUE(GenericWrite, 0x40000000)
+NEVERD_REGISTRY_VALUE(GenericExecute, 0x20000000)
+NEVERD_REGISTRY_VALUE(GenericAll, 0x10000000)
 NEVERD_REGISTRY_VALUE(CaseInsensitive, 0x0040)
 NEVERD_REGISTRY_VALUE(VolatileOption, 1)
 NEVERD_REGISTRY_VALUE(CreatedNewKey, 1)
@@ -58,7 +65,6 @@ NEVERD_REGISTRY_VALUE(FullNameLengthOffset, 16)
 NEVERD_REGISTRY_VALUE(PartialDataLengthOffset, 8)
 NEVERD_REGISTRY_VALUE(Partial64TypeOffset, 0)
 NEVERD_REGISTRY_VALUE(Partial64DataLengthOffset, 4)
-
 NEVERD_REGISTRY_VALUE(KeyBasicInformation, 0)
 NEVERD_REGISTRY_VALUE(KeyNodeInformation, 1)
 NEVERD_REGISTRY_VALUE(KeyFullInformation, 2)

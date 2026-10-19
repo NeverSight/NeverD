@@ -557,7 +557,7 @@ python3 scripts/validate_windows_driver_sample.py \
 
 ## التقارير وSDK
 
-يميز تقرير JSON بين `stop_reason` و`nt_status` و`nt_success` القابلين للقيمة null، وبين PC عند التوقف وعدد التعليمات. ويحفظ استدعاءات API والحالة القابلة للمشاهدة التي جُمعت قبل التوقف، بما فيها كائنات الأجهزة وعناوين الاستدعاءات الراجعة لبرنامج التشغيل. تُمثّل عناوين الضيف بسلاسل سداسية عشرية حتى لا يفقد مستهلكو JSON دقة 64 بت. يسجّل الكائن `configuration` حدود التشغيل واسم الخدمة وتجاوزات `kernel_exports` وإدخال `registry`. اسم ملف التعريف هو `wdm-x64-scheduled-v103`. يظل `nt_status` نتيجة DriverEntry، بينما تصف `scenario_success` التهيئة والطلبات المكتملة معًا. تحدد `phase` و`requests` و`unload_completed` أي أجزاء دورة الحياة المطلوبة قد نُفّذت. يسجّل كل استدعاء API وكل عملية كتابة من المعالج مرحلتها أيضًا: `driver_entry` أو `add_device:<ID>` أو `request:N`, `callback:N` أو `unload`. ويعرض كل طلب حالتي الإرسال والإدخال/الإخراج والإكمال وطول المعلومات وبايتات `output_hex` المعادة. يصف `preferred_image_base` العنوان الأساسي الأصلي لـPE. أما `security_cookie` فهو عنوان الضيف لملف تعريف الارتباط المهيّأ، أو `"0x0"` إن لم تكن هناك حاجة إليه. حقول الطلب هي `kind` و`device` و`device_id` و`pnp` و`file`, `requestor_process_id` و`byte_offset` و`code` و`irp` و`completed` و`cancel_requested_at_100ns` و`dispatch_status` و`io_status` و`information` و`information_hex` و`output_hex`. يظل الحقل العددي `information` عدد JSON صحيحًا عشريًا دقيقًا؛ وتحفظ `information_hex` البتات نفسها أيضًا للعملاء الذين يقرؤون أعداد JSON بدقة لا تتجاوز 53 بت.
+يميز تقرير JSON بين `stop_reason` و`nt_status` و`nt_success` القابلين للقيمة null، وبين PC عند التوقف وعدد التعليمات. ويحفظ استدعاءات API والحالة القابلة للمشاهدة التي جُمعت قبل التوقف، بما فيها كائنات الأجهزة وعناوين الاستدعاءات الراجعة لبرنامج التشغيل. تُمثّل عناوين الضيف بسلاسل سداسية عشرية حتى لا يفقد مستهلكو JSON دقة 64 بت. يسجّل الكائن `configuration` حدود التشغيل واسم الخدمة وتجاوزات `kernel_exports` وإدخال `registry`. اسم ملف التعريف هو `wdm-x64-scheduled-v111`. يظل `nt_status` نتيجة DriverEntry، بينما تصف `scenario_success` التهيئة والطلبات المكتملة معًا. تحدد `phase` و`requests` و`unload_completed` أي أجزاء دورة الحياة المطلوبة قد نُفّذت. يسجّل كل استدعاء API وكل عملية كتابة من المعالج مرحلتها أيضًا: `driver_entry` أو `add_device:<ID>` أو `request:N`, `callback:N` أو `unload`. ويعرض كل طلب حالتي الإرسال والإدخال/الإخراج والإكمال وطول المعلومات وبايتات `output_hex` المعادة. يصف `preferred_image_base` العنوان الأساسي الأصلي لـPE. أما `security_cookie` فهو عنوان الضيف لملف تعريف الارتباط المهيّأ، أو `"0x0"` إن لم تكن هناك حاجة إليه. حقول الطلب هي `kind` و`device` و`device_id` و`pnp` و`file`, `requestor_process_id` و`byte_offset` و`code` و`irp` و`completed` و`cancel_requested_at_100ns` و`dispatch_status` و`io_status` و`information` و`information_hex` و`output_hex`. يظل الحقل العددي `information` عدد JSON صحيحًا عشريًا دقيقًا؛ وتحفظ `information_hex` البتات نفسها أيضًا للعملاء الذين يقرؤون أعداد JSON بدقة لا تتجاوز 53 بت.
 
 تستخدم ملاحظات عناصر العمل المرحلة `callback:N`. يحتفظ الطلب المعلّق بالقيمة `STATUS_PENDING` في `dispatch_status`؛ وتُسجّل حالة الإكمال النهائية منفصلة في `io_status` وتحدد مساهمته في `scenario_success`.
 
@@ -820,3 +820,45 @@ python3 scripts/validate_windows_driver_sample.py \
 تقبل `MmCreateMdl` ثلاثة معاملات بكامل العرض حتى DISPATCH_LEVEL. تخصص وصفاً في تجمع غير قابل للترحيل مصفّراً، أو تستخدم نطاقاً قابلاً للكتابة بالكامل ضمن تخصيص نشط أو مكدس التنفيذ الحالي. تعيد الأطوال الأكبر من ULONG_MAX القيمة NULL قبل الوصول. تبقى بيانات النطاق الفارغ أو التفاف العنوان خاماً؛ ويتطلب بناء الصفحات نطاقاً صالحاً غير فارغ وحجم وصف دقيقاً من 16 بت. تُكتب ستة حقول بالترتيب الأصلي مع حفظ بقية بايتات المتصل. تقبل قاعدة التجمع IoFreeMdl أو تحرير التجمع؛ وتتبع السجلات الداخلية وسجلات المكدس مالكها. تمنع الأقفال والتعيينات المملوكة وعروض المستخدم والتبعيات التحرير. لا يدعم نقل الملكية إلى IRP أو إعادة تهيئة سجل نشط أو إعادة استعمال خانة إطار المكدس أو إزالة التعيين الجزئي تلقائياً عبر IoFreeMdl.
 
 تدعم `MmAdvanceMdl` مخازن التجمع والمستخدم المستقلة المقفلة التي تملك تعيين نظام حتى DISPATCH_LEVEL. يتجاهل ULONG البتات العليا؛ وتعاد STATUS_INVALID_PARAMETER_2 دون تغيير عند بلوغ النهاية أو تجاوزها. يدور ملف x64 الثابت مصفوفة PFN المحفوظة كاملة ويضع علامة على الذيل. تعيد الإزالة الصفحات الكاملة وترتيبها قبل تحرير الاسم البديل كله والقفل الأصلي. تبقى إزاحة البايت الحالية دون توسيع الملكية. يحتفظ MappedSystemVa بقيمة قديمة مطبّعة؛ ويتطلب التعيين مجدداً دورة فحص وقفل جديدة. لا تُدعم سلاسل IRP أو التبعيات الجزئية أو عروض المستخدم أو DMA أو الصور أو البناء المباشر غير المرحّل أو التقدم بلا تعيين.
+
+## Additional bounded model contracts (English reference)
+
+This technical appendix documents the additional kernel models used by the
+persistent driver environment. It is currently provided in English. The report
+contract is `wdm-x64-scheduled-v111`. These operations act on explicitly modeled
+guest state; none forwards a request to the host kernel or discovers host data.
+Unsupported information classes, layouts and execution contexts fail explicitly.
+
+The legacy `emulate-driver` CLI accepts positive `--instruction-limit`,
+`--event-limit` and `--timeout-ms` values and validates the supported timeout
+range before execution. These options use the same cumulative limits as the
+driver model; persistent executions configure their limits in the run JSON.
+
+| API family | Supported contract and limits |
+|---|---|
+| `ExAllocatePool` | Data allocations use the supported pool-type profile and modeled allocation lifetime; the untagged allocation uses the kernel's `None` tag. |
+| `RtlInitAnsiString`, `RtlAnsiStringToUnicodeString`, `RtlUnicodeStringToAnsiString`, `RtlxAnsiStringToUnicodeSize`, `RtlFreeAnsiString`, `RtlFreeUnicodeString` | Explicit counted-string buffers, validated lengths, supported character profile and owned allocation/free rules. No host locale conversion. |
+| `RtlAnsiCharToUnicodeChar`, `RtlUpperChar`, `RtlUpperString`, `RtlCompareString`, `RtlAppendStringToString` | Bounded character/counted-byte operations. Character conversion advances the caller's pointer cell only after a valid conversion; configured character observations do not authorize arbitrary host NLS behavior. |
+| `RtlAppendUnicodeToString`, `RtlPrefixUnicodeString` | Validated UTF-16 counted buffers with explicit capacity and the modeled case rules. |
+| `RtlIntegerToUnicodeString`, `RtlInt64ToUnicodeString`, `RtlUnicodeStringToInteger`, `RtlCharToInteger`, `RtlGUIDFromString` | Bounded input parsing/formatting with the supported base, grammar, width and caller-output contracts. |
+| `RtlGetVersion`, `VslGetSecurePciEnabled` | Return explicitly configured guest version/security observations. Missing security observations are not inferred from the host. |
+| `ZwQuerySystemInformation`, `NtQuerySystemInformation` | Supported versioned process/thread or module information classes use the same model objects and module records as the driver environment. Other classes remain unsupported. |
+| `PsLookupProcessByProcessId`, `PsGetProcessImageFileName`, `PsGetProcessSectionBaseAddress`, `PsGetProcessExitStatus`, `PsGetProcessPeb` | Query the declared process identity, explicit image/name/PEB observations and retained liveness/exit state. Pointer results refer to modeled guest storage and preserve its lifetime. |
+| `PsSetCreateThreadNotifyRoutine`, `PsRemoveCreateThreadNotifyRoutine` | Retain supported notification registrations and schedule actual guest callbacks with modeled creator/exit context and rundown rules. |
+| `ZwQueryInformationThread`, `ObReferenceObjectByName`, `ObOpenObjectByPointer` | Supported information classes and object types require an existing modeled identity, validated access/context and the shared reference/handle lifetime. |
+| `ZwQueryVirtualMemory`, `NtQueryVirtualMemory` | Query the supported classes from explicit process/address-space allocation metadata, respecting the current attachment and caller buffer contract. |
+| `MmGetPhysicalAddress`, `MmGetVirtualForPhysical`, `MmIsAddressValid`, `MmGetPhysicalMemoryRanges` | Observe the finite modeled RAM/MDL/DMA ownership and mappings. Physical-range snapshots have the documented pool lifetime; host physical memory is never exposed. |
+| `MmAllocateContiguousMemory`, `MmFreeContiguousMemory` | Use shared modeled PFN allocation, address/cache admission and matching release ownership. |
+| `MmAllocateMappingAddress`, `MmFreeMappingAddress`, `MmMapLockedPagesWithReservedMapping`, `MmUnmapReservedMapping` | Use tagged reserved VA placement and existing locked-page/MDL owners, with validated map/unmap lifetimes. |
+| `IoGetDeviceProperty`, `IoGetBaseFileSystemDeviceObject` | Return supported explicit device-property observations or the existing modeled filesystem-device identity. No hardware/host filesystem discovery. |
+| `KeQueryActiveProcessors`, `KeQueryActiveProcessorCountEx`, `KeGetCurrentProcessorNumberEx`, `KeGetProcessorNumberFromIndex` | Use the shared bounded processor/group profile and thread affinity; unsupported topologies are not invented. |
+| `ZwEnumerateKey`, `ZwFlushKey` | Enumerate configured registry metadata in the supported ordering and flush the owning modeled hive. No host registry access. |
+| `IoRegisterShutdownNotification`, `IoUnregisterShutdownNotification` | Retain registrations for modeled device ownership and the supported callback/lifetime sequence. |
+| `RtlCaptureContext`, `KeCapturePersistentThreadState` | Capture modeled CPU context. Persistent capture requires the explicit Windows 19041 profile and a suitable live nonpaged allocation; it is a bounded metadata object, not a complete Windows dump. |
+| `KeRegisterBugCheckReasonCallback`, `KeDeregisterBugCheckReasonCallback` | Validate and retain registration/record/code lifetime. Registration does not execute a crash callback or generate a persistent dump. |
+| `KeBugCheck`, `KeBugCheckEx` | Produce a terminal typed bug-check outcome with the supplied code/parameters. They cannot be resumed as a missing-module request. |
+
+The [runtime module guide](../runtime-modules.md) describes source registration, actual
+instance publication, stage stops and finite calls. A matched symbol address
+does not by itself provide an API model or permission to execute arbitrary
+kernel internals. Ring3 adaptation remains a separate design reservation.

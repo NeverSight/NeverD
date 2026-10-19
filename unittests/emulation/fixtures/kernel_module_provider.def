@@ -1,0 +1,3 @@
+LIBRARY provider.sys EXPORTS SupportProbe @19 SupportValue
+    @20 DATA PrivateOrdinal = SupportSet @23 NONAME AliasProbe =
+    SupportProbe @24

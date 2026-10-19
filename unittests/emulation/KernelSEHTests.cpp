@@ -6,7 +6,11 @@
 
 #include "fixtures/driver_seh_test.h"
 #include "gtest/gtest.h"
+#include "os/windows/driver/DriverImage.h"
 #include "os/windows/exception/X64SEH.h"
+#include "os/windows/exception/X64SEHMetadata.h"
+#include "os/windows/kernel/KernelExportRegistry.h"
+#include "os/windows/kernel/KernelModel.h"
 
 #include "llvm/Support/Endian.h"
 
@@ -228,6 +232,108 @@ protected:
     EXPECT_EQ(Words, MemoryBefore);
   }
 };
+TEST(X64SEHMetadata,
+     RetainsDirectoryScopesGsAndPersonalityCodeWithOneRangePolicy) {
+  ExceptionInfo Info;
+  Info.DirectoryRVA = 0x80;
+  Info.DirectorySize = 12;
+  ExceptionFunction F;
+  F.UnwindInfoRVA = 0x100;
+  F.NativeUnwindBytes = {1, 2, 3, 4};
+  F.HandlerDataVA = 0x180000200;
+  F.PersonalityVA = 0x180001020;
+  F.SEH.emplace().Scopes.resize(1);
+  F.GSCookie.emplace().Payload.resize(4);
+  Info.Functions.push_back(F);
+  auto R = x64SEHMetadataRanges(Info, 0x180000000, 0x4000, 0x80,
+                                {{0x1000, 0x1000}}, 2);
+  ASSERT_TRUE(bool(R)) << llvm::toString(R.takeError());
+  EXPECT_EQ(R->Records, 2u);
+  ASSERT_EQ(R->Ranges.size(), 4u);
+  EXPECT_EQ(R->Ranges[0].Size, 0x8cu);
+  EXPECT_EQ(R->Ranges[2].RVA, 0x200u);
+  EXPECT_EQ(R->Ranges[2].Size, 24u);
+  EXPECT_EQ(R->Ranges[3].Size, 0x1000u);
+  auto Small = x64SEHMetadataRanges(Info, 0x180000000, 0x4000, 0x80, {}, 1);
+  ASSERT_FALSE(bool(Small));
+  llvm::consumeError(Small.takeError());
+  auto Bounds = x64SEHMetadataRanges(Info, 0x180000000, 0x210, 0x80, {}, 2);
+  ASSERT_FALSE(bool(Bounds));
+  llvm::consumeError(Bounds.takeError());
+}
+TEST(X64SEHMetadata, PersonalityAvailabilityNeverGrantsADirectCallAbi) {
+  KernelExportRegistry Registry;
+  llvm::cantFail(Registry.initialize({}));
+  for (const auto Name : x64SEHPersonalityExports()) {
+    auto Address = Registry.findImport({0, "ntoskrnl.exe", Name.str()});
+    ASSERT_TRUE(bool(Address) && bool(*Address));
+    auto Export = Registry.lookup(**Address);
+    ASSERT_TRUE(Export);
+    EXPECT_FALSE(KernelModel::argumentCount(*Export));
+  }
+  DriverOptions O;
+  O.KernelExports["__C_specific_handler"] = false;
+  KernelExportRegistry Absent;
+  llvm::cantFail(Absent.initialize(O));
+  auto Address = Absent.findImport({0, "ntoskrnl.exe", "__C_specific_handler"});
+  ASSERT_FALSE(bool(Address));
+  EXPECT_NE(llvm::toString(Address.takeError()).find("explicitly absent"),
+            std::string::npos);
+}
+TEST_F(DriverKernelSEH,
+       AppendPreparationPreservesSuspendedFilterIndicesAndMetadata) {
+  auto &F = handler();
+  F.SEH->Scopes[0].Kind = SEHScopeKind::Filter;
+  F.SEH->Scopes[0].FilterOrFinallyVA = Base + 0x3000;
+  auto Original = std::make_unique<X64SEH>(planner());
+  auto Cursor = Original->begin(Code, Caller, {StackBase, StackSize});
+  auto Filter = Original->advance(Cursor);
+  ASSERT_TRUE(bool(Filter));
+  ASSERT_EQ(Filter->Kind, X64SEH::ActionKind::Filter);
+  ExceptionInfo Other;
+  unsigned Validated = 0;
+  auto Added = Original->withAdditionalImages(
+      {{&Other, Base, Base + 0x10000, ImageSize, {}, [&]() {
+          ++Validated;
+          return llvm::Error::success();
+        }}});
+  ASSERT_TRUE(bool(Added)) << llvm::toString(Added.takeError());
+  EXPECT_EQ(Validated, 0u);
+  Original.reset();
+  auto Handler = (*Added)->advance(Cursor, 1);
+  ASSERT_TRUE(bool(Handler)) << llvm::toString(Handler.takeError());
+  EXPECT_EQ(Handler->Kind, X64SEH::ActionKind::Handler);
+  EXPECT_EQ(Handler->State.HandlerPC, Base + 0x1080);
+  EXPECT_EQ(Validated, 1u);
+}
+TEST_F(DriverKernelSEH,
+       AppendRejectsOverlapAndFailedLiveProofLeavesTheCursorReusable) {
+  handler();
+  auto Original = planner();
+  auto Overlap = Original.withAdditionalImages(
+      {{&Metadata, Base, ActualBase + 0x1000, ImageSize, {}}});
+  ASSERT_FALSE(bool(Overlap));
+  llvm::consumeError(Overlap.takeError());
+  ExceptionInfo Other;
+  bool Accept = false;
+  auto Added = Original.withAdditionalImages(
+      {{&Other, Base, Base + 0x10000, ImageSize, {}, [&]() -> llvm::Error {
+          if (!Accept)
+            return llvm::createStringError(llvm::inconvertibleErrorCode(),
+                                           "changed witness");
+          return llvm::Error::success();
+        }}});
+  ASSERT_TRUE(bool(Added));
+  auto Cursor = (*Added)->begin(Code, Caller, {StackBase, StackSize});
+  auto Bad = (*Added)->advance(Cursor);
+  ASSERT_FALSE(bool(Bad));
+  EXPECT_NE(llvm::toString(Bad.takeError()).find("changed witness"),
+            std::string::npos);
+  Accept = true;
+  auto Good = (*Added)->advance(Cursor);
+  ASSERT_TRUE(bool(Good));
+  EXPECT_EQ(Good->Kind, X64SEH::ActionKind::Handler);
+}
 
 TEST_F(DriverKernelSEH, GSCookieIsCheckedDuringSearchAndTargetUnwind) {
   gsHandler();

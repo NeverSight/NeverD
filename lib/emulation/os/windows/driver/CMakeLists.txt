@@ -1,18 +1,54 @@
 target_sources(NeverDEmulation PRIVATE
   DriverResult.cpp
   DriverFileSystemJSON.cpp
+  DriverFiniteFileSystemJSON.cpp
   DriverCPUID.cpp
   DriverLoaderViewJSON.cpp
   DriverVersionQueryJSON.cpp
   DriverVaShadowQueryJSON.cpp
   DriverPhysicalInventoryJSON.cpp
+  DriverDeviceProperties.cpp
+  DriverPciConfiguration.cpp
+  DriverPciConfigurationJSON.cpp
+  DriverRegistryHives.cpp
+  DriverRegistryHivesJSON.cpp
+  DriverNetworkInterfaces.cpp
+  DriverNetworkInterfacesJSON.cpp
+  DriverNdisConfiguration.cpp
+  DriverNdisConfigurationJSON.cpp
+  DriverServices.cpp
+  DriverServicesJSON.cpp
   DriverScenario.cpp
+  DriverFirmware.cpp
+  DriverCPUID.cpp
+  DriverCPUIDJSON.cpp
+  DriverObjects.cpp
+  DriverSections.cpp
+  DriverSectionsJSON.cpp
+  DriverFirmwareJSON.cpp
   DriverSchedulingJSON.cpp
+  DriverFileSystemJSON.cpp
+  DriverFiniteFileSystemJSON.cpp
+  DriverProcessEventsJSON.cpp
+  DriverRegistryEventsJSON.cpp
+  DriverProcessInventory.cpp
+  DriverProcessInventoryJSON.cpp
+  DriverProcessMemoryJSON.cpp
+  DriverProcessImages.cpp
   DriverSession.cpp
   DriverEntryABI.cpp
   DriverContextCapture.cpp
   DriverObservation.cpp
+  DriverExecutionRun.cpp
+  DriverExecutionFactory.cpp
+  DriverSessionState.cpp
+  DriverBootstrapModules.cpp
+  DriverImportPublication.cpp
+  DriverExceptionPublication.cpp
+  DriverGuardPublication.cpp
   WindowsX64ExecutionPolicy.cpp
   DriverImage.cpp
+  KernelModuleImage.cpp
+  KernelModuleLink.cpp
   GuardControlFlow.cpp
 )

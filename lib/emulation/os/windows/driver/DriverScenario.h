@@ -15,6 +15,8 @@
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/Support/Error.h"
 
+#include <cstdint>
+
 namespace neverd::emulation {
 struct DriverOptions;
 struct DriverRequest;
@@ -34,13 +36,17 @@ llvm::Error validateDriverD3Cold(const DriverPnpDevice &Device);
 
 llvm::Error validateDriverUsbIdle(llvm::ArrayRef<DriverPnpDevice> Devices);
 
-llvm::Error validateDriverResources(llvm::ArrayRef<DriverPnpDevice> Devices);
+llvm::Error validateDriverResources(llvm::ArrayRef<DriverPnpDevice> Devices,
+                                    uint64_t KernelMemorySize);
 
 llvm::Error validateDriverInterrupts(llvm::ArrayRef<DriverPnpDevice> Devices);
 
-llvm::Error validateDriverDma(llvm::ArrayRef<DriverPnpDevice> Devices);
+llvm::Error validateDriverDma(llvm::ArrayRef<DriverPnpDevice> Devices,
+                              uint64_t KernelMemorySize);
 
 llvm::Error validateDriverUserMemory(const DriverRequest &Request);
+
+llvm::Error validateDriverIRPInitialization(const DriverOptions &Options);
 
 llvm::Error validateDriverScenario(const DriverOptions &Options);
 

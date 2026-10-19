@@ -1,0 +1,23 @@
+// Independent Windows RTL results; collected by observe_ansi_compare_append.py.
+NEVERD_ANSI_COMPARE_CASE(Empty, "", 0, "", 0, 0, 0)
+NEVERD_ANSI_COMPARE_CASE(CaseSensitive, "\x61", 1, "\x41", 1, 0, 32)
+NEVERD_ANSI_COMPARE_CASE(CaseFold, "\x61", 1, "\x41", 1, 1, 0)
+NEVERD_ANSI_COMPARE_CASE(ReverseCase, "\x41", 1, "\x61", 1, 1, 0)
+NEVERD_ANSI_COMPARE_CASE(FirstMismatch, "\x61\x6c\x70\x68\x61", 5,
+                         "\x61\x6c\x70\x68\x62", 5, 0, -1)
+NEVERD_ANSI_COMPARE_CASE(FoldThenMismatch, "\x61\x5a\x63", 3, "\x41\x5a\x64", 3,
+                         1, -1)
+NEVERD_ANSI_COMPARE_CASE(EmbeddedNull, "\x61\x00\x62", 3, "\x61\x00\x63", 3, 0,
+                         -1)
+NEVERD_ANSI_COMPARE_CASE(Prefix, "\x61\x62\x63", 3, "\x61\x62\x63\x64", 4, 0,
+                         -1)
+NEVERD_ANSI_COMPARE_CASE(Longer, "\x61\x62\x63\x64", 4, "\x61\x62\x63", 3, 1, 1)
+NEVERD_ANSI_COMPARE_CASE(UnsignedHigh, "\xff", 1, "\x7f", 1, 0, 128)
+NEVERD_ANSI_COMPARE_CASE(UnsignedHighFold, "\xff", 1, "\x7f", 1, 1, 128)
+NEVERD_ANSI_COMPARE_CASE(DistinctHighFold, "\xe0", 1, "\xc0", 1, 1, 32)
+NEVERD_ANSI_COMPARE_CASE(NullVsFF, "\x00", 1, "\xff", 1, 0, -255)
+NEVERD_ANSI_COMPARE_CASE(EqualHigh, "\x80\xfe", 2, "\x80\xfe", 2, 1, 0)
+NEVERD_ANSI_COMPARE_CASE(NonASCIIAfterCase, "\x61\xfe", 2, "\x41\xff", 2, 1, -1)
+NEVERD_ANSI_COMPARE_CASE(Punctuation, "\x60", 1, "\x40", 1, 1, 32)
+NEVERD_ANSI_COMPARE_CASE(UpperBoundary, "\x7a", 1, "\x5a", 1, 1, 0)
+NEVERD_ANSI_COMPARE_CASE(EmptyVersusFullLength, "", 0, "", 65535, 0, -65535)

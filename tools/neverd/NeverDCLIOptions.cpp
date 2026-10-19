@@ -1985,6 +1985,14 @@ cl::opt<unsigned long long> DriverInstructionLimit(
     cl::desc("Maximum guest instructions (must be positive)"),
     cl::init(emulation::profile::DefaultInstructionLimit),
     cl::sub(EmulateDriverCmd));
+cl::opt<unsigned long long> DriverEventLimit(
+    "event-limit", cl::desc("Maximum execution events (must be positive)"),
+    cl::init(emulation::profile::DefaultEventLimit), cl::sub(EmulateDriverCmd));
+cl::opt<unsigned long long> DriverTimeoutMilliseconds(
+    "timeout-ms",
+    cl::desc("Execution timeout in milliseconds (must be positive)"),
+    cl::init(emulation::profile::DefaultTimeoutMilliseconds),
+    cl::sub(EmulateDriverCmd));
 cl::opt<std::string> DriverBackend(execution_cli::BackendOption,
                                    cl::desc(execution_cli::BackendHelp),
                                    cl::init(emulation::execution::Auto),

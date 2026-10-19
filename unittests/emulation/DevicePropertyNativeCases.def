@@ -1,0 +1,122 @@
+// Original 19041 wrapper records; registry data supplied by the explicit probe
+// provider.
+NEVERD_NATIVE_PROPERTY_CASE(
+    1, 0, false, 0xc0000023, 8,
+    "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5")
+NEVERD_NATIVE_PROPERTY_CASE(
+    1, 0, true, 0xc0000034, 0,
+    "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5")
+NEVERD_NATIVE_PROPERTY_CASE(
+    1, 1, false, 0xc0000023, 8,
+    "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5")
+NEVERD_NATIVE_PROPERTY_CASE(
+    1, 1, true, 0xc0000034, 1,
+    "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5")
+NEVERD_NATIVE_PROPERTY_CASE(
+    1, 7, false, 0xc0000023, 8,
+    "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5")
+NEVERD_NATIVE_PROPERTY_CASE(
+    1, 7, true, 0xc0000034, 7,
+    "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5")
+NEVERD_NATIVE_PROPERTY_CASE(
+    1, 8, false, 0x0, 8,
+    "4e00440000000000a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5")
+NEVERD_NATIVE_PROPERTY_CASE(
+    1, 8, true, 0xc0000034, 8,
+    "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5")
+NEVERD_NATIVE_PROPERTY_CASE(
+    1, 16, false, 0x0, 8,
+    "4e00440000000000a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5")
+NEVERD_NATIVE_PROPERTY_CASE(
+    1, 16, true, 0xc0000034, 16,
+    "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5")
+NEVERD_NATIVE_PROPERTY_CASE(
+    2, 0, false, 0xc0000023, 16,
+    "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5")
+NEVERD_NATIVE_PROPERTY_CASE(
+    2, 0, true, 0xc0000034, 0,
+    "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5")
+NEVERD_NATIVE_PROPERTY_CASE(
+    2, 1, false, 0xc0000023, 16,
+    "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5")
+NEVERD_NATIVE_PROPERTY_CASE(
+    2, 1, true, 0xc0000034, 1,
+    "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5")
+NEVERD_NATIVE_PROPERTY_CASE(
+    2, 15, false, 0xc0000023, 16,
+    "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5")
+NEVERD_NATIVE_PROPERTY_CASE(
+    2, 15, true, 0xc0000034, 15,
+    "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5")
+NEVERD_NATIVE_PROPERTY_CASE(
+    2, 16, false, 0x0, 16,
+    "43006f006d0070006100740000000000a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5")
+NEVERD_NATIVE_PROPERTY_CASE(
+    2, 16, true, 0xc0000034, 16,
+    "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5")
+NEVERD_NATIVE_PROPERTY_CASE(
+    2, 24, false, 0x0, 16,
+    "43006f006d0070006100740000000000a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5")
+NEVERD_NATIVE_PROPERTY_CASE(
+    2, 24, true, 0xc0000034, 24,
+    "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5")
+NEVERD_NATIVE_PROPERTY_CASE(
+    14, 0, false, 0xc0000023, 4,
+    "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5")
+NEVERD_NATIVE_PROPERTY_CASE(
+    14, 0, true, 0xc0000023, 4,
+    "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5")
+NEVERD_NATIVE_PROPERTY_CASE(
+    14, 1, false, 0xc0000023, 4,
+    "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5")
+NEVERD_NATIVE_PROPERTY_CASE(
+    14, 1, true, 0xc0000023, 4,
+    "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5")
+NEVERD_NATIVE_PROPERTY_CASE(
+    14, 3, false, 0xc0000023, 4,
+    "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5")
+NEVERD_NATIVE_PROPERTY_CASE(
+    14, 3, true, 0xc0000023, 4,
+    "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5")
+NEVERD_NATIVE_PROPERTY_CASE(
+    14, 4, false, 0x0, 4,
+    "00000000a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5")
+NEVERD_NATIVE_PROPERTY_CASE(
+    14, 4, true, 0x0, 4,
+    "00000000a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5")
+NEVERD_NATIVE_PROPERTY_CASE(
+    14, 12, false, 0x0, 4,
+    "00000000a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5")
+NEVERD_NATIVE_PROPERTY_CASE(
+    14, 12, true, 0x0, 4,
+    "00000000a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5")
+NEVERD_NATIVE_PROPERTY_CASE(
+    17, 0, false, 0xc0000023, 4,
+    "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5")
+NEVERD_NATIVE_PROPERTY_CASE(
+    17, 0, true, 0xc0000034, 0,
+    "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5")
+NEVERD_NATIVE_PROPERTY_CASE(
+    17, 1, false, 0xc0000023, 4,
+    "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5")
+NEVERD_NATIVE_PROPERTY_CASE(
+    17, 1, true, 0xc0000034, 1,
+    "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5")
+NEVERD_NATIVE_PROPERTY_CASE(
+    17, 3, false, 0xc0000023, 4,
+    "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5")
+NEVERD_NATIVE_PROPERTY_CASE(
+    17, 3, true, 0xc0000034, 3,
+    "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5")
+NEVERD_NATIVE_PROPERTY_CASE(
+    17, 4, false, 0x0, 4,
+    "2a000000a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5")
+NEVERD_NATIVE_PROPERTY_CASE(
+    17, 4, true, 0xc0000034, 4,
+    "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5")
+NEVERD_NATIVE_PROPERTY_CASE(
+    17, 12, false, 0x0, 4,
+    "2a000000a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5")
+NEVERD_NATIVE_PROPERTY_CASE(
+    17, 12, true, 0xc0000034, 12,
+    "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5")

@@ -13,6 +13,8 @@
 #ifndef NEVERD_EMULATION_KERNELEXCEPTION_H
 #define NEVERD_EMULATION_KERNELEXCEPTION_H
 
+#include "neverd/emulation/DriverBugCheck.h"
+
 #include "llvm/Support/Error.h"
 
 #include <cstdint>
@@ -42,6 +44,19 @@ public:
 
 private:
   uint32_t Code;
+};
+/// A terminal request is not a guest SEH exception and cannot return through
+/// its API caller. The session records it before any further guest execution.
+class KernelGuestBugCheck final : public llvm::ErrorInfo<KernelGuestBugCheck> {
+public:
+  static char ID;
+  explicit KernelGuestBugCheck(DriverBugCheck Request) : Request(Request) {}
+  const DriverBugCheck &request() const { return Request; }
+  void log(llvm::raw_ostream &OS) const override;
+  std::error_code convertToErrorCode() const override;
+
+private:
+  DriverBugCheck Request;
 };
 } // namespace neverd::emulation
 

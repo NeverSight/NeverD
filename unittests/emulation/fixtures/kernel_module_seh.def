@@ -1,0 +1,1 @@
+LIBRARY ntoskrnl.exe EXPORTS ExRaiseStatus __C_specific_handler

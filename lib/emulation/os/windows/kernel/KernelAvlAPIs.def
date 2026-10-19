@@ -1,0 +1,9 @@
+// Symbol and exact Win64 arity. Shared by export, IRQL and dispatch owners.
+NEVERD_KERNEL_AVL_API(RtlInitializeGenericTableAvl, 5)
+NEVERD_KERNEL_AVL_API(RtlInsertElementGenericTableAvl, 4)
+NEVERD_KERNEL_AVL_API(RtlInsertElementGenericTableFullAvl, 6)
+NEVERD_KERNEL_AVL_API(RtlLookupElementGenericTableAvl, 2)
+NEVERD_KERNEL_AVL_API(RtlLookupElementGenericTableFullAvl, 4)
+NEVERD_KERNEL_AVL_API(RtlDeleteElementGenericTableAvl, 2)
+NEVERD_KERNEL_AVL_API(RtlNumberGenericTableElementsAvl, 1)
+NEVERD_KERNEL_AVL_API(RtlIsGenericTableEmptyAvl, 1)

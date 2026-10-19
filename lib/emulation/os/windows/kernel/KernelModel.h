@@ -16,7 +16,9 @@
 #include "KernelDispatcher.h"
 #include "KernelFileSystem.h"
 #include "KernelFramework.h"
+#include "KernelGuardBitmap.h"
 #include "KernelGuestCall.h"
+#include "KernelGuestPageTables.h"
 #include "KernelInterrupts.h"
 #include "KernelMMIO.h"
 #include "KernelModelMemory.h"
@@ -25,6 +27,7 @@
 #include "KernelRegistry.h"
 #include "KernelRemoveLocks.h"
 #include "KernelScheduler.h"
+#include "KernelSystemVA.h"
 #include "KernelUsbIdle.h"
 #include "KernelWaits.h"
 
@@ -36,14 +39,23 @@
 
 #include <deque>
 #include <map>
+#include <memory>
 #include <optional>
 #include <set>
 #include <variant>
+namespace neverd::modules {
+class ModuleImage;
+}
 namespace neverd::emulation {
 class RAMInitializationWatch;
 struct DriverImage;
+struct DriverProcessImagePlan;
+struct BackendFault;
 class KernelExportRegistry;
 struct KernelContextCapture;
+class KernelReferenceImage;
+class ModulePublication;
+struct ModuleInstance;
 enum class KernelAPIKind;
 class KernelModel {
   friend class KernelRegistry;
@@ -73,6 +85,42 @@ public:
   KernelModel &operator=(KernelModel &&) = delete;
   llvm::Error initialize(const DriverImage &Image,
                          const DriverOptions &Options);
+  /// Opt into the retained adapter's model-owned loader record/ring.
+  llvm::Error initializeLoadedModule(const DriverImage &, const std::string &);
+  void addReferenceModule(uint64_t Base, uint64_t Size);
+  /// Pure missing-image probe. Existing image extents and OS object lifetime
+  /// remain owned even when their backing page is currently absent.
+  bool isModuleResourceCandidate(uint64_t Address, uint32_t Size) const;
+  /// Stage loader records/names/ring links without guest or model mutation.
+  /// The common module RAM transaction owns publication of these patches.
+  llvm::Expected<std::unique_ptr<ModulePublication>>
+      prepareModulePublication(llvm::ArrayRef<ModuleInstance>);
+  llvm::Error setDebuggerReference(const KernelReferenceImage &Reference);
+  llvm::Error initializeDebuggerState();
+  llvm::Error initializeObjectTypes();
+  bool isObjectTypeDataRead(uint64_t Address, uint32_t Size) const;
+  llvm::Error initializeProcessData();
+  bool isProcessDataRead(uint64_t Address, uint32_t Size) const;
+  llvm::Error initializeProcessorData();
+  bool isProcessorDataRead(uint64_t Address, uint32_t Size) const;
+  llvm::Error initializeNlsData();
+  bool isNlsDataRead(uint64_t Address, uint32_t Size) const;
+  llvm::Error initializeHalDispatch();
+  llvm::Error initializeHalAcpiCache();
+  bool isHalDispatchRead(uint64_t, uint32_t) const;
+  llvm::Error validateHalDispatchAccess(uint64_t, uint32_t, bool) const;
+  llvm::Expected<uint64_t> callHalDispatch(const KernelExportRegistry::Export &,
+                                           llvm::ArrayRef<uint64_t>);
+  llvm::Error validateNlsDataAccess(uint64_t Address, uint32_t Size,
+                                    bool IsWrite) const;
+  llvm::Expected<uint64_t> processorNumber(uint64_t Output, bool FromIndex,
+                                           uint32_t Index = 0);
+  llvm::Expected<uint64_t> groupAffinity(uint64_t Input, uint64_t Previous,
+                                         bool Revert);
+  llvm::Error synchronizeProcessList();
+  llvm::Error synchronizeGuestPageTables();
+  llvm::Expected<uint64_t> guestCR3();
+  uint64_t guestCR4() const;
   /// End a normally returned DriverEntry, regardless of its NTSTATUS. The
   /// borrowed RegistryPath record and buffer expire before any later callback.
   llvm::Error finishEntry();
@@ -85,7 +133,15 @@ public:
   captureUnpackRuntime(bool IncludeBacking) const;
   std::map<uint64_t, uint64_t> unpackAllocations() const;
   uint64_t driverObject() const { return DriverObject; }
+  bool isServiceImagePC(uint64_t PC) const;
+  bool isServiceThreadEntry(uint64_t PC) const;
+  llvm::Error validateServiceAPI(uint64_t PC, llvm::StringRef Name) const;
+  const std::string &callDetail() const { return APICallDetail; }
   uint64_t registryPath() const { return RegistryPath; }
+  using ContextCapture = std::function<llvm::Error(uint64_t)>;
+  void setContextCapture(ContextCapture Capture) {
+    CaptureContext = std::move(Capture);
+  }
   /// Fixed kernel argument counts; unknown names have no execution contract.
   static std::optional<unsigned> argumentCount(const std::string &Name);
   static std::optional<unsigned>
@@ -158,7 +214,21 @@ public:
   nextScheduled(bool AdvanceTime,
                 std::optional<uint64_t> Deadline = std::nullopt);
   llvm::Error finishScheduled(uint64_t ID);
+  bool hasForegroundBlockingCallbacks() const {
+    return Scheduler.hasForegroundBlockingCallbacks();
+  }
+  bool isSuspendedSystemThread(uint64_t ID) const {
+    return Scheduler.isSuspendedSystemThread(ID);
+  }
+  bool isSystemThreadEntry(uint64_t PC) const;
   std::optional<uint32_t> takeThreadTermination();
+  bool hasDeferredThreadTermination(GuestCallToken Token) const {
+    if (Token.Owner != GuestCallOwner::ThreadNotify)
+      return false;
+    const auto It = ThreadNotifications.find(Token.ID);
+    return It != ThreadNotifications.end() &&
+           It->second.Thread == CurrentThreadKey && !It->second.Output;
+  }
   /// Finish a scheduled framework callback, including any destruction callbacks
   /// required before releasing its scheduler ownership.
   llvm::Expected<std::optional<KernelGuestCall>>
@@ -186,11 +256,13 @@ public:
   std::optional<KernelScheduler::ReadyThread> nextPassiveThread() const {
     return Scheduler.nextPassiveThread();
   }
-  KernelScheduler::ReadyThread readyThread(uint64_t Key, uint64_t Order) const {
-    return Scheduler.readyThread(Key, Order);
+  KernelScheduler::ReadyThread
+  readyThread(uint64_t Key, uint64_t Order,
+              const ExecutionContext *Paused = nullptr) const {
+    return Scheduler.readyThread(resolvedThreadPriorityKey(Key, Paused), Order);
   }
   int32_t threadPriority(uint64_t Key) const {
-    return Scheduler.threadPriority(Key);
+    return Scheduler.threadPriority(resolvedThreadPriorityKey(Key));
   }
   uint64_t now100ns() const { return Scheduler.now100ns(); }
   /// Process exactly one chronological boundary, including during execution.
@@ -217,7 +289,11 @@ public:
       FileClose,
       FileHandleClose,
       FileRequest,
-      FileOperation
+      FileOperation,
+      ExecutiveCallbackUnregister,
+      ProcessNotifyRemove,
+      ThreadNotifyRemove,
+      RegistryCallbackRemove
     };
     Kind Type = Kind::Dispatcher;
     uint64_t Object = 0;
@@ -295,6 +371,12 @@ public:
       uint32_t ProcessID = DriverRequest::DefaultRequestorProcessID);
   llvm::Error revokeRequestUserBuffers(uint64_t IRP);
   llvm::Error exitRequestorProcess(uint64_t IRP);
+  llvm::Expected<std::optional<KernelGuestCall>>
+  beginProcessEvent(const DriverProcessEvent &Event, size_t SourceIndex);
+  llvm::Error completeProcessEvent();
+  llvm::Expected<uint64_t> beginRegistryEvent(const DriverRegistryEvent &,
+                                              size_t);
+  llvm::Error finishRegistryEvent(uint64_t Status);
   bool canCatchUserAccess(uint64_t Address, uint64_t Size) const;
   llvm::Error validateExecutionReturn(uint64_t Identity, uint8_t EntryIRQL,
                                       bool Nested = false) const;
@@ -310,11 +392,18 @@ public:
   uint8_t currentIRQL() const { return CurrentIRQL; }
   /// Return a borrowed, opaque identity for the current kernel thread.
   llvm::Expected<uint64_t> currentThreadObject();
+  bool hasModelSpecificRegisters() const;
+  llvm::Expected<uint64_t> readModelSpecificRegister(uint32_t Index) const;
   llvm::Expected<Invocation> beginUnload();
   llvm::Error finishUnload();
   /// Reject CPU accesses whose environment semantics this profile does not own.
   llvm::Error validateGuestAccess(uint64_t Address, uint32_t Size,
                                   bool IsWrite) const;
+  /// CPU writes resolve COW through a protected-page fault and replay the
+  /// original instruction; API write admission can prepare its page directly.
+  llvm::Error validateGuestCPUWrite(uint64_t Address, uint32_t Size) const;
+  llvm::Expected<bool>
+  repairProcessImageWriteFault(const BackendFault &Fault) const;
 
 private:
   llvm::Expected<uint64_t> dispatchKernelCall(
@@ -343,7 +432,18 @@ private:
   llvm::Expected<uint64_t>
   allocatePool(llvm::ArrayRef<uint64_t> A, bool Modern,
                PoolSource Source = PoolSource::GuestAllocation);
+  llvm::Expected<uint64_t> initializeCountedString(llvm::ArrayRef<uint64_t> A,
+                                                   unsigned UnitBytes);
+  llvm::Expected<uint64_t> convertCountedString(llvm::ArrayRef<uint64_t> A,
+                                                bool ToUnicode);
+  llvm::Expected<uint64_t> freeCountedString(uint64_t Address);
+  std::set<uint64_t> RtlStringBuffers;
   llvm::Expected<uint64_t> freePool(llvm::ArrayRef<uint64_t> A, bool Tagged);
+  llvm::Expected<uint64_t> allocateContiguousMemory(uint64_t Size,
+                                                    uint64_t High);
+  llvm::Expected<uint64_t> freeContiguousMemory(uint64_t Address);
+  llvm::Error preflightPhysicalAllocation(uint64_t Address,
+                                          uint64_t Size) const;
   llvm::Expected<uint64_t>
   deleteSymbolicLinkFromGuest(llvm::ArrayRef<uint64_t> A);
   llvm::Expected<uint64_t>
@@ -370,6 +470,15 @@ private:
                  uint64_t Offset, uint64_t Size);
   DriverResult &Result;
   KernelExportRegistry *Exports;
+  std::vector<uint64_t> ObjectTypeDataSlots;
+  std::optional<uint64_t> InitialSystemProcessDataSlot;
+  std::optional<uint64_t> ProcessorCountDataSlot;
+  std::optional<uint64_t> NlsOemDataSlot;
+  std::optional<bool> NlsOemMultibyte;
+  std::optional<DriverPciConfiguration> PciConfiguration;
+  std::optional<uint8_t> IRPIOPriorityHint;
+  llvm::Expected<uint64_t> pciBusData(llvm::ArrayRef<uint64_t>, bool Writing);
+  std::set<uint64_t> SystemAffinityThreads;
   std::unique_ptr<KernelFramework> Framework;
   KernelPoFx PoFx;
   std::map<uint64_t, uint64_t> PoFxDeviceObjects;
@@ -576,6 +685,13 @@ private:
   KernelRegistry Registry;
   KernelFileSystem FileSystem;
   KernelScheduler Scheduler;
+  bool SharedClockMapped = false;
+  std::optional<uint64_t> PublishedSharedTick;
+  llvm::Error initializeSharedClock();
+  llvm::Error synchronizeSharedClock();
+  llvm::Expected<uint64_t> stallProcessor(uint32_t Microseconds);
+  llvm::Error validateSharedClockAccess(uint64_t Address, uint32_t Size,
+                                        bool IsWrite) const;
   KernelDispatcher Dispatcher;
   KernelRemoveLocks RemoveLocks;
   KernelResources Resources;
@@ -586,8 +702,10 @@ private:
   std::optional<KernelGuestCall> PendingDMACall;
   std::set<uint64_t> InlineDMACalls;
   bool hasPendingIndependentGuestCall() const {
-    return PendingWdmCall || PendingInterruptCall || PendingDMACall ||
-           (Framework && Framework->hasPendingGuestCall());
+    return PendingServiceCall || PendingAvlCall || PendingThreadNotify ||
+           PendingRegistryCallback || PendingProcessNotify ||
+           PendingExecutiveCallback || PendingWdmCall || PendingInterruptCall ||
+           PendingDMACall || (Framework && Framework->hasPendingGuestCall());
   }
   bool hasPendingModelGuestCall() const {
     auto Operation = BlockingPoFx.find(CurrentThreadKey);
@@ -653,6 +771,105 @@ private:
     uint16_t CriticalDepth = 0;
     uint16_t GuardedDepth = 0;
   };
+  struct ProcessNotifier {
+    uint64_t Routine = 0;
+    size_t Busy = 0;
+    bool Removing = false;
+    uint64_t RemovalThread = 0;
+    bool Extended = false;
+  };
+  std::array<std::optional<uint64_t>, 64> ProcessNotifySlots{};
+  std::map<uint64_t, ProcessNotifier> ProcessNotifiers;
+  uint64_t NextProcessNotifier = 1, NextProcessNotification = 1;
+  struct ProcessNotification {
+    uint64_t ID = 0, Thread = 0, Registration = 0;
+    size_t Cursor = 0, ReportIndex = 0;
+    ApcState Baseline;
+    bool Active = false;
+    uint64_t CreateInfo = 0, ImageFileObject = 0;
+    std::vector<std::pair<uint64_t, uint64_t>> Storage;
+  };
+  std::optional<ProcessNotification> ProcessNotificationState;
+  std::optional<KernelGuestCall> PendingProcessNotify;
+  std::set<uint32_t> LifecycleLiveProcesses{4}, LifecycleSeenProcesses{4};
+  std::optional<DriverProcessInventory> ProcessInventory;
+  std::set<uint64_t> PublishedProcessImageNames;
+  std::set<uint64_t> PublishedProcessSectionBases;
+  std::set<uint64_t> PublishedProcessPebs;
+  // Only exiting processes are recorded. Live processes without an exit
+  // observation retain the native initial STATUS_PENDING value.
+  std::map<uint32_t, std::optional<uint32_t>> ProcessExitStatuses;
+  std::set<uint64_t> PublishedProcessExitStatuses;
+  llvm::Expected<uint64_t> processExitStatus(uint64_t Object);
+  llvm::Error observeProcessExitStatus(uint32_t PID,
+                                       std::optional<uint32_t> Status);
+  llvm::Expected<uint64_t> processImageFileName(uint64_t Object);
+  bool isLiveProcess(uint32_t PID) const {
+    return LifecycleLiveProcesses.contains(PID) &&
+           !ExitedUserProcesses.contains(PID);
+  }
+  llvm::Expected<uint64_t> materializeProcessObject(uint32_t ProcessID);
+  llvm::Error admitProcess(uint32_t ProcessID);
+  llvm::Expected<uint64_t> queryProcessInformation(llvm::ArrayRef<uint64_t>,
+                                                   bool ZwCall);
+  std::map<uint32_t, uint32_t> LifecycleParents;
+  llvm::Error initializeProcessEvents(const DriverOptions &);
+  llvm::Expected<uint64_t> setProcessNotify(llvm::ArrayRef<uint64_t> A,
+                                            bool Extended = false);
+  llvm::Expected<std::optional<uint32_t>> pollProcessNotifyRemove(const Wait &);
+  llvm::Error prepareProcessNotify();
+  llvm::Error prepareProcessCreateInfo(const DriverProcessEvent &);
+  llvm::Error validateProcessNotifyAccess(uint64_t Address, uint32_t Size,
+                                          bool Write) const;
+  llvm::Error beginProcessNotify(uint64_t ID);
+  llvm::Expected<std::optional<uint64_t>> finishProcessNotify(uint64_t ID);
+  llvm::Error retireUserProcess(uint32_t ProcessID);
+  llvm::Error validateProcessNotifyUnload() const;
+  llvm::Error canReleaseProcessNotifyStorage(uint64_t Base,
+                                             uint64_t Size) const;
+  struct RegistryEventState {
+    size_t Index = 0;
+    uint64_t Thread = 0, Control = 0, Output = 0;
+    std::vector<std::pair<uint64_t, uint64_t>> Storage;
+  };
+  std::optional<RegistryEventState> ActiveRegistryEvent;
+  std::map<uint32_t, uint64_t> RegistryEventHandles;
+  struct RegistryCallbackRegistration {
+    uint64_t Cookie = 0, Routine = 0, Context = 0;
+    size_t Busy = 0;
+    bool Removing = false;
+    uint64_t RemovalThread = 0;
+  };
+  std::optional<RegistryCallbackRegistration> RegistryCallback;
+  uint64_t NextRegistryCookie = 1, NextRegistryNotification = 1;
+  struct RegistryNotification {
+    uint64_t Cookie = 0, Thread = 0, Storage = 0, Object = 0;
+    std::string API;
+    std::vector<uint64_t> Arguments;
+    uint32_t PreClass = 0, PostClass = 0, PreSize = 0, ContextOffset = 0;
+    uint32_t Status = 0;
+    bool Post = false, Active = false;
+    ApcState Baseline;
+    ExecutionContext Caller{};
+  };
+  std::map<uint64_t, RegistryNotification> RegistryNotifications;
+  std::map<uint64_t, uint64_t> RegistryKeyObjects;
+  std::optional<KernelGuestCall> PendingRegistryCallback;
+  llvm::Expected<uint64_t> registerRegistryCallback(llvm::ArrayRef<uint64_t>);
+  llvm::Expected<uint64_t> unregisterRegistryCallback(uint64_t Cookie);
+  llvm::Expected<std::optional<uint32_t>>
+  pollRegistryCallbackRemove(const Wait &);
+  llvm::Expected<uint64_t> registryOperation(llvm::StringRef,
+                                             llvm::ArrayRef<uint64_t>);
+  llvm::Expected<uint64_t> registryKeyObject(uint64_t Identity);
+  llvm::Error beginRegistryCallback(uint64_t ID);
+  llvm::Expected<std::optional<uint64_t>>
+  finishRegistryCallback(uint64_t ID, uint64_t Value);
+  llvm::Error validateRegistryCallbackAccess(uint64_t Address, uint32_t Size,
+                                             bool Write) const;
+  llvm::Error canReleaseRegistryCallbackStorage(uint64_t Address,
+                                                uint64_t Size) const;
+  llvm::Error validateRegistryCallbackUnload() const;
   std::map<uint64_t, ApcState> ApcStates;
   enum class ApcRegionKind { Critical, Guarded };
   llvm::Expected<ApcState *> apcStateForCall();
@@ -671,6 +888,53 @@ private:
   std::map<uint64_t, UserAllocation> UserAllocations;
   std::set<uint64_t> RevokedUserAllocations;
   std::set<uint32_t> ExitedUserProcesses;
+  struct FileNode;
+  struct ImageSection {
+    std::shared_ptr<const DriverProcessImagePlan> Plan;
+    uint64_t Backing = 0;
+    // The section owns the source identity independently of FILE_OBJECTs.
+    std::shared_ptr<FileNode> File;
+  };
+  struct ProcessMemoryView {
+    uint64_t Base = 0, Size = 0;
+    mutable uint64_t Backing = 0;
+    unsigned Permissions = 0;
+    mutable MemoryView Storage;
+    struct ImagePage {
+      std::shared_ptr<const DriverProcessImagePlan> Source;
+      std::shared_ptr<ImageSection> Section;
+      uint8_t Protection = 0;
+      uint64_t PrivateBacking = 0;
+      MemoryView PrivateStorage;
+      bool Private = false;
+    };
+    std::shared_ptr<ImagePage> Image;
+  };
+  std::map<uint32_t, std::vector<ProcessMemoryView>> ProcessMemoryViews;
+  struct ImageMapping {
+    std::shared_ptr<ImageSection> Section;
+    uint64_t Size = 0;
+    bool Dynamic = false;
+  };
+  std::map<std::pair<uint32_t, uint64_t>, ImageMapping> ImageMappings;
+  llvm::Expected<std::shared_ptr<ImageSection>>
+  imageSection(const DriverProcessImageMapping &Input,
+               std::shared_ptr<FileNode> File = {});
+  llvm::Expected<std::vector<ProcessMemoryView>>
+  imagePages(const std::shared_ptr<ImageSection> &Section, uint64_t Size);
+  llvm::Expected<uint64_t> createImageSection(llvm::ArrayRef<uint64_t>);
+  llvm::Expected<uint64_t> mapImageSection(llvm::ArrayRef<uint64_t>);
+  llvm::Expected<uint64_t> querySection(llvm::ArrayRef<uint64_t>);
+  llvm::Error retireImageMapping(uint32_t PID, uint64_t Base);
+  llvm::Error initializeProcessMemory();
+  llvm::Expected<uint64_t> queryVirtualMemory(llvm::ArrayRef<uint64_t> A,
+                                              bool ZwCall);
+  const ProcessMemoryView *processMemoryView(uint32_t PID, uint64_t Address,
+                                             uint64_t Size) const;
+  llvm::Error validateProcessMemoryAccess(uint64_t Address, uint32_t Size,
+                                          bool IsWrite) const;
+  unsigned processMemoryPermissions(const ProcessMemoryView &View) const;
+  llvm::Error prepareProcessImageWrite(uint64_t Address, uint64_t Size) const;
   struct UserMdlView {
     uint64_t MDL = 0;
     uint64_t Address = 0;
@@ -691,6 +955,8 @@ private:
     uint32_t PreviousProcessID;
     bool PreviousUserContext;
     bool Private = false;
+    ExecutionProcessContext PreviousContext;
+    uint32_t TargetProcessID;
   };
   std::vector<ProcessAttachment> ProcessAttachments;
   bool hasProcessAttachment(uint64_t Execution) const;
@@ -870,6 +1136,9 @@ private:
   llvm::Expected<uint64_t> raiseIRQL(uint8_t RequestedIRQL);
   llvm::Expected<uint64_t> lowerIRQL(uint8_t RequestedIRQL);
   llvm::Expected<uint64_t> processObject(uint32_t ProcessID);
+  llvm::Expected<uint64_t> processSectionBaseAddress(uint64_t Object);
+  llvm::Expected<uint64_t> processPeb(uint64_t Object);
+  llvm::Expected<uint64_t> queryDeviceProperty(llvm::ArrayRef<uint64_t>);
   llvm::Expected<uint64_t> requestorProcess(uint64_t IRP);
   llvm::Expected<uint64_t> currentProcess();
   llvm::Error stackAttachProcess(uint64_t Process, uint64_t ApcState,
@@ -986,7 +1255,6 @@ private:
   };
   std::map<uint64_t, ThreadObject> ThreadObjects;
   std::map<uint64_t, uint64_t> CurrentThreadObjects;
-  std::optional<uint32_t> PendingThreadTermination;
   /// Client IDs of live thread objects, assigned on first observation. Issued
   /// IDs are never reused, and requestor process IDs may not collide with them.
   std::map<uint64_t, uint32_t> ThreadClientIDs;
@@ -994,6 +1262,74 @@ private:
   std::set<uint32_t> RequestorProcessIDs;
   uint64_t NextThreadClientID = profile::ThreadIDBase;
   llvm::Expected<uint64_t> threadClientID(uint64_t Object);
+  struct ThreadIdentity {
+    uint64_t ID = 0;
+    std::optional<uint64_t> StartAddress;
+    std::optional<uint32_t> CreatingProcessID;
+    // Unknown borrowed-user state differs from a known non-GUI thread.
+    std::optional<uint64_t> Win32Thread;
+  };
+  // One identity/reference owner for scheduled and borrowed current threads.
+  // Exited borrowed threads remain here until their last pointer is released.
+  std::map<uint64_t, ThreadIdentity> ThreadIdentities;
+  struct NativeInitialThreadView {
+    uint64_t Auxiliary, Size;
+    bool Readable = true;
+  };
+  std::map<uint64_t, NativeInitialThreadView> NativeInitialThreadViews;
+  llvm::Error initializeNativeThreadView(uint64_t Object,
+                                         const ThreadIdentity &Identity);
+  bool isNativeThreadViewRead(uint64_t Object, uint64_t Address,
+                              uint32_t Size) const;
+  llvm::Error publishThreadIdentity(uint64_t Object, ThreadIdentity Identity);
+  bool isThreadIdentityRead(uint64_t Object, uint64_t Address,
+                            uint32_t Size) const;
+  llvm::Expected<uint64_t> threadProcessID(uint64_t Object) const;
+  llvm::Expected<uint64_t> threadProcessObject(uint64_t Object);
+  uint64_t
+  resolvedThreadPriorityKey(uint64_t Key,
+                            const ExecutionContext *Paused = nullptr) const;
+  std::optional<uint64_t> ForegroundThreadStart;
+  // Foreground requests reuse a CPU stack, not the creating process identity.
+  // A nested exception keeps both parts of its parent's logical thread key.
+  using ThreadHandle = ObjectHandle;
+  struct ThreadNotifier {
+    uint64_t Routine = 0;
+    size_t Busy = 0;
+    bool Removing = false;
+    uint64_t RemovalThread = 0;
+  };
+  struct ThreadCreationOutput {
+    uint64_t Output = 0, ClientID = 0, Value = 0;
+    ThreadHandle Handle;
+    bool Reserved = false;
+  };
+  struct ThreadNotification {
+    uint64_t Object = 0, Thread = 0, Registration = 0;
+    size_t Cursor = 0, Report = 0;
+    ApcState Baseline;
+    uint8_t IRQL = 0;
+    bool Active = false;
+    std::optional<ThreadCreationOutput> Output;
+  };
+  std::array<std::optional<uint64_t>, 64> ThreadNotifySlots{};
+  std::map<uint64_t, ThreadNotifier> ThreadNotifiers;
+  std::map<uint64_t, ThreadNotification> ThreadNotifications;
+  uint64_t NextThreadNotifier = 1, NextThreadNotification = 1;
+  std::optional<KernelGuestCall> PendingThreadNotify;
+  std::map<uint64_t, uint32_t> PendingThreadTerminations;
+  llvm::Expected<uint64_t> setThreadNotify(uint64_t Routine, bool Remove);
+  llvm::Error canStartThreadNotification() const;
+  llvm::Error startThreadNotification(
+      uint64_t Object, bool Create,
+      std::optional<ThreadCreationOutput> Output = std::nullopt);
+  llvm::Error prepareThreadNotify(uint64_t ID);
+  llvm::Error completeThreadNotification(uint64_t ID);
+  llvm::Error beginThreadNotify(uint64_t ID);
+  llvm::Expected<std::optional<uint64_t>> finishThreadNotify(uint64_t ID);
+  llvm::Expected<std::optional<uint32_t>> pollThreadNotifyRemove(const Wait &);
+  llvm::Error validateThreadNotifyUnload() const;
+  llvm::Error canReleaseThreadNotifyStorage(uint64_t Base, uint64_t Size) const;
   llvm::Expected<uint64_t>
   createSystemThread(llvm::ArrayRef<uint64_t> Arguments);
   llvm::Expected<uint64_t> terminateSystemThread(uint32_t Status);
@@ -1044,6 +1380,22 @@ private:
   bool matchesObjectType(ObjectKind Kind, uint64_t Type) const;
   void retainObjectHandle(uint64_t Object, uint32_t Access, uint32_t Attributes,
                           uint32_t ProcessID);
+  llvm::Expected<uint64_t> referenceThreadByHandle(llvm::ArrayRef<uint64_t>);
+  llvm::Expected<uint64_t>
+  queryThreadInformation(llvm::ArrayRef<uint64_t> Arguments);
+  uint32_t handleProcessID() const;
+  bool canAccessHandle(uint32_t Attributes, uint32_t ProcessID) const;
+  llvm::Error objectBuffer(uint64_t Address, uint32_t Size, bool IsWrite) const;
+  bool canAccessThreadHandle(const ThreadHandle &Handle) const;
+  bool hasThreadHandles(uint64_t Object) const;
+  llvm::Expected<uint64_t> dereferenceThread(uint64_t Object);
+  llvm::Expected<uint64_t> threadID(uint64_t Object) const;
+  llvm::Expected<uint64_t> isThreadTerminating(uint64_t Object) const;
+  llvm::Expected<uint64_t> currentThreadID();
+  llvm::Expected<uint64_t> currentThreadWin32Thread();
+  llvm::Expected<uint64_t> threadWin32Thread(uint64_t Object) const;
+  llvm::Expected<uint64_t> setThreadWin32Thread(uint64_t Object, uint64_t Value,
+                                                uint64_t Expected);
   llvm::Expected<uint64_t> closeHandle(uint64_t Handle);
   void retireObjectIfUnreferenced(uint64_t Object);
   void retireBorrowedThread(uint64_t Key);
@@ -1052,7 +1404,6 @@ private:
   llvm::Expected<uint64_t> queryThreadPriority(uint64_t Object) const;
   llvm::Expected<uint64_t> setThreadPriority(uint64_t Object, int32_t Priority);
   // Canonical logical-thread ownership survives parked and nested executions.
-  std::set<uint64_t> SystemAffinityThreads;
   llvm::Expected<uint64_t> currentProcessorNumber(uint64_t Output);
   llvm::Expected<uint64_t> setSystemAffinity(uint64_t Mask);
   llvm::Expected<uint64_t> revertSystemAffinity();
@@ -1087,8 +1438,9 @@ private:
   prepareReleaseRanges(llvm::ArrayRef<std::pair<uint64_t, uint64_t>> Ranges,
                        uint64_t IgnoredDMAPin = 0);
   llvm::Error validateGuestAccessImpl(uint64_t Address, uint32_t Size,
-                                      bool IsWrite,
-                                      bool IncludeDispatcher) const;
+                                      bool IsWrite, bool IncludeDispatcher,
+                                      bool PhysicalAccess = false,
+                                      bool PrepareImageWrites = true) const;
   llvm::Error validateDispatcherStorage(uint64_t Address, uint32_t Size,
                                         bool IsWrite) const;
   uint8_t CurrentIRQL = 0;
@@ -1117,7 +1469,6 @@ private:
   llvm::Expected<uint64_t> querySystemInformation(llvm::ArrayRef<uint64_t> Args,
                                                   bool Trusted);
   llvm::Expected<uint64_t> pcToFileHeader(uint64_t PC, uint64_t Output);
-  std::vector<KernelLoadedModule> LoadedModules;
   // Only loader-owned mapped spans, excluding image holes. Physical backing is
   // registered lazily when a permitted image range is first locked.
   std::map<uint64_t, uint64_t> ImageRAM;
@@ -1131,10 +1482,12 @@ private:
   // have no concrete model value, even when the State byte becomes empty.
   std::map<uint64_t, BugCheckRecord> BugCheckRecords;
   llvm::Error validateBugCheckRecord(uint64_t Record) const;
-  llvm::Error validateBugCheckAccess(uint64_t Address, uint32_t Size,
-                                     bool IsWrite) const;
+
   llvm::Error validateBugCheckPageBorrow(uint64_t Address, uint64_t Size) const;
   bool hasLiveBugCheckCallbacks() const;
+  llvm::Error validateBugCheckAccess(uint64_t, uint32_t, bool) const;
+  llvm::Error validateStrictBugCheckAccess(uint64_t, uint32_t, bool) const;
+  llvm::Error validateNativeBugCheckAccess(uint64_t, uint32_t, bool) const;
   llvm::Expected<uint64_t> registerBugCheckCallback(uint64_t Record,
                                                     uint64_t Callback,
                                                     uint32_t Reason,
@@ -1145,6 +1498,206 @@ private:
   bool unpackImageMDLCall(KernelAPIKind Kind,
                           llvm::ArrayRef<uint64_t> Arguments) const;
   uint64_t DriverObject = 0;
+  std::string APICallDetail;
+  struct NamedDriverObject {
+    std::string Name;
+    uint64_t Object = 0;
+    bool Guest = false;
+    std::array<bool, profile::MajorFunctionCount * 8> DispatchWritten{};
+    std::shared_ptr<RAMInitializationWatch> DispatchInitialization;
+  };
+  std::map<std::string, NamedDriverObject> NamedDrivers;
+  bool DriverNamespaceKnown = false;
+  std::vector<std::pair<uint64_t, uint64_t>> NamedDriverNameRanges;
+  llvm::Error initializeDriverNamespace(const DriverOptions &Options);
+  llvm::Expected<uint64_t> referenceDriverObjectByName(llvm::ArrayRef<uint64_t>,
+                                                       llvm::StringRef);
+  bool isNamedDriverObject(uint64_t Object) const;
+  llvm::Error validateNamedDriverAccess(uint64_t Address, uint32_t Size,
+                                        bool IsWrite) const;
+  llvm::Error validateNamedDriverUnload() const;
+  bool isGuestDriverObject(uint64_t Object) const;
+  llvm::Expected<uint64_t> guestDriverDispatch(uint64_t Owner,
+                                               unsigned Major) const;
+  struct ServiceImageState {
+    DriverServiceImage Resource;
+    std::shared_ptr<DriverImage> Image;
+    enum class State {
+      Unloaded,
+      Loading,
+      Loaded,
+      Unloading
+    } Phase = State::Unloaded;
+    bool Mapped = false, Active = false;
+    uint64_t Object = 0, Extension = 0, Module = 0, Path = 0, Thread = 0;
+    std::vector<std::pair<uint64_t, uint64_t>> Storage;
+  };
+  bool ServiceImagesKnown = false;
+  std::string PrimaryServiceName;
+  std::map<uint64_t, ServiceImageState> ServiceImages;
+  std::optional<KernelGuestCall> PendingServiceCall;
+  llvm::Error initializeServiceImages(const DriverImage &,
+                                      const DriverOptions &);
+  llvm::Expected<uint64_t> callDriverService(llvm::StringRef, uint64_t);
+  llvm::Error beginServiceCall(uint64_t);
+  llvm::Expected<std::optional<uint64_t>> finishServiceCall(uint64_t, uint64_t);
+  llvm::Error mapServiceImage(ServiceImageState &);
+  llvm::Error createServiceObject(ServiceImageState &);
+  llvm::Error retireServiceImage(ServiceImageState &);
+  llvm::Error validateServiceUnload() const;
+  llvm::Error validateServiceCallContext(llvm::StringRef,
+                                         uint64_t PC = 0) const;
+  uint64_t DriverModule = 0;
+  ContextCapture CaptureContext;
+  const KernelReferenceImage *DebuggerReference = nullptr;
+  std::vector<uint8_t> DebuggerData;
+  uint32_t ProcessObjectSize = profile::ProcessTokenSize;
+  uint32_t ThreadObjectSize = profile::ProcessTokenSize;
+  std::unique_ptr<KernelGuestPageTables> GuestPageTables;
+  std::unique_ptr<KernelGuardBitmap> GuardBitmap;
+  bool WindowsNonpagedMDLMappings = false;
+  // Deterministic guest boot state, independent of host secure-memory state.
+  uint64_t SecureMemoryCookie = 0x4e44536563757265ULL;
+  llvm::Error validateReferenceDataAccess(uint64_t Address, uint32_t Size,
+                                          bool IsWrite) const;
+  std::set<uint64_t> PersistentDumps;
+  uint64_t CapturingPersistentDump = 0;
+  llvm::Expected<uint64_t> capturePersistentState(llvm::ArrayRef<uint64_t> A);
+  llvm::Error validatePersistentDumpAccess(uint64_t Address, uint32_t Size,
+                                           bool IsWrite) const;
+  struct LoadedModule {
+    uint64_t Base, Size;
+    std::string Path;
+    bool Guest;
+    uint16_t DLLCharacteristics = 0;
+    uint64_t Record = 0;
+    std::string InstanceID;
+    std::shared_ptr<const modules::ModuleImage> Source;
+    std::string Name;
+  };
+  class ModulePublicationState;
+  std::vector<LoadedModule> LoadedModules;
+  llvm::Expected<uint64_t>
+  queryNativeSystemInformation(llvm::ArrayRef<uint64_t> A, bool ZwCall);
+  llvm::Expected<uint64_t> queryFirmwareInformation(llvm::ArrayRef<uint64_t> A,
+                                                    bool ZwCall);
+  std::optional<DriverSmbios> Smbios;
+  std::optional<DriverAcpiTables> AcpiTables;
+  struct AvlNode {
+    uint64_t Parent = 0, Left = 0, Right = 0;
+    uint32_t Size = 0, Height = 1;
+  };
+  struct AvlTable {
+    uint64_t Root = 0, Compare = 0, Allocate = 0, Free = 0, Context = 0,
+             Busy = 0;
+    uint32_t Deletes = 0;
+    std::map<uint64_t, AvlNode> Nodes;
+    std::vector<uint8_t> Expected;
+  };
+  struct AvlOperation {
+    enum class Kind { Lookup, LookupFull, Insert, InsertFull, Delete } Type;
+    enum class Stage { Compare, Allocate, Free } Phase = Stage::Compare;
+    uint64_t Table = 0, Input = 0, Flag = 0, ParentOut = 0, SearchOut = 0,
+             Node = 0, Parent = 0, Thread = 0;
+    uint32_t Size = 0, Search = 0;
+    uint8_t IRQL = 0;
+    bool Found = false, Active = false;
+  };
+  std::map<uint64_t, AvlTable> AvlTables;
+  std::map<uint64_t, AvlOperation> AvlOperations;
+  std::optional<KernelGuestCall> PendingAvlCall;
+  uint64_t NextAvlOperation = 1;
+  llvm::Expected<uint64_t> callAvl(llvm::StringRef, llvm::ArrayRef<uint64_t>);
+  llvm::Error beginAvlCall(uint64_t);
+  llvm::Expected<std::optional<uint64_t>> finishAvlCall(uint64_t, uint64_t);
+  llvm::Expected<std::optional<uint64_t>> advanceAvl(uint64_t);
+  llvm::Error writeAvlTable(uint64_t);
+  llvm::Error validateAvlTable(uint64_t) const;
+  llvm::Error validateAvlAccess(uint64_t, uint32_t, bool) const;
+  llvm::Error canReleaseAvlStorage(uint64_t, uint64_t) const;
+  void forgetEmptyAvlStorage(uint64_t, uint64_t);
+  llvm::Error validateAvlUnload() const;
+  std::optional<uint64_t> HalDispatchSlot, HalCacheFunction;
+  std::vector<std::pair<uint64_t, uint64_t>> HalAcpiCache;
+  std::optional<DriverOptions::WindowsVersion> Version;
+  std::optional<bool> SecurePciEnabled;
+  llvm::Expected<uint64_t> querySecurePciEnabled() const;
+  std::optional<bool> DmaGuardPolicyEnabled;
+  std::optional<uint32_t> CodeIntegrityOptions;
+  bool ForegroundReadyCallbacks = false;
+  llvm::Expected<uint64_t> queryCodeIntegrity(llvm::ArrayRef<uint64_t> A,
+                                              bool ZwCall);
+  llvm::Expected<uint64_t> queryDmaGuardPolicy(llvm::ArrayRef<uint64_t> A,
+                                               bool ZwCall);
+  std::optional<DriverPciMcfg> PciMcfg;
+  uint32_t PciMcfgCount = 0;
+  bool PciMcfgPublished = false;
+  llvm::Error configurePciMcfg(const std::optional<DriverPciMcfg> &Facts,
+                               bool RequireSymbols = true);
+  llvm::Error initializePciMcfg();
+  bool permitsPciMcfgFieldRead(uint64_t Address, uint32_t Size) const;
+  llvm::Error validatePciMcfgAccess(uint64_t Address, uint32_t Size,
+                                    bool IsWrite) const;
+  bool WindowsPoolTags = false;
+  bool WindowsIRPInitialization = false;
+  llvm::Expected<uint64_t> getVersion(uint64_t Address);
+  struct BugCheckRegistration {
+    uint64_t Routine, Component, ComponentSize;
+    bool ComponentStorageReleased = false;
+  };
+  std::map<uint64_t, BugCheckRegistration> BugCheckCallbacks;
+  struct ExecutiveCallbackObject {
+    std::string Name;
+    size_t PointerReferences = 0, Registrations = 0, Notifications = 0;
+    bool Multiple = true, Permanent = false, System = false;
+  };
+  struct ExecutiveCallbackRegistration {
+    uint64_t Object = 0, Routine = 0, Context = 0;
+    uint64_t UnregisterThread = 0;
+    size_t Busy = 0;
+    bool Removing = false;
+  };
+  struct ExecutiveNotification {
+    uint64_t Object = 0, Argument1 = 0, Argument2 = 0;
+    uint64_t Cursor = 0, Registration = 0, Thread = 0;
+    uint8_t IRQL = 0;
+    bool Active = false;
+  };
+  std::map<std::string, uint64_t> ExecutiveCallbackNames;
+  std::map<uint64_t, ExecutiveCallbackObject> ExecutiveCallbacks;
+  std::map<uint64_t, ExecutiveCallbackRegistration> ExecutiveRegistrations;
+  std::map<uint64_t, ExecutiveNotification> ExecutiveNotifications;
+  std::optional<KernelGuestCall> PendingExecutiveCallback;
+  uint64_t NextExecutiveNotification = 1;
+  llvm::Expected<uint64_t> createExecutiveCallback(llvm::ArrayRef<uint64_t> A);
+  llvm::Expected<uint64_t>
+  registerExecutiveCallback(llvm::ArrayRef<uint64_t> A);
+  llvm::Expected<uint64_t> notifyExecutiveCallback(llvm::ArrayRef<uint64_t> A);
+  llvm::Expected<uint64_t> unregisterExecutiveCallback(uint64_t Registration);
+  llvm::Expected<uint64_t> dereferenceExecutiveCallback(uint64_t Object);
+  llvm::Expected<uint64_t> makeCallbackTemporary(uint64_t Object);
+  void retireExecutiveCallback(uint64_t Object);
+  void eraseExecutiveRegistration(uint64_t Registration);
+  llvm::Expected<bool> prepareExecutiveCallback(uint64_t Notification);
+  llvm::Error beginExecutiveCallback(uint64_t Notification);
+  llvm::Expected<std::optional<uint64_t>>
+  finishExecutiveCallback(uint64_t Notification);
+  llvm::Expected<std::optional<uint32_t>>
+  pollExecutiveUnregister(const Wait &Pending);
+  llvm::Error validateExecutiveCallbackAccess(uint64_t Address,
+                                              uint32_t Size) const;
+  llvm::Error canReleaseExecutiveCallbackStorage(uint64_t Base,
+                                                 uint64_t Size) const;
+  llvm::Error validateExecutiveCallbackUnload() const;
+  llvm::Expected<uint64_t> registerBugCheck(llvm::ArrayRef<uint64_t> A);
+  llvm::Expected<uint64_t> deregisterBugCheck(uint64_t Record);
+
+  llvm::Error canReleaseBugCheckStorage(uint64_t Base, uint64_t Size) const;
+  void noteBugCheckComponentRelease(uint64_t Base, uint64_t Size);
+  void snapshotBugCheckCallbacks();
+  std::vector<std::pair<uint64_t, uint64_t>> ModuleNameRanges;
+  llvm::Error validateLoadedModuleAccess(uint64_t Address, uint32_t Size,
+                                         bool IsWrite) const;
   uint64_t RegistryPath = 0;
   uint64_t DriverExtension = 0;
   uint64_t DriverLoaderRecord = 0;
@@ -1164,8 +1717,11 @@ private:
   // Admission conservatively records reads that can expose model PFNs,
   // including reads performed by modeled copy/compare services.
   mutable bool UnpackMDLIdentityRead = false;
+  uint64_t KernelMemoryBytes = profile::KernelArenaSize;
   uint64_t NextAllocation = 0;
   uint64_t AllocationEnd = 0;
+  uint64_t NextPagedAllocation = 0;
+  uint64_t PagedAllocationEnd = 0;
   struct PoolAllocation {
     uint64_t Size;
     uint32_t Tag;
@@ -1174,10 +1730,16 @@ private:
     // supported external allocation recipe for native reconstruction.
     std::optional<WindowsDriverState::PoolAPI> API;
     uint64_t TypeOrFlags;
+    bool Contiguous = false;
   };
   std::map<uint64_t, PoolAllocation> Allocations;
   std::map<uint64_t, uint64_t> ArenaAllocations;
-  enum class DeviceOwnerKind { Guest, PnpProvider, FileSystemProvider };
+  enum class DeviceOwnerKind {
+    Guest,
+    PnpProvider,
+    FileSystemProvider,
+    FiniteFileSystem
+  };
   struct DeviceRecord {
     uint64_t Address = 0;
     uint64_t Extension = 0;
@@ -1193,6 +1755,9 @@ private:
     // Request and callback holds are distinct from open handles and from the
     // DEVICE_OBJECT.ReferenceCount field. Attachment links also prevent retire.
     uint64_t InternalReferences = 0;
+    // Each successful legacy registration retains a queue entry. Unregister
+    // and IoDeleteDevice cancel all entries for this object.
+    uint32_t ShutdownNotifications = 0;
     bool DeletePending = false;
     bool UnlinkedFromDriver = false;
     std::optional<DevicePowerState> ReportedDevicePower;
@@ -1393,6 +1958,167 @@ private:
   void retainReservedObjectHandle(uint64_t Handle, uint64_t Object,
                                   uint32_t Access, uint32_t Attributes,
                                   uint32_t ProcessID);
+  enum class NativeFileState { Closed, Opening, Open, Cleaned };
+  struct NativeOpenFile {
+    uint64_t Address = 0, Device = 0, PnpDevice = 0;
+    bool Asynchronous = false;
+    NativeFileState State = NativeFileState::Opening;
+  };
+  std::map<uint32_t, NativeOpenFile> NativeOpenFiles;
+  // Native file opens share FILE_OBJECT identity/lifecycle with scenario I/O.
+  std::optional<std::vector<DriverFiniteFileSystemVolume>> FiniteFileSystem;
+  std::optional<bool> FilterManagerFileNames;
+  struct FilterNameRecord {
+    uint64_t Size = 0, References = 0, NameAddress = 0;
+    uint32_t Format = 0;
+    bool Cached = false, Parsed = false;
+    std::u16string Name;
+    uint32_t VolumeUnits = 0;
+  };
+  std::map<uint64_t, FilterNameRecord> FilterNames;
+  std::map<std::pair<uint64_t, uint32_t>, uint64_t> FilterNameCache;
+  static std::optional<unsigned>
+  subsystemArgumentCount(const KernelExportRegistry::Export &);
+  llvm::Expected<uint64_t> callSubsystem(const KernelExportRegistry::Export &,
+                                         llvm::ArrayRef<uint64_t>);
+  llvm::Expected<uint64_t> callFilterName(llvm::StringRef,
+                                          llvm::ArrayRef<uint64_t>);
+  llvm::Error parseFilterName(uint64_t);
+  llvm::Error freeFilterName(uint64_t);
+  llvm::Error validateFilterNameAccess(uint64_t, uint32_t, bool) const;
+  llvm::Error releaseFilterNameCache();
+  llvm::Error retireFilterNamesForFile(uint64_t);
+  std::optional<DriverNetworkInterfaces> NetworkInterfaces;
+  std::set<uint64_t> MibTables;
+  std::optional<DriverNdisConfiguration> NdisConfiguration;
+  struct NdisConfigurationHandle {
+    std::string RegistryPath;
+    std::optional<uint64_t> Key;
+    std::vector<uint64_t> Allocations;
+  };
+  struct NdisConfigurationStorage {
+    uint64_t Size = 0;
+    std::vector<std::pair<uint64_t, uint64_t>> Readable;
+  };
+  std::map<uint64_t, NdisConfigurationHandle> NdisConfigurationHandles;
+  std::map<uint64_t, NdisConfigurationStorage> NdisConfigurationAllocations;
+  std::map<std::string, uint64_t> NdisPredefinedParameters;
+  bool ReleasingNdisConfiguration = false;
+  llvm::Error initializeNdisConfiguration();
+  llvm::Expected<uint64_t> callNdisConfiguration(llvm::StringRef,
+                                                 llvm::ArrayRef<uint64_t>);
+  llvm::Error validateNdisConfigurationAccess(uint64_t, uint32_t, bool) const;
+  llvm::Expected<uint64_t> callNetio(llvm::StringRef, llvm::ArrayRef<uint64_t>);
+  uint64_t FiniteFileSystemDriver = 0;
+  std::map<size_t, uint64_t> VolumeDevices;
+  struct FileNode {
+    std::string Path;
+    bool Directory = false;
+    std::vector<uint8_t> Data;
+    bool DeletePending = false;
+    std::string Key;
+    std::weak_ptr<ImageSection> Image;
+  };
+  std::map<size_t, std::map<std::string, std::shared_ptr<FileNode>>> FileNodes;
+  std::set<std::string> FiniteFileSystemLinks;
+  struct NativeFile {
+    uint32_t ID = 0;
+    size_t Volume = 0;
+    std::shared_ptr<FileNode> Node;
+    bool RawVolume = false;
+    uint32_t Access = 0;
+    uint32_t Share = 0;
+
+    std::string Name;
+    uint64_t NameStorage = 0;
+    bool DeleteOnClose = false;
+  };
+  struct FileHandle {
+    uint64_t Object = 0;
+    uint32_t Attributes = 0;
+    uint32_t ProcessID = 4;
+    uint32_t Access = 0;
+  };
+  std::map<uint64_t, NativeFile> NativeFiles;
+  std::map<uint64_t, FileHandle> FileHandles;
+  struct SectionHandle {
+    uint32_t Access = 0, Attributes = 0, ProcessID = 4;
+    // Empty selects the existing PhysicalMemory provider.
+    std::string Name;
+    std::shared_ptr<ImageSection> Image;
+  };
+  struct NamedSection {
+    std::string Name;
+    uint64_t Backing = 0, Size = 0;
+    uint32_t Protection = 4;
+  };
+  std::optional<DriverSectionNamespace> SectionNamespace;
+  std::map<std::string, NamedSection> NamedSections;
+  llvm::Error initializeSections(const DriverOptions &Options);
+  llvm::Error snapshotSections();
+  std::map<uint64_t, SectionHandle> SectionHandles;
+  uint64_t NextSectionHandle = 0x52000000;
+  struct SectionView {
+    uint64_t Base = 0, Size = 0, Offset = 0;
+    uint32_t ProcessID = 4;
+    unsigned Permissions = 0;
+    bool Inherit = false;
+    KernelPhysicalMemory::CacheType Cache =
+        KernelPhysicalMemory::CacheType::Cached;
+    std::vector<KernelPhysicalMemory::PhysicalViewPage> Pages;
+    std::map<uint64_t, uint64_t> Pins;
+  };
+  using SectionViewKey = std::pair<uint32_t, uint64_t>;
+  std::map<SectionViewKey, SectionView> SectionViews;
+  llvm::Expected<uint64_t> openSection(llvm::ArrayRef<uint64_t>);
+  llvm::Expected<uint64_t> mapSection(llvm::ArrayRef<uint64_t>);
+  llvm::Expected<uint64_t> unmapSection(llvm::ArrayRef<uint64_t>);
+  llvm::Expected<uint64_t> querySectionObject(llvm::ArrayRef<uint64_t>);
+  llvm::Expected<bool> validateSectionViewAccess(uint64_t, uint32_t, bool,
+                                                 bool) const;
+  llvm::Error retireSectionView(SectionViewKey, bool AlreadyUnmapped = false);
+  llvm::Error retireProcessSections(uint32_t, bool AlreadyUnmapped = false);
+  llvm::Error inheritSectionViews(uint32_t Parent, uint32_t Child);
+  llvm::Error pinSectionView(SectionView &);
+  llvm::Error releaseSectionPins(SectionView &);
+  uint64_t NextFileHandle = 0x50000000;
+  uint32_t NextNativeFileID = UINT32_MAX;
+  llvm::Error prepareFiniteFileSystem();
+  llvm::Error snapshotFiniteFileSystem();
+  std::pair<size_t, uint64_t> finiteFileSystemUsage() const;
+  llvm::Error unlinkFileIfClosed(size_t Volume,
+                                 const std::shared_ptr<FileNode> &Node);
+  llvm::Error setFileDeletePending(size_t Volume,
+                                   const std::shared_ptr<FileNode> &Node,
+                                   bool Pending);
+  struct FilePath {
+    size_t Volume = 0;
+    uint64_t Device = 0;
+    std::string Relative;
+    std::string Key;
+    bool Raw = false;
+    bool CaseInsensitive = false;
+    uint32_t Status = 0;
+    uint32_t Attributes = 0;
+  };
+  llvm::Expected<FilePath> resolveFilePath(uint64_t Attributes);
+  std::shared_ptr<FileNode> findFileNode(FilePath &Path) const;
+  bool fileDirectoryEmpty(size_t Volume, const FileNode &Node) const;
+  llvm::Expected<uint64_t> deleteFile(uint64_t Attributes);
+  llvm::Expected<uint64_t> fileInformation(llvm::ArrayRef<uint64_t> A,
+                                           bool Set);
+  llvm::Error retireNativeFile(uint64_t Object);
+  bool canAccessFileHandle(const FileHandle &Handle) const;
+  llvm::Expected<uint64_t> fileCall(llvm::StringRef Name,
+                                    llvm::ArrayRef<uint64_t> A);
+  llvm::Expected<uint64_t> openFile(llvm::ArrayRef<uint64_t> A,
+                                    uint64_t DeviceHint = 0);
+  llvm::Expected<uint64_t> referenceFile(llvm::ArrayRef<uint64_t> A);
+  llvm::Expected<uint64_t> openFilePointer(llvm::ArrayRef<uint64_t> A);
+  llvm::Expected<uint64_t> dereferenceFile(uint64_t Object);
+  llvm::Expected<uint64_t> finiteFileSystemDevice(uint64_t Object);
+  llvm::Expected<uint64_t> closeFile(uint64_t Handle);
+  llvm::Error releaseFiniteFileSystem();
   bool Unloading = false;
   bool Unloaded = false;
   struct RequestedPower {
@@ -1424,7 +2150,16 @@ private:
     uint64_t Address;
     uint32_t Size;
   };
+  struct ControlIRPBuilder {
+    uint64_t Device, Input, Output, Event, IOSB, ThreadObject, ThreadKey;
+    uint32_t Code, InputSize, OutputSize, Method;
+    bool Internal;
+    uint64_t SystemBuffer = 0, Mdl = 0;
+    llvm::SmallVector<bool, 0> SystemInitialized;
+    std::shared_ptr<RAMInitializationWatch> SystemInitialization;
+  };
   struct DriverIRPAllocation {
+    std::optional<ControlIRPBuilder> Builder;
     uint64_t Size = 0;
     uint8_t StackCount = 0;
     bool Submitted = false;
@@ -1442,11 +2177,19 @@ private:
   llvm::Expected<uint64_t>
   allocateDriverIRP(llvm::ArrayRef<uint64_t> Arguments);
   llvm::Error initializeIRPHeader(uint64_t IRP, uint8_t StackCount,
-                                  uint8_t CurrentLocation);
+                                  uint8_t CurrentLocation,
+                                  std::array<bool, 16> &IOStatusInitialized);
   llvm::Error freeDriverIRP(uint64_t IRP);
   llvm::Error releaseDriverIRPStorage(uint64_t IRP);
   llvm::Error freeSubmittedDriverIRP(uint64_t IRP);
   llvm::Error adoptDriverIRP(uint64_t Device, uint64_t IRP);
+  llvm::Expected<uint64_t>
+      buildDeviceIoControlRequest(llvm::ArrayRef<uint64_t>);
+  llvm::Error adoptBuiltControlIRP(uint64_t Device, uint64_t IRP);
+  llvm::Error validateBuiltControlCompletion(uint64_t IRP) const;
+  llvm::Error notifyBuiltControlCompletion(uint64_t IRP);
+  llvm::Error canReleaseBuiltControlStorage(uint64_t, uint64_t) const;
+  llvm::Error validateBuiltControlBufferAccess(uint64_t, uint32_t, bool) const;
   llvm::Error validateDriverIRPCompletion(uint64_t IRP, uint32_t Status,
                                           uint64_t Information) const;
   llvm::Error captureDriverIRPCompletion(uint64_t IRP);
@@ -1689,6 +2432,7 @@ private:
     uint64_t LockOwnerMDL = 0;
     uint64_t SystemMappingOwnerMDL = 0;
     bool OwnsSystemMapping = false;
+    uint64_t MappingReservation = 0;
     uint64_t AllocationSize = 0;
     uint64_t UserAddress = 0;
     uint32_t ByteCount = 0;
@@ -1709,6 +2453,17 @@ private:
     }
   };
   std::map<uint64_t, LockedMdl> MDLs;
+  struct ReservedMapping {
+    uint64_t Size;
+    uint32_t Tag;
+    uint64_t MDL = 0;
+  };
+  std::map<uint64_t, ReservedMapping> ReservedMappings;
+  uint64_t findSystemMappingAddress(uint64_t Size) const;
+  llvm::Expected<uint64_t> allocateMappingAddress(uint64_t Size, uint32_t Tag);
+  llvm::Expected<uint64_t> freeMappingAddress(uint64_t Address, uint32_t Tag);
+  llvm::Expected<uint64_t> mapReservedMapping(llvm::ArrayRef<uint64_t> A);
+  llvm::Expected<uint64_t> unmapReservedMapping(llvm::ArrayRef<uint64_t> A);
   llvm::Error initializeMDLPhysicalPages(const LockedMdl &State);
   llvm::Expected<uint64_t> allocateMDL(llvm::ArrayRef<uint64_t> Arguments);
   llvm::Expected<uint64_t> createMDL(uint64_t Record, uint64_t Address,
@@ -1770,7 +2525,8 @@ private:
   llvm::Expected<UserMemoryRange> resolveUserMemoryRange(uint64_t Address,
                                                          uint64_t Length,
                                                          bool ForWrite) const;
-  llvm::Error unmapLockedPages(uint64_t Address, uint64_t MDL);
+  llvm::Error unmapLockedPages(uint64_t Address, uint64_t MDL,
+                               bool Reserved = false);
   llvm::Error validateMDLAccess(uint64_t Address, uint32_t Size,
                                 bool IsWrite) const;
   llvm::Expected<std::vector<uint64_t>> requestMDLChain(uint64_t IRP) const;
@@ -1790,17 +2546,25 @@ private:
                                bool DispatcherStorage = false) const;
   llvm::Expected<uint64_t> allocate(uint64_t Size, uint64_t Alignment = 16);
   llvm::Expected<uint64_t> isResidentKernelAddress(uint64_t Address) const;
-  llvm::Expected<uint64_t> queryPhysicalAddress(uint64_t Address) const;
-  llvm::Expected<uint64_t>
-  queryPrimaryVirtualAddress(uint64_t PhysicalAddress) const;
+  llvm::Expected<uint64_t> queryPhysicalAddress(uint64_t Address);
+  llvm::Expected<uint64_t> queryPrimaryVirtualAddress(uint64_t PhysicalAddress);
+  llvm::Expected<uint64_t> allocateInArena(uint64_t Size, uint64_t Alignment,
+                                           uint64_t &Cursor, uint64_t End);
+  llvm::Expected<uint64_t> planArenaAllocation(uint64_t Size,
+                                               uint64_t Alignment,
+                                               uint64_t Cursor,
+                                               uint64_t End) const;
   llvm::Expected<uint64_t> allocatePhysicalBuffer(uint64_t AllocationSize,
                                                   uint64_t Alignment,
                                                   uint64_t DataOffset,
-                                                  uint64_t DataSize);
+                                                  uint64_t DataSize,
+                                                  bool PagedArena = false);
   llvm::Expected<uint64_t> makeUnicodeString(const std::string &Text);
   llvm::Expected<std::string>
   readObjectName(uint64_t Address,
                  size_t MaxCharacters = profile::MaxDeviceNameSize);
+  llvm::Expected<std::string> readNativeObjectName(uint64_t Address,
+                                                   bool Unicode = false);
   llvm::Expected<uint64_t> createDevice(llvm::ArrayRef<uint64_t> Arguments);
   struct DeviceCreation {
     uint32_t Status;
@@ -1818,8 +2582,14 @@ private:
                                               llvm::StringRef Target);
   llvm::Expected<uint32_t> deleteSymbolicLink(llvm::StringRef Name);
   llvm::Expected<std::string> linkKey(llvm::StringRef Name) const;
-  llvm::Expected<uint64_t> resolveDeviceName(llvm::StringRef Name) const;
+  llvm::Expected<uint64_t>
+  resolveDeviceName(llvm::StringRef Name, bool CaseInsensitive = false) const;
+  llvm::Expected<std::string> resolveObjectPath(llvm::StringRef Name,
+                                                bool CaseInsensitive,
+                                                bool UnicodeTail = false) const;
   llvm::Error deleteDevice(uint64_t Address);
+  llvm::Expected<uint64_t> shutdownNotification(uint64_t Device, bool Register);
+  llvm::Error clearShutdownNotifications(uint64_t Device);
   llvm::Error retireDeviceIfUnreferenced(uint64_t Address);
   llvm::Expected<uint64_t> topAttachedDevice(uint64_t Base) const;
   enum class DeviceStackQuery {

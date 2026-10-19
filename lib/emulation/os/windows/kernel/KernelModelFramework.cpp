@@ -9,6 +9,7 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "KernelHalDispatch.h"
 #include "KernelModel.h"
 #include "WindowsKernelLayout.h"
 
@@ -23,6 +24,18 @@ namespace {
 
 llvm::Error frameworkDeviceError(const llvm::Twine &Message) {
   return llvm::createStringError(llvm::inconvertibleErrorCode(), Message);
+}
+
+bool isHALKernelExport(const KernelExportRegistry::Export &Export) {
+  if (Export.Kind != KernelExportRegistry::ExportKind::ModuleExport ||
+      Export.Module != "hal.dll")
+    return false;
+#define NEVERD_KERNEL_HAL_API(Symbol, Arity, IRQL, Operation)                  \
+  if (Export.Name == #Symbol)                                                  \
+    return true;
+#include "KernelHALAPIs.def"
+#undef NEVERD_KERNEL_HAL_API
+  return false;
 }
 } // namespace
 
@@ -276,8 +289,26 @@ std::optional<unsigned>
 KernelModel::argumentCount(const KernelExportRegistry::Export &Export) {
   if (Export.Kind == KernelExportRegistry::ExportKind::ModuleData)
     return std::nullopt;
+#define NEVERD_KERNEL_HAL_API(Symbol, Arity, IRQL, Operation)                  \
+  if (Export.Module == KernelProvider && Export.Name == #Symbol)               \
+    return std::nullopt;
+#include "KernelHALAPIs.def"
+#undef NEVERD_KERNEL_HAL_API
+  if (Export.Kind == KernelExportRegistry::ExportKind::HalDispatchFunction)
+    return Export.Module == hal_dispatch::Provider &&
+                   Export.Name == hal_dispatch::CacheFunction
+               ? std::optional<unsigned>{3}
+               : std::nullopt;
+  if (auto Count = subsystemArgumentCount(Export))
+    return Count;
+  if (Export.Kind == KernelExportRegistry::ExportKind::ObjectTypeData ||
+      Export.Kind == KernelExportRegistry::ExportKind::ProcessData ||
+      Export.Kind == KernelExportRegistry::ExportKind::ProcessorData ||
+      Export.Kind == KernelExportRegistry::ExportKind::NlsData ||
+      Export.Kind == KernelExportRegistry::ExportKind::HalDispatchData)
+    return std::nullopt;
   if (Export.Kind == KernelExportRegistry::ExportKind::ModuleExport &&
-      Export.Module == KernelProvider)
+      (Export.Module == KernelProvider || isHALKernelExport(Export)))
     return argumentCount(Export.Name);
   if (Export.Kind == KernelExportRegistry::ExportKind::ModuleExport &&
       Export.Module == HALProvider)
@@ -296,6 +327,25 @@ llvm::Expected<uint64_t> KernelModel::call(
     const KernelContextCapture *Context) {
   if (Export.Kind == KernelExportRegistry::ExportKind::ModuleData)
     return llvm::createStringError("kernel data exports are not callable");
+  if (subsystemArgumentCount(Export))
+    return callSubsystem(Export, Arguments);
+  if (Export.Kind == KernelExportRegistry::ExportKind::HalDispatchFunction)
+    return callHalDispatch(Export, Arguments);
+  if (Export.Kind == KernelExportRegistry::ExportKind::HalDispatchData)
+    return llvm::createStringError(llvm::inconvertibleErrorCode(),
+                                   "HAL dispatch data is not callable");
+  if (Export.Kind == KernelExportRegistry::ExportKind::ObjectTypeData)
+    return llvm::createStringError(llvm::inconvertibleErrorCode(),
+                                   "object-type data is not callable");
+  if (Export.Kind == KernelExportRegistry::ExportKind::ProcessData)
+    return llvm::createStringError(llvm::inconvertibleErrorCode(),
+                                   "process data is not callable");
+  if (Export.Kind == KernelExportRegistry::ExportKind::ProcessorData)
+    return llvm::createStringError(llvm::inconvertibleErrorCode(),
+                                   "processor data is not callable");
+  if (Export.Kind == KernelExportRegistry::ExportKind::NlsData)
+    return llvm::createStringError(llvm::inconvertibleErrorCode(),
+                                   "NLS data is not callable");
   if (Export.Kind == KernelExportRegistry::ExportKind::ModuleExport &&
       Export.Module == KernelProvider)
     return call(Export.Name, Arguments, ReadArgument, Context);
@@ -418,6 +468,18 @@ std::optional<KernelGuestCall> KernelModel::takeGuestCall() {
 }
 
 std::optional<KernelGuestCall> KernelModel::takeIndependentGuestCall() {
+  if (PendingServiceCall)
+    return std::exchange(PendingServiceCall, std::nullopt);
+  if (PendingAvlCall)
+    return std::exchange(PendingAvlCall, std::nullopt);
+  if (PendingThreadNotify)
+    return std::exchange(PendingThreadNotify, std::nullopt);
+  if (PendingRegistryCallback)
+    return std::exchange(PendingRegistryCallback, std::nullopt);
+  if (PendingProcessNotify)
+    return std::exchange(PendingProcessNotify, std::nullopt);
+  if (PendingExecutiveCallback)
+    return std::exchange(PendingExecutiveCallback, std::nullopt);
   if (PendingDMACall)
     return std::exchange(PendingDMACall, std::nullopt);
   if (PendingInterruptCall)
@@ -439,6 +501,18 @@ KernelModel::finishGuestCall(GuestCallToken Token, uint64_t Result) {
     return llvm::createStringError(llvm::inconvertibleErrorCode(),
                                    "guest callback has no continuation token");
   switch (Token.Owner) {
+  case GuestCallOwner::DriverService:
+    return finishServiceCall(Token.ID, Result);
+  case GuestCallOwner::Avl:
+    return finishAvlCall(Token.ID, Result);
+  case GuestCallOwner::ThreadNotify:
+    return finishThreadNotify(Token.ID);
+  case GuestCallOwner::RegistryCallback:
+    return finishRegistryCallback(Token.ID, Result);
+  case GuestCallOwner::ProcessNotify:
+    return finishProcessNotify(Token.ID);
+  case GuestCallOwner::ExecutiveCallback:
+    return finishExecutiveCallback(Token.ID);
   case GuestCallOwner::Framework: {
     if (!Framework)
       return llvm::createStringError(llvm::inconvertibleErrorCode(),

@@ -15,6 +15,9 @@
 
 #include "neverd/emulation/ExecutionCommand.h"
 #include "neverd/emulation/ExecutionRunJSON.h"
+#ifdef NEVERD_ENABLE_DRIVER_EMULATION
+#include "neverd/emulation/DriverExecutionFactory.h"
+#endif
 
 #ifdef NEVERD_ENABLE_CPU_EMULATION
 #include "ExecutionHandle.h"
@@ -244,6 +247,16 @@ neverd_execution_create_v1(const neverd_execution_options_v1 *Options,
           if (Input->EnvironmentKind == "buffer")
             return e::createBufferExecution(std::move(*Input),
                                             Sources->state().Sources);
+          if (Input->EnvironmentKind == "windows-driver") {
+#ifdef NEVERD_ENABLE_DRIVER_EMULATION
+            return e::createDriverExecution(std::move(*Input),
+                                            Sources->state().Sources,
+                                            Sources->state().BaseDirectory);
+#else
+            return failure(
+                "Windows driver emulation is disabled in this build");
+#endif
+          }
           return failure("unsupported execution environment: " +
                          Input->EnvironmentKind);
         }();

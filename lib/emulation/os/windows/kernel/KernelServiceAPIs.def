@@ -1,0 +1,3 @@
+// Exact public NT service-call ABI; state belongs to KernelModelServices.
+NEVERD_KERNEL_SERVICE_API(ZwLoadDriver)
+NEVERD_KERNEL_SERVICE_API(ZwUnloadDriver)

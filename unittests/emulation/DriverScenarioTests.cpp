@@ -13,6 +13,7 @@
 
 #include "neverd/emulation/DriverSession.h"
 
+#include "llvm/Support/FormatVariadic.h"
 #include "llvm/Support/JSON.h"
 
 namespace neverd::emulation {
@@ -221,6 +222,148 @@ TEST(DriverScenario, WriteTraceSelectionIsExplicitAndRoundTrips) {
     ASSERT_FALSE(bool(Rejected)) << Invalid;
     llvm::consumeError(Rejected.takeError());
   }
+}
+
+TEST(DriverScenario, IRPInitializationPolicyIsExplicitAndVersionScoped) {
+  auto Default = driverOptionsFromScenarioJSON(
+      R"({"windows_version":{"major":10,"minor":0,"build":19041}})");
+  ASSERT_TRUE(bool(Default)) << llvm::toString(Default.takeError());
+  EXPECT_EQ(Default->IRPInitializationPolicy,
+            DriverIRPInitializationPolicy::Strict);
+  for (
+      const char *JSON :
+      {R"({"irp_initialization_policy":"windows-19041"})",
+       R"({"irp_initialization_policy":true})",
+       R"({"irp_initialization_policy":null})",
+       R"({"irp_initialization_policy":"native"})",
+       R"({"irp_initialization_policy":"windows-19041","windows_version":{"major":10,"minor":0,"build":22621}})"}) {
+    auto Parsed = driverOptionsFromScenarioJSON(JSON);
+    ASSERT_FALSE(bool(Parsed));
+    llvm::consumeError(Parsed.takeError());
+  }
+  auto Parsed = driverOptionsFromScenarioJSON(
+      R"({"irp_initialization_policy":"windows-19041","windows_version":{"major":10,"minor":0,"build":19041}})");
+  ASSERT_TRUE(bool(Parsed)) << llvm::toString(Parsed.takeError());
+  EXPECT_EQ(Parsed->IRPInitializationPolicy,
+            DriverIRPInitializationPolicy::Windows19041);
+  auto Cleared = driverOptionsFromScenarioJSON(
+      R"({"irp_initialization_policy":"strict"})", *Parsed);
+  ASSERT_TRUE(bool(Cleared)) << llvm::toString(Cleared.takeError());
+  EXPECT_EQ(Cleared->IRPInitializationPolicy,
+            DriverIRPInitializationPolicy::Strict);
+  Parsed->IRPInitializationPolicy =
+      static_cast<DriverIRPInitializationPolicy>(42);
+  auto Invalid = driverOptionsFromScenarioJSON("{}", *Parsed);
+  ASSERT_FALSE(bool(Invalid));
+  llvm::consumeError(Invalid.takeError());
+}
+
+TEST(DriverScenario, NativeMDLMappingPolicyIsExplicitAndVersionScoped) {
+  for (const char *JSON : {R"({"mdl_mapping_policy":"windows-19041"})",
+                           R"({"mdl_mapping_policy":true})",
+                           R"({"mdl_mapping_policy":"native"})"}) {
+    auto Parsed = driverOptionsFromScenarioJSON(JSON);
+    ASSERT_FALSE(bool(Parsed));
+    llvm::consumeError(Parsed.takeError());
+  }
+  auto Parsed = driverOptionsFromScenarioJSON(
+      R"({"mdl_mapping_policy":"windows-19041","windows_version":{"major":10,"minor":0,"build":19041}})");
+  ASSERT_TRUE(bool(Parsed)) << llvm::toString(Parsed.takeError());
+  EXPECT_EQ(Parsed->MDLMappingPolicy, DriverMDLMappingPolicy::Windows19041);
+  DriverOptions Invalid = *Parsed;
+  Invalid.MDLMappingPolicy = static_cast<DriverMDLMappingPolicy>(42);
+  auto Rejected = driverOptionsFromScenarioJSON("{}", Invalid);
+  ASSERT_FALSE(bool(Rejected));
+  llvm::consumeError(Rejected.takeError());
+}
+
+TEST(DriverScenario,
+     GuestPageTablesRequireExplicitVersionAndBooleanConfiguration) {
+  for (
+      const char *JSON :
+      {R"({"page_tables":true})", R"({"page_tables":1})",
+       R"({"page_tables":null})",
+       R"({"page_tables":true,"windows_version":{"major":10,"minor":0,"build":18362}})"}) {
+    auto Parsed = driverOptionsFromScenarioJSON(JSON);
+    ASSERT_FALSE(bool(Parsed));
+    llvm::consumeError(Parsed.takeError());
+  }
+  auto Parsed = driverOptionsFromScenarioJSON(
+      R"({"page_tables":true,"windows_version":{"major":10,"minor":0,"build":19041}})");
+  ASSERT_TRUE(bool(Parsed)) << llvm::toString(Parsed.takeError());
+  EXPECT_TRUE(Parsed->PageTables);
+  auto Cleared =
+      driverOptionsFromScenarioJSON(R"({"page_tables":false})", *Parsed);
+  ASSERT_TRUE(bool(Cleared)) << llvm::toString(Cleared.takeError());
+  EXPECT_FALSE(Cleared->PageTables);
+}
+
+TEST(DriverScenario, CPUIDQueriesAreExplicitBoundedAndSerializable) {
+  constexpr auto JSON = R"({"cpuid":[{"leaf":1073741824,"subleaf":4294967295,
+    "eax":2147483648,"ebx":1,"ecx":2,"edx":4294967295}]})";
+  auto Options = driverOptionsFromScenarioJSON(JSON);
+  ASSERT_TRUE(bool(Options)) << llvm::toString(Options.takeError());
+  ASSERT_EQ(Options->CPUID.size(), 1u);
+  const auto &Query = *Options->CPUID.begin();
+  EXPECT_EQ(Query.Leaf, 0x40000000u);
+  EXPECT_EQ(Query.Subleaf, UINT32_MAX);
+  EXPECT_EQ(Query.Registers,
+            (std::array<uint32_t, 4>{0x80000000, 1, 2, UINT32_MAX}));
+  DriverResult Result;
+  Result.Configuration = *Options;
+  auto Report = llvm::json::parse(driverResultJSON(Result));
+  ASSERT_TRUE(bool(Report)) << llvm::toString(Report.takeError());
+  const auto *Configuration = Report->getAsObject()->getObject("configuration");
+  ASSERT_NE(Configuration, nullptr);
+  const auto *Queries = Configuration->get("cpuid");
+  ASSERT_NE(Queries, nullptr);
+  auto Restored = driverOptionsFromScenarioJSON(
+      "{\"cpuid\":" + llvm::formatv("{0}", *Queries).str() + "}");
+  ASSERT_TRUE(bool(Restored)) << llvm::toString(Restored.takeError());
+  ASSERT_EQ(Restored->CPUID.size(), Options->CPUID.size());
+  EXPECT_EQ(Restored->CPUID.front().Leaf, Options->CPUID.front().Leaf);
+  EXPECT_EQ(Restored->CPUID.front().Subleaf, Options->CPUID.front().Subleaf);
+  EXPECT_EQ(Restored->CPUID.front().Registers,
+            Options->CPUID.front().Registers);
+  auto Cleared = driverOptionsFromScenarioJSON(R"({"cpuid":[]})", *Options);
+  ASSERT_TRUE(bool(Cleared)) << llvm::toString(Cleared.takeError());
+  EXPECT_TRUE(Cleared->CPUID.empty());
+}
+
+TEST(DriverScenario, RejectsMalformedOrDuplicateCPUIDObservations) {
+  for (
+      const char *JSON :
+      {R"({"cpuid":null})", R"({"cpuid":{}})", R"({"cpuid":[null]})",
+       R"({"cpuid":[{"leaf":0}]})",
+       R"({"cpuid":[{"leaf":-1,"subleaf":0,"eax":0,"ebx":0,"ecx":0,"edx":0}]})",
+       R"({"cpuid":[{"leaf":0,"subleaf":0,"eax":4294967296,"ebx":0,"ecx":0,"edx":0}]})",
+       R"({"cpuid":[{"leaf":0,"subleaf":0,"eax":0,"ebx":0,"ecx":0,"edx":false}]})",
+       R"({"cpuid":[{"leaf":0,"subleaf":0,"eax":0,"ebx":0,"ecx":0,"edx":0,"extra":0}]})",
+       R"({"cpuid":[{"leaf":0,"subleaf":0,"eax":0,"ebx":0,"ecx":0,"edx":0},
+                         {"leaf":0,"subleaf":0,"eax":1,"ebx":0,"ecx":0,"edx":0}]})"}) {
+    SCOPED_TRACE(JSON);
+    auto Parsed = driverOptionsFromScenarioJSON(JSON);
+    ASSERT_FALSE(bool(Parsed));
+    llvm::consumeError(Parsed.takeError());
+  }
+  DriverOptions Base;
+  for (unsigned I = 0; I < profile::MaxCPUIDEntries; ++I)
+    Base.CPUID.push_back({I, 0, {}});
+  auto AtLimit = driverOptionsFromScenarioJSON("{}", Base);
+  ASSERT_TRUE(bool(AtLimit)) << llvm::toString(AtLimit.takeError());
+  Base.CPUID.push_back({profile::MaxCPUIDEntries, 0, {}});
+  auto TooMany = driverOptionsFromScenarioJSON("{}", Base);
+  ASSERT_FALSE(bool(TooMany));
+  EXPECT_NE(llvm::toString(TooMany.takeError()).find("entry limit"),
+            std::string::npos);
+  std::string Array = "{\"cpuid\":[";
+  for (unsigned I = 0; I < profile::MaxCPUIDEntries; ++I)
+    Array += "null,";
+  Array += "null]}";
+  auto Oversized = driverOptionsFromScenarioJSON(Array);
+  ASSERT_FALSE(bool(Oversized));
+  EXPECT_NE(llvm::toString(Oversized.takeError()).find("entry limit"),
+            std::string::npos);
 }
 
 TEST(DriverScenario, ParsesOrderedLifecycleWithoutChangingExecutionBudgets) {
@@ -1204,6 +1347,64 @@ TEST(DriverScenario, UserMemoryReportSeparatesConfigurationAndObservedBacking) {
   EXPECT_EQ(State->getInteger("size"), 16);
   EXPECT_EQ(State->get("input"), nullptr);
   EXPECT_EQ((*Requests)[1].getAsObject()->getString("output_hex"), "");
+}
+
+TEST(DriverScenario, KernelReferenceAndVersionAreExplicitBoundedGuestInputs) {
+  auto Options = driverOptionsFromScenarioJSON(R"({
+    "kernel_image":"reference/ntoskrnl.exe",
+    "kernel_pdb":"reference/ntkrnlmp.pdb",
+    "windows_version":{"major":10,"minor":0,"build":19041}
+  })");
+  ASSERT_TRUE(bool(Options)) << llvm::toString(Options.takeError());
+  ASSERT_TRUE(Options->Version);
+  EXPECT_EQ(Options->Version->Major, 10u);
+  EXPECT_EQ(Options->Version->Build, 19041u);
+  EXPECT_EQ(Options->KernelImage.generic_string(), "reference/ntoskrnl.exe");
+  EXPECT_EQ(Options->KernelPDB.generic_string(), "reference/ntkrnlmp.pdb");
+  for (
+      const char *Text :
+      {R"({"kernel_image":""})", R"({"kernel_image":false})",
+       R"({"kernel_pdb":"x.pdb"})",
+       R"({"kernel_image":"x.exe","kernel_pdb":""})",
+       R"({"kernel_image":"x.exe","kernel_pdb":true})",
+       R"({"kernel_image":"x.exe","kernel_pdb":"x\u0000y"})",
+       R"({"kernel_image":"x\u0000y"})", R"({"windows_version":null})",
+       R"({"windows_version":{"major":10,"minor":0}})",
+       R"({"windows_version":{"major":10,"minor":0,"build":-1}})",
+       R"({"windows_version":{"major":10,"minor":0,"build":4294967296}})",
+       R"({"windows_version":{"major":10,"minor":0,"build":19041,"extra":1}})"}) {
+    SCOPED_TRACE(Text);
+    auto Rejected = driverOptionsFromScenarioJSON(Text);
+    ASSERT_FALSE(bool(Rejected));
+    llvm::consumeError(Rejected.takeError());
+  }
+  DriverResult Report;
+  Report.Configuration = *Options;
+  auto JSON = llvm::cantFail(llvm::json::parse(driverResultJSON(Report)));
+  const auto *Config = JSON.getAsObject()->getObject("configuration");
+  ASSERT_NE(Config, nullptr);
+  EXPECT_EQ(Config->getString("kernel_image"), "reference/ntoskrnl.exe");
+  EXPECT_EQ(Config->getString("kernel_pdb"), "reference/ntkrnlmp.pdb");
+  ASSERT_NE(Config->getObject("windows_version"), nullptr);
+  EXPECT_EQ(Config->getObject("windows_version")->getInteger("build"), 19041);
+}
+
+TEST(DriverScenario, PoolTagPolicyIsExplicitAndBoundToItsWindowsProfile) {
+  auto Options = driverOptionsFromScenarioJSON(R"({
+    "pool_tag_policy":"windows-19041",
+    "windows_version":{"major":10,"minor":0,"build":19041}
+  })");
+  ASSERT_TRUE(bool(Options)) << llvm::toString(Options.takeError());
+  EXPECT_EQ(Options->PoolTagPolicy, DriverPoolTagPolicy::Windows19041);
+  for (
+      const char *JSON :
+      {R"({"pool_tag_policy":false})", R"({"pool_tag_policy":"skip"})",
+       R"({"pool_tag_policy":"windows-19041"})",
+       R"({"pool_tag_policy":"windows-19041","windows_version":{"major":10,"minor":0,"build":18362}})"}) {
+    auto Rejected = driverOptionsFromScenarioJSON(JSON);
+    ASSERT_FALSE(bool(Rejected));
+    llvm::consumeError(Rejected.takeError());
+  }
 }
 
 } // namespace

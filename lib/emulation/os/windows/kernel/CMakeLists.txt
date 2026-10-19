@@ -1,7 +1,14 @@
 target_sources(NeverDEmulation PRIVATE
+  KernelAnsiStrings.cpp
   KernelExportRegistry.cpp
   KernelModuleImages.cpp
   KernelSystemInformation.cpp
+  KernelGuestPageTables.cpp
+  KernelReferenceImage.cpp
+  KernelReferenceExports.cpp
+  KernelReferenceInitializer.cpp
+  KernelReferenceThread.cpp
+  KernelGuardBitmap.cpp
   KernelException.cpp
   KernelFramework.cpp
   KernelFrameworkDispatch.cpp
@@ -22,6 +29,14 @@ target_sources(NeverDEmulation PRIVATE
   KernelModelFrameworkUsbIdle.cpp
   KernelModelUsbIdle.cpp
   KernelModelProviderReceipt.cpp
+  KernelModelControlRequests.cpp
+  KernelModelSubsystems.cpp
+  KernelModelFilterNames.cpp
+  KernelModelNetio.cpp
+  KernelModelNdisConfiguration.cpp
+  KernelModelHalDispatch.cpp
+  KernelModelAvl.cpp
+  KernelModelServices.cpp
   KernelModelDriverIRP.cpp
   KernelModelDriverIRPRequests.cpp
   KernelPoFx.cpp
@@ -45,11 +60,27 @@ target_sources(NeverDEmulation PRIVATE
   KernelFrameworkRequestCalls.cpp
   KernelFrameworkRequestAccessors.cpp
   KernelModelFramework.cpp
+  KernelModelCallbacks.cpp
+  KernelModelProcessNotify.cpp
+  KernelModelProcessCreate.cpp
+  KernelModelThreadNotify.cpp
+  KernelModelRegistryCallbacks.cpp
+  KernelModelRegistryEvents.cpp
   KernelModelFrameworkRequests.cpp
   KernelModelExports.cpp
+  KernelModelObjectTypes.cpp
+  KernelModelThreadIdentity.cpp
+  KernelModelNativeThread.cpp
+  KernelModelProcessor.cpp
+  KernelModelPlatform.cpp
+  KernelModelCodeIntegrity.cpp
+  KernelModelFirmware.cpp
+  KernelModelFirmwareQueries.cpp
+  KernelModelDriverObjects.cpp
   KernelModel.cpp
   KernelFileSystem.cpp
   KernelModelFileCreate.cpp
+  KernelModelFiniteFileSystem.cpp
   KernelModelFileSystem.cpp
   KernelLoaderView.cpp
   KernelVersionQuery.cpp
@@ -59,12 +90,37 @@ target_sources(NeverDEmulation PRIVATE
   KernelModelContextCapture.cpp
   KernelModelVersion.cpp
   KernelUnpackState.cpp
+  KernelModelClock.cpp
+  KernelModelSections.cpp
+  KernelModelFileInformation.cpp
+  KernelModelLoadedModule.cpp
+  KernelModelModulePublication.cpp
+  KernelModelSystemInformation.cpp
+  KernelModelProcessInformation.cpp
+  KernelModelProcessImageName.cpp
+  KernelModelProcessSectionBase.cpp
+  KernelModelProcessPeb.cpp
+  KernelModelDeviceProperties.cpp
+  KernelModelNlsData.cpp
+  KernelModelPciConfiguration.cpp
+  KernelModelProcessExitStatus.cpp
+  KernelModelProcessMemory.cpp
+  KernelModelImageSections.cpp
+  KernelModelVirtualMemory.cpp
+  KernelModelProcessData.cpp
+  KernelModelBugCheck.cpp
+  KernelModelPersistentDump.cpp
+  KernelModelDebuggerData.cpp
   KernelCalls.cpp
   KernelIRPCalls.cpp
   KernelMDLCalls.cpp
   KernelRuntimeCalls.cpp
+  KernelCrtStrings.cpp
+  KernelStringConversion.cpp
   KernelPoolCalls.cpp
   KernelObjectCalls.cpp
+  KernelModelObjectBuffer.cpp
+  KernelModelDeclaredVersion.cpp
   KernelMemoryCalls.cpp
   KernelModelBugCheck.cpp
   KernelModelIO.cpp
@@ -76,6 +132,7 @@ target_sources(NeverDEmulation PRIVATE
   KernelModelUserMemory.cpp
   KernelModelPhysicalMemory.cpp
   KernelModelMDL.cpp
+  KernelModelReservedMappings.cpp
   KernelModelMDLUserMappings.cpp
   KernelModelIRPStack.cpp
   KernelModelDeviceStack.cpp

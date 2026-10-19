@@ -1,0 +1,2 @@
+LIBRARY ndis.sys EXPORTS NdisOpenConfigurationEx
+    NdisReadConfiguration NdisCloseConfiguration

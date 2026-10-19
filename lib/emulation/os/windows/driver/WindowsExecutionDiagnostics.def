@@ -12,6 +12,8 @@ NEVERD_WINDOWS_EXECUTION_DIAGNOSTIC(
 NEVERD_WINDOWS_EXECUTION_DIAGNOSTIC(Rejected,
                                     "unmodeled CPU environment instruction: ")
 NEVERD_WINDOWS_EXECUTION_DIAGNOSTIC(
+    CR3Read, "unmodeled CR3 read requires guest-owned page tables")
+NEVERD_WINDOWS_EXECUTION_DIAGNOSTIC(
     Destination, "environment read has an unsupported full-width destination")
 NEVERD_WINDOWS_EXECUTION_DIAGNOSTIC(
     ThreadProfile,

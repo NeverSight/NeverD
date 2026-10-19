@@ -1,0 +1,315 @@
+// Original 19041 HAL wrappers with explicit owned PCI transport; no hardware
+// side effects. Observation SHA256:
+// c9cc4d97c15ef5ccfa41ede0d9247633ad238200800530c5efc0ac7e6931f392
+NEVERD_PCI_NATIVE_CASE(
+    false, false, 0, 0, 0, 0,
+    "f600eca824e84a43f0691b267bd620e462c50da165c5b80e17aecb7a924f1fa8")
+NEVERD_PCI_NATIVE_CASE(
+    false, false, 0, 0, 1, 1,
+    "6e59f62abcd66235975c2a1b43aae20618a649c6531dc8953064b3b7295e6966")
+NEVERD_PCI_NATIVE_CASE(
+    false, false, 0, 0, 4, 2,
+    "b0086e6b5d5e1c1eb7d7964d1d21a9aa0d19e844d6034fb758fb4a2966500917")
+NEVERD_PCI_NATIVE_CASE(
+    false, false, 0, 1, 8, 1,
+    "6e59f62abcd66235975c2a1b43aae20618a649c6531dc8953064b3b7295e6966")
+NEVERD_PCI_NATIVE_CASE(
+    false, false, 0, 2, 8, 0,
+    "f600eca824e84a43f0691b267bd620e462c50da165c5b80e17aecb7a924f1fa8")
+NEVERD_PCI_NATIVE_CASE(
+    false, false, 0, 4, 2, 0,
+    "f600eca824e84a43f0691b267bd620e462c50da165c5b80e17aecb7a924f1fa8")
+NEVERD_PCI_NATIVE_CASE(
+    false, false, 0, 60, 8, 0,
+    "f600eca824e84a43f0691b267bd620e462c50da165c5b80e17aecb7a924f1fa8")
+NEVERD_PCI_NATIVE_CASE(
+    false, false, 0, 63, 2, 0,
+    "f600eca824e84a43f0691b267bd620e462c50da165c5b80e17aecb7a924f1fa8")
+NEVERD_PCI_NATIVE_CASE(
+    false, false, 0, 64, 8, 0,
+    "f600eca824e84a43f0691b267bd620e462c50da165c5b80e17aecb7a924f1fa8")
+NEVERD_PCI_NATIVE_CASE(
+    false, false, 0, 255, 2, 0,
+    "f600eca824e84a43f0691b267bd620e462c50da165c5b80e17aecb7a924f1fa8")
+NEVERD_PCI_NATIVE_CASE(
+    false, false, 0, 256, 8, 0,
+    "f600eca824e84a43f0691b267bd620e462c50da165c5b80e17aecb7a924f1fa8")
+NEVERD_PCI_NATIVE_CASE(
+    false, false, 0, 4095, 1, 0,
+    "f600eca824e84a43f0691b267bd620e462c50da165c5b80e17aecb7a924f1fa8")
+NEVERD_PCI_NATIVE_CASE(
+    false, false, 0, 0, 4097, 2,
+    "b0086e6b5d5e1c1eb7d7964d1d21a9aa0d19e844d6034fb758fb4a2966500917")
+NEVERD_PCI_NATIVE_CASE(
+    false, false, 1, 0, 0, 0,
+    "f600eca824e84a43f0691b267bd620e462c50da165c5b80e17aecb7a924f1fa8")
+NEVERD_PCI_NATIVE_CASE(
+    false, false, 1, 0, 1, 1,
+    "6e59f62abcd66235975c2a1b43aae20618a649c6531dc8953064b3b7295e6966")
+NEVERD_PCI_NATIVE_CASE(
+    false, false, 1, 0, 4, 2,
+    "b0086e6b5d5e1c1eb7d7964d1d21a9aa0d19e844d6034fb758fb4a2966500917")
+NEVERD_PCI_NATIVE_CASE(
+    false, false, 1, 1, 8, 1,
+    "6e59f62abcd66235975c2a1b43aae20618a649c6531dc8953064b3b7295e6966")
+NEVERD_PCI_NATIVE_CASE(
+    false, false, 1, 2, 8, 0,
+    "f600eca824e84a43f0691b267bd620e462c50da165c5b80e17aecb7a924f1fa8")
+NEVERD_PCI_NATIVE_CASE(
+    false, false, 1, 4, 2, 0,
+    "f600eca824e84a43f0691b267bd620e462c50da165c5b80e17aecb7a924f1fa8")
+NEVERD_PCI_NATIVE_CASE(
+    false, false, 1, 60, 8, 0,
+    "f600eca824e84a43f0691b267bd620e462c50da165c5b80e17aecb7a924f1fa8")
+NEVERD_PCI_NATIVE_CASE(
+    false, false, 1, 63, 2, 0,
+    "f600eca824e84a43f0691b267bd620e462c50da165c5b80e17aecb7a924f1fa8")
+NEVERD_PCI_NATIVE_CASE(
+    false, false, 1, 64, 8, 0,
+    "f600eca824e84a43f0691b267bd620e462c50da165c5b80e17aecb7a924f1fa8")
+NEVERD_PCI_NATIVE_CASE(
+    false, false, 1, 255, 2, 0,
+    "f600eca824e84a43f0691b267bd620e462c50da165c5b80e17aecb7a924f1fa8")
+NEVERD_PCI_NATIVE_CASE(
+    false, false, 1, 256, 8, 0,
+    "f600eca824e84a43f0691b267bd620e462c50da165c5b80e17aecb7a924f1fa8")
+NEVERD_PCI_NATIVE_CASE(
+    false, false, 1, 4095, 1, 0,
+    "f600eca824e84a43f0691b267bd620e462c50da165c5b80e17aecb7a924f1fa8")
+NEVERD_PCI_NATIVE_CASE(
+    false, false, 1, 0, 4097, 2,
+    "b0086e6b5d5e1c1eb7d7964d1d21a9aa0d19e844d6034fb758fb4a2966500917")
+NEVERD_PCI_NATIVE_CASE(
+    false, true, 0, 0, 0, 0,
+    "f600eca824e84a43f0691b267bd620e462c50da165c5b80e17aecb7a924f1fa8")
+NEVERD_PCI_NATIVE_CASE(
+    false, true, 0, 0, 1, 1,
+    "13ab42ea6fa01194729b49c6ec8e96893d500cb59a881496c448a120f54c571c")
+NEVERD_PCI_NATIVE_CASE(
+    false, true, 0, 0, 4, 4,
+    "b80d1f486362ccfebc52e7f1373838bea7c3167e499b299dcc2a475bcafc605a")
+NEVERD_PCI_NATIVE_CASE(
+    false, true, 0, 1, 8, 8,
+    "30771c305085baea8c702523d58d1f92b67ad3d26f97175384c6b4d40ce33630")
+NEVERD_PCI_NATIVE_CASE(
+    false, true, 0, 2, 8, 8,
+    "32857175d31932d734b090168ba8e8ae2ab95e3d2f6444756133a9d68932a71a")
+NEVERD_PCI_NATIVE_CASE(
+    false, true, 0, 4, 2, 2,
+    "f354b39602c7512dfdbea5b8f85e2746220a0d91a2a922947da3d0cc840d431c")
+NEVERD_PCI_NATIVE_CASE(
+    false, true, 0, 60, 8, 8,
+    "c7c3552b7b081f333da1a6aa3a369d430dd0f6d1e07b16eb9fbc9e65ba2dface")
+NEVERD_PCI_NATIVE_CASE(
+    false, true, 0, 63, 2, 2,
+    "9431c1ad13a679044077dd89f2116aa344c8299846a221306d944ab1fad3cc44")
+NEVERD_PCI_NATIVE_CASE(
+    false, true, 0, 64, 8, 8,
+    "7cd3baa92dadb99ca97ad70e436d152d62a1d5749d8eddcff382ba6545765e27")
+NEVERD_PCI_NATIVE_CASE(
+    false, true, 0, 255, 2, 2,
+    "f5a83328b83f3ad455452f848d2e3d2d025bc46ab7cad133a8ac1ec4ba73c22e")
+NEVERD_PCI_NATIVE_CASE(
+    false, true, 0, 256, 8, 8,
+    "093f44cda2a96bf587e8894f54a1822db2dded13a2912f00ac5e5f1c5bf13d3e")
+NEVERD_PCI_NATIVE_CASE(
+    false, true, 0, 4095, 1, 1,
+    "6e59f62abcd66235975c2a1b43aae20618a649c6531dc8953064b3b7295e6966")
+NEVERD_PCI_NATIVE_CASE(
+    false, true, 0, 0, 4097, 4096,
+    "76767d86b91cd1ca9481524dbcdc57bebe4476400400ce46a5536549eb9af451")
+NEVERD_PCI_NATIVE_CASE(
+    false, true, 1, 0, 0, 0,
+    "f600eca824e84a43f0691b267bd620e462c50da165c5b80e17aecb7a924f1fa8")
+NEVERD_PCI_NATIVE_CASE(
+    false, true, 1, 0, 1, 1,
+    "13ab42ea6fa01194729b49c6ec8e96893d500cb59a881496c448a120f54c571c")
+NEVERD_PCI_NATIVE_CASE(
+    false, true, 1, 0, 4, 4,
+    "b80d1f486362ccfebc52e7f1373838bea7c3167e499b299dcc2a475bcafc605a")
+NEVERD_PCI_NATIVE_CASE(
+    false, true, 1, 1, 8, 8,
+    "30771c305085baea8c702523d58d1f92b67ad3d26f97175384c6b4d40ce33630")
+NEVERD_PCI_NATIVE_CASE(
+    false, true, 1, 2, 8, 8,
+    "32857175d31932d734b090168ba8e8ae2ab95e3d2f6444756133a9d68932a71a")
+NEVERD_PCI_NATIVE_CASE(
+    false, true, 1, 4, 2, 2,
+    "f354b39602c7512dfdbea5b8f85e2746220a0d91a2a922947da3d0cc840d431c")
+NEVERD_PCI_NATIVE_CASE(
+    false, true, 1, 60, 8, 8,
+    "c7c3552b7b081f333da1a6aa3a369d430dd0f6d1e07b16eb9fbc9e65ba2dface")
+NEVERD_PCI_NATIVE_CASE(
+    false, true, 1, 63, 2, 2,
+    "9431c1ad13a679044077dd89f2116aa344c8299846a221306d944ab1fad3cc44")
+NEVERD_PCI_NATIVE_CASE(
+    false, true, 1, 64, 8, 8,
+    "7cd3baa92dadb99ca97ad70e436d152d62a1d5749d8eddcff382ba6545765e27")
+NEVERD_PCI_NATIVE_CASE(
+    false, true, 1, 255, 2, 2,
+    "f5a83328b83f3ad455452f848d2e3d2d025bc46ab7cad133a8ac1ec4ba73c22e")
+NEVERD_PCI_NATIVE_CASE(
+    false, true, 1, 256, 8, 8,
+    "093f44cda2a96bf587e8894f54a1822db2dded13a2912f00ac5e5f1c5bf13d3e")
+NEVERD_PCI_NATIVE_CASE(
+    false, true, 1, 4095, 1, 1,
+    "6e59f62abcd66235975c2a1b43aae20618a649c6531dc8953064b3b7295e6966")
+NEVERD_PCI_NATIVE_CASE(
+    false, true, 1, 0, 4097, 4096,
+    "47bde4706ddfa94eb4253a572e34433d055866e42a3dcdd63fdba5a9a66615fa")
+NEVERD_PCI_NATIVE_CASE(
+    true, false, 0, 0, 0, 0,
+    "f600eca824e84a43f0691b267bd620e462c50da165c5b80e17aecb7a924f1fa8")
+NEVERD_PCI_NATIVE_CASE(
+    true, false, 0, 0, 1, 0,
+    "f600eca824e84a43f0691b267bd620e462c50da165c5b80e17aecb7a924f1fa8")
+NEVERD_PCI_NATIVE_CASE(
+    true, false, 0, 0, 4, 0,
+    "f600eca824e84a43f0691b267bd620e462c50da165c5b80e17aecb7a924f1fa8")
+NEVERD_PCI_NATIVE_CASE(
+    true, false, 0, 1, 8, 0,
+    "f600eca824e84a43f0691b267bd620e462c50da165c5b80e17aecb7a924f1fa8")
+NEVERD_PCI_NATIVE_CASE(
+    true, false, 0, 2, 8, 0,
+    "f600eca824e84a43f0691b267bd620e462c50da165c5b80e17aecb7a924f1fa8")
+NEVERD_PCI_NATIVE_CASE(
+    true, false, 0, 4, 2, 0,
+    "f600eca824e84a43f0691b267bd620e462c50da165c5b80e17aecb7a924f1fa8")
+NEVERD_PCI_NATIVE_CASE(
+    true, false, 0, 60, 8, 0,
+    "f600eca824e84a43f0691b267bd620e462c50da165c5b80e17aecb7a924f1fa8")
+NEVERD_PCI_NATIVE_CASE(
+    true, false, 0, 63, 2, 0,
+    "f600eca824e84a43f0691b267bd620e462c50da165c5b80e17aecb7a924f1fa8")
+NEVERD_PCI_NATIVE_CASE(
+    true, false, 0, 64, 8, 0,
+    "f600eca824e84a43f0691b267bd620e462c50da165c5b80e17aecb7a924f1fa8")
+NEVERD_PCI_NATIVE_CASE(
+    true, false, 0, 255, 2, 0,
+    "f600eca824e84a43f0691b267bd620e462c50da165c5b80e17aecb7a924f1fa8")
+NEVERD_PCI_NATIVE_CASE(
+    true, false, 0, 256, 8, 0,
+    "f600eca824e84a43f0691b267bd620e462c50da165c5b80e17aecb7a924f1fa8")
+NEVERD_PCI_NATIVE_CASE(
+    true, false, 0, 4095, 1, 0,
+    "f600eca824e84a43f0691b267bd620e462c50da165c5b80e17aecb7a924f1fa8")
+NEVERD_PCI_NATIVE_CASE(
+    true, false, 0, 0, 4097, 0,
+    "f600eca824e84a43f0691b267bd620e462c50da165c5b80e17aecb7a924f1fa8")
+NEVERD_PCI_NATIVE_CASE(
+    true, false, 1, 0, 0, 0,
+    "f600eca824e84a43f0691b267bd620e462c50da165c5b80e17aecb7a924f1fa8")
+NEVERD_PCI_NATIVE_CASE(
+    true, false, 1, 0, 1, 0,
+    "f600eca824e84a43f0691b267bd620e462c50da165c5b80e17aecb7a924f1fa8")
+NEVERD_PCI_NATIVE_CASE(
+    true, false, 1, 0, 4, 0,
+    "f600eca824e84a43f0691b267bd620e462c50da165c5b80e17aecb7a924f1fa8")
+NEVERD_PCI_NATIVE_CASE(
+    true, false, 1, 1, 8, 0,
+    "f600eca824e84a43f0691b267bd620e462c50da165c5b80e17aecb7a924f1fa8")
+NEVERD_PCI_NATIVE_CASE(
+    true, false, 1, 2, 8, 0,
+    "f600eca824e84a43f0691b267bd620e462c50da165c5b80e17aecb7a924f1fa8")
+NEVERD_PCI_NATIVE_CASE(
+    true, false, 1, 4, 2, 0,
+    "f600eca824e84a43f0691b267bd620e462c50da165c5b80e17aecb7a924f1fa8")
+NEVERD_PCI_NATIVE_CASE(
+    true, false, 1, 60, 8, 0,
+    "f600eca824e84a43f0691b267bd620e462c50da165c5b80e17aecb7a924f1fa8")
+NEVERD_PCI_NATIVE_CASE(
+    true, false, 1, 63, 2, 0,
+    "f600eca824e84a43f0691b267bd620e462c50da165c5b80e17aecb7a924f1fa8")
+NEVERD_PCI_NATIVE_CASE(
+    true, false, 1, 64, 8, 0,
+    "f600eca824e84a43f0691b267bd620e462c50da165c5b80e17aecb7a924f1fa8")
+NEVERD_PCI_NATIVE_CASE(
+    true, false, 1, 255, 2, 0,
+    "f600eca824e84a43f0691b267bd620e462c50da165c5b80e17aecb7a924f1fa8")
+NEVERD_PCI_NATIVE_CASE(
+    true, false, 1, 256, 8, 0,
+    "f600eca824e84a43f0691b267bd620e462c50da165c5b80e17aecb7a924f1fa8")
+NEVERD_PCI_NATIVE_CASE(
+    true, false, 1, 4095, 1, 0,
+    "f600eca824e84a43f0691b267bd620e462c50da165c5b80e17aecb7a924f1fa8")
+NEVERD_PCI_NATIVE_CASE(
+    true, false, 1, 0, 4097, 0,
+    "f600eca824e84a43f0691b267bd620e462c50da165c5b80e17aecb7a924f1fa8")
+NEVERD_PCI_NATIVE_CASE(
+    true, true, 0, 0, 0, 0,
+    "f600eca824e84a43f0691b267bd620e462c50da165c5b80e17aecb7a924f1fa8")
+NEVERD_PCI_NATIVE_CASE(
+    true, true, 0, 0, 1, 1,
+    "f600eca824e84a43f0691b267bd620e462c50da165c5b80e17aecb7a924f1fa8")
+NEVERD_PCI_NATIVE_CASE(
+    true, true, 0, 0, 4, 4,
+    "f600eca824e84a43f0691b267bd620e462c50da165c5b80e17aecb7a924f1fa8")
+NEVERD_PCI_NATIVE_CASE(
+    true, true, 0, 1, 8, 8,
+    "f600eca824e84a43f0691b267bd620e462c50da165c5b80e17aecb7a924f1fa8")
+NEVERD_PCI_NATIVE_CASE(
+    true, true, 0, 2, 8, 8,
+    "f600eca824e84a43f0691b267bd620e462c50da165c5b80e17aecb7a924f1fa8")
+NEVERD_PCI_NATIVE_CASE(
+    true, true, 0, 4, 2, 2,
+    "f600eca824e84a43f0691b267bd620e462c50da165c5b80e17aecb7a924f1fa8")
+NEVERD_PCI_NATIVE_CASE(
+    true, true, 0, 60, 8, 8,
+    "f600eca824e84a43f0691b267bd620e462c50da165c5b80e17aecb7a924f1fa8")
+NEVERD_PCI_NATIVE_CASE(
+    true, true, 0, 63, 2, 2,
+    "f600eca824e84a43f0691b267bd620e462c50da165c5b80e17aecb7a924f1fa8")
+NEVERD_PCI_NATIVE_CASE(
+    true, true, 0, 64, 8, 8,
+    "f600eca824e84a43f0691b267bd620e462c50da165c5b80e17aecb7a924f1fa8")
+NEVERD_PCI_NATIVE_CASE(
+    true, true, 0, 255, 2, 2,
+    "f600eca824e84a43f0691b267bd620e462c50da165c5b80e17aecb7a924f1fa8")
+NEVERD_PCI_NATIVE_CASE(
+    true, true, 0, 256, 8, 8,
+    "f600eca824e84a43f0691b267bd620e462c50da165c5b80e17aecb7a924f1fa8")
+NEVERD_PCI_NATIVE_CASE(
+    true, true, 0, 4095, 1, 1,
+    "f600eca824e84a43f0691b267bd620e462c50da165c5b80e17aecb7a924f1fa8")
+NEVERD_PCI_NATIVE_CASE(
+    true, true, 0, 0, 4097, 4096,
+    "f600eca824e84a43f0691b267bd620e462c50da165c5b80e17aecb7a924f1fa8")
+NEVERD_PCI_NATIVE_CASE(
+    true, true, 1, 0, 0, 0,
+    "f600eca824e84a43f0691b267bd620e462c50da165c5b80e17aecb7a924f1fa8")
+NEVERD_PCI_NATIVE_CASE(
+    true, true, 1, 0, 1, 0,
+    "f600eca824e84a43f0691b267bd620e462c50da165c5b80e17aecb7a924f1fa8")
+NEVERD_PCI_NATIVE_CASE(
+    true, true, 1, 0, 4, 0,
+    "f600eca824e84a43f0691b267bd620e462c50da165c5b80e17aecb7a924f1fa8")
+NEVERD_PCI_NATIVE_CASE(
+    true, true, 1, 1, 8, 0,
+    "f600eca824e84a43f0691b267bd620e462c50da165c5b80e17aecb7a924f1fa8")
+NEVERD_PCI_NATIVE_CASE(
+    true, true, 1, 2, 8, 0,
+    "f600eca824e84a43f0691b267bd620e462c50da165c5b80e17aecb7a924f1fa8")
+NEVERD_PCI_NATIVE_CASE(
+    true, true, 1, 4, 2, 0,
+    "f600eca824e84a43f0691b267bd620e462c50da165c5b80e17aecb7a924f1fa8")
+NEVERD_PCI_NATIVE_CASE(
+    true, true, 1, 60, 8, 0,
+    "f600eca824e84a43f0691b267bd620e462c50da165c5b80e17aecb7a924f1fa8")
+NEVERD_PCI_NATIVE_CASE(
+    true, true, 1, 63, 2, 0,
+    "f600eca824e84a43f0691b267bd620e462c50da165c5b80e17aecb7a924f1fa8")
+NEVERD_PCI_NATIVE_CASE(
+    true, true, 1, 64, 8, 8,
+    "f600eca824e84a43f0691b267bd620e462c50da165c5b80e17aecb7a924f1fa8")
+NEVERD_PCI_NATIVE_CASE(
+    true, true, 1, 255, 2, 2,
+    "f600eca824e84a43f0691b267bd620e462c50da165c5b80e17aecb7a924f1fa8")
+NEVERD_PCI_NATIVE_CASE(
+    true, true, 1, 256, 8, 8,
+    "f600eca824e84a43f0691b267bd620e462c50da165c5b80e17aecb7a924f1fa8")
+NEVERD_PCI_NATIVE_CASE(
+    true, true, 1, 4095, 1, 1,
+    "f600eca824e84a43f0691b267bd620e462c50da165c5b80e17aecb7a924f1fa8")
+NEVERD_PCI_NATIVE_CASE(
+    true, true, 1, 0, 4097, 0,
+    "f600eca824e84a43f0691b267bd620e462c50da165c5b80e17aecb7a924f1fa8")

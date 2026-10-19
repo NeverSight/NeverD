@@ -1,0 +1,13 @@
+// Module, symbol, Win64 arity, maximum IRQL.
+// Module identity is part of the callable contract; these are not NT exports.
+NEVERD_SUBSYSTEM_API("fltmgr.sys", FltGetFileNameInformationUnsafe, 4, 1)
+NEVERD_SUBSYSTEM_API("fltmgr.sys", FltReleaseFileNameInformation, 1, 1)
+NEVERD_SUBSYSTEM_API("fltmgr.sys", FltReferenceFileNameInformation, 1, 1)
+NEVERD_SUBSYSTEM_API("fltmgr.sys", FltParseFileNameInformation, 1, 1)
+// Pinned WDK GetIfTable2Ex annotation is PASSIVE_LEVEL; FreeMibTable <
+// DISPATCH.
+NEVERD_SUBSYSTEM_API("netio.sys", GetIfTable2Ex, 2, 0)
+NEVERD_SUBSYSTEM_API("netio.sys", FreeMibTable, 1, 1)
+NEVERD_SUBSYSTEM_API("ndis.sys", NdisOpenConfigurationEx, 2, 0)
+NEVERD_SUBSYSTEM_API("ndis.sys", NdisReadConfiguration, 5, 0)
+NEVERD_SUBSYSTEM_API("ndis.sys", NdisCloseConfiguration, 1, 0)

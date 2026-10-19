@@ -127,6 +127,10 @@ llvm::Expected<uint64_t> KernelModel::beginObjectWait(Wait Pending,
     if (!Deadline)
       return Deadline.takeError();
     Pending.Deadline = *Deadline;
+    if (Pending.Type == Wait::Kind::Delay)
+      APICallDetail =
+          "interval_100ns=" + std::to_string(std::bit_cast<int64_t>(*Raw)) +
+          "; deadline_100ns=" + std::to_string(*Deadline);
     PollOnly = !*Raw;
   }
   if (CurrentIRQL > ((Pending.Type != Wait::Kind::Delay && PollOnly)
@@ -271,6 +275,14 @@ KernelModel::pollWait(const Wait &Pending) {
   }
   if (Pending.Type == Wait::Kind::FrameworkWaitLock)
     return pollFrameworkWaitLock(Pending);
+  if (Pending.Type == Wait::Kind::ExecutiveCallbackUnregister)
+    return pollExecutiveUnregister(Pending);
+  if (Pending.Type == Wait::Kind::ProcessNotifyRemove)
+    return pollProcessNotifyRemove(Pending);
+  if (Pending.Type == Wait::Kind::ThreadNotifyRemove)
+    return pollThreadNotifyRemove(Pending);
+  if (Pending.Type == Wait::Kind::RegistryCallbackRemove)
+    return pollRegistryCallbackRemove(Pending);
   if (Pending.Type == Wait::Kind::FrameworkCallback ||
       Pending.Type == Wait::Kind::FrameworkCallbackLock)
     return pollFrameworkCallback(Pending);

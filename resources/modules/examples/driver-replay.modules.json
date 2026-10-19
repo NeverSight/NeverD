@@ -1,0 +1,9 @@
+{
+  "modules": [
+    {"id": "kernel", "image": "images/ntoskrnl.exe", "load": "eager",
+     "debug": {"kind": "pdb", "path": "symbols/ntkrnlmp.pdb"}},
+    {"id": "hal", "image": "images/hal.dll", "load": "lazy"},
+    {"id": "private-helper", "image": "images/my-helper.sys", "load": "lazy",
+     "debug": {"kind": "pdb", "path": "symbols/my-helper.pdb"}}
+  ]
+}

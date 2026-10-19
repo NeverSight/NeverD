@@ -1,0 +1,22 @@
+//===- KernelCallbackAPIs.def - Executive callback object services --------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+NEVERD_KERNEL_CALLBACK_API(ExCreateCallback, 4, APC, createExecutiveCallback(A))
+NEVERD_KERNEL_CALLBACK_API(ExRegisterCallback, 3, APC,
+                           registerExecutiveCallback(A))
+NEVERD_KERNEL_CALLBACK_API(ExNotifyCallback, 3, Dispatch,
+                           notifyExecutiveCallback(A))
+NEVERD_KERNEL_CALLBACK_API(ExUnregisterCallback, 1, APC,
+                           unregisterExecutiveCallback(A[0]))
+NEVERD_KERNEL_CALLBACK_API(ObMakeTemporaryObject, 1, APC,
+                           makeCallbackTemporary(A[0]))
+NEVERD_KERNEL_CALLBACK_API(PsSetCreateProcessNotifyRoutine, 2, Passive,
+                           setProcessNotify(A))
+NEVERD_KERNEL_CALLBACK_API(PsSetCreateProcessNotifyRoutineEx, 2, Passive,
+                           setProcessNotify(A, true))
+NEVERD_KERNEL_CALLBACK_API(CmRegisterCallback, 3, APC,
+                           registerRegistryCallback(A))
+NEVERD_KERNEL_CALLBACK_API(CmUnRegisterCallback, 1, APC,
+                           unregisterRegistryCallback(A[0]))

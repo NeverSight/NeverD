@@ -22,6 +22,38 @@ NEVERD_KERNEL_IRQL_VALUE(Any, dispatcher::HighLevel)
 #endif
 
 #ifdef NEVERD_KERNEL_IRQL_API
+NEVERD_KERNEL_IRQL_API(KeBugCheck, Any)
+NEVERD_KERNEL_IRQL_API(KeBugCheckEx, Any)
+
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/ntddk/nf-ntddk-mmisaddressvalid
+NEVERD_KERNEL_IRQL_API(MmIsAddressValid, Dispatch)
+NEVERD_KERNEL_IRQL_API(MmGetVirtualForPhysical, Any)
+NEVERD_KERNEL_IRQL_API(MmGetPhysicalAddress, Any)
+NEVERD_KERNEL_IRQL_API(MmGetPhysicalMemoryRanges, Passive)
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-exallocatepool
+NEVERD_KERNEL_IRQL_API(ExAllocatePool, Dispatch)
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-rtlgetversion
+NEVERD_KERNEL_IRQL_API(RtlGetVersion, Passive)
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/ntifs/nf-ntifs-rtlcapturecontext
+// Bounded persistent capture supports nonpaged output at <= DISPATCH_LEVEL.
+NEVERD_KERNEL_IRQL_API(KeCapturePersistentThreadState, Dispatch)
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-rtlinitansistring
+// The selected 19041 ntddk.h declares PASSIVE_LEVEL for both upper APIs.
+NEVERD_KERNEL_IRQL_API(RtlUpperString, Passive)
+NEVERD_KERNEL_IRQL_API(RtlUpperChar, Passive)
+NEVERD_KERNEL_IRQL_API(RtlAppendStringToString, APC)
+// Dedicated routine contract (not the enclosing counted-string API's IRQL):
+// https://learn.microsoft.com/previous-versions/windows/hardware/kernel/ff561132(v=vs.85)
+NEVERD_KERNEL_IRQL_API(RtlAnsiCharToUnicodeChar, APC)
+// https://learn.microsoft.com/windows/win32/sysinfo/zwquerysysteminformation
+NEVERD_KERNEL_IRQL_API(ZwQuerySystemInformation, Passive)
+NEVERD_KERNEL_IRQL_API(ZwQueryVirtualMemory, Passive)
+NEVERD_KERNEL_IRQL_API(NtQueryVirtualMemory, Passive)
+NEVERD_KERNEL_IRQL_API(NtQuerySystemInformation, Passive)
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-keregisterbugcheckreasoncallback
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-kederegisterbugcheckreasoncallback
+NEVERD_KERNEL_IRQL_API(KeRegisterBugCheckReasonCallback, Any)
+NEVERD_KERNEL_IRQL_API(KeDeregisterBugCheckReasonCallback, Any)
 
 #define NEVERD_KERNEL_HAL_API(Name, Arity, IRQL, Operation)                    \
   NEVERD_KERNEL_IRQL_API(Name, IRQL)
@@ -43,8 +75,6 @@ NEVERD_KERNEL_IRQL_API(PsGetCurrentThreadPreviousMode, Dispatch)
 // Pinned nonpaged lookup over the fixed module inventory; output residency
 // is checked separately. No dynamic function-table callback is executed.
 NEVERD_KERNEL_IRQL_API(RtlPcToFileHeader, Any)
-NEVERD_KERNEL_IRQL_API(NtQuerySystemInformation, Passive)
-NEVERD_KERNEL_IRQL_API(ZwQuerySystemInformation, Passive)
 // https://learn.microsoft.com/windows-hardware/drivers/ddi/ntifs/nf-ntifs-iogetrequestorprocessid
 // https://learn.microsoft.com/windows-hardware/drivers/ddi/ntddk/nf-ntddk-psgetcurrentprocessid
 NEVERD_KERNEL_IRQL_API(IoGetRequestorProcessId, Dispatch)
@@ -63,17 +93,28 @@ NEVERD_KERNEL_IRQL_API(KeGetCurrentThread, Any)
 // https://learn.microsoft.com/windows-hardware/drivers/ddi/ntddk/nf-ntddk-psgetthreadid
 NEVERD_KERNEL_IRQL_API(PsGetCurrentThreadId, Any)
 NEVERD_KERNEL_IRQL_API(PsGetThreadId, Dispatch)
+NEVERD_KERNEL_IRQL_API(PsGetProcessImageFileName, Any)
+// Selected native 19041 getter is a nonpaged leaf load of an EPROCESS field.
+NEVERD_KERNEL_IRQL_API(PsGetProcessSectionBaseAddress, Any)
+NEVERD_KERNEL_IRQL_API(PsGetProcessPeb, Any)
+NEVERD_KERNEL_IRQL_API(IoGetDeviceProperty, Passive)
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/ntddk/nf-ntddk-psgetprocessexitstatus
+NEVERD_KERNEL_IRQL_API(PsGetProcessExitStatus, APC)
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/ntifs/nf-ntifs-pslookupprocessbyprocessid
 // https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-pscreatesystemthread
 // https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-psterminatesystemthread
 // https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-obreferenceobjectbyhandle
 // https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-obdereferenceobject
 NEVERD_KERNEL_IRQL_API(PsCreateSystemThread, Passive)
+NEVERD_KERNEL_IRQL_API(PsSetCreateThreadNotifyRoutine, Passive)
+NEVERD_KERNEL_IRQL_API(PsRemoveCreateThreadNotifyRoutine, APC)
 NEVERD_KERNEL_IRQL_API(PsTerminateSystemThread, Passive)
 #define NEVERD_KERNEL_OBJECT_API(Name, Arity, IRQL, Operation)                 \
   NEVERD_KERNEL_IRQL_API(Name, IRQL)
 #include "KernelNamespaceAPIs.def"
 #include "KernelObjectAPIs.def"
 #undef NEVERD_KERNEL_OBJECT_API
+NEVERD_KERNEL_IRQL_API(ZwQueryInformationThread, Passive)
 // https://learn.microsoft.com/windows-hardware/drivers/ddi/ntifs/nf-ntifs-kestackattachprocess
 // https://learn.microsoft.com/windows-hardware/drivers/ddi/ntifs/nf-ntifs-keunstackdetachprocess
 NEVERD_KERNEL_IRQL_API(KeStackAttachProcess, APC)
@@ -82,6 +123,15 @@ NEVERD_KERNEL_IRQL_API(KeUnstackDetachProcess, APC)
   NEVERD_KERNEL_IRQL_API(Name, IRQL)
 #include "KernelExecutionAPIs.def"
 #undef NEVERD_KERNEL_EXECUTION_API
+#define NEVERD_KERNEL_CLOCK_API(Name, Arity, IRQL, Operation)                  \
+  NEVERD_KERNEL_IRQL_API(Name, IRQL)
+#include "KernelClockAPIs.def"
+#undef NEVERD_KERNEL_CLOCK_API
+
+// Undocumented 19041 reference observation; the modeled scope is restricted
+// to PASSIVE_LEVEL. This is not a claim about the complete native IRQL
+// contract.
+NEVERD_KERNEL_IRQL_API(VslGetSecurePciEnabled, Passive)
 #define NEVERD_KERNEL_THREAD_API(Name, Arity, IRQL, Operation)                 \
   NEVERD_KERNEL_IRQL_API(Name, IRQL)
 #include "KernelThreadAPIs.def"
@@ -140,21 +190,17 @@ NEVERD_KERNEL_IRQL_API(KeUnstackDetachProcess, APC)
 // https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-iodeletesymboliclink
 NEVERD_KERNEL_IRQL_API(RtlCompareUnicodeString, Passive)
 NEVERD_KERNEL_IRQL_API(RtlEqualUnicodeString, Passive)
+NEVERD_KERNEL_IRQL_API(RtlCharToInteger, Passive)
+NEVERD_KERNEL_IRQL_API(RtlxAnsiStringToUnicodeSize, Passive)
 NEVERD_KERNEL_IRQL_API(MmGetSystemRoutineAddress, Passive)
 // https://learn.microsoft.com/windows-hardware/drivers/ddi/ntddk/nf-ntddk-mmisaddressvalid
-NEVERD_KERNEL_IRQL_API(MmIsAddressValid, Dispatch)
 // https://learn.microsoft.com/windows-hardware/drivers/ddi/ntddk/nf-ntddk-mmgetphysicaladdress
 // The query separately requires a live resident mapping with known ownership.
-NEVERD_KERNEL_IRQL_API(MmGetPhysicalAddress, Any)
 // Fixed nonpaged PFN query: this profile admits only live nonpaged-pool
 // primary mappings; private backing and arbitrary reverse aliases refuse.
-NEVERD_KERNEL_IRQL_API(MmGetVirtualForPhysical, Any)
 // The base WDK query requires PASSIVE_LEVEL and returns caller-owned pool.
-NEVERD_KERNEL_IRQL_API(MmGetPhysicalMemoryRanges, Passive)
 // https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-keregisterbugcheckreasoncallback
 // https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-kederegisterbugcheckreasoncallback
-NEVERD_KERNEL_IRQL_API(KeRegisterBugCheckReasonCallback, Any)
-NEVERD_KERNEL_IRQL_API(KeDeregisterBugCheckReasonCallback, Any)
 // https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-mmmapiospace
 // https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-mmmapiospaceex
 // https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-mmunmapiospace
@@ -182,7 +228,14 @@ NEVERD_KERNEL_IRQL_API(IoDeleteSymbolicLink, Passive)
 // https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-iodeletedevice
 // https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-kedelayexecutionthread
 NEVERD_KERNEL_IRQL_API(IoCreateDevice, APC)
+NEVERD_KERNEL_IRQL_API(IoBuildDeviceIoControlRequest, APC)
+NEVERD_KERNEL_IRQL_API(IoGetBaseFileSystemDeviceObject, Dispatch)
 NEVERD_KERNEL_IRQL_API(IoDeleteDevice, APC)
+// Both shutdown queue operations require PASSIVE_LEVEL.
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-ioregistershutdownnotification
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-iounregistershutdownnotification
+NEVERD_KERNEL_IRQL_API(IoRegisterShutdownNotification, Passive)
+NEVERD_KERNEL_IRQL_API(IoUnregisterShutdownNotification, Passive)
 NEVERD_KERNEL_IRQL_API(KeDelayExecutionThread, APC)
 
 // Paged pool additionally requires <= APC_LEVEL for allocation and release.
@@ -190,7 +243,6 @@ NEVERD_KERNEL_IRQL_API(KeDelayExecutionThread, APC)
 // https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-exallocatepool2
 // https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-exfreepoolwithtag
 // https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-exfreepool
-NEVERD_KERNEL_IRQL_API(ExAllocatePool, Dispatch)
 NEVERD_KERNEL_IRQL_API(ExAllocatePoolWithTag, Dispatch)
 NEVERD_KERNEL_IRQL_API(ExAllocatePool2, Dispatch)
 NEVERD_KERNEL_IRQL_API(ExFreePoolWithTag, Dispatch)
@@ -223,6 +275,12 @@ NEVERD_KERNEL_IRQL_API(MmProbeAndLockPages, Dispatch)
 NEVERD_KERNEL_IRQL_API(MmProbeAndLockProcessPages, APC)
 NEVERD_KERNEL_IRQL_API(MmUnlockPages, Dispatch)
 NEVERD_KERNEL_IRQL_API(MmAllocatePagesForMdl, Dispatch)
+NEVERD_KERNEL_IRQL_API(MmAllocateContiguousMemory, Dispatch)
+NEVERD_KERNEL_IRQL_API(MmFreeContiguousMemory, Dispatch)
+NEVERD_KERNEL_IRQL_API(MmAllocateMappingAddress, APC)
+NEVERD_KERNEL_IRQL_API(MmFreeMappingAddress, APC)
+NEVERD_KERNEL_IRQL_API(MmMapLockedPagesWithReservedMapping, Dispatch)
+NEVERD_KERNEL_IRQL_API(MmUnmapReservedMapping, Dispatch)
 NEVERD_KERNEL_IRQL_API(MmAllocatePagesForMdlEx, Dispatch)
 NEVERD_KERNEL_IRQL_API(MmFreePagesFromMdl, Dispatch)
 NEVERD_KERNEL_IRQL_API(KeFlushIoBuffers, Dispatch)
@@ -234,7 +292,6 @@ NEVERD_KERNEL_IRQL_API(MmUnmapLockedPages, Dispatch)
 // https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-mmprotectmdlsystemaddress
 NEVERD_KERNEL_IRQL_API(MmProtectMdlSystemAddress, Dispatch)
 NEVERD_KERNEL_IRQL_API(RtlInitUnicodeString, Dispatch)
-NEVERD_KERNEL_IRQL_API(RtlGetVersion, Passive)
 // https://learn.microsoft.com/windows-hardware/drivers/ddi/ntifs/nf-ntifs-rtlcapturecontext
 NEVERD_KERNEL_IRQL_API(RtlCaptureContext, Dispatch)
 
@@ -272,7 +329,6 @@ NEVERD_KERNEL_IRQL_API(IoGetAttachedDevice, Dispatch)
 // https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-iogetrelateddeviceobject
 NEVERD_KERNEL_IRQL_API(IoGetRelatedDeviceObject, Dispatch)
 // The reserved base-file query uses this profile's device-query ceiling.
-NEVERD_KERNEL_IRQL_API(IoGetBaseFileSystemDeviceObject, Dispatch)
 NEVERD_KERNEL_IRQL_API(IoGetDeviceObjectPointer, Passive)
 // https://learn.microsoft.com/windows-hardware/drivers/ddi/ntifs/nf-ntifs-ioqueryfileinformation
 // Reserved helper: the supported target-kernel query path can block.
@@ -349,6 +405,8 @@ NEVERD_KERNEL_IRQL_API(IoReleaseCancelSpinLock, Dispatch)
 // https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-iocancelirp
 NEVERD_KERNEL_IRQL_API(IoCancelIrp, Dispatch)
 NEVERD_KERNEL_IRQL_API(KeGetCurrentIrql, Any)
+NEVERD_KERNEL_IRQL_API(KeQueryActiveProcessorCountEx, Any)
+NEVERD_KERNEL_IRQL_API(KeGetProcessorNumberFromIndex, Any)
 
 // Component power APIs share their exact IRQL contract with the export table.
 #define NEVERD_KERNEL_POFX_API(Name, Arity, Maximum, Operation)                \
@@ -362,4 +420,31 @@ NEVERD_KERNEL_IRQL_API(KeGetCurrentIrql, Any)
   NEVERD_KERNEL_IRQL_API(Name, Any)
 #include "KernelDispatcherAPIs.def"
 #undef NEVERD_KERNEL_DISPATCHER_API
+#define NEVERD_KERNEL_FILE_API(Name, Arity)                                    \
+  NEVERD_KERNEL_IRQL_API(Name, Passive)
+#include "KernelFileAPIs.def"
+#undef NEVERD_KERNEL_FILE_API
+
+#define NEVERD_KERNEL_CRT_API(Name, Arity, Operation, Scoped)                  \
+  NEVERD_KERNEL_IRQL_API(Name, Any)
+#include "KernelCrtAPIs.def"
+#undef NEVERD_KERNEL_CRT_API
+#define NEVERD_KERNEL_CALLBACK_API(Name, Arity, IRQL, Operation)               \
+  NEVERD_KERNEL_IRQL_API(Name, IRQL)
+#include "KernelCallbackAPIs.def"
+#undef NEVERD_KERNEL_CALLBACK_API
+#define NEVERD_KERNEL_AVL_API(Name, Arity)                                     \
+  NEVERD_KERNEL_IRQL_API(Name, Dispatch)
+#include "KernelAvlAPIs.def"
+#undef NEVERD_KERNEL_AVL_API
+#define NEVERD_KERNEL_SERVICE_API(Name) NEVERD_KERNEL_IRQL_API(Name, Passive)
+#include "KernelServiceAPIs.def"
+#undef NEVERD_KERNEL_SERVICE_API
+#endif
+
+#ifdef NEVERD_KERNEL_IRQL_API
+#define NEVERD_KERNEL_SECTION_API(Name, Arity, IRQL, Operation)                \
+  NEVERD_KERNEL_IRQL_API(Name, IRQL)
+#include "KernelSectionAPIs.def"
+#undef NEVERD_KERNEL_SECTION_API
 #endif

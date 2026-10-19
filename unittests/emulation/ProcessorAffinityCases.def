@@ -1,0 +1,75 @@
+// Native original set/revert bodies, single-processor profile.
+// Oracle SHA256:
+// 761390cc626bef059643e7f4e66a538e98372ebc9bdc98e9c416f97ccbc19b98
+NEVERD_PROCESSOR_AFFINITY_CASE(set, false, 0x1ULL, separate,
+                               "01000000000000000000000000000000",
+                               "00000000000000000000000000000000", true)
+NEVERD_PROCESSOR_AFFINITY_CASE(set, false, 0x1ULL, same,
+                               "00000000000000000000000000000000",
+                               "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5", true)
+NEVERD_PROCESSOR_AFFINITY_CASE(set, false, 0x1ULL, null,
+                               "01000000000000000000000000000000",
+                               "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5", true)
+NEVERD_PROCESSOR_AFFINITY_CASE(set, false, 0x3ULL, separate,
+                               "01000000000000000000000000000000",
+                               "00000000000000000000000000000000", true)
+NEVERD_PROCESSOR_AFFINITY_CASE(set, false, 0x3ULL, same,
+                               "00000000000000000000000000000000",
+                               "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5", true)
+NEVERD_PROCESSOR_AFFINITY_CASE(set, false, 0x3ULL, null,
+                               "01000000000000000000000000000000",
+                               "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5", true)
+NEVERD_PROCESSOR_AFFINITY_CASE(set, false, 0xffffffffffffffffULL, separate,
+                               "01000000000000000000000000000000",
+                               "00000000000000000000000000000000", true)
+NEVERD_PROCESSOR_AFFINITY_CASE(set, false, 0xffffffffffffffffULL, same,
+                               "00000000000000000000000000000000",
+                               "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5", true)
+NEVERD_PROCESSOR_AFFINITY_CASE(set, false, 0xffffffffffffffffULL, null,
+                               "01000000000000000000000000000000",
+                               "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5", true)
+NEVERD_PROCESSOR_AFFINITY_CASE(set, true, 0x1ULL, separate,
+                               "01000000000000000000000000000000",
+                               "01000000000000000000000000000000", true)
+NEVERD_PROCESSOR_AFFINITY_CASE(set, true, 0x1ULL, same,
+                               "01000000000000000000000000000000",
+                               "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5", true)
+NEVERD_PROCESSOR_AFFINITY_CASE(set, true, 0x1ULL, null,
+                               "01000000000000000000000000000000",
+                               "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5", true)
+NEVERD_PROCESSOR_AFFINITY_CASE(set, true, 0x3ULL, separate,
+                               "01000000000000000000000000000000",
+                               "01000000000000000000000000000000", true)
+NEVERD_PROCESSOR_AFFINITY_CASE(set, true, 0x3ULL, same,
+                               "01000000000000000000000000000000",
+                               "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5", true)
+NEVERD_PROCESSOR_AFFINITY_CASE(set, true, 0x3ULL, null,
+                               "01000000000000000000000000000000",
+                               "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5", true)
+NEVERD_PROCESSOR_AFFINITY_CASE(set, true, 0xffffffffffffffffULL, separate,
+                               "01000000000000000000000000000000",
+                               "01000000000000000000000000000000", true)
+NEVERD_PROCESSOR_AFFINITY_CASE(set, true, 0xffffffffffffffffULL, same,
+                               "01000000000000000000000000000000",
+                               "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5", true)
+NEVERD_PROCESSOR_AFFINITY_CASE(set, true, 0xffffffffffffffffULL, null,
+                               "01000000000000000000000000000000",
+                               "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5", true)
+NEVERD_PROCESSOR_AFFINITY_CASE(revert, false, 0x0ULL, separate,
+                               "00000000000000000000000000000000",
+                               "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5", false)
+NEVERD_PROCESSOR_AFFINITY_CASE(revert, false, 0x1ULL, separate,
+                               "01000000000000000000000000000000",
+                               "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5", false)
+NEVERD_PROCESSOR_AFFINITY_CASE(revert, false, 0x3ULL, separate,
+                               "03000000000000000000000000000000",
+                               "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5", false)
+NEVERD_PROCESSOR_AFFINITY_CASE(revert, true, 0x0ULL, separate,
+                               "00000000000000000000000000000000",
+                               "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5", false)
+NEVERD_PROCESSOR_AFFINITY_CASE(revert, true, 0x1ULL, separate,
+                               "01000000000000000000000000000000",
+                               "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5", true)
+NEVERD_PROCESSOR_AFFINITY_CASE(revert, true, 0x3ULL, separate,
+                               "01000000000000000000000000000000",
+                               "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5", true)

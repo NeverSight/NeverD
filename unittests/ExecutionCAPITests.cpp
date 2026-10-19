@@ -209,15 +209,6 @@ TEST_F(ExecutionCAPI, ConfigurationMustSelectASupportedEnvironmentExplicitly) {
   EXPECT_EQ(neverd_execution_create_v1(&O, &Error), 0u);
   EXPECT_FALSE(error().empty());
 }
-TEST_F(ExecutionCAPI, UnregisteredWindowsAdapterIsRejectedEvenWithCPUEnabled) {
-  auto Configuration = config();
-  (*Configuration.getObject("environment"))["kind"] = "windows-driver";
-  auto Text = json(std::move(Configuration));
-  neverd_execution_options_v1 O{sizeof(O), Sources, Text.c_str()};
-  EXPECT_EQ(neverd_execution_create_v1(&O, &Error), 0u);
-  EXPECT_NE(error().find("unsupported execution environment: windows-driver"),
-            std::string::npos);
-}
 TEST_F(ExecutionCAPI, CreateOwnsItsInputsAndRunsOnlyWhenAsked) {
   create(config());
   ASSERT_NE(Run, 0u);

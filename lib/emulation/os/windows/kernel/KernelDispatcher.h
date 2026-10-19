@@ -63,6 +63,10 @@ public:
   /// Read-only preflight for callers retiring multiple allocations together.
   llvm::Error canReleaseRange(uint64_t Address, uint64_t Size) const;
   bool isWaitable(uint64_t Object) const;
+  bool isEvent(uint64_t Address) const {
+    auto I = Objects.find(Address);
+    return I != Objects.end() && I->second.Type == Kind::Event;
+  }
   /// Process timers due now, without advancing time or dispatching callbacks.
   /// Successful synchronization-object acquisition consumes its signal.
   /// Mutex ownership uses the logical thread key, shared by all of its stacks.

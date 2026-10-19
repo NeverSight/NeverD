@@ -10,6 +10,20 @@
 //===----------------------------------------------------------------------===//
 
 #include "../TestProcess.h"
+#include "AcpiTestFixture.h"
+#include "CPUIDPolicyTestFixture.h"
+#include "FilterNamesTestFixture.h"
+#include "HalDispatchTestFixture.h"
+#include "McfgTestFixture.h"
+#include "NdisConfigurationTestFixture.h"
+#include "NetworkInterfacesTestFixture.h"
+#include "PciConfigurationTestFixture.h"
+#include "ProcessImageTestFixture.h"
+#include "ProcessPebTestFixture.h"
+#include "RegistryEnumerationTestFixture.h"
+#include "RegistryHivesTestFixture.h"
+#include "ServiceImageTestFixture.h"
+#include "SmbiosTestFixture.h"
 #include "fixtures/driver_kmdf_child_wake_test.h"
 #include "fixtures/driver_kmdf_interrupt_test.h"
 #include "fixtures/driver_nested_user.h"
@@ -19,6 +33,7 @@
 
 #include "neverd/emulation/DriverProfile.h"
 #include "neverd/sdk/NeverDCAPIEmulation.h"
+#include "neverd/sdk/NeverDCAPIQuery.h"
 
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/StringExtras.h"
@@ -77,8 +92,8 @@ protected:
   std::string error() { return takeString(neverd_last_error(Session)); }
 
   std::string runCLI(const std::string &Scenario, int ExpectedExit,
-                     const char *Name = "success",
-                     const char *Image = nullptr) {
+                     const char *Name = "success", const char *Image = nullptr,
+                     const char *Contract = nullptr) {
     const auto Path = Directory / "scenario.json";
     const auto Out = Directory / "output.json";
     const auto Err = Directory / "error.txt";
@@ -91,6 +106,9 @@ protected:
         neverd::test::shellQuote(Image ? Image : fixture(Name)) +
         CompatibilityBackend + " --scenario " +
         neverd::test::shellQuote(Path.string()) +
+        (Contract
+             ? " --execution-contract " + neverd::test::shellQuote(Contract)
+             : "") +
         neverd::test::redirectOutput(Out.string(), Err.string());
     int Exit =
         neverd::test::systemExitCode(neverd::test::runShellCommand(Command));
@@ -244,6 +262,1553 @@ TEST_F(DriverScenarioPublic, FileSystemOmissionEmptyAndInvalidRemainDistinct) {
   }
 }
 
+TEST_F(DriverScenarioPublic, HalCachedAcpiPointerCallsReachCAPIAndCLI) {
+  const auto Scenario =
+      llvm::formatv("{0}", llvm::json::Value(
+                               neverd::emulation::test::halDispatchScenario()))
+          .str();
+  for (const auto &Text : {takeString(neverd_emulate_driver_scenario_json(
+                               Session, fixture("driver_hal_dispatch").c_str(),
+                               Scenario.c_str(), nullptr)),
+                           runCLI(Scenario, 0, "driver_hal_dispatch")}) {
+    auto J = llvm::json::parse(Text);
+    ASSERT_TRUE(bool(J)) << llvm::toString(J.takeError()) << error();
+    const auto *R = J->getAsObject();
+    ASSERT_NE(R, nullptr);
+    EXPECT_EQ(R->getBoolean("scenario_success"), true);
+    EXPECT_EQ(R->getBoolean("unload_completed"), true);
+    unsigned Calls = 0;
+    for (const auto &V : *R->getArray("calls"))
+      if (V.getAsObject()->getString("name") == "HalGetCachedAcpiTable")
+        ++Calls;
+    EXPECT_EQ(Calls, 8u);
+  }
+}
+TEST_F(DriverScenarioPublic, AvlGuestCallbacksReachCAPIAndCLI) {
+  const char *Scenario =
+      R"({"windows_version":{"major":10,"minor":0,"build":19041},"unload":true})";
+  for (const auto &Text :
+       {takeString(neverd_emulate_driver_scenario_json(
+            Session, fixture("driver_avl").c_str(), Scenario, nullptr)),
+        runCLI(Scenario, 0, "driver_avl")}) {
+    auto J = llvm::json::parse(Text);
+    ASSERT_TRUE(bool(J)) << llvm::toString(J.takeError()) << error();
+    const auto *R = J->getAsObject();
+    ASSERT_NE(R, nullptr);
+    EXPECT_EQ(R->getBoolean("scenario_success"), true);
+    EXPECT_EQ(R->getBoolean("unload_completed"), true);
+    bool GuestPhase = false;
+    for (const auto &Call : *R->getArray("calls")) {
+      auto Phase = Call.getAsObject()->getString("phase");
+      GuestPhase |= Phase && Phase->starts_with("callback:avl:");
+    }
+    EXPECT_TRUE(GuestPhase);
+  }
+}
+TEST_F(DriverScenarioPublic, ExternalRegistryEventsReachCAPIAndCLI) {
+  const std::string Scenario = R"({
+    "windows_version":{"major":10,"minor":0,"build":19041},
+    "unload":true,
+    "registry":[{"path":"\\Registry\\Machine\\Software\\NeverD",
+                 "values":[{"name":"Mode","type":4,"data":"01000000"}]}],
+    "registry_events":[
+      {"kind":"open","before_request":0,"handle":1,
+       "path":"\\Registry\\Machine\\Software\\NeverD","desired_access":3},
+      {"kind":"set_value","before_request":0,"handle":1,
+       "value_name":"Mode","type":4,"data":"34120000"},
+      {"kind":"query_value","before_request":0,"handle":1,
+       "value_name":"Mode","output_size":16},
+      {"kind":"close","before_request":0,"handle":1}
+    ]})";
+  const auto API = takeString(neverd_emulate_driver_scenario_json(
+      Session, fixture("driver_registry_events").c_str(), Scenario.c_str(),
+      nullptr));
+  ASSERT_FALSE(API.empty()) << error();
+  for (const auto &Text :
+       {API, runCLI(Scenario, 0, "driver_registry_events")}) {
+    auto J = llvm::json::parse(Text);
+    ASSERT_TRUE(bool(J)) << llvm::toString(J.takeError());
+    const auto *O = J->getAsObject();
+    ASSERT_NE(O, nullptr);
+    EXPECT_EQ(O->getBoolean("scenario_success"), true)
+        << O->getString("diagnostic").value_or("").str();
+    EXPECT_EQ(O->getBoolean("unload_completed"), true);
+    const auto *Events = O->getArray("registry_events");
+    ASSERT_NE(Events, nullptr);
+    ASSERT_EQ(Events->size(), 4u);
+    EXPECT_EQ((*Events)[2].getAsObject()->getString("output_hex"),
+              "00000000040000000400000034120000");
+    EXPECT_EQ(
+        O->getObject("configuration")->getArray("registry_events")->size(), 4u);
+  }
+}
+TEST_F(DriverScenarioPublic, RelativeRegistryActorsReachCAPIAndCLI) {
+  const std::string Scenario = R"({
+    "windows_version":{"major":10,"minor":0,"build":19041},"unload":true,
+    "registry":[{"path":"\\Registry\\Machine\\Software\\NeverD",
+                 "values":[{"name":"Mode","type":4,"data":"01000000"}]}],
+    "process_events":[{"kind":"create","process_id":100,"parent_id":4}],
+    "registry_events":[
+      {"kind":"open","before_request":0,"actor_process_id":100,"handle":1,
+       "path":"\\Registry\\Machine","desired_access":3},
+      {"kind":"open","before_request":0,"actor_process_id":100,"handle":2,
+       "path":"Software\\NeverD","root_handle":1,"desired_access":3},
+      {"kind":"set_value","before_request":0,"actor_process_id":100,"handle":2,
+       "value_name":"Mode","type":4,"data":"07000000"},
+      {"kind":"query_value","before_request":0,"actor_process_id":100,"handle":2,
+       "value_name":"Mode","output_size":16},
+      {"kind":"close","before_request":0,"actor_process_id":100,"handle":2},
+      {"kind":"close","before_request":0,"actor_process_id":100,"handle":1}
+    ]})";
+  const auto API = takeString(neverd_emulate_driver_scenario_json(
+      Session, fixture("driver_registry_events_actor").c_str(),
+      Scenario.c_str(), nullptr));
+  ASSERT_FALSE(API.empty()) << error();
+  for (const auto &Text :
+       {API, runCLI(Scenario, 0, "driver_registry_events_actor")}) {
+    auto J = llvm::json::parse(Text);
+    ASSERT_TRUE(bool(J)) << llvm::toString(J.takeError());
+    const auto *O = J->getAsObject();
+    ASSERT_NE(O, nullptr);
+    EXPECT_EQ(O->getBoolean("scenario_success"), true)
+        << O->getString("diagnostic").value_or("").str();
+    const auto *E = O->getArray("registry_events");
+    ASSERT_NE(E, nullptr);
+    ASSERT_EQ(E->size(), 6u);
+    EXPECT_EQ((*E)[3].getAsObject()->getString("output_hex"),
+              "00000000040000000400000007000000");
+    EXPECT_EQ((*E)[1].getAsObject()->getInteger("actor_process_id"), 100);
+    EXPECT_EQ((*E)[1].getAsObject()->getInteger("root_handle"), 1);
+  }
+}
+TEST_F(DriverScenarioPublic, RequestDelaysWakeActualWorkersThroughCAPIAndCLI) {
+  const std::string Scenario =
+      R"({"callback_drain_policy":"foreground-ready","unload":true,
+    "requests":[
+      {"kind":"create","device":"\\Device\\NeverDIO","delay_before_100ns":5000},
+      {"kind":"ioctl","code":2236452,"output_size":4,"delay_before_100ns":5000},
+      {"kind":"ioctl","code":2236452,"output_size":4,"delay_before_100ns":20000},
+      {"kind":"cleanup"},{"kind":"close"}]})";
+  const auto API = takeString(neverd_emulate_driver_scenario_json(
+      Session, fixture("driver_resident_worker_pacing").c_str(),
+      Scenario.c_str(), nullptr));
+  ASSERT_FALSE(API.empty()) << error();
+  for (const auto &Text :
+       {API, runCLI(Scenario, 0, "driver_resident_worker_pacing")}) {
+    auto J = llvm::json::parse(Text);
+    ASSERT_TRUE(bool(J)) << llvm::toString(J.takeError());
+    const auto *O = J->getAsObject();
+    ASSERT_NE(O, nullptr);
+    EXPECT_EQ(O->getBoolean("scenario_success"), true)
+        << O->getString("diagnostic").value_or("").str();
+    const auto *D = O->getArray("request_delays");
+    ASSERT_NE(D, nullptr);
+    ASSERT_EQ(D->size(), 3u);
+    EXPECT_EQ((*D)[0].getAsObject()->getInteger("completed_at_100ns"), 5000);
+    EXPECT_EQ((*D)[2].getAsObject()->getInteger("completed_at_100ns"), 30000);
+    const auto *R = O->getArray("requests");
+    ASSERT_NE(R, nullptr);
+    ASSERT_EQ(R->size(), 5u);
+    EXPECT_EQ((*R)[1].getAsObject()->getString("output_hex"), "02000000");
+    EXPECT_EQ((*R)[2].getAsObject()->getString("output_hex"), "04000000");
+  }
+}
+TEST_F(DriverScenarioPublic, ExtendedProcessCreationReachesCAPIAndCLI) {
+  const std::string Scenario = R"({
+    "windows_version":{"major":10,"minor":0,"build":19041},"unload":true,
+    "process_events":[
+      {"kind":"create","process_id":100,"parent_id":4,"before_request":0,
+       "create_info":{"file_open_name_available":true,
+        "image_file_name":"\\??\\C:\\NeverDCreate.exe",
+        "command_line":"NeverDCreate.exe --test"}},
+      {"kind":"exit","process_id":100,"parent_id":4,"before_request":0}
+    ]})";
+  const auto API = takeString(neverd_emulate_driver_scenario_json(
+      Session, fixture("driver_process_create").c_str(), Scenario.c_str(),
+      nullptr));
+  ASSERT_FALSE(API.empty()) << error();
+  for (const auto &Text : {API, runCLI(Scenario, 0, "driver_process_create")}) {
+    auto J = llvm::json::parse(Text);
+    ASSERT_TRUE(bool(J)) << llvm::toString(J.takeError());
+    const auto *O = J->getAsObject();
+    ASSERT_NE(O, nullptr);
+    EXPECT_EQ(O->getBoolean("scenario_success"), true)
+        << O->getString("diagnostic").value_or("").str();
+    EXPECT_EQ(O->getBoolean("unload_completed"), true);
+    const auto *E = O->getArray("process_events");
+    ASSERT_NE(E, nullptr);
+    ASSERT_EQ(E->size(), 2u);
+    EXPECT_EQ((*E)[0].getAsObject()->getInteger("creation_status"), 0);
+    EXPECT_EQ((*E)[0].getAsObject()->getArray("delivered_routines")->size(),
+              3u);
+  }
+}
+
+TEST_F(DriverScenarioPublic, SharedChildDriverServicesReachCAPIAndCLI) {
+  auto O = neverd::emulation::serviceOptions();
+  llvm::json::Array Registry, Images;
+  for (const auto &K : *O.Registry) {
+    llvm::json::Array Values;
+    for (const auto &V : K.Values)
+      Values.push_back(llvm::json::Object{{"name", V.Name},
+                                          {"type", V.Type},
+                                          {"data", llvm::toHex(V.Data, true)}});
+    Registry.push_back(
+        llvm::json::Object{{"path", K.Path}, {"values", std::move(Values)}});
+  }
+  for (const auto &I : *O.ServiceImages)
+    Images.push_back(llvm::json::Object{{"service_name", I.ServiceName},
+                                        {"image_path", I.ImagePath},
+                                        {"source", I.Source.generic_string()},
+                                        {"load_address", I.LoadAddress}});
+  llvm::json::Value Input = llvm::json::Object{
+      {"windows_version",
+       llvm::json::Object{{"major", 10}, {"minor", 0}, {"build", 19041}}},
+      {"unload", true},
+      {"registry", std::move(Registry)},
+      {"service_images", std::move(Images)}};
+  auto Scenario = llvm::formatv("{0}", Input).str();
+  for (const auto &Text :
+       {takeString(neverd_emulate_driver_scenario_json(
+            Session, fixture("driver_service_lifecycle").c_str(),
+            Scenario.c_str(), nullptr)),
+        runCLI(Scenario, 0, "driver_service_lifecycle")}) {
+    auto J = llvm::json::parse(Text);
+    ASSERT_TRUE(bool(J)) << llvm::toString(J.takeError()) << error();
+    const auto *R = J->getAsObject();
+    ASSERT_NE(R, nullptr);
+    EXPECT_EQ(R->getBoolean("scenario_success"), true)
+        << R->getString("diagnostic").value_or("").str();
+    EXPECT_EQ(R->getBoolean("unload_completed"), true);
+    ASSERT_NE(R->getObject("configuration")->getArray("service_images"),
+              nullptr);
+    EXPECT_EQ(R->getObject("configuration")->getArray("service_images")->size(),
+              2u);
+    unsigned Entries = 0, Unloads = 0;
+    for (const auto &M : *R->getArray("messages")) {
+      Entries += M.getAsString() == "child service entry executed";
+      Unloads += M.getAsString() == "child service unload executed";
+    }
+    EXPECT_EQ(Entries, 2u);
+    EXPECT_EQ(Unloads, 2u);
+  }
+}
+TEST_F(DriverScenarioPublic, NdisConfigurationOwnershipReachesCAPIAndCLI) {
+  const auto Scenario =
+      llvm::formatv("{0}",
+                    llvm::json::Value(
+                        neverd::emulation::test::ndisConfigurationScenario()))
+          .str();
+  for (const auto &Text :
+       {takeString(neverd_emulate_driver_scenario_json(
+            Session, fixture("driver_ndis_configuration").c_str(),
+            Scenario.c_str(), nullptr)),
+        runCLI(Scenario, 0, "driver_ndis_configuration")}) {
+    auto J = llvm::json::parse(Text);
+    ASSERT_TRUE(bool(J)) << llvm::toString(J.takeError()) << error();
+    const auto *R = J->getAsObject();
+    ASSERT_NE(R, nullptr);
+    EXPECT_EQ(R->getBoolean("scenario_success"), true);
+    EXPECT_EQ(R->getBoolean("unload_completed"), true);
+    const auto *C =
+        R->getObject("configuration")->getObject("ndis_configuration");
+    ASSERT_NE(C, nullptr);
+    EXPECT_EQ(C->getInteger("version"), 0x60054);
+    EXPECT_EQ((*C->getArray("bindings"))[0]
+                  .getAsObject()
+                  ->get("handle")
+                  ->getAsUINT64(),
+              neverd::emulation::test::NdisBinding);
+  }
+}
+TEST_F(DriverScenarioPublic, NdisBadBindingsFailBeforeImageLoading) {
+  const char *Scenario = R"({"ndis_configuration":{"bindings":[]}})";
+  auto Text = takeString(neverd_emulate_driver_scenario_json(
+      Session, (Directory / "absent.sys").string().c_str(), Scenario, nullptr));
+  EXPECT_TRUE(Text.empty());
+  EXPECT_NE(error().find("ndis_configuration"), std::string::npos);
+  EXPECT_TRUE(runCLI(Scenario, 1, "success", "does-not-exist.sys").empty());
+}
+TEST_F(DriverScenarioPublic, NetioObservedInterfaceRowsReachCAPIAndCLI) {
+  const auto Scenario =
+      llvm::formatv("{0}",
+                    llvm::json::Value(
+                        neverd::emulation::test::networkInterfacesScenario()))
+          .str();
+  for (const auto &Text :
+       {takeString(neverd_emulate_driver_scenario_json(
+            Session, fixture("driver_netio_interfaces").c_str(),
+            Scenario.c_str(), nullptr)),
+        runCLI(Scenario, 0, "driver_netio_interfaces")}) {
+    auto J = llvm::json::parse(Text);
+    ASSERT_TRUE(bool(J)) << llvm::toString(J.takeError()) << error();
+    const auto *R = J->getAsObject();
+    ASSERT_NE(R, nullptr);
+    EXPECT_EQ(R->getBoolean("scenario_success"), true);
+    EXPECT_EQ(R->getBoolean("unload_completed"), true);
+    const auto *Rows = R->getObject("configuration")
+                           ->getObject("network_interfaces")
+                           ->getArray("raw");
+    ASSERT_NE(Rows, nullptr);
+    ASSERT_EQ(Rows->size(), 2u);
+    EXPECT_EQ((*Rows)[0].getAsString(),
+              llvm::toHex(neverd::emulation::test::networkRow(1, 1), true));
+  }
+}
+TEST_F(DriverScenarioPublic, NetioBadFactsFailBeforeImageLoading) {
+  const char *Scenario = R"({"network_interfaces":{"normal":[]}})";
+  auto Text = takeString(neverd_emulate_driver_scenario_json(
+      Session, (Directory / "absent.sys").string().c_str(), Scenario, nullptr));
+  EXPECT_TRUE(Text.empty());
+  EXPECT_NE(error().find("network_interfaces"), std::string::npos);
+  EXPECT_TRUE(runCLI(Scenario, 1, "success", "does-not-exist.sys").empty());
+}
+TEST_F(DriverScenarioPublic,
+       FilterManagerNamesUseScopedImportsThroughCAPIAndCLI) {
+  const auto Scenario =
+      llvm::formatv("{0}", llvm::json::Value(
+                               neverd::emulation::test::filterNamesScenario()))
+          .str();
+  for (const auto &Text : {takeString(neverd_emulate_driver_scenario_json(
+                               Session, fixture("driver_filter_names").c_str(),
+                               Scenario.c_str(), nullptr)),
+                           runCLI(Scenario, 0, "driver_filter_names")}) {
+    auto J = llvm::json::parse(Text);
+    ASSERT_TRUE(bool(J)) << llvm::toString(J.takeError()) << error();
+    const auto *R = J->getAsObject();
+    ASSERT_NE(R, nullptr);
+    EXPECT_EQ(R->getBoolean("scenario_success"), true);
+    EXPECT_EQ(R->getBoolean("unload_completed"), true);
+    EXPECT_EQ(
+        R->getObject("configuration")->getBoolean("filter_manager_file_names"),
+        true);
+    unsigned Calls = 0;
+    for (const auto &Entry : *R->getArray("calls")) {
+      auto Name = Entry.getAsObject()->getString("name");
+      if (Name && Name->starts_with("Flt"))
+        ++Calls;
+    }
+    EXPECT_EQ(Calls, 11u);
+  }
+}
+TEST_F(DriverScenarioPublic,
+       FilterManagerBadProviderFactsFailBeforeImageLoading) {
+  const char *Scenario = R"({"filter_manager_file_names":true})";
+  auto Text = takeString(neverd_emulate_driver_scenario_json(
+      Session, (Directory / "absent.sys").string().c_str(), Scenario, nullptr));
+  EXPECT_TRUE(Text.empty());
+  EXPECT_NE(error().find("filter_manager_file_names"), std::string::npos);
+  EXPECT_TRUE(runCLI(Scenario, 1, "success", "does-not-exist.sys").empty());
+}
+TEST_F(DriverScenarioPublic, RegistryHiveCommitReachesCAPIAndCLI) {
+  const auto Scenario =
+      llvm::formatv(
+          "{0}",
+          llvm::json::Value(neverd::emulation::test::registryHivesScenario()))
+          .str();
+  for (const auto &Text :
+       {takeString(neverd_emulate_driver_scenario_json(
+            Session, fixture("driver_registry_hives").c_str(), Scenario.c_str(),
+            nullptr)),
+        runCLI(Scenario, 0, "driver_registry_hives")}) {
+    auto J = llvm::json::parse(Text);
+    ASSERT_TRUE(bool(J)) << llvm::toString(J.takeError()) << error();
+    const auto *R = J->getAsObject();
+    ASSERT_NE(R, nullptr);
+    EXPECT_EQ(R->getBoolean("scenario_success"), true);
+    EXPECT_EQ(R->getBoolean("unload_completed"), true);
+    const auto *Hives = R->getArray("registry_hives");
+    ASSERT_NE(Hives, nullptr);
+    ASSERT_EQ(Hives->size(), 2u);
+    const auto *H = (*Hives)[0].getAsObject();
+    ASSERT_NE(H, nullptr);
+    EXPECT_EQ(H->getInteger("flush_count"), 1);
+    EXPECT_EQ(H->getString("storage"), "memory-backed");
+    EXPECT_EQ((*Hives)[1].getAsObject()->getInteger("flush_count"), 0);
+    const auto Find = [](const llvm::json::Array &Keys, const char *Suffix) {
+      for (const auto &Entry : Keys) {
+        const auto *K = Entry.getAsObject();
+        auto Path = K->getString("path");
+        if (Path && Path->ends_with(Suffix))
+          return (*K->getArray("values"))[0]
+              .getAsObject()
+              ->getString("data")
+              ->str();
+      }
+      return std::string("missing");
+    };
+    EXPECT_EQ(Find(*H->getArray("committed"), "\\A"), "0a000000");
+    EXPECT_EQ(Find(*H->getArray("committed"), "\\B"), "14000000");
+    EXPECT_EQ(Find(*R->getArray("registry"), "\\B"), "63000000");
+    EXPECT_EQ(Find(*(*Hives)[1].getAsObject()->getArray("committed"), "\\C"),
+              "03000000");
+    ASSERT_NE(R->getObject("configuration")->getArray("registry_hives"),
+              nullptr);
+  }
+}
+TEST_F(DriverScenarioPublic,
+       RegistryHiveMalformedMountFailsBeforeImageLoading) {
+  const char *Scenario =
+      R"({"registry_hives":[{"path":"x","storage":"host"}]})";
+  auto Text = takeString(neverd_emulate_driver_scenario_json(
+      Session, (Directory / "absent.sys").string().c_str(), Scenario, nullptr));
+  EXPECT_TRUE(Text.empty());
+  EXPECT_NE(error().find("registry_hives"), std::string::npos);
+  EXPECT_TRUE(runCLI(Scenario, 1, "success", "does-not-exist.sys").empty());
+}
+TEST_F(DriverScenarioPublic, ControlBuilderOwnershipReachesCAPIAndCLI) {
+  const char *Scenario =
+      R"({"windows_version":{"major":10,"minor":0,"build":19041},"irp_io_priority_hint":2,"unload":true})";
+  for (const auto &Text :
+       {takeString(neverd_emulate_driver_scenario_json(
+            Session, fixture("driver_control_builder").c_str(), Scenario,
+            nullptr)),
+        runCLI(Scenario, 0, "driver_control_builder")}) {
+    auto J = llvm::json::parse(Text);
+    ASSERT_TRUE(bool(J)) << llvm::toString(J.takeError()) << error();
+    auto *R = J->getAsObject();
+    ASSERT_NE(R, nullptr);
+    EXPECT_EQ(R->getBoolean("scenario_success"), true);
+    EXPECT_EQ(R->getBoolean("unload_completed"), true);
+    EXPECT_EQ(R->getObject("configuration")->getInteger("irp_io_priority_hint"),
+              2);
+    const auto *Requests = R->getArray("requests");
+    ASSERT_NE(Requests, nullptr);
+    ASSERT_EQ(Requests->size(), 24u);
+    for (const auto &Entry : *Requests) {
+      const auto *Q = Entry.getAsObject();
+      ASSERT_NE(Q, nullptr);
+      EXPECT_EQ(Q->getString("origin"), "IoBuildDeviceIoControlRequest");
+      EXPECT_EQ(Q->getBoolean("completed"), true);
+      EXPECT_EQ(Q->getInteger("information"), 8);
+      ASSERT_NE(Q->get("file"), nullptr);
+      EXPECT_TRUE(Q->get("file")->getAsNull());
+    }
+  }
+}
+TEST_F(DriverScenarioPublic, ControlBuilderBadPriorityFailsBeforeImageLoading) {
+  const char *Scenario = R"({"irp_io_priority_hint":5})";
+  auto Text = takeString(neverd_emulate_driver_scenario_json(
+      Session, (Directory / "absent.sys").string().c_str(), Scenario, nullptr));
+  EXPECT_TRUE(Text.empty());
+  EXPECT_NE(error().find("irp_io_priority_hint"), std::string::npos);
+  EXPECT_TRUE(runCLI(Scenario, 1, "success", "does-not-exist.sys").empty());
+}
+TEST_F(DriverScenarioPublic, PciConfigurationReachesCAPIAndCLI) {
+  const auto Scenario =
+      llvm::formatv("{0}", llvm::json::Value(
+                               neverd::emulation::pciConfigurationScenario()))
+          .str();
+  for (auto Text : {takeString(neverd_emulate_driver_scenario_json(
+                        Session, fixture("driver_pci_configuration").c_str(),
+                        Scenario.c_str(), nullptr)),
+                    runCLI(Scenario, 0, "driver_pci_configuration")}) {
+    auto JSON = llvm::json::parse(Text);
+    ASSERT_TRUE(bool(JSON)) << llvm::toString(JSON.takeError()) << error();
+    auto *Report = JSON->getAsObject();
+    ASSERT_NE(Report, nullptr);
+    EXPECT_EQ(Report->getBoolean("scenario_success"), true);
+    EXPECT_EQ(Report->getBoolean("unload_completed"), true);
+    auto *P = Report->getObject("pci_configuration");
+    ASSERT_NE(P, nullptr);
+    auto *D = P->getArray("devices");
+    ASSERT_NE(D, nullptr);
+    ASSERT_EQ(D->size(), 1u);
+    auto Hex = (*D)[0].getAsObject()->getString("config_hex");
+    ASSERT_TRUE(Hex);
+    EXPECT_EQ(Hex->substr(0x100 * 2, 8), "aabbccdd");
+    auto *Initial =
+        Report->getObject("configuration")->getObject("pci_configuration");
+    ASSERT_NE(Initial, nullptr);
+    auto Original = (*Initial->getArray("devices"))[0].getAsObject()->getString(
+        "config_hex");
+    ASSERT_TRUE(Original);
+    EXPECT_EQ(Original->substr(0x100 * 2, 8), "00010203");
+  }
+}
+TEST_F(DriverScenarioPublic, PciMalformedFactsFailBeforeImageLoading) {
+  const char *Scenario =
+      R"({"windows_version":{"major":10,"minor":0,"build":19041},"pci_configuration":{"minimum_bus_number":2,"maximum_bus_number":1,"devices":[]}})";
+  auto Text = takeString(neverd_emulate_driver_scenario_json(
+      Session, (Directory / "absent.sys").string().c_str(), Scenario, nullptr));
+  EXPECT_TRUE(Text.empty());
+  EXPECT_NE(error().find("pci_configuration"), std::string::npos);
+  EXPECT_TRUE(runCLI(Scenario, 1, "success", "does-not-exist.sys").empty());
+}
+TEST_F(DriverScenarioPublic, DynamicImageSectionsReachCAPIAndCLI) {
+  const auto Source = neverd::emulation::processImageFixture();
+  const std::string Scenario =
+      std::string(
+          R"({"windows_version":{"major":10,"minor":0,"build":19041},"unload":true,"process_inventory":[{"process_id":4,"image_name":"System"},{"process_id":100,"image_name":"client.exe","memory":[]}],"finite_filesystem":[{"drive":"C","device_name":"\\Device\\HarddiskVolume1","read_only":false,"entries":[{"path":"\\app","directory":true,"data":""},{"path":"\\app\\image.exe","directory":false,"data":")") +
+      llvm::toHex(llvm::ArrayRef(Source.FileBytes), true) + R"("}]}]})";
+  for (auto Text : {takeString(neverd_emulate_driver_scenario_json(
+                        Session, fixture("driver_image_sections").c_str(),
+                        Scenario.c_str(), nullptr)),
+                    runCLI(Scenario, 0, "driver_image_sections")}) {
+    auto JSON = llvm::json::parse(Text);
+    ASSERT_TRUE(bool(JSON)) << llvm::toString(JSON.takeError()) << error();
+    auto *Report = JSON->getAsObject();
+    ASSERT_NE(Report, nullptr);
+    EXPECT_EQ(Report->getBoolean("scenario_success"), true) << Text;
+    EXPECT_EQ(Report->getBoolean("unload_completed"), true) << Text;
+  }
+}
+
+TEST_F(DriverScenarioPublic, ProcessImageSourceAndCOWReachCAPIAndCLI) {
+  auto Source = neverd::emulation::processImageFixture();
+  auto Image = [&] {
+    return llvm::json::Object{
+        {"mapped_file", Source.MappedFile},
+        {"device_name", Source.DeviceName},
+        {"file_bytes_hex",
+         llvm::toHex(llvm::ArrayRef(Source.FileBytes), true)}};
+  };
+  llvm::json::Array Processes;
+  Processes.push_back(
+      llvm::json::Object{{"process_id", 4}, {"image_name", "System"}});
+  for (unsigned PID : {100u, 200u}) {
+    llvm::json::Array Images;
+    Images.push_back(Image());
+    Processes.push_back(llvm::json::Object{{"process_id", PID},
+                                           {"image_name", "image.exe"},
+                                           {"images", std::move(Images)}});
+  }
+  const std::string Scenario =
+      llvm::formatv("{0}",
+                    llvm::json::Value(llvm::json::Object{
+                        {"windows_version",
+                         llvm::json::Object{
+                             {"major", 10}, {"minor", 0}, {"build", 19041}}},
+                        {"unload", true},
+                        {"process_inventory", std::move(Processes)}}))
+          .str();
+  for (auto Text : {takeString(neverd_emulate_driver_scenario_json(
+                        Session, fixture("driver_process_images").c_str(),
+                        Scenario.c_str(), nullptr)),
+                    runCLI(Scenario, 0, "driver_process_images")}) {
+    auto JSON = llvm::json::parse(Text);
+    ASSERT_TRUE(bool(JSON)) << llvm::toString(JSON.takeError()) << error();
+    const auto *Report = JSON->getAsObject();
+    ASSERT_NE(Report, nullptr);
+    EXPECT_EQ(Report->getBoolean("scenario_success"), true);
+    EXPECT_EQ(Report->getBoolean("unload_completed"), true);
+    const auto *Config = Report->getObject("configuration");
+    ASSERT_NE(Config, nullptr);
+    const auto *Inventory = Config->getArray("process_inventory");
+    ASSERT_NE(Inventory, nullptr);
+    ASSERT_EQ(Inventory->size(), 3u);
+    const auto *Process = (*Inventory)[1].getAsObject();
+    ASSERT_NE(Process, nullptr);
+    const auto *Images = Process->getArray("images");
+    ASSERT_NE(Images, nullptr);
+    ASSERT_EQ(Images->size(), 1u);
+    const auto *Mapping = (*Images)[0].getAsObject();
+    ASSERT_NE(Mapping, nullptr);
+    EXPECT_EQ(Mapping->getString("mapped_file"), Source.MappedFile);
+    EXPECT_EQ(Mapping->getString("device_name"), Source.DeviceName);
+    EXPECT_EQ(Mapping->getString("file_bytes_hex"),
+              llvm::toHex(llvm::ArrayRef(Source.FileBytes), true));
+  }
+}
+
+TEST_F(DriverScenarioPublic, IRPInitializationPolicyReachesCAPIAndCLI) {
+  for (bool Native : {false, true}) {
+    std::string Scenario =
+        R"({"unload":true,"windows_version":{"major":10,"minor":0,"build":19041},"requests":[{"kind":"create","device":"\\Device\\NeverDInitIRP"},{"kind":"ioctl","code":2236416,"input":"01020304","output_size":4},{"kind":"cleanup"},{"kind":"close"}])";
+    if (Native)
+      Scenario += R"(,"irp_initialization_policy":"windows-19041")";
+    Scenario += "}";
+    for (auto Text :
+         {takeString(neverd_emulate_driver_scenario_json(
+              Session, fixture("driver_irp_initialization").c_str(),
+              Scenario.c_str(), nullptr)),
+          runCLI(Scenario, Native ? 0 : 3, "driver_irp_initialization")}) {
+      auto JSON = llvm::json::parse(Text);
+      ASSERT_TRUE(bool(JSON)) << llvm::toString(JSON.takeError()) << error();
+      const auto *Report = JSON->getAsObject();
+      ASSERT_NE(Report, nullptr);
+      EXPECT_EQ(Report->getBoolean("scenario_success"), Native);
+      EXPECT_EQ(Report->getBoolean("unload_completed"), Native);
+      const auto *Config = Report->getObject("configuration");
+      ASSERT_NE(Config, nullptr);
+      EXPECT_EQ(Config->getString("irp_initialization_policy"),
+                Native ? "windows-19041" : "strict");
+      const auto *Requests = Report->getArray("requests");
+      ASSERT_NE(Requests, nullptr);
+      ASSERT_EQ(Requests->size(), Native ? 4u : 1u);
+      for (const auto &Value : *Requests) {
+        const auto *Request = Value.getAsObject();
+        ASSERT_NE(Request, nullptr);
+        EXPECT_EQ(Request->getBoolean("completed"), Native);
+        if (Native) {
+          EXPECT_EQ(Request->getInteger("io_status"), 0);
+          EXPECT_EQ(Request->getInteger("information"), 0);
+        }
+      }
+    }
+  }
+}
+
+TEST_F(DriverScenarioPublic, ThreadNotificationsReachCAPIAndCLI) {
+  const char *Scenario =
+      R"({"unload":true,"windows_version":{"major":10,"minor":0,"build":19041}})";
+  for (auto Text : {takeString(neverd_emulate_driver_scenario_json(
+                        Session, fixture("driver_thread_notify").c_str(),
+                        Scenario, nullptr)),
+                    runCLI(Scenario, 0, "driver_thread_notify")}) {
+    auto JSON = llvm::json::parse(Text);
+    ASSERT_TRUE(bool(JSON)) << llvm::toString(JSON.takeError()) << error();
+    const auto *Report = JSON->getAsObject();
+    ASSERT_NE(Report, nullptr);
+    EXPECT_EQ(Report->getBoolean("scenario_success"), true);
+    EXPECT_EQ(Report->getBoolean("unload_completed"), true);
+    const auto *Events = Report->getArray("thread_notifications");
+    ASSERT_NE(Events, nullptr);
+    ASSERT_EQ(Events->size(), 2u);
+    for (const auto &E : *Events) {
+      const auto *Event = E.getAsObject();
+      ASSERT_NE(Event, nullptr);
+      EXPECT_EQ(Event->getBoolean("completed"), true);
+      const auto *Delivered = Event->getArray("delivered_routines");
+      ASSERT_NE(Delivered, nullptr);
+      EXPECT_EQ(Delivered->size(), 2u);
+    }
+    EXPECT_EQ((*Events)[0].getAsObject()->getBoolean("create"), true);
+    EXPECT_EQ((*Events)[1].getAsObject()->getBoolean("create"), false);
+  }
+}
+TEST_F(DriverScenarioPublic, ForegroundProcessMemoryReachesCAPIAndCLI) {
+  const char *Scenario = R"({"unload":true,
+    "windows_version":{"major":10,"minor":0,"build":19041},
+    "process_inventory":[{"process_id":4,"image_name":"System"},
+      {"process_id":100,"parent_id":4,"image_name":"A.exe","memory":[
+        {"base":4194304,"size":4096,"bytes_hex":"11111111","access":"read_write"},
+        {"base":5242880,"size":4096,"bytes_hex":"4d5a","access":"read_only"}]},
+      {"process_id":200,"parent_id":4,"image_name":"B.exe","memory":[
+        {"base":4194304,"size":4096,"bytes_hex":"22222222","access":"read_write"}]}]})";
+  for (auto Text : {takeString(neverd_emulate_driver_scenario_json(
+                        Session, fixture("driver_process_memory").c_str(),
+                        Scenario, nullptr)),
+                    runCLI(Scenario, 0, "driver_process_memory")}) {
+    auto JSON = llvm::json::parse(Text);
+    ASSERT_TRUE(bool(JSON)) << llvm::toString(JSON.takeError()) << error();
+    const auto *Report = JSON->getAsObject();
+    ASSERT_NE(Report, nullptr);
+    EXPECT_EQ(Report->getBoolean("scenario_success"), true);
+    EXPECT_EQ(Report->getBoolean("unload_completed"), true);
+    const auto *Config = Report->getObject("configuration");
+    ASSERT_NE(Config, nullptr);
+    const auto *Inventory = Config->getArray("process_inventory");
+    ASSERT_NE(Inventory, nullptr);
+    ASSERT_GT(Inventory->size(), 1u);
+    EXPECT_TRUE((*Inventory)[1].getAsObject()->getArray("memory"));
+  }
+}
+TEST_F(DriverScenarioPublic, ProcessExitStatusLifecycleReachesCAPIAndCLI) {
+  const char *Scenario = R"({"unload":true,
+    "windows_version":{"major":10,"minor":0,"build":19041},
+    "process_events":[{"kind":"create","process_id":100,"parent_id":4},
+      {"kind":"exit","process_id":100,"parent_id":4,"before_request":3,"exit_status":3221225477}],
+    "requests":[{"kind":"create","requestor_process_id":100},
+      {"kind":"cleanup","requestor_process_id":100},{"kind":"close","requestor_process_id":100}]})";
+  for (auto Text : {takeString(neverd_emulate_driver_scenario_json(
+                        Session, fixture("driver_process_exit_status").c_str(),
+                        Scenario, nullptr)),
+                    runCLI(Scenario, 0, "driver_process_exit_status")}) {
+    auto JSON = llvm::json::parse(Text);
+    ASSERT_TRUE(bool(JSON)) << llvm::toString(JSON.takeError()) << error();
+    auto *Report = JSON->getAsObject();
+    ASSERT_NE(Report, nullptr);
+    EXPECT_EQ(Report->getBoolean("scenario_success"), true);
+    EXPECT_EQ(Report->getBoolean("unload_completed"), true);
+    auto *Events = Report->getArray("process_events");
+    ASSERT_NE(Events, nullptr);
+    ASSERT_EQ(Events->size(), 2u);
+    EXPECT_EQ((*Events)[1].getAsObject()->getInteger("exit_status"),
+              3221225477LL);
+  }
+}
+
+TEST_F(DriverScenarioPublic, ContiguousMemoryReachesCAPIAndCLI) {
+  const std::string Scenario = R"({"unload":true,"page_tables":true,
+    "windows_version":{"major":10,"minor":0,"build":19041}})";
+  for (auto Text : {takeString(neverd_emulate_driver_scenario_json(
+                        Session, fixture("driver_contiguous").c_str(),
+                        Scenario.c_str(), nullptr)),
+                    runCLI(Scenario, 0, "driver_contiguous")}) {
+    auto JSON = llvm::json::parse(Text);
+    ASSERT_TRUE(bool(JSON)) << llvm::toString(JSON.takeError()) << error();
+    auto *Report = JSON->getAsObject();
+    ASSERT_NE(Report, nullptr);
+    EXPECT_EQ(Report->getBoolean("scenario_success"), true) << Text;
+    EXPECT_EQ(Report->getBoolean("unload_completed"), true) << Text;
+  }
+}
+
+TEST_F(DriverScenarioPublic, ProcessorQueriesAndDataReachCAPIAndCLI) {
+  const std::string Scenario = R"({"unload":true})";
+  for (auto Text : {takeString(neverd_emulate_driver_scenario_json(
+                        Session, fixture("driver_processors_native").c_str(),
+                        Scenario.c_str(), nullptr)),
+                    runCLI(Scenario, 0, "driver_processors_native")}) {
+    auto JSON = llvm::json::parse(Text);
+    ASSERT_TRUE(bool(JSON)) << llvm::toString(JSON.takeError()) << error();
+    auto *Report = JSON->getAsObject();
+    ASSERT_NE(Report, nullptr);
+    EXPECT_EQ(Report->getBoolean("scenario_success"), true) << Text;
+    EXPECT_EQ(Report->getBoolean("unload_completed"), true) << Text;
+  }
+}
+
+TEST_F(DriverScenarioPublic, RTLInputServicesReachCAPIAndCLI) {
+  const std::string Scenario = R"({"unload":true})";
+  for (auto Text : {takeString(neverd_emulate_driver_scenario_json(
+                        Session, fixture("driver_rtl_inputs").c_str(),
+                        Scenario.c_str(), nullptr)),
+                    runCLI(Scenario, 0, "driver_rtl_inputs")}) {
+    auto JSON = llvm::json::parse(Text);
+    ASSERT_TRUE(bool(JSON)) << llvm::toString(JSON.takeError()) << error();
+    auto *Report = JSON->getAsObject();
+    ASSERT_NE(Report, nullptr);
+    EXPECT_EQ(Report->getBoolean("scenario_success"), true) << Text;
+    EXPECT_EQ(Report->getBoolean("unload_completed"), true) << Text;
+  }
+}
+TEST_F(DriverScenarioPublic,
+       RegistryEnumerationAndFilterNotificationsReachCAPIAndCLI) {
+  auto O = neverd::emulation::test::registryEnumerationOptions();
+  llvm::json::Array Keys;
+  for (const auto &K : *O.Registry) {
+    llvm::json::Array Values;
+    for (const auto &V : K.Values)
+      Values.push_back(llvm::json::Object{{"name", V.Name},
+                                          {"type", V.Type},
+                                          {"data", llvm::toHex(V.Data, true)}});
+    llvm::json::Object Key{{"path", K.Path}, {"values", std::move(Values)}};
+    if (K.Information)
+      Key["information"] =
+          llvm::json::Object{{"last_write_time", K.Information->LastWriteTime},
+                             {"class_name", K.Information->ClassName}};
+    if (K.SubkeyOrder) {
+      llvm::json::Array Names;
+      for (const auto &N : *K.SubkeyOrder)
+        Names.push_back(N);
+      Key["subkey_order"] = std::move(Names);
+    }
+    Keys.push_back(std::move(Key));
+  }
+  const std::string Scenario =
+      llvm::formatv("{0}",
+                    llvm::json::Value(llvm::json::Object{
+                        {"windows_version",
+                         llvm::json::Object{
+                             {"major", 10}, {"minor", 0}, {"build", 19041}}},
+                        {"unload", true},
+                        {"registry", std::move(Keys)}}))
+          .str();
+  for (auto Text : {takeString(neverd_emulate_driver_scenario_json(
+                        Session, fixture("driver_registry_enumeration").c_str(),
+                        Scenario.c_str(), nullptr)),
+                    runCLI(Scenario, 0, "driver_registry_enumeration")}) {
+    auto JSON = llvm::cantFail(llvm::json::parse(Text));
+    auto *Report = JSON.getAsObject();
+    EXPECT_EQ(Report->getBoolean("scenario_success"), true) << Text;
+    EXPECT_EQ(Report->getBoolean("unload_completed"), true) << Text;
+    auto *Messages = Report->getArray("messages");
+    ASSERT_NE(Messages, nullptr);
+    ASSERT_EQ(Messages->size(), 1u);
+    EXPECT_EQ((*Messages)[0].getAsString(),
+              "registry enumeration and filters passed");
+  }
+}
+TEST_F(DriverScenarioPublic, NlsOemDataReachesCAPIAndCLIWithExplicitBooleans) {
+  for (bool Value : {false, true}) {
+    const std::string Scenario =
+        Value ? R"({"unload":true,"nls_oem_multibyte":true})"
+              : R"({"unload":true,"nls_oem_multibyte":false})";
+    for (auto Text : {takeString(neverd_emulate_driver_scenario_json(
+                          Session, fixture("driver_nls_oem").c_str(),
+                          Scenario.c_str(), nullptr)),
+                      runCLI(Scenario, 0, "driver_nls_oem")}) {
+      auto JSON = llvm::cantFail(llvm::json::parse(Text));
+      auto *Report = JSON.getAsObject();
+      EXPECT_EQ(Report->getBoolean("scenario_success"), true) << Text;
+      EXPECT_EQ(Report->getBoolean("unload_completed"), true) << Text;
+      EXPECT_EQ(
+          Report->getObject("configuration")->getBoolean("nls_oem_multibyte"),
+          Value);
+    }
+  }
+}
+TEST_F(DriverScenarioPublic, DevicePropertiesReachCAPIAndCLIThroughAddDevice) {
+  const std::string Scenario =
+      R"({"unload":true,"pnp_devices":[{"id":"port","bus":"resource_free",
+    "initial_device_power":"D0","initial_system_power":"working","device_properties":[
+      {"property":1,"bytes_hex":"4e00440000000000"},{"property":2,"bytes_hex":null},
+      {"property":14,"bytes_hex":"07000000"},{"property":17,"bytes_hex":"2a000000"}]}],
+    "requests":[{"kind":"pnp","device_id":"port","minor":"start","bus_completion":{"status":0,"delay_100ns":3}},
+                {"kind":"pnp","device_id":"port","minor":"query_remove","bus_completion":{"status":0}},{"kind":"pnp","device_id":"port","minor":"remove","bus_completion":{"status":0,"delay_100ns":3}}]})";
+  for (auto Text : {takeString(neverd_emulate_driver_scenario_json(
+                        Session, fixture("driver_device_properties").c_str(),
+                        Scenario.c_str(), nullptr)),
+                    runCLI(Scenario, 0, "driver_device_properties")}) {
+    auto JSON = llvm::cantFail(llvm::json::parse(Text));
+    auto *Report = JSON.getAsObject();
+    EXPECT_EQ(Report->getBoolean("scenario_success"), true) << Text;
+    EXPECT_EQ(Report->getBoolean("unload_completed"), true) << Text;
+    auto *Devices = Report->getArray("pnp_devices");
+    ASSERT_NE(Devices, nullptr);
+    ASSERT_EQ(Devices->size(), 1u);
+    EXPECT_EQ((*Devices)[0].getAsObject()->getBoolean("provider_present"),
+              false);
+    auto *Messages = Report->getArray("messages");
+    ASSERT_NE(Messages, nullptr);
+    ASSERT_EQ(Messages->size(), 1u);
+    EXPECT_EQ((*Messages)[0].getAsString(), "PDO property queries passed");
+  }
+}
+TEST_F(DriverScenarioPublic, ProcessPebAndOwnedLoaderBytesReachCAPIAndCLI) {
+  using namespace neverd::emulation;
+  auto O = test::processPebOptions();
+  llvm::json::Array Inventory, Requests;
+  for (const auto &P : *O.ProcessInventory) {
+    llvm::json::Object Record{{"process_id", P.ProcessID},
+                              {"image_name", P.ImageName}};
+    if (P.PebAddress)
+      Record["peb_address"] = *P.PebAddress;
+    if (P.Memory) {
+      const auto &R = P.Memory->at(0);
+      Record["memory"] = llvm::json::Array{
+          llvm::json::Object{{"base", R.Base},
+                             {"size", R.Size},
+                             {"bytes_hex", llvm::toHex(R.Bytes, true)},
+                             {"access", "read_write"}}};
+    }
+    Inventory.push_back(std::move(Record));
+  }
+  for (const char *Kind : {"create", "cleanup", "close"})
+    Requests.push_back(
+        llvm::json::Object{{"kind", Kind}, {"requestor_process_id", 100}});
+  const auto Scenario =
+      llvm::formatv("{0}",
+                    llvm::json::Value(llvm::json::Object{
+                        {"unload", true},
+                        {"windows_version",
+                         llvm::json::Object{
+                             {"major", 10}, {"minor", 0}, {"build", 19041}}},
+                        {"process_inventory", std::move(Inventory)},
+                        {"requests", std::move(Requests)}}))
+          .str();
+  for (auto Text : {takeString(neverd_emulate_driver_scenario_json(
+                        Session, fixture("driver_process_peb").c_str(),
+                        Scenario.c_str(), nullptr)),
+                    runCLI(Scenario, 0, "driver_process_peb")}) {
+    auto JSON = llvm::cantFail(llvm::json::parse(Text));
+    auto *Report = JSON.getAsObject();
+    EXPECT_EQ(Report->getBoolean("scenario_success"), true) << Text;
+    EXPECT_EQ(Report->getBoolean("unload_completed"), true) << Text;
+    auto *Messages = Report->getArray("messages");
+    ASSERT_NE(Messages, nullptr);
+    ASSERT_EQ(Messages->size(), 1u);
+    EXPECT_EQ((*Messages)[0].getAsString(), "process PEB observations passed");
+  }
+}
+TEST_F(DriverScenarioPublic, ProcessSectionBaseReachesCAPIAndCLI) {
+  const char *Scenario = R"({"unload":true,
+    "windows_version":{"major":10,"minor":0,"build":19041},
+    "process_inventory":[
+      {"process_id":4,"image_name":"System","section_base_address":0},
+      {"process_id":100,"parent_id":4,"image_name":"Client.exe",
+       "section_base_address":5368709120}],
+    "requests":[{"kind":"create","requestor_process_id":100},
+                {"kind":"cleanup","requestor_process_id":100},
+                {"kind":"close","requestor_process_id":100}]})";
+  for (auto Text : {takeString(neverd_emulate_driver_scenario_json(
+                        Session, fixture("driver_process_section_base").c_str(),
+                        Scenario, nullptr)),
+                    runCLI(Scenario, 0, "driver_process_section_base")}) {
+    auto JSON = llvm::json::parse(Text);
+    ASSERT_TRUE(bool(JSON)) << llvm::toString(JSON.takeError()) << error();
+    auto *Report = JSON->getAsObject();
+    ASSERT_NE(Report, nullptr);
+    EXPECT_EQ(Report->getBoolean("scenario_success"), true);
+    EXPECT_EQ(Report->getBoolean("unload_completed"), true);
+    auto *Messages = Report->getArray("messages");
+    ASSERT_NE(Messages, nullptr);
+    ASSERT_EQ(Messages->size(), 1u);
+    EXPECT_EQ((*Messages)[0].getAsString(), "process section bases passed");
+  }
+}
+
+TEST_F(DriverScenarioPublic, FileHintsAndProcessorStallReachCAPIAndCLI) {
+  const std::string Scenario = R"({"unload":true,
+    "windows_version":{"major":10,"minor":0,"build":19041},
+    "system_clock_increment_100ns":156250,
+    "finite_filesystem":[{"drive":"C","device_name":"\\Device\\NeverDVolumeC",
+      "read_only":false,"aliases":[{"name":"\\SystemRoot","path":"\\data"}],
+      "entries":[{"path":"\\data","directory":true,"data":""},
+        {"path":"\\data\\hello.bin","directory":false,"data":"0102030405"}]}]})";
+  for (const char *Name : {"driver_filesystem", "driver_clock_increment"}) {
+    for (auto Text :
+         {takeString(neverd_emulate_driver_scenario_json(
+              Session, fixture(Name).c_str(), Scenario.c_str(), nullptr)),
+          runCLI(Scenario, 0, Name)}) {
+      auto JSON = llvm::json::parse(Text);
+      ASSERT_TRUE(bool(JSON)) << llvm::toString(JSON.takeError()) << error();
+      auto *Report = JSON->getAsObject();
+      ASSERT_NE(Report, nullptr);
+      EXPECT_EQ(Report->getBoolean("scenario_success"), true) << Text;
+      EXPECT_EQ(Report->getBoolean("unload_completed"), true) << Text;
+    }
+  }
+}
+TEST_F(DriverScenarioPublic, NamedSectionViewsReachCAPIAndCLI) {
+  const char *Scenario = R"({"unload":true,"section_namespace":{
+    "directories":["\\BaseNamedObjects"],"sections":[{
+      "name":"\\BaseNamedObjects\\Shared","size":69632,
+      "bytes_hex":"1234","protection":4}]}})";
+  for (auto Text : {takeString(neverd_emulate_driver_scenario_json(
+                        Session, fixture("driver_named_sections").c_str(),
+                        Scenario, nullptr)),
+                    runCLI(Scenario, 0, "driver_named_sections")}) {
+    auto JSON = llvm::json::parse(Text);
+    ASSERT_TRUE(bool(JSON)) << llvm::toString(JSON.takeError()) << error();
+    auto *Report = JSON->getAsObject();
+    ASSERT_NE(Report, nullptr);
+    EXPECT_EQ(Report->getBoolean("scenario_success"), true);
+    EXPECT_EQ(Report->getBoolean("unload_completed"), true);
+    auto *Messages = Report->getArray("messages");
+    ASSERT_NE(Messages, nullptr);
+    ASSERT_EQ(Messages->size(), 1u);
+    EXPECT_EQ((*Messages)[0].getAsString(),
+              "named section shared views passed");
+    auto *Namespace = Report->getObject("section_namespace");
+    ASSERT_NE(Namespace, nullptr);
+    auto *Sections = Namespace->getArray("sections");
+    ASSERT_NE(Sections, nullptr);
+    ASSERT_EQ(Sections->size(), 1u);
+    auto *Section = (*Sections)[0].getAsObject();
+    ASSERT_NE(Section, nullptr);
+    EXPECT_EQ(Section->getInteger("size"), 69632);
+    auto Bytes = Section->getString("bytes_hex");
+    ASSERT_TRUE(Bytes);
+    EXPECT_EQ(Bytes->size(), 69632u * 2);
+    EXPECT_TRUE(Bytes->starts_with("78563412"));
+    auto *Configuration = Report->getObject("configuration");
+    ASSERT_NE(Configuration, nullptr);
+    auto *Initial = Configuration->getObject("section_namespace");
+    ASSERT_NE(Initial, nullptr);
+    auto *InitialSections = Initial->getArray("sections");
+    ASSERT_NE(InitialSections, nullptr);
+    ASSERT_EQ(InitialSections->size(), 1u);
+    EXPECT_EQ((*InitialSections)[0].getAsObject()->getString("bytes_hex"),
+              "1234");
+  }
+}
+
+TEST_F(DriverScenarioPublic, BugCheckReportsReachCAPIAndCLIWithoutReturning) {
+  const std::string Scenario = R"({"unload":true})";
+  for (const char *Name : {"driver_bugcheck_terminal", "driver_bugcheck_simple",
+                           "driver_bugcheck_unload", "driver_bugcheck_thread",
+                           "driver_bugcheck_seh"}) {
+    for (auto Text : {takeString(neverd_emulate_driver_backend_json(
+                          Session, fixture(Name).c_str(), Scenario.c_str(),
+                          nullptr, "unicorn", "checked-x64-v1")),
+                      runCLI(Scenario, 3, Name, nullptr, "checked-x64-v1")}) {
+      auto JSON = llvm::json::parse(Text);
+      ASSERT_TRUE(bool(JSON)) << llvm::toString(JSON.takeError()) << error();
+      auto *Report = JSON->getAsObject();
+      ASSERT_NE(Report, nullptr);
+      EXPECT_EQ(Report->getString("stop_reason"), "bugcheck") << Text;
+      EXPECT_EQ(Report->getBoolean("scenario_success"), false) << Text;
+      EXPECT_EQ(Report->getBoolean("unload_completed"), false) << Text;
+      auto *Bug = Report->getObject("bugcheck");
+      ASSERT_NE(Bug, nullptr);
+      EXPECT_EQ(Bug->getInteger("code"), int64_t(0xdead0042u));
+      EXPECT_EQ(Bug->getBoolean("dump_callbacks_executed"), false);
+      if (std::string_view(Name).ends_with("simple"))
+        EXPECT_TRUE(Bug->get("parameters")->getAsNull());
+      else {
+        auto *Parameters = Bug->getArray("parameters");
+        ASSERT_NE(Parameters, nullptr);
+        ASSERT_EQ(Parameters->size(), 4u);
+        EXPECT_EQ((*Parameters)[1].getAsString(), "0xFFFFFFFFFFFFFFFF");
+        EXPECT_EQ((*Parameters)[3].getAsString(), "0x8000000000000001");
+      }
+    }
+  }
+}
+
+TEST_F(DriverScenarioPublic, ReservedSystemMappingsReachCAPIAndCLI) {
+  const std::string Scenario = R"({"unload":true,"page_tables":true,
+    "windows_version":{"major":10,"minor":0,"build":19041}})";
+  for (auto Text : {takeString(neverd_emulate_driver_scenario_json(
+                        Session, fixture("driver_reserved_mapping").c_str(),
+                        Scenario.c_str(), nullptr)),
+                    runCLI(Scenario, 0, "driver_reserved_mapping")}) {
+    auto JSON = llvm::json::parse(Text);
+    ASSERT_TRUE(bool(JSON)) << llvm::toString(JSON.takeError()) << error();
+    auto *Report = JSON->getAsObject();
+    ASSERT_NE(Report, nullptr);
+    EXPECT_EQ(Report->getBoolean("scenario_success"), true) << Text;
+    EXPECT_EQ(Report->getBoolean("unload_completed"), true) << Text;
+  }
+}
+TEST_F(DriverScenarioPublic, AnsiCharacterConversionReachesCAPIAndCLI) {
+  const char *Scenario = R"({"unload":true})";
+  for (auto Text :
+       {takeString(neverd_emulate_driver_scenario_json(
+            Session, fixture("driver_ansi_char").c_str(), Scenario, nullptr)),
+        runCLI(Scenario, 0, "driver_ansi_char")}) {
+    auto JSON = llvm::json::parse(Text);
+    ASSERT_TRUE(bool(JSON)) << llvm::toString(JSON.takeError()) << error();
+    auto *Report = JSON->getAsObject();
+    ASSERT_NE(Report, nullptr);
+    EXPECT_EQ(Report->getBoolean("scenario_success"), true);
+    EXPECT_EQ(Report->getBoolean("unload_completed"), true);
+    auto *Messages = Report->getArray("messages");
+    ASSERT_NE(Messages, nullptr);
+    ASSERT_EQ(Messages->size(), 1u);
+    EXPECT_EQ((*Messages)[0].getAsString(), "ANSI character conversion passed");
+  }
+}
+
+TEST_F(DriverScenarioPublic, InitialSystemProcessDataReachesCAPIAndCLI) {
+  const char *Scenario = R"({"unload":true})";
+  for (auto Text : {takeString(neverd_emulate_driver_scenario_json(
+                        Session, fixture("driver_process_data").c_str(),
+                        Scenario, nullptr)),
+                    runCLI(Scenario, 0, "driver_process_data")}) {
+    auto JSON = llvm::json::parse(Text);
+    ASSERT_TRUE(bool(JSON)) << llvm::toString(JSON.takeError()) << error();
+    auto *Report = JSON->getAsObject();
+    ASSERT_NE(Report, nullptr);
+    EXPECT_EQ(Report->getBoolean("scenario_success"), true);
+    EXPECT_EQ(Report->getBoolean("unload_completed"), true);
+    auto *Messages = Report->getArray("messages");
+    ASSERT_NE(Messages, nullptr);
+    ASSERT_EQ(Messages->size(), 1u);
+    EXPECT_EQ((*Messages)[0].getAsString(), "System process data passed");
+  }
+}
+
+TEST_F(DriverScenarioPublic, ProcessInformationReachesCAPIAndCLI) {
+  const char *Scenario = R"({"unload":true,
+    "windows_version":{"major":10,"minor":0,"build":19041},
+    "process_inventory":[{"process_id":4,"image_name":"System",
+      "image_file_name_hex":"53797374656d000000000000000000"},
+    {"process_id":100,"parent_id":4,"image_name":"Client.exe",
+      "image_file_name_hex":"436c69656e742e6578650000000000"}]})";
+  for (auto Text : {takeString(neverd_emulate_driver_scenario_json(
+                        Session, fixture("driver_process_information").c_str(),
+                        Scenario, nullptr)),
+                    runCLI(Scenario, 0, "driver_process_information")}) {
+    auto JSON = llvm::json::parse(Text);
+    ASSERT_TRUE(bool(JSON)) << llvm::toString(JSON.takeError()) << error();
+    auto *Report = JSON->getAsObject();
+    ASSERT_NE(Report, nullptr);
+    EXPECT_EQ(Report->getBoolean("scenario_success"), true);
+    EXPECT_EQ(Report->getBoolean("unload_completed"), true);
+    auto *Messages = Report->getArray("messages");
+    ASSERT_NE(Messages, nullptr);
+    ASSERT_EQ(Messages->size(), 1u);
+    EXPECT_EQ((*Messages)[0].getAsString(), "process snapshot passed");
+    auto *Inventory =
+        Report->getObject("configuration")->getArray("process_inventory");
+    ASSERT_NE(Inventory, nullptr);
+    EXPECT_EQ(Inventory->size(), 2u);
+  }
+}
+
+TEST_F(DriverScenarioPublic, IntegerUnicodeConversionReachesCAPIAndCLI) {
+  const char *Scenario = R"({"unload":true})";
+  for (auto Text : {takeString(neverd_emulate_driver_scenario_json(
+                        Session, fixture("driver_integer_unicode").c_str(),
+                        Scenario, nullptr)),
+                    runCLI(Scenario, 0, "driver_integer_unicode")}) {
+    auto JSON = llvm::json::parse(Text);
+    ASSERT_TRUE(bool(JSON)) << llvm::toString(JSON.takeError()) << error();
+    auto *Report = JSON->getAsObject();
+    ASSERT_NE(Report, nullptr);
+    EXPECT_EQ(Report->getBoolean("scenario_success"), true);
+    EXPECT_EQ(Report->getBoolean("unload_completed"), true);
+    auto *Messages = Report->getArray("messages");
+    ASSERT_NE(Messages, nullptr);
+    ASSERT_EQ(Messages->size(), 1u);
+    EXPECT_EQ((*Messages)[0].getAsString(),
+              "integer Unicode conversion passed");
+  }
+}
+
+TEST_F(DriverScenarioPublic, LargeKernelPoolReachesCAPIAndCLI) {
+  const char *Scenario = R"({"kernel_memory_size":8388608,"unload":true,
+    "windows_version":{"major":10,"minor":0,"build":19041},"page_tables":true})";
+  for (auto Text :
+       {takeString(neverd_emulate_driver_scenario_json(
+            Session, fixture("driver_large_pool").c_str(), Scenario, nullptr)),
+        runCLI(Scenario, 0, "driver_large_pool")}) {
+    auto JSON = llvm::json::parse(Text);
+    ASSERT_TRUE(bool(JSON)) << llvm::toString(JSON.takeError()) << error();
+    auto *Report = JSON->getAsObject();
+    ASSERT_NE(Report, nullptr);
+    EXPECT_EQ(Report->getBoolean("scenario_success"), true);
+    EXPECT_EQ(Report->getBoolean("unload_completed"), true);
+    EXPECT_EQ(
+        Report->getObject("configuration")->getInteger("kernel_memory_size"),
+        8388608);
+  }
+  EXPECT_EQ(
+      neverd_emulate_driver_scenario_json(
+          Session, "missing.sys", R"({"kernel_memory_size":8388609})", nullptr),
+      nullptr);
+  EXPECT_NE(error().find("kernel_memory_size"), std::string::npos);
+}
+
+TEST_F(DriverScenarioPublic, ResidentWorkerLifecycleReachesCAPIAndCLI) {
+  const char *Scenario = R"({"callback_drain_policy":"foreground-ready",
+    "unload":true,"requests":[
+    {"kind":"create","device":"\\Device\\NeverDIO"},
+    {"kind":"ioctl","code":2236416,"input":"00112233","output_size":4},
+    {"kind":"ioctl","code":2236448,"output_size":4},
+    {"kind":"cleanup"},{"kind":"close"}]})";
+  for (auto Text : {takeString(neverd_emulate_driver_scenario_json(
+                        Session, fixture("driver_resident_worker").c_str(),
+                        Scenario, nullptr)),
+                    runCLI(Scenario, 0, "driver_resident_worker")}) {
+    auto JSON = llvm::json::parse(Text);
+    ASSERT_TRUE(bool(JSON)) << llvm::toString(JSON.takeError()) << error();
+    auto *Report = JSON->getAsObject();
+    ASSERT_NE(Report, nullptr);
+    EXPECT_EQ(Report->getBoolean("scenario_success"), true);
+    EXPECT_EQ(Report->getBoolean("unload_completed"), true);
+    EXPECT_EQ(
+        Report->getObject("configuration")->getString("callback_drain_policy"),
+        "foreground-ready");
+    auto *Requests = Report->getArray("requests");
+    ASSERT_NE(Requests, nullptr);
+    ASSERT_EQ(Requests->size(), 5u);
+    EXPECT_EQ((*Requests)[1].getAsObject()->getString("output_hex"),
+              "5a4b7869");
+    EXPECT_EQ((*Requests)[2].getAsObject()->getString("output_hex"),
+              "a0a1a2a3");
+    EXPECT_EQ((*Requests)[2].getAsObject()->getInteger("dispatch_status"),
+              0x103);
+  }
+  EXPECT_EQ(neverd_emulate_driver_scenario_json(
+                Session, "missing.sys", R"({"callback_drain_policy":"skip"})",
+                nullptr),
+            nullptr);
+  EXPECT_NE(error().find("callback_drain_policy"), std::string::npos);
+}
+
+TEST_F(DriverScenarioPublic, ExplicitClockIncrementReachesCAPIAndCLI) {
+  const char *Scenario =
+      R"({"system_clock_increment_100ns":156250,"unload":true})";
+  auto CAPI = llvm::json::parse(takeString(neverd_emulate_driver_scenario_json(
+      Session, fixture("driver_clock_increment").c_str(), Scenario, nullptr)));
+  ASSERT_TRUE(bool(CAPI)) << llvm::toString(CAPI.takeError()) << error();
+  auto CLI = llvm::json::parse(runCLI(Scenario, 0, "driver_clock_increment"));
+  ASSERT_TRUE(bool(CLI)) << llvm::toString(CLI.takeError());
+  for (auto *Report : {CAPI->getAsObject(), CLI->getAsObject()}) {
+    ASSERT_NE(Report, nullptr);
+    EXPECT_EQ(Report->getInteger("nt_status"), 0);
+    EXPECT_EQ(Report->getBoolean("unload_completed"), true);
+    EXPECT_EQ(Report->getObject("configuration")
+                  ->getInteger("system_clock_increment_100ns"),
+              156250);
+  }
+  EXPECT_EQ(neverd_emulate_driver_scenario_json(
+                Session, "missing.sys", R"({"system_clock_increment_100ns":0})",
+                nullptr),
+            nullptr);
+  EXPECT_NE(error().find("system_clock_increment_100ns"), std::string::npos);
+}
+
+TEST_F(DriverScenarioPublic, ExplicitSecurePciFactsReachCAPIAndCLI) {
+  for (bool Enabled : {false, true}) {
+    const std::string Scenario =
+        std::string(
+            R"({"windows_version":{"major":10,"minor":0,"build":19041},"unload":true,"secure_pci_enabled":)") +
+        (Enabled ? "true}" : "false}");
+    auto CAPI =
+        llvm::json::parse(takeString(neverd_emulate_driver_scenario_json(
+            Session, fixture("driver_secure_pci").c_str(), Scenario.c_str(),
+            nullptr)));
+    ASSERT_TRUE(bool(CAPI)) << llvm::toString(CAPI.takeError()) << error();
+    auto CLI = llvm::json::parse(runCLI(Scenario, 0, "driver_secure_pci"));
+    ASSERT_TRUE(bool(CLI)) << llvm::toString(CLI.takeError());
+    for (auto *Report : {CAPI->getAsObject(), CLI->getAsObject()}) {
+      ASSERT_NE(Report, nullptr);
+      EXPECT_EQ(Report->getInteger("nt_status"), 0);
+      EXPECT_EQ(Report->getBoolean("scenario_success"), true);
+      EXPECT_EQ(Report->getBoolean("unload_completed"), true);
+      EXPECT_EQ(
+          Report->getObject("configuration")->getBoolean("secure_pci_enabled"),
+          Enabled);
+      const auto *Messages = Report->getArray("messages");
+      ASSERT_NE(Messages, nullptr);
+      ASSERT_EQ(Messages->size(), 1u);
+      EXPECT_EQ((*Messages)[0].getAsString(),
+                Enabled ? "secure-pci:enabled" : "secure-pci:disabled");
+    }
+  }
+  EXPECT_EQ(neverd_emulate_driver_scenario_json(
+                Session, "missing.sys", R"({"secure_pci_enabled":0})", nullptr),
+            nullptr);
+  EXPECT_NE(error().find("secure_pci_enabled"), std::string::npos);
+}
+
+TEST_F(DriverScenarioPublic, ExplicitMcfgFirmwareReachesCAPIAndCLI) {
+  ASSERT_EQ(neverd_session_load(Session,
+                                fixture("driver_kernel_debugger_mcfg").c_str()),
+            1)
+      << error();
+  auto Exports = llvm::json::parse(takeString(neverd_exports_json(Session)));
+  ASSERT_TRUE(bool(Exports)) << llvm::toString(Exports.takeError());
+  uint64_t CountAddress = 0, PointerAddress = 0;
+  for (const auto &Value : *Exports->getAsArray()) {
+    const auto *E = Value.getAsObject();
+    auto Name = E->getString("name"), Address = E->getString("addr");
+    if (!Name || !Address)
+      continue;
+    uint64_t VA = 0;
+    ASSERT_FALSE(Address->getAsInteger(0, VA));
+    // The test PE uses its standard preferred base; the driver reference has
+    // a distinct, fixed guest kernel base. The original export RVA is retained.
+    VA = 0xfffff80000000000ULL + (VA - 0x180000000ULL);
+    if (*Name == "HalpPciMcfgTableCount")
+      CountAddress = VA;
+    if (*Name == "HalpPciMcfgTable")
+      PointerAddress = VA;
+  }
+  ASSERT_NE(CountAddress, 0u);
+  ASSERT_NE(PointerAddress, 0u);
+  for (const auto &F :
+       {neverd::emulation::DriverPciMcfg{}, mcgffixture::table()}) {
+    llvm::json::Object Mcfg{{"present", F.Present}};
+    if (F.Present)
+      Mcfg["table_hex"] = llvm::toHex(F.Table, true);
+    auto Parameters = mcgffixture::parameters(CountAddress, PointerAddress,
+                                              F.Present ? 2 : 0, F.Present);
+    llvm::json::Array Values;
+    for (const auto &V : Parameters.Values)
+      Values.push_back(llvm::json::Object{
+          {"name", V.Name}, {"type", 11}, {"data", llvm::toHex(V.Data, true)}});
+    llvm::json::Object O{
+        {"windows_version",
+         llvm::json::Object{{"major", 10}, {"minor", 0}, {"build", 19041}}},
+        {"kernel_image", fixture("driver_kernel_debugger_mcfg")},
+        {"kernel_pdb", (std::filesystem::path(NEVERD_DRIVER_FIXTURES) /
+                        "driver_kernel_debugger_mcfg.pdb")
+                           .string()},
+        {"kernel_exports", llvm::json::Object{{"RtlInitUnicodeString", true},
+                                              {"ZwOpenKey", true},
+                                              {"ZwQueryValueKey", true},
+                                              {"ZwClose", true},
+                                              {"DbgPrint", true}}},
+        {"pci_mcfg", std::move(Mcfg)},
+        {"unload", true},
+        {"registry",
+         llvm::json::Array{llvm::json::Object{{"path", Parameters.Path},
+                                              {"values", std::move(Values)}}}}};
+    const auto Scenario =
+        llvm::formatv("{0}", llvm::json::Value(std::move(O))).str();
+    auto CAPI =
+        llvm::json::parse(takeString(neverd_emulate_driver_scenario_json(
+            Session, fixture("driver_mcfg").c_str(), Scenario.c_str(),
+            nullptr)));
+    ASSERT_TRUE(bool(CAPI)) << llvm::toString(CAPI.takeError()) << error();
+    auto CLI = llvm::json::parse(runCLI(Scenario, 0, "driver_mcfg"));
+    ASSERT_TRUE(bool(CLI)) << llvm::toString(CLI.takeError());
+    for (auto *Report : {CAPI->getAsObject(), CLI->getAsObject()}) {
+      ASSERT_NE(Report, nullptr);
+      EXPECT_EQ(Report->getBoolean("scenario_success"), true)
+          << Report->getString("diagnostic").value_or("").str();
+      EXPECT_EQ(Report->getBoolean("unload_completed"), true);
+      EXPECT_EQ(Report->getObject("configuration")
+                    ->getObject("pci_mcfg")
+                    ->getBoolean("present"),
+                F.Present);
+    }
+  }
+  EXPECT_EQ(neverd_emulate_driver_scenario_json(
+                Session, "missing.sys",
+                R"({"pci_mcfg":{"present":true,"table_hex":"00"}})", nullptr),
+            nullptr);
+  EXPECT_NE(error().find("pci_mcfg"), std::string::npos);
+}
+
+TEST_F(DriverScenarioPublic,
+       NamedDriverObjectsReachCAPIAndCLIWithRealReferences) {
+  const char *Scenario =
+      R"({"windows_version":{"major":10,"minor":0,"build":19041},"driver_namespace":{"empty_drivers":["\\Driver\\pci"]},"unload":true})";
+  auto CAPI = llvm::json::parse(takeString(neverd_emulate_driver_scenario_json(
+      Session, fixture("driver_object_names").c_str(), Scenario, nullptr)));
+  ASSERT_TRUE(bool(CAPI)) << llvm::toString(CAPI.takeError()) << error();
+  auto CLI = llvm::json::parse(runCLI(Scenario, 0, "driver_object_names"));
+  ASSERT_TRUE(bool(CLI)) << llvm::toString(CLI.takeError());
+  for (auto *Report : {CAPI->getAsObject(), CLI->getAsObject()}) {
+    ASSERT_NE(Report, nullptr);
+    EXPECT_EQ(Report->getBoolean("scenario_success"), true)
+        << Report->getString("diagnostic").value_or("").str();
+    EXPECT_EQ(Report->getBoolean("unload_completed"), true);
+    const auto *Inventory =
+        Report->getObject("configuration")->getObject("driver_namespace");
+    ASSERT_NE(Inventory, nullptr);
+    EXPECT_EQ(Inventory->getArray("empty_drivers")->size(), 1u);
+    unsigned Queries = 0;
+    for (const auto &C : *Report->getArray("calls")) {
+      auto *Event = C.getAsObject();
+      if (Event->getString("name") != "ObReferenceObjectByName")
+        continue;
+      EXPECT_EQ(Event->getArray("arguments")->size(), 8u);
+      EXPECT_TRUE(Event->getString("detail")->starts_with("\\"));
+      ++Queries;
+    }
+    EXPECT_EQ(Queries, 5u);
+  }
+  EXPECT_EQ(neverd_emulate_driver_scenario_json(
+                Session, "missing.sys",
+                R"({"driver_namespace":{"empty_drivers":["not-absolute"]}})",
+                nullptr),
+            nullptr);
+  EXPECT_NE(error().find("driver_namespace"), std::string::npos);
+}
+
+TEST_F(DriverScenarioPublic, SmbiosTwoPhaseQueriesReachCAPIAndCLI) {
+  auto F = neverd::emulation::smbiosfixture::table();
+  const auto Scenario =
+      "{\"windows_version\":{\"major\":10,\"minor\":0,\"build\":19041},"
+      "\"unload\":true,\"smbios\":{\"raw_hex\":\"" +
+      llvm::toHex(F.Raw, true) + "\"}}";
+  auto CAPI = llvm::json::parse(takeString(neverd_emulate_driver_scenario_json(
+      Session, fixture("driver_smbios").c_str(), Scenario.c_str(), nullptr)));
+  ASSERT_TRUE(bool(CAPI)) << llvm::toString(CAPI.takeError()) << error();
+  auto CLI = llvm::json::parse(runCLI(Scenario, 0, "driver_smbios"));
+  ASSERT_TRUE(bool(CLI)) << llvm::toString(CLI.takeError());
+  for (const auto *Report : {CAPI->getAsObject(), CLI->getAsObject()}) {
+    ASSERT_NE(Report, nullptr);
+    EXPECT_EQ(Report->getBoolean("scenario_success"), true)
+        << Report->getString("diagnostic").value_or("").str();
+    EXPECT_EQ(Report->getBoolean("unload_completed"), true);
+    EXPECT_EQ(Report->getObject("configuration")
+                  ->getObject("smbios")
+                  ->getString("raw_hex"),
+              llvm::toHex(F.Raw, true));
+    unsigned Queries = 0;
+    for (const auto &C : *Report->getArray("calls"))
+      if (C.getAsObject()->getString("name") == "ZwQuerySystemInformation")
+        ++Queries;
+    EXPECT_EQ(Queries, 3u);
+  }
+  EXPECT_EQ(
+      neverd_emulate_driver_scenario_json(
+          Session, "missing.sys", R"({"smbios":{"raw_hex":"00"}})", nullptr),
+      nullptr);
+  EXPECT_NE(error().find("smbios"), std::string::npos);
+}
+
+TEST_F(DriverScenarioPublic, DmaGuardPolicyStatesReachCAPIAndCLI) {
+  for (bool Enabled : {false, true}) {
+    const std::string Scenario =
+        std::string(
+            "{\"windows_version\":{\"major\":10,\"minor\":0,\"build\":19041},"
+            "\"unload\":true,\"dma_guard_policy_enabled\":") +
+        (Enabled ? "true}" : "false}");
+    auto CAPI =
+        llvm::json::parse(takeString(neverd_emulate_driver_scenario_json(
+            Session, fixture("driver_dma_guard").c_str(), Scenario.c_str(),
+            nullptr)));
+    ASSERT_TRUE(bool(CAPI)) << llvm::toString(CAPI.takeError()) << error();
+    auto CLI = llvm::json::parse(runCLI(Scenario, 0, "driver_dma_guard"));
+    ASSERT_TRUE(bool(CLI)) << llvm::toString(CLI.takeError());
+    for (const auto *Report : {CAPI->getAsObject(), CLI->getAsObject()}) {
+      ASSERT_NE(Report, nullptr);
+      EXPECT_EQ(Report->getBoolean("scenario_success"), true)
+          << Report->getString("diagnostic").value_or("").str();
+      EXPECT_EQ(Report->getBoolean("unload_completed"), true);
+      EXPECT_EQ(Report->getObject("configuration")
+                    ->getBoolean("dma_guard_policy_enabled"),
+                Enabled);
+      ASSERT_EQ(Report->getArray("messages")->size(), 1u);
+      EXPECT_EQ((*Report->getArray("messages"))[0].getAsString(),
+                std::string("DMA guard enabled=") + (Enabled ? "1" : "0"));
+    }
+  }
+  EXPECT_EQ(
+      neverd_emulate_driver_scenario_json(
+          Session, "missing.sys", R"({"dma_guard_policy_enabled":0})", nullptr),
+      nullptr);
+  EXPECT_NE(error().find("dma_guard_policy_enabled"), std::string::npos);
+}
+
+TEST_F(DriverScenarioPublic,
+       AcpiInventoryReachesCAPIAndCLIWithCapturedQueries) {
+  const auto F = neverd::emulation::acpifixture::inventory();
+  llvm::json::Array Tables;
+  for (const auto &B : F.Tables)
+    Tables.push_back(llvm::toHex(B, true));
+  const auto Scenario =
+      llvm::formatv(
+          "{0}", llvm::json::Value(llvm::json::Object{
+                     {"windows_version", llvm::json::Object{{"major", 10},
+                                                            {"minor", 0},
+                                                            {"build", 19041}}},
+                     {"unload", true},
+                     {"acpi_tables",
+                      llvm::json::Object{{"tables_hex", std::move(Tables)}}}}))
+          .str();
+  auto CAPI = llvm::json::parse(takeString(neverd_emulate_driver_scenario_json(
+      Session, fixture("driver_acpi_tables").c_str(), Scenario.c_str(),
+      nullptr)));
+  ASSERT_TRUE(bool(CAPI)) << llvm::toString(CAPI.takeError()) << error();
+  auto CLI = llvm::json::parse(runCLI(Scenario, 0, "driver_acpi_tables"));
+  ASSERT_TRUE(bool(CLI)) << llvm::toString(CLI.takeError());
+  for (const auto *Report : {CAPI->getAsObject(), CLI->getAsObject()}) {
+    ASSERT_NE(Report, nullptr);
+    EXPECT_EQ(Report->getBoolean("scenario_success"), true)
+        << Report->getString("diagnostic").value_or("").str();
+    EXPECT_EQ(Report->getBoolean("unload_completed"), true);
+    const auto *Out = Report->getObject("configuration")
+                          ->getObject("acpi_tables")
+                          ->getArray("tables_hex");
+    ASSERT_EQ(Out->size(), F.Tables.size());
+    for (size_t I = 0; I < Out->size(); ++I)
+      EXPECT_EQ((*Out)[I].getAsString(), llvm::toHex(F.Tables[I], true));
+    unsigned Count = 0;
+    for (const auto &Call : *Report->getArray("calls")) {
+      const auto *C = Call.getAsObject();
+      if (C->getString("name") == "ZwQuerySystemInformation") {
+        EXPECT_TRUE(C->getString("detail")->starts_with("ACPI action="));
+        ++Count;
+      }
+    }
+    EXPECT_EQ(Count, 6u);
+  }
+  EXPECT_EQ(neverd_emulate_driver_scenario_json(
+                Session, "missing.sys",
+                R"({"acpi_tables":{"tables_hex":["00"]}})", nullptr),
+            nullptr);
+  EXPECT_NE(error().find("acpi_tables"), std::string::npos);
+}
+
+TEST_F(DriverScenarioPublic, CodeIntegrityObservationsReachCAPIAndCLIUnmasked) {
+  for (uint32_t Value : {0u, 0x401u, 0x200000u, UINT32_MAX}) {
+    const auto Scenario =
+        std::string("{\"windows_version\":{\"major\":10,\"minor\":0,\"build\":"
+                    "19041},\"unload\":true,\"code_integrity_options\":") +
+        std::to_string(Value) + "}";
+    for (const auto &JSON :
+         {takeString(neverd_emulate_driver_scenario_json(
+              Session, fixture("driver_code_integrity").c_str(),
+              Scenario.c_str(), nullptr)),
+          runCLI(Scenario, 0, "driver_code_integrity")}) {
+      auto R = llvm::json::parse(JSON);
+      ASSERT_TRUE(bool(R)) << llvm::toString(R.takeError()) << error();
+      const auto *Report = R->getAsObject();
+      EXPECT_EQ(Report->getBoolean("scenario_success"), true)
+          << Report->getString("diagnostic").value_or("").str();
+      EXPECT_EQ(Report->getBoolean("unload_completed"), true);
+      EXPECT_EQ(Report->getObject("configuration")
+                    ->getInteger("code_integrity_options"),
+                int64_t(Value));
+      ASSERT_EQ(Report->getArray("messages")->size(), 1u);
+      EXPECT_EQ((*Report->getArray("messages"))[0].getAsString(),
+                "CI options=" + std::to_string(Value));
+      unsigned Calls = 0;
+      for (const auto &C : *Report->getArray("calls"))
+        if (C.getAsObject()->getString("name") == "NtQuerySystemInformation" ||
+            C.getAsObject()->getString("name") == "ZwQuerySystemInformation")
+          ++Calls;
+      EXPECT_EQ(Calls, 6u);
+    }
+  }
+  EXPECT_EQ(neverd_emulate_driver_scenario_json(
+                Session, "missing.sys",
+                R"({"code_integrity_options":4294967296})", nullptr),
+            nullptr);
+  EXPECT_NE(error().find("code_integrity_options"), std::string::npos);
+}
+
+TEST_F(DriverScenarioPublic, ThreadTerminationQueriesReachCAPIAndCLI) {
+  const std::string Scenario = R"({"unload":true})";
+  for (const auto &JSON :
+       {takeString(neverd_emulate_driver_scenario_json(
+            Session, fixture("driver_thread_termination").c_str(),
+            Scenario.c_str(), nullptr)),
+        runCLI(Scenario, 0, "driver_thread_termination")}) {
+    auto R = llvm::json::parse(JSON);
+    ASSERT_TRUE(bool(R)) << llvm::toString(R.takeError()) << error();
+    const auto *Report = R->getAsObject();
+    EXPECT_EQ(Report->getBoolean("scenario_success"), true)
+        << Report->getString("diagnostic").value_or("").str();
+    EXPECT_EQ(Report->getBoolean("unload_completed"), true);
+    unsigned Live = 0, Terminating = 0;
+    for (const auto &C : *Report->getArray("calls")) {
+      const auto *Call = C.getAsObject();
+      if (Call->getString("name") != "PsIsThreadTerminating")
+        continue;
+      Live += Call->getString("result") == "0x0";
+      Terminating += Call->getString("result") == "0x1";
+    }
+    EXPECT_GE(Live, 4u);
+    EXPECT_GE(Terminating, 3u);
+  }
+}
+
+TEST_F(DriverScenarioPublic, AnsiUppercaseQueriesReachCAPIAndCLI) {
+  const std::string Scenario = R"({"unload":true})";
+  for (const auto &JSON : {takeString(neverd_emulate_driver_scenario_json(
+                               Session, fixture("driver_ansi_upper").c_str(),
+                               Scenario.c_str(), nullptr)),
+                           runCLI(Scenario, 0, "driver_ansi_upper")}) {
+    auto R = llvm::json::parse(JSON);
+    ASSERT_TRUE(bool(R)) << llvm::toString(R.takeError()) << error();
+    const auto *Report = R->getAsObject();
+    EXPECT_EQ(Report->getBoolean("scenario_success"), true)
+        << Report->getString("diagnostic").value_or("").str();
+    EXPECT_EQ(Report->getBoolean("unload_completed"), true);
+    ASSERT_EQ(Report->getArray("messages")->size(), 1u);
+    EXPECT_EQ((*Report->getArray("messages"))[0].getAsString(),
+              "ANSI uppercase byte contract passed");
+    unsigned Strings = 0, Characters = 0;
+    for (const auto &C : *Report->getArray("calls")) {
+      const auto Name = C.getAsObject()->getString("name");
+      Strings += Name == "RtlUpperString";
+      Characters += Name == "RtlUpperChar";
+    }
+    EXPECT_EQ(Strings, 3u);
+    EXPECT_EQ(Characters, 256u);
+  }
+}
+
+TEST_F(DriverScenarioPublic, AnsiCompareAndAppendReachCAPIAndCLI) {
+  const std::string Scenario = R"({"unload":true})";
+  for (const auto &JSON :
+       {takeString(neverd_emulate_driver_scenario_json(
+            Session, fixture("driver_ansi_operations").c_str(),
+            Scenario.c_str(), nullptr)),
+        runCLI(Scenario, 0, "driver_ansi_operations")}) {
+    auto R = llvm::json::parse(JSON);
+    ASSERT_TRUE(bool(R)) << llvm::toString(R.takeError()) << error();
+    const auto *Report = R->getAsObject();
+    EXPECT_EQ(Report->getBoolean("scenario_success"), true)
+        << Report->getString("diagnostic").value_or("").str();
+    EXPECT_EQ(Report->getBoolean("unload_completed"), true);
+    ASSERT_EQ(Report->getArray("messages")->size(), 1u);
+    EXPECT_EQ((*Report->getArray("messages"))[0].getAsString(),
+              "ANSI compare/append passed");
+    unsigned Compared = 0, Appended = 0;
+    for (const auto &C : *Report->getArray("calls")) {
+      const auto Name = C.getAsObject()->getString("name");
+      Compared += Name == "RtlCompareString";
+      Appended += Name == "RtlAppendStringToString";
+    }
+    EXPECT_EQ(Compared, 19u);
+    EXPECT_EQ(Appended, 4u);
+  }
+}
+
 TEST_F(DriverScenarioPublic, EmptyScenarioPreservesInitializationOnlyBehavior) {
   auto Parsed =
       llvm::json::parse(takeString(neverd_emulate_driver_scenario_json(
@@ -326,6 +1891,115 @@ TEST_F(DriverScenarioPublic, CLIParsesScenarioAndKeepsJSONOutput) {
   ASSERT_TRUE(static_cast<bool>(Parsed)) << llvm::toString(Parsed.takeError());
   ASSERT_NE(Parsed->getAsObject(), nullptr);
   EXPECT_EQ(Parsed->getAsObject()->getBoolean("scenario_success"), true);
+}
+
+TEST_F(DriverScenarioPublic, CAPIAndCLIUseOnlyExplicitCPUIDObservations) {
+  const std::string Scenario = R"({"cpuid":[{"leaf":1073741824,"subleaf":3,
+    "eax":4275878552,"ebx":2147483649,"ecx":19088743,"edx":4294967295}]})";
+  for (const auto &JSON : {takeString(neverd_emulate_driver_scenario_json(
+                               Session, fixture("driver_cpuid").c_str(),
+                               Scenario.c_str(), nullptr)),
+                           runCLI(Scenario, 0, "driver_cpuid")}) {
+    auto Parsed = llvm::json::parse(JSON);
+    ASSERT_TRUE(bool(Parsed)) << llvm::toString(Parsed.takeError()) << error();
+    const auto *Report = Parsed->getAsObject();
+    ASSERT_NE(Report, nullptr);
+    EXPECT_EQ(Report->getBoolean("scenario_success"), true);
+    const auto *Configuration = Report->getObject("configuration");
+    ASSERT_NE(Configuration, nullptr);
+    const auto *Queries = Configuration->getArray("cpuid");
+    ASSERT_NE(Queries, nullptr);
+    ASSERT_EQ(Queries->size(), 1u);
+    EXPECT_EQ((*Queries)[0].getAsObject()->getInteger("edx"), 4294967295LL);
+  }
+  auto Missing = llvm::json::parse(runCLI("{}", 3, "driver_cpuid"));
+  ASSERT_TRUE(bool(Missing)) << llvm::toString(Missing.takeError());
+  EXPECT_EQ(Missing->getAsObject()->getString("stop_reason"),
+            "unsupported_instruction");
+}
+
+TEST_F(DriverScenarioPublic, CPUIDPoliciesResolveGuestFactsThroughCAPIAndCLI) {
+  auto O = neverd::emulation::cpuidpolicyfixture::options();
+  llvm::json::Array Queries;
+  for (const auto &Query : O.CPUID) {
+    llvm::json::Object Entry{{"leaf", Query.Leaf},
+                             {"eax", Query.Registers[0]},
+                             {"ebx", Query.Registers[1]},
+                             {"ecx", Query.Registers[2]},
+                             {"edx", Query.Registers[3]}};
+    if (Query.Subleaf)
+      Entry["subleaf"] = *Query.Subleaf;
+    Queries.emplace_back(std::move(Entry));
+  }
+  const auto Scenario =
+      llvm::formatv(
+          "{0}", llvm::json::Value(llvm::json::Object{
+                     {"cpuid", std::move(Queries)},
+                     {"unload", true},
+                     {"cpuid_policy",
+                      llvm::json::Object{{"invalid_leaf", "intel-max-basic-v1"},
+                                         {"hypervisor", "neverd-v1"}}}}))
+          .str();
+  for (const auto &JSON : {takeString(neverd_emulate_driver_scenario_json(
+                               Session, fixture("driver_cpuid_policy").c_str(),
+                               Scenario.c_str(), nullptr)),
+                           runCLI(Scenario, 0, "driver_cpuid_policy")}) {
+    auto R = llvm::json::parse(JSON);
+    ASSERT_TRUE(bool(R)) << llvm::toString(R.takeError()) << error();
+    const auto *Report = R->getAsObject();
+    EXPECT_EQ(Report->getBoolean("scenario_success"), true)
+        << Report->getString("diagnostic").value_or("").str();
+    EXPECT_EQ(Report->getBoolean("unload_completed"), true);
+    const auto *Config = Report->getObject("configuration");
+    EXPECT_EQ(Config->getArray("cpuid")->size(), O.CPUID.size());
+    const auto *P = Config->getObject("cpuid_policy");
+    ASSERT_NE(P, nullptr);
+    EXPECT_EQ(P->getString("invalid_leaf"), "intel-max-basic-v1");
+    EXPECT_EQ(P->getString("hypervisor"), "neverd-v1");
+  }
+  EXPECT_EQ(neverd_emulate_driver_scenario_json(
+                Session, "missing.sys",
+                R"({"cpuid_policy":{"invalid_leaf":"intel-max-basic-v1"}})",
+                nullptr),
+            nullptr);
+  EXPECT_NE(error().find("cpuid_policy"), std::string::npos);
+}
+
+TEST_F(DriverScenarioPublic, CAPIAndCLIKeepProcessReferenceUntilUnload) {
+  for (const auto &JSON :
+       {takeString(neverd_emulate_driver_scenario_json(
+            Session, fixture("driver_process_lookup").c_str(),
+            R"({"unload":true})", nullptr)),
+        runCLI(R"({"unload":true})", 0, "driver_process_lookup")}) {
+    auto Parsed = llvm::json::parse(JSON);
+    ASSERT_TRUE(bool(Parsed)) << llvm::toString(Parsed.takeError()) << error();
+    const auto *Report = Parsed->getAsObject();
+    ASSERT_NE(Report, nullptr);
+    EXPECT_EQ(Report->getBoolean("scenario_success"), true);
+    EXPECT_EQ(Report->getBoolean("unload_completed"), true);
+  }
+}
+
+TEST_F(DriverScenarioPublic, CAPIAndCLIWalkGuestTablesAndNativeMDLAliases) {
+  const std::string Scenario =
+      R"({"page_tables":true,"mdl_mapping_policy":"windows-19041", "unload":true,
+           "windows_version":{"major":10,"minor":0,"build":19041}})";
+  for (const auto &JSON :
+       {takeString(neverd_emulate_driver_scenario_json(
+            Session, fixture("driver_paging_nonpaged").c_str(),
+            Scenario.c_str(), nullptr)),
+        runCLI(Scenario, 0, "driver_paging_nonpaged")}) {
+    auto Parsed = llvm::json::parse(JSON);
+    ASSERT_TRUE(bool(Parsed)) << llvm::toString(Parsed.takeError()) << error();
+    const auto *Report = Parsed->getAsObject();
+    ASSERT_NE(Report, nullptr);
+    EXPECT_EQ(Report->getBoolean("scenario_success"), true);
+    EXPECT_EQ(Report->getBoolean("unload_completed"), true);
+    auto *Configuration = Report->getObject("configuration");
+    ASSERT_NE(Configuration, nullptr);
+    EXPECT_EQ(Configuration->getBoolean("page_tables"), true);
+    EXPECT_EQ(Configuration->getString("mdl_mapping_policy"), "windows-19041");
+  }
 }
 
 TEST_F(DriverScenarioPublic, CLIRejectsUnknownFieldsNULAndOversizedFiles) {

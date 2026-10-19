@@ -9,7 +9,8 @@
 ///
 //===----------------------------------------------------------------------===//
 
-NEVERD_DRIVER_PROFILE_STRING(ReportProfile, "wdm-x64-scheduled-v103")
+NEVERD_DRIVER_PROFILE_STRING(ReportProfile, "wdm-x64-scheduled-v111")
+NEVERD_DRIVER_PROFILE_STRING(AvlCallbackPhase, "callback:avl:")
 NEVERD_DRIVER_PROFILE_STRING(DefaultServiceName, "NeverDDriver")
 NEVERD_DRIVER_PROFILE_STRING(EntryPhase, "driver_entry")
 NEVERD_DRIVER_PROFILE_STRING(AddDevicePhase, "add_device:")
@@ -22,5 +23,11 @@ NEVERD_DRIVER_PROFILE_STRING(PoFxCallbackPhase, "callback:pofx")
 NEVERD_DRIVER_PROFILE_STRING(DMACallbackPhase, "callback:dma")
 NEVERD_DRIVER_PROFILE_STRING(InterruptCallbackPhase, "callback:interrupt")
 NEVERD_DRIVER_PROFILE_STRING(UsbIdleCallbackPhase, "callback:usb-idle")
+NEVERD_DRIVER_PROFILE_STRING(ExecutiveCallbackPhase, "callback:executive")
+NEVERD_DRIVER_PROFILE_STRING(RegistryCallbackPhase, "callback:registry")
+NEVERD_DRIVER_PROFILE_STRING(ProcessNotifyCallbackPhase,
+                             "callback:process-notify")
 NEVERD_DRIVER_PROFILE_STRING(UnloadPhase, "unload")
+NEVERD_DRIVER_PROFILE_STRING(ThreadNotifyCallbackPhase,
+                             "callback:thread-notify")
 NEVERD_DRIVER_PROFILE_STRING(WriteSemantics, "attempted_guest_write")

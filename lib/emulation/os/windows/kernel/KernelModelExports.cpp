@@ -103,6 +103,12 @@ llvm::Expected<uint64_t> KernelModel::resolveRoutine(uint64_t Address) {
                                      "unsupported kernel export name encoding");
     Name.push_back(static_cast<char>(Bytes[I]));
   }
-  return Exports->resolve(Name);
+  auto Resolved = Exports->resolve(Name);
+  if (!Resolved)
+    return Resolved.takeError();
+  if (GuardBitmap && *Resolved)
+    if (auto E = GuardBitmap->resolveExport(*Resolved))
+      return E;
+  return *Resolved;
 }
 } // namespace neverd::emulation

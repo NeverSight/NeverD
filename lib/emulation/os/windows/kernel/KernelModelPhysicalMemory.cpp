@@ -24,6 +24,17 @@ llvm::Error physicalModelError(const llvm::Twine &Message) {
 }
 } // namespace
 
+llvm::Error KernelModel::preflightPhysicalAllocation(uint64_t Address,
+                                                     uint64_t Size) const {
+  for (const auto &[Key, View] : SectionViews)
+    for (const auto &Page : View.Pages)
+      if (Address < Page.Backing + profile::PageSize &&
+          Page.Backing < Address + Size)
+        return physicalModelError(
+            "allocation backing still has a live physical section view");
+  return canReleaseRange(Address, Size);
+}
+
 llvm::Expected<KernelPhysicalMemory::CacheType>
 KernelModel::memoryCacheType(uint32_t Value) {
   switch (Value) {
@@ -36,6 +47,73 @@ KernelModel::memoryCacheType(uint32_t Value) {
   default:
     return physicalModelError("unsupported memory cache type");
   }
+}
+
+llvm::Expected<uint64_t> KernelModel::allocateContiguousMemory(uint64_t Size,
+                                                               uint64_t High) {
+  if (!Size)
+    return physicalModelError(
+        "contiguous allocation requires a nonzero byte count");
+  if (Size > KernelMemoryBytes)
+    return uint64_t(0);
+  const uint64_t Bytes =
+      (Size + profile::PageSize - 1) & ~(profile::PageSize - 1);
+  const uint64_t Pages = Bytes / profile::PageSize;
+  // The matched native entry converts its inclusive byte limit to a PFN and
+  // clamps it to the supported physical width before entering the allocator.
+  const uint64_t HighPFN =
+      std::min<uint64_t>(High / profile::PageSize, 0xfffffffff);
+  const uint64_t Limit = HighPFN * profile::PageSize + profile::PageSize - 1;
+  auto Plan = Physical.planAllocatedPages(0, Limit, 0, Pages, Pages);
+  if (!Plan)
+    return Plan.takeError();
+  if (Plan->size() != Pages)
+    return uint64_t(0);
+  const uint64_t Start =
+      (NextAllocation + profile::PageSize - 1) & ~(profile::PageSize - 1);
+  if (Start > AllocationEnd || Bytes > AllocationEnd - Start)
+    return uint64_t(0);
+  if (auto E = preflightPhysicalAllocation(Start, Bytes))
+    return E;
+  constexpr auto Cache = KernelPhysicalMemory::CacheType::Cached;
+  if (auto E = Physical.canRegisterAllocatedPages(Start, Start, *Plan, Cache)) {
+    if (E.isA<PhysicalMemoryLimitError>()) {
+      llvm::consumeError(std::move(E));
+      return uint64_t(0);
+    }
+    return E;
+  }
+  auto Address = allocate(Bytes, profile::PageSize);
+  if (!Address)
+    return Address.takeError();
+  if (auto E =
+          Physical.registerAllocatedPages(*Address, *Address, *Plan, Cache))
+    return E;
+  // Native MmAllocateContiguousMemory selects cached executable read/write
+  // protection; SpecifyCache(MmCached) converges on the same internal value.
+  if (auto E = Memory.protect(*Address, Bytes, Read | Write | Execute))
+    return E;
+  Allocations.emplace(*Address,
+                      PoolAllocation{Bytes, 0, true, std::nullopt, 0, true});
+  return *Address;
+}
+
+llvm::Expected<uint64_t> KernelModel::freeContiguousMemory(uint64_t Address) {
+  auto It = Allocations.find(Address);
+  if (It == Allocations.end() || !It->second.Contiguous)
+    return physicalModelError(
+        "MmFreeContiguousMemory requires its exact live allocation base");
+  if (auto E = Physical.canRetire(Address))
+    return E;
+  if (auto E = prepareReleaseRange(Address, It->second.Size))
+    return E;
+  if (auto E = Memory.protect(Address, It->second.Size, 0))
+    return E;
+  if (auto E = Physical.retire(Address))
+    return E;
+  FreedRanges.emplace(Address, It->second.Size);
+  Allocations.erase(It);
+  return uint64_t(0);
 }
 
 llvm::Expected<uint64_t>
@@ -86,9 +164,10 @@ KernelModel::allocatePagesForMDL(llvm::ArrayRef<uint64_t> A, bool Extended) {
        Pages->size() != RequestedPages))
     return 0;
   const uint64_t AllocationSize = Pages->size() * profile::PageSize;
-  if (auto E = Physical.canRegisterRegion(
-          Start, Start, AllocationSize,
-          Cache.value_or(KernelPhysicalMemory::CacheType::Cached))) {
+  if (auto E = preflightPhysicalAllocation(Start, AllocationSize))
+    return E;
+  if (auto E =
+          Physical.canRegisterAllocatedPages(Start, Start, *Pages, Cache)) {
     if (E.isA<PhysicalMemoryLimitError>()) {
       llvm::consumeError(std::move(E));
       return 0;
@@ -135,6 +214,9 @@ llvm::Error KernelModel::freePagesFromMDL(uint64_t MDL) {
     return physicalModelError("MmFreePagesFromMdl requires a live independent "
                               "physical-page MDL");
   auto &State = It->second;
+  if (State.MappingReservation)
+    return physicalModelError(
+        "physical page release requires MmUnmapReservedMapping first");
   if (auto E = canReleaseMDLDependencies(MDL))
     return E;
   if (auto E = canReleaseMdlUserViews(MDL))
@@ -194,20 +276,23 @@ llvm::Error KernelModel::freeAllocatedMDL(uint64_t MDL) {
 
 llvm::Expected<uint64_t>
 KernelModel::allocatePhysicalBuffer(uint64_t AllocationSize, uint64_t Alignment,
-                                    uint64_t DataOffset, uint64_t DataSize) {
-  if (!AllocationSize || AllocationSize > profile::KernelArenaSize ||
-      !Alignment || (Alignment & (Alignment - 1)) || !DataSize ||
+                                    uint64_t DataOffset, uint64_t DataSize,
+                                    bool PagedArena) {
+  uint64_t &Cursor = PagedArena ? NextPagedAllocation : NextAllocation;
+  const uint64_t ArenaEnd = PagedArena ? PagedAllocationEnd : AllocationEnd;
+  if (!AllocationSize || AllocationSize > KernelMemoryBytes || !Alignment ||
+      (Alignment & (Alignment - 1)) || !DataSize ||
       DataOffset >= AllocationSize || DataSize > AllocationSize - DataOffset ||
-      NextAllocation > UINT64_MAX - (Alignment - 1))
+      !ArenaEnd || Cursor > UINT64_MAX - (Alignment - 1))
     return physicalModelError("invalid physical data allocation range");
-  const uint64_t Start = (NextAllocation + Alignment - 1) & ~(Alignment - 1);
-  if (Start > AllocationEnd || AllocationSize > AllocationEnd - Start)
+  const uint64_t Start = (Cursor + Alignment - 1) & ~(Alignment - 1);
+  if (Start > ArenaEnd || AllocationSize > ArenaEnd - Start)
     return physicalModelError("Windows initialization model arena exhausted");
   // Validate every new page and the exact exposed data range before allocating
   // or zeroing anything. Page padding remains outside this owner's authority.
   if (auto E = Physical.canRegisterRegion(Start, Start + DataOffset, DataSize))
     return std::move(E);
-  auto Address = allocate(AllocationSize, Alignment);
+  auto Address = allocateInArena(AllocationSize, Alignment, Cursor, ArenaEnd);
   if (!Address)
     return Address.takeError();
   if (auto E =
@@ -246,8 +331,19 @@ llvm::Error KernelModel::initializeMDLPhysicalPages(const LockedMdl &State) {
       return E;
   return llvm::Error::success();
 }
-llvm::Expected<uint64_t>
-KernelModel::queryPhysicalAddress(uint64_t Address) const {
+llvm::Expected<uint64_t> KernelModel::queryPhysicalAddress(uint64_t Address) {
+  if (Version) {
+    auto Readable = Memory.canAccess(Address, 1, Read);
+    if (!Readable)
+      return Readable.takeError();
+    if (!*Readable)
+      return physicalModelError(
+          "physical address query requires resident readable RAM");
+    for (const auto &[Base, Size] : FreedRanges)
+      if (Address >= Base && Address - Base < Size)
+        return physicalModelError("physical address query requires live RAM");
+    return Physical.frameAddress(Address);
+  }
   if (auto E = validateGuestAccess(Address, 1, false))
     return E;
   auto Readable = Memory.canAccess(Address, 1, Read);
@@ -274,7 +370,7 @@ KernelModel::queryPhysicalAddress(uint64_t Address) const {
 }
 
 llvm::Expected<uint64_t>
-KernelModel::queryPrimaryVirtualAddress(uint64_t PhysicalAddress) const {
+KernelModel::queryPrimaryVirtualAddress(uint64_t PhysicalAddress) {
   // A live nonpaged PoolAllocation records its allocator-owned primary VA.
   // Generic physical Region::Backing also includes private/request storage,
   // so it is not sufficient evidence for the original PFN primary PTE.
@@ -296,6 +392,13 @@ KernelModel::queryPrimaryVirtualAddress(uint64_t PhysicalAddress) const {
                                   "nonpaged pool mappings");
       Primary = Address;
     }
+  }
+  if (!Primary && Version) {
+    auto Pages = Physical.physicalViewPages(
+        PhysicalAddress & ~(profile::PageSize - 1), profile::PageSize);
+    if (!Pages)
+      return Pages.takeError();
+    Primary = Pages->front().Backing + PhysicalAddress % profile::PageSize;
   }
   if (!Primary)
     return physicalModelError("physical address has no live primary "

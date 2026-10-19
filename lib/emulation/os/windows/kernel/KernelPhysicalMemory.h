@@ -16,6 +16,7 @@
 #include "neverd/emulation/DriverDMA.h"
 #include "neverd/emulation/GuestMemory.h"
 
+#include <algorithm>
 #include <map>
 #include <optional>
 #include <set>
@@ -51,6 +52,9 @@ public:
   /// must explicitly select this simulated domain before publishing it as RAM.
   static std::pair<uint64_t, uint64_t> identityWindow();
   explicit KernelPhysicalMemory(GuestMemory &Memory) : Memory(Memory) {}
+  /// Configure before any owner, pin or ordinary guest frame is published.
+  /// The default remains the original 1 MiB managed physical window.
+  llvm::Error configureManagedCapacity(uint64_t Bytes);
   KernelPhysicalMemory(const KernelPhysicalMemory &) = delete;
   KernelPhysicalMemory &operator=(const KernelPhysicalMemory &) = delete;
   struct Region {
@@ -74,6 +78,11 @@ public:
   planAllocatedPages(uint64_t Low, uint64_t High, uint64_t Skip,
                      uint64_t PageCount, uint64_t ChunkPages = 0) const;
   /// Publish private canonical backing against exactly the selected free pages.
+  /// Reserved, unowned paging frames may be rebound. The caller must reject
+  /// outstanding virtual/physical views before assigning allocation backing.
+  llvm::Error canRegisterAllocatedPages(uint64_t Owner, uint64_t Backing,
+                                        llvm::ArrayRef<uint64_t> PhysicalPages,
+                                        std::optional<CacheType> Cache) const;
   llvm::Error registerAllocatedPages(uint64_t Owner, uint64_t Backing,
                                      llvm::ArrayRef<uint64_t> PhysicalPages,
                                      std::optional<CacheType> Cache);
@@ -128,6 +137,29 @@ public:
   /// This pure query neither pins pages nor grants access to their contents.
   llvm::Expected<AddressTranslation> resolveAddress(uint64_t Address) const;
   llvm::Expected<uint64_t> ownerForRange(uint64_t Backing, uint64_t Size) const;
+  /// Extend frame identity to ordinary mapped RAM for the guest paging model.
+  /// The original allocation window and exact owner/pin checks stay separate.
+  llvm::Error enableGuestFrames(uint64_t Capacity);
+  llvm::Expected<uint64_t> frameAddress(uint64_t Address);
+  llvm::Expected<CacheType> frameCacheType(uint64_t Address) const;
+  uint64_t frameGeneration() const { return FrameGeneration; }
+  struct PhysicalViewPage {
+    uint64_t Physical = 0, Backing = 0;
+    std::optional<CacheType> Cache;
+    std::vector<uint64_t> Owners;
+    MemoryView Storage;
+  };
+  // Resolve only published guest PFNs to their current canonical RAM mapping.
+  // No identity or zero-filled backing is invented for an unknown frame.
+  llvm::Expected<std::vector<PhysicalViewPage>>
+  physicalViewPages(uint64_t Address, uint64_t Size) const;
+  uint64_t availablePins() const {
+    return std::min<uint64_t>(physical::PinLimit - Pins.size(),
+                              UINT64_MAX - NextPin);
+  }
+  uint64_t physicalRangeSize() const {
+    return ManagedCapacity + GuestFrameCapacity;
+  }
 
 private:
   struct PinRecord {
@@ -147,11 +179,16 @@ private:
     uint64_t Physical;
     std::optional<CacheType> Cache;
     bool Reusable = false;
+    bool Managed = true;
+    uint64_t BackingPage = 0;
   };
-  llvm::Expected<std::vector<uint64_t>> planRegion(uint64_t Owner,
-                                                   uint64_t Backing,
-                                                   uint64_t Size,
-                                                   CacheType Cache) const;
+  llvm::Expected<std::vector<uint64_t>>
+  planRegion(uint64_t Owner, uint64_t Backing, uint64_t Size, CacheType Cache,
+             bool RebindUnmanaged = false) const;
+  llvm::Expected<Region>
+  planAllocatedRegion(uint64_t Owner, uint64_t Backing,
+                      llvm::ArrayRef<uint64_t> PhysicalPages,
+                      std::optional<CacheType> Cache) const;
   llvm::Expected<uint64_t> viewBacking(uint64_t Owner, uint64_t Offset,
                                        uint64_t Length) const;
   llvm::Expected<uint64_t> pinOffset(uint64_t Pin, uint64_t Offset,
@@ -159,6 +196,7 @@ private:
   llvm::Expected<PageKey> pageKey(uint64_t Address) const;
   PageKey pageKey(const Region &Region, uint64_t Address) const;
   bool containsPage(const MemoryView &View, const PageKey &Key) const;
+  size_t managedPageCount() const;
   using Owners = std::multimap<uint64_t, uint64_t>;
   const Owners *activeOwners() const;
   GuestMemory &Memory;
@@ -170,6 +208,11 @@ private:
   std::map<PageKey, PageRecord, PageKeyLess> Pages;
   std::map<uint64_t, PinRecord> Pins;
   uint64_t NextPin = 1;
+  uint64_t ManagedCapacity = physical::PhysicalSize;
+  bool ManagedCapacityConfigured = false;
+  uint64_t GuestFrameCapacity = 0;
+  uint64_t FrameGeneration = 0;
+  uint64_t NextGuestFrame = physical::PhysicalBase + physical::PhysicalSize;
 };
 } // namespace neverd::emulation
 #endif // NEVERD_EMULATION_KERNELPHYSICALMEMORY_H

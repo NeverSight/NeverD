@@ -69,17 +69,20 @@ llvm::Expected<uint64_t> KernelModel::allocatePool(llvm::ArrayRef<uint64_t> A,
   uint64_t Alignment = Modern && (Flags & pool::CacheAligned)
                            ? DeviceAlignmentMask + 1
                            : PoolAlignment;
-  uint64_t Start = (NextAllocation + Alignment - 1) & ~(Alignment - 1);
+  const bool PagedArena = GuestPageTables && !NonPaged;
+  const uint64_t Cursor = PagedArena ? NextPagedAllocation : NextAllocation;
+  const uint64_t ArenaEnd = PagedArena ? PagedAllocationEnd : AllocationEnd;
+  uint64_t Start = (Cursor + Alignment - 1) & ~(Alignment - 1);
   // Allocations smaller than one page never cross a page. Larger allocations
   // are page aligned. A run does not recycle addresses after a free.
   if (A[1] >= profile::PageSize ||
       (Start & (profile::PageSize - 1)) + A[1] > profile::PageSize) {
     Alignment = profile::PageSize;
-    Start = (NextAllocation + Alignment - 1) & ~(Alignment - 1);
+    Start = (Cursor + Alignment - 1) & ~(Alignment - 1);
   }
-  if (Start > AllocationEnd || A[1] > AllocationEnd - Start)
+  if (Start > ArenaEnd || A[1] > ArenaEnd - Start)
     return AllocationFailure();
-  auto Pointer = allocatePhysicalBuffer(A[1], Alignment, 0, A[1]);
+  auto Pointer = allocatePhysicalBuffer(A[1], Alignment, 0, A[1], PagedArena);
   if (!Pointer) {
     auto Error = Pointer.takeError();
     if (Error.isA<PhysicalMemoryLimitError>()) {
@@ -108,6 +111,10 @@ llvm::Expected<uint64_t> KernelModel::allocatePool(llvm::ArrayRef<uint64_t> A,
 
 llvm::Expected<uint64_t> KernelModel::freePool(llvm::ArrayRef<uint64_t> A,
                                                bool Tagged) {
+  if (NdisConfigurationAllocations.contains(A[0]) &&
+      !ReleasingNdisConfiguration)
+    return modelError(
+        "NDIS configuration storage requires NdisCloseConfiguration");
   if (auto Mdl = MDLs.find(A[0]);
       Mdl != MDLs.end() &&
       (Mdl->second.Owner == LockedMdl::Ownership::AllocatedPages ||
@@ -122,7 +129,10 @@ llvm::Expected<uint64_t> KernelModel::freePool(llvm::ArrayRef<uint64_t> A,
   auto It = Allocations.find(A[0]);
   if (It == Allocations.end())
     return modelError("pool free received an unknown or already freed pointer");
-  if (Tagged && uint32_t(A[1]) && static_cast<uint32_t>(A[1]) != It->second.Tag)
+  if (It->second.Contiguous)
+    return modelError("contiguous memory requires MmFreeContiguousMemory");
+  if (!WindowsPoolTags && Tagged && uint32_t(A[1]) &&
+      static_cast<uint32_t>(A[1]) != It->second.Tag)
     return modelError("ExFreePoolWithTag tag does not match allocation");
   if (!It->second.NonPaged && CurrentIRQL > APCLevel)
     return modelError("paged pool free requires IRQL <= APC_LEVEL");
@@ -142,6 +152,9 @@ llvm::Expected<uint64_t> KernelModel::freePool(llvm::ArrayRef<uint64_t> A,
     return E;
   FreedRanges.emplace(A[0], It->second.Size);
   Allocations.erase(It);
+  MibTables.erase(A[0]);
+  RtlStringBuffers.erase(A[0]);
+  PersistentDumps.erase(A[0]);
   return 0;
 }
 

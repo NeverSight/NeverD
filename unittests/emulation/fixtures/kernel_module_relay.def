@@ -1,0 +1,4 @@
+LIBRARY relay.sys EXPORTS ForwardProbe =
+    provider.SupportProbe @31 ForwardOrdinal = provider.#23 @32 ForwardData =
+        provider.SupportValue @33 DATA ForwardKernel =
+            ntoskrnl.KeGetCurrentIrql @34

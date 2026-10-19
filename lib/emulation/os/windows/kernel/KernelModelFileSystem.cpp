@@ -26,6 +26,8 @@ uint64_t KernelModel::deviceOwnerDriver(DeviceOwnerKind Kind) const {
     return DriverObject;
   case DeviceOwnerKind::PnpProvider:
     return PnpProviderDriver;
+  case DeviceOwnerKind::FiniteFileSystem:
+    return FiniteFileSystemDriver;
   case DeviceOwnerKind::FileSystemProvider:
     return FileSystemProviderDriver;
   }

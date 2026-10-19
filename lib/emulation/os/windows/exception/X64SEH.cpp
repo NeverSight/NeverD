@@ -153,7 +153,7 @@ X64SEH::X64SEH(std::vector<Image> Images, ReadStack64 ReadStack,
     : Images(std::move(Images)), ReadStack(std::move(ReadStack)),
       Executable(std::move(Executable)), Code(std::move(Code)) {}
 
-llvm::Error X64SEH::validateImages() const {
+llvm::Error X64SEH::validateImages(bool Live) const {
   if (Images.empty() || Images.size() > seh::MaxImages)
     return invalid(seh::text::InvalidExceptionImageCount);
   for (size_t I = 0; I < Images.size(); ++I) {
@@ -168,7 +168,23 @@ llvm::Error X64SEH::validateImages() const {
         return invalid(seh::text::OverlappingExceptionImages);
     }
   }
+  if (Live)
+    for (const auto &Image : Images)
+      if (Image.Validate)
+        if (auto E = Image.Validate())
+          return E;
   return llvm::Error::success();
+}
+llvm::Expected<std::unique_ptr<X64SEH>>
+X64SEH::withAdditionalImages(llvm::ArrayRef<Image> Added) const {
+  if (Added.size() > seh::MaxImages ||
+      Images.size() > seh::MaxImages - Added.size())
+    return invalid(seh::text::InvalidExceptionImageCount);
+  auto Next = std::make_unique<X64SEH>(*this);
+  Next->Images.insert(Next->Images.end(), Added.begin(), Added.end());
+  if (auto E = Next->validateImages())
+    return std::move(E);
+  return Next;
 }
 std::optional<size_t> X64SEH::imageFor(uint64_t PC) const {
   for (size_t I = 0; I < Images.size(); ++I)
@@ -224,7 +240,7 @@ X64SEH::beginNested(uint32_t ExceptionCode, const Context &Caller, Stack Bounds,
 
 llvm::Expected<X64SEH::Action>
 X64SEH::advance(Dispatch &State, std::optional<int32_t> FilterResult) const {
-  if (auto E = validateImages())
+  if (auto E = validateImages(true))
     return std::move(E);
   Dispatch Candidate = State;
   auto Result = advanceImpl(Candidate, FilterResult);
@@ -803,7 +819,7 @@ X64SEH::continuation(llvm::ArrayRef<uint8_t> Records, const Exception &Raised,
       SP < Bounds.Base || SP >= Bounds.Base + Bounds.Size ||
       SP % seh::PointerSize)
     return invalid(seh::text::ContinuationStackPointerExceedsItsExecutionStack);
-  if (auto E = validateImages())
+  if (auto E = validateImages(true))
     return std::move(E);
   if (!imageFor(Result->PC) || !Executable || !Executable(Result->PC))
     return invalid(seh::text::ContinuationDoesNotNameExecutableImageCode);

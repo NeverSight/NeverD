@@ -1,0 +1,7 @@
+//===- KernelCrtAPIs.def - Bounded kernel CRT string services
+//--------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+NEVERD_KERNEL_CRT_API(tolower, 1, LowerC, true)

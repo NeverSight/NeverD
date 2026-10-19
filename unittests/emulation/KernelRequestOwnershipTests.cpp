@@ -36,7 +36,10 @@ protected:
   std::unique_ptr<KernelModel> Model;
   uint64_t Device = 0;
 
-  void SetUp() override {
+  void SetUp() override { initialize(); }
+  void initialize(DriverOptions Options = {}) {
+    Model.reset();
+    Result = DriverResult{};
     auto Backend = UnicornBackend::create(8 * 1024 * 1024);
     ASSERT_TRUE(bool(Backend)) << llvm::toString(Backend.takeError());
     Memory = std::move(*Backend);
@@ -46,7 +49,7 @@ protected:
     Image.Base = 0x180000000;
     Image.Entry = Entry;
     Image.Size = 0x3000;
-    success(Model->initialize(Image, DriverOptions{}));
+    success(Model->initialize(Image, Options));
     ASSERT_EQ(call("IoCreateDevice", {Model->driverObject(), 0, 0,
                                       UnknownDeviceType, 0, 0, Scratch}),
               0u);
@@ -369,6 +372,144 @@ TEST_F(KernelRequestOwnership, IoStatusInitializationIsTrackedPerIRPAndByte) {
 }
 
 TEST_F(KernelRequestOwnership,
+       Windows19041InitializesScenarioStatusWithoutInventingDriverWrites) {
+  DriverOptions Options;
+  Options.Version = DriverOptions::WindowsVersion{10, 0, 19041};
+  Options.IRPInitializationPolicy = DriverIRPInitializationPolicy::Windows19041;
+  initialize(Options);
+  ASSERT_NE(open(), 0u);
+  const uint64_t IRP = begin(ioRequest());
+  ASSERT_NE(IRP, 0u);
+  success(Model->validateGuestAccess(IRP + IRPStatusOffset, 16, false));
+  EXPECT_EQ(integer(IRP + IRPStatusOffset, 4), 0u);
+  EXPECT_EQ(integer(IRP + IRPInformationOffset), 0u);
+  // A short status store preserves the remaining initialized bytes, including
+  // padding. Information still comes from the kernel initializer.
+  guestWrite(IRP + IRPStatusOffset, 0x1234, 2);
+  call("IofCompleteRequest", {IRP, 0});
+  success(Model->recordDispatchReturn(IRP, 0x1234));
+  success(Model->finalizeRequest(IRP));
+  EXPECT_TRUE(observation(IRP).Completed);
+  EXPECT_EQ(observation(IRP).IOStatus, 0x1234u);
+  EXPECT_EQ(observation(IRP).Information, 0u);
+  EXPECT_TRUE(
+      Result.Writes.empty()); // Model initialization is not a CPU store.
+  rejected(Model->validateGuestAccess(IRP + IRPStatusOffset, 4, false));
+  close();
+}
+
+TEST_F(KernelRequestOwnership,
+       Windows19041InitializationDoesNotBypassOutputBoundsOrPendingStatus) {
+  DriverOptions Options;
+  Options.Version = DriverOptions::WindowsVersion{10, 0, 19041};
+  Options.IRPInitializationPolicy = DriverIRPInitializationPolicy::Windows19041;
+  initialize(Options);
+  ASSERT_NE(open(), 0u);
+  const uint64_t IRP = begin(ioRequest());
+  guestWrite(IRP + IRPStatusOffset, Pending, 4);
+  rejected(Model->call("IofCompleteRequest", {IRP, 0}));
+  guestWrite(IRP + IRPStatusOffset, 0, 4);
+  guestWrite(IRP + IRPInformationOffset, 5, 8); // Output buffer is four bytes.
+  rejected(Model->call("IofCompleteRequest", {IRP, 0}));
+  EXPECT_FALSE(observation(IRP).Completed);
+  guestWrite(IRP + IRPInformationOffset, 0, 8);
+  call("IofCompleteRequest", {IRP, 0});
+  success(Model->recordDispatchReturn(IRP, 0));
+  success(Model->finalizeRequest(IRP));
+  EXPECT_EQ(observation(IRP).Information, 0u);
+  close();
+}
+
+TEST(KernelIRPInitialization, DirectOptionsRejectUnknownPolicyAndWrongVersion) {
+  for (unsigned Case = 0; Case < 3; ++Case) {
+    DriverOptions Options;
+    Options.IRPInitializationPolicy =
+        DriverIRPInitializationPolicy::Windows19041;
+    if (Case == 1)
+      Options.Version = DriverOptions::WindowsVersion{10, 0, 22621};
+    if (Case == 2)
+      Options.IRPInitializationPolicy =
+          static_cast<DriverIRPInitializationPolicy>(42);
+    auto Backend = UnicornBackend::create(4 * 1024 * 1024);
+    ASSERT_TRUE(bool(Backend)) << llvm::toString(Backend.takeError());
+    DriverResult Result;
+    KernelModel Model(**Backend, Result);
+    DriverImage Image;
+    Image.Base = 0x180000000;
+    Image.Entry = Image.Base + 0x1000;
+    Image.Size = 0x3000;
+    auto Error = Model.initialize(Image, Options);
+    ASSERT_TRUE(bool(Error));
+    EXPECT_NE(
+        llvm::toString(std::move(Error)).find("irp_initialization_policy"),
+        std::string::npos);
+    EXPECT_TRUE(Result.Requests.empty());
+  }
+}
+
+TEST(DriverIRPInitialization, StatusOnlyClientRequiresExplicitPolicy) {
+  DriverOptions Options;
+  Options.Version = DriverOptions::WindowsVersion{10, 0, 19041};
+  Options.Unload = true;
+  DriverRequest Create;
+  Create.Kind = DriverRequestKind::Create;
+  Create.Device = "\\Device\\NeverDInitIRP";
+  DriverRequest IOCTL;
+  IOCTL.ControlCode = 0x222000;
+  IOCTL.Input = {1, 2, 3, 4};
+  IOCTL.OutputSize = 4;
+  DriverRequest Cleanup;
+  Cleanup.Kind = DriverRequestKind::Cleanup;
+  DriverRequest Close;
+  Close.Kind = DriverRequestKind::Close;
+  Options.Requests = {Create, IOCTL, Cleanup, Close};
+  const auto Image = std::filesystem::path(NEVERD_DRIVER_FIXTURES) /
+                     "driver_irp_initialization.sys";
+  for (auto Policy : {DriverIRPInitializationPolicy::Strict,
+                      DriverIRPInitializationPolicy::Windows19041})
+    for (auto Contract :
+         {ExecutionContract::Legacy, ExecutionContract::CheckedX64})
+      for (bool Rebased : {false, true})
+        for (bool Preemptive : {false, true}) {
+          Options.IRPInitializationPolicy = Policy;
+          Options.Contract = Contract;
+          Options.LoadAddress = Rebased ? 0x1a0000000 : 0;
+          Options.Scheduling = Preemptive
+                                   ? std::optional<DriverScheduling>{{31, 1}}
+                                   : std::nullopt;
+          auto Result = emulateDriver(Image, Options);
+          ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+          if (Policy == DriverIRPInitializationPolicy::Strict) {
+            EXPECT_EQ(Result->Stop, DriverStopReason::ModelError);
+            EXPECT_NE(Result->Diagnostic.find("initialized IoStatus"),
+                      std::string::npos);
+            EXPECT_FALSE(Result->UnloadCompleted);
+            continue;
+          }
+          EXPECT_EQ(Result->Stop, DriverStopReason::Returned)
+              << Result->Diagnostic;
+          EXPECT_TRUE(Result->UnloadCompleted) << Result->Diagnostic;
+          ASSERT_EQ(Result->Requests.size(), 4u);
+          for (const auto &Request : Result->Requests) {
+            EXPECT_TRUE(Request.Completed);
+            EXPECT_EQ(Request.IOStatus, 0u);
+            EXPECT_EQ(Request.Information, 0u);
+            bool StatusStored = false;
+            for (const auto &Write : Result->Writes) {
+              if (Write.Address == Request.IRP + IRPStatusOffset &&
+                  Write.Size == 4)
+                StatusStored = true;
+              EXPECT_FALSE(Write.Address <
+                               Request.IRP + IRPInformationOffset + 8 &&
+                           Write.Address + Write.Size >
+                               Request.IRP + IRPInformationOffset);
+            }
+            EXPECT_TRUE(StatusStored);
+          }
+        }
+}
+
+TEST_F(KernelRequestOwnership,
        SynchronousFileRejectsNewRequestsUntilPriorRequestIsArchived) {
   ASSERT_NE(open(), 0u);
   auto ExpectFileBusy = [&] {
@@ -540,6 +681,35 @@ TEST_F(KernelRequestOwnership,
   close();
 }
 
+TEST_F(KernelRequestOwnership, VirtualQueryUsesRequestBufferPageOwnership) {
+  DriverOptions O;
+  O.Version = DriverOptions::WindowsVersion{10, 0, 19041};
+  initialize(O);
+  ASSERT_NE(open(), 0u);
+  auto Input = ioRequest(0, MethodNeither);
+  Input.DirectInput.clear();
+  Input.RequestorProcessID = 100;
+  Input.OutputSize = 5000;
+  const auto IRP = begin(Input);
+  ASSERT_NE(IRP, 0u);
+  Model->enterExecution(profile::StackBase);
+  success(Model->setUserRequestContext(true, 100));
+  const auto User = integer(IRP + IRPUserBufferOffset);
+  EXPECT_EQ(call("ZwQueryVirtualMemory",
+                 {UINT64_MAX, User + 4096 + 7, 0, Scratch, 48, 0}),
+            0u);
+  EXPECT_EQ(integer(Scratch), User + 4096);
+  EXPECT_EQ(integer(Scratch + 8), User);
+  EXPECT_EQ(integer(Scratch + 24), 4096u);
+  EXPECT_EQ(integer(Scratch + 32, 4), 0x1000u);
+  EXPECT_EQ(integer(Scratch + 36, 4), 4u);
+  EXPECT_EQ(integer(Scratch + 40, 4), 0x20000u);
+  complete(IRP);
+  success(Model->recordDispatchReturn(IRP, 0));
+  success(Model->finalizeRequest(IRP));
+  success(Model->setUserRequestContext(false));
+  close();
+}
 TEST_F(KernelRequestOwnership,
        NeitherProbesAndUserLocksKeepSeparatePacketAndRAMOwnership) {
   ASSERT_NE(open(), 0u);
@@ -885,6 +1055,11 @@ TEST_F(KernelRequestOwnership,
   const uint64_t UserOutput = integer(IRP + IRPUserBufferOffset);
   Model->enterExecution(profile::StackBase);
   success(Model->setUserRequestContext(true, Input.RequestorProcessID));
+  Model->enterExecution(profile::StackBase);
+  const uint64_t Thread = call("PsGetCurrentThread", {});
+  const uint64_t ThreadID = call("PsGetCurrentThreadId", {});
+  EXPECT_EQ(call("PsLookupThreadByThreadId", {ThreadID, Scratch + 0x100}), 0u);
+  EXPECT_EQ(integer(Scratch + 0x100), Thread);
   EXPECT_EQ(call("PsGetCurrentProcessId", {}), Input.RequestorProcessID);
   EXPECT_EQ(call("IoGetRequestorProcessId", {IRP}), Input.RequestorProcessID);
   const uint64_t InMdl = call("IoAllocateMdl", {UserInput, 2, 0, 0, 0});
@@ -926,6 +1101,12 @@ TEST_F(KernelRequestOwnership,
   const uint64_t RetainedProcess = integer(Scratch + 0x400);
   success(Model->exitRequestorProcess(IRP));
   rejected(Model->exitRequestorProcess(IRP));
+  EXPECT_EQ(call("PsLookupThreadByThreadId", {ThreadID, Scratch + 0x100}),
+            StatusInvalidCID);
+  EXPECT_EQ(call("PsGetThreadProcessId", {Thread}), Input.RequestorProcessID);
+  call("ObfDereferenceObject", {Thread});
+  rejected(Model->call("PsGetThreadProcessId", {Thread}));
+  rejected(Model->validateGuestAccess(Thread, 1, false));
   success(Model->setUserRequestContext(true, Other.RequestorProcessID));
   OwnProcessWrite = Memory->canAccess(OtherOutput, 1, Read | Write);
   ASSERT_TRUE(bool(OwnProcessWrite));
@@ -993,10 +1174,42 @@ TEST_F(KernelRequestOwnership, RequestorProcessIDsCannotTakeIssuedThreadIDs) {
 }
 
 TEST_F(KernelRequestOwnership,
+       RequestorExitWithoutCodeRevokesPublishedProcessExitStatus) {
+  DriverOptions O;
+  O.Version = DriverOptions::WindowsVersion{10, 0, 19041};
+  initialize(O);
+  ASSERT_NE(open(), 0u);
+  auto Input = ioRequest(0, MethodNeither);
+  Input.DirectInput.clear();
+  Input.RequestorProcessID = 0x1010;
+  Input.RequestorExitAfterDispatch = true;
+  const auto IRP = begin(Input);
+  ASSERT_NE(IRP, 0u);
+  Model->enterExecution(profile::StackBase);
+  success(Model->setUserRequestContext(true, Input.RequestorProcessID));
+  EXPECT_EQ(call("PsLookupProcessByProcessId",
+                 {Input.RequestorProcessID, Scratch + 0x100}),
+            0u);
+  const auto Process = integer(Scratch + 0x100);
+  EXPECT_EQ(call("PsGetProcessExitStatus", {Process}), 0x103u);
+  call("IoMarkIrpPending", {IRP});
+  success(Model->setUserRequestContext(false));
+  success(Model->recordDispatchReturn(IRP, Pending));
+  success(Model->exitRequestorProcess(IRP));
+  rejected(Model->call("PsGetProcessExitStatus", {Process}));
+  rejected(Model->validateGuestAccess(Process + ProcessExitStatus19041Offset, 4,
+                                      false));
+  call("ObfDereferenceObject", {Process});
+  complete(IRP, 0, 0);
+  success(Model->finalizeRequest(IRP));
+  close();
+}
+TEST_F(KernelRequestOwnership,
        WorkItemAttachmentRestoresUserAddressSpaceAndRequiresExactDetach) {
   ASSERT_NE(open(), 0u);
   ASSERT_NE(open(1), 0u);
   auto Input = ioRequest(0, MethodNeither);
+  Input.Input = {0x11, 0x22, 0, 0};
   Input.DirectInput.clear();
   Input.RequestorProcessID = 0x3030;
   const uint64_t IRP = begin(Input);
@@ -1043,9 +1256,11 @@ TEST_F(KernelRequestOwnership,
   ASSERT_TRUE(bool(*Scheduled));
   const uint64_t ID = (**Scheduled).ID;
   Model->enterExecution(profile::CallbackStackBase);
+  const uint64_t Thread = call("PsGetCurrentThread", {});
+  const uint64_t ThreadProcess = call("PsGetThreadProcess", {Thread});
+  EXPECT_EQ(call("PsGetThreadProcessId", {Thread}), 4u);
   EXPECT_EQ(call("PsGetCurrentProcessId", {}), 4u);
   EXPECT_EQ(call("PsGetProcessId", {call("IoGetCurrentProcess", {})}), 4u);
-  const uint64_t Thread = call("PsGetCurrentThread", {});
   ASSERT_NE(Thread, 0u);
   EXPECT_EQ(call("KeGetCurrentThread", {}), Thread);
   const uint64_t ThreadID = call("PsGetCurrentThreadId", {});
@@ -1055,6 +1270,25 @@ TEST_F(KernelRequestOwnership,
   rejected(Model->call("KeStackAttachProcess", {Process + 1, ApcState}));
   rejected(Model->call("KeStackAttachProcess", {Process, Scratch}));
   call("KeStackAttachProcess", {Process, ApcState});
+  EXPECT_EQ(call("PsGetCurrentThread", {}), Thread);
+  EXPECT_EQ(call("PsIsThreadTerminating", {Thread}), 0u);
+  EXPECT_EQ(call("RtlUpperChar", {'q'}), uint64_t('Q'));
+  constexpr uint64_t Number = Scratch + 0x8000, NumberText = Number + 0x100;
+  guestWrite(Number, 0x1234, 2);
+  guestWrite(Number + 2, 64, 2);
+  guestWrite(Number + 8, NumberText, 8);
+  EXPECT_EQ(call("RtlInt64ToUnicodeString", {UINT64_MAX, 10, Number}), 0u);
+  EXPECT_EQ(integer(Number, 2), 40u);
+  EXPECT_EQ(integer(NumberText, 2), uint64_t('1'));
+  EXPECT_EQ(call("RtlIntegerToUnicodeString", {UINT64_MAX, 16, Number}), 0u);
+  EXPECT_EQ(integer(Number, 2), 16u);
+  EXPECT_EQ(integer(NumberText, 2), uint64_t('F'));
+  guestWrite(Number + 0x30, UserInput, 8);
+  EXPECT_EQ(call("RtlAnsiCharToUnicodeChar", {Number + 0x30}), 0x11u);
+  EXPECT_EQ(integer(Number + 0x30), UserInput + 1);
+  EXPECT_EQ(call("PsGetThreadProcessId", {Thread}), 4u);
+  EXPECT_EQ(call("PsGetThreadProcess", {Thread}), ThreadProcess);
+  EXPECT_EQ(call("IoThreadToProcess", {Thread}), ThreadProcess);
   rejected(Model->validateGuestAccess(ApcState, 1, false));
   EXPECT_EQ(call("IoGetCurrentProcess", {}), Process);
   // Attachment changes the APC-state process, never the thread identity.
@@ -1069,6 +1303,8 @@ TEST_F(KernelRequestOwnership,
   EXPECT_EQ(call("KeGetCurrentProcessorNumberEx", {Scratch + 0x280}), 0u);
   EXPECT_EQ(bytes(Scratch + 0x280, 4), (std::vector<uint8_t>(4, 0)));
   EXPECT_EQ(bytes(UserInput, 1), (std::vector<uint8_t>{0x11}));
+  EXPECT_EQ(call("wcsrchr", {UserInput, 0}), UserInput + 2);
+  EXPECT_EQ(call("wcsrchr", {UserInput, 0x2211}), UserInput);
   auto CanReadOther = Memory->canAccess(OtherInput, 1, Read);
   ASSERT_TRUE(bool(CanReadOther));
   EXPECT_FALSE(*CanReadOther);

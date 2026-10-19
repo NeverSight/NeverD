@@ -1,0 +1,324 @@
+// Original ntdll and reference kernel agree. Explicit owned buffers.
+// Oracle SHA256:
+// f24bd66e491c0bba421b198d821376a35574b31ab758c69639a4ff82cc845cbf
+NEVERD_RTL_ADDITIONAL_CASE(character, "007f", 0x0u, 0x0u, 0x0u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "007f", 0x2u, 0x0u, 0x0u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "007f", 0x8u, 0x0u, 0x0u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "007f", 0xau, 0x0u, 0x0u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "007f", 0x10u, 0x0u, 0x0u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "007f", 0x1u, 0xc000000du, 0xa5a5a5a5u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "007f", 0x3u, 0xc000000du, 0xa5a5a5a5u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "007f", 0x24u, 0xc000000du, 0xa5a5a5a5u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "007f", 0xffffffffu, 0xc000000du,
+                           0xa5a5a5a5u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "30007f", 0x0u, 0x0u, 0x0u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "30007f", 0x2u, 0x0u, 0x0u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "30007f", 0x8u, 0x0u, 0x0u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "30007f", 0xau, 0x0u, 0x0u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "30007f", 0x10u, 0x0u, 0x0u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "30007f", 0x1u, 0xc000000du, 0xa5a5a5a5u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "30007f", 0x3u, 0xc000000du, 0xa5a5a5a5u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "30007f", 0x24u, 0xc000000du, 0xa5a5a5a5u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "30007f", 0xffffffffu, 0xc000000du,
+                           0xa5a5a5a5u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "3432007f", 0x0u, 0x0u, 0x2au)
+NEVERD_RTL_ADDITIONAL_CASE(character, "3432007f", 0x2u, 0x0u, 0x0u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "3432007f", 0x8u, 0x0u, 0x22u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "3432007f", 0xau, 0x0u, 0x2au)
+NEVERD_RTL_ADDITIONAL_CASE(character, "3432007f", 0x10u, 0x0u, 0x42u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "3432007f", 0x1u, 0xc000000du,
+                           0xa5a5a5a5u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "3432007f", 0x3u, 0xc000000du,
+                           0xa5a5a5a5u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "3432007f", 0x24u, 0xc000000du,
+                           0xa5a5a5a5u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "3432007f", 0xffffffffu, 0xc000000du,
+                           0xa5a5a5a5u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "202b3432007f", 0x0u, 0x0u, 0x2au)
+NEVERD_RTL_ADDITIONAL_CASE(character, "202b3432007f", 0x2u, 0x0u, 0x0u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "202b3432007f", 0x8u, 0x0u, 0x22u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "202b3432007f", 0xau, 0x0u, 0x2au)
+NEVERD_RTL_ADDITIONAL_CASE(character, "202b3432007f", 0x10u, 0x0u, 0x42u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "202b3432007f", 0x1u, 0xc000000du,
+                           0xa5a5a5a5u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "202b3432007f", 0x3u, 0xc000000du,
+                           0xa5a5a5a5u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "202b3432007f", 0x24u, 0xc000000du,
+                           0xa5a5a5a5u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "202b3432007f", 0xffffffffu, 0xc000000du,
+                           0xa5a5a5a5u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "090a2d3432007f", 0x0u, 0x0u, 0xffffffd6u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "090a2d3432007f", 0x2u, 0x0u, 0x0u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "090a2d3432007f", 0x8u, 0x0u, 0xffffffdeu)
+NEVERD_RTL_ADDITIONAL_CASE(character, "090a2d3432007f", 0xau, 0x0u, 0xffffffd6u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "090a2d3432007f", 0x10u, 0x0u,
+                           0xffffffbeu)
+NEVERD_RTL_ADDITIONAL_CASE(character, "090a2d3432007f", 0x1u, 0xc000000du,
+                           0xa5a5a5a5u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "090a2d3432007f", 0x3u, 0xc000000du,
+                           0xa5a5a5a5u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "090a2d3432007f", 0x24u, 0xc000000du,
+                           0xa5a5a5a5u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "090a2d3432007f", 0xffffffffu,
+                           0xc000000du, 0xa5a5a5a5u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "30784646007f", 0x0u, 0x0u, 0xffu)
+NEVERD_RTL_ADDITIONAL_CASE(character, "30784646007f", 0x2u, 0x0u, 0x0u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "30784646007f", 0x8u, 0x0u, 0x0u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "30784646007f", 0xau, 0x0u, 0x0u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "30784646007f", 0x10u, 0x0u, 0x0u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "30784646007f", 0x1u, 0xc000000du,
+                           0xa5a5a5a5u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "30784646007f", 0x3u, 0xc000000du,
+                           0xa5a5a5a5u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "30784646007f", 0x24u, 0xc000000du,
+                           0xa5a5a5a5u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "30784646007f", 0xffffffffu, 0xc000000du,
+                           0xa5a5a5a5u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "30586666007f", 0x0u, 0x0u, 0x0u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "30586666007f", 0x2u, 0x0u, 0x0u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "30586666007f", 0x8u, 0x0u, 0x0u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "30586666007f", 0xau, 0x0u, 0x0u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "30586666007f", 0x10u, 0x0u, 0x0u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "30586666007f", 0x1u, 0xc000000du,
+                           0xa5a5a5a5u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "30586666007f", 0x3u, 0xc000000du,
+                           0xa5a5a5a5u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "30586666007f", 0x24u, 0xc000000du,
+                           0xa5a5a5a5u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "30586666007f", 0xffffffffu, 0xc000000du,
+                           0xa5a5a5a5u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "3062313031007f", 0x0u, 0x0u, 0x5u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "3062313031007f", 0x2u, 0x0u, 0x0u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "3062313031007f", 0x8u, 0x0u, 0x0u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "3062313031007f", 0xau, 0x0u, 0x0u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "3062313031007f", 0x10u, 0x0u, 0xb101u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "3062313031007f", 0x1u, 0xc000000du,
+                           0xa5a5a5a5u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "3062313031007f", 0x3u, 0xc000000du,
+                           0xa5a5a5a5u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "3062313031007f", 0x24u, 0xc000000du,
+                           0xa5a5a5a5u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "3062313031007f", 0xffffffffu,
+                           0xc000000du, 0xa5a5a5a5u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "306f3737007f", 0x0u, 0x0u, 0x3fu)
+NEVERD_RTL_ADDITIONAL_CASE(character, "306f3737007f", 0x2u, 0x0u, 0x0u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "306f3737007f", 0x8u, 0x0u, 0x0u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "306f3737007f", 0xau, 0x0u, 0x0u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "306f3737007f", 0x10u, 0x0u, 0x0u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "306f3737007f", 0x1u, 0xc000000du,
+                           0xa5a5a5a5u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "306f3737007f", 0x3u, 0xc000000du,
+                           0xa5a5a5a5u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "306f3737007f", 0x24u, 0xc000000du,
+                           0xa5a5a5a5u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "306f3737007f", 0xffffffffu, 0xc000000du,
+                           0xa5a5a5a5u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "303737007f", 0x0u, 0x0u, 0x4du)
+NEVERD_RTL_ADDITIONAL_CASE(character, "303737007f", 0x2u, 0x0u, 0x0u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "303737007f", 0x8u, 0x0u, 0x3fu)
+NEVERD_RTL_ADDITIONAL_CASE(character, "303737007f", 0xau, 0x0u, 0x4du)
+NEVERD_RTL_ADDITIONAL_CASE(character, "303737007f", 0x10u, 0x0u, 0x77u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "303737007f", 0x1u, 0xc000000du,
+                           0xa5a5a5a5u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "303737007f", 0x3u, 0xc000000du,
+                           0xa5a5a5a5u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "303737007f", 0x24u, 0xc000000du,
+                           0xa5a5a5a5u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "303737007f", 0xffffffffu, 0xc000000du,
+                           0xa5a5a5a5u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "30643432007f", 0x0u, 0x0u, 0x0u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "30643432007f", 0x2u, 0x0u, 0x0u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "30643432007f", 0x8u, 0x0u, 0x0u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "30643432007f", 0xau, 0x0u, 0x0u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "30643432007f", 0x10u, 0x0u, 0xd42u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "30643432007f", 0x1u, 0xc000000du,
+                           0xa5a5a5a5u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "30643432007f", 0x3u, 0xc000000du,
+                           0xa5a5a5a5u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "30643432007f", 0x24u, 0xc000000du,
+                           0xa5a5a5a5u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "30643432007f", 0xffffffffu, 0xc000000du,
+                           0xa5a5a5a5u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "2b007f", 0x0u, 0x0u, 0x0u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "2b007f", 0x2u, 0x0u, 0x0u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "2b007f", 0x8u, 0x0u, 0x0u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "2b007f", 0xau, 0x0u, 0x0u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "2b007f", 0x10u, 0x0u, 0x0u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "2b007f", 0x1u, 0xc000000du, 0xa5a5a5a5u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "2b007f", 0x3u, 0xc000000du, 0xa5a5a5a5u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "2b007f", 0x24u, 0xc000000du, 0xa5a5a5a5u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "2b007f", 0xffffffffu, 0xc000000du,
+                           0xa5a5a5a5u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "2d007f", 0x0u, 0x0u, 0x0u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "2d007f", 0x2u, 0x0u, 0x0u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "2d007f", 0x8u, 0x0u, 0x0u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "2d007f", 0xau, 0x0u, 0x0u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "2d007f", 0x10u, 0x0u, 0x0u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "2d007f", 0x1u, 0xc000000du, 0xa5a5a5a5u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "2d007f", 0x3u, 0xc000000du, 0xa5a5a5a5u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "2d007f", 0x24u, 0xc000000du, 0xa5a5a5a5u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "2d007f", 0xffffffffu, 0xc000000du,
+                           0xa5a5a5a5u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "78797a007f", 0x0u, 0x0u, 0x0u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "78797a007f", 0x2u, 0x0u, 0x0u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "78797a007f", 0x8u, 0x0u, 0x0u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "78797a007f", 0xau, 0x0u, 0x0u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "78797a007f", 0x10u, 0x0u, 0x0u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "78797a007f", 0x1u, 0xc000000du,
+                           0xa5a5a5a5u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "78797a007f", 0x3u, 0xc000000du,
+                           0xa5a5a5a5u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "78797a007f", 0x24u, 0xc000000du,
+                           0xa5a5a5a5u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "78797a007f", 0xffffffffu, 0xc000000du,
+                           0xa5a5a5a5u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "31327a3334007f", 0x0u, 0x0u, 0xcu)
+NEVERD_RTL_ADDITIONAL_CASE(character, "31327a3334007f", 0x2u, 0x0u, 0x1u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "31327a3334007f", 0x8u, 0x0u, 0xau)
+NEVERD_RTL_ADDITIONAL_CASE(character, "31327a3334007f", 0xau, 0x0u, 0xcu)
+NEVERD_RTL_ADDITIONAL_CASE(character, "31327a3334007f", 0x10u, 0x0u, 0x12u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "31327a3334007f", 0x1u, 0xc000000du,
+                           0xa5a5a5a5u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "31327a3334007f", 0x3u, 0xc000000du,
+                           0xa5a5a5a5u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "31327a3334007f", 0x24u, 0xc000000du,
+                           0xa5a5a5a5u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "31327a3334007f", 0xffffffffu,
+                           0xc000000du, 0xa5a5a5a5u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "34323934393637323936007f", 0x0u, 0x0u,
+                           0x0u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "34323934393637323936007f", 0x2u, 0x0u,
+                           0x0u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "34323934393637323936007f", 0x8u, 0x0u,
+                           0x22u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "34323934393637323936007f", 0xau, 0x0u,
+                           0x0u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "34323934393637323936007f", 0x10u, 0x0u,
+                           0x94967296u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "34323934393637323936007f", 0x1u,
+                           0xc000000du, 0xa5a5a5a5u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "34323934393637323936007f", 0x3u,
+                           0xc000000du, 0xa5a5a5a5u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "34323934393637323936007f", 0x24u,
+                           0xc000000du, 0xa5a5a5a5u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "34323934393637323936007f", 0xffffffffu,
+                           0xc000000du, 0xa5a5a5a5u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "2d34323934393637323935007f", 0x0u, 0x0u,
+                           0x1u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "2d34323934393637323935007f", 0x2u, 0x0u,
+                           0x0u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "2d34323934393637323935007f", 0x8u, 0x0u,
+                           0xffffffdeu)
+NEVERD_RTL_ADDITIONAL_CASE(character, "2d34323934393637323935007f", 0xau, 0x0u,
+                           0x1u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "2d34323934393637323935007f", 0x10u, 0x0u,
+                           0x6b698d6bu)
+NEVERD_RTL_ADDITIONAL_CASE(character, "2d34323934393637323935007f", 0x1u,
+                           0xc000000du, 0xa5a5a5a5u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "2d34323934393637323935007f", 0x3u,
+                           0xc000000du, 0xa5a5a5a5u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "2d34323934393637323935007f", 0x24u,
+                           0xc000000du, 0xa5a5a5a5u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "2d34323934393637323935007f", 0xffffffffu,
+                           0xc000000du, 0xa5a5a5a5u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "4646464646464646007f", 0x0u, 0x0u, 0x0u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "4646464646464646007f", 0x2u, 0x0u, 0x0u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "4646464646464646007f", 0x8u, 0x0u, 0x0u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "4646464646464646007f", 0xau, 0x0u, 0x0u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "4646464646464646007f", 0x10u, 0x0u,
+                           0xffffffffu)
+NEVERD_RTL_ADDITIONAL_CASE(character, "4646464646464646007f", 0x1u, 0xc000000du,
+                           0xa5a5a5a5u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "4646464646464646007f", 0x3u, 0xc000000du,
+                           0xa5a5a5a5u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "4646464646464646007f", 0x24u,
+                           0xc000000du, 0xa5a5a5a5u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "4646464646464646007f", 0xffffffffu,
+                           0xc000000du, 0xa5a5a5a5u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "20007f", 0x0u, 0x0u, 0x0u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "20007f", 0x2u, 0x0u, 0x0u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "20007f", 0x8u, 0x0u, 0x0u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "20007f", 0xau, 0x0u, 0x0u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "20007f", 0x10u, 0x0u, 0x0u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "20007f", 0x1u, 0xc000000du, 0xa5a5a5a5u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "20007f", 0x3u, 0xc000000du, 0xa5a5a5a5u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "20007f", 0x24u, 0xc000000du, 0xa5a5a5a5u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "20007f", 0xffffffffu, 0xc000000du,
+                           0xa5a5a5a5u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "00203432007f", 0x0u, 0x0u, 0x2au)
+NEVERD_RTL_ADDITIONAL_CASE(character, "00203432007f", 0x2u, 0x0u, 0x0u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "00203432007f", 0x8u, 0x0u, 0x22u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "00203432007f", 0xau, 0x0u, 0x2au)
+NEVERD_RTL_ADDITIONAL_CASE(character, "00203432007f", 0x10u, 0x0u, 0x42u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "00203432007f", 0x1u, 0xc000000du,
+                           0xa5a5a5a5u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "00203432007f", 0x3u, 0xc000000du,
+                           0xa5a5a5a5u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "00203432007f", 0x24u, 0xc000000du,
+                           0xa5a5a5a5u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "00203432007f", 0xffffffffu, 0xc000000du,
+                           0xa5a5a5a5u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "3132003334007f", 0x0u, 0x0u, 0xcu)
+NEVERD_RTL_ADDITIONAL_CASE(character, "3132003334007f", 0x2u, 0x0u, 0x1u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "3132003334007f", 0x8u, 0x0u, 0xau)
+NEVERD_RTL_ADDITIONAL_CASE(character, "3132003334007f", 0xau, 0x0u, 0xcu)
+NEVERD_RTL_ADDITIONAL_CASE(character, "3132003334007f", 0x10u, 0x0u, 0x12u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "3132003334007f", 0x1u, 0xc000000du,
+                           0xa5a5a5a5u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "3132003334007f", 0x3u, 0xc000000du,
+                           0xa5a5a5a5u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "3132003334007f", 0x24u, 0xc000000du,
+                           0xa5a5a5a5u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "3132003334007f", 0xffffffffu,
+                           0xc000000du, 0xa5a5a5a5u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "ff007f", 0x0u, 0x0u, 0x0u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "ff007f", 0x2u, 0x0u, 0x0u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "ff007f", 0x8u, 0x0u, 0x0u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "ff007f", 0xau, 0x0u, 0x0u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "ff007f", 0x10u, 0x0u, 0x0u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "ff007f", 0x1u, 0xc000000du, 0xa5a5a5a5u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "ff007f", 0x3u, 0xc000000du, 0xa5a5a5a5u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "ff007f", 0x24u, 0xc000000du, 0xa5a5a5a5u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "ff007f", 0xffffffffu, 0xc000000du,
+                           0xa5a5a5a5u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "306232007f", 0x0u, 0x0u, 0x0u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "306232007f", 0x2u, 0x0u, 0x0u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "306232007f", 0x8u, 0x0u, 0x0u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "306232007f", 0xau, 0x0u, 0x0u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "306232007f", 0x10u, 0x0u, 0xb2u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "306232007f", 0x1u, 0xc000000du,
+                           0xa5a5a5a5u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "306232007f", 0x3u, 0xc000000du,
+                           0xa5a5a5a5u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "306232007f", 0x24u, 0xc000000du,
+                           0xa5a5a5a5u)
+NEVERD_RTL_ADDITIONAL_CASE(character, "306232007f", 0xffffffffu, 0xc000000du,
+                           0xa5a5a5a5u)
+NEVERD_RTL_ADDITIONAL_CASE(size, "", 0x0u, 0x2u, 0x0u)
+NEVERD_RTL_ADDITIONAL_CASE(size, "", 0x0u, 0x2u, 0x0u)
+NEVERD_RTL_ADDITIONAL_CASE(size, "", 0x1u, 0x2u, 0x0u)
+NEVERD_RTL_ADDITIONAL_CASE(size, "", 0x40u, 0x2u, 0x0u)
+NEVERD_RTL_ADDITIONAL_CASE(size, "61", 0x0u, 0x4u, 0x1u)
+NEVERD_RTL_ADDITIONAL_CASE(size, "61", 0x1u, 0x4u, 0x1u)
+NEVERD_RTL_ADDITIONAL_CASE(size, "61", 0x2u, 0x4u, 0x1u)
+NEVERD_RTL_ADDITIONAL_CASE(size, "61", 0x40u, 0x4u, 0x1u)
+NEVERD_RTL_ADDITIONAL_CASE(size, "616263", 0x0u, 0x8u, 0x3u)
+NEVERD_RTL_ADDITIONAL_CASE(size, "616263", 0x3u, 0x8u, 0x3u)
+NEVERD_RTL_ADDITIONAL_CASE(size, "616263", 0x4u, 0x8u, 0x3u)
+NEVERD_RTL_ADDITIONAL_CASE(size, "616263", 0x40u, 0x8u, 0x3u)
+NEVERD_RTL_ADDITIONAL_CASE(size, "61006263", 0x0u, 0xau, 0x4u)
+NEVERD_RTL_ADDITIONAL_CASE(size, "61006263", 0x4u, 0xau, 0x4u)
+NEVERD_RTL_ADDITIONAL_CASE(size, "61006263", 0x5u, 0xau, 0x4u)
+NEVERD_RTL_ADDITIONAL_CASE(size, "61006263", 0x40u, 0xau, 0x4u)
+NEVERD_RTL_ADDITIONAL_CASE(size, "090a", 0x0u, 0x6u, 0x2u)
+NEVERD_RTL_ADDITIONAL_CASE(size, "090a", 0x2u, 0x6u, 0x2u)
+NEVERD_RTL_ADDITIONAL_CASE(size, "090a", 0x3u, 0x6u, 0x2u)
+NEVERD_RTL_ADDITIONAL_CASE(size, "090a", 0x40u, 0x6u, 0x2u)
+NEVERD_RTL_ADDITIONAL_CASE(size, "41534349495f30313233343536373839", 0x0u,
+                           0x22u, 0x10u)
+NEVERD_RTL_ADDITIONAL_CASE(size, "41534349495f30313233343536373839", 0x10u,
+                           0x22u, 0x10u)
+NEVERD_RTL_ADDITIONAL_CASE(size, "41534349495f30313233343536373839", 0x11u,
+                           0x22u, 0x10u)
+NEVERD_RTL_ADDITIONAL_CASE(size, "41534349495f30313233343536373839", 0x40u,
+                           0x22u, 0x10u)

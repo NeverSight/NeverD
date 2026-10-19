@@ -19,7 +19,6 @@ add_neverd_unittest(NeverDModuleBindingTests
   MappingTransactionTests.cpp
   TIMEOUT 20
   LINK_COMPONENTS EmulationModules)
-
 target_include_directories(NeverDModuleBindingTests PRIVATE
   ${CMAKE_SOURCE_DIR}/lib/emulation)
 
@@ -702,6 +701,34 @@ endif()
 set(_driver_fixture_dir "${CMAKE_CURRENT_BINARY_DIR}/fixtures")
 file(MAKE_DIRECTORY "${_driver_fixture_dir}")
 set(_driver_import_lib "${_driver_fixture_dir}/ntoskrnl.lib")
+set(_driver_hal_import_lib "${_driver_fixture_dir}/hal.lib")
+set(_driver_flt_import_lib "${_driver_fixture_dir}/fltmgr.lib")
+set(_driver_netio_import_lib "${_driver_fixture_dir}/netio.lib")
+set(_driver_ndis_import_lib "${_driver_fixture_dir}/ndis.lib")
+add_custom_command(OUTPUT "${_driver_ndis_import_lib}"
+  COMMAND "${NEVERD_DRIVER_LLD_LINK}" /lib /machine:x64
+    "/def:${CMAKE_CURRENT_SOURCE_DIR}/fixtures/ndis.def"
+    "/out:${_driver_ndis_import_lib}"
+  DEPENDS fixtures/ndis.def
+  VERBATIM)
+add_custom_command(OUTPUT "${_driver_netio_import_lib}"
+  COMMAND "${NEVERD_DRIVER_LLD_LINK}" /lib /machine:x64
+    "/def:${CMAKE_CURRENT_SOURCE_DIR}/fixtures/netio.def"
+    "/out:${_driver_netio_import_lib}"
+  DEPENDS fixtures/netio.def
+  VERBATIM)
+add_custom_command(OUTPUT "${_driver_flt_import_lib}"
+  COMMAND "${NEVERD_DRIVER_LLD_LINK}" /lib /machine:x64
+    "/def:${CMAKE_CURRENT_SOURCE_DIR}/fixtures/fltmgr.def"
+    "/out:${_driver_flt_import_lib}"
+  DEPENDS fixtures/fltmgr.def
+  VERBATIM)
+add_custom_command(OUTPUT "${_driver_hal_import_lib}"
+  COMMAND "${NEVERD_DRIVER_LLD_LINK}" /lib /machine:x64
+    "/def:${CMAKE_CURRENT_SOURCE_DIR}/fixtures/hal.def"
+    "/out:${_driver_hal_import_lib}"
+  DEPENDS fixtures/hal.def
+  VERBATIM)
 add_custom_command(OUTPUT "${_driver_import_lib}"
   COMMAND "${NEVERD_DRIVER_LLD_LINK}" /lib /machine:x64
     "/def:${CMAKE_CURRENT_SOURCE_DIR}/fixtures/ntoskrnl.def"
@@ -739,7 +766,219 @@ foreach(_driver_name success failure unknown fault loop devices readonly privile
 endforeach()
 # The loader fixture deliberately retains relocations and a compiler-inserted
 # stack protector. The WDM fixture covers the complete synchronous lifecycle.
-foreach(_driver_name loader driver_io driver_direct driver_runtime driver_mdl driver_registry driver_registry_values driver_registry_keys driver_async driver_dispatcher driver_context_limits driver_preemptive driver_thread_priority driver_loader_view driver_bugcheck driver_version_query driver_physical_ranges driver_va_shadow_query driver_strings driver_identity driver_time_fields driver_interlocked driver_slist driver_cstrings driver_cstring_writes driver_crt_strings driver_lookaside driver_fast_mutex driver_eresource driver_objects driver_device_queries driver_file_handles driver_file_objects driver_file_queries driver_file_transfers driver_processors driver_int64_strings driver_filesystem_provider driver_registry_objects driver_namespace driver_data driver_qspinlock driver_rundown)
+set(_driver_invocation_object "${_driver_fixture_dir}/driver_invocation.obj")
+set(_driver_invocation_image "${_driver_fixture_dir}/driver_invocation.sys")
+set(_driver_invocation_pdb "${_driver_fixture_dir}/driver_invocation.pdb")
+add_custom_command(
+  OUTPUT "${_driver_invocation_image}" "${_driver_invocation_object}"
+    "${_driver_invocation_pdb}"
+  COMMAND "${NEVERD_TEST_CLANG_EXECUTABLE}" --target=x86_64-pc-windows-msvc
+    -std=c11 -ffreestanding -fno-stack-protector -O1 -g -gcodeview -c
+    "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/driver_invocation.c"
+    -o "${_driver_invocation_object}"
+  COMMAND "${NEVERD_DRIVER_LLD_LINK}" /machine:x64 /entry:DriverEntry
+    /subsystem:native /driver /nodefaultlib /dynamicbase /nxcompat
+    /base:0x180000000 "/out:${_driver_invocation_image}"
+    /debug "/pdb:${_driver_invocation_pdb}"
+    "${_driver_invocation_object}" "${_driver_import_lib}"
+  DEPENDS fixtures/driver_invocation.c "${_driver_import_lib}"
+  VERBATIM)
+list(APPEND _driver_outputs "${_driver_invocation_image}")
+set(_kernel_support_base "${_driver_fixture_dir}/kernel_module_support")
+add_custom_command(
+  OUTPUT "${_kernel_support_base}.sys" "${_kernel_support_base}.pdb"
+  BYPRODUCTS "${_kernel_support_base}.obj"
+  COMMAND "${NEVERD_TEST_CLANG_EXECUTABLE}" --target=x86_64-pc-windows-msvc
+    -std=c11 -ffreestanding -fno-stack-protector -O1 -g -gcodeview -c
+    "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/kernel_module_support.c"
+    -o "${_kernel_support_base}.obj"
+  COMMAND "${NEVERD_DRIVER_LLD_LINK}" /machine:x64 /entry:DriverEntry
+    /subsystem:native /driver /nodefaultlib /dynamicbase /base:0x1a0000000
+    /debug "/pdb:${_kernel_support_base}.pdb" "/out:${_kernel_support_base}.sys"
+    "${_kernel_support_base}.obj" "${_driver_import_lib}"
+  DEPENDS fixtures/kernel_module_support.c "${_driver_import_lib}"
+  VERBATIM)
+list(APPEND _driver_outputs "${_kernel_support_base}.sys")
+set(_kernel_seh_base "${_driver_fixture_dir}/kernel_module_seh")
+set(_kernel_seh_import "${_kernel_seh_base}.kernel.lib")
+add_custom_command(
+  OUTPUT "${_kernel_seh_import}"
+  COMMAND "${NEVERD_DRIVER_LLD_LINK}" /lib /machine:x64
+    "/def:${CMAKE_CURRENT_SOURCE_DIR}/fixtures/kernel_module_seh.def"
+    "/out:${_kernel_seh_import}"
+  DEPENDS fixtures/kernel_module_seh.def VERBATIM)
+add_custom_command(
+  OUTPUT "${_kernel_seh_base}.sys" "${_kernel_seh_base}.pdb"
+  BYPRODUCTS "${_kernel_seh_base}.obj"
+  COMMAND "${NEVERD_TEST_CLANG_EXECUTABLE}" --target=x86_64-pc-windows-msvc
+    -std=c11 -ffreestanding -fno-builtin -fno-stack-protector -fms-extensions
+    -fexceptions -O1 -g -gcodeview -c "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/kernel_module_seh.c"
+    -o "${_kernel_seh_base}.obj"
+  COMMAND "${NEVERD_DRIVER_LLD_LINK}" /machine:x64 /dll /noentry
+    /subsystem:native /nodefaultlib /dynamicbase /base:0x1a0000000
+    /debug "/pdb:${_kernel_seh_base}.pdb"
+    "/implib:${_kernel_seh_base}.exports.lib"
+    "/out:${_kernel_seh_base}.sys" "${_kernel_seh_base}.obj" "${_kernel_seh_import}"
+  DEPENDS fixtures/kernel_module_seh.c "${_kernel_seh_import}" VERBATIM)
+list(APPEND _driver_outputs "${_kernel_seh_base}.sys")
+set(_kernel_paging_base "${_driver_fixture_dir}/kernel_module_paging")
+add_custom_command(
+  OUTPUT "${_kernel_paging_base}.sys" "${_kernel_paging_base}.pdb"
+    "${_kernel_paging_base}.exports.lib"
+  BYPRODUCTS "${_kernel_paging_base}.obj"
+  COMMAND "${NEVERD_TEST_CLANG_EXECUTABLE}" --target=x86_64-pc-windows-msvc
+    -std=c11 -ffreestanding -fno-stack-protector -O1 -g -gcodeview -c
+    "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/kernel_module_paging.c"
+    -o "${_kernel_paging_base}.obj"
+  COMMAND "${NEVERD_DRIVER_LLD_LINK}" /machine:x64 /dll /noentry
+    /subsystem:native /nodefaultlib /dynamicbase /base:0x1a0000000
+    /debug "/pdb:${_kernel_paging_base}.pdb"
+    "/implib:${_kernel_paging_base}.exports.lib"
+    "/out:${_kernel_paging_base}.sys" "${_kernel_paging_base}.obj"
+  DEPENDS fixtures/kernel_module_paging.c VERBATIM)
+add_custom_command(
+  OUTPUT "${_kernel_paging_base}_primary.sys" "${_kernel_paging_base}_primary.pdb"
+  BYPRODUCTS "${_kernel_paging_base}_primary.obj"
+  COMMAND "${NEVERD_TEST_CLANG_EXECUTABLE}" --target=x86_64-pc-windows-msvc
+    -std=c11 -ffreestanding -fno-stack-protector -O1 -g -gcodeview -DPRIMARY -c
+    "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/kernel_module_paging.c"
+    -o "${_kernel_paging_base}_primary.obj"
+  COMMAND "${NEVERD_DRIVER_LLD_LINK}" /machine:x64 /entry:DriverEntry /driver
+    /subsystem:native /nodefaultlib /dynamicbase /base:0x180000000
+    /debug "/pdb:${_kernel_paging_base}_primary.pdb"
+    "/out:${_kernel_paging_base}_primary.sys"
+    "${_kernel_paging_base}_primary.obj" "${_kernel_paging_base}.exports.lib"
+  DEPENDS fixtures/kernel_module_paging.c "${_kernel_paging_base}.exports.lib"
+  VERBATIM)
+list(APPEND _driver_outputs "${_kernel_paging_base}.sys"
+  "${_kernel_paging_base}_primary.sys")
+foreach(_guard_variant active inactive)
+  set(_guard_base "${_driver_fixture_dir}/kernel_module_guard_${_guard_variant}")
+  set(_guard_flags)
+  if(_guard_variant STREQUAL "active")
+    list(APPEND _guard_flags /guard:cf)
+  endif()
+  add_custom_command(
+    OUTPUT "${_guard_base}.sys" "${_guard_base}.pdb"
+    BYPRODUCTS "${_guard_base}.obj" "${_guard_base}.exports.lib"
+    COMMAND "${NEVERD_TEST_CLANG_EXECUTABLE}" --target=x86_64-pc-windows-msvc
+      -std=c11 -ffreestanding -fno-stack-protector -O1 -g -gcodeview
+      -Xclang -cfguard -c "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/kernel_module_guard.c"
+      -o "${_guard_base}.obj"
+    COMMAND "${NEVERD_DRIVER_LLD_LINK}" /machine:x64 /dll /noentry
+      /subsystem:native /nodefaultlib /dynamicbase /base:0x1a0000000
+      ${_guard_flags} /debug "/pdb:${_guard_base}.pdb"
+      "/implib:${_guard_base}.exports.lib" "/out:${_guard_base}.sys" "${_guard_base}.obj"
+    DEPENDS fixtures/kernel_module_guard.c fixtures/driver_guard.c VERBATIM)
+  list(APPEND _driver_outputs "${_guard_base}.sys")
+endforeach()
+foreach(_support_variant noentry forwarder)
+  set(_support_flags)
+  if(_support_variant STREQUAL "forwarder")
+    list(APPEND _support_flags /export:SupportForward=missing.SupportProbe)
+  endif()
+  add_custom_command(
+    OUTPUT "${_kernel_support_base}_${_support_variant}.sys"
+    COMMAND "${NEVERD_DRIVER_LLD_LINK}" /machine:x64 /dll /noentry
+      /subsystem:native /nodefaultlib /dynamicbase /base:0x1a0000000
+      ${_support_flags} "/out:${_kernel_support_base}_${_support_variant}.sys"
+      "${_kernel_support_base}.obj" "${_driver_import_lib}"
+    DEPENDS "${_kernel_support_base}.sys" "${_driver_import_lib}"
+    VERBATIM)
+  list(APPEND _driver_outputs "${_kernel_support_base}_${_support_variant}.sys")
+endforeach()
+set(_kernel_provider_base "${_driver_fixture_dir}/kernel_module_provider")
+add_custom_command(
+  OUTPUT "${_kernel_provider_base}.sys" "${_kernel_provider_base}.lib"
+  COMMAND "${NEVERD_DRIVER_LLD_LINK}" /machine:x64 /dll /noentry
+    /subsystem:native /nodefaultlib /dynamicbase /base:0x1a0000000
+    "/def:${CMAKE_CURRENT_SOURCE_DIR}/fixtures/kernel_module_provider.def"
+    "/out:${_kernel_provider_base}.sys" "/implib:${_kernel_provider_base}.lib"
+    "${_kernel_support_base}.obj" "${_driver_import_lib}"
+  DEPENDS "${_kernel_support_base}.sys" fixtures/kernel_module_provider.def
+  VERBATIM)
+list(APPEND _driver_outputs "${_kernel_provider_base}.sys")
+set(_model_provider "${_driver_fixture_dir}/kernel_module_model_provider.sys")
+add_custom_command(
+  OUTPUT "${_model_provider}"
+  COMMAND "${NEVERD_DRIVER_LLD_LINK}" /machine:x64 /dll /noentry
+    /subsystem:native /nodefaultlib /dynamicbase /base:0x1a0000000
+    "/def:${CMAKE_CURRENT_SOURCE_DIR}/fixtures/kernel_module_model_provider.def"
+    "/out:${_model_provider}" "${_kernel_support_base}.obj" "${_driver_import_lib}"
+  DEPENDS "${_kernel_support_base}.sys" fixtures/kernel_module_model_provider.def
+  VERBATIM)
+list(APPEND _driver_outputs "${_model_provider}")
+foreach(_primary_variant named ordinal)
+  set(_primary_base "${_driver_fixture_dir}/driver_module_imports_${_primary_variant}")
+  set(_primary_defines)
+  if(_primary_variant STREQUAL ordinal)
+    list(APPEND _primary_defines -DPRIMARY_ORDINAL_IMPORT)
+  endif()
+  add_custom_command(
+    OUTPUT "${_primary_base}.sys" "${_primary_base}.pdb"
+    BYPRODUCTS "${_primary_base}.obj"
+    COMMAND "${NEVERD_TEST_CLANG_EXECUTABLE}" --target=x86_64-pc-windows-msvc
+      -std=c11 -ffreestanding -fno-stack-protector -O1 -g -gcodeview
+      ${_primary_defines} -c "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/driver_module_imports.c"
+      -o "${_primary_base}.obj"
+    COMMAND "${NEVERD_DRIVER_LLD_LINK}" /machine:x64 /entry:DriverEntry
+      /subsystem:native /driver /nodefaultlib /dynamicbase /base:0x180000000
+      /debug "/pdb:${_primary_base}.pdb" "/out:${_primary_base}.sys"
+      "${_primary_base}.obj" "${_kernel_provider_base}.lib"
+    DEPENDS fixtures/driver_module_imports.c "${_kernel_provider_base}.lib"
+    VERBATIM)
+  list(APPEND _driver_outputs "${_primary_base}.sys")
+endforeach()
+set(_kernel_dependent_base "${_driver_fixture_dir}/kernel_module_dependent")
+add_custom_command(
+  OUTPUT "${_kernel_dependent_base}.sys" "${_kernel_dependent_base}.pdb"
+  COMMAND "${NEVERD_TEST_CLANG_EXECUTABLE}" --target=x86_64-pc-windows-msvc
+    -std=c11 -ffreestanding -fno-stack-protector -O1 -g -gcodeview -c
+    "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/kernel_module_dependent.c"
+    -o "${_kernel_dependent_base}.obj"
+  COMMAND "${NEVERD_DRIVER_LLD_LINK}" /machine:x64 /dll /noentry
+    /subsystem:native /nodefaultlib /dynamicbase /base:0x1d0000000
+    /debug "/pdb:${_kernel_dependent_base}.pdb" "/out:${_kernel_dependent_base}.sys"
+    "${_kernel_dependent_base}.obj" "${_kernel_provider_base}.lib"
+  DEPENDS fixtures/kernel_module_dependent.c "${_kernel_provider_base}.lib"
+  VERBATIM)
+list(APPEND _driver_outputs "${_kernel_dependent_base}.sys")
+set(_kernel_deep_def "LIBRARY deep.sys\nEXPORTS\n")
+foreach(_kernel_chain_index RANGE 0 64)
+  math(EXPR _kernel_chain_ordinal "100 - ${_kernel_chain_index}")
+  math(EXPR _kernel_chain_next "${_kernel_chain_index} + 1")
+  if(_kernel_chain_index EQUAL 64)
+    set(_kernel_chain_target "provider.SupportProbe")
+  else()
+    set(_kernel_chain_target "deep.Chain${_kernel_chain_next}")
+  endif()
+  string(APPEND _kernel_deep_def
+    "  Chain${_kernel_chain_index}=${_kernel_chain_target} @${_kernel_chain_ordinal}\n")
+endforeach()
+file(GENERATE OUTPUT "${_driver_fixture_dir}/kernel_module_deep.def"
+  CONTENT "${_kernel_deep_def}")
+foreach(_kernel_forward_module relay cycle deep)
+  set(_kernel_forward_base "${_driver_fixture_dir}/kernel_module_${_kernel_forward_module}")
+  if(_kernel_forward_module STREQUAL "deep")
+    set(_kernel_forward_def "${_driver_fixture_dir}/kernel_module_deep.def")
+  else()
+    set(_kernel_forward_def "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/kernel_module_${_kernel_forward_module}.def")
+  endif()
+  add_custom_command(
+    OUTPUT "${_kernel_forward_base}.sys"
+    COMMAND "${NEVERD_TEST_CLANG_EXECUTABLE}" --target=x86_64-pc-windows-msvc
+      -std=c11 -ffreestanding -fno-stack-protector -O1 -c
+      "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/kernel_module_relay.c"
+      -o "${_kernel_forward_base}.obj"
+    COMMAND "${NEVERD_DRIVER_LLD_LINK}" /machine:x64 /dll /noentry
+      /subsystem:native /nodefaultlib /dynamicbase /base:0x1e0000000
+      "/def:${_kernel_forward_def}"
+      "/out:${_kernel_forward_base}.sys" "${_kernel_forward_base}.obj"
+    DEPENDS fixtures/kernel_module_relay.c "${_kernel_forward_def}"
+    VERBATIM)
+  list(APPEND _driver_outputs "${_kernel_forward_base}.sys")
+endforeach()
+foreach(_driver_name loader driver_io driver_direct driver_runtime driver_mdl driver_registry driver_registry_values driver_registry_keys driver_async driver_dispatcher driver_context_limits driver_preemptive driver_thread_priority driver_loader_view driver_bugcheck driver_version_query driver_physical_ranges driver_va_shadow_query driver_strings driver_identity driver_time_fields driver_interlocked driver_slist driver_cstrings driver_cstring_writes driver_crt_strings driver_lookaside driver_fast_mutex driver_eresource driver_objects driver_device_queries driver_file_handles driver_file_objects driver_file_queries driver_file_transfers driver_processors driver_int64_strings driver_filesystem_provider driver_registry_objects driver_namespace driver_data driver_qspinlock driver_rundown driver_thread_identity driver_thread_fields driver_native_thread_scan driver_native_thread_scan_write driver_msr driver_msr_unknown driver_msr_write driver_services driver_services_descriptor_write driver_services_table_write driver_kernel_reference driver_persistent_dump driver_persistent_dump_unknown driver_kernel_debugger_reference driver_kernel_debugger_services driver_kernel_debugger_other driver_kernel_debugger_code_data driver_kernel_debugger_cfg_es driver_kernel_debugger_cfg_suppressed driver_kd_client driver_kd_unknown_global driver_cpuid driver_process_lookup driver_paging driver_paging_write driver_paging_nonpaged driver_system_va driver_system_va_write driver_kernel_cfg driver_kernel_cfg_write driver_filesystem driver_callbacks driver_process_notify driver_unicode_filesystem driver_sections driver_process_notify_ex driver_control_registers driver_control_registers_write driver_export_walk driver_registry_callbacks driver_registry_callback_status driver_shutdown_registration driver_bugcheck_borrowed_name driver_reference_thread_transfer driver_reference_thread_nontransfer driver_reference_thread_memory driver_reference_thread_foreground driver_reference_thread_loop driver_reference_thread_export driver_reference_thread_chain driver_reference_thread_kernel driver_clock_increment driver_clock_shared_tick driver_secure_pci driver_kernel_debugger_mcfg driver_kernel_debugger_mcfg_partial driver_mcfg driver_object_names driver_object_names_leak driver_object_names_write driver_smbios driver_dma_guard driver_acpi_tables driver_cpuid_policy driver_cpuid_policy_unknown driver_code_integrity driver_thread_termination driver_ansi_upper driver_ansi_operations driver_resident_worker driver_resident_worker_leak driver_resident_worker_runnable driver_resident_worker_workitem driver_large_pool driver_integer_unicode driver_process_information driver_process_data driver_process_data_reference driver_process_data_write driver_process_data_cross driver_process_data_execute driver_ansi_char driver_named_sections driver_process_section_base driver_process_exit_status driver_process_memory driver_thread_notify driver_thread_notify_leak driver_irp_initialization driver_process_images driver_image_sections driver_image_sections_leak driver_rtl_inputs driver_processors_native driver_processors_write driver_contiguous driver_reserved_mapping driver_reserved_mapping_leak driver_bugcheck_terminal driver_bugcheck_simple driver_bugcheck_unload driver_bugcheck_thread driver_bugcheck_seh driver_process_peb driver_device_properties driver_nls_oem driver_nls_oem_write driver_nls_oem_cross driver_nls_oem_execute driver_registry_enumeration driver_kernel_signature driver_pci_configuration driver_control_builder driver_registry_hives driver_filter_names driver_netio_interfaces driver_ndis_configuration driver_hal_dispatch driver_avl_cfg_scan driver_avl driver_service_lifecycle driver_service_thread driver_service_child driver_service_fail driver_service_nounload driver_service_unload_denied driver_service_requests driver_registry_events driver_registry_events_plain driver_registry_events_borrow driver_registry_events_actor driver_process_create driver_process_create_veto driver_process_create_borrow driver_resident_worker_pacing)
   set(_driver_object "${_driver_fixture_dir}/${_driver_name}.obj")
   set(_driver_image "${_driver_fixture_dir}/${_driver_name}.sys")
   if(_driver_name STREQUAL "loader")
@@ -755,6 +994,208 @@ foreach(_driver_name loader driver_io driver_direct driver_runtime driver_mdl dr
   set(_driver_additional_libraries)
   if(_driver_name STREQUAL "driver_runtime")
     list(APPEND _driver_additional_libraries "${_driver_hal_lib}")
+  endif()
+  if(_driver_name MATCHES "^driver_service_(fail|nounload)$")
+    list(APPEND _driver_additional_dependencies fixtures/driver_service_child.c)
+  elseif(_driver_name MATCHES "^driver_service_(thread|requests)$")
+    list(APPEND _driver_additional_dependencies fixtures/driver_service_lifecycle.c)
+  endif()
+  set(_driver_debug_compile)
+  set(_driver_debug_link)
+  if(_driver_name MATCHES "^driver_bugcheck(_terminal$|_simple$|_unload$|_thread$|_seh$)")
+    set(_driver_source fixtures/driver_bugcheck_terminal.c)
+    if(_driver_name STREQUAL "driver_bugcheck_simple")
+      list(APPEND _driver_debug_compile -DSIMPLE_BUGCHECK)
+    elseif(_driver_name STREQUAL "driver_bugcheck_unload")
+      list(APPEND _driver_debug_compile -DBUGCHECK_ON_UNLOAD)
+    elseif(_driver_name STREQUAL "driver_bugcheck_thread")
+      list(APPEND _driver_debug_compile -DBUGCHECK_IN_THREAD)
+    elseif(_driver_name STREQUAL "driver_bugcheck_seh")
+      list(APPEND _driver_debug_compile -DBUGCHECK_IN_SEH)
+    endif()
+  endif()
+  if(_driver_name MATCHES "^driver_nls_oem($|_write$|_cross$|_execute$)")
+    set(_driver_source fixtures/driver_nls_oem.c)
+    if(_driver_name STREQUAL "driver_nls_oem_write")
+      list(APPEND _driver_debug_compile -DNLS_WRITE)
+    elseif(_driver_name STREQUAL "driver_nls_oem_cross")
+      list(APPEND _driver_debug_compile -DNLS_CROSS)
+    elseif(_driver_name STREQUAL "driver_nls_oem_execute")
+      list(APPEND _driver_debug_compile -DNLS_EXECUTE)
+    endif()
+  endif()
+  if(_driver_name STREQUAL "driver_reserved_mapping_leak")
+    list(APPEND _driver_additional_dependencies fixtures/driver_reserved_mapping.c)
+  endif()
+  if(_driver_name STREQUAL "driver_image_sections_leak")
+    set(_driver_source fixtures/driver_image_sections.c)
+    list(APPEND _driver_debug_compile -DLEAK_IMAGE_VIEW)
+  endif()
+  if(_driver_name STREQUAL "driver_processors_write")
+    set(_driver_source fixtures/driver_processors_native.c)
+    list(APPEND _driver_debug_compile -DWRITE_PROCESSOR_DATA)
+  endif()
+  set(_driver_debug_outputs)
+  if(_driver_name MATCHES "^driver_resident_worker")
+    set(_driver_source fixtures/driver_resident_worker.c)
+    list(APPEND _driver_additional_dependencies fixtures/driver_io.c)
+    if(_driver_name STREQUAL "driver_resident_worker_leak")
+      list(APPEND _driver_debug_compile -DRESIDENT_LEAK)
+    elseif(_driver_name STREQUAL "driver_resident_worker_workitem")
+      list(APPEND _driver_debug_compile -DRESIDENT_WORKITEM)
+    elseif(_driver_name STREQUAL "driver_resident_worker_runnable")
+      list(APPEND _driver_debug_compile -DRESIDENT_RUNNABLE)
+    elseif(_driver_name STREQUAL "driver_resident_worker_pacing")
+      list(APPEND _driver_debug_compile -DRESIDENT_PACING)
+    endif()
+  endif()
+  if(_driver_name STREQUAL "driver_integer_unicode")
+    list(APPEND _driver_additional_dependencies IntegerUnicodeClientCases.def)
+  endif()
+  if(_driver_name MATCHES "^driver_process_data_(write|cross|execute)$")
+    set(_driver_source fixtures/driver_process_data.c)
+    if(_driver_name STREQUAL "driver_process_data_write")
+      list(APPEND _driver_debug_compile -DPROCESS_DATA_WRITE)
+    elseif(_driver_name STREQUAL "driver_process_data_cross")
+      list(APPEND _driver_debug_compile -DPROCESS_DATA_CROSS)
+    else()
+      list(APPEND _driver_debug_compile -DPROCESS_DATA_EXECUTE)
+    endif()
+  endif()
+  if(_driver_name STREQUAL "driver_ansi_operations")
+    list(APPEND _driver_additional_dependencies AnsiCompareCases.def)
+  endif()
+  if(_driver_name STREQUAL "driver_ansi_upper")
+    list(APPEND _driver_additional_dependencies AnsiUpperExpected.def)
+  endif()
+  if(_driver_name STREQUAL "driver_cpuid_policy_unknown")
+    set(_driver_source fixtures/driver_cpuid_policy.c)
+    list(APPEND _driver_debug_compile -DUNOBSERVED_VALID_LEAF)
+  endif()
+  if(_driver_name STREQUAL "driver_process_notify_ex")
+    list(APPEND _driver_debug_link /integritycheck)
+  endif()
+  if(_driver_name STREQUAL "driver_registry_events_plain")
+    set(_driver_source fixtures/driver_registry_events.c)
+    list(APPEND _driver_debug_compile -DEVENTS_NO_FILTER)
+  endif()
+  if(_driver_name STREQUAL "driver_registry_events_borrow")
+    set(_driver_source fixtures/driver_registry_events.c)
+    list(APPEND _driver_debug_compile -DEVENTS_RETAIN_INPUT)
+  endif()
+  if(_driver_name STREQUAL "driver_registry_events_actor")
+    set(_driver_source fixtures/driver_registry_events.c)
+    list(APPEND _driver_debug_compile -DEVENTS_USER_ACTOR)
+  endif()
+  if(_driver_name MATCHES "^driver_process_create")
+    set(_driver_source fixtures/driver_process_create.c)
+    list(APPEND _driver_debug_link /integritycheck)
+    if(_driver_name STREQUAL "driver_process_create_veto")
+      list(APPEND _driver_debug_compile -DCREATE_VETO)
+    elseif(_driver_name STREQUAL "driver_process_create_borrow")
+      list(APPEND _driver_debug_compile -DCREATE_BORROW)
+    endif()
+  endif()
+  if(_driver_name STREQUAL "driver_registry_callbacks")
+    list(APPEND _driver_additional_dependencies fixtures/driver_registry.c)
+  endif()
+  if(_driver_name STREQUAL "driver_clock_shared_tick")
+    set(_driver_source fixtures/driver_clock_increment.c)
+    list(APPEND _driver_debug_compile -DCHECK_SHARED_TICKS)
+  endif()
+  if(_driver_name MATCHES "^driver_object_names_(leak|write)$")
+    set(_driver_source fixtures/driver_object_names.c)
+    if(_driver_name STREQUAL "driver_object_names_leak")
+      list(APPEND _driver_debug_compile -DLEAK_NAMED_DRIVER)
+    else()
+      list(APPEND _driver_debug_compile -DWRITE_NAMED_DRIVER)
+    endif()
+  endif()
+  if(_driver_name STREQUAL "driver_reference_thread_kernel")
+    set(_driver_source fixtures/driver_kernel_reference.c)
+    list(APPEND _driver_debug_compile -DREFERENCE_THREAD_TRANSFERS)
+  elseif(_driver_name MATCHES "^driver_reference_thread_")
+    set(_driver_source fixtures/driver_reference_thread_transfer.c)
+    if(_driver_name STREQUAL "driver_reference_thread_nontransfer")
+      list(APPEND _driver_debug_compile -DREFERENCE_TEST_MODE=1)
+    elseif(_driver_name STREQUAL "driver_reference_thread_memory")
+      list(APPEND _driver_debug_compile -DREFERENCE_TEST_MODE=2)
+    elseif(_driver_name STREQUAL "driver_reference_thread_foreground")
+      list(APPEND _driver_debug_compile -DREFERENCE_TEST_MODE=3)
+    elseif(_driver_name STREQUAL "driver_reference_thread_loop")
+      list(APPEND _driver_debug_compile -DREFERENCE_TEST_MODE=4)
+    elseif(_driver_name STREQUAL "driver_reference_thread_export")
+      list(APPEND _driver_debug_compile -DREFERENCE_TEST_MODE=5)
+    elseif(_driver_name STREQUAL "driver_reference_thread_chain")
+      list(APPEND _driver_debug_compile -DREFERENCE_TEST_MODE=6)
+    endif()
+  endif()
+  if(_driver_name STREQUAL "driver_control_registers_write")
+    set(_driver_source fixtures/driver_control_registers.c)
+    list(APPEND _driver_debug_compile -DWRITE_CR4)
+  endif()
+  if(_driver_name STREQUAL "driver_native_thread_scan_write")
+    set(_driver_source fixtures/driver_native_thread_scan.c)
+    list(APPEND _driver_debug_compile -DWRITE_THREAD)
+  endif()
+  if(_driver_name MATCHES "^driver_services_(descriptor|table)_write$")
+    set(_driver_source fixtures/driver_services.c)
+    if(_driver_name STREQUAL "driver_services_descriptor_write")
+      list(APPEND _driver_debug_compile -DWRITE_DESCRIPTOR)
+    else()
+      list(APPEND _driver_debug_compile -DWRITE_TABLE)
+    endif()
+  endif()
+  if(_driver_name MATCHES "^driver_msr_(unknown|write)$")
+    set(_driver_source fixtures/driver_msr.c)
+    if(_driver_name STREQUAL "driver_msr_unknown")
+      list(APPEND _driver_debug_compile -DUNKNOWN_MSR)
+    else()
+      list(APPEND _driver_debug_compile -DWRITE_MSR)
+    endif()
+  endif()
+  if(_driver_name MATCHES "^driver_kernel_debugger_(reference|services|other|code_data|cfg_es|cfg_suppressed|mcfg|mcfg_partial)$")
+    set(_driver_source fixtures/driver_kernel_debugger_reference.c)
+    set(_driver_debug_compile -g -gcodeview -Xclang -cfguard)
+    if(_driver_name STREQUAL "driver_kernel_debugger_mcfg")
+      list(APPEND _driver_debug_compile -DMCFG_REFERENCE)
+    endif()
+    if(_driver_name STREQUAL "driver_kernel_debugger_mcfg_partial")
+      set(_driver_source fixtures/driver_kernel_mcfg_partial.c)
+      list(APPEND _driver_additional_dependencies fixtures/driver_kernel_debugger_reference.c)
+    endif()
+    if(_driver_name STREQUAL "driver_kernel_debugger_services")
+      list(APPEND _driver_debug_compile -DSERVICE_TABLE_REFERENCE)
+    endif()
+    if(_driver_name MATCHES "^driver_kernel_debugger_cfg_")
+      list(APPEND _driver_debug_compile -DCFG_METADATA_REFERENCE)
+    endif()
+    if(_driver_name STREQUAL "driver_kernel_debugger_cfg_suppressed")
+      list(APPEND _driver_debug_compile -DCFG_FID_SUPPRESSED)
+    endif()
+    if(_driver_name STREQUAL "driver_kernel_debugger_other")
+      list(APPEND _driver_debug_compile -DOTHER_COMPANION)
+    endif()
+    if(_driver_name STREQUAL "driver_kernel_debugger_code_data")
+      list(APPEND _driver_debug_compile -DCODE_PLACED_DEBUGGER)
+    endif()
+    set(_driver_debug_outputs "${_driver_fixture_dir}/${_driver_name}.pdb")
+    set(_driver_debug_link /debug /guard:cf "/pdb:${_driver_debug_outputs}")
+  endif()
+  if(_driver_name STREQUAL "driver_kd_unknown_global")
+    list(APPEND _driver_additional_dependencies fixtures/driver_kd_client.c)
+  endif()
+  if(_driver_name STREQUAL "driver_persistent_dump_unknown")
+    list(APPEND _driver_additional_dependencies fixtures/driver_persistent_dump.c)
+  endif()
+  if(_driver_name MATCHES "^driver_paging_(write|nonpaged)$")
+    list(APPEND _driver_additional_dependencies fixtures/driver_paging.c)
+  endif()
+  if(_driver_name STREQUAL "driver_system_va_write")
+    list(APPEND _driver_additional_dependencies fixtures/driver_system_va.c)
+  endif()
+  if(_driver_name STREQUAL "driver_kernel_cfg_write")
+    list(APPEND _driver_additional_dependencies fixtures/driver_kernel_cfg.c)
   endif()
   if(_driver_name STREQUAL "driver_mdl")
     list(APPEND _driver_additional_dependencies fixtures/driver_mdl_actions.h)
@@ -794,17 +1235,33 @@ foreach(_driver_name loader driver_io driver_direct driver_runtime driver_mdl dr
       "${CMAKE_SOURCE_DIR}/lib/emulation/os/windows/kernel/WindowsKernelLayout.def"
       "${CMAKE_SOURCE_DIR}/lib/emulation/os/windows/kernel/KernelDispatcherValues.def")
   endif()
+  set(_driver_extra_import_libs)
+  if(_driver_name STREQUAL "driver_ndis_configuration")
+    list(APPEND _driver_extra_import_libs "${_driver_ndis_import_lib}")
+  endif()
+  if(_driver_name STREQUAL "driver_netio_interfaces")
+    list(APPEND _driver_extra_import_libs "${_driver_netio_import_lib}")
+  endif()
+  if(_driver_name STREQUAL "driver_filter_names")
+    list(APPEND _driver_extra_import_libs "${_driver_flt_import_lib}")
+  endif()
+  if(_driver_name STREQUAL "driver_clock_increment" OR
+      _driver_name STREQUAL "driver_clock_shared_tick" OR
+      _driver_name STREQUAL "driver_pci_configuration")
+    list(APPEND _driver_extra_import_libs "${_driver_hal_import_lib}")
+  endif()
   add_custom_command(OUTPUT "${_driver_image}" "${_driver_object}"
+    BYPRODUCTS ${_driver_debug_outputs}
     COMMAND "${NEVERD_TEST_CLANG_EXECUTABLE}"
       --target=x86_64-pc-windows-msvc -std=c11 -ffreestanding
-      ${_driver_stack_flag} -O1 -c
+      ${_driver_stack_flag} ${_driver_debug_compile} -O1 -c
       "${CMAKE_CURRENT_SOURCE_DIR}/${_driver_source}" -o "${_driver_object}"
     COMMAND "${NEVERD_DRIVER_LLD_LINK}" /machine:x64 "/entry:${_driver_entry}"
       /subsystem:native /driver /nodefaultlib /dynamicbase /base:0x180000000
-      "/out:${_driver_image}" "${_driver_object}" "${_driver_import_lib}"
-      ${_driver_additional_libraries}
+      ${_driver_debug_link} "/out:${_driver_image}" "${_driver_object}" "${_driver_import_lib}"
+      ${_driver_additional_libraries} ${_driver_extra_import_libs}
     DEPENDS "${_driver_source}" "${_driver_import_lib}"
-      ${_driver_additional_libraries}
+      ${_driver_additional_libraries} ${_driver_extra_import_libs}
       ${_driver_additional_dependencies}
     VERBATIM)
   list(APPEND _driver_outputs "${_driver_image}")
@@ -1610,6 +2067,38 @@ target_compile_definitions(NeverDDriverGuardMetadataTests PRIVATE
   ${_driver_execution_fixture_definitions})
 add_dependencies(NeverDDriverGuardMetadataTests NeverDDriverFixtures)
 
+add_neverd_unittest(NeverDDriverSessionStateTests
+  DriverSessionStateTests.cpp
+  TIMEOUT 30
+  LINK_COMPONENTS Emulation)
+target_include_directories(NeverDDriverSessionStateTests PRIVATE
+  ${CMAKE_SOURCE_DIR}/lib/emulation)
+target_compile_definitions(NeverDDriverSessionStateTests PRIVATE
+  ${_driver_execution_fixture_definitions})
+add_dependencies(NeverDDriverSessionStateTests NeverDDriverFixtures)
+
+add_neverd_unittest(NeverDDriverPersistentTests
+  DriverPersistentTests.cpp
+  DriverInvocationTests.cpp
+  DriverModuleInputTests.cpp
+  TIMEOUT 30
+  LINK_COMPONENTS Emulation)
+target_include_directories(NeverDDriverPersistentTests PRIVATE
+  ${CMAKE_SOURCE_DIR}/lib/emulation)
+target_compile_definitions(NeverDDriverPersistentTests PRIVATE
+  ${_driver_execution_fixture_definitions})
+add_dependencies(NeverDDriverPersistentTests NeverDDriverFixtures)
+
+add_neverd_unittest(NeverDKernelModulePublicationTests
+  KernelModulePublicationTests.cpp
+  TIMEOUT 30
+  LINK_COMPONENTS Emulation)
+target_include_directories(NeverDKernelModulePublicationTests PRIVATE
+  ${CMAKE_SOURCE_DIR}/lib/emulation)
+target_compile_definitions(NeverDKernelModulePublicationTests PRIVATE
+  ${_driver_execution_fixture_definitions})
+add_dependencies(NeverDKernelModulePublicationTests NeverDDriverFixtures)
+
 if(NOT NEVERD_EMULATION_BACKEND_UNICORN)
   return()
 endif()
@@ -1629,6 +2118,10 @@ add_neverd_unittest(NeverDDriverEmulationTests
   KernelDMATests.cpp
   KernelDMABridgeTests.cpp
   KernelPhysicalMemoryTests.cpp
+  KernelBugCheckTerminationTests.cpp
+  KernelDevicePropertyTests.cpp
+  KernelNlsDataTests.cpp
+  KernelReservedMappingTests.cpp
   SchedulerDMATests.cpp
   BackendBackingTests.cpp
   DriverSessionTests.cpp
@@ -1681,9 +2174,32 @@ add_neverd_unittest(NeverDDriverEmulationTests
   KernelLookasideTests.cpp
   KernelFastMutexTests.cpp
   KernelExecutiveResourceTests.cpp
+  KernelFileSystemTests.cpp
+  KernelFilterNameTests.cpp
+  KernelNetioTests.cpp
+  KernelNdisConfigurationTests.cpp
+  KernelHalDispatchTests.cpp
+  KernelAvlTests.cpp
+  KernelServiceTests.cpp
+  KernelSymbolicLinkTests.cpp
+  KernelCrtStringTests.cpp
+  KernelCallbackTests.cpp
+  KernelSectionTests.cpp
+  KernelThreadNotifyTests.cpp
+  KernelProcessNotifyTests.cpp
+  KernelPersistentDumpTests.cpp
+  KernelDebuggerTests.cpp
+  KernelReferenceExportTests.cpp
+  KernelServiceTableTests.cpp
+  KernelReferenceInitializerTests.cpp
+  KernelReferenceThreadTests.cpp
+  KernelGuestPagingTests.cpp
+  KernelNativeMDLTests.cpp
+  KernelFiniteFileSystemTests.cpp
   KernelRequestOwnershipTests.cpp
   KernelDriverIRPAllocationTests.cpp
   KernelDriverIRPOwnershipTests.cpp
+  KernelControlBuilderTests.cpp
   KernelCancellationTests.cpp
   KernelFrameworkTests.cpp
   KernelFrameworkPowerPolicyTests.cpp
@@ -1739,10 +2255,37 @@ add_neverd_unittest(NeverDDriverEmulationTests
   KernelAPIIRQLTests.cpp
   DriverContextLimitTests.cpp
   KernelRuntimeTests.cpp
+  KernelAnsiUpperTests.cpp
+  KernelAnsiCompareAppendTests.cpp
+  DriverCallbackDrainTests.cpp
+  DriverKernelMemoryTests.cpp
+  KernelIntegerUnicodeTests.cpp
+  KernelRTLInputTests.cpp
+  KernelProcessorTests.cpp
+  KernelProcessInformationTests.cpp
+  KernelProcessMemoryTests.cpp
+  KernelProcessDataTests.cpp
+  KernelAnsiCharTests.cpp
   DriverDirectIOTests.cpp
   DriverMDLTests.cpp
   DriverRegistryTests.cpp
   KernelRegistryTests.cpp
+  RegistryHivesTests.cpp
+    KernelRegistryCallbackTests.cpp
+    DriverRegistryEventsTests.cpp
+    DriverProcessCreateTests.cpp
+  KernelShutdownTests.cpp
+  KernelReferenceThreadTransferTests.cpp
+  KernelClockTests.cpp
+  KernelPciConfigurationTests.cpp
+  KernelPlatformTests.cpp
+  KernelDmaGuardTests.cpp
+  KernelAcpiTests.cpp
+  KernelCodeIntegrityTests.cpp
+  DriverCPUIDPolicyTests.cpp
+  KernelMcfgTests.cpp
+  KernelFirmwareQueryTests.cpp
+  KernelDriverObjectTests.cpp
   KernelExportTests.cpp
   LINK_COMPONENTS Emulation
 )
@@ -1760,6 +2303,7 @@ if(TARGET neverd_shared AND TARGET neverd)
   add_neverd_unittest(NeverDDriverEmulationPublicTests
     HardwareBackendPublicTests.cpp
     DriverEmulationPublicTests.cpp
+    DriverExecutionCAPITests.cpp
     DriverScenarioPublicTests.cpp
     DriverWdmWaitWakePublicTests.cpp
     DriverWdmUsbIdlePublicTests.cpp
@@ -1810,4 +2354,14 @@ if(TARGET neverd_shared AND TARGET neverd)
     target_link_libraries(NeverDDriverEmulationPublicTests PRIVATE LLVMSupport)
   endif()
   add_dependencies(NeverDDriverEmulationPublicTests NeverDDriverFixtures neverd)
+  if(Python3_EXECUTABLE)
+    add_test(NAME NeverDDriverExecutionCLITests
+      COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_SOURCE_DIR}/scripts/tests/test_driver_execution_cli.py"
+        --neverd "$<TARGET_FILE:neverd>"
+        --library "$<TARGET_FILE:neverd_shared>"
+        --fixtures "${_driver_fixture_dir}")
+    set_tests_properties(NeverDDriverExecutionCLITests PROPERTIES
+      LABELS "NeverDDriverExecutionCLITests;Execution;CLI;Driver" TIMEOUT 90)
+  endif()
 endif()

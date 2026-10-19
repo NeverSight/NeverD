@@ -69,7 +69,7 @@ NTSTATUS DriverEntry(DRIVER_OBJECT *Driver,
                      const UNICODE_STRING *RegistryPath) {
   OBJECT_ATTRIBUTES Attributes = {
       sizeof(Attributes), 0, RegistryPath, 0x240, 0, 0};
-  NTSTATUS Status = ZwOpenKey(&ServiceKey, 0x2001f, &Attributes);
+  NTSTATUS Status = ZwOpenKey(&ServiceKey, 0xc0000000, &Attributes);
   if (Status < 0)
     return Status;
   UNICODE_STRING Name;
@@ -98,7 +98,7 @@ NTSTATUS DriverEntry(DRIVER_OBJECT *Driver,
   Attributes.ObjectName = &ChildName;
   void *Child = 0;
   U32 Disposition = 0;
-  Status = ZwCreateKey(&Child, 0xf003f, &Attributes, 0, 0, 0, &Disposition);
+  Status = ZwCreateKey(&Child, 0x10000000, &Attributes, 0, 0, 0, &Disposition);
   if (Status < 0 || Disposition != 1)
     return (NTSTATUS)0xc000000d;
   Status = ZwSetValueKey(Child, &Name, 0, 4, &Information.Value, 4);

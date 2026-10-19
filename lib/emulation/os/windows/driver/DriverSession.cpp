@@ -23,6 +23,7 @@
 #include "DriverCPUID.h"
 #include "DriverContextCapture.h"
 #include "DriverEntryABI.h"
+#include "DriverExecutionRun.h"
 #include "DriverImage.h"
 #include "DriverObservation.h"
 #include "DriverScenario.h"
@@ -61,6 +62,15 @@ llvm::Error failure(const std::string &Text) {
 std::string guestCallPhase(const GuestCallToken &Token) {
   const char *Prefix = InvalidCallbackPhase;
   switch (Token.Owner) {
+  case GuestCallOwner::Avl:
+    Prefix = AvlCallbackPhase;
+    break;
+  case GuestCallOwner::DriverService:
+    Prefix = "callback:driver-service:";
+    break;
+  case GuestCallOwner::ThreadNotify:
+    Prefix = ThreadNotifyCallbackPhase;
+    break;
   case GuestCallOwner::Framework:
     Prefix = FrameworkCallbackPhase;
     break;
@@ -79,6 +89,15 @@ std::string guestCallPhase(const GuestCallToken &Token) {
   case GuestCallOwner::UsbIdle:
     Prefix = UsbIdleCallbackPhase;
     break;
+  case GuestCallOwner::ExecutiveCallback:
+    Prefix = ExecutiveCallbackPhase;
+    break;
+  case GuestCallOwner::ProcessNotify:
+    Prefix = ProcessNotifyCallbackPhase;
+    break;
+  case GuestCallOwner::RegistryCallback:
+    Prefix = RegistryCallbackPhase;
+    break;
   }
   return std::string(Prefix) + std::to_string(Token.ID);
 }
@@ -88,6 +107,9 @@ std::string guestCallPhase(const GuestCallToken &Token) {
 static llvm::Expected<DriverResult> runDriver(const std::filesystem::path &Path,
                                               const DriverOptions &Options,
                                               ProcessObserver *Observer) {
+  auto CPUID = DriverCPUIDModel::fromDriverOptions(Options);
+  if (!CPUID)
+    return CPUID.takeError();
   const bool Direct = Options.Contract == ExecutionContract::DirectDriverX64;
   if (Options.Contract != ExecutionContract::Legacy &&
       Options.Contract != ExecutionContract::CheckedX64 && !Direct)
@@ -97,7 +119,7 @@ static llvm::Expected<DriverResult> runDriver(const std::filesystem::path &Path,
       return failure(session_diagnostic::DirectScheduling);
     if (Options.TraceMemoryWrites)
       return failure(session_diagnostic::DirectWriteTrace);
-    if (!Options.CPUID.empty())
+    if (!Options.CPUID.empty() || Options.CPUIDPolicy)
       return failure(session_diagnostic::DirectCPUID);
   }
   if (!Options.InstructionLimit || !Options.MemoryLimit ||
@@ -247,7 +269,9 @@ static llvm::Expected<DriverResult> runDriver(const std::filesystem::path &Path,
   if (!BranchModel)
     return llvm::createStringError(llvm::inconvertibleErrorCode(),
                                    diagnostic::BranchModel);
-  if (auto E = Policy.initialize(*BranchModel))
+  if (auto E = Policy.initialize(*BranchModel, false, false,
+                                 WindowsX64ExecutionPolicy::Purpose::Driver,
+                                 Kernel.hasModelSpecificRegisters()))
     return std::move(E);
   bool Stopped = false;
   std::optional<uint64_t> InvocationReturn;
@@ -468,7 +492,19 @@ static llvm::Expected<DriverResult> runDriver(const std::filesystem::path &Path,
         Address == ProcessorEnvironmentBase + windows::GSCurrentThreadOffset)
       return;
     if (KernelExportRegistry::overlapsThunk(Address, Size)) {
-      Stop(DriverStopReason::UnsupportedAPI, session_diagnostic::ImportRead);
+      const KernelExportRegistry::Export *Owner = nullptr;
+      for (const auto &[Base, E] : Exports.entries())
+        if (Address >= Base && Address - Base < ThunkStride) {
+          Owner = &E;
+          break;
+        }
+      Stop(DriverStopReason::UnsupportedAPI,
+           llvm::formatv(session_diagnostic::ImportReadDetail,
+                         session_diagnostic::ImportRead,
+                         Owner ? Owner->Module : "<unbound>",
+                         Owner ? Owner->Name : "<unbound>",
+                         llvm::utohexstr(Address), Size)
+               .str());
       return;
     }
     if (auto E = Kernel.validateGuestAccess(Address, Size, false)) {
@@ -1179,6 +1215,33 @@ static llvm::Expected<DriverResult> runDriver(const std::filesystem::path &Path,
       }
       if (PendingEnvironmentRead) {
         const auto &Action = PendingEnvironmentRead->Request;
+        if (Action.Source == WindowsX64ExecutionPolicy::Action::Kind::ReadMSR) {
+          auto Index = CPU.reg(X64Register::CX);
+          if (!Index)
+            return Index.takeError();
+          auto Value = Kernel.readModelSpecificRegister(uint32_t(*Index));
+          if (!Value) {
+            Stop(DriverStopReason::UnsupportedInstruction,
+                 llvm::toString(Value.takeError()));
+            break;
+          }
+          Kernel.recordUnpackEnvironmentRead();
+          if (auto E = CPU.setReg(X64Register::AX, uint32_t(*Value)))
+            return E;
+          if (auto E = CPU.setReg(X64Register::DX, uint32_t(*Value >> 32)))
+            return E;
+          NextPC = PendingEnvironmentRead->NextPC;
+          continue;
+        }
+        if (Action.Source == WindowsX64ExecutionPolicy::Action::Kind::ReadCR4) {
+          Kernel.recordUnpackEnvironmentRead();
+          if (!Action.Destination)
+            return failure("CR4 read has no destination");
+          if (auto E = CPU.setReg(*Action.Destination, Kernel.guestCR4()))
+            return E;
+          NextPC = PendingEnvironmentRead->NextPC;
+          continue;
+        }
         if (Action.Source ==
             WindowsX64ExecutionPolicy::Action::Kind::ReadDisabledShadowStack) {
           // CR4.CET is disabled by this profile. RDSSPD also preserves the
@@ -1196,8 +1259,13 @@ static llvm::Expected<DriverResult> runDriver(const std::filesystem::path &Path,
           auto Subleaf = CPU.reg(X64Register::CX);
           if (!Subleaf)
             return Subleaf.takeError();
-          auto Values = driver_cpuid::query(Options.CPUID, uint32_t(*Leaf),
-                                            uint32_t(*Subleaf));
+          auto Values = [&]() -> llvm::Expected<std::array<uint32_t, 4>> {
+            if (Options.CPUIDPolicy)
+              if (auto R = CPUID->query(uint32_t(*Leaf), uint32_t(*Subleaf)))
+                return *R;
+            return driver_cpuid::query(Options.CPUID, uint32_t(*Leaf),
+                                       uint32_t(*Subleaf));
+          }();
           if (!Values) {
             Stop(DriverStopReason::UnsupportedInstruction,
                  llvm::toString(Values.takeError()));
@@ -1395,10 +1463,23 @@ static llvm::Expected<DriverResult> runDriver(const std::filesystem::path &Path,
           Kernel.call(*Pending, FixedArguments, ReadVariableArgument, &Context);
       if (!Value) {
         std::optional<uint32_t> RaisedCode;
+        std::optional<DriverBugCheck> BugCheck;
         auto OtherError = llvm::handleErrors(
-            Value.takeError(), [&](const KernelGuestException &Exception) {
+            Value.takeError(),
+            [&](const KernelGuestException &Exception) {
               RaisedCode = Exception.code();
+            },
+            [&](const KernelGuestBugCheck &Request) {
+              BugCheck = Request.request();
             });
+        if (!OtherError && BugCheck) {
+          Result.BugCheck = *BugCheck;
+          const std::string Detail =
+              "guest requested bug check 0x" + llvm::utohexstr(BugCheck->Code);
+          Result.Calls.back().Detail = Detail;
+          Stop(DriverStopReason::BugCheck, Detail);
+          break;
+        }
         if (!OtherError && RaisedCode) {
           const std::string Detail = session_diagnostic::RaisedException +
                                      llvm::utohexstr(*RaisedCode);
@@ -2562,6 +2643,44 @@ static llvm::Expected<DriverResult> runDriver(const std::filesystem::path &Path,
 
 llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
                                            const DriverOptions &Options) {
+  if (Options.Contract != ExecutionContract::DirectDriverX64 &&
+      (Options.Version || !Options.KernelImage.empty() || Options.PageTables ||
+       Options.CallbackDrainPolicy ||
+       std::any_of(Options.Requests.begin(), Options.Requests.end(),
+                   [](const auto &R) { return R.DelayBefore100ns != 0; }) ||
+       !Options.ProcessEvents.empty() || !Options.RegistryEvents.empty())) {
+    ExecutionRunOptions Control;
+    Control.Limits = {Options.InstructionLimit, Options.EventLimit,
+                      Options.TimeoutMilliseconds *
+                          runtime::MicrosecondsPerMillisecond};
+    Control.TimePolicy = ExecutionTimePolicy::AbsoluteDeadline;
+    Control.InstructionQuantum = UINT64_MAX;
+    Control.EnableResourcePauses = false;
+    Control.PauseUnknownAddresses = false;
+    auto Prepared = createDriverExecutionRun(Path, Options, std::move(Control),
+                                             {}, {}, true);
+    if (!Prepared)
+      return Prepared.takeError();
+    for (;;) {
+      auto Event = Prepared->Run->run();
+      if (!Event)
+        return Event.takeError();
+      if (Event->State == ExecutionRunState::Paused) {
+        if (auto E = Prepared->Run->resume())
+          return std::move(E);
+        continue;
+      }
+      if (Event->State == ExecutionRunState::Failed)
+        if (auto E = Prepared->finishStoppedFailure(*Event))
+          return std::move(E);
+      if (Event->State != ExecutionRunState::Failed &&
+          Event->State != ExecutionRunState::Completed)
+        return llvm::createStringError(
+            llvm::inconvertibleErrorCode(),
+            "one-shot driver stopped on an unexpected resource request");
+      return std::move(Prepared->State->Result);
+    }
+  }
   return runDriver(Path, Options, nullptr);
 }
 

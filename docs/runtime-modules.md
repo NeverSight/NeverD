@@ -1,12 +1,41 @@
 # Explicit binary modules and debug information
 
 `NeverDModules` owns a format-independent catalogue of caller-supplied binary
-and debug files. System files and privately built modules use the same interface.
-The resource layer supports eager/lazy preparation, strict debug identity,
-transactional guest mappings and resource repair at validated CPU stops.
-The C SDK, Python binding and JSON-lines CLI expose the same persistent raw-buffer
-execution owner. Its only registered environment is `buffer`; other environment
-kinds fail explicitly. Windows driver and Ring3 adapters are separate consumers.
+and debug files. Official system files and privately built modules use the
+same interface. The C++ resource layer, generic instance/mapping transactions,
+validated low-level resource stops, persistent workload/stage control and finite
+guest invocation are implemented. Module resource C ABI/CLI access is also
+implemented. Persistent execution C ABI exposes explicit raw CPU buffers and the
+Windows driver environment, with a persistent JSON-lines CLI using that same
+public boundary. The Windows driver adapter publishes explicit Native x64 guest
+modules through the common transaction. Supported CPU resource stops retain the
+driver call/phase while declared lazy modules or caller-supplied missing modules
+are mapped. Additional Native x64 guest bindings support exact imports and
+bounded export forwarding. Primary-driver/reference instance adoption is also
+implemented. Primary private-provider IAT linking uses the same stopped module
+transaction. Additional active CFG and C SEH/unwind metadata publish with that
+transaction. The driver-lab replay now consumes the public SDK through
+[`run_module_driver_replay.py`](../scripts/labs/run_module_driver_replay.py).
+Ring3 execution integration is reserved in the design.
+
+The existing Windows driver path uses a private `DriverSessionState` resource
+owner, with initialization separated from guest execution and stable lifetimes
+for its models, inputs, budget, CPU view and resident frame data. Its initial CPU
+transfers once into the shared `ExecutionSession` for hook installation,
+instruction accounting, execution and recoverable faults. The existing driver
+pump and OS policy remain authoritative. `DriverExecutionEnvironment` now retains
+that pump and its phase/callback/exception call tree in private suspended tasks,
+yielding CPU actions to `ExecutionRun`. The internal adapter stops after successful
+entry finalization and before the first callback drain. The one-shot driver API
+uses this adapter for explicitly selected native version, kernel reference,
+guest paging, resident-callback draining and lifecycle-event inputs. Ordinary
+one-shot execution, observation and direct execution retain their existing
+entry path and share the same kernel model. Finite driver calls adopt a generic Win64
+frame on a separate stack, use that same pump and validate return ownership,
+stack balance and IRQL. Both public factories are described below. Additional
+module imports use existing exact model bindings or explicitly bound guest
+providers. The public replay runs the original entry, stops at `after-entry`
+and makes caller-specified finite calls without rewriting production sources.
 
 ## Declare and prepare inputs
 
@@ -275,7 +304,7 @@ bindings, request human input or report no match. Found bindings use the same
 No callback starts execution, downloads files or searches host directories
 implicitly. The execution owner must provide the stopped boundary. Low-level
 resource pauses are available through `ExecutionSession` and `ExecutionRun`;
-OS adapters register separately; this interface does not infer an OS model.
+Windows adapter integration remains under development.
 
 An optional `ModulePublicationPreparer` prepares environment metadata from the
 candidate instance table. Its `ModulePublication` may expose guest RAM patches
@@ -381,7 +410,7 @@ and the original run's local deadline. Pending run/context/watch operations are
 rejected; quota failure retains the pending attempt. Session watches and call
 returns have priority, and CPU faults retain their typed outcome. This is model
 admission, without a missing-module request or permission to repair a terminal
-fault. OS adapters can use it for thunk/CFG/return boundaries and
+fault. The existing Windows driver uses it for thunk/CFG/return boundaries and
 modeled processor reads within its retained phase and invocation pump.
 
 `ExecutionEnvironment::prepareCPUEntry` refreshes OS projections of committed
@@ -393,6 +422,33 @@ failure is terminal `environment_failure`; it cannot request another resource
 or undo already committed modules. Shared time/instruction admission is checked
 after success and error, and a cooperative pause arriving during projection is
 observed before execution. Inspection and memory snapshots do not run the hook.
+
+## Driver report views and primary import policy
+
+The `windows-driver` environment accepts an optional `report` object with
+`call_tail` and `write_tail`, each a positive count up to 1,000,000. Only the
+serialized observation is bounded. Runtime records, guest effects and budgets
+remain unchanged. Its `environment_report.trace_view` contains `total_calls`,
+`first_call_index`, `total_writes` and `first_write_index`, identifying exactly
+which suffix was returned. Omitting `report` keeps the complete legacy report;
+omitting one tail field keeps that array complete. Use bounded views for large
+workloads without treating unreturned records as absent execution.
+
+`primary_import_policy` defaults to `modules`: primary imports without an
+existing model binding use the shared module/dependency transaction. Explicit
+`model-traps` retains the one-shot primary import contract, binding named
+imports to existing models or lazy unsupported-API traps. An unmodeled routine
+still has no callable ABI or invented return behavior. This compatibility
+selection retains strict ordinal/primary-image admission and does not change
+additional modules' shared linker. The report records the selected policy;
+`capabilities.primary_module_imports` indicates whether the primary uses module
+linking. Both choices use the same execution engine.
+
+The [public SDK replay runner](../scripts/labs/README.md) consumes explicit
+module/scenario files, pauses the original driver at `after-entry`, and performs
+bounded buffer/capacity calls without source rewriting or a private executor.
+It records actual outputs, API trace completeness, hashes and published owners.
+See the [configuration examples](../resources/modules/examples/README.md).
 
 ## Time policy across pauses
 
@@ -422,8 +478,10 @@ handle, or using a released handle, fails explicitly.
 
 The configuration has an explicit `environment` object, optional `run` controls
 and optional `bindings`. The `buffer` kind accepts explicitly supplied CPU
-instruction/data bytes without an OS loader; other environment kinds fail with an
-unsupported-environment error; they never select a fallback. Ring3 execution remains a reserved integration point.
+instruction/data bytes without an OS loader; `windows-driver` selects the
+retained WDM driver adapter described below. Other kinds fail with an
+unsupported-environment error; they never select a fallback. No Ring3 instance
+is introduced by either factory.
 
 ```json
 {
@@ -484,7 +542,9 @@ do not acquire the busy guard.
 The buffer mapper only accepts fixed link-address images of the selected ISA,
 without imports, relocations or rebase requests. It maps original file bytes
 through `ImageMappingPlan` and the common module transaction, preserving segment
-permissions; a nonzero entry in nonexecutable RAM is rejected. OS relocation/import/model policy belongs to each separately registered adapter.
+permissions; a nonzero entry in nonexecutable RAM is rejected. Windows module
+relocation/import/model policy belongs to the Windows driver adapter described
+below.
 Mapped symbols do not imply modeled API behavior. Python `HostAPI` has matching
 ctypes handles, structure, owned-string and byte-buffer signatures.
 
@@ -494,8 +554,371 @@ available in that build. An isolated test target compiles the production
 boundary/allocator without any emulation archive; the separate
 `NeverDExecutionSDKDisabledTests` links the real feature-disabled SDK and
 exercises every execution export, source lifetime and the public allocator.
-The disabled CLI tests check startup diagnostics for requested environment kinds. See the complete
+The disabled CLI tests check buffer and driver startup. See the complete
 [feature-disabled build instructions](testing.md#explicit-module-inputs).
+
+## Persistent Windows driver environment
+
+Select `windows-driver` through the same `neverd_execution_create_v1` call or
+`neverd execution` CLI. C++ consumers include
+[`DriverExecutionFactory.h`](../include/neverd/emulation/DriverExecutionFactory.h)
+and call `createDriverExecution`. This factory uses the same retained environment
+as the existing one-shot driver API, rather than running a second driver engine.
+
+```json
+{
+  "environment": {
+    "kind": "windows-driver",
+    "image": "example.sys",
+    "base_directory": "D:/analysis-inputs",
+    "backend": "unicorn",
+    "contract": "checked-x64-v1",
+    "memory_limit": 67108864,
+    "scenario": {"service_name": "Example"}
+  },
+  "run": {
+    "pause_stages": ["after-entry"],
+    "limits": {
+      "instructions": 100000000,
+      "events": 10000,
+      "timeout_microseconds": 10000000
+    }
+  }
+}
+```
+
+Specify exactly one of `image` or `image_module`. The path form prepares and pins an
+explicit file through the common resource layer; `image_module` selects a
+resource ID from the supplied `ModuleSet`. Both consume immutable bytes and the
+same strict driver preflight.
+`base_directory` is an explicit absolute origin for relative host files;
+otherwise the retained module-set origin is used. Absolute files
+need no origin. Neither cwd nor host-system directories are searched implicitly.
+The same path admission resolves the optional scenario's `kernel_image`,
+`kernel_pdb` and `service_images[].source`; guest image/registry/filesystem paths
+remain guest identities. The scenario uses the existing strict driver parser.
+Backend, kernel execution contract, memory capacity and common run controls are
+selected outside it. `driver-strict` and `checked-x64-v1` are the supported driver
+contracts; a user-mode contract does not select an application adapter.
+
+For a driver already declared in the source catalogue, use the ID form. The
+optional `kernel_module` selects the source observation used by the existing
+bounded kernel-reference model. For example, a module configuration can declare:
+
+```json
+{
+  "base_directory": "D:/analysis-inputs",
+  "modules": [
+    {"id": "driver-main", "image": "example.sys"},
+    {"id": "kernel-reference", "image": "ntoskrnl.exe",
+     "debug": {"kind": "pdb", "path": "ntkrnlmp.pdb"}}
+  ]
+}
+```
+
+Its execution configuration then selects those resources:
+
+```json
+{
+  "environment": {
+    "kind": "windows-driver",
+    "image_module": "driver-main",
+    "kernel_module": "kernel-reference",
+    "backend": "unicorn",
+    "contract": "checked-x64-v1",
+    "scenario": {"windows_version": {"major": 10, "minor": 0, "build": 19041}}
+  },
+  "run": {"pause_stages": ["after-entry"]}
+}
+```
+
+These are explicit bootstrap roles: constructing this environment is their
+first use, so creation prepares those selected inputs, including a configured
+PDB. It does not prepare unrelated catalogue entries. A source's eager/lazy
+declaration remains recorded; selected bootstrap roles are prepared at creation,
+while additional guest bindings follow the eager/first-use rules below. Supplying
+both `image` and `image_module`, or combining
+`kernel_module` with the scenario's `kernel_image`/`kernel_pdb`, fails explicitly.
+
+The driver byte view and strict execution preflight share the same prepared
+`BinaryImage`; no second read of the original driver path occurs for ID inputs.
+Kernel reference facts use the same pinned PE/debug observation. The PDB provider
+owns matching, while the existing kernel adapter continues to prove its bounded
+layout and original-code shapes. Names-only RSDS identity does not grant general
+function signatures or object extents; MAP debug names cannot supply these
+kernel layout facts. Removing or replacing the original files after preparation
+does not change the observation used by an execution. Later debug attachment
+publishes a new source observation and does not rewrite an existing run's facts.
+
+Creation publishes the already mapped primary driver as instance `$driver`, and
+an optional reference as `$kernel-reference`. These instance IDs are reserved by
+the adapter, count toward `instance_limit`, and cannot be redeclared or replaced.
+Their reports set `environment_owned: true` and `role: "driver"` or
+`"kernel-reference"`. Their `module_id` preserves the selected source ID; legacy
+file inputs use local observation labels `@driver-image` and
+`@kernel-reference`, without adding hidden entries to the caller's catalogue.
+The `input_modules` environment report continues to list explicit source-ID
+selections; all bootstrap instance reports include their pinned hashes.
+
+Bootstrap adoption reuses the existing guest module-query row and main driver
+loader record. It creates no duplicate row, link, allocation or initializer
+execution. The reference retains its sparse mappings and guarded runtime data.
+Its named export and ordinal metadata use the canonical registry's selected
+addresses; explicitly absent names stay absent. PDB lookup through
+`neverd_execution_lookup_symbol_json` with the instance ID projects into its
+actual guest base. A source symbol is metadata and may still refer to opaque
+storage. The reference's `entry` is zero because it has no initialization
+request.
+
+The persistent driver adapter links unbound external-provider imports, including
+code, data and validated ordinal imports, before its first CPU action. Explicit
+instance bindings provide the module identities; it does not infer a file from
+the source ID or search the host filesystem. A required lazy provider's first use
+is this load-time link, even with CPU resource pauses disabled. Missing providers
+produce the common dependency request, with no main-driver instruction executed.
+Callers can add/revise a source and supply its binding, then run the retained
+action. Failed supply retains its token and publishes no partial IAT or module.
+A provider's own dependencies may require supplying a complete batch.
+
+`DriverImportPublication` stages primary IAT writes with guest loader records
+and host instance state in the same RAM transaction. IAT permissions remain
+unchanged. Provider initialization is still explicit and is never inferred from
+successful linking. Environment snapshots report `primary_imports_linked`;
+`capabilities.primary_module_imports` records the selected primary linking policy.
+
+Preexisting registry bindings and explicit absence stay authoritative. Named
+kernel APIs without a declared model retain their unsupported API traps. A
+source file cannot replace a model's ABI or OS semantics. For a mapped provider's
+named modeled exports, name and corresponding ordinal lookup share the same
+registry target. Published exports and primary/extra import resolution use that
+same rule, including forwarding. Source/PDB symbol lookup still projects source
+addresses and grants no model or execution authority. The legacy one-shot driver
+API retains its previous unknown-import/strict ordinal policy while using the
+same persistent executor.
+
+Creation maps/initializes this one driver but executes no main-driver instructions.
+The selected `after-entry` stop occurs after a zero-status `DriverEntry` return
+and `finishEntry`, before the first callback drain. Omission keeps the normal
+entry/request/unload flow. A finite call requires this selected stage, an
+executable target inside the current driver or a published guest module, explicit `win64`, and the
+stopped foreground thread at PASSIVE_LEVEL without an active guest callback,
+user attachment or power-managed callback. Unsupported targets/ABIs fail before
+call effects.
+
+Use `neverd_execution_lookup_symbol_json` with `$driver` to obtain the bound
+address from its pinned matching PDB. Alternatively, use
+`neverd_module_set_lookup_symbol_json` to obtain an original-image function
+address, then translate explicitly as
+`runtime_base + (symbol_address - preferred_base)`. The stopped environment
+report supplies both bases. PDB symbols select addresses; they do not infer
+function signatures, argument types or return meaning. An absolute runtime
+address works without a PDB when the caller already knows it.
+
+The invocation installs its ABI/payload once on a separate 1 MiB writable stack
+with its own reserved return boundary. That storage is reserved when the
+after-entry stage is selected. Calls use the existing API, callback, exception,
+thread and scheduler owners. A validated return captures outputs, retires the
+call stack's model lifetime, restores the caller's CPU/control and model selector,
+and pauses at `after-entry` again. RAM, globals, OS side effects, queues, virtual
+clock and cumulative budgets persist. The retired entry stack is not revived.
+IRQL/ownership violations, an unbalanced stack, terminal memory faults or limits
+terminate the workload. Another `invoke` repeats a call; `resume` continues the
+original driver lifecycle.
+
+The run's exact microsecond time limit remains authoritative. The legacy driver
+configuration report expresses a rounded-up millisecond envelope; it neither
+extends nor replaces the shared deadline. A call may consume its final
+instruction and still reach an uncharged modeled API or reserved return point.
+Attempting an additional machine instruction exhausts that local allowance.
+
+Stopped `inspect_json` and CLI `inspect` append `environment_report` with actual
+driver observations, API calls, entry status, addresses and capabilities.
+Its `input_modules` lists selected source IDs, roles and the exact pinned
+image/debug digests. These input observations are distinct from the generic
+runtime instance table and do not imply publication of arbitrary kernel modules.
+Inspection snapshots model output without draining callbacks or running a CPU.
+Before lifecycle completion, `observation_only` is true and the legacy
+`stop_reason`/`scenario_success` claims are omitted; the outer execution event
+owns lifecycle and failure status. A failed entry status can be a completed
+observation without successful driver initialization.
+
+Additional guest modules use the same source catalogue and explicit bindings.
+For example, declare a caller-provided Native x64 `helper.sys`, with its matching
+PDB when available:
+
+```json
+{
+  "base_directory": "D:/analysis-inputs",
+  "modules": [
+    {"id": "support", "image": "helper.sys", "load": "eager",
+     "debug": {"kind": "pdb", "path": "helper.pdb"}}
+  ]
+}
+```
+
+Add this top-level `bindings` array to the execution configuration:
+
+```json
+{
+  "bindings": [
+    {"id": "helper-instance", "module_id": "support", "guest_name": "helper.sys",
+     "scope": "kernel", "address_space": "kernel", "base": "0x1B0000000"}
+  ]
+}
+```
+
+An eager binding is prepared before the next CPU action, including an eager
+binding explicitly declared at a later stopped boundary. Registering a source
+alone does not map it. The mapper consumes pinned original bytes, validates the
+Native x64 PE profile, applies supported relocations and links the complete batch
+before publication. Imports use existing exact model identities or explicitly
+bound guest providers, including named, ordinal and data imports. Export names and ordinals use the
+canonical PE export reader. Guest aliases, overlapping image extents and reserved
+model/call-stack ranges are rejected. A missing eager source can be corrected
+through its retained declared-module request before any CPU action; failed supply
+preserves that token for retry.
+
+The same stopped transaction commits image pages, initialized bytes, generic
+instances/exports and prepared OS metadata. The kernel model stages arena
+allocations, read-only names and loader-list links without changing live RAM.
+It validates the current ring, including service-owned records, before appending.
+Failed preparation or physical conflicts abandon both RAM and metadata; guest
+link corruption is reported rather than repaired. `ZwQuerySystemInformation(11)`
+and guest loader-ring reads observe the same newly published records and each
+record's own flags. A mapped instance pins its source/debug observation.
+The stopped `lookup` command returns a runtime symbol address for `invoke`.
+
+Publication installs the PE's initial file/zero-filled state. It does not execute
+an additional module's entry point or manufacture boot-initialized globals.
+Additional Native modules register immutable x64 unwind/C SEH facts with the
+same mapping transaction. Appended planners preserve previous image indices,
+metadata pointers and per-image cookie readers, including across later stopped
+module publication. A suspended driver task reacquires the current planner.
+The host only interprets supported loader-decoded contracts; unsupported language
+personalities/unwind versions remain errors.
+
+Finalized mapping facts retain witnesses for headers, directory/unwind bytes,
+C scope and GS payloads, personality code regions and personality IAT bindings.
+Dispatch and continuation validate those bytes against current guest backing;
+changed/unmapped facts fail instead of using stale cached metadata. Writable
+module globals and live cookie values are not frozen. Prepared facts and a new
+planner publish only with successful RAM/instance/OS metadata commit. Physical
+failure abandons the new planner and keeps the existing owner intact.
+
+The default kernel profile declares `__C_specific_handler`, `__GSHandlerCheck`
+and `__GSHandlerCheck_SEH` as structural personality identities. This grants no
+callable DDI ABI: direct calls remain unsupported. Explicit absence and the
+selected kernel-reference namespace retain authority. Imports used to establish a personality contract
+must keep an existing kernel binding; a private same-named routine cannot inherit
+that identity. Actual new module execution tests cover ordinary C SEH and
+cross-image unwind; GS byte-range/cookie ownership uses the shared existing
+planner, without a new standalone extra-module GS execution fixture.
+
+With the explicit 10.0.19041 `page_tables` model enabled, eager modules and modules
+supplied during a CPU resource stop have their current mappings projected into
+the same guest PTE/PFN model before the next machine instruction. Executable and
+writable data pages retain their own supervisor/NX/write permissions. The pager
+publishes through the stopped shared address space; backend register/context
+mutation guards remain in force across acknowledgement and original-PC retry.
+The complete recursive PML4 window and table storage belong to the pager;
+additional module extents cannot claim them, and missing recursive aliases do
+not become missing-module requests. A projection capacity/unsupported-layout
+failure stops execution; committed module publication remains intact. Stopped
+raw PTE snapshots may still show the previous projection until CPU admission or
+an explicit modeled paging query synchronizes it. These are read-only model
+tables; guest PTE writes, CR3 switching and TLB invalidation remain unsupported.
+
+Additional active CFG modules use the same exact-target check/dispatch policy
+as the primary image. The loader validates GFIDS, suppression, read-only slots,
+address-taken IAT metadata and complete supported relocations; Native no-entry
+modules do not acquire an invented entry point. Final mapping patches their
+guard slots to the existing helpers. A prepared policy and byte witnesses
+publish with the RAM/import/unwind/loader transaction. The policy object keeps
+its identity across suspended driver tasks; failed publication grants no new
+targets. Guarded images grant only unsuppressed GFIDS entries. Unguarded images
+grant exact direct function exports, excluding data, PDB labels and forwarded
+aliases; exports cannot override a guarded image's suppression. Helpers validate
+the retained metadata/slot witnesses before dispatch. An adjacent address is
+not authorized by sharing an executable page. XFG/export suppression and other
+unsupported active extensions retain the loader's explicit errors.
+
+An unguarded caller can trigger ordinary lazy fetch/supply of a guarded module;
+its CFG policy is installed before that original instruction resumes. A CFG
+helper itself requires an already published valid target; it does not bypass
+validation to speculate about an unmapped future target. Additional entry
+initialization and arbitrary bitmap rounding remain outside this profile.
+
+The adapter reports
+`module_publication: true`, `module_dependencies: true` and
+`module_x64_c_seh: true` and `module_cfg: true` for these additional
+guest bindings, and
+`module_entry_initialization: false`. `resource_pause` reports the selected CPU's
+support; `resource_pause_enabled` records the run's explicit option. These facts
+do not promise recovery for arbitrary instructions or model errors.
+
+With `enable_resource_pauses: true`, the driver adapter admits backend-validated
+unmapped CPU reads/fetches at supported restart boundaries. Existing image
+extents, user pointers, model objects and fixed arena/stack/thunk/device ranges
+remain owned. Bounds, lifetime, opaque-object and protection failures do not
+become missing-module requests. Admission only probes model identity; it does
+not record an attempted write or mutate RAM.
+
+For automatic first-use loading, declare the source with `load: lazy` and its
+runtime binding with both `base` and the exact PE `SizeOfImage` in `size`. A real
+guest access within that declared extent prepares and publishes the source, then
+continues the retained CPU action automatically. Source preparation alone still
+does not map it. Finite-call target admission requires an already published
+executable target; a call from that code can first-use a lazy dependency through
+its actual guest address.
+
+When `pause_unknown_addresses: true`, a supported access outside known owners
+can instead yield `awaiting_resource`. Add an explicit source using `module_add`
+or the module C API and supply its binding with the event's exact token. Failed
+supply retains the request for correction. Successful supply maps the module
+and loader metadata while stopped and acknowledges the existing continuation;
+it executes no CPU instruction. A subsequent `run` resumes at the backend's
+actual PC. Completed API calls, global writes, indirect-call return slots,
+registers, phase, active invocation and cumulative credits remain retained.
+Neither source registration nor inspection restarts the driver.
+
+The linker matches the full import provider identity, preserving the established
+kernel alias and Windows basename folding. Symbols remain case-sensitive. An
+extensionless forwarder provider must identify one registered provider; an
+ambiguous basename fails. No source directory or host-system search occurs.
+Named/ordinal forwarders may resolve to guest functions/data or existing model
+identities. Forwarder cycles, empty export targets and excessive depth/work fail
+before RAM publication. Existing model bindings and explicit absence retain
+their authority; the linker does not replace the live API registry.
+
+A dependency on an explicitly declared lazy binding is its first use. The engine
+expands the same batch, prepares that resource and revalidates the complete link
+without publishing an intermediate module. Unrelated lazy inputs remain unread.
+An undeclared dependency, or a missing file for a declared dependency, yields
+`missing_dependency` before the deferred CPU action. Add/correct the source and
+supply the requested provider binding. The deferred eager importers join that
+same transaction automatically. A provided module lacking the requested export
+is an explicit linking error; it is not treated as another missing file.
+
+If a CPU resource stop already exists when the missing module's own dependency
+is discovered, its original request/token/PC remain retained. Supply the original
+requested instance together with the new provider bindings. Failed linking
+abandons every draft and preserves the request; successful linking publishes
+them together before acknowledgement. It does not replay the caller or the
+indirect call that reached the missing target.
+
+Stopped loader publication and environment snapshots use explicit RAM snapshot
+reads. They can inspect owned backing while a resource stop is pending without
+changing CPU permissions, acknowledging the stop, invoking MMIO or clearing a
+fault. CPU operations keep their original continuation guards. Unsupported
+software instruction restart shapes, model/API errors and additional-module
+initialization remain explicit limitations. Setting `enable_resource_pauses`
+to false keeps ordinary terminal CPU-fault behavior; the one-shot driver entry
+retains that setting.
+
+The existing explicit
+`kernel_image`/`kernel_pdb` scenario path remains available for compatibility;
+its reference loader now delegates file/debug preparation to `ModuleSet` too.
+Ring3 remains a design reservation without new application runtime instances.
 
 ## Interactive execution CLI
 
@@ -668,8 +1091,9 @@ The run validates an environment's stage inventory and the caller's requested
 `PauseStages` at creation. A `StageBoundary` pauses only when selected. The
 inventory supports future application environments without requiring kernel
 names, `DriverEntry`, Windows or a particular loader. Raw-buffer environments
-exercise the generic layer. Future OS adapters can publish their stage inventory
-through this same boundary; this change registers only the buffer environment.
+exercise the generic layer. The private Windows driver adapter additionally
+retains actual driver state and provides its after-entry stop through the same
+public C/CLI creation boundary.
 
 `ExecutionRun::create` optionally adopts a shared budget with matching limits and
 time policy. Existing instruction/event usage and active/deadline time are not
@@ -786,22 +1210,63 @@ model restoration, exhausted limit or terminal guest fault terminates the owning
 workload rather than restoring an earlier CPU snapshot and implying success.
 Private call-stack/return-boundary failures are not missing-binary candidates.
 
-The call engine is available through C++ and the persistent C API. OS adapters
-can adopt its prepared frames through `ExecutionEnvironment`; API, callback and
-scheduler policy stays with that adapter. Raw-buffer tests exercise the common
-call boundary. Windows driver and Ring3 runtime validation belong to their
-respective adapter changes.
+The call engine is available through C++ and the persistent C API. The public
+driver factory adopts its prepared frame at after-entry and uses the existing
+kernel pump for APIs, callbacks and scheduled execution. Additional supported
+Native kernel modules use the transaction described above. The public replay
+consumer uses this same call boundary. No Ring3 application adapter or runtime
+example is introduced by these tests.
 
 ## Verification
 
-Build with `NEVERD_ENABLE_CPU_EMULATION=ON` and
-`NEVERD_ENABLE_DRIVER_EMULATION=OFF` to exercise the independent CPU boundary.
-`NeverDModuleTests` and `NeverDModuleCAPITests` cover file resources, PDB identity,
-catalogue transactions and the pure C boundary. The fixture PE/PDB files are
-compiled from repository source when Clang and lld-link are available.
-`NeverDModuleBindingTests`, `NeverDResourcePauseTests`, `NeverDExecutionRunTests`,
-`NeverDExecutionRunJSONTests` and `NeverDExecutionCAPITests` cover mapping rollback,
-resumption, finite calls, state ownership and strict JSON admission.
-`NeverDExecutionCAPIDisabledTests` and `NeverDExecutionSDKDisabledTests` cover
-disabled-build diagnostics and exported ABI availability. The CLI tests use the
-same public SDK. These checks do not establish an OS environment or Ring3 runtime.
+Build and run `NeverDModuleTests`, `NeverDDebugInfoTests` and
+`NeverDPDBIdentityTests`. The module suite covers pure registration, path origin,
+policy inheritance, lazy preparation, batch failure, source lifetime, companion
+failure, late attachment and names-only trust. Where Clang and `lld-link` are
+available, CMake builds two small driver PE/PDB fixtures with different identities
+for real matching/mismatching companion checks. They are file-analysis fixtures,
+not new Ring3 execution examples. Missing toolchains are reported as skips.
+
+`NeverDModuleBindingTests` covers declarations, independent instances,
+eager/lazy selection, cross-page supply, request tokens, resolver reentrancy,
+failed source/builder/publication/allocation steps, opaque exports and atomic
+guest/host metadata. Its mapping tests check abandoned/committed patches,
+alias identity, reservation witnesses and existing software/checked Unicorn
+CPUs observing newly mapped or patched code. They use isolated CPU instruction
+buffers, not a new Ring3 application adapter. Run affected memory lifecycle,
+RAM transaction, projection, parallel-execution and execution-session suites
+when changing the shared address-space transaction.
+
+`NeverDResourcePauseTests` executes software/checked x64 reads, cross-page reads
+and instruction fetches, CALL target fetches, forward/reverse REP source and
+destination faults, ENTER's committed store prefix, watch interactions, scalar
+load register aliasing and thread/vector state preservation. It also checks a
+checked ARM64 load, rejected software ARM64 hooks, untyped-run failure reporting,
+and terminal model/protection/policy failures. `NeverDExecutionBudgetTests`
+checks both time policies with deterministic clock samples. These are low-level
+CPU/session checks, not persistent driver or new Ring3 application validation.
+
+`NeverDExecutionRunTests` checks persistent environment/CPU/memory state,
+software/checked x64 supply, automatic lazy mapping, eager source correction,
+metadata dependency requests, foreign/stale tokens, resolver errors/reentry,
+cross-thread pause, stage/lifecycle bounds, terminal failures and cumulative
+instruction/event/time limits. Module tests also cover unprepared declaration
+correction and rejection of prepared-input replacement. These are generic CPU
+scene tests; they do not establish a completed driver adapter or Ring3 runtime.
+Its invocation cases cover Win64 registers/stack arguments, buffers, lazy target
+fetch, resource supply, repeated calls, API/nested callback transfer, saved caller
+state and terminal failures. Additional raw CPU cases exercise SysV AMD64 and
+software/checked AAPCS64. Execution-session tests verify saved watch control,
+foreign/pending context rejection, reserved returns and local time caps.
+
+`NeverDModuleCAPITests` links the actual shared SDK, including a pure C
+translation unit, and checks version prefixes, handle lifetime, borrowed inputs,
+eager/lazy policy, failed batches, correction, immutable sources, explicit debug,
+UTF-8/bounds and concurrent additions. Optional real PE/PDB fixtures verify the
+same matching policy through the public boundary. `NeverDModuleCLITests` compares
+CLI output/diagnostics with direct C calls and independent source hashes. Run
+the existing session/driver public suites and the Python plugin SDK ABI audit
+when changing these public surfaces. These are file-resource checks. Real driver
+calls and the public driver factory are additionally covered by
+`NeverDDriverPersistentTests`, `DriverExecutionCAPI.*` in the driver public target
+and `NeverDDriverExecutionCLITests`.

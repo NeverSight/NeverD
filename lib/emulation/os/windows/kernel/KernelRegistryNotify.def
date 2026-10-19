@@ -1,0 +1,16 @@
+//===- KernelRegistryNotify.def - WDK x64 registry notification layouts ---===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+// Facts from Windows 10.0.19041 wdm.h; no Windows implementation is reused.
+// API, pre class, post class, pre structure bytes, CallContext offset.
+NEVERD_REGISTRY_NOTIFY(ZwDeleteKey, 0, 15, 32, 8)
+NEVERD_REGISTRY_NOTIFY(ZwSetValueKey, 1, 16, 64, 40)
+NEVERD_REGISTRY_NOTIFY(ZwDeleteValueKey, 2, 17, 40, 16)
+NEVERD_REGISTRY_NOTIFY(ZwQueryValueKey, 8, 23, 72, 48)
+NEVERD_REGISTRY_NOTIFY(ZwEnumerateKey, 5, 20, 64, 40)
+NEVERD_REGISTRY_NOTIFY(ZwFlushKey, 30, 31, 32, 8)
+NEVERD_REGISTRY_NOTIFY(ZwClose, 14, 25, 32, 8)
+NEVERD_REGISTRY_NOTIFY(ZwCreateKey, 26, 27, 136, 80)
+NEVERD_REGISTRY_NOTIFY(ZwOpenKey, 28, 29, 136, 80)

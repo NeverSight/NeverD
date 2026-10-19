@@ -1,0 +1,6 @@
+// Section handle and mapping contracts.
+NEVERD_KERNEL_SECTION_API(ZwOpenSection, 3, Passive, openSection(A))
+NEVERD_KERNEL_SECTION_API(ZwCreateSection, 7, Passive, createImageSection(A))
+NEVERD_KERNEL_SECTION_API(ZwQuerySection, 5, Passive, querySection(A))
+NEVERD_KERNEL_SECTION_API(ZwMapViewOfSection, 10, Passive, mapSection(A))
+NEVERD_KERNEL_SECTION_API(ZwUnmapViewOfSection, 2, Passive, unmapSection(A))

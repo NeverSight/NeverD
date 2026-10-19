@@ -154,13 +154,17 @@ llvm::Expected<std::vector<uint8_t>> captureUserContext(ExecutionBackend &CPU,
   return Bytes;
 }
 
-llvm::Error captureCallerContext(ExecutionBackend &CPU, uint64_t Destination) {
+llvm::Error captureCallerContext(ExecutionBackend &CPU, uint64_t Destination,
+                                 bool UserMode) {
   const bool X64 = CPU.architecture() == GuestArchitecture::X64;
   const uint64_t Size = X64 ? X64ContextSize : AArch64ContextSize;
-  if (Destination < ImageAlignment || Destination >= UserLimit ||
-      Size > UserLimit - Destination || Destination % ContextVectorBytes)
+  if (!Destination || Size > UINT64_MAX - Destination ||
+      (UserMode && (Destination < ImageAlignment || Destination >= UserLimit ||
+                    Size > UserLimit - Destination)) ||
+      Destination % ContextVectorBytes)
     return failure(text::CaptureContextBuffer);
-  auto Writable = CPU.canAccess(Destination, Size, Write | UserAccessible);
+  const unsigned UserAccess = UserMode ? UserAccessible : 0;
+  auto Writable = CPU.canAccess(Destination, Size, Write | UserAccess);
   if (!Writable)
     return Writable.takeError();
   if (!*Writable)
@@ -176,7 +180,7 @@ llvm::Error captureCallerContext(ExecutionBackend &CPU, uint64_t Destination) {
   if (!CallerSP)
     return CallerSP.takeError();
   if (X64) {
-    auto Readable = CPU.canAccess((*SP)[0], PointerSize, Read | UserAccessible);
+    auto Readable = CPU.canAccess((*SP)[0], PointerSize, Read | UserAccess);
     if (!Readable)
       return Readable.takeError();
     if (!*Readable)

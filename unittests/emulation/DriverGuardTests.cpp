@@ -186,6 +186,33 @@ TEST(GuardControlFlow, DisabledImageNeverAcquiresPermissiveHelper) {
   EXPECT_NE(llvm::toString(std::move(Error)).find("inactive image"),
             std::string::npos);
 }
+TEST(GuardControlFlow, PublicationDraftPreservesOwnerSuppressionAndWitnesses) {
+  DriverImage Primary;
+  GuardControlFlow Live(Primary);
+  GuardControlFlow Draft = Live;
+  DriverGuardControlFlow Active;
+  Active.Enabled = true;
+  Active.ValidTargets = {0x180001000};
+  unsigned Checks = 0;
+  ASSERT_FALSE(bool(Draft.addImage(Active, {0x180002000}, [&]() -> llvm::Error {
+    ++Checks;
+    return llvm::Error::success();
+  })));
+  auto Error = Live.validateTarget(0x180001000);
+  EXPECT_TRUE(bool(Error));
+  llvm::consumeError(std::move(Error));
+  Live.swap(Draft);
+  EXPECT_TRUE(Live.enabled());
+  EXPECT_FALSE(Draft.enabled());
+  ASSERT_FALSE(bool(Live.validateTarget(0x180001000)));
+  EXPECT_EQ(Checks, 1u);
+  for (auto Target : {0x180001001ULL, 0x180002000ULL}) {
+    auto E = Live.validateTarget(Target);
+    EXPECT_TRUE(bool(E));
+    llvm::consumeError(std::move(E));
+  }
+  EXPECT_EQ(Checks, 1u);
+}
 
 TEST(DriverGuardExecution, GuardedCheckAndDispatchPreserveWin64Arguments) {
   for (const char *Name : {"driver_guard", "driver_guard_inactive"}) {

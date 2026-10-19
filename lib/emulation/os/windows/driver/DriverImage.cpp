@@ -14,11 +14,13 @@
 
 #include "../kernel/KernelExportRegistry.h"
 #include "GuardControlFlow.h"
+#include "GuardFunctionTable.h"
 
 #include "neverd/emulation/DriverProfile.h"
 #include "neverd/emulation/GuestMemory.h"
 #include "neverd/loader/COFF/PEProgramExports.h"
 #include "neverd/loader/Loader.h"
+#include "neverd/modules/ModuleImage.h"
 #include "neverd/object/PELayout.h"
 
 #include "llvm/BinaryFormat/COFF.h"
@@ -30,6 +32,7 @@
 #include <algorithm>
 #include <cstring>
 #include <limits>
+#include <optional>
 #include <set>
 
 namespace neverd::emulation {
@@ -113,7 +116,8 @@ llvm::Expected<std::string> nameAt(const COFFObjectFile &Object,
 
 llvm::Expected<std::vector<DriverImport>>
 validateImports(const COFFObjectFile &Object,
-                const std::vector<SectionPlan> &Sections, uint64_t Base) {
+                const std::vector<SectionPlan> &Sections, uint64_t Base,
+                bool AllowOrdinal) {
   std::vector<DriverImport> Imports;
   const auto *Directory = Object.getDataDirectory(llvm::COFF::IMPORT_TABLE);
   if (!Directory || !Directory->Size)
@@ -168,21 +172,32 @@ validateImports(const COFFObjectFile &Object,
         SymbolsTerminated = true;
         break;
       }
-      if (Value > UINT32_MAX)
+      std::optional<uint32_t> Ordinal;
+      const uint64_t OrdinalFlag = uint64_t(1) << 63;
+      if (AllowOrdinal && (Value & OrdinalFlag) &&
+          !(Value & ~(OrdinalFlag | uint64_t(0xffff))))
+        Ordinal = Value & 0xffff;
+      if (Value > UINT32_MAX && !Ordinal)
         return invalid(image::OrdinalOrNoncanonicalImportLookupIsUnsupported);
       if (Imports.size() >= MaxImports)
         return invalid(image::ImportCountExceedsTheExecutionProfile);
-      auto Hint = fileBytes(Object, Sections, Value, sizeof(uint16_t));
-      if (!Hint)
-        return Hint.takeError();
-      auto Name = nameAt(Object, Sections, Value + sizeof(uint16_t));
-      if (!Name)
-        return Name.takeError();
+      std::string Name;
+      if (Ordinal)
+        Name = (neverd::kOrdinalPrefix + llvm::Twine(*Ordinal)).str();
+      else {
+        auto Hint = fileBytes(Object, Sections, Value, sizeof(uint16_t));
+        if (!Hint)
+          return Hint.takeError();
+        auto ParsedName = nameAt(Object, Sections, Value + sizeof(uint16_t));
+        if (!ParsedName)
+          return ParsedName.takeError();
+        Name = std::move(*ParsedName);
+      }
       const uint64_t Slot = Base + Entry.ImportAddressTableRVA +
                             uint64_t(Index) * profile::PointerSize;
       if (!Slots.insert(Slot).second)
         return invalid(image::OverlappingImportAddressSlots);
-      Imports.push_back({Slot, *Module, *Name});
+      Imports.push_back({Slot, *Module, std::move(Name), Ordinal});
     }
     if (!SymbolsTerminated)
       return invalid(image::UnterminatedImportLookupTable);
@@ -638,6 +653,16 @@ validateGuard(const COFFObjectFile &Object,
       return Contents.takeError();
     if (auto Error = RegisterStorage(*RVA, Count * Stride))
       return Error;
+    if (!IAT) {
+      auto Targets = guard::decodeFunctionTable(
+          *Contents, ExtraBytes, guard::FunctionSuppressed, Executable);
+      if (!Targets)
+        return invalid(llvm::toString(Targets.takeError()));
+      for (const auto &Target : *Targets)
+        if (!(Target.Flags & guard::FunctionSuppressed))
+          Guard.ValidTargets.push_back(ActualBase + Target.RVA);
+      return llvm::Error::success();
+    }
     uint32_t Previous = 0;
     for (uint64_t Index = 0; Index != Count; ++Index) {
       const uint8_t *Entry = Contents->data() + Index * Stride;
@@ -646,25 +671,11 @@ validateGuard(const COFFObjectFile &Object,
       if (!Target || (Index && Target <= Previous))
         return invalid(image::CFGTargetsMustBeUniqueAndSorted);
       Previous = Target;
-      if (IAT) {
-        if (Metadata || std::none_of(Imports.begin(), Imports.end(),
-                                     [&](const auto &Import) {
-                                       return Import.Slot - Base == Target;
-                                     }))
-          return invalid(
-              image::CFGAddressTakenIATTargetIsNotADeclaredImportSlot);
-      } else {
-        if (!Executable(Target))
-          return invalid(image::CFGFunctionTargetIsNotFileBackedExecutableCode);
-        if (Metadata & ~guard::FunctionSuppressed)
-          return invalid(image::UnsupportedCFGFunctionTargetMetadata);
-        // The linker may explicitly include compatibility fallbacks when
-        // inferring targets from non-CFG objects. Honor its declared GFIDS;
-        // recommending that toolchains suppress a helper is not a PE validity
-        // condition and does not permit inventing a different target set.
-        if (!(Metadata & guard::FunctionSuppressed))
-          Guard.ValidTargets.push_back(ActualBase + Target);
-      }
+      if (Metadata ||
+          std::none_of(Imports.begin(), Imports.end(), [&](const auto &Import) {
+            return Import.Slot - Base == Target;
+          }))
+        return invalid(image::CFGAddressTakenIATTargetIsNotADeclaredImportSlot);
     }
     return llvm::Error::success();
   };
@@ -677,7 +688,7 @@ validateGuard(const COFFObjectFile &Object,
           offsetof(coff_load_configuration64, GuardAddressTakenIatEntryCount),
           true))
     return std::move(Error);
-  if (Guard.Enabled &&
+  if (Guard.Enabled && Header->AddressOfEntryPoint &&
       !std::binary_search(Guard.ValidTargets.begin(), Guard.ValidTargets.end(),
                           ActualBase + Header->AddressOfEntryPoint))
     return invalid(image::CFGEntryPointIsMissingFromDeclaredValidTargets);
@@ -704,27 +715,78 @@ validateGuard(const COFFObjectFile &Object,
         return invalid(
             image::RebasingCFGMetadataRequiresCompleteDIR64Relocations);
   }
+  if (Guard.Enabled) {
+    Guard.MetadataRanges.push_back({ConfigRVA, DeclaredSize});
+    for (auto [RVA, Size] : Storage)
+      Guard.MetadataRanges.push_back({RVA, Size});
+  }
   return Guard;
 }
 } // namespace
 
-llvm::Expected<DriverImage> loadDriverImage(const std::filesystem::path &Path,
-                                            uint64_t MemoryLimit,
-                                            uint64_t LoadAddress) {
-  std::error_code FileError;
-  const uint64_t FileSize = std::filesystem::file_size(Path, FileError);
-  if (FileError)
-    return invalid(image::CannotRead + Path.string());
-  if (FileSize > MemoryLimit)
+bool overlapsDriverReservedMemory(uint64_t Address, uint64_t Size) {
+  if (!Size || Size > UINT64_MAX - Address)
+    return true;
+  const uint64_t End = Address + Size;
+  for (auto [Start, Limit] :
+       {std::pair{profile::KernelModuleBase,
+                  profile::KernelModuleBase +
+                      profile::KernelModuleCount * profile::KernelModuleStride},
+        std::pair{profile::KernelArenaBase,
+                  profile::KernelArenaBase + profile::MaxKernelArenaSize},
+        std::pair{profile::ProcessorEnvironmentBase,
+                  profile::ProcessorEnvironmentBase + profile::PageSize},
+        std::pair{profile::ObjectTypeDataBase,
+                  profile::ObjectTypeDataBase + profile::PageSize},
+        std::pair{profile::StackBase, profile::StackBase + profile::StackSize},
+        std::pair{profile::InvocationStackBase,
+                  profile::InvocationReturnPC + profile::PageSize},
+        std::pair{profile::ThunkBase, profile::ThunkBase + profile::ThunkSize},
+        std::pair{profile::CallbackStackBase,
+                  profile::CallbackStackBase +
+                      profile::MaxConcurrentCallbacks *
+                          profile::CallbackStackStride},
+        std::pair{profile::GuardThunkBase,
+                  profile::GuardThunkBase + profile::PageSize},
+        std::pair{profile::UserAliasBase,
+                  profile::UserAliasBase + profile::UserAliasSize},
+        std::pair{profile::MMIOBase, profile::MMIOBase + profile::MMIOSize}})
+    if (Address < Limit && End > Start)
+      return true;
+  return false;
+}
+
+static llvm::Expected<DriverImage>
+loadDriverImageImpl(const std::filesystem::path &Path, uint64_t MemoryLimit,
+                    uint64_t LoadAddress, const modules::ModuleImage *Source,
+                    bool Module = false, bool AllowOrdinalImports = false) {
+  std::unique_ptr<llvm::MemoryBuffer> File;
+  llvm::ArrayRef<uint8_t> Original;
+  if (Source) {
+    Original = Source->bytes();
+  } else {
+    std::error_code FileError;
+    const uint64_t FileSize = std::filesystem::file_size(Path, FileError);
+    if (FileError)
+      return invalid(image::CannotRead + Path.string());
+    if (FileSize > MemoryLimit)
+      return invalid(image::InputFileExceedsMemoryLimit);
+    auto Buffer = llvm::MemoryBuffer::getFile(Path.string());
+    if (!Buffer)
+      return invalid(image::CannotRead + Path.string());
+    File = std::move(*Buffer);
+    Original = llvm::ArrayRef(
+        reinterpret_cast<const uint8_t *>(File->getBufferStart()),
+        File->getBufferSize());
+  }
+  if (Original.size() > MemoryLimit)
     return invalid(image::InputFileExceedsMemoryLimit);
-  auto Buffer = llvm::MemoryBuffer::getFile(Path.string());
-  if (!Buffer)
-    return invalid(image::CannotRead + Path.string());
-  if (auto Error = preflightLoadConfiguration(llvm::ArrayRef<uint8_t>(
-          reinterpret_cast<const uint8_t *>((*Buffer)->getBufferStart()),
-          (*Buffer)->getBufferSize())))
+  if (auto Error = preflightLoadConfiguration(Original))
     return std::move(Error);
-  auto Parsed = COFFObjectFile::create((*Buffer)->getMemBufferRef());
+  auto Parsed = COFFObjectFile::create(llvm::MemoryBufferRef(
+      llvm::StringRef(reinterpret_cast<const char *>(Original.data()),
+                      Original.size()),
+      "driver-execution"));
   if (!Parsed)
     return Parsed.takeError();
   const auto &Object = **Parsed;
@@ -750,7 +812,7 @@ llvm::Expected<DriverImage> loadDriverImage(const std::filesystem::path &Path,
       Base < PEImageBaseAlignment || (Base % PEImageBaseAlignment) || !Size ||
       (Size % SectionAlignment) || Size > MemoryLimit ||
       Size > UINT64_MAX - Base || !HeadersSize || HeadersSize % FileAlignment ||
-      HeadersSize > (*Buffer)->getBufferSize() || pages(HeadersSize) > Size)
+      HeadersSize > Original.size() || pages(HeadersSize) > Size)
     return invalid(image::InvalidImageSizeAlignmentBaseOrMemoryLimit);
   auto CanonicalImageRange = [&](uint64_t Address) {
     if (Address < PEImageBaseAlignment || (Address % PEImageBaseAlignment) ||
@@ -762,30 +824,10 @@ llvm::Expected<DriverImage> loadDriverImage(const std::filesystem::path &Path,
   };
   if (!CanonicalImageRange(Base) || !CanonicalImageRange(ActualBase))
     return invalid(image::ImageBaseHasInvalidAlignmentOrNoncanonicalX64Range);
-  const uint64_t End = ActualBase + Size;
   if (ActualBase < profile::UserProbeLimit)
     return invalid(image::DriverImageOverlapsTheModeledUserAddressSpace);
-  for (auto [Start, Limit] :
-       {std::pair{profile::KernelArenaBase,
-                  profile::KernelArenaBase + profile::KernelArenaSize},
-        std::pair{profile::ProcessorEnvironmentBase,
-                  profile::ProcessorEnvironmentBase + profile::PageSize},
-        std::pair{profile::StackBase, profile::StackBase + profile::StackSize},
-        std::pair{profile::ThunkBase, profile::ThunkBase + profile::ThunkSize},
-        std::pair{profile::KernelModuleBase,
-                  profile::KernelModuleBase +
-                      profile::KernelModuleCount * profile::KernelModuleStride},
-        std::pair{profile::CallbackStackBase,
-                  profile::CallbackStackBase +
-                      profile::MaxConcurrentCallbacks *
-                          profile::CallbackStackStride},
-        std::pair{profile::GuardThunkBase,
-                  profile::GuardThunkBase + profile::PageSize},
-        std::pair{profile::UserAliasBase,
-                  profile::UserAliasBase + profile::UserAliasSize},
-        std::pair{profile::MMIOBase, profile::MMIOBase + profile::MMIOSize}})
-    if (ActualBase < Limit && End > Start)
-      return invalid(image::ImageOverlapsReservedEmulationMemory);
+  if (overlapsDriverReservedMemory(ActualBase, Size))
+    return invalid(image::ImageOverlapsReservedEmulationMemory);
 
   std::vector<SectionPlan> Sections;
   std::vector<std::pair<uint64_t, uint64_t>> FileRanges;
@@ -801,10 +843,9 @@ llvm::Expected<DriverImage> loadDriverImage(const std::filesystem::path &Path,
         getPEDriverSectionMappedSize(VirtualSize, RawSize, PageSize);
     if (!VirtualSize || RVA % SectionAlignment || RVA < LastEnd ||
         RVA >= Size || Span > Size - RVA ||
-        (RawSize &&
-         (RawOffset < HeadersSize || RawOffset % FileAlignment ||
-          RawSize % FileAlignment || RawOffset > (*Buffer)->getBufferSize() ||
-          RawSize > (*Buffer)->getBufferSize() - RawOffset)) ||
+        (RawSize && (RawOffset < HeadersSize || RawOffset % FileAlignment ||
+                     RawSize % FileAlignment || RawOffset > Original.size() ||
+                     RawSize > Original.size() - RawOffset)) ||
         Section->NumberOfRelocations || Section->PointerToRelocations)
       return invalid(image::InvalidOverlappingTruncatedOrRelocatableSection);
     for (auto [Start, Limit] : FileRanges)
@@ -822,11 +863,11 @@ llvm::Expected<DriverImage> loadDriverImage(const std::filesystem::path &Path,
         EntryRVA >= RVA && EntryRVA - RVA < std::min(VirtualSize, RawSize))
       EntryExecutable = true;
   }
-  if (Sections.empty() || !EntryExecutable)
+  if (Sections.empty() ||
+      (!EntryExecutable && (!Module || Header->AddressOfEntryPoint)))
     return invalid(image::EntryPointIsNotInFileBackedExecutableBytes);
   const auto *LastSection = Sections.back().Header;
-  const auto *BufferStart =
-      reinterpret_cast<const uint8_t *>((*Buffer)->getBufferStart());
+  const auto *BufferStart = Original.data();
   const uint64_t SectionTableEnd =
       reinterpret_cast<const uint8_t *>(LastSection + 1) - BufferStart;
   if (SectionTableEnd > HeadersSize)
@@ -853,8 +894,7 @@ llvm::Expected<DriverImage> loadDriverImage(const std::filesystem::path &Path,
       return invalid(image::UnsupportedLoaderDataDirectory +
                      llvm::Twine(Index));
     if (Index == llvm::COFF::CERTIFICATE_TABLE) {
-      if (RVA > (*Buffer)->getBufferSize() ||
-          DirectorySize > (*Buffer)->getBufferSize() - RVA)
+      if (RVA > Original.size() || DirectorySize > Original.size() - RVA)
         return invalid(image::TruncatedCertificateTable);
       continue; // Authenticode is metadata; this emulator does not establish
                 // trust.
@@ -881,13 +921,10 @@ llvm::Expected<DriverImage> loadDriverImage(const std::filesystem::path &Path,
         if (Entry.Type != llvm::COFF::IMAGE_DEBUG_TYPE_EX_DLLCHARACTERISTICS)
           continue;
         if (Entry.SizeOfData < sizeof(uint32_t) ||
-            Entry.PointerToRawData > (*Buffer)->getBufferSize() ||
-            Entry.SizeOfData >
-                (*Buffer)->getBufferSize() - Entry.PointerToRawData)
+            Entry.PointerToRawData > Original.size() ||
+            Entry.SizeOfData > Original.size() - Entry.PointerToRawData)
           return invalid(image::TruncatedExtendedDLLCharacteristics);
-        const auto *Data =
-            reinterpret_cast<const uint8_t *>((*Buffer)->getBufferStart()) +
-            Entry.PointerToRawData;
+        const auto *Data = Original.data() + Entry.PointerToRawData;
         if (llvm::support::endian::read32le(Data))
           return invalid(
               image::UnsupportedExtendedDLLCharacteristicsIncludingCET);
@@ -897,8 +934,7 @@ llvm::Expected<DriverImage> loadDriverImage(const std::filesystem::path &Path,
   // Export tables describe this image; they do not initialize guest state.
   // Use the shared bounded decoder, then establish the driver's stricter
   // mapping contract for every metadata read and direct (code or data) RVA.
-  auto Exports = readPEProgramExports(
-      llvm::ArrayRef<uint8_t>(BufferStart, (*Buffer)->getBufferSize()));
+  auto Exports = readPEProgramExports(Original);
   if (!Exports)
     return Exports.takeError();
   for (const auto &Range : Exports->Metadata) {
@@ -913,7 +949,8 @@ llvm::Expected<DriverImage> loadDriverImage(const std::filesystem::path &Path,
                  Export.RVA - S.Header->VirtualAddress < S.Span;
         }))
       return invalid(image::ExportAddressIsNotMapped);
-  auto Imports = validateImports(Object, Sections, Base);
+  auto Imports =
+      validateImports(Object, Sections, Base, Module || AllowOrdinalImports);
   if (!Imports)
     return Imports.takeError();
   auto Cookie = validateCookie(Object, Sections, Base);
@@ -958,16 +995,23 @@ llvm::Expected<DriverImage> loadDriverImage(const std::filesystem::path &Path,
 
   // Keep the repository loader authoritative for the BinaryImage model. The
   // execution preflight above is deliberately stricter than analysis loading.
-  auto Loader = neverd::Loader::create(BinaryFormat::COFF);
-  auto Loaded = Loader->load(Path);
-  if (!Loaded)
-    return Loaded.takeError();
-  const auto Original = (*Buffer)->getBuffer();
+  std::optional<BinaryImage> FileImage;
+  const BinaryImage *Loaded = Source ? &Source->image() : nullptr;
+  if (!Loaded) {
+    auto Loader = neverd::Loader::create(BinaryFormat::COFF);
+    auto Image = Loader->load(Path);
+    if (!Image)
+      return Image.takeError();
+    FileImage = std::move(*Image);
+    Loaded = &*FileImage;
+  }
   if (Loaded->Raw.size() != Original.size() ||
       std::memcmp(Loaded->Raw.data(), Original.data(), Original.size()) != 0)
     return invalid(image::InputChangedWhileLoading);
   if (Loaded->Base != Base ||
-      Loaded->Entry != Base + Header->AddressOfEntryPoint ||
+      Loaded->Entry != (Header->AddressOfEntryPoint
+                            ? Base + Header->AddressOfEntryPoint
+                            : 0) ||
       Loaded->Arch != Arch::X64 || Loaded->Segments.size() != Sections.size() ||
       Loaded->Imports.size() != Imports->size())
     return invalid(image::LoaderMetadataDisagreesWithValidatedExecutionImage);
@@ -984,7 +1028,8 @@ llvm::Expected<DriverImage> loadDriverImage(const std::filesystem::path &Path,
     const auto Found = std::find_if(
         Loaded->Imports.begin(), Loaded->Imports.end(), [&](const auto &Item) {
           return Item.IATAddr == Import.Slot && Item.Name == Import.Name &&
-                 Item.Module == Import.Module;
+                 Item.Module == Import.Module &&
+                 (!Import.Ordinal || Item.Ordinal == *Import.Ordinal);
         });
     if (Found == Loaded->Imports.end())
       return invalid(image::LoaderImportIdentityDisagreesWithValidatedIAT);
@@ -992,13 +1037,15 @@ llvm::Expected<DriverImage> loadDriverImage(const std::filesystem::path &Path,
 
   DriverImage Image;
   Image.Name = Path.filename().string();
+  Image.DLLCharacteristics = Header->DLLCharacteristics;
   Image.Base = ActualBase;
   Image.PreferredBase = Loaded->Base;
-  Image.Entry = ActualBase + (Loaded->Entry - Base);
+  Image.Entry = Loaded->Entry ? ActualBase + (Loaded->Entry - Base) : 0;
   Image.SecurityCookieAddress = Cookie->RVA ? ActualBase + Cookie->RVA : 0;
   Image.Size = Size;
   Image.Guard = std::move(*Guard);
   Image.Imports = std::move(*Imports);
+  Image.Exports = std::move(*Exports);
   Image.Exceptions = std::move(Loaded->ExceptionMetadata);
   Image.FileHash = llvm::SHA256::hash(Loaded->Raw);
   for (auto &Import : Image.Imports)
@@ -1060,5 +1107,23 @@ llvm::Expected<DriverImage> loadDriverImage(const std::filesystem::path &Path,
     llvm::support::endian::write64le(Target, DriverSecurityCookie);
   }
   return Image;
+}
+llvm::Expected<DriverImage>
+loadKernelModuleImage(const modules::ModuleImage &Source, uint64_t MemoryLimit,
+                      uint64_t LoadAddress) {
+  return loadDriverImageImpl(Source.sourcePath(), MemoryLimit, LoadAddress,
+                             &Source, true);
+}
+llvm::Expected<DriverImage> loadDriverImage(const std::filesystem::path &Path,
+                                            uint64_t MemoryLimit,
+                                            uint64_t LoadAddress) {
+  return loadDriverImageImpl(Path, MemoryLimit, LoadAddress, nullptr);
+}
+llvm::Expected<DriverImage> loadDriverImage(const modules::ModuleImage &Source,
+                                            uint64_t MemoryLimit,
+                                            uint64_t LoadAddress,
+                                            bool AllowOrdinalImports) {
+  return loadDriverImageImpl(Source.sourcePath(), MemoryLimit, LoadAddress,
+                             &Source, false, AllowOrdinalImports);
 }
 } // namespace neverd::emulation

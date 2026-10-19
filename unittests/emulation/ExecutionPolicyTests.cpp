@@ -86,33 +86,33 @@ TEST_F(DriverExecutionPolicy, DisabledShadowStackReadsUseExactRegisterForms) {
       SCOPED_TRACE(Register);
       std::vector<uint8_t> Bytes{0xf3};
       if (Wide || Register >= 8)
-        Bytes.push_back(uint8_t(0x40 | (Wide ? 8 : 0) |
-                                (Register >= 8 ? 1 : 0)));
+        Bytes.push_back(
+            uint8_t(0x40 | (Wide ? 8 : 0) | (Register >= 8 ? 1 : 0)));
       Bytes.insert(Bytes.end(), {0x0f, 0x1e, uint8_t(0xc8 | (Register & 7))});
       for (unsigned Repeat = 0; Repeat != 2; ++Repeat) {
         auto Action = Policy.inspect(Bytes, 0x1000);
         ASSERT_TRUE(bool(Action)) << llvm::toString(Action.takeError());
         ASSERT_TRUE(*Action);
-        EXPECT_EQ((**Action).Source,
-                  WindowsX64ExecutionPolicy::Action::Kind::
-                      ReadDisabledShadowStack);
+        EXPECT_EQ(
+            (**Action).Source,
+            WindowsX64ExecutionPolicy::Action::Kind::ReadDisabledShadowStack);
         EXPECT_FALSE((**Action).Destination);
       }
     }
 }
 
 TEST_F(DriverExecutionPolicy, ShadowStackReadDoesNotAdmitOtherCETEncodings) {
-  for (const std::vector<uint8_t> &Bytes : {
-           std::vector<uint8_t>{0xf0, 0xf3, 0x0f, 0x1e, 0xc8},
-           std::vector<uint8_t>{0xf3, 0xf0, 0x0f, 0x1e, 0xc8},
-           std::vector<uint8_t>{0xf3, 0xf3, 0x0f, 0x1e, 0xc8},
-           std::vector<uint8_t>{0x66, 0xf3, 0x0f, 0x1e, 0xc8},
-           std::vector<uint8_t>{0xf3, 0x44, 0x0f, 0x1e, 0xc8},
-           std::vector<uint8_t>{0xf3, 0x0f, 0x1e, 0xc8, 0x90},
-           std::vector<uint8_t>{0xf3, 0x48, 0x0f, 0x1e},
-           std::vector<uint8_t>{0xf3, 0x0f, 0xae, 0xe8},
-           std::vector<uint8_t>{0xf3, 0x48, 0x0f, 0xae, 0xe8},
-           std::vector<uint8_t>{0xf3, 0x0f, 0x01, 0xea}}) {
+  for (const std::vector<uint8_t> &Bytes :
+       {std::vector<uint8_t>{0xf0, 0xf3, 0x0f, 0x1e, 0xc8},
+        std::vector<uint8_t>{0xf3, 0xf0, 0x0f, 0x1e, 0xc8},
+        std::vector<uint8_t>{0xf3, 0xf3, 0x0f, 0x1e, 0xc8},
+        std::vector<uint8_t>{0x66, 0xf3, 0x0f, 0x1e, 0xc8},
+        std::vector<uint8_t>{0xf3, 0x44, 0x0f, 0x1e, 0xc8},
+        std::vector<uint8_t>{0xf3, 0x0f, 0x1e, 0xc8, 0x90},
+        std::vector<uint8_t>{0xf3, 0x48, 0x0f, 0x1e},
+        std::vector<uint8_t>{0xf3, 0x0f, 0xae, 0xe8},
+        std::vector<uint8_t>{0xf3, 0x48, 0x0f, 0xae, 0xe8},
+        std::vector<uint8_t>{0xf3, 0x0f, 0x01, 0xea}}) {
     auto Action = Policy.inspect(Bytes, 0x1000);
     ASSERT_FALSE(bool(Action));
     llvm::consumeError(Action.takeError());
@@ -190,6 +190,235 @@ TEST_F(DriverExecutionPolicy, RejectsFSAndGSImplicitXLATMemory) {
   rejectsThreadAccess({0x64, 0xd7});
   rejectsThreadAccess({0x65, 0xd7});
   rejectsThreadAccess({0x67, 0x65, 0xd7});
+}
+
+TEST_F(DriverExecutionPolicy, InitializerPurposeKeepsDriverEnvironmentStrict) {
+  using Purpose = WindowsX64ExecutionPolicy::Purpose;
+  llvm::cantFail(Policy.initialize(X64BranchModel::Intel, false, false,
+                                   Purpose::ReferenceInitialization));
+  for (const auto &Bytes : std::vector<std::vector<uint8_t>>{
+           {0x65, 0x48, 0x8b, 0x04, 0x25, 0x20, 0, 0, 0},
+           {0x65, 0x48, 0x8b, 0x04, 0x25, 0x88, 1, 0, 0}}) {
+    auto Action = Policy.inspect(Bytes, 0x1000);
+    ASSERT_TRUE(bool(Action)) << llvm::toString(Action.takeError());
+    EXPECT_FALSE(*Action); // Defined private memory supplies these values.
+  }
+  auto Read = llvm::cantFail(Policy.inspect({0x44, 0x0f, 0x20, 0xc0}, 0x1000));
+  ASSERT_TRUE(Read);
+  EXPECT_EQ(Read->Source, WindowsX64ExecutionPolicy::Action::Kind::ReadIRQL);
+  EXPECT_EQ(Read->Destination, X64Register::AX);
+  auto Write = llvm::cantFail(Policy.inspect({0x44, 0x0f, 0x22, 0xc0}, 0x1000));
+  ASSERT_TRUE(Write);
+  EXPECT_EQ(Write->Source, WindowsX64ExecutionPolicy::Action::Kind::WriteIRQL);
+  EXPECT_EQ(Write->Input, X64Register::AX);
+  rejectsThreadAccess({0x65, 0x48, 0x8b, 0x04, 0x25, 0x30, 0, 0, 0});
+  rejectsEnvironment({0x0f, 0x31}, "rdtsc");
+  rejectsEnvironment({0x0f, 0x32}, "rdmsr");
+  rejectsEnvironment({0x0f, 0x30}, "wrmsr");
+  rejectsEnvironment({0xed}, "in");
+  llvm::cantFail(Policy.initialize()); // Also discards purpose-specific cache.
+  rejectsEnvironment({0x44, 0x0f, 0x22, 0xc0}, "mov");
+  rejectsThreadAccess({0x65, 0x48, 0x8b, 0x04, 0x25, 0x20, 0, 0, 0});
+  auto Action = Policy.inspect({0x44, 0x0f, 0x20, 0xc0}, 0x1000);
+  ASSERT_TRUE(bool(Action)) << llvm::toString(Action.takeError());
+  ASSERT_TRUE(*Action);
+  EXPECT_EQ((**Action).Source,
+            WindowsX64ExecutionPolicy::Action::Kind::ReadIRQL);
+}
+
+TEST_F(DriverExecutionPolicy,
+       MSRReadAdmissionRequiresItsOwnerAndKeepsWritesDenied) {
+  using Purpose = WindowsX64ExecutionPolicy::Purpose;
+  rejectsEnvironment({0x0f, 0x32}, "rdmsr");
+  llvm::cantFail(Policy.initialize(X64BranchModel::Intel, false, false,
+                                   Purpose::Driver, true));
+  auto Read = llvm::cantFail(Policy.inspect({0x0f, 0x32}, 0x1000));
+  ASSERT_TRUE(Read);
+  EXPECT_EQ(Read->Source, WindowsX64ExecutionPolicy::Action::Kind::ReadMSR);
+  rejectsEnvironment({0x0f, 0x30}, "wrmsr");
+  llvm::cantFail(Policy.initialize(X64BranchModel::Intel, false, false,
+                                   Purpose::ReferenceInitialization, true));
+  rejectsEnvironment({0x0f, 0x32}, "rdmsr");
+}
+
+TEST_F(DriverExecutionPolicy,
+       InitializerInterruptActionsNeverEnterDriverCache) {
+  rejectsEnvironment({0xfa}, "cli");
+  rejectsEnvironment({0xfb}, "sti");
+  llvm::cantFail(Policy.initialize(
+      X64BranchModel::Intel, false, false,
+      WindowsX64ExecutionPolicy::Purpose::ReferenceInitialization));
+  using Kind = WindowsX64ExecutionPolicy::Action::Kind;
+  EXPECT_EQ(llvm::cantFail(Policy.inspect({0xfa}, 0x1000))->Source,
+            Kind::DisableInterrupts);
+  EXPECT_EQ(llvm::cantFail(Policy.inspect({0xfb}, 0x1000))->Source,
+            Kind::EnableInterrupts);
+  for (const auto &Bytes :
+       {std::vector<uint8_t>{0xf0, 0xfa}, std::vector<uint8_t>{0x66, 0xfb},
+        std::vector<uint8_t>{0x48, 0xfa}}) {
+    auto Invalid = Policy.inspect(Bytes, 0x1000);
+    EXPECT_FALSE(bool(Invalid));
+    llvm::consumeError(Invalid.takeError());
+  }
+  llvm::cantFail(Policy.initialize());
+  rejectsEnvironment({0xfa}, "cli");
+  rejectsEnvironment({0xfb}, "sti");
+}
+
+TEST_F(DriverExecutionPolicy, PrivateTimestampRequiresItsOwnProvider) {
+  using Purpose = WindowsX64ExecutionPolicy::Purpose;
+  using Kind = WindowsX64ExecutionPolicy::Action::Kind;
+  llvm::cantFail(Policy.initialize(X64BranchModel::Intel, false, false,
+                                   Purpose::ReferenceInitialization));
+  rejectsEnvironment({0x0f, 0x31}, "rdtsc");
+  llvm::cantFail(Policy.initialize(X64BranchModel::Intel, false, false,
+                                   Purpose::ReferenceInitialization, false,
+                                   true));
+  auto Action = llvm::cantFail(Policy.inspect({0x0f, 0x31}, 0x1000));
+  ASSERT_TRUE(Action);
+  EXPECT_EQ(Action->Source, Kind::ReadTimestamp);
+  for (const auto &Bytes : {std::vector<uint8_t>{0xf3, 0x0f, 0x31},
+                            std::vector<uint8_t>{0x0f, 0x01, 0xf9}}) {
+    auto Invalid = Policy.inspect(Bytes, 0x1000);
+    EXPECT_FALSE(bool(Invalid));
+    llvm::consumeError(Invalid.takeError());
+  }
+  llvm::cantFail(Policy.initialize(X64BranchModel::Intel, false, false,
+                                   Purpose::Driver, false, true));
+  auto DriverClock = llvm::cantFail(Policy.inspect({0x0f, 0x31}, 0x1000));
+  ASSERT_TRUE(DriverClock);
+  EXPECT_EQ(DriverClock->Source, Kind::ReadTimestamp);
+}
+
+TEST_F(DriverExecutionPolicy, ReusedPCStillChecksChangedBytesAndTheirExtent) {
+  constexpr uint64_t PC = 0x140001000;
+  const uint8_t ReadThread[] = {0x65, 0x48, 0x8b, 0x04, 0x25,
+                                0x88, 0x01, 0x00, 0x00};
+  for (unsigned I = 0; I != 3; ++I) {
+    auto Ordinary = Policy.inspect({0x48, 0x89, 0xc8}, PC);
+    ASSERT_TRUE(bool(Ordinary)) << llvm::toString(Ordinary.takeError());
+    EXPECT_FALSE(*Ordinary);
+    auto Thread = Policy.inspect(ReadThread, PC);
+    ASSERT_TRUE(bool(Thread)) << llvm::toString(Thread.takeError());
+    ASSERT_TRUE(*Thread);
+    EXPECT_EQ((**Thread).Source,
+              WindowsX64ExecutionPolicy::Action::Kind::ReadCurrentThread);
+    auto Short = Policy.inspect(llvm::ArrayRef(ReadThread).drop_back(), PC);
+    ASSERT_FALSE(bool(Short));
+    llvm::consumeError(Short.takeError());
+    auto Empty = Policy.inspect({}, PC);
+    ASSERT_FALSE(bool(Empty));
+    llvm::consumeError(Empty.takeError());
+    auto Rejected = Policy.inspect({0xfa}, PC); // CLI cannot inherit admission.
+    ASSERT_FALSE(bool(Rejected));
+    llvm::consumeError(Rejected.takeError());
+  }
+}
+
+TEST(DriverBranchPolicy, ReinitializationInvalidatesEnvironmentAdmissions) {
+  WindowsX64ExecutionPolicy Selected;
+  llvm::cantFail(Selected.initialize(X64BranchModel::Intel, true, true));
+  ASSERT_TRUE(bool(Selected.inspect({0x0f, 0xa2}, 0x1000)));
+  ASSERT_TRUE(bool(Selected.inspect({0x0f, 0x20, 0xd8}, 0x1004)));
+  llvm::cantFail(Selected.initialize(X64BranchModel::AMD, false, false));
+  for (const auto &Bytes : {std::vector<uint8_t>{0x0f, 0x20, 0xd8}}) {
+    auto Result = Selected.inspect(Bytes, Bytes.size() == 2 ? 0x1000 : 0x1004);
+    ASSERT_FALSE(bool(Result));
+    llvm::consumeError(Result.takeError());
+  }
+}
+
+TEST_F(DriverExecutionPolicy, ChangedControlRegisterReadsKeepTheirDestination) {
+  for (unsigned I = 0; I != 3; ++I) {
+    auto RAX = Policy.inspect({0x44, 0x0f, 0x20, 0xc0}, 0x140001000);
+    ASSERT_TRUE(bool(RAX)) << llvm::toString(RAX.takeError());
+    ASSERT_TRUE(*RAX);
+    EXPECT_EQ((**RAX).Destination, X64Register::AX);
+    auto RCX = Policy.inspect({0x44, 0x0f, 0x20, 0xc1}, 0x140001000);
+    ASSERT_TRUE(bool(RCX)) << llvm::toString(RCX.takeError());
+    ASSERT_TRUE(*RCX);
+    EXPECT_EQ((**RCX).Destination, X64Register::CX);
+  }
+  auto Rejected = Policy.inspect({0x44, 0x0f, 0x22, 0xc0}, 0x140001000);
+  ASSERT_FALSE(bool(Rejected));
+  llvm::consumeError(Rejected.takeError());
+}
+
+TEST_F(DriverExecutionPolicy, CPUIDRequiresAnExplicitEnvironmentProvider) {
+  // CPUID always yields an environment action. The model rejects missing
+  // observations; enabling guest paging remains a separate admission.
+  auto Missing = llvm::cantFail(Policy.inspect({0x0f, 0xa2}, 0x1000));
+  ASSERT_TRUE(Missing);
+  EXPECT_EQ(Missing->Source,
+            WindowsX64ExecutionPolicy::Action::Kind::ReadCPUID);
+  WindowsX64ExecutionPolicy Configured;
+  llvm::cantFail(Configured.initialize(X64BranchModel::Intel, true));
+  for (const auto &Bytes : {std::vector<uint8_t>{0x0f, 0xa2},
+                            std::vector<uint8_t>{0x66, 0x0f, 0xa2}}) {
+    auto Action = Configured.inspect(Bytes, 0x1000);
+    ASSERT_TRUE(bool(Action)) << llvm::toString(Action.takeError());
+    ASSERT_TRUE(*Action);
+    EXPECT_EQ((**Action).Source,
+              WindowsX64ExecutionPolicy::Action::Kind::ReadCPUID);
+    EXPECT_FALSE((**Action).Destination);
+  }
+  auto Locked = Configured.inspect({0xf0, 0x0f, 0xa2}, 0x1000);
+  ASSERT_FALSE(bool(Locked));
+  llvm::consumeError(Locked.takeError());
+}
+
+TEST_F(DriverExecutionPolicy, CR3ReadsIdentifyTheMissingGuestPageTableModel) {
+  auto Error = Policy.validate({0x0f, 0x20, 0xde}, 0x1000); // mov rsi, cr3.
+  ASSERT_TRUE(bool(Error));
+  EXPECT_EQ(llvm::toString(std::move(Error)),
+            "unmodeled CR3 read requires guest-owned page tables");
+}
+TEST_F(DriverExecutionPolicy, FixedCR4ReadsNameEveryFullWidthGPR) {
+  const X64Register Registers[] = {
+      X64Register::AX,  X64Register::CX,  X64Register::DX,  X64Register::BX,
+      X64Register::SP,  X64Register::BP,  X64Register::SI,  X64Register::DI,
+      X64Register::R8,  X64Register::R9,  X64Register::R10, X64Register::R11,
+      X64Register::R12, X64Register::R13, X64Register::R14, X64Register::R15};
+  for (unsigned I = 0; I < 16; ++I) {
+    std::vector<uint8_t> Bytes;
+    if (I >= 8)
+      Bytes.push_back(0x41);
+    Bytes.insert(Bytes.end(), {0x0f, 0x20, uint8_t(0xe0 | (I & 7))});
+    auto A = Policy.inspect(Bytes, 0x1000);
+    ASSERT_TRUE(bool(A)) << llvm::toString(A.takeError());
+    ASSERT_TRUE(*A);
+    EXPECT_EQ((**A).Source, WindowsX64ExecutionPolicy::Action::Kind::ReadCR4);
+    EXPECT_EQ((**A).Destination, Registers[I]);
+  }
+  rejectsEnvironment({0x0f, 0x22, 0xe0}, "mov");
+  rejectsEnvironment({0x41, 0x0f, 0x22, 0xe0}, "mov");
+}
+
+TEST_F(DriverExecutionPolicy, CR4ScopeDoesNotEscapeThroughAdmissionCache) {
+  auto A = Policy.inspect({0x41, 0x0f, 0x20, 0xe0}, 0x1000);
+  ASSERT_TRUE(bool(A));
+  ASSERT_TRUE(*A);
+  llvm::cantFail(Policy.initialize(
+      X64BranchModel::Intel, false, false,
+      WindowsX64ExecutionPolicy::Purpose::ReferenceInitialization));
+  auto Denied = Policy.inspect({0x41, 0x0f, 0x20, 0xe0}, 0x1000);
+  ASSERT_FALSE(bool(Denied));
+  llvm::consumeError(Denied.takeError());
+}
+
+TEST_F(DriverExecutionPolicy,
+       ConfiguredCR3ReadsNameOnlyTheirFullWidthDestination) {
+  WindowsX64ExecutionPolicy Configured;
+  llvm::cantFail(Configured.initialize(X64BranchModel::Intel, false, true));
+  auto Action = Configured.inspect({0x0f, 0x20, 0xde}, 0x1000);
+  ASSERT_TRUE(bool(Action)) << llvm::toString(Action.takeError());
+  ASSERT_TRUE(*Action);
+  EXPECT_EQ((**Action).Source,
+            WindowsX64ExecutionPolicy::Action::Kind::ReadCR3);
+  EXPECT_EQ((**Action).Destination, X64Register::SI);
+  auto Write = Configured.inspect({0x0f, 0x22, 0xd8}, 0x1000);
+  ASSERT_FALSE(bool(Write));
+  llvm::consumeError(Write.takeError());
 }
 
 TEST_F(DriverExecutionPolicy, PermitsPassiveIRQLReadWithoutControlMutation) {
@@ -391,6 +620,15 @@ TEST_F(DriverExecutionPolicy, TimestampReadsRequireModeledEnvironmentActions) {
   rejectsEnvironment({0x0f, 0x32}, "rdmsr");
   rejectsEnvironment({0x0f, 0x30}, "wrmsr");
   rejectsEnvironment({0x0f, 0x33}, "rdpmc");
+}
+
+TEST_F(DriverExecutionPolicy, ModelsOriginalShadowStackReadsWithCETDisabled) {
+  accepts({0xf3, 0x0f, 0x1e, 0xc8});       // rdsspd eax
+  accepts({0xf3, 0x41, 0x0f, 0x1e, 0xc9}); // rdsspd r9d
+  accepts({0xf3, 0x48, 0x0f, 0x1e, 0xc8}); // rdsspq rax
+  accepts({0xf3, 0x49, 0x0f, 0x1e, 0xc9}); // rdsspq r9
+  rejectsEnvironment({0xf3, 0x48, 0x0f, 0xae, 0xe8}, "incsspq");
+  rejectsEnvironment({0xf3, 0x0f, 0x01, 0xea}, "saveprevssp");
 }
 
 TEST_F(DriverExecutionPolicy, RejectsExplicitAndStringThreadMemory) {

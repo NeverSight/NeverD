@@ -17,15 +17,29 @@
 #include "../kernel/KernelVersionQuery.h"
 #include "../kernel/WindowsKernelLayout.h"
 #include "DriverCPUID.h"
+#include "DriverCPUIDJSON.h"
 #include "DriverFileSystemJSON.h"
+#include "DriverFiniteFileSystemJSON.h"
+#include "DriverFirmwareJSON.h"
 #include "DriverLoaderViewJSON.h"
+#include "DriverNdisConfigurationJSON.h"
+#include "DriverNetworkInterfacesJSON.h"
+#include "DriverPciConfigurationJSON.h"
 #include "DriverPhysicalInventoryJSON.h"
+#include "DriverProcessEventsJSON.h"
+#include "DriverProcessInventoryJSON.h"
+#include "DriverRegistryEventsJSON.h"
+#include "DriverRegistryHivesJSON.h"
 #include "DriverSchedulingJSON.h"
+#include "DriverSectionsJSON.h"
+#include "DriverServicesJSON.h"
 #include "DriverVaShadowQueryJSON.h"
 #include "DriverVersionQueryJSON.h"
 
+#include "neverd/emulation/DriverClock.h"
 #include "neverd/emulation/DriverReportFields.h"
 #include "neverd/emulation/DriverSession.h"
+#include "neverd/support/FilePath.h"
 
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringExtras.h"
@@ -990,7 +1004,7 @@ pnpDevices(const llvm::json::Value &Value) {
                          field::RequestedDevicePower, resourceField::Resources,
                          interruptField::Interrupts, dmaField::Dma,
                          policyField::WakeCapabilities, coldField::D3Cold,
-                         usbField::UsbIdle}))
+                         usbField::UsbIdle, "device_properties"}))
       return std::move(E);
     auto ID = Object->getString(field::ID);
     auto Bus = Object->getString(field::Bus);
@@ -1002,6 +1016,36 @@ pnpDevices(const llvm::json::Value &Value) {
           "and initial_system_power strings");
     DriverPnpDevice Device;
     Device.ID = ID->str();
+    if (const auto *Properties = Object->get("device_properties")) {
+      const auto *Entries = Properties->getAsArray();
+      if (!Entries || Entries->size() > 18)
+        return invalid("device_properties requires a bounded array");
+      Device.DeviceProperties.emplace();
+      for (const auto &Entry : *Entries) {
+        const auto *Record = Entry.getAsObject();
+        if (!Record)
+          return invalid("device_properties entries require objects");
+        if (auto E = fields(*Record, {"property", "bytes_hex"}))
+          return std::move(E);
+        const auto *ID = Record->get("property"),
+                   *Data = Record->get("bytes_hex");
+        if (!ID || !ID->getAsUINT64() || *ID->getAsUINT64() > UINT32_MAX ||
+            !Data)
+          return invalid("device_properties requires property and bytes_hex");
+        DriverDeviceProperty Property;
+        Property.Property = uint32_t(*ID->getAsUINT64());
+        if (!Data->getAsNull()) {
+          auto Hex = Data->getAsString();
+          std::string Bytes;
+          if (!Hex || Hex->size() > 2 * MaxDriverDevicePropertyBytes ||
+              !llvm::tryGetFromHex(*Hex, Bytes))
+            return invalid(
+                "device_properties bytes_hex must be bounded hex or null");
+          Property.Bytes = std::vector<uint8_t>(Bytes.begin(), Bytes.end());
+        }
+        Device.DeviceProperties->push_back(std::move(Property));
+      }
+    }
     if (const auto *Parent = Object->get(field::ParentID)) {
       auto ParentID = Parent->getAsString();
       if (!ParentID)
@@ -1366,6 +1410,13 @@ llvm::Expected<DriverRequest> request(const llvm::json::Value &Value) {
       return invalid("defer_callback_drain must be a boolean");
     Result.DeferCallbackDrain = *Value;
   }
+  if (const auto *Delay = Object->get(DelayBefore100nsField)) {
+    auto N = Delay->getAsUINT64();
+    if (!N || *N > INT64_MAX)
+      return invalid(
+          "delay_before_100ns requires a nonnegative signed-range integer");
+    Result.DelayBefore100ns = *N;
+  }
   if (const auto *Offset = Object->get(ByteOffsetField)) {
     if (auto Text = Offset->getAsString()) {
       auto Number = hexNumber(*Text, ByteOffsetField);
@@ -1430,8 +1481,9 @@ registry(const llvm::json::Value &Value) {
     const auto *Key = KeyValue.getAsObject();
     if (!Key)
       return invalid("each registry key must be an object");
-    if (auto E = fields(
-            *Key, {field::Path, field::Values, field::LastWriteTime100ns}))
+    if (auto E =
+            fields(*Key, {field::Path, field::Values, field::LastWriteTime100ns,
+                          "information", "subkey_order"}))
       return std::move(E);
     auto Path = Key->getString(field::Path);
     if (!Path)
@@ -1442,6 +1494,32 @@ registry(const llvm::json::Value &Value) {
       Entry.LastWriteTime100ns = Time->getAsUINT64();
       if (!Entry.LastWriteTime100ns)
         return invalid("last_write_time_100ns must be an unsigned integer");
+    }
+    if (const auto *Info = Key->get("information")) {
+      const auto *Object = Info->getAsObject();
+      if (!Object)
+        return invalid("registry information requires an object");
+      if (auto E = fields(*Object, {"last_write_time", "class_name"}))
+        return std::move(E);
+      const auto *Time = Object->get("last_write_time");
+      auto Class = Object->getString("class_name");
+      if (!Time || !Time->getAsUINT64() || !Class)
+        return invalid(
+            "registry information requires last_write_time and class_name");
+      Entry.Information =
+          DriverRegistryKeyInformation{*Time->getAsUINT64(), Class->str()};
+    }
+    if (const auto *Order = Key->get("subkey_order")) {
+      const auto *Names = Order->getAsArray();
+      if (!Names || Names->size() > MaxRegistryKeys)
+        return invalid("registry subkey_order requires a bounded array");
+      Entry.SubkeyOrder.emplace();
+      for (const auto &Name : *Names) {
+        auto Text = Name.getAsString();
+        if (!Text)
+          return invalid("registry subkey_order requires names");
+        Entry.SubkeyOrder->push_back(Text->str());
+      }
     }
     if (const auto *ValuesValue = Key->get(field::Values)) {
       const auto *Values = ValuesValue->getAsArray();
@@ -1706,7 +1784,8 @@ llvm::Error validateDriverInterrupts(llvm::ArrayRef<DriverPnpDevice> Devices) {
   return llvm::Error::success();
 }
 
-llvm::Error validateDriverDma(llvm::ArrayRef<DriverPnpDevice> Devices) {
+llvm::Error validateDriverDma(llvm::ArrayRef<DriverPnpDevice> Devices,
+                              uint64_t KernelMemorySize) {
   for (const auto &Device : Devices) {
     if (!Device.Dma)
       continue;
@@ -1751,8 +1830,7 @@ llvm::Error validateDriverDma(llvm::ArrayRef<DriverPnpDevice> Devices) {
   for (const auto &Device : Devices)
     for (const auto &Resource : Device.Resources)
       if (Resource.Length &&
-          Resource.TranslatedStart <
-              DriverDmaPhysicalBase + DriverDmaPhysicalSize &&
+          Resource.TranslatedStart < DriverDmaPhysicalBase + KernelMemorySize &&
           (Resource.TranslatedStart >= DriverDmaPhysicalBase ||
            Resource.Length > DriverDmaPhysicalBase - Resource.TranslatedStart))
         return invalid(
@@ -1905,10 +1983,11 @@ llvm::Error validateDriverUsbIdle(llvm::ArrayRef<DriverPnpDevice> Devices) {
   return llvm::Error::success();
 }
 
-llvm::Error validateDriverResources(llvm::ArrayRef<DriverPnpDevice> Devices) {
+llvm::Error validateDriverResources(llvm::ArrayRef<DriverPnpDevice> Devices,
+                                    uint64_t KernelMemorySize) {
   if (auto E = validateDriverInterrupts(Devices))
     return E;
-  if (auto E = validateDriverDma(Devices))
+  if (auto E = validateDriverDma(Devices, KernelMemorySize))
     return E;
   using Interval = std::pair<uint64_t, uint64_t>;
   const auto HasOverlap = [](std::vector<Interval> Ranges) {
@@ -2082,7 +2161,29 @@ llvm::Error validateDriverUserMemory(const DriverRequest &Request) {
   return llvm::Error::success();
 }
 
+llvm::Error validateDriverIRPInitialization(const DriverOptions &Options) {
+  if (Options.IRPIOPriorityHint && *Options.IRPIOPriorityHint > 4)
+    return invalid("irp_io_priority_hint must be an integer from 0 through 4");
+  switch (Options.IRPInitializationPolicy) {
+  case DriverIRPInitializationPolicy::Strict:
+    return llvm::Error::success();
+  case DriverIRPInitializationPolicy::Windows19041:
+    if (!Options.Version || Options.Version->Major != 10 ||
+        Options.Version->Minor != 0 || Options.Version->Build != 19041)
+      return invalid("windows-19041 irp_initialization_policy requires "
+                     "windows_version 10.0.19041");
+    return llvm::Error::success();
+  }
+  return invalid("invalid irp_initialization_policy");
+}
+
 llvm::Error validateDriverScenario(const DriverOptions &Options) {
+  if (Options.FileSystem && Options.FiniteFileSystem)
+    return invalid("filesystem and finite_filesystem cannot coexist");
+  if (Options.Version && Options.LoaderView)
+    return invalid("windows_version and loader_view cannot coexist");
+  if (auto E = validateDriverFiniteFileSystem(Options.FiniteFileSystem))
+    return E;
   if (auto E = validateDriverFileSystem(Options.FileSystem))
     return E;
   if (Options.LoaderView)
@@ -2100,6 +2201,62 @@ llvm::Error validateDriverScenario(const DriverOptions &Options) {
       return E;
   if (auto E = driver_cpuid::validate(Options.CPUID))
     return E;
+  if (auto E = validateDriverIRPInitialization(Options))
+    return E;
+  if (auto E = validateDriverSectionNamespace(Options.SectionNamespace))
+    return E;
+  if (auto E = validateDriverProcessInventory(Options))
+    return E;
+  if (auto E = validateDriverKernelMemorySize(Options.KernelMemorySize,
+                                              Options.MemoryLimit))
+    return E;
+  if (auto E = validateDriverCallbackDrainPolicy(Options.CallbackDrainPolicy))
+    return E;
+  if (Options.Smbios)
+    if (auto E = validateDriverSmbios(*Options.Smbios))
+      return E;
+  if (auto E = validateDriverObjectNamespace(Options.DriverNamespace,
+                                             Options.ServiceName))
+    return E;
+  auto Mcfg = resolveDriverFirmwareMcfg(Options.PciMcfg, Options.AcpiTables);
+  if (!Mcfg)
+    return Mcfg.takeError();
+  if (auto E =
+          validateDriverSystemClockIncrement(Options.SystemClockIncrement100ns))
+    return E;
+  switch (Options.MDLMappingPolicy) {
+  case DriverMDLMappingPolicy::Strict:
+    break;
+  case DriverMDLMappingPolicy::Windows19041:
+    if (!Options.Version || Options.Version->Major != 10 ||
+        Options.Version->Minor != 0 || Options.Version->Build != 19041)
+      return invalid("windows-19041 mdl_mapping_policy requires "
+                     "windows_version 10.0.19041");
+    break;
+  default:
+    return invalid("invalid mdl_mapping_policy");
+  }
+  if (Options.PageTables &&
+      (!Options.Version || Options.Version->Major != 10 ||
+       Options.Version->Minor != 0 || Options.Version->Build != 19041))
+    return invalid("page_tables requires windows_version 10.0.19041");
+  auto CPUID = DriverCPUIDModel::fromDriverOptions(Options);
+  if (!CPUID)
+    return CPUID.takeError();
+  switch (Options.PoolTagPolicy) {
+  case DriverPoolTagPolicy::Strict:
+    break;
+  case DriverPoolTagPolicy::Windows19041:
+    if (!Options.Version || Options.Version->Major != 10 ||
+        Options.Version->Minor != 0 || Options.Version->Build != 19041)
+      return invalid(
+          "windows-19041 pool_tag_policy requires windows_version 10.0.19041");
+    break;
+  default:
+    return invalid("invalid pool_tag_policy");
+  }
+  if (!Options.KernelPDB.empty() && Options.KernelImage.empty())
+    return invalid("kernel_pdb requires kernel_image");
   if (Options.Scheduling)
     if (auto E = validateDriverScheduling(*Options.Scheduling))
       return E;
@@ -2117,13 +2274,40 @@ llvm::Error validateDriverScenario(const DriverOptions &Options) {
   if (auto E = validateDriverRegistry(Options.Registry,
                                       Options.RegistrySystemTime100ns))
     return invalid(llvm::toString(std::move(E)));
+  if (auto E = validateDriverRegistryHives(Options))
+    return invalid(llvm::toString(std::move(E)));
+  if (auto E = validateDriverPciConfiguration(Options))
+    return invalid(llvm::toString(std::move(E)));
+  if (auto E = validateDriverFileSystem(Options.FileSystem))
+    return invalid(llvm::toString(std::move(E)));
+  if (auto E = validateDriverFilterManager(Options))
+    return invalid(llvm::toString(std::move(E)));
+  if (auto E = validateDriverNetworkInterfaces(Options))
+    return invalid(llvm::toString(std::move(E)));
+  if (auto E = validateDriverNdisConfiguration(Options))
+    return invalid(llvm::toString(std::move(E)));
+  if (auto E = validateDriverRegistryEvents(Options))
+    return E;
+  if (auto E = validateDriverServices(Options))
+    return invalid(llvm::toString(std::move(E)));
+  if (auto E = validateDriverProcessEvents(
+          Options.ProcessEvents, Options.Requests,
+          initialDriverProcessIDs(Options.ProcessEvents, Options.Requests,
+                                  Options.ProcessInventory)))
+    return E;
   if (Options.PnpDevices.size() > DriverScenarioPnpDeviceLimit)
     return invalid("pnp_devices exceeds the device count limit");
-  if (auto E = validateDriverResources(Options.PnpDevices))
+  if (auto E = validateDriverResources(
+          Options.PnpDevices,
+          (!Options.Version && !Options.KernelMemorySize)
+              ? DriverDmaPhysicalSize
+              : driverKernelMemorySize(Options.KernelMemorySize)))
     return E;
   std::set<std::string> DeviceIDs;
   size_t PowerResponses = 0;
   for (const auto &Device : Options.PnpDevices) {
+    if (auto E = validateDriverDeviceProperties(Device.DeviceProperties))
+      return E;
     if (!validDeviceID(Device.ID))
       return invalid("pnp device id must be a bounded ASCII identifier");
     if (!DeviceIDs.insert(Device.ID).second)
@@ -2375,6 +2559,8 @@ llvm::Error validateDriverScenario(const DriverOptions &Options) {
         return invalid("cancel_after_100ns is valid only for read, write and "
                        "ioctl requests");
     }
+    if (Request.DelayBefore100ns > INT64_MAX)
+      return invalid("delay_before_100ns exceeds the signed time range");
     if (Request.Input.size() > DriverScenarioBufferLimit ||
         Request.OutputSize > DriverScenarioBufferLimit ||
         Request.DirectInput.size() > Request.OutputSize ||
@@ -2448,6 +2634,209 @@ driverOptionsFromScenarioJSON(llvm::StringRef JSON, DriverOptions Base) {
     return invalid("root must be an object");
   if (auto E = fields(*Object, RootFields))
     return std::move(E);
+  if (const auto *Policy = Object->get(CPUIDPolicyField)) {
+    auto Parsed = parseDriverCPUIDPolicy(*Policy);
+    if (!Parsed)
+      return Parsed.takeError();
+    Base.CPUIDPolicy = *Parsed;
+  }
+  if (const auto *Inventory = Object->get(ProcessInventoryField)) {
+    auto Parsed = parseDriverProcessInventory(*Inventory);
+    if (!Parsed)
+      return Parsed.takeError();
+    Base.ProcessInventory = std::move(*Parsed);
+  }
+  if (const auto *Capacity = Object->get(KernelMemorySizeField)) {
+    auto Size = Capacity->getAsInteger();
+    if (!Size || *Size < 0)
+      return invalid("kernel_memory_size must be a positive integer");
+    Base.KernelMemorySize = uint64_t(*Size);
+  }
+  if (const auto *Clock = Object->get(SystemClockIncrement100nsField)) {
+    auto Increment = Clock->getAsInteger();
+    if (!Increment || *Increment < 0 || uint64_t(*Increment) > UINT32_MAX)
+      return invalid("system_clock_increment_100ns must be a positive uint32");
+    Base.SystemClockIncrement100ns = uint32_t(*Increment);
+  }
+  if (const auto *SecurePci = Object->get(SecurePciEnabledField)) {
+    auto Enabled = SecurePci->getAsBoolean();
+    if (!Enabled)
+      return invalid("secure_pci_enabled must be a boolean");
+    Base.SecurePciEnabled = *Enabled;
+  }
+  if (const auto *Nls = Object->get(NlsOemMultibyteField)) {
+    auto Multibyte = Nls->getAsBoolean();
+    if (!Multibyte)
+      return invalid("nls_oem_multibyte must be a boolean");
+    Base.NlsOemMultibyte = *Multibyte;
+  }
+  if (const auto *Hint = Object->get(IRPIOPriorityHintField)) {
+    auto V = Hint->getAsInteger();
+    if (!V || *V < 0 || *V > 4)
+      return invalid(
+          "irp_io_priority_hint must be an integer from 0 through 4");
+    Base.IRPIOPriorityHint = uint8_t(*V);
+  }
+  if (const auto *Interfaces = Object->get(NetworkInterfacesField)) {
+    auto Parsed = parseDriverNetworkInterfaces(*Interfaces);
+    if (!Parsed)
+      return Parsed.takeError();
+    Base.NetworkInterfaces = std::move(*Parsed);
+  }
+  if (const auto *Ndis = Object->get(NdisConfigurationField)) {
+    auto Parsed = parseDriverNdisConfiguration(*Ndis);
+    if (!Parsed)
+      return Parsed.takeError();
+    Base.NdisConfiguration = std::move(*Parsed);
+  }
+  if (const auto *Images = Object->get(ServiceImagesField)) {
+    auto Parsed = parseDriverServiceImages(*Images);
+    if (!Parsed)
+      return Parsed.takeError();
+    Base.ServiceImages = std::move(*Parsed);
+  }
+  if (const auto *Names = Object->get(FilterManagerFileNamesField)) {
+    auto Enabled = Names->getAsBoolean();
+    if (!Enabled)
+      return invalid("filter_manager_file_names must be a boolean");
+    Base.FilterManagerFileNames = *Enabled;
+  }
+  if (const auto *Hives = Object->get(RegistryHivesField)) {
+    auto Parsed = parseDriverRegistryHives(*Hives);
+    if (!Parsed)
+      return Parsed.takeError();
+    Base.RegistryHives = std::move(*Parsed);
+  }
+  if (const auto *Pci = Object->get(PciConfigurationField)) {
+    auto Parsed = parseDriverPciConfiguration(*Pci);
+    if (!Parsed)
+      return Parsed.takeError();
+    Base.PciConfiguration = std::move(*Parsed);
+  }
+  if (const auto *CI = Object->get(CodeIntegrityOptionsField)) {
+    auto Options = CI->getAsInteger();
+    if (!Options || *Options < 0 || uint64_t(*Options) > UINT32_MAX)
+      return invalid("code_integrity_options must be a uint32");
+    Base.CodeIntegrityOptions = uint32_t(*Options);
+  }
+  if (const auto *DmaGuard = Object->get(DmaGuardPolicyEnabledField)) {
+    auto Enabled = DmaGuard->getAsBoolean();
+    if (!Enabled)
+      return invalid("dma_guard_policy_enabled must be a boolean");
+    Base.DmaGuardPolicyEnabled = *Enabled;
+  }
+  if (const auto *Acpi = Object->get(AcpiTablesField)) {
+    auto Facts = parseDriverAcpiTables(*Acpi);
+    if (!Facts)
+      return Facts.takeError();
+    Base.AcpiTables = std::move(*Facts);
+  }
+  if (const auto *Mcfg = Object->get(PciMcfgField)) {
+    auto Facts = parseDriverPciMcfg(*Mcfg);
+    if (!Facts)
+      return Facts.takeError();
+    Base.PciMcfg = std::move(*Facts);
+  }
+  if (const auto *Smbios = Object->get(SmbiosField)) {
+    auto Facts = parseDriverSmbios(*Smbios);
+    if (!Facts)
+      return Facts.takeError();
+    Base.Smbios = std::move(*Facts);
+  }
+  if (const auto *Namespace = Object->get(SectionNamespaceField)) {
+    auto Parsed = parseDriverSectionNamespace(*Namespace);
+    if (!Parsed)
+      return Parsed.takeError();
+    Base.SectionNamespace = std::move(*Parsed);
+  }
+  if (const auto *Namespace = Object->get(DriverNamespaceField)) {
+    const auto *Inventory = Namespace->getAsObject();
+    if (!Inventory)
+      return invalid("driver_namespace must be an object");
+    if (auto E = fields(*Inventory, {field::EmptyDrivers}))
+      return std::move(E);
+    const auto *Names = Inventory->getArray(field::EmptyDrivers);
+    if (!Names || Names->size() > 64)
+      return invalid("driver_namespace requires bounded empty_drivers");
+    DriverObjectNamespace Parsed;
+    for (const auto &Name : *Names) {
+      auto Text = Name.getAsString();
+      if (!Text)
+        return invalid("driver_namespace empty_drivers must contain strings");
+      Parsed.EmptyDrivers.push_back(Text->str());
+    }
+    Base.DriverNamespace = std::move(Parsed);
+  }
+  if (const auto *Paging = Object->get(PageTablesField)) {
+    auto Enabled = Paging->getAsBoolean();
+    if (!Enabled)
+      return invalid("page_tables must be a boolean");
+    Base.PageTables = *Enabled;
+  }
+  if (const auto *Reference = Object->get(KernelImageField)) {
+    auto Path = Reference->getAsString();
+    if (!Path || Path->empty() || Path->size() > 4096 || Path->contains('\0'))
+      return invalid("kernel_image must be a nonempty bounded file path");
+    Base.KernelImage =
+        std::filesystem::path(std::u8string(Path->begin(), Path->end()));
+  }
+  if (const auto *Reference = Object->get(KernelPDBField)) {
+    auto Path = Reference->getAsString();
+    if (!Path || Path->empty() || Path->size() > 4096 || Path->contains('\0'))
+      return invalid("kernel_pdb must be a nonempty bounded file path");
+    Base.KernelPDB =
+        std::filesystem::path(std::u8string(Path->begin(), Path->end()));
+  }
+  if (const auto *Policy = Object->get(CallbackDrainPolicyField)) {
+    const auto Text = Policy->getAsString();
+    auto Parsed = Text ? parseCallbackDrainPolicy(
+                             std::string_view(Text->data(), Text->size()))
+                       : std::nullopt;
+    if (!Parsed)
+      return invalid(
+          "callback_drain_policy must be complete or foreground-ready");
+    Base.CallbackDrainPolicy = *Parsed;
+  }
+  if (const auto *Policy = Object->get(PoolTagPolicyField)) {
+    const auto Text = Policy->getAsString();
+    if (!Text || (*Text != "strict" && *Text != "windows-19041"))
+      return invalid("pool_tag_policy must be strict or windows-19041");
+    Base.PoolTagPolicy = *Text == "strict" ? DriverPoolTagPolicy::Strict
+                                           : DriverPoolTagPolicy::Windows19041;
+  }
+  if (const auto *Policy = Object->get(MDLMappingPolicyField)) {
+    const auto Text = Policy->getAsString();
+    if (!Text || (*Text != "strict" && *Text != "windows-19041"))
+      return invalid("mdl_mapping_policy must be strict or windows-19041");
+    Base.MDLMappingPolicy = *Text == "strict"
+                                ? DriverMDLMappingPolicy::Strict
+                                : DriverMDLMappingPolicy::Windows19041;
+  }
+  if (const auto *Policy = Object->get(IRPInitializationPolicyField)) {
+    const auto Text = Policy->getAsString();
+    if (!Text || (*Text != "strict" && *Text != "windows-19041"))
+      return invalid(
+          "irp_initialization_policy must be strict or windows-19041");
+    Base.IRPInitializationPolicy =
+        *Text == "strict" ? DriverIRPInitializationPolicy::Strict
+                          : DriverIRPInitializationPolicy::Windows19041;
+  }
+  if (const auto *Version = Object->get(WindowsVersionField)) {
+    const auto *Values = Version->getAsObject();
+    if (!Values)
+      return invalid("windows_version must be an object");
+    if (auto E = fields(*Values, {"major", "minor", "build"}))
+      return std::move(E);
+    auto Major = Values->getInteger("major");
+    auto Minor = Values->getInteger("minor");
+    auto Build = Values->getInteger("build");
+    if (!Major || !Minor || !Build || *Major < 0 || *Minor < 0 || *Build < 0 ||
+        uint64_t(*Major) > UINT32_MAX || uint64_t(*Minor) > UINT32_MAX ||
+        uint64_t(*Build) > UINT32_MAX)
+      return invalid("windows_version requires uint32 major, minor and build");
+    Base.Version = DriverOptions::WindowsVersion{
+        uint32_t(*Major), uint32_t(*Minor), uint32_t(*Build)};
+  }
   if (const auto *Scheduling = Object->get(SchedulingField)) {
     auto Policy = parseDriverScheduling(*Scheduling);
     if (!Policy)
@@ -2459,6 +2848,24 @@ driverOptionsFromScenarioJSON(llvm::StringRef JSON, DriverOptions Base) {
     if (!ParsedDevices)
       return ParsedDevices.takeError();
     Base.PnpDevices = std::move(*ParsedDevices);
+  }
+  if (const auto *Files = Object->get(FiniteFileSystemField)) {
+    auto Parsed = parseDriverFiniteFileSystem(*Files);
+    if (!Parsed)
+      return Parsed.takeError();
+    Base.FiniteFileSystem = std::move(*Parsed);
+  }
+  if (const auto *Events = Object->get(RegistryEventsField)) {
+    auto Parsed = parseDriverRegistryEvents(*Events);
+    if (!Parsed)
+      return Parsed.takeError();
+    Base.RegistryEvents = std::move(*Parsed);
+  }
+  if (const auto *Events = Object->get(ProcessEventsField)) {
+    auto Parsed = parseDriverProcessEvents(*Events);
+    if (!Parsed)
+      return Parsed.takeError();
+    Base.ProcessEvents = std::move(*Parsed);
   }
   if (const auto *Registry = Object->get(RegistryField)) {
     auto ParsedRegistry = registry(*Registry);

@@ -15,6 +15,7 @@
 
 #include "neverd/emulation/DriverD3Cold.h"
 #include "neverd/emulation/DriverDMA.h"
+#include "neverd/emulation/DriverDeviceProperties.h"
 #include "neverd/emulation/DriverInterrupts.h"
 #include "neverd/emulation/DriverPowerPolicy.h"
 #include "neverd/emulation/DriverResources.h"
@@ -151,6 +152,9 @@ struct DriverPnpDevice {
   std::optional<std::string> ParentID;
   /// Explicit selective-idle role; resource transport does not imply USB.
   std::optional<DriverUsbIdleConfig> UsbIdle;
+  /// Final setup-property observations. Omission is unavailable; an empty
+  /// catalogue supplies no queried values. No host device registry is read.
+  std::optional<std::vector<DriverDeviceProperty>> DeviceProperties;
 };
 
 struct DriverPnpOperation {

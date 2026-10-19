@@ -2328,6 +2328,299 @@ run its test directory at `build-release/unittests/web-api`. With the worker
 enabled, `NeverDWorkerWeb` in `build-release/tools/neverd-worker` checks the real
 framed process and isolation from native-session revisions using a C++ client.
 
+## Explicit module inputs
+
+The independent `NeverDModuleTests` target covers explicit module declarations,
+eager/lazy file preparation, immutable input lifetime, atomic catalogue updates
+and late debug attachment. It also checks correction of unprepared declarations
+without IO and rejection of prepared-input replacement. Its optional
+Clang/lld-link driver fixtures exercise
+actual PE/PDB matching and mismatch rejection. Build it with
+`NeverDDebugInfoTests` and `NeverDPDBIdentityTests`, then select those three CTest
+labels. These are file/symbol checks; they do not establish resumable driver or
+Ring3 module execution. See [runtime modules](runtime-modules.md).
+
+`NeverDKernelModulePublicationTests` executes the Native x64 support-module fixture
+under legacy and checked driver contracts. It covers rebasing, exported code/data,
+pinned PDB lookup, imported API calls, retained globals, repeated publication,
+guest loader-ring traversal and per-record module-query flags. Failure cases
+check address/identity conflicts, reserved invocation space, guest-corrupted
+links and abandoned metadata preparation. A missing eager input is corrected
+through its retained request without replaying entry. Run it with the existing
+driver/persistent/service suites and `NeverDModuleBindingTests`; the public driver
+C API and CLI tests verify the same module through the shared SDK. These tests
+also cover actual driver lazy-read and indirect-call fetch continuations,
+caller-added sources inside an active call, failed supply/retry, retained API and
+global effects, option-disabled faults and rejection of model/owned-image holes.
+The public DLL/CLI repeat the missing indirect target and lazy first-use paths.
+The dependency cases execute named/data/ordinal imports in both declaration
+orders, required lazy expansion, correction of a missing declared file and
+unknown-provider supply. They verify forwarded code/data/model targets, cycles,
+ambiguous provider stems and depth rejection after suffix memoization. Another
+case supplies a module's own dependency while its original CPU fetch stop and
+parent invocation remain retained. No module entry initialization or Ring3
+runtime instance is added.
+
+The Native `kernel_module_paging.sys` and primary-driver variant read cached
+recursive PTEs directly, without CR3 or physical-address APIs that could hide a
+missing synchronization. Legacy/checked cases check executable/data permissions
+before the eager module's first execution and after a real missing kernel read
+is repaired at the same PC. A once-only guest counter disproves action replay.
+Further cases reject table-storage/recursive-window extents before publication,
+keep missing recursive aliases out of resource requests and retain ModelError
+through terminal one-shot cleanup. The CLI and public DLL repeat the actual
+read/supply/PTE continuation, adding a previously omitted source during the
+call. Generic workload checks cover eager projection order, CPU repair without
+repeating dependency preparation, failure classification, timeout precedence
+and cooperative pause during projection. Existing guest paging, physical/MDL,
+backend continuation and process suites provide affected regression coverage;
+no new Ring3 instance is introduced.
+
+Bootstrap cases check that the main driver and optional kernel reference appear
+in the same instance table before any guest instruction. They verify unchanged
+loader records and mapping generation, pinned hashes/PDB address projection,
+reference model names/ordinals, rejection of opaque data and subsequent extra
+module publication. Public DLL/CLI cases query `$driver` and preserve a selected
+lazy source's policy while preparing its required bootstrap role. Generic
+adoption tests cover expired source/file lifetime, validator/extent/identity
+rejection, pending-request preservation and atomic environment metadata patches.
+The metadata lease also checks unchanged aliases, physical capacity, reservation
+witnesses, repeated commit rejection and stopped/running/nested/thread exclusion.
+
+Primary import cases use a Native `.sys` with named/data and ordinal variants.
+They validate readonly IAT backing patches, required lazy providers, missing-file
+correction, caller-supplied providers before entry, one entry execution and the
+old one-shot unsupported API/strict ordinal behavior. The public C API and CLI
+repeat the ordinal provider supply with zero instructions before repair. A model
+provider fixture checks that export name/ordinal queries and primary import
+planning all preserve a canonical model target. Generic metadata refresh tests
+cover empty-finalizer exclusion, declared dependency expansion and failed source
+rollback. Workload tests retain an action across preparation dependencies, skip
+the hook on CPU repair and reject timeout admission for success/error/dependency
+outcomes. These are kernel or existing generic raw-buffer checks; no Ring3
+adapter or application runtime instance is added.
+
+Additional Native C SEH cases execute a private module repeatedly with retained
+writable globals, then unwind across a later-published second image. Negative
+cases change the actual unwind directory or personality IAT and require rejection
+of cached facts. A stopped real driver owner fills physical capacity to check
+that failed RAM publication keeps the old planner/table and supports retry.
+Public C/CLI cases repeat actual C exception calls through the same workload.
+Shared planner tests append images while a filter cursor is suspended, reject
+overlap, and retry a failed live witness without consuming the cursor. Metadata
+range tests cover directory/scope/GS/code coalescing, quotas and bounds; registry
+checks prove structural personality availability cannot grant direct-call arity.
+No new Ring3 adapter or application instance is introduced. The existing process
+regression is required because it shares the extracted metadata-range helper.
+
+Additional active CFG cases run a Native no-entry module under Legacy/Checked
+contracts. They cover mixed integer/SSE/stack arguments through check/dispatch,
+retained globals, dormant fallbacks, later activation under an unguarded primary,
+real lazy-fetch publication, exact unguarded function exports, interior-target
+rejection, changed metadata witnesses and failed RAM publication/retry without
+policy grants. A pure policy case checks isolated drafts, suppression and stable
+commit. Existing malformed CFG/XFG/relocation tests remain shared loader coverage.
+Public CLI/DLL tests repeat later activation. Report-view cases compare complete
+and bounded observations with identical execution counters and suffix contents,
+and reject malformed options. A subprocess invokes the actual public replay
+script twice over a driver fixture, checking retained globals, buffer canaries,
+source-handle release and output reports. The script uses no private executor.
+
+The binding target also checks pure batch finalization, abandoned draft writes,
+atomic declared dependency expansion, forwarded-target permission/ownership,
+unconsumed preparation rejection and preservation of the original request.
+
+`NeverDModuleCAPITests` links the real shared SDK and a pure C umbrella-header
+consumer. It checks exact v1 prefixes, opaque/stale handles, owned errors/results,
+eager/lazy rules, failed preparation, input correction, debug identity/trust,
+UTF-8/bounds, file origins and concurrent additions. `NeverDModuleCLITests`
+compares CLI/C API reports and diagnostics over file-analysis fixtures; it is
+registered when the CLI is built. Run the existing `NeverDSessionCAPITests` and
+`NeverDDriverEmulationPublicTests` plus Python SDK unit/audit checks for public
+API changes. Missing PE/PDB toolchains and unconfigured Python runtime fixtures
+remain skipped coverage. These tests introduce no application execution example.
+
+`NeverDModuleBindingTests` covers per-execution instances, namespaced symbols and
+exports, eager/lazy mapping, owner/version/one-shot request tokens, automatic and
+manual supply, cross-page coverage, physical capacity and publication failures.
+Its core transaction cases check abandoned/committed RAM and metadata patches,
+alias identity, reservation witnesses and previously running software/checked
+Unicorn CPUs observing newly mapped and patched code. These checks do not yet
+establish resource-fault resume or Windows loader integration. The affected
+regression targets are `NeverDMemoryLifecycleTests`, `NeverDProjectionCacheTests`,
+`NeverDRAMTransactionTests`, `NeverDParallelExecutionTests`,
+`NeverDCPUEmulationTests` and `NeverDExecutionSessionTests`. Native backend
+unavailability and unsupported contract cases remain explicit skips.
+
+`NeverDResourcePauseTests` validates repaired software/checked CPU continuations:
+scalar and cross-page loads, initial/cross-page instruction fetch, CALL stack
+effects, forward/reverse REP progress, committed ENTER stores, watch step-over,
+register aliasing, thread/vector state, terminal callback/MMIO/protection errors,
+and rejected unsupported backend hooks. `NeverDExecutionBudgetTests` covers both
+legacy absolute deadlines and explicit active-work scopes, including nested
+intervals, waiting, stale clock samples and sub-microsecond accounting. Broaden
+to execution-session, run-control, x64-exception and affected existing Windows
+SEH/COW tests for changes at these shared boundaries. Host-native original-EXE
+oracles run separately from emulation; retain and investigate their own failures.
+
+`NeverDExecutionRunTests` exercises the persistent owner with a small raw-buffer
+environment: retained CPU/model/memory state, software/checked x64 resource
+repair, eager preparation, automatic lazy supply, correction of missing inputs,
+metadata dependencies, resolver/token/reentry errors, cross-thread pause,
+stage/lifecycle and memory bounds, terminal outcomes and cumulative quotas.
+It verifies that model/resolver work cannot publish completion or a resource
+request after time exhaustion. Run it with the module, module-binding,
+resource-pause, execution-session, budget and run-control targets when changing
+the workload control layer. Invocation cases check saved CPU/thread/vector state,
+Win64 stack arguments, bounded input/output, lazy target fetch, resource repair,
+API/nested callbacks in the same pump, repeated calls, bad ABI/stage/stack and
+terminal faults/limits. Raw CPU cases additionally cover SysV AMD64 and
+software/checked AAPCS64. Session tests check saved execution/write watches and
+step-over control, foreign/pending contexts, reserved return persistence and
+local time admission. Include `NeverDIntegerABITests` and affected existing
+driver/SEH/context tests when changing these boundaries. These checks add no
+Windows application adapter or EXE/DLL runtime example. The actual driver
+adapter and after-entry integration have their own checks described below.
+
+`NeverDExecutionRunJSONTests` checks the shared execution protocol independently
+of an OS adapter: strict field/type/UTF-8 admission, duplicate fields and surrogate
+escapes, full-width token/number preservation, explicit space resolution, bounded
+ABI/buffer inputs, and event/snapshot/instance reports. The execution-run target
+also drives a real raw-buffer resource stop through encode/decode/supply and a
+JSON invocation through the retained frame/return boundary. These tests establish
+the codec-to-engine boundary; they do not establish completed persistent C API,
+interactive CLI or Windows driver integration. Run them with the workload,
+module-binding, resource-pause, session, budget and integer-ABI targets. Skipped
+backend/contract combinations remain unexecuted coverage.
+
+`NeverDExecutionCAPITests` links the actual shared SDK and a pure C consumer. It
+exercises typed/stale handle ownership, exact v1 prefixes, retained sources,
+stages/lifecycle, finite calls and exact captured bytes, bounded caller memory,
+guest-failure reports, cross-thread pause/busy guards, lazy and manual source
+supply, eager-input correction, strict factory configuration and checked ARM64
+raw buffers. Invalid nonexecutable image entries must not acquire permissions or
+publish partial mappings. These are raw CPU protocol checks, with no new OS or
+application loader. `NeverDExecutionCAPIDisabledTests` separately compiles the
+production C boundary and allocator without linking the SDK or an emulation
+archive, proving disabled diagnostics for every export; it does not replace a
+full feature-disabled SDK build. Run both with module C API, execution protocol,
+execution-run, existing session/driver public and Python SDK/audit checks.
+
+For the complete feature-disabled SDK, configure a separate Release tree. Keep
+both execution options off; `NEVERD_ENABLE_SEMANTIC_TESTS=OFF` also avoids the
+separate Unicorn-dependent lifting test group. This still builds the real
+shared SDK, CLI and file-resource consumers:
+
+```sh
+cmake -S . -B build-sdk-disabled -G Ninja \
+  -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON \
+  -DNEVERD_ENABLE_CPU_EMULATION=OFF \
+  -DNEVERD_ENABLE_DRIVER_EMULATION=OFF \
+  -DNEVERD_ENABLE_SEMANTIC_TESTS=OFF
+cmake --build build-sdk-disabled --target neverd NeverDModuleTests \
+  NeverDDebugInfoTests NeverDPDBIdentityTests NeverDModuleCAPITests \
+  NeverDSessionCAPITests NeverDExecutionCAPIDisabledTests \
+  NeverDExecutionSDKDisabledTests --parallel 4
+ctest --test-dir build-sdk-disabled \
+  -L '^NeverD(Module|DebugInfo|PDBIdentity|ModuleCAPI|SessionCAPI|ExecutionCAPIDisabled|ExecutionSDKDisabled|ExecutionSDKDisabledCLI|ModuleCLI)Tests$' \
+  --output-on-failure
+```
+
+`NeverDExecutionSDKDisabledTests` links that SDK, exercises every persistent
+execution export, frees errors through its public allocator and proves a failed
+execution call does not consume an independent module catalogue. It also links
+a pure C umbrella-header consumer. `NeverDExecutionSDKDisabledCLITests` checks
+buffer/driver startup diagnostics through the real CLI. Module/PDB and module
+CLI cases must remain usable without an execution backend. These targets are
+complementary to the isolated boundary test; neither is evidence for executing
+guest instructions in a disabled build. If using the pinned prebuilt LLVM
+profile, add `-DNEVERD_LLVM_PREBUILT=ON` to configuration as usual.
+
+`NeverDExecutionCLITests` drives the real CLI as a persistent child process and
+compares command results/errors against the actual C SDK. It covers stopped
+creation, retained lifecycle/memory, lazy inputs, late source addition and live
+token supply, eager-input correction, repeated finite calls, state/pause during
+execution, EOF worker joining, failed guest events, strict/bounded command
+transport, explicit path origins and Unicode. API tests separately exercise the
+same command facade after source handle release, nested duplicate rejection,
+source revision/debug attachment and mapped symbol lookup. These are raw CPU
+buffers/file resources, without a new application loader or Ring3 instance.
+CTest's CLI entry wraps the same Python cases; do not count them twice.
+
+`NeverDDriverSessionStateTests` checks the private owner consumed by the existing
+driver entry point: initialization without guest admission under both contracts,
+copied configuration and mapped-input lifetime, context capture after factory
+locals have expired, independent CPU/model/budget state, canonical import
+bindings, final permissions and early rejection of invalid options. Build and
+run it with `NeverDDriverEmulationTests`, `NeverDNativeDriverTests`,
+`NeverDDriverGuardMetadataTests` and `NeverDDriverEmulationPublicTests` when
+changing driver resource ownership or initialization. `NeverDExecutionCAPITests`
+checks the persistent raw-buffer API against the relinked shared SDK. These
+checks do not establish a persistent driver adapter or an after-entry stop.
+Missing native backends and optional WDK fixtures remain explicit skips.
+
+Execution-session model admission cases check uncharged boundaries at the exact
+instruction limit, charged emulation without machine effects, deferred one-shot
+ownership, PC changes, shared-credit exhaustion, active-work and original local
+time caps, context/watch/reentry guards, watch/return priority, quantum handling,
+memory observers, typed fault priority and terminal observer exceptions. They
+reuse raw x64/ARM64 instruction buffers; they add no application adapter or
+runtime example. For changes to this shared boundary, include execution-run,
+resource-pause, direct-x64, budget, service-request, user-execution, run-control,
+integer-ABI, x64-exception and affected existing Windows-process regression
+targets, in addition to the driver targets above. Original Windows EXE oracles
+are independent evidence; report their failures separately from emulation.
+
+`NeverDDriverPersistentTests` exercises the private driver adapter through the
+same `ExecutionRun` used by the one-shot entry point. It checks creation without
+guest execution, the real after-entry stop before the first callback drain,
+retained RAM/model/budget identity, resident worker requests and unload, nested
+callbacks, failed entry, unsupported APIs, cancellation and independent runs.
+Single-instruction quanta reproduce the complete one-shot report under both
+cooperative and scheduled policies. Live worker pause cases cover cross-thread
+requests and retained PC/counts; quota cases retain typed instruction/event
+reasons. Private task cases check parent/child cancellation, explicit errors and
+host exceptions. Execution-run tests additionally cover adopted-budget lifetime,
+used/exhausted credits, mismatched limits/policies and invalid failure reasons.
+They also cover an uncharged model-return boundary reached after the last
+instruction credit, without replenishment or another machine instruction.
+Run these with the existing driver, public driver, native driver, guard metadata,
+execution-run, execution protocol and execution C API targets. The finite-call
+cases use a rebased real driver and its matching PDB to locate internal functions:
+seven arguments, repeated buffers/global effects, modeled tail returns at the
+exact instruction bound, nested callbacks, context capture, scheduled calls and
+terminal IRQL/stack/memory failures. Session cases distinguish uncharged returns
+and model boundaries from attempted instructions at a zero local quantum.
+These tests add no Ring3 implementation or example.
+
+`DriverExecutionCAPI.*` in `NeverDDriverEmulationPublicTests` exercises the actual
+shared SDK's windows-driver factory, stopped observations, PDB-to-runtime address
+translation, repeated calls, retained source lifetime, explicit file origins and
+strict kernel-contract admission. `NeverDDriverExecutionCLITests` compares the
+real persistent CLI with that DLL, including matching API/callback reports,
+repeated buffer output, exact call limits and failed ABI admission without credit
+or stage changes. Its CTest entry wraps the same Python cases. The public tests
+also map an explicit Native x64 helper, query its runtime PDB address and call
+its exported code through that same run. Both public boundaries additionally
+supply an unknown dependency before entry, commit importer/provider together,
+and call the importer's real PDB-located function. Bootstrap ownership and the
+public replay consumer use that same workload. Preparing a file alone does not
+publish a guest module.
+
+`DriverModuleInput.*` in `NeverDDriverPersistentTests` compares strict file and
+pinned-source relocation/cookie plans and executes a real driver after its
+original sys/PDB and catalogue have gone. It checks replacement isolation,
+unchanged unsupported-feature rejection, matched kernel PE/PDB facts after file
+removal, late-debug observation lifetime and rejection of names-only MAP kernel
+facts. General RSDS signature/object-extent trust remains false even when the
+existing bounded kernel proof succeeds. Public driver tests additionally cover
+resource-ID selection, matching digest reports, conflict rejection before source
+preparation and mismatched companions. The driver CLI uses a named module file
+and keeps an unused missing lazy resource unprepared. Run these with the driver,
+module, debug-info and PDB-identity suites. Real owned kernel references can also
+use the existing explicit thread-reference fixture variables; such reruns do not
+add a Ring3 instance or establish arbitrary kernel-module execution support.
+
 ## Library recognition
 
 The feature repository retains the original compiler objects, truth, source
@@ -8926,10 +9219,3 @@ ctest --test-dir build-release -L "^(NeverDX86ScalarMoveAuditTests|NeverDX86Lega
 ```
 
 `NeverDSymConditionalStoreTests` covers conditional effects on current bytes across independent roots, 128-bit writes, both byte orders, partial overlaps, symbolic relative wrapping and absolute memory. It checks own-bank neighbors, current versus historical facts, post-write unknown epochs, unsupported inputs, and exact versus one-short budgets. Executor cases cover STORE with existing segment-base handling, strict CMPXCHG success/failure and delayed Old publication, refusal havoc, and other operations leaving the policy Invalid. Ordinary store and preservation defaults retain their existing behavior. These tests validate bounded memory semantics; they do not certify access permissions or complete program recovery.
-
-## Runtime module resources and persistent buffers
-
-The [runtime module reference](runtime-modules.md#verification) lists the focused
-resource, mapping, pause/resume, execution, C SDK and CLI suites. Qualify the
-CPU-on/Driver-off configuration as well as disabled execution. The Windows
-adapter remains a separate integration and is rejected when unregistered.

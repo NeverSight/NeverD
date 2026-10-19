@@ -34,6 +34,8 @@ llvm::Error KernelModel::adoptDriverIRP(uint64_t Device, uint64_t IRP) {
   if (Allocation == DriverIRPs.end() || Allocation->second.Submitted ||
       Allocation->second.StorageReleased)
     return driverIRPError("first submission requires a live unused allocation");
+  if (Allocation->second.Builder)
+    return adoptBuiltControlIRP(Device, IRP);
   if (PendingWdmCall || (Framework && Framework->hasPendingGuestCall()))
     return driverIRPError("submission cannot replace a pending callback");
   auto Target = Devices.find(Device);
@@ -130,12 +132,10 @@ llvm::Error KernelModel::adoptDriverIRP(uint64_t Device, uint64_t IRP) {
       (*Control & CompletionFlags) != CompletionFlags)
     return driverIRPError("caller packets require a completion routine for "
                           "success, error and cancellation");
-  auto PC = isPnpProviderDevice(Device)
-                ? llvm::Expected<uint64_t>(0)
-                : Memory.readInteger(Target->second.OwnerDriver +
-                                         DriverDispatchOffset +
-                                         InternalMajor * sizeof(uint64_t),
-                                     sizeof(uint64_t));
+  auto PC =
+      isPnpProviderDevice(Device)
+          ? llvm::Expected<uint64_t>(0)
+          : guestDriverDispatch(Target->second.OwnerDriver, InternalMajor);
   if (!PC)
     return PC.takeError();
   if (!*PC && !isPnpProviderDevice(Device))
@@ -157,8 +157,7 @@ llvm::Error KernelModel::adoptDriverIRP(uint64_t Device, uint64_t IRP) {
   for (const auto &[Address, Size, Write] :
        {std::tuple{*Input, *InputSize, false},
         std::tuple{*Output, *OutputSize, true}}) {
-    if (Size > profile::KernelArenaSize ||
-        (Size && Address < profile::UserProbeLimit))
+    if (Size > KernelMemoryBytes || (Size && Address < profile::UserProbeLimit))
       return driverIRPError("internal buffers require bounded kernel storage");
     if (Size)
       if (auto E = validateGuestAccess(Address, uint32_t(Size), Write))
@@ -326,7 +325,8 @@ llvm::Error KernelModel::recordDriverIRPDispatchReturn(uint64_t IRP,
   auto *Request = requestForIRP(IRP);
   if (!Request || Request->DispatchReturned)
     return driverIRPError("initial dispatch return lost its caller packet");
-  if (Status != StatusPending && !Request->Completed)
+  if (Status != StatusPending && !Request->Completed &&
+      !(DriverIRPs.at(IRP).Builder && DriverIRPs.at(IRP).CompletionHeld))
     return driverIRPError("internal dispatch returned without completion");
   if (Request->Completed && (Status == StatusPending) != Request->PendingMarked)
     return driverIRPError(

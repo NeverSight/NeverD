@@ -24,6 +24,15 @@ using namespace neverd;
 using namespace neverd::unpack::test;
 namespace text = neverd::unpack::strings;
 
+// Public API/CLI parity uses an explicit portable transport. Native transport
+// availability and auto selection have their own backend-parametrized tests.
+std::string softwareOptions(const char *Options) {
+  auto Parsed =
+      llvm::cantFail(llvm::json::parse(Options ? Options : text::EmptyOptions));
+  (*Parsed.getAsObject())["backend"] = "unicorn";
+  return llvm::formatv("{0}", Parsed).str();
+}
+
 class UnpackPublic : public testing::Test {
 protected:
   neverd_session_t Session = nullptr;
@@ -45,8 +54,9 @@ protected:
   std::optional<llvm::json::Object> api(const std::string &Input,
                                         const std::string &Output,
                                         const char *Options) {
-    const char *Report =
-        neverd_unpack_json(Session, Input.c_str(), Output.c_str(), Options);
+    const auto Configuration = softwareOptions(Options);
+    const char *Report = neverd_unpack_json(
+        Session, Input.c_str(), Output.c_str(), Configuration.c_str());
     if (!Report)
       return std::nullopt;
     auto Free = llvm::scope_exit([&] { neverd_free_string(Report); });
@@ -66,8 +76,8 @@ protected:
         test::shellQuote(NEVERD_UNPACK_CLI) + " " + unpack_cli::Command + " " +
         test::shellQuote(Input) + " -" + unpack_cli::OutputOption + " " +
         test::shellQuote(Output) + " --" + unpack_cli::OptionsOption + "=" +
-        test::shellQuote(Options) + test::redirectStdout(Report) +
-        test::silenceStderr();
+        test::shellQuote(softwareOptions(Options.c_str())) +
+        test::redirectStdout(Report) + test::silenceStderr();
     const int Status = test::systemExitCode(test::runShellCommand(Command));
     const auto Bytes = readFile(Report);
     return {Status, std::string(Bytes.begin(), Bytes.end())};

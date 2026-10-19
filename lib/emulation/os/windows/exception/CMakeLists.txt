@@ -1,6 +1,7 @@
 # Windows exception semantics are shared by kernel and user workloads.
 add_neverd_component_library(NeverDEmulationWindowsException
   X64SEH.cpp
+  X64SEHMetadata.cpp
   X64SEHGS.cpp
   X64SEHEpilogue.cpp
   X64SIMDException.cpp

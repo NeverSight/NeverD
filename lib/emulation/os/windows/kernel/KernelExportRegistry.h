@@ -21,6 +21,7 @@
 #include <cstdint>
 #include <map>
 #include <optional>
+#include <set>
 #include <string>
 #include <tuple>
 
@@ -28,15 +29,22 @@ namespace neverd::emulation {
 struct DriverOptions;
 struct DriverImport;
 struct ExecutionWatch;
+class KernelReferenceImage;
 
 class KernelExportRegistry {
 public:
   enum class ExportKind {
     ModuleExport,
     ModuleData,
+    ObjectTypeData,
     FrameworkFunction,
     DMAFunction,
-    ProviderFunction
+    ProviderFunction,
+    ProcessData,
+    ProcessorData,
+    NlsData,
+    HalDispatchData,
+    HalDispatchFunction
   };
 
   struct Export {
@@ -52,11 +60,11 @@ public:
     }
   };
 
-  /// Recognized PE import providers, folded case-insensitively. The kernel's
-  /// multiprocessor spelling aliases ntoskrnl; HAL and WDFLDR keep their own
-  /// namespaces.
-  /// Returned names have static storage. Loader validation shares this policy.
-  static std::optional<llvm::StringRef>
+  /// Bounded PE module basenames, folded case-insensitively. The kernel's
+  /// multiprocessor spelling aliases ntoskrnl; other providers keep independent
+  /// namespaces and unmodeled imports remain lazy traps. Loader validation
+  /// shares this policy; accepting a module grants no execution semantics.
+  static std::optional<std::string>
   canonicalImportModule(llvm::StringRef Module);
   /// Stable image identity shared by PE exports and module enumeration.
   static std::optional<uint64_t> moduleBase(llvm::StringRef Module);
@@ -67,9 +75,36 @@ public:
   /// Complete service regions, including identities registered after startup.
   /// Direct execution must stop before entering any byte of these bodies.
   static llvm::ArrayRef<ExecutionWatch> executionWatches();
+  static bool matchesImportProvider(llvm::StringRef Requested,
+                                    llvm::StringRef Provided);
 
   llvm::Error initialize(const DriverOptions &Options);
+  /// The authenticated image owns every typed data inventory. Keep complete
+  /// reference registration here so new data families cannot be omitted by
+  /// individual callers. Explicit inventories below support malformed-input
+  /// validation and synthetic reference construction.
+  llvm::Error attachReference(const KernelReferenceImage &,
+                              const DriverOptions &);
+  llvm::Error attachReferenceImage(
+      const std::map<std::string, uint64_t> &Names,
+      const DriverOptions &Options,
+      const std::map<std::string, uint64_t> &Data = {},
+      const std::map<std::string, uint64_t> &ProcessData = {},
+      const std::map<std::string, uint64_t> &ProcessorData = {},
+      const std::map<std::string, uint64_t> &NlsData = {},
+      const std::map<std::string, uint64_t> &HalData = {});
+  llvm::Expected<uint64_t> insertHalDispatchFunction(uint64_t Table);
   llvm::Expected<uint64_t> bindImport(const DriverImport &Import);
+  /// Pure lookup for a stopped mapping plan. Never allocates a new thunk or
+  /// changes availability while a module transaction is being prepared.
+  llvm::Expected<uint64_t> existingImport(const DriverImport &) const;
+  /// Missing identity is distinct from explicit absence and invalid input.
+  /// Never creates a thunk; used by the stopped module linker.
+  llvm::Expected<std::optional<uint64_t>>
+  findImport(const DriverImport &) const;
+  std::set<std::string> importProviders() const;
+  /// Kernel-only dynamic lookup, including kernel_exports scenario overrides.
+  /// Static WDF imports and bound function tables never imply kernel presence.
   /// Kernel/HAL dynamic lookup, including kernel_exports scenario overrides.
   /// Static WDF imports and bound function tables never imply system presence.
   /// Conflicting identities are refused rather than selecting a guessed owner.
@@ -99,6 +134,8 @@ private:
                                   uint64_t Binding = 0);
   bool Initialized = false;
   size_t ThunkCount = 0;
+  bool ReferenceNamespace = false;
+  uint64_t ReferenceHalCacheFunction = 0;
   std::map<Identity, uint64_t> Names;
   std::map<uint64_t, Export> Exports;
 };

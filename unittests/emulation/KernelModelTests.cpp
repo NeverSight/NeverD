@@ -15,6 +15,7 @@
 #include "os/windows/kernel/KernelAPINames.h"
 #include "os/windows/kernel/KernelException.h"
 #include "os/windows/kernel/KernelModel.h"
+#include "os/windows/kernel/KernelObjectTypes.h"
 #include "os/windows/kernel/WindowsKernelLayout.h"
 
 #include <algorithm>
@@ -37,6 +38,7 @@ protected:
   DriverResult Result;
   std::unique_ptr<KernelModel> Model;
 
+  virtual DriverOptions modelOptions() { return {}; }
   void SetUp() override {
     auto Backend = UnicornBackend::create(4 * 1024 * 1024);
     ASSERT_TRUE(static_cast<bool>(Backend))
@@ -48,7 +50,7 @@ protected:
     Image.Base = 0x180000000;
     Image.Entry = Entry;
     Image.Size = 0x3000;
-    success(Model->initialize(Image, DriverOptions{}));
+    success(Model->initialize(Image, modelOptions()));
   }
 
   void success(llvm::Error Error) {
@@ -73,7 +75,8 @@ protected:
       ADD_FAILURE() << Name.str() << " unexpectedly succeeded";
       return {};
     }
-    return llvm::toString(Value.takeError());
+    auto Message = llvm::toString(Value.takeError());
+    return Message;
   }
 
   std::string denied(uint64_t Address, uint32_t Size, bool IsWrite = false) {
@@ -148,6 +151,15 @@ protected:
     EXPECT_EQ(Fault->Address, Output);
     EXPECT_EQ(Fault->Size, 8u);
     EXPECT_EQ(Fault->Access, BackendAccessKind::Write);
+  }
+};
+
+class DriverNativeKernelModel : public DriverKernelModel {
+protected:
+  DriverOptions modelOptions() override {
+    DriverOptions O;
+    O.Version = DriverOptions::WindowsVersion{10, 0, 19041};
+    return O;
   }
 };
 
@@ -278,6 +290,882 @@ TEST_F(DriverKernelModel, StackQueryActivationPreservesExactLifetimeExtent) {
   Model->enterExecution(Base);
   EXPECT_EQ(invoke("IoGetInitialStack", {}), Base + Size);
   success(Model->retireStack(Base, Size));
+}
+
+TEST_F(DriverNativeKernelModel,
+       ProcessLookupSharesIdentityAndBalancesReferences) {
+  Model->enterExecution(profile::StackBase);
+  const auto Borrowed = invoke("IoGetCurrentProcess", {});
+  ASSERT_NE(Borrowed, 0u);
+  EXPECT_EQ(invoke("PsGetProcessId", {Borrowed}), 4u);
+  EXPECT_NE(
+      failure("ObfDereferenceObject", {Borrowed}).find("referenced process"),
+      std::string::npos);
+  for (unsigned I = 0; I < 2; ++I) {
+    ASSERT_EQ(invoke("PsLookupProcessByProcessId", {4, Scratch}), 0u);
+    EXPECT_EQ(integer(Scratch), Borrowed);
+  }
+  EXPECT_NE(denied(Borrowed, 8).find("opaque process"), std::string::npos);
+  EXPECT_EQ(invoke("ObfDereferenceObject", {Borrowed}), 0u);
+  EXPECT_EQ(invoke("ObfDereferenceObject", {Borrowed}), 0u);
+  EXPECT_NE(
+      failure("ObfDereferenceObject", {Borrowed}).find("referenced process"),
+      std::string::npos);
+  EXPECT_EQ(invoke("IoGetCurrentProcess", {}), Borrowed);
+}
+
+TEST_F(DriverNativeKernelModel,
+       ThreadLookupSharesCurrentAndNestedThreadIdentity) {
+  Model->enterExecution(profile::StackBase);
+  // The initial guest CID is allocated independently of its stack/scheduler
+  // key.
+  ASSERT_EQ(
+      invoke("PsLookupThreadByThreadId", {profile::InitialThreadID, Scratch}),
+      0u);
+  const uint64_t Object = integer(Scratch);
+  const uint64_t ID = invoke("PsGetCurrentThreadId", {});
+  EXPECT_NE(ID, profile::StackBase);
+  EXPECT_EQ(invoke("PsGetCurrentThread", {}), Object);
+  EXPECT_EQ(invoke("KeGetCurrentThread", {}), Object);
+  EXPECT_EQ(invoke("PsGetThreadId", {Object}), ID);
+  const auto Saved = Model->captureExecutionContext();
+  Model->enterExecution(Scratch + 0x8000, profile::StackBase);
+  EXPECT_EQ(invoke("PsGetCurrentThreadId", {}), ID);
+  EXPECT_EQ(invoke("PsLookupThreadByThreadId", {ID, Scratch + 8}), 0u);
+  EXPECT_EQ(integer(Scratch + 8), Object);
+  success(Model->retireStack(Scratch + 0x8000, profile::PageSize));
+  success(Model->restoreExecutionContext(Saved));
+  EXPECT_NE(denied(Object, 8).find("opaque thread"), std::string::npos);
+  invoke("ObfDereferenceObject", {Object});
+  invoke("ObfDereferenceObject", {Object});
+  EXPECT_NE(failure("ObfDereferenceObject", {Object}).find("referenced thread"),
+            std::string::npos);
+  EXPECT_EQ(invoke("PsGetCurrentThread", {}), Object);
+}
+
+TEST_F(DriverNativeKernelModel,
+       Win32ThreadAssociationSharesIdentityAndClearsConditionally) {
+  Model->enterExecution(profile::StackBase);
+  const auto Thread = invoke("PsGetCurrentThread", {});
+  EXPECT_EQ(invoke("PsGetCurrentThreadWin32Thread", {}), 0u);
+  EXPECT_EQ(invoke("PsGetThreadWin32Thread", {Thread}), 0u);
+  invoke("PsSetThreadWin32Thread", {Thread, Scratch, 0xdead});
+  EXPECT_EQ(invoke("PsGetCurrentThreadWin32Thread", {}), Scratch);
+  invoke("PsSetThreadWin32Thread", {Thread, 0, Scratch + 8});
+  EXPECT_EQ(invoke("PsGetThreadWin32Thread", {Thread}), Scratch);
+  invoke("PsSetThreadWin32Thread", {Thread, Scratch + 8, 0});
+  EXPECT_EQ(invoke("PsGetThreadWin32Thread", {Thread}), Scratch + 8);
+  invoke("PsSetThreadWin32Thread", {Thread, 0, Scratch + 8});
+  EXPECT_EQ(invoke("PsGetCurrentThreadWin32Thread", {}), 0u);
+  EXPECT_NE(failure("PsGetThreadWin32Thread", {0}).find("known thread"),
+            std::string::npos);
+  EXPECT_NE(
+      failure("PsSetThreadWin32Thread", {Scratch, 1, 0}).find("known thread"),
+      std::string::npos);
+}
+
+TEST_F(DriverNativeKernelModel,
+       Win32ThreadBorrowedStateIsUnknownAndSurvivesNestedExecution) {
+  Model->enterExecution(profile::StackBase);
+  const auto System = invoke("PsGetCurrentThread", {});
+  success(Model->setUserRequestContext(true, 100));
+  const auto User = invoke("PsGetCurrentThread", {});
+  EXPECT_NE(failure("PsGetCurrentThreadWin32Thread", {}).find("unspecified"),
+            std::string::npos);
+  EXPECT_NE(failure("PsSetThreadWin32Thread", {User, 0, 0}).find("unspecified"),
+            std::string::npos);
+  invoke("PsSetThreadWin32Thread", {User, Scratch, 0});
+  const auto Saved = Model->captureExecutionContext();
+  success(Model->inheritExecutionContext(Scratch + 0x8000, profile::StackBase));
+  Model->enterExecution(Scratch + 0x8000, profile::StackBase);
+  EXPECT_EQ(invoke("PsGetCurrentThreadWin32Thread", {}), Scratch);
+  invoke("PsSetThreadWin32Thread", {User, Scratch + 8, 0});
+  success(Model->retireStack(Scratch + 0x8000, profile::PageSize));
+  success(Model->restoreExecutionContext(Saved));
+  EXPECT_EQ(invoke("PsGetCurrentThreadWin32Thread", {}), Scratch + 8);
+  success(Model->setUserRequestContext(true, 200));
+  EXPECT_NE(failure("PsGetCurrentThreadWin32Thread", {}).find("unspecified"),
+            std::string::npos);
+  EXPECT_EQ(invoke("PsGetThreadWin32Thread", {User}), Scratch + 8);
+  EXPECT_EQ(invoke("PsGetThreadWin32Thread", {System}), 0u);
+}
+
+TEST_F(DriverNativeKernelModel, Win32ThreadQueryRequiresActiveExecution) {
+  EXPECT_NE(
+      failure("PsGetCurrentThreadWin32Thread", {}).find("active execution"),
+      std::string::npos);
+}
+
+TEST_F(DriverNativeKernelModel,
+       Win32ThreadNewSystemThreadHasIndependentAssociation) {
+  success(Memory->map(Entry, profile::PageSize, Read | Execute));
+  Model->enterExecution(profile::StackBase);
+  const auto Parent = invoke("PsGetCurrentThread", {});
+  invoke("PsSetThreadWin32Thread", {Parent, Scratch, 0});
+  ASSERT_EQ(
+      invoke("PsCreateSystemThread", {Scratch + 0x100, 0, 0, 0, 0, Entry, 0}),
+      0u);
+  auto Next = llvm::cantFail(Model->nextScheduled(false));
+  ASSERT_TRUE(Next);
+  Model->enterExecution(profile::CallbackStackBase, Next->ID);
+  const auto Child = invoke("PsGetCurrentThread", {});
+  ASSERT_NE(Child, Parent);
+  EXPECT_EQ(invoke("PsGetCurrentThreadWin32Thread", {}), 0u);
+  invoke("PsSetThreadWin32Thread", {Child, Scratch + 16, 0});
+  Model->enterExecution(profile::StackBase);
+  EXPECT_EQ(invoke("PsGetCurrentThreadWin32Thread", {}), Scratch);
+  EXPECT_EQ(invoke("PsGetThreadWin32Thread", {Child}), Scratch + 16);
+}
+
+TEST_F(DriverNativeKernelModel,
+       ThreadProcessIdentitySurvivesForegroundContextSwitches) {
+  Model->enterExecution(profile::StackBase);
+  const auto System = invoke("PsGetCurrentThread", {});
+  const auto SystemID = invoke("PsGetCurrentThreadId", {});
+  const auto SystemProcess = invoke("IoGetCurrentProcess", {});
+  EXPECT_EQ(invoke("PsGetThreadProcessId", {System}), 4u);
+  EXPECT_EQ(invoke("PsGetThreadProcess", {System}), SystemProcess);
+  EXPECT_EQ(invoke("IoThreadToProcess", {System}), SystemProcess);
+  invoke("KeSetPriorityThread", {System, 15});
+  const auto SystemContext = Model->captureExecutionContext();
+  EXPECT_EQ(Model->threadPriority(profile::StackBase), 15);
+  success(Model->setUserRequestContext(true, 0x3456));
+  const auto User = invoke("PsGetCurrentThread", {});
+  const auto UserID = invoke("PsGetCurrentThreadId", {});
+  ASSERT_NE(User, System);
+  ASSERT_NE(UserID, SystemID);
+  EXPECT_EQ(invoke("PsGetThreadProcessId", {User}), 0x3456u);
+  EXPECT_EQ(invoke("PsGetThreadProcess", {User}),
+            invoke("IoGetCurrentProcess", {}));
+  EXPECT_EQ(invoke("PsGetThreadProcessId", {System}), 4u);
+  EXPECT_EQ(Model->threadPriority(profile::StackBase),
+            thread_priority::Default);
+  EXPECT_EQ(Model->readyThread(profile::StackBase, 1).Priority,
+            thread_priority::Default);
+  invoke("KeSetPriorityThread", {User, 7});
+  EXPECT_EQ(Model->threadPriority(profile::StackBase), 7);
+  EXPECT_NE(failure("ZwQueryInformationThread",
+                    {windows::CurrentThreadPseudoHandle, 9, Scratch, 8, 0})
+                .find("start"),
+            std::string::npos);
+  const auto Saved = Model->captureExecutionContext();
+  success(Model->inheritExecutionContext(Scratch + 0x8000, profile::StackBase));
+  Model->enterExecution(Scratch + 0x8000, profile::StackBase);
+  EXPECT_EQ(invoke("PsGetCurrentThread", {}), User);
+  EXPECT_EQ(invoke("PsGetThreadProcessId", {User}), 0x3456u);
+  success(Model->retireStack(Scratch + 0x8000, profile::PageSize));
+  success(Model->restoreExecutionContext(Saved));
+  success(Model->setUserRequestContext(true, 0x5678));
+  const auto Peer = invoke("PsGetCurrentThread", {});
+  ASSERT_NE(Peer, User);
+  EXPECT_EQ(invoke("PsGetThreadProcessId", {Peer}), 0x5678u);
+  EXPECT_EQ(Model->readyThread(profile::StackBase, 1, &Saved).Priority, 7);
+  EXPECT_EQ(Model->readyThread(profile::StackBase, 1, &SystemContext).Priority,
+            15);
+  EXPECT_EQ(invoke("KeSetPriorityThread", {User, 9}), 7u);
+  EXPECT_EQ(Model->readyThread(profile::StackBase, 1, &Saved).Priority, 9);
+  invoke("KeSetPriorityThread", {User, 7});
+  success(Model->setUserRequestContext(true, 0x3456));
+  EXPECT_EQ(invoke("PsGetCurrentThread", {}), User);
+  EXPECT_EQ(Model->threadPriority(profile::StackBase), 7);
+  EXPECT_EQ(invoke("PsLookupThreadByThreadId", {SystemID, Scratch}), 0u);
+  EXPECT_EQ(integer(Scratch), System);
+  invoke("ObfDereferenceObject", {System});
+  success(Model->setUserRequestContext(false));
+  EXPECT_EQ(invoke("PsGetCurrentThread", {}), System);
+  EXPECT_EQ(Model->threadPriority(profile::StackBase), 15);
+  EXPECT_EQ(Model->readyThread(profile::StackBase, 1).Priority, 15);
+}
+
+TEST_F(DriverNativeKernelModel,
+       SystemThreadClientIDMatchesLookupAndScheduledIdentity) {
+  Model->enterExecution(profile::StackBase);
+  success(Model->setUserRequestContext(true, 0x3456));
+  success(
+      Memory->writeInteger(Scratch + 0x100, windows::ObjectAttributesSize, 4));
+  success(
+      Memory->writeInteger(Scratch + 0x118, windows::ObjectKernelHandle, 4));
+  ASSERT_EQ(
+      invoke("PsCreateSystemThread", {Scratch, 0x10000000, Scratch + 0x100, 0,
+                                      Scratch + 0x200, Entry, 0x9876}),
+      0u);
+  const auto Handle = integer(Scratch), PID = integer(Scratch + 0x200),
+             CID = integer(Scratch + 0x208);
+  EXPECT_EQ(PID, windows::SystemProcessID);
+  ASSERT_NE(CID, 0u);
+  ASSERT_EQ(invoke("PsLookupThreadByThreadId", {CID, Scratch + 8}), 0u);
+  const auto Object = integer(Scratch + 8);
+  EXPECT_EQ(invoke("PsGetThreadId", {Object}), CID);
+  EXPECT_EQ(invoke("PsGetThreadProcessId", {Object}), PID);
+  ASSERT_EQ(
+      invoke("ObReferenceObjectByHandle", {Handle, 0, 0, 0, Scratch + 16, 0}),
+      0u);
+  EXPECT_EQ(integer(Scratch + 16), Object);
+  invoke("ObfDereferenceObject", {Object});
+  invoke("ZwClose", {Handle});
+  auto Next = Model->nextScheduled(false);
+  ASSERT_TRUE(bool(Next)) << llvm::toString(Next.takeError());
+  ASSERT_TRUE(*Next);
+  EXPECT_EQ((**Next).Arguments, std::vector<uint64_t>{0x9876});
+  Model->enterExecution(Scratch + 0x8000, (**Next).ID);
+  EXPECT_EQ(invoke("PsGetCurrentThreadId", {}), CID);
+  EXPECT_EQ(invoke("PsGetCurrentThread", {}), Object);
+  EXPECT_EQ(invoke("PsGetCurrentProcessId", {}), PID);
+  invoke("PsTerminateSystemThread", {0});
+  ASSERT_TRUE(Model->takeThreadTermination());
+  success(Model->finishScheduled((**Next).ID));
+  invoke("ObfDereferenceObject", {Object});
+}
+
+TEST_F(DriverNativeKernelModel,
+       SystemThreadClientIDPreflightPreservesHandleAndIdentity) {
+  Model->enterExecution(profile::StackBase);
+  const auto Root = invoke("PsGetCurrentThreadId", {});
+  success(Memory->writeInteger(Scratch, 0xdeadbeef, 8));
+  success(Memory->writeInteger(Scratch + 0xff8, 0x12345678, 8));
+  success(Memory->protect(Scratch + 0x1000, profile::PageSize, Read));
+  EXPECT_NE(failure("PsCreateSystemThread",
+                    {Scratch, 0x10000000, 0, 0, Scratch + 0xff8, Entry, 0})
+                .find("permissions"),
+            std::string::npos);
+  EXPECT_EQ(integer(Scratch), 0xdeadbeefu);
+  EXPECT_EQ(integer(Scratch + 0xff8), 0x12345678u);
+  EXPECT_NE(failure("PsCreateSystemThread",
+                    {Scratch, 0x10000000, 0, 0, Scratch + 0xfff8, Entry, 0})
+                .find("permissions"),
+            std::string::npos);
+  EXPECT_EQ(integer(Scratch), 0xdeadbeefu);
+  EXPECT_NE(failure("PsCreateSystemThread",
+                    {Scratch, 0x10000000, 0, 0, Scratch + 4, Entry, 0})
+                .find("overlapping"),
+            std::string::npos);
+  auto Empty = Model->nextScheduled(false);
+  ASSERT_TRUE(bool(Empty)) << llvm::toString(Empty.takeError());
+  EXPECT_FALSE(*Empty);
+  success(Memory->protect(Scratch + 0x1000, profile::PageSize, Read | Write));
+  ASSERT_EQ(invoke("PsCreateSystemThread",
+                   {Scratch, 0x10000000, 0, 0, Scratch + 0x200, Entry, 0}),
+            0u);
+  EXPECT_EQ(integer(Scratch), profile::SystemThreadHandleBase);
+  EXPECT_EQ(integer(Scratch + 0x208), Root + profile::ThreadIDStride);
+}
+
+TEST_F(DriverNativeKernelModel,
+       GenericThreadHandlesKeepOneObjectAndRejectPrivileges) {
+  Model->enterExecution(profile::StackBase);
+  const auto Object = invoke("PsGetCurrentThread", {});
+  for (uint64_t Access : {0x80000000ULL, 0x40000000ULL, 0x20000000ULL,
+                          0x10000000ULL, 0xf0000040ULL}) {
+    ASSERT_EQ(invoke("ObOpenObjectByPointer",
+                     {Object, windows::ObjectKernelHandle, 0, Access, 0,
+                      windows::KernelMode, Scratch}),
+              0u);
+    const auto Handle = integer(Scratch);
+    ASSERT_EQ(
+        invoke("ObReferenceObjectByHandle", {Handle, 0, 0, 0, Scratch + 8, 0}),
+        0u);
+    EXPECT_EQ(integer(Scratch + 8), Object);
+    invoke("ObfDereferenceObject", {Object});
+    invoke("ZwClose", {Handle});
+  }
+  success(Memory->writeInteger(Scratch, 0xdeadbeef, 8));
+  EXPECT_NE(failure("PsCreateSystemThread",
+                    {Scratch, 0x11000000, 0, 0, Scratch + 0x200, Entry, 0})
+                .find("access mask"),
+            std::string::npos);
+  EXPECT_EQ(integer(Scratch), 0xdeadbeefu);
+}
+
+TEST_F(DriverNativeKernelModel,
+       SystemThreadModernProfileAlwaysReturnsKernelHandle) {
+  Model.reset();
+  auto Backend = UnicornBackend::create(4 * 1024 * 1024);
+  ASSERT_TRUE(bool(Backend));
+  Memory = std::move(*Backend);
+  success(Memory->map(Scratch, 0x10000, Read | Write));
+  Model = std::make_unique<KernelModel>(*Memory, Result);
+  DriverImage Image;
+  Image.Base = 0x180000000;
+  Image.Entry = Entry;
+  Image.Size = 0x3000;
+  DriverOptions Options;
+  Options.Version = DriverOptions::WindowsVersion{10, 0, 19041};
+  success(Model->initialize(Image, Options));
+  Model->enterExecution(profile::StackBase);
+  ASSERT_EQ(invoke("PsCreateSystemThread",
+                   {Scratch, 0x10000000, 0, 0, Scratch + 0x200, Entry, 0}),
+            0u);
+  const auto Handle = integer(Scratch);
+  success(Model->setUserRequestContext(true, 100));
+  ASSERT_EQ(
+      invoke("ObReferenceObjectByHandle", {Handle, 0, 0, 0, Scratch + 8, 0}),
+      0u);
+  const auto Object = integer(Scratch + 8);
+  EXPECT_EQ(invoke("PsGetThreadId", {Object}), integer(Scratch + 0x208));
+  invoke("ObfDereferenceObject", {Object});
+  EXPECT_EQ(invoke("ZwClose", {Handle}), 0u);
+}
+
+TEST_F(DriverNativeKernelModel,
+       ThreadProcessQueryKeepsSystemCreationOwnerAfterExit) {
+  Model->enterExecution(profile::StackBase);
+  success(Model->setUserRequestContext(true, 0x3456));
+  ASSERT_EQ(invoke("PsCreateSystemThread", {Scratch, windows::ThreadAllAccess,
+                                            Scratch + 0x100, 0, 0, Entry, 0}),
+            windows::StatusInvalidParameter);
+  success(
+      Memory->writeInteger(Scratch + 0x100, windows::ObjectAttributesSize, 4));
+  success(
+      Memory->writeInteger(Scratch + 0x118, windows::ObjectKernelHandle, 4));
+  ASSERT_EQ(invoke("PsCreateSystemThread", {Scratch, windows::ThreadAllAccess,
+                                            Scratch + 0x100, 0, 0, Entry, 0}),
+            0u);
+  const auto Handle = integer(Scratch);
+  ASSERT_EQ(
+      invoke("ObReferenceObjectByHandle", {Handle, 0, 0, 0, Scratch + 8, 0}),
+      0u);
+  const auto Object = integer(Scratch + 8);
+  EXPECT_EQ(invoke("PsGetThreadProcessId", {Object}), 4u);
+  const auto Process = invoke("PsGetThreadProcess", {Object});
+  EXPECT_EQ(invoke("PsGetProcessId", {Process}), 4u);
+  auto Call = llvm::cantFail(Model->nextScheduled(false));
+  ASSERT_TRUE(Call);
+  Model->enterExecution(Call->ID);
+  EXPECT_EQ(invoke("PsGetCurrentThread", {}), Object);
+  EXPECT_EQ(invoke("PsGetThreadProcessId", {Object}), 4u);
+  invoke("PsTerminateSystemThread", {0});
+  ASSERT_TRUE(Model->takeThreadTermination());
+  success(Model->finishScheduled(Call->ID));
+  Model->enterExecution(profile::StackBase);
+  invoke("ZwClose", {Handle});
+  EXPECT_EQ(invoke("PsGetThreadProcessId", {Object}), 4u);
+  EXPECT_EQ(invoke("IoThreadToProcess", {Object}), Process);
+  invoke("ObfDereferenceObject", {Object});
+  EXPECT_NE(failure("PsGetThreadProcessId", {Object}).find("known thread"),
+            std::string::npos);
+  EXPECT_NE(denied(Object, 1).find("freed"), std::string::npos);
+}
+
+TEST_F(DriverNativeKernelModel,
+       FixedControlStateDoesNotInventOtherMSRProviders) {
+  EXPECT_EQ(Model->guestCR4(), 0x620u);
+  EXPECT_TRUE(Model->hasModelSpecificRegisters());
+  auto CET = Model->readModelSpecificRegister(windows::IA32SupervisorCET);
+  ASSERT_TRUE(bool(CET));
+  EXPECT_EQ(*CET, 0u);
+  for (uint32_t Index : {uint32_t(windows::IA32LStar), uint32_t(0x6a3)}) {
+    auto Unknown = Model->readModelSpecificRegister(Index);
+    ASSERT_FALSE(bool(Unknown));
+    EXPECT_NE(llvm::toString(Unknown.takeError()).find("unmodeled guest MSR"),
+              std::string::npos);
+  }
+}
+
+TEST_F(DriverNativeKernelModel,
+       ThreadProcessQueryRejectsUnknownIdentityAndIRQL) {
+  Model->enterExecution(Scratch + 0x8000);
+  const auto UnknownOwner = invoke("PsGetCurrentThread", {});
+  for (const auto *Name :
+       {"PsGetThreadProcessId", "PsGetThreadProcess", "IoThreadToProcess"}) {
+    EXPECT_NE(failure(Name, {UnknownOwner}).find("creating process"),
+              std::string::npos);
+    EXPECT_NE(failure(Name, {Scratch}).find("known thread"), std::string::npos);
+  }
+  Model->enterExecution(profile::StackBase);
+  const auto System = invoke("PsGetCurrentThread", {});
+  const auto Old = invoke("KfRaiseIrql", {3});
+  for (const auto *Name :
+       {"PsGetThreadProcessId", "PsGetThreadProcess", "IoThreadToProcess"})
+    EXPECT_NE(failure(Name, {System}).find("IRQL"), std::string::npos);
+  invoke("KeLowerIrql", {Old});
+}
+
+TEST_F(DriverNativeKernelModel,
+       ObjectTypeDataIsReadOnlyAndChecksThreadReferences) {
+  using object_type::Kind;
+  const uint64_t ThreadType = integer(object_type::slot(Kind::Thread));
+  const uint64_t FileType = integer(object_type::slot(Kind::File));
+  ASSERT_NE(ThreadType, 0u);
+  EXPECT_NE(ThreadType, FileType);
+  success(
+      Model->validateGuestAccess(object_type::slot(Kind::Thread), 8, false));
+  EXPECT_NE(
+      denied(object_type::slot(Kind::Thread), 8, true).find("object-type"),
+      std::string::npos);
+  EXPECT_NE(denied(object_type::slot(Kind::Thread) + 7, 2).find("object-type"),
+            std::string::npos);
+  EXPECT_NE(denied(ThreadType, 1).find("object-type"), std::string::npos);
+  ASSERT_EQ(invoke("PsCreateSystemThread",
+                   {Scratch, windows::ThreadAllAccess, 0, 0, 0, Entry, 0}),
+            0u);
+  const uint64_t Handle = integer(Scratch);
+  success(Memory->writeInteger(Scratch + 8, 0x12345678, 8));
+  EXPECT_EQ(invoke("ObReferenceObjectByHandle",
+                   {Handle, 0, FileType, 0, Scratch + 8, 0}),
+            windows::StatusObjectTypeMismatch);
+  EXPECT_EQ(integer(Scratch + 8), 0x12345678u);
+  EXPECT_EQ(invoke("ObReferenceObjectByHandle",
+                   {Handle, 0, ThreadType, 0, Scratch + 8, 0}),
+            0u);
+  const uint64_t Object = integer(Scratch + 8);
+  invoke("ObfDereferenceObject", {Object});
+  EXPECT_NE(failure("ObfDereferenceObject", {Object}).find("referenced thread"),
+            std::string::npos);
+  invoke("ZwClose", {Handle});
+}
+
+TEST_F(DriverNativeKernelModel,
+       OpenPointerHandlesRetainBorrowedThreadsIndependently) {
+  constexpr uint64_t Stack = Scratch + 0x8000;
+  Model->enterExecution(Stack);
+  const auto Object = invoke("PsGetCurrentThread", {});
+  const auto Type = integer(object_type::slot(object_type::Kind::Thread));
+  ASSERT_EQ(
+      invoke("ObOpenObjectByPointer",
+             {Object, windows::ObjectKernelHandle, 0, 0x40, Type, 0, Scratch}),
+      0u);
+  const auto First = integer(Scratch);
+  ASSERT_EQ(
+      invoke("ObOpenObjectByPointer",
+             {Object, windows::ObjectKernelHandle, 0, 0, 0, 0, Scratch + 8}),
+      0u);
+  const auto Second = integer(Scratch + 8);
+  ASSERT_NE(First, Second);
+  EXPECT_NE(failure("ObfDereferenceObject", {Object}).find("referenced thread"),
+            std::string::npos); // Handles did not create caller pointer refs.
+  success(Model->retireStack(Stack, profile::PageSize));
+  Model->enterExecution(profile::StackBase);
+  EXPECT_EQ(invoke("ZwClose", {First}), 0u);
+  EXPECT_EQ(invoke("ZwClose", {First}), windows::StatusInvalidHandle);
+  EXPECT_EQ(invoke("ObReferenceObjectByHandle",
+                   {Second, 0, Type, 0, Scratch + 16, 0}),
+            0u);
+  EXPECT_EQ(integer(Scratch + 16), Object);
+  EXPECT_EQ(invoke("ZwClose", {Second}), 0u);
+  EXPECT_NE(denied(Object, 1).find("opaque thread"), std::string::npos);
+  invoke("ObfDereferenceObject", {Object});
+  EXPECT_NE(denied(Object, 1).find("freed"), std::string::npos);
+}
+
+TEST_F(DriverNativeKernelModel,
+       FailedOpenPointerDoesNotConsumeHandlesOrReferences) {
+  Model->enterExecution(profile::StackBase);
+  const auto Object = invoke("PsGetCurrentThread", {});
+  const auto Type = integer(object_type::slot(object_type::Kind::Thread));
+  const auto Wrong = integer(object_type::slot(object_type::Kind::File));
+  success(Memory->writeInteger(Scratch, 0x12345678, 8));
+  EXPECT_EQ(
+      invoke("ObOpenObjectByPointer", {Object, 0, 0, 0, Wrong, 0, Scratch}),
+      windows::StatusObjectTypeMismatch);
+  EXPECT_EQ(integer(Scratch), 0u); // Native type failure clears PHANDLE.
+  EXPECT_EQ(invoke("ObOpenObjectByPointer", {Object, 0, 0, 0, Type, 0, 0}),
+            windows::StatusInvalidParameter);
+  EXPECT_NE(
+      failure("ObOpenObjectByPointer", {Scratch, 0, 0, 0, Type, 0, Scratch})
+          .find("known live object"),
+      std::string::npos);
+  EXPECT_NE(failure("ObOpenObjectByPointer",
+                    {Object, 0, 0, 0, Type, 0,
+                     object_type::slot(object_type::Kind::Thread)})
+                .find("object-type"),
+            std::string::npos);
+  ASSERT_EQ(
+      invoke("ObOpenObjectByPointer", {Object, 0, 0, 0, Type, 0, Scratch}), 0u);
+  EXPECT_EQ(integer(Scratch), profile::SystemThreadHandleBase);
+  EXPECT_NE(failure("ObfDereferenceObject", {Object}).find("referenced thread"),
+            std::string::npos);
+  invoke("ZwClose", {integer(Scratch)});
+}
+
+TEST_F(DriverNativeKernelModel, OpenPointerWriteFaultLeavesNoUnloadOwnership) {
+  Model->enterExecution(profile::StackBase);
+  const auto Object = invoke("PsGetCurrentThread", {});
+  success(Memory->writeInteger(
+      Model->driverObject() + windows::DriverUnloadOffset, Entry, 8));
+  success(Memory->protect(Scratch, profile::PageSize, Read));
+  EXPECT_NE(failure("ObOpenObjectByPointer", {Object, 0, 0, 0, 0, 0, Scratch})
+                .find("write"),
+            std::string::npos);
+  // A backend fault is terminal for mutation. Read-only unload validation can
+  // still prove that the failed publication acquired neither kind of owner.
+  EXPECT_NE(failure("ObfDereferenceObject", {Object}).find("referenced thread"),
+            std::string::npos);
+  auto Unload = Model->beginUnload();
+  ASSERT_TRUE(bool(Unload)) << llvm::toString(Unload.takeError());
+  success(Model->finishUnload());
+}
+
+TEST_F(DriverNativeKernelModel,
+       ThreadStartQueryUsesInitialEntryAndTypedOutputWidths) {
+  Model->enterExecution(profile::StackBase);
+  success(Memory->writeInteger(Scratch + 8, 0x123456789abcdef0ULL, 8));
+  success(Memory->writeInteger(Scratch + 16, 0xabcdef0112345678ULL, 8));
+  EXPECT_EQ(invoke("ZwQueryInformationThread",
+                   {windows::CurrentThreadPseudoHandle, 0x100000009ULL, Scratch,
+                    0xaabbccdd00000008ULL, Scratch + 16}),
+            0u);
+  EXPECT_EQ(integer(Scratch), Entry);
+  EXPECT_EQ(integer(Scratch + 8), 0x123456789abcdef0ULL);
+  EXPECT_EQ(integer(Scratch + 16), 0xabcdef0100000008ULL);
+  const auto Object = invoke("PsGetCurrentThread", {});
+  EXPECT_NE(failure("ObfDereferenceObject", {Object}).find("referenced thread"),
+            std::string::npos);
+  const auto Saved = Model->captureExecutionContext();
+  Model->enterExecution(Scratch + 0x8000, profile::StackBase);
+  ASSERT_EQ(invoke("ZwQueryInformationThread",
+                   {windows::CurrentThreadPseudoHandle, 9, Scratch, 8, 0}),
+            0u);
+  EXPECT_EQ(integer(Scratch), Entry);
+  success(Model->retireStack(Scratch + 0x8000, profile::PageSize));
+  success(Model->restoreExecutionContext(Saved));
+}
+
+TEST_F(DriverNativeKernelModel,
+       ThreadStartQuerySurvivesSystemThreadExitUntilClose) {
+  constexpr uint64_t Start = Entry + 0x100;
+  ASSERT_EQ(invoke("PsCreateSystemThread",
+                   {Scratch, windows::ThreadAllAccess, 0, 0, 0, Start, 0}),
+            0u);
+  const auto Handle = integer(Scratch);
+  ASSERT_EQ(
+      invoke("ObReferenceObjectByHandle", {Handle, 0, 0, 0, Scratch + 8, 0}),
+      0u);
+  const auto Object = integer(Scratch + 8);
+  invoke("ObfDereferenceObject", {Object});
+  ASSERT_EQ(invoke("ZwQueryInformationThread", {Handle, 9, Scratch + 16, 8, 0}),
+            0u);
+  EXPECT_EQ(integer(Scratch + 16), Start);
+  auto Next = llvm::cantFail(Model->nextScheduled(false));
+  ASSERT_TRUE(Next);
+  Model->enterExecution(Scratch + 0x8000, Next->ID);
+  ASSERT_EQ(invoke("ZwQueryInformationThread",
+                   {windows::CurrentThreadPseudoHandle, 9, Scratch + 16, 8, 0}),
+            0u);
+  EXPECT_EQ(integer(Scratch + 16), Start);
+  invoke("PsTerminateSystemThread", {0x1234});
+  ASSERT_TRUE(Model->takeThreadTermination());
+  success(Model->finishScheduled(Next->ID));
+  Model->enterExecution(profile::StackBase);
+  ASSERT_EQ(invoke("ZwQueryInformationThread", {Handle, 9, Scratch + 16, 8, 0}),
+            0u);
+  EXPECT_EQ(integer(Scratch + 16), Start);
+  invoke("ZwClose", {Handle});
+  EXPECT_NE(denied(Object, 1).find("freed"), std::string::npos);
+  EXPECT_EQ(invoke("ZwQueryInformationThread", {Handle, 9, Scratch + 16, 8, 0}),
+            windows::StatusInvalidHandle);
+}
+
+TEST_F(DriverNativeKernelModel,
+       ThreadStartQueryLengthFailurePreservesBothOutputs) {
+  Model->enterExecution(profile::StackBase);
+  success(Memory->writeInteger(Scratch, 0x123456789abcdef0ULL, 8));
+  success(Memory->writeInteger(Scratch + 8, 0x5555666677778888ULL, 8));
+  for (uint64_t Length : {0ULL, 4ULL, 7ULL, 9ULL, 16ULL, 0xffffffffULL}) {
+    EXPECT_EQ(invoke("ZwQueryInformationThread",
+                     {0x1234, 9, Scratch, Length, Scratch + 8}),
+              windows::StatusInfoLengthMismatch);
+    EXPECT_EQ(integer(Scratch), 0x123456789abcdef0ULL);
+    EXPECT_EQ(integer(Scratch + 8), 0x5555666677778888ULL);
+  }
+}
+
+TEST_F(DriverNativeKernelModel, ThreadStartQueryReadsScheduledWorkItemEntry) {
+  Model->enterExecution(profile::StackBase);
+  ASSERT_EQ(invoke("IoCreateDevice",
+                   {Model->driverObject(), 0, 0, 0x22, 0, 0, Scratch}),
+            0u);
+  const auto Device = integer(Scratch);
+  const auto Work = invoke("IoAllocateWorkItem", {Device});
+  constexpr uint64_t Start = Entry + 0x200;
+  invoke("IoQueueWorkItem", {Work, Start, profile::DelayedWorkQueue, 0});
+  auto Next = llvm::cantFail(Model->nextScheduled(false));
+  ASSERT_TRUE(Next);
+  Model->enterExecution(Scratch + 0x8000, Next->ID);
+  ASSERT_EQ(invoke("ZwQueryInformationThread",
+                   {windows::CurrentThreadPseudoHandle, 9, Scratch, 8, 0}),
+            0u);
+  EXPECT_EQ(integer(Scratch), Start);
+  const auto Object = invoke("PsGetCurrentThread", {});
+  success(Model->finishScheduled(Next->ID));
+  EXPECT_NE(denied(Object, 1).find("freed"), std::string::npos);
+  Model->enterExecution(profile::StackBase);
+  invoke("IoFreeWorkItem", {Work});
+  invoke("IoDeleteDevice", {Device});
+}
+
+TEST_F(DriverNativeKernelModel,
+       ThreadStartQueryPreflightsAndOrdersOverlappingOutputs) {
+  Model->enterExecution(profile::StackBase);
+  constexpr uint64_t Length = Scratch + profile::PageSize;
+  success(Memory->writeInteger(Scratch, 0x123456789abcdef0ULL, 8));
+  success(Memory->protect(Length, profile::PageSize, Read));
+  EXPECT_NE(failure("ZwQueryInformationThread",
+                    {windows::CurrentThreadPseudoHandle, 9, Scratch, 8, Length})
+                .find("writable"),
+            std::string::npos);
+  EXPECT_EQ(integer(Scratch), 0x123456789abcdef0ULL);
+  success(Memory->protect(Length, profile::PageSize, Read | Write));
+  ASSERT_EQ(
+      invoke("ZwQueryInformationThread",
+             {windows::CurrentThreadPseudoHandle, 9, Scratch, 8, Scratch}),
+      0u);
+  EXPECT_EQ(integer(Scratch), (Entry & 0xffffffff00000000ULL) | 8);
+  ASSERT_EQ(
+      invoke("ZwQueryInformationThread",
+             {windows::CurrentThreadPseudoHandle, 9, Scratch, 8, Scratch + 4}),
+      0u);
+  EXPECT_EQ(integer(Scratch), (8ULL << 32) | (Entry & 0xffffffffULL));
+}
+
+TEST_F(DriverNativeKernelModel,
+       ThreadStartQueryRejectsMissingFactsAndUnknownClasses) {
+  Model->enterExecution(Scratch + 0x8000);
+  EXPECT_NE(failure("ZwQueryInformationThread",
+                    {windows::CurrentThreadPseudoHandle, 9, Scratch, 8, 0})
+                .find("no modeled execution start"),
+            std::string::npos);
+  Model->enterExecution(profile::StackBase);
+  for (uint64_t Class : {0ULL, 16ULL, 0xffffffffULL})
+    EXPECT_NE(
+        failure("ZwQueryInformationThread",
+                {windows::CurrentThreadPseudoHandle, Class, Scratch, 8, 0})
+            .find("unmodeled thread information class"),
+        std::string::npos);
+  EXPECT_EQ(invoke("ZwQueryInformationThread", {0xfffffffe, 9, Scratch, 8, 0}),
+            windows::StatusInvalidHandle);
+  invoke("KfRaiseIrql", {1});
+  EXPECT_NE(failure("ZwQueryInformationThread",
+                    {windows::CurrentThreadPseudoHandle, 9, Scratch, 8, 0})
+                .find("IRQL"),
+            std::string::npos);
+  invoke("KeLowerIrql", {0});
+}
+
+TEST_F(DriverNativeKernelModel,
+       OpenPointerHandlesEnforceProcessAndKernelOwnership) {
+  Model->enterExecution(profile::StackBase);
+  const auto Object = invoke("PsGetCurrentThread", {});
+  ASSERT_EQ(invoke("ObOpenObjectByPointer", {Object, 0, 0, 0, 0, 0, Scratch}),
+            0u);
+  const auto Local = integer(Scratch);
+  success(Model->setUserRequestContext(true, 0x1234));
+  EXPECT_EQ(
+      invoke("ObReferenceObjectByHandle", {Local, 0, 0, 0, Scratch + 8, 0}),
+      windows::StatusInvalidHandle);
+  EXPECT_EQ(invoke("ZwClose", {Local}), windows::StatusInvalidHandle);
+  EXPECT_NE(
+      failure("ObOpenObjectByPointer", {Object, 0, 0, 0, 0, 0, Scratch + 8})
+          .find("OBJ_KERNEL_HANDLE"),
+      std::string::npos);
+  ASSERT_EQ(
+      invoke("ObOpenObjectByPointer",
+             {Object, windows::ObjectKernelHandle, 0, 0, 0, 0, Scratch + 8}),
+      0u);
+  const auto Kernel = integer(Scratch + 8);
+  success(Model->setUserRequestContext(true, 0x5678));
+  ASSERT_EQ(
+      invoke("ObReferenceObjectByHandle", {Kernel, 0, 0, 0, Scratch + 16, 0}),
+      0u);
+  EXPECT_EQ(integer(Scratch + 16), Object);
+  invoke("ObfDereferenceObject", {Object});
+  invoke("ZwClose", {Kernel});
+  success(Model->setUserRequestContext(false));
+  EXPECT_EQ(invoke("ZwClose", {Local}), 0u);
+}
+
+TEST_F(DriverNativeKernelModel,
+       OpenPointerRejectsUnmodeledChecksAndUnloadLeaks) {
+  Model->enterExecution(profile::StackBase);
+  const auto Object = invoke("PsGetCurrentThread", {});
+  EXPECT_NE(
+      failure("ObOpenObjectByPointer", {Object, 0, Scratch, 0, 0, 0, Scratch})
+          .find("access state"),
+      std::string::npos);
+  EXPECT_EQ(invoke("ObOpenObjectByPointer", {Object, 0, 0, 0, 0, 1, Scratch}),
+            windows::StatusObjectTypeMismatch);
+  EXPECT_NE(failure("ObOpenObjectByPointer", {Object, 2, 0, 0, 0, 0, Scratch})
+                .find("attributes"),
+            std::string::npos);
+  EXPECT_NE(failure("ObOpenObjectByPointer",
+                    {Object, 0, 0, 0x01000000, 0, 0, Scratch})
+                .find("access mask"),
+            std::string::npos);
+  invoke("KfRaiseIrql", {2});
+  EXPECT_NE(failure("ObOpenObjectByPointer", {Object, 0, 0, 0, 0, 0, Scratch})
+                .find("IRQL"),
+            std::string::npos);
+  invoke("KeLowerIrql", {0});
+  invoke("KfRaiseIrql", {1});
+  ASSERT_EQ(invoke("ObOpenObjectByPointer", {Object, 0, 0, 0, 0, 0, Scratch}),
+            0u);
+  const auto Handle = integer(Scratch);
+  invoke("KeLowerIrql", {0});
+  success(Memory->writeInteger(
+      Model->driverObject() + windows::DriverUnloadOffset, Entry, 8));
+  auto Unload = Model->beginUnload();
+  ASSERT_TRUE(bool(Unload)) << llvm::toString(Unload.takeError());
+  auto Leaked = Model->finishUnload();
+  ASSERT_TRUE(bool(Leaked));
+  EXPECT_NE(llvm::toString(std::move(Leaked)).find("thread handles"),
+            std::string::npos);
+  invoke("ZwClose", {Handle});
+  success(Model->finishUnload());
+}
+
+TEST_F(DriverNativeKernelModel,
+       ThreadLookupRejectsUnknownIDsWithoutWritingOutput) {
+  Model->enterExecution(profile::StackBase);
+  const auto ID = invoke("PsGetCurrentThreadId", {});
+  success(Memory->writeInteger(Scratch, 0x12345678, 8));
+  const uint64_t UnknownIDs[] = {0, 4, 0x100000000ULL + ID, UINT64_MAX};
+  for (uint64_t Unknown : UnknownIDs) {
+    EXPECT_EQ(invoke("PsLookupThreadByThreadId", {Unknown, Scratch}),
+              windows::StatusInvalidCID);
+    EXPECT_EQ(integer(Scratch), 0x12345678u);
+  }
+  const auto Object = invoke("PsGetCurrentThread", {});
+  success(Memory->protect(Scratch, profile::PageSize, Read));
+  EXPECT_NE(failure("PsLookupThreadByThreadId", {ID, Scratch}).find("write"),
+            std::string::npos);
+  EXPECT_EQ(invoke("PsLookupThreadByThreadId", {ID, 0}),
+            windows::StatusInvalidParameter);
+  EXPECT_NE(failure("ObfDereferenceObject", {Object}).find("referenced thread"),
+            std::string::npos);
+  EXPECT_NE(failure("PsGetThreadId", {Scratch}).find("known thread"),
+            std::string::npos);
+}
+
+TEST_F(DriverNativeKernelModel,
+       ThreadLookupReferenceRetainsExitedBorrowedObject) {
+  constexpr uint64_t Stack = Scratch + 0x8000;
+  Model->enterExecution(Stack);
+  const auto Object = invoke("PsGetCurrentThread", {});
+  const auto ID = invoke("PsGetThreadId", {Object});
+  ASSERT_EQ(invoke("PsLookupThreadByThreadId", {ID, Scratch}), 0u);
+  success(Model->retireStack(Stack, profile::PageSize));
+  Model->enterExecution(profile::StackBase);
+  EXPECT_EQ(invoke("PsLookupThreadByThreadId", {ID, Scratch}),
+            windows::StatusInvalidCID);
+  EXPECT_EQ(invoke("PsGetThreadId", {Object}), ID);
+  EXPECT_NE(denied(Object, 8).find("opaque thread"), std::string::npos);
+  invoke("ObfDereferenceObject", {Object});
+  EXPECT_NE(denied(Object, 8).find("freed"), std::string::npos);
+  EXPECT_NE(failure("PsGetThreadId", {Object}).find("known thread"),
+            std::string::npos);
+  success(Model->activateStack(Stack, profile::PageSize));
+  Model->enterExecution(Stack);
+  EXPECT_NE(invoke("PsGetCurrentThreadId", {}), ID);
+  EXPECT_NE(invoke("PsGetCurrentThread", {}), Object);
+}
+
+TEST_F(DriverNativeKernelModel,
+       ThreadLookupAndHandleReferencesShareSystemLifetime) {
+  Model->enterExecution(profile::StackBase);
+  const auto RootID = invoke("PsGetCurrentThreadId", {});
+  ASSERT_EQ(invoke("PsCreateSystemThread",
+                   {Scratch, windows::ThreadAllAccess, 0, 0, 0, Entry, 0}),
+            0u);
+  const auto Handle = integer(Scratch);
+  ASSERT_EQ(invoke("ObReferenceObjectByHandle",
+                   {Handle, 0, 0, windows::KernelMode, Scratch + 8, 0}),
+            0u);
+  const auto Object = integer(Scratch + 8);
+  const auto ID = invoke("PsGetThreadId", {Object});
+  EXPECT_NE(ID, RootID);
+  EXPECT_NE(ID, Handle);
+  ASSERT_EQ(invoke("PsLookupThreadByThreadId", {ID, Scratch + 16}), 0u);
+  EXPECT_EQ(integer(Scratch + 16), Object);
+  invoke("ObfDereferenceObject", {Object}); // Drop only the handle lookup ref.
+  invoke("ZwClose", {Handle});
+  auto Next = llvm::cantFail(Model->nextScheduled(false));
+  ASSERT_TRUE(Next);
+  Model->enterExecution(Scratch + 0x8000, Next->ID);
+  EXPECT_EQ(invoke("PsGetCurrentThreadId", {}), ID);
+  EXPECT_EQ(invoke("PsGetCurrentThread", {}), Object);
+  invoke("PsTerminateSystemThread", {0});
+  ASSERT_TRUE(Model->takeThreadTermination());
+  success(Model->finishScheduled(Next->ID));
+  Model->enterExecution(profile::StackBase);
+  EXPECT_EQ(invoke("PsLookupThreadByThreadId", {ID, Scratch}),
+            windows::StatusInvalidCID);
+  EXPECT_EQ(invoke("PsGetThreadId", {Object}), ID);
+  invoke("ObfDereferenceObject", {Object});
+  EXPECT_NE(denied(Object, 8).find("freed"), std::string::npos);
+}
+
+TEST_F(DriverNativeKernelModel, ThreadLookupEnforcesIRQLAndUnloadReferences) {
+  Model->enterExecution(profile::StackBase);
+  const auto Object = invoke("PsGetCurrentThread", {});
+  const auto ID = invoke("PsGetCurrentThreadId", {});
+  invoke("KfRaiseIrql", {2});
+  EXPECT_NE(failure("PsLookupThreadByThreadId", {ID, Scratch}).find("IRQL"),
+            std::string::npos);
+  EXPECT_EQ(invoke("PsGetThreadId", {Object}), ID);
+  EXPECT_EQ(invoke("PsGetCurrentThreadId", {}), ID);
+  invoke("KeLowerIrql", {0});
+  ASSERT_EQ(invoke("PsLookupThreadByThreadId", {ID, Scratch}), 0u);
+  success(Memory->writeInteger(
+      Model->driverObject() + windows::DriverUnloadOffset, Entry, 8));
+  auto Unload = Model->beginUnload();
+  ASSERT_TRUE(bool(Unload)) << llvm::toString(Unload.takeError());
+  auto Leaked = Model->finishUnload();
+  ASSERT_TRUE(bool(Leaked));
+  EXPECT_NE(llvm::toString(std::move(Leaked)).find("thread pointer references"),
+            std::string::npos);
+  invoke("ObfDereferenceObject", {Object});
+  success(Model->finishUnload());
+  EXPECT_TRUE(Result.UnloadCompleted);
+}
+
+TEST_F(DriverNativeKernelModel,
+       ProcessLookupDoesNotTruncateIDsOrOverwriteFailedOutput) {
+  success(Memory->writeInteger(Scratch, 0x12345678, 8));
+  constexpr uint64_t UnknownIDs[] = {0, 12, 0x100000004ULL, UINT64_MAX};
+  for (uint64_t ID : UnknownIDs) {
+    EXPECT_EQ(invoke("PsLookupProcessByProcessId", {ID, Scratch}), 0xc000000bu);
+    EXPECT_EQ(integer(Scratch), 0x12345678u);
+  }
+  Model->enterExecution(profile::StackBase);
+  success(Model->setUserRequestContext(true, 0x3456));
+  EXPECT_EQ(invoke("PsLookupProcessByProcessId", {0x3456, Scratch}), 0u);
+  const auto User = integer(Scratch);
+  EXPECT_EQ(invoke("PsGetProcessId", {User}), 0x3456u);
+  EXPECT_EQ(invoke("IoGetCurrentProcess", {}), User);
+  EXPECT_EQ(invoke("ObfDereferenceObject", {User}), 0u);
+}
+
+TEST_F(DriverNativeKernelModel, FailedProcessLookupOutputAcquiresNoReference) {
+  Model->enterExecution(profile::StackBase);
+  const auto Borrowed = invoke("IoGetCurrentProcess", {});
+  success(Memory->protect(Scratch, profile::PageSize, Read));
+  EXPECT_NE(failure("PsLookupProcessByProcessId", {4, Scratch}).find("write"),
+            std::string::npos);
+  EXPECT_NE(
+      failure("ObfDereferenceObject", {Borrowed}).find("referenced process"),
+      std::string::npos);
+}
+
+TEST_F(DriverNativeKernelModel,
+       ProcessLookupEnforcesIRQLAndUnloadReferenceOwnership) {
+  Model->enterExecution(profile::StackBase);
+  const auto Old = invoke("KfRaiseIrql", {2});
+  EXPECT_NE(failure("PsLookupProcessByProcessId", {4, Scratch}).find("IRQL"),
+            std::string::npos);
+  success(Model->call("KeLowerIrql", {Old}).takeError());
+  ASSERT_EQ(invoke("PsLookupProcessByProcessId", {4, Scratch}), 0u);
+  const auto Object = integer(Scratch);
+  success(Memory->writeInteger(
+      Model->driverObject() + windows::DriverUnloadOffset, Entry, 8));
+  auto Unload = Model->beginUnload();
+  ASSERT_TRUE(bool(Unload)) << llvm::toString(Unload.takeError());
+  auto Leaked = Model->finishUnload();
+  ASSERT_TRUE(bool(Leaked));
+  EXPECT_NE(
+      llvm::toString(std::move(Leaked)).find("process pointer references"),
+      std::string::npos);
+  EXPECT_EQ(invoke("ObfDereferenceObject", {Object}), 0u);
+  success(Model->finishUnload());
+  EXPECT_TRUE(Result.UnloadCompleted);
 }
 
 TEST_F(DriverKernelModel,
@@ -1130,7 +2018,8 @@ TEST_F(DriverKernelModel, DebugLiteralsAreCapturedButVariadicFormatsFail) {
 
 TEST_F(DriverKernelModel, MemoryAPIsCannotBypassOpaqueObjectAccessChecks) {
   const uint64_t DriverSection = Model->driverObject() + 0x28;
-  EXPECT_NE(failure("memcpy", {Scratch, DriverSection, 8}).find("unmodeled"),
+  EXPECT_NE(failure("memcpy", {Scratch, Model->driverObject() + 0x10, 4})
+                .find("unmodeled"),
             std::string::npos);
   EXPECT_NE(failure("RtlZeroMemory", {DriverSection, 8}).find("opaque"),
             std::string::npos);
@@ -1538,6 +2427,433 @@ TEST_F(DriverKernelModel, RundownProtectionCountedFormsStepByTwiceTheCount) {
   EXPECT_EQ(invoke("ExAcquireRundownProtectionEx", {Ref, 5}), 0u);
   EXPECT_EQ(integer(Ref), 1u);
   invoke("ExFreePoolWithTag", {Ref, Tag});
+}
+
+TEST_F(DriverNativeKernelModel,
+       LoadedModuleHasImageIdentityAndBoundedMutableFlags) {
+  const uint64_t Module = integer(Model->driverObject() + 0x28);
+  ASSERT_NE(Module, 0u);
+  EXPECT_EQ(integer(Module), Module);
+  EXPECT_EQ(integer(Module + 8), Module);
+  EXPECT_EQ(integer(Module + 0x30), 0x180000000u);
+  EXPECT_EQ(integer(Module + 0x38), Entry);
+  EXPECT_EQ(integer(Module + 0x40, 4), 0x3000u);
+  EXPECT_EQ(integer(Module + 0x68, 4), 0u);
+  EXPECT_EQ(integer(Module + 0x6c, 2), 1u);
+  const uint64_t Name = integer(Module + 0x60);
+  const std::string Expected = "NeverDDriver.sys";
+  ASSERT_EQ(integer(Module + 0x58, 2), Expected.size() * 2);
+  for (size_t I = 0; I < Expected.size(); ++I)
+    EXPECT_EQ(integer(Name + I * 2, 2), uint8_t(Expected[I]));
+  success(Memory->writeInteger(Scratch, 0x02004000, 4));
+  invoke("RtlCopyMemory", {Module + 0x68, Scratch, 4});
+  EXPECT_EQ(integer(Module + 0x68, 4), 0x02004000u);
+  EXPECT_NE(failure("RtlZeroMemory", {Module + 0x30, 8}).find("read-only"),
+            std::string::npos);
+  EXPECT_NE(failure("RtlZeroMemory", {Module + 0x68, 8}).find("read-only"),
+            std::string::npos);
+  EXPECT_EQ(integer(Module + 0x68, 4), 0x02004000u);
+  EXPECT_NE(failure("memcpy", {Scratch, Module + 0x10, 8}).find("opaque"),
+            std::string::npos);
+  EXPECT_NE(failure("memcpy", {Scratch, Module + 0x70, 8}).find("opaque"),
+            std::string::npos);
+  EXPECT_NE(failure("RtlZeroMemory", {Name, 2}).find("read-only"),
+            std::string::npos);
+  EXPECT_EQ(integer(Name, 2), uint64_t('N'));
+}
+
+TEST_F(DriverNativeKernelModel,
+       AddressValidityIsAPureResidencyQueryNotObjectAccess) {
+  EXPECT_EQ(invoke("MmIsAddressValid", {Scratch}), 1u);
+  EXPECT_EQ(invoke("MmIsAddressValid", {Scratch + 0xffff}), 1u);
+  EXPECT_EQ(invoke("MmIsAddressValid", {Scratch + 0x10000}), 0u);
+  EXPECT_EQ(invoke("MmIsAddressValid", {0}), 0u);
+  EXPECT_EQ(invoke("MmIsAddressValid", {0x12345000}), 0u);
+  EXPECT_EQ(invoke("MmIsAddressValid", {UINT64_MAX}), 0u);
+  const uint64_t Module = integer(Model->driverObject() + 0x28);
+  EXPECT_EQ(invoke("MmIsAddressValid", {Module}), 1u);
+  const uint64_t OpaqueField = Model->driverObject() + 0x10;
+  EXPECT_EQ(invoke("MmIsAddressValid", {OpaqueField}), 1u);
+  EXPECT_NE(denied(OpaqueField, 4).find("unmodeled"), std::string::npos);
+  EXPECT_EQ(integer(Module + 0x68, 4), 0u);
+  EXPECT_FALSE(Memory->fault());
+}
+
+TEST_F(DriverNativeKernelModel,
+       BugCheckRegistrationRetainsStorageUntilDeregistered) {
+  success(Memory->map(Entry, 0x1000, Read | Execute));
+  const uint64_t Record =
+      invoke("ExAllocatePoolWithTag", {0, 0x30, 0x74736554});
+  ASSERT_NE(Record, 0u);
+  success(Memory->writeInteger(Record + 0x2c, 0, 1));
+  success(Memory->write(Scratch, {'T', 'e', 's', 't', 0}));
+  EXPECT_EQ(
+      invoke("KeRegisterBugCheckReasonCallback", {Record, Entry, 2, Scratch}),
+      1u);
+  EXPECT_EQ(integer(Record + 0x10), Entry);
+  EXPECT_EQ(integer(Record + 0x18), Scratch);
+  EXPECT_EQ(integer(Record + 0x28, 4), 2u);
+  EXPECT_EQ(integer(Record + 0x2c, 1), 1u);
+  EXPECT_EQ(
+      invoke("KeRegisterBugCheckReasonCallback", {Record, Entry, 2, Scratch}),
+      0u);
+  EXPECT_NE(failure("ExFreePool", {Record}).find("retained"),
+            std::string::npos);
+  EXPECT_NE(failure("RtlZeroMemory", {Record, 0x30}).find("opaque"),
+            std::string::npos);
+  EXPECT_EQ(invoke("KeDeregisterBugCheckReasonCallback", {Record}), 1u);
+  EXPECT_EQ(integer(Record + 0x2c, 1), 0u);
+  EXPECT_EQ(invoke("KeDeregisterBugCheckReasonCallback", {Record}), 0u);
+  EXPECT_EQ(
+      invoke("KeRegisterBugCheckReasonCallback", {Record, Entry, 7, Scratch}),
+      1u);
+  EXPECT_EQ(invoke("KeDeregisterBugCheckReasonCallback", {Record}), 1u);
+  invoke("ExFreePool", {Record});
+}
+
+TEST_F(DriverNativeKernelModel,
+       RejectedBugCheckRegistrationPreservesGuestBytes) {
+  success(Memory->map(Entry, 0x1000, Read | Execute));
+  success(Memory->write(Scratch + 0x100, {'T', 0}));
+  const auto Arguments = [&](uint32_t Reason) {
+    return invoke("KeRegisterBugCheckReasonCallback",
+                  {Scratch, Entry, Reason, Scratch + 0x100});
+  };
+  EXPECT_EQ(Arguments(0), 0u);
+  EXPECT_EQ(Arguments(8), 0u);
+  EXPECT_EQ(integer(Scratch + 0x2c, 1), 0u);
+  EXPECT_NE(failure("KeRegisterBugCheckReasonCallback",
+                    {Scratch, Scratch + 0x200, 2, Scratch + 0x100})
+                .find("executable"),
+            std::string::npos);
+  EXPECT_EQ(integer(Scratch + 0x2c, 1), 0u);
+  success(Memory->writeInteger(Scratch + 0x2c, 2, 1));
+  EXPECT_EQ(Arguments(2), 0u);
+  EXPECT_EQ(integer(Scratch + 0x2c, 1), 2u);
+  success(Memory->writeInteger(Scratch + 0x2c, 0, 1));
+  EXPECT_EQ(Arguments(2), 1u);
+  EXPECT_EQ(invoke("KeDeregisterBugCheckReasonCallback", {Scratch}), 1u);
+}
+
+TEST_F(DriverNativeKernelModel,
+       BugCheckComponentBorrowDoesNotOwnItsPoolStorage) {
+  success(Memory->map(Entry, 0x1000, Read | Execute));
+  const auto Name = invoke("ExAllocatePoolWithTag", {0, 16, 0x74736554});
+  ASSERT_NE(Name, 0u);
+  success(Memory->write(Name, {'N', 'a', 'm', 'e', 0}));
+  EXPECT_EQ(
+      invoke("KeRegisterBugCheckReasonCallback", {Scratch, Entry, 2, Name}),
+      1u);
+  EXPECT_EQ(invoke("ExFreePool", {Name}), 0u);
+  EXPECT_NE(denied(Name, 1).find("freed"), std::string::npos);
+  EXPECT_EQ(integer(Scratch + 0x18), Name); // Never replaced by a copied name.
+  success(Model->snapshot());
+  ASSERT_EQ(Result.BugCheckCallbacks.size(), 1u);
+  EXPECT_TRUE(Result.BugCheckCallbacks[0].ComponentStorageReleased);
+  EXPECT_EQ(Result.BugCheckCallbacks[0].Component, Name);
+  // Native deregistration removes the record without reading Component.
+  EXPECT_EQ(invoke("KeDeregisterBugCheckReasonCallback", {Scratch}), 1u);
+  success(Model->snapshot());
+  EXPECT_TRUE(Result.BugCheckCallbacks.empty());
+}
+
+TEST_F(DriverNativeKernelModel, BugCheckNameRetirementSurvivesStackSlotReuse) {
+  success(Memory->map(Entry, 0x1000, Read | Execute));
+  constexpr uint64_t Stack = Scratch + 0x4000, Name = Stack + 0x100;
+  success(Memory->write(Name, {'N', 0}));
+  EXPECT_EQ(
+      invoke("KeRegisterBugCheckReasonCallback", {Scratch, Entry, 4, Name}),
+      1u);
+  success(Model->validateGuestAccess(Name, 1, false));
+  success(Model->snapshot());
+  ASSERT_EQ(Result.BugCheckCallbacks.size(), 1u);
+  EXPECT_FALSE(Result.BugCheckCallbacks[0].ComponentStorageReleased);
+  success(Model->retireStack(Stack, 4096));
+  EXPECT_NE(denied(Name, 1).find("freed"), std::string::npos);
+  success(Model->activateStack(Stack, 4096));
+  success(Memory->write(Name, {'X', 0}));
+  success(Model->snapshot());
+  ASSERT_EQ(Result.BugCheckCallbacks.size(), 1u);
+  EXPECT_TRUE(Result.BugCheckCallbacks[0].ComponentStorageReleased);
+  EXPECT_EQ(Result.BugCheckCallbacks[0].Component, Name);
+  EXPECT_EQ(integer(Scratch + 0x18), Name);
+  EXPECT_EQ(invoke("KeDeregisterBugCheckReasonCallback", {Scratch}), 1u);
+}
+
+TEST_F(DriverNativeKernelModel,
+       RejectedBugCheckReleaseDoesNotPublishNameRetirement) {
+  success(Memory->map(Entry, 0x1000, Read | Execute));
+  const auto Record = invoke("ExAllocatePoolWithTag", {0, 128, 0x74736554});
+  ASSERT_NE(Record, 0u);
+  success(Memory->writeInteger(Record + 0x2c, 0, 1));
+  success(Memory->write(Record + 64, {'N', 0}));
+  EXPECT_EQ(invoke("KeRegisterBugCheckReasonCallback",
+                   {Record, Entry, 2, Record + 64}),
+            1u);
+  EXPECT_NE(failure("ExFreePool", {Record}).find("retained"),
+            std::string::npos);
+  auto E = Model->retireStack(Entry, 4096);
+  ASSERT_TRUE(bool(E));
+  EXPECT_NE(llvm::toString(std::move(E)).find("retained"), std::string::npos);
+  success(Model->snapshot());
+  ASSERT_EQ(Result.BugCheckCallbacks.size(), 1u);
+  EXPECT_FALSE(Result.BugCheckCallbacks[0].ComponentStorageReleased);
+  EXPECT_EQ(invoke("KeDeregisterBugCheckReasonCallback", {Record}), 1u);
+  EXPECT_EQ(invoke("ExFreePool", {Record}), 0u);
+}
+
+TEST_F(DriverKernelModel, VersionQueryRequiresExplicitGuestFacts) {
+  success(Memory->writeInteger(Scratch, 276, 4));
+  EXPECT_NE(failure("RtlGetVersion", {Scratch}).find("windows_version"),
+            std::string::npos);
+  EXPECT_EQ(integer(Scratch, 4), 276u);
+}
+
+TEST(DriverVersion, ConfiguredVersionWritesBothWDKLayoutsWithoutTouchingTail) {
+  for (unsigned Size : {0u, 276u, 284u}) {
+    auto Backend = UnicornBackend::create(4 * 1024 * 1024);
+    ASSERT_TRUE(bool(Backend)) << llvm::toString(Backend.takeError());
+    auto &Memory = **Backend;
+    DriverResult Result;
+    KernelModel Model(Memory, Result);
+    DriverImage Image;
+    Image.Base = 0x180000000;
+    Image.Entry = Image.Base + 0x1000;
+    Image.Size = 0x3000;
+    DriverOptions Options;
+    Options.Version = DriverOptions::WindowsVersion{10, 0, 19041};
+    llvm::cantFail(Model.initialize(Image, Options));
+    constexpr uint64_t Buffer = 0x60000000;
+    llvm::cantFail(Memory.map(Buffer, 0x1000, Read | Write));
+    llvm::cantFail(Memory.write(Buffer, std::vector<uint8_t>(300, 0xa5)));
+    llvm::cantFail(Memory.writeInteger(Buffer, Size, 4));
+    auto Status = Model.call("RtlGetVersion", {Buffer});
+    ASSERT_TRUE(bool(Status)) << llvm::toString(Status.takeError());
+    EXPECT_EQ(*Status, 0u);
+    EXPECT_EQ(llvm::cantFail(Memory.readInteger(Buffer, 4)), Size);
+    EXPECT_EQ(llvm::cantFail(Memory.readInteger(Buffer + 4, 4)), 10u);
+    EXPECT_EQ(llvm::cantFail(Memory.readInteger(Buffer + 8, 4)), 0u);
+    EXPECT_EQ(llvm::cantFail(Memory.readInteger(Buffer + 12, 4)), 19041u);
+    EXPECT_EQ(llvm::cantFail(Memory.readInteger(Buffer + 16, 4)), 2u);
+    EXPECT_EQ(llvm::cantFail(Memory.readInteger(Buffer + 20, 1)), 0xa5u);
+    EXPECT_EQ(llvm::cantFail(Memory.readInteger(Buffer + 284, 1)), 0xa5u);
+    if (Size == 284)
+      EXPECT_EQ(llvm::cantFail(Memory.readInteger(Buffer + 282, 1)), 1u);
+    llvm::cantFail(Memory.writeInteger(Buffer, 292, 4));
+    auto Bad = Model.call("RtlGetVersion", {Buffer});
+    ASSERT_FALSE(bool(Bad));
+    llvm::consumeError(Bad.takeError());
+    EXPECT_EQ(llvm::cantFail(Memory.readInteger(Buffer + 4, 4)), 10u);
+  }
+}
+
+TEST_F(DriverNativeKernelModel,
+       SystemModuleProbeAndQueryUseTheSameLoadedIdentity) {
+  Model->addReferenceModule(0xfffff80000000000, 0x1200000);
+  constexpr uint64_t Length = Scratch + 0x1000;
+  EXPECT_EQ(invoke("ZwQuerySystemInformation", {11, 0, 0, Length}),
+            0xc0000004u);
+  EXPECT_EQ(integer(Length, 4), 600u);
+  EXPECT_EQ(invoke("ZwQuerySystemInformation", {11, Scratch, 600, Length}), 0u);
+  EXPECT_EQ(integer(Scratch, 4), 2u);
+  EXPECT_EQ(integer(Scratch + 8 + 16), 0xfffff80000000000u);
+  EXPECT_EQ(integer(Scratch + 8 + 24, 4), 0x1200000u);
+  EXPECT_EQ(integer(Scratch + 8 + 296 + 16), 0x180000000u);
+  EXPECT_EQ(integer(Scratch + 8 + 296 + 24, 4), 0x3000u);
+  EXPECT_EQ(integer(Length, 4), 600u);
+  EXPECT_NE(failure("ZwQuerySystemInformation", {12, Scratch, 600, Length})
+                .find("class: 12"),
+            std::string::npos);
+  EXPECT_EQ(integer(Scratch, 4), 2u);
+  EXPECT_EQ(invoke("NtQuerySystemInformation", {11, 0, 0, Length}),
+            0xc0000004u);
+}
+
+TEST_F(DriverNativeKernelModel,
+       AnsiInitializationCountsBytesAndClearsRecordPadding) {
+  success(Memory->write(Scratch + 0x100, {'N', 'D', 0}));
+  success(Memory->write(Scratch, std::vector<uint8_t>(16, 0xa5)));
+  invoke("RtlInitAnsiString", {Scratch, Scratch + 0x100});
+  EXPECT_EQ(integer(Scratch, 2), 2u);
+  EXPECT_EQ(integer(Scratch + 2, 2), 3u);
+  EXPECT_EQ(integer(Scratch + 4, 4), 0u);
+  EXPECT_EQ(integer(Scratch + 8), Scratch + 0x100);
+  invoke("RtlInitAnsiString", {Scratch, 0});
+  EXPECT_EQ(integer(Scratch, 4), 0u);
+  EXPECT_EQ(integer(Scratch + 8), 0u);
+}
+
+TEST_F(DriverNativeKernelModel,
+       AllocatedRTLConversionsHaveIndependentOwnedLifetimes) {
+  constexpr uint64_t Ansi = Scratch, Wide = Scratch + 0x20;
+  constexpr uint64_t Roundtrip = Scratch + 0x40, Text = Scratch + 0x100;
+  success(Memory->write(Text, {'a', 'b', 'c', 0}));
+  invoke("RtlInitAnsiString", {Ansi, Text});
+  EXPECT_EQ(invoke("RtlAnsiStringToUnicodeString", {Wide, Ansi, 1}), 0u);
+  EXPECT_EQ(integer(Wide, 2), 6u);
+  EXPECT_EQ(integer(Wide + 2, 2), 8u);
+  const uint64_t WideBuffer = integer(Wide + 8);
+  EXPECT_EQ(integer(WideBuffer, 8), 0x006300620061u);
+  EXPECT_EQ(invoke("RtlUnicodeStringToAnsiString", {Roundtrip, Wide, 1}), 0u);
+  const uint64_t NarrowBuffer = integer(Roundtrip + 8);
+  EXPECT_EQ(integer(NarrowBuffer, 4), 0x00636261u);
+  invoke("RtlFreeUnicodeString", {Wide});
+  EXPECT_EQ(integer(Wide, 8), 0u);
+  EXPECT_EQ(integer(Wide + 8), 0u);
+  EXPECT_EQ(integer(NarrowBuffer, 4), 0x00636261u);
+  invoke("RtlFreeAnsiString", {Roundtrip});
+  EXPECT_EQ(integer(Roundtrip + 8), 0u);
+  EXPECT_EQ(integer(Text, 4), 0x00636261u);
+  EXPECT_NE(denied(WideBuffer, 2).find("freed"), std::string::npos);
+}
+
+TEST_F(DriverNativeKernelModel,
+       RTLShortBuffersMatchIndependentNativeASCIIObservations) {
+  constexpr uint64_t Source = Scratch, Destination = Scratch + 0x20;
+  constexpr uint64_t Input = Scratch + 0x100, Output = Scratch + 0x200;
+  success(Memory->write(Input, {'a', 'b', 'c', 0}));
+  invoke("RtlInitAnsiString", {Source, Input});
+  for (unsigned Capacity : {0u, 2u, 6u, 7u, 8u}) {
+    success(Memory->write(Output, std::vector<uint8_t>(16, 'Z')));
+    success(Memory->writeInteger(Destination + 2, Capacity, 2));
+    success(Memory->writeInteger(Destination + 8, Output, 8));
+    EXPECT_EQ(invoke("RtlAnsiStringToUnicodeString", {Destination, Source, 0}),
+              Capacity < 8 ? 0x80000005u : 0u);
+    EXPECT_EQ(integer(Destination, 2), 6u);
+    EXPECT_EQ(integer(Output, 8),
+              Capacity < 8 ? 0x5a5a5a5a5a5a5a5au : 0x006300620061u);
+  }
+  success(Memory->write(Input, {'a', 0, 'b', 0, 'c', 0, 0, 0}));
+  invoke("RtlInitUnicodeString", {Source, Input});
+  for (unsigned Capacity : {0u, 1u, 2u, 3u, 4u}) {
+    success(Memory->write(Output, std::vector<uint8_t>(16, 'Z')));
+    success(Memory->writeInteger(Destination + 2, Capacity, 2));
+    success(Memory->writeInteger(Destination + 8, Output, 8));
+    EXPECT_EQ(invoke("RtlUnicodeStringToAnsiString", {Destination, Source, 0}),
+              Capacity < 4 ? 0x80000005u : 0u);
+    EXPECT_EQ(integer(Destination, 2),
+              Capacity ? std::min(3u, Capacity - 1) : 3u);
+    EXPECT_EQ(integer(Output + (Capacity ? std::min(3u, Capacity - 1) : 0), 1),
+              Capacity ? 0u : uint64_t('Z'));
+  }
+}
+
+TEST_F(DriverNativeKernelModel, RTLFreeRejectsARecordInsideItsOwnedBuffer) {
+  const uint64_t Source = Scratch, Destination = Scratch + 0x20;
+  const uint64_t Text = Scratch + 0x100;
+  success(Memory->write(Text, std::vector<uint8_t>(40, 'a')));
+  success(Memory->writeInteger(Text + 40, 0, 1));
+  invoke("RtlInitAnsiString", {Source, Text});
+  invoke("RtlAnsiStringToUnicodeString", {Destination, Source, 1});
+  const auto Buffer = integer(Destination + 8);
+  success(Memory->writeInteger(Buffer + 8, Buffer, 8));
+  EXPECT_NE(failure("RtlFreeUnicodeString", {Buffer}).find("overlaps"),
+            std::string::npos);
+  success(Model->validateGuestAccess(Buffer, 16, false));
+  invoke("RtlFreeUnicodeString", {Destination});
+  EXPECT_NE(denied(Buffer, 16).find("freed"), std::string::npos);
+}
+
+TEST_F(DriverNativeKernelModel,
+       PhysicalRangeInventoryRequiresExplicitObservation) {
+  EXPECT_NE(failure("MmGetPhysicalMemoryRanges", {})
+                .find("physical_memory_inventory"),
+            std::string::npos);
+  const auto Pool = invoke("ExAllocatePool", {0, 16});
+  ASSERT_NE(Pool, 0u);
+  invoke("ExFreePool", {Pool});
+  EXPECT_EQ(invoke("ZwQuerySystemInformation", {196, Scratch, 4, Scratch + 8}),
+            0u);
+  EXPECT_EQ(integer(Scratch, 4), 0u);
+  EXPECT_EQ(integer(Scratch + 8, 4), 4u);
+}
+
+TEST_F(DriverNativeKernelModel,
+       ThreadTerminationRejectsUnknownPointersAndTracksIRQL) {
+  Model->enterExecution(profile::StackBase);
+  const auto Object = invoke("PsGetCurrentThread", {});
+  for (auto Invalid : {uint64_t(0), Scratch, Object + 1, UINT64_MAX})
+    EXPECT_NE(failure("PsIsThreadTerminating", {Invalid}).find("known thread"),
+              std::string::npos);
+  EXPECT_EQ(invoke("PsIsThreadTerminating", {Object}), 0u);
+  EXPECT_NE(failure("ObfDereferenceObject", {Object}).find("referenced thread"),
+            std::string::npos);
+  EXPECT_NE(failure("PsIsThreadTerminating", {}).find("argument count"),
+            std::string::npos);
+  invoke("KfRaiseIrql", {2});
+  EXPECT_EQ(invoke("PsIsThreadTerminating", {Object}), 0u);
+  invoke("KfRaiseIrql", {3});
+  EXPECT_NE(failure("PsIsThreadTerminating", {Object}).find("IRQL"),
+            std::string::npos);
+  invoke("KeLowerIrql", {2});
+  invoke("KeLowerIrql", {0});
+}
+
+TEST_F(DriverNativeKernelModel,
+       ThreadTerminationRemainsSetAcrossSystemExitAndReferences) {
+  Model->enterExecution(profile::StackBase);
+  ASSERT_EQ(invoke("PsCreateSystemThread",
+                   {Scratch, windows::ThreadAllAccess, 0, 0, 0, Entry, 0}),
+            0u);
+  const auto Handle = integer(Scratch);
+  ASSERT_EQ(
+      invoke("ObReferenceObjectByHandle", {Handle, 0, 0, 0, Scratch + 8, 0}),
+      0u);
+  const auto Object = integer(Scratch + 8);
+  EXPECT_EQ(invoke("PsIsThreadTerminating", {Object}), 0u);
+  auto Next = llvm::cantFail(Model->nextScheduled(false));
+  ASSERT_TRUE(Next);
+  Model->enterExecution(Scratch + 0x8000, Next->ID);
+  EXPECT_EQ(invoke("PsIsThreadTerminating", {Object}), 0u);
+  invoke("PsTerminateSystemThread", {0x1234});
+  EXPECT_EQ(invoke("PsIsThreadTerminating", {Object}), 1u);
+  ASSERT_EQ(Model->takeThreadTermination(), 0x1234u);
+  success(Model->finishScheduled(Next->ID));
+  Model->enterExecution(profile::StackBase);
+  EXPECT_EQ(invoke("PsIsThreadTerminating", {Object}), 1u);
+  invoke("ZwClose", {Handle});
+  EXPECT_EQ(invoke("PsIsThreadTerminating", {Object}), 1u);
+  invoke("ObfDereferenceObject", {Object});
+  EXPECT_NE(failure("PsIsThreadTerminating", {Object}).find("known thread"),
+            std::string::npos);
+}
+
+TEST_F(DriverNativeKernelModel,
+       ThreadTerminationRetainsExitedBorrowedIdentity) {
+  constexpr uint64_t Stack = Scratch + 0x8000;
+  Model->enterExecution(Stack);
+  const auto Object = invoke("PsGetCurrentThread", {});
+  const auto ID = invoke("PsGetThreadId", {Object});
+  ASSERT_EQ(invoke("PsLookupThreadByThreadId", {ID, Scratch}), 0u);
+  EXPECT_EQ(invoke("PsIsThreadTerminating", {Object}), 0u);
+  success(Model->retireStack(Stack, profile::PageSize));
+  Model->enterExecution(profile::StackBase);
+  EXPECT_EQ(invoke("PsIsThreadTerminating", {Object}), 1u);
+  EXPECT_EQ(invoke("PsLookupThreadByThreadId", {ID, Scratch}),
+            windows::StatusInvalidCID);
+  invoke("ObfDereferenceObject", {Object});
+  EXPECT_NE(failure("PsIsThreadTerminating", {Object}).find("known thread"),
+            std::string::npos);
+}
+
+TEST(DriverThreadTermination,
+     ImportedAndDynamicQueriesFollowRealThreadLifetime) {
+  for (auto Contract :
+       {ExecutionContract::Legacy, ExecutionContract::CheckedX64})
+    for (bool Preemptive : {false, true}) {
+      DriverOptions O;
+      O.Contract = Contract;
+      O.Unload = true;
+      if (Preemptive)
+        O.Scheduling = DriverScheduling{23, 1};
+      auto R = emulateDriver(std::filesystem::path(NEVERD_DRIVER_FIXTURES) /
+                                 "driver_thread_termination.sys",
+                             O);
+      ASSERT_TRUE(bool(R)) << llvm::toString(R.takeError());
+      EXPECT_EQ(R->NTStatus, 0u) << R->Diagnostic;
+      EXPECT_TRUE(R->UnloadCompleted) << R->Diagnostic;
+      EXPECT_EQ(R->Stop, DriverStopReason::Returned) << R->Diagnostic;
+    }
 }
 
 } // namespace

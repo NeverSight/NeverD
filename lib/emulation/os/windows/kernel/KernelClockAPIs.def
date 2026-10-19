@@ -1,0 +1,8 @@
+//===- KernelClockAPIs.def - Guest clock API contracts --------------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-kequerytimeincrement
+NEVERD_KERNEL_CLOCK_API(KeQueryTimeIncrement, 0, Any,
+                        Scheduler.queryTimeIncrement())
