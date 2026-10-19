@@ -23,6 +23,9 @@ validateExecutionObservation(const NativeExecutionObservationOptions &Options) {
   for (const auto &Read : Options.ReadMemory)
     if (!Read.Size || Read.Address > UINT64_MAX - Read.Size)
       return failure(diagnostic::SnapshotLimits);
+  for (const auto &Read : Options.ReadRegisterMemory)
+    if (!Read.Size || Read.Register > 31)
+      return failure(diagnostic::ObservationOptions);
   return llvm::Error::success();
 }
 llvm::Expected<uint64_t>
@@ -35,14 +38,21 @@ executionObservationBytes(const NativeExecutionObservationOptions &Options,
   uint64_t PerRecord = 36 * sizeof(uint64_t);
   if (PerRecord > Available)
     return failure(diagnostic::SnapshotLimits);
-  for (const auto &Read : Options.ReadMemory) {
+  auto Reserve = [&](uint64_t Size) -> llvm::Error {
     if (16 > Available - PerRecord)
       return failure(diagnostic::SnapshotLimits);
     PerRecord += 16;
-    if (Read.Size > Available - PerRecord)
+    if (Size > Available - PerRecord)
       return failure(diagnostic::SnapshotLimits);
-    PerRecord += Read.Size;
-  }
+    PerRecord += Size;
+    return llvm::Error::success();
+  };
+  for (const auto &Read : Options.ReadMemory)
+    if (auto E = Reserve(Read.Size))
+      return std::move(E);
+  for (const auto &Read : Options.ReadRegisterMemory)
+    if (auto E = Reserve(Read.Size))
+      return std::move(E);
   if (Options.Limit > Available / PerRecord)
     return failure(diagnostic::SnapshotLimits);
   return Options.Limit * PerRecord;
@@ -69,18 +79,36 @@ llvm::Expected<NativeExecutionObservation> captureExecutionObservation(
   if (!NZCV)
     return NZCV.takeError();
   Out.NZCV = (*NZCV)[0];
-  for (const auto &Read : Options.ReadMemory) {
-    auto Access = CPU.canAccess(Read.Address, Read.Size,
-                                emulation::Read | UserAccessible);
+  auto Capture = [&](uint64_t Address, uint64_t Size) -> llvm::Error {
+    if (Address > UINT64_MAX - Size)
+      return failure(diagnostic::ObservationMemory);
+    auto Access =
+        CPU.canAccess(Address, Size, emulation::Read | UserAccessible);
     if (!Access)
       return Access.takeError();
     if (!*Access)
       return failure(diagnostic::ObservationMemory);
-    NativeMemorySnapshot Snapshot{Read.Address,
-                                  std::vector<uint8_t>(Read.Size)};
-    if (auto E = CPU.read(Read.Address, Snapshot.Bytes))
+    NativeMemorySnapshot Snapshot{Address, std::vector<uint8_t>(Size)};
+    if (auto E = CPU.read(Address, Snapshot.Bytes))
       return std::move(E);
     Out.Memory.push_back(std::move(Snapshot));
+    return llvm::Error::success();
+  };
+  for (const auto &Read : Options.ReadMemory)
+    if (auto E = Capture(Read.Address, Read.Size))
+      return std::move(E);
+  for (const auto &Read : Options.ReadRegisterMemory) {
+    const uint64_t Base =
+        Read.Register == 31 ? Out.SP : Out.Registers[Read.Register];
+    const uint64_t Magnitude =
+        Read.Offset < 0 ? 0 - uint64_t(Read.Offset) : uint64_t(Read.Offset);
+    if ((Read.Offset < 0 && Base < Magnitude) ||
+        (Read.Offset >= 0 && Base > UINT64_MAX - Magnitude))
+      return failure(diagnostic::ObservationMemory);
+    const uint64_t Address =
+        Read.Offset < 0 ? Base - Magnitude : Base + Magnitude;
+    if (auto E = Capture(Address, Read.Size))
+      return std::move(E);
   }
   return Out;
 }

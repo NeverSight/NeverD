@@ -13,6 +13,7 @@
 #include "llvm/Support/Endian.h"
 #include "llvm/Support/JSON.h"
 
+#include <algorithm>
 #include <set>
 #include <tuple>
 
@@ -197,6 +198,169 @@ TEST_P(AndroidObservation, WholeObservationBudgetIsReservedBeforeExecution) {
   R = emulateProcess(Path, ProcessProfile::AndroidNativeAArch64, Options);
   EXPECT_FALSE(bool(R));
   llvm::consumeError(R.takeError());
+}
+TEST_P(AndroidObservation, RegisterReadsFollowEachThreadsCurrentPointer) {
+  Options.Android->EntrySymbol = "observation_threads";
+  Options.Android->Arguments = {Code, Buffer};
+  Options.Android->ThreadLimit = 3;
+  for (uint64_t Quantum : {1, 7}) {
+    Options.InstructionQuantum = Quantum;
+    Options.Android->ObserveExecution.reset();
+    const auto Baseline = run();
+    ASSERT_EQ(Baseline.ReturnValue, 126u);
+    observe(10);
+    auto &O = *Options.Android->ObserveExecution;
+    O.PCs.pop_back(); // x0 becomes an integer result after the last move.
+    O.ReadRegisterMemory = {{0, 16, 8}, {0, 0, 16}};
+    auto R = run();
+    ASSERT_EQ(R.ExecutionObservations.size(), 10u);
+    sameWorkload(Baseline, R);
+    std::set<uint64_t> Addresses;
+    for (const auto &Record : R.ExecutionObservations) {
+      ASSERT_EQ(Record.Memory.size(), 4u);
+      uint64_t Address = Record.Registers[0];
+      Addresses.insert(Address);
+      EXPECT_EQ(Record.Memory[2].Address, Address + 16);
+      EXPECT_EQ(llvm::support::endian::read64le(Record.Memory[2].Bytes.data()),
+                Address == Buffer ? 42u : 84u);
+      EXPECT_EQ(Record.Memory[3].Address, Address);
+      const auto Begin = Record.Memory[0].Bytes.begin() + (Address - Buffer);
+      EXPECT_EQ(Record.Memory[3].Bytes,
+                std::vector<uint8_t>(Begin, Begin + 16));
+    }
+    EXPECT_EQ(Addresses, (std::set<uint64_t>{Buffer, Buffer + 32}));
+  }
+}
+TEST_P(AndroidObservation, SignedOffsetsAndStackUseStoppedState) {
+  // sub sp,sp,#16; str x0,[sp]; add x0,x0,#8; add sp,sp,#16; ret.
+  const uint32_t Words[] = {0xd10043ff, 0xf90003e0, 0x91002000, 0x910043ff,
+                            0xd65f03c0};
+  auto &Bytes = Options.Android->Memory[1].Bytes;
+  Bytes.resize(sizeof(Words));
+  for (unsigned I = 0; I < 5; ++I)
+    llvm::support::endian::write32le(Bytes.data() + I * 4, Words[I]);
+  auto Baseline = run();
+  ASSERT_EQ(Baseline.ReturnValue, Buffer + 8);
+  observe(1);
+  auto &O = *Options.Android->ObserveExecution;
+  O.PCs = {Code + 12};
+  O.ReadRegisterMemory = {{0, -8, 24}, {31, 0, 8}};
+  auto R = run();
+  sameWorkload(Baseline, R);
+  ASSERT_EQ(R.ExecutionObservations.size(), 1u);
+  const auto &Record = R.ExecutionObservations.front();
+  ASSERT_EQ(Record.Memory.size(), 4u);
+  EXPECT_EQ(Record.Memory[2].Address, Buffer);
+  EXPECT_EQ(
+      Record.Memory[2].Bytes,
+      (std::vector<uint8_t>(Options.Android->Memory[0].Bytes.begin(),
+                            Options.Android->Memory[0].Bytes.begin() + 24)));
+  EXPECT_EQ(Record.Memory[3].Address, Record.SP);
+  EXPECT_EQ(llvm::support::endian::read64le(Record.Memory[3].Bytes.data()),
+            Buffer);
+}
+TEST_P(AndroidObservation,
+       AllocatedPointerNeedsNoEntryMappingOrRetainedLifetime) {
+  Options.Android->EntrySymbol = "observation_allocated";
+  Options.Android->Arguments[2] = 42;
+  Options.Android->MallocFillByte = 0xa5;
+  const auto Baseline = run();
+  ASSERT_EQ(Baseline.ReturnValue, 43u) << Baseline.Diagnostic;
+  observe(5);
+  auto &O = *Options.Android->ObserveExecution;
+  O.PCs.pop_back();
+  O.ReadRegisterMemory = {{0, 0, 24}};
+  auto R = run();
+  sameWorkload(Baseline, R);
+  ASSERT_EQ(R.ExecutionObservations.size(), 5u);
+  auto Allocation =
+      std::find_if(R.NativeCalls.begin(), R.NativeCalls.end(),
+                   [](const auto &Call) { return Call.Name == "malloc"; });
+  ASSERT_NE(Allocation, R.NativeCalls.end());
+  ASSERT_TRUE(Allocation->Result);
+  for (unsigned I = 0; I < 5; ++I) {
+    const auto &Record = R.ExecutionObservations[I];
+    ASSERT_EQ(Record.Memory.size(), 3u);
+    EXPECT_EQ(Record.Memory[2].Address, *Allocation->Result);
+    std::vector<uint8_t> Expected(24, 0xa5);
+    llvm::support::endian::write64le(Expected.data() + 16, 42);
+    if (I >= 2)
+      llvm::support::endian::write64le(Expected.data(), 42);
+    if (I >= 4)
+      llvm::support::endian::write64le(Expected.data() + 8, 43);
+    EXPECT_EQ(Record.Memory[2].Bytes, Expected);
+  }
+}
+TEST_P(AndroidObservation, DynamicAddressFailuresStopBeforeTheInstruction) {
+  observe(1);
+  auto &O = *Options.Android->ObserveExecution;
+  O.PCs = {Code};
+  for (auto Read : {NativeRegisterMemoryRead{1, -1, 8},
+                    {0, INT64_MIN, 8},
+                    {1, 1, 8},
+                    {1, 0, 8},
+                    {0, 4088, 16},
+                    {1, 0, UINT64_MAX}}) {
+    Options.Android->Arguments[2] = Read.Offset < 0 ? 0 : UINT64_MAX;
+    O.ReadRegisterMemory = {Read};
+    if (Read.Size == UINT64_MAX) {
+      auto Rejected =
+          emulateProcess(Path, ProcessProfile::AndroidNativeAArch64, Options);
+      EXPECT_FALSE(bool(Rejected));
+      llvm::consumeError(Rejected.takeError());
+      continue;
+    }
+    auto R = run();
+    EXPECT_EQ(R.Stop, ProcessStopReason::RuntimeFailure);
+    EXPECT_EQ(R.PC, Code);
+    EXPECT_TRUE(R.ExecutionObservations.empty());
+    EXPECT_NE(R.Diagnostic.find("observation memory is not readable"),
+              std::string::npos);
+  }
+  O.ReadRegisterMemory = {{32, 0, 8}};
+  auto Rejected =
+      emulateProcess(Path, ProcessProfile::AndroidNativeAArch64, Options);
+  EXPECT_FALSE(bool(Rejected));
+  llvm::consumeError(Rejected.takeError());
+  O.ReadRegisterMemory = {{0, 0, Options.OutputLimit}};
+  Rejected =
+      emulateProcess(Path, ProcessProfile::AndroidNativeAArch64, Options);
+  EXPECT_FALSE(bool(Rejected));
+  llvm::consumeError(Rejected.takeError());
+}
+TEST(AndroidObservationOptions, RegisterMemoryIsExplicitAndStrict) {
+  auto Parse = [](const std::string &Reads) {
+    return processOptionsFromJSON(
+        R"({"android":{"observe_execution":{"pcs":[4096],"limit":2,"read_register_memory":)" +
+        Reads + "}}}");
+  };
+  auto Good = Parse(
+      R"([{"register":"x0","offset":-8,"size":8},{"register":"x30","offset":9223372036854775807,"size":"0x10"},{"register":"sp","offset":-9223372036854775808,"size":1}])");
+  ASSERT_TRUE(bool(Good)) << llvm::toString(Good.takeError());
+  const auto &Reads = Good->Android->ObserveExecution->ReadRegisterMemory;
+  ASSERT_EQ(Reads.size(), 3u);
+  EXPECT_EQ(Reads[0].Offset, -8);
+  EXPECT_EQ(Reads[1].Register, 30u);
+  EXPECT_EQ(Reads[1].Offset, INT64_MAX);
+  EXPECT_EQ(Reads[2].Register, 31u);
+  EXPECT_EQ(Reads[2].Offset, INT64_MIN);
+  for (const char *Bad :
+       {"null", "{}", "[null]", "[{}]", R"([{"register":"x31","size":8}])",
+        R"([{"register":"x01","size":8}])", R"([{"register":"xzr","size":8}])",
+        R"([{"register":1,"size":8}])", R"([{"register":"x0","size":0}])",
+        R"([{"register":"x0","size":-1}])",
+        R"([{"register":"x0","size":1,"offset":"-1"}])",
+        R"([{"register":"x0","size":1,"offset":1.5}])",
+        R"([{"register":"x0","size":1,"offset":9223372036854775808}])",
+        R"([{"register":"x0","size":1,"offset":9.223372036854776e18}])",
+        R"([{"register":"x0","size":1,"offset":-1e20}])",
+        R"([{"register":"x0","size":1,"offset":false}])",
+        R"([{"register":"x0","size":1,"address":1}])",
+        R"([{"register":"x0","size":1,"require_mapped_at_entry":false}])"}) {
+    auto R = Parse(Bad);
+    EXPECT_FALSE(bool(R)) << Bad;
+    llvm::consumeError(R.takeError());
+  }
 }
 TEST(AndroidObservationOptions, StrictShapeAndLosslessAddresses) {
   auto Parse = [](const char *Value) {

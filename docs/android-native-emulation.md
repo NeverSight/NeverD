@@ -116,6 +116,18 @@ memory ranges are copied at every point. `require_mapped_at_entry: false`
 allows a range created during execution; it must be readable at every captured
 point. An unreadable range fails before executing that watched instruction.
 
+`read_register_memory` adds bounded reads from pointers that change during
+execution, for example `[{"register":"x1","offset":-8,"size":32}]`.
+The register is exactly `x0`–`x30` or `sp`; `offset` is an optional signed
+64-bit JSON integer, defaulting to zero. `size` is a positive byte count.
+Each address is resolved from that record's stopped register state, with
+checked addition/subtraction and range bounds. The complete range must be
+readable then; no entry mapping, null-pointer fallback or partial read is
+inferred. These snapshots follow fixed `read_memory` snapshots in input order
+and report the resolved address. They share the same reservation and truncation
+rules. They do not decode strings, dereference further pointers or supply JNI
+objects. `require_mapped_at_entry` applies only to fixed reads.
+
 The complete retained capacity shares `output_limit` with ordinary snapshots,
 thread records and PC tracing. `execution_observations_truncated` becomes true
 only when another point matches after the retained limit; execution continues

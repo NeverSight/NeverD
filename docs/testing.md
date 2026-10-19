@@ -6881,6 +6881,10 @@ Exact instruction bytes provide independent before-store register and memory
 expectations. Single- and multi-thread runs use quanta as short as one
 instruction; truncation, unknown imports, unreadable memory and output-budget
 admission are covered. `AndroidObservationOptions.*` checks strict JSON.
+Register-relative cases compare complete reports against unobserved execution,
+follow distinct pointers in interleaved threads, check signed offsets and SP
+against independent instruction bytes, and reject wraparound, inaccessible
+tails, invalid registers and excessive output before guest effects.
 `RuntimeSession.CheckedQuantumEndsBeforeTheNextExecutionWatch` covers the
 shared watch/quantum boundary on checked x64 and AArch64 transports.
 

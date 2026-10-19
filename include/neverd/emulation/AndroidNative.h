@@ -41,6 +41,16 @@ struct NativeMemorySnapshot {
   std::vector<uint8_t> Bytes;
 };
 
+/// Resolve a read from the stopped register state at each observation. Register
+/// 0..30 selects x0..x30; 31 selects SP, never the architectural zero register.
+/// Offset is signed and address arithmetic must not wrap. No entry-time mapping
+/// or pointer lifetime is inferred.
+struct NativeRegisterMemoryRead {
+  uint32_t Register = 0;
+  int64_t Offset = 0;
+  uint64_t Size = 0;
+};
+
 struct AndroidAuxiliaryValue {
   uint64_t Type = 0, Value = 0;
 };
@@ -61,6 +71,8 @@ struct NativeExecutionObservationOptions {
   /// The same explicit ranges are copied at each point. Deferred mappings
   /// must be readable when observed; no mapping or provider is synthesized.
   std::vector<NativeMemoryRead> ReadMemory;
+  /// Appended after fixed reads, in input order, with resolved guest addresses.
+  std::vector<NativeRegisterMemoryRead> ReadRegisterMemory;
 };
 struct NativeExecutionObservation {
   uint64_t PC = 0, ThreadID = 0, Instructions = 0, SP = 0, NZCV = 0;

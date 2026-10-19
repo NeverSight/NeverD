@@ -5331,6 +5331,10 @@ existing budget; OS models do not replace CPU hooks to collect traces.
 Selected Android execution observations instead use `ExecutionSession` watches
 to read stopped scalar state and explicit memory. `AndroidObservation` owns
 shared C++/JSON admission and capture, and the runtime owns watch continuation.
+Register-relative observations resolve the captured x0–x30/SP state in that
+same owner, with checked signed offsets and complete readable extents. They
+share fixed-read output reservation, snapshot ordering and fail-stop behavior;
+JSON only translates explicit register names and scalar inputs.
 Checked quantum boundaries precede a watch of the next instruction, so a
 cooperatively selected thread cannot inherit another thread's skipped watch.
 Observation stops preserve the current quantum and do not charge a service.

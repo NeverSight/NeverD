@@ -33,6 +33,17 @@ static volatile u64 *volatile seed_pointer = &seed;
 u64 observation_call(u64 (*entry)(u64 *, u64), u64 *out, u64 value) {
   return entry(out, value);
 }
+u64 observation_allocated(u64 (*entry)(u64 *, u64), u64 *out, u64 value) {
+  u64 *buffer = (u64 *)malloc(32);
+  if (!buffer)
+    return 99;
+  buffer[2] = value;
+  u64 result = entry(buffer, 0);
+  out[0] = buffer[0];
+  out[1] = buffer[1];
+  free(buffer);
+  return result;
+}
 extern int pthread_create(u64 *, const void *, void *(*)(void *), void *);
 extern int pthread_join(u64, void **);
 u64 observation_threads(void *(*entry)(void *), u64 *out) {

@@ -71,6 +71,63 @@ memoryReads(const llvm::json::Value &Value) {
   }
   return Reads;
 }
+llvm::Expected<std::vector<NativeRegisterMemoryRead>>
+registerMemoryReads(const llvm::json::Value &Value) {
+  const auto *Array = Value.getAsArray();
+  if (!Array)
+    return invalid(field::ReadRegisterMemory);
+  std::vector<NativeRegisterMemoryRead> Reads;
+  for (const auto &Item : *Array) {
+    const auto *Object = Item.getAsObject();
+    if (!Object || !Object->get(field::ObservationRegister) ||
+        !Object->get(field::Size))
+      return invalid(field::ReadRegisterMemory);
+    NativeRegisterMemoryRead Read;
+    for (const auto &[Key, V] : *Object) {
+      llvm::StringRef Name = Key;
+      if (Name == field::ObservationRegister) {
+        const auto Text = V.getAsString();
+        if (!Text)
+          return invalid(Name);
+        if (*Text == "sp")
+          Read.Register = 31;
+        else {
+          auto Index = *Text;
+          if (!Index.consume_front("x") || Index.empty() ||
+              Index.find_first_not_of("0123456789") != llvm::StringRef::npos ||
+              (Index.size() > 1 && Index.front() == '0') ||
+              Index.getAsInteger(10, Read.Register) || Read.Register > 30)
+            return invalid(Name);
+        }
+      } else if (Name == field::ObservationOffset) {
+        // Keep INT64_MAX exact, and reject floating-point 2^63 before the
+        // JSON integer accessor can narrow that rounded boundary.
+        if (auto Unsigned = V.getAsUINT64()) {
+          if (*Unsigned > uint64_t(INT64_MAX))
+            return invalid(Name);
+          Read.Offset = int64_t(*Unsigned);
+          continue;
+        }
+        auto Numeric = V.getAsNumber();
+        if (!Numeric || *Numeric < double(INT64_MIN) ||
+            *Numeric >= -double(INT64_MIN))
+          return invalid(Name);
+        auto Offset = V.getAsInteger();
+        if (!Offset)
+          return invalid(Name);
+        Read.Offset = *Offset;
+      } else if (Name == field::Size) {
+        auto Size = number(V, Name);
+        if (!Size)
+          return Size.takeError();
+        Read.Size = *Size;
+      } else
+        return invalid(Name);
+    }
+    Reads.push_back(Read);
+  }
+  return Reads;
+}
 llvm::Expected<NativeExecutionObservationOptions>
 observationOptions(const llvm::json::Value &Value) {
   const auto *Object = Value.getAsObject();
@@ -99,6 +156,11 @@ observationOptions(const llvm::json::Value &Value) {
       if (!Reads)
         return Reads.takeError();
       Out.ReadMemory = std::move(*Reads);
+    } else if (Name == field::ReadRegisterMemory) {
+      auto Reads = registerMemoryReads(V);
+      if (!Reads)
+        return Reads.takeError();
+      Out.ReadRegisterMemory = std::move(*Reads);
     } else
       return invalid(Name);
   }
