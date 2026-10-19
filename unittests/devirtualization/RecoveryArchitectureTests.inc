@@ -185,9 +185,8 @@ TEST_F(PEFixedImageTest, RawLegacyGSNativeExchangeRequiresTheExplicitDomain) {
   unsigned Exchanges = 0;
   for (const auto &Block : R.Residual.Blocks)
     for (const auto &Op : Block.Ops)
-      Exchanges +=
-          Op.Opcode == NdOp::INTRINSIC && Op.NumInputs == 1 &&
-          Op.Inputs[0] == NdVar::scalar(uint64_t(Intrinsic::Swapgs), 2);
+      Exchanges += Op.Opcode == NdOp::INTRINSIC && Op.NumInputs == 1 &&
+                   Op.Inputs[0] == NdVar::cst(uint64_t(Intrinsic::Swapgs), 2);
   EXPECT_EQ(Exchanges, 1U);
   ASSERT_TRUE(R.RawEnvironment);
   auto Error = validateSpecializationRawEnvironment(R, O);
