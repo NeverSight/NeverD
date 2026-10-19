@@ -3,6 +3,7 @@
 // NeverD Decompiler
 //
 //===----------------------------------------------------------------------===//
+#include "../exception/X64SEHMetadata.h"
 #include "WindowsProcess.h"
 
 #include "neverd/loader/Loader.h"
@@ -636,52 +637,26 @@ llvm::Expected<Image> readImage(const std::filesystem::path &Path,
   Out.PreferredBase = Base;
   Out.Exceptions = std::make_shared<const ExceptionInfo>(
       std::move(Decoded->ExceptionMetadata));
-  // Retain the exact bytes on which runtime dispatch relies. RVAs remain
-  // independent of rebasing; comparisons use the relocated image backing.
-  Out.ExceptionMetadata.push_back({0, PE.SizeOfHeaders});
   const auto &Info = *Out.Exceptions;
+  const auto RecordLimit = Budget.Records;
   if (Info.Functions.size() > Budget.Records)
     return failure(text::ModuleBudget);
   Budget.Records -= Info.Functions.size();
-  if (Info.DirectorySize)
-    Out.ExceptionMetadata.push_back({Info.DirectoryRVA, Info.DirectorySize});
-  for (const auto &F : Info.Functions) {
+  for (const auto &F : Info.Functions)
     if (F.SEH) {
       if (F.SEH->Scopes.size() > Budget.Records)
         return failure(text::ModuleBudget);
       Budget.Records -= F.SEH->Scopes.size();
     }
-    if (!F.NativeUnwindBytes.empty())
-      Out.ExceptionMetadata.push_back(
-          {F.UnwindInfoRVA, F.NativeUnwindBytes.size()});
-    if (F.SEH && F.HandlerDataVA >= Base)
-      Out.ExceptionMetadata.push_back(
-          {F.HandlerDataVA - Base,
-           DWordSize + F.SEH->Scopes.size() * ExceptionScopeRecordSize});
-  }
-  // Personality classification can inspect executable thunk bytes. Retain
-  // each containing region once rather than guessing a thunk instruction size.
-  for (const auto &Region : Out.Regions)
-    if ((Region.Permissions & Execute) &&
-        llvm::any_of(Info.Functions, [&](const auto &F) {
-          return F.PersonalityVA >= Region.Address &&
-                 F.PersonalityVA - Region.Address < Region.Bytes.size();
-        }))
-      Out.ExceptionMetadata.push_back(
-          {Region.Address - Base, Region.Bytes.size()});
-  std::sort(Out.ExceptionMetadata.begin(), Out.ExceptionMetadata.end(),
-            [](const auto &A, const auto &B) { return A.RVA < B.RVA; });
-  std::vector<PEMetadataRange> Ranges;
-  for (const auto &R : Out.ExceptionMetadata) {
-    if (R.RVA > Out.Size || R.Size > Out.Size - R.RVA)
-      return failure(text::Metadata);
-    if (!Ranges.empty() && R.RVA <= Ranges.back().RVA + Ranges.back().Size)
-      Ranges.back().Size =
-          std::max(Ranges.back().Size, R.RVA + R.Size - Ranges.back().RVA);
-    else
-      Ranges.push_back(R);
-  }
-  Out.ExceptionMetadata = std::move(Ranges);
+  std::vector<PEMetadataRange> Code;
+  for (const auto &R : Out.Regions)
+    if (R.Permissions & Execute)
+      Code.push_back({R.Address - Base, R.Bytes.size()});
+  auto Ranges = x64SEHMetadataRanges(Info, Base, Out.Size, PE.SizeOfHeaders,
+                                     Code, RecordLimit);
+  if (!Ranges)
+    return Ranges.takeError();
+  Out.ExceptionMetadata = std::move(Ranges->Ranges);
   return Out;
 }
 } // namespace

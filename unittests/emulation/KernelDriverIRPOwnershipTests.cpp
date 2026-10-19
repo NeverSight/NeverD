@@ -75,7 +75,10 @@ protected:
     success(Model->validateGuestAccess(Address, Width, true));
     success(Memory->writeInteger(Address, Value, Width));
   }
-  void SetUp() override {
+  void SetUp() override { initialize(); }
+  void initialize(DriverOptions Options = {}) {
+    Model.reset();
+    Result = DriverResult{};
     Memory = take(UnicornBackend::create(4 * 1024 * 1024));
     ASSERT_TRUE(Memory);
     success(Memory->map(Scratch, profile::PageSize, Read | Write));
@@ -84,7 +87,7 @@ protected:
     Image.Base = DispatchPC - profile::PageSize;
     Image.Entry = DispatchPC;
     Image.Size = 3 * profile::PageSize;
-    success(Model->initialize(Image, DriverOptions{}));
+    success(Model->initialize(Image, Options));
     Model->enterForeground();
     Model->enterExecution(profile::StackBase);
     const auto Create = [&] {
@@ -275,6 +278,50 @@ TEST_F(KernelDriverIRPOwnership,
   success(Model->validateGuestAccess(IRP + IRPDriverContextOffset,
                                      sizeof(uint64_t), false));
   finishInline(IRP, Dispatch);
+}
+
+TEST_F(KernelDriverIRPOwnership,
+       Windows19041InitializationSurvivesAdoptionWithoutDriverStatusStores) {
+  DriverOptions Options;
+  Options.Version = DriverOptions::WindowsVersion{10, 0, 19041};
+  Options.IRPInitializationPolicy = DriverIRPInitializationPolicy::Windows19041;
+  initialize(Options);
+  const auto IRP = packet();
+  EXPECT_EQ(get(IRP + IRPStatusOffset, 4), StatusSuccess);
+  EXPECT_EQ(get(IRP + IRPInformationOffset), 0u);
+  const auto Dispatch = submit(IRP);
+  // Adoption must retain the allocator's knowledge; there are no guest
+  // IoStatus stores and no second initialization when ownership changes.
+  EXPECT_EQ(get(IRP + IRPStatusOffset, 4), StatusSuccess);
+  EXPECT_EQ(get(IRP + IRPInformationOffset), 0u);
+  const auto Complete = complete(IRP);
+  call("IoFreeIrp", {IRP});
+  finish(Complete, StatusMoreProcessingRequired);
+  finish(Dispatch, StatusSuccess);
+  EXPECT_TRUE(observation(IRP).Completed);
+  EXPECT_EQ(observation(IRP).IOStatus, StatusSuccess);
+  EXPECT_EQ(observation(IRP).Information, 0u);
+}
+
+TEST_F(KernelDriverIRPOwnership,
+       Windows19041AdoptionPreservesCallerStatusAndCompletionChecks) {
+  DriverOptions Options;
+  Options.Version = DriverOptions::WindowsVersion{10, 0, 19041};
+  Options.IRPInitializationPolicy = DriverIRPInitializationPolicy::Windows19041;
+  initialize(Options);
+  const auto IRP = packet();
+  put(IRP + IRPStatusOffset, StatusPending, 4);
+  const auto Dispatch = submit(IRP);
+  EXPECT_EQ(get(IRP + IRPStatusOffset, 4), StatusPending);
+  rejected(Model->call("IofCompleteRequest", {IRP, 0}), "STATUS_PENDING");
+  EXPECT_FALSE(observation(IRP).Completed);
+  put(IRP + IRPStatusOffset, StatusNotSupported, 4);
+  const auto Complete = complete(IRP);
+  call("IoFreeIrp", {IRP});
+  finish(Complete, StatusMoreProcessingRequired);
+  finish(Dispatch, StatusNotSupported, StatusNotSupported);
+  EXPECT_TRUE(observation(IRP).Completed);
+  EXPECT_EQ(observation(IRP).IOStatus, StatusNotSupported);
 }
 
 TEST_F(KernelDriverIRPOwnership,

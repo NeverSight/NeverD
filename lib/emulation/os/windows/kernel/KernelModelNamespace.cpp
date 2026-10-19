@@ -7,6 +7,7 @@
 /// Resolve the session namespace through the shared object-reference owner.
 //===----------------------------------------------------------------------===//
 
+#include "../WindowsUnicode.h"
 #include "KernelModel.h"
 #include "WindowsKernelLayout.h"
 
@@ -76,7 +77,8 @@ uint64_t KernelModel::findSymbolicLink(llvm::StringRef Key) const {
   const auto Canonical = canonicalName(Key, true);
   for (const auto &[Object, Link] : SymbolicLinks)
     if (Link.Named &&
-        sameName(ReferencedObjects.at(Object).Name, Canonical, true))
+        sameName(canonicalName(ReferencedObjects.at(Object).Name, true),
+                 Canonical, true))
       return Object;
   return 0;
 }
@@ -120,6 +122,18 @@ llvm::Expected<uint32_t> KernelModel::mapObjectAccess(ObjectKind Kind,
   const auto Valid = objectAccessMask(Kind);
   if (!Valid)
     return namespaceError("unsupported object handle class");
+  if (Kind == ObjectKind::Thread) {
+    const uint32_t Generic = Access & 0xf0000000;
+    Access &= 0x0fffffff;
+    if (Generic & 0x80000000)
+      Access |= 0x20048;
+    if (Generic & 0x40000000)
+      Access |= 0x20437;
+    if (Generic & 0x20000000)
+      Access |= 0x121800;
+    if (Generic & 0x10000000)
+      Access |= *Valid;
+  }
   if (Kind == ObjectKind::Directory || Kind == ObjectKind::SymbolicLink ||
       Kind == ObjectKind::Key || Kind == ObjectKind::File) {
     // WDK rights and the target kernel's generic mappings. The per-type valid
@@ -196,7 +210,7 @@ KernelModel::lookupNamedObject(llvm::StringRef Name, uint64_t Root,
       if (const auto Device = Devices.find(Object);
           Device != Devices.end() && Device->second.DeletePending)
         continue;
-      if (sameName(objectName(Object), Candidate, Fold))
+      if (sameName(canonicalName(objectName(Object), Fold), Candidate, Fold))
         return Object;
     }
     return 0;
@@ -242,6 +256,8 @@ KernelModel::referenceObjectByName(llvm::ArrayRef<uint64_t> A) {
     return Name.takeError();
   if (Name->empty())
     return StatusObjectNameInvalid;
+  if (Version && llvm::StringRef(*Name).starts_with_insensitive("\\Driver\\"))
+    return referenceDriverObjectByName(A, *Name);
   if (uint8_t(A[5]) != KernelMode || A[2] || A[6] || !A[4] ||
       (uint32_t(A[1]) & ~ObjectCaseInsensitive))
     return namespaceError(
@@ -300,19 +316,43 @@ KernelModel::openNamedObject(llvm::ArrayRef<uint64_t> A, ObjectKind Kind) {
   if (ProcessID != SystemProcessID && !(Flags & ObjectKernelHandle))
     return namespaceError(
         "namespace open outside the system process requires OBJ_KERNEL_HANDLE");
+  if (Kind == ObjectKind::SymbolicLink &&
+      (llvm::StringRef(*Name).equals_insensitive("\\Device\\PhysicalMemory") ||
+       NamedSections.contains(llvm::StringRef(*Name).lower()))) {
+    if (auto E = validateObjectOutput(A[0], 8))
+      return E;
+    if (auto E = Memory.writeInteger(A[0], 0, 8))
+      return E;
+    return StatusObjectTypeMismatch;
+  }
   auto Found =
       lookupNamedObject(*Name, read64le(Record.data() + ObjectRootOffset),
                         Flags, Kind == ObjectKind::SymbolicLink);
   if (!Found)
     return Found.takeError();
+  const bool Native = Version || FiniteFileSystem || SectionNamespace;
+  if (Native)
+    if (auto E = validateObjectOutput(A[0], 8))
+      return E;
+  auto Failed = [&](uint64_t Status) -> llvm::Expected<uint64_t> {
+    if (Native)
+      if (auto E = Memory.writeInteger(A[0], 0, 8))
+        return E;
+    return Status;
+  };
   if (Found->Status)
-    return Found->Status;
+    return Failed(Found->Status);
   if (ReferencedObjects.at(Found->Object).Kind != Kind)
-    return StatusObjectTypeMismatch;
+    return Failed(StatusObjectTypeMismatch);
   if (auto E = validateObjectOutput(A[0], 8))
     return E;
-  if (NextObjectHandle > profile::SystemThreadHandleLimit)
-    return StatusInsufficientResources;
+  if (NextObjectHandle > profile::SystemThreadHandleLimit ||
+      (Native && Kind == ObjectKind::SymbolicLink &&
+       std::count_if(
+           ObjectHandles.begin(), ObjectHandles.end(), [&](const auto &H) {
+             return ReferencedObjects.at(H.second.Object).Kind == Kind;
+           }) >= 256))
+    return Failed(StatusInsufficientResources);
   if (auto E = Memory.writeInteger(A[0], NextObjectHandle, 8))
     return E;
   retainObjectHandle(Found->Object, *Access, Flags & ObjectKernelHandle,
@@ -364,6 +404,8 @@ KernelModel::queryObjectName(uint64_t Object, uint64_t Buffer, uint32_t Length,
 }
 
 llvm::Expected<uint64_t> KernelModel::queryObject(llvm::ArrayRef<uint64_t> A) {
+  if (SectionHandles.contains(A[0]))
+    return querySectionObject(A);
   const auto Handle = findObjectHandle(A[0]);
   if (!Handle)
     return StatusInvalidHandle;
@@ -390,9 +432,12 @@ KernelModel::querySymbolicLink(llvm::ArrayRef<uint64_t> A) {
   using namespace llvm::support::endian;
   const auto Maximum = read16le(String.data() + 2);
   const auto Buffer = read64le(String.data() + 8);
-  const auto Text = llvm::ArrayRef<uint8_t>(Link->second.TargetBytes)
-                        .take_front(A[2] ? Link->second.TargetBytes.size()
-                                         : Link->second.Target.size() * 2);
+  auto Target = windows_unicode::bytes(Link->second.Target, false);
+  if (!Target)
+    return Target.takeError();
+  const auto Text =
+      llvm::ArrayRef<uint8_t>(Link->second.TargetBytes)
+          .take_front(A[2] ? Link->second.TargetBytes.size() : Target->size());
   if (A[2])
     if (auto E = validateObjectOutput(A[2], 4))
       return E;
@@ -403,7 +448,7 @@ KernelModel::querySymbolicLink(llvm::ArrayRef<uint64_t> A) {
       return E;
     if (auto E = Memory.write(Buffer, Text))
       return E;
-    if (auto E = Memory.writeInteger(A[1], Link->second.Target.size() * 2, 2))
+    if (auto E = Memory.writeInteger(A[1], Target->size(), 2))
       return E;
   }
   if (A[2])

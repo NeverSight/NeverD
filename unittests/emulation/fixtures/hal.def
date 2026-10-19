@@ -1,3 +1,2 @@
-LIBRARY HAL.dll
-EXPORTS
-KeQueryPerformanceCounter
+LIBRARY HAL.dll EXPORTS KeQueryPerformanceCounter KeStallExecutionProcessor
+    HalGetBusDataByOffset HalSetBusDataByOffset

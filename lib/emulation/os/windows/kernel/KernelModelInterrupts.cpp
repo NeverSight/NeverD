@@ -71,6 +71,18 @@ llvm::Expected<uint64_t> KernelModel::synchronizeInterrupt(uint64_t Object,
 llvm::Error KernelModel::beginGuestCall(GuestCallToken Token) {
   if (!Token.ID)
     return apiError("guest callback has no continuation identity");
+  if (Token.Owner == GuestCallOwner::Avl)
+    return beginAvlCall(Token.ID);
+  if (Token.Owner == GuestCallOwner::DriverService)
+    return beginServiceCall(Token.ID);
+  if (Token.Owner == GuestCallOwner::ThreadNotify)
+    return beginThreadNotify(Token.ID);
+  if (Token.Owner == GuestCallOwner::ProcessNotify)
+    return beginProcessNotify(Token.ID);
+  if (Token.Owner == GuestCallOwner::RegistryCallback)
+    return beginRegistryCallback(Token.ID);
+  if (Token.Owner == GuestCallOwner::ExecutiveCallback)
+    return beginExecutiveCallback(Token.ID);
   if (Token.Owner == GuestCallOwner::PoFx) {
     const auto *Call = PoFx.callback(Token.ID);
     if (Call && Call->Thread && Call->Thread != CurrentThreadKey)
@@ -152,8 +164,33 @@ llvm::Error KernelModel::validateExecutionReturn(uint64_t Identity,
     const bool SystemThread =
         Scheduler.active() &&
         Scheduler.active()->Kind == KernelScheduler::CallbackKind::SystemThread;
-    if (It->second.GuardedDepth ||
-        It->second.CriticalDepth > (SystemThread ? 1 : 0))
+    const bool ProcessNotify =
+        ProcessNotificationState && ProcessNotificationState->Active &&
+        ProcessNotificationState->Thread == CurrentThreadKey;
+    unsigned Critical =
+        ProcessNotify ? ProcessNotificationState->Baseline.CriticalDepth + 1
+                      : (SystemThread ? 1 : 0);
+    unsigned Guarded =
+        ProcessNotify ? ProcessNotificationState->Baseline.GuardedDepth : 0;
+    bool ThreadNotify = false;
+    for (const auto &[ID, N] : ThreadNotifications)
+      if (N.Active && N.Thread == CurrentThreadKey &&
+          (!ThreadNotify || N.Baseline.CriticalDepth + 1 >= Critical)) {
+        ThreadNotify = true;
+        Critical = N.Baseline.CriticalDepth + 1;
+        Guarded = N.Baseline.GuardedDepth;
+      }
+    bool RegistryNotify = false;
+    for (const auto &[ID, N] : RegistryNotifications)
+      if (N.Active && N.Thread == CurrentThreadKey) {
+        RegistryNotify = true;
+        Critical = N.Baseline.CriticalDepth + 1;
+        Guarded = N.Baseline.GuardedDepth;
+      }
+    if (It->second.GuardedDepth != Guarded ||
+        It->second.CriticalDepth > Critical ||
+        ((ProcessNotify || ThreadNotify || RegistryNotify) &&
+         It->second.CriticalDepth != Critical))
       return apiError("guest return retains an unmatched APC-disable region");
   }
   if (auto E = Interrupts.validateExecutionReturn(Identity))

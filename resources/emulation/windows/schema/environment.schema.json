@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "NeverD Windows reference resource inventory",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "architecture", "windows_version", "modules"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "architecture": {"const": "x64"},
+    "windows_version": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["major", "minor", "build"],
+      "properties": {
+        "major": {"const": 10},
+        "minor": {"const": 0},
+        "build": {"const": 19041}
+      }
+    },
+    "modules": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 32,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "file_version", "image", "image_sha256", "pdb", "pdb_sha256", "pdb_guid", "pdb_age"],
+        "properties": {
+          "name": {"type": "string", "pattern": "^[A-Za-z0-9_-]+\\.(exe|dll|sys)$"},
+          "file_version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+$"},
+          "image": {"type": "string", "pattern": "^images/[A-Za-z0-9_-]+\\.(exe|dll|sys)$"},
+          "image_sha256": {"$ref": "#/$defs/sha256"},
+          "pdb": {"type": "string", "pattern": "^symbols/[A-Za-z0-9_-]+\\.pdb$"},
+          "pdb_sha256": {"$ref": "#/$defs/sha256"},
+          "pdb_guid": {"type": "string", "pattern": "^[A-F0-9]{8}-[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{12}$"},
+          "pdb_age": {"type": "integer", "minimum": 0, "maximum": 4294967295}
+        }
+      }
+    }
+  },
+  "$defs": {"sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}}
+}

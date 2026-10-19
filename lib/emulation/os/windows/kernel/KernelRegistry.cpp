@@ -12,7 +12,8 @@
 /// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/ne-wdm-_key_value_information_class
 /// https://learn.microsoft.com/windows/win32/sysinfo/writing-and-deleting-registry-data
 /// The explicit scenario tree grants the supported access-mask bits. This is
-/// a concrete capability model, not an ACL, privilege, hive, or host OS model.
+/// a concrete capability and virtual commit model; native hive formats,
+/// privileges, ACL evaluation and host registry I/O remain unsupported.
 ///
 //===----------------------------------------------------------------------===//
 
@@ -195,6 +196,12 @@ llvm::Error validateDriverRegistry(
     if (Key.LastWriteTime100ns && *Key.LastWriteTime100ns > INT64_MAX)
       return registryError(
           "registry last-write time exceeds the signed 64-bit limit");
+    if (Key.Information && Key.LastWriteTime100ns &&
+        Key.Information->LastWriteTime != *Key.LastWriteTime100ns)
+      return registryError("registry last-write observations disagree");
+    if (Key.Information && !Key.Information->ClassName.empty())
+      return registryError("registry information currently requires an "
+                           "explicit empty class_name");
     if (Key.Path.size() > MaxRegistryPathLength || !validPath(Key.Path))
       return registryError(
           "registry path must be bounded ASCII under \\Registry\\Machine or "
@@ -224,18 +231,46 @@ llvm::Error validateDriverRegistry(
         return registryError("registry total value bytes exceed the limit");
     }
   }
+  for (const auto &Key : *Registry) {
+    if (!Key.SubkeyOrder)
+      continue;
+    const auto Parent = folded(Key.Path);
+    std::set<std::string> Children, Seen;
+    for (const auto &Path : AllPaths)
+      if (Path != Parent && parentPath(Path) == Parent)
+        Children.insert(Path);
+    if (Key.SubkeyOrder->size() != Children.size())
+      return registryError("registry subkey_order must contain every immediate "
+                           "child exactly once");
+    for (const auto &Name : *Key.SubkeyOrder) {
+      if (Name.empty() || !asciiName(Name) ||
+          Name.find('\\') != std::string::npos ||
+          Name.size() > MaxRegistryPathLength)
+        return registryError(
+            "registry subkey_order requires bounded immediate child names");
+      const auto Path = Parent + "\\" + folded(Name);
+      if (!Children.contains(Path) || !Seen.insert(Path).second)
+        return registryError(
+            "registry subkey_order has an unknown or duplicate child");
+    }
+  }
   return llvm::Error::success();
 }
 
 llvm::Error KernelRegistry::initialize(
     const std::optional<std::vector<DriverRegistryKey>> &Registry,
-    std::optional<uint64_t> InitialSystemTime100ns) {
+    std::optional<uint64_t> InitialSystemTime100ns,
+    const std::optional<std::vector<DriverRegistryHive>> &Mounts) {
   if (auto E = validateDriverRegistry(Registry, InitialSystemTime100ns))
     return E;
   if (!KeyBodies.empty())
     return registryError("registry reset requires released key objects");
+  if (auto E = validateDriverRegistryHiveMounts(Registry, Mounts))
+    return E;
   Configured = Registry.has_value();
   Keys.clear();
+  Hives.reset();
+  NextKeyIdentity = 1;
   ValueCount = 0;
   DataBytes = 0;
   SystemTime100ns = InitialSystemTime100ns;
@@ -245,9 +280,11 @@ llvm::Error KernelRegistry::initialize(
     std::string Path = Input.Path;
     while (true) {
       const std::string Folded = folded(Path);
-      Keys.try_emplace(Folded,
-                       std::make_shared<Key>(
-                           Key{Path, {}, {}, false, false, SystemTime100ns}));
+      auto Inserted = Keys.try_emplace(
+          Folded, std::make_shared<Key>(
+                      Key{Path, {}, {}, false, false, SystemTime100ns}));
+      if (Inserted.second)
+        Inserted.first->second->Identity = NextKeyIdentity++;
       if (rootPath(Folded))
         break;
       Path = parentPath(Path);
@@ -256,7 +293,14 @@ llvm::Error KernelRegistry::initialize(
     // Prefer the explicit key spelling over an implicit ancestor spelling.
     Entry.Path = Input.Path;
     Entry.LastWriteTime100ns =
-        Input.LastWriteTime100ns ? Input.LastWriteTime100ns : SystemTime100ns;
+        Input.Information
+            ? std::optional<uint64_t>(Input.Information->LastWriteTime)
+        : Input.LastWriteTime100ns ? Input.LastWriteTime100ns
+                                   : SystemTime100ns;
+    Entry.Information = Input.Information;
+    ObservedEnumeration |=
+        Input.Information.has_value() || Input.SubkeyOrder.has_value();
+    Entry.SubkeyOrder = Input.SubkeyOrder;
     for (const DriverRegistryValue &Value : Input.Values) {
       Entry.Values.emplace(folded(Value.Name), Value);
       Entry.ValueOrder.push_back(folded(Value.Name));
@@ -282,7 +326,77 @@ llvm::Error KernelRegistry::initialize(
                    uint32_t((Path.size() - Parent->first.size() - 1) * 2));
     }
   }
+  if (Mounts) {
+    Hives.emplace();
+    for (const auto &H : *Mounts)
+      Hives->push_back({H.Path, 0, commitSnapshot(folded(H.Path))});
+  }
   return llvm::Error::success();
+}
+
+DriverRegistryKey KernelRegistry::keySnapshot(const Key &Entry) {
+  DriverRegistryKey Output{Entry.Path, {}};
+  Output.Information = Entry.Information;
+  Output.SubkeyOrder = Entry.SubkeyOrder;
+  Output.LastWriteTime100ns = Entry.LastWriteTime100ns;
+  if (Output.Information && Entry.LastWriteTime100ns)
+    Output.Information->LastWriteTime = *Entry.LastWriteTime100ns;
+  for (const auto &Name : Entry.ValueOrder)
+    Output.Values.push_back(Entry.Values.at(Name));
+  return Output;
+}
+llvm::Expected<std::optional<uint64_t>>
+KernelRegistry::providerKey(llvm::StringRef Path) const {
+  if (!Configured)
+    return registryError("registry provider is not configured");
+  if (!validPath(Path))
+    return registryError("invalid registry provider key path");
+  auto K = Keys.find(folded(Path));
+  if (K == Keys.end() || K->second->Deleted)
+    return std::optional<uint64_t>{};
+  return std::optional<uint64_t>{K->second->Identity};
+}
+llvm::Expected<KernelRegistry::ProviderValue>
+KernelRegistry::providerValue(uint64_t Identity, llvm::StringRef Name) const {
+  if (!Configured || !Identity || !asciiName(Name) ||
+      Name.size() > MaxRegistryValueNameLength)
+    return registryError("invalid registry provider value request");
+  for (const auto &[Path, K] : Keys)
+    if (K->Identity == Identity) {
+      if (K->Deleted)
+        return ProviderValue{uint32_t(KeyDeleted), {}};
+      auto V = K->Values.find(folded(Name));
+      if (V == K->Values.end())
+        return ProviderValue{uint32_t(ObjectNameNotFound), {}};
+      return ProviderValue{0, V->second};
+    }
+  return ProviderValue{uint32_t(KeyDeleted), {}};
+}
+std::vector<DriverRegistryKey>
+KernelRegistry::commitSnapshot(llvm::StringRef Root) const {
+  std::vector<DriverRegistryKey> Result;
+  for (const auto &[Path, Entry] : Keys)
+    if (!Entry->Deleted && !Entry->Volatile && atOrBelow(Path, Root))
+      Result.push_back(keySnapshot(*Entry));
+  return Result;
+}
+llvm::Expected<uint64_t> KernelRegistry::flush(const Key &Entry) {
+  if (!Hives)
+    return registryError("ZwFlushKey requires explicit registry_hives storage");
+  for (auto &H : *Hives) {
+    const auto Root = folded(H.Path);
+    if (!atOrBelow(folded(Entry.Path), Root))
+      continue;
+    if (H.FlushCount == UINT64_MAX)
+      return registryError("registry hive flush observation count exhausted");
+    auto Committed = commitSnapshot(Root);
+    // Publish the whole hive atomically. Unflushed live state and volatile
+    // keys never become durable merely because a handle was closed.
+    H.Committed = std::move(Committed);
+    ++H.FlushCount;
+    return Success;
+  }
+  return registryError("ZwFlushKey target has no declared hive mount");
 }
 
 std::optional<std::vector<DriverRegistryKey>> KernelRegistry::snapshot() const {
@@ -294,6 +408,8 @@ std::optional<std::vector<DriverRegistryKey>> KernelRegistry::snapshot() const {
     if (Entry.Deleted)
       continue;
     DriverRegistryKey Output{Entry.Path, {}};
+    Output.Information = Entry.Information;
+    Output.SubkeyOrder = Entry.SubkeyOrder;
     Output.LastWriteTime100ns = Entry.LastWriteTime100ns;
     for (const auto &Name : Entry.ValueOrder)
       Output.Values.push_back(Entry.Values.at(Name));
@@ -522,6 +638,10 @@ llvm::Expected<uint64_t> KernelRegistry::open(KernelModel &Model,
         std::max(Parent.MaxNameLength,
                  uint32_t((Path.size() - parentPath(Folded).size() - 1) * 2));
   }
+  if (!Exists) {
+    Keys.at(Folded)->Identity = NextKeyIdentity++;
+    Keys.at(parentPath(Folded))->SubkeyOrder.reset();
+  }
   KeyBodies.emplace(*Body, Keys.at(Folded));
   Model.ReferencedObjects.emplace(
       *Body, KernelModel::ObjectReferences{
@@ -529,6 +649,20 @@ llvm::Expected<uint64_t> KernelRegistry::open(KernelModel &Model,
   Model.retainObjectHandle(*Body, *Access, Flags & windows::ObjectKernelHandle,
                            ProcessID);
   return Success;
+}
+
+bool KernelRegistry::ownsHandle(uint64_t Handle) const {
+  const auto H = Owner.ObjectHandles.find(Handle);
+  return H != Owner.ObjectHandles.end() && KeyBodies.contains(H->second.Object);
+}
+
+std::optional<uint64_t> KernelRegistry::keyIdentity(uint64_t Handle) const {
+  const auto *H = Owner.findObjectHandle(Handle);
+  if (!H)
+    return std::nullopt;
+  auto It = KeyBodies.find(H->Object);
+  return It == KeyBodies.end() ? std::nullopt
+                               : std::optional<uint64_t>(It->second->Identity);
 }
 
 llvm::Expected<uint64_t> KernelRegistry::query(const KernelModel &Model,
@@ -750,6 +884,119 @@ KernelRegistry::queryKey(const KernelModel &Model, const Key &Entry,
   return Entry.Deleted ? KeyDeleted : Success;
 }
 
+llvm::Expected<uint64_t> KernelRegistry::enumerate(const KernelModel &Model,
+                                                   Key &Parent,
+                                                   llvm::ArrayRef<uint64_t> A) {
+  const uint32_t Class = uint32_t(A[2]), Index = uint32_t(A[1]),
+                 Capacity = uint32_t(A[4]);
+  std::vector<const Key *> Children;
+  const auto ParentName = folded(Parent.Path);
+  for (const auto &[Path, Entry] : Keys)
+    if (!Entry->Deleted && Path != ParentName && parentPath(Path) == ParentName)
+      Children.push_back(Entry.get());
+  if (Index >= Children.size())
+    return NoMoreEntries;
+  auto It = Keys.end();
+  if (!Parent.SubkeyOrder) {
+    if (Children.size() != 1)
+      return registryError("ZwEnumerateKey requires explicit subkey_order");
+    // The only remaining child is unambiguous without any ordering policy.
+    It = Keys.find(folded(Children.front()->Path));
+  } else {
+    if (Parent.SubkeyOrder->size() != Children.size())
+      return registryError("registry child order lost its live tree identity");
+    It = Keys.find(ParentName + "\\" + folded((*Parent.SubkeyOrder)[Index]));
+  }
+  if (It == Keys.end() || It->second->Deleted)
+    return registryError("registry child order refers to an unavailable key");
+  const auto &Entry = It->second;
+  const std::string Name = Entry->Path.substr(Entry->Path.rfind('\\') + 1);
+  const uint32_t Header = Class == 0 ? 16 : Class == 1 ? 24 : 44;
+  const uint32_t Required = Header + (Class == 2 ? 0 : Name.size() * 2);
+  const uint32_t Written = Capacity < Header ? 0 : std::min(Capacity, Required);
+  if (Class != 0 || Written)
+    if (!Entry->Information)
+      return registryError("ZwEnumerateKey requires observed key information; "
+                           "timestamp/class are unknown");
+  std::vector<uint8_t> Bytes(Required);
+  if (Written) {
+    llvm::support::endian::write64le(Bytes.data(),
+                                     Entry->Information->LastWriteTime);
+    if (Class == 0)
+      store32(Bytes, 12, Name.size() * 2);
+    else {
+      store32(Bytes, 12, UINT32_MAX); // Native absent class offset.
+      if (Class == 1)
+        store32(Bytes, 20, Name.size() * 2);
+      else {
+        uint32_t Count = 0, MaxName = 0;
+        for (const auto &[Path, Child] : Keys) {
+          if (Child->Deleted || Path == It->first ||
+              parentPath(Path) != It->first)
+            continue;
+          if (!Child->Information)
+            return registryError("ZwEnumerateKey full information requires "
+                                 "child class observations");
+          ++Count;
+          MaxName = std::max<uint32_t>(
+              MaxName, (Child->Path.size() - Entry->Path.size() - 1) * 2);
+        }
+        store32(Bytes, 20, Count);
+        store32(Bytes, 24, MaxName);
+        store32(Bytes, 32, Entry->Values.size());
+        uint32_t MaxValueName = 0, MaxValueData = 0;
+        for (const auto &[Key, Value] : Entry->Values) {
+          MaxValueName =
+              std::max<uint32_t>(MaxValueName, Value.Name.size() * 2);
+          MaxValueData = std::max<uint32_t>(MaxValueData, Value.Data.size());
+        }
+        store32(Bytes, 36, MaxValueName);
+        store32(Bytes, 40, MaxValueData);
+      }
+    }
+    if (Class != 2) {
+      // The finite ASCII hive uses native compressed names. Odd truncated
+      // outputs expand whole UTF-16 characters and leave the final byte zero.
+      const size_t Characters =
+          std::min<size_t>(Name.size(), (Written - Header) / 2);
+      storeName(Bytes, Header, llvm::StringRef(Name).take_front(Characters));
+    }
+  }
+  auto Writable = [&](uint64_t Address, uint32_t Size) -> llvm::Error {
+    if (auto E = Model.validateGuestAccess(Address, Size, true))
+      return E;
+    if (!Size)
+      return llvm::Error::success();
+    if (!Address)
+      return registryError("registry output requires nonnull RAM");
+    auto Pin = Memory.pinBacking(Address, Size);
+    if (!Pin)
+      return Pin.takeError();
+    auto Access = Memory.canAccess(Address, Size, Write);
+    if (!Access)
+      return Access.takeError();
+    if (!*Access)
+      return registryError("registry output requires writable RAM");
+    return llvm::Error::success();
+  };
+  if (auto E = Writable(A[5], 4))
+    return E;
+  if (Written) {
+    if (auto E = Writable(A[3], Written))
+      return E;
+    if (A[3] < A[5] + 4 && A[5] < A[3] + Written)
+      return registryError(
+          "overlapping registry enumeration outputs are unsupported");
+    if (auto E = Memory.write(A[3], llvm::ArrayRef(Bytes).take_front(Written)))
+      return E;
+  }
+  if (auto E = Memory.writeInteger(A[5], Required, 4))
+    return E;
+  return Capacity < Header     ? BufferTooSmall
+         : Capacity < Required ? BufferOverflow
+                               : Success;
+}
+
 llvm::Expected<uint64_t>
 KernelRegistry::enumerateKey(const KernelModel &Model, llvm::StringRef Path,
                              llvm::ArrayRef<uint64_t> A) {
@@ -765,6 +1012,16 @@ KernelRegistry::enumerateKey(const KernelModel &Model, llvm::StringRef Path,
           return llvm::toUpper(A) < llvm::toUpper(B);
         });
   });
+  if (const auto Parent = Keys.find(Path.str());
+      Parent != Keys.end() && Parent->second->SubkeyOrder) {
+    Children.clear();
+    for (const auto &Name : *Parent->second->SubkeyOrder) {
+      auto Child = Keys.find(Path.str() + "\\" + folded(Name));
+      if (Child == Keys.end())
+        return registryError("registry subkey_order lost its child");
+      Children.push_back(Child->second.get());
+    }
+  }
   const uint32_t Index = A[1];
   if (Index >= Children.size())
     return NoMoreEntries;
@@ -821,6 +1078,8 @@ llvm::Expected<uint64_t> KernelRegistry::set(const KernelModel &Model,
       std::max(Entry.MaxValueNameLength, uint32_t(Name.size() * 2));
   Entry.MaxValueDataLength = std::max(Entry.MaxValueDataLength, Size);
   Entry.LastWriteTime100ns = *Time;
+  if (ObservedEnumeration)
+    Entry.Information.reset();
   return Success;
 }
 
@@ -857,6 +1116,10 @@ llvm::Expected<uint64_t> KernelRegistry::call(llvm::StringRef Name,
   if (Entry.Deleted && Function != API::ZwDeleteKey &&
       !(Function == API::ZwQueryKey && uint32_t(A[1]) == KeyNameInformation))
     return KeyDeleted;
+  // Zw uses KernelMode object reference with zero desired access in the
+  // pinned native NtFlushKey body. It does not require KEY_SET_VALUE.
+  if (Function == API::ZwFlushKey)
+    return flush(Entry);
   uint32_t Required =
       (Function == API::ZwQueryValueKey ||
        Function == API::ZwEnumerateValueKey || Function == API::ZwQueryKey)
@@ -875,7 +1138,8 @@ llvm::Expected<uint64_t> KernelRegistry::call(llvm::StringRef Name,
   case API::ZwQueryKey:
     return queryKey(Model, Entry, uint32_t(A[1]), A[2], uint32_t(A[3]), A[4]);
   case API::ZwEnumerateKey:
-    return enumerateKey(Model, Path, A);
+    return ObservedEnumeration ? enumerate(Model, Entry, A)
+                               : enumerateKey(Model, Path, A);
   case API::ZwQueryValueKey:
   case API::ZwEnumerateValueKey:
     return query(Model, Entry, A, Function == API::ZwEnumerateValueKey);
@@ -907,6 +1171,10 @@ llvm::Expected<uint64_t> KernelRegistry::call(llvm::StringRef Name,
       return Success;
     if (rootPath(Path))
       return CannotDelete;
+    if (Hives && llvm::any_of(*Hives, [&](const auto &H) {
+          return folded(H.Path) == Path;
+        }))
+      return CannotDelete;
     for (const auto &[OtherPath, Other] : Keys)
       if (!Other->Deleted && OtherPath != Path && atOrBelow(OtherPath, Path))
         return CannotDelete;
@@ -923,6 +1191,8 @@ llvm::Expected<uint64_t> KernelRegistry::call(llvm::StringRef Name,
     Keys.erase(Path);
     const auto ParentPath = parentPath(Path);
     Key &Parent = *Keys.at(ParentPath);
+    if (ObservedEnumeration)
+      Parent.SubkeyOrder.reset();
     Parent.LastWriteTime100ns = *Time;
     if (llvm::none_of(Keys, [&](const auto &Other) {
           return !Other.second->Deleted &&

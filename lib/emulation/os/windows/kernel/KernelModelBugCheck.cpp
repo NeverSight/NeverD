@@ -31,8 +31,9 @@ bool KernelModel::hasLiveBugCheckCallbacks() const {
                      [](const auto &Entry) { return Entry.second.Live; });
 }
 
-llvm::Error KernelModel::validateBugCheckAccess(uint64_t Address, uint32_t Size,
-                                                bool IsWrite) const {
+llvm::Error KernelModel::validateStrictBugCheckAccess(uint64_t Address,
+                                                      uint32_t Size,
+                                                      bool IsWrite) const {
   for (const auto &[Base, Record] : BugCheckRecords) {
     if (Address >= Base + RecordSize || Base >= Address + Size)
       continue;
@@ -113,6 +114,10 @@ llvm::Error KernelModel::validateBugCheckRecord(uint64_t Record) const {
 llvm::Expected<uint64_t>
 KernelModel::registerBugCheckCallback(uint64_t Record, uint64_t Callback,
                                       uint32_t Reason, uint64_t Component) {
+  if (Version && Version->Major == 10 && Version->Minor == 0 &&
+      Version->Build == 19041)
+    return registerBugCheck({Record, Callback, Reason, Component});
+
   if (auto E = validateBugCheckRecord(Record))
     return std::move(E);
   auto Existing = BugCheckRecords.find(Record);
@@ -178,6 +183,10 @@ KernelModel::registerBugCheckCallback(uint64_t Record, uint64_t Callback,
 
 llvm::Expected<uint64_t>
 KernelModel::deregisterBugCheckCallback(uint64_t Record) {
+  if (Version && Version->Major == 10 && Version->Minor == 0 &&
+      Version->Build == 19041)
+    return deregisterBugCheck(Record);
+
   if (auto E = validateBugCheckRecord(Record))
     return std::move(E);
   auto It = BugCheckRecords.find(Record);
@@ -195,5 +204,161 @@ KernelModel::deregisterBugCheckCallback(uint64_t Record) {
     return std::move(E);
   It->second.Live = false;
   return 1;
+}
+} // namespace neverd::emulation
+
+//===- KernelModelBugCheck.cpp - Retained bug-check registrations --------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+#include "KernelModel.h"
+#include "KernelModelRuntime.h"
+
+#include "llvm/Support/Endian.h"
+
+namespace neverd::emulation {
+namespace {
+namespace bugcheck {
+#define NEVERD_KERNEL_BUGCHECK_VALUE(Name, Value)                              \
+  constexpr uint64_t Name = Value;
+#include "KernelBugCheck.def"
+#undef NEVERD_KERNEL_BUGCHECK_VALUE
+} // namespace bugcheck
+llvm::Error bugError(llvm::StringRef Message) {
+  return llvm::createStringError(llvm::inconvertibleErrorCode(), Message);
+}
+bool overlaps(uint64_t Base, uint64_t Size, uint64_t Other, uint64_t Length) {
+  return Size && Length && Base < Other + Length && Other < Base + Size;
+}
+} // namespace
+
+llvm::Expected<uint64_t>
+KernelModel::registerBugCheck(llvm::ArrayRef<uint64_t> A) {
+  const uint32_t Reason = uint32_t(A[2]);
+  if (Reason < bugcheck::FirstReason || Reason > bugcheck::LastReason)
+    return 0;
+  if (BugCheckCallbacks.contains(A[0]))
+    return 0;
+  for (const auto &[Record, State] : BugCheckCallbacks)
+    if (overlaps(A[0], bugcheck::RecordSize, Record, bugcheck::RecordSize))
+      return bugError("overlapping bug-check callback records");
+  if (auto E = runtime::checkBufferRange(A[0], bugcheck::RecordSize))
+    return E;
+  if (A[0] % 8)
+    return bugError("bug-check callback record requires pointer alignment");
+  if (auto E = validateGuestAccess(A[0], bugcheck::RecordSize, true))
+    return E;
+  auto Writable = Memory.canAccess(A[0], bugcheck::RecordSize, Read | Write);
+  if (!Writable)
+    return Writable.takeError();
+  if (!*Writable)
+    return bugError("bug-check callback record requires writable storage");
+  auto State = Memory.readInteger(A[0] + bugcheck::StateOffset, 1);
+  if (!State)
+    return State.takeError();
+  if (*State != bugcheck::Empty)
+    return 0;
+  auto Executable = Memory.canAccess(A[1], 1, Execute);
+  if (!Executable)
+    return Executable.takeError();
+  if (!A[1] || !*Executable || (Exports && Exports->lookup(A[1])))
+    return bugError("bug-check callback requires executable guest code");
+  if (auto E = runtime::checkBufferRange(A[3], bugcheck::MaxComponentBytes))
+    return E;
+  uint64_t ComponentSize = 0;
+  bool Terminated = false;
+  while (ComponentSize < bugcheck::MaxComponentBytes) {
+    if (auto E = validateGuestAccess(A[3] + ComponentSize, 1, false))
+      return E;
+    auto C = Memory.readInteger(A[3] + ComponentSize++, 1);
+    if (!C)
+      return C.takeError();
+    if (!*C) {
+      Terminated = true;
+      break;
+    }
+  }
+  if (!Terminated)
+    return bugError("bug-check component exceeds model capacity");
+  if (overlaps(A[0], bugcheck::RecordSize, A[3], ComponentSize))
+    return bugError("bug-check component overlaps callback record");
+  if (BugCheckCallbacks.size() >= bugcheck::MaxRegistrations)
+    return 0;
+  std::array<uint8_t, bugcheck::RecordSize> Bytes{};
+  llvm::support::endian::write64le(Bytes.data(), A[0]);
+  llvm::support::endian::write64le(Bytes.data() + 8, A[0]);
+  llvm::support::endian::write64le(Bytes.data() + bugcheck::RoutineOffset,
+                                   A[1]);
+  llvm::support::endian::write64le(Bytes.data() + bugcheck::ComponentOffset,
+                                   A[3]);
+  llvm::support::endian::write32le(Bytes.data() + bugcheck::ReasonOffset,
+                                   Reason);
+  Bytes[bugcheck::StateOffset] = bugcheck::Inserted;
+  if (auto E = Memory.write(A[0], Bytes))
+    return E;
+  BugCheckCallbacks.emplace(A[0],
+                            BugCheckRegistration{A[1], A[3], ComponentSize});
+  return 1;
+}
+
+llvm::Expected<uint64_t> KernelModel::deregisterBugCheck(uint64_t Record) {
+  auto I = BugCheckCallbacks.find(Record);
+  if (I == BugCheckCallbacks.end())
+    return 0;
+  // Kernel-owned writes bypass the guest's opaque-record access boundary.
+  if (auto E = Memory.writeInteger(Record + bugcheck::StateOffset,
+                                   bugcheck::Empty, 1))
+    return E;
+  BugCheckCallbacks.erase(I);
+  return 1;
+}
+
+llvm::Error KernelModel::validateNativeBugCheckAccess(uint64_t Address,
+                                                      uint32_t Size,
+                                                      bool IsWrite) const {
+  for (const auto &[Record, State] : BugCheckCallbacks)
+    if (overlaps(Address, Size, Record, bugcheck::RecordSize)) {
+      if (!IsWrite && Address == Record + bugcheck::StateOffset && Size == 1)
+        continue;
+      return bugError("guest access to a registered opaque bug-check record");
+    }
+  return llvm::Error::success();
+}
+
+llvm::Error KernelModel::canReleaseBugCheckStorage(uint64_t Base,
+                                                   uint64_t Size) const {
+  for (const auto &[Record, State] : BugCheckCallbacks)
+    if (overlaps(Base, Size, Record, bugcheck::RecordSize) ||
+        overlaps(Base, Size, State.Routine, 1))
+      return bugError(
+          "cannot release storage retained by a bug-check callback");
+  return llvm::Error::success();
+}
+
+void KernelModel::noteBugCheckComponentRelease(uint64_t Base, uint64_t Size) {
+  // Component is a borrowed diagnostic name, not an ownership reference. The
+  // matched 19041 registration stores the original pointer and deregistration
+  // does not dereference its bytes. Preserve that pointer, mark its original
+  // storage revocation, and leave actual access to the ordinary memory guards.
+  for (auto &[Record, State] : BugCheckCallbacks)
+    if (overlaps(Base, Size, State.Component, State.ComponentSize))
+      State.ComponentStorageReleased = true;
+}
+
+void KernelModel::snapshotBugCheckCallbacks() {
+  Result.BugCheckCallbacks.clear();
+  for (const auto &[Record, State] : BugCheckCallbacks)
+    Result.BugCheckCallbacks.push_back({Record, State.Routine, State.Component,
+                                        State.ComponentStorageReleased});
+}
+} // namespace neverd::emulation
+
+namespace neverd::emulation {
+llvm::Error KernelModel::validateBugCheckAccess(uint64_t Address, uint32_t Size,
+                                                bool IsWrite) const {
+  if (auto E = validateStrictBugCheckAccess(Address, Size, IsWrite))
+    return E;
+  return validateNativeBugCheckAccess(Address, Size, IsWrite);
 }
 } // namespace neverd::emulation

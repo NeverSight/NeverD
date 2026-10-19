@@ -9,11 +9,16 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "RegistryEnumerationTestFixture.h"
 #include "backends/unicorn/UnicornBackend.h"
 #include "gtest/gtest.h"
 #include "os/windows/driver/DriverImage.h"
 #include "os/windows/kernel/KernelModel.h"
 #include "os/windows/kernel/KernelRegistry.h"
+
+#include "llvm/ADT/StringExtras.h"
+
+#include <algorithm>
 
 namespace neverd::emulation {
 namespace {
@@ -58,8 +63,9 @@ protected:
   }
 
   void initialize(std::vector<DriverRegistryKey> Keys,
-                  std::optional<uint64_t> Time = std::nullopt) {
-    success(Registry->initialize(std::move(Keys), Time));
+                  std::optional<uint64_t> Time = std::nullopt,
+                  std::optional<std::vector<DriverRegistryHive>> Hives = {}) {
+    success(Registry->initialize(std::move(Keys), Time, Hives));
   }
 
   void put(uint64_t Address, uint64_t Value, unsigned Size = 8) {
@@ -159,6 +165,151 @@ protected:
   }
 };
 
+TEST_F(DriverKernelRegistry, HiveFlushMatchesNativeKernelModeHandleStatuses) {
+  struct Case {
+    bool Valid, Deleted;
+    uint32_t Status;
+  };
+  const Case Cases[] = {
+#define NEVERD_REGISTRY_FLUSH_NATIVE_CASE(V, D, S) {V, D, S},
+#include "RegistryFlushNativeCases.def"
+#undef NEVERD_REGISTRY_FLUSH_NATIVE_CASE
+  };
+  ASSERT_EQ(std::size(Cases), 4u);
+  for (const auto &C : Cases) {
+    initialize(
+        {{Path, {}}}, std::nullopt,
+        std::vector<DriverRegistryHive>{{"\\Registry\\Machine\\Software"}});
+    const auto Reader = open(Path, 0), Writer = open();
+    if (C.Deleted)
+      EXPECT_EQ(call("ZwDeleteKey", {Writer}), 0u);
+    EXPECT_EQ(call("ZwFlushKey", {C.Valid ? Reader : 0x123}), C.Status);
+    EXPECT_EQ(Registry->hiveSnapshot()->at(0).FlushCount, C.Status ? 0u : 1u);
+    call("ZwClose", {Reader});
+    call("ZwClose", {Writer});
+  }
+}
+TEST_F(DriverKernelRegistry, HiveFlushCommitsSiblingsAndPreservesOtherHives) {
+  const std::string Root = "\\Registry\\Machine\\Software";
+  const std::string Other = "\\Registry\\Machine\\System\\Other";
+  initialize(
+      {{Root + "\\A", {{"Mode", 4, {1, 0, 0, 0}}}},
+       {Root + "\\B", {{"Mode", 4, {2, 0, 0, 0}}}},
+       {Other, {{"Mode", 4, {3, 0, 0, 0}}}}},
+      std::nullopt,
+      std::vector<DriverRegistryHive>{{Root}, {"\\Registry\\Machine\\System"}});
+  const auto A = open(Root + "\\A", 0), B = open(Root + "\\B"), C = open(Other);
+  put(Data, 9, 4);
+  EXPECT_EQ(call("ZwSetValueKey", {B, ValueName, 0, 4, Data, 4}), 0u);
+  put(Data, 8, 4);
+  EXPECT_EQ(call("ZwSetValueKey", {C, ValueName, 0, 4, Data, 4}), 0u);
+  const auto ReadCommitted = [&](unsigned Hive, llvm::StringRef Path) {
+    const auto &H = Registry->hiveSnapshot();
+    EXPECT_TRUE(H);
+    for (const auto &K : H->at(Hive).Committed)
+      if (K.Path == Path)
+        return K.Values.at(0).Data.at(0);
+    ADD_FAILURE() << Path.str();
+    return uint8_t(255);
+  };
+  EXPECT_EQ(ReadCommitted(0, Root + "\\B"), 2u);
+  EXPECT_EQ(call("ZwFlushKey", {A}), 0u);
+  EXPECT_EQ(ReadCommitted(0, Root + "\\B"), 9u);
+  EXPECT_EQ(ReadCommitted(1, Other), 3u);
+  EXPECT_EQ(Registry->hiveSnapshot()->at(0).FlushCount, 1u);
+  EXPECT_EQ(Registry->hiveSnapshot()->at(1).FlushCount, 0u);
+  put(Data, 7, 4);
+  EXPECT_EQ(call("ZwSetValueKey", {B, ValueName, 0, 4, Data, 4}), 0u);
+  call("ZwClose", {B});
+  EXPECT_EQ(ReadCommitted(0, Root + "\\B"), 9u);
+  call("ZwFlushKey", {A});
+  EXPECT_EQ(ReadCommitted(0, Root + "\\B"), 7u);
+  call("ZwClose", {A});
+  call("ZwClose", {C});
+}
+TEST_F(DriverKernelRegistry, HiveFlushExcludesVolatileKeysAndCommitsDeletion) {
+  const std::string Root = "\\Registry\\Machine\\Software";
+  initialize({{Path, {{"Mode", 4, {1, 0, 0, 0}}}}}, std::nullopt,
+             std::vector<DriverRegistryHive>{{Root}});
+  const auto Parent = open();
+  object("Transient", Parent);
+  EXPECT_EQ(call("ZwCreateKey",
+                 {HandleOutput, 0xf003f, Object, 0, 0, 1, Disposition}),
+            0u);
+  const auto Volatile = get(HandleOutput);
+  put(Data, 5, 4);
+  EXPECT_EQ(call("ZwSetValueKey", {Volatile, ValueName, 0, 4, Data, 4}), 0u);
+  call("ZwFlushKey", {Volatile});
+  const auto &Committed = Registry->hiveSnapshot()->at(0).Committed;
+  EXPECT_TRUE(
+      std::none_of(Committed.begin(), Committed.end(), [](const auto &K) {
+        return K.Path.find("Transient") != std::string::npos;
+      }));
+  call("ZwClose", {Volatile});
+  object("Durable", Parent);
+  EXPECT_EQ(call("ZwCreateKey",
+                 {HandleOutput, 0xf003f, Object, 0, 0, 0, Disposition}),
+            0u);
+  const auto Durable = get(HandleOutput);
+  call("ZwFlushKey", {Parent});
+  auto HasDurable = [&] {
+    const auto &Keys = Registry->hiveSnapshot()->at(0).Committed;
+    return std::any_of(Keys.begin(), Keys.end(), [](const auto &K) {
+      return K.Path.find("Durable") != std::string::npos;
+    });
+  };
+  EXPECT_TRUE(HasDurable());
+  call("ZwDeleteKey", {Durable});
+  EXPECT_EQ(call("ZwFlushKey", {Durable}), 0xc000017cu);
+  EXPECT_TRUE(HasDurable());
+  call("ZwFlushKey", {Parent});
+  EXPECT_FALSE(HasDurable());
+  call("ZwClose", {Durable});
+  EXPECT_EQ(call("ZwFlushKey", {Durable}), 0xc0000008u);
+  call("ZwClose", {Parent});
+}
+TEST_F(DriverKernelRegistry, HiveFlushRequiresStorageFactsAndPassiveIrql) {
+  auto H = open();
+  EXPECT_NE(failure("ZwFlushKey", {H}).find("registry_hives"),
+            std::string::npos);
+  call("ZwClose", {H});
+  initialize({{Path, {}}}, std::nullopt, std::vector<DriverRegistryHive>{});
+  H = open();
+  EXPECT_NE(failure("ZwFlushKey", {H}).find("no declared hive"),
+            std::string::npos);
+  Model->enterForeground();
+  Model->enterExecution(profile::StackBase);
+  auto Raised = Model->call("KfRaiseIrql", {1});
+  ASSERT_TRUE(bool(Raised));
+  auto Flush = Model->call("ZwFlushKey", {H});
+  ASSERT_FALSE(bool(Flush));
+  EXPECT_NE(llvm::toString(Flush.takeError()).find("PASSIVE_LEVEL"),
+            std::string::npos);
+  auto Lowered = Model->call("KeLowerIrql", {0});
+  ASSERT_TRUE(bool(Lowered));
+  call("ZwClose", {H});
+}
+TEST_F(DriverKernelRegistry,
+       HiveMountCannotBeDeletedAndSnapshotsRestoreCommittedData) {
+  const std::string Root = "\\Registry\\Machine\\Software";
+  initialize({{Path, {{"Mode", 4, {1, 0, 0, 0}}}}}, std::nullopt,
+             std::vector<DriverRegistryHive>{{Root}});
+  const auto H = open(), Mount = open(Root);
+  EXPECT_EQ(call("ZwDeleteKey", {Mount}), 0xc0000121u);
+  put(Data, 42, 4);
+  EXPECT_EQ(call("ZwSetValueKey", {H, ValueName, 0, 4, Data, 4}), 0u);
+  call("ZwFlushKey", {H});
+  const auto Committed = Registry->hiveSnapshot()->at(0).Committed;
+  put(Data, 43, 4);
+  call("ZwSetValueKey", {H, ValueName, 0, 4, Data, 4});
+  call("ZwClose", {H});
+  call("ZwClose", {Mount});
+  initialize(Committed, std::nullopt, std::vector<DriverRegistryHive>{{Root}});
+  const auto Restored = open();
+  EXPECT_EQ(query(Restored, 2, 16), 0u);
+  EXPECT_EQ(get(Output + 12, 4), 42u);
+  call("ZwClose", {Restored});
+}
 TEST_F(DriverKernelRegistry,
        OmittedInventoryStopsButExplicitAbsenceIsConcrete) {
   success(Registry->initialize(std::nullopt));
@@ -706,6 +857,80 @@ TEST_F(DriverKernelRegistry, ParentDeletionAndVolatileChildrenHaveConstraints) {
   EXPECT_EQ(call("ZwDeleteKey", {Machine}), 0xc0000121u);
 }
 
+TEST_F(DriverKernelRegistry, GenericReadAndExecuteRetainReadOnlyCapabilities) {
+  for (uint32_t Access : {0x80000000u, 0x20000000u}) {
+    SCOPED_TRACE(Access);
+    const auto H = open(Path, Access);
+    EXPECT_EQ(query(H, 2, 16), 0u);
+    EXPECT_EQ(call("ZwSetValueKey", {H, ValueName, 0, 4, Data, 4}),
+              0xc0000022u);
+    EXPECT_EQ(call("ZwDeleteValueKey", {H, ValueName}), 0xc0000022u);
+    EXPECT_EQ(call("ZwDeleteKey", {H}), 0xc0000022u);
+    object("BlockedChild", H);
+    EXPECT_EQ(call("ZwCreateKey",
+                   {HandleOutput, 0x10000000, Object, 0, 0, 0, Disposition}),
+              0xc0000022u);
+    EXPECT_EQ(call("ZwClose", {H}), 0u);
+  }
+}
+
+TEST_F(DriverKernelRegistry, GenericWriteCanMutateAndCreateButCannotQuery) {
+  const auto H = open(Path, 0x40000000);
+  put(Data, 0x12345678, 4);
+  EXPECT_EQ(call("ZwSetValueKey", {H, ValueName, 0, 4, Data, 4}), 0u);
+  EXPECT_EQ(query(H, 2, 16), 0xc0000022u);
+  EXPECT_EQ(call("ZwDeleteKey", {H}), 0xc0000022u);
+  object("WritableChild", H);
+  EXPECT_EQ(call("ZwCreateKey",
+                 {HandleOutput, 0x10000000, Object, 0, 0, 0, Disposition}),
+            0u);
+  const auto Child = get(HandleOutput);
+  EXPECT_EQ(call("ZwDeleteKey", {Child}), 0u);
+  EXPECT_EQ(call("ZwClose", {Child}), 0u);
+  EXPECT_EQ(call("ZwDeleteValueKey", {H, ValueName}), 0u);
+  EXPECT_EQ(call("ZwClose", {H}), 0u);
+}
+
+TEST_F(DriverKernelRegistry,
+       GenericMasksUnionWithExplicitRightsAndIgnoreUpperBits) {
+  for (uint64_t Access :
+       {0xc0000000ULL, 0x80000002ULL, 0xdeadbeef80000002ULL}) {
+    object(Path);
+    ASSERT_EQ(call("ZwOpenKey", {HandleOutput, Access, Object}), 0u);
+    const auto H = get(HandleOutput);
+    put(Data, 0x98765432, 4);
+    EXPECT_EQ(call("ZwSetValueKey", {H, ValueName, 0, 4, Data, 4}), 0u);
+    EXPECT_EQ(query(H, 2, 16), 0u);
+    EXPECT_EQ(get(Output + 12, 4), 0x98765432u);
+    EXPECT_EQ(call("ZwDeleteKey", {H}), 0xc0000022u);
+    EXPECT_EQ(call("ZwClose", {H}), 0u);
+  }
+  const auto H = open(Path, 0x10000000);
+  EXPECT_EQ(query(H, 2, 16), 0u);
+  EXPECT_EQ(call("ZwDeleteKey", {H}), 0u);
+  EXPECT_EQ(query(H, 2, 16), 0xc000017cu);
+  EXPECT_EQ(call("ZwClose", {H}), 0u);
+}
+
+TEST_F(DriverKernelRegistry,
+       GenericOpenMissingKeyAndUnsupportedModifiersKeepOutputs) {
+  for (uint32_t Access :
+       {0x82000000u, 0x80000100u, 0x80000200u, 0x81000000u, 0x80100000u}) {
+    object(Path);
+    put(HandleOutput, 0x77777777);
+    EXPECT_NE(failure("ZwOpenKey", {HandleOutput, Access, Object})
+                  .find("access mask"),
+              std::string::npos);
+    EXPECT_EQ(get(HandleOutput), 0x77777777u);
+    EXPECT_FALSE(Registry->hasOpenHandles());
+  }
+  object("\\Registry\\Machine\\Software\\Missing");
+  put(HandleOutput, 0x77777777);
+  EXPECT_EQ(call("ZwOpenKey", {HandleOutput, 0x80000000, Object}), 0xc0000034u);
+  EXPECT_EQ(get(HandleOutput), 0x77777777u);
+  EXPECT_FALSE(Registry->hasOpenHandles());
+}
+
 TEST_F(DriverKernelRegistry, UnsupportedNamesSecurityAndAccessDoNotGuess) {
   object(Path);
   EXPECT_NE(
@@ -1054,5 +1279,153 @@ TEST(DriverRegistryValidation, RejectsAmbiguousNamesAndUnboundedInventories) {
   Invalid(std::move(Keys));
 }
 
+TEST_F(DriverKernelRegistry,
+       EnumerationMatchesNativePartialOutputAndStatusMatrix) {
+#define NEVERD_NATIVE_ENUM_METADATA(Name, Time, Values, MaxName, MaxData)      \
+  const std::string NativeName = Name;                                         \
+  const uint64_t NativeTime = Time;                                            \
+  const unsigned ValueCount = Values, MaxValueNameBytes = MaxName,             \
+                 MaxValueDataBytes = MaxData;
+#define NEVERD_NATIVE_ENUM_CASE(Class, Index, Capacity, Status, Length, Hex)
+#include "RegistryEnumerationNativeCases.def"
+#undef NEVERD_NATIVE_ENUM_CASE
+#undef NEVERD_NATIVE_ENUM_METADATA
+  DriverRegistryKey Parent{Path, {}};
+  Parent.SubkeyOrder = std::vector<std::string>{NativeName};
+  DriverRegistryKey Child{std::string(Path) + "\\" + NativeName, {}};
+  Child.Information = DriverRegistryKeyInformation{NativeTime, ""};
+  Child.SubkeyOrder = std::vector<std::string>{};
+  // These owned values reproduce only observed aggregate lengths/counts;
+  // their names/data are synthetic, never read from the host registry.
+  for (unsigned I = 0; I < ValueCount; ++I)
+    Child.Values.push_back({std::string(MaxValueNameBytes / 2, char('A' + I)),
+                            3, std::vector<uint8_t>(MaxValueDataBytes)});
+  struct NativeCase {
+    uint32_t Class, Index, Capacity, Status, Length;
+    const char *Hex;
+  };
+  static const NativeCase Cases[] = {
+#define NEVERD_NATIVE_ENUM_METADATA(Name, Time, Values, MaxName, MaxData)
+#define NEVERD_NATIVE_ENUM_CASE(Class, Index, Capacity, Status, Length, Hex)   \
+  {Class, Index, Capacity, Status, Length, Hex},
+#include "RegistryEnumerationNativeCases.def"
+#undef NEVERD_NATIVE_ENUM_CASE
+#undef NEVERD_NATIVE_ENUM_METADATA
+  };
+  initialize({Parent, Child});
+  const auto Handle = open(Path, 8);
+  for (const auto &C : Cases) {
+    SCOPED_TRACE(std::to_string(C.Class) + ":" + std::to_string(C.Index) + ":" +
+                 std::to_string(C.Capacity));
+    success(Memory->write(Output, std::vector<uint8_t>(2048, 0xa5)));
+    put(LengthOutput, 0xa5a5a5a5, 4);
+    EXPECT_EQ(call("ZwEnumerateKey", {Handle, C.Index, C.Class, Output,
+                                      C.Capacity, LengthOutput}),
+              C.Status);
+    EXPECT_EQ(get(LengthOutput, 4), C.Length);
+    EXPECT_EQ(llvm::toHex(bytes(Output, 128), true), C.Hex);
+  }
+  EXPECT_EQ(call("ZwClose", {Handle}), 0u);
+}
+TEST_F(DriverKernelRegistry,
+       EnumerationRequiresObservedOrderAndOnlyNeedsTimestampForOutput) {
+  auto Keys = *test::registryEnumerationOptions().Registry;
+  const auto Root = Keys[0].Path;
+  Keys[0].SubkeyOrder.reset();
+  initialize(Keys);
+  const auto H = open(Root, 8);
+  EXPECT_NE(failure("ZwEnumerateKey", {H, 0, 0, 0, 0, LengthOutput})
+                .find("subkey_order"),
+            std::string::npos);
+  put(LengthOutput, 0xa5a5a5a5, 4);
+  EXPECT_EQ(call("ZwEnumerateKey", {H, 2, 0, 0, 0, LengthOutput}), 0x8000001au);
+  EXPECT_EQ(get(LengthOutput, 4), 0xa5a5a5a5u);
+  call("ZwClose", {H});
+  Keys[0].SubkeyOrder = std::vector<std::string>{"Zulu", "Alpha"};
+  Keys[2].Information.reset();
+  initialize(Keys);
+  const auto Known = open(Root, 8);
+  EXPECT_EQ(call("ZwEnumerateKey", {Known, 0, 0, 0, 0, LengthOutput}),
+            0xc0000023u);
+  EXPECT_EQ(get(LengthOutput, 4), 24u);
+  EXPECT_NE(failure("ZwEnumerateKey", {Known, 0, 0, Output, 64, LengthOutput})
+                .find("information"),
+            std::string::npos);
+  EXPECT_EQ(call("ZwEnumerateKey", {Known, 1, 0, Output, 64, LengthOutput}),
+            0u);
+  EXPECT_EQ(get(Output), 0x1122334455667788u);
+  call("ZwClose", {Known});
+}
+TEST_F(DriverKernelRegistry,
+       EnumerationInvalidatesChangedOrderAndMetadataWithoutGuessing) {
+  auto Keys = *test::registryEnumerationOptions().Registry;
+  const auto Root = Keys[0].Path;
+  initialize(Keys);
+  const auto H = open(Root);
+  const auto Alpha = open(Root + "\\Alpha");
+  unicode(ValueName, "Mode");
+  put(Data, 9, 4);
+  EXPECT_EQ(call("ZwSetValueKey", {Alpha, ValueName, 0, 4, Data, 4}), 0u);
+  EXPECT_NE(failure("ZwEnumerateKey", {H, 1, 0, Output, 64, LengthOutput})
+                .find("information"),
+            std::string::npos);
+  EXPECT_EQ(call("ZwEnumerateKey", {H, 0, 0, Output, 64, LengthOutput}), 0u);
+  EXPECT_EQ(get(Output), UINT64_C(0x8000000000000001));
+  EXPECT_EQ(call("ZwDeleteKey", {Alpha}), 0u);
+  EXPECT_EQ(call("ZwClose", {Alpha}), 0u);
+  EXPECT_EQ(call("ZwEnumerateKey", {H, 1, 0, Output, 64, LengthOutput}),
+            0x8000001au);
+  EXPECT_EQ(call("ZwEnumerateKey", {H, 0, 0, Output, 64, LengthOutput}), 0u);
+  EXPECT_EQ(get(Output), UINT64_C(0x8000000000000001));
+  object("Beta", H);
+  EXPECT_EQ(call("ZwCreateKey",
+                 {HandleOutput, 0xf003f, Object, 0, 0, 0, Disposition}),
+            0u);
+  const auto Beta = get(HandleOutput);
+  EXPECT_NE(failure("ZwEnumerateKey", {H, 1, 0, 0, 0, LengthOutput})
+                .find("subkey_order"),
+            std::string::npos);
+  EXPECT_EQ(call("ZwEnumerateKey", {H, 2, 0, 0, 0, LengthOutput}), 0x8000001au);
+  auto Snapshot = Registry->snapshot();
+  ASSERT_TRUE(Snapshot);
+  bool Found = false;
+  for (const auto &K : *Snapshot)
+    if (K.Path == Root) {
+      Found = true;
+      EXPECT_FALSE(K.SubkeyOrder);
+    }
+  EXPECT_TRUE(Found);
+  call("ZwClose", {Beta});
+  call("ZwClose", {H});
+}
+TEST_F(DriverKernelRegistry,
+       EnumerationChecksCapabilitiesAndPreflightsAllOutputStores) {
+  auto Keys = *test::registryEnumerationOptions().Registry;
+  const auto Root = Keys[0].Path;
+  initialize(Keys);
+  const auto Limited = open(Root, 1);
+  put(LengthOutput, 0xa5a5a5a5, 4);
+  EXPECT_EQ(call("ZwEnumerateKey", {Limited, 0, 0, Output, 64, LengthOutput}),
+            0xc0000022u);
+  EXPECT_EQ(get(LengthOutput, 4), 0xa5a5a5a5u);
+  call("ZwClose", {Limited});
+  EXPECT_EQ(call("ZwEnumerateKey", {0, 0, 3, Output, 64, LengthOutput}),
+            0xc000000du);
+  const auto H = open(Root, 8);
+  EXPECT_FALSE(
+      failure("ZwEnumerateKey", {H, 0, 0, 0, 64, LengthOutput}).empty());
+  EXPECT_EQ(get(LengthOutput, 4), 0xa5a5a5a5u);
+  EXPECT_FALSE(
+      failure("ZwEnumerateKey", {H, 0, 0, Output, 64, Output + 4}).empty());
+  success(Memory->protect(Output, 4096, Read));
+  EXPECT_FALSE(
+      failure("ZwEnumerateKey", {H, 0, 0, Output, 64, LengthOutput}).empty());
+  EXPECT_EQ(get(LengthOutput, 4), 0xa5a5a5a5u);
+  success(Memory->protect(Output, 4096, Read | Write));
+  EXPECT_EQ(call("ZwEnumerateKey",
+                 {H, UINT64_C(0x100000000), 0, Output, 64, LengthOutput}),
+            0u);
+  call("ZwClose", {H});
+}
 } // namespace
 } // namespace neverd::emulation

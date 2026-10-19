@@ -304,7 +304,8 @@ TEST(KernelBugCheck, EnvironmentDependencySurvivesBaselineAndRemoval) {
     EXPECT_NE(std::find(Reasons.begin(), Reasons.end(),
                         "unreconstructed kernel or environment effects"),
               Reasons.end());
-    denied(S.Model.call("KeBugCheckEx", {0, 0, 0, 0, 0}), "unknown API");
+    denied(S.Model.call("KeBugCheckEx", {0, 0, 0, 0, 0}),
+           "guest requested bug check");
   }
 }
 

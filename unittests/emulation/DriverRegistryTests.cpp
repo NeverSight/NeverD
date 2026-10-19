@@ -10,14 +10,17 @@
 //===----------------------------------------------------------------------===//
 
 #include "HvfTestPolicy.h"
+#include "RegistryEnumerationTestFixture.h"
 #include "gtest/gtest.h"
 
 #include "neverd/emulation/CPU.h"
 #include "neverd/emulation/DriverSession.h"
 
+#include "llvm/Support/FormatVariadic.h"
 #include "llvm/Support/JSON.h"
 
 #include <algorithm>
+#include <filesystem>
 #include <tuple>
 
 namespace neverd::emulation {
@@ -129,42 +132,58 @@ TEST(DriverRegistry, ExplicitClockAndHistoricalTimesRoundTripWithoutDefaults) {
 }
 
 TEST(DriverRegistry, ExecutesQueriesMutationsAndHandleCleanup) {
-  auto Options = driverOptionsFromScenarioJSON(Scenario);
-  ASSERT_TRUE(static_cast<bool>(Options))
-      << llvm::toString(Options.takeError());
-  auto Run = emulateDriver(std::filesystem::path(NEVERD_DRIVER_FIXTURES) /
-                               "driver_registry.sys",
-                           *Options);
-  ASSERT_TRUE(static_cast<bool>(Run)) << llvm::toString(Run.takeError());
-  ASSERT_EQ(Run->Stop, DriverStopReason::Returned) << Run->Diagnostic;
-  EXPECT_EQ(Run->NTStatus, 0u);
-  EXPECT_TRUE(Run->UnloadCompleted);
-  ASSERT_TRUE(Run->Registry);
-  const auto Key = std::find_if(
-      Run->Registry->begin(), Run->Registry->end(),
-      [&](const auto &K) { return K.Path == Options->Registry->front().Path; });
-  ASSERT_NE(Key, Run->Registry->end());
-  ASSERT_EQ(Key->Values.size(), 2u);
-  const auto Value =
-      std::find_if(Key->Values.begin(), Key->Values.end(),
-                   [](const auto &V) { return V.Name == "Observed"; });
-  ASSERT_NE(Value, Key->Values.end());
-  EXPECT_EQ(Value->Type, 4u);
-  EXPECT_EQ(Value->Data, (std::vector<uint8_t>{0x78, 0x56, 0x34, 0x12}));
-  EXPECT_TRUE(std::none_of(
-      Run->Registry->begin(), Run->Registry->end(),
-      [](const auto &K) { return K.Path.ends_with("Temporary"); }));
-  auto JSON = llvm::json::parse(driverResultJSON(*Run));
-  ASSERT_TRUE(static_cast<bool>(JSON)) << llvm::toString(JSON.takeError());
-  ASSERT_NE(JSON->getAsObject(), nullptr);
-  EXPECT_NE(JSON->getAsObject()->getArray("registry"), nullptr);
-  EXPECT_EQ(JSON->getAsObject()->getBoolean("scenario_success"), true);
-  const auto *Configuration = JSON->getAsObject()->getObject("configuration");
-  ASSERT_NE(Configuration, nullptr);
-  const auto *Initial = Configuration->getArray("registry");
-  ASSERT_NE(Initial, nullptr);
-  ASSERT_EQ(Initial->size(), 1u);
-  EXPECT_EQ(Initial->front().getAsObject()->getArray("values")->size(), 1u);
+  for (auto Contract :
+       {ExecutionContract::Legacy, ExecutionContract::CheckedX64}) {
+    SCOPED_TRACE(executionContractName(Contract));
+    auto Options = driverOptionsFromScenarioJSON(Scenario);
+    ASSERT_TRUE(static_cast<bool>(Options))
+        << llvm::toString(Options.takeError());
+    Options->Contract = Contract;
+    auto Run = emulateDriver(std::filesystem::path(NEVERD_DRIVER_FIXTURES) /
+                                 "driver_registry.sys",
+                             *Options);
+    ASSERT_TRUE(static_cast<bool>(Run)) << llvm::toString(Run.takeError());
+    ASSERT_EQ(Run->Stop, DriverStopReason::Returned) << Run->Diagnostic;
+    EXPECT_EQ(Run->NTStatus, 0u);
+    EXPECT_TRUE(Run->UnloadCompleted);
+    ASSERT_TRUE(Run->Registry);
+    const auto Key = std::find_if(
+        Run->Registry->begin(), Run->Registry->end(), [&](const auto &K) {
+          return K.Path == Options->Registry->front().Path;
+        });
+    ASSERT_NE(Key, Run->Registry->end());
+    ASSERT_EQ(Key->Values.size(), 2u);
+    const auto Value =
+        std::find_if(Key->Values.begin(), Key->Values.end(),
+                     [](const auto &V) { return V.Name == "Observed"; });
+    ASSERT_NE(Value, Key->Values.end());
+    EXPECT_EQ(Value->Type, 4u);
+    EXPECT_EQ(Value->Data, (std::vector<uint8_t>{0x78, 0x56, 0x34, 0x12}));
+    EXPECT_TRUE(std::none_of(
+        Run->Registry->begin(), Run->Registry->end(),
+        [](const auto &K) { return K.Path.ends_with("Temporary"); }));
+    auto JSON = llvm::json::parse(driverResultJSON(*Run));
+    ASSERT_TRUE(static_cast<bool>(JSON)) << llvm::toString(JSON.takeError());
+    ASSERT_NE(JSON->getAsObject(), nullptr);
+    EXPECT_NE(JSON->getAsObject()->getArray("registry"), nullptr);
+    EXPECT_EQ(JSON->getAsObject()->getBoolean("scenario_success"), true);
+    const auto *Configuration = JSON->getAsObject()->getObject("configuration");
+    ASSERT_NE(Configuration, nullptr);
+    const auto *Initial = Configuration->getArray("registry");
+    ASSERT_NE(Initial, nullptr);
+    ASSERT_EQ(Initial->size(), 1u);
+    EXPECT_EQ(Initial->front().getAsObject()->getArray("values")->size(), 1u);
+    const auto Open =
+        std::find_if(Run->Calls.begin(), Run->Calls.end(),
+                     [](const auto &C) { return C.Name == "ZwOpenKey"; });
+    ASSERT_NE(Open, Run->Calls.end());
+    EXPECT_EQ(Open->Arguments.at(1), 0xc0000000u);
+    const auto Create =
+        std::find_if(Run->Calls.begin(), Run->Calls.end(),
+                     [](const auto &C) { return C.Name == "ZwCreateKey"; });
+    ASSERT_NE(Create, Run->Calls.end());
+    EXPECT_EQ(Create->Arguments.at(1), 0x10000000u);
+  }
 }
 
 class DriverRegistryEnumeration
@@ -307,5 +326,64 @@ TEST(DriverRegistry, SnapshotRetainsMutationsBeforeAFaultOrHandleLeakStop) {
   }
 }
 
+TEST(DriverRegistryEnumeration,
+     ExplicitMetadataAndOrderRoundTripWithoutFabricatedDefaults) {
+  auto O = test::registryEnumerationOptions();
+  DriverResult R;
+  R.Configuration = O;
+  auto JSON = llvm::cantFail(llvm::json::parse(driverResultJSON(R)));
+  auto Copy = driverOptionsFromScenarioJSON(
+      "{\"registry\":" +
+      llvm::formatv(
+          "{0}",
+          *JSON.getAsObject()->getObject("configuration")->get("registry"))
+          .str() +
+      "}");
+  ASSERT_TRUE(bool(Copy)) << llvm::toString(Copy.takeError());
+  EXPECT_EQ(Copy->Registry->at(0).SubkeyOrder, O.Registry->at(0).SubkeyOrder);
+  EXPECT_FALSE(Copy->Registry->at(0).Information);
+  EXPECT_EQ(Copy->Registry->at(1).Information->LastWriteTime,
+            UINT64_C(0x1122334455667788));
+  for (const char *Bad :
+       {R"("information":null)", R"("information":{})",
+        R"("information":{"last_write_time":0})",
+        R"("information":{"last_write_time":-1,"class_name":""})",
+        R"("information":{"last_write_time":0,"class_name":"Class"})",
+        R"("subkey_order":null)", R"("subkey_order":["missing"])",
+        R"("subkey_order":["A","a"])", R"("subkey_order":[1])"}) {
+    auto Parsed = driverOptionsFromScenarioJSON(
+        std::string(R"({"registry":[{"path":"\\Registry\\Machine\\NeverD",)") +
+        Bad + "}]}");
+    ASSERT_FALSE(bool(Parsed)) << Bad;
+    llvm::consumeError(Parsed.takeError());
+  }
+  auto Missing = driverOptionsFromScenarioJSON(
+      R"({"registry":[{"path":"\\Registry\\Machine\\NeverD","subkey_order":[]},{"path":"\\Registry\\Machine\\NeverD\\A"}]})");
+  ASSERT_FALSE(bool(Missing));
+  llvm::consumeError(Missing.takeError());
+}
+TEST(DriverRegistryEnumeration,
+     CompiledDriverEnumeratesAllClassesWithRealFiltersAndUnload) {
+  for (auto Contract :
+       {ExecutionContract::Legacy, ExecutionContract::CheckedX64})
+    for (bool Preemptive : {false, true})
+      for (bool Paging : {false, true}) {
+        auto O = test::registryEnumerationOptions();
+        O.Contract = Contract;
+        O.Unload = true;
+        O.PageTables = Paging;
+        if (Preemptive)
+          O.Scheduling = DriverScheduling{23, 1};
+        auto R = emulateDriver(std::filesystem::path(NEVERD_DRIVER_FIXTURES) /
+                                   "driver_registry_enumeration.sys",
+                               O);
+        ASSERT_TRUE(bool(R)) << llvm::toString(R.takeError());
+        EXPECT_EQ(R->Stop, DriverStopReason::Returned) << R->Diagnostic;
+        EXPECT_EQ(R->NTStatus, 0u) << R->Diagnostic;
+        EXPECT_TRUE(R->UnloadCompleted) << R->Diagnostic;
+        ASSERT_EQ(R->Messages.size(), 1u);
+        EXPECT_EQ(R->Messages[0], "registry enumeration and filters passed");
+      }
+}
 } // namespace
 } // namespace neverd::emulation

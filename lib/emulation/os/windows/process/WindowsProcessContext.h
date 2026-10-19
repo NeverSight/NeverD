@@ -19,7 +19,8 @@ captureUserContext(ExecutionBackend &CPU,
 /// RtlCaptureContext records the calling frame without changing CPU state.
 /// Validate the destination and return slot before publishing any bytes;
 /// fields outside the architecture's native capture contract stay untouched.
-llvm::Error captureCallerContext(ExecutionBackend &CPU, uint64_t Destination);
+llvm::Error captureCallerContext(ExecutionBackend &CPU, uint64_t Destination,
+                                 bool UserMode = true);
 llvm::Expected<X64SEH::Context>
 readUnwindContext(llvm::ArrayRef<uint8_t> Context);
 llvm::Error writeUnwindContext(const X64SEH::Context &State,

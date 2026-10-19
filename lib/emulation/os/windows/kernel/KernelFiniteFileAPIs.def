@@ -1,0 +1,16 @@
+//===- KernelFileAPIs.def - Synchronous finite filesystem APIs ------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+NEVERD_KERNEL_FINITE_FILE_API(ZwCreateFile, 11)
+NEVERD_KERNEL_FINITE_FILE_API(IoCreateFile, 14)
+NEVERD_KERNEL_FINITE_FILE_API(IoCreateFileSpecifyDeviceObjectHint, 15)
+NEVERD_KERNEL_FINITE_FILE_API(ZwOpenFile, 6)
+NEVERD_KERNEL_FINITE_FILE_API(ZwQueryObject, 5)
+NEVERD_KERNEL_FINITE_FILE_API(ZwReadFile, 9)
+NEVERD_KERNEL_FINITE_FILE_API(ZwQueryInformationFile, 5)
+NEVERD_KERNEL_FINITE_FILE_API(ZwWriteFile, 9)
+NEVERD_KERNEL_FINITE_FILE_API(ZwSetInformationFile, 5)
+NEVERD_KERNEL_FINITE_FILE_API(ZwDeleteFile, 1)
+NEVERD_KERNEL_FINITE_FILE_API(ZwFlushBuffersFile, 2)

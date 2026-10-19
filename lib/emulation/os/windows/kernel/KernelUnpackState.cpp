@@ -61,16 +61,19 @@ std::map<uint64_t, uint64_t> KernelModel::unpackAllocations() const {
   // PE metadata is readable even without a module-list call. A pointer into a
   // modeled provider remains borrowed state; never treat the input image as
   // such a dependency, since that is the image being recovered.
-  for (size_t I = 0; I + 1 < LoadedModules.size(); ++I) {
-    const auto &Module = LoadedModules[I];
-    uint64_t Begin = Module.Base;
-    const uint64_t End = Module.Base + Module.Size;
-    // Exact named exports have a separate import-rebinding contract. Excluding
-    // only those values preserves ordinary import cells while still exposing
-    // retained module bases, metadata and interior service-body pointers.
+  if (!Exports)
+    return Out;
+  auto Borrow = [&](uint64_t Base, uint64_t Size) {
+    uint64_t Begin = Base;
+    const uint64_t End = Base + Size;
     for (auto It = Exports->entries().lower_bound(Begin);
          It != Exports->entries().end() && It->first < End; ++It) {
-      if (It->second.Kind != KernelExportRegistry::ExportKind::ModuleExport)
+      const auto Kind = It->second.Kind;
+      if (Kind != KernelExportRegistry::ExportKind::ModuleExport &&
+          Kind != KernelExportRegistry::ExportKind::FrameworkFunction &&
+          Kind != KernelExportRegistry::ExportKind::DMAFunction &&
+          Kind != KernelExportRegistry::ExportKind::ProviderFunction &&
+          Kind != KernelExportRegistry::ExportKind::HalDispatchFunction)
         continue;
       if (It->first > Begin)
         Out.emplace(Begin, It->first - Begin);
@@ -78,7 +81,14 @@ std::map<uint64_t, uint64_t> KernelModel::unpackAllocations() const {
     }
     if (Begin < End)
       Out.emplace(Begin, End - Begin);
-  }
+  };
+  for (const auto &Module : LoadedModules)
+    if (!Module.Guest)
+      Borrow(Module.Base, Module.Size);
+  Borrow(profile::ObjectTypeDataBase, profile::PageSize);
+  Borrow(profile::KernelModuleBase + profile::KernelModuleDataRVA,
+         profile::KernelModuleDataSize);
+  Borrow(profile::ThunkBase, profile::ThunkSize);
   return Out;
 }
 
@@ -89,7 +99,7 @@ KernelModel::unpackDependencies() const {
   std::vector<std::string> Reasons;
   if (UnpackOpaqueEffects)
     Reasons.emplace_back("unreconstructed kernel or environment effects");
-  if (hasLiveBugCheckCallbacks())
+  if (hasLiveBugCheckCallbacks() || !BugCheckCallbacks.empty())
     Reasons.emplace_back("live kernel bug-check callbacks");
   if (!ExecutiveResources.empty())
     Reasons.emplace_back("live kernel executive resources");

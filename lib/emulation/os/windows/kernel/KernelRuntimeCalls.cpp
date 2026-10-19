@@ -160,6 +160,12 @@ KernelModel::ansiToUnicodeString(llvm::ArrayRef<uint64_t> A) {
     return modelError("RtlAnsiStringToUnicodeString of non-ASCII text "
                       "requires an unmodeled ANSI code page");
   const uint64_t Size = Text.size() * 2 + 2;
+  if (!uint8_t(A[2])) {
+    std::vector<uint8_t> Wide(Text.size() * 2);
+    for (size_t I = 0; I < Text.size(); ++I)
+      Wide[I * 2] = Text[I];
+    return runtime::writeCountedUnicode(*this, Memory, A[0], Wide);
+  }
   if (Size > runtime::MaxCountedUnicodeBytes)
     return StatusInvalidParameter2;
   if (auto E = validateGuestAccess(A[0], UnicodeRecordSize, true))
@@ -400,6 +406,11 @@ KernelModel::freeCountedString(llvm::ArrayRef<uint64_t> A) {
     return StatusSuccess;
   if (auto E = validateGuestAccess(A[0], UnicodeRecordSize, true))
     return E;
+  if (const auto Allocation = Allocations.find(*Buffer);
+      Allocation != Allocations.end() &&
+      A[0] < *Buffer + Allocation->second.Size &&
+      *Buffer < A[0] + UnicodeRecordSize)
+    return modelError("RTL string record overlaps the buffer being freed");
   auto Freed = freePool({*Buffer}, false);
   if (!Freed)
     return Freed.takeError();

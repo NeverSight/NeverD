@@ -13,6 +13,7 @@
 #include "KernelPhysicalMemory.h"
 
 #include "neverd/emulation/AddressSpace.h"
+#include "neverd/emulation/DriverKernelMemory.h"
 
 #include "llvm/Support/ErrorHandling.h"
 
@@ -101,9 +102,126 @@ KernelPhysicalMemory::find(uint64_t Owner) const {
   return I == Regions.end() ? nullptr : &I->second;
 }
 
+llvm::Error KernelPhysicalMemory::configureManagedCapacity(uint64_t Bytes) {
+  if (ManagedCapacityConfigured || GuestFrameCapacity || !Pages.empty() ||
+      !UsedOwners.empty() || !Pins.empty())
+    return physicalError("managed RAM capacity must be configured before use");
+  if (auto E =
+          validateDriverKernelMemorySize(Bytes, profile::MaxKernelArenaSize))
+    return E;
+  ManagedCapacity = Bytes;
+  NextGuestFrame = physical::PhysicalBase + Bytes;
+  ManagedCapacityConfigured = true;
+  return llvm::Error::success();
+}
+
+size_t KernelPhysicalMemory::managedPageCount() const {
+  if (!GuestFrameCapacity)
+    return Pages.size();
+  return std::count_if(Pages.begin(), Pages.end(),
+                       [](const auto &Entry) { return Entry.second.Managed; });
+}
+
+llvm::Error KernelPhysicalMemory::enableGuestFrames(uint64_t Capacity) {
+  if (GuestFrameCapacity || !Capacity || Capacity % physical::PageSize ||
+      Capacity > 1024ULL * 1024 * 1024)
+    return physicalError("invalid guest frame capacity");
+  GuestFrameCapacity = Capacity;
+  return llvm::Error::success();
+}
+
+llvm::Expected<uint64_t> KernelPhysicalMemory::frameAddress(uint64_t Address) {
+  if (!GuestFrameCapacity)
+    return physicalError("guest RAM frame identity is not enabled");
+  auto Key = pageKey(Address);
+  if (!Key)
+    return Key.takeError();
+  auto Found = Pages.find(*Key);
+  if (Found == Pages.end()) {
+    const auto Base = physical::PhysicalBase + ManagedCapacity;
+    if (NextGuestFrame - Base == GuestFrameCapacity)
+      return llvm::make_error<PhysicalMemoryLimitError>(
+          "guest RAM frame identity capacity exhausted");
+    Found = Pages
+                .emplace(*Key, PageRecord{NextGuestFrame, CacheType::Cached,
+                                          false, false, pageBase(Address)})
+                .first;
+    NextGuestFrame += physical::PageSize;
+    ++FrameGeneration;
+  }
+  return Found->second.Physical + Address % physical::PageSize;
+}
+
+llvm::Expected<std::vector<KernelPhysicalMemory::PhysicalViewPage>>
+KernelPhysicalMemory::physicalViewPages(uint64_t Address, uint64_t Size) const {
+  if (!Size || Address % physical::PageSize || Size % physical::PageSize ||
+      Size > UINT64_MAX - Address || Size / physical::PageSize > Pages.size())
+    return physicalError(
+        "physical section range contains unpublished guest PFNs");
+  std::map<uint64_t, const PageRecord *> Index;
+  std::map<uint64_t, PageKey> Identities;
+  for (const auto &[Key, Page] : Pages)
+    if (Page.Physical >= Address && Page.Physical - Address < Size) {
+      Index.emplace(Page.Physical, &Page);
+      Identities.emplace(Page.Physical, Key);
+    }
+  std::map<PageKey, std::vector<uint64_t>, PageKeyLess> Owners;
+  for (const auto &[ID, Region] : Regions) {
+    const uint64_t Last = pageBase(Region.Backing + Region.Size - 1);
+    for (uint64_t Page = pageBase(Region.Backing);;
+         Page += physical::PageSize) {
+      Owners[pageKey(Region, Page)].push_back(ID);
+      if (Page == Last)
+        break;
+    }
+  }
+  std::vector<PhysicalViewPage> Result;
+  for (uint64_t Offset = 0; Offset < Size; Offset += physical::PageSize) {
+    auto It = Index.find(Address + Offset);
+    if (It == Index.end())
+      return physicalError(
+          "physical section range contains an unpublished guest PFN");
+    const auto &P = *It->second;
+    const auto &Identity = Identities.at(Address + Offset);
+    auto Live = pageKey(P.BackingPage);
+    if (!Live)
+      return Live.takeError();
+    const PageKeyLess Less;
+    if (Less(*Live, Identity) || Less(Identity, *Live))
+      return physicalError(
+          "physical section canonical VA no longer names its guest frame");
+    if (auto E = Memory.validateBacking(P.BackingPage, physical::PageSize))
+      return E;
+    auto Storage = Memory.pinBacking(P.BackingPage, physical::PageSize);
+    if (!Storage)
+      return Storage.takeError();
+    const auto Found = Owners.find(Identity);
+    if (P.Managed && Found == Owners.end())
+      return physicalError(
+          "physical section frame has no live allocation owner");
+    Result.push_back(
+        {P.Physical, P.BackingPage, P.Cache,
+         Found == Owners.end() ? std::vector<uint64_t>{} : Found->second,
+         std::move(*Storage)});
+  }
+  return Result;
+}
+
+llvm::Expected<KernelPhysicalMemory::CacheType>
+KernelPhysicalMemory::frameCacheType(uint64_t Address) const {
+  auto Key = pageKey(Address);
+  if (!Key)
+    return Key.takeError();
+  const auto Found = Pages.find(*Key);
+  if (Found == Pages.end())
+    return physicalError("guest frame has no cache identity");
+  return Found->second.Cache.value_or(CacheType::Cached);
+}
+
 llvm::Expected<std::vector<uint64_t>>
 KernelPhysicalMemory::planRegion(uint64_t Owner, uint64_t Backing,
-                                 uint64_t Size, CacheType Cache) const {
+                                 uint64_t Size, CacheType Cache,
+                                 bool RebindUnmanaged) const {
   if (!validCacheType(Cache))
     return physicalError(physical_diagnostic::InvalidCache);
   if (!Owner || UsedOwners.count(Owner))
@@ -137,17 +255,21 @@ KernelPhysicalMemory::planRegion(uint64_t Owner, uint64_t Backing,
   std::vector<uint64_t> NewPages;
   std::set<PageKey, PageKeyLess> Added;
   const uint64_t Last = pageBase(Backing + Size - 1);
-  const uint64_t Limit = physical::PhysicalSize / physical::PageSize;
+  const uint64_t Limit = ManagedCapacity / physical::PageSize;
+  const uint64_t Managed = managedPageCount();
   for (uint64_t Page = pageBase(Backing);; Page += physical::PageSize) {
     const auto Key = pageKey(Proposed, Page);
     const auto Existing = Pages.find(Key);
-    if (Existing != Pages.end() && Existing->second.Cache != Cache)
+    if (Existing != Pages.end() && Existing->second.Cache != Cache &&
+        (!RebindUnmanaged || Existing->second.Managed))
       return physicalError(physical_diagnostic::CacheConflict);
-    if (Existing == Pages.end() && Added.insert(Key).second) {
-      if (Pages.size() + NewPages.size() >= Limit)
+    if ((Existing == Pages.end() || !Existing->second.Managed) &&
+        Added.insert(Key).second) {
+      if (Managed + Added.size() > Limit)
         return llvm::make_error<PhysicalMemoryLimitError>(
             physical_diagnostic::PageLimit);
-      NewPages.push_back(Page);
+      if (Existing == Pages.end())
+        NewPages.push_back(Page);
     }
     if (Page == Last)
       break;
@@ -183,13 +305,22 @@ llvm::Error KernelPhysicalMemory::registerRegion(uint64_t Owner,
   for (uint64_t Page : *Plan) {
     while (Used.contains(Candidate))
       Candidate += physical::PageSize;
-    Pages.emplace(pageKey(OwnerRegion, Page), PageRecord{Candidate, Cache});
+    Pages.emplace(pageKey(OwnerRegion, Page),
+                  PageRecord{Candidate, Cache, false, true, Page});
     Used.insert(Candidate);
+  }
+  const uint64_t Last = pageBase(Backing + Size - 1);
+  for (uint64_t Page = pageBase(Backing);; Page += physical::PageSize) {
+    Pages.at(pageKey(OwnerRegion, Page)).Managed = true;
+    Pages.at(pageKey(OwnerRegion, Page)).BackingPage = Page;
+    if (Page == Last)
+      break;
   }
   OwnersBySpace[OwnerRegion.Storage.addressSpaceIdentity()].emplace(Backing,
                                                                     Owner);
   Regions.emplace(Owner, std::move(OwnerRegion));
   UsedOwners.insert(Owner);
+  ++FrameGeneration;
   return llvm::Error::success();
 }
 
@@ -215,7 +346,7 @@ KernelPhysicalMemory::planAllocatedPages(uint64_t Low, uint64_t High,
     return Offset <= Width && physical::PageSize - 1 <= Width - Offset;
   };
   std::vector<uint64_t> Selected;
-  const uint64_t End = physical::PhysicalBase + physical::PhysicalSize;
+  const uint64_t End = physical::PhysicalBase + ManagedCapacity;
   if (!ChunkPages) {
     for (uint64_t Page = physical::PhysicalBase;
          Page < End && Selected.size() < PageCount; Page += physical::PageSize)
@@ -223,7 +354,7 @@ KernelPhysicalMemory::planAllocatedPages(uint64_t Low, uint64_t High,
         Selected.push_back(Page);
     return Selected;
   }
-  if (ChunkPages > physical::PhysicalSize / physical::PageSize)
+  if (ChunkPages > ManagedCapacity / physical::PageSize)
     return Selected;
   const uint64_t ChunkSize = ChunkPages * physical::PageSize;
   for (uint64_t Page = physical::PhysicalBase;
@@ -243,40 +374,73 @@ KernelPhysicalMemory::planAllocatedPages(uint64_t Low, uint64_t High,
   return Selected;
 }
 
-llvm::Error KernelPhysicalMemory::registerAllocatedPages(
+llvm::Expected<KernelPhysicalMemory::Region>
+KernelPhysicalMemory::planAllocatedRegion(
     uint64_t Owner, uint64_t Backing, llvm::ArrayRef<uint64_t> PhysicalPages,
-    std::optional<CacheType> Cache) {
+    std::optional<CacheType> Cache) const {
   if (PhysicalPages.empty() ||
-      PhysicalPages.size() > physical::PhysicalSize / physical::PageSize ||
+      PhysicalPages.size() > ManagedCapacity / physical::PageSize ||
       Backing % physical::PageSize || (Cache && !validCacheType(*Cache)))
     return physicalError(physical_diagnostic::InvalidAllocation);
   const uint64_t Size = PhysicalPages.size() * physical::PageSize;
   auto Plan =
-      planRegion(Owner, Backing, Size, Cache.value_or(CacheType::Cached));
+      planRegion(Owner, Backing, Size, Cache.value_or(CacheType::Cached), true);
   if (!Plan)
     return Plan.takeError();
-  if (Plan->size() != PhysicalPages.size())
-    return physicalError(physical_diagnostic::PrivateBackingRequired);
+  // Paging can publish frames for the reserved arena before it is allocated.
+  // Those unowned frames may acquire the allocator's selected PFNs. A live
+  // managed page, including an alias of one, must retain its identity.
+  auto Storage = Memory.pinBacking(Backing, Size);
+  if (!Storage)
+    return Storage.takeError();
+  Region OwnerRegion{Backing, Size, true, std::move(*Storage)};
+  std::set<PageKey, PageKeyLess> BackingPages;
+  for (size_t I = 0; I != PhysicalPages.size(); ++I) {
+    const auto Key = pageKey(OwnerRegion, Backing + I * physical::PageSize);
+    if (!BackingPages.insert(Key).second)
+      return physicalError(physical_diagnostic::PrivateBackingRequired);
+    auto Existing = Pages.find(Key);
+    if (Existing != Pages.end() && Existing->second.Managed)
+      return physicalError(physical_diagnostic::PrivateBackingRequired);
+  }
   std::set<uint64_t> Used;
   for (const auto &[Address, Page] : Pages)
     Used.insert(Page.Physical);
   for (uint64_t Page : PhysicalPages) {
     if (Page < physical::PhysicalBase ||
-        Page - physical::PhysicalBase >= physical::PhysicalSize ||
+        Page - physical::PhysicalBase >= ManagedCapacity ||
         Page % physical::PageSize || !Used.insert(Page).second)
       return physicalError(physical_diagnostic::UnavailablePage);
   }
-  auto Storage = Memory.pinBacking(Backing, Size);
-  if (!Storage)
-    return Storage.takeError();
-  Region OwnerRegion{Backing, Size, true, std::move(*Storage)};
+  return OwnerRegion;
+}
+
+llvm::Error KernelPhysicalMemory::canRegisterAllocatedPages(
+    uint64_t Owner, uint64_t Backing, llvm::ArrayRef<uint64_t> PhysicalPages,
+    std::optional<CacheType> Cache) const {
+  auto Plan = planAllocatedRegion(Owner, Backing, PhysicalPages, Cache);
+  if (!Plan)
+    return Plan.takeError();
+  return llvm::Error::success();
+}
+
+llvm::Error KernelPhysicalMemory::registerAllocatedPages(
+    uint64_t Owner, uint64_t Backing, llvm::ArrayRef<uint64_t> PhysicalPages,
+    std::optional<CacheType> Cache) {
+  auto Plan = planAllocatedRegion(Owner, Backing, PhysicalPages, Cache);
+  if (!Plan)
+    return Plan.takeError();
+  auto OwnerRegion = std::move(*Plan);
   for (size_t I = 0; I != PhysicalPages.size(); ++I)
-    Pages.emplace(pageKey(OwnerRegion, Backing + I * physical::PageSize),
-                  PageRecord{PhysicalPages[I], Cache, true});
+    Pages.insert_or_assign(
+        pageKey(OwnerRegion, Backing + I * physical::PageSize),
+        PageRecord{PhysicalPages[I], Cache, true, true,
+                   Backing + I * physical::PageSize});
   OwnersBySpace[OwnerRegion.Storage.addressSpaceIdentity()].emplace(Backing,
                                                                     Owner);
   Regions.emplace(Owner, std::move(OwnerRegion));
   UsedOwners.insert(Owner);
+  ++FrameGeneration;
   return llvm::Error::success();
 }
 
@@ -316,7 +480,11 @@ llvm::Error KernelPhysicalMemory::commitMappingCache(uint64_t Backing,
     return Owner.takeError();
   const uint64_t Last = pageBase(Backing + Size - 1);
   for (uint64_t Page = pageBase(Backing);; Page += physical::PageSize) {
-    Pages.at(pageKey(Regions.at(*Owner), Page)).Cache = Cache;
+    auto &Record = Pages.at(pageKey(Regions.at(*Owner), Page));
+    if (Record.Cache != Cache) {
+      Record.Cache = Cache;
+      ++FrameGeneration;
+    }
     if (Page == Last)
       break;
   }
@@ -363,8 +531,10 @@ llvm::Error KernelPhysicalMemory::retire(uint64_t Owner) {
         });
     if (Referenced)
       ++I;
-    else
+    else {
       I = Pages.erase(I);
+      ++FrameGeneration;
+    }
   }
   return llvm::Error::success();
 }

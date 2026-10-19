@@ -10,8 +10,23 @@
 //===----------------------------------------------------------------------===//
 
 NEVERD_WDM_VALUE(DriverObjectSize, 0x150)
+// Matched 19041.6456 PsGetProcessImageFileName is LEA RAX,[RCX+5A8h]; RET.
+NEVERD_WDM_VALUE(ProcessImageFileName19041Offset, 0x5a8)
+// Matched 19041.6456 PsGetProcessSectionBaseAddress is MOV RAX,[RCX+520h]; RET.
+NEVERD_WDM_VALUE(ProcessSectionBase19041Offset, 0x520)
+// Matched 19041.6456 PsGetProcessPeb is MOV RAX,[RCX+550h]; RET.
+NEVERD_WDM_VALUE(ProcessPeb19041Offset, 0x550)
+// Matched 19041.6456 getter is MOV EAX,[RCX+7D4h]; RET.
+NEVERD_WDM_VALUE(ProcessExitStatus19041Offset, 0x7d4)
 // x64 wdm.h KeGetCurrentThread reads the current KTHREAD identity from GS.
 NEVERD_WDM_VALUE(GSCurrentThreadOffset, 0x188)
+// Windows 19041 x64 WDK SharedTickCount / KSYSTEM_TIME layout.
+NEVERD_WDM_VALUE(SharedClockDataBase, 0xfffff78000000000ULL)
+NEVERD_WDM_VALUE(SharedTickCountOffset, 0x320)
+NEVERD_WDM_VALUE(SharedTickCountSize, 12)
+NEVERD_WDM_VALUE(SharedTickLowOffset, 0)
+NEVERD_WDM_VALUE(SharedTickHigh1Offset, 4)
+NEVERD_WDM_VALUE(SharedTickHigh2Offset, 8)
 // x64 ntifs.h KAPC_STATE: two LIST_ENTRYs, Process, and three UCHAR flags.
 NEVERD_WDM_VALUE(KAPCStateSize, 0x30)
 NEVERD_WDM_VALUE(KAPCStateProcessOffset, 0x20)
@@ -64,6 +79,7 @@ NEVERD_WDM_VALUE(IRPAllocationFlagsOffset, 0x47)
 NEVERD_WDM_VALUE(IRPUserIosbOffset, 0x48)
 NEVERD_WDM_VALUE(IRPUserEventOffset, 0x50)
 NEVERD_WDM_VALUE(IRPCancelRoutineOffset, 0x68)
+NEVERD_WDM_VALUE(IRPUserIOSBOffset, 0x48)
 NEVERD_WDM_VALUE(IRPUserBufferOffset, 0x70)
 NEVERD_WDM_VALUE(IRPDriverContextOffset, 0x78)
 NEVERD_WDM_VALUE(IRPThreadOffset, 0x98)
@@ -111,8 +127,11 @@ NEVERD_WDM_VALUE(FileFinalStatusOffset, 0x38)
 NEVERD_WDM_VALUE(FileRelatedOffset, 0x40)
 NEVERD_WDM_VALUE(FileReadAccessOffset, 0x4a)
 NEVERD_WDM_VALUE(FileWriteAccessOffset, 0x4b)
+NEVERD_WDM_VALUE(FileDeletePendingOffset, 0x49)
+NEVERD_WDM_VALUE(FileDeleteAccessOffset, 0x4c)
 NEVERD_WDM_VALUE(FileSharedReadOffset, 0x4d)
 NEVERD_WDM_VALUE(FileSharedWriteOffset, 0x4e)
+NEVERD_WDM_VALUE(FileSharedDeleteOffset, 0x4f)
 NEVERD_WDM_VALUE(FileFlagsOffset, 0x50)
 NEVERD_WDM_VALUE(FileNameOffset, 0x58)
 NEVERD_WDM_VALUE(FileNameBufferOffset, 0x60)
@@ -199,3 +218,6 @@ NEVERD_WDM_VALUE(ExecutiveResourceActiveEntriesOffset, 0x40)
 NEVERD_WDM_VALUE(ExecutiveResourceOwnerSize, 0x10)
 NEVERD_WDM_VALUE(ExecutiveResourceExclusiveFlag, 0x80)
 NEVERD_WDM_VALUE(ExecutiveResourceDisableBoostFlag, 0x8)
+// Read-only provider RAM; independent of ECAM physical addresses in the table.
+NEVERD_WDM_VALUE(FirmwareMcfgBase, 0xffffc20000000000ULL)
+NEVERD_WDM_VALUE(FirmwareMcfgWindowSize, 0x2000)

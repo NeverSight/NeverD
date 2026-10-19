@@ -34,12 +34,22 @@ struct DriverRegistryValue {
   std::vector<uint8_t> Data;
 };
 
+struct DriverRegistryKeyInformation {
+  uint64_t LastWriteTime = 0;
+  // Explicit observed empty class for the current finite ASCII hive provider.
+  // Nonempty classes require their own native partial-output validation.
+  std::string ClassName;
+};
 struct DriverRegistryKey {
   std::string Path;
   std::vector<DriverRegistryValue> Values;
   /// Absolute Windows time in 100 ns units. Omission leaves historical time
   /// unknown unless the scenario supplies the registry's initial system time.
   std::optional<uint64_t> LastWriteTime100ns;
+  std::optional<DriverRegistryKeyInformation> Information;
+  // Immediate child names in observed enumeration order. Omission does not
+  // impose an alphabetical/insertion order on Windows hive enumeration.
+  std::optional<std::vector<std::string>> SubkeyOrder;
 };
 
 /// An omitted inventory means unknown availability. An explicit inventory is

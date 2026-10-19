@@ -1,0 +1,898 @@
+// Native ntdll observations from owned valid buffers, 2026-10-16.
+// Oracle SHA256:
+// 4a59092b4d07830476ea2973e11136cb88f8297f24ea66907d0dc5efc38cd2ae KIND,
+// INPUT_UTF16_HEX, OTHER_UTF16_HEX, PARAMETER, STATUS_OR_VALUE, LENGTH,
+// OUTPUT_HEX
+NEVERD_RTL_INPUT_CASE(integer, "", "", 0x0u, 0xc000000du, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "", "", 0x2u, 0xc000000du, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "", "", 0x8u, 0xc000000du, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "", "", 0xau, 0xc000000du, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "", "", 0x10u, 0xc000000du, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "", "", 0x1u, 0xc000000du, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "", "", 0x3u, 0xc000000du, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "", "", 0x24u, 0xc000000du, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "", "", 0xffffffffu, 0xc000000du, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "3000", "", 0x0u, 0x0u, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "3000", "", 0x2u, 0x0u, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "3000", "", 0x8u, 0x0u, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "3000", "", 0xau, 0x0u, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "3000", "", 0x10u, 0x0u, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "3000", "", 0x1u, 0xc000000du, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "3000", "", 0x3u, 0xc000000du, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "3000", "", 0x24u, 0xc000000du, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "3000", "", 0xffffffffu, 0xc000000du, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "34003200", "", 0x0u, 0x0u, 42u, "")
+NEVERD_RTL_INPUT_CASE(integer, "34003200", "", 0x2u, 0x0u, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "34003200", "", 0x8u, 0x0u, 34u, "")
+NEVERD_RTL_INPUT_CASE(integer, "34003200", "", 0xau, 0x0u, 42u, "")
+NEVERD_RTL_INPUT_CASE(integer, "34003200", "", 0x10u, 0x0u, 66u, "")
+NEVERD_RTL_INPUT_CASE(integer, "34003200", "", 0x1u, 0xc000000du, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "34003200", "", 0x3u, 0xc000000du, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "34003200", "", 0x24u, 0xc000000du, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "34003200", "", 0xffffffffu, 0xc000000du, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "20002b0034003200", "", 0x0u, 0x0u, 42u, "")
+NEVERD_RTL_INPUT_CASE(integer, "20002b0034003200", "", 0x2u, 0x0u, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "20002b0034003200", "", 0x8u, 0x0u, 34u, "")
+NEVERD_RTL_INPUT_CASE(integer, "20002b0034003200", "", 0xau, 0x0u, 42u, "")
+NEVERD_RTL_INPUT_CASE(integer, "20002b0034003200", "", 0x10u, 0x0u, 66u, "")
+NEVERD_RTL_INPUT_CASE(integer, "20002b0034003200", "", 0x1u, 0xc000000du, 0u,
+                      "")
+NEVERD_RTL_INPUT_CASE(integer, "20002b0034003200", "", 0x3u, 0xc000000du, 0u,
+                      "")
+NEVERD_RTL_INPUT_CASE(integer, "20002b0034003200", "", 0x24u, 0xc000000du, 0u,
+                      "")
+NEVERD_RTL_INPUT_CASE(integer, "20002b0034003200", "", 0xffffffffu, 0xc000000du,
+                      0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "09000a002d0034003200", "", 0x0u, 0x0u,
+                      4294967254u, "")
+NEVERD_RTL_INPUT_CASE(integer, "09000a002d0034003200", "", 0x2u, 0x0u, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "09000a002d0034003200", "", 0x8u, 0x0u,
+                      4294967262u, "")
+NEVERD_RTL_INPUT_CASE(integer, "09000a002d0034003200", "", 0xau, 0x0u,
+                      4294967254u, "")
+NEVERD_RTL_INPUT_CASE(integer, "09000a002d0034003200", "", 0x10u, 0x0u,
+                      4294967230u, "")
+NEVERD_RTL_INPUT_CASE(integer, "09000a002d0034003200", "", 0x1u, 0xc000000du,
+                      0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "09000a002d0034003200", "", 0x3u, 0xc000000du,
+                      0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "09000a002d0034003200", "", 0x24u, 0xc000000du,
+                      0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "09000a002d0034003200", "", 0xffffffffu,
+                      0xc000000du, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "3000780046004600", "", 0x0u, 0x0u, 255u, "")
+NEVERD_RTL_INPUT_CASE(integer, "3000780046004600", "", 0x2u, 0x0u, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "3000780046004600", "", 0x8u, 0x0u, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "3000780046004600", "", 0xau, 0x0u, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "3000780046004600", "", 0x10u, 0x0u, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "3000780046004600", "", 0x1u, 0xc000000du, 0u,
+                      "")
+NEVERD_RTL_INPUT_CASE(integer, "3000780046004600", "", 0x3u, 0xc000000du, 0u,
+                      "")
+NEVERD_RTL_INPUT_CASE(integer, "3000780046004600", "", 0x24u, 0xc000000du, 0u,
+                      "")
+NEVERD_RTL_INPUT_CASE(integer, "3000780046004600", "", 0xffffffffu, 0xc000000du,
+                      0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "3000580066006600", "", 0x0u, 0x0u, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "3000580066006600", "", 0x2u, 0x0u, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "3000580066006600", "", 0x8u, 0x0u, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "3000580066006600", "", 0xau, 0x0u, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "3000580066006600", "", 0x10u, 0x0u, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "3000580066006600", "", 0x1u, 0xc000000du, 0u,
+                      "")
+NEVERD_RTL_INPUT_CASE(integer, "3000580066006600", "", 0x3u, 0xc000000du, 0u,
+                      "")
+NEVERD_RTL_INPUT_CASE(integer, "3000580066006600", "", 0x24u, 0xc000000du, 0u,
+                      "")
+NEVERD_RTL_INPUT_CASE(integer, "3000580066006600", "", 0xffffffffu, 0xc000000du,
+                      0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "30006200310030003100", "", 0x0u, 0x0u, 5u, "")
+NEVERD_RTL_INPUT_CASE(integer, "30006200310030003100", "", 0x2u, 0x0u, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "30006200310030003100", "", 0x8u, 0x0u, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "30006200310030003100", "", 0xau, 0x0u, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "30006200310030003100", "", 0x10u, 0x0u, 45313u,
+                      "")
+NEVERD_RTL_INPUT_CASE(integer, "30006200310030003100", "", 0x1u, 0xc000000du,
+                      0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "30006200310030003100", "", 0x3u, 0xc000000du,
+                      0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "30006200310030003100", "", 0x24u, 0xc000000du,
+                      0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "30006200310030003100", "", 0xffffffffu,
+                      0xc000000du, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "30006f0037003700", "", 0x0u, 0x0u, 63u, "")
+NEVERD_RTL_INPUT_CASE(integer, "30006f0037003700", "", 0x2u, 0x0u, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "30006f0037003700", "", 0x8u, 0x0u, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "30006f0037003700", "", 0xau, 0x0u, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "30006f0037003700", "", 0x10u, 0x0u, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "30006f0037003700", "", 0x1u, 0xc000000du, 0u,
+                      "")
+NEVERD_RTL_INPUT_CASE(integer, "30006f0037003700", "", 0x3u, 0xc000000du, 0u,
+                      "")
+NEVERD_RTL_INPUT_CASE(integer, "30006f0037003700", "", 0x24u, 0xc000000du, 0u,
+                      "")
+NEVERD_RTL_INPUT_CASE(integer, "30006f0037003700", "", 0xffffffffu, 0xc000000du,
+                      0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "300037003700", "", 0x0u, 0x0u, 77u, "")
+NEVERD_RTL_INPUT_CASE(integer, "300037003700", "", 0x2u, 0x0u, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "300037003700", "", 0x8u, 0x0u, 63u, "")
+NEVERD_RTL_INPUT_CASE(integer, "300037003700", "", 0xau, 0x0u, 77u, "")
+NEVERD_RTL_INPUT_CASE(integer, "300037003700", "", 0x10u, 0x0u, 119u, "")
+NEVERD_RTL_INPUT_CASE(integer, "300037003700", "", 0x1u, 0xc000000du, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "300037003700", "", 0x3u, 0xc000000du, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "300037003700", "", 0x24u, 0xc000000du, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "300037003700", "", 0xffffffffu, 0xc000000du, 0u,
+                      "")
+NEVERD_RTL_INPUT_CASE(integer, "3000640034003200", "", 0x0u, 0x0u, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "3000640034003200", "", 0x2u, 0x0u, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "3000640034003200", "", 0x8u, 0x0u, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "3000640034003200", "", 0xau, 0x0u, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "3000640034003200", "", 0x10u, 0x0u, 3394u, "")
+NEVERD_RTL_INPUT_CASE(integer, "3000640034003200", "", 0x1u, 0xc000000du, 0u,
+                      "")
+NEVERD_RTL_INPUT_CASE(integer, "3000640034003200", "", 0x3u, 0xc000000du, 0u,
+                      "")
+NEVERD_RTL_INPUT_CASE(integer, "3000640034003200", "", 0x24u, 0xc000000du, 0u,
+                      "")
+NEVERD_RTL_INPUT_CASE(integer, "3000640034003200", "", 0xffffffffu, 0xc000000du,
+                      0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "2b00", "", 0x0u, 0x0u, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "2b00", "", 0x2u, 0x0u, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "2b00", "", 0x8u, 0x0u, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "2b00", "", 0xau, 0x0u, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "2b00", "", 0x10u, 0x0u, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "2b00", "", 0x1u, 0xc000000du, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "2b00", "", 0x3u, 0xc000000du, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "2b00", "", 0x24u, 0xc000000du, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "2b00", "", 0xffffffffu, 0xc000000du, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "2d00", "", 0x0u, 0x0u, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "2d00", "", 0x2u, 0x0u, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "2d00", "", 0x8u, 0x0u, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "2d00", "", 0xau, 0x0u, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "2d00", "", 0x10u, 0x0u, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "2d00", "", 0x1u, 0xc000000du, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "2d00", "", 0x3u, 0xc000000du, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "2d00", "", 0x24u, 0xc000000du, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "2d00", "", 0xffffffffu, 0xc000000du, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "780079007a00", "", 0x0u, 0x0u, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "780079007a00", "", 0x2u, 0x0u, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "780079007a00", "", 0x8u, 0x0u, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "780079007a00", "", 0xau, 0x0u, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "780079007a00", "", 0x10u, 0x0u, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "780079007a00", "", 0x1u, 0xc000000du, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "780079007a00", "", 0x3u, 0xc000000du, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "780079007a00", "", 0x24u, 0xc000000du, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "780079007a00", "", 0xffffffffu, 0xc000000du, 0u,
+                      "")
+NEVERD_RTL_INPUT_CASE(integer, "310032007a0033003400", "", 0x0u, 0x0u, 12u, "")
+NEVERD_RTL_INPUT_CASE(integer, "310032007a0033003400", "", 0x2u, 0x0u, 1u, "")
+NEVERD_RTL_INPUT_CASE(integer, "310032007a0033003400", "", 0x8u, 0x0u, 10u, "")
+NEVERD_RTL_INPUT_CASE(integer, "310032007a0033003400", "", 0xau, 0x0u, 12u, "")
+NEVERD_RTL_INPUT_CASE(integer, "310032007a0033003400", "", 0x10u, 0x0u, 18u, "")
+NEVERD_RTL_INPUT_CASE(integer, "310032007a0033003400", "", 0x1u, 0xc000000du,
+                      0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "310032007a0033003400", "", 0x3u, 0xc000000du,
+                      0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "310032007a0033003400", "", 0x24u, 0xc000000du,
+                      0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "310032007a0033003400", "", 0xffffffffu,
+                      0xc000000du, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "3400320039003400390036003700320039003600", "",
+                      0x0u, 0x0u, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "3400320039003400390036003700320039003600", "",
+                      0x2u, 0x0u, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "3400320039003400390036003700320039003600", "",
+                      0x8u, 0x0u, 34u, "")
+NEVERD_RTL_INPUT_CASE(integer, "3400320039003400390036003700320039003600", "",
+                      0xau, 0x0u, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "3400320039003400390036003700320039003600", "",
+                      0x10u, 0x0u, 2492887702u, "")
+NEVERD_RTL_INPUT_CASE(integer, "3400320039003400390036003700320039003600", "",
+                      0x1u, 0xc000000du, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "3400320039003400390036003700320039003600", "",
+                      0x3u, 0xc000000du, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "3400320039003400390036003700320039003600", "",
+                      0x24u, 0xc000000du, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "3400320039003400390036003700320039003600", "",
+                      0xffffffffu, 0xc000000du, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "2d003400320039003400390036003700320039003500",
+                      "", 0x0u, 0x0u, 1u, "")
+NEVERD_RTL_INPUT_CASE(integer, "2d003400320039003400390036003700320039003500",
+                      "", 0x2u, 0x0u, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "2d003400320039003400390036003700320039003500",
+                      "", 0x8u, 0x0u, 4294967262u, "")
+NEVERD_RTL_INPUT_CASE(integer, "2d003400320039003400390036003700320039003500",
+                      "", 0xau, 0x0u, 1u, "")
+NEVERD_RTL_INPUT_CASE(integer, "2d003400320039003400390036003700320039003500",
+                      "", 0x10u, 0x0u, 1802079595u, "")
+NEVERD_RTL_INPUT_CASE(integer, "2d003400320039003400390036003700320039003500",
+                      "", 0x1u, 0xc000000du, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "2d003400320039003400390036003700320039003500",
+                      "", 0x3u, 0xc000000du, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "2d003400320039003400390036003700320039003500",
+                      "", 0x24u, 0xc000000du, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "2d003400320039003400390036003700320039003500",
+                      "", 0xffffffffu, 0xc000000du, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "46004600460046004600460046004600", "", 0x0u,
+                      0x0u, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "46004600460046004600460046004600", "", 0x2u,
+                      0x0u, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "46004600460046004600460046004600", "", 0x8u,
+                      0x0u, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "46004600460046004600460046004600", "", 0xau,
+                      0x0u, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "46004600460046004600460046004600", "", 0x10u,
+                      0x0u, 4294967295u, "")
+NEVERD_RTL_INPUT_CASE(integer, "46004600460046004600460046004600", "", 0x1u,
+                      0xc000000du, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "46004600460046004600460046004600", "", 0x3u,
+                      0xc000000du, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "46004600460046004600460046004600", "", 0x24u,
+                      0xc000000du, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "46004600460046004600460046004600", "",
+                      0xffffffffu, 0xc000000du, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "4100", "", 0x0u, 0x0u, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "4100", "", 0x2u, 0x0u, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "4100", "", 0x8u, 0x0u, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "4100", "", 0xau, 0x0u, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "4100", "", 0x10u, 0x0u, 10u, "")
+NEVERD_RTL_INPUT_CASE(integer, "4100", "", 0x1u, 0xc000000du, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "4100", "", 0x3u, 0xc000000du, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "4100", "", 0x24u, 0xc000000du, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "4100", "", 0xffffffffu, 0xc000000du, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "20002000", "", 0x0u, 0x0u, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "20002000", "", 0x2u, 0x0u, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "20002000", "", 0x8u, 0x0u, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "20002000", "", 0xau, 0x0u, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "20002000", "", 0x10u, 0x0u, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "20002000", "", 0x1u, 0xc000000du, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "20002000", "", 0x3u, 0xc000000du, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "20002000", "", 0x24u, 0xc000000du, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "20002000", "", 0xffffffffu, 0xc000000du, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "0000200034003200", "", 0x0u, 0x0u, 42u, "")
+NEVERD_RTL_INPUT_CASE(integer, "0000200034003200", "", 0x2u, 0x0u, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "0000200034003200", "", 0x8u, 0x0u, 34u, "")
+NEVERD_RTL_INPUT_CASE(integer, "0000200034003200", "", 0xau, 0x0u, 42u, "")
+NEVERD_RTL_INPUT_CASE(integer, "0000200034003200", "", 0x10u, 0x0u, 66u, "")
+NEVERD_RTL_INPUT_CASE(integer, "0000200034003200", "", 0x1u, 0xc000000du, 0u,
+                      "")
+NEVERD_RTL_INPUT_CASE(integer, "0000200034003200", "", 0x3u, 0xc000000du, 0u,
+                      "")
+NEVERD_RTL_INPUT_CASE(integer, "0000200034003200", "", 0x24u, 0xc000000du, 0u,
+                      "")
+NEVERD_RTL_INPUT_CASE(integer, "0000200034003200", "", 0xffffffffu, 0xc000000du,
+                      0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "31003200000033003400", "", 0x0u, 0x0u, 12u, "")
+NEVERD_RTL_INPUT_CASE(integer, "31003200000033003400", "", 0x2u, 0x0u, 1u, "")
+NEVERD_RTL_INPUT_CASE(integer, "31003200000033003400", "", 0x8u, 0x0u, 10u, "")
+NEVERD_RTL_INPUT_CASE(integer, "31003200000033003400", "", 0xau, 0x0u, 12u, "")
+NEVERD_RTL_INPUT_CASE(integer, "31003200000033003400", "", 0x10u, 0x0u, 18u, "")
+NEVERD_RTL_INPUT_CASE(integer, "31003200000033003400", "", 0x1u, 0xc000000du,
+                      0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "31003200000033003400", "", 0x3u, 0xc000000du,
+                      0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "31003200000033003400", "", 0x24u, 0xc000000du,
+                      0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "31003200000033003400", "", 0xffffffffu,
+                      0xc000000du, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "e900", "", 0x0u, 0x0u, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "e900", "", 0x2u, 0x0u, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "e900", "", 0x8u, 0x0u, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "e900", "", 0xau, 0x0u, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "e900", "", 0x10u, 0x0u, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "e900", "", 0x1u, 0xc000000du, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "e900", "", 0x3u, 0xc000000du, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "e900", "", 0x24u, 0xc000000du, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "e900", "", 0xffffffffu, 0xc000000du, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "004e", "", 0x0u, 0x0u, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "004e", "", 0x2u, 0x0u, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "004e", "", 0x8u, 0x0u, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "004e", "", 0xau, 0x0u, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "004e", "", 0x10u, 0x0u, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "004e", "", 0x1u, 0xc000000du, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "004e", "", 0x3u, 0xc000000du, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "004e", "", 0x24u, 0xc000000du, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "004e", "", 0xffffffffu, 0xc000000du, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "0001", "", 0x0u, 0x0u, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "0001", "", 0x2u, 0x0u, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "0001", "", 0x8u, 0x0u, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "0001", "", 0xau, 0x0u, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "0001", "", 0x10u, 0x0u, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "0001", "", 0x1u, 0xc000000du, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "0001", "", 0x3u, 0xc000000du, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "0001", "", 0x24u, 0xc000000du, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "0001", "", 0xffffffffu, 0xc000000du, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "11ff", "", 0x0u, 0x0u, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "11ff", "", 0x2u, 0x0u, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "11ff", "", 0x8u, 0x0u, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "11ff", "", 0xau, 0x0u, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "11ff", "", 0x10u, 0x0u, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "11ff", "", 0x1u, 0xc000000du, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "11ff", "", 0x3u, 0xc000000du, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "11ff", "", 0x24u, 0xc000000du, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "11ff", "", 0xffffffffu, 0xc000000du, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "30007800", "", 0x0u, 0x0u, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "30007800", "", 0x2u, 0x0u, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "30007800", "", 0x8u, 0x0u, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "30007800", "", 0xau, 0x0u, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "30007800", "", 0x10u, 0x0u, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "30007800", "", 0x1u, 0xc000000du, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "30007800", "", 0x3u, 0xc000000du, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "30007800", "", 0x24u, 0xc000000du, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "30007800", "", 0xffffffffu, 0xc000000du, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "300062003200", "", 0x0u, 0x0u, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "300062003200", "", 0x2u, 0x0u, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "300062003200", "", 0x8u, 0x0u, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "300062003200", "", 0xau, 0x0u, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "300062003200", "", 0x10u, 0x0u, 178u, "")
+NEVERD_RTL_INPUT_CASE(integer, "300062003200", "", 0x1u, 0xc000000du, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "300062003200", "", 0x3u, 0xc000000du, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "300062003200", "", 0x24u, 0xc000000du, 0u, "")
+NEVERD_RTL_INPUT_CASE(integer, "300062003200", "", 0xffffffffu, 0xc000000du, 0u,
+                      "")
+NEVERD_RTL_INPUT_CASE(guid,
+                      "7b00300031003200330034003500360037002d003800390041004200"
+                      "2d0043004400450046002d0030003100320033002d00340035003600"
+                      "3700380039004100420043004400450046007d00",
+                      "", 0x0u, 0x0u, 0u, "67452301ab89efcd0123456789abcdef")
+NEVERD_RTL_INPUT_CASE(guid,
+                      "7b00300031003200330034003500360037002d003800390061006200"
+                      "2d0063006400650066002d0030003100320033002d00340035003600"
+                      "3700380039006100620063006400650066007d00",
+                      "", 0x0u, 0x0u, 0u, "67452301ab89efcd0123456789abcdef")
+NEVERD_RTL_INPUT_CASE(
+    guid,
+    "300031003200330034003500360037002d0038003900410042002d0043004400450046002d"
+    "0030003100320033002d00340035003600370038003900410042004300440045004600",
+    "", 0x0u, 0xc000000du, 0u, "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5")
+NEVERD_RTL_INPUT_CASE(guid, "", "", 0x0u, 0xc000000du, 0u,
+                      "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5")
+NEVERD_RTL_INPUT_CASE(guid,
+                      "7b00300031003200330034003500360037002d003800390041004200"
+                      "2d0043004400450046002d0030003100320033002d00340035003600"
+                      "3700380039004100420043004400450046007d007800",
+                      "", 0x0u, 0xc000000du, 0u,
+                      "67452301ab89efcda5a5a5a5a5a5a5a5")
+NEVERD_RTL_INPUT_CASE(guid,
+                      "7b00300031003200330034003500360037002d003800390041004200"
+                      "2d0043004400450046002d0030003100320033002d00340035003600"
+                      "3700380039004100420043004400450046007d000000",
+                      "", 0x0u, 0x0u, 0u, "67452301ab89efcd0123456789abcdef")
+NEVERD_RTL_INPUT_CASE(guid,
+                      "20007b00300031003200330034003500360037002d00380039004100"
+                      "42002d0043004400450046002d0030003100320033002d0034003500"
+                      "36003700380039004100420043004400450046007d00",
+                      "", 0x0u, 0xc000000du, 0u,
+                      "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5")
+NEVERD_RTL_INPUT_CASE(guid,
+                      "7b00300031003200330034003500360037002d003800390041004200"
+                      "2d0043004400450046002d0030003100320033002d00340035003600"
+                      "370038003900410042004300440045004600",
+                      "", 0x0u, 0xc000000du, 0u,
+                      "67452301ab89efcda5a5a5a5a5a5a5a5")
+NEVERD_RTL_INPUT_CASE(guid,
+                      "7b00300030003000300030003000300030002d003000300030003000"
+                      "2d0030003000300030002d0030003000300030002d00300030003000"
+                      "3000300030003000300030003000300030007d00",
+                      "", 0x0u, 0x0u, 0u, "00000000000000000000000000000000")
+NEVERD_RTL_INPUT_CASE(guid,
+                      "2100300031003200330034003500360037002d003800390041004200"
+                      "2d0043004400450046002d0030003100320033002d00340035003600"
+                      "3700380039004100420043004400450046007d00",
+                      "", 0x0u, 0xc000000du, 0u,
+                      "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5")
+NEVERD_RTL_INPUT_CASE(guid,
+                      "7b00210031003200330034003500360037002d003800390041004200"
+                      "2d0043004400450046002d0030003100320033002d00340035003600"
+                      "3700380039004100420043004400450046007d00",
+                      "", 0x0u, 0xc000000du, 0u,
+                      "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5")
+NEVERD_RTL_INPUT_CASE(guid,
+                      "7b00300021003200330034003500360037002d003800390041004200"
+                      "2d0043004400450046002d0030003100320033002d00340035003600"
+                      "3700380039004100420043004400450046007d00",
+                      "", 0x0u, 0xc000000du, 0u,
+                      "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5")
+NEVERD_RTL_INPUT_CASE(guid,
+                      "7b00300031002100330034003500360037002d003800390041004200"
+                      "2d0043004400450046002d0030003100320033002d00340035003600"
+                      "3700380039004100420043004400450046007d00",
+                      "", 0x0u, 0xc000000du, 0u,
+                      "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5")
+NEVERD_RTL_INPUT_CASE(guid,
+                      "7b00300031003200210034003500360037002d003800390041004200"
+                      "2d0043004400450046002d0030003100320033002d00340035003600"
+                      "3700380039004100420043004400450046007d00",
+                      "", 0x0u, 0xc000000du, 0u,
+                      "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5")
+NEVERD_RTL_INPUT_CASE(guid,
+                      "7b00300031003200330021003500360037002d003800390041004200"
+                      "2d0043004400450046002d0030003100320033002d00340035003600"
+                      "3700380039004100420043004400450046007d00",
+                      "", 0x0u, 0xc000000du, 0u,
+                      "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5")
+NEVERD_RTL_INPUT_CASE(guid,
+                      "7b00300031003200330034002100360037002d003800390041004200"
+                      "2d0043004400450046002d0030003100320033002d00340035003600"
+                      "3700380039004100420043004400450046007d00",
+                      "", 0x0u, 0xc000000du, 0u,
+                      "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5")
+NEVERD_RTL_INPUT_CASE(guid,
+                      "7b00300031003200330034003500210037002d003800390041004200"
+                      "2d0043004400450046002d0030003100320033002d00340035003600"
+                      "3700380039004100420043004400450046007d00",
+                      "", 0x0u, 0xc000000du, 0u,
+                      "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5")
+NEVERD_RTL_INPUT_CASE(guid,
+                      "7b00300031003200330034003500360021002d003800390041004200"
+                      "2d0043004400450046002d0030003100320033002d00340035003600"
+                      "3700380039004100420043004400450046007d00",
+                      "", 0x0u, 0xc000000du, 0u,
+                      "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5")
+NEVERD_RTL_INPUT_CASE(guid,
+                      "7b003000310032003300340035003600370021003800390041004200"
+                      "2d0043004400450046002d0030003100320033002d00340035003600"
+                      "3700380039004100420043004400450046007d00",
+                      "", 0x0u, 0xc000000du, 0u,
+                      "67452301a5a5a5a5a5a5a5a5a5a5a5a5")
+NEVERD_RTL_INPUT_CASE(guid,
+                      "7b00300031003200330034003500360037002d002100390041004200"
+                      "2d0043004400450046002d0030003100320033002d00340035003600"
+                      "3700380039004100420043004400450046007d00",
+                      "", 0x0u, 0xc000000du, 0u,
+                      "67452301a5a5a5a5a5a5a5a5a5a5a5a5")
+NEVERD_RTL_INPUT_CASE(guid,
+                      "7b00300031003200330034003500360037002d003800210041004200"
+                      "2d0043004400450046002d0030003100320033002d00340035003600"
+                      "3700380039004100420043004400450046007d00",
+                      "", 0x0u, 0xc000000du, 0u,
+                      "67452301a5a5a5a5a5a5a5a5a5a5a5a5")
+NEVERD_RTL_INPUT_CASE(guid,
+                      "7b00300031003200330034003500360037002d003800390021004200"
+                      "2d0043004400450046002d0030003100320033002d00340035003600"
+                      "3700380039004100420043004400450046007d00",
+                      "", 0x0u, 0xc000000du, 0u,
+                      "67452301a5a5a5a5a5a5a5a5a5a5a5a5")
+NEVERD_RTL_INPUT_CASE(guid,
+                      "7b00300031003200330034003500360037002d003800390041002100"
+                      "2d0043004400450046002d0030003100320033002d00340035003600"
+                      "3700380039004100420043004400450046007d00",
+                      "", 0x0u, 0xc000000du, 0u,
+                      "67452301a5a5a5a5a5a5a5a5a5a5a5a5")
+NEVERD_RTL_INPUT_CASE(guid,
+                      "7b00300031003200330034003500360037002d003800390041004200"
+                      "210043004400450046002d0030003100320033002d00340035003600"
+                      "3700380039004100420043004400450046007d00",
+                      "", 0x0u, 0xc000000du, 0u,
+                      "67452301ab89a5a5a5a5a5a5a5a5a5a5")
+NEVERD_RTL_INPUT_CASE(guid,
+                      "7b00300031003200330034003500360037002d003800390041004200"
+                      "2d0021004400450046002d0030003100320033002d00340035003600"
+                      "3700380039004100420043004400450046007d00",
+                      "", 0x0u, 0xc000000du, 0u,
+                      "67452301ab89a5a5a5a5a5a5a5a5a5a5")
+NEVERD_RTL_INPUT_CASE(guid,
+                      "7b00300031003200330034003500360037002d003800390041004200"
+                      "2d0043002100450046002d0030003100320033002d00340035003600"
+                      "3700380039004100420043004400450046007d00",
+                      "", 0x0u, 0xc000000du, 0u,
+                      "67452301ab89a5a5a5a5a5a5a5a5a5a5")
+NEVERD_RTL_INPUT_CASE(guid,
+                      "7b00300031003200330034003500360037002d003800390041004200"
+                      "2d0043004400210046002d0030003100320033002d00340035003600"
+                      "3700380039004100420043004400450046007d00",
+                      "", 0x0u, 0xc000000du, 0u,
+                      "67452301ab89a5a5a5a5a5a5a5a5a5a5")
+NEVERD_RTL_INPUT_CASE(guid,
+                      "7b00300031003200330034003500360037002d003800390041004200"
+                      "2d0043004400450021002d0030003100320033002d00340035003600"
+                      "3700380039004100420043004400450046007d00",
+                      "", 0x0u, 0xc000000du, 0u,
+                      "67452301ab89a5a5a5a5a5a5a5a5a5a5")
+NEVERD_RTL_INPUT_CASE(guid,
+                      "7b00300031003200330034003500360037002d003800390041004200"
+                      "2d004300440045004600210030003100320033002d00340035003600"
+                      "3700380039004100420043004400450046007d00",
+                      "", 0x0u, 0xc000000du, 0u,
+                      "67452301ab89efcda5a5a5a5a5a5a5a5")
+NEVERD_RTL_INPUT_CASE(guid,
+                      "7b00300031003200330034003500360037002d003800390041004200"
+                      "2d0043004400450046002d0021003100320033002d00340035003600"
+                      "3700380039004100420043004400450046007d00",
+                      "", 0x0u, 0xc000000du, 0u,
+                      "67452301ab89efcda5a5a5a5a5a5a5a5")
+NEVERD_RTL_INPUT_CASE(guid,
+                      "7b00300031003200330034003500360037002d003800390041004200"
+                      "2d0043004400450046002d0030002100320033002d00340035003600"
+                      "3700380039004100420043004400450046007d00",
+                      "", 0x0u, 0xc000000du, 0u,
+                      "67452301ab89efcda5a5a5a5a5a5a5a5")
+NEVERD_RTL_INPUT_CASE(guid,
+                      "7b00300031003200330034003500360037002d003800390041004200"
+                      "2d0043004400450046002d0030003100210033002d00340035003600"
+                      "3700380039004100420043004400450046007d00",
+                      "", 0x0u, 0xc000000du, 0u,
+                      "67452301ab89efcda5a5a5a5a5a5a5a5")
+NEVERD_RTL_INPUT_CASE(guid,
+                      "7b00300031003200330034003500360037002d003800390041004200"
+                      "2d0043004400450046002d0030003100320021002d00340035003600"
+                      "3700380039004100420043004400450046007d00",
+                      "", 0x0u, 0xc000000du, 0u,
+                      "67452301ab89efcda5a5a5a5a5a5a5a5")
+NEVERD_RTL_INPUT_CASE(guid,
+                      "7b00300031003200330034003500360037002d003800390041004200"
+                      "2d0043004400450046002d0030003100320033002100340035003600"
+                      "3700380039004100420043004400450046007d00",
+                      "", 0x0u, 0xc000000du, 0u,
+                      "67452301ab89efcda5a5a5a5a5a5a5a5")
+NEVERD_RTL_INPUT_CASE(guid,
+                      "7b00300031003200330034003500360037002d003800390041004200"
+                      "2d0043004400450046002d0030003100320033002d00210035003600"
+                      "3700380039004100420043004400450046007d00",
+                      "", 0x0u, 0xc000000du, 0u,
+                      "67452301ab89efcda5a5a5a5a5a5a5a5")
+NEVERD_RTL_INPUT_CASE(guid,
+                      "7b00300031003200330034003500360037002d003800390041004200"
+                      "2d0043004400450046002d0030003100320033002d00340021003600"
+                      "3700380039004100420043004400450046007d00",
+                      "", 0x0u, 0xc000000du, 0u,
+                      "67452301ab89efcda5a5a5a5a5a5a5a5")
+NEVERD_RTL_INPUT_CASE(guid,
+                      "7b00300031003200330034003500360037002d003800390041004200"
+                      "2d0043004400450046002d0030003100320033002d00340035002100"
+                      "3700380039004100420043004400450046007d00",
+                      "", 0x0u, 0xc000000du, 0u,
+                      "67452301ab89efcda5a5a5a5a5a5a5a5")
+NEVERD_RTL_INPUT_CASE(guid,
+                      "7b00300031003200330034003500360037002d003800390041004200"
+                      "2d0043004400450046002d0030003100320033002d00340035003600"
+                      "2100380039004100420043004400450046007d00",
+                      "", 0x0u, 0xc000000du, 0u,
+                      "67452301ab89efcda5a5a5a5a5a5a5a5")
+NEVERD_RTL_INPUT_CASE(guid,
+                      "7b00300031003200330034003500360037002d003800390041004200"
+                      "2d0043004400450046002d0030003100320033002d00340035003600"
+                      "3700210039004100420043004400450046007d00",
+                      "", 0x0u, 0xc000000du, 0u,
+                      "67452301ab89efcda5a5a5a5a5a5a5a5")
+NEVERD_RTL_INPUT_CASE(guid,
+                      "7b00300031003200330034003500360037002d003800390041004200"
+                      "2d0043004400450046002d0030003100320033002d00340035003600"
+                      "3700380021004100420043004400450046007d00",
+                      "", 0x0u, 0xc000000du, 0u,
+                      "67452301ab89efcda5a5a5a5a5a5a5a5")
+NEVERD_RTL_INPUT_CASE(guid,
+                      "7b00300031003200330034003500360037002d003800390041004200"
+                      "2d0043004400450046002d0030003100320033002d00340035003600"
+                      "3700380039002100420043004400450046007d00",
+                      "", 0x0u, 0xc000000du, 0u,
+                      "67452301ab89efcda5a5a5a5a5a5a5a5")
+NEVERD_RTL_INPUT_CASE(guid,
+                      "7b00300031003200330034003500360037002d003800390041004200"
+                      "2d0043004400450046002d0030003100320033002d00340035003600"
+                      "3700380039004100210043004400450046007d00",
+                      "", 0x0u, 0xc000000du, 0u,
+                      "67452301ab89efcda5a5a5a5a5a5a5a5")
+NEVERD_RTL_INPUT_CASE(guid,
+                      "7b00300031003200330034003500360037002d003800390041004200"
+                      "2d0043004400450046002d0030003100320033002d00340035003600"
+                      "3700380039004100420021004400450046007d00",
+                      "", 0x0u, 0xc000000du, 0u,
+                      "67452301ab89efcda5a5a5a5a5a5a5a5")
+NEVERD_RTL_INPUT_CASE(guid,
+                      "7b00300031003200330034003500360037002d003800390041004200"
+                      "2d0043004400450046002d0030003100320033002d00340035003600"
+                      "3700380039004100420043002100450046007d00",
+                      "", 0x0u, 0xc000000du, 0u,
+                      "67452301ab89efcda5a5a5a5a5a5a5a5")
+NEVERD_RTL_INPUT_CASE(guid,
+                      "7b00300031003200330034003500360037002d003800390041004200"
+                      "2d0043004400450046002d0030003100320033002d00340035003600"
+                      "3700380039004100420043004400210046007d00",
+                      "", 0x0u, 0xc000000du, 0u,
+                      "67452301ab89efcda5a5a5a5a5a5a5a5")
+NEVERD_RTL_INPUT_CASE(guid,
+                      "7b00300031003200330034003500360037002d003800390041004200"
+                      "2d0043004400450046002d0030003100320033002d00340035003600"
+                      "3700380039004100420043004400450021007d00",
+                      "", 0x0u, 0xc000000du, 0u,
+                      "67452301ab89efcda5a5a5a5a5a5a5a5")
+NEVERD_RTL_INPUT_CASE(guid,
+                      "7b00300031003200330034003500360037002d003800390041004200"
+                      "2d0043004400450046002d0030003100320033002d00340035003600"
+                      "3700380039004100420043004400450046002100",
+                      "", 0x0u, 0xc000000du, 0u,
+                      "67452301ab89efcda5a5a5a5a5a5a5a5")
+NEVERD_RTL_INPUT_CASE(guid, "7b00", "", 0x0u, 0xc000000du, 0u,
+                      "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5")
+NEVERD_RTL_INPUT_CASE(guid, "7b003000", "", 0x0u, 0xc000000du, 0u,
+                      "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5")
+NEVERD_RTL_INPUT_CASE(guid, "7b0030003100", "", 0x0u, 0xc000000du, 0u,
+                      "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5")
+NEVERD_RTL_INPUT_CASE(guid, "7b00300031003200", "", 0x0u, 0xc000000du, 0u,
+                      "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5")
+NEVERD_RTL_INPUT_CASE(guid, "7b003000310032003300", "", 0x0u, 0xc000000du, 0u,
+                      "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5")
+NEVERD_RTL_INPUT_CASE(guid, "7b0030003100320033003400", "", 0x0u, 0xc000000du,
+                      0u, "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5")
+NEVERD_RTL_INPUT_CASE(guid, "7b00300031003200330034003500", "", 0x0u,
+                      0xc000000du, 0u, "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5")
+NEVERD_RTL_INPUT_CASE(guid, "7b003000310032003300340035003600", "", 0x0u,
+                      0xc000000du, 0u, "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5")
+NEVERD_RTL_INPUT_CASE(guid, "7b0030003100320033003400350036003700", "", 0x0u,
+                      0xc000000du, 0u, "67452301a5a5a5a5a5a5a5a5a5a5a5a5")
+NEVERD_RTL_INPUT_CASE(guid, "7b00300031003200330034003500360037002d00", "",
+                      0x0u, 0xc000000du, 0u, "67452301a5a5a5a5a5a5a5a5a5a5a5a5")
+NEVERD_RTL_INPUT_CASE(guid, "7b00300031003200330034003500360037002d003800", "",
+                      0x0u, 0xc000000du, 0u, "67452301a5a5a5a5a5a5a5a5a5a5a5a5")
+NEVERD_RTL_INPUT_CASE(guid, "7b00300031003200330034003500360037002d0038003900",
+                      "", 0x0u, 0xc000000du, 0u,
+                      "67452301a5a5a5a5a5a5a5a5a5a5a5a5")
+NEVERD_RTL_INPUT_CASE(guid,
+                      "7b00300031003200330034003500360037002d00380039004100",
+                      "", 0x0u, 0xc000000du, 0u,
+                      "67452301a5a5a5a5a5a5a5a5a5a5a5a5")
+NEVERD_RTL_INPUT_CASE(
+    guid, "7b00300031003200330034003500360037002d003800390041004200", "", 0x0u,
+    0xc000000du, 0u, "67452301ab89a5a5a5a5a5a5a5a5a5a5")
+NEVERD_RTL_INPUT_CASE(
+    guid, "7b00300031003200330034003500360037002d0038003900410042002d00", "",
+    0x0u, 0xc000000du, 0u, "67452301ab89a5a5a5a5a5a5a5a5a5a5")
+NEVERD_RTL_INPUT_CASE(
+    guid, "7b00300031003200330034003500360037002d0038003900410042002d004300",
+    "", 0x0u, 0xc000000du, 0u, "67452301ab89a5a5a5a5a5a5a5a5a5a5")
+NEVERD_RTL_INPUT_CASE(
+    guid,
+    "7b00300031003200330034003500360037002d0038003900410042002d0043004400", "",
+    0x0u, 0xc000000du, 0u, "67452301ab89a5a5a5a5a5a5a5a5a5a5")
+NEVERD_RTL_INPUT_CASE(
+    guid,
+    "7b00300031003200330034003500360037002d0038003900410042002d00430044004500",
+    "", 0x0u, 0xc000000du, 0u, "67452301ab89a5a5a5a5a5a5a5a5a5a5")
+NEVERD_RTL_INPUT_CASE(guid,
+                      "7b00300031003200330034003500360037002d003800390041004200"
+                      "2d004300440045004600",
+                      "", 0x0u, 0xc000000du, 0u,
+                      "67452301ab89efcda5a5a5a5a5a5a5a5")
+NEVERD_RTL_INPUT_CASE(guid,
+                      "7b00300031003200330034003500360037002d003800390041004200"
+                      "2d0043004400450046002d00",
+                      "", 0x0u, 0xc000000du, 0u,
+                      "67452301ab89efcda5a5a5a5a5a5a5a5")
+NEVERD_RTL_INPUT_CASE(guid,
+                      "7b00300031003200330034003500360037002d003800390041004200"
+                      "2d0043004400450046002d003000",
+                      "", 0x0u, 0xc000000du, 0u,
+                      "67452301ab89efcda5a5a5a5a5a5a5a5")
+NEVERD_RTL_INPUT_CASE(guid,
+                      "7b00300031003200330034003500360037002d003800390041004200"
+                      "2d0043004400450046002d0030003100",
+                      "", 0x0u, 0xc000000du, 0u,
+                      "67452301ab89efcda5a5a5a5a5a5a5a5")
+NEVERD_RTL_INPUT_CASE(guid,
+                      "7b00300031003200330034003500360037002d003800390041004200"
+                      "2d0043004400450046002d00300031003200",
+                      "", 0x0u, 0xc000000du, 0u,
+                      "67452301ab89efcda5a5a5a5a5a5a5a5")
+NEVERD_RTL_INPUT_CASE(guid,
+                      "7b00300031003200330034003500360037002d003800390041004200"
+                      "2d0043004400450046002d003000310032003300",
+                      "", 0x0u, 0xc000000du, 0u,
+                      "67452301ab89efcda5a5a5a5a5a5a5a5")
+NEVERD_RTL_INPUT_CASE(guid,
+                      "7b00300031003200330034003500360037002d003800390041004200"
+                      "2d0043004400450046002d0030003100320033002d00",
+                      "", 0x0u, 0xc000000du, 0u,
+                      "67452301ab89efcda5a5a5a5a5a5a5a5")
+NEVERD_RTL_INPUT_CASE(guid,
+                      "7b00300031003200330034003500360037002d003800390041004200"
+                      "2d0043004400450046002d0030003100320033002d003400",
+                      "", 0x0u, 0xc000000du, 0u,
+                      "67452301ab89efcda5a5a5a5a5a5a5a5")
+NEVERD_RTL_INPUT_CASE(guid,
+                      "7b00300031003200330034003500360037002d003800390041004200"
+                      "2d0043004400450046002d0030003100320033002d0034003500",
+                      "", 0x0u, 0xc000000du, 0u,
+                      "67452301ab89efcda5a5a5a5a5a5a5a5")
+NEVERD_RTL_INPUT_CASE(
+    guid,
+    "7b00300031003200330034003500360037002d0038003900410042002d0043004400450046"
+    "002d0030003100320033002d00340035003600",
+    "", 0x0u, 0xc000000du, 0u, "67452301ab89efcda5a5a5a5a5a5a5a5")
+NEVERD_RTL_INPUT_CASE(
+    guid,
+    "7b00300031003200330034003500360037002d0038003900410042002d0043004400450046"
+    "002d0030003100320033002d003400350036003700",
+    "", 0x0u, 0xc000000du, 0u, "67452301ab89efcda5a5a5a5a5a5a5a5")
+NEVERD_RTL_INPUT_CASE(
+    guid,
+    "7b00300031003200330034003500360037002d0038003900410042002d0043004400450046"
+    "002d0030003100320033002d0034003500360037003800",
+    "", 0x0u, 0xc000000du, 0u, "67452301ab89efcda5a5a5a5a5a5a5a5")
+NEVERD_RTL_INPUT_CASE(
+    guid,
+    "7b00300031003200330034003500360037002d0038003900410042002d0043004400450046"
+    "002d0030003100320033002d00340035003600370038003900",
+    "", 0x0u, 0xc000000du, 0u, "67452301ab89efcda5a5a5a5a5a5a5a5")
+NEVERD_RTL_INPUT_CASE(
+    guid,
+    "7b00300031003200330034003500360037002d0038003900410042002d0043004400450046"
+    "002d0030003100320033002d003400350036003700380039004100",
+    "", 0x0u, 0xc000000du, 0u, "67452301ab89efcda5a5a5a5a5a5a5a5")
+NEVERD_RTL_INPUT_CASE(
+    guid,
+    "7b00300031003200330034003500360037002d0038003900410042002d0043004400450046"
+    "002d0030003100320033002d0034003500360037003800390041004200",
+    "", 0x0u, 0xc000000du, 0u, "67452301ab89efcda5a5a5a5a5a5a5a5")
+NEVERD_RTL_INPUT_CASE(
+    guid,
+    "7b00300031003200330034003500360037002d0038003900410042002d0043004400450046"
+    "002d0030003100320033002d00340035003600370038003900410042004300",
+    "", 0x0u, 0xc000000du, 0u, "67452301ab89efcda5a5a5a5a5a5a5a5")
+NEVERD_RTL_INPUT_CASE(
+    guid,
+    "7b00300031003200330034003500360037002d0038003900410042002d0043004400450046"
+    "002d0030003100320033002d003400350036003700380039004100420043004400",
+    "", 0x0u, 0xc000000du, 0u, "67452301ab89efcda5a5a5a5a5a5a5a5")
+NEVERD_RTL_INPUT_CASE(
+    guid,
+    "7b00300031003200330034003500360037002d0038003900410042002d0043004400450046"
+    "002d0030003100320033002d0034003500360037003800390041004200430044004500",
+    "", 0x0u, 0xc000000du, 0u, "67452301ab89efcda5a5a5a5a5a5a5a5")
+NEVERD_RTL_INPUT_CASE(guid,
+                      "7b00300031003200330034003500360037002d003800390041004200"
+                      "2d0043004400450046002d0030003100320033002d00340035003600"
+                      "370038003900410042004300440045004600",
+                      "", 0x0u, 0xc000000du, 0u,
+                      "67452301ab89efcda5a5a5a5a5a5a5a5")
+NEVERD_RTL_INPUT_CASE(guid,
+                      "7b00300031003200330034003500360037002d003800390041004200"
+                      "2d0043004400450046002d0030003100320033002d00340035003600"
+                      "3700380039004100420043004400450046007d0000000000",
+                      "", 0x0u, 0x0u, 0u, "67452301ab89efcd0123456789abcdef")
+NEVERD_RTL_INPUT_CASE(guid,
+                      "7b00300031003200330034003500360037002d003800390041004200"
+                      "2d0043004400450046002d0030003100320033002d00340035003600"
+                      "3700380039004100420043004400450046007d0000007800",
+                      "", 0x0u, 0x0u, 0u, "67452301ab89efcd0123456789abcdef")
+NEVERD_RTL_INPUT_CASE(guid,
+                      "7b00300031003200330034003500360037002d003800390041004200"
+                      "2d0043004400450046002d0030003100320033002d00340035003600"
+                      "3700380039004100420043004400450046007d00000000000000",
+                      "", 0x0u, 0x0u, 0u, "67452301ab89efcd0123456789abcdef")
+NEVERD_RTL_INPUT_CASE(prefix, "", "", 0x0u, 0x1u, 0u, "")
+NEVERD_RTL_INPUT_CASE(prefix, "", "", 0x1u, 0x1u, 0u, "")
+NEVERD_RTL_INPUT_CASE(prefix, "", "", 0x2u, 0x1u, 0u, "")
+NEVERD_RTL_INPUT_CASE(prefix, "", "", 0xffu, 0x1u, 0u, "")
+NEVERD_RTL_INPUT_CASE(prefix, "", "610062006300", 0x0u, 0x1u, 0u, "")
+NEVERD_RTL_INPUT_CASE(prefix, "", "610062006300", 0x1u, 0x1u, 0u, "")
+NEVERD_RTL_INPUT_CASE(prefix, "", "610062006300", 0x2u, 0x1u, 0u, "")
+NEVERD_RTL_INPUT_CASE(prefix, "", "610062006300", 0xffu, 0x1u, 0u, "")
+NEVERD_RTL_INPUT_CASE(prefix, "610062006300", "61006200", 0x0u, 0x0u, 0u, "")
+NEVERD_RTL_INPUT_CASE(prefix, "610062006300", "61006200", 0x1u, 0x0u, 0u, "")
+NEVERD_RTL_INPUT_CASE(prefix, "610062006300", "61006200", 0x2u, 0x0u, 0u, "")
+NEVERD_RTL_INPUT_CASE(prefix, "610062006300", "61006200", 0xffu, 0x0u, 0u, "")
+NEVERD_RTL_INPUT_CASE(prefix, "6100", "610062006300", 0x0u, 0x1u, 0u, "")
+NEVERD_RTL_INPUT_CASE(prefix, "6100", "610062006300", 0x1u, 0x1u, 0u, "")
+NEVERD_RTL_INPUT_CASE(prefix, "6100", "610062006300", 0x2u, 0x1u, 0u, "")
+NEVERD_RTL_INPUT_CASE(prefix, "6100", "610062006300", 0xffu, 0x1u, 0u, "")
+NEVERD_RTL_INPUT_CASE(prefix, "41006200", "610062004300", 0x0u, 0x0u, 0u, "")
+NEVERD_RTL_INPUT_CASE(prefix, "41006200", "610062004300", 0x1u, 0x1u, 0u, "")
+NEVERD_RTL_INPUT_CASE(prefix, "41006200", "610062004300", 0x2u, 0x1u, 0u, "")
+NEVERD_RTL_INPUT_CASE(prefix, "41006200", "610062004300", 0xffu, 0x1u, 0u, "")
+NEVERD_RTL_INPUT_CASE(prefix, "61006200", "610042006300", 0x0u, 0x0u, 0u, "")
+NEVERD_RTL_INPUT_CASE(prefix, "61006200", "610042006300", 0x1u, 0x1u, 0u, "")
+NEVERD_RTL_INPUT_CASE(prefix, "61006200", "610042006300", 0x2u, 0x1u, 0u, "")
+NEVERD_RTL_INPUT_CASE(prefix, "61006200", "610042006300", 0xffu, 0x1u, 0u, "")
+NEVERD_RTL_INPUT_CASE(prefix, "610062000000", "6100620000004300", 0x0u, 0x1u,
+                      0u, "")
+NEVERD_RTL_INPUT_CASE(prefix, "610062000000", "6100620000004300", 0x1u, 0x1u,
+                      0u, "")
+NEVERD_RTL_INPUT_CASE(prefix, "610062000000", "6100620000004300", 0x2u, 0x1u,
+                      0u, "")
+NEVERD_RTL_INPUT_CASE(prefix, "610062000000", "6100620000004300", 0xffu, 0x1u,
+                      0u, "")
+NEVERD_RTL_INPUT_CASE(
+    append, "", "", 0x0u, 0x0u, 0u,
+    "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5"
+    "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a500")
+NEVERD_RTL_INPUT_CASE(
+    append, "", "", 0x2u, 0x0u, 0u,
+    "0000a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5"
+    "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a500")
+NEVERD_RTL_INPUT_CASE(
+    append, "", "", 0x4u, 0x0u, 0u,
+    "0000a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5"
+    "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a500")
+NEVERD_RTL_INPUT_CASE(
+    append, "", "", 0x6u, 0x0u, 0u,
+    "0000a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5"
+    "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a500")
+NEVERD_RTL_INPUT_CASE(
+    append, "", "", 0x8u, 0x0u, 0u,
+    "0000a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5"
+    "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a500")
+NEVERD_RTL_INPUT_CASE(
+    append, "", "", 0xau, 0x0u, 0u,
+    "0000a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5"
+    "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a500")
+NEVERD_RTL_INPUT_CASE(
+    append, "", "", 0xcu, 0x0u, 0u,
+    "0000a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5"
+    "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a500")
+NEVERD_RTL_INPUT_CASE(
+    append, "6100", "62006300", 0x2u, 0xc0000023u, 2u,
+    "6100a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5"
+    "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a500")
+NEVERD_RTL_INPUT_CASE(
+    append, "6100", "62006300", 0x4u, 0xc0000023u, 2u,
+    "6100a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5"
+    "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a500")
+NEVERD_RTL_INPUT_CASE(
+    append, "6100", "62006300", 0x6u, 0x0u, 6u,
+    "610062006300a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5"
+    "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a500")
+NEVERD_RTL_INPUT_CASE(
+    append, "6100", "62006300", 0x8u, 0x0u, 6u,
+    "6100620063000000a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5"
+    "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a500")
+NEVERD_RTL_INPUT_CASE(
+    append, "6100", "62006300", 0xau, 0x0u, 6u,
+    "6100620063000000a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5"
+    "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a500")
+NEVERD_RTL_INPUT_CASE(
+    append, "6100", "62006300", 0xcu, 0x0u, 6u,
+    "6100620063000000a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5"
+    "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a500")
+NEVERD_RTL_INPUT_CASE(
+    append, "610062006300", "", 0x6u, 0x0u, 6u,
+    "610062006300a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5"
+    "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a500")
+NEVERD_RTL_INPUT_CASE(
+    append, "610062006300", "", 0x8u, 0x0u, 6u,
+    "6100620063000000a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5"
+    "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a500")
+NEVERD_RTL_INPUT_CASE(
+    append, "610062006300", "", 0xau, 0x0u, 6u,
+    "6100620063000000a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5"
+    "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a500")
+NEVERD_RTL_INPUT_CASE(
+    append, "610062006300", "", 0xcu, 0x0u, 6u,
+    "6100620063000000a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5"
+    "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a500")
+NEVERD_RTL_INPUT_CASE(
+    append, "610062006300", "NULL", 0x6u, 0x0u, 6u,
+    "610062006300a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5"
+    "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a500")
+NEVERD_RTL_INPUT_CASE(
+    append, "610062006300", "NULL", 0x8u, 0x0u, 6u,
+    "610062006300a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5"
+    "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a500")
+NEVERD_RTL_INPUT_CASE(
+    append, "610062006300", "NULL", 0xau, 0x0u, 6u,
+    "610062006300a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5"
+    "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a500")
+NEVERD_RTL_INPUT_CASE(
+    append, "610062006300", "NULL", 0xcu, 0x0u, 6u,
+    "610062006300a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5"
+    "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a500")
+NEVERD_RTL_INPUT_CASE(
+    append, "61006200", "630000006400", 0x4u, 0xc0000023u, 4u,
+    "61006200a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5"
+    "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a500")
+NEVERD_RTL_INPUT_CASE(
+    append, "61006200", "630000006400", 0x6u, 0x0u, 6u,
+    "610062006300a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5"
+    "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a500")
+NEVERD_RTL_INPUT_CASE(
+    append, "61006200", "630000006400", 0x8u, 0x0u, 6u,
+    "6100620063000000a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5"
+    "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a500")
+NEVERD_RTL_INPUT_CASE(
+    append, "61006200", "630000006400", 0xau, 0x0u, 6u,
+    "6100620063000000a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5"
+    "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a500")
+NEVERD_RTL_INPUT_CASE(
+    append, "61006200", "630000006400", 0xcu, 0x0u, 6u,
+    "6100620063000000a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5"
+    "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a500")

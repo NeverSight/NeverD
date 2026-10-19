@@ -102,7 +102,7 @@ NTSTATUS DriverEntry(DRIVER_OBJECT *Driver, UNICODE_STRING *RegistryPath) {
   __asm__ volatile("cli");
   return 0;
 #elif DRIVER_CASE == 8
-  Counter = *(volatile U64 *)((U8 *)Driver + 0x28);
+  Counter = *(volatile U64 *)((U8 *)Driver + 0x10);
   return 0;
 #elif DRIVER_CASE == 9
   U64 Thread;

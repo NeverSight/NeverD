@@ -21,6 +21,7 @@
 #include <array>
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <set>
 #include <vector>
@@ -133,11 +134,18 @@ public:
     const ExceptionInfo *Metadata;
     uint64_t PreferredBase, ActualBase, Size;
     ReadSecurityCookie Cookie;
+    /// Validate the retained image facts against its current guest owner.
+    std::function<llvm::Error()> Validate;
   };
   /// Image views and metadata remain immutable for a suspended dispatch.
   /// The owner validates live module identity and metadata before resumption.
   X64SEH(std::vector<Image> Images, ReadStack64 ReadStack,
          IsExecutable Executable, ReadCode Code = {});
+  /// Pure append preparation. Existing indices, callbacks and metadata
+  /// pointers are preserved so suspended dispatches remain valid. The owner
+  /// publishes the returned planner only after its module transaction commits.
+  llvm::Expected<std::unique_ptr<X64SEH>>
+      withAdditionalImages(llvm::ArrayRef<Image>) const;
 
   /// Metadata retains preferred-base VAs. It must outlive the planner and
   /// remain immutable. Stack reads must be side-effect-free checked reads.
@@ -191,7 +199,7 @@ private:
   ReadStack64 ReadStack;
   IsExecutable Executable;
   ReadCode Code;
-  llvm::Error validateImages() const;
+  llvm::Error validateImages(bool Live = false) const;
   std::optional<size_t> imageFor(uint64_t PC) const;
   llvm::Error checkGSCookie(const ExceptionFunction &Frame,
                             uint64_t Establisher, Stack Bounds,

@@ -6,6 +6,7 @@
 
 #include "KernelAPINames.h"
 #include "KernelModel.h"
+#include "KernelObjectTypes.h"
 #include "WindowsKernelLayout.h"
 
 #include <algorithm>
@@ -24,7 +25,8 @@ llvm::Error KernelModel::validateObjectOutput(uint64_t Address, uint32_t Size) {
   if (!Writable)
     return Writable.takeError();
   if (!*Writable)
-    return objectError("object output requires writable guest memory");
+    return objectError(
+        "object output requires writable guest memory (write permissions)");
   return Memory.validateBacking(Address, Size);
 }
 
@@ -41,6 +43,31 @@ llvm::Expected<uint64_t> KernelModel::objectType(uint64_t Object) {
 }
 
 llvm::Expected<uint64_t> KernelModel::objectType(ObjectKind Kind) {
+  {
+    std::optional<object_type::Kind> Type;
+    switch (Kind) {
+    case ObjectKind::Process:
+      Type = object_type::Kind::Process;
+      break;
+    case ObjectKind::Thread:
+      Type = object_type::Kind::Thread;
+      break;
+    case ObjectKind::File:
+      Type = object_type::Kind::File;
+      break;
+    case ObjectKind::Driver:
+      Type = object_type::Kind::Driver;
+      break;
+    default:
+      break;
+    }
+    if (Type) {
+      const auto Value = object_type::identity(*Type);
+      ObjectTypes.try_emplace(Kind, Value);
+      return Value;
+    }
+  }
+
   if (const auto Type = ObjectTypes.find(Kind); Type != ObjectTypes.end())
     return Type->second;
   auto Type = allocate(profile::ProcessTokenSize);
@@ -51,6 +78,12 @@ llvm::Expected<uint64_t> KernelModel::objectType(ObjectKind Kind) {
 }
 
 llvm::Expected<uint64_t> KernelModel::referenceObject(uint64_t Object) {
+  if (auto E = ExecutiveCallbacks.find(Object); E != ExecutiveCallbacks.end()) {
+    if (E->second.PointerReferences == SIZE_MAX)
+      return objectError("callback reference overflow");
+    ++E->second.PointerReferences;
+    return uint64_t(0);
+  }
   auto Found = ReferencedObjects.find(Object);
   if (Found == ReferencedObjects.end())
     return objectError("object reference requires a known live object");
@@ -83,9 +116,20 @@ KernelModel::referenceObjectByPointer(llvm::ArrayRef<uint64_t> A) {
 }
 
 llvm::Expected<uint64_t> KernelModel::dereferenceObject(uint64_t Object) {
+  if (ExecutiveCallbacks.contains(Object))
+    return dereferenceExecutiveCallback(Object);
   auto Found = ReferencedObjects.find(Object);
   if (Found == ReferencedObjects.end() || !Found->second.Pointers)
-    return objectError("ObfDereferenceObject requires a referenced object");
+    return objectError(
+        Found != ReferencedObjects.end() &&
+                Found->second.Kind == ObjectKind::Thread
+            ? "ObfDereferenceObject requires a referenced object (referenced "
+              "thread)"
+        : Found != ReferencedObjects.end() &&
+                Found->second.Kind == ObjectKind::Process
+            ? "ObfDereferenceObject requires a referenced object (referenced "
+              "process)"
+            : "ObfDereferenceObject requires a referenced object");
   if (const auto File = FileObjects.find(Object);
       File != FileObjects.end() && File->second.Asynchronous &&
       File->second.InternalIOHolds && !Found->second.Handles &&
@@ -110,7 +154,9 @@ llvm::Expected<uint64_t> KernelModel::dereferenceObject(uint64_t Object) {
     if (auto E = retireDeviceIfUnreferenced(Object))
       return E;
   } else if (Found->second.Kind == ObjectKind::File) {
-    if (auto E = retireFileIfUnreferenced(Object))
+    if (auto E = NativeFiles.contains(Object)
+                     ? retireNativeFile(Object)
+                     : retireFileIfUnreferenced(Object))
       return E;
   } else
     retireObjectIfUnreferenced(Object);
@@ -119,6 +165,8 @@ llvm::Expected<uint64_t> KernelModel::dereferenceObject(uint64_t Object) {
 
 llvm::Expected<uint64_t>
 KernelModel::referenceObjectByHandle(llvm::ArrayRef<uint64_t> A) {
+  if (FileHandles.contains(A[0]))
+    return referenceFile(A);
   const auto Handle = ObjectHandles.find(A[0]);
   if (Handle == ObjectHandles.end())
     return windows::StatusInvalidHandle;
@@ -166,6 +214,8 @@ KernelModel::referenceObjectByHandle(llvm::ArrayRef<uint64_t> A) {
 
 llvm::Expected<uint64_t>
 KernelModel::openObjectByPointer(llvm::ArrayRef<uint64_t> A) {
+  if (NativeFiles.contains(A[0]))
+    return openFilePointer(A);
   const auto Object = ReferencedObjects.find(A[0]);
   if (Object == ReferencedObjects.end())
     return objectError("object open requires a known live object");
@@ -255,6 +305,15 @@ void KernelModel::retainReservedObjectHandle(uint64_t Handle, uint64_t Object,
 }
 
 llvm::Expected<uint64_t> KernelModel::closeHandle(uint64_t Handle) {
+  if (FileHandles.contains(Handle))
+    return closeFile(Handle);
+  if (auto Section = SectionHandles.find(Handle);
+      Section != SectionHandles.end()) {
+    if (!canAccessHandle(Section->second.Attributes, Section->second.ProcessID))
+      return windows::StatusInvalidHandle;
+    SectionHandles.erase(Section);
+    return uint64_t(0);
+  }
   const auto Found = ObjectHandles.find(Handle);
   if (Found == ObjectHandles.end())
     return windows::StatusInvalidHandle;
@@ -277,12 +336,15 @@ llvm::Expected<uint64_t> KernelModel::closeHandle(uint64_t Handle) {
 
 llvm::Expected<uint64_t> KernelModel::lookupProcess(uint64_t ID,
                                                     uint64_t Output) {
-  const bool Known = ID && ID <= UINT32_MAX &&
-                     (ID == windows::SystemProcessID ||
-                      ProcessObjects.contains(uint32_t(ID)) ||
-                      RequestorProcessIDs.contains(uint32_t(ID)) ||
-                      (UserRequestContext && ID == CurrentUserProcessID));
-  if (!Known)
+  const bool Known =
+      Version ? (ID && ID <= UINT32_MAX && isLiveProcess(uint32_t(ID)))
+              : ID && ID <= UINT32_MAX &&
+                    (ID == windows::SystemProcessID ||
+                     ProcessObjects.contains(uint32_t(ID)) ||
+                     RequestorProcessIDs.contains(uint32_t(ID)) ||
+                     (UserRequestContext && ID == CurrentUserProcessID));
+  if (!Known || ((Version || LifecycleParents.contains(uint32_t(ID))) &&
+                 ExitedUserProcesses.contains(uint32_t(ID))))
     return windows::StatusInvalidCID;
   if (!Output)
     return windows::StatusInvalidParameter;
@@ -299,10 +361,21 @@ llvm::Expected<uint64_t> KernelModel::lookupProcess(uint64_t ID,
 
 llvm::Expected<uint64_t> KernelModel::lookupThread(uint64_t ID,
                                                    uint64_t Output) {
+  if (CurrentExecution && CurrentThreadKey) {
+    auto Current = currentThreadObject();
+    if (!Current)
+      return Current.takeError();
+    auto CID = threadClientID(*Current);
+    if (!CID)
+      return CID.takeError();
+  }
   const auto Found =
       std::find_if(ThreadClientIDs.begin(), ThreadClientIDs.end(),
                    [&](const auto &Entry) { return Entry.second == ID; });
-  if (Found == ThreadClientIDs.end())
+  if (Found == ThreadClientIDs.end() ||
+      ((Version || ExitedUserProcesses.contains(
+                       ThreadObjects.at(Found->first).ProcessID)) &&
+       ThreadObjects.at(Found->first).Exited))
     return windows::StatusInvalidCID;
   if (!Output)
     return windows::StatusInvalidParameter;
@@ -316,9 +389,10 @@ llvm::Expected<uint64_t> KernelModel::lookupThread(uint64_t ID,
 
 llvm::Expected<uint64_t> KernelModel::threadProcess(uint64_t Object) {
   const auto Thread = ThreadObjects.find(Object);
-  if (Thread == ThreadObjects.end() || !Thread->second.ProcessID)
-    return objectError(
-        "thread process requires a known thread process identity");
+  if (Thread == ThreadObjects.end())
+    return objectError("thread process requires a known thread object");
+  if (!Thread->second.ProcessID)
+    return objectError("thread has no modeled creating process identity");
   return processObject(Thread->second.ProcessID);
 }
 
@@ -362,9 +436,12 @@ void KernelModel::retireObjectIfUnreferenced(uint64_t Object) {
   const auto Thread = ThreadObjects.find(Object);
   if (Thread == ThreadObjects.end() || !Thread->second.Exited)
     return;
-  FreedRanges.emplace(Object, profile::ProcessTokenSize);
+  FreedRanges.emplace(Object,
+                      Version ? ThreadObjectSize : profile::ProcessTokenSize);
   if (Thread->second.System)
     Scheduler.forgetThreadPriority(Thread->second.CallbackID);
+  ThreadIdentities.erase(Object);
+  NativeInitialThreadViews.erase(Object);
   ThreadClientIDs.erase(Object);
   ThreadObjects.erase(Thread);
   ReferencedObjects.erase(References);

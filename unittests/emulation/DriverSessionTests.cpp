@@ -9,9 +9,12 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "backends/unicorn/UnicornBackend.h"
 #include "gtest/gtest.h"
 #include "os/windows/driver/DriverImage.h"
+#include "os/windows/kernel/KernelReferenceImage.h"
 #include "os/windows/kernel/WindowsKernelLayout.h"
+#include "os/windows/process/WindowsProcessContext.h"
 
 #include "neverd/emulation/CPU.h"
 #include "neverd/emulation/DriverSession.h"
@@ -20,6 +23,7 @@
 #include "llvm/Object/COFF.h"
 #include "llvm/Support/Endian.h"
 #include "llvm/Support/FileSystem.h"
+#include "llvm/Support/JSON.h"
 #include "llvm/Support/MemoryBuffer.h"
 
 #include <algorithm>
@@ -64,6 +68,145 @@ TEST(DriverSession, DirectRejectsUnobservableScenarioOptionsBeforeLoading) {
   }
 }
 
+TEST(DriverSession, BugCheckBorrowedNameAllowsReturnAndDeregistration) {
+  for (auto Contract :
+       {ExecutionContract::Legacy, ExecutionContract::CheckedX64})
+    for (bool Preemptive : {false, true})
+      for (bool Unload : {false, true}) {
+        DriverOptions O;
+        O.Version = DriverOptions::WindowsVersion{10, 0, 19041};
+        O.Contract = Contract;
+        O.Unload = Unload;
+        if (Preemptive)
+          O.Scheduling = DriverScheduling{23, 1};
+        auto R = emulateDriver(fixture("driver_bugcheck_borrowed_name"), O);
+        ASSERT_TRUE(bool(R)) << llvm::toString(R.takeError());
+        EXPECT_EQ(R->Stop, DriverStopReason::Returned) << R->Diagnostic;
+        EXPECT_EQ(R->NTStatus, 0u) << R->Diagnostic;
+        EXPECT_EQ(R->UnloadCompleted, Unload);
+        if (Unload) {
+          EXPECT_TRUE(R->BugCheckCallbacks.empty());
+        } else {
+          ASSERT_EQ(R->BugCheckCallbacks.size(), 1u);
+          EXPECT_TRUE(R->BugCheckCallbacks[0].ComponentStorageReleased);
+          auto Parsed = llvm::json::parse(driverResultJSON(*R));
+          ASSERT_TRUE(bool(Parsed));
+          auto *Callbacks =
+              Parsed->getAsObject()->getArray("bugcheck_callbacks");
+          ASSERT_NE(Callbacks, nullptr);
+          ASSERT_EQ(Callbacks->size(), 1u);
+          EXPECT_EQ((*Callbacks)[0].getAsObject()->getBoolean(
+                        "component_storage_released"),
+                    true);
+        }
+      }
+}
+
+TEST(DriverSession, ThreadCIDsMatchGSAndSurviveHandleCloseAndExit) {
+  for (auto Contract :
+       {ExecutionContract::Legacy, ExecutionContract::CheckedX64}) {
+    DriverOptions Options;
+    Options.Version = DriverOptions::WindowsVersion{10, 0, 19041};
+    Options.Backend = ExecutionBackendKind::Unicorn;
+    Options.Contract = Contract;
+    Options.InstructionLimit = 10000;
+    auto Result = emulateDriver(fixture("driver_thread_identity"), Options);
+    ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+    ASSERT_EQ(Result->Stop, DriverStopReason::Returned) << Result->Diagnostic;
+
+    EXPECT_EQ(Result->NTStatus, 0u);
+    const auto *Lookup = findCall(*Result, "PsLookupThreadByThreadId");
+    ASSERT_NE(Lookup, nullptr);
+    EXPECT_EQ(Lookup->Result, 0u);
+    EXPECT_NE(findCall(*Result, "PsTerminateSystemThread"), nullptr);
+    EXPECT_NE(findCall(*Result, "ObOpenObjectByPointer"), nullptr);
+    EXPECT_NE(findCall(*Result, "ZwQueryInformationThread"), nullptr);
+    EXPECT_NE(findCall(*Result, "KeWaitForSingleObject"), nullptr);
+    EXPECT_NE(findCall(*Result, "PsGetCurrentThreadWin32Thread"), nullptr);
+    EXPECT_NE(findCall(*Result, "PsGetThreadWin32Thread"), nullptr);
+    EXPECT_NE(findCall(*Result, "PsSetThreadWin32Thread"), nullptr);
+  }
+}
+
+TEST(DriverSession, FixedControlReadsPreserveGuestStateAndExactBudget) {
+  for (auto Contract :
+       {ExecutionContract::Legacy, ExecutionContract::CheckedX64}) {
+    DriverOptions O;
+    O.Contract = Contract;
+    auto R = emulateDriver(fixture("driver_control_registers"), O);
+    ASSERT_TRUE(bool(R)) << llvm::toString(R.takeError());
+    ASSERT_EQ(R->Stop, DriverStopReason::Returned) << R->Diagnostic;
+    EXPECT_EQ(R->NTStatus, 0u);
+    ASSERT_GT(R->Instructions, 1u);
+    O.InstructionLimit = R->Instructions;
+    auto Exact = emulateDriver(fixture("driver_control_registers"), O);
+    ASSERT_TRUE(bool(Exact));
+    EXPECT_EQ(Exact->Stop, DriverStopReason::Returned) << Exact->Diagnostic;
+    O.InstructionLimit -= 1;
+    auto Short = emulateDriver(fixture("driver_control_registers"), O);
+    ASSERT_TRUE(bool(Short));
+    EXPECT_EQ(Short->Stop, DriverStopReason::InstructionLimit);
+    EXPECT_EQ(Short->Instructions, O.InstructionLimit);
+    O.InstructionLimit = profile::DefaultInstructionLimit;
+    auto Write = emulateDriver(fixture("driver_control_registers_write"), O);
+    ASSERT_TRUE(bool(Write));
+    EXPECT_EQ(Write->Stop, DriverStopReason::UnsupportedInstruction);
+    EXPECT_NE(Write->Diagnostic.find("mov"), std::string::npos);
+  }
+}
+
+TEST(DriverReport, LongCallsAndWritesPreserveOrderingNullsAndEscapedText) {
+  DriverResult Result;
+  Result.Stop = DriverStopReason::InstructionLimit;
+  Result.Phase = "driver_entry";
+  Result.Diagnostic = "budget \"quoted\"\nnext\\line";
+  for (unsigned I = 0; I != 2000; ++I) {
+    DriverAPIEvent Call;
+    Call.PC = 0x1000 + I;
+    Call.Phase = Result.Phase;
+    Call.Name = "Routine";
+    Call.Detail = "quote\" slash\\ newline\n";
+    Call.Arguments = {0, 0xfffff80000000000ULL, I};
+    if (I % 2 == 0)
+      Call.Result = I;
+    if (I % 3 == 0)
+      Call.ReturnAddress = 0x2000 + I;
+    Result.Calls.push_back(std::move(Call));
+    Result.Writes.push_back(
+        {Result.Phase, 0x3000 + I, 0x4000 + I, 8,
+         I % 2 ? std::nullopt : std::optional<uint64_t>(I)});
+  }
+  auto JSON = llvm::cantFail(llvm::json::parse(driverResultJSON(Result)));
+  const auto *Root = JSON.getAsObject();
+  ASSERT_NE(Root, nullptr);
+  EXPECT_EQ(Root->getString("diagnostic"), Result.Diagnostic);
+  const auto *Calls = Root->getArray("calls");
+  const auto *Writes = Root->getArray("writes");
+  ASSERT_NE(Calls, nullptr);
+  ASSERT_NE(Writes, nullptr);
+  ASSERT_EQ(Calls->size(), 2000u);
+  ASSERT_EQ(Writes->size(), 2000u);
+  for (unsigned I = 0; I != 2000; ++I) {
+    const auto *Call = (*Calls)[I].getAsObject();
+    const auto *Write = (*Writes)[I].getAsObject();
+    ASSERT_NE(Call, nullptr);
+    ASSERT_NE(Write, nullptr);
+    auto Hex = [](uint64_t V) { return "0x" + llvm::utohexstr(V); };
+    EXPECT_EQ(Call->getString("pc"), Hex(0x1000 + I));
+    EXPECT_EQ(Call->getString("detail"), "quote\" slash\\ newline\n");
+    ASSERT_EQ(Call->getArray("arguments")->size(), 3u);
+    EXPECT_EQ((*Call->getArray("arguments"))[2].getAsString(), Hex(I));
+    EXPECT_EQ(Call->getString("result").has_value(), I % 2 == 0);
+    EXPECT_EQ(Call->getString("return_address").has_value(), I % 3 == 0);
+    EXPECT_EQ(Write->getString("address"), Hex(0x4000 + I));
+    EXPECT_EQ(Write->getString("value").has_value(), I % 2 == 0);
+  }
+  Result.Calls.clear();
+  Result.Writes.clear();
+  auto Empty = llvm::cantFail(llvm::json::parse(driverResultJSON(Result)));
+  EXPECT_TRUE(Empty.getAsObject()->getArray("calls")->empty());
+  EXPECT_TRUE(Empty.getAsObject()->getArray("writes")->empty());
+}
 TEST(DriverSession, RejectsPendingInitializationBeforeDeliveringScenario) {
   DriverOptions Options;
   Options.Requests.push_back({DriverRequestKind::Create});
@@ -90,6 +233,8 @@ TEST(DriverEmulation, ReturnsSuccessAndObservesDriverObjectWrites) {
   EXPECT_GE(Result->DriverUnload, Result->ImageBase);
   EXPECT_GE(Result->MajorFunctions[0], Result->ImageBase);
   EXPECT_FALSE(Result->Writes.empty());
+  EXPECT_TRUE(Result->KernelImageSHA256.empty());
+  EXPECT_TRUE(Result->KernelPDBSHA256.empty());
 }
 
 TEST(DriverEmulation, PreservesFailingNTStatusAsNormalReturn) {
@@ -98,6 +243,130 @@ TEST(DriverEmulation, PreservesFailingNTStatusAsNormalReturn) {
   EXPECT_EQ(Result->Stop, DriverStopReason::Returned) << Result->Diagnostic;
   ASSERT_TRUE(Result->NTStatus);
   EXPECT_EQ(*Result->NTStatus, 0xc0000001u);
+}
+
+TEST(DriverCPUID, ExplicitQueriesPreserveFlagsAndZeroExtendAllFourOutputs) {
+  for (auto Contract :
+       {ExecutionContract::Legacy, ExecutionContract::CheckedX64}) {
+    DriverOptions Options;
+    Options.Contract = Contract;
+    Options.CPUID.push_back(
+        {0x40000000, 3, {0xfedcba98, 0x80000001, 0x01234567, UINT32_MAX}});
+    auto Result = emulateDriver(fixture("driver_cpuid"), Options);
+    ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+    EXPECT_EQ(Result->Stop, DriverStopReason::Returned) << Result->Diagnostic;
+
+    EXPECT_EQ(Result->NTStatus, 0u);
+    ASSERT_EQ(Result->Configuration.CPUID.size(), Options.CPUID.size());
+    EXPECT_EQ(Result->Configuration.CPUID.front().Registers,
+              Options.CPUID.front().Registers);
+    Options.InstructionLimit = Result->Instructions;
+    auto Exact = emulateDriver(fixture("driver_cpuid"), Options);
+    ASSERT_TRUE(bool(Exact)) << llvm::toString(Exact.takeError());
+    EXPECT_EQ(Exact->Stop, DriverStopReason::Returned) << Exact->Diagnostic;
+    EXPECT_EQ(Exact->Instructions, Options.InstructionLimit);
+    --Options.InstructionLimit;
+    auto Short = emulateDriver(fixture("driver_cpuid"), Options);
+    ASSERT_TRUE(bool(Short)) << llvm::toString(Short.takeError());
+    EXPECT_EQ(Short->Stop, DriverStopReason::InstructionLimit);
+    EXPECT_EQ(Short->Instructions, Options.InstructionLimit);
+    Options.InstructionLimit = DriverOptions{}.InstructionLimit;
+    Options.CPUID.clear();
+    auto Missing = emulateDriver(fixture("driver_cpuid"), Options);
+    ASSERT_TRUE(bool(Missing)) << llvm::toString(Missing.takeError());
+    EXPECT_EQ(Missing->Stop, DriverStopReason::UnsupportedInstruction);
+    EXPECT_FALSE(Missing->NTStatus);
+    Options.CPUID.push_back({0x40000000, 2, {}});
+    auto Other = emulateDriver(fixture("driver_cpuid"), Options);
+    ASSERT_TRUE(bool(Other)) << llvm::toString(Other.takeError());
+    EXPECT_EQ(Other->Stop, DriverStopReason::UnsupportedInstruction);
+    EXPECT_EQ(Other->Diagnostic,
+              "driver cpuid: undeclared leaf 0x40000000, subleaf 0x3");
+    EXPECT_EQ(Other->PC, Missing->PC);
+    EXPECT_EQ(Other->Instructions, Missing->Instructions);
+    EXPECT_FALSE(Other->NTStatus);
+  }
+}
+
+TEST(DriverProcessIdentity, CompiledClientKeepsOneReferenceUntilUnload) {
+  for (auto Contract :
+       {ExecutionContract::Legacy, ExecutionContract::CheckedX64}) {
+    DriverOptions Options;
+    Options.Contract = Contract;
+    Options.Unload = true;
+    auto Result = emulateDriver(fixture("driver_process_lookup"), Options);
+    ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+    EXPECT_EQ(Result->Stop, DriverStopReason::Returned) << Result->Diagnostic;
+
+    EXPECT_EQ(Result->NTStatus, 0u);
+    EXPECT_TRUE(Result->UnloadCompleted);
+  }
+}
+
+TEST(DriverGuestPaging, CompiledClientWalksRecursiveTablesAndLockedMDLAliases) {
+  for (auto Contract :
+       {ExecutionContract::Legacy, ExecutionContract::CheckedX64}) {
+    DriverOptions Options;
+    Options.Contract = Contract;
+    Options.PageTables = true;
+    Options.Version = DriverOptions::WindowsVersion{10, 0, 19041};
+    Options.Unload = true;
+    auto Result = emulateDriver(fixture("driver_paging"), Options);
+    ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+    EXPECT_EQ(Result->Stop, DriverStopReason::Returned) << Result->Diagnostic;
+
+    EXPECT_EQ(Result->NTStatus, 0u);
+    EXPECT_TRUE(Result->UnloadCompleted);
+    auto *Translation = findCall(*Result, "MmGetVirtualForPhysical");
+    ASSERT_NE(Translation, nullptr);
+    EXPECT_TRUE(Translation->Result);
+  }
+}
+
+TEST(DriverGuestPaging,
+     NativeNonpagedRemappingSharesPFNsAndRestoresBorrowedVA) {
+  for (auto Contract :
+       {ExecutionContract::Legacy, ExecutionContract::CheckedX64}) {
+    DriverOptions Options;
+    Options.Contract = Contract;
+    Options.PageTables = true;
+    Options.Version = DriverOptions::WindowsVersion{10, 0, 19041};
+    Options.MDLMappingPolicy = DriverMDLMappingPolicy::Windows19041;
+    Options.Unload = true;
+    auto Result = emulateDriver(fixture("driver_paging_nonpaged"), Options);
+    ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+    EXPECT_EQ(Result->Stop, DriverStopReason::Returned) << Result->Diagnostic;
+
+    EXPECT_EQ(Result->NTStatus, 0u);
+    EXPECT_TRUE(Result->UnloadCompleted);
+    Options.MDLMappingPolicy = DriverMDLMappingPolicy::Strict;
+    auto Strict = emulateDriver(fixture("driver_paging_nonpaged"), Options);
+    ASSERT_TRUE(bool(Strict)) << llvm::toString(Strict.takeError());
+    EXPECT_EQ(Strict->Stop, DriverStopReason::ModelError);
+    EXPECT_NE(Strict->Diagnostic.find("additional system-space mapping"),
+              std::string::npos);
+  }
+}
+
+TEST(DriverGuestPaging,
+     GuestPageTableWritesFaultAndDefaultCR3RemainsUnsupported) {
+  for (auto Contract :
+       {ExecutionContract::Legacy, ExecutionContract::CheckedX64}) {
+    DriverOptions Options;
+    Options.Contract = Contract;
+    Options.PageTables = true;
+    Options.Version = DriverOptions::WindowsVersion{10, 0, 19041};
+    auto Result = emulateDriver(fixture("driver_paging_write"), Options);
+    ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+    EXPECT_EQ(Result->Stop, DriverStopReason::MemoryFault)
+        << Result->Diagnostic;
+    EXPECT_FALSE(Result->NTStatus);
+    Options.PageTables = false;
+    auto Disabled = emulateDriver(fixture("driver_paging"), Options);
+    ASSERT_TRUE(bool(Disabled)) << llvm::toString(Disabled.takeError());
+    EXPECT_EQ(Disabled->Stop, DriverStopReason::UnsupportedInstruction);
+    EXPECT_FALSE(Disabled->NTStatus);
+  }
 }
 
 TEST(DriverEmulation, UnsupportedImportStopsWithoutInventingSuccess) {
@@ -347,6 +616,27 @@ protected:
     std::copy(Code.begin(), Code.end(), Bytes.begin() + Offset);
   }
 
+  void replaceImportProvider(llvm::StringRef Module) {
+    const auto *Imports = Object->getDataDirectory(llvm::COFF::IMPORT_TABLE);
+    ASSERT_NE(Imports, nullptr);
+    uintptr_t DescriptorAddress = 0;
+    auto Error =
+        Object->getRvaPtr(Imports->RelativeVirtualAddress, DescriptorAddress);
+    ASSERT_FALSE(bool(Error)) << llvm::toString(std::move(Error));
+    const auto *Descriptor = reinterpret_cast<
+        const llvm::object::coff_import_directory_table_entry *>(
+        DescriptorAddress);
+    uintptr_t NameAddress = 0;
+    Error = Object->getRvaPtr(Descriptor->NameRVA, NameAddress);
+    ASSERT_FALSE(bool(Error)) << llvm::toString(std::move(Error));
+    const auto *Name = reinterpret_cast<const char *>(NameAddress);
+    ASSERT_EQ(llvm::StringRef(Name), "ntoskrnl.exe");
+    ASSERT_LE(Module.size(), llvm::StringRef(Name).size());
+    const size_t NameOffset = offset(Name);
+    std::copy(Module.begin(), Module.end(), Bytes.begin() + NameOffset);
+    Bytes[NameOffset + Module.size()] = 0;
+  }
+
   // Append a real DIR64 block to existing file padding, leaving all original
   // imports and code intact. The target is the first eight bytes of that data
   // section; at the preferred base the loader must not alter those bytes.
@@ -398,6 +688,87 @@ protected:
     EXPECT_FALSE(Message.empty());
   }
 };
+
+TEST_F(DriverImageValidation, UnusedExternalImportsPermitActualEntryExecution) {
+  const std::array<uint8_t, 3> Code = {0x31, 0xc0, 0xc3}; // xor eax,eax; ret
+  replaceEntry(Code);
+  replaceImportProvider("FLTMGR.SYS");
+  const auto Path = writeModified();
+  auto Image = loadDriverImage(Path, 64 * 1024 * 1024);
+  ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+  ASSERT_FALSE(Image->Imports.empty());
+  EXPECT_EQ(Image->Imports[0].Module, "FLTMGR.SYS");
+  auto Result = emulateDriver(Path);
+  ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+  EXPECT_EQ(Result->Stop, DriverStopReason::Returned) << Result->Diagnostic;
+  EXPECT_EQ(Result->NTStatus, 0u);
+  EXPECT_EQ(Result->Instructions, 2u);
+  EXPECT_TRUE(Result->Calls.empty());
+}
+
+TEST_F(DriverImageValidation,
+       OriginalInstructionsReadAndUpdateLoadedModuleFlags) {
+  // MOV RAX,[RCX+28h]; OR DWORD [RAX+68h],02000000h;
+  // BTR DWORD [RAX+68h],25; MOV EAX,[RAX+68h]; RET.
+  const uint8_t Code[] = {0x48, 0x8b, 0x41, 0x28, 0x81, 0x48, 0x68,
+                          0x00, 0x00, 0x00, 0x02, 0x0f, 0xba, 0x70,
+                          0x68, 0x19, 0x8b, 0x40, 0x68, 0xc3};
+  replaceEntry(Code);
+  DriverOptions O;
+  O.Version = DriverOptions::WindowsVersion{10, 0, 19041};
+  auto Result = emulateDriver(writeModified(), O);
+  ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+  EXPECT_EQ(Result->Stop, DriverStopReason::Returned) << Result->Diagnostic;
+  EXPECT_EQ(Result->NTStatus, 0u);
+  ASSERT_EQ(Result->Writes.size(), 2u);
+  EXPECT_EQ(Result->Writes[0].Address, Result->Writes[1].Address);
+  EXPECT_EQ(Result->Writes[0].Size, 4u);
+  EXPECT_EQ(Result->Writes[1].Size, 4u);
+}
+
+TEST_F(DriverImageValidation,
+       ExecutedExternalImportCannotBorrowSameNamedKernelImplementation) {
+  replaceImportProvider("NDIS.SYS");
+  auto Result = emulateDriver(writeModified());
+  ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+  EXPECT_EQ(Result->Stop, DriverStopReason::UnsupportedAPI)
+      << Result->Diagnostic;
+  EXPECT_FALSE(Result->NTStatus);
+  EXPECT_GT(Result->Instructions, 0u);
+  EXPECT_NE(Result->Diagnostic.find("ndis.sys!RtlInitUnicodeString"),
+            std::string::npos);
+  EXPECT_TRUE(Result->Calls.empty());
+  EXPECT_TRUE(Result->Devices.empty());
+}
+
+TEST_F(DriverImageValidation, SyntheticImportReadReportsItsSymbolAndAddress) {
+  auto Image = loadDriverImage(fixture("devices"), profile::DefaultMemoryLimit);
+  ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+  const auto Import = std::find_if(
+      Image->Imports.begin(), Image->Imports.end(),
+      [](const auto &Entry) { return Entry.Name == "RtlInitUnicodeString"; });
+  ASSERT_NE(Import, Image->Imports.end());
+  // MOV RAX,[absolute IAT slot]; MOV RAX,[RAX+3]; RET. The interior read must
+  // name the owning synthetic import rather than inventing function bytes.
+  uint8_t Code[] = {0x48, 0xa1, 0,    0,    0,    0,    0,   0,
+                    0,    0,    0x48, 0x8b, 0x40, 0x03, 0xc3};
+  llvm::support::endian::write64le(Code + 2, Import->Slot);
+  replaceEntry(Code);
+  for (auto Contract :
+       {ExecutionContract::Legacy, ExecutionContract::CheckedX64}) {
+    DriverOptions Options;
+    Options.Contract = Contract;
+    auto Result = emulateDriver(writeModified(), Options);
+    ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+    EXPECT_EQ(Result->Stop, DriverStopReason::UnsupportedAPI);
+    EXPECT_NE(Result->Diagnostic.find("ntoskrnl.exe!RtlInitUnicodeString"),
+              std::string::npos);
+    EXPECT_NE(Result->Diagnostic.find("at 0x"), std::string::npos);
+    EXPECT_NE(Result->Diagnostic.find("(8 bytes)"), std::string::npos);
+    EXPECT_TRUE(Result->Calls.empty());
+    EXPECT_FALSE(Result->NTStatus);
+  }
+}
 
 TEST_F(DriverImageValidation, CurrentThreadComparisonsPreserveFlagsAndBudget) {
   // MOV rax,gs:[0x188]; CMP rax,gs:[0x188]; SETNE al; MOVZX eax,al; RET.
@@ -590,7 +961,7 @@ TEST_F(DriverImageValidation, RejectsUnmappedImportLookupWithoutIteratingIt) {
   rejects();
 }
 
-TEST_F(DriverImageValidation, RejectsNonKernelImportProvider) {
+TEST_F(DriverImageValidation, RejectsImportProviderPaths) {
   const auto *Directory = Object->getDataDirectory(llvm::COFF::IMPORT_TABLE);
   ASSERT_NE(Directory, nullptr);
   uintptr_t Address = 0;
@@ -603,7 +974,7 @@ TEST_F(DriverImageValidation, RejectsNonKernelImportProvider) {
   ASSERT_FALSE(static_cast<bool>(Error)) << llvm::toString(std::move(Error));
   ASSERT_EQ(std::string(reinterpret_cast<const char *>(Address)),
             "ntoskrnl.exe");
-  const char OtherProvider[] = "user32xx.dll";
+  const char OtherProvider[] = "../hal.dll";
   std::copy_n(OtherProvider, sizeof(OtherProvider),
               Bytes.data() + offset(reinterpret_cast<const void *>(Address)));
   rejects();
@@ -685,6 +1056,7 @@ TEST_P(DriverImportProvider, UnusedImportsDoNotRequireInventedImplementations) {
     auto Result = emulateDriver(writeModified(), Options);
     ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
     EXPECT_EQ(Result->Stop, DriverStopReason::Returned) << Result->Diagnostic;
+
     EXPECT_EQ(Result->NTStatus, 0u);
     EXPECT_EQ(Result->Instructions, 2u);
     EXPECT_TRUE(Result->Calls.empty());
@@ -771,5 +1143,194 @@ TEST(DriverImage, MapsVirtualZeroFillAndOriginalPermissions) {
   EXPECT_TRUE(HasExecutable);
   EXPECT_TRUE(HasWritableZeroFill);
 }
+TEST(DriverKernelContext, CapturesSupervisorCallerWithoutChangingCPU) {
+  auto Backend = UnicornBackend::create(4 * 1024 * 1024);
+  ASSERT_TRUE(bool(Backend)) << llvm::toString(Backend.takeError());
+  auto &CPU = **Backend;
+  constexpr uint64_t Base = 0xfffff80010000000ULL;
+  constexpr uint64_t Destination = Base + 0x100;
+  constexpr uint64_t Stack = Base + 0x1008;
+  constexpr uint64_t ReturnPC = 0xfffff80020001234ULL;
+  llvm::cantFail(CPU.map(Base, 8192, Read | Write));
+  const std::vector<uint8_t> Initial(1232, 0xa5);
+  llvm::cantFail(CPU.write(Destination, Initial));
+  llvm::cantFail(CPU.writeInteger(Stack, ReturnPC, 8));
+  llvm::cantFail(CPU.writeRegister(CPURegister::X64SP, {Stack, 0}));
+  llvm::cantFail(
+      CPU.writeRegister(CPURegister::X64AX, {0x123456789abcdef0ULL, 0}));
+  llvm::cantFail(CPU.writeRegister(CPURegister::X64PC, {0xabcdef, 0}));
+  auto User = windows_process::captureCallerContext(CPU, Destination);
+  ASSERT_TRUE(bool(User));
+  llvm::consumeError(std::move(User));
+  std::vector<uint8_t> Bytes(1232);
+  llvm::cantFail(CPU.read(Destination, Bytes));
+  EXPECT_EQ(Bytes, Initial);
+  auto Kernel = windows_process::captureCallerContext(CPU, Destination, false);
+  ASSERT_FALSE(bool(Kernel)) << llvm::toString(std::move(Kernel));
+  llvm::cantFail(CPU.read(Destination, Bytes));
+  EXPECT_EQ(llvm::support::endian::read64le(Bytes.data() + 120),
+            0x123456789abcdef0ULL);
+  EXPECT_EQ(llvm::support::endian::read64le(Bytes.data() + 152), Stack + 8);
+  EXPECT_EQ(llvm::support::endian::read64le(Bytes.data() + 248), ReturnPC);
+  EXPECT_EQ(llvm::support::endian::read32le(Bytes.data() + 48), 0x10000fu);
+  EXPECT_TRUE(std::equal(Bytes.begin(), Bytes.begin() + 48, Initial.begin()));
+  EXPECT_TRUE(
+      std::equal(Bytes.begin() + 672, Bytes.end(), Initial.begin() + 672));
+  EXPECT_EQ(llvm::cantFail(CPU.readRegister(CPURegister::X64SP))[0], Stack);
+  EXPECT_EQ(llvm::cantFail(CPU.readRegister(CPURegister::X64PC))[0], 0xabcdefu);
+  auto Misaligned =
+      windows_process::captureCallerContext(CPU, Destination + 1, false);
+  ASSERT_TRUE(bool(Misaligned));
+  llvm::consumeError(std::move(Misaligned));
+}
+
+TEST(DriverPersistentDump, OriginalCompiledClientCapturesMetadataAndFreesPool) {
+  DriverOptions Options;
+  Options.Contract = ExecutionContract::CheckedX64;
+  Options.Version = DriverOptions::WindowsVersion{10, 0, 19041};
+  Options.InstructionLimit = 100000;
+  auto Result = emulateDriver(fixture("driver_persistent_dump"), Options);
+  ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+  EXPECT_EQ(Result->Stop, DriverStopReason::Returned) << Result->Diagnostic;
+  EXPECT_EQ(Result->NTStatus, 0u);
+  auto *Capture = findCall(*Result, "KeCapturePersistentThreadState");
+  ASSERT_NE(Capture, nullptr);
+  EXPECT_EQ(Capture->Result, 0x40000u);
+  ASSERT_EQ(Capture->Arguments.size(), 8u);
+  EXPECT_EQ(Capture->Arguments[3], 0x1122334455667788u);
+  ASSERT_TRUE(Capture->ReturnAddress);
+  EXPECT_GT(*Capture->ReturnAddress, Result->ImageBase);
+  EXPECT_NE(findCall(*Result, "ExFreePoolWithTag"), nullptr);
+}
+
+TEST(DriverPersistentDump, OriginalCompiledClientCannotConsumeUnknownKDBytes) {
+  DriverOptions Options;
+  Options.Contract = ExecutionContract::CheckedX64;
+  Options.Version = DriverOptions::WindowsVersion{10, 0, 19041};
+  Options.InstructionLimit = 100000;
+  auto Result =
+      emulateDriver(fixture("driver_persistent_dump_unknown"), Options);
+  ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+  EXPECT_EQ(Result->Stop, DriverStopReason::ModelError) << Result->Diagnostic;
+  EXPECT_FALSE(Result->NTStatus);
+  EXPECT_NE(Result->Diagnostic.find("offset 0x2080"), std::string::npos);
+  auto *Capture = findCall(*Result, "KeCapturePersistentThreadState");
+  ASSERT_NE(Capture, nullptr);
+  EXPECT_EQ(Capture->Result, 0x40000u);
+  EXPECT_EQ(findCall(*Result, "ExFreePoolWithTag"), nullptr);
+}
+
+TEST(DriverPersistentDump, CheckedExecutionUsesTheSameCaptureBoundary) {
+  for (bool Unknown : {false, true}) {
+    DriverOptions Options;
+    Options.Contract = ExecutionContract::CheckedX64;
+    Options.Version = DriverOptions::WindowsVersion{10, 0, 19041};
+    Options.InstructionLimit = 100000;
+    auto Result =
+        emulateDriver(fixture(Unknown ? "driver_persistent_dump_unknown"
+                                      : "driver_persistent_dump"),
+                      Options);
+    ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+    EXPECT_EQ(Result->Stop, Unknown ? DriverStopReason::ModelError
+                                    : DriverStopReason::Returned)
+        << Result->Diagnostic;
+    if (Unknown)
+      EXPECT_NE(Result->Diagnostic.find("offset 0x2080"), std::string::npos);
+    else
+
+      EXPECT_EQ(Result->NTStatus, 0u);
+  }
+}
+
+TEST(DriverKernelReference, OriginalCodeAndHeadersAreReadableButNeverWritable) {
+  auto Reference = KernelReferenceImage::load(
+      fixture("driver_kernel_reference"), 4 * 1024 * 1024);
+  ASSERT_TRUE(bool(Reference)) << llvm::toString(Reference.takeError());
+  EXPECT_EQ(Reference->digest().size(), 64u);
+  ASSERT_NE(Reference->exports().at("ReferenceAccessor"), 0u);
+  EXPECT_EQ(Reference->exports().at("ReferenceData"), 0u);
+  auto Backend = UnicornBackend::create(4 * 1024 * 1024);
+  ASSERT_TRUE(bool(Backend)) << llvm::toString(Backend.takeError());
+  auto &Memory = **Backend;
+  llvm::cantFail(Reference->map(Memory));
+  EXPECT_EQ(llvm::cantFail(Memory.readInteger(Reference->base(), 2)), 0x5a4du);
+  const uint64_t Accessor = Reference->exports().at("ReferenceAccessor");
+  EXPECT_EQ(llvm::cantFail(Memory.readInteger(Accessor + 3, 4)), 0x80u);
+  EXPECT_FALSE(llvm::cantFail(Memory.canAccess(Accessor, 1, Write)));
+  EXPECT_TRUE(llvm::cantFail(Memory.canAccess(Accessor, 1, Read | Execute)));
+  auto TooSmall =
+      KernelReferenceImage::load(fixture("driver_kernel_reference"), 1);
+  ASSERT_FALSE(bool(TooSmall));
+  llvm::consumeError(TooSmall.takeError());
+}
+
+TEST_F(DriverImageValidation,
+       ReferenceCallsUseModelsAndInteriorCodeDoesNotExecute) {
+  auto Reference = KernelReferenceImage::load(
+      fixture("driver_kernel_reference"), 4 * 1024 * 1024);
+  ASSERT_TRUE(bool(Reference)) << llvm::toString(Reference.takeError());
+  const auto Target = Reference->exports().at("KeGetCurrentIrql");
+  ASSERT_NE(Target, 0u);
+  DriverOptions Options;
+  Options.KernelImage = fixture("driver_kernel_reference");
+  auto Original = loadDriverImage(fixture("devices"), 64 * 1024 * 1024);
+  ASSERT_TRUE(bool(Original)) << llvm::toString(Original.takeError());
+  for (const auto &Import : Original->Imports)
+    Options.KernelExports[Import.Name] = true;
+  for (uint64_t Offset : {0u, 1u}) {
+    std::vector<uint8_t> Code = {0x48, 0x83, 0xec, 0x28, 0x48, 0xb8};
+    const uint64_t Address = Target + Offset;
+    for (unsigned I = 0; I < 8; ++I)
+      Code.push_back(uint8_t(Address >> (I * 8)));
+    const uint8_t Tail[] = {0xff, 0xd0, 0x48, 0x83, 0xc4, 0x28, 0xc3};
+    Code.insert(Code.end(), std::begin(Tail), std::end(Tail));
+    replaceEntry(Code);
+    auto Result = emulateDriver(writeModified(), Options);
+    ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+    EXPECT_EQ(Result->KernelImageSHA256, Reference->digest());
+    if (!Offset) {
+      EXPECT_EQ(Result->Stop, DriverStopReason::Returned) << Result->Diagnostic;
+
+      EXPECT_EQ(Result->NTStatus, 0u);
+      ASSERT_EQ(Result->Calls.size(), 1u);
+      EXPECT_EQ(Result->Calls[0].Name, "KeGetCurrentIrql");
+      EXPECT_EQ(Result->Calls[0].PC, Target);
+      EXPECT_EQ(Result->Calls[0].ReturnAddress, Result->Entry + 16);
+    } else {
+      EXPECT_EQ(Result->Stop, DriverStopReason::UnsupportedAPI);
+      EXPECT_NE(Result->Diagnostic.find("inside reference kernel"),
+                std::string::npos);
+      EXPECT_TRUE(Result->Calls.empty());
+    }
+  }
+}
+
+TEST_F(DriverImageValidation, ReferenceRejectsSectionsOutsideDeclaredImage) {
+  auto Buffer =
+      llvm::MemoryBuffer::getFile(fixture("driver_kernel_reference").string());
+  ASSERT_TRUE(bool(Buffer));
+  const auto Data = (*Buffer)->getBuffer();
+  Bytes.assign(Data.bytes_begin(), Data.bytes_end());
+  auto Parsed = llvm::object::COFFObjectFile::create(llvm::MemoryBufferRef(
+      llvm::StringRef(reinterpret_cast<const char *>(Bytes.data()),
+                      Bytes.size()),
+      "kernel-reference-test"));
+  ASSERT_TRUE(bool(Parsed)) << llvm::toString(Parsed.takeError());
+  Object = std::move(*Parsed);
+  auto *Header = Object->getPE32PlusHeader();
+  ASSERT_NE(Header, nullptr);
+  const auto Original = uint32_t(Header->SizeOfImage);
+  for (uint32_t Size : {0u, 0x1000u, Original + 1, 0x40000000u}) {
+    put32(&Header->SizeOfImage, Size);
+    auto Reference =
+        KernelReferenceImage::load(writeModified(), 4 * 1024 * 1024);
+    ASSERT_FALSE(bool(Reference)) << Size;
+    llvm::consumeError(Reference.takeError());
+  }
+  put32(&Header->SizeOfImage, Original);
+  auto Reference = KernelReferenceImage::load(writeModified(), 4 * 1024 * 1024);
+  ASSERT_TRUE(bool(Reference)) << llvm::toString(Reference.takeError());
+}
+
 } // namespace
 } // namespace neverd::emulation

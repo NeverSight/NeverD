@@ -723,10 +723,9 @@ TEST_F(KernelRuntime, PrefixFoldsCaseOnlyWhenCountedUnitsDiffer) {
             1u);
   EXPECT_EQ(invoke("RtlPrefixUnicodeString", {Scratch + 0x100, Scratch, 1}),
             0u);
-  EXPECT_NE(
-      failure("RtlPrefixUnicodeString", {Scratch + 0x200, Scratch + 0x100, 1})
-          .find("case table"),
-      std::string::npos);
+  EXPECT_EQ(
+      invoke("RtlPrefixUnicodeString", {Scratch + 0x200, Scratch + 0x100, 1}),
+      1u);
 }
 
 TEST_F(KernelRuntime, IntegerFormattingUsesUnsignedRadicesAndTerminator) {
@@ -1395,19 +1394,15 @@ TEST_F(KernelRuntime, CountedByteComparisonUsesUnsignedBytesAndLengths) {
   EXPECT_EQ(static_cast<int32_t>(
                 invoke("RtlCompareString", {Scratch + 0x60, Scratch, 1})),
             -1);
-  EXPECT_NE(failure("RtlEqualString", {Scratch, Scratch + 0x40, 1})
-                .find("case table"),
-            std::string::npos);
-  EXPECT_NE(failure("RtlCompareString", {Scratch, Scratch + 0x40, 1})
-                .find("case table"),
-            std::string::npos);
+  EXPECT_EQ(invoke("RtlEqualString", {Scratch, Scratch + 0x40, 1}), 0u);
+  EXPECT_EQ(int32_t(invoke("RtlCompareString", {Scratch, Scratch + 0x40, 1})),
+            -1);
   // BOOLEAN arguments use only their low byte.
   EXPECT_EQ(invoke("RtlEqualString", {Scratch, Scratch + 0x40, 0x100}), 0u);
-  // A length beyond the capacity is a malformed record.
+  // Comparison ignores capacity and rejects unequal lengths before reading
+  // bytes.
   check(Memory->writeInteger(Scratch, 4, 2));
-  EXPECT_NE(failure("RtlEqualString", {Scratch, Scratch + 0x20, 0})
-                .find("8-bit string"),
-            std::string::npos);
+  EXPECT_EQ(invoke("RtlEqualString", {Scratch, Scratch + 0x20, 0}), 0u);
 }
 
 TEST_F(KernelRuntime, CountedByteHelpersFollowTheirIRQLContracts) {

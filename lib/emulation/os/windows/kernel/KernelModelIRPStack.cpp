@@ -98,6 +98,10 @@ llvm::Error KernelModel::validateCompletionPending(const ActiveRequest &Request,
 llvm::Expected<uint64_t>
 KernelModel::callDriver(uint64_t Device, uint64_t IRP, ForwardingOwner Owner,
                         std::optional<int64_t> SendTimeout) {
+  if (auto D = Devices.find(Device);
+      D != Devices.end() &&
+      D->second.OwnerKind == DeviceOwnerKind::FiniteFileSystem)
+    return stackError("filesystem endpoint has no provider IRP contract");
   if (!requestForIRP(IRP) && DriverIRPs.contains(IRP)) {
     if (Owner != ForwardingOwner::WDM)
       return stackError("caller-allocated packets require WDM dispatch");
@@ -163,9 +167,7 @@ KernelModel::callDriver(uint64_t Device, uint64_t IRP, ForwardingOwner Owner,
   const bool Provider = isPnpProviderDevice(Device) || FileProvider;
   llvm::Expected<uint64_t> PC =
       Provider ? llvm::Expected<uint64_t>(0)
-               : Memory.readInteger(Devices.at(Device).OwnerDriver +
-                                        DriverDispatchOffset + *Major * 8,
-                                    8);
+               : guestDriverDispatch(Devices.at(Device).OwnerDriver, *Major);
   if (!PC)
     return PC.takeError();
   if (!Provider && !*PC) {
@@ -456,7 +458,8 @@ KernelModel::planIRPCompletion(uint64_t IRP,
     }
     PropagatePending = Pending;
   }
-  if (DriverIRPs.contains(IRP))
+  if (auto A = DriverIRPs.find(IRP);
+      A != DriverIRPs.end() && !A->second.Builder)
     return stackError("caller IRP completion must return "
                       "STATUS_MORE_PROCESSING_REQUIRED");
   llvm::Expected<bool> Pending =
@@ -579,6 +582,8 @@ KernelModel::advanceIRPCompletion(uint64_t Token) {
     return E;
   if (auto E = tryFinalizeFileClose(IRP))
     return E;
+  if (auto E = tryFinalizeDriverIRP(IRP))
+    return E;
   return std::optional<uint64_t>{ReturnValue};
 }
 
@@ -676,8 +681,9 @@ KernelModel::finishWdmGuestCallBody(uint64_t Token, uint64_t ResultValue) {
   if (uint32_t(ResultValue) == StatusMoreProcessingRequired &&
       Allocation != DriverIRPs.end() && !Allocation->second.StorageReleased &&
       Call->second.Slot == Allocation->second.DispatchSlot + 1) {
-    if (auto E = captureDriverIRPCompletion(IRP))
-      return E;
+    if (!Allocation->second.Builder)
+      if (auto E = captureDriverIRPCompletion(IRP))
+        return E;
     Allocation->second.CompletionHeld = true;
   }
   Call->second.AwaitingCallback = false;

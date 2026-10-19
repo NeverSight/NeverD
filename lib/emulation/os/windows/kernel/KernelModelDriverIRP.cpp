@@ -26,8 +26,10 @@ llvm::Error driverIRPError(const llvm::Twine &Message) {
 }
 } // namespace
 
-llvm::Error KernelModel::initializeIRPHeader(uint64_t IRP, uint8_t StackCount,
-                                             uint8_t CurrentLocation) {
+llvm::Error
+KernelModel::initializeIRPHeader(uint64_t IRP, uint8_t StackCount,
+                                 uint8_t CurrentLocation,
+                                 std::array<bool, 16> &IOStatusWritten) {
   if (!StackCount || StackCount > MaxIRPStackCount || !CurrentLocation ||
       CurrentLocation > uint32_t(StackCount) + 1)
     return driverIRPError("header requires a bounded stack and valid cursor");
@@ -47,6 +49,16 @@ llvm::Error KernelModel::initializeIRPHeader(uint64_t IRP, uint8_t StackCount,
             {IRPStackPointerOffset, Stack, sizeof(uint64_t)}}})
     if (auto E = Memory.writeInteger(IRP + F.Offset, F.Value, F.Width))
       return E;
+  if (WindowsIRPInitialization) {
+    // Ordinary 19041 IoInitializeIrp and IopAllocateIrpPrivate clear the
+    // packet, including the complete IO_STATUS_BLOCK. Seed knowledge here
+    // for both producers; adoption must copy it without resetting values.
+    // These model writes are not guest CPU stores in DriverResult::Writes.
+    constexpr std::array<uint8_t, 16> Zero{};
+    if (auto E = Memory.write(IRP + IRPStatusOffset, Zero))
+      return E;
+    IOStatusWritten.fill(true);
+  }
   return llvm::Error::success();
 }
 
@@ -66,11 +78,12 @@ KernelModel::allocateDriverIRP(llvm::ArrayRef<uint64_t> Arguments) {
   auto IRP = allocate(Size, PoolAlignment);
   if (!IRP)
     return IRP.takeError();
-  if (auto E = initializeIRPHeader(*IRP, Count, Count + 1)) {
+  DriverIRPAllocation Allocation;
+  if (auto E = initializeIRPHeader(*IRP, Count, Count + 1,
+                                   Allocation.IOStatusWritten)) {
     FreedRanges.emplace(*IRP, Size);
     return E;
   }
-  DriverIRPAllocation Allocation;
   Allocation.Size = Size;
   Allocation.StackCount = Count;
   auto &Stored = DriverIRPs.emplace(*IRP, Allocation).first->second;
@@ -98,6 +111,9 @@ llvm::Error KernelModel::freeDriverIRP(uint64_t IRP) {
   if (Allocation == DriverIRPs.end())
     return driverIRPError("IoFreeIrp requires the exact base of a live "
                           "caller-allocated IRP");
+  if (Allocation->second.Builder)
+    return driverIRPError(
+        "IoFreeIrp cannot release an I/O-manager-owned synchronous request");
   if (Allocation->second.StorageReleased)
     return driverIRPError("IoFreeIrp cannot release the same packet twice");
   if (Allocation->second.Submitted)

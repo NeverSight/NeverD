@@ -1,0 +1,18 @@
+//===- KernelLoadedModule.def - Bounded x64 kernel loader record ---------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+// KLDR_DATA_TABLE_ENTRY x64 prefix, independently checked against System
+// Informer's ntfill.h. This is a concrete model layout, not a version probe:
+// https://github.com/winsiderss/systeminformer/blob/master/KSystemInformer/include/ntfill.h
+// Only the named fields below are exposed; the remaining record is opaque.
+NEVERD_KERNEL_MODULE_VALUE(Size, 0xa0)
+NEVERD_KERNEL_MODULE_VALUE(Links, 0x00)
+NEVERD_KERNEL_MODULE_VALUE(ImageBase, 0x30)
+NEVERD_KERNEL_MODULE_VALUE(EntryPoint, 0x38)
+NEVERD_KERNEL_MODULE_VALUE(ImageSize, 0x40)
+NEVERD_KERNEL_MODULE_VALUE(FullName, 0x48)
+NEVERD_KERNEL_MODULE_VALUE(BaseName, 0x58)
+NEVERD_KERNEL_MODULE_VALUE(Flags, 0x68)
+NEVERD_KERNEL_MODULE_VALUE(LoadCount, 0x6c)

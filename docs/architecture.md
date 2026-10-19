@@ -2721,12 +2721,105 @@ remains an explicit failure path.
 
 The CLI parses commands in `tools/neverd`, creates a `neverd_session_t`, and
 calls the public API in `include/neverd/sdk/NeverDCAPI.h`. Engine state lives in
-`lib/sdk/SessionImpl.h`; `neverd_session_load` selects a loader and builds a
+`lib/sdk/capi/SessionImpl.h`; `neverd_session_load` selects a loader and builds a
 `BinaryImage`, while IR-backed operations run `lib/pipeline/Pipeline.cpp`
 lazily. The `neverd` executable links `neverd_shared`; the component archives
 and their LLVM/Capstone dependencies are private implementation details of
 that shared library. The CLI uses LLVM Support for its command-line UI,
 but it does not bypass the C API to drive the engine.
+
+Explicit module resources use independent `neverd_module_set_t` C handles in
+`NeverDCAPIModules.h`. `ResourceHandles` owns typed, non-reused process identities
+and shared lifetime; `ModuleHandleState` retains the canonical `ModuleSet`, origin
+and operation guard. Source operations return owned errors directly rather than
+requiring an analysis session. The `modules` CLI consumes this public boundary
+for named-file configuration, eager validation and static symbol queries.
+The module layer owns file-origin/path and identity policy; the CLI does not
+duplicate it. `NeverDCAPIExecution.h` adds typed execution handles retaining the
+same guarded source state and one `ExecutionRunFactoryResult`. C calls delegate
+to the workload engine and common JSON codec. Only lifecycle state and cooperative
+pause bypass the operation guard; destroy/other concurrent access returns busy.
+An explicit factory kind selects raw CPU buffers or the persistent Windows
+driver environment; unsupported kinds fail rather than silently selecting a
+fallback. `DriverExecutionFactory` owns driver configuration and host-file
+origins above the common workload layer. The workload layer has no Windows
+dependency. Both factories retain the same canonical source catalogue.
+
+The driver factory's `image_module` and `kernel_module` bootstrap selections pin
+`ModuleImage` observations in `DriverSessionState`. `DriverImage` applies one
+strict execution preflight to file or immutable-source input; the latter shares
+the already parsed `BinaryImage` without reopening its original path.
+`KernelReferenceImage::fromModule` consumes the same matched PE/PDB observation,
+while the existing kernel adapter retains its layout/code-shape proofs and data
+ownership. The legacy reference-path entry delegates preparation to `ModuleSet`.
+Late catalogue/debug changes cannot replace a run's pinned observations. This
+bootstrap integration adopts the primary driver and optional reference as
+`$driver` and `$kernel-reference` in the same `ModuleBindings` table used by extra
+Native bindings. An explicit environment validator proves their existing owners;
+a metadata-only stopped lease publishes their pinned observations without
+remapping RAM or allocating another loader record. Kernel export identities
+remain in `KernelExportRegistry`; reference symbols/exports grant no additional
+runtime permissions. Primary imports without a preexisting model binding use
+the same kernel linker and instance table as extra Native modules. A stopped
+`prepareExecution` hook completes their metadata transaction before CPU admission;
+required lazy providers can join that transaction. Missing providers retain the
+original action and yield the common resource request. `DriverImportPublication`
+combines IAT backing patches with `KernelModel`'s loader metadata publication.
+`ModuleRuntimeData` retains immutable adapter facts from the final mapped bytes;
+the common layer gives them no OS meaning. Native mapping finalization retains
+unwind metadata, per-image cookie ownership and the initialized metadata/code/IAT
+witnesses in `KernelModuleRuntimeData`. `DriverExceptionPublication` stages an
+appended `X64SEH` planner alongside IAT/loader metadata, preserving the previous
+image indices and frame metadata pointers. The driver pump reacquires its planner
+after yields. Publication failure cannot replace that live planner. Shared
+`X64SEHMetadata` owns byte-range selection for headers, native unwind records,
+C scopes, GS payloads and personality code; the existing process consumer also
+uses that helper while retaining its own budget and module-lifetime checks.
+Native witness callbacks validate guest backing before dispatch/continuation.
+The registry is never replaced. The old one-shot facade selects its existing
+unknown-import trap policy while delegating to this same executor.
+
+`ExecutionRun` invokes the separate stopped `prepareCPUEntry` projection hook
+after eager/dependency preparation and on acknowledged CPU resource retries.
+The driver uses it to synchronize `KernelGuestPageTables` from the committed
+address-space authority. The pager updates its owned backing/recursive aliases
+through that stopped authority, preserving the CPU's stricter continuation
+mutation guard. This replaces the earlier pre-yield synchronization, which
+preceded eager mapping and was skipped by direct CPU continuation. Table storage
+and the complete recursive slot remain pager-owned even before individual
+aliases exist; additional module planning and resource admission share the
+pager's range predicate. Projection failure is terminal and does not roll back
+the preceding module transaction. Read-only workload inspection performs no
+projection or CPU mutation.
+
+`DriverGuardPublication` composes with import/unwind/loader publication. It
+stages exact GFIDS or unguarded direct-function-export targets and live metadata
+witnesses, then swaps contents into the stable `GuardControlFlow` object under
+the same stopped RAM lease. Suspended tasks retain valid policy references.
+Guard helper storage is reserved during environment construction so a later
+active image can join an initially unguarded primary. Native module preparation
+patches only validated draft helper slots; no policy or target publishes on
+physical failure. The authoritative PE guard validator handles both strict
+primary entry admission and additional Native no-entry images.
+
+`DriverResultView` is a read-only serializer projection. The persistent public
+factory can bound returned call/write suffixes while reporting their full counts
+and first indices; it neither edits retained events nor alters resource charging.
+The factory also exposes an explicit primary model/trap compatibility selection,
+sharing the existing one-shot binding path. Default primary module linking and
+all additional-module linking keep their existing owners. The public SDK replay
+consumer uses these contracts instead of copying or recompiling driver execution
+sources; private workload paths/configuration remain outside distributed code.
+
+The `execution` CLI retains one public workload handle and forwards bounded
+JSON-lines commands to `neverd_execution_command_json`. The workload component
+owns strict command envelopes and the SDK dispatches through its existing
+execution primitives. Source add/revision/debug helpers are shared with the
+module C API and retain its origin/identity policy. A CLI worker runs one CPU
+request while the input thread can query state or request pause; output IDs
+correlate interleaved responses. EOF/quit pauses and joins the worker before
+handle release. The frontend owns transport IO and never implements CPU restart,
+mapping, quota reset or OS policy.
 
 ARM32 ELF code mode is taken from defined executable function symbols,
 ARM/Thumb mapping symbols and an executable entry point, before normalizing
@@ -5034,6 +5127,75 @@ keeps the existing per-entry retirement. This changes neither instruction
 admission nor observations, RAM transactions or architectural state capture.
 Variable-length x64 instructions keep their existing invalidation path.
 
+`NeverDModules` is the OS-independent file-resource layer described in
+[runtime modules](runtime-modules.md). It depends on Loader, DebugInfo and
+Support, and owns caller declarations, preparation policy, immutable binary/debug
+source snapshots and symbol observations. Registration does not read files;
+explicit eager preparation or a lazy query materializes them. Existing format
+and debug loaders remain the identity authorities. Runtime instance bases,
+address spaces, module visibility and initialization belong to consumers, not
+to the shared resource catalogue. The resource layer and generic persistent
+workload owner are implemented; the Windows driver adapter consumes them through
+its own OS mapping and execution policy.
+
+`NeverDEmulationModules` owns per-workload declarations, instance bases/scopes,
+namespaced export observations and versioned resource requests. It consumes
+Modules, EmulationImage and EmulationRuntime without introducing a reverse
+dependency in the CPU/runtime layers. Environment adapters prepare mapping
+bytes, relocation/import policy and staged metadata; AddressSpace owns physical
+reservation, initialized mapping and backing-patch transactions. One stopped
+lease spans RAM, instance/export tables and the environment's prepared metadata
+swap. Existing aliases retain their physical identity. Backend projection remains
+the backend's generation-driven responsibility, and failed projection remains
+terminal. A resource request alone does not authorize CPU fault recovery.
+
+`ExecutionSession` owns typed resource continuations separately from modeled
+guest-exception transfers. Checked preflight retains architectural progress;
+software Unicorn admits specific x64 restart shapes and validates its exit
+status/actual PC before publishing a resource stop. Mapping repair is followed
+by explicit acknowledgement and an exact-PC continuation, without clearing a
+terminal fault. The runtime budget retains its legacy absolute deadline by
+default; an explicit active-work policy uses nested owned intervals to exclude
+interactive waiting while preserving cumulative quotas and fractional time.
+
+`NeverDEmulationWorkload` owns `ExecutionRun`, which retains one session, module
+table, budget and `ExecutionEnvironment` across stage/resource/user yields.
+Only the run executes the session. The environment owns canonical OS,
+loader/scheduler and phase state, supplies stopped actions, and consumes owned
+service/exception outcomes after CPU exit. Pure hooks only admit supported
+resource candidates; preparation and publication happen after the CPU stops.
+Repaired CPU continuations run at their mandatory PC before another environment
+action, preserving instruction progress without replaying completed model work.
+Nested work scopes charge initialization, preparation, resolver/model work and
+execution once. The layer depends on Modules/Runtime/ABI, with no Windows or
+other OS dependency. Finite `GuestInvocation` reuses `IntegerABI`, validates a
+bounded private stack/payload and delegates stage/thread/model admission to the
+same environment. APIs and nested callbacks continue through its existing next
+actions. A session-owned reserved return watch survives environment watch
+changes, stops before admission and cannot step over. `SessionContext` preserves
+CPU and caller watch control without rolling back memory, hooks or budgets.
+After validated stack/model return, the run restores that control and the prior
+paused stage. Call instruction/event/time caps share cumulative workload usage;
+errors after installation terminate the workload. The private Windows driver
+adapter now uses the same run for retained entry/callback/request/unload work
+and an after-entry stop. Its public driver factory and finite-call adoption use
+that same owner. Additional kernel modules link through the generic batch
+finalizer; bootstrap roles retain their existing mapping ownership in the same
+instance table. Ring3 is reserved
+at the environment boundary without a new adapter.
+
+`ExecutionRunJSON` belongs to that same workload component. It decodes bounded
+control options, source-binding descriptions, resource supply tokens and finite
+invocation inputs; frontends do not own another interpretation. Address-space
+descriptions remain names until an explicit stopped-environment lookup resolves
+them. Output similarly requires a scene identifier, never a serialized host
+pointer. Versioned event/snapshot/instance reports encode uint64 fields as hex
+strings and retain independent fault, restart, quota and optional outcome facts.
+Duplicate keys and invalid Unicode identities fail before binding or guest
+effects. The engine remains the authority for lifecycle, ownership, extent,
+ABI/phase capabilities and transactional publication. Persistent C execution
+handles and the interactive CLI consume this codec.
+
 CPU execution is independent of the guest OS and binary format. Enable
 `NEVERD_ENABLE_CPU_EMULATION` to build it without the Windows driver model;
 `NEVERD_ENABLE_DRIVER_EMULATION` also includes it. The public C++ boundary is
@@ -5051,6 +5213,81 @@ See [CPU configuration](cpu-execution.md) for the schema and current limits.
 `NEVERD_ENABLE_SEMANTIC_TESTS` defaults to `ON` and controls the test group in `unittests/semantic`, including its aggregate runners. To build native CPU tests without Unicorn, keep `BUILD_TESTING=ON` and set both `NEVERD_ENABLE_SEMANTIC_TESTS=OFF` and `NEVERD_EMULATION_BACKEND_UNICORN=OFF`. The native KVM/WHP tests remain available, including Windows ARM64/MSVC builds with suitable SDK headers. Enabling Unicorn on Windows ARM64 still requires an ARM64 LLVM-MinGW toolchain. This build separation does not establish native ARM64 runtime coverage.
 
 `os/windows/driver/` owns driver image loading, execution sessions, scenarios, reports and execution policy. `os/windows/kernel/` owns kernel API and object models, including WDM/KMDF, device lifecycle, power policy, memory and scheduling; `KernelModelPowerPolicy.cpp` belongs there. `os/windows/process/` owns user-process startup and services, while `os/windows/exception/` owns shared exception search and unwind. Driver and kernel sources still form `NeverDEmulation`: their existing calls and shared types are not independent library boundaries. Each directory maintains its own `CMakeLists.txt` source list, and public headers remain compatible.
+
+`DriverSessionState` is the private, stable owner used by the existing driver
+entry point. It retains copied options, reports, image/reference bytes, export
+bindings, kernel/SEH/CFG models, processor policy, cumulative budget and resident
+frame/queue data. Its factory initializes these resources without executing
+guest code; retained context providers capture the owner rather than factory
+locals. The factory's initial CPU transfers once into `ExecutionSession`, leaving
+a stable CPU view in the model owner. That session owns hook installation, CPU
+execution, instruction accounting and recoverable-fault consumption, and dies
+before the model state. `DriverExecutionEnvironment` supplies OS admission/access
+policy and retains the existing pump and phase continuations in a private
+`DriverTask` call tree. Tasks yield CPU actions; only `ExecutionRun` executes the
+session. The after-entry boundary follows successful `finishEntry` and precedes
+the first callback drain. `DriverSession` is now a one-shot consumer of that same
+implementation with its original absolute deadline. The public SDK driver factory
+uses that same owner. Additional Native x64 modules use the pure
+`KernelModuleImage` mapper and `KernelModel::prepareModulePublication` through
+`ModuleBindings`. The mapper shares strict driver PE/relocation preflight and
+the canonical export reader; its import lookup cannot mutate the live registry.
+The kernel publication candidate owns arena/name/record changes and immutable
+backing patches. AddressSpace commits those patches with the image pages before
+the instance and model swaps under one stopped lease. A failed plan consumes no
+arena identity; existing live loader links are validated before an append.
+Module query flags come from the corresponding record. Module entry execution
+remains unimplemented. Supported CPU
+resource stops preserve the same pump action and OS context. Driver admission
+rejects existing image/model ownership and uses the same reserved-range policy
+as image preflight. Missing declared lazy images use the common automatic supply
+path; unknown candidates retain a caller-supplied request. Snapshot/report and
+loader publication read explicitly through `KernelSnapshotMemory`, which uses
+the existing stopped RAM snapshot interface. It grants no CPU mutation, guest
+permission or MMIO effect; ordinary device-topology validation retains its CPU
+memory view. The bootstrap driver/reference roles are adopted into the common
+instance table while retaining their existing mapping and loader-record owners.
+Ring3 remains a future environment adapter boundary.
+
+`ModuleMappingFinalizer` runs over all prepared drafts and the previous instance
+table before publication. A typed `ModuleDependencyError` may expand the batch
+only through an already declared instance in the same address space; unknown
+resources return a retained request. Failed drafts are discarded before retry.
+An immutable adapter-owned preparation payload must be consumed before commit.
+Direct export bounds retain their original rule; explicitly forwarded metadata
+requires a finalizer and a permitted mapped/planned RAM target. It grants no
+model behavior, guest permission or inferred ABI. The default dependency matcher
+remains exact; Windows provider folding belongs to `KernelExportRegistry`.
+
+`KernelModuleLink` indexes canonical PE names/ordinals from the validated private
+preparation, resolves the whole batch and patches only draft IAT bytes. Existing
+model identities and explicit absence take precedence. Native guest providers
+remain native CPU targets and do not enter or replace the live API registry.
+Forwarders preserve target kind, bounded depth/work and cycle detection; cached
+suffixes retain their hop counts. Dependency first use may prepare a declared
+lazy resource, while unrelated declarations remain unread. A missing provider
+before CPU entry defers that same action, and supplied dependencies join its
+original eager batch. An already published CPU resource stop keeps its token and
+PC until the complete requested-instance/dependency batch succeeds.
+
+The driver component depends on EmulationWorkload; the generic workload has no
+Windows dependency. `ExecutionRun::create` may adopt an existing shared budget
+only when limits and time policy match exactly; it retains consumed credits and
+time. Environment model hooks attach once through the session. A failed scene
+action may carry a validated failure reason, preserving explicit model quotas
+without interpreting OS stop enums in the runtime. Failure reasons on other
+actions, or nonfailure reasons on failed actions, are rejected.
+
+`SessionModelHooks` separates an uncharged model boundary from a charged
+instruction that needs stopped emulation. Deferred admission retains an
+uncharged instruction while the model validates input-dependent operations.
+`admitDeferredInstruction` checks the same stopped PC, original local deadline,
+shared quotas and one-shot ownership before notifying the admitted observer.
+Run/context/watch operations cannot overwrite that pending decision. CPU faults
+retain their typed priority, and session watches/reserved returns precede model
+admission. Default callers retain their existing behavior. The driver uses this
+boundary for API/CFG/return interception and supported CPUID/MSR/control reads;
+the Windows policy remains in the OS layer.
 
 `KernelFrameworkDispatch` resolves each KMDF call from one registration containing
 its argument count, handler and shared IRQL policy. Binding and globals checks
@@ -5171,6 +5408,8 @@ options. Application SDK dispatch and workload assumptions remain outside the OS
 | `NeverDEmulationABI` | Explicit scalar calling conventions, argument locations and call frames |
 | `NeverDEmulationRuntime` | Typed CPU sessions and workload budgets shared across continuations and CPUs |
 | `NeverDEmulationImage` | Finite image mapping plans from loader-owned segments |
+| `NeverDEmulationModules` | Per-workload declarations, mapping/publication transactions and versioned resource requests |
+| `NeverDEmulationWorkload` | Persistent execution/environment owner, stage/resource yields and cumulative control |
 | `NeverDEmulationLinuxKernel` / `NeverDEmulationDarwinKernel` | Shared system-call ABI, services and memory policy |
 | `NeverDEmulationLinux` / `NeverDEmulationDarwin` | ELF/Mach-O process loading, initial stacks and continuations |
 | `NeverDEmulationAndroid` | Android API 28 AArch64 native linking, TLS and Bionic call models |
@@ -8444,13 +8683,3 @@ reservation explicitly excludes unsupported concurrent operations.
 `X86LegacyVectorMoveAudit` admits legacy MOVSS/MOVSD register and unsegmented memory forms through the same raw-prefix, opcode, ModRM/SIB and decoder-detail checks as packed moves. XMM operands remain 16 bytes while memory operands are exactly 4 or 8 bytes. The existing scalar move owners merge register sources and zero the remaining low-128-bit destination bytes on memory loads, preserving higher vector bits. Complete emitted spans bind the undefined-output receipt. This does not admit string MOVSD, VEX/EVEX forms, segmented memory or an opaque-state preservation contract.
 
 `SymState::storeConditional` optionally applies one STORE or atomic write phase without a nonalias contract. It constructs byte-equality conditions for current materialized bytes in other absolute or 64-bit symbolic banks; the actual bank uses ordinary overlap handling. Missing bytes retain the write's new unknown epochs, and historical facts are never imported. Complete plan validation and work charges precede conditional expression construction and the single store. Owner refusal leaves state unchanged. `SymExec::stepWithConditionalStore` uses this only for STORE and strictly admitted scalar CMPXCHG, retaining existing refusal havoc and publishing Old only after success. Other operations leave the policy Invalid. This does not prove access validity or initial alias consistency, or guarantee inexpensive downstream solving.
-
-## Explicit runtime modules and persistent execution
-
-`modules/ModuleSet` owns caller-declared files and debug identity independently
-of CPU or OS models. `emulation/runtime/ModuleBinding` owns transactional guest
-instances; environments contribute their publication transaction through that
-boundary. `ExecutionRun` owns persistent stage, resource pause and finite call
-control over one `ExecutionSession`. Transport adapters delegate to these owners.
-The registered raw-buffer factory requires CPU emulation only. See
-[runtime modules](runtime-modules.md) for contracts, bounds and C/CLI entry points.

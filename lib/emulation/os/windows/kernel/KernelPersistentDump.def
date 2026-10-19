@@ -1,0 +1,28 @@
+//===- KernelPersistentDump.def - Bounded x64 persistent dump facts ------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+// Layout: Windows SDK 10.0.19041.0/um/mindumpdef.h DUMP_HEADER64.
+// Capture stores and trailer: original ntoskrnl 10.0.19041.6456,
+// KeCapturePersistentThreadState. Unlisted bytes have no modeled value.
+#ifdef NEVERD_PERSISTENT_DUMP_VALUE
+NEVERD_PERSISTENT_DUMP_VALUE(Size, 0x40000)
+NEVERD_PERSISTENT_DUMP_VALUE(HeaderPatternEnd, 0x2000)
+NEVERD_PERSISTENT_DUMP_VALUE(Context, 0x348)
+NEVERD_PERSISTENT_DUMP_VALUE(ContextSize, 1232)
+NEVERD_PERSISTENT_DUMP_VALUE(ContextPC, 248)
+NEVERD_PERSISTENT_DUMP_VALUE(Exception, 0xf00)
+NEVERD_PERSISTENT_DUMP_VALUE(Control, 0x2000)
+NEVERD_PERSISTENT_DUMP_VALUE(Trailer, 0x3fffc)
+#endif
+#ifdef NEVERD_PERSISTENT_DUMP_RANGE
+NEVERD_PERSISTENT_DUMP_RANGE(0, 0x10)
+NEVERD_PERSISTENT_DUMP_RANGE(0x30, 0x30)
+NEVERD_PERSISTENT_DUMP_RANGE(0x348, 1232)
+NEVERD_PERSISTENT_DUMP_RANGE(0xf00, 0x20)
+NEVERD_PERSISTENT_DUMP_RANGE(0xf98, 4)
+NEVERD_PERSISTENT_DUMP_RANGE(0xfa0, 8)
+NEVERD_PERSISTENT_DUMP_RANGE(0x2000, 0x14)
+NEVERD_PERSISTENT_DUMP_RANGE(0x3fffc, 4)
+#endif

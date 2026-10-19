@@ -736,7 +736,7 @@ Las direcciones del invitado son cadenas hexadecimales para que los consumidores
 de JSON no pierdan precisión de 64 bits. El objeto `configuration` registra los
 límites, el nombre de servicio, las sustituciones de `kernel_exports` y la
 entrada `registry` de la ejecución. El perfil es
-`wdm-x64-scheduled-v103`. `nt_status` sigue siendo el resultado de DriverEntry,
+`wdm-x64-scheduled-v111`. `nt_status` sigue siendo el resultado de DriverEntry,
 mientras que `scenario_success` describe conjuntamente la inicialización y las
 solicitudes completadas. `phase`, `requests` y `unload_completed` identifican
 las partes ejecutadas del ciclo de vida solicitado. Cada llamada de API y
@@ -1054,3 +1054,45 @@ Los exports del núcleo `memcpy_s` y `memmove_s` admiten búferes accesibles aco
 `MmCreateMdl` recibe tres argumentos completos hasta DISPATCH_LEVEL. Asigna un descriptor no paginado inicializado a cero o usa un tramo totalmente escribible de una asignación no paginada activa o de la pila actual. Una longitud mayor que ULONG_MAX devuelve NULL antes de acceder. Conserva metadatos vacíos o de direcciones desbordadas; construir páginas exige un rango válido no vacío y tamaño exacto de descriptor de 16 bits. Escribe seis campos en el orden original y conserva los demás bytes aportados. La base del pool admite IoFreeMdl o liberación del pool; registros interiores o de pila siguen al propietario. Bloqueos, mapeos propios, vistas de usuario y dependencias impiden liberarlos. Transferencia a IRP, reinicialización activa, reutilización de posiciones de pila y desmontaje automático de mapeos parciales por IoFreeMdl siguen sin admitirse.
 
 `MmAdvanceMdl` admite búferes independientes de pool o usuario bloqueados con su propio mapeo de sistema hasta DISPATCH_LEVEL. ULONG ignora los bits altos; llegar o superar el final devuelve STATUS_INVALID_PARAMETER_2 sin cambios. El perfil x64 fijo rota todo el arreglo PFN retenido y marca su cola. La limpieza restaura páginas completas y su orden antes de retirar el alias completo y el bloqueo original. Conserva el desplazamiento actual sin ampliar la propiedad. MappedSystemVa retiene un valor normalizado obsoleto; remapear exige otro ciclo de sondeo/bloqueo. Cadenas IRP, dependencias parciales, vistas de usuario, DMA, imágenes, construcción no paginada directa y avance sin mapeo siguen excluidos.
+
+## Additional bounded model contracts (English reference)
+
+This technical appendix documents the additional kernel models used by the
+persistent driver environment. It is currently provided in English. The report
+contract is `wdm-x64-scheduled-v111`. These operations act on explicitly modeled
+guest state; none forwards a request to the host kernel or discovers host data.
+Unsupported information classes, layouts and execution contexts fail explicitly.
+
+The legacy `emulate-driver` CLI accepts positive `--instruction-limit`,
+`--event-limit` and `--timeout-ms` values and validates the supported timeout
+range before execution. These options use the same cumulative limits as the
+driver model; persistent executions configure their limits in the run JSON.
+
+| API family | Supported contract and limits |
+|---|---|
+| `ExAllocatePool` | Data allocations use the supported pool-type profile and modeled allocation lifetime; the untagged allocation uses the kernel's `None` tag. |
+| `RtlInitAnsiString`, `RtlAnsiStringToUnicodeString`, `RtlUnicodeStringToAnsiString`, `RtlxAnsiStringToUnicodeSize`, `RtlFreeAnsiString`, `RtlFreeUnicodeString` | Explicit counted-string buffers, validated lengths, supported character profile and owned allocation/free rules. No host locale conversion. |
+| `RtlAnsiCharToUnicodeChar`, `RtlUpperChar`, `RtlUpperString`, `RtlCompareString`, `RtlAppendStringToString` | Bounded character/counted-byte operations. Character conversion advances the caller's pointer cell only after a valid conversion; configured character observations do not authorize arbitrary host NLS behavior. |
+| `RtlAppendUnicodeToString`, `RtlPrefixUnicodeString` | Validated UTF-16 counted buffers with explicit capacity and the modeled case rules. |
+| `RtlIntegerToUnicodeString`, `RtlInt64ToUnicodeString`, `RtlUnicodeStringToInteger`, `RtlCharToInteger`, `RtlGUIDFromString` | Bounded input parsing/formatting with the supported base, grammar, width and caller-output contracts. |
+| `RtlGetVersion`, `VslGetSecurePciEnabled` | Return explicitly configured guest version/security observations. Missing security observations are not inferred from the host. |
+| `ZwQuerySystemInformation`, `NtQuerySystemInformation` | Supported versioned process/thread or module information classes use the same model objects and module records as the driver environment. Other classes remain unsupported. |
+| `PsLookupProcessByProcessId`, `PsGetProcessImageFileName`, `PsGetProcessSectionBaseAddress`, `PsGetProcessExitStatus`, `PsGetProcessPeb` | Query the declared process identity, explicit image/name/PEB observations and retained liveness/exit state. Pointer results refer to modeled guest storage and preserve its lifetime. |
+| `PsSetCreateThreadNotifyRoutine`, `PsRemoveCreateThreadNotifyRoutine` | Retain supported notification registrations and schedule actual guest callbacks with modeled creator/exit context and rundown rules. |
+| `ZwQueryInformationThread`, `ObReferenceObjectByName`, `ObOpenObjectByPointer` | Supported information classes and object types require an existing modeled identity, validated access/context and the shared reference/handle lifetime. |
+| `ZwQueryVirtualMemory`, `NtQueryVirtualMemory` | Query the supported classes from explicit process/address-space allocation metadata, respecting the current attachment and caller buffer contract. |
+| `MmGetPhysicalAddress`, `MmGetVirtualForPhysical`, `MmIsAddressValid`, `MmGetPhysicalMemoryRanges` | Observe the finite modeled RAM/MDL/DMA ownership and mappings. Physical-range snapshots have the documented pool lifetime; host physical memory is never exposed. |
+| `MmAllocateContiguousMemory`, `MmFreeContiguousMemory` | Use shared modeled PFN allocation, address/cache admission and matching release ownership. |
+| `MmAllocateMappingAddress`, `MmFreeMappingAddress`, `MmMapLockedPagesWithReservedMapping`, `MmUnmapReservedMapping` | Use tagged reserved VA placement and existing locked-page/MDL owners, with validated map/unmap lifetimes. |
+| `IoGetDeviceProperty`, `IoGetBaseFileSystemDeviceObject` | Return supported explicit device-property observations or the existing modeled filesystem-device identity. No hardware/host filesystem discovery. |
+| `KeQueryActiveProcessors`, `KeQueryActiveProcessorCountEx`, `KeGetCurrentProcessorNumberEx`, `KeGetProcessorNumberFromIndex` | Use the shared bounded processor/group profile and thread affinity; unsupported topologies are not invented. |
+| `ZwEnumerateKey`, `ZwFlushKey` | Enumerate configured registry metadata in the supported ordering and flush the owning modeled hive. No host registry access. |
+| `IoRegisterShutdownNotification`, `IoUnregisterShutdownNotification` | Retain registrations for modeled device ownership and the supported callback/lifetime sequence. |
+| `RtlCaptureContext`, `KeCapturePersistentThreadState` | Capture modeled CPU context. Persistent capture requires the explicit Windows 19041 profile and a suitable live nonpaged allocation; it is a bounded metadata object, not a complete Windows dump. |
+| `KeRegisterBugCheckReasonCallback`, `KeDeregisterBugCheckReasonCallback` | Validate and retain registration/record/code lifetime. Registration does not execute a crash callback or generate a persistent dump. |
+| `KeBugCheck`, `KeBugCheckEx` | Produce a terminal typed bug-check outcome with the supplied code/parameters. They cannot be resumed as a missing-module request. |
+
+The [runtime module guide](../runtime-modules.md) describes source registration, actual
+instance publication, stage stops and finite calls. A matched symbol address
+does not by itself provide an API model or permission to execute arbitrary
+kernel internals. Ring3 adaptation remains a separate design reservation.

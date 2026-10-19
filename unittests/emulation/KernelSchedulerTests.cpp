@@ -32,6 +32,37 @@ dpc(uint64_t Object,
   return DPC;
 }
 
+TEST(KernelSchedulerThreadReservation, HoldsCapacityAndOwnerUntilMadeRunnable) {
+  Scheduler::Limits L;
+  L.MaxPendingCallbacks = 1;
+  Scheduler S(L);
+  auto ID = S.reserveSystemThread(work(1));
+  ASSERT_TRUE(bool(ID));
+  EXPECT_TRUE(S.hasPending());
+  EXPECT_TRUE(S.hasOutstanding(100));
+  EXPECT_TRUE(S.hasForegroundBlockingCallbacks());
+  EXPECT_EQ(S.queuedCallbackCount(), 0u);
+  EXPECT_FALSE(S.nextPassiveThread());
+  auto Next = S.next(false);
+  ASSERT_TRUE(bool(Next));
+  EXPECT_FALSE(*Next);
+  auto Extra = S.enqueueSystemThread(work(2));
+  ASSERT_FALSE(bool(Extra));
+  llvm::consumeError(Extra.takeError());
+  auto Bad = S.readySystemThread(*ID + 1);
+  ASSERT_TRUE(bool(Bad));
+  llvm::consumeError(std::move(Bad));
+  llvm::cantFail(S.readySystemThread(*ID));
+  Next = S.next(false);
+  ASSERT_TRUE(bool(Next));
+  ASSERT_TRUE(*Next);
+  EXPECT_EQ((**Next).ID, *ID);
+  EXPECT_EQ((**Next).Kind, Scheduler::CallbackKind::SystemThread);
+  llvm::cantFail(S.finish(*ID));
+  EXPECT_FALSE(S.hasPending());
+  EXPECT_FALSE(S.hasOutstanding(100));
+}
+
 void success(llvm::Error E) {
   if (E)
     ADD_FAILURE() << llvm::toString(std::move(E));
@@ -72,6 +103,34 @@ Scheduler::Callback usbIdle(uint64_t Token, uint64_t Context = 0) {
 Scheduler::UsbIdleCallback nativeUsbIdle(uint64_t IRP, uint64_t Token = 500) {
   return {{IRP, 100, 200, 0, {100, IRP, Token}},
           Scheduler::CallbackKind::FrameworkUsbIdle};
+}
+
+TEST(DriverKernelScheduler,
+     ForegroundBoundaryDistinguishesParkedCallbackKinds) {
+  Scheduler S;
+  EXPECT_FALSE(S.hasForegroundBlockingCallbacks());
+  const auto Thread = take(S.enqueueSystemThread(work(1)));
+  EXPECT_TRUE(S.hasForegroundBlockingCallbacks());
+  ASSERT_TRUE(take(S.next()));
+  EXPECT_TRUE(S.hasForegroundBlockingCallbacks());
+  EXPECT_FALSE(S.isSuspendedSystemThread(Thread));
+  success(S.suspend(Thread));
+  EXPECT_FALSE(S.hasForegroundBlockingCallbacks());
+  EXPECT_TRUE(S.isSuspendedSystemThread(Thread));
+  EXPECT_FALSE(S.isSuspendedSystemThread(Thread + 1));
+  const auto Worker = take(S.enqueueWorkItem(work(2)));
+  EXPECT_TRUE(S.hasForegroundBlockingCallbacks());
+  ASSERT_TRUE(take(S.next()));
+  success(S.suspend(Worker));
+  EXPECT_TRUE(S.hasForegroundBlockingCallbacks());
+  EXPECT_FALSE(S.isSuspendedSystemThread(Worker));
+  success(S.resume(Worker));
+  success(S.finish(Worker));
+  EXPECT_FALSE(S.hasForegroundBlockingCallbacks());
+  success(S.resume(Thread));
+  EXPECT_TRUE(S.hasForegroundBlockingCallbacks());
+  success(S.finish(Thread));
+  EXPECT_FALSE(S.hasPending());
 }
 
 TEST(DriverKernelScheduler, MixedUsbIdleBatchAdmissionIsAtomic) {

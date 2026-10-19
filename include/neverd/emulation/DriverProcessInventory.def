@@ -1,0 +1,24 @@
+// Explicit synthetic process counters; offsets are the x64 19041 wire layout.
+// Define NEVERD_PROCESS_COUNTER(Member, JSON, Type, Default, Offset, Width).
+NEVERD_PROCESS_COUNTER(BasePriority, "base_priority", int32_t, 8, 0x48, 4)
+NEVERD_PROCESS_COUNTER(HandleCount, "handle_count", uint32_t, 0, 0x60, 4)
+NEVERD_PROCESS_COUNTER(SessionID, "session_id", uint32_t, 0, 0x64, 4)
+NEVERD_PROCESS_COUNTER(PeakVirtualSize, "peak_virtual_size", uint64_t, 0, 0x70,
+                       8)
+NEVERD_PROCESS_COUNTER(VirtualSize, "virtual_size", uint64_t, 0, 0x78, 8)
+NEVERD_PROCESS_COUNTER(PeakWorkingSetSize, "peak_working_set_size", uint64_t, 0,
+                       0x88, 8)
+NEVERD_PROCESS_COUNTER(WorkingSetSize, "working_set_size", uint64_t, 0, 0x90, 8)
+NEVERD_PROCESS_COUNTER(QuotaPeakPagedPoolUsage, "quota_peak_paged_pool_usage",
+                       uint64_t, 0, 0x98, 8)
+NEVERD_PROCESS_COUNTER(QuotaPagedPoolUsage, "quota_paged_pool_usage", uint64_t,
+                       0, 0xa0, 8)
+NEVERD_PROCESS_COUNTER(QuotaPeakNonPagedPoolUsage,
+                       "quota_peak_nonpaged_pool_usage", uint64_t, 0, 0xa8, 8)
+NEVERD_PROCESS_COUNTER(QuotaNonPagedPoolUsage, "quota_nonpaged_pool_usage",
+                       uint64_t, 0, 0xb0, 8)
+NEVERD_PROCESS_COUNTER(PagefileUsage, "pagefile_usage", uint64_t, 0, 0xb8, 8)
+NEVERD_PROCESS_COUNTER(PeakPagefileUsage, "peak_pagefile_usage", uint64_t, 0,
+                       0xc0, 8)
+NEVERD_PROCESS_COUNTER(PrivatePageCount, "private_page_count", uint64_t, 0,
+                       0xc8, 8)

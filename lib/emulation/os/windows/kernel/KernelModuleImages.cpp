@@ -30,6 +30,8 @@ makeKernelModuleImages(const KernelExportRegistry &Registry) {
     if (!Entry.isModuleSymbol())
       continue;
     const auto Base = KernelExportRegistry::moduleBase(Entry.Module);
+    if (!Base)
+      continue; // Unmodeled external imports use traps, not invented PE images.
     const bool Data =
         Entry.Kind == KernelExportRegistry::ExportKind::ModuleData;
     const uint64_t First = Data ? KernelModuleDataRVA : KernelModuleCodeRVA;

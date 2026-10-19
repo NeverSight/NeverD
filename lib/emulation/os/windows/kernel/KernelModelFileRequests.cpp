@@ -588,7 +588,8 @@ KernelModel::beginFileAPIRequest(llvm::ArrayRef<uint64_t> A,
   for (uint64_t Owner : Request.DeviceRoute)
     if (auto E = retainDevice(Owner))
       return E;
-  if (auto E = initializeIRPHeader(*Packet, *Count, *Count))
+  if (auto E =
+          initializeIRPHeader(*Packet, *Count, *Count, Request.IOStatusWritten))
     return E;
   const uint64_t Event = File.Asynchronous ? *Storage + QueryStatusSize : 0;
   if (Event) {

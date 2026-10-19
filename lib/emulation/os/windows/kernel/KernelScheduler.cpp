@@ -19,6 +19,7 @@
 
 #include "KernelWaits.h"
 
+#include "neverd/emulation/DriverClock.h"
 #include "neverd/emulation/DriverScheduling.h"
 
 #include "llvm/ADT/STLExtras.h"
@@ -56,6 +57,23 @@ bool removeObject(std::deque<KernelScheduler::Invocation> &Queue,
 }
 
 } // namespace
+
+llvm::Expected<uint64_t> KernelScheduler::queryTimeIncrement() const {
+  if (auto E =
+          validateDriverSystemClockIncrement(Bounds.SystemClockIncrement100ns))
+    return E;
+  if (!Bounds.SystemClockIncrement100ns)
+    return schedulerError(
+        "KeQueryTimeIncrement requires system_clock_increment_100ns");
+  return uint64_t(*Bounds.SystemClockIncrement100ns);
+}
+
+llvm::Expected<uint64_t> KernelScheduler::queryTickCount() const {
+  auto Increment = queryTimeIncrement();
+  if (!Increment)
+    return Increment.takeError();
+  return Now / *Increment;
+}
 
 bool KernelScheduler::isDMACallbackKind(CallbackKind Kind) {
   return Kind == CallbackKind::DMAListControl ||
@@ -166,7 +184,7 @@ KernelScheduler::validateInterrupt(const InterruptCallback &Interrupt) const {
 llvm::Error KernelScheduler::checkCapacity(uint64_t Additional) const {
   const uint64_t Outstanding = queuedCallbackCount() + Suspended.size() +
                                bool(Active) + WaitingDMA.size() +
-                               InlineDMA.size();
+                               WaitingSystemThreads.size() + InlineDMA.size();
   if (Outstanding > Bounds.MaxPendingCallbacks ||
       Additional > Bounds.MaxPendingCallbacks - Outstanding)
     return schedulerError("scheduler pending callback limit exhausted");
@@ -221,6 +239,28 @@ llvm::Expected<uint64_t> KernelScheduler::enqueueSystemThread(Callback Thread) {
   return SystemThreads.back().ID;
 }
 
+llvm::Expected<uint64_t> KernelScheduler::reserveSystemThread(Callback Thread) {
+  if (auto E = canEnqueueSystemThread(Thread))
+    return E;
+  auto Call =
+      makeInvocation(std::move(Thread), CallbackKind::SystemThread, Now);
+  const auto ID = Call.ID;
+  WaitingSystemThreads.emplace(ID, std::move(Call));
+  return ID;
+}
+llvm::Error KernelScheduler::readySystemThread(uint64_t ID) {
+  auto It = WaitingSystemThreads.find(ID);
+  if (It == WaitingSystemThreads.end())
+    return schedulerError("system thread readiness lost its reservation");
+  auto Order = issueReadyOrder();
+  if (!Order)
+    return Order.takeError();
+  It->second.ReadyOrder = *Order;
+  It->second.DueTime100ns = Now;
+  SystemThreads.push_back(std::move(It->second));
+  WaitingSystemThreads.erase(It);
+  return llvm::Error::success();
+}
 bool KernelScheduler::cancelWorkItem(uint64_t Object) {
   return removeObject(Workers, Object, CallbackKind::WorkItem);
 }
@@ -1112,16 +1152,34 @@ bool KernelScheduler::hasOutstanding(uint64_t Owner) const {
     return Item.second.Owner == Owner;
   };
   if (llvm::any_of(Suspended, HeldMatches) ||
-      llvm::any_of(WaitingDMA, HeldMatches))
+      llvm::any_of(WaitingDMA, HeldMatches) ||
+      llvm::any_of(WaitingSystemThreads, HeldMatches))
     return true;
   return llvm::any_of(Timers, [Owner](const auto &Item) {
     return Item.second.Armed && Item.second.Owner == Owner;
   });
 }
 
+bool KernelScheduler::hasForegroundBlockingCallbacks() const {
+  if (Active || !SystemThreads.empty() || !Workers.empty() || !DPCs.empty() ||
+      !Cancellations.empty() || !Completions.empty() || !Interrupts.empty() ||
+      !ReadyDMA.empty() || !WaitingSystemThreads.empty())
+    return true;
+  return std::any_of(Suspended.begin(), Suspended.end(), [](const auto &Entry) {
+    return Entry.second.Kind != CallbackKind::SystemThread;
+  });
+}
+
+bool KernelScheduler::isSuspendedSystemThread(uint64_t ID) const {
+  const auto Found = Suspended.find(ID);
+  return Found != Suspended.end() &&
+         Found->second.Kind == CallbackKind::SystemThread;
+}
+
 bool KernelScheduler::hasPending() const {
   if (Active || !Suspended.empty() || queuedCallbackCount() ||
-      !WaitingDMA.empty() || !InlineDMA.empty())
+      !WaitingDMA.empty() || !InlineDMA.empty() ||
+      !WaitingSystemThreads.empty())
     return true;
   return llvm::any_of(Timers,
                       [](const auto &Item) { return Item.second.Armed; });

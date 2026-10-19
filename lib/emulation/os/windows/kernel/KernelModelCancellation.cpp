@@ -223,6 +223,38 @@ KernelModel::continueScheduled(uint64_t ID, uint64_t ReturnValue) {
     return cancellationError(
         "callback continuation does not match active task");
   const auto Kind = Scheduler.active()->Kind;
+  if (Kind == KernelScheduler::CallbackKind::SystemThread &&
+      isServiceThreadEntry(Scheduler.active()->PC)) {
+    auto Token = ScheduledModelContinuations.find(ID);
+    if (Token != ScheduledModelContinuations.end()) {
+      if (Token->second.Owner != GuestCallOwner::ThreadNotify)
+        return cancellationError(
+            "service thread lost its exit notification owner");
+      auto R = finishGuestCall(Token->second, ReturnValue);
+      if (!R)
+        return R.takeError();
+      if (!*R) {
+        auto C = takeGuestCall();
+        if (!C)
+          return cancellationError("service thread lost its exit callback");
+        return C;
+      }
+      ScheduledModelContinuations.erase(Token);
+    } else {
+      // Pinned 19041 PspSystemThreadStartup ignores the routine's return
+      // register and invokes PspTerminateThreadByPointer(Thread,0,TRUE).
+      auto R = terminateSystemThread(0);
+      if (!R)
+        return R.takeError();
+      if (auto C = takeGuestCall()) {
+        ScheduledModelContinuations.emplace(ID, C->Token);
+        return C;
+      }
+    }
+    if (!takeThreadTermination())
+      return cancellationError("service thread exit lost its completion");
+    return std::optional<KernelGuestCall>{};
+  }
   if (Kind != KernelScheduler::CallbackKind::FrameworkCancel &&
       Kind != KernelScheduler::CallbackKind::FrameworkCompletion &&
       Kind != KernelScheduler::CallbackKind::FrameworkDeferred &&

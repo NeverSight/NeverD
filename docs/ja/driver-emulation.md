@@ -524,7 +524,7 @@ MinGW-w64 の include ディレクトリがデフォルトと異なる場合は 
 
 JSON レポートは `stop_reason`、null を取り得る `nt_status` と `nt_success`、停止時の PC、命令数を区別します。デバイスオブジェクトやドライバーのコールバックアドレスなど、停止前に収集した API 呼び出しと観測可能な状態を保持します。ゲストアドレスは 16 進文字列として表現するため、JSON の利用側で 64 ビットの精度が失われません。
 
-`configuration` オブジェクトには、実行の上限、サービス名、`kernel_exports` の上書き設定を記録します。プロファイルは `wdm-x64-scheduled-v103` です。`nt_status` は引き続き DriverEntry の結果を示し、`scenario_success` は初期化と完了済みリクエストを合わせた結果を示します。`phase`、`requests`、`unload_completed` は、要求されたライフサイクルのどの部分が実行されたかを示します。API 呼び出しと CPU 書き込みにも、そのフェーズ（`driver_entry`、`add_device:<ID>`、`request:N`, `callback:N`、`unload`）を記録します。各リクエストはディスパッチと I/O のステータス、完了の有無、information 長、返された `output_hex` バイト列を報告します。`preferred_image_base` は元の PE ベースアドレスを示します。`security_cookie` は初期化した Cookie のゲストアドレスで、不要だった場合は `"0x0"` です。リクエストのレポートフィールドは `kind`、`device`、`device_id`、`pnp`、`file`, `requestor_process_id`、`byte_offset`、`code`、`irp`、`completed`、`cancel_requested_at_100ns`、`dispatch_status`、`io_status`、`information`、`information_hex`、`output_hex` です。 `configuration.registry` は元のレジストリ設定を保持します。 `information_hex` は元の 64 ビット `IoStatus.Information` を 16 進文字列で正確に保持します。従来の数値フィールド `information` も保持します。
+`configuration` オブジェクトには、実行の上限、サービス名、`kernel_exports` の上書き設定を記録します。プロファイルは `wdm-x64-scheduled-v111` です。`nt_status` は引き続き DriverEntry の結果を示し、`scenario_success` は初期化と完了済みリクエストを合わせた結果を示します。`phase`、`requests`、`unload_completed` は、要求されたライフサイクルのどの部分が実行されたかを示します。API 呼び出しと CPU 書き込みにも、そのフェーズ（`driver_entry`、`add_device:<ID>`、`request:N`, `callback:N`、`unload`）を記録します。各リクエストはディスパッチと I/O のステータス、完了の有無、information 長、返された `output_hex` バイト列を報告します。`preferred_image_base` は元の PE ベースアドレスを示します。`security_cookie` は初期化した Cookie のゲストアドレスで、不要だった場合は `"0x0"` です。リクエストのレポートフィールドは `kind`、`device`、`device_id`、`pnp`、`file`, `requestor_process_id`、`byte_offset`、`code`、`irp`、`completed`、`cancel_requested_at_100ns`、`dispatch_status`、`io_status`、`information`、`information_hex`、`output_hex` です。 `configuration.registry` は元のレジストリ設定を保持します。 `information_hex` は元の 64 ビット `IoStatus.Information` を 16 進文字列で正確に保持します。従来の数値フィールド `information` も保持します。
 
 ワーク項目の観測フェーズは `callback:N` です。保留リクエストの `dispatch_status` は `STATUS_PENDING` を保持し、最終完了状態は別の `io_status` に記録され、`scenario_success` の判定に使われます。
 
@@ -787,3 +787,45 @@ ASCII 名、名前空間リンク、RootDirectory として保持したディレ
 `MmCreateMdl` は DISPATCH_LEVEL 以下で全幅の三引数を受け取ります。ゼロ初期化した非ページプールを確保するか、有効な非ページプールまたは現在の実行スタック内の完全に書込可能な領域を使います。ULONG_MAX 超の長さはアクセス前に NULL を返します。空・折返しアドレスのメタデータは保持しますが、ページ構築には有効な非空範囲と正確な16ビット記述子サイズが必要です。六フィールドを元の順序で初期化し、他の呼出側バイトは保持します。プール先頭は IoFreeMdl またはプール解放、内部・スタック記録は所有領域の解放に従います。ロック・所有マッピング・ユーザービュー・依存が残れば拒否します。IRP への移譲、活動記録の再初期化、スタック枠の再利用、IoFreeMdl の部分マッピング自動解放は未対応です。
 
 `MmAdvanceMdl` は専用システムマッピングを持つ独立したロック済みプール／ユーザーバッファを DISPATCH_LEVEL 以下で扱います。ULONG は上位ビットを無視し、終端到達以降は無変更で STATUS_INVALID_PARAMETER_2 を返します。固定 x64 設定は保持 PFN 配列を回転して末尾を標識します。解除はページ単位のメタデータと PFN 順序を復元し、元の別名全体とロックを解放します。現在のバイトオフセットは残り、所有範囲を拡大しません。解除後の MappedSystemVa は正規化した無効値として残り、再マッピングには再プローブ／ロックが必要です。IRP チェーン、部分依存、ユーザービュー、DMA、画像、非ページ直接構築、未マップ状態は未対応です。
+
+## Additional bounded model contracts (English reference)
+
+This technical appendix documents the additional kernel models used by the
+persistent driver environment. It is currently provided in English. The report
+contract is `wdm-x64-scheduled-v111`. These operations act on explicitly modeled
+guest state; none forwards a request to the host kernel or discovers host data.
+Unsupported information classes, layouts and execution contexts fail explicitly.
+
+The legacy `emulate-driver` CLI accepts positive `--instruction-limit`,
+`--event-limit` and `--timeout-ms` values and validates the supported timeout
+range before execution. These options use the same cumulative limits as the
+driver model; persistent executions configure their limits in the run JSON.
+
+| API family | Supported contract and limits |
+|---|---|
+| `ExAllocatePool` | Data allocations use the supported pool-type profile and modeled allocation lifetime; the untagged allocation uses the kernel's `None` tag. |
+| `RtlInitAnsiString`, `RtlAnsiStringToUnicodeString`, `RtlUnicodeStringToAnsiString`, `RtlxAnsiStringToUnicodeSize`, `RtlFreeAnsiString`, `RtlFreeUnicodeString` | Explicit counted-string buffers, validated lengths, supported character profile and owned allocation/free rules. No host locale conversion. |
+| `RtlAnsiCharToUnicodeChar`, `RtlUpperChar`, `RtlUpperString`, `RtlCompareString`, `RtlAppendStringToString` | Bounded character/counted-byte operations. Character conversion advances the caller's pointer cell only after a valid conversion; configured character observations do not authorize arbitrary host NLS behavior. |
+| `RtlAppendUnicodeToString`, `RtlPrefixUnicodeString` | Validated UTF-16 counted buffers with explicit capacity and the modeled case rules. |
+| `RtlIntegerToUnicodeString`, `RtlInt64ToUnicodeString`, `RtlUnicodeStringToInteger`, `RtlCharToInteger`, `RtlGUIDFromString` | Bounded input parsing/formatting with the supported base, grammar, width and caller-output contracts. |
+| `RtlGetVersion`, `VslGetSecurePciEnabled` | Return explicitly configured guest version/security observations. Missing security observations are not inferred from the host. |
+| `ZwQuerySystemInformation`, `NtQuerySystemInformation` | Supported versioned process/thread or module information classes use the same model objects and module records as the driver environment. Other classes remain unsupported. |
+| `PsLookupProcessByProcessId`, `PsGetProcessImageFileName`, `PsGetProcessSectionBaseAddress`, `PsGetProcessExitStatus`, `PsGetProcessPeb` | Query the declared process identity, explicit image/name/PEB observations and retained liveness/exit state. Pointer results refer to modeled guest storage and preserve its lifetime. |
+| `PsSetCreateThreadNotifyRoutine`, `PsRemoveCreateThreadNotifyRoutine` | Retain supported notification registrations and schedule actual guest callbacks with modeled creator/exit context and rundown rules. |
+| `ZwQueryInformationThread`, `ObReferenceObjectByName`, `ObOpenObjectByPointer` | Supported information classes and object types require an existing modeled identity, validated access/context and the shared reference/handle lifetime. |
+| `ZwQueryVirtualMemory`, `NtQueryVirtualMemory` | Query the supported classes from explicit process/address-space allocation metadata, respecting the current attachment and caller buffer contract. |
+| `MmGetPhysicalAddress`, `MmGetVirtualForPhysical`, `MmIsAddressValid`, `MmGetPhysicalMemoryRanges` | Observe the finite modeled RAM/MDL/DMA ownership and mappings. Physical-range snapshots have the documented pool lifetime; host physical memory is never exposed. |
+| `MmAllocateContiguousMemory`, `MmFreeContiguousMemory` | Use shared modeled PFN allocation, address/cache admission and matching release ownership. |
+| `MmAllocateMappingAddress`, `MmFreeMappingAddress`, `MmMapLockedPagesWithReservedMapping`, `MmUnmapReservedMapping` | Use tagged reserved VA placement and existing locked-page/MDL owners, with validated map/unmap lifetimes. |
+| `IoGetDeviceProperty`, `IoGetBaseFileSystemDeviceObject` | Return supported explicit device-property observations or the existing modeled filesystem-device identity. No hardware/host filesystem discovery. |
+| `KeQueryActiveProcessors`, `KeQueryActiveProcessorCountEx`, `KeGetCurrentProcessorNumberEx`, `KeGetProcessorNumberFromIndex` | Use the shared bounded processor/group profile and thread affinity; unsupported topologies are not invented. |
+| `ZwEnumerateKey`, `ZwFlushKey` | Enumerate configured registry metadata in the supported ordering and flush the owning modeled hive. No host registry access. |
+| `IoRegisterShutdownNotification`, `IoUnregisterShutdownNotification` | Retain registrations for modeled device ownership and the supported callback/lifetime sequence. |
+| `RtlCaptureContext`, `KeCapturePersistentThreadState` | Capture modeled CPU context. Persistent capture requires the explicit Windows 19041 profile and a suitable live nonpaged allocation; it is a bounded metadata object, not a complete Windows dump. |
+| `KeRegisterBugCheckReasonCallback`, `KeDeregisterBugCheckReasonCallback` | Validate and retain registration/record/code lifetime. Registration does not execute a crash callback or generate a persistent dump. |
+| `KeBugCheck`, `KeBugCheckEx` | Produce a terminal typed bug-check outcome with the supplied code/parameters. They cannot be resumed as a missing-module request. |
+
+The [runtime module guide](../runtime-modules.md) describes source registration, actual
+instance publication, stage stops and finite calls. A matched symbol address
+does not by itself provide an API model or permission to execute arbitrary
+kernel internals. Ring3 adaptation remains a separate design reservation.

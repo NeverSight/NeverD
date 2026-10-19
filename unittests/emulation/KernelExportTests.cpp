@@ -23,6 +23,7 @@
 #include <array>
 #include <initializer_list>
 #include <iterator>
+#include <set>
 #include <string_view>
 #include <utility>
 #include <vector>
@@ -44,6 +45,19 @@ std::string requireError(llvm::Expected<uint64_t> Value) {
     return {};
   }
   return llvm::toString(Value.takeError());
+}
+
+TEST(KernelExports, ExactInventoryArityFitsTheBoundedWin64Reader) {
+#define NEVERD_KERNEL_API(Name, Arity, Availability)                           \
+  {                                                                            \
+    SCOPED_TRACE(#Name);                                                       \
+    const auto Count = KernelModel::argumentCount(#Name);                      \
+    ASSERT_TRUE(Count);                                                        \
+    EXPECT_EQ(*Count, unsigned(Arity));                                        \
+    EXPECT_LE(*Count, profile::MaxAPIArguments);                               \
+  }
+#include "os/windows/kernel/KernelAPIs.def"
+#undef NEVERD_KERNEL_API
 }
 
 TEST(KernelExports, SeededModeledExportAndDuplicateImportsShareIdentity) {
@@ -191,14 +205,52 @@ TEST(KernelExports, CanonicalImportProvidersShareOneExplicitPolicy) {
     ASSERT_TRUE(Canonical);
     EXPECT_EQ(*Canonical, "wdfldr.sys");
   }
-  for (const char *Module : {"hal.dll", "HAL.DLL", "Hal.Dll"}) {
+  for (const char *Module : {"FLTMGR.SYS", "NDIS.SYS", "NETIO.SYS", "HAL.dll",
+                             "wdf01000.sys", "Vendor.Driver.sys"}) {
     auto Canonical = KernelExportRegistry::canonicalImportModule(Module);
     ASSERT_TRUE(Canonical);
-    EXPECT_EQ(*Canonical, "hal.dll");
+    EXPECT_EQ(*Canonical, llvm::StringRef(Module).lower());
   }
-  for (const char *Module : {"", "wdf01000.sys", "ntoskrnl", "hal",
-                             "path/ntoskrnl.exe", "ntoskrnl.exe "})
+  for (const char *Module :
+       {"", "ntoskrnl", "path/ntoskrnl.exe", "path\\ntoskrnl.exe",
+        "ntoskrnl.exe ", ".sys", "../ntoskrnl.exe", "bad..sys", "driver.txt"})
     EXPECT_FALSE(KernelExportRegistry::canonicalImportModule(Module));
+  EXPECT_FALSE(KernelExportRegistry::canonicalImportModule(
+      std::string(profile::MaxKernelExportNameSize + 1, 'a') + ".sys"));
+}
+
+TEST(KernelExports,
+     ExternalProvidersRemainLazyAndCannotAcquireKernelSemantics) {
+  DriverOptions Options;
+  Options.KernelExports.emplace("UnknownExternalRoutine", false);
+  KernelExportRegistry Registry;
+  ASSERT_EQ(llvm::toString(Registry.initialize(Options)), "");
+  const uint64_t Kernel = requireValue(Registry.resolve("DbgPrint"));
+  std::set<uint64_t> Addresses;
+  for (const char *Module : {"FLTMGR.SYS", "NDIS.SYS", "NETIO.SYS", "HAL.dll",
+                             "vendor.sys", "wdf01000.sys"}) {
+    SCOPED_TRACE(Module);
+    const uint64_t Address =
+        requireValue(Registry.bindImport({0x1000, Module, "DbgPrint"}));
+    EXPECT_NE(Address, Kernel);
+    EXPECT_TRUE(Addresses.insert(Address).second);
+    EXPECT_EQ(requireValue(Registry.bindImport(
+                  {0x2000, llvm::StringRef(Module).lower(), "DbgPrint"})),
+              Address);
+    const auto *Export = Registry.lookup(Address);
+    ASSERT_NE(Export, nullptr);
+    EXPECT_FALSE(KernelModel::argumentCount(*Export));
+    EXPECT_EQ(Export->Module, llvm::StringRef(Module).lower());
+    const uint64_t Unknown = requireValue(
+        Registry.bindImport({0x3000, Module, "UnknownExternalRoutine"}));
+    ASSERT_NE(Registry.lookup(Unknown), nullptr);
+    EXPECT_FALSE(KernelModel::argumentCount(*Registry.lookup(Unknown)));
+    EXPECT_EQ(requireValue(Registry.resolve("UnknownExternalRoutine")), 0u);
+    EXPECT_NE(requireValue(Registry.bindImport({0x4000, Module, "dbgprint"})),
+              Address);
+  }
+  EXPECT_NE(requireError(Registry.resolve("DbgPrint")).find("ambiguous"),
+            std::string::npos);
 }
 
 TEST(KernelExports, ProcessorImportsAndDynamicLookupShareExactArity) {
@@ -256,6 +308,28 @@ TEST(KernelExports, HALStaticAndDynamicLookupRetainProviderIdentity) {
             std::string::npos);
 }
 
+TEST(KernelExports, AuthenticatedKernelHALReexportSharesOneModelIdentity) {
+  KernelExportRegistry Registry;
+  DriverOptions Options;
+  ASSERT_EQ(llvm::toString(Registry.initialize(Options)), "");
+  const auto Old = requireValue(Registry.resolve("KeQueryPerformanceCounter"));
+  constexpr uint64_t Address = 0xfffff80000123000ULL;
+  ASSERT_EQ(llvm::toString(Registry.attachReferenceImage(
+                {{"KeQueryPerformanceCounter", Address}}, Options)),
+            "");
+  EXPECT_EQ(requireValue(Registry.resolve("KeQueryPerformanceCounter")),
+            Address);
+  for (const auto *Module : {"ntoskrnl.exe", "hal.dll"})
+    EXPECT_EQ(requireValue(Registry.existingImport(
+                  {0, Module, "KeQueryPerformanceCounter"})),
+              Address);
+  EXPECT_EQ(Registry.lookup(Old), nullptr);
+  const auto *Export = Registry.lookup(Address);
+  ASSERT_NE(Export, nullptr);
+  EXPECT_EQ(Export->Module, "hal.dll");
+  EXPECT_EQ(KernelModel::argumentCount(*Export), 1u);
+}
+
 TEST(KernelExports, AdditionalImportModulesKeepUnknownRoutinesIsolated) {
   KernelExportRegistry Registry;
   ASSERT_EQ(llvm::toString(Registry.initialize({})), "");
@@ -298,8 +372,8 @@ TEST(KernelExports, AdditionalImportModulesKeepUnknownRoutinesIsolated) {
   EXPECT_NE(
       requireError(Registry.resolve("UnknownRoutine")).find("unspecified"),
       std::string::npos);
-  for (const char *Module :
-       {"unknown.sys", "ndis", "ndis.sys ", "path/fltmgr.sys", "netio.sys/"}) {
+  for (const char *Module : {"../unknown.sys", "ndis", "ndis.sys ",
+                             "path/fltmgr.sys", "netio.sys/"}) {
     EXPECT_FALSE(KernelExportRegistry::canonicalImportModule(Module));
     EXPECT_FALSE(KernelExportRegistry::moduleBase(Module));
   }
@@ -506,10 +580,13 @@ TEST(KernelExports, InvalidIdentitiesDoNotConsumeAThunkOrEstablishPresence) {
   EXPECT_NE(requireError(Registry.insertFrameworkFunction(0, "WdfValid"))
                 .find("binding identity"),
             std::string::npos);
-  EXPECT_NE(
-      requireError(Registry.bindImport({0x1000, "wdf01000.sys", "WdfValid"}))
-          .find("provider"),
-      std::string::npos);
+  for (const std::string &Module :
+       {std::string(), std::string("path/wdf01000.sys"),
+        std::string("Bad\0Name.sys", 12), std::string("wdf01000.sys "),
+        std::string(profile::MaxKernelExportNameSize + 1, 'a') + ".sys"})
+    EXPECT_NE(requireError(Registry.bindImport({0x1000, Module, "WdfValid"}))
+                  .find("provider"),
+              std::string::npos);
   const uint64_t After = requireValue(
       Registry.bindImport({0x2000, "wdfldr.sys", "AfterInvalidInputs"}));
   EXPECT_EQ(After, Before + profile::ThunkStride);
@@ -602,7 +679,13 @@ TEST(KernelExports, ReadablePEExportsMatchTheAuthoritativeNamespace) {
   }
   // The callback function is present only in its binding table, and the
   // explicitly absent export has no address or export-table row.
-  EXPECT_EQ(Seen + 1, Registry.entries().size());
+  EXPECT_EQ(Seen, std::count_if(Registry.entries().begin(),
+                                Registry.entries().end(), [](const auto &E) {
+                                  return E.second.isModuleSymbol() &&
+                                         KernelExportRegistry::moduleBase(
+                                             E.second.Module)
+                                             .has_value();
+                                }));
   EXPECT_EQ(requireValue(Registry.resolve("NeverDOptionalAbsent")), 0u);
 }
 
@@ -814,8 +897,8 @@ TEST_F(KernelExportLookup, EnforcesFreedBorrowedAndOpaqueMemoryLifetimes) {
   check(Model->finishEntry());
   EXPECT_NE(lookupError(Model->registryPath()).find("freed"),
             std::string::npos);
-  // DRIVER_OBJECT.DriverSection is deliberately outside the public model.
-  record(Scratch, Model->driverObject() + 0x28, 4, 4);
+  // DRIVER_OBJECT.Flags remains opaque even though DriverSection is modeled.
+  record(Scratch, Model->driverObject() + 0x10, 4, 4);
   EXPECT_NE(lookupError().find("unmodeled"), std::string::npos);
   record(Scratch, profile::ThunkBase, 4, 4);
   EXPECT_NE(lookupError().find("thunks"), std::string::npos);
@@ -1003,9 +1086,105 @@ TEST_F(KernelExportLookup, ModuleQueryRetainsBorrowedRecoveryDependencies) {
     return false;
   };
   for (const auto &[Address, Export] : Exports.entries()) {
+    const auto K = Export.Kind;
     EXPECT_EQ(Contains(Address),
-              Export.Kind == KernelExportRegistry::ExportKind::ModuleData);
+              K == KernelExportRegistry::ExportKind::ModuleData ||
+                  K == KernelExportRegistry::ExportKind::ObjectTypeData ||
+                  K == KernelExportRegistry::ExportKind::ProcessData ||
+                  K == KernelExportRegistry::ExportKind::ProcessorData ||
+                  K == KernelExportRegistry::ExportKind::NlsData ||
+                  K == KernelExportRegistry::ExportKind::HalDispatchData);
     EXPECT_TRUE(Contains(Address + 1));
+  }
+}
+
+TEST(KernelExports, ReferenceCodeKeepsStaticAndDynamicIdentityAndModelGates) {
+  KernelExportRegistry Registry;
+  DriverOptions Options;
+  Options.KernelExports.emplace("MaskedReference", false);
+  ASSERT_EQ(llvm::toString(Registry.initialize(Options)), "");
+  constexpr uint64_t Code = 0xfffff80000001000;
+  ASSERT_EQ(llvm::toString(
+                Registry.attachReferenceImage({{"DbgPrint", Code},
+                                               {"UnknownReference", Code + 16},
+                                               {"DataReference", 0},
+                                               {"MaskedReference", Code + 32}},
+                                              Options)),
+            "");
+  EXPECT_EQ(requireValue(Registry.resolve("DbgPrint")), Code);
+  EXPECT_EQ(
+      requireValue(Registry.bindImport({0x1000, "ntkrnlmp.exe", "DbgPrint"})),
+      Code);
+  ASSERT_NE(Registry.lookup(Code), nullptr);
+  EXPECT_TRUE(KernelModel::argumentCount(*Registry.lookup(Code)));
+  ASSERT_NE(Registry.lookup(Code + 16), nullptr);
+  EXPECT_FALSE(KernelModel::argumentCount(*Registry.lookup(Code + 16)));
+  EXPECT_NE(requireValue(Registry.resolve("DataReference")), 0u);
+  EXPECT_EQ(requireValue(Registry.resolve("MaskedReference")), 0u);
+  EXPECT_EQ(requireValue(Registry.resolve("AbsentFromPE")), 0u);
+  EXPECT_EQ(requireValue(Registry.resolve("ExAllocatePoolWithTag")), 0u);
+  EXPECT_NE(requireError(Registry.bindImport(
+                             {0x1000, "ntoskrnl.exe", "ExAllocatePoolWithTag"}))
+                .find("absent"),
+            std::string::npos);
+}
+
+TEST(KernelExports, FailedReferenceRemappingPublishesNoPartialChanges) {
+  KernelExportRegistry Registry;
+  ASSERT_EQ(llvm::toString(Registry.initialize({})), "");
+  const auto Original = requireValue(Registry.resolve("DbgPrint"));
+  const auto Capacity = Registry.availableThunkCount();
+  EXPECT_FALSE(llvm::toString(Registry.attachReferenceImage(
+                                  {{"DbgPrint", 0xfffff80000001000},
+                                   {"Other", 0xfffff80000001000}},
+                                  {}))
+                   .empty());
+  EXPECT_EQ(requireValue(Registry.resolve("DbgPrint")), Original);
+  EXPECT_EQ(Registry.availableThunkCount(), Capacity);
+  EXPECT_NE(requireError(Registry.resolve("Other")).find("unspecified"),
+            std::string::npos);
+}
+
+TEST(KernelExports, ObjectTypeDataKeepsStaticDynamicIdentityAndCannotExecute) {
+  KernelExportRegistry Registry;
+  ASSERT_EQ(llvm::toString(Registry.initialize([] {
+              DriverOptions O;
+              O.Version = DriverOptions::WindowsVersion{10, 0, 19041};
+              return O;
+            }())),
+            "");
+  const uint64_t Synthetic = requireValue(Registry.resolve("PsThreadType"));
+  ASSERT_NE(Synthetic, 0u);
+  ASSERT_NE(Registry.lookup(Synthetic), nullptr);
+  EXPECT_EQ(Registry.lookup(Synthetic)->Kind,
+            KernelExportRegistry::ExportKind::ObjectTypeData);
+  EXPECT_FALSE(KernelModel::argumentCount(*Registry.lookup(Synthetic)));
+  constexpr uint64_t NativeSlot = 0xfffff80000006000;
+  ASSERT_EQ(llvm::toString(Registry.attachReferenceImage(
+                {{"PsThreadType", 0}}, {}, {{"PsThreadType", NativeSlot}})),
+            "");
+  EXPECT_EQ(requireValue(Registry.resolve("PsThreadType")), NativeSlot);
+  EXPECT_EQ(requireValue(
+                Registry.bindImport({0x1000, "ntkrnlmp.exe", "PsThreadType"})),
+            NativeSlot);
+  EXPECT_EQ(Registry.lookup(Synthetic), nullptr);
+  ASSERT_NE(Registry.lookup(NativeSlot), nullptr);
+  EXPECT_EQ(Registry.lookup(NativeSlot)->Kind,
+            KernelExportRegistry::ExportKind::ObjectTypeData);
+  EXPECT_FALSE(KernelModel::argumentCount(*Registry.lookup(NativeSlot)));
+}
+
+TEST(KernelExports, MalformedObjectTypeReferenceDoesNotReplaceTheNamespace) {
+  for (const auto &Data : {std::map<std::string, uint64_t>{{"PsThreadType", 0}},
+                           {{"PsThreadType", 0xfffff80000006001}},
+                           {{"UnknownType", 0xfffff80000006000}}}) {
+    KernelExportRegistry Registry;
+    ASSERT_EQ(llvm::toString(Registry.initialize({})), "");
+    const auto Original = requireValue(Registry.resolve("PsThreadType"));
+    EXPECT_FALSE(llvm::toString(Registry.attachReferenceImage(
+                                    {{"PsThreadType", 0}}, {}, Data))
+                     .empty());
+    EXPECT_EQ(requireValue(Registry.resolve("PsThreadType")), Original);
   }
 }
 

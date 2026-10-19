@@ -302,7 +302,8 @@ KernelModel::createFile(llvm::ArrayRef<uint64_t> A, FileOpenKind Kind,
   for (uint64_t Member : Request.DeviceRoute)
     if (auto E = retainDevice(Member))
       return E;
-  if (auto E = initializeIRPHeader(*Packet, *Count, *Count))
+  if (auto E =
+          initializeIRPHeader(*Packet, *Count, *Count, Request.IOStatusWritten))
     return E;
   auto Initialized =
       Dispatcher.call("KeInitializeEvent", {*Body + FileEventOffset, 0, 0},

@@ -1076,7 +1076,7 @@ and driver callback addresses. Guest addresses are hexadecimal strings so
 JSON consumers do not lose 64-bit precision.
 The `configuration` object records the run's limits, service name,
 `kernel_exports` overrides and original `registry` input.
-The profile is `wdm-x64-scheduled-v103`. `nt_status` remains the DriverEntry
+The profile is `wdm-x64-scheduled-v111`. `nt_status` remains the DriverEntry
 result, while `scenario_success` describes initialization and completed
 requests together. `phase`, `requests`, and `unload_completed` identify which
 parts of the requested lifecycle ran. Each API call and CPU write also records
@@ -1205,6 +1205,66 @@ existing loader; Windows object/API behavior belongs to `lib/emulation/os/window
 CPU state and execution belong to the Unicorn adapter. The adapter and model
 use the same guest-memory interface. No Windows API behavior belongs in the
 Unicorn fork.
+
+The existing driver path now initializes through the private
+`lib/emulation/os/windows/driver/DriverSessionState.{h,cpp}` owner. Configuration,
+image bytes, CPU/model state, export bindings, budget and resident frame data
+have a stable lifetime; initialization alone executes no guest instructions.
+The initial CPU transfers into the shared `ExecutionSession`, which installs
+hooks, runs the CPU, charges instruction attempts and owns recoverable-fault
+consumption. Driver OS policy distinguishes uncharged API/CFG/return boundaries,
+charged stopped control reads and CPUID/MSR attempts deferred until validation.
+The existing driver pump now lives in a private, suspended `DriverTask` call tree
+owned by `DriverExecutionEnvironment`. It retains entry, callbacks, requests and
+unload across control quanta; its scheduling, IRQL and model rules remain
+authoritative. Tasks yield CPU actions to `ExecutionRun` rather than running a
+CPU. The one-shot API uses this adapter for explicitly selected native version,
+kernel reference, guest paging, resident-callback draining and lifecycle-event
+inputs. Ordinary one-shot execution, observation and direct execution retain
+their existing entry path. Adapter runs retain the original
+absolute deadline. The internal driver adapter supports an after-entry stage
+after successful `finishEntry` and before its first callback drain.
+The persistent execution API described in [runtime modules](runtime-modules.md#persistent-windows-driver-environment)
+exposes this environment through the same C/CLI run, inspect, pause and invoke
+operations. At a selected after-entry stop, finite calls adopt the generic
+Win64 frame on a separate stack and use the retained driver pump, API models,
+callbacks and scheduler. Returning restores caller CPU/control and phase while
+retaining RAM/model side effects and cumulative budgets. Stack, IRQL and model
+ownership errors terminate the workload. Explicit additional Native x64 guest
+modules now publish through the common image/instance/OS-metadata transaction.
+They can be invoked at the same after-entry stop and call existing exact-provider
+API bindings. Loader-ring reads and class-11 module queries observe their records;
+module entry initialization is separate and is not executed automatically.
+Supported CPU resource stops can map a configured lazy module or pause for a
+caller-supplied missing binary, retaining the active driver call and cumulative
+budget. Publication and stopped reports use RAM snapshots while the CPU retains
+its continuation guard. Existing image/model bounds and object failures remain
+terminal. Additional Native x64 bindings now resolve named/ordinal/data imports
+and bounded export forwarding before the common commit. Declared lazy providers
+are prepared on dependency first use; unknown providers retain an explicit
+resource request. The bootstrap driver/reference are registered in the shared
+instance table without remapping their bytes or duplicating loader records.
+Additional supported C SEH/unwind and active CFG facts join the same publication
+transaction. See the linked configuration for restart-shape limits and explicit
+enable/unknown-address options.
+`image_module` selects a pinned driver resource, and `kernel_module` selects
+the source used by the existing kernel-reference model. They reuse the common
+file/PDB matching layer; the kernel's version-specific facts still require the
+same original-byte proofs. Replacing source files or attaching debug information
+later does not change a running environment's existing observations. See the
+[resource-ID configuration](runtime-modules.md#persistent-windows-driver-environment).
+Ring3 is reserved in the design without adding an application execution example.
+
+The public SDK consumer [`run_module_driver_replay.py`](../scripts/labs/run_module_driver_replay.py)
+loads explicit module/scenario files, runs the original entry, pauses at
+`after-entry` and invokes a caller-selected function with buffer/capacity
+arguments. It preserves cumulative budgets and RAM effects between calls and
+records returns, buffers, API suffixes and instances. It uses no private executor
+or production-source rewriting. This finite replay ends after its requested
+calls; it does not automatically continue the configured request/unload phases.
+See the [runner instructions](../scripts/labs/README.md) for imports, input
+origins, output bounds and the distinction between a completed call and a
+successful business path.
 
 ## x64 floating-point context state
 
@@ -1422,3 +1482,64 @@ Kernel `memcpy_s` and `memmove_s` accept bounded accessible buffers with full-wi
 `MmCreateMdl` accepts three full-width arguments through DISPATCH_LEVEL. It allocates zeroed nonpaged descriptor storage or uses a wholly writable span in one live nonpaged pool allocation or the current execution stack. Length above ULONG_MAX returns NULL before storage access; empty and wrapping described addresses preserve raw metadata, but page building needs a valid nonempty range. The 16-bit descriptor extent must remain exact. Six fields are initialized in original order; other supplied bytes remain untouched. Pool-base descriptors support IoFreeMdl or pool free; interior/stack records retire with their containing owner. Active locks, owned mappings, user views and dependencies prevent retirement. Caller-storage IRP transfer, active-record reinitialization, stack-frame slot reuse and automatic partial-map teardown on IoFreeMdl remain unsupported.
 
 `MmAdvanceMdl` supports standalone probe-locked pool and user buffers with an owned system mapping, through DISPATCH_LEVEL. Its ULONG count ignores upper carrier bits; reaching or passing the end returns STATUS_INVALID_PARAMETER_2 without mutation. The fixed x64 profile advances the data window, rotates the complete retained PFN array and marks its tail with MDL_FREE_EXTRA_PTES. Unmap and unlock restore whole-page metadata and original PFN order before retiring the complete alias and original pin. Restoration keeps the current byte offset, which can differ from the original byte range; it grants no additional backing. The stale normalized MappedSystemVa field is retained after advanced unmap. Remapping then requires a new probe/lock cycle. IRP chains, partial dependencies, user views, DMA, image buffers, nonpaged-built descriptors and advancement without a system mapping remain unsupported. The ordinary metadata write preflight prevents partial changes on refused calls.
+
+## Additional bounded model contracts (English reference)
+
+This technical appendix documents the additional kernel models used by the
+persistent driver environment. It is currently provided in English. The report
+contract is `wdm-x64-scheduled-v111`. These operations act on explicitly modeled
+guest state; none forwards a request to the host kernel or discovers host data.
+Unsupported information classes, layouts and execution contexts fail explicitly.
+
+The legacy `emulate-driver` CLI accepts positive `--instruction-limit`,
+`--event-limit` and `--timeout-ms` values and validates the supported timeout
+range before execution. These options use the same cumulative limits as the
+driver model; persistent executions configure their limits in the run JSON.
+
+| API family | Supported contract and limits |
+|---|---|
+| `ExAllocatePool` | Data allocations use the supported pool-type profile and modeled allocation lifetime; the untagged allocation uses the kernel's `None` tag. |
+| `RtlInitAnsiString`, `RtlAnsiStringToUnicodeString`, `RtlUnicodeStringToAnsiString`, `RtlxAnsiStringToUnicodeSize`, `RtlFreeAnsiString`, `RtlFreeUnicodeString` | Explicit counted-string buffers, validated lengths, supported character profile and owned allocation/free rules. No host locale conversion. |
+| `RtlAnsiCharToUnicodeChar`, `RtlUpperChar`, `RtlUpperString`, `RtlCompareString`, `RtlAppendStringToString` | Bounded character/counted-byte operations. Character conversion advances the caller's pointer cell only after a valid conversion; configured character observations do not authorize arbitrary host NLS behavior. |
+| `RtlAppendUnicodeToString`, `RtlPrefixUnicodeString` | Validated UTF-16 counted buffers with explicit capacity and the modeled case rules. |
+| `RtlIntegerToUnicodeString`, `RtlInt64ToUnicodeString`, `RtlUnicodeStringToInteger`, `RtlCharToInteger`, `RtlGUIDFromString` | Bounded input parsing/formatting with the supported base, grammar, width and caller-output contracts. |
+| `RtlGetVersion`, `VslGetSecurePciEnabled` | Return explicitly configured guest version/security observations. Missing security observations are not inferred from the host. |
+| `ZwQuerySystemInformation`, `NtQuerySystemInformation` | Supported versioned process/thread or module information classes use the same model objects and module records as the driver environment. Other classes remain unsupported. |
+| `PsLookupProcessByProcessId`, `PsGetProcessImageFileName`, `PsGetProcessSectionBaseAddress`, `PsGetProcessExitStatus`, `PsGetProcessPeb` | Query the declared process identity, explicit image/name/PEB observations and retained liveness/exit state. Pointer results refer to modeled guest storage and preserve its lifetime. |
+| `PsSetCreateThreadNotifyRoutine`, `PsRemoveCreateThreadNotifyRoutine` | Retain supported notification registrations and schedule actual guest callbacks with modeled creator/exit context and rundown rules. |
+| `ZwQueryInformationThread`, `ObReferenceObjectByName`, `ObOpenObjectByPointer` | Supported information classes and object types require an existing modeled identity, validated access/context and the shared reference/handle lifetime. |
+| `ZwQueryVirtualMemory`, `NtQueryVirtualMemory` | Query the supported classes from explicit process/address-space allocation metadata, respecting the current attachment and caller buffer contract. |
+| `MmGetPhysicalAddress`, `MmGetVirtualForPhysical`, `MmIsAddressValid`, `MmGetPhysicalMemoryRanges` | Observe the finite modeled RAM/MDL/DMA ownership and mappings. Physical-range snapshots have the documented pool lifetime; host physical memory is never exposed. |
+| `MmAllocateContiguousMemory`, `MmFreeContiguousMemory` | Use shared modeled PFN allocation, address/cache admission and matching release ownership. |
+| `MmAllocateMappingAddress`, `MmFreeMappingAddress`, `MmMapLockedPagesWithReservedMapping`, `MmUnmapReservedMapping` | Use tagged reserved VA placement and existing locked-page/MDL owners, with validated map/unmap lifetimes. |
+| `IoGetDeviceProperty`, `IoGetBaseFileSystemDeviceObject` | Return supported explicit device-property observations or the existing modeled filesystem-device identity. No hardware/host filesystem discovery. |
+| `KeQueryActiveProcessors`, `KeQueryActiveProcessorCountEx`, `KeGetCurrentProcessorNumberEx`, `KeGetProcessorNumberFromIndex` | Use the shared bounded processor/group profile and thread affinity; unsupported topologies are not invented. |
+| `ZwEnumerateKey`, `ZwFlushKey` | Enumerate configured registry metadata in the supported ordering and flush the owning modeled hive. No host registry access. |
+| `IoRegisterShutdownNotification`, `IoUnregisterShutdownNotification` | Retain registrations for modeled device ownership and the supported callback/lifetime sequence. |
+| `RtlCaptureContext`, `KeCapturePersistentThreadState` | Capture modeled CPU context. Persistent capture requires the explicit Windows 19041 profile and a suitable live nonpaged allocation; it is a bounded metadata object, not a complete Windows dump. |
+| `KeRegisterBugCheckReasonCallback`, `KeDeregisterBugCheckReasonCallback` | Validate and retain registration/record/code lifetime. Registration does not execute a crash callback or generate a persistent dump. |
+| `KeBugCheck`, `KeBugCheckEx` | Produce a terminal typed bug-check outcome with the supplied code/parameters. They cannot be resumed as a missing-module request. |
+
+The [runtime module guide](runtime-modules.md) describes source registration, actual
+instance publication, stage stops and finite calls. A matched symbol address
+does not by itself provide an API model or permission to execute arbitrary
+kernel internals. Ring3 adaptation remains a separate design reservation.
+
+
+## Explicit finite filesystem provider
+
+`DriverOptions::FiniteFileSystem` and scenario JSON `finite_filesystem` select a
+bounded synchronous provider whose files and contents are supplied by the caller.
+`filesystem` continues to describe the existing metadata inventory and its WDM
+CREATE/CLEANUP/CLOSE lifecycle. The two providers cannot be selected in the same
+session; this is checked before guest execution. Neither provider searches host
+drives or derives availability from the host operating system.
+
+
+
+Use the schema accepted by `DriverFiniteFileSystemJSON` for volume and entry
+fields. The public C++ types are `DriverFiniteFileSystemVolume` and
+`DriverFiniteFileSystemEntry`. The provider owns file identity, handles, pointer
+references, byte contents and synchronous output stores. Common kernel object
+and namespace owners preserve identity across file and object APIs. Unsupported
+routing, access checks or filesystem operations fail explicitly.

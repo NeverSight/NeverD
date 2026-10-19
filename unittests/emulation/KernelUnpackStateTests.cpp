@@ -53,7 +53,9 @@ protected:
     EXPECT_EQ(State.additionalDependencyReasons(),
               take(Model->unpackDependencies()));
   }
-  void SetUp() override {
+  void start(DriverOptions Options = {}) {
+    Model.reset();
+    Result = DriverResult{};
     Memory = take(AddressSpace::create(
         take(PhysicalMemory::create(MemoryLimit)), MemoryLimit));
     ASSERT_TRUE(Memory);
@@ -63,9 +65,33 @@ protected:
     Image.Base = 0x180000000;
     Image.Entry = Image.Base + 0x1000;
     Image.Size = 0x3000;
-    ok(Model->initialize(Image, DriverOptions{}));
+    ok(Model->initialize(Image, Options));
   }
+  void SetUp() override { start(); }
 };
+
+TEST_F(KernelUnpackState,
+       NativeBugCheckRegistrationsRemainDependenciesUntilRemoved) {
+  DriverOptions O;
+  O.Contract = ExecutionContract::CheckedX64;
+  O.Version = DriverOptions::WindowsVersion{10, 0, 19041};
+  start(O);
+  ok(Memory->map(Scratch + 4096, 4096, Read | Execute));
+  const uint8_t Name[] = {'n', 0};
+  ok(Memory->write(Scratch + 256, Name));
+  ok(Model->captureUnpackBaseline());
+  ASSERT_EQ(call(kernel_api::KeRegisterBugCheckReasonCallback,
+                 {Scratch, Scratch + 4096, 2, Scratch + 256}),
+            1u);
+  reason(take(Model->captureUnpackRuntime(false)),
+         "live kernel bug-check callbacks");
+  ASSERT_EQ(call(kernel_api::KeDeregisterBugCheckReasonCallback, {Scratch}),
+            1u);
+  const auto Removed = take(Model->captureUnpackRuntime(false));
+  EXPECT_EQ(std::count(Removed.Reasons.begin(), Removed.Reasons.end(),
+                       "live kernel bug-check callbacks"),
+            0u);
+}
 
 TEST_F(KernelUnpackState, RequiresAnOwnershipBaseline) {
   for (const bool IncludeBacking : {false, true}) {

@@ -56,8 +56,18 @@ Expected<std::string> readScenario(StringRef Path) {
 } // namespace
 
 int runEmulateDriver() {
+  if (!DriverEventLimit) {
+    WithColor::error() << "--event-limit must be positive\n";
+    return 1;
+  }
   if (!DriverInstructionLimit) {
     WithColor::error() << "--instruction-limit must be positive\n";
+    return 1;
+  }
+  if (!DriverTimeoutMilliseconds ||
+      DriverTimeoutMilliseconds > emulation::profile::MaxTimeoutMilliseconds) {
+    WithColor::error() << "--timeout-ms must be between 1 and "
+                       << emulation::profile::MaxTimeoutMilliseconds << "\n";
     return 1;
   }
   neverd_session_t Sess = neverd_session_create();
@@ -70,8 +80,8 @@ int runEmulateDriver() {
   Options.struct_size = sizeof(Options);
   Options.instruction_limit = DriverInstructionLimit;
   Options.memory_limit = emulation::profile::DefaultMemoryLimit;
-  Options.event_limit = emulation::profile::DefaultEventLimit;
-  Options.timeout_milliseconds = emulation::profile::DefaultTimeoutMilliseconds;
+  Options.event_limit = DriverEventLimit;
+  Options.timeout_milliseconds = DriverTimeoutMilliseconds;
   const char *Report;
   if (DriverScenarioFile.getNumOccurrences()) {
     auto Scenario = readScenario(DriverScenarioFile.getValue());

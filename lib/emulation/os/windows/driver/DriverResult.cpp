@@ -10,17 +10,32 @@
 //===----------------------------------------------------------------------===//
 
 #include "DriverCPUID.h"
+#include "DriverCPUIDJSON.h"
 #include "DriverFileSystemJSON.h"
+#include "DriverFiniteFileSystemJSON.h"
+#include "DriverFirmwareJSON.h"
 #include "DriverLoaderViewJSON.h"
+#include "DriverNdisConfigurationJSON.h"
+#include "DriverNetworkInterfacesJSON.h"
+#include "DriverPciConfigurationJSON.h"
 #include "DriverPhysicalInventoryJSON.h"
+#include "DriverProcessEventsJSON.h"
+#include "DriverProcessInventoryJSON.h"
+#include "DriverRegistryEventsJSON.h"
+#include "DriverRegistryHivesJSON.h"
+#include "DriverResultView.h"
 #include "DriverSchedulingJSON.h"
+#include "DriverSectionsJSON.h"
+#include "DriverServicesJSON.h"
 #include "DriverVaShadowQueryJSON.h"
 #include "DriverVersionQueryJSON.h"
 
 #include "neverd/emulation/DriverReportFields.h"
 #include "neverd/emulation/DriverSession.h"
+#include "neverd/support/FilePath.h"
 
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/JSON.h"
@@ -113,8 +128,36 @@ bool scenarioSucceeded(const DriverResult &Result) {
       llvm::count_if(Result.Requests, [](const DriverRequestResult &Request) {
         return Request.Origin == DriverRequestOrigin::Scenario;
       });
-  if (Result.Stop != DriverStopReason::Returned || !Result.NTStatus ||
-      *Result.NTStatus != 0 ||
+  if (Result.BugCheck || Result.Stop != DriverStopReason::Returned ||
+      !Result.NTStatus || *Result.NTStatus != 0 ||
+      Result.RequestDelays.size() !=
+          llvm::count_if(
+              Result.Configuration.Requests,
+              [](const auto &R) { return R.DelayBefore100ns != 0; }) ||
+      llvm::any_of(Result.RequestDelays,
+                   [](const auto &D) {
+                     return !D.CompletedAt100ns ||
+                            *D.CompletedAt100ns < D.StartedAt100ns ||
+                            *D.CompletedAt100ns - D.StartedAt100ns <
+                                D.Duration100ns;
+                   }) ||
+      Result.RegistryEvents.size() !=
+          Result.Configuration.RegistryEvents.size() ||
+      llvm::any_of(Result.RegistryEvents,
+                   [](const auto &E) {
+                     return !E.Completed || !E.Status ||
+                            (*E.Status & profile::NTStatusFailureMask);
+                   }) ||
+      Result.ProcessEvents.size() !=
+          Result.Configuration.ProcessEvents.size() ||
+      llvm::any_of(Result.ProcessEvents,
+                   [](const auto &E) {
+                     return !E.Completed || (E.CreationStatus &&
+                                             (*E.CreationStatus &
+                                              profile::NTStatusFailureMask));
+                   }) ||
+      llvm::any_of(Result.ThreadNotifications,
+                   [](const auto &E) { return !E.Completed; }) ||
       ScenarioRequests != Result.Configuration.Requests.size() ||
       InterruptCount != Result.Interrupts.size() ||
       DmaCount != Result.DmaTransfers.size() ||
@@ -203,11 +246,21 @@ registryJSON(const std::optional<std::vector<DriverRegistryKey>> &Registry) {
           {field::Type, Value.Type},
           {field::Data,
            llvm::toHex(llvm::ArrayRef<uint8_t>(Value.Data), true)}});
-    llvm::json::Object Entry{{field::Path, Key.Path},
-                             {field::Values, std::move(Values)}};
+    llvm::json::Object Record{{field::Path, Key.Path},
+                              {field::Values, std::move(Values)}};
     if (Key.LastWriteTime100ns)
-      Entry[field::LastWriteTime100ns] = *Key.LastWriteTime100ns;
-    Keys.push_back(std::move(Entry));
+      Record[field::LastWriteTime100ns] = *Key.LastWriteTime100ns;
+    if (Key.Information)
+      Record["information"] = llvm::json::Object{
+          {"last_write_time", Key.Information->LastWriteTime},
+          {"class_name", Key.Information->ClassName}};
+    if (Key.SubkeyOrder) {
+      llvm::json::Array Order;
+      for (const auto &Name : *Key.SubkeyOrder)
+        Order.push_back(Name);
+      Record["subkey_order"] = std::move(Order);
+    }
+    Keys.push_back(std::move(Record));
   }
   return Keys;
 }
@@ -659,6 +712,18 @@ llvm::json::Array pnpConfigurationJSON(const DriverOptions &Options) {
                             {field::InitialReportedDevicePower, nullptr}};
     if (Device.ParentID)
       Item[field::ParentID] = *Device.ParentID;
+    if (Device.DeviceProperties) {
+      llvm::json::Array Properties;
+      for (const auto &Property : *Device.DeviceProperties) {
+        llvm::json::Object Record{{"property", Property.Property},
+                                  {"bytes_hex", nullptr}};
+        if (Property.Bytes)
+          Record["bytes_hex"] =
+              llvm::toHex(llvm::ArrayRef(*Property.Bytes), true);
+        Properties.push_back(std::move(Record));
+      }
+      Item["device_properties"] = std::move(Properties);
+    }
     if (Device.InitialDevicePower)
       Item[field::InitialDevicePower] =
           devicePowerName(*Device.InitialDevicePower);
@@ -718,7 +783,8 @@ const char *driverStopReasonName(DriverStopReason Reason) {
   llvm_unreachable("invalid driver stop reason");
 }
 
-std::string driverResultJSON(const DriverResult &Result) {
+std::string driverResultJSONView(const DriverResult &Result,
+                                 const DriverResultView &View) {
   auto Address = [](uint64_t V) { return "0x" + llvm::utohexstr(V); };
   llvm::json::Object Root{
       {field::SchemaVersion, 1},
@@ -755,6 +821,71 @@ std::string driverResultJSON(const DriverResult &Result) {
   }
   Root[field::Registry] = registryJSON(Result.Registry);
   Root[field::FileSystem] = driver_filesystem::stateJSON(Result.FileSystem);
+  Root[field::RegistryHives] = nullptr;
+  if (Result.RegistryHives) {
+    llvm::json::Array Hives;
+    for (const auto &H : *Result.RegistryHives)
+      Hives.push_back(
+          llvm::json::Object{{"path", H.Path},
+                             {"storage", "memory-backed"},
+                             {"flush_count", H.FlushCount},
+                             {"committed", registryJSON(H.Committed)}});
+    Root[field::RegistryHives] = std::move(Hives);
+  }
+  Root[field::PciConfiguration] =
+      Result.PciConfiguration
+          ? driverPciConfigurationJSON(*Result.PciConfiguration)
+          : llvm::json::Value(nullptr);
+  Root[field::BugCheck] = nullptr;
+  if (Result.BugCheck) {
+    llvm::json::Value Parameters = nullptr;
+    if (Result.BugCheck->Parameters) {
+      llvm::json::Array Values;
+      for (uint64_t Value : *Result.BugCheck->Parameters)
+        Values.push_back(Address(Value));
+      Parameters = std::move(Values);
+    }
+    Root[field::BugCheck] =
+        llvm::json::Object{{"code", Result.BugCheck->Code},
+                           {"parameters", std::move(Parameters)},
+                           {"dump_callbacks_executed", false}};
+  }
+  Root[field::FiniteFileSystem] =
+      driverFiniteFileSystemJSON(Result.FiniteFileSystem);
+  Root[field::SectionNamespace] =
+      Result.SectionNamespace
+          ? driverSectionNamespaceJSON(*Result.SectionNamespace)
+          : llvm::json::Value(nullptr);
+  Root[field::RegistryEvents] =
+      driverRegistryEventResultsJSON(Result.RegistryEvents);
+  llvm::json::Array RequestDelays;
+  for (const auto &D : Result.RequestDelays)
+    RequestDelays.push_back(llvm::json::Object{
+        {"source_index", uint64_t(D.SourceIndex)},
+        {"duration_100ns", D.Duration100ns},
+        {"started_at_100ns", D.StartedAt100ns},
+        {"completed_at_100ns", D.CompletedAt100ns
+                                   ? llvm::json::Value(*D.CompletedAt100ns)
+                                   : llvm::json::Value(nullptr)}});
+  Root[field::RequestDelays] = std::move(RequestDelays);
+  Root[field::ProcessEvents] =
+      driverProcessEventResultsJSON(Result.ProcessEvents);
+  llvm::json::Array ThreadNotifications;
+  for (const auto &N : Result.ThreadNotifications) {
+    llvm::json::Array Routines;
+    for (auto PC : N.DeliveredRoutines)
+      Routines.push_back(Address(PC));
+    ThreadNotifications.push_back(
+        llvm::json::Object{{"process_id", N.ProcessID},
+                           {"thread_id", N.ThreadID},
+                           {"thread_object", Address(N.ThreadObject)},
+                           {"actor_process_id", N.ActorProcessID},
+                           {"actor_thread_key", Address(N.ActorThreadKey)},
+                           {"create", N.Create},
+                           {"completed", N.Completed},
+                           {"delivered_routines", std::move(Routines)}});
+  }
+  Root[field::ThreadNotifications] = std::move(ThreadNotifications);
   llvm::json::Object Exports;
   for (const auto &[Name, Present] : Result.Configuration.KernelExports)
     Exports[Name] = Present;
@@ -771,6 +902,12 @@ std::string driverResultJSON(const DriverResult &Result) {
       {field::Registry, registryJSON(Result.Configuration.Registry)},
       {field::FileSystem,
        driver_filesystem::configurationJSON(Result.Configuration.FileSystem)},
+      {field::RegistryEvents,
+       driverRegistryEventsJSON(Result.Configuration.RegistryEvents)},
+      {field::ProcessEvents,
+       driverProcessEventsJSON(Result.Configuration.ProcessEvents)},
+      {field::FiniteFileSystem,
+       driverFiniteFileSystemJSON(Result.Configuration.FiniteFileSystem)},
       {field::PnpDevices, pnpConfigurationJSON(Result.Configuration)},
       {interruptField::InterruptEvents,
        interruptEventConfigurationJSON(Result.Configuration)},
@@ -808,6 +945,109 @@ std::string driverResultJSON(const DriverResult &Result) {
           .getAsObject())[field::PhysicalMemoryInventory] =
         driver_physical_inventory::toJSON(
             *Result.Configuration.PhysicalMemoryInventory);
+  if (Result.Configuration.Version) {
+    const auto &V = *Result.Configuration.Version;
+    (*Root[field::Configuration].getAsObject())[field::WindowsVersion] =
+        llvm::json::Object{
+            {"major", V.Major}, {"minor", V.Minor}, {"build", V.Build}};
+  }
+  if (!Result.Configuration.KernelImage.empty())
+    (*Root[field::Configuration].getAsObject())[field::KernelImage] =
+        pathToUTF8(Result.Configuration.KernelImage);
+  if (!Result.KernelImageSHA256.empty())
+    (*Root[field::Configuration].getAsObject())[field::KernelImageSHA256] =
+        Result.KernelImageSHA256;
+  if (!Result.Configuration.KernelPDB.empty())
+    (*Root[field::Configuration].getAsObject())[field::KernelPDB] =
+        pathToUTF8(Result.Configuration.KernelPDB);
+  if (!Result.KernelPDBSHA256.empty())
+    (*Root[field::Configuration].getAsObject())[field::KernelPDBSHA256] =
+        Result.KernelPDBSHA256;
+  (*Root[field::Configuration].getAsObject())[field::PoolTagPolicy] =
+      Result.Configuration.PoolTagPolicy == DriverPoolTagPolicy::Windows19041
+          ? "windows-19041"
+          : "strict";
+  if (Result.Configuration.CPUIDPolicy)
+    (*Root[field::Configuration].getAsObject())[field::CPUIDPolicy] =
+        driverCPUIDPolicyJSON(*Result.Configuration.CPUIDPolicy);
+  (*Root[field::Configuration].getAsObject())[field::PageTables] =
+      Result.Configuration.PageTables;
+  if (Result.Configuration.SystemClockIncrement100ns)
+    (*Root[field::Configuration]
+          .getAsObject())[field::SystemClockIncrement100ns] =
+        *Result.Configuration.SystemClockIncrement100ns;
+  if (Result.Configuration.SecurePciEnabled.has_value())
+    (*Root[field::Configuration].getAsObject())[field::SecurePciEnabled] =
+        *Result.Configuration.SecurePciEnabled;
+  if (Result.Configuration.NlsOemMultibyte.has_value())
+    (*Root[field::Configuration].getAsObject())[field::NlsOemMultibyte] =
+        *Result.Configuration.NlsOemMultibyte;
+  if (Result.Configuration.IRPIOPriorityHint)
+    (*Root[field::Configuration].getAsObject())[field::IRPIOPriorityHint] =
+        uint64_t(*Result.Configuration.IRPIOPriorityHint);
+  if (Result.Configuration.RegistryHives)
+    (*Root[field::Configuration].getAsObject())[field::RegistryHives] =
+        driverRegistryHivesJSON(Result.Configuration.RegistryHives);
+  if (Result.Configuration.FilterManagerFileNames)
+    (*Root[field::Configuration].getAsObject())[field::FilterManagerFileNames] =
+        *Result.Configuration.FilterManagerFileNames;
+  if (Result.Configuration.NetworkInterfaces)
+    (*Root[field::Configuration].getAsObject())[field::NetworkInterfaces] =
+        driverNetworkInterfacesJSON(*Result.Configuration.NetworkInterfaces);
+  if (Result.Configuration.NdisConfiguration)
+    (*Root[field::Configuration].getAsObject())[field::NdisConfiguration] =
+        driverNdisConfigurationJSON(*Result.Configuration.NdisConfiguration);
+  if (Result.Configuration.ServiceImages)
+    (*Root[field::Configuration].getAsObject())[field::ServiceImages] =
+        driverServiceImagesJSON(*Result.Configuration.ServiceImages);
+  if (Result.Configuration.PciConfiguration)
+    (*Root[field::Configuration].getAsObject())[field::PciConfiguration] =
+        driverPciConfigurationJSON(*Result.Configuration.PciConfiguration);
+  if (Result.Configuration.PciMcfg)
+    (*Root[field::Configuration].getAsObject())[field::PciMcfg] =
+        driverPciMcfgJSON(*Result.Configuration.PciMcfg);
+  if (Result.Configuration.CodeIntegrityOptions.has_value())
+    (*Root[field::Configuration].getAsObject())[field::CodeIntegrityOptions] =
+        uint64_t(*Result.Configuration.CodeIntegrityOptions);
+  if (Result.Configuration.ProcessInventory)
+    (*Root[field::Configuration].getAsObject())[field::ProcessInventory] =
+        driverProcessInventoryJSON(*Result.Configuration.ProcessInventory);
+  if (Result.Configuration.SectionNamespace)
+    (*Root[field::Configuration].getAsObject())[field::SectionNamespace] =
+        driverSectionNamespaceJSON(*Result.Configuration.SectionNamespace);
+  if (Result.Configuration.KernelMemorySize)
+    (*Root[field::Configuration].getAsObject())[field::KernelMemorySize] =
+        *Result.Configuration.KernelMemorySize;
+  if (Result.Configuration.CallbackDrainPolicy)
+    (*Root[field::Configuration].getAsObject())[field::CallbackDrainPolicy] =
+        std::string(
+            callbackDrainPolicyName(*Result.Configuration.CallbackDrainPolicy));
+  if (Result.Configuration.DmaGuardPolicyEnabled.has_value())
+    (*Root[field::Configuration].getAsObject())[field::DmaGuardPolicyEnabled] =
+        *Result.Configuration.DmaGuardPolicyEnabled;
+  if (Result.Configuration.AcpiTables)
+    (*Root[field::Configuration].getAsObject())[field::AcpiTables] =
+        driverAcpiTablesJSON(*Result.Configuration.AcpiTables);
+  if (Result.Configuration.Smbios)
+    (*Root[field::Configuration].getAsObject())[field::Smbios] =
+        driverSmbiosJSON(*Result.Configuration.Smbios);
+  if (Result.Configuration.DriverNamespace) {
+    llvm::json::Array Names;
+    for (const auto &Name : Result.Configuration.DriverNamespace->EmptyDrivers)
+      Names.push_back(Name);
+    (*Root[field::Configuration].getAsObject())[field::DriverNamespace] =
+        llvm::json::Object{{field::EmptyDrivers, std::move(Names)}};
+  }
+  (*Root[field::Configuration].getAsObject())[field::MDLMappingPolicy] =
+      Result.Configuration.MDLMappingPolicy ==
+              DriverMDLMappingPolicy::Windows19041
+          ? "windows-19041"
+          : "strict";
+  (*Root[field::Configuration].getAsObject())[field::IRPInitializationPolicy] =
+      Result.Configuration.IRPInitializationPolicy ==
+              DriverIRPInitializationPolicy::Windows19041
+          ? "windows-19041"
+          : "strict";
   if (Result.Fault) {
     const auto &Fault = *Result.Fault;
     llvm::json::Object Item{
@@ -992,8 +1232,7 @@ std::string driverResultJSON(const DriverResult &Result) {
     DmaTransfers.push_back(std::move(Item));
   }
   Root[dmaField::DmaTransfers] = std::move(DmaTransfers);
-  llvm::json::Array Calls;
-  for (const auto &Call : Result.Calls) {
+  auto CallJSON = [&](const DriverAPIEvent &Call) {
     llvm::json::Array Arguments;
     for (uint64_t Argument : Call.Arguments)
       Arguments.push_back(Address(Argument));
@@ -1003,11 +1242,11 @@ std::string driverResultJSON(const DriverResult &Result) {
         {field::Result, nullptr},      {field::Detail, Call.Detail}};
     if (Call.Result)
       Event[field::Result] = Address(*Call.Result);
-    Calls.push_back(std::move(Event));
-  }
-  Root[field::Calls] = std::move(Calls);
-  llvm::json::Array Writes;
-  for (const auto &Write : Result.Writes) {
+    if (Call.ReturnAddress)
+      Event[field::ReturnAddress] = Address(*Call.ReturnAddress);
+    return Event;
+  };
+  auto WriteJSON = [&](const DriverMemoryWrite &Write) {
     llvm::json::Object Event{{field::PC, Address(Write.PC)},
                              {field::Phase, Write.Phase},
                              {field::Address, Address(Write.Address)},
@@ -1016,13 +1255,24 @@ std::string driverResultJSON(const DriverResult &Result) {
                              {field::Semantics, profile::WriteSemantics}};
     if (Write.Value)
       Event[field::Value] = Address(*Write.Value);
-    Writes.push_back(std::move(Event));
-  }
-  Root[field::Writes] = std::move(Writes);
+    return Event;
+  };
+  // Keep root ordering and schema, but do not retain a second JSON object tree
+  // for every call/write in a long trace. Each event lives only until emitted.
+  Root[field::Calls] = nullptr;
+  Root[field::Writes] = nullptr;
   llvm::json::Array Messages;
   for (const auto &Message : Result.Messages)
     Messages.push_back(Message);
   Root[field::Messages] = std::move(Messages);
+  llvm::json::Array BugCheckCallbacks;
+  for (const auto &Callback : Result.BugCheckCallbacks)
+    BugCheckCallbacks.push_back(llvm::json::Object{
+        {field::Record, Address(Callback.Record)},
+        {field::Routine, Address(Callback.Routine)},
+        {field::Component, Address(Callback.Component)},
+        {field::ComponentStorageReleased, Callback.ComponentStorageReleased}});
+  Root[field::BugCheckCallbacks] = std::move(BugCheckCallbacks);
   llvm::json::Array Requests;
   for (const auto &Request : Result.Requests) {
     llvm::json::Array UserBuffers;
@@ -1079,6 +1329,7 @@ std::string driverResultJSON(const DriverResult &Result) {
     if (Request.Kind == DriverRequestKind::Pnp ||
         Request.Kind == DriverRequestKind::Power ||
         Request.Origin == DriverRequestOrigin::DriverAllocatedIRP ||
+        Request.Origin == DriverRequestOrigin::IoControlBuilder ||
         Request.Origin == DriverRequestOrigin::FrameworkUsbIdle)
       Item[field::File] = nullptr;
     if (Request.Pnp) {
@@ -1172,9 +1423,43 @@ std::string driverResultJSON(const DriverResult &Result) {
     Requests.push_back(std::move(Item));
   }
   Root[field::Requests] = std::move(Requests);
+  const auto CallCount = std::min<uint64_t>(View.CallTail, Result.Calls.size());
+  const auto WriteCount =
+      std::min<uint64_t>(View.WriteTail, Result.Writes.size());
+  if (View.Enabled)
+    Root["trace_view"] = llvm::json::Object{
+        {"total_calls", uint64_t(Result.Calls.size())},
+        {"first_call_index", uint64_t(Result.Calls.size()) - CallCount},
+        {"total_writes", uint64_t(Result.Writes.size())},
+        {"first_write_index", uint64_t(Result.Writes.size()) - WriteCount}};
   std::string Text;
   llvm::raw_string_ostream OS(Text);
-  OS << llvm::json::Value(std::move(Root));
+  llvm::json::OStream JSON(OS);
+  llvm::SmallVector<llvm::StringRef> Keys;
+  for (const auto &Entry : Root)
+    Keys.push_back(Entry.first);
+  llvm::sort(Keys);
+  JSON.object([&] {
+    for (auto Key : Keys) {
+      if (Key == field::Calls)
+        JSON.attributeArray(Key, [&] {
+          for (const auto &Call :
+               llvm::ArrayRef(Result.Calls).take_back(CallCount))
+            JSON.value(CallJSON(Call));
+        });
+      else if (Key == field::Writes)
+        JSON.attributeArray(Key, [&] {
+          for (const auto &Write :
+               llvm::ArrayRef(Result.Writes).take_back(WriteCount))
+            JSON.value(WriteJSON(Write));
+        });
+      else
+        JSON.attribute(Key, Root.find(Key)->second);
+    }
+  });
   return Text;
+}
+std::string driverResultJSON(const DriverResult &Result) {
+  return driverResultJSONView(Result, {});
 }
 } // namespace neverd::emulation

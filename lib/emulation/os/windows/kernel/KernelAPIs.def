@@ -14,11 +14,14 @@
 //===----------------------------------------------------------------------===//
 
 NEVERD_KERNEL_API(IoCreateDevice, 7, Export)
+NEVERD_KERNEL_API(IoBuildDeviceIoControlRequest, 9, Export)
+NEVERD_KERNEL_API(KeBugCheck, 1, Export)
+NEVERD_KERNEL_API(KeBugCheckEx, 5, Export)
+NEVERD_KERNEL_API(IoGetBaseFileSystemDeviceObject, 1, Export)
 NEVERD_KERNEL_API(IoAttachDeviceToDeviceStack, 2, Export)
 NEVERD_KERNEL_API(IoDetachDevice, 1, Export)
 NEVERD_KERNEL_API(IoGetAttachedDevice, 1, Export)
 NEVERD_KERNEL_API(IoGetRelatedDeviceObject, 1, Export)
-NEVERD_KERNEL_API(IoGetBaseFileSystemDeviceObject, 1, Export)
 NEVERD_KERNEL_API(IoGetDeviceObjectPointer, 4, Export)
 NEVERD_KERNEL_API(IoQueryFileInformation, 5, Export)
 NEVERD_KERNEL_API(ZwQueryInformationFile, 5, Export)
@@ -63,6 +66,8 @@ NEVERD_KERNEL_API(RtlPcToFileHeader, 2, Export)
 NEVERD_KERNEL_API(RtlCopyUnicodeString, 2, Export)
 NEVERD_KERNEL_API(RtlCompareUnicodeString, 3, Export)
 NEVERD_KERNEL_API(RtlEqualUnicodeString, 3, Export)
+NEVERD_KERNEL_API(RtlCharToInteger, 3, Export)
+NEVERD_KERNEL_API(RtlxAnsiStringToUnicodeSize, 1, Export)
 NEVERD_KERNEL_API(MmGetSystemRoutineAddress, 1, Export)
 NEVERD_KERNEL_API(MmIsAddressValid, 1, Export)
 NEVERD_KERNEL_API(MmGetPhysicalAddress, 1, Export)
@@ -88,6 +93,12 @@ NEVERD_KERNEL_API(MmProbeAndLockPages, 3, Export)
 NEVERD_KERNEL_API(MmProbeAndLockProcessPages, 4, Export)
 NEVERD_KERNEL_API(MmUnlockPages, 1, Export)
 NEVERD_KERNEL_API(MmAllocatePagesForMdl, 4, Export)
+NEVERD_KERNEL_API(MmAllocateContiguousMemory, 2, Export)
+NEVERD_KERNEL_API(MmFreeContiguousMemory, 1, Export)
+NEVERD_KERNEL_API(MmAllocateMappingAddress, 2, Export)
+NEVERD_KERNEL_API(MmFreeMappingAddress, 2, Export)
+NEVERD_KERNEL_API(MmMapLockedPagesWithReservedMapping, 4, Export)
+NEVERD_KERNEL_API(MmUnmapReservedMapping, 3, Export)
 NEVERD_KERNEL_API(MmAllocatePagesForMdlEx, 6, Export)
 NEVERD_KERNEL_API(MmFreePagesFromMdl, 1, Export)
 NEVERD_KERNEL_API(KeFlushIoBuffers, 3, Export)
@@ -112,6 +123,15 @@ NEVERD_KERNEL_API(vDbgPrintExWithPrefix, 5, Export)
 NEVERD_KERNEL_API(RtlInitUnicodeString, 2, Export)
 NEVERD_KERNEL_API(RtlGetVersion, 1, Export)
 NEVERD_KERNEL_API(RtlCaptureContext, 1, Export)
+NEVERD_KERNEL_API(RtlUpperString, 2, Export)
+NEVERD_KERNEL_API(RtlUpperChar, 1, Export)
+NEVERD_KERNEL_API(RtlAppendStringToString, 2, Export)
+NEVERD_KERNEL_API(RtlAnsiCharToUnicodeChar, 1, Export)
+NEVERD_KERNEL_API(KeCapturePersistentThreadState, 8, Export)
+NEVERD_KERNEL_API(ZwQueryVirtualMemory, 6, Export)
+// The 19041 Nt entry is private; only ZwQueryVirtualMemory is a PE export.
+NEVERD_KERNEL_API(NtQueryVirtualMemory, 6, Helper)
+NEVERD_KERNEL_API(VslGetSecurePciEnabled, 0, Export)
 NEVERD_KERNEL_API(ExFreePoolWithTag, 2, Export)
 NEVERD_KERNEL_API(IoCreateSymbolicLink, 2, Export)
 NEVERD_KERNEL_API(RtlZeroMemory, 2, Export)
@@ -119,6 +139,8 @@ NEVERD_KERNEL_API(IofCompleteRequest, 2, Export)
 NEVERD_KERNEL_API(IoCompleteRequest, 2, Export)
 NEVERD_KERNEL_API(ExFreePool, 1, Export)
 NEVERD_KERNEL_API(IoDeleteDevice, 1, Export)
+NEVERD_KERNEL_API(IoRegisterShutdownNotification, 1, Export)
+NEVERD_KERNEL_API(IoUnregisterShutdownNotification, 1, Export)
 NEVERD_KERNEL_API(IoDeleteSymbolicLink, 1, Export)
 NEVERD_KERNEL_API(DbgPrint, 1, Export)
 NEVERD_KERNEL_API(IoGetCurrentIrpStackLocation, 1, Helper)
@@ -132,13 +154,21 @@ NEVERD_KERNEL_API(PsGetCurrentThreadId, 0, Export)
 NEVERD_KERNEL_API(PsGetThreadId, 1, Export)
 NEVERD_KERNEL_API(PsGetCurrentProcessId, 0, Export)
 NEVERD_KERNEL_API(PsGetProcessId, 1, Export)
+NEVERD_KERNEL_API(PsGetProcessImageFileName, 1, Export)
+NEVERD_KERNEL_API(PsGetProcessSectionBaseAddress, 1, Export)
+NEVERD_KERNEL_API(PsGetProcessPeb, 1, Export)
+NEVERD_KERNEL_API(IoGetDeviceProperty, 5, Export)
+NEVERD_KERNEL_API(PsGetProcessExitStatus, 1, Export)
 NEVERD_KERNEL_API(PsCreateSystemThread, 7, Export)
+NEVERD_KERNEL_API(PsSetCreateThreadNotifyRoutine, 1, Export)
+NEVERD_KERNEL_API(PsRemoveCreateThreadNotifyRoutine, 1, Export)
 NEVERD_KERNEL_API(PsTerminateSystemThread, 1, Export)
 #define NEVERD_KERNEL_OBJECT_API(Name, Arity, IRQL, Operation)                 \
   NEVERD_KERNEL_API(Name, Arity, Export)
 #include "KernelNamespaceAPIs.def"
 #include "KernelObjectAPIs.def"
 #undef NEVERD_KERNEL_OBJECT_API
+NEVERD_KERNEL_API(ZwQueryInformationThread, 5, Export)
 NEVERD_KERNEL_API(KeStackAttachProcess, 2, Export)
 NEVERD_KERNEL_API(KeUnstackDetachProcess, 1, Export)
 #define NEVERD_KERNEL_SPINLOCK_API(Name, Arity, IRQL, Operation)               \
@@ -146,10 +176,20 @@ NEVERD_KERNEL_API(KeUnstackDetachProcess, 1, Export)
 #include "KernelSpinLockAPIs.def"
 #undef NEVERD_KERNEL_SPINLOCK_API
 NEVERD_KERNEL_API(KeGetCurrentIrql, 0, Export)
+NEVERD_KERNEL_API(KeQueryActiveProcessorCountEx, 1, Export)
+NEVERD_KERNEL_API(KeGetProcessorNumberFromIndex, 2, Export)
 #define NEVERD_KERNEL_EXECUTION_API(Name, Arity, IRQL, Operation)              \
   NEVERD_KERNEL_API(Name, Arity, Export)
 #include "KernelExecutionAPIs.def"
 #undef NEVERD_KERNEL_EXECUTION_API
+#define NEVERD_KERNEL_CLOCK_API(Name, Arity, IRQL, Operation)                  \
+  NEVERD_KERNEL_API(Name, Arity, Export)
+#include "KernelClockAPIs.def"
+#undef NEVERD_KERNEL_CLOCK_API
+#define NEVERD_KERNEL_HAL_API(Name, Arity, IRQL, Operation)                    \
+  NEVERD_KERNEL_API(Name, Arity, Helper)
+#include "KernelHALAPIs.def"
+#undef NEVERD_KERNEL_HAL_API
 #define NEVERD_KERNEL_THREAD_API(Name, Arity, IRQL, Operation)                 \
   NEVERD_KERNEL_API(Name, Arity, Export)
 #include "KernelThreadAPIs.def"
@@ -212,3 +252,31 @@ NEVERD_KERNEL_API(KeDelayExecutionThread, 3, Export)
   NEVERD_KERNEL_API(Name, Arity, Export)
 #include "KernelRegistryAPIs.def"
 #undef NEVERD_KERNEL_REGISTRY_API
+
+#define NEVERD_KERNEL_FILE_API(Name, Arity)                                    \
+  NEVERD_KERNEL_API(Name, Arity, Export)
+#include "KernelFileAPIs.def"
+#undef NEVERD_KERNEL_FILE_API
+
+#define NEVERD_KERNEL_CRT_API(Name, Arity, Operation, Scoped)                  \
+  NEVERD_KERNEL_API(Name, Arity, Export)
+#include "KernelCrtAPIs.def"
+#undef NEVERD_KERNEL_CRT_API
+
+#define NEVERD_KERNEL_CALLBACK_API(Name, Arity, IRQL, Operation)               \
+  NEVERD_KERNEL_API(Name, Arity, Export)
+#include "KernelCallbackAPIs.def"
+#undef NEVERD_KERNEL_CALLBACK_API
+
+#define NEVERD_KERNEL_AVL_API(Name, Arity)                                     \
+  NEVERD_KERNEL_API(Name, Arity, Export)
+#include "KernelAvlAPIs.def"
+#undef NEVERD_KERNEL_AVL_API
+#define NEVERD_KERNEL_SERVICE_API(Name) NEVERD_KERNEL_API(Name, 1, Export)
+#include "KernelServiceAPIs.def"
+#undef NEVERD_KERNEL_SERVICE_API
+
+#define NEVERD_KERNEL_SECTION_API(Name, Arity, IRQL, Operation)                \
+  NEVERD_KERNEL_API(Name, Arity, Export)
+#include "KernelSectionAPIs.def"
+#undef NEVERD_KERNEL_SECTION_API

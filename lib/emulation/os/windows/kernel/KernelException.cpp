@@ -16,6 +16,7 @@
 
 namespace neverd::emulation {
 char KernelGuestException::ID = 0;
+char KernelGuestBugCheck::ID = 0;
 
 std::optional<uint32_t> exceptions::kernelX64ExceptionStatus(uint32_t Vector) {
   switch (Vector) {
@@ -34,6 +35,12 @@ void KernelGuestException::log(llvm::raw_ostream &OS) const {
 }
 
 std::error_code KernelGuestException::convertToErrorCode() const {
+  return llvm::inconvertibleErrorCode();
+}
+void KernelGuestBugCheck::log(llvm::raw_ostream &OS) const {
+  OS << "guest requested bug check 0x" << llvm::utohexstr(Request.Code);
+}
+std::error_code KernelGuestBugCheck::convertToErrorCode() const {
   return llvm::inconvertibleErrorCode();
 }
 } // namespace neverd::emulation

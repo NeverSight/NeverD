@@ -21,7 +21,9 @@
 #include "llvm/Support/FormatVariadic.h"
 
 #include <algorithm>
+#include <array>
 #include <optional>
+#include <tuple>
 #include <vector>
 
 namespace neverd::emulation::runtime {
@@ -580,26 +582,42 @@ llvm::Expected<uint64_t> unicodeOperation(const KernelModel &Model,
       return E;
     return 0;
   }
-  if (static_cast<uint8_t>(A[2]))
+  if (static_cast<uint8_t>(A[2]) && Operation != UnicodeOperation::Prefix)
     return runtimeError("case-insensitive Unicode comparison requires an "
                         "unmodeled Windows case table");
   auto Second = readCountedString(Model, Memory, A[1]);
   if (!Second)
     return Second.takeError();
+  if (Operation == UnicodeOperation::Prefix && First->Length > Second->Length)
+    return 0;
   auto Left = readBytes(Model, Memory, First->Buffer, First->Length);
   if (!Left)
     return Left.takeError();
-  auto Right = readBytes(Model, Memory, Second->Buffer, Second->Length);
+  auto Right = readBytes(
+      Model, Memory, Second->Buffer,
+      Operation == UnicodeOperation::Prefix ? First->Length : Second->Length);
   if (!Right)
     return Right.takeError();
-  int32_t Difference = int32_t(First->Length) - Second->Length;
+  int32_t Difference = Operation == UnicodeOperation::Prefix
+                           ? 0
+                           : int32_t(First->Length) - Second->Length;
   for (size_t I = 0, End = std::min(Left->size(), Right->size()); I < End;
-       I += 2)
-    if (codeUnit(*Left, I) != codeUnit(*Right, I)) {
-      Difference = int32_t(codeUnit(*Left, I)) - codeUnit(*Right, I);
-      break;
+       I += 2) {
+    uint16_t L = codeUnit(*Left, I), R = codeUnit(*Right, I);
+    if (Operation == UnicodeOperation::Prefix && uint8_t(A[2])) {
+      if (L > 0x7f || R > 0x7f)
+        return runtimeError("case-insensitive Unicode prefix requires an "
+                            "explicit NLS table outside ASCII");
+      L = upperAnsiByte(uint8_t(L));
+      R = upperAnsiByte(uint8_t(R));
     }
-  if (Operation == UnicodeOperation::Equal)
+    if (L == R)
+      continue;
+    Difference = int32_t(L) - R;
+    break;
+  }
+  if (Operation == UnicodeOperation::Equal ||
+      Operation == UnicodeOperation::Prefix)
     return Difference == 0;
   return static_cast<uint32_t>(Difference);
 }
@@ -871,35 +889,20 @@ llvm::Expected<uint64_t> compareAnsiStrings(const KernelModel &Model,
                                             GuestMemory &Memory,
                                             llvm::ArrayRef<uint64_t> A,
                                             bool EqualityOnly) {
-  // RtlEqualString and RtlCompareString compare unsigned bytes; the shorter
-  // length orders an equal prefix. Only unequal bytes consult the case table.
-  auto First = readCountedBytes(Model, Memory, A[0]);
-  if (!First)
-    return First.takeError();
-  auto Second = readCountedBytes(Model, Memory, A[1]);
-  if (!Second)
-    return Second.takeError();
-  if (EqualityOnly && First->Length != Second->Length)
-    return 0;
-  const unsigned Common = std::min(First->Length, Second->Length);
-  auto Left = readBytes(Model, Memory, First->Buffer, Common);
-  if (!Left)
-    return Left.takeError();
-  auto Right = readBytes(Model, Memory, Second->Buffer, Common);
-  if (!Right)
-    return Right.takeError();
-  for (unsigned I = 0; I < Common; ++I)
-    if ((*Left)[I] != (*Right)[I]) {
-      if (static_cast<uint8_t>(A[2]))
-        return runtimeError("case-insensitive 8-bit string comparison "
-                            "requires an unmodeled Windows case table");
-      if (EqualityOnly)
-        return 0;
-      return static_cast<uint32_t>(int32_t((*Left)[I]) - (*Right)[I]);
-    }
-  if (EqualityOnly)
-    return 1;
-  return static_cast<uint32_t>(int32_t(First->Length) - Second->Length);
+  if (EqualityOnly) {
+    auto Left = readInteger(Model, Memory, A[0], 2);
+    if (!Left)
+      return Left.takeError();
+    auto Right = readInteger(Model, Memory, A[1], 2);
+    if (!Right)
+      return Right.takeError();
+    if (*Left != *Right)
+      return 0;
+  }
+  auto Compared = compareAnsiStrings(Model, Memory, A);
+  if (!Compared)
+    return Compared.takeError();
+  return EqualityOnly ? uint64_t(*Compared == 0) : *Compared;
 }
 
 llvm::Expected<uint64_t> appendUnicodeString(const KernelModel &Model,
@@ -964,232 +967,20 @@ llvm::Expected<uint64_t> appendUnicodeString(const KernelModel &Model,
 llvm::Expected<uint64_t> prefixUnicodeString(const KernelModel &Model,
                                              GuestMemory &Memory,
                                              llvm::ArrayRef<uint64_t> A) {
-  auto Prefix = readCountedString(Model, Memory, A[0]);
-  if (!Prefix)
-    return Prefix.takeError();
-  auto String = readCountedString(Model, Memory, A[1]);
-  if (!String)
-    return String.takeError();
-  // RVA 0x5edbe0 compares only the prefix's counted units. Equal units never
-  // consult the case table, even for a case-insensitive request.
-  if (String->Length < Prefix->Length)
-    return 0;
-  if (!Prefix->Length)
-    return 1;
-  auto Left = readBytes(Model, Memory, Prefix->Buffer, Prefix->Length);
-  if (!Left)
-    return Left.takeError();
-  auto Right = readBytes(Model, Memory, String->Buffer, Prefix->Length);
-  if (!Right)
-    return Right.takeError();
-  for (size_t I = 0; I < Left->size(); I += 2)
-    if (codeUnit(*Left, I) != codeUnit(*Right, I)) {
-      if (static_cast<uint8_t>(A[2]))
-        return runtimeError("case-insensitive Unicode prefix requires an "
-                            "unmodeled Windows case table");
-      return 0;
-    }
-  return 1;
+  return unicodeOperation(Model, Memory, UnicodeOperation::Prefix, A);
 }
 
 llvm::Expected<uint64_t> integerToUnicodeString(const KernelModel &Model,
                                                 GuestMemory &Memory,
                                                 llvm::ArrayRef<uint64_t> A,
                                                 bool WideValue) {
-  // RtlIntegerToChar (RVA 0x6f7000) and RtlLargeIntegerToChar (0x6f6a70)
-  // format unsigned uppercase digits before accessing the output record.
-  uint64_t Value = WideValue ? A[0] : uint32_t(A[0]);
-  uint32_t Base = static_cast<uint32_t>(A[1]);
-  if (!Base)
-    Base = 10;
-  unsigned Shift = 0;
-  switch (Base) {
-  case 2:
-    Shift = 1;
-    break;
-  case 8:
-    Shift = 3;
-    break;
-  case 10:
-    break;
-  case 16:
-    Shift = 4;
-    break;
-  default:
-    return StatusInvalidParameter;
-  }
-  static constexpr char Digits[] = "0123456789ABCDEF";
-  char Reversed[64];
-  unsigned Count = 0;
-  do {
-    uint32_t Digit;
-    if (Shift) {
-      Digit = Value & ((1u << Shift) - 1);
-      Value >>= Shift;
-    } else {
-      Digit = Value % Base;
-      Value /= Base;
-    }
-    Reversed[Count++] = Digits[Digit];
-  } while (Value);
-  if (!A[2])
-    return runtimeError("UNICODE_STRING record must not be null");
-  if (auto E = Model.validateGuestAccess(A[2], UnicodeRecordSize, false))
-    return E;
-  auto Maximum = Memory.readInteger(A[2] + UnicodeMaximumOffset, 2);
-  if (!Maximum)
-    return Maximum.takeError();
-  // RtlAnsiStringToUnicodeString (RVA 0x6f6840) stores Length before checking
-  // that MaximumLength also holds the terminator.
-  const uint64_t Length = Count * 2;
-  if (auto E = Model.validateGuestAccess(A[2], 2, true))
-    return E;
-  if (auto E = Memory.writeInteger(A[2], Length, 2))
-    return E;
-  if (Length + 2 > *Maximum)
-    return StatusBufferOverflow;
-  auto Buffer = Memory.readInteger(A[2] + UnicodeBufferOffset, 8);
-  if (!Buffer)
-    return Buffer.takeError();
-  std::vector<uint8_t> Bytes(Length, 0);
-  for (unsigned I = 0; I < Count; ++I)
-    Bytes[I * 2] = static_cast<uint8_t>(Reversed[Count - 1 - I]);
-  if (auto E = Model.validateGuestAccess(*Buffer, Bytes.size(), true))
-    return E;
-  if (auto E = Memory.write(*Buffer, Bytes))
-    return E;
-  // The target conversion publishes digits before reloading Buffer for the
-  // terminator. A caller buffer may overlap its own UNICODE_STRING record.
-  Buffer = Memory.readInteger(A[2] + UnicodeBufferOffset, 8);
-  if (!Buffer)
-    return Buffer.takeError();
-  if (*Buffer > UINT64_MAX - Length)
-    return runtimeError("integer string terminator address overflows");
-  if (auto E = Model.validateGuestAccess(*Buffer + Length, 2, true))
-    return E;
-  if (auto E = Memory.writeInteger(*Buffer + Length, 0, 2))
-    return E;
-  return StatusSuccess;
+  return integerUnicodeString(Model, Memory, A, WideValue);
 }
 
 llvm::Expected<uint64_t> unicodeStringToInteger(const KernelModel &Model,
                                                 GuestMemory &Memory,
                                                 llvm::ArrayRef<uint64_t> A) {
-  // RVA 0x6638e0: empty or odd lengths and unsupported radices store zero and
-  // fail; other text succeeds and stops at the first invalid digit.
-  if (!A[0])
-    return runtimeError("UNICODE_STRING record must not be null");
-  if (auto E = Model.validateGuestAccess(A[0], UnicodeRecordSize, false))
-    return E;
-  auto Length = Memory.readInteger(A[0], 2);
-  if (!Length)
-    return Length.takeError();
-  auto Buffer = Memory.readInteger(A[0] + UnicodeBufferOffset, 8);
-  if (!Buffer)
-    return Buffer.takeError();
-  if (auto E = Model.validateGuestAccess(A[2], 4, true))
-    return E;
-  auto Store = [&](uint32_t Value,
-                   uint64_t Status) -> llvm::Expected<uint64_t> {
-    if (auto E = Memory.writeInteger(A[2], Value, 4))
-      return E;
-    return Status;
-  };
-  if (!*Length || (*Length & 1))
-    return Store(0, StatusInvalidParameter);
-  auto Bytes = readBytes(Model, Memory, *Buffer, *Length);
-  if (!Bytes)
-    return Bytes.takeError();
-  // Take yields zero once the counted text is exhausted, like the routine's
-  // remaining-unit checks; an embedded zero unit also ends the digits.
-  size_t Index = 0;
-  size_t Remaining = *Length / 2;
-  auto Take = [&]() -> uint16_t {
-    if (!Remaining)
-      return 0;
-    --Remaining;
-    return codeUnit(*Bytes, 2 * Index++);
-  };
-  // Units up to and including U+0020 are leading whitespace.
-  uint16_t First = 0;
-  while (Remaining) {
-    const uint16_t Unit = Take();
-    if (Unit > 0x20) {
-      First = Unit;
-      break;
-    }
-  }
-  uint16_t Current = First;
-  if (First == u'+' || First == u'-')
-    Current = Take();
-  uint32_t Base = static_cast<uint32_t>(A[1]);
-  unsigned Shift = 0;
-  if (!Base) {
-    // Only a zero radix recognizes 0x, 0o and 0b. Any other unit after the
-    // leading zero is read again as the first digit.
-    Base = 10;
-    if (Current == u'0') {
-      if (Remaining) {
-        const size_t SavedIndex = Index;
-        const size_t SavedRemaining = Remaining;
-        switch (Take()) {
-        case u'x':
-          Base = 16;
-          Shift = 4;
-          break;
-        case u'o':
-          Base = 8;
-          Shift = 3;
-          break;
-        case u'b':
-          Base = 2;
-          Shift = 1;
-          break;
-        default:
-          Index = SavedIndex;
-          Remaining = SavedRemaining;
-          break;
-        }
-      }
-      Current = Take();
-    }
-  } else {
-    switch (Base) {
-    case 2:
-      Shift = 1;
-      break;
-    case 8:
-      Shift = 3;
-      break;
-    case 10:
-      break;
-    case 16:
-      Shift = 4;
-      break;
-    default:
-      return Store(0, StatusInvalidParameter);
-    }
-  }
-  uint32_t Value = 0;
-  while (Current) {
-    uint32_t Digit;
-    if (uint16_t(Current - u'0') <= 9)
-      Digit = Current - u'0';
-    else if (uint16_t(Current - u'A') <= 5)
-      Digit = Current - u'A' + 10;
-    else if (uint16_t(Current - u'a') <= 5)
-      Digit = Current - u'a' + 10;
-    else
-      break;
-    if (Digit >= Base)
-      break;
-    // The routine accumulates without overflow checks in 32 bits.
-    Value = Shift ? Digit | (Value << Shift) : Digit + Base * Value;
-    Current = Take();
-  }
-  if (First == u'-')
-    Value = 0u - Value;
-  return Store(Value, StatusSuccess);
+  return unicodeToInteger(Model, Memory, A);
 }
 
 namespace {
@@ -1321,6 +1112,8 @@ llvm::Expected<uint64_t> cStringCheckedWrite(const KernelModel &Model,
     if (Prefix == Capacity)
       return Clear(Invalid);
   }
+  if (Append && Destination == Source)
+    return runtimeError("overlapping secure strings have undefined behavior");
   const uint64_t Available = Capacity - Prefix;
   for (uint64_t I = 0;; ++I) {
     auto Unit = readScanUnit(Model, Memory, Source, I, UnitWidth);
@@ -1544,6 +1337,272 @@ llvm::Expected<uint64_t> cStringSpan(const KernelModel &Model,
     if (!*Unit || (Complement ? inSet(*Unit) : !inSet(*Unit)))
       return Index;
   }
+}
+
+llvm::Expected<uint64_t> appendUnicode(const KernelModel &Model,
+                                       GuestMemory &Memory,
+                                       llvm::ArrayRef<uint64_t> A) {
+  if (!A[1])
+    return 0;
+  std::vector<uint8_t> Text;
+  bool Terminated = false;
+  for (unsigned I = 0; I < MaxCountedUnicodeBytes; I += 2) {
+    if (A[1] > UINT64_MAX - I)
+      return runtimeError("Unicode append source address overflows");
+    auto Unit = readInteger(Model, Memory, A[1] + I, 2);
+    if (!Unit)
+      return Unit.takeError();
+    if (!*Unit) {
+      Terminated = true;
+      break;
+    }
+    Text.push_back(uint8_t(*Unit));
+    Text.push_back(uint8_t(*Unit >> 8));
+  }
+  if (!Terminated)
+    return runtimeError(
+        "Unicode append source exceeds bounded terminated string");
+  auto Destination = readCountedString(Model, Memory, A[0]);
+  if (!Destination)
+    return Destination.takeError();
+  const uint64_t Length = Destination->Length + Text.size();
+  if (Length > Destination->MaximumLength)
+    return uint64_t(0xc0000023);
+  if (Length + 2 <= Destination->MaximumLength) {
+    Text.push_back(0);
+    Text.push_back(0);
+  }
+  if (Destination->Buffer > UINT64_MAX - Destination->Length)
+    return runtimeError("Unicode append destination address overflows");
+  if (auto E = Model.validateGuestAccess(A[0], 2, true))
+    return E;
+  const uint64_t Output = Destination->Buffer + Destination->Length;
+  if (auto E = Model.validateGuestAccess(Output, Text.size(), true))
+    return E;
+  auto Header = Memory.pinBacking(A[0], 16);
+  if (!Header)
+    return Header.takeError();
+  if (!Text.empty()) {
+    auto Data = Memory.pinBacking(Output, Text.size());
+    if (!Data)
+      return Data.takeError();
+    if (Data->overlaps(*Header))
+      return runtimeError(
+          "Unicode append output aliases its destination record");
+  }
+  if (!Text.empty())
+    if (auto E = Memory.write(Output, Text))
+      return E;
+  if (auto E = Memory.writeInteger(A[0], Length, 2))
+    return E;
+  return 0;
+}
+
+namespace {
+int digit(uint16_t Unit) {
+  if (Unit >= '0' && Unit <= '9')
+    return Unit - '0';
+  if (Unit >= 'a' && Unit <= 'f')
+    return Unit - 'a' + 10;
+  if (Unit >= 'A' && Unit <= 'F')
+    return Unit - 'A' + 10;
+  return -1;
+}
+llvm::Expected<uint32_t>
+parseInteger(uint32_t Base,
+             llvm::function_ref<llvm::Expected<uint16_t>(size_t)> Read) {
+  size_t I = 0;
+  auto Unit = Read(I);
+  if (!Unit)
+    return Unit.takeError();
+  while (*Unit <= 0x20) {
+    Unit = Read(++I);
+    if (!Unit)
+      return Unit.takeError();
+  }
+  bool Negative = false;
+  if (*Unit == '+' || *Unit == '-') {
+    Negative = *Unit == '-';
+    Unit = Read(++I);
+    if (!Unit)
+      return Unit.takeError();
+  }
+  if (!Base) {
+    Base = 10;
+    if (*Unit == '0') {
+      auto Prefix = Read(I + 1);
+      if (!Prefix)
+        return Prefix.takeError();
+      if (*Prefix == 'x' || *Prefix == 'b' || *Prefix == 'o') {
+        Base = *Prefix == 'x' ? 16 : *Prefix == 'b' ? 2 : 8;
+        I += 2;
+        Unit = Read(I);
+        if (!Unit)
+          return Unit.takeError();
+      }
+    }
+  }
+  uint32_t Value = 0;
+  while (true) {
+    const int Digit = digit(*Unit);
+    if (Digit < 0 || uint32_t(Digit) >= Base)
+      break;
+    Value = Value * Base + uint32_t(Digit);
+    Unit = Read(++I);
+    if (!Unit)
+      return Unit.takeError();
+  }
+  return Negative ? uint32_t(0) - Value : Value;
+}
+llvm::Error rejectInputOutputOverlap(GuestMemory &Memory, uint64_t Record,
+                                     const CountedString &S, uint64_t Output,
+                                     unsigned Size) {
+  auto Overlap = [&](uint64_t Address, uint64_t Count) {
+    return Count &&
+           (Output > UINT64_MAX - Size || Address > UINT64_MAX - Count ||
+            (Output < Address + Count && Address < Output + Size));
+  };
+  if (Overlap(Record, 16) || Overlap(S.Buffer, S.Length))
+    return runtimeError(
+        "overlapping RTL parser input and output are unmodeled");
+  auto Out = Memory.pinBacking(Output, Size);
+  if (!Out)
+    return Out.takeError();
+  auto Header = Memory.pinBacking(Record, 16);
+  if (!Header)
+    return Header.takeError();
+  if (Out->overlaps(*Header))
+    return runtimeError("aliased RTL parser input and output are unmodeled");
+  if (S.Length) {
+    auto Text = Memory.pinBacking(S.Buffer, S.Length);
+    if (!Text)
+      return Text.takeError();
+    if (Out->overlaps(*Text))
+      return runtimeError("aliased RTL parser input and output are unmodeled");
+  }
+  return llvm::Error::success();
+}
+} // namespace
+
+llvm::Expected<uint64_t> unicodeToInteger(const KernelModel &Model,
+                                          GuestMemory &Memory,
+                                          llvm::ArrayRef<uint64_t> A) {
+  if (auto E = Model.validateGuestAccess(A[0], UnicodeRecordSize, false))
+    return E;
+  auto Length = Memory.readInteger(A[0], 2);
+  if (!Length)
+    return Length.takeError();
+  auto Buffer = Memory.readInteger(A[0] + UnicodeBufferOffset, 8);
+  if (!Buffer)
+    return Buffer.takeError();
+  const CountedString Captured{uint16_t(*Length), UINT16_MAX, *Buffer};
+  const auto *Source = &Captured;
+  if (auto E = rejectInputOutputOverlap(Memory, A[0], *Source, A[2], 4))
+    return E;
+  if (auto E = Model.validateGuestAccess(A[2], 4, true))
+    return E;
+  if (auto E = Memory.writeInteger(A[2], 0, 4))
+    return E;
+  if (!Source->Length || (Source->Length & 1))
+    return StatusInvalidParameter;
+  uint32_t Base = uint32_t(A[1]);
+  if (Base && Base != 2 && Base != 8 && Base != 10 && Base != 16)
+    return StatusInvalidParameter;
+  auto Bytes = readBytes(Model, Memory, Source->Buffer, Source->Length);
+  if (!Bytes)
+    return Bytes.takeError();
+  auto Value = parseInteger(Base, [&](size_t I) -> llvm::Expected<uint16_t> {
+    return I < Bytes->size() / 2 ? codeUnit(*Bytes, I * 2) : uint16_t(0xffff);
+  });
+  if (!Value)
+    return Value.takeError();
+  if (auto E = Memory.writeInteger(A[2], *Value, 4))
+    return E;
+  return 0;
+}
+
+llvm::Expected<uint64_t> charToInteger(const KernelModel &Model,
+                                       GuestMemory &Memory,
+                                       llvm::ArrayRef<uint64_t> A) {
+  const uint32_t Base = uint32_t(A[1]);
+  // Unlike the counted Unicode entry, this native entry rejects the radix
+  // before reading the source or touching the output.
+  if (Base && Base != 2 && Base != 8 && Base != 10 && Base != 16)
+    return StatusInvalidParameter;
+  auto Value = parseInteger(Base, [&](size_t I) -> llvm::Expected<uint16_t> {
+    if (I >= MaxCountedUnicodeBytes || A[0] > UINT64_MAX - I)
+      return runtimeError(
+          "RTL character integer input exceeds bounded readable bytes");
+    auto Byte = readInteger(Model, Memory, A[0] + I, 1);
+    if (!Byte)
+      return Byte.takeError();
+    return uint16_t(*Byte);
+  });
+  if (!Value)
+    return Value.takeError();
+  if (auto E = Model.validateGuestAccess(A[2], 4, true))
+    return E;
+  if (auto E = Memory.writeInteger(A[2], *Value, 4))
+    return E;
+  return 0;
+}
+
+llvm::Expected<uint64_t> guidFromUnicode(const KernelModel &Model,
+                                         GuestMemory &Memory,
+                                         llvm::ArrayRef<uint64_t> A) {
+  auto Source = readCountedString(Model, Memory, A[0]);
+  if (!Source)
+    return Source.takeError();
+  if (auto E = rejectInputOutputOverlap(Memory, A[0], *Source, A[1], 16))
+    return E;
+  auto Bytes = readBytes(Model, Memory, Source->Buffer, Source->Length);
+  if (!Bytes)
+    return Bytes.takeError();
+  auto Unit = [&](size_t I) {
+    return I * 2 < Bytes->size() ? codeUnit(*Bytes, I * 2) : 0;
+  };
+  if (Unit(0) != '{')
+    return StatusInvalidParameter;
+  size_t I = 1;
+  auto Field = [&](unsigned Digits) -> std::optional<uint32_t> {
+    uint32_t Value = 0;
+    for (unsigned N = 0; N < Digits; ++N) {
+      const int D = digit(Unit(I++));
+      if (D < 0)
+        return std::nullopt;
+      Value = (Value << 4) | uint32_t(D);
+    }
+    return Value;
+  };
+  for (auto [Digits, Offset, Width] :
+       {std::tuple{8u, 0u, 4u}, std::tuple{4u, 4u, 2u},
+        std::tuple{4u, 6u, 2u}}) {
+    auto Value = Field(Digits);
+    if (!Value)
+      return StatusInvalidParameter;
+    if (auto E = Model.validateGuestAccess(A[1] + Offset, Width, true))
+      return E;
+    if (auto E = Memory.writeInteger(A[1] + Offset, *Value, Width))
+      return E;
+    if (Unit(I++) != '-')
+      return StatusInvalidParameter;
+  }
+  std::array<uint8_t, 8> Tail;
+  for (unsigned N = 0; N < 8; ++N) {
+    if (N == 2 && Unit(I++) != '-')
+      return StatusInvalidParameter;
+    auto Value = Field(2);
+    if (!Value)
+      return StatusInvalidParameter;
+    Tail[N] = uint8_t(*Value);
+  }
+  if (Unit(I++) != '}' || Unit(I))
+    return StatusInvalidParameter;
+  if (auto E = Model.validateGuestAccess(A[1] + 8, 8, true))
+    return E;
+  if (auto E = Memory.write(A[1] + 8, Tail))
+    return E;
+  return 0;
 }
 
 llvm::Expected<std::string> formatDebugMessage(const KernelModel &Model,

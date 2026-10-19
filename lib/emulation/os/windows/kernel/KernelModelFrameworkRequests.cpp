@@ -59,8 +59,15 @@ llvm::Error KernelModel::validateRequestCompletion(uint64_t IRP,
   if (!Request || Request->Completed)
     return frameworkRequestError(
         "completion requires the active IRP and cannot occur twice");
-  if (DriverIRPs.contains(IRP))
-    return validateDriverIRPCompletion(IRP, Status, Information);
+  if (auto A = DriverIRPs.find(IRP); A != DriverIRPs.end()) {
+    if (!A->second.Builder)
+      return validateDriverIRPCompletion(IRP, Status, Information);
+    if (Information > Request->OutputSize && Request->OutputSize)
+      return frameworkRequestError(
+          "builder completion exceeds output capacity");
+    if (auto E = validateBuiltControlCompletion(IRP))
+      return E;
+  }
   if (const auto File = FileObjects.find(Request->FileAddress);
       File != FileObjects.end() &&
       File->second.Source == OpenFile::Origin::DriverCreate) {

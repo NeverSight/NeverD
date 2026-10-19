@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "architecture": "x64",
+  "windows_version": {"major": 10, "minor": 0, "build": 19041},
+  "modules": [
+    {
+      "name": "ntoskrnl.exe",
+      "file_version": "10.0.19041.6456",
+      "image": "images/ntoskrnl.exe",
+      "image_sha256": "563f486f45853248e54b3ee800d6b19289101c6cca15e0e3fa11a70452b5ce91",
+      "pdb": "symbols/ntkrnlmp.pdb",
+      "pdb_sha256": "b06e15ab4cbcb75bc5f85880b0554a0978b58cae521f6f8f2847ead8fc2e87f8",
+      "pdb_guid": "F57E740B-088E-5056-E8AF-0772F1CC5BEB",
+      "pdb_age": 1
+    }
+  ]
+}

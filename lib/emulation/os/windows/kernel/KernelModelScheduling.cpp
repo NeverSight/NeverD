@@ -11,6 +11,10 @@
 
 #include "KernelAPINames.h"
 #include "KernelModel.h"
+#include "KernelModelRuntime.h"
+#include "KernelObjectTypes.h"
+#include "KernelReferenceImage.h"
+#include "KernelReferenceThread.h"
 #include "KernelWaits.h"
 #include "WindowsKernelLayout.h"
 
@@ -46,14 +50,57 @@ llvm::Expected<uint64_t> KernelModel::currentThreadObject() {
     }
     // Foreground requests can run in different process contexts. A retained
     // old thread must never acquire the next requestor's process identity.
-    retireBorrowedThread(CurrentThreadKey);
+    if (Version || ProcessNotificationState)
+      CurrentThreadObjects.erase(CurrentThreadKey);
+    else
+      retireBorrowedThread(CurrentThreadKey);
   }
-  auto Object = allocate(profile::ProcessTokenSize);
+  if (Version || ProcessNotificationState)
+    for (const auto &[Object, T] : ThreadObjects)
+      if (!T.System && !T.Exited && T.CallbackID == CurrentThreadKey &&
+          T.ProcessID == ProcessID) {
+        CurrentThreadObjects[CurrentThreadKey] = Object;
+        return Object;
+      }
+  const bool NativeHeader = Version && DebuggerReference &&
+                            hasKernelThreadConstruction(*DebuggerReference);
+  if (NativeHeader) {
+    auto Header = allocate(0x30);
+    if (!Header)
+      return Header.takeError();
+  }
+  auto Object =
+      allocate((Version || DebuggerReference) ? ThreadObjectSize
+                                              : profile::ProcessTokenSize);
   if (!Object)
     return Object.takeError();
+  if (NativeHeader)
+    NativeInitialThreadViews.emplace(*Object,
+                                     NativeInitialThreadView{0, 0, false});
   CurrentThreadObjects.emplace(CurrentThreadKey, *Object);
   ThreadObjects.emplace(*Object, ThreadObject{CurrentThreadKey, ProcessID});
   ReferencedObjects.emplace(*Object, ObjectReferences{ObjectKind::Thread});
+  {
+    auto ID = threadClientID(*Object);
+    if (!ID)
+      return ID.takeError();
+    std::optional<uint64_t> Start;
+    if (CurrentThreadKey == profile::StackBase &&
+        ProcessID == windows::SystemProcessID)
+      Start = ForegroundThreadStart;
+    else if (const auto &Active = Scheduler.active();
+             Active && Active->ID == CurrentThreadKey)
+      Start = Active->PC;
+    if (!Start && ProcessInventory)
+      for (const auto &P : *ProcessInventory)
+        if (P.ProcessID == ProcessID && P.BorrowedThreadStart)
+          Start = P.BorrowedThreadStart;
+    if (auto E = publishThreadIdentity(
+            *Object, ThreadIdentity{*ID, Start,
+                                    ProcessID ? std::optional(ProcessID)
+                                              : std::nullopt}))
+      return E;
+  }
   return *Object;
 }
 
@@ -101,15 +148,29 @@ llvm::Expected<uint64_t> KernelModel::allocateWorkItem(uint64_t Device) {
   return *Address;
 }
 
+bool KernelModel::isSystemThreadEntry(uint64_t PC) const {
+  const auto &Active = Scheduler.active();
+  if (!Active || Active->Kind != KernelScheduler::CallbackKind::SystemThread ||
+      Active->PC != PC || Active->ID != CurrentThreadKey)
+    return false;
+  const auto Thread = ThreadObjects.find(Active->Object);
+  return Thread != ThreadObjects.end() && !Thread->second.Exited &&
+         Thread->second.CallbackID == Active->ID;
+}
+
 llvm::Expected<uint64_t>
 KernelModel::createSystemThread(llvm::ArrayRef<uint64_t> A) {
+  if (auto E = canStartThreadNotification())
+    return E;
   if (!A[0] || !A[5])
     return windows::StatusInvalidParameter;
   if (A[3])
     return schedulingError("non-system process handles are unsupported for "
                            "system threads");
-  if (uint32_t(A[1]) & ~windows::ThreadAllAccess)
-    return schedulingError("unsupported system-thread access mask");
+  auto MappedAccess = mapObjectAccess(ObjectKind::Thread, uint32_t(A[1]));
+  if (!MappedAccess)
+    return MappedAccess.takeError();
+  const uint32_t Access = *MappedAccess;
   uint32_t Attributes = 0;
   if (A[2]) {
     if (auto E =
@@ -141,13 +202,14 @@ KernelModel::createSystemThread(llvm::ArrayRef<uint64_t> A) {
     Attributes = uint32_t(*Flags);
   }
   const bool CallerInUserProcess =
-      (CurrentExecution == profile::StackBase && UserRequestContext) ||
-      (hasProcessAttachment(CurrentExecution));
+      handleProcessID() != windows::SystemProcessID;
   if (CallerInUserProcess && !(Attributes & windows::ObjectKernelHandle))
     return schedulingError("system-thread creation outside the system process "
                            "requires OBJ_KERNEL_HANDLE");
   if (auto E = validateObjectOutput(A[0], 8))
     return E;
+  if (A[4] && A[0] < A[4] + 16 && A[4] < A[0] + 8)
+    return schedulingError("overlapping thread outputs are unsupported");
   if (A[4])
     if (auto E = validateObjectOutput(A[4], windows::ClientIDSize))
       return E;
@@ -158,8 +220,7 @@ KernelModel::createSystemThread(llvm::ArrayRef<uint64_t> A) {
     return windows::StatusInsufficientResources;
   const uint64_t Aligned = (NextAllocation + windows::PoolAlignment - 1) &
                            ~uint64_t(windows::PoolAlignment - 1);
-  if (Aligned > AllocationEnd ||
-      profile::ProcessTokenSize > AllocationEnd - Aligned)
+  if (Aligned > AllocationEnd || ThreadObjectSize > AllocationEnd - Aligned)
     return windows::StatusInsufficientResources;
   KernelScheduler::Callback Callback;
   Callback.Object = 1;
@@ -171,34 +232,63 @@ KernelModel::createSystemThread(llvm::ArrayRef<uint64_t> A) {
     return E;
   // The arena and scheduler are preflighted, so a faulting output cannot
   // reserve a thread object or callback identity.
-  if (auto E = Memory.writeInteger(A[0], NextObjectHandle, 8))
-    return E;
-  auto Object = allocate(profile::ProcessTokenSize);
+  if (ThreadNotifiers.empty())
+    if (auto E = Memory.writeInteger(A[0], NextObjectHandle, 8))
+      return E;
+  auto Object =
+      allocate((Version || DebuggerReference) ? ThreadObjectSize
+                                              : profile::ProcessTokenSize);
   if (!Object)
     return Object.takeError();
   Callback.Object = *Object;
   Callback.Thread = *Object;
-  auto ID = Scheduler.enqueueSystemThread(std::move(Callback));
+  const bool Reserved = !ThreadNotifiers.empty();
+  auto ID = Reserved ? Scheduler.reserveSystemThread(std::move(Callback))
+                     : Scheduler.enqueueSystemThread(std::move(Callback));
   if (!ID)
     return ID.takeError();
   ReferencedObjects.emplace(*Object, ObjectReferences{ObjectKind::Thread});
-  retainObjectHandle(*Object, uint32_t(A[1]),
-                     Attributes | uint32_t(windows::ObjectKernelHandle),
-                     windows::SystemProcessID);
   ThreadObject Thread;
   Thread.CallbackID = *ID;
   Thread.ProcessID = windows::SystemProcessID;
   Thread.System = true;
   ThreadObjects.emplace(*Object, Thread);
-  if (A[4]) {
-    // CLIENT_ID{UniqueProcess, UniqueThread} for the new system-process thread.
-    auto Thread = threadClientID(*Object);
-    if (!Thread)
-      return Thread.takeError();
-    if (auto E = Memory.writeInteger(A[4], windows::SystemProcessID, 8))
+  if (ThreadNotifiers.empty()) {
+    retainObjectHandle(*Object, Access,
+                       Attributes | uint32_t(windows::ObjectKernelHandle),
+                       windows::SystemProcessID);
+    if (A[4]) {
+      // CLIENT_ID{UniqueProcess, UniqueThread} for the new system-process
+      // thread.
+      auto Thread = threadClientID(*Object);
+      if (!Thread)
+        return Thread.takeError();
+      if (auto E = Memory.writeInteger(A[4], windows::SystemProcessID, 8))
+        return E;
+      if (auto E = Memory.writeInteger(A[4] + windows::ClientIDThreadOffset,
+                                       *Thread, 8))
+        return E;
+    }
+  }
+  auto ClientID = threadClientID(*Object);
+  if (!ClientID)
+    return ClientID.takeError();
+  if (auto E = publishThreadIdentity(
+          *Object,
+          ThreadIdentity{*ClientID, A[5], uint32_t(windows::SystemProcessID)}))
+    return E;
+  if (!ThreadNotifiers.empty()) {
+    ThreadCreationOutput Output{
+        A[0], A[4], NextObjectHandle,
+        ObjectHandle{*Object, Access,
+                     Attributes | uint32_t(windows::ObjectKernelHandle),
+                     uint32_t(windows::SystemProcessID)},
+        Reserved};
+    NextObjectHandle += profile::SystemThreadHandleStride;
+    if (auto E = startThreadNotification(*Object, true, std::move(Output)))
       return E;
-    if (auto E = Memory.writeInteger(A[4] + windows::ClientIDThreadOffset,
-                                     *Thread, 8))
+  } else if (Version) {
+    if (auto E = startThreadNotification(*Object, true))
       return E;
   }
   return uint64_t(0);
@@ -207,7 +297,8 @@ KernelModel::createSystemThread(llvm::ArrayRef<uint64_t> A) {
 llvm::Expected<uint64_t> KernelModel::terminateSystemThread(uint32_t Status) {
   const auto &Active = Scheduler.active();
   if (!Active || Active->Kind != KernelScheduler::CallbackKind::SystemThread ||
-      CurrentExecution == profile::StackBase || PendingThreadTermination)
+      CurrentExecution == profile::StackBase ||
+      PendingThreadTerminations.contains(CurrentThreadKey))
     return schedulingError(
         "PsTerminateSystemThread requires the running system thread");
   auto Thread = ThreadObjects.find(Active->Object);
@@ -220,14 +311,104 @@ llvm::Expected<uint64_t> KernelModel::terminateSystemThread(uint32_t Status) {
   if (threadHoldsExecutiveResource(CurrentThreadKey))
     return schedulingError(
         "system thread termination retains an executive resource");
+  for (const auto &[ID, N] : ThreadNotifications)
+    if (N.Active && N.Thread == CurrentThreadKey)
+      return schedulingError(
+          "cannot terminate from a thread notification callback");
+  if (auto E = canStartThreadNotification())
+    return E;
+  for (const auto &[IRP, A] : DriverIRPs)
+    if (A.Builder && !A.StorageReleased &&
+        A.Builder->ThreadKey == CurrentThreadKey)
+      return schedulingError("thread exit with outstanding synchronous IOCTL "
+                             "requests requires cancellation/drain support");
   Thread->second.ExitStatus = Status;
   Thread->second.Terminating = true;
-  PendingThreadTermination = Status;
+  if (auto E = startThreadNotification(Active->Object, false))
+    return E;
   return uint64_t(0);
 }
 
 std::optional<uint32_t> KernelModel::takeThreadTermination() {
-  return std::exchange(PendingThreadTermination, std::nullopt);
+  auto It = PendingThreadTerminations.find(CurrentThreadKey);
+  if (It == PendingThreadTerminations.end())
+    return std::nullopt;
+  const auto Status = It->second;
+  PendingThreadTerminations.erase(It);
+  return Status;
+}
+
+uint32_t KernelModel::handleProcessID() const {
+  const auto Context = executionProcessContext();
+  return Context ? Context->ProcessID : windows::SystemProcessID;
+}
+
+bool KernelModel::canAccessHandle(uint32_t Attributes,
+                                  uint32_t ProcessID) const {
+  return (Attributes & windows::ObjectKernelHandle) ||
+         ProcessID == handleProcessID();
+}
+
+bool KernelModel::canAccessThreadHandle(const ThreadHandle &Handle) const {
+  return canAccessHandle(Handle.Attributes, Handle.ProcessID);
+}
+
+bool KernelModel::hasThreadHandles(uint64_t Object) const {
+  return std::any_of(
+      ObjectHandles.begin(), ObjectHandles.end(),
+      [&](const auto &Entry) { return Entry.second.Object == Object; });
+}
+
+llvm::Expected<uint64_t>
+KernelModel::queryThreadInformation(llvm::ArrayRef<uint64_t> A) {
+  if (uint32_t(A[1]) != windows::ThreadQuerySetWin32StartAddress)
+    return llvm::createStringError(llvm::inconvertibleErrorCode(),
+                                   "unmodeled thread information class: %u",
+                                   uint32_t(A[1]));
+  // The inspected 19041 NtQueryInformationThread class-9 branch requires an
+  // exact pointer extent and leaves both outputs untouched on mismatch.
+  if (uint32_t(A[3]) != profile::PointerSize)
+    return windows::StatusInfoLengthMismatch;
+  uint64_t Object = 0;
+  if (A[0] == windows::CurrentThreadPseudoHandle) {
+    auto Current = currentThreadObject();
+    if (!Current)
+      return Current.takeError();
+    Object = *Current;
+  } else {
+    const auto Handle = ObjectHandles.find(A[0]);
+    if (Handle == ObjectHandles.end() || !canAccessThreadHandle(Handle->second))
+      return windows::StatusInvalidHandle;
+    Object = Handle->second.Object;
+  }
+  const auto Thread = ThreadIdentities.find(Object);
+  if (Thread == ThreadIdentities.end() || !Thread->second.StartAddress)
+    return schedulingError(
+        "queried thread has no modeled execution start address");
+  auto Writable = [&](uint64_t Address, uint32_t Size) -> llvm::Error {
+    if (auto E = runtime::checkBufferRange(Address, Size))
+      return E;
+    if (auto E = validateGuestAccess(Address, Size, true))
+      return E;
+    auto Allowed = Memory.canAccess(Address, Size, Write);
+    if (!Allowed)
+      return Allowed.takeError();
+    if (!*Allowed)
+      return schedulingError("thread information output is not writable");
+    return llvm::Error::success();
+  };
+  if (auto E = Writable(A[2], profile::PointerSize))
+    return E;
+  if (A[4])
+    if (auto E = Writable(A[4], 4))
+      return E;
+  if (auto E = Memory.writeInteger(A[2], *Thread->second.StartAddress, 8))
+    return E;
+  // This ordering also defines overlapping information and ULONG length slots.
+  if (A[4])
+    if (auto E = Memory.writeInteger(A[4], 8, 4))
+      return E;
+  return uint64_t(0);
 }
 
 llvm::Error KernelModel::queueWorkItem(llvm::ArrayRef<uint64_t> Arguments) {
@@ -274,10 +455,15 @@ llvm::Error KernelModel::updateDeviceReferences(uint64_t Device) {
   const uint64_t FileCount = std::count_if(
       FileObjects.begin(), FileObjects.end(),
       [&](const auto &Entry) { return Entry.second.Device == Device; });
+  const uint32_t NativeFileCount = std::count_if(
+      NativeOpenFiles.begin(), NativeOpenFiles.end(), [&](const auto &Entry) {
+        return Entry.second.Device == Device &&
+               Entry.second.State == NativeFileState::Open;
+      });
   // Each file body retains its device until failed CREATE or final CLOSE.
   // Caller pointer references and IRP route holds are separate owners.
-  return Memory.writeInteger(Device + windows::DeviceReferenceCount, FileCount,
-                             4);
+  return Memory.writeInteger(Device + windows::DeviceReferenceCount,
+                             FileCount + NativeFileCount, 4);
 }
 
 llvm::Expected<std::optional<KernelScheduler::Invocation>>
@@ -359,7 +545,7 @@ KernelModel::restoreExecutionContext(const ExecutionContext &Context) {
 llvm::Error KernelModel::preemptScheduled(uint64_t ID) {
   if (CurrentIRQL >= scheduler::DispatchLevel)
     return schedulingError(driver_scheduling::MaskedPreemption);
-  if (PendingWait || PendingThreadTermination ||
+  if (PendingWait || PendingThreadTerminations.contains(CurrentThreadKey) ||
       hasPendingIndependentGuestCall())
     return schedulingError(driver_scheduling::UnsafeBoundary);
   if (ID)
@@ -380,6 +566,8 @@ llvm::Error KernelModel::processScheduledBoundary(uint64_t Time,
     return E;
   if (auto E = Executing ? Scheduler.advanceExecutionTo100ns(Time)
                          : Scheduler.advanceTo100ns(Time))
+    return E;
+  if (auto E = synchronizeSharedClock())
     return E;
   // Publish hardware effects before making their interrupts eligible.
   if (auto E = processProviderCompletions())
@@ -525,6 +713,10 @@ llvm::Error KernelModel::finishScheduled(uint64_t ID) {
         !Thread->second.Terminating)
       return schedulingError(
           "system thread returned without PsTerminateSystemThread");
+    for (const auto &[Token, N] : ThreadNotifications)
+      if (N.Object == Invocation.Object)
+        return schedulingError(
+            "system thread still owns a notification traversal");
   }
   if (Invocation.Kind == KernelScheduler::CallbackKind::WDMCancel) {
     if (!CancelLock.Callback || CancelLock.Held ||
@@ -663,6 +855,23 @@ KernelModel::canRevokeVirtualRange(uint64_t Base, uint64_t Size,
                                    uint64_t RetiringLookaside) const {
   if (Size > UINT64_MAX - Base)
     return schedulingError("overflowing virtual storage range");
+  for (const auto &A : ProcessAttachments)
+    if (A.ApcState < Base + Size && Base < A.ApcState + windows::KAPCStateSize)
+      return schedulingError("cannot release active APC state storage");
+  if (auto E = canReleaseBuiltControlStorage(Base, Size))
+    return E;
+  if (auto E = canReleaseBugCheckStorage(Base, Size))
+    return E;
+  if (auto E = canReleaseExecutiveCallbackStorage(Base, Size))
+    return E;
+  if (auto E = canReleaseProcessNotifyStorage(Base, Size))
+    return E;
+  if (auto E = canReleaseThreadNotifyStorage(Base, Size))
+    return E;
+  if (auto E = canReleaseRegistryCallbackStorage(Base, Size))
+    return E;
+  if (auto E = canReleaseAvlStorage(Base, Size))
+    return E;
   if (auto E = DMA.canReleaseRange(Base, Size))
     return E;
   if (auto E = Interrupts.canReleaseRange(Base, Size))
@@ -701,7 +910,10 @@ llvm::Error KernelModel::prepareRevokeVirtualRange(uint64_t Base,
     return E;
   if (auto E = Dispatcher.prepareReleaseRange(Base, Size))
     return E;
-  return RemoveLocks.forgetRange(Base, Size);
+  if (auto E = RemoveLocks.forgetRange(Base, Size))
+    return E;
+  noteBugCheckComponentRelease(Base, Size);
+  return llvm::Error::success();
 }
 
 llvm::Error KernelModel::prepareReleaseRanges(
@@ -716,6 +928,12 @@ llvm::Error KernelModel::prepareReleaseRanges(
     if (auto E = RemoveLocks.forgetRange(Base, Size))
       return E;
     retireMDLStorage(Base, Size);
+  }
+  // No observation is published by the const preflight checks. Every range
+  // and every blocking owner must have accepted revocation first.
+  for (const auto &[Base, Size] : Ranges) {
+    forgetEmptyAvlStorage(Base, Size);
+    noteBugCheckComponentRelease(Base, Size);
   }
   return llvm::Error::success();
 }

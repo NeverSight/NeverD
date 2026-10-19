@@ -12,6 +12,7 @@
 #ifndef NEVERD_EMULATION_WINDOWS_KERNELSCHEDULER_H
 #define NEVERD_EMULATION_WINDOWS_KERNELSCHEDULER_H
 
+#include "KernelProcessorTopology.h"
 #include "KernelThreadPriorities.h"
 
 #include "neverd/emulation/DriverInterrupts.h"
@@ -27,6 +28,9 @@
 #include <vector>
 
 namespace neverd::emulation {
+static_assert(
+    processor::ActiveCount == 1 && processor::GroupCount == 1,
+    "the deterministic scheduler requires the single-processor profile");
 
 namespace scheduler {
 #define NEVERD_KERNEL_SCHEDULER_VALUE(Name, Value)                             \
@@ -77,6 +81,7 @@ public:
     uint64_t MaxTimerExpirations = scheduler::DefaultMaxTimerExpirations;
     uint64_t InitialTime100ns = 0;
     uint64_t MaxTime100ns = std::numeric_limits<uint64_t>::max();
+    std::optional<uint32_t> SystemClockIncrement100ns;
   };
 
   struct Callback {
@@ -143,6 +148,10 @@ public:
   llvm::Expected<uint64_t> enqueueWorkItem(Callback Work);
   llvm::Error canEnqueueSystemThread(const Callback &Thread) const;
   llvm::Expected<uint64_t> enqueueSystemThread(Callback Thread);
+  // A created thread owns scheduler capacity but is not runnable until its
+  // creator has completed the synchronous thread-notification traversal.
+  llvm::Expected<uint64_t> reserveSystemThread(Callback Thread);
+  llvm::Error readySystemThread(uint64_t ID);
   llvm::Expected<uint64_t> enqueuePoFx(Callback Call);
   /// USB permission callbacks have their own identity namespace and carry
   /// exactly one opaque context argument. Admission of a composite group is
@@ -338,6 +347,8 @@ public:
   bool hasOutstanding(uint64_t Owner) const;
   bool hasPending() const;
   uint64_t now100ns() const { return Now; }
+  llvm::Expected<uint64_t> queryTimeIncrement() const;
+  llvm::Expected<uint64_t> queryTickCount() const;
   uint64_t dispatchCount() const { return Dispatches; }
   uint64_t timerExpirationCount() const { return TimerExpirations; }
   size_t queuedCallbackCount() const {
@@ -346,6 +357,10 @@ public:
            ReadyDMA.size();
   }
   size_t suspendedCallbackCount() const { return Suspended.size(); }
+  /// Active/queued callbacks and suspended non-thread callbacks block a
+  /// foreground boundary. Only suspended system threads may remain parked.
+  bool hasForegroundBlockingCallbacks() const;
+  bool isSuspendedSystemThread(uint64_t ID) const;
   const std::optional<Invocation> &active() const { return Active; }
 
 private:
@@ -374,6 +389,7 @@ private:
   std::deque<Invocation> Completions;
   std::deque<Invocation> Interrupts;
   std::map<uint64_t, Invocation> WaitingDMA;
+  std::map<uint64_t, Invocation> WaitingSystemThreads;
   std::deque<Invocation> ReadyDMA;
   std::vector<Invocation> InlineDMA;
   std::optional<Invocation> Active;

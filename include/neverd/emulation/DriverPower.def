@@ -44,6 +44,7 @@ NEVERD_DRIVER_REQUEST_ORIGIN(FileHandleWrite, "ZwWriteFile")
 NEVERD_DRIVER_REQUEST_ORIGIN(FileHandleFlush, "ZwFlushBuffersFile")
 NEVERD_DRIVER_REQUEST_ORIGIN(FileHandleDeviceControl, "ZwDeviceIoControlFile")
 NEVERD_DRIVER_REQUEST_ORIGIN(FileHandleSystemControl, "ZwFsControlFile")
+NEVERD_DRIVER_REQUEST_ORIGIN(IoControlBuilder, "IoBuildDeviceIoControlRequest")
 #endif
 
 #ifdef NEVERD_DRIVER_POWER_DEVICE_STATE

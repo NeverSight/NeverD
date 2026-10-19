@@ -42,6 +42,8 @@ NEVERD_DRIVER_SESSION_DIAGNOSTIC(
 NEVERD_DRIVER_SESSION_DIAGNOSTIC(
     ImportRead,
     "reading bytes of an imported symbol requires an unmodeled kernel image")
+NEVERD_DRIVER_SESSION_DIAGNOSTIC(ImportReadDetail,
+                                 "{0}: {1}!{2} at 0x{3} ({4} bytes)")
 NEVERD_DRIVER_SESSION_DIAGNOSTIC(GuestFaultPrefix, "guest ")
 NEVERD_DRIVER_SESSION_DIAGNOSTIC(GuestFaultAddress, " fault at 0x")
 NEVERD_DRIVER_SESSION_DIAGNOSTIC(GuestFaultSizeSuffix, " bytes)")

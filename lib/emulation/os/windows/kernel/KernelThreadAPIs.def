@@ -21,3 +21,19 @@ NEVERD_KERNEL_THREAD_API(KeSetSystemAffinityThread, 1, Dispatch,
                          setSystemAffinity(A[0]))
 NEVERD_KERNEL_THREAD_API(KeRevertToUserAffinityThread, 0, Dispatch,
                          revertSystemAffinity())
+
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/ntifs/nf-ntifs-pslookupthreadbythreadid
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/ntddk/nf-ntddk-psgetthreadid
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/ntddk/nf-ntddk-psgetcurrentthreadid
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/ntifs/nf-ntifs-psisthreadterminating
+NEVERD_KERNEL_THREAD_API(PsGetThreadProcessId, 1, Dispatch,
+                         threadProcessID(A[0]))
+// The 19041 reference exports read the same per-thread Win32 association.
+// Setting a nonzero value exchanges it; clearing compares the supplied old
+// value. These scalar operations do not create or expose a win32k object.
+NEVERD_KERNEL_THREAD_API(PsGetCurrentThreadWin32Thread, 0, Any,
+                         currentThreadWin32Thread())
+NEVERD_KERNEL_THREAD_API(PsGetThreadWin32Thread, 1, Any,
+                         threadWin32Thread(A[0]))
+NEVERD_KERNEL_THREAD_API(PsSetThreadWin32Thread, 3, Any,
+                         setThreadWin32Thread(A[0], A[1], A[2]))

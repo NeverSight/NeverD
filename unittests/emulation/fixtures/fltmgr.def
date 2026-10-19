@@ -1,0 +1,3 @@
+LIBRARY FLTMGR.SYS EXPORTS FltGetFileNameInformationUnsafe
+    FltReleaseFileNameInformation
+        FltReferenceFileNameInformation FltParseFileNameInformation

@@ -10,6 +10,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "KernelModel.h"
+#include "KernelReferenceImage.h"
 
 #include "neverd/emulation/DriverProfile.h"
 
@@ -44,7 +45,7 @@ KernelModel::allocateUserBuffer(uint32_t Size, llvm::ArrayRef<uint8_t> Initial,
                                 uint32_t ProcessID) {
   if (!Size)
     return 0;
-  if (Initial.size() > Size || Size > profile::KernelArenaSize)
+  if (Initial.size() > Size || Size > KernelMemoryBytes)
     return userMemoryError("invalid synthetic user buffer extent");
   const uint64_t Pages =
       (uint64_t(Size) + profile::PageSize - 1) & ~(profile::PageSize - 1);
@@ -70,6 +71,54 @@ llvm::Error KernelModel::setUserRequestContext(bool Active,
   std::vector<GuestAliasRange> Removing;
   std::vector<GuestAliasMapping> Adding;
   if (Switching) {
+    const uint32_t OldPID = UserRequestContext
+                                ? CurrentUserProcessID
+                                : uint32_t(windows::SystemProcessID);
+    const uint32_t NewPID =
+        Active ? ProcessID : uint32_t(windows::SystemProcessID);
+    for (const auto &[PID, Views] : ProcessMemoryViews) {
+      if (PID == OldPID)
+        for (const auto &V : Views) {
+          if (auto E = canRevokeVirtualRange(V.Base, V.Size))
+            return E;
+          Removing.push_back({V.Base, V.Size});
+        }
+      if (PID == NewPID && !ExitedUserProcesses.contains(PID))
+        for (const auto &V : Views) {
+          auto Source = Memory.pinBacking(V.Backing, V.Size);
+          if (!Source)
+            return Source.takeError();
+          if (!Source->describesSameBytes(V.Storage))
+            return userMemoryError(
+                "process memory backing changed allocation identity");
+          Adding.push_back(
+              {V.Base, V.Backing, V.Size, processMemoryPermissions(V)});
+        }
+    }
+    for (const auto &[Key, View] : SectionViews) {
+      if (View.ProcessID == OldPID) {
+        if (auto E = canRevokeVirtualRange(View.Base, View.Size))
+          return E;
+        if (auto E =
+                Dispatcher.validateGuestAccess(View.Base, View.Size, false))
+          return E;
+        for (size_t I = 0; I < View.Pages.size(); ++I)
+          Removing.push_back(
+              {View.Base + I * profile::PageSize, profile::PageSize});
+      }
+      if (View.ProcessID == NewPID)
+        for (size_t I = 0; I < View.Pages.size(); ++I) {
+          const auto &Page = View.Pages[I];
+          auto Source = Memory.pinBacking(Page.Backing, profile::PageSize);
+          if (!Source)
+            return Source.takeError();
+          if (!Source->describesSameBytes(Page.Storage))
+            return userMemoryError(
+                "section view source changed allocation identity");
+          Adding.push_back({View.Base + I * profile::PageSize, Page.Backing,
+                            profile::PageSize, View.Permissions});
+        }
+    }
     for (const auto &[Key, View] : UserMdlViews) {
       if (UserRequestContext && View.ProcessID == CurrentUserProcessID) {
         if (auto E = canRevokeVirtualRange(View.PageBase, View.MappedSize))
@@ -121,6 +170,15 @@ llvm::Error KernelModel::setUserRequestContext(bool Active,
   }
   UserRequestContext = Active;
   CurrentUserProcessID = Active ? ProcessID : 0;
+  if (Active)
+    if (auto E = admitProcess(ProcessID))
+      return E;
+  if (Active && DebuggerReference && !DebuggerData.empty() &&
+      DebuggerReference->debugger()->ActiveProcessHead) {
+    auto Object = processObject(ProcessID);
+    if (!Object)
+      return Object.takeError();
+  }
   return llvm::Error::success();
 }
 
@@ -236,9 +294,23 @@ llvm::Error KernelModel::exitRequestorProcess(uint64_t IRP) {
     return userMemoryError(
         "requestor exit requires a live dispatched neither-I/O "
         "request and process");
+  if (!ProcessNotifiers.empty())
+    return userMemoryError("requestor exit with process callbacks requires an "
+                           "explicit process_events exit");
+  return retireUserProcess(Request->ProcessID);
+}
+
+llvm::Error KernelModel::retireUserProcess(uint32_t ProcessID) {
+  if (!ProcessID || ProcessID == windows::SystemProcessID ||
+      ExitedUserProcesses.contains(ProcessID))
+    return userMemoryError(
+        "process retirement requires a live non-System process");
+  for (const auto &A : ProcessAttachments)
+    if (A.TargetProcessID == ProcessID)
+      return userMemoryError("cannot retire a process with a live attachment");
   std::vector<std::pair<uint64_t, uint64_t>> Ranges;
   for (const auto &[Address, Allocation] : UserAllocations) {
-    if (Allocation.ProcessID != Request->ProcessID ||
+    if (Allocation.ProcessID != ProcessID ||
         RevokedUserAllocations.contains(Address))
       continue;
     const uint64_t Pages =
@@ -248,11 +320,31 @@ llvm::Error KernelModel::exitRequestorProcess(uint64_t IRP) {
     Ranges.emplace_back(Address, Pages);
   }
   const bool ActiveProcess =
-      UserRequestContext && CurrentUserProcessID == Request->ProcessID;
+      UserRequestContext && CurrentUserProcessID == ProcessID;
   std::vector<UserMdlViewKey> Views;
   std::vector<GuestAliasRange> Removing;
+  if (auto It = ProcessMemoryViews.find(ProcessID);
+      It != ProcessMemoryViews.end())
+    for (const auto &V : It->second) {
+      if (auto E = canRevokeVirtualRange(V.Base, V.Size))
+        return E;
+      if (ActiveProcess)
+        Removing.push_back({V.Base, V.Size});
+    }
+  for (const auto &[Key, View] : SectionViews)
+    if (View.ProcessID == ProcessID) {
+      if (auto E = canRevokeVirtualRange(View.Base, View.Size))
+        return E;
+      for (const auto &[Owner, Pin] : View.Pins)
+        if (auto E = Physical.canUnpin(Pin))
+          return E;
+      if (ActiveProcess)
+        for (size_t I = 0; I < View.Pages.size(); ++I)
+          Removing.push_back(
+              {View.Base + I * profile::PageSize, profile::PageSize});
+    }
   for (const auto &[Key, View] : UserMdlViews) {
-    if (View.ProcessID != Request->ProcessID)
+    if (View.ProcessID != ProcessID)
       continue;
     if (ActiveProcess) {
       if (auto E = Memory.validateBacking(View.PageBase, View.MappedSize))
@@ -266,6 +358,8 @@ llvm::Error KernelModel::exitRequestorProcess(uint64_t IRP) {
   if (!Removing.empty())
     if (auto E = Memory.replaceAliases(Removing, {}))
       return E;
+  if (auto E = retireProcessSections(ProcessID, true))
+    return E;
   for (const auto &Key : Views) {
     const auto &View = UserMdlViews.at(Key);
     if (ActiveProcess)
@@ -278,8 +372,31 @@ llvm::Error KernelModel::exitRequestorProcess(uint64_t IRP) {
       return E;
     RevokedUserAllocations.insert(Address);
   }
-  ExitedUserProcesses.insert(Request->ProcessID);
-  return llvm::Error::success();
+  if (!ProcessExitStatuses.contains(ProcessID))
+    if (auto E = observeProcessExitStatus(ProcessID, std::nullopt))
+      return E;
+  ExitedUserProcesses.insert(ProcessID);
+  ProcessMemoryViews.erase(ProcessID);
+  for (auto It = ImageMappings.begin(); It != ImageMappings.end();)
+    if (It->first.first == ProcessID)
+      It = ImageMappings.erase(It);
+    else
+      ++It;
+  LifecycleLiveProcesses.erase(ProcessID);
+  for (auto Thread = CurrentThreadObjects.begin();
+       Thread != CurrentThreadObjects.end();) {
+    const uint64_t Object = Thread->second;
+    if (ThreadObjects.at(Object).ProcessID != ProcessID) {
+      ++Thread;
+      continue;
+    }
+    auto &State = ThreadObjects.at(Object);
+    State.Exited = true;
+    State.ExitPriority = Scheduler.threadPriority(Thread->first);
+    Thread = CurrentThreadObjects.erase(Thread);
+    retireObjectIfUnreferenced(Object);
+  }
+  return synchronizeProcessList();
 }
 
 llvm::Error KernelModel::snapshotUserBuffers() {

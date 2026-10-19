@@ -46,8 +46,13 @@ llvm::Expected<std::vector<uint64_t>>
 KernelModel::driverDeviceInventory(ObjectRead Mode) const {
   std::vector<uint64_t> Inventory;
   std::set<uint64_t> Seen;
-  for (uint64_t Owner :
-       {DriverObject, PnpProviderDriver, FileSystemProviderDriver}) {
+  std::vector<uint64_t> Owners{DriverObject, PnpProviderDriver,
+                               FiniteFileSystemDriver,
+                               FileSystemProviderDriver};
+  for (const auto &[Key, D] : NamedDrivers)
+    if (D.Guest && D.Object != DriverObject)
+      Owners.push_back(D.Object);
+  for (uint64_t Owner : Owners) {
     if (!Owner)
       continue;
     auto Head = readObjectField(Owner + DriverDeviceHead, 8, Mode);
@@ -77,7 +82,10 @@ KernelModel::driverDeviceInventory(ObjectRead Mode) const {
 
 llvm::Error KernelModel::validateDeviceTopology(ObjectRead Mode) const {
   for (const auto &[Address, Device] : Devices) {
-    const uint64_t ExpectedOwner = deviceOwnerDriver(Device.OwnerKind);
+    const uint64_t ExpectedOwner =
+        Device.OwnerKind == DeviceOwnerKind::Guest
+            ? (isGuestDriverObject(Device.OwnerDriver) ? Device.OwnerDriver : 0)
+            : deviceOwnerDriver(Device.OwnerKind);
     if (Device.Address != Address || !ExpectedOwner ||
         Device.OwnerDriver != ExpectedOwner)
       return deviceError("device has an unsupported driver owner");
@@ -117,6 +125,10 @@ llvm::Error KernelModel::validateDeviceTopology(ObjectRead Mode) const {
     if (Device.OwnerKind == DeviceOwnerKind::FileSystemProvider)
       if (auto E = validateFileSystemDevice(Address, Mode))
         return E;
+    if (bool(*Flags & DeviceShutdownRegistered) !=
+        bool(Device.ShutdownNotifications))
+      return deviceError(
+          "DEVICE_OBJECT shutdown registration flag was corrupted");
     if (Device.Lower) {
       auto Lower = Devices.find(Device.Lower);
       if (Lower == Devices.end() || Lower->second.Upper != Address)
@@ -353,6 +365,55 @@ llvm::Error KernelModel::detachFrameworkPnpDevice(uint64_t Source,
   Physical->second.Upper = 0;
   FDO->second.Lower = 0;
   // The captured REMOVE route retains both objects until its own finalization.
+  return llvm::Error::success();
+}
+
+llvm::Expected<uint64_t> KernelModel::shutdownNotification(uint64_t Address,
+                                                           bool Register) {
+  auto Device = Devices.find(Address);
+  if (Device == Devices.end() || Device->second.DeletePending ||
+      Device->second.OwnerKind != DeviceOwnerKind::Guest)
+    return deviceError(
+        "shutdown notification requires a live guest-owned device");
+  if (auto E = validateDeviceTopology())
+    return E;
+  if (!Register) {
+    if (!Device->second.ShutdownNotifications)
+      return deviceError("IoUnregisterShutdownNotification requires a prior "
+                         "registration for this device");
+    if (auto E = clearShutdownNotifications(Address))
+      return E;
+    return uint64_t(0); // VOID ABI, not an NTSTATUS result.
+  }
+  uint64_t Entries = 0;
+  for (const auto &[Object, Record] : Devices)
+    Entries += Record.ShutdownNotifications;
+  if (Entries >= profile::MaxConcurrentCallbacks)
+    return uint64_t(StatusInsufficientResources);
+  auto Flags = Memory.readInteger(Address + DeviceFlagsOffset, 4);
+  if (!Flags)
+    return Flags.takeError();
+  if (auto E = Memory.writeInteger(Address + DeviceFlagsOffset,
+                                   *Flags | DeviceShutdownRegistered, 4))
+    return E;
+  ++Device->second.ShutdownNotifications;
+  // Registration queues a device; it does not execute DispatchShutdown.
+  // Shutdown delivery is not yet admitted by the scenario request provider.
+  return uint64_t(StatusSuccess);
+}
+
+llvm::Error KernelModel::clearShutdownNotifications(uint64_t Address) {
+  auto Device = Devices.find(Address);
+  if (Device == Devices.end())
+    return deviceError(
+        "cannot clear shutdown notifications for an unknown device");
+  auto Flags = Memory.readInteger(Address + DeviceFlagsOffset, 4);
+  if (!Flags)
+    return Flags.takeError();
+  if (auto E = Memory.writeInteger(Address + DeviceFlagsOffset,
+                                   *Flags & ~DeviceShutdownRegistered, 4))
+    return E;
+  Device->second.ShutdownNotifications = 0;
   return llvm::Error::success();
 }
 

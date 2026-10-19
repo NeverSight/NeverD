@@ -30,9 +30,48 @@ namespace runtime {
 llvm::Error checkBufferRange(uint64_t Address, uint64_t Size);
 llvm::Error writeBytes(GuestMemory &Memory, uint64_t Address, uint64_t Size,
                        uint8_t Value = 0);
+llvm::Expected<uint64_t> ansiCharToUnicode(const KernelModel &Model,
+                                           GuestMemory &Memory,
+                                           uint64_t PointerCell);
+llvm::Expected<uint64_t> writeCountedUnicode(const KernelModel &Model,
+                                             GuestMemory &Memory,
+                                             uint64_t Destination,
+                                             llvm::ArrayRef<uint8_t> Text);
+llvm::Expected<uint64_t> integerUnicodeString(const KernelModel &Model,
+                                              GuestMemory &Memory,
+                                              llvm::ArrayRef<uint64_t> A,
+                                              bool Wide);
 
 using ArgumentReader = llvm::function_ref<llvm::Expected<uint64_t>(unsigned)>;
-enum class UnicodeOperation { Copy, Compare, Equal };
+enum class UnicodeOperation { Copy, Compare, Equal, Prefix };
+llvm::Expected<uint64_t> appendUnicode(const KernelModel &, GuestMemory &,
+                                       llvm::ArrayRef<uint64_t>);
+llvm::Expected<uint64_t> unicodeToInteger(const KernelModel &, GuestMemory &,
+                                          llvm::ArrayRef<uint64_t>);
+llvm::Expected<uint64_t> charToInteger(const KernelModel &, GuestMemory &,
+                                       llvm::ArrayRef<uint64_t>);
+llvm::Expected<uint64_t> ansiUnicodeSize(const KernelModel &, GuestMemory &,
+                                         uint64_t);
+llvm::Expected<uint64_t> guidFromUnicode(const KernelModel &, GuestMemory &,
+                                         llvm::ArrayRef<uint64_t>);
+enum class CrtStringOperation { ConcatWide, FindLastWide, LowerC };
+// RtlUpperChar/RtlUpperString are byte operations, not NLS conversions.
+constexpr uint8_t upperAnsiByte(uint8_t Byte) {
+  return Byte >= 'a' && Byte <= 'z' ? uint8_t(Byte - ('a' - 'A')) : Byte;
+}
+llvm::Expected<uint64_t> upperAnsiString(const KernelModel &Model,
+                                         GuestMemory &Memory,
+                                         llvm::ArrayRef<uint64_t> Arguments);
+llvm::Expected<uint64_t> compareAnsiStrings(const KernelModel &Model,
+                                            GuestMemory &Memory,
+                                            llvm::ArrayRef<uint64_t> Arguments);
+llvm::Expected<uint64_t> appendAnsiString(const KernelModel &Model,
+                                          GuestMemory &Memory,
+                                          llvm::ArrayRef<uint64_t> Arguments);
+llvm::Expected<uint64_t> crtStringOperation(const KernelModel &Model,
+                                            GuestMemory &Memory,
+                                            CrtStringOperation Operation,
+                                            llvm::ArrayRef<uint64_t> Arguments);
 
 llvm::Expected<uint64_t> unicodeOperation(const KernelModel &Model,
                                           GuestMemory &Memory,

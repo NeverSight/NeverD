@@ -6,7 +6,60 @@ EXPORTS
   KeRaiseIrqlToDpcLevel
   KeSetSystemAffinityThread
   KeRevertToUserAffinityThread
+  PsGetCurrentThreadWin32Thread
+  ZwLoadDriver
+  ZwUnloadDriver
+  HalDispatchTable DATA
+  RtlInsertElementGenericTableFullAvl
+  RtlInitializeGenericTableAvl
+  RtlInsertElementGenericTableAvl
+  RtlLookupElementGenericTableAvl
+  RtlLookupElementGenericTableFullAvl
+  RtlDeleteElementGenericTableAvl
+  RtlNumberGenericTableElementsAvl
+  RtlIsGenericTableEmptyAvl
+  IoBuildDeviceIoControlRequest
+  IofCallDriver
+  PsSetCreateThreadNotifyRoutine
+  PsRemoveCreateThreadNotifyRoutine
+  ZwQueryVirtualMemory
+  memset
+  RtlInt64ToUnicodeString
+  RtlIntegerToUnicodeString
+  RtlAnsiCharToUnicodeChar
+CmRegisterCallback
+CmUnRegisterCallback
+ZwQuerySystemInformation
+NtQuerySystemInformation
+  PsGetCurrentThread
+  RtlUpperString
+  RtlUpperChar
+  RtlCompareString
+  RtlAppendStringToString
+  PsIsThreadTerminating
+  PsLookupThreadByThreadId
+  PsGetThreadId
+  PsGetProcessImageFileName
+  PsGetProcessSectionBaseAddress
+  PsGetProcessExitStatus
+  PsGetCurrentThreadId
+  PsGetThreadProcessId
+  PsGetThreadProcess
+  IoThreadToProcess
+  PsThreadType DATA
+  PsProcessType DATA
+  PsInitialSystemProcess DATA
+  IoFileObjectType DATA
+  IoDriverObjectType DATA
+  RtlCaptureContext
+  KeCapturePersistentThreadState
+  MmIsAddressValid
+  MmGetVirtualForPhysical
+  MmGetPhysicalAddress
+  MmProbeAndLockPages
+  MmUnlockPages
   ZwOpenKey
+  ZwFlushKey
   ZwCreateKey
   ZwQueryValueKey
   ZwEnumerateValueKey
@@ -17,11 +70,8 @@ EXPORTS
   ZwDeleteKey
   ZwClose
   RtlGetVersion
-  RtlCaptureContext
   RtlInitUnicodeString
   ExAllocatePool
-  NtQuerySystemInformation
-  ZwQuerySystemInformation
   ExAllocatePoolWithTag
   ExFreePool
   ExFreePoolWithTag
@@ -66,13 +116,10 @@ EXPORTS
   ZwCreateFile
   IoCreateFile
   IoCancelFileOpen
-  IofCallDriver
   MmMapLockedPagesSpecifyCache
   MmMapLockedPages
   MmUnmapLockedPages
-  MmProbeAndLockPages
   MmProbeAndLockProcessPages
-  MmUnlockPages
   IoAllocateMdl
   IoFreeMdl
   MmBuildMdlForNonPagedPool
@@ -82,9 +129,6 @@ EXPORTS
   DbgPrintEx
   vDbgPrintExWithPrefix
   MmGetSystemRoutineAddress
-  MmIsAddressValid
-  MmGetPhysicalAddress
-  MmGetVirtualForPhysical
   KeRegisterBugCheckReasonCallback
   KeDeregisterBugCheckReasonCallback
   RtlCopyUnicodeString
@@ -95,17 +139,14 @@ EXPORTS
   KeQueryPriorityThread
   KeSetPriorityThread
   ObReferenceObjectByHandle
+  ObOpenObjectByPointer
+  ZwQueryInformationThread
   ObfDereferenceObject
   ObfReferenceObject
   ObReferenceObjectByPointer
-  ObOpenObjectByPointer
   ObGetObjectType
   ObGetFilterVersion
   PsLookupProcessByProcessId
-  PsLookupThreadByThreadId
-  PsGetThreadProcess
-  IoThreadToProcess
-  PsIsThreadTerminating
   PsCreateSystemThread
   PsTerminateSystemThread
   KeAreApcsDisabled
@@ -128,6 +169,7 @@ EXPORTS
   IoGetDeviceObjectPointer
   IoGetInitialStack
   IoGetStackLimits
+  PsGetProcessId
   KeStackAttachProcess
   KeUnstackDetachProcess
   RtlInitAnsiString
@@ -135,18 +177,12 @@ EXPORTS
   RtlAppendUnicodeToString
   RtlAppendUnicodeStringToString
   RtlPrefixUnicodeString
-  RtlInt64ToUnicodeString
-  RtlIntegerToUnicodeString
   RtlUnicodeStringToInteger
   PsGetCurrentProcessId
   ExGetPreviousMode
   PsGetCurrentThreadPreviousMode
-  PsGetProcessId
   PsGetCurrentProcess
-  PsGetCurrentThread
   KeGetCurrentThread
-  PsGetCurrentThreadId
-  PsGetThreadId
   RtlAnsiStringToUnicodeString
   RtlUnicodeStringToAnsiString
   RtlFreeUnicodeString
@@ -161,7 +197,6 @@ EXPORTS
   RtlInitUnicodeStringEx
   RtlCopyString
   RtlEqualString
-  RtlCompareString
   RtlTimeToTimeFields
   RtlTimeFieldsToTime
   RtlStringFromGUID
@@ -261,15 +296,10 @@ ExEnterCriticalRegionAndAcquireSharedWaitForExclusive
 ExReleaseResourceAndLeaveCriticalRegion
 ExSetResourceOwnerPointer
 ExSetResourceOwnerPointerEx
-  PsProcessType DATA
-  PsThreadType DATA
-  IoDriverObjectType DATA
-  IoFileObjectType DATA
   ExEventObjectType DATA
   ExSemaphoreObjectType DATA
   PsJobType DATA
   SeTokenObjectType DATA
-  PsInitialSystemProcess DATA
   KeNumberProcessors DATA
   KdDebuggerEnabled DATA
   KdDebuggerNotPresent DATA
@@ -293,3 +323,45 @@ ExSetResourceOwnerPointerEx
   memmove_s
   RtlImageNtHeader
   RtlPcToFileHeader
+  IoCreateFileSpecifyDeviceObjectHint
+  NeverDUnsupportedKernelAPI
+  tolower
+  ZwDeleteFile
+  ExCreateCallback
+  ExRegisterCallback
+  ExNotifyCallback
+  ExUnregisterCallback
+  ObMakeTemporaryObject
+  PsSetCreateProcessNotifyRoutine
+  PsSetCreateProcessNotifyRoutineEx
+  ZwOpenSection
+  ZwCreateSection
+  ZwQuerySection
+  RtlCharToInteger
+  RtlxAnsiStringToUnicodeSize
+  KeQueryActiveProcessorCountEx
+  KeGetProcessorNumberFromIndex
+  KeSetSystemGroupAffinityThread
+  KeRevertToUserGroupAffinityThread
+  MmAllocateContiguousMemory
+  MmFreeContiguousMemory
+  MmAllocateMappingAddress
+  MmAllocatePagesForMdlEx
+  MmFreePagesFromMdl
+  KeBugCheck
+  KeBugCheckEx
+  __C_specific_handler
+  MmFreeMappingAddress
+  MmMapLockedPagesWithReservedMapping
+  MmUnmapReservedMapping
+  ZwMapViewOfSection
+  ZwUnmapViewOfSection
+  ProbeForRead
+  ProbeForWrite
+  IoRegisterShutdownNotification
+  IoUnregisterShutdownNotification
+KeQueryTimeIncrement
+VslGetSecurePciEnabled
+    PsGetProcessPeb
+    IoGetDeviceProperty
+    NlsMbOemCodePageTag DATA

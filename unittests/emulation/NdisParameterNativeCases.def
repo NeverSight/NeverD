@@ -1,0 +1,9 @@
+// Original pinned ndisSaveParameters/close observations, explicit pool/copy
+// providers. SHA256
+// 2d478f5b7a42888c2a707ab2de697686dc56e829c870295c44bc396ca0e59a63 Registry
+// type, exact input bytes, public parameter type, length, maximum, integer.
+NEVERD_NDIS_PARAMETER_NATIVE_CASE(4, "2a000000", 0, 0, 0, 42)
+NEVERD_NDIS_PARAMETER_NATIVE_CASE(1, "340032000000", 2, 4, 6, 0)
+NEVERD_NDIS_PARAMETER_NATIVE_CASE(1, "34003200", 2, 4, 4, 0)
+NEVERD_NDIS_PARAMETER_NATIVE_CASE(7, "61000000620000000000", 3, 10, 10, 0)
+NEVERD_NDIS_PARAMETER_NATIVE_CASE(3, "010203", 4, 3, 0, 0)

@@ -55,18 +55,37 @@ bool ntError(uint32_t Status) {
 }
 } // namespace
 
-llvm::Expected<uint64_t> KernelModel::processObject(uint32_t ProcessID) {
+llvm::Expected<uint64_t>
+KernelModel::materializeProcessObject(uint32_t ProcessID) {
   if (!ProcessID)
     return ioError("process object requires a modeled process identity");
   if (auto It = ProcessObjects.find(ProcessID); It != ProcessObjects.end())
     return It->second;
-  auto Object = allocate(profile::ProcessTokenSize);
+  auto Object = allocate(ProcessObjectSize);
   if (!Object)
     return Object.takeError();
   ProcessObjects.emplace(ProcessID, *Object);
   ProcessObjectIDs.emplace(*Object, ProcessID);
   ReferencedObjects.emplace(*Object, ObjectReferences{ObjectKind::Process});
   return *Object;
+}
+
+llvm::Expected<uint64_t> KernelModel::processObject(uint32_t ProcessID) {
+  auto Object = materializeProcessObject(ProcessID);
+  if (!Object)
+    return Object.takeError();
+  if (auto E = synchronizeProcessList())
+    return std::move(E);
+  return *Object;
+}
+
+llvm::Error KernelModel::admitProcess(uint32_t ProcessID) {
+  if (ProcessID && !ExitedUserProcesses.contains(ProcessID)) {
+    LifecycleLiveProcesses.insert(ProcessID);
+    LifecycleSeenProcesses.insert(ProcessID);
+    return synchronizeProcessList();
+  }
+  return llvm::Error::success();
 }
 
 llvm::Expected<uint64_t> KernelModel::requestorProcess(uint64_t IRP) {
@@ -95,45 +114,68 @@ bool KernelModel::hasProcessAttachment(uint64_t Execution) const {
 
 llvm::Error KernelModel::stackAttachProcess(uint64_t Process, uint64_t ApcState,
                                             bool Private) {
-  if (!Scheduler.active() ||
-      (Scheduler.active()->Kind != KernelScheduler::CallbackKind::WorkItem &&
-       Scheduler.active()->Kind !=
-           KernelScheduler::CallbackKind::FrameworkInterruptWorkItem &&
-       Scheduler.active()->Kind !=
-           KernelScheduler::CallbackKind::FrameworkDeferred &&
-       Scheduler.active()->Kind !=
-           KernelScheduler::CallbackKind::SystemThread) ||
-      CurrentExecution == profile::StackBase)
+  if (!Version &&
+      (!Scheduler.active() ||
+       (Scheduler.active()->Kind != KernelScheduler::CallbackKind::WorkItem &&
+        Scheduler.active()->Kind !=
+            KernelScheduler::CallbackKind::FrameworkInterruptWorkItem &&
+        Scheduler.active()->Kind !=
+            KernelScheduler::CallbackKind::FrameworkDeferred &&
+        Scheduler.active()->Kind !=
+            KernelScheduler::CallbackKind::SystemThread) ||
+       CurrentExecution == profile::StackBase))
     return ioError("process attachment requires a system work-item thread");
+  const auto Context = executionProcessContext();
+  if (Version && !Context)
+    return ioError("process attachment requires a modeled thread context");
   auto Target = ProcessObjectIDs.find(Process);
-  if (Target == ProcessObjectIDs.end() || Target->second == 4)
-    return ioError("process attachment requires a known user process object");
+  if (Target == ProcessObjectIDs.end())
+    return ioError("process attachment requires a known process object");
   const uint32_t ProcessID = Target->second;
-  if (ExitedUserProcesses.contains(ProcessID))
-    return ioError("cannot attach to an exited requesting process");
-  if (std::none_of(Requests.begin(), Requests.end(), [&](const auto &Entry) {
+  if (!isLiveProcess(ProcessID))
+    return ioError("cannot attach to an unknown or exited process");
+  if (ProcessID != SystemProcessID && !ProcessMemoryViews.contains(ProcessID) &&
+      std::none_of(Requests.begin(), Requests.end(), [&](const auto &Entry) {
         return Entry.second.ProcessID == ProcessID && !Entry.second.Completed;
       }))
-    return ioError("process attachment requires a live requesting IRP");
+    return ioError(Version
+                       ? "process attachment requires declared process memory "
+                         "or a live requesting IRP"
+                       : "process attachment requires a live requesting IRP");
   if (!Private) {
     if (!ApcState || (ApcState & 7) || ApcState < profile::UserProbeLimit)
       return ioError("process attachment requires aligned kernel APC storage");
+    const uint64_t CurrentStackSize = CurrentExecution == profile::StackBase
+                                          ? profile::StackSize
+                                          : profile::CallbackStackSize;
     const bool CurrentStack =
         ApcState >= CurrentExecution &&
-        ApcState - CurrentExecution <= profile::CallbackStackSize &&
-        KAPCStateSize <=
-            profile::CallbackStackSize - (ApcState - CurrentExecution);
+        ApcState - CurrentExecution <= CurrentStackSize &&
+        KAPCStateSize <= CurrentStackSize - (ApcState - CurrentExecution);
     const bool NonPagedPool = std::any_of(
         Allocations.begin(), Allocations.end(), [&](const auto &Entry) {
           return Entry.second.NonPaged && ApcState >= Entry.first &&
                  ApcState - Entry.first <= Entry.second.Size &&
                  KAPCStateSize <= Entry.second.Size - (ApcState - Entry.first);
         });
-    if (!CurrentStack && !NonPagedPool)
+    const bool ResidentDriver =
+        Version &&
+        std::any_of(ImageRAM.begin(), ImageRAM.end(), [&](const auto &R) {
+          return ApcState >= R.first && ApcState - R.first <= R.second &&
+                 KAPCStateSize <= R.second - (ApcState - R.first);
+        });
+    const auto Stack = ExecutionStacks.find(CurrentExecution);
+    const bool ActiveStack =
+        Version && Stack != ExecutionStacks.end() && ApcState >= Stack->first &&
+        ApcState - Stack->first <= Stack->second &&
+        KAPCStateSize <= Stack->second - (ApcState - Stack->first);
+    if (!CurrentStack && !NonPagedPool && !ResidentDriver && !ActiveStack)
       return ioError("APC storage must be on the current thread stack or in "
                      "nonpaged pool");
     for (const auto &Attachment : ProcessAttachments)
-      if (Attachment.ApcState == ApcState)
+      if (!Attachment.Private &&
+          ApcState < Attachment.ApcState + KAPCStateSize &&
+          Attachment.ApcState < ApcState + KAPCStateSize)
         return ioError("APC storage is already owned by an attachment");
     if (auto E = validateGuestAccess(ApcState, KAPCStateSize, true))
       return E;
@@ -148,12 +190,10 @@ llvm::Error KernelModel::stackAttachProcess(uint64_t Process, uint64_t ApcState,
   const bool PreviousUserContext = UserRequestContext;
   const uint32_t PreviousProcessID =
       PreviousUserContext ? CurrentUserProcessID : 4;
-  const uint32_t LogicalPreviousProcessID =
-      hasProcessAttachment(CurrentExecution) ? CurrentUserProcessID : 4;
-  auto PreviousProcess = processObject(LogicalPreviousProcessID);
+  auto PreviousProcess = processObject(Context->ProcessID);
   if (!PreviousProcess)
     return PreviousProcess.takeError();
-  if (auto E = setUserRequestContext(true, ProcessID))
+  if (auto E = setUserRequestContext(ProcessID != SystemProcessID, ProcessID))
     return E;
   if (!Private) {
     std::array<uint8_t, KAPCStateSize> Saved{};
@@ -163,8 +203,9 @@ llvm::Error KernelModel::stackAttachProcess(uint64_t Process, uint64_t ApcState,
                                      *PreviousProcess, 8))
       return E;
   }
-  ProcessAttachments.push_back({CurrentExecution, ApcState, PreviousProcessID,
-                                PreviousUserContext, Private});
+  ProcessAttachments.push_back(
+      {CurrentExecution, ApcState, PreviousProcessID, PreviousUserContext,
+       Private, Context.value_or(ExecutionProcessContext{}), ProcessID});
   return llvm::Error::success();
 }
 
@@ -345,7 +386,8 @@ llvm::Error KernelModel::initializeRequestPacket(ActiveRequest &Record,
     unsigned Size;
   };
   if (auto E =
-          initializeIRPHeader(Packet, Request->StackCount, Request->StackCount))
+          initializeIRPHeader(Packet, Request->StackCount, Request->StackCount,
+                              Request->IOStatusWritten))
     return E;
   for (const Field &F : std::array<Field, 8>{
            {{IRPMdlOffset, Request->Mdl, 8},
@@ -540,9 +582,9 @@ llvm::Expected<KernelModel::Invocation> KernelModel::beginFileRequest(
     return ioError("direct_input is valid only for direct IOCTLs");
   if (Input.DirectInput.size() > Input.OutputSize)
     return ioError("direct_input exceeds the second IOCTL buffer length");
-  if (Input.Input.size() > profile::KernelArenaSize ||
-      Input.OutputSize > profile::KernelArenaSize)
-    return ioError("request buffers exceed the 1 MiB model operation limit");
+  if (Input.Input.size() > KernelMemoryBytes ||
+      Input.OutputSize > KernelMemoryBytes)
+    return ioError("request buffers exceed the configured kernel arena");
   const uint64_t TransferSize = IsWrite ? Input.Input.size() : Input.OutputSize;
   if ((IsRead || IsWrite) && (Input.ByteOffset > INT64_MAX ||
                               TransferSize > INT64_MAX - Input.ByteOffset))
@@ -597,6 +639,9 @@ llvm::Expected<KernelModel::Invocation> KernelModel::beginFileRequest(
     if (!Device)
       return ioError("request device name does not identify a live device");
   }
+  if (Devices.at(Device).OwnerKind == DeviceOwnerKind::FiniteFileSystem)
+    return ioError(
+        "filesystem scenario requests require a modeled provider IRP contract");
   Result.Requests[Index].Device = Devices.at(Device).Name;
   uint64_t PnpOwner = 0;
   if (Input.Kind != DriverRequestKind::Create && FileIt != FileObjects.end()) {
@@ -847,6 +892,8 @@ llvm::Expected<KernelModel::Invocation> KernelModel::beginFileRequest(
   if (RetainedFile)
     Record.CallbackProcessID = Input.RequestorProcessID;
   RequestorProcessIDs.insert(Input.RequestorProcessID);
+  if (auto E = admitProcess(Record.ProcessID))
+    return std::move(E);
   if (Input.CancelAfter100ns) {
     llvm::Expected<uint64_t> Deadline = Scheduler.now100ns();
     if (*Input.CancelAfter100ns)
@@ -877,7 +924,6 @@ llvm::Expected<KernelModel::Invocation> KernelModel::beginFileRequest(
   if (auto E = armPowerPolicyEvents(Input.PowerPolicyEvents,
                                     SourceIndex.value_or(Index)))
     return E;
-  const uint64_t Callback = Result.MajorFunctions[Major];
   if (FileSystem.ownsDevice(*Top)) {
     auto Status = dispatchFileSystem(*Top, *Packet);
     if (!Status)
@@ -935,6 +981,10 @@ llvm::Expected<KernelModel::Invocation> KernelModel::beginFileRequest(
       return Call;
     }
   }
+  auto GuestCallback = guestDriverDispatch(Devices.at(*Top).OwnerDriver, Major);
+  if (!GuestCallback)
+    return GuestCallback.takeError();
+  const uint64_t Callback = *GuestCallback;
   if (!Callback) {
     if (anyInitialized(DispatchBytesWritten, DispatchInitialization,
                        Major * profile::PointerSize, profile::PointerSize))
@@ -989,7 +1039,8 @@ KernelModel::requestReleaseRanges(uint64_t IRP) const {
   const auto *Request = requestForIRP(IRP);
   if (!Request || Request->Completed)
     return ioError("completion release requires a live IRP");
-  if (DriverIRPs.contains(IRP))
+  if (auto A = DriverIRPs.find(IRP);
+      A != DriverIRPs.end() && !A->second.Builder)
     return ioError("caller-owned IRPs require explicit IoFreeIrp disposal");
   std::vector<std::pair<uint64_t, uint64_t>> Retiring;
   // CREATE and IoCancelFileOpen borrow a producer-owned packet. Their wrappers
@@ -1017,7 +1068,8 @@ KernelModel::requestReleaseRanges(uint64_t IRP) const {
   }
   if (Request->SystemBuffer && !Request->BorrowedSystemBuffer && !NativeRequest)
     Retiring.emplace_back(Request->SystemBuffer, Request->BufferSize);
-  if (Request->UserBuffer && !Request->Neither && !NativeRequest)
+  if (Request->UserBuffer && !Request->Neither && !NativeRequest &&
+      !(DriverIRPs.contains(IRP) && DriverIRPs.at(IRP).Builder))
     Retiring.emplace_back(Request->UserBuffer, Request->Direct
                                                    ? Request->TransferSize
                                                    : Request->OutputSize);
@@ -1076,7 +1128,10 @@ llvm::Error KernelModel::retireCompletedRequest(uint64_t IRP,
     return E;
   auto &Observation = Result.Requests[Request->ResultIndex];
   const bool HasIOCTLOutput =
-      Request->Kind == DriverRequestKind::DeviceControl && Request->OutputSize;
+      (Request->Kind == DriverRequestKind::DeviceControl ||
+       (Request->Kind == DriverRequestKind::InternalDeviceControl &&
+        DriverIRPs.contains(IRP) && DriverIRPs.at(IRP).Builder)) &&
+      Request->OutputSize;
   const bool NativeRequest = nativeFileRequest(Request->FileRequestID);
   auto Pending = dispatchPending(*Request, Request->StackCount - 1);
   if (!Pending)
@@ -1148,7 +1203,8 @@ llvm::Error KernelModel::retireCompletedRequest(uint64_t IRP,
   if (Request->SystemBuffer && !Request->BorrowedSystemBuffer && !NativeRequest)
     if (auto E = Physical.retire(Request->SystemBuffer))
       return E;
-  if (Request->UserBuffer && !Request->Neither && !NativeRequest)
+  if (Request->UserBuffer && !Request->Neither && !NativeRequest &&
+      !(DriverIRPs.contains(IRP) && DriverIRPs.at(IRP).Builder))
     if (auto E = Physical.retire(Request->UserBuffer))
       return E;
   // Ordinary request completion consumes the IRP. File operation producers
@@ -1158,6 +1214,9 @@ llvm::Error KernelModel::retireCompletedRequest(uint64_t IRP,
     Observation.UsbIdle->CompletedAt100ns = Scheduler.now100ns();
   Request->Completed = true;
   Request->CancelDeadline.reset();
+  if (DriverIRPs.contains(IRP) && DriverIRPs.at(IRP).Builder)
+    if (auto E = notifyBuiltControlCompletion(IRP))
+      return E;
   if (!Request->FileOperation && !NativeRequest)
     FreedRanges.emplace(IRP, IRPSize + Request->StackCount * StackSize);
   if (const auto Native = FrameworkUsbIdleRequests.find(IRP);
@@ -1170,7 +1229,8 @@ llvm::Error KernelModel::retireCompletedRequest(uint64_t IRP,
   }
   if (Request->SystemBuffer && !Request->BorrowedSystemBuffer && !NativeRequest)
     FreedRanges.emplace(Request->SystemBuffer, Request->BufferSize);
-  if (Request->UserBuffer && !Request->Neither && !NativeRequest)
+  if (Request->UserBuffer && !Request->Neither && !NativeRequest &&
+      !(DriverIRPs.contains(IRP) && DriverIRPs.at(IRP).Builder))
     FreedRanges.emplace(Request->UserBuffer, Request->Direct
                                                  ? Request->TransferSize
                                                  : Request->OutputSize);
@@ -1413,8 +1473,12 @@ llvm::Expected<KernelModel::Invocation> KernelModel::beginUnload() {
       return ioError(
           "unload requires all configured provider devices to retire");
   }
-  if (Scheduler.queuedCallbackCount() || Scheduler.active() ||
-      Scheduler.suspendedCallbackCount())
+  const bool BlockingCallbacks =
+      ForegroundReadyCallbacks
+          ? Scheduler.hasForegroundBlockingCallbacks()
+          : Scheduler.queuedCallbackCount() || Scheduler.active() ||
+                Scheduler.suspendedCallbackCount();
+  if (BlockingCallbacks)
     return ioError("unload requires scheduled callbacks to drain");
   const bool ScenarioOrOpeningFile = std::any_of(
       FileObjects.begin(), FileObjects.end(), [](const auto &Entry) {
@@ -1447,6 +1511,25 @@ llvm::Error KernelModel::finishUnload() {
     return E;
   if (Registry.hasOpenHandles())
     return ioError("unload returned with live registry handles");
+  if (!BugCheckCallbacks.empty())
+    return ioError("unload returned with registered bug-check callbacks");
+  if (auto E = validateExecutiveCallbackUnload())
+    return E;
+  if (auto E = validateProcessNotifyUnload())
+    return E;
+  if (auto E = validateThreadNotifyUnload())
+    return E;
+  if (auto E = validateRegistryCallbackUnload())
+    return E;
+  if (!SectionHandles.empty() || !SectionViews.empty())
+    return ioError("unload returned with live section handles or mapped views");
+  if (!ReservedMappings.empty())
+    return ioError("unload returned with live mapping reservations");
+  for (const auto &[Key, V] : ImageMappings)
+    if (V.Dynamic)
+      return ioError("unload returned with a live dynamic image view");
+  if (auto E = validateNamedDriverUnload())
+    return E;
   if (!Lookasides.empty())
     return ioError("unload returned with live lookaside lists");
   if (!ExecutiveResources.empty())
@@ -1458,9 +1541,21 @@ llvm::Error KernelModel::finishUnload() {
       return ioError("unload returned with a live system thread object");
   for (const auto &[Object, References] : ReferencedObjects)
     if (References.Pointers || References.Handles)
-      return ioError("unload returned with live object references or handles");
+      return ioError("unload returned with live object references or handles "
+                     "(thread handles, thread pointer references, process "
+                     "pointer references or symbolic-link handles)");
   if (Framework && Framework->hasLiveBinding())
     return ioError("unload returned with a live framework binding");
+  if (auto E = releaseFilterNameCache())
+    return E;
+  if (!NdisConfigurationHandles.empty())
+    return ioError("unload returned with live NDIS configuration handles");
+  if (auto E = validateAvlUnload())
+    return E;
+  if (auto E = validateServiceUnload())
+    return E;
+  if (auto E = releaseFiniteFileSystem())
+    return E;
   const bool OnlyDeclaredVolumes =
       Devices.size() == FileSystem.volumeCount() &&
       std::all_of(Devices.begin(), Devices.end(), [&](const auto &Entry) {
@@ -1551,7 +1646,12 @@ llvm::Error KernelModel::validateIOAccess(uint64_t Address, uint32_t Size,
             return initialized(Request->IOStatusWritten,
                                Request->IOStatusInitialization,
                                Offset - IRPStatusOffset);
-          return ((Request->FileRequestID || Request->FileOperation) &&
+          return (DriverIRPs.contains(IRP) && DriverIRPs.at(IRP).Builder &&
+                  ((Offset >= IRPUserIOSBOffset &&
+                    Offset < IRPUserEventOffset + 8) ||
+                   (Offset >= IRPThreadOffset &&
+                    Offset < IRPThreadOffset + 8))) ||
+                 ((Request->FileRequestID || Request->FileOperation) &&
                   ((Offset >= IRPAllocationFlagsOffset &&
                     Offset < IRPUserEventOffset + profile::PointerSize) ||
                    (Offset >= IRPThreadOffset &&
@@ -1590,7 +1690,8 @@ llvm::Error KernelModel::validateIOAccess(uint64_t Address, uint32_t Size,
         return E;
     // Raw user pointers are outside this kernel-only profile. Buffered requests
     // use SystemBuffer; direct requests access the locked system mapping.
-    if (!Request->Neither && !nativeFileRequest(Request->FileRequestID))
+    if (!Request->Neither && !nativeFileRequest(Request->FileRequestID) &&
+        !(DriverIRPs.contains(IRP) && DriverIRPs.at(IRP).Builder))
       if (auto E = Check(Request->UserBuffer,
                          Request->Direct ? Request->TransferSize
                                          : Request->OutputSize,

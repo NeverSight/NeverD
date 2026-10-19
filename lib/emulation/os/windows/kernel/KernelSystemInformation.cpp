@@ -14,7 +14,7 @@
 namespace neverd::emulation {
 llvm::Expected<uint64_t> KernelModel::pcToFileHeader(uint64_t PC,
                                                      uint64_t Output) {
-  if (LoadedModules.empty())
+  if (LoadedModules.empty() || (!Exports && !DriverModule && !Version))
     return llvm::createStringError("kernel module inventory is unavailable");
   std::optional<uint64_t> Base;
   for (const auto &Module : LoadedModules) {
@@ -46,6 +46,13 @@ KernelModel::querySystemInformation(llvm::ArrayRef<uint64_t> A, bool Trusted) {
     return llvm::createStringError("kernel system information: " + Why);
   };
   const uint32_t Class = A[0];
+  if ((Version || DriverModule || Class == 5 || Class == 76 || Class == 103 ||
+       Class == 202) &&
+      !(Class == kernel_va_shadow_query::InformationClass &&
+        KernelVaShadowQuery))
+    return queryNativeSystemInformation(A, Trusted);
+  if (Class == 11 && !Exports && !DriverModule && !Version)
+    return Fail("module inventory is unavailable");
   if (Class != 11 && Class != kernel_va_shadow_query::InformationClass)
     return Fail("unsupported information class");
   if (!Trusted) {

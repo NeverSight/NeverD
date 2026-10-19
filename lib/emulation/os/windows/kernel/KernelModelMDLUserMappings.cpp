@@ -44,9 +44,48 @@ KernelModel::resolveUserMemoryRange(uint64_t Address, uint64_t Length,
   if (!canCatchUserAccess(Address, Length) ||
       ExitedUserProcesses.contains(CurrentUserProcessID))
     return accessViolation();
+  if (ForWrite)
+    if (auto E = prepareProcessImageWrite(Address, Length))
+      return std::move(E);
   uint64_t Backing = 0;
+  if (const auto *V = processMemoryView(CurrentUserProcessID, Address, 1)) {
+    if (ForWrite && !(V->Permissions & Write))
+      return accessViolation();
+    Backing = V->Backing + (Address - V->Base);
+    uint64_t Done = 0;
+    while (Done < Length) {
+      const auto *Part =
+          processMemoryView(CurrentUserProcessID, Address + Done, 1);
+      if (!Part || !(Part->Permissions & Read) ||
+          (ForWrite && !(Part->Permissions & Write)))
+        return accessViolation();
+      if (Part->Backing + Address + Done - Part->Base != Backing + Done)
+        return userMappingError("probing scatter-backed process image pages "
+                                "requires multiple ranges");
+      Done +=
+          std::min(Length - Done, Part->Size - (Address + Done - Part->Base));
+    }
+  }
+  const uint32_t SectionPID =
+      UserRequestContext ? CurrentUserProcessID : uint32_t(SystemProcessID);
+  for (const auto &[Key, V] : SectionViews)
+    if (!Backing && V.ProcessID == SectionPID && Address >= V.Base &&
+        Address - V.Base < V.Size && Length <= V.Size - (Address - V.Base)) {
+      if (ForWrite && !(V.Permissions & Write))
+        return accessViolation();
+      const uint64_t Offset = Address - V.Base,
+                     FirstPage = Offset / profile::PageSize;
+      Backing = V.Pages.at(FirstPage).Backing + Offset % profile::PageSize;
+      for (uint64_t I = FirstPage;
+           I <= (Offset + Length - 1) / profile::PageSize; ++I)
+        if (V.Pages.at(I).Backing !=
+            V.Pages.at(FirstPage).Backing + (I - FirstPage) * profile::PageSize)
+          return userMappingError("probing this scatter-backed section span "
+                                  "requires multiple ranges");
+      break;
+    }
   auto View = UserMdlViews.upper_bound({CurrentUserProcessID, Address});
-  if (View != UserMdlViews.begin()) {
+  if (!Backing && View != UserMdlViews.begin()) {
     --View;
     const auto &V = View->second;
     if (V.ProcessID == CurrentUserProcessID && Address >= V.Address &&

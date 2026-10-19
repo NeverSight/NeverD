@@ -37,3 +37,7 @@ NEVERD_KERNEL_EXECUTION_API(KeAreAllApcsDisabled, 0, Dispatch,
 NEVERD_KERNEL_EXECUTION_API(IoGetInitialStack, 0, APC, queryInitialStack())
 NEVERD_KERNEL_EXECUTION_API(IoGetStackLimits, 2, Any,
                             queryStackLimits(A[0], A[1]))
+NEVERD_KERNEL_EXECUTION_API(KeSetSystemGroupAffinityThread, 2, APC,
+                            groupAffinity(A[0], A[1], false))
+NEVERD_KERNEL_EXECUTION_API(KeRevertToUserGroupAffinityThread, 1, APC,
+                            groupAffinity(A[0], 0, true))

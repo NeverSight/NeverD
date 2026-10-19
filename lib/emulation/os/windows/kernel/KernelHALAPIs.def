@@ -7,3 +7,8 @@
 // https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-kequeryperformancecounter
 NEVERD_KERNEL_HAL_API(KeQueryPerformanceCounter, 1, Any,
                       queryPerformanceCounter(A[0]))
+
+NEVERD_KERNEL_HAL_API(KeStallExecutionProcessor, 1, Any,
+                      stallProcessor(uint32_t(A[0])))
+NEVERD_KERNEL_HAL_API(HalGetBusDataByOffset, 6, Any, pciBusData(A, false))
+NEVERD_KERNEL_HAL_API(HalSetBusDataByOffset, 6, Any, pciBusData(A, true))

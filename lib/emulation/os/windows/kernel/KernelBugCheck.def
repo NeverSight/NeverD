@@ -1,0 +1,17 @@
+//===- KernelBugCheck.def - WDK x64 reason callback record ---------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+// Windows SDK 10.0.19041.0/km/wdm.h KBUGCHECK_REASON_CALLBACK_RECORD.
+NEVERD_KERNEL_BUGCHECK_VALUE(RecordSize, 0x30)
+NEVERD_KERNEL_BUGCHECK_VALUE(RoutineOffset, 0x10)
+NEVERD_KERNEL_BUGCHECK_VALUE(ComponentOffset, 0x18)
+NEVERD_KERNEL_BUGCHECK_VALUE(ReasonOffset, 0x28)
+NEVERD_KERNEL_BUGCHECK_VALUE(StateOffset, 0x2c)
+NEVERD_KERNEL_BUGCHECK_VALUE(Empty, 0)
+NEVERD_KERNEL_BUGCHECK_VALUE(Inserted, 1)
+NEVERD_KERNEL_BUGCHECK_VALUE(FirstReason, 2)
+NEVERD_KERNEL_BUGCHECK_VALUE(LastReason, 7)
+NEVERD_KERNEL_BUGCHECK_VALUE(MaxComponentBytes, 256)
+NEVERD_KERNEL_BUGCHECK_VALUE(MaxRegistrations, 64)

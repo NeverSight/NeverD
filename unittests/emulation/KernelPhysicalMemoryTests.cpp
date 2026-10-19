@@ -170,6 +170,60 @@ TEST_F(KernelPhysicalRAM, FirstCommittedMappingChoosesUnspecifiedPageCache) {
             Cache::NonCached);
 }
 
+TEST_F(KernelPhysicalRAM,
+       AllocatorAdmitsReservedPagingFramesButKeepsLiveOwners) {
+  ASSERT_EQ(llvm::toString(Model->enableGuestFrames(MemoryLimit)), "");
+  const auto Reserved = take(Model->frameAddress(Base));
+  const auto Generation = Model->frameGeneration();
+  const uint64_t Chosen = physical::PhysicalBase + 4 * Page;
+  ASSERT_NE(Reserved, Chosen);
+  ASSERT_EQ(llvm::toString(Model->registerAllocatedPages(
+                1, Base, {Chosen}, KernelPhysicalMemory::CacheType::Cached)),
+            "");
+  EXPECT_EQ(take(Model->frameAddress(Base)), Chosen);
+  EXPECT_GT(Model->frameGeneration(), Generation);
+  // Overlapping managed storage cannot acquire another identity.
+  EXPECT_NE(llvm::toString(Model->registerAllocatedPages(
+                2, Base, {Chosen + Page}, std::nullopt)),
+            "");
+  EXPECT_EQ(take(Model->frameAddress(Base)), Chosen);
+  EXPECT_EQ(Model->find(2), nullptr);
+}
+
+TEST_F(KernelPhysicalRAM,
+       PrivatePageAdmissionIsPureAndMayChooseNewCacheForReservedFrames) {
+  ASSERT_EQ(llvm::toString(Model->enableGuestFrames(MemoryLimit)), "");
+  const auto Before = take(Model->frameAddress(Base));
+  const auto Generation = Model->frameGeneration();
+  const auto Chosen = physical::PhysicalBase + 4 * Page;
+  using Cache = KernelPhysicalMemory::CacheType;
+  EXPECT_NE(llvm::toString(Model->canRegisterAllocatedPages(
+                1, Base, {Chosen, Chosen}, Cache::NonCached)),
+            "");
+  EXPECT_EQ(Model->find(1), nullptr);
+  EXPECT_EQ(take(Model->frameAddress(Base)), Before);
+  EXPECT_EQ(take(Model->frameCacheType(Base)), Cache::Cached);
+  ASSERT_EQ(llvm::toString(Model->canRegisterAllocatedPages(1, Base, {Chosen},
+                                                            Cache::NonCached)),
+            "");
+  EXPECT_EQ(Model->frameGeneration(), Generation);
+  EXPECT_EQ(take(Model->frameAddress(Base)), Before);
+  EXPECT_EQ(take(Model->frameCacheType(Base)), Cache::Cached);
+  ASSERT_EQ(llvm::toString(Model->registerAllocatedPages(1, Base, {Chosen},
+                                                         Cache::NonCached)),
+            "");
+  EXPECT_EQ(take(Model->frameAddress(Base)), Chosen);
+  EXPECT_EQ(take(Model->frameCacheType(Base)), Cache::NonCached);
+  EXPECT_GT(Model->frameGeneration(), Generation);
+  // An allocation owns its cache/PFN choice; a new alias cannot retag it.
+  EXPECT_NE(llvm::toString(Model->canRegisterAllocatedPages(
+                2, Base, {Chosen + Page}, Cache::Cached)),
+            "");
+  EXPECT_EQ(take(Model->frameCacheType(Base)), Cache::NonCached);
+  EXPECT_EQ(take(Model->frameAddress(Base)), Chosen);
+  EXPECT_EQ(Model->find(2), nullptr);
+}
+
 TEST_F(KernelPhysicalRAM, AllocatedPagePlansRejectInventedOrDuplicatePages) {
   const uint64_t Low = physical::PhysicalBase + 4 * Page;
   EXPECT_NE(llvm::toString(Model->registerAllocatedPages(1, Base, {Low, Low},

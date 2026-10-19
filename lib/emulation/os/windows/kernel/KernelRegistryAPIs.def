@@ -19,6 +19,7 @@ NEVERD_KERNEL_REGISTRY_API(ZwEnumerateValueKey, 6)
 NEVERD_KERNEL_REGISTRY_API(ZwQueryKey, 5)
 // https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-zwenumeratekey
 NEVERD_KERNEL_REGISTRY_API(ZwEnumerateKey, 6)
+NEVERD_KERNEL_REGISTRY_API(ZwFlushKey, 1)
 NEVERD_KERNEL_REGISTRY_API(ZwSetValueKey, 6)
 NEVERD_KERNEL_REGISTRY_API(ZwDeleteValueKey, 2)
 NEVERD_KERNEL_REGISTRY_API(ZwDeleteKey, 1)

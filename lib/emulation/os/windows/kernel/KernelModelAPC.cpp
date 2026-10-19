@@ -64,6 +64,18 @@ llvm::Expected<uint64_t> KernelModel::leaveApcRegion(ApcRegionKind Kind) {
     return State.takeError();
   const bool Critical = Kind == ApcRegionKind::Critical;
   auto &Depth = Critical ? (*State)->CriticalDepth : (*State)->GuardedDepth;
+  if (Critical)
+    for (const auto &[ID, N] : ThreadNotifications)
+      if (N.Active && N.Thread == CurrentThreadKey &&
+          Depth <= N.Baseline.CriticalDepth + 1)
+        return apcError("thread notify callback cannot consume its implicit "
+                        "critical region");
+  if (Critical && ProcessNotificationState &&
+      ProcessNotificationState->Active &&
+      ProcessNotificationState->Thread == CurrentThreadKey &&
+      Depth <= ProcessNotificationState->Baseline.CriticalDepth + 1)
+    return apcError(
+        "process notify callback cannot consume its implicit critical region");
   if (!Depth)
     return apcError(Critical ? "KeLeaveCriticalRegion has no matching entry"
                              : "KeLeaveGuardedRegion has no matching entry");
