@@ -363,6 +363,13 @@ struct Runtime::State::Engine {
       if (instance->Type != Object::Instance ||
           !program.assignable(objectDescriptor(*instance), ref.owner))
         fail(ExecutionStop::Invalid, "field receiver type mismatch");
+      if (program.androidFrameworkField(field)) {
+        auto result =
+            state.framework.field(*state.heap, field, receiver, write, admit);
+        if (result.stop != ExecutionStop::Returned)
+          throw Halt{std::move(result)};
+        return result.value;
+      }
       value = &instance->Fields.at(&field);
     }
     if (write)

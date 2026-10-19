@@ -31,6 +31,207 @@ protected:
     return result.value;
   }
 };
+using Instrumentation = AndroidApplicationSnapshot::Instrumentation;
+const FieldRef InstrumentationField{"Landroid/app/ActivityThread;",
+                                    "mInstrumentation",
+                                    "Landroid/app/Instrumentation;"};
+TEST_F(AndroidFrameworkTest,
+       InstrumentationStateIsIndependentOfApplicationPhase) {
+  const auto *field = program.findField(InstrumentationField, false);
+  ASSERT_NE(field, nullptr);
+  EXPECT_FALSE(has(field->access, "public"));
+  EXPECT_EQ(program.findField(InstrumentationField, true), nullptr);
+  for (auto phase : {Phase::Attached, Phase::Application}) {
+    Runtime unknown(program, heap, AndroidApplicationSnapshot{phase});
+    auto thread =
+        unknown.library(operation(CurrentActivityThread), 0, {}, Admit);
+    auto missing = unknown.field(*field, thread.value, {}, Admit, 65536);
+    EXPECT_EQ(missing.stop, ExecutionStop::Unsupported);
+    EXPECT_NE(missing.diagnostic.find("instrumentation state"),
+              std::string::npos);
+    for (auto input :
+         {Instrumentation::Uninitialized, Instrumentation::Platform}) {
+      AndroidApplicationSnapshot snapshot{phase};
+      snapshot.instrumentation = input;
+      Runtime state(program, heap, snapshot);
+      auto thread =
+          state.library(operation(CurrentActivityThread), 0, {}, Admit);
+      auto value = state.field(*field, thread.value, {}, Admit, 65536);
+      ASSERT_EQ(value.stop, ExecutionStop::Returned) << value.diagnostic;
+      EXPECT_EQ(value.value != 0, input == Instrumentation::Platform);
+      auto method = state.library(operation(ThreadInstrumentation),
+                                  thread.value, {}, Admit);
+      EXPECT_EQ(method.stop, ExecutionStop::Returned) << method.diagnostic;
+      EXPECT_EQ(method.value, value.value);
+      if (value.value)
+        EXPECT_EQ(heap->get(value.value)->ClassName,
+                  "android/app/Instrumentation");
+      auto cleared = state.field(*field, thread.value, 0, Admit, 65536);
+      EXPECT_EQ(cleared.stop, ExecutionStop::Returned);
+      EXPECT_EQ(state
+                    .library(operation(ThreadInstrumentation), thread.value, {},
+                             Admit)
+                    .value,
+                0u);
+      EXPECT_EQ(
+          state.field(*field, thread.value, value.value, Admit, 65536).stop,
+          ExecutionStop::Returned);
+      EXPECT_EQ(state
+                    .library(operation(ThreadInstrumentation), thread.value, {},
+                             Admit)
+                    .value,
+                value.value);
+    }
+  }
+}
+TEST_F(AndroidFrameworkTest,
+       ExplicitFieldWritesDoNotNeedAnInventedInitialValue) {
+  auto thread = call(CurrentActivityThread);
+  const auto *field = program.findField(InstrumentationField, false);
+  ASSERT_NE(field, nullptr);
+  EXPECT_EQ(runtime.field(*field, thread, 0, Admit, 65536).stop,
+            ExecutionStop::Returned);
+  EXPECT_EQ(call(ThreadInstrumentation, thread), 0u);
+}
+TEST_F(AndroidFrameworkTest,
+       InstrumentationRejectsForeignReceiversAndWrongValues) {
+  const auto *field = program.findField(InstrumentationField, false);
+  ASSERT_NE(field, nullptr);
+  for (const char *type : {"android/app/ActivityThread", "java/lang/Object"}) {
+    Runtime state(program, heap, AndroidApplicationSnapshot{Phase::Attached});
+    state.library(operation(CurrentActivityThread), 0, {}, Admit);
+    auto foreign = heap->allocate(Object::Instance, type, 0);
+    auto result = state.field(*field, foreign->Identity, 0, Admit, 65536);
+    EXPECT_EQ(result.stop,
+              std::string_view(type) == "android/app/ActivityThread"
+                  ? ExecutionStop::Unsupported
+                  : ExecutionStop::Invalid);
+  }
+  auto thread = call(CurrentActivityThread);
+  auto wrong = heap->allocate(Object::Instance, "java/lang/Object", 0);
+  EXPECT_EQ(runtime.field(*field, thread, wrong->Identity, Admit, 65536).stop,
+            ExecutionStop::Invalid);
+}
+TEST_F(AndroidFrameworkTest,
+       InstrumentationHonorsBudgetAndRejectsMalformedSnapshots) {
+  for (auto input :
+       {Instrumentation::Uninitialized, Instrumentation::Platform}) {
+    AndroidApplicationSnapshot snapshot{Phase::Unattached};
+    snapshot.instrumentation = input;
+    EXPECT_THROW(Runtime(program, heap, snapshot), Error);
+  }
+  AndroidApplicationSnapshot invalid{Phase::Attached};
+  invalid.instrumentation = Instrumentation(9);
+  EXPECT_THROW(Runtime(program, heap, invalid), Error);
+  AndroidApplicationSnapshot snapshot{Phase::Attached};
+  snapshot.instrumentation = Instrumentation::Platform;
+  Runtime state(program, heap, snapshot);
+  auto thread =
+      state.library(operation(CurrentActivityThread), 0, {}, Admit).value;
+  const auto *field = program.findField(InstrumentationField, false);
+  ASSERT_NE(field, nullptr);
+  auto result = state.field(
+      *field, thread, {}, [] { return ExecutionStop::Timeout; }, 65536);
+  EXPECT_EQ(result.stop, ExecutionStop::Timeout);
+  EXPECT_EQ(state.field(*field, thread, {}, Admit, 65536).stop, result.stop);
+}
+TEST_F(AndroidFrameworkTest,
+       DexGetterAndNativeFieldShareMutableSubclassIdentity) {
+  Class reader;
+  reader.name = "Ltest/InstrumentationReader;";
+  reader.superclass = "Ljava/lang/Object;";
+  reader.access = {"public"};
+  Method method;
+  method.reference = {reader.name,
+                      "read",
+                      {"Landroid/app/ActivityThread;"},
+                      "Landroid/app/Instrumentation;"};
+  method.access = {"public", "static"};
+  method.registers = 1;
+  Instruction get;
+  get.opcode = "invoke-virtual";
+  get.registers = {0};
+  get.reference = MethodRef{"Landroid/app/ActivityThread;",
+                            "getInstrumentation",
+                            {},
+                            "Landroid/app/Instrumentation;"};
+  Instruction move;
+  move.pc = 3;
+  move.opcode = "move-result-object";
+  move.registers = {0};
+  Instruction ret;
+  ret.pc = 4;
+  ret.opcode = "return-object";
+  ret.registers = {0};
+  method.instructions = {get, move, ret};
+  reader.methods.push_back(method);
+  Class custom;
+  custom.name = "Ltest/CustomInstrumentation;";
+  custom.superclass = "Landroid/app/Instrumentation;";
+  custom.access = {"public"};
+  Program code({reader, custom}, Properties{});
+  Runtime state(code, heap, AndroidApplicationSnapshot{Phase::Attached});
+  auto thread =
+      state.library(operation(CurrentActivityThread), 0, {}, Admit).value;
+  auto replacement = state.allocate(custom.name, true, Admit, 65536);
+  ASSERT_EQ(replacement.stop, ExecutionStop::Returned)
+      << replacement.diagnostic;
+  const auto *field = code.findField(InstrumentationField, false);
+  ASSERT_NE(field, nullptr);
+  EXPECT_EQ(state.field(*field, thread, replacement.value, Admit, 65536).stop,
+            ExecutionStop::Returned);
+  const uint64_t args[]{thread};
+  auto dex =
+      state.execute(*code.findStatic(method.reference), args, Admit, 65536);
+  EXPECT_EQ(dex.stop, ExecutionStop::Returned) << dex.diagnostic;
+  EXPECT_EQ(dex.value, replacement.value);
+  EXPECT_EQ(state.field(*field, thread, {}, Admit, 65536).value, dex.value);
+}
+
+TEST_F(AndroidFrameworkTest,
+       FrameworkFieldOwnershipDoesNotTrustSourceMetadata) {
+  Class ordinary;
+  ordinary.name = "Ltest/Ordinary;";
+  ordinary.superclass = "Ljava/lang/Object;";
+  ordinary.access = {"public"};
+  ordinary.source_id = "android-api28-framework";
+  Field field;
+  field.reference = {ordinary.name, "value", "I"};
+  field.access = {"public"};
+  ordinary.fields.push_back(field);
+  Program code({ordinary}, Properties{});
+  const auto *owned = code.findField(field.reference, false);
+  ASSERT_NE(owned, nullptr);
+  EXPECT_FALSE(code.androidFrameworkField(*owned));
+  const auto *platform = code.findField(InstrumentationField, false);
+  ASSERT_NE(platform, nullptr);
+  EXPECT_TRUE(code.androidFrameworkField(*platform));
+  Field copy = *platform;
+  EXPECT_FALSE(code.androidFrameworkField(copy));
+  Runtime state(code, heap);
+  auto object = state.allocate(ordinary.name, true, Admit, 65536);
+  ASSERT_EQ(object.stop, ExecutionStop::Returned);
+  EXPECT_EQ(state.field(*owned, object.value, 23, Admit, 65536).stop,
+            ExecutionStop::Returned);
+  EXPECT_EQ(state.field(*owned, object.value, {}, Admit, 65536).value, 23u);
+}
+TEST_F(AndroidFrameworkTest, InstrumentationAllocationHonorsSharedHeapLimit) {
+  auto bounded = std::make_shared<Heap>(65536, 1);
+  AndroidApplicationSnapshot snapshot{Phase::Attached};
+  snapshot.instrumentation = Instrumentation::Platform;
+  Runtime state(program, bounded, snapshot);
+  auto thread = state.library(operation(CurrentActivityThread), 0, {}, Admit);
+  ASSERT_EQ(thread.stop, ExecutionStop::Returned);
+  const auto *field = program.findField(InstrumentationField, false);
+  ASSERT_NE(field, nullptr);
+  auto result = state.field(*field, thread.value, {}, Admit, 65536);
+  EXPECT_EQ(result.stop, ExecutionStop::HeapLimit);
+  EXPECT_EQ(
+      state.library(operation(ThreadInstrumentation), thread.value, {}, Admit)
+          .stop,
+      ExecutionStop::HeapLimit);
+}
+
 TEST_F(AndroidFrameworkTest, FilesDirectoryRetainsFileAndStringIdentities) {
   for (const char *input :
        {"/data/user/0/example/files", "//data///files/", "/"}) {

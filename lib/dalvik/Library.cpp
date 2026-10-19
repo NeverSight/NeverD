@@ -119,6 +119,8 @@ static const LibraryMethod Methods[] = {
      "()Landroid/app/Application;", CurrentApplication, true},
     {"android/app/ActivityThread", "getApplication",
      "()Landroid/app/Application;", ThreadApplication},
+    {"android/app/ActivityThread", "getInstrumentation",
+     "()Landroid/app/Instrumentation;", ThreadInstrumentation},
     {"android/content/Context", "getApplicationContext",
      "()Landroid/content/Context;", ApplicationContext},
     {"android/content/ContextWrapper", "getBaseContext",

@@ -18,6 +18,7 @@ void Program::addAndroidFramework() {
   for (auto [name, base] :
        {std::pair{"android/app/ClientTransactionHandler", "java/lang/Object"},
         {"android/app/ActivityThread", "android/app/ClientTransactionHandler"},
+        {"android/app/Instrumentation", "java/lang/Object"},
         {"android/content/ComponentCallbacks", "java/lang/Object"},
         {"android/content/ComponentCallbacks2", "java/lang/Object"},
         {"android/content/Context", "java/lang/Object"},
@@ -57,8 +58,20 @@ void Program::addAndroidFramework() {
     if (std::string_view(name) == "java/io/File")
       type.interfaces = {"Ljava/io/Serializable;", "Ljava/lang/Comparable;"};
     type.source_id = "android-api28-framework";
-    classes.emplace(type.name, std::move(type));
+    if (std::string_view(name) == "android/app/ActivityThread") {
+      Field field;
+      field.reference = {type.name, "mInstrumentation",
+                         "Landroid/app/Instrumentation;"};
+      type.fields.push_back(std::move(field));
+    }
+    auto [entry, inserted] = classes.emplace(type.name, std::move(type));
+    if (inserted)
+      for (const auto &field : entry->second.fields)
+        android_framework_fields.insert(&field);
   }
+}
+bool Program::androidFrameworkField(const Field &field) const {
+  return android_framework_fields.contains(&field);
 }
 
 AndroidFramework::AndroidFramework(
@@ -71,6 +84,13 @@ AndroidFramework::AndroidFramework(
       snapshot->phase != Phase::Attached &&
       snapshot->phase != Phase::Application)
     throw Error("invalid Android application phase");
+  if (snapshot->instrumentation &&
+      (snapshot->phase == Phase::Unattached ||
+       (*snapshot->instrumentation !=
+            AndroidApplicationSnapshot::Instrumentation::Uninitialized &&
+        *snapshot->instrumentation !=
+            AndroidApplicationSnapshot::Instrumentation::Platform)))
+    throw Error("invalid Android instrumentation snapshot");
   if (snapshot->package_name) {
     const auto &name = *snapshot->package_name;
     if (snapshot->phase != Phase::Application || name.empty() ||
@@ -97,11 +117,66 @@ AndroidFramework::AndroidFramework(
   }
 }
 
+ExecutionResult
+AndroidFramework::instrumentationValue(Heap &heap, uint64_t receiver,
+                                       std::optional<uint64_t> write,
+                                       const AdmitInstruction &admit) {
+  if (!snapshot || !thread || receiver != thread)
+    return {ExecutionStop::Unsupported,
+            0,
+            {},
+            "unmodeled Android ActivityThread instance"};
+  auto budget = admit();
+  if (budget != ExecutionStop::Returned)
+    return {budget, 0, {}, "Android framework work budget exhausted"};
+  if (write)
+    instrumentation = *write;
+  if (!instrumentation) {
+    if (!snapshot->instrumentation)
+      return {ExecutionStop::Unsupported,
+              0,
+              {},
+              "Android instrumentation state is not supplied"};
+    if (*snapshot->instrumentation ==
+        AndroidApplicationSnapshot::Instrumentation::Uninitialized) {
+      instrumentation = 0;
+    } else {
+      auto value =
+          heap.allocate(Object::Instance, "android/app/Instrumentation", 0);
+      if (!value)
+        return {ExecutionStop::HeapLimit,
+                0,
+                {},
+                "Android framework storage budget exhausted"};
+      instrumentation = value->Identity;
+    }
+  }
+  return {ExecutionStop::Returned, *instrumentation, {}, {}};
+}
+
+ExecutionResult AndroidFramework::field(Heap &heap, const Field &field,
+                                        uint64_t receiver,
+                                        std::optional<uint64_t> write,
+                                        const AdmitInstruction &admit) {
+  const auto &ref = field.reference;
+  if (ref.owner == "Landroid/app/ActivityThread;" &&
+      ref.name == "mInstrumentation" &&
+      ref.type == "Landroid/app/Instrumentation;" &&
+      !has(field.access, "static"))
+    return instrumentationValue(heap, receiver, write, admit);
+  return {ExecutionStop::Unsupported,
+          0,
+          {},
+          "Android framework field is not modeled"};
+}
+
 ExecutionResult AndroidFramework::execute(Heap &heap, const Program &program,
                                           const LibraryMethod &method,
                                           uint64_t receiver,
                                           std::span<const uint64_t> arguments,
                                           const AdmitInstruction &admit) {
+  if (method.Op == ThreadInstrumentation)
+    return instrumentationValue(heap, receiver, {}, admit);
   struct Stop {
     ExecutionResult result;
   };

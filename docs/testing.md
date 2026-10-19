@@ -21,6 +21,16 @@ checks both LP64 ABIs, output bounds, root and unknown snapshots.
 O0/O2 across relocation packing, including guest allocation/free and errno.
 `ProcessReport.GuestDirectoriesAreExplicitAndTyped` checks JSON boundaries.
 
+`AndroidFrameworkTest.Instrumentation*`,
+`ExplicitFieldWritesDoNotNeedAnInventedInitialValue`, and
+`DexGetterAndNativeFieldShareMutableSubclassIdentity` cover independent lifecycle
+inputs, unknown state, mutable identities, receiver/type checks and resource
+stops. `AndroidJNI.InstrumentationFieldAndGetterShareLifetimeAndWrites` exercises
+field IDs, getters, null/replacement writes and detach/reattach across native
+fixture variants and CPU backends. `ProcessReport.AndroidInstrumentationInputIsExplicitAndStrict`
+checks JSON types and phase constraints. Run these with the full Dalvik suite,
+Android JNI regressions and ProcessReport tests after changing framework fields.
+
 `LinuxFileNamespace.CreatedDirectories*` and `Directory*` check directory
 inodes, complete stat layouts, parent updates, setgid/umask, reservation/time
 refusal, EOF insertion and duplicated cursors on both LP64 ABIs.

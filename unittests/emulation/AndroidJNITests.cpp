@@ -58,6 +58,26 @@ TEST_P(AndroidJNI, VMThreadAttachmentAndVersions) {
   EXPECT_EQ(R.Stop, ProcessStopReason::Returned) << R.Diagnostic;
   EXPECT_EQ(R.ReturnValue, 0u);
 }
+TEST_P(AndroidJNI, InstrumentationFieldAndGetterShareLifetimeAndWrites) {
+  using Snapshot = mobile::dalvik::AndroidApplicationSnapshot;
+  for (unsigned Mode : {1u, 2u, 3u}) {
+    Options.Android->Application = Snapshot{Snapshot::Phase::Attached};
+    if (Mode != 3)
+      Options.Android->Application->instrumentation =
+          Mode == 1 ? Snapshot::Instrumentation::Uninitialized
+                    : Snapshot::Instrumentation::Platform;
+    Options.Android->Arguments = {Mode};
+    auto R = run("jni_instrumentation");
+    EXPECT_EQ(R.Stop, ProcessStopReason::Returned) << R.Diagnostic;
+    EXPECT_EQ(R.ReturnValue, 0u);
+  }
+  Options.Android->Application = Snapshot{Snapshot::Phase::Attached};
+  Options.Android->Arguments = {0};
+  auto Unknown = run("jni_instrumentation");
+  EXPECT_EQ(Unknown.Stop, ProcessStopReason::UnsupportedService);
+  EXPECT_NE(Unknown.Diagnostic.find("instrumentation state"),
+            std::string::npos);
+}
 TEST_P(AndroidJNI, ApplicationSnapshotHasThreeDistinctLifecyclePhases) {
   using Phase = mobile::dalvik::AndroidApplicationSnapshot::Phase;
   for (auto P : {Phase::Unattached, Phase::Attached, Phase::Application}) {

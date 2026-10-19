@@ -54,7 +54,7 @@ descriptor spellings, non-ASCII lookup and unknown loader instances stop
 explicitly. They do not become ClassNotFoundException, empty classes, host
 classpath searches or successful placeholder objects.
 
-This is one immutable lifecycle snapshot per workload. It does not execute
+The lifecycle phase is fixed per workload; modeled mutable fields retain guest writes. It does not execute
 `bindApplication`, custom Application constructors, framework class initializers,
 split/delegate-last/custom class loaders, security-manager policies, framework
 callbacks, a Java scheduler, `Class.forName` or native Java method bodies.
@@ -76,6 +76,26 @@ Behavior references are Android's
 and [ClassLoader](https://android.googlesource.com/platform/libcore/+/android-9.0.0_r1/ojluni/src/main/java/java/lang/ClassLoader.java)
 at `android-9.0.0_r1`. The implementation and synthetic tests are independently
 written; reference framework bodies are not embedded in NeverD.
+
+## Instrumentation field state
+
+`application_snapshot.instrumentation` explicitly selects `uninitialized`
+(a null field) or `platform` (one retained `android.app.Instrumentation` object).
+It is optional for `attached` and `application`, and invalid for `unattached`.
+Application creation does not select an instrumentation value: API 28 binding
+installs instrumentation before creating the Application and can use a custom
+subclass. An omitted value therefore stops when read, rather than implying null
+or the default implementation.
+
+The declared package-private `ActivityThread.mInstrumentation` instance field and
+public `getInstrumentation()` method share one Runtime-owned value. JNI resolves
+its actual field ID and reads/writes through the same owner used by DEX method
+execution. A guest write, including null, establishes the value without reading
+an unknown initial value; compatible supplied subclass objects retain identity.
+Deleted JNI local references and native detach/reattach do not reset the field.
+An unrelated ActivityThread object cannot borrow the process snapshot's state.
+Unknown fields, custom instrumentation startup and callbacks remain unsupported;
+this projection does not execute framework constructors, `basicInit` or services.
 
 ## Existing application files directory
 

@@ -227,10 +227,22 @@ androidOptionsFromJSON(const llvm::json::Value &Value) {
               Text->contains('\0'))
             return invalid(Key);
           Snapshot.files_directory = Text->str();
+        } else if (Key == field::ApplicationInstrumentation) {
+          using State =
+              mobile::dalvik::AndroidApplicationSnapshot::Instrumentation;
+          if (*Text == "uninitialized")
+            Snapshot.instrumentation = State::Uninitialized;
+          else if (*Text == "platform")
+            Snapshot.instrumentation = State::Platform;
+          else
+            return invalid(Key);
         } else
           return invalid(Key);
       }
       if (!HasPhase ||
+          (Snapshot.instrumentation &&
+           Snapshot.phase ==
+               mobile::dalvik::AndroidApplicationSnapshot::Phase::Unattached) ||
           ((Snapshot.package_name || Snapshot.files_directory) &&
            Snapshot.phase !=
                mobile::dalvik::AndroidApplicationSnapshot::Phase::Application))

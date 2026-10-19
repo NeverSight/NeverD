@@ -25,5 +25,9 @@ struct AndroidApplicationSnapshot {
   // Initialized, existing app-private files directory. No mkdir/chmod is
   // inferred. Native workloads also require the same directory in LinuxFiles.
   std::optional<std::string> files_directory;
+  // Independent of application creation: binding may install instrumentation
+  // first, including a custom subclass. Absence is unknown, not null/default.
+  enum class Instrumentation { Uninitialized, Platform };
+  std::optional<Instrumentation> instrumentation;
 };
 } // namespace neverd::mobile::dalvik

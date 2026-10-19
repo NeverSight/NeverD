@@ -13,6 +13,7 @@
 
 #include <functional>
 #include <memory>
+#include <set>
 #include <span>
 
 namespace neverd::mobile::dalvik {
@@ -80,12 +81,16 @@ public:
     bool intern_string = false;
   };
   const PlatformValue *platformValue(const Field &field) const;
+  // Identity-based ownership, independent of source/debug metadata supplied
+  // by a DEX input. These values live in the shared framework projection.
+  bool androidFrameworkField(const Field &field) const;
 
 private:
   void addAndroidVersion(const std::map<std::string, std::string> &properties);
   void addAndroidFramework();
   ClassMap classes;
   std::map<FieldRef, PlatformValue> platform_values;
+  std::set<const Field *> android_framework_fields;
 };
 
 // One workload's mutable class and object state over an immutable Program,

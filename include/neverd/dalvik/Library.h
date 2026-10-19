@@ -38,6 +38,7 @@ enum LibraryOperation {
   CurrentActivityThread,
   CurrentApplication,
   ThreadApplication,
+  ThreadInstrumentation,
   ApplicationContext,
   BaseContext,
   ContextClassLoader,

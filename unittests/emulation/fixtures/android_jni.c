@@ -24,6 +24,52 @@ static Handle attach(void) {
     return 0;
   return env;
 }
+int jni_instrumentation(int mode) {
+  Handle e = attach();
+  CHECK(e);
+  Ref type = C(e, Ref, 6, "android/app/ActivityThread");
+  Ref thread_id = C(e, Ref, 113, type, "currentActivityThread",
+                    "()Landroid/app/ActivityThread;");
+  Ref thread = C(e, Ref, 114, type, thread_id);
+  CHECK(thread);
+  Ref field =
+      C(e, Ref, 94, type, "mInstrumentation", "Landroid/app/Instrumentation;");
+  CHECK(field && field == C(e, Ref, 94, type, "mInstrumentation",
+                            "Landroid/app/Instrumentation;"));
+  if (mode == 3)
+    C(e, void, 104, thread, field, (Ref)0);
+  Ref value = C(e, Ref, 95, thread, field);
+  CHECK(!!value == (mode == 2));
+  Ref getter = C(e, Ref, 33, type, "getInstrumentation",
+                 "()Landroid/app/Instrumentation;");
+  Ref via_method = C(e, Ref, 34, thread, getter);
+  CHECK(C(e, int, 24, value, via_method));
+  Ref global_thread = C(e, Ref, 21, thread);
+  Ref global_value = value ? C(e, Ref, 21, value) : 0;
+  if (value) {
+    Ref declared = C(e, Ref, 6, "android/app/Instrumentation");
+    Ref actual = C(e, Ref, 31, value);
+    CHECK(C(e, int, 24, declared, actual));
+    C(e, void, 23, value);
+    C(e, void, 23, via_method);
+  }
+  CHECK(!C(vm, int, 5));
+  e = attach();
+  CHECK(e);
+  Ref retained = C(e, Ref, 95, global_thread, field);
+  CHECK(C(e, int, 24, global_value, retained));
+  C(e, void, 104, global_thread, field, (Ref)0);
+  CHECK(!C(e, Ref, 34, global_thread, getter));
+  C(e, void, 104, global_thread, field, global_value);
+  Ref restored = C(e, Ref, 34, global_thread, getter);
+  CHECK(C(e, int, 24, global_value, restored));
+  C(e, void, 22, global_thread);
+  if (global_value)
+    C(e, void, 22, global_value);
+  CHECK(!C(vm, int, 5));
+  return 0;
+}
+
 int jni_application_files(void) {
   Handle e = attach();
   CHECK(e);

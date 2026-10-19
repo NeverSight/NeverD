@@ -1601,6 +1601,31 @@ TEST(ProcessReport, GuestDirectoriesAreExplicitAndTyped) {
   }
 }
 
+TEST(ProcessReport, AndroidInstrumentationInputIsExplicitAndStrict) {
+  using Snapshot = mobile::dalvik::AndroidApplicationSnapshot;
+  for (const char *Kind : {"uninitialized", "platform"}) {
+    auto Parsed = processOptionsFromJSON(
+        std::string(
+            R"({"android":{"jni":true,"application_snapshot":{"phase":"attached","instrumentation":")") +
+        Kind + "\"}}}");
+    ASSERT_TRUE(bool(Parsed)) << llvm::toString(Parsed.takeError());
+    EXPECT_EQ(Parsed->Android->Application->instrumentation,
+              std::string_view(Kind) == "platform"
+                  ? Snapshot::Instrumentation::Platform
+                  : Snapshot::Instrumentation::Uninitialized);
+  }
+  for (const char *Bad :
+       {R"({"phase":"unattached","instrumentation":"platform"})",
+        R"({"phase":"attached","instrumentation":"custom"})",
+        R"({"phase":"attached","instrumentation":null})",
+        R"({"phase":"attached","instrumentation":false})"}) {
+    auto Parsed = processOptionsFromJSON(
+        std::string(R"({"android":{"application_snapshot":)") + Bad + "}}");
+    EXPECT_FALSE(bool(Parsed)) << Bad;
+    llvm::consumeError(Parsed.takeError());
+  }
+}
+
 TEST(ProcessReport, AndroidApplicationSnapshotIsExplicitAndStrict) {
   auto Parsed = processOptionsFromJSON(R"({"android":{"jni":true,
     "application_snapshot":{"phase":"application","package_name":"test.app"}}})");

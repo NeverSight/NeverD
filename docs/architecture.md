@@ -8197,6 +8197,10 @@ boundary and heap; native thread detach never resets that process state. JSON
 supplies an optional snapshot, not inferred initialization or a second object
 owner. See [application snapshots](android-application-runtime.md) for the
 admitted methods, loader namespace and unsupported lifecycle transitions.
+Program registers framework field ownership by declaration identity, independent
+of supplied source metadata. Runtime routes those instance fields to the same
+AndroidFramework state as library getters. Instrumentation starts from explicit
+optional state and retains compatible guest writes; JNI IDs do not own a copy.
 The retained application files directory and File path values use the same
 heap. Native setup validates its declared directory against LinuxFiles; Dalvik
 does not acquire an independent host filesystem. LinuxFiles owns getcwd bytes
