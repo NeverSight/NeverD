@@ -91,7 +91,8 @@ public:
     return llvm::Error::success();
   }
   llvm::Error run(uint64_t PC, size_t Count = 1,
-                  const MachineRunControl *Control = nullptr) {
+                  const MachineRunControl *Control = nullptr,
+                  bool FixedAArch64Step = false) {
     ActiveControl = Control;
     Cancelled = false;
     auto Release = llvm::scope_exit([&] { ActiveControl = nullptr; });
@@ -102,16 +103,27 @@ public:
     // Host backing writes bypass Unicorn's code-write invalidation. A checked
     // step can execute only the instruction at PC: invalidating its first
     // byte retires every block covering that entry, including an instruction
-    // whose operands cross into another physical page. Later entries each
-    // perform their own invalidation, so writes through aliases stay visible.
+    // whose operands cross into another physical page. A fixed-width checked
+    // ARM64 step may retain that block only after revalidating all its bytes.
     // Direct runs and multi-instruction maintenance can visit other cached
     // entries and still need a full flush. Avoid wrapping the exclusive end.
-    const auto CacheStatus =
-        Count == 1 && PC != std::numeric_limits<uint64_t>::max()
-            ? uc_ctl_remove_cache(Engine, PC, PC + 1)
-            : uc_ctl_flush_tb(Engine);
-    if (auto E = check(CacheStatus))
-      return E;
+    auto Bytes = checkedBytes(PC, Count, FixedAArch64Step);
+    auto &Cached = Instructions[(PC >> 2) % Instructions.size()];
+    const bool Reuse =
+        Bytes && Cached.Valid && Cached.PC == PC && Cached.Bytes == *Bytes;
+    bool Completed = false;
+    auto RetireOnFailure = llvm::scope_exit([&] {
+      if (!Completed)
+        clearInstructions();
+    });
+    if (!Reuse) {
+      const auto CacheStatus =
+          Count == 1 && PC != std::numeric_limits<uint64_t>::max()
+              ? uc_ctl_remove_cache(Engine, PC, PC + 1)
+              : uc_ctl_flush_tb(Engine);
+      if (auto E = check(CacheStatus))
+        return E;
+    }
     if (interrupted()) {
       Cancelled = true;
       return diagnostic::interrupted(diagnostic::UnicornRun, *Control);
@@ -123,11 +135,64 @@ public:
       return check(Status);
     if (interrupted())
       return diagnostic::interrupted(diagnostic::UnicornRun, *Control);
+    if (Bytes)
+      Cached = {PC, *Bytes, true};
+    Completed = true;
     return llvm::Error::success();
   }
   bool entryCancelled() const { return Cancelled; }
 
 private:
+  // The pinned Unicorn bounded-step mode translates exactly one instruction.
+  // Only aligned AArch64 instructions have this fixed four-byte footprint.
+  // Re-read authoritative executable RAM under the checked execution lease;
+  // a host/guest alias write cannot be hidden by an unchanged mapping epoch.
+  // This is transport reuse, never instruction admission or decoded semantics.
+  using InstructionBytes = std::array<uint8_t, 4>;
+  struct Instruction {
+    uint64_t PC = 0;
+    InstructionBytes Bytes{};
+    bool Valid = false;
+  };
+  std::array<Instruction, 2048> Instructions{};
+  std::weak_ptr<AddressSpace> InstructionSpace;
+  uint64_t InstructionGeneration = 0, InstructionTransport = 0;
+  bool InstructionsActive = false;
+  void clearInstructions() {
+    if (!InstructionsActive)
+      return;
+    Instructions.fill({});
+    InstructionSpace.reset();
+    InstructionsActive = false;
+  }
+  std::optional<InstructionBytes> checkedBytes(uint64_t PC, size_t Count,
+                                               bool FixedAArch64Step) {
+    // Parallel execution can release the physical lease during transport.
+    // Maintenance/direct runs and staged device operands keep full retirement.
+    if (!FixedAArch64Step || Count != 1 || (PC & 3) ||
+        PC > std::numeric_limits<uint64_t>::max() - 3 ||
+        Memory.parallelEnabled() || Memory.deviceOperand()) {
+      clearInstructions();
+      return std::nullopt;
+    }
+    if (InstructionSpace.lock() != Memory.addressSpace() ||
+        InstructionGeneration != Memory.mappingGeneration() ||
+        InstructionTransport != Memory.transportPhysical(0)) {
+      clearInstructions();
+      InstructionSpace = Memory.addressSpace();
+      InstructionGeneration = Memory.mappingGeneration();
+      InstructionTransport = Memory.transportPhysical(0);
+    }
+    InstructionsActive = true;
+    InstructionBytes Bytes;
+    if (auto E = Memory.read(PC, Bytes, Execute)) {
+      // Admission and transport still own the failure and its original PC.
+      llvm::consumeError(std::move(E));
+      clearInstructions();
+      return std::nullopt;
+    }
+    return Bytes;
+  }
   // The synchronous engine call owns this borrow. Checked entries use a
   // one-instruction block; direct entries check at every translated block.
   const MachineRunControl *ActiveControl = nullptr;
@@ -537,7 +602,7 @@ public:
     }
     if (auto E = AArch64RegisterPacket(State).write(CPU.Engine))
       return E;
-    if (auto E = CPU.run(State.reg(AArch64Register::PC), 1, &Control))
+    if (auto E = CPU.run(State.reg(AArch64Register::PC), 1, &Control, true))
       return E;
     // The engine may write only a narrow register or fail after a prefix.
     // Zero the private packet and publish nothing until every read succeeds.

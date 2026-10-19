@@ -191,6 +191,41 @@ TEST_P(InstructionFetch, HostAliasWriteAndContextRestoreUseFreshBytes) {
   EXPECT_EQ(value(PCRegister), Code + Next.size() - nopSize());
 }
 
+TEST_P(InstructionFetch, GuestAliasStoreRetiresAnAlreadyExecutedTarget) {
+  const auto Program = bytes(RewriteX64, RewriteARM);
+  llvm::cantFail(CPU->write(Code, Program));
+  const auto Target = Code + (X64 ? 2 : 4);
+  const auto End = Code + Program.size() - nopSize();
+  for (unsigned Round = 0; Round != 3; ++Round) {
+    auto Exit = run(Target, End);
+    ASSERT_EQ(Exit.Kind, ExecutionExitKind::Stopped) << Exit.Diagnostic;
+    EXPECT_EQ(value(Result), FirstValue);
+  }
+  llvm::cantFail(CPU->writeRegister(
+      Pointer, {Alias + (X64 ? X64PatchOffset : ARMPatchOffset), 0}));
+  llvm::cantFail(
+      CPU->writeRegister(Source, {X64 ? SecondValue : ARMReplacement, 0}));
+  const auto Exit = run(Code, End);
+  ASSERT_EQ(Exit.Kind, ExecutionExitKind::Stopped) << Exit.Diagnostic;
+  EXPECT_EQ(value(Result), SecondValue);
+  EXPECT_EQ(value(PCRegister), End);
+}
+
+TEST_P(InstructionFetch, ReusedExecuteOnlyCodeStillObservesAliasChanges) {
+  llvm::cantFail(CPU->protect(Code, PageSize, Execute | UserAccessible));
+  for (unsigned Round = 0; Round != 3; ++Round) {
+    const auto Program =
+        Round == 1 ? bytes(SecondX64, SecondARM) : bytes(FirstX64, FirstARM);
+    llvm::cantFail(CPU->write(Alias, Program));
+    for (unsigned Repeat = 0; Repeat != 3; ++Repeat) {
+      llvm::cantFail(CPU->writeRegister(Result, {0, 0}));
+      const auto Exit = run(Code, Code + Program.size() - nopSize());
+      ASSERT_EQ(Exit.Kind, ExecutionExitKind::Stopped) << Exit.Diagnostic;
+      EXPECT_EQ(value(Result), Round == 1 ? SecondValue : FirstValue);
+    }
+  }
+}
+
 TEST_P(InstructionFetch, ExecutePermissionIsRecheckedAfterResumption) {
   auto Exit = program(bytes(FirstX64, FirstARM));
   ASSERT_EQ(Exit.Kind, ExecutionExitKind::Stopped) << Exit.Diagnostic;

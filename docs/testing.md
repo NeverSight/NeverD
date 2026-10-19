@@ -313,6 +313,14 @@ time separately; use both when the host has competing workloads.
 
 ## Configure a test build
 
+`NeverDInstructionFetchTests` checks warm code reuse, operand-byte changes,
+page tails, execute-only code, guest/host alias writes and bounded working-set
+eviction on checked x64 and ARM64. `NeverDMemoryLifecycleTests` adds shared-CPU
+writes, address-space rebinding with equal mapping generations and context
+restoration. Run these with ARM64 memory/atomic, FP/state, cache and cancellation
+regressions when changing Unicorn single-step translation reuse. Keep timing
+measurements separate from exact execution-state comparisons.
+
 Tests are disabled unless `BUILD_TESTING` is enabled. A Release build is the
 normal choice for the full suite; Debug preserves assertions and stepping but
 is intentionally unoptimized and is not representative for decode benchmarks.

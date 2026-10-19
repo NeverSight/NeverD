@@ -5021,6 +5021,16 @@ and NZCV normalization. Retrying a failed transfer reinstalls the entire input;
 instruction admission, RAM transactions and translation-cache invalidation
 retain their existing boundaries.
 
+Serial checked ARM64 steps reuse Unicorn's one-instruction translation only
+after comparing all four executable bytes with a bounded transport cache.
+Host and guest writes through any alias are therefore visible without relying
+on mapping generations as code-write epochs. Address-space identity, mapping
+generation and transport relocation invalidate the recorded identities; errors,
+device staging and maintenance/direct runs retire them too. Parallel execution
+keeps the existing per-entry retirement. This changes neither instruction
+admission nor observations, RAM transactions or architectural state capture.
+Variable-length x64 instructions keep their existing invalidation path.
+
 CPU execution is independent of the guest OS and binary format. Enable
 `NEVERD_ENABLE_CPU_EMULATION` to build it without the Windows driver model;
 `NEVERD_ENABLE_DRIVER_EMULATION` also includes it. The public C++ boundary is
