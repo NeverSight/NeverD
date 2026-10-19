@@ -119,8 +119,6 @@ static const LibraryMethod Methods[] = {
      "()Landroid/app/Application;", CurrentApplication, true},
     {"android/app/ActivityThread", "getApplication",
      "()Landroid/app/Application;", ThreadApplication},
-    {"android/app/ActivityThread", "getInstrumentation",
-     "()Landroid/app/Instrumentation;", ThreadInstrumentation},
     {"android/content/Context", "getApplicationContext",
      "()Landroid/content/Context;", ApplicationContext},
     {"android/content/ContextWrapper", "getBaseContext",
@@ -145,6 +143,10 @@ static const LibraryMethod Methods[] = {
     {"java/io/File", "getName", "()Ljava/lang/String;", FileName},
     {"java/io/File", "getParent", "()Ljava/lang/String;", FileParent},
     {"java/io/File", "isAbsolute", "()Z", FileIsAbsolute},
+    // JNI derives opaque method IDs from this catalog. Append new entries to
+    // preserve existing identities in deterministic execution reports.
+    {"android/app/ActivityThread", "getInstrumentation",
+     "()Landroid/app/Instrumentation;", ThreadInstrumentation},
 };
 
 struct LibraryStop {
@@ -227,7 +229,7 @@ ExecutionResult executeLibrary(Heap &heap, const LibraryMethod &M,
             (!o->Initialized || !assignable(objectDescriptor(*o), Types[i])))
           return failure("Java library reference parameter type mismatch");
       }
-    if (M.Op >= CurrentActivityThread && M.Op <= FileIsAbsolute) {
+    if (M.Op >= CurrentActivityThread && M.Op <= ThreadInstrumentation) {
       if (!program || !framework)
         return {ExecutionStop::Unsupported,
                 0,
