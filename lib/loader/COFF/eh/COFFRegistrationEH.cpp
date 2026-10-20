@@ -139,6 +139,64 @@ std::optional<size_t> directEH4Publication(const BinaryImage &Img,
   return Cursor;
 }
 
+/// After the checked `push -1; push <handler>; mov eax, fs:[0]; push eax`
+/// preamble a /GS C++ frame allocates locals, saves registers, then pushes a
+/// stack guard (`mov eax, __security_cookie; xor eax, ebp; push eax`) before
+/// publishing its node with `lea eax, [ebp-0xC]; mov fs:[0], eax`.  The guard
+/// is an ordinary pushed word the state solver replays; it is no part of the
+/// registration chain and does not move the three-word node, so the frame's
+/// coordinates stay those of an unguarded fixed C++ frame (HasSecurityCookies
+/// stays false).  Returns the publication store offset, or nothing when the
+/// tail is not exactly that shape.
+std::optional<size_t> directCxxCookiePublication(const BinaryImage &Img,
+                                                 const InstallSite &Site,
+                                                 size_t Cursor) {
+  const size_t Size = std::min<uint64_t>(Site.Range.size(), 128);
+  const uint8_t *P = Img.readVA(Site.Range.Begin, Size);
+  if (Img.Base > UINT32_MAX ||
+      Img.DynInfo.SecurityCookieRVA > UINT32_MAX - Img.Base)
+    return std::nullopt;
+  const va_t Cookie = Img.DynInfo.SecurityCookieRVA
+                          ? Img.Base + Img.DynInfo.SecurityCookieRVA
+                          : 0;
+  if (!P || !Cookie || Cookie > UINT32_MAX || Site.Identity.CxxFuncInfoVA == 0)
+    return std::nullopt;
+  // Optional local allocation.
+  if (Cursor + 3 <= Size && P[Cursor] == 0x83 && P[Cursor + 1] == 0xec)
+    Cursor += 3;
+  else if (Cursor + 6 <= Size && P[Cursor] == 0x81 && P[Cursor + 1] == 0xec)
+    Cursor += 6;
+  // Callee-saved pushes (EBX/ESI/EDI).
+  unsigned Saved = 0;
+  while (Cursor < Size &&
+         (P[Cursor] == 0x53 || P[Cursor] == 0x56 || P[Cursor] == 0x57)) {
+    const unsigned Bit = 1u << (P[Cursor] - 0x50);
+    if (Saved & Bit)
+      return std::nullopt;
+    Saved |= Bit;
+    ++Cursor;
+  }
+  // mov eax, [__security_cookie]; xor eax, ebp; push eax.
+  if (Cursor + 8 > Size || P[Cursor] != 0xa1 ||
+      readLE<uint32_t>(P + Cursor + 1) != Cookie ||
+      !((P[Cursor + 5] == 0x31 && P[Cursor + 6] == 0xe8) ||
+        (P[Cursor + 5] == 0x33 && P[Cursor + 6] == 0xc5)) ||
+      P[Cursor + 7] != 0x50)
+    return std::nullopt;
+  Cursor += 8;
+  // lea eax, [ebp-0xC]  (the C++ node base).
+  if (Cursor + 3 > Size || P[Cursor] != 0x8d || P[Cursor + 1] != 0x45 ||
+      P[Cursor + 2] != 0xf4)
+    return std::nullopt;
+  Cursor += 3;
+  const auto Store =
+      getX86RegistrationChainStoreSize(Img, Site.Range.Begin + Cursor);
+  if (!Store || *Store > Size - Cursor ||
+      (*Store == 7 && P[Cursor + 2] != 0x05))
+    return std::nullopt;
+  return Cursor;
+}
+
 /// Authenticate the direct MSVC frame from its exact entry instruction
 /// sequence. A chain-head read alone does not establish a registration, and
 /// locals containing -1/0 are not evidence of the runtime's state field.
@@ -174,7 +232,8 @@ void proveDirectRegistrationLayout(const BinaryImage &Img,
   if (P[Cursor + 7] != 0x64 || P[Cursor + 8] != 0x89 || P[Cursor + 9] != 0x25 ||
       readLE<uint32_t>(P + Cursor + 10) != 0) {
     const auto Publication =
-        IsCxx ? std::nullopt : directEH4Publication(Img, Site, Chain);
+        IsCxx ? directCxxCookiePublication(Img, Site, Cursor + 7)
+              : directEH4Publication(Img, Site, Chain);
     if (!Publication)
       return;
     Installation = *Publication;
