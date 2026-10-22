@@ -14,6 +14,7 @@
 #include "neverd/backend/llvm/WindowsEHMetadata.h"
 #include "neverd/backend/llvm/X86RegistrationLayout.h"
 #include "neverd/ir/low/RegistrationABI.h"
+#include "neverd/ir/low/RegistrationCallEffects.h"
 #include "neverd/ir/med/X86RegistrationCallback.h"
 #include "neverd/ir/med/X86RegistrationFrame.h"
 #include "neverd/loader/BinaryImage.h"
@@ -325,7 +326,7 @@ llvm::Expected<CxxCookieCoverage> bindCxxCookieCoverage(
       if (!Charge() || Binding == CleanupCalls.end() ||
           Binding->second->RelayTarget != Contract.RelayTarget ||
           Saved.ObjectFrameOffset != Fresh.ObjectFrameOffset ||
-          Saved.Leaf.Target != Fresh.Leaf.Target ||
+          !hasSameX86RegistrationLeafEffects(Saved.Leaf, Fresh.Leaf, Work) ||
           (Pad && Pad != Binding->second->Pad))
         return reject("cleanup transfer identity or order changed");
       Pad = Binding->second->Pad;

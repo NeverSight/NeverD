@@ -15,6 +15,8 @@
 #include "neverd/backend/llvm/RegistrationCxxCookieBindings.h"
 #include "neverd/backend/llvm/WindowsRegistrationFrame.h"
 #include "neverd/backend/llvm/X86RegistrationLayout.h"
+#include "neverd/ir/low/LowIR.h"
+#include "neverd/ir/low/RegistrationABI.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/COFF/COFFRegistrationEH.h"
 #include "neverd/support/BinaryEncoding.h"
@@ -189,21 +191,14 @@ struct CookieBindingsFixture {
     const std::array<llvm::Value *, 2> Objects{
         B.CreateGEP(B.getInt8Ty(), Frame, B.getInt32(48)),
         B.CreateGEP(B.getInt8Ty(), Frame, B.getInt32(44))};
-    RegistrationCleanupFrameContract Contract;
-    Contract.ActionState = 0;
-    Contract.RelayTarget = RelayVA;
     for (uint32_t I = 0; I != Objects.size(); ++I) {
       auto *Call = B.CreateCall(Cleanup, {Objects[I]},
                                 {llvm::OperandBundleDef("funclet", Pad)});
       Call->setCallingConv(llvm::CallingConv::X86_ThisCall);
       Call->setDoesNotThrow();
       Cleanups.push_back({Call, Pad, ParentVA, 0, RelayVA, I});
-      RegistrationCleanupCallContract Saved;
-      Saved.ObjectFrameOffset = -16 - int32_t(I) * 4;
-      Saved.Leaf.Target = LeafVA;
-      Contract.Calls.push_back(Saved);
     }
-    States.CleanupContracts.push_back(Contract);
+    EXPECT_TRUE(refreshCleanupContracts());
     RegistrationCleanupFrameEffect Effect;
     Effect.BlockId = States.Blocks[2].BlockId;
     Effect.Range = States.Blocks[2].Range;
@@ -211,6 +206,18 @@ struct CookieBindingsFixture {
     Effect.ActionState = Effect.CleanupIndex = 0;
     States.CleanupFrameEffects.push_back(Effect);
     B.CreateCleanupRet(Pad);
+  }
+
+  bool refreshCleanupContracts() {
+    LowFunc Function;
+    Function.ExceptionMetadata = Source.ExceptionMetadata;
+    RegistrationCallCalleeIndex Index(Image);
+    auto Contracts = Index.cleanupContracts(Function);
+    if (!Contracts || Contracts->size() != 1 ||
+        Contracts->front().Calls.size() != 2)
+      return false;
+    Source.RegistrationStates->CleanupContracts = std::move(*Contracts);
+    return true;
   }
 
   void writeCode(va_t VA, llvm::ArrayRef<uint8_t> Bytes) {
@@ -489,6 +496,44 @@ TEST(RegistrationCxxCookieBindings, HandlerOnlyChecksStillCoverEveryDispatch) {
   ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
   EXPECT_TRUE(Result->Calls.empty());
   EXPECT_EQ(Result->Dispatches.size(), 4u);
+}
+
+TEST(RegistrationCxxCookieBindings, RechecksCleanupObjectAndImageEffects) {
+  for (unsigned Mutation = 0; Mutation != 5; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    CookieBindingsFixture F;
+    F.writeCode(LeafVA, {0x8b, 0x41, 0, 0x89, 0x41, 4, 0xa1, 0, 0, 0, 0, 0xa3,
+                         0, 0, 0, 0, 0x31, 0xc0, 0xc3});
+    F.codeWord(LeafVA + 7, TableVA + 0x80);
+    F.codeWord(LeafVA + 12, TableVA + 0x84);
+    ASSERT_TRUE(F.refreshCleanupContracts());
+    // The destructor's scalar return is unused; source cleanup contracts do
+    // not retain it. Its current object/image effects still need equality.
+    ASSERT_FALSE(F.Source.RegistrationStates->CleanupContracts[0]
+                     .Calls[0]
+                     .Leaf.HasIndependentScalarReturn);
+    ASSERT_TRUE(F.accepts());
+    switch (Mutation) {
+    case 0:
+      F.writeCode(LeafVA + 2, {4});
+      break;
+    case 1:
+      F.writeCode(LeafVA + 5, {8});
+      break;
+    case 2:
+      F.codeWord(LeafVA + 7, TableVA + 0x88);
+      break;
+    case 3:
+      F.codeWord(LeafVA + 12, TableVA + 0x88);
+      break;
+    case 4:
+      F.writeCode(LeafVA + 18, {0x90, 0xc3});
+      break;
+    }
+    EXPECT_FALSE(F.accepts());
+    ASSERT_TRUE(F.refreshCleanupContracts());
+    EXPECT_TRUE(F.accepts());
+  }
 }
 
 TEST(RegistrationCxxCookieBindings, RechecksEveryOccurrenceField) {

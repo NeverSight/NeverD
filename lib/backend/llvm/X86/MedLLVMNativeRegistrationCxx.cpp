@@ -24,6 +24,7 @@
 #include "neverd/backend/llvm/X86RegistrationEntry.h"
 #include "neverd/backend/llvm/X86RegistrationLayout.h"
 #include "neverd/ir/low/RegistrationABI.h"
+#include "neverd/ir/low/RegistrationCallEffects.h"
 #include "neverd/ir/med/X86RegistrationCallResult.h"
 #include "neverd/ir/med/X86RegistrationCallback.h"
 #include "neverd/ir/med/X86RegistrationFrame.h"
@@ -374,7 +375,7 @@ bool MedLLVMEmitter::emitNativeX86RegistrationCxx(
       const auto &Fresh = Relay->Calls[I];
       if (Call.ObjectFrameOffset != Fresh.ObjectFrameOffset ||
           !EH.Registration->cxxSourceFrameOffset(Call.ObjectFrameOffset) ||
-          Call.Leaf.Target != Fresh.Leaf.Target ||
+          !hasSameX86RegistrationLeafEffects(Call.Leaf, Fresh.Leaf, Work) ||
           !Fresh.Leaf.CallerPCWrites.empty())
         return false;
       auto Name = CalleeName(Fresh.Leaf.Target, "cleanup.ecx");

@@ -6808,6 +6808,13 @@ searching the exited inner try or losing the active catch token. HighIR must
 contain every try and callback body; C and C++ output receive syntax checks.
 The catch-internal profile has three tries and four catches. Its inner catch
 updates the still-live outer reference, then resumes the suspended outer stack.
+`RegistrationCxxCallEffects` changes original image reads/writes, caller-PC
+observations, thrown types and code extents while keeping a valid physical call
+ABI. Fresh contracts remain accepted and stale ones refuse, including nested
+member effects and rethrows. Shared-budget boundaries retain sticky exhaustion.
+`RegistrationCxxCookieBindings` additionally changes cleanup object/image effects
+without changing transfer identity, order or arguments; fresh cleanup source
+contracts restore coverage. These checks do not grant native GS admission.
 `WindowsRegistrationCatchContext` rejects changed catch ancestry, missing
 suspended owners, and verifier-clean edits to resume values, source identities,
 offsets and required memory properties. State tests separately distinguish

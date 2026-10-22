@@ -1657,6 +1657,7 @@ add_neverd_unittest(NeverDWindowsRegistrationNativeTests
   eh/RegistrationCookieProofTests.cpp
   eh/RegistrationCookieFrameTests.cpp
   eh/RegistrationCxxCookieBindingsTests.cpp
+  eh/RegistrationCxxCallEffectsTests.cpp
   eh/RegistrationFrameXorTests.cpp
   eh/RegistrationFrameBitsTests.cpp
   eh/RegistrationPHICopyTests.cpp

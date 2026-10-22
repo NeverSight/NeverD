@@ -1986,6 +1986,15 @@ obligation. COFF source-segment replay has an explicit retained-C++ cookie mode,
 returns exact call bindings only after complete replay, and keeps SEH's elided
 check policy separate. The C++ control consumer uses those bindings for ordinary
 calls; guarded native emission and installation still require further integration.
+`RegistrationCallEffects` compares retained effects with fresh original-callee
+proofs for native call preflight and cleanup coverage. It binds the target and
+stack cleanup plus every object, image, physical caller-PC write and executed-code
+extent under the shared work budget. Ordinary scalar results and initializer
+must-writes keep their separate invocation checks; cleanup results are discarded.
+Private throws also recheck the thrown type and size. A direct CRT throw import
+still requires the caller's complete runtime-object and callback closure, which
+an import ABI alone cannot supply. This comparison neither proves current LLVM
+frame use nor enables guarded native admission.
 `COFFTrampolineRegions` resolves authenticated source entries across executable
 sections, including earlier generated code, with unique virtual/raw ownership
 and unchanged input bytes. A second reconstruction repeats all source and LLVM
