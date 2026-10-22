@@ -53,6 +53,7 @@
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
+#include "llvm/Support/Error.h"
 
 #include <array>
 #include <cstdint>
@@ -209,7 +210,8 @@ private:
   bool emitNativeX86RegistrationCxx(
       const MedFunc &Func, llvm::Function &LLVMFunc,
       const std::map<int, llvm::BasicBlock *> &OriginalBlockMap,
-      const std::map<llvm::BasicBlock *, std::pair<int, int>> &PHICopyEdges);
+      const std::map<llvm::BasicBlock *, std::pair<int, int>> &PHICopyEdges,
+      std::function<llvm::Error()> &FinalFrameProof);
   llvm::Function *resolveX86RegistrationHandlerReference(va_t Address);
   void declareX86RegistrationJumpRuntimes(const MedFunc &Func);
   void declareX86RegistrationLocalUnwinds(const MedFunc &Func);
@@ -2329,6 +2331,9 @@ private:
   // Sticky hard failure: a relocation-proven executable pointer must never
   // degrade to an embedded original VA.  emit() discards the module when set.
   bool FatalCodePointerResolution = false;
+  /// Validate committed registration candidates after every body and call
+  /// normalization has finished. A rejection suppresses the complete module.
+  std::vector<std::function<llvm::Error()>> FinalRegistrationFrameProofs;
   // Sticky hard failure for any data-address contract violation: mixed or
   // incomplete provenance, an unmaterializable trusted pointer/relocation, or
   // a canonical run that cannot be represented. Mutable because some

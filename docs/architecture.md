@@ -1964,8 +1964,8 @@ index and shared work budget. Exceptional dispatch additionally requires the
 event's own independent frame and image effects, not just its pre-call value.
 The final query closes the complete cookie and checker-code write sets. Source
 occurrence coverage, callback ownership, mapped storage and complete frame use
-closure remain consumer obligations. These queries do not enable native guarded
-C++ frames.
+closure remain consumer obligations. These queries alone grant no native guarded
+C++ frame permission.
 The shared frame validator accepts source-bound cookie occurrences as conditional
 call sinks. Their arguments retain frame taint everywhere else. It first closes
 all other frame uses, then runs the ordered protocol with fresh query caches;
@@ -1985,7 +1985,7 @@ Source execution order and full control flow remain the producer/replay owner's
 obligation. COFF source-segment replay has an explicit retained-C++ cookie mode,
 returns exact call bindings only after complete replay, and keeps SEH's elided
 check policy separate. The C++ control consumer uses those bindings for ordinary
-calls; guarded native emission and installation still require further integration.
+calls; guarded installation still requires independent control/frame integration.
 `RegistrationCallEffects` compares retained effects with fresh original-callee
 proofs for native call preflight and cleanup coverage. It binds the target and
 stack cleanup plus every object, image, physical caller-PC write and executed-code
@@ -1995,6 +1995,18 @@ Private throws also recheck the thrown type and size. A direct CRT throw import
 still requires the caller's complete runtime-object and callback closure, which
 an import ABI alone cannot supply. This comparison neither proves current LLVM
 frame use nor enables guarded native admission.
+`RegistrationCxxGuardedFrame` closes the cleanup-only native producer's final
+candidate. It combines current callee effects, complete call coverage, frame
+privacy and initialization, the ordered cookie protocol, and immutable runtime
+metadata/code. Retained checks keep their physical ECX ABI and distinct source
+operation kind. The check runs after every function body, dead spill removal and
+module call normalization; deleted occurrences refuse before dereference. Any
+failure suppresses the complete module because native calls and runtime edges
+have already been changed. Deferred checks are cleared on every exit, including
+failure and emitter reuse. Catches, incoming caller-frame accesses and direct CRT
+throw calls remain excluded from this guarded producer. The loader's unguarded
+personality API is unchanged. COFF control/table/handler/install gates still
+reject guarded output until they independently replay the complete current proof.
 `COFFTrampolineRegions` resolves authenticated source entries across executable
 sections, including earlier generated code, with unique virtual/raw ownership
 and unchanged input bytes. A second reconstruction repeats all source and LLVM

@@ -6771,7 +6771,7 @@ current arguments and frame words, cookie and checker-code writes, forged ABI
 attributes and source identities, cyclic dependencies and unknown calls.
 Exceptional dispatch tests require both the saved recipe and the call's own
 frame/image preservation, including checker code. The tests exercise conditional
-protocol queries; native guarded C++ output remains unavailable.
+protocol queries; source/control and native admission remain separate obligations.
 `RegistrationCookieFrame` exercises that protocol inside the complete shared
 frame validator. Only the exact checker sink can consume a decoded cookie;
 encoded and decoded values still fail when passed elsewhere or stored into a
@@ -6787,6 +6787,14 @@ bytes, object offsets and funclet ownership. Source-segment cases reject moved,
 deleted and marker-replaced retained checks without publishing partial bindings;
 the separate SEH elision mode does not admit a retained call. These are coverage
 tests, not permission to omit the subsequent current value and privacy proofs.
+`RegistrationCxxGuardedFrame` uses an authored cleanup-only GS PE32 supplied by
+`NEVERD_REGISTRATION_GUARDED_PE32`. It runs the real LowIR/MedIR ABI recovery and
+native producer, verifies the final LLVM module and compiles a cloned COFF object.
+Current cookie-word/argument changes, original-VA global aliases, extra/deleted
+calls, missing cleanup coverage and stale callee effects refuse. A bad generated
+cookie rejects the whole module; reusing that emitter for the valid source must
+succeed. The O0/O1 fixture profiles exercise the same checks. Independent guarded
+installation remains rejected; object compilation is not runtime qualification.
 `RegistrationFrameStores` and `RegistrationFrameTaint` test bounded LLVM spill
 proofs, joins, backedges, partial writes and exhausted budgets. Loader tests keep
 independent SafeSEH/code references and real function boundaries while excluding

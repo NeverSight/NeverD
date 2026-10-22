@@ -43,6 +43,7 @@
 #include "neverd/support/Diagnostic.h"
 
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/BinaryFormat/COFF.h"
 #include "llvm/IR/Constants.h"
@@ -1004,6 +1005,9 @@ MedLLVMEmitter::emit(const std::vector<MedFunc> &Funcs, llvm::LLVMContext &LCtx,
   ConstUsedAsPointerCache.clear();
   ConstValueUsedAsIntegerCache.clear();
   FatalCodePointerResolution = false;
+  FinalRegistrationFrameProofs.clear();
+  llvm::scope_exit ClearFrameProofs(
+      [&] { FinalRegistrationFrameProofs.clear(); });
   FatalDataPointerResolution = false;
   ImportedSymbolPlaceholders.clear();
   StringDataAddrs.clear();
@@ -1445,6 +1449,15 @@ MedLLVMEmitter::emit(const std::vector<MedFunc> &Funcs, llvm::LLVMContext &LCtx,
   llvm::raw_string_ostream VES(VerifyErr);
   if (llvm::verifyModule(*Mod_, &VES))
     syncWarning() << "med_llvm_emitter: verification: " << VerifyErr << "\n";
+
+  for (const auto &Proof : FinalRegistrationFrameProofs)
+    if (auto Error = Proof()) {
+      syncError() << "med_llvm_emitter: final registration frame rejected: "
+                  << llvm::toString(std::move(Error)) << '\n';
+      // Calls and runtime edges have already changed. Ordinary fallback must
+      // never consume a partially committed guarded candidate.
+      return nullptr;
+    }
 
   LLVM_DEBUG(llvm::dbgs() << "med_llvm_emitter: emitted " << Funcs.size()
                           << " functions\n");

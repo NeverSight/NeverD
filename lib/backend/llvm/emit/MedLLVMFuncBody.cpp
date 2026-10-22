@@ -43,6 +43,7 @@
 #include "llvm/Support/ErrorHandling.h"
 
 #include <algorithm>
+#include <functional>
 #include <limits>
 #include <map>
 #include <optional>
@@ -1113,9 +1114,11 @@ llvm::Function *MedLLVMEmitter::emitFunc(const MedFunc &Func) {
 
   // Registration-chain and table-driven WinEH have separate source contracts.
   // Install their runtime edges before promoting the callback SSA slots.
+  std::function<llvm::Error()> FinalRegistrationFrameProof;
   const bool NativeRegistration =
       emitNativeX86RegistrationSEH(Func, *LLVMFunc, BBMap, PHICopyEdges) ||
-      emitNativeX86RegistrationCxx(Func, *LLVMFunc, BBMap, PHICopyEdges);
+      emitNativeX86RegistrationCxx(Func, *LLVMFunc, BBMap, PHICopyEdges,
+                                   FinalRegistrationFrameProof);
   if (!NativeRegistration && !emitNativeSEH(Func, *LLVMFunc, BBMap) &&
       !emitNativeCxxEH(Func, *LLVMFunc, BBMap))
     emitNativeItaniumEH(Func, *LLVMFunc, BBMap);
@@ -1140,6 +1143,9 @@ llvm::Function *MedLLVMEmitter::emitFunc(const MedFunc &Func) {
       PrivateSlots.push_back(Slot);
     discardDeadMedLLVMSlots(PrivateSlots);
   }
+  if (FinalRegistrationFrameProof)
+    FinalRegistrationFrameProofs.push_back(
+        std::move(FinalRegistrationFrameProof));
   return LLVMFunc;
 }
 

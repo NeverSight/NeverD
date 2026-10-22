@@ -22,6 +22,7 @@ add_neverd_component_library(NeverDWindowsRegistrationFrame
   X86/RegistrationImageProof.cpp
   X86/RegistrationCookieProof.cpp
   X86/RegistrationCxxCookieBindings.cpp
+  X86/RegistrationCxxGuardedFrame.cpp
   X86/RegistrationCatch.cpp
   X86/RegistrationCatchBlocks.cpp
   X86/RegistrationEntry.cpp
