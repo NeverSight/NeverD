@@ -19,6 +19,7 @@ add_neverd_component_library(NeverDDebugInfo
 
   LINK_COMPONENTS
   IR
+  Loader
   LINK_LIBS ZLIB::ZLIB
 )
 # The prebuilt LLVM may read no zstd-compressed section; the pinned static SDK
