@@ -6807,6 +6807,11 @@ unknown calls must fail at every installation gate even with unchanged compiled
 bytes. `NEVERD_REGISTRATION_GUARDED_OUTPUT_PE32` optionally saves the installed
 image for separate authored runtime qualification; compilation alone is not
 runtime qualification.
+`RegistrationFunctionSelection` uses the same authored GS input to check the
+real selected-function Pipeline and source preparation. A FuncInfo-owned cleanup
+must not become an unauthenticated ordinary definition. Explicit callback
+requests, independent callable entries and stale FuncInfo bytes exercise the
+opposite boundaries; the existing x64 out-of-line selection tests stay enabled.
 `RegistrationFrameStores` and `RegistrationFrameTaint` test bounded LLVM spill
 proofs, joins, backedges, partial writes and exhausted budgets. Loader tests keep
 independent SafeSEH/code references and real function boundaries while excluding

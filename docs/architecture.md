@@ -8676,6 +8676,12 @@ Authenticated nested Swift once callbacks return void, so their source projectio
 The Darwin C catalog includes `sysctl`, `sysctlbyname` and `sysctlnametomib` after declaration agreement across ARM64/x86-64 macOS and iOS preprocessing profiles and exact SDK export checks. The signed 32-bit result, pointer parameters and 64-bit `size_t` values retain their complete source ABI. These declarations supply no buffer bounds, frame-borrowing, noescape or purity facts; callers still need independent memory and publication proofs.
 
 Selecting function entries limits which bodies are lifted; it does not discard other confirmed function-symbol boundaries. Shared LowIR construction keeps the same symbol-entry inventory for full and selected analysis across Mach-O, ELF and COFF. Independently callable entries inside a shared unwind range remain separate, including address-taken entries and tail calls. Nonfunction symbols, padding guesses and unclassified interior code pointers do not acquire function-entry authority.
+Selected PE32 C++ expansion reuses the loader's checked FuncInfo callback pointer
+sources. A runtime callback without independent callable-entry evidence stays in
+its installing frame instead of acquiring an extra ordinary definition. Explicit
+requests and independently authenticated entries remain selected. The query
+reparses the current selected graph; stale metadata grants no suppression, and
+table-driven out-of-line funclet discovery on other architectures is unchanged.
 
 Swift once addressors may return early when the predicate is already complete. The source proof requires both exits to return the same exact storage, with the sole `swift_once` call confined to the initialization path. Publication rechecks the current body, predicate, initializer, context parameter and ABI; an old discovery plan cannot authorize changed returns or additional effects.
 

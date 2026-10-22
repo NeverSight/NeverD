@@ -17,6 +17,7 @@
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/libc/LibCNames.h"
+#include "neverd/loader/COFF/COFFRegistrationEH.h"
 #include "neverd/loader/ExceptionInfo.h"
 #include "neverd/pipeline/Pipeline.h"
 
@@ -169,6 +170,14 @@ Pipeline::detectFunctions(const BinaryImage &Img, Decoder &Dec,
       const ExceptionFunction *EH = Img.ExceptionMetadata.findFunction(Work[I]);
       if (!EH)
         continue;
+      // A PE32 FuncInfo owns callbacks in the installing frame. Reuse the
+      // loader's current-byte pointer roles before adding an ordinary root;
+      // this selected source needs no image-wide function scan.
+      std::set<va_t> RegistrationCallbacks;
+      if (const auto Sources =
+              coff_loader::getCheckedX86CxxCallbackPointerSources(Img, *EH))
+        for (const auto &[Slot, Target] : *Sources)
+          RegistrationCallbacks.insert(Target);
       // Interior VAs inherit a containing pdata.  A huge or merged owner
       // must not enqueue every catch/unwind thunk in that range; keep only
       // nearby out-of-line funclets so `--func` can still attach a local
@@ -177,6 +186,9 @@ Pipeline::detectFunctions(const BinaryImage &Img, Decoder &Dec,
           EH->CodeRange.size() > limits::kMaxOnlyFunctionEHOwnerSize;
       auto addOutOfLine = [&](va_t Addr) {
         if (!Addr || EH->CodeRange.contains(Addr))
+          return;
+        if (RegistrationCallbacks.count(Addr) &&
+            !Img.hasAuthenticatedFunctionEntryAt(Addr))
           return;
         // An interior VA of a foreign pdata owner would CFG-decode that
         // whole body.  MSVC template unwind actions often land inside a
