@@ -2531,7 +2531,7 @@ class Checker {
           if (!Unique.insert(S).second)
             fail(Status::Invalid, "duplicate CFG successor");
         for (const auto &Op : B.Ops) {
-          if (isLowRawEnvironmentRequirement(Op) || isLowArchitecturalValue(Op))
+          if (isLowRawAnalysisOperation(Op) || isLowArchitecturalValue(Op))
             fail(Status::Unsupported,
                  "raw environment requirement has no static proof contract");
           if (Op.NumInputs > std::size(Op.Inputs))

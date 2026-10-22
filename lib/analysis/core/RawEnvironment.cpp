@@ -71,7 +71,8 @@ llvm::Error preflightResult(const SpecializationResult &R,
       !AddRecords(F.OrdinaryModuleAnalysisRoots.size(), 8) ||
       !AddRecords(F.FunctionTemporaries.size(), 32) ||
       !AddRecords(R.Origins.size(), 160) || !AddRecords(R.Reads.size(), 128) ||
-      !AddRecords(R.ExternalExits.size(), 2048))
+      !AddRecords(R.ExternalExits.size(), 2048) ||
+      !AddRecords(R.ReturningCalls.size(), 2048))
     return Exhausted();
   if (auto Error =
           (*Architecture)->reserveExternalExitValidation(R, Expected, Budget))
@@ -101,6 +102,25 @@ llvm::Error preflightResult(const SpecializationResult &R,
     for (const auto &Op : I.Ops)
       if (Op.NumInputs > std::size(Op.Inputs))
         return invalid("raw environment exit has an invalid operand count");
+  }
+  for (const auto &C : R.ReturningCalls) {
+    const auto &I = C.Original;
+    if (!AddRecords(I.Ops.size(), 512) || !AddBytes(I.NativeBytes.size()) ||
+        !AddRecords(I.UndefinedEffects.Effects.size(), 256) ||
+        !AddBytes(I.UndefinedEffects.OperationDigest.size()) ||
+        !AddBytes(I.UndefinedEffects.Diagnostic.size()) ||
+        !AddBytes(I.PreservedState.NativeBytesDigest.size()) ||
+        !AddBytes(I.PreservedState.OperationDigest.size()) ||
+        !AddBytes(C.IdentityDigest.size()) ||
+        !AddBytes(C.OriginalOperationDigest.size()) ||
+        !AddBytes(C.ExpandedOperationDigest.size()) ||
+        !AddBytes(C.ResidualOperationDigest.size()))
+      return Exhausted();
+    if (I.TerminalImport)
+      return invalid("returning-call receipt carries terminal-import evidence");
+    for (const auto &Op : I.Ops)
+      if (Op.NumInputs > std::size(Op.Inputs))
+        return invalid("raw returning call has an invalid operand count");
   }
   return llvm::Error::success();
 }
@@ -206,6 +226,12 @@ std::string evidenceDigest(const SpecializationResult &R) {
     H.number(E.Original.Ops.size());
     for (const auto &Op : E.Original.Ops)
       H.operation(Op, InputSlots);
+  }
+  if (!R.ReturningCalls.empty()) {
+    H.text("returning-call-spans-v1");
+    H.number(R.ReturningCalls.size());
+    for (const auto &C : R.ReturningCalls)
+      H.text(C.IdentityDigest);
   }
   H.number(static_cast<unsigned>(R.Status));
   H.text(R.Diagnostic);
@@ -392,8 +418,8 @@ llvm::Error
 validateSpecializationRawEnvironment(const SpecializationResult &Result,
                                      const SpecializationOptions &Options) {
   if (!Options.hasRawEnvironment()) {
-    if (Result.RawEnvironment ||
-        hasLowRawEnvironmentRequirement(Result.Residual))
+    if (Result.RawEnvironment || !Result.ReturningCalls.empty() ||
+        hasLowRawAnalysisOperation(Result.Residual))
       return invalid("raw environment evidence lacks its expected declaration");
     return llvm::Error::success();
   }
@@ -432,6 +458,11 @@ validateSpecializationRawEnvironment(const SpecializationResult &Result,
   if (*Graph != Receipt.GraphDigest)
     return invalid("raw environment graph differs from its receipt");
   if (auto Error = validateSpecializationExternalExits(Result, Options))
+    return Error;
+  auto Architecture = recoveryArchitecture(Options.Architecture);
+  if (!Architecture)
+    return Architecture.takeError();
+  if (auto Error = (*Architecture)->validateReturningCalls(Result, Options))
     return Error;
   if (Receipt.EvidenceDigest != evidenceDigest(Result) ||
       Receipt.IdentityDigest != receiptDigest(Receipt))

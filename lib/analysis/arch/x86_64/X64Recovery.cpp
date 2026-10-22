@@ -7,6 +7,7 @@
 
 #include "../../../lift/X86/X86CetEncoding.h"
 #include "NativeStackControl.h"
+#include "X64CallContinuation.h"
 #include "X64MachineFlags.h"
 
 #include "neverd/analysis/Limits.h"
@@ -101,8 +102,9 @@ validateRawEnvironmentDeclarations(const SpecializationOptions &Options) {
   for (size_t Count :
        {Options.X64CodeRegions.size(), Options.X64ImportBindings.size(),
         Options.X64TerminalImports.size(), Options.X64MachineExits.size(),
-        Options.ControlRegisters.size(), Options.ControlFrameSlots.size(),
-        Options.EntryConstants.size(), Options.EntryFrameExcludedObjects.size(),
+        Options.X64ReturningCalls.size(), Options.ControlRegisters.size(),
+        Options.ControlFrameSlots.size(), Options.EntryConstants.size(),
+        Options.EntryFrameExcludedObjects.size(),
         Options.EntryFrameBounds
             ? Options.EntryFrameBounds->ExcludedAddressRanges.size()
             : size_t{0}}) {
@@ -202,6 +204,8 @@ validateRawEnvironmentDeclarations(const SpecializationOptions &Options) {
         return Invalid("duplicate machine-exit declaration");
   }
   if (auto Error = validateX64TerminalImportDomain(Options))
+    return std::move(Error);
+  if (auto Error = validateReturningCallDeclarations(Options))
     return std::move(Error);
   const auto Text = [](llvm::StringRef S, bool AllowSpace = false) {
     return !S.empty() &&

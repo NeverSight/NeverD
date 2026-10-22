@@ -96,7 +96,7 @@ std::string MultiOutputRender::operator()(
     throw std::invalid_argument(kWritebackMalformed);
   if (const char *Reason = x86NonlocalControlTransferReason(IID))
     throw std::invalid_argument(Reason);
-  if (IID == Intrinsic::RawEnvironmentRequirementV1 ||
+  if (isRawAnalysisIntrinsicId(static_cast<uint64_t>(IID)) ||
       IID == Intrinsic::ArchitecturalValueV1)
     throw std::invalid_argument(
         "raw environment requirement has no C runtime contract");
@@ -121,7 +121,7 @@ std::string renderIntrinsicCall(Intrinsic Id, Arch TheArch,
     throw std::invalid_argument("FFR transfers require AArch64");
   if (const char *Reason = x86NonlocalControlTransferReason(Id))
     throw std::invalid_argument(Reason);
-  if (Id == Intrinsic::RawEnvironmentRequirementV1 ||
+  if (isRawAnalysisIntrinsicId(static_cast<uint64_t>(Id)) ||
       Id == Intrinsic::ArchitecturalValueV1)
     throw std::invalid_argument(
         "raw environment requirement has no C runtime contract");

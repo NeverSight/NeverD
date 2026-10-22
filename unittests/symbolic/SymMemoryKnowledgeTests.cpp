@@ -851,3 +851,177 @@ TEST(SymMemoryPreservation, PartialSymbolicWordsKeepTheirExactByteOrder) {
     }
   }
 }
+
+TEST(SymRegisterPreservation, ExactWorkAndEveryShortBudgetAreAtomic) {
+  for (auto Order : {llvm::endianness::little, llvm::endianness::big}) {
+    SymContext C;
+    SymState Source(C, Order);
+    const auto Word = C.mkConst(64, 0x8070605040302010);
+    Source.write(SymSpace::Register, 0, Word);
+    Source.write(SymSpace::Temporary, 20, C.mkConst(32, 7));
+    const auto P = C.mkVar("memory", 64);
+    Source.store(P, Word);
+    const auto GS = C.mkVar("gs", 64);
+    Source.setX64MemoryAddressSpaceBase(neverd::NdMemoryAddressSpace::X86GS,
+                                        GS);
+    const SymRegisterRange Ranges[] = {{2, 3}};
+    // Request + descriptor + epochs + current register/temp bytes + 3*saved.
+    constexpr uint64_t Exact = 1 + 1 + 2 + 8 + 4 + 3 * 3;
+    for (uint64_t Budget = 0; Budget < Exact; ++Budget) {
+      SymState S(Source), Before(Source);
+      const auto Nodes = C.numNodes(), Vars = C.numVars();
+      SymRegisterPreservation Keep{Ranges, Budget, 0};
+      S.clobberRegistersExcept(Keep);
+      EXPECT_EQ(Keep.Status, SymRegisterPreservationStatus::BudgetExceeded);
+      EXPECT_LE(Keep.WorkUsed, Budget);
+      EXPECT_EQ(Keep.NodesCreated, 0U);
+      EXPECT_EQ(C.numNodes(), Nodes);
+      EXPECT_EQ(C.numVars(), Vars);
+      EXPECT_TRUE(S.mergeIdentical(Before));
+    }
+    SymRegisterPreservation Keep{Ranges, Exact, 0};
+    Source.clobberRegistersExcept(Keep);
+    ASSERT_EQ(Keep.Status, SymRegisterPreservationStatus::Applied);
+    EXPECT_EQ(Keep.WorkUsed, Exact);
+    EXPECT_EQ(Keep.NodesCreated, 0U);
+    for (unsigned I = 0; I < 8; ++I) {
+      const auto Byte = Source.read(SymSpace::Register, I, 1);
+      if (I >= 2 && I < 5) {
+        const unsigned Shift =
+            (Order == llvm::endianness::little ? I : 7 - I) * 8;
+        EXPECT_EQ(Byte, C.mkConst(8, uint64_t{0x8070605040302010} >> Shift));
+      } else
+        EXPECT_FALSE(C.isConst(Byte));
+    }
+    EXPECT_FALSE(C.isConst(Source.read(SymSpace::Temporary, 20, 4)));
+    EXPECT_EQ(Source.load(P, 8), Word);
+    EXPECT_EQ(
+        Source.x64MemoryAddressSpaceBase(neverd::NdMemoryAddressSpace::X86GS),
+        GS);
+  }
+}
+
+TEST(SymRegisterPreservation, InvalidRangesNeverMaterializeOrRetire) {
+  const std::vector<std::vector<SymRegisterRange>> Cases = {
+      {{0, 0}},         {{UINT64_MAX, 1}}, {{UINT64_MAX - 1, 3}},
+      {{2, 3}, {4, 2}}, {{5, 2}, {1, 2}},  {{2, 1}, {2, 1}}};
+  for (const auto &Ranges : Cases) {
+    SymContext C;
+    SymState S(C);
+    S.write(SymSpace::Register, 0, C.mkConst(64, 123));
+    SymState Before(S);
+    const auto Nodes = C.numNodes(), Vars = C.numVars();
+    SymRegisterPreservation Keep{Ranges, 1000, 1000};
+    S.clobberRegistersExcept(Keep);
+    EXPECT_EQ(Keep.Status, SymRegisterPreservationStatus::Invalid);
+    EXPECT_EQ(C.numNodes(), Nodes);
+    EXPECT_EQ(C.numVars(), Vars);
+    EXPECT_TRUE(S.mergeIdentical(Before));
+  }
+}
+
+TEST(SymRegisterPreservation, MissingBytesReserveNodesBeforeAnyMutation) {
+  const SymRegisterRange Ranges[] = {{100, 4}};
+  for (uint64_t Nodes = 0; Nodes < 4; ++Nodes) {
+    SymContext C;
+    SymState S(C), Before(S);
+    const auto OldNodes = C.numNodes(), OldVars = C.numVars();
+    SymRegisterPreservation Keep{Ranges, 16, Nodes};
+    S.clobberRegistersExcept(Keep);
+    EXPECT_EQ(Keep.Status, SymRegisterPreservationStatus::BudgetExceeded);
+    EXPECT_EQ(C.numNodes(), OldNodes);
+    EXPECT_EQ(C.numVars(), OldVars);
+    EXPECT_TRUE(S.mergeIdentical(Before));
+  }
+  SymContext C;
+  SymState S(C), Entry(S);
+  const auto Before = C.numNodes();
+  SymRegisterPreservation Keep{Ranges, 16, 4};
+  S.clobberRegistersExcept(Keep);
+  ASSERT_EQ(Keep.Status, SymRegisterPreservationStatus::Applied);
+  EXPECT_EQ(Keep.WorkUsed, 16U);
+  EXPECT_EQ(Keep.NodesCreated, 4U);
+  EXPECT_EQ(C.numNodes() - Before, 4U);
+  EXPECT_EQ(S.read(SymSpace::Register, 100, 4),
+            Entry.read(SymSpace::Register, 100, 4));
+  EXPECT_NE(S.read(SymSpace::Register, 104, 4),
+            Entry.read(SymSpace::Register, 104, 4));
+}
+
+TEST(SymRegisterPreservation, InitialCanonicalBytesSurviveSiblingWideRead) {
+  for (auto Order : {llvm::endianness::little, llvm::endianness::big}) {
+    SymContext C;
+    SymState S(C, Order), Sibling(S);
+    const auto Word = Sibling.read(SymSpace::Register, 100, 8);
+    const SymRegisterRange Ranges[] = {{102, 3}};
+    const auto Nodes = C.numNodes();
+    SymRegisterPreservation Keep{Ranges, 13, 3};
+    S.clobberRegistersExcept(Keep);
+    ASSERT_EQ(Keep.Status, SymRegisterPreservationStatus::Applied);
+    EXPECT_EQ(C.numNodes(), Nodes);
+    EXPECT_EQ(Keep.NodesCreated, 0U);
+    EXPECT_EQ(
+        S.read(SymSpace::Register, 102, 3),
+        C.mkExtract(Word, Order == llvm::endianness::little ? 16 : 24, 24));
+    EXPECT_EQ(Sibling.read(SymSpace::Register, 100, 8), Word);
+  }
+}
+
+TEST(SymRegisterPreservation, SiblingOnlyAndLastOwnerCachesAreBounded) {
+  for (bool KeepSibling : {false, true}) {
+    SymContext C;
+    SymState Source(C);
+    Source.clobberRegistersExcept(llvm::ArrayRef<SymRegisterRange>{});
+    auto Sibling = std::make_unique<SymState>(Source);
+    const auto R = Sibling->read(SymSpace::Register, 100, 8);
+    const auto T = Sibling->read(SymSpace::Temporary, 200, 4);
+    if (!KeepSibling)
+      Sibling.reset();
+    const SymRegisterRange Ranges[] = {{100, 4}};
+    // Both caches count even though Source has no materialized byte in either.
+    constexpr uint64_t Exact = 1 + 1 + 2 + 8 + 4 + 4 * 3;
+    for (uint64_t Budget : {uint64_t{0}, Exact - 1}) {
+      SymState S(Source), Before(Source);
+      const auto Nodes = C.numNodes();
+      SymRegisterPreservation Keep{Ranges, Budget, 0};
+      S.clobberRegistersExcept(Keep);
+      EXPECT_EQ(Keep.Status, SymRegisterPreservationStatus::BudgetExceeded);
+      EXPECT_EQ(C.numNodes(), Nodes);
+      EXPECT_TRUE(S.mergeIdentical(Before));
+    }
+    SymRegisterPreservation Keep{Ranges, Exact, 0};
+    Source.clobberRegistersExcept(Keep);
+    ASSERT_EQ(Keep.Status, SymRegisterPreservationStatus::Applied);
+    EXPECT_EQ(Keep.WorkUsed, Exact);
+    EXPECT_EQ(Keep.NodesCreated, 0U);
+    EXPECT_EQ(Source.read(SymSpace::Register, 100, 4), C.mkExtract(R, 0, 32));
+    EXPECT_NE(Source.read(SymSpace::Register, 104, 4), C.mkExtract(R, 32, 32));
+    EXPECT_NE(Source.read(SymSpace::Temporary, 200, 4), T);
+    if (Sibling) {
+      EXPECT_EQ(Sibling->read(SymSpace::Register, 100, 8), R);
+      EXPECT_EQ(Sibling->read(SymSpace::Temporary, 200, 4), T);
+    }
+  }
+}
+
+TEST(SymRegisterPreservation, RepeatedEffectsHaveFreshUnreadDefaults) {
+  SymContext C;
+  SymState S(C);
+  const auto V = C.mkVar("word", 64);
+  S.write(SymSpace::Register, 0, V);
+  const SymRegisterRange Ranges[] = {{1, 4}};
+  SymRegisterPreservation Keep{Ranges, 1000, 4};
+  S.clobberRegistersExcept(Keep);
+  ASSERT_EQ(Keep.Status, SymRegisterPreservationStatus::Applied);
+  SymState First(S);
+  const auto Before = C.numNodes();
+  S.clobberRegistersExcept(Keep);
+  ASSERT_EQ(Keep.Status, SymRegisterPreservationStatus::Applied);
+  EXPECT_EQ(C.numNodes(), Before);
+  EXPECT_EQ(S.read(SymSpace::Register, 1, 4), C.mkExtract(V, 8, 32));
+  EXPECT_EQ(First.read(SymSpace::Register, 1, 4), C.mkExtract(V, 8, 32));
+  EXPECT_NE(S.read(SymSpace::Register, 500, 8),
+            First.read(SymSpace::Register, 500, 8));
+  EXPECT_NE(S.read(SymSpace::Temporary, 600, 8),
+            First.read(SymSpace::Temporary, 600, 8));
+}

@@ -11,6 +11,8 @@
 
 #include "llvm/ADT/ArrayRef.h"
 
+#include <array>
+
 namespace neverd::analysis {
 
 /// Near 64-bit RET, optionally with the MPX-preserving BND prefix. Other
@@ -95,6 +97,15 @@ expandX64MachineExit(const SpecializationInstruction &Instruction,
                      const SpecializationX64MachineExit &Declaration,
                      NdVar Scratch,
                      llvm::ArrayRef<NdVar> ReservedTemporaries = {});
+
+/// Reuse the strict native CALL owner, replacing only its final transfer with
+/// a conditional raw event after the original target capture and physical push.
+/// Declaration admission and whole-state transition have separate owners.
+llvm::Expected<NativeStackExpansion>
+expandX64ReturningCall(const SpecializationInstruction &Instruction,
+                       const std::array<uint64_t, 4> &DeclarationDigest,
+                       NdVar Scratch,
+                       llvm::ArrayRef<NdVar> ReservedTemporaries = {});
 
 } // namespace neverd::analysis
 

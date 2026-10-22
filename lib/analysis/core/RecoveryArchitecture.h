@@ -133,6 +133,24 @@ public:
          std::optional<SpecializationExternalExit> &Exit) const = 0;
 };
 
+class RecoveryReturningCallLookup {
+public:
+  virtual ~RecoveryReturningCallLookup() = default;
+  virtual bool
+  lookup(va_t Address, uint64_t &Work,
+         std::optional<SpecializationReturningCall> &Call) const = 0;
+};
+
+/// Architecture policy only. The common consumer owns state/provenance and
+/// bounded current-memory forgetting; every separate runtime-control root is
+/// unchanged by this explicitly conditional relation.
+struct RecoveryCallTransition {
+  llvm::ArrayRef<symbolic::SymRegisterRange> PreservedRegisters;
+  llvm::ArrayRef<uint64_t> FreshFlags;
+  NdVar Stack;
+  NdVar ProgramCounter;
+};
+
 /// Native policies live under arch/<isa>. Core owns graph/evidence integrity
 /// and generic resource accounting; raw integrity never interprets native
 /// fields.
@@ -146,6 +164,15 @@ public:
   virtual llvm::Expected<std::unique_ptr<RecoveryMachineExitLookup>>
   prepareMachineExitLookup(const SpecializationOptions &Options,
                            uint64_t &Work) const = 0;
+  virtual llvm::Expected<std::unique_ptr<RecoveryReturningCallLookup>>
+  prepareReturningCallLookup(const SpecializationOptions &Options,
+                             uint64_t &Work) const = 0;
+  virtual RecoveryCallTransition returningCallTransition() const = 0;
+  virtual std::string
+  returningCallDigest(const SpecializationReturningCall &Call) const = 0;
+  virtual llvm::Error
+  validateReturningCalls(const SpecializationResult &Result,
+                         const SpecializationOptions &Options) const = 0;
   virtual std::string
   rawOptionsDigest(const SpecializationOptions &Options) const = 0;
   virtual llvm::Error

@@ -903,7 +903,7 @@ StepResult SymExec::stepImpl(const LowOp &Op, const SymCallEffect *CallEffect,
                              SymConditionalStore *Conditional) {
   // Unmodelled is a continuing value abstraction. A required environment
   // cannot be replaced by an unknown result, especially without an output.
-  if (isLowRawEnvironmentRequirement(Op) || isLowArchitecturalValue(Op))
+  if (isLowRawAnalysisOperation(Op) || isLowArchitecturalValue(Op))
     throw std::invalid_argument(
         "raw environment requirement needs a receipt-aware symbolic consumer");
   if (Preservation) {
