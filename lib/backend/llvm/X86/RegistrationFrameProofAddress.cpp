@@ -18,6 +18,7 @@
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Operator.h"
+#include "llvm/Support/ModRef.h"
 
 #include <set>
 #include <utility>
@@ -31,10 +32,49 @@ AddressProof::AddressProof(
     const coff_registration::RegistrationFrameStores &Stores, size_t &Work,
     bool &Exhausted, LoadProjection ProjectLoad, EdgeProjection Predecessors,
     ObjectBounds Bounds)
+    : AddressProof(Parent, Escape, SecurityCookieVA, Stores, Work, Exhausted,
+                   ProjectLoad, Predecessors, Bounds, {}) {}
+
+AddressProof::AddressProof(
+    const llvm::Function &Parent, const llvm::IntrinsicInst *Escape,
+    va_t SecurityCookieVA,
+    const coff_registration::RegistrationFrameStores &Stores, size_t &Work,
+    bool &Exhausted, LoadProjection ProjectLoad, EdgeProjection Predecessors,
+    ObjectBounds Bounds, MemoryProjection PreservesMemory)
     : Parent(Parent), Layout(Parent.getParent()->getDataLayout()),
       Escape(Escape), SecurityCookieVA(SecurityCookieVA), Stores(Stores),
       Work(Work), Exhausted(Exhausted), ProjectLoad(ProjectLoad),
-      Predecessors(Predecessors), Bounds(Bounds) {}
+      Predecessors(Predecessors), Bounds(Bounds),
+      PreservesMemory(PreservesMemory) {}
+
+bool AddressProof::preservesMemory(const llvm::Instruction &I, const Cell &Slot,
+                                   uint64_t Bytes, unsigned Depth) {
+  if (const auto *Intrinsic = llvm::dyn_cast<llvm::IntrinsicInst>(&I)) {
+    if (llvm::isa<llvm::LifetimeIntrinsic>(Intrinsic)) {
+      const auto Where = locate(Intrinsic->getArgOperand(0), Depth + 1);
+      return Where && Where->Root != Slot.Root;
+    }
+    switch (Intrinsic->getIntrinsicID()) {
+    case llvm::Intrinsic::stackrestore:
+    case llvm::Intrinsic::write_register:
+    case llvm::Intrinsic::eh_sjlj_setjmp:
+    case llvm::Intrinsic::eh_sjlj_longjmp:
+      return false;
+    default:
+      break;
+    }
+    // Query the intrinsic definition, not editable attributes on the call or
+    // declaration. In particular, a forged memory(none) is no write proof.
+    const auto Attributes = llvm::Intrinsic::getAttributes(
+        I.getContext(), Intrinsic->getIntrinsicID(),
+        Intrinsic->getFunctionType());
+    if (Attributes.getMemoryEffects()
+            .getWithoutLoc(llvm::IRMemLocation::InaccessibleMem)
+            .onlyReadsMemory())
+      return true;
+  }
+  return PreservesMemory && PreservesMemory(I, Slot, Bytes);
+}
 
 bool AddressProof::hasPE32Layout() const {
   return Layout.getPointerSize(0) == 4 && Layout.isLittleEndian();
@@ -212,6 +252,8 @@ bool AddressProof::visitReachingStores(
     const llvm::LoadInst &Input,
     llvm::function_ref<bool(const llvm::StoreInst &)> Visit, unsigned Depth) {
   const auto *Load = &Input;
+  if (Load->isAtomic())
+    return false;
   auto Slot = locate(Load->getPointerOperand(), Depth + 1);
   if (!Slot || !llvm::isa<llvm::AllocaInst>(Slot->Root))
     return false;
@@ -246,7 +288,7 @@ bool AddressProof::visitReachingStoresAt(
       Exhausted = true;
       return false;
     }
-    bool Found = false;
+    const llvm::StoreInst *Definition = nullptr;
     for (const auto *Store : llvm::reverse(*Candidates)) {
       if (Work >= limits::kMaxRegistrationEHStateWork) {
         Exhausted = true;
@@ -270,10 +312,25 @@ bool AddressProof::visitReachingStoresAt(
       if (!Visit(*Store))
         return false;
       SawDefinition = true;
-      Found = true;
+      Definition = Store;
       break;
     }
-    if (Found)
+    const auto Effects =
+        Stores.interveningEffects(Slot->Root, Block, Definition, Last, Work);
+    if (!Effects) {
+      Exhausted = true;
+      return false;
+    }
+    for (const auto *Effect : *Effects) {
+      if (Work >= limits::kMaxRegistrationEHStateWork) {
+        Exhausted = true;
+        return false;
+      }
+      ++Work;
+      if (!preservesMemory(*Effect, *Slot, Bytes, Depth))
+        return false;
+    }
+    if (Definition)
       continue;
     if (llvm::pred_empty(Block))
       return false;

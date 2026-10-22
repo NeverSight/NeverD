@@ -27,8 +27,10 @@ struct XorValue {
 };
 
 /// Candidate value equality through current SSA and every reaching store.
-/// The consumer must independently close aliases, frame lifetime and writes
-/// by calls, and prove that the original image cookie remains unchanged.
+/// Intervening call/lifetime effects use AddressProof's checked projections;
+/// an unknown effect cannot reuse an earlier spill. The consumer must still
+/// close aliases and the full frame lifetime, authenticate those projections,
+/// and prove that the original image cookie remains unchanged.
 /// Neither a candidate nor cancellation alone grants native EH permission.
 class XorProof {
 public:

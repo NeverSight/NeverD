@@ -14,8 +14,10 @@
 #include "neverd/backend/llvm/RegistrationFrameXor.h"
 
 #include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Verifier.h"
+#include "llvm/Support/ModRef.h"
 
 #include <array>
 #include <limits>
@@ -47,7 +49,8 @@ struct XorFixture {
     Frame->setAlignment(llvm::Align(16));
   }
 
-  std::optional<XorValue> query(llvm::Value *Value, size_t InitialWork = 0) {
+  std::optional<XorValue> query(llvm::Value *Value, size_t InitialWork = 0,
+                                AddressProof::MemoryProjection Preserves = {}) {
     EXPECT_FALSE(llvm::verifyModule(Module, &llvm::errs()));
     size_t Work = InitialWork;
     bool Exhausted = false;
@@ -56,13 +59,15 @@ struct XorFixture {
     if (!Stores.build(Functions, Work))
       return std::nullopt;
     AddressProof Addresses(*Function, nullptr, 0x403010, Stores, Work,
-                           Exhausted);
+                           Exhausted, {}, {}, {}, Preserves);
     XorProof Values(Addresses, 0x403010, Work, Exhausted);
     auto Result = Values.evaluate(Value);
     return Exhausted ? std::nullopt : Result;
   }
 
-  std::optional<XorValue> queryAt(const llvm::Instruction &Before) {
+  std::optional<XorValue>
+  queryAt(const llvm::Instruction &Before,
+          AddressProof::MemoryProjection Preserves = {}) {
     size_t Work = 0;
     bool Exhausted = false;
     coff_registration::RegistrationFrameStores Stores;
@@ -70,7 +75,7 @@ struct XorFixture {
     if (!Stores.build(Functions, Work))
       return std::nullopt;
     AddressProof Addresses(*Function, nullptr, 0x403010, Stores, Work,
-                           Exhausted);
+                           Exhausted, {}, {}, {}, Preserves);
     const auto Where = Addresses.locate(Slot);
     if (!Where)
       return std::nullopt;
@@ -271,4 +276,144 @@ TEST(RegistrationFrameXor, AnExhaustedCounterCannotWrapOrReviveARecipe) {
   EXPECT_FALSE(Addresses.locate(F.Frame));
 }
 
+TEST(RegistrationFrameXor, InterveningCallsNeedCurrentWriteEffects) {
+  for (unsigned Mutation = 0; Mutation != 6; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    XorFixture F;
+    auto Callee = F.Module.getOrInsertFunction(
+        "callee",
+        llvm::FunctionType::get(F.B.getVoidTy(), {F.B.getPtrTy()}, false));
+    if (Mutation != 2)
+      F.B.CreateStore(F.Encoded, F.Slot);
+    auto *Call = F.B.CreateCall(Callee, {F.Slot});
+    if (Mutation == 1) {
+      Call->setMemoryEffects(llvm::MemoryEffects::none());
+      llvm::cast<llvm::Function>(Callee.getCallee())
+          ->setMemoryEffects(llvm::MemoryEffects::none());
+    }
+    if (Mutation == 2 || Mutation == 3)
+      F.B.CreateStore(F.Encoded, F.Slot);
+    auto *Decoded =
+        F.B.CreateXor(F.B.CreateLoad(F.B.getInt32Ty(), F.Slot), F.Base);
+    auto *Point = F.B.CreateCall(Callee, {F.Slot});
+    F.B.CreateRet(Decoded);
+    auto Preserves = [&](const llvm::Instruction &I, const Cell &Slot,
+                         uint64_t Bytes) {
+      // Model a separately authenticated call writing frame bytes [0,4).
+      // The alternate write [31,33) overlaps one queried cookie byte.
+      const int64_t Begin = Mutation == 5 ? 31 : 0;
+      const int64_t End = Mutation == 5 ? 33 : 4;
+      return &I == Call && (Mutation == 4 || Mutation == 5) &&
+             (Slot.Root != F.Frame || Slot.Offset >= End ||
+              Slot.Offset + int64_t(Bytes) <= Begin);
+    };
+    const bool Valid = Mutation >= 2 && Mutation <= 4;
+    EXPECT_EQ(F.query(Decoded, 0, Preserves).has_value(), Valid);
+    EXPECT_EQ(F.queryAt(*Point, Preserves).has_value(), Valid);
+  }
+}
+
+TEST(RegistrationFrameXor, CallsOnJoinsAndLoopSuffixesInvalidateTheWord) {
+  for (bool Loop : {false, true}) {
+    SCOPED_TRACE(Loop);
+    XorFixture F;
+    F.B.CreateStore(F.Encoded, F.Slot);
+    auto Callee = F.Module.getOrInsertFunction(
+        "clobber",
+        llvm::FunctionType::get(F.B.getVoidTy(), {F.B.getPtrTy()}, false));
+    auto *Read = llvm::BasicBlock::Create(F.Context, "read", F.Function);
+    auto *Write = llvm::BasicBlock::Create(F.Context, "write", F.Function);
+    auto *Exit = llvm::BasicBlock::Create(F.Context, "exit", F.Function);
+    if (Loop)
+      F.B.CreateBr(Read);
+    else
+      F.B.CreateCondBr(F.Function->getArg(0), Read, Write);
+    F.B.SetInsertPoint(Write);
+    F.B.CreateCall(Callee, {F.Slot});
+    F.B.CreateBr(Read);
+    F.B.SetInsertPoint(Read);
+    auto *Decoded =
+        F.B.CreateXor(F.B.CreateLoad(F.B.getInt32Ty(), F.Slot), F.Base);
+    if (Loop)
+      F.B.CreateCondBr(F.Function->getArg(0), Write, Exit);
+    else
+      F.B.CreateBr(Exit);
+    F.B.SetInsertPoint(Exit);
+    F.B.CreateRet(Decoded);
+    EXPECT_FALSE(F.query(Decoded));
+  }
+}
+
+TEST(RegistrationFrameXor, LifetimeChangesCannotReuseEarlierStores) {
+  for (unsigned Mutation = 0; Mutation != 4; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    XorFixture F;
+    F.B.CreateLifetimeStart(F.Frame);
+    F.B.CreateStore(F.Encoded, F.Slot);
+    auto *Target = Mutation == 3 ? F.B.CreateAlloca(F.B.getInt32Ty()) : F.Frame;
+    F.B.CreateLifetimeEnd(Target);
+    if (Mutation == 1 || Mutation == 2)
+      F.B.CreateLifetimeStart(F.Frame);
+    if (Mutation == 2)
+      F.B.CreateStore(F.Encoded, F.Slot);
+    auto *Decoded =
+        F.B.CreateXor(F.B.CreateLoad(F.B.getInt32Ty(), F.Slot), F.Base);
+    F.B.CreateRet(Decoded);
+    EXPECT_EQ(F.query(Decoded).has_value(), Mutation >= 2);
+  }
+}
+
+TEST(RegistrationFrameXor, PrivateSpillsDoNotAcquireUnrelatedCallAliases) {
+  XorFixture F;
+  auto *Carrier = F.B.CreateAlloca(F.B.getInt32Ty());
+  F.B.CreateStore(F.Encoded, Carrier);
+  auto Callee = F.Module.getOrInsertFunction(
+      "opaque", llvm::FunctionType::get(F.B.getVoidTy(), false));
+  F.B.CreateCall(Callee);
+  auto *Decoded =
+      F.B.CreateXor(F.B.CreateLoad(F.B.getInt32Ty(), Carrier), F.Base);
+  F.B.CreateRet(Decoded);
+  EXPECT_EQ(F.query(Decoded), (std::optional<XorValue>{{0, true, {}}}));
+}
+
+TEST(RegistrationFrameXor, AtomicAndIntrinsicWritesAreNotPlainStores) {
+  for (bool Atomic : {false, true}) {
+    SCOPED_TRACE(Atomic);
+    XorFixture F;
+    F.B.CreateStore(F.Encoded, F.Slot);
+    if (Atomic)
+      F.B.CreateAtomicRMW(llvm::AtomicRMWInst::Xchg, F.Slot, F.B.getInt32(0),
+                          llvm::Align(4), llvm::AtomicOrdering::Monotonic);
+    else {
+      auto *Call = F.B.CreateMemSet(F.Slot, F.B.getInt8(0), 4, llvm::Align(4));
+      Call->setMemoryEffects(llvm::MemoryEffects::none());
+      Call->getCalledFunction()->setMemoryEffects(llvm::MemoryEffects::none());
+    }
+    auto *Decoded =
+        F.B.CreateXor(F.B.CreateLoad(F.B.getInt32Ty(), F.Slot), F.Base);
+    F.B.CreateRet(Decoded);
+    EXPECT_FALSE(F.query(Decoded));
+  }
+}
+
+TEST(RegistrationFrameXor, SideEffectMarkersPreservePrivateWords) {
+  XorFixture F;
+  F.B.CreateStore(F.Encoded, F.Slot);
+  F.B.CreateCall(llvm::Intrinsic::getOrInsertDeclaration(
+      &F.Module, llvm::Intrinsic::sideeffect));
+  auto *Decoded =
+      F.B.CreateXor(F.B.CreateLoad(F.B.getInt32Ty(), F.Slot), F.Base);
+  F.B.CreateRet(Decoded);
+  EXPECT_EQ(F.query(Decoded), (std::optional<XorValue>{{0, true, {}}}));
+}
+
+TEST(RegistrationFrameXor, VolatileObservationsDoNotWritePrivateWords) {
+  XorFixture F;
+  F.B.CreateStore(F.Encoded, F.Slot);
+  F.B.CreateLoad(F.B.getInt32Ty(), F.Global)->setVolatile(true);
+  auto *Decoded =
+      F.B.CreateXor(F.B.CreateLoad(F.B.getInt32Ty(), F.Slot), F.Base);
+  F.B.CreateRet(Decoded);
+  EXPECT_EQ(F.query(Decoded), (std::optional<XorValue>{{0, true, {}}}));
+}
 } // namespace

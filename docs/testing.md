@@ -6729,6 +6729,18 @@ SSA/private spills and every predecessor. Different roots/offsets, partial or
 atomic writes, missing initialization, loop-suffix changes, narrow/poison values,
 foreign globals, wrong pointer width and exhausted work cannot certify a cookie.
 Poison-generating address recipes cannot cancel into an otherwise valid value.
+Call-write regressions cover opaque calls, forged memory attributes, exact
+disjoint/overlapping effects, initialization after a call, branch joins and loop
+suffixes. Atomic and intrinsic writes and lifetime end/restart cannot reuse an
+earlier word; unaliased direct spills retain their bounded fast path.
+Volatile image observations and side-effect markers preserve the stored word.
+`RegistrationInitializerFrame.CallWritesInvalidateSavedPointerValues` checks
+the independent COFF privacy consumer: a constructor's complete or partial
+write invalidates a prior stored pointer, while a disjoint write or a fresh
+post-call pointer store preserves the valid address proof.
+Its invoke companion checks possible constructor writes on both normal and
+exceptional successors; normal-edge must-writes never preserve a pre-call
+pointer on the unwind edge.
 The existing privacy suites independently retain bounds, lifetime and escape
 checks; the recipe query grants no native GS admission.
 `RegistrationFrameStores` and `RegistrationFrameTaint` test bounded LLVM spill

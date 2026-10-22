@@ -202,9 +202,69 @@ llvm::Error validateFramePrivacy(
     // independently below, rather than a compiler allocation's declared type.
     return llvm::isa<llvm::GlobalVariable>(Where.Root);
   };
+  auto PreservesMemory = [&](const llvm::Instruction &I, const Cell &Slot,
+                             uint64_t Bytes) {
+    auto Disjoint = [&](const llvm::Value *Root, int64_t Offset,
+                        uint64_t Width) {
+      if (Offset < -int64_t(UINT32_MAX) || Offset > int64_t(UINT32_MAX) ||
+          Width > UINT32_MAX)
+        return false;
+      return Root != Slot.Root || Offset >= Slot.Offset + int64_t(Bytes) ||
+             Slot.Offset >= Offset + int64_t(Width);
+    };
+    if (const auto *Pad = llvm::dyn_cast<llvm::CatchPadInst>(&I)) {
+      const auto Found = RuntimeObjects.find(Pad);
+      if (Found == RuntimeObjects.end())
+        return false;
+      const auto &Catch = *Found->second;
+      return Slot.Root != Catch.CallbackStack &&
+             (!Catch.ObjectSize ||
+              Disjoint(LogicalFrame, Catch.HomeOffset,
+                       Catch.Reference ? 4 : Catch.ObjectSize));
+    }
+    const auto *Call = llvm::dyn_cast<llvm::CallBase>(&I);
+    if (!Call || Call->isInlineAsm() || llvm::isa<llvm::CallBrInst>(Call) ||
+        llvm::isa<llvm::IntrinsicInst>(Call))
+      return false;
+    if (Cxx) {
+      const auto Found = Cxx->Borrows.find(Call);
+      if (Found != Cxx->Borrows.end()) {
+        const auto &Borrow = Found->second;
+        if (Borrow.Offset < -int64_t(UINT32_MAX) ||
+            Borrow.Offset > int64_t(UINT32_MAX))
+          return false;
+        const auto *Root = Borrow.Root ? Borrow.Root : LogicalFrame;
+        for (const auto *Effects : {&Borrow.Writes, &Borrow.Initialized})
+          for (const auto &Write : *Effects) {
+            if (Work >= limits::kMaxRegistrationEHStateWork) {
+              Exhausted = true;
+              return false;
+            }
+            ++Work;
+            if (Write.Begin >= Write.End ||
+                !Disjoint(Root, Borrow.Offset + int64_t(Write.Begin),
+                          uint64_t(int64_t(Write.End) - Write.Begin)))
+              return false;
+          }
+        return true;
+      }
+    }
+    if ((LocalUnwinds && LocalUnwinds->Calls.count(Call)) ||
+        (Jumps && Jumps->Calls.count(Call)) ||
+        (ParentExits && ParentExits->Calls.count(Call)) ||
+        (Scopes && Scopes->PhysicalWrites.count(Call)) ||
+        llvm::is_contained(Callbacks, Call->getCalledFunction()))
+      return false;
+    // This is conditional on the complete use closure below: an ordinary
+    // call cannot receive or retain any frame address. Calls admitted by a
+    // separate frame protocol need that protocol's write projection instead.
+    // Do not consult the growing Addresses set here: memoized answers must
+    // not depend on the order of the taint fixed point.
+    return true;
+  };
   registration_frame::AddressProof AddressOwner(
       Parent, Escape, SecurityCookieVA, Stores, Work, Exhausted, ProjectLoad,
-      Predecessors, ObjectBounds);
+      Predecessors, ObjectBounds, PreservesMemory);
   auto Locate = [&](const llvm::Value *Value, unsigned Depth) {
     return AddressOwner.locate(Value, Depth);
   };

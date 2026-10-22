@@ -40,6 +40,15 @@ public:
   candidates(const llvm::Value *Root, const llvm::BasicBlock *Block,
              const llvm::Instruction *Through, size_t &Work) const;
 
+  /// Non-STORE memory/lifetime effects after After (exclusive) and through
+  /// Through (inclusive). A null After starts at block entry. Only an alloca
+  /// whose complete use list consists of direct loads/stores can skip these
+  /// effects. The caller must prove preservation across every returned event.
+  std::optional<llvm::ArrayRef<const llvm::Instruction *>>
+  interveningEffects(const llvm::Value *Root, const llvm::BasicBlock *Block,
+                     const llvm::Instruction *After,
+                     const llvm::Instruction *Through, size_t &Work) const;
+
   /// Every write to an unaliased allocation, including later and loop writes.
   /// Unknown ownership or an exhausted budget returns no result.
   std::optional<llvm::ArrayRef<const llvm::StoreInst *>>
@@ -52,6 +61,9 @@ private:
   llvm::DenseMap<const llvm::Value *, std::vector<const llvm::StoreInst *>>
       DirectStores;
   Blocks AllStores;
+  llvm::DenseMap<const llvm::BasicBlock *,
+                 std::vector<const llvm::Instruction *>>
+      Effects;
   llvm::DenseMap<const llvm::Instruction *, unsigned> Positions;
 };
 } // namespace neverd::coff_registration

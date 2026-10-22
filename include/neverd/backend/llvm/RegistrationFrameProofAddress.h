@@ -50,22 +50,34 @@ public:
       const llvm::BasicBlock *, const llvm::BasicBlock *,
       llvm::SmallVectorImpl<const llvm::BasicBlock *> &)>;
   using ObjectBounds = llvm::function_ref<bool(const Cell &)>;
+  /// True only if this separately authenticated current event preserves the
+  /// complete queried interval. Unknown and partial writes must return false.
+  /// This hook does not replace the consumer's complete alias/use closure.
+  using MemoryProjection = llvm::function_ref<bool(const llvm::Instruction &,
+                                                   const Cell &, uint64_t)>;
 
-  /// Hooks project only separately authenticated runtime roots and resumption
-  /// edges. They must outlive this query; empty hooks select ordinary LLVM CFG.
+  /// Hooks project only separately authenticated runtime roots, resumption
+  /// edges and effects. They must outlive this query; the queried IR must stay
+  /// unchanged. Empty hooks select the ordinary CFG and reject unknown effects.
   AddressProof(const llvm::Function &Parent, const llvm::IntrinsicInst *Escape,
                va_t SecurityCookieVA,
                const coff_registration::RegistrationFrameStores &Stores,
                size_t &Work, bool &Exhausted, LoadProjection ProjectLoad = {},
                EdgeProjection Predecessors = {}, ObjectBounds Bounds = {});
+  AddressProof(const llvm::Function &Parent, const llvm::IntrinsicInst *Escape,
+               va_t SecurityCookieVA,
+               const coff_registration::RegistrationFrameStores &Stores,
+               size_t &Work, bool &Exhausted, LoadProjection ProjectLoad,
+               EdgeProjection Predecessors, ObjectBounds Bounds,
+               MemoryProjection PreservesMemory);
 
   std::optional<Cell> locate(const llvm::Value *Value, unsigned Depth = 0);
   bool hasPE32Layout() const;
 
   /// Visit every potentially reaching full-width store before this exact load.
-  /// Partial/atomic stores, unwritten paths or exhaustion fail. This is a value
-  /// candidate only: the consumer must separately close aliases and call
-  /// writes.
+  /// Partial/atomic stores, unwritten paths, unproved intervening effects or
+  /// exhaustion fail. The consumer must still close aliases and the complete
+  /// frame lifetime; a reaching-store candidate alone is not that proof.
   bool
   visitReachingStores(const llvm::LoadInst &Load,
                       llvm::function_ref<bool(const llvm::StoreInst &)> Visit,
@@ -80,6 +92,8 @@ public:
 private:
   std::optional<Cell> locateImpl(const llvm::Value *Value, unsigned Depth);
   bool withinObject(const Cell &Where) const;
+  bool preservesMemory(const llvm::Instruction &I, const Cell &Slot,
+                       uint64_t Bytes, unsigned Depth);
   const llvm::Function &Parent;
   const llvm::DataLayout &Layout;
   const llvm::IntrinsicInst *Escape;
@@ -90,6 +104,7 @@ private:
   LoadProjection ProjectLoad;
   EdgeProjection Predecessors;
   ObjectBounds Bounds;
+  MemoryProjection PreservesMemory;
   std::map<const llvm::Value *, std::optional<Cell>> Located;
 };
 

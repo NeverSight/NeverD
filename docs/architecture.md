@@ -1912,10 +1912,20 @@ The shared `WindowsRegistrationFrame` component owns `AddressProof` and the
 store index for current LLVM address and value queries. COFF supplies its checked
 runtime-object roots and resumption edges. Ordinary and callback paths therefore
 use the same byte-coordinate, cast, alignment and full-width reaching-store rules.
+The index also retains non-STORE memory and lifetime events in instruction order.
+An aliased slot cannot reuse a value across an unknown call, atomic operation,
+runtime catch write or lifetime transition. COFF projects authenticated C++
+borrow write intervals and catch initialization into that same query; a partial
+overlap invalidates a saved pointer, while a later full store can establish it
+again. Only allocas with exclusively direct load/store uses skip unrelated calls.
+Intrinsic effects come from their definition, not editable call attributes.
+Volatile reads retain their ordering but do not invalidate a stored word;
+LLVM's broad optimization side-effect classification is not a frame-write set.
 `XorProof` computes low-word cookie/address recipes through that owner, including
 values immediately before an exceptional call. These are candidates only:
-call writes, aliases, initialized lifetimes and image-cookie stability must still
-close independently before any native guarded-frame or check-elision permission.
+the effect projections, aliases, complete initialized lifetimes and image-cookie
+stability must still close independently before any native guarded-frame or
+check-elision permission.
 `COFFTrampolineRegions` resolves authenticated source entries across executable
 sections, including earlier generated code, with unique virtual/raw ownership
 and unchanged input bytes. A second reconstruction repeats all source and LLVM

@@ -35,6 +35,7 @@ bool RegistrationFrameStores::build(
   Stores.clear();
   DirectStores.clear();
   AllStores.clear();
+  Effects.clear();
   Positions.clear();
   for (const auto *Function : Functions)
     for (const auto &Block : *Function) {
@@ -45,6 +46,13 @@ bool RegistrationFrameStores::build(
         Positions.try_emplace(&I, Position++);
         if (const auto *Store = llvm::dyn_cast<llvm::StoreInst>(&I))
           AllStores[&Block].push_back(Store);
+        // LLVM's mayWriteToMemory also classifies volatile LOADs as effects
+        // for optimization ordering. They do not define a different frame
+        // word. Actual non-STORE writes and lifetime events remain barriers.
+        else if (!llvm::isa<llvm::LoadInst>(I) &&
+                 (llvm::isa<llvm::CallBase, llvm::CatchPadInst>(I) ||
+                  I.mayWriteToMemory()))
+          Effects[&Block].push_back(&I);
         const auto *Slot = llvm::dyn_cast<llvm::AllocaInst>(&I);
         if (!Slot || !Slot->isStaticAlloca())
           continue;
@@ -120,5 +128,33 @@ RegistrationFrameStores::directDefinitions(const llvm::Value *Root,
   if (Found == DirectStores.end())
     return std::nullopt;
   return llvm::ArrayRef(Found->second);
+}
+
+std::optional<llvm::ArrayRef<const llvm::Instruction *>>
+RegistrationFrameStores::interveningEffects(const llvm::Value *Root,
+                                            const llvm::BasicBlock *Block,
+                                            const llvm::Instruction *After,
+                                            const llvm::Instruction *Through,
+                                            size_t &Work) const {
+  if (!charge(Work))
+    return std::nullopt;
+  const auto Found = Effects.find(Block);
+  if (!Through || Stores.count(Root) || Found == Effects.end())
+    return llvm::ArrayRef<const llvm::Instruction *>{};
+  const auto &Candidates = Found->second;
+  if (!charge(Work, 2 * (std::bit_width(Candidates.size()) + 1)))
+    return std::nullopt;
+  auto BeforePosition = [&](unsigned Position, const auto *I) {
+    return Position < Positions.at(I);
+  };
+  const auto Begin =
+      After ? llvm::upper_bound(Candidates, Positions.at(After), BeforePosition)
+            : Candidates.begin();
+  const auto End =
+      llvm::upper_bound(Candidates, Positions.at(Through), BeforePosition);
+  if (Begin > End)
+    return std::nullopt;
+  return llvm::ArrayRef(Candidates)
+      .slice(Begin - Candidates.begin(), End - Begin);
 }
 } // namespace neverd::coff_registration
