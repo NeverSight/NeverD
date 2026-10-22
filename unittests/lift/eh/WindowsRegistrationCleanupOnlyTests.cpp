@@ -4,6 +4,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "../../../lib/backend/codegen/COFF/COFFRegistrationCxxIRProof.h"
 #include "../../../lib/backend/codegen/COFF/COFFRegistrationCxxStateProof.h"
 #include "gtest/gtest.h"
 
@@ -36,6 +37,7 @@
 #include "llvm/Transforms/Utils/Cloning.h"
 
 #include <cstdlib>
+#include <string>
 
 using namespace neverd;
 
@@ -407,6 +409,48 @@ void checkCleanupOnlyInput(const char *Path, bool RegisterStateWrite) {
     auto Error = validateCOFFRegistrationCxxIR(*Function, *Source, *Image);
     EXPECT_TRUE(bool(Error));
     llvm::consumeError(std::move(Error));
+  }
+  for (unsigned Lifetime = 0; Lifetime != 3; ++Lifetime) {
+    SCOPED_TRACE(Lifetime);
+    auto Changed = llvm::CloneModule(*Module);
+    auto *Function = Changed->getFunction(Parent->getName());
+    auto Proof = coff_registration::getCheckedCxxControlIRProof(
+        *Function, *Source, *Image);
+    ASSERT_TRUE(bool(Proof)) << llvm::toString(Proof.takeError());
+    auto *Allocation = const_cast<llvm::AllocaInst *>(Proof->Frame.Slot);
+    ASSERT_TRUE(Allocation && Allocation->getNextNode());
+    llvm::IRBuilder<> B(Allocation->getNextNode());
+    B.CreateLifetimeStart(Allocation);
+    llvm::InvokeInst *Invoke = nullptr;
+    for (auto &Block : *Function)
+      if (auto *Call =
+              llvm::dyn_cast<llvm::InvokeInst>(Block.getTerminator())) {
+        Invoke = Call;
+        break;
+      }
+    ASSERT_TRUE(Invoke);
+    ASSERT_TRUE(Invoke->getPrevNode());
+    B.SetInsertPoint(Invoke->getPrevNode());
+    if (Lifetime == 1)
+      B.CreateLifetimeEnd(Allocation);
+    if (Lifetime == 2)
+      B.CreateLifetimeStart(Allocation);
+    ASSERT_FALSE(llvm::verifyModule(*Changed, &llvm::errs()));
+    auto Control =
+        validateCOFFRegistrationCxxControlIR(*Function, *Source, *Image);
+    ASSERT_FALSE(bool(Control)) << llvm::toString(std::move(Control));
+    auto Error = validateCOFFRegistrationCxxIR(*Function, *Source, *Image);
+    // A start permits access, but every start also discards initialized bytes.
+    EXPECT_EQ(bool(Error), Lifetime != 0);
+    const auto Message = llvm::toString(std::move(Error));
+    if (Lifetime == 1)
+      EXPECT_NE(Message.find("outside its allocation lifetime"),
+                std::string::npos)
+          << Message;
+    if (Lifetime == 2)
+      EXPECT_NE(Message.find("not initialized on every path"),
+                std::string::npos)
+          << Message;
   }
   // Keep the object compile independent: code generation may mutate its IR.
   auto ObjectModule = llvm::CloneModule(*Module);

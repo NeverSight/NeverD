@@ -4,7 +4,7 @@
 //
 //===----------------------------------------------------------------------===//
 /// \file
-/// Index stores to allocations with no aliases or escaping uses. The frame
+/// Index stores, intervening effects and static allocation lifetimes. The frame
 /// proof still checks widths, values and every reaching control-flow path.
 //===----------------------------------------------------------------------===//
 
@@ -19,9 +19,11 @@
 #include <vector>
 
 namespace llvm {
+class AllocaInst;
 class BasicBlock;
 class Function;
 class Instruction;
+class IntrinsicInst;
 class StoreInst;
 class Value;
 } // namespace llvm
@@ -29,6 +31,8 @@ class Value;
 namespace neverd::coff_registration {
 class RegistrationFrameStores {
 public:
+  /// Lifetime markers must name a direct static allocation or poison. An
+  /// unsupported marker or exhausted shared budget rejects the whole index.
   bool build(llvm::ArrayRef<const llvm::Function *> Functions, size_t &Work);
 
   /// Return all potentially reaching stores in program order. For an
@@ -54,6 +58,18 @@ public:
   std::optional<llvm::ArrayRef<const llvm::StoreInst *>>
   directDefinitions(const llvm::Value *Root, size_t &Work) const;
 
+  struct LifetimeInfo {
+    bool HasMarkers = false;
+    bool StartsDead = false;
+  };
+  std::optional<LifetimeInfo> lifetimeInfo(const llvm::AllocaInst &Root,
+                                           size_t &Work) const;
+  /// Last lifetime marker through this block prefix. A null marker means no
+  /// event; an empty optional means the index/budget cannot answer the query.
+  std::optional<const llvm::IntrinsicInst *>
+  latestLifetime(const llvm::AllocaInst &Root, const llvm::BasicBlock &Block,
+                 const llvm::Instruction *Through, size_t &Work) const;
+
 private:
   using Blocks = llvm::DenseMap<const llvm::BasicBlock *,
                                 std::vector<const llvm::StoreInst *>>;
@@ -65,6 +81,13 @@ private:
                  std::vector<const llvm::Instruction *>>
       Effects;
   llvm::DenseMap<const llvm::Instruction *, unsigned> Positions;
+  struct LifetimeEvents {
+    bool StartsDead = false;
+    llvm::DenseMap<const llvm::BasicBlock *,
+                   std::vector<const llvm::IntrinsicInst *>>
+        Markers;
+  };
+  llvm::DenseMap<const llvm::AllocaInst *, LifetimeEvents> Lifetimes;
 };
 } // namespace neverd::coff_registration
 

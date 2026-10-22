@@ -19,6 +19,7 @@
 #include <functional>
 #include <map>
 #include <optional>
+#include <utility>
 
 namespace llvm {
 class DataLayout;
@@ -74,6 +75,13 @@ public:
   std::optional<Cell> locate(const llvm::Value *Value, unsigned Depth = 0);
   bool hasPE32Layout() const;
 
+  /// Whether this static allocation is alive immediately before the access
+  /// on every predecessor. Pointer arithmetic itself does not require this.
+  /// Cross-function uses of an unmarked parent allocation still require the
+  /// consumer's authenticated callback invocation; marked parents need a
+  /// call-site lifetime projection and are not guessed alive in callbacks.
+  bool isAliveAt(const llvm::AllocaInst &Root, const llvm::Instruction &Before);
+
   /// Visit every potentially reaching full-width store before this exact load.
   /// Partial/atomic stores, unwritten paths, unproved intervening effects or
   /// exhaustion fail. The consumer must still close aliases and the complete
@@ -106,6 +114,8 @@ private:
   ObjectBounds Bounds;
   MemoryProjection PreservesMemory;
   std::map<const llvm::Value *, std::optional<Cell>> Located;
+  std::map<std::pair<const llvm::AllocaInst *, const llvm::Instruction *>, bool>
+      Alive;
 };
 
 } // namespace neverd::registration_frame

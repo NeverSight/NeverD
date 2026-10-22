@@ -6741,6 +6741,15 @@ post-call pointer store preserves the valid address proof.
 Its invoke companion checks possible constructor writes on both normal and
 exceptional successors; normal-edge must-writes never preserve a pre-call
 pointer on the unwind edge.
+`RegistrationFrameLifetime` separates current storage accessibility from an
+earlier stored value. It checks dead stores, reinitialization after a start,
+joins, loop suffixes, unreachable start markers, poison markers, unsupported
+dynamic storage, member writes and implicit runtime catch copies. Earlier SSA values and address arithmetic
+survive an end; marked parent storage cannot acquire an inferred callback
+lifetime. The cleanup-only PE32 integration also retains the complete control
+receipt while rejecting an ended frame or a restart without object
+initialization before its protected call. A normal start before initialization
+preserves the valid source/control/frame proof.
 The existing privacy suites independently retain bounds, lifetime and escape
 checks; the recipe query grants no native GS admission.
 `RegistrationFrameStores` and `RegistrationFrameTaint` test bounded LLVM spill

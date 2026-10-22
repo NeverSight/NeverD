@@ -47,10 +47,96 @@ AddressProof::AddressProof(
       Predecessors(Predecessors), Bounds(Bounds),
       PreservesMemory(PreservesMemory) {}
 
+bool AddressProof::isAliveAt(const llvm::AllocaInst &Root,
+                             const llvm::Instruction &Before) {
+  auto Charge = [&] {
+    if (Exhausted || Work >= limits::kMaxRegistrationEHStateWork) {
+      Exhausted = true;
+      return false;
+    }
+    ++Work;
+    return true;
+  };
+  if (!Charge() || !Root.isStaticAlloca())
+    return false;
+  const auto Info = Stores.lifetimeInfo(Root, Work);
+  if (!Info) {
+    Exhausted = true;
+    return false;
+  }
+  if (Root.getFunction() != Before.getFunction())
+    return Root.getFunction() == &Parent && !Info->HasMarkers;
+  if (!Info->HasMarkers)
+    return Root.getParent() != Before.getParent() || Root.comesBefore(&Before);
+  const auto Key = std::make_pair(&Root, &Before);
+  if (const auto Found = Alive.find(Key); Found != Alive.end())
+    return Found->second;
+  auto Compute = [&] {
+    using Point =
+        std::pair<const llvm::BasicBlock *, const llvm::Instruction *>;
+    std::vector<Point> Pending{{Before.getParent(), Before.getPrevNode()}};
+    std::set<Point> Seen;
+    bool SawLive = false;
+    while (!Pending.empty()) {
+      if (!Charge())
+        return false;
+      const auto [Block, Last] = Pending.back();
+      Pending.pop_back();
+      // A backedge must revisit the suffix after the initial query prefix.
+      if (!Seen.emplace(Block, Last).second)
+        continue;
+      const auto Marker = Stores.latestLifetime(Root, *Block, Last, Work);
+      if (!Marker) {
+        Exhausted = true;
+        return false;
+      }
+      if (*Marker) {
+        if ((*Marker)->getIntrinsicID() != llvm::Intrinsic::lifetime_start)
+          return false;
+        SawLive = true;
+        continue;
+      }
+      if (Block == Root.getParent()) {
+        // Any lifetime.start use makes the allocation initially dead,
+        // including a marker in a different or unreachable block.
+        if (Info->StartsDead || !Last ||
+            (Last != &Root && !Root.comesBefore(Last)))
+          return false;
+        SawLive = true;
+        continue;
+      }
+      if (llvm::pred_empty(Block))
+        return false;
+      for (const auto *Pred : llvm::predecessors(Block)) {
+        if (!Charge())
+          return false;
+        llvm::SmallVector<const llvm::BasicBlock *, 4> Edges;
+        if (Predecessors) {
+          if (!Predecessors(Block, Pred, Edges) || Edges.empty())
+            return false;
+        } else
+          Edges.push_back(Pred);
+        for (const auto *Edge : Edges) {
+          if (!Charge() || !Edge || Edge->getParent() != Before.getFunction())
+            return false;
+          Pending.emplace_back(Edge, Edge->getTerminator());
+        }
+      }
+    }
+    return SawLive;
+  };
+  const bool Result = Compute();
+  if (!Exhausted)
+    Alive.emplace(Key, Result);
+  return Result;
+}
+
 bool AddressProof::preservesMemory(const llvm::Instruction &I, const Cell &Slot,
                                    uint64_t Bytes, unsigned Depth) {
   if (const auto *Intrinsic = llvm::dyn_cast<llvm::IntrinsicInst>(&I)) {
     if (llvm::isa<llvm::LifetimeIntrinsic>(Intrinsic)) {
+      if (llvm::isa<llvm::PoisonValue>(Intrinsic->getArgOperand(0)))
+        return true;
       const auto Where = locate(Intrinsic->getArgOperand(0), Depth + 1);
       return Where && Where->Root != Slot.Root;
     }
@@ -269,7 +355,8 @@ bool AddressProof::visitReachingStoresAt(
   if (Exhausted || !Bytes || Bytes > UINT32_MAX ||
       Input.Offset < -int64_t(UINT32_MAX) ||
       Input.Offset > int64_t(UINT32_MAX) ||
-      !llvm::isa<llvm::AllocaInst>(Input.Root))
+      !llvm::isa<llvm::AllocaInst>(Input.Root) ||
+      !isAliveAt(*llvm::cast<llvm::AllocaInst>(Input.Root), Before))
     return false;
   const auto *Slot = &Input;
   std::vector<std::pair<const llvm::BasicBlock *, const llvm::Instruction *>>
@@ -307,7 +394,8 @@ bool AddressProof::visitReachingStoresAt(
               Destination->Offset + int64_t(Written.getFixedValue()))
         continue;
       if (*Destination != *Slot || Written.getFixedValue() != Bytes ||
-          Store->isAtomic())
+          Store->isAtomic() ||
+          !isAliveAt(*llvm::cast<llvm::AllocaInst>(Slot->Root), *Store))
         return false;
       if (!Visit(*Store))
         return false;

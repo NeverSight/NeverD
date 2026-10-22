@@ -15,6 +15,7 @@
 
 #include "llvm/IR/Function.h"
 #include "llvm/IR/Instructions.h"
+#include "llvm/IR/IntrinsicInst.h"
 
 #include <algorithm>
 #include <bit>
@@ -37,6 +38,7 @@ bool RegistrationFrameStores::build(
   AllStores.clear();
   Effects.clear();
   Positions.clear();
+  Lifetimes.clear();
   for (const auto *Function : Functions)
     for (const auto &Block : *Function) {
       unsigned Position = 0;
@@ -44,6 +46,19 @@ bool RegistrationFrameStores::build(
         if (!charge(Work))
           return false;
         Positions.try_emplace(&I, Position++);
+        if (const auto *Marker = llvm::dyn_cast<llvm::LifetimeIntrinsic>(&I)) {
+          const auto *Argument = Marker->getArgOperand(0);
+          if (!llvm::isa<llvm::PoisonValue>(Argument)) {
+            const auto *Root = llvm::dyn_cast<llvm::AllocaInst>(Argument);
+            if (!Root || !Root->isStaticAlloca() ||
+                Root->getFunction() != Function)
+              return false;
+            auto &Lifetime = Lifetimes[Root];
+            Lifetime.StartsDead |=
+                Marker->getIntrinsicID() == llvm::Intrinsic::lifetime_start;
+            Lifetime.Markers[&Block].push_back(Marker);
+          }
+        }
         if (const auto *Store = llvm::dyn_cast<llvm::StoreInst>(&I))
           AllStores[&Block].push_back(Store);
         // LLVM's mayWriteToMemory also classifies volatile LOADs as effects
@@ -156,5 +171,39 @@ RegistrationFrameStores::interveningEffects(const llvm::Value *Root,
     return std::nullopt;
   return llvm::ArrayRef(Candidates)
       .slice(Begin - Candidates.begin(), End - Begin);
+}
+
+std::optional<RegistrationFrameStores::LifetimeInfo>
+RegistrationFrameStores::lifetimeInfo(const llvm::AllocaInst &Root,
+                                      size_t &Work) const {
+  if (!charge(Work) || !Positions.count(&Root))
+    return std::nullopt;
+  const auto Found = Lifetimes.find(&Root);
+  return Found == Lifetimes.end()
+             ? LifetimeInfo{}
+             : LifetimeInfo{true, Found->second.StartsDead};
+}
+
+std::optional<const llvm::IntrinsicInst *>
+RegistrationFrameStores::latestLifetime(const llvm::AllocaInst &Root,
+                                        const llvm::BasicBlock &Block,
+                                        const llvm::Instruction *Through,
+                                        size_t &Work) const {
+  if (!charge(Work))
+    return std::nullopt;
+  const auto Found = Lifetimes.find(&Root);
+  if (!Through || Found == Lifetimes.end())
+    return nullptr;
+  const auto Markers = Found->second.Markers.find(&Block);
+  if (Markers == Found->second.Markers.end())
+    return nullptr;
+  const auto &Events = Markers->second;
+  if (!charge(Work, std::bit_width(Events.size()) + 1))
+    return std::nullopt;
+  const auto End = llvm::upper_bound(Events, Positions.at(Through),
+                                     [&](unsigned Position, const auto *I) {
+                                       return Position < Positions.at(I);
+                                     });
+  return End == Events.begin() ? nullptr : *(End - 1);
 }
 } // namespace neverd::coff_registration

@@ -1921,6 +1921,14 @@ again. Only allocas with exclusively direct load/store uses skip unrelated calls
 Intrinsic effects come from their definition, not editable call attributes.
 Volatile reads retain their ordering but do not invalidate a stored word;
 LLVM's broad optimization side-effect classification is not a frame-write set.
+The same bounded index tracks each static allocation's lifetime markers.
+Memory reads, stores, member effects and implicit catch copies require a live
+allocation on every incoming path. A new store cannot revive ended storage;
+any lifetime start makes the allocation initially dead and each start discards
+its previous initialized bytes. COFF resets definite initialization at both
+transitions. Earlier SSA observations and address arithmetic remain valid without
+accessing the ended storage. Marked parent allocations need a separate callback
+invocation projection; their lifetime is not inferred inside another function.
 `XorProof` computes low-word cookie/address recipes through that owner, including
 values immediately before an exceptional call. These are candidates only:
 the effect projections, aliases, complete initialized lifetimes and image-cookie

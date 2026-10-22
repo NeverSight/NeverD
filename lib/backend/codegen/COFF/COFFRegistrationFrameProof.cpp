@@ -148,7 +148,8 @@ llvm::Error validateFramePrivacy(
   bool Exhausted = false;
   RegistrationFrameStores Stores;
   if (!Stores.build(Functions, Work))
-    return Reject("private store index exhausted its work budget");
+    return Reject("private store/lifetime index has unsupported storage or "
+                  "exhausted its work budget");
   auto Bounded = [&](const Cell &Where, uint64_t Bytes) {
     if (const auto Found = RuntimeObjects.find(Where.Root);
         Found != RuntimeObjects.end()) {
@@ -268,6 +269,10 @@ llvm::Error validateFramePrivacy(
   auto Locate = [&](const llvm::Value *Value, unsigned Depth) {
     return AddressOwner.locate(Value, Depth);
   };
+  auto LiveAt = [&](const Cell &Where, const llvm::Instruction &Access) {
+    const auto *Root = llvm::dyn_cast<llvm::AllocaInst>(Where.Root);
+    return !Root || AddressOwner.isAliveAt(*Root, Access);
+  };
   RegistrationFrameTaint TaintedMemory;
   std::set<const llvm::StoreInst *> TaintedStores;
   auto Size = [&](llvm::Type *Type) -> uint64_t {
@@ -324,11 +329,13 @@ llvm::Error validateFramePrivacy(
           if (++Work > limits::kMaxRegistrationEHStateWork)
             return Reject();
           if (const auto *Load = llvm::dyn_cast<llvm::LoadInst>(&I)) {
+            auto Where = Locate(Load->getPointerOperand(), 0);
+            if (Where && !LiveAt(*Where, *Load))
+              return Reject("frame read is outside its allocation lifetime");
             if (ChainProtocolReads.count(Load))
               continue;
             if (SEH && SEH->NullReads.count(Load))
               continue;
-            auto Where = Locate(Load->getPointerOperand(), 0);
             if (SEH && (SEH->Reads.count(Load) ||
                         (Where && SEH->Roots.count(Where->Root)))) {
               if (!Where || !SEH->validRead(*Load, Where->Root, Where->Offset))
@@ -443,9 +450,11 @@ llvm::Error validateFramePrivacy(
             continue;
           }
           if (const auto *Store = llvm::dyn_cast<llvm::StoreInst>(&I)) {
+            auto Where = Locate(Store->getPointerOperand(), 0);
+            if (Where && !LiveAt(*Where, *Store))
+              return Reject("frame write is outside its allocation lifetime");
             if (ParentExits && ParentExits->ChainWrites.count(Store))
               continue;
-            auto Where = Locate(Store->getPointerOperand(), 0);
             const uint64_t Bytes = Size(Store->getValueOperand()->getType());
             if (Scopes && Scopes->CallbackWrites.count(Store) &&
                 (!Where || Where->Root != LogicalFrame ||
@@ -648,6 +657,9 @@ llvm::Error validateFramePrivacy(
                                  uint64_t(int64_t(Effect.End) - Effect.Begin)))
                       return Reject(
                           "callee borrow leaves its allocated source frame");
+                    if (!LiveAt(Access, *Call))
+                      return Reject(
+                          "callee borrow is outside its allocation lifetime");
                     if (Effects == &Borrow->second.Reads &&
                         !Checked.Initializer) {
                       const auto Tainted = TaintedMemory.overlaps(
@@ -749,8 +761,14 @@ llvm::Error validateFramePrivacy(
           if (llvm::isa<llvm::AtomicRMWInst>(I) ||
               llvm::isa<llvm::AtomicCmpXchgInst>(I))
             return Reject();
-          if (RuntimeObjects.count(&I))
+          if (RuntimeObjects.count(&I)) {
+            const auto &Catch = *RuntimeObjects.at(&I);
+            if (Catch.ObjectSize &&
+                !LiveAt({LogicalFrame, Catch.HomeOffset}, I))
+              return Reject(
+                  "runtime catch write is outside its allocation lifetime");
             continue;
+          }
           if (I.isTerminator()) {
             if (llvm::any_of(I.operands(), [&](const auto &Use) {
                   return IsAddress(Use.get());
@@ -887,14 +905,24 @@ llvm::Error validateFramePrivacy(
       return State;
     };
     auto Seed = [&](Initialized &State, const llvm::Instruction &I) {
-      const auto Found = RuntimeObjects.find(&I);
-      if (Found != RuntimeObjects.end() && Found->second->CallbackStack)
+      auto Reset = [&](const llvm::Value *Root) {
         for (const auto &[Byte, Index] : Indices) {
           if (++Work > limits::kMaxRegistrationEHStateWork)
             return false;
-          if (Byte.Root == Found->second->CallbackStack)
+          if (Byte.Root == Root)
             State.reset(Index);
         }
+        return true;
+      };
+      // A start creates uninitialized contents even if the object was already
+      // alive. Ending and starting it again cannot revive an old must-write.
+      if (const auto *Lifetime = llvm::dyn_cast<llvm::LifetimeIntrinsic>(&I))
+        if (!Reset(Lifetime->getArgOperand(0)))
+          return false;
+      const auto Found = RuntimeObjects.find(&I);
+      if (Found != RuntimeObjects.end() && Found->second->CallbackStack)
+        if (!Reset(Found->second->CallbackStack))
+          return false;
       const auto Write = Writes.find(&I);
       if (Write == Writes.end())
         return true;
