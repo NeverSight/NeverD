@@ -305,12 +305,17 @@ TEST_F(PEFixedImageTest, ReturningCallBudgetFailurePublishesNoPartialRelation) {
   bool RegisterFailure = false, MemoryFailure = false,
        LaterMemoryFailure = false;
   for (uint64_t Work = 0; Work < Good.EvaluatedOperations; ++Work) {
+    SCOPED_TRACE(Work);
     auto Short = O;
     Short.MaxOperations = Work;
     const auto R = specializeBinaryInterpreter(*Loaded, Base + 0x1000, Short);
-    EXPECT_EQ(R.Status, SpecializationStatus::BudgetExceeded) << R.Diagnostic;
+    // Zero is invalid at admission; every positive short allowance exhausts.
+    EXPECT_EQ(R.Status, Work ? SpecializationStatus::BudgetExceeded
+                             : SpecializationStatus::InvalidInput)
+        << R.Diagnostic;
     EXPECT_TRUE(R.Residual.Blocks.empty());
     EXPECT_TRUE(R.Origins.empty());
+    EXPECT_TRUE(R.Reads.empty());
     EXPECT_TRUE(R.ReturningCalls.empty());
     EXPECT_TRUE(R.ExternalExits.empty());
     EXPECT_FALSE(R.RawEnvironment);
