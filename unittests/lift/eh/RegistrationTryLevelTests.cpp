@@ -1762,6 +1762,12 @@ TEST(RegistrationTryLevel, CxxEAXHelperReportsOrderedPhysicalEffects) {
         EXPECT_EQ(Call->Helper.Begin, kText + 0x100);
         EXPECT_EQ(Call->Helper.End, kText + 0x100 + (Variant ? 54 : 51));
         EXPECT_EQ(Call->HandlerVA, kText + 0x200);
+        EXPECT_EQ(Call->HandlerPointerVA, Call->CallVA - 4);
+        const auto HandlerSource =
+            coff_loader::getCheckedX86CxxHandlerPointerSource(Image, *EH);
+        ASSERT_TRUE(HandlerSource);
+        EXPECT_EQ(*HandlerSource,
+                  std::make_pair(Call->HandlerPointerVA, Call->HandlerVA));
         EXPECT_EQ(Call->SecurityCookieVA, kRData + 0xf0);
         EXPECT_EQ(Call->AllocationBytes, Allocation);
         // At helper entry the allocation word is above the return PC. The
@@ -1808,6 +1814,8 @@ TEST(RegistrationTryLevel, CxxEAXHelperRechecksEveryProtocolInstruction) {
           auto Changed = Original;
           Changed.Segments.front().Data[Byte] ^= 1;
           EXPECT_FALSE(coff_loader::getCheckedX86CxxPrologueCall(Changed, EH));
+          EXPECT_FALSE(
+              coff_loader::getCheckedX86CxxHandlerPointerSource(Changed, EH));
         }
     }
 }

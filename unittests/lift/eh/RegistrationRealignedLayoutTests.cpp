@@ -17,6 +17,18 @@ using namespace neverd;
 using namespace neverd::coff_loader;
 using namespace neverd::coff_loader::registration_detail;
 
+bool proveRealignedCxxRegistrationLayout(const BinaryImage &Image,
+                                         const InstallSite &Site,
+                                         RegistrationChainInfo &Chain) {
+  const auto Layout = decodeRealignedCxxRegistrationLayout(Image, Site);
+  if (Layout) {
+    EXPECT_EQ(Layout->HandlerPointerVA, Layout->ChainReadVA - 4);
+    EXPECT_EQ(readLE<uint32_t>(Image.readVA(Layout->HandlerPointerVA, 4)),
+              Site.HandlerVA);
+  }
+  return Layout && Layout->applyTo(Site.InstallVA, Chain);
+}
+
 struct RealignedLayoutImage {
   BinaryImage Image;
   InstallSite Site;

@@ -8682,6 +8682,16 @@ its installing frame instead of acquiring an extra ordinary definition. Explicit
 requests and independently authenticated entries remain selected. The query
 reparses the current selected graph; stale metadata grants no suppression, and
 table-driven out-of-line funclet discovery on other architectures is unchanged.
+Whole-image PE32 discovery also reuses that pointer-role owner for the exact
+handler operand of a C++ registration prefix. Fixed and realigned frame decoders
+return the chain read, handler source and publication together; shared prologue
+helpers expose the operand from their existing caller proof. Publication and
+coordinates must match the retained frame, and current immutable instructions,
+handler identity and FuncInfo records are replayed before the operand gains a
+runtime role. Independent relocated references, exports, stated symbols and
+ordinary calls keep their entry roles. This prevents a runtime-only handler from
+inventing an ordinary LLVM body and a conflicting CRT personality declaration;
+it grants neither a callable ABI nor permission to omit a guard.
 
 Swift once addressors may return early when the predicate is already complete. The source proof requires both exits to return the same exact storage, with the sole `swift_once` call confined to the initialization path. Publication rechecks the current body, predicate, initializer, context parameter and ABI; an old discovery plan cannot authorize changed returns or additional effects.
 

@@ -354,13 +354,35 @@ std::optional<va_t> alignedCxxInstallEntry(const BinaryImage &Img,
 std::optional<PhysicalRegistrationEntry>
 directCxxCookieInstallEntry(const BinaryImage &Img, const InstallSite &Site);
 
-bool proveFixedCxxRegistrationLayout(const BinaryImage &Img,
-                                     const InstallSite &Site,
-                                     RegistrationChainInfo &Chain);
+/// The current complete installation prefix, before comparing it with a scan
+/// observation or a retained frame descriptor. Pointer sources come from the
+/// same decoder as the physical layout; neither is inferred from a literal.
+struct RegistrationInstallation {
+  va_t ChainReadVA = 0;
+  va_t HandlerPointerVA = 0;
+  va_t ChainInstallVA = 0;
+  int32_t RegistrationOffset = 0;
+  int32_t TryLevelOffset = 0;
+  std::optional<RegistrationRealignedFrame> RealignedFrame;
+  std::vector<va_t> AddressOperands;
 
-bool proveRealignedCxxRegistrationLayout(const BinaryImage &Img,
-                                         const InstallSite &Site,
-                                         RegistrationChainInfo &Chain);
+  bool applyTo(va_t ExpectedChainRead, RegistrationChainInfo &Chain) const {
+    if (ChainReadVA != ExpectedChainRead)
+      return false;
+    Chain.RegistrationOffset = RegistrationOffset;
+    Chain.TryLevelOffset = TryLevelOffset;
+    Chain.ChainInstallVA = ChainInstallVA;
+    Chain.RealignedFrame = RealignedFrame;
+    return true;
+  }
+};
+std::optional<RegistrationInstallation>
+decodeFixedCxxRegistrationLayout(const BinaryImage &Img,
+                                 const InstallSite &Site);
+
+std::optional<RegistrationInstallation>
+decodeRealignedCxxRegistrationLayout(const BinaryImage &Img,
+                                     const InstallSite &Site);
 
 std::vector<InstallSite> findInstallSites(const BinaryImage &Img,
                                           const FunctionRangeMap &Functions,

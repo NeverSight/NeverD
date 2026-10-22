@@ -6812,6 +6812,15 @@ real selected-function Pipeline and source preparation. A FuncInfo-owned cleanup
 must not become an unauthenticated ordinary definition. Explicit callback
 requests, independent callable entries and stale FuncInfo bytes exercise the
 opposite boundaries; the existing x64 out-of-line selection tests stay enabled.
+Its whole-image O0/O1 cases require retained original handlers, a native guarded
+parent and the canonical personality ABI. Changed handler operands, state seeds,
+publication instructions, frame coordinates, FuncInfo records, writable code,
+conflicting fixups and wrong architecture/format cannot retain the pointer-role
+proof. Independent handler exports, stated symbols, relocated references and
+ordinary calls remain discoverable. Fixed/ESI/ESP prefix tests bind their decoded
+operand to the same chain-read observation; shared-helper tests recheck every
+protocol instruction. These checks qualify the guarded parent within the whole
+module, not complete native recovery of every function in that module.
 `RegistrationFrameStores` and `RegistrationFrameTaint` test bounded LLVM spill
 proofs, joins, backedges, partial writes and exhausted budgets. Loader tests keep
 independent SafeSEH/code references and real function boundaries while excluding

@@ -17,9 +17,9 @@
 
 namespace neverd::coff_loader::registration_detail {
 
-bool proveFixedCxxRegistrationLayout(const BinaryImage &Img,
-                                     const InstallSite &Site,
-                                     RegistrationChainInfo &Chain) {
+std::optional<RegistrationInstallation>
+decodeFixedCxxRegistrationLayout(const BinaryImage &Img,
+                                 const InstallSite &Site) {
   const size_t Size = std::min<uint64_t>(
       Site.Range.size(),
       ::neverd::limits::loader::
@@ -28,7 +28,7 @@ bool proveFixedCxxRegistrationLayout(const BinaryImage &Img,
   if (!P || Site.HandlerVA > UINT32_MAX || Size < 9 || P[0] != 0x55 ||
       P[1] != 0x89 || P[2] != 0xe5 || P[3] != 0x53 || P[4] != 0x57 ||
       P[5] != 0x56 || P[7] != 0xec)
-    return false;
+    return std::nullopt;
   size_t Cursor = 9;
   uint32_t Allocation = 0;
   if (P[6] == 0x83 && int8_t(P[8]) > 0)
@@ -38,7 +38,7 @@ bool proveFixedCxxRegistrationLayout(const BinaryImage &Img,
     Cursor = 12;
   }
   if (Allocation < 16 || Allocation > limits::kMaxSourceCallBorrowedBytes)
-    return false;
+    return std::nullopt;
   // Parameter copies, loads and private ECX/EDX spills can precede SavedESP.
   // They do not change ESP/EBP or any runtime cell. Preserve their real
   // instructions for the state solver; this only proves frame coordinates.
@@ -107,15 +107,15 @@ bool proveFixedCxxRegistrationLayout(const BinaryImage &Img,
       (P[Cursor + 1] & 0xf8) == 0xe0) {
     const uint8_t Register = P[Cursor + 1] & 7;
     if (Register == 4 || Register == 5)
-      return false;
+      return std::nullopt;
     Cursor += 2;
     if (!Operand(0x89, Register, -28))
-      return false;
+      return std::nullopt;
   } else if (!Operand(0x89, 4, -28)) {
-    return false;
+    return std::nullopt;
   }
   if (!Operand(0xc7, 0, -16) || !Immediate(UINT32_MAX))
-    return false;
+    return std::nullopt;
   auto NodeAddress = [&]() -> std::optional<uint8_t> {
     if (Cursor + 3 > Size)
       return std::nullopt;
@@ -126,12 +126,15 @@ bool proveFixedCxxRegistrationLayout(const BinaryImage &Img,
   };
   auto NodeRegister = NodeAddress();
   const bool EarlyNode = NodeRegister.has_value();
-  if (!Operand(0xc7, 0, -20) || !Immediate(Site.HandlerVA) ||
-      Site.InstallVA != Site.Range.Begin + Cursor)
-    return false;
+  if (!Operand(0xc7, 0, -20))
+    return std::nullopt;
+  const va_t HandlerPointer = Site.Range.Begin + Cursor;
+  if (!Immediate(Site.HandlerVA))
+    return std::nullopt;
+  const va_t ChainRead = Site.Range.Begin + Cursor;
   uint8_t LinkRegister = 0;
   if (Cursor + 6 > Size || P[Cursor] != 0x64)
-    return false;
+    return std::nullopt;
   if (P[Cursor + 1] == 0xa1 && readLE<uint32_t>(P + Cursor + 2) == 0)
     Cursor += 6;
   else if (Cursor + 7 <= Size && P[Cursor + 1] == 0x8b &&
@@ -140,11 +143,11 @@ bool proveFixedCxxRegistrationLayout(const BinaryImage &Img,
     LinkRegister = (P[Cursor + 2] >> 3) & 7;
     Cursor += 7;
   } else
-    return false;
+    return std::nullopt;
   if (LinkRegister == 4 || LinkRegister == 5 ||
       (EarlyNode && LinkRegister == *NodeRegister) ||
       !Operand(0x89, LinkRegister, -24))
-    return false;
+    return std::nullopt;
   if (!EarlyNode)
     NodeRegister = NodeAddress();
   const auto InstallSize =
@@ -152,11 +155,10 @@ bool proveFixedCxxRegistrationLayout(const BinaryImage &Img,
   if (!NodeRegister || !InstallSize || Cursor + *InstallSize > Size ||
       (*InstallSize == 6 && *NodeRegister != 0) ||
       (*InstallSize == 7 && ((P[Cursor + 2] >> 3) & 7) != *NodeRegister))
-    return false;
-  Chain.RegistrationOffset = -24;
-  Chain.TryLevelOffset = -16;
-  Chain.ChainInstallVA = Site.Range.Begin + Cursor;
-  return true;
+    return std::nullopt;
+  return RegistrationInstallation{
+      ChainRead, HandlerPointer, Site.Range.Begin + Cursor, -24,
+      -16,       std::nullopt,   {HandlerPointer}};
 }
 
 } // namespace neverd::coff_loader::registration_detail

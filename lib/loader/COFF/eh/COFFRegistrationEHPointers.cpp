@@ -88,6 +88,16 @@ getCheckedX86RegistrationPointerRoles(const BinaryImage &Img) {
         return std::nullopt;
       Roles.RuntimeOnlyPointerTargets.insert(Target);
     }
+    if (const auto Handler =
+            getCheckedX86CxxHandlerPointerSource(Img, Function)) {
+      if (!Charge(1))
+        return std::nullopt;
+      const auto [Slot, Target] = *Handler;
+      const auto [It, New] = Roles.Sources.emplace(Slot, Target);
+      if (!New && It->second != Target)
+        return std::nullopt;
+      Roles.RuntimeOnlyPointerTargets.insert(Target);
+    }
   }
   // SafeSEH entries are RVAs. Its relocated load-config pointer names the
   // table allocation even when a rewriter places that allocation in RX bytes.

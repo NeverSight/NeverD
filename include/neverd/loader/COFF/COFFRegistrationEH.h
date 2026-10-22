@@ -27,6 +27,7 @@
 #include <map>
 #include <optional>
 #include <set>
+#include <utility>
 #include <vector>
 
 namespace neverd::coff_loader {
@@ -80,11 +81,19 @@ std::optional<std::vector<ExceptionAddressRange>>
 getCheckedX86CxxMetadataRanges(const BinaryImage &Img,
                                const ExceptionFunction &Function);
 
-/// Image-wide runtime pointer roles, reconstructed from the checked FuncInfo
-/// and SafeSEH parsers. These sources name callbacks or table storage, not
-/// ordinary function entries. RuntimeOnlyPointerTargets have no independent
-/// relocated code-pointer source. Exports, stated symbols and ordinary calls
-/// retain their separate function-entry roles.
+/// Reconstruct the complete current C++ installation prefix and handler
+/// identity. Return its exact absolute handler operand only when the decoded
+/// publication and coordinates still match the frame. This pointer role does
+/// not grant an ordinary callable ABI or permission to omit runtime guards.
+std::optional<std::pair<va_t, va_t>>
+getCheckedX86CxxHandlerPointerSource(const BinaryImage &Img,
+                                     const ExceptionFunction &Function);
+
+/// Image-wide runtime pointer roles, reconstructed from the checked FuncInfo,
+/// registration prefix and SafeSEH parsers. These sources name runtime code or
+/// table storage, not ordinary function entries. RuntimeOnlyPointerTargets have
+/// no independent relocated code-pointer source. Exports, stated symbols and
+/// ordinary calls retain their separate function-entry roles.
 struct X86RegistrationPointerRoles {
   std::map<va_t, va_t> Sources;
   std::set<va_t> RuntimeOnlyPointerTargets;
@@ -207,6 +216,7 @@ struct X86CxxPrologueCall {
   ExceptionAddressRange Helper;
   va_t CallVA = 0;
   va_t HandlerVA = 0;
+  va_t HandlerPointerVA = 0;
   va_t SecurityCookieVA = 0;
   uint32_t AllocationBytes = 0;
   int32_t PostCallStackOffset = 0;

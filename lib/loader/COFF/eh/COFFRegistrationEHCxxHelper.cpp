@@ -106,6 +106,7 @@ std::optional<X86CxxPrologueCall> readCxxEAXPrologueCall(const BinaryImage &Img,
   Result.Helper = Helper->Code;
   Result.CallVA = Call;
   Result.HandlerVA = readLE<uint32_t>(Bytes + PushSize + 1);
+  Result.HandlerPointerVA = Entry + PushSize + 1;
   Result.SecurityCookieVA = Helper->SecurityCookieVA;
   Result.AllocationBytes = Allocation;
   Result.PostCallStackOffset = -28 - Allocation;

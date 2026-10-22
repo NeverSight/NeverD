@@ -13,6 +13,18 @@ namespace {
 using namespace neverd;
 using namespace neverd::coff_loader::registration_detail;
 
+bool proveFixedCxxRegistrationLayout(const BinaryImage &Image,
+                                     const InstallSite &Site,
+                                     RegistrationChainInfo &Chain) {
+  const auto Layout = decodeFixedCxxRegistrationLayout(Image, Site);
+  if (Layout) {
+    EXPECT_EQ(Layout->HandlerPointerVA, Layout->ChainReadVA - 4);
+    EXPECT_EQ(readLE<uint32_t>(Image.readVA(Layout->HandlerPointerVA, 4)),
+              Site.HandlerVA);
+  }
+  return Layout && Layout->applyTo(Site.InstallVA, Chain);
+}
+
 struct EntryLayoutImage {
   BinaryImage Image;
   InstallSite Site;
