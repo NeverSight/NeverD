@@ -6762,6 +6762,23 @@ The paired cookie observation case deliberately keeps the XOR candidate equal
 after a global overwrite, but rejects the required image stability proof.
 The cleanup-only O0/O1 integration exercises the new complete C++ image closure
 through independently replayed calls and compiler frame records.
+`RegistrationImagePrefix` distinguishes future writes from prior writes on every
+CFG predecessor, including the previous iteration's complete loop suffix. It
+rejects unindexed, foreign and detached observations, disconnected cycles and
+exhausted shared budgets; a successful prefix leaves callback-wide closure
+mandatory. `RegistrationCookieProof` covers ordered retained checks, changed
+current arguments and frame words, cookie and checker-code writes, forged ABI
+attributes and source identities, cyclic dependencies and unknown calls.
+Exceptional dispatch tests require both the saved recipe and the call's own
+frame/image preservation, including checker code. The tests exercise conditional
+protocol queries; native guarded C++ output remains unavailable.
+`RegistrationCookieFrame` exercises that protocol inside the complete shared
+frame validator. Only the exact checker sink can consume a decoded cookie;
+encoded and decoded values still fail when passed elsewhere or stored into a
+disjoint writable image word. Borrow writes and constructor must-writes cannot
+invalidate a dispatch guard, and callback writes participate in image closure.
+The suite retains live-allocation, source-image, unique-call authority and loop
+checks, with diagnostics distinguishing protocol refusal from an earlier gate.
 `RegistrationFrameStores` and `RegistrationFrameTaint` test bounded LLVM spill
 proofs, joins, backedges, partial writes and exhausted budgets. Loader tests keep
 independent SafeSEH/code references and real function boundaries while excluding

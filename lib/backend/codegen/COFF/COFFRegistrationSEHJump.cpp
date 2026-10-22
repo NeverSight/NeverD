@@ -14,14 +14,6 @@
 
 namespace neverd::coff_registration {
 
-bool RegistrationSEHJumpContract::readsSourceBuffer(int64_t Offset,
-                                                    uint64_t Bytes) const {
-  for (const auto &[Begin, End] : SourceBuffers)
-    if (Offset < End && (Offset >= Begin || Bytes > uint64_t(Begin - Offset)))
-      return true;
-  return false;
-}
-
 llvm::Expected<RegistrationSEHJumpContract>
 bindSEHJumps(const MedFunc &Source, const llvm::Function &Parent,
              const RegistrationFrame &Frame,

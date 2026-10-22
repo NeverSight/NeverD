@@ -1906,8 +1906,13 @@ The loader owns exact registration instruction widths and authenticated pointer
 roles, including SafeSEH table storage. Code discovery consumes those roles at the
 specific pointer slot so an independent reference retains its ordinary identity.
 `RegistrationFrameMemory` owns byte-cell overlap queries for the LowIR frame domain.
-The COFF LLVM privacy proof indexes private reaching stores and tainted byte ranges
-in separate units, preserving the shared work limit and conservative alias checks.
+The shared LLVM privacy proof indexes private reaching stores and tainted byte
+ranges in separate units, preserving the shared work limit and conservative
+alias checks. `WindowsRegistrationFrame` owns the complete use, initialized-byte,
+runtime-object and lifetime validation. COFF supplies independently replayed
+source contracts; its private compatibility headers do not duplicate the proof.
+SEH runtime-domain data and their field/range queries live in the shared component,
+while source occurrence and runtime bridge binding stay with the COFF consumer.
 The shared `WindowsRegistrationFrame` component owns `AddressProof` and the
 store index for current LLVM address and value queries. COFF supplies its checked
 runtime-object roots and resumption edges. Ordinary and callback paths therefore
@@ -1947,7 +1952,27 @@ The C++ immutable runtime closure and cookie recipe identity share this range
 resolver; the SEH explicit image-store closure uses it too. A private-frame
 preservation hook cannot stand in for image effects. A conditional cookie-check
 success path alone cannot certify the image stability used to prove that same
-condition. These queries do not enable native guarded C++ frames.
+condition. `preservesBefore` checks the exact current observation's CFG prefix;
+a backedge includes the previous iteration's suffix, and a disconnected cycle
+cannot establish an entry invariant. It leaves whole-function and callback
+closure as separate obligations.
+`RegistrationCookieProof` combines those prefix queries with current XOR recipes
+and the loader's authenticated checker success path. Each check can use only
+already proved checks; its cookie and checker code must remain unchanged before
+the call. Each new query gets fresh caches over the same immutable instruction
+index and shared work budget. Exceptional dispatch additionally requires the
+event's own independent frame and image effects, not just its pre-call value.
+The final query closes the complete cookie and checker-code write sets. Source
+occurrence coverage, callback ownership, mapped storage and complete frame use
+closure remain consumer obligations. These queries do not enable native guarded
+C++ frames.
+The shared frame validator accepts source-bound cookie occurrences as conditional
+call sinks. Their arguments retain frame taint everywhere else. It first closes
+all other frame uses, then runs the ordered protocol with fresh query caches;
+unproved checks cannot borrow the provisional frame-preservation assumption.
+Only a successful protocol supplies checker effects to the final immutable-image
+closure. Ordinary borrow/image summaries cannot also authorize a cookie call.
+Source/control binding and native output admission remain separate gates.
 `COFFTrampolineRegions` resolves authenticated source entries across executable
 sections, including earlier generated code, with unique virtual/raw ownership
 and unchanged input bytes. A second reconstruction repeats all source and LLVM

@@ -54,6 +54,15 @@ public:
   /// by symbol name. Unknown effects, aliases or exhausted work reject.
   bool preserves(const ExceptionAddressRange &Range);
 
+  /// Check all CFG paths in Before's indexed function up to, but excluding,
+  /// this exact instruction. A backedge also checks the previous iteration's
+  /// suffix, including Before itself. The function must belong to Functions
+  /// and have an entry path to Before. Independently authenticated call
+  /// projections own exceptional/runtime callback effects; this prefix query
+  /// does not replace the separate whole-image/callback closure.
+  bool preservesBefore(const ExceptionAddressRange &Range,
+                       const llvm::Instruction &Before);
+
 private:
   bool preserves(const llvm::Instruction &I,
                  const ExceptionAddressRange &Range);

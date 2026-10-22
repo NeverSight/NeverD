@@ -11,10 +11,16 @@ add_neverd_component_library(NeverDLLVMFloatConvertLowering
 
 add_neverd_component_library(NeverDWindowsRegistrationFrame
   X86/RegistrationFrameLayout.cpp
+  X86/RegistrationFrameProof.cpp
   X86/RegistrationFrameProofAddress.cpp
+  X86/RegistrationFrameRuntime.cpp
   X86/RegistrationFrameStores.cpp
+  X86/RegistrationFrameBits.cpp
+  X86/RegistrationFrameTaint.cpp
+  X86/RegistrationCxxLifetime.cpp
   X86/RegistrationFrameXor.cpp
   X86/RegistrationImageProof.cpp
+  X86/RegistrationCookieProof.cpp
   X86/RegistrationCatch.cpp
   X86/RegistrationCatchBlocks.cpp
   X86/RegistrationEntry.cpp
@@ -33,6 +39,7 @@ add_neverd_component_library(NeverDWindowsRegistrationFrame
   LINK_COMPONENTS
   IR
   IRMed
+  Loader
 )
 
 add_neverd_component_library(NeverDBackendLLVM

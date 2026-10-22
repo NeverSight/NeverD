@@ -1,4 +1,4 @@
-//===- COFFRegistrationCxxLifetime.cpp - Active runtime object guards -----===//
+//===- RegistrationCxxLifetime.cpp - Active runtime object guards -----===//
 //
 // NeverD Decompiler
 //
@@ -7,9 +7,8 @@
 /// Follow validated catch ancestry when a nested handler borrows an outer
 /// object.
 //===----------------------------------------------------------------------===//
-#include "COFFRegistrationFrameProof.h"
-
 #include "neverd/Limits.h"
+#include "neverd/backend/llvm/RegistrationFrameProof.h"
 
 #include "llvm/IR/Instructions.h"
 

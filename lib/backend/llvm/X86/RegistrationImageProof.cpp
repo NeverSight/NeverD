@@ -11,10 +11,14 @@
 
 #include "neverd/Limits.h"
 
+#include "llvm/IR/CFG.h"
 #include "llvm/IR/GlobalVariable.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Support/ModRef.h"
+
+#include <set>
+#include <vector>
 
 namespace neverd::registration_frame {
 
@@ -76,6 +80,54 @@ bool ImageProof::preserves(const ExceptionAddressRange &Range) {
   if (!Exhausted)
     Preserved.emplace(Key, Result);
   return Result && !Exhausted;
+}
+
+bool ImageProof::preservesBefore(const ExceptionAddressRange &Range,
+                                 const llvm::Instruction &Before) {
+  if (!charge() || !Addresses.hasPE32Layout() || !Range.isValid() ||
+      Range.End > uint64_t(UINT32_MAX) + 1 || !Before.getParent() ||
+      !Before.getParent()->getParent() || !Addresses.isIndexed(Before))
+    return false;
+  const auto *Function = Before.getFunction();
+  bool Included = false;
+  for (const auto *Candidate : Functions) {
+    if (!charge())
+      return false;
+    if (Candidate == Function) {
+      Included = true;
+      break;
+    }
+  }
+  if (!Included || !Function || Function->isDeclaration())
+    return false;
+
+  using Point = std::pair<const llvm::BasicBlock *, const llvm::Instruction *>;
+  std::vector<Point> Pending{{Before.getParent(), Before.getPrevNode()}};
+  std::set<Point> Seen;
+  bool SawEntry = false;
+  while (!Pending.empty()) {
+    if (!charge())
+      return false;
+    const auto [Block, Through] = Pending.back();
+    Pending.pop_back();
+    if (!Block || Block->getParent() != Function)
+      return false;
+    // The initial prefix and a full predecessor block are different points,
+    // even when a loop leads back into the original query block.
+    if (!Seen.emplace(Block, Through).second)
+      continue;
+    for (const auto *I = Through; I; I = I->getPrevNode())
+      if (!charge() || I->getParent() != Block || !Addresses.isIndexed(*I) ||
+          !preserves(*I, Range))
+        return false;
+    SawEntry |= Block == &Function->getEntryBlock();
+    for (const auto *Pred : llvm::predecessors(Block)) {
+      if (!charge() || Pred->getParent() != Function || !Pred->getTerminator())
+        return false;
+      Pending.emplace_back(Pred, Pred->getTerminator());
+    }
+  }
+  return SawEntry && !Exhausted;
 }
 
 bool ImageProof::preserves(const llvm::Instruction &I,

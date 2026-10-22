@@ -1,24 +1,22 @@
-//===- COFFRegistrationFrameProof.cpp - PE32 private frame proof ----------===//
+//===- RegistrationFrameProof.cpp - PE32 private frame proof ----------===//
 //
 // NeverD Decompiler
 //
 //===----------------------------------------------------------------------===//
+/// \file
+/// Validate the complete current frame use closure for every native consumer.
+//===----------------------------------------------------------------------===//
 
-#include "COFFRegistrationFrameProof.h"
-
-#include "COFFRegistrationFrameBits.h"
-#include "COFFRegistrationFrameStores.h"
-#include "COFFRegistrationFrameTaint.h"
-#include "COFFRegistrationSEHDynamicScope.h"
-#include "COFFRegistrationSEHException.h"
-#include "COFFRegistrationSEHJump.h"
-#include "COFFRegistrationSEHLocalUnwind.h"
-#include "COFFRegistrationSEHParentExit.h"
+#include "neverd/backend/llvm/RegistrationFrameProof.h"
 
 #include "neverd/Common.h"
 #include "neverd/Limits.h"
 #include "neverd/backend/Limits.h"
+#include "neverd/backend/llvm/RegistrationFrameBits.h"
 #include "neverd/backend/llvm/RegistrationFrameProofAddress.h"
+#include "neverd/backend/llvm/RegistrationFrameRuntime.h"
+#include "neverd/backend/llvm/RegistrationFrameStores.h"
+#include "neverd/backend/llvm/RegistrationFrameTaint.h"
 #include "neverd/backend/llvm/RegistrationImageProof.h"
 #include "neverd/backend/llvm/WindowsEHMetadata.h"
 #include "neverd/backend/llvm/X86RegistrationLayout.h"
@@ -151,6 +149,41 @@ llvm::Error validateFramePrivacy(
   if (!Stores.build(Functions, Work))
     return Reject("private store/lifetime index has unsupported storage or "
                   "exhausted its work budget");
+  std::set<const llvm::CallBase *> CookieCalls;
+  std::vector<registration_frame::CookieDispatch> CookieDispatches;
+  const bool HasCookies =
+      Cxx && (!Cxx->CookieCalls.empty() || !Cxx->CookieDispatches.empty());
+  if (HasCookies) {
+    if (!SecurityCookieVA || SecurityCookieVA > UINT32_MAX - 3 || SEH ||
+        Jumps || Scopes || ParentExits || LocalUnwinds)
+      return Reject("cookie protocol has no independent C++ frame domain");
+    for (const auto &Check : Cxx->CookieCalls) {
+      if (++Work > limits::kMaxRegistrationEHStateWork || !Check.Call ||
+          !Check.Call->getParent() || Check.Call->getFunction() != &Parent ||
+          !Stores.contains(*Check.Call) ||
+          !registration_frame::hasExactCookieCallABI(*Check.Call,
+                                                     Check.CheckVA) ||
+          Cxx->Borrows.count(Check.Call) ||
+          Cxx->ImageWrites.count(Check.Call) ||
+          !CookieCalls.insert(Check.Call).second)
+        return Reject("cookie call has no unique current conditional ABI");
+    }
+    for (const auto &[Before, Guards] : Cxx->CookieDispatches) {
+      const auto *Call = llvm::dyn_cast_or_null<llvm::CallBase>(Before);
+      if (++Work > limits::kMaxRegistrationEHStateWork || !Call ||
+          !Call->getParent() || Call->getFunction() != &Parent ||
+          !Stores.contains(*Call) || CookieCalls.count(Call) || Guards.empty())
+        return Reject("cookie dispatch has no current ordinary call");
+      std::set<std::tuple<Cell, Cell, va_t>> Unique;
+      for (const auto &Guard : Guards)
+        if (++Work > limits::kMaxRegistrationEHStateWork ||
+            Guard.Slot.Root != LogicalFrame ||
+            Guard.XORBase.Root != LogicalFrame ||
+            !Unique.emplace(Guard.Slot, Guard.XORBase, Guard.CheckVA).second)
+          return Reject("cookie guard has no unique logical frame coordinate");
+      CookieDispatches.push_back({Before, Guards});
+    }
+  }
   auto Bounded = [&](const Cell &Where, uint64_t Bytes) {
     if (const auto Found = RuntimeObjects.find(Where.Root);
         Found != RuntimeObjects.end()) {
@@ -228,6 +261,11 @@ llvm::Error validateFramePrivacy(
     if (!Call || Call->isInlineAsm() || llvm::isa<llvm::CallBrInst>(Call) ||
         llvm::isa<llvm::IntrinsicInst>(Call))
       return false;
+    // This conditional frame-use assumption is discharged by the complete
+    // cookie protocol below. Its fresh queries override every known checker:
+    // unresolved checks cannot preserve memory merely through this hook.
+    if (CookieCalls.count(Call))
+      return true;
     if (Cxx) {
       const auto Found = Cxx->Borrows.find(Call);
       if (Found != Cxx->Borrows.end()) {
@@ -560,6 +598,10 @@ llvm::Error validateFramePrivacy(
                 Call->isMustTailCall() ||
                 Call->hasFnAttr(llvm::Attribute::ReturnsTwice))
               return Reject();
+            // Defer only this exact source-bound sink. Its encoded/decoded
+            // operands remain tainted in every store, call and other use.
+            if (CookieCalls.count(Call))
+              continue;
             const auto *Callee = Call->getCalledFunction();
             if (Cxx) {
               const auto Borrow = Cxx->Borrows.find(Call);
@@ -778,8 +820,8 @@ llvm::Error validateFramePrivacy(
     // their original stack/exception objects. Image effects of calls require
     // their separate source replay; the frame-preservation hook is
     // insufficient.
-    auto PreservesImage = [&](const llvm::Instruction &I,
-                              const ExceptionAddressRange &Range) {
+    auto SourcePreservesImage = [&](const llvm::Instruction &I,
+                                    const ExceptionAddressRange &Range) {
       // localescape records compiler frame offsets; the checked C++ frame
       // and complete callback closure own its escaped storage, not the image.
       if (&I == Escape)
@@ -806,6 +848,28 @@ llvm::Error validateFramePrivacy(
           return false;
       }
       return true;
+    };
+    if (HasCookies) {
+      registration_frame::CookieProofContext Context{
+          Parent,           Escape,
+          Stores,           Functions,
+          SecurityCookieVA, ProjectLoad,
+          Predecessors,     ObjectBounds,
+          PreservesMemory,  SourcePreservesImage};
+      CurrentInstruction = nullptr;
+      if (!registration_frame::proveCookieProtocol(
+              *Cxx->Image, Context, Cxx->CookieCalls, CookieDispatches, Work,
+              Exhausted))
+        return Reject("C++ current cookie protocol is not established");
+    }
+    // Only the completed protocol above authorizes successful checker effects
+    // for the remaining immutable runtime image. Ordinary calls retain their
+    // independently replayed source summaries.
+    auto PreservesImage = [&](const llvm::Instruction &I,
+                              const ExceptionAddressRange &Range) {
+      const auto *Call = llvm::dyn_cast<llvm::CallBase>(&I);
+      return (Call && CookieCalls.count(Call)) ||
+             SourcePreservesImage(I, Range);
     };
     registration_frame::ImageProof ImageOwner(AddressOwner, Functions,
                                               SecurityCookieVA, Work, Exhausted,

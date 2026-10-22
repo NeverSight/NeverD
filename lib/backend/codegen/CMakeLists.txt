@@ -12,7 +12,6 @@ add_neverd_component_library(NeverDCodeGen
   COFF/COFFReloc.cpp
   COFF/COFFRegistrationPatch.cpp
   COFF/COFFRegistrationCallbackProof.cpp
-  COFF/COFFRegistrationFrameProof.cpp
   COFF/COFFRegistrationSEHScopeState.cpp
   COFF/COFFRegistrationSEHStateWrites.cpp
   COFF/COFFRegistrationSEHDynamicScope.cpp
@@ -33,8 +32,6 @@ add_neverd_component_library(NeverDCodeGen
   COFF/COFFRegistrationSEHLocalUnwindContext.cpp
   COFF/COFFRegistrationSEHParentExit.cpp
   COFF/COFFRegistrationSEHParentExitSource.cpp
-  COFF/COFFRegistrationFrameTaint.cpp
-  COFF/COFFRegistrationFrameBits.cpp
   COFF/COFFRegistrationImageProof.cpp
   COFF/COFFRegistrationIncomingFrame.cpp
   COFF/COFFRegistrationIR.cpp
@@ -50,7 +47,6 @@ add_neverd_component_library(NeverDCodeGen
   COFF/COFFRegistrationCxxContinuation.cpp
   COFF/COFFRegistrationCxxStack.cpp
   COFF/COFFRegistrationCxxResume.cpp
-  COFF/COFFRegistrationCxxLifetime.cpp
   COFF/COFFRegistrationCxxFrame.cpp
   COFF/COFFRegistrationCxxObjectCall.cpp
   COFF/COFFRegistrationCxxThrow.cpp

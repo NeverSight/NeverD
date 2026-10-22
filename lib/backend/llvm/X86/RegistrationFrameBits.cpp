@@ -1,4 +1,4 @@
-//===- COFFRegistrationFrameBits.cpp - PE32 register slice dependencies --===//
+//===- RegistrationFrameBits.cpp - PE32 register slice dependencies --===//
 //
 // NeverD Decompiler
 //
@@ -7,12 +7,11 @@
 /// Prove that a scalar register slice discards a preserved pointer's bits.
 //===----------------------------------------------------------------------===//
 
-#include "COFFRegistrationFrameBits.h"
-
-#include "COFFRegistrationFrameStores.h"
+#include "neverd/backend/llvm/RegistrationFrameBits.h"
 
 #include "neverd/Limits.h"
 #include "neverd/backend/Limits.h"
+#include "neverd/backend/llvm/RegistrationFrameStores.h"
 
 #include "llvm/ADT/ScopeExit.h"
 #include "llvm/IR/Constants.h"
