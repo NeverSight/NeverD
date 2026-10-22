@@ -11,6 +11,7 @@
 
 #include "neverd/Limits.h"
 #include "neverd/backend/Limits.h"
+#include "neverd/backend/llvm/RegistrationImageProof.h"
 
 #include "llvm/ADT/ScopeExit.h"
 #include "llvm/IR/Constants.h"
@@ -117,20 +118,9 @@ std::optional<XorValue> XorProof::evaluateImpl(const llvm::Value *Value,
     if (Load->isAtomic())
       return std::nullopt;
     const auto Slot = Addresses.locate(Load->getPointerOperand());
-    const auto *Global =
-        Slot ? llvm::dyn_cast<llvm::GlobalVariable>(Slot->Root) : nullptr;
-    auto Base = Global ? parseNdDataSymbol(Global->getName())
-                       : std::optional<uint64_t>{};
-    if (!Base && Global)
-      Base = parseNdCodePtrSymbol(Global->getName());
-    if (!Base && Global && Global->getName() == "__security_cookie")
-      Base = CookieVA;
-    if (CookieVA && Base && *Base <= UINT32_MAX &&
-        Slot->Offset >= -int64_t(*Base) &&
-        uint64_t(int64_t(*Base) + Slot->Offset) == CookieVA &&
-        Load->getType()->isIntegerTy(32) && Global->isDeclaration() &&
-        Global->hasExternalLinkage() && !Global->isThreadLocal() &&
-        !Global->hasDLLImportStorageClass() && !Global->getAddressSpace())
+    const auto Range = Slot ? imageRange(*Slot, 4, CookieVA) : std::nullopt;
+    if (CookieVA && Range && Range->Begin == CookieVA &&
+        Load->getType()->isIntegerTy(32))
       return XorValue{0, true, {}};
     std::optional<XorValue> Common;
     auto Accept = [&](const llvm::StoreInst &Store) {

@@ -74,6 +74,8 @@ public:
 
   std::optional<Cell> locate(const llvm::Value *Value, unsigned Depth = 0);
   bool hasPE32Layout() const;
+  /// Whether the immutable store index covers this instruction in our module.
+  bool isIndexed(const llvm::Instruction &I) const;
 
   /// Whether this static allocation is alive immediately before the access
   /// on every predecessor. Pointer arithmetic itself does not require this.

@@ -166,6 +166,10 @@ bool AddressProof::hasPE32Layout() const {
   return Layout.getPointerSize(0) == 4 && Layout.isLittleEndian();
 }
 
+bool AddressProof::isIndexed(const llvm::Instruction &I) const {
+  return I.getModule() == Parent.getParent() && Stores.contains(I);
+}
+
 bool AddressProof::withinObject(const Cell &Where) const {
   if (Bounds)
     return Bounds(Where);

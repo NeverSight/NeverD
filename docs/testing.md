@@ -6752,6 +6752,16 @@ initialization before its protected call. A normal start before initialization
 preserves the valid source/control/frame proof.
 The existing privacy suites independently retain bounds, lifetime and escape
 checks; the recipe query grants no native GS admission.
+`RegistrationImageProof` checks original-VA aliases, partial writes, signed and
+PE32 endpoint bounds, declaration roles, live private storage, canonical
+intrinsic effects, unindexed callbacks, unreachable writes and sticky work
+exhaustion. A forged call/declaration `memory(none)` cannot replace an image
+effect proof. Its COFF cases distinguish missing, disjoint, overlapping and
+malformed callee write summaries while retaining the checked `localescape`.
+The paired cookie observation case deliberately keeps the XOR candidate equal
+after a global overwrite, but rejects the required image stability proof.
+The cleanup-only O0/O1 integration exercises the new complete C++ image closure
+through independently replayed calls and compiler frame records.
 `RegistrationFrameStores` and `RegistrationFrameTaint` test bounded LLVM spill
 proofs, joins, backedges, partial writes and exhausted budgets. Loader tests keep
 independent SafeSEH/code references and real function boundaries while excluding

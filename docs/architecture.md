@@ -1934,6 +1934,20 @@ values immediately before an exceptional call. These are candidates only:
 the effect projections, aliases, complete initialized lifetimes and image-cookie
 stability must still close independently before any native guarded-frame or
 check-elision permission.
+`ImageProof` owns the separate current-image write query. Its shared PE32 range
+resolver maps external data, code-pointer and cookie declarations to original
+byte intervals, so differently named globals cannot hide overlapping storage.
+The query visits every indexed block and supplied callback under the same work
+budget. Bounded live private stores and disjoint image stores preserve a range;
+every ordinary call needs independent image effects, even with `memory(none)`.
+COFF supplies the complete callee image writes from its source/control replay
+and projects runtime stack/exception stores only after closing their use domain.
+Its checked `localescape` records compiler offsets without writing image bytes.
+The C++ immutable runtime closure and cookie recipe identity share this range
+resolver; the SEH explicit image-store closure uses it too. A private-frame
+preservation hook cannot stand in for image effects. A conditional cookie-check
+success path alone cannot certify the image stability used to prove that same
+condition. These queries do not enable native guarded C++ frames.
 `COFFTrampolineRegions` resolves authenticated source entries across executable
 sections, including earlier generated code, with unique virtual/raw ownership
 and unchanged input bytes. A second reconstruction repeats all source and LLVM

@@ -1652,6 +1652,7 @@ add_neverd_unittest(NeverDWindowsRegistrationNativeTests
   eh/RegistrationRuntimeMemberFrameTests.cpp
   eh/RegistrationFrameStoresTests.cpp
   eh/RegistrationFrameLifetimeTests.cpp
+  eh/RegistrationImageProofTests.cpp
   eh/RegistrationFrameXorTests.cpp
   eh/RegistrationFrameBitsTests.cpp
   eh/RegistrationPHICopyTests.cpp

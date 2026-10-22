@@ -81,6 +81,10 @@ struct RegistrationCxxFrameContract {
   std::set<const llvm::StoreInst *> SavedStackRestores;
   int64_t SavedStackOffset = 0;
   std::map<const llvm::CallBase *, RegistrationFrameBorrow> Borrows;
+  /// Complete source image effects, including the empty set, for every
+  /// preserved current call. Private-frame preservation is not this proof.
+  std::map<const llvm::CallBase *, std::vector<ExceptionAddressRange>>
+      ImageWrites;
   std::map<const llvm::Instruction *, RegistrationRuntimeAccess>
       RuntimeAccesses;
 };

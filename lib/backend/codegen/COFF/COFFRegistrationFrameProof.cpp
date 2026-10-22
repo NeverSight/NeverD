@@ -19,6 +19,7 @@
 #include "neverd/Limits.h"
 #include "neverd/backend/Limits.h"
 #include "neverd/backend/llvm/RegistrationFrameProofAddress.h"
+#include "neverd/backend/llvm/RegistrationImageProof.h"
 #include "neverd/backend/llvm/WindowsEHMetadata.h"
 #include "neverd/backend/llvm/X86RegistrationLayout.h"
 #include "neverd/backend/llvm/X86RegistrationSEHJump.h"
@@ -285,19 +286,9 @@ llvm::Error validateFramePrivacy(
     return Addresses.count(Value);
   };
   auto CheckImageAccess = [&](const Cell &Where, uint64_t Bytes, bool Write) {
-    const auto *Global = llvm::dyn_cast<llvm::GlobalVariable>(Where.Root);
-    auto Base = Global ? parseNdDataSymbol(Global->getName())
-                       : std::optional<uint64_t>{};
-    if (!Base && Global)
-      Base = parseNdCodePtrSymbol(Global->getName());
-    if (!Base || *Base > UINT32_MAX || Where.Offset < -int64_t(*Base))
-      return false;
-    const int64_t Address = int64_t(*Base) + Where.Offset;
-    if (Address < 0 || Address > UINT32_MAX ||
-        Bytes > uint64_t(UINT32_MAX) + 1 - uint64_t(Address) ||
-        !Global->isDeclaration() || !Global->hasExternalLinkage() ||
-        Global->isThreadLocal() || Global->getAddressSpace() ||
-        Global->hasDLLImportStorageClass())
+    const auto Access =
+        registration_frame::imageRange(Where, Bytes, SecurityCookieVA);
+    if (!Access)
       return false;
     const Segment *Owner = nullptr;
     for (const auto &Segment : Cxx->Image->Segments) {
@@ -305,11 +296,10 @@ llvm::Error validateFramePrivacy(
           Segment.VA > UINT32_MAX ||
           Segment.Size > uint64_t(UINT32_MAX) + 1 - Segment.VA)
         return false;
-      if (uint64_t(Address) < Segment.VA + Segment.Size &&
-          Segment.VA < uint64_t(Address) + Bytes) {
-        if (Owner || Address < int64_t(Segment.VA) ||
-            uint64_t(Address) - Segment.VA > Segment.Size ||
-            Bytes > Segment.Size - (uint64_t(Address) - Segment.VA) ||
+      if (Access->Begin < Segment.VA + Segment.Size &&
+          Segment.VA < Access->End) {
+        if (Owner || Access->Begin < Segment.VA ||
+            Access->End > Segment.VA + Segment.Size ||
             (Write &&
              (!Segment.isWritable() || Segment.ReadOnlyAfterRelocations)))
           return false;
@@ -377,30 +367,18 @@ llvm::Error validateFramePrivacy(
                 !CheckImageAccess(*Where, Size(Load->getType()), false))
               return Reject("image read lost its original storage identity");
             if (!Private && Where) {
-              const auto *Global =
-                  llvm::cast<llvm::GlobalVariable>(Where->Root);
-              auto Base = parseNdDataSymbol(Global->getName());
-              if (!Base)
-                Base = parseNdCodePtrSymbol(Global->getName());
-              if (!Base && SecurityCookieVA &&
-                  Global->getName() == "__security_cookie")
-                Base = SecurityCookieVA;
-              if (!Base || *Base > UINT32_MAX)
-                return Reject();
-              const int64_t Address = int64_t(*Base) + Where->Offset;
-              const uint64_t Bytes = Size(Load->getType());
+              const auto Read = registration_frame::imageRange(
+                  *Where, Size(Load->getType()), SecurityCookieVA);
               if (!I.getMetadata(
                       windows_eh_md::RegistrationOperationAttachment) ||
-                  Address < 0 || Address > UINT32_MAX ||
-                  Bytes > uint64_t(UINT32_MAX) + 1 - uint64_t(Address))
+                  !Read)
                 return Reject("unindexed or wrapping image read");
               auto Write =
-                  llvm::lower_bound(CallerPCWrites, uint64_t(Address),
+                  llvm::lower_bound(CallerPCWrites, Read->Begin,
                                     [](const auto &Range, uint64_t Begin) {
                                       return Range.End <= Begin;
                                     });
-              if (Write != CallerPCWrites.end() &&
-                  Write->Begin < uint64_t(Address) + Bytes)
+              if (Write != CallerPCWrites.end() && Write->Begin < Read->End)
                 return Reject("caller-PC image slot is read");
             }
             if (!Where &&
@@ -532,30 +510,18 @@ llvm::Error validateFramePrivacy(
                     : nullptr;
             if (Home && Dominators.at(&Parent)->dominates(Home->Catch, Store))
               return Reject("runtime reference home was overwritten");
-            if (!ImmutableImageRanges.empty() &&
+            if (!Cxx && !ImmutableImageRanges.empty() &&
                 !IncomingAccesses.count(Store) &&
                 (!Where || llvm::isa<llvm::GlobalVariable>(Where->Root))) {
-              const auto *Global =
-                  Where ? llvm::dyn_cast<llvm::GlobalVariable>(Where->Root)
-                        : nullptr;
-              auto Base = Global ? parseNdDataSymbol(Global->getName())
-                                 : std::optional<uint64_t>{};
-              if (!Base && Global)
-                Base = parseNdCodePtrSymbol(Global->getName());
-              if (!Base && Global && SecurityCookieVA &&
-                  Global->getName() == "__security_cookie")
-                Base = SecurityCookieVA;
-              if (!Base || *Base > UINT32_MAX)
+              const auto Written = Where ? registration_frame::imageRange(
+                                               *Where, Bytes, SecurityCookieVA)
+                                         : std::nullopt;
+              if (!Written)
                 return Reject("unproved registration image write");
-              const int64_t Address = int64_t(*Base) + Where->Offset;
-              if (Address < 0 || Address > UINT32_MAX ||
-                  Bytes > uint64_t(UINT32_MAX) + 1 - uint64_t(Address))
-                return Reject("wrapping registration image write");
               for (const auto &Range : ImmutableImageRanges) {
                 if (++Work > limits::kMaxRegistrationEHStateWork)
                   return Reject("image closure exhausted its work budget");
-                if (uint64_t(Address) < Range.End &&
-                    Range.Begin < uint64_t(Address) + Bytes)
+                if (Written->overlaps(Range))
                   return Reject(
                       "registration scope table or cookie is written");
               }
@@ -808,6 +774,48 @@ llvm::Error validateFramePrivacy(
   if (Exhausted)
     return Reject("address proof exhausted its work budget");
   if (Cxx) {
+    // The complete use closure above proves these runtime stores stay within
+    // their original stack/exception objects. Image effects of calls require
+    // their separate source replay; the frame-preservation hook is
+    // insufficient.
+    auto PreservesImage = [&](const llvm::Instruction &I,
+                              const ExceptionAddressRange &Range) {
+      // localescape records compiler frame offsets; the checked C++ frame
+      // and complete callback closure own its escaped storage, not the image.
+      if (&I == Escape)
+        return true;
+      if (llvm::isa<llvm::StoreInst>(I))
+        return IncomingAccesses.count(&I) || Cxx->RuntimeAccesses.count(&I);
+      if (llvm::isa<llvm::CatchPadInst>(I))
+        return RuntimeObjects.count(&I) != 0;
+      const auto *Call = llvm::dyn_cast<llvm::CallBase>(&I);
+      if (!Call || Call->isInlineAsm() || llvm::isa<llvm::CallBrInst>(Call) ||
+          llvm::isa<llvm::IntrinsicInst>(Call))
+        return false;
+      const auto Effects = Cxx->ImageWrites.find(Call);
+      if (Effects == Cxx->ImageWrites.end())
+        return false;
+      for (const auto &Write : Effects->second) {
+        if (Work >= limits::kMaxRegistrationEHStateWork) {
+          Exhausted = true;
+          return false;
+        }
+        ++Work;
+        if (!Write.isValid() || Write.End > uint64_t(UINT32_MAX) + 1 ||
+            Write.overlaps(Range))
+          return false;
+      }
+      return true;
+    };
+    registration_frame::ImageProof ImageOwner(AddressOwner, Functions,
+                                              SecurityCookieVA, Work, Exhausted,
+                                              PreservesImage);
+    for (const auto &Range : ImmutableImageRanges) {
+      CurrentInstruction = nullptr;
+      if (!ImageOwner.preserves(Range))
+        return Reject("C++ current writes do not preserve the original "
+                      "runtime image");
+    }
     // Recompute definite initialization from actual LLVM stores and the CRT
     // catch write. Only independently proved constructor must-writes seed
     // bytes after calls; ordinary callee write summaries remain may-effects.

@@ -58,6 +58,7 @@ llvm::Error validateCOFFRegistrationCxxIR(const llvm::Function &Function,
       Immutable.push_back({Segment.VA, Segment.VA + Segment.Size});
   }
   for (const auto &[Call, Checked] : Proof->Calls) {
+    Contract.ImageWrites.emplace(Call, Checked.Contract.ImageWrites);
     if (Checked.RuntimeObject)
       if (auto Error = coff_registration::bindCxxRuntimeObjectBorrow(
               *Proof, *Call, Checked, Contract))
@@ -124,18 +125,6 @@ llvm::Error validateCOFFRegistrationCxxIR(const llvm::Function &Function,
     if (!Range.isValid() || Range.End > uint64_t(UINT32_MAX) + 1)
       return coff_registration::rejectIR(
           "C++ immutable runtime range is malformed");
-  // A preserved call must obey the same image closure as the edited parent.
-  for (const auto &[Call, Checked] : Proof->Calls)
-    for (const auto &Write : Checked.Contract.ImageWrites)
-      for (const auto &Range : Immutable) {
-        if (++Work > limits::kMaxRegistrationEHStateWork)
-          return coff_registration::rejectIR(
-              "C++ runtime image proof exhausted its work budget");
-        if (Write.overlaps(Range))
-          return coff_registration::rejectIR(
-              "C++ preserved callee mutates language metadata or runtime "
-              "dispatch");
-      }
   return coff_registration::validateFramePrivacy(
       Function, {}, Proof->Frame.Slot, {}, Proof->IncomingAccesses,
       Proof->CallerPCWrites, Proof->ChainReads, 0, Immutable, &Contract);

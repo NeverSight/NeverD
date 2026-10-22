@@ -35,6 +35,10 @@ public:
   /// unsupported marker or exhausted shared budget rejects the whole index.
   bool build(llvm::ArrayRef<const llvm::Function *> Functions, size_t &Work);
 
+  bool contains(const llvm::Instruction &I) const {
+    return Positions.count(&I);
+  }
+
   /// Return all potentially reaching stores in program order. For an
   /// unaliased allocation, only its direct stores can define it. Otherwise
   /// retain every store in this block prefix for the full alias check.
