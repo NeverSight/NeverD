@@ -1,4 +1,4 @@
-//===- COFFRegistrationFrameStores.cpp - Private PE32 spill definitions --===//
+//===- RegistrationFrameStores.cpp - Private PE32 spill definitions --===//
 //
 // NeverD Decompiler
 //
@@ -9,7 +9,7 @@
 /// reaching-store walk in the frame proof.
 //===----------------------------------------------------------------------===//
 
-#include "COFFRegistrationFrameStores.h"
+#include "neverd/backend/llvm/RegistrationFrameStores.h"
 
 #include "neverd/Limits.h"
 

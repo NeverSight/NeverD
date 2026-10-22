@@ -33,7 +33,6 @@ add_neverd_component_library(NeverDCodeGen
   COFF/COFFRegistrationSEHLocalUnwindContext.cpp
   COFF/COFFRegistrationSEHParentExit.cpp
   COFF/COFFRegistrationSEHParentExitSource.cpp
-  COFF/COFFRegistrationFrameStores.cpp
   COFF/COFFRegistrationFrameTaint.cpp
   COFF/COFFRegistrationFrameBits.cpp
   COFF/COFFRegistrationImageProof.cpp

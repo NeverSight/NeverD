@@ -372,11 +372,9 @@ inline constexpr int
     kCOFFRegistrationFrameBitsTruncationMayDependOnFrameQueryActiveSizeLimit =
         128;
 
-// lib/backend/codegen/COFF/COFFRegistrationFrameProof.cpp
-inline constexpr int
-    kCOFFRegistrationFrameProofValidateFramePrivacyLocateDepthLimit = 128;
-inline constexpr int
-    kCOFFRegistrationFrameProofValidateFramePrivacyLocateImplDepthLimit = 128;
+// lib/backend/llvm/X86/RegistrationFrameProofAddress.cpp
+inline constexpr int kRegistrationFrameAddressLocateDepthLimit = 128;
+inline constexpr int kRegistrationFrameAddressLocateImplDepthLimit = 128;
 
 // lib/backend/codegen/COFF/COFFRegistrationImageProof.cpp
 inline constexpr int

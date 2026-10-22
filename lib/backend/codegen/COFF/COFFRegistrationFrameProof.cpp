@@ -18,7 +18,7 @@
 #include "neverd/Common.h"
 #include "neverd/Limits.h"
 #include "neverd/backend/Limits.h"
-#include "neverd/backend/llvm/RegistrationFrameAddress.h"
+#include "neverd/backend/llvm/RegistrationFrameProofAddress.h"
 #include "neverd/backend/llvm/WindowsEHMetadata.h"
 #include "neverd/backend/llvm/X86RegistrationLayout.h"
 #include "neverd/backend/llvm/X86RegistrationSEHJump.h"
@@ -75,16 +75,7 @@ llvm::Error validateFramePrivacy(
     return llvm::createStringError(llvm::errc::invalid_argument, "%s",
                                    Message.c_str());
   };
-  struct Cell {
-    const llvm::Value *Root;
-    int64_t Offset;
-    bool operator==(const Cell &) const = default;
-    bool operator<(const Cell &Other) const {
-      return Root != Other.Root
-                 ? std::less<const llvm::Value *>{}(Root, Other.Root)
-                 : Offset < Other.Offset;
-    }
-  };
+  using registration_frame::Cell;
   const auto &Layout = Parent.getParent()->getDataLayout();
   std::vector<const llvm::Function *> Functions{&Parent};
   Functions.insert(Functions.end(), Callbacks.begin(), Callbacks.end());
@@ -158,241 +149,6 @@ llvm::Error validateFramePrivacy(
   RegistrationFrameStores Stores;
   if (!Stores.build(Functions, Work))
     return Reject("private store index exhausted its work budget");
-  std::map<const llvm::Value *, std::optional<Cell>> Located;
-  std::function<std::optional<Cell>(const llvm::Value *, unsigned)> Locate,
-      LocateImpl;
-  Locate = [&](const llvm::Value *Value,
-               unsigned Depth) -> std::optional<Cell> {
-    if (++Work > limits::kMaxRegistrationEHStateWork ||
-        Depth >
-            ::neverd::limits::backend::
-                kCOFFRegistrationFrameProofValidateFramePrivacyLocateDepthLimit) {
-      Exhausted = true;
-      return std::nullopt;
-    }
-    auto Found = Located.find(Value);
-    if (Found != Located.end())
-      return Found->second;
-    auto Where = LocateImpl(Value, Depth);
-    // Address ownership depends only on this immutable LLVM graph. Repeated
-    // scalar queries must not replay the same reaching-definition walk.
-    if (!Exhausted)
-      Located.emplace(Value, Where);
-    return Where;
-  };
-  LocateImpl = [&](const llvm::Value *Value,
-                   unsigned Depth) -> std::optional<Cell> {
-    if (++Work > limits::kMaxRegistrationEHStateWork ||
-        Depth >
-            ::neverd::limits::backend::
-                kCOFFRegistrationFrameProofValidateFramePrivacyLocateImplDepthLimit) {
-      Exhausted = true;
-      return std::nullopt;
-    }
-    if (const auto *Slot = llvm::dyn_cast<llvm::AllocaInst>(Value))
-      return Cell{Slot, 0};
-    if (const auto *Freeze = llvm::dyn_cast<llvm::FreezeInst>(Value))
-      return Locate(Freeze->getOperand(0), Depth + 1);
-    if (const auto *Global = llvm::dyn_cast<llvm::GlobalVariable>(Value);
-        Global &&
-        (parseNdDataSymbol(Global->getName()) ||
-         parseNdCodePtrSymbol(Global->getName()) ||
-         (SecurityCookieVA && Global->getName() == "__security_cookie")))
-      return Cell{Global, 0};
-    if (const auto *Call = llvm::dyn_cast<llvm::IntrinsicInst>(Value);
-        Call && Call->getIntrinsicID() == llvm::Intrinsic::localrecover &&
-        Escape && Call->arg_size() == 3 && Call->getArgOperand(0) == &Parent) {
-      const auto *Index =
-          llvm::dyn_cast<llvm::ConstantInt>(Call->getArgOperand(2));
-      if (Index && Index->getValue().ult(Escape->arg_size()))
-        return Locate(Escape->getArgOperand(Index->getZExtValue()), Depth + 1);
-    }
-    if (const auto *Cast = llvm::dyn_cast<llvm::Operator>(Value);
-        Cast && llvm::Instruction::isCast(Cast->getOpcode())) {
-      if (const auto *Instruction = llvm::dyn_cast<llvm::CastInst>(Value);
-          Instruction && Instruction->hasPoisonGeneratingFlags())
-        return std::nullopt;
-      const auto *From = Cast->getOperand(0)->getType();
-      const auto *To = Value->getType();
-      auto FullInteger = [](const llvm::Type *Type) {
-        return Type->isIntegerTy() && Type->getIntegerBitWidth() >= 32;
-      };
-      auto PE32Pointer = [](const llvm::Type *Type) {
-        return Type->isPointerTy() && Type->getPointerAddressSpace() == 0;
-      };
-      switch (Cast->getOpcode()) {
-      case llvm::Instruction::PtrToInt:
-        if (!PE32Pointer(From) || !FullInteger(To))
-          return std::nullopt;
-        break;
-      case llvm::Instruction::IntToPtr:
-        if (!FullInteger(From) || !PE32Pointer(To))
-          return std::nullopt;
-        break;
-      case llvm::Instruction::Trunc:
-      case llvm::Instruction::ZExt:
-      case llvm::Instruction::SExt:
-        if (!FullInteger(From) || !FullInteger(To))
-          return std::nullopt;
-        break;
-      case llvm::Instruction::BitCast:
-        if (!PE32Pointer(From) || !PE32Pointer(To))
-          return std::nullopt;
-        break;
-      default:
-        return std::nullopt;
-      }
-      return Locate(Cast->getOperand(0), Depth + 1);
-    }
-    if (const auto *GEP = llvm::dyn_cast<llvm::GEPOperator>(Value)) {
-      auto Offset = registration_frame::checkedByteGEPOffset(GEP);
-      auto Base = Locate(GEP->getPointerOperand(), Depth + 1);
-      if (Base && llvm::isa<llvm::GlobalVariable>(Base->Root)) {
-        llvm::APInt Bytes(32, 0);
-        if (GEP->getPointerAddressSpace() == 0 &&
-            GEP->accumulateConstantOffset(Layout, Bytes))
-          Offset = Bytes.getSExtValue();
-      }
-      if (Base && Offset) {
-        Base->Offset += *Offset;
-        return Base;
-      }
-    }
-    if (const auto *Binary = llvm::dyn_cast<llvm::BinaryOperator>(Value)) {
-      const auto *Amount =
-          llvm::dyn_cast<llvm::ConstantInt>(Binary->getOperand(1));
-      if (Amount && Amount->getBitWidth() == 32 &&
-          Binary->getOpcode() == llvm::Instruction::And &&
-          !Binary->hasPoisonGeneratingFlags()) {
-        auto Base = Locate(Binary->getOperand(0), Depth + 1);
-        const auto *Root =
-            Base ? llvm::dyn_cast<llvm::AllocaInst>(Base->Root) : nullptr;
-        auto Offset = Root ? alignX86RegistrationOffset(
-                                 Base->Offset, Root->getAlign().value(),
-                                 uint32_t(Amount->getZExtValue()))
-                           : std::nullopt;
-        if (Offset)
-          return Cell{Root, *Offset};
-      }
-      if (Amount && Amount->getBitWidth() <= 64 &&
-          (Binary->getOpcode() == llvm::Instruction::Add ||
-           Binary->getOpcode() == llvm::Instruction::Sub)) {
-        auto Base = Locate(Binary->getOperand(0), Depth + 1);
-        const int64_t Delta = Amount->getSExtValue();
-        if (Base && Delta >= -int64_t(UINT32_MAX) &&
-            Delta <= int64_t(UINT32_MAX) &&
-            Base->Offset >= -int64_t(UINT32_MAX) &&
-            Base->Offset <= int64_t(UINT32_MAX)) {
-          // Integer address arithmetic is reduced only at the eventual
-          // PE32 pointer boundary. A zero-extended -4 is 0xfffffffc, whose
-          // effective byte displacement is still -4, without no-wrap flags.
-          const uint32_t Next = uint32_t(Base->Offset) +
-                                (Binary->getOpcode() == llvm::Instruction::Add
-                                     ? uint32_t(Delta)
-                                     : uint32_t(0) - uint32_t(Delta));
-          Base->Offset = int64_t(llvm::APInt(32, Next).getSExtValue());
-          return Base;
-        }
-      }
-    }
-    // Follow every reaching definition of an SSA register/PHI spill. All
-    // normal paths must establish the same address before this exact load;
-    // an entry zero or an unwritten path cannot stand in for a frame address.
-    if (const auto *Load = llvm::dyn_cast<llvm::LoadInst>(Value)) {
-      // This is a candidate identity only. Every such load must independently
-      // pass the address, width and invocation checks in the use closure.
-      if (SEH)
-        if (const auto *Root = SEH->pointerResult(*Load))
-          return Cell{Root, 0};
-      auto Slot = Locate(Load->getPointerOperand(), Depth + 1);
-      const auto *Catch = CatchAt(*Load);
-      const auto *Home = Slot && Slot->Root == LogicalFrame
-                             ? activeCxxReferenceHome(Cxx, Catch, Slot->Offset)
-                             : nullptr;
-      if (Home && Load->getType()->isIntegerTy(32) && !Load->isAtomic() &&
-          Dominators.at(&Parent)->dominates(Home->Catch, Load))
-        return Cell{Home->Catch, 0};
-      if (!Slot || !llvm::isa<llvm::AllocaInst>(Slot->Root))
-        return std::nullopt;
-      std::vector<
-          std::pair<const llvm::BasicBlock *, const llvm::Instruction *>>
-          Pending{{Load->getParent(), Load->getPrevNode()}};
-      std::set<std::pair<const llvm::BasicBlock *, const llvm::Instruction *>>
-          Seen;
-      std::optional<Cell> Common;
-      while (!Pending.empty()) {
-        auto [Block, Last] = Pending.back();
-        Pending.pop_back();
-        // The initial prefix ends immediately before the load. A backedge
-        // revisits the same block's suffix, which may overwrite this cell.
-        if (!Seen.emplace(Block, Last).second)
-          continue;
-        const auto Candidates =
-            Stores.candidates(Slot->Root, Block, Last, Work);
-        if (!Candidates) {
-          Exhausted = true;
-          return std::nullopt;
-        }
-        bool Found = false;
-        for (const auto *Store : llvm::reverse(*Candidates)) {
-          if (++Work > limits::kMaxRegistrationEHStateWork) {
-            Exhausted = true;
-            return std::nullopt;
-          }
-          auto Destination = Locate(Store->getPointerOperand(), Depth + 1);
-          if (!Destination || Destination->Root != Slot->Root)
-            continue;
-          const auto Written =
-              Layout.getTypeStoreSize(Store->getValueOperand()->getType());
-          const auto Read = Layout.getTypeStoreSize(Load->getType());
-          if (Written.isScalable() || Read.isScalable())
-            return std::nullopt;
-          if (Destination->Offset >=
-                  Slot->Offset + int64_t(Read.getFixedValue()) ||
-              Slot->Offset >=
-                  Destination->Offset + int64_t(Written.getFixedValue()))
-            continue;
-          if (*Destination != *Slot || Written != Read || Store->isAtomic())
-            return std::nullopt;
-          auto Address = Locate(Store->getValueOperand(), Depth + 1);
-          if (!Address || (Common && *Common != *Address))
-            return std::nullopt;
-          Common = Address;
-          Found = true;
-          break;
-        }
-        if (Found)
-          continue;
-        if (llvm::pred_empty(Block))
-          return std::nullopt;
-        for (const auto *Pred : llvm::predecessors(Block)) {
-          // A SjLj resume preserves the logical values last written by the
-          // exiting callback. Its apparent LLVM predecessor is the capture
-          // at machine entry; replay the authenticated transfer edge instead.
-          if (ParentExits && ParentExits->Dispatch &&
-              Pred == ParentExits->Dispatch->getParent()) {
-            const auto Resumes =
-                ParentExits->ResumptionPredecessors.find(Block);
-            if (Resumes == ParentExits->ResumptionPredecessors.end())
-              return std::nullopt;
-            for (const auto *Transfer : Resumes->second)
-              Pending.emplace_back(Transfer, Transfer->getTerminator());
-          } else
-            Pending.emplace_back(Pred, Pred->getTerminator());
-        }
-      }
-      return Common;
-    }
-    return std::nullopt;
-  };
-  RegistrationFrameTaint TaintedMemory;
-  std::set<const llvm::StoreInst *> TaintedStores;
-  auto Size = [&](llvm::Type *Type) -> uint64_t {
-    if (!Type->isSized())
-      return UINT64_MAX;
-    const auto Bytes = Layout.getTypeStoreSize(Type);
-    return Bytes.isScalable() ? UINT64_MAX : Bytes.getFixedValue();
-  };
   auto Bounded = [&](const Cell &Where, uint64_t Bytes) {
     if (const auto Found = RuntimeObjects.find(Where.Root);
         Found != RuntimeObjects.end()) {
@@ -407,6 +163,58 @@ llvm::Error validateFramePrivacy(
            Where.Offset >= 0 &&
            uint64_t(Where.Offset) <= Extent->getFixedValue() &&
            Bytes <= Extent->getFixedValue() - Where.Offset;
+  };
+  auto ProjectLoad = [&](const llvm::LoadInst &Load,
+                         registration_frame::AddressProof::Lookup Lookup)
+      -> std::optional<Cell> {
+    if (SEH)
+      if (const auto *Root = SEH->pointerResult(Load))
+        return Cell{Root, 0};
+    auto Slot = Lookup(Load.getPointerOperand());
+    const auto *Catch = CatchAt(Load);
+    const auto *Home = Slot && Slot->Root == LogicalFrame
+                           ? activeCxxReferenceHome(Cxx, Catch, Slot->Offset)
+                           : nullptr;
+    if (Home && Load.getType()->isIntegerTy(32) && !Load.isAtomic() &&
+        Dominators.at(&Parent)->dominates(Home->Catch, &Load))
+      return Cell{Home->Catch, 0};
+    return std::nullopt;
+  };
+  auto Predecessors =
+      [&](const llvm::BasicBlock *Block, const llvm::BasicBlock *Pred,
+          llvm::SmallVectorImpl<const llvm::BasicBlock *> &Edges) {
+        if (ParentExits && ParentExits->Dispatch &&
+            Pred == ParentExits->Dispatch->getParent()) {
+          const auto Resumes = ParentExits->ResumptionPredecessors.find(Block);
+          if (Resumes == ParentExits->ResumptionPredecessors.end())
+            return false;
+          for (const auto *Transfer : Resumes->second)
+            Edges.push_back(Transfer);
+        } else
+          Edges.push_back(Pred);
+        return true;
+      };
+  auto ObjectBounds = [&](const Cell &Where) {
+    if (llvm::isa<llvm::AllocaInst>(Where.Root) ||
+        RuntimeObjects.count(Where.Root))
+      return Bounded(Where, 0);
+    // Opaque image symbols denote mapped storage whose bounds are checked
+    // independently below, rather than a compiler allocation's declared type.
+    return llvm::isa<llvm::GlobalVariable>(Where.Root);
+  };
+  registration_frame::AddressProof AddressOwner(
+      Parent, Escape, SecurityCookieVA, Stores, Work, Exhausted, ProjectLoad,
+      Predecessors, ObjectBounds);
+  auto Locate = [&](const llvm::Value *Value, unsigned Depth) {
+    return AddressOwner.locate(Value, Depth);
+  };
+  RegistrationFrameTaint TaintedMemory;
+  std::set<const llvm::StoreInst *> TaintedStores;
+  auto Size = [&](llvm::Type *Type) -> uint64_t {
+    if (!Type->isSized())
+      return UINT64_MAX;
+    const auto Bytes = Layout.getTypeStoreSize(Type);
+    return Bytes.isScalable() ? UINT64_MAX : Bytes.getFixedValue();
   };
   auto IsAddress = [&](const llvm::Value *Value) {
     return Addresses.count(Value);

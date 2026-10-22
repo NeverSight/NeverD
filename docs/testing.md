@@ -6724,6 +6724,13 @@ values, escaping pointers, volatile reads, atomic/volatile stores and source
 observations. The narrow O1 entry re-lift also catches an unused ECX PHI that
 previously became an uninitialized native frame read on catch return. The
 source-frame initialization validator must still reject that old generated code.
+`RegistrationFrameXor` checks equal decoded-cookie recipes through current
+SSA/private spills and every predecessor. Different roots/offsets, partial or
+atomic writes, missing initialization, loop-suffix changes, narrow/poison values,
+foreign globals, wrong pointer width and exhausted work cannot certify a cookie.
+Poison-generating address recipes cannot cancel into an otherwise valid value.
+The existing privacy suites independently retain bounds, lifetime and escape
+checks; the recipe query grants no native GS admission.
 `RegistrationFrameStores` and `RegistrationFrameTaint` test bounded LLVM spill
 proofs, joins, backedges, partial writes and exhausted budgets. Loader tests keep
 independent SafeSEH/code references and real function boundaries while excluding

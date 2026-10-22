@@ -1908,6 +1908,14 @@ specific pointer slot so an independent reference retains its ordinary identity.
 `RegistrationFrameMemory` owns byte-cell overlap queries for the LowIR frame domain.
 The COFF LLVM privacy proof indexes private reaching stores and tainted byte ranges
 in separate units, preserving the shared work limit and conservative alias checks.
+The shared `WindowsRegistrationFrame` component owns `AddressProof` and the
+store index for current LLVM address and value queries. COFF supplies its checked
+runtime-object roots and resumption edges. Ordinary and callback paths therefore
+use the same byte-coordinate, cast, alignment and full-width reaching-store rules.
+`XorProof` computes low-word cookie/address recipes through that owner, including
+values immediately before an exceptional call. These are candidates only:
+call writes, aliases, initialized lifetimes and image-cookie stability must still
+close independently before any native guarded-frame or check-elision permission.
 `COFFTrampolineRegions` resolves authenticated source entries across executable
 sections, including earlier generated code, with unique virtual/raw ownership
 and unchanged input bytes. A second reconstruction repeats all source and LLVM
