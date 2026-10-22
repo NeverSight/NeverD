@@ -1941,6 +1941,11 @@ requires the actual ESI anchor, saved entry EBP, saved ESP, previous chain,
 handler and seed state. Entry-relative accesses below the saved-register area
 and runtime-relative accesses above the aligned allocation can cross coordinate
 spaces; both remain rejected without an exact projection.
+Cookie preservation consumes this same separation proof: saved entry-register
+writes cannot alias the aligned runtime cookie. Unknown coordinates, accesses
+crossing the boundary and live writes to the entry frame retain their existing
+refusals. A complete source cookie condition still grants no guarded C++ output
+ABI or permission to bypass its checker.
 A separate callback coordinate owns only allocated, initialized bytes below
 that invocation's return PC. Push/pop recovery must restore runtime EBP and
 balance ESP before a non-nested realigned catch can resume. Dispatch preserves

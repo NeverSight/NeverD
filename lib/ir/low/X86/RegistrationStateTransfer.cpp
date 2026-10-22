@@ -203,7 +203,7 @@ bool RegistrationStateSolver::transferBlock(size_t I, const Domain &Before,
       if (!Memory.Complete)
         CompleteCookies = false;
       if (After.Installed && !RuntimeMemory && !Address.CallbackAddress &&
-          (!Address.Offset && Address.MayBeFrame))
+          !Address.EntryOffset && (!Address.Offset && Address.MayBeFrame))
         CompleteCookies = false;
       if (After.Installed && Address.Offset) {
         auto Touches = [&](std::optional<int32_t> Slot) {
@@ -233,9 +233,11 @@ bool RegistrationStateSolver::transferBlock(size_t I, const Domain &Before,
       if (Memory.StoredValue) {
         const uint64_t TableEnd =
             Chain.ScopeTableVA + 16 + uint64_t(Chain.Scopes.size()) * 12;
-        // The callback-memory owner above proves its private stack disjoint
-        // from the establisher and image. It cannot overwrite either cookie.
-        if (!Address.Offset && !Address.CallbackAddress &&
+        // The callback and realignment owners above prove their separate
+        // stack coordinates disjoint from the establisher and image. Neither
+        // the callback stack nor the saved entry registers alias a cookie.
+        if (!Address.Offset && !Address.EntryOffset &&
+            !Address.CallbackAddress &&
             (!Address.Constant ||
              (uint64_t(*Address.Constant) < SecurityCookieVA + 4 &&
               SecurityCookieVA <

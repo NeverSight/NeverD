@@ -6533,6 +6533,14 @@ The cleanup-only PE32 qualification script accepts `--stack-aligned` for the
 authored ESP parent. Its ordinary and register-written state forms must pass
 LLVM, COFF installation and optional O0/O1 Wine checks at preferred and rebased
 addresses; the changed-trace control must still fail.
+`RegistrationRealignment.EntryRegisterSavesPreserveTheAlignedCookie` and
+`EntrySavesAlsoPreserveTheESIBasedCookie` require entry-register saves in the
+independent EBP coordinate to preserve the aligned C++ cookie proof. Short and
+wide alignment instructions are covered. Their negative companion retains
+rejection of entry accesses crossing the alignment boundary, live entry writes,
+unknown addresses, partial cookie initialization and altered cookie conditions.
+These source-state proofs do not admit guarded C++ handlers to native rewriting;
+their physical output cookie ABI remains a separate requirement.
 
 `CxxPhysicalEntryDoesNotRequireTheRemainingStateGraph` repeats the 24 forms
 with a runtime state write: the locally authenticated entry still roots the
