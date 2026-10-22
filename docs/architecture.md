@@ -1699,6 +1699,11 @@ construction must preserve both the image cookie and the parent slots.
 Catch entry preserves an encoded word only after every cleanup's write extent
 is known to be disjoint. Exact successful source checks preserve all GPRs and
 use their own call receipts rather than an ordinary callee-frame effect.
+`X86ArithmeticFlags` owns the six flag values from their equal CMP. LowIR frame
+transfer and MedIR conversion use that same result while preserving DF, vector
+and x87 state. Conversion retains the checker call, marks its complete register
+preservation before SSA and writes the six arithmetic flags explicitly; the
+x64-only GPR family mask cannot establish x86 preservation.
 If those receipts cannot be published, call, runtime-object and image-read
 closure also fail; the unchecked mismatch path has no summarized effects.
 `CxxCookieConditions` describes source values only; it grants no generated

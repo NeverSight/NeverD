@@ -9,6 +9,7 @@
 #include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/ir/low/LowIR.h"
 #include "neverd/ir/low/LowScalarConstant.h"
+#include "neverd/ir/low/X86ArithmeticFlags.h"
 #include "neverd/lift/X86Regs.h"
 
 namespace neverd::registration_state {
@@ -362,10 +363,10 @@ bool FrameTransfer::isCookieCheck(const LowOp &Op, va_t CookieCheckVA) const {
 void FrameTransfer::write(const LowOp &Op, FrameValue Value,
                           va_t CookieCheckVA) {
   if (isCookieCheck(Op, CookieCheckVA)) {
-    // The authenticated success path changes flags, but no GPR or stack
-    // cell. In particular the lifter's generic EAX result is not a write.
-    State.OtherRegisterBytes.clear();
-    State.OtherRegistersMayBeFrame = true;
+    // The authenticated success path compares equal values, then returns
+    // without changing another register. The generic EAX result is no write.
+    for (const auto &[Flag, Bit] : kX86EqualComparisonFlags)
+      State.OtherRegisterBytes[Flag] = FrameValue::constant(Bit);
     return;
   }
   if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) {

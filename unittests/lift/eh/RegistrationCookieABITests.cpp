@@ -9,8 +9,14 @@
 #include "../../../lib/ir/med/abi/MedABIPassDetail.h"
 #include "gtest/gtest.h"
 
+#include "neverd/ir/low/LowScalarConstant.h"
+#include "neverd/ir/med/LowToMed.h"
 #include "neverd/ir/med/MedABIPass.h"
 #include "neverd/lift/X86Regs.h"
+
+#include <initializer_list>
+#include <map>
+#include <tuple>
 
 namespace {
 using namespace neverd;
@@ -115,6 +121,102 @@ TEST(RegistrationCookieABI, CheckedECXOverridesIncidentalAndInferredArguments) {
   for (unsigned Pass = 0; Pass != 2; ++Pass) {
     Fixture.recover();
     checkCookieArgument(Fixture);
+  }
+}
+
+TEST(RegistrationCookieABI, SuccessEffectsReachSSAWithEveryVolatileGPRIntact) {
+  for (bool Proven : {false, true}) {
+    SCOPED_TRACE(Proven);
+    LowFunc Low;
+    Low.Entry = 0x1000;
+    auto &State = Low.RegistrationStates.emplace();
+    State.SecurityCookiesComplete = Proven;
+    State.CookieCheckVA = 0x2000;
+    State.CookieChecks.push_back({0x1010, 0x1015, 0});
+    auto &Block = Low.Blocks.emplace_back();
+    Block.Id = 0;
+    Block.StartAddr = 0x1000;
+    Block.EndAddr = 0x1021;
+    auto Emit = [&](va_t Address, NdOp Opcode, NdVar Output,
+                    std::initializer_list<NdVar> Inputs) {
+      LowOp Op;
+      Op.Addr = Address;
+      Op.Seq = 0;
+      Op.Opcode = Opcode;
+      Op.Output = Output;
+      for (const auto &Input : Inputs)
+        Op.Inputs[Op.NumInputs++] = Input;
+      Block.Ops.push_back(Op);
+    };
+    const auto AX = NdVar::reg(x86reg::RAX, 4);
+    const auto CX = NdVar::reg(x86reg::RCX, 4);
+    const auto DX = NdVar::reg(x86reg::RDX, 4);
+    Emit(0x1000, NdOp::COPY, AX, {NdVar::scalar(11, 4)});
+    Emit(0x1000, NdOp::COPY, CX, {NdVar::scalar(13, 4)});
+    Emit(0x1000, NdOp::COPY, DX, {NdVar::scalar(17, 4)});
+    for (uint64_t Flag : {x86reg::CF, x86reg::PF, x86reg::AF, x86reg::ZF,
+                          x86reg::SF, x86reg::OF})
+      Emit(0x1000, NdOp::COPY, NdVar::reg(Flag, 1),
+           {NdVar::scalar(Flag != x86reg::PF && Flag != x86reg::ZF, 1)});
+    Emit(0x1000, NdOp::COPY, NdVar::reg(x86reg::DF, 1), {NdVar::scalar(1, 1)});
+    Emit(0x1010, NdOp::CALL, AX, {NdVar::codeAddress(0x2000, 4)});
+    Emit(0x1015, NdOp::INT_ADD, AX, {AX, CX});
+    Emit(0x1015, NdOp::INT_ADD, AX, {AX, DX});
+    unsigned NextTemp = 0;
+    for (uint64_t Flag : {x86reg::CF, x86reg::PF, x86reg::AF, x86reg::ZF,
+                          x86reg::SF, x86reg::OF, x86reg::DF}) {
+      const auto Wide = NdVar::tmp(NextTemp++, 4);
+      Emit(0x1015, NdOp::INT_ZEXT, Wide, {NdVar::reg(Flag, 1)});
+      Emit(0x1015, NdOp::INT_ADD, AX, {AX, Wide});
+    }
+    Emit(0x1020, NdOp::RETURN, {}, {AX});
+    LowToMedConverter Converter;
+    const auto Med = Converter.convert(Low, Arch::X86, BinaryFormat::COFF);
+    const MedOp *Call = nullptr, *Return = nullptr;
+    for (const auto &B : Med.Blocks)
+      for (const auto &Op : B.Ops) {
+        if (Op.Opcode == NdOp::CALL)
+          Call = &Op;
+        if (Op.Opcode == NdOp::RETURN)
+          Return = &Op;
+      }
+    ASSERT_TRUE(Call && Return);
+    EXPECT_EQ(Call->PreservesCallerSaved, Proven);
+    if (Proven) {
+      EXPECT_EQ(Call->Output.Size, 0u);
+      EXPECT_TRUE(Med.CallClobbers.empty());
+      ASSERT_EQ(Return->NumInputs, 1u);
+      // Conversion need not fold arithmetic. Evaluate the surviving scalar
+      // SSA expression rather than requiring a particular optimized shape.
+      using Key = std::tuple<int, int, int>;
+      auto KeyOf = [](const MedVar &V) {
+        return Key{int(V.Kind), V.Id, V.SSAVer};
+      };
+      std::map<Key, std::optional<uint64_t>> Values;
+      auto ValueOf = [&](const MedVar &V) -> std::optional<uint64_t> {
+        if (V.isConst())
+          return V.ConstVal;
+        const auto It = Values.find(KeyOf(V));
+        return It == Values.end() ? std::nullopt : It->second;
+      };
+      for (const auto &B : Med.Blocks)
+        for (const auto &Op : B.Ops) {
+          if (Op.Output.Size == 0)
+            continue;
+          LowOp Scalar;
+          Scalar.Opcode = Op.Opcode;
+          Scalar.Output = NdVar::tmp(0, Op.Output.Size);
+          for (unsigned I = 0; I != Op.NumInputs; ++I)
+            Scalar.Inputs[Scalar.NumInputs++] =
+                NdVar::tmp(I, Op.Inputs[I].Size);
+          Values[KeyOf(Op.Output)] =
+              lowScalarConstantResult(Scalar, [&](const NdVar &V) {
+                return ValueOf(Op.Inputs[V.Offset]);
+              });
+        }
+      EXPECT_EQ(ValueOf(Return->Inputs[0]), std::optional<uint64_t>{44});
+    } else
+      EXPECT_FALSE(Med.CallClobbers.empty());
   }
 }
 

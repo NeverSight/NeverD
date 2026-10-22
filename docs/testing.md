@@ -5783,6 +5783,12 @@ ordinary and cleanup writes, overlapping catch objects and absent call evidence.
 An adjacent private-object write remains valid. The ABI tests bind a checked
 C++ source call to its current ECX value despite incidental EDX, XMM and stack
 values, and reject missing cookie or personality evidence.
+`RegistrationFrameScalar.CookieSuccessKeepsRegistersAndEqualCompareFlags`
+checks all eight GPRs, the six equal-CMP flags and surviving DF/vector facts.
+`RegistrationCookieABI.SuccessEffectsReachSSAWithEveryVolatileGPRIntact`
+uses EAX, ECX, EDX and all seven flags after the retained call. The authenticated
+case must evaluate to the machine result; missing proof must retain ordinary
+call clobbers.
 `CxxCookieSourceProofReachesTheParentAndMedCallABI` reparses actual PE32 code
 and FuncInfo bytes, then builds LowIR and MedIR. It requires the dedicated
 source-check receipt to close the parent ABI and rejects changed instruction

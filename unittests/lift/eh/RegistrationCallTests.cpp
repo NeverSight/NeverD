@@ -2081,7 +2081,7 @@ TEST(RegistrationCallABI, CxxCookieSourceProofReachesTheParentAndMedCallABI) {
       EXPECT_EQ(Call->Args.size(), 1u);
       EXPECT_EQ(Call->IntegerRegisterArgCount, 1);
       EXPECT_EQ(Call->FloatingRegisterArgCount, 0);
-      EXPECT_EQ(Op.CallPreservedGPRs, 0xff);
+      EXPECT_TRUE(Op.PreservesCallerSaved);
       EXPECT_EQ(Op.Output.Id, -1);
       EXPECT_EQ(Op.Output.Size, 0);
     }

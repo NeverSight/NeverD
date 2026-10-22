@@ -166,4 +166,37 @@ TEST(RegistrationFrameScalar, ReloadedChainComparisonIsAnExactScalar) {
   EXPECT_FALSE(Partial.Constant);
   EXPECT_TRUE(Partial.MayBeFrame);
 }
+
+TEST(RegistrationFrameScalar, CookieSuccessKeepsRegistersAndEqualCompareFlags) {
+  FrameState Frame;
+  for (unsigned I = 0; I != Frame.Registers.size(); ++I)
+    Frame.Registers[I] = FrameValue::constant(0x12340000 + I);
+  auto &Cookie = Frame.Registers[x86reg::RCX / x86reg::GeneralRegStride];
+  Cookie = {};
+  Cookie.SecurityCookie = true;
+  for (uint64_t Flag :
+       {x86reg::CF, x86reg::PF, x86reg::AF, x86reg::ZF, x86reg::SF, x86reg::OF})
+    Frame.OtherRegisterBytes[Flag] =
+        FrameValue::constant(Flag != x86reg::PF && Flag != x86reg::ZF);
+  Frame.OtherRegisterBytes[x86reg::DF] = FrameValue::constant(1);
+  Frame.OtherRegisterBytes[x86reg::VectorBase] = FrameValue::constant(0x57);
+  const auto Registers = Frame.Registers;
+  LowOp Call;
+  Call.Opcode = NdOp::CALL;
+  Call.Output = NdVar::reg(x86reg::RAX, 4);
+  Call.NumInputs = 1;
+  Call.Inputs[0] = NdVar::codeAddress(0x2000, 4);
+  FrameTransfer Transfer(Frame, -12);
+  ASSERT_TRUE(Transfer.isCookieCheck(Call, 0x2000));
+  Transfer.write(Call, {}, 0x2000);
+  EXPECT_EQ(Frame.Registers, Registers);
+  for (uint64_t Flag :
+       {x86reg::CF, x86reg::PF, x86reg::AF, x86reg::ZF, x86reg::SF, x86reg::OF})
+    EXPECT_EQ(Frame.OtherRegisterBytes[Flag],
+              FrameValue::constant(Flag == x86reg::PF || Flag == x86reg::ZF));
+  EXPECT_EQ(Frame.OtherRegisterBytes[x86reg::DF], FrameValue::constant(1));
+  EXPECT_EQ(Frame.OtherRegisterBytes[x86reg::VectorBase],
+            FrameValue::constant(0x57));
+  EXPECT_FALSE(Frame.OtherRegistersMayBeFrame);
+}
 } // namespace

@@ -29,6 +29,7 @@
 #include "neverd/ir/low/ImportCallee.h"
 #include "neverd/ir/low/LowRawEnvironment.h"
 #include "neverd/ir/low/RegistrationABI.h"
+#include "neverd/ir/low/X86ArithmeticFlags.h"
 #include "neverd/ir/med/LowToMedError.h"
 #include "neverd/ir/med/MedCallConvention.h"
 #include "neverd/ir/med/MedConstantPropagation.h"
@@ -1080,12 +1081,20 @@ MedFunc LowToMedConverter::convert(const LowFunc &SourceLow, Arch TheArch,
         for (unsigned K = 0; K <= LOp.X87ScratchSlots; ++K)
           MOp.X87ClobberedSlots |= uint8_t(1u << ((Slot + 8 - K) & 7));
       }
-      if (TheArch == Arch::X86 && Low.RegistrationStates &&
+      const bool CookieCall =
+          TheArch == Arch::X86 && Fmt == BinaryFormat::COFF &&
+          LOp.Opcode == NdOp::CALL && LOp.NumInputs == 1 &&
+          LOp.Inputs[0].isConst() && LOp.Inputs[0].Size == 4 &&
+          Low.RegistrationStates &&
           Low.RegistrationStates->SecurityCookiesComplete &&
-          Low.RegistrationStates->cookieCheck(LOp.Addr, LOp.Seq)) {
+          LOp.Inputs[0].Offset == Low.RegistrationStates->CookieCheckVA &&
+          Low.RegistrationStates->cookieCheck(LOp.Addr, LOp.Seq);
+      if (CookieCall) {
         MOp.Output = MedVar{};
         MOp.Output.Id = -1;
-        MOp.CallPreservedGPRs = 0xff;
+        // The family-mask summary is x64-only. The checked leaf preserves
+        // every non-arithmetic register, including vectors and x87 state.
+        MOp.PreservesCallerSaved = true;
       }
       if (TrackDispatchArgs)
         DispatchDefined = StepDefined(DispatchDefined, LOp);
@@ -1132,6 +1141,16 @@ MedFunc LowToMedConverter::convert(const LowFunc &SourceLow, Arch TheArch,
                                        Proof.TargetOwnerVA));
       }
       MB.Ops.push_back(MOp);
+      if (CookieCall)
+        for (const auto &[Flag, Bit] : kX86EqualComparisonFlags) {
+          MedOp Write;
+          Write.Opcode = NdOp::COPY;
+          Write.Addr = LOp.Addr;
+          Write.Output = ndVarToMedVar(NdVar::reg(Flag, 1));
+          Write.addInput(
+              MedVar::makeConst(Bit, 1, ConstantAddressProvenance::Scalar));
+          MB.Ops.push_back(std::move(Write));
+        }
 
       // i386 callee-cleanup: a checked runtime import or direct callee pops on
       // return (x86 `ret imm`, the SysV hidden struct-return (sret) pointer
