@@ -21,6 +21,7 @@ add_neverd_component_library(NeverDWindowsRegistrationFrame
   X86/RegistrationFrameXor.cpp
   X86/RegistrationImageProof.cpp
   X86/RegistrationCookieProof.cpp
+  X86/RegistrationCxxCookieBindings.cpp
   X86/RegistrationCatch.cpp
   X86/RegistrationCatchBlocks.cpp
   X86/RegistrationEntry.cpp
@@ -39,6 +40,7 @@ add_neverd_component_library(NeverDWindowsRegistrationFrame
   LINK_COMPONENTS
   IR
   IRMed
+  IRLow
   Loader
 )
 

@@ -1973,6 +1973,19 @@ unproved checks cannot borrow the provisional frame-preservation assumption.
 Only a successful protocol supplies checker effects to the final immutable-image
 closure. Ordinary borrow/image summaries cannot also authorize a cookie call.
 Source/control binding and native output admission remain separate gates.
+`RegistrationCxxCookieBindings` binds that protocol's complete call set to
+source occurrences and fresh handler/cleanup bytes. Handler-node displacements
+first become source-frame coordinates and then current allocation offsets;
+current allocation size and alignment must support the projection. Every live
+ordinary or catch call gets every handler guard, including state `-1` calls
+without an LLVM invoke. Generated cleanup transfers use their action, relay and
+ordinal identities; each current object and ordered call is checked independently.
+The binder rejects missing, extra, duplicate and conflicting call authorities.
+Source execution order and full control flow remain the producer/replay owner's
+obligation. COFF source-segment replay has an explicit retained-C++ cookie mode,
+returns exact call bindings only after complete replay, and keeps SEH's elided
+check policy separate. The C++ control consumer uses those bindings for ordinary
+calls; guarded native emission and installation still require further integration.
 `COFFTrampolineRegions` resolves authenticated source entries across executable
 sections, including earlier generated code, with unique virtual/raw ownership
 and unchanged input bytes. A second reconstruction repeats all source and LLVM

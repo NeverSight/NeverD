@@ -6779,6 +6779,14 @@ disjoint writable image word. Borrow writes and constructor must-writes cannot
 invalidate a dispatch guard, and callback writes participate in image closure.
 The suite retains live-allocation, source-image, unique-call authority and loop
 checks, with diagnostics distinguishing protocol refusal from an earlier gate.
+`RegistrationCxxCookieBindings` checks the source/current call bijection, live
+state `-1` and catch-internal events, pre-install/post-removal exclusions, and
+ordered generated cleanup calls. It authenticates one/two handler guards,
+node-to-frame coordinate projection, current allocation alignment, fresh relay
+bytes, object offsets and funclet ownership. Source-segment cases reject moved,
+deleted and marker-replaced retained checks without publishing partial bindings;
+the separate SEH elision mode does not admit a retained call. These are coverage
+tests, not permission to omit the subsequent current value and privacy proofs.
 `RegistrationFrameStores` and `RegistrationFrameTaint` test bounded LLVM spill
 proofs, joins, backedges, partial writes and exhausted budgets. Loader tests keep
 independent SafeSEH/code references and real function boundaries while excluding

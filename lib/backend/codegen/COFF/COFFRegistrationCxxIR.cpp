@@ -141,7 +141,10 @@ getCheckedCxxControlIRProof(const llvm::Function &Function,
   if (auto Error = validateIncomingCallerFrame(
           Function, Med, Functions, Result.IncomingAccesses, IncomingSetup))
     return std::move(Error);
-  auto Segments = validateSourceSegments(Function, Med, {}, Functions, true);
+  std::vector<registration_frame::CxxSourceCallBinding> SourceCalls;
+  auto Segments =
+      validateSourceSegments(Function, Med, {}, Functions, true, nullptr,
+                             SourceCookieCalls::RetainedCxx, &SourceCalls);
   if (!Segments)
     return Segments.takeError();
   Result.Segments = std::move(*Segments);
@@ -321,28 +324,31 @@ getCheckedCxxControlIRProof(const llvm::Function &Function,
       Result.Calls.emplace(Borrows[I], CxxIRCall{Call.Leaf, *Offset, true});
     }
   }
-  std::map<std::pair<va_t, uint32_t>, const llvm::CallBase *> CallsAt;
+  std::map<std::pair<va_t, int>,
+           const registration_frame::CxxSourceCallBinding *>
+      CallsAt;
   std::map<const llvm::CallBase *, const RegistrationCallFrameEffect *>
       SourceCallEffects;
-  for (const auto *Call : ActualCalls)
-    if (const auto *MD =
-            Call->getMetadata(windows_eh_md::RegistrationOperationAttachment)) {
-      auto Address = metadataInteger(*MD, 1, 64);
-      auto Seq = metadataInteger(*MD, 2, 32);
-      if (!Address || !Seq ||
-          !CallsAt.emplace(std::make_pair(*Address, uint32_t(*Seq)), Call)
-               .second)
-        return rejectIR("C++ source call occurrence was duplicated");
-    }
+  for (const auto &Binding : SourceCalls) {
+    if (Binding.CallKind !=
+        registration_frame::CxxSourceCallBinding::Kind::Ordinary)
+      return rejectIR(
+          "C++ cookie call needs a complete guarded frame protocol");
+    if (!ActualCalls.count(Binding.Call) ||
+        !CallsAt
+             .emplace(std::make_pair(Binding.Address, Binding.OpSeq), &Binding)
+             .second)
+      return rejectIR("C++ source call occurrence was duplicated");
+  }
   size_t Protected = 0;
   for (const auto &Effect : States.CallFrameEffects) {
-    const auto Found = CallsAt.find({Effect.Address, uint32_t(Effect.OpSeq)});
-    const auto *Call = Found == CallsAt.end() ? nullptr : Found->second;
-    if (!Call || Effect.CalleeIndex >= States.CalleeContracts.size())
+    const auto Found = CallsAt.find({Effect.Address, Effect.OpSeq});
+    const auto *Binding = Found == CallsAt.end() ? nullptr : Found->second;
+    const auto *Call = Binding ? Binding->Call : nullptr;
+    if (!Call || Binding->EndAddress != Effect.EndAddress ||
+        Effect.CalleeIndex >= States.CalleeContracts.size())
       return rejectIR("C++ source call occurrence was omitted");
-    const auto *MD =
-        Call->getMetadata(windows_eh_md::RegistrationOperationAttachment);
-    const int BlockId = int(*metadataInteger(*MD, 3, 32));
+    const int BlockId = Binding->BlockId;
     if (!StateByBlock.count(BlockId))
       return rejectIR("C++ call moved outside a reached source block");
     const auto &State = *StateByBlock.at(BlockId);
