@@ -3,6 +3,7 @@
 // NeverD Decompiler
 //
 //===----------------------------------------------------------------------===//
+#include "COFFRegistrationCxxIRProof.h"
 #include "COFFRegistrationCxxStateProof.h"
 #include "COFFRegistrationIRProof.h"
 #include "COFFRegistrationTableProof.h"
@@ -60,7 +61,6 @@ getCheckedCOFFRegistrationCxxTableReceipt(const llvm::Function &Function,
       !Classification.canLowerNativeIR() || Image.Arch != Arch::X86 ||
       Image.Format != BinaryFormat::COFF ||
       !coff_loader::getCheckedX86CxxMetadataRanges(Image, Source) ||
-      !coff_loader::getCheckedX86CxxPersonalityABI(Image, Source) ||
       !Compiled.Success || !Compiled.Unresolved.empty() ||
       !Compiled.FunctionRangesValid || !Compiled.WinEHSemanticsValid ||
       Compiled.TargetArch != Arch::X86 ||
@@ -72,6 +72,10 @@ getCheckedCOFFRegistrationCxxTableReceipt(const llvm::Function &Function,
           Compiled.WinEHSemanticRecords, Compiled.SourceFunctionOwners,
           Compiled.FunctionRanges, Compiled.FunctionOwnerAddrs))
     return rejectCxx("source or compiler contract is incomplete");
+  auto Runtime =
+      coff_registration::getCheckedCxxRuntimeIR(Function, Source, Image);
+  if (!Runtime)
+    return Runtime.takeError();
   const auto &Cxx = *Source.Cxx;
   auto Root = coff_registration::ownerVA(Function, Compiled);
   if (!Root)
@@ -340,8 +344,10 @@ getCheckedCOFFRegistrationCxxHandlerReceipt(const llvm::Function &Function,
                                                           Image, Compiled);
   if (!Tables)
     return Tables.takeError();
-  const auto Runtime =
-      coff_loader::getCheckedX86CxxPersonalityABI(Image, Source);
+  auto Runtime =
+      coff_registration::getCheckedCxxRuntimeIR(Function, Source, Image);
+  if (!Runtime)
+    return Runtime.takeError();
   const auto Row =
       llvm::find_if(Compiled.WinEHSemanticRecords, [&](const auto &R) {
         return R.SourceFunction == Function.getName() &&
@@ -350,8 +356,7 @@ getCheckedCOFFRegistrationCxxHandlerReceipt(const llvm::Function &Function,
                 R.Token.Kind ==
                     llvm::mc_rewrite::RewriteWinEHSemanticKind::CxxCleanup);
       });
-  if (!Runtime || Row == Compiled.WinEHSemanticRecords.end() ||
-      !Row->X86CxxLayout)
+  if (Row == Compiled.WinEHSemanticRecords.end() || !Row->X86CxxLayout)
     return rejectCxx(
         "registration handler lost source runtime or table identity");
   const auto &Layout = *Row->X86CxxLayout;

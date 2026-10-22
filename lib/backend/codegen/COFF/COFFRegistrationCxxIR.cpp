@@ -46,8 +46,15 @@ getCheckedCxxControlIRProof(const llvm::Function &Function,
   const auto Classification =
       classifyWindowsEHNativeSource(Source, Arch::X86, BinaryFormat::COFF,
                                     WindowsEHNativeCapability::IRLowering);
-  const auto Runtime =
-      coff_loader::getCheckedX86CxxPersonalityABI(Image, Source);
+  auto Runtime = coff_loader::getCheckedX86CxxPersonalityABI(Image, Source);
+  bool Guarded = false;
+  if (!Runtime) {
+    const auto Handler = coff_loader::getCheckedX86CxxHandlerABI(Image, Source);
+    if (Handler && !Handler->CookieGuards.empty()) {
+      Runtime = Handler->Dispatch;
+      Guarded = true;
+    }
+  }
   if (Image.Arch != Arch::X86 || Image.Format != BinaryFormat::COFF ||
       Classification.Model != WindowsEHNativeSourceModel::X86RegistrationCxx ||
       !Classification.canLowerNativeIR() || !Runtime ||
@@ -282,6 +289,7 @@ getCheckedCxxControlIRProof(const llvm::Function &Function,
   if (CleanupAnchors.size() != Result.Cleanups.size() ||
       Result.Cleanups.size() != States.CleanupContracts.size())
     return rejectIR("C++ source cleanup set is incomplete");
+  std::vector<registration_frame::CxxCleanupCallBinding> CleanupCalls;
   for (const auto &Contract : States.CleanupContracts) {
     auto Found = Result.Cleanups.find(Contract.ActionState);
     if (Found == Result.Cleanups.end())
@@ -322,6 +330,10 @@ getCheckedCxxControlIRProof(const llvm::Function &Function,
       if (!Offset || !BundleIs(*Borrows[I], Pad))
         return rejectIR("C++ cleanup object has no checked source coordinate");
       Result.Calls.emplace(Borrows[I], CxxIRCall{Call.Leaf, *Offset, true});
+      if (Guarded)
+        CleanupCalls.push_back({Borrows[I], Pad, Source.CodeRange.Begin,
+                                Contract.ActionState, Contract.RelayTarget,
+                                uint32_t(I)});
     }
   }
   std::map<std::pair<va_t, int>,
@@ -329,11 +341,15 @@ getCheckedCxxControlIRProof(const llvm::Function &Function,
       CallsAt;
   std::map<const llvm::CallBase *, const RegistrationCallFrameEffect *>
       SourceCallEffects;
+  std::set<const llvm::CallBase *> CookieCalls;
   for (const auto &Binding : SourceCalls) {
     if (Binding.CallKind !=
-        registration_frame::CxxSourceCallBinding::Kind::Ordinary)
-      return rejectIR(
-          "C++ cookie call needs a complete guarded frame protocol");
+        registration_frame::CxxSourceCallBinding::Kind::Ordinary) {
+      if (!Guarded || !ActualCalls.count(Binding.Call) ||
+          !CookieCalls.insert(Binding.Call).second)
+        return rejectIR("C++ cookie call has no unique guarded occurrence");
+      continue;
+    }
     if (!ActualCalls.count(Binding.Call) ||
         !CallsAt
              .emplace(std::make_pair(Binding.Address, Binding.OpSeq), &Binding)
@@ -386,7 +402,7 @@ getCheckedCxxControlIRProof(const llvm::Function &Function,
       return rejectIR("C++ call changed its runtime funclet context");
     SourceCallEffects.emplace(Call, &Effect);
   }
-  if (ActualCalls.size() != Result.Calls.size())
+  if (ActualCalls.size() != Result.Calls.size() + CookieCalls.size())
     return rejectIR("C++ IR gained an unproved external call");
   size_t CallResultWork = 0;
   for (const auto &[Call, Receipt] : Result.Calls) {
@@ -627,6 +643,19 @@ getCheckedCxxControlIRProof(const llvm::Function &Function,
       metadataInteger(*Contract, exception_rewrite::SkippedLandingPads, 64) !=
           0)
     return rejectIR("C++ native contract counters changed");
+  if (Guarded) {
+    std::map<X86RegistrationCatchIdentity, const llvm::CatchPadInst *> Catches;
+    for (const auto &[Identity, Catch] : Result.Catches)
+      Catches.emplace(Identity, Catch.Pad);
+    auto Coverage = registration_frame::bindCxxCookieCoverage(
+        Image, Med, Function, *Frame->Slot, *Layout, SourceCalls, CleanupCalls,
+        Catches, CallResultWork);
+    if (!Coverage)
+      return Coverage.takeError();
+    Result.Guarded.emplace(CxxIRGuardedFrame{std::move(Med), *Layout,
+                                             std::move(SourceCalls),
+                                             std::move(CleanupCalls)});
+  }
   return Result;
 #endif
 }

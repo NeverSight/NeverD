@@ -9,6 +9,10 @@
 
 #include "gtest/gtest.h"
 
+#include "neverd/backend/RewriteSourceIdentity.h"
+#include "neverd/backend/codegen/BinaryRewriter.h"
+#include "neverd/backend/codegen/COFF/COFFExceptionPatch.h"
+#include "neverd/backend/codegen/COFF/COFFPatch.h"
 #include "neverd/backend/codegen/COFF/COFFRegistrationPatch.h"
 #include "neverd/backend/codegen/CodeGen.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
@@ -23,16 +27,25 @@
 #include "neverd/ir/med/X86RegistrationFrame.h"
 #include "neverd/loader/COFF/COFFLoader.h"
 #include "neverd/loader/COFF/COFFRegistrationEH.h"
+#include "neverd/object/PELayout.h"
 
+#include "llvm/ADT/SmallString.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/IntrinsicInst.h"
+#include "llvm/IR/Mangler.h"
 #include "llvm/IR/Verifier.h"
+#include "llvm/Support/FileSystem.h"
+#include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/TargetSelect.h"
+#include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 
 #include <cstdlib>
 #include <memory>
 #include <optional>
 #include <set>
+#include <system_error>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -51,6 +64,9 @@ protected:
   std::vector<CxxSourceCallBinding> Calls;
   std::vector<CxxCleanupCallBinding> Cleanups;
   std::set<const llvm::Instruction *> ChainReads;
+  std::vector<uint8_t> Binary;
+  CompiledImage Native;
+  va_t CodeVA = 0;
 
   void SetUp() override {
     const char *Path = std::getenv("NEVERD_REGISTRATION_GUARDED_PE32");
@@ -162,6 +178,45 @@ protected:
     return validateCxxGuardedFrame(*Image, Source, *Parent, *Frame, Layout,
                                    Calls, Cleanups, ChainReads);
   }
+  void compile() {
+    llvm::InitializeAllTargetInfos();
+    llvm::InitializeAllTargets();
+    llvm::InitializeAllTargetMCs();
+    llvm::InitializeAllAsmParsers();
+    llvm::InitializeAllAsmPrinters();
+    auto Input = llvm::MemoryBuffer::getFile(
+        std::getenv("NEVERD_REGISTRATION_GUARDED_PE32"));
+    ASSERT_TRUE(bool(Input));
+    const auto Bytes = (*Input)->getBuffer();
+    Binary.assign(Bytes.bytes_begin(), Bytes.bytes_end());
+    CodeVA = COFFPatcher().plannedExecSegmentVA(Binary, Arch::X86);
+    ASSERT_NE(CodeVA, 0u);
+    auto Resolve = [&](llvm::StringRef Symbol,
+                       uint32_t) -> std::optional<uint64_t> {
+      if (auto VA = parseNdDataSymbol(Symbol))
+        return *VA;
+      if (auto VA = parseNdCodePtrSymbol(Symbol))
+        return *VA;
+      for (const auto &Function : *Module) {
+        llvm::SmallString<64> Name;
+        llvm::Mangler Mangler;
+        Mangler.getNameWithPrefix(Name, &Function, false);
+        if (Name != Symbol)
+          continue;
+        auto VA = rewrite_source::getOriginalVA(Function);
+        if (!VA) {
+          llvm::consumeError(VA.takeError());
+          return std::nullopt;
+        }
+        return *VA;
+      }
+      return std::nullopt;
+    };
+    Native = compileImageForPatch(*Module, Arch::X86, BinaryFormat::COFF,
+                                  CodeVA, Resolve, Image->Base);
+    ASSERT_TRUE(Native.Success);
+    ASSERT_TRUE(Native.Unresolved.empty());
+  }
   llvm::CallBase *call(bool Cookie) {
     for (const auto &Binding : Calls)
       if ((Binding.CallKind == CxxSourceCallBinding::Kind::Cookie) == Cookie)
@@ -176,8 +231,7 @@ protected:
   }
 };
 
-TEST_F(RegistrationCxxGuardedFrame,
-       NativeCandidateNeedsIndependentInstallation) {
+TEST_F(RegistrationCxxGuardedFrame, NativeCandidateHasIndependentFrameProof) {
   auto ObjectModule = llvm::CloneModule(*Module);
   const auto Compiled =
       Codegen().compile(*ObjectModule, Arch::X86, BinaryFormat::COFF);
@@ -185,12 +239,173 @@ TEST_F(RegistrationCxxGuardedFrame,
   EXPECT_FALSE(Compiled.ObjectData.empty());
   EXPECT_FALSE(coff_loader::getCheckedX86CxxPersonalityABI(
       *Image, *Source.ExceptionMetadata));
-  // Installation is a separate gate until independent guarded control/table
-  // replay is integrated. The loader's unguarded API remains unchanged.
+  // The caller's unguarded catch can independently identify this same CRT.
+  // Restrict the lookup to the guarded parent when checking this boundary.
+  auto GuardedImage = *Image;
+  GuardedImage.ExceptionMetadata.Functions = {*Source.ExceptionMetadata};
+  EXPECT_FALSE(
+      findCOFFExceptionPersonalityVA(GuardedImage, "__CxxFrameHandler3"));
+  // The image-only query stays closed; current source/control/frame replay
+  // must independently establish the guarded dispatch preconditions.
   auto Error =
       validateCOFFRegistrationCxxIR(*Parent, *Source.ExceptionMetadata, *Image);
-  EXPECT_TRUE(bool(Error));
-  llvm::consumeError(std::move(Error));
+  EXPECT_FALSE(bool(Error)) << llvm::toString(std::move(Error));
+}
+
+TEST_F(RegistrationCxxGuardedFrame, InstallsOnlyWithIndependentCompilerProof) {
+  ASSERT_NO_FATAL_FAILURE(compile());
+  auto Tables = getCheckedCOFFRegistrationCxxTableReceipt(
+      *Parent, *Source.ExceptionMetadata, *Image, Native);
+  ASSERT_TRUE(bool(Tables)) << llvm::toString(Tables.takeError());
+  auto Handler = getCheckedCOFFRegistrationCxxHandlerReceipt(
+      *Parent, *Source.ExceptionMetadata, *Image, Native);
+  ASSERT_TRUE(bool(Handler)) << llvm::toString(Handler.takeError());
+  const std::pair<va_t, va_t> Mapping{Source.Entry, Tables->OwnerVA};
+  auto Update = prepareCOFFRegistrationPatch(Binary, *Image, Native, {Mapping},
+                                             CodeVA, *Module);
+  ASSERT_TRUE(bool(Update)) << llvm::toString(Update.takeError());
+  ASSERT_TRUE(Update->Apply);
+  ASSERT_EQ(Update->GeneratedCxxGraphs.size(), 1u);
+  ASSERT_EQ(COFFPatcher().appendExecSegment(Binary, Native.Bytes,
+                                            kNdTextSection, Arch::X86),
+            CodeVA);
+  auto PE = locatePEHeaders(Binary.data(), Binary.size());
+  std::optional<size_t> Entry;
+  forEachPESection(PE, [&](const PESectionFields &Section, uint16_t) {
+    const uint64_t RVA = Source.Entry - Image->Base;
+    if (RVA >= Section.VirtualAddress &&
+        rangeInBounds(RVA - Section.VirtualAddress, 5, Section.SizeOfRawData))
+      Entry = Section.PointerToRawData + RVA - Section.VirtualAddress;
+  });
+  ASSERT_TRUE(Entry);
+  ASSERT_TRUE(rangeInBounds(*Entry, 5, Binary.size()));
+  Binary[*Entry] = 0xe9;
+  writeLE<uint32_t>(Binary.data() + *Entry + 1,
+                    uint32_t(Tables->OwnerVA - Source.Entry - 5));
+  auto Applied = applyCOFFRegistrationPatch(Binary, *Update);
+  ASSERT_FALSE(bool(Applied)) << llvm::toString(std::move(Applied));
+  auto Checked = validateCOFFRegistrationPatch(Binary, *Update);
+  ASSERT_FALSE(bool(Checked)) << llvm::toString(std::move(Checked));
+  if (const char *Output =
+          std::getenv("NEVERD_REGISTRATION_GUARDED_OUTPUT_PE32")) {
+    std::error_code Error;
+    llvm::raw_fd_ostream Stream(Output, Error, llvm::sys::fs::OF_None);
+    ASSERT_FALSE(bool(Error)) << Error.message();
+    Stream.write(reinterpret_cast<const char *>(Binary.data()), Binary.size());
+    Stream.close();
+    ASSERT_FALSE(Stream.has_error());
+  }
+  auto Changed = Native;
+  Changed.Bytes[Handler->CodeRange.Begin - Changed.BaseVA] = 0x90;
+  auto Rejected = getCheckedCOFFRegistrationCxxHandlerReceipt(
+      *Parent, *Source.ExceptionMetadata, *Image, Changed);
+  EXPECT_FALSE(bool(Rejected));
+  if (!Rejected)
+    llvm::consumeError(Rejected.takeError());
+}
+
+TEST_F(RegistrationCxxGuardedFrame, CurrentEditsRejectAtEveryInstallationGate) {
+  ASSERT_NO_FATAL_FAILURE(compile());
+  auto Tables = getCheckedCOFFRegistrationCxxTableReceipt(
+      *Parent, *Source.ExceptionMetadata, *Image, Native);
+  ASSERT_TRUE(bool(Tables)) << llvm::toString(Tables.takeError());
+  const std::pair<va_t, va_t> Mapping{Source.Entry, Tables->OwnerVA};
+  for (unsigned Mutation = 0; Mutation != 9; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    auto Edited = llvm::CloneModule(*Module);
+    auto *Function = Edited->getFunction(Parent->getName());
+    llvm::CallBase *Cookie = nullptr, *Dispatch = nullptr;
+    llvm::AllocaInst *Slot = nullptr;
+    std::vector<llvm::CallBase *> CleanupCalls;
+    for (auto &Block : *Function)
+      for (auto &I : Block) {
+        if (I.getMetadata(windows_eh_md::RegistrationFrameAttachment))
+          Slot = llvm::dyn_cast<llvm::AllocaInst>(&I);
+        auto *Call = llvm::dyn_cast<llvm::CallBase>(&I);
+        if (!Call || llvm::isa<llvm::IntrinsicInst>(Call))
+          continue;
+        if (Call->getCallingConv() == llvm::CallingConv::X86_FastCall)
+          Cookie = Call;
+        else if (Call->getOperandBundle("funclet"))
+          CleanupCalls.push_back(Call);
+        else if (!Dispatch)
+          Dispatch = Call;
+      }
+    ASSERT_TRUE(Cookie && Dispatch && Slot);
+    ASSERT_EQ(CleanupCalls.size(), 2u);
+    llvm::IRBuilder<> B(Dispatch);
+    switch (Mutation) {
+    case 0:
+      Cookie->setArgOperand(0, llvm::ConstantPointerNull::get(
+                                   llvm::PointerType::get(Context, 0)));
+      break;
+    case 1:
+      Cookie->eraseFromParent();
+      break;
+    case 2: {
+      auto *Alias = new llvm::GlobalVariable(
+          *Edited, B.getInt32Ty(), false, llvm::GlobalValue::ExternalLinkage,
+          nullptr,
+          makeNdDataSymbol(Source.RegistrationStates->SecurityCookieVA));
+      B.CreateStore(B.getInt32(0), Alias);
+      break;
+    }
+    case 3: {
+      const auto Offset = Layout.runtimeOffset(
+          Source.RegistrationStates->CxxCookieConditions.front().FrameOffset,
+          4);
+      ASSERT_TRUE(Offset);
+      B.CreateStore(B.getInt32(0),
+                    B.CreateGEP(B.getInt8Ty(), Slot, B.getInt32(*Offset)));
+      break;
+    }
+    case 4: {
+      auto *Argument = llvm::dyn_cast<llvm::GetElementPtrInst>(
+          CleanupCalls[1]->getArgOperand(0));
+      ASSERT_TRUE(Argument);
+      Argument->moveBefore(CleanupCalls[0]->getIterator());
+      CleanupCalls[1]->moveBefore(CleanupCalls[0]->getIterator());
+      break;
+    }
+    case 5:
+      Cookie->setMetadata(windows_eh_md::RegistrationOperationAttachment,
+                          nullptr);
+      break;
+    case 6:
+      B.CreateCall(Edited->getOrInsertFunction(
+          "unknown", llvm::FunctionType::get(B.getVoidTy(), false)));
+      break;
+    case 7:
+      Cookie->setCallingConv(llvm::CallingConv::C);
+      break;
+    case 8:
+      CleanupCalls.front()->setArgOperand(
+          0,
+          llvm::ConstantPointerNull::get(llvm::PointerType::get(Context, 0)));
+      break;
+    }
+    ASSERT_FALSE(llvm::verifyModule(*Edited, &llvm::errs()));
+    auto Error = validateCOFFRegistrationCxxIR(
+        *Function, *Source.ExceptionMetadata, *Image);
+    EXPECT_TRUE(bool(Error));
+    llvm::consumeError(std::move(Error));
+    auto Table = getCheckedCOFFRegistrationCxxTableReceipt(
+        *Function, *Source.ExceptionMetadata, *Image, Native);
+    EXPECT_FALSE(bool(Table));
+    if (!Table)
+      llvm::consumeError(Table.takeError());
+    auto Handler = getCheckedCOFFRegistrationCxxHandlerReceipt(
+        *Function, *Source.ExceptionMetadata, *Image, Native);
+    EXPECT_FALSE(bool(Handler));
+    if (!Handler)
+      llvm::consumeError(Handler.takeError());
+    auto Copy = Native;
+    auto Update = prepareCOFFRegistrationPatch(Binary, *Image, Copy, {Mapping},
+                                               CodeVA, *Edited);
+    EXPECT_FALSE(bool(Update));
+    if (!Update)
+      llvm::consumeError(Update.takeError());
+  }
 }
 
 TEST_F(RegistrationCxxGuardedFrame, RejectsCurrentCookieWordAtDispatch) {

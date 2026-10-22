@@ -8,6 +8,7 @@
 
 #include "neverd/Limits.h"
 #include "neverd/backend/codegen/COFF/COFFRegistrationPatch.h"
+#include "neverd/backend/llvm/RegistrationCxxGuardedFrame.h"
 #include "neverd/ir/low/RegistrationABI.h"
 #include "neverd/loader/COFF/COFFRegistrationEH.h"
 
@@ -19,6 +20,10 @@ llvm::Error validateCOFFRegistrationCxxIR(const llvm::Function &Function,
       coff_registration::getCheckedCxxControlIRProof(Function, Source, Image);
   if (!Proof)
     return Proof.takeError();
+  if (const auto &Guarded = Proof->Guarded)
+    return registration_frame::validateCxxGuardedFrame(
+        Image, Guarded->Source, Function, *Proof->Frame.Slot, Guarded->Layout,
+        Guarded->Calls, Guarded->Cleanups, Proof->ChainReads);
   const auto &States = *Proof->Source.RegistrationStates;
   coff_registration::RegistrationCxxFrameContract Contract;
   Contract.Image = &Image;
@@ -130,3 +135,19 @@ llvm::Error validateCOFFRegistrationCxxIR(const llvm::Function &Function,
       Proof->CallerPCWrites, Proof->ChainReads, 0, Immutable, &Contract);
 }
 } // namespace neverd
+
+namespace neverd::coff_registration {
+llvm::Expected<coff_loader::X86CxxPersonalityABI>
+getCheckedCxxRuntimeIR(const llvm::Function &Function,
+                       const ExceptionFunction &Source,
+                       const BinaryImage &Image) {
+  if (auto Runtime = coff_loader::getCheckedX86CxxPersonalityABI(Image, Source))
+    return *Runtime;
+  const auto Handler = coff_loader::getCheckedX86CxxHandlerABI(Image, Source);
+  if (!Handler || Handler->CookieGuards.empty())
+    return rejectIR("C++ runtime has no checked original dispatch");
+  if (auto Error = validateCOFFRegistrationCxxIR(Function, Source, Image))
+    return std::move(Error);
+  return Handler->Dispatch;
+}
+} // namespace neverd::coff_registration

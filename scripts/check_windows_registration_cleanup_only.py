@@ -26,6 +26,22 @@ ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "unittests/lift/eh/fixtures/registration_cleanup_only.cpp"
 SHARED_SOURCE = ROOT / "unittests/lift/eh/fixtures/registration_cleanup_shared.s"
 STACK_SOURCE = ROOT / "unittests/lift/eh/fixtures/registration_cleanup_stack_aligned.s"
+GUARDED_SOURCE = ROOT / "unittests/lift/eh/fixtures/registration_cleanup_guarded.s"
+
+
+def reject_cookie_success(pe: PE32) -> bytes:
+    """Force the authored checker's normal success edge into its failure exit."""
+    config, size = pe.directory(10)
+    if not config or size < 64:
+        raise ValueError("guarded fixture lost its load-config cookie")
+    cookie = pe.u32(pe.raw(config + 60))
+    pattern = b"\x3b\x0d" + struct.pack("<I", cookie) + b"\x75\x02\xf3\xc3"
+    if pe.data.count(pattern) != 1:
+        raise ValueError("guarded fixture has no unique authored checker")
+    changed = bytearray(pe.data)
+    offset = pe.data.index(pattern) + 8
+    changed[offset:offset + 2] = b"\xeb\x00"
+    return bytes(changed)
 
 
 def main() -> int:
@@ -40,6 +56,8 @@ def main() -> int:
                          help="use the authored shared entry/exit parent")
     parents.add_argument("--stack-aligned", action="store_true",
                          help="use the authored MSVC aligned ESP parent")
+    parents.add_argument("--guarded-stack", action="store_true",
+                         help="use the authored aligned ESP parent with GS checks")
     parser.add_argument("--wine", help="optionally execute the generated fixture in Wine")
     parser.add_argument("--wine-prefix", type=Path,
                         help="isolated Wine prefix (default: OUTPUT/wine-prefix)")
@@ -57,7 +75,10 @@ def main() -> int:
     if args.stack_aligned:
         report["stack_source_sha256"] = hashlib.sha256(
             STACK_SOURCE.read_bytes()).hexdigest()
-    authored_parent = args.shared_prologue or args.stack_aligned
+    if args.guarded_stack:
+        report["guarded_source_sha256"] = hashlib.sha256(
+            GUARDED_SOURCE.read_bytes()).hexdigest()
+    authored_parent = args.shared_prologue or args.stack_aligned or args.guarded_stack
 
     def run(command: list[str | Path], extra: dict | None = None) -> None:
         command = list(map(str, command))
@@ -90,11 +111,11 @@ def main() -> int:
                  "-c", SOURCE, "-o", obj])
             shared_objects = []
             if authored_parent:
-                shared = case / ("stack-aligned.obj" if args.stack_aligned
-                                 else "shared.obj")
+                assembly = (GUARDED_SOURCE if args.guarded_stack else
+                            STACK_SOURCE if args.stack_aligned else SHARED_SOURCE)
+                shared = case / (assembly.stem + ".obj")
                 run([args.compiler, "--target=i686-pc-windows-msvc",
-                     "-c", STACK_SOURCE if args.stack_aligned else SHARED_SOURCE,
-                     "-o", shared])
+                     "-c", assembly, "-o", shared])
                 shared_objects = [shared]
             run([args.linker, "/entry:mainCRTStartup", "/nodefaultlib",
                  "/machine:x86", "/subsystem:console", "/fixed:no",
@@ -102,12 +123,15 @@ def main() -> int:
                  *(["/export:cleanup_only_parent"] if authored_parent else []),
                  *libraries])
             record["image_sha256"] = hashlib.sha256(image.read_bytes()).hexdigest()
-            run([args.test_binary.resolve(),
-                 "--gtest_filter=WindowsRegistrationCleanupOnly.*",
+            suite = ("RegistrationCxxGuardedFrame" if args.guarded_stack else
+                     "WindowsRegistrationCleanupOnly")
+            variable = ("NEVERD_REGISTRATION_GUARDED" if args.guarded_stack else
+                        "NEVERD_REGISTRATION_CLEANUP_ONLY")
+            run([args.test_binary.resolve(), "--gtest_filter=" + suite + ".*",
                  "--gtest_output=xml:" + str(xml)],
-                {"NEVERD_REGISTRATION_CLEANUP_ONLY_PE32": str(image),
-                 "NEVERD_REGISTRATION_CLEANUP_ONLY_OUTPUT_PE32": str(product)})
-            if require_test_result(xml) != 1:
+                {variable + "_PE32": str(image),
+                 variable + "_OUTPUT_PE32": str(product)})
+            if require_test_result(xml) != (10 if args.guarded_stack else 1):
                 raise ValueError("cleanup-only source proof missing or skipped")
             record["product_sha256"] = hashlib.sha256(
                 product.read_bytes()).hexdigest()
@@ -122,8 +146,13 @@ def main() -> int:
                 struct.pack_into("<I", changed,
                                  pe.raw(pe.entry(b"cleanup_only_trace")), 3)
                 wrong.write_bytes(changed)
+                variants = [(image, 0), (product, 0), (wrong, 1)]
+                if args.guarded_stack:
+                    failed_cookie = case / "failed-cookie.exe"
+                    failed_cookie.write_bytes(reject_cookie_success(pe))
+                    variants.append((failed_cookie, 3))
                 record["runtime"] = []
-                for original, expected in ((image, 0), (product, 0), (wrong, 1)):
+                for original, expected in variants:
                     rebased = original.with_stem(original.stem + "-rebased")
                     rebased.write_bytes(PE32(original.read_bytes()).rebase(0x500000))
                     for executable in (original, rebased):

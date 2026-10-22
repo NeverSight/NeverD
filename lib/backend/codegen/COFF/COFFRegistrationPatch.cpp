@@ -190,9 +190,10 @@ llvm::Expected<COFFRegistrationPatchUpdate> prepareCOFFRegistrationPatch(
                             "code without a native replacement contract");
           }
       }
-      auto Runtime = coff_loader::getCheckedX86CxxPersonalityABI(Image, *EH);
+      auto Runtime =
+          coff_registration::getCheckedCxxRuntimeIR(*Function, *EH, Image);
       if (!Runtime)
-        return reject("preserved C++ CRT dispatch has no original ABI");
+        return Runtime.takeError();
       for (const auto &[Entry, Generated] : Mappings)
         for (const auto &Range : Runtime->CodeRanges)
           if (ExceptionAddressRange{Entry, Entry + 5}.overlaps(Range))

@@ -1985,7 +1985,8 @@ Source execution order and full control flow remain the producer/replay owner's
 obligation. COFF source-segment replay has an explicit retained-C++ cookie mode,
 returns exact call bindings only after complete replay, and keeps SEH's elided
 check policy separate. The C++ control consumer uses those bindings for ordinary
-calls; guarded installation still requires independent control/frame integration.
+calls and separately authenticates retained guarded checks; full frame and
+installation validation remain subsequent obligations.
 `RegistrationCallEffects` compares retained effects with fresh original-callee
 proofs for native call preflight and cleanup coverage. It binds the target and
 stack cleanup plus every object, image, physical caller-PC write and executed-code
@@ -2005,8 +2006,13 @@ failure suppresses the complete module because native calls and runtime edges
 have already been changed. Deferred checks are cleared on every exit, including
 failure and emitter reuse. Catches, incoming caller-frame accesses and direct CRT
 throw calls remain excluded from this guarded producer. The loader's unguarded
-personality API is unchanged. COFF control/table/handler/install gates still
-reject guarded output until they independently replay the complete current proof.
+personality API is unchanged. COFF independently rebuilds LowIR/MedIR from the
+current input bytes, checks the complete control graph and ordered cleanup calls,
+then supplies its own ephemeral bindings to the same guarded frame proof.
+Table, handler and installation consumers obtain conditional runtime permission
+only through that complete current proof. Edited IR cannot reuse a previous
+producer or compiler receipt. The image/symbol-only personality resolver remains
+unguarded; decorated source declarations preserve the exact runtime identity.
 `COFFTrampolineRegions` resolves authenticated source entries across executable
 sections, including earlier generated code, with unique virtual/raw ownership
 and unchanged input bytes. A second reconstruction repeats all source and LLVM

@@ -6547,6 +6547,12 @@ The cleanup-only PE32 qualification script accepts `--stack-aligned` for the
 authored ESP parent. Its ordinary and register-written state forms must pass
 LLVM, COFF installation and optional O0/O1 Wine checks at preferred and rebased
 addresses; the changed-trace control must still fail.
+Use `--guarded-stack` for the authored parent with retained normal-path cookie
+checking and a guarded original C++ handler. Its ten native/installation tests
+run at O0 and O1; optional Wine checks also force the retained checker's success
+edge into its failure exit, which must return three at both preferred and rebased
+addresses. The generated parent must still return normally, unwind both objects
+in order and reach the caller's catch. These checks execute only authored fixtures.
 `RegistrationRealignment.EntryRegisterSavesPreserveTheAlignedCookie` and
 `EntrySavesAlsoPreserveTheESIBasedCookie` require entry-register saves in the
 independent EBP coordinate to preserve the aligned C++ cookie proof. Short and
@@ -6793,8 +6799,14 @@ native producer, verifies the final LLVM module and compiles a cloned COFF objec
 Current cookie-word/argument changes, original-VA global aliases, extra/deleted
 calls, missing cleanup coverage and stale callee effects refuse. A bad generated
 cookie rejects the whole module; reusing that emitter for the valid source must
-succeed. The O0/O1 fixture profiles exercise the same checks. Independent guarded
-installation remains rejected; object compilation is not runtime qualification.
+succeed. The O0/O1 fixture profiles exercise the same checks. Independent COFF
+source/control/frame replay, table and handler receipts, installation and final
+PE validation use the authored fixture. Verifier-clean changes to retained
+checks, cookie words and aliases, cleanup ordering/arguments, call metadata and
+unknown calls must fail at every installation gate even with unchanged compiled
+bytes. `NEVERD_REGISTRATION_GUARDED_OUTPUT_PE32` optionally saves the installed
+image for separate authored runtime qualification; compilation alone is not
+runtime qualification.
 `RegistrationFrameStores` and `RegistrationFrameTaint` test bounded LLVM spill
 proofs, joins, backedges, partial writes and exhausted budgets. Loader tests keep
 independent SafeSEH/code references and real function boundaries while excluding
