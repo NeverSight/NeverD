@@ -814,11 +814,12 @@ TEST(SymMemoryPreservation, LastOwnerCacheRetirementHasTheSameBudget) {
     EXPECT_EQ(Witness.load(Absolute, 8), AV);
   }
   Keep.MaxWork = 30;
+  const auto SuccessNodes = C.numNodes(), SuccessVars = C.numVars();
   S.clobberMemory(Keep);
   ASSERT_EQ(Keep.Status, SymMemoryPreservationStatus::Applied);
   EXPECT_EQ(Keep.WorkUsed, 30u);
-  EXPECT_EQ(C.numNodes(), Nodes);
-  EXPECT_EQ(C.numVars(), Vars);
+  EXPECT_EQ(C.numNodes(), SuccessNodes);
+  EXPECT_EQ(C.numVars(), SuccessVars);
   EXPECT_EQ(S.numLiveBytes(), 0u);
   EXPECT_NE(S.load(P, 8), PV);
   EXPECT_NE(S.load(Q, 8), QV);
