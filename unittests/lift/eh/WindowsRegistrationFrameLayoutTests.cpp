@@ -50,3 +50,47 @@ TEST(WindowsRegistrationFrameLayout, PreservesEveryProvedPhysicalResidue) {
   EXPECT_FALSE(alignX86RegistrationOffset(INT64_MIN, 64, uint32_t(-64)));
   EXPECT_FALSE(alignX86RegistrationOffset(4, 63, uint32_t(-32)));
 }
+
+TEST(WindowsRegistrationFrameLayout, RequiresCompleteStackAlignedCoordinates) {
+  ExceptionFunction EH;
+  EH.CodeRange = {0x401000, 0x401100};
+  EH.Encoding = ExceptionEncoding::X86CxxFuncInfo;
+  EH.Personality = ExceptionPersonality::CxxFrameHandler3;
+  EH.Cxx.emplace();
+  auto &Chain = EH.Registration.emplace();
+  Chain.RegistrationOffset = -12;
+  Chain.TryLevelOffset = -4;
+  Chain.SeededTryLevel = -1;
+  Chain.RealignedFrame =
+      RegistrationRealignedFrame{4, 0x401003, 16, 72, -72, 0};
+  RegistrationStateAnalysis State;
+  State.Complete = State.RegistrationLifetimeComplete =
+      State.ChainOperationsComplete = true;
+  for (unsigned Mutation = 0; Mutation != 8; ++Mutation) {
+    auto Changed = EH;
+    auto Proof = State;
+    auto &Frame = *Changed.Registration->RealignedFrame;
+    if (Mutation == 1)
+      Frame.BaseOffset -= 4;
+    if (Mutation == 2)
+      Frame.SavedParentFrameOffset = -20;
+    if (Mutation == 3)
+      ++Frame.DefinitionVA;
+    if (Mutation == 4)
+      Frame.Alignment = 3;
+    if (Mutation == 5)
+      Frame.BaseRegister = 7;
+    if (Mutation == 6)
+      Proof.Complete = false;
+    if (Mutation == 7)
+      Changed.Cxx->TryBlocks.emplace_back();
+    const auto Coordinate =
+        realignedRegistrationFrameCoordinate(Changed, &Proof);
+    ASSERT_EQ(bool(Coordinate), Mutation == 0);
+    if (Coordinate) {
+      EXPECT_EQ(Coordinate->EntryOffset, -4);
+      EXPECT_EQ(Coordinate->Alignment, 16u);
+      EXPECT_EQ(Coordinate->AlignedOffset, 0);
+    }
+  }
+}

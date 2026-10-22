@@ -6521,6 +6521,19 @@ The distinct source call receipt alone does not grant native EH lowering.
 `CxxEAXHelperProjectsItsPhysicalFrameBeforeSSA` also checks all 24 helper forms
 through MedIR: the first stack argument, complete frame extent and ordered
 stack writes, including overlapping saves and both return-PC stores.
+`RegistrationRealignedLayout.ProvesStackBasedMSVCNodeIndependentlyOfEBP`
+covers alignment, allocation encoding, preserved-register pushes, optional
+cookies and both chain-publication encodings. Changed nodes, coordinates and
+ownership must refuse. `RegistrationRealignment.StackAlignedLocalsKeepEntryEBPIndependent`
+replays the separate entry and aligned frames; its mutation companion rejects
+changed source operations and catch continuations. The frame suites and
+`COFFExceptionIR.LLVMCRealignedFrameKeepsItsEstablisherCoordinates` cover the
+consumers, including ESP annotations without an invented saved-parent slot.
+The cleanup-only PE32 qualification script accepts `--stack-aligned` for the
+authored ESP parent. Its ordinary and register-written state forms must pass
+LLVM, COFF installation and optional O0/O1 Wine checks at preferred and rebased
+addresses; the changed-trace control must still fail.
+
 `CxxPhysicalEntryDoesNotRequireTheRemainingStateGraph` repeats the 24 forms
 with a runtime state write: the locally authenticated entry still roots the
 stack argument, while source state, parent ABI and native frame qualification
@@ -6573,8 +6586,9 @@ words inside instructions, with stated, exported, relocated, unreachable and
 explicit-control-entry counterexamples. `CxxEntryAlignment*` checks twenty
 alignment/allocation/immediate-width cases, all eight saved-register subsets
 with matching and mismatched node displacements, adjacent independently
-installed records, and fifteen incomplete or changed-prefix cases without
-granting fixed EBP slots or a verified native entry.
+installed records, and fifteen incomplete or changed-prefix cases. Complete
+installing records authenticate their function entries and aligned ESP
+coordinates; fixed EBP slots and native rewrite authority remain separate.
 `FunctionDiscoveryAlignment.RawDataPointerCandidatesRemainGuesses` checks
 COFF, ELF and Mach-O across x86, x64, ARM32 and ARM64, including existing
 symbols, relocation-slot order and later confirmation. Run these with

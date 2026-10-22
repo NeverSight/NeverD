@@ -69,8 +69,11 @@ findFrameSlotStores(const BinaryImage &Img, const ExceptionAddressRange &Range,
     const unsigned Mod = ModRM >> 6;
     const uint64_t DispBytes = Mod == 1 ? 1 : Mod == 2 ? 4 : 0;
     const uint64_t ImmediateBytes = RegisterZero ? 0 : Width;
+    const uint64_t SIBBytes = BaseRegister == 4 ? 1 : 0;
     if ((!RegisterZero && (ModRM & 0x38)) || (ModRM & 7) != BaseRegister ||
-        !DispBytes || Opcode + 2 + DispBytes + ImmediateBytes > End)
+        !DispBytes ||
+        Opcode + 2 + SIBBytes + DispBytes + ImmediateBytes > End ||
+        (SIBBytes && Data[Opcode + 2] != 0x24))
       continue;
     if (RegisterZero) {
       const unsigned Register = (ModRM >> 3) & 7;
@@ -83,11 +86,12 @@ findFrameSlotStores(const BinaryImage &Img, const ExceptionAddressRange &Range,
           (I >= Begin + 3 && Data[I - 3] == 0x66))
         continue;
     }
-    const uint64_t Immediate = Opcode + 2 + DispBytes;
+    const uint64_t DisplacementAt = Opcode + 2 + SIBBytes;
+    const uint64_t Immediate = DisplacementAt + DispBytes;
     const int64_t Displacement =
         int64_t(BaseOffset) + (DispBytes == 1
-                                   ? int8_t(Data[Opcode + 2])
-                                   : readLE<int32_t>(Data + Opcode + 2));
+                                   ? int8_t(Data[DisplacementAt])
+                                   : readLE<int32_t>(Data + DisplacementAt));
     if (Displacement < INT32_MIN || Displacement > INT32_MAX)
       continue;
     const int32_t Value = RegisterZero ? 0

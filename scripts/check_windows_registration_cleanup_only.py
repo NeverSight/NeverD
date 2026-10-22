@@ -25,6 +25,7 @@ else:
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "unittests/lift/eh/fixtures/registration_cleanup_only.cpp"
 SHARED_SOURCE = ROOT / "unittests/lift/eh/fixtures/registration_cleanup_shared.s"
+STACK_SOURCE = ROOT / "unittests/lift/eh/fixtures/registration_cleanup_stack_aligned.s"
 
 
 def main() -> int:
@@ -34,8 +35,11 @@ def main() -> int:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--compiler", default="clang++")
     parser.add_argument("--linker", default="lld-link")
-    parser.add_argument("--shared-prologue", action="store_true",
-                        help="use the authored shared entry/exit parent")
+    parents = parser.add_mutually_exclusive_group()
+    parents.add_argument("--shared-prologue", action="store_true",
+                         help="use the authored shared entry/exit parent")
+    parents.add_argument("--stack-aligned", action="store_true",
+                         help="use the authored MSVC aligned ESP parent")
     parser.add_argument("--wine", help="optionally execute the generated fixture in Wine")
     parser.add_argument("--wine-prefix", type=Path,
                         help="isolated Wine prefix (default: OUTPUT/wine-prefix)")
@@ -50,6 +54,10 @@ def main() -> int:
     if args.shared_prologue:
         report["shared_source_sha256"] = hashlib.sha256(
             SHARED_SOURCE.read_bytes()).hexdigest()
+    if args.stack_aligned:
+        report["stack_source_sha256"] = hashlib.sha256(
+            STACK_SOURCE.read_bytes()).hexdigest()
+    authored_parent = args.shared_prologue or args.stack_aligned
 
     def run(command: list[str | Path], extra: dict | None = None) -> None:
         command = list(map(str, command))
@@ -78,18 +86,20 @@ def main() -> int:
             run([args.compiler, "--target=i686-pc-windows-msvc",
                  "-fms-extensions", "-fexceptions", "-fcxx-exceptions",
                  "-fno-omit-frame-pointer", "-" + optimization,
-                 *(["-DNEVERD_SHARED_PROLOGUE"] if args.shared_prologue else []),
+                 *(["-DNEVERD_SHARED_PROLOGUE"] if authored_parent else []),
                  "-c", SOURCE, "-o", obj])
             shared_objects = []
-            if args.shared_prologue:
-                shared = case / "shared.obj"
+            if authored_parent:
+                shared = case / ("stack-aligned.obj" if args.stack_aligned
+                                 else "shared.obj")
                 run([args.compiler, "--target=i686-pc-windows-msvc",
-                     "-c", SHARED_SOURCE, "-o", shared])
+                     "-c", STACK_SOURCE if args.stack_aligned else SHARED_SOURCE,
+                     "-o", shared])
                 shared_objects = [shared]
             run([args.linker, "/entry:mainCRTStartup", "/nodefaultlib",
                  "/machine:x86", "/subsystem:console", "/fixed:no",
                  "/dynamicbase:no", "/out:" + str(image), obj, *shared_objects,
-                 *(["/export:cleanup_only_parent"] if args.shared_prologue else []),
+                 *(["/export:cleanup_only_parent"] if authored_parent else []),
                  *libraries])
             record["image_sha256"] = hashlib.sha256(image.read_bytes()).hexdigest()
             run([args.test_binary.resolve(),

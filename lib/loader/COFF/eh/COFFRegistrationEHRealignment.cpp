@@ -11,14 +11,135 @@
 #include "neverd/loader/Limits.h"
 
 #include <algorithm>
+#include <initializer_list>
+#include <vector>
 
 namespace neverd::coff_loader::registration_detail {
 
-/// Authenticate LLVM's realigned ESI frame and the complete publication of
-/// its C++ registration node. This proves coordinates, not CFG transfers.
+namespace {
+
+/// MSVC retains entry EBP while constructing its three-word node below an
+/// independently aligned ESP. Do not infer their relationship from a state
+/// literal or an FS read: authenticate the entire straight-line publication.
+bool proveStackRealignedCxxRegistrationLayout(const BinaryImage &Img,
+                                              const InstallSite &Site,
+                                              RegistrationChainInfo &Chain) {
+  const size_t Size = std::min<uint64_t>(
+      Site.Range.size(),
+      ::neverd::limits::loader::
+          kCOFFRegistrationEHRealignmentProveRealignedCxxRegistrationLayoutSizeMinArgument2);
+  const uint8_t *P = Img.readVA(Site.Range.Begin, Size);
+  if (!P || Site.HandlerVA > UINT32_MAX)
+    return false;
+  size_t Cursor = 0;
+  auto Bytes = [&](std::initializer_list<uint8_t> Expected) {
+    if (Cursor > Size || Expected.size() > Size - Cursor ||
+        !std::equal(Expected.begin(), Expected.end(), P + Cursor))
+      return false;
+    Cursor += Expected.size();
+    return true;
+  };
+  if (Size >= 2 && P[0] == 0x8b && P[1] == 0xff)
+    Cursor = 2;
+  if (!Bytes({0x55}) || Cursor + 2 > Size ||
+      !((P[Cursor] == 0x8b && P[Cursor + 1] == 0xec) ||
+        (P[Cursor] == 0x89 && P[Cursor + 1] == 0xe5)))
+    return false;
+  Cursor += 2;
+  const va_t Definition = Site.Range.Begin + Cursor;
+  if (Cursor + 3 > Size || P[Cursor + 1] != 0xe4)
+    return false;
+  uint32_t Mask = 0;
+  if (P[Cursor] == 0x83) {
+    Mask = uint32_t(int32_t(int8_t(P[Cursor + 2])));
+    Cursor += 3;
+  } else if (P[Cursor] == 0x81 && Cursor + 6 <= Size) {
+    Mask = readLE<uint32_t>(P + Cursor + 2);
+    Cursor += 6;
+  } else
+    return false;
+  const uint32_t Alignment = uint32_t{0} - Mask;
+  if (Alignment < limits::kMinRegistrationFrameAlignment ||
+      Alignment > limits::kMaxRegistrationFrameAlignment ||
+      (Alignment & (Alignment - 1)) || !Bytes({0x6a, 0xff, 0x68}) ||
+      Cursor + 4 > Size || readLE<uint32_t>(P + Cursor) != Site.HandlerVA)
+    return false;
+  std::vector<va_t> AddressOperands{Site.Range.Begin + Cursor};
+  Cursor += 4;
+  if (Site.InstallVA != Site.Range.Begin + Cursor ||
+      !(Bytes({0x64, 0xa1, 0, 0, 0, 0}) ||
+        Bytes({0x64, 0x8b, 0x05, 0, 0, 0, 0})) ||
+      !Bytes({0x50}) || Cursor + 3 > Size)
+    return false;
+  uint32_t Allocation = 0;
+  if (P[Cursor] == 0x83 && P[Cursor + 1] == 0xec &&
+      int8_t(P[Cursor + 2]) >= 0) {
+    Allocation = P[Cursor + 2];
+    Cursor += 3;
+  } else if (Cursor + 6 <= Size && P[Cursor] == 0x81 && P[Cursor + 1] == 0xec) {
+    Allocation = readLE<uint32_t>(P + Cursor + 2);
+    Cursor += 6;
+  } else
+    return false;
+  if (Allocation > limits::kMaxSourceCallBorrowedBytes)
+    return false;
+  unsigned Saved = 0, SavedBytes = 0;
+  while (Cursor < Size &&
+         (P[Cursor] == 0x53 || P[Cursor] == 0x56 || P[Cursor] == 0x57)) {
+    const unsigned Bit = 1u << (P[Cursor] - 0x50);
+    if (Saved & Bit)
+      return false;
+    Saved |= Bit;
+    SavedBytes += 4;
+    ++Cursor;
+  }
+  unsigned CookieBytes = 0;
+  if (Cursor < Size && P[Cursor] == 0xa1) {
+    if (Cursor + 8 > Size ||
+        !((P[Cursor + 5] == 0x33 && P[Cursor + 6] == 0xc4) ||
+          (P[Cursor + 5] == 0x31 && P[Cursor + 6] == 0xe0)) ||
+        P[Cursor + 7] != 0x50)
+      return false;
+    AddressOperands.push_back(Site.Range.Begin + Cursor + 1);
+    Cursor += 8;
+    CookieBytes = 4;
+  }
+  const uint64_t Depth = uint64_t(Allocation) + 12 + SavedBytes + CookieBytes;
+  if (Depth > limits::kMaxSourceCallBorrowedBytes || Depth > INT32_MAX ||
+      Cursor + 4 > Size || P[Cursor] != 0x8d || P[Cursor + 2] != 0x24)
+    return false;
+  int32_t Node = -1;
+  if (P[Cursor + 1] == 0x44) {
+    Node = int8_t(P[Cursor + 3]);
+    Cursor += 4;
+  } else if (P[Cursor + 1] == 0x84 && Cursor + 7 <= Size) {
+    Node = readLE<int32_t>(P + Cursor + 3);
+    Cursor += 7;
+  }
+  const auto Store =
+      getX86RegistrationChainStoreSize(Img, Site.Range.Begin + Cursor);
+  if (Node < 0 || uint64_t(Node) != Depth - 12 || !Store ||
+      *Store > Size - Cursor || (*Store == 7 && P[Cursor + 2] != 0x05) ||
+      !readImmutablePE32CodeBytes(Img, Site.Range.Begin, Cursor + *Store,
+                                  AddressOperands))
+    return false;
+  Chain.RealignedFrame = RegistrationRealignedFrame{
+      4, Definition, Alignment, uint32_t(Depth), -int32_t(Depth), 0};
+  Chain.RegistrationOffset = -12;
+  Chain.TryLevelOffset = -4;
+  Chain.ChainInstallVA = Site.Range.Begin + Cursor;
+  return true;
+}
+
+} // namespace
+
+/// Authenticate a supported realigned local frame and complete C++ node
+/// publication. This proves coordinates, not CFG transfers.
 bool proveRealignedCxxRegistrationLayout(const BinaryImage &Img,
                                          const InstallSite &Site,
                                          RegistrationChainInfo &Chain) {
+  if (proveStackRealignedCxxRegistrationLayout(Img, Site, Chain))
+    return true;
   const size_t Size = std::min<uint64_t>(
       Site.Range.size(),
       ::neverd::limits::loader::
@@ -31,8 +152,10 @@ bool proveRealignedCxxRegistrationLayout(const BinaryImage &Img,
     return false;
   const uint32_t Alignment = uint32_t(-int32_t(int8_t(P[8])));
   const uint32_t Allocation = readLE<uint32_t>(P + 11);
-  if (Alignment < 4 || Alignment > 128 || (Alignment & (Alignment - 1)) ||
-      Allocation < 20 || Allocation > limits::kMaxSourceCallBorrowedBytes)
+  if (Alignment < limits::kMinRegistrationFrameAlignment ||
+      Alignment > limits::kMaxRegistrationFrameAlignment ||
+      (Alignment & (Alignment - 1)) || Allocation < 20 ||
+      Allocation > limits::kMaxSourceCallBorrowedBytes)
     return false;
 
   size_t Cursor = 17;
@@ -90,6 +213,7 @@ bool proveRealignedCxxRegistrationLayout(const BinaryImage &Img,
     return false;
   const auto Link = Operand(0x8d, NodeRegister);
   const auto Handler = Operand(0xc7, 0);
+  const va_t HandlerOperand = Site.Range.Begin + Cursor;
   const auto HandlerVA = Immediate();
   if (!SavedParent || !SavedSP || !State || !Seed || !Link || !Handler ||
       !HandlerVA || *Seed != UINT32_MAX || *HandlerVA != Site.HandlerVA ||
@@ -119,7 +243,9 @@ bool proveRealignedCxxRegistrationLayout(const BinaryImage &Img,
   if (!Previous || *Previous != *Link || !InstallSize ||
       Cursor + *InstallSize > Size ||
       (*InstallSize == 6 && NodeRegister != 0) ||
-      (*InstallSize == 7 && ((P[Cursor + 2] >> 3) & 7) != NodeRegister))
+      (*InstallSize == 7 && ((P[Cursor + 2] >> 3) & 7) != NodeRegister) ||
+      !readImmutablePE32CodeBytes(Img, Site.Range.Begin, Cursor + *InstallSize,
+                                  {HandlerOperand}))
     return false;
 
   Chain.RealignedFrame = RegistrationRealignedFrame{

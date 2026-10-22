@@ -1851,6 +1851,16 @@ stack proof, outlining and security-check ABI under `lib/backend/llvm/X86`.
 used by both SEH and C++: preflight binds source memory occurrences, installation
 captures the physical entry frame in an escaped slot, and rollback restores
 pointers, metadata, volatility and newly introduced declarations.
+`COFFRegistrationEHRealignment` also authenticates MSVC's ESP-based C++ node
+publication. Its complete immutable prefix separates entry EBP from
+`align(entrySP - 4)` and records the full post-prefix ESP depth. ESP/SIB state
+stores remain candidate observations; LowIR must replay their actual frame
+address, value and lifetime. Cleanup-only functions can project this aligned
+runtime frame after the complete state proof. Catch continuations remain
+unsupported because restoring the independent entry EBP requires another
+physical contract. Call, object, cookie and native output qualifications retain
+their separate requirements.
+
 The `RegistrationSharedCall` prefix query independently replays the complete rooted
 C++ entry against the current immutable caller and helper. MedIR physical
 prologue projection consumes this local proof even when the remaining state

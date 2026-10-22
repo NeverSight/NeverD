@@ -219,6 +219,7 @@ void RegistrationStateSolver::dispatch(
           int64_t(Offset) != int64_t(*Chain.RegistrationOffset) - 4 &&
           Offset != *Chain.TryLevelOffset &&
           (!Chain.RealignedFrame ||
+           !Chain.RealignedFrame->hasSavedParentFrame() ||
            Offset != Chain.RealignedFrame->SavedParentFrameOffset))
         It->second = registration_state::join(It->second, {});
       if (It->second == FrameValue{})

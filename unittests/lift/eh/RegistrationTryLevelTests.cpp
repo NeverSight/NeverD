@@ -3593,13 +3593,19 @@ TEST(RegistrationTryLevel, CxxEntryAlignmentDoesNotBorrowAPrecedingGuess) {
         EXPECT_EQ(EH->PersonalityVA, kText + 0x200);
         ASSERT_TRUE(EH->Registration);
         EXPECT_EQ(EH->Registration->ChainInstallVA,
-                  kText + 0x20 + (Wide ? 16 : 13));
-        // Identifying an actual entry grants neither a fixed EBP coordinate
-        // nor the distinct realigned runtime-frame protocol.
-        EXPECT_FALSE(EH->Registration->RegistrationOffset);
-        EXPECT_FALSE(EH->Registration->TryLevelOffset);
-        EXPECT_FALSE(EH->Registration->RealignedFrame);
-        EXPECT_FALSE(Image.VerifiedFunctionEntries.count(kText + 0x20));
+                  kText + 0x20 + (Wide ? 47 : 38));
+        EXPECT_EQ(EH->Registration->RegistrationOffset, -12);
+        EXPECT_EQ(EH->Registration->TryLevelOffset, -4);
+        ASSERT_TRUE(EH->Registration->RealignedFrame);
+        const auto &Frame = *EH->Registration->RealignedFrame;
+        EXPECT_EQ(Frame.BaseRegister, 4u);
+        EXPECT_EQ(Frame.Alignment, Alignment);
+        EXPECT_EQ(Frame.DefinitionVA, kText + 0x23);
+        EXPECT_EQ(Frame.AllocationBytes, Allocation + 28);
+        EXPECT_EQ(Frame.BaseOffset, -int32_t(Allocation + 28));
+        // The complete installing record authenticates the function entry;
+        // its calling convention and native frame still need their proofs.
+        EXPECT_TRUE(Image.VerifiedFunctionEntries.count(kText + 0x20));
       }
 }
 
@@ -3621,10 +3627,17 @@ TEST(RegistrationTryLevel, CxxEntryAlignmentCountsTheActualSavedWords) {
           ASSERT_TRUE(EH);
           EXPECT_EQ(EH->CodeRange.Begin, kText + 0x20);
           ASSERT_TRUE(EH->Registration);
-          EXPECT_FALSE(EH->Registration->RegistrationOffset);
-          EXPECT_FALSE(EH->Registration->TryLevelOffset);
-          EXPECT_FALSE(EH->Registration->RealignedFrame);
-          EXPECT_FALSE(Image.VerifiedFunctionEntries.count(kText + 0x20));
+          EXPECT_EQ(EH->Registration->RegistrationOffset, -12);
+          EXPECT_EQ(EH->Registration->TryLevelOffset, -4);
+          ASSERT_TRUE(EH->Registration->RealignedFrame);
+          unsigned SavedWords = 0;
+          for (unsigned I = 0; I != 3; ++I)
+            SavedWords += (Saves >> I) & 1;
+          const uint32_t Depth = Allocation + 12 + 4 * (SavedWords + 1);
+          EXPECT_EQ(EH->Registration->RealignedFrame->AllocationBytes, Depth);
+          EXPECT_EQ(EH->Registration->RealignedFrame->BaseOffset,
+                    -int32_t(Depth));
+          EXPECT_TRUE(Image.VerifiedFunctionEntries.count(kText + 0x20));
         }
       }
 }
@@ -3647,7 +3660,8 @@ TEST(RegistrationTryLevel, CxxEntryAlignmentSeparatesAdjacentRegistrations) {
   ASSERT_TRUE(First);
   ASSERT_TRUE(Second);
   EXPECT_EQ(First->CodeRange.Begin, kText + 0x20);
-  EXPECT_EQ(First->CodeRange.End, kText + 0x80);
+  EXPECT_EQ(First->CodeRange.End,
+            kText + 0x58); // Complete RET, before padding.
   EXPECT_EQ(First->PersonalityVA, kText + 0x200);
   EXPECT_EQ(Second->CodeRange.Begin, kText + 0x80);
   EXPECT_EQ(Second->PersonalityVA, kText + 0x220);

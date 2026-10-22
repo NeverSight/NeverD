@@ -437,7 +437,8 @@ bool RegistrationStateSolver::transferBlock(size_t I, const Domain &Before,
             (Address.Offset != int64_t(*Chain.RegistrationOffset) - 4 ||
              Width != 4))
           Invalidate();
-        if (After.Installed && Chain.RealignedFrame && Address.Offset &&
+        if (After.Installed && Chain.RealignedFrame &&
+            Chain.RealignedFrame->hasSavedParentFrame() && Address.Offset &&
             overlaps(*Address.Offset, Width,
                      Chain.RealignedFrame->SavedParentFrameOffset, 4))
           Invalidate();

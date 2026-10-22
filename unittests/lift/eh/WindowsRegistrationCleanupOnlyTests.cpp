@@ -111,23 +111,38 @@ void checkCleanupOnlyInput(const char *Path, bool RegisterStateWrite) {
     });
     ASSERT_NE(Store, Chain.TryLevelStores.end());
     const va_t Address = Store->StoreVA;
-    const auto *Bytes = Image->readVA(Address, 12);
+    const bool StackBased =
+        Chain.RealignedFrame && Chain.RealignedFrame->BaseRegister == 4;
+    const unsigned StoreSize = StackBased ? 8 : 7;
+    const unsigned Displacement = StackBased ? 3 : 2;
+    const auto *Bytes = Image->readVA(Address, StoreSize + 5);
     ASSERT_TRUE(Bytes);
-    ASSERT_EQ(Store->EndVA - Address, 7u);
+    ASSERT_EQ(Store->EndVA - Address, StoreSize);
     ASSERT_EQ(Bytes[0], 0xc7);
-    ASSERT_EQ(Bytes[1], 0x45);
-    ASSERT_EQ(int8_t(Bytes[2]), Chain.TryLevelOffset);
-    ASSERT_EQ(readLE<uint32_t>(Bytes + 3), uint32_t(Store->Level));
+    ASSERT_EQ(Bytes[1], StackBased ? 0x44 : 0x45);
+    if (StackBased)
+      ASSERT_EQ(Bytes[2], 0x24);
+    ASSERT_EQ((StackBased ? Chain.RealignedFrame->BaseOffset : 0) +
+                  int8_t(Bytes[Displacement]),
+              Chain.TryLevelOffset);
+    ASSERT_EQ(readLE<uint32_t>(Bytes + Displacement + 1),
+              uint32_t(Store->Level));
     // EAX is scratch immediately before the fixture's no-argument throw.
-    ASSERT_EQ(Bytes[7], 0xe8);
+    ASSERT_EQ(Bytes[StoreSize], 0xe8);
     const auto Throw = llvm::find_if(Image->Exports, [](const auto &Entry) {
       return Entry.Name == "cleanup_only_throw";
     });
     ASSERT_NE(Throw, Image->Exports.end());
-    ASSERT_EQ(Address + 12 + int32_t(readLE<uint32_t>(Bytes + 8)), Throw->Addr);
-    const std::vector<uint8_t> Replacement = {
-        0x31,     0xc0, uint8_t(Store->Level ? 0x40 : 0x90), 0x89, 0x45,
-        Bytes[2], 0x90};
+    ASSERT_EQ(Address + StoreSize + 5 +
+                  int32_t(readLE<uint32_t>(Bytes + StoreSize + 1)),
+              Throw->Addr);
+    std::vector<uint8_t> Replacement = {
+        0x31, 0xc0, uint8_t(Store->Level ? 0x40 : 0x90), 0x89,
+        uint8_t(StackBased ? 0x44 : 0x45)};
+    if (StackBased)
+      Replacement.push_back(0x24);
+    Replacement.push_back(Bytes[Displacement]);
+    Replacement.push_back(0x90);
     auto Input = llvm::MemoryBuffer::getFile(Path);
     ASSERT_TRUE(bool(Input));
     const auto Buffer = (*Input)->getBuffer();

@@ -812,31 +812,40 @@ TEST(COFFExceptionIR, LLVMCExceptionAnnotationReadsCanonicalStringsOnly) {
 }
 
 TEST(COFFExceptionIR, LLVMCRealignedFrameKeepsItsEstablisherCoordinates) {
-  llvm::LLVMContext Context;
-  llvm::Module Module("realigned-cxx-frame", Context);
-  Module.setTargetTriple(llvm::Triple("i686-pc-windows-msvc"));
-  auto *Function = llvm::Function::Create(
-      llvm::FunctionType::get(llvm::Type::getVoidTy(Context), false),
-      llvm::GlobalValue::ExternalLinkage, "realigned", Module);
-  llvm::IRBuilder<> Builder(
-      llvm::BasicBlock::Create(Context, "entry", Function));
-  Builder.CreateRetVoid();
-  ExceptionFunction EH;
-  EH.CodeRange = {0x401000, 0x401100};
-  EH.Encoding = ExceptionEncoding::X86CxxFuncInfo;
-  EH.Registration.emplace().RealignedFrame =
-      RegistrationRealignedFrame{6, 0x40100f, 16, 0x270, -0x26c, -20};
-  Function->setMetadata(windows_eh_md::FunctionAttachment,
-                        windows_eh_md::getCanonicalFunctionMetadata(
-                            Context, EH, Arch::X86, BinaryFormat::COFF));
-  const auto Source = emitLLVMC(Module);
-  EXPECT_NE(
-      Source.find("registration.frame: base=esi, definition=0x40100F, "
-                  "alignment=16, allocation=624, establisher_offset=-620, "
-                  "saved_parent_offset=-20"),
-      std::string::npos)
-      << Source;
-  EXPECT_EQ(Source.find("metadata-invalid"), std::string::npos) << Source;
+  for (bool StackBased : {false, true}) {
+    llvm::LLVMContext Context;
+    llvm::Module Module("realigned-cxx-frame", Context);
+    Module.setTargetTriple(llvm::Triple("i686-pc-windows-msvc"));
+    auto *Function = llvm::Function::Create(
+        llvm::FunctionType::get(llvm::Type::getVoidTy(Context), false),
+        llvm::GlobalValue::ExternalLinkage, "realigned", Module);
+    llvm::IRBuilder<> Builder(
+        llvm::BasicBlock::Create(Context, "entry", Function));
+    Builder.CreateRetVoid();
+    ExceptionFunction EH;
+    EH.CodeRange = {0x401000, 0x401100};
+    EH.Encoding = ExceptionEncoding::X86CxxFuncInfo;
+    EH.Registration.emplace().RealignedFrame =
+        StackBased
+            ? RegistrationRealignedFrame{4, 0x401003, 16, 0x40, -0x40, 0}
+            : RegistrationRealignedFrame{6, 0x40100f, 16, 0x270, -0x26c, -20};
+    Function->setMetadata(windows_eh_md::FunctionAttachment,
+                          windows_eh_md::getCanonicalFunctionMetadata(
+                              Context, EH, Arch::X86, BinaryFormat::COFF));
+    const auto Source = emitLLVMC(Module);
+    const auto *Expected =
+        StackBased ? "registration.frame: base=esp, definition=0x401003, "
+                     "alignment=16, allocation=64, establisher_offset=-64, "
+                     "entry_frame=ebp"
+                   : "registration.frame: base=esi, definition=0x40100F, "
+                     "alignment=16, allocation=624, establisher_offset=-620, "
+                     "saved_parent_offset=-20";
+    EXPECT_NE(Source.find(Expected), std::string::npos) << Source;
+    EXPECT_EQ(Source.find("metadata-invalid"), std::string::npos) << Source;
+    if (StackBased)
+      EXPECT_EQ(Source.find("saved_parent_offset="), std::string::npos)
+          << Source;
+  }
 }
 
 TEST(COFFExceptionIR, LLVMCProjectsCanonicalWindowsEHAsCommentsOnly) {

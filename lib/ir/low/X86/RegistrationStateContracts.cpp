@@ -238,7 +238,7 @@ bool RegistrationStateSolver::frameObjectIsDisjointFromAdministration(
   // are runtime administration even when a source store left scalar contents.
   int64_t Administration =
       int64_t(*Chain.RegistrationOffset) - (KnownCxx ? 4 : 8);
-  if (Chain.RealignedFrame)
+  if (Chain.RealignedFrame && Chain.RealignedFrame->hasSavedParentFrame())
     Administration = std::min(
         Administration, int64_t(Chain.RealignedFrame->SavedParentFrameOffset));
   if (Overlaps(Administration,
