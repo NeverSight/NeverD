@@ -25,6 +25,7 @@
 #include "neverd/ir/low/FuncDetector.h"
 #include "neverd/ir/low/RegistrationABI.h"
 #include "neverd/ir/low/RegistrationCxxState.h"
+#include "neverd/ir/low/RegistrationSharedCall.h"
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/ir/med/MedStackAlignment.h"
 #include "neverd/ir/med/X86RegistrationFrame.h"
@@ -2105,6 +2106,59 @@ TEST(RegistrationTryLevel, CxxEAXHelperProjectsItsPhysicalFrameBeforeSSA) {
       }
 }
 
+TEST(RegistrationTryLevel,
+     CxxPhysicalEntryDoesNotRequireTheRemainingStateGraph) {
+  for (bool Wide : {false, true})
+    for (unsigned Variant : {0, 1, 2})
+      for (uint32_t Allocation : {0, 1, 4, 32}) {
+        SCOPED_TRACE(::testing::Message()
+                     << Wide << ' ' << Variant << ' ' << Allocation);
+        auto Image = makeCxxEAXStateImage(Wide, Variant, Allocation);
+        const va_t Entry = kText + 0x20;
+        const va_t Body = Entry + (Wide ? 15 : 12);
+        auto &Bytes = Image.Segments.front().Data;
+        // The entry helper is exact, but a runtime state write in its body
+        // prevents whole-function EH qualification. Its later argument read
+        // still needs the physical EBP = entry ESP - 4 relation.
+        const uint8_t UnknownState[] = {0x8b, 0x45, 0x08, 0x89,
+                                        0x45, 0xfc, 0x90};
+        std::copy(std::begin(UnknownState), std::end(UnknownState),
+                  Bytes.begin() + Body - kText);
+        const uint8_t Tail[] = {0x8b, 0x45, 0x08, 0x5d, 0xc3};
+        std::copy(std::begin(Tail), std::end(Tail),
+                  Bytes.begin() + Body + 28 - kText);
+        Image.ExceptionMetadata = {};
+        coff_loader::parseX86RegistrationExceptions(Image);
+        const auto Low = liftEntry(Image, Entry);
+        ASSERT_TRUE(Low.ExceptionMetadata);
+        ASSERT_TRUE(coff_loader::getCheckedX86CxxPrologueCall(
+            Image, *Low.ExceptionMetadata));
+        ASSERT_TRUE(Low.RegistrationStates);
+        ASSERT_FALSE(Low.RegistrationStates->Complete);
+        const va_t Call = Low.ExceptionMetadata->Registration->ChainInstallVA;
+        LowToMedConverter Converter;
+        Converter.setBinaryImage(&Image);
+        const auto Med = Converter.convert(Low, Arch::X86, BinaryFormat::COFF);
+        ASSERT_TRUE(verifyMedFunc(Med, "incomplete-state-physical-entry"));
+        ASSERT_EQ(Med.Params.size(), 1u);
+        EXPECT_EQ(Med.Params.front().RegOff, kNoParamReg);
+        for (const auto &Block : Med.Blocks)
+          for (const auto &Op : Block.Ops) {
+            EXPECT_FALSE(Op.Addr == Call && Op.Opcode == NdOp::CALL);
+            if (Op.Opcode == NdOp::RETURN) {
+              ASSERT_EQ(Op.NumInputs, 1u);
+              EXPECT_EQ(Op.Inputs[0], Med.Params.front());
+            }
+          }
+        ASSERT_TRUE(Med.RegistrationStates);
+        EXPECT_FALSE(Med.RegistrationStates->Complete);
+        EXPECT_FALSE(Med.RegistrationPhysicalFrame);
+        EXPECT_FALSE(Med.RegistrationCxxEntryPopBytes);
+        EXPECT_FALSE(cxxRegistrationFrameCoordinate(Med));
+        EXPECT_FALSE(getCheckedX86RegistrationCxxParentABI(Low, Image));
+      }
+}
+
 TEST(RegistrationTryLevel, CxxEAXHelperProjectionRechecksTheCurrentEntry) {
   auto Original = makeCxxEAXStateImage(false, 2);
   const auto Proven = liftEntry(Original, kText + 0x20);
@@ -2225,16 +2279,25 @@ TEST(RegistrationTryLevel, CxxEAXHelperProjectionRechecksTheCurrentEntry) {
     }
     if (Mutation != 23)
       EXPECT_FALSE(getCheckedX86RegistrationCxxParentABI(Low, Image));
+    EXPECT_EQ(getCheckedX86RegistrationCxxPrologueCall(Image, Low).has_value(),
+              Mutation == 23);
     LowToMedConverter Converter;
     if (Mutation != 23)
       Converter.setBinaryImage(&Image);
     const auto Med = Converter.convert(Low, Arch::X86, BinaryFormat::COFF);
-    EXPECT_TRUE(
+    const bool KeepsCall =
         std::any_of(Med.Blocks.begin(), Med.Blocks.end(), [&](const auto &B) {
           return std::any_of(B.Ops.begin(), B.Ops.end(), [&](const auto &Op) {
             return Op.Addr == Call && Op.Opcode == NdOp::CALL;
           });
-        }));
+        });
+    // Missing or stale whole-function receipts cannot authorize native EH,
+    // but do not invalidate the independently replayed physical entry. Source
+    // bytes, helper identity, rooted control and current LowIR remain exact.
+    const bool InvalidPrefix = Mutation >= 8 && Mutation <= 23;
+    EXPECT_EQ(KeepsCall, InvalidPrefix);
+    EXPECT_FALSE(Med.RegistrationPhysicalFrame);
+    EXPECT_FALSE(Med.RegistrationCxxEntryPopBytes);
   }
 }
 
@@ -4265,7 +4328,8 @@ TEST(RegistrationTryLevel,
       Text.Flags = Text.Flags | SegmentFlags::Writable;
       break;
     case 6:
-      Image.Sections[0].Flags = Image.Sections[0].Flags | SegmentFlags::Writable;
+      Image.Sections[0].Flags =
+          Image.Sections[0].Flags | SegmentFlags::Writable;
       break;
     case 7:
       Text.Data.pop_back();

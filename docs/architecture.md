@@ -1850,9 +1850,15 @@ stack proof, outlining and security-check ABI under `lib/backend/llvm/X86`.
 `MedLLVMRegistrationIncoming` owns the transactional caller-frame projection
 used by both SEH and C++: preflight binds source memory occurrences, installation
 captures the physical entry frame in an escaped slot, and rollback restores
-pointers, metadata, volatility and newly introduced declarations. The shared
-C++ entry projection in `lib/ir/med/X86/RegistrationEntry.cpp` orders physical
-ECX/EDX and stack words using the LowIR parent's authenticated RET cleanup count.
+pointers, metadata, volatility and newly introduced declarations.
+The `RegistrationSharedCall` prefix query independently replays the complete rooted
+C++ entry against the current immutable caller and helper. MedIR physical
+prologue projection consumes this local proof even when the remaining state
+graph is incomplete, preserving the SP/EBP relation needed for argument
+recovery. The checked prologue-call and native physical-frame consumers still
+require complete source-state and installation receipts.
+The shared C++ entry projection in `lib/ir/med/X86/RegistrationEntry.cpp` orders
+physical ECX/EDX and stack words using the LowIR parent's authenticated RET cleanup count.
 Register inputs retain their proved 8-, 16- or 32-bit width; source operations
 own sign and zero extension, while physical stack slots remain four bytes.
 After materializing implicit ABI uses and native registration exception edges,

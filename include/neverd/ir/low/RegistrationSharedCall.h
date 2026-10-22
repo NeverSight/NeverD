@@ -15,6 +15,14 @@ namespace neverd {
 struct LowFunc;
 struct LowBlock;
 
+/// Recheck the immutable helper and the complete rooted source prefix without
+/// requiring the rest of the function's registration-state graph. This permits
+/// physical dataflow projection only; it grants no callee ABI or native EH
+/// reconstruction receipt.
+std::optional<coff_loader::X86CxxPrologueCall>
+getCheckedX86RegistrationCxxProloguePrefix(const BinaryImage &Image,
+                                           const LowFunc &Source);
+
 /// Bind a complete source frame receipt to its current immutable helper,
 /// rooted entry prefix, decoded boundaries and exact lifted operations.
 /// These queries describe physical calls, never ordinary callee ABIs or

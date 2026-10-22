@@ -6521,9 +6521,15 @@ The distinct source call receipt alone does not grant native EH lowering.
 `CxxEAXHelperProjectsItsPhysicalFrameBeforeSSA` also checks all 24 helper forms
 through MedIR: the first stack argument, complete frame extent and ordered
 stack writes, including overlapping saves and both return-PC stores.
+`CxxPhysicalEntryDoesNotRequireTheRemainingStateGraph` repeats the 24 forms
+with a runtime state write: the locally authenticated entry still roots the
+stack argument, while source state, parent ABI and native frame qualification
+remain incomplete.
 `CxxEAXHelperProjectionRechecksTheCurrentEntry` rejects stale bytes, allocation,
 handler, cookie, fixups, source operations, boundaries, entry ownership and
-receipts, including missing, repeated or contradictory installation events.
+native receipts, including missing, repeated or contradictory installation
+events. Receipt-only mutations preserve the independently checked physical
+prefix while retaining native rejection.
 Incomplete physical frame bindings must keep native EH admission closed.
 `CxxSharedEpilogueProjectsThePhysicalReturnBeforeSSA` checks the returned scalar,
 restored ESP and chain removal for 32 source forms, including caller argument

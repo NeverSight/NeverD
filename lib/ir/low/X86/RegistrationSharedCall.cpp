@@ -85,19 +85,37 @@ bool matchesEntry(const BinaryImage &Image, const LowFunc &Source,
 } // namespace
 
 std::optional<coff_loader::X86CxxPrologueCall>
-getCheckedX86RegistrationCxxPrologueCall(const BinaryImage &Image,
-                                         const LowFunc &Source) {
+getCheckedX86RegistrationCxxProloguePrefix(const BinaryImage &Image,
+                                           const LowFunc &Source) {
   if (Image.Arch != Arch::X86 || !Image.isCOFF() || !Source.ExceptionMetadata ||
-      !Source.RegistrationStates ||
-      !Source.RegistrationStates->Complete ||
-      !Source.RegistrationStates->CallbackStatesComplete ||
-      !Source.RegistrationStates->RegistrationLifetimeComplete ||
-      !Source.RegistrationStates->ChainOperationsComplete ||
-      !Source.RegistrationStates->CxxPrologue ||
       Source.Blocks.size() > limits::kMaxRegistrationEHRecords)
     return std::nullopt;
   const auto Call = coff_loader::getCheckedX86CxxPrologueCall(
       Image, *Source.ExceptionMetadata);
+  if (!Call)
+    return std::nullopt;
+  const LowBlock *Entry = nullptr;
+  for (const auto &Block : Source.Blocks)
+    if (Block.StartAddr == Source.Entry) {
+      if (Entry)
+        return std::nullopt;
+      Entry = &Block;
+    }
+  return Entry && matchesEntry(Image, Source, *Entry, *Call) ? Call
+                                                             : std::nullopt;
+}
+
+std::optional<coff_loader::X86CxxPrologueCall>
+getCheckedX86RegistrationCxxPrologueCall(const BinaryImage &Image,
+                                         const LowFunc &Source) {
+  if (Image.Arch != Arch::X86 || !Image.isCOFF() || !Source.ExceptionMetadata ||
+      !Source.RegistrationStates || !Source.RegistrationStates->Complete ||
+      !Source.RegistrationStates->CallbackStatesComplete ||
+      !Source.RegistrationStates->RegistrationLifetimeComplete ||
+      !Source.RegistrationStates->ChainOperationsComplete ||
+      !Source.RegistrationStates->CxxPrologue)
+    return std::nullopt;
+  const auto Call = getCheckedX86RegistrationCxxProloguePrefix(Image, Source);
   if (!Call)
     return std::nullopt;
   const auto &Receipt = *Source.RegistrationStates->CxxPrologue;
@@ -108,9 +126,7 @@ getCheckedX86RegistrationCxxPrologueCall(const BinaryImage &Image,
       Receipt.EndAddress != Call->Caller.End ||
       Receipt.HelperVA != Call->Helper.Begin ||
       Receipt.StackOffset != Call->PostCallStackOffset ||
-      Entry == Source.Blocks.end() ||
-      !matchesEntry(Image, Source, *Entry, *Call) ||
-      Entry->Ops.back().Seq != Receipt.OpSeq ||
+      Entry == Source.Blocks.end() || Entry->Ops.back().Seq != Receipt.OpSeq ||
       !hasChainOccurrence(Source, Call->CallVA, Call->Caller.End, Receipt.OpSeq,
                           RegistrationChainAccess::Kind::Install))
     return std::nullopt;

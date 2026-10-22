@@ -16,7 +16,7 @@ namespace neverd::x86_registration {
 
 std::optional<LowFunc> projectCxxPrologue(const BinaryImage &Image,
                                           const LowFunc &Source) {
-  const auto Call = getCheckedX86RegistrationCxxPrologueCall(Image, Source);
+  const auto Call = getCheckedX86RegistrationCxxProloguePrefix(Image, Source);
   if (!Call)
     return std::nullopt;
   const auto Entry = std::find_if(

@@ -1804,6 +1804,8 @@ KernelFileSystem 为每个 FILE_OBJECT 保留一个 provider token。私有共�
 
 `KernelMemoryCalls` 负责检查型内存复制的准入并复用移动／填充操作，包括池生命周期和用户内存检查。`KernelModelRuntime` 负责 `RtlImageNtHeader` 原始签名探测。探测结果不能替代执行镜像所需的加载器验证；适配器不重复实现这两种语义。
 
+`RegistrationSharedCall` 的前缀查询独立重放具有完整入口归属的 C++ 共享序言，并复核当前调用方与辅助函数的不可变机器码。即使后续状态图尚未完成，MedIR 仍可按这项局部证明展开物理序言，保留参数恢复所需的 SP/EBP 关系。受检序言调用与原生物理帧消费者仍要求完整的来源状态及注册链安装凭据。
+
 `OptimizationGuards` 补充 LLVM 的 `optnone` 检查：模块中有受保护函数时，跳过可能改写其 CFG 或把回调实参替换成 poison 的可选模块及调用图优化。必需的适配器和普通函数优化继续运行。注册链源码投影保留序言保存操作的内存记录，供原生重建绑定。
 
 `COFFRegistrationEH4Wrapper` 负责保留的 EH4 转发证明。`COFFRegistrationScalarLeaf` 检查有界且仅向前的标量 CFG、寄存器与标志初始化、私有 MXCSR 存储及映像运行时数据；拒绝调用者栈帧读取、地址逃逸、未知调用、指令重叠及不完整返回。LLVM 发射和独立 COFF 校验共用加载器证明，原包装器、辅助函数及动态数据读取继续在原位执行。
