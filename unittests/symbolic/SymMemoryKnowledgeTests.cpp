@@ -532,7 +532,7 @@ TEST(SymMemoryPreservation, SiblingOnlyCachesAreNotCurrentFacts) {
   SymState S(C);
   S.load(P, 1);
   S.clobberMemory();
-  SymState Sibling(S);
+  SymState Sibling(S), LazyWitness(S);
   const auto CachedExisting = Sibling.load(P, 8);
   const auto CachedUnseen = Sibling.load(Q, 8);
   const auto CachedAbsolute = Sibling.load(C.mkConst(64, 0x1234), 8);
@@ -568,6 +568,9 @@ TEST(SymMemoryPreservation, SiblingOnlyCachesAreNotCurrentFacts) {
   EXPECT_EQ(Sibling.load(P, 8), CachedExisting);
   EXPECT_EQ(Sibling.load(Q, 8), CachedUnseen);
   EXPECT_EQ(Sibling.load(C.mkConst(64, 0x1234), 8), CachedAbsolute);
+  EXPECT_EQ(LazyWitness.load(P, 8), CachedExisting);
+  EXPECT_EQ(LazyWitness.load(Q, 8), CachedUnseen);
+  EXPECT_EQ(LazyWitness.load(C.mkConst(64, 0x1234), 8), CachedAbsolute);
 }
 
 TEST(SymMemoryPreservation, ModularIntervalsAndAbsoluteHighBytes) {
@@ -711,7 +714,7 @@ TEST(SymMemoryPreservation, SharedCacheRetirementIsChargedBeforePublication) {
   SymState Source(C);
   Source.clobberMemory();
   const auto Current = Source.load(P, 8);
-  SymState Sibling(Source);
+  SymState Sibling(Source), LazyWitness(Source);
   const auto Cached = Sibling.load(Q, 8);
   // P's eight cached bytes are charged in its bank and default-cache entry.
   // Q exists only in the default cache: 3 + 2 + 8 + 8 + 2 + 16 + 16 = 55.
@@ -734,6 +737,7 @@ TEST(SymMemoryPreservation, SharedCacheRetirementIsChargedBeforePublication) {
   EXPECT_EQ(Source.load(P, 8), Current);
   EXPECT_NE(Source.load(Q, 8), Cached);
   EXPECT_EQ(Sibling.load(Q, 8), Cached);
+  EXPECT_EQ(LazyWitness.load(Q, 8), Cached);
 }
 
 TEST(SymMemoryPreservation, ExtremeIntervalsDoNotEnumerateMissingBytes) {
