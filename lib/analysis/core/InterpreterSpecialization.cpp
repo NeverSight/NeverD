@@ -18,6 +18,7 @@
 #include "FrameOffsets.h"
 #include "RawEnvironment.h"
 #include "RecoveryArchitecture.h"
+#include "ReturningCallState.h"
 
 #include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/ir/low/LowArchitecturalValue.h"
@@ -1142,7 +1143,6 @@ bool Specializer::applyReturningCall(SymState &State, SymRef FrameRoot,
     return fail(SpecializationStatus::InvalidInput,
                 llvm::toString(Architecture.takeError()));
   const auto Policy = (*Architecture)->returningCallTransition();
-  SymContext &Ctx = State.context();
   const uint64_t Begin = static_cast<uint64_t>(PreservedBegin);
   const uint64_t Size =
       static_cast<uint64_t>(Options.EntryFrameBounds->End) - Begin;
@@ -1210,55 +1210,19 @@ bool Specializer::applyReturningCall(SymState &State, SymRef FrameRoot,
         NextOrigins.UndefinedFlags.insert(Byte);
     }
   }
-  // Six one-bit samples and their byte extensions, plus a guest-PC constant.
-  // RuntimeControls, CR8 and segment bindings are outside register forgetting
-  // and deliberately retain their exact current values under this profile.
-  const uint64_t WriteNodes = Policy.FreshFlags.size() * 2 + 1;
-  const uint64_t WriteBytes =
-      Policy.Stack.Size + Policy.ProgramCounter.Size + Policy.FreshFlags.size();
-  if (!chargeCallWork(WriteBytes) || !chargeCallWork(WriteBytes))
-    return false;
-  if (Ctx.numNodes() > Options.MaxSymbolicNodes ||
-      WriteNodes > Options.MaxSymbolicNodes - Ctx.numNodes())
-    return fail(SpecializationStatus::BudgetExceeded,
-                "returning-call output node allowance exhausted");
-  SymRegisterPreservation Registers;
-  Registers.Ranges = Policy.PreservedRegisters;
-  Registers.MaxWork = Options.MaxOperations - Result.EvaluatedOperations;
-  Registers.MaxNewNodes =
-      Options.MaxSymbolicNodes - Ctx.numNodes() - WriteNodes;
-  State.clobberRegistersExcept(Registers);
-  Result.EvaluatedOperations += Registers.WorkUsed;
-  if (Registers.Status != SymRegisterPreservationStatus::Applied)
-    return fail(Registers.Status ==
-                        SymRegisterPreservationStatus::BudgetExceeded
-                    ? SpecializationStatus::BudgetExceeded
-                    : SpecializationStatus::InvalidInput,
-                "returning-call register preservation refused");
-  SymMemoryPreservation Memory;
-  Memory.Base = FrameRoot;
-  Memory.Begin = PreservedBegin;
-  Memory.End = Options.EntryFrameBounds->End;
-  Memory.MaxWork = Options.MaxOperations - Result.EvaluatedOperations;
-  State.clobberMemory(Memory);
-  Result.EvaluatedOperations += Memory.WorkUsed;
-  if (Memory.Status != SymMemoryPreservationStatus::Applied)
-    // State/Ctx/Draft belong only to this evaluation. BudgetExceeded and
-    // InvalidInput terminate the attempt; no partial projection can escape.
-    return fail(Memory.Status == SymMemoryPreservationStatus::BudgetExceeded
-                    ? SpecializationStatus::BudgetExceeded
-                    : SpecializationStatus::InvalidInput,
-                "returning-call memory preservation refused");
-  for (uint64_t Flag : Policy.FreshFlags) {
-    State.write(SymSpace::Register, Flag,
-                Ctx.mkZExt(Ctx.mkFreshVar(1, "returning_call_flag"), 8));
+  ReturningCallStateEffect Effect;
+  Effect.MaxWork = Options.MaxOperations - Result.EvaluatedOperations;
+  Effect.MaxNodes = Options.MaxSymbolicNodes;
+  applyReturningCallState(State, FrameRoot, CallerStack, PreservedBegin,
+                          Options.EntryFrameBounds->End,
+                          Call.Original.Fallthrough.Address, Policy, Effect);
+  Result.EvaluatedOperations += Effect.WorkUsed;
+  if (Effect.Status != SpecializationStatus::Complete)
+    // A failed composition belongs only to this evaluator and is discarded.
+    return fail(Effect.Status, Effect.Diagnostic);
+  for (uint64_t Flag : Policy.FreshFlags)
     NextOrigins.UndefinedFlags.erase(Flag);
-  }
-  State.write(SymSpace::Register, Policy.Stack.Offset, CallerStack);
   setUnsafeOrigin(Policy.Stack, true, NextOrigins);
-  State.write(SymSpace::Register, Policy.ProgramCounter.Offset,
-              Ctx.mkConst(Policy.ProgramCounter.Size * 8,
-                          Call.Original.Fallthrough.Address));
   setUnsafeOrigin(Policy.ProgramCounter, false, NextOrigins);
   Origins = std::move(NextOrigins);
   Frame = std::move(NextFrame);

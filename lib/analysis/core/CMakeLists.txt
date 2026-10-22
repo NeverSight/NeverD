@@ -3,6 +3,7 @@
 add_neverd_component_library(NeverDInterpreterSpecialization
   InterpreterSpecialization.cpp
   RawEnvironment.cpp
+  ReturningCallState.cpp
   ../arch/RecoveryArchitecture.cpp
   ../arch/x86_64/RawEnvironment.cpp
   ../arch/x86_64/ExternalExits.cpp
