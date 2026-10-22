@@ -778,3 +778,75 @@ TEST(SymMemoryPreservation, UnprotectedNarrowAndWideRegionsAreForgotten) {
   EXPECT_NE(S.load(Narrow, 8), N);
   EXPECT_NE(S.load(Wide, 8), W);
 }
+
+TEST(SymMemoryPreservation, LastOwnerCacheRetirementHasTheSameBudget) {
+  SymContext C;
+  SymState S(C);
+  const auto P = C.mkVar("p", 64), Q = C.mkVar("q", 64);
+  const auto Absolute = C.mkConst(64, 0x1234);
+  S.load(P, 1);
+  S.clobberMemory();
+  SymRef PV, QV, AV;
+  {
+    SymState Population(S);
+    PV = Population.load(P, 8);
+    QV = Population.load(Q, 8);
+    AV = Population.load(Absolute, 8);
+  }
+  ASSERT_EQ(S.numLiveBytes(), 0u);
+  ASSERT_EQ(S.numMemoryRegions(), 1u);
+  // The same 30 units as the sibling-only case, now with no external owner
+  // keeping the old cached-byte maps alive during the successful commit.
+  SymMemoryPreservation Keep{P, 0, 8, 29};
+  const auto Nodes = C.numNodes(), Vars = C.numVars();
+  S.clobberMemory(Keep);
+  EXPECT_EQ(Keep.Status, SymMemoryPreservationStatus::BudgetExceeded);
+  EXPECT_GT(Keep.WorkUsed, 3u);
+  EXPECT_LE(Keep.WorkUsed, 29u);
+  EXPECT_EQ(C.numNodes(), Nodes);
+  EXPECT_EQ(C.numVars(), Vars);
+  EXPECT_EQ(S.numLiveBytes(), 0u);
+  EXPECT_EQ(S.numMemoryRegions(), 1u);
+  {
+    SymState Witness(S);
+    EXPECT_EQ(Witness.load(P, 8), PV);
+    EXPECT_EQ(Witness.load(Q, 8), QV);
+    EXPECT_EQ(Witness.load(Absolute, 8), AV);
+  }
+  Keep.MaxWork = 30;
+  S.clobberMemory(Keep);
+  ASSERT_EQ(Keep.Status, SymMemoryPreservationStatus::Applied);
+  EXPECT_EQ(Keep.WorkUsed, 30u);
+  EXPECT_EQ(C.numNodes(), Nodes);
+  EXPECT_EQ(C.numVars(), Vars);
+  EXPECT_EQ(S.numLiveBytes(), 0u);
+  EXPECT_NE(S.load(P, 8), PV);
+  EXPECT_NE(S.load(Q, 8), QV);
+  EXPECT_NE(S.load(Absolute, 8), AV);
+}
+
+TEST(SymMemoryPreservation, PartialSymbolicWordsKeepTheirExactByteOrder) {
+  for (auto Order : {llvm::endianness::little, llvm::endianness::big}) {
+    SymContext C;
+    SymState Source(C, Order);
+    const auto P = C.mkVar("p", 64), Value = C.mkVar("word", 64);
+    Source.store(P, Value);
+    for (uint16_t Begin : {1, 3}) {
+      const uint16_t Bytes = 4;
+      const auto At = C.mkAdd(P, C.mkConst(64, Begin));
+      const uint32_t Low = Order == llvm::endianness::little
+                               ? Begin * 8
+                               : (8 - Begin - Bytes) * 8;
+      const auto Expected = C.mkExtract(Value, Low, Bytes * 8);
+      SymState S(Source);
+      SymMemoryPreservation Keep{P, Begin, Begin + Bytes, 1000};
+      const auto Nodes = C.numNodes(), Vars = C.numVars();
+      S.clobberMemory(Keep);
+      ASSERT_EQ(Keep.Status, SymMemoryPreservationStatus::Applied);
+      EXPECT_EQ(C.numNodes(), Nodes);
+      EXPECT_EQ(C.numVars(), Vars);
+      EXPECT_EQ(S.load(At, Bytes), Expected);
+      EXPECT_NE(S.load(P, 8), Value);
+    }
+  }
+}
