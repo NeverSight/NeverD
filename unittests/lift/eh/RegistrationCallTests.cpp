@@ -2086,7 +2086,7 @@ TEST(RegistrationCallABI, CxxCookieSourceProofReachesTheParentAndMedCallABI) {
       EXPECT_EQ(Op.Output.Size, 0);
     }
   EXPECT_EQ(Matches, 1u);
-  for (unsigned Mutation = 0; Mutation != 6; ++Mutation) {
+  for (unsigned Mutation = 0; Mutation != 9; ++Mutation) {
     SCOPED_TRACE(Mutation);
     auto Changed = Low;
     auto ChangedImage = Image;
@@ -2112,6 +2112,16 @@ TEST(RegistrationCallABI, CxxCookieSourceProofReachesTheParentAndMedCallABI) {
       break;
     case 5:
       ChangedImage.DynInfo.SecurityCookieRVA += 4;
+      break;
+    case 6:
+      ++ChangedImage.Segments.front().Data[Check.Address + 1 - Text.VA];
+      break;
+    case 7:
+      ChangedImage.BaseRelocations.push_back(
+          {Check.Address + 1, llvm::COFF::IMAGE_REL_BASED_HIGHLOW});
+      break;
+    case 8:
+      ChangedImage.Segments.front().Data[Check.Address - Text.VA] = 0x90;
       break;
     }
     EXPECT_FALSE(getCheckedX86RegistrationCxxParentABI(Changed, ChangedImage));

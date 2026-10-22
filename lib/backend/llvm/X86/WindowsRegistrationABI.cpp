@@ -25,18 +25,22 @@ bool hasX86RegistrationSecurityCheckABI(const llvm::Function &Function) {
          Function.hasParamAttribute(0, llvm::Attribute::InReg);
 }
 
-llvm::Function *createX86RegistrationSecurityCheck(llvm::Module &Module) {
+llvm::Function *createX86RegistrationSecurityCheck(llvm::Module &Module,
+                                                   llvm::StringRef Name) {
   auto &Context = Module.getContext();
   auto *Type =
       llvm::FunctionType::get(llvm::Type::getVoidTy(Context),
                               llvm::PointerType::getUnqual(Context), false);
-  auto *Function =
-      llvm::Function::Create(Type, llvm::GlobalValue::ExternalLinkage,
-                             "__security_check_cookie", Module);
+  auto *Function = llvm::Function::Create(
+      Type, llvm::GlobalValue::ExternalLinkage, Name, Module);
   Function->setCallingConv(llvm::CallingConv::X86_FastCall);
   Function->addParamAttr(0, llvm::Attribute::InReg);
   Function->setDSOLocal(true);
   return Function;
+}
+
+llvm::Function *createX86RegistrationSecurityCheck(llvm::Module &Module) {
+  return createX86RegistrationSecurityCheck(Module, "__security_check_cookie");
 }
 
 } // namespace neverd

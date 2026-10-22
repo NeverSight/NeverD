@@ -1704,6 +1704,12 @@ transfer and MedIR conversion use that same result while preserving DF, vector
 and x87 state. Conversion retains the checker call, marks its complete register
 preservation before SSA and writes the six arithmetic flags explicitly; the
 x64-only GPR family mask cannot establish x86 preservation.
+`registrationCookieCallABI` reuses the current ECX argument binder and rechecks
+the immutable physical CALL, checker and image-cookie identity. LowIR caller
+closure shares the same CALL-byte owner. LLVM retains the original checker
+through a VA-bound void fastcall declaration with one `inreg` parameter;
+changed bytes, recovered arguments or result/register effects refuse emission.
+This call ABI grants no native guarded-frame or check-elision permission.
 If those receipts cannot be published, call, runtime-object and image-read
 closure also fail; the unchecked mismatch path has no summarized effects.
 `CxxCookieConditions` describes source values only; it grants no generated

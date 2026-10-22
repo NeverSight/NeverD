@@ -9,13 +9,24 @@
 #include "../../../lib/ir/med/abi/MedABIPassDetail.h"
 #include "gtest/gtest.h"
 
+#include "neverd/backend/RewriteSourceIdentity.h"
+#include "neverd/backend/llvm/MedLLVMEmitter.h"
+#include "neverd/backend/llvm/WindowsRegistrationFrame.h"
 #include "neverd/ir/low/LowScalarConstant.h"
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/ir/med/MedABIPass.h"
+#include "neverd/ir/med/X86RegistrationCall.h"
 #include "neverd/lift/X86Regs.h"
+#include "neverd/support/BinaryEncoding.h"
 
+#include "llvm/BinaryFormat/COFF.h"
+#include "llvm/IR/Verifier.h"
+
+#include <algorithm>
 #include <initializer_list>
+#include <iterator>
 #include <map>
+#include <optional>
 #include <tuple>
 
 namespace {
@@ -104,6 +115,46 @@ struct CookieFixture {
     for (unsigned I = 0; I != Count; ++I)
       States.CxxCookieConditions.push_back({-20 - int32_t(I) * 4, 0});
   }
+
+  void addPhysicalChecker() {
+    Image.Bits = Bitness::Bits32;
+    Image.DynInfo.SecurityCookieRVA = 0x4000;
+    Function.Name = "cookie_parent";
+    Function.RegistrationStates->SecurityCookieVA = 0x4000;
+    Segment Text;
+    Text.VA = 0x1000;
+    Text.Size = Text.FileSz = 0x1100;
+    Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+    Text.Data.resize(Text.Size, 0xcc);
+    Text.Data[0x10] = 0xe8;
+    writeLE<uint32_t>(Text.Data.data() + 0x11, 0x2000 - 0x1015);
+    const uint8_t Checker[] = {0x3b, 0x0d, 0, 0x40, 0, 0, 0x75, 0x10, 0xc3};
+    std::copy(std::begin(Checker), std::end(Checker),
+              Text.Data.begin() + 0x1000);
+    Image.Segments.push_back(std::move(Text));
+    Section Code;
+    Code.VA = 0x1000;
+    Code.Size = Code.FileSz = 0x1100;
+    Code.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+    Image.Sections.push_back(Code);
+    Segment Data;
+    Data.VA = 0x4000;
+    Data.Size = Data.FileSz = 4;
+    Data.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+    Data.Data.resize(4);
+    writeLE<uint32_t>(Data.Data.data(), 0x12345678);
+    Image.Segments.push_back(std::move(Data));
+    Image.BaseRelocations.push_back(
+        {0x2002, llvm::COFF::IMAGE_REL_BASED_HIGHLOW});
+    auto &Block = Function.Blocks.front();
+    Block.Ops.back().PreservesCallerSaved = true;
+    MedOp Return;
+    Return.Opcode = NdOp::RETURN;
+    Return.Addr = 0x1015;
+    Return.OriginSeq = 0;
+    Return.addInput(MedVar::makeConst(7, 4));
+    Block.Ops.push_back(Return);
+  }
 };
 
 void checkCookieArgument(const CookieFixture &Fixture) {
@@ -121,6 +172,127 @@ TEST(RegistrationCookieABI, CheckedECXOverridesIncidentalAndInferredArguments) {
   for (unsigned Pass = 0; Pass != 2; ++Pass) {
     Fixture.recover();
     checkCookieArgument(Fixture);
+  }
+}
+
+TEST(RegistrationCookieABI, RetainedCheckerUsesPhysicalFastcallAndVoidResult) {
+  for (bool Cxx : {false, true}) {
+    SCOPED_TRACE(Cxx);
+    CookieFixture Fixture;
+    if (Cxx)
+      Fixture.useCxxCookies(1);
+    Fixture.addPhysicalChecker();
+    Fixture.recover();
+    const auto ABI = registrationCookieCallABI(
+        Fixture.Image, Fixture.Function, Fixture.Function.Blocks.front(), 4);
+    ASSERT_TRUE(ABI);
+    EXPECT_EQ(ABI->Argument, Fixture.Cookie);
+    EXPECT_EQ(ABI->CheckVA, 0x2000u);
+    EXPECT_EQ(ABI->SecurityCookieVA, 0x4000u);
+    llvm::LLVMContext Context;
+    auto Module =
+        MedLLVMEmitter().emit({Fixture.Function}, Context, "cookie", Arch::X86,
+                              {}, &Fixture.Image, BinaryFormat::COFF);
+    ASSERT_TRUE(Module);
+    EXPECT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
+    const auto *Checker = Module->getFunction("__nd_registration_cookie_2000");
+    ASSERT_TRUE(Checker);
+    EXPECT_TRUE(hasX86RegistrationSecurityCheckABI(*Checker));
+    auto Identity = rewrite_source::getOriginalVA(*Checker);
+    ASSERT_TRUE(bool(Identity)) << llvm::toString(Identity.takeError());
+    ASSERT_TRUE(*Identity);
+    EXPECT_EQ(**Identity, 0x2000u);
+    ASSERT_TRUE(Checker->hasOneUse());
+    const auto *Call = llvm::dyn_cast<llvm::CallInst>(*Checker->user_begin());
+    ASSERT_TRUE(Call);
+    EXPECT_EQ(Call->getCallingConv(), llvm::CallingConv::X86_FastCall);
+    EXPECT_TRUE(Call->getType()->isVoidTy());
+    ASSERT_EQ(Call->arg_size(), 1u);
+    EXPECT_TRUE(Call->paramHasAttr(0, llvm::Attribute::InReg));
+  }
+}
+
+TEST(RegistrationCookieABI, PhysicalCheckerRechecksCurrentImageAndOccurrence) {
+  for (unsigned Mutation = 0; Mutation != 10; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    CookieFixture Fixture;
+    Fixture.useCxxCookies(1);
+    Fixture.addPhysicalChecker();
+    auto &States = *Fixture.Function.RegistrationStates;
+    auto &Block = Fixture.Function.Blocks.front();
+    ASSERT_TRUE(
+        registrationCookieCallABI(Fixture.Image, Fixture.Function, Block, 4));
+    switch (Mutation) {
+    case 0:
+      ++Fixture.Image.Segments.front().Data[0x11];
+      break;
+    case 1:
+      Fixture.Image.Segments.front().Data[0x1006] = 0x74;
+      break;
+    case 2:
+      ++Fixture.Image.Segments.front().Data[0x1002];
+      break;
+    case 3:
+      Fixture.Image.BaseRelocations.front().Address = 0x2000;
+      break;
+    case 4:
+      Fixture.Image.Segments.front().Flags = SegmentFlags::Readable |
+                                             SegmentFlags::Writable |
+                                             SegmentFlags::Executable;
+      break;
+    case 5:
+      ++States.CookieChecks.front().EndAddress;
+      break;
+    case 6:
+      ++Block.Ops[4].OriginSeq;
+      break;
+    case 7:
+      ++States.SecurityCookieVA;
+      break;
+    case 8:
+      Block.Ops.push_back(Block.Ops[4]);
+      break;
+    case 9:
+      Fixture.Image.BaseRelocations.push_back(
+          {0x1011, llvm::COFF::IMAGE_REL_BASED_HIGHLOW});
+      break;
+    }
+    EXPECT_FALSE(
+        registrationCookieCallABI(Fixture.Image, Fixture.Function, Block, 4));
+  }
+}
+
+TEST(RegistrationCookieABI, ChangedPhysicalCookieCallHasNoGenericFallback) {
+  for (unsigned Mutation = 0; Mutation != 6; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    CookieFixture Fixture;
+    Fixture.addPhysicalChecker();
+    Fixture.recover();
+    switch (Mutation) {
+    case 0:
+      Fixture.Function.CallInfos.front().Args.front() =
+          MedVar::makeConst(99, 4);
+      break;
+    case 1:
+      Fixture.Image.Segments.front().Data[0x1006] = 0x74;
+      break;
+    case 2:
+      Fixture.Function.Blocks.front().Ops[4].PreservesCallerSaved = false;
+      break;
+    case 3:
+      Fixture.Function.Blocks.front().Ops[4].Output = reg(9, x86reg::RAX);
+      break;
+    case 4:
+      ++Fixture.Function.CallInfos.front().TargetAddr;
+      break;
+    case 5:
+      Fixture.Function.CallInfos.front().IsIndirect = true;
+      break;
+    }
+    llvm::LLVMContext Context;
+    EXPECT_FALSE(MedLLVMEmitter().emit({Fixture.Function}, Context,
+                                       "changed-cookie", Arch::X86, {},
+                                       &Fixture.Image, BinaryFormat::COFF));
   }
 }
 

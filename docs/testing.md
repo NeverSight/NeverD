@@ -5789,6 +5789,12 @@ checks all eight GPRs, the six equal-CMP flags and surviving DF/vector facts.
 uses EAX, ECX, EDX and all seven flags after the retained call. The authenticated
 case must evaluate to the machine result; missing proof must retain ordinary
 call clobbers.
+`RetainedCheckerUsesPhysicalFastcallAndVoidResult` checks the retained EH4 and
+C++ calls, exact VA identity and LLVM verification. The physical binder's
+mutation companion rejects changed CALL/checker bytes, fixups, code permission,
+cookie identity, occurrence boundaries and duplicate calls.
+`ChangedPhysicalCookieCallHasNoGenericFallback` requires emission to fail for
+changed arguments, checker code, register preservation or a fabricated result.
 `CxxCookieSourceProofReachesTheParentAndMedCallABI` reparses actual PE32 code
 and FuncInfo bytes, then builds LowIR and MedIR. It requires the dedicated
 source-check receipt to close the parent ABI and rejects changed instruction

@@ -219,6 +219,10 @@ private:
                                         std::vector<llvm::Value *> &Arguments);
   llvm::Function *getX86RegistrationSEHRuntimeTarget(const MedOp &Op);
   llvm::Function *
+  prepareX86RegistrationCookieCall(const MedOp &Op, int BlockId, int OpIdx,
+                                   llvm::IRBuilder<> &Builder,
+                                   std::vector<llvm::Value *> &Arguments);
+  llvm::Function *
   prepareX86RegistrationSEHRuntimeCall(const MedOp &Op,
                                        llvm::IRBuilder<> &Builder,
                                        std::vector<llvm::Value *> &Arguments);

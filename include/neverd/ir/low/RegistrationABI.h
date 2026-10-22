@@ -38,6 +38,11 @@ RegistrationStateAnalysis analyzeCheckedX86SEHStates(
 /// builds a registration callee answers per level.
 unsigned x86SEHStateAnalysisLevel();
 
+/// Authenticate the current immutable PE32 E8 rel32 bytes and target. This
+/// supplies no source occurrence, argument, frame or exception-effect proof.
+bool hasCheckedX86RegistrationDirectCallBytes(const BinaryImage &Image,
+                                              va_t Address, va_t Target);
+
 /// Prove the entry ESP is restored at every ordinary near return and that
 /// all return-pop immediates agree. Unchecked calls invalidate ESP; an explicit
 /// restoration from an ABI-preserved register can recover it. Ordinary bodies

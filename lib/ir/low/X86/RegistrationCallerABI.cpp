@@ -6,6 +6,7 @@
 
 #include "RegistrationABIPrivate.h"
 #include "RegistrationJumpRuntime.h"
+#include "RegistrationSourceCall.h"
 
 #include "neverd/Limits.h"
 #include "neverd/ir/Limits.h"
@@ -144,16 +145,12 @@ bool hasRegistrationCallFrameABI(
           const auto Success = coff_loader::getCheckedX86CookieCheckSuccessPath(
               Image, States->CookieCheckVA);
           if (States->CookieCheckVA != Op.Inputs[0].Offset || !Success ||
-              Success->SecurityCookieVA != States->SecurityCookieVA ||
-              !chargeCalleeWork(Work, Block.InstructionBoundaries.size()))
+              Success->SecurityCookieVA != States->SecurityCookieVA)
             return false;
-          const auto Boundary =
-              llvm::find_if(Block.InstructionBoundaries, [&](const auto &B) {
-                return B.Address == Op.Addr;
-              });
-          if (Boundary == Block.InstructionBoundaries.end() ||
-              Boundary->Control != LowInstructionControl::Call ||
-              Op.Addr + Boundary->Size != Cookie->EndAddress)
+          const auto *Boundary =
+              registration_state::checkedRegistrationDirectCall(Image, Function,
+                                                                Op, Work);
+          if (!Boundary || Op.Addr + Boundary->Size != Cookie->EndAddress)
             return false;
           // The exact cookie receipt replaces an ordinary callee-frame
           // effect. Its successful path preserves the source registers.

@@ -9,10 +9,25 @@
 #include "RegistrationABIPrivate.h"
 
 #include "neverd/ir/low/LowIR.h"
+#include "neverd/ir/low/RegistrationABI.h"
 #include "neverd/loader/ReadOnlyBytes.h"
 #include "neverd/support/BinaryEncoding.h"
 
-namespace neverd::registration_state {
+namespace neverd {
+
+bool hasCheckedX86RegistrationDirectCallBytes(const BinaryImage &Image,
+                                              va_t Address, va_t Target) {
+  if (Image.Arch != Arch::X86 || Image.Bits != Bitness::Bits32 ||
+      Image.Format != BinaryFormat::COFF || Address > UINT32_MAX - 5 ||
+      Target > UINT32_MAX || !Image.hasExecutableCodeOwnerRange(Address, 5))
+    return false;
+  const auto Bytes = readImmutablePE32CodeBytes(Image, Address, 5, {});
+  return Bytes && (*Bytes)[0] == 0xe8 &&
+         uint32_t(Address + 5 + int64_t(readLE<int32_t>(Bytes->data() + 1))) ==
+             Target;
+}
+
+namespace registration_state {
 
 const LowInstructionBoundary *
 checkedRegistrationDirectCall(const BinaryImage &Image, const LowFunc &Function,
@@ -51,11 +66,8 @@ checkedRegistrationDirectCall(const BinaryImage &Image, const LowFunc &Function,
             hasLowInstructionControlFlag(
                 Insn.ControlFlags, LowInstructionControlFlag::InstructionGuard))
           return nullptr;
-        const auto Bytes = readImmutableCodeBytes(Image, Op.Addr, 5);
-        if (!Bytes || (*Bytes)[0] != 0xe8 ||
-            uint32_t(Op.Addr + 5 +
-                     int64_t(readLE<int32_t>(Bytes->data() + 1))) !=
-                Op.Inputs[0].Offset)
+        if (!hasCheckedX86RegistrationDirectCallBytes(Image, Op.Addr,
+                                                      Op.Inputs[0].Offset))
           return nullptr;
         return &Insn;
       }
@@ -65,4 +77,5 @@ checkedRegistrationDirectCall(const BinaryImage &Image, const LowFunc &Function,
   return nullptr;
 }
 
-} // namespace neverd::registration_state
+} // namespace registration_state
+} // namespace neverd

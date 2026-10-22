@@ -576,6 +576,12 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
     for (const MedVar &Arg : CI->Args)
       rejectEscapingAddressFragment(Arg, "a call argument");
 
+  std::vector<llvm::Value *> CookieArguments;
+  auto *CookieCheck = prepareX86RegistrationCookieCall(
+      Op, BlockId, OpIdx, Builder, CookieArguments);
+  if (FatalCodePointerResolution)
+    return;
+
   llvm::Value *Target = nullptr;
   if (Op.Opcode == NdOp::INDIR_CALL &&
       !getX86RegistrationSEHRuntimeTarget(Op)) {
@@ -1272,6 +1278,12 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
     KnownTarget = Runtime;
     Target = nullptr;
   }
+  if (CookieCheck) {
+    Callee = CookieCheck;
+    KnownTarget = CookieCheck;
+    Target = nullptr;
+    Args = std::move(CookieArguments);
+  }
   if (Op.X87ImportArguments) {
     if (!Callee) {
       syncError() << "med_llvm_emitter: CRT x87 call has no import identity\n";
@@ -1464,6 +1476,8 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
         Builder.CreateCall(Callee, CoercedArgs,
                            CalleeTy->getReturnType()->isVoidTy() ? "" : "call");
     Call->setCallingConv(Callee->getCallingConv());
+    if (CookieCheck)
+      Call->addParamAttr(0, llvm::Attribute::InReg);
     Result = Call;
   } else {
     // Indirect call: the callee is unknown, so its LLVM signature is rebuilt
