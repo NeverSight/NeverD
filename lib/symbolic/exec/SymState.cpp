@@ -377,9 +377,11 @@ bool SymState::writeBank(Bank &B, uint64_t Offset, SymRef Value) {
   return true;
 }
 
-void SymState::forget(Bank &B) {
+void SymState::forget(Bank &B) { forget(B, std::make_shared<UnknownBytes>()); }
+
+void SymState::forget(Bank &B, std::shared_ptr<UnknownBytes> Unknowns) {
   B.Bytes.clear();
-  B.Unknowns = std::make_shared<UnknownBytes>();
+  B.Unknowns = std::move(Unknowns);
   if (B.Epoch != std::numeric_limits<uint64_t>::max())
     ++B.Epoch;
 }
@@ -478,6 +480,82 @@ void SymState::clobberMemory() {
   forget(AbsoluteMemory);
   forgetRegions(SymRef());
   MemoryClobbered = true;
+}
+
+void SymState::clobberMemory(SymMemoryPreservation &Preservation) {
+  Preservation.WorkUsed = 0;
+  Preservation.Status = SymMemoryPreservationStatus::Invalid;
+  const auto Charge = [&](uint64_t Count) {
+    if (Count > Preservation.MaxWork - Preservation.WorkUsed) {
+      Preservation.Status = SymMemoryPreservationStatus::BudgetExceeded;
+      return false;
+    }
+    Preservation.WorkUsed += Count;
+    return true;
+  };
+  if (!Charge(1))
+    return;
+  if (Preservation.Begin >= Preservation.End ||
+      (Preservation.Base && (Preservation.Base.index() >= Ctx->numNodes() ||
+                             Ctx->width(Preservation.Base) != kMaxAddressBits ||
+                             Ctx->isConst(Preservation.Base))))
+    return;
+  if (!Charge(1))
+    return;
+  Bank *Protected = &AbsoluteMemory;
+  if (Preservation.Base) {
+    const auto Found = Regions.find(Preservation.Base.index());
+    Protected = Found == Regions.end() ? nullptr : &Found->second;
+  }
+
+  if (!Charge(1))
+    return;
+  auto NewRegions = std::make_shared<UnknownRegions>();
+  struct BankEpoch {
+    Bank *Storage;
+    std::shared_ptr<UnknownBytes> Unknowns;
+  };
+  llvm::SmallVector<BankEpoch, 8> Epochs;
+  const auto Prepare = [&](Bank &Storage) {
+    if (!Charge(1) || !Charge(Storage.Bytes.size()) ||
+        (Storage.Unknowns && !Charge(Storage.Unknowns->Values.size())))
+      return false;
+    Epochs.push_back({&Storage, std::make_shared<UnknownBytes>()});
+    return true;
+  };
+  if (!Prepare(AbsoluteMemory))
+    return;
+  for (auto &[Base, Storage] : Regions)
+    if (!Prepare(Storage))
+      return;
+  // A sibling can have populated a shared default cache without creating any
+  // bank in this state. Those bytes are neither current facts nor free to
+  // retire. Replacing ownership must never clear a shared cache in place.
+  if (UnseenRegions)
+    for (const auto &[Base, Unknowns] : UnseenRegions->Values)
+      if (!Charge(1) || (Unknowns && !Charge(Unknowns->Values.size())))
+        return;
+
+  std::map<uint64_t, ByteView> Saved;
+  const auto Begin = static_cast<uint64_t>(Preservation.Begin);
+  const auto Size = static_cast<uint64_t>(Preservation.End) - Begin;
+  if (Protected)
+    for (const auto &[Offset, Byte] : Protected->Bytes)
+      if (Offset - Begin < Size) {
+        if (!Charge(2))
+          return;
+        Saved.emplace_hint(Saved.end(), Offset, Byte);
+      }
+
+  // All potentially allocating preparation is complete. Only exact current
+  // ByteViews survive; neither old unknown epochs nor provenance seed memory.
+  for (auto &Epoch : Epochs)
+    forget(*Epoch.Storage, std::move(Epoch.Unknowns));
+  UnseenRegions = std::move(NewRegions);
+  if (Protected)
+    Protected->Bytes.swap(Saved);
+  MemoryClobbered = true;
+  Preservation.Status = SymMemoryPreservationStatus::Applied;
 }
 
 bool SymState::bindLoadOrigins(llvm::ArrayRef<LoadOriginBinding> Bindings) {

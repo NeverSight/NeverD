@@ -6,7 +6,10 @@
 #include "neverd/symbolic/SymState.h"
 
 #include <algorithm>
+#include <array>
+#include <cstdint>
 #include <limits>
+#include <vector>
 
 using namespace neverd::symbolic;
 
@@ -409,4 +412,365 @@ TEST(SymMaterializedRanges, RangeInspectionIsReadOnlyAndUsesCurrentBytes) {
     EXPECT_FALSE(S.hasMaterializedRegionRange(P, 64, 2));
     EXPECT_FALSE(C.asConst(Unknown));
   }
+}
+
+TEST(SymMemoryPreservation, CurrentBytesMatchIndependentByteArray) {
+  for (auto Order : {llvm::endianness::little, llvm::endianness::big}) {
+    SymContext C;
+    SymState Source(C, Order);
+    const auto P = C.mkVar("p", 64);
+    std::array<uint8_t, 16> Expected;
+    for (unsigned I = 0; I != Expected.size(); ++I) {
+      Expected[I] = static_cast<uint8_t>(17 + 11 * I);
+      if (I != 6 && I != 7)
+        Source.store(C.mkAdd(P, C.mkConst(64, I)), C.mkConst(8, Expected[I]));
+    }
+    Source.store(C.mkAdd(P, C.mkConst(64, 3)), C.mkConst(16, 0xabc5));
+    Expected[3] = Order == llvm::endianness::little ? 0xc5 : 0xab;
+    Expected[4] = Order == llvm::endianness::little ? 0xab : 0xc5;
+    for (int64_t Begin = 0; Begin != 18; Begin += 3) {
+      SCOPED_TRACE(Begin);
+      SymState S(Source), Before(Source);
+      const auto Hole = Before.load(C.mkAdd(P, C.mkConst(64, 6)), 2);
+      SymMemoryPreservation Keep{P, Begin, Begin + 5, 1000};
+      const auto Nodes = C.numNodes(), Vars = C.numVars();
+      S.clobberMemory(Keep);
+      ASSERT_EQ(Keep.Status, SymMemoryPreservationStatus::Applied);
+      EXPECT_EQ(C.numNodes(), Nodes);
+      EXPECT_EQ(C.numVars(), Vars);
+      for (unsigned I = 0; I != 20; ++I) {
+        const auto Value = S.load(C.mkAdd(P, C.mkConst(64, I)), 1);
+        if (I < Expected.size() && I != 6 && I != 7 && I >= Begin &&
+            I < Begin + 5)
+          EXPECT_EQ(Value, C.mkConst(8, Expected[I]));
+        else
+          EXPECT_FALSE(C.isConst(Value));
+      }
+      EXPECT_NE(S.load(C.mkAdd(P, C.mkConst(64, 6)), 2), Hole);
+    }
+  }
+}
+
+TEST(SymMemoryPreservation, RetainsCurrentSymbolicValuesAndHistoricalOrigins) {
+  for (auto Order : {llvm::endianness::little, llvm::endianness::big}) {
+    SymContext C;
+    SymState S(C, Order);
+    const auto P = C.mkVar("p", 64);
+    const auto Old = S.load(P, 8);
+    const auto Value = C.mkVar("replacement", 64);
+    S.store(P, Value);
+    S.store(C.mkAdd(P, C.mkConst(64, 2)), C.mkConst(16, 0x5321));
+    const auto Current = S.load(P, 8);
+    ASSERT_NE(Current, Old);
+    SymMemoryPreservation Keep{P, 0, 8, 1000};
+    const auto Nodes = C.numNodes(), Vars = C.numVars();
+    S.clobberMemory(Keep);
+    ASSERT_EQ(Keep.Status, SymMemoryPreservationStatus::Applied);
+    EXPECT_EQ(C.numNodes(), Nodes);
+    EXPECT_EQ(C.numVars(), Vars);
+    EXPECT_EQ(S.load(P, 8), Current);
+    EXPECT_NE(S.loadOrigin(Old), nullptr);
+    EXPECT_FALSE(S.memoryInputOrigins(Old).empty());
+    Keep.Begin = 8;
+    Keep.End = 16;
+    S.clobberMemory(Keep);
+    ASSERT_EQ(Keep.Status, SymMemoryPreservationStatus::Applied);
+    const auto Fresh = S.load(P, 8);
+    EXPECT_NE(Fresh, Old);
+    EXPECT_NE(Fresh, Current);
+    EXPECT_NE(S.loadOrigin(Old), nullptr);
+    EXPECT_TRUE(S.memoryInputOrigins(Fresh).empty());
+  }
+}
+
+TEST(SymMemoryPreservation, FreshEpochsCoverOtherAndPreviouslyUnreadBanks) {
+  SymContext C;
+  SymState S(C);
+  const auto P = C.mkVar("p", 64), Q = C.mkVar("q", 64);
+  const auto New = C.mkVar("new_region", 64);
+  const auto Absolute = C.mkConst(64, 0x1234);
+  const auto PV = S.load(P, 8), QV = S.load(Q, 8);
+  const auto AV = S.load(Absolute, 8);
+  SymState Before(S);
+  const auto NV = Before.load(New, 8);
+  SymMemoryPreservation Keep{P, 0, 8, 1000};
+  S.clobberMemory(Keep);
+  ASSERT_EQ(Keep.Status, SymMemoryPreservationStatus::Applied);
+  EXPECT_EQ(S.load(P, 8), PV);
+  EXPECT_NE(S.load(Q, 8), QV);
+  EXPECT_NE(S.load(Absolute, 8), AV);
+  EXPECT_NE(S.load(New, 8), NV);
+  EXPECT_TRUE(S.memoryIsUnknown());
+}
+
+TEST(SymMemoryPreservation,
+     ForksShareNewEpochsButIndependentForgettingDoesNot) {
+  SymContext C;
+  const auto P = C.mkVar("p", 64), Q = C.mkVar("q", 64);
+  SymState A(C), B(A);
+  SymMemoryPreservation Keep{P, -8, 0, 1000};
+  A.clobberMemory(Keep);
+  ASSERT_EQ(Keep.Status, SymMemoryPreservationStatus::Applied);
+  B.clobberMemory(Keep);
+  ASSERT_EQ(Keep.Status, SymMemoryPreservationStatus::Applied);
+  SymState Fork(A);
+  const auto First = A.load(Q, 8);
+  EXPECT_EQ(Fork.load(Q, 8), First);
+  EXPECT_NE(B.load(Q, 8), First);
+  const auto Absolute = C.mkConst(64, 0x1234);
+  EXPECT_EQ(A.load(Absolute, 8), Fork.load(Absolute, 8));
+  EXPECT_NE(A.load(Absolute, 8), B.load(Absolute, 8));
+  A.clobberMemory(Keep);
+  ASSERT_EQ(Keep.Status, SymMemoryPreservationStatus::Applied);
+  EXPECT_NE(A.load(Q, 8), First);
+  EXPECT_EQ(Fork.load(Q, 8), First);
+}
+
+TEST(SymMemoryPreservation, SiblingOnlyCachesAreNotCurrentFacts) {
+  SymContext C;
+  const auto P = C.mkVar("p", 64), Q = C.mkVar("q", 64);
+  SymState S(C);
+  S.load(P, 1);
+  S.clobberMemory();
+  SymState Sibling(S);
+  const auto CachedExisting = Sibling.load(P, 8);
+  const auto CachedUnseen = Sibling.load(Q, 8);
+  const auto CachedAbsolute = Sibling.load(C.mkConst(64, 0x1234), 8);
+  ASSERT_EQ(S.numLiveBytes(), 0u);
+  // Three fixed units, two banks, sixteen existing-bank cached bytes,
+  // and one default-cache entry with eight bytes. No current bytes survive.
+  for (uint64_t Budget = 0; Budget != 30; ++Budget) {
+    SymState Attempt(S), Before(S);
+    SymMemoryPreservation Keep{P, 0, 8, Budget};
+    const auto Nodes = C.numNodes(), Vars = C.numVars();
+    Attempt.clobberMemory(Keep);
+    EXPECT_EQ(Keep.Status, SymMemoryPreservationStatus::BudgetExceeded);
+    EXPECT_LE(Keep.WorkUsed, Budget);
+    EXPECT_EQ(C.numNodes(), Nodes);
+    EXPECT_EQ(C.numVars(), Vars);
+    EXPECT_TRUE(Attempt.mergeIdentical(Before));
+    EXPECT_EQ(Attempt.load(P, 8), CachedExisting);
+    EXPECT_EQ(Attempt.load(Q, 8), CachedUnseen);
+    EXPECT_EQ(Attempt.load(C.mkConst(64, 0x1234), 8), CachedAbsolute);
+  }
+  SymMemoryPreservation Keep{P, 0, 8, 30};
+  const auto Nodes = C.numNodes(), Vars = C.numVars();
+  S.clobberMemory(Keep);
+  ASSERT_EQ(Keep.Status, SymMemoryPreservationStatus::Applied);
+  EXPECT_EQ(Keep.WorkUsed, 30u);
+  EXPECT_EQ(C.numNodes(), Nodes);
+  EXPECT_EQ(C.numVars(), Vars);
+  EXPECT_EQ(S.numLiveBytes(), 0u);
+  EXPECT_NE(S.load(P, 8), CachedExisting);
+  EXPECT_NE(S.load(Q, 8), CachedUnseen);
+  EXPECT_NE(S.load(C.mkConst(64, 0x1234), 8), CachedAbsolute);
+  // Retiring this state's ownership must not erase the sibling's lazy maps.
+  EXPECT_EQ(Sibling.load(P, 8), CachedExisting);
+  EXPECT_EQ(Sibling.load(Q, 8), CachedUnseen);
+  EXPECT_EQ(Sibling.load(C.mkConst(64, 0x1234), 8), CachedAbsolute);
+}
+
+TEST(SymMemoryPreservation, ModularIntervalsAndAbsoluteHighBytes) {
+  for (bool Absolute : {false, true}) {
+    SymContext C;
+    SymState S(C);
+    const auto P = Absolute ? SymRef{} : C.mkVar("p", 64);
+    const auto Address = [&](int64_t Offset) {
+      const auto Number = C.mkConst(64, static_cast<uint64_t>(Offset));
+      return P ? C.mkAdd(P, Number) : Number;
+    };
+    for (int64_t I = -4; I != 4; ++I)
+      S.store(Address(I), C.mkConst(8, static_cast<uint8_t>(I + 40)));
+    SymMemoryPreservation Keep{P, -2, 2, 1000};
+    S.clobberMemory(Keep);
+    ASSERT_EQ(Keep.Status, SymMemoryPreservationStatus::Applied);
+    for (int64_t I = -4; I != 4; ++I) {
+      const auto Value = S.load(Address(I), 1);
+      if (I >= -2 && I < 2)
+        EXPECT_EQ(Value, C.mkConst(8, static_cast<uint8_t>(I + 40)));
+      else
+        EXPECT_FALSE(C.isConst(Value));
+    }
+  }
+}
+
+TEST(SymMemoryPreservation, AbsentAndNoncanonicalRegionsContributeNoFacts) {
+  SymContext C;
+  const auto P = C.mkVar("p", 64), Q = C.mkVar("q", 64);
+  const auto PlusEight = C.mkAdd(P, C.mkConst(64, 8));
+  for (const auto Base : {Q, PlusEight}) {
+    SymState S(C);
+    S.store(PlusEight, C.mkConst(64, 17));
+    const auto Regions = S.numMemoryRegions();
+    SymMemoryPreservation Keep{Base, 0, 16, 1000};
+    S.clobberMemory(Keep);
+    ASSERT_EQ(Keep.Status, SymMemoryPreservationStatus::Applied);
+    EXPECT_EQ(S.numLiveBytes(), 0u);
+    EXPECT_EQ(S.numMemoryRegions(), Regions);
+    EXPECT_FALSE(C.isConst(S.load(PlusEight, 8)));
+  }
+}
+
+TEST(SymMemoryPreservation, LaterStoresKeepOrdinaryAliasInvalidation) {
+  SymContext C;
+  SymState S(C);
+  const auto P = C.mkVar("p", 64), Q = C.mkVar("q", 64);
+  S.store(P, C.mkConst(64, 0x8877665544332211));
+  SymMemoryPreservation Keep{P, 0, 8, 1000};
+  S.clobberMemory(Keep);
+  ASSERT_EQ(Keep.Status, SymMemoryPreservationStatus::Applied);
+  S.store(C.mkAdd(P, C.mkConst(64, 2)), C.mkConst(16, 0xbbaa));
+  EXPECT_EQ(S.load(P, 8), C.mkConst(64, 0x88776655bbaa2211));
+  S.store(Q, C.mkConst(8, 19));
+  EXPECT_FALSE(C.isConst(S.load(P, 8)));
+}
+
+TEST(SymMemoryPreservation, LeavesOtherMachineBanksUntouched) {
+  SymContext C;
+  SymState S(C);
+  const auto P = C.mkVar("p", 64);
+  const auto Reg = S.read(SymSpace::Register, 8, 8);
+  const auto Temp = S.read(SymSpace::Temporary, 16, 8);
+  ASSERT_TRUE(
+      S.setX64MemoryAddressSpaceBase(neverd::NdMemoryAddressSpace::X86FS, P));
+  ASSERT_TRUE(
+      S.setX64MemoryAddressSpaceBase(neverd::NdMemoryAddressSpace::X86GS, P));
+  SymState Before(S);
+  SymMemoryPreservation Keep{P, 0, 8, 1000};
+  S.clobberMemory(Keep);
+  ASSERT_EQ(Keep.Status, SymMemoryPreservationStatus::Applied);
+  EXPECT_EQ(S.read(SymSpace::Register, 8, 8), Reg);
+  EXPECT_EQ(S.read(SymSpace::Temporary, 16, 8), Temp);
+  EXPECT_EQ(S.read(SymSpace::Register, 128, 8),
+            Before.read(SymSpace::Register, 128, 8));
+  EXPECT_EQ(S.read(SymSpace::Temporary, 128, 8),
+            Before.read(SymSpace::Temporary, 128, 8));
+  EXPECT_EQ(S.x64MemoryAddressSpaceBase(neverd::NdMemoryAddressSpace::X86FS),
+            P);
+  EXPECT_EQ(S.x64MemoryAddressSpaceBase(neverd::NdMemoryAddressSpace::X86GS),
+            P);
+}
+
+TEST(SymMemoryPreservation, InvalidDescriptorsPreserveStateAndContext) {
+  SymContext C;
+  SymState S(C);
+  const auto P = C.mkVar("p", 64);
+  S.load(P, 8);
+  const std::vector<SymMemoryPreservation> Invalid{
+      {P, 0, 0, 1000},
+      {P, 2, 1, 1000},
+      {C.mkConst(64, 0), 0, 8, 1000},
+      {C.mkVar("narrow", 32), 0, 8, 1000},
+      {C.mkVar("wide", 128), 0, 8, 1000},
+      {SymRef(static_cast<uint32_t>(C.numNodes() + 20)), 0, 8, 1000}};
+  for (auto Keep : Invalid) {
+    const auto Nodes = C.numNodes(), Vars = C.numVars();
+    const SymState Before(S);
+    S.clobberMemory(Keep);
+    EXPECT_EQ(Keep.Status, SymMemoryPreservationStatus::Invalid);
+    EXPECT_EQ(Keep.WorkUsed, 1u);
+    EXPECT_EQ(C.numNodes(), Nodes);
+    EXPECT_EQ(C.numVars(), Vars);
+    EXPECT_TRUE(S.mergeIdentical(Before));
+  }
+}
+
+TEST(SymMemoryPreservation, ExactBudgetAndEveryShortAttemptAreTransactional) {
+  SymContext C;
+  SymState Source(C);
+  const auto P = C.mkVar("p", 64);
+  Source.store(P, C.mkConst(64, 17));
+  // Three request/lookup/default units, two banks, eight current bytes,
+  // and two units for each of eight saved bytes: 3 + 2 + 8 + 16 = 29.
+  for (uint64_t Budget = 0; Budget != 29; ++Budget) {
+    SCOPED_TRACE(Budget);
+    SymState S(Source), Before(Source);
+    SymMemoryPreservation Keep{P, 0, 8, Budget};
+    const auto Nodes = C.numNodes(), Vars = C.numVars();
+    S.clobberMemory(Keep);
+    EXPECT_EQ(Keep.Status, SymMemoryPreservationStatus::BudgetExceeded);
+    EXPECT_LE(Keep.WorkUsed, Budget);
+    if (Budget)
+      EXPECT_GE(Keep.WorkUsed, 1u);
+    EXPECT_EQ(C.numNodes(), Nodes);
+    EXPECT_EQ(C.numVars(), Vars);
+    EXPECT_TRUE(S.mergeIdentical(Before));
+    const auto Unread = C.mkAdd(P, C.mkConst(64, 16));
+    EXPECT_EQ(S.load(Unread, 8), Before.load(Unread, 8));
+  }
+  SymMemoryPreservation Keep{P, 0, 8, 29};
+  Source.clobberMemory(Keep);
+  ASSERT_EQ(Keep.Status, SymMemoryPreservationStatus::Applied);
+  EXPECT_EQ(Keep.WorkUsed, 29u);
+  EXPECT_EQ(Source.load(P, 8), C.mkConst(64, 17));
+}
+
+TEST(SymMemoryPreservation, SharedCacheRetirementIsChargedBeforePublication) {
+  SymContext C;
+  const auto P = C.mkVar("p", 64), Q = C.mkVar("q", 64);
+  SymState Source(C);
+  Source.clobberMemory();
+  const auto Current = Source.load(P, 8);
+  SymState Sibling(Source);
+  const auto Cached = Sibling.load(Q, 8);
+  // P's eight cached bytes are charged in its bank and default-cache entry.
+  // Q exists only in the default cache: 3 + 2 + 8 + 8 + 2 + 16 + 16 = 55.
+  for (uint64_t Budget = 0; Budget != 55; ++Budget) {
+    SymState S(Source), Before(Source);
+    SymMemoryPreservation Keep{P, 0, 8, Budget};
+    const auto Nodes = C.numNodes(), Vars = C.numVars();
+    S.clobberMemory(Keep);
+    EXPECT_EQ(Keep.Status, SymMemoryPreservationStatus::BudgetExceeded);
+    EXPECT_LE(Keep.WorkUsed, Budget);
+    EXPECT_EQ(C.numNodes(), Nodes);
+    EXPECT_EQ(C.numVars(), Vars);
+    EXPECT_TRUE(S.mergeIdentical(Before));
+    EXPECT_EQ(S.load(Q, 8), Cached);
+  }
+  SymMemoryPreservation Keep{P, 0, 8, 55};
+  Source.clobberMemory(Keep);
+  ASSERT_EQ(Keep.Status, SymMemoryPreservationStatus::Applied);
+  EXPECT_EQ(Keep.WorkUsed, 55u);
+  EXPECT_EQ(Source.load(P, 8), Current);
+  EXPECT_NE(Source.load(Q, 8), Cached);
+  EXPECT_EQ(Sibling.load(Q, 8), Cached);
+}
+
+TEST(SymMemoryPreservation, ExtremeIntervalsDoNotEnumerateMissingBytes) {
+  SymContext C;
+  SymState S(C);
+  const auto P = C.mkVar("p", 64);
+  const auto Min = std::numeric_limits<int64_t>::min();
+  const auto Max = std::numeric_limits<int64_t>::max();
+  const auto At = [&](int64_t Offset) {
+    return C.mkAdd(P, C.mkConst(64, static_cast<uint64_t>(Offset)));
+  };
+  for (int64_t Offset : {Min, int64_t{-1}, int64_t{0}, Max})
+    S.store(At(Offset), C.mkConst(8, 31));
+  // Two banks and four bytes, only three of which are retained.
+  SymMemoryPreservation Keep{P, Min, Max, 15};
+  S.clobberMemory(Keep);
+  ASSERT_EQ(Keep.Status, SymMemoryPreservationStatus::Applied);
+  EXPECT_EQ(Keep.WorkUsed, 15u);
+  EXPECT_EQ(S.load(At(Min), 1), C.mkConst(8, 31));
+  EXPECT_EQ(S.load(At(-1), 1), C.mkConst(8, 31));
+  EXPECT_EQ(S.load(At(0), 1), C.mkConst(8, 31));
+  EXPECT_FALSE(C.isConst(S.load(At(Max), 1)));
+}
+
+TEST(SymMemoryPreservation, UnprotectedNarrowAndWideRegionsAreForgotten) {
+  SymContext C;
+  SymState S(C);
+  const auto P = C.mkVar("p", 64);
+  const auto Narrow = C.mkVar("narrow", 32), Wide = C.mkVar("wide", 128);
+  const auto PV = S.load(P, 8), N = S.load(Narrow, 8), W = S.load(Wide, 8);
+  // Three fixed units, four banks, 24 current bytes and eight saved bytes.
+  SymMemoryPreservation Keep{P, 0, 8, 47};
+  S.clobberMemory(Keep);
+  ASSERT_EQ(Keep.Status, SymMemoryPreservationStatus::Applied);
+  EXPECT_EQ(Keep.WorkUsed, 47u);
+  EXPECT_EQ(S.numMemoryRegions(), 3u);
+  EXPECT_EQ(S.load(P, 8), PV);
+  EXPECT_NE(S.load(Narrow, 8), N);
+  EXPECT_NE(S.load(Wide, 8), W);
 }

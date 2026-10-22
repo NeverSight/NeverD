@@ -143,6 +143,39 @@ struct SymConditionalStore {
   SymConditionalStoreStatus Status = SymConditionalStoreStatus::Invalid;
 };
 
+enum class SymMemoryPreservationStatus : uint8_t {
+  Invalid,
+  Applied,
+  BudgetExceeded,
+};
+
+/// Forget memory except current materialized bytes in one exact region's
+/// [Begin, End) interval. The caller owns the validity of every retained fact;
+/// this supplies no accessibility, alias, write-footprint or call contract.
+/// Empty Base denotes absolute memory. Other bases must be nonconstant 64-bit
+/// references in this context; indices cannot authenticate foreign contexts.
+/// Relative coordinates use the same modular arithmetic as ordinary memory.
+/// An absent/noncanonical region contributes no facts, including unread bytes
+/// inside the interval. Historical origins and shared lazy caches are not
+/// current materialized bytes. All other memory receives a fresh unknown epoch.
+///
+/// Work charges one request, one region lookup, one default epoch, one per
+/// existing bank, every current/cache byte, every default-cache region, and
+/// two per saved byte. Shared cache bytes are conservatively charged for each
+/// owning bank/default-cache entry. These charges cover epoch allocation,
+/// staging, retirement and failed-plan cleanup. No expression is constructed.
+/// Invalid input or exhausted work changes neither state nor context; consumed
+/// work remains charged. Register, temporary, segment and historical-origin
+/// state is intact.
+struct SymMemoryPreservation {
+  SymRef Base;
+  int64_t Begin = 0;
+  int64_t End = 0;
+  uint64_t MaxWork = 0;
+  uint64_t WorkUsed = 0;
+  SymMemoryPreservationStatus Status = SymMemoryPreservationStatus::Invalid;
+};
+
 /// The state is a regular value: copying one is what forking a path is, so it
 /// has to sit in a container and be assigned like anything else.  A copy is a
 /// full machine-state fork. Scalar-only queries can omit memory banks and
@@ -296,6 +329,11 @@ public:
   /// Forget memory outright, every region of it.  What a callee with no
   /// summary may have done.
   void clobberMemory();
+
+  /// Bounded forgetting under the caller's current-fact preservation contract.
+  /// This is not an architectural write or a whole-machine call transition.
+  /// Inspect Preservation.Status; all preparation precedes state publication.
+  void clobberMemory(SymMemoryPreservation &Preservation);
 
   /// Available values, not a history of accesses. An invalid Base denotes
   /// absolute memory; otherwise Offset is relative to its canonical region.
@@ -455,6 +493,8 @@ private:
   /// Give up everything \p B held, and start an epoch so that what is read
   /// from it next cannot be mistaken for what was read before.
   static void forget(Bank &B);
+  /// Commit an already allocated epoch without allocating or making values.
+  static void forget(Bank &B, std::shared_ptr<UnknownBytes> Unknowns);
   /// Forget every region except the one based on \p Except; an invalid ref
   /// spares nothing.
   void forgetRegions(SymRef Except);
