@@ -189,7 +189,7 @@ bool RegistrationStateSolver::conditionalReturn(const Domain &State,
   return Valid;
 }
 
-bool RegistrationStateSolver::conditionalCall(const FrameState &State,
+bool RegistrationStateSolver::conditionalCall(const Domain &State,
                                               const LowOp &Op) {
   if (Op.Opcode != NdOp::CALL && Op.Opcode != NdOp::INDIR_CALL)
     return true;
@@ -201,7 +201,7 @@ bool RegistrationStateSolver::conditionalCall(const FrameState &State,
     return Refuse();
   if (KnownCxx) {
     const auto SP =
-        State.Registers[x86reg::RSP / x86reg::GeneralRegStride].Offset;
+        State.Frame.Registers[x86reg::RSP / x86reg::GeneralRegStride].Offset;
     // CALL writes its return PC below ESP even without an explicit LowIR
     // STORE. It cannot borrow the incoming/output area or overwrite a node.
     if (!SP || *SP > *Chain.RegistrationOffset)
@@ -232,7 +232,8 @@ bool RegistrationStateSolver::conditionalCall(const FrameState &State,
   // An absent or expired borrowed capture still refuses at the transfer.
   if (JumpRuntime && JumpRuntime->Resume && JumpRuntime->Resume(Op, WorkUsed))
     return true;
-  if (!Conditional->ProveCall || !Conditional->ProveCall(Op, State))
+  if (!Conditional->ProveCall ||
+      !Conditional->ProveCall(Op, State.Frame, State.InitializedFrameBytes))
     return Refuse();
   return true;
 }

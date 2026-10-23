@@ -159,20 +159,8 @@ proveBoundCxxCallee(const BinaryImage &Image, const LowOp &Op,
   const int64_t Base = int64_t(*SP) - 8;
   ConditionalFrame Inputs;
   auto ReadWord = [&](int32_t Offset) -> std::optional<FrameValue> {
-    if (!Initialized) {
-      const auto Cell = Parent.Cells.find(Offset);
-      return Cell == Parent.Cells.end()
-                 ? std::nullopt
-                 : std::optional<FrameValue>(Cell->second);
-    }
-    if (Offset > INT32_MAX - 4 ||
-        !registration_abi::chargeCalleeWork(
-            Work, 4 + Parent.memoryAccessWork(FrameValue::frame(Offset), 4)))
-      return std::nullopt;
-    for (int64_t Byte = Offset; Byte < int64_t(Offset) + 4; ++Byte)
-      if (!Initialized->count(int32_t(Byte)))
-        return std::nullopt;
-    return Parent.load(Offset, 4);
+    return registration_abi::readCallerFrameWord(Parent, Offset, Initialized,
+                                                 Work);
   };
   for (const auto Reg : {x86reg::RAX, x86reg::RCX, x86reg::RDX}) {
     const auto Index = Reg / x86reg::GeneralRegStride;

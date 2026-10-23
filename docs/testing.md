@@ -9033,6 +9033,14 @@ image bases with zero, one and three iterations. Mutable or missing bytes,
 conflicting fixups, duplicate mappings, a count beyond the mapped object,
 writable code and a borrowed frame address all reject. An already exhausted
 budget and a budget one work unit short cannot publish a partial proof.
+`RegistrationConditionalFrame.UnknownScalarArgumentsNeedInitializedBytes`
+adds a search with an unknown scalar key. Complete byte initialization admits
+both full-word and bytewise stores despite absent sparse scalar cells. Every
+missing input byte, stale stack position, partial pointer taint and overflow
+rejects; an exact old value cannot override a missing initialization byte.
+Both image bases and exhausted/one-unit-short budgets are covered. Run the
+registration state suite as well: its conditional C++ tests consume the same
+caller-word reader and retain overlapping-taint and nested-call coverage.
 `RegistrationCallABI.ReturningStackProofDoesNotNormalizeTheX87Stack`
 keeps the stack proof for bodies whose x87 normalization alone is incomplete
 or splits blocks by TOP, and for FXAM with a proved or unproved tag.

@@ -2330,6 +2330,14 @@ the existing callee work budget. Exhaustion rejects the whole invocation.
 Ordinary target-only callee contracts retain their joined-state analysis. This
 bound memory proof supplies neither a caller argument binding nor a native
 call ABI or a call-result constant.
+`readCallerFrameWord` separates byte initialization from sparse value storage
+for bound SEH, plain and C++ callees. When the caller supplies its initialization
+inventory, all four bytes must be present; a fully initialized unknown scalar
+is still an available argument. Reads retain overlapping pointer taint through
+the shared frame-memory owner. Without that inventory, a retained full-word
+cell remains necessary. Conditional nested calls pass the solver's live
+initialization set, including its join and stack-retirement decisions, instead
+of interpreting a missing scalar cell as uninitialized storage.
 `COFFRegistrationFrameBits` checks which pointer-dependent bits survive a
 register truncation. It follows masks and casts through the existing private
 store index, includes every full-width definition, and rejects unknown aliases

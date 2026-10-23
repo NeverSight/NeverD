@@ -25,6 +25,94 @@
 
 using namespace neverd;
 
+TEST(RegistrationConditionalFrame, UnknownScalarArgumentsNeedInitializedBytes) {
+  using namespace registration_state;
+  for (va_t Base : {0x400000u, 0x18000000u})
+    for (unsigned Mutation = 0; Mutation != 17; ++Mutation) {
+      SCOPED_TRACE(Base);
+      SCOPED_TRACE(Mutation);
+      BinaryImage Image;
+      Image.Arch = Arch::X86;
+      Image.Bits = Bitness::Bits32;
+      Image.Format = BinaryFormat::COFF;
+      Image.Base = Base;
+      Image.Entry = Base + 0x1000;
+      Segment Text;
+      Text.Name = ".text";
+      Text.VA = Image.Entry;
+      Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+      // Search an immutable, count-prefixed table for an unknown scalar.
+      // Either comparison outcome is safe; the table count bounds the loop.
+      Text.Data = {0x55, 0x8b, 0xec, 0x56, 0x8b, 0x75, 0x08, 0x8b, 0x45,
+                   0x0c, 0x8b, 0x0e, 0x8d, 0x56, 0x04, 0x85, 0xc9, 0x74,
+                   0x0a, 0x39, 0x02, 0x74, 0x06, 0x83, 0xc2, 0x04, 0x49,
+                   0x75, 0xf6, 0x31, 0xc0, 0x5e, 0x5d, 0xc3};
+      Segment Data;
+      Data.Name = ".rdata";
+      Data.VA = Base + 0x3000;
+      Data.Flags = SegmentFlags::Readable;
+      Data.Data.resize(16);
+      writeLE<uint32_t>(Data.Data.data(), 3);
+      for (unsigned I = 1; I != 4; ++I)
+        writeLE<uint32_t>(Data.Data.data() + I * 4, I * 7);
+      for (auto *Segment : {&Text, &Data}) {
+        Segment->Size = Segment->FileSz = Segment->Data.size();
+        Section Section;
+        Section.Name = Segment->Name;
+        Section.VA = Segment->VA;
+        Section.Size = Section.FileSz = Segment->Size;
+        Section.Flags = Segment->Flags;
+        Image.Sections.push_back(Section);
+        Image.Segments.push_back(*Segment);
+      }
+      LowOp Call;
+      Call.Opcode = NdOp::CALL;
+      Call.NumInputs = 1;
+      Call.Inputs[0] = NdVar::cst(Image.Entry, 4);
+      FrameState Parent;
+      Parent.Registers[x86reg::RSP / x86reg::GeneralRegStride] =
+          FrameValue::frame(-64);
+      Parent.store(-64, 4, FrameValue::imageAddress(Data.VA));
+      Parent.store(-60, 4, {});
+      ASSERT_FALSE(Parent.Cells.count(-60));
+      std::set<int32_t> Initialized;
+      for (int32_t Byte = -64; Byte != -56; ++Byte)
+        Initialized.insert(Byte);
+      if (Mutation == 1 || Mutation == 3 || Mutation == 13)
+        Parent.store(-60, 4, FrameValue::constant(14));
+      if (Mutation == 2)
+        for (int32_t Byte = -60; Byte != -56; ++Byte)
+          Parent.store(Byte, 1, {});
+      if (Mutation >= 5 && Mutation <= 12)
+        Initialized.erase(-64 + int32_t(Mutation - 5));
+      if (Mutation == 13)
+        Initialized.erase(-58);
+      if (Mutation == 14)
+        Parent.store(-59, 1, FrameValue::frame(-8));
+      if (Mutation == 15)
+        Parent.Registers[x86reg::RSP / x86reg::GeneralRegStride] =
+            FrameValue::frame(-56);
+      if (Mutation == 16)
+        Parent.Registers[x86reg::RSP / x86reg::GeneralRegStride] =
+            FrameValue::frame(INT32_MAX - 3);
+      const auto *Bytes =
+          Mutation == 3 || Mutation == 4 ? nullptr : &Initialized;
+      size_t Work = 0;
+      EXPECT_EQ(registration_abi::hasConditionalCallFrame(Image, Call, Parent,
+                                                          Work, Bytes),
+                Mutation <= 3);
+      size_t Exhausted = limits::kMaxRegistrationEHStateWork;
+      EXPECT_FALSE(registration_abi::hasConditionalCallFrame(
+          Image, Call, Parent, Exhausted, Bytes));
+      if (Mutation <= 3) {
+        ASSERT_GT(Work, 0u);
+        size_t Incomplete = limits::kMaxRegistrationEHStateWork - Work + 1;
+        EXPECT_FALSE(registration_abi::hasConditionalCallFrame(
+            Image, Call, Parent, Incomplete, Bytes));
+      }
+    }
+}
+
 TEST(RegistrationConditionalFrame, BoundImmutableScansKeepTheirMemoryExtent) {
   using namespace registration_state;
   for (va_t Base : {0x400000u, 0x18000000u})
@@ -226,9 +314,10 @@ TEST(RegistrationConditionalFrame, XCPT4HelperChecksItsBoundIncomingCounter) {
                         {12, FrameValue::frame(256)}};
     Inputs.Objects = {{256, 260}};
     Inputs.ObjectCells = {{256, FrameValue::constant(1)}};
-    Inputs.ProveCall = [&](const LowOp &Op, const FrameState &State) {
+    Inputs.ProveCall = [&](const LowOp &Op, const FrameState &State,
+                           const std::set<int32_t> &Initialized) {
       return Mutation != 4 && registration_abi::hasConditionalCallFrame(
-                                  *Image, Op, State, Inputs.Work);
+                                  *Image, Op, State, Inputs.Work, &Initialized);
     };
     if (Mutation == 1)
       Inputs.Objects[0].End = 259;

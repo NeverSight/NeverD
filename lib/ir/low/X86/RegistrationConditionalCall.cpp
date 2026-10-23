@@ -14,8 +14,31 @@
 #include "neverd/loader/ReadOnlyBytes.h"
 #include "neverd/support/BinaryEncoding.h"
 
+#include <bit>
+
 namespace neverd::registration_abi {
 using namespace registration_state;
+
+std::optional<FrameValue>
+readCallerFrameWord(const FrameState &State, int32_t Offset,
+                    const std::set<int32_t> *Initialized, size_t &Work) {
+  if (Offset > INT32_MAX - 4 ||
+      !chargeCalleeWork(Work,
+                        State.memoryAccessWork(FrameValue::frame(Offset), 4)))
+    return std::nullopt;
+  if (Initialized) {
+    if (!chargeCalleeWork(Work,
+                          4 * (1 + 2 * std::bit_width(Initialized->size()))))
+      return std::nullopt;
+    for (int64_t Byte = Offset; Byte < int64_t(Offset) + 4; ++Byte)
+      if (!Initialized->count(int32_t(Byte)))
+        return std::nullopt;
+  } else if (!State.Cells.count(Offset))
+    return std::nullopt;
+  // Sparse storage omits unknown scalars. Read through the memory owner so
+  // a partial overlapping pointer store cannot become an untainted argument.
+  return State.load(Offset, 4);
+}
 
 bool hasClosedRegistrationRaise(const BinaryImage &Image, const LowOp &Op,
                                 const FrameState &State) {
@@ -52,7 +75,8 @@ bool hasClosedRegistrationRaise(const BinaryImage &Image, const LowOp &Op,
 }
 
 bool hasConditionalCallFrame(const BinaryImage &Image, const LowOp &Op,
-                             const FrameState &State, size_t &Work) {
+                             const FrameState &State, size_t &Work,
+                             const std::set<int32_t> *Initialized) {
   if (hasClosedRegistrationRaise(Image, Op, State))
     return chargeCalleeWork(Work, 10);
   if (Op.Opcode != NdOp::CALL || Op.NumInputs != 1 || !Op.Inputs[0].isConst() ||
@@ -61,17 +85,18 @@ bool hasConditionalCallFrame(const BinaryImage &Image, const LowOp &Op,
   const va_t Target = Op.Inputs[0].Offset;
   const auto SP =
       State.Registers[x86reg::RSP / x86reg::GeneralRegStride].Offset;
-  if (!SP || *SP > INT32_MAX - 128 || Op.Opcode != NdOp::CALL)
+  constexpr int32_t ArgumentLimit = limits::ir::
+      kRegistrationConditionalCallHasConditionalCallFrameOffsetLimit;
+  if (!SP || *SP > INT32_MAX - ArgumentLimit)
     return false;
   std::map<int32_t, FrameValue> Arguments;
-  for (int32_t Offset = 8;
-       Offset <=
-       ::neverd::limits::ir::
-           kRegistrationConditionalCallHasConditionalCallFrameOffsetLimit;
-       Offset += 4) {
-    const auto It = State.Cells.find(*SP + Offset - 8);
-    if (It != State.Cells.end() && !It->second.MayBeFrame)
-      Arguments.emplace(Offset, It->second);
+  for (int32_t Offset = 8; Offset <= ArgumentLimit; Offset += 4) {
+    if (!chargeCalleeWork(Work, 1))
+      return false;
+    const auto Value =
+        readCallerFrameWord(State, *SP + Offset - 8, Initialized, Work);
+    if (Value && !Value->MayBeFrame)
+      Arguments.emplace(Offset, *Value);
   }
   if (Arguments.empty())
     return false;

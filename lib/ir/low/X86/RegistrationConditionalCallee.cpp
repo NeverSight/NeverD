@@ -84,10 +84,11 @@ proveBoundSEHCallee(const BinaryImage &Image, const LowOp &Op,
        Arg <= ::neverd::limits::ir::
                   kRegistrationConditionalCalleeProveBoundSEHCalleeArgLimit;
        Arg += 4) {
-    const auto Cell = Parent.Cells.find(*SP + Arg - 8);
-    if (Cell == Parent.Cells.end())
+    const auto Cell = registration_abi::readCallerFrameWord(
+        Parent, *SP + Arg - 8, nullptr, Inputs.Work);
+    if (!Cell)
       continue;
-    const auto &Value = Cell->second;
+    const auto &Value = *Cell;
     if (!Value.MayBeFrame) {
       Inputs.Arguments.emplace(Arg, Value);
       continue;
@@ -106,7 +107,8 @@ proveBoundSEHCallee(const BinaryImage &Image, const LowOp &Op,
         Inputs.JumpBuffers.emplace(Capture->second.Call, Capture->second);
         continue;
       }
-    const auto Object = Parent.Cells.find(*Value.Offset);
+    const auto Object = registration_abi::readCallerFrameWord(
+        Parent, *Value.Offset, nullptr, Inputs.Work);
     const int64_t Offset = int64_t(*Value.Offset) - Base;
     if (Captures &&
         !registration_abi::chargeCalleeWork(Inputs.Work, Captures->size()))
@@ -118,19 +120,20 @@ proveBoundSEHCallee(const BinaryImage &Image, const LowOp &Op,
                  Begin < int64_t(*Value.Offset) + 4;
         }))
       continue;
-    if (Object == Parent.Cells.end() || Object->second.MayBeFrame ||
-        *Value.Offset < *SP + 128 || Offset > INT32_MAX - 4 || Offset < 136 ||
-        *Value.Offset >= -24 || int64_t(*Value.Offset) + 4 > -24)
+    if (!Object || Object->MayBeFrame || *Value.Offset < *SP + 128 ||
+        Offset > INT32_MAX - 4 || Offset < 136 || *Value.Offset >= -24 ||
+        int64_t(*Value.Offset) + 4 > -24)
       continue;
     Inputs.Arguments.emplace(Arg, FrameValue::frame(int32_t(Offset)));
     Inputs.Objects.push_back({int32_t(Offset), int32_t(Offset + 4)});
-    Inputs.ObjectCells.emplace(int32_t(Offset), Object->second);
+    Inputs.ObjectCells.emplace(int32_t(Offset), *Object);
   }
   if (Inputs.Objects.empty() && Inputs.JumpBuffers.empty())
     return std::nullopt;
-  Inputs.ProveCall = [&](const LowOp &Call, const FrameState &State) {
+  Inputs.ProveCall = [&](const LowOp &Call, const FrameState &State,
+                         const std::set<int32_t> &Initialized) {
     return registration_abi::hasConditionalCallFrame(Image, Call, State,
-                                                     Inputs.Work);
+                                                     Inputs.Work, &Initialized);
   };
   Decoder Dec;
   if (!Dec.init(Image))

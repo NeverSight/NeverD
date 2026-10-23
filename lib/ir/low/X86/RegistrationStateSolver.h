@@ -396,7 +396,7 @@ private:
                               const FrameTransfer &Transfer,
                               const std::set<int32_t> *Initialized = nullptr);
   bool conditionalReturn(const Domain &State, const LowOp &Op);
-  bool conditionalCall(const FrameState &State, const LowOp &Op);
+  bool conditionalCall(const Domain &State, const LowOp &Op);
   void dispatchBlock(size_t I, const Domain &Before, const BlockFacts &Facts);
   bool dispatchUnknownCxxCleanups(const Domain &Before);
   void queueSEHScopes(const Domain &Before, bool Invalid);

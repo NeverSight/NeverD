@@ -133,7 +133,7 @@ bool RegistrationStateSolver::transferBlock(size_t I, const Domain &Before,
     if (Conditional &&
         (!checkConditionalMemory(After.Frame, Op, Transfer,
                                  &After.InitializedFrameBytes) ||
-         !conditionalReturn(After, Op) || !conditionalCall(After.Frame, Op)))
+         !conditionalReturn(After, Op) || !conditionalCall(After, Op)))
       Invalidate();
     FrameValue RuntimeValue;
     if (CheckRuntimeObjects) {

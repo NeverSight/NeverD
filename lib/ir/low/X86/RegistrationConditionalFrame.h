@@ -64,7 +64,9 @@ struct BoundCxxCalleeEffect {
 /// Positive object extents are proved caller storage, disjoint from this
 /// invocation's return PC, private frame and incoming argument slots.
 struct ConditionalFrame {
-  std::function<bool(const LowOp &, const FrameState &)> ProveCall;
+  std::function<bool(const LowOp &, const FrameState &,
+                     const std::set<int32_t> &)>
+      ProveCall;
   /// Replays a nested C++ invocation after binding its physical CALL and
   /// current inputs. Only the private conditional solver consumes this hook.
   std::function<std::optional<BoundCxxCalleeEffect>(

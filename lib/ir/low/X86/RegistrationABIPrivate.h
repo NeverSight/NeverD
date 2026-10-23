@@ -14,6 +14,8 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <cstdint>
+#include <optional>
 #include <set>
 #include <utility>
 
@@ -78,9 +80,15 @@ std::optional<uint32_t>
 checkedRegistrationImportStackPop(const BinaryImage &Image, va_t Target);
 const Import *checkedImportSlot(const BinaryImage &Image, va_t Target);
 bool callerPCIsNotReadBack(const ImageFrameEffects &Effects);
+/// Initialization and value knowledge are independent. Without an explicit
+/// byte inventory, only a retained full-word cell supplies an input.
+std::optional<registration_state::FrameValue>
+readCallerFrameWord(const registration_state::FrameState &State, int32_t Offset,
+                    const std::set<int32_t> *Initialized, size_t &Work);
 bool hasConditionalCallFrame(const BinaryImage &Image, const LowOp &Op,
                              const registration_state::FrameState &State,
-                             size_t &Work);
+                             size_t &Work,
+                             const std::set<int32_t> *Initialized = nullptr);
 bool hasClosedRegistrationRaise(const BinaryImage &Image, const LowOp &Op,
                                 const registration_state::FrameState &State);
 bool hasSEHCallbackImageMemory(const BinaryImage &Image, va_t Address,
