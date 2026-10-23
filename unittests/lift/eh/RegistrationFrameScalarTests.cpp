@@ -66,6 +66,73 @@ TEST(RegistrationFrameScalar, ExactCoordinatesPreserveRelocatedResults) {
         }
 }
 
+TEST(RegistrationFrameScalar, AddressBitsAreNotAffineScalarConstants) {
+  for (uint32_t Address : {0x401000u, 0x18001000u}) {
+    FrameState State;
+    FrameTransfer Transfer(State, -16);
+    auto Input = NdVar::cst(Address, 4);
+    const auto Numeric = Transfer.read(Input);
+    ASSERT_EQ(Numeric.Constant, Address);
+    for (auto Provenance : {ConstantAddressProvenance::Address,
+                            ConstantAddressProvenance::DataAddress,
+                            ConstantAddressProvenance::CodeAddress}) {
+      Input.Provenance = Provenance;
+      const auto Pointer = Transfer.read(Input);
+      EXPECT_EQ(Pointer.ImageAddress, Address);
+      EXPECT_FALSE(Pointer.Constant);
+      EXPECT_NE(Pointer, Numeric);
+      for (unsigned Space = 0; Space != 3; ++Space) {
+        const auto Result =
+            evaluate(coordinate(Space, -16), Pointer, operation(NdOp::INT_SUB));
+        EXPECT_FALSE(Result.Offset);
+        EXPECT_FALSE(Result.EntryOffset);
+        EXPECT_FALSE(Result.CallbackAddress);
+        EXPECT_TRUE(Result.MayBeFrame);
+      }
+      for (NdOp Opcode : {NdOp::INT_SUB, NdOp::INT_EQUAL, NdOp::INT_NOTEQUAL})
+        EXPECT_FALSE(evaluate(Pointer, Numeric, operation(Opcode)).Constant);
+      auto Add = operation(NdOp::INT_ADD);
+      Add.Output.Size = 4;
+      EXPECT_EQ(evaluate(Pointer, FrameValue::constant(4), Add).ImageAddress,
+                Address + 4);
+      EXPECT_EQ(evaluate(FrameValue::constant(4), Pointer, Add).ImageAddress,
+                Address + 4);
+      State.store(-32, 4, Pointer);
+      EXPECT_EQ(State.load(-32, 4), Pointer);
+      EXPECT_FALSE(State.load(-32, 2).ImageAddress);
+      FrameState NumericState = State;
+      NumericState.store(-32, 4, Numeric);
+      EXPECT_NE(State, NumericState);
+      EXPECT_NE(State.snapshotHash(), NumericState.snapshotHash());
+    }
+    Input.Provenance = ConstantAddressProvenance::AddressFragment;
+    EXPECT_EQ(Transfer.read(Input), FrameValue{});
+    Input.Provenance = ConstantAddressProvenance::DataAddress;
+    for (uint16_t Size : {1, 2, 8}) {
+      Input.Size = Size;
+      EXPECT_EQ(Transfer.read(Input), FrameValue{});
+    }
+  }
+}
+
+TEST(RegistrationFrameScalar, CookieAddressXORDoesNotBecomeAnIntegerMask) {
+  FrameValue Cookie;
+  Cookie.SecurityCookie = true;
+  auto Xor = operation(NdOp::INT_XOR);
+  Xor.Output.Size = 4;
+  const auto Pointer = FrameValue::imageAddress(0x403000);
+  const auto Encoded = evaluate(Cookie, Pointer, Xor);
+  EXPECT_EQ(Encoded.cookieAddress(), 0x403000u);
+  EXPECT_FALSE(Encoded.Constant);
+  EXPECT_EQ(Encoded.CookieXOR, 0u);
+  EXPECT_EQ(evaluate(Encoded, Pointer, Xor), Cookie);
+  const auto Numeric = evaluate(Encoded, FrameValue::constant(0x403000), Xor);
+  EXPECT_NE(Numeric, Cookie);
+  EXPECT_FALSE(Numeric.cookieAddress());
+  EXPECT_EQ(evaluate(Encoded, Encoded, Xor).Constant, 0u);
+  EXPECT_FALSE(evaluate(Encoded, Cookie, Xor).Constant);
+}
+
 TEST(RegistrationFrameScalar, DistinctOrAmbiguousRootsRetainTaint) {
   for (unsigned Mutation = 0; Mutation != 10; ++Mutation) {
     SCOPED_TRACE(Mutation);

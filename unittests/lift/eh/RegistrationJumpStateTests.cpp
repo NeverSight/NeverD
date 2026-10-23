@@ -126,7 +126,8 @@ TEST(RegistrationJumpState, EH4InitializesAndProtectsItsCookieAddress) {
     FrameState Frame;
     Frame.store(-100, 4, FrameValue::constant(7));
     storeSEHJumpCapture(Frame, Capture);
-    EXPECT_EQ(Frame.load(-104, 4).Constant, 0x405000u);
+    EXPECT_EQ(Frame.load(-104, 4).ImageAddress, 0x405000u);
+    EXPECT_FALSE(Frame.load(-104, 4).Constant);
     EXPECT_EQ(Frame.load(-100, 4).Constant, 7u);
     EXPECT_TRUE(hasSEHJumpCapture(Frame, Capture));
     Frame.store(-144 + I, 1, {});

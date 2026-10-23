@@ -32,7 +32,12 @@ BinaryImage copyImage(std::vector<uint8_t> Code) {
   Text.VA = 0x1000;
   Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
   Text.Data = std::move(Code);
-  Text.Size = Text.Data.size();
+  Text.Size = Text.FileSz = Text.Data.size();
+  Section CodeSection;
+  CodeSection.VA = Text.VA;
+  CodeSection.Size = CodeSection.FileSz = Text.Size;
+  CodeSection.Flags = Text.Flags;
+  Image.Sections.push_back(CodeSection);
   Image.Segments.push_back(std::move(Text));
   Segment Data;
   Data.VA = 0x3000;

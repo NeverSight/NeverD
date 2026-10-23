@@ -94,11 +94,11 @@ bool RegistrationStateSolver::transferCxxEpilogue(
   }
   // Model the helper's moved PC separately from the incoming parent's PC.
   // The final push overwrites the old EBP slot, below the returned ESP.
-  const auto PC = FrameValue::constant(uint32_t(Call.Caller.End));
+  const auto PC = FrameValue::imageAddress(uint32_t(Call.Caller.End));
   State.Frame.store(*SP - 4, 4, PC);
   if (Call.CookieCheck) {
-    State.Frame.store(*SP - 8, 4,
-                      FrameValue::constant(uint32_t(Call.Helper.Begin + 10)));
+    State.Frame.store(
+        *SP - 8, 4, FrameValue::imageAddress(uint32_t(Call.Helper.Begin + 10)));
     ImageReads.emplace(SecurityCookieVA, SecurityCookieVA + 4);
     for (const auto &[Flag, Bit] : kX86EqualComparisonFlags) {
       // Equal four-byte operands make CMP produce 0 without borrow,

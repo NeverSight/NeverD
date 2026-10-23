@@ -238,13 +238,13 @@ bool RegistrationStateSolver::transferBlock(size_t I, const Domain &Before,
         // the callback stack nor the saved entry registers alias a cookie.
         if (!Address.Offset && !Address.EntryOffset &&
             !Address.CallbackAddress &&
-            (!Address.Constant ||
-             (uint64_t(*Address.Constant) < SecurityCookieVA + 4 &&
+            (!Address.preferredAddress() ||
+             (uint64_t(*Address.preferredAddress()) < SecurityCookieVA + 4 &&
               SecurityCookieVA <
-                  uint64_t(*Address.Constant) + Memory.AccessSize) ||
-             (EH4 && uint64_t(*Address.Constant) < TableEnd &&
+                  uint64_t(*Address.preferredAddress()) + Memory.AccessSize) ||
+             (EH4 && uint64_t(*Address.preferredAddress()) < TableEnd &&
               Chain.ScopeTableVA <
-                  uint64_t(*Address.Constant) + Memory.AccessSize)))
+                  uint64_t(*Address.preferredAddress()) + Memory.AccessSize)))
           CompleteCookies = false;
       }
     }
@@ -296,9 +296,10 @@ bool RegistrationStateSolver::transferBlock(size_t I, const Domain &Before,
       else if (Address.Offset || Address.EntryOffset ||
                Address.CallbackAddress || RuntimeMemory) {
         // The established private frame cannot alias an image allocation.
-      } else if (Address.Constant && !Address.MayBeFrame)
-        ImageReads.emplace(*Address.Constant,
-                           va_t(*Address.Constant) + Memory.AccessSize);
+      } else if (Address.preferredAddress() && !Address.MayBeFrame)
+        ImageReads.emplace(*Address.preferredAddress(),
+                           va_t(*Address.preferredAddress()) +
+                               Memory.AccessSize);
       else
         CompleteImageReads = false;
     }
@@ -489,7 +490,7 @@ bool RegistrationStateSolver::transferBlock(size_t I, const Domain &Before,
         }
         if (CheckCalls && !RuntimeMemory && !Address.Offset &&
             !Address.EntryOffset && !Address.CallbackAddress &&
-            !Address.Constant) {
+            !Address.preferredAddress()) {
           After.InitializedFrameBytes.clear();
           if (!charge(After.Frame.cellCount()))
             break;

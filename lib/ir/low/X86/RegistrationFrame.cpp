@@ -142,6 +142,11 @@ void FrameTransfer::beginInstruction(va_t Address) {
 }
 
 FrameValue FrameTransfer::read(const NdVar &Value) const {
+  if (Value.isConst() && isAddressProvenance(Value.Provenance))
+    return isExactAddressProvenance(Value.Provenance) && Value.Size == 4 &&
+                   Value.Offset <= UINT32_MAX
+               ? FrameValue::imageAddress(uint32_t(Value.Offset))
+               : FrameValue{};
   if (Value.isConst())
     return FrameValue::constant(static_cast<uint32_t>(Value.Offset));
   if (Value.isReg() && Value.Offset < 8 * x86reg::GeneralRegStride) {
@@ -242,7 +247,7 @@ FrameValue FrameTransfer::evaluate(const LowOp &Op, bool Installed) const {
                        : FrameValue::previousChain();
     if (SecurityCookieVA &&
         Op.MemoryAddressSpace == NdMemoryAddressSpace::Default &&
-        Address.Constant == SecurityCookieVA && Op.Output.Size == 4) {
+        Address.preferredAddress() == SecurityCookieVA && Op.Output.Size == 4) {
       FrameValue Cookie;
       Cookie.SecurityCookie = true;
       return Cookie;
@@ -269,8 +274,18 @@ FrameValue FrameTransfer::evaluate(const LowOp &Op, bool Installed) const {
       std::swap(Left, Right);
     if (Left.SecurityCookie) {
       if (Right.SecurityCookie &&
-          Left.CookieFrameOffset == Right.CookieFrameOffset)
+          Left.CookieFrameOffset == Right.CookieFrameOffset &&
+          Left.CookieImageXOR == Right.CookieImageXOR)
         return FrameValue::constant(Left.CookieXOR ^ Right.CookieXOR);
+      if (Right.ImageAddress) {
+        if (!Left.CookieImageXOR)
+          Left.CookieImageXOR = Right.ImageAddress;
+        else if (Left.CookieImageXOR == Right.ImageAddress)
+          Left.CookieImageXOR.reset();
+        else
+          return Result;
+        return Left;
+      }
       if (Right.Constant) {
         Left.CookieXOR ^= *Right.Constant;
         return Left;
@@ -293,6 +308,15 @@ FrameValue FrameTransfer::evaluate(const LowOp &Op, bool Installed) const {
       Op.NumInputs == 2) {
     const FrameValue Left = read(Op.Inputs[0]);
     const FrameValue Right = read(Op.Inputs[1]);
+    if (Op.Output.Size == 4 && Op.Inputs[0].Size == 4 &&
+        Op.Inputs[1].Size == 4) {
+      if (Left.ImageAddress && Right.Constant)
+        return FrameValue::imageAddress(
+            *Left.ImageAddress +
+            (Op.Opcode == NdOp::INT_ADD ? *Right.Constant : -*Right.Constant));
+      if (Op.Opcode == NdOp::INT_ADD && Left.Constant && Right.ImageAddress)
+        return FrameValue::imageAddress(*Left.Constant + *Right.ImageAddress);
+    }
     auto AddExceptionOffset = [&](const FrameValue &Base,
                                   int64_t Delta) -> std::optional<FrameValue> {
       if (!Base.SEHException || Op.Output.Size < 4)
@@ -357,7 +381,7 @@ bool FrameTransfer::isCookieCheck(const LowOp &Op, va_t CookieCheckVA) const {
          Op.Inputs[0].isConst() && Op.Inputs[0].Size == 4 &&
          Op.Inputs[0].Offset == CookieCheckVA && Cookie.SecurityCookie &&
          !Cookie.CookieFrameOffset && !Cookie.MayBeFrame &&
-         Cookie.CookieXOR == 0;
+         !Cookie.CookieImageXOR && Cookie.CookieXOR == 0;
 }
 
 void FrameTransfer::write(const LowOp &Op, FrameValue Value,

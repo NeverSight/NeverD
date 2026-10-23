@@ -9,12 +9,15 @@
 #include "RegistrationFrameEffects.h"
 
 #include "neverd/Limits.h"
+#include "neverd/decode/InstructionRelocations.h"
 #include "neverd/ir/Limits.h"
 #include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/lift/X86Regs.h"
 #include "neverd/loader/ReadOnlyBytes.h"
 #include "neverd/loader/RegistrationScopeGraph.h"
 #include "neverd/support/BinaryEncoding.h"
+
+#include "llvm/ADT/STLExtras.h"
 
 #include <deque>
 #include <functional>
@@ -44,9 +47,24 @@ bool hasImmutableCalleeInstruction(const BinaryImage &Image,
         (Insn.Id == X86_INS_MOV || Insn.Id == X86_INS_PUSH))
       AbsoluteOperands.push_back(Boundary.Address + X86.encoding.imm_offset);
   }
-  return readImmutablePE32CodeBytes(Image, Boundary.Address, Boundary.Size,
-                                    AbsoluteOperands)
-      .has_value();
+  if (!readImmutablePE32CodeBytes(Image, Boundary.Address, Boundary.Size,
+                                  AbsoluteOperands))
+    return false;
+  // The stronger frame/memory proof consumes LowIR address identities. A
+  // checked opcode alone does not authorize freezing an unclassified fixup's
+  // preferred bits. The stack-only proof below may instead forget those bits.
+  const auto Relocations = instructionRelocations(Image, Insn);
+  for (va_t Field : AbsoluteOperands)
+    if (!readImmutableCodeBytes(Image, Field, 4) &&
+        llvm::count_if(Relocations.Addresses, [&](const auto &Operand) {
+          return Operand.FieldVA == Field && Operand.Width == 4 &&
+                 !Operand.PCRelativeFromInstructionEnd &&
+                 Operand.EncodedValue ==
+                     readLE<uint32_t>(Bytes + Field - Boundary.Address) &&
+                 isExactAddressProvenance(Operand.Provenance);
+        }) != 1)
+      return false;
+  return true;
 }
 
 } // namespace neverd::registration_abi

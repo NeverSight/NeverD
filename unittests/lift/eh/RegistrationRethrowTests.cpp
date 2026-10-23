@@ -44,7 +44,13 @@ struct RethrowImage {
     Text.Data[0x80] = 0xff;
     Text.Data[0x81] = 0x25;
     writeLE<uint32_t>(Text.Data.data() + 0x82, Data + 4);
-    Text.Size = Text.Data.size();
+    Text.Size = Text.FileSz = Text.Data.size();
+    Section Code;
+    Code.Name = Text.Name;
+    Code.VA = Text.VA;
+    Code.Size = Code.FileSz = Text.Size;
+    Code.Flags = Text.Flags;
+    Image.Sections.push_back(Code);
     Image.Segments.push_back(std::move(Text));
     Segment Storage;
     Storage.Name = ".data";

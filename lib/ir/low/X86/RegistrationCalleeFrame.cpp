@@ -79,6 +79,13 @@ bool hasPrivateCallerFrame(const LowFunc &Function, const BinaryImage &Image,
     Work += Amount;
     return true;
   };
+  Decoder Dec;
+  if (!Dec.init(Image))
+    return false;
+  for (const auto &Block : Function.Blocks)
+    for (const auto &Insn : Block.InstructionBoundaries)
+      if (!Charge(1) || !hasImmutableCalleeInstruction(Image, Insn, Dec))
+        return false;
   std::map<int, const LowBlock *> Blocks;
   PrivateFrameState Initial;
   for (unsigned Index = 0; Index != Initial.Frame.Registers.size(); ++Index)
@@ -168,6 +175,7 @@ bool hasPrivateCallerFrame(const LowFunc &Function, const BinaryImage &Image,
                     State.CopySourceSpills.Cells.size() + Memory.AccessSize))
           return false;
         const auto Address = Transfer.read(*Memory.Address);
+        const auto ImageVA = Address.preferredAddress();
         const auto Object = BorrowTransfer.read(*Memory.Address);
         const auto CopySource = CopySourceTransfer.read(*Memory.Address);
         if ((Object.MayBeFrame && !Object.Offset) ||
@@ -176,7 +184,7 @@ bool hasPrivateCallerFrame(const LowFunc &Function, const BinaryImage &Image,
           return false;
         if (BorrowECX && Object.Offset) {
           const int64_t End = int64_t(*Object.Offset) + Memory.AccessSize;
-          if (Address.Offset || Address.Constant || Address.MayBeFrame ||
+          if (Address.Offset || ImageVA || Address.MayBeFrame ||
               *Object.Offset < 0 || End > INT32_MAX ||
               End > limits::kMaxSourceCallBorrowedBytes ||
               (CopyObjectSize && uint64_t(End) > CopyObjectSize))
@@ -202,7 +210,7 @@ bool hasPrivateCallerFrame(const LowFunc &Function, const BinaryImage &Image,
           }
         } else if (CopyObjectSize && CopySource.Offset) {
           const int64_t End = int64_t(*CopySource.Offset) + Memory.AccessSize;
-          if (Address.Offset || Address.Constant || Address.MayBeFrame ||
+          if (Address.Offset || ImageVA || Address.MayBeFrame ||
               *CopySource.Offset < 0 || uint64_t(End) > CopyObjectSize ||
               Op.Opcode != NdOp::LOAD || Memory.StoredValue)
             return false;
@@ -221,7 +229,7 @@ bool hasPrivateCallerFrame(const LowFunc &Function, const BinaryImage &Image,
                   uint64_t(8) + ScalarArgumentBytes &&
               Op.Opcode == NdOp::LOAD && Memory.AccessSize <= 4 &&
               (*Address.Offset - 8) % 4 + Memory.AccessSize <= 4;
-          if ((!Address.Offset && !Address.Constant) ||
+          if ((!Address.Offset && !ImageVA) ||
               (Address.MayBeFrame && !Address.Offset) ||
               (Address.Offset && !CopyArgument && !ScalarArgument &&
                int64_t(*Address.Offset) + Memory.AccessSize > 8 &&
@@ -229,20 +237,19 @@ bool hasPrivateCallerFrame(const LowFunc &Function, const BinaryImage &Image,
                 !ScalarArguments->count(*Address.Offset) ||
                 Op.Opcode != NdOp::LOAD)))
             return false;
-          if (Address.Constant && *Address.Constant != 0) {
-            const auto *Owner = Image.getSegmentFor(*Address.Constant);
-            if (!Owner || *Address.Constant < Owner->VA ||
-                uint64_t(*Address.Constant) - Owner->VA > Owner->Size ||
+          if (ImageVA && *ImageVA != 0) {
+            const auto *Owner = Image.getSegmentFor(*ImageVA);
+            if (!Owner || *ImageVA < Owner->VA ||
+                uint64_t(*ImageVA) - Owner->VA > Owner->Size ||
                 Memory.AccessSize >
-                    Owner->Size - (uint64_t(*Address.Constant) - Owner->VA))
+                    Owner->Size - (uint64_t(*ImageVA) - Owner->VA))
               return false;
           }
-          if (Address.Constant && Op.Opcode != NdOp::STORE)
-            Effects.Reads.emplace(*Address.Constant,
-                                  va_t(*Address.Constant) + Memory.AccessSize);
-          if (Address.Constant && Memory.StoredValue)
-            Effects.Writes.emplace(*Address.Constant,
-                                   va_t(*Address.Constant) + Memory.AccessSize);
+          if (ImageVA && Op.Opcode != NdOp::STORE)
+            Effects.Reads.emplace(*ImageVA, va_t(*ImageVA) + Memory.AccessSize);
+          if (ImageVA && Memory.StoredValue)
+            Effects.Writes.emplace(*ImageVA,
+                                   va_t(*ImageVA) + Memory.AccessSize);
           if (Address.Offset) {
             const int64_t End = int64_t(*Address.Offset) + Memory.AccessSize;
             if (End > INT32_MAX)
@@ -287,8 +294,9 @@ bool hasPrivateCallerFrame(const LowFunc &Function, const BinaryImage &Image,
                      Transfer.read(*Memory.StoredValue).MayBeFrame) {
             if (!Transfer.read(*Memory.StoredValue).ReturnPC)
               return false;
-            Effects.CallerPCWrites.emplace(
-                *Address.Constant, va_t(*Address.Constant) + Memory.AccessSize);
+            Effects.CallerPCWrites.emplace(*ImageVA,
+                                           va_t(*Address.preferredAddress()) +
+                                               Memory.AccessSize);
           }
           if (Memory.StoredValue && !Address.Offset &&
               (BorrowTransfer.read(*Memory.StoredValue).MayBeFrame ||
@@ -363,10 +371,10 @@ bool hasPrivateCallerFrame(const LowFunc &Function, const BinaryImage &Image,
             break;
           }
           if (!Object.Offset || Object.ReturnPC || Object.FrameOnlyFromCall ||
-              !Table.Constant || Table.MayBeFrame)
+              !Table.preferredAddress() || Table.MayBeFrame)
             return false;
           auto ObjectABI = getCheckedX86RegistrationThrowObjectABI(
-              Image, *Table.Constant, &Work);
+              Image, *Table.preferredAddress(), &Work);
           if (!ObjectABI ||
               !Charge(ObjectABI->Info.ObjectSize + State.Frame.Cells.size()))
             return false;

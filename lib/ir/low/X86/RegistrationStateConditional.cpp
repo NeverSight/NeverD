@@ -98,7 +98,7 @@ bool RegistrationStateSolver::checkConditionalMemory(
   if (Op.MemoryAddressSpace != NdMemoryAddressSpace::Default)
     return Refuse();
   if ((EH4 || CxxCookies) && CompleteCookies && Op.Opcode == NdOp::LOAD &&
-      Memory.AccessSize == 4 && Address.Constant == SecurityCookieVA)
+      Memory.AccessSize == 4 && Address.preferredAddress() == SecurityCookieVA)
     return true;
   if (Address.SEHException)
     return (Op.Opcode == NdOp::LOAD &&

@@ -20,7 +20,7 @@ bool RegistrationStateSolver::registrationInstallationReady(
                0 &&
            Frame.load(*Chain.RegistrationOffset - 4, 4).Offset == SP &&
            Frame.load(*Chain.RegistrationOffset, 4).PreviousChain &&
-           Frame.load(*Chain.RegistrationOffset + 4, 4).Constant ==
+           Frame.load(*Chain.RegistrationOffset + 4, 4).preferredAddress() ==
                Chain.HandlerVA &&
            Frame.load(*Chain.TryLevelOffset, 4).Constant ==
                uint32_t(*Chain.SeededTryLevel);
@@ -34,7 +34,7 @@ bool RegistrationStateSolver::registrationInstallationReady(
            Frame.Registers[x86reg::RSP / x86reg::GeneralRegStride].Offset ==
                Layout.BaseOffset &&
            Frame.load(*Chain.RegistrationOffset, 4).PreviousChain &&
-           Frame.load(*Chain.RegistrationOffset + 4, 4).Constant ==
+           Frame.load(*Chain.RegistrationOffset + 4, 4).preferredAddress() ==
                Chain.HandlerVA &&
            Frame.load(*Chain.TryLevelOffset, 4).Constant ==
                uint32_t(*Chain.SeededTryLevel);
@@ -48,7 +48,7 @@ bool RegistrationStateSolver::registrationInstallationReady(
              Layout.BaseOffset &&
          Parent.EntryOffset == 0 && Stack.Offset == Layout.BaseOffset &&
          Frame.load(*Chain.RegistrationOffset, 4).PreviousChain &&
-         Frame.load(*Chain.RegistrationOffset + 4, 4).Constant ==
+         Frame.load(*Chain.RegistrationOffset + 4, 4).preferredAddress() ==
              Chain.HandlerVA &&
          Frame.load(*Chain.TryLevelOffset, 4).Constant ==
              uint32_t(*Chain.SeededTryLevel);

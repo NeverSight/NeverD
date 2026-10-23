@@ -43,9 +43,11 @@ void RegistrationStateSolver::recordCatchReturn(
       !After.Parent && !After.OtherCallback && !After.Unknown &&
       !Facts.Invalid && After.Installed && !After.Uninstalled &&
       !After.Levels.empty() && callbackReturnInstruction(I, Op) &&
-      Op.NumInputs == 1 && Op.Inputs[0].Size == 4 && Target.Constant &&
-      !Target.MayBeFrame && EH.ownsCode(*Target.Constant) &&
-      *Target.Constant != Function.Entry && (SavedParent || SavedCallback);
+      Op.NumInputs == 1 && Op.Inputs[0].Size == 4 &&
+      Target.preferredAddress() && !Target.MayBeFrame &&
+      EH.ownsCode(*Target.preferredAddress()) &&
+      *Target.preferredAddress() != Function.Entry &&
+      (SavedParent || SavedCallback);
   if (!Valid) {
     InvalidCxxContinuations.insert(Identity);
     CxxContinuations.erase(Identity);
@@ -57,7 +59,7 @@ void RegistrationStateSolver::recordCatchReturn(
         Op.Addr,
         Block.EndAddr,
         Op.Seq,
-        *Target.Constant,
+        *Target.preferredAddress(),
         SavedCallback ? Captured.CallbackAddress->Offset : *Captured.Offset,
         SavedCallback ? Captured.CallbackAddress->Entry : 0};
     const auto [It, Inserted] =

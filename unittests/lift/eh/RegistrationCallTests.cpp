@@ -95,6 +95,16 @@ struct ThrowImage {
     Import.Name = "_CxxThrowException";
     Import.IATAddr = IATVA;
     Image.Imports.push_back(Import);
+    for (auto &Segment : Image.Segments) {
+      Segment.FileSz = Segment.Data.size();
+      Section Section;
+      Section.Name = Segment.Name;
+      Section.VA = Segment.VA;
+      Section.Size = Segment.Size;
+      Section.FileSz = Segment.FileSz;
+      Section.Flags = Segment.Flags;
+      Image.Sections.push_back(Section);
+    }
   }
 
   void tableWord(size_t Offset, uint32_t Value) {
@@ -200,6 +210,7 @@ TEST(RegistrationCallABI, ReturningStackDoesNotFreezeRelocatedOperands) {
     RegisterRestore,
     RelocatedCancellation,
     DerivedCancellation,
+    FrameStoreCancellation,
     WrongWidth,
     Duplicate,
     OpcodeFixup,
@@ -209,11 +220,12 @@ TEST(RegistrationCallABI, ReturningStackDoesNotFreezeRelocatedOperands) {
     RelativeControl
   };
   for (uint32_t Base : {0x400000u, 0x18000000u})
-    for (Case C : {Case::RelativeResult, Case::RegisterRestore,
-                   Case::RelocatedCancellation, Case::DerivedCancellation,
-                   Case::WrongWidth, Case::Duplicate, Case::OpcodeFixup,
-                   Case::ShortField, Case::Writable, Case::ConflictingTarget,
-                   Case::RelativeControl}) {
+    for (Case C :
+         {Case::RelativeResult, Case::RegisterRestore,
+          Case::RelocatedCancellation, Case::DerivedCancellation,
+          Case::FrameStoreCancellation, Case::WrongWidth, Case::Duplicate,
+          Case::OpcodeFixup, Case::ShortField, Case::Writable,
+          Case::ConflictingTarget, Case::RelativeControl}) {
       SCOPED_TRACE(Base);
       SCOPED_TRACE(static_cast<unsigned>(C));
       BinaryImage Image;
@@ -222,6 +234,10 @@ TEST(RegistrationCallABI, ReturningStackDoesNotFreezeRelocatedOperands) {
       Image.Format = BinaryFormat::COFF;
       Image.Base = Base;
       Image.Entry = Base + 0x1000;
+      const bool Cancellation = C == Case::RelocatedCancellation ||
+                                C == Case::DerivedCancellation ||
+                                C == Case::FrameStoreCancellation;
+      const uint32_t Value = Cancellation ? uint32_t(Image.Entry) : Base;
       Segment Text;
       Text.Name = ".text";
       Text.VA = Image.Entry;
@@ -232,8 +248,7 @@ TEST(RegistrationCallABI, ReturningStackDoesNotFreezeRelocatedOperands) {
       if (C == Case::RegisterRestore) {
         Text.Data = {0x55, 0x8b, 0xec, 0x81, 0xec, 0, 0, 0,
                      0,    0x8b, 0xe5, 0x5d, 0xc2, 8, 0};
-      } else if (C == Case::RelocatedCancellation ||
-                 C == Case::DerivedCancellation) {
+      } else if (Cancellation) {
         // Equal preferred-base literals cease to cancel after rebasing.
         // Following the relocated MOV through another arithmetic producer
         // must not recover the original constant as a stack displacement.
@@ -241,11 +256,20 @@ TEST(RegistrationCallABI, ReturningStackDoesNotFreezeRelocatedOperands) {
         Field = 1;
         if (C == Case::DerivedCancellation)
           Text.Data.insert(Text.Data.end(), {0x83, 0xc0, 4});
-        Text.Data.insert(Text.Data.end(), {0x01, 0xc4, 0x81, 0xec});
+        if (C == Case::FrameStoreCancellation)
+          Text.Data.push_back(0x2d);
+        else
+          Text.Data.insert(Text.Data.end(), {0x01, 0xc4, 0x81, 0xec});
         const size_t Scalar = Text.Data.size();
         Text.Data.resize(Scalar + 4);
         writeLE<uint32_t>(Text.Data.data() + Scalar,
-                          Base + (C == Case::DerivedCancellation ? 4 : 0));
+                          Value + (C == Case::DerivedCancellation ? 4 : 0));
+        if (C == Case::FrameStoreCancellation)
+          // Restoring ESP does not prove this apparent local write private:
+          // the relocated delta changes its address after rebasing.
+          Text.Data.insert(Text.Data.end(),
+                           {0x83, 0xec, 4, 0x01, 0xe0, 0xc7, 0x00, 7, 0, 0, 0,
+                            0x83, 0xc4, 4, 0x31, 0xc0});
         Text.Data.push_back(0xc3);
       } else if (C == Case::ShortField) {
         Text.Data = {0x66, 0x2d, 0, 0, 0x90, 0x90, 0xc3};
@@ -255,7 +279,7 @@ TEST(RegistrationCallABI, ReturningStackDoesNotFreezeRelocatedOperands) {
         Field = 1;
       }
       if (C != Case::RelativeControl && C != Case::ShortField)
-        writeLE<uint32_t>(Text.Data.data() + Field, Base);
+        writeLE<uint32_t>(Text.Data.data() + Field, Value);
       Text.Size = Text.FileSz = Text.Data.size();
       if (C == Case::Writable)
         Text.Flags = Text.Flags | SegmentFlags::Writable;
@@ -276,10 +300,61 @@ TEST(RegistrationCallABI, ReturningStackDoesNotFreezeRelocatedOperands) {
         --Image.BaseRelocations[0].Address;
       if (C == Case::ConflictingTarget)
         Image.DataAddressRelocOperands[Text.VA + Field] = {Base, Base + 4, 4};
-      EXPECT_EQ(getCheckedX86CalleeStackPop(Image, Image.Entry),
-                C == Case::RelativeResult || C == Case::RegisterRestore
-                    ? std::optional<uint32_t>{8}
-                    : std::nullopt);
+      const auto ExpectedPop =
+          C == Case::RelativeResult || C == Case::RegisterRestore
+              ? std::optional<uint32_t>{8}
+          : C == Case::FrameStoreCancellation ? std::optional<uint32_t>{0}
+                                              : std::nullopt;
+      EXPECT_EQ(getCheckedX86CalleeStackPop(Image, Image.Entry), ExpectedPop);
+      if (Cancellation)
+        for (bool Classified : {false, true}) {
+          SCOPED_TRACE(Classified);
+          if (Classified)
+            Image.DataAddressRelocOperands[Text.VA + Field] = {Value, Value, 4,
+                                                               Text.VA};
+          for (auto Result : {RegistrationLeafResult::Observed,
+                              RegistrationLeafResult::Discarded})
+            EXPECT_FALSE(getCheckedX86RegistrationLeafCalleeABI(
+                Image, Image.Entry, nullptr, Result));
+        }
+    }
+}
+
+TEST(RegistrationCallABI, RelocatedLeafAddressesKeepMemoryIdentity) {
+  for (bool ThroughOffset : {false, true})
+    for (unsigned Classification : {0, 1, 2}) {
+      SCOPED_TRACE(ThroughOffset);
+      SCOPED_TRACE(Classification);
+      ThrowImage F;
+      auto &Text = F.Image.Segments.front();
+      Text.Data = {0xb8, 0, 0, 0, 0};
+      const uint32_t Address = ThrowImage::DataVA + 4;
+      const uint32_t Encoded = Address - (ThroughOffset ? 4 : 0);
+      writeLE<uint32_t>(Text.Data.data() + 1, Encoded);
+      if (ThroughOffset)
+        Text.Data.insert(Text.Data.end(), {0x83, 0xc0, 4});
+      Text.Data.insert(Text.Data.end(), {0x8b, 0x00, 0xc3});
+      Text.Size = Text.FileSz = Text.Data.size();
+      Section Code;
+      Code.Name = Text.Name;
+      Code.VA = Text.VA;
+      Code.Size = Code.FileSz = Text.Size;
+      Code.Flags = Text.Flags;
+      F.Image.Sections = {Code};
+      F.Image.BaseRelocations = {{Text.VA + 1, 3}};
+      if (Classification)
+        F.Image.DataAddressRelocOperands[Text.VA + 1] = {
+            Encoded, Encoded, 4,
+            Classification == 2 ? ThrowImage::DataVA : InvalidVA};
+      const auto Proof =
+          getCheckedX86RegistrationLeafCalleeABI(F.Image, Text.VA);
+      ASSERT_EQ(Proof.has_value(), Classification == 2);
+      if (Proof) {
+        ASSERT_EQ(Proof->ImageReads.size(), 1u);
+        EXPECT_EQ(Proof->ImageReads[0].Begin, Address);
+        EXPECT_EQ(Proof->ImageReads[0].End, Address + 4);
+        EXPECT_TRUE(Proof->ImageWrites.empty());
+      }
     }
 }
 
@@ -1516,13 +1591,18 @@ TEST(RegistrationCallABI, PreservedCalleesCannotChangeEitherSEHScopeFormat) {
       Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
       Text.Data = {0xc7, 0x05, 0, 0, 0, 0, 7, 0, 0, 0, 0x31, 0xc0, 0xc3};
       writeLE<uint32_t>(Text.Data.data() + 2, WriteVA);
-      Text.Size = Text.Data.size();
+      Text.Size = Text.FileSz = Text.Data.size();
       Image.Segments.push_back(Text);
+      Section Code;
+      Code.VA = Text.VA;
+      Code.Size = Code.FileSz = Text.Size;
+      Code.Flags = Text.Flags;
+      Image.Sections.push_back(Code);
       Segment Data;
       Data.VA = TableVA - 16;
       Data.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
       Data.Data.resize(128);
-      Data.Size = Data.Data.size();
+      Data.Size = Data.FileSz = Data.Data.size();
       Image.Segments.push_back(Data);
       LowFunc Source;
       Source.Entry = 0x402000;

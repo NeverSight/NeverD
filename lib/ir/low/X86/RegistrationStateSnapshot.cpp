@@ -30,7 +30,8 @@ static hash_code hash_value(const FrameValue &Value) {
       Value.FrameOnlyFromCall, Value.SavedRegister, Value.ReturnPC,
       Value.SecurityCookie, Value.CookieFrameOffset, Value.CookieXOR,
       Value.EntryOffset, Value.CallbackAddress, Value.ExceptionObject,
-      Value.SEHException, Value.JumpCapture, Value.FrameOnlyFromSEHScalar);
+      Value.SEHException, Value.JumpCapture, Value.FrameOnlyFromSEHScalar,
+      Value.ImageAddress, Value.CookieImageXOR);
 }
 
 static hash_code hash_value(const FrameState &Frame) {

@@ -31,7 +31,12 @@ BinaryImage objectImage(std::vector<uint8_t> Code) {
   Text.VA = 0x1000;
   Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
   Text.Data = std::move(Code);
-  Text.Size = Text.Data.size();
+  Text.Size = Text.FileSz = Text.Data.size();
+  Section CodeSection;
+  CodeSection.VA = Text.VA;
+  CodeSection.Size = CodeSection.FileSz = Text.Size;
+  CodeSection.Flags = Text.Flags;
+  Image.Sections.push_back(CodeSection);
   Image.Segments.push_back(std::move(Text));
   Segment Table;
   Table.VA = 0x2000;
@@ -151,7 +156,8 @@ TEST(RegistrationThrowObject, PrivateThrowRetainsCodeInBothAddressOrders) {
     Image.Entry = Entry;
     auto &Text = Image.Segments[0];
     Text.Data.resize(0x140, 0xcc);
-    Text.Size = Text.Data.size();
+    Text.Size = Text.FileSz = Text.Data.size();
+    Image.Sections.front().Size = Image.Sections.front().FileSz = Text.Size;
     std::copy(Destroy.begin(), Destroy.end(),
               Text.Data.begin() + Destructor - Text.VA);
     writeLE<uint32_t>(Image.Segments[1].Data.data() + 4, Destructor);

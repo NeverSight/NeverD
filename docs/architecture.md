@@ -2269,7 +2269,18 @@ cannot prove a stack adjustment after rebasing. Direct register restoration
 remains valid independently of those values. Relative control operands,
 overlapping or malformed fixups and writable code still reject the proof.
 The stronger callee memory and scalar-return proofs retain their separate
-instruction and value requirements.
+instruction and value requirements. Their shared frame domain distinguishes a
+complete address from an integer constant. Address identity survives complete
+copies, frame spills and addition of a stable integer displacement; it does
+not become a scalar or a frame offset merely because preferred bits cancel.
+Partial addresses and unsupported arithmetic lose exact identity. Memory and
+runtime metadata consumers explicitly request the preferred address, while
+branch, stack and try-level proofs consume only integer constants. EH4
+cookie XOR expressions retain their address term separately from integer
+masks. Equality and snapshot hashes include both address fields. Strong
+callee proofs also authenticate instruction fields and require relocated
+operands to have the loader classification consumed by LowIR; an unclassified
+fixup cannot acquire the stack-only query's permission to ignore its bits.
 SEH callees additionally require the complete shared registration
 state/lifetime proof to separate dispatcher returns and seed established EBP
 at except entries. The same independent register-only proof still checks

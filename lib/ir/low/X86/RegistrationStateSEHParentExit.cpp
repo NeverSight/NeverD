@@ -47,9 +47,9 @@ bool RegistrationStateSolver::validateSEHParentChainUse(
   if (Op.MemoryAddressSpace == NdMemoryAddressSpace::X86FS)
     return Op.Opcode == NdOp::STORE;
   const auto Address = Transfer.read(*Memory.Address);
-  if (Address.Constant)
-    return *Address.Constant != 0 &&
-           uint64_t(*Address.Constant) + Memory.AccessSize <=
+  if (Address.preferredAddress())
+    return *Address.preferredAddress() != 0 &&
+           uint64_t(*Address.preferredAddress()) + Memory.AccessSize <=
                uint64_t(UINT32_MAX) + 1;
   const auto SP =
       State.Frame.Registers[x86reg::RSP / x86reg::GeneralRegStride].Offset;

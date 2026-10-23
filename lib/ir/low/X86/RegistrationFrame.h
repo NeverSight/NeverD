@@ -81,6 +81,24 @@ struct FrameValue {
   /// independent of regenerated frame placement. Mixing with any other frame
   /// provenance drops this fact; it never grants dereference authority.
   bool FrameOnlyFromSEHScalar = false;
+  /// A complete address retains its preferred-image identity for checked
+  /// memory/runtime consumers. Its bits are not a fixed integer after loading
+  /// or rewriting the image, and cannot serve as an affine frame displacement.
+  std::optional<uint32_t> ImageAddress;
+  /// An EH4 scope-table address XORed with the security cookie. CookieXOR
+  /// contains only the additional stable integer mask.
+  std::optional<uint32_t> CookieImageXOR;
+
+  std::optional<uint32_t> preferredAddress() const {
+    return ImageAddress ? ImageAddress : Constant;
+  }
+
+  std::optional<uint32_t> cookieAddress() const {
+    if (!SecurityCookie || CookieFrameOffset)
+      return std::nullopt;
+    return CookieImageXOR ? (CookieXOR ? std::nullopt : CookieImageXOR)
+                          : std::optional<uint32_t>{CookieXOR};
+  }
 
   bool isFrameIndependentScalar() const {
     return !MayBeFrame || FrameOnlyFromSEHScalar;
@@ -102,6 +120,11 @@ struct FrameValue {
   }
   static FrameValue constant(uint32_t Value) {
     return {{}, Value, false, false};
+  }
+  static FrameValue imageAddress(uint32_t Value) {
+    FrameValue Result;
+    Result.ImageAddress = Value;
+    return Result;
   }
   static FrameValue callbackFrame(va_t Entry, int32_t Offset) {
     FrameValue Result;

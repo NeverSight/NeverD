@@ -59,14 +59,14 @@ prepareSEHJumpCapture(const BinaryImage &Image, const LowFunc &Function,
     return std::nullopt;
   const auto Buffer = Frame.load(*SP, 4);
   const auto Level = Frame.load(*SP + 12, 4).Constant;
-  const auto Unwind = Frame.load(*SP + 8, 4).Constant;
+  const auto Unwind = Frame.load(*SP + 8, 4).preferredAddress();
   if (!Buffer.Offset || Buffer.ReturnPC || Buffer.CallbackAddress ||
       Buffer.EntryOffset || Buffer.SEHException ||
       Frame.load(*SP + 4, 4).Constant != (EH4 ? 3u : 2u) || !Level || !Unwind ||
       Frame.load(-4, 4).Constant != Level ||
       (!Frame.load(-16, 4).PreviousChain) ||
-      Frame.load(-12, 4).Constant != EH.PersonalityVA ||
-      (!EH4 && Frame.load(-8, 4).Constant != Chain.ScopeTableVA))
+      Frame.load(-12, 4).preferredAddress() != EH.PersonalityVA ||
+      (!EH4 && Frame.load(-8, 4).preferredAddress() != Chain.ScopeTableVA))
     return std::nullopt;
   const int64_t End = int64_t(*Buffer.Offset) + SEHJumpCapture::BufferBytes;
   if (*Buffer.Offset < int64_t(*SP) + ArgumentBytes || End > -24 ||

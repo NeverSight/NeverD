@@ -9019,7 +9019,14 @@ wrapper. An unbalanced recursive wrapper cannot borrow its own pending ESP
 answer. `RegistrationCallABI.ReturningStackDoesNotFreezeRelocatedOperands`
 checks arithmetic address operands and independent register restoration at
 two image bases, rejects cancellation against equal unrelocated literals,
-and covers conflicting, overlapping, partial and control-flow fixups.
+and covers conflicting, overlapping, partial and control-flow fixups. The
+observed and discarded leaf-result queries reject the same cancellation,
+with both classified and unclassified relocations.
+`RelocatedLeafAddressesKeepMemoryIdentity` retains exact image-read extents
+through a relocated address and a stable offset, while rejecting missing
+operand classification. `RegistrationFrameScalar` separately checks address
+versus integer identity, all three frame coordinate spaces, partial-width
+loss, frame spills, snapshot identity and EH4 cookie/address XOR terms.
 `RegistrationCallABI.ReturningStackProofDoesNotNormalizeTheX87Stack`
 keeps the stack proof for bodies whose x87 normalization alone is incomplete
 or splits blocks by TOP, and for FXAM with a proved or unproved tag.

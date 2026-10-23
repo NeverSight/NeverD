@@ -86,7 +86,8 @@ bool RegistrationStateSolver::cxxCookiesReady(const Domain &State) const {
   for (const auto &Condition : CxxCookieConditions) {
     const auto Value = State.Frame.load(Condition.FrameOffset, 4);
     if (Condition.FrameOffset < *SP || !Value.SecurityCookie ||
-        Value.CookieFrameOffset != Condition.XORFrameOffset || Value.CookieXOR)
+        Value.CookieFrameOffset != Condition.XORFrameOffset ||
+        Value.CookieXOR || Value.CookieImageXOR)
       return false;
     for (int32_t Byte = 0; Byte != 4; ++Byte)
       if (!State.InitializedFrameBytes.count(Condition.FrameOffset + Byte))
@@ -118,12 +119,12 @@ bool RegistrationStateSolver::cookiesReady(const FrameState &Frame) const {
     return ExpectedFrame >= INT32_MIN && ExpectedFrame <= INT32_MAX &&
            It != Frame.Cells.end() && It->second.SecurityCookie &&
            It->second.CookieFrameOffset == int32_t(ExpectedFrame) &&
-           It->second.CookieXOR == 0;
+           It->second.CookieXOR == 0 && !It->second.CookieImageXOR;
   };
   const auto Table = Frame.Cells.find(*Chain.RegistrationOffset + 8);
   return Table != Frame.Cells.end() && Table->second.SecurityCookie &&
          !Table->second.CookieFrameOffset &&
-         Table->second.CookieXOR == Chain.ScopeTableVA &&
+         Table->second.cookieAddress() == Chain.ScopeTableVA &&
          Matches(EHCookieSlot, Chain.EHCookieXOROffset) &&
          (Chain.GSCookieOffset == -2 ||
           Matches(GSCookieSlot, Chain.GSCookieXOROffset));

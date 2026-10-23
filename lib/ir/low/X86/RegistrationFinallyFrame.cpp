@@ -225,17 +225,19 @@ bool RegistrationStateSolver::runSEHCallbackFrame(
           if (Op.Opcode != NdOp::LOAD ||
               !State.sehExceptionLoad(*Address.SEHException, Memory.AccessSize))
             return false;
-        } else if (Address.Constant && !Address.MayBeFrame) {
+        } else if (Address.preferredAddress() && !Address.MayBeFrame) {
           const bool Write = Op.Opcode == NdOp::STORE;
-          const uint64_t End = uint64_t(*Address.Constant) + Memory.AccessSize;
+          const uint64_t End =
+              uint64_t(*Address.preferredAddress()) + Memory.AccessSize;
           const uint64_t TableEnd =
               Chain.ScopeTableVA + (EH4 ? 16 : 0) + Chain.Scopes.size() * 12;
           if (!JumpRuntime || !JumpRuntime->ImageMemory ||
-              !JumpRuntime->ImageMemory(*Address.Constant, Memory.AccessSize,
-                                        Write, WorkUsed) ||
-              (Write &&
-               (*Address.Constant < TableEnd && Chain.ScopeTableVA < End)) ||
-              (Write && EH4 && *Address.Constant < SecurityCookieVA + 4 &&
+              !JumpRuntime->ImageMemory(*Address.preferredAddress(),
+                                        Memory.AccessSize, Write, WorkUsed) ||
+              (Write && (*Address.preferredAddress() < TableEnd &&
+                         Chain.ScopeTableVA < End)) ||
+              (Write && EH4 &&
+               *Address.preferredAddress() < SecurityCookieVA + 4 &&
                SecurityCookieVA < End) ||
               (Write && Transfer.read(*Memory.StoredValue).MayBeFrame))
             return false;

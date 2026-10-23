@@ -55,7 +55,7 @@ std::optional<FrameValue> RegistrationStateSolver::transferLocalUnwind(
     return Refuse();
   if (HasCookie &&
       (!CompleteCookies || !cookiesReady(After.Frame) ||
-       After.Frame.load(*SP.Offset, 4).Constant != SecurityCookieVA))
+       After.Frame.load(*SP.Offset, 4).preferredAddress() != SecurityCookieVA))
     return Refuse();
   const auto &Insn = Boundary->second.second;
   const size_t OpIndex = &Op - Block.Ops.data();
