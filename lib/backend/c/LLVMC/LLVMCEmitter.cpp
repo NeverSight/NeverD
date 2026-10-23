@@ -45,6 +45,7 @@
 #include "neverd/backend/c/render/CTypeFormat.h"
 #include "neverd/backend/c/render/LLVMC/LLVMCIntrinsicRender.h"
 #include "neverd/backend/c/render/SyscallHelpers.h"
+#include "neverd/backend/llvm/LLVMFloatingCall.h"
 #include "neverd/backend/llvm/LLVMName.h"
 #include "neverd/backend/llvm/LLVMSourceMap.h"
 #include "neverd/backend/llvm/LLVMSourceTypeHints.h"
@@ -1733,13 +1734,29 @@ void LLVMCWriter::prepareSourceImportPrototypes(llvm::Module &Mod) {
              libc::variadicCallArguments(*Source, Opts.TheArch, Opts.Format)
                  .has_value());
         std::vector<TypeRef> Parameters;
+        bool ScalarParameters = true;
         for (const auto &Param : Source->Params) {
-          Fits &= Scalar(Param.second);
+          ScalarParameters &= Scalar(Param.second);
           Parameters.push_back(Param.second);
         }
         const auto Floating = Fits ? libc::floatingCallArguments(
                                          *Source, Opts.TheArch, Opts.Format)
                                    : std::nullopt;
+        // HFA parameters are LLVM arrays, preserving whole-record stack
+        // allocation. Admit only the shared, exact source signature.
+        if (Fits && Floating &&
+            (!Floating->ParameterElements.empty() ||
+             Floating->ReturnElements)) {
+          if (Call->getFunctionType() ==
+              floatingCallType(Mod.getContext(), *Floating))
+            SourceImportPrototypes.insert_or_assign(Name, *Source);
+          else {
+            SourceImportPrototypes.erase(Name);
+            Rejected.insert(Name);
+          }
+          continue;
+        }
+        Fits &= ScalarParameters;
         const auto Layout =
             Fits && !Floating
                 ? integerCallArguments(Opts.TheArch, Opts.Format,
@@ -1801,6 +1818,7 @@ LLVMCWriter::sourceImportCallee(const llvm::CallBase &Call) const {
 std::string LLVMCWriter::sourceImportDeclaration(const FunctionSym &Function,
                                                  llvm::StringRef Name) {
   const auto NotePointers = [&](const TypeRef &Type) {
+    noteRecordValue(Type);
     const NdType *Target = Type.get();
     while (Target && Target->Kind == NdTypeKind::Ptr)
       Target = Target->Pointee.get();
@@ -2479,8 +2497,14 @@ static void validateArrayValueBoundaries(const llvm::Module &Mod,
       (Target.isOSLinux() || Target.isOSDarwin()) &&
       (Target.isAArch64() || Target.getArch() == llvm::Triple::x86_64) &&
       Mod.getDataLayout().getPointerSizeInBits() == 64;
-  auto CheckType = [&](llvm::Type *Ty) {
+  const bool HFAABI =
+      Target.isAArch64() &&
+      (Target.isOSLinux() || Target.isOSDarwin() || Target.isOSWindows()) &&
+      Mod.getDataLayout().getPointerSizeInBits() == 64;
+  auto CheckType = [&](llvm::Type *Ty, bool Parameter) {
     if (!containsArrayValue(Ty))
+      return;
+    if (Parameter && HFAABI && isAAPCS64HFAArray(Ty))
       return;
     const auto *Array = llvm::dyn_cast<llvm::ArrayType>(Ty);
     if (!WordABI || !Array || !Array->getElementType()->isIntegerTy(64) ||
@@ -2492,17 +2516,26 @@ static void validateArrayValueBoundaries(const llvm::Module &Mod,
                             const llvm::AttributeList &Attributes) {
     bool HasArray = containsArrayValue(Ty->getReturnType());
     bool HasArrayParameter = false;
+    bool HasHFA = false;
     unsigned ArgumentWords = 0;
     bool WordParameters = true;
-    CheckType(Ty->getReturnType());
+    bool HFAParameters = true;
+    CheckType(Ty->getReturnType(), false);
     for (auto *Param : Ty->params()) {
       HasArray |= containsArrayValue(Param);
       HasArrayParameter |= containsArrayValue(Param);
-      CheckType(Param);
-      if (auto *Array = llvm::dyn_cast<llvm::ArrayType>(Param))
+      CheckType(Param, true);
+      const bool HFA = HFAABI && isAAPCS64HFAArray(Param);
+      HasHFA |= HFA;
+      HFAParameters &=
+          HFA || Param->isFloatTy() || Param->isDoubleTy() ||
+          (Param->isIntegerTy() && Param->getIntegerBitWidth() <= 64) ||
+          (Param->isPointerTy() && Param->getPointerAddressSpace() == 0);
+      if (auto *Array = llvm::dyn_cast<llvm::ArrayType>(Param)) {
         ArgumentWords += Array->getNumElements();
-      else if (Param->isIntegerTy(64) ||
-               (Param->isPointerTy() && Param->getPointerAddressSpace() == 0))
+        WordParameters &= !HFA;
+      } else if (Param->isIntegerTy(64) ||
+                 (Param->isPointerTy() && Param->getPointerAddressSpace() == 0))
         ++ArgumentWords;
       else
         WordParameters = false;
@@ -2524,8 +2557,10 @@ static void validateArrayValueBoundaries(const llvm::Module &Mod,
     // Once registers run out, C may spill a whole record while LLVM splits
     // the raw aggregate. Do not infer that stack-argument ABI from its type.
     const unsigned RegisterWords = Target.isAArch64() ? 8 : 6;
-    if (HasArrayParameter &&
-        (!WordParameters || ArgumentWords > RegisterWords || Ty->isVarArg()))
+    const bool ParametersFit =
+        HasHFA ? HFAParameters
+               : WordParameters && ArgumentWords <= RegisterWords;
+    if (HasArrayParameter && (!ParametersFit || Ty->isVarArg()))
       throw std::runtime_error(
           "C projection has an unsupported array argument ABI");
   };

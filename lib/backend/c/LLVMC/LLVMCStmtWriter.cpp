@@ -5412,16 +5412,20 @@ std::string LLVMCWriter::callExpr(const llvm::CallBase &Call, bool Statement) {
   const unsigned Limit = printedCallArgLimit(Call, CalleeName);
   const LibraryCallee Library = libraryCallee(Call);
   const auto Function = debugCallee(Call);
+  const bool SourceRecord =
+      Function &&
+      ((Library && Function->Name == Library.Name) || sourceImportCallee(Call));
+  const bool Grouped = Function && groupedFloatingCall(Call, *Function);
   const auto RecordCall =
-      Function && Library && Function->Name == Library.Name
-          ? libc::recordCallArguments(*Function, Opts.TheArch, Opts.Format,
-                                      libcVariant())
-          : std::nullopt;
-  if (Function && Library && Function->Name == Library.Name && !RecordCall &&
+      SourceRecord ? libc::recordCallArguments(*Function, Opts.TheArch,
+                                               Opts.Format, libcVariant())
+                   : std::nullopt;
+  if (SourceRecord && !RecordCall &&
       (Function->PrototypeFromHeader || Function->PrototypeFromCLibrary) &&
       libc::hasRecordCallParameters(*Function, libcVariant()))
     throw std::runtime_error("The header's record call ABI is unsupported");
-  if (RecordCall && RecordCall->Positions > Call.arg_size())
+  if (RecordCall && (Grouped ? RecordCall->Parameters.size()
+                             : RecordCall->Positions) > Call.arg_size())
     throw std::runtime_error("A record call argument is incomplete");
   const char *RecordHeader =
       RecordCall ? libc::headerFor(Library.Name) : nullptr;
@@ -5447,13 +5451,20 @@ std::string LLVMCWriter::callExpr(const llvm::CallBase &Call, bool Statement) {
           libc::isRecordCallParameter(*Function, ArgIdx, libcVariant())
               ? c_detail::recordCallType(Type, Opts)
               : typeToC(Type);
+      if (Grouped) {
+        Expr += "__builtin_bit_cast(" + Spelling + ", " +
+                valueStr(Call.getArgOperand(ArgIdx)) + ")";
+        continue;
+      }
       Expr += c_detail::recordCallArgument(
           Spelling, RecordCall->Parameters[ArgIdx],
           [&](unsigned Index) { return valueStr(Call.getArgOperand(Index)); });
       continue;
     }
     const unsigned Source =
-        RecordCall ? RecordCall->Parameters[ArgIdx].Pieces[0].Argument : ArgIdx;
+        RecordCall && !Grouped
+            ? RecordCall->Parameters[ArgIdx].Pieces[0].Argument
+            : ArgIdx;
     const llvm::Value *Operand = Call.getArgOperand(Source);
     bool PointerSpelling = false;
     std::string Argument = callArgStr(Operand, Call, ArgIdx, &PointerSpelling);
@@ -5816,7 +5827,8 @@ TypeRef LLVMCWriter::enumTypeUsedAsCallArg(const llvm::AllocaInst *Slot) const {
           continue;
         unsigned Parameter = I;
         if (const auto Layout = libc::recordCallArguments(
-                *FS, Opts.TheArch, Opts.Format, libcVariant())) {
+                *FS, Opts.TheArch, Opts.Format, libcVariant());
+            Layout && !groupedFloatingCall(*CB, *FS)) {
           const auto Scalar =
               libc::recordCallScalarParameter(*FS, *Layout, I, libcVariant());
           if (!Scalar)

@@ -1075,6 +1075,107 @@ TEST(LLVMCValues, UnprovedArrayBoundaryABIsFailBeforeWritingSource) {
   }
 }
 
+TEST(LLVMCValues, NonfiniteScalarAndAggregateConstantsPreserveTheirBits) {
+  llvm::LLVMContext Context;
+  llvm::Module Module("nonfinite-constants", Context);
+  Module.setDataLayout("e-p:64:64");
+  const uint64_t FloatBits[] = {0x7FC12345, 0xFFA54321, 0x7F800000,
+                                0xFF800000, 0x80000000, 0};
+  const uint64_t DoubleBits[] = {0x7FF8123456789ABCULL, 0xFFF1FEDCBA987654ULL,
+                                 0x7FF0000000000000ULL, 0xFFF0000000000000ULL,
+                                 0x8000000000000000ULL, 0};
+  for (bool Double : {false, true}) {
+    auto *Element = Double ? llvm::Type::getDoubleTy(Context)
+                           : llvm::Type::getFloatTy(Context);
+    const auto &Semantics =
+        Double ? llvm::APFloat::IEEEdouble() : llvm::APFloat::IEEEsingle();
+    llvm::SmallVector<llvm::Constant *> Values;
+    for (uint64_t Bits : Double ? DoubleBits : FloatBits)
+      Values.push_back(llvm::ConstantFP::get(
+          Context,
+          llvm::APFloat(Semantics, llvm::APInt(Double ? 64 : 32, Bits))));
+    auto *Array = llvm::ArrayType::get(Element, Values.size());
+    auto *Fn = llvm::Function::Create(
+        llvm::FunctionType::get(llvm::Type::getVoidTy(Context),
+                                {llvm::PointerType::getUnqual(Context)}, false),
+        llvm::GlobalValue::ExternalLinkage,
+        Double ? "double_bits" : "float_bits", Module);
+    llvm::IRBuilder<> B(llvm::BasicBlock::Create(Context, "entry", Fn));
+    B.CreateStore(llvm::ConstantArray::get(Array, Values), Fn->getArg(0));
+    B.CreateRetVoid();
+    auto *Scalar =
+        llvm::Function::Create(llvm::FunctionType::get(Element, {}, false),
+                               llvm::GlobalValue::ExternalLinkage,
+                               Double ? "double_nan" : "float_nan", Module);
+    B.SetInsertPoint(llvm::BasicBlock::Create(Context, "entry", Scalar));
+    B.CreateRet(Values[0]);
+  }
+  std::string Source;
+  llvm::raw_string_ostream Out(Source);
+  ASSERT_TRUE(neverd::LLVMCEmitter().emit(Module, Out, {}));
+  Source += R"(
+int main(void) {
+  uint32_t f[6], fs; uint64_t d[6], ds;
+  const uint32_t ef[] = {0x7FC12345, 0xFFA54321, 0x7F800000, 0xFF800000, 0x80000000, 0};
+  const uint64_t ed[] = {0x7FF8123456789ABCULL, 0xFFF1FEDCBA987654ULL,
+                         0x7FF0000000000000ULL, 0xFFF0000000000000ULL, 0x8000000000000000ULL, 0};
+  float_bits(f); double_bits(d);
+  float fv = float_nan(); double dv = double_nan();
+  __builtin_memcpy(&fs, &fv, 4); __builtin_memcpy(&ds, &dv, 8);
+  if (fs != ef[0] || ds != ed[0]) return 1;
+  for (unsigned i = 0; i < 6; ++i) if (f[i] != ef[i] || d[i] != ed[i]) return 2;
+  return 0;
+}
+)";
+  for (llvm::StringRef Optimization : {"-O0", "-O2"})
+    compileAndRun(Source, Optimization);
+}
+
+TEST(LLVMCValues, HFAArrayBoundariesRequireOrdinaryAAPCS64Parameters) {
+  for (unsigned Mode = 0; Mode < 9; ++Mode) {
+    SCOPED_TRACE(Mode);
+    llvm::LLVMContext Context;
+    llvm::Module Module("hfa-array-boundary", Context);
+    Module.setTargetTriple(llvm::Triple(Mode == 1 ? "x86_64-pc-windows-msvc"
+                                                  : "aarch64-pc-windows-msvc"));
+    Module.setDataLayout("e-p:64:64");
+    auto *Float = llvm::Type::getFloatTy(Context);
+    llvm::Type *HFA = llvm::ArrayType::get(Float, Mode == 2 ? 5 : 2);
+    if (Mode == 3)
+      HFA = llvm::ArrayType::get(HFA, 2);
+    llvm::SmallVector<llvm::Type *> Params(7, Float);
+    Params.push_back(HFA);
+    Params.push_back(Float);
+    Params.push_back(llvm::Type::getInt32Ty(Context));
+    Params.push_back(HFA);
+    if (Mode == 4)
+      Params.push_back(
+          llvm::ArrayType::get(llvm::Type::getInt64Ty(Context), 2));
+    auto *Result = Mode == 5 ? HFA : Float;
+    auto *Fn = llvm::Function::Create(
+        llvm::FunctionType::get(Result, Params, Mode == 6),
+        llvm::GlobalValue::ExternalLinkage, "hfa_boundary", Module);
+    if (Mode == 7)
+      Fn->setCallingConv(llvm::CallingConv::Fast);
+    if (Mode == 8)
+      Fn->addParamAttr(7, llvm::Attribute::InReg);
+    std::string Source;
+    llvm::raw_string_ostream Out(Source);
+    neverd::CEmitterOptions Options;
+    Options.TheArch = neverd::Arch::AArch64;
+    Options.Format = neverd::BinaryFormat::COFF;
+    Options.PreserveLLVMFunctionTypes = true;
+    if (Mode == 0) {
+      EXPECT_TRUE(neverd::LLVMCEmitter().emit(Module, Out, Options));
+      EXPECT_FALSE(Source.empty());
+    } else {
+      EXPECT_THROW(neverd::LLVMCEmitter().emit(Module, Out, Options),
+                   std::runtime_error);
+      EXPECT_TRUE(Source.empty());
+    }
+  }
+}
+
 TEST(LLVMCValues, AggregateCopiesPreserveUnalignedMemoryAndArrayStorage) {
   llvm::LLVMContext Context;
   llvm::Module Module("aggregate-memory", Context);
@@ -2603,6 +2704,105 @@ int main(void) {
     for (const char *Level : {"-O0", "-O2"})
       compileAndRun(Source, Level);
   }
+}
+
+TEST(LLVMCValues, OwnedImageMirrorsRetainBytesBeyondStringPrefixes) {
+  // SIMD constant pools can start with an empty UTF-16 string (float 1.0),
+  // ASCII, or UTF-16 text while the rest of the access is still binary data.
+  const uint8_t Bytes[] = {
+      0xde, 0xad, 0xbe, 0xef, 0x81, 0x82, 0x83, 0x84, 0x91, 0x92, 0x93,
+      0x94, 0xa1, 0xa2, 0xa3, 0xa4, 0,    0,    0x80, 0x3f, 0,    0,
+      0,    0x80, 0,    0,    0xc0, 0x7f, 0x45, 0x23, 0xa1, 0x7f, 'h',
+      'i',  0,    0,    0xb1, 0xb2, 0xb3, 0xb4, 0xc1, 0xc2, 0xc3, 0xc4,
+      0xd1, 0xd2, 0xd3, 0xd4, 'o',  0,    'k',  0,    0,    0,    0xe3,
+      0xe4, 0xf1, 0xf2, 0xf3, 0xf4, 0x85, 0x86, 0x87, 0x88};
+  for (auto Arch : {neverd::Arch::X64, neverd::Arch::AArch64})
+    for (const char *Name : {"__nd_codeptr_2000.bytes", "__nd_data_2000"})
+      for (bool Volatile : {false, true}) {
+        SCOPED_TRACE(static_cast<int>(Arch));
+        SCOPED_TRACE(Name);
+        SCOPED_TRACE(Volatile);
+        neverd::BinaryImage Image;
+        Image.Arch = Arch;
+        Image.Format = Arch == neverd::Arch::AArch64
+                           ? neverd::BinaryFormat::COFF
+                           : neverd::BinaryFormat::ELF;
+        Image.Bits = neverd::Bitness::Bits64;
+        neverd::Segment Data;
+        Data.VA = 0x2000;
+        Data.Size = Data.FileSz = sizeof(Bytes);
+        Data.Flags = neverd::SegmentFlags::Readable;
+        Data.Data.assign(std::begin(Bytes), std::end(Bytes));
+        Image.Segments.push_back(std::move(Data));
+        ASSERT_TRUE(neverd::imageStringLiteral(&Image, 0x2020));
+        ASSERT_TRUE(neverd::imageStringLiteral(&Image, 0x2030));
+
+        llvm::LLVMContext Context;
+        llvm::Module Module("owned-image-mirror", Context);
+        Module.setDataLayout("e-p:64:64-i64:64-i128:128");
+        auto *Init = llvm::ConstantDataArray::get(Context, Bytes);
+        auto *Global = new llvm::GlobalVariable(
+            Module, Init->getType(), true, llvm::GlobalValue::InternalLinkage,
+            Init, Name);
+        Global->setAlignment(llvm::Align(16));
+        llvm::IRBuilder<llvm::NoFolder> Builder(Context);
+        auto *Function = llvm::Function::Create(
+            llvm::FunctionType::get(Builder.getVoidTy(), {Builder.getPtrTy()},
+                                    false),
+            llvm::GlobalValue::ExternalLinkage, "copy_image_pool", Module);
+        Builder.SetInsertPoint(
+            llvm::BasicBlock::Create(Context, "entry", Function));
+        for (unsigned Offset = 0; Offset < sizeof(Bytes); Offset += 16) {
+          auto *Input = Builder.CreateGEP(Builder.getInt8Ty(), Global,
+                                          Builder.getInt64(Offset));
+          auto *Value = Builder.CreateAlignedLoad(Builder.getInt128Ty(), Input,
+                                                  llvm::Align(16), Volatile);
+          auto *Output =
+              Builder.CreateGEP(Builder.getInt8Ty(), Function->getArg(0),
+                                Builder.getInt64(Offset));
+          Builder.CreateAlignedStore(Value, Output, llvm::Align(16));
+        }
+        Builder.CreateRetVoid();
+        for (unsigned Offset : {0, 16}) {
+          auto *Address = llvm::Function::Create(
+              llvm::FunctionType::get(Builder.getInt64Ty(), {}, false),
+              llvm::GlobalValue::ExternalLinkage,
+              "pool_address_" + std::to_string(Offset), Module);
+          Builder.SetInsertPoint(
+              llvm::BasicBlock::Create(Context, "entry", Address));
+          auto *Pointer = Builder.CreateGEP(Builder.getInt8Ty(), Global,
+                                            Builder.getInt64(Offset));
+          Builder.CreateRet(
+              Builder.CreatePtrToInt(Pointer, Builder.getInt64Ty()));
+        }
+        ASSERT_FALSE(llvm::verifyModule(Module));
+        neverd::CEmitterOptions Options;
+        Options.TheArch = Arch;
+        Options.Format = Image.Format;
+        Options.PreserveLLVMFunctionTypes = true;
+        std::string Source;
+        llvm::raw_string_ostream Out(Source);
+        ASSERT_TRUE(
+            neverd::LLVMCEmitter().emit(Module, Out, Options, nullptr, &Image));
+        Source += "\n#include <string.h>\nstatic const uint8_t expected[] = {";
+        for (uint8_t Byte : Bytes)
+          Source += std::to_string(Byte) + ",";
+        Source += R"c(};
+int main(void) {
+  _Alignas(16) uint8_t output[96];
+  memset(output, 0xa5, sizeof(output));
+  copy_image_pool(output + 16);
+  if (memcmp(output + 16, expected, sizeof(expected))) return 1;
+  if (pool_address_16() - pool_address_0() != 16) return 3;
+  for (unsigned i = 0; i < 16; ++i)
+    if (output[i] != 0xa5 || output[80 + i] != 0xa5) return 2;
+  return 0;
+}
+)c";
+        for (const char *Optimization : {"-O0", "-O2"})
+          compileAndRun(Source, Optimization, {},
+                        /*CheckUndefinedBehavior=*/true);
+      }
 }
 
 TEST(LLVMCValues, GlobalByteViewsUseObjectAddresses) {

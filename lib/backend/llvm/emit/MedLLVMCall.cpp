@@ -15,6 +15,7 @@
 #include "neverd/backend/Limits.h"
 #include "neverd/backend/RewriteSourceIdentity.h"
 #include "neverd/backend/llvm/LLVMCallContract.h"
+#include "neverd/backend/llvm/LLVMFloatingCall.h"
 #include "neverd/backend/llvm/LLVMName.h"
 #include "neverd/backend/llvm/LLVMSourceMap.h"
 #include "neverd/backend/llvm/LLVMSourceTypeHints.h"
@@ -1208,28 +1209,7 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
             floatingHeaderCall(*Function, TargetArch, TargetFormat, Op, *CI)) {
           const auto Signature =
               libc::floatingCallArguments(*Function, TargetArch, TargetFormat);
-          std::vector<llvm::Type *> Parameters;
-          llvm::Type *Return = mapNdtype(Function->ReturnType);
-          if (!Signature->ParameterElements.empty() ||
-              Signature->ReturnElements) {
-            for (const auto &Parameter : Signature->Scalars)
-              Parameters.push_back(mapNdtype(
-                  Parameter.Floating ? NdType::makeFloat(Parameter.Bytes)
-                  : Parameter.Pointer
-                      ? NdType::makePtr()
-                      : NdType::makeInt(Parameter.Bytes, false)));
-            if (Signature->ReturnElements) {
-              auto *Element = mapNdtype(NdType::makeFloat(
-                  Signature->ReturnBytes / Signature->ReturnElements));
-              Return = llvm::StructType::get(
-                  *Ctx, std::vector<llvm::Type *>(Signature->ReturnElements,
-                                                  Element));
-            }
-          } else {
-            for (const auto &[Name, Type] : Function->Params)
-              Parameters.push_back(mapNdtype(Type));
-          }
-          auto *FT = llvm::FunctionType::get(Return, Parameters, false);
+          auto *FT = floatingCallType(*Ctx, *Signature);
           Callee = llvm::Function::Create(
               FT, llvm::GlobalValue::ExternalLinkage, CalleeName, Mod);
           Callee->setCallingConv(TargetArch == Arch::X64 &&
@@ -1244,32 +1224,15 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
       if (!Callee && CI && !CI->IsIndirect) {
         if (const auto Signature = recoveredFloatingCallArguments(
                 Op, *CI, TargetArch, TargetFormat)) {
-          std::vector<llvm::Type *> Types;
-          for (uint16_t Bytes : Signature->ParameterBytes)
-            Types.push_back(mapNdtype(NdType::makeFloat(Bytes)));
-          for (const auto &Parameter : Signature->Scalars)
-            Types.push_back(mapNdtype(
-                Parameter.Floating  ? NdType::makeFloat(Parameter.Bytes)
-                : Parameter.Pointer ? NdType::makePtr()
-                                    : NdType::makeInt(Parameter.Bytes, false)));
           const std::string Name =
               CalleeName.empty()
                   ? (kAutoFuncPrefix + llvm::utohexstr(CallAddr)).str()
                   : CalleeName;
           Callee = Mod->getFunction(Name);
           if (!Callee) {
-            llvm::Type *Return =
-                mapNdtype(NdType::makeFloat(Signature->ReturnBytes));
-            if (Signature->ReturnElements) {
-              auto *Element = mapNdtype(NdType::makeFloat(
-                  Signature->ReturnBytes / Signature->ReturnElements));
-              Return = llvm::StructType::get(
-                  *Ctx, std::vector<llvm::Type *>(Signature->ReturnElements,
-                                                  Element));
-            }
-            Callee = llvm::Function::Create(
-                llvm::FunctionType::get(Return, Types, false),
-                llvm::GlobalValue::ExternalLinkage, Name, Mod);
+            Callee = llvm::Function::Create(floatingCallType(*Ctx, *Signature),
+                                            llvm::GlobalValue::ExternalLinkage,
+                                            Name, Mod);
             Callee->setCallingConv(TargetArch == Arch::X64 &&
                                            TargetFormat == BinaryFormat::COFF
                                        ? llvm::CallingConv::Win64
@@ -1546,6 +1509,52 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
     }
     Args = std::move(Bound->Values);
     BoundArgumentBanks = true;
+  }
+  if (Op.ScalarCallSignature &&
+      !Op.ScalarCallSignature->ParameterElements.empty()) {
+    const auto &Signature = *Op.ScalarCallSignature;
+    if (!Callee ||
+        Callee->getFunctionType() != floatingCallType(*Ctx, Signature) ||
+        Args.size() != Signature.Scalars.size()) {
+      syncError()
+          << "med_llvm_emitter: HFA call lost its complete source groups\n";
+      FatalCodePointerResolution = true;
+      return;
+    }
+    std::vector<llvm::Value *> Grouped;
+    std::vector<int> Indices;
+    size_t At = 0;
+    for (unsigned Count : Signature.ParameterElements) {
+      if (!Count) {
+        Grouped.push_back(Args[At]);
+        Indices.push_back(ArgumentIndices[At++]);
+        continue;
+      }
+      auto *Element =
+          floatingCallElementType(*Ctx, Signature.Scalars[At].Bytes);
+      auto *Array = llvm::ArrayType::get(Element, Count);
+      llvm::Value *Value = llvm::PoisonValue::get(Array);
+      for (unsigned I = 0; I < Count; ++I, ++At) {
+        llvm::Value *Lane = Args[At];
+        const unsigned Bits = Lane->getType()->getPrimitiveSizeInBits();
+        if (!Bits || Lane->getType()->isPointerTy()) {
+          syncError()
+              << "med_llvm_emitter: HFA member has no scalar bit carrier\n";
+          FatalCodePointerResolution = true;
+          return;
+        }
+        if (!Lane->getType()->isIntegerTy())
+          Lane = Builder.CreateBitCast(Lane, llvm::Type::getIntNTy(*Ctx, Bits));
+        Lane = Builder.CreateZExtOrTrunc(
+            Lane, llvm::Type::getIntNTy(*Ctx, Signature.Scalars[At].Bytes * 8));
+        Lane = Builder.CreateBitCast(Lane, Element);
+        Value = Builder.CreateInsertValue(Value, Lane, {I});
+      }
+      Grouped.push_back(Value);
+      Indices.push_back(-1);
+    }
+    Args = std::move(Grouped);
+    ArgumentIndices = std::move(Indices);
   }
   if (Target && Callee && Args.size() < Callee->arg_size()) {
     syncError() << "med_llvm_emitter: resolved indirect call to "

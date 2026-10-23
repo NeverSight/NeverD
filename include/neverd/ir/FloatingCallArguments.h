@@ -32,7 +32,7 @@ struct FloatingCallArguments {
   uint16_t ReturnElements = 0;
   /// For an HFA signature, one count per source parameter: zero for a scalar,
   /// otherwise the number of consecutive Scalars carrying that dense record.
-  /// Only HFAs fully carried in registers are admitted by this flat adapter.
+  /// A spilled record keeps its dense member offsets within one stack object.
   std::vector<uint16_t> ParameterElements;
   struct ScalarParameter {
     SourceABICarrierKind Kind = SourceABICarrierKind::None;
@@ -52,8 +52,8 @@ struct FloatingCallArguments {
 
 /// A complete fixed scalar signature. Consecutive floating registers use the
 /// compact ParameterBytes form; mixed classes use source-ordered Scalars,
-/// including stack locations. Dense AAPCS64 HFAs are admitted only when their
-/// complete parameter records fit in registers. Other records and special
+/// including stack locations. Dense AAPCS64 HFAs preserve their complete
+/// parameter groups in registers or on the stack. Other records and special
 /// conventions need other adapters. The caller establishes the fixed C ABI.
 std::optional<FloatingCallArguments>
 floatingCallArguments(Arch A, BinaryFormat F, const TypeRef &ReturnType,

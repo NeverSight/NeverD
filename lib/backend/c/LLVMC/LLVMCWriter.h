@@ -98,9 +98,11 @@ public:
   void writeModule(llvm::Module &Mod, const llvm::Function *Only = nullptr);
   void prepareFunctionIdentifiers(llvm::Module &Mod);
   /// One declaration per imported symbol, admitted only when every printed
-  /// call has the header's complete scalar integer/pointer operand layout.
+  /// call has the header's complete scalar or HFA operand layout.
   void prepareSourceImportPrototypes(llvm::Module &Mod);
   const FunctionSym *sourceImportCallee(const llvm::CallBase &Call) const;
+  bool groupedFloatingCall(const llvm::CallBase &Call,
+                           const FunctionSym &Function) const;
   std::string sourceImportDeclaration(const FunctionSym &Function,
                                       llvm::StringRef Name);
   std::map<std::string, FunctionSym> SourceImportPrototypes;

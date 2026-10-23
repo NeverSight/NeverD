@@ -15,6 +15,8 @@
 #include "HighCWriter.h"
 
 #include "neverd/backend/c/CSourceMap.h"
+#include "neverd/libc/LibCFloatingArguments.h"
+#include "neverd/libc/LibCNames.h"
 
 #include <map>
 
@@ -86,6 +88,17 @@ void HighCWriter::prepareRecordDefinitions(const std::vector<HighFunc> &Funcs) {
         VisitImportType(Callee->ReturnType);
         for (const auto &[Name, Type] : Callee->Params)
           VisitImportType(Type);
+        // Definitions are collected before headers are written. Known
+        // library headers supply their own value records.
+        if (const auto Floating =
+                libc::floatingCallArguments(*Callee, Opts.TheArch, Opts.Format);
+            Floating && !libc::headerFor(Callee->Name) &&
+            (!Floating->ParameterElements.empty() ||
+             Floating->ReturnElements)) {
+          Visit(Callee->ReturnType);
+          for (const auto &[Name, Type] : Callee->Params)
+            Visit(Type);
+        }
       }
     E.forEachChildExpr([&](const ExprPtr &Child) { VisitExpr(*Child); });
   };

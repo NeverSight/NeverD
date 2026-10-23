@@ -46,8 +46,20 @@ TEST(FloatingCallArguments, HFAPlacementKeepsCompleteRecordsAndResultFields) {
         EXPECT_FALSE(Mixed->Scalars[Count].Floating);
         std::vector<TypeRef> Overflow(9 - Count, Scalar);
         Overflow.push_back(Record);
-        EXPECT_FALSE(
-            floatingCallArguments(Arch::AArch64, Format, Scalar, Overflow));
+        const auto Spilled =
+            floatingCallArguments(Arch::AArch64, Format, Scalar, Overflow);
+        if (Format == BinaryFormat::MachO) {
+          EXPECT_FALSE(Spilled);
+        } else {
+          ASSERT_TRUE(Spilled);
+          ASSERT_EQ(Spilled->Scalars.size(), 9u);
+          for (unsigned I = 0; I < Count; ++I) {
+            const auto &Member = Spilled->Scalars[9 - Count + I];
+            EXPECT_EQ(Member.Kind, SourceABICarrierKind::Stack);
+            EXPECT_EQ(Member.StackOffset, I * Bytes);
+            EXPECT_EQ(Member.Bytes, Bytes);
+          }
+        }
       }
       Record->Size += Bytes;
       EXPECT_FALSE(floatingCallArguments(Arch::AArch64, BinaryFormat::COFF,
@@ -58,6 +70,40 @@ TEST(FloatingCallArguments, HFAPlacementKeepsCompleteRecordsAndResultFields) {
                                          Scalar, {Record}));
     }
 }
+TEST(FloatingCallArguments, SpilledHFAsKeepDenseMembersAndIndependentBanks) {
+  for (auto Format : {BinaryFormat::COFF, BinaryFormat::ELF})
+    for (uint16_t Bytes : {4u, 8u})
+      for (unsigned Prefix : {7u, 8u, 9u}) {
+        SCOPED_TRACE(Prefix);
+        const auto Scalar = NdType::makeFloat(Bytes);
+        auto Pair = NdType::makeStruct({Scalar, Scalar});
+        Pair->Passing = NdRecordPassing::ByValue;
+        std::vector<TypeRef> Parameters(Prefix, Scalar);
+        Parameters.insert(Parameters.end(),
+                          {Pair, Scalar, NdType::makeInt(4), Pair});
+        const auto Layout =
+            floatingCallArguments(Arch::AArch64, Format, Pair, Parameters);
+        ASSERT_TRUE(Layout);
+        const int64_t Base = Prefix > 8 ? 8 : 0;
+        const auto &First = Layout->Scalars[Prefix];
+        EXPECT_EQ(First.Kind, SourceABICarrierKind::Stack);
+        EXPECT_EQ(First.StackOffset, Base);
+        EXPECT_EQ(Layout->Scalars[Prefix + 1].StackOffset, Base + Bytes);
+        EXPECT_EQ(Layout->Scalars[Prefix + 2].StackOffset, Base + 2 * Bytes);
+        const auto &Integer = Layout->Scalars[Prefix + 3];
+        EXPECT_EQ(Integer.Kind, SourceABICarrierKind::IntegerRegister);
+        EXPECT_EQ(Integer.Register,
+                  getTargetRegInfo(Arch::AArch64).integerParamRegs(Format)[0]);
+        EXPECT_EQ(Layout->Scalars[Prefix + 4].StackOffset,
+                  Base + 2 * Bytes + 8);
+        EXPECT_EQ(Layout->Scalars[Prefix + 5].StackOffset,
+                  Base + 3 * Bytes + 8);
+        Pair->Alignment *= 2;
+        EXPECT_FALSE(
+            floatingCallArguments(Arch::AArch64, Format, Pair, Parameters));
+      }
+}
+
 TEST(FloatingCallArguments, CompleteScalarRegistersAndConservativeBoundaries) {
   for (Arch A : {Arch::X64, Arch::AArch64}) {
     for (BinaryFormat F :

@@ -288,9 +288,23 @@ register HFAs preserve both returned fields through single and chained calls,
 including NaN payloads and signed zero; output sentinels bound every write.
 ARM64 explicitly stores both fields, so the test does not infer a wrapper's
 source return type from unused scratch registers. The shared placement suite
-covers one through four float/double HFA members on COFF/ELF/Mach-O and rejects
-incomplete, padded and spilled records. Native Windows/ARM64 execution and
-unobserved wrapper return-type recovery are separate coverage.
+covers one through four float/double HFA members on COFF/ELF/Mach-O, including
+whole-record COFF/ELF stack placement, and rejects incomplete, padded,
+over-aligned and unsupported Mach-O stack layouts.
+`RecordCallContract.WindowsStackedHFAsPreserveGroupsAndFollowingArguments`
+uses an independent header/provider and linked ARM64 PE fixtures for one through
+four float/double members, seven preceding floats, a following float, an integer
+and another HFA. Single/chained calls and O0/O2 inputs produce both C routes,
+executed at O0/O2 with address/undefined-behavior sanitizers. Every parameter,
+result member and output sentinel is observed, including signed zero and NaN
+payloads; malformed stack offsets and source groups fail the bound validator.
+LLVM parameters must retain HFA arrays instead of flattened or struct operands.
+`LLVMCValues.HFAArrayBoundariesRequireOrdinaryAAPCS64Parameters` rejects other
+architectures, nested/oversized arrays, unproved mixed array classes, array
+returns, variadic calls and special ABI attributes. The scalar/aggregate
+nonfinite constant test also checks exact quiet/signaling NaN, infinity and
+signed-zero bits. Native Windows/ARM64 execution and unobserved wrapper
+return-type recovery are separate coverage.
 `ReturnContract.ExplicitX87PrecisionRequiresAnExactIEEEValue` keeps arithmetic,
 raw byte changes and unknown loads at eighty bits while exact IEEE extensions
 and identity copies retain their declared precision. SDK checks use the
@@ -5024,6 +5038,12 @@ that same slot, in either operand order.
 strings, generic builtins compiled for a different source ISA, and dead image
 address calculations. The latter must retain volatile/atomic loads and
 observable calls while leaving the input LLVM module unchanged.
+`OwnedImageMirrorsRetainBytesBeyondStringPrefixes` reads complete SIMD-sized
+constant-pool objects behind empty, ASCII and UTF-16 prefixes through ordinary
+and volatile loads. Both section storage and pointer mirrors retain their
+bytes and the identity of pointer-to-integer views, including interior offsets.
+The generated C executes at O0/O2 with undefined-behavior checks for x64/ELF
+and ARM64/COFF writer options; a prefix cannot replace the owned byte object.
 Integer-initializer regressions give scalars, arrays and records values that
 match known image string addresses, then compile and execute their generated C
 at O0/O2 with x64 and AArch64 writer options. Symbolic global references retain

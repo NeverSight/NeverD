@@ -15,12 +15,15 @@
 
 #include "neverd/backend/c/HighC/HighCEmitter.h"
 #include "neverd/backend/c/LLVMC/LLVMCEmitter.h"
+#include "neverd/backend/llvm/LLVMFloatingCall.h"
+#include "neverd/ir/med/MedABIPass.h"
 #include "neverd/libc/LibCRecordArguments.h"
 #include "neverd/loader/Loader.h"
 #include "neverd/pipeline/Pipeline.h"
 #include "neverd/types/TypeParse.h"
 
 #include "llvm/ADT/ScopeExit.h"
+#include "llvm/IR/Instructions.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Path.h"
@@ -311,7 +314,7 @@ _Dcomplex cpow(_Dcomplex, _Dcomplex);
 class DeclaredHeaderDebug final : public NullDebugContext {
   const sdk::LocalTypesDebugContext &Inner;
   static std::optional<FunctionSym> asHeader(std::optional<FunctionSym> F) {
-    if (F && F->Name == "cpow") {
+    if (F && (F->Name == "cpow" || F->Name == "fixture_hfa")) {
       F->PrototypeFromHeader = true;
       F->PrototypeLibrary = "test-windows-header";
     }
@@ -510,6 +513,228 @@ int main(void) {
                               Errors))
               << Source;
           ASSERT_TRUE(execute(Product, {Product}, Errors)) << Source;
+        }
+      }
+    }
+  }
+#endif
+}
+
+TEST(RecordCallContract,
+     WindowsStackedHFAsPreserveGroupsAndFollowingArguments) {
+#if !defined(__linux__) || !defined(__x86_64__)
+  GTEST_SKIP() << "Host execution of the generated C requires Linux x86-64";
+#else
+  const std::string Compiler = NEVERD_TEST_CLANG;
+  const auto Linker = llvm::sys::findProgramByName("lld-link");
+  if (!Linker)
+    GTEST_SKIP() << "lld-link is required for the linked ARM64 PE fixture";
+  llvm::SmallString<128> Directory;
+  ASSERT_FALSE(
+      llvm::sys::fs::createUniqueDirectory("neverd-stacked-hfa", Directory));
+  const auto Cleanup = llvm::make_scope_exit(
+      [&] { llvm::sys::fs::remove_directories(Directory); });
+  const std::string Root = Directory.str().str();
+  const std::string Header = Root + "/hfa.h", Input = Root + "/input.c",
+                    Provider = Root + "/provider.c",
+                    Object = Root + "/input.obj",
+                    ProviderObject = Root + "/provider.obj",
+                    ImportLibrary = Root + "/provider.lib",
+                    ProviderDLL = "/out:" + Root + "/provider.dll",
+                    ImportOption = "/implib:" + ImportLibrary,
+                    DLL = Root + "/input.dll", DLLOption = "/out:" + DLL,
+                    Generated = Root + "/generated.c",
+                    Oracle = Root + "/oracle.c", Product = Root + "/run",
+                    Include = "-I" + Root, Errors = Root + "/errors.txt";
+  constexpr const char *Target = "--target=aarch64-pc-windows-msvc";
+  for (bool Double : {false, true}) {
+    for (unsigned Count : {1u, 2u, 3u, 4u}) {
+      SCOPED_TRACE(Count);
+      SCOPED_TRACE(Double ? "double HFA" : "float HFA");
+      const std::string Scalar = Double ? "double" : "float";
+      const std::string Declaration =
+          "typedef struct HFA { " + Scalar + " lane[" + std::to_string(Count) +
+          "]; } HFA;\nHFA fixture_hfa(" + Scalar + ", " + Scalar + ", " +
+          Scalar + ", " + Scalar + ", " + Scalar + ", " + Scalar + ", " +
+          Scalar + ", HFA, " + Scalar + ", unsigned, HFA);\n";
+      write(Header, Declaration);
+      write(Provider,
+            "#include \"hfa.h\"\nint _fltused;\n__declspec(dllexport) "
+            "HFA fixture_hfa(" +
+                Scalar + " a, " + Scalar + " b, " + Scalar + " c, " + Scalar +
+                " d, " + Scalar + " e, " + Scalar + " f, " + Scalar +
+                " g, HFA x, " + Scalar +
+                " h, unsigned n, HFA y) { return x; }\n");
+      ASSERT_TRUE(execute(Compiler,
+                          {Compiler, Target, "-O2", "-ffreestanding", "-c",
+                           Provider, "-o", ProviderObject},
+                          Errors));
+      ASSERT_TRUE(execute(*Linker,
+                          {*Linker, "/dll", "/noentry", "/nodefaultlib",
+                           ProviderDLL, ImportOption, ProviderObject},
+                          Errors));
+      auto Types =
+          std::make_shared<types::TypeLibrary>(types::DataModel::LLP64);
+      Types->setRecordABI(types::RecordABI::Microsoft);
+      ASSERT_TRUE(types::parseCTypes(Declaration, *Types).ok());
+      const std::string Word = Double ? "unsigned long long" : "unsigned";
+      const std::string X0 = Double ? "0x7FF8123456789ABCULL" : "0x7FC12345U";
+      const std::string X1 = Double ? "0x8000000000000000ULL" : "0x80000000U";
+      const std::string Y0 = Double ? "0x3FF0000000000000ULL" : "0x3F800000U";
+      const std::string Y1 = Double ? "0xFFF8DEADBEEF0123ULL" : "0xFFC54321U";
+      const std::string R0 = Double ? "0xFEDCBA9876543210ULL" : "0xBF123456U";
+      const std::string R1 = Double ? "0x0123456789ABCDEFULL" : "0x40123456U";
+      std::vector<std::string> X{X0, X1, Y1, R0}, Y{Y0, Y1, X0, R1},
+          R{R0, R1, X1, Y0};
+      const auto List = [&](const std::vector<std::string> &Values) {
+        std::string Text;
+        for (unsigned I = 0; I < Count; ++I)
+          Text += (I ? ", " : "") + Values[I];
+        return Text;
+      };
+      std::string Checks;
+      for (unsigned I = 0; I < Count; ++I) {
+        const auto Index = std::to_string(I);
+        Checks += " || xb[" + Index + "] != (calls ? rb[" + Index +
+                  "] : " + X[I] + ") || yb[" + Index + "] != " + Y[I];
+      }
+      write(Oracle,
+            "#include \"hfa.h\"\nstatic unsigned calls;\nHFA fixture_hfa(" +
+                Scalar + " a, " + Scalar + " b, " + Scalar + " c, " + Scalar +
+                " d, " + Scalar + " e, " + Scalar + " f, " + Scalar +
+                " g, HFA x, " + Scalar + " h, unsigned n, HFA y) {\n" + Word +
+                " xb[" + std::to_string(Count) + "], yb[" +
+                std::to_string(Count) + "], rb[] = {" + List(R) + "};\n" +
+                "__builtin_memcpy(xb, &x, sizeof(x));\n" +
+                "__builtin_memcpy(yb, &y, sizeof(y));\n" +
+                "if (a != 1 || b != 2 || c != 3 || d != 4 || e != 5 || f != 6 "
+                "|| g != 7 || " +
+                "h != 9 || n != 0x12345678U" + Checks +
+                ") __builtin_trap();\n" +
+                "++calls; HFA r; __builtin_memcpy(&r, rb, sizeof(r)); return "
+                "r; }\n" +
+                "unsigned observed_calls(void) { return calls; }\n");
+      for (bool Chain : {false, true}) {
+        SCOPED_TRACE(Chain);
+        const std::string Call = "fixture_hfa(1,2,3,4,5,6,7,x,9,0x12345678U,y)";
+        write(Input, "#include \"hfa.h\"\nint _fltused;\n"
+                     "__declspec(dllexport) void record_probe(HFA *out) {\n" +
+                         Word + " xb[] = {" + List(X) + "}, yb[] = {" +
+                         List(Y) +
+                         "}; HFA x,y; __builtin_memcpy(&x,xb,sizeof(x));\n" +
+                         "__builtin_memcpy(&y,yb,sizeof(y));\n" +
+                         (Chain ? "x = " + Call + ";\n" : "") +
+                         "*out = " + Call + "; }\n");
+        for (const char *Optimization : {"-O0", "-O2"}) {
+          SCOPED_TRACE(Optimization);
+          ASSERT_TRUE(
+              execute(Compiler,
+                      {Compiler, Target, Optimization, "-ffreestanding",
+                       "-fno-stack-protector", "-c", Input, "-o", Object},
+                      Errors));
+          ASSERT_TRUE(execute(*Linker,
+                              {*Linker, "/dll", "/noentry", "/nodefaultlib",
+                               DLLOption, Object, ImportLibrary},
+                              Errors));
+          auto Reader = Loader::create(DLL);
+          ASSERT_TRUE(bool(Reader));
+          auto Loaded = Reader->load(DLL);
+          ASSERT_TRUE(bool(Loaded)) << llvm::toString(Loaded.takeError());
+          BinaryImage Image = std::move(*Loaded);
+          EmptyDebug Empty;
+          sdk::LocalTypesDebugContext Context(Empty, Types, {}, &Image);
+          DeclaredHeaderDebug Debug(Context);
+          for (bool LLVM : {false, true}) {
+            SCOPED_TRACE(LLVM ? "LLVM-C" : "HighC");
+            llvm::LLVMContext LLVMContext;
+            PipelineOptions Options;
+            Options.EmitDumpOutput = false;
+            Options.LiftMode = LLVM;
+            Options.SourceProjection = LLVM;
+            for (const auto &Export : Image.Exports)
+              if (Export.Name == "record_probe")
+                Options.OnlyFunctionEntries.insert(Export.Addr);
+            ASSERT_EQ(Options.OnlyFunctionEntries.size(), 1u);
+            auto Result = Pipeline().run(Image, LLVMContext, Options, &Debug);
+            ASSERT_TRUE(Result.Success) << Result.Error;
+            unsigned BoundCalls = 0;
+            for (const auto &Function : Result.MedFuncs)
+              for (const auto &Block : Function.Blocks)
+                for (const auto &Op : Block.Ops) {
+                  if (!Op.ScalarCallSignature)
+                    continue;
+                  ++BoundCalls;
+                  ASSERT_TRUE(
+                      boundFloatingCallArguments(Op, Image.Arch, Image.Format));
+                  auto Wrong = std::make_shared<FloatingCallArguments>(
+                      *Op.ScalarCallSignature);
+                  Wrong->Scalars[8].StackOffset += 4;
+                  MedOp Broken = Op;
+                  Broken.ScalarCallSignature = Wrong;
+                  EXPECT_FALSE(boundFloatingCallArguments(Broken, Image.Arch,
+                                                          Image.Format));
+                  *Wrong = *Op.ScalarCallSignature;
+                  Wrong->ParameterElements[7] = Count == 1 ? 2 : 1;
+                  EXPECT_FALSE(boundFloatingCallArguments(Broken, Image.Arch,
+                                                          Image.Format));
+                }
+            ASSERT_EQ(BoundCalls, Chain ? 2u : 1u);
+            CEmitterOptions COptions;
+            COptions.TheArch = Image.Arch;
+            COptions.Format = Image.Format;
+            COptions.Image = &Image;
+            COptions.RecordDefinitions =
+                [&](const std::vector<TypeRef> &Records) {
+                  return Context.definitions(Records);
+                };
+            std::string Source;
+            llvm::raw_string_ostream Out(Source);
+            if (LLVM) {
+              ASSERT_TRUE(Result.LlvmModule);
+              const auto *Callee =
+                  Result.LlvmModule->getFunction("fixture_hfa");
+              ASSERT_NE(Callee, nullptr);
+              ASSERT_EQ(Callee->arg_size(), 11u);
+              EXPECT_TRUE(isAAPCS64HFAArray(
+                  Callee->getFunctionType()->getParamType(7)));
+              EXPECT_TRUE(isAAPCS64HFAArray(
+                  Callee->getFunctionType()->getParamType(10)));
+              ASSERT_TRUE(LLVMCEmitter().emit(*Result.LlvmModule, Out, COptions,
+                                              &Debug, &Image));
+            } else {
+              ASSERT_TRUE(
+                  HighCEmitter().emit(Result.HighFuncs, Out, COptions, &Debug));
+            }
+            const std::string Pointer =
+                Source.find("record_probe(void*") == std::string::npos
+                    ? "(uintptr_t)"
+                    : "(void*)";
+            std::string OutputChecks =
+                "out[0] != 23 || out[" + std::to_string(Count + 1) + "] != 79";
+            for (unsigned I = 0; I < Count; ++I)
+              OutputChecks +=
+                  " || out[" + std::to_string(I + 1) + "] != " + R[I];
+            write(Generated,
+                  Source +
+                      "\nextern unsigned observed_calls(void);\nint main(void) "
+                      "{\n" +
+                      Word + " out[" + std::to_string(Count + 2) +
+                      "] = {23}; out[" + std::to_string(Count + 1) +
+                      "] = 79; record_probe(" + Pointer + "&out[1]);\n" +
+                      "return observed_calls() != " + (Chain ? "2" : "1") +
+                      " || " + OutputChecks + "; }\n");
+            for (const char *COptimization : {"-O0", "-O2"}) {
+              SCOPED_TRACE(COptimization);
+              ASSERT_TRUE(
+                  execute(Compiler,
+                          {Compiler, "-std=gnu11", COptimization,
+                           "-fno-builtin", "-fsanitize=address,undefined",
+                           Include, Generated, Oracle, "-o", Product},
+                          Errors))
+                  << Source;
+              ASSERT_TRUE(execute(Product, {Product}, Errors)) << Source;
+            }
+          }
         }
       }
     }

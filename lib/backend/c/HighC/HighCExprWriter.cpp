@@ -2323,12 +2323,15 @@ std::string HighCWriter::renderCallExpr(const HighExpr &E) {
   // So does a known external function's declaration.
   if (const auto Declared = plainDeclarationArity(E))
     PrintedArgs = std::max(PrintedArgs, *Declared);
+  const bool SourceRecord =
+      !Defined && Callee && Name == Callee->Name &&
+      (includesHeaderOf(Name) ||
+       libc::floatingCallArguments(*Callee, Opts.TheArch, Opts.Format));
   const auto RecordCall =
-      !Defined && Callee && Name == Callee->Name && includesHeaderOf(Name)
-          ? libc::recordCallArguments(*Callee, Opts.TheArch, Opts.Format,
-                                      Opts.libcVariant())
-          : std::nullopt;
-  if (!Defined && Callee && Name == Callee->Name && includesHeaderOf(Name) &&
+      SourceRecord ? libc::recordCallArguments(*Callee, Opts.TheArch,
+                                               Opts.Format, Opts.libcVariant())
+                   : std::nullopt;
+  if (SourceRecord &&
       (Callee->PrototypeFromHeader || Callee->PrototypeFromCLibrary) &&
       !RecordCall && libc::hasRecordCallParameters(*Callee, Opts.libcVariant()))
     throw std::runtime_error("The header's record call ABI is unsupported");
@@ -2737,7 +2740,13 @@ std::string HighCWriter::renderCallExpr(const HighExpr &E) {
         E.Type->Size != Callee->ReturnType->Size)
       throw std::runtime_error(
           "A record call has an incompatible result carrier");
-    S = "__builtin_bit_cast(" + typeToC(E.Type) + ", " + S + ")";
+    // _BitInt(96) can occupy sixteen C bytes while a three-float record
+    // occupies twelve. Copy the exact record bytes into a zeroed carrier;
+    // bit_cast requires equal C object sizes and cannot express that case.
+    S = "({ " + c_detail::recordCallType(Callee->ReturnType, Opts) +
+        " __neverd_result = " + S + "; " + typeToC(E.Type) +
+        " __neverd_bits = 0; __builtin_memcpy(&__neverd_bits, "
+        "&__neverd_result, sizeof(__neverd_result)); __neverd_bits; })";
   }
   if (RecordCall && RecordCall->ResultPointer) {
     const unsigned Index = *RecordCall->ResultPointer;
@@ -3768,7 +3777,9 @@ size_t HighCWriter::debugCallArgLimit(const HighExpr &E) const {
     return I < Have && isCtorDisplayOperand(E.Operands[I].get());
   };
   if (const auto Callee = debugCallee(E)) {
-    if (Callee->Name == Name && includesHeaderOf(Name))
+    if (Callee->Name == Name &&
+        (includesHeaderOf(Name) ||
+         libc::floatingCallArguments(*Callee, Opts.TheArch, Opts.Format)))
       if (const auto Layout = libc::recordCallArguments(
               *Callee, Opts.TheArch, Opts.Format, Opts.libcVariant()))
         return Layout->Positions;
@@ -4460,6 +4471,26 @@ HighCWriter::debugExternPrototype(const FunctionSym &FS,
             ? debugCallConvAttribute(FS.CallConv).str()
             : "";
     return "extern " + Convention + Declaration.str();
+  }
+  if (const auto Floating =
+          libc::floatingCallArguments(FS, Opts.TheArch, Opts.Format);
+      Identifier == FS.Name && Floating &&
+      (!Floating->ParameterElements.empty() || Floating->ReturnElements)) {
+    const auto Declare = [&](const TypeRef &Type, const std::string &Name) {
+      return Type->Kind == NdTypeKind::Struct && !Type->IsEnum
+                 ? c_detail::recordCallType(Type, Opts) + " " + Name
+                 : declarationToC(cDisplayType(Type), Name);
+    };
+    std::string Signature = Identifier + "(";
+    for (size_t I = 0; I < FS.Params.size(); ++I) {
+      if (I)
+        Signature += ", ";
+      const auto &[Name, Type] = FS.Params[I];
+      Signature +=
+          Declare(Type, Name.empty() ? "arg" + std::to_string(I) : Name);
+    }
+    Signature += FS.Params.empty() ? "void)" : ")";
+    return "extern " + Declare(FS.ReturnType, Signature);
   }
   // A symbol the debug information names without a type returns what its
   // register holds, whole: a narrower type would drop the upper bytes of a

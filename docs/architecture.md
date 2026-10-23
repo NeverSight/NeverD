@@ -1412,8 +1412,19 @@ only along an unclobbered entry path. Its existing bounded summary worklist
 propagates the resulting facts. `recoveredFloatingCallArguments` checks the
 complete fixed signature for both LLVM declarations and HighC call metadata;
 expression types alone do not establish a nonvariadic external signature.
-Mixed classes, HFA records and stack overflow need their separate adapters;
-this scalar contract supplies no such coverage.
+Mixed scalar arguments and dense AAPCS64 HFAs use the same checked placement
+model, with source groups retained separately from their physical scalar
+operands. A spilled HFA occupies one stack object; its float members remain
+four bytes apart and exhausting the FP bank does not exhaust the integer bank.
+The native LLVM adapter uses an array for each HFA parameter: flattening it,
+or using an LLVM literal struct, can split a record between registers and the
+stack. Both C routes rebuild the original source record and retain complete
+return fields, including a single float and a three-float result whose C
+integer carrier has padding. Locally supplied header records get complete
+value definitions; records supplied by an included header are not redefined.
+Padded or over-aligned HFAs, special conventions and Apple stack packing remain
+outside this adapter. A source aggregate return for an untyped wrapper still
+needs independent source or caller evidence.
 
 LLVM-C also uses `integerCallArguments` to admit fixed scalar header import
 signatures. Every printed call of a symbol must agree before the writer uses

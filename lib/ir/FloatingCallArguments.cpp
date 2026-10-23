@@ -27,9 +27,19 @@ floatingCallArguments(Arch A, BinaryFormat F, const TypeRef &ReturnType,
   };
   if (Parameters.size() > static_cast<size_t>(limits::kMaxBoundSourceCallArgs))
     return std::nullopt;
-  // Flatten only complete, tightly packed AAPCS64 HFAs whose members all
-  // occupy registers. SourceParameterPlacement proves the real aggregate
-  // placement; comparing the flat signature rejects a partly spilled HFA.
+  const auto ScalarParameter = [&](const TypeRef &Type) {
+    return Scalar(Type) ||
+           (Type &&
+            (Type->Size == 1 || Type->Size == 2 || Type->Size == 4 ||
+             Type->Size == 8) &&
+            (Type->Kind != NdTypeKind::Ptr ||
+             Type->Size == getTargetRegInfo(A).PointerSize) &&
+            (Type->Kind == NdTypeKind::Int || Type->Kind == NdTypeKind::Ptr ||
+             (Type->Kind == NdTypeKind::Struct && Type->IsEnum)));
+  };
+  // Keep the original record placement. Flattening the source signature
+  // before placement would split an HFA between the last FP register and
+  // the stack, or give each stacked float an independent eight-byte slot.
   const auto HFA =
       [&](const TypeRef &Type) -> std::optional<std::vector<NdScalarLeaf>> {
     if (A != Arch::AArch64 || !Type ||
@@ -37,7 +47,8 @@ floatingCallArguments(Arch A, BinaryFormat F, const TypeRef &ReturnType,
       return std::nullopt;
     const auto Leaves = aapcs64FloatingAggregate(Type);
     if (!Leaves || Leaves->empty() ||
-        (Leaves->front().Size != 4 && Leaves->front().Size != 8))
+        (Leaves->front().Size != 4 && Leaves->front().Size != 8) ||
+        Type->Alignment != Leaves->front().Size)
       return std::nullopt;
     unsigned End = 0;
     for (const auto &Leaf : *Leaves) {
@@ -59,58 +70,60 @@ floatingCallArguments(Arch A, BinaryFormat F, const TypeRef &ReturnType,
     if (!Placement || Placement->ResultPointer ||
         Placement->Parameters.size() != Parameters.size())
       return std::nullopt;
-    std::vector<TypeRef> Flat;
-    std::vector<uint16_t> Elements;
-    std::vector<SourceABIValueLocation> Locations;
+    FloatingCallArguments Result;
+    Result.ReturnElements = ResultLeaves ? ResultLeaves->size() : 0;
+    Result.ReturnBytes = ReturnType->Size;
     for (size_t I = 0; I < Parameters.size(); ++I) {
       const auto &Type = Parameters[I];
       const auto Leaves = HFA(Type);
       const auto &Pieces = Placement->Parameters[I];
       if (Type && Type->Kind == NdTypeKind::Struct && !Type->IsEnum) {
-        if (!Leaves || Pieces.size() != Leaves->size())
+        if (!Leaves)
           return std::nullopt;
-        Elements.push_back(Leaves->size());
+        const bool Stacked =
+            Pieces.size() == 1 && !Pieces[0].Indirect && !Pieces[0].Offset &&
+            Pieces[0].Location.Kind == SourceABICarrierKind::Stack &&
+            Pieces[0].Location.ValueBytes == Type->Size;
+        if (!Stacked && Pieces.size() != Leaves->size())
+          return std::nullopt;
+        Result.ParameterElements.push_back(Leaves->size());
         for (size_t J = 0; J < Leaves->size(); ++J) {
-          if (Pieces[J].Indirect || Pieces[J].Offset != (*Leaves)[J].Offset ||
-              Pieces[J].Location.Kind !=
-                  SourceABICarrierKind::FloatingRegister ||
-              Pieces[J].Location.ValueBytes != (*Leaves)[J].Size)
-            return std::nullopt;
-          Flat.push_back(NdType::makeFloat((*Leaves)[J].Size));
-          Locations.push_back(Pieces[J].Location);
+          const auto &Leaf = (*Leaves)[J];
+          if (Stacked) {
+            Result.Scalars.push_back(
+                {SourceABICarrierKind::Stack, 0,
+                 Pieces[0].Location.EntryStackOffset + Leaf.Offset, Leaf.Size,
+                 true, false});
+          } else {
+            const auto &Piece = Pieces[J];
+            if (Piece.Indirect || Piece.Offset != Leaf.Offset ||
+                Piece.Location.Kind != SourceABICarrierKind::FloatingRegister ||
+                Piece.Location.ValueBytes != Leaf.Size)
+              return std::nullopt;
+            Result.Scalars.push_back({Piece.Location.Kind,
+                                      Piece.Location.RegisterOffset, 0,
+                                      Leaf.Size, true, false});
+          }
         }
       } else {
-        if (Pieces.size() != 1 || Pieces[0].Indirect || Pieces[0].Offset)
+        if (!ScalarParameter(Type) || Pieces.size() != 1 ||
+            Pieces[0].Indirect || Pieces[0].Offset ||
+            Pieces[0].Location.ValueBytes != Type->Size)
           return std::nullopt;
-        Elements.push_back(0);
-        Flat.push_back(Type);
-        Locations.push_back(Pieces[0].Location);
+        const auto &Location = Pieces[0].Location;
+        if (Location.Kind != SourceABICarrierKind::IntegerRegister &&
+            Location.Kind != SourceABICarrierKind::FloatingRegister &&
+            Location.Kind != SourceABICarrierKind::Stack)
+          return std::nullopt;
+        Result.ParameterElements.push_back(0);
+        Result.Scalars.push_back(
+            {Location.Kind, Location.RegisterOffset, Location.EntryStackOffset,
+             Location.ValueBytes, Scalar(Type), Type->Kind == NdTypeKind::Ptr});
       }
-    }
-    auto Result = floatingCallArguments(
-        A, F,
-        ResultLeaves ? NdType::makeFloat(ResultLeaves->front().Size)
-                     : ReturnType,
-        Flat);
-    if (!Result)
-      return std::nullopt;
-    if (Result->Scalars.empty()) {
-      const auto Registers = getTargetRegInfo(A).floatingParamRegs(F);
-      for (size_t I = 0; I < Result->ParameterBytes.size(); ++I)
-        Result->Scalars.push_back({SourceABICarrierKind::FloatingRegister,
-                                   Registers[I], 0, Result->ParameterBytes[I],
-                                   true, false});
-      Result->ParameterBytes.clear();
-    }
-    for (size_t I = 0; I < Locations.size(); ++I)
-      if (Result->Scalars[I].Kind != Locations[I].Kind ||
-          Result->Scalars[I].Register != Locations[I].RegisterOffset ||
-          Result->Scalars[I].StackOffset != Locations[I].EntryStackOffset ||
-          Result->Scalars[I].Bytes != Locations[I].ValueBytes)
+      if (Result.Scalars.size() >
+          static_cast<size_t>(limits::kMaxBoundSourceCallArgs))
         return std::nullopt;
-    Result->ParameterElements = std::move(Elements);
-    Result->ReturnElements = ResultLeaves ? ResultLeaves->size() : 0;
-    Result->ReturnBytes = ReturnType->Size;
+    }
     return Result;
   }
   if (!Scalar(ReturnType))
@@ -120,13 +133,7 @@ floatingCallArguments(Arch A, BinaryFormat F, const TypeRef &ReturnType,
   for (const auto &Type : Parameters)
     if (!Scalar(Type)) {
       AllFloating = false;
-      if (!Type ||
-          (Type->Size != 1 && Type->Size != 2 && Type->Size != 4 &&
-           Type->Size != 8) ||
-          (Type->Kind == NdTypeKind::Ptr &&
-           Type->Size != getTargetRegInfo(A).PointerSize) ||
-          (Type->Kind != NdTypeKind::Int && Type->Kind != NdTypeKind::Ptr &&
-           !(Type->Kind == NdTypeKind::Struct && Type->IsEnum)))
+      if (!ScalarParameter(Type))
         return std::nullopt;
     }
   if (A != Arch::X86 && AllFloating && Parameters.size() > Registers.size())

@@ -667,9 +667,14 @@ LLVMCWriter::declaredImageDataVA(const llvm::Value *V) const {
   // objects, and so does a module for a mirror its environment holds (one
   // with runtime-filled slots, such as an i386 GOT run and the data after
   // it), which it does not define.
-  if (!OnlyFunction && V->getType()->isPointerTy())
-    if (const auto *Global =
-            llvm::dyn_cast<llvm::GlobalVariable>(llvm::getUnderlyingObject(V));
+  // Taking an integer view of a pointer does not transfer its storage to
+  // a separate object or a string literal.
+  const llvm::Value *Pointer = V;
+  if (const auto *Cast = llvm::dyn_cast<llvm::PtrToIntOperator>(Pointer))
+    Pointer = Cast->getPointerOperand();
+  if (!OnlyFunction && Pointer->getType()->isPointerTy())
+    if (const auto *Global = llvm::dyn_cast<llvm::GlobalVariable>(
+            llvm::getUnderlyingObject(Pointer));
         Global && Global->hasInitializer() &&
         (parseNdCodePtrSymbol(Global->getName()) ||
          parseNdDataSymbol(Global->getName())))
@@ -867,6 +872,15 @@ std::string LLVMCWriter::constStr(const llvm::Constant *C,
   }
 
   if (auto *CF = llvm::dyn_cast<llvm::ConstantFP>(C)) {
+    if ((C->getType()->isFloatTy() || C->getType()->isDoubleTy()) &&
+        !CF->getValueAPF().isFinite()) {
+      // Decimal NaN/Inf spellings are not C literals, and a generic NAN
+      // would discard payload and sign. This also covers aggregate members.
+      const auto Bits = CF->getValueAPF().bitcastToAPInt();
+      const auto Integer = "uint" + std::to_string(Bits.getBitWidth()) + "_t";
+      return "__builtin_bit_cast(" + typeToCLLVM(C->getType()) + ", (" +
+             Integer + ")0x" + llvm::utohexstr(Bits.getZExtValue()) + "ULL)";
+    }
     llvm::SmallString<32> Buf;
     CF->getValueAPF().toString(Buf, 0, 0);
     auto S = std::string(Buf.str());
@@ -3253,7 +3267,10 @@ std::string LLVMCWriter::valueStr(const llvm::Value *V, bool *PointerSpelling) {
   if (const auto *CB = llvm::dyn_cast<llvm::CallBase>(V))
     if (std::string Addr = ctorThisAddress(*CB); !Addr.empty())
       return AddressText(std::move(Addr));
-  if (auto VA = imageDataVA(V))
+  // An owned image mirror keeps its complete storage and pointer identity.
+  // A string-looking prefix at an interior address cannot replace that
+  // object: a later access may read bytes beyond the first terminator.
+  if (auto VA = declaredImageDataVA(V))
     if (auto Lit = stringLiteralAt(Img, Dbg, *VA, /*AllowEmpty=*/true))
       return AddressText(*Lit);
   if (!llvm::isa<llvm::LoadInst>(V)) {

@@ -26,6 +26,7 @@
 #include "neverd/backend/RewriteSourceIdentity.h"
 #include "neverd/backend/c/MsvcCallee.h"
 #include "neverd/backend/c/render/CTypeFormat.h"
+#include "neverd/backend/llvm/LLVMFloatingCall.h"
 #include "neverd/backend/llvm/WindowsEHMetadata.h"
 #include "neverd/debug/UserPrototype.h"
 #include "neverd/libc/LibCNames.h"
@@ -3267,11 +3268,21 @@ bool LLVMCWriter::isTrailingLiveInCopy(const llvm::Value *V) const {
   return false;
 }
 
+bool LLVMCWriter::groupedFloatingCall(const llvm::CallBase &Call,
+                                      const FunctionSym &Function) const {
+  const auto Floating =
+      libc::floatingCallArguments(Function, Opts.TheArch, Opts.Format);
+  return Floating && !Floating->ParameterElements.empty() &&
+         Call.getFunctionType() ==
+             floatingCallType(Call.getContext(), *Floating);
+}
+
 TypeRef LLVMCWriter::expectedCallArgType(const llvm::CallBase &Call,
                                          unsigned Index) const {
   if (auto FS = debugCallee(Call)) {
     if (const auto Layout = libc::recordCallArguments(
-            *FS, Opts.TheArch, Opts.Format, libcVariant())) {
+            *FS, Opts.TheArch, Opts.Format, libcVariant());
+        Layout && !groupedFloatingCall(Call, *FS)) {
       const auto Scalar =
           libc::recordCallScalarParameter(*FS, *Layout, Index, libcVariant());
       if (!Scalar)

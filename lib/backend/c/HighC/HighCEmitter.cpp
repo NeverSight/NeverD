@@ -601,19 +601,17 @@ void HighCWriter::collectMemoryTypes(const std::vector<HighFunc> &Funcs) {
   // freed one's address.
   ParamCacheOf = nullptr;
   EmittedParamIndices.clear();
-  // Native AArch64 vector carriers are projected to SVE ACLE types.  x86
-  // vector intrinsics use scalar integer carriers at the HighIR boundary.
-  const bool ProjectsScalarWideIntegers =
-      Opts.TheArch == Arch::X86 || Opts.TheArch == Arch::X64;
   // C compilers provide __int128 on targets with 64-bit pointers only.
   const bool TargetHasInt128 = pointerBytes(Opts.TheArch) >= sizeof(uint64_t);
   auto CollectWideType = [&](const TypeRef &Type) {
     if (const unsigned Bytes = partialIntegerBytes(Type))
       PartialIntegerBytes.emplace(typeToC(Type), Bytes);
-    Has256BitInteger |= ProjectsScalarWideIntegers && Type &&
-                        Type->Kind == NdTypeKind::Int && Type->Size == 32;
-    Has512BitInteger |= ProjectsScalarWideIntegers && Type &&
-                        Type->Kind == NdTypeKind::Int && Type->Size == 64;
+    // Wide scalar carriers are also used for aggregate results on AArch64.
+    // Their typedefs follow the printed integer type, not the source ISA.
+    const bool ScalarInteger =
+        Type && Type->Kind == NdTypeKind::Int && Type->SourceName.empty();
+    Has256BitInteger |= ScalarInteger && Type->Size == 32;
+    Has512BitInteger |= ScalarInteger && Type->Size == 64;
     Int128AsBitInt |= !TargetHasInt128 && Type &&
                       Type->Kind == NdTypeKind::Int && Type->Size == 16;
     UsesX87Extended |= Type && Type->Kind == NdTypeKind::Float &&
