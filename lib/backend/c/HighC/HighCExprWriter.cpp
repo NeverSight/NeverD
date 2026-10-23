@@ -2258,9 +2258,11 @@ std::string HighCWriter::renderCallExpr(const HighExpr &E) {
   const libc::LibCPrototype *Prototype = calleePrototype(E);
   // A routine known only by its argument counts: the call collects its
   // integer arguments first, while a libm helper such as ldexp declares its
-  // floating ones first.
+  // floating ones first. A checked floating signature already carries source
+  // order; applying this compatibility permutation again exchanges arguments.
   const std::optional<libc::LibCArity> Arity =
-      !Prototype && !Defined && E.IntrinsicId == Intrinsic::None
+      !Prototype && !Defined && !E.FloatingCallSignature &&
+              E.IntrinsicId == Intrinsic::None
           ? libc::libcArityForSymbol(Name, Opts.libcVariant())
           : std::nullopt;
   const size_t ArityIntegers = Arity ? std::max(0, Arity->IntArgs) : 0;
@@ -2279,9 +2281,7 @@ std::string HighCWriter::renderCallExpr(const HighExpr &E) {
   // the header declares: one the unit declares no other way (HeaderCallee),
   // or a C library routine the type library declares, called by its own
   // name where the unit includes its header, at a parameter it makes a
-  // pointer too.  Its typed arguments above leave a signature that mixes
-  // integer and floating parameters to this one, as no positional one
-  // (positionalDebugSignature): modf's double *.
+  // pointer too, including the pointer member of a checked mixed signature.
   auto ObjectPointerAt = [&](size_t I) {
     const unsigned Index = static_cast<unsigned>(I);
     if (!HeaderCallee.empty())
