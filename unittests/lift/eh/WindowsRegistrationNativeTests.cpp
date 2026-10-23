@@ -1870,10 +1870,16 @@ TEST(WindowsRegistrationNative, InputPE32PreservesItsCheckedSourceContract) {
   } else if (!Low.RegistrationStates->SEHJumpCaptures.empty())
     registration_test::checkSEHJumpEdits(*Parent, EH, Image);
   if (llvm::any_of(Low.RegistrationStates->SEHBoundCalls, [](const auto &Call) {
-        return Call.CalleeKind !=
-               RegistrationSEHBoundCall::Kind::PreservedHelper;
+        return Call.CalleeKind ==
+                   RegistrationSEHBoundCall::Kind::RaiseException ||
+               Call.CalleeKind == RegistrationSEHBoundCall::Kind::ControlFP;
       }))
     registration_test::checkSEHRuntimeEdits(*Parent, EH, Image);
+  if (llvm::any_of(Low.RegistrationStates->SEHBoundCalls, [](const auto &Call) {
+        return Call.CalleeKind ==
+               RegistrationSEHBoundCall::Kind::GetStartupInfoW;
+      }))
+    registration_test::checkSEHStartupInfoEdits(*Parent, EH, Image);
   registration_test::checkSEHCopyEdits(*Parent, EH, Image);
   registration_test::checkSEHFinallyEdits(*Parent, EH, Image);
   registration_test::checkSEHParentExitEdits(*Parent, EH, Image);

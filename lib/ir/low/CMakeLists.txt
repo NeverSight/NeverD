@@ -55,6 +55,7 @@ add_neverd_component_library(NeverDIRRegistrationState
   X86/RegistrationStateBorrowedJump.cpp
   X86/RegistrationStateNestedFinally.cpp
   X86/RegistrationStateCRTCall.cpp
+  X86/RegistrationStateStartupInfo.cpp
   X86/RegistrationStateRuntimeCall.cpp
   X86/RegistrationStateOccurrences.cpp
   X86/RegistrationStateOrder.cpp

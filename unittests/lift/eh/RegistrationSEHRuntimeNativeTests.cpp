@@ -138,4 +138,95 @@ void checkSEHRuntimeEdits(const llvm::Function &Parent,
 #endif
 }
 
+void checkSEHStartupInfoEdits(const llvm::Function &Parent,
+                              const ExceptionFunction &Source,
+                              const BinaryImage &Image) {
+#ifdef LLVM_NEVERD_X86_REGISTRATION_EH
+  for (unsigned Mutation = 0; Mutation != 14; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    auto Module = llvm::CloneModule(*Parent.getParent());
+    auto *Function = Module->getFunction(Parent.getName());
+    llvm::CallBase *Runtime = nullptr;
+    for (auto &Block : *Function)
+      for (auto &I : Block)
+        if (auto *Call = llvm::dyn_cast<llvm::CallBase>(&I))
+          if (const auto *Callee = Call->getCalledFunction();
+              Callee && Callee->getName() == "GetStartupInfoW") {
+            ASSERT_FALSE(Runtime);
+            Runtime = Call;
+          }
+    ASSERT_TRUE(Runtime);
+    ASSERT_EQ(Runtime->arg_size(), 1u);
+    auto *Callee = Runtime->getCalledFunction();
+    auto ChangedImage = Image;
+    uint8_t *ChangedByte = nullptr;
+    uint8_t OriginalByte = 0;
+    auto Restore = llvm::scope_exit([&] {
+      if (ChangedByte)
+        *ChangedByte = OriginalByte;
+    });
+    llvm::IRBuilder<> B(Runtime);
+    if (Mutation == 0)
+      Callee->setDLLStorageClass(llvm::GlobalValue::DefaultStorageClass);
+    if (Mutation == 1)
+      Runtime->setCallingConv(llvm::CallingConv::C);
+    if (Mutation == 2)
+      Callee->setCallingConv(llvm::CallingConv::C);
+    if (Mutation == 3)
+      rewrite_source::setOriginalVA(*Callee, Source.CodeRange.Begin);
+    if (Mutation == 4 || Mutation == 5)
+      Runtime->setArgOperand(
+          0, B.CreateInBoundsGEP(B.getInt8Ty(), Runtime->getArgOperand(0),
+                                 B.getInt32(Mutation == 4 ? 4 : -4)));
+    if (Mutation == 6)
+      Callee->setName("unproved_startup_info");
+    if (Mutation == 7)
+      Runtime->setMetadata(windows_eh_md::RegistrationOperationAttachment,
+                           nullptr);
+    if (Mutation == 8)
+      Runtime->addFnAttr(llvm::Attribute::NoUnwind);
+    if (Mutation == 9)
+      Runtime->addFnAttr(llvm::Attribute::NoReturn);
+    if (Mutation == 10)
+      Runtime->setMemoryEffects(llvm::MemoryEffects::readOnly());
+    if (Mutation == 11)
+      Runtime->addParamAttr(0, llvm::Attribute::NoAlias);
+    if (Mutation == 12) {
+      auto Identity = rewrite_source::getOriginalVA(*Callee);
+      ASSERT_TRUE(bool(Identity)) << llvm::toString(Identity.takeError());
+      ASSERT_TRUE(*Identity);
+      bool Changed = false;
+      for (auto &Import : ChangedImage.Imports)
+        if (Import.IATAddr == **Identity) {
+          Import.Module = "unproved-runtime.dll";
+          Changed = true;
+        }
+      ASSERT_TRUE(Changed);
+    }
+    if (Mutation == 13) {
+      const auto *Marker =
+          Runtime->getMetadata(windows_eh_md::RegistrationOperationAttachment);
+      ASSERT_TRUE(Marker);
+      const auto *Address =
+          llvm::mdconst::dyn_extract<llvm::ConstantInt>(Marker->getOperand(1));
+      ASSERT_TRUE(Address);
+      const auto *Argument =
+          ChangedImage.readVA(Address->getZExtValue() - 4, 4);
+      ASSERT_TRUE(Argument);
+      ASSERT_EQ(Argument[0], 0x8d);
+      ASSERT_EQ(Argument[1], 0x45);
+      ASSERT_EQ(Argument[3], 0x50);
+      ChangedByte = const_cast<uint8_t *>(Argument + 2);
+      OriginalByte = *ChangedByte;
+      // A single byte at the end now overlaps SavedESP administration.
+      *ChangedByte = uint8_t(-91);
+    }
+    ASSERT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
+    auto Error = validateCOFFRegistrationIR(*Function, Source, ChangedImage);
+    ASSERT_TRUE(bool(Error));
+    llvm::consumeError(std::move(Error));
+  }
+#endif
+}
+
 } // namespace neverd::registration_test

@@ -317,7 +317,14 @@ struct RegistrationSEHBoundArgument {
 /// frame-observation proof; imported runtimes require an authenticated import
 /// and a complete invocation-specific memory and callback contract.
 struct RegistrationSEHBoundCall {
-  enum class Kind : uint8_t { PreservedHelper, RaiseException, ControlFP };
+  enum class Kind : uint8_t {
+    PreservedHelper,
+    RaiseException,
+    ControlFP,
+    GetStartupInfoW
+  };
+  /// SDK PE32 STARTUPINFOW extent, including the conditional standard handles.
+  static constexpr uint32_t StartupInfoBytes = 68;
   Kind CalleeKind = Kind::PreservedHelper;
   va_t Address = InvalidVA;
   int OpSeq = -1;
@@ -327,6 +334,11 @@ struct RegistrationSEHBoundCall {
   va_t EntryVA = 0;
   bool HasOrdinaryReturn = true;
   std::vector<RegistrationSEHBoundArgument> Arguments;
+  /// Native argument storage minimum. Preserved helpers additionally require
+  /// their independently checked access extents.
+  uint32_t borrowedObjectBytes() const {
+    return CalleeKind == Kind::GetStartupInfoW ? StartupInfoBytes : 4;
+  }
   bool operator==(const RegistrationSEHBoundCall &) const = default;
 };
 

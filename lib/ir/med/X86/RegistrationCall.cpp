@@ -40,7 +40,10 @@ std::optional<uint32_t> registrationCallStackPop(const LowFunc &Func,
       if (Bound.Address == Call.Addr && Bound.OpSeq == Call.Seq) {
         if (Runtime || Bound.TargetVA != Call.Inputs[0].Offset ||
             !Bound.HasOrdinaryReturn ||
-            Bound.CalleeKind != RegistrationSEHBoundCall::Kind::RaiseException)
+            (Bound.CalleeKind !=
+                 RegistrationSEHBoundCall::Kind::RaiseException &&
+             Bound.CalleeKind !=
+                 RegistrationSEHBoundCall::Kind::GetStartupInfoW))
           return std::nullopt;
         Runtime = &Bound;
       }
@@ -62,7 +65,10 @@ std::optional<uint32_t> registrationCallStackPop(const LowFunc &Func,
       return std::nullopt;
     // The source runtime contract owns the stdcall pop. Reflect it before
     // SSA so subsequent callback pushes use the same coordinate as analysis.
-    return 16;
+    return Runtime->CalleeKind ==
+                   RegistrationSEHBoundCall::Kind::GetStartupInfoW
+               ? 4
+               : 16;
   }
   if (!States.CallFrameEffectsComplete)
     return std::nullopt;

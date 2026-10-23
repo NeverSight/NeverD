@@ -9,6 +9,7 @@
 #include "../../../lib/ir/low/X86/RegistrationABIPrivate.h"
 #include "gtest/gtest.h"
 
+#include "neverd/Limits.h"
 #include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/ir/low/RegistrationABI.h"
 #include "neverd/lift/X86Regs.h"
@@ -282,5 +283,51 @@ TEST(RegistrationImportABI, ImportAliasesCannotReplaceCurrentVeneerBytes) {
                       ImportImage::IATVA + 4);
     EXPECT_FALSE(getCheckedX86CalleeStackPop(F.Image, ImportImage::StubVA));
     EXPECT_FALSE(getCheckedX86CalleeStackPop(F.Image, ImportImage::TextVA));
+  }
+}
+
+TEST(RegistrationImportABI, StartupOutputRequiresTheExactPhysicalInvocation) {
+  for (unsigned Mutation = 0; Mutation != 13; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    ImportImage F({"GetStartupInfoW", 1}, false);
+    LowOp Call;
+    Call.Opcode = NdOp::INDIR_CALL;
+    Call.Addr = F.CallVA;
+    Call.Seq = 0;
+    Call.addInput(NdVar::cst(ImportImage::IATVA, 4));
+    size_t Work = 0;
+    if (Mutation == 1)
+      Call.Opcode = NdOp::CALL;
+    if (Mutation == 2)
+      Call.Seq = -1;
+    if (Mutation == 3)
+      Call.MemoryAddressSpace = NdMemoryAddressSpace::X86FS;
+    if (Mutation == 4)
+      Call.Inputs[0].Size = 8;
+    if (Mutation == 5)
+      Call.NumInputs = 0;
+    if (Mutation == 6)
+      F.Image.Segments[0].Data[Call.Addr - ImportImage::TextVA] = 0x90;
+    if (Mutation == 7)
+      writeLE<uint32_t>(F.Image.Segments[0].Data.data() + Call.Addr -
+                            ImportImage::TextVA + 2,
+                        ImportImage::IATVA + 4);
+    if (Mutation == 8)
+      F.Image.Segments[0].Flags =
+          F.Image.Segments[0].Flags | SegmentFlags::Writable;
+    if (Mutation == 9)
+      F.Image.Imports[0].Module = "custom.dll";
+    if (Mutation == 10)
+      F.Image.Imports[0].IsDelayImport = true;
+    if (Mutation == 11) {
+      F.Image.Imports[0].Name = "DecodePointer";
+      F.Image.ImportStorageSlots.at(ImportImage::IATVA).Name = "DecodePointer";
+    }
+    if (Mutation == 12)
+      Work = limits::kMaxRegistrationEHStateWork;
+    EXPECT_EQ(registration_abi::isCheckedRegistrationStartupInfoCall(
+                  F.Image, Call, Work),
+              Mutation == 0);
+    EXPECT_LE(Work, limits::kMaxRegistrationEHStateWork);
   }
 }

@@ -171,7 +171,8 @@ bindSEHJumps(const MedFunc &Source, const llvm::Function &Parent,
   auto Bound = bindSEHBoundCalls(Source, Parent, Frame, Buffers, Callbacks);
   if (!Bound)
     return Bound.takeError();
-  Result.Calls.insert(Bound->begin(), Bound->end());
+  Result.Calls.insert(Bound->Calls.begin(), Bound->Calls.end());
+  Result.RuntimeOutputs = std::move(Bound->RuntimeOutputs);
   for (const auto &[Address, Capture] : Captures) {
     const auto *Call = Calls.at(Address);
     const auto &Receipt = *Expected->at(Address).Capture;

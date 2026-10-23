@@ -60,7 +60,14 @@ struct RegistrationSEHExceptionContract {
 };
 
 struct RegistrationSEHJumpContract {
+  struct Output {
+    const llvm::AllocaInst *Frame = nullptr;
+    int64_t Offset = 0;
+    uint64_t Bytes = 0;
+  };
   std::set<const llvm::CallBase *> Calls;
+  /// Current source-bound runtime output borrows, not definite initialization.
+  std::map<const llvm::CallBase *, Output> RuntimeOutputs;
   std::set<const llvm::StoreInst *> StateRestores;
   std::vector<std::pair<int64_t, int64_t>> SourceBuffers;
   bool readsSourceBuffer(int64_t Offset, uint64_t Bytes) const;

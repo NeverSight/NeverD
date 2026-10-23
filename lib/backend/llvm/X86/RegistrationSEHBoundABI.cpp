@@ -14,7 +14,9 @@ namespace neverd {
 
 llvm::CallingConv::ID
 getX86RegistrationSEHBoundConvention(const RegistrationSEHBoundCall &Call) {
-  return Call.CalleeKind == RegistrationSEHBoundCall::Kind::RaiseException
+  return Call.CalleeKind == RegistrationSEHBoundCall::Kind::RaiseException ||
+                 Call.CalleeKind ==
+                     RegistrationSEHBoundCall::Kind::GetStartupInfoW
              ? llvm::CallingConv::X86_StdCall
              : llvm::CallingConv::C;
 }
@@ -28,6 +30,8 @@ getX86RegistrationSEHBoundImport(const RegistrationSEHBoundCall &Call) {
     return "RaiseException";
   case RegistrationSEHBoundCall::Kind::ControlFP:
     return "_controlfp_s";
+  case RegistrationSEHBoundCall::Kind::GetStartupInfoW:
+    return "GetStartupInfoW";
   }
   llvm_unreachable("unvalidated native SEH callee kind");
 }
@@ -47,7 +51,8 @@ getX86RegistrationSEHBoundType(const RegistrationSEHBoundCall &Call,
                             : I32);
   }
   auto *Return =
-      Call.CalleeKind == RegistrationSEHBoundCall::Kind::RaiseException
+      Call.CalleeKind == RegistrationSEHBoundCall::Kind::RaiseException ||
+              Call.CalleeKind == RegistrationSEHBoundCall::Kind::GetStartupInfoW
           ? llvm::Type::getVoidTy(Context)
           : I32;
   return llvm::FunctionType::get(Return, Arguments, false);

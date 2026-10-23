@@ -2314,6 +2314,21 @@ and the distinct
 [InterlockedCompareExchange](https://learn.microsoft.com/en-us/windows/win32/api/winnt/nf-winnt-interlockedcompareexchange)
 and [InterlockedExchange](https://learn.microsoft.com/en-us/windows/win32/api/winnt/nf-winnt-interlockedexchange)
 signatures.
+`RegistrationStateStartupInfo` separately authenticates a direct PE32
+`GetStartupInfoW` invocation through the current immutable `FF 15` operand and
+exact eager Kernel32 IAT slot. The parent must own the entire 68-byte
+[STARTUPINFOW](https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/ns-processthreadsapi-startupinfow)
+output above the outgoing argument, disjoint from registration administration
+and cookies. The contract describes possible writes, preserving existing pointer
+taint and granting no newly initialized bytes: unused standard-handle fields
+may retain their previous contents. Normal and exceptional source states apply
+the same bound. This is limited to ordinary EH3/EH4 parent invocations; it grants
+no conditional helper or C++ frame authority.
+The native projection retains the SDK `void __stdcall(pointer)` call and its
+unknown effects. Fresh COFF replay checks its current source, ABI, argument and
+full output extent. A queried frame cell can survive this call only when it is
+disjoint from the output and every possible SEH callback preserves it. This
+invocation-specific borrow supplies no general import purity or no-unwind fact.
 Cleanup relay caching uses the existing unwind-record bound, independently of
 the smaller ordinary-callee cache. Successful and failed lookups still consume
 the same cumulative work budget. Within one dispatch snapshot, each unwind

@@ -324,6 +324,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--case", choices=CASES, default="filter")
     parser.add_argument("--shared-seh4", action="store_true",
                         help="use the authored shared SEH4 entry and exit helpers")
+    parser.add_argument("--startup-info", action="store_true",
+                        help="compare a private STARTUPINFOW output with an independent runtime observation")
     args = parser.parse_args(argv)
     if not math.isfinite(args.timeout) or args.timeout <= 0:
         parser.error("--timeout must be positive and finite")
@@ -336,9 +338,12 @@ def main(argv: list[str] | None = None) -> int:
     jump = "longjmp-" in args.case
     if args.shared_seh4 and (not eh4 or gs or case not in range(9)):
         parser.error("--shared-seh4 requires an ordinary EH4 case without GS")
+    if args.startup_info and case not in (0, 4):
+        parser.error("--startup-info requires a filter or normal-finally case")
     report = {"schema": 2, "evidence": f"reconstructed-source-registration-{'seh4' if eh4 else 'seh3'}",
               "case": args.case, "expected_trace": expected_trace,
               "shared_seh4": args.shared_seh4,
+              "startup_info": args.startup_info,
               "passed": False, "steps": [], "observations": []}
     environment = os.environ.copy()
     try:
@@ -361,7 +366,8 @@ def main(argv: list[str] | None = None) -> int:
         if jump:
             runtime_exports += "_setjmp3\n_longjmpex\n"
             runtime_exports += "_seh_longjmp_unwind4\n" if eh4 else "_seh_longjmp_unwind\n"
-        definitions = [("kernel32", KERNEL32)]
+        definitions = [("kernel32", KERNEL32 +
+                        ("_GetStartupInfoW@4\n" if args.startup_info else ""))]
         if args.runtime_root:
             runtime, report["seh_runtime"] = load_runtime(args.runtime_root.resolve())
             shutil.copy2(runtime, output / runtime.name)
@@ -412,6 +418,7 @@ def main(argv: list[str] | None = None) -> int:
         for source in sources:
             compile_command = [compiler, "--target=i686-pc-windows-msvc", "-O0",
                              f"-DREGISTRATION_CASE={case}",
+                             f"-DREGISTRATION_STARTUP_INFO={int(args.startup_info)}",
                              f"-DREGISTRATION_LOOP_EH4={int(eh4)}",
                              f"-DREGISTRATION_PARENT_EH4={int(eh4)}",
                              "-DREGISTRATION_FORWARD_ONLY=1", f"-DREGISTRATION_EXPECT_GS={int(gs)}",
@@ -470,7 +477,9 @@ def main(argv: list[str] | None = None) -> int:
             if result.returncode:
                 raise ValueError(f"fixture build or reconstruction failed: {command[0]}")
             if index == 0:
-                undecorate_kernel32_imports(output / "kernel32.lib")
+                undecorate_kernel32_imports(
+                    output / "kernel32.lib",
+                    (b"_GetStartupInfoW@4",) if args.startup_info else ())
         tests = ET.parse(output / "rewrite.xml").getroot()
         if int(tests.get("tests", "0")) != 1 or tests.findall(".//skipped"):
             raise ValueError("source reconstruction was not executed")

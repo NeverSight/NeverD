@@ -9098,6 +9098,19 @@ also pops sixteen bytes; neither it nor a cdecl CRT import gains caller-frame
 observation permission. Returning-stack facts still grant no object borrow or
 initialized memory. These are static authored-machine tests, not execution of
 GOF2 or qualification of its full image.
+`RegistrationStartupInfo` checks the complete 68-byte output against outgoing
+arguments, registration fields and cookies under EH3, EH4 and GS. Full and
+partial frame-pointer spills retain their provenance after a possible runtime
+write, including all three conditional standard-handle fields. The import tests
+also require the exact current direct-call instruction and bounded proof work.
+Earlier full or partial writes to its IAT slot invalidate the output borrow; an
+unrelated image write does not.
+`check_windows_registration_rewrite.py --startup-info` adds an independently
+sampled `GetStartupInfoW` output oracle to filter and normal-finally cases;
+combine it with `--shared-seh4` or an EH4/GS case as needed. Both observations
+start with the same poison so untouched fields remain observable. The native
+validator rejects changed call/provider identity, output offsets, source bytes,
+calling conventions and invented memory, unwind or parameter attributes.
 `RelocatedLeafAddressesKeepMemoryIdentity` retains exact image-read extents
 through a relocated address and a stable offset, while rejecting missing
 operand classification. `RegistrationFrameScalar` separately checks address

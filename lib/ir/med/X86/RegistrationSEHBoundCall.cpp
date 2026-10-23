@@ -58,6 +58,12 @@ getX86RegistrationSEHBoundCalls(const MedFunc &Function) {
           Call.Arguments[2].ArgumentKind != ArgumentKind::Scalar)
         return std::nullopt;
       break;
+    case CalleeKind::GetStartupInfoW:
+      if (Call.EntryVA || !Call.HasOrdinaryReturn ||
+          Call.Arguments.size() != 1 ||
+          Call.Arguments[0].ArgumentKind != ArgumentKind::Object)
+        return std::nullopt;
+      break;
     default:
       return std::nullopt;
     }
@@ -88,9 +94,11 @@ getX86RegistrationSEHBoundCalls(const MedFunc &Function) {
         break;
       case Kind::Object:
         if (Arg.Capture ||
-            (Call.CalleeKind == CalleeKind::ControlFP
-                 ? Arg.Offset > -4 ||
-                       Arg.Offset < int64_t(Call.StackOffset) + 12
+            (Call.CalleeKind == CalleeKind::ControlFP ||
+                     Call.CalleeKind == CalleeKind::GetStartupInfoW
+                 ? int64_t(Arg.Offset) + Call.borrowedObjectBytes() > 0 ||
+                       Arg.Offset < int64_t(Call.StackOffset) +
+                                        int64_t(Call.Arguments.size() * 4)
                  : Arg.Offset > -28 ||
                        Arg.Offset < int64_t(Call.StackOffset) + 128))
           return std::nullopt;

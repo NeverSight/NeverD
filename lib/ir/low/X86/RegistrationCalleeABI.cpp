@@ -50,11 +50,37 @@ bool isRaiseExceptionProvider(const Import &Import) {
          (llvm::StringRef(Import.Module).equals_insensitive("kernel32.dll") ||
           llvm::StringRef(Import.Module).equals_insensitive("kernelbase.dll"));
 }
+
+bool isStartupInfoProvider(const Import &Import) {
+  return Import.Name == "GetStartupInfoW" &&
+         llvm::StringRef(Import.Module).equals_insensitive("kernel32.dll");
+}
 } // namespace
 
 bool isCheckedRegistrationRaiseSlot(const BinaryImage &Image, va_t Target) {
   const auto *Import = checkedRuntimeImportSlot(Image, Target);
   return Import && isRaiseExceptionProvider(*Import);
+}
+
+bool isCheckedRegistrationStartupInfoSlot(const BinaryImage &Image,
+                                          va_t Target) {
+  const auto *Import = checkedRuntimeImportSlot(Image, Target);
+  return Import && isStartupInfoProvider(*Import);
+}
+
+bool isCheckedRegistrationStartupInfoCall(const BinaryImage &Image,
+                                          const LowOp &Op, size_t &Work) {
+  if (Op.Opcode != NdOp::INDIR_CALL || Op.NumInputs != 1 || Op.Seq < 0 ||
+      !Op.Inputs[0].isConst() || Op.Inputs[0].Size != 4 ||
+      Op.MemoryAddressSpace != NdMemoryAddressSpace::Default ||
+      Op.MemoryOrdering != NdMemoryOrdering::None || Op.Addr > UINT32_MAX - 6 ||
+      !chargeCalleeWork(Work, 10) ||
+      !isCheckedRegistrationStartupInfoSlot(Image, Op.Inputs[0].Offset))
+    return false;
+  const auto Bytes =
+      readImmutablePE32CodeBytes(Image, Op.Addr, 6, {Op.Addr + 2});
+  return Bytes && (*Bytes)[0] == 0xff && (*Bytes)[1] == 0x15 &&
+         readLE<uint32_t>(Bytes->data() + 2) == Op.Inputs[0].Offset;
 }
 
 std::optional<uint32_t>
@@ -66,13 +92,14 @@ checkedRegistrationImportStackPop(const BinaryImage &Image, va_t Target) {
   // pointer results, callbacks and FP state need separate effect contracts.
   if (isRaiseExceptionProvider(*Import))
     return 16;
+  if (isStartupInfoProvider(*Import))
+    return 4;
   const llvm::StringRef Module = Import->Module;
   const llvm::StringRef Name = Import->Name;
   if (Module.equals_insensitive("kernel32.dll")) {
     // The SDK's PE32 WINAPI declarations use 32-bit stack carriers. Exact
     // exports matter: neither similarly named APIs nor other DLLs inherit it.
-    if (Name == "GetStartupInfoW" || Name == "DecodePointer" ||
-        Name == "EncodePointer" || Name == "Sleep")
+    if (Name == "DecodePointer" || Name == "EncodePointer" || Name == "Sleep")
       return 4;
     if (Name == "InterlockedExchange")
       return 8;

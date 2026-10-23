@@ -1,3 +1,8 @@
+//===- registration_observer.c - Independent native SEH observations ------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
 // Executes the same source entry repeatedly and observes its actual caller PC.
 __declspec(dllimport) void __stdcall RaiseException(unsigned long,
                                                     unsigned long,
@@ -20,6 +25,31 @@ unsigned registration_parameter_after;
 #endif
 static unsigned observed_caller;
 unsigned registration_trace;
+#if REGISTRATION_STARTUP_INFO
+__declspec(dllimport) void __stdcall GetStartupInfoW(void *);
+unsigned registration_startup_snapshot[17];
+static unsigned expected_startup[17];
+
+static void prepare_startup_observation(void) {
+  for (unsigned i = 0; i != 17; ++i) {
+    // Standard handles may remain untouched without STARTF_USESTDHANDLES.
+    expected_startup[i] = 0xa5a5a5a5;
+    registration_startup_snapshot[i] = 0;
+  }
+  GetStartupInfoW(expected_startup);
+}
+
+static int startup_observation_matches(void) {
+  int matches = 1;
+  for (unsigned i = 0; i != 17; ++i)
+    if (registration_startup_snapshot[i] != expected_startup[i]) {
+      printf("startup word %u: expected=%08x observed=%08x\n", i,
+             expected_startup[i], registration_startup_snapshot[i]);
+      matches = 0;
+    }
+  return matches;
+}
+#endif
 #if (REGISTRATION_CASE >= 36 && REGISTRATION_CASE <= 49) ||                    \
     (REGISTRATION_CASE == 52 || REGISTRATION_CASE == 57 ||                     \
      REGISTRATION_CASE == 64 || REGISTRATION_CASE == 65 ||                     \
@@ -112,6 +142,9 @@ void mainCRTStartup(void) {
   int value = 0, chain_ok = 1;
   for (; iterations != 4; ++iterations) {
     registration_trace = 0;
+#if REGISTRATION_STARTUP_INFO
+    prepare_startup_observation();
+#endif
 #if (REGISTRATION_CASE >= 36 && REGISTRATION_CASE <= 49) ||                    \
     (REGISTRATION_CASE == 52 || REGISTRATION_CASE == 57 ||                     \
      REGISTRATION_CASE == 64 || REGISTRATION_CASE == 65 ||                     \
@@ -133,6 +166,10 @@ void mainCRTStartup(void) {
     value = registration_entry();
 #endif
     chain_ok &= __readfsdword(0) == chain;
+#if REGISTRATION_STARTUP_INFO
+    if (!startup_observation_matches())
+      break;
+#endif
     if (value != 7 || !chain_ok || registration_trace != EXPECTED_TRACE)
       break;
   }

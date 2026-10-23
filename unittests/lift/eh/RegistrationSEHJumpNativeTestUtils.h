@@ -36,6 +36,9 @@ void checkSEHBoundCookieEdits(const llvm::Function &Parent,
 void checkSEHRuntimeEdits(const llvm::Function &Parent,
                           const ExceptionFunction &Source,
                           const BinaryImage &Image);
+void checkSEHStartupInfoEdits(const llvm::Function &Parent,
+                              const ExceptionFunction &Source,
+                              const BinaryImage &Image);
 } // namespace registration_test
 } // namespace neverd
 

@@ -558,6 +558,8 @@ bool RegistrationStateSolver::transferBlock(size_t I, const Domain &Before,
       }
     if (!CallSP)
       CallSP = transferControlFP(Before, After, Op, Facts, CallException);
+    if (!CallSP)
+      CallSP = transferStartupInfo(Before, After, Op, Facts, CallException);
     if (!CallSP && JumpRuntime && JumpRuntime->Raise &&
         After.JumpBindingsIntact && !After.Unknown && !Facts.Invalid &&
         After.Installed && !After.Uninstalled &&

@@ -13,7 +13,11 @@ _registration_entry:
   mov eax,fs:[0]
   push eax
   mov fs:[0],esp
+#if REGISTRATION_STARTUP_INFO
+  sub esp,96
+#else
   sub esp,16
+#endif
   // Native CRT validates SavedESP before calling the filter; Wine does not.
   mov [ebp-24],esp
 #define REGISTRATION_SENTINEL -1

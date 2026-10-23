@@ -17,7 +17,8 @@ void RegistrationStateSolver::recordSEHRuntimeCall(
     std::optional<int32_t> Output) {
   if (Conditional || KnownCxx || State.Unknown || !State.Installed ||
       (EH4 && (!CompleteCookies ||
-               Kind != RegistrationSEHBoundCall::Kind::RaiseException)) ||
+               (Kind != RegistrationSEHBoundCall::Kind::RaiseException &&
+                Kind != RegistrationSEHBoundCall::Kind::GetStartupInfoW))) ||
       State.Uninstalled)
     return;
   const auto &SP =
@@ -43,13 +44,17 @@ void RegistrationStateSolver::recordSEHRuntimeCall(
   Call.TargetVA = Op.Inputs[0].Offset;
   using Argument = RegistrationSEHBoundArgument::Kind;
   const unsigned Count =
-      Kind == RegistrationSEHBoundCall::Kind::ControlFP ? 3 : 4;
+      Kind == RegistrationSEHBoundCall::Kind::GetStartupInfoW ? 1
+      : Kind == RegistrationSEHBoundCall::Kind::ControlFP     ? 3
+                                                              : 4;
   for (unsigned I = 0; I != Count; ++I)
     Call.Arguments.push_back(
         {Argument::Scalar, Call.StackOffset + int32_t(I * 4), 0});
   if (Kind == RegistrationSEHBoundCall::Kind::RaiseException)
     Call.Arguments.back() = {Argument::NullPointer, 0, 0};
-  else if (Kind == RegistrationSEHBoundCall::Kind::ControlFP && Output)
+  else if ((Kind == RegistrationSEHBoundCall::Kind::ControlFP ||
+            Kind == RegistrationSEHBoundCall::Kind::GetStartupInfoW) &&
+           Output)
     Call.Arguments.front() = {Argument::Object, *Output, 0};
   else
     return;

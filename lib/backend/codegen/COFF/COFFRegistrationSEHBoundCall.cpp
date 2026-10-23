@@ -16,7 +16,7 @@
 
 namespace neverd::coff_registration {
 
-llvm::Expected<std::set<const llvm::CallBase *>> bindSEHBoundCalls(
+llvm::Expected<RegistrationSEHJumpContract> bindSEHBoundCalls(
     const MedFunc &Source, const llvm::Function &Parent,
     const RegistrationFrame &Frame,
     const std::map<va_t, const llvm::AllocaInst *> &Buffers,
@@ -24,7 +24,7 @@ llvm::Expected<std::set<const llvm::CallBase *>> bindSEHBoundCalls(
   const auto Expected = getX86RegistrationSEHBoundCalls(Source);
   if (!Expected)
     return rejectIR("preserved SEH helper has no complete argument contract");
-  std::set<const llvm::CallBase *> Result;
+  RegistrationSEHJumpContract Result;
   std::set<va_t> Seen;
   const auto &Layout = Parent.getParent()->getDataLayout();
   size_t Work = 0;
@@ -142,10 +142,13 @@ llvm::Expected<std::set<const llvm::CallBase *>> bindSEHBoundCalls(
           const auto *GEP = llvm::dyn_cast<llvm::GetElementPtrInst>(Value);
           llvm::APInt Offset(32, 0);
           const int64_t ExpectedOffset = Base + Arg.Offset;
+          const auto Width = Arg.ArgumentKind == Kind::Object
+                                 ? Receipt.borrowedObjectBytes()
+                                 : 4;
           if (!GEP || GEP->getPointerOperand() != Storage ||
               !GEP->accumulateConstantOffset(Layout, Offset) ||
               ExpectedOffset < 0 || !Bytes || Bytes->isScalable() ||
-              uint64_t(ExpectedOffset) + 4 > Bytes->getFixedValue() ||
+              uint64_t(ExpectedOffset) + Width > Bytes->getFixedValue() ||
               Offset.getZExtValue() != uint64_t(ExpectedOffset))
             return rejectIR("preserved SEH helper changed its parent argument");
           Arguments.insert(GEP);
@@ -170,9 +173,15 @@ llvm::Expected<std::set<const llvm::CallBase *>> bindSEHBoundCalls(
             return rejectIR(
                 "preserved SEH scalar moved across source execution");
         }
-        Result.insert(Call);
+        Result.Calls.insert(Call);
+        if (Receipt.CalleeKind ==
+            RegistrationSEHBoundCall::Kind::GetStartupInfoW)
+          Result.RuntimeOutputs.emplace(
+              Call, RegistrationSEHJumpContract::Output{
+                        Storage, Base + Receipt.Arguments.front().Offset,
+                        Receipt.borrowedObjectBytes()});
       }
-  if (Result.size() != Expected->size())
+  if (Result.Calls.size() != Expected->size())
     return rejectIR("preserved SEH helper call set is incomplete");
   return Result;
 }

@@ -5,6 +5,9 @@
 #else
   mov dword ptr [ebp-4],0
 #endif
+#if REGISTRATION_STARTUP_INFO
+#include "registration_startup_info.inc"
+#endif
 #if REGISTRATION_CASE == 4
   call _registration_no_raise
 #else

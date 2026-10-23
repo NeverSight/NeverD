@@ -52,7 +52,7 @@ llvm::Error
 validateSEHJumpUnwindBridge(const llvm::Function &Parent,
                             const RegistrationSEHJumpCapture &Source);
 
-llvm::Expected<std::set<const llvm::CallBase *>> bindSEHBoundCalls(
+llvm::Expected<RegistrationSEHJumpContract> bindSEHBoundCalls(
     const MedFunc &Source, const llvm::Function &Parent,
     const RegistrationFrame &Frame,
     const std::map<va_t, const llvm::AllocaInst *> &Buffers,

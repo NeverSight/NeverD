@@ -308,6 +308,14 @@ llvm::Error validateFramePrivacy(
         return true;
       }
     }
+    if (Jumps)
+      if (const auto Found = Jumps->RuntimeOutputs.find(Call);
+          Found != Jumps->RuntimeOutputs.end()) {
+        const auto &Output = Found->second;
+        return !Cxx && Output.Frame == LogicalFrame && Output.Bytes &&
+               Disjoint(Output.Frame, Output.Offset, Output.Bytes) &&
+               SEHCallbacksPreserve && SEHCallbacksPreserve(Slot, Bytes);
+      }
     if ((LocalUnwinds && LocalUnwinds->Calls.count(Call)) ||
         (Jumps && Jumps->Calls.count(Call)) ||
         (ParentExits && ParentExits->Calls.count(Call)))

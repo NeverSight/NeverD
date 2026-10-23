@@ -198,6 +198,8 @@ proveBoundSEHCallee(const BinaryImage &Image, const LowOp &Op,
   for (const auto &Imported : Image.Imports)
     if (checkedJumpRuntime(Image, Imported.IATAddr, true) ||
         isCheckedControlFPSlot(Image, Imported.IATAddr) ||
+        registration_abi::isCheckedRegistrationStartupInfoSlot(
+            Image, Imported.IATAddr) ||
         registration_abi::isCheckedRegistrationRaiseSlot(Image,
                                                          Imported.IATAddr))
       Jumps.ImportSlots.insert(Imported.IATAddr);
@@ -211,6 +213,10 @@ proveBoundSEHCallee(const BinaryImage &Image, const LowOp &Op,
   };
   Jumps.ControlFP = [&](const LowOp &Op, size_t &Used) {
     return isCheckedControlFPCall(Image, Op, Used);
+  };
+  Jumps.StartupInfo = [&](const LowOp &Op, size_t &Used) {
+    return registration_abi::isCheckedRegistrationStartupInfoCall(Image, Op,
+                                                                  Used);
   };
   Jumps.ImageMemory = [&](va_t Address, uint16_t Width, bool Write,
                           size_t &Used) {
@@ -329,6 +335,8 @@ RegistrationStateAnalysis analyzeCheckedX86SEHStates(
   for (const auto &Imported : Image.Imports)
     if (checkedJumpRuntime(Image, Imported.IATAddr, true) ||
         isCheckedControlFPSlot(Image, Imported.IATAddr) ||
+        registration_abi::isCheckedRegistrationStartupInfoSlot(
+            Image, Imported.IATAddr) ||
         registration_abi::isCheckedRegistrationRaiseSlot(Image,
                                                          Imported.IATAddr))
       Jumps.ImportSlots.insert(Imported.IATAddr);
@@ -346,6 +354,10 @@ RegistrationStateAnalysis analyzeCheckedX86SEHStates(
   };
   Jumps.ControlFP = [&](const LowOp &Op, size_t &Work) {
     return isCheckedControlFPCall(Image, Op, Work);
+  };
+  Jumps.StartupInfo = [&](const LowOp &Op, size_t &Work) {
+    return registration_abi::isCheckedRegistrationStartupInfoCall(Image, Op,
+                                                                  Work);
   };
   Jumps.ImageMemory = [&](va_t Address, uint16_t Width, bool Write,
                           size_t &Work) {

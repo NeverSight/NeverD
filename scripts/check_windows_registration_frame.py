@@ -37,7 +37,8 @@ printf
 """
 
 
-def undecorate_kernel32_imports(library: Path) -> None:
+def undecorate_kernel32_imports(library: Path,
+                               additional_imports: tuple[bytes, ...] = ()) -> None:
     """Use the original COFF UNDECORATE import kind, also understood by lld 14.
 
     Older llvm-lib accepts EXPORTAS in a DEF but silently ignores its mapping.
@@ -46,7 +47,7 @@ def undecorate_kernel32_imports(library: Path) -> None:
     data = bytearray(library.read_bytes())
     if data[:8] != b"!<arch>\n":
         raise ValueError("kernel32 import library is not a COFF archive")
-    required = {b"_RaiseException@16", b"_ExitProcess@4"}
+    required = {b"_RaiseException@16", b"_ExitProcess@4", *additional_imports}
     seen = set()
     offset = 8
     while offset < len(data):

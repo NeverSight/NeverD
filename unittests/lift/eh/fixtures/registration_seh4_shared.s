@@ -3,7 +3,11 @@
 .text
 .globl _registration_entry
 _registration_entry:
+#if REGISTRATION_STARTUP_INFO
+  push 92
+#else
   push 32
+#endif
   .byte 0x68
   .long .Lscope_table
   call __seh_prolog4
@@ -37,7 +41,11 @@ __seh_epilog4:
 .section .rdata,"dr"
 .p2align 2
 .Lscope_table:
+#if REGISTRATION_STARTUP_INFO
+  .long -2,0,-124,0
+#else
   .long -2,0,-64,0
+#endif
 #include "registration_seh_scopes.inc"
 .globl __load_config_used
 __load_config_used:

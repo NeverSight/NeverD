@@ -61,7 +61,9 @@ bool hasSEHBoundFrameArguments(const RegistrationSEHBoundCall &Source,
     if (Arg.ArgumentKind != Kind::Scalar && Arg.ArgumentKind != Kind::Object)
       continue;
     const int64_t Offset = int64_t(EntrySP) - 4 + Arg.Offset;
-    if (Offset < 0 || uint64_t(Offset) + 4 > Bytes->getFixedValue())
+    const auto Width =
+        Arg.ArgumentKind == Kind::Object ? Source.borrowedObjectBytes() : 4;
+    if (Offset < 0 || uint64_t(Offset) + Width > Bytes->getFixedValue())
       return false;
   }
   return true;
