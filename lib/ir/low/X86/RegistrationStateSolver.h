@@ -221,7 +221,7 @@ public:
       const coff_loader::X86CxxPrologueCall *CxxPrologue = nullptr,
       const std::vector<coff_loader::X86CxxEpilogueCall> *CxxEpilogues =
           nullptr);
-  RegistrationStateAnalysis run();
+  RegistrationStateAnalysis run(size_t InitialWork = 0);
   size_t workUsed() const { return WorkUsed; }
 
 private:
@@ -265,10 +265,15 @@ private:
     bool DoesNotReturn;
     va_t EndAddress;
     std::optional<FrameValue> Result;
+    /// Invocation-bound writes may also precede exceptional dispatch.
+    std::vector<RegistrationObjectExtent> MayWrites;
   };
   std::optional<CallTransfer> transferCall(size_t I, Domain &After,
                                            const LowOp &Op,
                                            const BlockFacts &Facts);
+  std::optional<CallTransfer>
+  transferConditionalCxxCall(Domain &After, const LowOp &Op,
+                             const BlockFacts &Facts);
   bool transferScalarArguments(Domain &After,
                                const RegistrationCalleeFrameContract &Callee,
                                FrameValue &StackPointer,
@@ -416,7 +421,7 @@ private:
                           std::optional<int32_t> SP,
                           llvm::ArrayRef<RegistrationObjectExtent> Extents,
                           std::vector<RegistrationObjectExtent> &Projected,
-                          bool Reads);
+                          bool Reads, bool RecordBorrowedEffects = true);
   std::optional<int32_t> cookieSlot(int32_t Displacement) const;
   bool cookiesReady(const FrameState &Frame) const;
   bool cxxCookiesReady(const Domain &State) const;

@@ -15,12 +15,19 @@
 #include "neverd/ir/RegistrationCall.h"
 #include "neverd/ir/RegistrationState.h"
 
+#include "llvm/ADT/ArrayRef.h"
+
+#include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <map>
+#include <optional>
 #include <set>
+#include <vector>
 
 namespace neverd {
 struct BinaryImage;
+struct LowFunc;
 } // namespace neverd
 
 namespace neverd::registration_state {
@@ -33,11 +40,37 @@ struct BorrowedJumpResume {
   bool operator==(const BorrowedJumpResume &) const = default;
 };
 
+/// Source-only invocation effects. A returned alias is distinct from capture:
+/// a consumer must bind its uses before claiming that the caller slot is
+/// private. No native entry, call ABI or target-only callee contract is
+/// implied.
+struct BoundCxxCalleeEffect {
+  uint32_t StackPopBytes = 0;
+  /// Every supplied borrow, including objects that the callee never accesses.
+  std::vector<RegistrationObjectExtent> Objects;
+  std::vector<RegistrationObjectExtent> Reads;
+  std::vector<RegistrationObjectExtent> Writes;
+  std::vector<ExceptionAddressRange> ImageReads;
+  struct Return {
+    va_t Address = InvalidVA;
+    int Seq = -1;
+    bool MayAliasFrame = true;
+    std::optional<int32_t> BorrowedOffset;
+  };
+  std::vector<Return> Returns;
+};
+
 /// Invocation-specific inputs in the callee's established EBP coordinates.
 /// Positive object extents are proved caller storage, disjoint from this
 /// invocation's return PC, private frame and incoming argument slots.
 struct ConditionalFrame {
   std::function<bool(const LowOp &, const FrameState &)> ProveCall;
+  /// Replays a nested C++ invocation after binding its physical CALL and
+  /// current inputs. Only the private conditional solver consumes this hook.
+  std::function<std::optional<BoundCxxCalleeEffect>(
+      const LowFunc &, const LowOp &, const FrameState &,
+      const std::set<int32_t> &, size_t &)>
+      ProveCxxCall;
   /// Full-width volatile GPR facts, indexed like FrameState::Registers. A
   /// partial incoming register never supplies an untainted full-word seed.
   std::map<unsigned, FrameValue> Registers;
@@ -55,23 +88,6 @@ struct ConditionalFrame {
   bool NativeFramePrivate = true;
   bool Complete = true;
   size_t Work = 0;
-};
-
-/// Source-only invocation effects. A returned alias is distinct from capture:
-/// a consumer must bind its uses before claiming that the caller slot is
-/// private. No native entry, call ABI or target-only callee contract is
-/// implied.
-struct BoundCxxCalleeEffect {
-  uint32_t StackPopBytes = 0;
-  std::vector<RegistrationObjectExtent> Reads;
-  std::vector<RegistrationObjectExtent> Writes;
-  struct Return {
-    va_t Address = InvalidVA;
-    int Seq = -1;
-    bool MayAliasFrame = true;
-    std::optional<int32_t> BorrowedOffset;
-  };
-  std::vector<Return> Returns;
 };
 
 struct BoundCalleeEffect {
@@ -99,14 +115,19 @@ std::optional<BoundCalleeEffect> proveBoundSEHCallee(
 /// facts; the caller separately authenticates its CALL instruction boundary
 /// and frame ownership, including disjointness from its administration.
 /// StackArgumentBytes bounds the supplied incoming area and must match every
-/// ordinary RET. Borrowed scalar words must be above that area and below the
-/// caller's saved EBP. All code/effects
+/// ordinary RET. Zero requests inference from the complete current near RETs.
+/// Borrowed scalar words must be above that area and below the caller's saved
+/// EBP, or belong to CallerObjects already borrowed by this caller.
+/// CallerObjects grant no ownership to other positive offsets. All code/effects
 /// are replayed; invocation-dependent answers must never enter a target-only
-/// cache.
+/// cache. Initialized, when supplied, proves each input byte separately from
+/// its value; an initialized unknown scalar need not have a retained cell.
 std::optional<BoundCxxCalleeEffect>
 proveBoundCxxCallee(const BinaryImage &Image, const LowOp &Op,
                     const FrameState &Parent, uint32_t StackArgumentBytes,
-                    size_t &Work);
+                    size_t &Work,
+                    llvm::ArrayRef<RegistrationObjectExtent> CallerObjects = {},
+                    const std::set<int32_t> *Initialized = nullptr);
 
 using BoundCalleeProver = std::function<std::optional<BoundCalleeEffect>(
     const LowOp &, const FrameState &, size_t &,

@@ -6831,6 +6831,21 @@ cookie, metadata, return-pop, input ownership and shared-budget mutations cannot
 reuse a successful invocation. These source-only tests do not authorize native
 calls or caller reloads; every negative input mutation starts from a successful
 fresh baseline.
+Nested C++ cases forward an ancestor output or lend a private initialized word,
+preserve returned aliases through another GS epilogue, and distinguish a scalar
+result store from exact, joined and partial alias stores. Repeated calls check
+that losing a scalar value does not lose definite initialization. Changed CALLs,
+RET cleanup, outgoing initialization, recursive targets, administration borrows,
+ambient capture and nested personality-IAT writes must refuse. A one-work-unit
+short shared budget rejects the entire nested query; a fresh query still passes.
+Byte-level initialization controls preserve overlapping alias taint. Separate
+inner and outer cleanup bodies each reject an unsupported-instruction mutation.
+The acyclic-depth fixture keeps every code extent disjoint from its metadata,
+so an extra nesting level tests the depth policy without a mapping conflict.
+A nested-call counterexample places a pointer spill across the callee-pop
+boundary and then exports the surviving bytes. The scalar control passes;
+the pointer control refuses. Frame-memory tests also check partial releases
+at signed-coordinate bounds and callback initialization after stack reuse.
 `RegistrationFrameStores` and `RegistrationFrameTaint` test bounded LLVM spill
 proofs, joins, backedges, partial writes and exhausted budgets. Loader tests keep
 independent SafeSEH/code references and real function boundaries while excluding

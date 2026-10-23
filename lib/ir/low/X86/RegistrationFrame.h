@@ -12,6 +12,7 @@
 #include <array>
 #include <compare>
 #include <cstddef>
+#include <cstdint>
 #include <map>
 #include <optional>
 #include <set>
@@ -124,6 +125,11 @@ struct FrameValue {
 };
 
 FrameValue join(FrameValue Left, const FrameValue &Right);
+
+/// Drop fully deallocated words. A word crossing the new stack boundary loses
+/// its exact identity but retains taint in the bytes that remain live.
+void discardFrameCellsBelow(std::map<int32_t, FrameValue> &Cells,
+                            int32_t Boundary);
 
 /// A checked PE32 scalar call defines either its instruction-local result or
 /// the complete physical EAX. Other register outputs carry no return authority.

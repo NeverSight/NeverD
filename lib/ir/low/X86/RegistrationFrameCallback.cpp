@@ -72,10 +72,9 @@ void FrameState::trimCallbackCells() {
       Value = join(Value, {});
     return;
   }
-  // Dead stack slots cannot prove a later push/load after the runtime or a
-  // callee has reused them. A partial pop invalidates the overlapping cell.
-  CallbackCells.erase(CallbackCells.begin(),
-                      CallbackCells.lower_bound(SP->Offset));
+  // Deallocated bytes lose initialization. A partial pop also loses the
+  // complete word's identity, while its surviving pointer bits remain tainted.
+  discardFrameCellsBelow(CallbackCells, SP->Offset);
   InitializedCallbackBytes.erase(
       InitializedCallbackBytes.begin(),
       InitializedCallbackBytes.lower_bound(SP->Offset));

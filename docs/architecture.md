@@ -8711,6 +8711,24 @@ cache. This query supplies no MedIR receipt, spill-reload exception or native AB
 opaque heap inputs, general imports, catches and realigned callees remain outside
 its domain.
 
+Within that private query, nested cleanup-only C++ calls replay the same source
+owner with their current physical CALL, near RET cleanup, register inputs and
+initialized stack words. The caller validates every lent object, including
+unused arguments, against its runtime administration. It may forward a bounded
+ancestor borrow; other incoming storage acquires no ownership. Initialization
+remains independent of value facts after a may-write. Normal and exceptional
+flows lose the affected values, while every returned alias remains tainted or
+retains its exact borrowed coordinate. Source image reads compose across calls.
+All decoders and state solvers debit one cumulative work counter; active targets
+and bounded nesting prevent recursive self-certification. This consumer exists
+only in the conditional source proof, and publishes no ordinary call ABI or
+native frame permission.
+Stack release shares the frame-memory owner's cell trimming across ordinary,
+conditional and callback calls. A four-byte cell crossing the new ESP loses
+its exact identity, while its surviving pointer bytes retain alias taint.
+Deallocated bytes separately lose initialization; moving ESP back cannot
+revalidate them.
+
 Swift once addressors may return early when the predicate is already complete. The source proof requires both exits to return the same exact storage, with the sole `swift_once` call confined to the initialization path. Publication rechecks the current body, predicate, initializer, context parameter and ABI; an old discovery plan cannot authorize changed returns or additional effects.
 
 `LLVMMemoryAnalysis` owns literal integer-offset decomposition and the memory-transparent intrinsic contract used by byte forwarding and private-frame projection. `projectLLVMPrivateFrame` accepts an explicit numeric entry root, relative frame bounds and disjoint live object extents. It derives the actual access range and proves every loaded byte initialized across all predecessors and backedges before creating local storage. Original numeric address values and scalar instructions remain; external objects may alias each other and remain observable. Unknown effects, ordered memory, metadata, unresolved addresses, missing initialization and exhausted bounds refuse without mutation. Privacy, nonfaulting original accesses, nonwrapping bounds and unobserved final frame contents are caller preconditions. This shared 32/64-bit LLVM API is a conditional memory projection for defined executions, not native ABI or definedness evidence, and the default decompiler does not infer or invoke its contract.

@@ -233,6 +233,9 @@ inline constexpr size_t kRegistrationABIPrivateMaxObjectCallbackNodes = 256;
 inline constexpr unsigned kRegistrationConditionalCalleeMaxBoundCallCheckDepth =
     4;
 
+// lib/ir/low/X86/RegistrationCxxState.cpp
+inline constexpr unsigned kRegistrationCxxMaxBoundCallDepth = 4;
+
 // lib/ir/low/jumptable/JumpTableResolverBounds.cpp
 // Keep attacker-controlled work in independent accounts so an intentionally
 // expensive proposal scan cannot consume the memory needed for final all-path

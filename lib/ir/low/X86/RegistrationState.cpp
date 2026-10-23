@@ -48,7 +48,9 @@ RegistrationStateSolver::RegistrationStateSolver(
       CompleteCatchObjects(CheckRuntimeObjects),
       CompleteRuntimeObjects(CheckRuntimeObjects) {}
 
-RegistrationStateAnalysis RegistrationStateSolver::run() {
+RegistrationStateAnalysis RegistrationStateSolver::run(size_t InitialWork) {
+  if (!charge(InitialWork))
+    return std::move(Result);
   if (!initialize())
     return std::move(Result);
   if (!initializeOrder()) {
@@ -251,6 +253,7 @@ bool RegistrationStateSolver::initialize() {
 
 bool RegistrationStateSolver::charge(size_t Amount) {
   if (Amount > limits::kMaxRegistrationEHStateWork - WorkUsed) {
+    WorkUsed = limits::kMaxRegistrationEHStateWork;
     Exhausted = true;
     Result.Complete = Result.CallbackStatesComplete =
         Result.RegistrationLifetimeComplete = false;

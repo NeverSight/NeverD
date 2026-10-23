@@ -10,9 +10,12 @@
 #include "neverd/ir/low/RegistrationCxxState.h"
 
 #include "RegistrationABIPrivate.h"
+#include "RegistrationConditionalFrame.h"
+#include "RegistrationSourceCall.h"
 #include "RegistrationStateSolver.h"
 
 #include "neverd/Limits.h"
+#include "neverd/ir/Limits.h"
 #include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/lift/X86Regs.h"
 #include "neverd/loader/BinaryImage.h"
@@ -20,6 +23,11 @@
 #include "neverd/loader/COFF/COFFRegistrationEH.h"
 #include "neverd/loader/ReadOnlyBytes.h"
 #include "neverd/support/BinaryEncoding.h"
+
+#include "llvm/ADT/ScopeExit.h"
+
+#include <set>
+#include <utility>
 
 namespace neverd {
 
@@ -58,7 +66,7 @@ RegistrationStateAnalysis solveCheckedCxxStates(
       Function, Cookie, 0, Callees, Cleanups, Stacks, LocalUnwinds, SEHControls,
       Inputs, nullptr, nullptr, Handler ? &*Handler : nullptr,
       Prologue ? &*Prologue : nullptr, &Epilogues);
-  auto Result = Solver.run();
+  auto Result = Solver.run(StateWork ? *StateWork : 0);
   if (StateWork)
     *StateWork = Solver.workUsed();
   return Result;
@@ -80,17 +88,28 @@ namespace registration_state {
 std::optional<BoundCxxCalleeEffect>
 proveBoundCxxCallee(const BinaryImage &Image, const LowOp &Op,
                     const FrameState &Parent, uint32_t StackArgumentBytes,
-                    size_t &Work) {
+                    size_t &Work,
+                    llvm::ArrayRef<RegistrationObjectExtent> CallerObjects,
+                    const std::set<int32_t> *Initialized) {
   if (Image.Arch != Arch::X86 || Image.Bits != Bitness::Bits32 ||
       Image.Format != BinaryFormat::COFF || Op.Opcode != NdOp::CALL ||
       Op.Seq < 0 || Op.NumInputs != 1 || !Op.Inputs[0].isConst() ||
       Op.Inputs[0].Size != 4 || Op.Addr > UINT32_MAX - 5 ||
       Op.MemoryAddressSpace != NdMemoryAddressSpace::Default ||
-      Op.MemoryOrdering != NdMemoryOrdering::None || !StackArgumentBytes ||
+      Op.MemoryOrdering != NdMemoryOrdering::None ||
       StackArgumentBytes > UINT16_MAX || StackArgumentBytes % 4 ||
       !registration_abi::chargeCalleeWork(Work, 5))
     return std::nullopt;
   const va_t Target = Op.Inputs[0].Offset;
+  // Invocation inputs are never cached by target. Cycles and deep acyclic
+  // chains refuse before another decoder/solver can consume host stack.
+  using Query = std::pair<const BinaryImage *, va_t>;
+  static thread_local std::set<Query> Active;
+  const Query Identity{&Image, Target};
+  if (Active.size() >= limits::ir::kRegistrationCxxMaxBoundCallDepth ||
+      !Active.insert(Identity).second)
+    return std::nullopt;
+  const auto Leave = llvm::make_scope_exit([&] { Active.erase(Identity); });
   const auto Call = readImmutableCodeBytes(Image, Op.Addr, 5);
   const auto *EH = Image.ExceptionMetadata.findFunction(Target);
   if (!Call || (*Call)[0] != 0xe8 ||
@@ -102,47 +121,6 @@ proveBoundCxxCallee(const BinaryImage &Image, const LowOp &Op,
     return std::nullopt;
   const auto Handler = coff_loader::getCheckedX86CxxHandlerABI(Image, *EH);
   if (!Handler)
-    return std::nullopt;
-  const auto SP =
-      Parent.Registers[x86reg::RSP / x86reg::GeneralRegStride].Offset;
-  if (!SP || *SP < INT32_MIN + 8 ||
-      int64_t(*SP) + StackArgumentBytes > INT32_MAX)
-    return std::nullopt;
-  const int64_t Base = int64_t(*SP) - 8;
-  ConditionalFrame Inputs;
-  for (const auto Reg : {x86reg::RAX, x86reg::RCX, x86reg::RDX}) {
-    const auto Index = Reg / x86reg::GeneralRegStride;
-    const auto &Value = Parent.Registers[Index];
-    if (!Value.MayBeFrame)
-      Inputs.Registers.emplace(Index, Value);
-  }
-  for (uint32_t Arg = 0; Arg < StackArgumentBytes; Arg += 4) {
-    if (!registration_abi::chargeCalleeWork(Work, 1))
-      return std::nullopt;
-    const auto Cell = Parent.Cells.find(int32_t(*SP + int64_t(Arg)));
-    if (Cell == Parent.Cells.end())
-      continue;
-    const auto &Value = Cell->second;
-    if (!Value.MayBeFrame) {
-      Inputs.Arguments.emplace(8 + Arg, Value);
-      continue;
-    }
-    if (!Value.Offset || Value != FrameValue::frame(*Value.Offset))
-      continue;
-    const auto Object = Parent.Cells.find(*Value.Offset);
-    const int64_t Offset = int64_t(*Value.Offset) - Base;
-    // The exact incoming area ends before the supplied caller word. Saved
-    // EBP/PC are outside the caller allocation. Its other administration and
-    // object ownership remain preconditions of the caller's frame proof.
-    if (Object == Parent.Cells.end() || Object->second.MayBeFrame ||
-        *Value.Offset < int64_t(*SP) + StackArgumentBytes ||
-        int64_t(*Value.Offset) + 4 > 0 || Offset > INT32_MAX - 4)
-      continue;
-    Inputs.Arguments.emplace(8 + Arg, FrameValue::frame(int32_t(Offset)));
-    Inputs.Objects.push_back({int32_t(Offset), int32_t(Offset + 4)});
-    Inputs.ObjectCells.emplace(int32_t(Offset), Object->second);
-  }
-  if (Inputs.Objects.empty())
     return std::nullopt;
   Decoder Dec;
   if (!Dec.init(Image))
@@ -162,11 +140,89 @@ proveBoundCxxCallee(const BinaryImage &Image, const LowOp &Op,
         return std::nullopt;
       if (Insn.Control == LowInstructionControl::Return) {
         const auto Bytes = readImmutableCodeBytes(Image, Insn.Address, 3);
-        if (Insn.Size != 3 || !Bytes || (*Bytes)[0] != 0xc2 ||
-            readLE<uint16_t>(Bytes->data() + 1) != StackArgumentBytes)
+        if (Insn.Size != 3 || !Bytes || (*Bytes)[0] != 0xc2)
           return std::nullopt;
+        const uint32_t Pop = readLE<uint16_t>(Bytes->data() + 1);
+        if (!Pop || Pop % 4 ||
+            (StackArgumentBytes && Pop != StackArgumentBytes))
+          return std::nullopt;
+        StackArgumentBytes = Pop;
       }
     }
+  if (!StackArgumentBytes)
+    return std::nullopt;
+  const auto SP =
+      Parent.Registers[x86reg::RSP / x86reg::GeneralRegStride].Offset;
+  if (!SP || *SP < INT32_MIN + 8 ||
+      int64_t(*SP) + StackArgumentBytes > INT32_MAX)
+    return std::nullopt;
+  const int64_t Base = int64_t(*SP) - 8;
+  ConditionalFrame Inputs;
+  auto ReadWord = [&](int32_t Offset) -> std::optional<FrameValue> {
+    if (!Initialized) {
+      const auto Cell = Parent.Cells.find(Offset);
+      return Cell == Parent.Cells.end()
+                 ? std::nullopt
+                 : std::optional<FrameValue>(Cell->second);
+    }
+    if (Offset > INT32_MAX - 4 ||
+        !registration_abi::chargeCalleeWork(
+            Work, 4 + Parent.memoryAccessWork(FrameValue::frame(Offset), 4)))
+      return std::nullopt;
+    for (int64_t Byte = Offset; Byte < int64_t(Offset) + 4; ++Byte)
+      if (!Initialized->count(int32_t(Byte)))
+        return std::nullopt;
+    return Parent.load(Offset, 4);
+  };
+  for (const auto Reg : {x86reg::RAX, x86reg::RCX, x86reg::RDX}) {
+    const auto Index = Reg / x86reg::GeneralRegStride;
+    const auto &Value = Parent.Registers[Index];
+    if (!Value.MayBeFrame)
+      Inputs.Registers.emplace(Index, Value);
+  }
+  for (uint32_t Arg = 0; Arg < StackArgumentBytes; Arg += 4) {
+    if (!registration_abi::chargeCalleeWork(Work, 1))
+      return std::nullopt;
+    const auto Cell = ReadWord(int32_t(*SP + int64_t(Arg)));
+    if (!Cell)
+      continue;
+    const auto &Value = *Cell;
+    if (!Value.MayBeFrame) {
+      Inputs.Arguments.emplace(8 + Arg, Value);
+      continue;
+    }
+    if (!Value.Offset || Value != FrameValue::frame(*Value.Offset))
+      continue;
+    const auto Object = ReadWord(*Value.Offset);
+    const int64_t Offset = int64_t(*Value.Offset) - Base;
+    if (!registration_abi::chargeCalleeWork(Work, CallerObjects.size()))
+      return std::nullopt;
+    const bool Borrowed = llvm::any_of(CallerObjects, [&](const auto &Range) {
+      return Range.Begin >= 8 && Range.Begin <= *Value.Offset &&
+             int64_t(*Value.Offset) + 4 <= Range.End;
+    });
+    // The exact incoming area ends before the supplied caller word. Saved
+    // EBP/PC are outside the caller allocation. Its other administration and
+    // object ownership remain preconditions of the caller's frame proof.
+    if (!Object || Object->MayBeFrame ||
+        *Value.Offset < int64_t(*SP) + StackArgumentBytes ||
+        (!Borrowed && int64_t(*Value.Offset) + 4 > 0) || Offset > INT32_MAX - 4)
+      continue;
+    Inputs.Arguments.emplace(8 + Arg, FrameValue::frame(int32_t(Offset)));
+    Inputs.Objects.push_back({int32_t(Offset), int32_t(Offset + 4)});
+    Inputs.ObjectCells.emplace(int32_t(Offset), *Object);
+  }
+  if (Inputs.Objects.empty())
+    return std::nullopt;
+  Inputs.ProveCxxCall =
+      [&](const LowFunc &Caller, const LowOp &Call, const FrameState &State,
+          const std::set<int32_t> &InitializedBytes,
+          size_t &Used) -> std::optional<BoundCxxCalleeEffect> {
+    if (!checkedRegistrationDirectCall(Image, Caller, Call, Used))
+      return std::nullopt;
+    return proveBoundCxxCallee(Image, Call, State, 0, Used, Inputs.Objects,
+                               &InitializedBytes);
+  };
   const auto Callees = Index.contracts(Function);
   const auto Cleanups = Index.cleanupContracts(Function);
   const auto Stacks = Index.stackContracts(Function);
@@ -192,12 +248,12 @@ proveBoundCxxCallee(const BinaryImage &Image, const LowOp &Op,
       if (!HasPrivateEffects(Call.Leaf))
         return std::nullopt;
   }
-  size_t StateWork = 0;
+  size_t StateWork = Work;
   const auto States =
       solveCheckedCxxStates(Image, Function, &*Callees, &*Cleanups, &*Stacks,
                             nullptr, nullptr, &Inputs, &StateWork);
-  if (!registration_abi::chargeCalleeWork(Work, StateWork) ||
-      !Inputs.Complete || Inputs.ReturnValues.empty() || !States.Complete ||
+  Work = StateWork;
+  if (!Inputs.Complete || Inputs.ReturnValues.empty() || !States.Complete ||
       !States.CallbackStatesComplete || !States.RegistrationLifetimeComplete ||
       !States.ChainOperationsComplete || !States.CallFrameEffectsComplete ||
       !States.CleanupFrameEffectsComplete || !States.CxxCatchObjectsComplete ||
@@ -205,8 +261,16 @@ proveBoundCxxCallee(const BinaryImage &Image, const LowOp &Op,
       !States.IncomingFrameAccessesComplete || !States.ImageReadsComplete ||
       (!Handler->CookieGuards.empty() && !States.SecurityCookiesComplete))
     return std::nullopt;
+  if (!registration_abi::chargeCalleeWork(
+          Work, Inputs.Objects.size() + Inputs.Reads.size() +
+                    Inputs.Writes.size() + States.ImageReads.size() + 1))
+    return std::nullopt;
   BoundCxxCalleeEffect Effect;
   Effect.StackPopBytes = StackArgumentBytes;
+  for (const auto &Object : Inputs.Objects)
+    Effect.Objects.push_back(
+        {int32_t(Base + Object.Begin), int32_t(Base + Object.End)});
+  Effect.ImageReads = States.ImageReads;
   for (const auto &[Begin, End] : Inputs.Reads)
     Effect.Reads.push_back({int32_t(Base + Begin), int32_t(Base + End)});
   for (const auto &[Begin, End] : Inputs.Writes)

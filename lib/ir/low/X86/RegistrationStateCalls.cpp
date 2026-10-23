@@ -21,6 +21,9 @@ RegistrationStateSolver::transferCall(size_t I, Domain &After, const LowOp &Op,
                               Op.Inputs[0].isConst() && Op.Inputs[0].Size == 4
                           ? CalleeIndices.find(Op.Inputs[0].Offset)
                           : CalleeIndices.end();
+  if (Callee == CalleeIndices.end())
+    if (auto Call = transferConditionalCxxCall(After, Op, Facts))
+      return Call;
   auto StackPointer =
       After.Frame.Registers[x86reg::RSP / x86reg::GeneralRegStride];
   std::optional<FrameValue> CallResult;
@@ -118,8 +121,8 @@ RegistrationStateSolver::transferCall(size_t I, Domain &After, const LowOp &Op,
       After.Frame.forgetCellValues();
     return std::nullopt;
   }
-  return CallTransfer{StackPointer, Effect.DoesNotReturn, Effect.EndAddress,
-                      CallResult};
+  return CallTransfer{
+      StackPointer, Effect.DoesNotReturn, Effect.EndAddress, CallResult, {}};
 }
 
 } // namespace neverd::registration_state

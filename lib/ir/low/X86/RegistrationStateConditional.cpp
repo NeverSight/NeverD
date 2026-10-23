@@ -4,13 +4,80 @@
 //
 //===----------------------------------------------------------------------===//
 /// \file
-/// Check invocation-specific SEH frame inputs and bounded effects.
+/// Check invocation-specific x86 registration frame inputs and bounded effects.
 
 #include "RegistrationStateSolver.h"
 
 #include "neverd/lift/X86Regs.h"
 
+#include <utility>
+
 namespace neverd::registration_state {
+
+std::optional<RegistrationStateSolver::CallTransfer>
+RegistrationStateSolver::transferConditionalCxxCall(Domain &After,
+                                                    const LowOp &Op,
+                                                    const BlockFacts &Facts) {
+  if (!KnownCxx || !Conditional || !Conditional->ProveCxxCall ||
+      After.Unknown || Facts.Invalid || !After.Parent || After.Callback ||
+      !After.Installed || After.Uninstalled || Chain.RealignedFrame ||
+      Op.Opcode != NdOp::CALL || Op.NumInputs != 1 || !Op.Inputs[0].isConst() ||
+      Op.Inputs[0].Size != 4 || Op.Seq < 0)
+    return std::nullopt;
+  const auto SP = parentStackOffset(After);
+  if (!SP)
+    return std::nullopt;
+  const auto Effect = Conditional->ProveCxxCall(
+      Function, Op, After.Frame, After.InitializedFrameBytes, WorkUsed);
+  if (!Effect || !Effect->StackPopBytes || Effect->StackPopBytes > UINT16_MAX ||
+      Effect->StackPopBytes % 4 || Effect->Returns.empty() ||
+      int64_t(*SP) + Effect->StackPopBytes > *Chain.cxxRuntimeFrameOffset() ||
+      !frameObjectIsDisjointFromAdministration(
+          *SP, int64_t(*SP) + Effect->StackPopBytes) ||
+      !charge(Effect->StackPopBytes))
+    return std::nullopt;
+  const int32_t End = int32_t(int64_t(*SP) + Effect->StackPopBytes);
+  for (int64_t Byte = *SP; Byte < End; ++Byte)
+    if (!After.InitializedFrameBytes.count(int32_t(Byte)))
+      return std::nullopt;
+
+  // The caller owns the storage and its runtime administration. Check even
+  // unused borrows, without inventing a read or a write for their admission.
+  std::vector<RegistrationObjectExtent> Objects, Reads, Writes;
+  if (!projectFrameObject(After, 0, SP, Effect->Objects, Objects, true,
+                          false) ||
+      !projectFrameObject(After, 0, SP, Effect->Reads, Reads, true) ||
+      !projectFrameObject(After, 0, SP, Effect->Writes, Writes, false) ||
+      !charge(Effect->ImageReads.size() + Effect->Returns.size() + 1))
+    return std::nullopt;
+  for (const auto &Read : Effect->ImageReads)
+    ImageReads.emplace(Read.Begin, Read.End);
+  for (const auto &Write : Writes) {
+    if (!charge(After.Frame.cellCount() + 1))
+      return std::nullopt;
+    After.Frame.forgetCellValues(Write.Begin,
+                                 uint32_t(Write.End - Write.Begin));
+  }
+  std::optional<FrameValue> Returned;
+  for (const auto &Return : Effect->Returns) {
+    const auto Value = Return.BorrowedOffset
+                           ? FrameValue::frame(*Return.BorrowedOffset)
+                           : FrameValue::taint(Return.MayAliasFrame);
+    Returned = Returned ? join(*Returned, Value) : Value;
+  }
+  if (!charge(After.InitializedFrameBytes.size() + After.Frame.cellCount() +
+              After.RuntimeObject.cellCount()))
+    return std::nullopt;
+  After.InitializedFrameBytes.erase(
+      After.InitializedFrameBytes.begin(),
+      After.InitializedFrameBytes.lower_bound(End));
+  for (auto *Frame : {&After.Frame, &After.RuntimeObject})
+    discardFrameCellsBelow(Frame->Cells, End);
+  // The callback authenticated the unique original five-byte CALL. No
+  // context-free CallFrameEffect or native ABI is published for this result.
+  return CallTransfer{FrameValue::frame(End), false, Op.Addr + 5, Returned,
+                      std::move(Writes)};
+}
 
 bool RegistrationStateSolver::checkConditionalMemory(
     const FrameState &State, const LowOp &Op, const FrameTransfer &Transfer,
@@ -152,6 +219,11 @@ bool RegistrationStateSolver::conditionalCall(const FrameState &State,
   // a no-capture contract.
   if (KnownCxx && CheckCalls && Op.Opcode == NdOp::CALL &&
       CalleeIndices.count(Target))
+    return true;
+  // Defer a direct candidate to the source invocation owner. Neither this
+  // gate nor an independent stack-pop declaration proves a C++ callee effect.
+  if (KnownCxx && CheckCalls && Conditional->ProveCxxCall &&
+      Op.Opcode == NdOp::CALL)
     return true;
   if (LocalUnwindTargets.count({Target, Op.Opcode == NdOp::INDIR_CALL}) ||
       (Op.Opcode == NdOp::CALL && FinallyTargets.count(Target)))

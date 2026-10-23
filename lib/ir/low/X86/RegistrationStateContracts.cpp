@@ -261,7 +261,8 @@ bool RegistrationStateSolver::frameObjectIsDisjointFromAdministration(
 bool RegistrationStateSolver::projectFrameObject(
     const Domain &State, int32_t Object, std::optional<int32_t> SP,
     llvm::ArrayRef<RegistrationObjectExtent> Extents,
-    std::vector<RegistrationObjectExtent> &Projected, bool Reads) {
+    std::vector<RegistrationObjectExtent> &Projected, bool Reads,
+    bool RecordBorrowedEffects) {
   if (!SP || State.Unknown)
     return false;
   for (const auto &Extent : Extents) {
@@ -294,7 +295,7 @@ bool RegistrationStateSolver::projectFrameObject(
           return false;
     }
     Projected.push_back({int32_t(Begin), int32_t(End)});
-    if (Borrowed) {
+    if (Borrowed && RecordBorrowedEffects) {
       auto &Effects = Reads ? Conditional->Reads : Conditional->Writes;
       Effects.emplace(int32_t(Begin), int32_t(End));
     }

@@ -515,6 +515,18 @@ bool RegistrationStateSolver::transferBlock(size_t I, const Domain &Before,
         CheckedCall = true;
         CallSP = Call->StackPointer;
         CallResult = Call->Result;
+        if (!Call->MayWrites.empty()) {
+          if (!charge(Before.Frame.cellCount() + 1))
+            break;
+          if (!CallException)
+            CallException = Before;
+          for (const auto &Write : Call->MayWrites) {
+            if (!charge(CallException->Frame.cellCount() + 1))
+              break;
+            CallException->Frame.forgetCellValues(
+                Write.Begin, uint32_t(Write.End - Write.Begin));
+          }
+        }
         NoReturnAtExit = Call->DoesNotReturn;
         if (NoReturnAtExit)
           NoReturnEnd = Call->EndAddress;

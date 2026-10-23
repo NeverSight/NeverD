@@ -69,6 +69,20 @@ FrameValue loadCell(const std::map<int32_t, FrameValue> &Cells,
 
 } // namespace
 
+void discardFrameCellsBelow(std::map<int32_t, FrameValue> &Cells,
+                            int32_t Boundary) {
+  auto It = Cells.lower_bound(
+      int32_t(std::max<int64_t>(INT32_MIN, int64_t(Boundary) - 3)));
+  Cells.erase(Cells.begin(), It);
+  while (It != Cells.end() && It->first < Boundary) {
+    if (It->second.MayBeFrame) {
+      It->second = FrameValue::taint(true, It->second.FrameOnlyFromSEHScalar);
+      ++It;
+    } else
+      It = Cells.erase(It);
+  }
+}
+
 size_t FrameState::memoryAccessWork(const FrameValue &Address, uint16_t Width,
                                     bool Write) const {
   if (!Address.MayBeFrame)
