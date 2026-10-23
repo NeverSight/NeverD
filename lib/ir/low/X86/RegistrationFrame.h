@@ -158,6 +158,10 @@ void discardFrameCellsBelow(std::map<int32_t, FrameValue> &Cells,
 /// the complete physical EAX. Other register outputs carry no return authority.
 bool hasX86ScalarCallOutput(const LowOp &Op);
 
+/// Complete PE32 GPR indices that a bound invocation may refine. Saved
+/// nonvolatile identities and physical frame registers retain entry ownership.
+bool isX86VolatileFrameRegister(unsigned Index);
+
 struct FrameState {
   std::array<FrameValue, 8> Registers;
   /// Flags and vector registers carry conservative byte taint. They cannot

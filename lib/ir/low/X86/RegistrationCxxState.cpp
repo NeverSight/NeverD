@@ -162,10 +162,11 @@ proveBoundCxxCallee(const BinaryImage &Image, const LowOp &Op,
     return registration_abi::readCallerFrameWord(Parent, Offset, Initialized,
                                                  Work);
   };
-  for (const auto Reg : {x86reg::RAX, x86reg::RCX, x86reg::RDX}) {
-    const auto Index = Reg / x86reg::GeneralRegStride;
+  for (unsigned Index = 0; Index != Parent.Registers.size(); ++Index) {
+    if (!registration_abi::chargeCalleeWork(Work, 1))
+      return std::nullopt;
     const auto &Value = Parent.Registers[Index];
-    if (!Value.MayBeFrame)
+    if (isX86VolatileFrameRegister(Index) && !Value.MayBeFrame)
       Inputs.Registers.emplace(Index, Value);
   }
   for (uint32_t Arg = 0; Arg < StackArgumentBytes; Arg += 4) {

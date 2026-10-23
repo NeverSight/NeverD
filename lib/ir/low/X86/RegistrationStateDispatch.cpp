@@ -293,9 +293,7 @@ void RegistrationStateSolver::seedEntries() {
       // The query may refine only complete volatile input carriers. Saved
       // nonvolatile identities and both physical frame registers stay owned
       // by the entry protocol above.
-      if (Index != x86reg::RAX / x86reg::GeneralRegStride &&
-          Index != x86reg::RCX / x86reg::GeneralRegStride &&
-          Index != x86reg::RDX / x86reg::GeneralRegStride) {
+      if (!isX86VolatileFrameRegister(Index)) {
         Conditional->Complete = false;
         continue;
       }

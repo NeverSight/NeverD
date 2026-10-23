@@ -92,6 +92,14 @@ bool hasConditionalCallFrame(const BinaryImage &Image, const LowOp &Op,
       kRegistrationConditionalCallHasConditionalCallFrameOffsetLimit;
   if (!SP || *SP > INT32_MAX - ArgumentLimit)
     return false;
+  std::map<unsigned, FrameValue> Registers;
+  for (unsigned Index = 0; Index != State.Registers.size(); ++Index) {
+    if (!chargeCalleeWork(Work, 1))
+      return false;
+    const auto &Value = State.Registers[Index];
+    if (isX86VolatileFrameRegister(Index) && !Value.MayBeFrame)
+      Registers.emplace(Index, Value);
+  }
   std::map<int32_t, FrameValue> Arguments;
   for (int32_t Offset = 8; Offset <= ArgumentLimit; Offset += 4) {
     if (!chargeCalleeWork(Work, 1))
@@ -101,7 +109,7 @@ bool hasConditionalCallFrame(const BinaryImage &Image, const LowOp &Op,
     if (Value && !Value->MayBeFrame)
       Arguments.emplace(Offset, *Value);
   }
-  if (Arguments.empty())
+  if (Arguments.empty() && Registers.empty())
     return false;
   Decoder Dec;
   if (!Dec.init(Image))
@@ -121,6 +129,7 @@ bool hasConditionalCallFrame(const BinaryImage &Image, const LowOp &Op,
       !registration_abi::hasPrivateCallerFrame(
           Callee, Image, Work, Effects,
           {.ScalarArguments = &Arguments,
+           .ScalarRegisters = &Registers,
            .ReturnValue = ReturnValue ? &Returned : nullptr}) ||
       !Effects.Writes.empty() || !Effects.CallerPCWrites.empty())
     return false;

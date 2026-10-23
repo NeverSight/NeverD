@@ -143,8 +143,13 @@ struct PrivateFrameOptions {
   const ObjectCallbackCalls *ObjectCallbacks = nullptr;
   uint32_t CallbackStackPopBytes = 0;
   /// Known caller-written 4-byte stack arguments (offsets from the
-  /// entry frame). A plain callee frame only; no other option combines.
+  /// entry frame). An empty map still selects a bound plain-callee domain.
+  /// Only ScalarRegisters and result outputs combine with this option.
   const std::map<int32_t, registration_state::FrameValue> *ScalarArguments =
+      nullptr;
+  /// Full volatile GPR facts, indexed like FrameState::Registers. Requires
+  /// the bound domain above; no saved-register or frame identity is replaced.
+  const std::map<unsigned, registration_state::FrameValue> *ScalarRegisters =
       nullptr;
   /// Joined physical EAX at every reached ordinary return of a bound call.
   /// Published only after the whole proof succeeds; absent for no returns or

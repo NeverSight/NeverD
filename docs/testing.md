@@ -9056,6 +9056,13 @@ rejects; an exact old value cannot override a missing initialization byte.
 Both image bases and exhausted/one-unit-short budgets are covered. Run the
 registration state suite as well: its conditional C++ tests consume the same
 caller-word reader and retain overlapping-taint and nested-call coverage.
+`VolatileInputsDoNotRequireStackArguments` checks all three PE32 volatile GPRs
+at two image bases with constant, image and unknown scalar inputs. It retains
+callee definitions and exact branch selection, rejects partial pointer-bearing
+inputs, nonvolatile substitutes, unproved dereferences and writable code, and
+checks exact/short budgets. `PrivateRegisterBindingsKeepTheEntryABI` rejects
+frame pointers, nonvolatile/frame/out-of-range register indices and a register
+map outside the invocation domain. A failed query publishes no result.
 `RegistrationCallABI.ReturningStackProofDoesNotNormalizeTheX87Stack`
 keeps the stack proof for bodies whose x87 normalization alone is incomplete
 or splits blocks by TOP, and for FXAM with a proved or unproved tag.

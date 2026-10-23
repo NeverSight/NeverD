@@ -132,10 +132,10 @@ bool hasPrivateCallerFrame(const LowFunc &Function, const BinaryImage &Image,
   const auto [BorrowECX, ThrowProof, IndependentScalarReturn,
               DiscardReturnValue, CopyObjectSize, Initializer, Initializers,
               ObjectCallbacks, CallbackStackPopBytes, ScalarArguments,
-              ReturnValue] = Options;
+              ScalarRegisters, ReturnValue] = Options;
   if (ReturnValue)
     ReturnValue->reset();
-  if (ReturnValue && !ScalarArguments)
+  if ((ReturnValue || ScalarRegisters) && !ScalarArguments)
     return false;
   if (ScalarArguments &&
       (BorrowECX || ThrowProof || DiscardReturnValue || CopyObjectSize ||
@@ -180,6 +180,12 @@ bool hasPrivateCallerFrame(const LowFunc &Function, const BinaryImage &Image,
   FrameValue CallerPC;
   CallerPC.MayBeFrame = CallerPC.ReturnPC = true;
   Initial.Frame.Cells[4] = CallerPC;
+  if (ScalarRegisters)
+    for (const auto &[Index, Value] : *ScalarRegisters) {
+      if (!Charge(1) || !isX86VolatileFrameRegister(Index) || Value.MayBeFrame)
+        return false;
+      Initial.Frame.Registers[Index] = Value;
+    }
   if (ScalarArguments)
     for (const auto &[Offset, Value] : *ScalarArguments) {
       if (Offset < 8 ||

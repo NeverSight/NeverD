@@ -2319,7 +2319,7 @@ The same frame transfer separately reports whether every ordinary leaf return
 computes a 32-bit scalar independently of incoming registers, borrowed pointers
 and the caller PC. Frame privacy can admit an unobserved entry-EAX return;
 that weaker fact cannot choose a physical scalar call declaration.
-For an invocation with explicit caller-written scalar arguments,
+For an invocation with explicit caller scalar inputs,
 `RegistrationConditionalCall` retains distinct reached frame states instead of
 joining a loop's induction value away at its first backedge. Exact immutable
 image reads may supply scalar values; the shared loader checks their complete
@@ -2328,11 +2328,16 @@ exact scalar condition selects one ordinary successor. Repeated states close
 the local fixed point, while new states, comparisons and image reads consume
 the existing callee work budget. Exhaustion rejects the whole invocation.
 Ordinary target-only callee contracts retain their joined-state analysis. This
-bound memory proof supplies neither a caller argument binding nor a native
-call ABI. An optional physical EAX result joins all reached ordinary returns
+bound memory proof does not authenticate the caller's physical CALL or grant
+a native call ABI. Complete EAX/ECX/EDX facts enter the same domain even without
+stack arguments. The frame owner defines these eligible carriers for both plain
+and C++ queries; partial pointer taint, saved nonvolatile identities and physical
+frame registers cannot become scalar inputs. Register facts grant no object
+borrow or native SEH entry parameter. An optional physical EAX result joins all
+reached ordinary returns
 and is published only after the complete frame proof and the independent
 returning-stack proof succeed. Exact image addresses retain their address
-identity; differing values become unknown scalars. A callee's incoming
+identity; differing values become unknown scalars. An unbound callee's incoming
 register or return PC becomes opaque call provenance in the parent. No-return
 loops supply no result, and failed or exhausted queries publish none.
 Conditional SEH call transfers apply these results only to a complete

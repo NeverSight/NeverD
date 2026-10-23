@@ -20,6 +20,12 @@ bool hasX86ScalarCallOutput(const LowOp &Op) {
           (Op.Output.isReg() && Op.Output.Offset == x86reg::RAX));
 }
 
+bool isX86VolatileFrameRegister(unsigned Index) {
+  return Index == x86reg::RAX / x86reg::GeneralRegStride ||
+         Index == x86reg::RCX / x86reg::GeneralRegStride ||
+         Index == x86reg::RDX / x86reg::GeneralRegStride;
+}
+
 FrameValue join(FrameValue Left, const FrameValue &Right) {
   if (Left == Right)
     return Left;
