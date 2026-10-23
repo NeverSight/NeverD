@@ -138,20 +138,7 @@ bool hasConditionalCallFrame(const BinaryImage &Image, const LowOp &Op,
     // the closed original-body proof before projecting any result to a caller.
     if (!getCheckedX86CalleeStackPop(Image, Target, &Work))
       return false;
-    // A callee's saved incoming register, return PC or frame coordinate does
-    // not name the same entity in its caller. Preserve scalar/image facts;
-    // every other identity retains ordinary opaque-call provenance.
-    const auto &Value = *Returned;
-    if (Value == FrameValue{} ||
-        (Value.Constant && Value == FrameValue::constant(*Value.Constant)) ||
-        (Value.ImageAddress &&
-         Value == FrameValue::imageAddress(*Value.ImageAddress)))
-      *ReturnValue = Value;
-    else {
-      auto Opaque = FrameValue::taint(true);
-      Opaque.FrameOnlyFromCall = true;
-      *ReturnValue = Opaque;
-    }
+    *ReturnValue = projectX86CallReturnValue(*Returned);
   }
   return true;
 }

@@ -26,6 +26,17 @@ bool isX86VolatileFrameRegister(unsigned Index) {
          Index == x86reg::RDX / x86reg::GeneralRegStride;
 }
 
+FrameValue projectX86CallReturnValue(const FrameValue &Value) {
+  if (Value == FrameValue{} ||
+      (Value.Constant && Value == FrameValue::constant(*Value.Constant)) ||
+      (Value.ImageAddress &&
+       Value == FrameValue::imageAddress(*Value.ImageAddress)))
+    return Value;
+  auto Opaque = FrameValue::taint(true);
+  Opaque.FrameOnlyFromCall = true;
+  return Opaque;
+}
+
 FrameValue join(FrameValue Left, const FrameValue &Right) {
   if (Left == Right)
     return Left;

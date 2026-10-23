@@ -59,12 +59,9 @@ RegistrationStateSolver::transferConditionalCxxCall(Domain &After,
                                  uint32_t(Write.End - Write.Begin));
   }
   std::optional<FrameValue> Returned;
-  for (const auto &Return : Effect->Returns) {
-    const auto Value = Return.BorrowedOffset
-                           ? FrameValue::frame(*Return.BorrowedOffset)
-                           : FrameValue::taint(Return.MayAliasFrame);
-    Returned = Returned ? join(*Returned, Value) : Value;
-  }
+  if (hasX86ScalarCallOutput(Op))
+    for (const auto &Return : Effect->Returns)
+      Returned = Returned ? join(*Returned, Return.Value) : Return.Value;
   if (!charge(After.InitializedFrameBytes.size() + After.Frame.cellCount() +
               After.RuntimeObject.cellCount()))
     return std::nullopt;

@@ -268,12 +268,12 @@ proveBoundCxxCallee(const BinaryImage &Image, const LowOp &Op,
     if (!registration_abi::chargeCalleeWork(Work, Inputs.Objects.size() + 1))
       return std::nullopt;
     BoundCxxCalleeEffect::Return Return{Identity.first, Identity.second,
-                                        Value.MayBeFrame, std::nullopt};
+                                        projectX86CallReturnValue(Value)};
     if (Value.Offset && Value == FrameValue::frame(*Value.Offset) &&
         llvm::any_of(Inputs.Objects, [&](const auto &Object) {
           return Object.Begin <= *Value.Offset && *Value.Offset <= Object.End;
         }))
-      Return.BorrowedOffset = int32_t(Base + *Value.Offset);
+      Return.Value = FrameValue::frame(int32_t(Base + *Value.Offset));
     Effect.Returns.push_back(Return);
   }
   return Effect;

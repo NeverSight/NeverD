@@ -6888,6 +6888,20 @@ A nested-call counterexample places a pointer spill across the callee-pop
 boundary and then exports the surviving bytes. The scalar control passes;
 the pointer control refuses. Frame-memory tests also check partial releases
 at signed-coordinate bounds and callback initialization after stack reuse.
+`ExactReturnedZeroClosesOnlyItsOwnBranch` checks one and two nested C++ calls:
+an exact zero skips a capturing branch, while nonzero, unknown, image-address
+and tainted inputs refuse. `NestedReturnsKeepTheirInvocationAndAddressKind`
+checks zero through two nested calls with exact integers, image addresses,
+unknown scalars, saved registers, return PCs, retired private addresses, partial
+registers and joined aliases. Exact and one-work-unit-short budgets are replayed
+for each case. The shared-prologue caller tests also retain the complete result,
+and the plain-callee return tests consume the same projection rule.
+`ReturnedFactsRequireACompleteScalarCarrier` binds real nested callees but
+changes the LowIR result carrier: only full EAX or a four-byte temporary can
+justify the following branch. Other volatile registers and partial/wide
+carriers refuse. `ReturnFactsCoverEveryReachedExit` retains separate differing
+returns, rejects reached unresolved tails, and distinguishes an unreachable
+tail from a closed nonreturning loop, both alone and through a nested caller.
 `RegistrationFrameStores` and `RegistrationFrameTaint` test bounded LLVM spill
 proofs, joins, backedges, partial writes and exhausted budgets. Loader tests keep
 independent SafeSEH/code references and real function boundaries while excluding

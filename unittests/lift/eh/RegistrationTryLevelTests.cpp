@@ -1718,8 +1718,15 @@ TEST(RegistrationTryLevel, CxxEAXHelperBindsAnActualCaller) {
         EXPECT_TRUE(Effect->Reads.empty());
         EXPECT_TRUE(Effect->Writes.empty());
         ASSERT_EQ(Effect->Returns.size(), 1u);
-        EXPECT_EQ(Effect->Returns.front().MayAliasFrame, Mode == 3);
-        EXPECT_FALSE(Effect->Returns.front().BorrowedOffset);
+        EXPECT_EQ(Effect->Returns.front().Value.MayBeFrame, Mode == 3);
+        EXPECT_FALSE(Effect->Returns.front().Value.Offset);
+        if (Mode != 3)
+          EXPECT_EQ(Effect->Returns.front().Value, Input);
+        else {
+          auto Opaque = FrameValue::taint(true);
+          Opaque.FrameOnlyFromCall = true;
+          EXPECT_EQ(Effect->Returns.front().Value, Opaque);
+        }
         EXPECT_GT(Work, 0u);
         ASSERT_LT(Work, limits::kMaxRegistrationEHStateWork);
         size_t Exact = limits::kMaxRegistrationEHStateWork - Work;

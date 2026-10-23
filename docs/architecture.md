@@ -8814,8 +8814,15 @@ initialized stack words. The caller validates every lent object, including
 unused arguments, against its runtime administration. It may forward a bounded
 ancestor borrow; other incoming storage acquires no ownership. Initialization
 remains independent of value facts after a may-write. Normal and exceptional
-flows lose the affected values, while every returned alias remains tainted or
-retains its exact borrowed coordinate. Source image reads compose across calls.
+flows lose the affected values. Plain and C++ bound calls share return-value
+projection: exact integers, image addresses and unknown scalars retain their
+distinct identities; callee-owned registers, return PCs and private addresses
+become opaque returned aliases. The C++ borrow owner separately maps an exact
+borrowed coordinate back into its caller. Complete return occurrences join
+before the next caller branch, so only a proved scalar condition prunes an
+edge. Both call paths require a complete EAX result or a four-byte temporary;
+other volatile registers and partial/wide carriers supply no return fact.
+Source image reads compose across calls.
 All decoders and state solvers debit one cumulative work counter; active targets
 and bounded nesting prevent recursive self-certification. This consumer exists
 only in the conditional source proof, and publishes no ordinary call ABI or

@@ -10,11 +10,15 @@
 //===----------------------------------------------------------------------===//
 
 #include "../../../lib/ir/low/X86/RegistrationConditionalFrame.h"
+#include "../../../lib/ir/low/X86/RegistrationSourceCall.h"
+#include "../../../lib/ir/low/X86/RegistrationStateSolver.h"
 #include "gtest/gtest.h"
 
 #include "neverd/Limits.h"
 #include "neverd/ir/Limits.h"
+#include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/ir/low/LowIR.h"
+#include "neverd/ir/low/RegistrationABI.h"
 #include "neverd/lift/X86Regs.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/COFF/COFFRegistrationEH.h"
@@ -239,7 +243,7 @@ struct BoundCxxFixture {
 
   void addOuter(bool ForwardBorrow = true, bool StoreResult = false,
                 bool RepeatNested = false, va_t Wrapper = Outer,
-                bool CrossPopSpill = false) {
+                bool CrossPopSpill = false, bool RequireZero = false) {
     auto &Text = Image.Segments.front().Data;
     const auto Target = Call.Inputs[0].Offset;
     const va_t WrapperCaller = Wrapper + (OuterCaller - Outer);
@@ -280,6 +284,9 @@ struct BoundCxxFixture {
       CallTo(Target);
     }
     OuterResultVA = Entry + Text.size();
+    if (RequireZero)
+      Bytes({0x85, 0xc0, 0x74, 5, 0x8b, 0x55, 8, 0x89,
+             0x12}); // A nonzero result captures the borrowed output pointer.
     if (StoreResult)
       Bytes({0x8b, 0x55, 8, 0x89, 0x02}); // *outer_output = returned value.
     Bytes({0x89, 0x45, 0xe4, // Preserve the actual returned alias across GS.
@@ -365,8 +372,8 @@ TEST(RegistrationConditionalCxx, DistinguishesReturnedBorrowFromScalar) {
     EXPECT_EQ(Effect->Writes[0].End, -24);
     ASSERT_EQ(Effect->Returns.size(), 1u);
     EXPECT_EQ(Effect->Returns[0].Address, F.ReturnVA);
-    EXPECT_EQ(Effect->Returns[0].MayAliasFrame, Alias);
-    EXPECT_EQ(Effect->Returns[0].BorrowedOffset,
+    EXPECT_EQ(Effect->Returns[0].Value.MayBeFrame, Alias);
+    EXPECT_EQ(Effect->Returns[0].Value.Offset,
               Alias ? std::optional<int32_t>(-28) : std::nullopt);
     EXPECT_GT(Work, 0u);
     ASSERT_LT(Work, limits::kMaxRegistrationEHStateWork);
@@ -391,8 +398,8 @@ TEST(RegistrationConditionalCxx, JoinedAndPartialReturnsKeepAliasTaint) {
     const auto Effect = F.prove(Work);
     ASSERT_TRUE(Effect);
     ASSERT_EQ(Effect->Returns.size(), 1u);
-    EXPECT_TRUE(Effect->Returns[0].MayAliasFrame);
-    EXPECT_FALSE(Effect->Returns[0].BorrowedOffset);
+    EXPECT_TRUE(Effect->Returns[0].Value.MayBeFrame);
+    EXPECT_FALSE(Effect->Returns[0].Value.Offset);
   }
 }
 
@@ -408,7 +415,7 @@ TEST(RegistrationConditionalCxx, ComposesCheckedChildReadsAndMayWrites) {
   EXPECT_EQ(Effect->Writes[0].Begin, -28);
   EXPECT_EQ(Effect->Writes[0].End, -24);
   ASSERT_EQ(Effect->Returns.size(), 1u);
-  EXPECT_EQ(Effect->Returns[0].BorrowedOffset, -28);
+  EXPECT_EQ(Effect->Returns[0].Value.Offset, -28);
   // A failed query does not populate a target-only cache for the next inputs.
   F.Parent.Cells[-28] = FrameValue::frame(-80);
   Work = 0;
@@ -435,8 +442,8 @@ TEST(RegistrationConditionalCxx, BindsNestedCxxBorrowAndReturnedAlias) {
     ASSERT_EQ(Effect->Objects.size(), 1u);
     EXPECT_EQ(Effect->Objects.front().Begin, -28);
     ASSERT_EQ(Effect->Returns.size(), 1u);
-    EXPECT_TRUE(Effect->Returns.front().MayAliasFrame);
-    EXPECT_EQ(Effect->Returns.front().BorrowedOffset,
+    EXPECT_TRUE(Effect->Returns.front().Value.MayBeFrame);
+    EXPECT_EQ(Effect->Returns.front().Value.Offset,
               Forward ? std::optional<int32_t>(-28) : std::nullopt);
     ASSERT_EQ(Effect->Writes.size(), Forward ? 1u : 0u);
     if (Forward) {
@@ -469,6 +476,177 @@ TEST(RegistrationConditionalCxx, NestedReturnCannotHideAnAlias) {
   }
 }
 
+TEST(RegistrationConditionalCxx, ExactReturnedZeroClosesOnlyItsOwnBranch) {
+  for (unsigned Depth : {1u, 2u})
+    for (unsigned Mode = 0; Mode != 7; ++Mode) {
+      SCOPED_TRACE(::testing::Message() << Depth << " " << Mode);
+      BoundCxxFixture F(BoundCxxFixture::ReturnMode::Scalar);
+      if (Mode == 1)
+        F.overwrite(F.ResultVA, {0x31, 0xc0, 0x40}); // Known nonzero.
+      else if (Mode >= 2) {
+        F.overwrite(F.ResultVA, {0x8b, 0x45, 0xe8}); // Saved incoming ECX.
+        auto &Input =
+            F.Parent.Registers[x86reg::RCX / x86reg::GeneralRegStride];
+        if (Mode == 2)
+          Input = FrameValue::constant(0);
+        else if (Mode == 3)
+          Input = {};
+        else if (Mode == 4)
+          Input = FrameValue::imageAddress(Table);
+        else if (Mode == 5)
+          Input = FrameValue::constant(Table);
+        else
+          Input = FrameValue::taint(true);
+      }
+      for (unsigned Level = 0; Level != Depth; ++Level)
+        F.addOuter(true, false, false, Outer + Level * 0x280, false, true);
+      size_t Work = 0;
+      const auto Effect = F.prove(Work);
+      EXPECT_EQ(bool(Effect), Mode == 0 || Mode == 2);
+    }
+}
+
+TEST(RegistrationConditionalCxx,
+     NestedReturnsKeepTheirInvocationAndAddressKind) {
+  for (unsigned Depth : {0u, 1u, 2u})
+    for (unsigned Mode = 0; Mode != 9; ++Mode) {
+      SCOPED_TRACE(::testing::Message() << Depth << " " << Mode);
+      BoundCxxFixture F(Mode == 7   ? BoundCxxFixture::ReturnMode::Partial
+                        : Mode == 8 ? BoundCxxFixture::ReturnMode::Joined
+                                    : BoundCxxFixture::ReturnMode::Scalar);
+      auto Expected = FrameValue::constant(0);
+      auto &Input = F.Parent.Registers[x86reg::RCX / x86reg::GeneralRegStride];
+      if (Mode >= 1 && Mode <= 3) {
+        Expected = Mode == 1   ? FrameValue::constant(Table)
+                   : Mode == 2 ? FrameValue::imageAddress(Table)
+                               : FrameValue{};
+        Input = Expected;
+        F.overwrite(F.ResultVA, {0x8b, 0x45, 0xe8});
+      } else if (Mode >= 4) {
+        Expected = FrameValue::taint(true);
+        Expected.FrameOnlyFromCall = true;
+        if (Mode == 4)
+          F.overwrite(F.ResultVA, {0x8b, 0xc3, 0x90}); // Incoming saved EBX.
+        else if (Mode == 5)
+          F.overwrite(F.ResultVA, {0x8b, 0x45, 4}); // Callee return PC.
+        else if (Mode == 6)
+          F.overwrite(F.ResultVA,
+                      {0x8d, 0x45, 0xec}); // Retired private object.
+        else if (Mode == 8)
+          Input = {}; // Both the scalar and borrowed return arms are reached.
+      }
+      for (unsigned Level = 0; Level != Depth; ++Level)
+        F.addOuter(true, false, false, Outer + Level * 0x280);
+      size_t Work = 0;
+      const auto Effect = F.prove(Work);
+      ASSERT_TRUE(Effect);
+      ASSERT_EQ(Effect->Returns.size(), 1u);
+      EXPECT_EQ(Effect->Returns.front().Value, Expected);
+      ASSERT_GT(Work, 0u);
+      ASSERT_LT(Work, limits::kMaxRegistrationEHStateWork);
+      size_t Exact = limits::kMaxRegistrationEHStateWork - Work;
+      EXPECT_TRUE(F.prove(Exact));
+      EXPECT_EQ(Exact, limits::kMaxRegistrationEHStateWork);
+      size_t Short = limits::kMaxRegistrationEHStateWork - Work + 1;
+      EXPECT_FALSE(F.prove(Short));
+      EXPECT_EQ(Short, limits::kMaxRegistrationEHStateWork);
+    }
+}
+
+TEST(RegistrationConditionalCxx, ReturnedFactsRequireACompleteScalarCarrier) {
+  for (const auto Output :
+       {NdVar::reg(x86reg::RAX, 4), NdVar::tmp(80, 4),
+        NdVar::reg(x86reg::RAX, 2), NdVar::reg(x86reg::RCX, 4),
+        NdVar::reg(x86reg::RDX, 4), NdVar::tmp(80, 2), NdVar::tmp(80, 8)}) {
+    SCOPED_TRACE(::testing::Message() << int(Output.Space) << " "
+                                      << Output.Offset << " " << Output.Size);
+    BoundCxxFixture F(BoundCxxFixture::ReturnMode::Scalar);
+    F.addOuter(true, false, false, Outer, false, true);
+    Decoder Dec;
+    ASSERT_TRUE(Dec.init(F.Image));
+    size_t Work = 0;
+    RegistrationCallCalleeIndex Index(F.Image, &Work);
+    CFGBuilder Builder;
+    Builder.setRegistrationCalleeIndex(&Index);
+    auto Function =
+        Builder.buildIntegerFrameProof(F.Image, Dec, Outer, "bound-parent");
+    ASSERT_TRUE(Function.hasCompleteLiftCoverage());
+    ASSERT_TRUE(Function.ExceptionMetadata);
+    const auto HandlerABI = coff_loader::getCheckedX86CxxHandlerABI(
+        F.Image, *Function.ExceptionMetadata);
+    ASSERT_TRUE(HandlerABI);
+    unsigned Changed = 0;
+    for (auto &Block : Function.Blocks)
+      for (auto &Op : Block.Ops)
+        if (Op.Opcode == NdOp::CALL && Op.Addr == F.OuterCallVA) {
+          Op.Output = Output;
+          ++Changed;
+        }
+    ASSERT_EQ(Changed, 1u);
+    const auto Callees = Index.contracts(Function);
+    const auto Cleanups = Index.cleanupContracts(Function);
+    const auto Stacks = Index.stackContracts(Function);
+    ASSERT_TRUE(Callees && Cleanups && Stacks);
+    ConditionalFrame Inputs;
+    Inputs.Arguments.emplace(8, FrameValue::frame(76));
+    Inputs.Objects = {{76, 80}};
+    Inputs.ObjectCells.emplace(76, FrameValue::constant(1));
+    Inputs.Registers.emplace(x86reg::RCX / x86reg::GeneralRegStride,
+                             FrameValue::constant(17));
+    Inputs.ProveCxxCall =
+        [&](const LowFunc &Caller, const LowOp &Call, const FrameState &Frame,
+            const std::set<int32_t> &Initialized,
+            size_t &Used) -> std::optional<BoundCxxCalleeEffect> {
+      if (!checkedRegistrationDirectCall(F.Image, Caller, Call, Used))
+        return std::nullopt;
+      return proveBoundCxxCallee(F.Image, Call, Frame, 0, Used, Inputs.Objects,
+                                 &Initialized);
+    };
+    RegistrationStateSolver Solver(Function, Data, 0, &*Callees, &*Cleanups,
+                                   &*Stacks, nullptr, nullptr, &Inputs, nullptr,
+                                   nullptr, &*HandlerABI);
+    const auto States = Solver.run(Work);
+    const bool FullResult =
+        Output.Size == 4 && (Output.isTemp() || Output.Offset == x86reg::RAX);
+    EXPECT_EQ(States.Complete && Inputs.Complete, FullResult);
+  }
+}
+
+TEST(RegistrationConditionalCxx, ReturnFactsCoverEveryReachedExit) {
+  for (bool Nested : {false, true})
+    for (unsigned Mode = 0; Mode != 6; ++Mode) {
+      SCOPED_TRACE(::testing::Message() << Nested << " " << Mode);
+      BoundCxxFixture F(BoundCxxFixture::ReturnMode::Scalar);
+      if (Mode == 1 || Mode == 5)
+        F.overwrite(F.ReturnVA,
+                    {0x85, uint8_t(Mode == 1 ? 0xdb : 0xc0), 0x75, 3, 0xc2, 4,
+                     0, 0xff, 0xe2}); // An unproved indirect tail.
+      if (Mode == 2)
+        F.overwrite(F.ReturnVA, {0xff, 0xe2, 0x90}); // No ordinary return.
+      if (Mode == 3)
+        F.overwrite(F.ReturnVA,
+                    {0x85, 0xdb, 0x75, 3, 0xc2, 4, 0, 0xb8, 1, 0, 0, 0, 0xc2, 4,
+                     0}); // A second, differing return occurrence.
+      if (Mode == 4)
+        F.overwrite(F.ReturnVA, {0x85, 0xdb, 0x75, 3, 0xc2, 4, 0, 0xeb,
+                                 0xfe}); // A closed nonreturning loop.
+      F.Image.ExceptionMetadata = {};
+      coff_loader::parseX86RegistrationExceptions(F.Image);
+      if (Nested)
+        F.addOuter(true, false, false, Outer, false, true);
+      size_t Work = 0;
+      const auto Effect = F.prove(Work);
+      const bool Valid = Mode != 1 && Mode != 2 && (!Nested || Mode != 3);
+      ASSERT_EQ(bool(Effect), Valid);
+      if (!Effect)
+        continue;
+      ASSERT_EQ(Effect->Returns.size(), Mode == 3 ? 2u : 1u);
+      EXPECT_EQ(Effect->Returns.front().Value, FrameValue::constant(0));
+      if (Mode == 3)
+        EXPECT_EQ(Effect->Returns.back().Value, FrameValue::constant(1));
+    }
+}
+
 TEST(RegistrationConditionalCxx, NestedMayWriteKeepsInitializationSeparate) {
   BoundCxxFixture F;
   F.addOuter(true, false, true);
@@ -479,7 +657,7 @@ TEST(RegistrationConditionalCxx, NestedMayWriteKeepsInitializationSeparate) {
   EXPECT_EQ(Effect->Writes.front().Begin, -28);
   EXPECT_EQ(Effect->Writes.front().End, -24);
   ASSERT_EQ(Effect->Returns.size(), 1u);
-  EXPECT_EQ(Effect->Returns.front().BorrowedOffset, -28);
+  EXPECT_EQ(Effect->Returns.front().Value.Offset, -28);
 }
 
 TEST(RegistrationConditionalCxx, InitializedBytesDoNotEraseOverlappingTaint) {
@@ -529,7 +707,7 @@ TEST(RegistrationConditionalCxx, NestedThrowRetainsBothCleanupObligations) {
     ASSERT_EQ(Effect->Writes.size(), 1u);
     EXPECT_EQ(Effect->Writes.front().Begin, -28);
     ASSERT_EQ(Effect->Returns.size(), 1u);
-    EXPECT_EQ(Effect->Returns.front().BorrowedOffset, -28);
+    EXPECT_EQ(Effect->Returns.front().Value.Offset, -28);
     F.overwrite(Target, {0x0f, 0x0b});
     Work = 0;
     EXPECT_FALSE(F.prove(Work));
@@ -600,7 +778,7 @@ TEST(RegistrationConditionalCxx, ClosedThrowStillRequiresItsUnwindCleanup) {
   ASSERT_TRUE(Effect);
   ASSERT_EQ(Effect->Writes.size(), 1u);
   ASSERT_EQ(Effect->Returns.size(), 1u);
-  EXPECT_EQ(Effect->Returns[0].BorrowedOffset, -28);
+  EXPECT_EQ(Effect->Returns[0].Value.Offset, -28);
   F.overwrite(Destructor, {0x64, 0xa1, 0, 0, 0, 0, 0x8b, 0x40, 20, 0xa3, 0x20,
                            0x30, 0x40, 0, 0xc3});
   Work = 0;

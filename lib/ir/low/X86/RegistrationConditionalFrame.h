@@ -54,8 +54,9 @@ struct BoundCxxCalleeEffect {
   struct Return {
     va_t Address = InvalidVA;
     int Seq = -1;
-    bool MayAliasFrame = true;
-    std::optional<int32_t> BorrowedOffset;
+    /// Already projected into the caller domain. An exact frame coordinate
+    /// names a checked caller borrow, never the callee's private allocation.
+    FrameValue Value = FrameValue::taint(true);
   };
   std::vector<Return> Returns;
 };

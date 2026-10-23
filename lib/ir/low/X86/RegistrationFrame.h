@@ -162,6 +162,11 @@ bool hasX86ScalarCallOutput(const LowOp &Op);
 /// nonvolatile identities and physical frame registers retain entry ownership.
 bool isX86VolatileFrameRegister(unsigned Index);
 
+/// Change invocation domains after a complete call proof. Exact scalars and
+/// image identities survive; callee-owned identities become opaque returned
+/// aliases. The borrow owner separately remaps authenticated caller objects.
+FrameValue projectX86CallReturnValue(const FrameValue &Value);
+
 struct FrameState {
   std::array<FrameValue, 8> Registers;
   /// Flags and vector registers carry conservative byte taint. They cannot
