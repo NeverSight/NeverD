@@ -1,6 +1,14 @@
 //===- NdOpEmulatorFloatConvert.cpp - Concrete scalar FP conversions -----===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Pure binary80 integer conversion and architecture-specific scalar FP state.
+//===----------------------------------------------------------------------===//
 
 #include "neverd/ir/low/NdOpEmulator.h"
+#include "neverd/ir/low/X87Arithmetic.h"
 
 #include "llvm/ADT/APFloat.h"
 #include "llvm/ADT/APSInt.h"
@@ -74,17 +82,12 @@ bool NdOpEmulator::executeFloatConvert(const LowOp &Op) {
     // This pure conversion is exact, including INT64_MIN and UINT64_MAX.
     // It neither consults nor changes MXCSR, x87 PC/RC, or exception flags.
     // Machine FILD waiting, push admission and C1 belong to its instruction.
-    llvm::APFloat Result(llvm::APFloat::x87DoubleExtended());
-    const auto Status = Result.convertFromAPInt(
-        llvm::APInt(Op.Inputs[0].Size * 8, readOperand(Op.Inputs[0])),
-        Op.Opcode == NdOp::FLOAT_INT2FLOAT, llvm::APFloat::rmNearestTiesToEven);
-    if (Status != llvm::APFloat::opOK)
+    const auto Bytes =
+        convertIntegerToX87(readOperand(Op.Inputs[0]), Op.Inputs[0].Size,
+                            Op.Opcode == NdOp::FLOAT_INT2FLOAT);
+    if (!Bytes)
       return false;
-    const auto Bits = Result.bitcastToAPInt();
-    std::array<uint8_t, 10> Bytes;
-    for (unsigned I = 0; I < Bytes.size(); ++I)
-      Bytes[I] = Bits.extractBitsAsZExtValue(8, I * 8);
-    writeOutputBytes(Op.Output, Bytes);
+    writeOutputBytes(Op.Output, *Bytes);
     return true;
   }
   if (Op.NumInputs != 1 || Op.Output.Size == 0 || Op.Output.Size > 8 ||

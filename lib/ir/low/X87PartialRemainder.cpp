@@ -6,6 +6,7 @@
 
 #include "neverd/ir/low/X87PartialRemainder.h"
 
+#include "neverd/ir/X87Binary80.h"
 #include "neverd/lift/X86Regs.h"
 
 #include "llvm/ADT/APFloat.h"
@@ -18,37 +19,6 @@
 namespace neverd {
 
 namespace {
-
-struct X87Encoding {
-  uint64_t Significand = 0;
-  uint16_t SignExponent = 0;
-
-  unsigned exponent() const { return SignExponent & 0x7fffU; }
-  bool integerBit() const { return (Significand >> 63) != 0; }
-  bool isZero() const { return exponent() == 0 && Significand == 0; }
-  bool isSubnormal() const {
-    return exponent() == 0 && Significand != 0 && !integerBit();
-  }
-  bool isInfinity() const {
-    return exponent() == 0x7fffU && Significand == UINT64_C(0x8000000000000000);
-  }
-  bool isNaN() const {
-    return exponent() == 0x7fffU && Significand != UINT64_C(0x8000000000000000);
-  }
-  bool isCanonical() const {
-    if (exponent() == 0)
-      return !integerBit();
-    return integerBit();
-  }
-};
-
-X87Encoding decodeX87(llvm::ArrayRef<uint8_t> Bytes) {
-  X87Encoding Value;
-  for (unsigned Index = 0; Index != 8; ++Index)
-    Value.Significand |= uint64_t(Bytes[Index]) << (Index * 8);
-  Value.SignExponent = uint16_t(Bytes[8]) | (uint16_t(Bytes[9]) << 8);
-  return Value;
-}
 
 llvm::APInt x87Bits(llvm::ArrayRef<uint8_t> Bytes) {
   llvm::APInt Bits(80, 0);
@@ -68,8 +38,8 @@ std::array<uint8_t, 10> encodeX87(const llvm::APFloat &Value) {
 
 /// Return the low three bits of the absolute integral quotient. The x87
 /// reports magnitude bits, matching Intel-compatible hardware and SoftFloat.
-uint8_t completedQuotientBits(const X87Encoding &Dividend,
-                              const X87Encoding &Divisor,
+uint8_t completedQuotientBits(const X87Binary80 &Dividend,
+                              const X87Binary80 &Divisor,
                               bool RoundNearestEven) {
   const int ExponentDifference = static_cast<int>(Dividend.exponent()) -
                                  static_cast<int>(Divisor.exponent());
@@ -114,8 +84,10 @@ evaluateX87PartialRemainder(llvm::ArrayRef<uint8_t> DividendBytes,
                             bool RoundNearestEven) {
   if (DividendBytes.size() != 10 || DivisorBytes.size() != 10)
     return std::nullopt;
-  const X87Encoding Dividend = decodeX87(DividendBytes);
-  const X87Encoding Divisor = decodeX87(DivisorBytes);
+  const X87Binary80 Dividend =
+      *decodeX87Binary80({DividendBytes.data(), DividendBytes.size()});
+  const X87Binary80 Divisor =
+      *decodeX87Binary80({DivisorBytes.data(), DivisorBytes.size()});
 
   // Invalid encodings and operands that raise x87 exceptions need the tag
   // word, exception masks, and sticky exception fields to decide whether the
@@ -160,7 +132,7 @@ evaluateX87PartialRemainder(llvm::ArrayRef<uint8_t> DividendBytes,
   if (ArithmeticStatus != llvm::APFloat::opOK)
     return std::nullopt;
   Result.Value = encodeX87(Remainder);
-  const X87Encoding EncodedResult = decodeX87(Result.Value);
+  const X87Binary80 EncodedResult = *decodeX87Binary80(Result.Value);
   if (!EncodedResult.isCanonical() || EncodedResult.isSubnormal() ||
       EncodedResult.isNaN() || EncodedResult.isInfinity())
     return std::nullopt;
