@@ -23371,6 +23371,175 @@ TEST(LLVMCodePointerInvariantBoundary,
 }
 
 TEST(LLVMCodePointerInvariantBoundary,
+     NullableCallsKeepGuardsAcrossCompleteControlFlow) {
+  enum class Case {
+    Diamond,
+    InterveningCall,
+    Loop,
+    EveryArm,
+    UnguardedArm,
+    Bypass,
+    IndependentRoot,
+    ImageRoot,
+    ExceptionalEntry,
+    MissingPredecessor,
+    DuplicateDefinition,
+    Reload,
+    UnguardedSecondCall
+  };
+  for (Arch A : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64})
+    for (BinaryFormat Format :
+         {BinaryFormat::ELF, BinaryFormat::MachO, BinaryFormat::COFF})
+      for (Case C :
+           {Case::Diamond, Case::InterveningCall, Case::Loop, Case::EveryArm,
+            Case::UnguardedArm, Case::Bypass, Case::IndependentRoot,
+            Case::ImageRoot, Case::ExceptionalEntry, Case::MissingPredecessor,
+            Case::DuplicateDefinition, Case::Reload,
+            Case::UnguardedSecondCall}) {
+        SCOPED_TRACE(std::to_string(static_cast<int>(A)) + "/" +
+                     formatTraceName(Format) + "/" +
+                     std::to_string(static_cast<int>(C)));
+        const unsigned Width = getTargetRegInfo(A).PointerSize;
+        BinaryImage Image;
+        Image.Arch = A;
+        Image.Format = Format;
+        Image.Bits = Width == 8 ? Bitness::Bits64 : Bitness::Bits32;
+        Segment Data;
+        Data.VA = 0x4000;
+        Data.Size = Data.FileSz = 4 * Width;
+        Data.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+        Data.Data.resize(Data.Size);
+        Image.Segments.push_back(Data);
+        // An adjacent data pointer makes the zero slot's role nontrivial.
+        Image.DataPtrRelocSlots.insert(Data.VA + Width);
+        Image.DataPtrRelocTargetOwners[Data.VA + Width] = Data.VA;
+        MedFunc F;
+        F.Entry = 0x100;
+        F.Name = "guarded_callback_paths";
+        F.ReturnType = NdType::makeInt(Width);
+        auto value = [&](int Id, unsigned Size = 0) {
+          MedVar V;
+          V.Kind = MedVar::Temp;
+          V.Id = Id;
+          V.SSAVer = 1;
+          V.Size = Size ? Size : Width;
+          V.TheArch = A;
+          return V;
+        };
+        auto number = [&](uint64_t N, unsigned Size = 0) {
+          return MedVar::makeConst(N, Size ? Size : Width,
+                                   ConstantAddressProvenance::Scalar);
+        };
+        MedVar Choose = value(0, 1);
+        Choose.Kind = MedVar::Param;
+        F.Params = {Choose};
+        const MedVar Target = value(1), Selected = value(2);
+        F.Blocks.resize(8);
+        for (int I = 0; I != 8; ++I) {
+          auto &Block = F.Blocks[I];
+          Block.Id = I;
+          Block.StartAddr = F.Entry + I * 0x40;
+          Block.EndAddr = Block.StartAddr + 0x40;
+        }
+        auto append = [&](int B, NdOp Code, MedVar Out,
+                          std::initializer_list<MedVar> Inputs) {
+          MedOp Op;
+          Op.Opcode = Code;
+          Op.Output = Out;
+          Op.Addr = F.Blocks[B].StartAddr + F.Blocks[B].Ops.size();
+          for (const auto &Input : Inputs)
+            Op.addInput(Input);
+          F.Blocks[B].Ops.push_back(Op);
+        };
+        auto jump = [&](int From, int To) {
+          append(From, NdOp::BRANCH, {}, {number(F.Blocks[To].StartAddr)});
+          F.Blocks[From].Succs = {To};
+        };
+        auto branch = [&](int From, MedVar Condition, int Yes, int No) {
+          append(From, NdOp::COND_BR, {},
+                 {number(F.Blocks[Yes].StartAddr), Condition});
+          F.Blocks[From].Succs = {No, Yes};
+        };
+        append(0, NdOp::CALL, Target, {number(0x800)});
+        MedCallInfo Factory;
+        Factory.BlockId = 0;
+        Factory.OpIdx = 0;
+        Factory.TargetAddr = 0x800;
+        Factory.TargetName = "get_runtime_callback";
+        F.CallInfos.push_back(Factory);
+        append(0, NdOp::SELECT, Selected, {Choose, Target, number(0)});
+        if (C == Case::EveryArm || C == Case::UnguardedArm)
+          jump(0, 1);
+        else {
+          append(0, NdOp::INT_NOTEQUAL, value(3, 1), {Selected, number(0)});
+          branch(0, value(3, 1), 1, C == Case::Bypass ? 4 : 7);
+        }
+        if (C == Case::InterveningCall) {
+          append(1, NdOp::CALL, value(4), {number(0x900)});
+          MedCallInfo Check;
+          Check.BlockId = 1;
+          Check.OpIdx = 0;
+          Check.TargetAddr = 0x900;
+          Check.TargetName = "check_callback_context";
+          F.CallInfos.push_back(Check);
+        }
+        if (C == Case::DuplicateDefinition)
+          append(1, NdOp::SELECT, Selected, {Choose, Target, number(0)});
+        MedVar Called = Selected;
+        if (C == Case::Reload) {
+          Called = value(5);
+          append(1, NdOp::LOAD, Called,
+                 {MedVar::makeConst(Data.VA, Width,
+                                    ConstantAddressProvenance::DataAddress)});
+        }
+        jump(1, 2);
+        branch(2, Choose, 3, 4);
+        for (int B : {3, 4}) {
+          if (C == Case::EveryArm || (C == Case::UnguardedArm && B == 3)) {
+            const MedVar Condition = value(10 + B, 1);
+            append(B, NdOp::INT_NOTEQUAL, Condition, {Selected, number(0)});
+            branch(B, Condition, 5, 7);
+          } else
+            jump(B, 5);
+        }
+        append(5, NdOp::INDIR_CALL, value(6), {Called});
+        jump(5, 6);
+        if (C == Case::Loop)
+          branch(6, Choose, 1, 7);
+        else
+          jump(6, 7);
+        if (C == Case::UnguardedSecondCall)
+          append(7, NdOp::INDIR_CALL, value(7), {Selected});
+        append(7, NdOp::RETURN, {}, {number(0)});
+        for (const auto &Block : F.Blocks)
+          for (int Successor : Block.Succs)
+            F.Blocks[Successor].Preds.push_back(Block.Id);
+        if (C == Case::IndependentRoot)
+          F.ModuleAnalysisRoots.insert(F.Blocks[2].StartAddr);
+        if (C == Case::ImageRoot)
+          Image.CodeRefTargets.insert(F.Blocks[2].StartAddr + 1);
+        if (C == Case::ExceptionalEntry) {
+          ExceptionalEdge Edge;
+          Edge.BlockId = 2;
+          F.Blocks[7].ExceptionalSuccs.push_back(Edge);
+        }
+        if (C == Case::MissingPredecessor)
+          F.Blocks[5].Preds.pop_back();
+        llvm::LLVMContext Context;
+        testing::internal::CaptureStderr();
+        auto Module = MedLLVMEmitter().emit({F}, Context, "guarded-callback", A,
+                                            {}, &Image, Format);
+        const auto Diagnostic = testing::internal::GetCapturedStderr();
+        const bool Expected = C == Case::Diamond ||
+                              C == Case::InterveningCall || C == Case::Loop ||
+                              C == Case::EveryArm;
+        EXPECT_EQ(Module != nullptr, Expected) << Diagnostic;
+        if (Module)
+          expectValidModule(*Module);
+      }
+}
+
+TEST(LLVMCodePointerInvariantBoundary,
      NullableRecordCallsAuditEverySelectedSlotAndEveryCallGuard) {
   enum class Case {
     Valid,

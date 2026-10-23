@@ -540,7 +540,7 @@ TEST_F(NativePointerRelocationBoundary,
   append(Select, 0, NdOp::LOAD, var(11, 1), {var(10)});
   append(Select, 0, NdOp::RETURN, {}, {var(11, 1)});
 
-  MedFunc Callback = make("nullable_callback", 0x500, 1, 3);
+  MedFunc Callback = make("nullable_callback", 0x500, 1, 6);
   append(Callback, 0, NdOp::CALL, var(10), {num(0x800)});
   MedCallInfo Factory;
   Factory.BlockId = Factory.OpIdx = 0;
@@ -551,8 +551,28 @@ TEST_F(NativePointerRelocationBoundary,
          {Callback.Params[0], var(10), num(0)});
   append(Callback, 0, NdOp::INT_EQUAL, var(12, 1), {var(11), num(0)});
   branch(Callback, var(12, 1));
-  append(Callback, 1, NdOp::INDIR_CALL, var(13), {var(11)});
-  append(Callback, 1, NdOp::RETURN, {}, {var(13)});
+  // The factory's original returned value survives another call that changes
+  // its backing storage, and both sides of a further condition. Calling a
+  // freshly loaded replacement would change the behavior of this fixture.
+  append(Callback, 1, NdOp::CALL, var(14), {num(0x850)});
+  MedCallInfo Invalidate;
+  Invalidate.BlockId = 1;
+  Invalidate.OpIdx = 0;
+  Invalidate.TargetAddr = 0x850;
+  Invalidate.TargetName = "invalidate_runtime_callback";
+  Callback.CallInfos.push_back(Invalidate);
+  append(Callback, 1, NdOp::INT_AND, var(15), {Callback.Params[0], num(2)});
+  append(Callback, 1, NdOp::COND_BR, {},
+         {num(Callback.Blocks[4].StartAddr), var(15)});
+  Callback.Blocks[1].Succs = {3, 4};
+  for (int B : {3, 4}) {
+    Callback.Blocks[B].Preds = {1};
+    Callback.Blocks[B].Succs = {5};
+    append(Callback, B, NdOp::BRANCH, {}, {num(Callback.Blocks[5].StartAddr)});
+  }
+  Callback.Blocks[5].Preds = {3, 4};
+  append(Callback, 5, NdOp::INDIR_CALL, var(13), {var(11)});
+  append(Callback, 5, NdOp::RETURN, {}, {var(13)});
   // Execute a descending callable table with non-code sentinels on both
   // sides. The accumulated digits distinguish order as well as call count.
   Segment Code;
@@ -701,27 +721,39 @@ extern uint64_t runtime_or_lifted_callback(uint64_t);
 extern uint64_t exact_signature_callback(uint64_t);
 extern uint64_t import_argument(uint64_t);
 extern uint64_t import_zero_args(uint64_t);
-static unsigned calls;
+static unsigned calls, checks;
+static uintptr_t current_callback;
 static uint64_t callback(void) { ++calls; return 73; }
-uint64_t get_runtime_callback(void) { return (uintptr_t)&callback; }
+uint64_t get_runtime_callback(void) {
+  current_callback = (uintptr_t)&callback;
+  return current_callback;
+}
+uint64_t invalidate_runtime_callback(void) {
+  ++checks;
+  current_callback = 0;
+  return 0;
+}
 int main(void) {
   unsigned char byte = 0xe7;
+  unsigned expected_calls = 0;
   for (uint64_t i = 0; i != 1024; ++i) {
     const uint64_t word = i < 16 ? i : UINT64_MAX - i;
     if (masked_word(&word) != 0x40 + (word & 15)) return 1;
     const uint64_t expected = word >= 1 && word <= 6 ? 0x40 + 4 * (word - 1) : 0;
     if (guarded_word(&word) != expected) return 2;
     if (selected_pointer(&byte, i & 1) != ((i & 1) ? byte : 0x40)) return 3;
-    if (nullable_callback(i & 1) != ((i & 1) ? 73 : 0)) return 4;
-    if (calls != (i + 1) / 2) return 5;
+    if (nullable_callback(i % 4) != ((i % 4) ? 73 : 0)) return 4;
+    expected_calls += (i % 4) != 0;
+    if (calls != expected_calls || checks != expected_calls) return 5;
+    if ((i % 4) && current_callback != 0) return 12;
     if (exact_signature_callback(i) != i + 23) return 9;
     const long signed_value = (i & 1) ? -(long)(i << 33) : (long)(i << 33);
     if (import_argument((uint64_t)signed_value) != (uint64_t)labs(signed_value)) return 10;
     if (import_zero_args(i) != (uint64_t)getpid()) return 11;
   }
   if (countdown_callbacks() != 321) return 6;
-  if (runtime_or_lifted_callback(0) != 1 || calls != 512) return 7;
-  if (runtime_or_lifted_callback(1) != 73 || calls != 513) return 8;
+  if (runtime_or_lifted_callback(0) != 1 || calls != 768) return 7;
+  if (runtime_or_lifted_callback(1) != 73 || calls != 769) return 8;
   return 0;
 }
 )";

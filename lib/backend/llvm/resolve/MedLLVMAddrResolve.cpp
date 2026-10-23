@@ -167,6 +167,76 @@ bool sameIndexValue(const MedVar &A, const MedVar &B) {
   return A.Kind != MedVar::Stack || A.StackOff == B.StackOff;
 }
 
+template <typename NumericFn>
+bool isConstraintConstant(const MedVar &V, NumericFn &&IsNumeric) {
+  return V.isConst() && V.Size > 0 && V.Size <= 8 && IsNumeric(V) &&
+         (V.Size == 8 || V.ConstVal < (uint64_t(1) << (V.Size * 8)));
+}
+
+// The scalar relation carried by this exact truth edge. Both local table
+// bounds and whole-function non-null proofs use this one comparison decoder.
+template <typename LookupDefFn, typename NumericFn>
+std::optional<LoadIndexConstraint>
+conditionIndexConstraint(MedVar Condition, bool Truth, LookupDefFn &&LookupDef,
+                         NumericFn &&IsNumeric) {
+  const MedOp *Compare = nullptr;
+  for (unsigned Depth = 0;
+       Depth != ::neverd::limits::backend::kMaxGuardedScalarOffsetDepth;
+       ++Depth) {
+    Compare = LookupDef(Condition);
+    if (!Compare || !sameIndexValue(Compare->Output, Condition))
+      return std::nullopt;
+    if ((Compare->Opcode == NdOp::COPY || Compare->Opcode == NdOp::BOOL_NOT) &&
+        Compare->NumInputs == 1 && Compare->Inputs[0].Size == Condition.Size) {
+      Truth ^= Compare->Opcode == NdOp::BOOL_NOT;
+      Condition = Compare->Inputs[0];
+      Compare = nullptr;
+      continue;
+    }
+    break;
+  }
+  if (!Compare || Compare->NumInputs != 2 || Compare->Output.Size != 1)
+    return std::nullopt;
+  MedVar Left = Compare->Inputs[0], Right = Compare->Inputs[1];
+  auto constant = [&](const MedVar &V) {
+    return isConstraintConstant(V, IsNumeric);
+  };
+  if (Left.Size == 0 || Left.Size > 8 || Left.Size != Right.Size)
+    return std::nullopt;
+  if (Compare->Opcode == NdOp::INT_LESS) {
+    if (!Truth && constant(Left) && !Right.isConst())
+      return LoadIndexConstraint{Right, Left.ConstVal, std::nullopt};
+    if (Truth && constant(Right) && Right.ConstVal != 0 && !Left.isConst())
+      return LoadIndexConstraint{Left, Right.ConstVal - 1, std::nullopt};
+    return std::nullopt;
+  }
+  if (Compare->Opcode != NdOp::INT_EQUAL &&
+      Compare->Opcode != NdOp::INT_NOTEQUAL)
+    return std::nullopt;
+  Truth ^= Compare->Opcode == NdOp::INT_NOTEQUAL;
+  if (constant(Left) && !Right.isConst())
+    std::swap(Left, Right);
+  if (Truth || !constant(Right))
+    return std::nullopt;
+  // Keep the selector constraint when equality was lowered through SUB;
+  // constraining the difference first would lose the excluded selector value.
+  if (Right.ConstVal == 0) {
+    const MedOp *Difference = LookupDef(Left);
+    if (Difference && Difference->Opcode == NdOp::INT_SUB &&
+        Difference->NumInputs == 2 &&
+        sameIndexValue(Difference->Output, Left) &&
+        Difference->Inputs[0].Size == Left.Size &&
+        Difference->Inputs[1].Size == Left.Size &&
+        !Difference->Inputs[0].isConst() && constant(Difference->Inputs[1])) {
+      Left = Difference->Inputs[0];
+      Right = Difference->Inputs[1];
+    }
+  }
+  if (!Left.isConst())
+    return LoadIndexConstraint{Left, std::nullopt, Right.ConstVal};
+  return std::nullopt;
+}
+
 template <typename LookupDefFn, typename NumericFn>
 std::optional<LoadIndexConstraint>
 predecessorIndexConstraint(const MedFunc *Func, const MedOp *Load,
@@ -269,69 +339,22 @@ predecessorIndexConstraint(const MedFunc *Func, const MedOp *Load,
   if (!Taken)
     return std::nullopt;
   bool Truth = *Taken == Site->Id;
-  MedVar Condition = Branch.Inputs[1];
-  const MedOp *Compare = nullptr;
-  for (unsigned Depth = 0;
-       Depth != ::neverd::limits::backend::kMaxGuardedScalarOffsetDepth;
-       ++Depth) {
-    Compare = LookupDef(Condition);
-    if (!Compare || !sameIndexValue(Compare->Output, Condition))
-      return std::nullopt;
-    if ((Compare->Opcode == NdOp::COPY || Compare->Opcode == NdOp::BOOL_NOT) &&
-        Compare->NumInputs == 1 && Compare->Inputs[0].Size == Condition.Size) {
-      Truth ^= Compare->Opcode == NdOp::BOOL_NOT;
-      Condition = Compare->Inputs[0];
-      Compare = nullptr;
-      continue;
-    }
-    break;
-  }
-  if (!Compare || Compare->NumInputs != 2 || Compare->Output.Size != 1)
+  auto Constraint =
+      conditionIndexConstraint(Branch.Inputs[1], Truth, LookupDef, IsNumeric);
+  if (!Constraint || (Countdown && Constraint->Maximum))
     return std::nullopt;
-  MedVar Left = Compare->Inputs[0], Right = Compare->Inputs[1];
+  if (!Countdown)
+    return Constraint;
+  const MedVar &Left = Constraint->Value;
   auto constant = [&](const MedVar &V) {
-    return V.isConst() && V.Size > 0 && V.Size <= 8 && IsNumeric(V) &&
-           (V.Size == 8 || V.ConstVal < (uint64_t(1) << (V.Size * 8)));
+    return isConstraintConstant(V, IsNumeric);
   };
-  if (Left.Size == 0 || Left.Size > 8 || Left.Size != Right.Size)
-    return std::nullopt;
-  if (Compare->Opcode == NdOp::INT_LESS) {
-    if (Countdown)
-      return std::nullopt;
-    if (!Truth && constant(Left) && !Right.isConst())
-      return LoadIndexConstraint{Right, Left.ConstVal, std::nullopt};
-    if (Truth && constant(Right) && Right.ConstVal != 0 && !Left.isConst())
-      return LoadIndexConstraint{Left, Right.ConstVal - 1, std::nullopt};
-    return std::nullopt;
-  }
-  if (Compare->Opcode != NdOp::INT_EQUAL &&
-      Compare->Opcode != NdOp::INT_NOTEQUAL)
-    return std::nullopt;
-  Truth ^= Compare->Opcode == NdOp::INT_NOTEQUAL;
-  if (constant(Left) && !Right.isConst())
-    std::swap(Left, Right);
-  if (Truth || !constant(Right))
-    return std::nullopt;
-  // Keep the selector constraint when equality was lowered through SUB;
-  // constraining the difference first would lose the excluded selector value.
-  if (Right.ConstVal == 0) {
-    const MedOp *Difference = LookupDef(Left);
-    if (Difference && Difference->Opcode == NdOp::INT_SUB &&
-        Difference->NumInputs == 2 &&
-        sameIndexValue(Difference->Output, Left) &&
-        Difference->Inputs[0].Size == Left.Size &&
-        Difference->Inputs[1].Size == Left.Size &&
-        !Difference->Inputs[0].isConst() && constant(Difference->Inputs[1])) {
-      Left = Difference->Inputs[0];
-      Right = Difference->Inputs[1];
-    }
-  }
   if (Countdown) {
     // The load executes before the backedge test. A full-width scalar count
     // N, decrement by one, and repeat while the old count differs from one
     // prove that every visit uses an index in [1, N]. No section layout or
     // target-role assumption participates in this control-flow certificate.
-    if (Right.ConstVal != 1 || !Site->ExceptionalSuccs.empty())
+    if (Constraint->Excluded != uint64_t{1} || !Site->ExceptionalSuccs.empty())
       return std::nullopt;
     for (const PhiNode &Phi : Site->Phis) {
       if (!consume())
@@ -367,8 +390,6 @@ predecessorIndexConstraint(const MedFunc *Func, const MedOp *Load,
     }
     return std::nullopt;
   }
-  if (!Left.isConst())
-    return LoadIndexConstraint{Left, std::nullopt, Right.ConstVal};
   return std::nullopt;
 }
 
@@ -1949,26 +1970,163 @@ bool MedLLVMEmitter::valueIsAuthenticatedModelZero(const MedVar &V) const {
 
 bool MedLLVMEmitter::valueHasNonNullIndirectCallGuards(
     const MedVar &Value) const {
-  if (!CurMedFunc || !Img || Value.isConst())
+  if (!CurMedFunc || CurMedFunc->Blocks.empty() || !Img || Value.isConst() ||
+      CurMedFunc->SkippedSSA)
     return false;
   size_t Budget = static_cast<size_t>(limits::kMaxSSANodes);
-  bool FoundCall = false;
-  for (const MedBlock &Block : CurMedFunc->Blocks)
-    for (const MedOp &Op : Block.Ops) {
-      if (Budget == 0)
+  auto consume = [&](size_t Amount = 1) {
+    if (Amount > Budget)
+      return false;
+    Budget -= Amount;
+    return true;
+  };
+  using Key = std::tuple<MedVar::VarKind, int, int>;
+  auto key = [](const MedVar &V) { return Key{V.Kind, V.Id, V.SSAVer}; };
+  std::map<Key, const MedOp *> Definitions;
+  std::map<int, const MedBlock *> Blocks;
+  std::map<int, std::set<int>> Incoming;
+  std::set<int> ExceptionalRoots;
+  auto define = [&](const MedVar &Output, const MedOp *Op) {
+    return Output.isConst() || Output.Id < 0 || !Output.Size ||
+           Definitions.emplace(key(Output), Op).second;
+  };
+  auto terminates = [](const MedOp &Op) {
+    return Op.Opcode == NdOp::COND_BR || Op.Opcode == NdOp::BRANCH ||
+           Op.Opcode == NdOp::INDIR_BR || Op.Opcode == NdOp::RETURN;
+  };
+  for (const MedBlock &Block : CurMedFunc->Blocks) {
+    if (!consume(1 + Block.Ops.size() + Block.Phis.size() + Block.Preds.size() +
+                 Block.Succs.size() + Block.ExceptionalPreds.size() +
+                 Block.ExceptionalSuccs.size()) ||
+        !Blocks.emplace(Block.Id, &Block).second)
+      return false;
+    for (const PhiNode &Phi : Block.Phis)
+      if (!define(Phi.Output, nullptr))
         return false;
-      --Budget;
-      if (Op.Opcode != NdOp::INDIR_CALL || Op.NumInputs < 1 ||
-          !sameIndexValue(Op.Inputs[0], Value))
-        continue;
-      FoundCall = true;
-      auto Constraint = operationIndexConstraint(
-          CurMedFunc, &Op, Img, [&](const MedVar &V) { return lookupDef(V); },
-          [&](const MedVar &V) { return constantIsStableAddressOffset(V); });
-      if (!Constraint || !Constraint->Excluded || *Constraint->Excluded != 0 ||
-          !sameIndexValue(Constraint->Value, Value))
+    for (const MedOp &Op : Block.Ops) {
+      if (Op.NumInputs > Op.Inputs.size() ||
+          !define(Op.Output, Op.Dead ? nullptr : &Op) ||
+          (!Op.Dead && (Op.Opcode == NdOp::INDIR_BR ||
+                        (terminates(Op) && &Op != &Block.Ops.back()))))
         return false;
     }
+    if (std::set<int>(Block.Succs.begin(), Block.Succs.end()).size() !=
+        Block.Succs.size())
+      return false;
+    for (int Successor : Block.Succs)
+      Incoming[Successor].insert(Block.Id);
+    if (!Block.ExceptionalPreds.empty())
+      ExceptionalRoots.insert(Block.Id);
+    for (const ExceptionalEdge &Edge : Block.ExceptionalSuccs)
+      ExceptionalRoots.insert(Edge.BlockId);
+  }
+  for (const auto &[Id, Predecessors] : Incoming)
+    if (!Blocks.count(Id))
+      return false;
+  for (const auto &[Id, Block] : Blocks) {
+    const std::set<int> Recorded(Block->Preds.begin(), Block->Preds.end());
+    if (Recorded.size() != Block->Preds.size() || Recorded != Incoming[Id])
+      return false;
+  }
+  auto lookup = [&](const MedVar &V) -> const MedOp * {
+    const auto It = Definitions.find(key(V));
+    return V.isConst() || It == Definitions.end() ? nullptr : It->second;
+  };
+
+  // The fact belongs to this loaded SSA value, so an intervening call or a
+  // write to its old storage does not change it. A reload has another value;
+  // this query supplies no memory-preservation or reload-equivalence proof.
+  // Keep both incoming truth states. A loop may revisit a definition, which
+  // starts a new dynamic value and must lose the earlier iteration's guard.
+  const int Entry = CurMedFunc->Blocks.front().Id;
+  std::vector<int> Structural{Entry};
+  std::set<int> Reachable{Entry};
+  while (!Structural.empty()) {
+    const auto &Block = *Blocks.at(Structural.back());
+    Structural.pop_back();
+    if (!consume(1 + Block.Succs.size() + Block.ExceptionalSuccs.size()))
+      return false;
+    auto add = [&](int Id) {
+      if (Blocks.count(Id) && Reachable.insert(Id).second)
+        Structural.push_back(Id);
+    };
+    for (int Id : Block.Succs)
+      add(Id);
+    for (const ExceptionalEdge &Edge : Block.ExceptionalSuccs)
+      add(Edge.BlockId);
+  }
+  std::vector<std::pair<int, bool>> Pending;
+  std::set<std::pair<int, bool>> Visited;
+  auto enqueue = [&](int Id, bool Known) {
+    if (Blocks.count(Id) && Visited.emplace(Id, Known).second)
+      Pending.emplace_back(Id, Known);
+  };
+  for (const auto &[Id, Block] : Blocks) {
+    if (!consume())
+      return false;
+    auto contains = [&](const std::set<va_t> &Roots) {
+      const auto It = Roots.lower_bound(Block->StartAddr);
+      return It != Roots.end() &&
+             (*It == Block->StartAddr || *It < Block->EndAddr);
+    };
+    if (Id == Entry || !Reachable.count(Id) || ExceptionalRoots.count(Id) ||
+        contains(CurMedFunc->ModuleAnalysisRoots) ||
+        contains(Img->CodeRefTargets))
+      enqueue(Id, false);
+  }
+  bool FoundCall = false;
+  while (!Pending.empty()) {
+    auto [Id, Known] = Pending.back();
+    Pending.pop_back();
+    const auto &Block = *Blocks.at(Id);
+    if (!consume(1 + Block.Phis.size() + Block.Ops.size() + Block.Succs.size()))
+      return false;
+    for (const PhiNode &Phi : Block.Phis)
+      if (sameIndexValue(Phi.Output, Value))
+        Known = false;
+    for (const MedOp &Op : Block.Ops) {
+      if (Op.Dead)
+        continue;
+      if (sameIndexValue(Op.Output, Value))
+        Known = false;
+      if (Op.Opcode == NdOp::INDIR_CALL && Op.NumInputs >= 1 &&
+          sameIndexValue(Op.Inputs[0], Value)) {
+        FoundCall = true;
+        if (!Known)
+          return false;
+      }
+    }
+    const MedOp *Branch = Block.Ops.empty() ? nullptr : &Block.Ops.back();
+    std::optional<int> Taken;
+    if (Branch && !Branch->Dead && Branch->Opcode == NdOp::COND_BR &&
+        Branch->NumInputs == 2 && Branch->Inputs[0].isConst() &&
+        Branch->Inputs[0].ConstVal && Block.Succs.size() == 2) {
+      for (int Successor : Block.Succs) {
+        const auto &Target = *Blocks.at(Successor);
+        const va_t Address = Target.StartAddr || Target.Ops.empty()
+                                 ? Target.StartAddr
+                                 : Target.Ops.front().Addr;
+        if (Address == Branch->Inputs[0].ConstVal) {
+          if (Taken)
+            return false;
+          Taken = Successor;
+        }
+      }
+    }
+    for (int Successor : Block.Succs) {
+      bool Next = Known;
+      if (Taken) {
+        if (!consume(::neverd::limits::backend::kMaxGuardedScalarOffsetDepth))
+          return false;
+        const auto Constraint = conditionIndexConstraint(
+            Branch->Inputs[1], Successor == *Taken, lookup,
+            [&](const MedVar &V) { return constantIsStableAddressOffset(V); });
+        Next |= Constraint && Constraint->Excluded == uint64_t{0} &&
+                sameIndexValue(Constraint->Value, Value);
+      }
+      enqueue(Successor, Next);
+    }
+  }
   return FoundCall;
 }
 

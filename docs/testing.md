@@ -5687,6 +5687,16 @@ constructor order against independent C observations at O0/O2. Immutable
 scan tests additionally check lossless address carriers and folding a scan's
 exit count into successor PHI operands.
 
+`NullableCallsKeepGuardsAcrossCompleteControlFlow` checks diamonds, separately
+guarded incoming arms, loops and intervening calls on all twelve native
+target/format combinations. Bypasses, exceptional and independent entries,
+missing predecessors, duplicate definitions, fresh loads and an unguarded
+second call remain rejected. The existing nullable-record and countdown
+cases also exercise the shared comparison decoder. The native nullable
+callback fixture clears its backing storage in an intervening call, then
+crosses either side of a diamond before invoking the original loaded pointer.
+LLVM and both C modes execute this check at O0/O2.
+
 `ExactIndirectTargetsReuseTheirRecoveredCallSignature` checks all twelve
 target/format cells: a function identity or immutable slot uses the recovered
 callee signature, including narrow parameters and surplus caller registers.

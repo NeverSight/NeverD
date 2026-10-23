@@ -8243,6 +8243,18 @@ acquire this permission. Indirect calls still need their independent complete
 callable-slot domain, and pointer recurrences retain
 their separate initialization and step proofs.
 
+Nullable indirect-call values retain their non-null guard through ordinary
+control flow, including joins whose every incoming path checks the value and
+loops that keep the same SSA occurrence. The shared comparison decoder owns
+both this edge fact and local index constraints. A bounded two-state walk
+checks every call, resets the fact when its definition executes again, and
+starts independent and exceptional entries without a guard. Duplicate
+definitions, incomplete predecessor inventories and exhausted work reject
+the proof. Calls and writes do not change an already loaded SSA value; a new
+load, including an implicit memory-call reload, requires its own proof.
+This control-flow fact supplies no callable storage identity, memory
+preservation or native exception permission.
+
 A pointer run bound to original image storage has a separate runtime-displacement
 contract. The same `pointerRunStorageContract` selects its external declaration
 and authorizes keeping an escaped frame word as a live runtime read. A full
