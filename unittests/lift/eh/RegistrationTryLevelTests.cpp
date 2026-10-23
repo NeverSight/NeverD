@@ -15,6 +15,7 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "../../../lib/ir/low/X86/RegistrationStateSolver.h"
 #include "gtest/gtest.h"
 
 #include "neverd/Limits.h"
@@ -1564,6 +1565,170 @@ TEST(RegistrationTryLevel, CxxEAXHelperOwnsItsDecodedStateTransitions) {
         }
         EXPECT_EQ(Matched, 3u);
       }
+}
+
+TEST(RegistrationTryLevel, CxxEAXHelperPreservesBoundRegisterInputs) {
+  using namespace registration_state;
+  for (bool Wide : {false, true})
+    for (unsigned Variant : {0, 1, 2})
+      for (unsigned Register : {x86reg::RCX, x86reg::RDX}) {
+        auto Image = makeCxxEAXStateImage(Wide, Variant);
+        const auto Body = 0x20 + (Wide ? 15 : 12);
+        // Return the selected incoming register before the unlink sequence
+        // consumes ECX. The shared physical helper preserves both carriers.
+        const std::vector<uint8_t> Tail{
+            0x8b, uint8_t(Register == x86reg::RCX ? 0xc1 : 0xc2),
+            0x8b, 0x4d,
+            0xf4, 0x64,
+            0x89, 0x0d,
+            0,    0,
+            0,    0,
+            0x8d, 0x64,
+            0x24, 60,
+            0x5d, 0xc3};
+        std::copy(Tail.begin(), Tail.end(),
+                  Image.Segments.front().Data.begin() + Body + 14);
+        Image.ExceptionMetadata = {};
+        coff_loader::parseX86RegistrationExceptions(Image);
+        const auto Original = liftEntry(Image, kText + 0x20);
+        ASSERT_TRUE(Original.hasCompleteLiftCoverage());
+        const auto &EH = *Original.ExceptionMetadata;
+        const auto Call = coff_loader::getCheckedX86CxxPrologueCall(Image, EH);
+        const auto Handler = coff_loader::getCheckedX86CxxHandlerABI(Image, EH);
+        ASSERT_TRUE(Call);
+        ASSERT_TRUE(Handler);
+        const std::vector<RegistrationCalleeFrameContract> Callees;
+        const std::vector<RegistrationCleanupFrameContract> Cleanups;
+        for (unsigned Mode = 0; Mode != 7; ++Mode) {
+          SCOPED_TRACE(::testing::Message() << Wide << " " << Variant << " "
+                                            << Register << " " << Mode);
+          auto Function = Original;
+          ConditionalFrame Inputs;
+          FrameValue Expected;
+          switch (Mode) {
+          case 0:
+            Expected = FrameValue::constant(0);
+            break;
+          case 1:
+          case 5:
+          case 6:
+            Expected = FrameValue::constant(42);
+            break;
+          case 2:
+            Expected = FrameValue::imageAddress(kRData);
+            break;
+          case 3:
+            break; // Initialized scalar with no known bits.
+          case 4:
+            Expected = FrameValue::taint(true);
+            Expected.SavedRegister = Register / x86reg::GeneralRegStride + 1;
+            break; // No invocation fact; retain the opaque entry identity.
+          }
+          if (Mode != 4)
+            Inputs.Registers.emplace(Register / x86reg::GeneralRegStride,
+                                     Expected);
+          if (Mode == 5) {
+            // The descriptor cannot excuse a clobber in the decoded prefix.
+            auto &Block = Function.Blocks.front();
+            auto &First = Block.InstructionBoundaries.front();
+            LowOp Clobber;
+            Clobber.Addr = First.Address;
+            Clobber.Seq = 100;
+            Clobber.Opcode = NdOp::COPY;
+            Clobber.Output = NdVar::reg(Register, 4);
+            Clobber.addInput(NdVar::cst(43, 4));
+            Block.Ops.insert(Block.Ops.begin() + First.OpCount, Clobber);
+            ++First.OpCount;
+            for (size_t I = 1; I != Block.InstructionBoundaries.size(); ++I)
+              ++Block.InstructionBoundaries[I].FirstOp;
+          }
+          if (Mode == 6)
+            Inputs.Registers.emplace(x86reg::RBX / x86reg::GeneralRegStride,
+                                     FrameValue::constant(0));
+          RegistrationStateSolver Solver(
+              Function, Call->SecurityCookieVA, 0, &Callees, &Cleanups, nullptr,
+              nullptr, nullptr, &Inputs, nullptr, nullptr, &*Handler, &*Call);
+          const auto States = Solver.run();
+          if (Mode >= 5) {
+            EXPECT_FALSE(States.Complete && Inputs.Complete);
+            continue;
+          }
+          EXPECT_TRUE(Inputs.Complete);
+          EXPECT_TRUE(States.Complete);
+          EXPECT_TRUE(States.ChainOperationsComplete);
+          EXPECT_TRUE(States.CxxPrologue);
+          ASSERT_EQ(Inputs.ReturnValues.size(), 1u);
+          EXPECT_EQ(Inputs.ReturnValues.begin()->second, Expected);
+        }
+      }
+}
+
+TEST(RegistrationTryLevel, CxxEAXHelperBindsAnActualCaller) {
+  using namespace registration_state;
+  for (unsigned Variant : {0, 1, 2})
+    for (unsigned Register : {x86reg::RCX, x86reg::RDX}) {
+      auto Image = makeCxxEAXStateImage(false, Variant);
+      auto &Text = Image.Segments.front().Data;
+      Text[0] = 0xe8;
+      writeLE<uint32_t>(Text.data() + 1, 0x20 - 5);
+      Text[5] = 0xc3;
+      const std::vector<uint8_t> Tail{
+          0x8b, uint8_t(Register == x86reg::RCX ? 0xc1 : 0xc2),
+          0x8b, 0x4d,
+          0xf4, 0x64,
+          0x89, 0x0d,
+          0,    0,
+          0,    0,
+          0x8d, 0x64,
+          0x24, 60,
+          0x5d, 0xc2,
+          4,    0};
+      std::copy(Tail.begin(), Tail.end(), Text.begin() + 0x20 + 12 + 14);
+      Image.ExceptionMetadata = {};
+      coff_loader::parseX86RegistrationExceptions(Image);
+      LowOp Call;
+      Call.Opcode = NdOp::CALL;
+      Call.Addr = kText;
+      Call.Seq = 0;
+      Call.addInput(NdVar::cst(kText + 0x20, 4));
+      for (unsigned Mode = 0; Mode != 4; ++Mode) {
+        SCOPED_TRACE(::testing::Message()
+                     << Variant << " " << Register << " " << Mode);
+        FrameState Parent;
+        for (auto &Value : Parent.Registers)
+          Value = FrameValue::taint(true);
+        Parent.Registers[x86reg::RSP / x86reg::GeneralRegStride] =
+            FrameValue::frame(-96);
+        Parent.Cells[-96] = FrameValue::frame(-28);
+        Parent.Cells[-28] = FrameValue::constant(7);
+        auto &Input = Parent.Registers[Register / x86reg::GeneralRegStride];
+        if (Mode == 0)
+          Input = FrameValue::constant(42);
+        else if (Mode == 1)
+          Input = {};
+        else if (Mode == 2)
+          Input = FrameValue::imageAddress(kRData);
+        size_t Work = 0;
+        const auto Effect = proveBoundCxxCallee(Image, Call, Parent, 4, Work);
+        ASSERT_TRUE(Effect);
+        EXPECT_EQ(Effect->StackPopBytes, 4u);
+        ASSERT_EQ(Effect->Objects.size(), 1u);
+        EXPECT_EQ(Effect->Objects.front().Begin, -28);
+        EXPECT_EQ(Effect->Objects.front().End, -24);
+        EXPECT_TRUE(Effect->Reads.empty());
+        EXPECT_TRUE(Effect->Writes.empty());
+        ASSERT_EQ(Effect->Returns.size(), 1u);
+        EXPECT_EQ(Effect->Returns.front().MayAliasFrame, Mode == 3);
+        EXPECT_FALSE(Effect->Returns.front().BorrowedOffset);
+        EXPECT_GT(Work, 0u);
+        ASSERT_LT(Work, limits::kMaxRegistrationEHStateWork);
+        size_t Exact = limits::kMaxRegistrationEHStateWork - Work;
+        EXPECT_TRUE(proveBoundCxxCallee(Image, Call, Parent, 4, Exact));
+        EXPECT_EQ(Exact, limits::kMaxRegistrationEHStateWork);
+        size_t Limited = limits::kMaxRegistrationEHStateWork - Work + 1;
+        EXPECT_FALSE(proveBoundCxxCallee(Image, Call, Parent, 4, Limited));
+      }
+    }
 }
 
 TEST(RegistrationTryLevel, CxxEAXHelperRequiresItsExactLowIRInvocation) {

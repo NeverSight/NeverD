@@ -101,14 +101,11 @@ bool RegistrationStateSolver::transferCxxPrologue(size_t I, Domain &State,
       State.Frame.load(0, 4).Constant != Call.AllocationBytes ||
       !State.Frame.load(4, 4).ReturnPC)
     return false;
-  // No incoming GPR has a guessed scalar value. The exact entry prefix changes
-  // only EAX and ESP; preserve the remaining opaque identities, including EBP.
-  for (unsigned Index : {1, 2, 3, 5, 6, 7}) {
-    auto Incoming = FrameValue::taint(true);
-    Incoming.SavedRegister = uint8_t(Index + 1);
-    if (Registers[Index] != Incoming)
+  // The exact entry prefix changes only EAX and ESP. The seed owns any bound
+  // volatile inputs and the remaining opaque identities, including EBP.
+  for (unsigned Index : {1, 2, 3, 5, 6, 7})
+    if (Registers[Index] != ParentEntryRegisters[Index])
       return false;
-  }
   if (!charge(Call.Writes.size() * 12 + State.Frame.cellCount() +
               State.Frame.OtherRegisterBytes.size() +
               State.RuntimeObject.cellCount() +

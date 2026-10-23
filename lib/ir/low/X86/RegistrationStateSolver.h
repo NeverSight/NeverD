@@ -459,6 +459,10 @@ private:
   const bool CheckCleanups;
   RegistrationStateAnalysis Result;
 
+  /// One entry seed owns both invocation refinements and opaque identities.
+  /// Shared prologues must preserve this seed through their decoded prefix.
+  decltype(FrameState::Registers) ParentEntryRegisters;
+
   std::map<int, size_t> Index;
   std::map<va_t, size_t> Entries;
   std::vector<bool> InvalidBlocks;

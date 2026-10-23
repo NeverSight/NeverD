@@ -8785,6 +8785,11 @@ C++ helper under checked caller-frame inputs. It shares ordinary C++ handler,
 cookie and state setup, authenticates the direct call and complete current body,
 and requires a uniform stack-pop extent. Full volatile register facts and
 initialized scalar output words remain distinct from incoming pointer carriers.
+The state solver retains one register seed for the parent entry. A shared C++
+prologue checks the unchanged carriers against that seed, including any bound
+ECX/EDX facts, instead of reconstructing unrelated opaque values. Its physical
+prefix still owns EAX and ESP; nonvolatile inputs cannot be refined by a caller
+query, and any intervening carrier change refuses the shared-helper transfer.
 The conditional memory owner bounds every access and composes checked child
 borrows; ordinary and exceptional writes are may-effects, not initialization
 claims. Physical EAX facts join by return occurrence, retaining an exact borrowed

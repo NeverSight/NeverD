@@ -315,6 +315,7 @@ void RegistrationStateSolver::seedEntries() {
   // incoming SP minus four bytes. Do not assume later reads still name it.
   Initial.Frame.Registers[x86reg::RSP / x86reg::GeneralRegStride] =
       Chain.RealignedFrame ? FrameValue::entryFrame(4) : FrameValue::frame(4);
+  ParentEntryRegisters = Initial.Frame.Registers;
   Initial.Parent = Initial.Uninstalled = Initial.CanDispatch = true;
   merge(Entries.at(Function.Entry), Initial);
   for (va_t RootVA : Function.OrdinaryModuleAnalysisRoots) {

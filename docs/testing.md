@@ -6531,7 +6531,13 @@ truncated or ambiguous mappings, fixups, architecture/format and invalid call
 addresses. A valid helper cannot rescue an altered frame or publication.
 `RegistrationTryLevel.CxxEAXHelper*` separately checks shared C++ prologue
 descriptions, including every instruction byte, parent identity, storage and
-fixups. `CxxEAXHelperRefutesOnlyReachedInteriorGuesses` checks short/wide
+fixups. `CxxEAXHelperPreservesBoundRegisterInputs` checks short/wide prefixes
+and all three helper layouts with constant, image, unknown scalar and opaque
+ECX/EDX inputs. Decoded-prefix clobbers and nonvolatile refinements reject.
+`CxxEAXHelperBindsAnActualCaller` repeats these inputs through a physical CALL,
+complete callee and RET cleanup, including exact and one-unit-short budgets.
+These conditional source proofs grant no native ABI or object ownership.
+`CxxEAXHelperRefutesOnlyReachedInteriorGuesses` checks short/wide
 prologues reached from an image entry, a separate calling entry and a previously
 authenticated physical frame. Stated boundaries, noninterior guesses,
 unreachable or immediate-embedded CALL bytes, ordinary branches, source fixups
