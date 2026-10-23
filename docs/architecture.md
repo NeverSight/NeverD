@@ -2562,9 +2562,12 @@ funclet depth. Mixed try/catch graphs retain their smaller search bound.
 Generated state-map validation uses the shared record limit and still binds
 every native state and outer edge to the source projection.
 The emitter fixes original image storage identity before materializing any
-function or shard, including masked native C++ sources. Preserved callee
-footprints and ordinary helper bodies therefore share the same canonical image
-storage. The independent C++ control validator replays source analysis, binds
+function or shard, including masked native SEH and C++ sources. SEH cookies,
+writable globals, preserved callee footprints and ordinary helper bodies
+therefore share the same canonical image storage. SEH admission retains its
+complete source lifetime, chain, callback and caller ABI requirements; C++
+admission retains its complete call and cleanup effects. The independent C++
+control validator replays source analysis, binds
 source ranges to stable LowIR identities and checks every source operation,
 catch, cleanup, invoke, chain occurrence and continuation. A no-return call
 carries its terminal block boundary because its normal successor cannot execute

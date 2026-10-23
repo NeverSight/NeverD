@@ -6383,6 +6383,11 @@ block and operation identities, call ABI and source targets, semantic pads,
 catch subfields, unwind/resumption edges, chain reads and localescape. Terminal
 no-return boundaries remain indexed after unreachable-code pruning. These
 control and compiler-table checks still do not establish source PE installation.
+`WindowsRegistrationNative.PreservesSEHImageIdentityBeforeMaskedBodies` checks
+both SEH/helper orders and a helper-only shard, including refusal to grant
+original storage identity from an incomplete caller ABI. The source PE32 unit
+runs ordinary call ABI recovery before emission so retained GS checks must bind
+their physical ECX argument.
 The full C++ IR validator additionally replays actual affine frame addresses,
 scalar destructor borrows, definite byte initialization on normal and exceptional
 edges, typed runtime reference accesses, and original image storage. Its frame

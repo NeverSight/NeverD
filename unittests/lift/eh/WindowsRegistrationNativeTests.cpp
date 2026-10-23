@@ -33,6 +33,7 @@
 #include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/ir/low/RegistrationABI.h"
 #include "neverd/ir/med/LowToMed.h"
+#include "neverd/ir/med/MedABIPass.h"
 #include "neverd/ir/med/MedTypePass.h"
 #include "neverd/loader/COFF/COFFLoader.h"
 #include "neverd/loader/COFF/COFFRegistrationEH.h"
@@ -1828,6 +1829,7 @@ TEST(WindowsRegistrationNative, InputPE32PreservesItsCheckedSourceContract) {
   LowToMedConverter Converter;
   Converter.setBinaryImage(&Image);
   auto Med = Converter.convert(Low, Arch::X86, BinaryFormat::COFF);
+  recoverCallAbi(Med, Arch::X86, {}, &Image);
   llvm::LLVMContext Context;
   MedLLVMEmitter Emitter;
   auto Module = Emitter.emit({Med}, Context, "input-registration", Arch::X86,
@@ -3067,6 +3069,79 @@ struct RegistrationNativeFixture {
     return MedLLVMEmitterTestPeer::lower(Emitter, Source, *Parent, Blocks);
   }
 };
+
+TEST(WindowsRegistrationNative, PreservesSEHImageIdentityBeforeMaskedBodies) {
+  RegistrationNativeFixture Fixture;
+  auto Source = Fixture.Source;
+  Source.Name = "masked_seh_parent";
+  BinaryImage Image;
+  Image.Arch = Arch::X86;
+  Image.Bits = Bitness::Bits32;
+  Image.Format = BinaryFormat::COFF;
+  Segment Data;
+  Data.VA = 0x4000;
+  Data.Size = Data.FileSz = 16;
+  Data.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+  Data.Data.resize(Data.Size, 0x42);
+  Section Section;
+  Section.VA = Data.VA;
+  Section.Size = Section.FileSz = Data.Size;
+  Section.Flags = Data.Flags;
+  Image.Sections.push_back(Section);
+  Image.Segments.push_back(Data);
+
+  MedFunc Helper;
+  Helper.Entry = 0x5000;
+  Helper.Name = "image_reader";
+  MedBlock Block;
+  Block.Id = 0;
+  Block.StartAddr = Helper.Entry;
+  Block.EndAddr = Helper.Entry + 8;
+  MedOp Load;
+  Load.Opcode = NdOp::LOAD;
+  Load.Output.Kind = MedVar::Temp;
+  Load.Output.Id = Load.Output.SSAVer = 1;
+  Load.Output.Size = 4;
+  Load.Addr = Helper.Entry;
+  Load.OriginSeq = 0;
+  Load.addInput(
+      MedVar::makeConst(Data.VA, 4, ConstantAddressProvenance::DataAddress));
+  Block.Ops.push_back(Load);
+  MedOp Return;
+  Return.Opcode = NdOp::RETURN;
+  Return.Addr = Helper.Entry + 7;
+  Return.addInput(Load.Output);
+  Block.Ops.push_back(Return);
+  Helper.Blocks.push_back(Block);
+
+  for (bool Reversed : {false, true})
+    for (bool CompleteABI : {false, true}) {
+      SCOPED_TRACE(::testing::Message() << Reversed << CompleteABI);
+      Source.RegistrationCallerCleanupABIComplete = CompleteABI;
+      const std::vector<MedFunc> Functions =
+          Reversed ? std::vector<MedFunc>{Source, Helper}
+                   : std::vector<MedFunc>{Helper, Source};
+      const std::vector<char> Mask =
+          Reversed ? std::vector<char>{0, 1} : std::vector<char>{1, 0};
+      llvm::LLVMContext Context;
+      auto Module = MedLLVMEmitter().emit(Functions, Context, "seh-image-shard",
+                                          Arch::X86, {}, &Image,
+                                          BinaryFormat::COFF, true, &Mask);
+      ASSERT_TRUE(Module);
+      ASSERT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
+      ASSERT_TRUE(Module->getFunction(Source.Name));
+      EXPECT_TRUE(Module->getFunction(Source.Name)->isDeclaration());
+      const llvm::GlobalVariable *Storage = nullptr;
+      for (const auto &Global : Module->globals())
+        if (parseNdDataSymbol(Global.getName()) == Data.VA) {
+          ASSERT_EQ(Storage, nullptr);
+          Storage = &Global;
+        }
+      ASSERT_NE(Storage, nullptr);
+      EXPECT_EQ(Storage->isDeclaration(), CompleteABI);
+      EXPECT_EQ(Storage->hasExternalLinkage(), CompleteABI);
+    }
+}
 
 TEST(WindowsRegistrationNative, ResolvesOnlyTheAuthenticatedEH4RuntimeSymbols) {
   BinaryImage Image;

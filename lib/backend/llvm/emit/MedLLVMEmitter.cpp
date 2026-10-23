@@ -831,26 +831,32 @@ MedLLVMEmitter::emit(const std::vector<MedFunc> &Funcs, llvm::LLVMContext &LCtx,
                                           JT.StorageRanges.end());
     }
   // Decide shared image identity before any function can cache a private run.
-  // Native C++ calls preserve immutable input helpers, whose image footprints
-  // are supplied by the same state/ABI owner as their exact call occurrences.
+  // Native registration frames and their preserved input helpers must share
+  // the original image storage, including SEH cookies and writable globals.
   // Inspect masked bodies too, so every shard agrees on storage identity.
   PreservedRegistrationImageStorageRanges.clear();
   if (TheArch == Arch::X86 && Fmt == BinaryFormat::COFF && Img) {
     for (size_t I = 0; I != Funcs.size(); ++I) {
       const auto &Func = Funcs[I];
       if (!Func.ExceptionMetadata || !Func.RegistrationStates ||
-          Func.SkippedSSA || !Func.RegistrationCxxEntryPopBytes)
+          Func.SkippedSSA)
         continue;
       const auto Classification =
           classifyWindowsEHNativeSource(*Func.ExceptionMetadata, TheArch, Fmt,
                                         WindowsEHNativeCapability::IRLowering);
       const auto &States = *Func.RegistrationStates;
-      if (!Classification.canLowerNativeIR() ||
-          Classification.Model !=
-              WindowsEHNativeSourceModel::X86RegistrationCxx ||
-          !States.Complete || !States.RegistrationLifetimeComplete ||
-          !States.CallFrameEffectsComplete ||
-          !States.CleanupFrameEffectsComplete)
+      const bool Cxx = Classification.Model ==
+                       WindowsEHNativeSourceModel::X86RegistrationCxx;
+      if (!Classification.canLowerNativeIR() || !States.Complete ||
+          !States.RegistrationLifetimeComplete ||
+          (Cxx ? !Func.RegistrationCxxEntryPopBytes ||
+                     !States.CallFrameEffectsComplete ||
+                     !States.CleanupFrameEffectsComplete
+               : Classification.Model !=
+                         WindowsEHNativeSourceModel::X86RegistrationSEH ||
+                     !Func.RegistrationCallerCleanupABIComplete ||
+                     Func.CalleePopBytes || !States.CallbackStatesComplete ||
+                     !States.ChainOperationsComplete))
         continue;
       auto Preserve = [&](const RegistrationCalleeFrameContract &Contract) {
         for (const auto *Ranges : {&Contract.ImageReads, &Contract.ImageWrites,
@@ -882,11 +888,13 @@ MedLLVMEmitter::emit(const std::vector<MedFunc> &Funcs, llvm::LLVMContext &LCtx,
           PreservedRegistrationImageStorageRanges.push_back(
               {Segment.VA, Segment.VA + Segment.Size});
         }
-      for (const auto &Contract : States.CalleeContracts)
-        Complete &= Preserve(Contract);
-      for (const auto &Contract : States.CleanupContracts)
-        for (const auto &Call : Contract.Calls)
-          Complete &= Preserve(Call.Leaf);
+      if (Cxx) {
+        for (const auto &Contract : States.CalleeContracts)
+          Complete &= Preserve(Contract);
+        for (const auto &Contract : States.CleanupContracts)
+          for (const auto &Call : Contract.Calls)
+            Complete &= Preserve(Call.Leaf);
+      }
       if (!Complete) {
         llvm::WithColor::error() << "med_llvm_emitter: malformed preserved "
                                     "registration image footprint\n";
