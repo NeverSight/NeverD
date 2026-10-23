@@ -6764,6 +6764,12 @@ intrinsic effects, unindexed callbacks, unreachable writes and sticky work
 exhaustion. A forged call/declaration `memory(none)` cannot replace an image
 effect proof. Its COFF cases distinguish missing, disjoint, overlapping and
 malformed callee write summaries while retaining the checked `localescape`.
+Catch-return cases require the exact independent control binding and retain the
+throw's complete runtime effects: missing summaries and overlapping destruction
+writes still reject, while disjoint effects preserve the original image. The
+generic image owner continues to reject an unprojected `catchret`. Authored
+realigned and displaced fixed PE32 inputs also exercise this path through the
+ordinary source reconstruction and independent COFF validator.
 The paired cookie observation case deliberately keeps the XOR candidate equal
 after a global overwrite, but rejects the required image stability proof.
 The cleanup-only O0/O1 integration exercises the new complete C++ image closure

@@ -28,6 +28,7 @@ llvm::Error validateCOFFRegistrationCxxIR(const llvm::Function &Function,
   coff_registration::RegistrationCxxFrameContract Contract;
   Contract.Image = &Image;
   Contract.SavedStackRestores = Proof->SavedStackRestores;
+  Contract.CatchReturns = Proof->CatchReturns;
   std::map<X86RegistrationCatchIdentity, size_t> CatchIndices;
   for (const auto &[Identity, Catch] : Proof->Catches) {
     CatchIndices.emplace(Identity, Contract.Catches.size());

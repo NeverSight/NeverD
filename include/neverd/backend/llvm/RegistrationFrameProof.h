@@ -27,6 +27,7 @@ class AllocaInst;
 class BasicBlock;
 class CallBase;
 class CatchPadInst;
+class CatchReturnInst;
 class Function;
 class Instruction;
 class StoreInst;
@@ -89,6 +90,10 @@ struct RegistrationCxxFrameContract {
   /// preserved current call. Private-frame preservation is not this proof.
   std::map<const llvm::CallBase *, std::vector<ExceptionAddressRange>>
       ImageWrites;
+  /// Exact returns authenticated by the independent control replay. Exception
+  /// destruction/copy image effects remain part of the complete call summaries
+  /// above; a bound continuation alone does not prove image preservation.
+  std::set<const llvm::CatchReturnInst *> CatchReturns;
   std::map<const llvm::Instruction *, RegistrationRuntimeAccess>
       RuntimeAccesses;
   /// Exact source-bound checker occurrences remain conditional until the

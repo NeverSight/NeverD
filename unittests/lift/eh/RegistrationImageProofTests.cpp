@@ -73,6 +73,44 @@ struct ImageFixture {
   }
 };
 
+struct CatchImageFixture : ImageFixture {
+  llvm::InvokeInst *Throw;
+  llvm::CatchPadInst *Pad;
+  llvm::CatchReturnInst *Return;
+
+  CatchImageFixture() {
+    Function->setPersonalityFn(llvm::cast<llvm::Constant>(
+        Module
+            .getOrInsertFunction("__CxxFrameHandler3",
+                                 llvm::FunctionType::get(B.getInt32Ty(), true))
+            .getCallee()));
+    B.CreateCall(llvm::Intrinsic::getOrInsertDeclaration(
+                     &Module, llvm::Intrinsic::localescape),
+                 {Frame});
+    auto Block = [&](const char *Name) {
+      return llvm::BasicBlock::Create(Context, Name, Function);
+    };
+    auto *Normal = Block("normal"), *Dispatch = Block("dispatch"),
+         *Catch = Block("catch"), *Resume = Block("resume");
+    Throw = B.CreateInvoke(
+        Module.getOrInsertFunction(
+            "throwing", llvm::FunctionType::get(B.getVoidTy(), false)),
+        Normal, Dispatch);
+    B.SetInsertPoint(Normal);
+    B.CreateRetVoid();
+    B.SetInsertPoint(Dispatch);
+    auto *Switch =
+        B.CreateCatchSwitch(llvm::ConstantTokenNone::get(Context), nullptr, 1);
+    Switch->addHandler(Catch);
+    B.SetInsertPoint(Catch);
+    auto *Null = llvm::ConstantPointerNull::get(B.getPtrTy());
+    Pad = B.CreateCatchPad(Switch, {Null, B.getInt32(64), Null});
+    Return = B.CreateCatchRet(Pad, Resume);
+    B.SetInsertPoint(Resume);
+    B.CreateRetVoid();
+  }
+};
+
 TEST(RegistrationImageProof, ResolvesOriginalAliasesAndPartialOverlaps) {
   for (const char *Name :
        {"__nd_data_403010", "__nd_codeptr_403010", "__security_cookie"})
@@ -331,6 +369,46 @@ TEST(RegistrationImageProof, COFFChecksEveryCallAgainstImmutableImage) {
     const bool Failed = bool(Error);
     const auto Message = llvm::toString(std::move(Error));
     EXPECT_EQ(Failed, Mutation == 1 || Mutation >= 3) << Message;
+    if (Failed)
+      EXPECT_NE(Message.find("current writes do not preserve"),
+                std::string::npos)
+          << Message;
+  }
+}
+
+TEST(RegistrationImageProof, CatchReturnNeedsAnIndependentProjection) {
+  CatchImageFixture F;
+  EXPECT_FALSE(
+      F.preserves([&](const auto &I, const auto &) { return &I != F.Return; }));
+  EXPECT_TRUE(F.preserves([](const auto &, const auto &) { return true; }));
+}
+
+TEST(RegistrationImageProof, COFFBindsCatchReturnWithoutErasingRuntimeWrites) {
+  for (unsigned Mutation = 0; Mutation != 5; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    CatchImageFixture F;
+    ASSERT_FALSE(llvm::verifyModule(F.Module, &llvm::errs()));
+    BinaryImage Image;
+    coff_registration::RegistrationCxxFrameContract Contract;
+    Contract.Image = &Image;
+    auto &Catch = Contract.Catches.emplace_back();
+    Catch.Catch = F.Pad;
+    Catch.CallbackBlocks.insert(F.Pad->getParent());
+    if (Mutation != 1)
+      Contract.CatchReturns.insert(F.Return);
+    if (Mutation != 2)
+      Contract.ImageWrites[F.Throw] = {};
+    // The source throw summary includes destruction after catch return.
+    if (Mutation == 3)
+      Contract.ImageWrites[F.Throw] = {{CookieVA - 1, CookieVA + 1}};
+    if (Mutation == 4)
+      Contract.ImageWrites[F.Throw] = {{CookieVA - 4, CookieVA}};
+    auto Error = coff_registration::validateFramePrivacy(
+        *F.Function, {}, F.Frame, {}, {}, {}, {}, CookieVA, {CookieRange},
+        &Contract);
+    const bool Failed = bool(Error);
+    const auto Message = llvm::toString(std::move(Error));
+    EXPECT_EQ(Failed, Mutation >= 1 && Mutation <= 3) << Message;
     if (Failed)
       EXPECT_NE(Message.find("current writes do not preserve"),
                 std::string::npos)

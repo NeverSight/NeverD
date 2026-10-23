@@ -830,6 +830,12 @@ llvm::Error validateFramePrivacy(
         return IncomingAccesses.count(&I) || Cxx->RuntimeAccesses.count(&I);
       if (llvm::isa<llvm::CatchPadInst>(I))
         return RuntimeObjects.count(&I) != 0;
+      // A source-bound catch return completes the checked runtime invocation.
+      // Its exception copy/destruction effects are included in the throw call
+      // summaries, which the whole-image query still checks independently.
+      if (const auto *Return = llvm::dyn_cast<llvm::CatchReturnInst>(&I))
+        return Cxx->CatchReturns.count(Return) &&
+               RuntimeObjects.count(Return->getCatchPad());
       const auto *Call = llvm::dyn_cast<llvm::CallBase>(&I);
       if (!Call || Call->isInlineAsm() || llvm::isa<llvm::CallBrInst>(Call) ||
           llvm::isa<llvm::IntrinsicInst>(Call))

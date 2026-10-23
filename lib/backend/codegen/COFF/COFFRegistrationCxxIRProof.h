@@ -14,8 +14,14 @@
 #include "neverd/ir/med/MedIR.h"
 #include "neverd/loader/COFF/COFFRegistrationEH.h"
 
+#include <map>
 #include <optional>
+#include <set>
 #include <vector>
+
+namespace llvm {
+class CatchReturnInst;
+} // namespace llvm
 
 namespace neverd {
 struct BinaryImage;
@@ -56,6 +62,7 @@ struct CxxIRControlProof {
   std::map<const llvm::BasicBlock *, const llvm::BasicBlock *> CopyEdges;
   std::map<uint32_t, const llvm::CleanupPadInst *> Cleanups;
   std::map<const llvm::CallBase *, CxxIRCall> Calls;
+  std::set<const llvm::CatchReturnInst *> CatchReturns;
   std::set<const llvm::Instruction *> ChainReads;
   std::set<const llvm::StoreInst *> SavedStackRestores;
   std::set<const llvm::Instruction *> IncomingAccesses;

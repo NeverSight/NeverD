@@ -482,7 +482,6 @@ getCheckedCxxControlIRProof(const llvm::Function &Function,
       return rejectIR(
           "C++ preserved callee changed its original entry identity");
   }
-  std::set<const llvm::CatchReturnInst *> Returns;
   for (const auto &[Anchor, P] : Anchors[Role::HandlerTarget]) {
     const RegistrationCxxContinuation *Resume = nullptr;
     for (const auto &Candidate : States.CxxContinuations)
@@ -514,13 +513,13 @@ getCheckedCxxControlIRProof(const llvm::Function &Function,
             Result.Segments.at(BlockAt.at(Resume->TargetVA))
                 .Enter->getParent() ||
         !BundleIs(*Anchor, Result.Catches.at(Identity).Pad) ||
-        !Returns.insert(Return).second)
+        !Result.CatchReturns.insert(Return).second)
       return rejectIR("C++ catch changed its checked runtime continuation");
     Result.SavedStackRestores.insert(
         llvm::cast<llvm::StoreInst>(Return->getPrevNode()));
     ExpectedAnchors.insert(Anchor);
   }
-  if (Returns.size() != States.CxxContinuations.size())
+  if (Result.CatchReturns.size() != States.CxxContinuations.size())
     return rejectIR("C++ catch omitted a checked runtime continuation");
   std::set<std::pair<va_t, int>> Chain;
   for (const auto &[Anchor, P] : Anchors[Role::RegistrationChainAccess]) {
@@ -595,7 +594,7 @@ getCheckedCxxControlIRProof(const llvm::Function &Function,
       CompilerBlocks.insert(Normal);
     } else if (const auto *Return =
                    llvm::dyn_cast<llvm::CatchReturnInst>(Term)) {
-      if (!Returns.count(Return))
+      if (!Result.CatchReturns.count(Return))
         return rejectIR("C++ IR gained an unbound catch return");
     } else {
       if (!SourceBlocks.count(Id))

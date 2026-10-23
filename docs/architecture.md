@@ -1948,6 +1948,12 @@ every ordinary call needs independent image effects, even with `memory(none)`.
 COFF supplies the complete callee image writes from its source/control replay
 and projects runtime stack/exception stores only after closing their use domain.
 Its checked `localescape` records compiler offsets without writing image bytes.
+The independent C++ control replay also retains the exact `catchret` occurrences
+and their registered catch owners. Only those bound returns receive an image
+projection; unbound catch returns remain unknown effects. Exception copy and
+destruction writes, including destruction after a catch returns, remain in the
+source throw summaries checked across the complete current function. Binding a
+return never replaces those summaries or permits an overlapping runtime write.
 The C++ immutable runtime closure and cookie recipe identity share this range
 resolver; the SEH explicit image-store closure uses it too. A private-frame
 preservation hook cannot stand in for image effects. A conditional cookie-check
