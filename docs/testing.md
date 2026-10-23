@@ -305,6 +305,11 @@ returns, variadic calls and special ABI attributes. The scalar/aggregate
 nonfinite constant test also checks exact quiet/signaling NaN, infinity and
 signed-zero bits. Native Windows/ARM64 execution and unobserved wrapper
 return-type recovery are separate coverage.
+The generated C matrix executes on the host. It does not establish native
+AArch64 C compilation of wide aggregate-result bridges: the paired Clang
+currently rejects `_BitInt` wider than 128 bits on AArch64. Three/four-double
+HighC result carriers still have that native-C limitation; native LLVM HFA
+carriers and ordinary SVE ACLE projections do not use that C scalar type.
 `ReturnContract.ExplicitX87PrecisionRequiresAnExactIEEEValue` keeps arithmetic,
 raw byte changes and unknown loads at eighty bits while exact IEEE extensions
 and identity copies retain their declared precision. SDK checks use the

@@ -48401,11 +48401,9 @@ TEST(HighCPointerAddresses, LibraryComparatorsPassAsTheirHeadersTypeThem) {
 }
 
 TEST(HighCPointerAddresses, MixedLibmSignaturesTakeTheirPointers) {
-  // find passes modf the address of a frame slot, which the machine holds
-  // as an integer.  The type library declares modf, whose double and
-  // pointer parameters are no positional signature: the typed arguments
-  // leave the pointer to the call model, which converts it to the header's
-  // double * as it does for a routine the header alone declares.
+  // A mixed call uses the checked source order. Its frame address is still
+  // an integer carrier, converted to the header's pointer type at the call.
+  // Without the placement descriptor, operand types cannot prove that order.
   const auto Double = NdType::makeFloat(8);
   const auto Pointer = NdType::makePtr(Double);
   class MathDbg : public NullDebugContext {
@@ -48435,21 +48433,29 @@ TEST(HighCPointerAddresses, MixedLibmSignaturesTakeTheirPointers) {
   Func.Entry = 0x140001000;
   Func.ReturnType = Double;
   Func.Params = {{"value", Double}, {"whole", Word}};
-  // The call collects its integer argument, in RDI, before its double.
   auto Split = HighExpr::makeCall("modf", 0x140002000,
-                                  {parameter(1, Word), parameter(0, Double)});
+                                  {parameter(0, Double), parameter(1, Word)});
   Split->Type = Double;
-  returnValue(Func, std::move(Split));
+  returnValue(Func, Split);
   std::string Source;
   llvm::raw_string_ostream OS(Source);
   CEmitterOptions Options;
   Options.TheArch = Arch::X64;
   Options.Format = BinaryFormat::ELF;
+  EXPECT_THROW(HighCEmitter().emit({Func}, OS, Options, &Dbg),
+               std::runtime_error);
+  Source.clear();
+  const std::vector<TypeRef> Parameters{Double, Pointer};
+  const auto Signature = floatingCallArguments(Options.TheArch, Options.Format,
+                                               Double, Parameters);
+  ASSERT_TRUE(Signature);
+  Split->FloatingCallSignature =
+      std::make_shared<const FloatingCallArguments>(*Signature);
   ASSERT_TRUE(HighCEmitter().emit({Func}, OS, Options, &Dbg));
   OS.flush();
   EXPECT_NE(Source.find("#include <math.h>"), std::string::npos) << Source;
-  EXPECT_NE(Source.find("(void *)(uintptr_t)whole"), std::string::npos)
-      << Source;
+  EXPECT_NE(Source.find("modf(value,"), std::string::npos) << Source;
+  EXPECT_NE(Source.find("uintptr_t)whole"), std::string::npos) << Source;
   expectCSyntax(Source);
 }
 
