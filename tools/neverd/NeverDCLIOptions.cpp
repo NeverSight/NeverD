@@ -219,6 +219,8 @@ cl::SubCommand
                      "Run bounded x64 WDM driver initialization and emit JSON");
 cl::SubCommand CPUCapabilitiesCmd(execution_cli::CapabilitiesCommand,
                                   execution_cli::CapabilitiesHelp);
+cl::SubCommand X87CapabilitiesCmd("x87-capabilities",
+                                  "Report scoped x87 semantic capabilities");
 cl::SubCommand EmulateProcessCmd(process_cli::Command, process_cli::Help);
 cl::SubCommand
     ModulesCmd("modules",

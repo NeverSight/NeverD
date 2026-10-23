@@ -106,6 +106,8 @@ static int realMain(int Argc, char *Argv[]) {
     return runEmulateDriver();
   if (CPUCapabilitiesCmd)
     return runCPUCapabilities();
+  if (X87CapabilitiesCmd)
+    return runX87Capabilities();
   if (ModulesCmd)
     return runModules();
   if (ExecutionCmd)

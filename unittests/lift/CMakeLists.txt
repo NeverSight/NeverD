@@ -1,12 +1,16 @@
+add_neverd_unittest(NeverDX87CapabilityTests
+  core/X87CapabilitiesTests.cpp
+  LINK_COMPONENTS IRLowValidation)
+
 add_neverd_unittest(NeverDX87ArithmeticTests
   core/X87ArithmeticTests.cpp
   LINK_COMPONENTS IRLowValidation)
-if(TARGET unicorn)
-  target_link_libraries(NeverDX87ArithmeticTests PRIVATE unicorn)
-  target_compile_definitions(NeverDX87ArithmeticTests PRIVATE
-    NEVERD_X87_UNICORN_REFERENCE=1)
-endif()
-
+add_neverd_unittest(NeverDX87PortableContextTests
+  core/X87PortableContextTests.cpp
+  LINK_COMPONENTS IRLowValidation)
+add_neverd_unittest(NeverDX87PortableEmulatorTests
+  core/X87PortableEmulatorTests.cpp
+  LINK_COMPONENTS IRLow Lift)
 add_executable(NeverDX87ArithmeticReplay core/X87ArithmeticReplay.cpp)
 target_link_libraries(NeverDX87ArithmeticReplay PRIVATE NeverDIRLowValidation)
 if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64)$" AND
@@ -14,6 +18,28 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64)$" AND
   add_executable(NeverDX87OriginalReplay core/X87ArithmeticReplay.cpp)
   target_compile_definitions(NeverDX87OriginalReplay PRIVATE
     NEVERD_X87_ORIGINAL_REFERENCE=1)
+endif()
+if(TARGET unicorn)
+  target_link_libraries(NeverDX87ArithmeticTests PRIVATE unicorn)
+  target_compile_definitions(NeverDX87ArithmeticTests PRIVATE
+    NEVERD_X87_UNICORN_REFERENCE=1)
+  target_link_libraries(NeverDX87PortableContextTests PRIVATE unicorn)
+  target_compile_definitions(NeverDX87PortableContextTests PRIVATE
+    NEVERD_X87_UNICORN_REFERENCE=1)
+endif()
+
+if(TARGET neverd_shared AND TARGET neverd)
+  add_neverd_unittest(NeverDX87CapabilitiesPublicTests
+    core/X87CapabilitiesPublicTests.cpp
+    LINK_LIBS neverd_shared)
+  target_include_directories(NeverDX87CapabilitiesPublicTests PRIVATE
+    ${CMAKE_SOURCE_DIR}/include ${LLVM_INCLUDE_DIRS})
+  target_compile_definitions(NeverDX87CapabilitiesPublicTests PRIVATE
+    NEVERD_X87_CLI="$<TARGET_FILE:neverd>")
+  if(NOT APPLE)
+    target_link_libraries(NeverDX87CapabilitiesPublicTests PRIVATE LLVMSupport)
+  endif()
+  add_dependencies(NeverDX87CapabilitiesPublicTests neverd)
 endif()
 
 add_neverd_unittest(NeverDCOFFExceptionV2Tests
@@ -2187,6 +2213,14 @@ target_include_directories(NeverDPipelineLLVMShardingTests PRIVATE
 )
 
 find_package(Python3 3.10 REQUIRED COMPONENTS Interpreter)
+if(TARGET NeverDX87CapabilitiesPublicTests)
+  add_test(NAME X87Capabilities.GeneratedDocumentationMatchesPublicReport
+    COMMAND "${Python3_EXECUTABLE}"
+      "${CMAKE_SOURCE_DIR}/scripts/generate_x87_capabilities.py"
+      --neverd "$<TARGET_FILE:neverd>" --check)
+  set_tests_properties(X87Capabilities.GeneratedDocumentationMatchesPublicReport
+    PROPERTIES LABELS NeverDX87CapabilitiesPublicTests TIMEOUT 120)
+endif()
 set(NEVERD_SYNTHETIC_WINDOWS_EH_ROOT
   "${CMAKE_CURRENT_BINARY_DIR}/windows-eh-synthetic")
 set(NEVERD_SYNTHETIC_WINDOWS_EH_MANIFEST

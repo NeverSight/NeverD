@@ -99,6 +99,16 @@ public:
   /// completed operation records ApproximatedOps. This survives reset().
   void setX87NativeReferenceMode(bool Enable) {
     X87NativeReferenceMode = Enable;
+    if (Enable)
+      X87PortableMode = false;
+  }
+  /// Select the explicit Intel 64 portable masked-state slice. Unsupported
+  /// instructions fail; no host-native fallback is attempted. Survives reset.
+  /// This does not select a translation backend or authenticate incoming state.
+  void setX87PortableMode(bool Enable) {
+    X87PortableMode = Enable;
+    if (Enable)
+      X87NativeReferenceMode = false;
   }
   void setMXCSR(uint32_t Value) {
     MXCSR = Value;
@@ -243,6 +253,7 @@ private:
   bool StrictMode = false;
   bool X86Approx12ReferenceMode = false;
   bool X87NativeReferenceMode = false;
+  bool X87PortableMode = false;
   std::optional<NdVar> ReachedIndirectBranchTarget;
   std::optional<InstructionMode> ReachedSourceMode;
   std::optional<LowInstructionTargetMode> ReachedTargetMode;

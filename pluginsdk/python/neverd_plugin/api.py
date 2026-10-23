@@ -906,6 +906,17 @@ class Session:
     def _json(self, name: str, operation: str, *arguments: object) -> object:
         return _decode_json(operation, self._owned_string(name, *arguments))
 
+    def x87_capabilities(self) -> object:
+        """Return the static x87 inventory without probing or loading a binary.
+
+        Numerical support, complete state and native-reference observations
+        remain separate. Test source references are not passing evidence.
+        """
+        value = self._owned_string("neverd_x87_capabilities_json")
+        if value is None:
+            raise NeverDError(self.last_error)
+        return _decode_json("x87 capabilities", value)
+
     def cpu_capabilities(
         self, configuration: str | None = None, *, probe_host: bool = False
     ) -> object:

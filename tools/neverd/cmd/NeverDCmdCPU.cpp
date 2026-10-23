@@ -29,4 +29,21 @@ int runCPUCapabilities() {
   neverd_free_string(Report);
   return 0;
 }
+
+int runX87Capabilities() {
+  auto Session = neverd_session_create();
+  if (!Session) {
+    llvm::WithColor::error() << "could not create a capability-query session\n";
+    return 1;
+  }
+  SessionGuard Guard(Session);
+  const char *Report = neverd_x87_capabilities_json(Session);
+  if (!Report) {
+    llvm::WithColor::error() << takeLastError(Session) << '\n';
+    return 1;
+  }
+  llvm::outs() << Report << '\n';
+  neverd_free_string(Report);
+  return 0;
+}
 } // namespace neverd::cli

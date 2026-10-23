@@ -22789,6 +22789,98 @@
           "neverd_unpack_json"
         ]
       }
+    },
+    {
+      "id": "x87.scoped-semantic-inventory",
+      "kind": "analysis",
+      "status": "experimental",
+      "owner": "ir",
+      "targets": [
+        "i386",
+        "x86_64",
+        "aarch64"
+      ],
+      "docs": [
+        "docs/x87-semantics.md",
+        "docs/x87-capabilities.md",
+        "docs/testing.md"
+      ],
+      "limitations": [
+        "The shared static matrix separates encoding/lifting, numerical results, architectural state, native references and formal/translation support. It does not execute input code or probe the host. Test-source references are not passing evidence.",
+        "Owned context is x64-only. Typed paths retain their existing refusals and incomplete architectural-state projection. The complete portable context, arbitrary exception/fault delivery, checked x87 refinement and cross-architecture translation remain unqualified.",
+        "The explicit intel64-architectural-masked-v1 concrete slice uses raw owned state and integer/rational binary80 arithmetic, direct PC/RC rounding and extended exponents on ARM64. Its inventory-listed control/raw-move/register-arithmetic forms refuse unimplemented instructions, stack faults, unmasked arithmetic controls and nonfinite/noncanonical arithmetic operands. Complete architectural state remains unqualified. LLVM, Unicorn, native x86 and Rosetta observations have separately recorded limitations."
+      ],
+      "tests": [
+        {
+          "runner": "gtest",
+          "target": "NeverDX87CapabilityTests",
+          "source": "unittests/lift/core/X87CapabilitiesTests.cpp",
+          "filter": "X87Capabilities.InventoryCoversEveryAdmittedEncodingExactlyOnce",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDX87CapabilitiesPublicTests",
+          "source": "unittests/lift/core/X87CapabilitiesPublicTests.cpp",
+          "filter": "X87CapabilitiesPublic.CLIAndCUseIdenticalInventory",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDX87ArithmeticTests",
+          "source": "unittests/lift/core/X87ArithmeticTests.cpp",
+          "filter": "X87Arithmetic.DirectRoundingDistinguishesBothSidesOfBinary80Midpoints",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDX87PortableContextTests",
+          "source": "unittests/lift/core/X87PortableContextTests.cpp",
+          "filter": "X87PortableContext.RefusalsLeaveAllStateOutputAndMemoryUntouched",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDX87PortableEmulatorTests",
+          "source": "unittests/lift/core/X87PortableEmulatorTests.cpp",
+          "filter": "X87PortableEmulator.LiftedInstructionsRetainBeyondBinary64Precision",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        }
+      ],
+      "public_surfaces": {
+        "c": [
+          "neverd_x87_capabilities_json"
+        ],
+        "python": [
+          "Session.x87_capabilities"
+        ],
+        "cli": [
+          "neverd x87-capabilities"
+        ],
+        "json": [
+          "neverd_x87_capabilities_json"
+        ]
+      }
     }
   ]
 }

@@ -740,6 +740,22 @@ class SessionTests(unittest.TestCase):
         with self.assertRaisesRegex(NeverDError, "not a PE image"):
             session.unpack("packed.exe", "out.exe")
 
+    def test_x87_inventory_uses_shared_native_report(self) -> None:
+        from neverd_plugin import NeverDError, Session
+
+        host = mock.Mock()
+        report = {"schema_version": 1, "coverage": [{"numerical": "unsupported"}]}
+        host.owned_string.return_value = json.dumps(report)
+        session = Session(object(), _native=_FakeNativeBridge(), _host=host)
+        self.assertEqual(session.x87_capabilities(), report)
+        self.assertEqual(
+            host.owned_string.call_args.args[0], "neverd_x87_capabilities_json"
+        )
+        self.assertEqual(host.owned_string.call_args.args[2:], ())
+        host.owned_string.side_effect = [None, "x87 capability query failed"]
+        with self.assertRaisesRegex(NeverDError, "x87 capability query failed"):
+            session.x87_capabilities()
+
     def test_cpu_query_preserves_native_validation_and_unloaded_session(self) -> None:
         from neverd_plugin import NeverDError, Session
 

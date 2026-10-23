@@ -8,9 +8,12 @@
 //===----------------------------------------------------------------------===//
 
 #include "neverd/Limits.h"
+#include "neverd/ir/X87Capabilities.h"
 #include "neverd/ir/X87Context.h"
+#include "neverd/ir/X87Control.h"
 #include "neverd/ir/low/NdOpEmulator.h"
 #include "neverd/ir/low/X87NativeContext.h"
+#include "neverd/ir/low/X87PortableContext.h"
 #include "neverd/lift/X86Regs.h"
 
 #include <algorithm>
@@ -22,26 +25,13 @@ constexpr uint64_t ContextHandle = UINT64_C(0xffffffffffff8700);
 uint16_t word(const std::array<uint8_t, 512> &S, unsigned Offset) {
   return S[Offset] | (unsigned(S[Offset + 1]) << 8);
 }
-bool validControl(uint16_t CW) {
-  // PC=01 and reserved control bits have no portable architectural meaning.
-  return (CW & 0xe080) == 0 && (CW & 0x300) != 0x100;
-}
-bool implementationDependent(uint32_t Selector) {
-  if (Selector & X87ContextMemory)
-    return false;
-  const unsigned Escape = Selector & 0xff, ModRM = (Selector >> 8) & 0xff;
-  return Escape == 0xd9 &&
-         (ModRM == 0xf0 || ModRM == 0xf1 || ModRM == 0xf2 || ModRM == 0xf3 ||
-          ModRM == 0xf5 || ModRM == 0xf8 || ModRM == 0xf9 || ModRM == 0xfb ||
-          ModRM == 0xfe || ModRM == 0xff);
-}
 } // namespace
 
 bool NdOpEmulator::setX87Context(llvm::ArrayRef<uint8_t> Image) {
   if (Img.Arch != Arch::X64 || Image.size() != X87ContextState.size())
     return false;
   const uint16_t CW = Image[0] | (unsigned(Image[1]) << 8);
-  if (!validControl(CW))
+  if (!x87ControlWordIsValid(CW))
     return false;
   std::copy_n(Image.begin(), 24, X87ContextState.begin());
   std::copy_n(Image.begin() + 32, 128, X87ContextState.begin() + 32);
@@ -92,6 +82,10 @@ bool NdOpEmulator::executeX87Context(const LowOp &Op) {
   if (!Handle || *Handle != ContextHandle)
     return false;
   if (Id != Intrinsic::X87ContextStep) {
+    if (X87PortableMode && (Id == Intrinsic::X87ContextMMXRead ||
+                            Id == Intrinsic::X87ContextMMXWrite ||
+                            Id == Intrinsic::X87ContextMMXEnter))
+      return false;
     if (!X87ContextKnown)
       return false;
     const uint16_t SW = word(X87ContextState, 2);
@@ -149,7 +143,8 @@ bool NdOpEmulator::executeX87Context(const LowOp &Op) {
   // changed on this refusal, including in the lenient switch-tracing mode.
   if (Spec->Waiting && ((SW & 0x80) || (SW & ~CW & 0x3f)))
     return false;
-  if ((State[4] & ~X87PayloadKnown) && !Initialize && Selector != 0x770f)
+  if (!X87PortableMode && (State[4] & ~X87PayloadKnown) && !Initialize &&
+      Selector != 0x770f)
     return false;
   // FNSAVE stores every register's retained bits, empty ones included.
   if ((Selector & X87ContextMemory) && Escape == 0xdd && (ModRM >> 3) == 6 &&
@@ -158,9 +153,14 @@ bool NdOpEmulator::executeX87Context(const LowOp &Op) {
   if (!(Selector & X87ContextMemory) && Escape == 0xd9 && ModRM == 0xe5 &&
       !(X87PayloadKnown & (1u << ((SW >> 11) & 7))))
     return false;
-  const bool Approximate = implementationDependent(Selector);
+  const bool Approximate = x87InstructionIsProcessorDependent(Selector);
   if (Approximate && (StrictMode || !X87NativeReferenceMode))
     return false;
+  if (X87PortableMode) {
+    const auto *Form = x87InstructionForm(Selector);
+    if (!Form || Form->PortableOperation == X87PortableOperation::None)
+      return false;
+  }
   const auto Flags =
       Spec->ReadsFlags ? Known(Op.Inputs[4]) : std::optional<uint64_t>(0);
   if (!Flags)
@@ -197,7 +197,7 @@ bool NdOpEmulator::executeX87Context(const LowOp &Op) {
     if ((Escape == 0xd9 && (ModRM == 0x20 || ModRM == 0x28)) ||
         (Escape == 0xdd && ModRM == 0x20)) {
       const uint16_t Incoming = Memory[0] | (unsigned(Memory[1]) << 8);
-      if (!validControl(Incoming))
+      if (!x87ControlWordIsValid(Incoming))
         return false;
     }
   }
@@ -207,15 +207,23 @@ bool NdOpEmulator::executeX87Context(const LowOp &Op) {
   std::memcpy(&PreviousIP, State.data() + 8, 8);
   std::memcpy(&PreviousDP, State.data() + 16, 8);
   uint64_t Result = 0;
-  if (!executeNativeX87Context(Selector, State,
-                               Memory.empty() ? nullptr : Memory.data(), *Flags,
-                               Result))
+  auto PayloadKnown = X87PayloadKnown;
+  if (X87PortableMode) {
+    if (executePortableX87Context(Selector, State, PayloadKnown, Memory,
+                                  Op.Inputs[5].Offset, Address.value_or(0),
+                                  Result) != X87PortableOutcome::Completed)
+      return false;
+  } else if (!executeNativeX87Context(Selector, State,
+                                      Memory.empty() ? nullptr : Memory.data(),
+                                      *Flags, Result)) {
     return false;
+  }
   uint64_t CurrentIP = 0;
   std::memcpy(&CurrentIP, State.data() + 8, 8);
-  if (x87ContextUpdatesInstructionPointer(Selector) && CurrentIP != PreviousIP)
+  if (!X87PortableMode && x87ContextUpdatesInstructionPointer(Selector) &&
+      CurrentIP != PreviousIP)
     std::memcpy(State.data() + 8, &Op.Inputs[5].Offset, 8);
-  if (x87ContextUpdatesInstructionPointer(Selector) &&
+  if (!X87PortableMode && x87ContextUpdatesInstructionPointer(Selector) &&
       (word(State, 6) != PreviousOpcode || (word(State, 2) & 0x80))) {
     const uint16_t FOP =
         ((Escape & 7) << 8) |
@@ -224,7 +232,8 @@ bool NdOpEmulator::executeX87Context(const LowOp &Op) {
              : ModRM);
     std::memcpy(State.data() + 6, &FOP, 2);
   }
-  if (Address && x87ContextUpdatesInstructionPointer(Selector)) {
+  if (!X87PortableMode && Address &&
+      x87ContextUpdatesInstructionPointer(Selector)) {
     uint64_t CurrentDP = 0;
     std::memcpy(&CurrentDP, State.data() + 16, 8);
     if (CurrentDP != PreviousDP)
@@ -234,7 +243,9 @@ bool NdOpEmulator::executeX87Context(const LowOp &Op) {
     return false;
   if (CollectLoads && Spec->ReadsMemory)
     LoadLog.push_back({*Address, static_cast<uint16_t>(Spec->MemoryBytes)});
-  if ((Selector & X87ContextMemory) && Escape == 0xdd && ModRM == 0x20)
+  if (X87PortableMode)
+    X87PayloadKnown = PayloadKnown;
+  else if ((Selector & X87ContextMemory) && Escape == 0xdd && ModRM == 0x20)
     X87PayloadKnown = 0xff;
   else if (!Initialize &&
            !((Selector & X87ContextMemory) && Escape == 0xd9 && ModRM == 0x20))

@@ -1,0 +1,26 @@
+//===- X87StateBoundaries.def - External x87 state interfaces --*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// NEVERD_X87_EXTERNAL_STATE(Intrinsic) lists instructions requiring context
+/// export/refresh. Synchronization is not instruction-completion admission.
+//===----------------------------------------------------------------------===//
+
+NEVERD_X87_EXTERNAL_STATE(Fxsave)
+NEVERD_X87_EXTERNAL_STATE(Fxrstor)
+NEVERD_X87_EXTERNAL_STATE(Fxsave64Mem)
+NEVERD_X87_EXTERNAL_STATE(Fxrstor64Mem)
+NEVERD_X87_EXTERNAL_STATE(Xsave)
+NEVERD_X87_EXTERNAL_STATE(Xsavec)
+NEVERD_X87_EXTERNAL_STATE(Xsaves)
+NEVERD_X87_EXTERNAL_STATE(Xsaveopt)
+NEVERD_X87_EXTERNAL_STATE(Xrstor)
+NEVERD_X87_EXTERNAL_STATE(Xrstors)
+NEVERD_X87_EXTERNAL_STATE(Xsave64)
+NEVERD_X87_EXTERNAL_STATE(Xsavec64)
+NEVERD_X87_EXTERNAL_STATE(Xsaves64)
+NEVERD_X87_EXTERNAL_STATE(Xsaveopt64)
+NEVERD_X87_EXTERNAL_STATE(Xrstor64)
+NEVERD_X87_EXTERNAL_STATE(Xrstors64)

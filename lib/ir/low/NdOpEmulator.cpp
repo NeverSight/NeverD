@@ -609,6 +609,10 @@ bool NdOpEmulator::step(const LowOp &Op) {
   case NdOp::INTRINSIC:
     if (Op.NumInputs >= 1 && Op.Inputs[0].isConst()) {
       const auto Id = static_cast<Intrinsic>(Op.Inputs[0].Offset);
+      // The explicit portable x87 profile cannot silently skip an unmodeled
+      // state boundary, even when the surrounding scalar tracer is lenient.
+      if (X87PortableMode && x87ContextSynchronizesExternalState(Id))
+        return false;
       if (isX86FPStateIntrinsic(Id))
         return executeX86ScalarFPState(Op);
       if (Id == Intrinsic::CetRdSsp || Id == Intrinsic::CetIncSsp ||

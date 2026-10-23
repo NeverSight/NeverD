@@ -1,0 +1,286 @@
+//===- X87Instructions.def - x87 capability inventory ----------*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Semantic coverage metadata for the encodings admitted by X87Context.h.
+/// NEVERD_X87_FORM(Id, Escape, FirstModRM, LastModRM, Memory, Mnemonic,
+///                 Operands, TypedLift, ValueClass, PortableOperation)
+/// Memory ModRM values are opcode groups; address bits remain with the lifter.
+/// Operand16 selects the short environment form. Register ranges enumerate all
+/// eight ST(i) operands. This table records implementation, not test execution.
+/// ExactValue describes the value projection only, subject to CFG/tag/control
+/// preconditions; it does not assert complete architectural-state fidelity.
+//===----------------------------------------------------------------------===//
+
+NEVERD_X87_FORM(FADD_m32fp, 0xd8, 0x00, 0x00, true, "FADD", "m32fp", true,
+                ValueProjection, None)
+NEVERD_X87_FORM(FMUL_m32fp, 0xd8, 0x08, 0x08, true, "FMUL", "m32fp", true,
+                ValueProjection, None)
+NEVERD_X87_FORM(FCOM_m32fp, 0xd8, 0x10, 0x10, true, "FCOM", "m32fp", true,
+                ValueProjection, None)
+NEVERD_X87_FORM(FCOMP_m32fp, 0xd8, 0x18, 0x18, true, "FCOMP", "m32fp", true,
+                ValueProjection, None)
+NEVERD_X87_FORM(FSUB_m32fp, 0xd8, 0x20, 0x20, true, "FSUB", "m32fp", true,
+                ValueProjection, None)
+NEVERD_X87_FORM(FSUBR_m32fp, 0xd8, 0x28, 0x28, true, "FSUBR", "m32fp", true,
+                ValueProjection, None)
+NEVERD_X87_FORM(FDIV_m32fp, 0xd8, 0x30, 0x30, true, "FDIV", "m32fp", true,
+                ValueProjection, None)
+NEVERD_X87_FORM(FDIVR_m32fp, 0xd8, 0x38, 0x38, true, "FDIVR", "m32fp", true,
+                ValueProjection, None)
+NEVERD_X87_FORM(FIADD_m32int, 0xda, 0x00, 0x00, true, "FIADD", "m32int", true,
+                ValueProjection, None)
+NEVERD_X87_FORM(FIMUL_m32int, 0xda, 0x08, 0x08, true, "FIMUL", "m32int", true,
+                ValueProjection, None)
+NEVERD_X87_FORM(FICOM_m32int, 0xda, 0x10, 0x10, true, "FICOM", "m32int", true,
+                ValueProjection, None)
+NEVERD_X87_FORM(FICOMP_m32int, 0xda, 0x18, 0x18, true, "FICOMP", "m32int", true,
+                ValueProjection, None)
+NEVERD_X87_FORM(FISUB_m32int, 0xda, 0x20, 0x20, true, "FISUB", "m32int", true,
+                ValueProjection, None)
+NEVERD_X87_FORM(FISUBR_m32int, 0xda, 0x28, 0x28, true, "FISUBR", "m32int", true,
+                ValueProjection, None)
+NEVERD_X87_FORM(FIDIV_m32int, 0xda, 0x30, 0x30, true, "FIDIV", "m32int", true,
+                ValueProjection, None)
+NEVERD_X87_FORM(FIDIVR_m32int, 0xda, 0x38, 0x38, true, "FIDIVR", "m32int", true,
+                ValueProjection, None)
+NEVERD_X87_FORM(FADD_m64fp, 0xdc, 0x00, 0x00, true, "FADD", "m64fp", true,
+                ValueProjection, None)
+NEVERD_X87_FORM(FMUL_m64fp, 0xdc, 0x08, 0x08, true, "FMUL", "m64fp", true,
+                ValueProjection, None)
+NEVERD_X87_FORM(FCOM_m64fp, 0xdc, 0x10, 0x10, true, "FCOM", "m64fp", true,
+                ValueProjection, None)
+NEVERD_X87_FORM(FCOMP_m64fp, 0xdc, 0x18, 0x18, true, "FCOMP", "m64fp", true,
+                ValueProjection, None)
+NEVERD_X87_FORM(FSUB_m64fp, 0xdc, 0x20, 0x20, true, "FSUB", "m64fp", true,
+                ValueProjection, None)
+NEVERD_X87_FORM(FSUBR_m64fp, 0xdc, 0x28, 0x28, true, "FSUBR", "m64fp", true,
+                ValueProjection, None)
+NEVERD_X87_FORM(FDIV_m64fp, 0xdc, 0x30, 0x30, true, "FDIV", "m64fp", true,
+                ValueProjection, None)
+NEVERD_X87_FORM(FDIVR_m64fp, 0xdc, 0x38, 0x38, true, "FDIVR", "m64fp", true,
+                ValueProjection, None)
+NEVERD_X87_FORM(FIADD_m16int, 0xde, 0x00, 0x00, true, "FIADD", "m16int", true,
+                ValueProjection, None)
+NEVERD_X87_FORM(FIMUL_m16int, 0xde, 0x08, 0x08, true, "FIMUL", "m16int", true,
+                ValueProjection, None)
+NEVERD_X87_FORM(FICOM_m16int, 0xde, 0x10, 0x10, true, "FICOM", "m16int", true,
+                ValueProjection, None)
+NEVERD_X87_FORM(FICOMP_m16int, 0xde, 0x18, 0x18, true, "FICOMP", "m16int", true,
+                ValueProjection, None)
+NEVERD_X87_FORM(FISUB_m16int, 0xde, 0x20, 0x20, true, "FISUB", "m16int", true,
+                ValueProjection, None)
+NEVERD_X87_FORM(FISUBR_m16int, 0xde, 0x28, 0x28, true, "FISUBR", "m16int", true,
+                ValueProjection, None)
+NEVERD_X87_FORM(FIDIV_m16int, 0xde, 0x30, 0x30, true, "FIDIV", "m16int", true,
+                ValueProjection, None)
+NEVERD_X87_FORM(FIDIVR_m16int, 0xde, 0x38, 0x38, true, "FIDIVR", "m16int", true,
+                ValueProjection, None)
+NEVERD_X87_FORM(FLD_m32fp, 0xd9, 0x00, 0x00, true, "FLD", "m32fp", true,
+                ValueProjection, None)
+NEVERD_X87_FORM(FST_m32fp, 0xd9, 0x10, 0x10, true, "FST", "m32fp", true,
+                ValueProjection, None)
+NEVERD_X87_FORM(FSTP_m32fp, 0xd9, 0x18, 0x18, true, "FSTP", "m32fp", true,
+                ValueProjection, None)
+NEVERD_X87_FORM(FLDENV_m14_28byte, 0xd9, 0x20, 0x20, true, "FLDENV",
+                "m14/28byte", true, StateOnly, None)
+NEVERD_X87_FORM(FLDCW_m16cw, 0xd9, 0x28, 0x28, true, "FLDCW", "m16cw", true,
+                StateOnly, LoadControl)
+NEVERD_X87_FORM(FNSTENV_m14_28byte, 0xd9, 0x30, 0x30, true, "FNSTENV",
+                "m14/28byte", true, StateOnly, None)
+NEVERD_X87_FORM(FNSTCW_m16cw, 0xd9, 0x38, 0x38, true, "FNSTCW", "m16cw", true,
+                StateOnly, StoreControl)
+NEVERD_X87_FORM(FILD_m32int, 0xdb, 0x00, 0x00, true, "FILD", "m32int", true,
+                ExactValue, LoadInteger)
+NEVERD_X87_FORM(FISTTP_m32int, 0xdb, 0x08, 0x08, true, "FISTTP", "m32int", true,
+                ValueProjection, None)
+NEVERD_X87_FORM(FIST_m32int, 0xdb, 0x10, 0x10, true, "FIST", "m32int", true,
+                ValueProjection, None)
+NEVERD_X87_FORM(FISTP_m32int, 0xdb, 0x18, 0x18, true, "FISTP", "m32int", true,
+                ValueProjection, None)
+NEVERD_X87_FORM(FLD_m80fp, 0xdb, 0x28, 0x28, true, "FLD", "m80fp", true,
+                ValueProjection, LoadRaw)
+NEVERD_X87_FORM(FSTP_m80fp, 0xdb, 0x38, 0x38, true, "FSTP", "m80fp", true,
+                ValueProjection, StoreRawPop)
+NEVERD_X87_FORM(FLD_m64fp, 0xdd, 0x00, 0x00, true, "FLD", "m64fp", true,
+                ValueProjection, None)
+NEVERD_X87_FORM(FISTTP_m64int, 0xdd, 0x08, 0x08, true, "FISTTP", "m64int", true,
+                ValueProjection, None)
+NEVERD_X87_FORM(FST_m64fp, 0xdd, 0x10, 0x10, true, "FST", "m64fp", true,
+                ValueProjection, None)
+NEVERD_X87_FORM(FSTP_m64fp, 0xdd, 0x18, 0x18, true, "FSTP", "m64fp", true,
+                ValueProjection, None)
+NEVERD_X87_FORM(FRSTOR_m94_108byte, 0xdd, 0x20, 0x20, true, "FRSTOR",
+                "m94/108byte", true, StateOnly, None)
+NEVERD_X87_FORM(FNSAVE_m94_108byte, 0xdd, 0x30, 0x30, true, "FNSAVE",
+                "m94/108byte", true, StateOnly, None)
+NEVERD_X87_FORM(FNSTSW_m16sw, 0xdd, 0x38, 0x38, true, "FNSTSW", "m16sw", true,
+                StateOnly, StoreStatus)
+NEVERD_X87_FORM(FILD_m16int, 0xdf, 0x00, 0x00, true, "FILD", "m16int", true,
+                ExactValue, LoadInteger)
+NEVERD_X87_FORM(FISTTP_m16int, 0xdf, 0x08, 0x08, true, "FISTTP", "m16int", true,
+                ValueProjection, None)
+NEVERD_X87_FORM(FIST_m16int, 0xdf, 0x10, 0x10, true, "FIST", "m16int", true,
+                ValueProjection, None)
+NEVERD_X87_FORM(FISTP_m16int, 0xdf, 0x18, 0x18, true, "FISTP", "m16int", true,
+                ValueProjection, None)
+NEVERD_X87_FORM(FBLD_m80bcd, 0xdf, 0x20, 0x20, true, "FBLD", "m80bcd", false,
+                ValueProjection, None)
+NEVERD_X87_FORM(FILD_m64int, 0xdf, 0x28, 0x28, true, "FILD", "m64int", true,
+                ExactValue, LoadInteger)
+NEVERD_X87_FORM(FBSTP_m80bcd, 0xdf, 0x30, 0x30, true, "FBSTP", "m80bcd", false,
+                ValueProjection, None)
+NEVERD_X87_FORM(FISTP_m64int, 0xdf, 0x38, 0x38, true, "FISTP", "m64int", true,
+                ValueProjection, None)
+NEVERD_X87_FORM(FADD_reg_d8, 0xd8, 0xc0, 0xc7, false, "FADD", "ST(0),ST(i)",
+                true, ValueProjection, Add)
+NEVERD_X87_FORM(FMUL_reg_d8, 0xd8, 0xc8, 0xcf, false, "FMUL", "ST(0),ST(i)",
+                true, ValueProjection, Multiply)
+NEVERD_X87_FORM(FCOM_reg_d8, 0xd8, 0xd0, 0xd7, false, "FCOM", "ST(0),ST(i)",
+                true, ValueProjection, None)
+NEVERD_X87_FORM(FCOMP_reg_d8, 0xd8, 0xd8, 0xdf, false, "FCOMP", "ST(0),ST(i)",
+                true, ValueProjection, None)
+NEVERD_X87_FORM(FSUB_reg_d8, 0xd8, 0xe0, 0xe7, false, "FSUB", "ST(0),ST(i)",
+                true, ValueProjection, Subtract)
+NEVERD_X87_FORM(FSUBR_reg_d8, 0xd8, 0xe8, 0xef, false, "FSUBR", "ST(0),ST(i)",
+                true, ValueProjection, ReverseSubtract)
+NEVERD_X87_FORM(FDIV_reg_d8, 0xd8, 0xf0, 0xf7, false, "FDIV", "ST(0),ST(i)",
+                true, ValueProjection, Divide)
+NEVERD_X87_FORM(FDIVR_reg_d8, 0xd8, 0xf8, 0xff, false, "FDIVR", "ST(0),ST(i)",
+                true, ValueProjection, ReverseDivide)
+NEVERD_X87_FORM(FADD_reg_dc, 0xdc, 0xc0, 0xc7, false, "FADD", "ST(i),ST(0)",
+                true, ValueProjection, Add)
+NEVERD_X87_FORM(FMUL_reg_dc, 0xdc, 0xc8, 0xcf, false, "FMUL", "ST(i),ST(0)",
+                true, ValueProjection, Multiply)
+NEVERD_X87_FORM(FSUBR_reg_dc, 0xdc, 0xe0, 0xe7, false, "FSUBR", "ST(i),ST(0)",
+                true, ValueProjection, ReverseSubtract)
+NEVERD_X87_FORM(FSUB_reg_dc, 0xdc, 0xe8, 0xef, false, "FSUB", "ST(i),ST(0)",
+                true, ValueProjection, Subtract)
+NEVERD_X87_FORM(FDIVR_reg_dc, 0xdc, 0xf0, 0xf7, false, "FDIVR", "ST(i),ST(0)",
+                true, ValueProjection, ReverseDivide)
+NEVERD_X87_FORM(FDIV_reg_dc, 0xdc, 0xf8, 0xff, false, "FDIV", "ST(i),ST(0)",
+                true, ValueProjection, Divide)
+NEVERD_X87_FORM(FADDP_reg_de, 0xde, 0xc0, 0xc7, false, "FADDP", "ST(i),ST(0)",
+                true, ValueProjection, Add)
+NEVERD_X87_FORM(FMULP_reg_de, 0xde, 0xc8, 0xcf, false, "FMULP", "ST(i),ST(0)",
+                true, ValueProjection, Multiply)
+NEVERD_X87_FORM(FSUBRP_reg_de, 0xde, 0xe0, 0xe7, false, "FSUBRP", "ST(i),ST(0)",
+                true, ValueProjection, ReverseSubtract)
+NEVERD_X87_FORM(FSUBP_reg_de, 0xde, 0xe8, 0xef, false, "FSUBP", "ST(i),ST(0)",
+                true, ValueProjection, Subtract)
+NEVERD_X87_FORM(FDIVRP_reg_de, 0xde, 0xf0, 0xf7, false, "FDIVRP", "ST(i),ST(0)",
+                true, ValueProjection, ReverseDivide)
+NEVERD_X87_FORM(FDIVP_reg_de, 0xde, 0xf8, 0xff, false, "FDIVP", "ST(i),ST(0)",
+                true, ValueProjection, Divide)
+NEVERD_X87_FORM(FLD_reg, 0xd9, 0xc0, 0xc7, false, "FLD", "ST(i)", true,
+                ValueProjection, LoadRegister)
+NEVERD_X87_FORM(FXCH_reg, 0xd9, 0xc8, 0xcf, false, "FXCH", "ST(i)", true,
+                ValueProjection, Exchange)
+NEVERD_X87_FORM(FNOP_reg, 0xd9, 0xd0, 0xd0, false, "FNOP", "implicit", true,
+                StateOnly, None)
+NEVERD_X87_FORM(FCHS_reg, 0xd9, 0xe0, 0xe0, false, "FCHS", "implicit", true,
+                ExactValue, Negate)
+NEVERD_X87_FORM(FABS_reg, 0xd9, 0xe1, 0xe1, false, "FABS", "implicit", true,
+                ExactValue, Absolute)
+NEVERD_X87_FORM(FTST_reg, 0xd9, 0xe4, 0xe4, false, "FTST", "implicit", true,
+                ValueProjection, None)
+NEVERD_X87_FORM(FXAM_reg, 0xd9, 0xe5, 0xe5, false, "FXAM", "implicit", true,
+                ValueProjection, None)
+NEVERD_X87_FORM(FLD1, 0xd9, 0xe8, 0xe8, false, "FLD1", "implicit", true,
+                ExactValue, None)
+NEVERD_X87_FORM(FLDL2T, 0xd9, 0xe9, 0xe9, false, "FLDL2T", "implicit", true,
+                ExactValue, None)
+NEVERD_X87_FORM(FLDL2E, 0xd9, 0xea, 0xea, false, "FLDL2E", "implicit", true,
+                ExactValue, None)
+NEVERD_X87_FORM(FLDPI, 0xd9, 0xeb, 0xeb, false, "FLDPI", "implicit", true,
+                ExactValue, None)
+NEVERD_X87_FORM(FLDLG2, 0xd9, 0xec, 0xec, false, "FLDLG2", "implicit", true,
+                ExactValue, None)
+NEVERD_X87_FORM(FLDLN2, 0xd9, 0xed, 0xed, false, "FLDLN2", "implicit", true,
+                ExactValue, None)
+NEVERD_X87_FORM(FLDZ, 0xd9, 0xee, 0xee, false, "FLDZ", "implicit", true,
+                ExactValue, None)
+NEVERD_X87_FORM(F2XM1, 0xd9, 0xf0, 0xf0, false, "F2XM1", "implicit", true,
+                ProcessorDependent, None)
+NEVERD_X87_FORM(FYL2X, 0xd9, 0xf1, 0xf1, false, "FYL2X", "implicit", true,
+                ProcessorDependent, None)
+NEVERD_X87_FORM(FPTAN, 0xd9, 0xf2, 0xf2, false, "FPTAN", "implicit", true,
+                ProcessorDependent, None)
+NEVERD_X87_FORM(FPATAN, 0xd9, 0xf3, 0xf3, false, "FPATAN", "implicit", true,
+                ProcessorDependent, None)
+NEVERD_X87_FORM(FXTRACT, 0xd9, 0xf4, 0xf4, false, "FXTRACT", "implicit", true,
+                ValueProjection, None)
+NEVERD_X87_FORM(FPREM1, 0xd9, 0xf5, 0xf5, false, "FPREM1", "implicit", true,
+                ProcessorDependent, None)
+NEVERD_X87_FORM(FDECSTP, 0xd9, 0xf6, 0xf6, false, "FDECSTP", "implicit", false,
+                StateOnly, None)
+NEVERD_X87_FORM(FINCSTP, 0xd9, 0xf7, 0xf7, false, "FINCSTP", "implicit", true,
+                StateOnly, None)
+NEVERD_X87_FORM(FPREM, 0xd9, 0xf8, 0xf8, false, "FPREM", "implicit", true,
+                ProcessorDependent, None)
+NEVERD_X87_FORM(FYL2XP1, 0xd9, 0xf9, 0xf9, false, "FYL2XP1", "implicit", true,
+                ProcessorDependent, None)
+NEVERD_X87_FORM(FSQRT, 0xd9, 0xfa, 0xfa, false, "FSQRT", "implicit", true,
+                ValueProjection, None)
+NEVERD_X87_FORM(FSINCOS, 0xd9, 0xfb, 0xfb, false, "FSINCOS", "implicit", true,
+                ProcessorDependent, None)
+NEVERD_X87_FORM(FRNDINT, 0xd9, 0xfc, 0xfc, false, "FRNDINT", "implicit", true,
+                ValueProjection, None)
+NEVERD_X87_FORM(FSCALE, 0xd9, 0xfd, 0xfd, false, "FSCALE", "implicit", true,
+                ValueProjection, None)
+NEVERD_X87_FORM(FSIN, 0xd9, 0xfe, 0xfe, false, "FSIN", "implicit", true,
+                ProcessorDependent, None)
+NEVERD_X87_FORM(FCOS, 0xd9, 0xff, 0xff, false, "FCOS", "implicit", true,
+                ProcessorDependent, None)
+NEVERD_X87_FORM(FCMOVB, 0xda, 0xc0, 0xc7, false, "FCMOVB", "ST(0),ST(i)", true,
+                ValueProjection, None)
+NEVERD_X87_FORM(FCMOVE, 0xda, 0xc8, 0xcf, false, "FCMOVE", "ST(0),ST(i)", true,
+                ValueProjection, None)
+NEVERD_X87_FORM(FCMOVBE, 0xda, 0xd0, 0xd7, false, "FCMOVBE", "ST(0),ST(i)",
+                true, ValueProjection, None)
+NEVERD_X87_FORM(FCMOVU, 0xda, 0xd8, 0xdf, false, "FCMOVU", "ST(0),ST(i)", true,
+                ValueProjection, None)
+NEVERD_X87_FORM(FCMOVNB, 0xdb, 0xc0, 0xc7, false, "FCMOVNB", "ST(0),ST(i)",
+                true, ValueProjection, None)
+NEVERD_X87_FORM(FCMOVNE, 0xdb, 0xc8, 0xcf, false, "FCMOVNE", "ST(0),ST(i)",
+                true, ValueProjection, None)
+NEVERD_X87_FORM(FCMOVNBE, 0xdb, 0xd0, 0xd7, false, "FCMOVNBE", "ST(0),ST(i)",
+                true, ValueProjection, None)
+NEVERD_X87_FORM(FCMOVNU, 0xdb, 0xd8, 0xdf, false, "FCMOVNU", "ST(0),ST(i)",
+                true, ValueProjection, None)
+NEVERD_X87_FORM(FUCOMPP_reg, 0xda, 0xe9, 0xe9, false, "FUCOMPP", "implicit",
+                true, ValueProjection, None)
+NEVERD_X87_FORM(FNCLEX_reg, 0xdb, 0xe2, 0xe2, false, "FNCLEX", "implicit", true,
+                StateOnly, ClearExceptions)
+NEVERD_X87_FORM(FNINIT_reg, 0xdb, 0xe3, 0xe3, false, "FNINIT", "implicit", true,
+                StateOnly, Initialize)
+NEVERD_X87_FORM(FCOMPP_reg, 0xde, 0xd9, 0xd9, false, "FCOMPP", "implicit", true,
+                ValueProjection, None)
+NEVERD_X87_FORM(FNSTSW_reg, 0xdf, 0xe0, 0xe0, false, "FNSTSW", "AX", true,
+                StateOnly, StoreStatus)
+NEVERD_X87_FORM(FUCOMI, 0xdb, 0xe8, 0xef, false, "FUCOMI", "ST(0),ST(i)", true,
+                ValueProjection, None)
+NEVERD_X87_FORM(FCOMI, 0xdb, 0xf0, 0xf7, false, "FCOMI", "ST(0),ST(i)", true,
+                ValueProjection, None)
+NEVERD_X87_FORM(FUCOMIP, 0xdf, 0xe8, 0xef, false, "FUCOMIP", "ST(0),ST(i)",
+                true, ValueProjection, None)
+NEVERD_X87_FORM(FCOMIP, 0xdf, 0xf0, 0xf7, false, "FCOMIP", "ST(0),ST(i)", true,
+                ValueProjection, None)
+NEVERD_X87_FORM(FFREE_reg_dd, 0xdd, 0xc0, 0xc7, false, "FFREE", "ST(i)", true,
+                StateOnly, None)
+NEVERD_X87_FORM(FST_reg_dd, 0xdd, 0xd0, 0xd7, false, "FST", "ST(i)", true,
+                ValueProjection, StoreRegister)
+NEVERD_X87_FORM(FSTP_reg_dd, 0xdd, 0xd8, 0xdf, false, "FSTP", "ST(i)", true,
+                ValueProjection, StoreRegisterPop)
+NEVERD_X87_FORM(FUCOM_reg_dd, 0xdd, 0xe0, 0xe7, false, "FUCOM", "ST(i)", true,
+                ValueProjection, None)
+NEVERD_X87_FORM(FUCOMP_reg_dd, 0xdd, 0xe8, 0xef, false, "FUCOMP", "ST(i)", true,
+                ValueProjection, None)
+NEVERD_X87_FORM(FFREEP, 0xdf, 0xc0, 0xc7, false, "FFREEP", "ST(i)", false,
+                StateOnly, None)
+NEVERD_X87_FORM(WAIT, 0x9b, 0x00, 0x00, false, "WAIT", "implicit", true,
+                StateOnly, Wait)
+NEVERD_X87_FORM(EMMS, 0x0f, 0x77, 0x77, false, "EMMS", "MMX aliases", true,
+                StateOnly, None)

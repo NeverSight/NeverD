@@ -4401,6 +4401,18 @@ The loader validates bounded, acyclic graphs of Darwin constant strings, integer
 
 ## Owned x64 x87 context
 
+The [x87 semantic contracts](x87-semantics.md) and [generated capability
+inventory](x87-capabilities.md) separate encoding/lifting, numerical results,
+complete state, native references, portable execution and formal qualification.
+`X87Instructions.def` owns coverage metadata and the strict evaluator’s
+processor-dependent classification; `X87StateBoundaries.def` owns external-state
+synchronization membership. C API, CLI and Python queries use the same report.
+`X87Binary80.h` owns raw classification. `X87Arithmetic` owns exact finite
+arithmetic and pure integer conversion; `X87PortableContext` applies the
+explicit masked-state slice to the existing context. It neither creates a
+parallel stack nor changes native/translation admission. Undefined CPU fields,
+unknown incoming state and unsupported effects stay explicit in that profile.
+
 For Win64 x64 images, whose C ABI never passes an x87 value, `ir/X87Context.h` owns encoding admission and `CFGBuilderX86Fpu` owns a function-local mutable context. It carries CW, SW, runtime TOP, abridged tags and all eight raw binary80 payloads. Entry and independent roots capture incoming state; ordinary edges publish before a root recaptures. Calls and extended-state save/restore export and refresh the context, including wrappers without local x87 instructions. Entry backedges keep their existing context. LLVM, HighC and LLVMC share this contract; HighC uses named helpers and fixed aligned storage. MMX bridges physical aliases; EMMS empties tags. Concrete execution requires authenticated state and memory, refuses unknown effects, and admits implementation-dependent results only in explicit native reference mode. The static TOP/tag proofs described above remain the projection for x86-32 and for System V x64, whose long double parameters and st0 results stay typed values; `x87ContextOwnsStack` chooses the model per image and `BinaryImage::X87ContextOverride` selects either one explicitly. These x64 regressions do not certify every CPU, instruction, fault priority or source-level floating return ABI.
 
 ## IR representations and routes

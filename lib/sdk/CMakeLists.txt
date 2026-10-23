@@ -6,6 +6,7 @@ set(NEVERD_SDK_SOURCES
     capi/NeverDCAPIBytecode.cpp
     capi/NeverDCAPI.cpp
     capi/NeverDCAPICPU.cpp
+    capi/NeverDCAPIX87.cpp
     capi/NeverDCAPIProcess.cpp
     capi/NeverDCAPIBench.cpp
     capi/NeverDCAPIBenchDecode.cpp
@@ -228,6 +229,7 @@ set(NEVERD_SDK_HEADERS
     ${CMAKE_SOURCE_DIR}/include/neverd/sdk/NeverDCAPIBytecode.h
     ${CMAKE_SOURCE_DIR}/include/neverd/sdk/NeverDCAPI.h
     ${CMAKE_SOURCE_DIR}/include/neverd/sdk/NeverDCAPICPU.h
+    ${CMAKE_SOURCE_DIR}/include/neverd/sdk/NeverDCAPIX87.h
     ${CMAKE_SOURCE_DIR}/include/neverd/sdk/NeverDCAPIProcess.h
     ${CMAKE_SOURCE_DIR}/include/neverd/sdk/NeverDCAPITypes.h
     ${CMAKE_SOURCE_DIR}/include/neverd/sdk/NeverDCAPISession.h

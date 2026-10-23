@@ -14,6 +14,8 @@ add_neverd_component_library(NeverDIRLowValidation
   Windows/SEHImageFormat.cpp
   X87PartialRemainder.cpp
   X87Arithmetic.cpp
+  X87PortableContext.cpp
+  X87Capabilities.cpp
 
   LINK_COMPONENTS
   Digest

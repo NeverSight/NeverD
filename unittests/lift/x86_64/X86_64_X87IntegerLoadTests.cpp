@@ -440,6 +440,12 @@ TEST(X87IntegerLoadContract, OwnedContextLoadsRequireOnlyTheExactSourceExtent) {
         Data.Size = Data.FileSz = Data.Data.size();
         Image.Segments.push_back(Data);
         NdOpEmulator E(Image);
+#if !(defined(__x86_64__) || defined(_M_X64)) ||                               \
+    !(defined(__clang__) || defined(__GNUC__))
+        // Keep this host-independent contract runnable through the explicit
+        // portable slice; native original-instruction tests remain separate.
+        E.setX87PortableMode(true);
+#endif
         E.setStrictMode(true);
         ASSERT_TRUE(E.setX86LinearAddressBits(48));
         E.setRegister(x86reg::RCX, Data.VA);

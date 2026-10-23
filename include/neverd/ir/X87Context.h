@@ -57,22 +57,9 @@ constexpr bool x87ContextReturnsValue(Intrinsic Id) {
 
 constexpr bool x87ContextSynchronizesExternalState(Intrinsic Id) {
   switch (Id) {
-  case Intrinsic::Fxsave:
-  case Intrinsic::Fxrstor:
-  case Intrinsic::Fxsave64Mem:
-  case Intrinsic::Fxrstor64Mem:
-  case Intrinsic::Xsave:
-  case Intrinsic::Xsavec:
-  case Intrinsic::Xsaves:
-  case Intrinsic::Xsaveopt:
-  case Intrinsic::Xrstor:
-  case Intrinsic::Xrstors:
-  case Intrinsic::Xsave64:
-  case Intrinsic::Xsavec64:
-  case Intrinsic::Xsaves64:
-  case Intrinsic::Xsaveopt64:
-  case Intrinsic::Xrstor64:
-  case Intrinsic::Xrstors64:
+#define NEVERD_X87_EXTERNAL_STATE(ID) case Intrinsic::ID:
+#include "neverd/ir/X87StateBoundaries.def"
+#undef NEVERD_X87_EXTERNAL_STATE
     return true;
   default:
     return false;

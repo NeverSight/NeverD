@@ -240,6 +240,7 @@ extern llvm::cl::opt<std::string> ExecutionConfiguration, ExecutionModules;
 extern llvm::cl::opt<std::string> ModulesAction, ModulesConfiguration,
     ModulesID, ModulesSymbol;
 extern llvm::cl::SubCommand CPUCapabilitiesCmd;
+extern llvm::cl::SubCommand X87CapabilitiesCmd;
 extern llvm::cl::SubCommand EmulateProcessCmd;
 extern llvm::cl::SubCommand UnpackCmd;
 extern llvm::cl::SubCommand AuditCmd;
@@ -780,6 +781,7 @@ int runEmulateDriver();
 int runModules();
 int runExecution();
 int runCPUCapabilities();
+int runX87Capabilities();
 int runEmulateProcess();
 int runUnpack();
 
