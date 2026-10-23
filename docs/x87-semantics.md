@@ -173,6 +173,12 @@ The initial slice admits FNINIT/FNCLEX, WAIT, FLDCW/FNSTCW/FNSTSW, FLD/FSTP m80,
 FLD/FST/FSTP ST(i), FXCH, FILD m16/m32/m64, FABS/FCHS, and the D8/DC/DE
 register ADD/SUB/MUL/DIV variants. FILD shares its exact conversion with typed
 LowIR; it preserves all 64 integer significand bits regardless of PC/RC.
+Finite FCOM/FUCOM register forms, their one/two-pop variants, FTST and the
+FCOMI/FUCOMI flag-producing variants share ordered comparison semantics.
+They preserve signed-zero equality, set DE for subnormal operands, commit
+condition/flag results and pop only after successful comparison. NaNs,
+infinities, unsupported encodings and stack faults refuse atomically; this
+does not conflate FCOM/FUCOM's unimplemented NaN exception differences.
 Arithmetic uses canonical finite operands with all exception masks set, all
 three valid PC settings and all four RC settings. Raw m80/register transport
 preserves all ten bytes, including NaN payloads and unsupported encodings.

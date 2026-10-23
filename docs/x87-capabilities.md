@@ -100,8 +100,8 @@ continues to reject reserved bits, invalid addressing forms and prefixes.
 | FISTP | m64int | DF | 38 | 8 | true | value-projection |
 | FADD | ST(0),ST(i) | D8 | C0–C7 | 0 | true | portable-value-projection |
 | FMUL | ST(0),ST(i) | D8 | C8–CF | 0 | true | portable-value-projection |
-| FCOM | ST(0),ST(i) | D8 | D0–D7 | 0 | true | value-projection |
-| FCOMP | ST(0),ST(i) | D8 | D8–DF | 0 | true | value-projection |
+| FCOM | ST(0),ST(i) | D8 | D0–D7 | 0 | true | portable-value-projection |
+| FCOMP | ST(0),ST(i) | D8 | D8–DF | 0 | true | portable-value-projection |
 | FSUB | ST(0),ST(i) | D8 | E0–E7 | 0 | true | portable-value-projection |
 | FSUBR | ST(0),ST(i) | D8 | E8–EF | 0 | true | portable-value-projection |
 | FDIV | ST(0),ST(i) | D8 | F0–F7 | 0 | true | portable-value-projection |
@@ -123,7 +123,7 @@ continues to reject reserved bits, invalid addressing forms and prefixes.
 | FNOP | implicit | D9 | D0 | 0 | true | state-only |
 | FCHS | implicit | D9 | E0 | 0 | true | portable-exact-value-projection |
 | FABS | implicit | D9 | E1 | 0 | true | portable-exact-value-projection |
-| FTST | implicit | D9 | E4 | 0 | true | value-projection |
+| FTST | implicit | D9 | E4 | 0 | true | portable-value-projection |
 | FXAM | implicit | D9 | E5 | 0 | true | value-projection |
 | FLD1 | implicit | D9 | E8 | 0 | true | exact-value-projection |
 | FLDL2T | implicit | D9 | E9 | 0 | true | exact-value-projection |
@@ -156,20 +156,20 @@ continues to reject reserved bits, invalid addressing forms and prefixes.
 | FCMOVNE | ST(0),ST(i) | DB | C8–CF | 0 | true | value-projection |
 | FCMOVNBE | ST(0),ST(i) | DB | D0–D7 | 0 | true | value-projection |
 | FCMOVNU | ST(0),ST(i) | DB | D8–DF | 0 | true | value-projection |
-| FUCOMPP | implicit | DA | E9 | 0 | true | value-projection |
+| FUCOMPP | implicit | DA | E9 | 0 | true | portable-value-projection |
 | FNCLEX | implicit | DB | E2 | 0 | true | portable-state-only |
 | FNINIT | implicit | DB | E3 | 0 | true | portable-state-only |
-| FCOMPP | implicit | DE | D9 | 0 | true | value-projection |
+| FCOMPP | implicit | DE | D9 | 0 | true | portable-value-projection |
 | FNSTSW | AX | DF | E0 | 0 | true | portable-state-only |
-| FUCOMI | ST(0),ST(i) | DB | E8–EF | 0 | true | value-projection |
-| FCOMI | ST(0),ST(i) | DB | F0–F7 | 0 | true | value-projection |
-| FUCOMIP | ST(0),ST(i) | DF | E8–EF | 0 | true | value-projection |
-| FCOMIP | ST(0),ST(i) | DF | F0–F7 | 0 | true | value-projection |
+| FUCOMI | ST(0),ST(i) | DB | E8–EF | 0 | true | portable-value-projection |
+| FCOMI | ST(0),ST(i) | DB | F0–F7 | 0 | true | portable-value-projection |
+| FUCOMIP | ST(0),ST(i) | DF | E8–EF | 0 | true | portable-value-projection |
+| FCOMIP | ST(0),ST(i) | DF | F0–F7 | 0 | true | portable-value-projection |
 | FFREE | ST(i) | DD | C0–C7 | 0 | true | state-only |
 | FST | ST(i) | DD | D0–D7 | 0 | true | portable-value-projection |
 | FSTP | ST(i) | DD | D8–DF | 0 | true | portable-value-projection |
-| FUCOM | ST(i) | DD | E0–E7 | 0 | true | value-projection |
-| FUCOMP | ST(i) | DD | E8–EF | 0 | true | value-projection |
+| FUCOM | ST(i) | DD | E0–E7 | 0 | true | portable-value-projection |
+| FUCOMP | ST(i) | DD | E8–EF | 0 | true | portable-value-projection |
 | FFREEP | ST(i) | DF | C0–C7 | 0 | false | owned-only-state |
 | WAIT | implicit | 9B | 00 | 0 | true | portable-state-only |
 | EMMS | MMX aliases | 0F | 77 | 0 | true | state-only |
@@ -428,7 +428,7 @@ test_sources are regression source references, not passing results, CPU qualific
 - explicit incoming state; validated encoding, memory and CFG/call contract.
 - x86 GCC/Clang GNU assembly and target x87; actual source/target ABI and long-double layout; typed C value operations require 64-bit significand long double; admitted CFG/tag/control and call preconditions.
 - x86-64 GCC/Clang; FXSAVE/FXRSTOR; SSE3 for FISTTP; known CW/SW, tags and demanded payloads; valid PC/RC; no pending unmasked exception at waiting boundaries; authenticated ordinary memory; processor-dependent operations require explicit non-strict native-reference mode.
-- explicit setX87PortableMode(true); x64 owned state; known CW/SW and read payloads; authenticated ordinary memory; no pending waiting exception or stack fault; arithmetic requires all masks and canonical finite operands; raw m80/register moves retain encodings; undefined C0/C2/C3/FOP/register FDP are not CPU identity.
+- explicit setX87PortableMode(true); x64 owned state; known CW/SW and read payloads; authenticated ordinary memory; no pending waiting exception or stack fault; arithmetic/comparisons require all masks and canonical finite operands; raw m80/register moves retain encodings; undefined C0/C2/C3/FOP/register FDP are not CPU identity.
 
 Test sources referenced by this inventory:
 

@@ -169,6 +169,44 @@ TEST(X87Arithmetic, ZeroDivideTakesPriorityOverDenormalOperand) {
         }
 }
 
+TEST(X87Arithmetic, FiniteComparisonMatchesIndependentLLVMOrdering) {
+  std::mt19937_64 Random(0x87c01677);
+  for (unsigned Trial = 0; Trial != 1024; ++Trial) {
+    auto A = bits(Random() | IntegerBit,
+                  uint16_t(1 + Random() % 0x7ffe) | (Random() & 0x8000));
+    auto B = bits(Random() | IntegerBit,
+                  uint16_t(1 + Random() % 0x7ffe) | (Random() & 0x8000));
+    if (Trial % 8 == 0)
+      A = bits(Random() & ~IntegerBit, Random() & 0x8000);
+    if (Trial % 8 == 1)
+      B = A;
+    if (Trial % 8 == 2) {
+      A = bits(0, 0);
+      B = bits(0, 0x8000);
+    }
+    const llvm::APFloat Left(llvm::APFloat::x87DoubleExtended(), integer(A));
+    const llvm::APFloat Right(llvm::APFloat::x87DoubleExtended(), integer(B));
+    const auto Reference = Left.compare(Right);
+    const auto Expected =
+        Reference == llvm::APFloat::cmpLessThan ? X87Comparison::Less
+        : Reference == llvm::APFloat::cmpEqual  ? X87Comparison::Equal
+                                                : X87Comparison::Greater;
+    auto Actual = evaluateFiniteX87Compare(A, B);
+    ASSERT_TRUE(Actual);
+    EXPECT_EQ(Actual->Relation, Expected) << Trial;
+  }
+  auto Denormal = evaluateFiniteX87Compare(bits(1, 0), bits(0, 0x8000));
+  ASSERT_TRUE(Denormal);
+  EXPECT_EQ(Denormal->Relation, X87Comparison::Greater);
+  EXPECT_EQ(Denormal->Exceptions, 2);
+  for (const auto &Unsupported :
+       {bits(IntegerBit, 0x7fff), bits(UINT64_C(0xc000000000000321), 0xffff),
+        bits(UINT64_C(0x8000000000003210), 0x7fff), bits(1, 0x4000)}) {
+    EXPECT_FALSE(evaluateFiniteX87Compare(Unsupported, bits(0, 0)));
+    EXPECT_FALSE(evaluateFiniteX87Compare(bits(0, 0), Unsupported));
+  }
+}
+
 TEST(X87Arithmetic, OverflowAndGradualUnderflowRetainPCAndStatus) {
   for (unsigned PC : {0U, 2U, 3U}) {
     const unsigned P = PC == 0 ? 24 : PC == 2 ? 53 : 64;

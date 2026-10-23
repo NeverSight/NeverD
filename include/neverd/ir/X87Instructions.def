@@ -139,9 +139,9 @@ NEVERD_X87_FORM(FADD_reg_d8, 0xd8, 0xc0, 0xc7, false, "FADD", "ST(0),ST(i)",
 NEVERD_X87_FORM(FMUL_reg_d8, 0xd8, 0xc8, 0xcf, false, "FMUL", "ST(0),ST(i)",
                 true, ValueProjection, Multiply)
 NEVERD_X87_FORM(FCOM_reg_d8, 0xd8, 0xd0, 0xd7, false, "FCOM", "ST(0),ST(i)",
-                true, ValueProjection, None)
+                true, ValueProjection, Compare)
 NEVERD_X87_FORM(FCOMP_reg_d8, 0xd8, 0xd8, 0xdf, false, "FCOMP", "ST(0),ST(i)",
-                true, ValueProjection, None)
+                true, ValueProjection, ComparePop)
 NEVERD_X87_FORM(FSUB_reg_d8, 0xd8, 0xe0, 0xe7, false, "FSUB", "ST(0),ST(i)",
                 true, ValueProjection, Subtract)
 NEVERD_X87_FORM(FSUBR_reg_d8, 0xd8, 0xe8, 0xef, false, "FSUBR", "ST(0),ST(i)",
@@ -185,7 +185,7 @@ NEVERD_X87_FORM(FCHS_reg, 0xd9, 0xe0, 0xe0, false, "FCHS", "implicit", true,
 NEVERD_X87_FORM(FABS_reg, 0xd9, 0xe1, 0xe1, false, "FABS", "implicit", true,
                 ExactValue, Absolute)
 NEVERD_X87_FORM(FTST_reg, 0xd9, 0xe4, 0xe4, false, "FTST", "implicit", true,
-                ValueProjection, None)
+                ValueProjection, TestZero)
 NEVERD_X87_FORM(FXAM_reg, 0xd9, 0xe5, 0xe5, false, "FXAM", "implicit", true,
                 ValueProjection, None)
 NEVERD_X87_FORM(FLD1, 0xd9, 0xe8, 0xe8, false, "FLD1", "implicit", true,
@@ -251,23 +251,23 @@ NEVERD_X87_FORM(FCMOVNBE, 0xdb, 0xd0, 0xd7, false, "FCMOVNBE", "ST(0),ST(i)",
 NEVERD_X87_FORM(FCMOVNU, 0xdb, 0xd8, 0xdf, false, "FCMOVNU", "ST(0),ST(i)",
                 true, ValueProjection, None)
 NEVERD_X87_FORM(FUCOMPP_reg, 0xda, 0xe9, 0xe9, false, "FUCOMPP", "implicit",
-                true, ValueProjection, None)
+                true, ValueProjection, ComparePopTwice)
 NEVERD_X87_FORM(FNCLEX_reg, 0xdb, 0xe2, 0xe2, false, "FNCLEX", "implicit", true,
                 StateOnly, ClearExceptions)
 NEVERD_X87_FORM(FNINIT_reg, 0xdb, 0xe3, 0xe3, false, "FNINIT", "implicit", true,
                 StateOnly, Initialize)
 NEVERD_X87_FORM(FCOMPP_reg, 0xde, 0xd9, 0xd9, false, "FCOMPP", "implicit", true,
-                ValueProjection, None)
+                ValueProjection, ComparePopTwice)
 NEVERD_X87_FORM(FNSTSW_reg, 0xdf, 0xe0, 0xe0, false, "FNSTSW", "AX", true,
                 StateOnly, StoreStatus)
 NEVERD_X87_FORM(FUCOMI, 0xdb, 0xe8, 0xef, false, "FUCOMI", "ST(0),ST(i)", true,
-                ValueProjection, None)
+                ValueProjection, CompareFlags)
 NEVERD_X87_FORM(FCOMI, 0xdb, 0xf0, 0xf7, false, "FCOMI", "ST(0),ST(i)", true,
-                ValueProjection, None)
+                ValueProjection, CompareFlags)
 NEVERD_X87_FORM(FUCOMIP, 0xdf, 0xe8, 0xef, false, "FUCOMIP", "ST(0),ST(i)",
-                true, ValueProjection, None)
+                true, ValueProjection, CompareFlagsPop)
 NEVERD_X87_FORM(FCOMIP, 0xdf, 0xf0, 0xf7, false, "FCOMIP", "ST(0),ST(i)", true,
-                ValueProjection, None)
+                ValueProjection, CompareFlagsPop)
 NEVERD_X87_FORM(FFREE_reg_dd, 0xdd, 0xc0, 0xc7, false, "FFREE", "ST(i)", true,
                 StateOnly, None)
 NEVERD_X87_FORM(FST_reg_dd, 0xdd, 0xd0, 0xd7, false, "FST", "ST(i)", true,
@@ -275,9 +275,9 @@ NEVERD_X87_FORM(FST_reg_dd, 0xdd, 0xd0, 0xd7, false, "FST", "ST(i)", true,
 NEVERD_X87_FORM(FSTP_reg_dd, 0xdd, 0xd8, 0xdf, false, "FSTP", "ST(i)", true,
                 ValueProjection, StoreRegisterPop)
 NEVERD_X87_FORM(FUCOM_reg_dd, 0xdd, 0xe0, 0xe7, false, "FUCOM", "ST(i)", true,
-                ValueProjection, None)
+                ValueProjection, Compare)
 NEVERD_X87_FORM(FUCOMP_reg_dd, 0xdd, 0xe8, 0xef, false, "FUCOMP", "ST(i)", true,
-                ValueProjection, None)
+                ValueProjection, ComparePop)
 NEVERD_X87_FORM(FFREEP, 0xdf, 0xc0, 0xc7, false, "FFREEP", "ST(i)", false,
                 StateOnly, None)
 NEVERD_X87_FORM(WAIT, 0x9b, 0x00, 0x00, false, "WAIT", "implicit", true,

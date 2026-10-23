@@ -239,6 +239,65 @@ TEST(X87PortableContext, RefusalsLeaveAllStateOutputAndMemoryUntouched) {
   EXPECT_EQ(Memory, BeforeMemory);
 }
 
+TEST(X87PortableContext, ComparisonsCommitConditionsFlagsAndOnlyRequiredPops) {
+  struct Form {
+    uint32_t Selector;
+    unsigned Pops;
+    bool Flags;
+  };
+  const Form Forms[] = {{0xd1d8, 0, false}, {0xd9d8, 1, false},
+                        {0xe1dd, 0, false}, {0xe9dd, 1, false},
+                        {0xd9de, 2, false}, {0xe9da, 2, false},
+                        {0xf1db, 0, true},  {0xe9db, 0, true},
+                        {0xf1df, 1, true},  {0xe9df, 1, true}};
+  for (const auto &F : Forms)
+    for (unsigned Top = 0; Top != 8; ++Top)
+      for (unsigned Relation = 0; Relation != 3; ++Relation) {
+        auto S = initial(Top);
+        putWord(S, 2, (Top << 11) | 0x4708); // Old conditions and sticky OE.
+        put(S, 0, bits(Relation == 1 ? 0 : 1, Relation == 0 ? 0x8000 : 0));
+        put(S, 1, bits(0, 0));
+        uint8_t Known = 0xff;
+        uint64_t Output = 0xfff;
+        ASSERT_EQ(executePortableX87Context(F.Selector, S, Known, {}, GuestIP,
+                                            GuestDP, Output),
+                  Outcome::Completed);
+        const unsigned Conditions = Relation == 0   ? 0x100
+                                    : Relation == 1 ? 0x4000
+                                                    : 0;
+        EXPECT_EQ(word(S, 2) & 0x4700, F.Flags ? 0x4500 : Conditions);
+        EXPECT_EQ(word(S, 2) & 0x3f, Relation == 1 ? 8 : 10);
+        EXPECT_EQ((word(S, 2) >> 11) & 7, (Top + F.Pops) & 7);
+        unsigned Tags = 0xff;
+        for (unsigned I = 0; I != F.Pops; ++I)
+          Tags &= ~(1U << ((Top + I) & 7));
+        EXPECT_EQ(S[4], Tags);
+        EXPECT_EQ(Known, 0xff);
+        EXPECT_EQ(Output, F.Flags ? (Relation == 0   ? 1
+                                     : Relation == 1 ? 0x40
+                                                     : 0)
+                                  : 0xfff);
+      }
+  auto S = initial();
+  uint8_t Known = 1; // FTST needs no unrelated operand provenance.
+  EXPECT_EQ(step(0xe4d9, S, Known), Outcome::Completed);
+  EXPECT_EQ(word(S, 2) & 0x4700, 0); // Positive ST0 > zero.
+  for (const auto &Bad :
+       {bits(IntegerBit, 0x7fff), bits(UINT64_C(0xc000000000000123), 0x7fff),
+        bits(UINT64_C(0x8000000000000123), 0x7fff), bits(1, 0x4000)}) {
+    S = initial();
+    put(S, 0, Bad);
+    const auto Before = S;
+    Known = 0xff;
+    uint64_t Output = 0x8d5;
+    EXPECT_EQ(executePortableX87Context(0xf1df, S, Known, {}, GuestIP, GuestDP,
+                                        Output),
+              Outcome::UnsupportedValue);
+    EXPECT_EQ(S, Before);
+    EXPECT_EQ(Output, 0x8d5);
+  }
+}
+
 TEST(X87PortableContext, WaitingAndNonwaitingControlPreserveDefinedEffects) {
   auto S = initial(5);
   putWord(S, 0, 0x37e);
@@ -334,13 +393,27 @@ TEST(X87PortableContext, OriginalInstructionsMatchDefinedStateAcrossAllTOP) {
           ASSERT_EQ(
               uc_mem_read(UC, 0x2200, ExpectedMemory.data(), Memory.size()),
               UC_ERR_OK);
-          ASSERT_EQ(step(Selector, S, Known, Operand), Outcome::Completed);
+          uint64_t Output = 0;
+          ASSERT_EQ(executePortableX87Context(Selector, S, Known, Operand,
+                                              GuestIP, GuestDP, Output),
+                    Outcome::Completed);
           EXPECT_EQ(word(S), word(Expected));
           // C0/C2/C3 are undefined here. This pinned Unicorn/QEMU reference
           // does not propagate SoftFloat's flags to FSW (fpu_helper.c), and
           // does not implement C1 rounding. Do not call this exception
           // evidence.
-          EXPECT_EQ(word(S, 2) & 0xb8c0, word(Expected, 2) & 0xb8c0);
+          const bool LegacyCompare =
+              Form.PortableOperation == X87PortableOperation::Compare ||
+              Form.PortableOperation == X87PortableOperation::ComparePop ||
+              Form.PortableOperation == X87PortableOperation::ComparePopTwice ||
+              Form.PortableOperation == X87PortableOperation::TestZero;
+          const unsigned StatusMask = LegacyCompare ? 0xffc0 : 0xb8c0;
+          EXPECT_EQ(word(S, 2) & StatusMask, word(Expected, 2) & StatusMask);
+          if (Spec.WritesFlags) {
+            uint64_t Flags = 0;
+            ASSERT_EQ(uc_reg_read(UC, UC_X86_REG_EFLAGS, &Flags), UC_ERR_OK);
+            EXPECT_EQ(Output, Flags & 0x8d5);
+          }
           EXPECT_EQ(S[4], Expected[4]);
           for (unsigned I = 0; I != 8; ++I)
             EXPECT_EQ(get(S, I), get(Expected, I));

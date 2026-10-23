@@ -222,6 +222,38 @@ Outcome execute(Operation Op, unsigned Escape, unsigned Index, Context &S,
     S.clearC1();
     return Outcome::Completed;
   }
+  case Operation::Compare:
+  case Operation::ComparePop:
+  case Operation::ComparePopTwice:
+  case Operation::CompareFlags:
+  case Operation::CompareFlagsPop:
+  case Operation::TestZero: {
+    if (auto Status = S.readable(0); Status != Outcome::Completed)
+      return Status;
+    X87Binary80Bytes Right{};
+    if (Op != Operation::TestZero) {
+      if (auto Status = S.readable(Index); Status != Outcome::Completed)
+        return Status;
+      Right = S.read(Index);
+    }
+    const auto Compared = evaluateFiniteX87Compare(S.read(0), Right);
+    if (!Compared)
+      return Outcome::UnsupportedValue;
+    uint16_t Status = (word(S.Image, 2) & ~C1) | Compared->Exceptions;
+    const bool Less = Compared->Relation == X87Comparison::Less;
+    const bool Equal = Compared->Relation == X87Comparison::Equal;
+    if (Op == Operation::CompareFlags || Op == Operation::CompareFlagsPop)
+      Result = Less ? 1 : Equal ? 0x40 : 0;
+    else
+      Status = (Status & ~0x4500U) | (Less ? 0x100 : Equal ? 0x4000 : 0);
+    putWord(S.Image, 2, Status);
+    if (Op == Operation::ComparePop || Op == Operation::CompareFlagsPop ||
+        Op == Operation::ComparePopTwice)
+      S.pop();
+    if (Op == Operation::ComparePopTwice)
+      S.pop();
+    return Outcome::Completed;
+  }
   default:
     return arithmetic(Op, Escape, Index, S);
   }

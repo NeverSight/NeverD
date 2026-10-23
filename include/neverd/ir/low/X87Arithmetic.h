@@ -21,6 +21,19 @@
 namespace neverd {
 
 enum class X87ArithmeticOperation { Add, Subtract, Multiply, Divide };
+enum class X87Comparison { Less, Equal, Greater };
+
+struct X87ComparisonResult {
+  X87Comparison Relation;
+  uint16_t Exceptions = 0;
+};
+
+/// Ordered comparison of canonical finite operands. Signed zeros compare
+/// equal; subnormal inputs raise DE. NaNs, infinities and noncanonical inputs
+/// remain outside this slice. Stack/flags/condition codes belong to the owner.
+std::optional<X87ComparisonResult>
+evaluateFiniteX87Compare(const X87Binary80Bytes &Left,
+                         const X87Binary80Bytes &Right);
 
 struct X87ArithmeticResult {
   X87Binary80Bytes Value{};

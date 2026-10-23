@@ -22,6 +22,30 @@
 #include <utility>
 
 namespace neverd {
+std::optional<X87ComparisonResult>
+evaluateFiniteX87Compare(const X87Binary80Bytes &Left,
+                         const X87Binary80Bytes &Right) {
+  const auto A = *decodeX87Binary80(Left), B = *decodeX87Binary80(Right);
+  if (!A.isCanonical() || !B.isCanonical() || A.exponent() == 0x7fff ||
+      B.exponent() == 0x7fff)
+    return std::nullopt;
+  X87Comparison Relation;
+  if ((A.isZero() && B.isZero()) ||
+      (A.SignExponent == B.SignExponent && A.Significand == B.Significand)) {
+    Relation = X87Comparison::Equal;
+  } else if (A.negative() != B.negative()) {
+    Relation = A.negative() ? X87Comparison::Less : X87Comparison::Greater;
+  } else {
+    const bool MagnitudeLess = A.exponent() != B.exponent()
+                                   ? A.exponent() < B.exponent()
+                                   : A.Significand < B.Significand;
+    Relation = MagnitudeLess != A.negative() ? X87Comparison::Less
+                                             : X87Comparison::Greater;
+  }
+  return X87ComparisonResult{
+      Relation, uint16_t(A.isSubnormal() || B.isSubnormal() ? 2 : 0)};
+}
+
 std::optional<X87Binary80Bytes>
 convertIntegerToX87(uint64_t Bits, unsigned Bytes, bool Signed) {
   if (Bytes != 1 && Bytes != 2 && Bytes != 4 && Bytes != 8)

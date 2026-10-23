@@ -59,9 +59,14 @@ void describe() {
 #ifdef __clang__
   std::printf("\"compiler\":\"clang\",\"compiler_major\":%u}\n",
               unsigned(__clang_major__));
-#else
+#elif defined(__GNUC__)
   std::printf("\"compiler\":\"gcc\",\"compiler_major\":%u}\n",
               unsigned(__GNUC__));
+#elif defined(_MSC_VER)
+  std::printf("\"compiler\":\"msvc\",\"compiler_version\":%u}\n",
+              unsigned(_MSC_VER));
+#else
+  std::printf("\"compiler\":\"unknown\"}\n");
 #endif
 }
 

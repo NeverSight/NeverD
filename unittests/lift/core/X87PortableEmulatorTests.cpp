@@ -139,4 +139,33 @@ TEST(X87PortableEmulator, UnsupportedMemoryAndExternalStateFailClosed) {
     EXPECT_FALSE(instruction(E, std::array<uint8_t, 2>{0xdb, 0x28}));
   }
 }
+
+TEST(X87PortableEmulator, CompareFlagsFeedDownstreamIntegerInstructions) {
+  auto Img = image();
+  NdOpEmulator E(Img);
+  E.setStrictMode(true);
+  E.setX87PortableMode(true);
+  std::array<uint8_t, 512> State{};
+  State[0] = 0x7f;
+  State[1] = 3;
+  State[4] = 3;
+  const auto Tiny = X87Binary80{IntegerBit, 0x3fc0}.bytes();
+  const auto One = X87Binary80{IntegerBit, 0x3fff}.bytes();
+  std::copy(Tiny.begin(), Tiny.end(), State.begin() + 32);
+  std::copy(One.begin(), One.end(), State.begin() + 48);
+  ASSERT_TRUE(E.setX87Context(State));
+  for (const auto &Flag : x86reg::EFlagsBits)
+    E.setRegister(Flag.Flag, 1);
+  E.setRegister(x86reg::RAX, 0);
+  ASSERT_TRUE(instruction(E, std::array<uint8_t, 2>{0xdb, 0xf1})); // FCOMI
+  EXPECT_EQ(E.getRegister(x86reg::CF), 1);
+  for (auto Flag : {x86reg::ZF, x86reg::PF, x86reg::AF, x86reg::SF, x86reg::OF})
+    EXPECT_EQ(E.getRegister(Flag), 0);
+  ASSERT_TRUE(instruction(E, std::array<uint8_t, 3>{0x0f, 0x92, 0xc0})); // SETB
+  EXPECT_EQ(E.getRegister(x86reg::RAX), 1);
+  ASSERT_TRUE(instruction(E, std::array<uint8_t, 2>{0xdf, 0xe9})); // FUCOMIP
+  ASSERT_TRUE(E.getX87Context());
+  EXPECT_EQ((*E.getX87Context())[4], 2);
+  EXPECT_EQ((*E.getRegister(x86reg::FPU_SW) >> 11) & 7, 1);
+}
 } // namespace
