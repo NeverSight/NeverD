@@ -47,11 +47,7 @@ bool hasClosedRegistrationRaise(const BinaryImage &Image, const LowOp &Op,
       !Op.Inputs[0].isConst() || Op.Inputs[0].Size != 4 ||
       Op.MemoryAddressSpace != NdMemoryAddressSpace::Default ||
       Op.MemoryOrdering != NdMemoryOrdering::None || Op.Addr > UINT32_MAX - 6 ||
-      checkedRegistrationImportStackPop(Image, Op.Inputs[0].Offset) != 16)
-    return false;
-  const auto *Imported = Image.findImportAt(Op.Inputs[0].Offset);
-  if (!Imported || Imported->IsDelayImport ||
-      !isFileBackedPEImportSlot(Image, Op.Inputs[0].Offset))
+      !isCheckedRegistrationRaiseSlot(Image, Op.Inputs[0].Offset))
     return false;
   const auto Bytes =
       readImmutablePE32CodeBytes(Image, Op.Addr, 6, {Op.Addr + 2});

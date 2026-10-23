@@ -198,8 +198,8 @@ proveBoundSEHCallee(const BinaryImage &Image, const LowOp &Op,
   for (const auto &Imported : Image.Imports)
     if (checkedJumpRuntime(Image, Imported.IATAddr, true) ||
         isCheckedControlFPSlot(Image, Imported.IATAddr) ||
-        registration_abi::checkedRegistrationImportStackPop(
-            Image, Imported.IATAddr) == 16)
+        registration_abi::isCheckedRegistrationRaiseSlot(Image,
+                                                         Imported.IATAddr))
       Jumps.ImportSlots.insert(Imported.IATAddr);
   Jumps.Resume = [&](const LowOp &Resume, size_t &Used) {
     const auto Binding = checkedJumpRuntimeCall(Image, Function, Resume, Used);
@@ -329,8 +329,8 @@ RegistrationStateAnalysis analyzeCheckedX86SEHStates(
   for (const auto &Imported : Image.Imports)
     if (checkedJumpRuntime(Image, Imported.IATAddr, true) ||
         isCheckedControlFPSlot(Image, Imported.IATAddr) ||
-        registration_abi::checkedRegistrationImportStackPop(
-            Image, Imported.IATAddr) == 16)
+        registration_abi::isCheckedRegistrationRaiseSlot(Image,
+                                                         Imported.IATAddr))
       Jumps.ImportSlots.insert(Imported.IATAddr);
   Jumps.Capture = [&](const LowOp &Op, const FrameState &State, bool Installed,
                       size_t &Work) {

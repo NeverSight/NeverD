@@ -2298,6 +2298,22 @@ PE32 scalar/array new/delete entries keep their exact decorated spelling.
 Direct IAT calls and authenticated jump veneers share the same provider and
 storage checks. Their allocation, deallocation, aliasing and callback effects
 remain outside this register-only proof.
+The same owner checks the exact Kernel32 PE32 exports `GetStartupInfoW`,
+`HeapSetInformation`, `InterlockedCompareExchange`, `InterlockedExchange`,
+`DecodePointer`, `EncodePointer` and `Sleep` for their SDK stdcall adjustment.
+Every imported stack fact requires a current, file-backed eager import-directory
+slot, including `RaiseException`; a recorded executable alias is insufficient
+without the independently checked jump veneer. The separate
+`isCheckedRegistrationRaiseSlot` query owns the exception-provider identity
+used by conditional invocation and caller-frame analysis. A matching pop count
+cannot supply dispatch, frame-observation or memory-effect permission. These
+facts follow the [Win32 stdcall contract](https://learn.microsoft.com/en-us/cpp/cpp/stdcall)
+and the exact SDK export declarations, including
+[HeapSetInformation](https://learn.microsoft.com/en-us/windows/win32/api/heapapi/nf-heapapi-heapsetinformation)
+and the distinct
+[InterlockedCompareExchange](https://learn.microsoft.com/en-us/windows/win32/api/winnt/nf-winnt-interlockedcompareexchange)
+and [InterlockedExchange](https://learn.microsoft.com/en-us/windows/win32/api/winnt/nf-winnt-interlockedexchange)
+signatures.
 Cleanup relay caching uses the existing unwind-record bound, independently of
 the smaller ordinary-callee cache. Successful and failed lookups still consume
 the same cumulative work budget. Within one dispatch snapshot, each unwind

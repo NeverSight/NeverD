@@ -9088,6 +9088,16 @@ two image bases, rejects cancellation against equal unrelocated literals,
 and covers conflicting, overlapping, partial and control-flow fixups. The
 observed and discarded leaf-result queries reject the same cancellation,
 with both classified and unclassified relocations.
+`RegistrationImportABI` covers the seven checked Kernel32 startup imports
+through direct IAT calls and decoded jump veneers. Wrong providers, delay
+imports, conflicting or truncated storage, missing import-directory evidence,
+mutable code and unbalanced argument cleanup refuse the stack proof. The same
+storage controls apply to `RaiseException`. A four-argument
+`HeapSetInformation` call cannot acquire exception dispatch merely because it
+also pops sixteen bytes; neither it nor a cdecl CRT import gains caller-frame
+observation permission. Returning-stack facts still grant no object borrow or
+initialized memory. These are static authored-machine tests, not execution of
+GOF2 or qualification of its full image.
 `RelocatedLeafAddressesKeepMemoryIdentity` retains exact image-read extents
 through a relocated address and a stable offset, while rejecting missing
 operand classification. `RegistrationFrameScalar` separately checks address

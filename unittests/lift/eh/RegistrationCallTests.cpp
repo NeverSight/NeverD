@@ -373,7 +373,7 @@ TEST(RegistrationCallABI, StackCleanupIncludesCheckedNestedImportCleanup) {
     Code.VA = Text.VA;
     Code.Size = Code.FileSz = Text.Size;
     Code.Flags = Text.Flags;
-    F.Image.Sections = {Code};
+    F.Image.Sections[0] = Code;
     F.Image.Imports[0].Name = "RaiseException";
     F.Image.Imports[0].Module = "KERNEL32.dll";
     ASSERT_TRUE(F.Image.recordImportStorageSlot(
@@ -648,9 +648,9 @@ TEST(RegistrationCallABI, StackImportContractRequiresTheExactRuntimeProvider) {
     ThrowImage F;
     F.Image.Imports[0].Name = "RaiseException";
     F.Image.Imports[0].Module = "KERNEL32.dll";
-    ASSERT_TRUE(
-        F.Image.recordImportStorageSlot(ThrowImage::IATVA, "RaiseException", 0,
-                                        ImportStorageEvidence::PointerTable));
+    ASSERT_TRUE(F.Image.recordImportStorageSlot(
+        ThrowImage::IATVA, "RaiseException", 0,
+        ImportStorageEvidence::ImportDirectory));
     LowFunc Caller;
     Caller.Blocks.resize(1);
     LowOp Call;

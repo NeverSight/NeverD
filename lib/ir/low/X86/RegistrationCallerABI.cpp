@@ -400,7 +400,7 @@ bool hasRegistrationCallFrameABI(
         if (Image.findImportAt(Next)) {
           // Dispatch intentionally consumes the live registration chain.
           // Other opaque APIs need a separate frame-observation contract.
-          if (!registration_abi::checkedRegistrationImportStackPop(Image, Next))
+          if (!registration_abi::isCheckedRegistrationRaiseSlot(Image, Next))
             return false;
           continue;
         }

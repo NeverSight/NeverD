@@ -82,6 +82,9 @@ std::optional<uint16_t> parentPopBytes(const LowFunc &Function,
 std::optional<uint32_t>
 checkedRegistrationImportStackPop(const BinaryImage &Image, va_t Target);
 const Import *checkedImportSlot(const BinaryImage &Image, va_t Target);
+/// Authenticate the exact eager PE32 RaiseException IAT slot. A returning
+/// stack adjustment alone cannot identify exception dispatch or its effects.
+bool isCheckedRegistrationRaiseSlot(const BinaryImage &Image, va_t Target);
 bool callerPCIsNotReadBack(const ImageFrameEffects &Effects);
 /// Initialization and value knowledge are independent. Without an explicit
 /// byte inventory, only a retained full-word cell supplies an input.

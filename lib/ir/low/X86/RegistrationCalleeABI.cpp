@@ -39,38 +39,62 @@ const Import *checkedImportSlot(const BinaryImage &Image, va_t Target) {
   return Import;
 }
 
+namespace {
+const Import *checkedRuntimeImportSlot(const BinaryImage &Image, va_t Target) {
+  const auto *Import = checkedImportSlot(Image, Target);
+  return Import && isFileBackedPEImportSlot(Image, Target) ? Import : nullptr;
+}
+
+bool isRaiseExceptionProvider(const Import &Import) {
+  return Import.Name == "RaiseException" &&
+         (llvm::StringRef(Import.Module).equals_insensitive("kernel32.dll") ||
+          llvm::StringRef(Import.Module).equals_insensitive("kernelbase.dll"));
+}
+} // namespace
+
+bool isCheckedRegistrationRaiseSlot(const BinaryImage &Image, va_t Target) {
+  const auto *Import = checkedRuntimeImportSlot(Image, Target);
+  return Import && isRaiseExceptionProvider(*Import);
+}
+
 std::optional<uint32_t>
 checkedRegistrationImportStackPop(const BinaryImage &Image, va_t Target) {
-  const auto *Named = Image.findImportAt(Target);
-  const auto *Import =
-      Named ? checkedImportSlot(Image, Named->IATAddr) : nullptr;
-  // These authenticated C-runtime entries use caller cleanup on PE32.
-  // This is a returning ESP fact only: allocation, deallocation, callbacks,
-  // errno and floating-point effects need separate memory/runtime contracts.
-  if (Import && !Import->IsDelayImport &&
-      isFileBackedPEImportSlot(Image, Import->IATAddr)) {
-    const llvm::StringRef Module = Import->Module;
-    const llvm::StringRef Name = Import->Name;
-    if ((Module.equals_insensitive("msvcrt.dll") ||
-         Module.equals_insensitive("msvcr100.dll")) &&
-        (Name == "malloc" || Name == "calloc" || Name == "realloc" ||
-         Name == "free" || Name == "memcpy" || Name == "memmove" ||
-         Name == "memset" || Name == "??2@YAPAXI@Z" ||
-         Name == "??_U@YAPAXI@Z" || Name == "??3@YAXPAX@Z" ||
-         Name == "??_V@YAXPAX@Z"))
-      return 0;
-    if ((Name == "log" || Name == "exp") &&
-        (Module.equals_insensitive("api-ms-win-crt-math-l1-1-0.dll") ||
-         Module.equals_insensitive("ucrtbase.dll") ||
-         Module.equals_insensitive("ucrtbased.dll") ||
-         Module.equals_insensitive("msvcrt.dll")))
-      return 0;
-  }
-  if (!Import || Import->Name != "RaiseException" ||
-      (!llvm::StringRef(Import->Module).equals_insensitive("kernel32.dll") &&
-       !llvm::StringRef(Import->Module).equals_insensitive("kernelbase.dll")))
+  const auto *Import = checkedRuntimeImportSlot(Image, Target);
+  if (!Import)
     return std::nullopt;
-  return 16;
+  // These are returning ESP facts only. Dispatch, allocation, memory writes,
+  // pointer results, callbacks and FP state need separate effect contracts.
+  if (isRaiseExceptionProvider(*Import))
+    return 16;
+  const llvm::StringRef Module = Import->Module;
+  const llvm::StringRef Name = Import->Name;
+  if (Module.equals_insensitive("kernel32.dll")) {
+    // The SDK's PE32 WINAPI declarations use 32-bit stack carriers. Exact
+    // exports matter: neither similarly named APIs nor other DLLs inherit it.
+    if (Name == "GetStartupInfoW" || Name == "DecodePointer" ||
+        Name == "EncodePointer" || Name == "Sleep")
+      return 4;
+    if (Name == "InterlockedExchange")
+      return 8;
+    if (Name == "InterlockedCompareExchange")
+      return 12;
+    if (Name == "HeapSetInformation")
+      return 16;
+  }
+  if ((Module.equals_insensitive("msvcrt.dll") ||
+       Module.equals_insensitive("msvcr100.dll")) &&
+      (Name == "malloc" || Name == "calloc" || Name == "realloc" ||
+       Name == "free" || Name == "memcpy" || Name == "memmove" ||
+       Name == "memset" || Name == "??2@YAPAXI@Z" || Name == "??_U@YAPAXI@Z" ||
+       Name == "??3@YAXPAX@Z" || Name == "??_V@YAXPAX@Z"))
+    return 0;
+  if ((Name == "log" || Name == "exp") &&
+      (Module.equals_insensitive("api-ms-win-crt-math-l1-1-0.dll") ||
+       Module.equals_insensitive("ucrtbase.dll") ||
+       Module.equals_insensitive("ucrtbased.dll") ||
+       Module.equals_insensitive("msvcrt.dll")))
+    return 0;
+  return std::nullopt;
 }
 
 bool callerPCIsNotReadBack(const ImageFrameEffects &Effects) {

@@ -35,6 +35,7 @@ endif()
 
 add_neverd_unittest(NeverDRegistrationCalleeStackTests
   eh/RegistrationCallTests.cpp
+  eh/RegistrationImportABITests.cpp
   eh/RegistrationCalleeRecursionTests.cpp
   LINK_COMPONENTS Pipeline)
 
@@ -1646,6 +1647,7 @@ add_neverd_unittest(NeverDWindowsRegistrationNativeTests
   eh/RegistrationSEHNullAccessTests.cpp
   eh/RegistrationCxxContinuationTestUtils.cpp
   eh/RegistrationCallTests.cpp
+  eh/RegistrationImportABITests.cpp
   eh/RegistrationCalleeRecursionTests.cpp
   eh/RegistrationCleanupABITests.cpp
   eh/RegistrationRealignedCleanupABITests.cpp
