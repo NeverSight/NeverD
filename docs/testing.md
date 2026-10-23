@@ -3495,7 +3495,8 @@ evidence must retain the ordinary load path.
 `LLVMDataPointerInvariantBoundary.OriginalImageDisplacementsKeepEscapedFrameReadsLive`
 checks original-storage displacement reads across x86, x64, ARM and AArch64 in
 ELF, Mach-O and COFF. Initialization, partial writes, memory recurrences and
-query order are checked alongside pointer-valued sources, uninitialized loops,
+query order are checked alongside saved pointer reloads and the widened address
+carriers used on 32-bit targets. Counterexamples include pointer-valued sources, uninitialized loops,
 narrowed bases, raw address models, indirect-call uses and private mirrors. The
 native pointer suite's
 `OriginalImageOffsetsObserveCapturedFrameWrites` retains a slot address, overwrites

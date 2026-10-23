@@ -15924,6 +15924,8 @@ TEST(LLVMDataPointerInvariantBoundary,
     UninitializedLoop,
     PointerLoop,
     CallableLoad,
+    SpilledPointer,
+    WidenedSpilledPointer,
     InternalContinuation
   };
   for (Arch A : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64})
@@ -15936,7 +15938,8 @@ TEST(LLVMDataPointerInvariantBoundary,
               Case::MissingStore, Case::PartialStore, Case::LaterStore,
               Case::PointerInitializer, Case::RawBase, Case::NarrowBase,
               Case::RuntimeLoop, Case::UninitializedLoop, Case::PointerLoop,
-              Case::CallableLoad, Case::InternalContinuation}) {
+              Case::CallableLoad, Case::SpilledPointer,
+              Case::WidenedSpilledPointer, Case::InternalContinuation}) {
           SCOPED_TRACE(std::to_string(static_cast<int>(A)) + "/" +
                        formatTraceName(Format) + "/" +
                        std::to_string(OriginalStorage) + "/" +
@@ -16098,6 +16101,24 @@ TEST(LLVMDataPointerInvariantBoundary,
           MedVar Selected = temp(), Pointer = temp(), Result = temp();
           append(NdOp::INT_ADD, Pointer, {Base, Reload});
           append(NdOp::SELECT, Selected, {Input, Pointer, Base});
+          if (C == Case::SpilledPointer || C == Case::WidenedSpilledPointer) {
+            MedVar PointerSlot = temp(), Saved = temp();
+            append(NdOp::INT_ADD, PointerSlot, {SP, number(uint64_t(-24))});
+            if (C == Case::WidenedSpilledPointer && Width == 4) {
+              MedVar Wide = temp(8), Narrow = temp();
+              append(NdOp::INT_ZEXT, Wide, {Selected});
+              append(NdOp::SUBBYTES, Narrow, {Wide, number(0)});
+              Selected = Narrow;
+            }
+            append(NdOp::STORE, {}, {PointerSlot, Selected});
+            append(NdOp::LOAD, Saved, {PointerSlot});
+            Selected = Saved;
+            if (C == Case::WidenedSpilledPointer && Width == 4) {
+              MedVar Wide = temp(8);
+              append(NdOp::INT_ZEXT, Wide, {Selected});
+              Selected = Wide;
+            }
+          }
           append(NdOp::LOAD, Result, {Selected});
           if (C == Case::CallableLoad)
             append(NdOp::INDIR_CALL, {}, {Result});
@@ -16123,7 +16144,8 @@ TEST(LLVMDataPointerInvariantBoundary,
               C == Case::Initialized || C == Case::RuntimeWrite ||
               C == Case::PartialRuntimeWrite || C == Case::RawBase ||
               C == Case::NarrowBase || C == Case::RuntimeLoop ||
-              C == Case::CallableLoad;
+              C == Case::CallableLoad || C == Case::SpilledPointer ||
+              C == Case::WidenedSpilledPointer;
           EXPECT_EQ(MedLLVMProvenanceTestPeer::originalImageRuntimeOffset(
                         Classifier, Reload),
                     RuntimeSource);
@@ -16141,7 +16163,8 @@ TEST(LLVMDataPointerInvariantBoundary,
           const bool Expected =
               OriginalStorage &&
               (C == Case::Initialized || C == Case::RuntimeWrite ||
-               C == Case::PartialRuntimeWrite || C == Case::RuntimeLoop);
+               C == Case::PartialRuntimeWrite || C == Case::RuntimeLoop ||
+               C == Case::SpilledPointer || C == Case::WidenedSpilledPointer);
           EXPECT_EQ(Module != nullptr, Expected) << Diagnostic;
           if (Module)
             expectValidModule(*Module);
