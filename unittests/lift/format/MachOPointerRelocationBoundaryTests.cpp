@@ -289,6 +289,12 @@ public:
     return Emitter.valueIsOpaqueRuntimeOffset(Value);
   }
 
+  static bool originalImageRuntimeOffset(MedLLVMEmitter &Emitter,
+                                         const MedVar &Value) {
+    return Emitter.valueIsOpaqueRuntimeOffset(Value,
+                                              /*AllowEscapedFrame=*/true);
+  }
+
   static std::pair<uint64_t, uint64_t>
   stableOffsetNodeWork(const MedLLVMEmitter &Emitter) {
     return {Emitter.AddressProvenanceWork.StableOffsetNodes,
@@ -15901,6 +15907,248 @@ TEST(LLVMDataPointerInvariantBoundary,
 }
 
 TEST(LLVMDataPointerInvariantBoundary,
+     OriginalImageDisplacementsKeepEscapedFrameReadsLive) {
+  enum class Case {
+    Initialized,
+    RuntimeWrite,
+    PointerWrite,
+    PartialRuntimeWrite,
+    PartialPointerWrite,
+    MissingStore,
+    PartialStore,
+    LaterStore,
+    PointerInitializer,
+    RawBase,
+    NarrowBase,
+    RuntimeLoop,
+    UninitializedLoop,
+    PointerLoop,
+    CallableLoad,
+    InternalContinuation
+  };
+  for (Arch A : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64})
+    for (BinaryFormat Format :
+         {BinaryFormat::ELF, BinaryFormat::MachO, BinaryFormat::COFF})
+      for (bool OriginalStorage : {false, true})
+        for (Case C :
+             {Case::Initialized, Case::RuntimeWrite, Case::PointerWrite,
+              Case::PartialRuntimeWrite, Case::PartialPointerWrite,
+              Case::MissingStore, Case::PartialStore, Case::LaterStore,
+              Case::PointerInitializer, Case::RawBase, Case::NarrowBase,
+              Case::RuntimeLoop, Case::UninitializedLoop, Case::PointerLoop,
+              Case::CallableLoad, Case::InternalContinuation}) {
+          SCOPED_TRACE(std::to_string(static_cast<int>(A)) + "/" +
+                       formatTraceName(Format) + "/" +
+                       std::to_string(OriginalStorage) + "/" +
+                       std::to_string(static_cast<int>(C)));
+          const uint16_t Width = getTargetRegInfo(A).PointerSize;
+          BinaryImage Image =
+              makeSpilledConstTableImage(A, Format, /*PointerTable=*/true);
+          Image.Bits = Width == 8 ? Bitness::Bits64 : Bitness::Bits32;
+          // Every fixture address must fit the architecture's pointer width.
+          // The common image uses high 64-bit VAs; rebase its pointer payloads
+          // and metadata together for the 32-bit cases.
+          const va_t Delta = Width == 4 ? TextVA - 0x400000 : 0;
+          const va_t TableVA = SpilledConstTableVA - Delta;
+          if (Delta) {
+            Image.Base -= Delta;
+            for (auto &Segment : Image.Segments) {
+              for (va_t SlotVA : Image.DataPtrRelocSlots)
+                if (Segment.contains(SlotVA)) {
+                  const size_t Offset = SlotVA - Segment.VA;
+                  uint64_t Target = 0;
+                  std::memcpy(&Target, Segment.Data.data() + Offset,
+                              sizeof(Target));
+                  writeObject(Segment.Data, Offset, Target - Delta);
+                }
+              Segment.VA -= Delta;
+            }
+            for (auto &Section : Image.Sections)
+              Section.VA -= Delta;
+            for (auto &Symbol : Image.Symbols)
+              Symbol.Addr -= Delta;
+            const auto Slots = Image.DataPtrRelocSlots;
+            Image.DataPtrRelocSlots.clear();
+            for (va_t SlotVA : Slots)
+              Image.DataPtrRelocSlots.insert(SlotVA - Delta);
+            const auto Targets = Image.RelocDataAddrs;
+            Image.RelocDataAddrs.clear();
+            for (va_t TargetVA : Targets)
+              Image.RelocDataAddrs.insert(TargetVA - Delta);
+          }
+          if (OriginalStorage) {
+            const va_t Slot = TableVA + 0x10;
+            Image.RuntimeCallablePointerSlots.push_back({Slot});
+          }
+          MedFunc F;
+          F.Name = "escaped_runtime_displacement";
+          F.Entry = CallerVA - Delta;
+          F.FrameSize = 32;
+          F.ReturnType = NdType::makeInt(Width);
+          MedBlock B;
+          B.Id = 0;
+          B.StartAddr = F.Entry;
+          B.EndAddr = F.Entry + 0x100;
+          int Next = 0;
+          auto temp = [&](uint16_t Size = 0) {
+            MedVar V;
+            V.Kind = MedVar::Temp;
+            V.Id = Next++;
+            V.SSAVer = 1;
+            V.TheArch = A;
+            V.Size = Size ? Size : Width;
+            return V;
+          };
+          auto number = [&](uint64_t N) {
+            return MedVar::makeConst(N, Width,
+                                     ConstantAddressProvenance::Scalar);
+          };
+          auto address = [&] {
+            return MedVar::makeConst(TableVA, Width,
+                                     ConstantAddressProvenance::DataAddress);
+          };
+          auto append = [&](NdOp Opcode, MedVar Out,
+                            std::initializer_list<MedVar> Inputs) {
+            MedOp Op;
+            Op.Opcode = Opcode;
+            Op.Output = Out;
+            Op.Addr = B.StartAddr + B.Ops.size();
+            for (const auto &V : Inputs)
+              Op.addInput(V);
+            B.Ops.push_back(Op);
+          };
+          MedVar Input = temp(), SP = temp(), Slot = temp(), Reload = temp();
+          Input.Kind = MedVar::Param;
+          SP.Kind = MedVar::Reg;
+          SP.RegOff = getTargetRegInfo(A).StackPointer;
+          SP.SSAVer = 0;
+          F.Params = {Input};
+          append(NdOp::INT_ADD, Slot, {SP, number(uint64_t(-16))});
+          if (C != Case::MissingStore && C != Case::LaterStore &&
+              C != Case::UninitializedLoop) {
+            MedVar Initial =
+                C == Case::PointerInitializer || C == Case::PointerLoop
+                    ? address()
+                    : number(0);
+            if (C == Case::PartialStore)
+              Initial.Size = Width / 2;
+            append(NdOp::STORE, {}, {Slot, Initial});
+          }
+          // The runtime owner receives the address. Even a full initializer
+          // cannot authorize recovering an exact value after this escape.
+          MedCallInfo Call;
+          Call.BlockId = B.Id;
+          Call.OpIdx = B.Ops.size();
+          Call.TargetAddr = 0x1100;
+          Call.TargetName = "capture_frame_word";
+          Call.Args = {Slot};
+          F.CallInfos.push_back(Call);
+          append(NdOp::CALL, {}, {number(Call.TargetAddr)});
+          if (C == Case::RuntimeWrite || C == Case::PointerWrite ||
+              C == Case::PartialRuntimeWrite ||
+              C == Case::PartialPointerWrite) {
+            MedVar Written =
+                C == Case::PointerWrite || C == Case::PartialPointerWrite
+                    ? address()
+                    : number(Width);
+            if (C == Case::PartialRuntimeWrite ||
+                C == Case::PartialPointerWrite) {
+              MedVar Fragment = temp(Width / 2);
+              append(NdOp::SUBBYTES, Fragment, {Written, number(0)});
+              Written = Fragment;
+            }
+            append(NdOp::STORE, {}, {Input, Written});
+          }
+          if (C == Case::RuntimeLoop || C == Case::UninitializedLoop ||
+              C == Case::PointerLoop) {
+            append(NdOp::BRANCH, {}, {number(F.Entry + 0x40)});
+            B.Succs = {1};
+            B.EndAddr = F.Entry + 0x40;
+            F.Blocks.push_back(std::move(B));
+            B = {};
+            B.Id = 1;
+            B.StartAddr = F.Entry + 0x40;
+            B.EndAddr = F.Entry + 0x80;
+            B.Preds = {0, 1};
+            B.Succs = {1, 2};
+            MedVar Previous = temp(), NextValue = temp();
+            append(NdOp::LOAD, Previous, {Slot});
+            append(NdOp::INT_ADD, NextValue, {Previous, number(Width)});
+            append(NdOp::STORE, {}, {Slot, NextValue});
+            append(NdOp::COND_BR, {}, {number(B.StartAddr), Input});
+            F.Blocks.push_back(std::move(B));
+            B = {};
+            B.Id = 2;
+            B.StartAddr = F.Entry + 0x80;
+            B.EndAddr = F.Entry + 0xc0;
+            B.Preds = {1};
+          }
+          append(NdOp::LOAD, Reload, {Slot});
+          if (C == Case::LaterStore)
+            append(NdOp::STORE, {}, {Slot, number(0)});
+          MedVar Base = address();
+          if (C == Case::RawBase)
+            Base.Provenance = ConstantAddressProvenance::Address;
+          if (C == Case::NarrowBase) {
+            MedVar Byte = temp(1), Wide = temp();
+            append(NdOp::SUBBYTES, Byte, {Base, number(0)});
+            append(NdOp::INT_ZEXT, Wide, {Byte});
+            Base = Wide;
+          }
+          MedVar Selected = temp(), Pointer = temp(), Result = temp();
+          append(NdOp::INT_ADD, Pointer, {Base, Reload});
+          append(NdOp::SELECT, Selected, {Input, Pointer, Base});
+          append(NdOp::LOAD, Result, {Selected});
+          if (C == Case::CallableLoad)
+            append(NdOp::INDIR_CALL, {}, {Result});
+          append(NdOp::RETURN, {}, {Result});
+          F.Blocks.push_back(std::move(B));
+          if (C == Case::InternalContinuation) {
+            const ExceptionalEdge Edge{
+                0, F.Entry, ExceptionalEdgeKind::CxxCatch, 0, 0, F.Entry + 2};
+            F.Blocks.front().ExceptionalSuccs = {Edge};
+            F.Blocks.front().ExceptionalPreds = {Edge};
+          }
+          MedLLVMEmitter Classifier;
+          MedLLVMProvenanceTestPeer::prepareFreshAnalysis(Classifier, F, Image,
+                                                          A, Format);
+          EXPECT_FALSE(
+              MedLLVMProvenanceTestPeer::runtimeOffset(Classifier, Reload));
+          EXPECT_FALSE(MedLLVMProvenanceTestPeer::stableOffset(
+              Classifier, Reload, nullptr));
+          EXPECT_FALSE(
+              MedLLVMProvenanceTestPeer::pointerTableLoadIsCallableOnly(
+                  Classifier, Result));
+          const bool RuntimeSource =
+              C == Case::Initialized || C == Case::RuntimeWrite ||
+              C == Case::PartialRuntimeWrite || C == Case::RawBase ||
+              C == Case::NarrowBase || C == Case::RuntimeLoop ||
+              C == Case::CallableLoad;
+          EXPECT_EQ(MedLLVMProvenanceTestPeer::originalImageRuntimeOffset(
+                        Classifier, Reload),
+                    RuntimeSource);
+          // Runtime-source memoization cannot grant exact or bounded recovery.
+          EXPECT_FALSE(
+              MedLLVMProvenanceTestPeer::runtimeOffset(Classifier, Reload));
+          EXPECT_FALSE(MedLLVMProvenanceTestPeer::stableOffset(
+              Classifier, Reload, nullptr));
+          llvm::LLVMContext Context;
+          testing::internal::CaptureStderr();
+          auto Module = MedLLVMEmitter().emit(
+              {F}, Context, "escaped-displacement", A,
+              {{0x1100, "capture_frame_word"}}, &Image, Format);
+          const auto Diagnostic = testing::internal::GetCapturedStderr();
+          const bool Expected =
+              OriginalStorage &&
+              (C == Case::Initialized || C == Case::RuntimeWrite ||
+               C == Case::PartialRuntimeWrite || C == Case::RuntimeLoop);
+          EXPECT_EQ(Module != nullptr, Expected) << Diagnostic;
+          if (Module)
+            expectValidModule(*Module);
+        }
+}
+
+TEST(LLVMDataPointerInvariantBoundary,
      RuntimeOffsetSourcesRequireCompleteMemoryAndMergeProofs) {
   enum class Case {
     Single,
@@ -16082,6 +16330,9 @@ TEST(LLVMDataPointerInvariantBoundary,
         if (C != Case::SegmentLoad)
           EXPECT_FALSE(
               MedLLVMProvenanceTestPeer::stableOffset(Proof, Scaled, nullptr));
+        EXPECT_EQ(MedLLVMProvenanceTestPeer::originalImageRuntimeOffset(Proof,
+                                                                        Scaled),
+                  Expected);
         // Reusing the source proof must not change its result after the
         // ordinary scalar analysis has populated its own caches.
         EXPECT_EQ(MedLLVMProvenanceTestPeer::runtimeOffset(Proof, Scaled),

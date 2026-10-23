@@ -104,6 +104,38 @@ bool MedLLVMEmitter::preservesRegistrationImageStorage(uint64_t Begin,
                             });
 }
 
+MedLLVMEmitter::PointerRunStorageContract
+MedLLVMEmitter::pointerRunStorageContract(uint64_t Begin, uint64_t End) const {
+  if (!Img || Begin >= End)
+    return {};
+  const bool Registration =
+      (TargetArch == Arch::X86 && TargetFormat == BinaryFormat::COFF &&
+       llvm::any_of(Img->ExceptionMetadata.Functions,
+                    [&](const auto &EH) {
+                      return EH.Registration &&
+                             EH.Registration->ScopeTableVA >= Begin &&
+                             EH.Registration->ScopeTableVA < End;
+                    })) ||
+      preservesRegistrationImageStorage(Begin, End);
+  const unsigned Width = Img->getPointerSize();
+  const bool Runtime =
+      Width &&
+      llvm::any_of(Img->RuntimeCallablePointerSlots, [&](const auto &Slot) {
+        return Slot.SlotVA >= Begin && Slot.SlotVA < End &&
+               Width <= End - Slot.SlotVA;
+      });
+  return {Registration || Runtime, Registration};
+}
+
+bool MedLLVMEmitter::pointerRunHasOriginalStorage(uint64_t RunStart) const {
+  if (completePointerMirrorRun(RunStart) != std::optional<uint64_t>(RunStart))
+    return false;
+  uint64_t Begin = 0, End = 0;
+  readOnlyAfterRelocRun(Img->getSegmentFor(RunStart), Begin, End);
+  return Begin == RunStart &&
+         pointerRunStorageContract(Begin, End).OriginalStorage;
+}
+
 bool MedLLVMEmitter::hasAuthenticatedFunctionEntryVA(va_t Address) const {
   return EmittedFuncNames.count(Address) != 0 ||
          (Img && Img->isFunctionEntryCandidateAt(Address) &&
@@ -521,15 +553,7 @@ llvm::Constant *MedLLVMEmitter::buildCodePtrSegmentGlobal(
     uint64_t TargetOwnerVA = InvalidVA;
   };
   std::map<uint64_t, PtrSlot> SlotsByVA;
-  bool HasRuntimeCallableStorage = false;
-  const bool HasRegistrationStorage =
-      TargetArch == Arch::X86 && TargetFormat == BinaryFormat::COFF &&
-      llvm::any_of(Img->ExceptionMetadata.Functions, [&](const auto &EH) {
-        return EH.Registration && EH.Registration->ScopeTableVA >= RunStart &&
-               EH.Registration->ScopeTableVA < RunEnd;
-      });
-  const bool HasPreservedRegistrationStorage =
-      preservesRegistrationImageStorage(RunStart, RunEnd);
+  const auto StorageContract = pointerRunStorageContract(RunStart, RunEnd);
   auto slotInRun = [&](uint64_t S) {
     return S >= RunStart && S <= RunEnd && PtrSz <= RunEnd - S;
   };
@@ -583,7 +607,6 @@ llvm::Constant *MedLLVMEmitter::buildCodePtrSegmentGlobal(
     const uint64_t S = RuntimeSlot.SlotVA;
     if (!slotInRun(S))
       continue;
-    HasRuntimeCallableStorage = true;
     const bool IsCode = Img->CodePtrRelocSlots.count(S) != 0;
     const bool IsData = Img->DataPtrRelocSlots.count(S) != 0;
     const bool IsImport = EffectiveImportStorageSlots.count(S) != 0 ||
@@ -689,7 +712,7 @@ llvm::Constant *MedLLVMEmitter::buildCodePtrSegmentGlobal(
       if (Imported && !Imported->Name.empty()) {
         Kind = PtrSlotKind::Import;
         ImportName = Imported->Name;
-      } else if ((HasRegistrationStorage || HasPreservedRegistrationStorage)
+      } else if (StorageContract.OriginalCodeTargets
                      ? (!Img->isCodeAddress(TargetVA) ||
                         !Img->readVA(TargetVA, 1))
                      : !resolveImageFunctionAddress(TargetVA)) {
@@ -739,8 +762,7 @@ llvm::Constant *MedLLVMEmitter::buildCodePtrSegmentGlobal(
   // fields name dispatcher-only labels with an implicit frame ABI, rather than
   // ordinary address-taken LLVM blocks. Native lowering emits a fresh table
   // for its own callbacks; source inspection still sees the original storage.
-  if (HasRuntimeCallableStorage || HasRegistrationStorage ||
-      HasPreservedRegistrationStorage) {
+  if (StorageContract.OriginalStorage) {
     auto *GV = new llvm::GlobalVariable(*Mod, StructTy, /*isConstant=*/false,
                                         llvm::GlobalValue::ExternalLinkage,
                                         /*Initializer=*/nullptr, GlobalName);
@@ -2163,7 +2185,8 @@ llvm::Value *MedLLVMEmitter::tryResolveCodePtrTablePtr(
           return Pointer.Model == AddressModel::Symbolized &&
                  completePointerMirrorRun(Pointer.Segment) ==
                      std::optional<uint64_t>(Pointer.Segment) &&
-                 valueIsOpaqueRuntimeOffset(Offset);
+                 valueIsOpaqueRuntimeOffset(
+                     Offset, pointerRunHasOriginalStorage(Pointer.Segment));
         };
         if (RightTable && (Def->Opcode == NdOp::INT_SUB || LeftTable))
           return invalidProof();

@@ -11,6 +11,7 @@
 #include "neverd/backend/c/LLVMC/LLVMCEmitter.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/decode/Decoder.h"
+#include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/loader/COFF/COFFLoader.h"
 #include "neverd/loader/PointerRelocation.h"
@@ -748,6 +749,182 @@ int main(void) {
       auto Ran = exec(Binary.string(), {});
       EXPECT_EQ(Ran.exitCode, 0) << Ran.err << Optimization;
     }
+#endif
+}
+
+TEST_F(NativePointerRelocationBoundary,
+       OriginalImageOffsetsObserveCapturedFrameWrites) {
+#if !defined(__linux__) || !defined(__x86_64__)
+  GTEST_SKIP() << "native execution requires Linux x86-64";
+#else
+  if (!hasCrossTargetClang())
+    GTEST_SKIP() << "native LLVM execution requires Clang";
+  BinaryImage Image;
+  Image.Arch = Arch::X64;
+  Image.Format = BinaryFormat::ELF;
+  Image.Bits = Bitness::Bits64;
+  Segment Data;
+  Data.Name = ".data";
+  Data.VA = 0x8000;
+  Data.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+  Data.Size = Data.FileSz = 256;
+  Data.Data.resize(Data.Size);
+  Image.Segments.push_back(Data);
+  Image.RuntimeCallablePointerSlots.push_back({0x80f0});
+  Image.RelocDataAddrs = {0x8000, 0x8010};
+  MedFunc F;
+  F.Name = "captured_frame_offset";
+  F.Entry = 0x1000;
+  F.FrameSize = 32;
+  F.ReturnType = NdType::makeInt(8);
+  auto var = [](int Id, uint16_t Size = 8) {
+    MedVar V;
+    V.Kind = MedVar::Temp;
+    V.Id = Id;
+    V.SSAVer = 1;
+    V.Size = Size;
+    V.TheArch = Arch::X64;
+    return V;
+  };
+  auto number = [](uint64_t N) {
+    return MedVar::makeConst(N, 8, ConstantAddressProvenance::Scalar);
+  };
+  auto address = [](uint64_t N) {
+    return MedVar::makeConst(N, 8, ConstantAddressProvenance::DataAddress);
+  };
+  for (int I = 0; I != 2; ++I) {
+    MedVar P = var(I);
+    P.Kind = MedVar::Param;
+    P.RegOff = kNoParamReg;
+    F.Params.push_back(P);
+  }
+  MedBlock B;
+  B.Id = 0;
+  B.StartAddr = F.Entry;
+  B.EndAddr = F.Entry + 0x100;
+  auto append = [&](NdOp Opcode, MedVar Out,
+                    std::initializer_list<MedVar> Inputs) {
+    MedOp Op;
+    Op.Opcode = Opcode;
+    Op.Output = Out;
+    Op.Addr = F.Entry + B.Ops.size();
+    for (const auto &V : Inputs)
+      Op.addInput(V);
+    B.Ops.push_back(Op);
+  };
+  auto call = [&](va_t Target, const char *Name, const MedVar &Argument) {
+    MedCallInfo Call;
+    Call.BlockId = 0;
+    Call.OpIdx = B.Ops.size();
+    Call.TargetAddr = Target;
+    Call.TargetName = Name;
+    Call.Args = {Argument};
+    F.CallInfos.push_back(Call);
+    append(NdOp::CALL, {}, {number(Target)});
+  };
+  MedVar SP = var(2);
+  SP.Kind = MedVar::Reg;
+  SP.RegOff = getTargetRegInfo(Arch::X64).StackPointer;
+  SP.SSAVer = 0;
+  append(NdOp::INT_ADD, var(3), {SP, number(uint64_t(-16))});
+  append(NdOp::STORE, {}, {var(3), number(7)});
+  call(0x2000, "retain_offset_slot", var(3));
+  append(NdOp::STORE, {}, {var(3), number(0)});
+  call(0x2100, "change_retained_offset", F.Params[0]);
+  append(NdOp::LOAD, var(4), {var(3)});
+  append(NdOp::INT_ADD, var(5), {address(0x8000), var(4)});
+  append(NdOp::SELECT, var(6), {F.Params[1], var(5), address(0x8010)});
+  append(NdOp::LOAD, var(7, 1), {var(6)});
+  append(NdOp::RETURN, {}, {var(7, 1)});
+  F.Blocks.push_back(std::move(B));
+  MedFunc Loop = F;
+  Loop.Name = "captured_frame_loop";
+  Loop.Entry = 0x1100;
+  Loop.Blocks.resize(3);
+  Loop.Blocks[0].Ops.resize(5);
+  Loop.Blocks[0].Succs = {1};
+  Loop.Blocks[1].Preds = {0, 1};
+  Loop.Blocks[1].Succs = {1, 2};
+  Loop.Blocks[2].Preds = {1};
+  Loop.Blocks[2].Ops.assign(F.Blocks[0].Ops.begin() + 5, F.Blocks[0].Ops.end());
+  for (unsigned I = 0; I != Loop.Blocks.size(); ++I) {
+    auto &Block = Loop.Blocks[I];
+    Block.Id = I;
+    Block.StartAddr = Loop.Entry + I * 0x40;
+    Block.EndAddr = Block.StartAddr + 0x40;
+    for (size_t J = 0; J != Block.Ops.size(); ++J)
+      Block.Ops[J].Addr = Block.StartAddr + J;
+  }
+  auto loopOp = [&](unsigned Block, NdOp Opcode, MedVar Out,
+                    std::initializer_list<MedVar> Inputs) {
+    MedOp Op;
+    Op.Opcode = Opcode;
+    Op.Output = Out;
+    Op.Addr = Loop.Blocks[Block].StartAddr + Loop.Blocks[Block].Ops.size();
+    for (const auto &V : Inputs)
+      Op.addInput(V);
+    Loop.Blocks[Block].Ops.push_back(Op);
+  };
+  loopOp(0, NdOp::BRANCH, {}, {number(Loop.Blocks[1].StartAddr)});
+  PhiNode Counter;
+  Counter.Output = var(20);
+  Counter.Args = {{0, number(0)}, {1, var(21)}};
+  Loop.Blocks[1].Phis.push_back(Counter);
+  loopOp(1, NdOp::LOAD, var(22), {var(3)});
+  loopOp(1, NdOp::INT_ADD, var(23), {var(22), number(1)});
+  loopOp(1, NdOp::STORE, {}, {var(3), var(23)});
+  loopOp(1, NdOp::INT_ADD, var(21), {var(20), number(1)});
+  loopOp(1, NdOp::INT_LESS, var(24, 1), {var(21), number(2)});
+  loopOp(1, NdOp::COND_BR, {}, {number(Loop.Blocks[1].StartAddr), var(24, 1)});
+  llvm::LLVMContext Context;
+  auto Module = MedLLVMEmitter().emit(
+      {F, Loop}, Context, "captured-frame-runtime-offset", Arch::X64,
+      {{0x2000, "retain_offset_slot"}, {0x2100, "change_retained_offset"}},
+      &Image, BinaryFormat::ELF);
+  ASSERT_NE(Module, nullptr);
+  ASSERT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
+  const auto *Storage = Module->getNamedGlobal("__nd_codeptr_8000");
+  ASSERT_NE(Storage, nullptr);
+  ASSERT_TRUE(Storage->isDeclaration());
+  const fs::path IR = tmpFile("captured-frame-offset.ll");
+  const fs::path Harness = tmpFile("captured-frame-offset.c");
+  const fs::path Binary = tmpFile("captured-frame-offset");
+  std::error_code EC;
+  llvm::raw_fd_ostream OS(IR.string(), EC);
+  ASSERT_FALSE(EC);
+  Module->print(OS, nullptr);
+  OS.close();
+  std::ofstream C(Harness);
+  C << R"(
+#include <stdint.h>
+unsigned char __nd_codeptr_8000[256] __attribute__((aligned(16)));
+static uintptr_t *retained;
+static unsigned calls;
+void retain_offset_slot(uintptr_t p) { retained = (uintptr_t *)p; ++calls; }
+void change_retained_offset(uintptr_t n) { *retained = n; ++calls; }
+extern uintptr_t captured_frame_offset(uintptr_t, uintptr_t);
+extern uintptr_t captured_frame_loop(uintptr_t, uintptr_t);
+int main(void) {
+  for (unsigned i = 0; i != 256; ++i) __nd_codeptr_8000[i] = i ^ 0xa5;
+  for (uintptr_t i = 0; i != 128; ++i)
+    for (uintptr_t choice = 0; choice != 2; ++choice) {
+      uintptr_t expected = __nd_codeptr_8000[choice ? i : 16];
+      if (captured_frame_offset(i, choice) != expected) return 1;
+      expected = __nd_codeptr_8000[choice ? i + 2 : 16];
+      if (captured_frame_loop(i, choice) != expected) return 2;
+    }
+  return calls == 1024 ? 0 : 3;
+}
+)";
+  C.close();
+  for (const char *Optimization : {"-O0", "-O2"}) {
+    auto Compiled =
+        exec(NEVERD_TEST_CLANG, {Optimization, IR.string(), Harness.string(),
+                                 "-o", Binary.string()});
+    ASSERT_EQ(Compiled.exitCode, 0) << Compiled.err;
+    auto Ran = exec(Binary.string(), {});
+    EXPECT_EQ(Ran.exitCode, 0) << Ran.err << Optimization;
+  }
 #endif
 }
 

@@ -3492,6 +3492,17 @@ before the owned runtime slots. Missing maps, fixups or ownership, added filler
 slots, unindexed reads, malformed strides, address overflow and exhausted
 evidence must retain the ordinary load path.
 
+`LLVMDataPointerInvariantBoundary.OriginalImageDisplacementsKeepEscapedFrameReadsLive`
+checks original-storage displacement reads across x86, x64, ARM and AArch64 in
+ELF, Mach-O and COFF. Initialization, partial writes, memory recurrences and
+query order are checked alongside pointer-valued sources, uninitialized loops,
+narrowed bases, raw address models, indirect-call uses and private mirrors. The
+native pointer suite's
+`OriginalImageOffsetsObserveCapturedFrameWrites` retains a slot address, overwrites
+the slot, changes it through the retained address and checks the resulting
+lookups, including an initialized memory loop, at O0 and O2 on Linux x86-64.
+This does not qualify Windows exception execution.
+
 `NeverDJumpTableTests` checks repeated field loads at nonzero offsets on x64
 and AArch64. Independently computed addresses may share a switch guard only
 when their full-width pointer, displacement, load width and memory history

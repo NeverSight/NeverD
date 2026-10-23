@@ -2057,7 +2057,8 @@ bool MedLLVMEmitter::valueIsGuardedScalarOffset(const MedVar &Value) const {
   return valueIsOpaqueRuntimeOffset(Constraint->Value);
 }
 
-bool MedLLVMEmitter::valueIsOpaqueRuntimeOffset(const MedVar &Value) const {
+bool MedLLVMEmitter::valueIsOpaqueRuntimeOffset(const MedVar &Value,
+                                                bool AllowEscapedFrame) const {
   if (!CurMedFunc || !Img)
     return false;
   const unsigned PointerSize = getTargetRegInfo(TargetArch).PointerSize;
@@ -2067,9 +2068,10 @@ bool MedLLVMEmitter::valueIsOpaqueRuntimeOffset(const MedVar &Value) const {
   // Exact spill recovery can itself consult scalar provenance. Keep a
   // re-entered source query incomplete until its outer proof has finished.
   using QueryKey = std::tuple<const MedLLVMEmitter *, const MedFunc *,
-                              AddressProvenanceVarKey>;
+                              AddressProvenanceVarKey, bool>;
   static thread_local std::set<QueryKey> ActiveQueries;
-  const QueryKey Query{this, CurMedFunc, addressProvenanceVarKey(Value)};
+  const QueryKey Query{this, CurMedFunc, addressProvenanceVarKey(Value),
+                       AllowEscapedFrame};
   if (!ActiveQueries.insert(Query).second)
     return false;
   auto LeaveQuery = llvm::make_scope_exit([&] { ActiveQueries.erase(Query); });
@@ -2146,12 +2148,15 @@ bool MedLLVMEmitter::valueIsOpaqueRuntimeOffset(const MedVar &Value) const {
   // A nested runtime load retains its address dependencies, and a private
   // reload retains every exact reaching STORE source. Neither may hide image
   // pointers behind an otherwise ordinary arithmetic or merge operation.
-  unsigned Budget = 256;
-  std::set<AddressProvenanceVarKey> Active, Done;
+  unsigned Budget = limits::backend::kMaxRuntimeOffsetSourceNodes;
+  std::map<AddressProvenanceVarKey, unsigned> Active;
+  std::set<AddressProvenanceVarKey> Done;
+  unsigned RuntimeFrameDepth = 0;
   bool SawRuntimeLoad = false;
   std::function<bool(const MedVar &, unsigned)> scalarSource =
       [&](const MedVar &V, unsigned Depth) {
-        if (Depth > 32 || Budget == 0 || V.Size == 0 || V.Size > 8)
+        if (Depth > limits::backend::kMaxRuntimeOffsetSourceDepth ||
+            Budget == 0 || V.Size == 0 || V.Size > 8)
           return false;
         --Budget;
         if (V.isConst())
@@ -2159,8 +2164,21 @@ bool MedLLVMEmitter::valueIsOpaqueRuntimeOffset(const MedVar &Value) const {
         const auto Key = addressProvenanceVarKey(V);
         if (Done.count(Key))
           return true;
-        if (!Active.insert(Key).second || varMayBeFrameAddress(V))
+        if (varMayBeFrameAddress(V))
           return false;
+        const auto [ActiveIt, Entered] = Active.emplace(Key, RuntimeFrameDepth);
+        if (!Entered) {
+          // A memory-carried recurrence can close only through a runtime LOAD
+          // whose all-path initialization has already been proved. Pure SSA
+          // cycles, and cycles merely nested under such a load, stay unproved.
+          return AllowEscapedFrame && RuntimeFrameDepth > ActiveIt->second;
+        }
+        bool RuntimeFrameAnchor = false;
+        auto Leave = llvm::scope_exit([&] {
+          Active.erase(Key);
+          if (RuntimeFrameAnchor)
+            --RuntimeFrameDepth;
+        });
         auto finish = [&] {
           Active.erase(Key);
           Done.insert(Key);
@@ -2199,11 +2217,35 @@ bool MedLLVMEmitter::valueIsOpaqueRuntimeOffset(const MedVar &Value) const {
           const MedVar &Address = Def->Inputs[0];
           if (varMayBeFrameAddress(Address)) {
             std::vector<MedVar> Sources;
-            if (!collectFrameReloadSources(*Def, Sources) || Sources.empty())
-              return false;
-            for (const MedVar &Source : Sources)
-              if (Source.Size != V.Size || !scalarSource(Source, Depth + 1))
+            // An original-image consumer can keep the actual loaded word
+            // after an escape. Its query audits the visible possible writes
+            // and initialization, but never substitutes a reaching value or
+            // claims that a call preserves this slot.
+            bool RuntimeFrame = false;
+            if (!collectFrameReloadSources(*Def, Sources)) {
+              if (!AllowEscapedFrame ||
+                  !collectFrameReloadSources(*Def, Sources,
+                                             FrameReloadSourceMode::Runtime))
                 return false;
+              RuntimeFrame = true;
+            }
+            if (Sources.empty())
+              return false;
+            if (RuntimeFrame) {
+              RuntimeFrameAnchor = true;
+              ++RuntimeFrameDepth;
+            }
+            for (const MedVar &Source : Sources) {
+              if (!Source.Size || Source.Size > V.Size ||
+                  (!RuntimeFrame && Source.Size != V.Size) ||
+                  varMayBeFrameAddress(Source))
+                return false;
+              if (RuntimeFrame && valueIsStableAddressOffset(Source))
+                continue;
+              if (!scalarSource(Source, Depth + 1))
+                return false;
+            }
+            SawRuntimeLoad |= RuntimeFrame;
           } else {
             if (traceValueVA(Address)) {
               if (!mutableRuntimeWord(Address, V.Size))

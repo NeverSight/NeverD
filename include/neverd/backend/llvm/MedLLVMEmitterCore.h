@@ -731,6 +731,14 @@ private:
   /// functions.
   bool preservesRegistrationImageStorage(uint64_t Begin, uint64_t End) const;
 
+  struct PointerRunStorageContract {
+    bool OriginalStorage = false;
+    bool OriginalCodeTargets = false;
+  };
+  PointerRunStorageContract pointerRunStorageContract(uint64_t Begin,
+                                                      uint64_t End) const;
+  bool pointerRunHasOriginalStorage(uint64_t RunStart) const;
+
   /// True when segment \p S is read-only after relocation — a true read-only
   /// segment (.rodata) or a `.data.rel.ro` (writable in section flags but a
   /// relocated, read-only-after-reloc pointer table).  A genuinely mutable
@@ -827,11 +835,18 @@ private:
   /// overlapping writes, ambiguous frame addresses, and cycles without a
   /// proven definition.  The returned values are provenance candidates only;
   /// callers must still prove what each value represents.
-  bool collectFrameReloadSources(const MedOp &Load,
-                                 std::vector<MedVar> &Sources) const;
+  /// Runtime mode additionally admits an escaped, initialized slot. Its
+  /// sources describe visible possible writes only: arbitrary callee writes
+  /// remain live runtime values. Only an original-image displacement consumer
+  /// may use this mode, never exact recovery, scalar bounds or call targets.
+  enum class FrameReloadSourceMode { Exact, Runtime };
+  bool collectFrameReloadSources(
+      const MedOp &Load, std::vector<MedVar> &Sources,
+      FrameReloadSourceMode Mode = FrameReloadSourceMode::Exact) const;
 
   bool collectFrameReloadSourcesUncached(const MedOp &Load,
-                                         std::vector<MedVar> &Sources) const;
+                                         std::vector<MedVar> &Sources,
+                                         FrameReloadSourceMode Mode) const;
 
   /// Prove a full-width STORE precedes this exact LOAD on every path.
   /// This proves initialization only; intervening writes still require a
@@ -1056,7 +1071,8 @@ private:
   /// establishes neither an index bound nor a callable slot domain. An address
   /// consumer additionally needs a complete pointer mirror and one uniform
   /// symbolized address model before using it as an unbounded offset.
-  bool valueIsOpaqueRuntimeOffset(const MedVar &V) const;
+  bool valueIsOpaqueRuntimeOffset(const MedVar &V,
+                                  bool AllowEscapedFrame = false) const;
   /// A runtime word read with no frame or relocatable image address dependency.
   /// A consumer must separately prove its bound or complete mirror ownership.
   bool isOpaqueRuntimeWordLoad(const MedOp &Op) const;
@@ -1967,7 +1983,8 @@ private:
   mutable FrameReloadCacheState FrameReloadSourceState =
       FrameReloadCacheState::Empty;
   mutable bool FrameReloadBuildSawReentrantQuery = false;
-  mutable std::map<FrameReloadOccurrenceKey, FrameReloadSourceResult>
+  mutable std::map<std::pair<FrameReloadOccurrenceKey, FrameReloadSourceMode>,
+                   FrameReloadSourceResult>
       FrameReloadSourceCache;
   // Immutable per-function write/CFG facts reused by every occurrence proof.
   // Result cache identity remains the upstream stable occurrence key.

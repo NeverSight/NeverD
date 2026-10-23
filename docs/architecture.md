@@ -8235,6 +8235,21 @@ acquire this permission. Indirect calls still need their independent complete
 callable-slot domain, and pointer recurrences retain
 their separate initialization and step proofs.
 
+A pointer run bound to original image storage has a separate runtime-displacement
+contract. The same `pointerRunStorageContract` selects its external declaration
+and authorizes keeping an escaped frame word as a live runtime read. A full
+store must initialize the word on every path. The source audit retains visible
+possibly overlapping writes, including partial writes and indirect destinations;
+known relocated pointers cannot become offsets through an escape. A memory
+recurrence closes only through a load with independently proved initialization,
+not through a pure SSA cycle. Internal exceptional continuations remain outside
+this audit. The expression must retain a complete symbolized pointer in one
+complete original-storage run. Its load and arithmetic remain in the output;
+no reaching value is substituted. This contract proves neither a scalar bound,
+no-capture behavior, callable identity nor native exception eligibility. Exact
+reload recovery and private mirrors retain their existing escape refusal, and
+source caches distinguish the two proof modes.
+
 Jump-table recovery emits transfers to ordinary successor blocks instead of rebuilding their statements through a separate path. Each block keeps one lowering owner, including shared cases, default targets and loop entries. Dispatch-edge PHI copies execute before the corresponding transfer, with parallel snapshots preserved; incomplete edge bindings remain explicit failures.
 
 Loop structuring preserves exact native entry ownership. An always-true wrapper keeps the first body instruction's label rather than duplicating it. A conditional backedge exits to its original continuation, including edge copies with no native address. Only exact continuation targets become breaks; transfers inside nested loops or switches keep their control scope.

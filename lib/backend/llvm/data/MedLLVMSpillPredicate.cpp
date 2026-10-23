@@ -1141,7 +1141,8 @@ void MedLLVMEmitter::ensureFrameReloadAnalysis() const {
 }
 
 bool MedLLVMEmitter::collectFrameReloadSources(
-    const MedOp &Load, std::vector<MedVar> &Sources) const {
+    const MedOp &Load, std::vector<MedVar> &Sources,
+    FrameReloadSourceMode Mode) const {
   Sources.clear();
   ++FrameReloadSourceWork.Queries;
 
@@ -1195,7 +1196,8 @@ bool MedLLVMEmitter::collectFrameReloadSources(
     FrameReloadBuildSawReentrantQuery = true;
     return false;
   }
-  if (auto It = FrameReloadSourceCache.find(*Key);
+  const auto CacheKey = std::make_pair(*Key, Mode);
+  if (auto It = FrameReloadSourceCache.find(CacheKey);
       It != FrameReloadSourceCache.end()) {
     ++FrameReloadSourceWork.Hits;
     Sources = It->second.Sources;
@@ -1206,7 +1208,8 @@ bool MedLLVMEmitter::collectFrameReloadSources(
   FrameReloadBuildSawReentrantQuery = false;
   ++FrameReloadSourceWork.Builds;
   std::vector<MedVar> NextSources;
-  const bool Proven = collectFrameReloadSourcesUncached(Load, NextSources);
+  const bool Proven =
+      collectFrameReloadSourcesUncached(Load, NextSources, Mode);
 
   const bool CanPublish =
       FrameReloadSourceCacheFor == CurMedFunc &&
@@ -1226,7 +1229,7 @@ bool MedLLVMEmitter::collectFrameReloadSources(
   }
 
   auto [Published, Inserted] = FrameReloadSourceCache.emplace(
-      *Key, FrameReloadSourceResult{Proven, NextSources});
+      CacheKey, FrameReloadSourceResult{Proven, NextSources});
   (void)Inserted;
   FrameReloadSourceState = FrameReloadCacheState::Ready;
   Sources = Published->second.Sources;
@@ -1368,15 +1371,31 @@ bool MedLLVMEmitter::frameReloadHasAllPathInitializer(const MedOp &Load) const {
 }
 
 bool MedLLVMEmitter::collectFrameReloadSourcesUncached(
-    const MedOp &Load, std::vector<MedVar> &Sources) const {
+    const MedOp &Load, std::vector<MedVar> &Sources,
+    FrameReloadSourceMode Mode) const {
   Sources.clear();
   const bool Escapes = CurMedFunc && Load.Opcode == NdOp::LOAD &&
                        Load.NumInputs >= 1 &&
                        stackSlotAddressEscapes(Load.Inputs[0]);
   if (!CurMedFunc || Load.Opcode != NdOp::LOAD || Load.NumInputs < 1 ||
       Load.Output.Size == 0 ||
-      Load.MemoryAddressSpace != NdMemoryAddressSpace::Default || Escapes)
+      Load.MemoryAddressSpace != NdMemoryAddressSpace::Default ||
+      (Mode == FrameReloadSourceMode::Exact && Escapes) ||
+      (Mode == FrameReloadSourceMode::Runtime && !Escapes))
     return false;
+
+  // A runtime-source audit does not project effects at an internal throw
+  // point. Escaping exceptional exits cannot reach this load again, while a
+  // handler that resumes in this function needs its own ordered edge proof.
+  if (Mode == FrameReloadSourceMode::Runtime)
+    for (const MedBlock &Block : CurMedFunc->Blocks) {
+      auto Internal = [](const ExceptionalEdge &Edge) {
+        return Edge.BlockId >= 0;
+      };
+      if (llvm::any_of(Block.ExceptionalSuccs, Internal) ||
+          llvm::any_of(Block.ExceptionalPreds, Internal))
+        return false;
+    }
 
   const auto Target = canonicalFrameSlotKey(Load.Inputs[0]);
   if (!Target)
@@ -1438,12 +1457,28 @@ bool MedLLVMEmitter::collectFrameReloadSourcesUncached(
   // footprint does not. Keep this cache within the enclosing immutable CFG
   // transaction; a reentrant or invalidated query cannot publish its result.
   std::map<std::pair<AddressProvenanceVarKey, uint16_t>, bool> DisjointWrites;
+  size_t RuntimeWork = limits::backend::kMaxFrameRuntimeSourceWork;
+  bool Exhausted = false;
+  auto consume = [&] {
+    if (Mode == FrameReloadSourceMode::Exact)
+      return true;
+    if (!RuntimeWork) {
+      Exhausted = true;
+      return false;
+    }
+    --RuntimeWork;
+    return true;
+  };
   auto transfer = [&](const FrameReloadBlock &Block, std::size_t Boundary,
                       ReachingState State,
                       const ControlValueBindings *Bindings = nullptr) {
     if (!State.Reachable)
       return State;
     for (const FrameReloadWrite &Write : Block.Writes) {
+      if (!consume()) {
+        State.Invalid = true;
+        return State;
+      }
       if (Write.Index >= Boundary)
         break;
       if (!Write.HasAddress) {
@@ -1452,8 +1487,23 @@ bool MedLLVMEmitter::collectFrameReloadSourcesUncached(
         continue;
       }
       const MedVar &WriteAddr = Write.Address;
-      if (!varMayBeFrameAddress(WriteAddr))
+      if (!varMayBeFrameAddress(WriteAddr)) {
+        if (Mode == FrameReloadSourceMode::Exact)
+          continue;
+        // A known image object is disjoint from this frame. After an escape,
+        // any other indirect write can overlap the reload; retain its source
+        // as a possible runtime value, without treating it as initialization.
+        uint64_t ImageVA = 0;
+        if (resolveMaterializableDataAddress(WriteAddr, ImageVA))
+          continue;
+        if (Write.IsStore && Write.HasValue && Write.Size != 0 &&
+            Write.Size <= Load.Output.Size) {
+          addUnique(State.Values, Write.Value);
+        } else {
+          State.Invalid = true;
+        }
         continue;
+      }
       const uint16_t WriteSize = Write.Size;
       const auto WriteKey = canonicalFrameSlotKey(
           WriteAddr, /*RequireEntryStackPointer=*/false, Bindings);
@@ -1489,9 +1539,17 @@ bool MedLLVMEmitter::collectFrameReloadSourcesUncached(
         addUnique(State.Values, Write.Value);
         continue;
       }
-      State.Uninitialized = false;
-      State.Invalid = true;
-      State.Values.clear();
+      if (Mode == FrameReloadSourceMode::Runtime && Write.IsStore &&
+          Write.HasValue && WriteSize != 0 && WriteSize <= Load.Output.Size) {
+        // A partial write cannot initialize a whole word. Once a full store
+        // has initialized it, keep both the old bytes and this new source in
+        // the provenance audit instead of pretending to recover an exact word.
+        addUnique(State.Values, Write.Value);
+      } else {
+        State.Uninitialized = false;
+        State.Invalid = true;
+        State.Values.clear();
+      }
     }
     return State;
   };
@@ -1560,6 +1618,8 @@ bool MedLLVMEmitter::collectFrameReloadSourcesUncached(
       return false;
     const FrameReloadBlock &Block = BlockIt->second;
     for (int SuccId : Block.Successors) {
+      if (!consume())
+        return false;
       if (FrameReloadIndex.Blocks.find(SuccId) == FrameReloadIndex.Blocks.end())
         return false;
       const auto Facts = Block.EqualityFacts.find(SuccId);
@@ -1582,8 +1642,8 @@ bool MedLLVMEmitter::collectFrameReloadSourcesUncached(
     return false;
   ReachingState AtLoad =
       transfer(LoadBlockIt->second, Site.Index, InStates[Site.BlockId]);
-  if (!AtLoad.Reachable || AtLoad.Uninitialized || AtLoad.Invalid ||
-      AtLoad.Values.empty())
+  if (Exhausted || !AtLoad.Reachable || AtLoad.Uninitialized ||
+      AtLoad.Invalid || AtLoad.Values.empty())
     return false;
   Sources = std::move(AtLoad.Values);
   return true;
