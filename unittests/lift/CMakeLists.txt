@@ -1542,6 +1542,7 @@ add_neverd_unittest(NeverDExceptionEdgeTests
 )
 
 add_neverd_unittest(NeverDRegistrationEHTests
+  eh/RegistrationConditionalCxxTests.cpp
   eh/RegistrationEH4WrapperTests.cpp
   eh/RegistrationPrologueSavesTests.cpp
   eh/RegistrationTryLevelTests.cpp

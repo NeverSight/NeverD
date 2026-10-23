@@ -8693,6 +8693,24 @@ ordinary calls keep their entry roles. This prevents a runtime-only handler from
 inventing an ordinary LLVM body and a conflicting CRT personality declaration;
 it grants neither a callable ABI nor permission to omit a guard.
 
+The private `proveBoundCxxCallee` query replays a fixed-frame, cleanup-only PE32
+C++ helper under checked caller-frame inputs. It shares ordinary C++ handler,
+cookie and state setup, authenticates the direct call and complete current body,
+and requires a uniform stack-pop extent. Full volatile register facts and
+initialized scalar output words remain distinct from incoming pointer carriers.
+The conditional memory owner bounds every access and composes checked child
+borrows; ordinary and exceptional writes are may-effects, not initialization
+claims. Physical EAX facts join by return occurrence, retaining an exact borrowed
+address or unknown alias taint separately from persistent capture. A later scalar
+store cannot clear a failed capture proof. Nested callees and unwind actions must
+have complete private/borrowed effects; image writes, including personality-IAT
+rewrites, need a further evidence-preservation proof and currently refuse.
+The caller still owns instruction-boundary binding, object lifetime and runtime
+administration separation. Invocation answers never enter the target-only callee
+cache. This query supplies no MedIR receipt, spill-reload exception or native ABI;
+opaque heap inputs, general imports, catches and realigned callees remain outside
+its domain.
+
 Swift once addressors may return early when the predicate is already complete. The source proof requires both exits to return the same exact storage, with the sole `swift_once` call confined to the initialization path. Publication rechecks the current body, predicate, initializer, context parameter and ABI; an old discovery plan cannot authorize changed returns or additional effects.
 
 `LLVMMemoryAnalysis` owns literal integer-offset decomposition and the memory-transparent intrinsic contract used by byte forwarding and private-frame projection. `projectLLVMPrivateFrame` accepts an explicit numeric entry root, relative frame bounds and disjoint live object extents. It derives the actual access range and proves every loaded byte initialized across all predecessors and backedges before creating local storage. Original numeric address values and scalar instructions remain; external objects may alias each other and remain observable. Unknown effects, ordered memory, metadata, unresolved addresses, missing initialization and exhausted bounds refuse without mutation. Privacy, nonfaulting original accesses, nonwrapping bounds and unobserved final frame contents are caller preconditions. This shared 32/64-bit LLVM API is a conditional memory projection for defined executions, not native ABI or definedness evidence, and the default decompiler does not infer or invoke its contract.

@@ -30,7 +30,7 @@ bool RegistrationStateSolver::checkConditionalMemory(
     return (Address.Constant == 0 && Memory.AccessSize == 4) || Refuse();
   if (Op.MemoryAddressSpace != NdMemoryAddressSpace::Default)
     return Refuse();
-  if (EH4 && CompleteCookies && Op.Opcode == NdOp::LOAD &&
+  if ((EH4 || CxxCookies) && CompleteCookies && Op.Opcode == NdOp::LOAD &&
       Memory.AccessSize == 4 && Address.Constant == SecurityCookieVA)
     return true;
   if (Address.SEHException)
@@ -111,6 +111,14 @@ bool RegistrationStateSolver::conditionalReturn(const Domain &State,
              !Value.CallbackAddress && !Value.SEHException;
   }
   Conditional->Complete &= Valid;
+  if (Valid && KnownCxx && charge(1)) {
+    const auto Value =
+        State.Frame.Registers[x86reg::RAX / x86reg::GeneralRegStride];
+    const auto [It, New] = Conditional->ReturnValues.emplace(
+        std::make_pair(Op.Addr, Op.Seq), Value);
+    if (!New)
+      It->second = join(It->second, Value);
+  }
   return Valid;
 }
 
@@ -124,11 +132,26 @@ bool RegistrationStateSolver::conditionalCall(const FrameState &State,
   };
   if (Op.NumInputs != 1 || !Op.Inputs[0].isConst() || Op.Inputs[0].Size != 4)
     return Refuse();
+  if (KnownCxx) {
+    const auto SP =
+        State.Registers[x86reg::RSP / x86reg::GeneralRegStride].Offset;
+    // CALL writes its return PC below ESP even without an explicit LowIR
+    // STORE. It cannot borrow the incoming/output area or overwrite a node.
+    if (!SP || *SP > *Chain.RegistrationOffset)
+      return Refuse();
+  }
   const va_t Target = Op.Inputs[0].Offset;
   // The transfer owner checks the actual ECX cookie and records the call.
   // The callee proof requires that complete cookie receipt before publishing.
-  if (EH4 && CompleteCookies && CookieCheckVA && Op.Opcode == NdOp::CALL &&
-      Target == CookieCheckVA)
+  if ((EH4 || CxxCookies) && CompleteCookies && CookieCheckVA &&
+      Op.Opcode == NdOp::CALL && Target == CookieCheckVA)
+    return true;
+  // These contracts have independently checked original bodies, including
+  // ambient memory accesses. transferCall still has to bind the current
+  // arguments, initialization and effects; stack-pop evidence alone is not
+  // a no-capture contract.
+  if (KnownCxx && CheckCalls && Op.Opcode == NdOp::CALL &&
+      CalleeIndices.count(Target))
     return true;
   if (LocalUnwindTargets.count({Target, Op.Opcode == NdOp::INDIR_CALL}) ||
       (Op.Opcode == NdOp::CALL && FinallyTargets.count(Target)))

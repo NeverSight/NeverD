@@ -269,10 +269,18 @@ bool RegistrationStateSolver::projectFrameObject(
       return false;
     const int64_t Begin = int64_t(Object) + Extent.Begin;
     const int64_t End = int64_t(Object) + Extent.End;
+    bool Borrowed = false;
+    if (KnownCxx && Conditional && Begin >= 8) {
+      if (End > INT32_MAX || !charge(Conditional->Objects.size()))
+        return false;
+      Borrowed = llvm::any_of(Conditional->Objects, [&](const auto &Range) {
+        return Range.Begin <= Begin && End <= Range.End;
+      });
+    }
     // Saved EBP and the caller PC lie above the source allocation. The common
     // administration proof also protects runtime slots within that allocation.
     if (Begin < *SP || Begin < -int64_t(limits::kMaxSourceCallBorrowedBytes) ||
-        End > (KnownCxx ? *Chain.cxxRuntimeFrameOffset() : 0) ||
+        (!Borrowed && End > (KnownCxx ? *Chain.cxxRuntimeFrameOffset() : 0)) ||
         !frameObjectIsDisjointFromAdministration(Begin, End) ||
         !charge(size_t(End - Begin) + State.Frame.cellCount()))
       return false;
@@ -286,6 +294,10 @@ bool RegistrationStateSolver::projectFrameObject(
           return false;
     }
     Projected.push_back({int32_t(Begin), int32_t(End)});
+    if (Borrowed) {
+      auto &Effects = Reads ? Conditional->Reads : Conditional->Writes;
+      Effects.emplace(int32_t(Begin), int32_t(End));
+    }
   }
   return true;
 }

@@ -6821,6 +6821,16 @@ ordinary calls remain discoverable. Fixed/ESI/ESP prefix tests bind their decode
 operand to the same chain-read observation; shared-helper tests recheck every
 protocol instruction. These checks qualify the guarded parent within the whole
 module, not complete native recovery of every function in that module.
+`RegistrationConditionalCxx` constructs an authored fixed-frame GS C++ helper
+with a stack output pointer, a scalar child and a checked cleanup. It distinguishes
+scalar, exact borrowed, joined and partial-register returns; composes child
+reads/may-writes; and checks a closed throw with exceptional cleanup. Direct
+capture, capture followed by a scalar overwrite, ambient `FS:[0]` capture in
+ordinary/unwind callees, and personality-IAT rewrites must refuse. Current-image,
+cookie, metadata, return-pop, input ownership and shared-budget mutations cannot
+reuse a successful invocation. These source-only tests do not authorize native
+calls or caller reloads; every negative input mutation starts from a successful
+fresh baseline.
 `RegistrationFrameStores` and `RegistrationFrameTaint` test bounded LLVM spill
 proofs, joins, backedges, partial writes and exhausted budgets. Loader tests keep
 independent SafeSEH/code references and real function boundaries while excluding

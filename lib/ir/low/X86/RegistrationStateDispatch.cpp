@@ -289,10 +289,26 @@ void RegistrationStateSolver::seedEntries() {
     Initial.Frame.Cells[4] = PC;
   }
   if (Conditional) {
+    for (const auto &[Index, Value] : Conditional->Registers) {
+      // The query may refine only complete volatile input carriers. Saved
+      // nonvolatile identities and both physical frame registers stay owned
+      // by the entry protocol above.
+      if (Index != x86reg::RAX / x86reg::GeneralRegStride &&
+          Index != x86reg::RCX / x86reg::GeneralRegStride &&
+          Index != x86reg::RDX / x86reg::GeneralRegStride) {
+        Conditional->Complete = false;
+        continue;
+      }
+      Initial.Frame.Registers[Index] = Value;
+    }
     for (const auto &[Offset, Value] : Conditional->Arguments)
       Initial.Frame.store(Offset, 4, Value);
-    for (const auto &[Offset, Value] : Conditional->ObjectCells)
+    for (const auto &[Offset, Value] : Conditional->ObjectCells) {
       Initial.Frame.store(Offset, 4, Value);
+      if (KnownCxx && Offset <= INT32_MAX - 4)
+        for (int32_t Byte = Offset; Byte != Offset + 4; ++Byte)
+          Initial.InitializedFrameBytes.insert(Byte);
+    }
   }
   Initial.Frame.OtherRegistersMayBeFrame = true;
   // After push EBP, the canonical direct prologue establishes EBP at this
