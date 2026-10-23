@@ -15926,6 +15926,7 @@ TEST(LLVMDataPointerInvariantBoundary,
     CallableLoad,
     SpilledPointer,
     WidenedSpilledPointer,
+    WidenedGlobalSource,
     InternalContinuation
   };
   for (Arch A : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64})
@@ -15939,7 +15940,8 @@ TEST(LLVMDataPointerInvariantBoundary,
               Case::PointerInitializer, Case::RawBase, Case::NarrowBase,
               Case::RuntimeLoop, Case::UninitializedLoop, Case::PointerLoop,
               Case::CallableLoad, Case::SpilledPointer,
-              Case::WidenedSpilledPointer, Case::InternalContinuation}) {
+              Case::WidenedSpilledPointer, Case::WidenedGlobalSource,
+              Case::InternalContinuation}) {
           SCOPED_TRACE(std::to_string(static_cast<int>(A)) + "/" +
                        formatTraceName(Format) + "/" +
                        std::to_string(OriginalStorage) + "/" +
@@ -15982,6 +15984,16 @@ TEST(LLVMDataPointerInvariantBoundary,
           if (OriginalStorage) {
             const va_t Slot = TableVA + 0x10;
             Image.RuntimeCallablePointerSlots.push_back({Slot});
+          }
+          constexpr va_t GlobalVA = 0x700000;
+          if (C == Case::WidenedGlobalSource) {
+            Segment Global;
+            Global.Name = ".data";
+            Global.VA = GlobalVA;
+            Global.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+            Global.Size = Global.FileSz = 64;
+            Global.Data.resize(Global.Size);
+            Image.Segments.push_back(std::move(Global));
           }
           MedFunc F;
           F.Name = "escaped_runtime_displacement";
@@ -16033,6 +16045,17 @@ TEST(LLVMDataPointerInvariantBoundary,
                 C == Case::PointerInitializer || C == Case::PointerLoop
                     ? address()
                     : number(0);
+            if (C == Case::WidenedGlobalSource) {
+              MedVar GlobalAddress = temp(8), Object = temp(), Field = temp();
+              append(
+                  NdOp::INT_ZEXT, GlobalAddress,
+                  {MedVar::makeConst(GlobalVA, Width,
+                                     ConstantAddressProvenance::DataAddress)});
+              append(NdOp::LOAD, Object, {GlobalAddress});
+              append(NdOp::INT_ADD, Field, {Object, number(8)});
+              Initial = temp();
+              append(NdOp::LOAD, Initial, {Field});
+            }
             if (C == Case::PartialStore)
               Initial.Size = Width / 2;
             append(NdOp::STORE, {}, {Slot, Initial});
@@ -16101,7 +16124,8 @@ TEST(LLVMDataPointerInvariantBoundary,
           MedVar Selected = temp(), Pointer = temp(), Result = temp();
           append(NdOp::INT_ADD, Pointer, {Base, Reload});
           append(NdOp::SELECT, Selected, {Input, Pointer, Base});
-          if (C == Case::SpilledPointer || C == Case::WidenedSpilledPointer) {
+          if (C == Case::SpilledPointer || C == Case::WidenedSpilledPointer ||
+              C == Case::WidenedGlobalSource) {
             MedVar PointerSlot = temp(), Saved = temp();
             append(NdOp::INT_ADD, PointerSlot, {SP, number(uint64_t(-24))});
             if (C == Case::WidenedSpilledPointer && Width == 4) {
@@ -16145,7 +16169,8 @@ TEST(LLVMDataPointerInvariantBoundary,
               C == Case::PartialRuntimeWrite || C == Case::RawBase ||
               C == Case::NarrowBase || C == Case::RuntimeLoop ||
               C == Case::CallableLoad || C == Case::SpilledPointer ||
-              C == Case::WidenedSpilledPointer;
+              C == Case::WidenedSpilledPointer ||
+              C == Case::WidenedGlobalSource;
           EXPECT_EQ(MedLLVMProvenanceTestPeer::originalImageRuntimeOffset(
                         Classifier, Reload),
                     RuntimeSource);
@@ -16164,7 +16189,8 @@ TEST(LLVMDataPointerInvariantBoundary,
               OriginalStorage &&
               (C == Case::Initialized || C == Case::RuntimeWrite ||
                C == Case::PartialRuntimeWrite || C == Case::RuntimeLoop ||
-               C == Case::SpilledPointer || C == Case::WidenedSpilledPointer);
+               C == Case::SpilledPointer || C == Case::WidenedSpilledPointer ||
+               C == Case::WidenedGlobalSource);
           EXPECT_EQ(Module != nullptr, Expected) << Diagnostic;
           if (Module)
             expectValidModule(*Module);
@@ -16368,6 +16394,18 @@ TEST(LLVMDataPointerInvariantBoundary,
   enum class Case {
     Direct,
     Nested,
+    WidenedAddress,
+    RoundTripAddress,
+    NarrowedAddress,
+    SignedAddress,
+    ShiftedAddress,
+    ScalarAddress,
+    FragmentAddress,
+    CodeAddress,
+    WrappedForeignOwner,
+    ExtraCopyInput,
+    ExtraExtensionInput,
+    ExtraSliceInput,
     ZeroFilled,
     Nonzero,
     ReadOnly,
@@ -16394,6 +16432,18 @@ TEST(LLVMDataPointerInvariantBoundary,
          {BinaryFormat::ELF, BinaryFormat::MachO, BinaryFormat::COFF})
       for (Case C : {Case::Direct,
                      Case::Nested,
+                     Case::WidenedAddress,
+                     Case::RoundTripAddress,
+                     Case::NarrowedAddress,
+                     Case::SignedAddress,
+                     Case::ShiftedAddress,
+                     Case::ScalarAddress,
+                     Case::FragmentAddress,
+                     Case::CodeAddress,
+                     Case::WrappedForeignOwner,
+                     Case::ExtraCopyInput,
+                     Case::ExtraExtensionInput,
+                     Case::ExtraSliceInput,
                      Case::ZeroFilled,
                      Case::Nonzero,
                      Case::ReadOnly,
@@ -16423,8 +16473,9 @@ TEST(LLVMDataPointerInvariantBoundary,
                      formatTraceName(Format) + "/" +
                      std::to_string(static_cast<int>(C)));
         const uint16_t Width = getTargetRegInfo(A).PointerSize;
-        constexpr va_t GlobalVA = SpilledConstTableVA + 0x1000;
-        constexpr va_t SlotVA = GlobalVA + 16;
+        const va_t GlobalVA =
+            Width == 4 ? 0x500000 : SpilledConstTableVA + 0x1000;
+        const va_t SlotVA = GlobalVA + 16;
         BinaryImage Image =
             makeSpilledConstTableImage(A, Format, /*PointerTable=*/true);
         Image.Bits = Width == 8 ? Bitness::Bits64 : Bitness::Bits32;
@@ -16514,11 +16565,50 @@ TEST(LLVMDataPointerInvariantBoundary,
             Op.addInput(V);
           Block.Ops.push_back(Op);
         };
+        MedVar Address = MedVar::makeConst(
+            SlotVA, Width, ConstantAddressProvenance::DataAddress,
+            C == Case::ForeignOwner || C == Case::WrappedForeignOwner
+                ? SpilledConstTableVA
+                : GlobalVA);
+        if (C == Case::ScalarAddress)
+          Address.Provenance = ConstantAddressProvenance::Scalar;
+        if (C == Case::FragmentAddress)
+          Address.Provenance = ConstantAddressProvenance::AddressFragment;
+        if (C == Case::CodeAddress)
+          Address.Provenance = ConstantAddressProvenance::CodeAddress;
+        const bool Wrapped =
+            C == Case::WidenedAddress || C == Case::RoundTripAddress ||
+            C == Case::NarrowedAddress || C == Case::SignedAddress ||
+            C == Case::ShiftedAddress || C == Case::ScalarAddress ||
+            C == Case::FragmentAddress || C == Case::CodeAddress ||
+            C == Case::WrappedForeignOwner || C == Case::ExtraCopyInput ||
+            C == Case::ExtraExtensionInput || C == Case::ExtraSliceInput;
+        if (Wrapped) {
+          if (C == Case::NarrowedAddress) {
+            MedVar Narrow = temp(Width / 2);
+            append(NdOp::SUBBYTES, Narrow, {Address, number(0)});
+            Address = Narrow;
+          }
+          MedVar Wide = temp(2 * Width);
+          append(C == Case::SignedAddress ? NdOp::INT_SEXT : NdOp::INT_ZEXT,
+                 Wide, {Address});
+          if (C == Case::ExtraCopyInput || C == Case::ExtraExtensionInput) {
+            if (C == Case::ExtraCopyInput)
+              Block.Ops.back().Opcode = NdOp::COPY;
+            Block.Ops.back().addInput(number(1));
+          }
+          Address = Wide;
+          if (C != Case::WidenedAddress) {
+            MedVar Low = temp();
+            append(NdOp::SUBBYTES, Low,
+                   {Address, number(C == Case::ShiftedAddress ? 1 : 0)});
+            if (C == Case::ExtraSliceInput)
+              Block.Ops.back().addInput(number(1));
+            Address = Low;
+          }
+        }
         MedVar Word = temp(C == Case::WideLoad ? 2 * Width : Width);
-        append(NdOp::LOAD, Word,
-               {MedVar::makeConst(
-                   SlotVA, Width, ConstantAddressProvenance::DataAddress,
-                   C == Case::ForeignOwner ? SpilledConstTableVA : GlobalVA)});
+        append(NdOp::LOAD, Word, {Address});
         if (C == Case::SegmentLoad)
           Block.Ops.back().MemoryAddressSpace = NdMemoryAddressSpace::X86FS;
         if (C == Case::Nested) {
@@ -16531,6 +16621,8 @@ TEST(LLVMDataPointerInvariantBoundary,
         append(NdOp::INT_MULT, Scaled, {Word, number(Width)});
         append(NdOp::RETURN, {}, {Scaled});
         const bool Expected = C == Case::Direct || C == Case::Nested ||
+                              C == Case::WidenedAddress ||
+                              C == Case::RoundTripAddress ||
                               C == Case::ZeroFilled || C == Case::Nonzero ||
                               C == Case::ObjectFootprint;
         MedLLVMEmitter Proof;
@@ -16538,6 +16630,10 @@ TEST(LLVMDataPointerInvariantBoundary,
                                                         Format);
         EXPECT_EQ(MedLLVMProvenanceTestPeer::runtimeOffset(Proof, Scaled),
                   Expected);
+        if (Wrapped && C != Case::WrappedForeignOwner)
+          EXPECT_EQ(MedLLVMProvenanceTestPeer::materializableDataAddress(
+                        Proof, Address),
+                    Expected);
         if (Expected) {
           EXPECT_FALSE(
               MedLLVMProvenanceTestPeer::stableOffset(Proof, Scaled, nullptr));

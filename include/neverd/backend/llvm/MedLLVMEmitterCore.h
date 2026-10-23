@@ -1416,9 +1416,10 @@ private:
   /// lookup-or-compute wrappers around these *Impl bodies (which hold the
   /// unchanged analysis).
   void ensureConstClassCache() const;
-  /// Resolve one occurrence-sensitive address operand through bit-preserving
-  /// COPYs. Numeric membership in a mapped segment is insufficient: the leaf
-  /// must carry architectural address origin or exact loader provenance.
+  /// Resolve one occurrence-sensitive address operand through the shared
+  /// pointer-preserving transports, retaining a complete target pointer at
+  /// every step. Numeric membership in a mapped segment is insufficient: the
+  /// leaf must carry architectural address origin or exact loader provenance.
   bool resolveMaterializableDataAddress(const MedVar &V, uint64_t &Value,
                                         uint64_t *OwnerVA = nullptr) const;
   bool constUsedAsPointerImpl(uint64_t Val) const;

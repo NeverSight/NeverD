@@ -4749,8 +4749,12 @@ const MedOp *MedLLVMEmitter::memoryAddressSumDef(const MedVar &Address) const {
 
 std::optional<MedVar>
 MedLLVMEmitter::pointerPreservingInput(const MedOp &Op) const {
+  // A transport must be a complete operation, not merely have a usable first
+  // operand. Extra operands cannot be discarded by a provenance proof.
+  const unsigned ExpectedInputs = Op.Opcode == NdOp::SUBBYTES ? 2 : 1;
   if (Op.RegistrationRoot != MedOp::RegistrationRootKind::None ||
-      Op.NumInputs < 1 || Op.Output.Size == 0 || Op.Inputs[0].Size == 0)
+      Op.NumInputs != ExpectedInputs || Op.Output.Size == 0 ||
+      Op.Inputs[0].Size == 0)
     return std::nullopt;
 
   const MedVar &Input = Op.Inputs[0];

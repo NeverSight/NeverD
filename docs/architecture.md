@@ -8250,6 +8250,15 @@ no-capture behavior, callable identity nor native exception eligibility. Exact
 reload recovery and private mirrors retain their existing escape refusal, and
 source caches distinguish the two proof modes.
 
+Materializable data-address resolution uses the same pointer-preserving
+transport rule as pointer-role recovery. Widened native addresses and their
+low pointer-width slices retain the leaf's occurrence provenance and storage
+owner. A narrow intermediate, shifted slice or unproved signed extension
+cannot regain that provenance through widening. Malformed transport operations
+with missing or extra operands grant no pointer identity. Mutable image-word
+reads use this shared resolution before checking their complete storage and
+fixup extent.
+
 Jump-table recovery emits transfers to ordinary successor blocks instead of rebuilding their statements through a separate path. Each block keeps one lowering owner, including shared cases, default targets and loop entries. Dispatch-edge PHI copies execute before the corresponding transfer, with parallel snapshots preserved; incomplete edge bindings remain explicit failures.
 
 Loop structuring preserves exact native entry ownership. An always-true wrapper keeps the first body instruction's label rather than duplicating it. A conditional backedge exits to its original continuation, including edge copies with no native address. Only exact continuation targets become breaks; transfers inside nested loops or switches keep their control scope.

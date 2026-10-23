@@ -3504,6 +3504,14 @@ the slot, changes it through the retained address and checks the resulting
 lookups, including an initialized memory loop, at O0 and O2 on Linux x86-64.
 This does not qualify Windows exception execution.
 
+`MutableImageWordsNeedCompleteStorageWithoutPointerFixups` also checks widened
+addresses and complete low-pointer slices on all four architectures and three
+formats. Narrow intermediates, shifted slices, signed extensions, scalar/code
+origins, extra operation inputs and foreign storage owners remain rejected. The
+escaped-displacement test includes a nested field load from a widened
+mutable-global address before the stack index and final table pointer are saved
+and reloaded.
+
 `NeverDJumpTableTests` checks repeated field loads at nonzero offsets on x64
 and AArch64. Independently computed addresses may share a switch guard only
 when their full-width pointer, displacement, load width and memory history
