@@ -203,6 +203,30 @@ X87ArithmeticResult roundResult(const llvm::APInt &N, const llvm::APInt &D,
 }
 } // namespace
 
+std::optional<X87IntegerStoreResult>
+convertFiniteX87ToInteger(const X87Binary80Bytes &Value, unsigned Bytes,
+                          uint16_t Control) {
+  if ((Bytes != 2 && Bytes != 4 && Bytes != 8) ||
+      !x87ControlWordIsValid(Control))
+    return std::nullopt;
+  const auto Source = decode(Value);
+  if (!Source)
+    return std::nullopt;
+  const auto Rounded =
+      roundRational(llvm::APInt(64, Source->Significand), llvm::APInt(64, 1),
+                    Source->Scale, (Control >> 10) & 3, Source->Negative);
+  const uint64_t Indefinite = UINT64_C(1) << (Bytes * 8 - 1);
+  const uint64_t Limit = Indefinite - !Source->Negative;
+  if (Rounded.Significand.getActiveBits() > 64 ||
+      Rounded.Significand.getZExtValue() > Limit)
+    return X87IntegerStoreResult{Indefinite, Invalid, false};
+  const auto Magnitude = Rounded.Significand.getZExtValue();
+  const auto Result = Source->Negative ? -Magnitude : Magnitude;
+  return X87IntegerStoreResult{llvm::APInt(Bytes * 8, Result).getZExtValue(),
+                               uint16_t(Rounded.Inexact ? Precision : 0),
+                               Rounded.Incremented};
+}
+
 std::optional<X87ArithmeticResult>
 evaluateFiniteX87Arithmetic(X87ArithmeticOperation Operation,
                             const X87Binary80Bytes &Left,

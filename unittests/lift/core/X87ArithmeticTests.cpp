@@ -15,6 +15,7 @@
 
 #include "llvm/ADT/APFloat.h"
 #include "llvm/ADT/APInt.h"
+#include "llvm/ADT/APSInt.h"
 
 #include <array>
 #include <cstdint>
@@ -205,6 +206,96 @@ TEST(X87Arithmetic, FiniteComparisonMatchesIndependentLLVMOrdering) {
     EXPECT_FALSE(evaluateFiniteX87Compare(Unsupported, bits(0, 0)));
     EXPECT_FALSE(evaluateFiniteX87Compare(bits(0, 0), Unsupported));
   }
+}
+
+TEST(X87Arithmetic, IntegerStoresUseRCWithoutPCOrDenormalException) {
+  for (unsigned Bytes : {2U, 4U, 8U})
+    for (unsigned PC : {0U, 2U, 3U})
+      for (unsigned RC = 0; RC != 4; ++RC)
+        for (unsigned Sign : {0U, 0x8000U}) {
+          const bool Negative = Sign != 0;
+          const bool Away = RC == (Negative ? 1U : 2U);
+          for (const auto &Input :
+               {bits(1, Sign), bits(IntegerBit, 0x3ffe | Sign)}) {
+            const auto Actual =
+                convertFiniteX87ToInteger(Input, Bytes, control(PC, RC));
+            ASSERT_TRUE(Actual);
+            const uint64_t Expected = Away ? (Negative ? UINT64_MAX : 1) : 0;
+            EXPECT_EQ(Actual->Bits,
+                      llvm::APInt(Bytes * 8, Expected).getZExtValue());
+            EXPECT_EQ(Actual->Exceptions, 32); // Never DE for FIST/FISTP.
+            EXPECT_EQ(Actual->RoundedUp, Away);
+          }
+          const auto OneAndHalf =
+              bits(UINT64_C(0xc000000000000000), 0x3fff | Sign);
+          const auto Actual =
+              convertFiniteX87ToInteger(OneAndHalf, Bytes, control(PC, RC));
+          ASSERT_TRUE(Actual);
+          const bool Up = RC == 0 || Away;
+          const uint64_t Magnitude = Up ? 2 : 1;
+          EXPECT_EQ(Actual->Bits,
+                    llvm::APInt(Bytes * 8, Negative ? -Magnitude : Magnitude)
+                        .getZExtValue());
+          EXPECT_EQ(Actual->Exceptions, 32);
+          EXPECT_EQ(Actual->RoundedUp, Up);
+          // Both integer endpoints must survive even PC=24.
+          const uint64_t SignBit = UINT64_C(1) << (Bytes * 8 - 1);
+          for (uint64_t Exact : {SignBit, SignBit - 1}) {
+            const auto Source = convertIntegerToX87(Exact, Bytes, true);
+            ASSERT_TRUE(Source);
+            const auto Endpoint =
+                convertFiniteX87ToInteger(*Source, Bytes, control(PC, RC));
+            ASSERT_TRUE(Endpoint);
+            EXPECT_EQ(Endpoint->Bits, Exact);
+            EXPECT_EQ(Endpoint->Exceptions, 0);
+            EXPECT_FALSE(Endpoint->RoundedUp);
+          }
+        }
+}
+
+TEST(X87Arithmetic, IntegerStoreBoundariesMatchIndependentLLVMConversion) {
+  constexpr std::array Rounding{
+      llvm::APFloat::rmNearestTiesToEven, llvm::APFloat::rmTowardNegative,
+      llvm::APFloat::rmTowardPositive, llvm::APFloat::rmTowardZero};
+  std::mt19937_64 Random(0x87f1571677);
+  for (unsigned Bytes : {2U, 4U, 8U})
+    for (unsigned Trial = 0; Trial != 512; ++Trial) {
+      // Concentrate on signed limits and fractional ties, with wide exponents
+      // mixed in. LLVM's conversion independently supplies range/PE behavior.
+      const unsigned Exponent = Trial % 4 == 0
+                                    ? 1 + Random() % 0x7ffe
+                                    : 0x3fff + Random() % (Bytes * 8 + 2);
+      auto Value = bits(Random() | IntegerBit, Exponent | (Random() & 0x8000));
+      if (Trial < 4)
+        Value = bits(UINT64_MAX - (Trial & 1),
+                     (0x3fff + Bytes * 8 - 2) | (Trial & 2 ? 0x8000 : 0));
+      for (unsigned RC = 0; RC != 4; ++RC) {
+        llvm::APSInt Converted(Bytes * 8, false);
+        bool Exact = false;
+        const llvm::APFloat Source(llvm::APFloat::x87DoubleExtended(),
+                                   integer(Value));
+        const auto Status =
+            Source.convertToInteger(Converted, Rounding[RC], &Exact);
+        const bool Invalid = Status & llvm::APFloat::opInvalidOp;
+        const uint64_t Expected =
+            Invalid ? UINT64_C(1) << (Bytes * 8 - 1) : Converted.getZExtValue();
+        for (unsigned PC : {0U, 2U, 3U}) {
+          const auto Actual =
+              convertFiniteX87ToInteger(Value, Bytes, control(PC, RC));
+          ASSERT_TRUE(Actual);
+          EXPECT_EQ(Actual->Bits, Expected);
+          EXPECT_EQ(Actual->Exceptions, Invalid ? 1 : Exact ? 0 : 32);
+          if (Invalid)
+            EXPECT_FALSE(Actual->RoundedUp);
+        }
+      }
+    }
+  for (const auto &Unsupported :
+       {bits(IntegerBit, 0x7fff), bits(UINT64_C(0xc000000000000123), 0x7fff),
+        bits(1, 1), bits(IntegerBit, 0)})
+    EXPECT_FALSE(convertFiniteX87ToInteger(Unsupported, 4, 0x37f));
+  EXPECT_FALSE(convertFiniteX87ToInteger(bits(0, 0), 1, 0x37f));
+  EXPECT_FALSE(convertFiniteX87ToInteger(bits(0, 0), 4, 0x17f));
 }
 
 TEST(X87Arithmetic, OverflowAndGradualUnderflowRetainPCAndStatus) {

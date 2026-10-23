@@ -168,4 +168,34 @@ TEST(X87PortableEmulator, CompareFlagsFeedDownstreamIntegerInstructions) {
   EXPECT_EQ((*E.getX87Context())[4], 2);
   EXPECT_EQ((*E.getRegister(x86reg::FPU_SW) >> 11) & 7, 1);
 }
+
+TEST(X87PortableEmulator, IntegerStoreWritesOnlyAuthenticatedDestination) {
+  auto Img = image();
+  NdOpEmulator E(Img);
+  E.setStrictMode(true);
+  E.setX87PortableMode(true);
+  ASSERT_TRUE(E.setX86LinearAddressBits(48));
+  std::array<uint8_t, 512> State{};
+  State[0] = 0x7f;
+  State[1] = 3;
+  State[4] = 1;
+  const auto Value = X87Binary80{UINT64_C(0xc000000000000000), 0x3fff}.bytes();
+  std::copy(Value.begin(), Value.end(), State.begin() + 32);
+  ASSERT_TRUE(E.setX87Context(State));
+  // A four-byte store crossing the segment end cannot consume ST0.
+  E.setRegister(x86reg::RAX, DataAddress + 254);
+  EXPECT_FALSE(instruction(E, std::array<uint8_t, 2>{0xdb, 0x18}));
+  EXPECT_EQ(E.getX87Context(), State);
+  // The same address is a valid exact-extent two-byte destination.
+  ASSERT_TRUE(instruction(E, std::array<uint8_t, 2>{0xdf, 0x18}));
+  EXPECT_EQ(E.getRegister(x86reg::FPU_SW), 0x0a20);
+  ASSERT_TRUE(E.getX87Context());
+  EXPECT_EQ((*E.getX87Context())[4], 0);
+  LowOp Load;
+  Load.Opcode = NdOp::LOAD;
+  Load.Output = NdVar::tmp(90002, 2);
+  Load.addInput(NdVar::cst(DataAddress + 254, 8));
+  ASSERT_TRUE(E.step(Load));
+  EXPECT_EQ(E.getRegister(90002), 2);
+}
 } // namespace

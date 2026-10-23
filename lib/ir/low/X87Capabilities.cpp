@@ -224,7 +224,8 @@ X87Capability queryX87Capability(const X87CapabilityQuery &Q) {
       Result.Requirements =
           "explicit setX87PortableMode(true); x64 owned state; known CW/SW "
           "and read payloads; authenticated ordinary memory; no pending "
-          "waiting exception or stack fault; arithmetic/comparisons require "
+          "waiting exception or stack fault; arithmetic/comparisons/integer "
+          "stores require "
           "all masks and canonical finite operands; raw m80/register moves "
           "retain "
           "encodings; undefined C0/C2/C3/FOP/register FDP are not CPU identity";

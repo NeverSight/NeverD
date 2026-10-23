@@ -97,9 +97,9 @@ NEVERD_X87_FORM(FILD_m32int, 0xdb, 0x00, 0x00, true, "FILD", "m32int", true,
 NEVERD_X87_FORM(FISTTP_m32int, 0xdb, 0x08, 0x08, true, "FISTTP", "m32int", true,
                 ValueProjection, None)
 NEVERD_X87_FORM(FIST_m32int, 0xdb, 0x10, 0x10, true, "FIST", "m32int", true,
-                ValueProjection, None)
+                ValueProjection, StoreInteger)
 NEVERD_X87_FORM(FISTP_m32int, 0xdb, 0x18, 0x18, true, "FISTP", "m32int", true,
-                ValueProjection, None)
+                ValueProjection, StoreIntegerPop)
 NEVERD_X87_FORM(FLD_m80fp, 0xdb, 0x28, 0x28, true, "FLD", "m80fp", true,
                 ValueProjection, LoadRaw)
 NEVERD_X87_FORM(FSTP_m80fp, 0xdb, 0x38, 0x38, true, "FSTP", "m80fp", true,
@@ -123,9 +123,9 @@ NEVERD_X87_FORM(FILD_m16int, 0xdf, 0x00, 0x00, true, "FILD", "m16int", true,
 NEVERD_X87_FORM(FISTTP_m16int, 0xdf, 0x08, 0x08, true, "FISTTP", "m16int", true,
                 ValueProjection, None)
 NEVERD_X87_FORM(FIST_m16int, 0xdf, 0x10, 0x10, true, "FIST", "m16int", true,
-                ValueProjection, None)
+                ValueProjection, StoreInteger)
 NEVERD_X87_FORM(FISTP_m16int, 0xdf, 0x18, 0x18, true, "FISTP", "m16int", true,
-                ValueProjection, None)
+                ValueProjection, StoreIntegerPop)
 NEVERD_X87_FORM(FBLD_m80bcd, 0xdf, 0x20, 0x20, true, "FBLD", "m80bcd", false,
                 ValueProjection, None)
 NEVERD_X87_FORM(FILD_m64int, 0xdf, 0x28, 0x28, true, "FILD", "m64int", true,
@@ -133,7 +133,7 @@ NEVERD_X87_FORM(FILD_m64int, 0xdf, 0x28, 0x28, true, "FILD", "m64int", true,
 NEVERD_X87_FORM(FBSTP_m80bcd, 0xdf, 0x30, 0x30, true, "FBSTP", "m80bcd", false,
                 ValueProjection, None)
 NEVERD_X87_FORM(FISTP_m64int, 0xdf, 0x38, 0x38, true, "FISTP", "m64int", true,
-                ValueProjection, None)
+                ValueProjection, StoreIntegerPop)
 NEVERD_X87_FORM(FADD_reg_d8, 0xd8, 0xc0, 0xc7, false, "FADD", "ST(0),ST(i)",
                 true, ValueProjection, Add)
 NEVERD_X87_FORM(FMUL_reg_d8, 0xd8, 0xc8, 0xcf, false, "FMUL", "ST(0),ST(i)",

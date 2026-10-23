@@ -179,6 +179,13 @@ They preserve signed-zero equality, set DE for subnormal operands, commit
 condition/flag results and pop only after successful comparison. NaNs,
 infinities, unsupported encodings and stack faults refuse atomically; this
 does not conflate FCOM/FUCOM's unimplemented NaN exception differences.
+FIST/FISTP m16/m32 and FISTP m64 convert canonical finite values directly under
+RC, independently of PC. The rounded integer range determines masked IE and
+the destination-width integer indefinite; otherwise inexact conversion sets PE
+and the rounding direction sets C1. Subnormal inputs do not set DE. This follows
+the [Intel FIST/FISTP instruction contract](https://cdrdv2-public.intel.com/868140/253666-089-sdm-vol-2a.pdf#page=458).
+FISTTP remains outside this initial profile. Integer stores and their pops
+commit together only after the full memory range and state are authenticated.
 Arithmetic uses canonical finite operands with all exception masks set, all
 three valid PC settings and all four RC settings. Raw m80/register transport
 preserves all ten bytes, including NaN payloads and unsupported encodings.

@@ -298,6 +298,57 @@ TEST(X87PortableContext, ComparisonsCommitConditionsFlagsAndOnlyRequiredPops) {
   }
 }
 
+TEST(X87PortableContext, IntegerStoresCommitExactExtentStatusAndPop) {
+  struct Form {
+    unsigned Escape, Group, Bytes;
+    bool Pops;
+  };
+  const Form Forms[] = {{0xdf, 2, 2, false},
+                        {0xdf, 3, 2, true},
+                        {0xdb, 2, 4, false},
+                        {0xdb, 3, 4, true},
+                        {0xdf, 7, 8, true}};
+  for (const auto &F : Forms)
+    for (unsigned Top = 0; Top != 8; ++Top) {
+      auto S = initial(Top);
+      putWord(S, 2, (Top << 11) | 8); // Retain sticky OE.
+      put(S, 0, bits(UINT64_C(0xc000000000000000), 0xbfff)); // -1.5
+      std::array<uint8_t, 10> Memory{};
+      Memory.fill(0xa5);
+      uint8_t Known = 0xff;
+      ASSERT_EQ(step(mem(F.Escape, F.Group), S, Known,
+                     std::span(Memory).subspan(1, F.Bytes)),
+                Outcome::Completed);
+      EXPECT_EQ(Memory[0], 0xa5);
+      EXPECT_EQ(Memory[F.Bytes + 1], 0xa5);
+      EXPECT_EQ(Memory[1], 0xfe);
+      for (unsigned I = 2; I <= F.Bytes; ++I)
+        EXPECT_EQ(Memory[I], 0xff);
+      EXPECT_EQ(word(S, 2), (((Top + F.Pops) & 7) << 11) | 0x228);
+      EXPECT_EQ(S[4], F.Pops ? uint8_t(0xff & ~(1U << Top)) : 0xff);
+      EXPECT_EQ(Known, 0xff);
+      EXPECT_EQ(get(S, F.Pops ? 7 : 0),
+                bits(UINT64_C(0xc000000000000000), 0xbfff));
+      EXPECT_EQ(address(S, 8), GuestIP);
+      EXPECT_EQ(address(S, 16), GuestDP);
+
+      for (const auto &Unsupported :
+           {bits(IntegerBit, 0x7fff),
+            bits(UINT64_C(0xc000000000000123), 0xffff), bits(1, 1)}) {
+        auto Rejected = initial(Top);
+        put(Rejected, 0, Unsupported);
+        const auto Before = Rejected;
+        const auto BeforeMemory = Memory;
+        EXPECT_EQ(step(mem(F.Escape, F.Group), Rejected, Known,
+                       std::span(Memory).subspan(1, F.Bytes)),
+                  Outcome::UnsupportedValue);
+        EXPECT_EQ(Rejected, Before);
+        EXPECT_EQ(Memory, BeforeMemory);
+        EXPECT_EQ(Known, 0xff);
+      }
+    }
+}
+
 TEST(X87PortableContext, WaitingAndNonwaitingControlPreserveDefinedEffects) {
   auto S = initial(5);
   putWord(S, 0, 0x37e);

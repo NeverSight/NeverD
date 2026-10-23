@@ -60,6 +60,23 @@ evaluateFiniteX87Arithmetic(X87ArithmeticOperation Operation,
 std::optional<X87Binary80Bytes>
 convertIntegerToX87(uint64_t Bits, unsigned Bytes, bool Signed);
 
+struct X87IntegerStoreResult {
+  /// Low destination-width bits, zero extended. Masked invalid conversions
+  /// return the destination-width integer indefinite (its sign bit alone).
+  uint64_t Bits = 0;
+  uint16_t Exceptions = 0;
+  bool RoundedUp = false;
+};
+
+/// FIST/FISTP numerical conversion for canonical finite binary80 values and
+/// signed 2/4/8-byte destinations. RC selects direct integer rounding; PC does
+/// not narrow the source. Subnormal operands raise PE, not DE. A rounded
+/// out-of-range value raises only IE. The owner supplies stack/memory effects
+/// and must not commit masked results under unmasked exception controls.
+std::optional<X87IntegerStoreResult>
+convertFiniteX87ToInteger(const X87Binary80Bytes &Value, unsigned Bytes,
+                          uint16_t Control);
+
 } // namespace neverd
 
 #endif // NEVERD_IR_LOW_X87ARITHMETIC_H

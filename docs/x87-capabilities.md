@@ -79,8 +79,8 @@ continues to reject reserved bits, invalid addressing forms and prefixes.
 | FNSTCW | m16cw | D9 | 38 | 2 | true | portable-state-only |
 | FILD | m32int | DB | 00 | 4 | true | portable-exact-value-projection |
 | FISTTP | m32int | DB | 08 | 4 | true | value-projection |
-| FIST | m32int | DB | 10 | 4 | true | value-projection |
-| FISTP | m32int | DB | 18 | 4 | true | value-projection |
+| FIST | m32int | DB | 10 | 4 | true | portable-value-projection |
+| FISTP | m32int | DB | 18 | 4 | true | portable-value-projection |
 | FLD | m80fp | DB | 28 | 10 | true | portable-value-projection |
 | FSTP | m80fp | DB | 38 | 10 | true | portable-value-projection |
 | FLD | m64fp | DD | 00 | 8 | true | value-projection |
@@ -92,12 +92,12 @@ continues to reject reserved bits, invalid addressing forms and prefixes.
 | FNSTSW | m16sw | DD | 38 | 2 | true | portable-state-only |
 | FILD | m16int | DF | 00 | 2 | true | portable-exact-value-projection |
 | FISTTP | m16int | DF | 08 | 2 | true | value-projection |
-| FIST | m16int | DF | 10 | 2 | true | value-projection |
-| FISTP | m16int | DF | 18 | 2 | true | value-projection |
+| FIST | m16int | DF | 10 | 2 | true | portable-value-projection |
+| FISTP | m16int | DF | 18 | 2 | true | portable-value-projection |
 | FBLD | m80bcd | DF | 20 | 10 | false | owned-only |
 | FILD | m64int | DF | 28 | 8 | true | portable-exact-value-projection |
 | FBSTP | m80bcd | DF | 30 | 10 | false | owned-only |
-| FISTP | m64int | DF | 38 | 8 | true | value-projection |
+| FISTP | m64int | DF | 38 | 8 | true | portable-value-projection |
 | FADD | ST(0),ST(i) | D8 | C0–C7 | 0 | true | portable-value-projection |
 | FMUL | ST(0),ST(i) | D8 | C8–CF | 0 | true | portable-value-projection |
 | FCOM | ST(0),ST(i) | D8 | D0–D7 | 0 | true | portable-value-projection |
@@ -428,7 +428,7 @@ test_sources are regression source references, not passing results, CPU qualific
 - explicit incoming state; validated encoding, memory and CFG/call contract.
 - x86 GCC/Clang GNU assembly and target x87; actual source/target ABI and long-double layout; typed C value operations require 64-bit significand long double; admitted CFG/tag/control and call preconditions.
 - x86-64 GCC/Clang; FXSAVE/FXRSTOR; SSE3 for FISTTP; known CW/SW, tags and demanded payloads; valid PC/RC; no pending unmasked exception at waiting boundaries; authenticated ordinary memory; processor-dependent operations require explicit non-strict native-reference mode.
-- explicit setX87PortableMode(true); x64 owned state; known CW/SW and read payloads; authenticated ordinary memory; no pending waiting exception or stack fault; arithmetic/comparisons require all masks and canonical finite operands; raw m80/register moves retain encodings; undefined C0/C2/C3/FOP/register FDP are not CPU identity.
+- explicit setX87PortableMode(true); x64 owned state; known CW/SW and read payloads; authenticated ordinary memory; no pending waiting exception or stack fault; arithmetic/comparisons/integer stores require all masks and canonical finite operands; raw m80/register moves retain encodings; undefined C0/C2/C3/FOP/register FDP are not CPU identity.
 
 Test sources referenced by this inventory:
 

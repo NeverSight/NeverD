@@ -181,6 +181,23 @@ Outcome execute(Operation Op, unsigned Escape, unsigned Index, Context &S,
     S.clearC1();
     return S.push(*Value);
   }
+  case Operation::StoreInteger:
+  case Operation::StoreIntegerPop: {
+    if (auto Status = S.readable(0); Status != Outcome::Completed)
+      return Status;
+    const auto Value =
+        convertFiniteX87ToInteger(S.read(0), Memory.size(), word(S.Image));
+    if (!Value)
+      return Outcome::UnsupportedValue;
+    for (unsigned I = 0; I != Memory.size(); ++I)
+      Memory[I] = Value->Bits >> (I * 8);
+    putWord(S.Image, 2,
+            (word(S.Image, 2) & ~C1) | Value->Exceptions |
+                (Value->RoundedUp ? C1 : 0));
+    if (Op == Operation::StoreIntegerPop)
+      S.pop();
+    return Outcome::Completed;
+  }
   case Operation::Negate:
   case Operation::Absolute: {
     if (auto Status = S.readable(0); Status != Outcome::Completed)

@@ -57,6 +57,8 @@ enum class X87PortableOperation {
   LoadRaw,
   StoreRawPop,
   LoadInteger,
+  StoreInteger,
+  StoreIntegerPop,
   Negate,
   Absolute,
   LoadRegister,
