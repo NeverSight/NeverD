@@ -78,6 +78,7 @@ struct StackBody {
   std::map<int, const LowBlock *> Blocks;
   std::map<va_t, int> Entries;
   std::map<int, bool> Immutable;
+  std::map<va_t, std::set<uint32_t>> VariantConstants;
   bool Valid = false;
 
   StackBody(const BinaryImage &Image, const LowFunc &Function, size_t &Work)
@@ -97,6 +98,59 @@ struct StackBody {
     Valid = true;
   }
 
+  bool immutableInstruction(const LowInstructionBoundary &Boundary) {
+    if (readImmutableCodeBytes(Image, Boundary.Address, Boundary.Size))
+      return true;
+    const auto *Bytes = Image.readVA(Boundary.Address, Boundary.Size);
+    DecodedInsn Insn;
+    if (!Bytes ||
+        !Dec.decodeOne(Bytes, Boundary.Size, Boundary.Address, Insn) ||
+        Insn.Size != Boundary.Size || !Insn.Raw || !Insn.Raw->detail)
+      return false;
+    const auto &X86 = Insn.Raw->detail->x86;
+    std::vector<va_t> Operands;
+    bool Memory = false, Immediate = false;
+    for (unsigned I = 0; I != X86.op_count; ++I) {
+      const auto &Operand = X86.operands[I];
+      Memory |= Operand.type == X86_OP_MEM && Operand.mem.base != X86_REG_EIP &&
+                Operand.mem.base != X86_REG_RIP;
+      Immediate |= Operand.type == X86_OP_IMM;
+    }
+    if (Memory && X86.encoding.disp_size == 4)
+      Operands.push_back(Boundary.Address + X86.encoding.disp_offset);
+    // HIGHLOW is an absolute field, never a relative branch/call encoding.
+    if (Immediate && X86.encoding.imm_size == 4 &&
+        Boundary.Control == LowInstructionControl::None)
+      Operands.push_back(Boundary.Address + X86.encoding.imm_offset);
+    if (!readImmutablePE32CodeBytes(Image, Boundary.Address, Boundary.Size,
+                                    Operands))
+      return false;
+    // The opcode is immutable, but these operand values may change with the
+    // load address. The stack-only query below deliberately forgets them.
+    // This grants no callee memory, return-value or native-EH authority.
+    auto &Constants = VariantConstants[Boundary.Address];
+    for (va_t Operand : Operands)
+      Constants.insert(readLE<uint32_t>(Bytes + Operand - Boundary.Address));
+    return true;
+  }
+
+  LowOp stackOperation(const LowOp &Op) const {
+    LowOp Abstract = Op;
+    const auto Constants = VariantConstants.find(Op.Addr);
+    for (unsigned I = 0; I != Abstract.NumInputs; ++I) {
+      auto &Input = Abstract.Inputs[I];
+      if (Input.isConst() &&
+          (isAddressProvenance(Input.Provenance) ||
+           (Constants != VariantConstants.end() &&
+            Constants->second.count(uint32_t(Input.Offset)))))
+        // RAM is an unknown abstract value to FrameTransfer. This temporary
+        // view is never emitted, and cannot turn a relocated literal (or a
+        // numerically equal internal operand) into a fixed frame offset.
+        Input = NdVar::ram(0, Input.Size);
+    }
+    return Abstract;
+  }
+
   bool immutableBlock(int Id) {
     if (!chargeCalleeWork(Work, 1))
       return false;
@@ -104,9 +158,8 @@ struct StackBody {
     if (!New)
       return It->second;
     for (const auto &Boundary : Blocks.at(Id)->InstructionBoundaries)
-      if (!chargeCalleeWork(Work, 1) ||
-          !registration_abi::hasImmutableCalleeInstruction(Image, Boundary,
-                                                           Dec))
+      if (!chargeCalleeWork(Work, 1 + Boundary.Size) ||
+          !immutableInstruction(Boundary))
         return false;
     return It->second = true;
   }
@@ -207,7 +260,8 @@ stackPopForBody(StackBody &Body, va_t Entry,
         Adjust.addInput(NdVar::cst(*CalleePop, 4));
         CallSP = Transfer.evaluate(Adjust, false);
       }
-      Transfer.write(Op, Transfer.evaluate(Op, false));
+      const auto Abstract = Body.stackOperation(Op);
+      Transfer.write(Abstract, Transfer.evaluate(Abstract, false));
       if (CallSP)
         State.Registers[x86reg::RSP / x86reg::GeneralRegStride] = *CallSP;
     }

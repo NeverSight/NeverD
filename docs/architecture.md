@@ -2262,6 +2262,14 @@ through one cache and work budget, with no facts borrowed from an in-progress
 recursive proof. Unchecked nested calls forget ESP;
 explicit restoration through an ABI-preserved register can recover it. Memory
 loads do not acquire a saved-stack identity in the ordinary-body analysis.
+For this stack-only query, decoded full-width absolute instruction fields may
+carry checked PE32 HIGHLOW relocations, including arithmetic operands. Their
+values are unknown in the affine replay: equality at the preferred image base
+cannot prove a stack adjustment after rebasing. Direct register restoration
+remains valid independently of those values. Relative control operands,
+overlapping or malformed fixups and writable code still reject the proof.
+The stronger callee memory and scalar-return proofs retain their separate
+instruction and value requirements.
 SEH callees additionally require the complete shared registration
 state/lifetime proof to separate dispatcher returns and seed established EBP
 at except entries. The same independent register-only proof still checks

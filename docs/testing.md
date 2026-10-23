@@ -9006,7 +9006,11 @@ The source registration solver uses one administration-boundary check for object
 `NeverDRegistrationCalleeStackTests` runs the decoded PE32 call/return ABI
 controls, including a cycle between a registration parent and an ordinary
 wrapper. An unbalanced recursive wrapper cannot borrow its own pending ESP
-answer. `RegistrationCallABI.ReturningStackProofDoesNotNormalizeTheX87Stack`
+answer. `RegistrationCallABI.ReturningStackDoesNotFreezeRelocatedOperands`
+checks arithmetic address operands and independent register restoration at
+two image bases, rejects cancellation against equal unrelocated literals,
+and covers conflicting, overlapping, partial and control-flow fixups.
+`RegistrationCallABI.ReturningStackProofDoesNotNormalizeTheX87Stack`
 keeps the stack proof for bodies whose x87 normalization alone is incomplete
 or splits blocks by TOP, and for FXAM with a proved or unproved tag.
 `RegistrationCallABI.ScalarReturnDescribesEAXBesideAnX87Result` pins the leaf

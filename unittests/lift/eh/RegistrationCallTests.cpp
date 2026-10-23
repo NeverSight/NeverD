@@ -16,6 +16,8 @@
 #include "neverd/loader/ReadOnlyBytes.h"
 #include "neverd/support/BinaryEncoding.h"
 
+#include "llvm/BinaryFormat/COFF.h"
+
 #include <algorithm>
 #include <vector>
 
@@ -190,6 +192,95 @@ TEST(RegistrationCallABI, StackCleanupRequiresEveryRestoredNearReturn) {
         getCheckedX86CalleeStackPop(F.Image, ThrowImage::TextVA).has_value(),
         Mutation == 0);
   }
+}
+
+TEST(RegistrationCallABI, ReturningStackDoesNotFreezeRelocatedOperands) {
+  enum class Case {
+    RelativeResult,
+    RegisterRestore,
+    RelocatedCancellation,
+    DerivedCancellation,
+    WrongWidth,
+    Duplicate,
+    OpcodeFixup,
+    ShortField,
+    Writable,
+    ConflictingTarget,
+    RelativeControl
+  };
+  for (uint32_t Base : {0x400000u, 0x18000000u})
+    for (Case C : {Case::RelativeResult, Case::RegisterRestore,
+                   Case::RelocatedCancellation, Case::DerivedCancellation,
+                   Case::WrongWidth, Case::Duplicate, Case::OpcodeFixup,
+                   Case::ShortField, Case::Writable, Case::ConflictingTarget,
+                   Case::RelativeControl}) {
+      SCOPED_TRACE(Base);
+      SCOPED_TRACE(static_cast<unsigned>(C));
+      BinaryImage Image;
+      Image.Arch = Arch::X86;
+      Image.Bits = Bitness::Bits32;
+      Image.Format = BinaryFormat::COFF;
+      Image.Base = Base;
+      Image.Entry = Base + 0x1000;
+      Segment Text;
+      Text.Name = ".text";
+      Text.VA = Image.Entry;
+      Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+      // The result depends on the load address; returning ESP does not.
+      Text.Data = {0x8b, 0x44, 0x24, 4, 0x2d, 0, 0, 0, 0, 0xc2, 8, 0};
+      size_t Field = 5;
+      if (C == Case::RegisterRestore) {
+        Text.Data = {0x55, 0x8b, 0xec, 0x81, 0xec, 0, 0, 0,
+                     0,    0x8b, 0xe5, 0x5d, 0xc2, 8, 0};
+      } else if (C == Case::RelocatedCancellation ||
+                 C == Case::DerivedCancellation) {
+        // Equal preferred-base literals cease to cancel after rebasing.
+        // Following the relocated MOV through another arithmetic producer
+        // must not recover the original constant as a stack displacement.
+        Text.Data = {0xb8, 0, 0, 0, 0};
+        Field = 1;
+        if (C == Case::DerivedCancellation)
+          Text.Data.insert(Text.Data.end(), {0x83, 0xc0, 4});
+        Text.Data.insert(Text.Data.end(), {0x01, 0xc4, 0x81, 0xec});
+        const size_t Scalar = Text.Data.size();
+        Text.Data.resize(Scalar + 4);
+        writeLE<uint32_t>(Text.Data.data() + Scalar,
+                          Base + (C == Case::DerivedCancellation ? 4 : 0));
+        Text.Data.push_back(0xc3);
+      } else if (C == Case::ShortField) {
+        Text.Data = {0x66, 0x2d, 0, 0, 0x90, 0x90, 0xc3};
+        Field = 2;
+      } else if (C == Case::RelativeControl) {
+        Text.Data = {0xe9, 0, 0, 0, 0, 0xc3};
+        Field = 1;
+      }
+      if (C != Case::RelativeControl && C != Case::ShortField)
+        writeLE<uint32_t>(Text.Data.data() + Field, Base);
+      Text.Size = Text.FileSz = Text.Data.size();
+      if (C == Case::Writable)
+        Text.Flags = Text.Flags | SegmentFlags::Writable;
+      Section Code;
+      Code.Name = Text.Name;
+      Code.VA = Text.VA;
+      Code.Size = Code.FileSz = Text.Size;
+      Code.Flags = Text.Flags;
+      Image.Sections.push_back(Code);
+      Image.Segments.push_back(Text);
+      Image.BaseRelocations.push_back(
+          {Text.VA + Field, llvm::COFF::IMAGE_REL_BASED_HIGHLOW});
+      if (C == Case::WrongWidth)
+        Image.BaseRelocations[0].Type = llvm::COFF::IMAGE_REL_BASED_DIR64;
+      if (C == Case::Duplicate)
+        Image.BaseRelocations.push_back(Image.BaseRelocations[0]);
+      if (C == Case::OpcodeFixup)
+        --Image.BaseRelocations[0].Address;
+      if (C == Case::ConflictingTarget)
+        Image.DataAddressRelocOperands[Text.VA + Field] = {Base, Base + 4, 4};
+      EXPECT_EQ(getCheckedX86CalleeStackPop(Image, Image.Entry),
+                C == Case::RelativeResult || C == Case::RegisterRestore
+                    ? std::optional<uint32_t>{8}
+                    : std::nullopt);
+    }
 }
 
 TEST(RegistrationCallABI, StackCleanupIncludesCheckedNestedImportCleanup) {
