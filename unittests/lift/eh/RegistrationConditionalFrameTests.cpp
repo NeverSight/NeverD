@@ -19,8 +19,94 @@
 #include "neverd/lift/X86Regs.h"
 #include "neverd/loader/COFF/COFFLoader.h"
 #include "neverd/pipeline/Pipeline.h"
+#include "neverd/support/BinaryEncoding.h"
+
+#include "llvm/BinaryFormat/COFF.h"
 
 using namespace neverd;
+
+TEST(RegistrationConditionalFrame, BoundImmutableScansKeepTheirMemoryExtent) {
+  using namespace registration_state;
+  for (va_t Base : {0x400000u, 0x18000000u})
+    for (unsigned Count : {0u, 1u, 3u})
+      for (unsigned Mutation = 0; Mutation != 8; ++Mutation) {
+        SCOPED_TRACE(Base);
+        SCOPED_TRACE(Count);
+        SCOPED_TRACE(Mutation);
+        BinaryImage Image;
+        Image.Arch = Arch::X86;
+        Image.Bits = Bitness::Bits32;
+        Image.Format = BinaryFormat::COFF;
+        Image.Base = Base;
+        Image.Entry = Base + 0x1000;
+        Segment Text;
+        Text.Name = ".text";
+        Text.VA = Image.Entry;
+        Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+        // Sum count immutable words. The count, addresses and backedge must
+        // be proved together; the mapping's capacity is not a loop bound.
+        Text.Data = {0x55, 0x8b, 0xec, 0x56, 0x8b, 0x75, 0x08, 0x8b, 0x0e, 0x8d,
+                     0x56, 0x04, 0x31, 0xc0, 0x85, 0xc9, 0x74, 0x08, 0x03, 0x02,
+                     0x83, 0xc2, 0x04, 0x49, 0x75, 0xf8, 0x5e, 0x5d, 0xc3};
+        Segment Data;
+        Data.Name = ".rdata";
+        Data.VA = Base + 0x3000;
+        Data.Flags = SegmentFlags::Readable;
+        Data.Data.resize(16);
+        writeLE<uint32_t>(Data.Data.data(), Mutation == 5 ? 4 : Count);
+        for (unsigned I = 1; I != 4; ++I)
+          writeLE<uint32_t>(Data.Data.data() + I * 4, I * 7);
+        for (auto *Segment : {&Text, &Data}) {
+          Segment->Size = Segment->FileSz = Segment->Data.size();
+          Section Section;
+          Section.Name = Segment->Name;
+          Section.VA = Segment->VA;
+          Section.Size = Section.FileSz = Segment->Size;
+          Section.Flags = Segment->Flags;
+          Image.Sections.push_back(Section);
+          Image.Segments.push_back(*Segment);
+        }
+        if (Mutation == 1) {
+          Image.Segments[1].Flags = Image.Sections[1].Flags =
+              SegmentFlags::Readable | SegmentFlags::Writable;
+        }
+        if (Mutation == 2)
+          Image.Sections[1].FileSz = 0;
+        if (Mutation == 3)
+          Image.BaseRelocations.push_back(
+              {Data.VA, llvm::COFF::IMAGE_REL_BASED_HIGHLOW});
+        if (Mutation == 4)
+          Image.Sections.push_back(Image.Sections[1]);
+        if (Mutation == 6) {
+          Image.Segments[0].Flags = Image.Sections[0].Flags =
+              SegmentFlags::Readable | SegmentFlags::Executable |
+              SegmentFlags::Writable;
+        }
+        LowOp Call;
+        Call.Opcode = NdOp::CALL;
+        Call.NumInputs = 1;
+        Call.Inputs[0] = NdVar::cst(Image.Entry, 4);
+        FrameState Parent;
+        Parent.Registers[x86reg::RSP / x86reg::GeneralRegStride] =
+            FrameValue::frame(-64);
+        Parent.store(-64, 4,
+                     Mutation == 7 ? FrameValue::frame(-32)
+                                   : FrameValue::imageAddress(Data.VA));
+        size_t Work = 0;
+        EXPECT_EQ(registration_abi::hasConditionalCallFrame(Image, Call, Parent,
+                                                            Work),
+                  Mutation == 0);
+        size_t Exhausted = limits::kMaxRegistrationEHStateWork;
+        EXPECT_FALSE(registration_abi::hasConditionalCallFrame(
+            Image, Call, Parent, Exhausted));
+        if (Mutation == 0) {
+          ASSERT_GT(Work, 0u);
+          size_t Incomplete = limits::kMaxRegistrationEHStateWork - Work + 1;
+          EXPECT_FALSE(registration_abi::hasConditionalCallFrame(
+              Image, Call, Parent, Incomplete));
+        }
+      }
+}
 
 #ifdef NEVERD_BINARY_CORPUS_ROOT
 namespace {

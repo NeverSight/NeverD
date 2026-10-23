@@ -9027,6 +9027,12 @@ through a relocated address and a stable offset, while rejecting missing
 operand classification. `RegistrationFrameScalar` separately checks address
 versus integer identity, all three frame coordinate spaces, partial-width
 loss, frame spills, snapshot identity and EH4 cookie/address XOR terms.
+`RegistrationConditionalFrame.BoundImmutableScansKeepTheirMemoryExtent`
+in `NeverDSEHRuntimeMemoryTests` checks caller-bound immutable scans at two
+image bases with zero, one and three iterations. Mutable or missing bytes,
+conflicting fixups, duplicate mappings, a count beyond the mapped object,
+writable code and a borrowed frame address all reject. An already exhausted
+budget and a budget one work unit short cannot publish a partial proof.
 `RegistrationCallABI.ReturningStackProofDoesNotNormalizeTheX87Stack`
 keeps the stack proof for bodies whose x87 normalization alone is incomplete
 or splits blocks by TOP, and for FXAM with a proved or unproved tag.

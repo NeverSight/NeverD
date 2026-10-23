@@ -7,6 +7,7 @@
 /// Preserve exact scalar results while rejecting ambiguous frame provenance.
 
 #include "../../../lib/ir/low/X86/RegistrationFrame.h"
+#include "../../../lib/ir/low/X86/RegistrationFrameBranch.h"
 #include "gtest/gtest.h"
 
 #include "neverd/ir/low/LowIR.h"
@@ -37,6 +38,64 @@ FrameValue evaluate(FrameValue Left, FrameValue Right, const LowOp &Op) {
   Frame.Registers[x86reg::RAX / x86reg::GeneralRegStride] = Left;
   Frame.Registers[x86reg::RCX / x86reg::GeneralRegStride] = Right;
   return FrameTransfer(Frame, -16).evaluate(Op, true);
+}
+
+TEST(RegistrationFrameScalar, ConstantBranchesRequireBothPhysicalEdges) {
+  for (bool Taken : {false, true})
+    for (bool Reversed : {false, true})
+      for (unsigned Mutation = 0; Mutation != 12; ++Mutation) {
+        SCOPED_TRACE(Taken);
+        SCOPED_TRACE(Reversed);
+        SCOPED_TRACE(Mutation);
+        FrameState State;
+        auto &Condition =
+            State.Registers[x86reg::RAX / x86reg::GeneralRegStride];
+        Condition = FrameValue::constant(Taken);
+        FrameTransfer Transfer(State, -16);
+        LowBlock Block;
+        Block.StartAddr = 0x1000;
+        Block.EndAddr = 0x1010;
+        Block.Succs =
+            Reversed ? std::vector<int>{2, 1} : std::vector<int>{1, 2};
+        LowOp Branch;
+        Branch.Opcode = NdOp::COND_BR;
+        Branch.NumInputs = 2;
+        Branch.Inputs[0] = NdVar::cst(0x1020, 4);
+        Branch.Inputs[1] = NdVar::reg(x86reg::RAX, 4);
+        std::map<va_t, int> Entries{{0x1010, 1}, {0x1020, 2}};
+        if (Mutation == 1)
+          Entries.erase(0x1010);
+        if (Mutation == 2)
+          Entries.erase(0x1020);
+        if (Mutation == 3)
+          Entries[0x1020] = 1;
+        if (Mutation == 4)
+          Entries[0x1020] = 3;
+        if (Mutation == 5)
+          Branch.Inputs[0] = NdVar::reg(x86reg::RCX, 4);
+        if (Mutation == 6)
+          Condition.MayBeFrame = true;
+        if (Mutation == 7)
+          Condition = FrameValue::imageAddress(0x1000);
+        if (Mutation == 8)
+          Condition = {};
+        if (Mutation == 10)
+          Branch.NumInputs = 1;
+        if (Mutation == 11)
+          Block.Succs = {1, 1};
+        if (Mutation != 9)
+          Block.Ops.push_back(Branch);
+        const auto Target = knownFrameBranchTarget(
+            Block, Transfer, [&](va_t Address) -> std::optional<int> {
+              const auto Found = Entries.find(Address);
+              return Found == Entries.end() ? std::nullopt
+                                            : std::optional<int>{Found->second};
+            });
+        if (Mutation == 0)
+          EXPECT_EQ(Target, Taken ? 0x1020u : 0x1010u);
+        else
+          EXPECT_FALSE(Target);
+      }
 }
 
 TEST(RegistrationFrameScalar, ExactCoordinatesPreserveRelocatedResults) {

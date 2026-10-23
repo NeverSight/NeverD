@@ -2319,6 +2319,17 @@ The same frame transfer separately reports whether every ordinary leaf return
 computes a 32-bit scalar independently of incoming registers, borrowed pointers
 and the caller PC. Frame privacy can admit an unobserved entry-EAX return;
 that weaker fact cannot choose a physical scalar call declaration.
+For an invocation with explicit caller-written scalar arguments,
+`RegistrationConditionalCall` retains distinct reached frame states instead of
+joining a loop's induction value away at its first backedge. Exact immutable
+image reads may supply scalar values; the shared loader checks their complete
+mapping and fixup inventory, and possible address bits remain opaque. Only an
+exact scalar condition selects one ordinary successor. Repeated states close
+the local fixed point, while new states, comparisons and image reads consume
+the existing callee work budget. Exhaustion rejects the whole invocation.
+Ordinary target-only callee contracts retain their joined-state analysis. This
+bound memory proof supplies neither a caller argument binding nor a native
+call ABI or a call-result constant.
 `COFFRegistrationFrameBits` checks which pointer-dependent bits survive a
 register truncation. It follows masks and casts through the existing private
 store index, includes every full-width definition, and rejects unknown aliases
