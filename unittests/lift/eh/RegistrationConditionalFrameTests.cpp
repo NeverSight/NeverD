@@ -23,7 +23,96 @@
 
 #include "llvm/BinaryFormat/COFF.h"
 
+#include <cstdint>
+#include <optional>
+#include <set>
+#include <vector>
+
 using namespace neverd;
+
+TEST(RegistrationConditionalFrame,
+     ReturnsKeepTheirInvocationAndAddressIdentity) {
+  using namespace registration_state;
+  for (va_t Base : {0x400000u, 0x18000000u})
+    for (unsigned Mode = 0; Mode != 11; ++Mode) {
+      SCOPED_TRACE(Base);
+      SCOPED_TRACE(Mode);
+      BinaryImage Image;
+      Image.Arch = Arch::X86;
+      Image.Bits = Bitness::Bits32;
+      Image.Format = BinaryFormat::COFF;
+      Image.Base = Base;
+      Image.Entry = Base + 0x1000;
+      Segment Text;
+      Text.VA = Image.Entry;
+      Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+      Text.Data = {0x55, 0x8b, 0xec};                 // push ebp; mov ebp,esp
+      std::vector<uint8_t> Body = {0x8b, 0x45, 0x08}; // return arg0
+      if (Mode == 3)
+        Body.clear(); // Incoming EAX belongs to another invocation.
+      if (Mode == 4)
+        Body = {0x8b, 0x45, 0x04}; // This callee's return PC.
+      if (Mode == 5)
+        Body = {0x8d, 0x45, 0xf8}; // Escaping private-frame address.
+      if (Mode == 6 || Mode == 7)
+        // The unknown second argument selects arg0 or arg0+4. Neither arm
+        // alone may supply the summary, regardless of block visitation order.
+        Body = {0x8b, 0x45, 0x08, 0x83, 0x7d, 0x0c,
+                0x00, 0x74, 0x03, 0x83, 0xc0, 0x04};
+      if (Mode == 10)
+        Body = {0xeb, 0xfe}; // A closed loop supplies no ordinary return.
+      Text.Data.insert(Text.Data.end(), Body.begin(), Body.end());
+      if (Mode != 10)
+        Text.Data.insert(Text.Data.end(), {0x5d, 0xc3});
+      Text.Size = Text.FileSz = Text.Data.size();
+      if (Mode == 9)
+        Text.Flags = Text.Flags | SegmentFlags::Writable;
+      Section Code;
+      Code.VA = Text.VA;
+      Code.Size = Code.FileSz = Text.Size;
+      Code.Flags = Text.Flags;
+      Image.Sections.push_back(Code);
+      Image.Segments.push_back(Text);
+      LowOp Call;
+      Call.Opcode = NdOp::CALL;
+      Call.addInput(NdVar::cst(Image.Entry, 4));
+      FrameState Parent;
+      Parent.Registers[x86reg::RSP / x86reg::GeneralRegStride] =
+          FrameValue::frame(-64);
+      const auto Argument = Mode == 1 || Mode == 6
+                                ? FrameValue::imageAddress(Base + 0x3000)
+                            : Mode == 2 ? FrameValue{}
+                                        : FrameValue::constant(37);
+      Parent.store(-64, 4, Argument);
+      std::set<int32_t> Initialized;
+      for (int32_t Byte = -64; Byte != -56; ++Byte)
+        Initialized.insert(Byte);
+      if (Mode == 8)
+        Initialized.erase(-61);
+      size_t Work = 0;
+      std::optional<FrameValue> Returned = FrameValue::constant(UINT32_MAX);
+      const bool Valid = registration_abi::hasConditionalCallFrame(
+          Image, Call, Parent, Work, &Initialized, &Returned);
+      EXPECT_EQ(Valid, Mode != 5 && Mode != 8 && Mode != 9);
+      if (!Valid || Mode == 10) {
+        EXPECT_FALSE(Returned);
+        continue;
+      }
+      ASSERT_TRUE(Returned);
+      if (Mode == 3 || Mode == 4) {
+        auto Opaque = FrameValue::taint(true);
+        Opaque.FrameOnlyFromCall = true;
+        EXPECT_EQ(*Returned, Opaque);
+      } else if (Mode == 6 || Mode == 7)
+        EXPECT_EQ(*Returned, FrameValue{});
+      else
+        EXPECT_EQ(*Returned, Argument);
+      size_t Incomplete = limits::kMaxRegistrationEHStateWork - Work + 1;
+      EXPECT_FALSE(registration_abi::hasConditionalCallFrame(
+          Image, Call, Parent, Incomplete, &Initialized, &Returned));
+      EXPECT_FALSE(Returned);
+    }
+}
 
 TEST(RegistrationConditionalFrame, UnknownScalarArgumentsNeedInitializedBytes) {
   using namespace registration_state;
@@ -181,17 +270,25 @@ TEST(RegistrationConditionalFrame, BoundImmutableScansKeepTheirMemoryExtent) {
                      Mutation == 7 ? FrameValue::frame(-32)
                                    : FrameValue::imageAddress(Data.VA));
         size_t Work = 0;
-        EXPECT_EQ(registration_abi::hasConditionalCallFrame(Image, Call, Parent,
-                                                            Work),
+        std::optional<FrameValue> Returned = FrameValue::constant(UINT32_MAX);
+        EXPECT_EQ(registration_abi::hasConditionalCallFrame(
+                      Image, Call, Parent, Work, nullptr, &Returned),
                   Mutation == 0);
+        if (Mutation == 0)
+          EXPECT_EQ(Returned,
+                    FrameValue::constant(7 * Count * (Count + 1) / 2));
+        else
+          EXPECT_FALSE(Returned);
         size_t Exhausted = limits::kMaxRegistrationEHStateWork;
         EXPECT_FALSE(registration_abi::hasConditionalCallFrame(
-            Image, Call, Parent, Exhausted));
+            Image, Call, Parent, Exhausted, nullptr, &Returned));
+        EXPECT_FALSE(Returned);
         if (Mutation == 0) {
           ASSERT_GT(Work, 0u);
           size_t Incomplete = limits::kMaxRegistrationEHStateWork - Work + 1;
           EXPECT_FALSE(registration_abi::hasConditionalCallFrame(
-              Image, Call, Parent, Incomplete));
+              Image, Call, Parent, Incomplete, nullptr, &Returned));
+          EXPECT_FALSE(Returned);
         }
       }
 }
@@ -315,9 +412,11 @@ TEST(RegistrationConditionalFrame, XCPT4HelperChecksItsBoundIncomingCounter) {
     Inputs.Objects = {{256, 260}};
     Inputs.ObjectCells = {{256, FrameValue::constant(1)}};
     Inputs.ProveCall = [&](const LowOp &Op, const FrameState &State,
-                           const std::set<int32_t> &Initialized) {
-      return Mutation != 4 && registration_abi::hasConditionalCallFrame(
-                                  *Image, Op, State, Inputs.Work, &Initialized);
+                           const std::set<int32_t> &Initialized,
+                           std::optional<FrameValue> &Returned) {
+      return Mutation != 4 &&
+             registration_abi::hasConditionalCallFrame(
+                 *Image, Op, State, Inputs.Work, &Initialized, &Returned);
     };
     if (Mutation == 1)
       Inputs.Objects[0].End = 259;

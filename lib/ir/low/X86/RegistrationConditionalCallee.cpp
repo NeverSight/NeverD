@@ -131,9 +131,10 @@ proveBoundSEHCallee(const BinaryImage &Image, const LowOp &Op,
   if (Inputs.Objects.empty() && Inputs.JumpBuffers.empty())
     return std::nullopt;
   Inputs.ProveCall = [&](const LowOp &Call, const FrameState &State,
-                         const std::set<int32_t> &Initialized) {
-    return registration_abi::hasConditionalCallFrame(Image, Call, State,
-                                                     Inputs.Work, &Initialized);
+                         const std::set<int32_t> &Initialized,
+                         std::optional<FrameValue> &Returned) {
+    return registration_abi::hasConditionalCallFrame(
+        Image, Call, State, Inputs.Work, &Initialized, &Returned);
   };
   Decoder Dec;
   if (!Dec.init(Image))

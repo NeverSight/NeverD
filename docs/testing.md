@@ -9033,6 +9033,15 @@ image bases with zero, one and three iterations. Mutable or missing bytes,
 conflicting fixups, duplicate mappings, a count beyond the mapped object,
 writable code and a borrowed frame address all reject. An already exhausted
 budget and a budget one work unit short cannot publish a partial proof.
+Its successful scans also check the sum returned in EAX; every failed query
+clears its result. `ReturnsKeepTheirInvocationAndAddressIdentity` covers exact
+integers, image addresses, unknown initialized arguments, differing return
+paths and no-return loops. Incoming EAX and the callee's return PC retain opaque
+call provenance; a private-frame escape still refuses. The registration state
+test `ConditionalResultsReachTheNextInitializedCall` follows these results
+through physical EAX or an instruction-local temporary into the next call,
+including partial/wide output carriers, other volatile registers, absent
+results and a refusing callee prover.
 `RegistrationConditionalFrame.UnknownScalarArgumentsNeedInitializedBytes`
 adds a search with an unknown scalar key. Complete byte initialization admits
 both full-word and bytewise stores despite absent sparse scalar cells. Every

@@ -65,7 +65,7 @@ struct BoundCxxCalleeEffect {
 /// invocation's return PC, private frame and incoming argument slots.
 struct ConditionalFrame {
   std::function<bool(const LowOp &, const FrameState &,
-                     const std::set<int32_t> &)>
+                     const std::set<int32_t> &, std::optional<FrameValue> &)>
       ProveCall;
   /// Replays a nested C++ invocation after binding its physical CALL and
   /// current inputs. Only the private conditional solver consumes this hook.

@@ -2329,7 +2329,14 @@ the local fixed point, while new states, comparisons and image reads consume
 the existing callee work budget. Exhaustion rejects the whole invocation.
 Ordinary target-only callee contracts retain their joined-state analysis. This
 bound memory proof supplies neither a caller argument binding nor a native
-call ABI or a call-result constant.
+call ABI. An optional physical EAX result joins all reached ordinary returns
+and is published only after the complete frame proof and the independent
+returning-stack proof succeed. Exact image addresses retain their address
+identity; differing values become unknown scalars. A callee's incoming
+register or return PC becomes opaque call provenance in the parent. No-return
+loops supply no result, and failed or exhausted queries publish none.
+Conditional SEH call transfers apply these results only to a complete
+32-bit EAX or temporary call output; other volatile registers remain opaque.
 `readCallerFrameWord` separates byte initialization from sparse value storage
 for bound SEH, plain and C++ callees. When the caller supplies its initialization
 inventory, all four bytes must be present; a fully initialized unknown scalar

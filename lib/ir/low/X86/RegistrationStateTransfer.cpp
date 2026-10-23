@@ -119,6 +119,7 @@ bool RegistrationStateSolver::transferBlock(size_t I, const Domain &Before,
       continue;
     }
     FrameValue Value = Transfer.evaluate(Op, After.Installed);
+    std::optional<FrameValue> CallResult;
     if (Conditional) {
       // The caller's physical registration address changes during native
       // reconstruction. Preserve its provenance through arithmetic and spills
@@ -130,10 +131,10 @@ bool RegistrationStateSolver::transferBlock(size_t I, const Domain &Before,
         Op.MemoryAddressSpace == NdMemoryAddressSpace::Default)
       invalidateJumpRuntimeBindings(After, Transfer.read(*Memory.Address),
                                     Memory.AccessSize);
-    if (Conditional &&
-        (!checkConditionalMemory(After.Frame, Op, Transfer,
-                                 &After.InitializedFrameBytes) ||
-         !conditionalReturn(After, Op) || !conditionalCall(After, Op)))
+    if (Conditional && (!checkConditionalMemory(After.Frame, Op, Transfer,
+                                                &After.InitializedFrameBytes) ||
+                        !conditionalReturn(After, Op) ||
+                        !conditionalCall(After, Op, CallResult)))
       Invalidate();
     FrameValue RuntimeValue;
     if (CheckRuntimeObjects) {
@@ -499,7 +500,6 @@ bool RegistrationStateSolver::transferBlock(size_t I, const Domain &Before,
       }
     }
     std::optional<FrameValue> CallSP;
-    std::optional<FrameValue> CallResult;
     bool CheckedCall = false;
     const bool JumpCapture = transferJumpCapture(I, After, Op, Facts, CallSP);
     const bool JumpResume = transferJumpResume(I, After, Op, Facts);

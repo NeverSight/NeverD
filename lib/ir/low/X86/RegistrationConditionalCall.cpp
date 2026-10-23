@@ -76,7 +76,10 @@ bool hasClosedRegistrationRaise(const BinaryImage &Image, const LowOp &Op,
 
 bool hasConditionalCallFrame(const BinaryImage &Image, const LowOp &Op,
                              const FrameState &State, size_t &Work,
-                             const std::set<int32_t> *Initialized) {
+                             const std::set<int32_t> *Initialized,
+                             std::optional<FrameValue> *ReturnValue) {
+  if (ReturnValue)
+    ReturnValue->reset();
   if (hasClosedRegistrationRaise(Image, Op, State))
     return chargeCalleeWork(Work, 10);
   if (Op.Opcode != NdOp::CALL || Op.NumInputs != 1 || !Op.Inputs[0].isConst() ||
@@ -112,12 +115,35 @@ bool hasConditionalCallFrame(const BinaryImage &Image, const LowOp &Op,
           !hasImmutableCalleeInstruction(Image, Insn, Dec))
         return false;
   registration_abi::ImageFrameEffects Effects;
+  std::optional<FrameValue> Returned;
   if (Callee.ExceptionMetadata || !Callee.hasCompleteLiftCoverage() ||
       !registration_abi::chargeDecodedCallee(Work, Callee) ||
       !registration_abi::hasPrivateCallerFrame(
-          Callee, Image, Work, Effects, {.ScalarArguments = &Arguments}) ||
+          Callee, Image, Work, Effects,
+          {.ScalarArguments = &Arguments,
+           .ReturnValue = ReturnValue ? &Returned : nullptr}) ||
       !Effects.Writes.empty() || !Effects.CallerPCWrites.empty())
     return false;
+  if (ReturnValue && Returned) {
+    // A recovered RETURN is not evidence for an unresolved tail path. Reuse
+    // the closed original-body proof before projecting any result to a caller.
+    if (!getCheckedX86CalleeStackPop(Image, Target, &Work))
+      return false;
+    // A callee's saved incoming register, return PC or frame coordinate does
+    // not name the same entity in its caller. Preserve scalar/image facts;
+    // every other identity retains ordinary opaque-call provenance.
+    const auto &Value = *Returned;
+    if (Value == FrameValue{} ||
+        (Value.Constant && Value == FrameValue::constant(*Value.Constant)) ||
+        (Value.ImageAddress &&
+         Value == FrameValue::imageAddress(*Value.ImageAddress)))
+      *ReturnValue = Value;
+    else {
+      auto Opaque = FrameValue::taint(true);
+      Opaque.FrameOnlyFromCall = true;
+      *ReturnValue = Opaque;
+    }
+  }
   return true;
 }
 

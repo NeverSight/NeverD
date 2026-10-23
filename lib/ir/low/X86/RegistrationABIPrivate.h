@@ -85,10 +85,15 @@ bool callerPCIsNotReadBack(const ImageFrameEffects &Effects);
 std::optional<registration_state::FrameValue>
 readCallerFrameWord(const registration_state::FrameState &State, int32_t Offset,
                     const std::set<int32_t> *Initialized, size_t &Work);
-bool hasConditionalCallFrame(const BinaryImage &Image, const LowOp &Op,
-                             const registration_state::FrameState &State,
-                             size_t &Work,
-                             const std::set<int32_t> *Initialized = nullptr);
+/// Prove a particular caller's plain callee frame. An optional physical EAX
+/// result keeps scalar/image identity, never a callee's frame coordinate.
+/// Failure clears it; no ordinary return supplies no result. No native call
+/// declaration or caller argument ownership is implied.
+bool hasConditionalCallFrame(
+    const BinaryImage &Image, const LowOp &Op,
+    const registration_state::FrameState &State, size_t &Work,
+    const std::set<int32_t> *Initialized = nullptr,
+    std::optional<registration_state::FrameValue> *ReturnValue = nullptr);
 bool hasClosedRegistrationRaise(const BinaryImage &Image, const LowOp &Op,
                                 const registration_state::FrameState &State);
 bool hasSEHCallbackImageMemory(const BinaryImage &Image, va_t Address,
@@ -141,6 +146,11 @@ struct PrivateFrameOptions {
   /// entry frame). A plain callee frame only; no other option combines.
   const std::map<int32_t, registration_state::FrameValue> *ScalarArguments =
       nullptr;
+  /// Joined physical EAX at every reached ordinary return of a bound call.
+  /// Published only after the whole proof succeeds; absent for no returns or
+  /// an incomplete result shape. Callee frame identities need caller
+  /// projection.
+  std::optional<registration_state::FrameValue> *ReturnValue = nullptr;
 };
 
 bool hasPrivateCallerFrame(const LowFunc &Function, const BinaryImage &Image,

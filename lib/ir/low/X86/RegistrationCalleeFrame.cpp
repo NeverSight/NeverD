@@ -131,8 +131,12 @@ bool hasPrivateCallerFrame(const LowFunc &Function, const BinaryImage &Image,
                            const PrivateFrameOptions &Options) {
   const auto [BorrowECX, ThrowProof, IndependentScalarReturn,
               DiscardReturnValue, CopyObjectSize, Initializer, Initializers,
-              ObjectCallbacks, CallbackStackPopBytes, ScalarArguments] =
-      Options;
+              ObjectCallbacks, CallbackStackPopBytes, ScalarArguments,
+              ReturnValue] = Options;
+  if (ReturnValue)
+    ReturnValue->reset();
+  if (ReturnValue && !ScalarArguments)
+    return false;
   if (ScalarArguments &&
       (BorrowECX || ThrowProof || DiscardReturnValue || CopyObjectSize ||
        Initializer || Initializers || ObjectCallbacks || CallbackStackPopBytes))
@@ -226,6 +230,8 @@ bool hasPrivateCallerFrame(const LowFunc &Function, const BinaryImage &Image,
   if (ScalarArguments)
     BoundIncoming[Entry->Id].push_back(Initial);
   std::map<std::pair<va_t, uint16_t>, std::optional<FrameValue>> ImageValues;
+  std::optional<FrameValue> Returned;
+  bool CompleteReturns = true;
   std::deque<std::pair<int, size_t>> Pending{{Entry->Id, 0}};
   while (!Pending.empty()) {
     const auto [Id, StateIndex] = Pending.front();
@@ -590,6 +596,16 @@ bool hasPrivateCallerFrame(const LowFunc &Function, const BinaryImage &Image,
             return false;
         }
       if (Op.Opcode == NdOp::RETURN) {
+        if (ReturnValue) {
+          if (!Charge(1))
+            return false;
+          if (Op.NumInputs != 1 || Op.Inputs[0].Size != 4)
+            CompleteReturns = false;
+          else {
+            const auto Value = Transfer.read(Op.Inputs[0]);
+            Returned = Returned ? join(*Returned, Value) : Value;
+          }
+        }
         if (Initializer) {
           if (Op.NumInputs != 1 || Op.Inputs[0].Size != 4 ||
               Transfer.read(Op.Inputs[0]).MayBeFrame ||
@@ -719,6 +735,8 @@ bool hasPrivateCallerFrame(const LowFunc &Function, const BinaryImage &Image,
         Pending.emplace_back(Successor, 0);
     }
   }
+  if (ReturnValue && CompleteReturns)
+    *ReturnValue = Returned;
   return true;
 }
 
