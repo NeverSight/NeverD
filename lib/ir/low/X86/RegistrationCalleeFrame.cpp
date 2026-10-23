@@ -132,10 +132,10 @@ bool hasPrivateCallerFrame(const LowFunc &Function, const BinaryImage &Image,
   const auto [BorrowECX, ThrowProof, IndependentScalarReturn,
               DiscardReturnValue, CopyObjectSize, Initializer, Initializers,
               ObjectCallbacks, CallbackStackPopBytes, ScalarArguments,
-              ScalarRegisters, ReturnValue] = Options;
+              ScalarRegisters, ReturnValue, ExcludeCalls] = Options;
   if (ReturnValue)
     ReturnValue->reset();
-  if ((ReturnValue || ScalarRegisters) && !ScalarArguments)
+  if ((ReturnValue || ScalarRegisters || ExcludeCalls) && !ScalarArguments)
     return false;
   if (ScalarArguments &&
       (BorrowECX || ThrowProof || DiscardReturnValue || CopyObjectSize ||
@@ -424,6 +424,8 @@ bool hasPrivateCallerFrame(const LowFunc &Function, const BinaryImage &Image,
       std::optional<FrameValue> AfterCallObject;
       bool AfterCallScalar = false;
       if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) {
+        if (ExcludeCalls)
+          return false;
         if (BorrowECX && !Initializer && !ObjectCallbacks)
           return false;
         const RegistrationInitializerCalleeABI *Init = nullptr;

@@ -21,9 +21,11 @@ RegistrationStateSolver::transferCall(size_t I, Domain &After, const LowOp &Op,
                               Op.Inputs[0].isConst() && Op.Inputs[0].Size == 4
                           ? CalleeIndices.find(Op.Inputs[0].Offset)
                           : CalleeIndices.end();
-  if (Callee == CalleeIndices.end())
-    if (auto Call = transferConditionalCxxCall(After, Op, Facts))
-      return Call;
+  // A target-only leaf contract deliberately forgets exact return values.
+  // The conditional source owner must inspect the current invocation before
+  // that general result can discard facts needed by a following branch.
+  if (auto Call = transferConditionalCxxCall(After, Op, Facts))
+    return Call;
   auto StackPointer =
       After.Frame.Registers[x86reg::RSP / x86reg::GeneralRegStride];
   std::optional<FrameValue> CallResult;

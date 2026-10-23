@@ -9,6 +9,7 @@
 /// aliases.
 //===----------------------------------------------------------------------===//
 
+#include "../../../lib/ir/low/X86/RegistrationABIPrivate.h"
 #include "../../../lib/ir/low/X86/RegistrationConditionalFrame.h"
 #include "../../../lib/ir/low/X86/RegistrationSourceCall.h"
 #include "../../../lib/ir/low/X86/RegistrationStateSolver.h"
@@ -66,10 +67,11 @@ struct BoundCxxFixture {
   va_t OuterCallVA = 0;
   va_t OuterResultVA = 0;
 
-  explicit BoundCxxFixture(ReturnMode Result = ReturnMode::Alias,
-                           bool BorrowInChild = false,
-                           bool CaptureBeforeWrite = false,
-                           bool ThrowingChild = false) {
+  explicit BoundCxxFixture(
+      ReturnMode Result = ReturnMode::Alias, bool BorrowInChild = false,
+      bool CaptureBeforeWrite = false, bool ThrowingChild = false,
+      bool RequireChildZero = false,
+      std::optional<uint8_t> ChildArgument = std::nullopt) {
     std::vector<uint8_t> Text;
     auto Bytes = [&](std::initializer_list<uint8_t> Values) {
       Text.insert(Text.end(), Values);
@@ -97,8 +99,12 @@ struct BoundCxxFixture {
       Bytes({0x8b, 0x4d, 8});
     if (ThrowingChild)
       Bytes({0x85, 0xc9, 0x74, 5});
+    if (ChildArgument)
+      Bytes({0x6a, *ChildArgument});
     NestedCallVA = Entry + Text.size();
     CallTo(Child);
+    if (RequireChildZero)
+      Bytes({0x85, 0xc0, 0x74, 5, 0x8b, 0x55, 8, 0x89, 0x12});
     Bytes({0x8b, 0x45, 8, 0x8b, 0x55, 0xe8});
     if (CaptureBeforeWrite)
       Bytes({0x89, 0x00}); // Capture remains invalid after the next store.
@@ -473,6 +479,127 @@ TEST(RegistrationConditionalCxx, NestedReturnCannotHideAnAlias) {
     F.addOuter(true, true);
     size_t Work = 0;
     EXPECT_FALSE(F.prove(Work));
+  }
+}
+
+TEST(RegistrationConditionalCxx, PlainChildUsesTheCurrentScalarInvocation) {
+  for (bool Nested : {false, true})
+    for (unsigned Mode = 0; Mode != 5; ++Mode) {
+      SCOPED_TRACE(::testing::Message() << Nested << " " << Mode);
+      BoundCxxFixture F(BoundCxxFixture::ReturnMode::Scalar, false, false,
+                        false, true);
+      // Only ECX == 17 bypasses an unowned dereference. A target-only leaf
+      // contract cannot prove this helper, even though the actual call can.
+      F.overwrite(Child,
+                  {0x83, 0xf9, 17, 0x74, 3, 0x8b, 2, 0xc3, 0x31, 0xc0, 0xc3});
+      auto &Input = F.Parent.Registers[x86reg::RCX / x86reg::GeneralRegStride];
+      if (Mode == 1)
+        Input = FrameValue::constant(18);
+      else if (Mode == 2)
+        Input = {};
+      else if (Mode == 3)
+        Input = FrameValue::taint(true);
+      else if (Mode == 4)
+        Input = FrameValue::imageAddress(Table);
+      if (Nested)
+        F.addOuter();
+      size_t Work = 0;
+      const auto Effect = F.prove(Work);
+      EXPECT_EQ(bool(Effect), Mode == 0);
+      if (!Effect)
+        continue;
+      ASSERT_EQ(Effect->Returns.size(), 1u);
+      EXPECT_EQ(Effect->Returns.front().Value, FrameValue::constant(0));
+      ASSERT_LT(Work, limits::kMaxRegistrationEHStateWork);
+      size_t Exact = limits::kMaxRegistrationEHStateWork - Work;
+      EXPECT_TRUE(F.prove(Exact));
+      EXPECT_EQ(Exact, limits::kMaxRegistrationEHStateWork);
+      size_t Limited = limits::kMaxRegistrationEHStateWork - Work + 1;
+      EXPECT_FALSE(F.prove(Limited));
+      EXPECT_EQ(Limited, limits::kMaxRegistrationEHStateWork);
+      Input = FrameValue::constant(18);
+      Work = 0;
+      EXPECT_FALSE(F.prove(Work));
+      EXPECT_FALSE(getCheckedX86RegistrationObjectCalleeABI(F.Image, Child));
+    }
+}
+
+TEST(RegistrationConditionalCxx, PlainChildOwnsItsExactStackCleanup) {
+  for (unsigned Mode = 0; Mode != 5; ++Mode) {
+    SCOPED_TRACE(Mode);
+    BoundCxxFixture F(
+        BoundCxxFixture::ReturnMode::Scalar, false, false, false, true,
+        Mode == 2 ? std::nullopt : std::optional<uint8_t>(Mode == 1 ? 18 : 17));
+    F.overwrite(Child, {0x8b, 0x44, 0x24, 4, 0x83, 0xf8, 17, 0x74, 5, 0x8b, 2,
+                        0xc2, 4, 0, 0x31, 0xc0, 0xc2, 4, 0});
+    if (Mode >= 3) {
+      F.overwrite(Child + 12, {uint8_t(Mode == 3 ? 8 : 2)});
+      F.overwrite(Child + 17, {uint8_t(Mode == 3 ? 8 : 2)});
+    }
+    size_t Work = 0;
+    EXPECT_EQ(bool(F.prove(Work)), Mode == 0);
+  }
+}
+
+TEST(RegistrationConditionalCxx, PlainChildRetainsImageReadAndReturnFacts) {
+  for (unsigned Mode = 0; Mode != 4; ++Mode) {
+    SCOPED_TRACE(Mode);
+    BoundCxxFixture F(BoundCxxFixture::ReturnMode::Scalar, false, false, false,
+                      true);
+    F.overwrite(Child, {0xa1, 0x70, 0x20, 0x40, 0, 0xc3});
+    if (Mode == 1)
+      writeLE<uint32_t>(F.Image.Segments[1].Data.data() + 0x70, 1);
+    else if (Mode == 2) {
+      F.Image.Segments[1].Flags =
+          SegmentFlags::Readable | SegmentFlags::Writable;
+      F.Image.Sections[1].Flags = F.Image.Segments[1].Flags;
+    } else if (Mode == 3)
+      F.overwrite(Child, {0xa3, 4, 0x30, 0x40, 0, 0x31, 0xc0, 0xc3});
+    size_t Work = 0;
+    const auto Effect = F.prove(Work);
+    EXPECT_EQ(bool(Effect), Mode == 0);
+    if (Effect)
+      EXPECT_TRUE(llvm::any_of(Effect->ImageReads, [](const auto &Read) {
+        return Read.Begin <= Table + 0x70 && Table + 0x74 <= Read.End;
+      }));
+  }
+}
+
+TEST(RegistrationConditionalCxx, PlainEffectCannotImportNestedRuntimeEffects) {
+  BoundCxxFixture F;
+  // ECX == 17 bypasses a closed RaiseException invocation. Its argument and
+  // stack proof alone cannot grant the enclosing runtime's callback effects.
+  F.overwrite(Child, {0x83, 0xf9, 17,   0x74, 17,   0x6a, 0,    0x6a, 0,
+                      0x6a, 0,    0x68, 0x42, 0x42, 0x42, 0xe0, 0xff, 0x15,
+                      8,    0x30, 0x40, 0,    0x31, 0xc0, 0xc3});
+  Import Raise;
+  Raise.Name = "RaiseException";
+  Raise.Module = "kernel32.dll";
+  Raise.IATAddr = Data + 8;
+  F.Image.Imports.push_back(Raise);
+  ASSERT_TRUE(F.Image.recordImportStorageSlot(
+      Raise.IATAddr, Raise.Name, 0, ImportStorageEvidence::ImportDirectory));
+  LowOp Call = F.Call;
+  Call.Addr = F.NestedCallVA;
+  Call.Inputs[0] = NdVar::cst(Child, 4);
+  BoundPlainCalleeEffect Effect;
+  for (unsigned Input : {17u, 18u, 17u}) {
+    SCOPED_TRACE(Input);
+    F.Parent.Registers[x86reg::RCX / x86reg::GeneralRegStride] =
+        FrameValue::constant(Input);
+    size_t Work = 0;
+    std::optional<FrameValue> Returned;
+    ASSERT_TRUE(registration_abi::hasConditionalCallFrame(
+        F.Image, Call, F.Parent, Work, nullptr, &Returned));
+    EXPECT_EQ(Returned, FrameValue::constant(0));
+    Work = 0;
+    EXPECT_EQ(registration_abi::hasConditionalCallFrame(
+                  F.Image, Call, F.Parent, Work, nullptr, nullptr, &Effect),
+              Input == 17);
+    EXPECT_EQ(Effect.ReturnValue,
+              Input == 17 ? FrameValue::constant(0) : FrameValue::taint(true));
+    EXPECT_EQ(Effect.StackPopBytes, 0u);
+    EXPECT_TRUE(Effect.ImageReads.empty());
   }
 }
 

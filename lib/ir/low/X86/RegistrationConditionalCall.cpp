@@ -7,6 +7,7 @@
 /// Check invocation-specific SEH frame inputs and bounded effects.
 
 #include "RegistrationABIPrivate.h"
+#include "RegistrationConditionalFrame.h"
 
 #include "neverd/ir/Limits.h"
 #include "neverd/ir/low/CFGBuilder.h"
@@ -77,15 +78,20 @@ bool hasClosedRegistrationRaise(const BinaryImage &Image, const LowOp &Op,
 bool hasConditionalCallFrame(const BinaryImage &Image, const LowOp &Op,
                              const FrameState &State, size_t &Work,
                              const std::set<int32_t> *Initialized,
-                             std::optional<FrameValue> *ReturnValue) {
+                             std::optional<FrameValue> *ReturnValue,
+                             BoundPlainCalleeEffect *Effect) {
   if (ReturnValue)
     ReturnValue->reset();
+  if (Effect)
+    *Effect = {};
   if (hasClosedRegistrationRaise(Image, Op, State))
-    return chargeCalleeWork(Work, 10);
+    return !Effect && chargeCalleeWork(Work, 10);
   if (Op.Opcode != NdOp::CALL || Op.NumInputs != 1 || !Op.Inputs[0].isConst() ||
       Op.Inputs[0].Size != 4)
     return false;
   const va_t Target = Op.Inputs[0].Offset;
+  if (Effect && Image.ExceptionMetadata.findFunction(Target))
+    return false;
   const auto SP =
       State.Registers[x86reg::RSP / x86reg::GeneralRegStride].Offset;
   constexpr int32_t ArgumentLimit = limits::ir::
@@ -130,16 +136,29 @@ bool hasConditionalCallFrame(const BinaryImage &Image, const LowOp &Op,
           Callee, Image, Work, Effects,
           {.ScalarArguments = &Arguments,
            .ScalarRegisters = &Registers,
-           .ReturnValue = ReturnValue ? &Returned : nullptr}) ||
+           .ReturnValue = ReturnValue || Effect ? &Returned : nullptr,
+           .ExcludeCalls = Effect != nullptr}) ||
       !Effects.Writes.empty() || !Effects.CallerPCWrites.empty())
     return false;
-  if (ReturnValue && Returned) {
+  if (Effect && !Returned)
+    return false;
+  std::optional<uint32_t> Pop;
+  if ((ReturnValue || Effect) && Returned) {
     // A recovered RETURN is not evidence for an unresolved tail path. Reuse
     // the closed original-body proof before projecting any result to a caller.
-    if (!getCheckedX86CalleeStackPop(Image, Target, &Work))
+    Pop = getCheckedX86CalleeStackPop(Image, Target, &Work);
+    if (!Pop)
       return false;
-    *ReturnValue = projectX86CallReturnValue(*Returned);
   }
+  if (Effect) {
+    if (!chargeCalleeWork(Work, Effects.Reads.size() + 1))
+      return false;
+    Effect->StackPopBytes = *Pop;
+    copyExtents(Effects.Reads, Effect->ImageReads);
+    Effect->ReturnValue = projectX86CallReturnValue(*Returned);
+  }
+  if (ReturnValue && Returned)
+    *ReturnValue = projectX86CallReturnValue(*Returned);
   return true;
 }
 

@@ -212,6 +212,17 @@ proveBoundCxxCallee(const BinaryImage &Image, const LowOp &Op,
     return proveBoundCxxCallee(Image, Call, State, 0, Used, Inputs.Objects,
                                &InitializedBytes);
   };
+  Inputs.ProvePlainCall =
+      [&](const LowFunc &Caller, const LowOp &Call, const FrameState &State,
+          const std::set<int32_t> &InitializedBytes,
+          size_t &Used) -> std::optional<BoundPlainCalleeEffect> {
+    BoundPlainCalleeEffect Effect;
+    if (!checkedRegistrationDirectCall(Image, Caller, Call, Used) ||
+        !registration_abi::hasConditionalCallFrame(
+            Image, Call, State, Used, &InitializedBytes, nullptr, &Effect))
+      return std::nullopt;
+    return Effect;
+  };
   const auto Callees = Index.contracts(Function);
   const auto Cleanups = Index.cleanupContracts(Function);
   const auto Stacks = Index.stackContracts(Function);

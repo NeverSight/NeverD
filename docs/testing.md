@@ -6902,6 +6902,20 @@ justify the following branch. Other volatile registers and partial/wide
 carriers refuse. `ReturnFactsCoverEveryReachedExit` retains separate differing
 returns, rejects reached unresolved tails, and distinguishes an unreachable
 tail from a closed nonreturning loop, both alone and through a nested caller.
+`PlainChildUsesTheCurrentScalarInvocation` sends different inputs through the
+same ordinary helper, directly and inside another C++ invocation. Only the
+input that bypasses an unowned dereference can justify the returned-zero
+branch; unknown, tainted, changed and image-address inputs refuse. Exact and
+one-work-unit-short shared budgets cannot reuse the previous result.
+`PlainChildOwnsItsExactStackCleanup` checks initialized scalar arguments,
+missing arguments and whole/partial cleanup into the parent's administration.
+`PlainChildRetainsImageReadAndReturnFacts` requires the read footprint and exact
+immutable scalar result to survive the call; changed contents, writable
+storage and a personality-IAT write cannot justify the same branch.
+`PlainEffectCannotImportNestedRuntimeEffects` distinguishes an input that skips
+a checked `RaiseException` call from one that reaches it. A valid scalar return
+and stack-pop proof cannot supply the missing runtime effects; failure clears
+the previous invocation's result, and a fresh bypass query still succeeds.
 `RegistrationFrameStores` and `RegistrationFrameTaint` test bounded LLVM spill
 proofs, joins, backedges, partial writes and exhausted budgets. Loader tests keep
 independent SafeSEH/code references and real function boundaries while excluding

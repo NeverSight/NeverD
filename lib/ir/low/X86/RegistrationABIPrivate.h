@@ -23,6 +23,9 @@ namespace neverd {
 class Decoder;
 struct Import;
 struct LowInstructionBoundary;
+namespace registration_state {
+struct BoundPlainCalleeEffect;
+}
 } // namespace neverd
 
 namespace neverd::registration_abi {
@@ -89,11 +92,15 @@ readCallerFrameWord(const registration_state::FrameState &State, int32_t Offset,
 /// result keeps scalar/image identity, never a callee's frame coordinate.
 /// Failure clears it; no ordinary return supplies no result. No native call
 /// declaration or caller argument ownership is implied.
+/// Effect additionally requires a closed returning graph with no reached
+/// calls. Its stack cleanup, image reads and projected result share this same
+/// input-bound analysis; failure clears the complete effect.
 bool hasConditionalCallFrame(
     const BinaryImage &Image, const LowOp &Op,
     const registration_state::FrameState &State, size_t &Work,
     const std::set<int32_t> *Initialized = nullptr,
-    std::optional<registration_state::FrameValue> *ReturnValue = nullptr);
+    std::optional<registration_state::FrameValue> *ReturnValue = nullptr,
+    registration_state::BoundPlainCalleeEffect *Effect = nullptr);
 bool hasClosedRegistrationRaise(const BinaryImage &Image, const LowOp &Op,
                                 const registration_state::FrameState &State);
 bool hasSEHCallbackImageMemory(const BinaryImage &Image, va_t Address,
@@ -156,6 +163,9 @@ struct PrivateFrameOptions {
   /// an incomplete result shape. Callee frame identities need caller
   /// projection.
   std::optional<registration_state::FrameValue> *ReturnValue = nullptr;
+  /// The bound source consumer owns no nested runtime/callback effects.
+  /// Unreached calls remain outside the invocation's memory footprint.
+  bool ExcludeCalls = false;
 };
 
 bool hasPrivateCallerFrame(const LowFunc &Function, const BinaryImage &Image,

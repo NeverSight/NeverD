@@ -61,6 +61,15 @@ struct BoundCxxCalleeEffect {
   std::vector<Return> Returns;
 };
 
+/// A returning plain helper under the current scalar inputs. Every reached
+/// call is excluded, so this result grants no implicit runtime/callback
+/// effects. Image reads and the projected EAX value belong to this invocation.
+struct BoundPlainCalleeEffect {
+  uint32_t StackPopBytes = 0;
+  std::vector<ExceptionAddressRange> ImageReads;
+  FrameValue ReturnValue = FrameValue::taint(true);
+};
+
 /// Invocation-specific inputs in the callee's established EBP coordinates.
 /// Positive object extents are proved caller storage, disjoint from this
 /// invocation's return PC, private frame and incoming argument slots.
@@ -74,6 +83,10 @@ struct ConditionalFrame {
       const LowFunc &, const LowOp &, const FrameState &,
       const std::set<int32_t> &, size_t &)>
       ProveCxxCall;
+  std::function<std::optional<BoundPlainCalleeEffect>(
+      const LowFunc &, const LowOp &, const FrameState &,
+      const std::set<int32_t> &, size_t &)>
+      ProvePlainCall;
   /// Full-width volatile GPR facts, indexed like FrameState::Registers. A
   /// partial incoming register never supplies an untainted full-word seed.
   std::map<unsigned, FrameValue> Registers;

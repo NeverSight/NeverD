@@ -18,7 +18,8 @@ std::optional<RegistrationStateSolver::CallTransfer>
 RegistrationStateSolver::transferConditionalCxxCall(Domain &After,
                                                     const LowOp &Op,
                                                     const BlockFacts &Facts) {
-  if (!KnownCxx || !Conditional || !Conditional->ProveCxxCall ||
+  if (!KnownCxx || !Conditional ||
+      (!Conditional->ProveCxxCall && !Conditional->ProvePlainCall) ||
       After.Unknown || Facts.Invalid || !After.Parent || After.Callback ||
       !After.Installed || After.Uninstalled || Chain.RealignedFrame ||
       Op.Opcode != NdOp::CALL || Op.NumInputs != 1 || !Op.Inputs[0].isConst() ||
@@ -27,16 +28,25 @@ RegistrationStateSolver::transferConditionalCxxCall(Domain &After,
   const auto SP = parentStackOffset(After);
   if (!SP)
     return std::nullopt;
-  const auto Effect = Conditional->ProveCxxCall(
-      Function, Op, After.Frame, After.InitializedFrameBytes, WorkUsed);
-  if (!Effect || !Effect->StackPopBytes || Effect->StackPopBytes > UINT16_MAX ||
-      Effect->StackPopBytes % 4 || Effect->Returns.empty() ||
-      int64_t(*SP) + Effect->StackPopBytes > *Chain.cxxRuntimeFrameOffset() ||
-      !frameObjectIsDisjointFromAdministration(
-          *SP, int64_t(*SP) + Effect->StackPopBytes) ||
-      !charge(Effect->StackPopBytes))
+  std::optional<BoundPlainCalleeEffect> Plain;
+  std::optional<BoundCxxCalleeEffect> Cxx;
+  if (Conditional->ProvePlainCall)
+    Plain = Conditional->ProvePlainCall(Function, Op, After.Frame,
+                                        After.InitializedFrameBytes, WorkUsed);
+  if (!Plain && Conditional->ProveCxxCall)
+    Cxx = Conditional->ProveCxxCall(Function, Op, After.Frame,
+                                    After.InitializedFrameBytes, WorkUsed);
+  if ((!Plain && !Cxx) ||
+      (Cxx && (!Cxx->StackPopBytes || Cxx->Returns.empty())))
     return std::nullopt;
-  const int32_t End = int32_t(int64_t(*SP) + Effect->StackPopBytes);
+  const auto Pop = Plain ? Plain->StackPopBytes : Cxx->StackPopBytes;
+  if (Pop > UINT16_MAX || Pop % 4 ||
+      int64_t(*SP) + Pop > *Chain.cxxRuntimeFrameOffset() ||
+      (Pop &&
+       !frameObjectIsDisjointFromAdministration(*SP, int64_t(*SP) + Pop)) ||
+      !charge(Pop))
+    return std::nullopt;
+  const int32_t End = int32_t(int64_t(*SP) + Pop);
   for (int64_t Byte = *SP; Byte < End; ++Byte)
     if (!After.InitializedFrameBytes.count(int32_t(Byte)))
       return std::nullopt;
@@ -44,13 +54,15 @@ RegistrationStateSolver::transferConditionalCxxCall(Domain &After,
   // The caller owns the storage and its runtime administration. Check even
   // unused borrows, without inventing a read or a write for their admission.
   std::vector<RegistrationObjectExtent> Objects, Reads, Writes;
-  if (!projectFrameObject(After, 0, SP, Effect->Objects, Objects, true,
-                          false) ||
-      !projectFrameObject(After, 0, SP, Effect->Reads, Reads, true) ||
-      !projectFrameObject(After, 0, SP, Effect->Writes, Writes, false) ||
-      !charge(Effect->ImageReads.size() + Effect->Returns.size() + 1))
+  if (Cxx &&
+      (!projectFrameObject(After, 0, SP, Cxx->Objects, Objects, true, false) ||
+       !projectFrameObject(After, 0, SP, Cxx->Reads, Reads, true) ||
+       !projectFrameObject(After, 0, SP, Cxx->Writes, Writes, false)))
     return std::nullopt;
-  for (const auto &Read : Effect->ImageReads)
+  const auto &Image = Plain ? Plain->ImageReads : Cxx->ImageReads;
+  if (!charge(Image.size() + (Cxx ? Cxx->Returns.size() : 1) + 1))
+    return std::nullopt;
+  for (const auto &Read : Image)
     ImageReads.emplace(Read.Begin, Read.End);
   for (const auto &Write : Writes) {
     if (!charge(After.Frame.cellCount() + 1))
@@ -59,9 +71,13 @@ RegistrationStateSolver::transferConditionalCxxCall(Domain &After,
                                  uint32_t(Write.End - Write.Begin));
   }
   std::optional<FrameValue> Returned;
-  if (hasX86ScalarCallOutput(Op))
-    for (const auto &Return : Effect->Returns)
-      Returned = Returned ? join(*Returned, Return.Value) : Return.Value;
+  if (hasX86ScalarCallOutput(Op)) {
+    if (Plain)
+      Returned = Plain->ReturnValue;
+    else
+      for (const auto &Return : Cxx->Returns)
+        Returned = Returned ? join(*Returned, Return.Value) : Return.Value;
+  }
   if (!charge(After.InitializedFrameBytes.size() + After.Frame.cellCount() +
               After.RuntimeObject.cellCount()))
     return std::nullopt;
@@ -220,7 +236,8 @@ bool RegistrationStateSolver::conditionalCall(
     return true;
   // Defer a direct candidate to the source invocation owner. Neither this
   // gate nor an independent stack-pop declaration proves a C++ callee effect.
-  if (KnownCxx && CheckCalls && Conditional->ProveCxxCall &&
+  if (KnownCxx && CheckCalls &&
+      (Conditional->ProveCxxCall || Conditional->ProvePlainCall) &&
       Op.Opcode == NdOp::CALL)
     return true;
   if (LocalUnwindTargets.count({Target, Op.Opcode == NdOp::INDIR_CALL}) ||

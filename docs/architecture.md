@@ -8823,6 +8823,17 @@ before the next caller branch, so only a proved scalar condition prunes an
 edge. Both call paths require a complete EAX result or a four-byte temporary;
 other volatile registers and partial/wide carriers supply no return fact.
 Source image reads compose across calls.
+The conditional C++ caller also binds plain helpers through the same private
+frame owner used by SEH. A complete effect requires a returning original graph,
+no reached nested calls and no image or caller-PC writes. Current initialized
+stack words and full volatile inputs determine its image reads and joined EAX
+result. The caller validates zero or exact callee cleanup against its live
+allocation and administration, and retires released bytes through the common
+frame-memory owner. This invocation query precedes a target-only leaf summary,
+whose intentionally unknown result cannot discard a proved scalar fact.
+Neither an excluded nested runtime nor a missing source effect gains a contract
+from its stack-pop declaration. These facts remain private source evidence;
+ordinary C++ state analysis and native publication receive no new authority.
 All decoders and state solvers debit one cumulative work counter; active targets
 and bounded nesting prevent recursive self-certification. This consumer exists
 only in the conditional source proof, and publishes no ordinary call ABI or
