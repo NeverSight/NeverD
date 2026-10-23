@@ -1626,6 +1626,7 @@ add_neverd_unittest(NeverDWindowsRegistrationNativeTests
   eh/RegistrationSEHJumpCaptureNativeTests.cpp
   eh/RegistrationSEHJumpABITests.cpp
   eh/RegistrationCookieABITests.cpp
+  eh/RegistrationSEH4PhysicalTests.cpp
   eh/RegistrationCopyEdgeTests.cpp
   eh/RegistrationRecoveredCopyTests.cpp
   eh/RegistrationSEHBoundNativeTests.cpp

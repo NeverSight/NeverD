@@ -322,6 +322,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="captured Microsoft x86 CRT directory with runtime.json")
     parser.add_argument("--timeout", type=float, default=60)
     parser.add_argument("--case", choices=CASES, default="filter")
+    parser.add_argument("--shared-seh4", action="store_true",
+                        help="use the authored shared SEH4 entry and exit helpers")
     args = parser.parse_args(argv)
     if not math.isfinite(args.timeout) or args.timeout <= 0:
         parser.error("--timeout must be positive and finite")
@@ -332,8 +334,11 @@ def main(argv: list[str] | None = None) -> int:
     gs = args.case.startswith("eh4-gs-")
     helper_gs = gs != args.case.endswith("-mixed-gs")
     jump = "longjmp-" in args.case
+    if args.shared_seh4 and (not eh4 or gs or case not in range(9)):
+        parser.error("--shared-seh4 requires an ordinary EH4 case without GS")
     report = {"schema": 2, "evidence": f"reconstructed-source-registration-{'seh4' if eh4 else 'seh3'}",
               "case": args.case, "expected_trace": expected_trace,
+              "shared_seh4": args.shared_seh4,
               "passed": False, "steps": [], "observations": []}
     environment = os.environ.copy()
     try:
@@ -396,6 +401,8 @@ def main(argv: list[str] | None = None) -> int:
                              "registration_filter_state.s" if case >= 36 else
                              "registration_state.s" if case >= 30 else
                              "registration_jump.s" if jump else "registration_seh3.s"])
+        if args.shared_seh4:
+            sources = ["registration_seh4_shared.s", "registration_eh4_runtime.c"]
         sources.append("registration_observer.c")
         if case in (49, 51):
             sources.append("registration_private_graph.s")

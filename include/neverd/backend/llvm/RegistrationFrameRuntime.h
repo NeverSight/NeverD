@@ -23,6 +23,8 @@ namespace llvm {
 class AllocaInst;
 class BasicBlock;
 class CallBase;
+class CatchPadInst;
+class CatchReturnInst;
 class Function;
 class Instruction;
 class LoadInst;
@@ -70,6 +72,10 @@ struct RegistrationSEHScopeState {
   std::map<const llvm::StoreInst *, uint16_t> Writes;
   std::set<const llvm::StoreInst *> CallbackWrites;
   std::set<const llvm::CallBase *> PhysicalWrites;
+  /// Exact SEH dispatch returns bound by the independent control replay.
+  /// Their target transfer has no implicit exception-object destruction.
+  std::map<const llvm::CatchPadInst *, const llvm::CatchReturnInst *>
+      CatchReturns;
 };
 
 struct RegistrationSEHParentExitContract {

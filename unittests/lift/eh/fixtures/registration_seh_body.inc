@@ -89,6 +89,9 @@
   jmp .Lfinish
 #endif
 .Lhandler:
+#if REGISTRATION_SHARED_SEH4
+  mov esp,[ebp-24]
+#endif
 #if REGISTRATION_CASE == 1 || REGISTRATION_CASE == 2
   mov eax,[_registration_trace]
   imul eax,eax,10
@@ -107,6 +110,10 @@
   mov eax,7
 #endif
 .Lfinish:
+#if REGISTRATION_SHARED_SEH4
+  mov dword ptr [ebp-4],REGISTRATION_SENTINEL
+  call __seh_epilog4
+#else
 #if REGISTRATION_EXPECT_GS
   mov ecx, dword ptr [ebp - 32]
   xor ecx, ebp
@@ -116,6 +123,7 @@
   mov fs:[0],ecx
   mov esp,ebp
   pop ebp
+#endif
   ret
 #if REGISTRATION_CASE == 6
 .globl _registration_call_entry

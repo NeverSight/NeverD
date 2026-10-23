@@ -8797,8 +8797,42 @@ binding. Ordinary LowIR analysis re-lifts the rooted caller prefix and applies
 the ordered writes to its actual incoming frame. Exit calls require the live
 sentinel, previous chain, parent PC, cookie and complete original nonvolatile
 saves. Overlapping writes cannot recreate a lost save. These source receipts
-do not establish an ordinary callee ABI or a generated physical frame; native
-SEH publication still refuses shared SEH4 frames pending that projection.
+do not establish an ordinary callee ABI or a generated physical frame.
+`RegistrationSEH4PhysicalFrame` separately expands the checked calls and
+replays their physical operations. SEH4 and C++ exits share instruction decoding,
+scratch-storage allocation, physical CALL/RET PC effects and chain-occurrence
+binding. The original LowIR and source receipts remain unchanged. A separate
+MedIR-owned receipt carries the expanded frame values and chain operations;
+all other source state, callback, cookie, incoming-stack and image-read facts
+must agree with the independent replay. The frame-storage owner includes the
+transient moved return PC below the post-call stack pointer.
+Replay rechecks the ordinary body's callee stack and local-unwind contracts
+through the CFG analysis owner. After replay succeeds, the physical projection
+exposes the entry helper's authenticated allocation word as a constant decrement;
+both output routes must retain the one fixed frame instead of classifying its
+reload as a new dynamic allocation.
+The independent LLVM frame proof preserves a saved cell across SEH dispatch or
+an explicit finally call only
+when every current outlined callback's stores are disjoint from that interval.
+It reuses the common address and intrinsic-memory owners, rejects overlapping
+or unknown effects and cyclic preservation queries, and still checks the full
+frame alias/use closure. A callback's source receipt alone cannot excuse a
+changed LLVM write into the saved stack slot.
+The control replay binds each SEH catchpad to its exact catch return. Only these
+returns preserve private storage as the checked x86 SEH branch transfer; the
+generic LLVM catch-return instruction does not grant that property to C++
+exception destruction or an unbound runtime continuation.
+Installation retires the exact relocated operand of a checked narrow shared
+entry when the entry jump replaces its opcode: the C++ handler load and SEH4
+scope-table push use the same rule. Adjacent fields and changed operand bytes
+cannot inherit that proof or leave a relocation covering the new jump.
+The product patch transaction retains source bytes before installing entry
+jumps, so relocation retirement and final jump validation consume their proper
+snapshots in both section and inplace routes.
+Native SEH emission and the independent COFF IR validator use that same physical
+view and recheck current helper bytes. A missing receipt cannot turn a checked
+shared entry into a direct-frame source. This projection does not grant unknown
+callee effects, a callee-pop parent ABI or complete whole-image lifting.
 
 The private `proveBoundCxxCallee` query replays a fixed-frame, cleanup-only PE32
 C++ helper under checked caller-frame inputs. It shares ordinary C++ handler,

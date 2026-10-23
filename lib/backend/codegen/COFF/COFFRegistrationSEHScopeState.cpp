@@ -9,6 +9,7 @@
 #include "neverd/Limits.h"
 #include "neverd/backend/Limits.h"
 #include "neverd/ir/med/MedStackAlignment.h"
+#include "neverd/ir/med/X86RegistrationSEH4PhysicalFrame.h"
 #include "neverd/ir/med/X86RegistrationSEHStateStore.h"
 
 #include <functional>
@@ -20,6 +21,9 @@ llvm::Expected<RegistrationSEHScopeState>
 bindDynamicSEHState(const MedFunc &Source, const RegistrationFrame &Frame,
                     llvm::ArrayRef<const llvm::Function *> Functions,
                     const std::set<const llvm::StoreInst *> &RuntimeWrites) {
+  const auto *States = getX86RegistrationSEHPhysicalStates(Source);
+  if (!States)
+    return rejectIR("dynamic scope has no current physical frame binding");
   RegistrationSEHScopeState Result;
   Result.Offset = int64_t(Frame.EntrySP) - 8;
   const auto CallbackStores = getX86RegistrationSEHStateStores(Source);
@@ -38,7 +42,7 @@ bindDynamicSEHState(const MedFunc &Source, const RegistrationFrame &Frame,
   using Identity = std::pair<va_t, int>;
   std::map<Identity, std::optional<int32_t>> Frames;
   size_t Work = 0;
-  for (const auto &Value : Source.RegistrationStates->FrameValues) {
+  for (const auto &Value : States->FrameValues) {
     if (++Work > limits::kMaxRegistrationEHStateWork)
       return rejectIR("dynamic scope frame values exceed their work budget");
     if (!Frames

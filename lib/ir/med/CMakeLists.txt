@@ -29,6 +29,8 @@ add_neverd_component_library(NeverDIRMed
   X86/RegistrationRoots.cpp
   X86/RegistrationPrologue.cpp
   X86/RegistrationEpilogue.cpp
+  X86/RegistrationHelperExpansion.cpp
+  X86/RegistrationSEH4PhysicalFrame.cpp
   X86/RegistrationPhysicalFrame.cpp
   X86/RegistrationReachability.cpp
   X86/SEHFrame.cpp

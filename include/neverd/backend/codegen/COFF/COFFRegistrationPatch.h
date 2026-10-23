@@ -121,6 +121,9 @@ getCheckedCOFFRegistrationCxxHandlerReceipt(const llvm::Function &Function,
                                             const ExceptionFunction &Source,
                                             const BinaryImage &Image,
                                             const CompiledImage &Compiled);
+/// Prepare from immutable source bytes before entry trampolines are installed.
+/// Final validation independently closes the written entries and generated
+/// data.
 llvm::Expected<COFFRegistrationPatchUpdate> prepareCOFFRegistrationPatch(
     llvm::ArrayRef<uint8_t> OriginalBinary, const BinaryImage &Image,
     CompiledImage &Compiled,

@@ -34,6 +34,7 @@
 namespace neverd {
 
 struct X86RegistrationCxxPhysicalFrame;
+class X86RegistrationSEH4PhysicalFrame;
 
 /// Sentinel RegOff for a stack-passed parameter (Kind==Param with no backing
 /// register).  The emitter must not enter such a param into its register->arg
@@ -643,6 +644,8 @@ struct MedFunc {
   /// retain their original call occurrences and prologue receipt.
   std::shared_ptr<const X86RegistrationCxxPhysicalFrame>
       RegistrationPhysicalFrame;
+  std::shared_ptr<const X86RegistrationSEH4PhysicalFrame>
+      RegistrationSEH4PhysicalFrame;
 
   bool hasTypeInfo() const { return ReturnType != nullptr; }
 

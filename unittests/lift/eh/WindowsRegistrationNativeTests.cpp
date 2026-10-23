@@ -6,7 +6,9 @@
 
 #include "../../../lib/backend/codegen/COFF/COFFSourceCallSymbols.h"
 #include "RegistrationCxxContinuationTestUtils.h"
+#include "RegistrationEntryRelocationTestUtils.h"
 #include "RegistrationNativeEmitterTestPeer.h"
+#include "RegistrationSEH4NativeTestUtils.h"
 #include "RegistrationSEHCopyIRMutations.h"
 #include "RegistrationSEHDynamicScopeTestUtils.h"
 #include "RegistrationSEHExceptionNativeTestUtils.h"
@@ -37,6 +39,7 @@
 #include "neverd/ir/med/MedTypePass.h"
 #include "neverd/loader/COFF/COFFLoader.h"
 #include "neverd/loader/COFF/COFFRegistrationEH.h"
+#include "neverd/loader/COFF/COFFSEH4Entry.h"
 #include "neverd/loader/ExceptionInfo.h"
 #include "neverd/object/PELayout.h"
 
@@ -1852,6 +1855,8 @@ TEST(WindowsRegistrationNative, InputPE32PreservesItsCheckedSourceContract) {
   if (Error)
     Module->print(llvm::errs(), nullptr);
   ASSERT_FALSE(bool(Error)) << llvm::toString(std::move(Error));
+  if (Low.RegistrationStates->SEH4Prologue)
+    registration_test::checkSharedSEH4SavedStackEdits(*Parent, EH, Image);
   registration_test::checkSEHStateDispatchEdits(*Parent, Med, EH, Image);
   if (!Low.RegistrationStates->SEHExceptionAccesses.empty())
     registration_test::checkSEHExceptionEdits(*Parent, EH, Image,
@@ -2734,6 +2739,19 @@ TEST(WindowsRegistrationNative, InputPE32PreservesItsCheckedSourceContract) {
   ASSERT_TRUE(bool(GuardUpdate)) << llvm::toString(GuardUpdate.takeError());
   ASSERT_TRUE(GuardUpdate->ApplyCF);
   ASSERT_GT(GuardUpdate->CFFunctionCount, 0u);
+  if (const auto Entry = coff_loader::getCheckedX86SEH4PrologueCall(Image, EH);
+      Entry && Entry->CallVA == Mapping.first + 7)
+    registration_test::checkRetiredEntryRelocationEdits(
+        Binary, Mapping.first + 3 - Image.Base,
+        [&](const std::vector<uint8_t> &Changed) {
+          auto CompiledCopy = Compiled;
+          auto Rejected = prepareCOFFRegistrationPatch(
+              Changed, Image, CompiledCopy, {Mapping}, CodeVA, *Module,
+              &*GuardUpdate);
+          EXPECT_FALSE(bool(Rejected));
+          if (!Rejected)
+            llvm::consumeError(Rejected.takeError());
+        });
   auto Update = prepareCOFFRegistrationPatch(Binary, Image, Compiled, {Mapping},
                                              CodeVA, *Module, &*GuardUpdate);
   ASSERT_TRUE(bool(Update)) << llvm::toString(Update.takeError());

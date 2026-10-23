@@ -17,6 +17,7 @@
 #include "../X86/RegistrationPhysicalFrame.h"
 #include "../X86/RegistrationPrologue.h"
 #include "../X86/RegistrationRoots.h"
+#include "../X86/RegistrationSEH4PhysicalFrame.h"
 
 #include "neverd/Limits.h"
 #include "neverd/ir/Limits.h"
@@ -601,6 +602,12 @@ MedFunc LowToMedConverter::convert(const LowFunc &SourceLow, Arch TheArch,
       Physical ? x86_registration::analyzePhysicalCxxFrame(*Image, SourceLow,
                                                            *Physical)
                : nullptr;
+  auto SEHPhysical =
+      !Physical && Image && TheArch == Arch::X86 && Fmt == BinaryFormat::COFF
+          ? x86_registration::projectSEH4PhysicalFrame(*Image, SourceLow)
+          : std::nullopt;
+  if (SEHPhysical)
+    Physical = std::move(SEHPhysical->Function);
   const LowFunc &Low = Physical ? *Physical : SourceLow;
   for (const LowBlock &Block : Low.Blocks)
     for (const LowOp &Op : Block.Ops) {
@@ -743,6 +750,8 @@ MedFunc LowToMedConverter::convert(const LowFunc &SourceLow, Arch TheArch,
   Func.ExceptionMetadata = Low.ExceptionMetadata;
   Func.RegistrationStates = Low.RegistrationStates;
   Func.RegistrationPhysicalFrame = PhysicalFrame;
+  if (SEHPhysical)
+    Func.RegistrationSEH4PhysicalFrame = std::move(SEHPhysical->Frame);
   Func.CalleePopBytes = Low.CalleePopBytes;
   Func.ConsumesX87Argument = Low.ConsumesX87Argument;
   bool HasReturn = false, AllX87Returns = true;

@@ -22,6 +22,16 @@ std::optional<coff_loader::X86SEH4PrologueCall>
 getCheckedX86RegistrationSEH4ProloguePrefix(const BinaryImage &Image,
                                             const LowFunc &Source);
 
+/// Bind complete SEH4 source installation/removal receipts to the current
+/// immutable helpers, decoded boundaries and exact lifted call operations.
+std::optional<coff_loader::X86SEH4PrologueCall>
+getCheckedX86RegistrationSEH4PrologueCall(const BinaryImage &Image,
+                                          const LowFunc &Source);
+std::optional<coff_loader::X86SEH4EpilogueCall>
+getCheckedX86RegistrationSEH4EpilogueCall(const BinaryImage &Image,
+                                          const LowFunc &Source,
+                                          const LowBlock &Block);
+
 /// Recheck the immutable helper and the complete rooted source prefix without
 /// requiring the rest of the function's registration-state graph. This permits
 /// physical dataflow projection only; it grants no callee ABI or native EH

@@ -99,11 +99,15 @@ public:
                         llvm::function_ref<bool(const llvm::StoreInst &)> Visit,
                         unsigned Depth = 0);
 
+  /// Check one intervening effect using intrinsic-owned memory semantics and
+  /// the consumer's current runtime contract. This does not close aliases or
+  /// validate the rest of a callback's writes.
+  bool preservesMemory(const llvm::Instruction &I, const Cell &Slot,
+                       uint64_t Bytes, unsigned Depth = 0);
+
 private:
   std::optional<Cell> locateImpl(const llvm::Value *Value, unsigned Depth);
   bool withinObject(const Cell &Where) const;
-  bool preservesMemory(const llvm::Instruction &I, const Cell &Slot,
-                       uint64_t Bytes, unsigned Depth);
   const llvm::Function &Parent;
   const llvm::DataLayout &Layout;
   const llvm::IntrinsicInst *Escape;

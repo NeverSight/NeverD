@@ -82,6 +82,43 @@ bool matchesEntry(const BinaryImage &Image, const LowFunc &Source,
   return Address == Call.Caller.End && Entry.Ops == Expected;
 }
 
+template <typename Protocol>
+bool matchesExit(const BinaryImage &Image, const LowFunc &Source,
+                 const LowBlock &Block, const Protocol &Call) {
+  const auto &Op = Block.Ops.back();
+  const auto &Boundary = Block.InstructionBoundaries.back();
+  if (Call.Caller.End != Block.EndAddr || Boundary.Address != Op.Addr ||
+      Boundary.Size != 5 || Boundary.FirstOp != Block.Ops.size() - 1 ||
+      Boundary.OpCount != 1 || Boundary.Mode != InstructionMode::Default ||
+      Boundary.TargetMode != LowInstructionTargetMode::Preserve ||
+      Boundary.Control != LowInstructionControl::Call ||
+      Boundary.ControlFlags != LowInstructionControlFlag::Call ||
+      Boundary.Immediate != Call.Helper.Begin)
+    return false;
+  const auto Root = Source.OrdinaryModuleAnalysisRoots.upper_bound(Op.Addr);
+  if (Root != Source.OrdinaryModuleAnalysisRoots.end() &&
+      *Root < Call.Caller.End)
+    return false;
+  Decoder Dec;
+  if (!Dec.init(Image))
+    return false;
+  Dec.setStrict(true);
+  const auto *Bytes = Image.readVA(Op.Addr, 5);
+  DecodedInsn Insn;
+  if (!Bytes || !Dec.decodeOne(Bytes, 5, Op.Addr, Insn) || Insn.Size != 5)
+    return false;
+  const auto Relocations = instructionRelocations(Image, Insn);
+  std::vector<LowOp> Expected;
+  try {
+    Dec.liftToLow(Insn, Expected, Relocations.Addresses, Relocations.Scalars);
+  } catch (const UnliftedInstruction &) {
+    return false;
+  }
+  if (Expected.size() != 1 || Expected.front() != Op)
+    return false;
+  return true;
+}
+
 } // namespace
 
 std::optional<coff_loader::X86SEH4PrologueCall>
@@ -103,6 +140,57 @@ getCheckedX86RegistrationSEH4ProloguePrefix(const BinaryImage &Image,
     }
   return Entry && matchesEntry(Image, Source, *Entry, *Call) ? Call
                                                              : std::nullopt;
+}
+
+std::optional<coff_loader::X86SEH4PrologueCall>
+getCheckedX86RegistrationSEH4PrologueCall(const BinaryImage &Image,
+                                          const LowFunc &Source) {
+  if (!Source.RegistrationStates || !Source.RegistrationStates->Complete ||
+      !Source.RegistrationStates->CallbackStatesComplete ||
+      !Source.RegistrationStates->RegistrationLifetimeComplete ||
+      !Source.RegistrationStates->ChainOperationsComplete ||
+      !Source.RegistrationStates->SecurityCookiesComplete ||
+      !Source.RegistrationStates->SEH4Prologue)
+    return std::nullopt;
+  const auto Call = getCheckedX86RegistrationSEH4ProloguePrefix(Image, Source);
+  if (!Call)
+    return std::nullopt;
+  const auto &Receipt = *Source.RegistrationStates->SEH4Prologue;
+  const auto Entry = std::find_if(
+      Source.Blocks.begin(), Source.Blocks.end(),
+      [&](const auto &Block) { return Block.StartAddr == Source.Entry; });
+  if (Receipt.Address != Call->CallVA ||
+      Receipt.EndAddress != Call->Caller.End ||
+      Receipt.HelperVA != Call->Helper.Begin ||
+      Receipt.StackOffset != Call->PostCallStackOffset ||
+      Source.RegistrationStates->SecurityCookieVA != Call->SecurityCookieVA ||
+      Entry == Source.Blocks.end() || Entry->Ops.back().Seq != Receipt.OpSeq ||
+      !hasChainOccurrence(Source, Call->CallVA, Call->Caller.End, Receipt.OpSeq,
+                          RegistrationChainAccess::Kind::Install))
+    return std::nullopt;
+  return Call;
+}
+
+std::optional<coff_loader::X86SEH4EpilogueCall>
+getCheckedX86RegistrationSEH4EpilogueCall(const BinaryImage &Image,
+                                          const LowFunc &Source,
+                                          const LowBlock &Block) {
+  if (!Source.ExceptionMetadata || !Source.RegistrationStates ||
+      !Source.RegistrationStates->Complete ||
+      !Source.RegistrationStates->CallbackStatesComplete ||
+      !Source.RegistrationStates->RegistrationLifetimeComplete ||
+      !Source.RegistrationStates->ChainOperationsComplete ||
+      !Source.RegistrationStates->SEH4Prologue || Block.Ops.empty() ||
+      Block.InstructionBoundaries.empty())
+    return std::nullopt;
+  const auto &Op = Block.Ops.back();
+  if (Op.Opcode != NdOp::CALL ||
+      !hasChainOccurrence(Source, Op.Addr, Block.EndAddr, Op.Seq,
+                          RegistrationChainAccess::Kind::Remove))
+    return std::nullopt;
+  const auto Call = coff_loader::getCheckedX86SEH4EpilogueCall(
+      Image, *Source.ExceptionMetadata, Op.Addr);
+  return Call && matchesExit(Image, Source, Block, *Call) ? Call : std::nullopt;
 }
 
 std::optional<coff_loader::X86CxxPrologueCall>
@@ -167,42 +255,13 @@ getCheckedX86RegistrationCxxEpilogueCall(const BinaryImage &Image,
       Block.InstructionBoundaries.empty())
     return std::nullopt;
   const auto &Op = Block.Ops.back();
-  const auto &Boundary = Block.InstructionBoundaries.back();
   if (Op.Opcode != NdOp::CALL ||
       !hasChainOccurrence(Source, Op.Addr, Block.EndAddr, Op.Seq,
                           RegistrationChainAccess::Kind::Remove))
     return std::nullopt;
   const auto Call = coff_loader::getCheckedX86CxxEpilogueCall(
       Image, *Source.ExceptionMetadata, Op.Addr);
-  if (!Call || Call->Caller.End != Block.EndAddr ||
-      Boundary.Address != Op.Addr || Boundary.Size != 5 ||
-      Boundary.FirstOp != Block.Ops.size() - 1 || Boundary.OpCount != 1 ||
-      Boundary.Mode != InstructionMode::Default ||
-      Boundary.TargetMode != LowInstructionTargetMode::Preserve ||
-      Boundary.Control != LowInstructionControl::Call ||
-      Boundary.ControlFlags != LowInstructionControlFlag::Call ||
-      Boundary.Immediate != Call->Helper.Begin)
-    return std::nullopt;
-  const auto Root = Source.OrdinaryModuleAnalysisRoots.upper_bound(Op.Addr);
-  if (Root != Source.OrdinaryModuleAnalysisRoots.end() &&
-      *Root < Call->Caller.End)
-    return std::nullopt;
-  Decoder Dec;
-  if (!Dec.init(Image))
-    return std::nullopt;
-  Dec.setStrict(true);
-  const auto *Bytes = Image.readVA(Op.Addr, 5);
-  DecodedInsn Insn;
-  if (!Bytes || !Dec.decodeOne(Bytes, 5, Op.Addr, Insn) || Insn.Size != 5)
-    return std::nullopt;
-  const auto Relocations = instructionRelocations(Image, Insn);
-  std::vector<LowOp> Expected;
-  try {
-    Dec.liftToLow(Insn, Expected, Relocations.Addresses, Relocations.Scalars);
-  } catch (const UnliftedInstruction &) {
-    return std::nullopt;
-  }
-  if (Expected.size() != 1 || Expected.front() != Op)
+  if (!Call || !matchesExit(Image, Source, Block, *Call))
     return std::nullopt;
   return Call;
 }

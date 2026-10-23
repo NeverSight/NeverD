@@ -32,6 +32,7 @@
 #include "neverd/ir/low/RegistrationABI.h"
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/ir/med/X86RegistrationCallback.h"
+#include "neverd/ir/med/X86RegistrationSEH4PhysicalFrame.h"
 #include "neverd/ir/med/X86RegistrationSEHCall.h"
 #include "neverd/loader/COFF/COFFRegistrationEH.h"
 
@@ -198,6 +199,11 @@ llvm::Error validateCOFFRegistrationIR(const llvm::Function &Function,
   LowToMedConverter Converter;
   Converter.setBinaryImage(&Image);
   MedFunc ReplayMed = Converter.convert(Replay, Arch::X86, BinaryFormat::COFF);
+  const auto *PhysicalStates = getX86RegistrationSEHPhysicalStates(ReplayMed);
+  if (!PhysicalStates ||
+      !hasCheckedX86RegistrationSEHPhysicalFrame(Image, ReplayMed))
+    return rejectIR(
+        "shared SEH4 source has no independently replayed physical frame");
   std::map<CallbackKey, std::set<uint8_t>> ExpectedRoots;
   for (const auto &Scope : Source.Registration->Scopes) {
     const CallbackKey Key{Scope.IsFinally ? Scope.HandlerVA : Scope.FilterVA,
@@ -255,12 +261,13 @@ llvm::Error validateCOFFRegistrationIR(const llvm::Function &Function,
           !Jumps->Calls.count(Call))
         return rejectIR(
             "generated call changes the checked x86 stack cleanup ABI");
-  const auto &States = *Replay.RegistrationStates;
+  const auto &States = *PhysicalStates;
   const auto &Scopes = Source.Registration->Scopes;
   struct Dispatch {
     const llvm::BasicBlock *Unwind = nullptr;
     const llvm::CatchSwitchInst *Switch = nullptr;
     const llvm::CleanupReturnInst *Cleanup = nullptr;
+    const llvm::CatchReturnInst *Return = nullptr;
     const llvm::BasicBlock *Handler = nullptr;
   };
   std::map<uint32_t, Dispatch> Dispatches;
@@ -501,6 +508,7 @@ llvm::Error validateCOFFRegistrationIR(const llvm::Function &Function,
               "scope catchswitch has extra handlers or a parent pad");
         D.Unwind = D.Switch->getParent();
         D.Handler = Return->getSuccessor();
+        D.Return = Return;
       }
       if (!Dispatches.emplace(P->Region, D).second)
         return rejectIR("source scope dispatch is duplicated");
@@ -521,6 +529,12 @@ llvm::Error validateCOFFRegistrationIR(const llvm::Function &Function,
       ReplayMed, *Frame, NativeFunctions, ScopeWrites);
   if (!ScopeState)
     return ScopeState.takeError();
+  for (const auto &[Region, Dispatch] : Dispatches)
+    if (Dispatch.Return &&
+        !ScopeState->CatchReturns
+             .emplace(Dispatch.Return->getCatchPad(), Dispatch.Return)
+             .second)
+      return rejectIR("SEH return belongs to multiple dispatches");
   auto SourceSegments = validateSourceSegments(
       Function, ReplayMed, *CallbackMap, NativeFunctions, false, &*ParentExits);
   if (!SourceSegments)

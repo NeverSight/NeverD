@@ -26,6 +26,7 @@
 #include "neverd/backend/llvm/X86RegistrationSEHScope.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/med/X86RegistrationCallback.h"
+#include "neverd/ir/med/X86RegistrationSEH4PhysicalFrame.h"
 #include "neverd/ir/med/X86RegistrationSEHCall.h"
 #include "neverd/ir/med/X86RegistrationSEHStateStore.h"
 #include "neverd/loader/COFF/COFFRegistrationEH.h"
@@ -73,11 +74,12 @@ bool MedLLVMEmitter::emitNativeX86RegistrationSEH(
       Source.Model != WindowsEHNativeSourceModel::X86RegistrationSEH)
     return false;
   const RegistrationChainInfo &Chain = *EH.Registration;
-  const RegistrationStateAnalysis &States = *Func.RegistrationStates;
-  // Source helper transfers do not describe the generated frame. Their
-  // native publication requires a separately replayed physical projection.
-  if (States.SEH4Prologue)
+  const auto *PhysicalStates = getX86RegistrationSEHPhysicalStates(Func);
+  if (!PhysicalStates ||
+      (Img ? !hasCheckedX86RegistrationSEHPhysicalFrame(*Img, Func)
+           : bool(Func.RegistrationSEH4PhysicalFrame)))
     return false;
+  const RegistrationStateAnalysis &States = *PhysicalStates;
   const bool EH4 = EH.Personality == ExceptionPersonality::ExceptHandler4;
   if (Img && !EH4 &&
       !coff_loader::isCheckedX86SEH3Personality(*Img, EH.PersonalityVA))

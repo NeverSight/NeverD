@@ -52,13 +52,17 @@ bool hasRegistrationCallFrameABI(
       if (!Reachability.emplace(State.BlockId, &State).second)
         return false;
   }
-  if (States && States->CxxPrologue &&
+  if (States && (States->CxxPrologue || States->SEH4Prologue) &&
       !chargeCalleeWork(Work,
                         Function.Blocks.size() + States->ChainAccesses.size()))
     return false;
   const auto SharedEntry =
       getCheckedX86RegistrationCxxPrologueCall(Image, Function);
   if (States && States->CxxPrologue && !SharedEntry)
+    return false;
+  const auto SharedSEHEntry =
+      getCheckedX86RegistrationSEH4PrologueCall(Image, Function);
+  if (States && States->SEH4Prologue && !SharedSEHEntry)
     return false;
   std::set<va_t> Targets;
   std::map<va_t, uint32_t> ScalarMemberPops;
@@ -94,6 +98,19 @@ bool hasRegistrationCallFrameABI(
           if (const auto Exit = getCheckedX86RegistrationCxxEpilogueCall(
                   Image, Function, Block);
               Exit && !Exit->CookieCheck)
+            continue;
+        }
+      }
+      if (SharedSEHEntry) {
+        if (Block.StartAddr == Function.Entry &&
+            Block.EndAddr == SharedSEHEntry->Caller.End &&
+            &Op == &Block.Ops.back() && Op.Addr == SharedSEHEntry->CallVA &&
+            Op.Seq == States->SEH4Prologue->OpSeq)
+          continue;
+        if (&Op == &Block.Ops.back()) {
+          if (!chargeCalleeWork(Work, States->ChainAccesses.size()))
+            return false;
+          if (getCheckedX86RegistrationSEH4EpilogueCall(Image, Function, Block))
             continue;
         }
       }

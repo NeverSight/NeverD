@@ -237,6 +237,7 @@ llvm::Error validateFramePrivacy(
     // independently below, rather than a compiler allocation's declared type.
     return llvm::isa<llvm::GlobalVariable>(Where.Root);
   };
+  std::function<bool(const Cell &, uint64_t)> SEHCallbacksPreserve;
   auto PreservesMemory = [&](const llvm::Instruction &I, const Cell &Slot,
                              uint64_t Bytes) {
     auto Disjoint = [&](const llvm::Value *Root, int64_t Offset,
@@ -249,13 +250,31 @@ llvm::Error validateFramePrivacy(
     };
     if (const auto *Pad = llvm::dyn_cast<llvm::CatchPadInst>(&I)) {
       const auto Found = RuntimeObjects.find(Pad);
-      if (Found == RuntimeObjects.end())
-        return false;
+      if (Found == RuntimeObjects.end()) {
+        const auto *Filter =
+            Pad->arg_size() == 1
+                ? llvm::dyn_cast<llvm::Function>(Pad->getArgOperand(0))
+                : nullptr;
+        return !Cxx && SEH && Scopes && Scopes->CatchReturns.count(Pad) &&
+               Pad->getFunction() == &Parent && Filter &&
+               llvm::is_contained(Callbacks, Filter) && SEHCallbacksPreserve &&
+               SEHCallbacksPreserve(Slot, Bytes);
+      }
       const auto &Catch = *Found->second;
       return Slot.Root != Catch.CallbackStack &&
              (!Catch.ObjectSize ||
               Disjoint(LogicalFrame, Catch.HomeOffset,
                        Catch.Reference ? 4 : Catch.ObjectSize));
+    }
+    if (const auto *Return = llvm::dyn_cast<llvm::CatchReturnInst>(&I)) {
+      // The checked x86 SEH personality lowers this return to a branch.
+      // Do not extend that property to C++ exception-object destruction or
+      // to an unbound pad. Actual dispatch/callback writes are checked at
+      // their own occurrences in this same reaching-definition walk.
+      if (Cxx || !SEH || !Scopes || Return->getFunction() != &Parent)
+        return false;
+      const auto Found = Scopes->CatchReturns.find(Return->getCatchPad());
+      return Found != Scopes->CatchReturns.end() && Found->second == Return;
     }
     const auto *Call = llvm::dyn_cast<llvm::CallBase>(&I);
     if (!Call || Call->isInlineAsm() || llvm::isa<llvm::CallBrInst>(Call) ||
@@ -291,9 +310,12 @@ llvm::Error validateFramePrivacy(
     }
     if ((LocalUnwinds && LocalUnwinds->Calls.count(Call)) ||
         (Jumps && Jumps->Calls.count(Call)) ||
-        (ParentExits && ParentExits->Calls.count(Call)) ||
-        (Scopes && Scopes->PhysicalWrites.count(Call)) ||
-        llvm::is_contained(Callbacks, Call->getCalledFunction()))
+        (ParentExits && ParentExits->Calls.count(Call)))
+      return false;
+    if (llvm::is_contained(Callbacks, Call->getCalledFunction()))
+      return !Cxx && SEH && SEHCallbacksPreserve &&
+             SEHCallbacksPreserve(Slot, Bytes);
+    if (Scopes && Scopes->PhysicalWrites.count(Call))
       return false;
     // This is conditional on the complete use closure below: an ordinary
     // call cannot receive or retain any frame address. Calls admitted by a
@@ -307,6 +329,53 @@ llvm::Error validateFramePrivacy(
       Predecessors, ObjectBounds, PreservesMemory);
   auto Locate = [&](const llvm::Value *Value, unsigned Depth) {
     return AddressOwner.locate(Value, Depth);
+  };
+  std::map<std::pair<Cell, uint64_t>, bool> CallbackPreservation;
+  SEHCallbacksPreserve = [&](const Cell &Slot, uint64_t Bytes) {
+    const auto [Result, New] =
+        CallbackPreservation.emplace(std::make_pair(Slot, Bytes), false);
+    if (!New)
+      return Result->second;
+    // SEH dispatch and explicit finally calls can reach filters or termination
+    // callbacks. Close over every current callback, not just the chosen one.
+    // The use closure below independently checks the parent-frame call ABI.
+    // In-progress queries stay false, so a cyclic memory dependency
+    // cannot prove its own preservation. Unknown calls require a separate
+    // transitive callback write contract.
+    for (const auto *Callback : Callbacks)
+      for (const auto &Block : *Callback)
+        for (const auto &I : Block) {
+          if (Work >= limits::kMaxRegistrationEHStateWork) {
+            Exhausted = true;
+            return false;
+          }
+          ++Work;
+          if (const auto *Store = llvm::dyn_cast<llvm::StoreInst>(&I)) {
+            const auto Destination = Locate(Store->getPointerOperand(), 0);
+            const auto Written =
+                Layout.getTypeStoreSize(Store->getValueOperand()->getType());
+            if (!Destination || Store->isAtomic() || Written.isScalable() ||
+                Written.getFixedValue() > UINT32_MAX || Bytes > UINT32_MAX ||
+                Destination->Offset < -int64_t(UINT32_MAX) ||
+                Destination->Offset > int64_t(UINT32_MAX) ||
+                Slot.Offset < -int64_t(UINT32_MAX) ||
+                Slot.Offset > int64_t(UINT32_MAX))
+              return false;
+            if (Destination->Root == Slot.Root &&
+                Destination->Offset < Slot.Offset + int64_t(Bytes) &&
+                Slot.Offset <
+                    Destination->Offset + int64_t(Written.getFixedValue()))
+              return false;
+          } else if (!llvm::isa<llvm::LoadInst>(I) &&
+                     (llvm::isa<llvm::CallBase, llvm::CatchPadInst>(I) ||
+                      I.mayWriteToMemory())) {
+            if (!llvm::isa<llvm::IntrinsicInst>(I) ||
+                !AddressOwner.preservesMemory(I, Slot, Bytes))
+              return false;
+          }
+        }
+    Result->second = true;
+    return true;
   };
   auto LiveAt = [&](const Cell &Where, const llvm::Instruction &Access) {
     const auto *Root = llvm::dyn_cast<llvm::AllocaInst>(Where.Root);

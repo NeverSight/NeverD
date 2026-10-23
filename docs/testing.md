@@ -9057,9 +9057,27 @@ installation and restoration through the ordinary loader and CFG builder.
 It covers short/wide allocation pushes, two image bases, current helper-byte
 mutations, changed LowIR prefixes and extra entry roots. Small allocations
 whose SavedESP write overlaps a nonvolatile save must refuse the returning
-frame proof. Source-state completion is distinct from native EH publication;
-the generated shared SEH4 frame remains unsupported until independently
-projected and revalidated.
+frame proof. Source-state completion is distinct from native EH publication.
+`RegistrationSEH4Physical.*` in `NeverDWindowsRegistrationNativeTests` checks
+the separate physical projection at two bases, both allocation encodings and
+three frame extents, then runs the LLVM verifier and independent COFF IR proof.
+Removed or changed receipts, current helper edits, changed LowIR, extra entry
+roots and overlapping saves must not regain native publication.
+A returning ordinary call and an except entry exercise independently rechecked
+callee stacks, fixed helper allocation and the COFF frame-lifetime proof; changing
+the callee to return from the wrong stack slot invalidates the projection.
+The filter reads the shared frame, forcing recovery across the native catchpad;
+added byte and full-word writes to saved ESP must fail independent validation.
+The real shared-frame fixture repeats those mutations in every outlined filter
+and finally body, including normal and abnormal calls.
+The real PE installer also rejects shifted relocation fields and changed table
+operands at a narrow shared entry, using the same controls as the C++ entry.
+`check_windows_registration_rewrite.py --shared-seh4` selects an authored PE32
+shared-helper fixture for ordinary non-GS EH4 cases. Check filter, normal finally,
+parameter writes and exception-code reads with both original and rebased images;
+pass `--patch-binary` to include ordinary CLI section/inplace reconstruction from
+EXE and IR. Original-helper execution alone does not qualify generated native
+EH, and selected-function reconstruction does not qualify the GOF2 whole image.
 
 `NeverDRegistrationCalleeStackTests` runs the decoded PE32 call/return ABI
 controls, including a cycle between a registration parent and an ordinary
