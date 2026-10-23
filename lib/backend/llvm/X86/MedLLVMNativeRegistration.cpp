@@ -74,6 +74,10 @@ bool MedLLVMEmitter::emitNativeX86RegistrationSEH(
     return false;
   const RegistrationChainInfo &Chain = *EH.Registration;
   const RegistrationStateAnalysis &States = *Func.RegistrationStates;
+  // Source helper transfers do not describe the generated frame. Their
+  // native publication requires a separately replayed physical projection.
+  if (States.SEH4Prologue)
+    return false;
   const bool EH4 = EH.Personality == ExceptionPersonality::ExceptHandler4;
   if (Img && !EH4 &&
       !coff_loader::isCheckedX86SEH3Personality(*Img, EH.PersonalityVA))

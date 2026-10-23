@@ -11,6 +11,7 @@
 #include "neverd/ir/low/LowNoReturn.h"
 #include "neverd/lift/X86Regs.h"
 #include "neverd/loader/COFF/COFFRegistrationEH.h"
+#include "neverd/loader/COFF/COFFSEH4Entry.h"
 
 #include "llvm/ADT/STLExtras.h"
 
@@ -76,6 +77,29 @@ bool RegistrationStateSolver::transferBlock(size_t I, const Domain &Before,
       RegisterBytes += Op.Inputs[Input].Size;
     if (!charge(1 + RegisterBytes + MemoryWork))
       break;
+    const bool SEH4Entry = SEH4Prologue && Op.Addr == SEH4Prologue->CallVA;
+    const auto SEH4Exit = SEH4EpilogueIndex.find(Op.Addr);
+    if (SEH4Entry || SEH4Exit != SEH4EpilogueIndex.end()) {
+      const bool Applied = SEH4Entry ? transferSEH4Prologue(I, After, Op, Facts)
+                                     : transferSEH4Epilogue(I, After, Op, Facts,
+                                                            *SEH4Exit->second);
+      if (!Applied) {
+        Invalidate();
+        CompleteCalls = CompleteChainOperations = CompleteCookies = false;
+      } else {
+        const auto Value =
+            After.Frame.Registers[x86reg::RAX / x86reg::GeneralRegStride];
+        LowOp Returned;
+        Returned.Opcode = NdOp::COPY;
+        Returned.Output = Op.Output;
+        Transfer.write(Returned, Value);
+        auto [It, New] =
+            FrameValues.emplace(std::make_pair(Op.Addr, Op.Seq), Value);
+        if (!New)
+          It->second = registration_state::join(It->second, Value);
+      }
+      continue;
+    }
     if (CxxPrologue && Op.Addr == CxxPrologue->CallVA) {
       if (!transferCxxPrologue(I, After, Op, Facts)) {
         Invalidate();

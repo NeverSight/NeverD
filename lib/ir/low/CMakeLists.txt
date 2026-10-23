@@ -61,6 +61,7 @@ add_neverd_component_library(NeverDIRRegistrationState
   X86/RegistrationStateRealignment.cpp
   X86/RegistrationStateInstallation.cpp
   X86/RegistrationStatePrologue.cpp
+  X86/RegistrationStateSEH4Entry.cpp
   X86/RegistrationStateEpilogue.cpp
   X86/RegistrationStateResult.cpp
   X86/RegistrationStateSearch.cpp

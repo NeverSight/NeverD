@@ -9047,6 +9047,15 @@ range must retain separate owners; a damaged prefix supplies no new entry.
 
 The source registration solver uses one administration-boundary check for object borrows, catch-object construction and local-finally writes. `RegistrationState.SEHObjectBorrowsExcludeSavedStackAndExceptionPointers` and `SEHObjectWritesCannotBorrowWholeOrPartialCookieCells` cover EH3/EH4 reads, writes and partial overlaps with SavedESP, exception pointers and cookie cells. `RegistrationCallback.RealignedCatchObjectsCannotReplaceRuntimeAnchors` protects the saved entry frame independently of later reloads. Adjacent ordinary objects remain valid.
 
+`RegistrationSEH4Shared.*` in `NeverDRegistrationSEH4EntryTests` checks shared EH4
+installation and restoration through the ordinary loader and CFG builder.
+It covers short/wide allocation pushes, two image bases, current helper-byte
+mutations, changed LowIR prefixes and extra entry roots. Small allocations
+whose SavedESP write overlaps a nonvolatile save must refuse the returning
+frame proof. Source-state completion is distinct from native EH publication;
+the generated shared SEH4 frame remains unsupported until independently
+projected and revalidated.
+
 `NeverDRegistrationCalleeStackTests` runs the decoded PE32 call/return ABI
 controls, including a cycle between a registration parent and an ordinary
 wrapper. An unbalanced recursive wrapper cannot borrow its own pending ESP

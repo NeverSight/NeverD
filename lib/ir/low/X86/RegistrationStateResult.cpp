@@ -217,6 +217,8 @@ RegistrationStateAnalysis RegistrationStateSolver::finish() {
       Result.ChainAccesses.push_back(Access);
   if (Result.ChainOperationsComplete)
     Result.CxxPrologue = CxxPrologueEffect;
+  if (Result.ChainOperationsComplete)
+    Result.SEH4Prologue = SEH4PrologueEffect;
   Result.IncomingFrameAccessesComplete = ConsistentIncomingAccesses;
   Result.CallFrameEffectsComplete = CompleteCalls && Result.Complete &&
                                     Result.CallbackStatesComplete &&
@@ -308,6 +310,7 @@ RegistrationStateAnalysis RegistrationStateSolver::finish() {
       Result.CxxCookieConditions.clear();
       Result.ChainAccesses.clear();
       Result.CxxPrologue.reset();
+      Result.SEH4Prologue.reset();
       Result.Diagnostics.push_back(
           "registration-frame output budget exhausted");
       return std::move(Result);

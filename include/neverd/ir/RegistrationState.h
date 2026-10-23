@@ -24,7 +24,7 @@ namespace neverd {
 namespace coff_loader {
 struct X86CxxHandlerABI;
 struct X86CxxPrologueCall;
-}
+} // namespace coff_loader
 
 struct LowFunc;
 
@@ -356,6 +356,17 @@ struct RegistrationCxxPrologueEffect {
   bool operator==(const RegistrationCxxPrologueEffect &) const = default;
 };
 
+/// The corresponding shared SEH4 source call. Its encoded scope table and
+/// moved PC require a separate physical projection before native emission.
+struct RegistrationSEH4PrologueEffect {
+  va_t Address = InvalidVA;
+  va_t EndAddress = InvalidVA;
+  va_t HelperVA = InvalidVA;
+  int OpSeq = -1;
+  int32_t StackOffset = 0;
+  bool operator==(const RegistrationSEH4PrologueEffect &) const = default;
+};
+
 struct RegistrationStateAnalysis {
   std::vector<RegistrationBlockState> Blocks;
   bool Complete = false;
@@ -394,6 +405,7 @@ struct RegistrationStateAnalysis {
   bool ChainOperationsComplete = false;
   std::vector<RegistrationChainAccess> ChainAccesses;
   std::optional<RegistrationCxxPrologueEffect> CxxPrologue;
+  std::optional<RegistrationSEH4PrologueEffect> SEH4Prologue;
   std::vector<RegistrationFrameValue> FrameValues;
   bool IncomingFrameAccessesComplete = true;
   std::vector<RegistrationIncomingFrameAccess> IncomingFrameAccesses;

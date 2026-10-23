@@ -9,6 +9,7 @@
 #include "COFFRegistrationEHDetail.h"
 
 #include "neverd/Limits.h"
+#include "neverd/loader/COFF/COFFSEH4Entry.h"
 #include "neverd/loader/COFF/COFFStackProbe.h"
 #include "neverd/loader/Limits.h"
 #include "neverd/loader/ReadOnlyBytes.h"
@@ -501,6 +502,10 @@ void parseX86RegistrationExceptions(BinaryImage &Img) {
     if (getCheckedX86CxxPrologueCall(Img, F)) {
       Chain.RegistrationOffset = X86CxxPrologueCall::RegistrationOffset;
       Chain.TryLevelOffset = X86CxxPrologueCall::TryLevelOffset;
+    }
+    if (getCheckedX86SEH4PrologueCall(Img, F)) {
+      Chain.RegistrationOffset = X86SEH4PrologueCall::RegistrationOffset;
+      Chain.TryLevelOffset = X86SEH4PrologueCall::TryLevelOffset;
     }
     registration_detail::recoverRegistrationCallbackRanges(
         F, Img, BodyFunctions, Chain);

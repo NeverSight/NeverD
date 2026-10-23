@@ -10,10 +10,17 @@
 
 #include "neverd/loader/COFF/COFFCxxEpilogue.h"
 #include "neverd/loader/COFF/COFFRegistrationEH.h"
+#include "neverd/loader/COFF/COFFSEH4Entry.h"
 
 namespace neverd {
 struct LowFunc;
 struct LowBlock;
+
+/// Re-lift the immutable three-instruction SEH4 entry before applying its
+/// physical frame effects to the current LowIR.
+std::optional<coff_loader::X86SEH4PrologueCall>
+getCheckedX86RegistrationSEH4ProloguePrefix(const BinaryImage &Image,
+                                            const LowFunc &Source);
 
 /// Recheck the immutable helper and the complete rooted source prefix without
 /// requiring the rest of the function's registration-state graph. This permits

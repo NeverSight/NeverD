@@ -21,7 +21,9 @@
 
 namespace neverd::coff_loader {
 struct X86CxxEpilogueCall;
-}
+struct X86SEH4PrologueCall;
+struct X86SEH4EpilogueCall;
+} // namespace neverd::coff_loader
 
 namespace neverd::registration_state {
 
@@ -220,6 +222,9 @@ public:
       const coff_loader::X86CxxHandlerABI *CxxHandler = nullptr,
       const coff_loader::X86CxxPrologueCall *CxxPrologue = nullptr,
       const std::vector<coff_loader::X86CxxEpilogueCall> *CxxEpilogues =
+          nullptr,
+      const coff_loader::X86SEH4PrologueCall *SEH4Prologue = nullptr,
+      const std::vector<coff_loader::X86SEH4EpilogueCall> *SEH4Epilogues =
           nullptr);
   RegistrationStateAnalysis run(size_t InitialWork = 0);
   size_t workUsed() const { return WorkUsed; }
@@ -233,6 +238,12 @@ private:
                                  uint16_t Width) const;
   bool registrationInstallationReady(const FrameState &Frame) const;
   bool validateCxxPrologue() const;
+  bool validateSEH4Prologue() const;
+  bool transferSEH4Prologue(size_t I, Domain &State, const LowOp &Op,
+                            BlockFacts &Facts);
+  bool transferSEH4Epilogue(size_t I, Domain &State, const LowOp &Op,
+                            BlockFacts &Facts,
+                            const coff_loader::X86SEH4EpilogueCall &Call);
   bool transferCxxPrologue(size_t I, Domain &State, const LowOp &Op,
                            BlockFacts &Facts);
   bool transferCxxEpilogue(size_t I, Domain &State, const LowOp &Op,
@@ -442,6 +453,9 @@ private:
   va_t CookieCheckVA;
   const coff_loader::X86CxxHandlerABI *CxxHandler;
   const coff_loader::X86CxxPrologueCall *CxxPrologue;
+  const coff_loader::X86SEH4PrologueCall *SEH4Prologue;
+  const std::vector<coff_loader::X86SEH4EpilogueCall> *SEH4Epilogues;
+  std::map<va_t, const coff_loader::X86SEH4EpilogueCall *> SEH4EpilogueIndex;
   const std::vector<coff_loader::X86CxxEpilogueCall> *CxxEpilogues;
   std::map<va_t, const coff_loader::X86CxxEpilogueCall *> CxxEpilogueIndex;
   const std::vector<RegistrationCalleeFrameContract> *Callees;
@@ -490,6 +504,7 @@ private:
   bool Exhausted = false;
   bool ProvenInstallation = false;
   std::optional<RegistrationCxxPrologueEffect> CxxPrologueEffect;
+  std::optional<RegistrationSEH4PrologueEffect> SEH4PrologueEffect;
   bool CompleteChainOperations = true;
   std::map<std::pair<va_t, int>, RegistrationChainAccess> ChainAccesses;
   std::map<va_t, std::pair<int, LowInstructionBoundary>> Boundaries;

@@ -281,7 +281,7 @@ void RegistrationStateSolver::seedEntries() {
         return C.Control ==
                RegistrationSEHControlContract::Kind::ParentEpilogue;
       });
-  if (Conditional || ParentEpilogue || CxxPrologue) {
+  if (Conditional || ParentEpilogue || CxxPrologue || SEH4Prologue) {
     for (unsigned Index = 0; Index != Initial.Frame.Registers.size(); ++Index)
       Initial.Frame.Registers[Index].SavedRegister = uint8_t(Index + 1);
     FrameValue PC;

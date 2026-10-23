@@ -14,6 +14,7 @@
 
 #include "neverd/ir/Limits.h"
 #include "neverd/ir/low/CFGBuilder.h"
+#include "neverd/ir/low/RegistrationSharedCall.h"
 #include "neverd/lift/X86Regs.h"
 #include "neverd/loader/ReadOnlyBytes.h"
 #include "neverd/support/BinaryEncoding.h"
@@ -25,6 +26,36 @@
 namespace neverd::registration_state {
 
 namespace {
+struct SEH4EntryCalls {
+  std::optional<coff_loader::X86SEH4PrologueCall> Entry;
+  std::vector<coff_loader::X86SEH4EpilogueCall> Exits;
+  size_t WorkUsed = 0;
+
+  SEH4EntryCalls(const BinaryImage &Image, const LowFunc &Function)
+      : Entry(getCheckedX86RegistrationSEH4ProloguePrefix(Image, Function)) {
+    if (!Entry)
+      return;
+    for (const auto &Block : Function.Blocks)
+      for (const auto &Op : Block.Ops) {
+        if (!registration_abi::chargeCalleeWork(WorkUsed, 1)) {
+          Entry.reset();
+          Exits.clear();
+          return;
+        }
+        if (Op.Opcode == NdOp::CALL && Op.Addr != Entry->CallVA)
+          if (const auto Exit = coff_loader::getCheckedX86SEH4EpilogueCall(
+                  Image, *Function.ExceptionMetadata, Op.Addr)) {
+            if (Exits.size() == limits::kMaxRegistrationEHRecords) {
+              Entry.reset();
+              Exits.clear();
+              return;
+            }
+            Exits.push_back(*Exit);
+          }
+      }
+  }
+};
+
 struct SEHCookieInputs {
   va_t CookieVA = 0;
   va_t CheckVA = 0;
@@ -187,9 +218,13 @@ proveBoundSEHCallee(const BinaryImage &Image, const LowOp &Op,
                                                        Write, Used);
   };
   const auto Cookies = getSEHCookieInputs(Image, *EH);
-  RegistrationStateSolver Solver(Function, Cookies.CookieVA, Cookies.CheckVA,
-                                 nullptr, nullptr, &*Stacks, &*Unwinds,
-                                 &*Controls, &Inputs, nullptr, &Jumps);
+  const SEH4EntryCalls Shared(Image, Function);
+  if (!registration_abi::chargeCalleeWork(Inputs.Work, Shared.WorkUsed))
+    return std::nullopt;
+  RegistrationStateSolver Solver(
+      Function, Cookies.CookieVA, Cookies.CheckVA, nullptr, nullptr, &*Stacks,
+      &*Unwinds, &*Controls, &Inputs, nullptr, &Jumps, nullptr, nullptr,
+      nullptr, Shared.Entry ? &*Shared.Entry : nullptr, &Shared.Exits);
   const auto States = Solver.run();
   if (!registration_abi::chargeCalleeWork(Inputs.Work, Solver.workUsed()))
     return std::nullopt;
@@ -321,12 +356,15 @@ RegistrationStateAnalysis analyzeCheckedX86SEHStates(
       Function.ExceptionMetadata
           ? getSEHCookieInputs(Image, *Function.ExceptionMetadata)
           : SEHCookieInputs{};
-  RegistrationStateSolver Solver(Function, Cookies.CookieVA, Cookies.CheckVA,
-                                 nullptr, nullptr, Stacks, LocalUnwinds,
-                                 Controls, nullptr,
-                                 CheckBoundCalls ? &Prove : nullptr, &Jumps);
+  const SEH4EntryCalls Shared(Image, Function);
+  RegistrationStateSolver Solver(
+      Function, Cookies.CookieVA, Cookies.CheckVA, nullptr, nullptr, Stacks,
+      LocalUnwinds, Controls, nullptr, CheckBoundCalls ? &Prove : nullptr,
+      &Jumps, nullptr, nullptr, nullptr,
+      Shared.Entry ? &*Shared.Entry : nullptr, &Shared.Exits);
   auto States = Solver.run();
-  if (Index && !Index->chargeStateWork(Solver.workUsed())) {
+  if (Index && (!Index->chargeStateWork(Shared.WorkUsed) ||
+                !Index->chargeStateWork(Solver.workUsed()))) {
     States.Complete = States.CallbackStatesComplete =
         States.RegistrationLifetimeComplete = false;
     States.SEHInvocationExitsComplete = States.SEHExceptionAccessesComplete =

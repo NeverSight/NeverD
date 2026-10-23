@@ -1555,6 +1555,11 @@ add_neverd_unittest(NeverDRegistrationEHTests
   Pipeline
 )
 
+add_neverd_unittest(NeverDRegistrationSEH4EntryTests
+  eh/RegistrationSEH4SharedTests.cpp
+  LINK_COMPONENTS IRLow
+)
+
 add_neverd_unittest(NeverDWindowsRegistrationFrameTests
   eh/WindowsRegistrationFrameTests.cpp
   eh/WindowsRegistrationFrameLayoutTests.cpp

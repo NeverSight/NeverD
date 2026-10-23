@@ -28,6 +28,7 @@
 #include "neverd/lift/ARMRegs.h"
 #include "neverd/lift/X86Regs.h"
 #include "neverd/loader/COFF/COFFRegistrationEH.h"
+#include "neverd/loader/COFF/COFFSEH4Entry.h"
 #include "neverd/loader/ExecutableCodeOwnerIndex.h"
 #include "neverd/loader/PointerRelocation.h"
 #include "neverd/loader/ReadOnlyBytes.h"
@@ -1251,6 +1252,9 @@ LowFunc CFGBuilder::buildOnce(const BinaryImage &Img, Decoder &Dec,
         AddBoundary(Chain.ChainInstallVA + *InstallSize);
       if (const auto Prologue =
               coff_loader::getCheckedX86CxxPrologueCall(Img, *Exception))
+        AddBoundary(Prologue->Caller.End);
+      if (const auto Prologue =
+              coff_loader::getCheckedX86SEH4PrologueCall(Img, *Exception))
         AddBoundary(Prologue->Caller.End);
       for (const RegistrationScopeRecord &Scope :
            Exception->Registration->Scopes) {

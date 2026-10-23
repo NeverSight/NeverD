@@ -32,9 +32,9 @@ bool hasChainOccurrence(const LowFunc &Source, va_t Address, va_t End, int Seq,
   return Match;
 }
 
+template <typename Protocol>
 bool matchesEntry(const BinaryImage &Image, const LowFunc &Source,
-                  const LowBlock &Entry,
-                  const coff_loader::X86CxxPrologueCall &Call) {
+                  const LowBlock &Entry, const Protocol &Call) {
   if (Source.Entry != Call.Caller.Begin || Entry.StartAddr != Source.Entry ||
       Entry.EndAddr != Call.Caller.End || !Entry.Preds.empty() ||
       !Entry.ExceptionalPreds.empty() ||
@@ -83,6 +83,27 @@ bool matchesEntry(const BinaryImage &Image, const LowFunc &Source,
 }
 
 } // namespace
+
+std::optional<coff_loader::X86SEH4PrologueCall>
+getCheckedX86RegistrationSEH4ProloguePrefix(const BinaryImage &Image,
+                                            const LowFunc &Source) {
+  if (Image.Arch != Arch::X86 || !Image.isCOFF() || !Source.ExceptionMetadata ||
+      Source.Blocks.size() > limits::kMaxRegistrationEHRecords)
+    return std::nullopt;
+  const auto Call = coff_loader::getCheckedX86SEH4PrologueCall(
+      Image, *Source.ExceptionMetadata);
+  if (!Call)
+    return std::nullopt;
+  const LowBlock *Entry = nullptr;
+  for (const auto &Block : Source.Blocks)
+    if (Block.StartAddr == Source.Entry) {
+      if (Entry)
+        return std::nullopt;
+      Entry = &Block;
+    }
+  return Entry && matchesEntry(Image, Source, *Entry, *Call) ? Call
+                                                             : std::nullopt;
+}
 
 std::optional<coff_loader::X86CxxPrologueCall>
 getCheckedX86RegistrationCxxProloguePrefix(const BinaryImage &Image,

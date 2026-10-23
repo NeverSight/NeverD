@@ -8785,6 +8785,18 @@ ordinary calls keep their entry roles. This prevents a runtime-only handler from
 inventing an ordinary LLVM body and a conflicting CRT personality declaration;
 it grants neither a callable ABI nor permission to omit a guard.
 
+`COFFSEH4Entry` owns the immutable shared SEH4 entry and exit protocols. The
+caller supplies the allocation and scope-table address; the helper moves its
+return PC, saves EBP in the allocation word, encodes the table and cookie,
+then installs FS:[0]. The ordinary loader publishes the physical slot offsets
+only after checking that protocol, the current EH4 wrapper and any SafeSEH
+binding. Ordinary LowIR analysis re-lifts the rooted caller prefix and applies
+the ordered writes to its actual incoming frame. Exit calls require the live
+sentinel, previous chain, parent PC, cookie and complete original nonvolatile
+saves. Overlapping writes cannot recreate a lost save. These source receipts
+do not establish an ordinary callee ABI or a generated physical frame; native
+SEH publication still refuses shared SEH4 frames pending that projection.
+
 The private `proveBoundCxxCallee` query replays a fixed-frame, cleanup-only PE32
 C++ helper under checked caller-frame inputs. It shares ordinary C++ handler,
 cookie and state setup, authenticates the direct call and complete current body,
