@@ -56,6 +56,9 @@ collectRegistrationRuntimeThrowInfos(const LowFunc &Function,
                                      std::set<std::pair<va_t, va_t>> &Code);
 
 bool chargeDecodedCallee(size_t &Work, const LowFunc &Function);
+/// Plain object/initializer proofs cannot own an EH frame. Check admission
+/// before asking any subsidiary stack proof to build another callee graph.
+bool isPlainRegistrationCalleeEntry(const BinaryImage &Image, va_t Target);
 bool hasImmutableCalleeInstruction(const BinaryImage &Image,
                                    const LowInstructionBoundary &Boundary,
                                    Decoder &Dec);

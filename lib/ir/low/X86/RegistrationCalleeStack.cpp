@@ -13,6 +13,7 @@
 #include "neverd/decode/InstructionRelocations.h"
 #include "neverd/ir/Limits.h"
 #include "neverd/ir/low/CFGBuilder.h"
+#include "neverd/ir/low/RegistrationSharedCall.h"
 #include "neverd/lift/X86Regs.h"
 #include "neverd/loader/ReadOnlyBytes.h"
 #include "neverd/loader/RegistrationScopeGraph.h"
@@ -243,10 +244,75 @@ struct StackBody {
   }
 };
 
+struct CxxStackPaths {
+  std::optional<coff_loader::X86CxxPrologueCall> Entry;
+  std::map<int, coff_loader::X86CxxEpilogueCall> Exits;
+  std::map<std::pair<va_t, int>, va_t> NoReturnImports;
+};
+
+std::optional<CxxStackPaths> cleanupCxxStackPaths(StackBody &Body,
+                                                  const LowFunc &Function) {
+  const auto &EH = *Function.ExceptionMetadata;
+  const auto &States = *Function.RegistrationStates;
+  if (!EH.Cxx || EH.CodeRange.Begin != Function.Entry ||
+      !EH.Cxx->TryBlocks.empty() || !EH.Registration->Scopes.empty() ||
+      States.Blocks.size() != Function.Blocks.size() ||
+      !States.CallFrameEffectsComplete || !States.CleanupFrameEffectsComplete ||
+      !States.CxxContinuationsComplete)
+    return std::nullopt;
+  CxxStackPaths Paths;
+  if (!chargeCalleeWork(Body.Work, Function.Blocks.size() +
+                                       States.ChainAccesses.size() + 1))
+    return std::nullopt;
+  Paths.Entry = getCheckedX86RegistrationCxxPrologueCall(Body.Image, Function);
+  if (States.CxxPrologue && !Paths.Entry)
+    return std::nullopt;
+  const auto Handler = coff_loader::getCheckedX86CxxHandlerABI(Body.Image, EH);
+  if (!Handler)
+    return std::nullopt;
+  Body.ImportSlots.insert(Handler->Dispatch.IATVA);
+  for (const auto &Block : Function.Blocks) {
+    if (!chargeCalleeWork(Body.Work,
+                          Block.Ops.size() + States.ChainAccesses.size() + 1))
+      return std::nullopt;
+    if (Paths.Entry)
+      if (auto Exit = getCheckedX86RegistrationCxxEpilogueCall(Body.Image,
+                                                               Function, Block))
+        Paths.Exits.emplace(Block.Id, *Exit);
+    for (const auto &Op : Block.Ops) {
+      const auto *Effect = States.callFrameEffect(Op.Addr, Op.Seq);
+      if (!Effect || !Effect->DoesNotReturn)
+        continue;
+      if (Op.Opcode != NdOp::CALL || Op.NumInputs != 1 ||
+          !Op.Inputs[0].isConst() || Op.Inputs[0].Size != 4 ||
+          Effect->Target != Op.Inputs[0].Offset ||
+          Effect->CalleeIndex >= States.CalleeContracts.size())
+        return std::nullopt;
+      const auto &Contract = States.CalleeContracts[Effect->CalleeIndex];
+      std::optional<va_t> Slot;
+      if (Contract.isRuntimeThrow()) {
+        if (const auto Import = getCheckedX86RegistrationThrowImportABI(
+                Body.Image, Effect->Target, &Body.Work))
+          Slot = Import->IATVA;
+      } else if (const auto Throw = getCheckedX86RegistrationThrowCalleeABI(
+                     Body.Image, Effect->Target, &Body.Work))
+        Slot = Throw->ImportIATVA;
+      if (!Slot || !chargeCalleeWork(Body.Work, 1))
+        return std::nullopt;
+      // Omitting a nonreturning path is itself a live import dependency.
+      // A caller that replaced this slot cannot borrow the normal RET proof.
+      Paths.NoReturnImports.emplace(std::make_pair(Op.Addr, Op.Seq), *Slot);
+      Body.ImportSlots.insert(*Slot);
+    }
+  }
+  return Paths;
+}
+
 std::optional<uint32_t>
 stackPopForBody(StackBody &Body, va_t Entry, const NestedStackProof &NestedPop,
                 const LowFunc *Registration = nullptr,
-                const std::set<int> *RegistrationParents = nullptr) {
+                const std::set<int> *RegistrationParents = nullptr,
+                const CxxStackPaths *CxxPaths = nullptr) {
   if (!Body.Valid || !Body.Entries.count(Entry) ||
       !Body.collectCalleeImports(NestedPop))
     return std::nullopt;
@@ -296,6 +362,7 @@ stackPopForBody(StackBody &Body, va_t Entry, const NestedStackProof &NestedPop,
     if (!Body.immutableBlock(Id) || (Registration && !ParentBlocks.count(Id)))
       return std::nullopt;
     FrameTransfer Transfer(State, 0);
+    bool DoesNotReturn = false;
     for (const auto &Op : Block.Ops) {
       size_t Width = Op.Output.Size;
       for (unsigned I = 0; I != Op.NumInputs; ++I)
@@ -309,6 +376,44 @@ stackPopForBody(StackBody &Body, va_t Entry, const NestedStackProof &NestedPop,
         if (!chargeCalleeWork(Work, Body.ImportSlots.size() + 1))
           return std::nullopt;
         Transfer.invalidateImportBindings(Op, Body.ImportSlots);
+      }
+      if (CxxPaths && Op.Opcode == NdOp::CALL) {
+        if (CxxPaths->Entry && Op.Addr == CxxPaths->Entry->CallVA) {
+          if (State.Registers[x86reg::RSP / x86reg::GeneralRegStride].Offset !=
+              0)
+            return std::nullopt;
+          State.Registers[x86reg::RBP / x86reg::GeneralRegStride] =
+              FrameValue::frame(0);
+          State.Registers[x86reg::RSP / x86reg::GeneralRegStride] =
+              FrameValue::frame(CxxPaths->Entry->PostCallStackOffset);
+          State.Registers[x86reg::RAX / x86reg::GeneralRegStride] =
+              FrameValue::frame(CxxPaths->Entry->RegistrationOffset);
+          State.OtherRegisterBytes.clear();
+          continue;
+        }
+        if (const auto Exit = CxxPaths->Exits.find(Id);
+            Exit != CxxPaths->Exits.end() &&
+            Op.Addr == Exit->second.Caller.Begin) {
+          if (State.Registers[x86reg::RBP / x86reg::GeneralRegStride].Offset !=
+              0)
+            return std::nullopt;
+          // The complete source receipt owns the live saved-register words
+          // and PC. Keep only the helper's physical returning ESP here.
+          for (unsigned Register : {3, 5, 6, 7})
+            State.Registers[Register] = {};
+          State.Registers[x86reg::RCX / x86reg::GeneralRegStride] = {};
+          State.Registers[x86reg::RSP / x86reg::GeneralRegStride] =
+              FrameValue::frame(4);
+          if (Exit->second.CookieCheck)
+            State.OtherRegisterBytes.clear();
+          continue;
+        }
+        if (CxxPaths->NoReturnImports.count({Op.Addr, Op.Seq})) {
+          if (!State.ImportBindingsIntact)
+            return std::nullopt;
+          DoesNotReturn = true;
+          break;
+        }
       }
       if (Op.Opcode == NdOp::RETURN) {
         if (State.Registers[x86reg::RSP / x86reg::GeneralRegStride].Offset !=
@@ -374,6 +479,8 @@ stackPopForBody(StackBody &Body, va_t Entry, const NestedStackProof &NestedPop,
       if (CallSP)
         State.Registers[x86reg::RSP / x86reg::GeneralRegStride] = *CallSP;
     }
+    if (DoesNotReturn)
+      continue;
     if (Block.Succs.empty() &&
         (Block.Ops.empty() || Block.Ops.back().Opcode != NdOp::RETURN))
       return std::nullopt;
@@ -526,11 +633,17 @@ stackPopForRegistration(StackBody &Body, const LowFunc &Function,
     return stackPopForBody(Body, Function.Entry, NestedPop, &Function,
                            &*Parents);
   }
-  if (!Body.Valid || !EH || !EH->Registration || EH->Cxx ||
+  if (!Body.Valid || !EH || !EH->Registration ||
       EH->Registration->RealignedFrame || !States || !States->Complete ||
       !States->CallbackStatesComplete ||
       !States->RegistrationLifetimeComplete || !States->ChainOperationsComplete)
     return std::nullopt;
+  std::optional<CxxStackPaths> CxxPaths;
+  if (EH->Cxx) {
+    CxxPaths = cleanupCxxStackPaths(Body, Function);
+    if (!CxxPaths)
+      return std::nullopt;
+  }
   std::set<int> Parents;
   for (const auto &State : States->Blocks) {
     if (!State.Reached)
@@ -548,7 +661,8 @@ stackPopForRegistration(StackBody &Body, const LowFunc &Function,
   // Runtime filter/finally returns pop a dispatcher invocation, not this
   // function's caller. The complete state proof separates those paths; the
   // independent register-only proof still owns every parent return's ESP.
-  return stackPopForBody(Body, Function.Entry, NestedPop, &Function, &Parents);
+  return stackPopForBody(Body, Function.Entry, NestedPop, &Function, &Parents,
+                         CxxPaths ? &*CxxPaths : nullptr);
 }
 
 class ReturningStackProof {
@@ -607,8 +721,8 @@ public:
     }
     if ((!Parent || !Parent->Entries.count(Target)))
       if (const auto *EH = Image.ExceptionMetadata.findFunction(Target);
-          EH &&
-          (EH->Cxx || !EH->Registration || EH->Registration->RealignedFrame))
+          EH && (!EH->Registration || EH->Registration->RealignedFrame ||
+                 (EH->Cxx && !EH->Cxx->TryBlocks.empty())))
         return std::nullopt;
     // In-progress entries carry no fact: recursion cannot certify itself.
     // Even failed nested bodies consume the same cumulative work allowance.

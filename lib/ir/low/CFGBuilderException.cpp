@@ -76,7 +76,7 @@ void CFGBuilder::linkExceptionalSuccessors(LowFunc &Func) {
           *CurrentImg, Func, Callees ? &*Callees : nullptr,
           Cleanups ? &*Cleanups : nullptr, Stacks ? &*Stacks : nullptr,
           LocalUnwinds ? &*LocalUnwinds : nullptr,
-          SEHControls ? &*SEHControls : nullptr);
+          SEHControls ? &*SEHControls : nullptr, CalleeIndex);
     else
       Func.RegistrationStates = analyzeRegistrationStates(
           Func,

@@ -12,6 +12,7 @@
 #include "neverd/ir/low/RegistrationABI.h"
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/ir/med/MedABIPass.h"
+#include "neverd/loader/COFF/COFFLoader.h"
 #include "neverd/loader/COFF/COFFRegistrationEH.h"
 #include "neverd/loader/ReadOnlyBytes.h"
 #include "neverd/support/BinaryEncoding.h"
@@ -19,6 +20,7 @@
 #include "llvm/BinaryFormat/COFF.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include <vector>
 
 using namespace neverd;
@@ -112,6 +114,57 @@ struct ThrowImage {
   }
 };
 } // namespace
+
+TEST(RegistrationCallABI, ThrowImportMustSurvivePrivateHelperEffects) {
+  for (bool Rethrow : {false, true})
+    for (unsigned Mutation = 0; Mutation != 7; ++Mutation) {
+      SCOPED_TRACE(Rethrow);
+      SCOPED_TRACE(Mutation);
+      std::vector<uint8_t> Extra;
+      if (Mutation == 1 || Mutation == 4 || Mutation == 6) {
+        Extra = {0xc7, 0x05, 0, 0, 0, 0, 0, 0, 0, 0};
+        const va_t Slot = Mutation == 4   ? ThrowImage::IATVA + 4
+                          : Mutation == 6 ? ThrowImage::IATVA - 4
+                                          : ThrowImage::IATVA;
+        writeLE<uint32_t>(Extra.data() + 2, Slot);
+        writeLE<uint32_t>(Extra.data() + 6, ThrowImage::TextVA + 0x90);
+      } else if (Mutation == 2) {
+        Extra = {0xc6, 0x05, 0, 0, 0, 0, 0};
+        writeLE<uint32_t>(Extra.data() + 2, ThrowImage::IATVA + 3);
+      } else if (Mutation == 3) {
+        Extra = {0x66, 0xc7, 0x05, 0, 0, 0, 0, 0, 0};
+        writeLE<uint32_t>(Extra.data() + 3, ThrowImage::IATVA - 1);
+      } else if (Mutation == 5) {
+        // EAX still contains the real caller PC from the fixture's observer.
+        Extra = {0xa3, 0, 0, 0, 0};
+        writeLE<uint32_t>(Extra.data() + 1, ThrowImage::IATVA);
+      }
+      ThrowImage F({0xc7, 0x45, 0xfc, 7, 0, 0, 0}, Extra);
+      auto &Text = F.Image.Segments.front();
+      Text.Data.resize(0x93, 0xcc);
+      // A real replacement returns with the runtime's two arguments removed.
+      // The original helper can then reach its retained ordinary epilogue.
+      Text.Data[0x90] = 0xc2;
+      Text.Data[0x91] = 8;
+      Text.Data[0x92] = 0;
+      Text.Size = Text.FileSz = Text.Data.size();
+      F.Image.Sections.front().Size = F.Image.Sections.front().FileSz =
+          Text.Size;
+      if (Rethrow) {
+        const size_t Args = F.CallVA - ThrowImage::TextVA - 9;
+        const uint8_t NullArguments[] = {0x6a, 0,    0x90, 0x90, 0x90,
+                                         0x31, 0xc9, 0x90, 0x51};
+        std::copy(std::begin(NullArguments), std::end(NullArguments),
+                  Text.Data.begin() + Args);
+      }
+      const auto Proof =
+          getCheckedX86RegistrationThrowCalleeABI(F.Image, ThrowImage::TextVA);
+      const bool Preserved = Mutation == 0 || Mutation == 4 || Mutation == 6;
+      EXPECT_EQ(bool(Proof), Preserved);
+      if (Proof)
+        EXPECT_EQ(Proof->IsRethrow, Rethrow);
+    }
+}
 
 TEST(RegistrationCallABI, StackCleanupRequiresEveryRestoredNearReturn) {
   auto MapText = [](BinaryImage &Image) {
@@ -2235,6 +2288,11 @@ TEST(RegistrationCallABI, CxxCookieSourceProofReachesTheParentAndMedCallABI) {
   const auto &Check = States.CookieChecks.front();
   EXPECT_FALSE(States.callFrameEffect(Check.Address, Check.OpSeq));
   ASSERT_EQ(getCheckedX86RegistrationCxxParentABI(Low, Image), 0);
+  EXPECT_EQ(getCheckedX86CalleeStackPop(Image, Entry), 0u);
+  auto Unbalanced = Image;
+  ASSERT_EQ(Body[Body.size() - 2], 0x5d);
+  Unbalanced.Segments.front().Data[Body.size() - 2] = 0x90;
+  EXPECT_FALSE(getCheckedX86CalleeStackPop(Unbalanced, Entry));
   EXPECT_FALSE(coff_loader::getCheckedX86CxxPersonalityABI(Image, *EH));
   LowToMedConverter Converter;
   Converter.setBinaryImage(&Image);
@@ -2297,6 +2355,128 @@ TEST(RegistrationCallABI, CxxCookieSourceProofReachesTheParentAndMedCallABI) {
     }
     EXPECT_FALSE(getCheckedX86RegistrationCxxParentABI(Changed, ChangedImage));
   }
+}
+
+TEST(RegistrationCallABI, InputPE32CleanupParentRetainsThrowBinding) {
+  const auto *Path = std::getenv("NEVERD_REGISTRATION_CLEANUP_ONLY_PE32");
+  if (!Path)
+    GTEST_SKIP() << "set the authored C++ cleanup image";
+  auto Image = COFFLoader().load(Path);
+  ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+  const auto Export = llvm::find_if(Image->Exports, [](const auto &E) {
+    return E.Name == "cleanup_only_parent";
+  });
+  ASSERT_NE(Export, Image->Exports.end());
+  const va_t Entry = Export->Addr;
+  const auto *EH = Image->ExceptionMetadata.findFunction(Entry);
+  ASSERT_TRUE(EH && EH->Cxx && EH->Registration);
+  ASSERT_TRUE(EH->Cxx->TryBlocks.empty());
+  if (EH->Registration->RealignedFrame) {
+    // Realigned parent coordinates still need their separate stack owner.
+    EXPECT_FALSE(getCheckedX86CalleeStackPop(*Image, Entry));
+    return;
+  }
+  size_t Work = 0;
+  EXPECT_EQ(getCheckedX86CalleeStackPop(*Image, Entry, &Work), 0u);
+  ASSERT_GT(Work, 0u);
+  ASSERT_LT(Work, limits::kMaxRegistrationEHStateWork);
+  const size_t Used = Work;
+  Work = limits::kMaxRegistrationEHStateWork - Used;
+  EXPECT_EQ(getCheckedX86CalleeStackPop(*Image, Entry, &Work), 0u);
+  EXPECT_EQ(Work, limits::kMaxRegistrationEHStateWork);
+  Work = limits::kMaxRegistrationEHStateWork - Used + 1;
+  EXPECT_FALSE(getCheckedX86CalleeStackPop(*Image, Entry, &Work));
+  EXPECT_EQ(Work, limits::kMaxRegistrationEHStateWork);
+
+  LowFunc Caller;
+  Caller.Entry = Entry - 1;
+  Caller.Blocks.resize(1);
+  LowOp Call;
+  Call.Opcode = NdOp::CALL;
+  Call.addInput(NdVar::cst(Entry, 4));
+  Caller.Blocks.front().Ops.push_back(Call);
+  RegistrationCallCalleeIndex Index(*Image);
+  const auto Contracts = Index.stackContracts(Caller);
+  ASSERT_TRUE(Contracts);
+  ASSERT_EQ(Contracts->size(), 1u);
+  const auto &Contract = Contracts->front();
+  EXPECT_EQ(Contract.Target, Entry);
+  EXPECT_EQ(Contract.StackPopBytes, 0u);
+  EXPECT_FALSE(Contract.PreservesImportBindings);
+  const auto Throw = llvm::find_if(Image->Imports, [](const auto &I) {
+    return I.Name == "_CxxThrowException";
+  });
+  ASSERT_NE(Throw, Image->Imports.end());
+  EXPECT_NE(std::find(Contract.RequiredImports.begin(),
+                      Contract.RequiredImports.end(), Throw->IATAddr),
+            Contract.RequiredImports.end());
+
+  for (bool ReplaceImport : {false, true}) {
+    SCOPED_TRACE(ReplaceImport);
+    auto Wrapped = *Image;
+    va_t Address = 0;
+    for (const auto &Segment : Wrapped.Segments)
+      Address = std::max(Address, Segment.VA + Segment.Size);
+    ASSERT_LE(Address, UINT32_MAX - 32);
+    Address = (Address + 15) & ~va_t{15};
+    Segment Wrapper;
+    Wrapper.Name = ".wrapper";
+    Wrapper.VA = Address;
+    Wrapper.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+    if (ReplaceImport) {
+      // Even one changed byte revokes the nonreturning-path assumption.
+      Wrapper.Data = {0xc6, 0x05, 0, 0, 0, 0, 0};
+      writeLE<uint32_t>(Wrapper.Data.data() + 2, Throw->IATAddr + 3);
+    }
+    Wrapper.Data.push_back(0xe8);
+    const size_t Displacement = Wrapper.Data.size();
+    Wrapper.Data.resize(Displacement + 4);
+    writeLE<uint32_t>(Wrapper.Data.data() + Displacement,
+                      uint32_t(Entry - (Address + Displacement + 4)));
+    Wrapper.Data.push_back(0xc3);
+    Wrapper.Size = Wrapper.FileSz = Wrapper.Data.size();
+    Section Code;
+    Code.Name = Wrapper.Name;
+    Code.VA = Wrapper.VA;
+    Code.Size = Code.FileSz = Wrapper.Size;
+    Code.Flags = Wrapper.Flags;
+    Wrapped.Sections.push_back(Code);
+    Wrapped.Symbols.push_back(Symbol::makeFunc(Address, Wrapper.Size));
+    Wrapped.Segments.push_back(std::move(Wrapper));
+    EXPECT_EQ(getCheckedX86CalleeStackPop(Wrapped, Address),
+              ReplaceImport ? std::nullopt : std::optional<uint32_t>{0});
+  }
+
+  auto Changed = *Image;
+  const auto ChangedThrow = llvm::find_if(Changed.Imports, [&](const auto &I) {
+    return I.IATAddr == Throw->IATAddr;
+  });
+  ASSERT_NE(ChangedThrow, Changed.Imports.end());
+  ChangedThrow->Name = "unknown_throw";
+  EXPECT_FALSE(getCheckedX86CalleeStackPop(Changed, Entry));
+
+  Decoder Decode;
+  ASSERT_TRUE(Decode.init(*Image));
+  const auto Parent = CFGBuilder().build(*Image, Decode, Entry, "stack-parent");
+  unsigned Returns = 0;
+  for (const auto &Block : Parent.Blocks)
+    for (const auto &Insn : Block.InstructionBoundaries)
+      if (Insn.Control == LowInstructionControl::Return) {
+        ++Returns;
+        Changed = *Image;
+        for (auto &Segment : Changed.Segments)
+          if (Segment.VA <= Insn.Address &&
+              Insn.Address - Segment.VA < Segment.Data.size())
+            Segment.Data[Insn.Address - Segment.VA] = 0xcb;
+        EXPECT_FALSE(getCheckedX86CalleeStackPop(Changed, Entry));
+      }
+  EXPECT_GT(Returns, 0u);
+
+  Changed = *Image;
+  for (auto &Segment : Changed.Segments)
+    if (Segment.VA <= Entry && Entry < Segment.VA + Segment.Size)
+      Segment.Flags = Segment.Flags | SegmentFlags::Writable;
+  EXPECT_FALSE(getCheckedX86CalleeStackPop(Changed, Entry));
 }
 
 TEST(RegistrationCallABI, CxxHandlerRejectsChangedCookieGuardSemantics) {

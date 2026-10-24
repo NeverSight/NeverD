@@ -5854,6 +5854,24 @@ also checks that these table, lock and exit-registration imports cannot acquire
 the separate RaiseException caller-frame contract from their stack fact.
 Managed-name variants, partial or missing caller cleanup, and stale provider or
 slot bindings receive no normal-return stack contract.
+`CxxCookieSourceProofReachesTheParentAndMedCallABI` also checks an independent
+returning-stack proof for a cleanup-only C++ parent and rejects a removed EBP
+pop even when the return opcode still says zero cleanup.
+`InputPE32CleanupParentRetainsThrowBinding`, with
+`NEVERD_REGISTRATION_CLEANUP_ONLY_PE32` set to the authored cleanup fixture,
+checks its parent return, exact cumulative budget, transitive throw-import
+dependency and ordinary caller composition. Partial IAT replacement, a renamed
+throw import, far returns and writable code must refuse. The shared-prologue
+variant exercises its authenticated physical entry and exit calls. This is
+stack evidence; ordinary whole-image native EH remains a separate check.
+The realigned fixture must retain its refusal from this stack-only route.
+`PlainObjectQueriesRejectRecursiveCxxEntries` and
+`ReplaysNestedCallsAndTheirAdministration` check that initializer, object and
+stack queries cannot restart an unbounded recursive C++ graph.
+`ThrowImportMustSurvivePrivateHelperEffects` supplies a real `RET 8` replacement
+for the runtime import, partial writes from either edge, and a caller-PC store.
+New throws and rethrows both refuse overlapping writes; adjacent disjoint writes
+retain their existing contract.
 `CachedImportTargetsKeepOnlyTheirReturningStackABI` checks cdecl and stdcall
 imports through six physical register families. Counterexamples cover partial
 loads/writes, wrong slots/providers, delayed binding, prior slot or unknown

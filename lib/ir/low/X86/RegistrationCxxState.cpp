@@ -79,9 +79,21 @@ RegistrationStateAnalysis analyzeCheckedX86CxxStates(
     const std::vector<RegistrationCleanupFrameContract> *Cleanups,
     const std::vector<RegistrationCalleeStackContract> *Stacks,
     const std::vector<RegistrationLocalUnwindContract> *LocalUnwinds,
-    const std::vector<RegistrationSEHControlContract> *SEHControls) {
-  return solveCheckedCxxStates(Image, Function, Callees, Cleanups, Stacks,
-                               LocalUnwinds, SEHControls);
+    const std::vector<RegistrationSEHControlContract> *SEHControls,
+    RegistrationCallCalleeIndex *CalleeIndex) {
+  size_t Work = 0;
+  auto States =
+      solveCheckedCxxStates(Image, Function, Callees, Cleanups, Stacks,
+                            LocalUnwinds, SEHControls, nullptr, &Work);
+  if (CalleeIndex && !CalleeIndex->chargeStateWork(Work)) {
+    States.Complete = States.CallbackStatesComplete =
+        States.RegistrationLifetimeComplete = States.ChainOperationsComplete =
+            States.CallFrameEffectsComplete = false;
+    States.CallFrameEffects.clear();
+    States.CxxPrologue.reset();
+    States.Diagnostics.push_back("C++ callee state proof budget exhausted");
+  }
+  return States;
 }
 
 namespace registration_state {

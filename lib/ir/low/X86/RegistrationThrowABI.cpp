@@ -109,6 +109,16 @@ getCheckedX86RegistrationThrowCalleeABI(const BinaryImage &Image, va_t Target,
                         : Result.ThrowInfo.Address == InvalidVA) ||
       !callerPCIsNotReadBack(Effects))
     return std::nullopt;
+  if (!chargeCalleeWork(Work, Effects.Writes.size() + 1))
+    return std::nullopt;
+  const ExceptionAddressRange Binding{Result.ImportIATVA,
+                                      Result.ImportIATVA + 4};
+  for (const auto &[Begin, End] : Effects.Writes)
+    if (Binding.overlaps({Begin, End}))
+      // The physical call can return after its import slot is replaced.
+      // Initializers and runtime callbacks contribute to the same may-writes;
+      // a rethrow depends on this binding just as a new throw does.
+      return std::nullopt;
   if (!Result.IsRethrow) {
     const auto &Info = Result.ThrowInfo;
     if (Effects.Writes.size() > (limits::kMaxRegistrationEHStateWork - Work) /

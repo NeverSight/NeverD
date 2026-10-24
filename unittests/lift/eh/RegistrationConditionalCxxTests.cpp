@@ -897,6 +897,21 @@ TEST(RegistrationConditionalCxx, ReplaysNestedCallsAndTheirAdministration) {
   }
 }
 
+TEST(RegistrationConditionalCxx, PlainObjectQueriesRejectRecursiveCxxEntries) {
+  BoundCxxFixture F;
+  F.addOuter(false);
+  writeLE<uint32_t>(F.Image.Segments.front().Data.data() + F.OuterCallVA + 1 -
+                        Entry,
+                    uint32_t(Outer - (F.OuterCallVA + 5)));
+  size_t Work = 0;
+  EXPECT_FALSE(
+      getCheckedX86RegistrationInitializerCalleeABI(F.Image, Outer, &Work));
+  EXPECT_FALSE(getCheckedX86RegistrationObjectCalleeABI(F.Image, Outer, &Work));
+  EXPECT_FALSE(getCheckedX86RegistrationMemberCalleeABI(F.Image, Outer, &Work));
+  EXPECT_FALSE(getCheckedX86CalleeStackPop(F.Image, Outer, &Work));
+  EXPECT_LT(Work, limits::kMaxRegistrationEHStateWork);
+}
+
 TEST(RegistrationConditionalCxx, ClosedThrowStillRequiresItsUnwindCleanup) {
   BoundCxxFixture F(BoundCxxFixture::ReturnMode::Alias, false, false, true);
   F.Parent.Registers[x86reg::RCX / x86reg::GeneralRegStride] = {};

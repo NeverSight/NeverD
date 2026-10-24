@@ -18,7 +18,9 @@ namespace neverd::registration_abi {
 std::optional<RegistrationInitializerCalleeABI>
 checkedInitializerCalleeABI(const BinaryImage &Image, va_t Target, size_t &Work,
                             InitializerContext &Context) {
-  if (!chargeCalleeWork(Work, 1) || Context.Depth >= kMaxInitializerGraphDepth)
+  if (!chargeCalleeWork(Work, 1) ||
+      !isPlainRegistrationCalleeEntry(Image, Target) ||
+      Context.Depth >= kMaxInitializerGraphDepth)
     return std::nullopt;
   if (const auto It = Context.Callees.find(Target);
       It != Context.Callees.end()) {

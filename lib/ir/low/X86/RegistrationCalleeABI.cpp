@@ -20,6 +20,13 @@
 
 namespace neverd::registration_abi {
 
+bool isPlainRegistrationCalleeEntry(const BinaryImage &Image, va_t Target) {
+  return Image.Arch == Arch::X86 && Image.Bits == Bitness::Bits32 &&
+         Image.Format == BinaryFormat::COFF && Target <= UINT32_MAX &&
+         Image.isCodeAddress(Target) &&
+         !Image.ExceptionMetadata.findFunction(Target);
+}
+
 const Import *checkedImportSlot(const BinaryImage &Image, va_t Target) {
   if (Image.Arch != Arch::X86 || Image.Bits != Bitness::Bits32 ||
       Image.Format != BinaryFormat::COFF)
@@ -287,10 +294,7 @@ std::optional<RegistrationLeafCalleeABI> registration_abi::checkedLeafCalleeABI(
       (Callbacks && (Initializer || CopyObjectSize)) ||
       (!Callbacks && CallbackStackPopBytes))
     return std::nullopt;
-  if (Image.Arch != Arch::X86 || Image.Bits != Bitness::Bits32 ||
-      Image.Format != BinaryFormat::COFF || Target > UINT32_MAX ||
-      !Image.isCodeAddress(Target) ||
-      Image.ExceptionMetadata.findFunction(Target))
+  if (!registration_abi::isPlainRegistrationCalleeEntry(Image, Target))
     return std::nullopt;
   if (!chargeCalleeWork(Work, 1))
     return std::nullopt;

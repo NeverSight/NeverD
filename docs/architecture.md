@@ -2306,6 +2306,23 @@ ordinary subgraph, while the checked
 RaiseException provider supplies its separate stdcall adjustment. These facts
 do not grant object borrows, memory-effect completeness or native EH authority;
 the existing call-frame and generated-code checks remain required.
+C++ parents with cleanup actions and no catches can use this same stack proof
+after complete source lifetime and call-effect analysis. Checked shared entry
+and exit occurrences supply their physical register transfers; every ordinary
+return still needs the independently restored ESP and matching near-return
+encoding. Runtime callback returns never supply the parent's cleanup. A checked
+throw can terminate an ordinary path only while its required IAT binding is
+live, and that dependency travels with the returning-stack contract to callers.
+C++ state analysis charges the same callee index as nested stack and frame
+queries. These facts still provide neither caller memory effects nor native
+permission to preserve or replace the C++ call.
+Plain object and initializer graphs share their non-EH entry admission with
+the leaf frame proof, before requesting a separate stack graph. A recursive
+C++ entry cannot reset that closure through an inapplicable plain-callee query.
+The private throw helper's complete may-write set must also preserve its own
+runtime IAT slot, including writes from initializers and runtime callbacks.
+Changing that slot can make the physical call return; neither a new throw nor
+a rethrow can retain a nonreturning contract in that case.
 Exact, file-backed MSVCRT/MSVCR100 allocation, release and memory-copy/fill
 imports likewise supply only their cdecl returning-stack adjustment. Named
 PE32 scalar/array new/delete entries keep their exact decorated spelling.
