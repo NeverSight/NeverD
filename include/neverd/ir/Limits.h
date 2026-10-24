@@ -235,6 +235,7 @@ inline constexpr unsigned kRegistrationConditionalCalleeMaxBoundCallCheckDepth =
 
 // lib/ir/low/X86/RegistrationCxxState.cpp
 inline constexpr unsigned kRegistrationCxxMaxBoundCallDepth = 4;
+inline constexpr unsigned kRegistrationCxxMaxCalleeDepth = 4;
 
 // lib/ir/low/jumptable/JumpTableResolverBounds.cpp
 // Keep attacker-controlled work in independent accounts so an intentionally

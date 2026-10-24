@@ -81,7 +81,7 @@ std::optional<uint32_t> registrationCallStackPop(const LowFunc &Func,
     return std::nullopt;
   const auto &Callee = States.CalleeContracts[Effect->CalleeIndex];
   if ((Callee.CalleeKind != RegistrationCalleeFrameContract::Kind::Leaf &&
-       !Callee.isInitializer()) ||
+       !Callee.isInitializer() && !Callee.isCxxParent()) ||
       Callee.Target != Effect->Target ||
       Callee.StackPopBytes != Effect->StackPopBytes ||
       Callee.StackPopBytes > UINT16_MAX || Callee.StackPopBytes % 4)
@@ -141,7 +141,7 @@ std::optional<RegistrationCallABI> registrationCallABI(const MedFunc &Func,
       (Callee.isThrow() ? !Callee.DoesNotReturn || Borrow
                         : (Callee.CalleeKind !=
                                RegistrationCalleeFrameContract::Kind::Leaf &&
-                           !Callee.isInitializer()) ||
+                           !Callee.isInitializer() && !Callee.isCxxParent()) ||
                               Callee.DoesNotReturn))
     return std::nullopt;
 

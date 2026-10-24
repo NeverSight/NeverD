@@ -123,7 +123,8 @@ struct RegistrationCalleeFrameContract {
     PrivateThrow,
     PrivateRethrow,
     RuntimeThrow,
-    Initializer
+    Initializer,
+    CxxParent
   } CalleeKind = Kind::Leaf;
   va_t Target = InvalidVA;
   uint32_t StackPopBytes = 0;
@@ -135,6 +136,10 @@ struct RegistrationCalleeFrameContract {
   va_t ThrownTypeVA = 0;
   uint32_t ThrownObjectSize = 0;
   std::vector<RegistrationRuntimeThrowInfo> RuntimeThrowInfos;
+  /// Eager import bindings required by this complete invocation, including
+  /// nested language dispatch. Sorted and unique; the caller must keep them
+  /// live before using any of this contract's effects.
+  std::vector<va_t> RequiredImports;
   std::vector<RegistrationObjectExtent> ECXReads;
   std::vector<RegistrationObjectExtent> ECXWrites;
   /// Bytes initialized on every normal return from an ordinary constructor.
@@ -152,6 +157,7 @@ struct RegistrationCalleeFrameContract {
   bool isRethrow() const { return CalleeKind == Kind::PrivateRethrow; }
   bool isRuntimeThrow() const { return CalleeKind == Kind::RuntimeThrow; }
   bool isInitializer() const { return CalleeKind == Kind::Initializer; }
+  bool isCxxParent() const { return CalleeKind == Kind::CxxParent; }
 };
 
 /// An ordinary member call borrows a still-live reference catch's exception

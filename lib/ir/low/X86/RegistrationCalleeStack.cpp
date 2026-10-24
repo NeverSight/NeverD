@@ -20,6 +20,7 @@
 #include "neverd/support/BinaryEncoding.h"
 
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/ScopeExit.h"
 
 #include <deque>
 #include <functional>
@@ -665,6 +666,11 @@ stackPopForRegistration(StackBody &Body, const LowFunc &Function,
                          CxxPaths ? &*CxxPaths : nullptr);
 }
 
+// A subsidiary object/initializer query can start a new public index. Keep
+// the complete active body path across that boundary, including its limit.
+using StackQuery = std::pair<const BinaryImage *, va_t>;
+thread_local std::set<StackQuery> ActiveStackProofs;
+
 class ReturningStackProof {
   const BinaryImage &Image;
   size_t &Work;
@@ -695,7 +701,11 @@ public:
         return std::nullopt;
       return It->second;
     }
+    const StackQuery Identity{&Image, Target};
     if (Depth == ::neverd::limits::ir::kMaxReturningStackProofDepth ||
+        ActiveStackProofs.size() >=
+            ::neverd::limits::ir::kMaxReturningStackProofDepth ||
+        ActiveStackProofs.count(Identity) ||
         Cache.size() ==
             ::neverd::limits::ir::kRegistrationCalleeStackProveCacheSizeLimit ||
         Target > UINT32_MAX || !Image.isCodeAddress(Target))
@@ -727,7 +737,12 @@ public:
     // In-progress entries carry no fact: recursion cannot certify itself.
     // Even failed nested bodies consume the same cumulative work allowance.
     auto It = Cache.emplace(Target, std::nullopt).first;
+    ActiveStackProofs.insert(Identity);
     ++Depth;
+    const llvm::scope_exit Leave([&] {
+      --Depth;
+      ActiveStackProofs.erase(Identity);
+    });
     const auto Nested = [&](va_t Callee) { return prove(Callee); };
     const auto Record = [&](StackBody &Body, std::optional<uint32_t> Pop) {
       if (Pop && chargeCalleeWork(Work, Body.ImportSlots.size() + 1))
@@ -753,7 +768,6 @@ public:
                          : stackPopForBody(Body, Target, Nested));
       }
     }
-    --Depth;
     if (It->second &&
         !chargeCalleeWork(Work, It->second->RequiredImports.size() + 1))
       return std::nullopt;
@@ -807,7 +821,10 @@ std::optional<uint32_t> getCheckedX86CalleeStackPop(const BinaryImage &Image,
   // level alone, charging the same work every time; only the caller's
   // remaining budget decides whether that work fits. Every charge counts
   // toward that total, so it fits exactly when the recorded work does.
-  RegistrationStackPopMemo *Memo = CurrentStackPopMemo;
+  RegistrationStackPopMemo *Memo =
+      !ActiveStackProofs.empty() || registration_abi::hasActiveCxxCalleeProof()
+          ? nullptr
+          : CurrentStackPopMemo;
   const unsigned Level = x86SEHStateAnalysisLevel();
   if (Memo)
     if (const auto Known = Memo->find(Image, Target, Level)) {

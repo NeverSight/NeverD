@@ -247,8 +247,10 @@ TEST(RegistrationFrameScalar, ImportPreservationDoesNotRestoreLostFacts) {
         Call.Output = NdVar::reg(x86reg::RAX, 4);
         Call.addInput(NdVar::reg(x86reg::RSI, 4));
         Transfer.write(Call, {}, 0, PreserveTargets, PreserveBindings);
-        EXPECT_EQ(State.ImportBindingsIntact,
-                  Intact && PreserveTargets && PreserveBindings);
+        EXPECT_EQ(State.ImportBindingsIntact, Intact && PreserveBindings);
+        EXPECT_EQ(State.Registers[x86reg::RSI / x86reg::GeneralRegStride]
+                      .ImportTarget.has_value(),
+                  PreserveTargets);
         const auto &Result =
             State.Registers[x86reg::RAX / x86reg::GeneralRegStride];
         EXPECT_TRUE(Result.MayBeFrame);

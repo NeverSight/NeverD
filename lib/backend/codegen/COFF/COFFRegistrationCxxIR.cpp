@@ -16,6 +16,7 @@
 #include "neverd/backend/llvm/X86RegistrationLayout.h"
 #include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/ir/low/RegistrationABI.h"
+#include "neverd/ir/low/RegistrationCallEffects.h"
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/ir/med/X86RegistrationCallResult.h"
 #include "neverd/ir/med/X86RegistrationCallback.h"
@@ -416,14 +417,25 @@ getCheckedCxxControlIRProof(const llvm::Function &Function,
     const bool Initializer = Receipt.Contract.isInitializer();
     bool DiscardResult = false;
     if (!Throw && !Receipt.Cleanup && !Initializer) {
-      const auto Fresh = getCheckedX86RegistrationMemberCalleeABI(
-          Image, Receipt.Contract.Target, &CallResultWork,
-          RegistrationLeafResult::Discarded);
-      if (!Fresh || Fresh->StackPopBytes != Receipt.Contract.StackPopBytes ||
-          Fresh->HasIndependentScalarReturn !=
-              Receipt.Contract.HasIndependentScalarReturn)
-        return rejectIR("C++ returning call lost its current object contract");
-      DiscardResult = !Fresh->HasIndependentScalarReturn;
+      if (Receipt.Contract.isCxxParent()) {
+        const auto Fresh = getCheckedX86RegistrationCxxCalleeABI(
+            Image, Receipt.Contract.Target, &CallResultWork);
+        if (!Fresh || !hasSameX86RegistrationCxxEffects(Receipt.Contract,
+                                                        *Fresh, CallResultWork))
+          return rejectIR(
+              "C++ returning parent lost its current frame contract");
+        DiscardResult = !Fresh->HasIndependentScalarReturn;
+      } else {
+        const auto Fresh = getCheckedX86RegistrationMemberCalleeABI(
+            Image, Receipt.Contract.Target, &CallResultWork,
+            RegistrationLeafResult::Discarded);
+        if (!Fresh || Fresh->StackPopBytes != Receipt.Contract.StackPopBytes ||
+            Fresh->HasIndependentScalarReturn !=
+                Receipt.Contract.HasIndependentScalarReturn)
+          return rejectIR(
+              "C++ returning call lost its current object contract");
+        DiscardResult = !Fresh->HasIndependentScalarReturn;
+      }
       const auto SourceCall = SourceCallEffects.find(Call);
       if (DiscardResult && (SourceCall == SourceCallEffects.end() ||
                             !hasUnusedX86RegistrationCallResult(

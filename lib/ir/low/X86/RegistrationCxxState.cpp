@@ -32,6 +32,9 @@
 namespace neverd {
 
 namespace {
+using CxxCalleeQuery = std::pair<const BinaryImage *, va_t>;
+thread_local std::set<CxxCalleeQuery> ActiveCxxCallees;
+
 RegistrationStateAnalysis solveCheckedCxxStates(
     const BinaryImage &Image, const LowFunc &Function,
     const std::vector<RegistrationCalleeFrameContract> *Callees,
@@ -73,6 +76,10 @@ RegistrationStateAnalysis solveCheckedCxxStates(
 }
 } // namespace
 
+bool registration_abi::hasActiveCxxCalleeProof() {
+  return !ActiveCxxCallees.empty();
+}
+
 RegistrationStateAnalysis analyzeCheckedX86CxxStates(
     const BinaryImage &Image, const LowFunc &Function,
     const std::vector<RegistrationCalleeFrameContract> *Callees,
@@ -94,6 +101,217 @@ RegistrationStateAnalysis analyzeCheckedX86CxxStates(
     States.Diagnostics.push_back("C++ callee state proof budget exhausted");
   }
   return States;
+}
+
+std::optional<RegistrationCalleeFrameContract>
+RegistrationCallCalleeIndex::cxxCallee(va_t Target) {
+  using namespace registration_abi;
+  const auto *EH = Image.ExceptionMetadata.findFunction(Target);
+  if (Image.Arch != Arch::X86 || Image.Bits != Bitness::Bits32 ||
+      Image.Format != BinaryFormat::COFF || Image.IsRelocatable || !EH ||
+      !EH->Cxx || !EH->Registration || EH->CodeRange.Begin != Target ||
+      EH->Registration->RealignedFrame || !EH->Cxx->TryBlocks.empty() ||
+      !EH->Registration->Scopes.empty() ||
+      CxxDepth >= limits::ir::kRegistrationCxxMaxCalleeDepth ||
+      !chargeCalleeWork(Work, 1))
+    return std::nullopt;
+  // A plain object/initializer query can enter through a separate public
+  // stack query before returning to this shared index. Never let that route
+  // restart a currently active C++ proof with a fresh depth or budget.
+  const CxxCalleeQuery Identity{&Image, Target};
+  if (ActiveCxxCallees.size() >= limits::ir::kRegistrationCxxMaxCalleeDepth ||
+      !ActiveCxxCallees.insert(Identity).second)
+    return std::nullopt;
+  ++CxxDepth;
+  const llvm::scope_exit Leave([&] {
+    --CxxDepth;
+    ActiveCxxCallees.erase(Identity);
+  });
+  const auto Handler = coff_loader::getCheckedX86CxxHandlerABI(Image, *EH);
+  auto Metadata = coff_loader::getCheckedX86CxxMetadataRanges(Image, *EH);
+  if (!Handler || !Metadata)
+    return std::nullopt;
+  Decoder Dec;
+  if (!Dec.init(Image))
+    return std::nullopt;
+  CFGBuilder Builder;
+  Builder.setRegistrationCalleeIndex(this);
+  auto Function =
+      Builder.buildIntegerFrameProof(Image, Dec, Target, "closed-cxx-callee");
+  if (!Function.hasCompleteLiftCoverage() ||
+      !chargeDecodedCallee(Work, Function))
+    return std::nullopt;
+  RegistrationCalleeFrameContract Result;
+  Result.CalleeKind = RegistrationCalleeFrameContract::Kind::CxxParent;
+  Result.Target = Target;
+  if (!collectCalleeCodeRanges(Function, Image, Work, Result.CodeRanges))
+    return std::nullopt;
+  for (const auto &Block : Function.Blocks)
+    for (const auto &Insn : Block.InstructionBoundaries)
+      if (!chargeCalleeWork(Work, 1) ||
+          !hasImmutableCalleeInstruction(Image, Insn, Dec))
+        return std::nullopt;
+  const auto Callees = contracts(Function);
+  const auto Cleanups = cleanupContracts(Function);
+  const auto Stacks = stackContracts(Function);
+  if (!Callees || !Cleanups || !Stacks)
+    return std::nullopt;
+  ImageFrameEffects Effects;
+  std::set<std::pair<va_t, va_t>> Code;
+  std::set<va_t> Imports{Handler->Dispatch.IATVA};
+  std::map<va_t, RegistrationRuntimeThrowInfo> Throws;
+  auto AddRanges = [&](const auto &From, auto &To) {
+    if (!chargeCalleeWork(Work, From.size()))
+      return false;
+    for (const auto &Range : From)
+      To.emplace(Range.Begin, Range.End);
+    return true;
+  };
+  auto AddCallee = [&](const RegistrationCalleeFrameContract &Callee) {
+    if (!Callee.CallerPCWrites.empty() || Callee.isRethrow() ||
+        !chargeCalleeWork(Work, Callee.RequiredImports.size() +
+                                    Callee.RuntimeThrowInfos.size() + 1) ||
+        !AddRanges(Callee.ImageReads, Effects.Reads) ||
+        !AddRanges(Callee.ImageWrites, Effects.Writes) ||
+        !AddRanges(Callee.CodeRanges, Code))
+      return false;
+    Imports.insert(Callee.RequiredImports.begin(),
+                   Callee.RequiredImports.end());
+    for (const auto &Info : Callee.RuntimeThrowInfos) {
+      const auto [It, New] = Throws.emplace(Info.Address, Info);
+      if (!New && It->second != Info)
+        return false;
+    }
+    if (Callee.CalleeKind ==
+        RegistrationCalleeFrameContract::Kind::PrivateThrow) {
+      const auto Throw =
+          getCheckedX86RegistrationThrowCalleeABI(Image, Callee.Target, &Work);
+      if (!Throw || Throw->IsRethrow)
+        return false;
+      const auto &Info = Throw->ThrowInfo;
+      const RegistrationRuntimeThrowInfo Value{
+          Info.Address, Info.TypeDescriptorVA, Info.ObjectSize};
+      const auto [It, New] = Throws.emplace(Info.Address, Value);
+      if (!New && It->second != Value)
+        return false;
+    }
+    return true;
+  };
+  if (!AddRanges(Result.CodeRanges, Code) ||
+      !AddRanges(Handler->Dispatch.CodeRanges, Code))
+    return std::nullopt;
+  for (const auto &Callee : *Callees)
+    if (!AddCallee(Callee))
+      return std::nullopt;
+  for (const auto &Cleanup : *Cleanups) {
+    const auto Relay = getCheckedX86RegistrationCleanupRelayABI(
+        Image, Cleanup.RelayTarget, &Work);
+    if (!Relay || !Relay->matchesParentFrame(*EH->Registration))
+      return std::nullopt;
+    Code.emplace(Relay->Target, Relay->EndAddress);
+    for (const auto &Call : Cleanup.Calls)
+      if (!AddCallee(Call.Leaf))
+        return std::nullopt;
+  }
+  registration_state::ConditionalFrame Inputs;
+  Inputs.ProveImageMemory = [&](va_t Address, uint16_t Width, bool Write,
+                                size_t &Used) {
+    if (!hasSEHCallbackImageMemory(Image, Address, Width, Write, Used))
+      return false;
+    (Write ? Effects.Writes : Effects.Reads).emplace(Address, Address + Width);
+    return true;
+  };
+  auto States =
+      solveCheckedCxxStates(Image, Function, &*Callees, &*Cleanups, &*Stacks,
+                            nullptr, nullptr, &Inputs, &Work);
+  if (!Inputs.Complete || !Inputs.NativeFramePrivate ||
+      Inputs.ReturnValues.empty() || !States.Complete ||
+      !States.CallbackStatesComplete || !States.RegistrationLifetimeComplete ||
+      !States.ChainOperationsComplete || !States.CallFrameEffectsComplete ||
+      !States.CleanupFrameEffectsComplete || !States.CxxContinuationsComplete ||
+      !States.CxxCatchObjectsComplete ||
+      !States.RuntimeObjectAccessesComplete ||
+      !States.IncomingFrameAccessesComplete || !States.ImageReadsComplete ||
+      (!Handler->CookieGuards.empty() && !States.SecurityCookiesComplete) ||
+      !AddRanges(States.ImageReads, Effects.Reads))
+    return std::nullopt;
+  Result.HasIndependentScalarReturn = true;
+  for (const auto &[Occurrence, Value] : Inputs.ReturnValues) {
+    if (!chargeCalleeWork(Work, 1))
+      return std::nullopt;
+    Result.HasIndependentScalarReturn &= Value.isFrameIndependentScalar();
+  }
+  if (const auto Entry = coff_loader::getCheckedX86CxxPrologueCall(Image, *EH))
+    Code.emplace(Entry->Helper.Begin, Entry->Helper.End);
+  for (const auto &Block : Function.Blocks)
+    for (const auto &Op : Block.Ops) {
+      if (!chargeCalleeWork(Work, 1))
+        return std::nullopt;
+      if (Op.Opcode != NdOp::CALL)
+        continue;
+      if (const auto Exit =
+              coff_loader::getCheckedX86CxxEpilogueCall(Image, *EH, Op.Addr)) {
+        Code.emplace(Exit->Helper.Begin, Exit->Helper.End);
+        Code.emplace(Exit->Restore.Begin, Exit->Restore.End);
+        if (Exit->CookieCheck)
+          Code.emplace(Exit->CookieCheck->Checker.Begin,
+                       Exit->CookieCheck->Checker.End);
+      }
+      if (States.cookieCheck(Op.Addr, Op.Seq)) {
+        const auto Check = coff_loader::getCheckedX86CookieCheckSuccessPath(
+            Image, Op.Inputs[0].Offset);
+        if (!Check)
+          return std::nullopt;
+        Code.emplace(Check->CodeRange.Begin, Check->CodeRange.End);
+      }
+    }
+  for (const auto &[Address, Info] : Throws) {
+    const auto Object =
+        getCheckedX86RegistrationThrowObjectABI(Image, Address, &Work);
+    if (!Object ||
+        !chargeCalleeWork(Work, Object->Info.ReadOnlyRanges.size() + 1))
+      return std::nullopt;
+    Metadata->insert(Metadata->end(), Object->Info.ReadOnlyRanges.begin(),
+                     Object->Info.ReadOnlyRanges.end());
+    Metadata->push_back(Object->Info.TypeDescriptorRange);
+  }
+  for (const auto &[Begin, End] : Effects.Writes) {
+    if (!chargeCalleeWork(Work, Metadata->size() + Imports.size() + 1))
+      return std::nullopt;
+    if (llvm::any_of(
+            *Metadata,
+            [&](const auto &Range) { return Range.overlaps({Begin, End}); }) ||
+        llvm::any_of(Imports,
+                     [&](va_t Slot) { return Begin < Slot + 4 && Slot < End; }))
+      return std::nullopt;
+  }
+  // Dispatch reads these immutable tables and eager bindings outside the
+  // parent's LowIR. Transitive callers must see the same read footprint.
+  if (!AddRanges(*Metadata, Effects.Reads) ||
+      !chargeCalleeWork(Work, Imports.size()))
+    return std::nullopt;
+  for (va_t Slot : Imports)
+    Effects.Reads.emplace(Slot, Slot + 4);
+  Function.RegistrationStates = std::move(States);
+  if (parentPopBytes(Function, Image, &Work) != std::optional<uint16_t>(0) ||
+      !chargeCalleeWork(Work, Effects.Reads.size() + Effects.Writes.size() +
+                                  Code.size() + Imports.size() + Throws.size()))
+    return std::nullopt;
+  Result.CodeRanges.clear();
+  copyExtents(Code, Result.CodeRanges);
+  copyExtents(Effects.Reads, Result.ImageReads);
+  copyExtents(Effects.Writes, Result.ImageWrites);
+  Result.RequiredImports.assign(Imports.begin(), Imports.end());
+  for (const auto &[Address, Info] : Throws)
+    Result.RuntimeThrowInfos.push_back(Info);
+  return Result;
+}
+
+std::optional<RegistrationCalleeFrameContract>
+getCheckedX86RegistrationCxxCalleeABI(const BinaryImage &Image, va_t Target,
+                                      size_t *CumulativeWork) {
+  RegistrationCallCalleeIndex Index(Image, CumulativeWork);
+  return Index.cxxCallee(Target);
 }
 
 namespace registration_state {

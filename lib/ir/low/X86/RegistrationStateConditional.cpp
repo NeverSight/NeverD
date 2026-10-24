@@ -123,8 +123,15 @@ bool RegistrationStateSolver::checkConditionalMemory(
                                          Memory.AccessSize,
                                          Op.Opcode == NdOp::LOAD) ||
            Refuse();
-  if (!Address.Offset)
-    return Refuse();
+  if (!Address.Offset) {
+    const auto VA = Address.preferredAddress();
+    return (VA && !Address.MayBeFrame && Conditional->ProveImageMemory &&
+            (Op.Opcode != NdOp::STORE ||
+             !Transfer.read(*Memory.StoredValue).MayBeFrame) &&
+            Conditional->ProveImageMemory(
+                *VA, Memory.AccessSize, Op.Opcode == NdOp::STORE, WorkUsed)) ||
+           Refuse();
+  }
   const int64_t End = int64_t(*Address.Offset) + Memory.AccessSize;
   if (*Address.Offset < 4) {
     const auto SP =

@@ -65,6 +65,22 @@ llvm::Error validateCOFFRegistrationCxxIR(const llvm::Function &Function,
   }
   for (const auto &[Call, Checked] : Proof->Calls) {
     Contract.ImageWrites.emplace(Call, Checked.Contract.ImageWrites);
+    for (va_t Slot : Checked.Contract.RequiredImports) {
+      if (++Work > limits::kMaxRegistrationEHStateWork)
+        return coff_registration::rejectIR("C++ import closure exceeds budget");
+      Immutable.push_back({Slot, Slot + 4});
+    }
+    if (Checked.Contract.isCxxParent())
+      for (const auto &Info : Checked.Contract.RuntimeThrowInfos) {
+        const auto Object =
+            getCheckedX86RegistrationThrowObjectABI(Image, Info.Address, &Work);
+        if (!Object)
+          return coff_registration::rejectIR(
+              "C++ parent throw metadata changed");
+        Immutable.insert(Immutable.end(), Object->Info.ReadOnlyRanges.begin(),
+                         Object->Info.ReadOnlyRanges.end());
+        Immutable.push_back(Object->Info.TypeDescriptorRange);
+      }
     if (Checked.RuntimeObject)
       if (auto Error = coff_registration::bindCxxRuntimeObjectBorrow(
               *Proof, *Call, Checked, Contract))

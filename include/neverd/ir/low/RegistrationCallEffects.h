@@ -31,6 +31,12 @@ bool hasSameX86RegistrationLeafEffects(
 bool hasSameX86RegistrationThrowEffects(
     const RegistrationCalleeFrameContract &Saved,
     const RegistrationThrowCalleeABI &Current, size_t &Work);
+
+/// Match a freshly proved cleanup-only parent, including its transitive
+/// exception identities and eager import prerequisites.
+bool hasSameX86RegistrationCxxEffects(
+    const RegistrationCalleeFrameContract &Saved,
+    const RegistrationCalleeFrameContract &Current, size_t &Work);
 } // namespace neverd
 
 #endif // NEVERD_IR_LOW_REGISTRATIONCALLEFFECTS_H

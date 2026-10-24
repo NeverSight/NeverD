@@ -451,8 +451,7 @@ void FrameTransfer::write(const LowOp &Op, FrameValue Value, va_t CookieCheckVA,
     return;
   }
   if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) {
-    State.ImportBindingsIntact &=
-        PreserveImportedTargets && PreserveImportBindings;
+    State.ImportBindingsIntact &= PreserveImportBindings;
     if (!PreserveImportedTargets) {
       for (auto &Register : State.Registers)
         Register.ImportTarget.reset();

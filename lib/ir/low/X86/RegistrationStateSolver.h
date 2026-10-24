@@ -66,9 +66,9 @@ struct SEHActivation {
   auto operator<=>(const SEHActivation &) const = default;
 };
 
-/// Keep a live buffer's saved unwind bound correlated with the reaching state.
-/// Other frame facts still join and can invalidate the buffer; this key grants
-/// no initialization or value authority of its own.
+/// Keep C++ cleanup ownership and a live SEH buffer's saved unwind bound
+/// correlated with the reaching state. Other facts still join at the same
+/// state; this key grants no initialization or value authority of its own.
 struct SEHFlowKey {
   SEHActivation Activation;
   std::vector<int32_t> Levels;
@@ -278,6 +278,9 @@ private:
     std::optional<FrameValue> Result;
     /// Invocation-bound writes may also precede exceptional dispatch.
     std::vector<RegistrationObjectExtent> MayWrites;
+    /// Complete image may-writes have already invalidated affected bindings.
+    /// This does not authorize retaining cached callable register identities.
+    bool PreservesImportBindings = false;
   };
   std::optional<CallTransfer> transferCall(size_t I, Domain &After,
                                            const LowOp &Op,

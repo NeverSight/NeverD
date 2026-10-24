@@ -21,6 +21,7 @@
 #include "neverd/backend/llvm/WindowsEHNativeSource.h"
 #include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/ir/med/LowToMed.h"
+#include "neverd/ir/med/MedABIPass.h"
 #include "neverd/ir/med/MedTypePass.h"
 #include "neverd/ir/med/X86RegistrationCallback.h"
 #include "neverd/ir/med/X86RegistrationPhysicalFrame.h"
@@ -105,6 +106,10 @@ void checkCleanupOnlyInput(const char *Path, bool RegisterStateWrite) {
   });
   ASSERT_NE(Export, Image->Exports.end());
   const va_t ParentEntry = Export->Addr;
+  const auto Nested = llvm::find_if(Image->Exports, [](const auto &Entry) {
+    return Entry.Name == "cleanup_only_inner";
+  });
+  const va_t NestedTarget = Nested == Image->Exports.end() ? 0 : Nested->Addr;
   const auto *Source = Image->ExceptionMetadata.findFunction(ParentEntry);
   ASSERT_TRUE(Source && Source->Cxx && Source->Registration);
   if (RegisterStateWrite) {
@@ -130,7 +135,7 @@ void checkCleanupOnlyInput(const char *Path, bool RegisterStateWrite) {
               Chain.TryLevelOffset);
     ASSERT_EQ(readLE<uint32_t>(Bytes + Displacement + 1),
               uint32_t(Store->Level));
-    // EAX is scratch immediately before the fixture's no-argument throw.
+    // EAX is scratch immediately before either authored no-argument callee.
     ASSERT_EQ(Bytes[StoreSize], 0xe8);
     const auto Throw = llvm::find_if(Image->Exports, [](const auto &Entry) {
       return Entry.Name == "cleanup_only_throw";
@@ -138,7 +143,7 @@ void checkCleanupOnlyInput(const char *Path, bool RegisterStateWrite) {
     ASSERT_NE(Throw, Image->Exports.end());
     ASSERT_EQ(Address + StoreSize + 5 +
                   int32_t(readLE<uint32_t>(Bytes + StoreSize + 1)),
-              Throw->Addr);
+              NestedTarget ? NestedTarget : Throw->Addr);
     std::vector<uint8_t> Replacement = {
         0x31, 0xc0, uint8_t(Store->Level ? 0x40 : 0x90), 0x89,
         uint8_t(StackBased ? 0x44 : 0x45)};
@@ -223,6 +228,20 @@ void checkCleanupOnlyInput(const char *Path, bool RegisterStateWrite) {
               Low.RegistrationStates->CxxPrologue);
   }
   inferMedTypes(Med, Arch::X86);
+  recoverCallAbi(Med, Arch::X86, {}, &*Image);
+  if (NestedTarget)
+    for (const auto &Block : Med.Blocks)
+      for (size_t I = 0; I != Block.Ops.size(); ++I) {
+        const auto &Op = Block.Ops[I];
+        if (Op.Opcode != NdOp::CALL || Op.NumInputs != 1 ||
+            !Op.Inputs[0].isConst() || Op.Inputs[0].ConstVal != NestedTarget)
+          continue;
+        const auto *Call = Med.findCall(Block.Id, I);
+        ASSERT_TRUE(Call);
+        EXPECT_TRUE(Call->Args.empty());
+        EXPECT_EQ(Call->IntegerRegisterArgCount, 0);
+        EXPECT_EQ(Call->FloatingRegisterArgCount, 0);
+      }
   const auto Owners = registrationCatchBlocks(Med);
   const auto Parents = registrationCleanupParents(Med);
   ASSERT_TRUE(Owners && Parents);
@@ -391,7 +410,8 @@ void checkCleanupOnlyInput(const char *Path, bool RegisterStateWrite) {
               Store
                   ? llvm::dyn_cast<llvm::ConstantInt>(Store->getValueOperand())
                   : nullptr;
-          if (!Initialization && Value && Value->equalsInt(1) &&
+          if (!Initialization && Value &&
+              Value->equalsInt(NestedTarget ? 3 : 1) &&
               Store->getMetadata(
                   windows_eh_md::RegistrationOperationAttachment))
             Initialization = Store;

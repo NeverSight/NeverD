@@ -975,12 +975,16 @@ void recoverCallAbi(MedFunc &Func, Arch TheArch,
                                     ? registrationCallABI(Func, Blk, Op)
                                     : std::nullopt;
       const bool RuntimeThrow = Registration && Registration->RuntimeThrow;
-      // Checked capture, resume and local-unwind protocols own their exact
-      // stack-only arities. Incidental registers cannot become arguments.
-      const bool CheckedStackCall = RuntimeThrow || SEHStackCall;
+      // Checked private registration callees take no incoming words unless
+      // the runtime-throw protocol supplies its exact two-word stack ABI.
+      // Local object stores cannot become arguments to a private callee.
+      // Capture, resume and local-unwind protocols likewise own their arity.
+      const bool RegistrationStackCall =
+          Registration && !Registration->BorrowsECX;
+      const bool CheckedStackCall = RegistrationStackCall || SEHStackCall;
       if (CheckedStackCall) {
         CalleeRegArgs = 0;
-        CalleeArgs = SEHStackCall ? SEHStackABI->second : 2;
+        CalleeArgs = SEHStackCall ? SEHStackABI->second : RuntimeThrow ? 2 : 0;
       }
       // Checked ordinary members and constructors own exactly one ECX
       // receiver plus their proved scalar stack words. Other live registers

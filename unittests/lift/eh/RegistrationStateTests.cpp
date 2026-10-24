@@ -1017,6 +1017,53 @@ TEST(RegistrationState, ImportBindingAndRegisterEffectsRemainIndependent) {
           }
 }
 
+TEST(RegistrationState, CxxCalleeEffectsRequireLiveTransitiveImports) {
+  for (bool EH4 : {false, true})
+    for (unsigned Mutation = 0; Mutation != 8; ++Mutation) {
+      SCOPED_TRACE(::testing::Message() << EH4 << ' ' << Mutation);
+      auto F = makeSEHObjectCall(EH4, false, -32, 4, false);
+      auto &Calls = F.Blocks.back();
+      RegistrationCalleeFrameContract First;
+      First.Target = 0x2100;
+      if (Mutation == 1)
+        First.ImageWrites = {{0x2200, 0x2204}};
+      if (Mutation == 2)
+        First.ImageWrites = {{0x2203, 0x2204}};
+      if (Mutation == 3)
+        First.ImageWrites = {{0x21ff, 0x2201}};
+      if (Mutation == 4)
+        First.ImageWrites = {{0x2204, 0x2208}};
+      RegistrationCalleeFrameContract Parent;
+      Parent.Target = 0x2400;
+      Parent.CalleeKind = RegistrationCalleeFrameContract::Kind::CxxParent;
+      Parent.RequiredImports = {0x2200};
+      Parent.HasIndependentScalarReturn = true;
+      if (Mutation == 6)
+        Parent.RequiredImports.clear();
+      if (Mutation == 7)
+        Parent.RequiredImports.push_back(0x2200);
+      const auto AppendCall = [&](va_t Target) {
+        const va_t At = Calls.EndAddr;
+        Calls.InstructionBoundaries.push_back({At, 5, Calls.Ops.size(), 1});
+        Calls.InstructionBoundaries.back().Control =
+            LowInstructionControl::Call;
+        emitOp(Calls, At, NdOp::CALL, {}, {NdVar::cst(Target, 4)});
+        Calls.EndAddr += 5;
+      };
+      if (Mutation == 5)
+        AppendCall(0x2500); // Unknown effects lose bindings.
+      AppendCall(Parent.Target);
+      AppendCall(Parent.Target); // A complete first invocation retains them.
+      const std::vector Callees{First, Parent};
+      const auto A =
+          analyzeRegistrationStates(F, EH4 ? 0x4000 : 0, 0, &Callees);
+      EXPECT_EQ(A.CallFrameEffectsComplete, Mutation == 0 || Mutation == 4);
+      EXPECT_EQ(A.callFrameEffect(Calls.Ops.back().Addr,
+                                  Calls.Ops.back().Seq) != nullptr,
+                Mutation == 0 || Mutation == 4);
+    }
+}
+
 namespace {
 LowFunc makeCxxObjectCleanup() {
   auto F = makeCxxObjectCall();
@@ -1055,6 +1102,52 @@ TEST(RegistrationState, ProjectsInitializedCleanupObjectsAtEveryDispatch) {
     ASSERT_GE(Effect.BlockId, 0);
     EXPECT_EQ(Effect.Range.Begin, F.Blocks[Effect.BlockId].StartAddr);
   }
+}
+
+TEST(RegistrationState, CleanupObjectsStayCorrelatedWithTheirLiveState) {
+  for (bool Reverse : {false, true})
+    for (unsigned Mutation = 0; Mutation != 3; ++Mutation) {
+      SCOPED_TRACE(::testing::Message() << Reverse << ' ' << Mutation);
+      auto F = makeCxxObjectCleanup();
+      auto &EH = *F.ExceptionMetadata;
+      EH.Cxx->TryBlocks.clear();
+      // The object-free branch joins the live-object branch immediately
+      // before resetting its state. Only state zero owns a cleanup borrow.
+      auto Skip = F.Blocks[1];
+      Skip.Id = 8;
+      Skip.StartAddr += 0x200;
+      Skip.EndAddr += 0x200;
+      Skip.Succs = {2};
+      std::erase_if(Skip.Ops, [](const auto &Op) {
+        return Op.Addr == 0x1013 &&
+               (Op.Output == NdVar::reg(x86reg::RCX, 4) ||
+                (Op.Opcode == NdOp::STORE &&
+                 Op.Inputs[0] == NdVar::reg(x86reg::RCX, 4)));
+      });
+      const int32_t Level = Mutation == 1 ? 0 : -1;
+      Skip.Ops.back().Inputs[1] = NdVar::cst(uint32_t(Level), 4);
+      for (size_t I = 0; I != Skip.Ops.size(); ++I) {
+        Skip.Ops[I].Addr += 0x200;
+        Skip.Ops[I].Seq = I;
+      }
+      for (auto &Boundary : Skip.InstructionBoundaries)
+        Boundary.Address += 0x200;
+      EH.Registration->TryLevelStores.push_back({0x1216, 0x121d, Level});
+      F.Blocks[0].Succs = {1, Skip.Id};
+      F.Blocks.push_back(std::move(Skip));
+      if (Mutation == 2)
+        for (auto &Op : F.Blocks[1].Ops)
+          if (Op.Opcode == NdOp::STORE &&
+              Op.Inputs[0] == NdVar::reg(x86reg::RCX, 4))
+            Op.Inputs[1] = NdVar::cst(7, 1);
+      if (Reverse)
+        std::reverse(F.Blocks.begin(), F.Blocks.end());
+      const std::vector Calls{objectLeafContract()};
+      const std::vector Cleanups{objectCleanupContract()};
+      const auto A = analyzeRegistrationStates(F, 0, 0, &Calls, &Cleanups);
+      EXPECT_EQ(A.Complete, Mutation != 2);
+      EXPECT_EQ(A.CleanupFrameEffectsComplete, Mutation == 0);
+    }
 }
 
 TEST(RegistrationState, SharedUnwindTailsKeepEachSourceLevelProof) {

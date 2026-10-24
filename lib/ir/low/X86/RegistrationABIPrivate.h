@@ -56,6 +56,9 @@ collectRegistrationRuntimeThrowInfos(const LowFunc &Function,
                                      std::set<std::pair<va_t, va_t>> &Code);
 
 bool chargeDecodedCallee(size_t &Work, const LowFunc &Function);
+/// Nested C++ proofs depend on their active ancestors and depth. A stack
+/// memo keyed only by target and SEH level cannot retain these answers.
+bool hasActiveCxxCalleeProof();
 /// Plain object/initializer proofs cannot own an EH frame. Check admission
 /// before asking any subsidiary stack proof to build another callee graph.
 bool isPlainRegistrationCalleeEntry(const BinaryImage &Image, va_t Target);
@@ -80,7 +83,8 @@ std::optional<CleanupFramePrefix>
 getCleanupFramePrefix(const BinaryImage &Image, va_t Target, size_t &Work);
 
 std::optional<uint16_t> parentPopBytes(const LowFunc &Function,
-                                       const BinaryImage &Image);
+                                       const BinaryImage &Image,
+                                       size_t *CumulativeWork = nullptr);
 
 std::optional<uint32_t>
 checkedRegistrationImportStackPop(const BinaryImage &Image, va_t Target);

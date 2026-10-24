@@ -121,6 +121,9 @@ validateCxxGuardedFrame(const BinaryImage &Image, const MedFunc &Source,
         !Contract.ImageWrites.emplace(Call, Callee.ImageWrites).second ||
         !Append(Callee.CodeRanges))
       return false;
+    for (va_t Slot : Callee.RequiredImports)
+      if (!Append({{Slot, Slot + 4}}))
+        return false;
     if (Object) {
       const auto Offset = Layout.runtimeOffset(*Object, 0);
       if (!Offset)
@@ -163,6 +166,18 @@ validateCxxGuardedFrame(const BinaryImage &Image, const MedFunc &Source,
           !hasSameX86RegistrationLeafEffects(Callee, Fresh->Object, Work) ||
           Callee.ECXInitialized != Fresh->Initialized)
         return reject("initializer effects changed");
+    } else if (Callee.isCxxParent()) {
+      const auto Fresh =
+          getCheckedX86RegistrationCxxCalleeABI(Image, Callee.Target, &Work);
+      if (!Fresh || !hasSameX86RegistrationCxxEffects(Callee, *Fresh, Work))
+        return reject("C++ parent effects changed");
+      for (const auto &Info : Fresh->RuntimeThrowInfos) {
+        const auto Object =
+            getCheckedX86RegistrationThrowObjectABI(Image, Info.Address, &Work);
+        if (!Object || !Append(Object->Info.ReadOnlyRanges) ||
+            !Append({Object->Info.TypeDescriptorRange}))
+          return reject("C++ parent throw metadata changed");
+      }
     } else {
       const auto Fresh = getCheckedX86RegistrationMemberCalleeABI(
           Image, Callee.Target, &Work, RegistrationLeafResult::Discarded);

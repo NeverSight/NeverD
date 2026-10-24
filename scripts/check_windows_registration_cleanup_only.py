@@ -54,6 +54,8 @@ def main() -> int:
     parents = parser.add_mutually_exclusive_group()
     parents.add_argument("--shared-prologue", action="store_true",
                          help="use the authored shared entry/exit parent")
+    parents.add_argument("--nested-shared", action="store_true",
+                         help="wrap the shared parent in a second C++ cleanup frame")
     parents.add_argument("--stack-aligned", action="store_true",
                          help="use the authored MSVC aligned ESP parent")
     parents.add_argument("--guarded-stack", action="store_true",
@@ -69,7 +71,7 @@ def main() -> int:
     report = {"schema": 2, "evidence": evidence,
               "passed": False, "commands": [], "cases": [],
               "source_sha256": hashlib.sha256(SOURCE.read_bytes()).hexdigest()}
-    if args.shared_prologue:
+    if args.shared_prologue or args.nested_shared:
         report["shared_source_sha256"] = hashlib.sha256(
             SHARED_SOURCE.read_bytes()).hexdigest()
     if args.stack_aligned:
@@ -78,7 +80,9 @@ def main() -> int:
     if args.guarded_stack:
         report["guarded_source_sha256"] = hashlib.sha256(
             GUARDED_SOURCE.read_bytes()).hexdigest()
-    authored_parent = args.shared_prologue or args.stack_aligned or args.guarded_stack
+    authored_parent = (args.shared_prologue or args.nested_shared or
+                       args.stack_aligned or args.guarded_stack)
+    report["nested_shared"] = args.nested_shared
 
     def run(command: list[str | Path], extra: dict | None = None) -> None:
         command = list(map(str, command))
@@ -108,6 +112,7 @@ def main() -> int:
                  "-fms-extensions", "-fexceptions", "-fcxx-exceptions",
                  "-fno-omit-frame-pointer", "-" + optimization,
                  *(["-DNEVERD_SHARED_PROLOGUE"] if authored_parent else []),
+                 *(["-DNEVERD_NESTED_CXX_PARENT"] if args.nested_shared else []),
                  "-c", SOURCE, "-o", obj])
             shared_objects = []
             if authored_parent:
@@ -115,6 +120,8 @@ def main() -> int:
                             STACK_SOURCE if args.stack_aligned else SHARED_SOURCE)
                 shared = case / (assembly.stem + ".obj")
                 run([args.compiler, "--target=i686-pc-windows-msvc",
+                     *(["-Wa,-defsym,NEVERD_NESTED_CXX_PARENT=1"]
+                       if args.nested_shared else []),
                      "-c", assembly, "-o", shared])
                 shared_objects = [shared]
             run([args.linker, "/entry:mainCRTStartup", "/nodefaultlib",

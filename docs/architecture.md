@@ -9306,6 +9306,30 @@ bypass the shared x87 graph cache and parallel prefetch. The ordinary x87
 projection leaves a registration language graph opaque before constructing its
 callback closure; that graph needs a separate dispatcher invocation domain.
 
+A cleanup-only, fixed-frame C++ callee has a separate frame/effect contract.
+The same conditional state solver proves its private allocation, initialized
+reads, restored nonvolatile identities and ordinary return PC without granting
+incoming argument or object storage. Checked image accesses retain may-effects
+without copying mutable runtime values. Nested callees, cleanup relays and
+language dispatch contribute code, image effects, possible throw types and
+required eager imports. Pending cache entries and a shared depth/work bound
+reject recursive proof construction, including fresh public stack queries
+entered by initializer/object proofs. Such nested queries bypass the ordinary
+stack memo because its key does not contain active ancestors. Metadata and
+required IAT reads join the complete image read footprint. A scalar-return fact is independent of
+frame privacy; an unproved result can only serve an independently discarded
+invocation. MedIR, LLVM and the COFF writer consume this distinct C++ contract,
+and the native owners replay its complete current-image proof.
+
+Checked call effects preserve a live import binding only after their image
+writes have invalidated overlapping slots. Required imports are prerequisites
+at each source occurrence. This is independent of retaining an already loaded
+callable in a register: an ordinary frame contract does not grant that latter
+identity, and neither proof can restore an earlier lost binding.
+The runtime-throw argument proof cannot replace that prerequisite. C++ source
+states keep cleanup initialization correlated with each live unwind level;
+paths at the same level still intersect their initialized bytes and values.
+
 Every PE32 registration ABI proof builds its callee with the decoded x87 stack
 (`CFGBuilder::buildIntegerFrameProof`): returning-stack, leaf, member,
 initializer, throw, conditional-call and caller-frame proofs alike. These

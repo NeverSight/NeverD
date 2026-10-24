@@ -15,6 +15,7 @@
 #include "neverd/ir/low/RegistrationABI.h"
 #include "neverd/ir/low/RegistrationCallEffects.h"
 #include "neverd/loader/BinaryImage.h"
+#include "neverd/loader/COFF/COFFLoader.h"
 #include "neverd/support/BinaryEncoding.h"
 
 #include "llvm/IR/IRBuilder.h"
@@ -22,6 +23,7 @@
 #include "llvm/IR/Verifier.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include <optional>
 #include <vector>
 
@@ -201,6 +203,67 @@ TEST(RegistrationCxxCallEffects, RechecksCurrentImageReadsAndWrites) {
       ASSERT_TRUE(F.accepts(*Current));
       EXPECT_FALSE(F.accepts(*Saved));
     }
+}
+
+TEST(RegistrationCxxCallEffects, InputPE32CxxParentRechecksNativeCallEffects) {
+  const auto *Path = std::getenv("NEVERD_REGISTRATION_CLEANUP_ONLY_PE32");
+  if (!Path)
+    GTEST_SKIP() << "set the authored shared C++ cleanup image";
+  auto Image = COFFLoader().load(Path);
+  ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+  const auto Export = llvm::find_if(Image->Exports, [](const auto &E) {
+    return E.Name == "cleanup_only_parent";
+  });
+  ASSERT_NE(Export, Image->Exports.end());
+  const va_t Target = Export->Addr;
+  const auto *EH = Image->ExceptionMetadata.findFunction(Target);
+  ASSERT_TRUE(EH && EH->Cxx && EH->Registration);
+  if (EH->Registration->RealignedFrame)
+    GTEST_SKIP() << "this callee contract requires a non-realigned parent";
+  CurrentCalleeFixture F(CurrentCalleeFixture::Kind::Leaf);
+  F.Image = std::move(*Image);
+  const auto Saved = getCheckedX86RegistrationCxxCalleeABI(F.Image, Target);
+  ASSERT_TRUE(Saved);
+  ASSERT_TRUE(Saved->isCxxParent());
+  ASSERT_TRUE(Saved->HasIndependentScalarReturn);
+  ASSERT_FALSE(Saved->ImageReads.empty());
+  ASSERT_FALSE(Saved->ImageWrites.empty());
+  ASSERT_FALSE(Saved->RequiredImports.empty());
+  ASSERT_FALSE(Saved->RuntimeThrowInfos.empty());
+  ASSERT_TRUE(F.accepts(*Saved));
+  for (unsigned Mutation = 0; Mutation != 7; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    auto Changed = *Saved;
+    switch (Mutation) {
+    case 0:
+      Changed.ImageReads.clear();
+      break;
+    case 1:
+      Changed.ImageWrites.clear();
+      break;
+    case 2:
+      Changed.CodeRanges.clear();
+      break;
+    case 3:
+      Changed.RequiredImports.clear();
+      break;
+    case 4:
+      Changed.RuntimeThrowInfos.clear();
+      break;
+    case 5:
+      Changed.HasIndependentScalarReturn = false;
+      break;
+    case 6:
+      Changed.CalleeKind = RegistrationCalleeFrameContract::Kind::Leaf;
+      break;
+    }
+    EXPECT_FALSE(F.accepts(Changed));
+  }
+  for (auto &Import : F.Image.Imports)
+    if (std::find(Saved->RequiredImports.begin(), Saved->RequiredImports.end(),
+                  Import.IATAddr) != Saved->RequiredImports.end())
+      Import.Module = "unknown-provider.dll";
+  EXPECT_FALSE(F.accepts(*Saved));
 }
 
 TEST(RegistrationCxxCallEffects, RechecksPrivateThrowCallerPCWrites) {

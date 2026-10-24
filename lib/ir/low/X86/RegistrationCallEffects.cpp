@@ -55,7 +55,8 @@ bool hasSameX86RegistrationLeafEffects(
     const RegistrationCalleeFrameContract &Saved,
     const RegistrationLeafCalleeABI &Current, size_t &Work) {
   return chargeCalleeWork(Work, 1) && !Saved.isThrow() &&
-         !Saved.DoesNotReturn && Saved.Target == Current.Target &&
+         !Saved.isCxxParent() && !Saved.DoesNotReturn &&
+         Saved.Target == Current.Target &&
          Saved.StackPopBytes == Current.StackPopBytes && !Saved.ThrownTypeVA &&
          !Saved.ThrownObjectSize && Saved.RuntimeThrowInfos.empty() &&
          sameExtents(Saved.ECXReads, Current.ECXReads, Work) &&
@@ -77,6 +78,24 @@ bool hasSameX86RegistrationThrowEffects(
              (Current.IsRethrow ? 0 : Current.ThrowInfo.TypeDescriptorVA) &&
          Saved.ThrownObjectSize ==
              (Current.IsRethrow ? 0 : Current.ThrowInfo.ObjectSize) &&
+         sameImageEffects(Saved, Current, Work);
+}
+
+bool hasSameX86RegistrationCxxEffects(
+    const RegistrationCalleeFrameContract &Saved,
+    const RegistrationCalleeFrameContract &Current, size_t &Work) {
+  return chargeCalleeWork(Work, Saved.RequiredImports.size() +
+                                    Saved.RuntimeThrowInfos.size() + 1) &&
+         Saved.isCxxParent() && Current.isCxxParent() &&
+         Saved.Target == Current.Target && !Saved.StackPopBytes &&
+         !Current.StackPopBytes && !Saved.DoesNotReturn &&
+         !Current.DoesNotReturn && !Saved.ThrownTypeVA &&
+         !Saved.ThrownObjectSize && Saved.ECXReads.empty() &&
+         Saved.ECXWrites.empty() && Saved.ECXInitialized.empty() &&
+         Saved.HasIndependentScalarReturn ==
+             Current.HasIndependentScalarReturn &&
+         Saved.RequiredImports == Current.RequiredImports &&
+         Saved.RuntimeThrowInfos == Current.RuntimeThrowInfos &&
          sameImageEffects(Saved, Current, Work);
 }
 } // namespace neverd

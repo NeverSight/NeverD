@@ -376,6 +376,18 @@ bool hasRegistrationCallFrameABI(
           Effects.CallerPCWrites.emplace(Write.Begin, Write.End);
         continue;
       }
+    if (UseReachability)
+      if (const auto Parent =
+              getCheckedX86RegistrationCxxCalleeABI(Image, Target, &Work)) {
+        if (!chargeCalleeWork(Work, Parent->ImageReads.size() +
+                                        Parent->ImageWrites.size()))
+          return false;
+        for (const auto &Read : Parent->ImageReads)
+          Effects.Reads.emplace(Read.Begin, Read.End);
+        for (const auto &Write : Parent->ImageWrites)
+          Effects.Writes.emplace(Write.Begin, Write.End);
+        continue;
+      }
     const LowFunc Callee =
         Builder.buildIntegerFrameProof(Image, Decoder, Target, "abi-callee");
     if (Callee.CalleePopBytes || !Callee.hasCompleteLiftCoverage() ||

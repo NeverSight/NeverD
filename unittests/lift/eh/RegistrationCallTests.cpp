@@ -10,10 +10,12 @@
 #include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/ir/low/LowIR.h"
 #include "neverd/ir/low/RegistrationABI.h"
+#include "neverd/ir/low/RegistrationCallEffects.h"
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/ir/med/MedABIPass.h"
 #include "neverd/loader/COFF/COFFLoader.h"
 #include "neverd/loader/COFF/COFFRegistrationEH.h"
+#include "neverd/loader/PointerRelocation.h"
 #include "neverd/loader/ReadOnlyBytes.h"
 #include "neverd/support/BinaryEncoding.h"
 
@@ -2238,6 +2240,7 @@ TEST(RegistrationCallABI, CxxCookieSourceProofReachesTheParentAndMedCallABI) {
   auto Address = [&](va_t Value) {
     Image.BaseRelocations.push_back(
         {Entry + Body.size(), llvm::COFF::IMAGE_REL_BASED_HIGHLOW});
+    recordAbsolutePointerRelocation(Image, Entry + Body.size(), Value);
     Word(uint32_t(Value));
   };
   Address(F.HandlerVA);
@@ -2289,10 +2292,88 @@ TEST(RegistrationCallABI, CxxCookieSourceProofReachesTheParentAndMedCallABI) {
   EXPECT_FALSE(States.callFrameEffect(Check.Address, Check.OpSeq));
   ASSERT_EQ(getCheckedX86RegistrationCxxParentABI(Low, Image), 0);
   EXPECT_EQ(getCheckedX86CalleeStackPop(Image, Entry), 0u);
+  size_t CxxWork = 0;
+  const auto Cxx =
+      getCheckedX86RegistrationCxxCalleeABI(Image, Entry, &CxxWork);
+  ASSERT_TRUE(Cxx);
+  EXPECT_TRUE(Cxx->isCxxParent());
+  EXPECT_TRUE(Cxx->HasIndependentScalarReturn);
+  EXPECT_EQ(Cxx->StackPopBytes, 0u);
+  ASSERT_FALSE(Cxx->RequiredImports.empty());
+  EXPECT_TRUE(Cxx->CallerPCWrites.empty());
+  const size_t CxxUsed = CxxWork;
+  {
+    RegistrationStackPopMemo Memo(Image);
+    RegistrationStackPopMemoScope Scope(Memo);
+    const unsigned Level = x86SEHStateAnalysisLevel();
+    for (unsigned Query = 0; Query != 2; ++Query) {
+      size_t Used = 0;
+      const auto Again =
+          getCheckedX86RegistrationCxxCalleeABI(Image, Entry, &Used);
+      ASSERT_TRUE(Again);
+      EXPECT_EQ(Used, CxxUsed);
+      size_t MatchWork = 0;
+      EXPECT_TRUE(hasSameX86RegistrationCxxEffects(*Again, *Cxx, MatchWork));
+      if (Query == 0) {
+        // A nested query must neither publish nor consume an answer keyed
+        // without its C++ proof ancestry. An independent stack query may.
+        EXPECT_FALSE(Memo.find(Image, LeafVA, Level));
+        RegistrationCallCalleeIndex Index(Image);
+        EXPECT_EQ(Index.stackPop(Entry), 0u);
+        EXPECT_FALSE(Memo.find(Image, LeafVA, Level));
+        EXPECT_EQ(getCheckedX86CalleeStackPop(Image, LeafVA), 0u);
+        EXPECT_TRUE(Memo.find(Image, LeafVA, Level));
+        EXPECT_EQ(getCheckedX86CalleeStackPop(Image, Entry), 0u);
+      }
+    }
+  }
+  CxxWork = limits::kMaxRegistrationEHStateWork - CxxUsed;
+  EXPECT_TRUE(getCheckedX86RegistrationCxxCalleeABI(Image, Entry, &CxxWork));
+  EXPECT_EQ(CxxWork, limits::kMaxRegistrationEHStateWork);
+  CxxWork = limits::kMaxRegistrationEHStateWork - CxxUsed + 1;
+  EXPECT_FALSE(getCheckedX86RegistrationCxxCalleeABI(Image, Entry, &CxxWork));
+  EXPECT_EQ(CxxWork, limits::kMaxRegistrationEHStateWork);
+  auto ReturnedFrame = Image;
+  const uint8_t FrameResult[] = {0x8b, 0xc5, 0xc3};
+  std::copy(std::begin(FrameResult), std::end(FrameResult),
+            ReturnedFrame.Segments.front().Data.begin() + LeafVA - Text.VA);
+  const auto Aliased =
+      getCheckedX86RegistrationCxxCalleeABI(ReturnedFrame, Entry);
+  ASSERT_TRUE(Aliased);
+  EXPECT_FALSE(Aliased->HasIndependentScalarReturn);
+  auto Recursive = Image;
+  auto *Child = Recursive.Segments.front().Data.data() + LeafVA - Text.VA;
+  Child[0] = 0xe8;
+  writeLE<uint32_t>(Child + 1, uint32_t(Entry - (LeafVA + 5)));
+  Child[5] = 0xc3;
+  size_t RecursiveWork = 0;
+  EXPECT_FALSE(
+      getCheckedX86RegistrationCxxCalleeABI(Recursive, Entry, &RecursiveWork));
+  EXPECT_LT(RecursiveWork, limits::kMaxRegistrationEHStateWork);
+  for (unsigned Mutation = 0; Mutation != 4; ++Mutation) {
+    auto Forged = *Cxx;
+    switch (Mutation) {
+    case 0:
+      Forged.RequiredImports.clear();
+      break;
+    case 1:
+      Forged.HasIndependentScalarReturn = false;
+      break;
+    case 2:
+      Forged.ImageWrites.push_back({0x404000, 0x404004});
+      break;
+    case 3:
+      Forged.CalleeKind = RegistrationCalleeFrameContract::Kind::Leaf;
+      break;
+    }
+    size_t MatchWork = 0;
+    EXPECT_FALSE(hasSameX86RegistrationCxxEffects(Forged, *Cxx, MatchWork));
+  }
   auto Unbalanced = Image;
   ASSERT_EQ(Body[Body.size() - 2], 0x5d);
   Unbalanced.Segments.front().Data[Body.size() - 2] = 0x90;
   EXPECT_FALSE(getCheckedX86CalleeStackPop(Unbalanced, Entry));
+  EXPECT_FALSE(getCheckedX86RegistrationCxxCalleeABI(Unbalanced, Entry));
   EXPECT_FALSE(coff_loader::getCheckedX86CxxPersonalityABI(Image, *EH));
   LowToMedConverter Converter;
   Converter.setBinaryImage(&Image);
@@ -2374,8 +2455,29 @@ TEST(RegistrationCallABI, InputPE32CleanupParentRetainsThrowBinding) {
   if (EH->Registration->RealignedFrame) {
     // Realigned parent coordinates still need their separate stack owner.
     EXPECT_FALSE(getCheckedX86CalleeStackPop(*Image, Entry));
+    EXPECT_FALSE(getCheckedX86RegistrationCxxCalleeABI(*Image, Entry));
     return;
   }
+  const auto Frame = getCheckedX86RegistrationCxxCalleeABI(*Image, Entry);
+  ASSERT_TRUE(Frame);
+  EXPECT_TRUE(Frame->isCxxParent());
+  EXPECT_TRUE(Frame->HasIndependentScalarReturn);
+  EXPECT_FALSE(Frame->ImageReads.empty());
+  EXPECT_FALSE(Frame->ImageWrites.empty());
+  EXPECT_FALSE(Frame->RuntimeThrowInfos.empty());
+  EXPECT_GE(Frame->RequiredImports.size(), 2u);
+  const auto Metadata =
+      coff_loader::getCheckedX86CxxMetadataRanges(*Image, *EH);
+  ASSERT_TRUE(Metadata);
+  auto Reads = [&](const ExceptionAddressRange &Expected) {
+    return llvm::any_of(Frame->ImageReads, [&](const auto &Range) {
+      return Range.Begin <= Expected.Begin && Expected.End <= Range.End;
+    });
+  };
+  for (const auto &Range : *Metadata)
+    EXPECT_TRUE(Reads(Range));
+  for (va_t Slot : Frame->RequiredImports)
+    EXPECT_TRUE(Reads({Slot, Slot + 4}));
   size_t Work = 0;
   EXPECT_EQ(getCheckedX86CalleeStackPop(*Image, Entry, &Work), 0u);
   ASSERT_GT(Work, 0u);

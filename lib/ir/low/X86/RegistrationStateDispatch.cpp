@@ -33,8 +33,12 @@ void RegistrationStateSolver::merge(size_t Target, const Domain &Source) {
                            2 * std::bit_width(States[Target].size() + 1)))
     return;
   SEHFlowKey Key{Source.Activation};
-  if (JumpRuntime && !KnownCxx) {
+  // The live C++ state owns its initialized cleanup objects. Joining it
+  // with a path that never constructed them would lose that correlation.
+  // Paths at the same state still intersect their initialization and facts.
+  if ((KnownCxx && !Source.Unknown) || (JumpRuntime && !KnownCxx))
     Key.Levels.assign(Source.Levels.begin(), Source.Levels.end());
+  if (JumpRuntime && !KnownCxx) {
     for (const auto &[Offset, Capture] : Source.JumpCaptures)
       Key.Captures.emplace_back(Offset, Capture.Call, Capture.Level);
   }

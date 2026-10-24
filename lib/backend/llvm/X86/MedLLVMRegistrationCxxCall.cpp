@@ -135,6 +135,18 @@ std::optional<RegistrationCxxCallABI> getCheckedRegistrationCxxCallABI(
     ABI.Type = llvm::FunctionType::get(Void, Arguments, false);
     ABI.Convention = llvm::CallingConv::X86_ThisCall;
     ABI.BorrowsECX = ABI.Initializer = true;
+  } else if (Contract.isCxxParent()) {
+    const auto Proof =
+        getCheckedX86RegistrationCxxCalleeABI(Image, Effect.Target, &Work);
+    if (!Proof || !hasSameX86RegistrationCxxEffects(Contract, *Proof, Work) ||
+        Effect.ECXFrameOffset || Effect.ECXRuntimeObject || !Call.arg_empty() ||
+        Effect.DoesNotReturn ||
+        (!Call.getType()->isIntegerTy(32) &&
+         !Call.getType()->isIntegerTy(64)) ||
+        (!Proof->HasIndependentScalarReturn && !ResultUnused))
+      return std::nullopt;
+    ABI.DiscardResult = !Proof->HasIndependentScalarReturn;
+    ABI.Type = llvm::FunctionType::get(ABI.DiscardResult ? Void : I32, false);
   } else {
     const auto Proof = getCheckedX86RegistrationMemberCalleeABI(
         Image, Effect.Target, &Work, RegistrationLeafResult::Discarded);

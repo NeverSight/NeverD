@@ -17,7 +17,8 @@
 
 namespace neverd::registration_abi {
 std::optional<uint16_t> parentPopBytes(const LowFunc &Function,
-                                       const BinaryImage &Image) {
+                                       const BinaryImage &Image,
+                                       size_t *CumulativeWork) {
   if (Image.Arch != Arch::X86 || Image.Bits != Bitness::Bits32 ||
       Image.Format != BinaryFormat::COFF || !Function.ExceptionMetadata ||
       !Function.ExceptionMetadata->Cxx ||
@@ -37,7 +38,8 @@ std::optional<uint16_t> parentPopBytes(const LowFunc &Function,
     llvm::consumeError(std::move(Error));
     return std::nullopt;
   }
-  size_t Work = 0;
+  size_t LocalWork = 0;
+  size_t &Work = CumulativeWork ? *CumulativeWork : LocalWork;
   std::map<int, const RegistrationBlockState *> ByBlock;
   for (const auto &State : States.Blocks)
     if (!chargeCalleeWork(Work, 1) ||

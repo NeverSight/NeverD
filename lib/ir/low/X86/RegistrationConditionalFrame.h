@@ -87,6 +87,9 @@ struct ConditionalFrame {
       const LowFunc &, const LowOp &, const FrameState &,
       const std::set<int32_t> &, size_t &)>
       ProvePlainCall;
+  /// Optional closed-image memory authority. It checks mapped storage and
+  /// records may-effects without supplying the bytes' runtime values.
+  std::function<bool(va_t, uint16_t, bool, size_t &)> ProveImageMemory;
   /// Full-width volatile GPR facts, indexed like FrameState::Registers. A
   /// partial incoming register never supplies an untainted full-word seed.
   std::map<unsigned, FrameValue> Registers;

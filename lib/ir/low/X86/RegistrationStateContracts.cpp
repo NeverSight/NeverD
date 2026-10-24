@@ -121,6 +121,7 @@ bool RegistrationStateSolver::initializeContracts() {
           Callee.CalleeKind == RegistrationCalleeFrameContract::Kind::Leaf;
       const bool Throw = Callee.isThrow();
       const bool Initializer = Callee.isInitializer();
+      const bool CxxParent = Callee.isCxxParent();
       const bool Member =
           Leaf && (!Callee.ECXReads.empty() || !Callee.ECXWrites.empty()) &&
           Callee.CallerPCWrites.empty();
@@ -130,12 +131,17 @@ bool RegistrationStateSolver::initializeContracts() {
                      Callee.StackPopBytes % 4 ||
                      (Leaf && Callee.StackPopBytes / 4 >= limits::kMaxCallArgs)
                : Callee.StackPopBytes != 0) ||
-          (!Leaf && !Throw && !Initializer) || Callee.DoesNotReturn != Throw ||
-          (Callee.HasIndependentScalarReturn && !Leaf) ||
-          ((Leaf || Initializer || Callee.isRethrow() ||
+          (!Leaf && !Throw && !Initializer && !CxxParent) ||
+          Callee.DoesNotReturn != Throw ||
+          (Callee.HasIndependentScalarReturn && !Leaf && !CxxParent) ||
+          ((Leaf || Initializer || CxxParent || Callee.isRethrow() ||
             Callee.isRuntimeThrow()) &&
            (Callee.ThrownTypeVA || Callee.ThrownObjectSize)) ||
           (Throw && (!Callee.ECXReads.empty() || !Callee.ECXWrites.empty())) ||
+          (CxxParent &&
+           (!Callee.ECXReads.empty() || !Callee.ECXWrites.empty() ||
+            !Callee.CallerPCWrites.empty() ||
+            Callee.RequiredImports.empty())) ||
           (Throw && !Callee.isRethrow() && !Callee.isRuntimeThrow() &&
            (!Callee.ThrownTypeVA || Callee.ThrownTypeVA > UINT32_MAX ||
             !Callee.ThrownObjectSize ||
@@ -162,7 +168,15 @@ bool RegistrationStateSolver::initializeContracts() {
         if (!Covered)
           return false;
       }
-      if (!Callee.isRuntimeThrow() && !Callee.RuntimeThrowInfos.empty())
+      va_t PreviousImport = 0;
+      for (va_t Slot : Callee.RequiredImports) {
+        if (!charge(1) || Slot <= PreviousImport || Slot > UINT32_MAX - 3)
+          return false;
+        StackImportSlots.insert(Slot);
+        PreviousImport = Slot;
+      }
+      if (!Callee.isRuntimeThrow() && !CxxParent &&
+          !Callee.RuntimeThrowInfos.empty())
         return false;
       va_t Previous = 0;
       for (const auto &Info : Callee.RuntimeThrowInfos) {

@@ -5865,6 +5865,22 @@ throw import, far returns and writable code must refuse. The shared-prologue
 variant exercises its authenticated physical entry and exit calls. This is
 stack evidence; ordinary whole-image native EH remains a separate check.
 The realigned fixture must retain its refusal from this stack-only route.
+These two parent cases also exercise the separate C++ frame/effect contract:
+scalar versus frame-derived returns, exact proof budgets, transitive throw
+types/imports, metadata/IAT reads, image writes, and changed receipts. Warm and
+cold stack queries must preserve answers and work without publishing nested
+C++ ancestry-dependent answers. A returning-stack answer
+alone still cannot supply this contract. `CxxCalleeEffectsRequireLiveTransitiveImports`
+checks repeated calls and full/partial IAT writes by an earlier callee, with
+adjacent nonoverlapping writes as the positive control. Run the registration
+state, callee-stack and native EH owners; ordinary CLI and authored Wine
+execution remain separate integration checks.
+`InputPE32CxxParentRechecksNativeCallEffects` checks the native call adapter
+against the shared PE fixture, changed effects and changed import providers.
+`CleanupObjectsStayCorrelatedWithTheirLiveState` separates object-free and
+constructed-object paths, reverses traversal order, and rejects missing bytes
+at the same live state. Direct runtime-throw cases reject full and partial IAT
+writes while retaining an adjacent-store positive control.
 `PlainObjectQueriesRejectRecursiveCxxEntries` and
 `ReplaysNestedCallsAndTheirAdministration` check that initializer, object and
 stack queries cannot restart an unbounded recursive C++ graph.
@@ -6586,6 +6602,10 @@ native admission. The narrow entry's handler relocation is retired only for
 its checked MOV operand; adjacent partial fields and changed operand bytes
 must refuse installation. Preferred/rebased execution and wrong-trace controls
 use the same runner checks as the compiled inline parent.
+Use `--nested-shared` instead to wrap that exported shared helper in a second
+compiled cleanup frame. The ordinary-return branch constructs no object; the
+throwing branch must unwind both frames in the order 2, 1, 4, 3. The test helper
+runs ABI recovery before native emission, as the ordinary pipeline does.
 Large cleanup graph tests cover 129 through 4,096 source states, independent
 lifetimes, a 128-action depth boundary and long empty transition chains.
 `RegistrationCallABI.CleanupCacheUsesTheBoundedUnwindGraph` authenticates 257,

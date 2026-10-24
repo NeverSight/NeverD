@@ -18,7 +18,7 @@ using namespace neverd::registration_test;
 
 namespace {
 void checkDirectThrowObject(bool Callback) {
-  for (unsigned Mutation = 0; Mutation != 10; ++Mutation) {
+  for (unsigned Mutation = 0; Mutation != 13; ++Mutation) {
     SCOPED_TRACE(Mutation);
     auto Function = Callback ? makeRealignedRegistrationFrame()
                              : makeCxxCatchContinuation();
@@ -70,19 +70,31 @@ void checkDirectThrowObject(bool Callback) {
     emitOp(Block, Begin + 3, NdOp::STORE, {},
            {NdVar::tmp(901, 4), NdVar::cst(Mutation == 4 ? 0x3004 : 0x3000,
                                            Mutation == 5 ? 1 : 4)});
+    if (Mutation >= 10)
+      emitOp(Block, Begin + 3, NdOp::STORE, {},
+             {NdVar::cst(Mutation == 10   ? 0x6000
+                         : Mutation == 11 ? 0x6003
+                                          : 0x6004,
+                         4),
+              NdVar::cst(0, Mutation == 11 ? 1 : 4)});
     emitOp(Block, Begin + 6, NdOp::CALL, {}, {NdVar::cst(0x2100, 4)});
     RegistrationCalleeFrameContract Contract;
     Contract.CalleeKind = RegistrationCalleeFrameContract::Kind::RuntimeThrow;
     Contract.Target = 0x2100;
     Contract.DoesNotReturn = true;
+    if (Mutation >= 10)
+      Contract.RequiredImports = {0x6000};
     Contract.RuntimeThrowInfos.push_back(
         {0x3000, 0x5000, Mutation == 8 ? 8u : 4u});
     if (Mutation == 9)
       Contract.RuntimeThrowInfos.push_back(Contract.RuntimeThrowInfos.front());
     const std::vector Contracts{Contract};
     const auto State = analyzeRegistrationStates(Function, 0, 0, &Contracts);
-    EXPECT_EQ(State.CallFrameEffectsComplete, Mutation == 0);
-    if (Mutation)
+    // Runtime dispatch already loses unproved import bindings. The adjacent
+    // store is a positive control only on the ordinary parent path.
+    const bool Valid = Mutation == 0 || (Mutation == 12 && !Callback);
+    EXPECT_EQ(State.CallFrameEffectsComplete, Valid);
+    if (!Valid)
       continue;
     ASSERT_EQ(State.CallFrameEffects.size(), 1u);
     ASSERT_TRUE(State.CallFrameEffects.front().RuntimeThrow);

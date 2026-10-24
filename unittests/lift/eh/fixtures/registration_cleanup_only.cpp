@@ -20,6 +20,18 @@ CleanupOnlyGuard::~CleanupOnlyGuard() {
   cleanup_only_trace = cleanup_only_trace * 10 + Tag;
 }
 
+#ifdef NEVERD_NESTED_CXX_PARENT
+extern "C" __declspec(noinline) int cleanup_only_inner();
+
+extern "C" __declspec(dllexport) __declspec(noinline) int
+cleanup_only_parent() {
+  if (!cleanup_only_enabled)
+    return cleanup_only_inner();
+  CleanupOnlyGuard Outer{3};
+  CleanupOnlyGuard Inner{4};
+  return cleanup_only_inner();
+}
+#else
 extern "C" __declspec(dllexport) __declspec(noinline) int
 #ifdef NEVERD_SHARED_PROLOGUE
 cleanup_only_parent();
@@ -33,6 +45,7 @@ cleanup_only_parent() {
   return 9;
 }
 #endif
+#endif
 
 extern "C" __declspec(noreturn) void mainCRTStartup() {
 #ifdef NEVERD_SHARED_PROLOGUE
@@ -45,7 +58,12 @@ extern "C" __declspec(noreturn) void mainCRTStartup() {
   try {
     cleanup_only_parent();
   } catch (int Value) {
-    ExitProcess(Value == 7 && cleanup_only_trace == 21 ? 0 : 1);
+#ifdef NEVERD_NESTED_CXX_PARENT
+    const unsigned Expected = 2143;
+#else
+    const unsigned Expected = 21;
+#endif
+    ExitProcess(Value == 7 && cleanup_only_trace == Expected ? 0 : 1);
   }
   ExitProcess(2);
 }

@@ -4,8 +4,13 @@
 .intel_syntax noprefix
 .text
 .p2align 4, 0x90
+.ifdef NEVERD_NESTED_CXX_PARENT
+.globl _cleanup_only_inner
+_cleanup_only_inner:
+.else
 .globl _cleanup_only_parent
 _cleanup_only_parent:
+.endif
   push 32
   mov eax, offset _shared_handler
   call _shared_prologue
@@ -87,3 +92,8 @@ __load_config_used:
 .data
 .p2align 2
 ___security_cookie: .long 0xbb40e64e
+
+.ifdef NEVERD_NESTED_CXX_PARENT
+.section .drectve,"yn"
+.ascii " /EXPORT:_cleanup_only_inner"
+.endif

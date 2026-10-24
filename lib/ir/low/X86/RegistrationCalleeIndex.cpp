@@ -38,6 +38,9 @@ RegistrationCallCalleeIndex::contracts(const LowFunc &Function) {
           ::neverd::limits::ir::
               kRegistrationCalleeIndexRegistrationCallCalleeIndexContractsCacheSizeLimit)
         return std::nullopt;
+      // A nested CFG must see an unavailable in-progress answer, never start
+      // a fresh copy of this same invocation with another proof budget.
+      Existing = Cache.emplace(Target, std::nullopt).first;
       std::optional<RegistrationCalleeFrameContract> Contract;
       if (auto Import =
               getCheckedX86RegistrationThrowImportABI(Image, Target, &Work)) {
@@ -46,6 +49,7 @@ RegistrationCallCalleeIndex::contracts(const LowFunc &Function) {
             RegistrationCalleeFrameContract::Kind::RuntimeThrow;
         Contract->Target = Target;
         Contract->DoesNotReturn = true;
+        Contract->RequiredImports.push_back(Import->IATVA);
         Contract->CodeRanges.push_back({Target, Target + 6});
       } else if (auto Initializer =
                      getCheckedX86RegistrationInitializerCalleeABI(
@@ -83,6 +87,7 @@ RegistrationCallCalleeIndex::contracts(const LowFunc &Function) {
                 : RegistrationCalleeFrameContract::Kind::PrivateThrow;
         Contract->Target = Target;
         Contract->DoesNotReturn = true;
+        Contract->RequiredImports.push_back(Throw->ImportIATVA);
         if (!Throw->IsRethrow) {
           Contract->ThrownTypeVA = Throw->ThrowInfo.TypeDescriptorVA;
           Contract->ThrownObjectSize = Throw->ThrowInfo.ObjectSize;
@@ -91,10 +96,11 @@ RegistrationCallCalleeIndex::contracts(const LowFunc &Function) {
         Contract->ImageWrites = std::move(Throw->ImageWrites);
         Contract->CallerPCWrites = std::move(Throw->CallerPCWrites);
         Contract->CodeRanges = std::move(Throw->CodeRanges);
-      }
+      } else
+        Contract = cxxCallee(Target);
       if (Work == limits::kMaxRegistrationEHStateWork)
         return std::nullopt;
-      Existing = Cache.emplace(Target, std::move(Contract)).first;
+      Existing->second = std::move(Contract);
     }
     if (Existing->second) {
       const auto &Contract = *Existing->second;
@@ -103,7 +109,8 @@ RegistrationCallCalleeIndex::contracts(const LowFunc &Function) {
               Contract.ECXReads.size() + Contract.ECXWrites.size() +
                   Contract.ECXInitialized.size() + Contract.ImageReads.size() +
                   Contract.ImageWrites.size() + Contract.CallerPCWrites.size() +
-                  Contract.CodeRanges.size() + 1))
+                  Contract.CodeRanges.size() + Contract.RequiredImports.size() +
+                  Contract.RuntimeThrowInfos.size() + 1))
         return std::nullopt;
       Result.push_back(Contract);
     }

@@ -287,6 +287,14 @@ std::optional<RegistrationThrowCalleeABI>
 getCheckedX86RegistrationThrowCalleeABI(const BinaryImage &Image, va_t Target,
                                         size_t *CumulativeWork = nullptr);
 
+/// A cleanup-only C++ parent with no incoming arguments or object borrows.
+/// Proves its private physical frame, ordinary returns, all transitive image
+/// effects and required runtime bindings. The original callee is preserved;
+/// callers and native emitters must bind/replay this context-free evidence.
+std::optional<RegistrationCalleeFrameContract>
+getCheckedX86RegistrationCxxCalleeABI(const BinaryImage &Image, va_t Target,
+                                      size_t *CumulativeWork = nullptr);
+
 /// Memoized checked callees for one CFG construction and its continuation
 /// closure. A shared work budget includes failed proofs; a new CFG build gets
 /// a fresh index so edits to an image cannot reuse stale callee evidence.
@@ -302,6 +310,7 @@ public:
   /// Bill decoded state propagation, including unsuccessful helper analyses,
   /// to this invocation closure's cumulative work budget.
   bool chargeStateWork(size_t Amount);
+  std::optional<RegistrationCalleeFrameContract> cxxCallee(va_t Target);
   std::optional<uint32_t> stackPop(va_t Target);
   std::optional<std::vector<RegistrationCalleeFrameContract>>
   contracts(const LowFunc &Function);
@@ -319,6 +328,7 @@ private:
   size_t LocalWork = 0;
   size_t &Work;
   unsigned StackDepth = 0;
+  unsigned CxxDepth = 0;
   std::map<va_t, std::optional<RegistrationCalleeFrameContract>> Cache;
   std::map<va_t, std::optional<RegistrationCleanupRelayABI>> CleanupCache;
   std::map<va_t, std::optional<RegistrationCalleeStackContract>> StackCache;

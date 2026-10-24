@@ -536,6 +536,7 @@ bool RegistrationStateSolver::transferBlock(size_t I, const Domain &Before,
     }
     std::optional<FrameValue> CallSP;
     bool CheckedCall = false;
+    bool CallPreservesImportBindings = false;
     if (!KnownCxx && !After.JumpBindingsIntact &&
         (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL)) {
       if (!charge(1))
@@ -555,6 +556,7 @@ bool RegistrationStateSolver::transferBlock(size_t I, const Domain &Before,
         !transferOrdinaryFinally(I, After, Op, Facts, CallSP))
       if (auto Call = transferCall(I, After, Op, Facts)) {
         CheckedCall = true;
+        CallPreservesImportBindings = Call->PreservesImportBindings;
         CallSP = Call->StackPointer;
         CallResult = Call->Result;
         if (!Call->MayWrites.empty()) {
@@ -696,7 +698,7 @@ bool RegistrationStateSolver::transferBlock(size_t I, const Domain &Before,
       After.JumpBindingsIntact = false;
     recordSEHStackRestore(Op, After, Transfer, Value);
     Transfer.write(Op, Value, CookieCheckVA, ImportedCall,
-                   PreserveImportBindings);
+                   PreserveImportBindings || CallPreservesImportBindings);
     if (JumpCapture)
       After.Frame.Registers[x86reg::RAX / x86reg::GeneralRegStride] =
           FrameValue::constant(0);

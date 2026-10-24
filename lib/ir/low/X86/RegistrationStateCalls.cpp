@@ -38,12 +38,14 @@ RegistrationStateSolver::transferCall(size_t I, Domain &After, const LowOp &Op,
   RegistrationCallFrameEffect Effect;
   if (Valid) {
     const auto &Contract = Result.CalleeContracts[Callee->second];
+    Valid &=
+        Contract.RequiredImports.empty() || After.Frame.ImportBindingsIntact;
     // A rethrow carries the CRT's current exception, not an initialized new
     // object. It is valid only in a proved live catch invocation.
     if (Contract.isRuntimeThrow()) {
       Effect.RuntimeThrow =
           runtimeThrowArguments(After, Contract, Effect.FrameReads);
-      Valid = Effect.RuntimeThrow.has_value();
+      Valid &= Effect.RuntimeThrow.has_value();
     }
     if (Contract.isRethrow() ||
         (Effect.RuntimeThrow && Effect.RuntimeThrow->isRethrow()))
@@ -127,11 +129,18 @@ RegistrationStateSolver::transferCall(size_t I, Domain &After, const LowOp &Op,
   // binding owner as explicit stores, without narrowing a merged write range
   // to one instruction's access width.
   for (const auto &Write :
-       Result.CalleeContracts[Effect.CalleeIndex].ImageWrites)
+       Result.CalleeContracts[Effect.CalleeIndex].ImageWrites) {
+    if (!charge(StackImportSlots.size() + 1))
+      return std::nullopt;
+    for (va_t Slot : StackImportSlots)
+      if (Write.Begin < Slot + 4 && Slot < Write.End)
+        After.Frame.ImportBindingsIntact = false;
     invalidateJumpRuntimeBindings(After, FrameValue::constant(Write.Begin),
                                   Write.End - Write.Begin);
+  }
   return CallTransfer{
-      StackPointer, Effect.DoesNotReturn, Effect.EndAddress, CallResult, {}};
+      StackPointer, Effect.DoesNotReturn, Effect.EndAddress, CallResult, {},
+      true};
 }
 
 } // namespace neverd::registration_state
