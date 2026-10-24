@@ -874,3 +874,27 @@ TEST(RegistrationImportABI, StartupOutputRequiresTheExactPhysicalInvocation) {
     EXPECT_LE(Work, limits::kMaxRegistrationEHStateWork);
   }
 }
+
+TEST(RegistrationImportABI, ReturningHelperMayReplaceRuntimeSlot) {
+  ImportImage F({"GetStartupInfoW", 1}, false);
+  auto &Text = F.Image.Segments[0];
+  Text.Data = {0xc7, 0x05, 0x00, 0x30, 0x40, 0x00, 0x30,
+               0x10, 0x40, 0x00, 0x31, 0xc0, 0xc3};
+  Text.Data.resize(0x30, 0xcc);
+  Text.Data.push_back(0xc3);
+  Text.Size = Text.FileSz = Text.Data.size();
+  F.Image.Sections[0].Size = F.Image.Sections[0].FileSz = Text.Size;
+  EXPECT_EQ(getCheckedX86CalleeStackPop(F.Image, ImportImage::TextVA),
+            std::optional<uint32_t>{0});
+  RegistrationCallCalleeIndex Index(F.Image);
+  const auto Stacks = Index.stackContracts(F.caller());
+  ASSERT_TRUE(Stacks);
+  ASSERT_EQ(Stacks->size(), 1u);
+  EXPECT_FALSE(Stacks->front().PreservesImportBindings);
+  const auto Contracts = Index.contracts(F.caller());
+  ASSERT_TRUE(Contracts);
+  ASSERT_EQ(Contracts->size(), 1u);
+  ASSERT_EQ(Contracts->front().ImageWrites.size(), 1u);
+  EXPECT_EQ(Contracts->front().ImageWrites.front().Begin, ImportImage::IATVA);
+  EXPECT_EQ(Contracts->front().ImageWrites.front().End, ImportImage::IATVA + 4);
+}

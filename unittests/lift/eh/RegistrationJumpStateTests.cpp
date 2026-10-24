@@ -868,3 +868,164 @@ TEST(RegistrationJumpState, CallbackStateReloadControlsDirectResumption) {
     EXPECT_EQ(Marker->EstablishedFrameOffset, -40);
   }
 }
+
+TEST(RegistrationJumpState, ImageEffectsGateLaterCapture) {
+  for (unsigned Mode = 0; Mode != 10; ++Mode) {
+    SCOPED_TRACE(Mode);
+    auto F = makeJumpFrame(0);
+    std::vector<RegistrationCalleeFrameContract> Callees;
+    std::vector<RegistrationCalleeStackContract> Stacks;
+    if (Mode) {
+      LowBlock Call;
+      Call.Id = 10;
+      Call.StartAddr = 0x1070;
+      Call.EndAddr = 0x1075;
+      Call.Succs = F.Blocks[0].Succs;
+      Call.InstructionBoundaries = {{0x1070, 5, 0, 1}};
+      Call.InstructionBoundaries[0].Control = LowInstructionControl::Call;
+      Call.InstructionBoundaries[0].Immediate = 0x4300;
+      emitOp(Call, 0x1070, NdOp::CALL, {}, {NdVar::cst(0x4300, 4)});
+      F.Blocks[0].Succs = {10};
+      F.Blocks.push_back(std::move(Call));
+      Stacks.push_back({0x4300, 0, false});
+      if (Mode >= 2) {
+        RegistrationCalleeFrameContract Callee;
+        Callee.Target = 0x4300;
+        if (Mode == 3)
+          Callee.ImageWrites = {{0x4100, 0x4104}};
+        if (Mode == 4)
+          Callee.ImageWrites = {{0x4400, 0x4404}};
+        if (Mode == 5)
+          // A merged image effect is not limited to one instruction's width.
+          Callee.ImageWrites = {{0x4000, 0x14000}};
+        if (Mode == 6)
+          Callee.ImageWrites = {{0x4000, 0x4100}};
+        if (Mode == 7)
+          Callee.ImageWrites = {{0x4104, 0x4200}};
+        if (Mode == 8)
+          Callee.ImageWrites = {{0x40ff, 0x4101}};
+        if (Mode == 9)
+          Callee.ImageWrites = {{0x4103, 0x4104}};
+        Callees.push_back(Callee);
+      }
+    }
+    SEHJumpRuntime Runtime;
+    Runtime.ImportSlots.insert(0x4100);
+    Runtime.Capture = [](const LowOp &Op, const FrameState &Frame, bool,
+                         size_t &) -> std::optional<SEHJumpCapture> {
+      if (Op.Addr != 0x1100)
+        return std::nullopt;
+      SEHJumpCapture Capture;
+      Capture.Call = Op.Addr;
+      Capture.ReturnPC = 0x1105;
+      Capture.BufferOffset = -144;
+      Capture.StackOffset = -192;
+      Capture.UnwindTarget = 0x3300;
+      constexpr uint64_t Registers[] = {x86reg::RBP, x86reg::RBX, x86reg::RDI,
+                                        x86reg::RSI};
+      for (unsigned I = 0; I != 4; ++I)
+        Capture.Nonvolatile[I] =
+            Frame.Registers[Registers[I] / x86reg::GeneralRegStride];
+      return Capture;
+    };
+    Runtime.Resume = [](const LowOp &Op, size_t &) {
+      return Op.Addr == 0x111a;
+    };
+    RegistrationStateSolver Solver(F, 0, 0, Mode >= 2 ? &Callees : nullptr,
+                                   nullptr, &Stacks, nullptr, nullptr, nullptr,
+                                   nullptr, &Runtime);
+    const auto Result = Solver.run();
+    EXPECT_EQ(Result.HasSEHJumpCaptures,
+              Mode == 0 || Mode == 2 || Mode == 4 || Mode == 6 || Mode == 7);
+  }
+}
+
+TEST(RegistrationJumpState, OpaqueCallsRevokeExceptionalRuntimeBindings) {
+  for (bool Filter : {false, true}) {
+    SCOPED_TRACE(Filter);
+    for (unsigned Mutation = 0; Mutation != 2; ++Mutation) {
+      SCOPED_TRACE(Mutation);
+      auto F = makeJumpFrame(0);
+      F.Blocks.resize(8);
+      auto &Chain = *F.ExceptionMetadata->Registration;
+      Chain.Scopes =
+          Filter ? std::vector<RegistrationScopeRecord>{{-1, 0x110f, 0x1120,
+                                                         false}}
+                 : std::vector<RegistrationScopeRecord>{{-1, 0, 0x110f, true}};
+      Chain.TryLevelStores = {{0x1120, 0x1127, -1}, {0x1140, 0x1147, 0}};
+      auto &Resume = F.Blocks[3];
+      Resume.Ops.clear();
+      Resume.Succs = {7};
+      Resume.EndAddr = 0x1108;
+      emitOp(Resume, 0x1105, NdOp::INT_ADD, NdVar::reg(x86reg::RSP, 4),
+             {NdVar::reg(x86reg::RSP, 4), NdVar::cst(16, 4)});
+      Resume.InstructionBoundaries = {{0x1105, 3, 0, 1}};
+      auto &Active = F.Blocks[7];
+      Active.Id = 7;
+      Active.StartAddr = 0x1140;
+      Active.EndAddr = 0x1147;
+      Active.Succs = {5};
+      addSlotStore(Active, 0);
+      for (unsigned I = 0; I != Active.Ops.size(); ++I)
+        Active.Ops[I].Seq = I;
+      Active.InstructionBoundaries = {{0x1140, 7, 0, 2}};
+      if (Mutation) {
+        LowBlock Call;
+        Call.Id = 8;
+        Call.StartAddr = 0x1180;
+        Call.EndAddr = 0x1185;
+        emitOp(Call, 0x1180, NdOp::CALL, {}, {NdVar::cst(0x4300, 4)});
+        Call.InstructionBoundaries = {{0x1180, 5, 0, 1}};
+        auto &Insn = Call.InstructionBoundaries[0];
+        Insn.Control = LowInstructionControl::Call;
+        Insn.ControlFlags = LowInstructionControlFlag::Call |
+                            LowInstructionControlFlag::NoReturn;
+        Insn.Immediate = 0x4300;
+        Active.Succs = {8};
+        F.Blocks.push_back(std::move(Call));
+      }
+      SEHJumpRuntime Runtime;
+      Runtime.ImportSlots.insert(0x4100);
+      Runtime.Capture = [](const LowOp &Op, const FrameState &Frame, bool,
+                           size_t &) -> std::optional<SEHJumpCapture> {
+        if (Op.Addr != 0x1100)
+          return std::nullopt;
+        SEHJumpCapture Capture;
+        Capture.Call = Op.Addr;
+        Capture.ReturnPC = 0x1105;
+        Capture.BufferOffset = -144;
+        Capture.StackOffset = -192;
+        Capture.UnwindTarget = 0x3300;
+        constexpr uint64_t Registers[] = {x86reg::RBP, x86reg::RBX, x86reg::RDI,
+                                          x86reg::RSI};
+        for (unsigned I = 0; I != 4; ++I)
+          Capture.Nonvolatile[I] =
+              Frame.Registers[Registers[I] / x86reg::GeneralRegStride];
+        return Capture;
+      };
+      Runtime.Resume = [](const LowOp &Op, size_t &) {
+        return Op.Addr == 0x111a;
+      };
+      std::vector<RegistrationSEHControlContract> Controls;
+      RegistrationStateSolver Solver(F, 0, 0, nullptr, nullptr, nullptr,
+                                     nullptr, &Controls, nullptr, nullptr,
+                                     &Runtime);
+      const auto Result = Solver.run();
+      if (!Mutation) {
+        for (const auto &Diagnostic : Result.Diagnostics)
+          ADD_FAILURE() << Diagnostic;
+        EXPECT_TRUE(Result.Complete);
+        ASSERT_EQ(Result.SEHJumpResumptions.size(), 1u);
+        EXPECT_EQ(Result.SEHJumpResumptions.front().EntryVA, 0x110fu);
+        EXPECT_EQ(Result.SEHJumpResumptions.front().TargetVA, 0x1105u);
+        EXPECT_EQ(Result.SEHJumpResumptions.front().ValueOffset, -4);
+        EXPECT_EQ(Result.SEHJumpResumptions.front().ResumedLevels,
+                  std::vector<int32_t>{-1});
+      } else {
+        EXPECT_FALSE(Result.Complete);
+        EXPECT_FALSE(Result.SEHJumpResumptionsComplete);
+        EXPECT_TRUE(Result.SEHJumpResumptions.empty());
+      }
+    }
+  }
+}

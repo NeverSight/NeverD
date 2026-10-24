@@ -149,6 +149,18 @@ RegistrationStateAnalysis RegistrationStateSolver::finish() {
     Result.Diagnostics.push_back(
         "SEH invocation exit or parent stack is not proven");
   }
+  // Receipts gathered on an earlier visit are provisional. A later reaching
+  // state with an expired binding revokes only that same source occurrence.
+  for (const auto &Identity : InvalidRuntimeBindings) {
+    if (!charge(1))
+      break;
+    if (BoundCalls.count(Identity))
+      Result.SEHBoundCallsComplete = false;
+    if (LocalUnwindCalls.count(Identity))
+      Result.SEHLocalUnwindsComplete = false;
+    if (JumpCaptureOccurrences.count(Identity))
+      Result.SEHJumpCapturesComplete = false;
+  }
   for (const auto &[Identity, Resume] : JumpResumptions)
     if (!charge(1) || ModifiedCallbackCaptures.count(Resume.CaptureCall))
       Result.SEHJumpResumptionsComplete = false;

@@ -5890,6 +5890,14 @@ modified binding or local callee.
 `ImportBindingAndRegisterEffectsRemainIndependent` checks both source-state
 consumers and rejects malformed effect contracts. Frame transfer tests also
 ensure preservation cannot revive a lost binding or invent a pointer result.
+`ReturningHelperMayReplaceRuntimeSlot` proves from machine bytes that a balanced
+returning helper can overwrite an IAT slot. `CallsNeedIndependentRuntimeBindingEffects`
+checks the later EH3/EH4 output call across opaque calls, imports and veneers,
+while `ImageEffectsGateLaterCapture` covers checked callee image writes.
+`OpaqueCallsRevokeExceptionalRuntimeBindings` rejects stale filter/finally
+resumptions after an opaque terminating call. `LaterIterationsRevokeEarlierRuntimeReceipts`
+keeps an explicit stack restoration while revoking a prior loop iteration's
+runtime receipt after its binding becomes unproved.
 `CachedImportsRespectCumulativeWork` checks the exact work boundary and refusal
 on exhaustion. `OpaqueCallsCannotCertifyCachedTargetPreservation` isolates the
 register-preservation boundary from all returning-stack facts.

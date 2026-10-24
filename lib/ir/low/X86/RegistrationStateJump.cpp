@@ -17,7 +17,7 @@
 namespace neverd::registration_state {
 
 void RegistrationStateSolver::invalidateJumpRuntimeBindings(
-    Domain &State, const FrameValue &Address, uint16_t Width) {
+    Domain &State, const FrameValue &Address, uint64_t Width) {
   if ((!JumpRuntime && LocalUnwindImportSlots.empty()) || Address.Offset ||
       Address.EntryOffset || Address.CallbackAddress)
     return;

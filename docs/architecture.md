@@ -2343,6 +2343,13 @@ effect follows their documented pointer-value transformation; the process
 secret and returned value remain runtime data. It cannot restore an earlier
 invalidated binding, discharge frame or callback effects, prove a result
 independent of a frame, or authorize a fresh native lookup for a cached call.
+Runtime capture, unwind and output-call receipts also require a live binding
+on every reaching invocation. The state solver withdraws that fact after an
+opaque call, projects checked callees' complete image writes through the same
+overlap owner as explicit stores, and carries possible binding loss into
+exceptional dispatch. A normal-return preservation effect cannot authorize an
+exceptional path. Invalid reaching occurrences revoke provisional receipts
+from earlier iterations or activations before publication.
 Cached PE32 import pointers additionally require an immutable full-word MOV
 whose complete current LowIR address, load and destination agree with its
 machine bytes. The stack contract retains that exact load occurrence. The

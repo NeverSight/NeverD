@@ -123,6 +123,13 @@ RegistrationStateSolver::transferCall(size_t I, Domain &After, const LowOp &Op,
       After.Frame.forgetCellValues();
     return std::nullopt;
   }
+  // A checked frame borrow can still overwrite image storage. Use the same
+  // binding owner as explicit stores, without narrowing a merged write range
+  // to one instruction's access width.
+  for (const auto &Write :
+       Result.CalleeContracts[Effect.CalleeIndex].ImageWrites)
+    invalidateJumpRuntimeBindings(After, FrameValue::constant(Write.Begin),
+                                  Write.End - Write.Begin);
   return CallTransfer{
       StackPointer, Effect.DoesNotReturn, Effect.EndAddress, CallResult, {}};
 }

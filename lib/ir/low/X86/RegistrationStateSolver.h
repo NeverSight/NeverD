@@ -406,7 +406,7 @@ private:
   void invalidateJumpCaptures(Domain &State, const FrameValue &Address,
                               uint16_t Width);
   void invalidateJumpRuntimeBindings(Domain &State, const FrameValue &Address,
-                                     uint16_t Width);
+                                     uint64_t Width);
   bool checkConditionalMemory(const FrameState &State, const LowOp &Op,
                               const FrameTransfer &Transfer,
                               const std::set<int32_t> *Initialized = nullptr);
@@ -533,6 +533,9 @@ private:
   std::set<SEHExitKey> InvalidSEHExits;
   std::map<SEHExitKey, RegistrationSEHJumpResume> JumpResumptions;
   std::map<std::pair<va_t, int>, RegistrationSEHBoundCall> BoundCalls;
+  /// A runtime occurrence must retain its binding on every reaching visit,
+  /// including later loop iterations and distinct callback activations.
+  std::set<std::pair<va_t, int>> InvalidRuntimeBindings;
   std::map<std::pair<va_t, int>, RegistrationSEHJumpCapture>
       JumpCaptureOccurrences;
   std::set<va_t> ModifiedCallbackCaptures;

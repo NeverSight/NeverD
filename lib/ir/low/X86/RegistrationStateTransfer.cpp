@@ -36,6 +36,7 @@ bool RegistrationStateSolver::transferBlock(size_t I, const Domain &Before,
     return true;
   Domain After = Before;
   std::optional<Domain> CallException;
+  bool UnprovedExceptionalBindings = false;
   FrameTransfer Transfer(
       After.Frame, *Chain.RegistrationOffset,
       EH4 || CxxCookies || CxxPrologue ? SecurityCookieVA : 0,
@@ -535,6 +536,12 @@ bool RegistrationStateSolver::transferBlock(size_t I, const Domain &Before,
     }
     std::optional<FrameValue> CallSP;
     bool CheckedCall = false;
+    if (!KnownCxx && !After.JumpBindingsIntact &&
+        (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL)) {
+      if (!charge(1))
+        break;
+      InvalidRuntimeBindings.emplace(Op.Addr, Op.Seq);
+    }
     const bool JumpCapture = transferJumpCapture(I, After, Op, Facts, CallSP);
     const bool JumpResume = transferJumpResume(I, After, Op, Facts);
     const auto LocalSP = !JumpCapture && !JumpResume
@@ -600,13 +607,16 @@ bool RegistrationStateSolver::transferBlock(size_t I, const Domain &Before,
       break;
     if (!CallSP && !JumpCapture && !JumpResume)
       CallSP = transferPrivateSEHCall(After, Op, Facts);
-    if (!JumpCapture && !JumpResume && !CallSP && !Facts.InvocationAtExit &&
+    const bool UnprovedCallEffects =
+        !JumpCapture && !JumpResume && !CallSP && !Facts.InvocationAtExit &&
         (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL ||
-         (Op.Opcode == NdOp::INTRINSIC && !isFramePreservingIntrinsic(Op)))) {
+         (Op.Opcode == NdOp::INTRINSIC && !isFramePreservingIntrinsic(Op)));
+    if (UnprovedCallEffects) {
       if (After.Callback)
         for (const auto &[Offset, Capture] : After.JumpCaptures)
           ModifiedCallbackCaptures.insert(Capture.Call);
       After.JumpCaptures.clear();
+      UnprovedExceptionalBindings = true;
     }
     if (!JumpResume && !CallSP && !Facts.InvocationAtExit && SEHControls &&
         !KnownCxx && Before.Callback && Before.Activation.Entry &&
@@ -679,6 +689,11 @@ bool RegistrationStateSolver::transferBlock(size_t I, const Domain &Before,
         }
       }
     }
+    // Stack cleanup does not preserve a future runtime target. A separate
+    // imported normal-return effect may retain a still-live binding, but it
+    // cannot repair earlier loss or authorize the exceptional path above.
+    if (UnprovedCallEffects && !(ImportedCall && PreserveImportBindings))
+      After.JumpBindingsIntact = false;
     recordSEHStackRestore(Op, After, Transfer, Value);
     Transfer.write(Op, Value, CookieCheckVA, ImportedCall,
                    PreserveImportBindings);
@@ -780,6 +795,19 @@ bool RegistrationStateSolver::transferBlock(size_t I, const Domain &Before,
   }
   if (CatchReturn)
     resumeCxxCatch(After, *CatchReturn);
+  // A call or explicit image write can change a runtime binding before a
+  // fault dispatches this block. Do not lend the pre-block binding or capture
+  // to a filter/finally after that possible effect.
+  if (Before.JumpBindingsIntact &&
+      (UnprovedExceptionalBindings || !After.JumpBindingsIntact)) {
+    if (!CallException) {
+      if (!charge(Before.snapshotWork()))
+        return true;
+      CallException = Before;
+    }
+    CallException->JumpBindingsIntact = false;
+    CallException->JumpCaptures.clear();
+  }
   dispatchBlock(I, CallException ? *CallException : Before, Facts);
   return true;
 }

@@ -144,3 +144,111 @@ TEST(RegistrationStartupInfo, EarlierImportWritesInvalidateTheOutputBorrow) {
         EXPECT_TRUE(Result.Complete);
     }
 }
+
+TEST(RegistrationStartupInfo, CallsNeedIndependentRuntimeBindingEffects) {
+  for (unsigned Protocol = 0; Protocol != 3; ++Protocol)
+    for (unsigned Mode = 0; Mode != 6; ++Mode) {
+      SCOPED_TRACE(Protocol);
+      SCOPED_TRACE(Mode);
+      auto F = makeStartupFrame(Protocol);
+      std::vector<RegistrationCalleeStackContract> Stacks;
+      if (Mode) {
+        const bool Imported = Mode >= 2;
+        const bool Indirect = Mode == 2 || Mode == 3;
+        const va_t Target = Mode >= 4 ? 0x4400 : 0x4300;
+        LowBlock Call;
+        Call.Id = 10;
+        Call.StartAddr = Imported ? 0x106d : 0x1070;
+        Call.EndAddr = Indirect ? 0x1076 : 0x1075;
+        Call.Succs = F.Blocks[0].Succs;
+        if (Imported) {
+          emitOp(Call, 0x106d, NdOp::INT_SUB, NdVar::reg(x86reg::RSP, 4),
+                 {NdVar::reg(x86reg::RSP, 4), NdVar::cst(4, 4)});
+          Call.InstructionBoundaries = {{0x106d, 3, 0, 1}};
+        }
+        emitOp(Call, 0x1070, Indirect ? NdOp::INDIR_CALL : NdOp::CALL, {},
+               {NdVar::cst(Target, 4)});
+        Call.InstructionBoundaries.push_back(
+            {0x1070, uint8_t(Indirect ? 6 : 5), uint32_t(Imported), 1});
+        auto &Insn = Call.InstructionBoundaries.back();
+        Insn.Control = LowInstructionControl::Call;
+        Insn.ControlFlags = LowInstructionControlFlag::Call;
+        if (Indirect)
+          Insn.ControlFlags |= LowInstructionControlFlag::Indirect;
+        Insn.Immediate = Target;
+        F.Blocks[0].Succs = {10};
+        F.Blocks.push_back(std::move(Call));
+        RegistrationCalleeStackContract Stack{Target, Imported ? 4u : 0u,
+                                              Indirect};
+        Stack.ImportVeneer = Mode >= 4;
+        if (Stack.ImportVeneer)
+          Stack.RequiredImports = {0x4300};
+        Stack.PreservesImportBindings = Mode == 3 || Mode == 5;
+        Stacks.push_back(std::move(Stack));
+      }
+      SEHJumpRuntime Runtime;
+      Runtime.ImportSlots.insert(0x4200);
+      Runtime.StartupInfo = [](const LowOp &Op, size_t &) {
+        return Op.Opcode == NdOp::INDIR_CALL && Op.Addr == 0x1100;
+      };
+      RegistrationStateSolver Solver(F, Protocol ? 0x4000 : 0, 0, nullptr,
+                                     nullptr, &Stacks, nullptr, nullptr,
+                                     nullptr, nullptr, &Runtime);
+      const auto Result = Solver.run();
+      const bool Preserved = Mode == 0 || Mode == 3 || Mode == 5;
+      EXPECT_EQ(Result.HasBoundSEHCallees, Preserved);
+      if (Preserved)
+        EXPECT_TRUE(Result.Complete);
+    }
+}
+
+TEST(RegistrationStartupInfo, LaterIterationsRevokeEarlierRuntimeReceipts) {
+  for (bool Loop : {false, true}) {
+    SCOPED_TRACE(Loop);
+    auto F = makeStartupFrame(0);
+    // An explicit physical stack restoration remains valid even when the
+    // preceding call no longer has an authenticated imported ABI.
+    auto &Resume = F.Blocks[3];
+    Resume.Ops[0].Inputs[0] = NdVar::reg(x86reg::RBP, 4);
+    Resume.Ops[0].Inputs[1] = NdVar::cst(uint32_t(-176), 4);
+    if (Loop) {
+      Resume.Succs = {5, 10};
+      LowBlock Call;
+      Call.Id = 10;
+      Call.StartAddr = 0x1180;
+      Call.EndAddr = 0x1185;
+      Call.Succs = {11};
+      emitOp(Call, 0x1180, NdOp::CALL, {}, {NdVar::cst(0x4300, 4)});
+      Call.InstructionBoundaries = {{0x1180, 5, 0, 1}};
+      Call.InstructionBoundaries[0].Control = LowInstructionControl::Call;
+      Call.InstructionBoundaries[0].Immediate = 0x4300;
+      F.Blocks.push_back(std::move(Call));
+      LowBlock Reset;
+      Reset.Id = 11;
+      Reset.StartAddr = 0x1190;
+      Reset.EndAddr = 0x1199;
+      Reset.Succs = {2};
+      emitOp(Reset, 0x1190, NdOp::INT_ADD, NdVar::reg(x86reg::RSP, 4),
+             {NdVar::reg(x86reg::RBP, 4), NdVar::cst(uint32_t(-192), 4)});
+      emitOp(Reset, 0x1193, NdOp::INT_ADD, NdVar::tmp(0, 4),
+             {NdVar::reg(x86reg::RBP, 4), NdVar::cst(uint32_t(-108), 4)});
+      emitOp(Reset, 0x1196, NdOp::STORE, {},
+             {NdVar::reg(x86reg::RSP, 4), NdVar::tmp(0, 4)});
+      Reset.InstructionBoundaries = {
+          {0x1190, 3, 0, 1}, {0x1193, 3, 1, 1}, {0x1196, 3, 2, 1}};
+      F.Blocks.push_back(std::move(Reset));
+    }
+    const std::vector<RegistrationCalleeStackContract> Stacks = {
+        {0x4300, 0, false}};
+    SEHJumpRuntime Runtime;
+    Runtime.ImportSlots.insert(0x4200);
+    Runtime.StartupInfo = [](const LowOp &Op, size_t &) {
+      return Op.Opcode == NdOp::INDIR_CALL && Op.Addr == 0x1100;
+    };
+    RegistrationStateSolver Solver(F, 0, 0, nullptr, nullptr, &Stacks, nullptr,
+                                   nullptr, nullptr, nullptr, &Runtime);
+    const auto Result = Solver.run();
+    EXPECT_EQ(Result.SEHBoundCallsComplete, !Loop);
+    EXPECT_EQ(Result.SEHBoundCalls.size(), Loop ? 0u : 1u);
+  }
+}
