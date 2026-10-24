@@ -326,13 +326,17 @@ stackPopForBody(StackBody &Body, va_t Entry, const NestedStackProof &NestedPop,
       // affine transfers share the registration state's authoritative rules.
       std::optional<uint32_t> CalleePop;
       bool ImportedCall = false;
+      bool PreserveImportBindings = false;
       if (Op.Opcode == NdOp::CALL && Op.NumInputs == 1 &&
           Op.Inputs[0].isConst() && Op.Inputs[0].Size == 4 &&
           State.Registers[x86reg::RSP / x86reg::GeneralRegStride].Offset)
         if (const auto Callee = NestedPop(Op.Inputs[0].Offset);
             Callee &&
-            (Callee->RequiredImports.empty() || State.ImportBindingsIntact))
+            (Callee->RequiredImports.empty() || State.ImportBindingsIntact)) {
           CalleePop = Callee->StackPopBytes;
+          ImportedCall = Callee->ImportVeneer;
+          PreserveImportBindings = Callee->PreservesImportBindings;
+        }
       if (Op.Opcode == NdOp::INDIR_CALL && Op.NumInputs == 1 &&
           Op.Inputs[0].Size == 4 &&
           Op.MemoryAddressSpace == NdMemoryAddressSpace::Default &&
@@ -346,6 +350,9 @@ stackPopForBody(StackBody &Body, va_t Entry, const NestedStackProof &NestedPop,
               registration_abi::checkedRegistrationImportStackPop(Image, *Slot);
         ImportedCall = CalleePop.has_value() &&
                        (!Op.Inputs[0].isConst() || State.ImportBindingsIntact);
+        PreserveImportBindings =
+            ImportedCall &&
+            registration_abi::preservesRegistrationImportBindings(Image, *Slot);
       }
       std::optional<FrameValue> CallSP;
       if (CalleePop) {
@@ -363,7 +370,7 @@ stackPopForBody(StackBody &Body, va_t Entry, const NestedStackProof &NestedPop,
                                        Load == Body.ImportLoads.end()
                                            ? std::nullopt
                                            : std::optional<va_t>{Load->second}),
-                     0, ImportedCall);
+                     0, ImportedCall, PreserveImportBindings);
       if (CallSP)
         State.Registers[x86reg::RSP / x86reg::GeneralRegStride] = *CallSP;
     }
@@ -590,6 +597,10 @@ public:
             return std::nullopt;
           RegistrationCalleeStackContract Result{
               Target, *Pop, false, {}, {readLE<uint32_t>(Bytes->data() + 2)}};
+          Result.ImportVeneer = true;
+          Result.PreservesImportBindings =
+              registration_abi::preservesRegistrationImportBindings(
+                  Image, Result.RequiredImports.front());
           Cache.emplace(Target, Result);
           return Result;
         }
@@ -747,13 +758,19 @@ RegistrationCallCalleeIndex::stackContracts(const LowFunc &Function) {
                             &Parent);
   for (const auto &[Target, Indirect] : Targets) {
     if (Indirect) {
-      // The registration runtime's existing provider contract. This gives
-      // only stdcall cleanup, not permission to rewrite exception dispatch.
+      // Stack cleanup and normal binding preservation are separate facts;
+      // neither permits rewriting exception dispatch or borrowing a frame.
       const auto *Import = Image.findImportAt(Target);
       if (Import && Import->IATAddr == Target)
         if (auto Pop = registration_abi::checkedRegistrationImportStackPop(
-                Image, Target))
-          Result.push_back({Target, *Pop, true, ImportLoads[Target]});
+                Image, Target)) {
+          RegistrationCalleeStackContract Contract{Target, *Pop, true,
+                                                   ImportLoads[Target]};
+          Contract.PreservesImportBindings =
+              registration_abi::preservesRegistrationImportBindings(Image,
+                                                                    Target);
+          Result.push_back(std::move(Contract));
+        }
       continue;
     }
     if (Target == Function.Entry)

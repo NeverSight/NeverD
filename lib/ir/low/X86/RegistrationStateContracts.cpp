@@ -75,6 +75,16 @@ bool RegistrationStateSolver::initializeContracts() {
       }
       if (!Stack.Loads.empty() && !Stack.Indirect)
         return false;
+      if (Stack.ImportVeneer) {
+        if (Stack.Indirect || Stack.RequiredImports.size() != 1)
+          return false;
+        StackImportVeneers.insert(Stack.Target);
+      }
+      if (Stack.PreservesImportBindings) {
+        if (!Stack.Indirect && !Stack.ImportVeneer)
+          return false;
+        StackBindingPreservers.emplace(Stack.Target, Stack.Indirect);
+      }
       if (Stack.Indirect) {
         if (!Stack.RequiredImports.empty())
           return false;

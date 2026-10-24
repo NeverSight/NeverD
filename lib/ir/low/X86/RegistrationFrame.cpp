@@ -441,7 +441,8 @@ bool FrameTransfer::isCookieCheck(const LowOp &Op, va_t CookieCheckVA) const {
 }
 
 void FrameTransfer::write(const LowOp &Op, FrameValue Value, va_t CookieCheckVA,
-                          bool PreserveImportedTargets) {
+                          bool PreserveImportedTargets,
+                          bool PreserveImportBindings) {
   if (isCookieCheck(Op, CookieCheckVA)) {
     // The authenticated success path compares equal values, then returns
     // without changing another register. The generic EAX result is no write.
@@ -450,7 +451,8 @@ void FrameTransfer::write(const LowOp &Op, FrameValue Value, va_t CookieCheckVA,
     return;
   }
   if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) {
-    State.ImportBindingsIntact = false;
+    State.ImportBindingsIntact &=
+        PreserveImportedTargets && PreserveImportBindings;
     if (!PreserveImportedTargets) {
       for (auto &Register : State.Registers)
         Register.ImportTarget.reset();

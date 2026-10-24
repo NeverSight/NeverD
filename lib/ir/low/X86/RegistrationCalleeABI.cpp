@@ -128,6 +128,17 @@ checkedRegistrationImportStackPop(const BinaryImage &Image, va_t Target) {
   return std::nullopt;
 }
 
+bool preservesRegistrationImportBindings(const BinaryImage &Image,
+                                         va_t Target) {
+  const auto *Import = checkedRuntimeImportSlot(Image, Target);
+  // These APIs transform pointer bits with a process-specific secret, without
+  // replacing the caller image's import slots. Keep the runtime result opaque;
+  // in particular, decoding does not establish frame-independent provenance.
+  return Import &&
+         llvm::StringRef(Import->Module).equals_insensitive("kernel32.dll") &&
+         (Import->Name == "DecodePointer" || Import->Name == "EncodePointer");
+}
+
 std::optional<RegistrationImportLoad>
 checkedRegistrationImportLoad(const BinaryImage &Image, const LowBlock &Block,
                               const LowInstructionBoundary &Boundary,

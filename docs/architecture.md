@@ -2334,6 +2334,15 @@ slot require the same reaching binding even when no pointer was cached in a
 register. The scalar stack-pop query describes the callee under its entry
 binding assumptions; source callers consume the full dependency-bearing
 contract. An explicit stack restoration remains an independent proof.
+An exact immutable `FF25` import veneer additionally retains the imported
+ABI's nonvolatile callable identities while its single IAT dependency is
+live. Ordinary local returning-stack summaries do not inherit that fact.
+Separately, the exact eager `kernel32!EncodePointer` and `DecodePointer`
+contracts retain existing import bindings on normal return. This narrow
+effect follows their documented pointer-value transformation; the process
+secret and returned value remain runtime data. It cannot restore an earlier
+invalidated binding, discharge frame or callback effects, prove a result
+independent of a frame, or authorize a fresh native lookup for a cached call.
 Cached PE32 import pointers additionally require an immutable full-word MOV
 whose complete current LowIR address, load and destination agree with its
 machine bytes. The stack contract retains that exact load occurrence. The

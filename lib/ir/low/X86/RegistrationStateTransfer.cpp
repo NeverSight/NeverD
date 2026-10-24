@@ -646,6 +646,7 @@ bool RegistrationStateSolver::transferBlock(size_t I, const Domain &Before,
     // initialization or no-return obligations. Retain their refusal while
     // recovering the independent register coordinate for ordinary flow.
     bool ImportedCall = false;
+    bool PreserveImportBindings = false;
     if ((Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) &&
         Op.NumInputs == 1 && Op.Inputs[0].Size == 4 &&
         Op.MemoryAddressSpace == NdMemoryAddressSpace::Default &&
@@ -665,8 +666,8 @@ bool RegistrationStateSolver::transferBlock(size_t I, const Domain &Before,
           Boundary != Boundaries.end() && Boundary->second.first == Block.Id &&
           Boundary->second.second.Control == LowInstructionControl::Call) {
         ImportedCall =
-            Op.Opcode == NdOp::INDIR_CALL &&
-            (!Op.Inputs[0].isConst() || After.Frame.ImportBindingsIntact);
+            Op.Opcode == NdOp::INDIR_CALL || StackImportVeneers.count(*Target);
+        PreserveImportBindings = StackBindingPreservers.count(It->first);
         if (!CallSP) {
           LowOp Adjust;
           Adjust.Opcode = NdOp::INT_ADD;
@@ -679,7 +680,8 @@ bool RegistrationStateSolver::transferBlock(size_t I, const Domain &Before,
       }
     }
     recordSEHStackRestore(Op, After, Transfer, Value);
-    Transfer.write(Op, Value, CookieCheckVA, ImportedCall);
+    Transfer.write(Op, Value, CookieCheckVA, ImportedCall,
+                   PreserveImportBindings);
     if (JumpCapture)
       After.Frame.Registers[x86reg::RAX / x86reg::GeneralRegStride] =
           FrameValue::constant(0);

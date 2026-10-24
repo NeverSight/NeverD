@@ -925,6 +925,98 @@ TEST(RegistrationState, ImportedStackCleanupRequiresItsCurrentBinding) {
       }
 }
 
+TEST(RegistrationState, ImportBindingAndRegisterEffectsRemainIndependent) {
+  for (bool EH4 : {false, true})
+    for (bool Veneer : {false, true})
+      for (bool PreservesBindings : {false, true})
+        for (bool CachedCall : {false, true})
+          for (unsigned Mutation = 0; Mutation != 6; ++Mutation) {
+            SCOPED_TRACE(::testing::Message()
+                         << EH4 << ' ' << Veneer << ' ' << PreservesBindings
+                         << ' ' << CachedCall << ' ' << Mutation);
+            auto F = EH4 ? makeCookieFrame() : makeBranchingFrame();
+            LowBlock Calls;
+            Calls.Id = 4;
+            Calls.StartAddr = 0x1100;
+            Calls.EndAddr = 0x1156;
+            Calls.Succs = {1, 2};
+            const auto Boundary = [&](va_t Address, uint16_t Size,
+                                      bool IsCall = false) {
+              Calls.InstructionBoundaries.push_back(
+                  {Address, Size, Calls.Ops.size(), 1});
+              if (IsCall)
+                Calls.InstructionBoundaries.back().Control =
+                    LowInstructionControl::Call;
+            };
+            Boundary(0x1100, 6);
+            Calls.InstructionBoundaries.back().OpCount = 4;
+            emitOp(Calls, 0x1100, NdOp::COPY, NdVar::tmp(0, 4),
+                   {NdVar::cst(0x2100, 4)});
+            emitOp(Calls, 0x1100, NdOp::INT_ZEXT, NdVar::tmp(8, 8),
+                   {NdVar::tmp(0, 4)});
+            emitOp(Calls, 0x1100, NdOp::LOAD, NdVar::tmp(16, 4),
+                   {NdVar::tmp(8, 8)});
+            emitOp(Calls, 0x1100, NdOp::COPY, NdVar::reg(x86reg::RSI, 4),
+                   {NdVar::tmp(16, 4)});
+            std::vector<RegistrationCalleeStackContract> Stacks{
+                {0x2100, 0, true, {{0x1100, 2}}}};
+            Stacks[0].PreservesImportBindings = PreservesBindings;
+            if (Veneer) {
+              Stacks.push_back({0x2200, 0, false, {}, {0x2100}});
+              Stacks.back().ImportVeneer = true;
+              Stacks.back().PreservesImportBindings = PreservesBindings;
+            }
+            if (Mutation == 1) {
+              Boundary(0x1110, 10);
+              emitOp(Calls, 0x1110, NdOp::STORE, {},
+                     {NdVar::cst(0x2100, 4), NdVar::cst(0, 4)});
+            }
+            if (Mutation == 2) {
+              Boundary(0x1110, 5, true);
+              emitOp(Calls, 0x1110, NdOp::CALL, {}, {NdVar::cst(0x2300, 4)});
+              Stacks.push_back({0x2300, 0, false});
+            }
+            if (Mutation == 3) {
+              if (Veneer)
+                Stacks.back().RequiredImports.clear();
+              else
+                Stacks[0].ImportVeneer = true;
+            }
+            if (Mutation == 5) {
+              Stacks.push_back({0x2300, 0, false});
+              Stacks.back().PreservesImportBindings = true;
+            }
+            Boundary(0x1120, Veneer ? 5 : 6, true);
+            emitOp(Calls, 0x1120, Veneer ? NdOp::CALL : NdOp::INDIR_CALL, {},
+                   {NdVar::cst(Veneer ? 0x2200 : 0x2100, 4)});
+            if (Mutation == 4) {
+              Boundary(0x1130, 10);
+              emitOp(Calls, 0x1130, NdOp::STORE, {},
+                     {NdVar::cst(0x2100, 4), NdVar::cst(0, 4)});
+            }
+            Boundary(0x1140, CachedCall ? 2 : 6, true);
+            emitOp(Calls, 0x1140, NdOp::INDIR_CALL, {},
+                   {CachedCall ? NdVar::reg(x86reg::RSI, 4)
+                               : NdVar::cst(0x2100, 4)});
+            Boundary(0x1150, 3);
+            emitOp(Calls, 0x1150, NdOp::INT_SUB, NdVar::reg(x86reg::RSP, 4),
+                   {NdVar::reg(x86reg::RSP, 4), NdVar::cst(4, 4)});
+            Boundary(0x1153, 3);
+            emitOp(Calls, 0x1153, NdOp::STORE, {},
+                   {NdVar::reg(x86reg::RSP, 4), NdVar::cst(7, 4)});
+            F.Blocks[0].Succs = {4};
+            F.Blocks.push_back(std::move(Calls));
+            const auto A = analyzeRegistrationStates(F, EH4 ? 0x4000 : 0, 0,
+                                                     nullptr, nullptr, &Stacks);
+            EXPECT_EQ(A.Complete,
+                      (Mutation == 0 && (CachedCall || PreservesBindings)) ||
+                          (Mutation == 4 && CachedCall));
+            EXPECT_FALSE(A.CallFrameEffectsComplete);
+            EXPECT_TRUE(A.CallFrameEffects.empty());
+            EXPECT_TRUE(A.SEHBoundCalls.empty());
+          }
+}
+
 namespace {
 LowFunc makeCxxObjectCleanup() {
   auto F = makeCxxObjectCall();

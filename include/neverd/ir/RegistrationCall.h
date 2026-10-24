@@ -58,6 +58,13 @@ struct RegistrationCalleeStackContract {
   /// proof assumes these bindings still hold at entry. Sorted and unique;
   /// an indirect contract instead depends on Target itself.
   std::vector<va_t> RequiredImports;
+  /// An exact immutable FF25 tail veneer to RequiredImports' single slot.
+  /// Under that binding it inherits the import's nonvolatile register ABI.
+  bool ImportVeneer = false;
+  /// A separate normal-return effect of an authenticated import or veneer:
+  /// existing eager-IAT bindings survive. This never restores a lost binding
+  /// or grants frame access, result provenance, native EH or no-throw facts.
+  bool PreservesImportBindings = false;
 };
 
 /// Runtime identity alone grants no frame effect. The state solver must bind

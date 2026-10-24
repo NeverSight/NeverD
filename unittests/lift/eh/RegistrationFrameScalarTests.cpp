@@ -231,6 +231,35 @@ TEST(RegistrationFrameScalar,
       State.Registers[x86reg::RSI / x86reg::GeneralRegStride].ImportTarget);
 }
 
+TEST(RegistrationFrameScalar, ImportPreservationDoesNotRestoreLostFacts) {
+  for (bool Intact : {false, true})
+    for (bool PreserveTargets : {false, true})
+      for (bool PreserveBindings : {false, true}) {
+        FrameState State;
+        State.ImportBindingsIntact = Intact;
+        State.Registers[x86reg::RSI / x86reg::GeneralRegStride] =
+            FrameValue::importTarget(0x403000);
+        State.Registers[x86reg::RSP / x86reg::GeneralRegStride] =
+            FrameValue::frame(-64);
+        FrameTransfer Transfer(State, -16);
+        LowOp Call;
+        Call.Opcode = NdOp::INDIR_CALL;
+        Call.Output = NdVar::reg(x86reg::RAX, 4);
+        Call.addInput(NdVar::reg(x86reg::RSI, 4));
+        Transfer.write(Call, {}, 0, PreserveTargets, PreserveBindings);
+        EXPECT_EQ(State.ImportBindingsIntact,
+                  Intact && PreserveTargets && PreserveBindings);
+        const auto &Result =
+            State.Registers[x86reg::RAX / x86reg::GeneralRegStride];
+        EXPECT_TRUE(Result.MayBeFrame);
+        EXPECT_FALSE(Result.Constant);
+        EXPECT_FALSE(Result.ImageAddress);
+        EXPECT_FALSE(Result.ImportTarget);
+        EXPECT_FALSE(
+            State.Registers[x86reg::RSP / x86reg::GeneralRegStride].Offset);
+      }
+}
+
 TEST(RegistrationFrameScalar, SegmentedWritesNeedAnImageDisjointnessProof) {
   for (unsigned Mutation = 0; Mutation != 5; ++Mutation) {
     FrameState State;

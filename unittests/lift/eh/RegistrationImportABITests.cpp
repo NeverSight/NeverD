@@ -184,6 +184,12 @@ TEST(RegistrationImportABI, StartupCleanupRequiresCurrentProviderAndStorage) {
         }
         EXPECT_EQ(getCheckedX86CalleeStackPop(Image, ImportImage::TextVA),
                   Mutation < 2 ? std::optional<uint32_t>{0} : std::nullopt);
+        EXPECT_EQ(registration_abi::preservesRegistrationImportBindings(
+                      Image, ImportImage::IATVA),
+                  (llvm::StringRef(C.Name) == "DecodePointer" ||
+                   llvm::StringRef(C.Name) == "EncodePointer") &&
+                      (Mutation < 2 || Mutation == 14 || Mutation == 15 ||
+                       Mutation == 19 || Mutation == 22));
         // Stack balance grants neither a private object borrow nor memory
         // initialization, even when the imported routine writes its arguments.
         EXPECT_FALSE(getCheckedX86RegistrationObjectCalleeABI(
@@ -402,9 +408,12 @@ TEST(RegistrationImportABI, CachedImportTargetsKeepOnlyTheirReturningStackABI) {
           Image.Imports[0].Module = "unproved.dll";
         if (Mutation == 2)
           Image.Imports[0].IsDelayImport = true;
-        const bool Valid = Mutation == 0 || Mutation == 7 || Mutation == 11 ||
-                           Mutation == 15 || Mutation == 20 ||
-                           (Mutation == 13 && Register >= 3);
+        const bool Valid =
+            Mutation == 0 || Mutation == 7 || Mutation == 11 ||
+            Mutation == 15 || Mutation == 20 ||
+            (Mutation == 13 && Register >= 3) ||
+            (!CallerCleanup &&
+             (Mutation == 16 || (Mutation == 18 && Register >= 3)));
         EXPECT_EQ(getCheckedX86CalleeStackPop(Image, ImportImage::TextVA),
                   Valid ? std::optional<uint32_t>{0} : std::nullopt);
         EXPECT_FALSE(getCheckedX86RegistrationObjectCalleeABI(
@@ -518,6 +527,123 @@ TEST(RegistrationImportABI, DirectCleanupNeedsTheInvokedImportBinding) {
         EXPECT_EQ(Contracts->front().RequiredImports,
                   (std::vector<va_t>{ImportImage::IATVA}));
       }
+    }
+}
+
+TEST(RegistrationImportABI, PointerTransformsRetainOnlyLiveImportBindings) {
+  for (const auto *Name : {"DecodePointer", "EncodePointer", "Sleep"})
+    for (unsigned Form = 0; Form != 3; ++Form)
+      for (unsigned Mutation = 0; Mutation != 6; ++Mutation) {
+        SCOPED_TRACE(::testing::Message()
+                     << Name << ' ' << Form << ' ' << Mutation);
+        ImportImage F({Name, 1}, false);
+        auto &Image = F.Image;
+        auto &Text = Image.Segments[0];
+        auto &Bytes = Text.Data;
+        Bytes.clear();
+        const auto Store = [&] {
+          Bytes.insert(Bytes.end(), {0xc7, 0x05, 0, 0x30, 0x40, 0, 0, 0, 0, 0});
+        };
+        const auto Invoke = [&] {
+          Bytes.insert(Bytes.end(), {0x6a, 0});
+          if (Form == 2) {
+            const auto CallVA = Text.VA + Bytes.size();
+            Bytes.push_back(0xe8);
+            const auto Field = Bytes.size();
+            Bytes.resize(Field + 4);
+            writeLE<uint32_t>(Bytes.data() + Field,
+                              ImportImage::StubVA - (CallVA + 5));
+          } else
+            Bytes.insert(Bytes.end(), {0xff, 0x15, 0, 0x30, 0x40, 0});
+        };
+        if (Mutation == 1)
+          Store();
+        Invoke();
+        if (Mutation == 2)
+          Store();
+        if (Mutation == 3) {
+          const auto CallVA = Text.VA + Bytes.size();
+          Bytes.push_back(0xe8);
+          const auto Field = Bytes.size();
+          Bytes.resize(Field + 4);
+          writeLE<uint32_t>(Bytes.data() + Field,
+                            ImportImage::StubVA + 6 - (CallVA + 5));
+        }
+        if (Form == 1)
+          Bytes.insert(Bytes.end(),
+                       {0x8b, 0x35, 0, 0x30, 0x40, 0, 0x6a, 0, 0xff, 0xd6});
+        else
+          Invoke();
+        Bytes.insert(Bytes.end(), {0x31, 0xc0, 0xc3});
+        ASSERT_LE(Bytes.size(), ImportImage::StubVA - Text.VA);
+        Bytes.resize(ImportImage::StubVA - Text.VA, 0xcc);
+        Bytes.insert(Bytes.end(), {0xff, 0x25, 0, 0x30, 0x40, 0, 0xc3});
+        Text.Size = Text.FileSz = Bytes.size();
+        Image.Sections[0].Size = Image.Sections[0].FileSz = Text.Size;
+        if (Mutation == 4)
+          Image.Imports[0].Module = "unproved.dll";
+        if (Mutation == 5)
+          Image.Imports[0].IsDelayImport = true;
+        const bool Valid = Mutation == 0 && llvm::StringRef(Name) != "Sleep";
+        EXPECT_EQ(getCheckedX86CalleeStackPop(Image, ImportImage::TextVA),
+                  Valid ? std::optional<uint32_t>{0} : std::nullopt);
+        Decoder Dec;
+        ASSERT_TRUE(Dec.init(Image));
+        const auto Function = CFGBuilder().buildIntegerFrameProof(
+            Image, Dec, ImportImage::TextVA, "import-effects");
+        RegistrationCallCalleeIndex Index(Image);
+        const auto Contracts = Index.stackContracts(Function);
+        ASSERT_TRUE(Contracts);
+        for (const auto &Contract : *Contracts) {
+          if (Contract.Target !=
+              (Form == 2 ? ImportImage::StubVA : ImportImage::IATVA))
+            continue;
+          EXPECT_EQ(Contract.ImportVeneer, Form == 2);
+          EXPECT_EQ(Contract.PreservesImportBindings,
+                    llvm::StringRef(Name) != "Sleep");
+        }
+        EXPECT_FALSE(getCheckedX86RegistrationObjectCalleeABI(
+            Image, ImportImage::TextVA));
+        EXPECT_FALSE(getCheckedX86RegistrationInitializerCalleeABI(
+            Image, ImportImage::TextVA));
+      }
+}
+
+TEST(RegistrationImportABI, ImportVeneersPreserveCachedNonvolatileTargets) {
+  for (const auto *Name : {"DecodePointer", "Sleep", "_lock"})
+    for (unsigned Mutation = 0; Mutation != 4; ++Mutation) {
+      SCOPED_TRACE(::testing::Message() << Name << ' ' << Mutation);
+      const bool CallerCleanup = llvm::StringRef(Name) == "_lock";
+      ImportImage F({Name, 1}, false, CallerCleanup);
+      if (CallerCleanup)
+        F.Image.Imports[0].Module = "msvcr100.dll";
+      auto &Text = F.Image.Segments[0];
+      auto &Bytes = Text.Data;
+      Bytes = {0x8b, 0x35, 0, 0x30, 0x40, 0};
+      if (Mutation == 1)
+        Bytes.insert(Bytes.end(), {0xc7, 0x05, 0, 0x30, 0x40, 0, 0, 0, 0, 0});
+      Bytes.insert(Bytes.end(), {0x6a, 0, 0xe8});
+      const auto Field = Bytes.size();
+      Bytes.resize(Field + 4);
+      writeLE<uint32_t>(Bytes.data() + Field,
+                        ImportImage::StubVA - (Text.VA + Field + 4));
+      if (CallerCleanup)
+        Bytes.insert(Bytes.end(), {0x83, 0xc4, 4});
+      Bytes.insert(Bytes.end(), {0x6a, 0, 0xff, 0xd6});
+      if (CallerCleanup)
+        Bytes.insert(Bytes.end(), {0x83, 0xc4, 4});
+      Bytes.insert(Bytes.end(), {0x31, 0xc0, 0xc3});
+      Bytes.resize(ImportImage::StubVA - Text.VA, 0xcc);
+      if (Mutation == 2)
+        Bytes.insert(Bytes.end(), {0x31, 0xf6, 0xc2, 4, 0});
+      else
+        Bytes.insert(Bytes.end(), {0xff, 0x25, 0, 0x30, 0x40, 0});
+      Text.Size = Text.FileSz = Bytes.size();
+      F.Image.Sections[0].Size = F.Image.Sections[0].FileSz = Text.Size;
+      if (Mutation == 3)
+        Text.Flags = Text.Flags | SegmentFlags::Writable;
+      EXPECT_EQ(getCheckedX86CalleeStackPop(F.Image, ImportImage::TextVA),
+                Mutation == 0 ? std::optional<uint32_t>{0} : std::nullopt);
     }
 }
 

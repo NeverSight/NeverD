@@ -259,8 +259,10 @@ public:
 
   /// Cached callables survive only a separately authenticated import ABI.
   /// Returning-stack facts for arbitrary local callees supply no such fact.
+  /// Keeping a live slot binding additionally needs its own call effect.
   void write(const LowOp &Op, FrameValue Value, va_t CookieCheckVA = 0,
-             bool PreserveImportedTargets = false);
+             bool PreserveImportedTargets = false,
+             bool PreserveImportBindings = false);
 
 private:
   std::optional<FrameValue> evaluateRelativeScalar(const LowOp &Op) const;

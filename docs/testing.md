@@ -5881,6 +5881,15 @@ and valid wrappers must retain their transitive IAT dependencies.
 `ImportedStackCleanupRequiresItsCurrentBinding` checks the corresponding
 EH3/EH4 state consumers, partial overlap, unknown aliases, prior calls,
 malformed dependency lists and disjoint or later writes.
+`PointerTransformsRetainOnlyLiveImportBindings` checks consecutive direct,
+cached-load and veneer invocations with intervening writes or opaque calls;
+`Sleep` remains a control without a binding-preservation effect.
+`ImportVeneersPreserveCachedNonvolatileTargets` checks nonvolatile callable
+identity across exact stdcall and zero-pop legacy CRT veneers, refusing a
+modified binding or local callee.
+`ImportBindingAndRegisterEffectsRemainIndependent` checks both source-state
+consumers and rejects malformed effect contracts. Frame transfer tests also
+ensure preservation cannot revive a lost binding or invent a pointer result.
 `CachedImportsRespectCumulativeWork` checks the exact work boundary and refusal
 on exhaustion. `OpaqueCallsCannotCertifyCachedTargetPreservation` isolates the
 register-preservation boundary from all returning-stack facts.
