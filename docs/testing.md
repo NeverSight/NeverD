@@ -9210,6 +9210,11 @@ two image bases, rejects cancellation against equal unrelocated literals,
 and covers conflicting, overlapping, partial and control-flow fixups. The
 observed and discarded leaf-result queries reject the same cancellation,
 with both classified and unclassified relocations.
+`RelocatedStoresRetainExactImportAliasBounds` checks direct and register-carried
+image writes at two bases, including stable address arithmetic. Disjoint writes
+retain the imported stack adjustment; full and partial IAT overlaps, duplicate
+or malformed fixups and conflicting address receipts reject it. Cached import
+tests apply the same alias rule before and after loading a callable target.
 `RegistrationImportABI` covers the seven checked Kernel32 startup imports
 through direct IAT calls and decoded jump veneers. Wrong providers, delay
 imports, conflicting or truncated storage, missing import-directory evidence,

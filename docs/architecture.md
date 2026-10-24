@@ -2284,7 +2284,10 @@ explicit restoration through an ABI-preserved register can recover it. Memory
 loads do not acquire a saved-stack identity in the ordinary-body analysis.
 For this stack-only query, decoded full-width absolute instruction fields may
 carry checked PE32 HIGHLOW relocations, including arithmetic operands. Their
-values are unknown in the affine replay: equality at the preferred image base
+unclassified values are unknown in the affine replay. Loader-proved addresses
+retain the shared frame domain's image identity, so a disjoint image write does
+not invalidate a later import's stack-cleanup contract. Neither representation
+becomes an integer stack displacement: equality at the preferred image base
 cannot prove a stack adjustment after rebasing. Direct register restoration
 remains valid independently of those values. Relative control operands,
 overlapping or malformed fixups and writable code still reject the proof.

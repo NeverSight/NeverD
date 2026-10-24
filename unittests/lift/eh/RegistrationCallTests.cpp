@@ -367,6 +367,8 @@ TEST(RegistrationCallABI, ReturningStackDoesNotFreezeRelocatedOperands) {
           if (Classified)
             Image.DataAddressRelocOperands[Text.VA + Field] = {Value, Value, 4,
                                                                Text.VA};
+          EXPECT_EQ(getCheckedX86CalleeStackPop(Image, Image.Entry),
+                    ExpectedPop);
           for (auto Result : {RegistrationLeafResult::Observed,
                               RegistrationLeafResult::Discarded})
             EXPECT_FALSE(getCheckedX86RegistrationLeafCalleeABI(

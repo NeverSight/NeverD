@@ -467,12 +467,72 @@ TEST(RegistrationImportABI, CachedImportsNeedEveryInvokedSlotBinding) {
     Bytes.insert(Bytes.end(), {0x6a, 0, 0xff, 0xd6, 0x31, 0xc0, 0xc3});
     Text.Size = Text.FileSz = Bytes.size();
     Image.Sections[0].Size = Image.Sections[0].FileSz = Text.Size;
-    // This stack-only proof forgets relocated store addresses. Even the
-    // disjoint global write therefore remains conservatively unproved.
     EXPECT_EQ(getCheckedX86CalleeStackPop(Image, ImportImage::TextVA),
-              Mutation == 0 || Mutation == 3 ? std::optional<uint32_t>{0}
-                                             : std::nullopt);
+              Mutation == 0 || Mutation == 3 || Mutation == 4
+                  ? std::optional<uint32_t>{0}
+                  : std::nullopt);
   }
+}
+
+TEST(RegistrationImportABI, RelocatedStoresRetainExactImportAliasBounds) {
+  for (uint32_t Slide : {0u, 0x17c00000u})
+    for (unsigned Form = 0; Form != 3; ++Form)
+      for (unsigned Offset : {0u, 1u, 3u, 4u, 8u})
+        for (unsigned Mutation = 0; Mutation != 4; ++Mutation) {
+          SCOPED_TRACE(::testing::Message() << Slide << ' ' << Form << ' '
+                                            << Offset << ' ' << Mutation);
+          ImportImage F({"Sleep", 1}, false);
+          auto &Image = F.Image;
+          Image.Base += Slide;
+          Image.Entry += Slide;
+          for (auto &Segment : Image.Segments)
+            Segment.VA += Slide;
+          for (auto &Section : Image.Sections)
+            Section.VA += Slide;
+          const va_t Slot = ImportImage::IATVA + Slide;
+          Image.Imports[0].IATAddr = Slot;
+          Image.ImportStorageSlots.clear();
+          ASSERT_TRUE(Image.recordImportStorageSlot(
+              Slot, "Sleep", 0, ImportStorageEvidence::ImportDirectory));
+          auto &Data = Image.Segments[1];
+          Data.Data.resize(16);
+          Data.Size = Data.FileSz = Data.Data.size();
+          Image.Sections[1].Size = Image.Sections[1].FileSz = Data.Size;
+          auto &Text = Image.Segments[0];
+          auto &Bytes = Text.Data;
+          Bytes.clear();
+          if (Form == 0)
+            Bytes.insert(Bytes.end(), {0xc7, 0x05}); // mov [address], 0
+          else
+            Bytes.push_back(0xba); // mov edx, address
+          const size_t Field = Bytes.size();
+          Bytes.resize(Field + 4);
+          const uint32_t Address = Slot + Offset - (Form == 2 ? 4 : 0);
+          writeLE<uint32_t>(Bytes.data() + Field, Address);
+          if (Form == 2)
+            Bytes.insert(Bytes.end(), {0x83, 0xc2, 4});
+          if (Form != 0)
+            Bytes.insert(Bytes.end(), {0xc7, 2}); // mov [edx], 0
+          Bytes.insert(Bytes.end(), {0, 0, 0, 0, 0x6a, 0, 0xff, 0x15});
+          const size_t CallField = Bytes.size();
+          Bytes.resize(CallField + 4);
+          writeLE<uint32_t>(Bytes.data() + CallField, Slot);
+          Bytes.insert(Bytes.end(), {0x31, 0xc0, 0xc3});
+          Text.Size = Text.FileSz = Bytes.size();
+          Image.Sections[0].Size = Image.Sections[0].FileSz = Text.Size;
+          Image.BaseRelocations = {{Text.VA + Field, 3}};
+          Image.DataAddressRelocOperands[Text.VA + Field] = {Address, Address,
+                                                             4, Data.VA};
+          if (Mutation == 1)
+            Image.BaseRelocations.push_back(Image.BaseRelocations.front());
+          if (Mutation == 2)
+            Image.BaseRelocations[0].Type = 10;
+          if (Mutation == 3)
+            Image.DataAddressRelocOperands.at(Text.VA + Field).TargetVA += 4;
+          EXPECT_EQ(getCheckedX86CalleeStackPop(Image, Text.VA),
+                    Mutation == 0 && Offset >= 4 ? std::optional<uint32_t>{0}
+                                                 : std::nullopt);
+        }
 }
 
 TEST(RegistrationImportABI, DirectCleanupNeedsTheInvokedImportBinding) {

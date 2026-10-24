@@ -206,7 +206,8 @@ struct StackBody {
                                     Operands))
       return false;
     // The opcode is immutable, but these operand values may change with the
-    // load address. The stack-only query below deliberately forgets them.
+    // load address. The stack-only query below forgets unclassified values;
+    // exact addresses retain their separate identity in the frame domain.
     // This grants no callee memory, return-value or native-EH authority.
     auto &Constants = VariantConstants[Boundary.Address];
     for (va_t Operand : Operands)
@@ -219,7 +220,7 @@ struct StackBody {
     const auto Constants = VariantConstants.find(Op.Addr);
     for (unsigned I = 0; I != Abstract.NumInputs; ++I) {
       auto &Input = Abstract.Inputs[I];
-      if (Input.isConst() &&
+      if (Input.isConst() && !isExactAddressProvenance(Input.Provenance) &&
           (isAddressProvenance(Input.Provenance) ||
            (Constants != VariantConstants.end() &&
             Constants->second.count(uint32_t(Input.Offset)))))
