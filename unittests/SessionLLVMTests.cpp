@@ -8,7 +8,7 @@
 #include "gtest/gtest.h"
 
 #include "neverd/backend/RewriteSourceIdentity.h"
-#include "neverd/lift/X86Regs.h"
+#include "neverd/lift/X86/X86Regs.h"
 
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/Constants.h"

@@ -1,4 +1,5 @@
 add_subdirectory(neverd-bench)
+add_subdirectory(common/transport)
 add_subdirectory(neverd)
 add_subdirectory(neverd-sigmaker)
 add_subdirectory(neverd-bytecode)

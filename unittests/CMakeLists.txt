@@ -75,6 +75,14 @@ target_include_directories(NeverDSupportThreadTests PRIVATE
 
 add_subdirectory(acceleration)
 
+add_neverd_unittest(NeverDExportTableTests
+  ExportTableTests.cpp
+  "${CMAKE_SOURCE_DIR}/tools/neverd/ExportTable.cpp"
+  LINK_LIBS neverd_tool_json LLVMSupport
+)
+target_include_directories(NeverDExportTableTests PRIVATE
+  "${CMAKE_SOURCE_DIR}/tools/neverd" ${LLVM_INCLUDE_DIRS})
+
 add_neverd_unittest(NeverDLowUndefinedDigestTests
   LowUndefinedDigestTests.cpp
   LINK_COMPONENTS IRLowValidation

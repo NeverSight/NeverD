@@ -2845,6 +2845,56 @@ TEST_F(SessionCAPITest, DashboardHashesTheInputFile) {
   EXPECT_EQ(Hashes->getString("md5"), "9ee02fc015f79641c0620e674c5be3c7");
 }
 
+TEST_F(SessionCAPITest, ExportsEmptyBeforeAndAfterLoad) {
+  EXPECT_EQ(takeString(neverd_exports_json(Session)), "[]");
+  const auto Input = write("no-exports.evm", "00");
+  ASSERT_EQ(neverd_session_load(Session, Input.c_str()), 1);
+  EXPECT_EQ(takeString(neverd_exports_json(Session)), "[]");
+}
+
+TEST_F(SessionCAPITest, ExportsPreserveRowsAndText) {
+  const auto Input = write("exports.elf", makeNamedNativeELF("entry"));
+  ASSERT_EQ(neverd_session_load(Session, Input.c_str()), 1);
+  auto &Exports = neverd::sdk::toSession(Session)->Img.Exports;
+  Exports = {{"", 0, 0},
+             {"quote\"\\\n\t\b\f\r\x01", 17, 0x123},
+             {"valid_\xc3\xa9_\xe4\xb8\xad_\xf0\x9f\x98\x80", 0xffffffffU,
+              0xffffffffffffffffULL},
+             {std::string("nul\0tail", 8), 7, 0x100000000ULL},
+             {"bad_\xff\x80", 2, 0x90},
+             {"duplicate", 4, 0x10},
+             {"duplicate", 4, 0x10}};
+  EXPECT_EQ(
+      takeString(neverd_exports_json(Session)),
+      R"([{"addr":"0x0","name":"","ordinal":0},)"
+      R"({"addr":"0x123","name":"quote\"\\\n\t\u0008\u000c\r\u0001","ordinal":17},)"
+      R"({"addr":"0xFFFFFFFFFFFFFFFF","name":"valid_)"
+      "\xc3\xa9_\xe4\xb8\xad_\xf0\x9f\x98\x80"
+      R"(","ordinal":4294967295},)"
+      R"({"addr":"0x100000000","name":"nul\u0000tail","ordinal":7},)"
+      R"({"addr":"0x90","name":"bad_)"
+      "\xef\xbf\xbd\xef\xbf\xbd"
+      R"(","ordinal":2},)"
+      R"({"addr":"0x10","name":"duplicate","ordinal":4},)"
+      R"({"addr":"0x10","name":"duplicate","ordinal":4}])");
+}
+
+TEST_F(SessionCAPITest, ExportsReadCurrentImageRows) {
+  const auto Input = write("export-edits.elf", makeNamedNativeELF("entry"));
+  ASSERT_EQ(neverd_session_load(Session, Input.c_str()), 1);
+  auto &Exports = neverd::sdk::toSession(Session)->Img.Exports;
+  Exports = {{"before", 1, 0x1000}};
+  EXPECT_EQ(takeString(neverd_exports_json(Session)),
+            R"([{"addr":"0x1000","name":"before","ordinal":1}])");
+  Exports.front() = {"after", 9, 0x2000};
+  Exports.push_back({"added", 10, 0x3000});
+  EXPECT_EQ(takeString(neverd_exports_json(Session)),
+            R"([{"addr":"0x2000","name":"after","ordinal":9},)"
+            R"({"addr":"0x3000","name":"added","ordinal":10}])");
+  Exports.clear();
+  EXPECT_EQ(takeString(neverd_exports_json(Session)), "[]");
+}
+
 TEST_F(SessionCAPITest, EntryPointsIncludeEVMZeroAddress) {
   const std::string Input = write("entry.evm", "00");
   ASSERT_EQ(neverd_session_load(Session, Input.c_str()), 1);

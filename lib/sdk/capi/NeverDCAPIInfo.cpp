@@ -312,15 +312,20 @@ const char *neverd_exports_json(neverd_session_t Sess) {
   if (!S->Loaded)
     return dupStr(std::string("[]"));
 
-  llvm::json::Array Arr;
-  for (const auto &Exp : S->Img.Exports) {
-    llvm::json::Object Obj;
-    Obj["name"] = jsonSafeText(Exp.Name);
-    Obj["ordinal"] = static_cast<int64_t>(Exp.Ordinal);
-    Obj["addr"] = vaHex(Exp.Addr);
-    Arr.push_back(std::move(Obj));
-  }
-  return dupStr(jsonToString(llvm::json::Value(std::move(Arr))));
+  // Stream in the sorted key order a json::Object prints.
+  std::string Buf;
+  llvm::raw_string_ostream OS(Buf);
+  llvm::json::OStream J(OS);
+  J.array([&] {
+    for (const auto &Exp : S->Img.Exports)
+      J.object([&] {
+        J.attribute("addr", vaHex(Exp.Addr));
+        J.attribute("name", jsonSafeText(Exp.Name));
+        J.attribute("ordinal", static_cast<int64_t>(Exp.Ordinal));
+      });
+  });
+  OS.flush();
+  return dupStr(Buf);
 }
 
 const char *neverd_segments_json(neverd_session_t Sess) {

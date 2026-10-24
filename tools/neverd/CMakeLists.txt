@@ -54,6 +54,7 @@ add_neverd_tool(neverd
   NeverDCLIFunctions.cpp
   NeverDSymbolDownload.cpp
   NeverDTranslateOutput.cpp
+  ExportTable.cpp
   cmd/NeverDCmdInfo.cpp
   cmd/NeverDCmdTables.cpp
   cmd/NeverDCmdTypes.cpp
@@ -104,7 +105,9 @@ add_neverd_tool(neverd
   LINK_LIBS
   neverd_shared
   NeverDMobile
+  neverd_tool_json
 )
+neverd_stage_json_notice(neverd)
 
 # Symbol downloads go through the system's HTTP client: WinHTTP on Windows,
 # and elsewhere libcurl, loaded only when a download is asked for.

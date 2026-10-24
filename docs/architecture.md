@@ -1938,6 +1938,10 @@ metadata and byte-preserving repair remain authoritative. Transport parsing
 copies validated simdjson values into the owned nlohmann DOM and checks decoded
 keys during object insertion. Floating-point tokens and negative zero retain
 the original numeric parser; refused SIMD input uses the original admission path.
+The CLI export-table adapter reuses this parser and owned DOM for the SDK's
+shallow export array. It validates every record before formatting and admits
+the full SDK response size, without applying the transport frame-size budget.
+The SDK remains responsible for export order, ordinal width and UTF-8 repair.
 The default task helper uses oneTBB with checked 8 MiB worker stacks. A caller
 with enough unused stack can coordinate directly; small callers get a native
 coordinator. Small batches and explicitly serial weighted batches also use
