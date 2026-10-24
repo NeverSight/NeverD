@@ -50,6 +50,10 @@ struct RegistrationCalleeStackContract {
   va_t Target = InvalidVA;
   uint32_t StackPopBytes = 0;
   bool Indirect = false;
+  /// Current immutable MOV occurrences that read this eager IAT slot. The
+  /// load's instruction address and LowOp sequence bind an opaque callable,
+  /// not the slot address or its initial file bytes as a runtime value.
+  std::vector<std::pair<va_t, int>> Loads;
 };
 
 /// Runtime identity alone grants no frame effect. The state solver must bind

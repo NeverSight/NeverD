@@ -754,6 +754,106 @@ TEST(RegistrationState, StackCleanupDoesNotGrantMemoryBorrowAuthority) {
   }
 }
 
+TEST(RegistrationState,
+     CachedImportCleanupRequiresItsCurrentLoadAndReachingValue) {
+  for (bool EH4 : {false, true})
+    for (unsigned Mutation = 0; Mutation != 17; ++Mutation) {
+      SCOPED_TRACE(EH4);
+      SCOPED_TRACE(Mutation);
+      auto F = EH4 ? makeCookieFrame() : makeBranchingFrame();
+      LowBlock Load;
+      Load.Id = 4;
+      Load.StartAddr = 0x1100;
+      Load.EndAddr = 0x1106;
+      Load.Succs = {5};
+      Load.InstructionBoundaries = {{0x1100, 6, 0, 4}};
+      emitOp(Load, 0x1100, NdOp::COPY, NdVar::tmp(0, 4),
+             {NdVar::cst(0x2100, 4)});
+      emitOp(Load, 0x1100, NdOp::INT_ZEXT, NdVar::tmp(8, 8),
+             {NdVar::tmp(0, 4)});
+      emitOp(Load, 0x1100, NdOp::LOAD, NdVar::tmp(16, 4), {NdVar::tmp(8, 8)});
+      emitOp(Load, 0x1100, NdOp::COPY, NdVar::reg(x86reg::RSI, 4),
+             {NdVar::tmp(16, 4)});
+      LowBlock Call;
+      Call.Id = 5;
+      Call.StartAddr = 0x1110;
+      Call.EndAddr = 0x1117;
+      Call.Succs = {1, 2};
+      Call.InstructionBoundaries = {
+          {0x1110, 2, 0, 1}, {0x1112, 3, 1, 1}, {0x1115, 2, 2, 1}};
+      Call.InstructionBoundaries[0].Control = LowInstructionControl::Call;
+      emitOp(Call, 0x1110, NdOp::INDIR_CALL, {}, {NdVar::reg(x86reg::RSI, 4)});
+      emitOp(Call, 0x1112, NdOp::INT_SUB, NdVar::reg(x86reg::RSP, 4),
+             {NdVar::reg(x86reg::RSP, 4), NdVar::cst(4, 4)});
+      emitOp(Call, 0x1115, NdOp::STORE, {},
+             {NdVar::reg(x86reg::RSP, 4), NdVar::cst(7, 4)});
+      F.Blocks[0].Succs = {4};
+      std::vector<RegistrationCalleeStackContract> Stacks{
+          {0x2100, 0, true, {{0x1100, 2}}}};
+      if (Mutation == 1)
+        Stacks[0].Loads.clear();
+      if (Mutation == 2)
+        Stacks[0].Loads[0].second = 3;
+      if (Mutation == 3)
+        Stacks[0].Target += 4;
+      if (Mutation == 4)
+        Load.Ops[2].Output.Size = 2;
+      if (Mutation == 5)
+        Stacks[0].Loads.push_back(Stacks[0].Loads[0]);
+      if (Mutation == 6)
+        Load.Ops[0].Inputs[0].Offset += 4;
+      if (Mutation == 7)
+        Load.Ops[2].MemoryAddressSpace = NdMemoryAddressSpace::X86FS;
+      if (Mutation == 8)
+        Call.Ops[0].Inputs[0] = NdVar::reg(x86reg::RCX, 4);
+      if (Mutation == 9)
+        Load.Ops[3].Output.Size = 2;
+      if (Mutation == 10)
+        F.Blocks[0].Succs.push_back(5); // One reaching path never loaded ESI.
+      if (Mutation == 11)
+        Stacks[0].Indirect = false;
+      if (Mutation == 12)
+        Call.Ops[0].MemoryAddressSpace = NdMemoryAddressSpace::X86FS;
+      if (Mutation == 13)
+        Call.Ops[0].MemoryOrdering = NdMemoryOrdering::Acquire;
+      if (Mutation >= 14) {
+        LowBlock Intermediary;
+        Intermediary.Id = 6;
+        Intermediary.StartAddr = 0x1120;
+        Intermediary.EndAddr = 0x1136;
+        Intermediary.Succs = {5};
+        Load.Succs = {6};
+        if (Mutation == 15) {
+          Intermediary.InstructionBoundaries.push_back({0x1120, 10, 0, 1});
+          emitOp(Intermediary, 0x1120, NdOp::STORE, {},
+                 {NdVar::cst(0x2100, 4), NdVar::cst(0, 4)});
+        }
+        if (Mutation == 16) {
+          Intermediary.InstructionBoundaries.push_back({0x1120, 6, 0, 1});
+          Intermediary.InstructionBoundaries.back().Control =
+              LowInstructionControl::Call;
+          emitOp(Intermediary, 0x1120, NdOp::INDIR_CALL, {},
+                 {NdVar::cst(0x2100, 4)});
+        }
+        Intermediary.InstructionBoundaries.push_back(
+            {0x1130, 6, Intermediary.Ops.size(), 1});
+        Intermediary.InstructionBoundaries.back().Control =
+            LowInstructionControl::Call;
+        emitOp(Intermediary, 0x1130, NdOp::INDIR_CALL, {},
+               {NdVar::cst(0x2100, 4)});
+        F.Blocks.push_back(std::move(Intermediary));
+      }
+      F.Blocks.push_back(std::move(Load));
+      F.Blocks.push_back(std::move(Call));
+      const auto A = analyzeRegistrationStates(F, EH4 ? 0x4000 : 0, 0, nullptr,
+                                               nullptr, &Stacks);
+      EXPECT_EQ(A.Complete, Mutation == 0 || Mutation == 14);
+      EXPECT_FALSE(A.CallFrameEffectsComplete);
+      EXPECT_TRUE(A.CallFrameEffects.empty());
+      EXPECT_TRUE(A.CalleeContracts.empty());
+    }
+}
+
 namespace {
 LowFunc makeCxxObjectCleanup() {
   auto F = makeCxxObjectCall();

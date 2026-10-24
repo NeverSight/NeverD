@@ -140,6 +140,8 @@ void RegistrationStateSolver::merge(size_t Target, const Domain &Source) {
 
 Domain dispatchSource(const Domain &Source) {
   Domain Root;
+  // Runtime dispatch supplies no proof that eager IAT bindings stayed intact.
+  Root.Frame.ImportBindingsIntact = false;
   Root.Frame.Cells = Source.Frame.Cells;
   Root.Frame.EntryCells = Source.Frame.EntryCells;
   Root.JumpCaptures = Source.JumpCaptures;

@@ -142,7 +142,17 @@ bool RegistrationStateSolver::transferBlock(size_t I, const Domain &Before,
       }
       continue;
     }
-    FrameValue Value = Transfer.evaluate(Op, After.Installed);
+    if (!StackImportSlots.empty()) {
+      if (!charge(StackImportSlots.size() + 1))
+        break;
+      Transfer.invalidateImportBindings(Op, StackImportSlots);
+    }
+    const auto ImportLoad = StackImportLoads.find({Op.Addr, Op.Seq});
+    FrameValue Value =
+        Transfer.evaluate(Op, After.Installed,
+                          ImportLoad == StackImportLoads.end()
+                              ? std::nullopt
+                              : std::optional<va_t>{ImportLoad->second});
     std::optional<FrameValue> CallResult;
     if (Conditional) {
       // The caller's physical registration address changes during native
@@ -635,25 +645,39 @@ bool RegistrationStateSolver::transferBlock(size_t I, const Domain &Before,
     // Stack balance alone does not discharge transferCall's memory, object
     // initialization or no-return obligations. Retain their refusal while
     // recovering the independent register coordinate for ordinary flow.
-    if (!CallSP && (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) &&
-        Op.NumInputs == 1 && Op.Inputs[0].isConst() && Op.Inputs[0].Size == 4) {
+    bool ImportedCall = false;
+    if ((Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) &&
+        Op.NumInputs == 1 && Op.Inputs[0].Size == 4 &&
+        Op.MemoryAddressSpace == NdMemoryAddressSpace::Default &&
+        Op.MemoryOrdering == NdMemoryOrdering::None) {
+      const auto Target =
+          Op.Inputs[0].isConst() ? std::optional<va_t>{Op.Inputs[0].Offset}
+          : Op.Opcode == NdOp::INDIR_CALL
+              ? std::optional<va_t>{Transfer.read(Op.Inputs[0]).ImportTarget}
+              : std::nullopt;
       const auto It =
-          StackPops.find({Op.Inputs[0].Offset, Op.Opcode == NdOp::INDIR_CALL});
+          Target ? StackPops.find({*Target, Op.Opcode == NdOp::INDIR_CALL})
+                 : StackPops.end();
       const auto Boundary = Boundaries.find(Op.Addr);
       if (It != StackPops.end() && Op.Seq >= 0 &&
           Boundary != Boundaries.end() && Boundary->second.first == Block.Id &&
           Boundary->second.second.Control == LowInstructionControl::Call) {
-        LowOp Adjust;
-        Adjust.Opcode = NdOp::INT_ADD;
-        Adjust.Output = NdVar::reg(x86reg::RSP, 4);
-        Adjust.NumInputs = 2;
-        Adjust.Inputs[0] = Adjust.Output;
-        Adjust.Inputs[1] = NdVar::cst(It->second, 4);
-        CallSP = Transfer.evaluate(Adjust, After.Installed);
+        ImportedCall =
+            Op.Opcode == NdOp::INDIR_CALL &&
+            (!Op.Inputs[0].isConst() || After.Frame.ImportBindingsIntact);
+        if (!CallSP) {
+          LowOp Adjust;
+          Adjust.Opcode = NdOp::INT_ADD;
+          Adjust.Output = NdVar::reg(x86reg::RSP, 4);
+          Adjust.NumInputs = 2;
+          Adjust.Inputs[0] = Adjust.Output;
+          Adjust.Inputs[1] = NdVar::cst(It->second, 4);
+          CallSP = Transfer.evaluate(Adjust, After.Installed);
+        }
       }
     }
     recordSEHStackRestore(Op, After, Transfer, Value);
-    Transfer.write(Op, Value, CookieCheckVA);
+    Transfer.write(Op, Value, CookieCheckVA, ImportedCall);
     if (JumpCapture)
       After.Frame.Registers[x86reg::RAX / x86reg::GeneralRegStride] =
           FrameValue::constant(0);

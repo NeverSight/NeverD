@@ -88,6 +88,9 @@ struct FrameValue {
   /// An EH4 scope-table address XORed with the security cookie. CookieXOR
   /// contains only the additional stable integer mask.
   std::optional<uint32_t> CookieImageXOR;
+  /// A runtime callable loaded from an authenticated eager import slot.
+  /// This names the provider binding, never the callable's address bits.
+  std::optional<uint32_t> ImportTarget;
 
   std::optional<uint32_t> preferredAddress() const {
     return ImageAddress ? ImageAddress : Constant;
@@ -124,6 +127,11 @@ struct FrameValue {
   static FrameValue imageAddress(uint32_t Value) {
     FrameValue Result;
     Result.ImageAddress = Value;
+    return Result;
+  }
+  static FrameValue importTarget(uint32_t Slot) {
+    FrameValue Result;
+    Result.ImportTarget = Slot;
     return Result;
   }
   static FrameValue callbackFrame(va_t Entry, int32_t Offset) {
@@ -169,6 +177,9 @@ FrameValue projectX86CallReturnValue(const FrameValue &Value);
 
 struct FrameState {
   std::array<FrameValue, 8> Registers;
+  /// Unknown calls or possibly overlapping writes prevent future cached-IAT
+  /// load facts. Cached values have a separate call-preservation obligation.
+  bool ImportBindingsIntact = true;
   /// Flags and vector registers carry conservative byte taint. They cannot
   /// acquire an exact frame offset through a truncation or vector alias.
   std::map<uint64_t, FrameValue> OtherRegisterBytes;
@@ -238,11 +249,18 @@ public:
 
   FrameValue read(const NdVar &Value) const;
 
-  FrameValue evaluate(const LowOp &Op, bool Installed) const;
+  FrameValue evaluate(const LowOp &Op, bool Installed,
+                      std::optional<va_t> ImportLoad = std::nullopt) const;
+
+  void invalidateImportBindings(const LowOp &Op,
+                                const std::set<va_t> &ImportSlots);
 
   bool isCookieCheck(const LowOp &Op, va_t CookieCheckVA) const;
 
-  void write(const LowOp &Op, FrameValue Value, va_t CookieCheckVA = 0);
+  /// Cached callables survive only a separately authenticated import ABI.
+  /// Returning-stack facts for arbitrary local callees supply no such fact.
+  void write(const LowOp &Op, FrameValue Value, va_t CookieCheckVA = 0,
+             bool PreserveImportedTargets = false);
 
 private:
   std::optional<FrameValue> evaluateRelativeScalar(const LowOp &Op) const;

@@ -296,6 +296,215 @@ TEST(RegistrationImportABI, InitializerTablesRetainTheirCallerStackCleanup) {
         }
 }
 
+TEST(RegistrationImportABI, CachedImportTargetsKeepOnlyTheirReturningStackABI) {
+  for (uint8_t Register : {0, 1, 2, 3, 6, 7})
+    for (bool CallerCleanup : {false, true})
+      for (unsigned Mutation = 0; Mutation != 22; ++Mutation) {
+        SCOPED_TRACE(::testing::Message() << unsigned(Register) << ' '
+                                          << CallerCleanup << ' ' << Mutation);
+        ImportImage F({CallerCleanup ? "_initterm_e" : "DecodePointer",
+                       CallerCleanup ? 2u : 1u},
+                      false, CallerCleanup);
+        auto &Image = F.Image;
+        if (CallerCleanup)
+          Image.Imports[0].Module = "msvcr100.dll";
+        auto &Text = Image.Segments[0];
+        auto &Bytes = Text.Data;
+        Bytes.clear();
+        const auto StoreSlot = [&] {
+          Bytes.insert(Bytes.end(), {0xc7, 0x05, 0, 0x30, 0x40, 0, 0, 0, 0, 0});
+        };
+        const auto OpaqueCall = [&] {
+          Bytes.push_back(0xe8);
+          const size_t Field = Bytes.size();
+          Bytes.resize(Field + 4);
+          writeLE<uint32_t>(Bytes.data() + Field,
+                            ImportImage::StubVA - (Text.VA + Field + 4));
+        };
+        const auto ImportCall = [&] {
+          for (unsigned I = 0; I != (CallerCleanup ? 2u : 1u); ++I)
+            Bytes.insert(Bytes.end(), {0x6a, 0});
+          Bytes.insert(Bytes.end(), {0xff, 0x15, 0, 0x30, 0x40, 0});
+          if (CallerCleanup)
+            Bytes.insert(Bytes.end(), {0x83, 0xc4, 8});
+        };
+        if (Mutation == 6)
+          StoreSlot();
+        if (Mutation == 16)
+          ImportCall();
+        if (Mutation == 8)
+          Bytes.insert(Bytes.end(), {0x89, 0x01}); // Unknown memory alias.
+        if (Mutation == 9)
+          OpaqueCall();
+        if (Mutation == 19)
+          Bytes.insert(Bytes.end(), {0x64, 0x89, 0x01});
+        if (Mutation == 21)
+          Bytes.push_back(0x66);
+        if (Mutation == 20 || Mutation == 21)
+          Bytes.insert(Bytes.end(), {0x64, 0x89, 0x15, 0, 0, 0, 0});
+        if (Mutation == 3)
+          Bytes.push_back(0x66); // A partial target load is not a pointer.
+        Bytes.insert(Bytes.end(),
+                     {0x8b, uint8_t(0x05 + Register * 8),
+                      uint8_t(Mutation == 5 ? 4 : 0), 0x30, 0x40, 0});
+        if (Mutation == 4)
+          Bytes.insert(Bytes.end(), {0x66, uint8_t(0xb8 + Register), 0, 0});
+        if (Mutation == 7)
+          StoreSlot(); // The cached pointer remains the earlier value.
+        if (Mutation == 10 || Mutation == 14)
+          OpaqueCall();
+        if (Mutation == 17)
+          StoreSlot();
+        if (Mutation == 18)
+          ImportCall();
+        if (Mutation == 13 || Mutation == 17 || Mutation == 18)
+          ImportCall();
+        uint8_t CallRegister = Register;
+        if (Mutation == 15) {
+          CallRegister = Register == 3 ? 6 : 3;
+          Bytes.insert(Bytes.end(),
+                       {0x89, uint8_t(0xc0 + Register * 8 + CallRegister)});
+        }
+        if (Mutation == 11 || Mutation == 12) {
+          Bytes.insert(Bytes.end(), {0x85, 0xc0, 0x74, 0x02});
+          Bytes.insert(Bytes.end(),
+                       Mutation == 11
+                           ? std::initializer_list<uint8_t>{0x90, 0x90}
+                           : std::initializer_list<uint8_t>{
+                                 0x31, uint8_t(0xc0 + Register * 9)});
+        }
+        for (unsigned I = 0; I != (CallerCleanup ? 2u : 1u); ++I)
+          Bytes.insert(Bytes.end(), {0x6a, 0});
+        Bytes.insert(Bytes.end(), {0xff, uint8_t(0xd0 + CallRegister)});
+        if (CallerCleanup)
+          Bytes.insert(Bytes.end(), {0x83, 0xc4, 8});
+        Bytes.insert(Bytes.end(), {0x31, 0xc0, 0xc3});
+        ASSERT_LT(Bytes.size(), ImportImage::StubVA - Text.VA);
+        Bytes.resize(ImportImage::StubVA - Text.VA, 0xcc);
+        if (Mutation == 14)
+          Bytes.insert(Bytes.end(), {0x31, uint8_t(0xc0 + Register * 9)});
+        Bytes.push_back(0xc3);
+        Text.Size = Text.FileSz = Bytes.size();
+        Image.Sections[0].Size = Image.Sections[0].FileSz = Text.Size;
+        if (Mutation == 1)
+          Image.Imports[0].Module = "unproved.dll";
+        if (Mutation == 2)
+          Image.Imports[0].IsDelayImport = true;
+        const bool Valid = Mutation == 0 || Mutation == 7 || Mutation == 11 ||
+                           Mutation == 15 || Mutation == 20 ||
+                           (Mutation == 13 && Register >= 3);
+        EXPECT_EQ(getCheckedX86CalleeStackPop(Image, ImportImage::TextVA),
+                  Valid ? std::optional<uint32_t>{0} : std::nullopt);
+        EXPECT_FALSE(getCheckedX86RegistrationObjectCalleeABI(
+            Image, ImportImage::TextVA));
+        EXPECT_FALSE(getCheckedX86RegistrationInitializerCalleeABI(
+            Image, ImportImage::TextVA));
+      }
+}
+
+TEST(RegistrationImportABI, CachedLoadReceiptsBindCurrentBytesAndLowIR) {
+  for (bool AccumulatorForm : {false, true})
+    for (unsigned Mutation = 0; Mutation != 20; ++Mutation) {
+      SCOPED_TRACE(::testing::Message() << AccumulatorForm << ' ' << Mutation);
+      ImportImage F({"DecodePointer", 1}, false);
+      auto &Image = F.Image;
+      auto &Text = Image.Segments[0];
+      Text.Data = AccumulatorForm
+                      ? std::vector<uint8_t>{0xa1, 0, 0x30, 0x40, 0}
+                      : std::vector<uint8_t>{0x8b, 0x35, 0, 0x30, 0x40, 0};
+      Text.Data.insert(Text.Data.end(),
+                       {0x6a, 0, 0xff, uint8_t(AccumulatorForm ? 0xd0 : 0xd6),
+                        0x31, 0xc0, 0xc3});
+      Text.Size = Text.FileSz = Text.Data.size();
+      Image.Sections[0].Size = Image.Sections[0].FileSz = Text.Size;
+      Decoder Dec;
+      ASSERT_TRUE(Dec.init(Image));
+      auto Function = CFGBuilder().buildIntegerFrameProof(
+          Image, Dec, ImportImage::TextVA, "cached-import");
+      ASSERT_FALSE(Function.Blocks.empty());
+      auto &Block = Function.Blocks.front();
+      ASSERT_GE(Block.Ops.size(), 4u);
+      auto &Boundary = Block.InstructionBoundaries.front();
+      if (Mutation == 1)
+        Text.Data[0] = 0x90;
+      if (Mutation == 2)
+        Text.Data[AccumulatorForm ? 1 : 2] = 4;
+      if (Mutation == 3)
+        Text.Flags = Text.Flags | SegmentFlags::Writable;
+      if (Mutation == 4)
+        Block.Ops[0].Inputs[0].Offset += 4;
+      if (Mutation == 5)
+        Block.Ops[3].Output = NdVar::reg(x86reg::RDI, 4);
+      if (Mutation == 6)
+        Block.Ops[2].Output.Size = 2;
+      if (Mutation == 7)
+        Block.Ops[2].Opcode = NdOp::COPY;
+      if (Mutation == 8)
+        Block.Ops[2].MemoryAddressSpace = NdMemoryAddressSpace::X86FS;
+      if (Mutation == 9)
+        Block.Ops[2].MemoryOrdering = NdMemoryOrdering::Acquire;
+      if (Mutation == 10)
+        Boundary.OpCount = 3;
+      if (Mutation == 11)
+        Block.InstructionBoundaries.push_back(Boundary);
+      if (Mutation == 12)
+        Image.Imports[0].IsDelayImport = true;
+      if (Mutation == 13)
+        Image.Imports[0].Module = "unproved.dll";
+      if (Mutation == 14)
+        Image.ImportStorageSlots.clear();
+      if (Mutation == 15)
+        Image.ImportStorageSlots.at(ImportImage::IATVA).Name = "Sleep";
+      if (Mutation == 16)
+        Block.Ops[3].Inputs[0] = NdVar::tmp(0x1234, 4);
+      if (Mutation == 17)
+        ++Block.Ops[2].Seq;
+      if (Mutation == 18)
+        Boundary.ControlFlags = LowInstructionControlFlag::Conditional;
+      if (Mutation == 19)
+        Image.Bits = Bitness::Bits64;
+      RegistrationCallCalleeIndex Index(Image);
+      const auto Contracts = Index.stackContracts(Function);
+      ASSERT_TRUE(Contracts);
+      ASSERT_EQ(Contracts->size(), Mutation == 0 ? 1u : 0u);
+      if (Mutation == 0) {
+        EXPECT_EQ(Contracts->front().Target, ImportImage::IATVA);
+        EXPECT_EQ(Contracts->front().StackPopBytes, 4u);
+        EXPECT_TRUE(Contracts->front().Indirect);
+        EXPECT_EQ(Contracts->front().Loads, (std::vector<std::pair<va_t, int>>{
+                                                {ImportImage::TextVA, 2}}));
+      }
+    }
+}
+
+TEST(RegistrationImportABI, CachedImportsRespectCumulativeWork) {
+  ImportImage F({"DecodePointer", 1}, false);
+  auto &Text = F.Image.Segments[0];
+  Text.Data = {0x8b, 0x35, 0,    0x30, 0x40, 0,   0x6a,
+               0,    0xff, 0xd6, 0x31, 0xc0, 0xc3};
+  Text.Size = Text.FileSz = Text.Data.size();
+  F.Image.Sections[0].Size = F.Image.Sections[0].FileSz = Text.Size;
+  size_t Used = 0;
+  ASSERT_EQ(getCheckedX86CalleeStackPop(F.Image, ImportImage::TextVA, &Used),
+            std::optional<uint32_t>{0});
+  ASSERT_GT(Used, 0u);
+  ASSERT_LT(Used, limits::kMaxRegistrationEHStateWork);
+  for (bool Exhausted : {false, true}) {
+    size_t Work = limits::kMaxRegistrationEHStateWork - Used + Exhausted;
+    EXPECT_EQ(getCheckedX86CalleeStackPop(F.Image, ImportImage::TextVA, &Work),
+              Exhausted ? std::nullopt : std::optional<uint32_t>{0});
+    EXPECT_EQ(Work, limits::kMaxRegistrationEHStateWork);
+  }
+  Decoder Dec;
+  ASSERT_TRUE(Dec.init(F.Image));
+  const auto Function = CFGBuilder().buildIntegerFrameProof(
+      F.Image, Dec, ImportImage::TextVA, "cached-import-budget");
+  size_t Work = limits::kMaxRegistrationEHStateWork - 1;
+  RegistrationCallCalleeIndex Index(F.Image, &Work);
+  EXPECT_FALSE(Index.stackContracts(Function));
+  EXPECT_EQ(Work, limits::kMaxRegistrationEHStateWork);
+}
+
 TEST(RegistrationImportABI, RaiseCleanupRequiresRealImportDirectoryStorage) {
   for (unsigned Mutation = 0; Mutation != 8; ++Mutation) {
     SCOPED_TRACE(Mutation);

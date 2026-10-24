@@ -2318,6 +2318,22 @@ on return, the caller still owns both table-pointer arguments on its stack.
 This returning-stack fact grants no callback, unwind, table-memory or private
 initializer-borrow authority. Both direct IAT calls and immutable jump veneers
 use the same owner; a similarly named export receives no inferred convention.
+Cached PE32 import pointers additionally require an immutable full-word MOV
+whose complete current LowIR address, load and destination agree with its
+machine bytes. The stack contract retains that exact load occurrence. The
+shared frame domain propagates an opaque import identity through complete
+copies and unanimous reaching paths; it never substitutes IAT storage or file
+contents for the runtime function address. Partial writes, arithmetic and
+disagreeing joins lose the identity. A checked import ABI preserves cached
+nonvolatile values across its invocation; returning-stack facts for an arbitrary
+local helper cannot prove that it preserves those registers. Calls withdraw
+permission for later cached-IAT load facts. A later call through the slot cannot
+prove register preservation without its current binding; exception dispatch
+also supplies no fresh binding proof. Explicit writes that may overlap an IAT
+slot likewise withdraw future load facts without changing an earlier cached
+value. Segment-relative writes require their own disjointness proof; only the
+exact PE32 FS:[0] chain word has a known non-image address here. Returning-stack and registration-state analyses share these transfers;
+cached identities grant no callee memory, callback or native EH authority.
 The same owner checks the exact Kernel32 PE32 exports `GetStartupInfoW`,
 `HeapSetInformation`, `InterlockedCompareExchange`, `InterlockedExchange`,
 `DecodePointer`, `EncodePointer` and `Sleep` for their SDK stdcall adjustment.

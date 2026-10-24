@@ -4,6 +4,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "RegistrationImportLoad.h"
 #include "RegistrationStateSolver.h"
 
 #include "neverd/Limits.h"
@@ -44,7 +45,25 @@ bool RegistrationStateSolver::initializeContracts() {
         ::neverd::limits::ir::
             kRegistrationStateContractsRegistrationStateSolverInitializeContractsStacksSizeLimit)
       return false;
-    for (const auto &Stack : *Stacks)
+    std::map<std::pair<va_t, int>, va_t> CurrentLoads;
+    const bool HasImportLoads =
+        std::any_of(Stacks->begin(), Stacks->end(),
+                    [](const auto &Stack) { return !Stack.Loads.empty(); });
+    if (HasImportLoads) {
+      for (const auto &Block : Function.Blocks)
+        for (const auto &Boundary : Block.InstructionBoundaries) {
+          if (!charge(16))
+            return false;
+          if (const auto Load =
+                  registration_abi::registrationImportLoad(Block, Boundary))
+            if (!CurrentLoads
+                     .emplace(std::make_pair(Boundary.Address, Load->OpSeq),
+                              Load->Slot)
+                     .second)
+              return false;
+        }
+    }
+    for (const auto &Stack : *Stacks) {
       if (!charge(1) || !Stack.Target || Stack.Target > UINT32_MAX ||
           Stack.StackPopBytes > UINT16_MAX ||
           !StackPops
@@ -54,6 +73,18 @@ bool RegistrationStateSolver::initializeContracts() {
         Result.Diagnostics.push_back("registration stack contract is invalid");
         return false;
       }
+      if (!Stack.Loads.empty() && !Stack.Indirect)
+        return false;
+      for (const auto &Load : Stack.Loads) {
+        if (!charge(1))
+          return false;
+        const auto Current = CurrentLoads.find(Load);
+        if (Current == CurrentLoads.end() || Current->second != Stack.Target ||
+            !StackImportLoads.emplace(Load, Stack.Target).second)
+          return false;
+        StackImportSlots.insert(Stack.Target);
+      }
+    }
   }
   if (CheckCalls) {
     if (Callees->size() >

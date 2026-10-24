@@ -6,6 +6,8 @@
 
 #include "RegistrationFrame.h"
 
+#include "RegistrationFrameEffects.h"
+
 #include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/ir/low/LowIR.h"
 #include "neverd/ir/low/LowScalarConstant.h"
@@ -87,7 +89,8 @@ bool mergeCells(std::map<int32_t, FrameValue> &Cells,
 } // namespace
 
 bool FrameState::merge(const FrameState &Other) {
-  bool Changed = false;
+  bool Changed = ImportBindingsIntact && !Other.ImportBindingsIntact;
+  ImportBindingsIntact &= Other.ImportBindingsIntact;
   for (size_t I = 0; I < Registers.size(); ++I) {
     const FrameValue Merged = join(Registers[I], Other.Registers[I]);
     Changed |= Merged != Registers[I];
@@ -212,7 +215,38 @@ FrameValue FrameTransfer::read(const NdVar &Value) const {
   return {};
 }
 
-FrameValue FrameTransfer::evaluate(const LowOp &Op, bool Installed) const {
+void FrameTransfer::invalidateImportBindings(
+    const LowOp &Op, const std::set<va_t> &ImportSlots) {
+  if (!State.ImportBindingsIntact || ImportSlots.empty())
+    return;
+  const auto Memory = lowMemoryOperands(Op);
+  if (!Memory.Address || !Memory.StoredValue)
+    return;
+  const auto Address = read(*Memory.Address);
+  if (Op.MemoryAddressSpace != NdMemoryAddressSpace::Default) {
+    // Only the exact PE32 exception-chain word is known to be outside the
+    // image. Other segment-relative stores have no proved IAT alias bound.
+    if (Op.MemoryAddressSpace != NdMemoryAddressSpace::X86FS ||
+        Address.Constant != uint32_t{0} || Memory.AccessSize != 4)
+      State.ImportBindingsIntact = false;
+    return;
+  }
+  if (Address.Offset || Address.EntryOffset || Address.CallbackAddress)
+    return;
+  const auto VA = Address.preferredAddress();
+  if (!VA) {
+    State.ImportBindingsIntact = false;
+    return;
+  }
+  for (va_t Slot : ImportSlots)
+    if (uint64_t(*VA) < Slot + 4 && Slot < uint64_t(*VA) + Memory.AccessSize) {
+      State.ImportBindingsIntact = false;
+      return;
+    }
+}
+
+FrameValue FrameTransfer::evaluate(const LowOp &Op, bool Installed,
+                                   std::optional<va_t> ImportLoad) const {
   FrameValue Result;
   for (unsigned I = 0; I < Op.NumInputs; ++I) {
     const FrameValue Input = read(Op.Inputs[I]);
@@ -250,6 +284,11 @@ FrameValue FrameTransfer::evaluate(const LowOp &Op, bool Installed) const {
       Op.Inputs[1].isConst() && Op.Inputs[1].Offset == 0 && Op.Output.Size == 4)
     return read(Op.Inputs[0]);
   if (Op.Opcode == NdOp::LOAD && Op.NumInputs == 1) {
+    if (ImportLoad && *ImportLoad <= UINT32_MAX && State.ImportBindingsIntact &&
+        Op.Output.Size == 4 &&
+        Op.MemoryAddressSpace == NdMemoryAddressSpace::Default &&
+        Op.MemoryOrdering == NdMemoryOrdering::None)
+      return FrameValue::importTarget(uint32_t(*ImportLoad));
     const FrameValue Address = read(Op.Inputs[0]);
     if (Address.SEHException) {
       if (Op.MemoryAddressSpace == NdMemoryAddressSpace::Default)
@@ -401,8 +440,8 @@ bool FrameTransfer::isCookieCheck(const LowOp &Op, va_t CookieCheckVA) const {
          !Cookie.CookieImageXOR && Cookie.CookieXOR == 0;
 }
 
-void FrameTransfer::write(const LowOp &Op, FrameValue Value,
-                          va_t CookieCheckVA) {
+void FrameTransfer::write(const LowOp &Op, FrameValue Value, va_t CookieCheckVA,
+                          bool PreserveImportedTargets) {
   if (isCookieCheck(Op, CookieCheckVA)) {
     // The authenticated success path compares equal values, then returns
     // without changing another register. The generic EAX result is no write.
@@ -411,6 +450,13 @@ void FrameTransfer::write(const LowOp &Op, FrameValue Value,
     return;
   }
   if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) {
+    State.ImportBindingsIntact = false;
+    if (!PreserveImportedTargets) {
+      for (auto &Register : State.Registers)
+        Register.ImportTarget.reset();
+      for (auto &[Offset, Temporary] : Temps)
+        Temporary.ImportTarget.reset();
+    }
     State.Registers[x86reg::RAX / x86reg::GeneralRegStride] = {
         {}, {}, false, true, true};
     State.Registers[x86reg::RCX / x86reg::GeneralRegStride] = {
@@ -424,6 +470,15 @@ void FrameTransfer::write(const LowOp &Op, FrameValue Value,
     State.OtherRegisterBytes.clear();
     State.OtherRegistersMayBeFrame = true;
     Value = {{}, {}, false, true, true};
+  }
+  if (Op.Opcode == NdOp::INTRINSIC && !isFramePreservingIntrinsic(Op)) {
+    State.ImportBindingsIntact = false;
+    for (auto &Register : State.Registers)
+      if (Register.ImportTarget)
+        Register = {};
+    for (auto &[Offset, Temporary] : Temps)
+      if (Temporary.ImportTarget)
+        Temporary = {};
   }
   if (Op.Output.isTemp())
     Temps[Op.Output.Offset] = Value;

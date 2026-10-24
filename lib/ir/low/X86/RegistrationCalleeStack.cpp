@@ -7,6 +7,7 @@
 #include "RegistrationABIPrivate.h"
 #include "RegistrationFrame.h"
 #include "RegistrationFrameEffects.h"
+#include "RegistrationImportLoad.h"
 
 #include "neverd/Limits.h"
 #include "neverd/decode/InstructionRelocations.h"
@@ -97,6 +98,8 @@ struct StackBody {
   std::map<va_t, int> Entries;
   std::map<int, bool> Immutable;
   std::map<va_t, std::set<uint32_t>> VariantConstants;
+  std::map<std::pair<va_t, int>, va_t> ImportLoads;
+  std::set<va_t> ImportSlots;
   bool Valid = false;
 
   StackBody(const BinaryImage &Image, const LowFunc &Function, size_t &Work)
@@ -108,11 +111,33 @@ struct StackBody {
       llvm::consumeError(std::move(Error));
       return;
     }
-    for (const auto &Block : Function.Blocks)
+    bool HasCachedCall = false;
+    for (const auto &Block : Function.Blocks) {
       if (!chargeCalleeWork(Work, Block.Ops.size() + 1) ||
           !Blocks.emplace(Block.Id, &Block).second ||
           !Entries.emplace(Block.StartAddr, Block.Id).second)
         return;
+      HasCachedCall |= llvm::any_of(Block.Ops, [](const auto &Op) {
+        return Op.Opcode == NdOp::INDIR_CALL && Op.NumInputs == 1 &&
+               Op.Inputs[0].Size == 4 && !Op.Inputs[0].isConst();
+      });
+    }
+    if (HasCachedCall)
+      for (const auto &Block : Function.Blocks)
+        for (const auto &Boundary : Block.InstructionBoundaries) {
+          if (auto Load = registration_abi::checkedRegistrationImportLoad(
+                  Image, Block, Boundary, Work)) {
+            if (!ImportLoads
+                     .emplace(std::make_pair(Boundary.Address, Load->OpSeq),
+                              Load->Slot)
+                     .second)
+              return;
+            ImportSlots.insert(Load->Slot);
+          }
+          // An absent match must not hide exhaustion inside the query.
+          if (!chargeCalleeWork(Work, 1))
+            return;
+        }
     Valid = true;
   }
 
@@ -217,6 +242,7 @@ stackPopForBody(StackBody &Body, va_t Entry,
       // particular, a saved-SP reload cannot inherit an opaque call's
       // unproved memory preservation through registration-state facts.
       FrameState Handler;
+      Handler.ImportBindingsIntact = false;
       Handler.Registers[x86reg::RBP / x86reg::GeneralRegStride] =
           FrameValue::frame(0);
       auto [Root, New] = Incoming.emplace(It->second, Handler);
@@ -244,6 +270,11 @@ stackPopForBody(StackBody &Body, va_t Entry,
            !registration_state::isFramePreservingIntrinsic(Op)))
         return std::nullopt;
       Transfer.beginInstruction(Op.Addr);
+      if (!Body.ImportSlots.empty()) {
+        if (!chargeCalleeWork(Work, Body.ImportSlots.size() + 1))
+          return std::nullopt;
+        Transfer.invalidateImportBindings(Op, Body.ImportSlots);
+      }
       if (Op.Opcode == NdOp::RETURN) {
         if (State.Registers[x86reg::RSP / x86reg::GeneralRegStride].Offset !=
             (Registration ? 4 : 0))
@@ -259,16 +290,25 @@ stackPopForBody(StackBody &Body, va_t Entry,
       // saved-SP reload cannot supply an unproved restoration. Register-only
       // affine transfers share the registration state's authoritative rules.
       std::optional<uint32_t> CalleePop;
+      bool ImportedCall = false;
       if (Op.Opcode == NdOp::CALL && Op.NumInputs == 1 &&
           Op.Inputs[0].isConst() && Op.Inputs[0].Size == 4 &&
           State.Registers[x86reg::RSP / x86reg::GeneralRegStride].Offset)
         CalleePop = NestedPop(Op.Inputs[0].Offset);
       if (Op.Opcode == NdOp::INDIR_CALL && Op.NumInputs == 1 &&
-          Op.Inputs[0].isConst() && Op.Inputs[0].Size == 4)
-        if (const auto *Import = Image.findImportAt(Op.Inputs[0].Offset);
-            Import && Import->IATAddr == Op.Inputs[0].Offset)
-          CalleePop = registration_abi::checkedRegistrationImportStackPop(
-              Image, Import->IATAddr);
+          Op.Inputs[0].Size == 4 &&
+          Op.MemoryAddressSpace == NdMemoryAddressSpace::Default &&
+          Op.MemoryOrdering == NdMemoryOrdering::None) {
+        const auto Slot =
+            Op.Inputs[0].isConst()
+                ? std::optional<va_t>{Op.Inputs[0].Offset}
+                : std::optional<va_t>{Transfer.read(Op.Inputs[0]).ImportTarget};
+        if (Slot)
+          CalleePop =
+              registration_abi::checkedRegistrationImportStackPop(Image, *Slot);
+        ImportedCall = CalleePop.has_value() &&
+                       (!Op.Inputs[0].isConst() || State.ImportBindingsIntact);
+      }
       std::optional<FrameValue> CallSP;
       if (CalleePop) {
         LowOp Adjust;
@@ -279,7 +319,13 @@ stackPopForBody(StackBody &Body, va_t Entry,
         CallSP = Transfer.evaluate(Adjust, false);
       }
       const auto Abstract = Body.stackOperation(Op);
-      Transfer.write(Abstract, Transfer.evaluate(Abstract, false));
+      const auto Load = Body.ImportLoads.find({Op.Addr, Op.Seq});
+      Transfer.write(Abstract,
+                     Transfer.evaluate(Abstract, false,
+                                       Load == Body.ImportLoads.end()
+                                           ? std::nullopt
+                                           : std::optional<va_t>{Load->second}),
+                     0, ImportedCall);
       if (CallSP)
         State.Registers[x86reg::RSP / x86reg::GeneralRegStride] = *CallSP;
     }
@@ -622,6 +668,20 @@ RegistrationCallCalleeIndex::stackContracts(const LowFunc &Function) {
   // One graph and immutable-instruction cache for all interior callback
   // entries. Each entry still gets an independent reaching-register proof.
   StackBody Parent(Image, Function, Work);
+  if (!chargeCalleeWork(Work, 1))
+    return std::nullopt;
+  std::map<va_t, std::vector<std::pair<va_t, int>>> ImportLoads;
+  if (Parent.Valid)
+    for (const auto &[Occurrence, Slot] : Parent.ImportLoads) {
+      if (!chargeCalleeWork(Work, 1))
+        return std::nullopt;
+      Targets.emplace(Slot, true);
+      ImportLoads[Slot].push_back(Occurrence);
+    }
+  if (Targets.size() >
+      ::neverd::limits::ir::
+          kRegistrationCalleeStackRegistrationCallCalleeIndexStackContractsTargetsSizeLimit)
+    return std::nullopt;
   ReturningStackProof Proof(Image, Work, StackCache, *this, StackDepth,
                             &Parent);
   for (const auto &[Target, Indirect] : Targets) {
@@ -632,7 +692,7 @@ RegistrationCallCalleeIndex::stackContracts(const LowFunc &Function) {
       if (Import && Import->IATAddr == Target)
         if (auto Pop = registration_abi::checkedRegistrationImportStackPop(
                 Image, Target))
-          Result.push_back({Target, *Pop, true});
+          Result.push_back({Target, *Pop, true, ImportLoads[Target]});
       continue;
     }
     if (Target == Function.Entry)

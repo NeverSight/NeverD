@@ -517,6 +517,8 @@ private:
 
   std::map<va_t, uint32_t> CalleeIndices;
   std::map<std::pair<va_t, bool>, uint32_t> StackPops;
+  std::map<std::pair<va_t, int>, va_t> StackImportLoads;
+  std::set<va_t> StackImportSlots;
   std::map<std::pair<va_t, bool>, RegistrationLocalUnwindContract>
       LocalUnwindTargets;
   std::set<va_t> LocalUnwindImportSlots;

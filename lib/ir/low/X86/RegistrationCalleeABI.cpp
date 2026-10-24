@@ -5,9 +5,11 @@
 //===----------------------------------------------------------------------===//
 
 #include "RegistrationABIPrivate.h"
+#include "RegistrationImportLoad.h"
 
 #include "neverd/Limits.h"
 #include "neverd/ir/low/CFGBuilder.h"
+#include "neverd/lift/X86Regs.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/COFF/COFFRegistrationEH.h"
 #include "neverd/loader/ReadOnlyBytes.h"
@@ -123,6 +125,31 @@ checkedRegistrationImportStackPop(const BinaryImage &Image, va_t Target) {
        Module.equals_insensitive("msvcrt.dll")))
     return 0;
   return std::nullopt;
+}
+
+std::optional<RegistrationImportLoad>
+checkedRegistrationImportLoad(const BinaryImage &Image, const LowBlock &Block,
+                              const LowInstructionBoundary &Boundary,
+                              size_t &Work) {
+  if (!chargeCalleeWork(Work, 1) || Boundary.OpCount != 4 ||
+      !chargeCalleeWork(Work, 16))
+    return std::nullopt;
+  const auto Load = registrationImportLoad(Block, Boundary);
+  if (!Load || (Boundary.Size != 5 && Boundary.Size != 6) ||
+      Boundary.Address > UINT32_MAX - Boundary.Size ||
+      !checkedRegistrationImportStackPop(Image, Load->Slot))
+    return std::nullopt;
+  const unsigned Field = Boundary.Size - 4;
+  const auto Bytes = readImmutablePE32CodeBytes(
+      Image, Boundary.Address, Boundary.Size, {Boundary.Address + Field});
+  if (!Bytes || readLE<uint32_t>(Bytes->data() + Field) != Load->Slot)
+    return std::nullopt;
+  const unsigned Register = Load->Register / x86reg::GeneralRegStride;
+  if (Boundary.Size == 5
+          ? (*Bytes)[0] != 0xa1 || Register != 0
+          : (*Bytes)[0] != 0x8b || (*Bytes)[1] != uint8_t(0x05 + Register * 8))
+    return std::nullopt;
+  return Load;
 }
 
 bool callerPCIsNotReadBack(const ImageFrameEffects &Effects) {

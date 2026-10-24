@@ -5852,6 +5852,28 @@ zero callee cleanup, while private object/initializer borrows and exception
 dispatch remain unproved. `StackCleanupCannotAuthorizeDispatchOrObservation`
 also checks that these callback-table imports cannot acquire the separate
 RaiseException caller-frame contract from their stack fact.
+`CachedImportTargetsKeepOnlyTheirReturningStackABI` checks cdecl and stdcall
+imports through six physical register families. Counterexamples cover partial
+loads/writes, wrong slots/providers, delayed binding, prior slot or unknown
+stores, opaque calls and conflicting branches. A slot write after the load
+does not change the earlier cached pointer; only a checked import ABI preserves
+nonvolatile cached identities across its call. An opaque helper, including one
+that actually overwrites the carrier, receives no preservation assumption.
+A modified IAT or an earlier opaque call also prevents a later slot invocation
+from preserving the cache.
+`CachedImportCleanupRequiresItsCurrentLoadAndReachingValue` checks EH3/EH4
+registration-state transfers, including changed LowIR, missing/duplicate occurrences and a predecessor that never loaded the
+pointer. `ImportedCallablesAreNotAddressesOrScalars` checks value, join, spill,
+hash and volatile-call boundaries independently of the import's initial bytes.
+`CachedLoadReceiptsBindCurrentBytesAndLowIR` rejects altered instruction bytes,
+storage, operation slices and LowIR operands for both MOV encodings.
+`CachedImportsRespectCumulativeWork` checks the exact work boundary and refusal
+on exhaustion. `OpaqueCallsCannotCertifyCachedTargetPreservation` isolates the
+register-preservation boundary from all returning-stack facts.
+`DispatchCannotReseedCachedImportBindings` rejects fresh cached-load facts after
+exception dispatch. `SegmentedWritesNeedAnImageDisjointnessProof` and physical
+FS-store wrappers reject unproved segmented aliases while retaining the exact
+FS:[0] chain word.
 `NestedReturningStackProofIsBoundedAndNonCircular` checks multi-level callee
 cleanup, mismatched pops, recursive dependencies, the depth boundary and shared
 work exhaustion. It does not admit dispatcher-entered parent returns through

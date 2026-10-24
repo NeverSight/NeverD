@@ -31,18 +31,18 @@ static hash_code hash_value(const FrameValue &Value) {
       Value.SecurityCookie, Value.CookieFrameOffset, Value.CookieXOR,
       Value.EntryOffset, Value.CallbackAddress, Value.ExceptionObject,
       Value.SEHException, Value.JumpCapture, Value.FrameOnlyFromSEHScalar,
-      Value.ImageAddress, Value.CookieImageXOR);
+      Value.ImageAddress, Value.CookieImageXOR, Value.ImportTarget);
 }
 
 static hash_code hash_value(const FrameState &Frame) {
-  return hash_combine(hash_combine_range(Frame.Registers),
-                      hash_combine_range(Frame.OtherRegisterBytes),
-                      Frame.OtherRegistersMayBeFrame,
-                      hash_combine_range(Frame.Cells),
-                      hash_combine_range(Frame.EntryCells),
-                      hash_combine_range(Frame.CallbackCells),
-                      hash_combine_range(Frame.InitializedCallbackBytes),
-                      Frame.CallbackEntry, Frame.SEHFilterEntry);
+  return hash_combine(
+      hash_combine_range(Frame.Registers), Frame.ImportBindingsIntact,
+      hash_combine_range(Frame.OtherRegisterBytes),
+      Frame.OtherRegistersMayBeFrame, hash_combine_range(Frame.Cells),
+      hash_combine_range(Frame.EntryCells),
+      hash_combine_range(Frame.CallbackCells),
+      hash_combine_range(Frame.InitializedCallbackBytes), Frame.CallbackEntry,
+      Frame.SEHFilterEntry);
 }
 
 size_t FrameState::snapshotHash() const { return hash_value(*this); }

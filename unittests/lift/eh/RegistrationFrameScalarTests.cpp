@@ -8,6 +8,7 @@
 
 #include "../../../lib/ir/low/X86/RegistrationFrame.h"
 #include "../../../lib/ir/low/X86/RegistrationFrameBranch.h"
+#include "../../../lib/ir/low/X86/RegistrationStateSolver.h"
 #include "gtest/gtest.h"
 
 #include "neverd/ir/low/LowIR.h"
@@ -171,6 +172,99 @@ TEST(RegistrationFrameScalar, AddressBitsAreNotAffineScalarConstants) {
       Input.Size = Size;
       EXPECT_EQ(Transfer.read(Input), FrameValue{});
     }
+  }
+}
+
+TEST(RegistrationFrameScalar, ImportedCallablesAreNotAddressesOrScalars) {
+  const auto Callable = FrameValue::importTarget(0x403000);
+  EXPECT_FALSE(Callable.Constant);
+  EXPECT_FALSE(Callable.ImageAddress);
+  EXPECT_FALSE(Callable.preferredAddress());
+  EXPECT_FALSE(Callable.Offset);
+  EXPECT_NE(Callable, FrameValue::constant(0x403000));
+  EXPECT_NE(Callable, FrameValue::imageAddress(0x403000));
+  auto Arithmetic = operation(NdOp::INT_ADD);
+  Arithmetic.Output.Size = 4;
+  EXPECT_FALSE(
+      evaluate(Callable, FrameValue::constant(0), Arithmetic).ImportTarget);
+  EXPECT_EQ(join(Callable, Callable), Callable);
+  EXPECT_FALSE(join(Callable, FrameValue::importTarget(0x403004)).ImportTarget);
+  EXPECT_FALSE(join(Callable, {}).ImportTarget);
+  FrameState State;
+  State.Registers[x86reg::RSI / x86reg::GeneralRegStride] = Callable;
+  State.Registers[x86reg::RAX / x86reg::GeneralRegStride] = Callable;
+  State.store(-32, 4, Callable);
+  EXPECT_EQ(State.load(-32, 4), Callable);
+  EXPECT_FALSE(State.load(-32, 2).ImportTarget);
+  FrameState Changed = State;
+  Changed.Registers[x86reg::RSI / x86reg::GeneralRegStride] = {};
+  EXPECT_NE(State.snapshotHash(), Changed.snapshotHash());
+  FrameTransfer Transfer(State, -16);
+  LowOp Call;
+  Call.Opcode = NdOp::INDIR_CALL;
+  Call.addInput(NdVar::cst(0x403000, 4));
+  Transfer.write(Call, {}, 0, true);
+  EXPECT_FALSE(State.ImportBindingsIntact);
+  EXPECT_EQ(State.Registers[x86reg::RSI / x86reg::GeneralRegStride], Callable);
+  EXPECT_FALSE(
+      State.Registers[x86reg::RAX / x86reg::GeneralRegStride].ImportTarget);
+  Changed = State;
+  Changed.ImportBindingsIntact = true;
+  EXPECT_NE(State.snapshotHash(), Changed.snapshotHash());
+  EXPECT_TRUE(Changed.merge(State));
+  EXPECT_FALSE(Changed.ImportBindingsIntact);
+}
+
+TEST(RegistrationFrameScalar,
+     OpaqueCallsCannotCertifyCachedTargetPreservation) {
+  FrameState State;
+  State.Registers[x86reg::RSI / x86reg::GeneralRegStride] =
+      FrameValue::importTarget(0x403000);
+  FrameTransfer Transfer(State, -16);
+  LowOp Call;
+  Call.Opcode = NdOp::CALL;
+  Call.addInput(NdVar::cst(0x401000, 4));
+  // A returning-stack fact for this helper does not prove that its body
+  // preserves ESI. Keep other frame facts separate from cached-call identity.
+  Transfer.write(Call, {});
+  EXPECT_FALSE(
+      State.Registers[x86reg::RSI / x86reg::GeneralRegStride].ImportTarget);
+}
+
+TEST(RegistrationFrameScalar, SegmentedWritesNeedAnImageDisjointnessProof) {
+  for (unsigned Mutation = 0; Mutation != 5; ++Mutation) {
+    FrameState State;
+    FrameTransfer Transfer(State, -16);
+    LowOp Store;
+    Store.Opcode = NdOp::STORE;
+    Store.MemoryAddressSpace = Mutation == 3 ? NdMemoryAddressSpace::X86GS
+                                             : NdMemoryAddressSpace::X86FS;
+    Store.addInput(Mutation == 4 ? NdVar::reg(x86reg::RCX, 4)
+                                 : NdVar::cst(Mutation == 1 ? 0x18 : 0, 4));
+    Store.addInput(NdVar::cst(0, Mutation == 2 ? 2 : 4));
+    Transfer.invalidateImportBindings(Store, {0x403000});
+    LowOp Load;
+    Load.Opcode = NdOp::LOAD;
+    Load.Output = NdVar::tmp(0, 4);
+    Load.addInput(NdVar::cst(0x403000, 4));
+    EXPECT_EQ(bool(Transfer.evaluate(Load, false, 0x403000).ImportTarget),
+              Mutation == 0);
+  }
+}
+
+TEST(RegistrationFrameScalar, DispatchCannotReseedCachedImportBindings) {
+  for (bool Intact : {false, true}) {
+    Domain Source;
+    Source.Frame.ImportBindingsIntact = Intact;
+    auto Root = dispatchSource(Source);
+    LowOp Load;
+    Load.Opcode = NdOp::LOAD;
+    Load.Output = NdVar::tmp(0, 4);
+    Load.addInput(NdVar::cst(0x403000, 4));
+    EXPECT_FALSE(Root.Frame.ImportBindingsIntact);
+    EXPECT_FALSE(FrameTransfer(Root.Frame, -16)
+                     .evaluate(Load, false, 0x403000)
+                     .ImportTarget);
   }
 }
 
