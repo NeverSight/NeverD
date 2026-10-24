@@ -466,6 +466,61 @@ TEST(RegistrationImportABI, CachedImportsNeedEveryInvokedSlotBinding) {
   }
 }
 
+TEST(RegistrationImportABI, DirectCleanupNeedsTheInvokedImportBinding) {
+  for (unsigned Form = 0; Form != 3; ++Form)
+    for (bool Overwrite : {false, true}) {
+      SCOPED_TRACE(Form);
+      SCOPED_TRACE(Overwrite);
+      ImportImage F({"Sleep", 1}, Form != 0);
+      auto &Image = F.Image;
+      auto &Text = Image.Segments[0];
+      auto &Bytes = Text.Data;
+      Bytes.clear();
+      if (Overwrite)
+        Bytes.insert(Bytes.end(),
+                     {0xc7, 0x05, 0, 0x30, 0x40, 0, 0x36, 0x10, 0x40, 0});
+      // A replacement RET leaves the argument in place. Copying the caller
+      // PC here makes the wrapper return with the wrong ESP, not just fault.
+      Bytes.insert(Bytes.end(), {0xff, 0x34, 0x24});
+      if (Form) {
+        const auto CallVA = Text.VA + Bytes.size();
+        Bytes.push_back(0xe8);
+        const auto Field = Bytes.size();
+        Bytes.resize(Field + 4);
+        writeLE<uint32_t>(Bytes.data() + Field, ImportImage::StubVA +
+                                                    (Form == 2 ? 16 : 0) -
+                                                    (CallVA + 5));
+      } else
+        Bytes.insert(Bytes.end(), {0xff, 0x15, 0, 0x30, 0x40, 0});
+      Bytes.insert(Bytes.end(), {0x31, 0xc0, 0xc3});
+      Bytes.resize(ImportImage::StubVA - Text.VA, 0xcc);
+      Bytes.insert(Bytes.end(), {0xff, 0x25, 0, 0x30, 0x40, 0, 0xc3});
+      if (Form == 2) {
+        Bytes.resize(ImportImage::StubVA + 16 - Text.VA, 0xcc);
+        Bytes.insert(Bytes.end(), {0xff, 0x74, 0x24, 4, 0xe8});
+        const auto Field = Bytes.size();
+        Bytes.resize(Field + 4);
+        writeLE<uint32_t>(Bytes.data() + Field,
+                          ImportImage::StubVA - (Text.VA + Field + 4));
+        Bytes.insert(Bytes.end(), {0xc2, 4, 0});
+      }
+      Text.Size = Text.FileSz = Bytes.size();
+      Image.Sections[0].Size = Image.Sections[0].FileSz = Text.Size;
+      EXPECT_EQ(getCheckedX86CalleeStackPop(Image, ImportImage::TextVA),
+                Overwrite ? std::nullopt : std::optional<uint32_t>{0});
+      RegistrationCallCalleeIndex Index(Image);
+      const auto Contracts = Index.stackContracts(F.caller());
+      ASSERT_TRUE(Contracts);
+      if (Overwrite)
+        EXPECT_TRUE(Contracts->empty());
+      else {
+        ASSERT_EQ(Contracts->size(), 1u);
+        EXPECT_EQ(Contracts->front().RequiredImports,
+                  (std::vector<va_t>{ImportImage::IATVA}));
+      }
+    }
+}
+
 TEST(RegistrationImportABI, CachedLoadReceiptsBindCurrentBytesAndLowIR) {
   for (bool AccumulatorForm : {false, true})
     for (unsigned Mutation = 0; Mutation != 20; ++Mutation) {
@@ -539,6 +594,22 @@ TEST(RegistrationImportABI, CachedLoadReceiptsBindCurrentBytesAndLowIR) {
                                                 {ImportImage::TextVA, 2}}));
       }
     }
+}
+
+TEST(RegistrationImportABI, TransitiveImportDependenciesRespectCumulativeWork) {
+  ImportImage F({"Sleep", 1}, true);
+  size_t Used = 0;
+  ASSERT_EQ(getCheckedX86CalleeStackPop(F.Image, ImportImage::TextVA, &Used),
+            std::optional<uint32_t>{0});
+  ASSERT_GT(Used, 0u);
+  ASSERT_LT(Used, limits::kMaxRegistrationEHStateWork);
+  for (bool Fits : {false, true}) {
+    SCOPED_TRACE(Fits);
+    size_t Work = limits::kMaxRegistrationEHStateWork - Used + !Fits;
+    EXPECT_EQ(getCheckedX86CalleeStackPop(F.Image, ImportImage::TextVA, &Work),
+              Fits ? std::optional<uint32_t>{0} : std::nullopt);
+    EXPECT_EQ(Work, limits::kMaxRegistrationEHStateWork);
+  }
 }
 
 TEST(RegistrationImportABI, CachedImportsRespectCumulativeWork) {

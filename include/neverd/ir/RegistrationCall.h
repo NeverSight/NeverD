@@ -54,6 +54,10 @@ struct RegistrationCalleeStackContract {
   /// load's instruction address and LowOp sequence bind an opaque callable,
   /// not the slot address or its initial file bytes as a runtime value.
   std::vector<std::pair<va_t, int>> Loads;
+  /// A direct callee's transitive eager-IAT dependencies. Its returning stack
+  /// proof assumes these bindings still hold at entry. Sorted and unique;
+  /// an indirect contract instead depends on Target itself.
+  std::vector<va_t> RequiredImports;
 };
 
 /// Runtime identity alone grants no frame effect. The state solver must bind

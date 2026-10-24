@@ -75,8 +75,20 @@ bool RegistrationStateSolver::initializeContracts() {
       }
       if (!Stack.Loads.empty() && !Stack.Indirect)
         return false;
-      if (HasImportLoads && Stack.Indirect)
+      if (Stack.Indirect) {
+        if (!Stack.RequiredImports.empty())
+          return false;
         StackImportSlots.insert(Stack.Target);
+      }
+      va_t PreviousImport = 0;
+      for (va_t Slot : Stack.RequiredImports) {
+        if (!charge(1) || Slot <= PreviousImport || Slot > UINT32_MAX - 3)
+          return false;
+        StackImportSlots.insert(Slot);
+        PreviousImport = Slot;
+      }
+      if (!Stack.RequiredImports.empty())
+        StackBindingCallees.insert(Stack.Target);
       for (const auto &Load : Stack.Loads) {
         if (!charge(1))
           return false;

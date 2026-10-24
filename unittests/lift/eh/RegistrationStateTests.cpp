@@ -858,6 +858,73 @@ TEST(RegistrationState,
     }
 }
 
+TEST(RegistrationState, ImportedStackCleanupRequiresItsCurrentBinding) {
+  for (bool EH4 : {false, true})
+    for (bool Indirect : {false, true})
+      for (unsigned Mutation = 0; Mutation != 8; ++Mutation) {
+        SCOPED_TRACE(EH4);
+        SCOPED_TRACE(Indirect);
+        SCOPED_TRACE(Mutation);
+        auto F = EH4 ? makeCookieFrame() : makeBranchingFrame();
+        LowBlock Call;
+        Call.Id = 4;
+        Call.StartAddr = 0x1100;
+        Call.EndAddr = 0x1136;
+        Call.Succs = {1, 2};
+        const va_t Target = Indirect ? 0x2200 : 0x2100;
+        std::vector<RegistrationCalleeStackContract> Stacks{
+            {Target,
+             0,
+             Indirect,
+             {},
+             Indirect ? std::vector<va_t>{} : std::vector<va_t>{0x2200}}};
+        if (Mutation >= 1 && Mutation <= 4) {
+          Call.InstructionBoundaries.push_back({0x1100, 10, 0, 1});
+          const auto Address = Mutation == 4
+                                   ? NdVar::reg(x86reg::RCX, 4)
+                                   : NdVar::cst(Mutation == 2   ? 0x2300
+                                                : Mutation == 3 ? 0x2203
+                                                                : 0x2200,
+                                                4);
+          emitOp(Call, 0x1100, NdOp::STORE, {},
+                 {Address, NdVar::cst(0, Mutation == 3 ? 1 : 4)});
+        }
+        if (Mutation == 5) {
+          Call.InstructionBoundaries.push_back({0x1100, 5, 0, 1});
+          Call.InstructionBoundaries.back().Control =
+              LowInstructionControl::Call;
+          emitOp(Call, 0x1100, NdOp::CALL, {}, {NdVar::cst(0x2300, 4)});
+          Stacks.push_back({0x2300, 0, false});
+        }
+        if (Mutation == 6)
+          Stacks[0].RequiredImports = {0x2200, 0x2200};
+        Call.InstructionBoundaries.push_back(
+            {0x1110, uint16_t(Indirect ? 6 : 5), Call.Ops.size(), 1});
+        Call.InstructionBoundaries.back().Control = LowInstructionControl::Call;
+        emitOp(Call, 0x1110, Indirect ? NdOp::INDIR_CALL : NdOp::CALL, {},
+               {NdVar::cst(Target, 4)});
+        if (Mutation == 7) {
+          Call.InstructionBoundaries.push_back(
+              {0x1120, 10, Call.Ops.size(), 1});
+          emitOp(Call, 0x1120, NdOp::STORE, {},
+                 {NdVar::cst(0x2200, 4), NdVar::cst(0, 4)});
+        }
+        Call.InstructionBoundaries.push_back({0x1130, 3, Call.Ops.size(), 1});
+        emitOp(Call, 0x1130, NdOp::INT_SUB, NdVar::reg(x86reg::RSP, 4),
+               {NdVar::reg(x86reg::RSP, 4), NdVar::cst(4, 4)});
+        Call.InstructionBoundaries.push_back({0x1133, 3, Call.Ops.size(), 1});
+        emitOp(Call, 0x1133, NdOp::STORE, {},
+               {NdVar::reg(x86reg::RSP, 4), NdVar::cst(7, 4)});
+        F.Blocks[0].Succs = {4};
+        F.Blocks.push_back(std::move(Call));
+        const auto A = analyzeRegistrationStates(F, EH4 ? 0x4000 : 0, 0,
+                                                 nullptr, nullptr, &Stacks);
+        EXPECT_EQ(A.Complete, Mutation == 0 || Mutation == 2 || Mutation == 7);
+        EXPECT_FALSE(A.CallFrameEffectsComplete);
+        EXPECT_TRUE(A.CallFrameEffects.empty());
+      }
+}
+
 namespace {
 LowFunc makeCxxObjectCleanup() {
   auto F = makeCxxObjectCall();

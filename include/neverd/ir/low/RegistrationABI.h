@@ -52,6 +52,9 @@ bool hasCheckedX86RegistrationDirectCallBytes(const BinaryImage &Image,
 /// memory values or grants memory-effect authority. A termination-only SEH
 /// frame has no exceptional parent entry and uses the ordinary register-only
 /// proof, including a separate proof for every called finally.
+/// Import-dependent callees assume their eager IAT bindings at entry. Source
+/// callers consume stackContracts(), which retains those transitive
+/// dependencies and checks that the caller has not invalidated them.
 std::optional<uint32_t>
 getCheckedX86CalleeStackPop(const BinaryImage &Image, va_t Target,
                             size_t *CumulativeWork = nullptr);
@@ -318,7 +321,7 @@ private:
   unsigned StackDepth = 0;
   std::map<va_t, std::optional<RegistrationCalleeFrameContract>> Cache;
   std::map<va_t, std::optional<RegistrationCleanupRelayABI>> CleanupCache;
-  std::map<va_t, std::optional<uint32_t>> StackCache;
+  std::map<va_t, std::optional<RegistrationCalleeStackContract>> StackCache;
 };
 
 /// Native registration lowering currently emits caller-cleanup calls. Require

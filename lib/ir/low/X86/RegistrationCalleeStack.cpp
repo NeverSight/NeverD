@@ -76,6 +76,8 @@ using registration_abi::chargeCalleeWork;
 using registration_state::FrameState;
 using registration_state::FrameTransfer;
 using registration_state::FrameValue;
+using NestedStackProof =
+    std::function<std::optional<RegistrationCalleeStackContract>(va_t)>;
 
 std::optional<uint32_t> nearReturnPop(const BinaryImage &Image, va_t Address) {
   const auto Byte = readImmutableCodeBytes(Image, Address, 1);
@@ -138,19 +140,40 @@ struct StackBody {
           if (!chargeCalleeWork(Work, 1))
             return;
         }
-    if (!ImportLoads.empty())
-      for (const auto &Block : Function.Blocks) {
-        if (!chargeCalleeWork(Work, Block.Ops.size() + 1))
-          return;
-        // Every slot whose call can preserve a cached register must retain
-        // its binding, even if that slot is never itself cached in a GPR.
-        for (const auto &Op : Block.Ops)
-          if (Op.Opcode == NdOp::INDIR_CALL && Op.NumInputs == 1 &&
-              Op.Inputs[0].isConst() && Op.Inputs[0].Size == 4 &&
-              Op.Inputs[0].Offset <= UINT32_MAX)
-            ImportSlots.insert(Op.Inputs[0].Offset);
-      }
+    for (const auto &Block : Function.Blocks) {
+      if (!chargeCalleeWork(Work, Block.Ops.size() + 1))
+        return;
+      // Stack cleanup and cached-register preservation both depend on the
+      // current binding, even when the target is never cached in a GPR.
+      for (const auto &Op : Block.Ops)
+        if (Op.Opcode == NdOp::INDIR_CALL && Op.NumInputs == 1 &&
+            Op.Inputs[0].isConst() && Op.Inputs[0].Size == 4 &&
+            Op.Inputs[0].Offset <= UINT32_MAX)
+          ImportSlots.insert(Op.Inputs[0].Offset);
+    }
     Valid = true;
+  }
+
+  bool collectCalleeImports(const NestedStackProof &Nested) {
+    // Collect before transfer: a store can invalidate a dependency of a
+    // later direct helper, including a veneer hidden behind another helper.
+    for (const auto &[Id, Block] : Blocks) {
+      if (!chargeCalleeWork(Work, Block->Ops.size() + 1))
+        return false;
+      for (const auto &Op : Block->Ops)
+        if (Op.Opcode == NdOp::CALL && Op.NumInputs == 1 &&
+            Op.Inputs[0].isConst() && Op.Inputs[0].Size == 4) {
+          if (const auto Callee = Nested(Op.Inputs[0].Offset)) {
+            if (!chargeCalleeWork(Work, Callee->RequiredImports.size() + 1))
+              return false;
+            ImportSlots.insert(Callee->RequiredImports.begin(),
+                               Callee->RequiredImports.end());
+          }
+          if (!chargeCalleeWork(Work, 1))
+            return false;
+        }
+    }
+    return true;
   }
 
   bool immutableInstruction(const LowInstructionBoundary &Boundary) {
@@ -221,11 +244,11 @@ struct StackBody {
 };
 
 std::optional<uint32_t>
-stackPopForBody(StackBody &Body, va_t Entry,
-                const std::function<std::optional<uint32_t>(va_t)> &NestedPop,
+stackPopForBody(StackBody &Body, va_t Entry, const NestedStackProof &NestedPop,
                 const LowFunc *Registration = nullptr,
                 const std::set<int> *RegistrationParents = nullptr) {
-  if (!Body.Valid || !Body.Entries.count(Entry))
+  if (!Body.Valid || !Body.Entries.count(Entry) ||
+      !Body.collectCalleeImports(NestedPop))
     return std::nullopt;
   const auto &Image = Body.Image;
   size_t &Work = Body.Work;
@@ -306,7 +329,10 @@ stackPopForBody(StackBody &Body, va_t Entry,
       if (Op.Opcode == NdOp::CALL && Op.NumInputs == 1 &&
           Op.Inputs[0].isConst() && Op.Inputs[0].Size == 4 &&
           State.Registers[x86reg::RSP / x86reg::GeneralRegStride].Offset)
-        CalleePop = NestedPop(Op.Inputs[0].Offset);
+        if (const auto Callee = NestedPop(Op.Inputs[0].Offset);
+            Callee &&
+            (Callee->RequiredImports.empty() || State.ImportBindingsIntact))
+          CalleePop = Callee->StackPopBytes;
       if (Op.Opcode == NdOp::INDIR_CALL && Op.NumInputs == 1 &&
           Op.Inputs[0].Size == 4 &&
           Op.MemoryAddressSpace == NdMemoryAddressSpace::Default &&
@@ -315,7 +341,7 @@ stackPopForBody(StackBody &Body, va_t Entry,
             Op.Inputs[0].isConst()
                 ? std::optional<va_t>{Op.Inputs[0].Offset}
                 : std::optional<va_t>{Transfer.read(Op.Inputs[0]).ImportTarget};
-        if (Slot)
+        if (Slot && (!Op.Inputs[0].isConst() || State.ImportBindingsIntact))
           CalleePop =
               registration_abi::checkedRegistrationImportStackPop(Image, *Slot);
         ImportedCall = CalleePop.has_value() &&
@@ -452,9 +478,9 @@ std::optional<std::set<int>> registrationParentBlocks(StackBody &Body,
   return Result;
 }
 
-std::optional<uint32_t> stackPopForRegistration(
-    StackBody &Body, const LowFunc &Function,
-    const std::function<std::optional<uint32_t>(va_t)> &NestedPop) {
+std::optional<uint32_t>
+stackPopForRegistration(StackBody &Body, const LowFunc &Function,
+                        const NestedStackProof &NestedPop) {
   const auto &EH = Function.ExceptionMetadata;
   const auto &States = Function.RegistrationStates;
   // A termination-only frame has no dispatcher-entered parent body. Its
@@ -473,7 +499,7 @@ std::optional<uint32_t> stackPopForRegistration(
           !preservesFinallyFrame(Body, Scope.HandlerVA))
         return std::nullopt;
       const auto Pop = NestedPop(Scope.HandlerVA);
-      if (!Pop || *Pop != 0)
+      if (!Pop || Pop->StackPopBytes != 0)
         return std::nullopt;
     }
     return stackPopForBody(Body, Function.Entry, NestedPop);
@@ -521,28 +547,33 @@ std::optional<uint32_t> stackPopForRegistration(
 class ReturningStackProof {
   const BinaryImage &Image;
   size_t &Work;
-  std::map<va_t, std::optional<uint32_t>> &Cache;
+  std::map<va_t, std::optional<RegistrationCalleeStackContract>> &Cache;
   RegistrationCallCalleeIndex &Owner;
   unsigned &Depth;
   StackBody *Parent;
 
 public:
-  ReturningStackProof(const BinaryImage &Image, size_t &Work,
-                      std::map<va_t, std::optional<uint32_t>> &Cache,
-                      RegistrationCallCalleeIndex &Owner, unsigned &Depth,
-                      StackBody *Parent = nullptr)
+  ReturningStackProof(
+      const BinaryImage &Image, size_t &Work,
+      std::map<va_t, std::optional<RegistrationCalleeStackContract>> &Cache,
+      RegistrationCallCalleeIndex &Owner, unsigned &Depth,
+      StackBody *Parent = nullptr)
       : Image(Image), Work(Work), Cache(Cache), Owner(Owner), Depth(Depth),
         Parent(Parent) {}
 
-  std::optional<uint32_t> prove(va_t Target) {
+  std::optional<RegistrationCalleeStackContract> prove(va_t Target) {
     if (!chargeCalleeWork(Work, 1))
       return std::nullopt;
     // The parent may have dispatcher-entered returns. Its ordinary entry
     // cannot borrow the proof intended only for separately called interiors.
     if (Parent && Target == Parent->FunctionEntry)
       return std::nullopt;
-    if (auto It = Cache.find(Target); It != Cache.end())
+    if (auto It = Cache.find(Target); It != Cache.end()) {
+      if (It->second &&
+          !chargeCalleeWork(Work, It->second->RequiredImports.size() + 1))
+        return std::nullopt;
       return It->second;
+    }
     if (Depth == ::neverd::limits::ir::kMaxReturningStackProofDepth ||
         Cache.size() ==
             ::neverd::limits::ir::kRegistrationCalleeStackProveCacheSizeLimit ||
@@ -555,8 +586,12 @@ public:
         if (const auto Pop =
                 registration_abi::checkedRegistrationImportStackPop(
                     Image, readLE<uint32_t>(Bytes->data() + 2))) {
-          Cache.emplace(Target, Pop);
-          return Pop;
+          if (!chargeCalleeWork(Work, 2))
+            return std::nullopt;
+          RegistrationCalleeStackContract Result{
+              Target, *Pop, false, {}, {readLE<uint32_t>(Bytes->data() + 2)}};
+          Cache.emplace(Target, Result);
+          return Result;
         }
     }
     if ((!Parent || !Parent->Entries.count(Target)))
@@ -569,8 +604,17 @@ public:
     auto It = Cache.emplace(Target, std::nullopt).first;
     ++Depth;
     const auto Nested = [&](va_t Callee) { return prove(Callee); };
+    const auto Record = [&](StackBody &Body, std::optional<uint32_t> Pop) {
+      if (Pop && chargeCalleeWork(Work, Body.ImportSlots.size() + 1))
+        It->second = RegistrationCalleeStackContract{
+            Target,
+            *Pop,
+            false,
+            {},
+            {Body.ImportSlots.begin(), Body.ImportSlots.end()}};
+    };
     if (Parent && Parent->Entries.count(Target)) {
-      It->second = stackPopForBody(*Parent, Target, Nested);
+      Record(*Parent, stackPopForBody(*Parent, Target, Nested));
     } else {
       Decoder Dec;
       if (Dec.init(Image)) {
@@ -579,12 +623,15 @@ public:
         const LowFunc Callee =
             Builder.buildIntegerFrameProof(Image, Dec, Target, "abi-stack");
         StackBody Body(Image, Callee, Work);
-        It->second = Callee.ExceptionMetadata
+        Record(Body, Callee.ExceptionMetadata
                          ? stackPopForRegistration(Body, Callee, Nested)
-                         : stackPopForBody(Body, Target, Nested);
+                         : stackPopForBody(Body, Target, Nested));
       }
     }
     --Depth;
+    if (It->second &&
+        !chargeCalleeWork(Work, It->second->RequiredImports.size() + 1))
+      return std::nullopt;
     return It->second;
   }
 };
@@ -655,8 +702,10 @@ std::optional<uint32_t> getCheckedX86CalleeStackPop(const BinaryImage &Image,
 std::optional<uint32_t> RegistrationCallCalleeIndex::stackPop(va_t Target) {
   if (!isPE32(Image))
     return std::nullopt;
-  return ReturningStackProof(Image, Work, StackCache, *this, StackDepth)
-      .prove(Target);
+  const auto Proof =
+      ReturningStackProof(Image, Work, StackCache, *this, StackDepth)
+          .prove(Target);
+  return Proof ? std::optional<uint32_t>{Proof->StackPopBytes} : std::nullopt;
 }
 
 std::optional<std::vector<RegistrationCalleeStackContract>>
@@ -709,8 +758,8 @@ RegistrationCallCalleeIndex::stackContracts(const LowFunc &Function) {
     }
     if (Target == Function.Entry)
       continue;
-    if (auto Pop = Proof.prove(Target))
-      Result.push_back({Target, *Pop, false});
+    if (auto Callee = Proof.prove(Target))
+      Result.push_back(std::move(*Callee));
   }
   return Result;
 }

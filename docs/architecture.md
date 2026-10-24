@@ -2325,6 +2325,15 @@ caller-owned arguments on normal return. The documented
 declarations and the native SDK `_onexit` declaration use cdecl. A stack fact
 proves neither that a lock returns nor that callback registration is free of
 memory effects; managed `_onexit_m` and other providers receive no inferred ABI.
+The returning-stack contract retains each direct callee's transitive IAT
+dependencies, including imports behind an immutable veneer or another helper.
+Callers collect those dependencies before interpreting any stores. A preceding
+possibly overlapping write, opaque call or exceptional entry cannot lend a
+fresh import binding to a later stack adjustment. Indirect calls through the
+slot require the same reaching binding even when no pointer was cached in a
+register. The scalar stack-pop query describes the callee under its entry
+binding assumptions; source callers consume the full dependency-bearing
+contract. An explicit stack restoration remains an independent proof.
 Cached PE32 import pointers additionally require an immutable full-word MOV
 whose complete current LowIR address, load and destination agree with its
 machine bytes. The stack contract retains that exact load occurrence. The

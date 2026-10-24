@@ -660,6 +660,8 @@ bool RegistrationStateSolver::transferBlock(size_t I, const Domain &Before,
                  : StackPops.end();
       const auto Boundary = Boundaries.find(Op.Addr);
       if (It != StackPops.end() && Op.Seq >= 0 &&
+          (!Op.Inputs[0].isConst() || After.Frame.ImportBindingsIntact ||
+           (Op.Opcode == NdOp::CALL && !StackBindingCallees.count(*Target))) &&
           Boundary != Boundaries.end() && Boundary->second.first == Block.Id &&
           Boundary->second.second.Control == LowInstructionControl::Call) {
         ImportedCall =

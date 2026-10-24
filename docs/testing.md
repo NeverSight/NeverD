@@ -5874,6 +5874,13 @@ IAT slots, including store addresses synthesized from scalar instructions.
 Writes before the second slot's invocation must withdraw preservation; a later
 write does not change the already preserved cache. EH3/EH4 state mutations also
 check a different imported-call slot and an unrelated disjoint global write.
+`DirectCleanupNeedsTheInvokedImportBinding` replaces a stdcall import with a
+plain `RET`: a copied caller PC lets the wrapper return with the wrong ESP.
+Direct IAT calls, veneers and nested wrappers must all refuse that stack fact,
+and valid wrappers must retain their transitive IAT dependencies.
+`ImportedStackCleanupRequiresItsCurrentBinding` checks the corresponding
+EH3/EH4 state consumers, partial overlap, unknown aliases, prior calls,
+malformed dependency lists and disjoint or later writes.
 `CachedImportsRespectCumulativeWork` checks the exact work boundary and refusal
 on exhaustion. `OpaqueCallsCannotCertifyCachedTargetPreservation` isolates the
 register-preservation boundary from all returning-stack facts.
