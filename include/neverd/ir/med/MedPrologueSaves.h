@@ -23,12 +23,12 @@ namespace neverd {
 /// its version zero, or the entry seed that copies it (`COPY RSI.1 = RSI`).
 bool isEntryLiveInValue(const MedFunc &Func, const MedVar &V, uint64_t RegOff);
 
-/// Mark source-mode prologue saves, unobserved entry spills and return-address
-/// reads using one frame access analysis. Complete fixed integer call operands
-/// reading private frame bytes proved never written on any incoming path become
-/// explicit unavailable values in source only. General partial-byte
-/// observations are separate. The analysis is discarded before returning;
-/// operation positions stay stable.
+/// Mark source-mode prologue saves, unobserved scratch spills and
+/// return-address reads using one frame access analysis. Complete fixed integer
+/// call operands reading private frame bytes proved never written on any
+/// incoming path become explicit unavailable values in source only. General
+/// partial-byte observations are separate. The analysis is discarded before
+/// returning; operation positions stay stable.
 void markSourceStackAccesses(MedFunc &Func, Arch Architecture,
                              BinaryFormat Format,
                              StackEntryKind Entry = StackEntryKind::Call);

@@ -243,7 +243,7 @@ struct MedOp {
   bool HasSourceErrorResult = false;
   bool Dead = false;
   /// Source views only: this STORE saves a callee-saved register's entry
-  /// value into prologue storage, or an incoming register into scratch bytes
+  /// value into prologue storage, or a scalar into scratch bytes
   /// proved unobserved before overwrite/return (markSourceStackAccesses).
   /// Source emitters leave it out. Binary lifting and patching never set it.
   bool PrologueSave = false;

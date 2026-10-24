@@ -8,6 +8,7 @@
 
 #include "neverd/ir/Limits.h"
 #include "neverd/ir/TargetRegInfo.h"
+#include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/ir/med/MedABIPass.h"
 #include "neverd/ir/med/MedStackAlignment.h"
 
@@ -42,9 +43,53 @@ bool isEntryLiveInValue(const MedFunc &Func, const MedVar &V, uint64_t RegOff) {
 
 namespace {
 
-using ValueKey = std::pair<int, int>;
+using ValueKey = std::tuple<MedVar::VarKind, int, int>;
 
-ValueKey keyOf(const MedVar &V) { return {V.Id, V.SSAVer}; }
+ValueKey keyOf(const MedVar &V) { return {V.Kind, V.Id, V.SSAVer}; }
+
+/// Explicit and implicit readers, shared by both source spill proofs. A
+/// clobber or PHI is not an ordinary operation that a restore can skip.
+struct ValueReads {
+  std::map<ValueKey, std::vector<const MedOp *>> Ops;
+  std::set<ValueKey> Others;
+
+  explicit ValueReads(const MedFunc &Func) {
+    auto Note = [&](const MedVar &V, const MedOp *By) {
+      if (V.isConst() || V.Id < 0)
+        return;
+      if (By)
+        Ops[keyOf(V)].push_back(By);
+      else
+        Others.insert(keyOf(V));
+    };
+    for (const MedBlock &Block : Func.Blocks) {
+      for (const PhiNode &Phi : Block.Phis) {
+        for (const auto &Incoming : Phi.Args)
+          Note(Incoming.second, nullptr);
+        if (Phi.ExceptionalEntry)
+          Note(*Phi.ExceptionalEntry, nullptr);
+      }
+      for (const MedOp &Op : Block.Ops)
+        for (unsigned I = 0; I < Op.NumInputs; ++I)
+          Note(Op.Inputs[I], &Op);
+    }
+    for (const MedCallClobber &Clobber : Func.CallClobbers) {
+      Note(Clobber.Value, nullptr);
+      Note(Clobber.PreservedInput, nullptr);
+    }
+  }
+
+  bool unread(const MedVar &V) const {
+    return !Ops.count(keyOf(V)) && !Others.count(keyOf(V));
+  }
+
+  const MedOp *singleReader(const MedVar &V) const {
+    const auto It = Ops.find(keyOf(V));
+    return !Others.count(keyOf(V)) && It != Ops.end() && It->second.size() == 1
+               ? It->second.front()
+               : nullptr;
+  }
+};
 
 /// A load or store of the bytes at Offset from the entry stack pointer.
 struct FrameAccess {
@@ -56,6 +101,23 @@ struct FrameAccess {
     return Offset < End && Begin < Offset + Size;
   }
 };
+
+/// Validate the start and remaining space before computing an end offset.
+/// An extreme positive offset must not wrap into the private frame or a home
+/// slot. A zero-width access cannot establish private storage either.
+bool isPrivateFrameAccess(const MedFunc &Func,
+                          const IntegerArgumentLayout &Layout, int64_t Offset,
+                          uint16_t Bytes) {
+  if (!Bytes)
+    return false;
+  if (Func.FrameSize > 0 && Offset >= -Func.FrameSize && Offset < 0 &&
+      Bytes <= -Offset)
+    return true;
+  const int64_t HomeBegin = Layout.EntryStackBase - Layout.CallStackBase;
+  return Layout.CallStackBase && Offset >= HomeBegin &&
+         Offset < Layout.EntryStackBase &&
+         Bytes <= Layout.EntryStackBase - Offset;
+}
 
 /// Every plain load and store of \p Func whose address resolves against the
 /// entry stack pointer, all by one proof.
@@ -90,7 +152,8 @@ void frameAccessesOf(MedFunc &Func, Arch Architecture, BinaryFormat Format,
 void markCalleeSavePrologueSaves(MedFunc &Func, Arch Architecture,
                                  BinaryFormat Format, StackEntryKind Entry,
                                  std::vector<FrameAccess> &Loads,
-                                 std::vector<FrameAccess> &Stores) {
+                                 std::vector<FrameAccess> &Stores,
+                                 const ValueReads &Reads) {
   const auto &TRI = getTargetRegInfo(Architecture);
   const BinaryFormat Convention =
       Func.CC == CallingConv::Win64 ? BinaryFormat::COFF : BinaryFormat::ELF;
@@ -98,38 +161,8 @@ void markCalleeSavePrologueSaves(MedFunc &Func, Arch Architecture,
   // return address: MSVC saves nonvolatile registers there.
   const IntegerArgumentLayout Layout =
       TRI.integerArgumentLayout(Convention == BinaryFormat::COFF);
-  const int64_t HomeBegin = Layout.EntryStackBase - Layout.CallStackBase;
 
-  // Every read of a value: the operations and joins that take it.
-  std::map<ValueKey, std::vector<const MedOp *>> OpReads;
-  std::set<ValueKey> OtherReads;
-  auto NoteRead = [&](const MedVar &V, const MedOp *By) {
-    if (V.isConst() || V.Id < 0)
-      return;
-    if (By)
-      OpReads[keyOf(V)].push_back(By);
-    else
-      OtherReads.insert(keyOf(V));
-  };
-  for (const MedBlock &Block : Func.Blocks) {
-    for (const PhiNode &Phi : Block.Phis) {
-      for (const auto &Incoming : Phi.Args)
-        NoteRead(Incoming.second, nullptr);
-      if (Phi.ExceptionalEntry)
-        NoteRead(*Phi.ExceptionalEntry, nullptr);
-    }
-    for (const MedOp &Op : Block.Ops)
-      for (unsigned I = 0; I < Op.NumInputs; ++I)
-        NoteRead(Op.Inputs[I], &Op);
-  }
   frameAccessesOf(Func, Architecture, Format, Entry, Loads, Stores);
-  for (const MedCallClobber &Clobber : Func.CallClobbers) {
-    NoteRead(Clobber.Value, nullptr);
-    NoteRead(Clobber.PreservedInput, nullptr);
-  }
-  auto Unread = [&](const MedVar &V) {
-    return !OpReads.count(keyOf(V)) && !OtherReads.count(keyOf(V));
-  };
 
   std::vector<MedOp *> Saves;
   for (const FrameAccess &Save : Stores) {
@@ -139,12 +172,9 @@ void markCalleeSavePrologueSaves(MedFunc &Func, Arch Architecture,
         !(TRI.isCallPreserved(Saved.RegOff, Saved.Size, Convention) ||
           TRI.isFramePointer(Saved.RegOff) || TRI.isLinkRegister(Saved.RegOff)))
       continue;
-    const int64_t End = Save.Offset + Saved.Size;
-    const bool OwnFrame =
-        Func.FrameSize > 0 && Save.Offset >= -Func.FrameSize && End <= 0;
-    const bool Home = Save.Offset >= HomeBegin && End <= Layout.EntryStackBase;
-    if (!OwnFrame && !Home)
+    if (!isPrivateFrameAccess(Func, Layout, Save.Offset, Saved.Size))
       continue;
+    const int64_t End = Save.Offset + Saved.Size;
     // A later store into the same bytes makes them storage the body uses.
     if (llvm::any_of(Stores, [&](const FrameAccess &Other) {
           return Other.Op != Save.Op && Other.overlaps(Save.Offset, End);
@@ -163,15 +193,14 @@ void markCalleeSavePrologueSaves(MedFunc &Func, Arch Architecture,
       if (Read.Offset != Save.Offset || Read.Size != Saved.Size)
         return false;
       const MedVar &Out = Read.Op->Output;
-      if (Unread(Out))
+      if (Reads.unread(Out))
         return true;
-      const auto It = OpReads.find(keyOf(Out));
-      if (SameRegister(Out) || OtherReads.count(keyOf(Out)) ||
-          It == OpReads.end() || It->second.size() != 1)
+      const MedOp *Reader = Reads.singleReader(Out);
+      if (SameRegister(Out) || !Reader)
         return false;
-      const MedOp &Copy = *It->second.front();
+      const MedOp &Copy = *Reader;
       return Copy.Opcode == NdOp::COPY && Copy.NumInputs == 1 &&
-             SameRegister(Copy.Output) && Unread(Copy.Output);
+             SameRegister(Copy.Output) && Reads.unread(Copy.Output);
     });
     if (OnlyRestored)
       Saves.push_back(Save.Op);
@@ -200,26 +229,90 @@ void markReturnAddressReads(unsigned PointerSize,
       Read.Op->ReturnAddressRead = true;
 }
 
-/// Saving an incoming register into scratch storage does not read its value
+/// A status-word transfer has no implicit access to the lifted frame: the x86
+/// lifter already makes PUSHF's store and POPF's load explicit. Keep the
+/// intrinsic and its architectural effects; this is not a purity contract.
+bool isExplicitFlagsTransfer(const MedOp &Op, Arch Architecture) {
+  if ((Architecture != Arch::X86 && Architecture != Arch::X64) ||
+      Op.NumInputs == 0 || !Op.Inputs[0].isConst() || Op.Inputs[0].Size != 2 ||
+      !Op.IntrinsicOutputs.empty())
+    return false;
+  const auto ValidWidth = [&](uint16_t Size) {
+    return Size == 2 || Size == getTargetRegInfo(Architecture).PointerSize;
+  };
+  const auto Scalar = [](const MedVar &V) {
+    return V.isConst() || V.Kind == MedVar::Temp || V.Kind == MedVar::Reg;
+  };
+  switch (static_cast<Intrinsic>(Op.Inputs[0].ConstVal)) {
+  case Intrinsic::Pushf:
+    return Op.NumInputs == 1 && !Op.Output.isConst() && Scalar(Op.Output) &&
+           Op.Output.Id >= 0 && ValidWidth(Op.Output.Size);
+  case Intrinsic::Popf:
+    return Op.NumInputs == 2 && Op.Output.Size == 0 && Scalar(Op.Inputs[1]) &&
+           ValidWidth(Op.Inputs[1].Size);
+  default:
+    return false;
+  }
+}
+
+/// Scalar moves, address calculations and flag updates with no implicit
+/// observer or trapping operation. Both scratch proofs use this boundary.
+bool isSpillScalarStep(NdOp Opcode) {
+  switch (Opcode) {
+  case NdOp::NOP:
+  case NdOp::COPY:
+  case NdOp::INT_ADD:
+  case NdOp::INT_SUB:
+  case NdOp::INT_MULT:
+  case NdOp::INT_AND:
+  case NdOp::INT_OR:
+  case NdOp::INT_XOR:
+  case NdOp::INT_LEFT:
+  case NdOp::INT_RIGHT:
+  case NdOp::INT_ASHR:
+  case NdOp::INT_EQUAL:
+  case NdOp::INT_NOTEQUAL:
+  case NdOp::INT_LESS:
+  case NdOp::INT_LESSEQUAL:
+  case NdOp::INT_SLESS:
+  case NdOp::INT_SLESSEQUAL:
+  case NdOp::INT_ZEXT:
+  case NdOp::INT_SEXT:
+  case NdOp::INT_NEGATE:
+  case NdOp::INT_NEG2:
+  case NdOp::INT_NOT:
+  case NdOp::INT_CARRY:
+  case NdOp::INT_SOVF:
+  case NdOp::INT_SBOR:
+  case NdOp::BOOL_AND:
+  case NdOp::BOOL_OR:
+  case NdOp::BOOL_XOR:
+  case NdOp::BOOL_NOT:
+  case NdOp::CONCAT:
+  case NdOp::SUBBYTES:
+  case NdOp::SELECT:
+    return true;
+  default:
+    return false;
+  }
+}
+
+/// Saving a scalar into scratch storage does not read its value
 /// when every path overwrites the bytes before observing them. Keep the proof
 /// in source preparation so HighC and LLVMC discard the same transport. Calls,
 /// opaque memory accesses and exceptional edges stop the proof; a partial
 /// overwrite kills only its own bytes. Operation positions remain unchanged.
-void markUnobservedEntrySpills(MedFunc &Func, Arch Architecture,
+void markUnobservedStackSpills(MedFunc &Func, Arch Architecture,
                                BinaryFormat Format,
                                llvm::ArrayRef<FrameAccess> Loads,
-                               llvm::ArrayRef<FrameAccess> Stores) {
+                               llvm::ArrayRef<FrameAccess> Stores,
+                               const ValueReads &Reads) {
   if (Func.Blocks.empty() || Func.SkippedSSA || Func.AnalystStackFrame)
     return;
   const auto &TRI = getTargetRegInfo(Architecture);
   const auto Layout = TRI.integerArgumentLayout(Format);
-  const int64_t HomeBegin = Layout.EntryStackBase - Layout.CallStackBase;
   const auto Private = [&](int64_t At, uint16_t Bytes) {
-    return Bytes && ((Func.FrameSize > 0 && At >= -Func.FrameSize && At < 0 &&
-                      At + Bytes <= 0) ||
-                     (Layout.CallStackBase && At >= HomeBegin &&
-                      At < Layout.EntryStackBase &&
-                      Bytes <= Layout.EntryStackBase - At));
+    return isPrivateFrameAccess(Func, Layout, At, Bytes);
   };
   std::map<const MedOp *, const FrameAccess *> Accesses;
   for (const FrameAccess &Access : Loads)
@@ -238,11 +331,87 @@ void markUnobservedEntrySpills(MedFunc &Func, Arch Architecture,
     }
   }
   size_t Budget = limits::ir::kSourceEntrySpillWork;
+  auto UnusedRestore = [&](const MedOp &Load) {
+    const MedOp *Definition = &Load;
+    if (!Reads.unread(Load.Output)) {
+      Definition = Reads.singleReader(Load.Output);
+      if (!Definition || Definition->Opcode != NdOp::COPY ||
+          Definition->NumInputs != 1 || !Reads.unread(Definition->Output))
+        return false;
+    }
+    const MedVar &Value = Definition->Output;
+    if (Value.Kind == MedVar::Temp)
+      return true;
+    // Return and preserved registers have implicit exit observers. A call's
+    // arguments may also be completed later: lack of an SSA reader alone
+    // cannot prove a physical scratch register dead before that call.
+    if (Value.Kind != MedVar::Reg || !TRI.isGeneralReg(Value.RegOff) ||
+        TRI.isReturnReg(Value.RegOff) || TRI.isReturnControlReg(Value.RegOff) ||
+        llvm::is_contained(TRI.IntReturnRegs, Value.RegOff) ||
+        TRI.isCallPreserved(Value.RegOff, Value.Size, Format) ||
+        (Func.CC == CallingConv::Win64 &&
+         TRI.isCallPreserved(Value.RegOff, Value.Size, BinaryFormat::COFF)) ||
+        llvm::any_of(Func.MultiReturn, [&](const MedReturnReg &Return) {
+          return Return.RegOff == Value.RegOff;
+        }))
+      return false;
+    auto Overlaps = [&](const MedVar &Other) {
+      return Other.Kind == MedVar::Reg && Other.Size &&
+             (Other.RegOff >= Value.RegOff
+                  ? Other.RegOff - Value.RegOff < Value.Size
+                  : Value.RegOff - Other.RegOff < Other.Size);
+    };
+    auto [B, Position] = Positions.at(Definition);
+    ++Position;
+    std::set<size_t> Seen;
+    while (Seen.insert(B).second) {
+      const MedBlock &Block = Func.Blocks[B];
+      if (!Block.ExceptionalSuccs.empty() ||
+          (Position == 0 && !Block.Phis.empty()))
+        return false;
+      for (size_t I = Position; I < Block.Ops.size(); ++I) {
+        if (!Budget)
+          return false;
+        --Budget;
+        const MedOp &Op = Block.Ops[I];
+        if (Op.MemoryOrdering != NdMemoryOrdering::None ||
+            Op.MemoryAddressSpace != NdMemoryAddressSpace::Default)
+          return false;
+        for (unsigned K = 0; K < Op.NumInputs; ++K)
+          if (Overlaps(Op.Inputs[K]))
+            return false;
+        if (Op.Opcode == NdOp::RETURN)
+          return true;
+        if (Op.Opcode == NdOp::BRANCH || Op.Opcode == NdOp::COND_BR) {
+          if (!Op.NumInputs || !Op.Inputs[0].isConst() ||
+              !BlockEntries.count(Op.Inputs[0].ConstVal))
+            return false;
+        } else if (!isSpillScalarStep(Op.Opcode) && Op.Opcode != NdOp::LOAD &&
+                   Op.Opcode != NdOp::STORE &&
+                   !(Op.Opcode == NdOp::INTRINSIC &&
+                     isExplicitFlagsTransfer(Op, Architecture))) {
+          return false;
+        }
+        if (Op.Output.Kind == MedVar::Reg && Op.Output.RegOff == Value.RegOff &&
+            Op.Output.Size >= Value.Size)
+          return true;
+      }
+      // Follow only straight continuations; a join, branch, cycle or missing
+      // block keeps the restore. All work shares the stack-spill budget.
+      if (Block.Succs.size() != 1)
+        return false;
+      const auto Next = Blocks.find(Block.Succs.front());
+      if (Next == Blocks.end())
+        return false;
+      B = Next->second;
+      Position = 0;
+    }
+    return false;
+  };
   for (const FrameAccess &Save : Stores) {
     const MedVar &Value = Save.Op->Inputs[1];
-    if (Save.Op->PrologueSave || Value.Kind != MedVar::Reg ||
-        Value.Size > sizeof(uint64_t) || !Private(Save.Offset, Value.Size) ||
-        !isEntryLiveInValue(Func, Value, Value.RegOff))
+    if (Save.Op->PrologueSave || Value.isConst() ||
+        Value.Size > sizeof(uint64_t) || !Private(Save.Offset, Value.Size))
       continue;
     const auto [FirstBlock, FirstOp] = Positions.at(Save.Op);
     const uint64_t All = (uint64_t{1} << Value.Size) - 1;
@@ -288,12 +457,16 @@ void markUnobservedEntrySpills(MedFunc &Func, Arch Architecture,
             if (At->second->overlaps(Save.Offset + Byte,
                                      Save.Offset + Byte + 1))
               Overlap |= uint64_t{1} << Byte;
-          if (Op.Opcode == NdOp::LOAD && (Pending & Overlap)) {
+          if (Op.Opcode == NdOp::LOAD && (Pending & Overlap) &&
+              !UnusedRestore(Op)) {
             Safe = false;
             break;
           }
           if (Op.Opcode == NdOp::STORE)
             Pending &= ~Overlap;
+        } else if (Op.Opcode == NdOp::INTRINSIC &&
+                   isExplicitFlagsTransfer(Op, Architecture)) {
+          continue;
         } else if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL ||
                    Op.Opcode == NdOp::INTRINSIC ||
                    Op.Opcode == NdOp::INDIR_BR ||
@@ -316,49 +489,9 @@ void markUnobservedEntrySpills(MedFunc &Func, Arch Architecture,
             Safe = false;
             break;
           }
-        } else {
-          // These are scalar moves, address calculations and flag updates,
-          // without an implicit memory observer or a trapping operation.
-          switch (Op.Opcode) {
-          case NdOp::NOP:
-          case NdOp::COPY:
-          case NdOp::INT_ADD:
-          case NdOp::INT_SUB:
-          case NdOp::INT_MULT:
-          case NdOp::INT_AND:
-          case NdOp::INT_OR:
-          case NdOp::INT_XOR:
-          case NdOp::INT_LEFT:
-          case NdOp::INT_RIGHT:
-          case NdOp::INT_ASHR:
-          case NdOp::INT_EQUAL:
-          case NdOp::INT_NOTEQUAL:
-          case NdOp::INT_LESS:
-          case NdOp::INT_LESSEQUAL:
-          case NdOp::INT_SLESS:
-          case NdOp::INT_SLESSEQUAL:
-          case NdOp::INT_ZEXT:
-          case NdOp::INT_SEXT:
-          case NdOp::INT_NEGATE:
-          case NdOp::INT_NEG2:
-          case NdOp::INT_NOT:
-          case NdOp::INT_CARRY:
-          case NdOp::INT_SOVF:
-          case NdOp::INT_SBOR:
-          case NdOp::BOOL_AND:
-          case NdOp::BOOL_OR:
-          case NdOp::BOOL_XOR:
-          case NdOp::BOOL_NOT:
-          case NdOp::CONCAT:
-          case NdOp::SUBBYTES:
-          case NdOp::SELECT:
-            break;
-          default:
-            Safe = false;
-            break;
-          }
-          if (!Safe)
-            break;
+        } else if (!isSpillScalarStep(Op.Opcode)) {
+          Safe = false;
+          break;
         }
       }
       if (!Safe || !Pending || Returned)
@@ -525,7 +658,9 @@ void replaceUnwrittenCallFrameReads(MedFunc &Func, Arch Architecture,
 void markCalleeSavePrologueSaves(MedFunc &Func, Arch Architecture,
                                  BinaryFormat Format, StackEntryKind Entry) {
   std::vector<FrameAccess> Loads, Stores;
-  markCalleeSavePrologueSaves(Func, Architecture, Format, Entry, Loads, Stores);
+  const ValueReads Reads(Func);
+  markCalleeSavePrologueSaves(Func, Architecture, Format, Entry, Loads, Stores,
+                              Reads);
 }
 
 void markReturnAddressReads(MedFunc &Func, Arch Architecture,
@@ -541,13 +676,15 @@ void markReturnAddressReads(MedFunc &Func, Arch Architecture,
 void markSourceStackAccesses(MedFunc &Func, Arch Architecture,
                              BinaryFormat Format, StackEntryKind Entry) {
   std::vector<FrameAccess> Loads, Stores;
-  markCalleeSavePrologueSaves(Func, Architecture, Format, Entry, Loads, Stores);
+  const ValueReads Reads(Func);
+  markCalleeSavePrologueSaves(Func, Architecture, Format, Entry, Loads, Stores,
+                              Reads);
   // Annotate before source-only replacement. No access proof survives the
   // replacements at the end of this preparation.
   if (hasStackReturnAddress(Architecture, Entry))
     markReturnAddressReads(getTargetRegInfo(Architecture).PointerSize, Loads,
                            Stores);
-  markUnobservedEntrySpills(Func, Architecture, Format, Loads, Stores);
+  markUnobservedStackSpills(Func, Architecture, Format, Loads, Stores, Reads);
   replaceUnwrittenCallFrameReads(Func, Architecture, Loads, Stores);
 }
 

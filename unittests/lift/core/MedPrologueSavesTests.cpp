@@ -8,9 +8,12 @@
 
 #include "neverd/Common.h"
 #include "neverd/ir/TargetRegInfo.h"
+#include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/ir/med/MedPrologueSaves.h"
+#include "neverd/lift/X86/X86Regs.h"
 
 #include <initializer_list>
+#include <limits>
 #include <utility>
 
 namespace {
@@ -164,11 +167,220 @@ TEST_P(MedPrologueSaves, AReadBeforeTheOverwriteKeepsTheSave) {
   EXPECT_EQ(Ops.size(), 12u);
 }
 
+TEST(SourceStackSpills, OverwrittenValuesNeedNotComeFromTheEntry) {
+  for (Arch Architecture : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64})
+    for (BinaryFormat Format :
+         {BinaryFormat::COFF, BinaryFormat::ELF, BinaryFormat::MachO})
+      for (MedVar::VarKind Kind :
+           {MedVar::Reg, MedVar::Temp, MedVar::Unspecified}) {
+        SCOPED_TRACE(testing::Message() << unsigned(Architecture) << ':'
+                                        << unsigned(Format) << ':' << Kind);
+        const auto &TRI = getTargetRegInfo(Architecture);
+        const auto Width = TRI.PointerSize;
+        auto SP = reg(1, TRI.StackPointer, 0);
+        SP.TheArch = Architecture;
+        SP.Size = Width;
+        auto Address = temp(10);
+        Address.TheArch = Architecture;
+        Address.Size = Width;
+        auto Value = MedVar::makeUnspecified(Width, Architecture);
+        if (Kind != MedVar::Unspecified) {
+          Value = reg(2, TRI.IntReturnReg, 3);
+          Value.Kind = Kind;
+          Value.TheArch = Architecture;
+          Value.Size = Width;
+        }
+        MedFunc Func;
+        Func.Entry = 0x1000;
+        Func.FrameSize = Width;
+        MedBlock Block;
+        Block.Id = 0;
+        Block.StartAddr = Func.Entry;
+        Block.Ops = {
+            op(NdOp::COPY, SP, {SP}),
+            op(NdOp::INT_SUB, Address, {SP, MedVar::makeConst(Width, Width)}),
+            op(NdOp::STORE, none(), {Address, Value}),
+            op(NdOp::STORE, none(), {Address, MedVar::makeConst(19, Width)}),
+            op(NdOp::RETURN, none(), {MedVar::makeConst(19, Width)})};
+        Func.Blocks.push_back(std::move(Block));
+        markSourceStackAccesses(Func, Architecture, Format);
+        EXPECT_TRUE(Func.Blocks[0].Ops[2].PrologueSave);
+        EXPECT_EQ(Func.Blocks[0].Ops.size(), 5u);
+      }
+}
+
+TEST(SourceStackSpills, FlagsTransfersDoNotObserveScratchButKeepTheirEffects) {
+  for (Arch Architecture : {Arch::X86, Arch::X64})
+    for (unsigned Mode = 0; Mode < 9; ++Mode) {
+      SCOPED_TRACE(testing::Message() << unsigned(Architecture) << ':' << Mode);
+      MedFunc Func = pushedRbx(CallingConv::Win64);
+      auto &Ops = Func.Blocks[0].Ops;
+      Ops.resize(5);
+      for (auto &Op : Ops) {
+        Op.Output.TheArch = Architecture;
+        Op.Output.Size =
+            Op.Output.Size ? getTargetRegInfo(Architecture).PointerSize : 0;
+        for (unsigned I = 0; I < Op.NumInputs; ++I) {
+          Op.Inputs[I].TheArch = Architecture;
+          Op.Inputs[I].Size = getTargetRegInfo(Architecture).PointerSize;
+        }
+      }
+      const auto Address = Ops[4].Inputs[0];
+      const auto Width = getTargetRegInfo(Architecture).PointerSize;
+      Ops[4].Inputs[1] = MedVar::makeUnspecified(Width, Architecture);
+      auto Flags = temp(20);
+      Flags.Size = Width;
+      Flags.TheArch = Architecture;
+      Ops.push_back(op(NdOp::INTRINSIC, Flags,
+                       {MedVar::makeConst(unsigned(Intrinsic::Pushf), 2)}));
+      Ops.push_back(
+          op(NdOp::INTRINSIC, none(),
+             {MedVar::makeConst(unsigned(Intrinsic::Popf), 2), Flags}));
+      switch (Mode) {
+      case 1: // An unrelated or unknown intrinsic remains a barrier.
+        Ops[5].Inputs[0].ConstVal = 0xFFFF;
+        break;
+      case 2:
+        Ops[5].Output.Size = 3;
+        break;
+      case 3:
+        Ops[6].Inputs[1].Size = 3;
+        break;
+      case 4:
+        Ops[6].NumInputs = 1;
+        break;
+      case 5:
+        Ops[5].Inputs[0].Size = 8;
+        break;
+      case 6:
+        Ops[5].IntrinsicOutputs.push_back(temp(30));
+        break;
+      case 7:
+        Ops[6].MemoryOrdering = NdMemoryOrdering::SequentiallyConsistent;
+        break;
+      case 8:
+        Func.Blocks[0].ExceptionalSuccs.emplace_back(1, 0x2000);
+        break;
+      }
+      Ops.push_back(
+          op(NdOp::STORE, none(), {Address, MedVar::makeConst(19, Width)}));
+      Ops.push_back(op(NdOp::RETURN, none(), {MedVar::makeConst(19, Width)}));
+      markSourceStackAccesses(Func, Architecture, BinaryFormat::COFF);
+      EXPECT_EQ(Ops[4].PrologueSave, Mode == 0);
+      EXPECT_EQ(Ops[5].Opcode, NdOp::INTRINSIC);
+      EXPECT_EQ(Ops[6].Opcode, NdOp::INTRINSIC);
+      EXPECT_FALSE(Ops[5].Dead);
+      EXPECT_FALSE(Ops[6].Dead);
+      EXPECT_EQ(Ops.size(), 9u);
+    }
+}
+
+TEST(SourceStackSpills, OnlyUnreadScratchRestoresCanBeIgnored) {
+  for (unsigned Mode = 0; Mode < 16; ++Mode) {
+    SCOPED_TRACE(Mode);
+    MedFunc Func = pushedRbx(CallingConv::Win64);
+    auto &Ops = Func.Blocks[0].Ops;
+    Ops[4].Inputs[1] = MedVar::makeUnspecified(8, Arch::X64);
+    const auto Loaded = temp(10);
+    auto Restored = reg(30, x86reg::R10, 1);
+    // R10 is volatile and cannot be an ordinary ABI result.
+    if (Mode == 1)
+      Restored = rbx(2);
+    if (Mode == 2)
+      Restored.RegOff = getTargetRegInfo(Arch::X64).IntReturnReg;
+    if (Mode == 3)
+      Restored = sp(2);
+    Ops[7] = op(NdOp::COPY, Restored, {Loaded});
+    Ops[8] = op(NdOp::STORE, none(), {sp(1), MedVar::makeConst(19, 8)});
+    Ops[9] = op(NdOp::RETURN, none(), {MedVar::makeConst(19, 8)});
+    if (Mode == 4)
+      Ops[9].Inputs[0] = Restored;
+    if (Mode == 5) {
+      PhiNode Phi;
+      Phi.Output = temp(40);
+      Phi.Args = {{0, Restored}};
+      Func.Blocks[0].Phis.push_back(std::move(Phi));
+    }
+    if (Mode == 6) {
+      MedCallClobber Clobber;
+      Clobber.Value = temp(40);
+      Clobber.PreservedInput = Restored;
+      Clobber.PreservedPrefixSize = 4;
+      Func.CallClobbers.push_back(Clobber);
+    }
+    if (Mode == 7)
+      Ops.insert(Ops.begin() + 8,
+                 op(NdOp::CALL, none(), {MedVar::makeConst(0x2000, 8), sp(1)}));
+    if (Mode >= 8 && Mode <= 10) {
+      // The slot is dead, but ABI recovery could still observe the restored
+      // register at a later call. Only a complete register overwrite kills it.
+      Ops.insert(Ops.end() - 1,
+                 op(NdOp::CALL, none(), {MedVar::makeConst(0x2000, 8)}));
+      if (Mode >= 9) {
+        auto Overwritten = Restored;
+        ++Overwritten.SSAVer;
+        if (Mode == 10)
+          Overwritten.Size = 4;
+        Ops.insert(Ops.end() - 2, op(NdOp::COPY, Overwritten,
+                                     {MedVar::makeConst(0, Overwritten.Size)}));
+      }
+    }
+    if (Mode == 11) {
+      Ops[7].Output.RegOff = x86reg::DF;
+      Ops[7].Output.Size = 1;
+    }
+    if (Mode == 12)
+      Func.MultiReturn.push_back({Restored.RegOff, Restored.Size, false});
+    if (Mode == 13)
+      Ops[9] = op(NdOp::INDIR_BR, none(), {MedVar::makeConst(0x2000, 8)});
+    if (Mode == 14) {
+      // A straight continuation kills the scratch register before its call.
+      Ops[9] = op(NdOp::BRANCH, none(), {MedVar::makeConst(0x2000, 8)});
+      Func.Blocks[0].Succs = {1};
+      auto Overwritten = Restored;
+      ++Overwritten.SSAVer;
+      MedBlock Next;
+      Next.Id = 1;
+      Next.StartAddr = 0x2000;
+      Next.Preds = {0};
+      Next.Ops = {op(NdOp::COPY, Overwritten, {MedVar::makeConst(0, 8)}),
+                  op(NdOp::CALL, none(), {MedVar::makeConst(0x3000, 8)}),
+                  op(NdOp::RETURN, none(), {MedVar::makeConst(19, 8)})};
+      Func.Blocks.push_back(std::move(Next));
+    }
+    if (Mode == 15)
+      Ops[7].Output.RegOff = x86reg::RSI;
+    markSourceStackAccesses(
+        Func, Arch::X64, Mode == 15 ? BinaryFormat::ELF : BinaryFormat::COFF);
+    EXPECT_EQ(Func.Blocks[0].Ops[4].PrologueSave,
+              Mode == 0 || Mode == 9 || Mode == 14);
+  }
+}
+
 TEST_P(MedPrologueSaves, AnArgumentSpillIsNoSave) {
   MedFunc Func = pushedRbx();
   Func.Blocks[0].Ops[4] = op(NdOp::STORE, none(), {sp(1), rcx(0)});
   markStackAccesses(Func, Arch::X64, BinaryFormat::ELF);
   EXPECT_FALSE(save(Func).PrologueSave);
+}
+
+TEST_P(MedPrologueSaves, OutOfFrameExtentsAreNotPrivateStorage) {
+  for (BinaryFormat Format : {BinaryFormat::COFF, BinaryFormat::ELF})
+    for (int64_t Offset :
+         {std::numeric_limits<int64_t>::max(),
+          std::numeric_limits<int64_t>::max() - 7,
+          std::numeric_limits<int64_t>::max() - 8,
+          std::numeric_limits<int64_t>::min(), int64_t{-9}, int64_t{0}}) {
+      SCOPED_TRACE(testing::Message() << unsigned(Format) << ':' << Offset);
+      MedFunc Func =
+          pushedRbx(Format == BinaryFormat::COFF ? CallingConv::Win64
+                                                 : CallingConv::SysV_AMD64);
+      Func.Blocks[0].Ops[3] =
+          op(NdOp::INT_ADD, sp(1),
+             {sp(0), MedVar::makeConst(uint64_t(Offset), 8)});
+      markStackAccesses(Func, Arch::X64, Format);
+      EXPECT_FALSE(save(Func).PrologueSave);
+    }
 }
 
 /// `mov [rsp+8], rbx; …; mov rbx, [rsp+8]; ret`: MSVC saves rbx in the home
