@@ -2318,6 +2318,13 @@ on return, the caller still owns both table-pointer arguments on its stack.
 This returning-stack fact grants no callback, unwind, table-memory or private
 initializer-borrow authority. Both direct IAT calls and immutable jump veneers
 use the same owner; a similarly named export receives no inferred convention.
+The exact legacy CRT `_lock`, `_unlock` and `_onexit` exports also retain
+caller-owned arguments on normal return. The documented
+[`_lock`](https://learn.microsoft.com/en-us/cpp/c-runtime-library/lock) and
+[`_unlock`](https://learn.microsoft.com/en-us/cpp/c-runtime-library/unlock)
+declarations and the native SDK `_onexit` declaration use cdecl. A stack fact
+proves neither that a lock returns nor that callback registration is free of
+memory effects; managed `_onexit_m` and other providers receive no inferred ABI.
 Cached PE32 import pointers additionally require an immutable full-word MOV
 whose complete current LowIR address, load and destination agree with its
 machine bytes. The stack contract retains that exact load occurrence. The
@@ -2332,7 +2339,8 @@ prove register preservation without its current binding; exception dispatch
 also supplies no fresh binding proof. Explicit writes that may overlap an IAT
 slot likewise withdraw future load facts without changing an earlier cached
 value. Segment-relative writes require their own disjointness proof; only the
-exact PE32 FS:[0] chain word has a known non-image address here. Returning-stack and registration-state analyses share these transfers;
+exact PE32 FS:[0] chain word has a known non-image address here. Returning-stack
+and registration-state analyses share these transfers;
 cached identities grant no callee memory, callback or native EH authority.
 The same owner checks the exact Kernel32 PE32 exports `GetStartupInfoW`,
 `HeapSetInformation`, `InterlockedCompareExchange`, `InterlockedExchange`,

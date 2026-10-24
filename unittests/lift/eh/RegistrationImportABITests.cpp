@@ -198,12 +198,16 @@ TEST(RegistrationImportABI, StackCleanupCannotAuthorizeDispatchOrObservation) {
   for (const auto &C :
        {ImportCase{"RaiseException", 4}, ImportCase{"HeapSetInformation", 4},
         ImportCase{"malloc", 4}, ImportCase{"_initterm", 2},
-        ImportCase{"_initterm_e", 2}}) {
+        ImportCase{"_initterm_e", 2}, ImportCase{"_lock", 1},
+        ImportCase{"_unlock", 1}, ImportCase{"_onexit", 1}}) {
     SCOPED_TRACE(C.Name);
     const bool IsRaise = llvm::StringRef(C.Name) == "RaiseException";
     const bool IsCRT = llvm::StringRef(C.Name) == "malloc" ||
                        llvm::StringRef(C.Name) == "_initterm" ||
-                       llvm::StringRef(C.Name) == "_initterm_e";
+                       llvm::StringRef(C.Name) == "_initterm_e" ||
+                       llvm::StringRef(C.Name) == "_lock" ||
+                       llvm::StringRef(C.Name) == "_unlock" ||
+                       llvm::StringRef(C.Name) == "_onexit";
     ImportImage F(C, false, IsCRT);
     if (IsCRT)
       F.Image.Imports[0].Module = "msvcrt.dll";
@@ -226,14 +230,16 @@ TEST(RegistrationImportABI, StackCleanupCannotAuthorizeDispatchOrObservation) {
   }
 }
 
-TEST(RegistrationImportABI, InitializerTablesRetainTheirCallerStackCleanup) {
-  for (const char *Name : {"_initterm", "_initterm_e"})
+TEST(RegistrationImportABI, LegacyCRTCallsRetainTheirCallerStackCleanup) {
+  for (const auto &C : {ImportCase{"_initterm", 2},
+                        ImportCase{"_initterm_e", 2}, ImportCase{"_lock", 1},
+                        ImportCase{"_unlock", 1}, ImportCase{"_onexit", 1}})
     for (const char *Module : {"msvcrt.dll", "MSVCR100.DLL"})
       for (bool ThroughStub : {false, true})
-        for (unsigned Mutation = 0; Mutation != 12; ++Mutation) {
-          SCOPED_TRACE(::testing::Message() << Name << ' ' << Module << ' '
+        for (unsigned Mutation = 0; Mutation != 13; ++Mutation) {
+          SCOPED_TRACE(::testing::Message() << C.Name << ' ' << Module << ' '
                                             << ThroughStub << ' ' << Mutation);
-          ImportImage F({Name, 2}, ThroughStub, true);
+          ImportImage F(C, ThroughStub, true);
           auto &Image = F.Image;
           Image.Imports[0].Module = Module;
           if (Mutation == 1)
@@ -259,7 +265,7 @@ TEST(RegistrationImportABI, InitializerTablesRetainTheirCallerStackCleanup) {
                               ImportImage::IATVA + 4);
           }
           if (Mutation == 8) {
-            Image.Imports[0].Name += "@8";
+            Image.Imports[0].Name += "@" + std::to_string(C.Arguments * 4);
             Image.ImportStorageSlots.at(ImportImage::IATVA).Name =
                 Image.Imports[0].Name;
           }
@@ -267,14 +273,20 @@ TEST(RegistrationImportABI, InitializerTablesRetainTheirCallerStackCleanup) {
             const size_t Cleanup =
                 F.CallVA - ImportImage::TextVA + (ThroughStub ? 5 : 6);
             // Missing or partial caller cleanup must not become stdcall.
-            Image.Segments[0].Data[Cleanup + 2] = Mutation == 9 ? 0 : 4;
+            Image.Segments[0].Data[Cleanup + 2] =
+                Mutation == 9 ? 0 : uint8_t(C.Arguments * 2);
           }
           if (Mutation == 11)
             Image.Arch = Arch::X64;
+          if (Mutation == 12) {
+            Image.Imports[0].Name += "_m";
+            Image.ImportStorageSlots.at(ImportImage::IATVA).Name =
+                Image.Imports[0].Name;
+          }
           EXPECT_EQ(getCheckedX86CalleeStackPop(Image, ImportImage::TextVA),
                     Mutation == 0 ? std::optional<uint32_t>{0} : std::nullopt);
-          // A function-pointer table is not a private constructor/object
-          // borrow. Stack balance alone grants no callback or unwind effect.
+          // CRT locks and callback registration are not private constructor
+          // borrows. Stack balance grants no callback or unwind effect.
           EXPECT_FALSE(getCheckedX86RegistrationObjectCalleeABI(
               Image, ImportImage::TextVA));
           EXPECT_FALSE(getCheckedX86RegistrationInitializerCalleeABI(
@@ -285,7 +297,7 @@ TEST(RegistrationImportABI, InitializerTablesRetainTheirCallerStackCleanup) {
             Decoder Dec;
             ASSERT_TRUE(Dec.init(Image));
             const auto Function = CFGBuilder().buildIntegerFrameProof(
-                Image, Dec, ImportImage::TextVA, "initializer-table");
+                Image, Dec, ImportImage::TextVA, "legacy-crt-call");
             RegistrationCallCalleeIndex Index(Image);
             const auto Contracts = Index.stackContracts(Function);
             ASSERT_TRUE(Contracts);

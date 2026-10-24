@@ -5843,15 +5843,17 @@ imports through both IAT calls and jump veneers. Provider, name, delayed-import,
 conflicting-slot, addend, backing-byte, metadata, architecture and caller-cleanup
 mutations must refuse; every accepted stack fact still lacks an object or
 initializer memory contract.
-`InitializerTablesRetainTheirCallerStackCleanup` checks `_initterm` and
-`_initterm_e` from both legacy CRT providers through direct IAT calls and jump
-veneers. Missing or partial caller cleanup, wrong providers or decorated
+`LegacyCRTCallsRetainTheirCallerStackCleanup` checks `_initterm`, `_initterm_e`,
+`_lock`, `_unlock` and `_onexit` from both legacy CRT providers through direct
+IAT calls and jump veneers. Missing or partial caller cleanup, wrong providers or decorated
 names, delayed or conflicting imports, incomplete storage, writable or changed
 code and a different architecture must refuse. Current call occurrences retain
 zero callee cleanup, while private object/initializer borrows and exception
 dispatch remain unproved. `StackCleanupCannotAuthorizeDispatchOrObservation`
-also checks that these callback-table imports cannot acquire the separate
-RaiseException caller-frame contract from their stack fact.
+also checks that these table, lock and exit-registration imports cannot acquire
+the separate RaiseException caller-frame contract from their stack fact.
+Managed-name variants, partial or missing caller cleanup, and stale provider or
+slot bindings receive no normal-return stack contract.
 `CachedImportTargetsKeepOnlyTheirReturningStackABI` checks cdecl and stdcall
 imports through six physical register families. Counterexamples cover partial
 loads/writes, wrong slots/providers, delayed binding, prior slot or unknown

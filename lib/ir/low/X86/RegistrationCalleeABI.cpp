@@ -115,6 +115,7 @@ checkedRegistrationImportStackPop(const BinaryImage &Image, va_t Target) {
       (Name == "malloc" || Name == "calloc" || Name == "realloc" ||
        Name == "free" || Name == "memcpy" || Name == "memmove" ||
        Name == "memset" || Name == "_initterm" || Name == "_initterm_e" ||
+       Name == "_lock" || Name == "_unlock" || Name == "_onexit" ||
        Name == "??2@YAPAXI@Z" || Name == "??_U@YAPAXI@Z" ||
        Name == "??3@YAXPAX@Z" || Name == "??_V@YAXPAX@Z"))
     return 0;
