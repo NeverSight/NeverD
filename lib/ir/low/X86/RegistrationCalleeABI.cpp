@@ -112,7 +112,8 @@ checkedRegistrationImportStackPop(const BinaryImage &Image, va_t Target) {
        Module.equals_insensitive("msvcr100.dll")) &&
       (Name == "malloc" || Name == "calloc" || Name == "realloc" ||
        Name == "free" || Name == "memcpy" || Name == "memmove" ||
-       Name == "memset" || Name == "??2@YAPAXI@Z" || Name == "??_U@YAPAXI@Z" ||
+       Name == "memset" || Name == "_initterm" || Name == "_initterm_e" ||
+       Name == "??2@YAPAXI@Z" || Name == "??_U@YAPAXI@Z" ||
        Name == "??3@YAXPAX@Z" || Name == "??_V@YAXPAX@Z"))
     return 0;
   if ((Name == "log" || Name == "exp") &&

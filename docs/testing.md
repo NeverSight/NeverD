@@ -5843,6 +5843,15 @@ imports through both IAT calls and jump veneers. Provider, name, delayed-import,
 conflicting-slot, addend, backing-byte, metadata, architecture and caller-cleanup
 mutations must refuse; every accepted stack fact still lacks an object or
 initializer memory contract.
+`InitializerTablesRetainTheirCallerStackCleanup` checks `_initterm` and
+`_initterm_e` from both legacy CRT providers through direct IAT calls and jump
+veneers. Missing or partial caller cleanup, wrong providers or decorated
+names, delayed or conflicting imports, incomplete storage, writable or changed
+code and a different architecture must refuse. Current call occurrences retain
+zero callee cleanup, while private object/initializer borrows and exception
+dispatch remain unproved. `StackCleanupCannotAuthorizeDispatchOrObservation`
+also checks that these callback-table imports cannot acquire the separate
+RaiseException caller-frame contract from their stack fact.
 `NestedReturningStackProofIsBoundedAndNonCircular` checks multi-level callee
 cleanup, mismatched pops, recursive dependencies, the depth boundary and shared
 work exhaustion. It does not admit dispatcher-entered parent returns through

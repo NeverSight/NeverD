@@ -197,10 +197,13 @@ TEST(RegistrationImportABI, StackCleanupCannotAuthorizeDispatchOrObservation) {
   using namespace registration_state;
   for (const auto &C :
        {ImportCase{"RaiseException", 4}, ImportCase{"HeapSetInformation", 4},
-        ImportCase{"malloc", 4}}) {
+        ImportCase{"malloc", 4}, ImportCase{"_initterm", 2},
+        ImportCase{"_initterm_e", 2}}) {
     SCOPED_TRACE(C.Name);
     const bool IsRaise = llvm::StringRef(C.Name) == "RaiseException";
-    const bool IsCRT = llvm::StringRef(C.Name) == "malloc";
+    const bool IsCRT = llvm::StringRef(C.Name) == "malloc" ||
+                       llvm::StringRef(C.Name) == "_initterm" ||
+                       llvm::StringRef(C.Name) == "_initterm_e";
     ImportImage F(C, false, IsCRT);
     if (IsCRT)
       F.Image.Imports[0].Module = "msvcrt.dll";
@@ -221,6 +224,76 @@ TEST(RegistrationImportABI, StackCleanupCannotAuthorizeDispatchOrObservation) {
         IsRaise);
     EXPECT_EQ(hasCallerCleanupRegistrationABI(F.caller(), F.Image), IsRaise);
   }
+}
+
+TEST(RegistrationImportABI, InitializerTablesRetainTheirCallerStackCleanup) {
+  for (const char *Name : {"_initterm", "_initterm_e"})
+    for (const char *Module : {"msvcrt.dll", "MSVCR100.DLL"})
+      for (bool ThroughStub : {false, true})
+        for (unsigned Mutation = 0; Mutation != 12; ++Mutation) {
+          SCOPED_TRACE(::testing::Message() << Name << ' ' << Module << ' '
+                                            << ThroughStub << ' ' << Mutation);
+          ImportImage F({Name, 2}, ThroughStub, true);
+          auto &Image = F.Image;
+          Image.Imports[0].Module = Module;
+          if (Mutation == 1)
+            Image.Imports[0].Module = "kernel32.dll";
+          if (Mutation == 2)
+            Image.Imports[0].IsDelayImport = true;
+          if (Mutation == 3)
+            Image.Segments[1].FileSz = 3;
+          if (Mutation == 4)
+            Image.ImportStorageSlots.at(ImportImage::IATVA).Evidence =
+                ImportStorageEvidence::PointerTable;
+          if (Mutation == 5) {
+            Image.Imports.push_back(Image.Imports[0]);
+            Image.Imports.back().Module = "unproved.dll";
+          }
+          if (Mutation == 6)
+            Image.Segments[0].Flags =
+                Image.Segments[0].Flags | SegmentFlags::Writable;
+          if (Mutation == 7) {
+            const va_t Address = ThroughStub ? ImportImage::StubVA : F.CallVA;
+            writeLE<uint32_t>(Image.Segments[0].Data.data() + Address -
+                                  ImportImage::TextVA + 2,
+                              ImportImage::IATVA + 4);
+          }
+          if (Mutation == 8) {
+            Image.Imports[0].Name += "@8";
+            Image.ImportStorageSlots.at(ImportImage::IATVA).Name =
+                Image.Imports[0].Name;
+          }
+          if (Mutation == 9 || Mutation == 10) {
+            const size_t Cleanup =
+                F.CallVA - ImportImage::TextVA + (ThroughStub ? 5 : 6);
+            // Missing or partial caller cleanup must not become stdcall.
+            Image.Segments[0].Data[Cleanup + 2] = Mutation == 9 ? 0 : 4;
+          }
+          if (Mutation == 11)
+            Image.Arch = Arch::X64;
+          EXPECT_EQ(getCheckedX86CalleeStackPop(Image, ImportImage::TextVA),
+                    Mutation == 0 ? std::optional<uint32_t>{0} : std::nullopt);
+          // A function-pointer table is not a private constructor/object
+          // borrow. Stack balance alone grants no callback or unwind effect.
+          EXPECT_FALSE(getCheckedX86RegistrationObjectCalleeABI(
+              Image, ImportImage::TextVA));
+          EXPECT_FALSE(getCheckedX86RegistrationInitializerCalleeABI(
+              Image, ImportImage::TextVA));
+          EXPECT_FALSE(registration_abi::isCheckedRegistrationRaiseSlot(
+              Image, ImportImage::IATVA));
+          if (Mutation == 0) {
+            Decoder Dec;
+            ASSERT_TRUE(Dec.init(Image));
+            const auto Function = CFGBuilder().buildIntegerFrameProof(
+                Image, Dec, ImportImage::TextVA, "initializer-table");
+            RegistrationCallCalleeIndex Index(Image);
+            const auto Contracts = Index.stackContracts(Function);
+            ASSERT_TRUE(Contracts);
+            ASSERT_EQ(Contracts->size(), 1u);
+            EXPECT_EQ(Contracts->front().StackPopBytes, 0u);
+            EXPECT_EQ(Contracts->front().Indirect, !ThroughStub);
+          }
+        }
 }
 
 TEST(RegistrationImportABI, RaiseCleanupRequiresRealImportDirectoryStorage) {

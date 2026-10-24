@@ -2312,6 +2312,12 @@ PE32 scalar/array new/delete entries keep their exact decorated spelling.
 Direct IAT calls and authenticated jump veneers share the same provider and
 storage checks. Their allocation, deallocation, aliasing and callback effects
 remain outside this register-only proof.
+The exact `_initterm` and `_initterm_e` imports from the same CRT providers
+retain their [declared cdecl ABI](https://learn.microsoft.com/en-us/cpp/c-runtime-library/reference/initterm-initterm-e):
+on return, the caller still owns both table-pointer arguments on its stack.
+This returning-stack fact grants no callback, unwind, table-memory or private
+initializer-borrow authority. Both direct IAT calls and immutable jump veneers
+use the same owner; a similarly named export receives no inferred convention.
 The same owner checks the exact Kernel32 PE32 exports `GetStartupInfoW`,
 `HeapSetInformation`, `InterlockedCompareExchange`, `InterlockedExchange`,
 `DecodePointer`, `EncodePointer` and `Sleep` for their SDK stdcall adjustment.
