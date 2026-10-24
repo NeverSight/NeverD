@@ -8,6 +8,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "../../../lib/backend/llvm/X86/MedLLVMRegistrationCxxCall.h"
+#include "../../../lib/backend/llvm/eh/MedLLVMEHHelpers.h"
 #include "gtest/gtest.h"
 
 #include "neverd/Limits.h"
@@ -33,6 +34,32 @@ using namespace neverd;
 constexpr va_t Entry = 0x401000;
 constexpr va_t DataVA = 0x403000;
 constexpr va_t TableVA = 0x404000;
+
+TEST(RegistrationCxxCallEffects, ExternalDeclarationsRequireExactConvention) {
+  llvm::LLVMContext Context;
+  llvm::Module Module("cxx-call-conventions", Context);
+  auto *Type =
+      llvm::FunctionType::get(llvm::Type::getVoidTy(Context),
+                              {llvm::PointerType::get(Context, 0)}, false);
+  constexpr llvm::CallingConv::ID Conventions[] = {
+      llvm::CallingConv::C, llvm::CallingConv::X86_ThisCall,
+      llvm::CallingConv::X86_StdCall, llvm::CallingConv::X86_FastCall};
+  for (auto Convention : Conventions)
+    EXPECT_TRUE(med_llvm_eh::canMaterializeExternalFunctionDeclaration(
+        Module, "callee", Type, Convention));
+  auto *Callee = llvm::Function::Create(
+      Type, llvm::GlobalValue::ExternalLinkage, "callee", Module);
+  for (auto Convention : Conventions) {
+    Callee->setCallingConv(Convention);
+    for (auto Expected : Conventions)
+      EXPECT_EQ(med_llvm_eh::canMaterializeExternalFunctionDeclaration(
+                    Module, "callee", Type, Expected),
+                Convention == Expected);
+    EXPECT_EQ(med_llvm_eh::canMaterializeExternalFunctionDeclaration(
+                  Module, "callee", Type),
+              Convention == llvm::CallingConv::C);
+  }
+}
 
 struct CurrentCalleeFixture {
   enum class Kind { Leaf, Initializer, Throw, Rethrow };

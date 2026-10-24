@@ -38,8 +38,10 @@
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 
+#include <algorithm>
 #include <cstdlib>
 #include <string>
+#include <vector>
 
 using namespace neverd;
 
@@ -94,6 +96,41 @@ TEST(WindowsRegistrationCxxStateMap, LargeGeneratedStateMapsKeepExactEdges) {
           Source, Changed, {}, Changed.BaseVA, States, Mapped, Failed);
       EXPECT_TRUE(bool(Rejected));
       llvm::consumeError(std::move(Rejected));
+    }
+  }
+}
+
+void checkSharedCleanupDeclarations(const BinaryImage &Image,
+                                    const MedFunc &Outer, va_t InnerEntry) {
+  Decoder Decode;
+  ASSERT_TRUE(Decode.init(Image));
+  auto Low = CFGBuilder().build(Image, Decode, InnerEntry, "cleanup_inner");
+  ASSERT_TRUE(Low.RegistrationStates && Low.RegistrationStates->Complete);
+  LowToMedConverter Converter;
+  Converter.setBinaryImage(&Image);
+  auto Inner = Converter.convert(Low, Arch::X86, BinaryFormat::COFF);
+  inferMedTypes(Inner, Arch::X86);
+  recoverCallAbi(Inner, Arch::X86, {}, &Image);
+  for (bool Reverse : {false, true}) {
+    SCOPED_TRACE(Reverse);
+    std::vector<MedFunc> Functions{Outer, Inner};
+    if (Reverse)
+      std::reverse(Functions.begin(), Functions.end());
+    llvm::LLVMContext Context;
+    MedLLVMEmitter Emitter;
+    auto Module = Emitter.emit(Functions, Context, "shared-cleanup", Arch::X86,
+                               {}, &Image, BinaryFormat::COFF);
+    ASSERT_TRUE(Module);
+    ASSERT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
+    for (const auto &Source : Functions) {
+      const auto *Parent = Module->getFunction(Source.Name);
+      ASSERT_TRUE(Parent);
+      ASSERT_TRUE(Parent->getMetadata(windows_eh_md::NativeAttachment))
+          << Source.Name;
+      ASSERT_TRUE(Source.ExceptionMetadata);
+      auto Error = validateCOFFRegistrationCxxIR(
+          *Parent, *Source.ExceptionMetadata, Image);
+      ASSERT_FALSE(bool(Error)) << llvm::toString(std::move(Error));
     }
   }
 }
@@ -277,6 +314,9 @@ void checkCleanupOnlyInput(const char *Path, bool RegisterStateWrite) {
   auto *Parent = Module->getFunction(Med.Name);
   ASSERT_TRUE(Parent);
   ASSERT_TRUE(Parent->getMetadata(windows_eh_md::NativeAttachment));
+  if (NestedTarget)
+    ASSERT_NO_FATAL_FAILURE(
+        checkSharedCleanupDeclarations(*Image, Med, NestedTarget));
   if (Med.RegistrationPhysicalFrame)
     for (unsigned Mutation = 0; Mutation != 4; ++Mutation) {
       SCOPED_TRACE(Mutation);

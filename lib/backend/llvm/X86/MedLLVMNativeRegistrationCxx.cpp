@@ -346,8 +346,8 @@ bool MedLLVMEmitter::emitNativeX86RegistrationCxx(
                               ? (ABI->BorrowsECX ? "ecx_void" : "leaf_void")
                           : ABI->BorrowsECX ? "ecx"
                                             : "leaf");
-      if (!med_llvm_eh::canMaterializeExternalFunctionDeclaration(*Mod, Name,
-                                                                  ABI->Type))
+      if (!med_llvm_eh::canMaterializeExternalFunctionDeclaration(
+              *Mod, Name, ABI->Type, ABI->Convention))
         return false;
       Calls.push_back(
           {Call, Effect, State, Throw, *ABI,
@@ -414,8 +414,8 @@ bool MedLLVMEmitter::emitNativeX86RegistrationCxx(
           !Fresh.Leaf.CallerPCWrites.empty())
         return false;
       auto Name = CalleeName(Fresh.Leaf.Target, "cleanup.ecx");
-      if (!med_llvm_eh::canMaterializeExternalFunctionDeclaration(*Mod, Name,
-                                                                  CleanupType))
+      if (!med_llvm_eh::canMaterializeExternalFunctionDeclaration(
+              *Mod, Name, CleanupType, llvm::CallingConv::X86_ThisCall))
         return false;
       Names.push_back(std::move(Name));
     }
