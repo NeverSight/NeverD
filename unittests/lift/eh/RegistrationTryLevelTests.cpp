@@ -2712,6 +2712,159 @@ TEST(RegistrationTryLevel, CxxEAXHelperChecksFixupsAndSafeSEH) {
   }
 }
 
+std::pair<BinaryImage, va_t> makeComputedSEHStateImage(bool EH4, bool Bitwise,
+                                                       uint8_t Register,
+                                                       bool Wide, int32_t Level,
+                                                       unsigned Mutation = 0,
+                                                       bool Join = false) {
+  ImageBuilder B;
+  const int32_t Seed = EH4 ? -2 : -1;
+  if (EH4) {
+    auto Fixture = makeDirectEH4Fixture(false, false, false, false);
+    B = std::move(Fixture.Builder);
+    B.Text.resize(Fixture.Publication + 9);
+    B.RData.resize(16);
+  } else {
+    emitInstall(B.Text, -1, kRData);
+    B.Text.insert(B.Text.end(), {0x83, 0xec, 16, 0x89, 0x65, 0xe8});
+  }
+  B.addScope(Seed, kText + 0xc0, kText + 0xd0);
+  B.addScope(0, kText + 0xc0, kText + 0xd0);
+  B.endScopes();
+  if (EH4)
+    B.RData.resize(0x84);
+  const auto RegisterWrite = [&](uint8_t Reg, int32_t Value) {
+    B.Text.push_back(uint8_t(0xb8 | Reg));
+    emit32(B.Text, uint32_t(Value));
+    B.Text.push_back(0x90);
+    B.Text.insert(B.Text.end(), {0x89, uint8_t(0x45 | (Reg << 3)), 0xfc});
+  };
+  if (Join) {
+    B.Text.insert(B.Text.end(), {0x85, 0xd2, 0x74, 7});
+    emitFrameStore(B.Text, -4, 0);
+  }
+  if (!Bitwise) {
+    B.Text.push_back(uint8_t(0xb8 | Register));
+    emit32(B.Text, Mutation == 2 ? 7 : uint32_t(Level));
+    if (Mutation == 1)
+      std::fill(B.Text.end() - 5, B.Text.end(), 0x90);
+    B.Text.push_back(0x90);
+    if (Mutation == 3) {
+      const uint8_t Condition = Register == 1 ? 2 : 1;
+      B.Text.insert(B.Text.end(),
+                    {0x85, uint8_t(0xc0 | (Condition << 3) | Condition), 0x74,
+                     1, uint8_t(0x40 | Register)});
+    }
+  }
+  const va_t Store = B.textVA();
+  B.Text.push_back(Bitwise ? (Wide ? 0x81 : 0x83) : 0x89);
+  B.Text.push_back(
+      uint8_t((Wide ? 0x85 : 0x45) | ((Bitwise ? 4 : Register) << 3)));
+  if (Wide)
+    emit32(B.Text, uint32_t(-4));
+  else
+    B.Text.push_back(0xfc);
+  if (Bitwise) {
+    if (Wide)
+      emit32(B.Text, uint32_t(Level));
+    else
+      B.Text.push_back(uint8_t(Level));
+  }
+  B.Text.push_back(0x90);
+  if (Bitwise && !EH4)
+    B.Text.insert(B.Text.end(), {0x83, 0x4d, 0xfc, 0xff});
+  else
+    RegisterWrite(1, Seed);
+  const auto JumpToExit = [&] {
+    B.Text.push_back(0xe9);
+    emit32(B.Text, uint32_t(kText + 0x90 - (B.textVA() + 4)));
+  };
+  JumpToExit();
+  B.Text.resize(0x90, 0xcc);
+  B.Text.insert(B.Text.end(), {0x8b, 0x4d, 0xf0, 0x64, 0x89, 0x0d, 0, 0, 0, 0});
+  if (EH4)
+    B.Text.insert(B.Text.end(), {0x5f, 0x5e, 0x5b});
+  B.Text.insert(B.Text.end(), {0x8b, 0xe5, 0x5d, 0xc3});
+  B.Text.resize(0xc0, 0xcc);
+  B.addStub();
+  B.Text.resize(0xd0, 0xcc);
+  RegisterWrite(1, Seed);
+  JumpToExit();
+  return {B.build({{"computed_states", kText}}), Store};
+}
+
+TEST(RegistrationTryLevel, SEHComputedRegistersUseCompleteReachingValues) {
+  for (bool EH4 : {false, true})
+    for (uint8_t Register : {0, 1, 2, 3, 6, 7})
+      for (bool Wide : {false, true})
+        for (int32_t Level : {EH4 ? -2 : -1, 0, 1}) {
+          SCOPED_TRACE(::testing::Message() << EH4 << ' ' << unsigned(Register)
+                                            << ' ' << Wide << ' ' << Level);
+          auto [Image, Store] =
+              makeComputedSEHStateImage(EH4, false, Register, Wide, Level);
+          const auto *Chain = chainAt(Image, kText);
+          ASSERT_TRUE(Chain);
+          EXPECT_TRUE(Chain->TryLevelStores.empty());
+          const auto Function = liftEntry(Image, kText);
+          ASSERT_TRUE(Function.hasCompleteLiftCoverage());
+          ASSERT_TRUE(Function.RegistrationStates);
+          const auto &States = *Function.RegistrationStates;
+          EXPECT_TRUE(States.Complete);
+          EXPECT_TRUE(States.RegistrationLifetimeComplete);
+          EXPECT_TRUE(States.SEHStateStoresComplete);
+          const auto Receipt = std::find_if(
+              States.SEHStateStores.begin(), States.SEHStateStores.end(),
+              [&](const auto &S) { return S.Address == Store; });
+          ASSERT_NE(Receipt, States.SEHStateStores.end());
+          EXPECT_EQ(Receipt->EndAddress, Store + (Wide ? 6 : 3));
+          EXPECT_EQ(Receipt->Width, 4u);
+          EXPECT_EQ(Receipt->Value, uint32_t(Level));
+          EXPECT_EQ(Receipt->Transitions,
+                    (std::vector<std::pair<int32_t, int32_t>>{
+                        {EH4 ? -2 : -1, Level}}));
+        }
+}
+
+TEST(RegistrationTryLevel,
+     SEHComputedRegistersRejectUnknownOrConflictingValues) {
+  for (bool EH4 : {false, true})
+    for (unsigned Mutation : {1, 2, 3}) {
+      SCOPED_TRACE(::testing::Message() << EH4 << ' ' << Mutation);
+      auto [Image, Store] =
+          makeComputedSEHStateImage(EH4, false, 3, false, 0, Mutation);
+      const auto Function = liftEntry(Image, kText);
+      ASSERT_TRUE(Function.RegistrationStates);
+      EXPECT_FALSE(Function.RegistrationStates->Complete);
+      EXPECT_FALSE(Function.RegistrationStates->SEHStateStoresComplete);
+    }
+}
+
+TEST(RegistrationTryLevel, SEHBitwiseStatesBindEveryReachingTransition) {
+  for (bool EH4 : {false, true})
+    for (bool Wide : {false, true})
+      for (bool Join : {false, true}) {
+        SCOPED_TRACE(::testing::Message() << EH4 << ' ' << Wide << ' ' << Join);
+        auto [Image, Store] =
+            makeComputedSEHStateImage(EH4, true, 0, Wide, 0, 0, Join);
+        const auto Function = liftEntry(Image, kText);
+        ASSERT_TRUE(Function.hasCompleteLiftCoverage());
+        ASSERT_TRUE(Function.RegistrationStates);
+        const auto &States = *Function.RegistrationStates;
+        EXPECT_TRUE(States.Complete);
+        EXPECT_TRUE(States.RegistrationLifetimeComplete);
+        EXPECT_TRUE(States.SEHStateStoresComplete);
+        const auto Receipt = std::find_if(
+            States.SEHStateStores.begin(), States.SEHStateStores.end(),
+            [&](const auto &S) { return S.Address == Store; });
+        ASSERT_NE(Receipt, States.SEHStateStores.end());
+        EXPECT_EQ(Receipt->EndAddress, Store + (Wide ? 10 : 4));
+        std::vector<std::pair<int32_t, int32_t>> Expected{{EH4 ? -2 : -1, 0}};
+        if (Join)
+          Expected.emplace_back(0, 0);
+        EXPECT_EQ(Receipt->Transitions, Expected);
+      }
+}
+
 std::pair<BinaryImage, va_t> makeCxxRegisterStateImage(uint8_t Register,
                                                        bool WideDisplacement,
                                                        int32_t Level,
@@ -2967,114 +3120,124 @@ TEST(RegistrationTryLevel, CxxBitwiseStatesFollowTheCheckedSharedPrologue) {
     }
 }
 
-TEST(RegistrationTryLevel, CxxBitwiseStatesRequireTheirExactMemoryOperation) {
-  auto [Image, Ends] = makeCxxBitwiseStateImage(false, false, 0);
-  const auto Original = liftEntry(Image, kText);
-  ASSERT_TRUE(Original.RegistrationStates);
-  ASSERT_TRUE(Original.RegistrationStates->Complete);
-  const va_t Address = Ends.front() - 4;
-  for (unsigned Mutation = 0; Mutation != 22; ++Mutation) {
-    SCOPED_TRACE(Mutation);
-    auto Function = Original;
-    bool Changed = false;
-    NdVar Loaded;
-    for (auto &Block : Function.Blocks) {
-      for (auto &Boundary : Block.InstructionBoundaries)
-        if (Boundary.Address == Address && Mutation < 9) {
-          Changed = true;
-          switch (Mutation) {
-          case 0:
-            --Boundary.Size;
-            break;
-          case 1:
-            ++Boundary.FirstOp;
-            break;
-          case 2:
-            --Boundary.OpCount;
-            break;
-          case 3:
-            Boundary.Control = LowInstructionControl::Call;
-            break;
-          case 4:
-            Boundary.ControlFlags = LowInstructionControlFlag::InstructionGuard;
-            break;
-          case 5:
-            ++Block.EndAddr;
-            break;
-          case 6:
-            Boundary.Mode = InstructionMode::Thumb;
-            break;
-          case 7:
-            Boundary.TargetMode = LowInstructionTargetMode::Thumb;
-            break;
-          case 8:
-            Boundary.Immediate = kText;
-            break;
+TEST(RegistrationTryLevel, ComputedStatesRequireTheirExactMemoryOperation) {
+  for (unsigned Protocol : {0, 1, 2}) {
+    SCOPED_TRACE(Protocol);
+    auto [Image, Ends] = makeCxxBitwiseStateImage(false, false, 0);
+    va_t Address = Ends.front() - 4;
+    if (Protocol) {
+      auto Fixture =
+          makeComputedSEHStateImage(Protocol == 2, true, 0, false, 0);
+      Image = std::move(Fixture.first);
+      Address = Fixture.second;
+    }
+    const auto Original = liftEntry(Image, kText);
+    ASSERT_TRUE(Original.RegistrationStates);
+    ASSERT_TRUE(Original.RegistrationStates->Complete);
+    for (unsigned Mutation = 0; Mutation != 22; ++Mutation) {
+      SCOPED_TRACE(Mutation);
+      auto Function = Original;
+      bool Changed = false;
+      NdVar Loaded;
+      for (auto &Block : Function.Blocks) {
+        for (auto &Boundary : Block.InstructionBoundaries)
+          if (Boundary.Address == Address && Mutation < 9) {
+            Changed = true;
+            switch (Mutation) {
+            case 0:
+              --Boundary.Size;
+              break;
+            case 1:
+              ++Boundary.FirstOp;
+              break;
+            case 2:
+              --Boundary.OpCount;
+              break;
+            case 3:
+              Boundary.Control = LowInstructionControl::Call;
+              break;
+            case 4:
+              Boundary.ControlFlags =
+                  LowInstructionControlFlag::InstructionGuard;
+              break;
+            case 5:
+              ++Block.EndAddr;
+              break;
+            case 6:
+              Boundary.Mode = InstructionMode::Thumb;
+              break;
+            case 7:
+              Boundary.TargetMode = LowInstructionTargetMode::Thumb;
+              break;
+            case 8:
+              Boundary.Immediate = kText;
+              break;
+            }
           }
-        }
-      for (auto &Op : Block.Ops) {
-        if (Op.Addr != Address || Mutation < 9)
-          continue;
-        if (Op.Opcode == NdOp::LOAD) {
-          Loaded = Op.Output;
-          if (Mutation == 9) {
-            Op.MemoryAddressSpace = NdMemoryAddressSpace::X86FS;
+        for (auto &Op : Block.Ops) {
+          if (Op.Addr != Address || Mutation < 9)
+            continue;
+          if (Op.Opcode == NdOp::LOAD) {
+            Loaded = Op.Output;
+            if (Mutation == 9) {
+              Op.MemoryAddressSpace = NdMemoryAddressSpace::X86FS;
+              Changed = true;
+            }
+            if (Mutation == 14) {
+              Op.Inputs[0] = NdVar::cst(kRData, 8);
+              Changed = true;
+            }
+            if (Mutation == 16) {
+              Op.Output.Size = 2;
+              Changed = true;
+            }
+          }
+          if (Op.Opcode == NdOp::INT_AND && Op.Output.Size == 4) {
+            if (Mutation == 11 || Mutation == 12) {
+              Op.Inputs[1] = Mutation == 11 ? NdVar::reg(x86reg::RDX, 4)
+                                            : NdVar::cst(7, 4);
+              Changed = true;
+            }
+            if (Mutation == 17) {
+              Op.MemoryOrdering = NdMemoryOrdering::Relaxed;
+              Changed = true;
+            }
+            if (Mutation == 20) {
+              Op.Opcode = NdOp::INT_XOR;
+              Changed = true;
+            }
+          }
+          if (Op.Output == NdVar::reg(x86reg::ZF, 1) && Mutation == 15) {
+            Op.Output = NdVar::reg(x86reg::RBP, 4);
             Changed = true;
           }
-          if (Mutation == 14) {
-            Op.Inputs[0] = NdVar::cst(kRData, 8);
-            Changed = true;
-          }
-          if (Mutation == 16) {
-            Op.Output.Size = 2;
-            Changed = true;
-          }
-        }
-        if (Op.Opcode == NdOp::INT_AND && Op.Output.Size == 4) {
-          if (Mutation == 11 || Mutation == 12) {
-            Op.Inputs[1] =
-                Mutation == 11 ? NdVar::reg(x86reg::RDX, 4) : NdVar::cst(7, 4);
-            Changed = true;
-          }
-          if (Mutation == 17) {
-            Op.MemoryOrdering = NdMemoryOrdering::Relaxed;
-            Changed = true;
-          }
-          if (Mutation == 20) {
-            Op.Opcode = NdOp::INT_XOR;
-            Changed = true;
-          }
-        }
-        if (Op.Output == NdVar::reg(x86reg::ZF, 1) && Mutation == 15) {
-          Op.Output = NdVar::reg(x86reg::RBP, 4);
-          Changed = true;
-        }
-        if (Op.Opcode == NdOp::STORE) {
-          if (Mutation == 10) {
-            Op.MemoryOrdering = NdMemoryOrdering::SequentiallyConsistent;
-            Changed = true;
-          }
-          if (Mutation == 13) {
-            Op.Inputs[1] = Loaded;
-            Changed = true;
-          }
-          if (Mutation == 18) {
-            Op.Seq = -1;
-            Changed = true;
-          }
-          if (Mutation == 19) {
-            ++Op.Addr;
-            Changed = true;
-          }
-          if (Mutation == 21) {
-            Op.Inputs[0].Size = 1;
-            Changed = true;
+          if (Op.Opcode == NdOp::STORE) {
+            if (Mutation == 10) {
+              Op.MemoryOrdering = NdMemoryOrdering::SequentiallyConsistent;
+              Changed = true;
+            }
+            if (Mutation == 13) {
+              Op.Inputs[1] = Loaded;
+              Changed = true;
+            }
+            if (Mutation == 18) {
+              Op.Seq = -1;
+              Changed = true;
+            }
+            if (Mutation == 19) {
+              ++Op.Addr;
+              Changed = true;
+            }
+            if (Mutation == 21) {
+              Op.Inputs[0].Size = 1;
+              Changed = true;
+            }
           }
         }
       }
+      ASSERT_TRUE(Changed);
+      EXPECT_FALSE(analyzeRegistrationStates(Function).Complete);
     }
-    ASSERT_TRUE(Changed);
-    EXPECT_FALSE(analyzeRegistrationStates(Function).Complete);
   }
 }
 

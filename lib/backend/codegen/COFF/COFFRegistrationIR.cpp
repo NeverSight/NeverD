@@ -28,6 +28,7 @@
 #include "neverd/backend/llvm/WindowsEHSemanticDigest.h"
 #include "neverd/backend/llvm/WindowsRegistrationFrame.h"
 #include "neverd/backend/llvm/X86RegistrationSEHScope.h"
+#include "neverd/backend/llvm/X86RegistrationSEHStateStore.h"
 #include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/ir/low/RegistrationABI.h"
 #include "neverd/ir/med/LowToMed.h"
@@ -539,6 +540,10 @@ llvm::Error validateCOFFRegistrationIR(const llvm::Function &Function,
       Function, ReplayMed, *CallbackMap, NativeFunctions, false, &*ParentExits);
   if (!SourceSegments)
     return SourceSegments.takeError();
+  if (!hasCheckedX86RegistrationSEHComputedStores(ReplayMed, Function,
+                                                  *Frame->Slot, Frame->EntrySP))
+    return rejectIR(
+        "computed SEH state store changed its source result or frame");
   if (auto Error = coff_registration::validateSEHRegisterStorage(
           Function, ReplayMed, *CallbackMap))
     return Error;

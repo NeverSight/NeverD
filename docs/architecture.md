@@ -1740,7 +1740,7 @@ operation identity, width, literal and reaching-state transitions. Finally
 execution partitions frame outcomes by the resulting try level; local unwind
 reloads that level before selecting another cleanup. Joining frames first or
 recomputing narrow-write semantics downstream would lose that correlation.
-C++ state writes can also use complete reaching register values or a
+SEH and C++ state writes can also use complete reaching register values or a
 four-byte `AND`/`OR` update of the checked state slot. CFG cutting and state
 transfer share `stateStoreCandidate`; the latter still proves the actual
 address and resulting level on every path. The original load, store and
@@ -1749,6 +1749,20 @@ arithmetic flags remain intact. `LowScalarConstant` owns width-correct
 Supplied instruction operation slices use the same ownership check as LowIR
 structural validation, before an invalid operation address can erase temporary
 frame provenance.
+Loader store observations remain optional discovery evidence for these exact
+decoded writes. Their absence neither invents a literal nor prevents analysis
+of an otherwise authenticated SEH frame. Computed SEH receipts retain the
+instruction end, operation identity, full-word result and every reaching
+transition. Native parent emission and independent COFF replay additionally
+bind the surviving store to the current logical state slot and a literal or
+absorbing `AND 0` / `OR all-ones` value. They preserve the original RMW load and
+flag effects. Other computed native values still require a separate proof;
+callback state writes retain their existing literal-store binding.
+Private SSA spills are rebound through their complete reaching stores before
+outlining. The iterative value walk rejects cycles and poison, and does not
+borrow an assumed scalar value from unrelated source memory. Dynamic scope
+replay consumes the same result proof for computed parent writes while
+preserving the literal requirement for observed writes.
 The implementation lives under `lib/ir/low/X86`: frame transfer, callee ABI,
 state initialization, ordinary transfers, C++ calls/objects, exceptional roots,
 cookies and result publication have separate translation units. The private

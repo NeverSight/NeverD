@@ -8,6 +8,7 @@
 
 #include "neverd/Limits.h"
 #include "neverd/backend/Limits.h"
+#include "neverd/backend/llvm/X86RegistrationSEHStateStore.h"
 #include "neverd/ir/med/MedStackAlignment.h"
 #include "neverd/ir/med/X86RegistrationSEH4PhysicalFrame.h"
 #include "neverd/ir/med/X86RegistrationSEHStateStore.h"
@@ -40,8 +41,23 @@ bindDynamicSEHState(const MedFunc &Source, const RegistrationFrame &Frame,
   using Key = std::tuple<MedVar::VarKind, int, int>;
   auto KeyOf = [](const MedVar &V) { return Key{V.Kind, V.Id, V.SSAVer}; };
   using Identity = std::pair<va_t, int>;
-  std::map<Identity, std::optional<int32_t>> Frames;
   size_t Work = 0;
+  std::set<va_t> Observed;
+  for (const auto &Store :
+       Source.ExceptionMetadata->Registration->TryLevelStores) {
+    if (++Work > limits::kMaxRegistrationEHStateWork)
+      return rejectIR(
+          "dynamic scope source observations exceed their work budget");
+    Observed.insert(Store.StoreVA);
+  }
+  const auto SourceStores = getX86RegistrationSEHStateStores(Source, true);
+  if (!SourceStores)
+    return rejectIR("dynamic scope has incomplete source state writes");
+  std::map<Identity, const X86RegistrationSEHStateStoreBinding *> StateWrites;
+  for (const auto &Store : *SourceStores)
+    StateWrites.emplace(Identity{Store.Source->Address, Store.Source->OpSeq},
+                        &Store);
+  std::map<Identity, std::optional<int32_t>> Frames;
   for (const auto &Value : States->FrameValues) {
     if (++Work > limits::kMaxRegistrationEHStateWork)
       return rejectIR("dynamic scope frame values exceed their work budget");
@@ -165,6 +181,7 @@ bindDynamicSEHState(const MedFunc &Source, const RegistrationFrame &Frame,
     int Block;
     uint32_t Value;
     uint16_t Width;
+    bool Computed;
   };
   std::map<Identity, Write> Expected;
   for (const auto &Block : Source.Blocks)
@@ -178,14 +195,21 @@ bindDynamicSEHState(const MedFunc &Source, const RegistrationFrame &Frame,
           Op.MemoryOrdering != NdMemoryOrdering::None ||
           Resolve(Op.Inputs[0], true, 0) != -4)
         continue;
-      const auto Value = Resolve(Op.Inputs[1], false, 0);
+      auto Value = Resolve(Op.Inputs[1], false, 0);
+      const auto Bound = StateWrites.find({Op.Addr, Op.OriginSeq});
+      const bool Computed = Bound != StateWrites.end() &&
+                            Bound->second->Operation == &Op &&
+                            !Observed.count(Op.Addr);
+      if (!Value && Computed)
+        Value = Bound->second->Source->Value;
       const uint16_t Width = Op.Inputs[1].Size;
       const uint32_t Mask =
           Width == 4 ? UINT32_MAX : (uint32_t(1) << (8 * Width)) - 1;
       if (!Value || Op.OriginSeq < 0 ||
           !Expected
-               .emplace(Identity{Op.Addr, Op.OriginSeq},
-                        Write{Block.Id, uint32_t(*Value) & Mask, Width})
+               .emplace(
+                   Identity{Op.Addr, Op.OriginSeq},
+                   Write{Block.Id, uint32_t(*Value) & Mask, Width, Computed})
                .second)
         return rejectIR("dynamic scope has an unproved source state write");
     }
@@ -213,8 +237,11 @@ bindDynamicSEHState(const MedFunc &Source, const RegistrationFrame &Frame,
             metadataInteger(*MD, 3, 32) != uint32_t(Found->second.Block) ||
             metadataInteger(*MD, 4, 8) != 1 || Store->isAtomic() ||
             !Store->isVolatile() || Store->getAlign() != llvm::Align(1) ||
-            integer(Store->getValueOperand(), 8 * Found->second.Width) !=
-                Found->second.Value)
+            (Found->second.Computed && Found->second.Width == 4
+                 ? !isX86RegistrationSEHStateValue(*Store->getValueOperand(),
+                                                   Found->second.Value)
+                 : integer(Store->getValueOperand(), 8 * Found->second.Width) !=
+                       Found->second.Value))
           return rejectIR("dynamic scope changed its source state write");
         Result.Writes.emplace(Store, Found->second.Width);
       }

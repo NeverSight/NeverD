@@ -12,6 +12,7 @@
 #include "neverd/backend/RewriteSourceIdentity.h"
 #include "neverd/backend/codegen/COFF/COFFRegistrationPatch.h"
 #include "neverd/backend/llvm/WindowsEHMetadata.h"
+#include "neverd/ir/RegistrationState.h"
 #include "neverd/loader/BinaryImage.h"
 
 #include "llvm/ADT/ScopeExit.h"
@@ -220,6 +221,117 @@ void checkSEHStartupInfoEdits(const llvm::Function &Parent,
       OriginalByte = *ChangedByte;
       // A single byte at the end now overlaps SavedESP administration.
       *ChangedByte = uint8_t(-91);
+    }
+    ASSERT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
+    auto Error = validateCOFFRegistrationIR(*Function, Source, ChangedImage);
+    ASSERT_TRUE(bool(Error));
+    llvm::consumeError(std::move(Error));
+  }
+#endif
+}
+
+void checkSEHComputedStateEdits(const llvm::Function &Parent,
+                                const ExceptionFunction &Source,
+                                const BinaryImage &Image,
+                                const RegistrationStateAnalysis &States) {
+#ifdef LLVM_NEVERD_X86_REGISTRATION_EH
+  const auto Candidate =
+      llvm::find_if(States.SEHStateStores, [&](const auto &S) {
+        return llvm::none_of(
+            Source.Registration->TryLevelStores,
+            [&](const auto &O) { return O.StoreVA == S.Address; });
+      });
+  if (Candidate == States.SEHStateStores.end())
+    return;
+  for (unsigned Mutation = 0; Mutation != 11; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    auto Module = llvm::CloneModule(*Parent.getParent());
+    auto *Function = Module->getFunction(Parent.getName());
+    llvm::StoreInst *Store = nullptr;
+    for (auto &Block : *Function)
+      for (auto &I : Block) {
+        const auto *MD =
+            I.getMetadata(windows_eh_md::RegistrationOperationAttachment);
+        if (!MD)
+          continue;
+        const auto *Address =
+            llvm::mdconst::dyn_extract<llvm::ConstantInt>(MD->getOperand(1));
+        const auto *Seq =
+            llvm::mdconst::dyn_extract<llvm::ConstantInt>(MD->getOperand(2));
+        if (Address && Seq && Address->getZExtValue() == Candidate->Address &&
+            Seq->getZExtValue() == uint32_t(Candidate->OpSeq)) {
+          ASSERT_FALSE(Store);
+          Store = llvm::dyn_cast<llvm::StoreInst>(&I);
+        }
+      }
+    ASSERT_TRUE(Store);
+    auto ChangedImage = Image;
+    uint8_t *ChangedByte = nullptr;
+    uint8_t OriginalByte = 0;
+    auto Restore = llvm::scope_exit([&] {
+      if (ChangedByte)
+        *ChangedByte = OriginalByte;
+    });
+    llvm::IRBuilder<> B(Store);
+    if (Mutation == 0)
+      Store->setOperand(0, B.getInt32(Candidate->Value ^ 1));
+    if (Mutation == 1)
+      Store->setOperand(1,
+                        B.CreateGEP(B.getInt8Ty(), Store->getPointerOperand(),
+                                    B.getInt32(4)));
+    if (Mutation == 2)
+      Store->setOperand(0, B.getInt16(uint16_t(Candidate->Value)));
+    if (Mutation == 3)
+      Store->setAlignment(llvm::Align(4));
+    if (Mutation == 4)
+      Store->setVolatile(false);
+    if (Mutation == 5)
+      Store->setMetadata(windows_eh_md::RegistrationOperationAttachment,
+                         nullptr);
+    if (Mutation == 6 || Mutation == 7) {
+      const auto *Bytes = ChangedImage.readVA(Candidate->Address, 4);
+      ASSERT_TRUE(Bytes);
+      ASSERT_TRUE(Bytes[0] == 0x89 || Bytes[0] == 0x83);
+      ASSERT_EQ(Bytes[2], 0xfc);
+      const va_t Changed = Mutation == 6      ? Candidate->Address + 2
+                           : Bytes[0] == 0x83 ? Candidate->Address + 3
+                                              : Candidate->Address - 5;
+      ChangedByte = const_cast<uint8_t *>(ChangedImage.readVA(Changed, 1));
+      ASSERT_TRUE(ChangedByte);
+      OriginalByte = *ChangedByte;
+      *ChangedByte = Mutation == 6 ? 0xf8 : 7;
+    }
+    if (Mutation == 8 || Mutation == 9) {
+      llvm::Value *Poison = llvm::PoisonValue::get(B.getInt32Ty());
+      if (Mutation == 9) {
+        llvm::IRBuilder<> Entry(
+            &*Function->getEntryBlock().getFirstInsertionPt());
+        auto *Slot = Entry.CreateAlloca(B.getInt32Ty());
+        B.CreateStore(Poison, Slot);
+        Poison = B.CreateLoad(B.getInt32Ty(), Slot);
+      }
+      Store->setOperand(
+          0, B.Insert(llvm::BinaryOperator::CreateAnd(Poison, B.getInt32(0))));
+    }
+    if (Mutation == 10) {
+      llvm::LoadInst *Read = nullptr;
+      for (auto &Block : *Function)
+        for (auto &I : Block)
+          if (auto *Load = llvm::dyn_cast<llvm::LoadInst>(&I))
+            if (const auto *MD = I.getMetadata(
+                    windows_eh_md::RegistrationOperationAttachment)) {
+              const auto *Address =
+                  llvm::mdconst::dyn_extract<llvm::ConstantInt>(
+                      MD->getOperand(1));
+              if (Address && Address->getZExtValue() == Candidate->Address) {
+                ASSERT_FALSE(Read);
+                Read = Load;
+              }
+            }
+      if (!Read)
+        continue;
+      Read->replaceAllUsesWith(llvm::UndefValue::get(Read->getType()));
+      Read->eraseFromParent();
     }
     ASSERT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
     auto Error = validateCOFFRegistrationIR(*Function, Source, ChangedImage);

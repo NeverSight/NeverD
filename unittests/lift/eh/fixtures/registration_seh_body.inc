@@ -1,9 +1,26 @@
 // clang-format off: this include contains x86 assembly.
 // Shared semantic cases for the SEH3 and EH4 runtime probes.
-#if REGISTRATION_CASE == 1 || REGISTRATION_CASE == 2 || REGISTRATION_CASE == 4
-  mov dword ptr [ebp-4],1
+.macro registration_set_state level
+#if REGISTRATION_STATE_WRITE == 1
+  mov ecx,\level
+  nop
+  mov dword ptr [ebp-4],ecx
+#elif REGISTRATION_STATE_WRITE == 2
+  .if \level == 0
+    and dword ptr [ebp-4],0
+  .elseif \level == -1
+    or dword ptr [ebp-4],-1
+  .else
+    mov dword ptr [ebp-4],\level
+  .endif
 #else
-  mov dword ptr [ebp-4],0
+  mov dword ptr [ebp-4],\level
+#endif
+.endm
+#if REGISTRATION_CASE == 1 || REGISTRATION_CASE == 2 || REGISTRATION_CASE == 4
+  registration_set_state 1
+#else
+  registration_set_state 0
 #endif
 #if REGISTRATION_STARTUP_INFO
 #include "registration_startup_info.inc"
@@ -13,7 +30,7 @@
 #else
   call _registration_raise
 #endif
-  mov dword ptr [ebp-4],REGISTRATION_SENTINEL
+  registration_set_state REGISTRATION_SENTINEL
 #if REGISTRATION_CASE == 4
   call .Lfinally
 #endif
@@ -87,7 +104,7 @@
   xor eax,eax
   ret
 .Linnerhandler:
-  mov dword ptr [ebp-4],REGISTRATION_SENTINEL
+  registration_set_state REGISTRATION_SENTINEL
   mov eax,91
   jmp .Lfinish
 #endif
@@ -114,7 +131,7 @@
 #endif
 .Lfinish:
 #if REGISTRATION_SHARED_SEH4
-  mov dword ptr [ebp-4],REGISTRATION_SENTINEL
+  registration_set_state REGISTRATION_SENTINEL
   call __seh_epilog4
 #else
 #if REGISTRATION_EXPECT_GS

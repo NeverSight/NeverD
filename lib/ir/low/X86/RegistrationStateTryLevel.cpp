@@ -152,15 +152,12 @@ bool RegistrationStateSolver::transferTryLevelStore(
         uint32_t(Observation->second.Level) != *Stored.Constant)
       return Refuse();
   } else {
-    // C++ uses the solved block states directly. A register's definition can
-    // precede its state write by many instructions, so no loader literal is
-    // required when the actual decoded instruction and all-path frame/value
-    // transfer prove the write. SEH callback rewriting still requires its
-    // separate observed-store receipt.
+    // A register's definition can precede its state write by many
+    // instructions. Both C++ and SEH use the decoded instruction and complete
+    // reaching frame/value transfer; a loader literal is not this proof.
     const auto Boundary = Boundaries.find(Op.Addr);
     const auto &Block = Function.Blocks[I];
-    if (!KnownCxx || Boundary == Boundaries.end() ||
-        Boundary->second.first != Block.Id)
+    if (Boundary == Boundaries.end() || Boundary->second.first != Block.Id)
       return Refuse();
     const auto &Instruction = Boundary->second.second;
     if (Instruction.Address != Op.Addr || Instruction.Size == 0 ||
@@ -223,8 +220,9 @@ bool RegistrationStateSolver::transferTryLevelStore(
   if (Boundary->second.first != Block.Id ||
       Boundary->second.second.Address != Op.Addr ||
       Boundary->second.second.Size > UINT64_MAX - Op.Addr ||
-      Boundary->second.second.Address + Boundary->second.second.Size !=
-          Observation->second.EndVA)
+      (Observation != Stores.end() &&
+       Boundary->second.second.Address + Boundary->second.second.Size !=
+           Observation->second.EndVA))
     return Refuse();
   if (Op.Seq < 0 || !Boundary->second.second.OpCount) {
     Result.SEHStateStoresComplete = false;
@@ -243,7 +241,7 @@ bool RegistrationStateSolver::transferTryLevelStore(
     return true;
   }
   RegistrationSEHStateStore Receipt{
-      Block.Id, Op.Addr,        Observation->second.EndVA,
+      Block.Id, Op.Addr,        Op.Addr + Boundary->second.second.Size,
       Op.Seq,   uint8_t(Width), *Stored.Constant,
       {}};
   const auto [Found, New] =

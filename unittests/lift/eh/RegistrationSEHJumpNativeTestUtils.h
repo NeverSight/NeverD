@@ -11,6 +11,7 @@ namespace llvm {
 class Function;
 }
 namespace neverd {
+struct RegistrationStateAnalysis;
 struct BinaryImage;
 struct ExceptionFunction;
 namespace registration_test {
@@ -39,6 +40,10 @@ void checkSEHRuntimeEdits(const llvm::Function &Parent,
 void checkSEHStartupInfoEdits(const llvm::Function &Parent,
                               const ExceptionFunction &Source,
                               const BinaryImage &Image);
+void checkSEHComputedStateEdits(const llvm::Function &Parent,
+                                const ExceptionFunction &Source,
+                                const BinaryImage &Image,
+                                const RegistrationStateAnalysis &States);
 } // namespace registration_test
 } // namespace neverd
 

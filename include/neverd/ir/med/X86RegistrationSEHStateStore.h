@@ -33,8 +33,12 @@ struct X86RegistrationSEHStateStoreBinding {
 /// must preserve the untouched high bytes and produce a valid complete level.
 /// The source solver owns address and transition semantics. Native projection
 /// and replay retain their ordinary checks of the current memory operand.
+/// IncludeParentStores also returns ordinary parent writes. Computed parent
+/// values retain their LowIR result receipt and require independent native
+/// value/address validation; callback writes still require literal bindings.
 std::optional<std::vector<X86RegistrationSEHStateStoreBinding>>
-getX86RegistrationSEHStateStores(const MedFunc &Function);
+getX86RegistrationSEHStateStores(const MedFunc &Function,
+                                 bool IncludeParentStores = false);
 
 /// Return sorted scopes selected only by callback writes, including enclosing
 /// scopes. Every scope must be reachable from a parent state or callback write.

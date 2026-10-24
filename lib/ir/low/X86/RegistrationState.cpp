@@ -163,7 +163,6 @@ bool RegistrationStateSolver::initialize() {
   }
   if (!Chain.RegistrationOffset || !Chain.TryLevelOffset ||
       !Chain.SeededTryLevel || !Chain.ChainInstallVA ||
-      (!KnownCxx && Chain.TryLevelStores.empty()) ||
       (KnownCxx && (!Chain.cxxRuntimeFrameOffset() ||
                     *Chain.RegistrationOffset < INT32_MIN + 4))) {
     Result.Diagnostics.push_back(

@@ -28,7 +28,15 @@ _registration_entry:
   mov dword ptr [ebp-4],.Lseed_level
   .set .Lseed_level,.Lseed_level+1
   .endr
+#if REGISTRATION_STATE_WRITE == 1
+  mov ecx,0
+  nop
+  mov dword ptr [ebp-4],ecx
+#elif REGISTRATION_STATE_WRITE == 2
+  and dword ptr [ebp-4],0
+#else
   mov dword ptr [ebp-4],0
+#endif
   push 0
   .byte 0x68
   .long __seh_longjmp_unwind

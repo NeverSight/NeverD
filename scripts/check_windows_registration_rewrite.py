@@ -326,6 +326,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="use the authored shared SEH4 entry and exit helpers")
     parser.add_argument("--startup-info", action="store_true",
                         help="compare a private STARTUPINFOW output with an independent runtime observation")
+    parser.add_argument("--state-write", choices=("literal", "register", "bitwise"),
+                        default="literal", help="source encoding of ordinary SEH state writes")
     args = parser.parse_args(argv)
     if not math.isfinite(args.timeout) or args.timeout <= 0:
         parser.error("--timeout must be positive and finite")
@@ -340,10 +342,15 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--shared-seh4 requires an ordinary EH4 case without GS")
     if args.startup_info and case not in (0, 4):
         parser.error("--startup-info requires a filter or normal-finally case")
+    if args.state_write != "literal" and case not in (*range(9), 43, 44):
+        parser.error("--state-write requires an ordinary filter/finally or shared byte-state case")
+    if args.state_write == "bitwise" and case in (1, 2, 4):
+        parser.error("--state-write bitwise requires a zero-activation case")
     report = {"schema": 2, "evidence": f"reconstructed-source-registration-{'seh4' if eh4 else 'seh3'}",
               "case": args.case, "expected_trace": expected_trace,
               "shared_seh4": args.shared_seh4,
               "startup_info": args.startup_info,
+              "state_write": args.state_write,
               "passed": False, "steps": [], "observations": []}
     environment = os.environ.copy()
     try:
@@ -419,6 +426,7 @@ def main(argv: list[str] | None = None) -> int:
             compile_command = [compiler, "--target=i686-pc-windows-msvc", "-O0",
                              f"-DREGISTRATION_CASE={case}",
                              f"-DREGISTRATION_STARTUP_INFO={int(args.startup_info)}",
+                             f"-DREGISTRATION_STATE_WRITE={('literal', 'register', 'bitwise').index(args.state_write)}",
                              f"-DREGISTRATION_LOOP_EH4={int(eh4)}",
                              f"-DREGISTRATION_PARENT_EH4={int(eh4)}",
                              "-DREGISTRATION_FORWARD_ONLY=1", f"-DREGISTRATION_EXPECT_GS={int(gs)}",

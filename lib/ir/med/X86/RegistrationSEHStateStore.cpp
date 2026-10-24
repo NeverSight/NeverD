@@ -76,7 +76,8 @@ std::optional<StateStoreSource> collectSource(const MedFunc &Function) {
 } // namespace
 
 std::optional<std::vector<X86RegistrationSEHStateStoreBinding>>
-getX86RegistrationSEHStateStores(const MedFunc &Function) {
+getX86RegistrationSEHStateStores(const MedFunc &Function,
+                                 bool IncludeParentStores) {
   const auto Source = collectSource(Function);
   if (!Source)
     return std::nullopt;
@@ -104,14 +105,20 @@ getX86RegistrationSEHStateStores(const MedFunc &Function) {
     const Key Identity{Store.BlockId, Store.Address, Store.OpSeq};
     if (++Work > limits::kMaxRegistrationEHStateWork ||
         State == Source->States.end() || Store.OpSeq < 0 ||
-        !Seen.insert(Identity).second || Native == Source->Stores.end() ||
-        Store.EndAddress != Native->second->EndVA ||
-        Store.Width != Native->second->Width ||
-        Store.Value != uint32_t(Native->second->Level) ||
+        !Seen.insert(Identity).second || Store.Address >= Store.EndAddress ||
         Store.Address < State->second->Range.Begin ||
         Store.EndAddress > State->second->Range.End)
       return std::nullopt;
-    if (!State->second->CallbackOnly)
+    if (Native != Source->Stores.end()) {
+      if (Store.EndAddress != Native->second->EndVA ||
+          Store.Width != Native->second->Width ||
+          Store.Value != uint32_t(Native->second->Level))
+        return std::nullopt;
+    } else if (State->second->CallbackOnly || Store.Width != 4 ||
+               Store.EndAddress != State->second->Range.End)
+      return std::nullopt;
+    if (!State->second->CallbackOnly && !IncludeParentStores &&
+        Native != Source->Stores.end())
       continue;
     const auto Operation = Operations.find(Identity);
     if (Operation == Operations.end())
@@ -123,11 +130,13 @@ getX86RegistrationSEHStateStores(const MedFunc &Function) {
         (Op.Inputs[0].Size != 4 && Op.Inputs[0].Size != 8) ||
         Op.MemoryAddressSpace != NdMemoryAddressSpace::Default ||
         Op.MemoryOrdering != NdMemoryOrdering::None ||
-        !Op.Inputs[1].isConst() || Op.Inputs[1].Size != Store.Width)
+        (State->second->CallbackOnly && !Op.Inputs[1].isConst()) ||
+        Op.Inputs[1].Size != Store.Width)
       return std::nullopt;
     const uint32_t Mask =
         Store.Width == 4 ? UINT32_MAX : (uint32_t(1) << (8 * Store.Width)) - 1;
-    if (Store.Value > Mask || (Op.Inputs[1].ConstVal & Mask) != Store.Value)
+    if (Store.Value > Mask || (Op.Inputs[1].isConst() &&
+                               (Op.Inputs[1].ConstVal & Mask) != Store.Value))
       return std::nullopt;
     std::set<int32_t> TargetLevels;
     std::set<std::pair<int32_t, int32_t>> Transitions;
@@ -140,6 +149,8 @@ getX86RegistrationSEHStateStores(const MedFunc &Function) {
         return std::nullopt;
       TargetLevels.insert(Transition.second);
     }
+    if (!State->second->CallbackOnly && !IncludeParentStores)
+      continue;
     if (!Bound
              .emplace(
                  Store.Address,

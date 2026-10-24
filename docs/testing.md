@@ -6033,7 +6033,19 @@ operands and malformed widths supply no fact. `RegistrationTryLevel.CxxBitwiseSt
 checks immediate/displacement widths, joined old states, direct and shared
 prologues, and exact post-instruction state boundaries. Changed ownership,
 memory spaces, atomic ordering, frame registers and unknown or invalid state
-values refuse. The native MSVC input owner also checks chain
+values refuse. `RegistrationTryLevel.SEHComputedRegisters*` and
+`SEHBitwiseStatesBindEveryReachingTransition` cover EH3/EH4 register writes,
+missing loader observations, joined old states and complete transition receipts.
+`ComputedStatesRequireTheirExactMemoryOperation` runs the same instruction and
+memory mutations for C++, EH3 and EH4. The rewrite harness's `--state-write`
+selects register writes in ordinary filter/finally fixtures, or bitwise zero
+activation in zero-entry cases. Both encodings also apply to the shared
+byte-state cases; `longjmp-state-byte-high-bits --state-write bitwise` combines
+a computed parent write with callback transitions to distinct full-word states.
+Native mutation controls change the current value, address, width, alignment,
+volatility, marker and original instruction bytes, inject poison directly or
+through a private spill, and remove the original RMW read. Independent COFF
+replay must reject each change. The native MSVC input owner also checks chain
 observations in `nonlocal_finally_reenter` across `/Od`/`/O2`, `/GS-`/`/GS` and
 raw/optimized projection. The focused Windows EH job runs the complete native
 input owner with its verified MSVC images. Its exact source state does not discharge the separate

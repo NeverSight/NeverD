@@ -1858,6 +1858,8 @@ TEST(WindowsRegistrationNative, InputPE32PreservesItsCheckedSourceContract) {
   if (Low.RegistrationStates->SEH4Prologue)
     registration_test::checkSharedSEH4SavedStackEdits(*Parent, EH, Image);
   registration_test::checkSEHStateDispatchEdits(*Parent, Med, EH, Image);
+  registration_test::checkSEHComputedStateEdits(*Parent, EH, Image,
+                                                *Low.RegistrationStates);
   if (!Low.RegistrationStates->SEHExceptionAccesses.empty())
     registration_test::checkSEHExceptionEdits(*Parent, EH, Image,
                                               *Low.RegistrationStates);

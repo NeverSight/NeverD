@@ -130,6 +130,45 @@ TEST(RegistrationSEHStateStore, UsesAllDynamicParentStatesAndOuterScopes) {
   EXPECT_FALSE(getX86RegistrationSEHRetainedScopes(Function));
 }
 
+TEST(RegistrationSEHStateStore, ComputedParentsKeepTheirExactSourceOccurrence) {
+  auto Make = [] {
+    auto Function = sourceStateStore();
+    Function.ExceptionMetadata->Registration->TryLevelStores.clear();
+    Function.RegistrationStates->Blocks[1].CallbackOnly = false;
+    Function.RegistrationStates->SEHStateStores[0].EndAddress = 0x2030;
+    Function.Blocks[1].Ops[0].Inputs[1] = Function.Blocks[1].Ops[0].Inputs[0];
+    return Function;
+  };
+  auto Function = Make();
+  const auto Callbacks = getX86RegistrationSEHStateStores(Function);
+  ASSERT_TRUE(Callbacks);
+  EXPECT_TRUE(Callbacks->empty());
+  const auto All = getX86RegistrationSEHStateStores(Function, true);
+  ASSERT_TRUE(All);
+  ASSERT_EQ(All->size(), 1u);
+  EXPECT_EQ(All->front().Operation, &Function.Blocks[1].Ops[0]);
+  auto Reject = [&](auto Mutate) {
+    auto Changed = Make();
+    Mutate(Changed);
+    EXPECT_FALSE(getX86RegistrationSEHStateStores(Changed));
+    EXPECT_FALSE(getX86RegistrationSEHStateStores(Changed, true));
+  };
+  Reject([](auto &F) { --F.RegistrationStates->SEHStateStores[0].EndAddress; });
+  Reject([](auto &F) { F.RegistrationStates->SEHStateStores[0].Width = 2; });
+  Reject([](auto &F) {
+    F.RegistrationStates->SEHStateStores[0].Transitions.clear();
+  });
+  Reject([](auto &F) { F.RegistrationStates->Blocks[1].CallbackOnly = true; });
+  Reject([](auto &F) { F.Blocks[1].Ops.clear(); });
+  Reject([](auto &F) { F.Blocks[1].Ops[0].Dead = true; });
+  Reject(
+      [](auto &F) { F.Blocks[1].Ops[0].Inputs[1] = MedVar::makeConst(2, 4); });
+  Reject([](auto &F) {
+    F.Blocks[1].Ops[0].MemoryOrdering = NdMemoryOrdering::Relaxed;
+  });
+  Reject([](auto &F) { F.Blocks[1].Ops.push_back(F.Blocks[1].Ops[0]); });
+}
+
 TEST(RegistrationSEHStateStore, ComparesTheDeclaredFullWordBits) {
   auto Function = sourceStateStore();
   Function.ExceptionMetadata->Registration->TryLevelStores[0].Level = -1;

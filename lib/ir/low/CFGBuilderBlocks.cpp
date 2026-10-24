@@ -92,7 +92,7 @@ void CFGBuilder::splitBlocks() {
                  Op.MemoryAddressSpace == NdMemoryAddressSpace::X86FS;
         }))
       BlockStarts.insert(Addr + Rec.Size);
-    if (Registration && EH->Cxx &&
+    if (Registration &&
         registration_state::stateStoreCandidate(*EH->Registration, Rec.Ops))
       BlockStarts.insert(Addr + Rec.Size);
     if (Registration && EH->Cxx && Rec.IsCall && !Rec.IsIndirect &&

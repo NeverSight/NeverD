@@ -24,6 +24,7 @@
 #include "neverd/backend/llvm/WindowsEHSemanticDigest.h"
 #include "neverd/backend/llvm/WindowsRegistrationFrame.h"
 #include "neverd/backend/llvm/X86RegistrationSEHScope.h"
+#include "neverd/backend/llvm/X86RegistrationSEHStateStore.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/med/X86RegistrationCallback.h"
 #include "neverd/ir/med/X86RegistrationSEH4PhysicalFrame.h"
@@ -366,6 +367,14 @@ bool MedLLVMEmitter::emitNativeX86RegistrationSEH(
   auto SourceProof = x86_registration::getCheckedSEHSourceOperations(
       Func, OriginalBlockMap, RegistrationMemoryIR, CallSiteAddrs);
   if (!SourceProof)
+    return false;
+  if (!hasCheckedX86RegistrationSEHComputedStores(
+          Func, Parent, *FrameAlloca, FrameEntrySPOffset,
+          [&](va_t Address, int Seq) -> const llvm::Instruction * {
+            const auto Found = RegistrationMemoryIR.find({Address, Seq});
+            return Found == RegistrationMemoryIR.end() ? nullptr
+                                                       : Found->second;
+          }))
     return false;
   auto JumpPlan = x86_registration::prepareSEHJumps(
       Func, Parent, *FrameAlloca, FrameEntrySPOffset, CallSiteAddrs);
