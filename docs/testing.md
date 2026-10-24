@@ -6100,6 +6100,16 @@ for registration_case in filter nested-finally continue-search continue-executio
 done
 ```
 
+`RegistrationSEH4Physical` separates parent `RET 4/16/20` from zero-pop
+filter/finally returns, checks both caller/callee emission orders and rejects
+changed source bytes, incomplete state receipts and altered LLVM conventions.
+`WindowsRegistrationIncoming.SEHStdcallNeedsExactStackOnlyParameters` covers
+missing, surplus, register and variadic parameter layouts. The runtime script's
+`--parent-pop 4|16|20` option applies to filter, normal-finally and
+cdecl-parameter cases; its observer checks ESP, stack guards and exception-chain
+restoration on every repeated call. Run the selected SEH3/SEH4 cases through
+raw and optimized CLI reconstruction and both installation modes.
+
 The SEH rewrite script also runs `longjmp-finally`, `longjmp-zero`,
 `longjmp-filter`, `longjmp-parameter`, `longjmp-callback`,
 `longjmp-unwind-callback`, `longjmp-callback-zero`, `longjmp-search-filter`

@@ -23,6 +23,10 @@ struct X86RegistrationEntryABI {
 std::optional<X86RegistrationEntryABI>
 projectX86RegistrationEntry(const MedFunc &Function);
 
+/// Preserve the established caller-cleanup SEH path or require the exact
+/// source-authenticated stack-only stdcall signature for a callee-pop parent.
+bool hasX86RegistrationSEHEntryContract(const MedFunc &Function);
+
 /// Preserve stack words observed only from runtime callbacks, and unused
 /// words authenticated by RET cleanup. Existing operand identities stay fixed.
 void completeX86RegistrationEntryParameters(MedFunc &Function);

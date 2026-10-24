@@ -1892,10 +1892,16 @@ prologue projection consumes this local proof even when the remaining state
 graph is incomplete, preserving the SP/EBP relation needed for argument
 recovery. The checked prologue-call and native physical-frame consumers still
 require complete source-state and installation receipts.
-The shared C++ entry projection in `lib/ir/med/X86/RegistrationEntry.cpp` orders
+The shared entry projection in `lib/ir/med/X86/RegistrationEntry.cpp` orders
 physical ECX/EDX and stack words using the LowIR parent's authenticated RET cleanup count.
 Register inputs retain their proved 8-, 16- or 32-bit width; source operations
 own sign and zero extension, while physical stack slots remain four bytes.
+SEH3/SEH4 parents additionally admit stack-only stdcall entries through their
+separate `RegistrationSEHEntryPopBytes` fact. Every reached parent return must
+agree with immutable bytes, and filter/finally returns must retain zero cleanup.
+The existing caller-cleanup SEH path remains separate. A stdcall declaration
+receives its proved convention before either caller or callee body is emitted;
+the independent COFF replay rechecks the source count, signature and attributes.
 After materializing implicit ABI uses and native registration exception edges,
 the LLVM emitter discards store-only private SSA slots and their dead pure inputs.
 This prevents unused PHI copies from reading unavailable register values in

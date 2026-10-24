@@ -142,7 +142,7 @@ getCheckedCxxControlIRProof(const llvm::Function &Function,
     return rejectIR("C++ source frame lost its physical coordinate projection");
   Frame->Establisher = Layout->Establisher;
   Result.Frame = *Frame;
-  if (!hasX86RegistrationCxxEntryABI(Med, Function))
+  if (!hasX86RegistrationEntryABI(Med, Function))
     return rejectIR("C++ parent changed its physical entry ABI");
   const std::array<const llvm::Function *, 1> Functions = {&Function};
   std::set<const llvm::Instruction *> IncomingSetup;

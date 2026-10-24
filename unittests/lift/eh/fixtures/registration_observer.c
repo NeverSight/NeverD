@@ -14,7 +14,13 @@ void *_ReturnAddress(void);
 unsigned long __readfsdword(unsigned long);
 #pragma intrinsic(_ReturnAddress)
 #pragma intrinsic(__readfsdword)
-#if REGISTRATION_CASE == 5 || REGISTRATION_CASE == 6 || REGISTRATION_CASE == 12
+#if REGISTRATION_PARENT_POP == 4
+extern int __stdcall registration_entry(int);
+#elif REGISTRATION_PARENT_POP == 16
+extern int __stdcall registration_entry(int, int, int, int);
+#elif REGISTRATION_PARENT_POP == 20
+extern int __stdcall registration_entry(int, int, int, int, int);
+#elif REGISTRATION_CASE == 5 || REGISTRATION_CASE == 6 || REGISTRATION_CASE == 12
 extern int registration_entry(int);
 #else
 extern int registration_entry(void);
@@ -142,6 +148,11 @@ void mainCRTStartup(void) {
   int value = 0, chain_ok = 1;
   for (; iterations != 4; ++iterations) {
     registration_trace = 0;
+#if REGISTRATION_PARENT_POP
+    unsigned stack_before, stack_after;
+    volatile unsigned stack_guard[2] = {0x12345678, 0xa5c39e71};
+    __asm mov stack_before, esp
+#endif
 #if REGISTRATION_STARTUP_INFO
     prepare_startup_observation();
 #endif
@@ -156,7 +167,13 @@ void mainCRTStartup(void) {
 #if REGISTRATION_CASE >= 48 && REGISTRATION_CASE <= 51
     registration_helper_visits = 0;
 #endif
-#if REGISTRATION_CASE == 6
+#if REGISTRATION_PARENT_POP == 4
+    value = registration_entry(7);
+#elif REGISTRATION_PARENT_POP == 16
+    value = registration_entry(7, 31, 47, 63);
+#elif REGISTRATION_PARENT_POP == 20
+    value = registration_entry(7, 31, 47, 63, 79);
+#elif REGISTRATION_CASE == 6
     registration_parameter_after = 0;
     value = registration_call_entry();
     registration_trace += registration_parameter_after * 10;
@@ -166,6 +183,11 @@ void mainCRTStartup(void) {
     value = registration_entry();
 #endif
     chain_ok &= __readfsdword(0) == chain;
+#if REGISTRATION_PARENT_POP
+    __asm mov stack_after, esp
+    chain_ok &= stack_before == stack_after && stack_guard[0] == 0x12345678 &&
+                stack_guard[1] == 0xa5c39e71;
+#endif
 #if REGISTRATION_STARTUP_INFO
     if (!startup_observation_matches())
       break;

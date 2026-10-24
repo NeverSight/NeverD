@@ -536,6 +536,21 @@ std::optional<uint16_t> getCheckedX86RegistrationCxxParentABI(
     std::vector<ExceptionAddressRange> *CallerPCWrites) {
   if (CallerPCWrites)
     CallerPCWrites->clear();
+  if (!Function.ExceptionMetadata || !Function.ExceptionMetadata->Cxx)
+    return std::nullopt;
+  const auto Pop = registration_abi::parentPopBytes(Function, Image);
+  if (!Pop || !hasRegistrationCallFrameABI(Function, Image, CallerPCWrites))
+    return std::nullopt;
+  return Pop;
+}
+
+std::optional<uint16_t> getCheckedX86RegistrationSEHParentABI(
+    const LowFunc &Function, const BinaryImage &Image,
+    std::vector<ExceptionAddressRange> *CallerPCWrites) {
+  if (CallerPCWrites)
+    CallerPCWrites->clear();
+  if (!Function.ExceptionMetadata || Function.ExceptionMetadata->Cxx)
+    return std::nullopt;
   const auto Pop = registration_abi::parentPopBytes(Function, Image);
   if (!Pop || !hasRegistrationCallFrameABI(Function, Image, CallerPCWrites))
     return std::nullopt;

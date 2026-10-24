@@ -2091,7 +2091,9 @@ TEST(WindowsRegistrationNative, InputPE32PreservesItsCheckedSourceContract) {
   RejectMutation(
       "changed parent stack cleanup",
       [](llvm::Function &F) {
-        F.setCallingConv(llvm::CallingConv::X86_StdCall);
+        F.setCallingConv(F.getCallingConv() == llvm::CallingConv::X86_StdCall
+                             ? llvm::CallingConv::C
+                             : llvm::CallingConv::X86_StdCall);
         return true;
       },
       "stack cleanup ABI");

@@ -27,6 +27,7 @@
 #include "neverd/backend/llvm/WindowsEHNativeSource.h"
 #include "neverd/backend/llvm/WindowsEHSemanticDigest.h"
 #include "neverd/backend/llvm/WindowsRegistrationFrame.h"
+#include "neverd/backend/llvm/X86RegistrationEntry.h"
 #include "neverd/backend/llvm/X86RegistrationSEHScope.h"
 #include "neverd/backend/llvm/X86RegistrationSEHStateStore.h"
 #include "neverd/ir/low/CFGBuilder.h"
@@ -156,8 +157,15 @@ llvm::Error validateCOFFRegistrationIR(const llvm::Function &Function,
   LowFunc Replay = Builder.build(Image, Decoder, Source.CodeRange.Begin,
                                  Function.getName().str());
   std::vector<ExceptionAddressRange> SourceCallerPCWrites;
-  if (Function.getCallingConv() != llvm::CallingConv::C ||
-      !hasCallerCleanupRegistrationABI(Replay, Image, &SourceCallerPCWrites))
+  const bool Stdcall =
+      Function.getCallingConv() == llvm::CallingConv::X86_StdCall;
+  const auto ParentPop = Stdcall ? getCheckedX86RegistrationSEHParentABI(
+                                       Replay, Image, &SourceCallerPCWrites)
+                                 : std::nullopt;
+  if (Stdcall ? !ParentPop || !*ParentPop
+              : Function.getCallingConv() != llvm::CallingConv::C ||
+                    !hasCallerCleanupRegistrationABI(Replay, Image,
+                                                     &SourceCallerPCWrites))
     return rejectIR(
         "source or preserved callee has an unproved x86 stack cleanup ABI");
   if (!Replay.RegistrationStates || !Replay.RegistrationStates->Complete ||
@@ -200,6 +208,8 @@ llvm::Error validateCOFFRegistrationIR(const llvm::Function &Function,
   LowToMedConverter Converter;
   Converter.setBinaryImage(&Image);
   MedFunc ReplayMed = Converter.convert(Replay, Arch::X86, BinaryFormat::COFF);
+  if (Stdcall && !hasX86RegistrationEntryABI(ReplayMed, Function))
+    return rejectIR("SEH parent changed its physical stdcall entry ABI");
   const auto *PhysicalStates = getX86RegistrationSEHPhysicalStates(ReplayMed);
   if (!PhysicalStates ||
       !hasCheckedX86RegistrationSEHPhysicalFrame(Image, ReplayMed))

@@ -14,8 +14,10 @@
 namespace neverd {
 namespace {
 std::optional<X86RegistrationEntryABI> describeEntry(const MedFunc &Function) {
-  if (!Function.RegistrationCxxEntryPopBytes || Function.IsVariadic ||
-      !Function.RegistrationStates ||
+  const auto CxxPop = Function.RegistrationCxxEntryPopBytes;
+  const auto SEHPop = Function.RegistrationSEHEntryPopBytes;
+  if (bool(CxxPop) == bool(SEHPop) || (SEHPop && !*SEHPop) ||
+      Function.IsVariadic || !Function.RegistrationStates ||
       !Function.RegistrationStates->IncomingFrameAccessesComplete)
     return std::nullopt;
   const auto &Accesses = Function.RegistrationStates->IncomingFrameAccesses;
@@ -24,7 +26,7 @@ std::optional<X86RegistrationEntryABI> describeEntry(const MedFunc &Function) {
           limits::kMaxRegistrationEHStateWork - Function.Params.size())
     return std::nullopt;
   X86RegistrationEntryABI ABI;
-  ABI.PopBytes = *Function.RegistrationCxxEntryPopBytes;
+  ABI.PopBytes = CxxPop ? *CxxPop : *SEHPop;
   if (ABI.PopBytes % 4)
     return std::nullopt;
   ABI.StackWords = ABI.PopBytes / 4;
@@ -43,7 +45,7 @@ std::optional<X86RegistrationEntryABI> describeEntry(const MedFunc &Function) {
     if (Param.Kind != MedVar::Param && Param.Kind != MedVar::Reg)
       return std::nullopt;
     if (Param.RegOff != kNoParamReg) {
-      if ((Param.Size != 1 && Param.Size != 2 && Param.Size != 4) ||
+      if (SEHPop || (Param.Size != 1 && Param.Size != 2 && Param.Size != 4) ||
           Index != ABI.RegisterCount || ABI.RegisterCount >= 2 ||
           Param.RegOff != Registers[ABI.RegisterCount])
         return std::nullopt;
@@ -67,6 +69,15 @@ projectX86RegistrationEntry(const MedFunc &Function) {
   if (!ABI || Function.Params.size() != ABI->RegisterCount + ABI->StackWords)
     return std::nullopt;
   return ABI;
+}
+
+bool hasX86RegistrationSEHEntryContract(const MedFunc &Function) {
+  if (Function.RegistrationCxxEntryPopBytes)
+    return false;
+  if (Function.RegistrationSEHEntryPopBytes)
+    return bool(projectX86RegistrationEntry(Function));
+  return !Function.CalleePopBytes &&
+         Function.RegistrationCallerCleanupABIComplete;
 }
 
 void completeX86RegistrationEntryParameters(MedFunc &Function) {

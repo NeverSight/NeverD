@@ -771,6 +771,8 @@ MedFunc LowToMedConverter::convert(const LowFunc &SourceLow, Arch TheArch,
         KnownRegistrationFrameFacts->CallerCleanupABIComplete;
     Func.RegistrationCxxEntryPopBytes =
         KnownRegistrationFrameFacts->CxxEntryPopBytes;
+    Func.RegistrationSEHEntryPopBytes =
+        KnownRegistrationFrameFacts->SEHEntryPopBytes;
   } else {
     if (Low.RegistrationStates && Image)
       Func.RegistrationCallerCleanupABIComplete =
@@ -778,6 +780,9 @@ MedFunc LowToMedConverter::convert(const LowFunc &SourceLow, Arch TheArch,
     if (Low.ExceptionMetadata && Low.ExceptionMetadata->Cxx && Image)
       Func.RegistrationCxxEntryPopBytes =
           getCheckedX86RegistrationCxxParentABI(SourceLow, *Image);
+    else if (Low.RegistrationStates && Low.CalleePopBytes && Image)
+      Func.RegistrationSEHEntryPopBytes =
+          getCheckedX86RegistrationSEHParentABI(SourceLow, *Image);
   }
   if (SourceCallHintsEnabled && Image && Fmt == BinaryFormat::MachO &&
       TheArch == Arch::AArch64 && Image->Arch == TheArch) {

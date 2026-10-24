@@ -324,6 +324,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--case", choices=CASES, default="filter")
     parser.add_argument("--shared-seh4", action="store_true",
                         help="use the authored shared SEH4 entry and exit helpers")
+    parser.add_argument("--parent-pop", type=int, choices=(0, 4, 16, 20), default=0,
+                        help="use a stdcall parent with this RET cleanup; callbacks remain cdecl")
     parser.add_argument("--startup-info", action="store_true",
                         help="compare a private STARTUPINFOW output with an independent runtime observation")
     parser.add_argument("--state-write", choices=("literal", "register", "bitwise"),
@@ -340,6 +342,8 @@ def main(argv: list[str] | None = None) -> int:
     jump = "longjmp-" in args.case
     if args.shared_seh4 and (not eh4 or gs or case not in range(9)):
         parser.error("--shared-seh4 requires an ordinary EH4 case without GS")
+    if args.parent_pop and case not in (0, 4, 5):
+        parser.error("--parent-pop requires a filter, normal-finally or cdecl-parameter case")
     if args.startup_info and case not in (0, 4):
         parser.error("--startup-info requires a filter or normal-finally case")
     if args.state_write != "literal" and case not in (*range(9), 43, 44):
@@ -349,6 +353,7 @@ def main(argv: list[str] | None = None) -> int:
     report = {"schema": 2, "evidence": f"reconstructed-source-registration-{'seh4' if eh4 else 'seh3'}",
               "case": args.case, "expected_trace": expected_trace,
               "shared_seh4": args.shared_seh4,
+              "parent_pop": args.parent_pop,
               "startup_info": args.startup_info,
               "state_write": args.state_write,
               "passed": False, "steps": [], "observations": []}
@@ -425,6 +430,7 @@ def main(argv: list[str] | None = None) -> int:
         for source in sources:
             compile_command = [compiler, "--target=i686-pc-windows-msvc", "-O0",
                              f"-DREGISTRATION_CASE={case}",
+                             f"-DREGISTRATION_PARENT_POP={args.parent_pop}",
                              f"-DREGISTRATION_STARTUP_INFO={int(args.startup_info)}",
                              f"-DREGISTRATION_STATE_WRITE={('literal', 'register', 'bitwise').index(args.state_write)}",
                              f"-DREGISTRATION_LOOP_EH4={int(eh4)}",
@@ -450,6 +456,8 @@ def main(argv: list[str] | None = None) -> int:
         link_command = [linker, "/entry:mainCRTStartup", "/nodefaultlib",
                          "/machine:x86", "/subsystem:console", "/dynamicbase:no",
                          "/export:registration_entry",
+                         *([f"/alternatename:_registration_entry@{args.parent_pop}=_registration_entry"]
+                           if args.parent_pop else []),
                          *( ["/export:registration_eh4_personality=_except_handler4"] if eh4 else []),
                          f"/out:{original}",
                          *(str(output / (name + ".obj")) for name in sources),

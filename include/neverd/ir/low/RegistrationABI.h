@@ -348,6 +348,12 @@ bool hasCallerCleanupRegistrationABI(
 std::optional<uint16_t> getCheckedX86RegistrationCxxParentABI(
     const LowFunc &Function, const BinaryImage &Image,
     std::vector<ExceptionAddressRange> *CallerPCWrites = nullptr);
+
+/// The corresponding SEH3/SEH4 parent contract. Runtime filters and finally
+/// callbacks retain their independent zero-pop invocation ABI.
+std::optional<uint16_t> getCheckedX86RegistrationSEHParentABI(
+    const LowFunc &Function, const BinaryImage &Image,
+    std::vector<ExceptionAddressRange> *CallerPCWrites = nullptr);
 } // namespace neverd
 
 #endif

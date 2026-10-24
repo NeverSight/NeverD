@@ -23,10 +23,12 @@
 #include "neverd/backend/llvm/WindowsEHNativeSource.h"
 #include "neverd/backend/llvm/WindowsEHSemanticDigest.h"
 #include "neverd/backend/llvm/WindowsRegistrationFrame.h"
+#include "neverd/backend/llvm/X86RegistrationEntry.h"
 #include "neverd/backend/llvm/X86RegistrationSEHScope.h"
 #include "neverd/backend/llvm/X86RegistrationSEHStateStore.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/med/X86RegistrationCallback.h"
+#include "neverd/ir/med/X86RegistrationEntry.h"
 #include "neverd/ir/med/X86RegistrationSEH4PhysicalFrame.h"
 #include "neverd/ir/med/X86RegistrationSEHCall.h"
 #include "neverd/ir/med/X86RegistrationSEHStateStore.h"
@@ -65,8 +67,15 @@ bool MedLLVMEmitter::emitNativeX86RegistrationSEH(
     const std::map<llvm::BasicBlock *, std::pair<int, int>> &PHICopyEdges) {
   if (TargetArch != Arch::X86 || TargetFormat != BinaryFormat::COFF ||
       !Func.ExceptionMetadata || !Func.RegistrationStates || Func.SkippedSSA ||
-      Func.CalleePopBytes || !Func.RegistrationCallerCleanupABIComplete ||
-      !FrameAlloca || FrameEntrySPOffset < 24 || Parent.hasPersonalityFn())
+      !hasX86RegistrationSEHEntryContract(Func) || !FrameAlloca ||
+      FrameEntrySPOffset < 24 || Parent.hasPersonalityFn())
+    return false;
+  const auto EntryABI =
+      Func.RegistrationSEHEntryPopBytes
+          ? getX86RegistrationEntryABI(Func, Parent)
+          : std::optional<llvm::CallingConv::ID>(llvm::CallingConv::C);
+  if (!EntryABI || (Parent.getCallingConv() != llvm::CallingConv::C &&
+                    Parent.getCallingConv() != *EntryABI))
     return false;
   const ExceptionFunction &EH = *Func.ExceptionMetadata;
   const auto Source = classifyWindowsEHNativeSource(
@@ -624,6 +633,7 @@ bool MedLLVMEmitter::emitNativeX86RegistrationSEH(
   }
 
   // Commit. All source occurrences, callbacks and control edges are closed.
+  Parent.setCallingConv(*EntryABI);
   ParentProjection.commit();
   IncomingProjection.commit();
   if (!StateWrites->empty() || !ParentExits->Sources.empty()) {

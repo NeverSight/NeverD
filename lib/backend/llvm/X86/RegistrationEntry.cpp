@@ -1,4 +1,4 @@
-//===- RegistrationEntry.cpp - PE32 C++ parent entry ABI -----------------===//
+//===- RegistrationEntry.cpp - PE32 parent entry ABI -----------------===//
 //
 // NeverD Decompiler
 //
@@ -32,16 +32,16 @@ entryConvention(const MedFunc &Source, const llvm::Function &Function) {
 } // namespace
 
 std::optional<llvm::CallingConv::ID>
-getX86RegistrationCxxEntryABI(const MedFunc &Source,
-                              const llvm::Function &Function) {
+getX86RegistrationEntryABI(const MedFunc &Source,
+                           const llvm::Function &Function) {
   for (const auto &Arg : Function.args())
     if (Function.getAttributes().hasParamAttrs(Arg.getArgNo()))
       return std::nullopt;
   return entryConvention(Source, Function);
 }
 
-bool hasX86RegistrationCxxEntryABI(const MedFunc &Source,
-                                   const llvm::Function &Function) {
+bool hasX86RegistrationEntryABI(const MedFunc &Source,
+                                const llvm::Function &Function) {
   const auto Convention = entryConvention(Source, Function);
   if (!Convention || Function.getCallingConv() != *Convention)
     return false;

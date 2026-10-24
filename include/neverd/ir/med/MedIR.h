@@ -464,6 +464,9 @@ struct MedFunc {
   /// Checked C++ parent return cleanup and preserved call/frame closure.
   /// Runtime catch returns are excluded from this physical entry contract.
   std::optional<uint16_t> RegistrationCxxEntryPopBytes;
+  /// Checked SEH parent return cleanup, separate from filter/finally returns.
+  /// A nonzero count additionally requires an exact stdcall entry projection.
+  std::optional<uint16_t> RegistrationSEHEntryPopBytes;
   /// Bytes reserved below and above the synthetic entry stack pointer.
   int64_t FrameSize = 0;
   int64_t FrameHeadroom = 0;

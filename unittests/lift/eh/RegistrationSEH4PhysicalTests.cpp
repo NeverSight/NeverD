@@ -14,6 +14,7 @@
 #include "neverd/backend/codegen/COFF/COFFRegistrationPatch.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/backend/llvm/WindowsEHMetadata.h"
+#include "neverd/ir/low/RegistrationABI.h"
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/ir/med/MedABIPass.h"
 #include "neverd/ir/med/X86RegistrationSEH4PhysicalFrame.h"
@@ -23,6 +24,9 @@
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/Support/Error.h"
+
+#include <algorithm>
+#include <vector>
 
 using namespace neverd;
 using namespace neverd::registration_test;
@@ -36,6 +40,155 @@ MedFunc convertSharedFrame(const BinaryImage &Image, const LowFunc &Low) {
   return Result;
 }
 } // namespace
+
+TEST(RegistrationSEH4Physical, DeclaresStdcallBeforeEitherBodyEmissionOrder) {
+  auto Image =
+      sharedSEH4Image(0x400000, false, 32, SharedSEH4Body::FilteredCall, 16);
+  const auto Low = liftSharedSEH4(Image);
+  const auto Target = convertSharedFrame(Image, Low);
+  MedFunc Caller;
+  Caller.Entry = 0x402400;
+  Caller.Name = "caller";
+  Caller.CC = CallingConv::CDECL;
+  MedBlock Block;
+  Block.Id = 0;
+  Block.StartAddr = Caller.Entry;
+  Block.EndAddr = Caller.Entry + 6;
+  MedOp Call;
+  Call.Opcode = NdOp::CALL;
+  Call.Addr = Caller.Entry;
+  Call.OriginSeq = 0;
+  Call.addInput(MedVar::makeConst(Target.Entry, 4));
+  Block.Ops.push_back(Call);
+  MedOp Return;
+  Return.Opcode = NdOp::RETURN;
+  Return.Addr = Caller.Entry + 5;
+  Return.OriginSeq = 1;
+  Return.addInput(MedVar::makeConst(7, 4));
+  Block.Ops.push_back(Return);
+  Caller.Blocks.push_back(Block);
+  MedCallInfo Info;
+  Info.BlockId = 0;
+  Info.OpIdx = 0;
+  Info.TargetAddr = Target.Entry;
+  for (unsigned I = 0; I != 4; ++I)
+    Info.Args.push_back(MedVar::makeConst(7 + I, 4));
+  Caller.CallInfos.push_back(Info);
+  std::vector<MedFunc> Functions{Caller, Target};
+  for (unsigned Order = 0; Order != 2; ++Order) {
+    SCOPED_TRACE(Order);
+    llvm::LLVMContext Context;
+    auto Module =
+        MedLLVMEmitter().emit(Functions, Context, "stdcall-order", Arch::X86,
+                              {}, &Image, BinaryFormat::COFF);
+    ASSERT_TRUE(Module);
+    ASSERT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
+    const auto *Parent = Module->getFunction(Target.Name);
+    ASSERT_TRUE(Parent);
+    ASSERT_TRUE(Parent->getMetadata(windows_eh_md::NativeAttachment));
+    unsigned Calls = 0;
+    for (const auto &IRBlock : *Module->getFunction(Caller.Name))
+      for (const auto &I : IRBlock)
+        if (const auto *Site = llvm::dyn_cast<llvm::CallBase>(&I);
+            Site && Site->getCalledFunction() == Parent) {
+          ++Calls;
+          EXPECT_EQ(Site->getCallingConv(), llvm::CallingConv::X86_StdCall);
+          EXPECT_EQ(Site->arg_size(), 4u);
+        }
+    EXPECT_EQ(Calls, 1u);
+    std::reverse(Functions.begin(), Functions.end());
+  }
+}
+
+TEST(RegistrationSEH4Physical, SeparatesStdcallParentFromCdeclCallbacks) {
+  for (uint16_t Pop : {4, 16, 20}) {
+    SCOPED_TRACE(Pop);
+    auto Image =
+        sharedSEH4Image(0x400000, false, 32, SharedSEH4Body::FilteredCall, Pop);
+    const auto Low = liftSharedSEH4(Image);
+    ASSERT_TRUE(Low.RegistrationStates);
+    ASSERT_TRUE(Low.RegistrationStates->Complete);
+    EXPECT_EQ(getCheckedX86RegistrationSEHParentABI(Low, Image), Pop);
+    EXPECT_FALSE(getCheckedX86RegistrationCxxParentABI(Low, Image));
+    const auto Med = convertSharedFrame(Image, Low);
+    llvm::LLVMContext Context;
+    auto Module =
+        MedLLVMEmitter().emit({Med}, Context, "shared-seh4-stdcall", Arch::X86,
+                              {}, &Image, BinaryFormat::COFF);
+    ASSERT_TRUE(Module);
+    ASSERT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
+    const auto *Parent = Module->getFunction(Med.Name);
+    ASSERT_TRUE(Parent);
+    ASSERT_TRUE(Parent->getMetadata(windows_eh_md::NativeAttachment));
+    EXPECT_EQ(Parent->getCallingConv(), llvm::CallingConv::X86_StdCall);
+    EXPECT_EQ(Parent->arg_size(), Pop / 4u);
+    for (const auto &Function : *Module)
+      if (&Function != Parent && !Function.isDeclaration())
+        EXPECT_EQ(Function.getCallingConv(), llvm::CallingConv::C);
+#ifdef LLVM_NEVERD_X86_REGISTRATION_EH
+    auto Error =
+        validateCOFFRegistrationIR(*Parent, *Low.ExceptionMetadata, Image);
+    EXPECT_FALSE(bool(Error)) << llvm::toString(std::move(Error));
+    auto *Mutable = Module->getFunction(Med.Name);
+    for (const auto Convention :
+         {llvm::CallingConv::C, llvm::CallingConv::X86_ThisCall,
+          llvm::CallingConv::X86_FastCall}) {
+      Mutable->setCallingConv(Convention);
+      auto Wrong =
+          validateCOFFRegistrationIR(*Mutable, *Low.ExceptionMetadata, Image);
+      EXPECT_TRUE(bool(Wrong));
+      llvm::consumeError(std::move(Wrong));
+    }
+    Mutable->setCallingConv(llvm::CallingConv::X86_StdCall);
+    Mutable->addParamAttr(0, llvm::Attribute::InReg);
+    auto Wrong =
+        validateCOFFRegistrationIR(*Mutable, *Low.ExceptionMetadata, Image);
+    EXPECT_TRUE(bool(Wrong));
+    llvm::consumeError(std::move(Wrong));
+#endif
+  }
+}
+
+TEST(RegistrationSEH4Physical, ParentCleanupRequiresCurrentCompleteSource) {
+  auto Image =
+      sharedSEH4Image(0x400000, false, 32, SharedSEH4Body::FilteredCall, 16);
+  const auto Low = liftSharedSEH4(Image);
+  ASSERT_EQ(getCheckedX86RegistrationSEHParentABI(Low, Image), 16);
+  auto Changed = Low;
+  Changed.CalleePopBytes = 65532;
+  EXPECT_EQ(getCheckedX86RegistrationSEHParentABI(Changed, Image), 16);
+  for (auto Flag : {&RegistrationStateAnalysis::Complete,
+                    &RegistrationStateAnalysis::CallbackStatesComplete,
+                    &RegistrationStateAnalysis::RegistrationLifetimeComplete,
+                    &RegistrationStateAnalysis::ChainOperationsComplete,
+                    &RegistrationStateAnalysis::SEHInvocationExitsComplete,
+                    &RegistrationStateAnalysis::SEHParentChainComplete}) {
+    Changed = Low;
+    Changed.RegistrationStates.value().*Flag = false;
+    EXPECT_FALSE(getCheckedX86RegistrationSEHParentABI(Changed, Image));
+  }
+  unsigned Returns = 0;
+  for (size_t B = 0; B != Low.Blocks.size(); ++B)
+    for (size_t I = 0; I != Low.Blocks[B].InstructionBoundaries.size(); ++I) {
+      const auto &Boundary = Low.Blocks[B].InstructionBoundaries[I];
+      if (Boundary.Control != LowInstructionControl::Return)
+        continue;
+      ++Returns;
+      Changed = Low;
+      Changed.Blocks[B].InstructionBoundaries[I].Immediate =
+          Boundary.Immediate.value_or(0) + 4;
+      EXPECT_FALSE(getCheckedX86RegistrationSEHParentABI(Changed, Image));
+      auto EditedImage = Image;
+      EditedImage.Segments.front()
+          .Data[Boundary.Address - EditedImage.Segments.front().VA] = 0xcb;
+      EXPECT_FALSE(getCheckedX86RegistrationSEHParentABI(Low, EditedImage));
+    }
+  EXPECT_GE(Returns, 2u);
+  auto Unaligned =
+      sharedSEH4Image(0x400000, false, 32, SharedSEH4Body::FilteredCall, 6);
+  EXPECT_FALSE(getCheckedX86RegistrationSEHParentABI(liftSharedSEH4(Unaligned),
+                                                     Unaligned));
+}
 
 TEST(RegistrationSEH4Physical, ReplaysOriginalCallsThroughIndependentNativeIR) {
   for (uint32_t Base : {0x400000u, 0x18000000u})

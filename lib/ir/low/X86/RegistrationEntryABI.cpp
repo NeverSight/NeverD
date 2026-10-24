@@ -21,16 +21,22 @@ std::optional<uint16_t> parentPopBytes(const LowFunc &Function,
                                        size_t *CumulativeWork) {
   if (Image.Arch != Arch::X86 || Image.Bits != Bitness::Bits32 ||
       Image.Format != BinaryFormat::COFF || !Function.ExceptionMetadata ||
-      !Function.ExceptionMetadata->Cxx ||
       !Function.ExceptionMetadata->Registration ||
       Function.Entry != Function.ExceptionMetadata->CodeRange.Begin ||
       !Function.hasCompleteLiftCoverage() || !Function.RegistrationStates)
     return std::nullopt;
+  const auto &EH = *Function.ExceptionMetadata;
+  const bool Cxx = EH.Cxx.has_value();
+  if (!Cxx && EH.Personality != ExceptionPersonality::ExceptHandler3 &&
+      EH.Personality != ExceptionPersonality::ExceptHandler4)
+    return std::nullopt;
   const auto &States = *Function.RegistrationStates;
   if (!States.Complete || !States.CallbackStatesComplete ||
-      !States.RegistrationLifetimeComplete ||
-      !States.CxxContinuationsComplete || !States.ChainOperationsComplete ||
-      !States.CallFrameEffectsComplete ||
+      !States.RegistrationLifetimeComplete || !States.ChainOperationsComplete ||
+      (Cxx ? !States.CxxContinuationsComplete ||
+                 !States.CallFrameEffectsComplete
+           : !States.SEHInvocationExitsComplete ||
+                 !States.SEHParentChainComplete) ||
       States.Blocks.size() != Function.Blocks.size())
     return std::nullopt;
   if (auto Error = validateLowInstructionBoundaries(

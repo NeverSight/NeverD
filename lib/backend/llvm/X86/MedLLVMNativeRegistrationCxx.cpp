@@ -125,7 +125,7 @@ bool MedLLVMEmitter::emitNativeX86RegistrationCxx(
       Catches[{Region, Index}].Object = *Object;
     }
 
-  const auto EntryABI = getX86RegistrationCxxEntryABI(Func, Parent);
+  const auto EntryABI = getX86RegistrationEntryABI(Func, Parent);
   if (!EntryABI)
     return false;
 

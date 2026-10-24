@@ -31,9 +31,11 @@
 #include "neverd/backend/llvm/LanguageEHMetadata.h"
 #include "neverd/backend/llvm/PEImportShadow.h"
 #include "neverd/backend/llvm/WindowsEHNativeSource.h"
+#include "neverd/backend/llvm/X86RegistrationEntry.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/med/IntrinsicShapes.h"
 #include "neverd/ir/med/MedRawEnvironment.h"
+#include "neverd/ir/med/X86RegistrationEntry.h"
 #include "neverd/loader/COFF/COFFRegistrationEH.h"
 
 #define DEBUG_TYPE "neverd-med-llvm-emitter"
@@ -689,6 +691,13 @@ llvm::Function *MedLLVMEmitter::declareFunc(const MedFunc &Func) {
   auto *FuncTy = llvm::FunctionType::get(RetType, ParamTypes, Func.IsVariadic);
   auto *LLVMFunc = llvm::Function::Create(
       FuncTy, llvm::GlobalValue::ExternalLinkage, EmittedName, Mod);
+  // The physical source entry is independent of native EH admission. Assign
+  // its checked stack convention before any earlier caller sees the symbol.
+  if (TargetArch == Arch::X86 && TargetFormat == BinaryFormat::COFF &&
+      Func.RegistrationSEHEntryPopBytes &&
+      hasX86RegistrationSEHEntryContract(Func))
+    if (const auto ABI = getX86RegistrationEntryABI(Func, *LLVMFunc))
+      LLVMFunc->setCallingConv(*ABI);
   // Recovered parameters are ordered by independent ABI register banks, then
   // incoming stack slots. A resolved indirect call can have surplus registers
   // in either bank; retaining these boundaries prevents positional coercion
@@ -854,8 +863,8 @@ MedLLVMEmitter::emit(const std::vector<MedFunc> &Funcs, llvm::LLVMContext &LCtx,
                      !States.CleanupFrameEffectsComplete
                : Classification.Model !=
                          WindowsEHNativeSourceModel::X86RegistrationSEH ||
-                     !Func.RegistrationCallerCleanupABIComplete ||
-                     Func.CalleePopBytes || !States.CallbackStatesComplete ||
+                     !hasX86RegistrationSEHEntryContract(Func) ||
+                     !States.CallbackStatesComplete ||
                      !States.ChainOperationsComplete))
         continue;
       auto Preserve = [&](const RegistrationCalleeFrameContract &Contract) {

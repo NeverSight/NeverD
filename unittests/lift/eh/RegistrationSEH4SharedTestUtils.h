@@ -28,9 +28,10 @@
 namespace neverd::registration_test {
 enum class SharedSEH4Body { Plain, OrdinaryCall, FilteredCall };
 
-inline BinaryImage
-sharedSEH4Image(uint32_t Base, bool Wide, uint32_t Allocation = 32,
-                SharedSEH4Body Kind = SharedSEH4Body::Plain) {
+inline BinaryImage sharedSEH4Image(uint32_t Base, bool Wide,
+                                   uint32_t Allocation = 32,
+                                   SharedSEH4Body Kind = SharedSEH4Body::Plain,
+                                   uint16_t ParentPop = 0) {
   const bool CallInBody = Kind != SharedSEH4Body::Plain;
   const bool Filtered = Kind == SharedSEH4Body::FilteredCall;
   BinaryImage Image;
@@ -89,7 +90,9 @@ sharedSEH4Image(uint32_t Base, bool Wide, uint32_t Allocation = 32,
   }
   Put(Finish, {0xc7, 0x45, 0xfc, 0xfe, 0xff, 0xff, 0xff, 0x31, 0xc0});
   Call(Finish + 9, 0x150);
-  Text[Finish + 14] = 0xc3;
+  Text[Finish + 14] = ParentPop ? 0xc2 : 0xc3;
+  if (ParentPop)
+    writeLE<uint16_t>(Text.data() + Finish + 15, ParentPop);
   Put(0x80, {0xb8, 1, 0, 0, 0, 0xc3});
   Put(0x180, {0x31, 0xc0, 0xc3});
 

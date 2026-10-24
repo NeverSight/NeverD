@@ -144,7 +144,11 @@
   mov esp,ebp
   pop ebp
 #endif
+#if REGISTRATION_PARENT_POP
+  ret REGISTRATION_PARENT_POP
+#else
   ret
+#endif
 #if REGISTRATION_CASE == 6
 .globl _registration_call_entry
 _registration_call_entry:
