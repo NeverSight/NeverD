@@ -59,6 +59,12 @@ enum class PDBIdentityState : uint8_t { Absent, Unique, Ambiguous };
 // ===--------------------------------------------------------------------===//
 
 struct DynamicInfo {
+  /// Original PE header facts, also retained by restricted loads without Raw.
+  /// No subsystem is invented for a relocatable COFF object.
+  std::optional<uint16_t> PESubsystem;
+  uint16_t PECharacteristics = 0;
+  /// Original Mach-O file type, distinct from its build platform.
+  std::optional<uint32_t> MachOFileType;
   std::string SOName;
   std::vector<std::string> NeededLibs;
   std::vector<std::string> RPaths;

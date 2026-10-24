@@ -9,6 +9,7 @@
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/COFF/RichHeader.h"
 #include "neverd/loader/DirectBranch.h"
+#include "neverd/loader/ImageProfile.h"
 #include "neverd/loader/LanguageRuntime.h"
 #include "neverd/loader/LinkerThunk.h"
 #include "neverd/sigs/Limits.h"
@@ -80,6 +81,7 @@ std::vector<StoredModule> takeModules(std::vector<PatternChunk> &Chunks,
 } // namespace
 
 void SignatureDB::commitSource(SigSource Src, std::vector<StoredModule> Mods) {
+  AutoSelection.reset();
   Src.ModuleCount = Mods.size();
   auto Existing = std::find_if(
       LoadedFiles.begin(), LoadedFiles.end(),
@@ -257,6 +259,36 @@ std::string SignatureDB::libraryName(const std::filesystem::path &File) {
 std::vector<std::filesystem::path>
 SignatureDB::selectForImage(const BinaryImage &Img,
                             std::vector<std::filesystem::path> Files) {
+  const ImageProfile Profile = identifyImageProfile(Img);
+  if (Profile.ConflictingEvidence)
+    return Files;
+  const auto Fits = [&](ImageSystem System, ImageDomain Domain,
+                        ImageRuntime Runtime) {
+    // Linux kernel ABI facts also fit Android; runtime/domain evidence
+    // distinguishes its user libraries without excluding common helpers.
+    const auto LinuxFamily = [](ImageSystem Value) {
+      return Value == ImageSystem::Linux || Value == ImageSystem::Android;
+    };
+    return (System == ImageSystem::Unknown ||
+            Profile.System == ImageSystem::Unknown ||
+            System == Profile.System ||
+            (LinuxFamily(System) && LinuxFamily(Profile.System))) &&
+           (Domain == ImageDomain::Unknown ||
+            Profile.Domain == ImageDomain::Unknown ||
+            Domain == Profile.Domain) &&
+           (Runtime == ImageRuntime::Unknown ||
+            Profile.Runtime == ImageRuntime::Unknown ||
+            Runtime == Profile.Runtime);
+  };
+  llvm::erase_if(Files, [&](const std::filesystem::path &File) {
+    const std::string Library = libraryName(File);
+#define NEVERD_SIGNATURE_SCOPE(Format, Name, System, Domain, Runtime)          \
+  if (Img.abiFormat() == BinaryFormat::Format && Library == Name)              \
+    return !Fits(ImageSystem::System, ImageDomain::Domain,                     \
+                 ImageRuntime::Runtime);
+#include "SignatureScopes.def"
+    return false;
+  });
   if (!Img.COFFRichHeader)
     return Files;
   const std::vector<unsigned> Years = richToolsetYears(*Img.COFFRichHeader);
@@ -445,6 +477,7 @@ SignatureDB::loadFiles(const std::vector<std::filesystem::path> &PatFiles) {
   }
   Modules.swap(NewModules);
   LoadedFiles.swap(NewSources);
+  AutoSelection.reset();
   Index.reset();
   clearMatches();
 
@@ -665,6 +698,7 @@ std::unordered_map<uint64_t, std::string> SignatureDB::buildNameMap() const {
 }
 
 void SignatureDB::clear() {
+  AutoSelection.reset();
   Modules.clear();
   LoadedFiles.clear();
   FeaturePacks.clear();
@@ -678,6 +712,7 @@ llvm::Error SignatureDB::loadFeaturePack(const std::filesystem::path &Path) {
   if (!Pack)
     return Pack.takeError();
   const std::string Id = Pack->Id;
+  AutoSelection.reset();
   FeaturePacks.insert_or_assign(Id, std::move(*Pack));
   ++FeatureGeneration;
   return llvm::Error::success();
@@ -710,6 +745,7 @@ SignatureDB::loadFeatureDirectory(const std::filesystem::path &Dir) {
                                      "duplicate library feature pack ID: " +
                                          Id);
   }
+  AutoSelection.reset();
   FeaturePacks = std::move(NewPacks);
   ++FeatureGeneration;
   return llvm::Error::success();
@@ -733,13 +769,16 @@ llvm::Error SignatureDB::loadForImage(const BinaryImage &Image,
     return llvm::createStringError(EC,
                                    "cannot inspect library feature directory");
   std::vector<std::filesystem::path> Files;
+  SignatureSelectionStats Selection;
   if (auto Relative = treeDirectory(Image)) {
     const auto Directory = Root / *Relative;
     if (std::filesystem::exists(Directory, EC)) {
       auto Listed = listDirectory(Directory);
       if (!Listed)
         return Listed.takeError();
+      Selection.AvailableFiles = Listed->size();
       Files = selectForImage(Image, std::move(*Listed));
+      Selection.SelectedFiles = Files.size();
     }
     if (EC)
       return llvm::createStringError(
@@ -748,6 +787,7 @@ llvm::Error SignatureDB::loadForImage(const BinaryImage &Image,
   if (auto Error = loadFiles(Files))
     return Error;
   FeaturePacks = std::move(Features.FeaturePacks);
+  AutoSelection = Selection;
   ++FeatureGeneration;
   return llvm::Error::success();
 }

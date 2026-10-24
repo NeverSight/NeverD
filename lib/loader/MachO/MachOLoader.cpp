@@ -198,6 +198,7 @@ llvm::Expected<BinaryImage> MachOLoader::loadBufferImpl(
   Img.IsRelocatable = Obj.getHeader().filetype == MH_OBJECT;
   Img.ReadsStaticSymbols = ReadsStaticSymbols;
   Img.MachOIsDylib = Obj.getHeader().filetype == MH_DYLIB;
+  Img.DynInfo.MachOFileType = Obj.getHeader().filetype;
   // An executable linked without MH_PIE runs at its link address.
   Img.LoadsAtLinkAddress = !Img.MachOSharedCache &&
                            Obj.getHeader().filetype == MH_EXECUTE &&

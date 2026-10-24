@@ -32,6 +32,8 @@ namespace limits {
 /// gracefully by the Segment bounds checks.  The cap is far larger than any
 /// real .bss, so legitimate binaries are unaffected.
 constexpr uint64_t kMaxSegmentZeroFill = 1ull << 30; // 1 GiB
+/// Bound optional target metadata inspection; larger records remain unknown.
+inline constexpr size_t kMaxImageProfileMetadataBytes = 64 * 1024;
 
 /// Work for proving that PE initialization leaves mapped header bytes intact.
 /// Counts section-owner queries and visited import/configuration/fixup bytes.

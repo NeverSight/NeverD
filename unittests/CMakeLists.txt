@@ -326,6 +326,12 @@ if(TARGET neverd_shared)
     LINK_COMPONENTS Types
     LINK_LIBS neverd_shared
   )
+  add_neverd_unittest(NeverDSessionSignatureProfileTests
+    SessionSignatureProfileTests.cpp
+    LINK_LIBS neverd_shared LLVMSupport
+  )
+  target_include_directories(NeverDSessionSignatureProfileTests PRIVATE
+    "${CMAKE_SOURCE_DIR}/include" ${LLVM_INCLUDE_DIRS})
   add_neverd_unittest(NeverDUnwindFrameCAPITests
     UnwindFrameCAPITests.cpp
     LINK_LIBS neverd_shared LLVMSupport

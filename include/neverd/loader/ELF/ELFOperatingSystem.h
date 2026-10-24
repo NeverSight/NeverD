@@ -51,6 +51,24 @@ inline bool runsUnderLinux(const BinaryImage &Image) {
 /// targets, and bionic's pthread_mutex_t is one word there.
 enum class LinuxLibC : uint8_t { GNU, Bionic, Musl };
 
+/// A runtime explicitly named by PT_INTERP. An arbitrary System V image,
+/// empty path, or a path merely starting with an Android linker's name does
+/// not identify a C library.
+inline std::optional<LinuxLibC> elfInterpreterLibC(llvm::StringRef Path) {
+  if (Path == "/system/bin/linker" || Path == "/system/bin/linker64" ||
+      Path == "/apex/com.android.runtime/bin/linker" ||
+      Path == "/apex/com.android.runtime/bin/linker64")
+    return LinuxLibC::Bionic;
+  const llvm::StringRef Name = Path.rsplit('/').second;
+  if (Name.starts_with("ld-musl-") && Name.ends_with(".so.1"))
+    return LinuxLibC::Musl;
+  if (Name == "ld-linux.so.1" || Name == "ld-linux.so.2" ||
+      Name == "ld-linux-x86-64.so.2" || Name == "ld-linux-aarch64.so.1" ||
+      Name == "ld-linux-armhf.so.3" || Name == "ld-linux-arm.so.3")
+    return LinuxLibC::GNU;
+  return std::nullopt;
+}
+
 /// The C library \p Image runs on, as its own records name it: Android's
 /// dynamic linker or the NDK's identification note for bionic, musl's
 /// dynamic linker for musl, and glibc's otherwise, a static program
@@ -58,12 +76,10 @@ enum class LinuxLibC : uint8_t { GNU, Bionic, Musl };
 inline std::optional<LinuxLibC> linuxLibC(const BinaryImage &Image) {
   if (!runsUnderLinux(Image))
     return std::nullopt;
-  const llvm::StringRef Interpreter = Image.ELFMetadata->Interpreter;
-  if (Image.ELFMetadata->AndroidApiLevel ||
-      Interpreter.starts_with("/system/bin/linker"))
+  if (Image.ELFMetadata->AndroidApiLevel)
     return LinuxLibC::Bionic;
-  if (Interpreter.contains("ld-musl-"))
-    return LinuxLibC::Musl;
+  if (auto Runtime = elfInterpreterLibC(Image.ELFMetadata->Interpreter))
+    return Runtime;
   return LinuxLibC::GNU;
 }
 

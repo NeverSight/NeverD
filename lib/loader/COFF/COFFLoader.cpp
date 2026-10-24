@@ -148,9 +148,11 @@ COFFLoader::loadBuffer(llvm::MemoryBufferRef Buffer) {
   if (const auto *PE32Plus = Obj.getPE32PlusHeader()) {
     EntryRVA = PE32Plus->AddressOfEntryPoint;
     Img.Bits = Bitness::Bits64;
+    Img.DynInfo.PESubsystem = PE32Plus->Subsystem;
   } else if (const auto *PE32 = Obj.getPE32Header()) {
     EntryRVA = PE32->AddressOfEntryPoint;
     Img.Bits = Bitness::Bits32;
+    Img.DynInfo.PESubsystem = PE32->Subsystem;
   } else {
     IsRelocatable = true;
     Img.Entry = 0;
@@ -159,6 +161,7 @@ COFFLoader::loadBuffer(llvm::MemoryBufferRef Buffer) {
                    : Bitness::Bits32;
   }
   Img.IsRelocatable = IsRelocatable;
+  Img.DynInfo.PECharacteristics = Obj.getCharacteristics();
   if (EntryRVA) {
     if (EntryRVA > InvalidVA - ImageBase ||
         (Img.Bits == Bitness::Bits32 && ImageBase + EntryRVA > UINT32_MAX))

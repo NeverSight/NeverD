@@ -5032,6 +5032,16 @@ framed process and isolation from native-session revisions using a C++ client.
 
 ## Library recognition
 
+`NeverDSignatureTests` includes target-profile and pre-I/O pack-selection
+regressions: PE native user processes versus drivers, restricted PE loads,
+Android/glibc/musl and unknown System V ELF, conflicting ABI notes, bounded
+Linux module metadata, iOS/macOS/kext headers, mixed WDK packs and custom
+names. Explicit directory loading still attempts every file; a failed
+automatic load retains the previous successful database and statistics.
+`NeverDSessionSignatureProfileTests` verifies the same selection through the
+public C SDK, including header JSON counts and their manual-load reset.
+See [signature selection](signature-selection.md) for the evidence boundaries.
+
 The feature repository retains the original compiler objects, truth, source
 profiles and digests. `NeverDLibraryRecognitionTests` consumes those archives
 and checks all 59 rules in the five supported libc++/MSVC STL/ATL/musl profiles.

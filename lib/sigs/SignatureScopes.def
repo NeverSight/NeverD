@@ -1,0 +1,90 @@
+//===- SignatureScopes.def - Targets of bundled signature packs -*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Reviewed scopes of bundled library names, after removing part suffixes.
+/// Unknown/custom names stay eligible. Unknown dimensions impose no filter.
+/// These describe library builds, never a compiler inferred for a whole image.
+/// Define NEVERD_SIGNATURE_SCOPE with
+/// (Format, Name, System, Domain, Runtime) before including this table.
+//===----------------------------------------------------------------------===//
+
+// WDK contains both kernel and user-mode libraries (including media and CRT
+// code). Do not turn its name, or a file extension, into a kernel-only rule.
+NEVERD_SIGNATURE_SCOPE(COFF, "supplemental-ms32wdk", Windows, Unknown, Unknown)
+NEVERD_SIGNATURE_SCOPE(COFF, "supplemental-ms64wdk", Windows, Unknown, Unknown)
+NEVERD_SIGNATURE_SCOPE(COFF, "supplemental-msddk64", Windows, Unknown, Unknown)
+NEVERD_SIGNATURE_SCOPE(COFF, "supplemental-vc32mfce", WindowsCE, Unknown,
+                       Unknown)
+NEVERD_SIGNATURE_SCOPE(COFF, "supplemental-mfc", WindowsCE, Unknown, Unknown)
+// These aggregate SDK routines with CRT/FPU primitives; the aggregate cannot
+// exclude the primitives from kernel code without splitting its records.
+NEVERD_SIGNATURE_SCOPE(COFF, "winsdk", Windows, Unknown, Unknown)
+NEVERD_SIGNATURE_SCOPE(COFF, "masm32", Windows, Unknown, Unknown)
+NEVERD_SIGNATURE_SCOPE(COFF, "supplemental-bdsboost", Windows, Unknown, Unknown)
+NEVERD_SIGNATURE_SCOPE(COFF, "supplemental-bds", Windows, User, Unknown)
+NEVERD_SIGNATURE_SCOPE(COFF, "supplemental-bds2006", Windows, User, Unknown)
+NEVERD_SIGNATURE_SCOPE(COFF, "supplemental-bds2007", Windows, User, Unknown)
+NEVERD_SIGNATURE_SCOPE(COFF, "supplemental-bds8ext", Windows, User, Unknown)
+NEVERD_SIGNATURE_SCOPE(COFF, "supplemental-bds8vcl", Windows, User, Unknown)
+NEVERD_SIGNATURE_SCOPE(COFF, "supplemental-bdsext", Windows, User, Unknown)
+NEVERD_SIGNATURE_SCOPE(COFF, "supplemental-bh32cls", Windows, User, Unknown)
+NEVERD_SIGNATURE_SCOPE(COFF, "supplemental-bh32dbe", Windows, User, Unknown)
+NEVERD_SIGNATURE_SCOPE(COFF, "supplemental-bh32ocf", Windows, User, Unknown)
+NEVERD_SIGNATURE_SCOPE(COFF, "supplemental-bh32owl", Windows, User, Unknown)
+NEVERD_SIGNATURE_SCOPE(COFF, "supplemental-b32vcl", Windows, User, Unknown)
+NEVERD_SIGNATURE_SCOPE(COFF, "supplemental-b5132mfc", Windows, User, Unknown)
+NEVERD_SIGNATURE_SCOPE(COFF, "supplemental-b532cgw", Windows, User, Unknown)
+NEVERD_SIGNATURE_SCOPE(COFF, "supplemental-c4vcl", Windows, User, Unknown)
+NEVERD_SIGNATURE_SCOPE(COFF, "supplemental-d3vcl", Windows, User, Unknown)
+NEVERD_SIGNATURE_SCOPE(COFF, "supplemental-d4vcl", Windows, User, Unknown)
+NEVERD_SIGNATURE_SCOPE(COFF, "supplemental-d5vcl", Windows, User, Unknown)
+NEVERD_SIGNATURE_SCOPE(COFF, "supplemental-mccor", Windows, User, Unknown)
+NEVERD_SIGNATURE_SCOPE(COFF, "supplemental-og70", Windows, User, Unknown)
+NEVERD_SIGNATURE_SCOPE(COFF, "supplemental-omvc60", Windows, User, Unknown)
+NEVERD_SIGNATURE_SCOPE(COFF, "supplemental-osc60", Windows, User, Unknown)
+NEVERD_SIGNATURE_SCOPE(COFF, "supplemental-otp60", Windows, User, Unknown)
+// MSVC, Intel math, Watcom and other common compiler helpers may also occur
+// in kernel or firmware code. Their packages deliberately have no mode gate.
+
+NEVERD_SIGNATURE_SCOPE(ELF, "android-ndk", Android, User, Bionic)
+NEVERD_SIGNATURE_SCOPE(ELF, "ubuntu-libc6", Linux, User, GNU)
+NEVERD_SIGNATURE_SCOPE(ELF, "ubuntu-musl", Linux, User, Musl)
+NEVERD_SIGNATURE_SCOPE(ELF, "musl-1.2.5-memory", Linux, Unknown, Musl)
+NEVERD_SIGNATURE_SCOPE(ELF, "ubuntu-libc++-10", Linux, User, GNU)
+NEVERD_SIGNATURE_SCOPE(ELF, "ubuntu-libc++-11", Linux, User, GNU)
+NEVERD_SIGNATURE_SCOPE(ELF, "ubuntu-libc++-12", Linux, User, GNU)
+NEVERD_SIGNATURE_SCOPE(ELF, "ubuntu-libc++-13", Linux, User, GNU)
+NEVERD_SIGNATURE_SCOPE(ELF, "ubuntu-libc++-14", Linux, User, GNU)
+NEVERD_SIGNATURE_SCOPE(ELF, "ubuntu-libc++-15", Linux, User, GNU)
+NEVERD_SIGNATURE_SCOPE(ELF, "ubuntu-libc++-7", Linux, User, GNU)
+NEVERD_SIGNATURE_SCOPE(ELF, "ubuntu-libc++-8", Linux, User, GNU)
+NEVERD_SIGNATURE_SCOPE(ELF, "ubuntu-libc++-9", Linux, User, GNU)
+NEVERD_SIGNATURE_SCOPE(ELF, "ubuntu-libstdc++-10", Linux, User, GNU)
+NEVERD_SIGNATURE_SCOPE(ELF, "ubuntu-libstdc++-11", Linux, User, GNU)
+NEVERD_SIGNATURE_SCOPE(ELF, "ubuntu-libstdc++-12", Linux, User, GNU)
+NEVERD_SIGNATURE_SCOPE(ELF, "ubuntu-libstdc++-5", Linux, User, GNU)
+NEVERD_SIGNATURE_SCOPE(ELF, "ubuntu-libstdc++-6", Linux, User, GNU)
+NEVERD_SIGNATURE_SCOPE(ELF, "ubuntu-libstdc++-7", Linux, User, GNU)
+NEVERD_SIGNATURE_SCOPE(ELF, "ubuntu-libstdc++-8", Linux, User, GNU)
+NEVERD_SIGNATURE_SCOPE(ELF, "ubuntu-libstdc++-9", Linux, User, GNU)
+// libgcc arithmetic helpers can be linked by another compiler and in kernels.
+NEVERD_SIGNATURE_SCOPE(ELF, "ubuntu-libgcc-10", Linux, Unknown, Unknown)
+NEVERD_SIGNATURE_SCOPE(ELF, "ubuntu-libgcc-11", Linux, Unknown, Unknown)
+NEVERD_SIGNATURE_SCOPE(ELF, "ubuntu-libgcc-12", Linux, Unknown, Unknown)
+NEVERD_SIGNATURE_SCOPE(ELF, "ubuntu-libgcc-7", Linux, Unknown, Unknown)
+NEVERD_SIGNATURE_SCOPE(ELF, "ubuntu-libgcc-8", Linux, Unknown, Unknown)
+NEVERD_SIGNATURE_SCOPE(ELF, "ubuntu-libgcc-9", Linux, Unknown, Unknown)
+NEVERD_SIGNATURE_SCOPE(ELF, "ubuntu-libseccomp", Linux, User, GNU)
+NEVERD_SIGNATURE_SCOPE(ELF, "ubuntu-libsodium", Linux, User, GNU)
+NEVERD_SIGNATURE_SCOPE(ELF, "ubuntu-openssl", Linux, User, GNU)
+NEVERD_SIGNATURE_SCOPE(ELF, "ubuntu-zlib", Linux, User, GNU)
+NEVERD_SIGNATURE_SCOPE(ELF, "fedora-zlib", Linux, User, GNU)
+
+NEVERD_SIGNATURE_SCOPE(MachO, "homebrew-pcre2", MacOS, User, Unknown)
+NEVERD_SIGNATURE_SCOPE(MachO, "homebrew-xz", MacOS, User, Unknown)
+NEVERD_SIGNATURE_SCOPE(MachO, "homebrew-zlib", MacOS, User, Unknown)
+
+#undef NEVERD_SIGNATURE_SCOPE

@@ -162,6 +162,11 @@ int runInfo(neverd_session_t Sess) {
   neverd_free_string(HeaderJson);
   if (HeaderParsed)
     if (auto *Root = HeaderParsed->getAsObject()) {
+      if (auto *Target = Root->getObject("target_profile"))
+        outs() << "Target: " << Target->getString("system").value_or("unknown")
+               << " / " << Target->getString("domain").value_or("unknown")
+               << " / " << Target->getString("runtime").value_or("unknown")
+               << "\n";
       if (auto *Language = Root->getObject("language"))
         outs() << "Language: " << describeLanguage(*Language) << "\n";
       if (auto *SBF = Root->getObject("sbf"))

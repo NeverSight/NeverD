@@ -227,6 +227,20 @@ int runSigs(neverd_session_t Sess, const char *Argv0) {
   if (JsonOutput) {
     outs() << (Json ? Json : "[]") << "\n";
   } else {
+    const char *Headers = neverd_headers_json(Sess);
+    auto HeaderValue = json::parse(Headers ? Headers : "{}");
+    neverd_free_string(Headers);
+    if (HeaderValue) {
+      if (const auto *Root = HeaderValue->getAsObject())
+        if (const auto *Selection = Root->getObject("signature_selection"))
+          outs() << "Signature packs: "
+                 << Selection->getInteger("selected_files").value_or(0)
+                 << " selected, "
+                 << Selection->getInteger("skipped_files").value_or(0)
+                 << " skipped by target metadata\n";
+    } else {
+      consumeError(HeaderValue.takeError());
+    }
     outs() << format("Found %d signature matches:\n\n", *MatchCount);
     auto Parsed = json::parse(Json ? Json : "[]");
     if (Parsed) {

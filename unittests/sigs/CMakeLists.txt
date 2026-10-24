@@ -1,4 +1,5 @@
 add_neverd_unittest(NeverDSignatureTests
+  ImageProfileTests.cpp
   LibraryFeatureTests.cpp
   MachOPatternGeneratorTests.cpp
   PatternGeneratorTests.cpp

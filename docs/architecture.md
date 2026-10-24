@@ -4049,6 +4049,11 @@ and its [schema](web-artifact-schema.md) for the current capability boundary.
 
 Library feature recognition reads the shared MedIR boundary before the source
 routes diverge. `SignatureDB` owns validated packs and the existing byte matcher;
+`loader/ImageProfile` separately owns metadata-based system, execution-domain
+and runtime evidence. Automatic pattern selection consumes that evidence and
+the reviewed bundled pack scopes before file/cache I/O. Unknown or conflicting
+dimensions retain coverage; mixed SDK and compiler helpers keep their broad
+scope. See [signature selection](signature-selection.md).
 MedIR analyses prove typed expressions and bounded COM ownership sequences.
 `PipelineLibraryRecognition` combines this evidence without changing names,
 operands, bodies or ABI contracts. The session publishes one display identity

@@ -10,6 +10,7 @@
 #include "neverd/sigs/SignatureDB.h"
 
 #include "llvm/ADT/SmallString.h"
+#include "llvm/BinaryFormat/COFF.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/FileSystem.h"
 
@@ -85,6 +86,47 @@ TEST(SignatureDBTransactions, FailedInMemoryBatchDoesNotMutateDatabase) {
             std::string::npos);
   EXPECT_EQ(Database.moduleCount(), 1u);
   EXPECT_EQ(Database.fileCount(), 1u);
+}
+
+TEST_F(SignatureDirectoryTest, AutomaticSelectionSkipsFilesBeforeOpeningThem) {
+  const auto Relative = std::filesystem::path("pe/x86/64");
+  std::filesystem::create_directories(Directory / Relative);
+  write("pe/x86/64/supplemental-bds.pat",
+        "deliberately invalid user library\n");
+  write("pe/x86/64/supplemental-ms64wdk.pat",
+        "AABB 00 0000 0002 :0000 driver_routine\n");
+  write("pe/x86/64/custom.pat", "CCDD 00 0000 0002 :0000 custom_routine\n");
+  auto Image = makeMatchingImage();
+  Image.Format = neverd::BinaryFormat::COFF;
+  Image.Arch = neverd::Arch::X64;
+  Image.Bits = neverd::Bitness::Bits64;
+  Image.DynInfo.PESubsystem = llvm::COFF::IMAGE_SUBSYSTEM_NATIVE;
+  Image.Imports.push_back({"ntoskrnl.exe", "ExAllocatePool2"});
+  SignatureDB Database;
+  auto Error = Database.loadForImage(Image, Directory);
+  ASSERT_FALSE(bool(Error)) << llvm::toString(std::move(Error));
+  EXPECT_EQ(Database.moduleCount(), 2u);
+  ASSERT_TRUE(Database.automaticSelection());
+  EXPECT_EQ(Database.automaticSelection()->AvailableFiles, 3u);
+  EXPECT_EQ(Database.automaticSelection()->SelectedFiles, 2u);
+
+  // An unclassified image must attempt the full directory; a failed load
+  // retains both the previous database and its successful selection report.
+  Image.Imports.clear();
+  Error = Database.loadForImage(Image, Directory);
+  EXPECT_TRUE(bool(Error));
+  llvm::consumeError(std::move(Error));
+  EXPECT_EQ(Database.fileCount(), 2u);
+  ASSERT_TRUE(Database.automaticSelection());
+  EXPECT_EQ(Database.automaticSelection()->SelectedFiles, 2u);
+
+  // Explicit directory loads bypass automatic platform selection.
+  Error = Database.loadDirectory(Directory / Relative);
+  EXPECT_TRUE(bool(Error));
+  llvm::consumeError(std::move(Error));
+  ASSERT_FALSE(
+      Database.loadPatternText("EEFF 00 0000 0002 :0000 manual\n", "manual"));
+  EXPECT_FALSE(Database.automaticSelection());
 }
 
 TEST(SignatureDBTransactions, ReloadingOneSourceReplacesItsOldModules) {
@@ -766,7 +808,8 @@ TEST(SignatureDBAliases, OneModulesNamesForAnOffsetAreOneRoutine) {
 
   ASSERT_EQ(Database.matches().size(), 1u);
   EXPECT_EQ(Database.matches()[0].Name, "puts");
-  EXPECT_EQ(Database.matches()[0].Aliases, std::vector<std::string>{"_IO_puts"});
+  EXPECT_EQ(Database.matches()[0].Aliases,
+            std::vector<std::string>{"_IO_puts"});
   EXPECT_EQ(Database.buildNameMap().at(0x1000), "puts");
 }
 
@@ -784,10 +827,10 @@ TEST(SignatureDBAliases, MatchesThatShareANameAgreeOnIt) {
 
 TEST(SignatureDBAliases, AliasSetsWithNothingInCommonAreDisputed) {
   SignatureDB Database;
-  ASSERT_FALSE(Database.loadPatternText(
-      "AABB 00 0000 0002 :0000 puts :0000 _IO_puts\n"
-      "AABB 00 0000 0002 :0000 fputs\n",
-      "libc"));
+  ASSERT_FALSE(
+      Database.loadPatternText("AABB 00 0000 0002 :0000 puts :0000 _IO_puts\n"
+                               "AABB 00 0000 0002 :0000 fputs\n",
+                               "libc"));
   Database.apply(makeMatchingImage(), {0x1000});
 
   EXPECT_EQ(Database.buildNameMap().count(0x1000), 0u);

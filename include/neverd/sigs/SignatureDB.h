@@ -45,8 +45,17 @@ struct BinaryImage;
 
 namespace sigs {
 
+struct SignatureSelectionStats {
+  size_t AvailableFiles = 0;
+  size_t SelectedFiles = 0;
+};
+
 class SignatureDB {
 public:
+  /// Present after a successful automatic load; manual changes clear it.
+  const std::optional<SignatureSelectionStats> &automaticSelection() const {
+    return AutoSelection;
+  }
   /// Load pattern files through \p NewCache from now on, or, when it is
   /// none, parse every one.  A file the cache holds as it is now is mapped
   /// rather than parsed, and one it does not is kept there once it is
@@ -74,14 +83,21 @@ public:
 
   /// The pattern files among \p Files that fit \p Img.
   ///
+  /// Loader-owned platform, runtime and execution-domain evidence excludes
+  /// incompatible reviewed bundled packs before their files are opened.
+  /// Unknown/custom libraries, unknown dimensions and conflicting evidence
+  /// retain coverage. Mixed WDK and common compiler helper packs are not
+  /// assigned a kernel/user restriction. Explicit loadFiles bypasses selection.
+  ///
   /// A file of library `vs<year>` (see \ref libraryName) holds one Visual
   /// Studio release's runtime libraries.  A PE file links the static runtime
   /// libraries of its linker's release, and other releases state some of the
   /// same bytes under other names, so when the image's Rich header names the
   /// release of its linker, only that release's file is kept.  Every file that
-  /// belongs to no release, such as `winsdk.pat`, is kept.  When the image has
+  /// belongs to no release and fits the platform is kept. When the image has
   /// no Rich header, when the header was altered after linking, or when
-  /// \p Files hold no file for a release it names, every file is kept.
+  /// \p Files hold no file for a release it names, all platform-compatible
+  /// files are kept.
   static std::vector<std::filesystem::path>
   selectForImage(const BinaryImage &Img,
                  std::vector<std::filesystem::path> Files);
@@ -259,6 +275,8 @@ private:
   /// Add \p Mods, the modules of \p Src, in place of those of a source with
   /// the same path or after every other source.
   void commitSource(SigSource Src, std::vector<StoredModule> Mods);
+
+  std::optional<SignatureSelectionStats> AutoSelection;
 
   /// The library a module was loaded from, by its index in \ref Modules.
   const std::string &libraryNameOf(size_t ModuleIndex) const;
