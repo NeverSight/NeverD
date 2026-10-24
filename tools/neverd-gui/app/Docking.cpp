@@ -10,14 +10,18 @@
 #include "Docking.h"
 
 #include "../Config.h"
+#include "Icons.h"
 #include "Theme.h"
+#include "WindowFrame.h"
 
 #include <QContextMenuEvent>
 #include <QCoreApplication>
 #include <QCursor>
 #include <QEnterEvent>
 #include <QGuiApplication>
+#include <QHBoxLayout>
 #include <QHoverEvent>
+#include <QLabel>
 #include <QMainWindow>
 #include <QMenu>
 #include <QMouseEvent>
@@ -36,15 +40,21 @@
 #include <kddockwidgets/core/MainWindow.h>
 #include <kddockwidgets/core/Separator.h>
 #include <kddockwidgets/core/TabBar.h>
+#include <kddockwidgets/core/TitleBar.h>
 #include <kddockwidgets/qtcommon/View.h>
 #include <kddockwidgets/qtwidgets/ViewFactory.h>
 #include <kddockwidgets/qtwidgets/views/FloatingWindow.h>
 #include <kddockwidgets/qtwidgets/views/Group.h>
 #include <kddockwidgets/qtwidgets/views/Separator.h>
 #include <kddockwidgets/qtwidgets/views/TabBar.h>
+#include <kddockwidgets/qtwidgets/views/TitleBar.h>
 
 namespace neverd::gui {
 namespace {
+bool onWayland() {
+  return QGuiApplication::platformName().startsWith(QLatin1String("wayland"));
+}
+
 // A pointer that only crosses a separator does not light it up.
 constexpr int SeparatorHoverDelayMs = 300;
 constexpr int SeparatorFadeInMs = 150;
@@ -57,7 +67,7 @@ QPointer<KDDockWidgets::QtWidgets::FloatingWindow> DockDragSource;
 Qt::WindowStates DockDragWindowState;
 
 bool beginDockDrag(KDDockWidgets::Core::Draggable *draggable) {
-  if (!QGuiApplication::platformName().startsWith(QLatin1String("wayland")))
+  if (!onWayland())
     return true;
   auto *view = KDDockWidgets::QtCommon::View_qt::asQWidget(draggable->asView());
   auto *floating = qobject_cast<KDDockWidgets::QtWidgets::FloatingWindow *>(
@@ -69,7 +79,7 @@ bool beginDockDrag(KDDockWidgets::Core::Draggable *draggable) {
   // Wayland leaves the source in place while QDrag moves its snapshot. It
   // would cover both the workbench's drop targets and their preview. Minimize
   // only after QDrag has its pointer serial and snapshot; unlike hide/show,
-  // this retains the native surface, caption and compositor-owned position.
+  // this retains the surface and compositor-owned position.
   // A pane dragged within a multi-group floating window still needs that
   // window's other groups as drop targets, so only whole-window drags do this.
   const auto source = DockDragSource;
@@ -309,23 +319,108 @@ private:
   int hovered_ = -1;
 };
 
-/// The client edge complements the platform's floating-window frame.
+/// One drawn caption provides docking and window controls. Keep the dock
+/// button alongside Maximize: the library's optional maximize button replaces
+/// the dock button, making the existing return action disappear.
+class DockTitleBar final : public KDDockWidgets::QtWidgets::TitleBar {
+public:
+  using TitleBar::TitleBar;
+
+protected:
+  void init() override {
+    TitleBar::init();
+    if (!titleBar()->floatingWindow())
+      return;
+    maximize_ = new KDDockWidgets::QtWidgets::Button(this);
+    maximize_->setObjectName(QStringLiteral("floatingMaximizeButton"));
+    m_minimizeButton->setObjectName(QStringLiteral("floatingMinimizeButton"));
+    m_layout->insertWidget(m_layout->indexOf(m_floatButton), maximize_);
+    connect(maximize_, &QAbstractButton::clicked, this, [this] {
+      titleBar()->onMaximizeClicked();
+      updateMaximize();
+    });
+    QWidget::window()->installEventFilter(this);
+    connect(&Theme::instance(), &Theme::changed, this,
+            [this] { updateMaximize(); });
+    updateMaximize();
+    if (onWayland() && m_dockWidgetIcon) {
+      // Wayland's compositor move and QDrag docking are separate operations.
+      // The caption and tab dock; the icon moves the window on the desktop.
+      m_dockWidgetIcon->setObjectName(
+          QStringLiteral("floatingWindowMoveHandle"));
+      m_dockWidgetIcon->setToolTip(
+          QCoreApplication::translate("Docking", "Move window"));
+      m_dockWidgetIcon->setCursor(Qt::SizeAllCursor);
+      m_dockWidgetIcon->installEventFilter(this);
+    }
+  }
+
+  bool eventFilter(QObject *object, QEvent *event) override {
+    if (object == QWidget::window() &&
+        (event->type() == QEvent::WindowStateChange ||
+         event->type() == QEvent::LanguageChange))
+      updateMaximize();
+    if (object == m_dockWidgetIcon &&
+        event->type() == QEvent::MouseButtonPress &&
+        static_cast<QMouseEvent *>(event)->button() == Qt::LeftButton)
+      if (auto *handle = QWidget::window()->windowHandle())
+        return handle->startSystemMove();
+    return TitleBar::eventFilter(object, event);
+  }
+
+private:
+  void updateMaximize() {
+    if (!maximize_)
+      return;
+    const bool maximized = QWidget::window()->isMaximized();
+    maximize_->setIcon(icon(maximized ? "restore" : "maximize"));
+    const auto text =
+        maximized
+            ? QCoreApplication::translate("neverd::gui::TitleBar", "Restore")
+            : QCoreApplication::translate("neverd::gui::TitleBar", "Maximize");
+    maximize_->setToolTip(text);
+    maximize_->setAccessibleName(text);
+  }
+
+  QAbstractButton *maximize_ = nullptr;
+};
+
+/// Wayland needs our resizable frame around the library's docking caption.
+/// The other desktops already use the library's client caption and resizing.
 class DockFloatingWindow final
     : public KDDockWidgets::QtWidgets::FloatingWindow {
 public:
   using FloatingWindow::FloatingWindow;
 
 protected:
+  bool event(QEvent *event) override {
+    if (event->type() == QEvent::Polish && onWayland() && !frame_)
+      frame_ =
+          WindowFrame::attach(*this, nullptr, WindowFrame::Caption::Client);
+    return FloatingWindow::event(event);
+  }
+
   void paintEvent(QPaintEvent *) override {
+    if (frame_)
+      return;
     QPainter painter(this);
     painter.setPen(
         Theme::instance().chrome(QStringLiteral("FloatingWindowBorder")));
     painter.drawRect(rect().adjusted(0, 0, -1, -1));
   }
+
+private:
+  WindowFrame *frame_ = nullptr;
 };
 
 class DockViewFactory final : public KDDockWidgets::QtWidgets::ViewFactory {
 public:
+  KDDockWidgets::Core::View *
+  createTitleBar(KDDockWidgets::Core::TitleBar *controller,
+                 KDDockWidgets::Core::View *parent) const override {
+    return new DockTitleBar(controller, parent);
+  }
+
   KDDockWidgets::Core::View *
   createGroup(KDDockWidgets::Core::Group *controller,
               KDDockWidgets::Core::View *parent) const override {
@@ -362,13 +457,13 @@ void configureDocking() {
   KDDockWidgets::initFrontend(KDDockWidgets::FrontendType::QtWidgets);
   auto &config = KDDockWidgets::Config::self();
   // Every docked window carries a closable tab, as in classic disassemblers.
-  // Floating windows keep the client title bar: on Wayland the native title
-  // bar only moves windows, while the client bar performs docking drags.
+  // The drawn floating caption remains a docking drag source on every desktop.
   config.setFlags(KDDockWidgets::Config::Flag_AlwaysShowTabs |
                   KDDockWidgets::Config::Flag_HideTitleBarWhenTabsVisible |
                   KDDockWidgets::Config::Flag_AlwaysTitleBarWhenFloating |
                   KDDockWidgets::Config::Flag_TabsHaveCloseButton |
                   KDDockWidgets::Config::Flag_AllowReorderTabs |
+                  KDDockWidgets::Config::Flag_TitleBarHasMinimizeButton |
                   KDDockWidgets::Config::Flag_TitleBarIsFocusable);
   // Setting the thickness resets the spacing too, so it comes first.
   config.setSeparatorThickness(

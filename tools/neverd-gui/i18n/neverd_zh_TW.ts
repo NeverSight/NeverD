@@ -8191,6 +8191,10 @@ Secondary SHA-256: %3
         <source>Dock back into main window</source>
         <translation>停駐回主視窗</translation>
     </message>
+    <message>
+        <source>Move window</source>
+        <translation>移動視窗</translation>
+    </message>
 </context>
 <context>
     <name>neverd::gui::ExportDataDialog</name>

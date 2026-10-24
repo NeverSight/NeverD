@@ -10,18 +10,37 @@
 
 #include "neverd/backend/ParameterSites.h"
 #include "neverd/backend/llvm/LLVMSourceMap.h"
+#include "neverd/diff/Control.h"
+#include "neverd/diff/DataFlow.h"
 #include "neverd/diff/DataFlowJSON.h"
 #include "neverd/diff/FlowFragments.h"
+#include "neverd/diff/FlowMatch.h"
 #include "neverd/diff/LLVMDataFlow.h"
+#include "neverd/diff/Limits.h"
 
+#include "llvm/ADT/StringRef.h"
 #include "llvm/AsmParser/Parser.h"
+#include "llvm/IR/Argument.h"
+#include "llvm/IR/BasicBlock.h"
+#include "llvm/IR/Function.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
+#include "llvm/Support/Casting.h"
+#include "llvm/Support/Error.h"
+#include "llvm/Support/JSON.h"
 #include "llvm/Support/SourceMgr.h"
+#include "llvm/Support/raw_ostream.h"
 
 #include <atomic>
+#include <cstddef>
+#include <cstdint>
 #include <gtest/gtest.h>
+#include <initializer_list>
+#include <stdexcept>
+#include <string>
+#include <utility>
+#include <vector>
 
 using namespace neverd;
 using namespace neverd::diff;

@@ -1973,13 +1973,15 @@ reference selection. These cases also run in the native Windows/macOS checks;
 
 `floatingDocksReturnToWorkbench` checks returning through the client title bar,
 its dock button and the tab context menu in both themes.
-`NeverDGuiDocking` checks the floating caption with both native-caption settings.
+`NeverDGuiDocking` checks the drawn floating caption with both native-caption
+preferences for the other windows, including visible minimize and maximize
+controls.
 Its native `dragIntoWorkbench` cases press and drag the title bar or tab, verify
 the drop preview, and release into a tab group or horizontal/vertical split.
 They cover separate, overlapping and maximized floating windows, and release
 away from the indicators to verify cancellation and subsequent mouse input.
-`floatingWindowStates` checks maximizing, full screen and restoring on every
-native platform. Run these
+`floatingWindowStates` clicks the drawn maximize/restore and minimize buttons,
+then checks full screen and restoring on every native platform. Run these
 in both themes with a window manager and `xdotool` for native X11 input (Xvfb
 alone has no window stacking list):
 
@@ -1998,10 +2000,10 @@ python tools/neverd-gui/tests/run_wayland_docking.py --scale 1.5 \
 
 The Wayland runner requires GNOME Shell and creates a private headless desktop
 and D-Bus session. It supplies trusted pointer events, since synthetic QtTest
-mouse events cannot authorize Wayland drag-and-drop. It also checks moving the
-floating window through its system caption, resizing its edges and maximizing
-by double-clicking the system caption. Docking drags use the client caption or
-tab; the native caption retains the compositor's ordinary window operations.
+mouse events cannot authorize Wayland drag-and-drop. `customFloatingMoveAndResize`
+checks moving the floating window through its caption icon and resizing its
+drawn edges. The caption text and tab start docking drags; on Wayland the icon
+starts the compositor's desktop move. No system caption is added.
 While a whole floating window is dragged, its native surface is minimized so
 it cannot obscure the target. Cancelled drags must restore its native position,
 size and window state, and accept another mouse click. No input is sent

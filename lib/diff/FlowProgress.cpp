@@ -13,10 +13,18 @@
 
 #include "LLVMFlowSemantics.h"
 
+#include "neverd/diff/Control.h"
+#include "neverd/diff/Limits.h"
+#include "neverd/diff/Program.h"
+
 #include "llvm/IR/InstrTypes.h"
 #include "llvm/IR/Operator.h"
 
+#include <cstddef>
 #include <limits>
+#include <stdexcept>
+#include <utility>
+#include <vector>
 
 namespace neverd::diff {
 llvm::StringRef flowProgressName(FlowProgressKind Kind) {

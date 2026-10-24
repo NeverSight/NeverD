@@ -8371,6 +8371,10 @@ SHA-256 الثانوي: %3
         <source>Dock back into main window</source>
         <translation>إعادة الإرساء في النافذة الرئيسية</translation>
     </message>
+    <message>
+        <source>Move window</source>
+        <translation>تحريك النافذة</translation>
+    </message>
 </context>
 <context>
     <name>neverd::gui::ExportDataDialog</name>

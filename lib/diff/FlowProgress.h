@@ -14,6 +14,11 @@
 #include "neverd/diff/DataFlow.h"
 
 #include "llvm/ADT/STLFunctionalExtras.h"
+#include "llvm/ADT/StringRef.h"
+
+#include <cstdint>
+#include <optional>
+#include <string>
 
 namespace neverd::diff {
 /// All graph references must already have passed structural validation.

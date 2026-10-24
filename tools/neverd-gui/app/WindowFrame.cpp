@@ -84,8 +84,10 @@ bool WindowFrame::enabled() {
   return !QSettings().value(settings::NativeTitleBar).toBool();
 }
 
-WindowFrame *WindowFrame::attach(QWidget &window, QWidget *titleBar) {
-  if (!enabled())
+WindowFrame *WindowFrame::attach(QWidget &window, QWidget *titleBar,
+                                 Caption caption) {
+  if (platform::frameKind() == platform::FrameKind::System ||
+      (caption == Caption::UserPreference && !enabled()))
     return nullptr;
   const bool frameless =
       platform::frameKind() == platform::FrameKind::Frameless;

@@ -8227,6 +8227,10 @@ SHA-256 secondaire : %3
         <source>Dock back into main window</source>
         <translation>Rattacher à la fenêtre principale</translation>
     </message>
+    <message>
+        <source>Move window</source>
+        <translation>Déplacer la fenêtre</translation>
+    </message>
 </context>
 <context>
     <name>neverd::gui::ExportDataDialog</name>

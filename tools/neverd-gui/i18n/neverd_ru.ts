@@ -8263,6 +8263,10 @@ Secondary SHA-256: %3
         <source>Dock back into main window</source>
         <translation>Вернуть в главное окно</translation>
     </message>
+    <message>
+        <source>Move window</source>
+        <translation>Переместить окно</translation>
+    </message>
 </context>
 <context>
     <name>neverd::gui::ExportDataDialog</name>

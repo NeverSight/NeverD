@@ -13,7 +13,12 @@
 #include "neverd/diff/DataFlow.h"
 
 #include "llvm/ADT/STLFunctionalExtras.h"
+#include "llvm/ADT/StringRef.h"
 #include "llvm/IR/Intrinsics.h"
+
+#include <cstdint>
+#include <optional>
+#include <string>
 
 namespace neverd::diff {
 enum class LLVMFlowShape {

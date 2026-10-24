@@ -8191,6 +8191,10 @@ Secondary SHA-256: %3
         <source>Dock back into main window</source>
         <translation>メインウィンドウに戻してドッキング</translation>
     </message>
+    <message>
+        <source>Move window</source>
+        <translation>ウィンドウを移動</translation>
+    </message>
 </context>
 <context>
     <name>neverd::gui::ExportDataDialog</name>

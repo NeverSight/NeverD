@@ -276,7 +276,18 @@ def run(executable):
             assert second["rows"][0]["line"] == 3 and "code line 3" in second["text"]
         cfg = client.call("cfg", {"address": BASE})["payload"]
         assert isinstance(cfg["nodes"][0]["id"], str) and cfg["complete"]
-        assert client.call("cfg", {"address": "0xffff800012340001"})["status"] == "budget_exceeded"
+        # Isolate the mock's oversized graph entry from the other protocol
+        # state. An interior byte selects the ordinary owner until defined.
+        graph_binary = Path(directory) / "cfg-budget.bin"
+        graph_binary.write_bytes(b"benign graph fixture")
+        with Client(executable) as graph_client:
+            assert graph_client.call("open", {"path": str(graph_binary)})["status"] == "ok"
+            interior = "0xffff800012340001"
+            assert len(graph_client.call("cfg", {"address": interior})["payload"]["nodes"]) == 2
+            assert graph_client.call("function_create", {"address": interior})["status"] == "ok"
+            assert graph_client.call("cfg", {"address": interior})["status"] == "budget_exceeded"
+            assert graph_client.call("function_delete", {"address": interior})["status"] == "ok"
+            assert len(graph_client.call("cfg", {"address": interior})["payload"]["nodes"]) == 2
         # Direct references come from the instruction index without analysis.
         direct = client.call("xrefs", {"address": BASE})["payload"]
         assert direct["items"][0]["address"] == "0xffff800012340008" and direct["items"][0]["type"] == "j", direct

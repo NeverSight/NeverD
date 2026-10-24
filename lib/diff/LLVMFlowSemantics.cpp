@@ -10,9 +10,13 @@
 
 #include "LLVMFlowSemantics.h"
 
+#include "neverd/diff/Program.h"
+
 #include "llvm/ADT/StringSwitch.h"
 
+#include <cstddef>
 #include <limits>
+#include <vector>
 
 namespace neverd::diff {
 LLVMFlowShape integerFlowShape(llvm::StringRef Op) {
