@@ -138,6 +138,18 @@ struct StackBody {
           if (!chargeCalleeWork(Work, 1))
             return;
         }
+    if (!ImportLoads.empty())
+      for (const auto &Block : Function.Blocks) {
+        if (!chargeCalleeWork(Work, Block.Ops.size() + 1))
+          return;
+        // Every slot whose call can preserve a cached register must retain
+        // its binding, even if that slot is never itself cached in a GPR.
+        for (const auto &Op : Block.Ops)
+          if (Op.Opcode == NdOp::INDIR_CALL && Op.NumInputs == 1 &&
+              Op.Inputs[0].isConst() && Op.Inputs[0].Size == 4 &&
+              Op.Inputs[0].Offset <= UINT32_MAX)
+            ImportSlots.insert(Op.Inputs[0].Offset);
+      }
     Valid = true;
   }
 

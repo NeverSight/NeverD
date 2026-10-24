@@ -414,6 +414,58 @@ TEST(RegistrationImportABI, CachedImportTargetsKeepOnlyTheirReturningStackABI) {
       }
 }
 
+TEST(RegistrationImportABI, CachedImportsNeedEveryInvokedSlotBinding) {
+  for (unsigned Mutation = 0; Mutation != 7; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    ImportImage F({"DecodePointer", 1}, false);
+    auto &Image = F.Image;
+    auto Second = Image.Imports[0];
+    Second.Name = "Sleep";
+    Second.IATAddr += 4;
+    Image.Imports.push_back(Second);
+    ASSERT_TRUE(
+        Image.recordImportStorageSlot(Second.IATAddr, Second.Name, 0,
+                                      ImportStorageEvidence::ImportDirectory));
+    Image.Segments[1].Data.resize(12);
+    Image.Segments[1].Size = Image.Segments[1].FileSz = 12;
+    Image.Sections[1].Size = Image.Sections[1].FileSz = 12;
+    auto &Text = Image.Segments[0];
+    auto &Bytes = Text.Data;
+    Bytes.clear();
+    const auto ComputedStore = [&] {
+      // Build 0x403004 from immutable scalar immediates rather than an
+      // absolute relocatable operand; the stack proof retains this address.
+      Bytes.insert(Bytes.end(), {0x31, 0xd2, 0x83, 0xc2, 0x40, 0xc1, 0xe2, 8,
+                                 0x83, 0xc2, 0x30, 0xc1, 0xe2, 8,    0x83, 0xc2,
+                                 4,    0xc7, 2,    0,    0,    0,    0});
+    };
+    const auto Store = [&] {
+      Bytes.insert(Bytes.end(), {0xc7, 0x05, uint8_t(Mutation == 4 ? 8 : 4),
+                                 0x30, 0x40, 0, 0, 0, 0, 0});
+    };
+    if (Mutation == 1)
+      Store();
+    if (Mutation == 5)
+      ComputedStore();
+    Bytes.insert(Bytes.end(), {0x8b, 0x35, 0, 0x30, 0x40, 0});
+    if (Mutation == 2 || Mutation == 4)
+      Store();
+    if (Mutation == 6)
+      ComputedStore();
+    Bytes.insert(Bytes.end(), {0x6a, 0, 0xff, 0x15, 4, 0x30, 0x40, 0});
+    if (Mutation == 3)
+      Store();
+    Bytes.insert(Bytes.end(), {0x6a, 0, 0xff, 0xd6, 0x31, 0xc0, 0xc3});
+    Text.Size = Text.FileSz = Bytes.size();
+    Image.Sections[0].Size = Image.Sections[0].FileSz = Text.Size;
+    // This stack-only proof forgets relocated store addresses. Even the
+    // disjoint global write therefore remains conservatively unproved.
+    EXPECT_EQ(getCheckedX86CalleeStackPop(Image, ImportImage::TextVA),
+              Mutation == 0 || Mutation == 3 ? std::optional<uint32_t>{0}
+                                             : std::nullopt);
+  }
+}
+
 TEST(RegistrationImportABI, CachedLoadReceiptsBindCurrentBytesAndLowIR) {
   for (bool AccumulatorForm : {false, true})
     for (unsigned Mutation = 0; Mutation != 20; ++Mutation) {

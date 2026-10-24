@@ -5869,6 +5869,11 @@ pointer. `ImportedCallablesAreNotAddressesOrScalars` checks value, join, spill,
 hash and volatile-call boundaries independently of the import's initial bytes.
 `CachedLoadReceiptsBindCurrentBytesAndLowIR` rejects altered instruction bytes,
 storage, operation slices and LowIR operands for both MOV encodings.
+`CachedImportsNeedEveryInvokedSlotBinding` checks separate cached and invoked
+IAT slots, including store addresses synthesized from scalar instructions.
+Writes before the second slot's invocation must withdraw preservation; a later
+write does not change the already preserved cache. EH3/EH4 state mutations also
+check a different imported-call slot and an unrelated disjoint global write.
 `CachedImportsRespectCumulativeWork` checks the exact work boundary and refusal
 on exhaustion. `OpaqueCallsCannotCertifyCachedTargetPreservation` isolates the
 register-preservation boundary from all returning-stack facts.

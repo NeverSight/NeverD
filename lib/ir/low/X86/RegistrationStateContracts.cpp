@@ -75,6 +75,8 @@ bool RegistrationStateSolver::initializeContracts() {
       }
       if (!Stack.Loads.empty() && !Stack.Indirect)
         return false;
+      if (HasImportLoads && Stack.Indirect)
+        StackImportSlots.insert(Stack.Target);
       for (const auto &Load : Stack.Loads) {
         if (!charge(1))
           return false;
@@ -82,7 +84,6 @@ bool RegistrationStateSolver::initializeContracts() {
         if (Current == CurrentLoads.end() || Current->second != Stack.Target ||
             !StackImportLoads.emplace(Load, Stack.Target).second)
           return false;
-        StackImportSlots.insert(Stack.Target);
       }
     }
   }

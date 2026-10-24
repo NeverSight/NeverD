@@ -757,7 +757,7 @@ TEST(RegistrationState, StackCleanupDoesNotGrantMemoryBorrowAuthority) {
 TEST(RegistrationState,
      CachedImportCleanupRequiresItsCurrentLoadAndReachingValue) {
   for (bool EH4 : {false, true})
-    for (unsigned Mutation = 0; Mutation != 17; ++Mutation) {
+    for (unsigned Mutation = 0; Mutation != 20; ++Mutation) {
       SCOPED_TRACE(EH4);
       SCOPED_TRACE(Mutation);
       auto F = EH4 ? makeCookieFrame() : makeBranchingFrame();
@@ -823,10 +823,14 @@ TEST(RegistrationState,
         Intermediary.EndAddr = 0x1136;
         Intermediary.Succs = {5};
         Load.Succs = {6};
-        if (Mutation == 15) {
+        const va_t CalledSlot = Mutation >= 17 ? 0x2200 : 0x2100;
+        if (Mutation >= 17)
+          Stacks.push_back({CalledSlot, 0, true, {}});
+        if (Mutation == 15 || Mutation == 17 || Mutation == 19) {
           Intermediary.InstructionBoundaries.push_back({0x1120, 10, 0, 1});
           emitOp(Intermediary, 0x1120, NdOp::STORE, {},
-                 {NdVar::cst(0x2100, 4), NdVar::cst(0, 4)});
+                 {NdVar::cst(Mutation == 19 ? 0x2300 : CalledSlot, 4),
+                  NdVar::cst(0, 4)});
         }
         if (Mutation == 16) {
           Intermediary.InstructionBoundaries.push_back({0x1120, 6, 0, 1});
@@ -840,14 +844,14 @@ TEST(RegistrationState,
         Intermediary.InstructionBoundaries.back().Control =
             LowInstructionControl::Call;
         emitOp(Intermediary, 0x1130, NdOp::INDIR_CALL, {},
-               {NdVar::cst(0x2100, 4)});
+               {NdVar::cst(CalledSlot, 4)});
         F.Blocks.push_back(std::move(Intermediary));
       }
       F.Blocks.push_back(std::move(Load));
       F.Blocks.push_back(std::move(Call));
       const auto A = analyzeRegistrationStates(F, EH4 ? 0x4000 : 0, 0, nullptr,
                                                nullptr, &Stacks);
-      EXPECT_EQ(A.Complete, Mutation == 0 || Mutation == 14);
+      EXPECT_EQ(A.Complete, Mutation == 0 || Mutation == 14 || Mutation >= 18);
       EXPECT_FALSE(A.CallFrameEffectsComplete);
       EXPECT_TRUE(A.CallFrameEffects.empty());
       EXPECT_TRUE(A.CalleeContracts.empty());

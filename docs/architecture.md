@@ -2336,8 +2336,11 @@ nonvolatile values across its invocation; returning-stack facts for an arbitrary
 local helper cannot prove that it preserves those registers. Calls withdraw
 permission for later cached-IAT load facts. A later call through the slot cannot
 prove register preservation without its current binding; exception dispatch
-also supplies no fresh binding proof. Explicit writes that may overlap an IAT
-slot likewise withdraw future load facts without changing an earlier cached
+also supplies no fresh binding proof. The invalidation set includes every
+invoked IAT slot whose ABI can preserve a cached register, including slots with
+no cached-load occurrence. Exact scalar arithmetic that computes such a slot's
+address cannot bypass the same write check. Explicit writes that may overlap an
+IAT slot likewise withdraw future load facts without changing an earlier cached
 value. Segment-relative writes require their own disjointness proof; only the
 exact PE32 FS:[0] chain word has a known non-image address here. Returning-stack
 and registration-state analyses share these transfers;
