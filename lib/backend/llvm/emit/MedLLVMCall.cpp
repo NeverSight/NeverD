@@ -1052,8 +1052,8 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
       // source-only declaration separate from physical machine ABI inference.
       if (PreserveUnknownSourceValues && CI && CI->SourceCallHint &&
           Op.SourceCallHint == CI->SourceCallHint && !CI->IsIndirect &&
-          Op.Opcode == NdOp::CALL && Op.NumInputs &&
-          Op.Inputs[0].isConst() && !CalleeName.empty()) {
+          Op.Opcode == NdOp::CALL && Op.NumInputs && Op.Inputs[0].isConst() &&
+          !CalleeName.empty()) {
         const auto &Hint = *CI->SourceCallHint;
         const auto &Signature = Hint.Signature;
         const bool NativeSource =
@@ -1080,7 +1080,7 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
           for (const auto &Parameter : Signature.Parameters)
             Parameters.push_back(mapNdtype(Parameter.Type));
           auto *FT = llvm::FunctionType::get(mapNdtype(Signature.ReturnType),
-                                            Parameters, false);
+                                             Parameters, false);
           Callee = Mod->getFunction(CalleeName);
           if (Callee && Callee->getFunctionType() != FT) {
             syncError() << "med_llvm_emitter: conflicting native source call "

@@ -235,9 +235,11 @@ void runHomeSourceMatrix(bool Explicit, bool SelectedCaller = false) {
                     ? Floating
                           ? "\n#include <string.h>\n"
                             "uint64_t read_home(double value) { uint64_t bits; "
-                            "memcpy(&bits, &value, sizeof(bits)); return bits; }\n"
+                            "memcpy(&bits, &value, sizeof(bits)); return bits; "
+                            "}\n"
                             "int main(void) { return caller_home() != 42; }\n"
-                          : "\nuint64_t read_home(uint64_t value) { return value; }\n"
+                          : "\nuint64_t read_home(uint64_t value) { return "
+                            "value; }\n"
                             "int main(void) { return caller_home() != 42; }\n"
                 : Floating
                     ? "\n#include <string.h>\n"

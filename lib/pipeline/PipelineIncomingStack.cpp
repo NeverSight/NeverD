@@ -75,9 +75,6 @@ bool mayReadIncomingStackLeaf(const BinaryImage &Image, va_t Entry,
   size_t Offset = Entry - Segment->VA;
   size_t Work = 0;
   const auto End = Image.getFunctionMetadataEnd(Entry);
-  if (End != InvalidVA && End > Entry &&
-      End - Entry > limits::pipeline::kIncomingStackLeafOperations)
-    return false;
   for (size_t Step = 0; Step < limits::pipeline::kIncomingStackLeafOperations;
        ++Step) {
     if (Offset >= Segment->Data.size() ||

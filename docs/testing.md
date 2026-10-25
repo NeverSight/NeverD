@@ -19,6 +19,16 @@ checks integer and floating bit transport, repeated binding, call indices, and
 isolation from machine lifting, patching and analysis. These host executions
 do not qualify native Windows ARM64 drivers.
 
+The same target executes automatically recovered stack inputs for complete
+modules and selected callers, checks unchanged results across cached selections,
+and resets the cache before changing the callee bytes. Selected callers also
+link against independently defined integer and floating-point source callees,
+so lost fixed declarations fail compilation or execution. Negative controls reject
+partial outgoing writes, narrow reads, frame-address returns, preserved-register
+changes, external loads and values initialized by the callee itself. A selected
+call optimized away is checked by compiling and executing its resulting source,
+rather than requiring an intermediate call record to survive optimization.
+
 `NeverDLLVMCValueTests` executes byte-shuffle and SHA-256 projections against
 independent scalar oracles and compiles mixed SHA/SGX/AMX feature selection.
 The latter does not execute privileged or tile-state instructions.
