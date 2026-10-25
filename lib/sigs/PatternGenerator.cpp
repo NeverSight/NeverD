@@ -329,6 +329,12 @@ std::optional<uint64_t> coffBranchReferenceOffset(uint16_t Machine,
         isX86ImportReferenceField(Code.drop_front(FunctionOffset), Offset,
                                   Machine == COFF::IMAGE_FILE_MACHINE_AMD64))
       return Offset;
+    if (Rel32 &&
+        isX86ConditionalReferenceField(Code.drop_front(FunctionOffset), Offset,
+                                       Machine ==
+                                           COFF::IMAGE_FILE_MACHINE_AMD64) &&
+        readLE<uint32_t>(Code.data() + RelocationOffset) == 0)
+      return Offset;
     // Otherwise the opcode before the field must be a direct branch.
     if (!Rel32 || Offset == 0)
       return std::nullopt;
@@ -1155,6 +1161,15 @@ PatternGeneratorStats generateCOFF(const COFFObjectFile &Obj,
         consumeError(TargetName.takeError());
         continue;
       }
+      if (At &&
+          (Machine == COFF::IMAGE_FILE_MACHINE_I386 ||
+           Machine == COFF::IMAGE_FILE_MACHINE_AMD64) &&
+          isX86ConditionalReferenceField(
+              Sec.Contents.slice(Fn.Offset, Size), *At,
+              Machine == COFF::IMAGE_FILE_MACHINE_AMD64) &&
+          (!hasCOFFFunctionType(*TargetOrErr) ||
+           TargetOrErr->getSectionNumber() < COFF::IMAGE_SYM_UNDEFINED))
+        continue;
       if (AddressReference) {
         if (!coff_loader::primaryVTableTypeName(*TargetName) &&
             !(hasCOFFFunctionType(*TargetOrErr) &&

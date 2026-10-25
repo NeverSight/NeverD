@@ -8,6 +8,7 @@
 
 `NeverDSourceEntryBindingTests` 編譯並執行 x64/ARM64、PE/ELF、HighC/LLVMC 的入口堆疊參數矩陣，涵蓋完整模組、單獨呼叫者、顯式浮點位元傳遞、快取重用與重設。負向測試拒絕不完整寫入、窄讀取、堆疊位址逃逸及未定義輸入；獨立被呼叫函式定義檢查固定參數宣告。主機執行不等於原生 Windows ARM64 驅動程式驗證。
 
+`PEFunctionAddresses.*` 檢查 x64 PE 無堆疊框架葉函式、歸屬與指令邊界、拒絕的前綴及窄運算元、可呼叫出口、取消，以及 1/2/4/16 個工作執行緒的結果一致性。特徵測試涵蓋全部 16 種條件 rel32 編碼、正負位移、明確入口範圍和來源重定位限制。Python 補充特徵測試要求每個單位置條件區分全部原始衝突宣告，保留備選名稱與必須聯合使用的位置，並避免重複既有宣告。
 
 `DriverKernelSEH.V2*`, `COFFExceptionParser.*V2*` and `DriverSEHV2Execution.*` cover normalized V2 tables, partial restoration, malformed metadata and original linked driver exceptions. Run `NeverDNativeDriverTests`, `NeverDDriverEmulationTests`, `NeverDWindowsProcessTests` and `NeverDCOFFExceptionV2Tests`; unavailable host backends remain explicit skips.
 

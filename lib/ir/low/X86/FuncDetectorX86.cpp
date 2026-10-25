@@ -15,7 +15,9 @@
 #include "neverd/ir/low/FuncDetector.h"
 #include "neverd/libc/LibCNames.h"
 #include "neverd/libc/NoReturnLoadedTarget.h"
+#include "neverd/support/BinaryEncoding.h"
 #include "neverd/support/ProloguePatterns.h"
+#include "neverd/support/X86AddressReference.h"
 
 #include "llvm/ADT/ArrayRef.h"
 
@@ -100,9 +102,23 @@ std::optional<CallScanStep> stepCallsX86(const BinaryImage &Img, Decoder &Dec,
   if (!Owned &&
       !Img.hasExecutableCodeOwnerRange(Cur, static_cast<uint64_t>(Sz)))
     return Step;
-  // Only a call can have a direct target, and an instruction's size and a
-  // call's id depend neither on operand detail nor on printed text, so a sweep
-  // run without them decodes the calls again with both.
+  // Linked PE leaf callbacks need not have unwind metadata or a prologue.
+  // The size/id sweep already proves the instruction boundary. Its canonical
+  // RIP-relative encoding supplies the target without a second decode.
+  if (DI.Id == X86_INS_LEA && Img.Arch == Arch::X64 &&
+      Img.Format == BinaryFormat::COFF && !Img.IsRelocatable) {
+    const auto Bytes = llvm::ArrayRef(Seg->Data).slice(Off, Sz);
+    if (x86::isRipRelativeAddressInstruction(Bytes)) {
+      const va_t Target =
+          Step.Next + static_cast<va_t>(readLE<int32_t>(
+                          Bytes.data() + x86::kAddressDisplacementOffset));
+      if (Img.hasExecutableCodeOwnerAt(Target))
+        Step.CodeTarget = Target;
+    }
+    return Step;
+  }
+  // Sizes and ids do not depend on operand detail or printed text. Only
+  // calls need a detailed re-decode.
   if (!Dec.detailEnabled()) {
     if (DI.Id != X86_INS_CALL)
       return Step;
@@ -246,7 +262,9 @@ bool isX86EscapingCodeImmediate(const BinaryImage &Img, va_t Insn) {
 
 void scanSegmentCallsX86(const BinaryImage &Img, Decoder &Dec,
                          const Segment *Seg, va_t Start, va_t End,
-                         std::set<va_t> &Out, const Cancellation *Control) {
+                         std::set<va_t> &Out,
+                         std::vector<std::pair<va_t, va_t>> &CodeAddresses,
+                         const Cancellation *Control) {
   CodeInterval Known = codeIntervalAround(Img, Start);
   for (va_t Cur = Start; Cur < End;) {
     func_detect_detail::checkCancellation(Control);
@@ -256,6 +274,8 @@ void scanSegmentCallsX86(const BinaryImage &Img, Decoder &Dec,
       break;
     if (Step->Target != InvalidVA)
       Out.insert(Step->Target);
+    if (Step->CodeTarget != InvalidVA)
+      CodeAddresses.emplace_back(Step->Addr, Step->CodeTarget);
     Cur = Step->Next;
   }
 }

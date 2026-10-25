@@ -1,7 +1,20 @@
+//===- SourceStackFrame.cpp - Entry-relative stack observations ---------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Bounded must-analysis for stack observations and private source correction.
+//===----------------------------------------------------------------------===//
+
 #include "neverd/ir/SourceStackFrame.h"
 
 #include "neverd/ir/Limits.h"
 #include "neverd/ir/TargetRegInfo.h"
+#include "neverd/ir/intrinsics/AArch64/AArch64AddressMemory.h"
+#include "neverd/ir/low/LowIntrinsicEffects.h"
+
+#include "llvm/Support/MathExtras.h"
 
 #include <deque>
 #include <tuple>
@@ -177,6 +190,35 @@ StackFrameAnalysis analyzeSourceStackFrame(const LowFunc &F, Arch Architecture,
                 {PC, Op.Seq, *At,
                  Op.Opcode == NdOp::LOAD ? Op.Output.Size : Op.Inputs[1].Size,
                  Op.Opcode == NdOp::STORE});
+        }
+        if (Op.Opcode == NdOp::INTRINSIC && Op.NumInputs &&
+            Op.Inputs[0].isConst() &&
+            isAArch64AddressMemoryIntrinsic(
+                static_cast<Intrinsic>(Op.Inputs[0].Offset))) {
+          if (Architecture != Arch::AArch64 ||
+              !lowAArch64AddressMemoryShapeIsValid(Op)) {
+            Out.Error = kAddressMemoryMalformed;
+            return S;
+          }
+          const auto Instruction = *aarch64AddressMemoryInstruction(
+              Op.Inputs[kAddressMemoryWordOperand + 1].Offset);
+          const auto &Index = Op.Inputs[kAddressMemoryIndexOperand + 1];
+          const auto Base =
+              offset(S, Op.Inputs[kAddressMemoryBaseOperand + 1], Width);
+          // Keep the original instruction opaque to generic memory proofs.
+          // A constant index describes its nominal footprint, including SP
+          // origin, but proves no checked address, translation or tagging.
+          int64_t At, End;
+          if (Record && Base && Index.isConst() &&
+              !llvm::AddOverflow(
+                  *Base,
+                  static_cast<int64_t>(Instruction.addressOffset(Index.Offset)),
+                  At) &&
+              !llvm::AddOverflow(At, int64_t(Instruction.accessBytes()), End) &&
+              bounded(At) && bounded(End))
+            Out.Accesses.push_back({PC, Op.Seq, At,
+                                    uint16_t(Instruction.accessBytes()),
+                                    !Instruction.isLoad(), Instruction.Word});
         }
         transfer(S, Op, Width);
         // Calls may overwrite every alias except SP. This is intentionally

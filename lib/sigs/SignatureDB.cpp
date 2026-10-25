@@ -991,6 +991,19 @@ std::optional<Branch> branchTarget(const BinaryImage &Img, uint64_t Start,
   switch (Img.Arch) {
   case Arch::X86:
   case Arch::X64:
+    if (Img.isCOFF() && Offset >= x86::kJccNearDispOffset &&
+        uint64_t(Offset) + sizeof(uint32_t) <=
+            std::numeric_limits<size_t>::max() &&
+        Start <= InvalidVA - (uint64_t(Offset) + sizeof(uint32_t))) {
+      const size_t Size = size_t(Offset) + sizeof(uint32_t);
+      if (const uint8_t *Bytes = Img.readVA(Start, Size))
+        if (isX86ConditionalReferenceField({Bytes, Size}, Offset,
+                                           Img.Arch == Arch::X64))
+          return Branch{
+              wrapToImage(Img, Start + Size +
+                                   int64_t(readLE<int32_t>(Bytes + Offset))),
+              false};
+    }
     // The reference states the rel32 field, which follows the opcode.
     if (Site < x86::kRel32DispOffset)
       return std::nullopt;

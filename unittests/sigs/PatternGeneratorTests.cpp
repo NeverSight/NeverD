@@ -16,6 +16,7 @@
 #include "llvm/BinaryFormat/ELF.h"
 #include "llvm/Object/ObjectFile.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -613,6 +614,55 @@ TEST(PatternGeneratorCOFF, SymbolsAtOneAddressRetainTheirAliases) {
   EXPECT_EQ(Mod->PublicNames[2].Name, "__copy");
   for (const auto &Name : Mod->PublicNames)
     EXPECT_EQ(Name.Offset, 0u);
+}
+
+TEST(PatternGeneratorCOFF, ConditionalTailReferencesNeedWholeFunctionTargets) {
+  for (uint16_t Machine :
+       {COFF::IMAGE_FILE_MACHINE_I386, COFF::IMAGE_FILE_MACHINE_AMD64}) {
+    const uint16_t Type = Machine == COFF::IMAGE_FILE_MACHINE_I386
+                              ? uint16_t(COFF::IMAGE_REL_I386_REL32)
+                              : uint16_t(COFF::IMAGE_REL_AMD64_REL32);
+    for (uint8_t Condition = 0x80; Condition <= 0x8f; ++Condition) {
+      std::vector<uint8_t> Code(32, 0x90);
+      Code[4] = 0x0f;
+      Code[5] = Condition;
+      std::fill(Code.begin() + 6, Code.begin() + 10, 0);
+      COFFObjectBuilder Builder(Machine, Code);
+      Builder.addFunction("dispatcher", 0);
+      Builder.setRelocationTarget("short_implementation");
+      Builder.addRelocation(6, Type);
+      PatternGeneratorOptions Opts;
+      Opts.EmitReferences = true;
+      auto Out = generate(Builder.build(), Opts);
+      ASSERT_EQ(Out.Lines.size(), 1u);
+      auto Mod = PatternParser::parseLine(Out.Lines.front());
+      ASSERT_TRUE(bool(Mod)) << toString(Mod.takeError());
+      ASSERT_EQ(Mod->References.size(), 1u);
+      EXPECT_EQ(Mod->References.front().Offset, 6u);
+      EXPECT_EQ(Mod->References.front().Name, "short_implementation");
+      Builder.setDataTarget();
+      Out = generate(Builder.build(), Opts);
+      Mod = PatternParser::parseLine(Out.Lines.front());
+      ASSERT_TRUE(bool(Mod)) << toString(Mod.takeError());
+      EXPECT_TRUE(Mod->References.empty());
+      Code[6] = 1; // symbol+1 is not the function entry.
+      EXPECT_EQ(coffBranchReferenceOffset(Machine, Type, Code, 6, 0),
+                std::nullopt);
+    }
+    for (uint8_t Prefix : {0x66, 0x67, 0x2e, 0xf2, 0xf3}) {
+      const uint8_t Code[] = {Prefix, 0x0f, 0x85, 0, 0, 0, 0};
+      EXPECT_EQ(coffBranchReferenceOffset(Machine, Type, Code, 3, 0),
+                std::nullopt);
+    }
+    const uint8_t Code[] = {0x0f, 0x85, 0, 0, 0, 0};
+    for (size_t Size = 2; Size < std::size(Code); ++Size)
+      EXPECT_EQ(coffBranchReferenceOffset(
+                    Machine, Type, ArrayRef(Code).take_front(Size), 2, 0),
+                std::nullopt);
+    EXPECT_EQ(coffBranchReferenceOffset(Machine, COFF::IMAGE_REL_I386_DIR32,
+                                        Code, 2, 0),
+              std::nullopt);
+  }
 }
 
 TEST(PatternGeneratorCOFF, CanonicalIndirectImportsRetainTheirReferences) {

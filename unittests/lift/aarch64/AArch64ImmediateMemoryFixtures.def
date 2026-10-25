@@ -570,6 +570,7 @@ IMMEDIATE_MEMORY_TEXT(kImmediateArtifactProperty, "cpta_memory_artifacts")
 IMMEDIATE_MEMORY_TEXT(kImmediateHighCArtifact, "high.c")
 IMMEDIATE_MEMORY_TEXT(kImmediateLLVMCArtifact, "llvm.c")
 IMMEDIATE_MEMORY_TEXT(kImmediateELFArtifact, "llvm.o")
+IMMEDIATE_MEMORY_TEXT(kImmediateMachOArtifact, "llvm-macho.o")
 IMMEDIATE_MEMORY_TEXT(kImmediateHarnessArtifact, "harness.c")
 
 #undef IMMEDIATE_MEMORY_CASE

@@ -16,7 +16,7 @@ class SupplementTests(unittest.TestCase):
         self.existing = self.root / "existing"
         self.existing.mkdir()
 
-    def select(self, candidates, evidence, existing=""):
+    def select(self, candidates, evidence, existing="", **options):
         (self.existing / "runtime.pat").write_text(existing)
         paths = []
         for index, (name, text) in enumerate(evidence):
@@ -24,7 +24,7 @@ class SupplementTests(unittest.TestCase):
             path.write_text(text)
             paths.append((name, path))
         return supplement.select({"runtime": builder.fold(candidates.splitlines())},
-                                 paths, self.existing)["runtime"]
+                                 paths, self.existing, **options)["runtime"]
 
     def test_caller_records_keep_distinct_names_without_byte_uniqueness(self):
         a = "33C0C3 00 0000 0003 !caller :0000 a\n"
@@ -196,6 +196,53 @@ class SupplementTests(unittest.TestCase):
             "--existing", str(self.existing), "--output", str(self.existing)]), 0)
         self.assertEqual((self.existing / "runtime.part3.npat").read_text(), claim + "---\n")
         self.assertEqual(self.select(claim, [("runtime", claim)]), [])
+
+    def test_single_reference_context_audits_each_clause_against_every_rival(self):
+        a = "E8........E9........ 00 0000 000A !refs :0000 a ^0001 first ^0006 last\n"
+        b = a.replace(":0000 a", ":0000 b").replace("first", "other")
+        result = self.select(a, [("runtime", a + b)], single_reference_context=True)
+        self.assertEqual({line.refs for line in result},
+                         {((1, "first"), (6, "last")), ((1, "first"),)})
+        unknown = "E8........E9........ 00 0000 000A !evidence :0000 unknown\n"
+        self.assertEqual(self.select(a, [("runtime", a + b + unknown)],
+                                     single_reference_context=True), [])
+        covering = b.replace("000A", "000B").replace("E9........ ", "E9........C3 ")
+        result = self.select(a, [("runtime", a), ("other", covering)],
+                             single_reference_context=True)
+        self.assertEqual(len(result), 2)
+
+    def test_single_reference_context_preserves_complete_alternatives(self):
+        a = "E8........E9........ 00 0000 000A !refs :0000 a ^0001 first ^0001 alias ^0006 last\n"
+        b = "E8........E9........ 00 0000 000A !evidence :0000 b ^0001 alias ^0006 other\n"
+        result = self.select(a, [("runtime", a + b)], single_reference_context=True)
+        self.assertEqual({line.refs for line in result},
+                         {((1, "alias"), (1, "first"), (6, "last")), ((6, "last"),)})
+        self.assertFalse(any(line.refs == ((1, "first"),) for line in result))
+
+    def test_single_reference_context_keeps_jointly_necessary_sites(self):
+        a = "E8........E9........ 00 0000 000A !refs :0000 a ^0001 first ^0006 last\n"
+        b = a.replace(":0000 a", ":0000 b").replace("first", "other")
+        c = a.replace(":0000 a", ":0000 c").replace("last", "other")
+        result = self.select(a, [("runtime", a + b + c)], single_reference_context=True)
+        self.assertEqual([line.text for line in result], [a.strip()])
+
+    def test_single_reference_context_refines_owned_required_but_not_ordinary_claims(self):
+        a = "E8........E9........ 00 0000 000A !refs :0000 a ^0001 first ^0006 last\n"
+        result = self.select(a, [("runtime", a)], a, single_reference_context=True)
+        self.assertEqual({line.refs for line in result}, {((1, "first"),), ((6, "last"),)})
+        existing = a + "\n".join(line.text for line in result)
+        self.assertEqual(self.select(a, [("runtime", a)], existing,
+                                     single_reference_context=True), [])
+        self.assertEqual(self.select(a, [("runtime", a)], a.replace(" !refs", ""),
+                                     single_reference_context=True), [])
+        self.assertEqual(len(self.select(a, [("runtime", a)], a.replace("!refs", "!caller"),
+                                         single_reference_context=True)), 3)
+
+    def test_single_reference_context_does_not_promote_optional_or_partial_bodies(self):
+        for line in ["E8........E9........ 00 0000 000A :0000 a ^0001 first ^0006 last",
+                     "E8........E9........ 00 0000 000B !refs :0000 a ^0001 first ^0006 last"]:
+            parsed = builder.parse_line(line)
+            self.assertEqual(supplement.reference_variants(parsed), [parsed])
 
     def test_numbered_output_does_not_replace_existing_parts(self):
         claim = "AABBCCDD 00 0000 0004 :0000 wanted\n"

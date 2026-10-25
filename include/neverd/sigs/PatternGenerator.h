@@ -59,7 +59,9 @@ struct PatternGeneratorOptions {
   /// State the routines each COFF or ELF function branches to directly as
   /// `^offset name` references (see PatternModule::References). Off by
   /// default: a loader older than the references rejects a line with one.
-  /// COFF x86/x64 also states canonical indirect import-pointer references.
+  /// COFF x86/x64 also states canonical indirect import-pointer references
+  /// and unprefixed conditional rel32 references to explicit function symbols
+  /// with zero relocation addends. Unsupported forms remain unstated.
   bool EmitReferences = false;
   /// Emit referenced functions with the NeverD `!refs` constraint and full
   /// byte coverage, including functions below the ordinary fixed-byte floor.

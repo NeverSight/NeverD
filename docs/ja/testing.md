@@ -8,6 +8,7 @@
 
 `NeverDSourceEntryBindingTests` は x64/ARM64、PE/ELF、HighC/LLVMC の入口スタック引数をコンパイルして実行します。完全なモジュール、呼び出し元だけの選択、明示的な浮動小数点ビット転送、キャッシュ再利用とリセットを検証します。不完全な書き込み、狭い読み取り、フレームアドレスの逸出、未定義入力を拒否する対照を含みます。独立した呼び出し先定義で固定宣言を確認します。ホスト実行はネイティブ Windows ARM64 ドライバーの検証ではありません。
 
+`PEFunctionAddresses.*` はスタックフレームのない x64 PE リーフ、所有関係、命令境界、拒否する接頭辞と狭いオペランド、出口、キャンセル、1/2/4/16 ワーカーの一致を検証します。シグネチャテストは全16条件の rel32 の正負変位、明示的な入口範囲、ソース再配置制約を扱います。Python テストは各単一位置条件がすべての元の競合宣言を区別し、代替名と共同で必要な位置を保持して既存宣言を重複させないことを確認します。
 
 `DriverKernelSEH.V2*`, `COFFExceptionParser.*V2*` and `DriverSEHV2Execution.*` cover normalized V2 tables, partial restoration, malformed metadata and original linked driver exceptions. Run `NeverDNativeDriverTests`, `NeverDDriverEmulationTests`, `NeverDWindowsProcessTests` and `NeverDCOFFExceptionV2Tests`; unavailable host backends remain explicit skips.
 

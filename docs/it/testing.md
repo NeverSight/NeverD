@@ -8,6 +8,7 @@
 
 `NeverDSourceEntryBindingTests` compila ed esegue la matrice x64/ARM64, PE/ELF, HighC/LLVMC: moduli completi, chiamanti selezionati, trasporto esplicito dei bit floating-point, riuso e azzeramento della cache. I controlli negativi rifiutano scritture parziali, letture strette, fuga di indirizzi del frame e ingressi indefiniti. Definizioni indipendenti delle funzioni chiamate verificano le dichiarazioni fisse. Le esecuzioni sull’host non qualificano driver Windows ARM64 nativi.
 
+`PEFunctionAddresses.*` verifica foglie PE x64 senza frame, proprietà e confini delle istruzioni, prefissi e operandi stretti rifiutati, uscite, annullamento e parità con 1/2/4/16 worker. I test delle firme coprono le 16 condizioni rel32 in entrambe le direzioni, ingressi espliciti e vincoli di rilocazione. I test Python preservano alternative e siti necessari congiuntamente, verificano ogni controesempio originale ed evitano duplicati.
 
 `DriverKernelSEH.V2*`, `COFFExceptionParser.*V2*` and `DriverSEHV2Execution.*` cover normalized V2 tables, partial restoration, malformed metadata and original linked driver exceptions. Run `NeverDNativeDriverTests`, `NeverDDriverEmulationTests`, `NeverDWindowsProcessTests` and `NeverDCOFFExceptionV2Tests`; unavailable host backends remain explicit skips.
 

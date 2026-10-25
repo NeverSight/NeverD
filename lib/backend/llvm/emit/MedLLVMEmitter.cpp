@@ -822,7 +822,10 @@ MedLLVMEmitter::emit(const std::vector<MedFunc> &Funcs, llvm::LLVMContext &LCtx,
               throw std::runtime_error(kAddressMemoryMalformed);
             const auto Instruction = *aarch64AddressMemoryInstruction(
                 Op.Inputs[kAddressMemoryWordOperand + 1].ConstVal);
-            if (Instruction.stackBase())
+            if (!Instruction.supportsSourceBase(
+                    Img_ != nullptr,
+                    Op.Inputs[kAddressMemoryBaseOperand + 1].Kind ==
+                        MedVar::Param))
               throw std::runtime_error(kAddressMemorySPUnsupported);
             if (Img_ && !Instruction.hasRegisterIndex())
               throw std::runtime_error(kAddressMemoryImmediateImageUnsupported);

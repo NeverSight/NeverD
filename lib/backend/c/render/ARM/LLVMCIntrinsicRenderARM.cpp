@@ -47,15 +47,16 @@ static const AsmToCEntry ARMAsmTable[] = {
 bool validateAArch64AddressMemoryCall(Arch TheArch,
                                       const llvm::CallInst &Call) {
   const auto *Asm = llvm::dyn_cast<llvm::InlineAsm>(Call.getCalledOperand());
-  if (!Asm || (Asm->getAsmString() != kAddressLoadAsm &&
-               Asm->getAsmString() != kAddressStoreAsm &&
-               Asm->getAsmString() != kAddressVectorLoadAsm &&
-               Asm->getAsmString() != kAddressVectorStoreAsm))
+  if (!Asm)
     return false;
-  const bool Store = Asm->getAsmString() == kAddressStoreAsm ||
-                     Asm->getAsmString() == kAddressVectorStoreAsm;
-  const bool Vector = Asm->getAsmString() == kAddressVectorLoadAsm ||
-                      Asm->getAsmString() == kAddressVectorStoreAsm;
+  const auto *Machine =
+      llvm::find_if(kAddressMemoryMachines, [&](const auto &M) {
+        return Asm->getAsmString() == M.Asm;
+      });
+  if (Machine == std::end(kAddressMemoryMachines))
+    return false;
+  const bool Store = Machine->Store;
+  const bool Vector = Machine->Vector;
   const auto ValueType = [&](llvm::Type *Type) {
     if (!Vector)
       return Type->isIntegerTy(kAddressMemoryPointerBits);
@@ -68,11 +69,7 @@ bool validateAArch64AddressMemoryCall(Arch TheArch,
   const unsigned Count =
       Store ? kAddressStoreOperandCount : kAddressLoadOperandCount;
   if (TheArch != Arch::AArch64 ||
-      Asm->getConstraintString() !=
-          (Vector ? (Store ? kAddressVectorStoreConstraints
-                           : kAddressVectorLoadConstraints)
-                  : (Store ? kAddressStoreConstraints
-                           : kAddressLoadConstraints)) ||
+      Asm->getConstraintString() != Machine->Constraints ||
       !Asm->hasSideEffects() || Asm->isAlignStack() || Asm->canThrow() ||
       Asm->getDialect() != llvm::InlineAsm::AD_ATT ||
       Call.arg_size() != Count || Call.getFunctionType()->isVarArg() ||
@@ -103,7 +100,9 @@ bool validateAArch64AddressMemoryCall(Arch TheArch,
       Call.getArgOperand(kAddressMemoryIndexOperand));
   if (!Instruction || Instruction->isLoad() == Store ||
       Instruction->isVector() != Vector ||
-      Instruction->base() != kAddressMemoryScratchBase ||
+      Instruction->stackBase() != Machine->StackBase ||
+      (!Machine->StackBase &&
+       Instruction->base() != kAddressMemoryScratchBase) ||
       (Instruction->hasRegisterIndex()
            ? Instruction->index() != kAddressMemoryScratchIndex
            : !Index || !Index->isZero()) ||

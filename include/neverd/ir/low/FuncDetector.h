@@ -24,6 +24,7 @@
 #include <map>
 #include <optional>
 #include <set>
+#include <utility>
 #include <vector>
 
 namespace neverd {
@@ -52,7 +53,8 @@ private:
   std::vector<std::pair<va_t, std::string>>
   detectImpl(const BinaryImage &Img, Decoder &Dec, bool RelocationsOnly);
   void scanCallTargets(const BinaryImage &Img, Decoder &Dec,
-                       std::set<va_t> &Out);
+                       std::set<va_t> &Out,
+                       std::vector<std::pair<va_t, va_t>> &CodeAddresses);
   /// Recover VC6 / MSVC functions that have no PDB symbol: EBP-frame
   /// prologues at any alignment, plus 16-byte-aligned SEH / callee-saved /
   /// stack-adjust starts.  Tagged entries skip the bounded verify walk so a

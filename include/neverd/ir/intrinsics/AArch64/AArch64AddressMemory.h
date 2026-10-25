@@ -13,9 +13,11 @@
 
 #include "neverd/ir/intrinsics/Intrinsics.h"
 
+#include <algorithm>
 #include <bit>
 #include <climits>
 #include <cstdint>
+#include <iterator>
 #include <limits>
 #include <optional>
 
@@ -26,6 +28,21 @@ namespace neverd {
 #define NEVERD_A64_ADDRESS_MEMORY_TEXT(Name, Text)                             \
   inline constexpr char Name[] = Text;
 #include "neverd/ir/intrinsics/AArch64/AArch64AddressMemory.def"
+
+struct AArch64AddressMemoryMachine {
+  bool StackBase;
+  bool Vector;
+  bool Store;
+  const char *Asm;
+  const char *Constraints;
+};
+
+inline constexpr AArch64AddressMemoryMachine kAddressMemoryMachines[] = {
+#define NEVERD_A64_ADDRESS_MEMORY_MACHINE(Stack, Vector, Store, Asm,           \
+                                          Constraints)                         \
+  {Stack, Vector, Store, Asm, Constraints},
+#include "neverd/ir/intrinsics/AArch64/AArch64AddressMemory.def"
+};
 
 inline bool isAArch64AddressMemoryIntrinsic(Intrinsic Id) {
   switch (Id) {
@@ -162,6 +179,11 @@ struct AArch64AddressMemoryInstruction {
                : kAddressMemoryRegisterMask;
   }
   bool stackBase() const { return base() == kAddressMemoryRegisterMask; }
+  /// A raw parameter supplies the physical SP, including alignment/tag bits.
+  /// A relocated image address or a synthetic frame is not that environment.
+  bool supportsSourceBase(bool HasImage, bool IsParameter) const {
+    return !stackBase() || (!HasImage && IsParameter);
+  }
   unsigned indexShift() const {
     return hasRegisterIndex() && (Word & kAddressMemoryScaleMask)
                ? std::countr_zero(accessBytes())
@@ -256,17 +278,25 @@ struct AArch64AddressMemoryInstruction {
     return AArch64AddressMemorySpan{Begin, End - Begin};
   }
   uint32_t scratchWord() const {
+    const unsigned Base =
+        stackBase() ? kAddressMemoryRegisterMask : kAddressMemoryScratchBase;
     // Immediate fields belong to the original instruction, including bits
     // that the register-offset form uses for Rm or the extension option.
     if (!hasRegisterIndex())
       return (Word & ~kAddressMemoryBaseDestinationMask) |
-             kAddressMemoryScratchValue |
-             (kAddressMemoryScratchBase << kAddressMemoryBaseShift);
+             kAddressMemoryScratchValue | (Base << kAddressMemoryBaseShift);
     // Replacing XZR's index with a zero-valued GPR preserves its value. The
     // original shift stays encoded and is applied exactly once by the load.
     return (Word & ~kAddressMemoryRegistersMask) | kAddressMemoryScratchValue |
-           (kAddressMemoryScratchBase << kAddressMemoryBaseShift) |
+           (Base << kAddressMemoryBaseShift) |
            (kAddressMemoryScratchIndex << kAddressMemoryIndexShift);
+  }
+  const AArch64AddressMemoryMachine &machine() const {
+    return *std::find_if(std::begin(kAddressMemoryMachines),
+                         std::end(kAddressMemoryMachines), [&](const auto &M) {
+                           return M.StackBase == stackBase() &&
+                                  M.Vector == isVector() && M.Store != isLoad();
+                         });
   }
 };
 

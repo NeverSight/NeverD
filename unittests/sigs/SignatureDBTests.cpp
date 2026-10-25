@@ -1754,6 +1754,57 @@ struct IncomingChain {
 };
 } // namespace
 
+TEST(SignatureDBCallerContext, ConditionalTailReferencesPreserveEntryScope) {
+  for (auto Arch : {neverd::Arch::X86, neverd::Arch::X64})
+    for (uint8_t Condition = 0x80; Condition <= 0x8f; ++Condition)
+      for (bool Backward : {false, true}) {
+        auto Image = incomingCallerImage();
+        Image.Format = neverd::BinaryFormat::COFF;
+        Image.Arch = Arch;
+        Image.Bits = Arch == neverd::Arch::X64 ? neverd::Bitness::Bits64
+                                               : neverd::Bitness::Bits32;
+        auto &Code = Image.Segments.front().Data;
+        std::vector<uint8_t> Parent(Code.begin(), Code.begin() + 27);
+        Parent.insert(Parent.begin() + 4, 0x0f);
+        Parent[5] = Condition;
+        const uint64_t Source = Backward ? 0x1100 : 0x1000;
+        const uint64_t Target = Backward ? 0x1000 : 0x1100;
+        neverd::writeLE<int32_t>(Parent.data() + 6,
+                                 static_cast<int32_t>(Target - (Source + 10)));
+        std::fill(Code.begin(), Code.end(), 0xcc);
+        std::copy(Parent.begin(), Parent.end(), Code.begin() + Source - 0x1000);
+        const uint8_t Leaf[] = {0xaa, 0xbb, 0xcc, 0xdd, 0xc3};
+        std::copy(std::begin(Leaf), std::end(Leaf),
+                  Code.begin() + Target - 0x1000);
+        std::string Prefix = "554889E50F";
+        constexpr char Hex[] = "0123456789ABCDEF";
+        Prefix += Hex[Condition >> 4];
+        Prefix += Hex[Condition & 15];
+        const std::string Pattern =
+            Prefix +
+            "........909090909090909090909090909090905DC3 00 0000 001C "
+            ":0000 parent ^0006 callee\n";
+        SignatureDB DB;
+        ASSERT_FALSE(DB.loadPatternText(Pattern + IncomingLeaf, "conditional"));
+        DB.apply(Image, {Source, Target});
+        auto Names = DB.buildCandidateNameMap();
+        ASSERT_EQ(Names.size(), 2u);
+        EXPECT_EQ(Names.at(Target), "callee");
+        EXPECT_TRUE(DB.buildNameMap().empty());
+        DB.apply(Image, {Source});
+        EXPECT_EQ(DB.buildCandidateNameMap().count(Target), 0u);
+        // Without a known boundary, a prefix-looking preceding byte must not
+        // silently turn a different instruction form into a rel32 reference.
+        Code[Source - 0x1000 + 3] = 0x66;
+        std::string Prefixed = Pattern;
+        Prefixed.replace(6, 2, "66");
+        SignatureDB Other;
+        ASSERT_FALSE(Other.loadPatternText(Prefixed + IncomingLeaf, "prefix"));
+        Other.apply(Image, {Source, Target});
+        EXPECT_EQ(Other.buildCandidateNameMap().count(Target), 0u);
+      }
+}
+
 TEST(SignatureDBCallerContext, StrongIncomingChainsKeepTheirOriginalRoot) {
   for (bool Reverse : {false, true}) {
     IncomingChain Chain(3);

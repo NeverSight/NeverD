@@ -1,0 +1,42 @@
+//===- AArch64StackAddressMemoryFixtures.def - SP memory oracles -*- C++
+//-*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Independent SP fields, native template expectations and export identities.
+/// VALUE and TEXT define fixture constants and text; the existing scalar,
+/// vector and immediate MC inventories supply independent instruction words.
+//===----------------------------------------------------------------------===//
+
+#ifndef STACK_MEMORY_VALUE
+#define STACK_MEMORY_VALUE(Type, Name, Value)
+#endif
+#ifndef STACK_MEMORY_TEXT
+#define STACK_MEMORY_TEXT(Name, Text)
+#endif
+
+STACK_MEMORY_VALUE(uint32_t, kStackBaseMask, 0x3e0U)
+STACK_MEMORY_VALUE(uint32_t, kStackGeneralBaseBits, 0x200U)
+STACK_MEMORY_VALUE(uint32_t, kStackSignedIndexBit, 0x8000U)
+STACK_MEMORY_VALUE(uint64_t, kStackNegativeNarrowIndex, 0xffffffffULL)
+STACK_MEMORY_VALUE(uint64_t, kStackNegativeWideIndex, 0xffffffffffffffffULL)
+STACK_MEMORY_VALUE(unsigned, kStackRegisterCaseCount, 184)
+STACK_MEMORY_VALUE(int64_t, kStackFrameDistance, 64)
+STACK_MEMORY_TEXT(kStackSaveSP, "mov x14, sp")
+STACK_MEMORY_TEXT(kStackSelectSP, "mov sp, x16")
+STACK_MEMORY_TEXT(kStackRestoreSP, "mov sp, x14")
+STACK_MEMORY_TEXT(kStackClobberSP, "~{x14}")
+STACK_MEMORY_TEXT(kStackArtifactEnvironment,
+                  "NEVERD_ARM64E_CPTA_STACK_ARTIFACT_DIR")
+STACK_MEMORY_TEXT(kStackArtifactPrefix, "stack-memory")
+STACK_MEMORY_TEXT(kStackArtifactProperty, "cpta_stack_memory_artifacts")
+STACK_MEMORY_TEXT(kStackRegisterArtifactPrefix, "stack-register-memory")
+STACK_MEMORY_TEXT(kStackRegisterArtifactProperty,
+                  "cpta_stack_register_memory_artifacts")
+STACK_MEMORY_TEXT(kRegisterArtifactPrefix, "register-memory")
+STACK_MEMORY_TEXT(kRegisterArtifactProperty, "cpta_register_memory_artifacts")
+
+#undef STACK_MEMORY_VALUE
+#undef STACK_MEMORY_TEXT

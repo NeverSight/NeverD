@@ -6,6 +6,10 @@ vs2022 or winsdk). Repeat --evidence for every raw sigmaker output belonging
 to that library, including other versions and libraries in the same target
 directory. An already pruned database is not a substitute for raw evidence.
 Existing packs are read-only; output contains additional numbered parts.
+--single-reference-context also proposes one required reference site at a time.
+Each complete clause must distinguish every overlapping raw source claim;
+alternatives at that site remain intact. This can recover a candidate when an
+unnecessary reference is unresolved, without admitting it on bytes alone.
 """
 
 from __future__ import annotations
@@ -56,8 +60,42 @@ def context_candidates(result: builder.FoldResult) -> list[builder.PatternLine]:
     return lines
 
 
+def reference_variants(line: builder.PatternLine) -> list[builder.PatternLine]:
+    """Propose complete single-site clauses; selection still audits each one.
+
+    The ordinary full clause stays available when several sites together are
+    necessary. Alternatives at a site are inseparable, and optional references
+    or incomplete bodies never acquire a required-context claim.
+    """
+    sites = builder.ref_table(line.refs)
+    if not line.require_references or len(sites) < 2 or \
+            not builder.Shape.of(line.key).fully_verified():
+        return [line]
+    variants = [line]
+    tokens = line.key.split()
+    for offset, names in sites.items():
+        references = [f"^{offset:04X} {name}" for name in sorted(names)]
+        text = " ".join([*tokens[:4], "!refs", *line.names, *references, *tokens[4:]])
+        variants.append(builder.parse_line(text))
+    return variants
+
+
+def context_covers(older: builder.PatternLine, newer: builder.PatternLine) -> bool:
+    """Whether an existing byte/required claim already admits this clause."""
+    if older.require_caller:
+        return False
+    if not older.require_references:
+        return True
+    old_sites = builder.ref_table(older.refs)
+    new_sites = builder.ref_table(newer.refs)
+    return bool(old_sites) and all(
+        offset in new_sites and new_sites[offset] <= names
+        for offset, names in old_sites.items())
+
+
 def select(candidates: dict[str, builder.FoldResult],
-           evidence: list[tuple[str, Path]], existing: Path
+           evidence: list[tuple[str, Path]], existing: Path, *,
+           single_reference_context: bool = False
            ) -> dict[str, list[builder.PatternLine]]:
     """Retain novel claims with complete byte-collision evidence.
 
@@ -67,6 +105,10 @@ def select(candidates: dict[str, builder.FoldResult],
     rather than by the size of the entire source collection.
     """
     candidate_lines = {name: context_candidates(result) for name, result in candidates.items()}
+    if single_reference_context:
+        candidate_lines = {
+            name: [variant for line in lines for variant in reference_variants(line)]
+            for name, lines in candidate_lines.items()}
     keys = {line.key for lines in candidate_lines.values() for line in lines}
     heads = {" ".join(key.split()[:4]) for key in keys}
     by_crc = defaultdict(list)
@@ -175,9 +217,14 @@ def select(candidates: dict[str, builder.FoldResult],
     for name, lines in candidate_lines.items():
         retained = {line.text for line in selected[name]}
         for line in lines:
-            if not line.require_references or not line.refs or \
-                    set(line.names) & owned[line.key] or line.text in retained:
+            if not line.require_references or not line.refs or line.text in retained:
                 continue
+            if set(line.names) & owned[line.key]:
+                previous = [old for old in old_by_key[name, line.key]
+                            if set(old.names) & set(line.names)]
+                if not single_reference_context or not previous or any(
+                        context_covers(old, line) for old in previous):
+                    continue
             shape = builder.Shape.of(line.key)
             safe = True
             for key, counterclaims in by_key.items():
@@ -235,6 +282,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--existing", type=Path, required=True,
                         help="existing patterns for this one format/architecture")
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--single-reference-context", action="store_true",
+                        help="also audit complete single-site required clauses; "
+                             "each must distinguish every raw counterclaim")
     args = parser.parse_args(argv)
     try:
         if not args.existing.is_dir():
@@ -243,7 +293,8 @@ def main(argv: list[str] | None = None) -> int:
         for name, path in args.candidate:
             raw[name].extend(path.read_text(encoding="utf-8").splitlines())
         selected = select({name: builder.fold(lines) for name, lines in raw.items()},
-                          args.evidence, args.existing)
+                          args.evidence, args.existing,
+                          single_reference_context=args.single_reference_context)
         args.output.mkdir(parents=True, exist_ok=True)
         written = []
         for name, lines in sorted(selected.items()):
@@ -269,6 +320,8 @@ def main(argv: list[str] | None = None) -> int:
                                for path in builder.pattern_files(args.existing)
                                if path.name not in {entry["file"] for entry in written}],
                   "output": written}
+        if args.single_reference_context:
+            report["single_reference_context"] = True
         with (args.output / "supplement.sources.json").open("x", encoding="utf-8") as target:
             target.write(json.dumps(report, indent=2) + "\n")
         print(json.dumps(written, indent=2))

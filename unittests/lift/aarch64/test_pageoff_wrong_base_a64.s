@@ -26,12 +26,10 @@ a64_pageoff_wrong_base_no_escape:
   ret
 .size a64_pageoff_wrong_base_no_escape, .-a64_pageoff_wrong_base_no_escape
 
-.p2align 2
-.globl a64_writable_unknown_callee
+// Keep the callee unresolved. A local RET body proves the argument unread,
+// which would remove the escape this fixture must exercise.
+.extern a64_writable_unknown_callee
 .type a64_writable_unknown_callee, %function
-a64_writable_unknown_callee:
-  ret
-.size a64_writable_unknown_callee, .-a64_writable_unknown_callee
 
 .section .data.jt_a64_pageoff_wrong_base,"aw",%progbits
 .p2align 3

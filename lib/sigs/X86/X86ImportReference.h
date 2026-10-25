@@ -15,6 +15,7 @@
 #define NEVERD_SIGS_X86_X86IMPORTREFERENCE_H
 
 #include "neverd/support/ISAEncoding.h"
+#include "neverd/support/X86AddressReference.h"
 
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/StringRef.h"
@@ -71,17 +72,31 @@ inline bool isX86ImportReferenceField(llvm::ArrayRef<uint8_t> Code,
   return !isX86ReferencePrefix(Code[Opcode - 1], Is64Bit);
 }
 
+/// Unprefixed 0F 80..8F rel32, with Offset at its displacement. As for
+/// import fields, a preceding prefix-looking byte leaves the form unknown.
+inline bool isX86ConditionalReferenceField(llvm::ArrayRef<uint8_t> Code,
+                                           size_t Offset, bool Is64Bit) {
+  if (Offset < x86::kJccNearDispOffset || Offset > Code.size() ||
+      Code.size() - Offset < sizeof(uint32_t))
+    return false;
+  const size_t Start = Offset - x86::kJccNearDispOffset;
+  return Code[Start] == x86::kTwoByteEscape &&
+         Code[Start + 1] >= x86::kJccNearBase &&
+         Code[Start + 1] <= x86::kJccNearEnd &&
+         (Start == 0 || !isX86ReferencePrefix(Code[Start - 1], Is64Bit));
+}
+
 /// REX.W LEA r64,[RIP+disp32]. Only the canonical whole-pointer address
 /// materialization is supported; address/segment overrides are not inferred.
 inline bool isX64AddressReferenceField(llvm::ArrayRef<uint8_t> Code,
                                        size_t Offset) {
-  constexpr size_t DisplacementOffset = 3;
+  constexpr size_t DisplacementOffset = x86::kAddressDisplacementOffset;
   if (Offset < DisplacementOffset || Offset > Code.size() ||
       Code.size() - Offset < sizeof(uint32_t))
     return false;
   const size_t Start = Offset - DisplacementOffset;
-  return (Code[Start] == 0x48 || Code[Start] == 0x4c) &&
-         Code[Start + 1] == 0x8d && (Code[Start + 2] & 0xc7) == 0x05 &&
+  return x86::isRipRelativeAddressInstruction(
+             Code.slice(Start, x86::kAddressInstructionSize)) &&
          (Start == 0 || !isX86ReferencePrefix(Code[Start - 1], true));
 }
 

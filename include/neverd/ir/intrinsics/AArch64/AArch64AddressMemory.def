@@ -10,6 +10,7 @@
 /// identities, store direction and vector class. ENCODING owns Id, masked word,
 /// access bytes, result bytes and signedness. UNSIGNED and UNSCALED encoding
 /// hooks retain imm12/imm9 and the unprivileged access variant in the word.
+/// MACHINE owns the exact stack/vector/direction assembly and constraints.
 /// Loads return accessed bytes;
 /// explicit IR extends them through the encoded W/X result width before
 /// publishing X, or publishes the natural vector view before zeroing its upper
@@ -24,6 +25,10 @@
 #endif
 #ifndef NEVERD_A64_ADDRESS_MEMORY_ENCODING
 #define NEVERD_A64_ADDRESS_MEMORY_ENCODING(Id, Word, Access, Result, Signed)
+#endif
+#ifndef NEVERD_A64_ADDRESS_MEMORY_MACHINE
+#define NEVERD_A64_ADDRESS_MEMORY_MACHINE(Stack, Vector, Store, Asm,           \
+                                          Constraints)
 #endif
 
 #include "neverd/ir/intrinsics/AArch64/AArch64AddressMemoryOperations.def"
@@ -132,11 +137,53 @@ NEVERD_A64_ADDRESS_MEMORY_TEXT(kAddressVectorStoreAsm,
                                ".inst ${2:c} // neverd.address.vector.store")
 NEVERD_A64_ADDRESS_MEMORY_TEXT(kAddressVectorStoreConstraints,
                                "{x16},{x15},i,{v17},~{memory}")
+NEVERD_A64_ADDRESS_MEMORY_TEXT(
+    kAddressSPLoadAsm,
+    "mov x14, sp\n\tmov sp, x16\n\t.inst ${3:c}\n\tmov sp, x14 "
+    "// neverd.address.sp.load")
+NEVERD_A64_ADDRESS_MEMORY_TEXT(kAddressSPLoadConstraints,
+                               "=&{x17},{x16},{x15},i,~{x14},~{memory}")
+NEVERD_A64_ADDRESS_MEMORY_TEXT(
+    kAddressSPStoreAsm,
+    "mov x14, sp\n\tmov sp, x16\n\t.inst ${2:c}\n\tmov sp, x14 "
+    "// neverd.address.sp.store")
+NEVERD_A64_ADDRESS_MEMORY_TEXT(kAddressSPStoreConstraints,
+                               "{x16},{x15},i,{x17},~{x14},~{memory}")
+NEVERD_A64_ADDRESS_MEMORY_TEXT(
+    kAddressSPVectorLoadAsm,
+    "mov x14, sp\n\tmov sp, x16\n\t.inst ${3:c}\n\tmov sp, x14 "
+    "// neverd.address.sp.vector.load")
+NEVERD_A64_ADDRESS_MEMORY_TEXT(kAddressSPVectorLoadConstraints,
+                               "=&{v17},{x16},{x15},i,~{x14},~{memory}")
+NEVERD_A64_ADDRESS_MEMORY_TEXT(
+    kAddressSPVectorStoreAsm,
+    "mov x14, sp\n\tmov sp, x16\n\t.inst ${2:c}\n\tmov sp, x14 "
+    "// neverd.address.sp.vector.store")
+NEVERD_A64_ADDRESS_MEMORY_TEXT(kAddressSPVectorStoreConstraints,
+                               "{x16},{x15},i,{v17},~{x14},~{memory}")
+NEVERD_A64_ADDRESS_MEMORY_MACHINE(false, false, false, kAddressLoadAsm,
+                                  kAddressLoadConstraints)
+NEVERD_A64_ADDRESS_MEMORY_MACHINE(false, false, true, kAddressStoreAsm,
+                                  kAddressStoreConstraints)
+NEVERD_A64_ADDRESS_MEMORY_MACHINE(false, true, false, kAddressVectorLoadAsm,
+                                  kAddressVectorLoadConstraints)
+NEVERD_A64_ADDRESS_MEMORY_MACHINE(false, true, true, kAddressVectorStoreAsm,
+                                  kAddressVectorStoreConstraints)
+NEVERD_A64_ADDRESS_MEMORY_MACHINE(true, false, false, kAddressSPLoadAsm,
+                                  kAddressSPLoadConstraints)
+NEVERD_A64_ADDRESS_MEMORY_MACHINE(true, false, true, kAddressSPStoreAsm,
+                                  kAddressSPStoreConstraints)
+NEVERD_A64_ADDRESS_MEMORY_MACHINE(true, true, false, kAddressSPVectorLoadAsm,
+                                  kAddressSPVectorLoadConstraints)
+NEVERD_A64_ADDRESS_MEMORY_MACHINE(true, true, true, kAddressSPVectorStoreAsm,
+                                  kAddressSPVectorStoreConstraints)
 NEVERD_A64_ADDRESS_MEMORY_TEXT(kAddressMemoryMalformed,
                                "malformed AArch64 original memory operation")
-NEVERD_A64_ADDRESS_MEMORY_TEXT(kAddressMemorySPUnsupported,
-                               "SP-origin memory requires the original SP "
-                               "alignment and tagging environment")
+NEVERD_A64_ADDRESS_MEMORY_TEXT(
+    kAddressMemorySPUnsupported,
+    "SP-origin memory projection requires an "
+    "explicit raw-SP parameter without an image; "
+    "reconstructed stack environments are unqualified")
 NEVERD_A64_ADDRESS_MEMORY_TEXT(
     kAddressMemoryImmediateImageUnsupported,
     "immediate original memory requires occurrence-bound image relocation")
@@ -288,3 +335,4 @@ NEVERD_A64_ADDRESS_MEMORY_VALUE(uint32_t, kAddressMemoryBaseDestinationMask,
 #undef NEVERD_A64_ADDRESS_MEMORY_OPERATION
 #undef NEVERD_A64_ADDRESS_MEMORY_TEXT
 #undef NEVERD_A64_ADDRESS_MEMORY_VALUE
+#undef NEVERD_A64_ADDRESS_MEMORY_MACHINE

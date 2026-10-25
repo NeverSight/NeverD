@@ -1,9 +1,23 @@
-#pragma once
+//===- SourceStackFrame.h - Entry-relative stack observations -*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Inspect retained memory accesses without granting runtime address or
+/// execution-environment evidence.
+//===----------------------------------------------------------------------===//
+
+#ifndef NEVERD_IR_SOURCESTACKFRAME_H
+#define NEVERD_IR_SOURCESTACKFRAME_H
+
 #include "neverd/ir/low/LowIR.h"
 
+#include <cstdint>
 #include <map>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace neverd {
 /// Analyst assertions are entry-SP coordinates, never machine lift evidence.
@@ -28,6 +42,9 @@ struct StackFrameAccess {
   int64_t Offset = 0;
   uint16_t Bytes = 0;
   bool Write = false;
+  /// Original AArch64 memory encoding, when the access is an opaque intrinsic.
+  /// Offset describes its nominal entry-SP coordinate, not a no-fault proof.
+  std::optional<uint32_t> OriginalWord = std::nullopt;
 };
 struct StackFrameInstruction {
   std::optional<int64_t> Before, After;
@@ -46,3 +63,5 @@ std::optional<LowFunc> projectSourceStackFrame(const LowFunc &, Arch,
                                                const SourceStackFrame &,
                                                std::string &Error);
 } // namespace neverd
+
+#endif // NEVERD_IR_SOURCESTACKFRAME_H

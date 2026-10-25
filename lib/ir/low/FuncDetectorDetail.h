@@ -21,6 +21,8 @@
 #include <functional>
 #include <optional>
 #include <set>
+#include <utility>
+#include <vector>
 
 namespace neverd {
 namespace func_detect_detail {
@@ -48,11 +50,12 @@ inline void checkCancellation(const Cancellation *Control) {
 
 /// One step of the x86 call-target sweep: the instruction (or the byte that
 /// does not decode) at \p Addr, where the sweep goes next, and the direct
-/// call target it found there.
+/// call target and linked PE code address it found there.
 struct CallScanStep {
   va_t Addr = 0;
   va_t Next = 0;
   va_t Target = InvalidVA;
+  va_t CodeTarget = InvalidVA;
 };
 
 /// A stretch of an x86 image that one executable section of one executable
@@ -101,6 +104,7 @@ bool isX86EscapingCodeImmediate(const BinaryImage &Img, va_t Insn);
 void scanSegmentCallsX86(const BinaryImage &Img, Decoder &Dec,
                          const Segment *Seg, va_t Start, va_t End,
                          std::set<va_t> &Out,
+                         std::vector<std::pair<va_t, va_t>> &CodeAddresses,
                          const Cancellation *Control = nullptr);
 void scanSegmentCallsARM(const BinaryImage &Img, Decoder &Dec,
                          const Segment *Seg, va_t Start, va_t End,
@@ -113,6 +117,7 @@ void scanSegmentCallsAArch64(const BinaryImage &Img, const Segment *Seg,
 inline void scanSegmentCalls(const BinaryImage &Img, Decoder &Dec,
                              const Segment *Seg, va_t Start, va_t End,
                              std::set<va_t> &Out,
+                             std::vector<std::pair<va_t, va_t>> &CodeAddresses,
                              const Cancellation *Control = nullptr) {
   switch (Img.Arch) {
   case Arch::AArch64:
@@ -123,10 +128,10 @@ inline void scanSegmentCalls(const BinaryImage &Img, Decoder &Dec,
     return;
   case Arch::X86:
   case Arch::X64:
-    scanSegmentCallsX86(Img, Dec, Seg, Start, End, Out, Control);
+    scanSegmentCallsX86(Img, Dec, Seg, Start, End, Out, CodeAddresses, Control);
     return;
   default:
-    scanSegmentCallsX86(Img, Dec, Seg, Start, End, Out, Control);
+    scanSegmentCallsX86(Img, Dec, Seg, Start, End, Out, CodeAddresses, Control);
     return;
   }
 }

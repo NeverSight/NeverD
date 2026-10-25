@@ -479,9 +479,9 @@ LLVM objects execute the GPR and B/H/S/D/Q forms at O0/O2, checking actual bytes
 extension and unchanged neighbors; Q reads compare both 64-bit halves separately.
 These are explicit-IR tests; they do not
 qualify automatic decoding/lifting, relocated-image projection or native
-half/whole-vector ABI. Stack and image requirements fail before body filtering.
+half/whole-vector ABI. Synthetic-stack and image requirements fail before body filtering.
 Set `NEVERD_ARM64E_CPTA_ARTIFACT_DIR` for the immediate execution test to retain
-both generated C files, the independent native harness and an LLVM ELF object
+both generated C files, the independent native harness and LLVM ELF/Mach-O objects
 in a fresh directory recorded in the test's properties. These artifacts allow
 a controlled guest to consume the actual generated output; exporting them is
 not CPTA-on qualification.
@@ -497,7 +497,53 @@ model. It does not qualify automatic lifting, image relocation, original SP,
 writeback/pairs, EL0 instruction execution, native half/whole-vector ABI,
 Apple hardware, other translation/tagging contexts or overflowing memory and
 every CPACHECK choice. Remote GitHub CI results require separate observation.
-SP-origin source execution remains explicitly unsupported. Local Z/P state
+`AArch64StackAddressMemory` separately checks no-image, explicit raw-SP
+parameters with all 177 immediate samples and 184 GPR/SIMD register-offset
+samples. Both C routes and linked LLVM objects execute at O0/O2, retaining
+literal SP, signed/extended indices and both halves of Q results. The same
+361 samples check nominal entry-SP coordinates and LowToMed frame bounds.
+Unknown or expired inputs, joins/independent roots, hidden invalid source
+bases and malformed assembly/clobber contracts retain their refusal.
+`NEVERD_ARM64E_CPTA_STACK_ARTIFACT_DIR` exports the immediate SP matrix under
+the `cpta_stack_memory_artifacts` property, the register-offset SP matrix under
+`cpta_stack_register_memory_artifacts` and its matching GPR controls under
+`cpta_register_memory_artifacts`. The native exception verifier
+consumes successful complete seven-test SP and seven-test immediate reports:
+
+```sh
+python3 scripts/verify_arm64e_sp_memory.py \
+  --stack-artifacts /path/to/stack-export \
+  --control-artifacts /path/to/immediate-export \
+  --stack-report /path/to/stack-tests.json \
+  --control-report /path/to/immediate-tests.json \
+  --neverd-revision FULL_40_CHARACTER_COMMIT \
+  --sdk /path/to/MacOSX.sdk --compiler /path/to/clang \
+  --output /path/to/new-evidence-directory
+```
+
+The verifier compiles each C route at O0/O2 and also links the actual Mach-O
+object. In the default immediate profile, every one of the 177 SP accesses must raise a native SP-alignment
+exception, report exactly the supplied raw SP and leave all 66,064 guarded
+bytes unchanged. Five independent GPR routes execute at the same eight-byte
+misalignment and check their complete byte results. Inputs, commands, compiler
+version, verifier hashes and failed observations are retained. This is a native
+single-access exception check, not Apple CPA2 or stack-ABI qualification.
+Use `--profile register` with the register-offset SP/GPR exports and the same
+complete seven-test SP report for both report arguments to require all 184
+register-offset faults and matching GPR results. Signed W/X indices, each
+encoded extension/scale and all scalar/vector access widths remain in the
+original generated functions.
+Both harnesses must match the independent sample count. Passing a 177-sample
+immediate GPR export to the 184-sample register profile must fail compilation,
+even when the supplied report contains a successful register export.
+The controlled FVP driver's `--profile stack` additionally requires all four
+SA=1 readbacks and 83 guest checks per route. Its `--profile stack-register`
+requires the same controls for all 184 register-offset SP samples;
+`--profile register` separately checks the 184 matching GPR samples.
+Reconstructed source stacks,
+image-backed SP values, tagging and asynchronous unwind remain unqualified.
+
+Local Z/P state
 survives a validated memory operation only when physical V/Z aliases are absent.
 The interleaving test checks original words in LLVM ELF objects and retains the
 existing LLVMC scalable-carrier refusal. It does not qualify Apple SVE execution
@@ -517,8 +563,8 @@ cold/warm query mixtures exercise the distinct cache modes.
 `MedSourceStackAccesses` and `MedPrologueSaves` also verify source-stack proofs;
 an edited store must lose its previous prologue-save annotation before the
 ObjC private-copy machine replay compares both saved representations.
-These checks do not qualify SCTLR2 CPTA-on execution or other CPA2 memory
-instruction families.
+The source-stack proof checks alone do not qualify SCTLR2 CPTA-on execution
+or additional CPA2 memory instruction families.
 `SourceStackSpills` checks that pure POPCOUNT parity calculations allow an
 explicit scratch overwrite while division and actual old-slot reads remain
 barriers. `OverwrittenCallClobberSpills` executes the flag-save case through
@@ -5903,6 +5949,8 @@ enabled, `NeverDWorkerWeb` in `build-release/tools/neverd-worker` checks the rea
 framed process and isolation from native-session revisions using a C++ client.
 
 ## Library recognition
+
+`PEFunctionAddresses.*` checks stackless x64 PE leaves, ownership and instruction boundaries, rejected prefixes and narrower operands, callable exits, cancellation and identical results with 1/2/4/16 workers. Signature tests cover all 16 conditional rel32 forms in both directions, explicit entry scope and source relocation constraints. Python supplement tests require each single-site clause to distinguish every raw counterclaim, preserving alternatives and jointly necessary sites without duplicating existing claims.
 
 `PatternGeneratorCOFF.*` checks aliases at one source address, equal bytes at
 different addresses, recursion through aliases, canonical indirect import

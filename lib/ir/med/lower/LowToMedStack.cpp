@@ -9,10 +9,12 @@
 ///
 //===----------------------------------------------------------------------===//
 
-#include "neverd/ir/med/LowToMed.h"
-
 #include "neverd/Limits.h"
+#include "neverd/ir/SourceStackFrame.h"
 #include "neverd/ir/TargetRegInfo.h"
+#include "neverd/ir/low/LowIntrinsicEffects.h"
+#include "neverd/ir/med/LowToMed.h"
+#include "neverd/ir/med/LowToMedError.h"
 
 #include <algorithm>
 #include <limits>
@@ -302,6 +304,22 @@ void LowToMedConverter::analyzeStack(const LowFunc &Low) {
       } else
         ClearOutput(Op);
     }
+  }
+
+  if (TargetArch == Arch::AArch64 &&
+      std::any_of(Low.Blocks.begin(), Low.Blocks.end(), [](const auto &Block) {
+        return std::any_of(Block.Ops.begin(), Block.Ops.end(),
+                           lowAArch64AddressMemoryShapeIsValid);
+      })) {
+    // Raw memory operands retain a base, not a precomputed access address.
+    // Reuse the must-analysis at the exact use rather than the flow-insensitive
+    // address map above, which cannot establish joins or temporary lifetimes.
+    const auto Frame = analyzeSourceStackFrame(Low, TargetArch);
+    if (!Frame.Error.empty())
+      throw LowToMedConversionError(Frame.Error);
+    for (const auto &Access : Frame.Accesses)
+      if (Access.OriginalWord)
+        AddSlot(Access.Offset, Access.Bytes);
   }
 
   std::sort(StackSlots.begin(), StackSlots.end(),

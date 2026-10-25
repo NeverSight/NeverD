@@ -8,6 +8,7 @@
 
 `NeverDSourceEntryBindingTests` kompiliert und führt die Matrix x64/ARM64, PE/ELF, HighC/LLVMC aus: vollständige Module, einzelne Aufrufer, explizite Übertragung von Gleitkommabits sowie Cache-Wiederverwendung und -Zurücksetzung. Negativkontrollen lehnen Teilzugriffe, entweichende Rahmenadressen und undefinierte Eingaben ab. Unabhängige Definitionen der Aufgerufenen prüfen feste Deklarationen. Host-Ausführungen qualifizieren keine nativen Windows-ARM64-Treiber.
 
+`PEFunctionAddresses.*` prüft x64-PE-Blattfunktionen ohne Stackframe, Eigentümerschaft und Instruktionsgrenzen, abgewiesene Präfixe und schmale Operanden, Ausgänge, Abbruch und gleiche Ergebnisse mit 1/2/4/16 Workern. Signaturtests decken alle 16 rel32-Bedingungen in beiden Richtungen, explizite Einstiegsbereiche und Quellrelokationen ab. Python-Tests bewahren Alternativen und gemeinsam notwendige Stellen, prüfen jeden ursprünglichen Gegenbeleg und vermeiden doppelte Ansprüche.
 
 `DriverKernelSEH.V2*`, `COFFExceptionParser.*V2*` and `DriverSEHV2Execution.*` cover normalized V2 tables, partial restoration, malformed metadata and original linked driver exceptions. Run `NeverDNativeDriverTests`, `NeverDDriverEmulationTests`, `NeverDWindowsProcessTests` and `NeverDCOFFExceptionV2Tests`; unavailable host backends remain explicit skips.
 

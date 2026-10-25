@@ -8,6 +8,7 @@
 
 يترجم `NeverDSourceEntryBindingTests` مصفوفة x64/ARM64 وPE/ELF وHighC/LLVMC وينفذها، بما يشمل الوحدات الكاملة والمستدعين المحددين ونقل بتات الفاصلة العائمة الصريح وإعادة استخدام الذاكرة المؤقتة وإعادة ضبطها. ترفض الاختبارات السلبية الكتابات الجزئية والقراءات الضيقة وتسرب عناوين الإطار والمدخلات غير المعرفة. تتحقق تعريفات مستقلة للدوال المستدعاة من التصريحات الثابتة. لا يُعد التنفيذ على المضيف اعتمادًا لبرامج تشغيل Windows ARM64 الأصلية.
 
+تتحقق اختبارات `PEFunctionAddresses.*` من دوال PE x64 الورقية بلا إطار مكدس، والملكية وحدود التعليمات، ورفض البادئات والمعاملات الضيقة، والمخارج والإلغاء وتطابق النتائج مع 1/2/4/16 عاملاً. تغطي اختبارات التواقيع شروط rel32 الستة عشر في الاتجاهين، ونطاق المداخل الصريح وقيود إعادة التمركز. وتحافظ اختبارات Python على البدائل والمواقع الضرورية معاً، وتفحص جميع الأمثلة الأصلية المضادة وتتجنب التكرار.
 
 `DriverKernelSEH.V2*`, `COFFExceptionParser.*V2*` and `DriverSEHV2Execution.*` cover normalized V2 tables, partial restoration, malformed metadata and original linked driver exceptions. Run `NeverDNativeDriverTests`, `NeverDDriverEmulationTests`, `NeverDWindowsProcessTests` and `NeverDCOFFExceptionV2Tests`; unavailable host backends remain explicit skips.
 

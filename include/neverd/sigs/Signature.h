@@ -88,7 +88,10 @@ struct PatternModule {
   /// alternate name a link resolves it to where no object defines it, or
   /// the routines two builds of the same bytes call there -- and any of them
   /// confirms it.  The bytes there are wildcards, so matching checks the
-  /// target separately; see SignatureDB::apply. COFF x86/x64 also supports
+  /// target separately; see SignatureDB::apply. COFF x86/x64 additionally
+  /// accepts canonical unprefixed conditional rel32 branches (0F 80..8F)
+  /// from zero-addend relocations naming explicit function symbols. These
+  /// references never create function entries. COFF x86/x64 also supports
   /// the four-byte field of FF 15/FF 25 import calls/jumps, either unprefixed
   /// or with a single canonical REX.W prefix in x64, named
   /// `__imp_<export>`. Only an exact name at the addressed, mapped IAT slot
