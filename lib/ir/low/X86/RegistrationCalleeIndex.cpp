@@ -5,6 +5,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "RegistrationABIPrivate.h"
+#include "RegistrationStackOwner.h"
 
 #include "neverd/Limits.h"
 #include "neverd/ir/Limits.h"
@@ -17,6 +18,7 @@ using registration_abi::chargeCalleeWork;
 
 std::optional<std::vector<RegistrationCalleeFrameContract>>
 RegistrationCallCalleeIndex::contracts(const LowFunc &Function) {
+  const registration_abi::StackProofOwnerScope OwnerScope(*this, Work);
   const auto FrameCalls =
       registration_abi::checkedRegistrationFrameCalls(Image, Function, Work);
   if (!FrameCalls)
@@ -148,6 +150,7 @@ RegistrationCallCalleeIndex::contracts(const LowFunc &Function) {
 
 std::optional<std::vector<RegistrationCleanupFrameContract>>
 RegistrationCallCalleeIndex::cleanupContracts(const LowFunc &Function) {
+  const registration_abi::StackProofOwnerScope OwnerScope(*this, Work);
   std::vector<RegistrationCleanupFrameContract> Result;
   if (!Function.ExceptionMetadata || !Function.ExceptionMetadata->Cxx)
     return Result;

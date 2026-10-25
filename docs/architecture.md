@@ -9456,6 +9456,16 @@ built callee proves its transitive calls under standalone admission too; a
 relay cannot export a parent's local callback witness. Both routes retain the
 same active recursion guard, cumulative work bound and import dependencies.
 
+Object, initializer and cleanup queries inside that index, and subsidiary
+queries inside a returning-stack proof, reuse its independent stack cache
+through a scoped owner. Reuse requires the same image object, the exact same
+cumulative work counter and the same SEH analysis level, with no active C++
+callee proof. A cache hit charges the retained contract instead of decoding
+its body again. The scope restores the previous owner on exit; other queries
+still create a fresh index. The worker memo above continues to charge the
+measured work of a complete independent query. Neither mechanism adds memory,
+caller-frame or native EH authority to a returning-stack fact.
+
 The i64-caller re-conversion in `modelWideIntReturns` takes
 `RegistrationCallerCleanupABIComplete` and `RegistrationCxxEntryPopBytes` from
 the first conversion of the same LowFunc: they depend only on the LowFunc and

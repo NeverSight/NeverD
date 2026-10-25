@@ -4,6 +4,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "../../../lib/ir/low/X86/RegistrationStackOwner.h"
 #include "gtest/gtest.h"
 
 #include "neverd/Limits.h"
@@ -752,6 +753,57 @@ TEST(RegistrationCallABI, RecordedStackPopsChargeTheirFreshWork) {
   ThrowImage Other;
   Other.Image = F.Image;
   EXPECT_FALSE(Memo.find(Other.Image, Text.VA, 0));
+}
+
+TEST(RegistrationCallABI, OwnedStackQueriesKeepImageAndBudgetBoundaries) {
+  ThrowImage F;
+  F.Image.Imports.clear();
+  auto &Text = F.Image.Segments.front();
+  Text.Data = {0xc2, 4, 0};
+  Text.Size = Text.FileSz = Text.Data.size();
+  F.Image.Sections.front().Size = F.Image.Sections.front().FileSz = Text.Size;
+  const va_t Target = Text.VA;
+  auto Other = F.Image;
+  Other.Segments.front().Data[1] = 8;
+
+  size_t FreshWork = 0;
+  ASSERT_EQ(getCheckedX86CalleeStackPop(F.Image, Target, &FreshWork), 4u);
+  size_t Work = 0;
+  RegistrationCallCalleeIndex Index(F.Image, &Work);
+  ASSERT_EQ(Index.stackPop(Target), 4u);
+  const size_t BeforeHit = Work;
+  ASSERT_EQ(Index.stackPop(Target), 4u);
+  const size_t HitWork = Work - BeforeHit;
+  ASSERT_GT(HitWork, 0u);
+  ASSERT_LT(HitWork, FreshWork);
+  {
+    registration_abi::StackProofOwnerScope Scope(Index, Work);
+    const size_t BeforeOwned = Work;
+    EXPECT_EQ(getCheckedX86CalleeStackPop(F.Image, Target, &Work), 4u);
+    EXPECT_EQ(Work - BeforeOwned, HitWork);
+    // The same address in another image has a different return-pop encoding.
+    EXPECT_EQ(getCheckedX86CalleeStackPop(Other, Target, &Work), 8u);
+    const size_t BeforeOtherBudget = Work;
+    size_t OtherBudget = limits::kMaxRegistrationEHStateWork - HitWork;
+    // This allowance fits a hit but cannot pay for an independent proof. A
+    // query on another counter must neither borrow nor charge this owner.
+    EXPECT_FALSE(getCheckedX86CalleeStackPop(F.Image, Target, &OtherBudget));
+    EXPECT_EQ(OtherBudget, limits::kMaxRegistrationEHStateWork);
+    EXPECT_EQ(Work, BeforeOtherBudget);
+    RegistrationCallCalleeIndex OtherIndex(Other, &Work);
+    {
+      registration_abi::StackProofOwnerScope Inner(OtherIndex, Work);
+      EXPECT_EQ(getCheckedX86CalleeStackPop(Other, Target, &Work), 8u);
+      EXPECT_EQ(getCheckedX86CalleeStackPop(F.Image, Target, &Work), 4u);
+    }
+    const size_t BeforeRestored = Work;
+    EXPECT_EQ(getCheckedX86CalleeStackPop(F.Image, Target, &Work), 4u);
+    EXPECT_EQ(Work - BeforeRestored, HitWork);
+  }
+  // Ending the owner scope restores independent public queries.
+  const size_t BeforeIndependent = Work;
+  EXPECT_EQ(getCheckedX86CalleeStackPop(F.Image, Target, &Work), 4u);
+  EXPECT_EQ(Work - BeforeIndependent, FreshWork);
 }
 
 TEST(RegistrationCallABI, ReturningStackProofDoesNotNormalizeTheX87Stack) {

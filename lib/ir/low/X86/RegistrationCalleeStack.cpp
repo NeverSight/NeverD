@@ -8,6 +8,7 @@
 #include "RegistrationFrame.h"
 #include "RegistrationFrameEffects.h"
 #include "RegistrationImportLoad.h"
+#include "RegistrationStackOwner.h"
 
 #include "neverd/Limits.h"
 #include "neverd/decode/InstructionRelocations.h"
@@ -31,6 +32,26 @@
 #include <vector>
 
 namespace neverd::registration_abi {
+thread_local StackProofOwnerScope *StackProofOwnerScope::Current = nullptr;
+
+StackProofOwnerScope::StackProofOwnerScope(RegistrationCallCalleeIndex &Index,
+                                           size_t &Work)
+    : Index(Index), Work(Work), Level(x86SEHStateAnalysisLevel()),
+      Previous(Current) {
+  Current = this;
+}
+
+StackProofOwnerScope::~StackProofOwnerScope() { Current = Previous; }
+
+RegistrationCallCalleeIndex *
+StackProofOwnerScope::find(const BinaryImage &Image, size_t *CumulativeWork) {
+  if (!Current || !CumulativeWork || !Current->Index.ownsImage(Image) ||
+      CumulativeWork != &Current->Work ||
+      Current->Level != x86SEHStateAnalysisLevel() || hasActiveCxxCalleeProof())
+    return nullptr;
+  return &Current->Index;
+}
+
 bool hasImmutableCalleeInstruction(const BinaryImage &Image,
                                    const LowInstructionBoundary &Boundary,
                                    Decoder &Decoder) {
@@ -783,6 +804,7 @@ public:
         Parent(Parent) {}
 
   std::optional<RegistrationCalleeStackContract> prove(va_t Target) {
+    const registration_abi::StackProofOwnerScope OwnerScope(Owner, Work);
     if (!chargeCalleeWork(Work, 1))
       return std::nullopt;
     // The parent may have dispatcher-entered returns. Its ordinary entry
@@ -925,6 +947,12 @@ std::optional<uint32_t> getCheckedX86CalleeStackPop(const BinaryImage &Image,
                                                     size_t *CumulativeWork) {
   if (!isPE32(Image))
     return std::nullopt;
+  // Reuse only independently admitted entries from this invocation closure.
+  // stackPop() retains the same recursion guards and import dependencies;
+  // source-graph witnesses never enter its cache.
+  if (auto *Owner =
+          registration_abi::StackProofOwnerScope::find(Image, CumulativeWork))
+    return Owner->stackPop(Target);
   size_t LocalWork = 0;
   size_t &Work = CumulativeWork ? *CumulativeWork : LocalWork;
   // A fresh index answers from the unchanged image and the SEH analysis

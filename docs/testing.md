@@ -5990,7 +5990,13 @@ an ordinary subgraph.
 callback's ordinary returning-stack witness while refusing the same address
 as a standalone entry, in both query orders and on repeated queries. A relay
 outside the parent's EH range also cannot export that local witness through
-the standalone cache. `SEHReturningStackUsesCompleteParentFrameEvidence`
+the standalone cache.
+`OwnedStackQueriesKeepImageAndBudgetBoundaries` checks reuse within the active
+index, a different image with the same entry address and another return pop,
+an independent near-exhausted counter, and nested owner restoration. Leaving
+the scope restores the work of a fresh public query. Existing mixed-proof
+cycle and C++ memo-ancestry tests retain the recursion boundary.
+`SEHReturningStackUsesCompleteParentFrameEvidence`
 separately checks complete registration state and lifetime, corrupted EBP,
 missing ESP restoration, incompatible ordinary/exceptional return pops,
 writable code, stale installation metadata and an opaque helper overwriting
