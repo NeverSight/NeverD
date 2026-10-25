@@ -789,12 +789,16 @@ public:
     // cannot borrow the proof intended only for separately called interiors.
     if (Parent && Target == Parent->FunctionEntry)
       return std::nullopt;
-    if (auto It = Cache.find(Target); It != Cache.end()) {
-      if (It->second &&
-          !chargeCalleeWork(Work, It->second->RequiredImports.size() + 1))
-        return std::nullopt;
-      return It->second;
-    }
+    const bool LocalEntry = Parent && Parent->Entries.count(Target);
+    // Local witnesses belong to this source graph. Neither a cached standalone
+    // refusal nor a local success may answer the other entry's proof domain.
+    if (!LocalEntry)
+      if (auto It = Cache.find(Target); It != Cache.end()) {
+        if (It->second &&
+            !chargeCalleeWork(Work, It->second->RequiredImports.size() + 1))
+          return std::nullopt;
+        return It->second;
+      }
     const StackQuery Identity{&Image, Target};
     if (Depth == ::neverd::limits::ir::kMaxReturningStackProofDepth ||
         ActiveStackProofs.size() >=
@@ -819,35 +823,46 @@ public:
           Result.PreservesImportBindings =
               registration_abi::preservesRegistrationImportBindings(
                   Image, Result.RequiredImports.front());
-          Cache.emplace(Target, Result);
+          if (!LocalEntry)
+            Cache.emplace(Target, Result);
           return Result;
         }
     }
-    if ((!Parent || !Parent->Entries.count(Target)))
+    if (!LocalEntry)
       if (const auto *EH = Image.ExceptionMetadata.findFunction(Target);
           EH && (!EH->Registration || EH->Registration->RealignedFrame ||
                  (EH->Cxx && !EH->Cxx->TryBlocks.empty())))
         return std::nullopt;
     // In-progress entries carry no fact: recursion cannot certify itself.
     // Even failed nested bodies consume the same cumulative work allowance.
-    auto It = Cache.emplace(Target, std::nullopt).first;
+    std::optional<RegistrationCalleeStackContract> LocalResult;
+    auto &Result = LocalEntry
+                       ? LocalResult
+                       : Cache.emplace(Target, std::nullopt).first->second;
     ActiveStackProofs.insert(Identity);
     ++Depth;
     const llvm::scope_exit Leave([&] {
       --Depth;
       ActiveStackProofs.erase(Identity);
     });
-    const auto Nested = [&](va_t Callee) { return prove(Callee); };
+    const auto Nested = [&](va_t Callee) {
+      // An independently built callee cannot export a local witness through
+      // its transitive dependencies either. Its children use the same entry
+      // admission as a fresh standalone query.
+      return LocalEntry ? prove(Callee)
+                        : ReturningStackProof(Image, Work, Cache, Owner, Depth)
+                              .prove(Callee);
+    };
     const auto Record = [&](StackBody &Body, std::optional<uint32_t> Pop) {
       if (Pop && chargeCalleeWork(Work, Body.ImportSlots.size() + 1))
-        It->second = RegistrationCalleeStackContract{
+        Result = RegistrationCalleeStackContract{
             Target,
             *Pop,
             false,
             {},
             {Body.ImportSlots.begin(), Body.ImportSlots.end()}};
     };
-    if (Parent && Parent->Entries.count(Target)) {
+    if (LocalEntry) {
       StackBody EntryBody(Image, Parent->Source, Work, Target);
       Record(EntryBody, stackPopForBody(EntryBody, Target, Nested));
     } else {
@@ -864,10 +879,9 @@ public:
                          : stackPopForBody(Body, Target, Nested));
       }
     }
-    if (It->second &&
-        !chargeCalleeWork(Work, It->second->RequiredImports.size() + 1))
+    if (Result && !chargeCalleeWork(Work, Result->RequiredImports.size() + 1))
       return std::nullopt;
-    return It->second;
+    return Result;
   }
 };
 } // namespace

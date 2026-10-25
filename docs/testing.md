@@ -5985,7 +5985,12 @@ FS:[0] chain word.
 `NestedReturningStackProofIsBoundedAndNonCircular` checks multi-level callee
 cleanup, mismatched pops, recursive dependencies, the depth boundary and shared
 work exhaustion. It does not admit dispatcher-entered parent returns through
-an ordinary subgraph. `SEHReturningStackUsesCompleteParentFrameEvidence`
+an ordinary subgraph.
+`CxxLocalStackWitnessDoesNotAuthorizeStandaloneEntry` keeps a local C++
+callback's ordinary returning-stack witness while refusing the same address
+as a standalone entry, in both query orders and on repeated queries. A relay
+outside the parent's EH range also cannot export that local witness through
+the standalone cache. `SEHReturningStackUsesCompleteParentFrameEvidence`
 separately checks complete registration state and lifetime, corrupted EBP,
 missing ESP restoration, incompatible ordinary/exceptional return pops,
 writable code, stale installation metadata and an opaque helper overwriting

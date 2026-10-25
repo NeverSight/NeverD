@@ -311,6 +311,8 @@ public:
   /// to this invocation closure's cumulative work budget.
   bool chargeStateWork(size_t Amount);
   std::optional<RegistrationCalleeFrameContract> cxxCallee(va_t Target);
+  /// Prove a standalone entry. Local witnesses from stackContracts() cannot
+  /// satisfy this entry's admission or its transitive callee dependencies.
   std::optional<uint32_t> stackPop(va_t Target);
   std::optional<std::vector<RegistrationCalleeFrameContract>>
   contracts(const LowFunc &Function);
@@ -331,6 +333,7 @@ private:
   unsigned CxxDepth = 0;
   std::map<va_t, std::optional<RegistrationCalleeFrameContract>> Cache;
   std::map<va_t, std::optional<RegistrationCleanupRelayABI>> CleanupCache;
+  // Independent entries only; parent-graph witnesses stay in their query.
   std::map<va_t, std::optional<RegistrationCalleeStackContract>> StackCache;
 };
 

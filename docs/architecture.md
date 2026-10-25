@@ -9448,6 +9448,14 @@ the same image object, callee and level charges that work again before taking
 the answer, so the answer and the exhaustion of a caller's cumulative budget
 match a fresh proof. A query that exhausts the budget records nothing.
 
+Within one registration callee index, the returning-stack cache contains only
+independently admitted entries. A separately called interior may use the
+current parent's complete source graph, but that local witness stays in its
+query and neither reads nor populates the standalone cache. An independently
+built callee proves its transitive calls under standalone admission too; a
+relay cannot export a parent's local callback witness. Both routes retain the
+same active recursion guard, cumulative work bound and import dependencies.
+
 The i64-caller re-conversion in `modelWideIntReturns` takes
 `RegistrationCallerCleanupABIComplete` and `RegistrationCxxEntryPopBytes` from
 the first conversion of the same LowFunc: they depend only on the LowFunc and

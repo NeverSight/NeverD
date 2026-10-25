@@ -1338,6 +1338,64 @@ BinaryImage makeCxxContinuationImage(va_t Target = kText + 0xc0,
   return Img;
 }
 
+TEST(RegistrationTryLevel,
+     CxxLocalStackWitnessDoesNotAuthorizeStandaloneEntry) {
+  for (bool WithRelay : {false, true}) {
+    SCOPED_TRACE(WithRelay);
+    auto Image = makeCxxContinuationImage();
+    Image.Entry = kText;
+    auto &Bytes = Image.Segments.front().Data;
+    const std::vector<uint8_t> Epilogue(Bytes.begin() + 0x80,
+                                        Bytes.begin() + 0x8e);
+    std::copy(Epilogue.begin(), Epilogue.end(),
+              Bytes.begin() + (WithRelay ? 0x8a : 0x85));
+    // An ordinary call uses the same local RET as the catch invocation. Its
+    // parent graph owns that local proof; a standalone entry still has to pass
+    // its independent EH admission instead of reading the parent's cache.
+    Bytes[0x80] = 0xe8;
+    writeLE<uint32_t>(Bytes.data() + 0x81, 0xa0 - 0x85);
+    if (WithRelay) {
+      // The relay is outside the EH range and needs a standalone proof. It
+      // cannot publish the parent's local witness as its own stack contract.
+      Bytes[0x85] = 0xe8;
+      writeLE<uint32_t>(Bytes.data() + 0x86, 0xf0 - 0x8a);
+      Bytes[0xf0] = 0xe8;
+      writeLE<uint32_t>(Bytes.data() + 0xf1, uint32_t(0xa0 - 0xf5));
+      Bytes[0xf5] = 0xc3;
+    }
+    Image.ExceptionMetadata.rebuildIndex();
+    Decoder Decode;
+    ASSERT_TRUE(Decode.init(Image));
+    auto Source =
+        CFGBuilder().buildIntegerFrameProof(Image, Decode, kText, "parent");
+    ASSERT_TRUE(Source.hasCompleteLiftCoverage());
+    ASSERT_FALSE(getCheckedX86CalleeStackPop(Image, kText + 0xa0));
+    if (WithRelay)
+      ASSERT_FALSE(getCheckedX86CalleeStackPop(Image, kText + 0xf0));
+    for (bool StandaloneFirst : {false, true}) {
+      SCOPED_TRACE(StandaloneFirst);
+      size_t Work = 0;
+      RegistrationCallCalleeIndex Index(Image, &Work);
+      if (StandaloneFirst) {
+        EXPECT_FALSE(Index.stackPop(kText + 0xa0));
+        if (WithRelay)
+          EXPECT_FALSE(Index.stackPop(kText + 0xf0));
+      }
+      for (unsigned Repeat = 0; Repeat != 2; ++Repeat) {
+        SCOPED_TRACE(Repeat);
+        const auto Contracts = Index.stackContracts(Source);
+        ASSERT_TRUE(Contracts);
+        ASSERT_EQ(Contracts->size(), 1u);
+        EXPECT_EQ(Contracts->front().Target, kText + 0xa0);
+        EXPECT_EQ(Contracts->front().StackPopBytes, 0u);
+        EXPECT_FALSE(Index.stackPop(kText + 0xa0));
+        if (WithRelay)
+          EXPECT_FALSE(Index.stackPop(kText + 0xf0));
+      }
+    }
+  }
+}
+
 BinaryImage makeCxxEAXHelperImage(bool Wide, unsigned Variant,
                                   unsigned Mutation = 0) {
   auto Image = makeCxxContinuationImage();
