@@ -870,12 +870,17 @@ RegistrationCallCalleeIndex::stackContracts(const LowFunc &Function) {
   std::vector<RegistrationCalleeStackContract> Result;
   if (!isPE32(Image))
     return Result;
+  const auto FrameCalls =
+      registration_abi::checkedRegistrationFrameCalls(Image, Function, Work);
+  if (!FrameCalls)
+    return std::nullopt;
   std::set<std::pair<va_t, bool>> Targets;
   for (const auto &Block : Function.Blocks)
     for (const auto &Op : Block.Ops) {
       if (!chargeCalleeWork(Work, 1))
         return std::nullopt;
-      if ((Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) &&
+      if (!FrameCalls->count(&Op) &&
+          (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) &&
           Op.NumInputs == 1 && Op.Inputs[0].isConst() && Op.Inputs[0].Size == 4)
         Targets.emplace(Op.Inputs[0].Offset, Op.Opcode == NdOp::INDIR_CALL);
       if (Targets.size() >

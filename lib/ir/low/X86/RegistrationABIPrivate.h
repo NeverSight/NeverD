@@ -71,6 +71,14 @@ bool collectCalleeCodeRanges(const LowFunc &Function, const BinaryImage &Image,
 
 bool chargeCalleeWork(size_t &Work, size_t Amount);
 
+/// Exact shared frame operations belong to registration-state analysis, not
+/// ordinary callee inference. These pointers identify only current LowIR
+/// occurrences; another call to the same helper receives no exemption. This
+/// classification grants no frame, return-stack or native lowering contract.
+std::optional<std::set<const LowOp *>>
+checkedRegistrationFrameCalls(const BinaryImage &Image, const LowFunc &Function,
+                              size_t &Work);
+
 struct CleanupFramePrefix {
   unsigned Size = 0;
   uint8_t BaseRegister = 5;

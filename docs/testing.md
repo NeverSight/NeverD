@@ -9202,6 +9202,14 @@ It covers short/wide allocation pushes, two image bases, current helper-byte
 mutations, changed LowIR prefixes and extra entry roots. Small allocations
 whose SavedESP write overlaps a nonvolatile save must refuse the returning
 frame proof. Source-state completion is distinct from native EH publication.
+`FrameCallsLeaveBudgetForOrdinaryCallees` and
+`RegistrationTryLevel.CxxSharedCallsDoNotConsumeOrdinaryCalleeBudget` check
+that exact shared entry/exit occurrences use their physical-frame analysis
+without spending the ordinary-callee budget on those helpers. A separate
+ordinary call still needs its scalar and returning-stack proofs within a
+2,048-unit allowance. Changed helper bytes, call operations, instruction
+boundaries, metadata and interior roots withdraw the classification; another
+occurrence of the same target is not exempt. Exhausted budgets still refuse.
 `RegistrationSEH4Physical.*` in `NeverDWindowsRegistrationNativeTests` checks
 the separate physical projection at two bases, both allocation encodings and
 three frame extents, then runs the LLVM verifier and independent COFF IR proof.

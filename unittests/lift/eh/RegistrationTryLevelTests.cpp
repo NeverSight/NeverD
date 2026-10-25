@@ -15,6 +15,7 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "../../../lib/ir/low/X86/RegistrationABIPrivate.h"
 #include "../../../lib/ir/low/X86/RegistrationStateSolver.h"
 #include "gtest/gtest.h"
 
@@ -3359,6 +3360,56 @@ TEST(RegistrationTryLevel,
           EXPECT_FALSE(cxxRegistrationFrameCoordinate(
               *Med.ExceptionMetadata, &*Med.RegistrationStates));
         }
+}
+
+TEST(RegistrationTryLevel, CxxSharedCallsDoNotConsumeOrdinaryCalleeBudget) {
+  for (bool Wide : {false, true})
+    for (unsigned Variant : {0, 1, 2}) {
+      SCOPED_TRACE(::testing::Message() << Wide << " " << Variant);
+      auto [Image, Call] = makeCxxSharedEpilogueImage(Wide, Variant, 32);
+      auto Source = liftEntry(Image, kText + 0x20);
+      ASSERT_TRUE(Source.RegistrationStates);
+      ASSERT_TRUE(Source.RegistrationStates->Complete);
+      Source.RegistrationStates.reset();
+      size_t Work = 0;
+      const auto FrameCalls =
+          registration_abi::checkedRegistrationFrameCalls(Image, Source, Work);
+      ASSERT_TRUE(FrameCalls);
+      ASSERT_EQ(FrameCalls->size(), 2u);
+      Work = limits::kMaxRegistrationEHStateWork - 2048;
+      RegistrationCallCalleeIndex Index(Image, &Work);
+      const auto Stacks = Index.stackContracts(Source);
+      ASSERT_TRUE(Stacks);
+      EXPECT_TRUE(Stacks->empty());
+      const auto Callees = Index.contracts(Source);
+      ASSERT_TRUE(Callees);
+      EXPECT_TRUE(Callees->empty());
+      EXPECT_LT(Work, limits::kMaxRegistrationEHStateWork);
+      for (unsigned Mutation = 0; Mutation != 5; ++Mutation) {
+        SCOPED_TRACE(Mutation);
+        auto Changed = Source;
+        auto Bytes = Image;
+        auto Exit = llvm::find_if(Changed.Blocks, [&](const auto &Block) {
+          return !Block.Ops.empty() && Block.Ops.back().Addr == Call;
+        });
+        ASSERT_NE(Exit, Changed.Blocks.end());
+        if (Mutation == 0)
+          Changed.Blocks.front().Ops.back().Inputs[0].Offset += 1;
+        else if (Mutation == 1)
+          Bytes.Segments.front().Data[0x100] ^= 1;
+        else if (Mutation == 2)
+          Exit->Ops.back().Inputs[0].Offset += 1;
+        else if (Mutation == 3)
+          Exit->InstructionBoundaries.back().Immediate.reset();
+        else
+          Bytes.Segments.front().Data[0x180] ^= 1;
+        Work = 0;
+        const auto Current = registration_abi::checkedRegistrationFrameCalls(
+            Bytes, Changed, Work);
+        ASSERT_TRUE(Current);
+        EXPECT_EQ(Current->size(), Mutation < 2 ? 0u : 1u);
+      }
+    }
 }
 
 TEST(RegistrationTryLevel, CxxSharedHelpersHaveTheCheckedParentEntryABI) {

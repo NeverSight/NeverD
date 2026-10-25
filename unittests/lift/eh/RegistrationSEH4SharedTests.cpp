@@ -7,9 +7,11 @@
 /// Exercise physical SEH4 entry and exit calls through ordinary CFG analysis.
 //===----------------------------------------------------------------------===//
 
+#include "../../../lib/ir/low/X86/RegistrationABIPrivate.h"
 #include "RegistrationSEH4SharedTestUtils.h"
 #include "gtest/gtest.h"
 
+#include "neverd/Limits.h"
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/ir/low/RegistrationSharedCall.h"
@@ -17,6 +19,8 @@
 #include "neverd/loader/COFF/COFFRegistrationEH.h"
 #include "neverd/loader/COFF/COFFSEH4Entry.h"
 #include "neverd/support/BinaryEncoding.h"
+
+#include "llvm/ADT/STLExtras.h"
 
 #include <algorithm>
 #include <iterator>
@@ -26,6 +30,93 @@
 using namespace neverd;
 
 using namespace neverd::registration_test;
+
+TEST(RegistrationSEH4Shared, FrameCallsLeaveBudgetForOrdinaryCallees) {
+  for (uint32_t Base : {0x400000u, 0x18000000u})
+    for (bool Wide : {false, true}) {
+      auto Image =
+          sharedSEH4Image(Base, Wide, 32, SharedSEH4Body::OrdinaryCall);
+      auto Source = liftSharedSEH4(Image);
+      ASSERT_TRUE(Source.RegistrationStates);
+      ASSERT_TRUE(Source.RegistrationStates->Complete);
+      // Classification precedes state solving and cannot borrow its result.
+      Source.RegistrationStates.reset();
+      for (bool Stack : {false, true}) {
+        SCOPED_TRACE(::testing::Message()
+                     << Base << " " << Wide << " " << Stack);
+        size_t Work = limits::kMaxRegistrationEHStateWork - 2048;
+        RegistrationCallCalleeIndex Index(Image, &Work);
+        if (Stack) {
+          const auto Calls = Index.stackContracts(Source);
+          ASSERT_TRUE(Calls);
+          ASSERT_EQ(Calls->size(), 1u);
+          EXPECT_EQ(Calls->front().Target, Base + 0x1180);
+          EXPECT_EQ(Calls->front().StackPopBytes, 0u);
+        } else {
+          const auto Calls = Index.contracts(Source);
+          ASSERT_TRUE(Calls);
+          ASSERT_EQ(Calls->size(), 1u);
+          EXPECT_EQ(Calls->front().Target, Base + 0x1180);
+          EXPECT_TRUE(Calls->front().HasIndependentScalarReturn);
+        }
+        EXPECT_LT(Work, limits::kMaxRegistrationEHStateWork);
+      }
+      size_t Exhausted = limits::kMaxRegistrationEHStateWork;
+      RegistrationCallCalleeIndex Limited(Image, &Exhausted);
+      EXPECT_FALSE(Limited.stackContracts(Source));
+      EXPECT_FALSE(Limited.contracts(Source));
+    }
+}
+
+TEST(RegistrationSEH4Shared, FrameClassificationRequiresTheCurrentOccurrence) {
+  auto Image = sharedSEH4Image(0x400000, false);
+  const auto Source = liftSharedSEH4(Image);
+  size_t Work = 0;
+  const auto Calls =
+      registration_abi::checkedRegistrationFrameCalls(Image, Source, Work);
+  ASSERT_TRUE(Calls);
+  ASSERT_EQ(Calls->size(), 2u);
+  for (unsigned Mutation = 0; Mutation != 7; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    auto Changed = Source;
+    auto Bytes = Image;
+    auto Exit = llvm::find_if(Changed.Blocks, [](const auto &Block) {
+      return !Block.Ops.empty() && Block.Ops.back().Addr == 0x40101d;
+    });
+    ASSERT_NE(Exit, Changed.Blocks.end());
+    if (Mutation == 0)
+      Changed.Blocks.front().Ops.back().Inputs[0].Offset += 1;
+    else if (Mutation == 1)
+      Bytes.Segments.front().Data[0x100] ^= 1;
+    else if (Mutation == 2)
+      Exit->Ops.back().Inputs[0].Offset += 1;
+    else if (Mutation == 3)
+      Exit->InstructionBoundaries.back().Immediate.reset();
+    else if (Mutation == 4)
+      Bytes.Segments.front().Data[0x150] ^= 1;
+    else if (Mutation == 5)
+      Changed.OrdinaryModuleAnalysisRoots.insert(0x40101e);
+    else
+      Changed.ExceptionMetadata.reset();
+    Work = 0;
+    const auto Current =
+        registration_abi::checkedRegistrationFrameCalls(Bytes, Changed, Work);
+    ASSERT_TRUE(Current);
+    EXPECT_EQ(Current->size(), Mutation < 2 || Mutation == 6 ? 0u : 1u);
+  }
+  auto Changed = Source;
+  LowBlock Extra;
+  Extra.Id = 99;
+  Extra.StartAddr = 0x401300;
+  Extra.Ops.push_back(**Calls->begin());
+  Changed.Blocks.push_back(std::move(Extra));
+  Work = 0;
+  const auto Current =
+      registration_abi::checkedRegistrationFrameCalls(Image, Changed, Work);
+  ASSERT_TRUE(Current);
+  EXPECT_EQ(Current->size(), 2u);
+  EXPECT_FALSE(Current->count(&Changed.Blocks.back().Ops.back()));
+}
 
 TEST(RegistrationSEH4Shared, OrdinaryAnalysisOwnsTheInstalledFrame) {
   for (uint32_t Base : {0x400000u, 0x18000000u})

@@ -17,13 +17,17 @@ using registration_abi::chargeCalleeWork;
 
 std::optional<std::vector<RegistrationCalleeFrameContract>>
 RegistrationCallCalleeIndex::contracts(const LowFunc &Function) {
+  const auto FrameCalls =
+      registration_abi::checkedRegistrationFrameCalls(Image, Function, Work);
+  if (!FrameCalls)
+    return std::nullopt;
   std::set<va_t> Targets;
   for (const auto &Block : Function.Blocks)
     for (const auto &Op : Block.Ops) {
       if (!chargeCalleeWork(Work, 1))
         return std::nullopt;
-      if (Op.Opcode == NdOp::CALL && Op.NumInputs == 1 &&
-          Op.Inputs[0].isConst() && Op.Inputs[0].Size == 4)
+      if (!FrameCalls->count(&Op) && Op.Opcode == NdOp::CALL &&
+          Op.NumInputs == 1 && Op.Inputs[0].isConst() && Op.Inputs[0].Size == 4)
         Targets.insert(Op.Inputs[0].Offset);
       if (Targets.size() >
           ::neverd::limits::ir::

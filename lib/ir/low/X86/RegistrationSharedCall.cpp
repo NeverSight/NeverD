@@ -6,6 +6,8 @@
 
 #include "neverd/ir/low/RegistrationSharedCall.h"
 
+#include "RegistrationABIPrivate.h"
+
 #include "neverd/Limits.h"
 #include "neverd/decode/Decoder.h"
 #include "neverd/decode/InstructionRelocations.h"
@@ -264,6 +266,52 @@ getCheckedX86RegistrationCxxEpilogueCall(const BinaryImage &Image,
   if (!Call || !matchesExit(Image, Source, Block, *Call))
     return std::nullopt;
   return Call;
+}
+
+std::optional<std::set<const LowOp *>>
+registration_abi::checkedRegistrationFrameCalls(const BinaryImage &Image,
+                                                const LowFunc &Function,
+                                                size_t &Work) {
+  std::set<const LowOp *> Result;
+  if (!Function.ExceptionMetadata || !Function.ExceptionMetadata->Registration)
+    return Result;
+  if (!chargeCalleeWork(Work, Function.Blocks.size()))
+    return std::nullopt;
+  const auto Cxx = getCheckedX86RegistrationCxxProloguePrefix(Image, Function);
+  const auto SEH = getCheckedX86RegistrationSEH4ProloguePrefix(Image, Function);
+  if (!Cxx && !SEH)
+    return Result;
+  for (const auto &Block : Function.Blocks) {
+    if (!chargeCalleeWork(Work, Block.Ops.size() +
+                                    Block.InstructionBoundaries.size()))
+      return std::nullopt;
+    if (Block.Ops.empty() || Block.InstructionBoundaries.empty())
+      continue;
+    const auto &Op = Block.Ops.back();
+    if (Op.Opcode != NdOp::CALL)
+      continue;
+    if (Block.StartAddr == Function.Entry &&
+        ((Cxx && Op.Addr == Cxx->CallVA) || (SEH && Op.Addr == SEH->CallVA))) {
+      Result.insert(&Op);
+      continue;
+    }
+    // The current prefix, helper bytes and exact source CALL identify the
+    // physical protocol before state solving. Live saves, cookie checks and
+    // chain removal still require the independent state proof above.
+    const auto &EH = *Function.ExceptionMetadata;
+    if (Cxx) {
+      const auto Exit =
+          coff_loader::getCheckedX86CxxEpilogueCall(Image, EH, Op.Addr);
+      if (Exit && matchesExit(Image, Function, Block, *Exit))
+        Result.insert(&Op);
+    } else {
+      const auto Exit =
+          coff_loader::getCheckedX86SEH4EpilogueCall(Image, EH, Op.Addr);
+      if (Exit && matchesExit(Image, Function, Block, *Exit))
+        Result.insert(&Op);
+    }
+  }
+  return Result;
 }
 
 } // namespace neverd
