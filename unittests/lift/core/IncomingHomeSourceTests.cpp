@@ -6,6 +6,7 @@
 /// \file
 /// Execute source projections of explicit incoming stack carriers.
 
+#include "../../../lib/pipeline/PipelineIncomingStack.h"
 #include "SourceCallExecution.h"
 #include "gtest/gtest.h"
 
@@ -17,6 +18,7 @@
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/ir/low/SourceCallOccurrence.h"
+#include "neverd/ir/med/LowToMed.h"
 #include "neverd/ir/med/MedStackAlignment.h"
 #include "neverd/ir/med/MedTypePass.h"
 #include "neverd/loader/BinaryImage.h"
@@ -243,6 +245,31 @@ TEST(IncomingHomeSource, ExplicitStackCarrierReachesBothCPaths) {
 
 TEST(IncomingHomeSource, AutomaticStackCarrierReachesBothCPaths) {
   runHomeSourceMatrix(false);
+}
+
+TEST(IncomingHomeSource, OmittedStackLeafUsesTheOrdinaryCalleeReader) {
+  for (Arch Architecture : {Arch::X64, Arch::AArch64})
+    for (BinaryFormat Format : {BinaryFormat::COFF, BinaryFormat::ELF}) {
+      SCOPED_TRACE(static_cast<unsigned>(Architecture));
+      SCOPED_TRACE(static_cast<unsigned>(Format));
+      const auto Image = homeImage(Architecture, Format);
+      Decoder Dec;
+      ASSERT_TRUE(Dec.init(Image));
+      ASSERT_TRUE(mayReadIncomingStackLeaf(Image, Callee, Dec));
+      CFGBuilder Builder;
+      const std::set<va_t> Entries{Caller, Callee};
+      Builder.setKnownFuncEntries(&Entries);
+      const auto Low = Builder.build(Image, Dec, Callee, "read_home");
+      LowToMedConverter Converter;
+      Converter.setBinaryImage(&Image);
+      auto Med = Converter.convert(Low, Architecture, Format);
+      inferMedTypes(Med, Architecture);
+      ASSERT_TRUE(inferIncomingStackLeaf(Image, Low, Med));
+      PipelineResult Result;
+      const auto Hints = readIncomingStackCallees(Image, Result, {Callee});
+      ASSERT_EQ(Hints.size(), 1u);
+      ASSERT_TRUE(Hints.count(Callee));
+    }
 }
 
 TEST(IncomingHomeSource, SelectedCallerRetainsIncomingStackArguments) {
