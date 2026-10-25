@@ -286,6 +286,47 @@ TEST(IncomingHomeSource, SelectedCallerRetainsIncomingStackArguments) {
   runHomeSourceMatrix(false, true);
 }
 
+TEST(IncomingHomeSource, PartialOutgoingWritesDoNotBecomeCompleteInputs) {
+  for (Arch Architecture : {Arch::X64, Arch::AArch64})
+    for (BinaryFormat Format : {BinaryFormat::COFF, BinaryFormat::ELF})
+      for (bool Selected : {false, true}) {
+        SCOPED_TRACE(static_cast<unsigned>(Architecture));
+        SCOPED_TRACE(static_cast<unsigned>(Format));
+        SCOPED_TRACE(Selected);
+        auto Image = homeImage(Architecture, Format);
+        auto &Text = Image.Segments.front();
+        if (Architecture == Arch::X64) {
+          const std::vector<uint8_t> Body(Text.Data.begin() + (Callee - Caller),
+                                          Text.Data.end());
+          Text.Data = {0x48, 0x83, 0xec, 0x28, 0xc7, 0x04,
+                       0x24, 42,   0,    0,    0, // mov dword [rsp],42
+                       0xe8, 0x30, 0,    0,    0,    0x48,
+                       0x83, 0xc4, 0x28, 0xc3};
+          Text.Data.resize(Callee - Caller, 0xcc);
+          Text.Data.insert(Text.Data.end(), Body.begin(), Body.end());
+        } else
+          Text.Data[15] = 0xb9; // str w0,[sp], instead of str x0,[sp]
+        Text.Size = Text.FileSz = Text.Data.size();
+        llvm::LLVMContext Context;
+        PipelineOptions Options;
+        Options.EmitDumpOutput = false;
+        Options.OnlyFunctionEntries =
+            Selected ? std::set<va_t>{Caller} : std::set<va_t>{Caller, Callee};
+        const auto Result = Pipeline().run(Image, Context, Options);
+        ASSERT_TRUE(Result.Success) << Result.Error;
+        bool Called = false;
+        for (const auto &Function : Result.MedFuncs) {
+          EXPECT_FALSE(Function.SourceTypeHint);
+          for (const auto &Call : Function.CallInfos)
+            if (Call.TargetAddr == Callee) {
+              Called = true;
+              EXPECT_FALSE(Call.SourceCallHint);
+            }
+        }
+        EXPECT_TRUE(Called);
+      }
+}
+
 TEST(IncomingHomeSource, AutomaticInputsRequireCompleteReadOnlyLeaves) {
   const std::vector<std::vector<uint8_t>> Rejected{
       {0x8b, 0x44, 0x24, 8, 0xc3},       // mov eax,[rsp+8]: partial word
