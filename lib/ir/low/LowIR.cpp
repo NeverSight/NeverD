@@ -4,6 +4,7 @@
 
 #include "neverd/ir/X87Constant.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
+#include "neverd/ir/intrinsics/X87Environment.h"
 #include "neverd/ir/low/SourceCallOccurrence.h"
 
 #include "llvm/ADT/StringExtras.h"
@@ -62,6 +63,13 @@ llvm::Error validateMemoryAddressSpace(const LowOp &Op) {
   if (Op.NumInputs == 0 || !Op.Inputs[0].isConst())
     return invalid("intrinsic has no constant intrinsic ID");
   const auto Id = static_cast<Intrinsic>(Op.Inputs[0].Offset);
+  if (isX87EnvironmentIntrinsic(Id) &&
+      !x87EnvironmentShapeIsValid(Id, Op.NumInputs, Op.Output.Size,
+                                  Op.NumInputs > 1 ? Op.Inputs[1].Size : 0,
+                                  Op.NumInputs > 2 ? Op.Inputs[2].Size : 0,
+                                  Op.NumInputs > 2 && Op.Inputs[2].isConst(),
+                                  Op.NumInputs > 2 ? Op.Inputs[2].Offset : 0))
+    return invalid("x87 environment intrinsic has an invalid image extent");
   if (isX87ConstantControlIntrinsic(Id) &&
       !x87ConstantControlShapeIsValid(
           Id, x87ConstantControlLowShape(Op, Arch::X64)))

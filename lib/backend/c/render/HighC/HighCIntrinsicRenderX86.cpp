@@ -25,6 +25,7 @@
 #include "neverd/ir/intrinsics/X86SegmentRegisters.h"
 #include "neverd/ir/intrinsics/X86StringCompare.h"
 #include "neverd/ir/intrinsics/X86VectorLaneReads.h"
+#include "neverd/ir/intrinsics/X87Environment.h"
 #include "neverd/lift/X86Regs.h"
 
 #include "llvm/ADT/STLExtras.h"
@@ -1096,6 +1097,17 @@ std::string
 renderStateSnapshot(const HighExpr &Call,
                     std::function<std::string(const HighExpr &)> ExprFn) {
   const bool TakesMask = stateSnapshotTakesMask(Call.IntrinsicId);
+  bool ShortEnvironment = false;
+  if (isX87EnvironmentIntrinsic(Call.IntrinsicId)) {
+    const auto *Extent =
+        Call.Operands.size() == 2 ? Call.Operands[1].get() : nullptr;
+    if (!Extent || Extent->Kind != ExprKind::Const ||
+        !x87EnvironmentUses16BitImage(Call.IntrinsicId, Extent->ConstVal))
+      llvm::report_fatal_error(
+          "x87 environment intrinsic has an invalid image extent");
+    ShortEnvironment =
+        *x87EnvironmentUses16BitImage(Call.IntrinsicId, Extent->ConstVal);
+  }
   const size_t Required = TakesMask ? 3 : 1;
   if (Call.Operands.size() < Required)
     llvm::report_fatal_error(
@@ -1130,8 +1142,9 @@ renderStateSnapshot(const HighExpr &Call,
   Result += "    uintptr_t neverd_address = (uintptr_t)(" + Address + ");\n";
   if (TakesMask)
     Result += "    uint64_t neverd_mask = " + Mask + ";\n";
-  Result += "    __asm__ volatile(\"" + std::string(Mnemonic) + " " +
-            MemoryOperand +
+  Result += "    __asm__ volatile(\"" +
+            std::string(ShortEnvironment ? "data16 " : "") +
+            std::string(Mnemonic) + " " + MemoryOperand +
             "\"\n        :\n        : [address] \"r\"(neverd_address)";
   if (TakesMask)
     Result += ", \"a\"((uint32_t)neverd_mask), "

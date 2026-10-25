@@ -17,6 +17,7 @@
 
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
+#include "neverd/ir/intrinsics/X87Environment.h"
 #include "neverd/ir/med/IntrinsicShapes.h"
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/ir/med/MedStackAlignment.h"
@@ -65,6 +66,17 @@ bool verifyMedFunc(const MedFunc &Func, const char *PassName) {
         else if (Op.Opcode == NdOp::INTRINSIC && Op.NumInputs > 0 &&
                  Op.Inputs[0].isConst()) {
           const auto Id = static_cast<Intrinsic>(Op.Inputs[0].ConstVal);
+          if (isX87EnvironmentIntrinsic(Id) &&
+              !x87EnvironmentShapeIsValid(
+                  Id, Op.NumInputs, Op.Output.Size,
+                  Op.NumInputs > 1 ? Op.Inputs[1].Size : 0,
+                  Op.NumInputs > 2 ? Op.Inputs[2].Size : 0,
+                  Op.NumInputs > 2 && Op.Inputs[2].isConst(),
+                  Op.NumInputs > 2 && Op.Inputs[2].isConst()
+                      ? Op.Inputs[2].ConstVal
+                      : 0))
+            Err("x87 environment intrinsic has an invalid image extent", Blk.Id,
+                Op.Addr);
           if (isX87ContextIntrinsic(Id) &&
               !x87ContextMedShapeIsValid(Op, Arch::Unknown))
             Err("x87 context intrinsic has an invalid state/operand contract",

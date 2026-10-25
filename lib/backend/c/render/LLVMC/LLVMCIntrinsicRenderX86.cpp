@@ -145,6 +145,30 @@ InlineAsmRender renderX86InlineAsm(Arch TheArch, const std::string &AsmStr,
                                    const std::string &ResultName,
                                    bool ResultLive,
                                    const std::vector<std::string> &Args) {
+  // Preserve the complete memory operand and the selected image format.
+  // Reducing "data16 fnstenv ($0)" to its first word loses both properties.
+  {
+    llvm::StringRef Text(AsmStr);
+    const bool Short = Text.consume_front("data16 ");
+    const auto [Name, Address] = Text.split(' ');
+    for (Intrinsic Id : {Intrinsic::X87Fldenv, Intrinsic::X87Fnstenv,
+                         Intrinsic::X87Frstor, Intrinsic::X87Fnsave}) {
+      if (Name != intrinsicAsmMnemonic(Id))
+        continue;
+      const char *CAddress = Address == "($0)"       ? "(%[address])"
+                             : Address == "%fs:($0)" ? "%%fs:(%[address])"
+                             : Address == "%gs:($0)" ? "%%gs:(%[address])"
+                                                     : nullptr;
+      if (!CAddress || IsStructReturn || ResultLive || Args.size() != 1)
+        throw std::runtime_error(
+            "invalid x87 environment inline assembly contract");
+      return {"__asm__ volatile(\"" + std::string(Short ? "data16 " : "") +
+                  Name.str() + " " + CAddress +
+                  "\" :: [address] \"r\"((uintptr_t)(" + Args[0] +
+                  ")) : \"memory\");\n",
+              false};
+    }
+  }
   if (AsmStr == intrinsicAsmMnemonic(Intrinsic::Int1)) {
     if (IsStructReturn || ResultLive || !Args.empty())
       throw std::runtime_error("unsupported INT1 inline assembly contract");

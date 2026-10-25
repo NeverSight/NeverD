@@ -22,6 +22,7 @@
 #define DEBUG_TYPE "neverd-med-llvm-x86-sideeffect"
 #include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/ir/intrinsics/X86SegmentRegisters.h"
+#include "neverd/ir/intrinsics/X87Environment.h"
 #include "neverd/ir/med/IntrinsicShapes.h"
 
 #include "llvm/ADT/APInt.h"
@@ -333,10 +334,24 @@ void MedLLVMEmitter::emitX86StateSnapshot(const MedOp &Op, Intrinsic IC,
   case I::Xrstors64:
     ID = llvm::Intrinsic::x86_xrstors64;
     break;
-  default:
-    // x87 environment forms have no LLVM intrinsic.
-    emitX86MemPtrAsm(intrinsicAsmMnemonic(IC), Op, Builder);
+  default: {
+    // x87 environment forms have no LLVM intrinsic. Both x86 and x64 use
+    // the full image by default; data16 selects the decoded short image.
+    if (!x87EnvironmentShapeIsValid(IC, Op.NumInputs, Op.Output.Size,
+                                    Op.NumInputs > 1 ? Op.Inputs[1].Size : 0,
+                                    Op.NumInputs > 2 ? Op.Inputs[2].Size : 0,
+                                    Op.NumInputs > 2 && Op.Inputs[2].isConst(),
+                                    Op.NumInputs > 2 && Op.Inputs[2].isConst()
+                                        ? Op.Inputs[2].ConstVal
+                                        : 0))
+      llvm::report_fatal_error(
+          "x87 environment intrinsic has an invalid image extent");
+    const bool Short = *x87EnvironmentUses16BitImage(IC, Op.Inputs[2].ConstVal);
+    const std::string Mnemonic =
+        std::string(Short ? "data16 " : "") + intrinsicAsmMnemonic(IC);
+    emitX86MemPtrAsm(Mnemonic.c_str(), Op, Builder);
     return;
+  }
   }
   if (Op.NumInputs < (TakesMask ? 4 : 2))
     llvm::report_fatal_error(

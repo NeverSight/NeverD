@@ -1,3 +1,10 @@
+add_neverd_unittest(NeverDX87EnvironmentTests
+  core/X87EnvironmentTests.cpp
+  LINK_COMPONENTS BackendC BackendLLVM Decode
+)
+target_compile_definitions(NeverDX87EnvironmentTests PRIVATE
+  NEVERD_TEST_CLANG="${NEVERD_TEST_CLANG_EXECUTABLE}")
+
 add_neverd_unittest(NeverDX87CapabilityTests
   core/X87CapabilitiesTests.cpp
   LINK_COMPONENTS IRLowValidation)

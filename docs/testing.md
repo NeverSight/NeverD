@@ -2199,6 +2199,13 @@ python3 scripts/generate_x87_capabilities.py --neverd build-release/bin/neverd -
 ```
 
 Use your configured Release build directory in place of `build-release`.
+`NeverDX87EnvironmentTests` checks 32/64-bit scan-to-detail transitions,
+effective and cancelled REX prefixes, and both typed and owned-context lifting.
+Its emission matrix checks all four environment/state instructions with flat,
+FS and GS addresses through LLVM, HighC and LLVMC, compiles emitted C, and
+rejects missing or invalid image extents. These checks run on non-x86 hosts;
+they do not establish native x87 memory fault behavior.
+
 `NeverDX87ArithmeticTests` checks direct PC/RC rounding, extended exponents,
 signed zero, masked overflow/underflow numerical results and invalid domains.
 LLVM and Unicorn are independent numerical references; the native x64 test

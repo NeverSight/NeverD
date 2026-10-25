@@ -21,6 +21,7 @@
 #include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/ir/intrinsics/RuntimeRoutineIntrinsics.h"
 #include "neverd/ir/intrinsics/X64Syscall.h"
+#include "neverd/ir/intrinsics/X87Environment.h"
 #include "neverd/ir/low/BlockRegisterConstant.h"
 #include "neverd/ir/low/CallRegisterEffects.h"
 #include "neverd/ir/low/ImportCallee.h"
@@ -610,6 +611,15 @@ MedFunc LowToMedConverter::convert(const LowFunc &Low, Arch TheArch,
         if (Op.NumInputs == 0 || !Op.Inputs[0].isConst())
           llvm::report_fatal_error("intrinsic has no constant intrinsic ID");
         const auto Id = static_cast<Intrinsic>(Op.Inputs[0].Offset);
+        if (isX87EnvironmentIntrinsic(Id) &&
+            !x87EnvironmentShapeIsValid(
+                Id, Op.NumInputs, Op.Output.Size,
+                Op.NumInputs > 1 ? Op.Inputs[1].Size : 0,
+                Op.NumInputs > 2 ? Op.Inputs[2].Size : 0,
+                Op.NumInputs > 2 && Op.Inputs[2].isConst(),
+                Op.NumInputs > 2 ? Op.Inputs[2].Offset : 0))
+          llvm::report_fatal_error(
+              "x87 environment intrinsic has an invalid image extent");
         if (isApxAtomicIntrinsic(Id)) {
           if (!intrinsicApxAtomicShapeIsValid(Id,
                                               apxAtomicLowShape(Op, TheArch)))

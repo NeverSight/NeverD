@@ -14,6 +14,7 @@
 #include "neverd/ir/X87Constant.h"
 #include "neverd/ir/X87Context.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
+#include "neverd/ir/intrinsics/X87Environment.h"
 #include "neverd/lift/X86Lifter.h"
 
 #include "llvm/Support/Debug.h"
@@ -802,8 +803,16 @@ bool X86Lifter::liftFPU(LiftState &S, const cs_insn *Insn, const cs_x86 &X86) {
     default:
       break;
     }
-    if (X86.op_count < 1 || !S.emitMemoryIntrinsic(Id, X86.operands[0]))
+    if (X86.op_count != 1)
       return false;
+    if (isX87EnvironmentIntrinsic(Id)) {
+      const auto &Operand = X86.operands[0];
+      if (!x87EnvironmentUses16BitImage(Id, Operand.size) ||
+          !S.emitMemoryIntrinsic(Id, Operand, {NdVar::cst(Operand.size, 1)}))
+        return false;
+    } else if (!S.emitMemoryIntrinsic(Id, X86.operands[0])) {
+      return false;
+    }
     break;
   }
   case X86_INS_WAIT:

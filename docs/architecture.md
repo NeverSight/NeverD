@@ -4415,6 +4415,14 @@ unknown incoming state and unsupported effects stay explicit in that profile.
 
 For Win64 x64 images, whose C ABI never passes an x87 value, `ir/X87Context.h` owns encoding admission and `CFGBuilderX86Fpu` owns a function-local mutable context. It carries CW, SW, runtime TOP, abridged tags and all eight raw binary80 payloads. Entry and independent roots capture incoming state; ordinary edges publish before a root recaptures. Calls and extended-state save/restore export and refresh the context, including wrappers without local x87 instructions. Entry backedges keep their existing context. LLVM, HighC and LLVMC share this contract; HighC uses named helpers and fixed aligned storage. MMX bridges physical aliases; EMMS empties tags. Concrete execution requires authenticated state and memory, refuses unknown effects, and admits implementation-dependent results only in explicit native reference mode. The static TOP/tag proofs described above remain the projection for x86-32 and for System V x64, whose long double parameters and st0 results stay typed values; `x87ContextOwnsStack` chooses the model per image and `BinaryImage::X87ContextOverride` selects either one explicitly. These x64 regressions do not certify every CPU, instruction, fault priority or source-level floating return ABI.
 
+The typed x87 environment intrinsics retain `[id, effective address, image bytes]`.
+The decoder resolves the 14/28-byte environment or 94/108-byte register image;
+`X87Environment.h` validates that extent across LowIR, MedIR and emission. LLVM,
+HighC and LLVMC preserve the short format with `data16`, including FS/GS memory
+operands. Missing, dynamic or invalid extents fail validation. This preserves
+the image format; it does not add a bridge between typed x87 locals and the
+hardware state used by these snapshot operations.
+
 ## IR representations and routes
 
 `IntrinsicValueEffects` defines positive, shape-validated contracts for operations
