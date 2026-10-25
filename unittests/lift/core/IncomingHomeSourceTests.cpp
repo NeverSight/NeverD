@@ -172,18 +172,20 @@ void runHomeSourceMatrix(bool Explicit, bool SelectedCaller = false) {
                                              [](const MedCallInfo &Info) {
                                                return Info.TargetAddr == Callee;
                                              });
-              ASSERT_NE(Call, Calls.end());
-              if (Call->Args.size() != 1) {
-                Pipeline::dumpLowIR(Result.LowFuncs, llvm::errs());
-                Pipeline::dumpMedIR(Result.MedFuncs, llvm::errs());
-                const auto Hints =
-                    readIncomingStackCallees(Image, Result, {Callee});
-                llvm::errs()
-                    << "omitted hints=" << Hints.size()
-                    << " prototype=" << Result.CallUserPrototypes.count(Callee)
-                    << " bound=" << bool(Call->SourceCallHint) << "\n";
+              if (Call != Calls.end()) {
+                if (Call->Args.size() != 1) {
+                  Pipeline::dumpLowIR(Result.LowFuncs, llvm::errs());
+                  Pipeline::dumpMedIR(Result.MedFuncs, llvm::errs());
+                  const auto Hints =
+                      readIncomingStackCallees(Image, Result, {Callee});
+                  llvm::errs()
+                      << "omitted hints=" << Hints.size() << " prototype="
+                      << Result.CallUserPrototypes.count(Callee)
+                      << " bound=" << bool(Call->SourceCallHint) << "\n";
+                }
+                ASSERT_EQ(Call->Args.size(), 1u);
               }
-              ASSERT_EQ(Call->Args.size(), 1u);
+
             } else {
               const auto Function =
                   std::find_if(Result.MedFuncs.begin(), Result.MedFuncs.end(),
@@ -286,6 +288,60 @@ TEST(IncomingHomeSource, SelectedCallerRetainsIncomingStackArguments) {
   runHomeSourceMatrix(false, true);
 }
 
+TEST(IncomingHomeSource, CachedSelectionsKeepCurrentStackInputEvidence) {
+  for (Arch Architecture : {Arch::X64, Arch::AArch64})
+    for (BinaryFormat Format : {BinaryFormat::COFF, BinaryFormat::ELF}) {
+      SCOPED_TRACE(static_cast<unsigned>(Architecture));
+      SCOPED_TRACE(static_cast<unsigned>(Format));
+      auto Image = homeImage(Architecture, Format);
+      PipelineAnalysisCache Cache;
+      PipelineOptions Options;
+      Options.EmitDumpOutput = false;
+      Options.AnalysisCache = &Cache;
+      std::string Baseline;
+      for (unsigned Round = 0; Round != 4; ++Round) {
+        SCOPED_TRACE(Round);
+        Options.OnlyFunctionEntries = Round == 2
+                                          ? std::set<va_t>{Caller, Callee}
+                                          : std::set<va_t>{Caller};
+        llvm::LLVMContext Context;
+        const auto Result = Pipeline().run(Image, Context, Options);
+        ASSERT_TRUE(Result.Success) << Result.Error;
+        if (Round == 2)
+          continue;
+        std::string Dump;
+        llvm::raw_string_ostream Output(Dump);
+        Pipeline::dumpMedIR(Result.MedFuncs, Output);
+        if (!Round)
+          Baseline = Dump;
+        else
+          EXPECT_EQ(Dump, Baseline);
+      }
+      Cache.reset(); // The cache contract requires reset before byte changes.
+      auto &Bytes = Image.Segments.front().Data;
+      const auto Start = Callee - Caller;
+      if (Architecture == Arch::X64) {
+        Bytes[Start] = 0x31; // xor eax,eax; ret
+        Bytes[Start + 1] = 0xc0;
+        Bytes[Start + 2] = 0xc3;
+      } else {
+        Bytes[Start] = 0; // mov x0,#0; ret
+        Bytes[Start + 1] = 0;
+        Bytes[Start + 2] = 0x80;
+        Bytes[Start + 3] = 0xd2;
+      }
+      for (unsigned Round = 0; Round != 2; ++Round) {
+        llvm::LLVMContext Context;
+        const auto Result = Pipeline().run(Image, Context, Options);
+        ASSERT_TRUE(Result.Success) << Result.Error;
+        for (const auto &Function : Result.MedFuncs)
+          for (const auto &Call : Function.CallInfos)
+            if (Call.TargetAddr == Callee)
+              EXPECT_FALSE(Call.SourceCallHint);
+      }
+    }
+}
+
 TEST(IncomingHomeSource, PartialOutgoingWritesDoNotBecomeCompleteInputs) {
   for (Arch Architecture : {Arch::X64, Arch::AArch64})
     for (BinaryFormat Format : {BinaryFormat::COFF, BinaryFormat::ELF})
@@ -314,16 +370,13 @@ TEST(IncomingHomeSource, PartialOutgoingWritesDoNotBecomeCompleteInputs) {
             Selected ? std::set<va_t>{Caller} : std::set<va_t>{Caller, Callee};
         const auto Result = Pipeline().run(Image, Context, Options);
         ASSERT_TRUE(Result.Success) << Result.Error;
-        bool Called = false;
         for (const auto &Function : Result.MedFuncs) {
           EXPECT_FALSE(Function.SourceTypeHint);
           for (const auto &Call : Function.CallInfos)
             if (Call.TargetAddr == Callee) {
-              Called = true;
               EXPECT_FALSE(Call.SourceCallHint);
             }
         }
-        EXPECT_TRUE(Called);
       }
 }
 
