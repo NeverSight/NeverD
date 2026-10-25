@@ -1919,7 +1919,13 @@ source promotion keeps its separate incomplete-native-EH policy.
 
 `COFFRegistrationEH4Wrapper` owns the retained EH4 forwarding proof. `COFFRegistrationScalarLeaf` checks a bounded forward-only scalar CFG, initialized registers and flags, private MXCSR storage and mapped runtime data. It rejects caller-frame reads, escaping addresses, unknown calls, overlapping instructions and incomplete returns. LLVM emission and independent COFF validation consume the same loader proof; the original wrapper, helper and dynamic data reads remain in place.
 `lib/ir/low/X86/RegistrationEntryABI.cpp` binds those returns to source bytes and
-keeps callback returns separate. The LLVM adapter selects cdecl, stdcall,
+keeps callback returns separate. Its parent entry contract records normal-return
+evidence independently of the entry pop count. A cleanup-only C++ parent with
+no incoming frame access can have a zero-argument C entry when every reached
+ordinary path closes at a freshly authenticated private throw. Unknown edges,
+cycles, local catches, incomplete states and changed source/callee bytes retain
+their refusal. This entry-only proof never supplies a returning callee stack
+or scalar result contract. The LLVM adapter selects cdecl, stdcall,
 thiscall or fastcall and independently validates its exact parameter attributes;
 fastcall requires `inreg` on both register words. HighIR's x86 continuation
 projection keeps shared resume tails outside synchronous protected prefixes and

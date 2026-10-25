@@ -31,6 +31,125 @@
 namespace {
 using namespace neverd;
 
+TEST(RegistrationEntryABI, InputPE32NonReturningCleanupHasOnlyEntryContract) {
+  const auto *Path = std::getenv("NEVERD_REGISTRATION_NORETURN_PE32");
+  if (!Path)
+    GTEST_SKIP() << "requires the non-returning cleanup-only PE32 fixture";
+  auto Image = COFFLoader().load(Path);
+  ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+  const auto Found =
+      llvm::find_if(Image->ExceptionMetadata.Functions, [](const auto &F) {
+        return F.Cxx && F.Cxx->TryBlocks.empty();
+      });
+  ASSERT_NE(Found, Image->ExceptionMetadata.Functions.end());
+  Decoder Decode;
+  ASSERT_TRUE(Decode.init(*Image));
+  const auto Low = CFGBuilder().build(*Image, Decode, Found->CodeRange.Begin,
+                                      "nonreturning_cleanup");
+  ASSERT_TRUE(Low.RegistrationStates);
+  ASSERT_EQ(getCheckedX86RegistrationCxxParentABI(Low, *Image), 0);
+  EXPECT_FALSE(getCheckedX86CalleeStackPop(*Image, Low.Entry));
+  EXPECT_FALSE(getCheckedX86RegistrationCxxCalleeABI(*Image, Low.Entry));
+  auto Changed = Low;
+  Changed.CalleePopBytes = 65532;
+  EXPECT_EQ(getCheckedX86RegistrationCxxParentABI(Changed, *Image), 0);
+  const auto &States = *Low.RegistrationStates;
+  const auto Call = llvm::find_if(
+      States.CallFrameEffects, [](const auto &C) { return C.DoesNotReturn; });
+  ASSERT_NE(Call, States.CallFrameEffects.end());
+  const size_t Index = Call - States.CallFrameEffects.begin();
+  ASSERT_LT(Call->CalleeIndex, States.CalleeContracts.size());
+  for (unsigned Mutation = 0; Mutation != 15; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    Changed = Low;
+    auto &Proof = *Changed.RegistrationStates;
+    auto &Effect = Proof.CallFrameEffects[Index];
+    auto &Contract = Proof.CalleeContracts[Effect.CalleeIndex];
+    switch (Mutation) {
+    case 0:
+      Effect.DoesNotReturn = false;
+      break;
+    case 1:
+      ++Effect.EndAddress;
+      break;
+    case 2:
+      Effect.CalleeIndex = Proof.CalleeContracts.size();
+      break;
+    case 3:
+      ++Effect.Target;
+      break;
+    case 4:
+      Effect.StackPopBytes = 4;
+      break;
+    case 5:
+      Contract.DoesNotReturn = false;
+      break;
+    case 6:
+      Contract.StackPopBytes = 4;
+      break;
+    case 7:
+      Contract.CalleeKind = RegistrationCalleeFrameContract::Kind::Leaf;
+      break;
+    case 8:
+      Contract.CodeRanges.clear();
+      break;
+    case 9:
+      Proof.IncomingFrameAccesses.emplace_back();
+      break;
+    case 10:
+      Proof.IncomingFrameAccessesComplete = false;
+      break;
+    case 11:
+      Proof.CallFrameEffectsComplete = false;
+      break;
+    case 12:
+      Proof.CxxContinuations.emplace_back();
+      break;
+    case 13:
+      Changed.ExceptionMetadata->Cxx->TryBlocks.emplace_back();
+      break;
+    case 14:
+      for (auto &State : Proof.Blocks)
+        if (State.Range.Begin == Low.Entry)
+          State.CallbackOnly = true;
+      break;
+    }
+    EXPECT_FALSE(getCheckedX86RegistrationCxxParentABI(Changed, *Image));
+  }
+  unsigned Branches = 0;
+  for (size_t B = 0; B != Low.Blocks.size(); ++B) {
+    const auto &Block = Low.Blocks[B];
+    if (Block.InstructionBoundaries.back().Control !=
+        LowInstructionControl::Branch)
+      continue;
+    ++Branches;
+    Changed = Low;
+    Changed.Blocks[B].Succs.clear();
+    EXPECT_FALSE(getCheckedX86RegistrationCxxParentABI(Changed, *Image));
+    Changed = Low;
+    Changed.Blocks[B].Succs.push_back(-1);
+    EXPECT_FALSE(getCheckedX86RegistrationCxxParentABI(Changed, *Image));
+    Changed = Low;
+    Changed.Blocks[B].InstructionBoundaries.back().Immediate.reset();
+    EXPECT_FALSE(getCheckedX86RegistrationCxxParentABI(Changed, *Image));
+  }
+  EXPECT_GT(Branches, 0u);
+  // An edited caller opcode or a now-returning helper cannot reuse the saved
+  // DoesNotReturn bit, source boundaries or callee code-range receipt.
+  for (va_t Address : {Call->Address, Call->Target}) {
+    SCOPED_TRACE(Address);
+    auto Edited = *Image;
+    unsigned Replacements = 0;
+    for (auto &Segment : Edited.Segments)
+      if (Address >= Segment.VA && Address - Segment.VA < Segment.Data.size()) {
+        Segment.Data[Address - Segment.VA] = 0xc3;
+        ++Replacements;
+      }
+    ASSERT_EQ(Replacements, 1u);
+    EXPECT_FALSE(getCheckedX86RegistrationCxxParentABI(Low, Edited));
+  }
+}
+
 TEST(RegistrationEntryABI, InputPE32PreservesPhysicalArgumentsAndCleanup) {
 #ifdef LLVM_NEVERD_X86_CXX_CATCH_SUBFIELDS
   const auto *Path = std::getenv("NEVERD_REGISTRATION_ENTRY_PE32");

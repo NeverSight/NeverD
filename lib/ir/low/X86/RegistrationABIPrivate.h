@@ -82,9 +82,16 @@ struct CleanupFramePrefix {
 std::optional<CleanupFramePrefix>
 getCleanupFramePrefix(const BinaryImage &Image, va_t Target, size_t &Work);
 
-std::optional<uint16_t> parentPopBytes(const LowFunc &Function,
-                                       const BinaryImage &Image,
-                                       size_t *CumulativeWork = nullptr);
+/// Entry projection and actual normal-return evidence are separate facts.
+/// A cleanup-only parent with closed throw exits has a zero-argument C entry,
+/// but must never supply a normal-return stack or scalar-result contract.
+struct ParentEntryABI {
+  uint16_t PopBytes = 0;
+  bool HasNormalReturn = false;
+};
+std::optional<ParentEntryABI> parentEntryABI(const LowFunc &Function,
+                                             const BinaryImage &Image,
+                                             size_t *CumulativeWork = nullptr);
 
 std::optional<uint32_t>
 checkedRegistrationImportStackPop(const BinaryImage &Image, va_t Target);

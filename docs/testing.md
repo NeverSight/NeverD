@@ -6609,6 +6609,13 @@ parents must return zero after the caller catches the thrown value and observes
 destructors in order; a changed initial trace must return one at both bases.
 `--wine-prefix PATH` selects an isolated prefix instead of the output directory's
 default prefix. These runtime checks execute only the generated test fixtures.
+Add `--no-return` for the compiled O0/O1 cleanup parent whose ordinary branches
+all reach a private throw. `RegistrationEntryABI.InputPE32NonReturningCleanupHasOnlyEntryContract`
+checks entry admission while returning-stack and C++ callee queries still refuse,
+then rejects edited effects, callees, source opcodes, incomplete states and
+missing or unknown successors. The same native LLVM, COFF and installed-PE
+checks run. Wine also exercises both sides of the source condition in originals
+and generated images at both bases; the alternate trace must return one.
 Add `--shared-prologue` to use the authored shared entry/exit assembly parent
 with the same C++ throwing helper, destructors and caller catch. The caller
 first exercises an ordinary return without cleanup, then enables the throw.

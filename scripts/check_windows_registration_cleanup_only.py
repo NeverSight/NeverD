@@ -60,6 +60,8 @@ def main() -> int:
                          help="use the authored MSVC aligned ESP parent")
     parents.add_argument("--guarded-stack", action="store_true",
                          help="use the authored aligned ESP parent with GS checks")
+    parents.add_argument("--no-return", action="store_true",
+                         help="use a compiled parent whose ordinary paths always throw")
     parser.add_argument("--wine", help="optionally execute the generated fixture in Wine")
     parser.add_argument("--wine-prefix", type=Path,
                         help="isolated Wine prefix (default: OUTPUT/wine-prefix)")
@@ -83,6 +85,7 @@ def main() -> int:
     authored_parent = (args.shared_prologue or args.nested_shared or
                        args.stack_aligned or args.guarded_stack)
     report["nested_shared"] = args.nested_shared
+    report["no_return"] = args.no_return
 
     def run(command: list[str | Path], extra: dict | None = None) -> None:
         command = list(map(str, command))
@@ -113,6 +116,7 @@ def main() -> int:
                  "-fno-omit-frame-pointer", "-" + optimization,
                  *(["-DNEVERD_SHARED_PROLOGUE"] if authored_parent else []),
                  *(["-DNEVERD_NESTED_CXX_PARENT"] if args.nested_shared else []),
+                 *(["-DNEVERD_NORETURN_CXX_PARENT"] if args.no_return else []),
                  "-c", SOURCE, "-o", obj])
             shared_objects = []
             if authored_parent:
@@ -134,11 +138,17 @@ def main() -> int:
                      "WindowsRegistrationCleanupOnly")
             variable = ("NEVERD_REGISTRATION_GUARDED" if args.guarded_stack else
                         "NEVERD_REGISTRATION_CLEANUP_ONLY")
-            run([args.test_binary.resolve(), "--gtest_filter=" + suite + ".*",
+            tests = suite + ".*"
+            extra = {variable + "_PE32": str(image),
+                     variable + "_OUTPUT_PE32": str(product)}
+            if args.no_return:
+                tests += ":RegistrationEntryABI.InputPE32NonReturningCleanupHasOnlyEntryContract"
+                extra["NEVERD_REGISTRATION_NORETURN_PE32"] = str(image)
+            run([args.test_binary.resolve(), "--gtest_filter=" + tests,
                  "--gtest_output=xml:" + str(xml)],
-                {variable + "_PE32": str(image),
-                 variable + "_OUTPUT_PE32": str(product)})
-            if require_test_result(xml) != (10 if args.guarded_stack else 1):
+                extra)
+            expected_tests = 10 if args.guarded_stack else 2 if args.no_return else 1
+            if require_test_result(xml) != expected_tests:
                 raise ValueError("cleanup-only source proof missing or skipped")
             record["product_sha256"] = hashlib.sha256(
                 product.read_bytes()).hexdigest()
@@ -154,6 +164,15 @@ def main() -> int:
                                  pe.raw(pe.entry(b"cleanup_only_trace")), 3)
                 wrong.write_bytes(changed)
                 variants = [(image, 0), (product, 0), (wrong, 1)]
+                if args.no_return:
+                    for source in (image, product):
+                        conditional = source.with_stem(source.stem + "-conditional")
+                        branch_pe = PE32(source.read_bytes())
+                        branch_bytes = bytearray(branch_pe.data)
+                        struct.pack_into("<I", branch_bytes,
+                                         branch_pe.raw(branch_pe.entry(b"cleanup_only_enabled")), 0)
+                        conditional.write_bytes(branch_bytes)
+                        variants.append((conditional, 1))
                 if args.guarded_stack:
                     failed_cookie = case / "failed-cookie.exe"
                     failed_cookie.write_bytes(reject_cookie_success(pe))

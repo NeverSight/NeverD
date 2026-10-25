@@ -6,6 +6,9 @@ ExitProcess(unsigned);
 extern "C" {
 __declspec(dllexport) volatile unsigned cleanup_only_trace = 0;
 __declspec(dllexport) volatile unsigned cleanup_only_enabled = 1;
+#ifdef NEVERD_NORETURN_CXX_PARENT
+__declspec(noreturn)
+#endif
 __declspec(dllexport) __declspec(noinline) void cleanup_only_throw() {
   throw 7;
 }
@@ -37,12 +40,20 @@ extern "C" __declspec(dllexport) __declspec(noinline) int
 cleanup_only_parent();
 #else
 cleanup_only_parent() {
+#ifndef NEVERD_NORETURN_CXX_PARENT
   if (!cleanup_only_enabled)
     return 0;
+#endif
   CleanupOnlyGuard Outer{1};
   CleanupOnlyGuard Inner{2};
+#ifdef NEVERD_NORETURN_CXX_PARENT
+  if (!cleanup_only_enabled)
+    cleanup_only_trace = 3;
+#endif
   cleanup_only_throw();
+#ifndef NEVERD_NORETURN_CXX_PARENT
   return 9;
+#endif
 }
 #endif
 #endif

@@ -293,7 +293,8 @@ RegistrationCallCalleeIndex::cxxCallee(va_t Target) {
   for (va_t Slot : Imports)
     Effects.Reads.emplace(Slot, Slot + 4);
   Function.RegistrationStates = std::move(States);
-  if (parentPopBytes(Function, Image, &Work) != std::optional<uint16_t>(0) ||
+  const auto Entry = parentEntryABI(Function, Image, &Work);
+  if (!Entry || !Entry->HasNormalReturn || Entry->PopBytes ||
       !chargeCalleeWork(Work, Effects.Reads.size() + Effects.Writes.size() +
                                   Code.size() + Imports.size() + Throws.size()))
     return std::nullopt;

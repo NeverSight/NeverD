@@ -538,10 +538,10 @@ std::optional<uint16_t> getCheckedX86RegistrationCxxParentABI(
     CallerPCWrites->clear();
   if (!Function.ExceptionMetadata || !Function.ExceptionMetadata->Cxx)
     return std::nullopt;
-  const auto Pop = registration_abi::parentPopBytes(Function, Image);
-  if (!Pop || !hasRegistrationCallFrameABI(Function, Image, CallerPCWrites))
+  const auto Entry = registration_abi::parentEntryABI(Function, Image);
+  if (!Entry || !hasRegistrationCallFrameABI(Function, Image, CallerPCWrites))
     return std::nullopt;
-  return Pop;
+  return Entry->PopBytes;
 }
 
 std::optional<uint16_t> getCheckedX86RegistrationSEHParentABI(
@@ -551,9 +551,9 @@ std::optional<uint16_t> getCheckedX86RegistrationSEHParentABI(
     CallerPCWrites->clear();
   if (!Function.ExceptionMetadata || Function.ExceptionMetadata->Cxx)
     return std::nullopt;
-  const auto Pop = registration_abi::parentPopBytes(Function, Image);
-  if (!Pop || !hasRegistrationCallFrameABI(Function, Image, CallerPCWrites))
+  const auto Entry = registration_abi::parentEntryABI(Function, Image);
+  if (!Entry || !hasRegistrationCallFrameABI(Function, Image, CallerPCWrites))
     return std::nullopt;
-  return Pop;
+  return Entry->PopBytes;
 }
 } // namespace neverd
