@@ -1247,7 +1247,7 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(
       if (V.isConst()) {
         if (!isGuardLiteral(V))
           return {};
-        if (V.Offset < 64)
+        if (V.Offset < std::numeric_limits<uint64_t>::digits)
           ProposedJoinedBound = std::max(ProposedJoinedBound, V.Offset + 1);
         if (!consumeGuardBuildWork())
           return {};
@@ -1742,7 +1742,7 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(
   }
 
   if (IndexGuards.empty()) {
-    // A loop may check its initial and recurrent index separately. No one
+    // Separate incoming paths may check the index independently. No one
     // dominating comparison then names the complete merged value. Reuse the
     // shared finite-domain proof over that exact use, including every current
     // predecessor and root. The normal candidate replay still authenticates
@@ -1750,8 +1750,37 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(
     // from table capacity or omit an unguarded incoming path.
     // Provisional group graphs keep their separate universal guard proof;
     // their hypothesized edges cannot seed an existential finite domain.
-    if (!GuardedGroupProofContext && SawControllingGuard &&
-        !Info.IndexValueDefinedAtUse &&
+    if (!GuardedGroupProofContext && !Info.IndexValueDefinedAtUse) {
+      // Non-dominating comparisons can propose the finite query envelope.
+      // Even an unrelated literal is only a proposal: the shared proof below
+      // must establish the complete domain at the exact index use.
+      for (const auto &[Address, Instruction] : Insns) {
+        if (!consumeCandidateEvidence())
+          return failIncomplete();
+        for (const LowOp &Op : Instruction.Ops) {
+          if (!consumeCandidateEvidence())
+            return failIncomplete();
+          if (Op.Opcode != NdOp::INT_SUB && Op.Opcode != NdOp::INT_EQUAL &&
+              Op.Opcode != NdOp::INT_NOTEQUAL && Op.Opcode != NdOp::INT_LESS &&
+              Op.Opcode != NdOp::INT_LESSEQUAL &&
+              Op.Opcode != NdOp::INT_SLESS && Op.Opcode != NdOp::INT_SLESSEQUAL)
+            continue;
+          if (Op.NumInputs != 2)
+            return failIncomplete();
+          for (unsigned I = 0; I < Op.NumInputs; ++I) {
+            if (!consumeCandidateEvidence())
+              return failIncomplete();
+            const NdVar &Value = Op.Inputs[I];
+            if (isGuardLiteral(Value) && Value.Size != 0 &&
+                Value.Size <= sizeof(uint64_t) &&
+                Value.Offset < std::numeric_limits<uint64_t>::digits)
+              ProposedJoinedBound =
+                  std::max(ProposedJoinedBound, Value.Offset + 1);
+          }
+        }
+      }
+    }
+    if (!GuardedGroupProofContext && !Info.IndexValueDefinedAtUse &&
         ProposedJoinedBound >= limits::kMinJumpTableEntries) {
       if (!consumeGuardBuildWork(12))
         return failIncomplete();
@@ -1782,7 +1811,7 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(
         }
       }
       if (Complete.size() != 1 || !Complete[0])
-        SawIncompleteProofQuery = true;
+        return failIncomplete();
     }
     // Dropping an unrelated guard only enlarges the candidate domain and is
     // conservative when another complete guard was materialized.  With no

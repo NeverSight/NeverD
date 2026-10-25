@@ -333,6 +333,15 @@ bool authenticatedSourceAnchorExemptionMatches(
                                               Run);
 }
 
+bool canBoundCodePtrRun(va_t Target, va_t BaseAddr, uint64_t EntryStride,
+                        uint32_t Run) {
+  if (!EntryStride || !Run || Target <= BaseAddr)
+    return false;
+  const uint64_t Delta = Target - BaseAddr;
+  return Delta / EntryStride < Run ||
+         (Delta / EntryStride == Run && Delta % EntryStride == 0);
+}
+
 uint32_t boundCodePtrRunByNextAnchor(
     const BinaryImage &Img, va_t BaseAddr, uint64_t EntryStride, uint32_t Run,
     const std::set<va_t> &DecodedAnchors,
@@ -344,6 +353,9 @@ uint32_t boundCodePtrRunByNextAnchor(
   std::set<va_t> Anchors = Img.RelCodeTableAnchors;
   Anchors.insert(DecodedAnchors.begin(), DecodedAnchors.end());
   for (const auto &[FieldVA, Field] : Img.DataAddressRelocOperands) {
+    if (Field.PCRelativeFromInstructionEnd ||
+        !canBoundCodePtrRun(Field.TargetVA, BaseAddr, EntryStride, Run))
+      continue;
     const auto Authenticated = AuthenticatedSources.find(FieldVA);
     const bool IsAuthenticated =
         Authenticated != AuthenticatedSources.end() &&
@@ -386,8 +398,8 @@ bool codePtrRelocRunHasExactBoundary(const BinaryImage &Img, va_t BaseAddr,
   if (DecodedAnchors.count(End))
     return true;
   for (const auto &[FieldVA, Field] : Img.DataAddressRelocOperands)
-    if (!Field.PCRelativeFromInstructionEnd &&
-        Img.hasExecutableCodeOwnerAt(FieldVA) && Field.TargetVA == End)
+    if (!Field.PCRelativeFromInstructionEnd && Field.TargetVA == End &&
+        Img.hasExecutableCodeOwnerAt(FieldVA))
       return true;
   return false;
 }

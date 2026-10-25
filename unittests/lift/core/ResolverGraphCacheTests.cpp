@@ -449,6 +449,80 @@ struct ResolverGraphCacheTestAccess {
     return Q;
   }
 
+  static Query seedJoinedLaneGuard(CFGBuilder &B, const BinaryImage &Image,
+                                   unsigned Variant = 0) {
+    B.CurrentImg = &Image;
+    B.CurrentFuncEntry = 0x100;
+    B.JumpTableProofContextComplete = true;
+    B.PersistentCFGRoots = {0x100};
+    B.BlockStarts = {0x100, 0x101, 0x200, 0x201, 0x300, 0x301, 0x400};
+    if (Variant == 4)
+      B.PersistentCFGRoots.insert(0x400);
+    const uint16_t PointerSize = Image.getPointerSize();
+    const NdVar Index = NdVar::reg(0, 4);
+    const NdVar WideIndex = NdVar::reg(0, PointerSize);
+    auto Emit = [&](va_t Address, NdOp Opcode, NdVar Output,
+                    std::initializer_list<NdVar> Inputs) {
+      auto &R = B.Insns[Address];
+      R.Addr = Address;
+      R.Size = 1;
+      LowOp Op;
+      Op.Addr = Address;
+      Op.Seq = static_cast<int>(R.Ops.size());
+      Op.Opcode = Opcode;
+      Op.Output = Output;
+      for (NdVar Input : Inputs)
+        Op.addInput(Input);
+      R.Ops.push_back(Op);
+    };
+    auto Branch = [&](va_t Address, va_t Target,
+                      std::optional<NdVar> Condition = std::nullopt) {
+      if (Condition)
+        Emit(Address, NdOp::COND_BR, {},
+             {NdVar::cst(Target, PointerSize), *Condition});
+      else
+        Emit(Address, NdOp::BRANCH, {}, {NdVar::cst(Target, PointerSize)});
+      auto &R = B.Insns.at(Address);
+      R.IsBranch = true;
+      R.IsCond = Condition.has_value();
+      R.BranchTarget = Target;
+    };
+    if (Variant == 1)
+      Emit(0x100, NdOp::COPY, WideIndex, {NdVar::reg(8, PointerSize)});
+    else {
+      Emit(0x100, NdOp::COPY, Index, {NdVar::reg(8, 4)});
+      if (PointerSize > 4)
+        Emit(0x100, NdOp::INT_ZEXT, WideIndex, {Index});
+    }
+    Emit(0x100, NdOp::INT_EQUAL, NdVar::tmp(0x100, 1),
+         {Index, NdVar::cst(1, 4)});
+    Branch(0x100, 0x200, NdVar::tmp(0x100, 1));
+    Branch(0x101, 0x300);
+    Emit(0x200, NdOp::INT_EQUAL, NdVar::tmp(0x200, 1),
+         {NdVar::reg(16, 4), NdVar::cst(0, 4)});
+    Branch(0x200, 0x400, NdVar::tmp(0x200, 1));
+    Emit(0x201, NdOp::COPY, WideIndex,
+         {NdVar::cst(Variant == 2 ? uint64_t{1} << 32 : 0, PointerSize)});
+    Branch(0x201, 0x300);
+    Emit(0x300, Variant == 5 ? NdOp::INT_SLESSEQUAL : NdOp::INT_LESSEQUAL,
+         NdVar::tmp(0x300, 1), {Index, NdVar::cst(2, 4)});
+    Branch(0x300, 0x400, NdVar::tmp(0x300, 1));
+    Emit(0x301, NdOp::RETURN, {}, {NdVar::cst(99, 4)});
+    B.Insns.at(0x301).IsRet = true;
+    if (Variant == 3)
+      Emit(0x400, NdOp::COPY, NdVar::reg(0, 1), {NdVar::cst(255, 1)});
+    const int UseSeq = static_cast<int>(B.Insns[0x400].Ops.size());
+    Emit(0x400, NdOp::INDIR_BR, {}, {WideIndex});
+    B.Insns.at(0x400).IsBranch = B.Insns.at(0x400).IsIndirect = true;
+    Query Q;
+    Q.Candidate = WideIndex;
+    Q.UseAddr = 0x400;
+    Q.UseSeq = UseSeq;
+    Q.Relation = Relation::JoinedUnsignedFeasibleSet;
+    Q.UnsignedUpperBound = 4;
+    return Q;
+  }
+
   static Query seedFrameModeChain(CFGBuilder &B, const BinaryImage &Image,
                                   unsigned Length) {
     Query Q = seedPredecessorLane(B, Image, Length);
@@ -2051,6 +2125,71 @@ TEST(ResolverGuardPredicates, CompoundGuardsPreserveEveryJoinedInput) {
     EXPECT_EQ(Modes.Values, (std::vector<bool>{false, true, false, true}));
     EXPECT_EQ(Modes.Masks, (std::vector<uint64_t>{0, 7, 0, 7}));
     EXPECT_EQ(Access::batch(B, Mixed, 1000000, 0, 0, true, true, true), Modes);
+  }
+}
+
+TEST(ResolverGuardPredicates,
+     NarrowJoinedGuardsRequireZeroHighBytesOnEveryArm) {
+  for (Arch Target : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64})
+    for (BinaryFormat Format :
+         {BinaryFormat::ELF, BinaryFormat::COFF, BinaryFormat::MachO}) {
+      auto Image = image();
+      Image.Arch = Target;
+      Image.Format = Format;
+      Image.Bits = Target == Arch::X64 || Target == Arch::AArch64
+                       ? Bitness::Bits64
+                       : Bitness::Bits32;
+      SCOPED_TRACE(static_cast<unsigned>(Target));
+      SCOPED_TRACE(static_cast<unsigned>(Format));
+      for (unsigned Variant : {0u, 1u, 2u, 3u, 4u, 5u}) {
+        if ((Variant == 1 || Variant == 2) && Image.getPointerSize() == 4)
+          continue;
+        SCOPED_TRACE(Variant);
+        CFGBuilder B;
+        const auto Q = Access::seedJoinedLaneGuard(B, Image, Variant);
+        const auto Answer =
+            Access::batch(B, {Q}, 1000000, 0, 0, true, true, true);
+        EXPECT_EQ(Answer.Values, (std::vector<bool>{Variant == 0}));
+        EXPECT_EQ(Answer.Masks,
+                  (std::vector<uint64_t>{Variant == 0 ? 7u : 0u}));
+        if (Variant == 0)
+          EXPECT_TRUE(Answer.Complete);
+        EXPECT_EQ(Access::batch(B, {Q}, 1000000, 0, 0, true, true, true),
+                  Answer);
+        Access::clear(B);
+        EXPECT_EQ(Access::batch(B, {Q}, 1000000, 0, 0, true, true, true),
+                  Answer);
+      }
+    }
+}
+
+TEST(ResolverGuardPredicates, JoinedLaneEvidenceAgreesColdAndWarm) {
+  auto Image = image();
+  Image.Arch = Arch::X64;
+  Image.Bits = Bitness::Bits64;
+  CFGBuilder Warm;
+  const auto Q = Access::seedJoinedLaneGuard(Warm, Image);
+  const auto Full = Access::batch(Warm, {Q}, 1000000, 0, 0, true, true, true);
+  ASSERT_TRUE(Full.Complete);
+  ASSERT_EQ(Full.Values, (std::vector<bool>{true}));
+  const size_t Work = 1000000 - Full.Remaining;
+  ASSERT_GT(Work, 0u);
+  for (size_t Limit : {size_t{0}, size_t{1}, Work / 2, Work - 1, Work}) {
+    SCOPED_TRACE(Limit);
+    CFGBuilder Cold;
+    Access::seedJoinedLaneGuard(Cold, Image);
+    const auto Answer = Access::batch(Cold, {Q}, Limit, 0, 0, true, true, true);
+    EXPECT_EQ(Access::batch(Warm, {Q}, Limit, 0, 0, true, true, true), Answer);
+    EXPECT_EQ(Answer.Complete, Limit == Work);
+    if (Limit == Work) {
+      EXPECT_EQ(Answer.Values, (std::vector<bool>{true}));
+      EXPECT_EQ(Answer.Masks, (std::vector<uint64_t>{7}));
+    } else {
+      EXPECT_TRUE(std::none_of(Answer.Values.begin(), Answer.Values.end(),
+                               [](bool Value) { return Value; }));
+      EXPECT_TRUE(std::all_of(Answer.Masks.begin(), Answer.Masks.end(),
+                              [](uint64_t Mask) { return Mask == 0; }));
+    }
   }
 }
 

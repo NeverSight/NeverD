@@ -3355,11 +3355,22 @@ proof before the batched extension-range fallback is considered.
 x64, ARM32 and AArch64, including changed lanes, independent roots, unrelated
 flags, wide indices and exhausted evidence. Query-mode changes must retain
 separate caches, and a logical union cannot claim CFG predecessor ownership.
-`JumpTableJoinedGuard.*` checks separate inclusive/exclusive loop guards in
-ELF, COFF and Mach-O. Its ELF source
-roundtrips execute HighC and both LLVMC modes at O0/O2 against an independent
-selection oracle. Small joined domains reuse the finite-coordinate proof;
-unchecked paths and sparse or incomplete domains cannot grant a dense table.
+Joined narrow-lane guards require zero high bytes on every incoming arm before
+constraining a wider index. Unknown or nonzero high bytes, changed lanes,
+independent roots, signed-only guards and exhausted work retain refusal;
+cold and warm results agree across the architecture/format matrix.
+`JumpTableJoinedGuard.*` checks separate inclusive/exclusive loop guards and
+joined equality/range paths without a dominating index guard in ELF, COFF and
+Mach-O, including i386 absolute tables in ELF and COFF. Its ELF source
+roundtrips execute HighC and both LLVMC modes at O0/O2 with UB traps against
+independent selection oracles. Small joined domains reuse the finite-coordinate
+proof; unchecked paths, changed index lanes, signed-only guards, unrelated
+literals, nonzero high-byte arms and sparse or incomplete domains cannot grant
+a dense table.
+Unrelated relocation fields and imports must leave enough evidence to prove a
+small absolute table. The instruction-boundary suite separately retains
+misaligned-anchor refusal, exact-end ownership, source exemptions and
+near-VA-limit arithmetic when filtering those owner queries.
 
 `GuardExpression.*` independently enumerates every byte offset and boundary
 for signed/unsigned comparisons in both operand orders and affine directions.

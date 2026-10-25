@@ -5850,6 +5850,52 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
     return false;
   };
 
+  // A merged wide register can contain only zero-extended narrow values even
+  // though extension distributes over merges and constraints. Check every
+  // arm before relating a narrow comparison to that complete wide value.
+  auto hasZeroUpperBytes = [&](const ResolverValue &Value, uint16_t LowSize) {
+    std::map<const ResolverValueExpr *, bool> Memo;
+    std::function<bool(const ResolverValue &, unsigned)> Visit =
+        [&](const ResolverValue &Node, unsigned Depth) -> bool {
+      if (Depth > MaxResolverDepth) {
+        markResolverDepthIncomplete();
+        return false;
+      }
+      if (!consumeEvidence(8) || !Node || Node->Size == 0 ||
+          Node->Size > sizeof(uint64_t))
+        return false;
+      if (Node->Size <= LowSize)
+        return true;
+      if (!consumeEvidence(orderedSetLookupWork(Memo.size())))
+        return false;
+      if (const auto It = Memo.find(Node.get()); It != Memo.end())
+        return It->second;
+      bool Result = false;
+      if (Node->K == ResolverValueExpr::Kind::Zero)
+        Result = true;
+      else if (Node->K == ResolverValueExpr::Kind::Constant)
+        Result = (Node->Constant & ~resolverWidthMask(LowSize)) == 0;
+      else if ((Node->K == ResolverValueExpr::Kind::Constraint ||
+                Node->K == ResolverValueExpr::Kind::ZeroExtend) &&
+               Node->Input && Node->Input->Size <= Node->Size)
+        Result = Visit(Node->Input, Depth + 1);
+      else if (Node->K == ResolverValueExpr::Kind::Merge &&
+               !Node->Inputs.empty()) {
+        Result = true;
+        for (const ResolverValue &Arm : Node->Inputs)
+          if (!Arm || Arm->Size != Node->Size || !Visit(Arm, Depth + 1)) {
+            Result = false;
+            break;
+          }
+      }
+      if (!consumeEvidence(orderedSetLookupWork(Memo.size()) + 5))
+        return false;
+      Memo.emplace(Node.get(), Result);
+      return Result;
+    };
+    return Visit(Value, 0);
+  };
+
   // Exact equality and unsigned-order predicates filter the lane they compare.
   // Keep that relation on CFG edges and SELECT arms: a loop's checked index
   // must not regain out-of-range values through its predecessor merge.
@@ -5982,6 +6028,20 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
       // extension. Constrain that exact lane, then re-extend it for the use.
       MatchedValue = Value.Value->Input;
       Reextend = true;
+    } else if (JoinedGuard && Compared->Size < Value.Value->Size &&
+               Constant->Size == Compared->Size) {
+      if (!hasZeroUpperBytes(Value.Value, Compared->Size))
+        return Value;
+      const ResolverValue Low =
+          resolverSlice(Value.Value, 0, Compared->Size, consumeEvidence,
+                        &QueryResolverAnalysisIncomplete);
+      if (!Low)
+        return resolverInvalid();
+      if (!sameResolverValueForEdge(Compared, Low, 0))
+        return Value;
+      // The low lane identifies the compared value, and every incoming arm
+      // has zero high bytes. Apply the unsigned constraint to the original
+      // wide graph so none of its existing path predicates are discarded.
     } else {
       return Value;
     }

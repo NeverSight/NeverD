@@ -3400,6 +3400,21 @@ the exact operand use before guard materialization accepts it. Lexical
 proximity supplies no memory, frame or constant-value authority.
 Direct and reloaded guard constants reject address provenance and address
 owners: a relocation's small source value is not a numeric bound after relinking.
+When no single index guard dominates the dispatch, comparison literals across
+the current graph may propose a small finite query envelope. Only the shared
+all-path value proof can establish the exact use's complete dense domain;
+unrelated literals, physical table capacity and provisional group edges grant
+no selector bound. Incomplete queries retain an unsafe unresolved branch.
+For a narrow comparison over a merged wide index, the value resolver first
+proves every incoming value has zero high bytes, then matches the exact low
+lane. It applies the constraint to the original wide graph, retaining all
+earlier path predicates; a matching low lane alone never bounds unknown high
+bits.
+Absolute relocation boundary scans reject numerically irrelevant targets
+before querying executable ownership. Their shared accounting charges every
+field scan and the full owner-query work for potentially relevant fields.
+Misaligned interior anchors and exact-end anchors remain relevant, and the
+existing storage-owner checks and source exemptions still decide acceptance.
 Within one block, the value resolver can forward an equal-width literal STORE
 to a LOAD through the same unchanged full guest pointer, including complete
 address copies and zero-extension into the internal VA width. The first
