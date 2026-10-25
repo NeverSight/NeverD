@@ -1911,6 +1911,12 @@ Ordinary analysis IR retains its original value graph.
 
 `OptimizationGuards` supplements LLVM’s `optnone` instrumentation: optional module and call-graph passes are skipped when the module defines a protected function, because those passes can rewrite its CFG or replace callback arguments with poison. Required adaptors and ordinary function optimizations still run. Registration source projection retains prologue-save memory occurrences until native reconstruction can bind them.
 
+`OptimizationResult::Diagnostic` retains the exact verifier or exception-contract
+refusal while the original module remains unchanged. Pipeline, source-recovery
+and SDK adapters share `optimizationStopMessage`, preserving the stable stop
+category together with the failing function and contract detail. Analysis-only
+source promotion keeps its separate incomplete-native-EH policy.
+
 `COFFRegistrationEH4Wrapper` owns the retained EH4 forwarding proof. `COFFRegistrationScalarLeaf` checks a bounded forward-only scalar CFG, initialized registers and flags, private MXCSR storage and mapped runtime data. It rejects caller-frame reads, escaping addresses, unknown calls, overlapping instructions and incomplete returns. LLVM emission and independent COFF validation consume the same loader proof; the original wrapper, helper and dynamic data reads remain in place.
 `lib/ir/low/X86/RegistrationEntryABI.cpp` binds those returns to source bytes and
 keeps callback returns separate. The LLVM adapter selects cdecl, stdcall,

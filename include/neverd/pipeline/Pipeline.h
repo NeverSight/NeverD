@@ -396,7 +396,13 @@ struct FunctionOptimizationResult {
 /// reached by any definition, and Stop uses the documented severity order.
 struct OptimizationResult : FunctionOptimizationResult {
   uint64_t FunctionsVisited = 0;
+  /// The verifier or exception-contract refusal that stopped this transaction.
+  /// A failed candidate leaves the original module unchanged.
+  std::string Diagnostic;
 };
+
+/// Stable stop name followed by the available rejection detail.
+std::string optimizationStopMessage(const OptimizationResult &Result);
 
 class Pipeline {
 public:

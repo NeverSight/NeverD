@@ -801,7 +801,8 @@ llvm::Error localizeProfitableBanks(llvm::Module &M, StateSourceRecovery &R) {
   auto Optimized = Pipeline::optimizeModule(M, Options);
   if (Optimized.Stop == OptimizationStopReason::InputInvalid ||
       Optimized.Stop == OptimizationStopReason::VerificationFailed)
-    return invalid("local bank optimization failed verification");
+    return invalid("local bank optimization failed: " +
+                   optimizationStopMessage(Optimized));
   auto Cost = [](const llvm::Function &F) {
     unsigned Value = 0;
     for (const auto &I : llvm::instructions(F)) {
@@ -1198,7 +1199,8 @@ llvm::Error finishStateSourceRecovery(llvm::Module &M, StateSourceRecovery &R) {
     auto Result = Pipeline::optimizeModule(M, Policy);
     if (Result.Stop == OptimizationStopReason::InputInvalid ||
         Result.Stop == OptimizationStopReason::VerificationFailed)
-      return invalid("argument source optimization failed");
+      return invalid("argument source optimization failed: " +
+                     optimizationStopMessage(Result));
   }
   for (unsigned Round = 0;
        Round < ::neverd::limits::pipeline::
@@ -1211,7 +1213,8 @@ llvm::Error finishStateSourceRecovery(llvm::Module &M, StateSourceRecovery &R) {
     auto Result = Pipeline::optimizeModule(M, Policy);
     if (Result.Stop == OptimizationStopReason::InputInvalid ||
         Result.Stop == OptimizationStopReason::VerificationFailed)
-      return invalid("bank slice optimization failed");
+      return invalid("bank slice optimization failed: " +
+                     optimizationStopMessage(Result));
   }
   for (size_t Index = 0; Index < R.Probes.size(); ++Index) {
     if (R.Probes[Index].empty())

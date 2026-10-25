@@ -323,7 +323,8 @@ recoverBytecode(llvm::ArrayRef<uint8_t> Code, llvm::StringRef RequestJSON,
       auto Normalized = Pipeline::optimizeModule(*Module, Normalization);
       if (Normalized.Stop == OptimizationStopReason::InputInvalid ||
           Normalized.Stop == OptimizationStopReason::VerificationFailed)
-        return invalid("state source normalization failed");
+        return invalid(llvm::Twine("state source normalization failed: ") +
+                       optimizationStopMessage(Normalized));
       auto Prepared = prepareStateSourceRecovery(*Module, *StateContract);
       if (!Prepared)
         return Prepared.takeError();
@@ -342,7 +343,7 @@ recoverBytecode(llvm::ArrayRef<uint8_t> Code, llvm::StringRef RequestJSON,
       if (Optimized.Stop == OptimizationStopReason::InputInvalid ||
           Optimized.Stop == OptimizationStopReason::VerificationFailed)
         return invalid(llvm::Twine("LLVM source optimization failed: ") +
-                       optimizationStopReasonName(Optimized.Stop));
+                       optimizationStopMessage(Optimized));
       if (StateRecovery) {
         if (auto Error = finishStateSourceRecovery(*Module, *StateRecovery))
           return Error;
@@ -351,7 +352,9 @@ recoverBytecode(llvm::ArrayRef<uint8_t> Code, llvm::StringRef RequestJSON,
         auto Refined = Pipeline::optimizeModule(*Module, Policy);
         if (Refined.Stop == OptimizationStopReason::InputInvalid ||
             Refined.Stop == OptimizationStopReason::VerificationFailed)
-          return invalid("contracted source optimization failed");
+          return invalid(
+              llvm::Twine("contracted source optimization failed: ") +
+              optimizationStopMessage(Refined));
         Result.ReconstructedCalls = StateRecovery->RewrittenCalls;
         Result.GuardedContractCalls = StateRecovery->GuardedCalls;
         Result.UnresolvedContractCalls = StateRecovery->UnresolvedCalls;

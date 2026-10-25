@@ -4,6 +4,12 @@
 
 # Testing NeverD
 
+`NeverDSymSimplifyGuardTests` checks that invalid LLVM, invalid options and
+incomplete exception contracts retain their diagnostics without modifying the
+input module. `NeverDSemanticCAPI.LLVMContractFailureRetainsFunctionAndReason`
+checks the same function and refusal detail through both public C and JSON APIs.
+Run `NeverDPipelineOutcomeTests` for whole-module and sharded failure propagation.
+
 `DriverKernelSEH.V2*`, `COFFExceptionParser.*V2*` and `DriverSEHV2Execution.*` cover normalized V2 tables, partial restoration, malformed metadata and original linked driver exceptions. Run `NeverDNativeDriverTests`, `NeverDDriverEmulationTests`, `NeverDWindowsProcessTests` and `NeverDCOFFExceptionV2Tests`; unavailable host backends remain explicit skips.
 
 `DriverProcessPebDeclaration.*`, `DriverProcessPebExecution.*`, `KernelProcessPeb.*` and `KernelProcessPebInitialization.*` cover strict transport, explicit zero/full-width inputs, per-process identity, repeated native calls, forged tokens, missing declarations, IRQL and retained recovery dependencies. Run the native driver, driver emulation and kernel snapshot suites; unavailable backends remain explicit skips.

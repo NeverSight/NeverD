@@ -74,6 +74,13 @@ const char *optimizationStopReasonName(OptimizationStopReason Stop) {
   llvm_unreachable("unhandled optimization stop reason");
 }
 
+std::string optimizationStopMessage(const OptimizationResult &Result) {
+  std::string Message = optimizationStopReasonName(Result.Stop);
+  if (!Result.Diagnostic.empty())
+    Message += ": " + Result.Diagnostic;
+  return Message;
+}
+
 FunctionOptimizationResult driveSemanticConvergence(unsigned MaxRounds,
                                                     RunRoundFn RunRound,
                                                     SnapshotFn Snapshot) {
