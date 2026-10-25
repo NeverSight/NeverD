@@ -48,6 +48,14 @@ std::optional<coff_loader::X86CxxPrologueCall>
 getCheckedX86RegistrationCxxPrologueCall(const BinaryImage &Image,
                                          const LowFunc &Source);
 
+/// Recheck one block-final physical exit without a source chain receipt.
+/// This supplies only physical instruction effects. Saved words, return PC,
+/// cookies, memory and native registration lifetime require separate proofs.
+std::optional<coff_loader::X86CxxEpilogueCall>
+getCheckedX86RegistrationCxxEpilogueSuffix(const BinaryImage &Image,
+                                           const LowFunc &Source,
+                                           const LowBlock &Block);
+
 /// Bind one block-final shared exit to its exact current call and removal
 /// receipt. Its entry prologue needs the separate check above. A guarded
 /// result still requires preserving its checker and failure path.

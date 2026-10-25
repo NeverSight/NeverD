@@ -16,6 +16,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "../../../lib/ir/low/X86/RegistrationABIPrivate.h"
+#include "../../../lib/ir/low/X86/RegistrationOrdinaryGraph.h"
 #include "../../../lib/ir/low/X86/RegistrationStateSolver.h"
 #include "gtest/gtest.h"
 
@@ -3408,6 +3409,183 @@ makeCxxSharedEpilogueImage(bool Wide, unsigned Variant, uint32_t Allocation,
   Image.ExceptionMetadata = {};
   coff_loader::parseX86RegistrationExceptions(Image);
   return {std::move(Image), Call};
+}
+
+TEST(RegistrationTryLevel, CxxOrdinaryReturningStackGrantsNoNativeFrame) {
+  for (unsigned Mutation = 0; Mutation != 8; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    auto [Image, Call] = makeCxxSharedEpilogueImage(false, 1, 32, true);
+    auto &Bytes = Image.Segments.front().Data;
+    const auto Begin = Call - kText - 19;
+    if (Mutation >= 1 && Mutation <= 3) {
+      std::fill(Bytes.begin() + Begin + 8, Bytes.begin() + Call - kText, 0x90);
+      Bytes[Begin + 8] = 0x89;
+      Bytes[Begin + 9] =
+          0x01; // An unbounded object store, not a private frame.
+      if (Mutation == 2) {
+        Bytes[Begin + 10] = 0x31;
+        Bytes[Begin + 11] = 0xed; // Destroy the epilogue's EBP coordinate.
+      }
+      if (Mutation == 3)
+        Bytes[Begin + 10] = 0x50; // The shared exit still restores this PUSH.
+    }
+    if (Mutation == 4)
+      std::fill(Bytes.begin() + Call - kText, Bytes.begin() + Call - kText + 5,
+                0x90);
+    if (Mutation == 5)
+      Bytes[0x180 + 16] = 0xec; // Change MOV ESP,EBP to MOV EBP,ESP.
+    if (Mutation == 6)
+      Bytes[Call - kText + 5] = 0xcc;
+    if (Mutation == 7) {
+      Bytes[Begin + 8] = 0xd9;
+      Bytes[Begin + 9] = 0xee; // FLDZ keeps the integer frame unchanged.
+    }
+    Image.ExceptionMetadata = {};
+    coff_loader::parseX86RegistrationExceptions(Image);
+    const auto Function = liftEntry(Image, kText + 0x20);
+    ASSERT_TRUE(Function.hasCompleteLiftCoverage());
+    ASSERT_TRUE(Function.RegistrationStates);
+    const bool Stack =
+        Mutation == 0 || Mutation == 1 || Mutation == 3 || Mutation == 7;
+    EXPECT_EQ(getCheckedX86CalleeStackPop(Image, Function.Entry),
+              Stack ? std::optional<uint32_t>(8) : std::nullopt);
+    if (Mutation >= 1 && Mutation <= 3) {
+      EXPECT_FALSE(Function.RegistrationStates->RegistrationLifetimeComplete);
+      EXPECT_FALSE(Function.RegistrationStates->ChainOperationsComplete);
+      EXPECT_FALSE(getCheckedX86RegistrationCxxParentABI(Function, Image));
+      for (const auto &Block : Function.Blocks)
+        EXPECT_FALSE(
+            getCheckedX86RegistrationCxxEpilogueCall(Image, Function, Block));
+    }
+  }
+}
+
+TEST(RegistrationTryLevel, CxxOrdinaryGraphCannotSupplyNativeReceipts) {
+  auto [Image, Call] = makeCxxSharedEpilogueImage(false, 1, 32, true);
+  Decoder Decode;
+  ASSERT_TRUE(Decode.init(Image));
+  size_t Work = 0;
+  RegistrationCallCalleeIndex Index(Image, &Work);
+  for (unsigned Repeat = 0; Repeat != 2; ++Repeat) {
+    const auto Ordinary = registration_abi::buildOrdinaryCxxFrameGraph(
+        Image, Decode, kText + 0x20, Index);
+    ASSERT_TRUE(Ordinary.hasCompleteLiftCoverage());
+    EXPECT_FALSE(Ordinary.RegistrationStates);
+    EXPECT_TRUE(getCheckedX86RegistrationCxxProloguePrefix(Image, Ordinary));
+    EXPECT_FALSE(getCheckedX86RegistrationCxxPrologueCall(Image, Ordinary));
+    EXPECT_FALSE(getCheckedX86RegistrationCxxParentABI(Ordinary, Image));
+    unsigned Exits = 0;
+    for (const auto &Block : Ordinary.Blocks) {
+      EXPECT_TRUE(Block.ExceptionalSuccs.empty());
+      EXPECT_TRUE(Block.ExceptionalPreds.empty());
+      Exits += bool(
+          getCheckedX86RegistrationCxxEpilogueSuffix(Image, Ordinary, Block));
+      EXPECT_FALSE(
+          getCheckedX86RegistrationCxxEpilogueCall(Image, Ordinary, Block));
+    }
+    EXPECT_EQ(Exits, 1u);
+    // The scope is gone before another builder visits this same entry.
+    const auto Normal = liftEntry(Image, Ordinary.Entry);
+    ASSERT_TRUE(Normal.RegistrationStates);
+    EXPECT_TRUE(Normal.RegistrationStates->RegistrationLifetimeComplete);
+    EXPECT_TRUE(Normal.RegistrationStates->ChainOperationsComplete);
+    EXPECT_TRUE(getCheckedX86RegistrationCxxPrologueCall(Image, Normal));
+  }
+  auto Other = Image;
+  EXPECT_TRUE(registration_abi::buildOrdinaryCxxFrameGraph(Other, Decode,
+                                                           kText + 0x20, Index)
+                  .Blocks.empty());
+}
+
+TEST(RegistrationTryLevel, CxxPhysicalExitRechecksSourceWithoutChainReceipts) {
+  auto [Image, Call] = makeCxxSharedEpilogueImage(false, 1, 32);
+  auto Source = liftEntry(Image, kText + 0x20);
+  Source.RegistrationStates.reset();
+  const auto Found = llvm::find_if(
+      Source.Blocks, [&](const LowBlock &B) { return B.EndAddr == Call + 5; });
+  ASSERT_NE(Found, Source.Blocks.end());
+  const auto Position = Found - Source.Blocks.begin();
+  ASSERT_TRUE(
+      getCheckedX86RegistrationCxxEpilogueSuffix(Image, Source, *Found));
+  for (unsigned Mutation = 0; Mutation != 9; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    auto Changed = Source;
+    auto ChangedImage = Image;
+    auto &Block = Changed.Blocks[Position];
+    switch (Mutation) {
+    case 0:
+      Block.Ops.back().Inputs[0].Offset += 1;
+      break;
+    case 1:
+      ++Block.InstructionBoundaries.back().Size;
+      break;
+    case 2:
+      ++Block.InstructionBoundaries.back().FirstOp;
+      break;
+    case 3:
+      Changed.OrdinaryModuleAnalysisRoots.insert(Call + 1);
+      break;
+    case 4:
+      Block.Ops.clear();
+      break;
+    case 5:
+      Block.InstructionBoundaries.clear();
+      break;
+    case 6:
+      ChangedImage.Segments.front().Data[0x180 + 16] ^= 1;
+      break;
+    case 7:
+      ChangedImage.Segments.front().Flags =
+          ChangedImage.Segments.front().Flags | SegmentFlags::Writable;
+      break;
+    case 8:
+      ChangedImage.Segments.front().Data[Call - kText + 1] ^= 1;
+      break;
+    }
+    EXPECT_FALSE(getCheckedX86RegistrationCxxEpilogueSuffix(ChangedImage,
+                                                            Changed, Block));
+  }
+}
+
+TEST(RegistrationTryLevel, CxxIncomingPrefixDoesNotGuessPastCallsOrBranches) {
+  for (unsigned Mutation = 0; Mutation != 6; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    auto [Image, Call] = makeCxxSharedEpilogueImage(false, 1, 32);
+    auto &Bytes = Image.Segments.front().Data;
+    const auto Begin = Call - kText - 11;
+    std::fill(Bytes.begin() + Begin, Bytes.begin() + Call - kText, 0x90);
+    Bytes[Begin + 5] = 0x8b;
+    Bytes[Begin + 6] = 0x7d;
+    Bytes[Begin + 7] = Mutation == 1 ? 0xe0 : 0x0c;
+    if (Mutation == 2) {
+      Bytes[Begin] = 0x31;
+      Bytes[Begin + 1] = 0xed;
+    }
+    if (Mutation == 3) {
+      Bytes[Begin] = 0xe8;
+      writeLE<uint32_t>(Bytes.data() + Begin + 1,
+                        uint32_t(kText + 0xc0 - (kText + Begin + 5)));
+    }
+    if (Mutation == 4) {
+      Bytes[Begin] = 0x75;
+      Bytes[Begin + 1] = 3;
+    }
+    if (Mutation == 5)
+      Bytes[Begin + 5] = 0x89; // Writing incoming storage is also incompatible.
+    Image.ExceptionMetadata = {};
+    coff_loader::parseX86RegistrationExceptions(Image);
+    Decoder Decode;
+    ASSERT_TRUE(Decode.init(Image));
+    RegistrationCallCalleeIndex Index(Image);
+    const auto Ordinary = registration_abi::buildOrdinaryCxxFrameGraph(
+        Image, Decode, kText + 0x20, Index);
+    ASSERT_TRUE(Ordinary.hasCompleteLiftCoverage());
+    size_t Work = 0;
+    EXPECT_EQ(
+        registration_abi::hasIncomingCxxFramePrefix(Image, Ordinary, Work),
+        Mutation == 0 || Mutation == 5);
+    EXPECT_LT(Work, limits::kMaxRegistrationEHStateWork);
+  }
 }
 
 TEST(RegistrationTryLevel, CxxSharedEpilogueRestoresTheProvedParentFrame) {

@@ -8,6 +8,7 @@
 #include "RegistrationFrame.h"
 #include "RegistrationFrameEffects.h"
 #include "RegistrationImportLoad.h"
+#include "RegistrationOrdinaryGraph.h"
 #include "RegistrationStackOwner.h"
 
 #include "neverd/Limits.h"
@@ -514,8 +515,8 @@ stackPopForBody(StackBody &Body, va_t Entry, const NestedStackProof &NestedPop,
           if (State.Registers[x86reg::RBP / x86reg::GeneralRegStride].Offset !=
               0)
             return std::nullopt;
-          // The complete source receipt owns the live saved-register words
-          // and PC. Keep only the helper's physical returning ESP here.
+          // Saved-register words and PC need a separate source receipt.
+          // Keep only the helper's physical returning ESP here.
           for (unsigned Register : {3, 5, 6, 7})
             State.Registers[Register] = {};
           State.Registers[x86reg::RCX / x86reg::GeneralRegStride] = {};
@@ -709,6 +710,48 @@ std::optional<std::set<int>> registrationParentBlocks(StackBody &Body,
 }
 
 std::optional<uint32_t>
+stackPopForOrdinaryCxxRegistration(StackBody &Body, const LowFunc &Function,
+                                   const NestedStackProof &NestedPop) {
+  const auto &EH = Function.ExceptionMetadata;
+  // Cleanup-only C++ has no dispatcher-entered parent continuation. Exact
+  // physical helper calls can prove returning ESP independently of native
+  // frame ownership, object effects and registration-chain lifetime.
+  if (!Body.Valid || !EH || !EH->Registration || !EH->Cxx ||
+      EH->ParseStatus != ExceptionParseStatus::Complete ||
+      EH->CodeRange.Begin != Function.Entry ||
+      EH->Registration->RealignedFrame || !EH->Cxx->TryBlocks.empty() ||
+      !EH->Registration->Scopes.empty() ||
+      !Body.hasOnlyReturnTerminals(Function.Entry))
+    return std::nullopt;
+  CxxStackPaths Paths;
+  Paths.Entry =
+      getCheckedX86RegistrationCxxProloguePrefix(Body.Image, Function);
+  const auto Handler = coff_loader::getCheckedX86CxxHandlerABI(Body.Image, *EH);
+  if (!Paths.Entry || !Handler)
+    return std::nullopt;
+  std::set<int> Parents;
+  for (const auto &[Id, Block] : Body.Blocks) {
+    if (!chargeCalleeWork(Body.Work, 1))
+      return std::nullopt;
+    Parents.insert(Id);
+    if (const auto Exit = getCheckedX86RegistrationCxxEpilogueSuffix(
+            Body.Image, Function, *Block)) {
+      // An ordinary cookie-failure path still needs the complete source
+      // proof. Handler guards belong to exception dispatch; neither kind is
+      // omitted or authorized by this conditional normal-return fact.
+      if (Exit->CookieCheck)
+        return std::nullopt;
+      Paths.Exits.emplace(Id, *Exit);
+    }
+  }
+  if (Paths.Exits.empty())
+    return std::nullopt;
+  Body.ImportSlots.insert(Handler->Dispatch.IATVA);
+  return stackPopForBody(Body, Function.Entry, NestedPop, &Function, &Parents,
+                         &Paths);
+}
+
+std::optional<uint32_t>
 stackPopForRegistration(StackBody &Body, const LowFunc &Function,
                         const NestedStackProof &NestedPop) {
   const auto &EH = Function.ExceptionMetadata;
@@ -892,13 +935,27 @@ public:
       if (Dec.init(Image)) {
         CFGBuilder Builder;
         Builder.setRegistrationCalleeIndex(&Owner);
-        const LowFunc Callee =
-            Builder.buildIntegerFrameProof(Image, Dec, Target, "abi-stack");
-        StackBody Body(Image, Callee, Work,
-                       Callee.ExceptionMetadata ? InvalidVA : Target);
-        Record(Body, Callee.ExceptionMetadata
-                         ? stackPopForRegistration(Body, Callee, Nested)
-                         : stackPopForBody(Body, Target, Nested));
+        if (const auto *EH = Image.ExceptionMetadata.findFunction(Target);
+            EH && EH->Registration && EH->Cxx &&
+            EH->CodeRange.Begin == Target &&
+            EH->ParseStatus == ExceptionParseStatus::Complete &&
+            EH->Cxx->TryBlocks.empty() && EH->Registration->Scopes.empty() &&
+            !EH->Registration->RealignedFrame) {
+          const LowFunc Ordinary = registration_abi::buildOrdinaryCxxFrameGraph(
+              Image, Dec, Target, Owner);
+          StackBody Body(Image, Ordinary, Work, Target);
+          Record(Body,
+                 stackPopForOrdinaryCxxRegistration(Body, Ordinary, Nested));
+        }
+        if (!Result && Work < limits::kMaxRegistrationEHStateWork) {
+          const LowFunc Callee =
+              Builder.buildIntegerFrameProof(Image, Dec, Target, "abi-stack");
+          StackBody Body(Image, Callee, Work,
+                         Callee.ExceptionMetadata ? InvalidVA : Target);
+          Record(Body, Callee.ExceptionMetadata
+                           ? stackPopForRegistration(Body, Callee, Nested)
+                           : stackPopForBody(Body, Target, Nested));
+        }
       }
     }
     if (Result && !chargeCalleeWork(Work, Result->RequiredImports.size() + 1))

@@ -59,6 +59,12 @@ bool chargeDecodedCallee(size_t &Work, const LowFunc &Function);
 /// Nested C++ proofs depend on their active ancestors and depth. A stack
 /// memo keyed only by target and SEH level cannot retain these answers.
 bool hasActiveCxxCalleeProof();
+/// Negative-only admission check for a zero-argument native C++ parent.
+/// A checked straight-line shared prefix accesses incoming frame storage
+/// before any ordinary call or branch. Absence proves no calling convention.
+bool hasIncomingCxxFramePrefix(const BinaryImage &Image,
+                               const LowFunc &Function, size_t &Work);
+
 /// Plain object/initializer proofs cannot own an EH frame. Check admission
 /// before asking any subsidiary stack proof to build another callee graph.
 bool isPlainRegistrationCalleeEntry(const BinaryImage &Image, va_t Target);

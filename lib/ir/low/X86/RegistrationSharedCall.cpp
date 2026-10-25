@@ -245,6 +245,19 @@ getCheckedX86RegistrationCxxPrologueCall(const BinaryImage &Image,
 }
 
 std::optional<coff_loader::X86CxxEpilogueCall>
+getCheckedX86RegistrationCxxEpilogueSuffix(const BinaryImage &Image,
+                                           const LowFunc &Source,
+                                           const LowBlock &Block) {
+  if (Image.Arch != Arch::X86 || !Image.isCOFF() || !Source.ExceptionMetadata ||
+      Block.Ops.empty() || Block.InstructionBoundaries.empty() ||
+      Block.Ops.back().Opcode != NdOp::CALL)
+    return std::nullopt;
+  const auto Call = coff_loader::getCheckedX86CxxEpilogueCall(
+      Image, *Source.ExceptionMetadata, Block.Ops.back().Addr);
+  return Call && matchesExit(Image, Source, Block, *Call) ? Call : std::nullopt;
+}
+
+std::optional<coff_loader::X86CxxEpilogueCall>
 getCheckedX86RegistrationCxxEpilogueCall(const BinaryImage &Image,
                                          const LowFunc &Source,
                                          const LowBlock &Block) {
@@ -261,11 +274,7 @@ getCheckedX86RegistrationCxxEpilogueCall(const BinaryImage &Image,
       !hasChainOccurrence(Source, Op.Addr, Block.EndAddr, Op.Seq,
                           RegistrationChainAccess::Kind::Remove))
     return std::nullopt;
-  const auto Call = coff_loader::getCheckedX86CxxEpilogueCall(
-      Image, *Source.ExceptionMetadata, Op.Addr);
-  if (!Call || !matchesExit(Image, Source, Block, *Call))
-    return std::nullopt;
-  return Call;
+  return getCheckedX86RegistrationCxxEpilogueSuffix(Image, Source, Block);
 }
 
 std::optional<std::set<const LowOp *>>

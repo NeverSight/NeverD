@@ -11,12 +11,16 @@
 
 #include "RegistrationABIPrivate.h"
 #include "RegistrationConditionalFrame.h"
+#include "RegistrationFrame.h"
+#include "RegistrationFrameEffects.h"
+#include "RegistrationOrdinaryGraph.h"
 #include "RegistrationSourceCall.h"
 #include "RegistrationStateSolver.h"
 
 #include "neverd/Limits.h"
 #include "neverd/ir/Limits.h"
 #include "neverd/ir/low/CFGBuilder.h"
+#include "neverd/ir/low/RegistrationSharedCall.h"
 #include "neverd/lift/X86Regs.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/COFF/COFFCxxEpilogue.h"
@@ -75,6 +79,80 @@ RegistrationStateAnalysis solveCheckedCxxStates(
   return Result;
 }
 } // namespace
+
+// Reject only a straight-line, current shared-entry prefix that accesses
+// incoming storage before any ordinary call or branch. A returning stack pop
+// alone cannot reject a zero-argument parent: its calls might never return.
+bool registration_abi::hasIncomingCxxFramePrefix(const BinaryImage &Image,
+                                                 const LowFunc &Function,
+                                                 size_t &Work) {
+  using namespace registration_state;
+  const auto Prefix =
+      getCheckedX86RegistrationCxxProloguePrefix(Image, Function);
+  if (!Prefix)
+    return false;
+  Decoder Dec;
+  if (!Dec.init(Image) ||
+      !registration_abi::chargeCalleeWork(Work, Function.Blocks.size()))
+    return false;
+  FrameState State;
+  State.Registers[x86reg::RSP / x86reg::GeneralRegStride] =
+      FrameValue::frame(4);
+  const LowBlock *Block = nullptr;
+  for (const auto &Candidate : Function.Blocks)
+    if (Candidate.StartAddr == Function.Entry)
+      Block = &Candidate;
+  std::set<int> Seen;
+  bool Installed = false;
+  while (Block && Seen.insert(Block->Id).second) {
+    for (const auto &Insn : Block->InstructionBoundaries)
+      if (!registration_abi::chargeCalleeWork(Work, 1) ||
+          !registration_abi::hasImmutableCalleeInstruction(Image, Insn, Dec))
+        return false;
+    FrameTransfer Transfer(State, 0);
+    for (const auto &Op : Block->Ops) {
+      if (!registration_abi::chargeCalleeWork(Work, 1 + Op.Output.Size +
+                                                        Op.NumInputs))
+        return false;
+      Transfer.beginInstruction(Op.Addr);
+      if (Op.Opcode == NdOp::CALL && Op.Addr == Prefix->CallVA && !Installed) {
+        if (State.Registers[x86reg::RSP / x86reg::GeneralRegStride].Offset != 0)
+          return false;
+        State.Registers[x86reg::RBP / x86reg::GeneralRegStride] =
+            FrameValue::frame(0);
+        State.Registers[x86reg::RSP / x86reg::GeneralRegStride] =
+            FrameValue::frame(Prefix->PostCallStackOffset);
+        State.Registers[x86reg::RAX / x86reg::GeneralRegStride] =
+            FrameValue::frame(Prefix->RegistrationOffset);
+        Installed = true;
+        continue;
+      }
+      if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL ||
+          Op.Opcode == NdOp::BRANCH || Op.Opcode == NdOp::COND_BR ||
+          Op.Opcode == NdOp::INDIR_BR || Op.Opcode == NdOp::RETURN ||
+          (Op.Opcode == NdOp::INTRINSIC && !isFramePreservingIntrinsic(Op)))
+        return false;
+      if (Installed && (Op.Opcode == NdOp::LOAD || Op.Opcode == NdOp::STORE) &&
+          Op.NumInputs &&
+          Op.MemoryAddressSpace == NdMemoryAddressSpace::Default &&
+          Op.MemoryOrdering == NdMemoryOrdering::None) {
+        const auto Address = Transfer.read(Op.Inputs[0]);
+        if (Address.Offset && *Address.Offset >= 8)
+          return true;
+      }
+      Transfer.write(Op, Transfer.evaluate(Op, Installed));
+    }
+    if (Block->Succs.size() != 1)
+      return false;
+    if (!registration_abi::chargeCalleeWork(Work, Function.Blocks.size()))
+      return false;
+    const auto Next = llvm::find_if(Function.Blocks, [&](const LowBlock &B) {
+      return B.Id == Block->Succs.front() && B.StartAddr == Block->EndAddr;
+    });
+    Block = Next == Function.Blocks.end() ? nullptr : &*Next;
+  }
+  return false;
+}
 
 bool registration_abi::hasActiveCxxCalleeProof() {
   return !ActiveCxxCallees.empty();
@@ -136,6 +214,14 @@ RegistrationCallCalleeIndex::cxxCallee(va_t Target) {
     return std::nullopt;
   CFGBuilder Builder;
   Builder.setRegistrationCalleeIndex(this);
+  if (coff_loader::getCheckedX86CxxPrologueCall(Image, *EH)) {
+    const LowFunc Ordinary =
+        buildOrdinaryCxxFrameGraph(Image, Dec, Target, *this);
+    if (!chargeDecodedCallee(Work, Ordinary) ||
+        hasIncomingCxxFramePrefix(Image, Ordinary, Work) ||
+        Work == limits::kMaxRegistrationEHStateWork)
+      return std::nullopt;
+  }
   auto Function =
       Builder.buildIntegerFrameProof(Image, Dec, Target, "closed-cxx-callee");
   if (!Function.hasCompleteLiftCoverage() ||

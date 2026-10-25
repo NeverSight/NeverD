@@ -9662,6 +9662,23 @@ Control writes retain their explicit floating-state operation. `FNSTCW`'s
 separate memory store still needs the ordinary frame and alias analysis, so
 it cannot preserve an overlapping saved stack pointer.
 
+A cleanup-only C++ parent can obtain a conditional normal-return stack fact
+from its ordinary integer graph. A private builder scope binds the exact
+builder, image object and entry; that graph has no registration states or
+exceptional edges and cannot enter a native frame cache. Current shared
+prologue and non-cookie epilogue occurrences establish physical EBP/ESP only.
+Every ordinary terminal must be a checked near return with the same cleanup;
+unknown memory writes never supply saved-slot restoration. Import dependencies,
+recursion and cumulative work remain in the owning callee index. Guarded exits
+and nonreturning paths retain the complete source-proof fallback. No stack fact
+authorizes omitting handler guards, object effects, saved registers or return PC.
+
+A zero-argument native C++ callee query first checks its authenticated shared
+entry prefix. An incoming frame access before any ordinary call or branch
+already contradicts that query's input contract, so it refuses before analysing
+transitive native effects. This is a negative-only check. A nonzero returning
+stack pop alone cannot reject a parent whose closed calls never return.
+
 A termination-only SEH function has no dispatcher-entered except body. Its
 returning-stack proof follows its ordinary entry and checks every finally's
 actual near return independently. A finally that writes the established frame

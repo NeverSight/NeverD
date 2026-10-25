@@ -10,12 +10,15 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "X86/RegistrationOrdinaryGraph.h"
+
 #include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/ir/low/RegistrationABI.h"
 #include "neverd/ir/low/RegistrationCxxState.h"
 #include "neverd/loader/COFF/COFFRegistrationEH.h"
 
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/Support/SaveAndRestore.h"
 
 #include <algorithm>
 #include <bit>
@@ -29,6 +32,29 @@
 
 namespace neverd {
 
+namespace {
+struct OrdinaryCxxGraphRequest {
+  const CFGBuilder *Builder;
+  const BinaryImage *Image;
+  va_t Entry;
+};
+thread_local const OrdinaryCxxGraphRequest *CurrentOrdinaryCxxGraph = nullptr;
+} // namespace
+
+LowFunc registration_abi::buildOrdinaryCxxFrameGraph(
+    const BinaryImage &Image, Decoder &Decode, va_t Entry,
+    RegistrationCallCalleeIndex &Callees) {
+  if (!Callees.ownsImage(Image))
+    return {};
+  CFGBuilder Builder;
+  Builder.setRegistrationCalleeIndex(&Callees);
+  const OrdinaryCxxGraphRequest Request{&Builder, &Image, Entry};
+  llvm::SaveAndRestore<const OrdinaryCxxGraphRequest *> Scope(
+      CurrentOrdinaryCxxGraph, &Request);
+  return Builder.buildIntegerFrameProof(Image, Decode, Entry,
+                                        "ordinary-cxx-frame");
+}
+
 void CFGBuilder::linkExceptionalSuccessors(LowFunc &Func) {
   for (LowBlock &Block : Func.Blocks) {
     Block.ExceptionalSuccs.clear();
@@ -38,6 +64,14 @@ void CFGBuilder::linkExceptionalSuccessors(LowFunc &Func) {
     return;
   const ExceptionFunction &Metadata = *Func.ExceptionMetadata;
   Func.RegistrationStates.reset();
+  if (CurrentOrdinaryCxxGraph && CurrentOrdinaryCxxGraph->Builder == this &&
+      CurrentOrdinaryCxxGraph->Image == CurrentImg &&
+      CurrentOrdinaryCxxGraph->Entry == Func.Entry && Metadata.Registration &&
+      Metadata.Cxx && Metadata.ParseStatus == ExceptionParseStatus::Complete &&
+      Metadata.CodeRange.Begin == Func.Entry &&
+      !Metadata.Registration->RealignedFrame &&
+      Metadata.Registration->Scopes.empty() && Metadata.Cxx->TryBlocks.empty())
+    return;
   if (Metadata.Registration) {
     std::optional<std::vector<RegistrationCalleeFrameContract>> Callees;
     std::optional<std::vector<RegistrationCleanupFrameContract>> Cleanups;
