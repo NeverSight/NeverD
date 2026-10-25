@@ -9654,6 +9654,14 @@ supply integer-frame facts only. Their floating effects, traps and original
 calls remain in LowIR. Writes in asynchronous filters withdraw affected jump
 resumption receipts even if those receipts were observed earlier.
 
+The shared PE32/Win64 integer-frame intrinsic policy checks x87 constant and
+control transfers against `X87Constant.h`. A control read defines a temporary;
+a constant load defines a temporary or one exact binary80 stack-register slot.
+Integer registers and misaligned slots remain unsupported by that policy.
+Control writes retain their explicit floating-state operation. `FNSTCW`'s
+separate memory store still needs the ordinary frame and alias analysis, so
+it cannot preserve an overlapping saved stack pointer.
+
 A termination-only SEH function has no dispatcher-entered except body. Its
 returning-stack proof follows its ordinary entry and checks every finally's
 actual near return independently. A finally that writes the established frame

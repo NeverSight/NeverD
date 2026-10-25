@@ -12,6 +12,7 @@
 
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/TargetRegInfo.h"
+#include "neverd/ir/X87Constant.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/ir/low/SEHFrameProof.h"
@@ -178,6 +179,68 @@ TEST(X64CRTFrame, FloatingInstructionsKeepTheIntegerFrameProof) {
       EXPECT_EQ(Proof.Calls.begin()->first.first, F.UnwindCall);
     }
   }
+}
+
+TEST(X64CRTFrame, X87ConstantsAndControlKeepTheIntegerFrameProof) {
+  for (uint8_t Selector = 0; Selector != 7; ++Selector)
+    for (bool Overlap : {false, true}) {
+      SCOPED_TRACE(::testing::Message()
+                   << unsigned(Selector) << ':' << Overlap);
+      const uint8_t Slot = Overlap ? 104 : 96;
+      const std::vector<uint8_t> Floating{
+          0xd9, uint8_t(0xe8 + Selector), // fld1 through fldz
+          0xdd, 0xd8,                     // fstp st(0)
+          0xd9, 0x7c,
+          0x24, Slot, // fnstcw [rsp+Slot]
+          0xd9, 0x6c,
+          0x24, Slot}; // fldcw [rsp+Slot]
+      ControlFixture F(96, 0, false, Floating);
+      const auto Caller = F.lift();
+      ASSERT_TRUE(Caller.hasCompleteLiftCoverage());
+      const auto Proof = F.prove(Caller);
+      // The explicit FNSTCW store still invalidates an overlapping saved SP.
+      // The floating instructions never certify its memory destination.
+      if (Overlap)
+        EXPECT_TRUE(Proof.Calls.empty());
+      else {
+        ASSERT_EQ(Proof.Calls.size(), 1u);
+        EXPECT_EQ(Proof.Calls.begin()->first.first, F.UnwindCall);
+        EXPECT_EQ(Proof.Calls.begin()->second, -120);
+      }
+    }
+}
+
+TEST(X64CRTFrame, X87FrameEffectsRejectIntegerAndMisalignedOutputs) {
+  const std::vector<uint8_t> Floating{0xd9, 0xeb, 0xdd, 0xd8}; // fldpi; fstp
+  ControlFixture F(96, 0, false, Floating);
+  const auto Caller = F.lift();
+  ASSERT_TRUE(Caller.hasCompleteLiftCoverage());
+  unsigned Checked = 0;
+  for (const auto &Block : Caller.Blocks)
+    for (const auto &Original : Block.Ops) {
+      if (Original.Opcode != NdOp::INTRINSIC || !Original.NumInputs ||
+          !Original.Inputs[0].isConst())
+        continue;
+      const auto Id = static_cast<Intrinsic>(Original.Inputs[0].Offset);
+      if (Id != Intrinsic::X87ReadControl && Id != Intrinsic::X87LoadConstant)
+        continue;
+      ++Checked;
+      for (Arch Architecture : {Arch::X86, Arch::X64}) {
+        EXPECT_TRUE(isX86FramePreservingIntrinsic(Original, Architecture));
+        for (uint64_t Register :
+             {x86reg::RSP, x86reg::RBP, x86reg::R8, x86reg::R16,
+              x86reg::ST0 + 1, x86reg::ST7 + x86reg::FPURegStride}) {
+          auto Changed = Original;
+          Changed.Output = NdVar::reg(Register, Original.Output.Size);
+          // The numerical shape alone permits these writable values. The
+          // frame policy must separately reject integer and non-slot writes.
+          ASSERT_TRUE(x87ConstantControlShapeIsValid(
+              Id, x87ConstantControlLowShape(Changed, Architecture)));
+          EXPECT_FALSE(isX86FramePreservingIntrinsic(Changed, Architecture));
+        }
+      }
+    }
+  EXPECT_EQ(Checked, 2u);
 }
 
 TEST(X64CRTFrame, ControlFPRequiresAnAuthenticatedReturningInvocation) {

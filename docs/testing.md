@@ -5996,6 +5996,13 @@ index, a different image with the same entry address and another return pop,
 an independent near-exhausted counter, and nested owner restoration. Leaving
 the scope restores the work of a fresh public query. Existing mixed-proof
 cycle and C++ memo-ancestry tests retain the recursion boundary.
+`ReturningStackProofDoesNotNormalizeTheX87Stack` also covers all seven x87
+constant ROM selectors and control-word loads/stores. Win64
+`X87ConstantsAndControlKeepTheIntegerFrameProof` checks saved-SP preservation
+and an overlapping explicit `FNSTCW` store; `X87FrameEffectsRejectIntegerAndMisalignedOutputs`
+rejects GPR and non-slot destinations under both PE32 and Win64 policies.
+The x87 constant suite separately retains native numerical, control-word and
+malformed-shape coverage.
 `SEHReturningStackUsesCompleteParentFrameEvidence`
 separately checks complete registration state and lifetime, corrupted EBP,
 missing ESP restoration, incompatible ordinary/exceptional return pops,

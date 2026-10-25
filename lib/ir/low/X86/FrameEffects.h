@@ -9,6 +9,7 @@
 #ifndef NEVERD_IR_LOW_X86_FRAMEEFFECTS_H
 #define NEVERD_IR_LOW_X86_FRAMEEFFECTS_H
 
+#include "neverd/ir/X87Constant.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/ir/low/LowIR.h"
 #include "neverd/lift/X86Regs.h"
@@ -47,6 +48,21 @@ inline bool isX86FramePreservingIntrinsic(const LowOp &Op, Arch Architecture) {
       Id == Intrinsic::X86FPArithMemoryState)
     return NonIntegerOutput &&
            x86FPStateShapeIsValid(Id, x86FPStateLowShape(Op, Architecture));
+  if (isX87ConstantControlIntrinsic(Id)) {
+    if (!x87ConstantControlShapeIsValid(
+            Id, x87ConstantControlLowShape(Op, Architecture)))
+      return false;
+    // Control transfers and ROM loads retain their floating state effects.
+    // FNSTCW's memory store is a separate LowOp and keeps its alias checks.
+    if (Id == Intrinsic::X87WriteControl)
+      return Op.Output == NdVar();
+    if (Id == Intrinsic::X87ReadControl)
+      return Op.Output.isTemp();
+    return Op.Output.isTemp() ||
+           (Op.Output.isReg() && Op.Output.Offset >= x86reg::ST0 &&
+            Op.Output.Offset <= x86reg::ST7 &&
+            (Op.Output.Offset - x86reg::ST0) % x86reg::FPURegStride == 0);
+  }
   // FXAM classifies one stack slot into the status word. It reads no memory
   // and raises no floating-point exception.
   const NdVar StatusWord = NdVar::reg(x86reg::FPU_SW, 2);
