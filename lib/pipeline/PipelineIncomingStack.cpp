@@ -14,6 +14,7 @@
 #include "neverd/ir/Limits.h"
 #include "neverd/ir/SourceABI.h"
 #include "neverd/ir/TargetRegInfo.h"
+#include "neverd/ir/med/MedPrologueSaves.h"
 #include "neverd/ir/med/MedStackAlignment.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/pipeline/Limits.h"
@@ -132,6 +133,7 @@ inferIncomingStackLeaf(const BinaryImage &Image, const LowFunc &Low,
     return {};
   };
   bool Returned = false;
+  std::optional<MedVar> IntegerResult;
   for (const auto &Op : MB.Ops) {
     if (Returned || !supported(Op.Opcode) ||
         Op.MemoryOrdering != NdMemoryOrdering::None ||
@@ -161,8 +163,16 @@ inferIncomingStackLeaf(const BinaryImage &Image, const LowFunc &Low,
       const auto Offset = Frame.find(key(Op.Inputs[0]));
       if (Offset != Frame.end() && AddInput(Offset->second))
         Result = Role::Scalar;
-    } else if (Op.Opcode == NdOp::RETURN && Op.NumInputs == 1 &&
-               Read(Op.Inputs[0]) == Role::Scalar) {
+    } else if (Op.Opcode == NdOp::RETURN && Op.NumInputs == 1) {
+      // AArch64 LowIR retains LR as RETURN's control target. It is not the
+      // source result. Prove that control is unchanged and that a distinct,
+      // complete X0 definition supplies the source result before declaring it.
+      if (Image.Arch == Arch::AArch64) {
+        if (!isEntryLiveInValue(Med, Op.Inputs[0], TRI.LinkRegister) ||
+            !IntegerResult || Read(*IntegerResult) != Role::Scalar)
+          return {};
+      } else if (Read(Op.Inputs[0]) != Role::Scalar)
+        return {};
       Returned = true;
       continue;
     }
@@ -170,6 +180,8 @@ inferIncomingStackLeaf(const BinaryImage &Image, const LowFunc &Low,
         (Op.Output.Kind != MedVar::Reg && Op.Output.Kind != MedVar::Temp) ||
         !Values.emplace(key(Op.Output), *Result).second)
       return {};
+    if (Op.Output.Kind == MedVar::Reg && Op.Output.RegOff == TRI.IntReturnReg)
+      IntegerResult = Op.Output;
   }
   if (!Returned || Inputs.empty())
     return {};
