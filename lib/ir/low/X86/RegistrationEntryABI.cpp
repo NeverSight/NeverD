@@ -66,12 +66,20 @@ bool hasClosedThrowExits(
           Call->RuntimeThrow || !Call->FrameReads.empty() ||
           !Call->FrameWrites.empty())
         return false;
-      const auto Current =
-          getCheckedX86RegistrationThrowCalleeABI(Image, Call->Target, &Work);
-      if (!Current || Current->IsRethrow ||
-          !hasSameX86RegistrationThrowEffects(
-              Proof.CalleeContracts[Call->CalleeIndex], *Current, Work))
-        return false;
+      const auto &Saved = Proof.CalleeContracts[Call->CalleeIndex];
+      if (Saved.isCxxParent()) {
+        const auto Current =
+            getCheckedX86RegistrationCxxCalleeABI(Image, Call->Target, &Work);
+        if (!Current || !Current->DoesNotReturn ||
+            !hasSameX86RegistrationCxxEffects(Saved, *Current, Work))
+          return false;
+      } else {
+        const auto Current =
+            getCheckedX86RegistrationThrowCalleeABI(Image, Call->Target, &Work);
+        if (!Current || Current->IsRethrow ||
+            !hasSameX86RegistrationThrowEffects(Saved, *Current, Work))
+          return false;
+      }
       Throws = true;
       break;
     }

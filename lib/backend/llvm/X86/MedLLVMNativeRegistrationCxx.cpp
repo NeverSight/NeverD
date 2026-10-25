@@ -184,7 +184,7 @@ bool MedLLVMEmitter::emitNativeX86RegistrationCxx(
     llvm::CallInst *Call;
     const RegistrationCallFrameEffect *Effect;
     const RegistrationBlockState *State;
-    bool Throw;
+    bool DoesNotReturn;
     med_llvm_eh::RegistrationCxxCallABI ABI;
     X86RegistrationCatchIdentity CatchIdentity;
     std::string Name;
@@ -320,7 +320,7 @@ bool MedLLVMEmitter::emitNativeX86RegistrationCxx(
       }
       const bool Throw = Contract.isThrow();
       const bool ResultUnused =
-          !Throw && !Contract.isInitializer() &&
+          !Effect->DoesNotReturn && !Contract.isInitializer() &&
           hasUnusedX86RegistrationCallResult(Func, *Effect, Work);
       const auto ABI = med_llvm_eh::getCheckedRegistrationCxxCallABI(
           *Img, Contract, *Effect, *Call, Work, ResultUnused);
@@ -350,7 +350,7 @@ bool MedLLVMEmitter::emitNativeX86RegistrationCxx(
               *Mod, Name, ABI->Type, ABI->Convention))
         return false;
       Calls.push_back(
-          {Call, Effect, State, Throw, *ABI,
+          {Call, Effect, State, Effect->DoesNotReturn, *ABI,
            State->CallbackOnly
                ? CatchOwners->at(Block.Id)
                : X86RegistrationCatchIdentity{UINT32_MAX, UINT32_MAX},
@@ -663,7 +663,7 @@ bool MedLLVMEmitter::emitNativeX86RegistrationCxx(
         Mod->getOrInsertFunction(Plan.Name, Plan.ABI.Type).getCallee());
     Callee->setCallingConv(Plan.ABI.Convention);
     rewrite_source::setOriginalVA(*Callee, Plan.Effect->Target);
-    if (Plan.Throw)
+    if (Plan.DoesNotReturn)
       Callee->addFnAttr(llvm::Attribute::NoReturn);
     llvm::SmallVector<llvm::Value *, 2> Args;
     if (Plan.ABI.RuntimeThrow) {
@@ -713,15 +713,15 @@ bool MedLLVMEmitter::emitNativeX86RegistrationCxx(
       med_llvm_eh::emitWindowsEHProvenanceAnchor(
           B, Model, Role::ProtectedInvoke, EH.CodeRange.Begin,
           Plan.Effect->Address, uint32_t(Level), Plan.Effect->OpSeq, nullptr,
-          Plan.Effect->Target, Plan.Throw);
+          Plan.Effect->Target, Plan.DoesNotReturn);
     } else {
       Call = B.CreateCall(Callee, Args, Bundles);
     }
     Call->setCallingConv(Callee->getCallingConv());
-    if (Plan.Throw)
+    if (Plan.DoesNotReturn)
       Call->setDoesNotReturn();
     Call->copyMetadata(*Old);
-    if (Plan.Throw) {
+    if (Plan.DoesNotReturn) {
       // A noreturn normal edge cannot execute an anchor after the invoke.
       // Bind the terminal source boundary to the call occurrence itself.
       auto *Exit = SourceExits.at(Plan.State->BlockId);
@@ -733,7 +733,7 @@ bool MedLLVMEmitter::emitNativeX86RegistrationCxx(
     for (auto &Operation : Operations)
       if (Operation.IR == Old)
         Operation.IR = Call;
-    if (!Plan.Throw && !Plan.ABI.DiscardResult) {
+    if (!Plan.DoesNotReturn && !Plan.ABI.DiscardResult) {
       llvm::Value *Result = Call;
       if (Plan.ABI.Initializer || Old->getType() != Call->getType()) {
         if (auto *Invoke = llvm::dyn_cast<llvm::InvokeInst>(Call))

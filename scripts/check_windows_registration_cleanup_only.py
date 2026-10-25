@@ -48,6 +48,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--test-binary", type=Path, required=True)
     parser.add_argument("--runtime-libs", type=Path, required=True)
+    parser.add_argument("--patch-binary", type=Path,
+                        help="also lift the whole no-return fixture and rewrite its caller")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--compiler", default="clang++")
     parser.add_argument("--linker", default="lld-link")
@@ -66,6 +68,8 @@ def main() -> int:
     parser.add_argument("--wine-prefix", type=Path,
                         help="isolated Wine prefix (default: OUTPUT/wine-prefix)")
     args = parser.parse_args()
+    if args.patch_binary and not args.no_return:
+        parser.error("--patch-binary currently requires --no-return")
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
     evidence = ("cleanup-only-source-to-pe-and-wine" if args.wine else
@@ -142,16 +146,28 @@ def main() -> int:
             extra = {variable + "_PE32": str(image),
                      variable + "_OUTPUT_PE32": str(product)}
             if args.no_return:
-                tests += ":RegistrationEntryABI.InputPE32NonReturningCleanupHasOnlyEntryContract"
+                tests += ":RegistrationEntryABI.InputPE32NonReturningCleanupHasNoReturnStack"
+                tests += ":RegistrationEntryABI.InputPE32NonReturningCalleeKeepsOuterCatch"
                 extra["NEVERD_REGISTRATION_NORETURN_PE32"] = str(image)
+                extra["NEVERD_REGISTRATION_NORETURN_OUTER_IR"] = str(case / "outer.ll")
             run([args.test_binary.resolve(), "--gtest_filter=" + tests,
                  "--gtest_output=xml:" + str(xml)],
                 extra)
-            expected_tests = 10 if args.guarded_stack else 2 if args.no_return else 1
+            expected_tests = 10 if args.guarded_stack else 3 if args.no_return else 1
             if require_test_result(xml) != expected_tests:
                 raise ValueError("cleanup-only source proof missing or skipped")
             record["product_sha256"] = hashlib.sha256(
                 product.read_bytes()).hexdigest()
+            outer_product = None
+            if args.patch_binary:
+                whole = case / "whole.ll"
+                run([args.patch_binary.resolve(), "lift", image, "-o", whole])
+                record["whole_image_ir_sha256"] = hashlib.sha256(whole.read_bytes()).hexdigest()
+                outer_product = case / "outer-product.exe"
+                run([args.patch_binary.resolve(), "patch", image,
+                     "--from-ir=" + str(case / "outer.ll"),
+                     "--mode=section", "-o", outer_product])
+                record["outer_product_sha256"] = hashlib.sha256(outer_product.read_bytes()).hexdigest()
             if args.wine:
                 prefix = (args.wine_prefix or output / "wine-prefix").resolve()
                 environment = os.environ | {
@@ -164,8 +180,11 @@ def main() -> int:
                                  pe.raw(pe.entry(b"cleanup_only_trace")), 3)
                 wrong.write_bytes(changed)
                 variants = [(image, 0), (product, 0), (wrong, 1)]
+                if outer_product:
+                    variants.append((outer_product, 0))
                 if args.no_return:
-                    for source in (image, product):
+                    branch_sources = (image, product, outer_product) if outer_product else (image, product)
+                    for source in branch_sources:
                         conditional = source.with_stem(source.stem + "-conditional")
                         branch_pe = PE32(source.read_bytes())
                         branch_bytes = bytearray(branch_pe.data)

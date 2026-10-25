@@ -58,7 +58,27 @@ cleanup_only_parent() {
 #endif
 #endif
 
+#ifdef NEVERD_NORETURN_CXX_PARENT
+extern "C" __declspec(dllexport) __declspec(noinline) int
+cleanup_only_returning_wrapper() {
+  CleanupOnlyGuard Guard{3};
+  if (cleanup_only_enabled == 2)
+    return 9;
+  cleanup_only_parent();
+  __builtin_unreachable();
+}
+
+extern "C" __declspec(dllexport) __declspec(noinline) __declspec(noreturn) void
+cleanup_only_forward() {
+  CleanupOnlyGuard Guard{3};
+  cleanup_only_parent();
+  __builtin_unreachable();
+}
+
+extern "C" int mainCRTStartup() {
+#else
 extern "C" __declspec(noreturn) void mainCRTStartup() {
+#endif
 #ifdef NEVERD_SHARED_PROLOGUE
   const unsigned Before = cleanup_only_trace;
   cleanup_only_enabled = 0;
@@ -74,7 +94,15 @@ extern "C" __declspec(noreturn) void mainCRTStartup() {
 #else
     const unsigned Expected = 21;
 #endif
+#ifdef NEVERD_NORETURN_CXX_PARENT
+    return Value == 7 && cleanup_only_trace == Expected ? 0 : 1;
+#else
     ExitProcess(Value == 7 && cleanup_only_trace == Expected ? 0 : 1);
+#endif
   }
+#ifdef NEVERD_NORETURN_CXX_PARENT
+  return 2;
+#else
   ExitProcess(2);
+#endif
 }

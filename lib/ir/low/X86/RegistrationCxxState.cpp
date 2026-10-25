@@ -224,8 +224,7 @@ RegistrationCallCalleeIndex::cxxCallee(va_t Target) {
   auto States =
       solveCheckedCxxStates(Image, Function, &*Callees, &*Cleanups, &*Stacks,
                             nullptr, nullptr, &Inputs, &Work);
-  if (!Inputs.Complete || !Inputs.NativeFramePrivate ||
-      Inputs.ReturnValues.empty() || !States.Complete ||
+  if (!Inputs.Complete || !Inputs.NativeFramePrivate || !States.Complete ||
       !States.CallbackStatesComplete || !States.RegistrationLifetimeComplete ||
       !States.ChainOperationsComplete || !States.CallFrameEffectsComplete ||
       !States.CleanupFrameEffectsComplete || !States.CxxContinuationsComplete ||
@@ -235,7 +234,7 @@ RegistrationCallCalleeIndex::cxxCallee(va_t Target) {
       (!Handler->CookieGuards.empty() && !States.SecurityCookiesComplete) ||
       !AddRanges(States.ImageReads, Effects.Reads))
     return std::nullopt;
-  Result.HasIndependentScalarReturn = true;
+  Result.HasIndependentScalarReturn = !Inputs.ReturnValues.empty();
   for (const auto &[Occurrence, Value] : Inputs.ReturnValues) {
     if (!chargeCalleeWork(Work, 1))
       return std::nullopt;
@@ -294,10 +293,12 @@ RegistrationCallCalleeIndex::cxxCallee(va_t Target) {
     Effects.Reads.emplace(Slot, Slot + 4);
   Function.RegistrationStates = std::move(States);
   const auto Entry = parentEntryABI(Function, Image, &Work);
-  if (!Entry || !Entry->HasNormalReturn || Entry->PopBytes ||
+  if (!Entry || Entry->PopBytes ||
+      Entry->HasNormalReturn != !Inputs.ReturnValues.empty() ||
       !chargeCalleeWork(Work, Effects.Reads.size() + Effects.Writes.size() +
                                   Code.size() + Imports.size() + Throws.size()))
     return std::nullopt;
+  Result.DoesNotReturn = !Entry->HasNormalReturn;
   Result.CodeRanges.clear();
   copyExtents(Code, Result.CodeRanges);
   copyExtents(Effects.Reads, Result.ImageReads);

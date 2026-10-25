@@ -88,10 +88,12 @@ bool hasSameX86RegistrationCxxEffects(
                                     Saved.RuntimeThrowInfos.size() + 1) &&
          Saved.isCxxParent() && Current.isCxxParent() &&
          Saved.Target == Current.Target && !Saved.StackPopBytes &&
-         !Current.StackPopBytes && !Saved.DoesNotReturn &&
-         !Current.DoesNotReturn && !Saved.ThrownTypeVA &&
-         !Saved.ThrownObjectSize && Saved.ECXReads.empty() &&
-         Saved.ECXWrites.empty() && Saved.ECXInitialized.empty() &&
+         !Current.StackPopBytes &&
+         Saved.DoesNotReturn == Current.DoesNotReturn &&
+         (!Saved.DoesNotReturn || !Saved.HasIndependentScalarReturn) &&
+         !Saved.ThrownTypeVA && !Saved.ThrownObjectSize &&
+         Saved.ECXReads.empty() && Saved.ECXWrites.empty() &&
+         Saved.ECXInitialized.empty() &&
          Saved.HasIndependentScalarReturn ==
              Current.HasIndependentScalarReturn &&
          Saved.RequiredImports == Current.RequiredImports &&

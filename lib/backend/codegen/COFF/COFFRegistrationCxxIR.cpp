@@ -409,6 +409,7 @@ getCheckedCxxControlIRProof(const llvm::Function &Function,
   for (const auto &[Call, Receipt] : Result.Calls) {
     const auto *Callee = Call->getCalledFunction();
     const bool Throw = Receipt.Contract.isThrow();
+    const bool DoesNotReturn = Receipt.Contract.DoesNotReturn;
     if (Receipt.ObjectFrameOffset && Receipt.RuntimeObject)
       return rejectIR("C++ member call has conflicting object coordinates");
     const bool Borrow = Receipt.ObjectFrameOffset.has_value() ||
@@ -422,9 +423,8 @@ getCheckedCxxControlIRProof(const llvm::Function &Function,
             Image, Receipt.Contract.Target, &CallResultWork);
         if (!Fresh || !hasSameX86RegistrationCxxEffects(Receipt.Contract,
                                                         *Fresh, CallResultWork))
-          return rejectIR(
-              "C++ returning parent lost its current frame contract");
-        DiscardResult = !Fresh->HasIndependentScalarReturn;
+          return rejectIR("C++ parent lost its current frame contract");
+        DiscardResult = !DoesNotReturn && !Fresh->HasIndependentScalarReturn;
       } else {
         const auto Fresh = getCheckedX86RegistrationMemberCalleeABI(
             Image, Receipt.Contract.Target, &CallResultWork,
@@ -456,10 +456,11 @@ getCheckedCxxControlIRProof(const llvm::Function &Function,
         Call->getCallingConv() != Callee->getCallingConv() ||
         Call->getFunctionType() != Callee->getFunctionType() ||
         (Borrow && !Call->getArgOperand(0)->getType()->isPointerTy()) ||
-        (Throw || Receipt.Cleanup || Initializer || DiscardResult
+        (DoesNotReturn || Receipt.Cleanup || Initializer || DiscardResult
              ? !Call->getType()->isVoidTy()
              : !Call->getType()->isIntegerTy(32)) ||
-        Call->doesNotReturn() != Throw || Callee->doesNotReturn() != Throw ||
+        Call->doesNotReturn() != DoesNotReturn ||
+        Callee->doesNotReturn() != DoesNotReturn ||
         (Receipt.Cleanup && !Call->doesNotThrow()) ||
         (!Receipt.Cleanup && Call->doesNotThrow()))
       return rejectIR("C++ preserved callee changed its physical call ABI");

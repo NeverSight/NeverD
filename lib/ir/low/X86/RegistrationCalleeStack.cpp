@@ -13,6 +13,7 @@
 #include "neverd/decode/InstructionRelocations.h"
 #include "neverd/ir/Limits.h"
 #include "neverd/ir/low/CFGBuilder.h"
+#include "neverd/ir/low/RegistrationCallEffects.h"
 #include "neverd/ir/low/RegistrationSharedCall.h"
 #include "neverd/lift/X86Regs.h"
 #include "neverd/loader/ReadOnlyBytes.h"
@@ -249,7 +250,7 @@ struct StackBody {
 struct CxxStackPaths {
   std::optional<coff_loader::X86CxxPrologueCall> Entry;
   std::map<int, coff_loader::X86CxxEpilogueCall> Exits;
-  std::map<std::pair<va_t, int>, va_t> NoReturnImports;
+  std::set<std::pair<va_t, int>> NoReturnCalls;
 };
 
 std::optional<CxxStackPaths> cleanupCxxStackPaths(StackBody &Body,
@@ -291,6 +292,19 @@ std::optional<CxxStackPaths> cleanupCxxStackPaths(StackBody &Body,
           Effect->CalleeIndex >= States.CalleeContracts.size())
         return std::nullopt;
       const auto &Contract = States.CalleeContracts[Effect->CalleeIndex];
+      if (Contract.isCxxParent()) {
+        const auto Current = getCheckedX86RegistrationCxxCalleeABI(
+            Body.Image, Effect->Target, &Body.Work);
+        if (!Current || !Current->DoesNotReturn ||
+            !hasSameX86RegistrationCxxEffects(Contract, *Current, Body.Work) ||
+            Current->RequiredImports.empty() ||
+            !chargeCalleeWork(Body.Work, Current->RequiredImports.size() + 1))
+          return std::nullopt;
+        Body.ImportSlots.insert(Current->RequiredImports.begin(),
+                                Current->RequiredImports.end());
+        Paths.NoReturnCalls.emplace(Op.Addr, Op.Seq);
+        continue;
+      }
       std::optional<va_t> Slot;
       if (Contract.isRuntimeThrow()) {
         if (const auto Import = getCheckedX86RegistrationThrowImportABI(
@@ -303,7 +317,7 @@ std::optional<CxxStackPaths> cleanupCxxStackPaths(StackBody &Body,
         return std::nullopt;
       // Omitting a nonreturning path is itself a live import dependency.
       // A caller that replaced this slot cannot borrow the normal RET proof.
-      Paths.NoReturnImports.emplace(std::make_pair(Op.Addr, Op.Seq), *Slot);
+      Paths.NoReturnCalls.emplace(Op.Addr, Op.Seq);
       Body.ImportSlots.insert(*Slot);
     }
   }
@@ -410,7 +424,7 @@ stackPopForBody(StackBody &Body, va_t Entry, const NestedStackProof &NestedPop,
             State.OtherRegisterBytes.clear();
           continue;
         }
-        if (CxxPaths->NoReturnImports.count({Op.Addr, Op.Seq})) {
+        if (CxxPaths->NoReturnCalls.count({Op.Addr, Op.Seq})) {
           if (!State.ImportBindingsIntact)
             return std::nullopt;
           DoesNotReturn = true;

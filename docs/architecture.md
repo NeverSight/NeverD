@@ -1925,7 +1925,10 @@ no incoming frame access can have a zero-argument C entry when every reached
 ordinary path closes at a freshly authenticated private throw. Unknown edges,
 cycles, local catches, incomplete states and changed source/callee bytes retain
 their refusal. This entry-only proof never supplies a returning callee stack
-or scalar result contract. The LLVM adapter selects cdecl, stdcall,
+or scalar result contract. The complete C++ invocation proof may separately
+retain `DoesNotReturn` together with its source image effects, import bindings
+and exception types. LLVM and COFF consumers preserve the exceptional invoke
+edge while closing only its ordinary continuation. The LLVM adapter selects cdecl, stdcall,
 thiscall or fastcall and independently validates its exact parameter attributes;
 fastcall requires `inreg` on both register words. HighIR's x86 continuation
 projection keeps shared resume tails outside synchronous protected prefixes and

@@ -6610,12 +6610,21 @@ destructors in order; a changed initial trace must return one at both bases.
 `--wine-prefix PATH` selects an isolated prefix instead of the output directory's
 default prefix. These runtime checks execute only the generated test fixtures.
 Add `--no-return` for the compiled O0/O1 cleanup parent whose ordinary branches
-all reach a private throw. `RegistrationEntryABI.InputPE32NonReturningCleanupHasOnlyEntryContract`
-checks entry admission while returning-stack and C++ callee queries still refuse,
+all reach a private throw. `RegistrationEntryABI.InputPE32NonReturningCleanupHasNoReturnStack`
+checks entry admission while the returning-stack query still refuses and the
+complete C++ callee query retains a non-returning invocation contract,
 then rejects edited effects, callees, source opcodes, incomplete states and
-missing or unknown successors. The same native LLVM, COFF and installed-PE
+missing or unknown successors. A further cleanup wrapper must retain its
+non-returning contract; a sibling with one normal return and one nested throw
+must retain its exact zero-pop returning-stack contract and import dependencies.
+The same native LLVM, COFF and installed-PE
 checks run. Wine also exercises both sides of the source condition in originals
 and generated images at both bases; the alternate trace must return one.
+`InputPE32NonReturningCalleeKeepsOuterCatch` checks both emission orders, the
+independent COFF call proof, and verifier-valid removal of `noreturn` or addition
+of `nounwind`. Add `--patch-binary build-release/bin/neverd` to require ordinary
+optimized whole-image LLVM lifting of this authored image and CLI reconstruction
+of its outer catch from the proved IR, followed by the same runtime observations.
 Add `--shared-prologue` to use the authored shared entry/exit assembly parent
 with the same C++ throwing helper, destructors and caller catch. The caller
 first exercises an ordinary return without cleanup, then enables the throw.

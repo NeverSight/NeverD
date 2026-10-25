@@ -132,7 +132,9 @@ bool RegistrationStateSolver::initializeContracts() {
                      (Leaf && Callee.StackPopBytes / 4 >= limits::kMaxCallArgs)
                : Callee.StackPopBytes != 0) ||
           (!Leaf && !Throw && !Initializer && !CxxParent) ||
-          Callee.DoesNotReturn != Throw ||
+          (Throw ? !Callee.DoesNotReturn
+                 : !CxxParent && Callee.DoesNotReturn) ||
+          (Callee.DoesNotReturn && Callee.HasIndependentScalarReturn) ||
           (Callee.HasIndependentScalarReturn && !Leaf && !CxxParent) ||
           ((Leaf || Initializer || CxxParent || Callee.isRethrow() ||
             Callee.isRuntimeThrow()) &&

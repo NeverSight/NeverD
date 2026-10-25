@@ -138,11 +138,13 @@ std::optional<RegistrationCallABI> registrationCallABI(const MedFunc &Func,
        Callee.CalleeKind != RegistrationCalleeFrameContract::Kind::Leaf) ||
       Borrow != (Effect->ECXFrameOffset.has_value() ||
                  Effect->ECXRuntimeObject.has_value()) ||
-      (Callee.isThrow() ? !Callee.DoesNotReturn || Borrow
-                        : (Callee.CalleeKind !=
-                               RegistrationCalleeFrameContract::Kind::Leaf &&
-                           !Callee.isInitializer() && !Callee.isCxxParent()) ||
-                              Callee.DoesNotReturn))
+      (Callee.isThrow()
+           ? !Callee.DoesNotReturn || Borrow
+           : (Callee.CalleeKind !=
+                  RegistrationCalleeFrameContract::Kind::Leaf &&
+              !Callee.isInitializer() && !Callee.isCxxParent()) ||
+                 (Callee.DoesNotReturn && (!Callee.isCxxParent() || Borrow ||
+                                           Callee.HasIndependentScalarReturn))))
     return std::nullopt;
 
   size_t Work = 0;
