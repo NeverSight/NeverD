@@ -555,6 +555,89 @@ TEST(RegistrationCallABI, CRTMemoryImportsProveOnlyReturningStackCleanup) {
       }
 }
 
+TEST(RegistrationCallABI, RejectedTerminalLeavesBudgetForSiblingCallees) {
+  ThrowImage F;
+  auto &Text = F.Image.Segments.front();
+  Text.Data.resize(0x500, 0xcc);
+  const std::vector<uint8_t> Parent{
+      0x55, 0x8b, 0xec, 0xe8, 0, 0,    0, 0,    0x85, 0xc0, 0x74, 4, 0x8b,
+      0xe5, 0x5d, 0xc3, 0x6a, 0, 0x6a, 0, 0xe8, 0,    0,    0,    0};
+  std::copy(Parent.begin(), Parent.end(), Text.Data.begin());
+  writeLE<uint32_t>(Text.Data.data() + 4, 0x100 - 8);
+  writeLE<uint32_t>(Text.Data.data() + 21, 0x80 - 25);
+  constexpr unsigned Count = 24;
+  for (unsigned I = 0; I != Count; ++I) {
+    const size_t Offset = 0x100 + I * 0x20;
+    size_t Return = Offset;
+    if (I + 1 != Count) {
+      Text.Data[Offset] = 0x6a;
+      Text.Data[Offset + 1] = 0;
+      Text.Data[Offset + 2] = 0xe8;
+      writeLE<uint32_t>(Text.Data.data() + Offset + 3, 0x20 - 7);
+      Return += 7;
+    }
+    Text.Data[Return] = 0xc2;
+    Text.Data[Return + 1] = 4;
+    Text.Data[Return + 2] = 0;
+    F.Image.Symbols.push_back(Symbol::makeFunc(Text.VA + Offset, 0x20));
+  }
+  const va_t Sibling = Text.VA + 0x480;
+  Text.Data[0x480] = 0xc2;
+  Text.Data[0x481] = 8;
+  Text.Data[0x482] = 0;
+  Text.Size = Text.FileSz = Text.Data.size();
+  F.Image.Sections.front().Size = F.Image.Sections.front().FileSz = Text.Size;
+  F.Image.Symbols.push_back(Symbol::makeFunc(Text.VA, Parent.size()));
+  F.Image.Symbols.push_back(Symbol::makeFunc(Sibling, 3));
+  LowFunc Caller;
+  Caller.Blocks.resize(1);
+  for (va_t Target : {Text.VA, Sibling}) {
+    LowOp Call;
+    Call.Opcode = NdOp::CALL;
+    Call.addInput(NdVar::cst(Target, 4));
+    Caller.Blocks.front().Ops.push_back(Call);
+  }
+  // The reachable runtime-throw terminal cannot supply this plain returning
+  // proof. Reject it before traversing the unrelated deep callee chain.
+  size_t Work = limits::kMaxRegistrationEHStateWork - 1024;
+  RegistrationCallCalleeIndex Index(F.Image, &Work);
+  const auto Contracts = Index.stackContracts(Caller);
+  ASSERT_TRUE(Contracts);
+  ASSERT_EQ(Contracts->size(), 1u);
+  EXPECT_EQ(Contracts->front().Target, Sibling);
+  EXPECT_EQ(Contracts->front().StackPopBytes, 8u);
+  EXPECT_LT(Work, limits::kMaxRegistrationEHStateWork);
+  EXPECT_FALSE(getCheckedX86CalleeStackPop(F.Image, Text.VA));
+  // Replacing the terminal with a restored RET still takes the complete
+  // ordinary proof, including the genuine nested stack dependencies.
+  std::copy(Parent.begin() + 12, Parent.begin() + 16, Text.Data.begin() + 16);
+  EXPECT_EQ(getCheckedX86CalleeStackPop(F.Image, Text.VA),
+            std::optional<uint32_t>{0});
+}
+
+TEST(RegistrationCallABI, DisconnectedTerminalsDoNotBecomeOrdinaryExits) {
+  ThrowImage F;
+  F.Image.Imports.clear();
+  auto &Text = F.Image.Segments.front();
+  Text.Data.assign(0x80, 0xcc);
+  Text.Data[0] = 0xc3;
+  Text.Data[0x40] = 0xff;
+  Text.Data[0x41] = 0xe0;
+  Text.Size = Text.FileSz = Text.Data.size();
+  F.Image.Sections.front().Size = F.Image.Sections.front().FileSz = Text.Size;
+  F.Image.Symbols.push_back(Symbol::makeFunc(Text.VA, Text.Size));
+  F.Image.CodePtrRelocSlots.insert(ThrowImage::DataVA + 4);
+  writeLE<uint32_t>(F.Image.Segments[2].Data.data() + 4, Text.VA + 0x40);
+  Decoder Dec;
+  ASSERT_TRUE(Dec.init(F.Image));
+  const auto Low = CFGBuilder().buildIntegerFrameProof(F.Image, Dec, Text.VA,
+                                                       "separate-terminal");
+  ASSERT_TRUE(Low.hasCompleteLiftCoverage());
+  ASSERT_TRUE(Low.ModuleAnalysisRoots.count(Text.VA + 0x40));
+  EXPECT_EQ(getCheckedX86CalleeStackPop(F.Image, Text.VA),
+            std::optional<uint32_t>{0});
+}
+
 TEST(RegistrationCallABI, NestedReturningStackProofIsBoundedAndNonCircular) {
   for (unsigned Mutation = 0; Mutation != 6; ++Mutation) {
     SCOPED_TRACE(Mutation);

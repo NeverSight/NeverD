@@ -5953,6 +5953,12 @@ separately checks complete registration state and lifetime, corrupted EBP,
 missing ESP restoration, incompatible ordinary/exceptional return pops,
 writable code, stale installation metadata and an opaque helper overwriting
 a saved stack value, both directly and through an outer helper.
+`RejectedTerminalLeavesBudgetForSiblingCallees` checks that an unsupported
+ordinary terminal refuses before recursive callee discovery consumes another
+call's budget. Replacing that terminal with a restored return still requires
+the ordinary stack proof. `DisconnectedTerminalsDoNotBecomeOrdinaryExits`
+keeps separately rooted code outside this entry's terminal check. These cases
+grant no no-return, memory-effect or native EH facts.
 `StackCleanupDoesNotGrantMemoryBorrowAuthority` checks exact
 direct/indirect target identity, registration-overlapping pops and duplicate
 contracts while retaining the independent call-frame refusal.

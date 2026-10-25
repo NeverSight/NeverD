@@ -27,6 +27,7 @@
 #include <functional>
 #include <map>
 #include <set>
+#include <vector>
 
 namespace neverd::registration_abi {
 bool hasImmutableCalleeInstruction(const BinaryImage &Image,
@@ -81,6 +82,10 @@ using registration_state::FrameTransfer;
 using registration_state::FrameValue;
 using NestedStackProof =
     std::function<std::optional<RegistrationCalleeStackContract>(va_t)>;
+
+bool endsInReturn(const LowBlock &Block) {
+  return !Block.Ops.empty() && Block.Ops.back().Opcode == NdOp::RETURN;
+}
 
 std::optional<uint32_t> nearReturnPop(const BinaryImage &Image, va_t Address) {
   const auto Byte = readImmutableCodeBytes(Image, Address, 1);
@@ -155,6 +160,26 @@ struct StackBody {
           ImportSlots.insert(Op.Inputs[0].Offset);
     }
     Valid = true;
+  }
+
+  bool hasOnlyReturnTerminals(va_t Entry) {
+    std::vector<int> Pending{Entries.at(Entry)};
+    std::set<int> Visited;
+    while (!Pending.empty()) {
+      const int Id = Pending.back();
+      Pending.pop_back();
+      if (!chargeCalleeWork(Work, 1) || !Blocks.count(Id))
+        return false;
+      if (!Visited.insert(Id).second)
+        continue;
+      const auto &Block = *Blocks.at(Id);
+      if (Block.Succs.empty() && !endsInReturn(Block))
+        return false;
+      if (!chargeCalleeWork(Work, Block.Succs.size()))
+        return false;
+      Pending.insert(Pending.end(), Block.Succs.begin(), Block.Succs.end());
+    }
+    return true;
   }
 
   bool collectCalleeImports(const NestedStackProof &Nested) {
@@ -329,7 +354,12 @@ stackPopForBody(StackBody &Body, va_t Entry, const NestedStackProof &NestedPop,
                 const LowFunc *Registration = nullptr,
                 const std::set<int> *RegistrationParents = nullptr,
                 const CxxStackPaths *CxxPaths = nullptr) {
+  // A plain body cannot borrow a returning-stack fact from an unsupported
+  // terminal, regardless of its callees. Refuse before their recursive import
+  // inventory can exhaust work needed by another caller. Registration paths
+  // retain their separate dispatcher roots and authenticated no-return exits.
   if (!Body.Valid || !Body.Entries.count(Entry) ||
+      (!Registration && !CxxPaths && !Body.hasOnlyReturnTerminals(Entry)) ||
       !Body.collectCalleeImports(NestedPop))
     return std::nullopt;
   const auto &Image = Body.Image;
@@ -497,8 +527,7 @@ stackPopForBody(StackBody &Body, va_t Entry, const NestedStackProof &NestedPop,
     }
     if (DoesNotReturn)
       continue;
-    if (Block.Succs.empty() &&
-        (Block.Ops.empty() || Block.Ops.back().Opcode != NdOp::RETURN))
+    if (Block.Succs.empty() && !endsInReturn(Block))
       return std::nullopt;
     for (int Successor : Block.Succs) {
       if (!Blocks.count(Successor) ||
