@@ -59,8 +59,8 @@ cleanup_only_parent() {
 #endif
 
 #ifdef NEVERD_NORETURN_CXX_PARENT
-extern "C" __declspec(dllexport) __declspec(noinline) int
-cleanup_only_returning_wrapper() {
+extern "C" __declspec(dllexport)
+__declspec(noinline) int cleanup_only_returning_wrapper() {
   CleanupOnlyGuard Guard{3};
   if (cleanup_only_enabled == 2)
     return 9;
@@ -75,6 +75,10 @@ cleanup_only_forward() {
   __builtin_unreachable();
 }
 
+#endif
+
+#ifndef NEVERD_MIXED_REGISTRATION
+#ifdef NEVERD_NORETURN_CXX_PARENT
 extern "C" int mainCRTStartup() {
 #else
 extern "C" __declspec(noreturn) void mainCRTStartup() {
@@ -106,3 +110,4 @@ extern "C" __declspec(noreturn) void mainCRTStartup() {
   ExitProcess(2);
 #endif
 }
+#endif

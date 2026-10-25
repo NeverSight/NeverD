@@ -6634,6 +6634,36 @@ the capture records that library provenance alongside the generated object.
 Use these native libraries for CRT RTTI definitions: a Wine-only import stub
 can admit exports that the native CRT does not provide.
 This is generated-frame analysis/runtime evidence, not source reconstruction.
+When the LLVM toolchain provides `LLVM_NEVERD_X86_CXX_EH_MODE`, the cleanup-only
+input test also validates and compiles its synchronous parent under the SEH
+module default. Independent COFF table receipts must still preserve its FH3
+flags and unwind graph. Removing the mode or frame marker, supplying a mode
+value, or dropping `noinline` must refuse. Qualify changes to the LLVM mode
+with verifier, mandatory-inlining and optimized code-generation tests, plus
+native mixed SEH/C++ fixtures in both function orders; a module-flag check
+alone does not establish mixed-source emission or whole-image completion.
+
+`NeverDWindowsMixedRegistrationTests` reconstructs both a shared FH3 C++
+cleanup parent and an EH3 SEH parent from the same authored PE. It emits both
+function orders, then checks the unchanged IR and the result of
+`Pipeline::optimizeModule` with default options. Both functions must retain
+native source proofs, compile together, pass independent COFF installation
+checks, and have their original entries redirected to generated code.
+
+```bash
+python3 scripts/check_windows_mixed_registration.py \
+  --test-binary build-release/bin/NeverDWindowsMixedRegistrationTests \
+  --runtime-libs PATH --output PATH
+```
+
+Add `--wine /path/to/wine --wine-prefix PATH` for 36 observations: O0/O1 source
+fixtures, both emission orders, unchanged/default-optimized LLVM, preferred
+and rebased images, and wrong-destructor-trace controls. The original fixture
+must pass before reconstruction is tested. Its observer checks the SEH result,
+C++ exception and destructor order, stack guards, and FS-chain restoration
+after leaving the C++ catch. `--baseline-only` runs just the four original
+observations. This is mixed-source qualification, not whole-image acceptance.
+
 `check_windows_registration_cleanup_only.py --test-binary
 build-release/bin/NeverDWindowsRegistrationNativeTests --runtime-libs PATH
 --output PATH` statically checks a compiled PE32 parent with two destructors

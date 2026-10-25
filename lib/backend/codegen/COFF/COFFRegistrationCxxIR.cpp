@@ -25,6 +25,7 @@
 #include "neverd/loader/COFF/COFFRegistrationEH.h"
 
 #include "llvm/IR/CFG.h"
+#include "llvm/IR/EHPersonalities.h"
 #include "llvm/IR/GlobalVariable.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/TargetParser/Triple.h"
@@ -67,6 +68,12 @@ getCheckedCxxControlIRProof(const llvm::Function &Function,
   if (!UnwindGraph)
     return rejectIR("C++ source unwind destinations are incomplete");
   const auto *Module = Function.getParent();
+#ifdef LLVM_NEVERD_X86_CXX_EH_MODE
+  if (Module &&
+      Function.hasFnAttribute(llvm::RewriteWinX86SynchronousCxxAttribute))
+    if (auto Error = llvm::validateRewriteWinX86SynchronousCxx(Function))
+      return rejectIR(llvm::toString(std::move(Error)));
+#endif
   const auto *Marker = Function.getMetadata(windows_eh_md::NativeAttachment);
   const auto *Kind =
       Marker && Marker->getNumOperands() == 2
@@ -84,7 +91,11 @@ getCheckedCxxControlIRProof(const llvm::Function &Function,
       !Personality->getReturnType()->isIntegerTy(32) ||
       !Personality->isVarArg() || Personality->arg_size() ||
       Personality->getCallingConv() != llvm::CallingConv::C ||
+#ifdef LLVM_NEVERD_X86_CXX_EH_MODE
+      llvm::usesAsynchronousEHMode(Function) ||
+#else
       Module->getModuleFlag("eh-asynch") ||
+#endif
       Module->getTargetTriple().getArch() != llvm::Triple::x86 ||
       !Module->getTargetTriple().isWindowsMSVCEnvironment() ||
       Module->getDataLayout().getPointerSize() != 4 ||

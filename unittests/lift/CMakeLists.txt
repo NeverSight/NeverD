@@ -1691,6 +1691,14 @@ target_include_directories(NeverDWindowsEHMetadataEncoderTests PRIVATE
   ${LLVM_INCLUDE_DIRS}
 )
 
+add_neverd_unittest(NeverDWindowsMixedRegistrationTests
+  eh/WindowsMixedRegistrationTests.cpp
+  LINK_COMPONENTS
+  Pipeline
+  BackendLLVM
+  CodeGen
+)
+
 if(TARGET neverd)
   add_dependencies(NeverDLiftTests neverd)
 endif()

@@ -9397,6 +9397,16 @@ frame privacy; an unproved result can only serve an independently discarded
 invocation. MedIR, LLVM and the COFF writer consume this distinct C++ contract,
 and the native owners replay its complete current-image proof.
 
+Synchronous PE32 C++ parents can share a module with asynchronous SEH only
+when LLVM provides `LLVM_NEVERD_X86_CXX_EH_MODE`. The native producer marks each
+proved parent with the checked synchronous rewrite attribute. LLVM uses that
+function's mode for invoke simplification, state numbering, block-state labels
+and FH3 flags, and refuses inlining across different modes. Ordinary functions
+retain the module default. The independent COFF proof validates the attribute
+and queries the same mode; source synchronous classification and every frame,
+call and unwind receipt remain necessary. Older toolchains retain the mixed
+module refusal.
+
 Checked call effects preserve a live import binding only after their image
 writes have invalidated overlapping slots. Required imports are prerequisites
 at each source occurrence. This is independent of retaining an already loaded

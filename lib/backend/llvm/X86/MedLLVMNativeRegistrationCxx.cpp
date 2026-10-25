@@ -84,8 +84,10 @@ bool MedLLVMEmitter::emitNativeX86RegistrationCxx(
     Runtime = Handler->Dispatch;
     Guarded = true;
   }
+#ifndef LLVM_NEVERD_X86_CXX_EH_MODE
   if (Mod->getModuleFlag("eh-asynch"))
     return false;
+#endif
   if (!States.Complete || !States.CallbackStatesComplete ||
       !States.RegistrationLifetimeComplete || !States.ChainOperationsComplete ||
       !States.IncomingFrameAccessesComplete ||
@@ -547,6 +549,9 @@ bool MedLLVMEmitter::emitNativeX86RegistrationCxx(
     Parent.addParamAttr(1, llvm::Attribute::InReg);
   }
   Parent.addFnAttr(llvm::RewriteWinX86CxxFrameAttribute);
+#ifdef LLVM_NEVERD_X86_CXX_EH_MODE
+  Parent.addFnAttr(llvm::RewriteWinX86SynchronousCxxAttribute);
+#endif
   Parent.addFnAttr("frame-pointer", "all");
   Parent.addFnAttr(llvm::Attribute::NoInline);
   Parent.addFnAttr(llvm::Attribute::OptimizeNone);

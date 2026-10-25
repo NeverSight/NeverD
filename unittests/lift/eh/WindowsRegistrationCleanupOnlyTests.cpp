@@ -33,6 +33,9 @@
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/Mangler.h"
 #include "llvm/IR/Verifier.h"
+#ifdef LLVM_NEVERD_X86_CXX_CATCH_SUBFIELDS
+#include "llvm/IR/WinEHFrame.h"
+#endif
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/TargetSelect.h"
@@ -46,6 +49,42 @@
 using namespace neverd;
 
 namespace {
+#ifdef LLVM_NEVERD_X86_CXX_EH_MODE
+void checkSynchronousCleanupMode(const llvm::Module &Module,
+                                 const MedFunc &Source,
+                                 const BinaryImage &Image) {
+  ASSERT_TRUE(Source.ExceptionMetadata);
+  for (unsigned Mutation = 0; Mutation != 5; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    auto Mixed = llvm::CloneModule(Module);
+    Mixed->addModuleFlag(llvm::Module::Warning, "eh-asynch", 1);
+    auto *Parent = Mixed->getFunction(Source.Name);
+    ASSERT_TRUE(Parent);
+    ASSERT_TRUE(
+        Parent->hasFnAttribute(llvm::RewriteWinX86SynchronousCxxAttribute));
+    if (Mutation == 1)
+      Parent->removeFnAttr(llvm::RewriteWinX86SynchronousCxxAttribute);
+    if (Mutation == 2)
+      Parent->addFnAttr(llvm::RewriteWinX86SynchronousCxxAttribute, "async");
+    if (Mutation == 3)
+      Parent->removeFnAttr(llvm::Attribute::NoInline);
+    if (Mutation == 4)
+      Parent->removeFnAttr(llvm::RewriteWinX86CxxFrameAttribute);
+    auto Checked = validateCOFFRegistrationCxxIR(
+        *Parent, *Source.ExceptionMetadata, Image);
+    if (Mutation) {
+      EXPECT_TRUE(bool(Checked));
+      llvm::consumeError(std::move(Checked));
+    } else {
+      ASSERT_FALSE(bool(Checked)) << llvm::toString(std::move(Checked));
+      ASSERT_FALSE(llvm::verifyModule(*Mixed, &llvm::errs()));
+      auto Compiled = Codegen().compile(*Mixed, Arch::X86, BinaryFormat::COFF);
+      EXPECT_TRUE(Compiled.Success);
+    }
+  }
+}
+#endif
+
 #ifdef LLVM_NEVERD_X86_CXX_FUNCTION_RECEIPTS
 TEST(WindowsRegistrationCxxStateMap, LargeGeneratedStateMapsKeepExactEdges) {
   for (bool Sparse : {false, true}) {
@@ -314,6 +353,9 @@ void checkCleanupOnlyInput(const char *Path, bool RegisterStateWrite) {
   auto *Parent = Module->getFunction(Med.Name);
   ASSERT_TRUE(Parent);
   ASSERT_TRUE(Parent->getMetadata(windows_eh_md::NativeAttachment));
+#ifdef LLVM_NEVERD_X86_CXX_EH_MODE
+  ASSERT_NO_FATAL_FAILURE(checkSynchronousCleanupMode(*Module, Med, *Image));
+#endif
   if (NestedTarget)
     ASSERT_NO_FATAL_FAILURE(
         checkSharedCleanupDeclarations(*Image, Med, NestedTarget));
@@ -572,6 +614,21 @@ void checkCleanupOnlyInput(const char *Path, bool RegisterStateWrite) {
   auto Tables = getCheckedCOFFRegistrationCxxTableReceipt(*Parent, *Source,
                                                           *Image, Native);
   ASSERT_TRUE(bool(Tables)) << llvm::toString(Tables.takeError());
+#ifdef LLVM_NEVERD_X86_CXX_EH_MODE
+  {
+    auto Mixed = llvm::CloneModule(*Module);
+    Mixed->addModuleFlag(llvm::Module::Warning, "eh-asynch", 1);
+    auto MixedNative = compileImageForPatch(
+        *Mixed, Arch::X86, BinaryFormat::COFF, CodeVA, Resolve, Image->Base);
+    ASSERT_TRUE(MixedNative.Success);
+    ASSERT_TRUE(MixedNative.Unresolved.empty());
+    const auto *MixedParent = Mixed->getFunction(Med.Name);
+    ASSERT_TRUE(MixedParent);
+    auto MixedTables = getCheckedCOFFRegistrationCxxTableReceipt(
+        *MixedParent, *Source, *Image, MixedNative);
+    ASSERT_TRUE(bool(MixedTables)) << llvm::toString(MixedTables.takeError());
+  }
+#endif
   EXPECT_EQ(Tables->Tables[2], (std::pair<va_t, va_t>{0, 0}));
   EXPECT_EQ(Tables->SourceToGeneratedStates.size(),
             Source->Cxx->UnwindMap.size() + 1);
