@@ -56,7 +56,7 @@ testing::AssertionResult validLLVMModule(llvm::Module &Module) {
   return testing::AssertionSuccess();
 }
 
-testing::AssertionResult validHighC(llvm::StringRef Source,
+testing::AssertionResult validHighC(llvm::StringRef Source, Arch Architecture,
                                     unsigned ExpectedImageBytes) {
 #ifdef NEVERD_TEST_CLANG
   std::string CompilerPath = NEVERD_TEST_CLANG;
@@ -116,18 +116,19 @@ testing::AssertionResult validHighC(llvm::StringRef Source,
       return testing::AssertionFailure() << EC.message();
     Out << Source;
   }
-  llvm::SmallVector<llvm::StringRef, 14> Args{CompilerPath,
-                                              "-target",
-                                              "x86_64-none-elf",
-                                              "-ffreestanding",
-                                              "-std=gnu11",
-                                              "-mavx2",
-                                              "-I",
-                                              IncludeDir,
-                                              "-c",
-                                              SourcePath,
-                                              "-o",
-                                              ObjectPath};
+  llvm::SmallVector<llvm::StringRef, 14> Args{
+      CompilerPath,
+      "-target",
+      Architecture == Arch::X86 ? "i386-none-elf" : "x86_64-none-elf",
+      "-ffreestanding",
+      "-std=gnu11",
+      "-mavx2",
+      "-I",
+      IncludeDir,
+      "-c",
+      SourcePath,
+      "-o",
+      ObjectPath};
   std::optional<llvm::StringRef> Redirects[] = {std::nullopt, StdoutPath.str(),
                                                 StderrPath.str()};
   std::string ExecuteError;
@@ -139,7 +140,9 @@ testing::AssertionResult validHighC(llvm::StringRef Source,
     if (!Object)
       return testing::AssertionFailure() << llvm::toString(Object.takeError());
     csh Handle;
-    if (cs_open(CS_ARCH_X86, CS_MODE_64, &Handle) != CS_ERR_OK)
+    if (cs_open(CS_ARCH_X86,
+                Architecture == Arch::X86 ? CS_MODE_32 : CS_MODE_64,
+                &Handle) != CS_ERR_OK)
       return testing::AssertionFailure() << "cannot decode emitted object";
     cs_option(Handle, CS_OPT_DETAIL, CS_OPT_ON);
     unsigned Images = 0;
@@ -351,11 +354,11 @@ TEST(X87Environment, ExtentReachesEveryEmitter) {
                   EXPECT_NE(
                       Rendered.Code.find(Segment == 0x64 ? "%%fs:" : "%%gs:"),
                       std::string::npos);
-                if (A == Arch::X64 && Segment == 0 && Prefix.Bytes.size() <= 1)
+                if (Prefix.Bytes.size() <= 1)
                   EXPECT_TRUE(validHighC(
                       "#include <stdint.h>\nvoid env(uintptr_t address) {\n" +
                           Rendered.Code + "}\n",
-                      ExpectedImageBytes));
+                      A, ExpectedImageBytes));
               }
           EXPECT_TRUE(SawInstruction);
 
@@ -368,8 +371,8 @@ TEST(X87Environment, ExtentReachesEveryEmitter) {
           OS.flush();
           EXPECT_NE(Source.find(Mnemonic + " "), std::string::npos);
           EXPECT_NE(Source.find("(%[address])"), std::string::npos);
-          if (A == Arch::X64 && Segment == 0 && Prefix.Bytes.size() <= 1)
-            EXPECT_TRUE(validHighC(Source, ExpectedImageBytes));
+          if (Prefix.Bytes.size() <= 1)
+            EXPECT_TRUE(validHighC(Source, A, ExpectedImageBytes));
 
           // Removing or corrupting the extent must be rejected before output.
           for (auto &Block : Med.Blocks)
