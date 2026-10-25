@@ -6012,6 +6012,12 @@ callee index. `CxxPhysicalExitRechecksSourceWithoutChainReceipts` binds exact
 operations, instruction boundaries, interior roots and immutable helper bytes.
 `CxxIncomingPrefixDoesNotGuessPastCallsOrBranches` checks incoming reads/writes,
 local storage, lost frame coordinates and the ordinary call/branch boundary.
+`RegistrationConditionalCxx.MissingBorrowDoesNotAnalyzeUnboundCalls` checks
+that direct and nested queries reject missing caller words before spending
+the work of an unbound native-state graph, retain the cumulative budget limit,
+and accept a subsequent query with restored inputs. The conditional C++ suite
+continues to cover cleanup failures, runtime-IAT writes, nested throws, return
+aliases, incomplete code and invocation-specific input changes.
 Run these with the callee-stack, registration EH/state, native mixed and
 cleanup-only fixtures, instruction-boundary, exception-edge and jump-table
 suites. Stack facts do not qualify whole-image call or escape domains.

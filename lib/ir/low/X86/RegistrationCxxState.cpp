@@ -444,10 +444,12 @@ proveBoundCxxCallee(const BinaryImage &Image, const LowOp &Op,
   if (!Dec.init(Image))
     return std::nullopt;
   RegistrationCallCalleeIndex Index(Image, &Work);
-  CFGBuilder Builder;
-  Builder.setRegistrationCalleeIndex(&Index);
+  // Invocation inputs belong to the conditional solver below. Building an
+  // unbound native state closure here repeats unrelated callee work before
+  // those inputs can even be checked. The physical graph grants no states;
+  // every admitted invocation still replays its full cleanup/effect proof.
   const auto Function =
-      Builder.buildIntegerFrameProof(Image, Dec, Target, "bound-cxx-callee");
+      registration_abi::buildOrdinaryCxxFrameGraph(Image, Dec, Target, Index);
   if (!Function.hasCompleteLiftCoverage() ||
       !registration_abi::chargeDecodedCallee(Work, Function))
     return std::nullopt;

@@ -394,6 +394,38 @@ TEST(RegistrationConditionalCxx, DistinguishesReturnedBorrowFromScalar) {
   }
 }
 
+TEST(RegistrationConditionalCxx, MissingBorrowDoesNotAnalyzeUnboundCalls) {
+  for (bool Nested : {false, true}) {
+    SCOPED_TRACE(Nested);
+    BoundCxxFixture F;
+    if (Nested)
+      F.addOuter();
+    F.Parent.Cells.erase(-28);
+    Decoder Dec;
+    ASSERT_TRUE(Dec.init(F.Image));
+    size_t UnboundWork = 0;
+    RegistrationCallCalleeIndex Index(F.Image, &UnboundWork);
+    CFGBuilder Builder;
+    Builder.setRegistrationCalleeIndex(&Index);
+    const auto Unbound = Builder.buildIntegerFrameProof(
+        F.Image, Dec, F.Call.Inputs[0].Offset, "unbound-cxx-callee");
+    ASSERT_TRUE(Unbound.hasCompleteLiftCoverage());
+    ASSERT_TRUE(Unbound.RegistrationStates);
+    ASSERT_GT(UnboundWork, 0u);
+    size_t Work = 0;
+    EXPECT_FALSE(F.prove(Work));
+    // A missing invocation input is decidable from the physical body and
+    // caller cells. It must not first pay for the unbound call/state closure.
+    EXPECT_LT(Work, UnboundWork);
+    size_t Limited = limits::kMaxRegistrationEHStateWork - Work;
+    EXPECT_FALSE(F.prove(Limited));
+    EXPECT_EQ(Limited, limits::kMaxRegistrationEHStateWork);
+    F.Parent.Cells[-28] = FrameValue::constant(1);
+    Work = 0;
+    EXPECT_TRUE(F.prove(Work));
+  }
+}
+
 TEST(RegistrationConditionalCxx, JoinedAndPartialReturnsKeepAliasTaint) {
   for (const auto Mode : {BoundCxxFixture::ReturnMode::Joined,
                           BoundCxxFixture::ReturnMode::Partial}) {

@@ -9042,6 +9042,11 @@ C++ helper under checked caller-frame inputs. It shares ordinary C++ handler,
 cookie and state setup, authenticates the direct call and complete current body,
 and requires a uniform stack-pop extent. Full volatile register facts and
 initialized scalar output words remain distinct from incoming pointer carriers.
+Its initial graph uses the private ordinary C++ decoder, so missing caller
+inputs refuse before an unrelated unbound native-state closure consumes the
+query budget. The graph supplies no registration states or exceptional edges;
+the invocation owner still obtains checked call and cleanup contracts and
+replays the complete conditional state, lifetime and memory-effect proof.
 The state solver retains one register seed for the parent entry. A shared C++
 prologue checks the unchanged carriers against that seed, including any bound
 ECX/EDX facts, instead of reconstructing unrelated opaque values. Its physical
