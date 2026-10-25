@@ -20,6 +20,7 @@
 #include "neverd/Common.h"
 #include "neverd/Limits.h"
 #include "neverd/ir/Limits.h"
+#include "neverd/ir/SourceCallABI.h"
 #include "neverd/ir/low/SourceCallOccurrence.h"
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/ir/med/LowToMedError.h"
@@ -305,6 +306,7 @@ void Pipeline::buildMedIR(const BinaryImage &Img, const PipelineOptions &Opts,
         ExplicitCallTargets.insert(Hint.TargetAddress);
     std::set<va_t> Inferred;
     std::set<size_t> Affected;
+    std::map<va_t, size_t> LocalDefinitions;
     for (size_t I = 0; I < Total; ++I) {
       const auto &Low = Result.LowFuncs[I];
       if (SourceCalleeHints.count(Low.Entry) ||
@@ -326,6 +328,7 @@ void Pipeline::buildMedIR(const BinaryImage &Img, const PipelineOptions &Opts,
       SourceCalleeHints.emplace(Low.Entry, std::move(*Hint));
       SourceHints.emplace(Low.Entry, &SourceEntryHints.at(Low.Entry));
       Inferred.insert(Low.Entry);
+      LocalDefinitions.emplace(Low.Entry, I);
       Affected.insert(I);
     }
     std::set<va_t> OmittedTargets;
@@ -345,6 +348,36 @@ void Pipeline::buildMedIR(const BinaryImage &Img, const PipelineOptions &Opts,
       SourceCalleeHints.emplace(Entry, std::move(Hint));
       Inferred.insert(Entry);
     }
+    // An automatically declared input must be supplied by every caller in
+    // this request. A partial/unwritten outgoing word is not a scalar value.
+    // Withdraw the candidate as a unit rather than publish incompatible
+    // definition and call signatures in a whole-module source projection.
+    std::set<va_t> Unavailable;
+    for (const auto &Low : Result.LowFuncs)
+      for (const auto &Block : Low.Blocks)
+        for (const auto &Op : Block.Ops) {
+          const auto Site = sourceCallOccurrenceKey(Op);
+          if (!Site || Site->Opcode != NdOp::CALL || !Site->StaticTarget ||
+              !Inferred.count(*Site->StaticTarget))
+            continue;
+          SourceCallTypeHint Hint;
+          Hint.Signature = SourceCalleeHints.at(*Site->StaticTarget);
+          const auto Bias =
+              sourceCallReturnAddressBias(&Img, Img.Arch, Op.Addr);
+          std::string Diagnostic;
+          if (!Bias || !sourceCallStackArgumentsDefined(
+                           Low, Hint, *Site, Img.Arch, *Bias, Diagnostic))
+            Unavailable.insert(*Site->StaticTarget);
+        }
+    for (va_t Entry : Unavailable) {
+      Inferred.erase(Entry);
+      SourceCalleeHints.erase(Entry);
+      SourceHints.erase(Entry);
+      SourceEntryHints.erase(Entry);
+      if (auto Local = LocalDefinitions.find(Entry);
+          Local != LocalDefinitions.end())
+        Affected.erase(Local->second);
+    }
     for (size_t I = 0; I < Total && !Inferred.empty(); ++I)
       for (const auto &Block : Result.LowFuncs[I].Blocks)
         for (const auto &Op : Block.Ops) {
@@ -355,6 +388,7 @@ void Pipeline::buildMedIR(const BinaryImage &Img, const PipelineOptions &Opts,
           SourceCallTypeHint Hint;
           Hint.CallKind = SourceCallTypeHint::Kind::Native;
           Hint.TargetAddress = *Site->StaticTarget;
+          Hint.TargetName = Img.getFunctionNameAt(Hint.TargetAddress);
           Hint.Signature = SourceCalleeHints.at(Hint.TargetAddress);
           if (SourceSites[Result.LowFuncs[I].Entry]
                   .try_emplace(*Site, std::move(Hint))

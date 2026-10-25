@@ -207,14 +207,25 @@ bool neverd::sourceCallStackArgumentsDefined(const LowFunc &Function,
                                              const SourceCallTypeHint &Hint,
                                              Arch Architecture, int64_t Bias,
                                              std::string &Error) {
+  if (Hint.AnalystSite)
+    return sourceCallStackArgumentsDefined(Function, Hint, *Hint.AnalystSite,
+                                           Architecture, Bias, Error);
+  for (const auto &Parameter : Hint.Signature.Parameters)
+    if (Parameter.Location.Kind == SourceABICarrierKind::Stack)
+      return refuse(Error,
+                    "The stack arguments have no original call occurrence");
+  return true;
+}
+
+bool neverd::sourceCallStackArgumentsDefined(
+    const LowFunc &Function, const SourceCallTypeHint &Hint,
+    const SourceCallOccurrenceKey &OriginalSite, Arch Architecture,
+    int64_t Bias, std::string &Error) {
   bool HasStack = false;
   for (const auto &P : Hint.Signature.Parameters)
     HasStack |= P.Location.Kind == SourceABICarrierKind::Stack;
   if (!HasStack)
     return true;
-  if (!Hint.AnalystSite)
-    return refuse(Error,
-                  "The stack arguments have no original call occurrence");
   using Key = std::tuple<VnodeSpace, uint64_t, uint16_t>;
   auto key = [](const NdVar &V) { return Key{V.Space, V.Offset, V.Size}; };
   const auto SP = NdVar::reg(getTargetRegInfo(Architecture).StackPointer, 8);
@@ -234,7 +245,7 @@ bool neverd::sourceCallStackArgumentsDefined(const LowFunc &Function,
         return refuse(Error,
                       "The outgoing stack argument proof exceeded its budget");
       if (const auto Site = sourceCallOccurrenceKey(Op);
-          Site && *Site == *Hint.AnalystSite) {
+          Site && *Site == OriginalSite) {
         const auto CurrentSP = address(SP);
         if (!CurrentSP)
           return refuse(Error, "The call's stack pointer is not a complete "

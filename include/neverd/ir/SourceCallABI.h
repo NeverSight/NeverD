@@ -23,6 +23,13 @@ bool sourceCallVariadicStateDefined(const LowFunc &Function,
 /// block, after any prior call or unknown memory write.
 bool sourceCallStackArgumentsDefined(const LowFunc &Function,
                                      const SourceCallTypeHint &Hint,
+                                     const SourceCallOccurrenceKey &Site,
+                                     Arch Architecture,
+                                     int64_t ReturnAddressBias,
+                                     std::string &Diagnostic);
+/// Compatibility entry point for an analyst declaration carrying its site.
+bool sourceCallStackArgumentsDefined(const LowFunc &Function,
+                                     const SourceCallTypeHint &Hint,
                                      Arch Architecture,
                                      int64_t ReturnAddressBias,
                                      std::string &Diagnostic);

@@ -724,6 +724,11 @@ std::optional<RecoveredArgumentBound> argumentBoundOf(const MedFunc &Callee) {
 /// signature. A checked x87 argument follows that entire recovered prefix:
 /// remove surplus ordinary arguments before it, never the argument itself.
 void boundRecoveredArguments(MedCallInfo &Call, RecoveredArgumentBound Bound) {
+  // The call's validated physical source ABI owns these operands. An omitted
+  // callee's ordinary machine signature may have a different positional
+  // prefix, and cannot truncate the already bound source argument list.
+  if (Call.SourceCallHint)
+    return;
   if (Call.Args.size() == Bound.Parameters)
     return;
   if (!Bound.X87Parameters.empty() && !Call.Args.empty()) {
