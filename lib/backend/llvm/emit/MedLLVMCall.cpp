@@ -1046,6 +1046,54 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
               llvm::GlobalValue::ExternalLinkage, CalleeName, Mod);
       }
 
+      // A source-bound native call already has a complete logical signature.
+      // In a selected-function export its body may be omitted, but that does
+      // not make its declaration an unknown variadic external. Keep this
+      // source-only declaration separate from physical machine ABI inference.
+      if (PreserveUnknownSourceValues && CI && CI->SourceCallHint &&
+          Op.SourceCallHint == CI->SourceCallHint && !CI->IsIndirect &&
+          Op.Opcode == NdOp::CALL && Op.NumInputs &&
+          Op.Inputs[0].isConst() && !CalleeName.empty()) {
+        const auto &Hint = *CI->SourceCallHint;
+        const auto &Signature = Hint.Signature;
+        const bool NativeSource =
+            Hint.CallKind == SourceCallTypeHint::Kind::Native &&
+            Hint.TargetAddress == Op.Inputs[0].ConstVal &&
+            (Signature.Origin ==
+                 SourceFunctionTypeHint::OriginKind::NativeAnalysis ||
+             Signature.Origin ==
+                 SourceFunctionTypeHint::OriginKind::ExplicitSource);
+        if (NativeSource) {
+          std::string Diagnostic;
+          if (Signature.Architecture != TargetArch ||
+              !validateSourceABI(Signature, Diagnostic) ||
+              Signature.Convention !=
+                  SourceFunctionTypeHint::ConventionKind::C ||
+              Args.size() != Signature.Parameters.size() ||
+              CI->VarArgFixedCount >= 0) {
+            syncError() << "med_llvm_emitter: invalid native source call "
+                           "declaration\n";
+            FatalCodePointerResolution = true;
+            return;
+          }
+          std::vector<llvm::Type *> Parameters;
+          for (const auto &Parameter : Signature.Parameters)
+            Parameters.push_back(mapNdtype(Parameter.Type));
+          auto *FT = llvm::FunctionType::get(mapNdtype(Signature.ReturnType),
+                                            Parameters, false);
+          Callee = Mod->getFunction(CalleeName);
+          if (Callee && Callee->getFunctionType() != FT) {
+            syncError() << "med_llvm_emitter: conflicting native source call "
+                           "declaration\n";
+            FatalCodePointerResolution = true;
+            return;
+          }
+          if (!Callee)
+            Callee = llvm::Function::Create(
+                FT, llvm::GlobalValue::ExternalLinkage, CalleeName, Mod);
+        }
+      }
+
       // On AArch64, variadic and non-variadic functions use different
       // calling conventions (variadic args go on the stack).  We detect
       // known variadic functions by pattern/whitelist, and for any

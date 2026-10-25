@@ -232,8 +232,13 @@ void runHomeSourceMatrix(bool Explicit, bool SelectedCaller = false) {
                 << Source;
             const std::string Oracle =
                 SelectedCaller
-                    ? "\nuint64_t read_home(uint64_t value) { return value; }\n"
-                      "int main(void) { return caller_home() != 42; }\n"
+                    ? Floating
+                          ? "\n#include <string.h>\n"
+                            "uint64_t read_home(double value) { uint64_t bits; "
+                            "memcpy(&bits, &value, sizeof(bits)); return bits; }\n"
+                            "int main(void) { return caller_home() != 42; }\n"
+                          : "\nuint64_t read_home(uint64_t value) { return value; }\n"
+                            "int main(void) { return caller_home() != 42; }\n"
                 : Floating
                     ? "\n#include <string.h>\n"
                       "int main(void) { double value = 71.0; uint64_t bits; "
@@ -286,6 +291,10 @@ TEST(IncomingHomeSource, OmittedStackLeafUsesTheOrdinaryCalleeReader) {
 
 TEST(IncomingHomeSource, SelectedCallerRetainsIncomingStackArguments) {
   runHomeSourceMatrix(false, true);
+}
+
+TEST(IncomingHomeSource, SelectedCallerRetainsExplicitScalarDeclarations) {
+  runHomeSourceMatrix(true, true);
 }
 
 TEST(IncomingHomeSource, CachedSelectionsKeepCurrentStackInputEvidence) {
