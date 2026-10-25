@@ -132,7 +132,7 @@ homeCallSites(const BinaryImage &Image,
 }
 
 void runHomeSourceMatrix(bool Explicit, bool SelectedCaller = false,
-                         bool Framed = false) {
+                         bool Framed = false, bool Allocated = false) {
   for (bool Floating : {false, true})
     for (Arch Architecture : {Arch::X64, Arch::AArch64})
       for (BinaryFormat Format : {BinaryFormat::COFF, BinaryFormat::ELF}) {
@@ -159,6 +159,18 @@ void runHomeSourceMatrix(bool Explicit, bool SelectedCaller = false,
                               0xa0, 0x0b, 0x40, 0xf9, // ldr x0,[x29,#16]
                               0xfd, 0x7b, 0xc1, 0xa8, // ldp x29,x30,[sp],#16
                               0xc0, 0x03, 0x5f, 0xd6}); // ret
+          if (Allocated) {
+            if (Architecture == Arch::X64) {
+              Text.Data.insert(Text.Data.begin() + (Callee - Caller) + 4,
+                               {0x48, 0x83, 0xec, 0x20}); // sub rsp,32
+              Text.Data[Text.Data.size() - 2] = 0xc9;     // leave
+            } else {
+              Text.Data.insert(Text.Data.begin() + (Callee - Caller) + 8,
+                               {0xff, 0x83, 0x00, 0xd1}); // sub sp,sp,#32
+              Text.Data.insert(Text.Data.end() - 8,
+                               {0xff, 0x83, 0x00, 0x91}); // add sp,sp,#32
+            }
+          }
           Text.Size = Text.FileSz = Text.Data.size();
         }
         const auto Signature = homeSignature(Architecture, Floating);
@@ -329,6 +341,18 @@ TEST(IncomingHomeSource, AutomaticStackInputSurvivesAFrame) {
 
 TEST(IncomingHomeSource, SelectedCallerRetainsFramedStackInput) {
   runHomeSourceMatrix(false, true, true);
+}
+
+TEST(IncomingHomeSource, ExplicitStackInputSurvivesAnAllocatedFrame) {
+  runHomeSourceMatrix(true, false, true, true);
+}
+
+TEST(IncomingHomeSource, AutomaticStackInputSurvivesAnAllocatedFrame) {
+  runHomeSourceMatrix(false, false, true, true);
+}
+
+TEST(IncomingHomeSource, SelectedCallerRetainsAllocatedFrameStackInput) {
+  runHomeSourceMatrix(false, true, true, true);
 }
 
 TEST(IncomingHomeSource, CachedSelectionsKeepCurrentStackInputEvidence) {
