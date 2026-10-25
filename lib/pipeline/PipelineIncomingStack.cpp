@@ -40,9 +40,17 @@ bool supported(NdOp Opcode) {
          Opcode == NdOp::STORE || Opcode == NdOp::RETURN;
 }
 bool supported(const LowOp &Op, const TargetRegInfo &TRI) {
-  return supported(Op.Opcode) && Op.MemoryOrdering == NdMemoryOrdering::None &&
+  // LowIR retains arithmetic flag calculations even when ordinary source
+  // conversion proves them unobserved. Reuse the frame owner's total-bit
+  // transfer policy; the MedIR role walk still rejects every live unsupported
+  // operation or leaked frame value. Direction state is not an arithmetic
+  // result and must not disappear behind this source declaration.
+  return (supported(Op.Opcode) || isSourceFrameScalarTransfer(Op.Opcode)) &&
+         Op.MemoryOrdering == NdMemoryOrdering::None &&
          Op.MemoryAddressSpace == NdMemoryAddressSpace::Default &&
          (!Op.Output.isReg() || !Op.Output.Size ||
+          (TRI.isFlag(Op.Output.Offset, Op.Output.Size) &&
+           Op.Output.Offset != TRI.FlagDF) ||
           ((Op.Output.Offset == TRI.IntReturnReg ||
             Op.Output.Offset == TRI.StackPointer ||
             TRI.isFrameOrLinkReg(Op.Output.Offset)) &&

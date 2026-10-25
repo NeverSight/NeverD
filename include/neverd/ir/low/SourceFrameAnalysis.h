@@ -56,6 +56,12 @@ bool hasNativeScalarIntrinsicEvidence(const LowOp &Operation,
 /// grants no alignment, no-fault, restoration or source-rewrite certificate.
 bool isSourceFrameObservationGuard(const LowOp &Operation);
 
+/// Total scalar bit transfers with no observable effect beyond their outputs.
+/// This opcode query neither validates operands nor proves address roles or
+/// restored state. Division, floating operations and intrinsics remain outside
+/// it because an unused result alone cannot discard faults or status effects.
+bool isSourceFrameScalarTransfer(NdOp Opcode);
+
 /// Prove that every exit restores the format-specific preserved registers,
 /// stack pointer and link register. Calls must already have validated source
 /// declarations. Exact private spills may carry these identities across calls;

@@ -1578,6 +1578,10 @@ private:
 };
 } // namespace
 
+bool isSourceFrameScalarTransfer(NdOp Opcode) {
+  return privateFrameScalarTransfer(Opcode);
+}
+
 static bool validateFrameCalls(const LowFunc &Function, Arch Architecture,
                                const NativeSourceCalls &Calls,
                                bool &HasStackStore) {
