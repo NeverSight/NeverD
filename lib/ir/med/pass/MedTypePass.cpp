@@ -21,6 +21,7 @@
 #include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/ir/med/IntrinsicShapes.h"
 #include "neverd/ir/med/MedSourceParameterUses.h"
+#include "neverd/ir/med/MedStackAlignment.h"
 
 #include <algorithm>
 #include <deque>
@@ -1277,6 +1278,60 @@ sourceStackSeeds(const MedFunc &Func, Arch Architecture,
   // entry-SP memory to initialize.
   if (!Stack)
     return Seeds;
+
+  // A declaration initializes only its own bytes. In particular, a raw
+  // eight-byte home read cannot be supplied by a four-byte parameter and
+  // uninitialized padding. Generic Param slices are checked by the binder;
+  // check the corresponding raw memory views through the shared stack proof.
+  std::vector<std::pair<int64_t, int64_t>> Ranges;
+  for (const auto &Parameter : Parameters) {
+    const auto &Location = Parameter.Location;
+    if (Location.Kind == SourceABICarrierKind::Stack)
+      Ranges.emplace_back(Location.EntryStackOffset,
+                          Location.EntryStackOffset + Location.ValueBytes);
+  }
+  std::sort(Ranges.begin(), Ranges.end());
+  size_t RangeCount = 0;
+  for (const auto Range : Ranges) {
+    if (RangeCount && Ranges[RangeCount - 1].second >= Range.first)
+      Ranges[RangeCount - 1].second =
+          std::max(Ranges[RangeCount - 1].second, Range.second);
+    else
+      Ranges[RangeCount++] = Range;
+  }
+  Ranges.resize(RangeCount);
+  std::vector<MedVar> Loads{*Stack};
+  std::vector<uint16_t> Widths{0};
+  for (const auto &Block : Func.Blocks)
+    for (const auto &Op : Block.Ops)
+      if (Op.Opcode == NdOp::LOAD && Op.NumInputs == 1 && Op.Output.Size &&
+          Op.MemoryAddressSpace == NdMemoryAddressSpace::Default) {
+        Loads.push_back(Op.Inputs[0]);
+        Widths.push_back(Op.Output.Size);
+      }
+  // This binder has no loader format; do not add format-specific alignment
+  // assumptions to the address proof.
+  const auto Offsets = entryStackOffsets(Func, Loads, Architecture,
+                                         BinaryFormat::Unknown, Func.EntryKind);
+  // Authenticate the entry value before publishing stores through it. Merely
+  // seeing an SSA-zero register at SP does not establish the entry seed.
+  if (Offsets.empty() || Offsets.front() != 0)
+    return std::nullopt;
+  for (size_t I = 1; I < Offsets.size(); ++I) {
+    if (!Offsets[I])
+      continue;
+    const int64_t Begin = *Offsets[I];
+    if (Begin > std::numeric_limits<int64_t>::max() - Widths[I])
+      return std::nullopt;
+    const int64_t End = Begin + Widths[I];
+    const auto Range = std::lower_bound(
+        Ranges.begin(), Ranges.end(), Begin,
+        [](const auto &Span, int64_t Offset) { return Span.second <= Offset; });
+    if (Range == Ranges.end() || Range->first >= End)
+      continue;
+    if (Range->first > Begin || Range->second < End)
+      return std::nullopt;
+  }
   for (const auto &Op : Func.Blocks.front().Ops) {
     if (Op.Opcode != NdOp::COPY || Op.NumInputs != 1 ||
         Op.Output != Op.Inputs[0])

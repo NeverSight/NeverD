@@ -17,6 +17,7 @@
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/ir/low/SourceCallOccurrence.h"
+#include "neverd/ir/med/MedStackAlignment.h"
 #include "neverd/ir/med/MedTypePass.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/pipeline/Pipeline.h"
@@ -265,6 +266,7 @@ TEST(IncomingHomeSource, EntryInitializationRetainsCallOccurrenceIndices) {
     Function.Blocks.resize(1);
     auto &Block = Function.Blocks.front();
     Block.Id = 0;
+    Block.StartAddr = Function.Entry;
     MedVar Stack;
     Stack.Kind = MedVar::Reg;
     Stack.TheArch = Architecture;
@@ -302,6 +304,75 @@ TEST(IncomingHomeSource, EntryInitializationRetainsCallOccurrenceIndices) {
     ASSERT_TRUE(Function.SourceTypeHint);
     EXPECT_EQ(Function.CallInfos.front().OpIdx, static_cast<int>(Index));
     EXPECT_EQ(Block.Ops.size(), Size);
+  }
+}
+
+TEST(IncomingHomeSource, NarrowDeclarationsDoNotDefineAdjacentStackBytes) {
+  for (Arch Architecture : {Arch::X64, Arch::AArch64}) {
+    const auto &TRI = getTargetRegInfo(Architecture);
+    MedFunc Function;
+    Function.Entry = Callee;
+    Function.Name = "wide_home_read";
+    Function.SourceTypeHint = homeSignature(Architecture, false);
+    Function.SourceTypeHint->Parameters.front().Type = NdType::makeInt(4);
+    Function.SourceTypeHint->Parameters.front().Location.ValueBytes = 4;
+    std::string Diagnostic;
+    ASSERT_TRUE(validateSourceABI(*Function.SourceTypeHint, Diagnostic))
+        << Diagnostic;
+    Function.Blocks.resize(1);
+    auto &Block = Function.Blocks.front();
+    Block.Id = 0;
+    Block.StartAddr = Function.Entry;
+    MedVar Stack;
+    Stack.Kind = MedVar::Reg;
+    Stack.Id = 20;
+    Stack.TheArch = Architecture;
+    Stack.RegOff = TRI.StackPointer;
+    Stack.Size = TRI.PointerSize;
+    MedOp Seed;
+    Seed.Opcode = NdOp::COPY;
+    Seed.Output = Stack;
+    Seed.addInput(Stack);
+    MedOp Address;
+    Address.Opcode = NdOp::INT_ADD;
+    Address.Output.Kind = MedVar::Temp;
+    Address.Output.Id = 21;
+    Address.Output.TheArch = Architecture;
+    Address.Output.Size = TRI.PointerSize;
+    Address.addInput(Stack);
+    Address.addInput(MedVar::makeConst(
+        Function.SourceTypeHint->Parameters.front().Location.EntryStackOffset,
+        TRI.PointerSize));
+    MedOp Load;
+    Load.Opcode = NdOp::LOAD;
+    Load.Output.Kind = MedVar::Reg;
+    Load.Output.Id = 22;
+    Load.Output.SSAVer = 1;
+    Load.Output.TheArch = Architecture;
+    Load.Output.RegOff = TRI.IntReturnReg;
+    Load.Output.Size = 8;
+    Load.addInput(Address.Output);
+    MedOp Return;
+    Return.Opcode = NdOp::RETURN;
+    Return.addInput(Load.Output);
+    Block.Ops = {Seed, Address, Load, Return};
+    ASSERT_EQ(
+        entryStackOffset(Function, Address.Output, Architecture,
+                         BinaryFormat::Unknown),
+        Function.SourceTypeHint->Parameters.front().Location.EntryStackOffset);
+    inferMedTypes(Function, Architecture);
+    EXPECT_FALSE(Function.SourceTypeHint);
+    EXPECT_FALSE(Function.SourceParametersBound);
+    EXPECT_EQ(Block.Ops.size(), 4u);
+
+    Function.SourceTypeHint = homeSignature(Architecture, false);
+    Block.StartAddr = Function.Entry + 1;
+    EXPECT_FALSE(
+        entryStackOffset(Function, Stack, Architecture, BinaryFormat::Unknown));
+    inferMedTypes(Function, Architecture);
+    EXPECT_FALSE(Function.SourceTypeHint);
+    EXPECT_FALSE(Function.SourceParametersBound);
+    EXPECT_EQ(Block.Ops.size(), 4u);
   }
 }
 } // namespace
