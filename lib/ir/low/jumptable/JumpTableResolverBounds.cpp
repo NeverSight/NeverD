@@ -1990,8 +1990,14 @@ uint32_t CFGBuilder::inferBoundsFromMaskWithAbsoluteProof(
           // LOAD/address/target role: replay that singleton after its
           // destination is decoded so the entry edge can be published without
           // treating the rest of the physical object as selector authority.
+          // An absolute consumer's exact singleton still authorizes decoding
+          // its one owned destination. Keep that finite replay as a discovery
+          // seed even when it cannot publish a table: discarding it here can
+          // leave a real case absent from the next immutable proof graph.
+          // The closed-domain and minimum-cardinality gates below still own
+          // publication; this grants no singleton or physical-storage fact.
           if (Authorized.size() < limits::kMinJumpTableEntries &&
-              !AllowRelativeSingletonPublication &&
+              !Info.RelocAbsolute && !AllowRelativeSingletonPublication &&
               !ExactFiniteRelativeClosureUnknown &&
               !Info.IndexDomainAuthenticated) {
             // Initial discovery must not promote one relative selector value

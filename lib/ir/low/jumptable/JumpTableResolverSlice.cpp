@@ -5764,6 +5764,16 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
       return false;
     if (A == B)
       return true;
+    // A constraint narrows the paths on which its input is feasible, without
+    // changing that input's bits. Match the lane beneath existing constraints
+    // when applying another edge predicate, while retaining the constrained
+    // graph as the value to refine.
+    if (A && A->K == ResolverValueExpr::Kind::Constraint && A->Input &&
+        A->Input->Size == A->Size)
+      return sameResolverValueForEdge(A->Input, B, Depth + 1);
+    if (B && B->K == ResolverValueExpr::Kind::Constraint && B->Input &&
+        B->Input->Size == B->Size)
+      return sameResolverValueForEdge(A, B->Input, Depth + 1);
     // A named predecessor merge is the same block-entry lane throughout one
     // immutable graph snapshot even when two recursive reconstructions have
     // accumulated a different prefix of its back-edge arms.  The symbolic
@@ -5992,9 +6002,9 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
         Compared->Inputs[1]->Constant == 0)
       Compared = Compared->Inputs[0];
     // At the same width, (x - c) == 0 is exactly x == c, including
-    // modular wraparound. This is the ZF half of an x64 inclusive guard;
-    // unlike an ordering comparison, it needs no no-wrap assumption.
-    if (JoinedGuard && Compared && Constant &&
+    // modular wraparound. This includes a CMP zero flag in every predicate
+    // query mode; unlike ordering, the identity needs no no-wrap assumption.
+    if (Compared && Constant &&
         (Predicate->Opcode == NdOp::INT_EQUAL ||
          Predicate->Opcode == NdOp::INT_NOTEQUAL) &&
         Constant->K == ResolverValueExpr::Kind::Constant &&
@@ -6084,6 +6094,37 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
   auto constrainOnCondition = [&](ResolverResult Value,
                                   ResolverResult Condition, bool Taken) {
     return constrainPredicate(std::move(Value), std::move(Condition), Taken, 0);
+  };
+
+  // Keep one edge-refinement owner for register transport and a load reused
+  // across the same edge. The latter must preserve both the memory identity
+  // and the condition under which that earlier memory value reaches the use.
+  auto constrainOnEdge = [&](ResolverResult Value, int Pred, int Successor,
+                             unsigned Depth) -> ResolverResult {
+    const ResolverFlowBlock &PredBlock = Graph.Blocks[Pred];
+    if (ResolvingPredicate || Value.Kind != ResolverResultKind::Value ||
+        !Value.Value || !PredBlock.LastInsn)
+      return Value;
+    if (!consumeEvidence(PredBlock.LastInsn->Ops.size()))
+      return resolverInvalid();
+    const auto Edges = resolverConditionEdges(*PredBlock.LastInsn);
+    if (!Edges)
+      return Value;
+    const bool IsTaken = Graph.Blocks[Successor].Start == Edges->TrueTarget;
+    const bool IsFalse = Graph.Blocks[Successor].Start == Edges->FalseTarget;
+    if (IsTaken == IsFalse)
+      return Value;
+    if (!consumeProofPointLookup())
+      return resolverInvalid();
+    const LowOp &Branch = *Edges->Condition;
+    const auto Point = Graph.findPoint({Branch.Addr, Branch.Seq});
+    if (!Point || Point->first != Pred ||
+        predicateCannotFilter(Pred, Point->second, Branch.Inputs[1]))
+      return Value;
+    ResolverResult Condition =
+        resolvePredicate(Pred, Point->second, Branch.Inputs[1], Depth + 1);
+    return constrainOnCondition(std::move(Value), std::move(Condition),
+                                IsTaken);
   };
 
   auto supportsRelocatedLiteral = [&](uint16_t Size) {
@@ -8275,10 +8316,12 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
           };
           if ((!AddressResolved ||
                AddressValue.Kind == ResolverResultKind::Value) &&
-              Def.MemoryOrdering == NdMemoryOrdering::None) {
+              Def.MemoryOrdering == NdMemoryOrdering::None &&
+              consumeEvidence(2)) {
             int SearchBlock = Block;
             int SearchEnd = I;
             std::set<int> Searched{Block};
+            std::vector<std::pair<int, int>> CrossedEdges;
             bool Stop = false;
             for (uint32_t Hop = 0;
                  !Stop && Hop < limits::kMaxJumpTableReloadSearchBlocks;
@@ -8318,8 +8361,17 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
                               .Kind != ResolverResultKind::Value)
                     continue;
                 }
-                const ResolverResult Earlier =
+                ResolverResult Earlier =
                     resolveValue(SearchBlock, J + 1, Op.Output, Depth + 1);
+                for (auto Edge = CrossedEdges.rbegin();
+                     Edge != CrossedEdges.rend(); ++Edge) {
+                  if (!consumeEvidence(2)) {
+                    Earlier = resolverInvalid();
+                    break;
+                  }
+                  Earlier = constrainOnEdge(std::move(Earlier), Edge->first,
+                                            Edge->second, Depth);
+                }
                 if (Earlier.Kind == ResolverResultKind::Value &&
                     Earlier.Value && Earlier.Value->Size == Def.Output.Size)
                   Full = Earlier.Value;
@@ -8329,7 +8381,13 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
               if (Stop || Searching.Preds.size() != 1 ||
                   IsRootBlock[static_cast<size_t>(SearchBlock)])
                 break;
-              SearchBlock = Searching.Preds.front();
+              const int Previous = Searching.Preds.front();
+              if (!ResolvingPredicate) {
+                if (!consumeEvidence(6))
+                  break;
+                CrossedEdges.emplace_back(Previous, SearchBlock);
+              }
+              SearchBlock = Previous;
               if (SearchBlock < 0 ||
                   SearchBlock >= static_cast<int>(Graph.Blocks.size()) ||
                   !Searched.insert(SearchBlock).second)
@@ -8570,47 +8628,8 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
         ResolverResult IncomingValue = resolveValue(
             Pred, static_cast<int>(PredBlock.Ops.size()), V, Depth + 1);
 
-        // Preserve an exact branch-edge predicate with the incoming value it
-        // filters.  A common state-machine lowering is
-        //
-        //   if (state == 0) exit;
-        //   dispatch(state - 1);
-        //
-        // The predecessor merge alone includes the zero sentinel even though
-        // that arm cannot reach the dispatch block. Record equality and
-        // unsigned-order predicates only against the same resolved lane; the
-        // finite-domain solver applies them arm-locally. Unsupported conditions
-        // remain an over-approximation and therefore fail closed.
-        if (!ResolvingPredicate &&
-            IncomingValue.Kind == ResolverResultKind::Value &&
-            IncomingValue.Value && PredBlock.LastInsn) {
-          if (!consumeEvidence(PredBlock.LastInsn->Ops.size())) {
-            Incoming.clear();
-            break;
-          }
-          const auto Edges = resolverConditionEdges(*PredBlock.LastInsn);
-          if (Edges) {
-            const bool IsTaken = B.Start == Edges->TrueTarget;
-            const bool IsFalse = B.Start == Edges->FalseTarget;
-            if (IsTaken != IsFalse) {
-              if (!consumeProofPointLookup()) {
-                Incoming.clear();
-                break;
-              }
-              const LowOp &Branch = *Edges->Condition;
-              const auto Point = Graph.findPoint({Branch.Addr, Branch.Seq});
-              if (Point && Point->first == Pred) {
-                if (!predicateCannotFilter(Pred, Point->second,
-                                           Branch.Inputs[1])) {
-                  ResolverResult Condition = resolvePredicate(
-                      Pred, Point->second, Branch.Inputs[1], Depth + 1);
-                  IncomingValue = constrainOnCondition(
-                      std::move(IncomingValue), std::move(Condition), IsTaken);
-                }
-              }
-            }
-          }
-        }
+        IncomingValue =
+            constrainOnEdge(std::move(IncomingValue), Pred, Block, Depth);
         if (EvidenceBudgetExhausted) {
           Incoming.clear();
           break;

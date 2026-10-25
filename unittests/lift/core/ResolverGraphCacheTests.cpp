@@ -14,6 +14,7 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <optional>
 #include <set>
 #include <vector>
 
@@ -109,6 +110,136 @@ struct ResolverGraphCacheTestAccess {
     Q.UseSeq = 0;
     Q.Alternatives = {{First, R.Addr, FirstSeq, true}};
     Q.AllowZeroExtension = true;
+    return Q;
+  }
+
+  enum class ReloadGuardCase {
+    Unchanged,
+    DirectEquality,
+    Register,
+    TwoGuards,
+    OtherAddress,
+    Store,
+    Call,
+    Atomic,
+    OrderedRead,
+    OrderedReload,
+    Width,
+    IndependentRoot,
+    Bypass,
+    PointerChange,
+    Intrinsic,
+    Opposite,
+    Signed
+  };
+
+  static Query seedGuardedReload(CFGBuilder &B, const BinaryImage &Image,
+                                 ReloadGuardCase Kind) {
+    B.CurrentImg = &Image;
+    B.CurrentFuncEntry = 0x100;
+    B.JumpTableProofContextComplete = true;
+    B.PersistentCFGRoots = {0x100};
+    B.BlockStarts = {0x100, 0x110, 0x120, 0x200};
+    if (Kind == ReloadGuardCase::IndependentRoot)
+      B.PersistentCFGRoots.insert(0x120);
+    const auto Width = static_cast<uint16_t>(Image.getPointerSize());
+    const NdVar Address = NdVar::reg(8, Width);
+    const NdVar First = NdVar::tmp(0x8000, 4);
+    const NdVar Difference = NdVar::tmp(0x8010, 4);
+    const NdVar Condition = NdVar::tmp(0x8020, 1);
+    const NdVar Inverted = NdVar::tmp(0x8030, 1);
+    const NdVar Candidate =
+        NdVar::reg(0, Kind == ReloadGuardCase::Width ? 2 : 4);
+    auto Emit = [&](va_t Address, NdOp Code, NdVar Output,
+                    std::initializer_list<NdVar> Inputs) -> LowOp & {
+      auto &R = B.Insns[Address];
+      R.Addr = Address;
+      R.Size = 0x10;
+      LowOp Op;
+      Op.Addr = Address;
+      Op.Seq = static_cast<int>(R.Ops.size());
+      Op.Opcode = Code;
+      Op.Output = Output;
+      for (const auto &Input : Inputs)
+        Op.addInput(Input);
+      R.Ops.push_back(Op);
+      return R.Ops.back();
+    };
+    auto Branch = [&](va_t Address, va_t Target,
+                      std::optional<NdVar> Condition = std::nullopt) {
+      if (Condition)
+        Emit(Address, NdOp::COND_BR, {},
+             {NdVar::cst(Target, Width), *Condition});
+      else
+        Emit(Address, NdOp::BRANCH, {}, {NdVar::cst(Target, Width)});
+      auto &R = B.Insns.at(Address);
+      R.IsBranch = true;
+      R.IsCond = Condition.has_value();
+      R.BranchTarget = Target;
+    };
+    auto &FirstLoad = Emit(0x100, NdOp::LOAD, First, {Address});
+    if (Kind == ReloadGuardCase::OrderedRead)
+      FirstLoad.MemoryOrdering = NdMemoryOrdering::Acquire;
+    if (Kind == ReloadGuardCase::TwoGuards || Kind == ReloadGuardCase::Signed) {
+      Emit(0x100,
+           Kind == ReloadGuardCase::Signed ? NdOp::INT_SLESS : NdOp::INT_LESS,
+           Condition, {First, NdVar::scalar(7, 4)});
+      Emit(0x100, NdOp::BOOL_NOT, Inverted, {Condition});
+      Branch(0x100, 0x200, Inverted);
+    } else {
+      if (Kind != ReloadGuardCase::DirectEquality)
+        Emit(0x100, NdOp::INT_SUB, Difference, {First, NdVar::scalar(6, 4)});
+      Emit(0x100,
+           Kind == ReloadGuardCase::Opposite ? NdOp::INT_EQUAL
+                                             : NdOp::INT_NOTEQUAL,
+           Condition,
+           {Kind == ReloadGuardCase::DirectEquality ? First : Difference,
+            NdVar::scalar(Kind == ReloadGuardCase::DirectEquality ? 6 : 0, 4)});
+      Branch(0x100, 0x200, Condition);
+    }
+    if (Kind == ReloadGuardCase::Store)
+      Emit(0x110, NdOp::STORE, {}, {Address, NdVar::reg(16, 4)});
+    if (Kind == ReloadGuardCase::Call)
+      Emit(0x110, NdOp::CALL, {}, {NdVar::address(0x400, Width)});
+    if (Kind == ReloadGuardCase::Atomic)
+      Emit(0x110, NdOp::ATOMIC_XCHG, NdVar::tmp(0x8040, 4),
+           {Address, NdVar::reg(16, 4)});
+    if (Kind == ReloadGuardCase::PointerChange)
+      Emit(0x110, NdOp::COPY, Address, {NdVar::reg(16, Width)});
+    if (Kind == ReloadGuardCase::Intrinsic)
+      Emit(0x110, NdOp::INTRINSIC, {}, {Address});
+    if (Kind == ReloadGuardCase::TwoGuards) {
+      const NdVar Lower = NdVar::tmp(0x8050, 1);
+      Emit(0x110, NdOp::INT_LESS, Lower, {First, NdVar::scalar(3, 4)});
+      Branch(0x110, 0x200, Lower);
+    } else {
+      Branch(0x110, 0x120);
+    }
+    NdVar ReloadAddress = Address;
+    if (Kind == ReloadGuardCase::OtherAddress) {
+      ReloadAddress = NdVar::tmp(0x8060, Width);
+      Emit(0x120, NdOp::INT_ADD, ReloadAddress,
+           {Address, NdVar::scalar(4, Width)});
+    }
+    auto &Reload = Emit(
+        0x120, Kind == ReloadGuardCase::Register ? NdOp::COPY : NdOp::LOAD,
+        Candidate, {Kind == ReloadGuardCase::Register ? First : ReloadAddress});
+    if (Kind == ReloadGuardCase::OrderedReload)
+      Reload.MemoryOrdering = NdMemoryOrdering::Acquire;
+    Emit(0x130, NdOp::RETURN, {}, {Candidate});
+    B.Insns.at(0x130).IsRet = true;
+    if (Kind == ReloadGuardCase::Bypass)
+      Branch(0x200, 0x120);
+    else {
+      Emit(0x200, NdOp::RETURN, {}, {NdVar::scalar(99, 4)});
+      B.Insns.at(0x200).IsRet = true;
+    }
+    Query Q;
+    Q.Candidate = Candidate;
+    Q.UseAddr = 0x130;
+    Q.UseSeq = 0;
+    Q.Relation = Relation::UnsignedFeasibleSet;
+    Q.UnsignedUpperBound = 8;
     return Q;
   }
 
@@ -2100,6 +2231,102 @@ TEST(ResolverLoadAddress, ARMELFLiteralStillRequiresItsAddressValue) {
   const auto Full = Access::batch(B, {Q}, 1000000, 128);
   ASSERT_TRUE(Full.Complete);
   EXPECT_EQ(Full.Values, (std::vector<bool>{true}));
+}
+
+TEST(ResolverGuardPredicates, ReloadCarriesEveryCrossedEdgePredicate) {
+  using Kind = Access::ReloadGuardCase;
+  for (Arch Target : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64})
+    for (BinaryFormat Format :
+         {BinaryFormat::ELF, BinaryFormat::COFF, BinaryFormat::MachO}) {
+      auto Image = image();
+      Image.Arch = Target;
+      Image.Format = Format;
+      Image.Bits = Target == Arch::X64 || Target == Arch::AArch64
+                       ? Bitness::Bits64
+                       : Bitness::Bits32;
+      SCOPED_TRACE(static_cast<unsigned>(Target));
+      SCOPED_TRACE(static_cast<unsigned>(Format));
+      for (Kind Case : {Kind::Unchanged, Kind::DirectEquality, Kind::Register,
+                        Kind::TwoGuards}) {
+        SCOPED_TRACE(static_cast<unsigned>(Case));
+        CFGBuilder B;
+        const auto Q = Access::seedGuardedReload(B, Image, Case);
+        const auto Answer =
+            Access::batch(B, {Q}, 1000000, 0, 0, true, true, true);
+        ASSERT_TRUE(Answer.Complete);
+        EXPECT_EQ(Answer.Values, (std::vector<bool>{true}));
+        EXPECT_EQ(Answer.Masks, (std::vector<uint64_t>{
+                                    Case == Kind::TwoGuards ? 0x78u : 0x40u}));
+        EXPECT_EQ(Access::batch(B, {Q}, 1000000, 0, 0, true, true, true),
+                  Answer);
+        Access::clear(B);
+        EXPECT_EQ(Access::batch(B, {Q}, 1000000, 0, 0, true, true, true),
+                  Answer);
+      }
+    }
+}
+
+TEST(ResolverGuardPredicates, ReloadCannotBorrowUnrelatedOrStaleConditions) {
+  using Kind = Access::ReloadGuardCase;
+  for (Arch Target : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64}) {
+    auto Image = image();
+    Image.Arch = Target;
+    Image.Bits = Target == Arch::X64 || Target == Arch::AArch64
+                     ? Bitness::Bits64
+                     : Bitness::Bits32;
+    SCOPED_TRACE(static_cast<unsigned>(Target));
+    for (Kind Case : {Kind::OtherAddress, Kind::Store, Kind::Call, Kind::Atomic,
+                      Kind::OrderedRead, Kind::OrderedReload, Kind::Width,
+                      Kind::IndependentRoot, Kind::Bypass, Kind::PointerChange,
+                      Kind::Intrinsic, Kind::Opposite, Kind::Signed}) {
+      SCOPED_TRACE(static_cast<unsigned>(Case));
+      CFGBuilder B;
+      const auto Q = Access::seedGuardedReload(B, Image, Case);
+      const auto Answer =
+          Access::batch(B, {Q}, 1000000, 0, 0, true, true, true);
+      EXPECT_EQ(Answer.Values, (std::vector<bool>{false}));
+      EXPECT_EQ(Answer.Masks, (std::vector<uint64_t>{0}));
+      EXPECT_EQ(Access::batch(B, {Q}, 1000000, 0, 0, true, true, true), Answer);
+    }
+  }
+}
+
+TEST(ResolverGuardPredicates, ReloadConditionsRespectModesAndEvidence) {
+  auto Image = image();
+  Image.Arch = Arch::X86;
+  Image.Bits = Bitness::Bits32;
+  CFGBuilder Warm;
+  const auto Q = Access::seedGuardedReload(Warm, Image,
+                                           Access::ReloadGuardCase::Unchanged);
+  auto Joined = Q;
+  Joined.Relation = Access::Relation::JoinedUnsignedFeasibleSet;
+  const auto Modes =
+      Access::batch(Warm, {Q, Joined, Q}, 1000000, 0, 0, true, true, true);
+  ASSERT_TRUE(Modes.Complete);
+  EXPECT_EQ(Modes.Values, (std::vector<bool>{true, false, true}));
+  EXPECT_EQ(Modes.Masks, (std::vector<uint64_t>{0x40, 0, 0x40}));
+  const auto Full = Access::batch(Warm, {Q}, 1000000, 0, 0, true, true, true);
+  ASSERT_TRUE(Full.Complete);
+  ASSERT_EQ(Full.Values, (std::vector<bool>{true}));
+  const size_t Work = 1000000 - Full.Remaining;
+  ASSERT_GT(Work, 0u);
+  for (size_t Limit : {size_t{0}, size_t{1}, Work / 2, Work - 1, Work}) {
+    SCOPED_TRACE(Limit);
+    CFGBuilder Cold;
+    Access::seedGuardedReload(Cold, Image, Access::ReloadGuardCase::Unchanged);
+    const auto Answer = Access::batch(Cold, {Q}, Limit, 0, 0, true, true, true);
+    EXPECT_EQ(Access::batch(Warm, {Q}, Limit, 0, 0, true, true, true), Answer);
+    EXPECT_EQ(Answer.Complete, Limit == Work);
+    if (Limit == Work) {
+      EXPECT_EQ(Answer.Values, (std::vector<bool>{true}));
+      EXPECT_EQ(Answer.Masks, (std::vector<uint64_t>{0x40}));
+    } else {
+      EXPECT_TRUE(std::none_of(Answer.Values.begin(), Answer.Values.end(),
+                               [](bool Value) { return Value; }));
+      EXPECT_TRUE(std::all_of(Answer.Masks.begin(), Answer.Masks.end(),
+                              [](uint64_t Mask) { return Mask == 0; }));
+    }
+  }
 }
 
 TEST(ResolverGuardPredicates, CompoundGuardsPreserveEveryJoinedInput) {

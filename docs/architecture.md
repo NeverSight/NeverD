@@ -3606,6 +3606,19 @@ transports preserve that classification. Needed predicates, guarded or partial
 definitions, and producers outside the local block retain the complete walk.
 All inspected definitions consume the ordinary evidence allowance.
 
+An equivalent memory reload carries the predicates of every crossed edge in
+execution order, using that same edge-refinement owner. Reuse still requires
+equal addresses and widths, a single-predecessor path without memory writers,
+and no intervening independent entry. Predicates narrow feasible paths without
+changing their input bits: a later comparison matches the underlying lane and
+refines the original constrained value. Exact-width `(x - c) == 0` and
+`x == c` share that equality in every predicate mode. None of these identities
+turns a physical table capacity or a signed comparison into a selector bound.
+An exact absolute singleton may seed decoding of its owned destination before
+publication is possible. Its finite-domain replay remains active through that
+graph growth; the existing closure and minimum-cardinality checks still decide
+whether a table can be published.
+
 HighIR's call-argument projection uses the same checked affine equation core
 for entry-stack offsets in an immutable MedIR function. Each SSA definition is
 indexed once; PHIs require all incoming offsets to agree. Width and ambiguity

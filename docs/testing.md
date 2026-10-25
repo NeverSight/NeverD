@@ -3282,6 +3282,17 @@ its unused address exceeds the proof depth. Across four architectures and
 three formats, stores, calls, ordered reads and incompatible widths prevent
 load reuse. Compatible reloads and ARM ELF literals still require complete
 address reconstruction; warm queries retain the same result and budget.
+`ResolverGuardPredicates.Reload*` checks that equal reloads retain successive
+edge conditions across x86, x64, ARM and AArch64 in ELF, COFF and Mach-O.
+Direct and subtraction-based equality agree with register transport. Stores,
+calls, atomic operations, ordered reads, changed addresses or widths,
+independent entries, bypasses and signed-only guards cannot borrow a finite
+domain. Predicate modes and exact/short evidence budgets agree cold and warm.
+`JumpTableFiniteSelector.ExactSingletonReplayPreservesAProvedSibling`
+uses i386 and x64 consumers sharing one relocated table. The exact singleton
+keeps its finite replay without poisoning the independently bounded sibling's
+graph. An unmodelled case call still prevents singleton publication, and
+exhausted evidence publishes neither branch.
 `ResolverPendingCycles.*` checks nested loops whose late definitions must reach
 every batched query, in both query orders and in isolated queries. Register and
 private-frame variants cover x86, x64, ARM and AArch64 across ELF, COFF and
