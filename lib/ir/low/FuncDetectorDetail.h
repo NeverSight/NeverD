@@ -15,6 +15,7 @@
 #define NEVERD_IR_LOW_FUNCDETECTORDETAIL_H
 
 #include "neverd/decode/Decoder.h"
+#include "neverd/decode/X86InstructionScan.h"
 #include "neverd/loader/BinaryImage.h"
 
 #include <optional>
@@ -48,9 +49,12 @@ CodeInterval codeIntervalAround(const BinaryImage &Img, va_t Addr);
 /// where the segment's bytes end.  A sweep is these steps from its start, so
 /// two sweeps of one range that reach the same address agree from there on.
 /// \p Known caches the code stretch the sweep is in.
+/// \p Scan may cache the same segment bytes and mode over a wider range;
+/// this step still rejects instructions crossing \p End.
 std::optional<CallScanStep> stepCallsX86(const BinaryImage &Img, Decoder &Dec,
                                          const Segment *Seg, va_t Cur, va_t End,
-                                         CodeInterval &Known);
+                                         CodeInterval &Known,
+                                         X86InstructionScan *Scan = nullptr);
 
 /// Functions x86-64 code takes the address of with RIP-relative `lea`, such
 /// as main handed to __libc_start_main: each target that starts with a

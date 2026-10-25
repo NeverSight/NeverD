@@ -7539,10 +7539,29 @@ per-handle scan adapter. Capstone consults it only on vector slow paths and
 retains output, cursor, option and fallback ownership. NeverD clears the adapter
 before pooling a handle. The pinned NeverSight iced fork owns the bounded C ABI and
 its UD1 operand profile and per-consumer scratch decoder. Input windows live
-only for a decode call. The optional route admits selected VEX/EVEX forms;
-scalar instructions retain Capstone's compact scan. Generated IDs follow the same pinned source; no
+only for a decode call. The single-instruction route admits selected VEX/EVEX
+forms; other instructions retain Capstone's compact scan. Generated IDs follow the same pinned source; no
 architecture lifter consumes iced discriminants directly. Full detail and
-text remain with Capstone. See [the boundary and checks](iced-decoder.md).
+text remain with Capstone.
+
+For bounded x86 classification sweeps, `Decoder::scanX86Light` returns owned
+ID/length records. The optional iced batch ABI borrows the whole input window
+for one call and stops before unadmitted instructions; `Decoder` consumes
+those with the existing Capstone route and fixups. A separate closed map adds
+common scalar and legacy SSE encodings. Its entries mark prefix-sensitive
+control transfers, so ordinary instructions use iced's existing legality
+checks. Other MOVSXD widths, moffs, loop counters and far transfers retain
+fallback. `X86InstructionScan` scopes
+prefetched records to one immutable input range and unchanged x86 mode.
+Function discovery uses it for serial/parallel CALL sweeps and x64 code-pointer
+scans. Existing code ownership checks remain per instruction, and calls/LEAs
+still read full operands when their targets are needed. A chunk's scan end
+bounds decoding even when the underlying segment contains more bytes.
+After a short batch, the scoped scan remembers the first invalid position;
+it reports failure there without decoding the same bytes twice. Seeking to a
+different position starts a fresh batch. Neither valid nor invalid cached
+results may outlive the immutable range or its x86 mode.
+See [the boundary and checks](iced-decoder.md).
 
 ## Strict lifting contract
 

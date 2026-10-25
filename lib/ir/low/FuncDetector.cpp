@@ -1260,9 +1260,19 @@ void FuncDetector::scanCallTargets(const BinaryImage &Img, Decoder &Dec,
         const PieceJob &Piece = PieceJobs[Job];
         func_detect_detail::CodeInterval Known =
             func_detect_detail::codeIntervalAround(Img, Piece.Start);
+        const size_t Limit =
+            Piece.RangeEnd > Piece.Seg->VA
+                ? std::min<uint64_t>(Piece.Seg->Data.size(),
+                                     Piece.RangeEnd - Piece.Seg->VA)
+                : 0;
+        X86InstructionScan Scan(
+            LocalDec,
+            llvm::ArrayRef<uint8_t>(Piece.Seg->Data).take_front(Limit),
+            Piece.Seg->VA);
+        X86InstructionScan *Batch = LocalDec.usesIcedScan() ? &Scan : nullptr;
         for (va_t Cur = Piece.Start; Cur < Piece.End;) {
           const auto Step = func_detect_detail::stepCallsX86(
-              Img, LocalDec, Piece.Seg, Cur, Piece.RangeEnd, Known);
+              Img, LocalDec, Piece.Seg, Cur, Piece.RangeEnd, Known, Batch);
           if (!Step)
             break;
           PieceSteps[Job].push_back(*Step);

@@ -27,6 +27,7 @@
 
 #include "llvm/Support/raw_ostream.h"
 
+#include <algorithm>
 #include <cstring>
 #include <iterator>
 #include <mutex>
@@ -380,6 +381,42 @@ int Decoder::decodeOneLight(const uint8_t *Bytes, size_t Len, va_t Addr,
   Out.Id = InsnBuf->id;
   Out.Raw = InsnBuf;
   return Out.Size;
+}
+
+size_t Decoder::scanX86Light(const uint8_t *Bytes, size_t Len, va_t Addr,
+                             llvm::MutableArrayRef<uint32_t> Output) {
+  if (!X86 || !Bytes || Text || Detail)
+    return 0;
+  size_t Count = 0;
+  while (Len && Count < Output.size()) {
+#if NEVERD_ENABLE_ICED
+    size_t Consumed = 0;
+    const size_t Capacity =
+        std::min(limits::decode::kScanBatchInstructions, Output.size() - Count);
+    const size_t Accepted =
+        Iced ? Iced->scanBatch(Bytes, Len, Output.data() + Count, Capacity,
+                               Consumed)
+             : 0;
+    Count += Accepted;
+    Bytes += Consumed;
+    Len -= Consumed;
+    Addr += Consumed;
+    if (!Len || Count == Output.size())
+      break;
+    // A full batch has not encountered a declined instruction yet.
+    if (Accepted == Capacity)
+      continue;
+#endif
+    DecodedInsn Insn;
+    const int Size = decodeOneLight(Bytes, Len, Addr, Insn);
+    if (Size <= 0)
+      break;
+    Output[Count++] = ScannedInsn{Insn.Id, Insn.Size}.pack();
+    Bytes += Size;
+    Len -= Size;
+    Addr += Size;
+  }
+  return Count;
 }
 
 bool Decoder::decodePrefixedX86Fence(const uint8_t *Bytes, size_t Len,

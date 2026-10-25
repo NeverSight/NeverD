@@ -10,8 +10,11 @@
 #include "gtest/gtest.h"
 
 #include "neverd/decode/Decoder.h"
+#include "neverd/decode/X86InstructionScan.h"
 
+#include <array>
 #include <cstring>
+#include <random>
 #include <vector>
 
 namespace neverd {
@@ -101,6 +104,132 @@ TEST(DecoderOptions, ScanDetailTransitionsAndFallback) {
   EXPECT_EQ(D.decodeOneLight(&Nop, 1, 0, Out), 0);
   ASSERT_TRUE(D.init(Arch::X86));
   compare(D, Arch::X86, {Nop}, false, false, true);
+}
+
+TEST(DecoderOptions, BatchMatchesIndependentInstructionBoundaries) {
+  Decoder D, Reference;
+  std::mt19937_64 Random(0x7ab15);
+  for (Arch A : {Arch::X86, Arch::X64}) {
+    ASSERT_TRUE(D.init(A));
+    ASSERT_TRUE(Reference.init(A));
+    D.setDetail(false);
+    D.setText(false);
+    Reference.setDetail(false);
+    Reference.setText(false);
+    std::vector<std::vector<uint8_t>> Inputs{
+        {0x90, 0x89, 0xc1, 0xc5, 0xf8, 0x28, 0x00, 0xe8, 1, 0, 0, 0, 0xc3},
+        {0x90, 0x66, 0x48, 0xd9, 0x30, 0x90, 0x48, 0x66, 0xd9, 0x30},
+        {0x90, 0x66, 0xe9, 0xff, 0xff, 0xff, 0xff, 0x90, 0x67, 0xe3, 0xff},
+        {0x90, 0x0f, 0x1a, 0xc1, 0x90, 0x66, 0x0f, 0xae, 0xf0, 0x90},
+        {0x90, 0xf0, 0x90, 0xc3},
+        {0x90, 0x0f},
+        std::vector<uint8_t>(200, 0x90)};
+    for (unsigned I = 0; I != 500; ++I) {
+      auto &Bytes = Inputs.emplace_back(1 + I % 256);
+      for (auto &Byte : Bytes)
+        Byte = static_cast<uint8_t>(Random());
+    }
+    for (const auto &Bytes : Inputs) {
+      for (size_t Capacity : {0, 1, 2, 63, 64, 65, 127}) {
+        std::array<uint32_t, 128> Batch;
+        for (auto &Insn : Batch)
+          Insn = 0xdeadbeef;
+        const va_t Address = InvalidVA - 8;
+        const size_t Count = D.scanX86Light(
+            Bytes.data(), Bytes.size(), Address,
+            llvm::MutableArrayRef<uint32_t>(Batch.data(), Capacity));
+        size_t Offset = 0, ExpectedCount = 0;
+        while (Offset < Bytes.size() && ExpectedCount < Capacity) {
+          DecodedInsn Expected;
+          if (!Reference.decodeOneLight(Bytes.data() + Offset,
+                                        Bytes.size() - Offset, Address + Offset,
+                                        Expected))
+            break;
+          ASSERT_LT(ExpectedCount, Count);
+          EXPECT_EQ(ScannedInsn::unpack(Batch[ExpectedCount]).Id, Expected.Id);
+          EXPECT_EQ(ScannedInsn::unpack(Batch[ExpectedCount]).Size,
+                    Expected.Size);
+          Offset += Expected.Size;
+          ++ExpectedCount;
+        }
+        EXPECT_EQ(Count, ExpectedCount);
+        for (size_t I = Count; I != Batch.size(); ++I) {
+          EXPECT_EQ(Batch[I], 0xdeadbeef);
+        }
+      }
+    }
+  }
+}
+
+TEST(DecoderOptions, BatchDeclinesUnavailableOrOperandAwareState) {
+  Decoder D;
+  const uint8_t Bytes[] = {0x90, 0xc3};
+  std::array<uint32_t, 2> Out;
+  EXPECT_EQ(D.scanX86Light(Bytes, sizeof(Bytes), 0, Out), 0u);
+  for (Arch A : {Arch::X64, Arch::X86, Arch::ARM, Arch::AArch64}) {
+    ASSERT_TRUE(D.init(A));
+    for (bool Detail : {false, true})
+      for (bool Text : {false, true}) {
+        D.setDetail(Detail);
+        D.setText(Text);
+        const bool Enabled =
+            !Detail && !Text && (A == Arch::X64 || A == Arch::X86);
+        EXPECT_EQ(D.scanX86Light(Bytes, sizeof(Bytes), 0, Out),
+                  Enabled ? 2u : 0u);
+      }
+  }
+  D.reset();
+  EXPECT_EQ(D.scanX86Light(Bytes, sizeof(Bytes), 0, Out), 0u);
+}
+
+TEST(DecoderOptions, ScopedScanRetainsBoundsAcrossDetailedQueriesAndSeeks) {
+  Decoder D;
+  ASSERT_TRUE(D.init(Arch::X64));
+  const std::vector<uint8_t> Bytes{0x90, 0x48, 0x89, 0xc1, 0xe8,
+                                   0,    0,    0,    0,    0x90};
+  D.setText(false);
+  D.setDetail(false);
+  X86InstructionScan Scan(D, Bytes, 0xfffffff8);
+  EXPECT_EQ(Scan.decode(0).Size, 1);
+  EXPECT_EQ(Scan.decode(1).Id, X86_INS_MOV);
+  D.setText(true);
+  D.setDetail(true);
+  DecodedInsn Full;
+  ASSERT_EQ(D.decodeOne(Bytes.data() + 1, Bytes.size() - 1, 0xfffffff9, Full),
+            3);
+  ASSERT_NE(Full.Raw->detail, nullptr);
+  EXPECT_EQ(Full.Raw->detail->x86.op_count, 2);
+  EXPECT_EQ(Scan.decode(4).Size, 0);
+  D.setText(false);
+  D.setDetail(false);
+  EXPECT_EQ(Scan.decode(4).Id, X86_INS_CALL);
+  EXPECT_EQ(Scan.decode(0).Id, X86_INS_NOP);
+  EXPECT_EQ(Scan.decode(1).Size, 3);
+  EXPECT_EQ(Scan.decode(Bytes.size()).Size, 0);
+  X86InstructionScan Bounded(D, llvm::ArrayRef<uint8_t>(Bytes).take_front(8),
+                             0xfffffff8);
+  EXPECT_EQ(Bounded.decode(0).Size, 1);
+  EXPECT_EQ(Bounded.decode(1).Size, 3);
+  EXPECT_EQ(Bounded.decode(4).Size, 0); // CALL's immediate crosses the bound.
+  D.reset();
+}
+
+TEST(DecoderOptions, ScopedScanStopsAtMalformedInputAndResumesAfterIt) {
+  for (Arch A : {Arch::X86, Arch::X64}) {
+    Decoder D;
+    ASSERT_TRUE(D.init(A));
+    D.setText(false);
+    D.setDetail(false);
+    const uint8_t Bytes[] = {0x90, 0xf0, 0x90, 0xc3};
+    X86InstructionScan Scan(D, Bytes, 0x100000);
+    EXPECT_EQ(Scan.decode(0).Id, X86_INS_NOP);
+    EXPECT_EQ(Scan.decode(1).Size, 0);
+    EXPECT_EQ(Scan.decode(1).Size, 0);
+    EXPECT_EQ(Scan.decode(2).Id, X86_INS_NOP);
+    EXPECT_EQ(Scan.decode(3).Id, X86_INS_RET);
+    EXPECT_EQ(Scan.decode(1).Size, 0);
+    EXPECT_EQ(Scan.decode(0).Id, X86_INS_NOP);
+  }
 }
 
 } // namespace

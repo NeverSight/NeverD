@@ -20,6 +20,7 @@ namespace neverd::limits::decode {
 
 // lib/decode/Decoder.cpp
 inline constexpr size_t kDecoderMaxSpare = 16;
+inline constexpr size_t kScanBatchInstructions = 64;
 
 } // namespace neverd::limits::decode
 

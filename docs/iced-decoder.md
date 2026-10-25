@@ -1,7 +1,7 @@
 # iced compatibility decoder
 
 NeverD can use the pinned NeverSight iced fork for selected x86 32/64-bit
-VEX/EVEX classification scans. Enable it with `-DNEVERD_ENABLE_ICED=ON`; the
+classification scans. Enable it with `-DNEVERD_ENABLE_ICED=ON`; the
 default remains off because whole-workload and platform qualification is
 incomplete. The build needs
 Cargo/Rust and the initialized `third_party/iced` submodule. Cargo uses the
@@ -27,6 +27,24 @@ the adapter returns only a mapped ID and length. NeverD enables Capstone's
 the callback and its state. The private static-link hook does not extend the
 installed Capstone API.
 
+Bounded function-discovery sweeps additionally use `Decoder::scanX86Light`.
+Its separate closed map admits 741 scalar, legacy SSE and vector encodings.
+The fork decodes up to 64 instructions per call and writes packed ID/length
+records directly into caller-owned storage. Map entries mark prefix-sensitive
+control transfers; ordinary mapped forms reuse iced's full validity checks.
+PUSH/POP/NOP/LEAVE width names are normalized explicitly, and only the
+`Movsxd_r64_rm32` form is admitted. Other MOVSXD widths, moffs, far transfers,
+loop counters and unlisted extensions retain Capstone fallback. A declined
+instruction is neither emitted nor included in the returned byte extent.
+
+`X86InstructionScan` keeps this batch within one immutable byte range and x86
+mode. It remembers an invalid position after a partial batch, avoiding a
+second decode of the same failure; a discontinuous offset starts a new batch.
+Serial/parallel CALL sweeps and x64 code-pointer scans retain their instruction
+ownership checks and decode CALL/LEA operands separately. Text/detail queries
+may interleave only after restoring the classification options. Disabling
+iced preserves the original per-instruction sweep route.
+
 Full text, detail, lifting, AArch64 and ARM keep their existing paths. The fork
 also supplies a detailed primitive with a fixed UD1 r32/rm32 profile; this
 primitive is not yet used by NeverD lifting. Its operands alone do not provide
@@ -41,7 +59,7 @@ counter-register selection retain Capstone fallback. A blanket per-instruction
 redirect to iced was measured and rejected: constructor overhead, compatibility
 checks, copying and double decoding on fallback outweighed its core advantage.
 
-On an Apple M4 Max (macOS arm64, Release), six rotating trials of actual
+Before batch integration, on an Apple M4 Max (macOS arm64, Release), six rotating trials of actual
 `decodeOneLight` streams gave the following CPU-time ratios against a frozen
 Capstone-only NeverD executable. Counts, rejection counts and boundary/ID
 checksums matched, and each trial included a repeated baseline control.
@@ -57,8 +75,31 @@ Most system-code streams have very few admitted vector forms. The SIMD result
 does not qualify all x86 workloads or full decompilation. Small regressions,
 link-layout sensitivity and untested host platforms keep the option off by
 default. These ratios compare NeverD routes; they do not establish superiority
-over native iced. A future broader route must remove the per-instruction
-boundary and fallback costs without changing the accepted instruction stream.
+over native iced. Batch integration must be evaluated separately in the actual
+consumer, with fallback, operand redecoding and output checks preserved.
+
+The batch route was measured separately in the actual `scanSegmentCallsX86`
+consumer on the same host: five rotating trials, calibrated to roughly 150 ms
+of baseline CPU time, with an identical A/A baseline control. The baseline
+uses the current single-step helper with no cache. All target-set checksums
+matched. Independent full streams also matched instruction counts, rejected
+byte counts and boundary/ID checksums.
+
+| CALL sweep workload | Baseline time / batch time |
+| --- | ---: |
+| Scalar 32-bit generated stream | 1.1275x |
+| Scalar 64-bit generated stream | 1.3408x |
+| SIMD 64-bit generated stream | 1.5688x |
+| Five 32-bit PE code samples (4.3–7.3 KiB) | 1.0250x–1.0795x |
+| Seven 64-bit system-code streams | 0.9773x–1.0357x |
+| Tiny 60-byte / 12-byte controls | 0.7939x / 0.9324x |
+
+A/A medians ranged from 0.9720x to 1.0283x under other host workloads. Small
+changes in system-code streams are not evidence of a consistent win. Tiny
+buffers still lose to setup cost. The option therefore remains off by default;
+these results neither qualify full decompilation nor establish superiority
+over native iced. Larger buffers and representative user binaries still need
+whole-pipeline and other-host qualification.
 
 A standalone comparison builds the actual adapter without LLVM:
 

@@ -16,6 +16,7 @@ namespace neverd::x86iced {
 namespace {
 #include "X86IcedIds.inc"
 static_assert(ICED_CAPSTONE_ABI_VERSION == 1);
+static_assert(X86_INS_ENDING <= ICED_CAPSTONE_BATCH_PREFIX_SENSITIVE);
 static_assert(sizeof(iced_capstone_instruction) == 120);
 static_assert(offsetof(iced_capstone_instruction, length) == 108);
 } // namespace
@@ -48,5 +49,13 @@ uint32_t Scanner::scan(const uint8_t *Bytes, size_t Len) {
       !InstructionIds[Code])
     return 0;
   return (InstructionIds[Code] << 8) | Size;
+}
+size_t Scanner::scanBatch(const uint8_t *Bytes, size_t Len, uint32_t *Output,
+                          size_t Capacity, size_t &Consumed) {
+  const auto Result = iced_capstone_scan_batch(
+      Bitness, Bytes, Len, BatchInstructionIds, std::size(BatchInstructionIds),
+      Output, Capacity);
+  Consumed = Result.bytes;
+  return Result.count;
 }
 } // namespace neverd::x86iced

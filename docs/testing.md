@@ -674,6 +674,17 @@ For integration changes, rebuild `NeverDDecode`, compare actual
 `Decoder::decodeOneLight` streams and exercise detail/text option transitions
 before timing. A scan speedup is not a full lifting or decompilation result.
 
+Batch checks compare the returned prefix and untouched output tail against
+independent single-instruction decodes, including capacities around the batch
+boundary, wrapped addresses, malformed input and NeverD's MPX/fence fixups.
+Scoped scan tests interleave full-detail queries and discontinuous offsets.
+They also cover a cached failure followed by byte resynchronization. A cache
+covering a wider range must not extend a caller's instruction boundary.
+The CALL sweep tests compare every start/end in a bounded fixture and require
+code ownership across the entire call, rejecting both data-shaped calls and
+instructions whose immediates cross the scan limit. Run the focused
+`NeverDDecoderOptionsTests` with iced both enabled and disabled.
+
 ## Acceleration libraries
 
 The bounded byte/Unicode, JSON and scheduler contracts can be checked without

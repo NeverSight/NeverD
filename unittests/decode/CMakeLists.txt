@@ -2,7 +2,10 @@ cmake_minimum_required(VERSION 3.20)
 if(NOT CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   add_neverd_unittest(NeverDDecoderOptionsTests
     DecoderOptionsTests.cpp
-    LINK_COMPONENTS Decode)
+    X86InstructionScanTests.cpp
+    LINK_COMPONENTS Decode IRLow)
+  target_include_directories(NeverDDecoderOptionsTests PRIVATE
+    "${PROJECT_SOURCE_DIR}/lib/ir/low")
   if(NOT NEVERD_ENABLE_ICED)
     return()
   endif()

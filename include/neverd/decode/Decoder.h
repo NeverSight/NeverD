@@ -75,6 +75,16 @@ struct DecodedInsn {
   cs_insn *Raw;
 };
 
+/// Classification result with no borrowed cs_insn or operand state.
+struct ScannedInsn {
+  uint32_t Id;
+  uint16_t Size;
+  static ScannedInsn unpack(uint32_t Packed) {
+    return {Packed >> 8, static_cast<uint16_t>(Packed & 0xff)};
+  }
+  uint32_t pack() const { return (Id << 8) | Size; }
+};
+
 /// One loader-authenticated address occurrence inside an encoded instruction.
 /// FieldVA identifies the exact relocation field; TargetVA is the resolved
 /// address represented by that field, and Provenance records whether the
@@ -160,6 +170,16 @@ public:
   int decodeOneLight(const uint8_t *Bytes, size_t Len, va_t Addr,
                      DecodedInsn &Out);
 
+  /// Decode a contiguous x86 prefix as packed (ID << 8) | length results.
+  /// ScannedInsn::unpack exposes individual fields without another array copy.
+  /// Requires text and detail disabled. Stops before the first invalid input,
+  /// at the byte boundary, or when Output is full. Only the returned prefix is
+  /// modified. Other architectures and an uninitialized decoder return zero.
+  /// No input pointer is retained. Operand-aware callers decode selected
+  /// instructions separately; this operation never returns a Raw pointer.
+  size_t scanX86Light(const uint8_t *Bytes, size_t Len, va_t Addr,
+                      llvm::MutableArrayRef<uint32_t> Output);
+
   /// Enable/disable capstone operand-detail generation for subsequent decodes.
   /// Detail is on by default (the lift path needs operands); turning it off for
   /// classification-only scans (which read just Size/Id) skips the per-
@@ -176,6 +196,8 @@ public:
   /// and call ids turns it off.  No-op if the state is unchanged.
   void setText(bool On);
   bool textEnabled() const { return Text; }
+  /// Whether this initialized x86 decoder has the optional iced adapter.
+  bool usesIcedScan() const { return Iced != nullptr; }
 
   /// True when \p Insn is a trap execution can continue past, so the bytes
   /// after it may still belong to the same function (x86, ARM32, or the

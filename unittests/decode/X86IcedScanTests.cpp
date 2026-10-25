@@ -61,10 +61,69 @@ struct Oracle {
   }
 };
 static uint64_t Accepted = 0, Checked = 0;
+static uint64_t BatchAccepted = 0;
+static bool checkScalarCoverage(Oracle &O) {
+  const std::pair<std::vector<uint8_t>, unsigned> Cases[] = {
+      {{0x90}, X86_INS_NOP},
+      {{0x6a, 0xff}, X86_INS_PUSH},
+      {{0x68, 0xff, 0xff, 0xff, 0xff}, X86_INS_PUSH},
+      {{0xc9}, X86_INS_LEAVE},
+      {{0x66, 0x89, 0xc1}, X86_INS_MOV},
+      {{0x64, 0x8b, 0}, X86_INS_MOV},
+      {{0x0f, 0x28, 0xc1}, X86_INS_MOVAPS},
+      {{0xf3, 0x0f, 0x10, 0}, X86_INS_MOVSS},
+      {{0x66, 0x0f, 0xef, 0xc0}, X86_INS_PXOR},
+      {{0x66, 0x90}, X86_INS_NOP},
+      {{0x66, 0x0f, 0x1f, 0x44, 0, 0}, X86_INS_NOP},
+      {{0x66, 0x66, 0x2e, 0x0f, 0x1f, 0x84, 0, 0, 0, 0, 0}, X86_INS_NOP}};
+  for (const auto &[Bytes, Id] : Cases) {
+    uint32_t Packed = 0;
+    size_t Consumed = 0;
+    if (O.Scanner.scanBatch(Bytes.data(), Bytes.size(), &Packed, 1, Consumed) !=
+            1 ||
+        Packed != (Id << 8 | Bytes.size()) || Consumed != Bytes.size()) {
+      std::fprintf(stderr, "missing scalar mapping: id=%u size=%zu\n", Id,
+                   Bytes.size());
+      return false;
+    }
+  }
+  return true;
+}
+static bool checkBatch(Oracle &O, const uint8_t *Bytes, size_t Length) {
+  for (size_t Capacity : {1, 2, 8, 64}) {
+    std::array<uint32_t, 65> Output;
+    Output.fill(0xfefefefe);
+    size_t Consumed = 0;
+    const size_t Count =
+        O.Scanner.scanBatch(Bytes, Length, Output.data(), Capacity, Consumed);
+    if (Count > Capacity)
+      return false;
+    const uint8_t *P = Bytes;
+    size_t Remaining = Length;
+    uint64_t Address = 0xfffffff8;
+    for (size_t I = 0; I != Count; ++I) {
+      if (!cs_disasm_iter(O.Handle, &P, &Remaining, &Address, O.Insn) ||
+          (Output[I] >> 8) != O.Insn->id || (Output[I] & 0xff) != O.Insn->size)
+        return false;
+    }
+    if (Consumed != Length - Remaining)
+      return false;
+    for (size_t I = Count; I != Output.size(); ++I)
+      if (Output[I] != 0xfefefefe)
+        return false;
+  }
+  return true;
+}
 static bool check(Oracle &O, unsigned Bits, const uint8_t *Bytes,
                   size_t Length) {
   ++Checked;
   const uint32_t Result = O.Scanner.scan(Bytes, Length);
+  uint32_t Batch = 0xfefefefe;
+  size_t Consumed = 0;
+  const size_t BatchCount =
+      O.Scanner.scanBatch(Bytes, Length, &Batch, 1, Consumed);
+  if (BatchCount)
+    ++BatchAccepted;
   if (Result) {
     ++Accepted;
     O.AcceptedIds.insert(Result >> 8);
@@ -81,8 +140,13 @@ static bool check(Oracle &O, unsigned Bits, const uint8_t *Bytes,
   const auto &Actual = *O.AdaptedInsn;
   const bool ScanOK = !Result || (OK && (Result >> 8) == O.Insn->id &&
                                   (Result & 0xff) == O.Insn->size);
+  const bool BatchOK = BatchCount ? BatchCount == 1 && OK &&
+                                        (Batch >> 8) == O.Insn->id &&
+                                        (Batch & 0xff) == O.Insn->size &&
+                                        Consumed == O.Insn->size
+                                  : Batch == 0xfefefefe && Consumed == 0;
   const bool CursorOK = P == AdaptedP && N == AdaptedN && A == AdaptedA;
-  if (ScanOK && CursorOK && OK == AdaptedOK &&
+  if (ScanOK && BatchOK && CursorOK && OK == AdaptedOK &&
       (!OK || (Actual.id == O.Insn->id && Actual.size == O.Insn->size &&
                Actual.address == O.Insn->address &&
                !std::memcmp(Actual.bytes, O.Insn->bytes, Actual.size) &&
@@ -94,6 +158,8 @@ static bool check(Oracle &O, unsigned Bits, const uint8_t *Bytes,
   for (size_t I = 0; I < Length; ++I)
     std::fprintf(stderr, "%02x", Bytes[I]);
   std::fprintf(stderr, "\n");
+  std::fprintf(stderr, "batch=%zu id=%u length=%u\n", BatchCount, Batch >> 8,
+               Batch & 0xff);
   return false;
 }
 
@@ -127,7 +193,7 @@ static bool checkIcedFixtures(Oracle &O, unsigned Bits) {
       }
       if (High >= 0 || !check(O, Bits, Bytes.data(), Bytes.size()))
         return false;
-      if (!Bytes.empty() && ((Bytes[0] & 0xfe) == 0xc4 || Bytes[0] == 0x62)) {
+      if (!Bytes.empty()) {
         for (size_t N = 0; N < Bytes.size(); ++N)
           if (!check(O, Bits, Bytes.data(), N))
             return false;
@@ -144,6 +210,8 @@ int main(int Argc, char **Argv) {
     Oracle O(Bits);
     if (!O.Insn || !O.AdaptedInsn)
       return 1;
+    if (!checkScalarCoverage(O))
+      return 1;
     if (!checkIcedFixtures(O, Bits))
       return 1;
     std::mt19937_64 Random(0xabc123);
@@ -155,8 +223,11 @@ int main(int Argc, char **Argv) {
         return 1;
     }
     // Systematic ModR/M values, operand/address prefixes and signed tails.
-    for (unsigned Prefix : {0u, 0x66u, 0x67u, 0x64u, 0x48u}) {
-      if (Bits == 32 && Prefix == 0x48)
+    for (unsigned Prefix :
+         {0u,    0x26u, 0x2eu, 0x36u, 0x3eu, 0x64u, 0x65u, 0x66u, 0x67u, 0xf0u,
+          0xf2u, 0xf3u, 0x40u, 0x41u, 0x42u, 0x43u, 0x44u, 0x45u, 0x46u, 0x47u,
+          0x48u, 0x49u, 0x4au, 0x4bu, 0x4cu, 0x4du, 0x4eu, 0x4fu}) {
+      if (Bits == 32 && Prefix >= 0x40 && Prefix <= 0x4f)
         continue;
       for (unsigned Op = 0; Op < 256; ++Op)
         for (unsigned ModRM = 0; ModRM < 256; ++ModRM) {
@@ -197,6 +268,17 @@ int main(int Argc, char **Argv) {
       if (!check(O, Bits, Memory + Page - N, N))
         return 1;
     }
+    for (size_t N = 1; N <= 130; ++N) {
+      std::memset(Memory + Page - N, 0x90, N);
+      if (!checkBatch(O, Memory + Page - N, N))
+        return 1;
+      Memory[Page - 1] = 0x0f;
+      if (!checkBatch(O, Memory + Page - N, N))
+        return 1;
+      Memory[Page - 1] = 0x48;
+      if (!checkBatch(O, Memory + Page - N, N))
+        return 1;
+    }
     munmap(Memory, Page * 2);
 #endif
     if (Argc == 3 && Bits == static_cast<unsigned>(std::atoi(Argv[1]))) {
@@ -219,7 +301,8 @@ int main(int Argc, char **Argv) {
         return 1;
       }
   }
-  std::printf("checked=%llu accepted=%llu\n", (unsigned long long)Checked,
-              (unsigned long long)Accepted);
+  std::printf("checked=%llu vector_accepted=%llu batch_accepted=%llu\n",
+              (unsigned long long)Checked, (unsigned long long)Accepted,
+              (unsigned long long)BatchAccepted);
   return Accepted ? 0 : 1;
 }

@@ -28,6 +28,10 @@ public:
   /// Return (Capstone ID << 8) | length, or zero for ordinary Capstone
   /// decoding.
   uint32_t scan(const uint8_t *Bytes, size_t Len);
+  /// Write a contiguous prefix of packed IDs/lengths. The first unsupported
+  /// instruction is not consumed; caller-owned output survives option changes.
+  size_t scanBatch(const uint8_t *Bytes, size_t Len, uint32_t *Output,
+                   size_t Capacity, size_t &Consumed);
 
 private:
   static uint32_t scanCallback(void *Context, const uint8_t *Bytes, size_t Len);

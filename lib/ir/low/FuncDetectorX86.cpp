@@ -77,7 +77,8 @@ CodeInterval codeIntervalAround(const BinaryImage &Img, va_t Addr) {
 
 std::optional<CallScanStep> stepCallsX86(const BinaryImage &Img, Decoder &Dec,
                                          const Segment *Seg, va_t Cur, va_t End,
-                                         CodeInterval &Known) {
+                                         CodeInterval &Known,
+                                         X86InstructionScan *Scan) {
   const size_t Off = static_cast<size_t>(Cur - Seg->VA);
   if (Off >= Seg->Data.size())
     return std::nullopt;
@@ -86,7 +87,14 @@ std::optional<CallScanStep> stepCallsX86(const BinaryImage &Img, Decoder &Dec,
   DecodedInsn DI;
   const size_t Remain =
       static_cast<size_t>(std::min<va_t>(Seg->Data.size() - Off, End - Cur));
-  const int Sz = Dec.decodeOneLight(Seg->Data.data() + Off, Remain, Cur, DI);
+  int Sz;
+  if (Scan && !Dec.detailEnabled() && !Dec.textEnabled()) {
+    const ScannedInsn Classified = Scan->decode(Off);
+    DI.Id = Classified.Id;
+    Sz = Classified.Size <= Remain ? Classified.Size : 0;
+  } else {
+    Sz = Dec.decodeOneLight(Seg->Data.data() + Off, Remain, Cur, DI);
+  }
   if (Sz <= 0) {
     Step.Next = Cur + 1;
     return Step;
@@ -128,6 +136,8 @@ void scanCodePointersX64(const BinaryImage &Img, Decoder &Dec,
   for (const Segment &Seg : Img.Segments) {
     if (!Seg.isExecutable() || Seg.Data.empty())
       continue;
+    X86InstructionScan Scan(Dec, Seg.Data, Seg.VA);
+    const bool UseBatch = Dec.usesIcedScan();
     for (size_t Off = 0; Off < Seg.Data.size();) {
       const va_t Cur = Seg.VA + Off;
       const uint8_t *Bytes = Seg.Data.data() + Off;
@@ -135,7 +145,14 @@ void scanCodePointersX64(const BinaryImage &Img, Decoder &Dec,
       DecodedInsn DI;
       Dec.setText(false);
       Dec.setDetail(false);
-      const int Size = Dec.decodeOneLight(Bytes, Remain, Cur, DI);
+      int Size;
+      if (UseBatch) {
+        const ScannedInsn Classified = Scan.decode(Off);
+        Size = Classified.Size;
+        DI.Id = Classified.Id;
+      } else {
+        Size = Dec.decodeOneLight(Bytes, Remain, Cur, DI);
+      }
       if (Size <= 0) {
         ++Off;
         continue;
@@ -242,9 +259,14 @@ void scanSegmentCallsX86(const BinaryImage &Img, Decoder &Dec,
                          const Segment *Seg, va_t Start, va_t End,
                          std::set<va_t> &Out) {
   CodeInterval Known = codeIntervalAround(Img, Start);
+  const size_t Limit =
+      End > Seg->VA ? std::min<uint64_t>(Seg->Data.size(), End - Seg->VA) : 0;
+  X86InstructionScan Scan(
+      Dec, llvm::ArrayRef<uint8_t>(Seg->Data).take_front(Limit), Seg->VA);
+  X86InstructionScan *Batch = Dec.usesIcedScan() ? &Scan : nullptr;
   for (va_t Cur = Start; Cur < End;) {
     const std::optional<CallScanStep> Step =
-        stepCallsX86(Img, Dec, Seg, Cur, End, Known);
+        stepCallsX86(Img, Dec, Seg, Cur, End, Known, Batch);
     if (!Step)
       break;
     if (Step->Target != InvalidVA)
