@@ -67,6 +67,7 @@ target_include_directories(NeverDSupportThreadTests PRIVATE
   "${CMAKE_SOURCE_DIR}/include")
 
 add_subdirectory(acceleration)
+add_subdirectory(decode)
 
 add_neverd_unittest(NeverDLowUndefinedDigestTests
   LowUndefinedDigestTests.cpp

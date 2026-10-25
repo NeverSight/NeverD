@@ -11,6 +11,10 @@
 
 #include "neverd/decode/Decoder.h"
 
+#if NEVERD_ENABLE_ICED
+#include "X86IcedScan.h"
+#endif
+
 #include "neverd/decode/AArch64NativeDecode.h"
 #include "neverd/decode/Limits.h"
 #include "neverd/ir/X87Context.h"
@@ -94,6 +98,10 @@ cs_mode x86HandleMode(Arch A) {
 
 /// Close \p Handle, a decoder's for \p A, or keep an x86 one for another.
 void closeHandle(csh &Handle, Arch A) {
+#if NEVERD_ENABLE_ICED
+  if (A == Arch::X64 || A == Arch::X86)
+    x86iced::Scanner::detach(Handle);
+#endif
   if (A == Arch::X64 || A == Arch::X86)
     spareX86Handles().give(x86HandleMode(A), Handle);
   else
@@ -128,6 +136,10 @@ void Decoder::reset() {
     cs_free(InsnBuf, 1);
   if (Handle)
     closeHandle(Handle, TargetArch);
+#if NEVERD_ENABLE_ICED
+  delete Iced;
+#endif
+  Iced = nullptr;
   InsnBuf = nullptr;
   Handle = 0;
   TargetArch = Arch::Unknown;
@@ -179,6 +191,12 @@ bool Decoder::init(Arch TheArch, InstructionMode Mode) {
     return false;
   }
 
+#if NEVERD_ENABLE_ICED
+  auto NewIced =
+      NewX86
+          ? std::make_unique<x86iced::Scanner>(TheArch == Arch::X64 ? 64 : 32)
+          : nullptr;
+#endif
   csh NewHandle =
       CsArch == CS_ARCH_X86 ? spareX86Handles().take(CsMode) : csh(0);
   if (!NewHandle) {
@@ -201,6 +219,12 @@ bool Decoder::init(Arch TheArch, InstructionMode Mode) {
   if (Handle)
     closeHandle(Handle, TargetArch);
 
+#if NEVERD_ENABLE_ICED
+  delete Iced;
+  Iced = NewIced.release();
+  if (Iced)
+    Iced->attach(NewHandle);
+#endif
   Handle = NewHandle;
   InsnBuf = NewInsnBuf;
   TargetArch = TheArch;

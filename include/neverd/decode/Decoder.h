@@ -30,6 +30,9 @@
 
 namespace neverd {
 
+namespace x86iced {
+class Scanner;
+}
 class X86Lifter;
 class ARMLifter;
 class AArch64Lifter;
@@ -293,6 +296,7 @@ private:
   /// architecture lifter's fixup.
   void fixupDecodedInsn(cs_insn *I) const;
 
+  x86iced::Scanner *Iced = nullptr;
   csh Handle = 0;
   cs_insn *InsnBuf = nullptr;
   Arch TargetArch = Arch::Unknown;

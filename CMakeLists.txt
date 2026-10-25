@@ -94,6 +94,8 @@ else()
 endif()
 
 # --- Capstone (our fork, built from submodule) ---
+option(NEVERD_ENABLE_ICED "Use the NeverSight iced compatibility scan adapter" OFF)
+set(CAPSTONE_X86_SCAN_ADAPTER ${NEVERD_ENABLE_ICED} CACHE BOOL "" FORCE)
 set(CAPSTONE_BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 set(CAPSTONE_BUILD_STATIC_LIBS ON  CACHE BOOL "" FORCE)
 set(CAPSTONE_BUILD_CSTOOL      OFF CACHE BOOL "" FORCE)

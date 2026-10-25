@@ -7532,6 +7532,18 @@ internal C++ class part of the SDK by accident: stable external operations
 belong in the pure C header and one of the focused `lib/sdk/NeverDCAPI*.cpp`
 files.
 
+## Optional iced classification
+
+`NeverDDecode` owns the optional x86 32/64-bit iced mapping and registers a
+per-handle scan adapter. Capstone consults it only on vector slow paths and
+retains output, cursor, option and fallback ownership. NeverD clears the adapter
+before pooling a handle. The pinned NeverSight iced fork owns the bounded C ABI and
+its UD1 operand profile and per-consumer scratch decoder. Input windows live
+only for a decode call. The optional route admits selected VEX/EVEX forms;
+scalar instructions retain Capstone's compact scan. Generated IDs follow the same pinned source; no
+architecture lifter consumes iced discriminants directly. Full detail and
+text remain with Capstone. See [the boundary and checks](iced-decoder.md).
+
 ## Strict lifting contract
 
 Function admission requires decoded instruction and control-flow evidence.

@@ -22,3 +22,9 @@ else()
   target_compile_options(NeverDDecode PRIVATE
     "$<$<NOT:$<CONFIG:Debug>>:-O3;-fomit-frame-pointer>")
 endif()
+
+if(NEVERD_ENABLE_ICED)
+  include(${PROJECT_SOURCE_DIR}/cmake/NeverDIced.cmake)
+  target_link_libraries(NeverDDecode PRIVATE NeverDX86IcedScan)
+  target_compile_definitions(NeverDDecode PRIVATE NEVERD_ENABLE_ICED=1)
+endif()

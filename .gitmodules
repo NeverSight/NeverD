@@ -38,3 +38,7 @@
 	path = third_party/oneTBB
 	url = https://github.com/NeverSight/oneTBB.git
 	branch = master
+[submodule "third_party/iced"]
+	path = third_party/iced
+	url = https://github.com/NeverSight/iced.git
+	branch = codex/neverd-capstone-compat

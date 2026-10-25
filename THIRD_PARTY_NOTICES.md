@@ -8,6 +8,15 @@ contributor credits from `third_party/capstone/LICENSES` and `CREDITS.TXT` under
 `share/neverd/licenses/capstone`; the product receipt records that source
 revision. The fork's original license and component notices remain applicable.
 
+## iced
+
+The optional `NEVERD_ENABLE_ICED` adapter links the Rust implementation in the
+[NeverSight fork](https://github.com/NeverSight/iced), pinned by
+`third_party/iced`. Its original MIT notice and the MIT notice for its locked
+`lazy_static` dependency are installed under `share/neverd/licenses/iced`.
+The fork owns the bounded C ABI and UD1 compatibility profile; NeverD owns
+its closed Capstone ID mapping and fallback selection.
+
 ## nlohmann JSON
 
 The native C++ worker and offline web MCP transport use the header-only
