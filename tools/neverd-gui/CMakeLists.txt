@@ -323,7 +323,8 @@ if(BUILD_TESTING)
       allSecondKeysOwnNativeShortcutDispatch cancelledAndRepeatedKeysNeverPatch
       secondKeyPatchesThroughTheNativePopup patchEditorDismissalDoesNotApply
       patchEditorKeepsFirstPaintGeometry patchEditorDragsAndRetainsPosition
-      patchPopupFollowsItsOrigin patchHistoryKeepsUnchangedFunctionRows)
+      patchPopupFollowsItsOrigin patchHistoryKeepsUnchangedFunctionRows
+      patchColorsStayVisibleAcrossUnrelatedEdits)
     set_tests_properties(NeverDGuiPatchKeys PROPERTIES
       ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 180)
     if(NEVERD_WORKER_REAL_ENGINE_TESTS)

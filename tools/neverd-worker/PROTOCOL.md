@@ -1235,7 +1235,7 @@ replacement are advertised independently.
 | `patch_preview` | A patch request below; returns `address`, `file_off`, `size`, `original`, `current`/`hex`, `covers`, `decoded`, `covers_truncated`, `decoded_truncated` and `warnings` without mutation. Instruction arrays are bounded for display; validation still checks the complete range. |
 | `patch_apply` | The same request, optionally `expected` original hex; applies and journals one edit, persists `patches.json` and invalidates analysis. Requires the writer and no staged unsaved annotations. |
 | `patch_revert` | `address` and optional `size` (zero restores the containing changed run), or `ranges:[{address,size}]`; restores immutable input bytes. A batch is one history command. |
-| `patches` | Optional `offset`, `limit`, or `ranges_only`; returns canonical changed runs, their original/current bytes and kind, with ordinary page metadata. |
+| `patches` | Optional `offset`, `limit`, or `ranges_only`; returns canonical changed runs, their original/current bytes and kind, with ordinary page metadata. `ranges_only:true` returns all `{address,size}` ranges without byte payloads; current SDKs encode only these ranges, while older SDKs retain the full-row compatibility path. |
 | `patch_export` | `path` and optional `allow_unsigned`; exclusively publishes a new binary by replaying the overlay. Never overwrites an existing destination. |
 | `patch_source_target` | `function`, `representation` (`c`/`llvmc`), zero-based `line`, and `literal` (zero-based integer index, or -1 for a statement); returns only proven actions and the exact `source_anchor`. |
 | `patch_source_preview` | A proven source patch request; returns `before` and `after` C, or `after_error`, using an isolated session. |

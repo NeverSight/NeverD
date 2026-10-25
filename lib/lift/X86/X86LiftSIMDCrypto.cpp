@@ -6,8 +6,7 @@
 ///
 /// \file
 /// Cryptographic acceleration (AES-NI, SHA-NI, carry-less
-/// multiply, CRC32) plus the transactional-memory (TSX) and
-/// bounds-check (MPX) extensions that share this dispatcher.
+/// multiply, CRC32) and admission of the MPX bounds-check extensions.
 ///
 //===----------------------------------------------------------------------===//
 
@@ -92,40 +91,6 @@ bool liftSIMDCrypto(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
   case X86_INS_XACQUIRE:
   case X86_INS_XRELEASE:
     return false;
-
-  // Intel TSX (transactional memory) instructions.
-  case X86_INS_XEND:
-  case X86_INS_XABORT:
-  case X86_INS_XTEST: {
-    if (InsnId == X86_INS_XABORT) {
-      // xabort imm8 — capture the immediate so codegen can re-emit
-      // `xabort $imm` (a bare `xabort` is rejected: too few operands).
-      uint64_t Imm = (X86.op_count >= 1 && X86.operands[0].type == X86_OP_IMM)
-                         ? static_cast<uint64_t>(X86.operands[0].imm)
-                         : 0;
-      // Outside a transaction XABORT does nothing; an abort resumes at the
-      // XBEGIN fallback, whose own output carries EAX.  No value falls
-      // through, so it defines no register here.
-      S.emitIntrinsic(Intrinsic::Xabort, NdVar(), {NdVar::cst(Imm & 0xFF, 1)});
-      break;
-    }
-    if (InsnId == X86_INS_XTEST) {
-      // XTEST clears ZF inside a transaction and sets it otherwise; it
-      // writes no general register.
-      NdVar InTransaction = S.makeTemp(1);
-      S.emitIntrinsic(Intrinsic::Xtest, InTransaction, {});
-      S.emit(NdOp::INT_EQUAL, NdVar::reg(x86reg::ZF, 1),
-             {InTransaction, NdVar::cst(0, 1)});
-      for (uint64_t Flag :
-           {x86reg::CF, x86reg::PF, x86reg::AF, x86reg::SF, x86reg::OF})
-        S.emit(NdOp::COPY, NdVar::reg(Flag, 1), {NdVar::cst(0, 1)});
-      break;
-    }
-    // XEND writes no register. XBEGIN needs its original continuation and
-    // checkpoint, and is refused by the nonlocal-control admission boundary.
-    S.emitIntrinsic(Intrinsic::Xend, NdVar());
-    break;
-  }
 
   // MPX owns bounds-register state, bounds tables and #BR completion. An
   // ordinary COPY loses those semantics even on hosts that ignore MPX.

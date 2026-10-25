@@ -62,6 +62,7 @@ M("outsd", "__outdwordstring")
 // TSX (Transactional Synchronization Extensions)
 M("xbegin", "_xbegin")
 M("xend", "_xend")
+M("xabort", "_xabort")
 M("xtest", "_xtest")
 
 // xsave / xrstor

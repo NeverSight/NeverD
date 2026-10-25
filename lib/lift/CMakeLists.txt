@@ -138,6 +138,8 @@ add_neverd_component_library(NeverDLift
   X86/X86LiftSystem.cpp
   X86/X86LiftVirtualization.cpp
   X86/X86LiftSystemState.cpp
+  X86/X86LiftTBM.cpp
+  X86/X86LiftTransactions.cpp
   X86/X86LiftRepState.cpp
   X86/X86LiftSgx.cpp
   X86/X86LiftBoundedLeaf.cpp

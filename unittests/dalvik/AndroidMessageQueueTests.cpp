@@ -117,7 +117,9 @@ protected:
     Input.main_looper_prepared = true;
     Input.initial_message_pool_empty = true;
     if (QueueKnown)
-      Input.initial_main_queue.emplace().native_callbacks_empty = NativeEmpty;
+      Input.initial_main_queue
+          .emplace(AndroidApplicationSnapshot::EmptyMessageQueue{})
+          .native_callbacks_empty = NativeEmpty;
     RuntimeServices Services;
     if (ClockKnown)
       Services.uptime_milliseconds = [&] {

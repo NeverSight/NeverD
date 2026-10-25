@@ -508,6 +508,12 @@ inline X86SystemStateShape x86SystemStateLowShape(const LowOp &Op,
       Op.NumInputs > 1 && Op.Inputs[1].isConst() && Op.Inputs[1].Size == 2 &&
       Op.Inputs[1].Offset <= UINT16_MAX)
     Shape.SegmentedBlockSelector = static_cast<uint16_t>(Op.Inputs[1].Offset);
+  if (Shape.ValidId &&
+      Op.Inputs[0].Offset == static_cast<uint16_t>(Intrinsic::Xabort) &&
+      Op.NumInputs > 1 && Op.Inputs[1].isConst() && Op.Inputs[1].Size == 1 &&
+      !isAddressProvenance(Op.Inputs[1].Provenance) &&
+      Op.Inputs[1].Offset <= UINT8_MAX)
+    Shape.TransactionAbortCode = static_cast<uint8_t>(Op.Inputs[1].Offset);
   return Shape;
 }
 

@@ -2379,8 +2379,8 @@ Double-click to go to the declaration.</source>
         <translation>シグネチャパックを読み込む</translation>
     </message>
     <message>
-        <source>Signature packs (*.pat *.json);;All files (*)</source>
-        <translation>シグネチャパック (*.pat *.json);;すべてのファイル (*)</translation>
+        <source>Signature packs (*.pat *.npat *.json);;All files (*)</source>
+        <translation>シグネチャパック (*.pat *.npat *.json);;すべてのファイル (*)</translation>
     </message>
     <message>
         <source>Signature directory</source>

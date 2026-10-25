@@ -126,6 +126,7 @@ class BytePatchIntegrationTests(unittest.TestCase):
         session = Session(pointer, _host=host,
                           _native=SimpleNamespace(session_address=lambda handle: handle))
         self.assertEqual(session.byte_patches, [])
+        self.assertEqual(session.byte_patch_ranges, [])
         assembled = session.assemble(self.entry, "mov eax, [rsp+var_20]",
                                      symbols={"var_20": -32})
         self.assertEqual(assembled["hex"], "8b4424e0")
@@ -138,6 +139,7 @@ class BytePatchIntegrationTests(unittest.TestCase):
         self.assertIn("revert", context["actions"])
         self.assertEqual(context["revert_ranges"],
                          [{"address": hex(self.entry + 1), "size": 1}])
+        self.assertEqual(session.byte_patch_ranges, context["revert_ranges"])
         session.save_byte_patches()
         output = self.root / "python.elf"
         session.export_byte_patches(output)
@@ -155,9 +157,25 @@ class BytePatchIntegrationTests(unittest.TestCase):
         self.assertEqual(sidecar.read_bytes(), b"[]\n")
         sidecar.write_bytes(saved)
         session.load_byte_patches()
+        # Equal row count/address/size is insufficient for the reload shortcut.
+        # A foreign original must still fail admission without touching bytes.
+        foreign = json.loads(saved)
+        foreign[0]["original"] = "ff"
+        sidecar.write_text(json.dumps(foreign))
+        with self.assertRaisesRegex(NeverDError, "original"):
+            session.load_byte_patches()
+        self.assertEqual(session.byte_patches[0]["current"], "2a")
+        sidecar.write_bytes(saved)
+        # The file digest remains the saved one after an in-memory edit.
+        # Reload must still restore the saved overlay, not mistake it for a
+        # clean session based only on that unchanged digest.
+        session.apply_byte_patch(self.entry, kind="constant", value=43)
+        session.load_byte_patches()
+        self.assertEqual(session.byte_patches[0]["current"], "2a")
         session.revert_byte_patch(self.entry, 5)
         session.save_byte_patches()
         self.assertEqual(session.byte_patches, [])
+        self.assertEqual(session.byte_patch_ranges, [])
 
 
 if __name__ == "__main__":

@@ -47,7 +47,8 @@ const LibraryMethod &handlerConstructor() {
 AndroidApplicationSnapshot messageInput() {
   AndroidApplicationSnapshot input;
   input.main_looper_prepared = true;
-  input.initial_main_queue.emplace();
+  input.initial_main_queue.emplace(
+      AndroidApplicationSnapshot::EmptyMessageQueue{});
   input.initial_message_pool_empty = true;
   return input;
 }
@@ -2164,6 +2165,58 @@ TEST_F(AndroidFrameworkTest, PackageApplicationInfoHonorsTerminalBudgets) {
   EXPECT_EQ(result.stop, ExecutionStop::HeapLimit);
   EXPECT_EQ(state.library(operation(CurrentApplication), 0, {}, Admit).stop,
             ExecutionStop::HeapLimit);
+}
+TEST_F(AndroidFrameworkTest, PackageQueriesAdmitOneResultAllocation) {
+  AndroidApplicationSnapshot input{Phase::Application};
+  input.package_manager_available = true;
+  input.application_info_queries = {{"test.app", 0, {"/query"}}};
+  input.package_info_queries = {{"test.app", 0, {}}};
+  unsigned query_work = 0;
+  for (auto op : {PackageInfoQuery, PackageApplicationInfo}) {
+    SCOPED_TRACE(op);
+    for (bool complete : {true, false}) {
+      SCOPED_TRACE(complete);
+      auto storage = std::make_shared<Heap>();
+      Runtime state(program, storage, input);
+      auto app = state.library(operation(CurrentApplication), 0, {}, Admit);
+      ASSERT_EQ(app.stop, ExecutionStop::Returned);
+      auto manager =
+          state.library(operation(ContextPackageManager), app.value, {}, Admit);
+      ASSERT_EQ(manager.stop, ExecutionStop::Returned);
+      auto name = storage->literal("test.app");
+      ASSERT_TRUE(name);
+      auto before = storage->allocate(Object::Instance, "java/lang/Object", 0);
+      ASSERT_TRUE(before);
+      const uint64_t args[]{name->Identity, 0};
+      unsigned work = 0;
+      auto result = state.library(operation(op), manager.value, args, [&] {
+        ++work;
+        return query_work && work > query_work - unsigned(!complete)
+                   ? ExecutionStop::InstructionLimit
+                   : ExecutionStop::Returned;
+      });
+      if (!query_work) {
+        ASSERT_EQ(result.stop, ExecutionStop::Returned);
+        query_work = work;
+      }
+      // The same name and query row require one fresh result in either API.
+      EXPECT_EQ(work, query_work);
+      if (complete) {
+        ASSERT_EQ(result.stop, ExecutionStop::Returned);
+        EXPECT_EQ(result.value, before->Identity + 1u);
+        EXPECT_EQ(storage->get(result.value)->ClassName,
+                  op == PackageInfoQuery
+                      ? "android/content/pm/PackageInfo"
+                      : "android/content/pm/ApplicationInfo");
+      } else {
+        EXPECT_EQ(result.stop, ExecutionStop::InstructionLimit);
+        EXPECT_TRUE(state.snapshot().terminal);
+      }
+      auto after = storage->allocate(Object::Instance, "java/lang/Object", 0);
+      ASSERT_TRUE(after);
+      EXPECT_EQ(after->Identity, before->Identity + (complete ? 2u : 1u));
+    }
+  }
 }
 TEST_F(AndroidFrameworkTest,
        PackageApplicationInfoDexAndLibraryShareFieldOwnership) {

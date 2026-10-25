@@ -36,6 +36,7 @@ def run(executable, real=False):
             request["expected"] = original
             ok(worker, "patch_apply", request)
             assert ok(worker, "bytes", {"address": hex(at), "size": 1})["data"] == "2a"
+            assert ok(worker, "patches", {"ranges_only": True})["items"] == [{"address": hex(at), "size": 1}]
             last = ok(worker, "history")["items"][-1]
             assert last["kind"] == "patch" and last["details_omitted"]
             assert int(last["address"], 16) == at, last
@@ -51,6 +52,7 @@ def run(executable, real=False):
             with Client(executable) as replica:
                 ok(replica, "analysis_restore", snapshot)
                 assert ok(replica, "bytes", {"address": hex(at), "size": 1})["data"] == "2a"
+                assert ok(replica, "patches", {"ranges_only": True})["items"] == [{"address": hex(at), "size": 1}]
                 denied = replica.call("patch_apply", {**request, "expected": "2a"})
                 assert denied["error"]["code"] == "read_only", denied
             assert int(ok(worker, "undo")["address"], 16) == at
@@ -71,6 +73,7 @@ def run(executable, real=False):
             rows = ok(worker, "patches")["items"]
             ok(worker, "patch_revert", {"address": hex(at), "ranges": [{"address": row["va"], "size": row["size"]} for row in rows]})
             assert ok(worker, "patches")["total"] == 0
+            assert ok(worker, "patches", {"ranges_only": True})["items"] == []
             ok(worker, "undo")
             assert ok(worker, "patches")["total"] == len(rows)
         with Client(executable) as reopened:

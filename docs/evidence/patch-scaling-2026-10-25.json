@@ -1,0 +1,1938 @@
+{
+  "schema_version": 1,
+  "date": "2026-10-25",
+  "baseline_commit": "640418249fe0684ed1a2a9e216603bf6296e18e6",
+  "baseline_tree": "72cf7e955cb831d70bcf60f963d65defde9de1c2",
+  "baseline_equivalent_merge": "ab1c58d00a5c85bef2d0754bc4982be30808b7a9",
+  "candidate": "Same baseline plus the patch-scaling production changes identified by source and artifact hashes below, before later dev integration.",
+  "mode": "PR Review; sampled interactive-patch edit, persistence and GUI refresh paths.",
+  "host_cpu": "Intel Core i9-13900H, 20 logical CPUs; scheduler affinity unrestricted",
+  "compiler": "Ubuntu clang version 23.1.2 (++20260910044155+069ef0e7cb36-1~exp1~20260910044205.69)",
+  "build": {
+    "profile": "Release",
+    "llvm": "Repository prebuilt LLVM package",
+    "qt": "6.8.3",
+    "cpu_emulation": false,
+    "driver_emulation": false,
+    "python_plugins": false,
+    "mimalloc": true,
+    "highway": true,
+    "simdutf": true,
+    "simdjson": true,
+    "tbb": true
+  },
+  "dependency_inputs": {
+    "purpose": "configure_inputs",
+    "schema": 1,
+    "sources": {
+      "neverd_highway": {
+        "branch": "master",
+        "commit": "1693ca7926ed12c5520623564e465cff97d93374",
+        "repository": "https://github.com/NeverSight/highway.git",
+        "selection": "managed",
+        "sha256": "f5149df5acb77cd9730ed8e5160f2deff0b02fe49cc45443fd396fdb5f0519d2",
+        "used": true
+      },
+      "neverd_mimalloc": {
+        "branch": "main3",
+        "commit": "e8e7bc41ce904b4c83fe20e87d93f24d5286315a",
+        "repository": "https://github.com/NeverSight/mimalloc.git",
+        "selection": "managed",
+        "sha256": "aea4126df4ada4e8f733e2a0f08642a8aabe6c2afc01886a1a9a259c18231ac3",
+        "used": true
+      },
+      "neverd_simdjson": {
+        "branch": "master",
+        "commit": "edb7016c62efbe6155226896cdba5736307190e3",
+        "repository": "https://github.com/NeverSight/simdjson.git",
+        "selection": "managed",
+        "sha256": "e4e849bbb16878f8555501cc09bf4a6d90d4a06ccfc67a202a3c030486c3823d",
+        "used": true
+      },
+      "neverd_simdutf": {
+        "branch": "master",
+        "commit": "8d82299606e675b50de8dc16fd118aae4b65bfde",
+        "repository": "https://github.com/NeverSight/simdutf.git",
+        "selection": "managed",
+        "sha256": "48e9c9fc33940bcc81cdaec785ce6e21ea20f7b03b7a26bff56abb41d2cf5126",
+        "used": true
+      },
+      "neverd_tbb": {
+        "branch": "master",
+        "commit": "d26e0502ca39f888c1266cbbf1e2c2226d31e41b",
+        "repository": "https://github.com/NeverSight/oneTBB.git",
+        "selection": "managed",
+        "sha256": "98300a443e43d047eabae27d3e30232efe7508b20d8e24a92ff2d54ef511761b",
+        "used": true
+      }
+    }
+  },
+  "production_source_sha256": {
+    "include/neverd/sdk/NeverDCAPIBytePatch.h": "83a4519bc05272158dd21c47d285c05f6473144dc161f240f169b94e064cd23d",
+    "lib/patch/PatchOverlay.cpp": "a2c65be2d78e51b22731441636478f6eaf8cfd15fd380de05988c1e389e1e9dc",
+    "lib/sdk/capi/NeverDCAPIBytePatch.cpp": "96931b6e41e777498f2aab92c625af762c20fd6a40e0c570a79aa445bae6ad66",
+    "pluginsdk/python/neverd_plugin/abi.py": "9f0aae307e1de2652de8d94af57fb9d494d7b12e73e49c3583e7f2e8c9f15345",
+    "pluginsdk/python/neverd_plugin/api.py": "b7851491f784a3503250eb1968fb23e4dd7b584f271eb7a18e3ce4770b8d36a4",
+    "tools/neverd-worker/EnginePatch.cpp": "10e72bf3b8a2c01708cd6ca425effc3b02f373c229533b49b244560d46b8d91f",
+    "tools/neverd-gui/app/Session.cpp": "20ee2c65decbeaf71360857b74e1c534bbd0f2775fdbaaace27fce36aab39b19"
+  },
+  "method": "Four sequential processes in baseline/candidate/candidate/baseline order, 21 samples per process/case, pooled 42 per variant. Identical driver hash and fixtures; no warmup samples discarded. Setup, reset/undo and byte-oracle export checks are outside timings. SDK samples include Python binding overhead; worker samples include IPC. Every edit checks expected bytes; each timed worker edit is read back before undo, outside the timer. Worker SDK identity checked through /proc/<pid>/maps.",
+  "limitations": [
+    "Other development builds were running on this shared host. Absolute wall times and especially tails are noisy; load averages are retained per run. No own builds or runtime tests overlapped this paired campaign.",
+    "Synthetic warm raw-x64 fixtures measure established overlays, not cold image snapshots, ELF/PE/Mach-O loading, instruction assembly, source recompilation, reanalysis, GUI paint latency, peak memory or power.",
+    "Worker commits include synchronous history and sidecar persistence; fixture projects use the local NVMe filesystem. No crash/power-loss experiment was performed by this benchmark.",
+    "Only Linux x86-64 was timed. There are no timed IDA, Binary Ninja, Ghidra or other competitor results, and these figures establish no world-ranking claim.",
+    "The optional new range API removes work proportional to patched byte payloads; output still scales with canonical row count. Durable history/sidecar snapshots and range publication still scale with total overlay state.",
+    "The 65,536-row candidate-only stress run used an earlier driver revision (its hash is retained); it proves byte-oracle correctness and records diagnostic timings, not a paired baseline speedup."
+  ],
+  "pooled_results": [
+    {
+      "operation": "sdk_single_byte_edit",
+      "adjacent_rows": 64,
+      "wall": {
+        "baseline": {
+          "sample_count": 42,
+          "median_ms": 0.1483735,
+          "p95_ms": 0.232153
+        },
+        "candidate": {
+          "sample_count": 42,
+          "median_ms": 0.1217665,
+          "p95_ms": 0.209505
+        },
+        "median_speedup": 1.2185083746350596
+      },
+      "cpu": {
+        "baseline": {
+          "sample_count": 42,
+          "median_ms": 0.14576250000000002,
+          "p95_ms": 0.221581
+        },
+        "candidate": {
+          "sample_count": 42,
+          "median_ms": 0.1184055,
+          "p95_ms": 0.201431
+        },
+        "median_speedup": 1.2310450105780562
+      }
+    },
+    {
+      "operation": "sdk_single_byte_edit",
+      "adjacent_rows": 1024,
+      "wall": {
+        "baseline": {
+          "sample_count": 42,
+          "median_ms": 50.5796885,
+          "p95_ms": 78.935199
+        },
+        "candidate": {
+          "sample_count": 42,
+          "median_ms": 0.1588805,
+          "p95_ms": 0.196686
+        },
+        "median_speedup": 318.35051186268925
+      },
+      "cpu": {
+        "baseline": {
+          "sample_count": 42,
+          "median_ms": 50.400656,
+          "p95_ms": 78.921836
+        },
+        "candidate": {
+          "sample_count": 42,
+          "median_ms": 0.15539799999999998,
+          "p95_ms": 0.192724
+        },
+        "median_speedup": 324.3327198548244
+      }
+    },
+    {
+      "operation": "sdk_single_byte_edit",
+      "adjacent_rows": 2048,
+      "wall": {
+        "baseline": {
+          "sample_count": 42,
+          "median_ms": 381.3501705,
+          "p95_ms": 565.733549
+        },
+        "candidate": {
+          "sample_count": 42,
+          "median_ms": 0.202405,
+          "p95_ms": 0.249553
+        },
+        "median_speedup": 1884.0946147575405
+      },
+      "cpu": {
+        "baseline": {
+          "sample_count": 42,
+          "median_ms": 381.315929,
+          "p95_ms": 565.62114
+        },
+        "candidate": {
+          "sample_count": 42,
+          "median_ms": 0.198007,
+          "p95_ms": 0.244004
+        },
+        "median_speedup": 1925.7699424767811
+      }
+    },
+    {
+      "operation": "worker_patch_ranges",
+      "changed_bytes": 4096,
+      "wall": {
+        "baseline": {
+          "sample_count": 42,
+          "median_ms": 0.3838695,
+          "p95_ms": 0.760465
+        },
+        "candidate": {
+          "sample_count": 42,
+          "median_ms": 0.087981,
+          "p95_ms": 0.228514
+        },
+        "median_speedup": 4.363095441061137
+      }
+    },
+    {
+      "operation": "worker_patch_ranges",
+      "changed_bytes": 1048576,
+      "wall": {
+        "baseline": {
+          "sample_count": 42,
+          "median_ms": 44.2440445,
+          "p95_ms": 72.599214
+        },
+        "candidate": {
+          "sample_count": 42,
+          "median_ms": 0.09372,
+          "p95_ms": 0.241157
+        },
+        "median_speedup": 472.0875426803244
+      }
+    },
+    {
+      "operation": "worker_single_byte_commit",
+      "adjacent_rows": 64,
+      "wall": {
+        "baseline": {
+          "sample_count": 42,
+          "median_ms": 19.899783,
+          "p95_ms": 22.422958
+        },
+        "candidate": {
+          "sample_count": 42,
+          "median_ms": 18.9830765,
+          "p95_ms": 21.6456
+        },
+        "median_speedup": 1.0482907235821337
+      }
+    },
+    {
+      "operation": "worker_single_byte_commit",
+      "adjacent_rows": 1024,
+      "wall": {
+        "baseline": {
+          "sample_count": 42,
+          "median_ms": 148.4420255,
+          "p95_ms": 172.434136
+        },
+        "candidate": {
+          "sample_count": 42,
+          "median_ms": 53.1758425,
+          "p95_ms": 66.804783
+        },
+        "median_speedup": 2.7915312390208014
+      }
+    },
+    {
+      "operation": "worker_single_byte_commit",
+      "adjacent_rows": 2048,
+      "wall": {
+        "baseline": {
+          "sample_count": 42,
+          "median_ms": 575.8819579999999,
+          "p95_ms": 774.16402
+        },
+        "candidate": {
+          "sample_count": 42,
+          "median_ms": 95.879879,
+          "p95_ms": 128.114135
+        },
+        "median_speedup": 6.006285823535508
+      }
+    }
+  ],
+  "runs": [
+    {
+      "label": "baseline-a",
+      "platform": "Linux-7.0.0-38-generic-x86_64-with-glibc2.43",
+      "machine": "x86_64",
+      "processor": "",
+      "timestamp_utc": "2026-10-25T21:22:40Z",
+      "benchmark_sha256": "1ff46318f6cf7c883a9f864e7496bfe32971f68008c9468a74574abcbd52f1ff",
+      "cpu_count": 20,
+      "load_average": [
+        13.0595703125,
+        17.67236328125,
+        25.96728515625
+      ],
+      "library": "/mnt/data/neverd-patch-scaling/baseline/bin/libneverd.so",
+      "library_sha256": "e1f705618bc625817e6d7b274b221c13741892cbf7b047f46c04ac2362b50f06",
+      "worker": "/mnt/data/neverd-patch-scaling/baseline/bin/neverd-worker",
+      "worker_sha256": "cd5adb705f1ffa8bb07d3ea8dd86ad8990b1ae73e9677fc4ebdc462c9b3ade42",
+      "samples": 21,
+      "results": [
+        {
+          "operation": "sdk_single_byte_edit",
+          "adjacent_rows": 64,
+          "wall": {
+            "median_ms": 0.0934,
+            "p95_ms": 0.159059,
+            "samples_ms": [
+              0.232153,
+              0.135195,
+              0.159059,
+              0.129754,
+              0.098385,
+              0.091053,
+              0.084825,
+              0.137688,
+              0.110309,
+              0.085954,
+              0.085821,
+              0.087344,
+              0.089597,
+              0.109599,
+              0.0934,
+              0.08902,
+              0.08402,
+              0.101538,
+              0.091949,
+              0.096388,
+              0.081487
+            ]
+          },
+          "cpu": {
+            "median_ms": 0.092154,
+            "p95_ms": 0.155833,
+            "samples_ms": [
+              0.227019,
+              0.13131,
+              0.155833,
+              0.127816,
+              0.096572,
+              0.090125,
+              0.083966,
+              0.135692,
+              0.10922,
+              0.085221,
+              0.085067,
+              0.086628,
+              0.088614,
+              0.107915,
+              0.092154,
+              0.0883,
+              0.082867,
+              0.100475,
+              0.091108,
+              0.095331,
+              0.080714
+            ]
+          }
+        },
+        {
+          "operation": "sdk_single_byte_edit",
+          "adjacent_rows": 1024,
+          "wall": {
+            "median_ms": 49.794621,
+            "p95_ms": 52.391012,
+            "samples_ms": [
+              50.897095,
+              50.162959,
+              50.188953,
+              49.794621,
+              50.817596,
+              49.373825,
+              49.549059,
+              50.337318,
+              48.507848,
+              48.8028,
+              48.785565,
+              49.834909,
+              52.391012,
+              51.78569,
+              48.678956,
+              48.548012,
+              48.347116,
+              48.9625,
+              55.595164,
+              49.991999,
+              49.051597
+            ]
+          },
+          "cpu": {
+            "median_ms": 49.514961,
+            "p95_ms": 52.232501,
+            "samples_ms": [
+              50.734313,
+              49.894233,
+              49.973372,
+              49.514961,
+              50.545953,
+              49.20071,
+              49.373915,
+              50.15522,
+              48.359028,
+              48.667358,
+              48.570124,
+              49.640878,
+              52.232501,
+              51.528623,
+              48.508645,
+              48.380647,
+              48.224102,
+              48.952091,
+              55.562098,
+              49.98151,
+              49.04263
+            ]
+          }
+        },
+        {
+          "operation": "sdk_single_byte_edit",
+          "adjacent_rows": 2048,
+          "wall": {
+            "median_ms": 376.841552,
+            "p95_ms": 471.600518,
+            "samples_ms": [
+              493.702326,
+              471.600518,
+              412.007585,
+              393.464887,
+              402.563026,
+              409.119337,
+              416.536059,
+              373.933135,
+              369.415215,
+              384.724341,
+              403.09418,
+              376.841552,
+              380.398252,
+              370.711543,
+              368.256533,
+              369.317597,
+              370.403718,
+              364.748236,
+              366.841978,
+              375.179222,
+              367.41667
+            ]
+          },
+          "cpu": {
+            "median_ms": 376.808433,
+            "p95_ms": 470.43917,
+            "samples_ms": [
+              493.65193,
+              470.43917,
+              410.973405,
+              392.970152,
+              402.457751,
+              406.433156,
+              416.318579,
+              373.863222,
+              369.378161,
+              384.673932,
+              402.513401,
+              376.808433,
+              380.362212,
+              370.680589,
+              368.225494,
+              369.282228,
+              370.371984,
+              364.7177,
+              366.801092,
+              375.148166,
+              367.381059
+            ]
+          }
+        },
+        {
+          "operation": "worker_patch_ranges",
+          "changed_bytes": 4096,
+          "wall": {
+            "median_ms": 0.381099,
+            "p95_ms": 0.407873,
+            "samples_ms": [
+              0.760465,
+              0.407873,
+              0.402701,
+              0.402904,
+              0.382068,
+              0.36995,
+              0.356615,
+              0.37019,
+              0.386802,
+              0.375557,
+              0.381099,
+              0.358636,
+              0.382262,
+              0.38368,
+              0.34444,
+              0.353433,
+              0.384059,
+              0.370958,
+              0.392395,
+              0.356459,
+              0.37897
+            ]
+          }
+        },
+        {
+          "operation": "worker_patch_ranges",
+          "changed_bytes": 1048576,
+          "wall": {
+            "median_ms": 43.505758,
+            "p95_ms": 72.599214,
+            "samples_ms": [
+              96.247449,
+              72.599214,
+              43.505758,
+              44.131198,
+              44.120459,
+              43.211452,
+              42.224894,
+              42.993097,
+              43.495296,
+              42.320333,
+              42.194732,
+              42.034497,
+              45.099576,
+              42.744873,
+              44.439633,
+              46.35468,
+              42.745445,
+              45.007665,
+              42.402444,
+              52.464601,
+              59.729253
+            ]
+          }
+        },
+        {
+          "operation": "worker_single_byte_commit",
+          "adjacent_rows": 64,
+          "wall": {
+            "median_ms": 19.501792,
+            "p95_ms": 21.062361,
+            "samples_ms": [
+              19.501792,
+              18.542342,
+              19.734006,
+              19.666231,
+              18.067878,
+              19.953153,
+              19.698751,
+              19.183263,
+              19.331196,
+              20.733602,
+              19.180952,
+              19.896417,
+              19.919175,
+              18.578817,
+              18.938622,
+              19.462954,
+              21.062361,
+              15.990545,
+              18.483674,
+              20.44379,
+              22.220282
+            ]
+          }
+        },
+        {
+          "operation": "worker_single_byte_commit",
+          "adjacent_rows": 1024,
+          "wall": {
+            "median_ms": 143.08282,
+            "p95_ms": 165.228667,
+            "samples_ms": [
+              140.592458,
+              104.662528,
+              164.973367,
+              164.598407,
+              160.405922,
+              155.096517,
+              143.08282,
+              145.399278,
+              143.083908,
+              105.139086,
+              138.802252,
+              114.199253,
+              112.037954,
+              117.969187,
+              128.53778,
+              106.299864,
+              165.228667,
+              162.675654,
+              158.44699,
+              118.095482,
+              172.434136
+            ]
+          }
+        },
+        {
+          "operation": "worker_single_byte_commit",
+          "adjacent_rows": 2048,
+          "wall": {
+            "median_ms": 564.483009,
+            "p95_ms": 777.398054,
+            "samples_ms": [
+              854.065332,
+              777.398054,
+              564.483009,
+              502.828466,
+              487.530986,
+              549.293644,
+              485.306192,
+              512.955464,
+              485.311062,
+              609.424734,
+              707.724868,
+              755.853251,
+              640.625962,
+              681.09402,
+              480.504095,
+              487.392675,
+              574.118997,
+              496.063274,
+              774.16402,
+              577.644919,
+              528.044839
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "label": "candidate-a",
+      "platform": "Linux-7.0.0-38-generic-x86_64-with-glibc2.43",
+      "machine": "x86_64",
+      "processor": "",
+      "timestamp_utc": "2026-10-25T21:23:12Z",
+      "benchmark_sha256": "1ff46318f6cf7c883a9f864e7496bfe32971f68008c9468a74574abcbd52f1ff",
+      "cpu_count": 20,
+      "load_average": [
+        13.20263671875,
+        17.2578125,
+        25.56494140625
+      ],
+      "library": "/mnt/data/neverd-patch-scaling/candidate-measured/bin/libneverd.so",
+      "library_sha256": "33a630f8b0e24408c06b9fb115da04e07f7dcdf9a858dc348211b87fa12ee779",
+      "worker": "/mnt/data/neverd-patch-scaling/candidate-measured/bin/neverd-worker",
+      "worker_sha256": "eb7e04beb834548d699937e638706f0f018b0e92eb45880cc5a8a90ab1077b1a",
+      "samples": 21,
+      "results": [
+        {
+          "operation": "sdk_single_byte_edit",
+          "adjacent_rows": 64,
+          "wall": {
+            "median_ms": 0.122311,
+            "p95_ms": 0.253907,
+            "samples_ms": [
+              0.25695,
+              0.253907,
+              0.179427,
+              0.141105,
+              0.130097,
+              0.142147,
+              0.12675,
+              0.123621,
+              0.114786,
+              0.121186,
+              0.122311,
+              0.110958,
+              0.116433,
+              0.115392,
+              0.131839,
+              0.113513,
+              0.121966,
+              0.115636,
+              0.113852,
+              0.137529,
+              0.113761
+            ]
+          },
+          "cpu": {
+            "median_ms": 0.118903,
+            "p95_ms": 0.238714,
+            "samples_ms": [
+              0.248249,
+              0.238714,
+              0.175382,
+              0.137519,
+              0.12617,
+              0.138567,
+              0.123095,
+              0.120635,
+              0.111814,
+              0.118061,
+              0.118903,
+              0.108135,
+              0.113514,
+              0.112282,
+              0.128481,
+              0.110274,
+              0.118377,
+              0.112669,
+              0.110549,
+              0.134346,
+              0.110529
+            ]
+          }
+        },
+        {
+          "operation": "sdk_single_byte_edit",
+          "adjacent_rows": 1024,
+          "wall": {
+            "median_ms": 0.160933,
+            "p95_ms": 0.179294,
+            "samples_ms": [
+              0.176181,
+              0.173449,
+              0.175456,
+              0.153934,
+              0.159033,
+              0.179294,
+              0.158728,
+              0.188025,
+              0.16196,
+              0.145752,
+              0.141902,
+              0.151123,
+              0.161785,
+              0.156847,
+              0.170091,
+              0.160943,
+              0.165528,
+              0.160933,
+              0.154797,
+              0.144273,
+              0.154135
+            ]
+          },
+          "cpu": {
+            "median_ms": 0.157382,
+            "p95_ms": 0.176117,
+            "samples_ms": [
+              0.170721,
+              0.16934,
+              0.172417,
+              0.151227,
+              0.155029,
+              0.176117,
+              0.155767,
+              0.182934,
+              0.157636,
+              0.142888,
+              0.139348,
+              0.148115,
+              0.159108,
+              0.152834,
+              0.1661,
+              0.157677,
+              0.162015,
+              0.157382,
+              0.151949,
+              0.140851,
+              0.150669
+            ]
+          }
+        },
+        {
+          "operation": "sdk_single_byte_edit",
+          "adjacent_rows": 2048,
+          "wall": {
+            "median_ms": 0.234965,
+            "p95_ms": 0.259885,
+            "samples_ms": [
+              0.202021,
+              0.225065,
+              0.248067,
+              0.234965,
+              0.211432,
+              0.218622,
+              0.211404,
+              0.237245,
+              0.248017,
+              0.249553,
+              0.243791,
+              0.243236,
+              0.223173,
+              0.259885,
+              0.26331,
+              0.232444,
+              0.211886,
+              0.229198,
+              0.247186,
+              0.246385,
+              0.202789
+            ]
+          },
+          "cpu": {
+            "median_ms": 0.229471,
+            "p95_ms": 0.253905,
+            "samples_ms": [
+              0.197218,
+              0.220279,
+              0.244004,
+              0.229471,
+              0.206469,
+              0.214437,
+              0.206374,
+              0.232148,
+              0.242619,
+              0.24385,
+              0.237788,
+              0.23735,
+              0.218084,
+              0.253905,
+              0.256763,
+              0.227684,
+              0.207845,
+              0.223495,
+              0.241208,
+              0.240632,
+              0.198796
+            ]
+          }
+        },
+        {
+          "operation": "worker_patch_ranges",
+          "changed_bytes": 4096,
+          "wall": {
+            "median_ms": 0.106405,
+            "p95_ms": 0.259782,
+            "samples_ms": [
+              0.295075,
+              0.259782,
+              0.216235,
+              0.228514,
+              0.160958,
+              0.138272,
+              0.117511,
+              0.092692,
+              0.08965,
+              0.106405,
+              0.111768,
+              0.101166,
+              0.095088,
+              0.092267,
+              0.100269,
+              0.107625,
+              0.10926,
+              0.084862,
+              0.081572,
+              0.092056,
+              0.082028
+            ]
+          }
+        },
+        {
+          "operation": "worker_patch_ranges",
+          "changed_bytes": 1048576,
+          "wall": {
+            "median_ms": 0.102079,
+            "p95_ms": 0.161502,
+            "samples_ms": [
+              0.199303,
+              0.141202,
+              0.12531,
+              0.094798,
+              0.092642,
+              0.102079,
+              0.145469,
+              0.127628,
+              0.092244,
+              0.075423,
+              0.161502,
+              0.137445,
+              0.132089,
+              0.132708,
+              0.105972,
+              0.079532,
+              0.068531,
+              0.066315,
+              0.069743,
+              0.07244,
+              0.076703
+            ]
+          }
+        },
+        {
+          "operation": "worker_single_byte_commit",
+          "adjacent_rows": 64,
+          "wall": {
+            "median_ms": 19.586459,
+            "p95_ms": 23.010133,
+            "samples_ms": [
+              18.023855,
+              18.234939,
+              18.045339,
+              16.187055,
+              24.066327,
+              23.010133,
+              18.399273,
+              19.511397,
+              20.112061,
+              20.258377,
+              19.586459,
+              20.616016,
+              19.552694,
+              18.713857,
+              20.547975,
+              21.6456,
+              19.78964,
+              20.053855,
+              19.448519,
+              18.239835,
+              20.260535
+            ]
+          }
+        },
+        {
+          "operation": "worker_single_byte_commit",
+          "adjacent_rows": 1024,
+          "wall": {
+            "median_ms": 49.569583,
+            "p95_ms": 66.804783,
+            "samples_ms": [
+              85.440354,
+              66.804783,
+              56.534245,
+              55.55969,
+              54.182883,
+              46.634875,
+              58.278093,
+              39.692676,
+              44.038508,
+              43.414059,
+              59.220131,
+              48.510251,
+              39.739169,
+              42.584696,
+              45.609737,
+              42.041807,
+              47.4867,
+              56.956696,
+              53.097266,
+              49.569583,
+              58.042857
+            ]
+          }
+        },
+        {
+          "operation": "worker_single_byte_commit",
+          "adjacent_rows": 2048,
+          "wall": {
+            "median_ms": 82.019143,
+            "p95_ms": 119.562121,
+            "samples_ms": [
+              145.618368,
+              76.703622,
+              118.342482,
+              85.009469,
+              79.123387,
+              110.228629,
+              93.410955,
+              104.320708,
+              101.84077,
+              84.379148,
+              76.920189,
+              80.610923,
+              73.399097,
+              80.859337,
+              111.149292,
+              82.019143,
+              119.562121,
+              64.779268,
+              61.559018,
+              62.581497,
+              76.045321
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "label": "candidate-b",
+      "platform": "Linux-7.0.0-38-generic-x86_64-with-glibc2.43",
+      "machine": "x86_64",
+      "processor": "",
+      "timestamp_utc": "2026-10-25T21:23:20Z",
+      "benchmark_sha256": "1ff46318f6cf7c883a9f864e7496bfe32971f68008c9468a74574abcbd52f1ff",
+      "cpu_count": 20,
+      "load_average": [
+        13.09716796875,
+        17.10107421875,
+        25.42431640625
+      ],
+      "library": "/mnt/data/neverd-patch-scaling/candidate-measured/bin/libneverd.so",
+      "library_sha256": "33a630f8b0e24408c06b9fb115da04e07f7dcdf9a858dc348211b87fa12ee779",
+      "worker": "/mnt/data/neverd-patch-scaling/candidate-measured/bin/neverd-worker",
+      "worker_sha256": "eb7e04beb834548d699937e638706f0f018b0e92eb45880cc5a8a90ab1077b1a",
+      "samples": 21,
+      "results": [
+        {
+          "operation": "sdk_single_byte_edit",
+          "adjacent_rows": 64,
+          "wall": {
+            "median_ms": 0.120138,
+            "p95_ms": 0.144681,
+            "samples_ms": [
+              0.209505,
+              0.144681,
+              0.131909,
+              0.129265,
+              0.128215,
+              0.119012,
+              0.116663,
+              0.128523,
+              0.129145,
+              0.122682,
+              0.136881,
+              0.117352,
+              0.11342,
+              0.114253,
+              0.121567,
+              0.114197,
+              0.108949,
+              0.114569,
+              0.105771,
+              0.120138,
+              0.109021
+            ]
+          },
+          "cpu": {
+            "median_ms": 0.116545,
+            "p95_ms": 0.139425,
+            "samples_ms": [
+              0.201431,
+              0.139425,
+              0.128071,
+              0.125572,
+              0.124506,
+              0.115866,
+              0.113557,
+              0.124936,
+              0.125287,
+              0.119193,
+              0.132899,
+              0.114118,
+              0.110197,
+              0.111272,
+              0.118434,
+              0.111106,
+              0.105356,
+              0.111736,
+              0.102936,
+              0.116545,
+              0.10577
+            ]
+          }
+        },
+        {
+          "operation": "sdk_single_byte_edit",
+          "adjacent_rows": 1024,
+          "wall": {
+            "median_ms": 0.154769,
+            "p95_ms": 0.211716,
+            "samples_ms": [
+              0.216434,
+              0.211716,
+              0.166544,
+              0.147288,
+              0.138422,
+              0.130911,
+              0.130708,
+              0.196686,
+              0.184387,
+              0.146214,
+              0.139546,
+              0.170476,
+              0.154769,
+              0.144722,
+              0.155568,
+              0.174432,
+              0.148679,
+              0.13718,
+              0.159915,
+              0.137273,
+              0.166621
+            ]
+          },
+          "cpu": {
+            "median_ms": 0.150754,
+            "p95_ms": 0.204984,
+            "samples_ms": [
+              0.209817,
+              0.204984,
+              0.162108,
+              0.143936,
+              0.136093,
+              0.127512,
+              0.128231,
+              0.192724,
+              0.180051,
+              0.142736,
+              0.136624,
+              0.166608,
+              0.150754,
+              0.141779,
+              0.151891,
+              0.170766,
+              0.145148,
+              0.134346,
+              0.156358,
+              0.134677,
+              0.163309
+            ]
+          }
+        },
+        {
+          "operation": "sdk_single_byte_edit",
+          "adjacent_rows": 2048,
+          "wall": {
+            "median_ms": 0.173287,
+            "p95_ms": 0.192349,
+            "samples_ms": [
+              0.16658,
+              0.164376,
+              0.165919,
+              0.182754,
+              0.173287,
+              0.190746,
+              0.165694,
+              0.192349,
+              0.180957,
+              0.188605,
+              0.163646,
+              0.155123,
+              0.164347,
+              0.175175,
+              0.185078,
+              0.178808,
+              0.151702,
+              0.208012,
+              0.182773,
+              0.168174,
+              0.170099
+            ]
+          },
+          "cpu": {
+            "median_ms": 0.169487,
+            "p95_ms": 0.188503,
+            "samples_ms": [
+              0.161827,
+              0.160207,
+              0.162514,
+              0.178878,
+              0.169487,
+              0.186347,
+              0.161936,
+              0.188503,
+              0.176732,
+              0.184871,
+              0.160003,
+              0.152024,
+              0.160985,
+              0.17077,
+              0.180811,
+              0.174541,
+              0.148745,
+              0.202564,
+              0.177892,
+              0.164548,
+              0.166955
+            ]
+          }
+        },
+        {
+          "operation": "worker_patch_ranges",
+          "changed_bytes": 4096,
+          "wall": {
+            "median_ms": 0.048766,
+            "p95_ms": 0.121992,
+            "samples_ms": [
+              0.149933,
+              0.073463,
+              0.057693,
+              0.051236,
+              0.048766,
+              0.043667,
+              0.040022,
+              0.040158,
+              0.041615,
+              0.039363,
+              0.039379,
+              0.04272,
+              0.040003,
+              0.040634,
+              0.039393,
+              0.121992,
+              0.064564,
+              0.05334,
+              0.113437,
+              0.086312,
+              0.057544
+            ]
+          }
+        },
+        {
+          "operation": "worker_patch_ranges",
+          "changed_bytes": 1048576,
+          "wall": {
+            "median_ms": 0.081006,
+            "p95_ms": 0.268853,
+            "samples_ms": [
+              0.268861,
+              0.224728,
+              0.144747,
+              0.081006,
+              0.074736,
+              0.06935,
+              0.068754,
+              0.117883,
+              0.073255,
+              0.065632,
+              0.063198,
+              0.062889,
+              0.065042,
+              0.131168,
+              0.228442,
+              0.268853,
+              0.241157,
+              0.132585,
+              0.091339,
+              0.075163,
+              0.07449
+            ]
+          }
+        },
+        {
+          "operation": "worker_single_byte_commit",
+          "adjacent_rows": 64,
+          "wall": {
+            "median_ms": 18.548274,
+            "p95_ms": 19.8811,
+            "samples_ms": [
+              18.643829,
+              17.040183,
+              18.144582,
+              18.018123,
+              19.8811,
+              18.455822,
+              17.699699,
+              19.584427,
+              18.468572,
+              18.357155,
+              18.3816,
+              18.548274,
+              18.110813,
+              18.976115,
+              18.87992,
+              19.290618,
+              19.835519,
+              20.203198,
+              18.990038,
+              19.455129,
+              18.473193
+            ]
+          }
+        },
+        {
+          "operation": "worker_single_byte_commit",
+          "adjacent_rows": 1024,
+          "wall": {
+            "median_ms": 54.71007,
+            "p95_ms": 66.602865,
+            "samples_ms": [
+              77.651363,
+              66.602865,
+              53.254419,
+              37.288115,
+              58.703687,
+              50.400084,
+              55.471831,
+              57.216335,
+              58.138046,
+              56.424355,
+              54.71007,
+              44.207071,
+              45.179166,
+              55.35028,
+              57.657914,
+              50.524354,
+              42.377023,
+              39.241075,
+              47.934987,
+              57.40643,
+              48.32887
+            ]
+          }
+        },
+        {
+          "operation": "worker_single_byte_commit",
+          "adjacent_rows": 2048,
+          "wall": {
+            "median_ms": 107.494557,
+            "p95_ms": 128.114135,
+            "samples_ms": [
+              111.716792,
+              81.848489,
+              100.175914,
+              73.339834,
+              82.860749,
+              63.03323,
+              105.481838,
+              85.693018,
+              98.348803,
+              86.587826,
+              107.494557,
+              122.35151,
+              110.644476,
+              113.741883,
+              117.915622,
+              83.811428,
+              112.794153,
+              116.112293,
+              129.947391,
+              128.114135,
+              108.987215
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "label": "baseline-b",
+      "platform": "Linux-7.0.0-38-generic-x86_64-with-glibc2.43",
+      "machine": "x86_64",
+      "processor": "",
+      "timestamp_utc": "2026-10-25T21:23:29Z",
+      "benchmark_sha256": "1ff46318f6cf7c883a9f864e7496bfe32971f68008c9468a74574abcbd52f1ff",
+      "cpu_count": 20,
+      "load_average": [
+        12.92919921875,
+        16.99951171875,
+        25.3466796875
+      ],
+      "library": "/mnt/data/neverd-patch-scaling/baseline/bin/libneverd.so",
+      "library_sha256": "e1f705618bc625817e6d7b274b221c13741892cbf7b047f46c04ac2362b50f06",
+      "worker": "/mnt/data/neverd-patch-scaling/baseline/bin/neverd-worker",
+      "worker_sha256": "cd5adb705f1ffa8bb07d3ea8dd86ad8990b1ae73e9677fc4ebdc462c9b3ade42",
+      "samples": 21,
+      "results": [
+        {
+          "operation": "sdk_single_byte_edit",
+          "adjacent_rows": 64,
+          "wall": {
+            "median_ms": 0.194005,
+            "p95_ms": 0.277677,
+            "samples_ms": [
+              0.277677,
+              0.433958,
+              0.224733,
+              0.206991,
+              0.193934,
+              0.187839,
+              0.201945,
+              0.19078,
+              0.18069,
+              0.179367,
+              0.194093,
+              0.210461,
+              0.192322,
+              0.191811,
+              0.220079,
+              0.198172,
+              0.194005,
+              0.195492,
+              0.172957,
+              0.123829,
+              0.104679
+            ]
+          },
+          "cpu": {
+            "median_ms": 0.191504,
+            "p95_ms": 0.221581,
+            "samples_ms": [
+              0.271029,
+              0.220473,
+              0.221581,
+              0.204234,
+              0.191094,
+              0.185541,
+              0.199088,
+              0.188184,
+              0.178167,
+              0.176942,
+              0.191797,
+              0.207372,
+              0.188675,
+              0.188343,
+              0.217045,
+              0.195417,
+              0.191504,
+              0.192897,
+              0.169746,
+              0.122465,
+              0.103598
+            ]
+          }
+        },
+        {
+          "operation": "sdk_single_byte_edit",
+          "adjacent_rows": 1024,
+          "wall": {
+            "median_ms": 74.036588,
+            "p95_ms": 78.991108,
+            "samples_ms": [
+              49.727007,
+              50.552256,
+              50.607121,
+              49.491887,
+              53.906369,
+              74.036588,
+              50.109179,
+              49.521908,
+              52.329024,
+              50.785816,
+              72.021597,
+              79.080588,
+              78.991108,
+              78.58488,
+              78.506242,
+              78.781759,
+              78.538868,
+              78.935199,
+              78.613011,
+              78.76826,
+              78.716517
+            ]
+          },
+          "cpu": {
+            "median_ms": 73.950095,
+            "p95_ms": 78.964744,
+            "samples_ms": [
+              49.577948,
+              50.403476,
+              50.397836,
+              49.243664,
+              53.751961,
+              73.950095,
+              49.849697,
+              49.420897,
+              52.058098,
+              50.585178,
+              71.959099,
+              79.066739,
+              78.964744,
+              78.571941,
+              78.492556,
+              78.768621,
+              78.524605,
+              78.921836,
+              78.599675,
+              78.754301,
+              78.702964
+            ]
+          }
+        },
+        {
+          "operation": "sdk_single_byte_edit",
+          "adjacent_rows": 2048,
+          "wall": {
+            "median_ms": 388.47946,
+            "p95_ms": 586.543618,
+            "samples_ms": [
+              472.841199,
+              459.473279,
+              472.845337,
+              489.475162,
+              565.733549,
+              586.543618,
+              591.318636,
+              465.934624,
+              404.513963,
+              375.994174,
+              391.666225,
+              369.235689,
+              382.302089,
+              371.333435,
+              369.451673,
+              368.932382,
+              374.226044,
+              388.47946,
+              365.024485,
+              377.379236,
+              371.078797
+            ]
+          },
+          "cpu": {
+            "median_ms": 388.427894,
+            "p95_ms": 586.487606,
+            "samples_ms": [
+              472.767856,
+              458.605738,
+              472.596522,
+              489.306845,
+              565.62114,
+              586.487606,
+              591.26287,
+              465.861499,
+              404.475437,
+              375.961983,
+              391.616358,
+              369.205136,
+              382.269646,
+              371.280705,
+              369.402955,
+              368.879446,
+              374.177244,
+              388.427894,
+              364.988717,
+              377.347996,
+              371.041862
+            ]
+          }
+        },
+        {
+          "operation": "worker_patch_ranges",
+          "changed_bytes": 4096,
+          "wall": {
+            "median_ms": 0.408993,
+            "p95_ms": 0.846394,
+            "samples_ms": [
+              0.846394,
+              0.499562,
+              0.484106,
+              0.487015,
+              0.471195,
+              0.489858,
+              0.424398,
+              0.369925,
+              0.354834,
+              0.351447,
+              0.407037,
+              0.408993,
+              0.414956,
+              0.400365,
+              0.408356,
+              0.343699,
+              0.382853,
+              1.130771,
+              0.410833,
+              0.353458,
+              0.349492
+            ]
+          }
+        },
+        {
+          "operation": "worker_patch_ranges",
+          "changed_bytes": 1048576,
+          "wall": {
+            "median_ms": 46.282057,
+            "p95_ms": 71.507191,
+            "samples_ms": [
+              136.260621,
+              44.356891,
+              42.06667,
+              46.282057,
+              43.659055,
+              42.981579,
+              42.506476,
+              42.991339,
+              42.707176,
+              43.278127,
+              69.304364,
+              66.461068,
+              70.887369,
+              66.38169,
+              69.438454,
+              49.466558,
+              44.378054,
+              43.136658,
+              64.251068,
+              71.507191,
+              51.609601
+            ]
+          }
+        },
+        {
+          "operation": "worker_single_byte_commit",
+          "adjacent_rows": 64,
+          "wall": {
+            "median_ms": 20.229575,
+            "p95_ms": 22.539773,
+            "samples_ms": [
+              19.11452,
+              19.812064,
+              18.804936,
+              19.903149,
+              20.198,
+              19.837096,
+              20.158655,
+              20.810361,
+              20.54915,
+              22.539773,
+              22.422958,
+              19.800425,
+              20.217732,
+              20.589114,
+              21.715891,
+              19.648792,
+              28.09391,
+              20.844547,
+              20.355346,
+              20.229575,
+              20.39336
+            ]
+          }
+        },
+        {
+          "operation": "worker_single_byte_commit",
+          "adjacent_rows": 1024,
+          "wall": {
+            "median_ms": 157.265359,
+            "p95_ms": 176.145574,
+            "samples_ms": [
+              211.386415,
+              176.145574,
+              127.420891,
+              169.406662,
+              164.100198,
+              161.000257,
+              157.265359,
+              121.774993,
+              168.654073,
+              169.381741,
+              114.720417,
+              168.473619,
+              100.782901,
+              116.236406,
+              114.251979,
+              168.668887,
+              123.048405,
+              155.338079,
+              164.992981,
+              147.730673,
+              149.153378
+            ]
+          }
+        },
+        {
+          "operation": "worker_single_byte_commit",
+          "adjacent_rows": 2048,
+          "wall": {
+            "median_ms": 627.419984,
+            "p95_ms": 750.275602,
+            "samples_ms": [
+              766.758092,
+              508.320738,
+              665.526869,
+              574.031604,
+              514.966461,
+              676.62098,
+              487.621644,
+              502.878045,
+              739.240401,
+              653.502568,
+              730.902307,
+              588.326996,
+              744.482717,
+              660.597055,
+              627.419984,
+              489.589137,
+              750.275602,
+              739.27743,
+              509.971543,
+              521.406034,
+              545.564477
+            ]
+          }
+        }
+      ]
+    }
+  ],
+  "candidate_stress": {
+    "platform": "Linux-7.0.0-38-generic-x86_64-with-glibc2.43",
+    "machine": "x86_64",
+    "benchmark_sha256": "1a61ea45ff24258342b442cf3cfd3b1d6b54fb9bc1b9772920a8afdfdb34725d",
+    "cpu_count": 20,
+    "load_average": [
+      37.69189453125,
+      37.6162109375,
+      35.28466796875
+    ],
+    "library": "/mnt/data/neverd-interactive-patch-review/bin/libneverd.so",
+    "library_sha256": "33a630f8b0e24408c06b9fb115da04e07f7dcdf9a858dc348211b87fa12ee779",
+    "worker": null,
+    "worker_sha256": null,
+    "samples": 7,
+    "results": [
+      {
+        "operation": "sdk_single_byte_edit",
+        "adjacent_rows": 8192,
+        "wall": {
+          "median_ms": 0.409227,
+          "p95_ms": 0.746007,
+          "samples_ms": [
+            0.746007,
+            0.447499,
+            0.409227,
+            0.390838,
+            0.436199,
+            0.405753,
+            0.384875
+          ]
+        },
+        "cpu": {
+          "median_ms": 0.396771,
+          "p95_ms": 0.734755,
+          "samples_ms": [
+            0.734755,
+            0.431334,
+            0.393809,
+            0.385365,
+            0.428809,
+            0.396771,
+            0.37895
+          ]
+        }
+      },
+      {
+        "operation": "sdk_single_byte_edit",
+        "adjacent_rows": 16384,
+        "wall": {
+          "median_ms": 0.886289,
+          "p95_ms": 3.671069,
+          "samples_ms": [
+            0.687337,
+            0.584577,
+            3.671069,
+            0.693448,
+            0.886289,
+            0.970333,
+            1.038267
+          ]
+        },
+        "cpu": {
+          "median_ms": 0.684289,
+          "p95_ms": 1.030263,
+          "samples_ms": [
+            0.68131,
+            0.577017,
+            0.661896,
+            0.684289,
+            0.877118,
+            0.961729,
+            1.030263
+          ]
+        }
+      },
+      {
+        "operation": "sdk_single_byte_edit",
+        "adjacent_rows": 65536,
+        "wall": {
+          "median_ms": 1.844303,
+          "p95_ms": 8.542575,
+          "samples_ms": [
+            1.674876,
+            1.844303,
+            2.903127,
+            1.423459,
+            1.454816,
+            8.542575,
+            4.471213
+          ]
+        },
+        "cpu": {
+          "median_ms": 1.478357,
+          "p95_ms": 2.840969,
+          "samples_ms": [
+            1.613959,
+            1.549926,
+            2.840969,
+            1.415302,
+            1.446775,
+            1.478357,
+            1.463429
+          ]
+        }
+      }
+    ]
+  },
+  "qualification": {
+    "sdk_source_commit": "138a53a9a455828dcf74f52426bd32c5389e1936",
+    "sdk_sha256": "a0650ccf5c6c5772707bf0f90f6e31b284e71b786781621d073d0ad2e73443f9",
+    "scope": "Final dev-integrated delivery, separate from the controlled baseline/candidate benchmark snapshots.",
+    "driver_emulation": true,
+    "z3": true,
+    "cpu_emulation": false,
+    "python_plugins": false,
+    "integrated_checks": [
+      {
+        "name": "final-readonly-bytes",
+        "command": [
+          "/mnt/data/neverd-interactive-patch-review/bin/NeverDReadOnlyBytesTests"
+        ],
+        "exit_code": 0,
+        "seconds": 0.008735179901123047
+      },
+      {
+        "name": "final-constant-branches",
+        "command": [
+          "/mnt/data/neverd-interactive-patch-review/bin/NeverDConstantBranchTests"
+        ],
+        "exit_code": 0,
+        "seconds": 0.023087263107299805
+      },
+      {
+        "name": "final-dalvik-queues",
+        "command": [
+          "/mnt/data/neverd-interactive-patch-review/bin/NeverDDalvikTests",
+          "--gtest_filter=AndroidMessageQueueTest.*:AndroidFrameworkTest.*"
+        ],
+        "exit_code": 0,
+        "seconds": 1.0483763217926025
+      },
+      {
+        "name": "final-android-json",
+        "command": [
+          "/mnt/data/neverd-interactive-patch-review/bin/NeverDLinuxProcessTests",
+          "--gtest_filter=ProcessReport.Android*"
+        ],
+        "exit_code": 0,
+        "seconds": 0.022848844528198242
+      },
+      {
+        "name": "final-core",
+        "command": [
+          "ctest",
+          "--test-dir",
+          "/mnt/data/neverd-interactive-patch-review/unittests/patch",
+          "--output-on-failure"
+        ],
+        "exit_code": 0,
+        "seconds": 0.3140103816986084
+      },
+      {
+        "name": "final-ctest",
+        "command": [
+          "ctest",
+          "--test-dir",
+          "/mnt/data/neverd-interactive-patch-review",
+          "--output-on-failure",
+          "-R",
+          "^(NeverDGui(Units|PatchKeys|NativePatchKeys|Smoke)|NeverDWorker(Patch|NativePatch|SourceBytePatch|AnalysisSnapshot|HistoryContributions))$"
+        ],
+        "exit_code": 0,
+        "seconds": 54.258522510528564
+      },
+      {
+        "name": "final-python-api",
+        "command": [
+          "python3",
+          "-m",
+          "unittest",
+          "discover",
+          "-s",
+          "pluginsdk/python/tests",
+          "-p",
+          "test_api.py",
+          "-v"
+        ],
+        "exit_code": 0,
+        "seconds": 0.46370697021484375
+      },
+      {
+        "name": "final-python-abi",
+        "command": [
+          "python3",
+          "-m",
+          "unittest",
+          "discover",
+          "-s",
+          "pluginsdk/python/tests",
+          "-p",
+          "test_abi.py",
+          "-v"
+        ],
+        "exit_code": 0,
+        "seconds": 0.3100757598876953
+      },
+      {
+        "name": "final-python-real",
+        "command": [
+          "python3",
+          "-m",
+          "unittest",
+          "discover",
+          "-s",
+          "pluginsdk/python/tests",
+          "-p",
+          "test_byte_patch_integration.py",
+          "-v"
+        ],
+        "exit_code": 0,
+        "seconds": 0.8863303661346436
+      }
+    ],
+    "delivery_checks": [
+      {
+        "name": "final-delivery-x11",
+        "command": [
+          "xvfb-run",
+          "-a",
+          "-s",
+          "-screen 0 2560x1600x24",
+          "/home/ad/code/NeverD/build-gui/bin/neverd-gui-patch-tests"
+        ],
+        "exit_code": 0,
+        "seconds": 29.762424588901922
+      },
+      {
+        "name": "final-delivery-wayland",
+        "command": [
+          "python3",
+          "tools/neverd-gui/tests/run_wayland_docking.py",
+          "/home/ad/code/NeverD/build-gui/bin/neverd-gui-patch-tests"
+        ],
+        "exit_code": 0,
+        "seconds": 36.84962201304734
+      },
+      {
+        "name": "final-delivery-ctest",
+        "command": [
+          "ctest",
+          "--test-dir",
+          "/home/ad/code/NeverD/build-gui",
+          "--output-on-failure",
+          "-R",
+          "^(NeverDGui(Units|PatchKeys|NativePatchKeys|Smoke)|NeverDWorker(Patch|NativePatch|SourceBytePatch|AnalysisSnapshot|HistoryContributions))$"
+        ],
+        "exit_code": 0,
+        "seconds": 38.61441583815031
+      }
+    ],
+    "native_x87_observations": 608,
+    "native_x87_translation": false,
+    "native_x87_audit_replay_checks": 24,
+    "validation_logs": "/mnt/data/neverd-patch-scaling",
+    "limitations": "Focused qualification, not a complete release certification; native Windows/macOS GUI and timing not measured locally.",
+    "pipeline_outcome_cases": 55,
+    "pipeline_fixture_note": "The existing ARM/x64 projection test now supplies the matching LowFunc entry to the current four-argument API; all original assertions are retained.",
+    "documentation_matrix_cases": 134,
+    "documentation_matrix_cli_passed": true
+  }
+}

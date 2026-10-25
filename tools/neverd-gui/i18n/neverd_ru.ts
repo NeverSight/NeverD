@@ -2391,8 +2391,8 @@ Double-click to go to the declaration.</source>
         <translation>Загрузить пакет сигнатур</translation>
     </message>
     <message>
-        <source>Signature packs (*.pat *.json);;All files (*)</source>
-        <translation>Пакеты сигнатур (*.pat *.json);;Все файлы (*)</translation>
+        <source>Signature packs (*.pat *.npat *.json);;All files (*)</source>
+        <translation>Пакеты сигнатур (*.pat *.npat *.json);;Все файлы (*)</translation>
     </message>
     <message>
         <source>Signature directory</source>

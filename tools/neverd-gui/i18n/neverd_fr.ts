@@ -2385,8 +2385,8 @@ Double-cliquez pour aller à la déclaration.</translation>
         <translation>Charger un pack de signatures</translation>
     </message>
     <message>
-        <source>Signature packs (*.pat *.json);;All files (*)</source>
-        <translation>Packs de signatures (*.pat *.json);;Tous les fichiers (*)</translation>
+        <source>Signature packs (*.pat *.npat *.json);;All files (*)</source>
+        <translation>Packs de signatures (*.pat *.npat *.json);;Tous les fichiers (*)</translation>
     </message>
     <message>
         <source>Signature directory</source>

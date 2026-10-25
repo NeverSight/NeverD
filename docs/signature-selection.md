@@ -4,6 +4,9 @@
 opening, parsing or mapping their cache entries. The same `SignatureDB`
 selection is used by the SDK and GUI. Explicit `--sig-file` and `--sig-dir`
 loads retain their caller-selected contents.
+Directory selection includes ordinary `.pat` and NeverD `.npat` patterns.
+Both use the same library stems and numbered parts. The latter carries explicit
+context constraints; older readers ignore those files and retain ordinary packs.
 
 Selection proceeds through three independent dimensions:
 

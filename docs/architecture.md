@@ -128,6 +128,19 @@ SHA-256 vector projections participate in the same feature set, including the
 SGX/AMX fallback branches. LLVM-to-C validates the complete SHA operand/result
 shape before selecting a compiler intrinsic.
 
+`X86LiftTransactions` owns the bounded XABORT/XEND/XTEST instruction family,
+separate from SIMD cryptography. Raw byte/detail agreement precedes all effects.
+XABORT's constant byte and void completion use the shared system-state shape
+across LowIR, MedIR and C admission. Native LLVM and both C routes retain the
+same byte; a missing or dynamic operand cannot become an arbitrary abort code.
+
+`X86LiftTBM` owns the nine trailing-bit operations, including their XOP
+byte/detail validation, source-before-destination carry calculation, defined
+flags and undefined AF/PF effects. The common three-byte prefix and memory-tail
+validators retain VEX/XOP addressing rules; TBM owns its opcode/group, width and
+operand roles. Its arithmetic LowIR is shared by LLVM and both C routes.
+Undefined-output coverage is separate from an opaque machine-state bank audit.
+
 `X86SystemStateNative` also owns the RTM and CLZERO target requirements for
 native system calls. LLVM emission adds those requirements to the completed
 function without replacing its other family features, so standalone LLVM IR
@@ -1907,6 +1920,20 @@ or exception-personality context (`SignatureDB::buildNameMap`). Byte/reference
 agreement alone remains a candidate (`buildCandidateNameMap`) and cannot
 authorize type lookup, safety sinks, automatic renaming or library folding.
 The signature database owns this decision; SDK, CLI and worker consume it.
+Native `!refs` candidates require all outgoing context before settlement;
+`!caller` records are separate name-indexed bodies requested only after that
+settlement by a complete, strong and unambiguous ordinary caller. Incoming
+requests never change their anchors' outgoing evidence. Complete, strong
+incoming bodies can extend a bounded rooted chain, with every generation
+validated against the same original outgoing result. Only new frontiers are
+visited; short bodies and unrooted cycles cannot extend them. Both forms
+remain candidate evidence under the same identity boundary. The shared name
+index reuses complete native `!refs` and `!caller` bodies; ordinary nominal
+claims are not opted into incoming inference merely by loading them. Source
+refinements of ordinary anchors share the frozen reference validation pass;
+contradicted refinements withdraw only the incoming names they supported.
+The matcher owns byte/index behavior, the database owns reference settlement, and the COFF
+loader owns validation of primary MSVC RTTI metadata.
 The separately gated library-feature path retains its independent identity
 verifier before candidate settlement. A name analysis or the user gave otherwise
 says nothing of what the function is. A linked COFF image's section symbols,

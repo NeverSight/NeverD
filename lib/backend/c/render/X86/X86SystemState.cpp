@@ -12,15 +12,24 @@
 
 #include "neverd/ir/high/HighIR.h"
 
+#include "llvm/IR/Attributes.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/InlineAsm.h"
 #include "llvm/IR/Instructions.h"
+#include "llvm/Support/ModRef.h"
 
 #include <stdexcept>
 
 namespace neverd {
 namespace {
+
+bool hasTransactionEffects(const llvm::CallBase &Call) {
+  // Abort can roll back ordinary memory even though its only argument is an
+  // integer byte. Argument-only or inaccessible-memory effects lose that fact.
+  return Call.getMemoryEffects() == llvm::MemoryEffects::unknown() &&
+         !Call.hasFnAttr(llvm::Attribute::Speculatable);
+}
 
 std::string unsignedType(uint16_t Bytes) {
   return Bytes == 16 ? "__uint128_t"
@@ -312,8 +321,19 @@ renderX86SystemStateExpression(Arch TargetArch, const HighExpr &Expression,
         Selector->ConstVal <= UINT16_MAX)
       Shape.SegmentedBlockSelector = static_cast<uint16_t>(Selector->ConstVal);
   }
+  if (Id == Intrinsic::Xabort && Expression.Operands.size() == 1) {
+    const auto *Code = Expression.Operands[0].get();
+    if (Code && Code->Kind == ExprKind::Const && Code->Type &&
+        Code->Type->Kind == NdTypeKind::Int && Code->Type->Size == 1 &&
+        Code->ConstVal <= UINT8_MAX)
+      Shape.TransactionAbortCode = static_cast<uint8_t>(Code->ConstVal);
+  }
   if (!x86SystemStateShapeIsValid(Id, Shape))
     throw std::invalid_argument("invalid x86 system expression contract");
+  if (Id == Intrinsic::Xabort) {
+    HasCIntrinsics = true;
+    return "_xabort(" + std::to_string(*Shape.TransactionAbortCode) + ")";
+  }
   // Preserve the established MSVC spelling after the shared admission check.
   // These compiler intrinsics own the actual shadow-stack access; segmented
   // operands instead need the explicit assembly contract below.
@@ -420,6 +440,13 @@ renderX86SystemStateCall(Arch TargetArch, const llvm::CallInst &Call,
           else
             Types &= T->isIntegerTy(8 * P->InputBytes[I]);
         }
+        if (Id == Intrinsic::Xabort) {
+          const auto *Code =
+              llvm::dyn_cast<llvm::ConstantInt>(Call.getArgOperand(0));
+          if (!Types || !Code || !hasTransactionEffects(Call))
+            continue;
+          return "_xabort(" + std::to_string(Code->getZExtValue()) + ");\n";
+        }
         if (!Types)
           continue;
         if (P->OutputBytes.empty())
@@ -506,6 +533,13 @@ renderX86SystemStateNativeCall(Arch TargetArch, const llvm::CallBase &Call,
         Valid &= isX86SystemStateAddressArgument(Id, I) && !P->AddressBits
                      ? T->isPointerTy() && T->getPointerAddressSpace() == 0
                      : T->isIntegerTy(8 * P->InputBytes[I]);
+      }
+      if (Id == Intrinsic::Xabort) {
+        const auto *Code =
+            llvm::dyn_cast<llvm::ConstantInt>(Call.getArgOperand(0));
+        if (!Valid || !Code || !hasTransactionEffects(Call))
+          continue;
+        return "_xabort(" + std::to_string(Code->getZExtValue()) + ");\n";
       }
       if (!Valid)
         continue;

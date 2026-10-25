@@ -178,9 +178,24 @@ jobs:
           subprocess.run(command + ['--no-tests=error', '--output-on-failure', '--output-junit', 'results.xml'], check=True)
           cases = list(ET.parse(build / 'results.xml').getroot().iter('testcase'))
           assert Counter(case.get('name') for case in cases) == Counter(names)
-          assert all(case.get('status') == 'run' and not any(child.tag in {'failure', 'error', 'skipped'} for child in case) for case in cases)
+          # This one native fault oracle requires x86-64 POSIX (see Capstone's
+          # tests/unit/x86_x87_environment_hardware.c). Keep it required on
+          # native x64 POSIX, and never count its explicit absence as a pass.
+          unavailable_x87_host = (os.environ['RUNNER_OS'], os.environ['RUNNER_ARCH']) in {
+              ('macOS', 'ARM64'), ('Linux', 'ARM64'), ('Windows', 'X64'), ('Windows', 'ARM64')}
+          skipped = 0
+          for case in cases:
+              assert not any(child.tag in {'failure', 'error'} for child in case)
+              missing = case.find('skipped')
+              if missing is None:
+                  assert case.get('status') == 'run'
+                  continue
+              assert unavailable_x87_host and case.get('name') == 'unit_x86_x87_environment_hardware'
+              assert case.get('status') == 'notrun' and missing.get('message') == 'SKIP_RETURN_CODE=77'
+              assert case.findtext('system-out', '').strip() == 'SKIP: x87 execution requires an x86-64 POSIX host'
+              skipped += 1
           (build / 'source.txt').write_text(subprocess.check_output(['git', '-C', 'third_party/capstone', 'rev-parse', 'HEAD'], text=True))
-          print(f'Capstone: {len(cases)} passed, zero failed, zero skipped')
+          print(f'Capstone: {len(cases) - skipped} passed, zero failed, {skipped} explicitly unavailable native-x87 tests')
           subprocess.run(['ctest', '--test-dir', str(build), '-R', '^integration_py_cstest$',
                           '--no-tests=error', '--output-on-failure',
                           '--output-junit', 'cstest-integration.xml'], check=True)

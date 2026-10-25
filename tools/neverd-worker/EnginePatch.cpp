@@ -28,6 +28,8 @@ struct PatchFunctions {
   decltype(&neverd_byte_patches_load) load;
   decltype(&neverd_byte_patches_export) exportFile;
   decltype(&neverd_byte_patch_context_json) context;
+  // Older SDKs still provide complete rows; retain their patch capability.
+  decltype(&neverd_byte_patch_ranges_json) ranges;
   explicit operator bool() const {
     return preview && apply && revert && rows && load && exportFile && context;
   }
@@ -47,7 +49,9 @@ const PatchFunctions &patches() {
       engineSymbol<decltype(&neverd_byte_patches_export)>(
           "neverd_byte_patches_export"),
       engineSymbol<decltype(&neverd_byte_patch_context_json)>(
-          "neverd_byte_patch_context_json")};
+          "neverd_byte_patch_context_json"),
+      engineSymbol<decltype(&neverd_byte_patch_ranges_json)>(
+          "neverd_byte_patch_ranges_json")};
   return F;
 }
 } // namespace
@@ -174,6 +178,10 @@ Json Engine::patchOperation(const std::string &Operation, const Json &P) {
   if (!patches())
     throw Error("unsupported", "This engine does not support byte patches");
   if (Operation == "patches") {
+    if (P.value("ranges_only", false) && patches().ranges) {
+      auto Ranges = backendJson(patches().ranges(session_));
+      return {{"items", Ranges}, {"total", Ranges.size()}, {"complete", true}};
+    }
     auto Rows = bytePatchRows();
     for (auto &Row : Rows)
       Row["address"] = Row.at("va");
@@ -360,7 +368,9 @@ Json Engine::patchOperation(const std::string &Operation, const Json &P) {
     functionsChanged();
     throw;
   }
-  if (!reloadBytePatches())
+  // This edit always invalidates analysis below; no before/after JSON
+  // comparison is needed just to acknowledge its persisted SDK overlay.
+  if (patches().load(session_) != 0)
     throw Error("reload_failed", error());
   functionsChanged();
   ++revision_;

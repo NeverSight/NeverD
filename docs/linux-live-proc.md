@@ -111,7 +111,16 @@ remain outside the model.
 model RAM. The raw x64 and ARM64 syscalls, Bionic `prctl` and Bionic `syscall`
 all use LinuxMemory's shared implementation. The option is independent of
 Android API level, GKI and whether the live proc namespace is enabled. Missing
-selection and other outer `prctl` operations stop as unsupported.
+selection and other nonnegative outer `prctl` operations stop as unsupported.
+
+The shared Linux owner narrows the outer option to a signed 32-bit kernel
+`int`. Negative options return EINVAL before reading the remaining arguments
+or requiring an optional VMA-name provider. They change no guest memory or
+mapping state. Raw x64 and ARM64 traps return `-EINVAL`; Bionic callers return
+`-1` and set their thread errno. High bits outside the kernel `int` do not
+change the interpretation of a nonnegative option. Dynamic calls still require
+an active provider before reaching this owner. Custom security hooks and
+vendor-defined negative commands are outside this contract.
 
 This contract borrows the **guest pointer**, without copying, validating or
 pinning the name at the call. A null pointer clears the name. Pointer identity

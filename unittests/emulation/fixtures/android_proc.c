@@ -30,6 +30,9 @@ extern int pthread_mutex_unlock(void *);
 extern int gettid(void);
 extern int prctl(int, ...);
 extern int *__errno(void);
+extern void *dlopen(const char *, int);
+extern void *dlsym(void *, const char *);
+extern int dlclose(void *);
 
 static int equal(const char *A, const char *B) {
   while (*A && *A == *B) {
@@ -155,6 +158,27 @@ static I64 raw_prctl(U64 Option, U64 Suboption, U64 Address, U64 Size,
                    : "r"(X1), "r"(X2), "r"(X3), "r"(X4), "r"(X8)
                    : "memory", "cc");
   return (I64)X0;
+}
+
+U64 proc_prctl_option(U64 *Out, U64 Option, U64 Route) {
+  int (*Call)(int, ...) = prctl;
+  if (Route >= 3) {
+    void *Handle = dlopen("libprctl.so", 2);
+    Call = (int (*)(int, ...))dlsym(Handle, "prctl");
+    if (Route == 4)
+      dlclose(Handle);
+  }
+  *__errno() = 733;
+  I64 Result;
+  if (Route == 1)
+    Result = raw_prctl(Option, ~0UL, ~0UL, ~0UL, ~0UL);
+  else if (Route == 2)
+    Result = syscall(167, Option, ~0UL, ~0UL, ~0UL, ~0UL);
+  else
+    Result = Call((int)Option, ~0UL, ~0UL, ~0UL, ~0UL);
+  Out[0] = (U64)Result;
+  Out[1] = (U64)*__errno();
+  return 0;
 }
 
 static int maps_have(const char *Text) {

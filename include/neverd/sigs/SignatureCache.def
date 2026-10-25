@@ -41,7 +41,7 @@ NEVERD_SIGNATURE_CACHE_VALUE(DefaultMinSourceBytes, 1024 * 1024)
 // differently or the parser reads any line differently: an entry of another
 // format version is a miss.  Its records are aligned to the alignment.
 NEVERD_SIGNATURE_CACHE_STRING(EntryMagic, "NDSIGCCH")
-NEVERD_SIGNATURE_CACHE_VALUE(EntryFormatVersion, 1)
+NEVERD_SIGNATURE_CACHE_VALUE(EntryFormatVersion, 3)
 NEVERD_SIGNATURE_CACHE_VALUE(EntryByteOrderMark, 0x01020304)
 NEVERD_SIGNATURE_CACHE_VALUE(EntryAlignment, 8)
 

@@ -118,6 +118,7 @@ C(Intrinsic::Clwb, "_mm_clwb");
 // TSX
 C(Intrinsic::Xbegin, "_xbegin");
 C(Intrinsic::Xend, "_xend");
+C(Intrinsic::Xabort, "_xabort");
 C(Intrinsic::Xtest, "_xtest");
 
 // xsave/xrstor

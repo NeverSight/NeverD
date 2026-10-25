@@ -63,6 +63,16 @@ struct PatternModule {
   uint16_t CRC16 = 0;
   uint8_t CRCLen = 0;
 
+  /// `!refs`: every reference must be confirmed before this byte hit can
+  /// become a candidate or support another candidate. This is a NeverD
+  /// extension; older readers must reject it, not ignore the requirement.
+  bool RequireReferences : 1 = false;
+  /// `!caller`: indexed by expected linkage name only. A complete, strong,
+  /// settled caller must unanimously name this target at a reference site.
+  /// A supported complete, strong body can extend a rooted incoming chain;
+  /// its descendants never confirm its outgoing references.
+  bool RequireCaller : 1 = false;
+
   uint32_t TotalLen = 0;
 
   std::vector<FuncRef> PublicNames;
@@ -79,9 +89,13 @@ struct PatternModule {
   /// the routines two builds of the same bytes call there -- and any of them
   /// confirms it.  The bytes there are wildcards, so matching checks the
   /// target separately; see SignatureDB::apply. COFF x86/x64 also supports
-  /// the four-byte field of unprefixed FF 15/FF 25 import calls/jumps, named
+  /// the four-byte field of FF 15/FF 25 import calls/jumps, either unprefixed
+  /// or with a single canonical REX.W prefix in x64, named
   /// `__imp_<export>`. Only an exact name at the addressed, mapped IAT slot
   /// confirms that reference; absent or different spellings are unknown.
+  /// A COFF x64 RIP-relative LEA can reference a primary MSVC vftable by its
+  /// exact `??_7...6B@` linkage name. The loader validates RTTI to compare
+  /// the mangled type; unsupported or incomplete metadata remains unknown.
   std::vector<FuncRef> References;
 
   std::vector<PatternByte> TailBytes;
@@ -118,6 +132,12 @@ struct StoredModule {
   uint32_t ReferenceCount = 0;
   uint16_t CRC16 = 0;
   uint8_t CRCLen = 0;
+  bool RequireReferences : 1 = false;
+  /// `!caller`: indexed by expected linkage name only. A complete, strong,
+  /// settled caller must unanimously name this target at a reference site.
+  /// A supported complete, strong body can extend a rooted incoming chain;
+  /// its descendants never confirm its outgoing references.
+  bool RequireCaller : 1 = false;
 
   bool isStated(size_t Byte) const {
     return (Stated[Byte / CHAR_BIT] >> (Byte % CHAR_BIT)) & 1;
@@ -173,6 +193,11 @@ struct SigMatch {
   /// see SignatureDB::apply. This can settle a candidate disputed by other
   /// patterns, but does not prove its original name or nominal source types.
   bool Confirmed = false;
+  /// A frozen, complete caller unanimously references this exact name at
+  /// this address. Its outgoing constraints have no known contradiction.
+  /// Multiple such incoming names are candidate aliases at the same target;
+  /// they cannot prove source identity or confirm an ancestor's references.
+  bool CallerConfirmed = false;
 };
 
 } // namespace sigs

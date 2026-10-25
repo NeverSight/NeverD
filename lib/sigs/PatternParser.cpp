@@ -197,6 +197,8 @@ struct DraftModule {
   uint32_t ReferenceCount = 0;
   uint16_t CRC16 = 0;
   uint8_t CRCLen = 0;
+  bool RequireReferences = false;
+  bool RequireCaller = false;
 };
 
 /// Where the modules of a chunk are written: each module's bytes, then its
@@ -398,14 +400,24 @@ llvm::Expected<DraftModule> parsePatternLine(llvm::StringRef Line,
   // with, is no name.
   auto CannotBeName = [](llvm::StringRef Field) {
     return Field.starts_with(PublicNamePrefix) ||
-           Field.starts_with(ReferencePrefix) ||
-           Field.starts_with(UnstatedByte);
+           Field.starts_with(ReferencePrefix) || Field == RequiredReferences ||
+           Field == RequiredCaller || Field.starts_with(UnstatedByte);
   };
 
   // Remaining tokens form :offset/name pairs, then ^offset/name references,
   // followed by at most one tail.
   bool SawTail = false;
   for (size_t I = OpeningFields; I < Tokens.size(); ++I) {
+    if (Tokens[I] == CollisionEvidenceOnly)
+      return patternError("collision evidence is not a matchable signature");
+    if (Tokens[I] == RequiredReferences || Tokens[I] == RequiredCaller) {
+      if (I != OpeningFields)
+        return patternError(
+            "context requirement must immediately follow total length");
+      Mod.RequireReferences = Tokens[I] == RequiredReferences;
+      Mod.RequireCaller = Tokens[I] == RequiredCaller;
+      continue;
+    }
     if (Tokens[I].starts_with(ReferencePrefix)) {
       if (SawTail)
         return patternError("reference follows the tail pattern");
@@ -456,6 +468,20 @@ llvm::Expected<DraftModule> parsePatternLine(llvm::StringRef Line,
 
   if (Mod.PublicNameCount == 0)
     return patternError("no public names found");
+  if (Mod.RequireReferences &&
+      (Mod.ReferenceCount == 0 ||
+       uint64_t(Mod.LeadingCount) + Mod.CRCLen + Mod.TailCount < Mod.TotalLen))
+    return patternError(
+        "!refs requires references and whole-function coverage");
+
+  if (Mod.RequireCaller &&
+      (uint64_t(Mod.LeadingCount) + Mod.CRCLen + Mod.TailCount < Mod.TotalLen ||
+       llvm::any_of(
+           llvm::ArrayRef(Writer.Names.Names)
+               .slice(Mod.Names, Mod.PublicNameCount),
+           [](const StoredName &Name) { return Name.Offset != 0; })))
+    return patternError(
+        "!caller requires a complete body with public names at its start");
 
   // The stated bits follow the bytes.
   const size_t Count = size_t{Mod.LeadingCount} + Mod.TailCount;
@@ -501,6 +527,8 @@ StoredModule storedModule(const DraftModule &Draft, const uint8_t *Bytes,
   Module.ReferenceCount = Draft.ReferenceCount;
   Module.CRC16 = Draft.CRC16;
   Module.CRCLen = Draft.CRCLen;
+  Module.RequireReferences = Draft.RequireReferences;
+  Module.RequireCaller = Draft.RequireCaller;
   return Module;
 }
 
@@ -519,6 +547,8 @@ PatternModule PatternParser::toPatternModule(const StoredModule &Module) {
   Result.LeadingBytes = Pattern(0, Module.LeadingCount);
   Result.CRC16 = Module.CRC16;
   Result.CRCLen = Module.CRCLen;
+  Result.RequireReferences = Module.RequireReferences;
+  Result.RequireCaller = Module.RequireCaller;
   Result.TotalLen = Module.TotalLen;
   for (const StoredName &Name : Module.publicNames())
     Result.PublicNames.push_back({Name.Offset, std::string(Name.Name)});

@@ -566,3 +566,38 @@ TEST(SignatureMatcherCRCReuse, ExternalCallbacksCanChangeInputBytes) {
   SignatureMatcher::scanRegion(Code.data(), Code.size(), *Modules, Mutate);
   EXPECT_EQ(Matches, 1u);
 }
+
+TEST(SignatureMatcherIndex, CallerRecordsDoNotIncreaseByteScanWork) {
+  std::string Text = "33C0C3 00 0000 0003 :0000 ordinary\n";
+  for (unsigned I = 0; I < 4096; ++I)
+    Text += "33C0C3 00 0000 0003 !caller :0000 leaf" + std::to_string(I) + "\n";
+  auto Chunks = PatternParser::splitChunks(Text);
+  const auto Bytes = PatternParser::reserveBytes(Chunks);
+  PatternParser::parseChunks(Chunks);
+  ASSERT_FALSE(PatternParser::firstError(Chunks));
+  std::vector<StoredModule> Modules;
+  std::vector<PatternModule> Values;
+  for (const auto &Chunk : Chunks)
+    for (const auto &Mod : Chunk.Modules) {
+      Modules.push_back(Mod);
+      Values.push_back(PatternParser::toPatternModule(Mod));
+    }
+  const uint8_t Code[] = {0x33, 0xc0, 0xc3};
+  SignatureMatcher::HashIndex Index;
+  Index.build(Modules);
+  EXPECT_EQ(Index.candidateCount(Code, sizeof(Code)), 1u);
+  ASSERT_EQ(Index.callerModules(Modules, "leaf1234").size(), 1u);
+  EXPECT_TRUE(Index.callerModules(Modules, "missing").empty());
+  auto Copy = Index;
+  Index.build(std::vector<PatternModule>{});
+  auto Moved = std::move(Copy);
+  ASSERT_EQ(Moved.callerModules(Modules, "leaf1234").size(), 1u);
+  EXPECT_EQ(Moved.candidateCount(Code, sizeof(Code)), 1u);
+  SignatureMatcher::ScanStatistics Work;
+  const auto Hits = SignatureMatcher::findAtAddresses(
+      Code, sizeof(Code), 0x1000, {0x1000}, Modules, Moved, Work);
+  EXPECT_EQ(Hits.size(), 1u);
+  EXPECT_EQ(Work.Candidates, 1u);
+  Index.build(Values);
+  EXPECT_EQ(Index.candidateCount(Code, sizeof(Code)), 1u);
+}

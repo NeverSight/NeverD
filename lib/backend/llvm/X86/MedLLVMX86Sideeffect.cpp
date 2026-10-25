@@ -400,20 +400,6 @@ bool MedLLVMEmitter::emitX86SystemAsm(const MedOp &Op, Intrinsic IC,
                                       llvm::IRBuilder<> &Builder) {
   using I = Intrinsic;
 
-  // XABORT imm8: immediate baked into the asm text (like INT N).
-  if (IC == I::Xabort) {
-    auto *VoidTy = llvm::Type::getVoidTy(*Ctx);
-    uint64_t Imm = (Op.NumInputs > 1 && Op.Inputs[1].isConst())
-                       ? Op.Inputs[1].ConstVal
-                       : 0;
-    auto *I8 = llvm::Type::getInt8Ty(*Ctx);
-    auto *AsmFnTy = llvm::FunctionType::get(VoidTy, {I8}, false);
-    auto *IA = llvm::InlineAsm::get(AsmFnTy, "xabort $0", "i,~{memory}",
-                                    /*hasSideEffects=*/true);
-    Builder.CreateCall(IA, {llvm::ConstantInt::get(I8, Imm & 0xFF)});
-    return true;
-  }
-
   // OUT port, acc.
   if (IC == I::Out) {
     emitX86ScalarSystem(Op, IC, Builder);

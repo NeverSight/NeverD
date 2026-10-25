@@ -942,6 +942,12 @@ x86SystemStateMedShape(const MedOp &Op, Arch TargetArch = Arch::Unknown) {
       Op.NumInputs > 1 && Op.Inputs[1].isConst() && Op.Inputs[1].Size == 2 &&
       Op.Inputs[1].ConstVal <= UINT16_MAX)
     Shape.SegmentedBlockSelector = static_cast<uint16_t>(Op.Inputs[1].ConstVal);
+  if (Shape.ValidId &&
+      Op.Inputs[0].ConstVal == static_cast<uint16_t>(Intrinsic::Xabort) &&
+      Op.NumInputs > 1 && Op.Inputs[1].isConst() && Op.Inputs[1].Size == 1 &&
+      !isAddressProvenance(Op.Inputs[1].Provenance) &&
+      Op.Inputs[1].ConstVal <= UINT8_MAX)
+    Shape.TransactionAbortCode = static_cast<uint8_t>(Op.Inputs[1].ConstVal);
   return Shape;
 }
 

@@ -55,6 +55,11 @@ NEVERD_PATTERN_FIELD(Length)
 NEVERD_PATTERN_STRING(UnstatedByte, "..")
 NEVERD_PATTERN_STRING(PublicNamePrefix, ":")
 NEVERD_PATTERN_STRING(ReferencePrefix, "^")
+// Optional NeverD constraint immediately after the four opening fields.
+// Such a line must cover the whole routine and have at least one reference.
+NEVERD_PATTERN_STRING(RequiredReferences, "!refs")
+NEVERD_PATTERN_STRING(RequiredCaller, "!caller")
+NEVERD_PATTERN_STRING(CollisionEvidenceOnly, "!evidence")
 
 // A reference's offset is where its branch starts, except that an ARM-state
 // branch is stated one byte past its instruction: at an odd offset, which no

@@ -2379,8 +2379,8 @@ Double-click to go to the declaration.</source>
         <translation>시그니처 팩 불러오기</translation>
     </message>
     <message>
-        <source>Signature packs (*.pat *.json);;All files (*)</source>
-        <translation>시그니처 팩 (*.pat *.json);;모든 파일 (*)</translation>
+        <source>Signature packs (*.pat *.npat *.json);;All files (*)</source>
+        <translation>시그니처 팩 (*.pat *.npat *.json);;모든 파일 (*)</translation>
     </message>
     <message>
         <source>Signature directory</source>

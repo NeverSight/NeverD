@@ -16,6 +16,7 @@
 #include "X86DoubleShiftUndefined.h"
 #include "X86LegacyVectorMoveAudit.h"
 #include "X86LiftDetail.h"
+#include "X86LiftTBM.h"
 #include "X86NativeStateAudit.h"
 #include "X86OpaqueStateAudit.h"
 #include "X86ShiftUndefined.h"
@@ -1314,6 +1315,9 @@ void X86Lifter::liftImpl(const cs_insn *Insn, std::vector<LowOp> &Ops,
             ? doubleshiftundefined::matches(
                   X86, llvm::ArrayRef<LowOp>(Ops).drop_front(S.OpsStart),
                   EffectsDraft)
+        : tbm::isInstruction(Id)
+            ? tbm::matches(llvm::ArrayRef<LowOp>(Ops).drop_front(S.OpsStart),
+                           EffectsDraft)
         : Logic ? HasLogicEffect
                 : EffectsDraft.Effects.empty();
     if (!Handled) {
@@ -1326,7 +1330,8 @@ void X86Lifter::liftImpl(const cs_insn *Insn, std::vector<LowOp> &Ops,
     } else if (EffectsDraft.OpCount == 0 ||
                (!hasAuditedLegacyIntegerForm(Insn, TargetArch) &&
                 !vectormoveaudit::form(Insn, TargetArch) &&
-                !nativestateaudit::form(Insn, TargetArch))) {
+                !nativestateaudit::form(Insn, TargetArch) &&
+                !tbm::form(Insn, TargetArch))) {
       EffectsDraft.Diagnostic =
           "instruction form has no complete undefined-output audit";
     } else if (!HasExpectedEffects) {

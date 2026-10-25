@@ -213,8 +213,8 @@ std::string x86NativeFunctionPreamble(const llvm::Function &Function) {
       }
       if (const auto *Asm =
               llvm::dyn_cast<llvm::InlineAsm>(Call->getCalledOperand())) {
-        const auto Mnemonic =
-            llvm::StringRef(Asm->getAsmString()).split('\n').first;
+        const auto Text = llvm::StringRef(Asm->getAsmString()).trim();
+        const auto Mnemonic = Text.substr(0, Text.find_first_of(" \t\r\n"));
         Sgx |= Mnemonic == "encls" || Mnemonic == "enclv";
         // An older SDK's owned assembly can select a native C builtin later.
         // Its feature requirement must survive that assembly representation.

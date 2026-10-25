@@ -112,6 +112,15 @@ RESERVED_LIBRARY = re.compile(r"vs[0-9]{4}|winsdk")
 # <name>.pat, then <name>.part2.pat, <name>.part3.pat, ...
 MAX_FILE_BYTES = 50_000_000
 
+# Native constraints use a separate extension so old directory readers skip
+# them while retaining all ordinary patterns.
+PATTERN_SUFFIXES = (".pat", ".npat")
+
+
+def pattern_files(directory: Path) -> list[Path]:
+    return sorted(path for path in directory.iterdir()
+                  if path.is_file() and path.suffix in PATTERN_SUFFIXES)
+
 # Lines whose first bytes are relocated are not searched for routines that
 # state them; see settle_directory.
 MIN_PREFIX_BYTES = 4
@@ -256,15 +265,20 @@ class PatternLine:
     key: str
     names: tuple[str, ...]
     refs: tuple[tuple[int, str], ...] = ()
+    require_references: bool = False
+    require_caller: bool = False
 
-    def with_refs(self, refs: tuple[tuple[int, str], ...]) -> "PatternLine":
+    def with_refs(self, refs: tuple[tuple[int, str], ...],
+                  require: bool | None = None) -> "PatternLine":
         """This line stating only `refs`."""
 
         tokens = self.key.split()
         head, tail = tokens[:4], tokens[4:]
         stated = [f"^{offset:04X} {name}" for offset, name in refs]
-        text = " ".join([*head, *self.names, *stated, *tail])
-        return PatternLine(text, self.key, self.names, refs)
+        required = self.require_references if require is None else require
+        constraint = ["!refs"] if required else ["!caller"] if self.require_caller else []
+        text = " ".join([*head, *constraint, *self.names, *stated, *tail])
+        return PatternLine(text, self.key, self.names, refs, required, self.require_caller)
 
 
 def alias_order(name: str) -> tuple:
@@ -302,8 +316,9 @@ def aliases_of(lines: list[PatternLine]) -> PatternLine:
     merged = common_refs(lines)
     tokens = merged.key.split()
     stated = [f"^{offset:04X} {name}" for offset, name in merged.refs]
-    text = " ".join([*tokens[:4], *names, *stated, *tokens[4:]])
-    return PatternLine(text, merged.key, names, merged.refs)
+    constraint = ["!refs"] if merged.require_references else ["!caller"] if merged.require_caller else []
+    text = " ".join([*tokens[:4], *constraint, *names, *stated, *tokens[4:]])
+    return PatternLine(text, merged.key, names, merged.refs, merged.require_references, merged.require_caller)
 
 
 def ref_table(refs: tuple[tuple[int, str], ...]) -> dict[int, set[str]]:
@@ -345,11 +360,13 @@ def common_refs(lines: list[PatternLine]) -> PatternLine:
     """
 
     first = lines[0]
-    if all(line.refs == first.refs for line in lines[1:]):
+    required = any(line.require_references for line in lines)
+    if all(line.refs == first.refs and line.require_references == required
+           for line in lines):
         return first
     offsets = set.intersection(*(set(ref_table(line.refs)) for line in lines))
     refs = {(offset, name) for line in lines for offset, name in line.refs if offset in offsets}
-    return first.with_refs(tuple(sorted(refs)))
+    return first.with_refs(tuple(sorted(refs)), required)
 
 
 @dataclass(frozen=True)
@@ -375,6 +392,16 @@ class Shape:
             if self.lead[index] == ".":
                 return self.lead[:index]
         return self.lead
+
+    def fully_verified(self) -> bool:
+        """Whether the matcher verifies a complete nonempty function body."""
+        if not self.total:
+            return False
+        leading = len(self.lead) // 2
+        if leading >= self.total:
+            return self.crc_len == 0
+        end = leading + self.crc_len
+        return end <= self.total and end + len(self.tail) // 2 >= self.total
 
     def covered_by(self, other: "Shape") -> bool:
         """Whether a routine at least as long states every byte this line states.
@@ -424,12 +451,18 @@ def parse_line(text: str) -> PatternLine | None:
     if not stripped or stripped.startswith((";", "#")) or stripped == "---":
         return None
     tokens = stripped.split()
+    if len(tokens) > 4 and tokens[4] == "!evidence":
+        raise BuildError("collision evidence is not a candidate pattern")
     if len(tokens) < 6:
         raise BuildError(f"malformed pattern line: {stripped[:120]}")
     names: list[str] = []
     refs: list[tuple[int, str]] = []
     rest = tokens[:4]
     index = 4
+    required = tokens[index] == "!refs"
+    caller = tokens[index] == "!caller"
+    if required or caller:
+        index += 1
     while index < len(tokens):
         token = tokens[index]
         if token.startswith(":") and index + 1 < len(tokens):
@@ -444,7 +477,12 @@ def parse_line(text: str) -> PatternLine | None:
         index += 1
     if not names:
         raise BuildError(f"pattern line names nothing: {stripped[:120]}")
-    return PatternLine(stripped, " ".join(rest), tuple(names), tuple(sorted(refs)))
+    if caller:
+        shape = Shape.of(" ".join(rest))
+        if any(int(n.split()[0][1:], 16) != 0 for n in names) or \
+                not shape.fully_verified():
+            raise BuildError("!caller requires a complete body with public names at its start")
+    return PatternLine(stripped, " ".join(rest), tuple(names), tuple(sorted(refs)), required, caller)
 
 
 @dataclass
@@ -487,10 +525,14 @@ def fold(lines: list[str]) -> FoldResult:
     """
 
     copies: dict[str, dict[tuple[str, ...], list[PatternLine]]] = {}
+    callers: dict[str, PatternLine] = {}
     seen = 0
     for raw in lines:
         parsed = parse_line(raw)
         if parsed is None:
+            continue
+        if parsed.require_caller:
+            callers[parsed.text] = parsed
             continue
         seen += 1
         copies.setdefault(parsed.key, {}).setdefault(parsed.names, []).append(parsed)
@@ -499,6 +541,11 @@ def fold(lines: list[str]) -> FoldResult:
     for key, by_names in copies.items():
         variants = {names: common_refs(lines) for names, lines in by_names.items()}
         result.evidence.extend(variants.values())
+        if any(line.require_references and not line.refs for line in variants.values()):
+            result.ambiguous_keys.add(key)
+            result.conflicting_groups += 1
+            result.conflicting_lines += len(variants)
+            continue
         if len(variants) > 1 and shared_names(list(variants)):
             result.lines.append(
                 aliases_of([line for lines in by_names.values() for line in lines]))
@@ -517,6 +564,8 @@ def fold(lines: list[str]) -> FoldResult:
             continue
         (line,) = variants.values()
         result.lines.append(line)
+    result.lines.extend(callers.values())
+    result.evidence.extend(callers.values())
     result.lines.sort(key=lambda line: line.text)
     result.duplicates = seen - sum(len(v) for v in copies.values())
     return result
@@ -529,6 +578,22 @@ def another_routine(names: tuple[str, ...], other: tuple[str, ...]) -> bool:
 
 
 def settle_directory(results: dict[Path, FoldResult]) -> None:
+    """Settle byte claims; named caller queries do not assert byte uniqueness."""
+
+    callers = {path: [line for line in result.lines if line.require_caller]
+               for path, result in results.items()}
+    evidence = {path: result.evidence for path, result in results.items()}
+    for result in results.values():
+        result.lines = [line for line in result.lines if not line.require_caller]
+        result.evidence = [line for line in result.evidence if not line.require_caller]
+    _settle_byte_claims(results)
+    for path, result in results.items():
+        result.lines.extend(callers[path])
+        result.lines.sort(key=lambda line: line.text)
+        result.evidence = evidence[path]
+
+
+def _settle_byte_claims(results: dict[Path, FoldResult]) -> None:
     """Drop lines whose bytes another file of the same directory contradicts.
 
     The loader applies every file of a directory together.  A line one file

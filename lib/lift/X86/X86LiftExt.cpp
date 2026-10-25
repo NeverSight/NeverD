@@ -764,6 +764,11 @@ bool X86Lifter::liftExt(LiftState &S, const cs_insn *Insn, const cs_x86 &X86) {
     break;
   }
 
+  case X86_INS_XABORT:
+  case X86_INS_XEND:
+  case X86_INS_XTEST:
+    return liftTransactions(*this, S, Insn, X86);
+
   case X86_INS_RDPID:
   case X86_INS_CLUI:
   case X86_INS_STUI:

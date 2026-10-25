@@ -38,6 +38,7 @@ U64 residency_call(U64 Op, U64 Address, U64 Length, unsigned char *Vector,
 extern U64 linux_service(U64, U64, U64, U64);
 #if defined(__aarch64__)
 enum {
+  Prctl = 167,
   Mincore = 232,
   Madvise = 233,
   Mprotect = 226,
@@ -47,6 +48,7 @@ enum {
 };
 #else
 enum {
+  Prctl = 157,
   Mincore = 27,
   Madvise = 28,
   Mprotect = 10,
@@ -92,7 +94,20 @@ void process_main(U64 *Stack) {
   unsigned char Vector[32];
   for (unsigned I = 0; I != sizeof(Vector); ++I)
     Vector[I] = 0xa5;
-  if (((const char **)(Stack + 1))[1][0] == 'd') {
+  if (((const char **)(Stack + 1))[1][0] == 'p') {
+    const U64 Options[] = {0x80000000UL, 0xffffffffUL, 0xffffffff80000000UL,
+                           0x1234567880000001UL};
+    U64 Results[4];
+    for (unsigned I = 0; I != 4; ++I)
+      Results[I] = linux_service(Prctl, Options[I], ~0UL, ~0UL);
+    linux_service(Write, 1, (U64)Results, sizeof(Results));
+    linux_service(Write, 1, (U64)Vector, sizeof(Vector));
+    linux_service(Exit, 0, 0, 0);
+  } else if (((const char **)(Stack + 1))[1][0] == 'P') {
+    // High bits outside the int argument must not turn a valid operation
+    // into the negative-operation rejection path.
+    linux_service(Prctl, 0x800000000000000fUL, ~0UL, ~0UL);
+  } else if (((const char **)(Stack + 1))[1][0] == 'd') {
     U64 Address = anonymous_pages();
     if (Address != 0x60000000UL)
       linux_service(Exit, 92, 0, 0);

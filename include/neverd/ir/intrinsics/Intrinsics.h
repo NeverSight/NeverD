@@ -518,7 +518,8 @@ enum class X86SystemStateKind : uint8_t {
   HistoryReset,
   InvalidateBroadcast,
   SegmentedBlock,
-  CacheZero
+  CacheZero,
+  TransactionAbort
 };
 
 struct X86SystemStateContract {

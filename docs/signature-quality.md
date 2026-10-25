@@ -34,9 +34,105 @@ unresolved aliases, ordinal imports, duplicate slots and different spellings
 remain unknown, and unsupported prefixed instructions are not guessed. The
 slot is data, so reference checking never scans it as a function. Confirmation
 still does not establish the caller's independent source identity.
+The x64 form also accepts one canonical REX.W prefix, including the indirect
+tail jumps emitted for Windows; LLVM describes this encoding in its
+[X86 control-flow definitions](https://github.com/llvm/llvm-project/blob/main/llvm/lib/Target/X86/X86InstrControl.td).
+Additional address, segment, mandatory or REX prefixes remain unsupported.
+
+For x64 COFF, a canonical RIP-relative address of a primary MSVC vftable
+can also supply its exact mangled type. The loader checks its complete-object
+locator, self RVA, hierarchy, self base descriptor and bounded type name.
+Unreadable or unsupported RTTI remains unknown; a valid different type
+contradicts the candidate. These reads are lazy and cached within one match
+application. The data addresses never enter the function-reference graph.
+
+The optional NeverD `!refs` token immediately after a pattern's total length
+requires whole-function coverage and at least one reference. Every reference
+must be confirmed before the hit becomes a candidate or supports another
+candidate. Required hits cannot bootstrap each other from raw bytes; a cycle
+without independent evidence stays unresolved. The existing bounded withdrawal
+algorithm removes dependent claims when their evidence changes. Older parsers
+reject this extension, and cache format 3 preserves both context requirements. Published
+constraint packs use `.npat`, which older directory readers ignore while
+retaining the ordinary `.pat` packs. New readers apply the same profile and
+toolset selection to both extensions.
+`neverd-sigmaker --contextual` emits this form for referenced functions,
+including those below the ordinary fixed-byte floor, and covers their entire
+body. Unreferenced functions retain the ordinary floor. This changes candidate
+eligibility, not the independent identity gate.
+
+The separate `!caller` form describes a complete body whose public names all
+label the start. These records are indexed by
+linkage name and excluded from the global byte index. After ordinary reference
+settlement, a caller can request a matching body at its actual direct branch
+or supported function-address target. The caller must have a settled candidate,
+whole-function coverage and the ordinary fixed-byte floor. Every surviving
+variant of that name must state the same complete set of alternatives at the
+same site. A site with several alternatives needs complete native bodies for
+every alternative and exactly one name surviving body and frozen reference
+checks. Missing alternatives or multiple surviving names leave it unresolved.
+Ambiguous or partial callers cannot anchor a request. Context-dependent
+callers cannot start a chain without a complete ordinary root.
+Only requested executable entries without a settled candidate are eligible.
+An incoming candidate with complete coverage and the ordinary fixed-byte floor
+can extend a rooted chain. Each round visits only its new frontier, up to
+`MaxIncomingRounds` in `lib/sigs/ReferenceCheckLimits.def`; short bodies do not
+extend it. A previously named target cannot form a new edge back into the
+chain, so unrooted cycles cannot bootstrap it. Every generation checks its own
+outgoing references with the same resolver against the frozen prior
+result from before incoming inference: contradictions reject it, and missing
+evidence remains unknown. Descendants never confirm an ancestor's references
+or change its supporting proof. Reaching the depth budget leaves the supported
+prefix intact and its unexplored descendants unknown. Multiple
+validated incoming names at one target are retained as candidate aliases. Only
+names actually requested by those callers participate; matching bytes do not
+import additional nominal names from the source pattern. This adds suggestions, never
+independent identity evidence or automatic names.
+`neverd-sigmaker --caller-context` emits these records, including short bodies.
+The supplement builder requires exact raw source ownership and keeps distinct
+same-byte names separate; they are queries, not claims of byte uniqueness.
+When incoming context is loaded, the name index also reuses complete existing
+`!refs` records. Ordinary nominal byte claims are not opted into incoming
+inference merely by being loaded. An incoming request supplies
+the context for that occurrence; its own reference contradictions still reject
+it. No duplicate body is needed just to support both directions of evidence.
+
+Complete ordinary anchors can use supplemental source references missing from
+an older pack. All matching source variants must agree on each new field, and
+existing alternatives cannot be narrowed. Only refinements used by a matched
+child enter the frozen validation pass. Contradicting a refinement removes its
+dependent names, including individual aliases; temporary anchor rows never
+appear in the results. Source references are intersected across raw versions,
+and supplement deduplication respects independently selected library packs.
+An ambiguous ordinary body does not cover an audited incoming-context record:
+the latter supplies the source ownership needed for a name-directed query.
+
+`scripts/signatures/refine_pattern_metadata.py` adds missing import or primary
+vftable references to existing complete bodies. Every existing alias needs raw
+source ownership, and all matching raw versions participate: an absent field
+prevents its addition, while alternative names remain alternatives. The tool
+preserves bytes, names and existing fields, writes changed files separately,
+and records input/output hashes. Repeat `--name` to restrict a review to named
+records; evaluate the changed packs through the normal CLI before publication.
+
+Required context can distinguish claims from independently selected packs,
+but the supplement builder still checks every overlapping raw source claim,
+including short, ambiguous and previously discarded functions. No missing
+rival pack is treated as proof of uniqueness. A mandatory-reference claim can
+survive even when two other claims with the same bytes remain ambiguous, but
+only if its own references distinguish it from every raw counterclaim.
+Missing common fields, overlapping alias uncertainty and ordinary optional
+references do not acquire this exception. Pack publication also requires
+held-out image checks and index/reference cost measurements.
+`neverd-sigmaker --collision-evidence` generates that offline evidence with
+complete bodies and without size/fixed-byte floors. Its `!evidence` records
+are accepted only as supplement `--evidence` inputs: the matching parser
+rejects them, so an unfiltered audit cannot accidentally become a pack.
+Architecture filtering and unsupported-relocation diagnostics still apply.
 
 `neverd_sig_matches_json` retains `name`, `aliases` and `confirmed` as candidate
-fields. Its additive `auto_name` field reports the address's admitted spelling,
+fields. Its `caller_confirmed` field identifies incoming reference support;
+those names take precedence over unresolved byte-only alternatives. Its additive `auto_name` field reports the address's admitted spelling,
 or an empty string. `name_evidence` is `image_symbol`, `exception_personality`,
 or `none`; a candidate without an admitted name reports
 `candidate_reason=independent_identity_missing`. Every row at one address

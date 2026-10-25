@@ -2379,8 +2379,8 @@ Double-click to go to the declaration.</source>
         <translation>載入簽章套件</translation>
     </message>
     <message>
-        <source>Signature packs (*.pat *.json);;All files (*)</source>
-        <translation>簽章套件 (*.pat *.json);;所有檔案 (*)</translation>
+        <source>Signature packs (*.pat *.npat *.json);;All files (*)</source>
+        <translation>簽章套件 (*.pat *.npat *.json);;所有檔案 (*)</translation>
     </message>
     <message>
         <source>Signature directory</source>

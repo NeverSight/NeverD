@@ -96,6 +96,10 @@ x86SystemStateAsm(Intrinsic Id, Arch TargetArch, uint16_t Width,
   case K::Void:
   case K::Void64:
     break;
+  case K::TransactionAbort:
+    P.Text += " " + Input(0);
+    P.InputConstraints = {"i"};
+    break;
   case K::TestUserInterrupt:
     P.Text += "\n\tsetc $0";
     break;

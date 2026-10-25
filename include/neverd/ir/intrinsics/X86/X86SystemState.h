@@ -26,6 +26,7 @@ struct X86SystemStateShape {
   NdMemoryOrdering MemoryOrdering = NdMemoryOrdering::None;
   NdMemoryAddressSpace MemoryAddressSpace = NdMemoryAddressSpace::Default;
   std::optional<uint16_t> SegmentedBlockSelector;
+  std::optional<uint8_t> TransactionAbortCode;
   bool ValidId = false;
   bool WritableOutput = false;
   uint16_t OutputSize = 0;
@@ -77,6 +78,8 @@ x86SystemStateLayout(Intrinsic Id, Arch TargetArch, uint16_t Width,
     return X86SystemStateLayout{0, 1, {Width}};
   case K::Void:
     return X86SystemStateLayout{};
+  case K::TransactionAbort:
+    return X86SystemStateLayout{0, 1, {1}};
   case K::Void64:
   case K::TestUserInterrupt:
   case K::SendUserInterrupt:
@@ -200,6 +203,9 @@ inline bool x86SystemStateShapeIsValid(Intrinsic Id,
       Shape.OutputSize != L->OutputSize ||
       (Shape.OutputSize && !Shape.WritableOutput) ||
       Shape.Arguments != L->Arguments)
+    return false;
+  if (C.Kind == X86SystemStateKind::TransactionAbort &&
+      !Shape.TransactionAbortCode)
     return false;
   for (uint8_t I = 0; I < L->Arguments; ++I)
     if (!Shape.ScalarInputs[I] || Shape.InputSizes[I] != L->InputSizes[I])

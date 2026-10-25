@@ -312,6 +312,7 @@ TEST_F(BytePatch, OverlapAndPartialRevertReplayMatchesAByteOracle) {
     Bytes[I] = uint8_t(I);
   reset(Bytes);
   auto Expected = Original;
+  std::vector<PatchKind> ExpectedKinds(Bytes.size(), PatchKind::Bytes);
   uint32_t State = 0x831b0ad5;
   const auto Next = [&] {
     State ^= State << 13;
@@ -330,6 +331,8 @@ TEST_F(BytePatch, OverlapAndPartialRevertReplayMatchesAByteOracle) {
       ASSERT_FALSE(Overlay.apply(Img, *Input, 0x1000 + First, Change,
                                  Step % 2 ? PatchKind::Bytes : PatchKind::Nop));
       std::copy(Change.begin(), Change.end(), Expected.begin() + First);
+      std::fill_n(ExpectedKinds.begin() + First, Size,
+                  Step % 2 ? PatchKind::Bytes : PatchKind::Nop);
     } else {
       const bool Changed =
           !std::equal(Expected.begin() + First, Expected.begin() + First + Size,
@@ -343,6 +346,27 @@ TEST_F(BytePatch, OverlapAndPartialRevertReplayMatchesAByteOracle) {
     EXPECT_TRUE(std::equal(Expected.begin(), Expected.end(),
                            Img.Segments[0].Data.begin()));
     EXPECT_EQ(Img.Sections[0].Data, Img.Segments[0].Data);
+    // An independent byte/tag oracle checks canonical boundaries before
+    // replay can normalize a mistakenly split or merged row.
+    auto Row = Overlay.rows().begin();
+    for (size_t I = 0; I < Expected.size();) {
+      if (Expected[I] == Original[I]) {
+        ++I;
+        continue;
+      }
+      size_t End = I + 1;
+      while (End < Expected.size() && Expected[End] != Original[End] &&
+             ExpectedKinds[End] == ExpectedKinds[I])
+        ++End;
+      ASSERT_NE(Row, Overlay.rows().end());
+      EXPECT_EQ(Row->second.FileOffset, I);
+      EXPECT_EQ(Row->second.Address, 0x1000 + I);
+      EXPECT_EQ(Row->second.size(), End - I);
+      EXPECT_EQ(Row->second.Kind, ExpectedKinds[I]);
+      ++Row;
+      I = End;
+    }
+    EXPECT_EQ(Row, Overlay.rows().end());
     std::string Text;
     llvm::raw_string_ostream Stream(Text);
     Stream << llvm::json::Value(patchRowsJSON(Overlay));
@@ -353,6 +377,43 @@ TEST_F(BytePatch, OverlapAndPartialRevertReplayMatchesAByteOracle) {
     EXPECT_TRUE(std::equal(Expected.begin(), Expected.end(),
                            Img.Segments[0].Data.begin()));
   }
+}
+
+TEST_F(BytePatch, MixedKindRowLimitKeepsLocalEditsCanonical) {
+  constexpr auto Count = ::neverd::limits::patch::kMaxPatchRows;
+  reset(std::vector<uint8_t>(Count, 0xcc));
+  std::vector<PatchRow> Rows;
+  Rows.reserve(Count);
+  for (size_t I = 0; I < Count; ++I)
+    Rows.push_back({I,
+                    0x1000 + I,
+                    {0xcc},
+                    {uint8_t(I % 2 ? 0x90 : 0x91)},
+                    I % 2 ? PatchKind::Nop : PatchKind::Bytes});
+  ASSERT_FALSE(Overlay.replace(Img, *Input, std::move(Rows)));
+  ASSERT_EQ(Overlay.rows().size(), Count);
+  // Both outside edges and an interior edit join only matching neighbours.
+  ASSERT_FALSE(Overlay.apply(Img, *Input, 0x1000, {0x90}, PatchKind::Nop));
+  ASSERT_FALSE(
+      Overlay.apply(Img, *Input, 0x1000 + Count - 1, {0x91}, PatchKind::Bytes));
+  ASSERT_FALSE(
+      Overlay.apply(Img, *Input, 0x1000 + Count / 2, {0x90}, PatchKind::Nop));
+  EXPECT_EQ(Overlay.rows().size(), Count - 4);
+  EXPECT_EQ(Overlay.rows().at(0).size(), 2u);
+  EXPECT_EQ(Overlay.rows().at(Count / 2 - 1).size(), 3u);
+  EXPECT_EQ(Overlay.rows().at(Count - 2).size(), 2u);
+  for (size_t I = 0; I < Count; ++I) {
+    const uint8_t Expected = I == 0 || I == Count / 2 ? 0x90
+                             : I == Count - 1         ? 0x91
+                             : I % 2                  ? 0x90
+                                                      : 0x91;
+    ASSERT_EQ(Img.Segments[0].Data[I], Expected) << I;
+    ASSERT_EQ(Overlay.originalByte(0x1000 + I), 0xcc) << I;
+  }
+  EXPECT_EQ(Img.Sections[0].Data, Img.Segments[0].Data);
+  Overlay.clear(Img);
+  EXPECT_TRUE(std::equal(Original.begin(), Original.end(),
+                         Img.Segments[0].Data.begin()));
 }
 
 TEST_F(BytePatch, SignedPEExportRequiresConsentAndRecomputesChecksum) {

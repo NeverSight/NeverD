@@ -5,8 +5,9 @@
 //===----------------------------------------------------------------------===//
 ///
 /// \file
-/// Turns the functions an object file defines into FLIRT-compatible .pat
-/// lines, the format PatternParser reads back.
+/// Turns the functions an object file defines into .pat lines, the format
+/// PatternParser reads back. Ordinary output is FLIRT-compatible; optional
+/// required-reference constraints use NeverD's explicit extension.
 ///
 /// A signature states the bytes a function has in every image it is linked
 /// into. A relocated byte holds a placeholder in the object and an address in
@@ -60,6 +61,19 @@ struct PatternGeneratorOptions {
   /// default: a loader older than the references rejects a line with one.
   /// COFF x86/x64 also states canonical indirect import-pointer references.
   bool EmitReferences = false;
+  /// Emit referenced functions with the NeverD `!refs` constraint and full
+  /// byte coverage, including functions below the ordinary fixed-byte floor.
+  /// Unreferenced functions retain the ordinary floor and output format.
+  bool RequireReferences = false;
+  /// Emit complete bodies with !caller. Their names may be requested by
+  /// verified callers, never by a standalone byte scan. Outgoing references
+  /// can reject a body but cannot change its caller or support a new query.
+  /// Unlike ordinary patterns, this includes functions below the size floor.
+  bool RequireCaller = false;
+  /// Emit complete collision evidence without the size/fixed-byte floors.
+  /// Every line is marked !evidence and rejected by the matching parser.
+  /// It is input to offline supplement validation, never a signature pack.
+  bool CollisionEvidence = false;
   /// The names a COFF link resolves a symbol to when no object defines it,
   /// as `/alternatename:symbol=alternate` directives give them (see
   /// collectAlternateNames).  A reference to the symbol also names each
@@ -191,7 +205,8 @@ size_t statedByteCount(llvm::ArrayRef<bool> Wildcard,
 /// the linker may rewrite and \p References, sorted by offset, the routines it
 /// branches to. Returns false, writing nothing, when the function is shorter
 /// than Opts.MinFuncSize or its line would state fewer than
-/// SignatureMatcher::MinStatedBytes bytes exactly.
+/// SignatureMatcher::MinStatedBytes bytes exactly, unless reference context
+/// is explicitly required. Required-reference lines cover the whole function.
 bool emitPatternLine(llvm::raw_ostream &OS,
                      llvm::ArrayRef<llvm::StringRef> Names,
                      llvm::ArrayRef<uint8_t> Data,
@@ -212,7 +227,8 @@ inline bool emitPatternLine(llvm::raw_ostream &OS, llvm::StringRef Name,
 /// after an E8 or E9 opcode on x86 and x64, and a BRANCH26 (ARM64) or
 /// BRANCH24T/BLX23T (Thumb-2) instruction.  \p Code holds the section's
 /// bytes, \p RelocationOffset and \p FunctionOffset are section offsets.
-/// Also accepts unprefixed FF 15/FF 25 import fields: DIR32 on x86, REL32
+/// Also accepts canonical FF 15/FF 25 import fields (a single REX.W prefix
+/// is allowed in x64): DIR32 on x86, REL32
 /// on x64. The caller must separately require an import-pointer symbol.
 std::optional<uint64_t> coffBranchReferenceOffset(uint16_t Machine,
                                                   uint16_t Type,

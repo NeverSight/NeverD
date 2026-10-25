@@ -548,7 +548,7 @@ TEST_P(AndroidJNI, HandlerPostSharesQueueClockAndThreadLifetime) {
   Options.Android->Application = Snapshot{};
   auto &input = *Options.Android->Application;
   input.main_looper_prepared = true;
-  input.initial_main_queue.emplace();
+  input.initial_main_queue.emplace(Snapshot::EmptyMessageQueue{});
   Options.Android->ObserveJavaState = true;
   auto unknown = run("jni_handler_post");
   EXPECT_EQ(unknown.Stop, ProcessStopReason::UnsupportedService);

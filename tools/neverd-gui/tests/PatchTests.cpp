@@ -496,7 +496,8 @@ private slots:
     QTRY_VERIFY(reverted);
     QTRY_VERIFY(!obsolete || !obsolete->isVisible());
     QCOMPARE(nop.size(), 0);
-    QVERIFY(!session.hasBytePatches());
+    // Colors are replaced atomically when the asynchronous range read arrives.
+    QTRY_VERIFY(!session.hasBytePatches());
   }
 
   void patchEditorDismissalDoesNotApply_data() {
@@ -966,6 +967,48 @@ private slots:
     QTRY_VERIFY(model.total() > 0 && !model.loading());
     QVERIFY(resets.count() > 0);
     QVERIFY(!selected.isValid());
+  }
+
+  void patchColorsStayVisibleAcrossUnrelatedEdits() {
+    QTemporaryDir directory;
+    const auto path = directory.filePath(QStringLiteral("patch-colors.bin"));
+    QFile file(path);
+    QVERIFY(file.open(QIODevice::WriteOnly));
+    QCOMPARE(file.write("fixture"), 7);
+    file.close();
+    Session session(QString::fromLocal8Bit(TEST_WORKER));
+    session.open(path);
+    QTRY_VERIFY_WITH_TIMEOUT(session.loaded(), OpenTimeoutMs);
+    session.editBytePatch("patch_apply",
+                          {{"address", hexAddress(FixtureBase)},
+                           {"kind", "bytes"},
+                           {"bytes", "90"}},
+                          session.epoch());
+    QTRY_VERIFY(session.hasBytePatch(FixtureBase));
+    QTRY_VERIFY(!session.queries().hasPending());
+    QSignalSpy colors(&session, &Session::bytePatchesChanged);
+    bool disappeared = false;
+    connect(&session, &Session::bytePatchesChanged, &session,
+            [&] { disappeared |= !session.hasBytePatch(FixtureBase); });
+    const auto revision = session.revision();
+    session.rename(FixtureBase, "renamed_with_patch", session.epoch());
+    QTRY_VERIFY(session.revision() != revision);
+    QTRY_VERIFY(!session.queries().hasPending());
+    QVERIFY(!disappeared);
+    QCOMPARE(colors.count(), 0);
+    QVERIFY(session.hasBytePatch(FixtureBase));
+    // Opening another input must still retire the old project's colors.
+    const auto other = directory.filePath(QStringLiteral("unpatched.bin"));
+    QFile next(other);
+    QVERIFY(next.open(QIODevice::WriteOnly));
+    QCOMPARE(next.write("fixture"), 7);
+    next.close();
+    const auto epoch = session.epoch();
+    session.open(other);
+    QTRY_VERIFY(session.loaded() && session.epoch() != epoch);
+    QTRY_VERIFY(!session.queries().hasPending());
+    QVERIFY(!session.hasBytePatches());
+    QVERIFY(disappeared);
   }
 
   void nativeInstructionKeysApplyUndoAndRedo_data() {

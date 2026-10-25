@@ -4517,6 +4517,84 @@ TEST_F(ProcessPublic, AndroidLiveProcAndMaintainedStatMatchSDKAndCLI) {
 #endif
 }
 
+TEST_F(ProcessPublic, AndroidNegativePrctlMatchesSDKAndCLI) {
+#ifndef NEVERD_ANDROID_FIXTURE_DIR
+  GTEST_SKIP() << "Android fixtures unavailable";
+#else
+  llvm::SmallString<128> Directory;
+  ASSERT_FALSE(llvm::sys::fs::createUniqueDirectory(Prefix, Directory));
+  const std::filesystem::path Root(Directory.str().str());
+  auto Cleanup = llvm::scope_exit([&] { std::filesystem::remove_all(Root); });
+  const auto Output = (Root / OutputFile).string();
+  const uint64_t Values[] = {0x80000000ULL, 0xffffffffULL,
+                             0xffffffff80000000ULL, 0x1234567880000001ULL,
+                             0x800000000000000fULL};
+  for (const char *Variant : {"proc-O0-none", "proc-O2-relr"}) {
+    Path = (std::filesystem::path(NEVERD_ANDROID_FIXTURE_DIR) /
+            (std::string(Variant) + ".so"))
+               .string();
+    for (unsigned Route = 0; Route != 5; ++Route) {
+      for (unsigned Case = 0; Case != 5; ++Case) {
+        if (Route == 4 && Case)
+          continue;
+        SCOPED_TRACE(Variant);
+        SCOPED_TRACE(Route);
+        SCOPED_TRACE(Case);
+        auto Request = llvm::cantFail(llvm::json::parse(R"({
+          "backend":"unicorn","instruction_quantum":17,
+          "android":{"initialize":false,"entry_symbol":"proc_prctl_option",
+            "memory":[{"address":"0x20000000","size":4096}],
+            "read_memory":[{"address":"0x20000000","size":4096}],
+            "libraries":{"libprctl.so":["prctl"]}}})"));
+        auto &Android = *Request.getAsObject()->getObject(field::Android);
+        Android[field::Arguments] = llvm::json::Array{
+            "0x20000000", "0x" + llvm::utohexstr(Values[Case]), Route};
+        std::vector<uint8_t> Expected(4096, 0xa5);
+        (*Android.getArray(field::Memory)
+              ->front()
+              .getAsObject())[field::Bytes] = llvm::toHex(Expected, true);
+        const auto Options = jsonText(*Request.getAsObject());
+        const auto Text = takeString(neverd_emulate_process_json(
+            Session, Path.c_str(), AndroidNativeAArch64, Options.c_str()));
+        ASSERT_FALSE(Text.empty()) << takeString(neverd_last_error(Session));
+        auto Report = llvm::cantFail(llvm::json::parse(Text));
+        auto *Object = Report.getAsObject();
+        ASSERT_NE(Object, nullptr);
+        const bool Refused = Route == 4 || Case == 4;
+        ASSERT_EQ(Object->getString(field::Stop),
+                  Refused ? "unsupported_service" : "returned")
+            << Text;
+        if (Refused) {
+          EXPECT_EQ(*Object->get(field::ReturnValue),
+                    llvm::json::Value(nullptr));
+          ASSERT_TRUE(Object->getString(field::Diagnostic));
+          EXPECT_NE(Object->getString(field::Diagnostic)
+                        ->find(Route == 4 ? "inactive" : "prctl operation"),
+                    llvm::StringRef::npos);
+        } else {
+          EXPECT_EQ(Object->getString(field::ReturnValue), "0");
+          llvm::support::endian::write64le(
+              Expected.data(), Route == 1 ? uint64_t(0) - 22 : UINT64_MAX);
+          llvm::support::endian::write64le(Expected.data() + 8,
+                                           Route == 1 ? 733 : 22);
+        }
+        auto *State = Object->getObject(field::Android);
+        ASSERT_NE(State, nullptr);
+        auto *Memory = State->getArray(field::Memory);
+        ASSERT_NE(Memory, nullptr);
+        ASSERT_EQ(Memory->size(), 1u);
+        ASSERT_NE(Memory->front().getAsObject(), nullptr);
+        EXPECT_EQ(Memory->front().getAsObject()->getString(field::Bytes),
+                  llvm::toHex(Expected, true));
+        EXPECT_EQ(runCLIRequest(Path, AndroidNativeAArch64, Options, Output),
+                  Refused ? process_cli::Incomplete : process_cli::Success);
+        ASSERT_NO_FATAL_FAILURE(expectCLIReport(Output, Report));
+      }
+    }
+  }
+#endif
+}
+
 TEST_F(ProcessPublic, AndroidPrctlNamesAndThreadRetirementMatchSDKAndCLI) {
 #ifndef NEVERD_ANDROID_FIXTURE_DIR
   GTEST_SKIP() << "Android fixtures unavailable";

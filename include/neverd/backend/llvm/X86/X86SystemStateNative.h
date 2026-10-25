@@ -45,6 +45,7 @@ void applyX86SystemNativeTargetFeatures(llvm::Function &Function);
 
 inline constexpr Intrinsic X86SystemStateNativeInventory[] = {
     Intrinsic::Xend,
+    Intrinsic::Xabort,
     Intrinsic::Clac,
     Intrinsic::Stac,
     Intrinsic::Clzero,

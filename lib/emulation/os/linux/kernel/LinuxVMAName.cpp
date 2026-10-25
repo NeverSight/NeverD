@@ -53,7 +53,12 @@ LinuxMemory::prctl(const ProcessServiceEvent &Event, ProcessResult &Result) {
     return std::nullopt;
   };
   // The outer option is an int; all remaining LP64 arguments retain 64 bits.
-  if (uint32_t(Event.Arguments[0]) != PRSetVMA)
+  const auto Option = uint32_t(Event.Arguments[0]);
+  // Negative options are outside this Linux command namespace. Reject them
+  // before consulting optional providers or interpreting any pointer argument.
+  if (Option > INT32_MAX)
+    return std::optional<uint64_t>(uint64_t(0) - InvalidArgument);
+  if (Option != PRSetVMA)
     return Unsupported("prctl operation is unmodeled");
   if (!Options.LinuxKernel || Options.LinuxKernel->AnonymousVMANames !=
                                   LinuxAnonymousVMANames::AndroidUserPointer)

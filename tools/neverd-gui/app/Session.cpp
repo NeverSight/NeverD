@@ -1799,24 +1799,31 @@ bool Session::hasBytePatch(Address address, Address size) const {
   return address - it->first < it->second;
 }
 void Session::refreshBytePatches() {
-  patchRanges_.clear();
-  emit bytePatchesChanged();
-  if (!loaded_ || !keepsBytePatches())
+  if (!loaded_ || !keepsBytePatches()) {
+    if (!patchRanges_.isEmpty()) {
+      patchRanges_.clear();
+      emit bytePatchesChanged();
+    }
     return;
+  }
   const auto before = revision();
   const auto opened = epoch();
   read("patches", {{"ranges_only", true}}, this,
        [this, before, opened](const QJsonObject &rows) {
          if (before != revision() || opened != epoch())
            return;
+         decltype(patchRanges_) ranges;
          for (const auto &value : rows.value("items").toArray()) {
            const auto row = value.toObject();
            const auto at = parseAddress(row.value("address").toString());
            const auto size = row.value("size").toInteger();
            if (at && size > 0)
-             patchRanges_.append({*at, Address(size)});
+             ranges.append({*at, Address(size)});
          }
-         std::sort(patchRanges_.begin(), patchRanges_.end());
+         std::sort(ranges.begin(), ranges.end());
+         if (ranges == patchRanges_)
+           return;
+         patchRanges_ = std::move(ranges);
          emit bytePatchesChanged();
        });
 }

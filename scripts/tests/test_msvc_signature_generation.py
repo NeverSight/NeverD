@@ -34,6 +34,17 @@ class ParseLineTests(unittest.TestCase):
         self.assertEqual(line.key, "4883EC28 00 0000 0010 4883C428C3")
         self.assertEqual(line.names, (":0000 ?Run@Task@@QEAAXXZ",))
 
+    def test_context_requirement_is_preserved_but_is_not_a_byte_key(self) -> None:
+        text = "E8........C3 00 0000 0006 !refs :0000 wrapper ^0001 callee"
+        line = parse_line(text)
+        self.assertTrue(line.require_references)
+        self.assertEqual(line.key, "E8........C3 00 0000 0006")
+        self.assertEqual(line.with_refs(line.refs).text, text)
+        ordinary = text.replace(" !refs", "")
+        folded = fold([ordinary, text])
+        self.assertEqual(len(folded.lines), 1)
+        self.assertTrue(folded.lines[0].require_references)
+
     def test_every_public_name_is_kept_in_order(self) -> None:
         line = parse_line("AABB 00 0000 0020 :0000 first :0010 second")
         assert line is not None

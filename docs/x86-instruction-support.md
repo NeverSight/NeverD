@@ -37,6 +37,8 @@ complete instruction support or semantic test coverage.
 | ENCLS, ENCLV | Native supervisor/VMM completion on x86/x64, preserving rAX/rBX results, rCX/rDX inputs and leaf-dependent arithmetic flags. Enclave memory and fault ordering remain instruction-owned. |
 | RDPID | Explicit natural-width query result; ordered hardware effect. |
 | XTEST | Retains the native transaction query, its actual ZF and the required clearing of CF/PF/AF/SF/OF; no GPR or DF modification. |
+| XABORT | Exact constant imm8 through validated native LLVM, HighC and LLVM-to-C. Missing or inconsistent decoded operands and nonconstant IR fail; enclosing RTM checkpoint recovery remains separate. |
+| BLCFILL, BLCI, BLCIC, BLCMSK, BLCS, BLSFILL, BLSIC, T1MSKC, TZMSK | Validated XOP forms with source-dependent CF, result-dependent ZF/SF, cleared OF and explicit undefined AF/PF. LLVM, HighC and LLVM-to-C consume the same arithmetic semantics; see the TBM qualification below. |
 | RDFSBASE, RDGSBASE, WRFSBASE, WRGSBASE | 32/64-bit operands in long mode; explicit read/write direction. |
 | CLTS | Ordered processor-state effect with no fabricated register output. |
 | Operand-free WRMSRNS | Distinct nonserializing instruction with explicit ECX/EAX/EDX inputs on x86 and x64. |
@@ -110,6 +112,8 @@ family-specific rules. REX2 cannot encode ROUND's map 3.
 
 | Instructions or family | Missing contract |
 | --- | --- |
+| LDS, LES, LSS, LFS, LGS | Coupled GPR/segment-selector completion, hidden descriptor state and fault ordering. The former ordinary load/COPY approximation is now explicitly refused in both strict and permissive lifting. |
+| 3DNow! arithmetic, comparison, conversion and rearrangement operations | Packed-lane results, instruction-specific floating-point rules and MMX/x87 state. The 24 former COPY/scalar-FLOAT approximations now fail explicitly; decoder recognition remains available. |
 | VMRUN | Complete guest/host transition, including guest-modified unsaved GPRs and floating/vector state, plus the VM-exit continuation. |
 | SKINIT | Machine reinitialization and nonlocal control transfer. |
 | GETSEC transferring or unproved leaves | Measured-environment entry/exit and a complete-machine-state continuation. Leaves 0 and 6..8 now use the bounded contract below when natural-width AX is proven constant. |
@@ -175,6 +179,74 @@ complete checkpoint are absent; the previous status-only lowering could
 lose both the abort branch and the successful path's EAX value. These
 instruction contracts follow the
 [Intel XBEGIN/XTEST reference](https://cdrdv2-public.intel.com/874247/334569-090-sdm-vol-2d.pdf).
+
+XABORT now retains its exact constant byte through the shared system-state
+contract, using native `llvm.x86.xabort` on both the pinned SDK and current
+fork. Missing, variable, mistyped or contradictory operands fail before
+effects. LLVM-to-C also rejects narrowed memory effects and speculative or
+nonreturning annotations; its legacy assembly input retains the required
+`rtm` function attribute. Store/abort/reload fixtures preserve ordinary memory
+order. The decoder qualification covers all 256 bytes in 14,592 combinations;
+48 source fixtures cover x86/x64, ELF/COFF/Mach-O and both pipeline settings,
+including 24 x64 fixtures compiled with NeverC. Native and C outputs are
+compiled at O0/O2. NeverC's bare Microsoft `_xabort` also now rejects a
+nonconstant argument before publishing an object. The independent compiler
+oracle checks all 256 codes over 40 profiles (10,240 functions), including
+NeverC, the full LLVM backend and the NeverC-to-LLVM bridge. This is byte,
+operand and ordering qualification, not physical transactional rollback.
+
+An additional audit reproduced two previously hidden false positives:
+`48 0f b4 07` (LFS) became an ordinary eight-byte load, and `0f 0f c1 94`
+(PFMIN) became a COPY of MM1 to MM0. The former loses the segment selector and
+descriptor transition; the latter loses both minimum comparisons. The
+related far-pointer loads and all 24 affected 3DNow! operations now refuse
+before appending LowIR effects. `NeverDX86LegacyAdmissionTests` covers 76
+far-pointer forms and 384 3DNow! forms, each through three decoder routes in
+strict and permissive mode (2,760 admission checks), plus ordinary-load/MMX
+positive controls. These are explicit remaining implementation gaps. 3DNow!
+completion must follow the packed-operation and state rules in
+[AMD APM volume 5](https://www.amd.com/content/dam/amd/en/documents/processor-tech-docs/programmer-references/26569.pdf),
+including its defined and undefined input domains.
+
+The same audit found a TBM counterexample:
+`mov rdi, -1; clc; blcfill rax, rdi; setc al; movzx eax, al; ret` previously
+exported a constant zero. BLCFILL's carry comes from incrementing its source
+and must be one for that input, as specified in
+[AMD APM volume 3](https://docs.amd.com/api/khub/documents/j44LvPXzuuXgM0WyHKQfeQ/content).
+`X86LiftTBM` now owns the nine operations' byte/detail admission, values and
+flags. It computes CF before an aliased destination write, derives ZF/SF from
+the result, clears OF and preserves DF. AF/PF remain explicitly undefined;
+the concrete representative does not establish architectural zero. Memory
+loads precede all architectural writes. Malformed forms fail before effects,
+including permissive lifting. The shared XOP prefix parser retains ignored
+32-bit W/vvvv/B fields without selecting long-mode registers.
+
+`NeverDX86TBMTests` covers 25,920 value/flag cases, 432 ignored-field cases,
+1,296 memory-encoding cases and 1,782 malformed-instruction refusals, plus
+faulting-read checks. Its reference scans for the first set/clear bit rather
+than repeating the lifter's adjacent-value formulas. The prefix, APX BMI and
+undefined-effect suites cover the shared boundary.
+`NeverDX86TBMPipeline` exercises both pipeline optimization settings, O0/O2
+compilation and LLVM/HighC/LLVM-to-C for 32/64-bit operands: 216 profiles and
+31,104 executed value/flag cases. It disables TBM and inspects the assembly
+before linking, so it never executes the original TBM instruction on the host.
+The old CLI fails this regression at BLCFILL(0), where ZF was lost.
+
+NeverC now installs the native `tbmintrin.h` interfaces through `x86intrin.h`:
+20 value interfaces across ten operations and two widths, including BEXTR's
+constant control. Function-level `target("tbm")` works without a translation-
+unit feature flag. The LLVM fork already selects all these instructions from
+its standard intrinsics/arithmetic patterns; no new LLVM intrinsic ID or
+inline assembly is needed. ELF/COFF/Mach-O O0/O2 compilation, native O2
+selection, the NeverC-to-LLVM bridge and nonconstant BEXTR refusals are covered.
+These C interfaces return values; they do not expose the architectural flags.
+Physical TBM hardware execution and CPU exception delivery remain unqualified.
+
+The broader integration run retains a separate source-frame proof gap:
+`NativePointerRelocationBoundary.MinGWProgramWholeModuleLLVMCCompiles` rejects
+`_pei386_runtime_relocator` because a dynamic-stack CALL may overwrite an
+observed physical return-address slot. The safe-output guard remains enabled;
+whole-program source qualification for this fixture is still incomplete.
 
 MPX memory forms retain their decoded identity in both full and lightweight
 decoding. The decoder no longer assumes MPX is disabled for BNDLDX/BNDSTX.

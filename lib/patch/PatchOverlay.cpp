@@ -417,28 +417,28 @@ llvm::Error PatchOverlay::apply(BinaryImage &Img, const InputFile &Input,
     return Target.takeError();
   const Segment &Seg = Img.Segments[Target->Segment];
   const uint64_t Lo = Target->FileOffset, Hi = Lo + NewBytes.size();
-  // The window: the write and every run of its segment that it reaches, by
-  // overlap or adjacency, directly or through another such run.
+  // Canonical runs already merge equal-kind neighbours. Only overlaps and
+  // same-kind neighbours at the write's edges can change: extending through
+  // every adjacent run would repeatedly scan an unrelated mixed-kind chain.
   uint64_t First = Lo, End = Hi;
   std::vector<uint64_t> Touched;
-  for (bool Grew = true; Grew;) {
-    Grew = false;
-    auto It = Rows.upper_bound(End);
-    while (It != Rows.begin()) {
-      --It;
-      const PatchRow &Row = It->second;
-      if (Row.FileOffset + Row.size() < First)
-        break;
-      if (segmentIndex(Img, Row.Address) != Target->Segment ||
-          llvm::is_contained(Touched, Row.FileOffset))
-        continue;
-      Touched.push_back(Row.FileOffset);
-      if (Row.FileOffset < First || Row.FileOffset + Row.size() > End) {
-        First = std::min(First, Row.FileOffset);
-        End = std::max<uint64_t>(End, Row.FileOffset + Row.size());
-        Grew = true;
-      }
-    }
+  auto It = Rows.lower_bound(Lo);
+  if (It != Rows.begin()) {
+    const auto Before = std::prev(It);
+    const auto &Row = Before->second;
+    if (Row.FileOffset + Row.size() > Lo ||
+        (Row.FileOffset + Row.size() == Lo && Row.Kind == Kind))
+      It = Before;
+  }
+  for (; It != Rows.end(); ++It) {
+    const PatchRow &Row = It->second;
+    if (Row.FileOffset > Hi || (Row.FileOffset == Hi && Row.Kind != Kind))
+      break;
+    if (segmentIndex(Img, Row.Address) != Target->Segment)
+      continue;
+    Touched.push_back(Row.FileOffset);
+    First = std::min(First, Row.FileOffset);
+    End = std::max<uint64_t>(End, Row.FileOffset + Row.size());
   }
   const uint64_t Width = End - First;
   const va_t WindowVA = Seg.VA + (First - Input.base() - Seg.FileOff);

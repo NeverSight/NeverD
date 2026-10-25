@@ -116,7 +116,26 @@ public:
     /// deterministic performance counter; it does not perform a match.
     size_t candidateCount(const uint8_t *Data, size_t Available) const;
 
+    /// !caller records never enter the byte decision tree. Lookup names from
+    /// an established caller instead, then verify only those complete bodies.
+    /// Existing !refs bodies participate too, so callers can reuse explicitly
+    /// contextual records without duplicating them. Ordinary nominal byte
+    /// claims do not acquire incoming support merely by being loaded.
+    /// Numeric indices retain the same copy/move lifetime as byte candidates.
+    struct CallerEntry {
+      size_t Module = 0;
+      size_t PublicName = 0;
+      size_t NameHash = 0;
+    };
+    bool hasCallerModules() const {
+      return CallerStorage && !CallerStorage->empty();
+    }
+    llvm::ArrayRef<CallerEntry>
+    callerModules(llvm::ArrayRef<StoredModule> Modules,
+                  std::string_view Name) const;
+
   private:
+    std::shared_ptr<const std::vector<CallerEntry>> CallerStorage;
     /// Leaves view one immutable permutation instead of allocating per leaf.
     /// Copies retain its lifetime; rebuilding an index replaces only its own
     /// storage, so copies and moved indexes keep valid views.

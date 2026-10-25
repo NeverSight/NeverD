@@ -430,7 +430,8 @@ androidOptionsFromJSON(const llvm::json::Value &Value) {
             if (Member.first != "blocked" &&
                 Member.first != field::ApplicationQueueNativeCallbacksEmpty)
               return invalid(Key);
-          auto &State = Snapshot.initial_main_queue.emplace();
+          auto &State = Snapshot.initial_main_queue.emplace(
+              mobile::dalvik::AndroidApplicationSnapshot::EmptyMessageQueue{});
           State.blocked = *Queue->getBoolean("blocked");
           if (const auto *Callbacks =
                   Queue->get(field::ApplicationQueueNativeCallbacksEmpty)) {

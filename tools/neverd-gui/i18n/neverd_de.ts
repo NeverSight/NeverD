@@ -2385,8 +2385,8 @@ Doppelklicken, um zur Deklaration zu springen.</translation>
         <translation>Signaturpaket laden</translation>
     </message>
     <message>
-        <source>Signature packs (*.pat *.json);;All files (*)</source>
-        <translation>Signaturpakete (*.pat *.json);;Alle Dateien (*)</translation>
+        <source>Signature packs (*.pat *.npat *.json);;All files (*)</source>
+        <translation>Signaturpakete (*.pat *.npat *.json);;Alle Dateien (*)</translation>
     </message>
     <message>
         <source>Signature directory</source>

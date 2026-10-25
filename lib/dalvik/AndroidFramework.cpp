@@ -1718,8 +1718,8 @@ ExecutionResult AndroidFramework::execute(Heap &heap, const Program &program,
                              ? find(snapshot->application_info_queries)
                              : find(snapshot->package_info_queries);
       if (index) {
-        tick();
         if (method.Op == PackageInfoQuery) {
+          tick();
           auto result = ref(heap.allocate(
               Object::Instance, "android/content/pm/PackageInfo", 0,
               sizeof(PackageInfoState) +

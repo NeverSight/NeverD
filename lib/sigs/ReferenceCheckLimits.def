@@ -19,6 +19,12 @@
 // this budget can resolve longer chains; it cannot establish cyclic claims.
 NEVERD_SIGS_REFERENCE_LIMIT(MaxReferenceRounds, 16)
 
+// A rooted incoming chain can extend through complete, strong bodies. Each
+// round uses only the previous frontier and validates against the original
+// outgoing result. Stop extending at this depth; already supported prefixes
+// remain valid without depending on unresolved descendants.
+NEVERD_SIGS_REFERENCE_LIMIT(MaxIncomingRounds, 16)
+
 // A round checks its matches in parallel from this many, in blocks of this
 // many matches.
 NEVERD_SIGS_REFERENCE_LIMIT(ParallelReferenceMatches, 4096)

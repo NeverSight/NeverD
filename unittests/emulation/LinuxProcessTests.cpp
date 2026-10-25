@@ -256,6 +256,44 @@ TEST_P(LinuxProcess, ResidencyObservationsExecuteOnBothLP64ABIs) {
   }
 }
 
+TEST_P(LinuxProcess, NegativePrctlOptionsUseIntWidthOnBothLP64ABIs) {
+  for (const char *Opt : {"O0", "O2"}) {
+    SCOPED_TRACE(Opt);
+    const auto Fixture = Path.parent_path() /
+                         (Path.stem().string() + "-residency-" + Opt + ".elf");
+    Options.Arguments = {"prctl", "p"};
+    auto Run = emulateProcess(Fixture, ProcessProfile::LinuxELF64, Options);
+    ASSERT_TRUE(bool(Run)) << llvm::toString(Run.takeError());
+    ASSERT_EQ(Run->Stop, ProcessStopReason::Exited) << Run->Diagnostic;
+    EXPECT_EQ(Run->ExitStatus, 0u);
+    std::string Expected;
+    for (unsigned I = 0; I != 4; ++I) {
+      Expected.push_back(char(0xea));
+      Expected.append(7, char(0xff));
+    }
+    Expected.append(32, char(0xa5));
+    EXPECT_EQ(Run->StandardOutput, Expected);
+    unsigned Calls = 0;
+    for (const auto &Call : Run->Services)
+      if (Call.Number ==
+          (GetParam().ISA == GuestArchitecture::X64 ? 157u : 167u)) {
+        ASSERT_TRUE(Call.Result);
+        EXPECT_EQ(*Call.Result, uint64_t(-22));
+        ++Calls;
+      }
+    EXPECT_EQ(Calls, 4u);
+    Options.Arguments[1] = "P";
+    Run = emulateProcess(Fixture, ProcessProfile::LinuxELF64, Options);
+    ASSERT_TRUE(bool(Run)) << llvm::toString(Run.takeError());
+    EXPECT_EQ(Run->Stop, ProcessStopReason::UnsupportedService);
+    EXPECT_EQ(Run->Diagnostic, "prctl operation is unmodeled");
+    EXPECT_TRUE(Run->StandardOutput.empty());
+    ASSERT_FALSE(Run->Services.empty());
+    EXPECT_EQ(Run->Services.back().Arguments[0], 0x800000000000000fULL);
+    EXPECT_FALSE(Run->Services.back().Result);
+  }
+}
+
 TEST_P(LinuxProcess, DiscardPreservesOuterPagesThenClearsBothSidesOfAHole) {
   Options.Limits.Instructions = 500000;
   Options.Limits.TimeoutMicroseconds = 30000000;

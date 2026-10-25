@@ -72,7 +72,8 @@
 {"llvm.x86.bmi.pext.32",           "_pext_u32"},
 {"llvm.x86.bmi.pext.64",           "_pext_u64"},
 
-// x86 transactional execution query
+// x86 transactional execution
+{"llvm.x86.xabort",               "_xabort"},
 {"llvm.x86.xtest",                "_xtest"},
 
     // clang-format on

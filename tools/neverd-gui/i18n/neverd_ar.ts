@@ -2409,8 +2409,8 @@ Double-click to go to the declaration.</source>
         <translation>تحميل حزمة التوقيعات</translation>
     </message>
     <message>
-        <source>Signature packs (*.pat *.json);;All files (*)</source>
-        <translation>حزم التوقيعات (*.pat *.json);;جميع الملفات (*)</translation>
+        <source>Signature packs (*.pat *.npat *.json);;All files (*)</source>
+        <translation>حزم التوقيعات (*.pat *.npat *.json);;جميع الملفات (*)</translation>
     </message>
     <message>
         <source>Signature directory</source>

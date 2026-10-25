@@ -23,6 +23,8 @@
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/MemoryBuffer.h"
 
+#include <algorithm>
+
 using namespace neverd;
 using namespace neverd::sdk;
 namespace patchLimits = neverd::limits::patch;
@@ -201,6 +203,17 @@ const char *neverd_byte_patches_json(neverd_session_t Sess) {
     return nullptr;
   return dupStr(jsonToString(patch::patchRowsJSON(S->BytePatches)));
 }
+const char *neverd_byte_patch_ranges_json(neverd_session_t Sess) {
+  auto *S = toSession(Sess);
+  if (!S || !S->Loaded)
+    return nullptr;
+  llvm::json::Array Ranges;
+  for (const auto &[Offset, Row] : S->BytePatches.rows())
+    Ranges.push_back(llvm::json::Object{
+        {"address", "0x" + llvm::utohexstr(Row.Address, true)},
+        {"size", Row.size()}});
+  return dupStr(jsonToString(std::move(Ranges)));
+}
 const char *neverd_byte_patch_context_json(neverd_session_t Sess,
                                            neverd_va_t Address) {
   auto *S = toSession(Sess);
@@ -348,15 +361,27 @@ int neverd_byte_patches_load(neverd_session_t Sess) {
   }
   if (!ready(S))
     return -1;
-  const auto Before = jsonToString(patch::patchRowsJSON(S->BytePatches));
+  const auto Digest =
+      sha256(llvm::arrayRefFromStringRef((*Buffer)->getBuffer()));
+  const auto &Current = S->BytePatches.rows();
+  // A worker commit persists the already-admitted live overlay. Acknowledge
+  // those exact rows without clearing/replaying the image or hex-encoding it
+  // for comparison. A saved digest alone cannot detect unsaved live edits.
+  if (std::equal(Rows->begin(), Rows->end(), Current.begin(), Current.end(),
+                 [](const patch::PatchRow &Row, const auto &Entry) {
+                   return Row == Entry.second;
+                 })) {
+    S->BytePatchesSavedDigest = Digest;
+    return 0;
+  }
+  const auto Before = Current;
   if (auto E =
           S->BytePatches.replace(S->Img, *S->PatchInput, std::move(*Rows))) {
     S->setError(llvm::toString(std::move(E)));
     return -1;
   }
-  S->BytePatchesSavedDigest =
-      sha256(llvm::arrayRefFromStringRef((*Buffer)->getBuffer()));
-  if (Before != jsonToString(patch::patchRowsJSON(S->BytePatches)))
+  S->BytePatchesSavedDigest = Digest;
+  if (Before != S->BytePatches.rows())
     changed(*S);
   return 0;
 }

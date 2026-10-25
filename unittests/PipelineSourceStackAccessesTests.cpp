@@ -14,6 +14,7 @@
 #include "gtest/gtest.h"
 
 #include "neverd/ir/TargetRegInfo.h"
+#include "neverd/ir/low/LowIR.h"
 #include "neverd/lift/ARM/ARMRegs.h"
 #include "neverd/lift/X86/X86Regs.h"
 #include "neverd/loader/BinaryImage.h"
@@ -104,7 +105,10 @@ TEST(PipelineSourceStackAccesses, MachineRequestsKeepCallerStateOperations) {
         Options.MedAnalysisOnly = C.Analysis;
         Options.SourceProjection = C.Projection;
         auto F = savedCallerRegister(Architecture, ReadsRestore);
-        prepareMedStackAccesses(F, Image, medStackProjection(Options));
+        // These ARM/x64 fixtures have no x86 registration-state provenance.
+        LowFunc Source;
+        Source.Entry = F.Entry;
+        prepareMedStackAccesses(F, Source, Image, medStackProjection(Options));
         EXPECT_EQ(F.Blocks[0].Ops[3].PrologueSave, C.Source && !ReadsRestore);
         EXPECT_EQ(F.Blocks[0].Ops[5].ReturnAddressRead,
                   C.Source && Architecture == Arch::X64);

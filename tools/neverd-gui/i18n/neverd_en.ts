@@ -2385,8 +2385,8 @@ Double-click to go to the declaration.</translation>
         <translation>Load signature pack</translation>
     </message>
     <message>
-        <source>Signature packs (*.pat *.json);;All files (*)</source>
-        <translation>Signature packs (*.pat *.json);;All files (*)</translation>
+        <source>Signature packs (*.pat *.npat *.json);;All files (*)</source>
+        <translation>Signature packs (*.pat *.npat *.json);;All files (*)</translation>
     </message>
     <message>
         <source>Signature directory</source>

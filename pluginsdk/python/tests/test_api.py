@@ -639,6 +639,7 @@ class SessionTests(unittest.TestCase):
             lambda: session.apply_byte_patch(0, data=b"\x90", expected=b"\xcc"),
             lambda: session.assemble(0, "mov eax, unresolved"),
             lambda: session.byte_patches,
+            lambda: session.byte_patch_ranges,
         ):
             with self.subTest(operation=operation):
                 host.owned_string.side_effect = [None, "stale patch preview"]

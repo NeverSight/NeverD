@@ -77,7 +77,7 @@ public:
   /// Replace the current database with all pattern files from a directory.
   llvm::Error loadDirectory(const std::filesystem::path &Dir);
 
-  /// The pattern files of a directory, sorted by name.
+  /// The .pat and .npat files of a directory, sorted by name.
   static llvm::Expected<std::vector<std::filesystem::path>>
   listDirectory(const std::filesystem::path &Dir);
 
@@ -247,7 +247,10 @@ public:
   /// takes the preferred shared name (preferredAliasOrder). An address the
   /// matches name differently gets no name, unless the matches whose
   /// references were all confirmed agree on one: the bytes alone could not
-  /// tell the routines apart, but what they call could.
+  /// tell the routines apart, but what they call could. Caller-confirmed
+  /// rows state exactly the names frozen callers requested at one target.
+  /// Those candidate aliases take precedence over unresolved byte alternatives;
+  /// they do not bypass the independent identity gate of buildNameMap().
   std::unordered_map<uint64_t, std::string> buildCandidateNameMap() const;
 
 private:
@@ -294,8 +297,6 @@ private:
     }
     bool operator==(const SettledRoutine &) const = default;
   };
-  /// The candidate routines the matches settle; see buildCandidateNameMap.
-  std::unordered_map<uint64_t, SettledRoutine> settleRoutines() const;
   /// What \p Proposals, the matches at one address, settle there.
   static std::optional<SettledRoutine>
   settle(llvm::ArrayRef<const SigMatch *> Proposals);
@@ -303,8 +304,19 @@ private:
   /// Drop the matches their references contradict and record the ones they
   /// confirm; see \ref apply.  \p Hits are the modules that matched at each
   /// of \p Entries, the addresses the matches were looked for at.
+  void applyCallerContext(const BinaryImage &Img,
+                          llvm::ArrayRef<uint64_t> Entries);
+  void applyCallerContextRound(
+      const BinaryImage &Img, llvm::ArrayRef<uint64_t> Entries,
+      const std::unordered_map<uint64_t, std::string> &Names,
+      size_t FrozenMatches, size_t FirstParent);
+  /// A nonzero FrozenMatches validates only later incoming candidates, against
+  /// the frozen prefix. Their outcomes cannot change anchors or feed another
+  /// candidate: the same resolver performs one validation pass. FirstChecked
+  /// skips earlier validated incoming rows without making them evidence.
   void checkReferences(const BinaryImage &Img, llvm::ArrayRef<uint64_t> Entries,
-                       std::vector<SignatureMatcher::Hit> Hits);
+                       std::vector<SignatureMatcher::Hit> Hits,
+                       size_t FrozenMatches = 0, size_t FirstChecked = 0);
 
   /// Add \p Mods, the modules of \p Src, in place of those of a source with
   /// the same path or after every other source.

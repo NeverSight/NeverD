@@ -56,6 +56,8 @@ neverd_byte_patch_apply(neverd_session_t Sess,
 NEVERD_API int neverd_byte_patch_revert(neverd_session_t Sess,
                                         neverd_va_t Address, uint64_t Size);
 NEVERD_API const char *neverd_byte_patches_json(neverd_session_t Sess);
+/// Canonical changed ranges as [{address,size}], without encoding byte data.
+NEVERD_API const char *neverd_byte_patch_ranges_json(neverd_session_t Sess);
 /// Applicable machine-byte actions and the current instruction, for menus.
 NEVERD_API const char *neverd_byte_patch_context_json(neverd_session_t Sess,
                                                       neverd_va_t Address);

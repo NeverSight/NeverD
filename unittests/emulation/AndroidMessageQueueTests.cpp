@@ -60,7 +60,10 @@ protected:
     auto &Input = Options.Android->Application.emplace();
     Input.main_looper_prepared = true;
     Input.initial_message_pool_empty = true;
-    Input.initial_main_queue.emplace().native_callbacks_empty = true;
+    Input.initial_main_queue
+        .emplace(
+            mobile::dalvik::AndroidApplicationSnapshot::EmptyMessageQueue{})
+        .native_callbacks_empty = true;
     Options.LinuxTime.emplace();
     Options.LinuxTime->Clocks = {{1, {10, 123456789}}};
     Options.LinuxTime->AdvanceOnIdle = true;

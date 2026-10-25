@@ -45,8 +45,9 @@ NEVERD_API int neverd_auto_apply_signatures(neverd_session_t Sess,
 NEVERD_API int neverd_apply_signature_file(neverd_session_t Sess,
                                            const char *SigPath);
 NEVERD_API int neverd_sig_match_count(neverd_session_t Sess);
-/// Candidate rows: addr, name, optional aliases, library, func_len, confirmed.
-/// confirmed checks branch references only; it does not authorize naming.
+/// Candidate rows: addr, name, optional aliases, library, func_len, confirmed,
+/// caller_confirmed. These check outgoing or incoming references respectively;
+/// neither authorizes naming. Incoming rows name only caller-requested aliases.
 /// auto_name is the independently admitted name at this address, or empty.
 /// name_evidence is image_symbol, exception_personality, or none. An empty
 /// auto_name carries candidate_reason=independent_identity_missing. All rows

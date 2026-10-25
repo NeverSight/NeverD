@@ -50,6 +50,34 @@ protected:
   }
 };
 
+TEST_F(LinuxMemory, NegativePrctlOptionsNarrowToIntAndPreserveAllMemory) {
+  ASSERT_EQ(map(PageSize), UnitHint);
+  const std::vector<uint8_t> Before(PageSize, 0xa5);
+  llvm::cantFail(Space->write(UnitHint, Before));
+  const auto Generation = Space->mappingGeneration();
+  const auto Allocated = RAM->allocatedBytes();
+  for (uint64_t Option : {0x80000000ULL, 0xffffffffULL, 0xffffffff80000000ULL,
+                          0x1234567880000001ULL}) {
+    SCOPED_TRACE(Option);
+    EXPECT_EQ(call(ServiceKind::Prctl, Option, UINT64_MAX, UINT64_MAX,
+                   UINT64_MAX, UINT64_MAX),
+              uint64_t(-22));
+    EXPECT_TRUE(Report.Diagnostic.empty());
+    EXPECT_EQ(readBytes(UnitHint, PageSize), Before);
+    EXPECT_EQ(Space->mappingGeneration(), Generation);
+    EXPECT_EQ(RAM->allocatedBytes(), Allocated);
+  }
+}
+TEST_F(LinuxMemory, PositiveUnmodeledPrctlDoesNotInventInvalidArgument) {
+  for (uint64_t Option : {0ULL, 15ULL, 0x7fffffffULL, 0x800000000000000fULL}) {
+    SCOPED_TRACE(Option);
+    EXPECT_FALSE(call(ServiceKind::Prctl, Option, UINT64_MAX, UINT64_MAX,
+                      UINT64_MAX, UINT64_MAX));
+    EXPECT_EQ(Report.Stop, ProcessStopReason::UnsupportedService);
+    EXPECT_EQ(Report.Diagnostic, "prctl operation is unmodeled");
+  }
+}
+
 TEST_F(LinuxMemory, ResidencyErrorsUseRangesBeforeMappingsAndLeaveMemoryAlone) {
   ASSERT_EQ(map(PageSize), UnitHint);
   llvm::cantFail(Space->writeInteger(UnitHint, 0x8877665544332211, 8));

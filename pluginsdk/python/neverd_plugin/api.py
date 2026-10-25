@@ -1818,6 +1818,11 @@ class Session:
         """Canonical overlay runs, with immutable original and current bytes."""
         return self._json("neverd_byte_patches_json", "read byte patches")
 
+    @property
+    def byte_patch_ranges(self) -> object:
+        """Changed address/size ranges without transferring the byte payloads."""
+        return self._json("neverd_byte_patch_ranges_json", "read byte patch ranges")
+
     def preview_byte_patch(self, address: int, *, kind: str = "bytes",
                            data: bytes | str = b"", text: str = "",
                            value: int = 0, size: int = 0,

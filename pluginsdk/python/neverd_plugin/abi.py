@@ -1752,6 +1752,7 @@ for _patch_function in ("neverd_byte_patches_save", "neverd_byte_patches_load"):
 _declare("neverd_byte_patch_revert", "int", ["neverd_session_t", "neverd_va_t", "uint64_t"])
 _declare("neverd_byte_patches_export", "int", ["neverd_session_t", "const char *", "int"])
 _declare("neverd_byte_patches_json", "const char *", ["neverd_session_t"], ownership=Ownership.OWNED_STRING)
+_declare("neverd_byte_patch_ranges_json", "const char *", ["neverd_session_t"], ownership=Ownership.OWNED_STRING)
 _declare("neverd_byte_patch_context_json", "const char *", ["neverd_session_t", "neverd_va_t"], ownership=Ownership.OWNED_STRING)
 _declare("neverd_byte_patch_source_target_json", "const char *", ["neverd_session_t", "neverd_va_t", "const char *", "size_t", "int64_t"], ownership=Ownership.OWNED_STRING)
 _declare("neverd_byte_patch_source_preview_json", "const char *", ["neverd_session_t", "neverd_va_t", "const char *", "const neverd_byte_patch_options_v1 *"], ownership=Ownership.OWNED_STRING)

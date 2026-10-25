@@ -110,9 +110,10 @@ llvm::Value *MedLLVMEmitter::emitX86SystemState(const MedOp &Op, Intrinsic Id,
   const auto Native = x86SystemStateNative(
       Id, TargetArch, x86SystemStateWidth(Id, Shape), Op.MemoryAddressSpace);
   llvm::CallInst *Call;
-  if (Native && llvm::Intrinsic::lookupIntrinsicID(
-                    Native->AddressBits ? "llvm.x86.lar.mem16.address"
-                                        : "llvm.x86.invlpgb.addr32")) {
+  if (Native && (Id == Intrinsic::Xabort ||
+                 llvm::Intrinsic::lookupIntrinsicID(
+                     Native->AddressBits ? "llvm.x86.lar.mem16.address"
+                                         : "llvm.x86.invlpgb.addr32"))) {
     const auto IID = llvm::Intrinsic::lookupIntrinsicID(Native->LLVMName);
     if (!IID)
       llvm::report_fatal_error("native system SDK is incomplete");

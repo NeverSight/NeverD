@@ -87,6 +87,23 @@ static cl::opt<bool> References(
              "such lines"),
     cl::init(false));
 static cl::opt<bool>
+    Contextual("contextual",
+               cl::desc("Require verified references for referenced functions, "
+                        "including short functions; emits whole-function "
+                        "NeverD !refs patterns and implies --references"),
+               cl::init(false));
+static cl::opt<bool> CallerContext(
+    "caller-context",
+    cl::desc("Emit whole-function patterns with !caller; only a verified "
+             "caller may request them by name; implies --references"),
+    cl::init(false));
+static cl::opt<bool> CollisionEvidence(
+    "collision-evidence",
+    cl::desc("Emit complete offline collision evidence, including short and "
+             "unreferenced functions; !evidence records cannot be loaded as "
+             "signatures and imply --references"),
+    cl::init(false));
+static cl::opt<bool>
     Verify("verify",
            cl::desc("Parse the positional .pat files with the signature "
                     "loader's parser instead of generating"),
@@ -178,6 +195,14 @@ int main(int Argc, char *Argv[]) {
                               "NeverD Signature Maker\n\n"
                               "  Generate .pat files from static libraries.\n");
 
+  if (unsigned(Contextual) + unsigned(CallerContext) +
+          unsigned(CollisionEvidence) >
+      1) {
+    WithColor::error()
+        << "--contextual, --caller-context and --collision-evidence "
+           "are separate outputs\n";
+    return 1;
+  }
   if (Verify)
     return verifyPatterns();
 
@@ -207,7 +232,11 @@ int main(int Argc, char *Argv[]) {
   Opts.LeadingLen = LeadingLen;
   Opts.MinFuncSize = MinFuncSize;
   Opts.TailLen = TailLen;
-  Opts.EmitReferences = References;
+  Opts.EmitReferences =
+      References || Contextual || CallerContext || CollisionEvidence;
+  Opts.RequireReferences = Contextual;
+  Opts.RequireCaller = CallerContext;
+  Opts.CollisionEvidence = CollisionEvidence;
 
   auto ForMachine = [&](const ObjectFile &Obj) {
     return !Required || isObjectForMachine(Obj, *Required);
