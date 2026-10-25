@@ -1553,6 +1553,7 @@ target_include_directories(NeverDWin64CallContractTests PRIVATE
 
 add_neverd_unittest(NeverDSourceEntryBindingTests
   core/IncomingHomeSourceTests.cpp
+  core/SourceFrameAnalysisTests.cpp
   core/SourceABITests.cpp
   core/ObjCSourceTypeHintTests.cpp
   core/HighCSourceCallTests.cpp
