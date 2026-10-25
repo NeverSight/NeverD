@@ -7334,6 +7334,10 @@ member calls and separately authenticates its source, type and scalar-word proof
 separate; `RegistrationMemberArgumentState.*` checks one through three words in
 parent, value-catch and reference-catch contexts, including missing, partial,
 pointer-bearing, unbalanced and retired storage.
+`ScalarMembersNeedOnlyOneObjectGraphProof` admits a scalar member within the
+work already sufficient for its complete object graph; one unit less still
+refuses. Zero-argument graphs retain their separate observed-scalar and
+discarded-result policies, including a child that returns its borrowed object.
 `RegistrationRuntimeMemberFrame.RechecksDefinedScalarStackWords` and authentic
 source mutants reject pointer, undef and poison arguments after LLVM emission.
 Capture, replay and a second reconstruction cover both optimizations, negative
