@@ -128,7 +128,7 @@ homeCallSites(const BinaryImage &Image,
   return Sites;
 }
 
-void runHomeSourceMatrix(bool Explicit) {
+void runHomeSourceMatrix(bool Explicit, bool SelectedCaller = false) {
   for (bool Floating : {false, true})
     for (Arch Architecture : {Arch::X64, Arch::AArch64})
       for (BinaryFormat Format : {BinaryFormat::COFF, BinaryFormat::ELF}) {
@@ -152,8 +152,9 @@ void runHomeSourceMatrix(bool Explicit) {
             llvm::LLVMContext Context;
             PipelineOptions Options;
             Options.EmitDumpOutput = false;
-            Options.OnlyFunctionEntries = Entries;
-            Options.SourceProjection = true;
+            Options.OnlyFunctionEntries =
+                SelectedCaller ? std::set<va_t>{Caller} : Entries;
+            Options.SourceProjection = LLVM;
             Options.LiftMode = LLVM;
             Options.NoOpt = NoOpt;
             if (Explicit) {
@@ -162,23 +163,42 @@ void runHomeSourceMatrix(bool Explicit) {
             }
             auto Result = Pipeline().run(Image, Context, Options);
             ASSERT_TRUE(Result.Success) << Result.Error;
-            const auto Function =
-                std::find_if(Result.MedFuncs.begin(), Result.MedFuncs.end(),
-                             [](const MedFunc &Function) {
-                               return Function.Entry == Callee;
-                             });
-            ASSERT_NE(Function, Result.MedFuncs.end());
-            ASSERT_TRUE(Function->SourceParametersBound);
-            size_t Operations = 0;
-            for (const auto &Block : Function->Blocks)
-              Operations += Block.Ops.size();
-            inferMedTypes(*Function, Architecture);
-            ASSERT_TRUE(Function->SourceTypeHint);
-            ASSERT_TRUE(Function->SourceParametersBound);
-            size_t ReboundOperations = 0;
-            for (const auto &Block : Function->Blocks)
-              ReboundOperations += Block.Ops.size();
-            EXPECT_EQ(ReboundOperations, Operations);
+            if (SelectedCaller) {
+              ASSERT_EQ(Result.MedFuncs.size(), 1u);
+              const auto &Calls = Result.MedFuncs.front().CallInfos;
+              const auto Call = std::find_if(Calls.begin(), Calls.end(),
+                                             [](const MedCallInfo &Info) {
+                                               return Info.TargetAddr == Callee;
+                                             });
+              ASSERT_NE(Call, Calls.end());
+              ASSERT_EQ(Call->Args.size(), 1u);
+            } else {
+              const auto Function =
+                  std::find_if(Result.MedFuncs.begin(), Result.MedFuncs.end(),
+                               [](const MedFunc &Function) {
+                                 return Function.Entry == Callee;
+                               });
+              ASSERT_NE(Function, Result.MedFuncs.end());
+              if (!Function->SourceParametersBound) {
+                Pipeline::dumpLowIR(Result.LowFuncs, llvm::errs());
+                Pipeline::dumpMedIR(Result.MedFuncs, llvm::errs());
+              }
+              ASSERT_TRUE(Function->SourceParametersBound);
+              size_t Operations = 0;
+              for (const auto &Block : Function->Blocks)
+                Operations += Block.Ops.size();
+              inferMedTypes(*Function, Architecture);
+              ASSERT_TRUE(Function->SourceTypeHint);
+              if (!Function->SourceParametersBound) {
+                Pipeline::dumpLowIR(Result.LowFuncs, llvm::errs());
+                Pipeline::dumpMedIR(Result.MedFuncs, llvm::errs());
+              }
+              ASSERT_TRUE(Function->SourceParametersBound);
+              size_t ReboundOperations = 0;
+              for (const auto &Block : Function->Blocks)
+                ReboundOperations += Block.Ops.size();
+              EXPECT_EQ(ReboundOperations, Operations);
+            }
             std::string Source;
             llvm::raw_string_ostream Output(Source);
             CEmitterOptions COptions;
@@ -197,7 +217,10 @@ void runHomeSourceMatrix(bool Explicit) {
             ASSERT_EQ(Source.find("__builtin_trap"), std::string::npos)
                 << Source;
             const std::string Oracle =
-                Floating
+                SelectedCaller
+                    ? "\nuint64_t read_home(uint64_t value) { return value; }\n"
+                      "int main(void) { return caller_home() != 42; }\n"
+                : Floating
                     ? "\n#include <string.h>\n"
                       "int main(void) { double value = 71.0; uint64_t bits; "
                       "memcpy(&bits, &value, sizeof(bits)); "
@@ -220,6 +243,10 @@ TEST(IncomingHomeSource, ExplicitStackCarrierReachesBothCPaths) {
 
 TEST(IncomingHomeSource, AutomaticStackCarrierReachesBothCPaths) {
   runHomeSourceMatrix(false);
+}
+
+TEST(IncomingHomeSource, SelectedCallerRetainsIncomingStackArguments) {
+  runHomeSourceMatrix(false, true);
 }
 
 TEST(IncomingHomeSource, AutomaticInputsRequireCompleteReadOnlyLeaves) {
