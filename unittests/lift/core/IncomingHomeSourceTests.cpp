@@ -181,7 +181,7 @@ void runHomeSourceMatrix(bool Explicit, bool SelectedCaller = false) {
                 llvm::errs()
                     << "omitted hints=" << Hints.size()
                     << " prototype=" << Result.CallUserPrototypes.count(Callee)
-                    << " bound=" << Call->SourceCallHint.has_value() << "\n";
+                    << " bound=" << bool(Call->SourceCallHint) << "\n";
               }
               ASSERT_EQ(Call->Args.size(), 1u);
             } else {
