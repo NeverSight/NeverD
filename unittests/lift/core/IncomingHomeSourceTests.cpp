@@ -173,6 +173,16 @@ void runHomeSourceMatrix(bool Explicit, bool SelectedCaller = false) {
                                                return Info.TargetAddr == Callee;
                                              });
               ASSERT_NE(Call, Calls.end());
+              if (Call->Args.size() != 1) {
+                Pipeline::dumpLowIR(Result.LowFuncs, llvm::errs());
+                Pipeline::dumpMedIR(Result.MedFuncs, llvm::errs());
+                const auto Hints =
+                    readIncomingStackCallees(Image, Result, {Callee});
+                llvm::errs()
+                    << "omitted hints=" << Hints.size()
+                    << " prototype=" << Result.CallUserPrototypes.count(Callee)
+                    << " bound=" << Call->SourceCallHint.has_value() << "\n";
+              }
               ASSERT_EQ(Call->Args.size(), 1u);
             } else {
               const auto Function =
