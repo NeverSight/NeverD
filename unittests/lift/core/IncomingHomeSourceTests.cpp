@@ -222,6 +222,36 @@ TEST(IncomingHomeSource, AutomaticStackCarrierReachesBothCPaths) {
   runHomeSourceMatrix(false);
 }
 
+TEST(IncomingHomeSource, AutomaticInputsRequireCompleteReadOnlyLeaves) {
+  const std::vector<std::vector<uint8_t>> Rejected{
+      {0x8b, 0x44, 0x24, 8, 0xc3},       // mov eax,[rsp+8]: partial word
+      {0x48, 0x8d, 0x44, 0x24, 8, 0xc3}, // lea rax,[rsp+8]: frame escape
+      {0x48, 0x8b, 0x00, 0xc3},          // mov rax,[rax]: external memory
+      {0x48, 0x8b, 0x5c, 0x24, 8, 0x48, 0x89, 0xd8, 0xc3}, // changes rbx
+      {0x48, 0xc7, 0x44, 0x24, 8, 42, 0, 0, 0, 0x48, 0x8b, 0x44, 0x24, 8,
+       0xc3}}; // initialized by this function
+  for (BinaryFormat Format : {BinaryFormat::COFF, BinaryFormat::ELF})
+    for (size_t Case = 0; Case < Rejected.size(); ++Case) {
+      SCOPED_TRACE(Case);
+      SCOPED_TRACE(static_cast<unsigned>(Format));
+      auto Image = homeImage(Arch::X64, Format);
+      auto &Text = Image.Segments.front();
+      Text.Data.resize(Callee - Caller);
+      Text.Data.insert(Text.Data.end(), Rejected[Case].begin(),
+                       Rejected[Case].end());
+      Text.Size = Text.FileSz = Text.Data.size();
+      llvm::LLVMContext Context;
+      PipelineOptions Options;
+      Options.EmitDumpOutput = false;
+      Options.OnlyFunctionEntries = {Callee};
+      const auto Result = Pipeline().run(Image, Context, Options);
+      ASSERT_TRUE(Result.Success) << Result.Error;
+      ASSERT_EQ(Result.MedFuncs.size(), 1u);
+      EXPECT_FALSE(Result.MedFuncs.front().SourceTypeHint);
+      EXPECT_FALSE(Result.MedFuncs.front().SourceParametersBound);
+    }
+}
+
 TEST(IncomingHomeSource, MachineModesIgnoreSourceStackDeclarations) {
   for (Arch Architecture : {Arch::X64, Arch::AArch64})
     for (BinaryFormat Format : {BinaryFormat::COFF, BinaryFormat::ELF})
