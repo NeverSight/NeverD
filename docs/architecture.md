@@ -2542,8 +2542,13 @@ contract. Catch entries and native reconstruction still require separate
 physical transfers; source-slot metadata alone grants neither.
 When a preceding padding guess prevents a closed-body boundary proof,
 `COFFRegistrationEHCallBoundary` requires two independent instruction witnesses:
-the guess lies inside a reached instruction, and a reached direct CALL names
-the complete checked prologue. Its bounded graph starts at the image entry and
+the guess lies inside a reached instruction or is an exact reached instruction
+owned by an earlier closed physical body, and a reached direct CALL names the
+complete checked prologue. The closed-body witness starts at an independently
+authenticated physical entry, checks every reached instruction's immutable
+storage and fixups, and permits no stated entry before the candidate. This
+handles loop backedges that precede the guessed entry without moving a real
+boundary. Its bounded graph starts at the image entry and
 already authenticated physical registration entries. Actual witness paths
 must have immutable, unambiguous storage and valid absolute-operand fixups;
 indirect edges, byte-scan hits and the deferred candidates supply no roots.
@@ -2551,6 +2556,8 @@ Stated boundaries remain authoritative. This fallback changes source ownership
 only and grants no ordinary callee, successful-return or native frame contract.
 The scoped `IndexedPE32CodeBytes` index avoids rescanning every image fixup for
 each witness span. It and the ordinary reader share one storage/fixup validator.
+The closed-body witness borrows that same index and cumulative budget, so an
+additional physical owner does not sort the complete fixup inventory again.
 Index construction, lookups and inspected records use the caller's existing
 budget; the image remains immutable for the index's lifetime. A completed
 traversal can publish independently checked boundaries even if a later witness

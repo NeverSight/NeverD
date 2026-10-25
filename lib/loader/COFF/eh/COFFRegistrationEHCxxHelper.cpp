@@ -216,8 +216,8 @@ std::vector<InstallSite> findCxxEAXPrologueCallers(
                                       {Range->Begin}, BoundaryWork);
       if (!Closed) {
         // A stated entry remains authoritative. A padding guess needs both
-        // an instruction-interior refutation and an independently reached
-        // direct call to this complete helper protocol.
+        // an independent instruction-ownership witness and a reached direct
+        // call to this complete helper protocol.
         if (!Functions.isBoundaryGuess(Range->Begin) ||
             std::any_of(Img.Symbols.begin(), Img.Symbols.end(),
                         [&](const auto &S) {

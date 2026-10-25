@@ -2603,6 +2603,86 @@ TEST(RegistrationTryLevel, CxxEAXHelperRefutesOnlyReachedInteriorGuesses) {
       }
 }
 
+TEST(RegistrationTryLevel, CxxEAXHelperKeepsAClosedEarlierPhysicalOwner) {
+  for (bool Wide : {false, true})
+    for (unsigned Mutation = 0; Mutation != 13; ++Mutation) {
+      SCOPED_TRACE(::testing::Message() << Wide << "/" << Mutation);
+      auto Image = makeCxxEAXHelperImage(Wide, 0);
+      auto &Text = Image.Segments.front().Data;
+      Image.Entry = kText;
+      Text[0] = 0xe8;
+      writeLE<uint32_t>(Text.data() + 1, 0x50 - 5);
+      Text[5] = 0xc3;
+      const unsigned Body = 0x20 + (Wide ? 15 : 12);
+      Text[Body] = 0xeb;
+      Text[Body + 1] = 0x34 - Body - 2;
+      // The guessed entry is an exact instruction in the earlier parent's
+      // loop. Starting there alone escapes below its supposed range; starting
+      // at the complete physical prefix reaches it and closes before +0x50.
+      const std::vector<uint8_t> Loop{0x85, 0xc0, 0x74, 0x10, 0x90, 0x90,
+                                      0x90, 0x90, 0x40, 0xeb, 0xf5};
+      std::copy(Loop.begin(), Loop.end(), Text.begin() + 0x34);
+      Text[0x48] = 0xc3;
+      auto Guess = Symbol::makeFunc(kText + 0x3c);
+      Guess.IsBoundaryGuess = true;
+      Image.Symbols.push_back(Guess);
+      switch (Mutation) {
+      case 1:
+        Image.Symbols.back().Name = "stated_entry";
+        break;
+      case 2: {
+        Export Other;
+        Other.Addr = Guess.Addr;
+        Image.Exports.push_back(Other);
+        break;
+      }
+      case 3:
+        Image.Symbols.push_back(Symbol::makeFunc(Guess.Addr));
+        break;
+      case 4:
+        Image.Symbols.push_back(Symbol::makeFunc(kText + 0x38));
+        break;
+      case 5:
+        Text[0] = 0xc3; // No independently reached CALL to the candidate.
+        break;
+      case 6:
+        Text[Body + 1] = 0x48 - Body - 2; // The loop is unreachable.
+        break;
+      case 7:
+        Text[0x3e] = uint8_t(0x10 - 0x3f); // Escape the physical owner.
+        break;
+      case 8:
+        Text[0x3d] = 0xff;
+        Text[0x3e] = 0xe0; // Unresolved ordinary jump.
+        break;
+      case 9:
+        Text[0x37] = 0x50 - 0x38; // An ordinary edge enters the candidate.
+        break;
+      case 10:
+        Image.BaseRelocations.push_back({kText + 0x3e, 3});
+        break;
+      case 11:
+        // Even a stated entry in an unvisited gap must remain independent.
+        Image.Symbols.push_back(Symbol::makeFunc(kText + 0x32));
+        break;
+      case 12:
+        Text[0x20 + (Wide ? 5 : 2)] = 0xb9; // Earlier prefix is unproved.
+        break;
+      }
+      Image.ExceptionMetadata = {};
+      coff_loader::parseX86RegistrationExceptions(Image);
+      const auto *EH = Image.ExceptionMetadata.findFunction(kText + 0x50);
+      if (Mutation) {
+        EXPECT_TRUE(!EH || EH->CodeRange.Begin != kText + 0x50);
+        continue;
+      }
+      ASSERT_TRUE(EH);
+      EXPECT_EQ(EH->CodeRange.Begin, kText + 0x50);
+      EXPECT_TRUE(coff_loader::getCheckedX86CxxPrologueCall(Image, *EH));
+      EXPECT_FALSE(Image.VerifiedFunctionEntries.count(kText + 0x50));
+    }
+}
+
 TEST(RegistrationTryLevel, CxxEAXCallBoundaryRequiresImmutableSourceStorage) {
   for (unsigned Mutation = 0; Mutation != 5; ++Mutation) {
     SCOPED_TRACE(Mutation);

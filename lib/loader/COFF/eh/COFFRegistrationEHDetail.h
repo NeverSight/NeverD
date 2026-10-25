@@ -33,6 +33,10 @@
 #include <string>
 #include <vector>
 
+namespace neverd {
+class IndexedPE32CodeBytes;
+}
+
 namespace neverd::coff_loader {
 namespace LLVM_LIBRARY_VISIBILITY_NAMESPACE registration_detail {
 
@@ -75,8 +79,19 @@ checkedRegistrationRangeEnd(const BinaryImage &Img,
                             const ExceptionAddressRange &Range,
                             const std::vector<va_t> &Roots, size_t &Work);
 
+/// Prove that an exact instruction belongs to a closed ordinary body rooted
+/// at Entry. Every reached instruction must have immutable, unambiguous byte
+/// and fixup ownership. This structural witness grants no returning-call ABI.
+/// CodeBytes is the caller's scoped index for this same image and work budget.
+bool checkedRegistrationBodyOwnsInstruction(const BinaryImage &Img,
+                                            const ExceptionAddressRange &Range,
+                                            va_t Entry, va_t Instruction,
+                                            size_t &Work,
+                                            IndexedPE32CodeBytes &CodeBytes);
+
 /// Recover only candidates reached by a decoded direct call, whose preceding
-/// padding guess is independently inside a decoded instruction. Paths start
+/// padding guess is independently inside a decoded instruction or owned by a
+/// closed earlier physical body. Stated entries remain boundaries. Paths start
 /// at the image entry or already authenticated physical registration entries.
 /// This proves structural boundaries, not a callee ABI or native frame.
 std::set<va_t> checkedRegistrationCallBoundaries(
@@ -233,6 +248,15 @@ public:
                                                    Limit, CallbackWork))
         Range->End = *End;
     return Range;
+  }
+
+  /// Keep every stated or physical entry strictly between these boundaries.
+  bool hasIndependentEntry(va_t Begin, va_t End) const {
+    for (auto It = std::upper_bound(Starts.begin(), Starts.end(), Begin);
+         It != Starts.end() && *It < End; ++It)
+      if (!Guesses.count(*It))
+        return true;
+    return false;
   }
 
   bool isBoundaryGuess(va_t Address) const { return Guesses.count(Address); }

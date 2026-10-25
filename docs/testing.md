@@ -6775,6 +6775,12 @@ and changed protocols cannot supply the fallback. The separate source-storage
 test rejects writable, truncated, overlapping or mismapped witnesses.
 Indirect CALL address tests admit exact IAT HIGHLOW operands while rejecting
 relocated direct-call displacements and indirect-jump continuations.
+`CxxEAXHelperKeepsAClosedEarlierPhysicalOwner` covers exact loop instructions
+misidentified as entries, with short/wide prefixes and twelve refusal mutations:
+stated entries, absent independent calls, unreachable or escaping loops,
+unresolved jumps, conflicting fixups and altered physical prefixes.
+`RegistrationInstructionRange.ClosedBodyWitness*` checks exact reached ownership,
+immutable storage, absolute operands and exact versus one-unit-short budgets.
 `NeverDReadOnlyBytesTests` compares ordinary and indexed storage queries across
 29 fixup/mapping cases, including unordered and duplicate records, wide fields
 starting before the span, exact nonoverlap boundaries and conflicting slots.
