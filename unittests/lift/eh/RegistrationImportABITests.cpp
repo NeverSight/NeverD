@@ -7,10 +7,13 @@
 /// Keep imported stack cleanup separate from dispatch and memory effects.
 
 #include "../../../lib/ir/low/X86/RegistrationABIPrivate.h"
+#include "../../../lib/ir/low/X86/RegistrationFrameEffects.h"
 #include "gtest/gtest.h"
 
 #include "neverd/Limits.h"
+#include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/ir/low/CFGBuilder.h"
+#include "neverd/ir/low/LowIR.h"
 #include "neverd/ir/low/RegistrationABI.h"
 #include "neverd/lift/X86Regs.h"
 #include "neverd/loader/BinaryImage.h"
@@ -22,6 +25,7 @@
 #include <cstdint>
 #include <initializer_list>
 #include <optional>
+#include <vector>
 
 using namespace neverd;
 
@@ -957,4 +961,68 @@ TEST(RegistrationImportABI, ReturningHelperMayReplaceRuntimeSlot) {
   ASSERT_EQ(Contracts->front().ImageWrites.size(), 1u);
   EXPECT_EQ(Contracts->front().ImageWrites.front().Begin, ImportImage::IATVA);
   EXPECT_EQ(Contracts->front().ImageWrites.front().End, ImportImage::IATVA + 4);
+}
+
+TEST(RegistrationImportABI, DivideGuardKeepsOnlyTheNormalReturnStack) {
+  for (bool Signed : {false, true})
+    for (bool Memory : {false, true})
+      for (unsigned Width : {1u, 2u, 4u})
+        for (unsigned Mutation = 0; Mutation != 4; ++Mutation) {
+          SCOPED_TRACE(::testing::Message() << Signed << "/" << Memory << "/"
+                                            << Width << "/" << Mutation);
+          ImportImage F({"Sleep", 1}, false);
+          auto &Text = F.Image.Segments[0];
+          Text.Data.clear();
+          if (Mutation == 2)
+            Text.Data = {0xc6, 0x05, 0, 0x30, 0x40, 0, 0};
+          if (Mutation == 3)
+            Text.Data.insert(Text.Data.end(), {0x0f, 0xa2}); // CPUID.
+          else {
+            if (Width == 2)
+              Text.Data.push_back(0x66);
+            Text.Data.push_back(Width == 1 ? 0xf6 : 0xf7);
+            Text.Data.push_back((Memory ? 0x74 : 0xf1) + (Signed ? 8 : 0));
+            if (Memory)
+              Text.Data.insert(Text.Data.end(), {0x24, 4}); // [ESP + 4].
+          }
+          Text.Data.insert(Text.Data.end(),
+                           {0x6a, 0, 0xff, 0x15, 0, 0x30, 0x40, 0});
+          if (Mutation == 1)
+            Text.Data.push_back(0x50); // An unmatched push still rejects.
+          Text.Data.insert(Text.Data.end(), {0xc2, 4, 0});
+          Text.Size = Text.FileSz = Text.Data.size();
+          F.Image.Sections[0].Size = F.Image.Sections[0].FileSz = Text.Size;
+          Decoder Decode;
+          ASSERT_TRUE(Decode.init(F.Image));
+          const auto Low = CFGBuilder().buildIntegerFrameProof(
+              F.Image, Decode, Text.VA, "divide-stack");
+          ASSERT_TRUE(Low.hasCompleteLiftCoverage());
+          unsigned Guards = 0;
+          for (const auto &Block : Low.Blocks)
+            for (const auto &Op : Block.Ops)
+              if (Op.Opcode == NdOp::INTRINSIC && Op.NumInputs &&
+                  Op.Inputs[0] ==
+                      NdVar::cst(static_cast<uint64_t>(
+                                     Intrinsic::X86RequireDivPrecondition),
+                                 2)) {
+                ++Guards;
+                EXPECT_TRUE(intrinsicX86DivPreconditionShapeIsValid(
+                    Intrinsic::X86RequireDivPrecondition,
+                    x86DivPreconditionLowShape(Op, Arch::X86)));
+                EXPECT_FALSE(
+                    registration_state::isFramePreservingIntrinsic(Op));
+              }
+          EXPECT_EQ(Guards, Mutation == 3 ? 0u : 1u);
+          EXPECT_EQ(getCheckedX86CalleeStackPop(F.Image, Text.VA),
+                    Mutation ? std::nullopt : std::optional<uint32_t>{4});
+          RegistrationCallCalleeIndex Index(F.Image);
+          const auto Contracts = Index.stackContracts(F.caller());
+          ASSERT_TRUE(Contracts);
+          ASSERT_EQ(Contracts->size(), Mutation ? 0u : 1u);
+          if (!Mutation) {
+            EXPECT_EQ(Contracts->front().StackPopBytes, 4u);
+            EXPECT_EQ(Contracts->front().RequiredImports,
+                      std::vector<va_t>{ImportImage::IATVA});
+          }
+        }
 }

@@ -12,6 +12,7 @@
 #include "neverd/Limits.h"
 #include "neverd/decode/InstructionRelocations.h"
 #include "neverd/ir/Limits.h"
+#include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/ir/low/RegistrationCallEffects.h"
 #include "neverd/ir/low/RegistrationSharedCall.h"
@@ -447,11 +448,26 @@ stackPopForBody(StackBody &Body, va_t Entry, const NestedStackProof &NestedPop,
       size_t Width = Op.Output.Size;
       for (unsigned I = 0; I != Op.NumInputs; ++I)
         Width += Op.Inputs[I].Size;
-      if (!chargeCalleeWork(Work, 1 + Width) ||
-          (Op.Opcode == NdOp::INTRINSIC &&
-           !registration_state::isFramePreservingIntrinsic(Op)))
+      if (!chargeCalleeWork(Work, 1 + Width))
         return std::nullopt;
       Transfer.beginInstruction(Op.Addr);
+      if (Op.Opcode == NdOp::INTRINSIC) {
+        if (Op.NumInputs &&
+            Op.Inputs[0] ==
+                NdVar::cst(
+                    static_cast<uint64_t>(Intrinsic::X86RequireDivPrecondition),
+                    2) &&
+            intrinsicX86DivPreconditionShapeIsValid(
+                Intrinsic::X86RequireDivPrecondition,
+                x86DivPreconditionLowShape(Op, Arch::X86))) {
+          // The successful divide guard writes no register or memory. Only
+          // this ordinary-return proof skips its abstract transfer; the
+          // original fault guard and the shared frame/EH policy remain intact.
+          continue;
+        }
+        if (!registration_state::isFramePreservingIntrinsic(Op))
+          return std::nullopt;
+      }
       if (!Body.ImportSlots.empty()) {
         if (!chargeCalleeWork(Work, Body.ImportSlots.size() + 1))
           return std::nullopt;

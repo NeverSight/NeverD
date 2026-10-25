@@ -5876,6 +5876,11 @@ alignment, disagreeing return pops, missing restoration, volatile anchors,
 memory-only saved pointers, far/tail returns, writable code, wrong targets and
 exhausted work. `StackCleanupIncludesCheckedNestedImportCleanup` verifies
 provider and exact-slot identity before a nested stdcall can balance its caller.
+`RegistrationImportABI.DivideGuardKeepsOnlyTheNormalReturnStack` checks signed
+and unsigned 8/16/32-bit register and memory divides followed by a stdcall. The
+exact divide guard remains in LowIR and the shared frame policy still refuses
+it. Extra pushes, changed IAT bindings and an unknown-effect intrinsic reject;
+accepted stack contracts retain the actual import dependency.
 `CRTMemoryImportsProveOnlyReturningStackCleanup` checks eleven legacy CRT
 imports through both IAT calls and jump veneers. Provider, name, delayed-import,
 conflicting-slot, addend, backing-byte, metadata, architecture and caller-cleanup
