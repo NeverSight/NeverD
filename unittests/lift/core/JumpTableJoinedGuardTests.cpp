@@ -13,7 +13,10 @@
 
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/low/CFGBuilder.h"
+#include "neverd/ir/low/FuncDetector.h"
 #include "neverd/support/BinaryLoading.h"
+
+#include <set>
 
 namespace {
 
@@ -181,7 +184,165 @@ protected:
     EXPECT_TRUE(Built.ok()) << Built.err;
     return Object;
   }
+
+  static std::set<neverd::va_t>
+  entryInventory(const neverd::BinaryImage &Image) {
+    neverd::Decoder Decoder;
+    EXPECT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+    const auto Functions = neverd::FuncDetector().detect(Image, Decoder);
+    std::set<neverd::va_t> Entries;
+    for (const auto &[Address, Name] : Functions)
+      Entries.insert(Address);
+    return Entries;
+  }
+
+  fs::path filteredPrefixFixture(const std::string &Format, unsigned Variant,
+                                 bool I386) {
+    const bool COFF = Format == "coff", MachO = Format == "macho";
+    const std::string Stem =
+        Format + std::to_string(Variant) + (I386 ? "-i386" : "-x64");
+    const auto Source = tmpFile("prefix-" + Stem + ".s");
+    const auto Object = tmpFile("prefix-" + Stem + ".o");
+    std::ofstream Out(Source);
+    Out << (MachO ? ".section __TEXT,__text,regular,pure_instructions\n"
+                  : ".text\n")
+        << ".globl jt_guard_prefix\n";
+    if (COFF)
+      Out << ".def jt_guard_prefix; .scl 2; .type 32; .endef\n";
+    else if (!MachO)
+      Out << ".type jt_guard_prefix,@function\n";
+    Out << "jt_guard_prefix:\n";
+    if (I386)
+      Out << "  mov 4(%esp),%edx\n";
+    const char *Address = I386 ? "(%edx)" : COFF ? "(%rcx)" : "(%rdi)";
+    auto RangeGuard = [&] {
+      Out << "  cmp $" << (Variant == 3 ? 11 : 10) << ','
+          << (Variant == 4 ? "%ecx" : "%eax") << '\n';
+      if (Variant == 9)
+        Out << "  inc %esi\n";
+      Out << (Variant == 5   ? "  jg .Ldefault\n"
+              : Variant == 3 ? "  jae .Ldefault\n"
+                             : "  ja .Ldefault\n");
+    };
+    if (Variant == 2) {
+      Out << "  mov " << Address << ",%eax\n";
+      RangeGuard();
+    }
+    const bool Exclusion = Variant == 1 || Variant == 2 || Variant == 5;
+    Out << "  cmpl $"
+        << (Exclusion       ? 3
+            : Variant == 10 ? 13
+                            : 6)
+        << ',' << Address
+        << (Exclusion ? "\n  je .Ldefault\n" : "\n  jne .Ldefault\n");
+    Out << "  mov " << Address << ",%eax\n";
+    if (Variant == 8)
+      Out << "  test %esi,%esi\n  jne .Ldispatch\n";
+    if (Variant != 2 && Variant != 6)
+      RangeGuard();
+    if (Variant == 7)
+      Out << "  mov %esi,%eax\n";
+    Out << ".Ldispatch:\n";
+    // Relative COFF tables avoid promoting bare absolute case pointers to
+    // independent unsized entries. ELF and Mach-O exercise absolute tables.
+    if (COFF && I386)
+      Out << "  lea .Ltable,%ecx\n  mov (%ecx,%eax,4),%eax\n"
+             "  add %ecx,%eax\n  jmp *%eax\n";
+    else if (COFF)
+      Out << "  lea .Ltable(%rip),%r8\n  movslq (%r8,%rax,4),%rax\n"
+             "  add %r8,%rax\n  jmp *%rax\n";
+    else if (I386)
+      Out << "  jmp *.Ltable(,%eax,4)\n";
+    else
+      Out << "  lea .Ltable(%rip),%r8\n  jmp *(%r8,%rax,8)\n";
+    for (unsigned I = 0; I < 11; ++I) {
+      Out << ".Lcase" << I << ":\n";
+      if (I == 6)
+        Out << "  call prefix_helper\n";
+      Out << "  mov $" << I + 10 << ",%eax\n  ret\n";
+    }
+    Out << ".Ldefault:\n  mov $99,%eax\n  ret\n";
+    if (!COFF && !MachO)
+      Out << ".size jt_guard_prefix,.-jt_guard_prefix\n";
+    Out << (MachO  ? ".section __TEXT,__const\n"
+            : COFF ? ".section .rdata,\"dr\"\n"
+                   : ".section .rodata\n")
+        << ".p2align 3\n.Ltable:\n";
+    for (unsigned I = 0; I < 11; ++I)
+      Out << (COFF || I386 ? "  .long " : "  .quad ") << ".Lcase" << I
+          << (COFF ? "-.Ltable\n" : "\n");
+    Out << (MachO ? ".section __TEXT,__text,regular,pure_instructions\n"
+                  : ".text\n")
+        << ".globl prefix_helper\n";
+    if (COFF)
+      Out << ".def prefix_helper; .scl 2; .type 32; .endef\n";
+    else if (!MachO)
+      Out << ".type prefix_helper,@function\n";
+    Out << "prefix_helper:\n  ret\n";
+    if (!COFF && !MachO)
+      Out << ".size prefix_helper,.-prefix_helper\n"
+             ".section .note.GNU-stack,\"\",@progbits\n";
+    Out.close();
+    const std::string Triple = (I386 ? "i686" : "x86_64") +
+                               std::string(COFF    ? "-pc-windows-msvc"
+                                           : MachO ? "-apple-darwin"
+                                                   : "-unknown-linux-gnu");
+    const auto Built =
+        exec(NEVERD_TEST_CLANG,
+             {"-target", Triple, "-c", Source.string(), "-o", Object.string()});
+    EXPECT_TRUE(Built.ok()) << Built.err;
+    return Object;
+  }
 };
+
+TEST_F(JumpTableJoinedGuard, AStricterFilterKeepsAnIndependentDenseGuard) {
+  for (const std::string Format : {"elf", "coff", "macho"})
+    for (bool I386 : {false, true}) {
+      if (I386 && Format == "macho")
+        continue;
+      for (unsigned Variant : {0u, 1u, 2u, 3u}) {
+        SCOPED_TRACE(Format + ':' + std::to_string(I386) + ':' +
+                     std::to_string(Variant));
+        auto Image =
+            neverd::loadBinary(filteredPrefixFixture(Format, Variant, I386));
+        ASSERT_TRUE(static_cast<bool>(Image))
+            << llvm::toString(Image.takeError());
+        const auto Entries = entryInventory(*Image);
+        neverd::CFGBuilder Builder;
+        Builder.setKnownFuncEntries(&Entries);
+        const auto Low = build(*Image, Builder, "jt_guard_prefix");
+        EXPECT_EQ(Low.JumpTables.size(), 1u);
+        if (Low.JumpTables.empty())
+          continue;
+        EXPECT_EQ(Low.JumpTables.front().Targets.size(), 11u);
+        EXPECT_EQ(Low.JumpTables.front().SlotIndices,
+                  (std::vector<uint32_t>{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10}));
+        EXPECT_TRUE(Low.UnsafeIndirectBranchAddresses.empty());
+        neverd::CFGBuilder Exhausted;
+        Exhausted.setKnownFuncEntries(&Entries);
+        Exhausted.setMaskFixedPointEvidenceBudgetForTesting(1);
+        const auto Short = build(*Image, Exhausted, "jt_guard_prefix");
+        EXPECT_TRUE(Short.JumpTables.empty());
+        EXPECT_TRUE(Short.EverPublishedJumpTableBranchAddresses.empty());
+      }
+    }
+}
+
+TEST_F(JumpTableJoinedGuard, FilteredGuardStillNeedsItsOwnCompleteProof) {
+  for (const std::string Format : {"elf", "coff", "macho"})
+    for (unsigned Variant : {4u, 5u, 6u, 7u, 8u, 9u, 10u}) {
+      SCOPED_TRACE(Format + ':' + std::to_string(Variant));
+      auto Image =
+          neverd::loadBinary(filteredPrefixFixture(Format, Variant, false));
+      ASSERT_TRUE(static_cast<bool>(Image))
+          << llvm::toString(Image.takeError());
+      const auto Entries = entryInventory(*Image);
+      neverd::CFGBuilder Builder;
+      Builder.setKnownFuncEntries(&Entries);
+      const auto Low = build(*Image, Builder, "jt_guard_prefix");
+      EXPECT_TRUE(Low.JumpTables.empty());
+    }
+}
 
 TEST_F(JumpTableJoinedGuard,
        EqualityAndRangePathsJoinWithoutOneDominatingGuard) {

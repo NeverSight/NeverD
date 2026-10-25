@@ -3293,6 +3293,16 @@ uses i386 and x64 consumers sharing one relocated table. The exact singleton
 keeps its finite replay without poisoning the independently bounded sibling's
 graph. An unmodelled case call still prevents singleton publication, and
 exhausted evidence publishes neither branch.
+`JumpTableJoinedGuard.AStricterFilterKeepsAnIndependentDenseGuard`
+checks equality, exclusion and reversed guard order with both strict and
+inclusive unsigned bounds. Native i386/x64 ELF and COFF decoding, plus x64
+Mach-O, cover absolute and relative tables and exhausted evidence. COFF uses
+relative tables so bare absolute case pointers do not introduce independent
+unsized entries. `FilteredGuardStillNeedsItsOwnCompleteProof` rejects unrelated
+values, signed-only upper bounds, missing bounds, overwritten selectors,
+bypassed checks, clobbered flags and contradictory paths. Signed negative
+values require the full-width proof even when small concrete samples look
+like a prefix.
 `ResolverPendingCycles.*` checks nested loops whose late definitions must reach
 every batched query, in both query orders and in isolated queries. Register and
 private-frame variants cover x86, x64, ARM and AArch64 across ELF, COFF and

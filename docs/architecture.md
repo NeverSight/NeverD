@@ -3619,6 +3619,16 @@ publication is possible. Its finite-domain replay remains active through that
 graph growth; the existing closure and minimum-cardinality checks still decide
 whether a table can be published.
 
+A precise guard proof first checks the conjunction of all materialized
+index predicates. If an extra dominating filter cuts holes in that domain,
+a separate dominating predicate can still authenticate a dense zero-based
+prefix. Concrete replay only nominates that predicate and bound; the existing
+full-width symbolic equivalence proof must establish the entire prefix.
+Dropping the other filters enlarges the candidate domain without granting
+new value identity, address ownership or target-closure authority. Candidate
+replay and selection consume the same evidence account, and incompleteness
+still prevents publication.
+
 HighIR's call-argument projection uses the same checked affine equation core
 for entry-stack offsets in an immutable MedIR function. Each SSA definition is
 indexed once; PHIs require all incoming offsets to agree. Width and ambiguity

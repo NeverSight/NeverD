@@ -1826,7 +1826,7 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(
   }
 
   // All dominating table-reaching guards constrain the same runtime path.
-  // Prove their conjunction, not each comparison in isolation: a signed
+  // First prove their conjunction: a signed
   // upper bound is sound only when a separate dominating guard excludes the
   // negative half-domain, while either comparison alone is not a dense
   // zero-based table domain.
@@ -1945,6 +1945,7 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(
   size_t Interval = 0;
   uint32_t FirstRejected = 0;
   bool SawRejected = false;
+  bool IsDensePrefix = true;
   // A sparse domain (a two-level index table, whose unreached index bytes are
   // simply unused) is bounded by its last reaching value.
   std::optional<uint64_t> LastReaching;
@@ -1963,9 +1964,55 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(
       FirstRejected = static_cast<uint32_t>(Value);
       SawRejected = true;
     } else if (SawRejected && Reaches && !AllowSparseDomain) {
-      return failSemantic();
+      IsDensePrefix = false;
     }
     Value = Next;
+  }
+  // A stricter dominating predicate can cut holes in an otherwise dense
+  // bound. Such holes do not invalidate a different dominating predicate's
+  // independently proved prefix. Select one complete predicate and replay its
+  // exact equivalence below; dropping the others only enlarges the domain.
+  if (!AllowSparseDomain && !IsDensePrefix) {
+    if (!consumeCandidateProduct(ConcreteWorkPerValue,
+                                 static_cast<size_t>(LastSample) + 1) ||
+        !consumeGuardBuildWork(IndexGuards.size()))
+      return failIncomplete();
+    std::optional<size_t> SelectedGuard;
+    uint32_t SelectedBound = 0;
+    for (size_t I = 0; I < IndexGuards.size(); ++I) {
+      const auto &[Expr, TableCondition] = IndexGuards[I];
+      size_t GuardInterval = 0;
+      uint32_t Bound = 0;
+      bool Rejected = false;
+      bool Prefix = true;
+      for (uint64_t Value = 0; Value <= LastSample;) {
+        const uint64_t Next =
+            Partitioned ? ChangePoints[++GuardInterval] : Value + 1;
+        const std::optional<uint64_t> Condition =
+            evaluateGuardExpr(Expr, Value);
+        if (!Condition)
+          return failSemantic();
+        const bool Reaches = (*Condition != 0) == TableCondition;
+        if (!Rejected && !Reaches) {
+          Bound = static_cast<uint32_t>(Value);
+          Rejected = true;
+        } else if (Rejected && Reaches) {
+          Prefix = false;
+          break;
+        }
+        Value = Next;
+      }
+      if (Prefix && Rejected && Bound >= limits::kMinJumpTableEntries &&
+          Bound <= limits::kMaxJumpTableEntries &&
+          (!SelectedGuard || Bound < SelectedBound)) {
+        SelectedGuard = I;
+        SelectedBound = Bound;
+      }
+    }
+    if (!SelectedGuard)
+      return failSemantic();
+    ReachesTable = SymbolicConstraints[*SelectedGuard];
+    FirstRejected = SelectedBound;
   }
   const bool SparseDomain = AllowSparseDomain && SawRejected && LastReaching &&
                             *LastReaching >= FirstRejected &&
