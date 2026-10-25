@@ -4,6 +4,11 @@
 
 # Architettura di NeverD
 
+## Recupero dei valori di stack in ingresso
+
+`PipelineIncomingStack` ricava dichiarazioni sorgente intere limitate per funzioni foglia complete senza frame x64/ARM64 PE/ELF. La prova condivisa dello stack determina gli offset; ogni chiamante deve scrivere tutti i byte richiesti, altrimenti la dichiarazione viene ritirata. HighC e LLVMC collegano la stessa dichiarazione prima di SSA e riconvertono solo le funzioni interessate. I chiamanti selezionati riusano il lettore e la cache delle funzioni omesse e mantengono dichiarazioni a parametri fissi. Non si deducono stati VM generali, tipi floating-point o ABI esterne e non cambiano i contratti di lifting macchina, patch o analisi.
+
+
 Il loader COFF separa le posizioni degli epiloghi V2 dalle operazioni del prologo. V2 ripristina i registri salvati del frame principale in base alla posizione esatta nell’epilogo dichiarato; il rilascio dello stack precede tale regione. Intervalli, dimensioni e sequenze non validi vengono rifiutati prima delle letture dello stack. V1 mantiene il riconoscimento tramite istruzioni. Tutti i backend condividono i controlli dello stack e la gestione delle eccezioni.
 
 Solo la sequenza iniziale di `UWOP_EPILOG` definisce gli epiloghi V2. I marcatori successivi occupano due slot senza ripristinare lo stato né influire sull’ordine degli offset del prologo; le coppie troncate restano non valide.

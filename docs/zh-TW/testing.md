@@ -4,6 +4,11 @@
 
 # 測試 NeverD
 
+## 入口堆疊值的原始碼恢復
+
+`NeverDSourceEntryBindingTests` 編譯並執行 x64/ARM64、PE/ELF、HighC/LLVMC 的入口堆疊參數矩陣，涵蓋完整模組、單獨呼叫者、顯式浮點位元傳遞、快取重用與重設。負向測試拒絕不完整寫入、窄讀取、堆疊位址逃逸及未定義輸入；獨立被呼叫函式定義檢查固定參數宣告。主機執行不等於原生 Windows ARM64 驅動程式驗證。
+
+
 `DriverKernelSEH.V2*`, `COFFExceptionParser.*V2*` and `DriverSEHV2Execution.*` cover normalized V2 tables, partial restoration, malformed metadata and original linked driver exceptions. Run `NeverDNativeDriverTests`, `NeverDDriverEmulationTests`, `NeverDWindowsProcessTests` and `NeverDCOFFExceptionV2Tests`; unavailable host backends remain explicit skips.
 
 `DriverMSRExecution.*` 與 `DriverMSRDeclaration.*` 在可用後端檢查明確 MSR 輸入、全寬拆分、狀態保留、重複讀取、精確指令預算、缺少/無效宣告及不授予記憶體權限。`KernelMSRRead.*` 檢查未使用宣告仍保留依賴。執行原生驅動、驅動模擬與核心快照測試；不可用的 WHP/HVF 記為略過，不算原生驗證。

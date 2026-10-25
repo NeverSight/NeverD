@@ -4511,7 +4511,7 @@ Every caller in a request must supply all outgoing bytes through the shared
 Ordinary signature bounds cannot truncate an already bound source call.
 LLVM source exports retain the fixed declaration of such a call even when the
 selected output omits its callee, instead of falling back to unknown extern
-varargs. Explicit native scalar source calls use the same declaration path.
+varargs. Explicit native stack-word source calls use the same declaration path.
 
 Selected callers use the existing omitted-callee reader and its image- and
 summary-sensitive memo. A bounded instruction preflight only avoids unnecessary

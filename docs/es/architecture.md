@@ -4,6 +4,11 @@
 
 # Arquitectura de NeverD
 
+## Recuperación de valores de pila de entrada
+
+`PipelineIncomingStack` deduce declaraciones fuente enteras acotadas para funciones hoja completas sin marco x64/ARM64 PE/ELF. La prueba compartida de pila determina los desplazamientos; cada llamador debe escribir todos los bytes necesarios o se retira la declaración. HighC y LLVMC enlazan la misma declaración antes de SSA y solo reconvierten las funciones afectadas. Los llamadores seleccionados reutilizan el lector y la caché de funciones omitidas y conservan declaraciones de parámetros fijos. No se deducen estados VM generales, tipos flotantes ni ABI externas, ni se alteran los contratos de lifting de máquina, parches o análisis.
+
+
 El cargador COFF separa las posiciones de epílogos V2 de las operaciones del prólogo. V2 restaura los registros guardados del marco principal según la posición exacta del epílogo declarado; la liberación de la pila queda fuera de esa región. Los rangos, tamaños y secuencias inválidos se rechazan antes de leer la pila. V1 conserva el reconocimiento por instrucciones. Todos los motores comparten las comprobaciones de pila y el manejo de excepciones.
 
 Solo la secuencia inicial de `UWOP_EPILOG` define los epílogos V2. Los marcadores posteriores consumen dos posiciones sin restaurar estado ni afectar al orden de los desplazamientos del prólogo; los pares truncados siguen siendo inválidos.

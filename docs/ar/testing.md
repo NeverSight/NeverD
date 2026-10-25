@@ -4,6 +4,11 @@
 
 # اختبار NeverD
 
+## استعادة قيم المكدس عند الدخول في الشيفرة المصدرية
+
+يترجم `NeverDSourceEntryBindingTests` مصفوفة x64/ARM64 وPE/ELF وHighC/LLVMC وينفذها، بما يشمل الوحدات الكاملة والمستدعين المحددين ونقل بتات الفاصلة العائمة الصريح وإعادة استخدام الذاكرة المؤقتة وإعادة ضبطها. ترفض الاختبارات السلبية الكتابات الجزئية والقراءات الضيقة وتسرب عناوين الإطار والمدخلات غير المعرفة. تتحقق تعريفات مستقلة للدوال المستدعاة من التصريحات الثابتة. لا يُعد التنفيذ على المضيف اعتمادًا لبرامج تشغيل Windows ARM64 الأصلية.
+
+
 `DriverKernelSEH.V2*`, `COFFExceptionParser.*V2*` and `DriverSEHV2Execution.*` cover normalized V2 tables, partial restoration, malformed metadata and original linked driver exceptions. Run `NeverDNativeDriverTests`, `NeverDDriverEmulationTests`, `NeverDWindowsProcessTests` and `NeverDCOFFExceptionV2Tests`; unavailable host backends remain explicit skips.
 
 تختبر `DriverMSRExecution.*` و`DriverMSRDeclaration.*` قيم MSR الصريحة وتقسيمها الكامل وحفظ الحالة والقراءة المتكررة والميزانيات الدقيقة والمدخلات الغائبة أو غير الصحيحة وعدم منح صلاحيات الذاكرة على الخلفيات المتاحة. تحفظ `KernelMSRRead.*` التبعيات غير المستخدمة. شغّل مجموعات برنامج التشغيل الأصلي والمحاكاة ولقطات النواة؛ يعد غياب WHP/HVF تخطياً لا تحققاً أصلياً.

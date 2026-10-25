@@ -4,6 +4,11 @@
 
 # Architecture de NeverD
 
+## Récupération des valeurs de pile à l’entrée
+
+`PipelineIncomingStack` déduit des déclarations source entières bornées pour les feuilles complètes sans cadre x64/ARM64 PE/ELF. La preuve partagée de pile fixe les décalages ; chaque appelant doit écrire tous les octets requis, sinon la déclaration est retirée. HighC et LLVMC lient la même déclaration avant SSA et ne reconvertissent que les fonctions concernées. Un appelant sélectionné réutilise le lecteur et le cache des appelés omis, tout en conservant la déclaration à paramètres fixes. Cela ne déduit ni état VM général, ni types flottants, ni ABI externe et ne modifie pas les contrats de lifting machine, de patch ou d’analyse.
+
+
 Le chargeur COFF sépare les positions des épilogues V2 des opérations du prologue. V2 restaure les registres sauvegardés du cadre principal selon la position exacte dans l’épilogue déclaré ; la libération de la pile précède cette région. Les plages, tailles et séquences invalides sont refusées avant toute lecture de pile. V1 conserve la reconnaissance par instructions. Tous les moteurs partagent les contrôles de pile et le traitement des exceptions.
 
 Seule la séquence initiale de `UWOP_EPILOG` définit les épilogues V2. Les marqueurs suivants occupent deux emplacements sans restaurer l’état ni intervenir dans l’ordre des décalages du prologue ; une paire tronquée reste invalide.

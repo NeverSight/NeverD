@@ -4,6 +4,11 @@
 
 # NeverD-Architektur
 
+## Quelltextrekonstruktion von Eingangswerten auf dem Stack
+
+`PipelineIncomingStack` leitet begrenzte ganzzahlige Quelldeklarationen für vollständige rahmenlose x64/ARM64-PE/ELF-Blattfunktionen ab. Der gemeinsame Nachweis des Eingangsstacks bestimmt die Offsets; jeder Aufrufer muss alle benötigten Bytes schreiben, sonst wird die Deklaration zurückgezogen. HighC und LLVMC binden dieselbe Deklaration vor SSA und konvertieren nur betroffene Funktionen erneut. Einzelne Aufrufer nutzen den vorhandenen Leser und Cache ausgelassener Aufgerufener und behalten feste Parameterdeklarationen. Dies erschließt weder allgemeinen VM-Zustand noch Gleitkommatypen oder externe ABIs und ändert keine Verträge für Maschinen-Lifting, Patches oder Analyse.
+
+
 Der COFF-Loader trennt V2-Epilogpositionen von Prologoperationen. V2 stellt anhand der gesicherten Register des primären Frames und der genauen Epilogposition wieder her; die Freigabe des Stackbereichs liegt davor. Ungültige Bereiche, Größen und Wiederherstellungsfolgen werden vor Stackzugriffen abgelehnt. V1 behält die Erkennung anhand von Instruktionen. Alle Backends teilen die Stackprüfung und Ausnahmebehandlung.
 
 Nur die anfängliche Folge von `UWOP_EPILOG` definiert V2-Epiloge. Spätere Marker belegen zwei Slots, ohne Zustand wiederherzustellen oder die Reihenfolge der Prolog-Offsets zu beeinflussen; unvollständige Paare bleiben ungültig.

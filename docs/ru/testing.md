@@ -4,6 +4,11 @@
 
 # Тестирование NeverD
 
+## Восстановление входных значений стека в исходном коде
+
+`NeverDSourceEntryBindingTests` компилирует и выполняет матрицу x64/ARM64, PE/ELF, HighC/LLVMC: полные модули, отдельные вызывающие функции, явную передачу битов плавающих значений, повторное использование и сброс кэша. Отрицательные проверки отклоняют частичные записи, узкие чтения, выход адресов кадра и неопределённые входы. Независимые определения вызываемых функций проверяют фиксированные объявления. Выполнение на хосте не является проверкой нативных драйверов Windows ARM64.
+
+
 `DriverKernelSEH.V2*`, `COFFExceptionParser.*V2*` and `DriverSEHV2Execution.*` cover normalized V2 tables, partial restoration, malformed metadata and original linked driver exceptions. Run `NeverDNativeDriverTests`, `NeverDDriverEmulationTests`, `NeverDWindowsProcessTests` and `NeverDCOFFExceptionV2Tests`; unavailable host backends remain explicit skips.
 
 `DriverMSRExecution.*` и `DriverMSRDeclaration.*` проверяют явные MSR, полное разделение значения, сохранение состояния, повторные чтения, точные лимиты, отсутствующие/неверные записи и отсутствие прав памяти на доступных бэкендах. `KernelMSRRead.*` сохраняет неиспользованные зависимости. Запускать наборы нативного драйвера, эмуляции и снимков ядра; недоступные WHP/HVF считаются пропусками, не нативной проверкой.

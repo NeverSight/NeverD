@@ -4,6 +4,11 @@
 
 # 测试 NeverD
 
+## 入口栈值的源码恢复
+
+`NeverDSourceEntryBindingTests` 编译并执行 x64/ARM64、PE/ELF、HighC/LLVMC 的入口栈参数矩阵，覆盖完整模块、单独调用者、显式浮点位传递、缓存复用和重置。负向测试拒绝不完整写入、窄读取、栈地址逃逸和未定义输入；独立被调函数定义检查固定参数声明。主机执行不等于原生 Windows ARM64 驱动验证。
+
+
 `DriverKernelSEH.V2*`, `COFFExceptionParser.*V2*` and `DriverSEHV2Execution.*` cover normalized V2 tables, partial restoration, malformed metadata and original linked driver exceptions. Run `NeverDNativeDriverTests`, `NeverDDriverEmulationTests`, `NeverDWindowsProcessTests` and `NeverDCOFFExceptionV2Tests`; unavailable host backends remain explicit skips.
 
 `DriverMSRExecution.*` 与 `DriverMSRDeclaration.*` 在可用后端上检查显式 MSR 输入、全宽拆分、状态保留、重复读取、精确指令预算、缺失/无效声明及不授予内存权限。`KernelMSRRead.*` 检查未使用声明仍保留依赖。运行原生驱动、驱动模拟和内核快照测试组；不可用的 WHP/HVF 记为跳过，不算原生验证。

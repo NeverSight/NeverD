@@ -4,6 +4,11 @@
 
 # NeverD 테스트
 
+## 진입 스택 값의 소스 복원
+
+`NeverDSourceEntryBindingTests`는 x64/ARM64, PE/ELF, HighC/LLVMC의 진입 스택 인수를 컴파일하고 실행합니다. 전체 모듈, 호출자만 선택, 명시적 부동소수점 비트 전달, 캐시 재사용과 초기화를 검증합니다. 부분 쓰기, 좁은 읽기, 프레임 주소 유출 및 정의되지 않은 입력을 거부하는 대조군과 독립 피호출 함수 정의를 통한 고정 선언 검증을 포함합니다. 호스트 실행은 네이티브 Windows ARM64 드라이버 검증이 아닙니다.
+
+
 `DriverKernelSEH.V2*`, `COFFExceptionParser.*V2*` and `DriverSEHV2Execution.*` cover normalized V2 tables, partial restoration, malformed metadata and original linked driver exceptions. Run `NeverDNativeDriverTests`, `NeverDDriverEmulationTests`, `NeverDWindowsProcessTests` and `NeverDCOFFExceptionV2Tests`; unavailable host backends remain explicit skips.
 
 `DriverMSRExecution.*`와 `DriverMSRDeclaration.*`는 가용 백엔드에서 명시적 MSR 값, 전체 너비 분할, 상태 보존, 반복 읽기, 정확한 명령 예산, 누락·잘못된 선언과 메모리 권한 부재를 검사합니다. `KernelMSRRead.*`는 미사용 선언의 의존성을 유지합니다. 원시 드라이버, 드라이버 에뮬레이션 및 커널 스냅샷 테스트를 실행합니다. 사용할 수 없는 WHP/HVF는 검증 통과가 아닌 건너뛰기입니다.

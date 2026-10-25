@@ -4,6 +4,11 @@
 
 # NeverD testen
 
+## Quelltextrekonstruktion von Eingangswerten auf dem Stack
+
+`NeverDSourceEntryBindingTests` kompiliert und führt die Matrix x64/ARM64, PE/ELF, HighC/LLVMC aus: vollständige Module, einzelne Aufrufer, explizite Übertragung von Gleitkommabits sowie Cache-Wiederverwendung und -Zurücksetzung. Negativkontrollen lehnen Teilzugriffe, entweichende Rahmenadressen und undefinierte Eingaben ab. Unabhängige Definitionen der Aufgerufenen prüfen feste Deklarationen. Host-Ausführungen qualifizieren keine nativen Windows-ARM64-Treiber.
+
+
 `DriverKernelSEH.V2*`, `COFFExceptionParser.*V2*` and `DriverSEHV2Execution.*` cover normalized V2 tables, partial restoration, malformed metadata and original linked driver exceptions. Run `NeverDNativeDriverTests`, `NeverDDriverEmulationTests`, `NeverDWindowsProcessTests` and `NeverDCOFFExceptionV2Tests`; unavailable host backends remain explicit skips.
 
 `DriverMSRExecution.*` und `DriverMSRDeclaration.*` prüfen explizite MSR-Werte, vollständige Aufteilung, Zustandserhalt, Wiederholungen, exakte Budgets, fehlende/ungültige Angaben und fehlende Speicherrechte auf verfügbaren Backends. `KernelMSRRead.*` erhält ungenutzte Abhängigkeiten. Native Treiber-, Treiberemulations- und Kernelsnapshot-Suiten ausführen; nicht verfügbare WHP/HVF-Läufe sind übersprungen, nicht nativ qualifiziert.

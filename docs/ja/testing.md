@@ -4,6 +4,11 @@
 
 # NeverD のテスト
 
+## 入口スタック値のソース復元
+
+`NeverDSourceEntryBindingTests` は x64/ARM64、PE/ELF、HighC/LLVMC の入口スタック引数をコンパイルして実行します。完全なモジュール、呼び出し元だけの選択、明示的な浮動小数点ビット転送、キャッシュ再利用とリセットを検証します。不完全な書き込み、狭い読み取り、フレームアドレスの逸出、未定義入力を拒否する対照を含みます。独立した呼び出し先定義で固定宣言を確認します。ホスト実行はネイティブ Windows ARM64 ドライバーの検証ではありません。
+
+
 `DriverKernelSEH.V2*`, `COFFExceptionParser.*V2*` and `DriverSEHV2Execution.*` cover normalized V2 tables, partial restoration, malformed metadata and original linked driver exceptions. Run `NeverDNativeDriverTests`, `NeverDDriverEmulationTests`, `NeverDWindowsProcessTests` and `NeverDCOFFExceptionV2Tests`; unavailable host backends remain explicit skips.
 
 `DriverMSRExecution.*` と `DriverMSRDeclaration.*` は明示した MSR 値、全幅分割、状態保持、反復読み取り、厳密な命令予算、不足・無効な宣言、メモリ権限が増えないことを利用可能なバックエンドで検査します。`KernelMSRRead.*` は未使用宣言の依存を保持します。ネイティブドライバ、ドライバエミュレーション、カーネルスナップショットのテストを実行します。利用不能な WHP/HVF はスキップであり認証ではありません。

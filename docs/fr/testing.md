@@ -4,6 +4,11 @@
 
 # Tester NeverD
 
+## Récupération des valeurs de pile à l’entrée
+
+`NeverDSourceEntryBindingTests` compile et exécute la matrice x64/ARM64, PE/ELF, HighC/LLVMC : modules complets, appelants sélectionnés, transport explicite des bits flottants, réutilisation et remise à zéro du cache. Les contrôles négatifs refusent les écritures partielles, lectures étroites, adresses de cadre échappées et entrées indéfinies. Des définitions indépendantes des appelés vérifient les déclarations fixes. Ces exécutions sur l’hôte ne qualifient pas les pilotes Windows ARM64 natifs.
+
+
 `DriverKernelSEH.V2*`, `COFFExceptionParser.*V2*` and `DriverSEHV2Execution.*` cover normalized V2 tables, partial restoration, malformed metadata and original linked driver exceptions. Run `NeverDNativeDriverTests`, `NeverDDriverEmulationTests`, `NeverDWindowsProcessTests` and `NeverDCOFFExceptionV2Tests`; unavailable host backends remain explicit skips.
 
 `DriverMSRExecution.*` et `DriverMSRDeclaration.*` vérifient les valeurs MSR explicites, leur séparation complète, l’état préservé, les lectures répétées, les limites exactes, les entrées absentes/invalides et l’absence de droits mémoire sur les backends disponibles. `KernelMSRRead.*` conserve les dépendances inutilisées. Exécuter les suites pilote natif, émulation du pilote et instantané noyau ; WHP/HVF indisponibles sont ignorés, sans qualification native.
