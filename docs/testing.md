@@ -28,6 +28,13 @@ partial outgoing writes, narrow reads, frame-address returns, preserved-register
 changes, external loads and values initialized by the callee itself. A selected
 call optimized away is checked by compiling and executing its resulting source,
 rather than requiring an intermediate call record to survive optimization.
+The same target runs the shared `SourceFrameAnalysis` suite. Balanced RBP and
+x29/x30 frames, including local stack allocation and `leave`, execute through
+explicit, automatic and selected-caller paths;
+negative controls retain overwritten saved bytes, changed RBP despite balanced
+SP, escaped frame addresses and the distinction between ELF and Windows
+preserved-register banks. An incoming x64 declaration cannot consume the pushed
+return address.
 
 `NeverDLLVMCValueTests` executes byte-shuffle and SHA-256 projections against
 independent scalar oracles and compiles mixed SHA/SGX/AMX feature selection.

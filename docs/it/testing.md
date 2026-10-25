@@ -6,7 +6,7 @@
 
 ## Recupero dei valori di stack in ingresso
 
-`NeverDSourceEntryBindingTests` compila ed esegue la matrice x64/ARM64, PE/ELF, HighC/LLVMC: moduli completi, chiamanti selezionati, trasporto esplicito dei bit floating-point, riuso e azzeramento della cache. I controlli negativi rifiutano scritture parziali, letture strette, fuga di indirizzi del frame e ingressi indefiniti. Definizioni indipendenti delle funzioni chiamate verificano le dichiarazioni fisse. Le esecuzioni sull’host non qualificano driver Windows ARM64 nativi.
+`NeverDSourceEntryBindingTests` compila ed esegue la matrice x64/ARM64, PE/ELF, HighC/LLVMC: moduli completi, chiamanti selezionati, trasporto esplicito dei bit floating-point, riuso e azzeramento della cache. I controlli negativi rifiutano scritture parziali, letture strette, fuga di indirizzi del frame e ingressi indefiniti. Definizioni indipendenti delle funzioni chiamate verificano le dichiarazioni fisse. Le esecuzioni sull’host non qualificano driver Windows ARM64 nativi. La matrice include frame RBP e x29/x30 bilanciati. Rifiuta salvataggi sovrascritti, RBP modificato anche con SP ripristinato e indirizzi di ritorno usati come parametri; distingue i registri preservati di ELF e Windows.
 
 `PEFunctionAddresses.*` verifica foglie PE x64 senza frame, proprietà e confini delle istruzioni, prefissi e operandi stretti rifiutati, uscite, annullamento e parità con 1/2/4/16 worker. I test delle firme coprono le 16 condizioni rel32 in entrambe le direzioni, ingressi espliciti e vincoli di rilocazione. I test Python preservano alternative e siti necessari congiuntamente, verificano ogni controesempio originale ed evitano duplicati.
 

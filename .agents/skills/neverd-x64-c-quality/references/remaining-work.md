@@ -156,8 +156,18 @@ recovered branches and tail jumps through both C routes on x64 COFF/ELF/Mach-O
 and ordinary ARM64 COFF/ELF calls. Checked local stack declarations use the same
 LLVMC adapter, and changing a parameter width invalidates cached output even
 when its argument count stays the same. Apple ARM64 packed stack placement,
-x86/ARM32 adapters, nonordinary conventions and source wrappers' unused
-incoming stack-home parameters remain separate gaps. A bounded source-only
+x86/ARM32 adapters, nonordinary conventions and general incoming machine-state
+projection remain separate gaps. Explicit x64/ARM64 source stack declarations
+now initialize their exact entry bytes in the shared MedIR frame, including
+floating bit transport. Bounded complete PE/ELF leaves can derive full-word
+integer stack inputs automatically, including restored RBP or x29/x30 frames
+and explicit local stack allocation. The shared byte proof checks original
+restoration against the current format's preserved bank; saved state, frame
+escape, external memory and partial words cannot become such inputs. Every
+selected caller must completely write the same outgoing bytes. Selected-only
+LLVM exports retain fixed declarations rather than falling back to varargs.
+These rules do not supply an arbitrary VM dispatcher with a missing bytecode
+cursor or hidden register state. A bounded source-only
 proof marks a complete declared stack operand unavailable when any required
 private-frame byte is never written on any incoming path. Possible aliasing
 writers, prior calls, incomplete graphs and query backedges prevent that proof;

@@ -4511,10 +4511,13 @@ not infer an original prototype or authorize a machine-code rewrite.
 
 `PipelineIncomingStack` also derives internal integer source declarations for
 bounded, complete x64/ARM64 PE/ELF leaves that read whole incoming stack words.
-The low-level body must preserve every physical register other than the integer
-result; the shared entry-stack proof owns offsets, and a separate value walk
-rejects external memory, frame escape and undefined inputs. ARM64 return control
-in LR is proved independently of the result in X0. Both source routes bind these
+The shared entry-stack proof owns offsets, and a separate value walk rejects
+external memory, frame escape and undefined inputs. Private frame/link spills
+may survive in the leaf: `SourceFrameAnalysis` checks the original LowIR byte
+identities, complete SP restoration and the current format's preserved bank.
+Saved registers cannot become declared scalar inputs or return values. Incoming
+x64 slots start above the pushed return address; ARM64 slots start at entry SP.
+ARM64 return control in LR is proved independently of the result in X0. Both source routes bind these
 declarations before SSA and reconvert only affected definitions and callers.
 Every caller in a request must supply all outgoing bytes through the shared
 `SourceCallABI` write proof; otherwise the declaration is withdrawn as a unit.

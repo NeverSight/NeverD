@@ -3,6 +3,8 @@
 // NeverD Decompiler
 //
 //===----------------------------------------------------------------------===//
+/// \file
+/// Bounded source-only discovery of complete incoming stack values.
 
 #ifndef NEVERD_PIPELINE_PIPELINEINCOMINGSTACK_H
 #define NEVERD_PIPELINE_PIPELINEINCOMINGSTACK_H
@@ -49,4 +51,4 @@ readIncomingStackCallees(const BinaryImage &Image, PipelineResult &Result,
                          const std::set<va_t> &Targets);
 } // namespace neverd
 
-#endif
+#endif // NEVERD_PIPELINE_PIPELINEINCOMINGSTACK_H
