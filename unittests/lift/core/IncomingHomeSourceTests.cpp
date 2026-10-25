@@ -130,7 +130,8 @@ homeCallSites(const BinaryImage &Image,
   return Sites;
 }
 
-void runHomeSourceMatrix(bool Explicit, bool SelectedCaller = false) {
+void runHomeSourceMatrix(bool Explicit, bool SelectedCaller = false,
+                         bool Framed = false) {
   for (bool Floating : {false, true})
     for (Arch Architecture : {Arch::X64, Arch::AArch64})
       for (BinaryFormat Format : {BinaryFormat::COFF, BinaryFormat::ELF}) {
@@ -140,7 +141,25 @@ void runHomeSourceMatrix(bool Explicit, bool SelectedCaller = false) {
         SCOPED_TRACE(Floating);
         SCOPED_TRACE(static_cast<unsigned>(Architecture));
         SCOPED_TRACE(static_cast<unsigned>(Format));
-        const auto Image = homeImage(Architecture, Format);
+        auto Image = homeImage(Architecture, Format);
+        if (Framed) {
+          auto &Text = Image.Segments.front();
+          Text.Data.resize(Callee - Caller);
+          if (Architecture == Arch::X64)
+            Text.Data.insert(Text.Data.end(),
+                             {0x55,                   // push rbp
+                              0x48, 0x89, 0xe5,       // mov rbp,rsp
+                              0x48, 0x8b, 0x45, 0x10, // mov rax,[rbp+16]
+                              0x5d, 0xc3});           // pop rbp; ret
+          else
+            Text.Data.insert(Text.Data.end(),
+                             {0xfd, 0x7b, 0xbf, 0xa9, // stp x29,x30,[sp,#-16]!
+                              0xfd, 0x03, 0x00, 0x91, // mov x29,sp
+                              0xa0, 0x0b, 0x40, 0xf9, // ldr x0,[x29,#16]
+                              0xfd, 0x7b, 0xc1, 0xa8, // ldp x29,x30,[sp],#16
+                              0xc0, 0x03, 0x5f, 0xd6}); // ret
+          Text.Size = Text.FileSz = Text.Data.size();
+        }
         const auto Signature = homeSignature(Architecture, Floating);
         std::string Diagnostic;
         ASSERT_TRUE(validateSourceABI(Signature, Diagnostic)) << Diagnostic;
@@ -297,6 +316,18 @@ TEST(IncomingHomeSource, SelectedCallerRetainsIncomingStackArguments) {
 
 TEST(IncomingHomeSource, SelectedCallerRetainsExplicitScalarDeclarations) {
   runHomeSourceMatrix(true, true);
+}
+
+TEST(IncomingHomeSource, ExplicitStackInputSurvivesAFrame) {
+  runHomeSourceMatrix(true, false, true);
+}
+
+TEST(IncomingHomeSource, AutomaticStackInputSurvivesAFrame) {
+  runHomeSourceMatrix(false, false, true);
+}
+
+TEST(IncomingHomeSource, SelectedCallerRetainsFramedStackInput) {
+  runHomeSourceMatrix(false, true, true);
 }
 
 TEST(IncomingHomeSource, CachedSelectionsKeepCurrentStackInputEvidence) {
