@@ -127,10 +127,13 @@ homeCallSites(const BinaryImage &Image,
   return Sites;
 }
 
-TEST(IncomingHomeSource, ExplicitStackCarrierReachesBothCPaths) {
+void runHomeSourceMatrix(bool Explicit) {
   for (bool Floating : {false, true})
     for (Arch Architecture : {Arch::X64, Arch::AArch64})
       for (BinaryFormat Format : {BinaryFormat::COFF, BinaryFormat::ELF}) {
+        if (Floating && !Explicit)
+          continue; // Native bytes alone do not declare a floating parameter.
+        SCOPED_TRACE(Explicit);
         SCOPED_TRACE(Floating);
         SCOPED_TRACE(static_cast<unsigned>(Architecture));
         SCOPED_TRACE(static_cast<unsigned>(Format));
@@ -152,8 +155,10 @@ TEST(IncomingHomeSource, ExplicitStackCarrierReachesBothCPaths) {
             Options.SourceProjection = true;
             Options.LiftMode = LLVM;
             Options.NoOpt = NoOpt;
-            Options.SourceTypeHints.emplace(Callee, Signature);
-            Options.SourceCallSiteHints.emplace(Caller, Sites);
+            if (Explicit) {
+              Options.SourceTypeHints.emplace(Callee, Signature);
+              Options.SourceCallSiteHints.emplace(Caller, Sites);
+            }
             auto Result = Pipeline().run(Image, Context, Options);
             ASSERT_TRUE(Result.Success) << Result.Error;
             const auto Function =
@@ -206,6 +211,14 @@ TEST(IncomingHomeSource, ExplicitStackCarrierReachesBothCPaths) {
                    "-fsanitize=undefined", "-fsanitize-trap=all"});
           }
       }
+}
+
+TEST(IncomingHomeSource, ExplicitStackCarrierReachesBothCPaths) {
+  runHomeSourceMatrix(true);
+}
+
+TEST(IncomingHomeSource, AutomaticStackCarrierReachesBothCPaths) {
+  runHomeSourceMatrix(false);
 }
 
 TEST(IncomingHomeSource, MachineModesIgnoreSourceStackDeclarations) {
