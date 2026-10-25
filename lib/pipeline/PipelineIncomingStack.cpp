@@ -11,6 +11,7 @@
 
 #include "PipelineIncomingStack.h"
 
+#include "neverd/decode/Decoder.h"
 #include "neverd/ir/Limits.h"
 #include "neverd/ir/SourceABI.h"
 #include "neverd/ir/TargetRegInfo.h"
@@ -36,17 +37,87 @@ bool supported(NdOp Opcode) {
   return Opcode == NdOp::COPY || Opcode == NdOp::INT_ADD ||
          Opcode == NdOp::LOAD || Opcode == NdOp::RETURN;
 }
+bool supported(const LowOp &Op, const TargetRegInfo &TRI) {
+  return supported(Op.Opcode) && Op.MemoryOrdering == NdMemoryOrdering::None &&
+         Op.MemoryAddressSpace == NdMemoryAddressSpace::Default &&
+         (!Op.Output.isReg() || !Op.Output.Size ||
+          (Op.Output.Offset == TRI.IntReturnReg &&
+           Op.Output.Size == TRI.PointerSize)) &&
+         (Op.Opcode != NdOp::RETURN ||
+          (Op.NumInputs == 1 &&
+           Op.Inputs[0] == NdVar::reg(TRI.LinkRegister ? TRI.LinkRegister
+                                                       : TRI.IntReturnReg,
+                                      TRI.PointerSize)));
+}
 } // namespace
+
+bool supportsIncomingStackSources(const BinaryImage &Image) {
+  return (Image.Arch == Arch::X64 || Image.Arch == Arch::AArch64) &&
+         (Image.Format == BinaryFormat::COFF ||
+          Image.Format == BinaryFormat::ELF) &&
+         Image.Bits == Bitness::Bits64 && !Image.IsRelocatable;
+}
+
+bool mayReadIncomingStackLeaf(const BinaryImage &Image, va_t Entry,
+                              Decoder &Dec) {
+  if (!supportsIncomingStackSources(Image))
+    return false;
+  if (const auto *Exception = Image.ExceptionMetadata.findFunction(Entry);
+      Exception && (Exception->Personality != ExceptionPersonality::None ||
+                    Exception->ParseStatus != ExceptionParseStatus::Complete))
+    return false;
+  const auto Segment = std::find_if(
+      Image.Segments.begin(), Image.Segments.end(),
+      [&](const auto &Segment) { return Segment.contains(Entry); });
+  if (Segment == Image.Segments.end())
+    return false;
+  const auto &TRI = getTargetRegInfo(Image.Arch);
+  size_t Offset = Entry - Segment->VA;
+  size_t Work = 0;
+  const auto End = Image.getFunctionMetadataEnd(Entry);
+  if (End != InvalidVA && End > Entry &&
+      End - Entry > limits::pipeline::kIncomingStackLeafOperations)
+    return false;
+  for (size_t Step = 0; Step < limits::pipeline::kIncomingStackLeafOperations;
+       ++Step) {
+    if (Offset >= Segment->Data.size() ||
+        (End != InvalidVA && Segment->VA + Offset >= End) ||
+        !Dec.selectMode(Image, Segment->VA + Offset))
+      return false;
+    DecodedInsn Instruction{};
+    if (!Dec.decodeOneForLift(Segment->Data.data() + Offset,
+                              Segment->Data.size() - Offset,
+                              Segment->VA + Offset, Instruction) ||
+        !Instruction.Size)
+      return false;
+    std::vector<LowOp> Ops;
+    try {
+      Dec.liftToLow(Instruction, Ops);
+    } catch (const UnliftedInstruction &) {
+      return false;
+    }
+    if (Ops.empty() ||
+        Ops.size() > limits::pipeline::kIncomingStackLeafOperations - Work)
+      return false;
+    Work += Ops.size();
+    for (const auto &Op : Ops)
+      if (!supported(Op, TRI))
+        return false;
+    if (Ops.back().Opcode == NdOp::RETURN)
+      return true;
+    if (Dec.isFunctionTerminator(Instruction))
+      return false;
+    Offset += Instruction.Size;
+  }
+  return false;
+}
 
 std::optional<SourceFunctionTypeHint>
 inferIncomingStackLeaf(const BinaryImage &Image, const LowFunc &Low,
                        const MedFunc &Med) {
-  if ((Image.Arch != Arch::X64 && Image.Arch != Arch::AArch64) ||
-      (Image.Format != BinaryFormat::COFF &&
-       Image.Format != BinaryFormat::ELF) ||
-      Image.IsRelocatable || Image.Bits != Bitness::Bits64 ||
-      !Image.isCodeAddress(Low.Entry) || Low.Entry != Med.Entry ||
-      !Low.hasCompleteLiftCoverage() || !Low.LiftedInstructionCount ||
+  if (!supportsIncomingStackSources(Image) || !Image.isCodeAddress(Low.Entry) ||
+      Low.Entry != Med.Entry || !Low.hasCompleteLiftCoverage() ||
+      !Low.LiftedInstructionCount ||
       !Low.UnsafeIndirectBranchAddresses.empty() || Low.CalleePopBytes ||
       std::any_of(Low.ModuleAnalysisRoots.begin(),
                   Low.ModuleAnalysisRoots.end(),
@@ -77,14 +148,9 @@ inferIncomingStackLeaf(const BinaryImage &Image, const LowFunc &Low,
       MB.Ops.size() > limits::pipeline::kIncomingStackLeafOperations)
     return {};
   const auto &TRI = getTargetRegInfo(Image.Arch);
-  for (const auto &Op : LB.Ops) {
-    if (!supported(Op.Opcode) || Op.MemoryOrdering != NdMemoryOrdering::None ||
-        Op.MemoryAddressSpace != NdMemoryAddressSpace::Default ||
-        (Op.Output.isReg() && Op.Output.Size &&
-         (Op.Output.Offset != TRI.IntReturnReg ||
-          Op.Output.Size != TRI.PointerSize)))
+  for (const auto &Op : LB.Ops)
+    if (!supported(Op, TRI))
       return {};
-  }
 
   // Use the shared entry-stack proof for every address. The value walk below
   // only checks use roles; it neither derives offsets nor guesses aliases.
@@ -185,14 +251,23 @@ inferIncomingStackLeaf(const BinaryImage &Image, const LowFunc &Low,
   }
   if (!Returned || Inputs.empty())
     return {};
+  const std::vector<int64_t> OffsetsSorted(Inputs.begin(), Inputs.end());
+  return incomingStackSourceHint(Image.Arch, OffsetsSorted);
+}
+
+std::optional<SourceFunctionTypeHint>
+incomingStackSourceHint(Arch Architecture, llvm::ArrayRef<int64_t> Offsets) {
+  if (Offsets.empty())
+    return {};
+  const auto &TRI = getTargetRegInfo(Architecture);
   SourceFunctionTypeHint Hint;
   Hint.Origin = SourceFunctionTypeHint::OriginKind::NativeAnalysis;
-  Hint.Architecture = Image.Arch;
+  Hint.Architecture = Architecture;
   Hint.HasExplicitABI = true;
   Hint.ReturnType = NdType::makeInt(TRI.PointerSize, false);
   Hint.ReturnLocation = {SourceABICarrierKind::IntegerRegister,
                          TRI.IntReturnReg, 0, TRI.PointerSize};
-  for (int64_t Offset : Inputs) {
+  for (int64_t Offset : Offsets) {
     SourceParameterTypeHint Parameter;
     Parameter.Name = "stack_arg" + std::to_string(Hint.Parameters.size());
     Parameter.Type = Hint.ReturnType;

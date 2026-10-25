@@ -194,6 +194,9 @@ struct OmittedCalleeMemo {
     std::optional<CalleeSummary> Summary;
     std::vector<va_t> CalleesRead;
     std::vector<va_t> DirectCallTargets;
+    /// Complete read-only leaf inputs proved from this conversion's original
+    /// LowIR. These locations do not alter Body's machine calling convention.
+    std::vector<int64_t> SourceStackInputs;
     /// Whether \p Result's summaries read as they did for the conversion.
     bool readsHold(const PipelineResult &Result) const;
   };
@@ -207,6 +210,8 @@ struct OmittedCalleeMemo {
   static constexpr size_t MaxConversions =
       ::neverd::limits::pipeline::kPipelineCallAbiDetailMaxConversions;
   struct Callee {
+    /// Bounded instruction preflight, valid for the memo's immutable image.
+    std::optional<bool> IncomingStackCandidate;
     /// Whether the callee was lifted: BlockOps is then known.
     bool Lifted = false;
     /// The operations of each block of the lift, when the lift is complete

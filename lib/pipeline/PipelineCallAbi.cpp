@@ -13,6 +13,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "PipelineCallAbiDetail.h"
+#include "PipelineIncomingStack.h"
 
 #include "neverd/Limits.h"
 #include "neverd/decode/Decoder.h"
@@ -311,6 +312,7 @@ OmittedCalleeMemo::keep(Callee &Holder, Conversion Converted) {
         (Converted.CalleesRead.size() + Converted.DirectCallTargets.size()) *
         sizeof(va_t);
   }
+  Converted.Bytes += Converted.SourceStackInputs.capacity() * sizeof(int64_t);
   if (Holder.Conversions.size() == MaxConversions) {
     Bytes -= Holder.Conversions.back().Bytes;
     Holder.Conversions.pop_back();
@@ -462,6 +464,9 @@ public:
     Builder.setX87CallGraphCache(createX87CallGraphCache());
   }
   bool init() { return Dec.init(Img); }
+  bool incomingStackCandidate(va_t Target) {
+    return mayReadIncomingStackLeaf(Img, Target, Dec);
+  }
   /// Whether \p Target is a callee the read takes: a function of this image.
   bool reads(va_t Target) const {
     return Img.isFunctionEntryCandidateAt(Target) &&
@@ -560,6 +565,17 @@ public:
       // An unsupported callee's body supplies no signature evidence.
     }
     OmittedCalleeMemo::Conversion Converted{std::move(Body), {}};
+    if (Converted.Body) {
+      if (auto Hint = inferIncomingStackLeaf(Img, Lifted, *Converted.Body)) {
+        MedFunc Bound = *Converted.Body;
+        Bound.SourceTypeHint = *Hint;
+        inferMedTypes(Bound, Img.Arch);
+        if (Bound.SourceParametersBound && Bound.SourceTypeHint)
+          for (const auto &Parameter : Hint->Parameters)
+            Converted.SourceStackInputs.push_back(
+                Parameter.Location.EntryStackOffset);
+      }
+    }
     for (const va_t Key : Keys)
       Converted.Reads.push_back(OmittedCalleeMemo::readAt(Result, Key));
     if (Memo && Kept) {
@@ -1203,6 +1219,43 @@ void propagateForwardedCallArities(
 }
 
 } // namespace
+
+std::map<va_t, SourceFunctionTypeHint>
+readIncomingStackCallees(const BinaryImage &Image, PipelineResult &Result,
+                         const std::set<va_t> &Targets) {
+  std::map<va_t, SourceFunctionTypeHint> Hints;
+  if (Targets.empty() || !supportsIncomingStackSources(Image))
+    return Hints;
+  auto *Memo = Result.CalleeSignatureMemo.get();
+  if (Memo)
+    Memo->adopt(Image, Result);
+  CalleeReader Reader(Image, Result);
+  if (!Reader.init())
+    return Hints;
+  size_t Remaining = limits::pipeline::kIncomingStackLeafCallees;
+  for (va_t Target : Targets) {
+    if (!Remaining)
+      break;
+    if (!Reader.reads(Target))
+      continue;
+    --Remaining;
+    OmittedCalleeMemo::Callee Local;
+    auto &Read = Reader.callee(Target, Local);
+    const auto *Converted = Read.conversionFor(Result);
+    if (!Converted) {
+      if (!Read.IncomingStackCandidate)
+        Read.IncomingStackCandidate = Reader.incomingStackCandidate(Target);
+      if (!*Read.IncomingStackCandidate)
+        continue;
+      std::optional<LowFunc> Low;
+      Converted = &Reader.conversion(Target, Read, Memo != nullptr, Low);
+    }
+    if (auto Hint =
+            incomingStackSourceHint(Image.Arch, Converted->SourceStackInputs))
+      Hints.emplace(Target, std::move(*Hint));
+  }
+  return Hints;
+}
 
 AnalysisCacheWarmup warmOmittedCallees(const BinaryImage &Img,
                                        const PipelineResult &Summaries,

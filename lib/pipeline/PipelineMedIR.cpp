@@ -296,7 +296,7 @@ void Pipeline::buildMedIR(const BinaryImage &Img, const PipelineOptions &Opts,
   // reconvert their definitions and exact direct callers. Call operands must
   // be present before SSA; adding a C parameter after lowering loses the
   // caller's store and cannot restore the physical CALL return-address bias.
-  if (Opts.usesSourceDeclarations() &&
+  if (Opts.usesSourceDeclarations() && supportsIncomingStackSources(Img) &&
       std::none_of(ConversionErrors.begin(), ConversionErrors.end(),
                    [](const auto &Error) { return Error.has_value(); })) {
     std::set<va_t> ExplicitCallTargets;
@@ -327,6 +327,23 @@ void Pipeline::buildMedIR(const BinaryImage &Img, const PipelineOptions &Opts,
       SourceHints.emplace(Low.Entry, &SourceEntryHints.at(Low.Entry));
       Inferred.insert(Low.Entry);
       Affected.insert(I);
+    }
+    std::set<va_t> OmittedTargets;
+    for (const auto &Low : Result.LowFuncs)
+      for (const auto &Block : Low.Blocks)
+        for (const auto &Op : Block.Ops) {
+          const auto Site = sourceCallOccurrenceKey(Op);
+          if (Site && Site->Opcode == NdOp::CALL && Site->StaticTarget &&
+              !SourceCalleeFunctions.count(*Site->StaticTarget) &&
+              !SourceCalleeHints.count(*Site->StaticTarget) &&
+              !ExplicitCallTargets.count(*Site->StaticTarget) &&
+              !Result.CallUserPrototypes.count(*Site->StaticTarget))
+            OmittedTargets.insert(*Site->StaticTarget);
+        }
+    for (auto &[Entry, Hint] :
+         readIncomingStackCallees(Img, Result, OmittedTargets)) {
+      SourceCalleeHints.emplace(Entry, std::move(Hint));
+      Inferred.insert(Entry);
     }
     for (size_t I = 0; I < Total && !Inferred.empty(); ++I)
       for (const auto &Block : Result.LowFuncs[I].Blocks)
