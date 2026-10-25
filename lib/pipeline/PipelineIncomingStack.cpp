@@ -5,7 +5,7 @@
 //===----------------------------------------------------------------------===//
 ///
 /// \file
-/// Recover scalar stack inputs of complete, frameless read-only leaves.
+/// Recover scalar stack inputs of complete leaves with restored frames.
 ///
 //===----------------------------------------------------------------------===//
 
@@ -15,6 +15,7 @@
 #include "neverd/ir/Limits.h"
 #include "neverd/ir/SourceABI.h"
 #include "neverd/ir/TargetRegInfo.h"
+#include "neverd/ir/low/SourceFrameAnalysis.h"
 #include "neverd/ir/med/MedPrologueSaves.h"
 #include "neverd/ir/med/MedStackAlignment.h"
 #include "neverd/loader/BinaryImage.h"
@@ -35,13 +36,16 @@ Key key(const MedVar &Value) { return {Value.Kind, Value.Id, Value.SSAVer}; }
 
 bool supported(NdOp Opcode) {
   return Opcode == NdOp::COPY || Opcode == NdOp::INT_ADD ||
-         Opcode == NdOp::LOAD || Opcode == NdOp::RETURN;
+         Opcode == NdOp::INT_SUB || Opcode == NdOp::LOAD ||
+         Opcode == NdOp::STORE || Opcode == NdOp::RETURN;
 }
 bool supported(const LowOp &Op, const TargetRegInfo &TRI) {
   return supported(Op.Opcode) && Op.MemoryOrdering == NdMemoryOrdering::None &&
          Op.MemoryAddressSpace == NdMemoryAddressSpace::Default &&
          (!Op.Output.isReg() || !Op.Output.Size ||
-          (Op.Output.Offset == TRI.IntReturnReg &&
+          ((Op.Output.Offset == TRI.IntReturnReg ||
+            Op.Output.Offset == TRI.StackPointer ||
+            TRI.isFrameOrLinkReg(Op.Output.Offset)) &&
            Op.Output.Size == TRI.PointerSize)) &&
          (Op.Opcode != NdOp::RETURN ||
           (Op.NumInputs == 1 &&
@@ -174,7 +178,7 @@ inferIncomingStackLeaf(const BinaryImage &Image, const LowFunc &Low,
     Inputs.insert(Offset);
     return Inputs.size() <= limits::ir::kMaxSourceABIParameters;
   };
-  enum class Role { Scalar, Address };
+  enum class Role { Scalar, Address, Saved };
   std::map<Key, Role> Values;
   auto Read = [&](const MedVar &Value) -> std::optional<Role> {
     if (Value.Size != TRI.PointerSize)
@@ -210,28 +214,50 @@ inferIncomingStackLeaf(const BinaryImage &Image, const LowFunc &Low,
           Op.Output.Size == TRI.PointerSize && Op.Output.SSAVer == 0 &&
           Frame.contains(key(Op.Output)) && Frame.at(key(Op.Output)) == 0)
         Values.emplace(key(Op.Output), Role::Address);
+      else if (Op.Output.Kind == MedVar::Reg &&
+               Op.Output.Size == TRI.PointerSize &&
+               isEntryLiveInValue(Med, Op.Output, Op.Output.RegOff) &&
+               TRI.isFrameOrLinkReg(Op.Output.RegOff))
+        Values.emplace(key(Op.Output), Role::Saved);
       continue; // Other entry placeholders establish no input value.
     }
     std::optional<Role> Result;
     if (Op.Opcode == NdOp::COPY && Op.NumInputs == 1)
       Result = Read(Op.Inputs[0]);
-    else if (Op.Opcode == NdOp::INT_ADD && Op.NumInputs == 2) {
+    else if ((Op.Opcode == NdOp::INT_ADD || Op.Opcode == NdOp::INT_SUB) &&
+             Op.NumInputs == 2) {
       const auto A = Read(Op.Inputs[0]), B = Read(Op.Inputs[1]);
       if (A == Role::Scalar && B == Role::Scalar)
         Result = Role::Scalar;
-      else if (A && B && *A != *B && Frame.contains(key(Op.Output)))
+      else if (((A == Role::Address && B == Role::Scalar) ||
+                (Op.Opcode == NdOp::INT_ADD && A == Role::Scalar &&
+                 B == Role::Address)) &&
+               Frame.contains(key(Op.Output)))
         Result = Role::Address;
     } else if (Op.Opcode == NdOp::LOAD && Op.NumInputs == 1 &&
                Read(Op.Inputs[0]) == Role::Address) {
       const auto Offset = Frame.find(key(Op.Inputs[0]));
-      if (Offset != Frame.end() && AddInput(Offset->second))
-        Result = Role::Scalar;
+      if (Offset != Frame.end()) {
+        if (Offset->second < 0)
+          Result = Role::Saved;
+        else if (AddInput(Offset->second))
+          Result = Role::Scalar;
+      }
+    } else if (Op.Opcode == NdOp::STORE && Op.NumInputs == 2 &&
+               Op.Inputs[1].Size == TRI.PointerSize &&
+               Read(Op.Inputs[0]) == Role::Address &&
+               Read(Op.Inputs[1]) == Role::Saved) {
+      const auto Offset = Frame.find(key(Op.Inputs[0]));
+      if (Offset == Frame.end() || Offset->second >= 0)
+        return {};
+      continue;
     } else if (Op.Opcode == NdOp::RETURN && Op.NumInputs == 1) {
       // AArch64 LowIR retains LR as RETURN's control target. It is not the
       // source result. Prove that control is unchanged and that a distinct,
       // complete X0 definition supplies the source result before declaring it.
       if (Image.Arch == Arch::AArch64) {
-        if (!isEntryLiveInValue(Med, Op.Inputs[0], TRI.LinkRegister) ||
+        if ((!isEntryLiveInValue(Med, Op.Inputs[0], TRI.LinkRegister) &&
+             Read(Op.Inputs[0]) != Role::Saved) ||
             !IntegerResult || Read(*IntegerResult) != Role::Scalar)
           return {};
       } else if (Read(Op.Inputs[0]) != Role::Scalar)
@@ -249,7 +275,14 @@ inferIncomingStackLeaf(const BinaryImage &Image, const LowFunc &Low,
   if (!Returned || Inputs.empty())
     return {};
   const std::vector<int64_t> OffsetsSorted(Inputs.begin(), Inputs.end());
-  return incomingStackSourceHint(Image.Arch, OffsetsSorted);
+  // The role walk cannot authorize a restored machine frame. Authenticate
+  // the original LowIR with the shared byte-identity proof, including the
+  // format-specific preserved bank and every declared incoming word.
+  auto Hint = incomingStackSourceHint(Image.Arch, OffsetsSorted);
+  if (!Hint || !restoresNativeSourceState(Low, Image.Arch, {}, nullptr, &*Hint,
+                                          Image.abiFormat()))
+    return {};
+  return Hint;
 }
 
 std::optional<SourceFunctionTypeHint>

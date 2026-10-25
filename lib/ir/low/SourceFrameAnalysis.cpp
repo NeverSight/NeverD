@@ -1778,7 +1778,8 @@ static bool restoresNativeSourceStateImpl(
     const SourceFunctionTypeHint *EntrySignature, bool RequirePrivateFrame,
     bool ExternalMemoryDisjoint, int64_t *RequiredFrameSize,
     const NativeSourceCallKey *CopyQuery = nullptr,
-    std::optional<std::vector<SourceFrameByValueCopy>> *Copies = nullptr) {
+    std::optional<std::vector<SourceFrameByValueCopy>> *Copies = nullptr,
+    BinaryFormat Format = BinaryFormat::MachO) {
   const size_t Count = Function.Blocks.size();
   if (!Count ||
       Count > ::neverd::limits::ir::
@@ -1804,11 +1805,17 @@ static bool restoresNativeSourceStateImpl(
       const auto &Location = Parameter.Location;
       if (Location.Kind != SourceABICarrierKind::Stack)
         continue;
-      if (Architecture != Arch::AArch64 || !Parameter.Components.empty() ||
-          !Parameter.Type || Parameter.Type->Size != 8 ||
+      const bool X64Stack =
+          Architecture == Arch::X64 &&
+          (Format == BinaryFormat::COFF || Format == BinaryFormat::ELF);
+      const int64_t Minimum =
+          X64Stack ? getTargetRegInfo(Architecture).PointerSize : 0;
+      if ((Architecture != Arch::AArch64 && !X64Stack) ||
+          !Parameter.Components.empty() || !Parameter.Type ||
+          Parameter.Type->Size != 8 ||
           (Parameter.Type->Kind != NdTypeKind::Int &&
            Parameter.Type->Kind != NdTypeKind::Ptr) ||
-          Location.ValueBytes != 8 || Location.EntryStackOffset < 0 ||
+          Location.ValueBytes != 8 || Location.EntryStackOffset < Minimum ||
           Location.EntryStackOffset >
               ::neverd::limits::ir::kSourceFrameAnalysisMaxFrame - 8 ||
           Location.EntryStackOffset % 8 != 0 ||
@@ -1818,7 +1825,7 @@ static bool restoresNativeSourceStateImpl(
   }
   PreservationProof Proof(Architecture, Calls, false,
                           std::move(IncomingStackSlots), RequirePrivateFrame,
-                          ExternalMemoryDisjoint, EntrySignature);
+                          ExternalMemoryDisjoint, EntrySignature, Format);
   if (CopyQuery)
     Proof.CopyQuery = *CopyQuery;
   const auto Graph = frameGraph(Function, Architecture, Calls, Proof.Remaining);
@@ -2191,10 +2198,11 @@ std::vector<SourceFrameArgumentStorage> sourceFrameStorageBefore(
 bool restoresNativeSourceState(const LowFunc &Function, Arch Architecture,
                                const NativeSourceCalls &Calls,
                                std::set<uint64_t> *UsedEntryRegisters,
-                               const SourceFunctionTypeHint *EntrySignature) {
-  return restoresNativeSourceStateImpl(Function, Architecture, Calls,
-                                       UsedEntryRegisters, EntrySignature,
-                                       false, false, nullptr);
+                               const SourceFunctionTypeHint *EntrySignature,
+                               BinaryFormat Format) {
+  return restoresNativeSourceStateImpl(
+      Function, Architecture, Calls, UsedEntryRegisters, EntrySignature, false,
+      false, nullptr, nullptr, nullptr, Format);
 }
 
 bool certifiesPrivateSourceFrame(const LowFunc &Function, Arch Architecture,

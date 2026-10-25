@@ -24,10 +24,11 @@ struct PipelineResult;
 
 bool supportsIncomingStackSources(const BinaryImage &Image);
 
-/// A bounded, complete leaf which only reads full incoming stack words and
-/// defines its integer result. The current LowIR must change no other physical
-/// register. This describes a source projection, never a machine rewriting ABI.
-/// Callers must bind the same physical stack locations before SSA conversion.
+/// A bounded, complete leaf which reads full incoming stack words and defines
+/// its integer result. Private saves may preserve frame/link registers; the
+/// shared byte analysis must prove their restoration and the entry stack. This
+/// describes a source projection, never a machine rewriting ABI. Callers must
+/// bind the same physical stack locations before SSA conversion.
 std::optional<SourceFunctionTypeHint>
 inferIncomingStackLeaf(const BinaryImage &Image, const LowFunc &Low,
                        const MedFunc &Med);

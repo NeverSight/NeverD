@@ -18,6 +18,7 @@
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/ir/low/SourceCallOccurrence.h"
+#include "neverd/ir/low/SourceFrameAnalysis.h"
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/ir/med/MedStackAlignment.h"
 #include "neverd/ir/med/MedTypePass.h"
@@ -427,6 +428,14 @@ TEST(IncomingHomeSource, AutomaticInputsRequireCompleteReadOnlyLeaves) {
       {0x8b, 0x44, 0x24, 8, 0xc3},       // mov eax,[rsp+8]: partial word
       {0x48, 0x8d, 0x44, 0x24, 8, 0xc3}, // lea rax,[rsp+8]: frame escape
       {0x48, 0x8b, 0x00, 0xc3},          // mov rax,[rax]: external memory
+      {0x55, 0x48, 0x89, 0xe5, 0x48, 0x8b, 0x45, 0x10, 0xc3},
+      // A readable input does not authorize leaving SP/RBP changed.
+      {0x55, 0x48, 0x89, 0xe5, 0x48, 0x8b, 0x45, 0x10, 0x48, 0xc7, 0x04, 0x24,
+       0, 0, 0, 0, 0x5d, 0xc3},
+      // The restore must read the original saved bytes, not an overwrite.
+      {0x55, 0x48, 0x89, 0xe5, 0x48, 0x8b, 0x45, 0x10, 0x48, 0x8b, 0x04, 0x24,
+       0x5d, 0xc3},
+      // Returning a saved RBP is an undeclared input, not a scalar stack word.
       {0x48, 0x8b, 0x5c, 0x24, 8, 0x48, 0x89, 0xd8, 0xc3}, // changes rbx
       {0x48, 0xc7, 0x44, 0x24, 8, 42, 0, 0, 0, 0x48, 0x8b, 0x44, 0x24, 8,
        0xc3}}; // initialized by this function
@@ -606,3 +615,43 @@ TEST(IncomingHomeSource, NarrowDeclarationsDoNotDefineAdjacentStackBytes) {
   }
 }
 } // namespace
+
+TEST(IncomingHomeSource, FrameRestorationUsesTheCurrentPreservedBank) {
+  auto Image = homeImage(Arch::X64, BinaryFormat::ELF);
+  Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(Image));
+  CFGBuilder Builder;
+  auto Low = Builder.build(Image, Decoder, Callee, "read_home");
+  ASSERT_TRUE(Low.hasCompleteLiftCoverage());
+  auto Signature = homeSignature(Arch::X64, false);
+  Signature.Origin = SourceFunctionTypeHint::OriginKind::NativeAnalysis;
+  ASSERT_TRUE(restoresNativeSourceState(Low, Arch::X64, {}, nullptr, &Signature,
+                                        BinaryFormat::ELF));
+  ASSERT_TRUE(restoresNativeSourceState(Low, Arch::X64, {}, nullptr, &Signature,
+                                        BinaryFormat::COFF));
+  const auto &TRI = getTargetRegInfo(Arch::X64);
+  const auto SysV = TRI.callPreservedRanges(BinaryFormat::ELF);
+  const auto Windows = TRI.callPreservedRanges(BinaryFormat::COFF);
+  const auto WindowsOnly =
+      std::find_if(Windows.begin(), Windows.end(), [&](const auto &Range) {
+        return Range.Bytes == TRI.PointerSize &&
+               std::none_of(SysV.begin(), SysV.end(), [&](const auto &Other) {
+                 return Other.Offset == Range.Offset;
+               });
+      });
+  ASSERT_NE(WindowsOnly, Windows.end());
+  LowOp Write;
+  Write.Opcode = NdOp::COPY;
+  Write.Output = NdVar::reg(WindowsOnly->Offset, TRI.PointerSize);
+  Write.addInput(NdVar::scalar(0, TRI.PointerSize));
+  Write.Addr = Callee;
+  Low.Blocks.front().Ops.insert(Low.Blocks.front().Ops.begin(), Write);
+  EXPECT_TRUE(restoresNativeSourceState(Low, Arch::X64, {}, nullptr, &Signature,
+                                        BinaryFormat::ELF));
+  EXPECT_FALSE(restoresNativeSourceState(Low, Arch::X64, {}, nullptr,
+                                         &Signature, BinaryFormat::COFF));
+  // A declaration may not turn the pushed return address into an argument.
+  Signature.Parameters.front().Location.EntryStackOffset = 0;
+  EXPECT_FALSE(restoresNativeSourceState(Low, Arch::X64, {}, nullptr,
+                                         &Signature, BinaryFormat::ELF));
+}
