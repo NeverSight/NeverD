@@ -6716,6 +6716,14 @@ must not acquire a physical native frame binding.
 bytes individually and checks altered calls, allocation bounds, writable,
 truncated or ambiguous mappings, fixups, architecture/format and invalid call
 addresses. A valid helper cannot rescue an altered frame or publication.
+`RegistrationCalleeRecursion.StackImportsBelongToTheQueriedEntry` keeps a
+relocation-rooted secondary entry in the decoded CFG while proving the ordinary
+callee independently. Direct and cached IAT calls retain their dependency when
+reachable or queried at the secondary entry. A caller that modifies that IAT
+can use only the independent entry's stack cleanup. Repeated mixed-entry
+queries and exact versus one-unit-short work budgets check scope and cache
+isolation.
+
 `RegistrationTryLevel.CxxEAXHelper*` separately checks shared C++ prologue
 descriptions, including every instruction byte, parent identity, storage and
 fixups. `CxxEAXHelperPreservesBoundRegisterInputs` checks short/wide prefixes

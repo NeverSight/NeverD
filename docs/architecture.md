@@ -2297,6 +2297,15 @@ through one cache and work budget, with no facts borrowed from an in-progress
 recursive proof. Unchecked nested calls forget ESP;
 explicit restoration through an ABI-preserved register can recover it. Memory
 loads do not acquire a saved-stack identity in the ordinary-body analysis.
+An ordinary returning-stack query collects direct callees, cached import loads
+and IAT dependencies only from the ordinary graph reachable from its requested
+entry. Disconnected address-taken entries remain in the source CFG and receive
+separate stack queries when called. A separately invoked interior callback
+also receives its own reachable view, so another callback's imports cannot
+pollute its contract or exhaust its callee budget. Registration parent queries
+retain their complete dispatcher-root analysis. Every scoped view preserves
+all ordinary successors, checks its current source instructions and charges
+the shared work budget; it supplies no memory or native EH permission.
 For this stack-only query, decoded full-width absolute instruction fields may
 carry checked PE32 HIGHLOW relocations, including arithmetic operands. Their
 unclassified values are unknown in the affine replay. Loader-proved addresses

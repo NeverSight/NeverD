@@ -9,10 +9,14 @@
 #include "gtest/gtest.h"
 
 #include "neverd/Limits.h"
+#include "neverd/ir/low/CFGBuilder.h"
+#include "neverd/ir/low/LowIR.h"
 #include "neverd/ir/low/RegistrationABI.h"
 #include "neverd/support/BinaryEncoding.h"
 
 #include <algorithm>
+#include <optional>
+#include <vector>
 
 using namespace neverd;
 
@@ -105,4 +109,126 @@ TEST(RegistrationCallABI, FloatingAndRegistrationProofsSharePendingCallees) {
               Cycle ? std::nullopt : std::optional<uint32_t>{0});
     EXPECT_LE(Work, limits::kMaxRegistrationEHStateWork);
   }
+}
+
+namespace {
+BinaryImage makeSeparateStackEntryImage(bool Reached, bool Cached) {
+  constexpr va_t TextVA = 0x401000, DataVA = 0x404000, IAT = DataVA + 16;
+  BinaryImage Image;
+  Image.Arch = Arch::X86;
+  Image.Bits = Bitness::Bits32;
+  Image.Format = BinaryFormat::COFF;
+  Image.Base = 0x400000;
+  Image.Entry = TextVA;
+  Segment Text;
+  Text.Name = ".text";
+  Text.VA = TextVA;
+  Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Text.Data.assign(0x80, 0xcc);
+  const uint8_t Caller[] = {0xc6, 0x05, 0, 0, 0, 0, 0,   0x6a,
+                            0,    0xe8, 0, 0, 0, 0, 0xc3};
+  std::copy(std::begin(Caller), std::end(Caller), Text.Data.begin());
+  writeLE<uint32_t>(Text.Data.data() + 2, IAT);
+  writeLE<uint32_t>(Text.Data.data() + 10, 0x40 - 14);
+  const uint8_t Child[] = {0x85, 0xc0, 0x75, 0x1c, 0xc2, 4, 0};
+  std::copy(std::begin(Child), std::end(Child), Text.Data.begin() + 0x40);
+  if (!Reached) {
+    Text.Data[0x40] = 0xc2;
+    Text.Data[0x41] = 4;
+    Text.Data[0x42] = 0;
+  }
+  std::vector<uint8_t> Other;
+  if (Cached) {
+    Other = {0x8b, 0x15, 0, 0, 0, 0, 0x6a, 0, 0xff, 0xd2, 0xc2, 4, 0};
+    writeLE<uint32_t>(Other.data() + 2, IAT);
+  } else {
+    Other = {0x6a, 0, 0xff, 0x15, 0, 0, 0, 0, 0xc2, 4, 0};
+    writeLE<uint32_t>(Other.data() + 4, IAT);
+  }
+  std::copy(Other.begin(), Other.end(), Text.Data.begin() + 0x60);
+  Text.Size = Text.FileSz = Text.Data.size();
+  Image.Segments.push_back(std::move(Text));
+  Segment Pointers;
+  Pointers.Name = ".rdata";
+  Pointers.VA = 0x403000;
+  Pointers.Flags = SegmentFlags::Readable;
+  Pointers.Data.resize(4);
+  writeLE<uint32_t>(Pointers.Data.data(), TextVA + 0x60);
+  Pointers.Size = Pointers.FileSz = Pointers.Data.size();
+  Image.CodePtrRelocSlots.insert(Pointers.VA);
+  Image.Segments.push_back(std::move(Pointers));
+  Segment Data;
+  Data.Name = ".data";
+  Data.VA = DataVA;
+  Data.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+  Data.Data.resize(32);
+  Data.Size = Data.FileSz = Data.Data.size();
+  Image.Segments.push_back(std::move(Data));
+  for (const auto &Segment : Image.Segments) {
+    Section Code;
+    Code.Name = Segment.Name;
+    Code.VA = Segment.VA;
+    Code.Size = Code.FileSz = Segment.Size;
+    Code.Flags = Segment.Flags;
+    Image.Sections.push_back(Code);
+  }
+  Image.Symbols.push_back(Symbol::makeFunc(TextVA, sizeof(Caller)));
+  Image.Symbols.push_back(Symbol::makeFunc(TextVA + 0x40, 0x30));
+  Image.Imports.push_back({"KERNEL32.dll", "Sleep", 0, IAT});
+  EXPECT_TRUE(Image.recordImportStorageSlot(
+      IAT, "Sleep", 0, ImportStorageEvidence::ImportDirectory));
+  return Image;
+}
+LowFunc stackEntryQuery(va_t Target) {
+  LowFunc Query;
+  Query.Entry = 0x401000;
+  Query.Blocks.resize(1);
+  LowOp Call;
+  Call.Opcode = NdOp::CALL;
+  Call.addInput(NdVar::cst(Target, 4));
+  Query.Blocks.front().Ops.push_back(Call);
+  return Query;
+}
+} // namespace
+
+TEST(RegistrationCalleeRecursion, StackImportsBelongToTheQueriedEntry) {
+  for (bool Reached : {false, true})
+    for (bool Cached : {false, true}) {
+      SCOPED_TRACE(::testing::Message() << Reached << "/" << Cached);
+      auto Image = makeSeparateStackEntryImage(Reached, Cached);
+      Decoder Decode;
+      ASSERT_TRUE(Decode.init(Image));
+      const auto Low =
+          CFGBuilder().buildIntegerFrameProof(Image, Decode, 0x401040, "child");
+      ASSERT_TRUE(Low.hasCompleteLiftCoverage());
+      ASSERT_TRUE(
+          std::any_of(Low.Blocks.begin(), Low.Blocks.end(),
+                      [](const auto &B) { return B.StartAddr == 0x401060; }));
+      ASSERT_TRUE(Low.ModuleAnalysisRoots.count(0x401060));
+      size_t Work = 0;
+      RegistrationCallCalleeIndex Index(Image, &Work);
+      for (va_t Target : {va_t{0x401040}, va_t{0x401060}, va_t{0x401040}}) {
+        SCOPED_TRACE(Target);
+        const auto Contracts = Index.stackContracts(stackEntryQuery(Target));
+        ASSERT_TRUE(Contracts);
+        ASSERT_EQ(Contracts->size(), 1u);
+        EXPECT_EQ(Contracts->front().StackPopBytes, 4u);
+        EXPECT_EQ(Contracts->front().RequiredImports,
+                  Reached || Target == 0x401060 ? std::vector<va_t>{0x404010}
+                                                : std::vector<va_t>{});
+      }
+      EXPECT_LT(Work, limits::kMaxRegistrationEHStateWork);
+      size_t Used = 0;
+      EXPECT_EQ(getCheckedX86CalleeStackPop(Image, 0x401040, &Used), 4u);
+      ASSERT_GT(Used, 0u);
+      ASSERT_LT(Used, limits::kMaxRegistrationEHStateWork);
+      Work = limits::kMaxRegistrationEHStateWork - Used;
+      EXPECT_EQ(getCheckedX86CalleeStackPop(Image, 0x401040, &Work), 4u);
+      EXPECT_EQ(Work, limits::kMaxRegistrationEHStateWork);
+      Work = limits::kMaxRegistrationEHStateWork - Used + 1;
+      EXPECT_FALSE(getCheckedX86CalleeStackPop(Image, 0x401040, &Work));
+      EXPECT_EQ(Work, limits::kMaxRegistrationEHStateWork);
+      EXPECT_EQ(getCheckedX86CalleeStackPop(Image, Image.Entry),
+                Reached ? std::nullopt : std::optional<uint32_t>{0});
+    }
 }

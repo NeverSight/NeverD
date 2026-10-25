@@ -101,6 +101,7 @@ std::optional<uint32_t> nearReturnPop(const BinaryImage &Image, va_t Address) {
 
 struct StackBody {
   const BinaryImage &Image;
+  const LowFunc &Source;
   va_t FunctionEntry;
   size_t &Work;
   Decoder Dec;
@@ -112,8 +113,10 @@ struct StackBody {
   std::set<va_t> ImportSlots;
   bool Valid = false;
 
-  StackBody(const BinaryImage &Image, const LowFunc &Function, size_t &Work)
-      : Image(Image), FunctionEntry(Function.Entry), Work(Work) {
+  StackBody(const BinaryImage &Image, const LowFunc &Function, size_t &Work,
+            va_t OrdinaryEntry = InvalidVA)
+      : Image(Image), Source(Function), FunctionEntry(Function.Entry),
+        Work(Work) {
     if (!Function.hasCompleteLiftCoverage() || !Dec.init(Image))
       return;
     if (auto Error = validateLowInstructionBoundaries(
@@ -121,22 +124,54 @@ struct StackBody {
       llvm::consumeError(std::move(Error));
       return;
     }
-    bool HasCachedCall = false;
     for (const auto &Block : Function.Blocks) {
       if (!chargeCalleeWork(Work, Block.Ops.size() + 1) ||
           !Blocks.emplace(Block.Id, &Block).second ||
           !Entries.emplace(Block.StartAddr, Block.Id).second)
         return;
-      HasCachedCall |= llvm::any_of(Block.Ops, [](const auto &Op) {
+    }
+    if (OrdinaryEntry != InvalidVA) {
+      const auto Root = Entries.find(OrdinaryEntry);
+      if (Root == Entries.end())
+        return;
+      std::vector<int> Pending{Root->second};
+      std::set<int> Reached;
+      while (!Pending.empty()) {
+        const int Id = Pending.back();
+        Pending.pop_back();
+        if (!chargeCalleeWork(Work, 1) || !Blocks.count(Id))
+          return;
+        if (!Reached.insert(Id).second)
+          continue;
+        const auto &Successors = Blocks.at(Id)->Succs;
+        if (!chargeCalleeWork(Work, Successors.size()))
+          return;
+        Pending.insert(Pending.end(), Successors.begin(), Successors.end());
+      }
+      // Other address-taken entries remain in the source CFG. This ordinary
+      // invocation cannot execute their calls or depend on their IAT slots.
+      // A separately called interior gets its own view rooted at that entry.
+      if (!chargeCalleeWork(Work, Blocks.size() + Entries.size()))
+        return;
+      std::erase_if(Blocks,
+                    [&](const auto &B) { return !Reached.count(B.first); });
+      std::erase_if(Entries,
+                    [&](const auto &E) { return !Reached.count(E.second); });
+    }
+    bool HasCachedCall = false;
+    for (const auto &[Id, Block] : Blocks) {
+      if (!chargeCalleeWork(Work, Block->Ops.size() + 1))
+        return;
+      HasCachedCall |= llvm::any_of(Block->Ops, [](const auto &Op) {
         return Op.Opcode == NdOp::INDIR_CALL && Op.NumInputs == 1 &&
                Op.Inputs[0].Size == 4 && !Op.Inputs[0].isConst();
       });
     }
     if (HasCachedCall)
-      for (const auto &Block : Function.Blocks)
-        for (const auto &Boundary : Block.InstructionBoundaries) {
+      for (const auto &[Id, Block] : Blocks)
+        for (const auto &Boundary : Block->InstructionBoundaries) {
           if (auto Load = registration_abi::checkedRegistrationImportLoad(
-                  Image, Block, Boundary, Work)) {
+                  Image, *Block, Boundary, Work)) {
             if (!ImportLoads
                      .emplace(std::make_pair(Boundary.Address, Load->OpSeq),
                               Load->Slot)
@@ -148,12 +183,11 @@ struct StackBody {
           if (!chargeCalleeWork(Work, 1))
             return;
         }
-    for (const auto &Block : Function.Blocks) {
-      if (!chargeCalleeWork(Work, Block.Ops.size() + 1))
+    for (const auto &[Id, Block] : Blocks) {
+      if (!chargeCalleeWork(Work, Block->Ops.size() + 1))
         return;
-      // Stack cleanup and cached-register preservation both depend on the
-      // current binding, even when the target is never cached in a GPR.
-      for (const auto &Op : Block.Ops)
+      // Both stack cleanup and cached targets depend on the live binding.
+      for (const auto &Op : Block->Ops)
         if (Op.Opcode == NdOp::INDIR_CALL && Op.NumInputs == 1 &&
             Op.Inputs[0].isConst() && Op.Inputs[0].Size == 4 &&
             Op.Inputs[0].Offset <= UINT32_MAX)
@@ -798,7 +832,8 @@ public:
             {Body.ImportSlots.begin(), Body.ImportSlots.end()}};
     };
     if (Parent && Parent->Entries.count(Target)) {
-      Record(*Parent, stackPopForBody(*Parent, Target, Nested));
+      StackBody EntryBody(Image, Parent->Source, Work, Target);
+      Record(EntryBody, stackPopForBody(EntryBody, Target, Nested));
     } else {
       Decoder Dec;
       if (Dec.init(Image)) {
@@ -806,7 +841,8 @@ public:
         Builder.setRegistrationCalleeIndex(&Owner);
         const LowFunc Callee =
             Builder.buildIntegerFrameProof(Image, Dec, Target, "abi-stack");
-        StackBody Body(Image, Callee, Work);
+        StackBody Body(Image, Callee, Work,
+                       Callee.ExceptionMetadata ? InvalidVA : Target);
         Record(Body, Callee.ExceptionMetadata
                          ? stackPopForRegistration(Body, Callee, Nested)
                          : stackPopForBody(Body, Target, Nested));
@@ -917,8 +953,9 @@ RegistrationCallCalleeIndex::stackContracts(const LowFunc &Function) {
               kRegistrationCalleeStackRegistrationCallCalleeIndexStackContractsTargetsSizeLimit)
         return std::nullopt;
     }
-  // One graph and immutable-instruction cache for all interior callback
-  // entries. Each entry still gets an independent reaching-register proof.
+  // Retain one source graph for all interior callback entries. Each queried
+  // entry gets its own reachable instructions, import dependencies and
+  // reaching-register proof.
   StackBody Parent(Image, Function, Work);
   if (!chargeCalleeWork(Work, 1))
     return std::nullopt;
