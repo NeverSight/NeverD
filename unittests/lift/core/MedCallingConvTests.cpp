@@ -1196,6 +1196,25 @@ TEST(TargetRegInfo, ARM32PreservesD8ThroughD15Views) {
   EXPECT_FALSE(TRI.isCallPreserved(TRI.VecRegBase + 15 * TRI.VecRegStride, 16));
 }
 
+TEST(TargetRegInfo, I386CallRangesDoNotPromiseAnUnchangedStackPointer) {
+  for (Arch Target : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64})
+    for (BinaryFormat Format :
+         {BinaryFormat::COFF, BinaryFormat::ELF, BinaryFormat::MachO}) {
+      SCOPED_TRACE(::testing::Message()
+                   << unsigned(Target) << ':' << unsigned(Format));
+      const auto &TRI = getTargetRegInfo(Target);
+      const auto Ranges = TRI.callPreservedRanges(Format);
+      auto Has = [&](uint64_t Register) {
+        return llvm::any_of(Ranges, [&](const auto &Range) {
+          return Range.Offset <= Register &&
+                 Register + TRI.PointerSize <= Range.Offset + Range.Bytes;
+        });
+      };
+      EXPECT_EQ(Has(TRI.StackPointer), Target != Arch::X86);
+      EXPECT_TRUE(Has(TRI.FramePointer));
+    }
+}
+
 TEST(TargetRegInfo, EnumeratesPartialVectorCallPreservation) {
   auto HasRange = [](llvm::ArrayRef<TargetRegisterRange> Ranges,
                      uint64_t Offset, uint16_t Bytes) {

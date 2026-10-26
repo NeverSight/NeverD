@@ -5651,6 +5651,71 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
            A.Container == B.Container;
   };
 
+  auto importedCopyHasCallerCleanup = [&](const LowOp &Call) {
+    // An ELF object's undefined C memcpy/memmove has no hidden result or
+    // callee-popped arguments. The loader's callable extern identity and
+    // this exact native CALL must agree: a local spelling, a data import,
+    // an import-plus-addend or a mutable IAT slot supplies no such receipt.
+    if (CurrentImg->Arch != Arch::X86 ||
+        CurrentImg->Format != BinaryFormat::ELF || !CurrentImg->IsRelocatable ||
+        CurrentImg->getPointerSize() != 4 || Call.Opcode != NdOp::CALL ||
+        Call.NumInputs != 1 || !Call.Inputs[0].isConst() ||
+        Call.Inputs[0].Size != 4 || Call.Addr > UINT32_MAX - 5 ||
+        Call.Inputs[0].Offset > UINT32_MAX)
+      return false;
+    if (!consumeEvidence(orderedSetLookupWork(
+            CurrentImg->ObjectExternFunctionEntries.size())) ||
+        !CurrentImg->ObjectExternFunctionEntries.count(Call.Inputs[0].Offset))
+      return false;
+    if (!consumeEvidenceSum({orderedSetLookupWork(Insns.size()),
+                             CurrentImg->Imports.size(),
+                             CurrentImg->Segments.size(), 12}))
+      return false;
+    const auto It = Insns.find(Call.Addr);
+    if (It == Insns.end())
+      return false;
+    const auto &Record = It->second;
+    if (Record.Size != 5 || !Record.IsCall || Record.IsInstructionGuard ||
+        Record.IsBranch || Record.IsRet || Record.IsOpaqueTerminator ||
+        Record.IsResumableTerminator || Record.Ops.size() != 1 ||
+        Record.Ops.front().Seq != Call.Seq)
+      return false;
+    const Import *Match = nullptr;
+    for (const Import &Imp : CurrentImg->Imports)
+      if (Imp.IATAddr == Call.Inputs[0].Offset) {
+        if (Match)
+          return false;
+        Match = &Imp;
+      }
+    if (!Match || Match->IsDelayImport ||
+        (Match->Name != "memcpy" && Match->Name != "memmove"))
+      return false;
+    const uint8_t *Bytes = CurrentImg->readVA(Call.Addr, 5);
+    return Bytes && Bytes[0] == 0xe8 &&
+           uint32_t(Call.Addr + 5 + readLE<uint32_t>(Bytes + 1)) ==
+               Call.Inputs[0].Offset;
+  };
+  auto callPreservesLane = [&](const LowOp &Call, const LaneView &Query) {
+    if (!Query.Valid || Query.Begin > InvalidVA - Query.Container)
+      return false;
+    const uint64_t Begin = Query.Container + Query.Begin;
+    if (Query.Size > InvalidVA - Begin)
+      return false;
+    const uint64_t End = Begin + Query.Size;
+    if (!consumeEvidence(CallPreservedRanges.size()))
+      return false;
+    if (std::any_of(CallPreservedRanges.begin(), CallPreservedRanges.end(),
+                    [&](const TargetRegisterRange &Range) {
+                      return Range.Bytes <= InvalidVA - Range.Offset &&
+                             Begin >= Range.Offset &&
+                             End <= Range.Offset + Range.Bytes;
+                    }))
+      return true;
+    return Query.Space == VnodeSpace::REG && Begin >= TRI.StackPointer &&
+           End <= TRI.StackPointer + TRI.PointerSize &&
+           importedCopyHasCallerCleanup(Call);
+  };
+
   using LaneKey = std::tuple<int, int, uint8_t, uint64_t, uint16_t>;
   constexpr size_t LaneKeyWork = 5;
   using ValueKey = std::tuple<int, int, uint8_t, uint64_t, uint16_t, bool>;
@@ -6379,26 +6444,7 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
         break;
       const LowOp &Def = B.Ops[I];
       if (Def.Opcode == NdOp::CALL || Def.Opcode == NdOp::INDIR_CALL) {
-        const bool QueryPreserved = [&] {
-          if (TRI.isStackPointer(BaseReg))
-            return true;
-          if (!Query.Valid || Query.Begin > InvalidVA - Query.Container)
-            return false;
-          const uint64_t Begin = Query.Container + Query.Begin;
-          if (Query.Size > InvalidVA - Begin)
-            return false;
-          const uint64_t End = Begin + Query.Size;
-          if (!consumeEvidence(CallPreservedRanges.size()))
-            return false;
-          return std::any_of(CallPreservedRanges.begin(),
-                             CallPreservedRanges.end(),
-                             [&](const TargetRegisterRange &Range) {
-                               if (Range.Bytes > InvalidVA - Range.Offset)
-                                 return false;
-                               return Begin >= Range.Offset &&
-                                      End <= Range.Offset + Range.Bytes;
-                             });
-        }();
+        const bool QueryPreserved = callPreservesLane(Def, Query);
         if (!QueryPreserved) {
           Found = true;
           Result = frameInvalid();
@@ -6919,23 +6965,10 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
       const LowOp &Def = B.Ops[I];
       if ((Def.Opcode == NdOp::CALL || Def.Opcode == NdOp::INDIR_CALL) &&
           Value.isReg()) {
-        bool Preserved = false;
-        if (Query.Valid && Query.Begin <= InvalidVA - Query.Container) {
-          const uint64_t Begin = Query.Container + Query.Begin;
-          if (Query.Size <= InvalidVA - Begin) {
-            const uint64_t End = Begin + Query.Size;
-            if (!consumeEvidence(CallPreservedRanges.size())) {
-              FrameAddressTaintMemo.erase(MemoIt);
-              return std::nullopt;
-            }
-            Preserved = std::any_of(
-                CallPreservedRanges.begin(), CallPreservedRanges.end(),
-                [&](const TargetRegisterRange &Range) {
-                  return Range.Bytes <= InvalidVA - Range.Offset &&
-                         Begin >= Range.Offset &&
-                         End <= Range.Offset + Range.Bytes;
-                });
-          }
+        const bool Preserved = callPreservesLane(Def, Query);
+        if (EvidenceBudgetExhausted) {
+          FrameAddressTaintMemo.erase(MemoIt);
+          return std::nullopt;
         }
         if (!Preserved) {
           MemoIt->second = false;
@@ -7690,24 +7723,7 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
                  (ZeroWrite && OBegin == 0 && QBegin == 0 &&
                   QEnd == Output.ContainerSize);
         }();
-        const bool QueryPreserved = [&] {
-          if (!Query.Valid || Query.Begin > InvalidVA - Query.Container)
-            return false;
-          const uint64_t Begin = Query.Container + Query.Begin;
-          if (Query.Size > InvalidVA - Begin)
-            return false;
-          const uint64_t End = Begin + Query.Size;
-          if (!consumeEvidence(CallPreservedRanges.size()))
-            return false;
-          return std::any_of(CallPreservedRanges.begin(),
-                             CallPreservedRanges.end(),
-                             [&](const TargetRegisterRange &Range) {
-                               if (Range.Bytes > InvalidVA - Range.Offset)
-                                 return false;
-                               return Begin >= Range.Offset &&
-                                      End <= Range.Offset + Range.Bytes;
-                             });
-        }();
+        const bool QueryPreserved = callPreservesLane(Def, Query);
         // CALL LowIR only names explicit results.  Every other caller-saved
         // byte lane is an implicit definition and therefore a hard reaching-
         // value barrier.  This also keeps a predicated call fail closed: the

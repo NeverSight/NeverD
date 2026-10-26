@@ -5,8 +5,9 @@
 //   gcc_fused_switch  gcc's fused `add tbl@GOTOFF(%eax,%edx,4), %eax`
 //   clang_switch      clang -m32 -O2 -fPIC: call/pop, fused add
 //   saved_got_switch  the GOT register set before a branch around a call
-//   spilled_got_switch  clang -O0: an aligned frame, the GOT register spilled
-//                       and reloaded around a foreign store and a PLT call
+//   spilled_got_switch  an aligned frame, the GOT register spilled and
+//                       reloaded around a foreign store and a PLT call;
+//                       an explicit restore owns the post-call ESP coordinate
 // The linked library keeps no relocation for any of them; the PLT call gives
 // it a DT_PLTGOT besides its `_GLOBAL_OFFSET_TABLE_` symbol.  Two dispatches
 // whose register is not the GOT address on every path must stay unresolved:
@@ -241,6 +242,11 @@ spilled_got_switch:
 	movl	%edx, (%esp)
 	movl	0x54(%esp), %ebx
 	calll	note_value@PLT
+spilled_got_switch_restore:
+	leal	-4(%ebp), %esp
+	andl	$-16, %esp
+	subl	$0x90, %esp
+spilled_got_switch_restored:
 	movl	0x38(%esp), %ecx
 	cmpl	$3, %ecx
 	ja	.Lsp_default
@@ -294,6 +300,9 @@ escaped_got_switch:
 	movl	%eax, (%esp)
 	movl	0x54(%esp), %ebx
 	calll	note_pointer@PLT
+	leal	-4(%ebp), %esp
+	andl	$-16, %esp
+	subl	$0x90, %esp
 	movl	0x38(%esp), %ecx
 	cmpl	$3, %ecx
 	ja	.Leg_default

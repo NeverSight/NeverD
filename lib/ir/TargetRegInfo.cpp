@@ -370,7 +370,11 @@ TargetRegInfo::callPreservedRanges(BinaryFormat Format) const {
       It->Bytes = std::max(It->Bytes, Bytes);
   };
 
-  Add(StackPointer, PointerSize);
+  // i386 conventions may release incoming arguments with RET imm. Its ESP
+  // is therefore not an unchanged value at the caller's CALL boundary.
+  // A known cleanup or a later explicit restoration needs separate evidence.
+  if (TheArch != Arch::X86)
+    Add(StackPointer, PointerSize);
   Add(FramePointer, PointerSize);
   for (uint64_t Reg : CalleeSaveRegs)
     Add(Reg, FullRegWidth);

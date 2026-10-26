@@ -3257,6 +3257,27 @@ or failed local proofs retain full discovery, overwritten producers are
 rejected, and every evidence-budget boundary preserves transactional
 publication. Both belong to `NeverDJumpTableTests`.
 
+`CallsDoNotInventI386StackEpochs` checks direct and indirect calls in affine
+and scalar queries, explicit restoration, changed partial lanes, cold/warm
+answers, four architectures and three formats. `NativeRetImmediateCannotPreserveCallerESP`
+decodes self-authored PE32 callers and `RET 0`/`RET 12` helpers: without a
+callee-cleanup receipt only an explicit caller restoration proves equality.
+`ImportedCopyStackReceiptRequiresExactNativeCall` checks the ELF object copy
+ABI receipt in scalar and affine modes, cold/warm budget boundaries and
+refusals for local names, data imports, ambiguous owners, indirect calls,
+native-byte mismatches, target addends, other formats and later clobbers.
+`JTE_X86_32.StackMemcpyTableNeedsDedicatedEvidenceCeiling` exercises the real
+loader and compiler-produced PIC stack table through the full consumer audit.
+Aligned and GOTOFF spill fixtures restore ESP explicitly after an unproved
+call so their positive cases continue to isolate memory ownership and alias
+tracking. The linked-import case with that restoration removed, and the
+compiler-produced aligned lexer with unknown external cleanup, must remain
+unresolved. A C declaration in the fixture source is not a binary ABI receipt.
+`TargetRegInfo.I386CallRangesDoNotPromiseAnUnchangedStackPointer` checks the
+same shared preservation table and retained frame-pointer ranges. Run the
+complete jump-table and FP/calling-convention suites, then affected pipeline,
+registration, source-frame and symbolic-call consumers for this shared rule.
+
 `ResolverGraphCache.*` in `NeverDJumpTableTests` compares hot and cold answers
 and remaining budgets at every small-fixture budget boundary. Equal-size
 instruction, edge, root and ownership changes must replace the graph; rolled

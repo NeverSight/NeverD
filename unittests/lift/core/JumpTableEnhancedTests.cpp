@@ -696,14 +696,26 @@ TEST_F(JTE_X86_32, RealignedFrameKeepsItsSpilledGOTBase) {
   // `and $-16, %esp` (`$-4` in the leaf) anchors the frame: the GOT spill and
   // its reload are the same cell of the aligned frame, which no escape or
   // store reaches.
-  for (const char *Name :
-       {"jt_i386_realigned_loop", "jt_i386_realigned_lexer"}) {
-    SCOPED_TRACE(Name);
-    const neverd::LowFunc Low =
-        buildI386Function("test_jumptable_realigned_frame_i386.o", Name);
-    ASSERT_EQ(Low.JumpTables.size(), 1u);
-    EXPECT_TRUE(Low.UnsafeIndirectBranchAddresses.empty());
-  }
+  const neverd::LowFunc Low = buildI386Function(
+      "test_jumptable_realigned_frame_i386.o", "jt_i386_realigned_loop");
+  ASSERT_EQ(Low.JumpTables.size(), 1u);
+  EXPECT_TRUE(Low.UnsafeIndirectBranchAddresses.empty());
+}
+
+TEST_F(JTE_X86_32, UnknownCalleeCleanupCannotPreserveAnAlignedSpill) {
+  // The C source has declarations, but this object supplies no corresponding
+  // ABI receipt to the resolver. Its unknown external calls can change ESP;
+  // the earlier alignment cannot prove a later ESP-relative reload.
+  const neverd::LowFunc Low = buildI386Function(
+      "test_jumptable_realigned_frame_i386.o", "jt_i386_realigned_lexer");
+  EXPECT_TRUE(Low.JumpTables.empty());
+  EXPECT_TRUE(
+      std::any_of(Low.Blocks.begin(), Low.Blocks.end(), [](const auto &B) {
+        return std::any_of(B.Ops.begin(), B.Ops.end(), [](const auto &Op) {
+          return Op.Opcode == neverd::NdOp::INDIR_BR ||
+                 Op.Opcode == neverd::NdOp::INDIR_CALL;
+        });
+      }));
 }
 
 TEST_F(JTE_X86_32, StoreAboveTheAlignedFrameLeavesItsSpill) {

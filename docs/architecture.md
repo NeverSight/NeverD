@@ -3606,6 +3606,23 @@ their users. The existing evidence allowance charges graph construction and
 propagation. Completed equations are immutable within a proof mode, so later
 queries solve only new dependencies.
 
+Both affine frame and scalar reconstruction consume
+`TargetRegInfo::callPreservedRanges`. That owner excludes i386 ESP: a near
+`RET imm` can remove incoming arguments, so the physical CALL boundary does
+not guarantee an unchanged stack address. The resolver has no separate
+stack-pointer exemption. An explicit restoration from a preserved frame
+register can establish a new exact coordinate; a partial write cannot inherit
+the old one. Known callee cleanup remains a separate, occurrence-bound proof.
+The resolver's scalar, affine and frame-address dependency queries share that
+decision. An i386 ELF object's direct native call to the loader's undefined
+`memcpy` or `memmove` entry can supply a zero-pop receipt from its C ABI.
+The exact call bytes, decoded boundary and unique callable extern identity
+must agree. A local name, indirect import slot, different format, target
+addend or later unproved call cannot borrow this receipt. Its evidence work
+and query cache obey the same immutable-image and budget contract as the
+surrounding resolver.
+The x64 and ARM preserved ranges retain their existing stack-pointer rule.
+
 Register and memory value reconstruction share a stack of active walks. A
 concrete merge that skipped a transparent backedge is still provisional: later
 loop definitions may add values. `ResolverPendingWalks` records the exact active

@@ -7,8 +7,10 @@
 #include "gtest/gtest.h"
 
 #include "neverd/Limits.h"
+#include "neverd/decode/Decoder.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/low/CFGBuilder.h"
+#include "neverd/support/BinaryEncoding.h"
 
 #include <algorithm>
 #include <functional>
@@ -661,6 +663,177 @@ struct ResolverGraphCacheTestAccess {
                              Image.getPointerSize());
     Q.Alternatives = {{Q.Candidate, 0x100, 0, false}};
     Q.Relation = Relation::SameCanonicalFrameAddress;
+    return Q;
+  }
+
+  static Query seedCallStackEpoch(CFGBuilder &B, const BinaryImage &Image,
+                                  unsigned Variant, bool Scalar) {
+    B.CurrentImg = &Image;
+    B.CurrentFuncEntry = 0x100;
+    B.JumpTableProofContextComplete = true;
+    B.PersistentCFGRoots = {0x100};
+    B.BlockStarts = {0x100, 0x120};
+    const auto &TRI = getTargetRegInfo(Image.Arch);
+    const auto Width = uint16_t(Image.getPointerSize());
+    const auto SP = NdVar::reg(TRI.StackPointer, Width);
+    const auto FP = NdVar::reg(TRI.FramePointer, Width);
+    auto Emit = [&](va_t Address, NdOp Code, NdVar Output,
+                    std::initializer_list<NdVar> Inputs) {
+      auto &R = B.Insns[Address];
+      R.Addr = Address;
+      R.Size = 0x10;
+      LowOp Op;
+      Op.Addr = Address;
+      Op.Seq = int(R.Ops.size());
+      Op.Opcode = Code;
+      Op.Output = Output;
+      for (const auto &Input : Inputs)
+        Op.addInput(Input);
+      R.Ops.push_back(Op);
+    };
+    if (Scalar)
+      Emit(0x100, NdOp::COPY, SP, {NdVar::scalar(0x10000, Width)});
+    Emit(0x100, NdOp::COPY, FP, {SP});
+    if (Variant) {
+      Emit(0x110, Variant == 2 ? NdOp::INDIR_CALL : NdOp::CALL, {},
+           {NdVar::address(0x400, Width)});
+      B.Insns.at(0x110).IsCall = true;
+    } else
+      Emit(0x110, NdOp::COPY, NdVar::tmp(0x100, Width), {SP});
+    if (Variant == 3)
+      Emit(0x120, NdOp::COPY, SP, {FP});
+    else if (Variant == 4)
+      Emit(0x120, NdOp::COPY, NdVar::reg(TRI.StackPointer, Width / 2),
+           {NdVar::scalar(7, Width / 2)});
+    else
+      Emit(0x120, NdOp::COPY, NdVar::tmp(0x120, Width), {SP});
+    Emit(0x130, NdOp::RETURN, {}, {SP});
+    B.Insns.at(0x130).IsRet = true;
+    Query Q;
+    Q.Candidate = SP;
+    Q.UseAddr = 0x130;
+    Q.UseSeq = 0;
+    Q.Relation =
+        Scalar ? Relation::MustEqual : Relation::SameCanonicalFrameAddress;
+    Q.Alternatives = {
+        {Scalar ? NdVar::scalar(0x10000, Width) : SP, 0x100, 0, false}};
+    return Q;
+  }
+
+  static Query nativeCallStackEpoch(CFGBuilder &B, va_t Before, va_t After) {
+    Query Q;
+    const auto First = B.Insns.find(Before);
+    const auto Last = B.Insns.find(After);
+    if (!B.CurrentImg || First == B.Insns.end() || Last == B.Insns.end() ||
+        First->second.Ops.empty() || Last->second.Ops.empty())
+      return Q;
+    B.JumpTableProofContextComplete = true;
+    Q.Candidate = NdVar::reg(getTargetRegInfo(B.CurrentImg->Arch).StackPointer,
+                             B.CurrentImg->getPointerSize());
+    Q.UseAddr = After;
+    Q.UseSeq = Last->second.Ops.front().Seq;
+    Q.Relation = Relation::SameCanonicalFrameAddress;
+    Q.Alternatives = {
+        {Q.Candidate, Before, First->second.Ops.front().Seq, false}};
+    return Q;
+  }
+
+  static Query seedImportedCopyStackEpoch(CFGBuilder &B, BinaryImage &Image,
+                                          bool Scalar, unsigned Variant) {
+    Image.Arch = Arch::X86;
+    Image.Bits = Bitness::Bits32;
+    Image.Format = BinaryFormat::ELF;
+    Image.IsRelocatable = true;
+    const Query Q = seedCallStackEpoch(B, Image, Variant == 17 ? 4 : 1, Scalar);
+    auto Next = B.Insns.extract(0x120);
+    Next.key() = 0x115;
+    Next.mapped().Addr = 0x115;
+    Next.mapped().Size = 0x1b;
+    for (auto &Op : Next.mapped().Ops)
+      Op.Addr = 0x115;
+    B.Insns.insert(std::move(Next));
+    B.BlockStarts.erase(0x120);
+    B.BlockStarts.insert(0x115);
+    auto &Call = B.Insns.at(0x110);
+    Call.Size = 5;
+    Segment Text;
+    Text.VA = Call.Addr;
+    Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+    Text.Data = {0xe8, 0, 0, 0, 0};
+    writeLE<uint32_t>(Text.Data.data() + 1, 0x400 - 0x115);
+    Text.Size = Text.FileSz = Text.Data.size();
+    Image.Segments.push_back(Text);
+    Import Copy;
+    Copy.Name = Variant == 1 ? "memmove" : "memcpy";
+    Copy.IATAddr = 0x400;
+    Image.Imports.push_back(Copy);
+    Image.ObjectExternFunctionEntries.insert(0x400);
+    switch (Variant) {
+    case 2: // A data import is not a callable extern identity.
+      Image.ObjectExternFunctionEntries.clear();
+      break;
+    case 3: // An unknown import has no C memory-copy contract.
+      Image.Imports.front().Name = "copy_with_callee_cleanup";
+      break;
+    case 4: // The native target disagrees with LowIR.
+      ++Image.Segments.front().Data[1];
+      break;
+    case 5: // A jump at the same occurrence is not CALL.
+      Image.Segments.front().Data[0] = 0xe9;
+      break;
+    case 6:
+      Image.Segments.clear();
+      break;
+    case 7: // An indirect call may read a mutable slot.
+      Call.Ops.front().Opcode = NdOp::INDIR_CALL;
+      break;
+    case 8: // Two import owners cannot grant one ABI receipt.
+      Image.Imports.push_back(Copy);
+      break;
+    case 9:
+      Call.IsInstructionGuard = true;
+      break;
+    case 10: {
+      LowOp Extra = Call.Ops.front();
+      ++Extra.Seq;
+      Call.Ops.push_back(Extra);
+      break;
+    }
+    case 11:
+      Image.IsRelocatable = false;
+      break;
+    case 12:
+      Image.Format = BinaryFormat::COFF;
+      break;
+    case 13:
+      Image.Format = BinaryFormat::MachO;
+      break;
+    case 14: // Calling into an extern does not call its entry.
+      ++Call.Ops.front().Inputs[0].Offset;
+      ++Image.Segments.front().Data[1];
+      break;
+    case 15: { // A local function's name carries no cleanup guarantee.
+      Image.Imports.clear();
+      Image.ObjectExternFunctionEntries.clear();
+      Symbol Local = Symbol::makeFunc(0x400);
+      Local.Name = "memcpy";
+      Image.Symbols.push_back(Local);
+      break;
+    }
+    case 16:
+      ++Call.Size;
+      break;
+    case 18: { // A later unproved call still destroys the stack identity.
+      auto &Later = B.Insns.at(0x115);
+      Later.Ops = Call.Ops;
+      Later.Ops.front().Addr = Later.Addr;
+      Later.Ops.front().Inputs[0].Offset = 0x500;
+      Later.IsCall = true;
+      break;
+    }
+    default:
+      break;
+    }
     return Q;
   }
 
@@ -2492,6 +2665,120 @@ TEST(ResolverGuardPredicates, ResourceRefusalCannotPublishAPartialDomain) {
   EXPECT_FALSE(Refused.Complete);
   EXPECT_EQ(Refused.Values, (std::vector<bool>{false}));
   EXPECT_EQ(Refused.Masks, (std::vector<uint64_t>{0}));
+}
+
+TEST(ResolverFrameModes, CallsDoNotInventI386StackEpochs) {
+  for (Arch Target : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64})
+    for (BinaryFormat Format :
+         {BinaryFormat::ELF, BinaryFormat::COFF, BinaryFormat::MachO})
+      for (bool Scalar : {false, true})
+        for (unsigned Variant = 0; Variant != 5; ++Variant) {
+          SCOPED_TRACE(::testing::Message()
+                       << unsigned(Target) << ':' << unsigned(Format) << ':'
+                       << Scalar << ':' << Variant);
+          auto Image = image();
+          Image.Arch = Target;
+          Image.Format = Format;
+          Image.Bits = Target == Arch::X64 || Target == Arch::AArch64
+                           ? Bitness::Bits64
+                           : Bitness::Bits32;
+          CFGBuilder B;
+          const auto Q = Access::seedCallStackEpoch(B, Image, Variant, Scalar);
+          const bool Expected =
+              Variant != 4 && (!Variant || Variant == 3 || Target != Arch::X86);
+          const auto Answer = Access::batch(B, {Q});
+          ASSERT_TRUE(Answer.Complete);
+          EXPECT_EQ(Answer.Values, (std::vector<bool>{Expected}));
+          EXPECT_EQ(Access::batch(B, {Q}), Answer);
+          Access::clear(B);
+          EXPECT_EQ(Access::batch(B, {Q}), Answer);
+        }
+}
+
+TEST(ResolverFrameModes, NativeRetImmediateCannotPreserveCallerESP) {
+  for (unsigned Pop : {0u, 12u})
+    for (bool Restore : {false, true}) {
+      SCOPED_TRACE(::testing::Message() << Pop << ':' << Restore);
+      BinaryImage Image;
+      Image.Arch = Arch::X86;
+      Image.Bits = Bitness::Bits32;
+      Image.Format = BinaryFormat::COFF;
+      Image.Base = 0x400000;
+      Image.Entry = 0x401000;
+      Segment Text;
+      Text.VA = Image.Entry;
+      Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+      // Save EBP, allocate four words and call a separate near-RET helper.
+      Text.Data = {0x55, 0x89, 0xe5, 0x83, 0xec, 0x10, 0xe8, 0, 0, 0, 0};
+      writeLE<uint32_t>(Text.Data.data() + 7, 0x100 - 11);
+      if (Restore)
+        Text.Data.insert(Text.Data.end(), {0x8d, 0x65, 0xf0}); // ESP = EBP-16.
+      const va_t Use = Text.VA + Text.Data.size();
+      Text.Data.insert(Text.Data.end(), {0x89, 0xe1, 0x89, 0xec, 0x5d, 0xc3});
+      Text.Data.resize(0x100, 0xcc);
+      Text.Data.insert(Text.Data.end(), {0xc2, uint8_t(Pop), 0});
+      Text.Size = Text.FileSz = Text.Data.size();
+      Image.Segments.push_back(Text);
+      Section Code;
+      Code.VA = Text.VA;
+      Code.Size = Code.FileSz = Text.Size;
+      Code.Flags = Text.Flags;
+      Code.Data = Text.Data;
+      Image.Sections.push_back(Code);
+      const std::set<va_t> Entries{Image.Entry, Image.Entry + 0x100};
+      for (const auto Entry : Entries)
+        Image.Symbols.push_back(Symbol::makeFunc(Entry));
+      Decoder Dec;
+      ASSERT_TRUE(Dec.init(Image));
+      CFGBuilder B;
+      B.setKnownFuncEntries(&Entries);
+      const auto Function =
+          B.buildIntegerFrameProof(Image, Dec, Image.Entry, "caller");
+      ASSERT_TRUE(Function.hasCompleteLiftCoverage());
+      const auto Q = Access::nativeCallStackEpoch(B, Image.Entry + 6, Use);
+      ASSERT_GE(Q.UseSeq, 0);
+      const auto Answer = Access::batch(B, {Q});
+      ASSERT_TRUE(Answer.Complete);
+      // No callee-stack receipt participates in this query. Even RET 0
+      // needs that separate proof; the explicit EBP restoration is local.
+      EXPECT_EQ(Answer.Values, (std::vector<bool>{Restore}));
+    }
+}
+
+TEST(ResolverFrameModes, ImportedCopyStackReceiptRequiresExactNativeCall) {
+  for (bool Scalar : {false, true})
+    for (unsigned Variant = 0; Variant != 19; ++Variant) {
+      SCOPED_TRACE(::testing::Message() << Scalar << ':' << Variant);
+      auto Image = image();
+      CFGBuilder B;
+      const auto Q =
+          Access::seedImportedCopyStackEpoch(B, Image, Scalar, Variant);
+      const auto Answer = Access::batch(B, {Q});
+      EXPECT_EQ(Answer.Values, (std::vector<bool>{Variant < 2}));
+      if (Variant < 2)
+        EXPECT_TRUE(Answer.Complete);
+      EXPECT_EQ(Access::batch(B, {Q}), Answer);
+      Access::clear(B);
+      EXPECT_EQ(Access::batch(B, {Q}), Answer);
+      if (Variant >= 2)
+        continue;
+      const size_t Work = 1000000 - Answer.Remaining;
+      ASSERT_GT(Work, 1u);
+      for (size_t Limit : {size_t{1}, Work - 1, Work}) {
+        auto ColdImage = image();
+        CFGBuilder Cold;
+        const auto ColdQ = Access::seedImportedCopyStackEpoch(Cold, ColdImage,
+                                                              Scalar, Variant);
+        const auto Bounded = Access::batch(Cold, {ColdQ}, Limit);
+        EXPECT_EQ(Access::batch(B, {Q}, Limit), Bounded);
+        EXPECT_EQ(Bounded.Complete, Limit == Work);
+        if (Limit == Work)
+          EXPECT_EQ(Bounded.Values, (std::vector<bool>{true}));
+        else
+          EXPECT_TRUE(std::none_of(Bounded.Values.begin(), Bounded.Values.end(),
+                                   [](bool Value) { return Value; }));
+      }
+    }
 }
 
 TEST(ResolverFrameModes, ValueModesDoNotRebuildIndependentFrameProofs) {

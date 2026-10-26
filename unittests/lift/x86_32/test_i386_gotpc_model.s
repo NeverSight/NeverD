@@ -622,7 +622,8 @@ jt_i386_gotoff_prescaled_literal_zero:
 // A call/pop GOT base is spilled to a private caller-frame cell.  One table
 // arm calls an ordinary scalar helper and then re-enters the dispatch, so the
 // expanded proof graph must trace the exact GOTOFF model through a CALL before
-// reloading the spill.  The helper never observes the spill address.
+// reloading the spill. The helper never observes the spill address. Restore
+// ESP explicitly: this resolver query carries no callee-cleanup receipt.
 .p2align 2
 .globl jt_i386_gotoff_private_spill_calls
 .type jt_i386_gotoff_private_spill_calls, @function
@@ -652,7 +653,7 @@ jt_i386_gotoff_private_spill_calls_branch:
 .Lprivate_spill_case0:
   pushl %ecx
   call jt_i386_gotoff_private_spill_scalar
-  addl $4, %esp
+  leal -8(%ebp), %esp
   movl $1, %ecx
   jmp .Lprivate_spill_dispatch
 .Lprivate_spill_case1:
@@ -701,7 +702,7 @@ jt_i386_gotoff_escaped_spill_call_branch:
   movb -8(%ebp), %al
   pushl %eax
   call jt_i386_gotoff_private_spill_mutator
-  addl $4, %esp
+  leal -8(%ebp), %esp
   movl $1, %ecx
   jmp .Lesescaped_spill_dispatch
 .Lesescaped_spill_case1:

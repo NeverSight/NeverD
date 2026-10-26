@@ -307,8 +307,9 @@ struct TargetRegInfo {
                                    BinaryFormat Format) const;
 
   /// Every register byte range preserved by the platform calling convention.
-  /// Includes the stack/frame pointers, partially preserved vector banks, and
-  /// Win64's additional nonvolatile GPR/SIMD registers.
+  /// Includes the frame pointer, partially preserved vector banks, and
+  /// Win64's additional nonvolatile GPR/SIMD registers. The stack pointer is
+  /// excluded on i386, where a callee may pop incoming arguments.
   std::vector<TargetRegisterRange>
   callPreservedRanges(BinaryFormat Format) const;
 
