@@ -15,6 +15,37 @@ namespace neverd::sbf {
 namespace {
 
 template <typename UInt>
+std::optional<uint64_t> evaluateScalarALUImpl(Operation Op, UInt Left,
+                                              UInt Right, bool SwapOperands) {
+  constexpr unsigned Width = sizeof(UInt) * kBitsPerByte;
+  switch (Op) {
+  case Operation::Add:
+    return static_cast<UInt>(Left + Right);
+  case Operation::Sub:
+    return static_cast<UInt>(SwapOperands ? Right - Left : Left - Right);
+  case Operation::Mul:
+    return static_cast<UInt>(Left * Right);
+  case Operation::Or:
+    return Left | Right;
+  case Operation::And:
+    return Left & Right;
+  case Operation::Xor:
+    return Left ^ Right;
+  case Operation::LSh:
+    return static_cast<UInt>(Left << (Right & (Width - 1)));
+  case Operation::RSh:
+    return Left >> (Right & (Width - 1));
+  case Operation::ARSh:
+    return static_cast<UInt>(std::bit_cast<std::make_signed_t<UInt>>(Left) >>
+                             (Right & (Width - 1)));
+  case Operation::Neg:
+    return static_cast<UInt>(UInt{0} - Left);
+  default:
+    return std::nullopt;
+  }
+}
+
+template <typename UInt>
 bool evaluateBranchConditionImpl(Operation Op, UInt Left, UInt Right) {
   const auto Signed = [](UInt Value) {
     return std::bit_cast<std::make_signed_t<UInt>>(Value);
@@ -134,6 +165,20 @@ uint64_t extendALU32Result(uint32_t Value, ResultExtension Extension) {
     return static_cast<uint64_t>(
         static_cast<int64_t>(std::bit_cast<int32_t>(Value)));
   return Value;
+}
+
+std::optional<uint64_t> evaluateScalarALU(Operation Op, unsigned Width,
+                                          uint64_t Left, uint64_t Right,
+                                          bool SwapOperands) {
+  switch (Width) {
+  case kWordBitWidth:
+    return evaluateScalarALUImpl(Op, static_cast<uint32_t>(Left),
+                                 static_cast<uint32_t>(Right), SwapOperands);
+  case kDoubleWordBitWidth:
+    return evaluateScalarALUImpl(Op, Left, Right, SwapOperands);
+  default:
+    return std::nullopt;
+  }
 }
 
 bool evaluateBranchCondition(Operation Op, unsigned Width, uint64_t Left,

@@ -16,6 +16,7 @@
 #include "neverd/sbf/runtime/SBFOpcodes.h"
 
 #include <cstdint>
+#include <optional>
 
 namespace neverd::sbf {
 
@@ -68,6 +69,11 @@ struct SemanticTraits {
 SemanticTraits semanticTraits(const OpcodeInfo &Info, Version V);
 uint64_t normalizeImmediate(uint64_t Immediate, ImmediateExtension Extension);
 uint64_t extendALU32Result(uint32_t Value, ResultExtension Extension);
+/// Evaluate a non-faulting scalar ALU operation, truncating to its width.
+/// Result extension is applied separately. Other operations return no value.
+std::optional<uint64_t> evaluateScalarALU(Operation Op, unsigned Width,
+                                          uint64_t Left, uint64_t Right,
+                                          bool SwapOperands = false);
 /// Evaluate a validated conditional opcode with normalized scalar operands.
 /// Width is the opcode's 32- or 64-bit comparison width.
 bool evaluateBranchCondition(Operation Op, unsigned Width, uint64_t Left,

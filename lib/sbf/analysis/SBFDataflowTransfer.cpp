@@ -53,11 +53,10 @@ void applyAddSubImmediate(const MedInstruction &Instruction,
                           RegisterValue &Value) {
   const uint64_t Immediate = instructionImmediate(Instruction);
   if (Value.ValueKind == RegisterValue::Kind::Constant) {
-    const uint64_t Result =
-        Instruction.Op == Operation::Add     ? Value.Value + Immediate
-        : Instruction.Semantics.SwapOperands ? Immediate - Value.Value
-                                             : Value.Value - Immediate;
-    Value.Value = normalizeResult(Instruction, Result);
+    Value.Value = normalizeResult(
+        Instruction,
+        *evaluateScalarALU(Instruction.Op, Instruction.Width, Value.Value,
+                           Immediate, Instruction.Semantics.SwapOperands));
     return;
   }
 
@@ -221,6 +220,7 @@ void applySyscallWindow(const SyscallMemoryInfo &Window, MachineState &State) {
 /// without following them the payload at the invocation reads as unproven.
 struct ModeledMemoryTransfer {
   va_t Destination = 0;
+  uint64_t Size = 0;
   llvm::SmallVector<uint8_t> Bytes;
   StoredRegisterMemory Values;
   MemoryCoordinate Coordinate = MemoryCoordinate::Absolute;
@@ -257,6 +257,7 @@ modelMemoryTransfer(const MedInstruction &Instruction,
       return std::nullopt;
     ModeledMemoryTransfer Transfer{
         *Destination,
+        *Length,
         llvm::SmallVector<uint8_t>(*Length, static_cast<uint8_t>(*Fill)),
         {}};
     Transfer.Coordinate = memoryCoordinate(
@@ -280,10 +281,13 @@ modelMemoryTransfer(const MedInstruction &Instruction,
     return std::nullopt;
   const llvm::ArrayRef<uint8_t> Bytes =
       readProven(State, Image, *Source, *Length);
-  if (Bytes.empty())
+  if (Bytes.empty() && (!TrackValues || !isScratchRange(*Source, *Length)))
     return std::nullopt;
   ModeledMemoryTransfer Transfer{
-      *Destination, llvm::SmallVector<uint8_t>(Bytes.begin(), Bytes.end()), {}};
+      *Destination,
+      *Length,
+      llvm::SmallVector<uint8_t>(Bytes.begin(), Bytes.end()),
+      {}};
   Transfer.Coordinate = memoryCoordinate(
       State.Registers[argumentRegister(SyscallArgument::Arg1)]);
   const MemoryCoordinate SourceCoordinate = memoryCoordinate(
@@ -323,9 +327,10 @@ void applyCall(const MedInstruction &Instruction, MachineState &State,
     if (Window.Access == SyscallMemoryAccess::Write)
       applySyscallWindow(Window, State);
   if (Transfer) {
-    State.Scratch.Memory.write(Transfer->Destination, Transfer->Bytes);
+    if (!Transfer->Bytes.empty())
+      State.Scratch.Memory.write(Transfer->Destination, Transfer->Bytes);
     State.Scratch.Values.copyFrom(Transfer->Values, Transfer->Destination,
-                                  Transfer->Destination, Transfer->Bytes.size(),
+                                  Transfer->Destination, Transfer->Size,
                                   Transfer->Coordinate, Transfer->Coordinate);
   }
 }
@@ -407,6 +412,17 @@ void applyRegisterTransfer(const MedInstruction &Instruction,
               Instruction.Op == Operation::Sub) &&
              Instruction.Form == OperandForm::DstImm) {
     applyAddSubImmediate(Instruction, State[Instruction.Dst]);
+  } else if ((Instruction.Op == Operation::Add ||
+              Instruction.Op == Operation::Sub) &&
+             Instruction.Form == OperandForm::DstSrc &&
+             State[Instruction.Src].ValueKind ==
+                 RegisterValue::Kind::Constant) {
+    MedInstruction Immediate = Instruction;
+    Immediate.Form = OperandForm::DstImm;
+    Immediate.Semantics.Source = OperandSourceKind::Immediate;
+    Immediate.Semantics.Immediate = ImmediateExtension::Full64;
+    Immediate.Immediate = State[Instruction.Src].Value;
+    applyAddSubImmediate(Immediate, State[Instruction.Dst]);
   } else if (Instruction.Op == Operation::HighOr &&
              State[Instruction.Dst].ValueKind ==
                  RegisterValue::Kind::Constant) {
@@ -414,7 +430,23 @@ void applyRegisterTransfer(const MedInstruction &Instruction,
         static_cast<uint64_t>(static_cast<uint32_t>(Instruction.Immediate))
         << kWordBitWidth;
   } else if (Instruction.Semantics.WritesDestination) {
+    const auto Left = State[Instruction.Dst];
+    const auto Right =
+        Instruction.Semantics.Source == OperandSourceKind::SourceRegister
+            ? State[Instruction.Src]
+            : RegisterValue{RegisterValue::Kind::Constant,
+                            instructionImmediate(Instruction), 0};
+    // Symbolic addresses are affine expressions, never numeric ALU operands.
+    const auto Value =
+        Left.ValueKind == RegisterValue::Kind::Constant &&
+                (Instruction.Op == Operation::Neg ||
+                 Right.ValueKind == RegisterValue::Kind::Constant)
+            ? evaluateScalarALU(Instruction.Op, Instruction.Width, Left.Value,
+                                Right.Value, Instruction.Semantics.SwapOperands)
+            : std::nullopt;
     State[Instruction.Dst] = {};
+    if (Value)
+      SetConstant(normalizeResult(Instruction, *Value));
   }
 
   if (Instruction.Call != CallKind::None)

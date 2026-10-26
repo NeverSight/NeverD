@@ -692,6 +692,116 @@ TEST(SBFCallXContexts, ComposesParameterizedWritesAndReturnAddresses) {
   }
 }
 
+TEST(SBFStoredRegisterMemory, ScalarALUDoesNotEvaluateSymbolicAddresses) {
+  auto Program = analyze(test::makeImage({encode(Opcode::EXIT)}, {}));
+  ASSERT_TRUE(static_cast<bool>(Program))
+      << llvm::toString(Program.takeError());
+  RegisterState State{};
+  const auto Apply = [&](Opcode Op, uint8_t Src = 0, int32_t Immediate = 0,
+                         Version V = Version::V0) {
+    const auto &Info = *getOpcodeInfo(Op);
+    MedInstruction I;
+    I.Op = Info.Op;
+    I.Form = Info.Form;
+    I.Width = Info.Width;
+    I.Src = Src;
+    I.Immediate = static_cast<uint64_t>(Immediate);
+    I.Semantics = semanticTraits(Info, V);
+    applyRegisterTransfer(I, State, Program->ExecutableImage);
+  };
+  for (Version V : {Version::V0, Version::V2}) {
+    State[0] = {RegisterValue::Kind::Constant, 0x40000000, 0};
+    Apply(Opcode::MUL32_IMM, 0, 3, V);
+    EXPECT_EQ(State[0].ValueKind, RegisterValue::Kind::Constant);
+    EXPECT_EQ(State[0].Value, V == Version::V0 ? UINT64_C(0xffffffffc0000000)
+                                               : UINT64_C(0xc0000000));
+  }
+  State[0] = {RegisterValue::Kind::StackAddress, kStackStart, 64};
+  State[1] = {RegisterValue::Kind::Constant, 8, 0};
+  Apply(Opcode::ADD64_REG, 1);
+  EXPECT_EQ(State[0], (RegisterValue{RegisterValue::Kind::StackAddress,
+                                     kStackStart, 72}));
+  Apply(Opcode::SUB64_REG, 1);
+  EXPECT_EQ(State[0].Offset, 64);
+  Apply(Opcode::MUL64_IMM, 0, 1);
+  EXPECT_EQ(State[0].ValueKind, RegisterValue::Kind::Unknown);
+  State[0] = {RegisterValue::Kind::Constant, 5, 0};
+  State[1] = {};
+  Apply(Opcode::OR64_REG, 1);
+  EXPECT_EQ(State[0].ValueKind, RegisterValue::Kind::Unknown);
+  State[0] = {RegisterValue::Kind::Constant, 7, 0};
+  Apply(Opcode::SUB64_IMM, 0, 10, Version::V2);
+  EXPECT_EQ(State[0].Value, 3u);
+}
+
+TEST(SBFCallXContexts, FollowsLengthArithmeticIntoWordCopyOrMemcpy) {
+  // The length calculation mirrors a compiler-emitted copy dispatcher. Both
+  // its shifted/multiplied length and its register-indexed word addresses
+  // must stay known. Unknown arithmetic must not authorize a target.
+  for (int32_t Length : {8, 127}) {
+    SCOPED_TRACE(Length);
+    std::vector<test::EncodedInstruction> Text{
+        encode(Opcode::MOV64_REG, 1, 10),
+        encode(Opcode::ADD64_IMM, 1, 0, 0, -256)};
+    const auto Literal = test::loadImm64(2, kBytecodeStart + 33 * 8);
+    Text.insert(Text.end(), Literal.begin(), Literal.end());
+    const std::vector<test::EncodedInstruction> Body{
+        encode(Opcode::ST_DW_REG, 1, 2),
+        encode(Opcode::MOV64_REG, 2, 1),
+        encode(Opcode::MOV64_REG, 1, 10),
+        encode(Opcode::ADD64_IMM, 1, 0, 0, -512),
+        encode(Opcode::MOV64_IMM, 3, 0, 0, Length),
+        encode(Opcode::CALL_IMM, 0, 1, 0, 3),
+        encode(Opcode::LD_DW_REG, 2, 0),
+        encode(Opcode::CALL_REG, 2),
+        encode(Opcode::EXIT),
+        encode(Opcode::MOV64_REG, 6, 1),
+        encode(Opcode::MOV64_REG, 4, 3),
+        encode(Opcode::RSH64_IMM, 4, 0, 0, 3),
+        encode(Opcode::MOV64_REG, 1, 4),
+        encode(Opcode::MUL64_IMM, 1, 0, 0, -7),
+        encode(Opcode::ADD64_REG, 1, 3),
+        encode(Opcode::JGT64_IMM, 1, 0, 9, 15),
+        encode(Opcode::MOV64_IMM, 1),
+        encode(Opcode::MOV64_REG, 0, 6),
+        encode(Opcode::ADD64_REG, 0, 1),
+        encode(Opcode::MOV64_REG, 7, 2),
+        encode(Opcode::ADD64_REG, 7, 1),
+        encode(Opcode::LD_DW_REG, 7, 7),
+        encode(Opcode::ST_DW_REG, 0, 7),
+        encode(Opcode::MOV64_REG, 0, 6),
+        encode(Opcode::EXIT),
+        encode(Opcode::MOV64_REG, 1, 6),
+        encode(Opcode::CALL_IMM, 0, 0, 0,
+               getSyscallInfo(Syscall::Memcpy)->Hash),
+        encode(Opcode::MOV64_REG, 0, 6),
+        encode(Opcode::EXIT),
+        encode(Opcode::MOV64_IMM, 0, 0, 0, 42),
+        encode(Opcode::EXIT)};
+    Text.insert(Text.end(), Body.begin(), Body.end());
+    auto Program = analyze(test::makeImage(Text, {}));
+    ASSERT_TRUE(static_cast<bool>(Program))
+        << llvm::toString(Program.takeError());
+    auto Report = recoverCallXContexts(*Program);
+    ASSERT_TRUE(static_cast<bool>(Report))
+        << llvm::toString(Report.takeError());
+    bool Proven = false;
+    for (const auto &Proof : Report->Contexts)
+      if (Proof.CallXSlot == 11 && Proof.TargetSlot) {
+        EXPECT_EQ(Proof.TargetSlot, 33u);
+        Proven = true;
+      }
+    EXPECT_TRUE(Proven);
+    EXPECT_GT(Report->SkippedConstantBranchSuccessors, 0u);
+    if (Length == 8) {
+      auto Raw = executeRaw(*Program);
+      ASSERT_TRUE(static_cast<bool>(Raw)) << llvm::toString(Raw.takeError());
+      EXPECT_EQ(Raw->Status, ExecutionStatus::Returned) << Raw->Error;
+      EXPECT_EQ(Raw->ReturnValue, 42u);
+    }
+  }
+}
+
 TEST(SBFCallXContexts, InstantiatesMustStoreValuesThroughGeneralizedWrappers) {
   // Vary both the output address and target past the four retained variants.
   // The generic leaf and wrapper must express the store using entry inputs,
@@ -1349,6 +1459,35 @@ TEST(SBFStoredRegisterMemory,
   Call.Call = CallKind::Internal;
   applyTransfer(Call, State, ProgramImage{}, ScratchLoadPolicy::ProvenValues);
   EXPECT_TRUE(State.Scratch.empty());
+}
+
+TEST(SBFStoredRegisterMemory, CopiesKnownWordsWithoutInventingOtherBytes) {
+  const va_t Source = kStackStart + 1024;
+  const va_t Destination = kStackStart + 2048;
+  const RegisterValue Origin{RegisterValue::Kind::StackAddress, 2, 16};
+  for (auto Which : {Syscall::Memcpy, Syscall::Memmove})
+    for (uint64_t Length : std::array<uint64_t, 3>{7, 127, kMemoryRegionSize}) {
+      MachineState State;
+      State.Registers[1] = {RegisterValue::Kind::StackAddress, Destination, 0};
+      State.Registers[2] = {RegisterValue::Kind::StackAddress, Source, 0};
+      State.Registers[3] = {RegisterValue::Kind::Constant, Length, 0};
+      State.Scratch.Values.write(Source, Origin,
+                                 MemoryCoordinate::FrameRelative);
+      const std::array<uint8_t, 1> Partial{0xa5};
+      State.Scratch.Memory.write(Source, Partial);
+      MedInstruction Copy;
+      Copy.Call = CallKind::Syscall;
+      Copy.Syscall = getSyscallInfo(Which);
+      applyTransfer(Copy, State, ProgramImage{},
+                    ScratchLoadPolicy::ProvenValues);
+      EXPECT_EQ(State.Scratch.Values.read(Destination,
+                                          MemoryCoordinate::FrameRelative),
+                Length == 127 ? Origin : RegisterValue{});
+      EXPECT_EQ(State.Scratch.Values.read(Destination + 8,
+                                          MemoryCoordinate::FrameRelative),
+                RegisterValue{});
+      EXPECT_TRUE(State.Scratch.Memory.read(Destination, 1).empty());
+    }
 }
 
 TEST(SBFStoredRegisterMemory, WrappingFrameStoreCoordinatesCannotProveAWord) {

@@ -331,6 +331,15 @@ remaining CALLX values are reported separately and do not count as a unique
 proven target or authorize a single-callee effect summary. Ordinary block and
 Solana recovery retain the singleton must-analysis policy.
 
+The scalar transfer and raw interpreter share width-normalized wrapping ALU
+evaluation, including bitwise operations, masked shifts and multiplication.
+Only proven constants enter numeric folding. A proven register offset can
+advance a typed address through the same affine rule as an immediate offset;
+symbolic frame/input identities are never evaluated as numbers. Byte-moving
+syscalls can retain complete typed words within a proven copy range even when
+other source bytes are unknown. Partial words and the unknown bytes stay
+unknown; copied symbolic words never become literal VM addresses.
+
 A separate symbolic lane describes entry-register-relative return expressions
 and may-write intervals, including pointer spills through local scratch. Its
 symbolic bases are never VM addresses or literal target values. At a call,
@@ -343,6 +352,10 @@ precedence and recursion retain conservative havoc. Generic frame anchors and
 return expressions are instantiated before they can escape to a caller.
 Catalog return annotations do not override the configured host callback outcome;
 possible syscall continuations remain in the CFG.
+
+Replacement searches examine only the entry's live variants in creation order,
+including after reclamation. Their index is charged to the retained-state
+budget; historical stable IDs do not enlarge the four-variant limit.
 
 Full-width stores also produce entry-relative must-value postconditions. These
 are intersected at joins and composed through nested calls, then substituted

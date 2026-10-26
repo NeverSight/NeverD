@@ -52,9 +52,6 @@ struct CallFrame {
 int64_t signed64(uint64_t Value);
 int32_t signed32(uint32_t Value);
 
-uint32_t arithmeticShiftRight32(uint32_t Value, uint32_t Shift);
-uint64_t arithmeticShiftRight64(uint64_t Value, uint64_t Shift);
-
 uint64_t unsignedHighMultiply64(uint64_t Left, uint64_t Right);
 uint64_t signedHighMultiply64(uint64_t Left, uint64_t Right);
 

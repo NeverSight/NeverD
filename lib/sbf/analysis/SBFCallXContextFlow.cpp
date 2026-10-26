@@ -647,9 +647,8 @@ void ContextFlow::transferValues(const MedInstruction &Instruction,
       }
     }
   } else {
-    // The scalar owner only propagates Mov, immediate arithmetic and HighOr.
-    // Enumerating both declared operands also remains conservative if that
-    // owner learns another operation later; no opcode semantics live here.
+    // Lift the canonical scalar transfer over complete operand alternatives;
+    // neither numeric opcode semantics nor affine-address rules live here.
     for (const auto &Source : possibleValues(State.Registers[Instruction.Src]))
       for (const auto &Destination :
            possibleValues(State.Registers[Instruction.Dst])) {
