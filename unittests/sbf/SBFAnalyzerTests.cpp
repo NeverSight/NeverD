@@ -1543,7 +1543,7 @@ TEST(SBFAnalyzer, RepresentsAndEmitsTenThousandRemoteJoinConditionals) {
     auto Source = emitRust(*Program);
     ASSERT_TRUE(static_cast<bool>(Source))
         << llvm::toString(Source.takeError());
-    EXPECT_NE(Source->find("match pc"), std::string::npos)
+    EXPECT_NE(Source->find("match current_pc"), std::string::npos)
         << "hostile nesting must use the exact portable Rust dispatcher";
   }
 }
@@ -1750,7 +1750,7 @@ TEST(SBFAnalyzer, RepresentsFiveThousandNestedNaturalLoopsCompactly) {
     auto Source = emitRust(*Program);
     ASSERT_TRUE(static_cast<bool>(Source))
         << llvm::toString(Source.takeError());
-    EXPECT_NE(Source->find("match pc"), std::string::npos)
+    EXPECT_NE(Source->find("match current_pc"), std::string::npos)
         << "deep loop syntax must use the exact portable Rust dispatcher";
   }
 }
