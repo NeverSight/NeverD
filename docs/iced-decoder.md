@@ -71,6 +71,45 @@ check passed. Eight AArch64/ARM/Thumb/RISC-V cases retained identical outputs
 with no stable regression. The other 107 decoder/core objects are byte-identical
 to the baseline; the x86 decoder object grows by about 26 KiB.
 
+Capstone `9e6e87177334998e122a5ba9d69d06f187ffbf09` further specializes the public iterator's
+byte copy using the successful x86 decoder's 15-byte limit. It removes generic
+truncation, large-copy dispatch and a duplicate size write. Allocated output
+keeps the generic path, leaving the shared core object byte-identical to
+`a0340fe4122fbf43f2a5f7000e20ea49daa7e5ec`. Hot x86 scan entries and metadata
+use explicit alignment. The new adapter boundary check covers every accepted
+length and rejects 16-byte results even with 16 bytes of available input.
+
+The same nine-trial, paired fresh-process protocol compared the final Release
+library with `a0340fe4122fbf43f2a5f7000e20ea49daa7e5ec` on 2026-10-27:
+
+| Decode workload | Previous / new public iterator time |
+| --- | ---: |
+| Scalar64 / scalar32 / scalar16 | 1.081x / 1.108x / 1.107x |
+| SIMD64 | 1.040x |
+| Six 64-bit system-code streams | 1.031x–1.073x |
+| Five PE32 code samples | 1.053x–1.061x |
+
+Native batch decoding remains faster than native iced on all 15 substantive
+matching-boundary cases, measuring 1.122x–1.798x iced/Capstone time. This change
+does not establish a further batch speedup: batch ratios against the previous
+Capstone version ranged from 0.972x to 1.008x. In a follow-up controlled layout
+comparison, AWK changed from 0.972x to 0.994x and the PE32 SEH O0 case from
+0.986x to 0.991x. Every observation is retained. Public iteration still trails
+iced on scalar, SIMD, bash, SQLite and the five substantive PE32 cases; it leads
+on the four other system streams. SSH and the tiny controls retain the exclusions
+above. These results do not establish universal or full-detail superiority.
+
+The final build again matched 272,920,462 scan, 37,916,536 full API and 864,000
+raw-state observations. Release passed 116 checks with the same hardware skip;
+ASan/UBSan and reduced builds each passed six checks, and adapter parity and
+length-boundary checks passed. The other 105 core/decoder objects are unchanged.
+Eight AArch64/ARM/Thumb/RISC-V workloads retained identical outputs. Small
+AArch64 timing changes remain unresolved under host load: for example, SQLite
+measured 0.981x in final qualification and 1.007x in the follow-up controlled
+comparison. No non-x86 speedup is claimed. Splitting function and table alignment
+did not produce a consistently better overall candidate; rejected layouts and
+pointer-preservation experiments are excluded from the fork.
+
 NeverD can use the pinned NeverSight iced fork for selected x86 32/64-bit
 classification scans. Enable it with `-DNEVERD_ENABLE_ICED=ON`; the
 default remains off because whole-workload and platform qualification is
