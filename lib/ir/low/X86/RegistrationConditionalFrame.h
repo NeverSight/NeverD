@@ -80,9 +80,16 @@ struct BoundPlainCalleeEffect {
   FrameValue ReturnValue = FrameValue::taint(true);
 };
 
+/// The current source caller alone owns this storage query. It may extend a
+/// scalar word into contiguous live storage after checking its allocation and
+/// runtime administration. The query bills that caller's active work counter;
+/// the callee must not retain it or infer an extent from neighboring values.
+using BoundCxxBorrowStorage =
+    std::function<std::optional<RegistrationObjectExtent>(int32_t)>;
+
 using BoundCxxCalleeProver = std::function<std::optional<BoundCxxCalleeEffect>(
     const LowFunc &, const LowOp &, const FrameState &,
-    const std::set<int32_t> &, size_t &)>;
+    const std::set<int32_t> &, const BoundCxxBorrowStorage &, size_t &)>;
 
 /// Root invocations retain their actual caller domain. All image import slots
 /// participate in binding invalidation before this proof can use a callee's
@@ -167,13 +174,18 @@ std::optional<BoundCalleeEffect> proveBoundSEHCallee(
 /// OwnerIndex may reuse only context-free evidence for this same image. It
 /// bills its own queries; the caller must also charge Work to that owner once
 /// its state analysis finishes. Invocation inputs/results are never cached.
+/// BorrowStorage can authorize additional contiguous caller storage. Each
+/// word still needs a separate value/initialization check, and a possibly
+/// overlapping frame pointer stops the loan before those bytes. Without this
+/// current-caller authority, the original one-word storage bound remains.
 std::optional<BoundCxxCalleeEffect>
 proveBoundCxxCallee(const BinaryImage &Image, const LowOp &Op,
                     const FrameState &Parent, uint32_t StackArgumentBytes,
                     size_t &Work,
                     llvm::ArrayRef<RegistrationObjectExtent> CallerObjects = {},
                     const std::set<int32_t> *Initialized = nullptr,
-                    RegistrationCallCalleeIndex *OwnerIndex = nullptr);
+                    RegistrationCallCalleeIndex *OwnerIndex = nullptr,
+                    const BoundCxxBorrowStorage *BorrowStorage = nullptr);
 
 using BoundCalleeProver = std::function<std::optional<BoundCalleeEffect>(
     const LowOp &, const FrameState &, size_t &,

@@ -9123,6 +9123,22 @@ enter that target-only cache. The index bills its own queries and receives the
 separate source-state work once at publication; failures consume the same
 unchanged cumulative budget. An index for another image cannot supply evidence.
 
+At a bound C++ call, the current source solver can also authorize a larger
+contiguous storage interval beginning at the supplied output pointer. It uses
+the current stack allocation or an already admitted ancestor borrow, and the
+same administration predicate used by ordinary object projection. Saved-stack,
+registration and cookie bytes terminate the interval. The callee separately
+excludes outgoing arguments and checks every word's initialization and retained
+pointer provenance; even partial overlapping pointer bytes stop the scalar
+loan. Thus an uninitialized second field can be written before reading, while
+an initialized neighboring value alone grants no storage extent. Without the
+current caller's storage query, a standalone invocation retains its one-word
+bound. These intervals describe physical source storage, not inferred C++
+object types, and may-writes still invalidate every affected caller value.
+The query and its word projections share the existing cumulative work and
+borrowed-byte limits. Larger storage grants no native call receipt or permission
+to read an opaque external pointer.
+
 Within that private query, nested cleanup-only C++ calls replay the same source
 owner with their current physical CALL, near RET cleanup, register inputs and
 initialized stack words. The caller validates every lent object, including

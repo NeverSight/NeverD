@@ -7182,6 +7182,15 @@ exercise the root's shared index and source-state accounting.
 zero, nonzero and zero inputs. Only the proved zero may bypass a capturing
 branch. Both successful and failed source queries consume cumulative work;
 an index from a different image refuses without supplying evidence.
+`RootBorrowExtentRequiresCallerStorage` exercises direct and nested second-field
+accesses through an actual source root. Writes followed by reads and separately
+initialized fields succeed only inside the live allocation. SavedESP, cookie, outgoing
+argument and below-stack storage refuse, as do reads before initialization and
+full or partial adjacent frame pointers. A neighboring scalar cleanup field
+remains ordinary owned storage, with its actual writes projected back to the
+caller. All successful cases still lack a native call receipt and parent ABI.
+`WordBorrowDoesNotInventAdjacentStorage` keeps the standalone word-only query
+negative even when a neighboring caller value is known and initialized.
 Nested C++ cases forward an ancestor output or lend a private initialized word,
 preserve returned aliases through another GS epilogue, and distinguish a scalar
 result store from exact, joined and partial alias stores. Repeated calls check

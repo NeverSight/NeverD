@@ -342,6 +342,49 @@ bool RegistrationStateSolver::frameObjectIsDisjointFromAdministration(
   return true;
 }
 
+std::optional<RegistrationObjectExtent>
+RegistrationStateSolver::cxxBorrowedStorage(const Domain &State,
+                                            int32_t Begin) {
+  const auto SP = parentStackOffset(State);
+  if (!KnownCxx || !SP || State.Unknown || Begin < *SP ||
+      Begin < -int64_t(limits::kMaxSourceCallBorrowedBytes))
+    return std::nullopt;
+  int64_t End = *Chain.cxxRuntimeFrameOffset();
+  if (Begin >= 8 && Conditional) {
+    if (!charge(Conditional->Objects.size() + 1))
+      return std::nullopt;
+    for (const auto &Object : Conditional->Objects)
+      if (Object.Begin <= Begin && int64_t(Begin) + 4 <= Object.End)
+        End = std::max(End, int64_t(Object.End));
+  }
+  End = std::min(End, int64_t(Begin) + limits::kMaxSourceCallBorrowedBytes);
+  if (End < int64_t(Begin) + 4)
+    return std::nullopt;
+
+  // The prefix predicate is monotone: once a range touches administration,
+  // extending it cannot regain ownership. Reuse that authority, including
+  // noncontiguous cookie slots, without scanning a large frame byte by byte.
+  uint32_t Words = 0, Limit = uint32_t((End - Begin) / 4);
+  while (Words < Limit) {
+    if (!charge(CxxCookieConditions.size() + 1))
+      return std::nullopt;
+    const uint32_t Middle = Words + (Limit - Words + 1) / 2;
+    if (frameObjectIsDisjointFromAdministration(Begin,
+                                                int64_t(Begin) + 4 * Middle))
+      Words = Middle;
+    else
+      Limit = Middle - 1;
+  }
+  if (!Words)
+    return std::nullopt;
+  const RegistrationObjectExtent Extent{Begin,
+                                        int32_t(int64_t(Begin) + 4 * Words)};
+  std::vector<RegistrationObjectExtent> Projected;
+  if (!projectFrameObject(State, 0, SP, {Extent}, Projected, false, false))
+    return std::nullopt;
+  return Extent;
+}
+
 bool RegistrationStateSolver::projectFrameObject(
     const Domain &State, int32_t Object, std::optional<int32_t> SP,
     llvm::ArrayRef<RegistrationObjectExtent> Extents,

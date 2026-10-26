@@ -442,6 +442,8 @@ private:
   /// saved-stack, exception-pointer, realigned-anchor or cookie storage.
   bool frameObjectIsDisjointFromAdministration(int64_t Begin,
                                                int64_t End) const;
+  std::optional<RegistrationObjectExtent>
+  cxxBorrowedStorage(const Domain &State, int32_t Begin);
   bool projectFrameObject(const Domain &State, int32_t Object,
                           std::optional<int32_t> SP,
                           llvm::ArrayRef<RegistrationObjectExtent> Extents,

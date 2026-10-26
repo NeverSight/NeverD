@@ -41,9 +41,13 @@ RegistrationStateSolver::transferConditionalCxxCall(Domain &After,
   if (PlainProof)
     Plain = Conditional->ProvePlainCall(Function, Op, After.Frame,
                                         After.InitializedFrameBytes, WorkUsed);
-  if (!Plain && CxxProof && *CxxProof)
+  if (!Plain && CxxProof && *CxxProof) {
+    const BoundCxxBorrowStorage Storage = [&](int32_t Begin) {
+      return cxxBorrowedStorage(After, Begin);
+    };
     Cxx = (*CxxProof)(Function, Op, After.Frame, After.InitializedFrameBytes,
-                      WorkUsed);
+                      Storage, WorkUsed);
+  }
   if ((!Plain && !Cxx) ||
       (Cxx && (!Cxx->StackPopBytes || Cxx->Returns.empty())))
     return std::nullopt;

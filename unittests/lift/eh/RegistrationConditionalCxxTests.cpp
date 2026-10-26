@@ -63,6 +63,8 @@ struct BoundCxxFixture {
     StoreByte,
     StoreByteThenReadWord,
     StoreWordThenReadWord,
+    StoreTwoWordsThenReadSecond,
+    ReadSecondWord,
     StoreOneArm,
     StoreOneArmThenReadWord,
     StoreBothArmsThenReadWord
@@ -136,6 +138,12 @@ struct BoundCxxFixture {
       break;
     case OutputAccess::StoreWordThenReadWord:
       Bytes({0x89, 0x10, 0x8b, 0x10});
+      break;
+    case OutputAccess::StoreTwoWordsThenReadSecond:
+      Bytes({0x89, 0x10, 0x89, 0x50, 4, 0x8b, 0x50, 4});
+      break;
+    case OutputAccess::ReadSecondWord:
+      Bytes({0x8b, 0x50, 4});
       break;
     case OutputAccess::StoreOneArm:
     case OutputAccess::StoreOneArmThenReadWord:
@@ -287,7 +295,8 @@ struct BoundCxxFixture {
   void addOuter(bool ForwardBorrow = true, bool StoreResult = false,
                 bool RepeatNested = false, va_t Wrapper = Outer,
                 bool CrossPopSpill = false, bool RequireZero = false,
-                std::optional<va_t> ImageWrite = std::nullopt) {
+                std::optional<va_t> ImageWrite = std::nullopt,
+                bool ZeroInput = false) {
     auto &Text = Image.Segments.front().Data;
     const auto Target = Call.Inputs[0].Offset;
     const va_t WrapperCaller = Wrapper + (OuterCaller - Outer);
@@ -308,9 +317,11 @@ struct BoundCxxFixture {
     Word(Handler);
     Bytes({0x64, 0xa1, 0, 0, 0, 0, 0x50, 0x83, 0xec, 16, 0xa1});
     Word(Data);
-    Bytes({0x33, 0xc5, 0x50, 0x8d, 0x45, 0xf4, 0x64, 0xa3, 0, 0,
-           0,    0,    0x89, 0x4d, 0xe8, 0xc7, 0x45, 0xec, 1, 0,
-           0,    0,    0xc7, 0x45, 0xfc, 0,    0,    0,    0});
+    Bytes({0x33, 0xc5, 0x50, 0x8d, 0x45, 0xf4, 0x64, 0xa3, 0, 0, 0, 0});
+    if (ZeroInput)
+      Bytes({0x31, 0xc9});
+    Bytes({0x89, 0x4d, 0xe8, 0xc7, 0x45, 0xec, 1, 0, 0, 0, 0xc7, 0x45, 0xfc, 0,
+           0, 0, 0});
     if (CrossPopSpill)
       Bytes({0x83, 0xec, 12, 0xc7, 0x45, 0xd4, 0, 0, 0, 0, 0x6a, 0});
     if (ImageWrite) {
@@ -826,11 +837,12 @@ TEST(RegistrationConditionalCxx, ReturnedFactsRequireACompleteScalarCarrier) {
     Inputs.ProveCxxCall =
         [&](const LowFunc &Caller, const LowOp &Call, const FrameState &Frame,
             const std::set<int32_t> &Initialized,
+            const BoundCxxBorrowStorage &Storage,
             size_t &Used) -> std::optional<BoundCxxCalleeEffect> {
       if (!checkedRegistrationDirectCall(F.Image, Caller, Call, Used))
         return std::nullopt;
       return proveBoundCxxCallee(F.Image, Call, Frame, 0, Used, Inputs.Objects,
-                                 &Initialized);
+                                 &Initialized, nullptr, &Storage);
     };
     RegistrationStateSolver Solver(Function, Data, 0, &*Callees, &*Cleanups,
                                    &*Stacks, nullptr, nullptr, &Inputs, nullptr,
@@ -1116,6 +1128,94 @@ TEST(RegistrationConditionalCxx, RootInvocationDoesNotGrantNativeCallABI) {
       }
     }
   }
+}
+
+TEST(RegistrationConditionalCxx, RootBorrowExtentRequiresCallerStorage) {
+  struct Case {
+    const char *Name;
+    int8_t Output;
+    bool ReadOnly;
+    bool Initialized;
+    int8_t PointerStore;
+    uint8_t SecondStore;
+    bool Accepted;
+  };
+  for (bool Nested : {false, true}) {
+    SCOPED_TRACE(Nested);
+    for (const auto &C : {
+             Case{"write then read second field", -28, false, false, 0, 4,
+                  true},
+             Case{"second field is SavedESP", -20, false, false, 0, 4, false},
+             Case{"outgoing argument", -36, false, false, 0, 4, false},
+             Case{"cookie", -32, false, false, 0, 4, false},
+             Case{"below live stack", -40, false, false, 0, 4, false},
+             Case{"uninitialized second field", -28, true, false, 0, 4, false},
+             Case{"initialized second field", -28, true, true, 0, 4, true},
+             Case{"adjacent frame pointer", -28, false, false, -24, 4, false},
+             Case{"overlapping pointer bytes", -28, false, false, -22, 4,
+                  false},
+             Case{"store reaches SavedESP", -28, false, true, 0, 12, false},
+             Case{"neighboring scalar storage", -24, false, true, 0, 4, true},
+         }) {
+      SCOPED_TRACE(C.Name);
+      BoundCxxFixture F(
+          BoundCxxFixture::ReturnMode::Scalar, false, false, false, false,
+          std::nullopt,
+          C.ReadOnly
+              ? BoundCxxFixture::OutputAccess::ReadSecondWord
+              : BoundCxxFixture::OutputAccess::StoreTwoWordsThenReadSecond);
+      if (Nested)
+        F.addOuter();
+      const va_t Root = Nested ? Outer + 0x800 : Outer;
+      const va_t RootCaller = Root + (OuterCaller - Outer);
+      F.addOuter(false, false, false, Root, false, false, std::nullopt, true);
+      auto &Text = F.Image.Segments.front().Data;
+      const std::vector<uint8_t> Save{0x89, 0x4d, 0xe8};
+      const auto Saved = std::search(Text.begin() + Root - Entry,
+                                     Text.begin() + F.OuterCallVA - Entry,
+                                     Save.begin(), Save.end());
+      ASSERT_NE(Saved, Text.begin() + F.OuterCallVA - Entry);
+      const auto SaveVA = Entry + (Saved - Text.begin());
+      if (C.PointerStore)
+        F.overwrite(SaveVA, {0x89, 0x6d, uint8_t(C.PointerStore)});
+      else if (!C.Initialized)
+        F.overwrite(SaveVA, {0x90, 0x90, 0x90});
+      F.overwrite(F.OuterCallVA - 4, {0x8d, 0x45, uint8_t(C.Output), 0x50});
+      if (!C.ReadOnly)
+        F.overwrite(F.StoreVA + 4, {C.SecondStore});
+      const std::vector<uint8_t> Return{0x8b, 0xe5, 0x5d, 0xc2, 4, 0};
+      const auto Ret = std::search(Text.begin() + F.OuterResultVA - Entry,
+                                   Text.begin() + RootCaller - Entry,
+                                   Return.begin(), Return.end());
+      ASSERT_NE(Ret, Text.begin() + RootCaller - Entry);
+      F.overwrite(Entry + (Ret - Text.begin()) + 3, {0xc3, 0x90, 0x90});
+      F.Image.ExceptionMetadata = {};
+      coff_loader::parseX86RegistrationExceptions(F.Image);
+      Decoder Decode;
+      ASSERT_TRUE(Decode.init(F.Image));
+      CFGBuilder Builder;
+      const auto Function = Builder.buildIntegerFrameProof(
+          F.Image, Decode, Root, "authored-root-storage");
+      ASSERT_TRUE(Function.hasCompleteLiftCoverage());
+      ASSERT_TRUE(Function.RegistrationStates);
+      const auto &States = *Function.RegistrationStates;
+      EXPECT_EQ(States.Complete, C.Accepted);
+      EXPECT_EQ(States.SourceCallFrameEffectsComplete, C.Accepted);
+      EXPECT_FALSE(States.CallFrameEffectsComplete);
+      EXPECT_FALSE(getCheckedX86RegistrationCxxParentABI(Function, F.Image));
+      for (const auto &Effect : States.CallFrameEffects)
+        EXPECT_NE(Effect.Address, F.OuterCallVA);
+    }
+  }
+}
+
+TEST(RegistrationConditionalCxx, WordBorrowDoesNotInventAdjacentStorage) {
+  BoundCxxFixture F(BoundCxxFixture::ReturnMode::Scalar, false, false, false,
+                    false, std::nullopt,
+                    BoundCxxFixture::OutputAccess::StoreTwoWordsThenReadSecond);
+  F.Parent.Cells[-24] = FrameValue::constant(0);
+  size_t Work = 0;
+  EXPECT_FALSE(F.prove(Work));
 }
 
 TEST(RegistrationConditionalCxx, StackPopPreservesOverlappingPointerBytes) {

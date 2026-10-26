@@ -183,16 +183,19 @@ RegistrationStateAnalysis analyzeCheckedX86CxxStates(
     }
     Calls.ImportSlots.insert(Import.IATAddr);
   }
-  Calls.ProveCall = [&](const LowFunc &Caller, const LowOp &Call,
-                        const registration_state::FrameState &Frame,
-                        const std::set<int32_t> &Initialized, size_t &Used)
+  Calls.ProveCall =
+      [&](const LowFunc &Caller, const LowOp &Call,
+          const registration_state::FrameState &Frame,
+          const std::set<int32_t> &Initialized,
+          const registration_state::BoundCxxBorrowStorage &Storage,
+          size_t &Used)
       -> std::optional<registration_state::BoundCxxCalleeEffect> {
     if (!Frame.ImportBindingsIntact ||
         !registration_state::checkedRegistrationDirectCall(Image, Caller, Call,
                                                            Used))
       return std::nullopt;
     return registration_state::proveBoundCxxCallee(
-        Image, Call, Frame, 0, Used, {}, &Initialized, CalleeIndex);
+        Image, Call, Frame, 0, Used, {}, &Initialized, CalleeIndex, &Storage);
   };
   auto States =
       solveCheckedCxxStates(Image, Function, Callees, Cleanups, Stacks,
@@ -437,7 +440,8 @@ proveBoundCxxCallee(const BinaryImage &Image, const LowOp &Op,
                     size_t &Work,
                     llvm::ArrayRef<RegistrationObjectExtent> CallerObjects,
                     const std::set<int32_t> *Initialized,
-                    RegistrationCallCalleeIndex *OwnerIndex) {
+                    RegistrationCallCalleeIndex *OwnerIndex,
+                    const BoundCxxBorrowStorage *BorrowStorage) {
   if ((OwnerIndex && !OwnerIndex->ownsImage(Image)) ||
       Image.Arch != Arch::X86 || Image.Bits != Bitness::Bits32 ||
       Image.Format != BinaryFormat::COFF || Op.Opcode != NdOp::CALL ||
@@ -537,7 +541,6 @@ proveBoundCxxCallee(const BinaryImage &Image, const LowOp &Op,
     }
     if (!Value.Offset || Value != FrameValue::frame(*Value.Offset))
       continue;
-    const auto Object = ReadWord(*Value.Offset);
     const int64_t Offset = int64_t(*Value.Offset) - Base;
     if (!registration_abi::chargeCalleeWork(Work, CallerObjects.size()))
       return std::nullopt;
@@ -548,33 +551,65 @@ proveBoundCxxCallee(const BinaryImage &Image, const LowOp &Op,
     // The exact incoming area ends before the supplied caller word. Saved
     // EBP/PC are outside the caller allocation. Its other administration and
     // object ownership remain preconditions of the caller's frame proof.
-    if ((!Object && !Initialized) ||
-        *Value.Offset < int64_t(*SP) + StackArgumentBytes ||
+    if (*Value.Offset < int64_t(*SP) + StackArgumentBytes ||
         (!Borrowed && int64_t(*Value.Offset) + 4 > 0) || Offset > INT32_MAX - 4)
       continue;
-    // Storage ownership does not require an old value. Retain overlapping
-    // frame-pointer taint even when some bytes lack initialization; no such
-    // value may enter this scalar borrow through a sparse missing cell.
-    if (!registration_abi::chargeCalleeWork(Work,
-                                            Parent.memoryAccessWork(Value, 4)))
-      return std::nullopt;
-    if (Parent.load(*Value.Offset, 4).MayBeFrame)
+    int64_t StorageEnd = int64_t(*Value.Offset) + 4;
+    if (BorrowStorage) {
+      if (!*BorrowStorage || !registration_abi::chargeCalleeWork(Work, 1))
+        return std::nullopt;
+      const auto Storage = (*BorrowStorage)(*Value.Offset);
+      if (!Storage || Storage->Begin != *Value.Offset ||
+          Storage->End < StorageEnd ||
+          int64_t(Storage->End) - Storage->Begin >
+              limits::kMaxSourceCallBorrowedBytes ||
+          int64_t(Storage->End) - Base > INT32_MAX)
+        continue;
+      if (!registration_abi::chargeCalleeWork(Work, CallerObjects.size()))
+        return std::nullopt;
+      if (Storage->End > 0 &&
+          !llvm::any_of(CallerObjects, [&](const auto &Range) {
+            return Range.Begin >= 8 && Range.Begin <= Storage->Begin &&
+                   Storage->End <= Range.End;
+          }))
+        continue;
+      StorageEnd = int64_t(Storage->Begin) +
+                   (int64_t(Storage->End) - Storage->Begin) / 4 * 4;
+    }
+    int64_t BorrowEnd = *Value.Offset;
+    for (int64_t Word = *Value.Offset; Word < StorageEnd; Word += 4) {
+      const auto Object = ReadWord(int32_t(Word));
+      if (!Object && !Initialized)
+        break;
+      // Storage ownership does not require an old value. A possibly
+      // overlapping pointer, including partial bytes, ends this scalar loan
+      // even if the callee would overwrite it before its first read.
+      if (!registration_abi::chargeCalleeWork(
+              Work,
+              Parent.memoryAccessWork(FrameValue::frame(int32_t(Word)), 4)))
+        return std::nullopt;
+      if (Parent.load(int32_t(Word), 4).MayBeFrame)
+        break;
+      if (Object)
+        Inputs.ObjectCells.emplace(int32_t(Word - Base), *Object);
+      BorrowEnd = Word + 4;
+    }
+    if (BorrowEnd == *Value.Offset)
       continue;
     Inputs.Arguments.emplace(8 + Arg, FrameValue::frame(int32_t(Offset)));
-    Inputs.Objects.push_back({int32_t(Offset), int32_t(Offset + 4)});
-    if (Object)
-      Inputs.ObjectCells.emplace(int32_t(Offset), *Object);
+    Inputs.Objects.push_back({int32_t(Offset), int32_t(BorrowEnd - Base)});
   }
   if (Inputs.Objects.empty())
     return std::nullopt;
   Inputs.ProveCxxCall =
       [&](const LowFunc &Caller, const LowOp &Call, const FrameState &State,
           const std::set<int32_t> &InitializedBytes,
+          const BoundCxxBorrowStorage &Storage,
           size_t &Used) -> std::optional<BoundCxxCalleeEffect> {
     if (!checkedRegistrationDirectCall(Image, Caller, Call, Used))
       return std::nullopt;
     return proveBoundCxxCallee(Image, Call, State, 0, Used, Inputs.Objects,
-                               &InitializedBytes, OwnerIndex);
+                               &InitializedBytes, OwnerIndex, &Storage);
   };
   Inputs.ProvePlainCall =
       [&](const LowFunc &Caller, const LowOp &Call, const FrameState &State,
