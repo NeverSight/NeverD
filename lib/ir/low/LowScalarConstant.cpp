@@ -27,15 +27,17 @@ std::optional<uint64_t> lowScalarConstantResult(
   std::optional<uint64_t> Result;
   if (Op.NumInputs == 1 &&
       (Op.Opcode == NdOp::COPY || Op.Opcode == NdOp::INT_ZEXT ||
-       Op.Opcode == NdOp::BOOL_NOT)) {
+       Op.Opcode == NdOp::INT_NOT || Op.Opcode == NdOp::BOOL_NOT)) {
     const auto Width = Op.Inputs[0].Size;
     if (!Width || Width > Op.Output.Size ||
         (Op.Opcode == NdOp::BOOL_NOT && (Width != 1 || Op.Output.Size != 1)) ||
-        (Op.Opcode == NdOp::COPY && Width != Op.Output.Size))
+        ((Op.Opcode == NdOp::COPY || Op.Opcode == NdOp::INT_NOT) &&
+         Width != Op.Output.Size))
       return std::nullopt;
     if (auto Value = ValueOf(Op.Inputs[0]))
-      Result = Op.Opcode == NdOp::BOOL_NOT ? !(*Value & Mask(Width))
-                                           : *Value & Mask(Width);
+      Result = Op.Opcode == NdOp::BOOL_NOT  ? !(*Value & Mask(Width))
+               : Op.Opcode == NdOp::INT_NOT ? ~*Value
+                                            : *Value & Mask(Width);
   } else if (Op.NumInputs == 2 && Op.Output.Size == 1 && Op.Inputs[0].Size &&
              Op.Inputs[0].Size <= 8 && Op.Inputs[0].Size == Op.Inputs[1].Size &&
              (Op.Opcode == NdOp::INT_EQUAL || Op.Opcode == NdOp::INT_NOTEQUAL ||
