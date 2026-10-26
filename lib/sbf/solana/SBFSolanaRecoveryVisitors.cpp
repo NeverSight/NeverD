@@ -57,7 +57,8 @@ void Recovery::noteKey(va_t Address, const Pubkey &Key, bool ReferencedByCode) {
   // Deduplicate on the key rather than the address so a value repeated across
   // read-only data appears once, at the first place it was found.
   const uint64_t FirstWord = llvm::support::endian::read64le(Key.Bytes.data());
-  llvm::SmallVector<size_t, 1> &Bucket = KeyIndicesByFirstWord[FirstWord];
+  llvm::SmallVector<size_t, 1> &Bucket =
+      KeyIndicesByFirstWord[wordKey(FirstWord)];
   for (size_t Index : Bucket) {
     RecoveredPubkey &Existing = Model.Pubkeys[Index];
     if (Existing.Key == Key) {

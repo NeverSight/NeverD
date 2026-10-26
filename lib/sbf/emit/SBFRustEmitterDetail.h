@@ -20,6 +20,7 @@
 
 #include "neverd/sbf/analysis/SBFStructuredCFG.h"
 #include "neverd/sbf/emit/SBFRustEmitter.h"
+#include "neverd/sbf/emit/SBFSourcePartition.h"
 
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Compiler.h"
@@ -37,6 +38,10 @@ namespace LLVM_LIBRARY_VISIBILITY_NAMESPACE rust_emitter_detail {
 /// A 64-bit literal in the generated Rust dialect.
 std::string word(uint64_t Value);
 
+/// Statically named VM register field. Avoids per-use array-index trait work
+/// in the Rust frontend; the register bank is private generated state.
+std::string reg(unsigned Register);
+
 /// The Rust expression for the comparison \p Instruction performs.
 std::string comparison(const MedInstruction &Instruction);
 
@@ -44,11 +49,24 @@ std::string comparison(const MedInstruction &Instruction);
 /// for the control-flow forms, which the caller renders itself.
 bool emitLinearInstruction(llvm::raw_ostream &OS,
                            const MedInstruction &Instruction,
-                           llvm::StringRef Indent);
+                           llvm::StringRef Indent,
+                           bool SharedMemoryFault = false);
 
 /// Render one arm of the dispatch match, control flow included.
 void emitInstruction(llvm::raw_ostream &OS, const MedInstruction &Instruction,
-                     const SBFProgram &Program);
+                     const SBFProgram &Program, bool InPartition = false);
+
+/// Render shared call protocol helpers used by partitioned regions.
+void emitCallHelpers(llvm::raw_ostream &OS, const SBFProgram &Program);
+
+/// Memory callbacks record a fault for the region's single post-step check.
+/// No following instruction executes before that check.
+void emitMemoryHelpers(llvm::raw_ostream &OS, const SBFProgram &Program);
+
+void emitPartitionedProgram(
+    llvm::raw_ostream &OS, const SBFProgram &Program,
+    const std::map<size_t, const MedInstruction *> &BySlot,
+    const SourcePartition &Partition);
 
 /// Render a validated structured control-flow plan. Returns false when the
 /// plan contains a node this backend cannot render.

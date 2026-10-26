@@ -353,7 +353,7 @@ runRegisterDataflow(SBFProgram &Program,
     RegisterState State = Block.Inputs;
     for (size_t Slot = Block.StartSlot; Slot < Block.EndSlot; ++Slot)
       if (const MedInstruction *Instruction = Index.find(Slot))
-        applyRegisterTransfer(*Instruction, State);
+        applyRegisterTransfer(*Instruction, State, Program.ExecutableImage);
     const bool FirstEvaluation = !Reached[ID];
     const bool OutputChanged = State != Block.Outputs;
     if (!FirstEvaluation && !OutputChanged)
@@ -432,7 +432,7 @@ bool refineCallXTargets(DecodeContext &Context) {
           Instruction->Call = CallKind::Indirect;
           Instruction->CallTarget.reset();
           Changed |= ClassificationChanged;
-          applyRegisterTransfer(*Instruction, State);
+          applyRegisterTransfer(*Instruction, State, Program.ExecutableImage);
           continue;
         }
 
@@ -466,7 +466,7 @@ bool refineCallXTargets(DecodeContext &Context) {
           DiagnosedContinuationTargets.set(*ExactTarget);
         }
       }
-      applyRegisterTransfer(*Instruction, State);
+      applyRegisterTransfer(*Instruction, State, Program.ExecutableImage);
     }
   }
   return Changed;

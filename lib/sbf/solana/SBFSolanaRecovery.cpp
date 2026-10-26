@@ -15,6 +15,7 @@
 #include "neverd/sbf/solana/SBFSolanaRecovery.h"
 
 #include "SBFSolanaRecoveryDetail.h"
+#include "SBFWordKey.h"
 
 #include "neverd/sbf/SBFConstants.h"
 #include "neverd/sbf/SBFIR.h"
@@ -40,26 +41,27 @@ namespace solana_recovery_detail {
 void Recovery::scanReadOnlyData() {
   // Index both tables by their leading word so a region scan costs one hash
   // probe per offset instead of one comparison per table entry.
-  llvm::DenseMap<uint64_t, llvm::SmallVector<const KnownAddressInfo *, 1>>
+  llvm::DenseMap<WordKey, llvm::SmallVector<const KnownAddressInfo *, 1>>
       AddressesByFirstWord;
   for (const KnownAddressInfo &Info : knownAddressInfos()) {
     // The all-zero System Program address would match every zero run in
     // read-only data, so it is only recognized when code references it.
     if (!Info.Decoded || Info.Key.isZero())
       continue;
-    AddressesByFirstWord[llvm::support::endian::read64le(Info.Key.Bytes.data())]
+    AddressesByFirstWord[wordKey(llvm::support::endian::read64le(
+                             Info.Key.Bytes.data()))]
         .push_back(&Info);
   }
 
   // A discriminator is only eight bytes, so one probe is the whole comparison.
   // Anchor derives them by truncating SHA-256, which makes an accidental match
   // as unlikely as a collision in that hash.
-  llvm::DenseSet<uint64_t> NamedWords;
+  llvm::DenseSet<WordKey> NamedWords;
   for (const AnchorNameInfo &Info : anchorNameInfos())
-    NamedWords.insert(Info.Discriminator.toWord());
+    NamedWords.insert(wordKey(Info.Discriminator.toWord()));
   if (Options.Idl)
     for (const AnchorIdlItem &Item : Options.Idl->Items)
-      NamedWords.insert(Item.Discriminator.toWord());
+      NamedWords.insert(wordKey(Item.Discriminator.toWord()));
 
   for (const ProgramRegion &Region : Program.ExecutableImage.regions()) {
     if (!Region.DataVisible || Region.Bytes.size() < kAnchorDiscriminatorLength)
@@ -73,7 +75,7 @@ void Recovery::scanReadOnlyData() {
       const uint64_t Word =
           llvm::support::endian::read64le(Region.Bytes.data() + Offset);
 
-      if (NamedWords.contains(Word)) {
+      if (NamedWords.contains(wordKey(Word))) {
         RecoveredDiscriminator Found;
         Found.Address = Region.Address + Offset;
         Found.Value = AnchorDiscriminator::fromWord(Word);
@@ -87,7 +89,7 @@ void Recovery::scanReadOnlyData() {
 
       if (!HoldsKey || Offset > LastKey)
         continue;
-      const auto Addresses = AddressesByFirstWord.find(Word);
+      const auto Addresses = AddressesByFirstWord.find(wordKey(Word));
       if (Addresses == AddressesByFirstWord.end())
         continue;
       const llvm::ArrayRef<uint8_t> Window =

@@ -1,0 +1,19 @@
+//===- SBFAnalysisStages.def - Observable SBF analysis boundaries -*- C++
+//-*-===//
+//
+// NeverD Decompiler
+//
+// SBF_ANALYSIS_STAGE(ID, NAME)
+// No include guard: consumers generate the enum and its spelling together.
+//
+//===----------------------------------------------------------------------===//
+
+SBF_ANALYSIS_STAGE(RuntimeImage, "runtime_image")
+SBF_ANALYSIS_STAGE(Decode, "decode")
+SBF_ANALYSIS_STAGE(ControlFlow, "control_flow")
+SBF_ANALYSIS_STAGE(Verification, "verification")
+SBF_ANALYSIS_STAGE(MedIR, "cfg_medir")
+SBF_ANALYSIS_STAGE(HighIR, "highir")
+SBF_ANALYSIS_STAGE(Solana, "solana")
+
+#undef SBF_ANALYSIS_STAGE

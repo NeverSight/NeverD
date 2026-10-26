@@ -34,85 +34,137 @@ llvm::Expected<SBFProgram> analyze(const BinaryImage &Image,
     return llvm::make_error<llvm::StringError>(
         "sbf: input image is not a loaded SBF ELF",
         llvm::inconvertibleErrorCode());
-  SBFProgram Program;
-  Program.Image = *Image.SBF;
-  if (Options.VersionOverride != Version::Auto) {
-    if (!isConcreteVersion(Options.VersionOverride))
-      return llvm::make_error<llvm::StringError>(
-          "sbf: invalid explicit version override",
-          llvm::inconvertibleErrorCode());
-    Program.Image.Version = Options.VersionOverride;
-  }
-
-  if (Options.ExpertEnvironment && Options.RuntimeVersions)
+  if (analysisStageName(Options.StopAfter) == "unknown")
     return llvm::make_error<llvm::StringError>(
-        "sbf: a complete expert environment cannot be combined with a "
-        "separate runtime version policy",
-        llvm::inconvertibleErrorCode());
+        "sbf: invalid analysis stop stage", llvm::inconvertibleErrorCode());
+  SBFProgram Program;
+  const auto RunStage = [&](AnalysisStage Stage, auto &&Body) -> llvm::Error {
+    if (Options.Observer)
+      Options.Observer(Stage, AnalysisStageState::Started, Program);
+    llvm::Error Error = Body();
+    if (Options.Observer)
+      Options.Observer(Stage,
+                       Error ? AnalysisStageState::Failed
+                             : AnalysisStageState::Passed,
+                       Program);
+    return Error;
+  };
+  if (llvm::Error Error =
+          RunStage(AnalysisStage::RuntimeImage, [&]() -> llvm::Error {
+            Program.Image = *Image.SBF;
+            if (Options.VersionOverride != Version::Auto) {
+              if (!isConcreteVersion(Options.VersionOverride))
+                return llvm::make_error<llvm::StringError>(
+                    "sbf: invalid explicit version override",
+                    llvm::inconvertibleErrorCode());
+              Program.Image.Version = Options.VersionOverride;
+            }
 
-  auto Environment = [&]() -> llvm::Expected<ResolvedRuntimeEnvironment> {
-    if (Options.ExpertEnvironment)
-      return resolveExpertRuntimeEnvironment(*Options.ExpertEnvironment);
-    const RuntimeVersionPolicy VersionPolicy = Options.RuntimeVersions.value_or(
-        Options.VersionOverride == Version::Auto
-            ? RuntimeVersionPolicy::ChainProfile
-            : RuntimeVersionPolicy::UpstreamToolchain);
-    return resolveRuntimeEnvironment(Options.Profile, VersionPolicy);
-  }();
-  if (!Environment)
-    return Environment.takeError();
-  Program.Config = Environment->vmConfig();
-  Program.EnvironmentOrigin = Environment->origin();
-  Program.VersionPolicy = Environment->versionPolicy();
-  Program.MinimumRuntimeVersion = Environment->minimumVersion();
-  Program.MaximumRuntimeVersion = Environment->maximumVersion();
-  Program.Profile = Environment->profile();
-  Program.ActiveRuntimeFeatures = Environment->activeRuntimeFeatures();
-  Program.RuntimeAccountABI = Environment->accountABI();
-  Program.RegisteredSyscallHashes.assign(
-      Environment->registeredSyscallHashes().begin(),
-      Environment->registeredSyscallHashes().end());
+            if (Options.ExpertEnvironment && Options.RuntimeVersions)
+              return llvm::make_error<llvm::StringError>(
+                  "sbf: a complete expert environment cannot be combined with "
+                  "a "
+                  "separate runtime version policy",
+                  llvm::inconvertibleErrorCode());
 
-  auto ExecutableImage = buildProgramImage(Image, Program.Image, *Environment);
-  if (!ExecutableImage)
-    return ExecutableImage.takeError();
-  Program.ExecutableImage = std::move(*ExecutableImage);
-  Program.Low.TheVersion = Program.ExecutableImage.version();
-  Program.Low.TextAddress = Program.ExecutableImage.textAddress();
-  Program.Low.EntrySlot = Program.ExecutableImage.entrySlot();
+            auto Environment =
+                [&]() -> llvm::Expected<ResolvedRuntimeEnvironment> {
+              if (Options.ExpertEnvironment)
+                return resolveExpertRuntimeEnvironment(
+                    *Options.ExpertEnvironment);
+              const RuntimeVersionPolicy VersionPolicy =
+                  Options.RuntimeVersions.value_or(
+                      Options.VersionOverride == Version::Auto
+                          ? RuntimeVersionPolicy::ChainProfile
+                          : RuntimeVersionPolicy::UpstreamToolchain);
+              return resolveRuntimeEnvironment(Options.Profile, VersionPolicy);
+            }();
+            if (!Environment)
+              return Environment.takeError();
+            Program.Config = Environment->vmConfig();
+            Program.EnvironmentOrigin = Environment->origin();
+            Program.VersionPolicy = Environment->versionPolicy();
+            Program.MinimumRuntimeVersion = Environment->minimumVersion();
+            Program.MaximumRuntimeVersion = Environment->maximumVersion();
+            Program.Profile = Environment->profile();
+            Program.ActiveRuntimeFeatures =
+                Environment->activeRuntimeFeatures();
+            Program.RuntimeAccountABI = Environment->accountABI();
+            Program.RegisteredSyscallHashes.assign(
+                Environment->registeredSyscallHashes().begin(),
+                Environment->registeredSyscallHashes().end());
+
+            auto ExecutableImage =
+                buildProgramImage(Image, Program.Image, *Environment);
+            if (!ExecutableImage)
+              return ExecutableImage.takeError();
+            Program.ExecutableImage = std::move(*ExecutableImage);
+            Program.Low.TheVersion = Program.ExecutableImage.version();
+            Program.Low.TextAddress = Program.ExecutableImage.textAddress();
+            Program.Low.EntrySlot = Program.ExecutableImage.entrySlot();
+            return llvm::Error::success();
+          }))
+    return std::move(Error);
+  if (Options.StopAfter == AnalysisStage::RuntimeImage)
+    return Program;
 
   DecodeContext Context{Image, Options, Program};
-  if (llvm::Error Error = decodeInstructions(Context))
+  if (llvm::Error Error = RunStage(AnalysisStage::Decode, [&]() -> llvm::Error {
+        if (llvm::Error Error = decodeInstructions(Context))
+          return std::move(Error);
+        if (Program.Low.EntrySlot >= Program.Low.Instructions.size())
+          return analysisError(Program.Low.EntrySlot, Image.Entry,
+                               "entry point is outside program text");
+        return llvm::Error::success();
+      }))
     return std::move(Error);
-  if (Program.Low.EntrySlot >= Program.Low.Instructions.size())
-    return analysisError(Program.Low.EntrySlot, Image.Entry,
-                         "entry point is outside program text");
-  if (llvm::Error Error = resolveControlFlow(Context))
+  if (Options.StopAfter == AnalysisStage::Decode)
+    return Program;
+  if (llvm::Error Error =
+          RunStage(AnalysisStage::ControlFlow, [&]() -> llvm::Error {
+            if (llvm::Error Error = resolveControlFlow(Context))
+              return std::move(Error);
+            collectFunctionEntries(Context);
+            return llvm::Error::success();
+          }))
     return std::move(Error);
-  collectFunctionEntries(Context);
-  if (Options.Verification == VerificationPolicy::RequisiteAndLocalPreflight) {
-    const bool RequisiteFailed = std::any_of(
-        Program.Low.Instructions.begin(), Program.Low.Instructions.end(),
-        [](const LowInstruction &Instruction) {
-          return Instruction.isInvalid();
-        });
-    if (RequisiteFailed) {
-      Program.Verification.State = VerificationState::BlockedByRequisite;
-    } else {
-      auto Verification =
-          verifyLocalPreflight(Program.Low, Program.RegisteredSyscallHashes);
-      if (!Verification)
-        return Verification.takeError();
-      Program.Verification = std::move(*Verification);
-      for (const VerificationIssue &Issue : Program.Verification.Issues) {
-        Program.Low.Diagnostics.push_back(
-            {DiagnosticSeverity::Error, Issue.Slot, Issue.Address,
-             Issue.Message, ValidationRule::None});
-        if (Options.Strict)
-          return analysisError(Issue.Slot, Issue.Address, Issue.Message);
-      }
-    }
-  }
+  if (Options.StopAfter == AnalysisStage::ControlFlow)
+    return Program;
+  if (llvm::Error Error =
+          RunStage(AnalysisStage::Verification, [&]() -> llvm::Error {
+            if (Options.Verification ==
+                VerificationPolicy::RequisiteAndLocalPreflight) {
+              const bool RequisiteFailed =
+                  std::any_of(Program.Low.Instructions.begin(),
+                              Program.Low.Instructions.end(),
+                              [](const LowInstruction &Instruction) {
+                                return Instruction.isInvalid();
+                              });
+              if (RequisiteFailed) {
+                Program.Verification.State =
+                    VerificationState::BlockedByRequisite;
+              } else {
+                auto Verification = verifyLocalPreflight(
+                    Program.Low, Program.RegisteredSyscallHashes);
+                if (!Verification)
+                  return Verification.takeError();
+                Program.Verification = std::move(*Verification);
+                for (const VerificationIssue &Issue :
+                     Program.Verification.Issues) {
+                  Program.Low.Diagnostics.push_back(
+                      {DiagnosticSeverity::Error, Issue.Slot, Issue.Address,
+                       Issue.Message, ValidationRule::None});
+                  if (Options.Strict)
+                    return analysisError(Issue.Slot, Issue.Address,
+                                         Issue.Message);
+                }
+              }
+            }
+            return llvm::Error::success();
+          }))
+    return std::move(Error);
+  if (Options.StopAfter == AnalysisStage::Verification)
+    return Program;
 
   // Candidate CALLX targets enlarge FunctionEntrySlots monotonically. A new
   // function boundary contributes its own ABI predecessor and can therefore
@@ -121,20 +173,34 @@ llvm::Expected<SBFProgram> analyze(const BinaryImage &Image,
   // as Internal, until neither the bounded boundary set nor a classification
   // changes. Retaining discovered boundaries makes the process monotone and
   // avoids an Indirect/Internal oscillation without an arbitrary step cap.
-  for (;;) {
-    Program.Low.Blocks.clear();
-    Program.Low.Edges.clear();
-    Program.Med = {};
-    buildCFG(Program.Low, Context.FunctionEntrySlots);
-    buildMedIR(Program);
-    runRegisterDataflow(Program, Context.FunctionEntrySlots);
-    if (!refineCallXTargets(Context))
-      break;
-  }
-  if (Options.RecoverHighIR) {
-    recoverHighIR(Context);
-    Program.High.Solana = recoverSolanaModel(Program, {Options.Idl});
-  }
+  if (llvm::Error Error = RunStage(AnalysisStage::MedIR, [&]() -> llvm::Error {
+        for (;;) {
+          Program.Low.Blocks.clear();
+          Program.Low.Edges.clear();
+          Program.Med = {};
+          buildCFG(Program.Low, Context.FunctionEntrySlots);
+          buildMedIR(Program);
+          runRegisterDataflow(Program, Context.FunctionEntrySlots);
+          if (!refineCallXTargets(Context))
+            break;
+        }
+        return llvm::Error::success();
+      }))
+    return std::move(Error);
+  if (Options.StopAfter == AnalysisStage::MedIR || !Options.RecoverHighIR)
+    return Program;
+  if (llvm::Error Error = RunStage(AnalysisStage::HighIR, [&]() -> llvm::Error {
+        recoverHighIR(Context);
+        return llvm::Error::success();
+      }))
+    return std::move(Error);
+  if (Options.StopAfter == AnalysisStage::HighIR)
+    return Program;
+  if (llvm::Error Error = RunStage(AnalysisStage::Solana, [&]() -> llvm::Error {
+        Program.High.Solana = recoverSolanaModel(Program, {Options.Idl});
+        return llvm::Error::success();
+      }))
+    return std::move(Error);
   return Program;
 }
 

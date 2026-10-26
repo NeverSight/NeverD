@@ -9,6 +9,7 @@
 
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/sbf/SBFIR.h"
+#include "neverd/sbf/analysis/SBFAnalysisReport.h"
 #include "neverd/sbf/analysis/SBFVerifier.h"
 
 #include "llvm/ADT/StringRef.h"
@@ -42,6 +43,12 @@ struct AnalyzeOptions {
   /// An Anchor IDL supplied by the operator. Its names take precedence over the
   /// built-in dictionary when recovering instruction dispatch.
   const AnchorIdl *Idl = nullptr;
+  /// Explicit inspection boundary. The returned program contains only stages
+  /// completed up to this boundary; default callers still receive all stages.
+  AnalysisStage StopAfter = AnalysisStage::Solana;
+  /// Notifications borrow immutable stage state for this call only. Persist
+  /// completed snapshots outside the analysis process to survive fatal faults.
+  AnalysisObserver Observer;
 };
 
 llvm::Expected<SBFProgram> analyze(const BinaryImage &Image,

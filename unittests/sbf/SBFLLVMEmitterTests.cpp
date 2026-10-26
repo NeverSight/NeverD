@@ -8,7 +8,9 @@
 
 #include "neverd/sbf/emit/SBFLLVMEmitter.h"
 
+#include "llvm/ADT/ArrayRef.h"
 #include "llvm/IR/Attributes.h"
+#include "llvm/IR/Instructions.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/Support/Error.h"
@@ -26,7 +28,7 @@ namespace neverd::sbf {
 namespace {
 
 SBFProgram makeProgram(Version TheVersion,
-                       std::initializer_list<MedInstruction> Instructions,
+                       llvm::ArrayRef<MedInstruction> Instructions,
                        size_t EntrySlot = 0) {
   SBFProgram Program;
   Program.Low.TheVersion = TheVersion;
@@ -166,6 +168,40 @@ TEST(SBFLLVMEmitter, MatchesCurrentCallFrameAndCallXSemantics) {
   EXPECT_NE(IR.find(", 63"), std::string::npos);
   EXPECT_EQ(IR.find("and i64 %"), std::string::npos);
   EXPECT_NE(IR.find("udiv i64"), std::string::npos);
+}
+
+TEST(SBFLLVMEmitter, CallXTargetEdgesStayLinearAsCallSitesGrow) {
+  for (const size_t CallCount : {1u, 16u, 64u}) {
+    SCOPED_TRACE(CallCount);
+    std::vector<MedInstruction> Instructions;
+    for (size_t Slot = 0; Slot < CallCount; ++Slot) {
+      auto Call = instruction(Slot, Opcode::CALL_REG, Operation::CallX,
+                              OperandForm::CallReg);
+      Call.Call = CallKind::Indirect;
+      Call.CallRegister = kFirstArgumentRegister;
+      Instructions.push_back(Call);
+    }
+    for (size_t Padding = 0; Padding < 128; ++Padding)
+      Instructions.push_back(instruction(Instructions.size(), Opcode::MOV64_IMM,
+                                         Operation::Mov, OperandForm::DstImm));
+    Instructions.push_back(
+        instruction(Instructions.size(), Opcode::EXIT, Operation::Exit));
+    const SBFProgram Program = makeProgram(Version::V3, Instructions);
+    llvm::LLVMContext Context;
+    auto Module = emitLLVM(Program, Context);
+    ASSERT_TRUE(static_cast<bool>(Module))
+        << llvm::toString(Module.takeError());
+    size_t TargetEdges = 0;
+    for (const llvm::Function &Function : **Module)
+      for (const llvm::BasicBlock &Block : Function)
+        if (const auto *Switch =
+                llvm::dyn_cast<llvm::SwitchInst>(Block.getTerminator()))
+          TargetEdges += Switch->getNumCases();
+    // Dynamic calls and returns may each need the full raw-slot table once.
+    // Repeating that table per call site makes real programs exceed the corpus
+    // output budget even though the machine code itself is small.
+    EXPECT_LE(TargetEdges, 2 * Program.Low.Instructions.size());
+  }
 }
 
 TEST(SBFLLVMEmitter, UsesCheckedRuntimeCallsForMemoryAndSyscalls) {

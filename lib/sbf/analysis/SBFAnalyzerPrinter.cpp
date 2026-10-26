@@ -12,6 +12,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "neverd/sbf/analysis/SBFAnalyzer.h"
+#include "neverd/sbf/analysis/SBFDataflow.h"
 #include "neverd/sbf/solana/SBFSolanaRecovery.h"
 
 #include "llvm/ADT/StringExtras.h"
@@ -202,13 +203,15 @@ std::string dumpLowIR(const LowIR &IR) {
 std::string dumpMedIR(const MedIR &IR) {
   std::string Buffer;
   llvm::raw_string_ostream OS(Buffer);
+  const MedInstructionIndex Index(IR);
   OS << "; SBF MedIR " << versionDisplayName(IR.TheVersion) << "\n";
   for (const MedBlock &Block : IR.Blocks) {
     OS << "block_" << Block.ID << ":\n";
-    for (const MedInstruction &Instruction : IR.Instructions) {
-      if (Instruction.Slot < Block.StartSlot ||
-          Instruction.Slot >= Block.EndSlot)
+    for (size_t Slot = Block.StartSlot; Slot < Block.EndSlot; ++Slot) {
+      const MedInstruction *Found = Index.find(Slot);
+      if (!Found)
         continue;
+      const MedInstruction &Instruction = *Found;
       OS << "  %pc" << Instruction.Slot << " = "
          << operationName(Instruction.Op) << "." << unsigned(Instruction.Width)
          << " r" << unsigned(Instruction.Dst);

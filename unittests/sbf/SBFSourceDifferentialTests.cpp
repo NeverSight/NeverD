@@ -18,6 +18,7 @@
 #include "neverd/sbf/analysis/SBFAnalyzer.h"
 #include "neverd/sbf/emit/SBFCEmitter.h"
 #include "neverd/sbf/emit/SBFRustEmitter.h"
+#include "neverd/sbf/emit/SBFSourceLimits.h"
 #include "neverd/sbf/image/SBFRelocations.h"
 #include "neverd/sbf/runtime/SBFInterpreter.h"
 #include "neverd/support/BinaryLoading.h"
@@ -100,8 +101,10 @@ void compileAndRun(SourceBackend Backend, llvm::StringRef Source) {
   EXPECT_EQ(llvm::sys::ExecuteAndWait(Executable.str(), RunArguments), 0);
 }
 
-void runDifferential(SourceBackend Backend, const DifferentialCase &Case) {
+void runDifferential(SourceBackend Backend, const DifferentialCase &Case,
+                     bool Partitioned, std::string *RustModule = nullptr) {
   SCOPED_TRACE(Case.Name);
+  SCOPED_TRACE(Partitioned ? "partitioned" : "monolithic");
   ExecutionEnvironment OracleEnvironment = Case.Environment;
   SyscallCallback CustomSyscall = OracleEnvironment.Syscall;
   OracleEnvironment.Syscall =
@@ -129,6 +132,7 @@ void runDifferential(SourceBackend Backend, const DifferentialCase &Case) {
   if (Backend == SourceBackend::C) {
     CEmitterOptions Options;
     Options.PreferStructuredControlFlow = false;
+    Options.PartitionDispatcher = Partitioned;
     auto Source = emitC(Case.Program, Options);
     ASSERT_TRUE(static_cast<bool>(Source))
         << llvm::toString(Source.takeError());
@@ -142,12 +146,16 @@ void runDifferential(SourceBackend Backend, const DifferentialCase &Case) {
 
   RustEmitterOptions Options;
   Options.PreferStructuredControlFlow = false;
+  Options.PartitionDispatcher = Partitioned;
   auto Source = emitRust(Case.Program, Options);
   ASSERT_TRUE(static_cast<bool>(Source)) << llvm::toString(Source.takeError());
   *Source += makeRustHarness(Case.Environment, *Expected,
                              Case.Program.ActiveRuntimeFeatures, Memory,
                              Case.HostFaults, Case.LoadFault, Case.StoreFault);
-  compileAndRun(Backend, *Source);
+  if (RustModule)
+    *RustModule = std::move(*Source);
+  else
+    compileAndRun(Backend, *Source);
 }
 
 void addSyntheticCases(std::vector<DifferentialCase> &Cases) {
@@ -162,6 +170,60 @@ void addSyntheticCases(std::vector<DifferentialCase> &Cases) {
                      std::move(Environment), std::move(HostFaults), LoadFault,
                      StoreFault});
   };
+
+  // Real corpus programs include both reflexive comparisons and signed casts
+  // immediately before '<'. Every predicate contributes a distinct result bit
+  // so a wrong fold cannot be hidden by another wrong branch.
+  std::vector<test::EncodedInstruction> Comparisons{
+      encode(Opcode::MOV64_IMM, 4, 0, 0, -1),
+      encode(Opcode::MOV64_IMM, 5, 0, 0, 0)};
+  unsigned Predicate = 0;
+  const auto AppendComparison = [&](Opcode Op, uint8_t Dst, uint8_t Src,
+                                    int32_t Immediate = 0) {
+    Comparisons.push_back(encode(Op, Dst, Src, 1, Immediate));
+    Comparisons.push_back(
+        encode(Opcode::ADD64_IMM, 0, 0, 0, int32_t{1} << Predicate++));
+  };
+  for (Opcode Op : {Opcode::JEQ64_REG,  Opcode::JNE64_REG,  Opcode::JGT64_REG,
+                    Opcode::JGE64_REG,  Opcode::JLT64_REG,  Opcode::JLE64_REG,
+                    Opcode::JSGT64_REG, Opcode::JSGE64_REG, Opcode::JSLT64_REG,
+                    Opcode::JSLE64_REG, Opcode::JEQ32_REG,  Opcode::JNE32_REG,
+                    Opcode::JGT32_REG,  Opcode::JGE32_REG,  Opcode::JLT32_REG,
+                    Opcode::JLE32_REG,  Opcode::JSGT32_REG, Opcode::JSGE32_REG,
+                    Opcode::JSLT32_REG, Opcode::JSLE32_REG})
+    AppendComparison(Op, 4, 4);
+  AppendComparison(Opcode::JSLT64_REG, 4, 5);
+  AppendComparison(Opcode::JSLT32_REG, 4, 5);
+  AppendComparison(Opcode::JSLT64_IMM, 4, 0);
+  AppendComparison(Opcode::JSLT32_IMM, 4, 0);
+  AppendComparison(Opcode::JSET64_REG, 4, 4);
+  AppendComparison(Opcode::JSET32_REG, 5, 5);
+  Comparisons.push_back(encode(Opcode::EXIT));
+  Add("signed-and-reflexive-comparisons",
+      analyzeProgram(Version::V3, Comparisons));
+  Add("only-reflexive-signed-predicate",
+      analyzeProgram(Version::V3, {encode(Opcode::JSGT64_REG, 1, 1, 1),
+                                   encode(Opcode::MOV64_IMM, 0, 0, 0, 37),
+                                   encode(Opcode::EXIT)}));
+
+  // The source dialect must cast the complete expression. Rust's `as`
+  // binds more tightly than bitwise operators; testing both legacy signed
+  // and current zero extension catches a cast applied only to the RHS.
+  for (Version SourceVersion : {Version::V0, Version::V3}) {
+    std::vector<test::EncodedInstruction> Bitwise;
+    const auto Wide = encodeLDDW(1, UINT64_C(0xabcdef0181234567));
+    Bitwise.insert(Bitwise.end(), Wide.begin(), Wide.end());
+    for (Opcode Op : {Opcode::OR32_REG, Opcode::AND32_REG, Opcode::XOR32_REG,
+                      Opcode::OR32_IMM, Opcode::AND32_IMM, Opcode::XOR32_IMM}) {
+      Bitwise.push_back(encode(Opcode::MOV64_IMM, 2, 0, 0, -1));
+      Bitwise.push_back(encode(Op, 2, 1, 0, -2));
+      Bitwise.push_back(encode(Opcode::XOR64_REG, 0, 2));
+    }
+    Bitwise.push_back(encode(Opcode::EXIT));
+    Add(SourceVersion == Version::V0 ? "legacy-32-bit-expression-extension"
+                                     : "current-32-bit-expression-extension",
+        analyzeProgram(SourceVersion, Bitwise));
+  }
 
   Add("v0-sign-extension",
       analyzeProgram(Version::V0, {encode(Opcode::MOV64_IMM, 0, 0, 0,
@@ -183,6 +245,44 @@ void addSyntheticCases(std::vector<DifferentialCase> &Cases) {
            encode(Opcode::ADD64_IMM, 0, 0, 0, 40),
            encode(Opcode::CALL_IMM, 0, 1, 0, 1), encode(Opcode::EXIT),
            encode(Opcode::ADD64_IMM, 0, 0, 0, 1), encode(Opcode::EXIT)}));
+
+  // Both caller and callee cross rendering regions. Callee-saved values must
+  // survive the native region transitions and the guest software return;
+  // caller-saved registers and the result must retain the callee's changes.
+  std::vector<test::EncodedInstruction> RegionCalls;
+  for (unsigned Register = kFirstCalleeSavedRegister;
+       Register < kFirstCalleeSavedRegister + kCalleeSavedRegisterCount;
+       ++Register)
+    RegionCalls.push_back(encode(Opcode::MOV64_IMM, Register, 0, 0, Register));
+  const size_t CallSlot = RegionCalls.size();
+  RegionCalls.push_back({});
+  for (size_t Index = 0; Index < kMaximumDispatcherRegionSlots * 2; ++Index)
+    RegionCalls.push_back(encode(Opcode::ADD64_IMM, 0, 0, 0, 1));
+  for (unsigned Register = kFirstCalleeSavedRegister;
+       Register < kFirstCalleeSavedRegister + kCalleeSavedRegisterCount;
+       ++Register) {
+    RegionCalls.push_back(
+        encode(Opcode::MUL64_IMM, Register, 0, 0, int32_t{1} << Register));
+    RegionCalls.push_back(encode(Opcode::ADD64_REG, 0, Register));
+  }
+  RegionCalls.push_back(encode(Opcode::ADD64_REG, 0, kFramePointerRegister));
+  RegionCalls.push_back(encode(Opcode::ADD64_REG, 0, kFirstArgumentRegister));
+  RegionCalls.push_back(encode(Opcode::EXIT));
+  const size_t CalleeSlot = RegionCalls.size();
+  RegionCalls[CallSlot] =
+      encode(Opcode::CALL_IMM, 0, 1, 0,
+             static_cast<int32_t>(CalleeSlot - CallSlot - 1));
+  for (size_t Index = 0; Index < kMaximumDispatcherRegionSlots * 2; ++Index)
+    RegionCalls.push_back(encode(Opcode::ADD64_IMM, 0, 0, 0, 1));
+  for (unsigned Register = kFirstCalleeSavedRegister;
+       Register < kFirstCalleeSavedRegister + kCalleeSavedRegisterCount;
+       ++Register)
+    RegionCalls.push_back(encode(Opcode::MOV64_IMM, Register, 0, 0, -1));
+  RegionCalls.push_back(
+      encode(Opcode::MOV64_IMM, kFirstArgumentRegister, 0, 0, 7));
+  RegionCalls.push_back(encode(Opcode::EXIT));
+  Add("source-regions-retain-call-frame-registers",
+      analyzeProgram(Version::V3, RegionCalls));
 
   ExecutionEnvironment InstructionDataEnvironment;
   InstructionDataEnvironment.InstructionData = UINT64_C(0x500000040);
@@ -345,6 +445,23 @@ void addSyntheticCases(std::vector<DifferentialCase> &Cases) {
 
   AnalyzeOptions Relaxed;
   Relaxed.Strict = false;
+  Add("faulted-load-stops-before-following-host-call",
+      analyzeProgram(Version::V3, {encode(Opcode::LD_DW_REG, 0, 1),
+                                   encode(Opcode::CALL_IMM, 0, 0, 0,
+                                          static_cast<int32_t>(Log64->Hash)),
+                                   encode(Opcode::EXIT)}));
+  // A shared post-step memory fault must win over the fallthrough overrun at
+  // the final raw slot and must stop before any following host callback.
+  Add("terminal-load-fault-precedes-overrun",
+      analyzeProgram(Version::V3, {encode(Opcode::LD_DW_REG, 0, 1)}, Relaxed));
+  Add("terminal-store-fault-precedes-overrun",
+      analyzeProgram(Version::V3, {encode(Opcode::ST_DW_REG, 1, 0)}, Relaxed));
+  ExecutionEnvironment TerminalMemory;
+  TerminalMemory.Memory.push_back(
+      {kInputStart, {9, 0, 0, 0, 0, 0, 0, 0}, false, "input"});
+  Add("terminal-successful-load-overruns",
+      analyzeProgram(Version::V3, {encode(Opcode::LD_DW_REG, 0, 1)}, Relaxed),
+      std::move(TerminalMemory));
   test::EncodedInstruction Unknown{};
   Unknown[kOpcodeOffset] = std::numeric_limits<uint8_t>::max();
   Add("malformed-unknown-opcode",
@@ -443,8 +560,32 @@ void runAllSourceCases(SourceBackend Backend) {
   addSyntheticCases(Cases);
   addOfficialRelocationCase(Cases);
   ASSERT_GE(Cases.size(), 6u);
-  for (const DifferentialCase &Case : Cases)
-    runDifferential(Backend, Case);
+  std::string RustModules;
+  std::string RustDriver = "fn main() {\n";
+  size_t ModuleIndex = 0;
+  for (const DifferentialCase &Case : Cases) {
+    for (bool Partitioned : {false, true}) {
+      if (Backend != SourceBackend::Rust) {
+        runDifferential(Backend, Case, Partitioned);
+        continue;
+      }
+      // Compile every generated module and execute every oracle assertion,
+      // while paying compiler/linker startup once for this synthetic suite.
+      // Corpus native qualification continues to compile each complete SO's
+      // source independently with its original resource budgets.
+      std::string Source;
+      runDifferential(Backend, Case, Partitioned, &Source);
+      ASSERT_FALSE(Source.empty()) << Case.Name;
+      const std::string Name = "nd_case_" + std::to_string(ModuleIndex++);
+      RustModules += "pub mod " + Name + " {\n" + Source +
+                     "\npub fn run() { main(); }\n}\n";
+      RustDriver += "    eprintln!(\"" + Name + ": " + Case.Name +
+                    (Partitioned ? " partitioned" : " monolithic") + "\"); " +
+                    Name + "::run();\n";
+    }
+  }
+  if (Backend == SourceBackend::Rust)
+    compileAndRun(Backend, RustModules + RustDriver + "}\n");
 }
 
 TEST(SBFSourceDifferential, GeneratedCMatchesTheRawOracle) {
@@ -454,5 +595,6 @@ TEST(SBFSourceDifferential, GeneratedCMatchesTheRawOracle) {
 TEST(SBFSourceDifferential, GeneratedRustMatchesTheRawOracle) {
   runAllSourceCases(SourceBackend::Rust);
 }
+
 } // namespace
 } // namespace neverd::sbf

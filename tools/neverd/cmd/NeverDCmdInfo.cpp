@@ -373,6 +373,8 @@ int runHeaders(neverd_session_t Sess) {
                        Root->getInteger("section_count").value_or(0));
       outs() << format("  %-20s %lld\n", "Functions:",
                        Root->getInteger("func_count").value_or(0));
+      if (Root->getString("func_count_status") == "image_inventory")
+        outs() << "  Function count is from the image; recovery has not run.\n";
       outs() << format("  %-20s %lld\n", "Symbols:",
                        Root->getInteger("symbol_count").value_or(0));
       outs() << format("  %-20s %lld\n", "Imports:",

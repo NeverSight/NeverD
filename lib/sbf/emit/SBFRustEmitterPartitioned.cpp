@@ -1,0 +1,112 @@
+//===- SBFRustEmitterPartitioned.cpp - Function-owned Rust regions --------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Bounds per-function Rust compiler work while preserving one VM state and
+/// every raw dynamic entry. One static handler table uses the existing host
+/// trait through a borrowed trait object, without allocating a handler vector.
+///
+//===----------------------------------------------------------------------===//
+
+#include "SBFRustEmitterDetail.h"
+
+#include "neverd/sbf/emit/SBFSourceStatus.h"
+
+namespace neverd::sbf::rust_emitter_detail {
+
+void emitPartitionedProgram(
+    llvm::raw_ostream &OS, const SBFProgram &Program,
+    const std::map<size_t, const MedInstruction *> &BySlot,
+    const SourcePartition &Partition) {
+  emitCallHelpers(OS, Program);
+  emitMemoryHelpers(OS, Program);
+  OS << "struct NdMachine {\n"
+        "    r: NdRegisters,\n"
+        "    saved: [[u64; SAVED_REGISTERS]; MAX_CALL_DEPTH],\n"
+        "    saved_fp: [u64; MAX_CALL_DEPTH],\n"
+        "    return_pc: [usize; MAX_CALL_DEPTH],\n"
+        "    depth: usize,\n"
+        "    pc: usize,\n"
+        "}\n\n";
+  for (const auto &Region : Partition.Regions) {
+    bool NeedsFaultCheck = false;
+    OS << "#[inline(never)]\nfn " << Region.Name
+       << "(env: &mut dyn SbfEnvironmentV2, machine: &mut NdMachine) -> "
+          "Result<Option<u64>, SbfErrorV2> {\n"
+          "    let mut pc = machine.pc; let mut depth = machine.depth;\n"
+          "    let mut fault: Option<SbfErrorV2> = None;\n"
+          "    let r = &mut machine.r; let saved = &mut machine.saved;\n"
+          "    let saved_fp = &mut machine.saved_fp; let return_pc = &mut "
+          "machine.return_pc;\n"
+          "    let _ = (&mut *env, &mut pc, &mut depth, &mut fault, &mut *r, "
+          "&mut *saved, "
+          "&mut *saved_fp, &mut *return_pc);\n"
+          "    loop {\n        match pc {\n";
+    for (size_t Slot : Region.Slots) {
+      const auto Found = BySlot.find(Slot);
+      if (Program.Low.Instructions[Slot].IsContinuation ||
+          Found == BySlot.end()) {
+        OS << "            " << Slot
+           << " => { machine.pc = pc; machine.depth = depth; return Err("
+           << rustSourceErrorName(FaultCode::InvalidInstruction) << "); },\n";
+        continue;
+      }
+      const auto &Instruction = *Found->second;
+      NeedsFaultCheck |= (Instruction.Op == Operation::Load ||
+                          Instruction.Op == Operation::Store) &&
+                         Instruction.Slot + Instruction.SlotWidth <
+                             Program.Low.Instructions.size();
+      emitInstruction(OS, *Found->second, Program, true);
+    }
+    OS << "            _ => { machine.pc = pc; machine.depth = depth; return "
+          "Ok(None); },\n"
+          "        }\n";
+    if (NeedsFaultCheck)
+      OS << "        if let Some(error) = fault { return Err(error); }\n";
+    OS << "    }\n}\n\n";
+  }
+  OS << "const ND_REGION_BY_PC: &[usize] = &[\n";
+  for (size_t Region : Partition.RegionBySlot)
+    OS << "    " << Region << ",\n";
+  OS << "];\n"
+        "type NdRegionHandler = fn(&mut dyn SbfEnvironmentV2, &mut NdMachine) "
+        "-> "
+        "Result<Option<u64>, SbfErrorV2>;\n"
+        "const ND_REGION_HANDLERS: &[NdRegionHandler] = &[\n";
+  for (const auto &Region : Partition.Regions)
+    OS << "    " << Region.Name << ",\n";
+  OS << "];\n\n"
+        "fn nd_program_impl<E: SbfEnvironmentV2>(env: &mut E, input: u64, "
+        "instruction_data: u64) -> Result<u64, SbfErrorV2> {\n"
+        "    let mut machine = NdMachine {\n"
+        "        r: NdRegisters::default(), saved: [[0u64; SAVED_REGISTERS]; "
+        "MAX_CALL_DEPTH],\n"
+        "        saved_fp: [0u64; MAX_CALL_DEPTH], return_pc: [0usize; "
+        "MAX_CALL_DEPTH],\n"
+        "        depth: 0, pc: "
+     << Program.Low.EntrySlot
+     << ",\n"
+        "    };\n"
+        "    machine."
+     << reg(kFirstArgumentRegister) << " = input; machine."
+     << reg(kInstructionDataRegister) << " = instruction_data;\n    machine."
+     << reg(kFramePointerRegister) << " = STACK_START + "
+     << (versionHasFeature(Program.Low.TheVersion,
+                           VersionFeature::ManualStackFrames)
+             ? "STACK_SIZE"
+             : "STACK_FRAME_SIZE")
+     << ";\n"
+        "    let handlers = ND_REGION_HANDLERS;\n"
+        "    loop {\n"
+        "        let region = *ND_REGION_BY_PC.get(machine.pc).ok_or("
+     << rustSourceErrorName(FaultCode::ExecutionOverrun)
+     << ")?;\n"
+        "        if let Some(value) = handlers[region](env, &mut machine)? { "
+        "return Ok(value); }\n"
+        "    }\n}\n";
+}
+
+} // namespace neverd::sbf::rust_emitter_detail

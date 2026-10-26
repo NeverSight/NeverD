@@ -27,6 +27,7 @@
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/Instructions.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Type.h"
@@ -74,6 +75,9 @@ struct EmitContext {
   RuntimeABI Runtime;
   llvm::DenseMap<size_t, llvm::BasicBlock *> Blocks;
   llvm::DenseMap<size_t, const MedInstruction *> Instructions;
+  llvm::BasicBlock *CallXDispatch = nullptr;
+  llvm::PHINode *CallXTargetSlot = nullptr;
+  llvm::PHINode *CallXAddress = nullptr;
   llvm::BasicBlock *ReturnDispatch = nullptr;
   llvm::BasicBlock *ReturnValue = nullptr;
   unsigned FaultSerial = 0;

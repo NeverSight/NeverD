@@ -17,6 +17,7 @@
 
 #include "llvm/Support/Endian.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <iterator>
 #include <limits>
@@ -224,12 +225,218 @@ bool MemoryModel::operator==(const MemoryModel &Other) const {
   return Runs == Other.Runs;
 }
 
+ProvenValueSet::ProvenValueSet(const RegisterValue &Value) {
+  if (Value.ValueKind != RegisterValue::Kind::Unknown)
+    Values.push_back(Value);
+}
+
+RegisterValue ProvenValueSet::singleton() const {
+  return Values.size() == 1 ? Values.front() : RegisterValue{};
+}
+
+void ProvenValueSet::join(const ProvenValueSet &Other) {
+  if (unknown() || Other.unknown()) {
+    Values.clear();
+    return;
+  }
+  for (const RegisterValue &Value : Other.Values)
+    if (std::find(Values.begin(), Values.end(), Value) == Values.end()) {
+      if (Values.size() == kCallXContextValueAlternatives) {
+        Values.clear();
+        return;
+      }
+      Values.push_back(Value);
+    }
+  std::sort(Values.begin(), Values.end(), [](const auto &L, const auto &R) {
+    if (L.ValueKind != R.ValueKind)
+      return L.ValueKind < R.ValueKind;
+    if (L.Value != R.Value)
+      return L.Value < R.Value;
+    return L.Offset < R.Offset;
+  });
+}
+
+void ProvenValueSet::profile(llvm::FoldingSetNodeID &ID) const {
+  ID.AddInteger(Values.size());
+  for (const auto &Value : Values) {
+    ID.AddInteger(static_cast<unsigned>(Value.ValueKind));
+    ID.AddInteger(Value.Value);
+    ID.AddInteger(static_cast<uint64_t>(Value.Offset));
+  }
+}
+
+uint64_t ProvenValueSet::allocatedBytes() const {
+  return Values.capacity() > 1 ? Values.capacity() * sizeof(RegisterValue) : 0;
+}
+
+void StoredRegisterMemory::write(va_t Address, const RegisterValue &Value,
+                                 MemoryCoordinate Coordinate) {
+  writeValues(Address, ProvenValueSet(Value), Coordinate);
+}
+
+void StoredRegisterMemory::writeValues(va_t Address, ProvenValueSet Value,
+                                       MemoryCoordinate Coordinate) {
+  // Value is snapshotted before invalidation, including a readValues result
+  // borrowed from this very cell.
+  invalidate(Address, sizeof(uint64_t), Coordinate);
+  if (!Value.unknown() &&
+      Values.size() < kMaxModeledScratchBytes / sizeof(uint64_t))
+    Values.emplace(std::make_pair(Coordinate, Address), std::move(Value));
+}
+
+void StoredRegisterMemory::invalidate(va_t Address, uint64_t Size,
+                                      MemoryCoordinate Coordinate) {
+  if (Size == 0)
+    return;
+  if (Size > std::numeric_limits<va_t>::max() - Address) {
+    clear();
+    return;
+  }
+  const va_t End = Address + Size;
+  for (auto It = Values.begin(); It != Values.end();) {
+    const auto [OtherCoordinate, Start] = It->first;
+    if (OtherCoordinate == Coordinate &&
+        (Start >= End ||
+         (Start < Address && Address - Start >= sizeof(uint64_t))))
+      ++It;
+    else
+      It = Values.erase(It);
+  }
+}
+
+void StoredRegisterMemory::invalidateFrom(va_t Address,
+                                          MemoryCoordinate Coordinate) {
+  const va_t RegionEnd = (Address / kMemoryRegionSize + 1) * kMemoryRegionSize;
+  invalidate(Address, RegionEnd - Address, Coordinate);
+}
+
+void StoredRegisterMemory::discardFrameCoordinates() {
+  for (auto It = Values.begin(); It != Values.end();) {
+    const bool FrameValue = std::any_of(
+        It->second.values().begin(), It->second.values().end(),
+        [](const RegisterValue &Value) {
+          return Value.ValueKind == RegisterValue::Kind::StackAddress;
+        });
+    if (It->first.first == MemoryCoordinate::FrameRelative || FrameValue)
+      It = Values.erase(It);
+    else
+      ++It;
+  }
+}
+
+uint64_t StoredRegisterMemory::retainedByteEstimate() const {
+  // The same ordered-node and allocator charge used by MemoryModel.
+  constexpr uint64_t NodeOverhead = 6 * sizeof(void *);
+  uint64_t Allocated = 0;
+  for (const auto &[Key, Value] : Values)
+    Allocated += Value.allocatedBytes();
+  return Values.empty()
+             ? 0
+             : sizeof(*this) + Allocated +
+                   Values.size() *
+                       (sizeof(decltype(Values)::value_type) + NodeOverhead);
+}
+
+RegisterValue StoredRegisterMemory::read(va_t Address,
+                                         MemoryCoordinate Coordinate) const {
+  return readValues(Address, Coordinate).singleton();
+}
+
+const ProvenValueSet &
+StoredRegisterMemory::readValues(va_t Address,
+                                 MemoryCoordinate Coordinate) const {
+  const auto It = Values.find(std::make_pair(Coordinate, Address));
+  static const ProvenValueSet Unknown;
+  return It == Values.end() ? Unknown : It->second;
+}
+
+void StoredRegisterMemory::meet(const StoredRegisterMemory &Other) {
+  for (auto It = Values.begin(); It != Values.end();) {
+    if (It->second != Other.readValues(It->first.second, It->first.first))
+      It = Values.erase(It);
+    else
+      ++It;
+  }
+}
+
+void StoredRegisterMemory::joinValues(const StoredRegisterMemory &Other) {
+  for (auto It = Values.begin(); It != Values.end();) {
+    It->second.join(Other.readValues(It->first.second, It->first.first));
+    if (It->second.unknown())
+      It = Values.erase(It);
+    else
+      ++It;
+  }
+}
+
+void MemoryModel::profile(llvm::FoldingSetNodeID &ID) const {
+  ID.AddInteger(Runs.size());
+  for (const auto &[Address, Bytes] : Runs) {
+    ID.AddInteger(Address);
+    ID.AddString(llvm::StringRef(reinterpret_cast<const char *>(Bytes.data()),
+                                 Bytes.size()));
+  }
+}
+
+void StoredRegisterMemory::profile(llvm::FoldingSetNodeID &ID) const {
+  ID.AddInteger(Values.size());
+  for (const auto &[Key, Value] : Values) {
+    ID.AddInteger(static_cast<unsigned>(Key.first));
+    ID.AddInteger(Key.second);
+    Value.profile(ID);
+  }
+}
+
+void StoredRegisterMemory::copyFrom(const StoredRegisterMemory &Source,
+                                    va_t SourceAddress, va_t Destination,
+                                    uint64_t Size,
+                                    MemoryCoordinate SourceCoordinate,
+                                    MemoryCoordinate DestinationCoordinate) {
+  // Snapshot first: memmove can overlap and invalidation must not erase its
+  // source. Partial pointer words deliberately prove no full-width value.
+  std::vector<std::pair<va_t, ProvenValueSet>> Copied;
+  for (auto It = Source.Values.lower_bound(
+           std::make_pair(SourceCoordinate, SourceAddress));
+       It != Source.Values.end() && It->first.first == SourceCoordinate; ++It) {
+    const uint64_t Offset = It->first.second - SourceAddress;
+    if (Offset >= Size)
+      break;
+    if (sizeof(uint64_t) <= Size - Offset)
+      Copied.emplace_back(Destination + Offset, It->second);
+  }
+  invalidate(Destination, Size, DestinationCoordinate);
+  for (const auto &[Address, Value] : Copied)
+    writeValues(Address, Value, DestinationCoordinate);
+}
+
+uint64_t ScratchState::retainedByteEstimate() const {
+  return sizeof(*this) +
+         (Memory.empty() ? 0 : Memory.retainedByteEstimate() - sizeof(Memory)) +
+         (Values.empty() ? 0 : Values.retainedByteEstimate() - sizeof(Values));
+}
+
+void ScratchState::clear() {
+  Memory.clear();
+  Values.clear();
+}
+
+void ScratchState::invalidate(va_t Address, uint64_t Size) {
+  Memory.invalidate(Address, Size);
+  Values.invalidate(Address, Size);
+}
+
+void ScratchState::invalidateFrom(va_t Address) {
+  Memory.invalidateFrom(Address);
+  Values.invalidateFrom(Address);
+}
+
 void ScratchState::meet(const ScratchState &Other) {
   Memory.meet(Other.Memory);
+  Values.meet(Other.Values);
 }
 
 bool ScratchState::operator==(const ScratchState &Other) const {
-  return Memory == Other.Memory;
+  return Memory == Other.Memory && Values == Other.Values;
 }
 
 } // namespace neverd::sbf

@@ -58,7 +58,7 @@ bool emitStructuredBlock(llvm::raw_ostream &OS, const SBFProgram &Program,
                          Instruction.BranchTarget.has_value()))
       continue;
     if (Instruction.Op == Operation::Exit) {
-      OS << Indent << "return Ok(r[RETURN_REGISTER]);\n";
+      OS << Indent << "return Ok(" << reg(kReturnRegister) << ");\n";
       continue;
     }
     if (!emitLinearInstruction(OS, Instruction, Indent))

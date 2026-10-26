@@ -715,7 +715,10 @@ const char *neverd_headers_json(neverd_session_t Sess) {
   auto *S = toSession(Sess);
   if (!S->Loaded)
     return dupStr("{}");
-  (void)S->synchronizeFunctions();
+  // SBF function recovery includes optional Solana analysis. Header admission
+  // must remain observable even when that later stage fails or is not run.
+  if (S->Img.Arch != Arch::SBF)
+    (void)S->synchronizeFunctions();
 
   llvm::json::Object Root;
   Root["entry"] = vaHex(S->Img.Entry);
@@ -763,6 +766,9 @@ const char *neverd_headers_json(neverd_session_t Sess) {
   Root["segment_count"] = static_cast<int64_t>(S->Img.Segments.size());
   Root["section_count"] = static_cast<int64_t>(S->Img.Sections.size());
   Root["func_count"] = static_cast<int64_t>(S->Functions.size());
+  if (S->Img.Arch == Arch::SBF)
+    Root["func_count_status"] =
+        S->SBFFunctionsSynchronized ? "recovered" : "image_inventory";
   Root["symbol_count"] = static_cast<int64_t>(S->Img.Symbols.size());
   Root["import_count"] = static_cast<int64_t>(S->Img.Imports.size());
   Root["export_count"] = static_cast<int64_t>(S->Img.Exports.size());

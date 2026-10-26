@@ -158,6 +158,35 @@ TEST_F(SBFIntegrationTest, ExposesAllStagesAndBothSourceLanguages) {
             std::string::npos);
 }
 
+TEST_F(SBFIntegrationTest,
+       HeadersRemainAvailableBeforeFailedInstructionAnalysis) {
+  neverd::sbf::test::StrictELFOptions Options;
+  Options.Text.assign(neverd::sbf::kInstructionSize, 0);
+  Options.Text[neverd::sbf::kOpcodeOffset] = 0xff;
+  write(neverd::sbf::test::buildStrictELF(Options));
+  testing::internal::CaptureStderr();
+  const int Loaded = neverd_session_load(Session, Path.string().c_str());
+  const std::string HeaderText = takeString(neverd_headers_json(Session));
+  const std::string Diagnostics = testing::internal::GetCapturedStderr();
+  ASSERT_EQ(Loaded, 1);
+  EXPECT_EQ(Diagnostics.find("unsupported arch for decoder"),
+            std::string::npos);
+  auto Headers = llvm::json::parse(HeaderText);
+  ASSERT_TRUE(static_cast<bool>(Headers));
+  const auto *Root = Headers->getAsObject();
+  ASSERT_NE(Root, nullptr);
+  EXPECT_EQ(Root->getString("arch"), "sbf");
+  EXPECT_EQ(Root->getString("func_count_status"), "image_inventory");
+  EXPECT_EQ(neverd_session_analyze(Session), 0);
+  EXPECT_FALSE(takeString(neverd_last_error(Session)).empty());
+  auto AfterFailure =
+      llvm::json::parse(takeString(neverd_headers_json(Session)));
+  ASSERT_TRUE(static_cast<bool>(AfterFailure));
+  ASSERT_NE(AfterFailure->getAsObject(), nullptr);
+  EXPECT_EQ(AfterFailure->getAsObject()->getString("func_count_status"),
+            "image_inventory");
+}
+
 TEST_F(SBFIntegrationTest, RejectsInvalidConfigurationAndPatchRoutes) {
   write(neverd::sbf::test::buildStrictELF());
   ASSERT_EQ(neverd_session_load(Session, Path.string().c_str()), 1);
@@ -307,11 +336,21 @@ TEST_F(SBFIntegrationTest, DisassemblyHonorsRecoveredFunctionBoundaries) {
   ASSERT_EQ(neverd_session_load(Session, Path.string().c_str()), 1)
       << takeString(neverd_last_error(Session));
 
+  auto Inventory = llvm::json::parse(takeString(neverd_headers_json(Session)));
+  ASSERT_TRUE(static_cast<bool>(Inventory));
+  ASSERT_NE(Inventory->getAsObject(), nullptr);
+  EXPECT_EQ(Inventory->getAsObject()->getInteger("func_count"), 1);
+  EXPECT_EQ(Inventory->getAsObject()->getString("func_count_status"),
+            "image_inventory");
+  // The second function is discovered from CALL, not stated by the ELF.
+  // Function requests explicitly synchronize recovery before header counts.
+  ASSERT_EQ(neverd_func_count(Session), 2);
   auto Headers = llvm::json::parse(takeString(neverd_headers_json(Session)));
   ASSERT_TRUE(static_cast<bool>(Headers));
   const llvm::json::Object *HeaderRoot = Headers->getAsObject();
   ASSERT_NE(HeaderRoot, nullptr);
   EXPECT_EQ(HeaderRoot->getInteger("func_count"), 2);
+  EXPECT_EQ(HeaderRoot->getString("func_count_status"), "recovered");
 
   auto Dashboard =
       llvm::json::parse(takeString(neverd_dashboard_json(Session)));

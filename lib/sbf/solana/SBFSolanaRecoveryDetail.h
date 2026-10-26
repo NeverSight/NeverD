@@ -17,6 +17,8 @@
 #ifndef NEVERD_SBF_SOLANA_SBFSOLANARECOVERYDETAIL_H
 #define NEVERD_SBF_SOLANA_SBFSOLANARECOVERYDETAIL_H
 
+#include "SBFWordKey.h"
+
 #include "neverd/sbf/SBFIR.h"
 #include "neverd/sbf/analysis/SBFDataflow.h"
 #include "neverd/sbf/solana/SBFCPI.h"
@@ -160,7 +162,7 @@ private:
   /// Keys already recorded, bucketed by a cheap prefix before full comparison.
   /// A hostile binary controls key bytes, so a prefix collision must neither
   /// duplicate a key nor merge two distinct keys.
-  llvm::DenseMap<uint64_t, llvm::SmallVector<size_t, 1>> KeyIndicesByFirstWord;
+  llvm::DenseMap<WordKey, llvm::SmallVector<size_t, 1>> KeyIndicesByFirstWord;
 };
 
 } // namespace LLVM_LIBRARY_VISIBILITY_NAMESPACE solana_recovery_detail

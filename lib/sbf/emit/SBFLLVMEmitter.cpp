@@ -197,12 +197,37 @@ emitLLVM(const SBFProgram &Program, llvm::LLVMContext &Context,
       [](const MedInstruction &Instruction) {
         return Instruction.Op == Operation::CallX;
       });
-  if (HasIndirectCall)
+  if (HasIndirectCall) {
     for (const LowInstruction &Instruction : Program.Low.Instructions)
       if (!EC.Blocks.contains(Instruction.Slot))
         EC.Blocks[Instruction.Slot] = llvm::BasicBlock::Create(
             Context, "sbf.callx.pc." + std::to_string(Instruction.Slot),
             Function);
+
+    // Keep one full-domain target table for all CALLX sites. Each site still
+    // reads its target, pushes its frame and checks bounds in the original
+    // order; PHIs carry that site's checked target and diagnostic address.
+    // Repeating this switch per site makes IR size grow as calls * raw slots.
+    EC.CallXDispatch =
+        llvm::BasicBlock::Create(Context, "callx.dispatch", Function);
+    EC.Builder.SetInsertPoint(EC.CallXDispatch);
+    EC.CallXTargetSlot = EC.Builder.CreatePHI(EC.I32, 0, "callx.slot");
+    EC.CallXAddress = EC.Builder.CreatePHI(EC.I64, 0, "callx.address");
+    auto *BadTarget =
+        llvm::BasicBlock::Create(Context, "callx.invalid", Function);
+    llvm::SwitchInst *Switch = EC.Builder.CreateSwitch(
+        EC.CallXTargetSlot, BadTarget, EC.Blocks.size());
+    for (const auto &Target : EC.Blocks)
+      Switch->addCase(EC.i32(static_cast<uint32_t>(Target.first)),
+                      Target.second);
+    EC.Builder.SetInsertPoint(BadTarget);
+    EC.Builder.CreateCall(
+        Runtime.Fault,
+        {Environment,
+         EC.i32(static_cast<uint32_t>(FaultCode::UnknownIndirectCall)),
+         EC.CallXAddress});
+    EC.Builder.CreateRet(EC.i64(0));
+  }
 
   EC.Builder.SetInsertPoint(Entry);
   EC.Registers = EC.Builder.CreateAlloca(EC.RegisterArrayType, nullptr, "regs");

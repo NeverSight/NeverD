@@ -311,6 +311,76 @@ provenance, node, edge, element, and `CallGraphOutputByteBudget` limits make the
 JSON exact-or-empty. Exhaustion returns `{"nodes":[],"edges":[]}` and sets
 `neverd_last_error()`; it never publishes a partial relation.
 
+### Conditional CALLX caller evidence
+
+`recoverCallXContexts` analyzes complete recognized function CFGs with
+context-keyed function summaries. Keys project away entry registers that every
+path overwrites before reading, using a conservative interprocedural dependency
+fixed point. Scratch inputs are omitted only when the callee neither reads nor
+writes memory. Other keys include both scratch views, pointer kinds and
+memory-coordinate lanes. Arguments and memory enter nested direct calls and
+proven literal CALLX targets; converged returns supply r0 and memory effects.
+The shared transfer owns register clobbers and syscall effects. Callee-saved
+registers survive a return; automatic frames advance by the VM stride.
+
+Contextual joins retain complete sets of up to four register/stored-word
+alternatives. Transfers lift the canonical scalar operation over those sets;
+for example two immutable table bases can load the same target. Unknown is
+absorbing and set overflow widens to unknown, never a truncated list. Multiple
+remaining CALLX values are reported separately and do not count as a unique
+proven target or authorize a single-callee effect summary. Ordinary block and
+Solana recovery retain the singleton must-analysis policy.
+
+A separate symbolic lane describes entry-register-relative return expressions
+and may-write intervals, including pointer spills through local scratch. Its
+symbolic bases are never VM addresses or literal target values. At a call,
+parameter-relative intervals are substituted using the proven caller inputs.
+Automatic callee/descendant frame writes invalidate their own and higher frame
+coordinates while preserving earlier frames; absolute/frame aliasing remains
+conservative. Intervals can include holes between writes, so these are may-write
+footprints, not must-write facts. Unknown addresses, opaque calls, legacy runtime
+precedence and recursion retain conservative havoc. Generic frame anchors and
+return expressions are instantiated before they can escape to a caller.
+Catalog return annotations do not override the configured host callback outcome;
+possible syscall continuations remain in the CFG.
+
+Blocks join every reachable CFG predecessor, including the initial loop entry.
+Only final replay of converged entries publishes evidence and dependencies.
+Solver-only summaries not referenced by a final edge or root may be reclaimed
+and recomputed; pinned proofs are never evicted. Function-call-free generic
+summaries with identical projected inputs are reused without losing input facts.
+All generic roots remain available, but standalone specialization is skipped
+when the static CFG/direct-call graph cannot reach an unresolved CALLX; actual
+callers can still demand return/memory specializations. Remaining roots retain
+ascending entry-slot order: eagerly specializing small unknown-input wrappers
+can consume all four cached variants before their concrete callers are analyzed.
+Completed cache hits remain usable after specialization work is exhausted. Schema 3 records input
+projection, bounded alternatives, return expressions, memory footprints,
+summary dependencies, barriers, cache reclamation and instruction work. Prior
+independent entry-prefix proofs keep a distinct `evidence_scope`.
+
+Full-width stored values retain pointer provenance independently of descriptor
+bytes. Frame-relative coordinates and absolute VM addresses occupy separate
+lanes: a potentially aliasing write forgets facts in the other lane. Partial
+writes invalidate the overlapping word, and memmove snapshots before writing.
+Abstract frame coordinates never authorize an immutable-image load.
+
+Every result remains conditional on recognized CFG/function entries and its
+recorded caller facts. Unaligned targets and continuation slots use raw VM rules;
+proving an address does not prove call success. Unknown indirect entries,
+partial loads, runtime/account contents, recursive effects, unresolved aliasing
+and unproved expressions remain open. No result rewrites global CALLX dispatch
+or closes its target set; dynamic fallback is mandatory.
+
+`CallXContextSpecializationsPerEntry` still bounds each entry to four cached
+specializations. Further inputs use explicitly marked generic summaries.
+`SBFAnalysisLimits.def` owns the unchanged instruction, retained-state and
+output budgets; dependency work is included. Generic summaries must complete
+first. Specialization exhaustion discards incomplete results and uses completed
+generic summaries, recording the reason. Generic-analysis or output exhaustion
+fails the complete query. These precision policies do not increase corpus
+request budgets.
+
 ## Solana program recovery
 
 Above the SBF machine model, NeverD reports what a program means as a Solana
@@ -429,6 +499,24 @@ block has a unique reducible representation. Internal calls, CALLX, and
 irreducible control flow conservatively retain the exact PC dispatcher, so
 readability never changes execution semantics.
 
+The default dispatcher layout groups slots by HighIR function ownership and
+splits each group into regions bounded by
+`SBFSourceLimits.def::MaximumDispatcherRegionSlots`. Shared tails and unowned
+slots have explicit regions; continuation slots retain their faulting entries.
+All regions operate on one VM register/call-frame state, with common frame and
+legacy runtime-call helpers. A layout boundary does not change guest calling
+conventions, dynamic entry rules or fault ordering. These compiler-sized regions
+are not yet structured, independently callable recovered functions.
+
+The partitioned C layout retains every case label while allowing sequential
+instructions to fall through only to their actual next slot. LDDW still skips
+the continuation's faulting entry. Shared memory helpers retain callback
+validation, exact status conversion and result extension. Rust uses private
+named register fields and shared memory helpers to bound frontend work. A
+memory error stops at the region's common post-step check before another
+instruction or callback can execute, including before a terminal overrun.
+Public host contracts and architectural register identities are unchanged.
+
 The syscall database includes logging, memory, PDA, SHA-256/Keccak/Blake3,
 Poseidon, secp256k1, curve and alt-bn128 operations, big modular exponentiation,
 CPI, return data, sibling instructions, compute-unit queries, and current
@@ -458,7 +546,13 @@ declarations carry typed `nounwind`, `captures(none)`, and `writeonly`
 attributes where their ABI permits it; fault callbacks are marked cold. Normal
 programs retain one LLVM block per analyzed SBF basic block, while CALLX
 programs add only the dynamic entry blocks required to model any valid raw
-instruction address.
+instruction address. All CALLX sites share one raw-slot dispatch table. Each
+site retains target evaluation, frame setup, bounds-check ordering and its own
+fault address; SSA PHIs carry the checked target and source address into the
+shared table. LDDW continuation targets still reach their invalid-instruction
+blocks, and v2 unaligned targets retain their slot-flooring semantics. Target
+edges grow with the raw slot count rather than slot count times CALLX sites;
+ordinary direct calls and the return dispatcher retain their existing paths.
 
 ## Generated C host contract
 

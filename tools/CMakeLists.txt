@@ -3,6 +3,7 @@ add_subdirectory(common/transport)
 add_subdirectory(neverd)
 add_subdirectory(neverd-sigmaker)
 add_subdirectory(neverd-bytecode)
+add_subdirectory(neverd-sbf-corpus)
 
 if(NEVERD_BUILD_GUI OR NEVERD_BUILD_WORKER OR NEVERD_BUILD_WEB_MCP)
   if(NOT NEVERD_BUILD_SHARED)

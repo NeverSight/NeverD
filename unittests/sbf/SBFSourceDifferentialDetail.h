@@ -18,6 +18,7 @@
 #include "neverd/sbf/analysis/SBFAnalyzer.h"
 #include "neverd/sbf/runtime/SBFInterpreter.h"
 
+#include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/Endian.h"
@@ -112,7 +113,7 @@ encodeLDDW(uint8_t Dst, uint64_t Immediate) {
 
 inline llvm::Expected<SBFProgram>
 analyzeProgram(Version TheVersion,
-               std::initializer_list<EncodedInstruction> Instructions,
+               llvm::ArrayRef<EncodedInstruction> Instructions,
                const AnalyzeOptions &Options = {}, size_t EntrySlot = 0) {
   BinaryImage Image;
   Image.Arch = Arch::SBF;

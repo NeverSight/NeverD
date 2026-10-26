@@ -20,7 +20,9 @@
 #include "neverd/sbf/image/SBFProgramImage.h"
 
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/FoldingSet.h"
 #include "llvm/ADT/STLFunctionalExtras.h"
+#include "llvm/ADT/SmallVector.h"
 
 #include <array>
 #include <cstddef>
@@ -28,6 +30,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <utility>
 #include <vector>
 
 namespace neverd::sbf {
@@ -94,6 +97,9 @@ public:
   /// a program point reachable by two paths can claim.
   void meet(const MemoryModel &Other);
 
+  /// Include every retained byte and its address in a contextual-summary key.
+  void profile(llvm::FoldingSetNodeID &ID) const;
+
   bool operator==(const MemoryModel &Other) const;
   bool operator!=(const MemoryModel &Other) const { return !(*this == Other); }
 
@@ -104,11 +110,82 @@ private:
   uint64_t TrackedBytes = 0;
 };
 
+/// Full-width stored values, retaining address provenance independently of the
+/// descriptor byte view. In particular, a frame-relative pointer is never a
+/// literal integer merely because its analysis coordinates were serialized.
+enum class MemoryCoordinate : uint8_t { Absolute, FrameRelative };
+
+/// A complete finite disjunction used by the optional contextual analysis.
+/// Empty denotes unknown, not an unreachable state. Ordinary must-analysis
+/// still reads only singleton values and uses the existing equality meet.
+class ProvenValueSet {
+public:
+  ProvenValueSet() = default;
+  ProvenValueSet(const RegisterValue &Value);
+  RegisterValue singleton() const;
+  llvm::ArrayRef<RegisterValue> values() const { return Values; }
+  bool unknown() const { return Values.empty(); }
+  void join(const ProvenValueSet &Other);
+  void profile(llvm::FoldingSetNodeID &ID) const;
+  uint64_t allocatedBytes() const;
+  bool operator==(const ProvenValueSet &) const = default;
+
+private:
+  llvm::SmallVector<RegisterValue, 1> Values;
+};
+
+class StoredRegisterMemory {
+public:
+  /// The store/copy owner must first validate the complete scratch range.
+  void write(va_t Address, const RegisterValue &Value,
+             MemoryCoordinate Coordinate = MemoryCoordinate::Absolute);
+  void writeValues(va_t Address, ProvenValueSet Value,
+                   MemoryCoordinate Coordinate = MemoryCoordinate::Absolute);
+  /// A write in either coordinate system may alias any value in the other:
+  /// the current function's absolute call depth is not known. Forget those
+  /// values rather than equating an abstract frame with an absolute address.
+  void invalidate(va_t Address, uint64_t Size,
+                  MemoryCoordinate Coordinate = MemoryCoordinate::Absolute);
+  void invalidateFrom(va_t Address,
+                      MemoryCoordinate Coordinate = MemoryCoordinate::Absolute);
+  /// Keep only absolute values independent of a symbolic frame anchor.
+  void discardFrameCoordinates();
+  void clear() { Values.clear(); }
+  bool empty() const { return Values.empty(); }
+  uint64_t retainedByteEstimate() const;
+  RegisterValue
+  read(va_t Address,
+       MemoryCoordinate Coordinate = MemoryCoordinate::Absolute) const;
+  const ProvenValueSet &
+  readValues(va_t Address,
+             MemoryCoordinate Coordinate = MemoryCoordinate::Absolute) const;
+  void meet(const StoredRegisterMemory &Other);
+  /// Contextual union of complete alternatives at cells present on both paths.
+  void joinValues(const StoredRegisterMemory &Other);
+  void profile(llvm::FoldingSetNodeID &ID) const;
+  size_t size() const { return Values.size(); }
+  void
+  copyFrom(const StoredRegisterMemory &Source, va_t SourceAddress,
+           va_t Destination, uint64_t Size,
+           MemoryCoordinate SourceCoordinate = MemoryCoordinate::Absolute,
+           MemoryCoordinate DestinationCoordinate = MemoryCoordinate::Absolute);
+  bool operator==(const StoredRegisterMemory &) const = default;
+
+private:
+  std::map<std::pair<MemoryCoordinate, va_t>, ProvenValueSet> Values;
+};
+
 /// What the register fixed point does not carry: the scratch bytes a program
 /// has written.
 struct ScratchState {
   MemoryModel Memory;
+  StoredRegisterMemory Values;
 
+  bool empty() const { return Memory.empty() && Values.empty(); }
+  uint64_t retainedByteEstimate() const;
+  void clear();
+  void invalidate(va_t Address, uint64_t Size);
+  void invalidateFrom(va_t Address);
   void meet(const ScratchState &Other);
   bool operator==(const ScratchState &Other) const;
   bool operator!=(const ScratchState &Other) const { return !(*this == Other); }
@@ -142,18 +219,28 @@ private:
 /// This is the only transfer function of the SBF value lattice. The block fixed
 /// point in the analyzer and any per-instruction replay both call it, so a
 /// recovered value can never contradict the analyzer's block summary.
+/// Image is the immutable, relocated VM image. Without an explicit scratch
+/// context, only data-visible image loads can produce constants. A contextual
+/// analysis can additionally supply proven full-width stored register values;
+/// pointer provenance is retained and descriptor bytes never authorize a fold.
 void applyRegisterTransfer(const MedInstruction &Instruction,
-                           RegisterState &State);
+                           RegisterState &State, const ProgramImage &Image,
+                           const StoredRegisterMemory *Scratch = nullptr);
+
+enum class ScratchLoadPolicy : uint8_t { Ignore, ProvenValues };
 
 /// Apply one instruction's effect to registers and to scratch memory.
 ///
 /// This is \c applyRegisterTransfer plus the memory effects the register
 /// lattice alone cannot express, so the register half of the result is the
-/// same value the analyzer's fixed point computes. \p Image supplies the bytes
+/// same value the analyzer's fixed point computes with the default Ignore
+/// policy. ProvenValues is for a distinct, caller-seeded context, not replay of
+/// ordinary block summaries. \p Image supplies the bytes
 /// a copy can be following, which is how a payload copied out of read-only
 /// data becomes readable at the invocation that sends it.
 void applyTransfer(const MedInstruction &Instruction, MachineState &State,
-                   const ProgramImage &Image);
+                   const ProgramImage &Image,
+                   ScratchLoadPolicy Loads = ScratchLoadPolicy::Ignore);
 
 /// Whether Solana recovery reads scratch bytes at this runtime call. CPI and
 /// PDA decoding dereference program-built descriptors; other recovery
@@ -180,9 +267,14 @@ public:
     size_t SuccessorIndexEntryCount = 0;
   };
 
-  ScratchFlow(const SBFProgram &Program, const MedInstructionIndex &Index);
+  ScratchFlow(const SBFProgram &Program, const MedInstructionIndex &Index,
+              ScratchLoadPolicy Loads = ScratchLoadPolicy::Ignore);
 
   const ScratchState &entryState(size_t BlockID) const;
+  /// Joint register/scratch must-facts when ProvenValues was requested. A
+  /// widened or unreached state returns nullptr; callers then use the ordinary
+  /// block inputs and replay local stores rather than partial solver output.
+  const RegisterState *entryRegisters(size_t BlockID) const;
   const Statistics &statistics() const { return Stats; }
 
 private:
@@ -190,6 +282,7 @@ private:
   /// object, so the storage scales with distinct scratch mutations rather than
   /// with the program's block count.
   std::vector<std::shared_ptr<const ScratchState>> Entry;
+  std::vector<RegisterState> RegisterEntries;
   std::shared_ptr<const ScratchState> Empty =
       std::make_shared<const ScratchState>();
   ScratchState Unreached;
