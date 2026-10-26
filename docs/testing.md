@@ -7175,6 +7175,15 @@ ambient capture and nested personality-IAT writes must refuse. A one-work-unit
 short shared budget rejects the entire nested query; a fresh query still passes.
 Byte-level initialization controls preserve overlapping alias taint. Separate
 inner and outer cleanup bodies each reject an unsupported-instruction mutation.
+`OutputBorrowChecksEveryReadAndReturnPath` separates output storage from entry
+values: full stores, byte stores, subsequent wider reads and one/both branch
+stores check byte initialization, all-path joins and exact budget exhaustion.
+`NestedOutputBorrowRetainsDefiniteInitialization` forwards an initially empty
+word through repeated C++ calls and a read after a complete write. Entry
+preconditions, may-effects and initialized normal-return bytes remain distinct;
+these tests grant no exceptional initialization or native call ABI.
+`OutputInitializationRequiresEveryNormalReturn` splits the paths before their
+epilogues and checks two physical RET occurrences with one or both writes.
 The acyclic-depth fixture keeps every code extent disjoint from its metadata,
 so an extra nesting level tests the depth policy without a mapping conflict.
 A nested-call counterexample places a pointer spill across the callee-pop

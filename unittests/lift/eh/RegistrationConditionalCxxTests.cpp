@@ -57,6 +57,16 @@ constexpr va_t Data = 0x403000;
 
 struct BoundCxxFixture {
   enum class ReturnMode { Alias, Scalar, Joined, Partial };
+  enum class OutputAccess {
+    StoreWord,
+    ReadWord,
+    StoreByte,
+    StoreByteThenReadWord,
+    StoreWordThenReadWord,
+    StoreOneArm,
+    StoreOneArmThenReadWord,
+    StoreBothArmsThenReadWord
+  };
   BinaryImage Image;
   FrameState Parent;
   LowOp Call;
@@ -67,11 +77,13 @@ struct BoundCxxFixture {
   va_t OuterCallVA = 0;
   va_t OuterResultVA = 0;
 
-  explicit BoundCxxFixture(
-      ReturnMode Result = ReturnMode::Alias, bool BorrowInChild = false,
-      bool CaptureBeforeWrite = false, bool ThrowingChild = false,
-      bool RequireChildZero = false,
-      std::optional<uint8_t> ChildArgument = std::nullopt) {
+  explicit BoundCxxFixture(ReturnMode Result = ReturnMode::Alias,
+                           bool BorrowInChild = false,
+                           bool CaptureBeforeWrite = false,
+                           bool ThrowingChild = false,
+                           bool RequireChildZero = false,
+                           std::optional<uint8_t> ChildArgument = std::nullopt,
+                           OutputAccess Access = OutputAccess::StoreWord) {
     std::vector<uint8_t> Text;
     auto Bytes = [&](std::initializer_list<uint8_t> Values) {
       Text.insert(Text.end(), Values);
@@ -109,7 +121,32 @@ struct BoundCxxFixture {
     if (CaptureBeforeWrite)
       Bytes({0x89, 0x00}); // Capture remains invalid after the next store.
     StoreVA = Entry + Text.size();
-    Bytes({0x89, 0x10}); // *output = saved ECX.
+    switch (Access) {
+    case OutputAccess::StoreWord:
+      Bytes({0x89, 0x10}); // *output = saved ECX.
+      break;
+    case OutputAccess::ReadWord:
+      Bytes({0x8b, 0x10});
+      break;
+    case OutputAccess::StoreByte:
+      Bytes({0x88, 0x10});
+      break;
+    case OutputAccess::StoreByteThenReadWord:
+      Bytes({0x88, 0x10, 0x8b, 0x10});
+      break;
+    case OutputAccess::StoreWordThenReadWord:
+      Bytes({0x89, 0x10, 0x8b, 0x10});
+      break;
+    case OutputAccess::StoreOneArm:
+    case OutputAccess::StoreOneArmThenReadWord:
+      Bytes({0x85, 0xd2, 0x74, 2, 0x89, 0x10});
+      if (Access == OutputAccess::StoreOneArmThenReadWord)
+        Bytes({0x8b, 0x10});
+      break;
+    case OutputAccess::StoreBothArmsThenReadWord:
+      Bytes({0x85, 0xd2, 0x74, 4, 0x89, 0x10, 0xeb, 2, 0x89, 0x10, 0x8b, 0x10});
+      break;
+    }
     Bytes({0xc7, 0x45, 0xfc, 0xff, 0xff, 0xff, 0xff, 0x8b, 0x4d, 0xe0, 0x33,
            0xcd});
     CallTo(Checker);
@@ -821,6 +858,8 @@ TEST(RegistrationConditionalCxx, NestedMayWriteKeepsInitializationSeparate) {
 
 TEST(RegistrationConditionalCxx, InitializedBytesDoNotEraseOverlappingTaint) {
   BoundCxxFixture F;
+  F.overwrite(F.StoreVA,
+              {0x8b, 0x10}); // Read the incoming word before any write.
   F.Parent.Cells.erase(-28);
   std::set<int32_t> Initialized;
   for (const auto Begin : {-96, -28})
@@ -838,6 +877,119 @@ TEST(RegistrationConditionalCxx, InitializedBytesDoNotEraseOverlappingTaint) {
   ASSERT_TRUE(Prove());
   F.Parent.Cells[-29] = FrameValue::frame(-80);
   EXPECT_FALSE(Prove()); // Three bytes still contain a possible frame alias.
+}
+
+TEST(RegistrationConditionalCxx, OutputBorrowChecksEveryReadAndReturnPath) {
+  using Access = BoundCxxFixture::OutputAccess;
+  for (const auto Mode :
+       {Access::StoreWord, Access::ReadWord, Access::StoreByte,
+        Access::StoreByteThenReadWord, Access::StoreWordThenReadWord,
+        Access::StoreOneArm, Access::StoreOneArmThenReadWord,
+        Access::StoreBothArmsThenReadWord}) {
+    SCOPED_TRACE(unsigned(Mode));
+    BoundCxxFixture F(BoundCxxFixture::ReturnMode::Alias, false, false, false,
+                      false, std::nullopt, Mode);
+    F.Parent.Cells.erase(-28);
+    F.Parent.Registers[x86reg::RCX / x86reg::GeneralRegStride] = {};
+    const std::set<int32_t> Initialized{-96, -95, -94, -93};
+    auto Prove = [&](size_t &Work) {
+      return proveBoundCxxCallee(F.Image, F.Call, F.Parent, 4, Work, {},
+                                 &Initialized);
+    };
+    size_t Work = 0;
+    const auto Effect = Prove(Work);
+    const bool Accepted = Mode != Access::ReadWord &&
+                          Mode != Access::StoreByteThenReadWord &&
+                          Mode != Access::StoreOneArmThenReadWord;
+    ASSERT_EQ(bool(Effect), Accepted);
+    if (!Effect)
+      continue;
+    EXPECT_TRUE(Effect->RequiredInitializedInputs.empty());
+    ASSERT_EQ(Effect->Objects.size(), 1u);
+    EXPECT_EQ(Effect->Objects.front().Begin, -28);
+    EXPECT_EQ(Effect->Objects.front().End, -24);
+    ASSERT_FALSE(Effect->Writes.empty());
+    if (Mode == Access::StoreOneArm)
+      EXPECT_TRUE(Effect->InitializedOnReturn.empty());
+    else {
+      ASSERT_EQ(Effect->InitializedOnReturn.size(), 1u);
+      EXPECT_EQ(Effect->InitializedOnReturn.front().Begin, -28);
+      EXPECT_EQ(Effect->InitializedOnReturn.front().End,
+                Mode == Access::StoreByte ? -27 : -24);
+    }
+    ASSERT_GT(Work, 0u);
+    ASSERT_LT(Work, limits::kMaxRegistrationEHStateWork);
+    size_t Exact = limits::kMaxRegistrationEHStateWork - Work;
+    EXPECT_TRUE(Prove(Exact));
+    EXPECT_EQ(Exact, limits::kMaxRegistrationEHStateWork);
+    size_t Limited = limits::kMaxRegistrationEHStateWork - Work + 1;
+    EXPECT_FALSE(Prove(Limited));
+    EXPECT_EQ(Limited, limits::kMaxRegistrationEHStateWork);
+  }
+}
+
+TEST(RegistrationConditionalCxx,
+     NestedOutputBorrowRetainsDefiniteInitialization) {
+  BoundCxxFixture F(BoundCxxFixture::ReturnMode::Alias, false, false, false,
+                    false, std::nullopt,
+                    BoundCxxFixture::OutputAccess::StoreWordThenReadWord);
+  F.addOuter(true, false, true);
+  F.Parent.Cells.erase(-28);
+  const std::set<int32_t> Initialized{-96, -95, -94, -93};
+  size_t Work = 0;
+  const auto Effect =
+      proveBoundCxxCallee(F.Image, F.Call, F.Parent, 4, Work, {}, &Initialized);
+  ASSERT_TRUE(Effect);
+  EXPECT_TRUE(Effect->RequiredInitializedInputs.empty());
+  ASSERT_EQ(Effect->InitializedOnReturn.size(), 1u);
+  EXPECT_EQ(Effect->InitializedOnReturn.front().Begin, -28);
+  EXPECT_EQ(Effect->InitializedOnReturn.front().End, -24);
+  ASSERT_FALSE(Effect->Reads.empty());
+}
+
+TEST(RegistrationConditionalCxx,
+     OutputInitializationRequiresEveryNormalReturn) {
+  for (bool BothWrite : {false, true}) {
+    SCOPED_TRACE(BothWrite);
+    BoundCxxFixture F(BoundCxxFixture::ReturnMode::Alias, false, false, false,
+                      false, std::nullopt,
+                      BoundCxxFixture::OutputAccess::StoreOneArm);
+    auto &Text = F.Image.Segments.front().Data;
+    const va_t Tail = F.StoreVA + 6;
+    const std::vector<uint8_t> Epilogue(Text.begin() + Tail - Entry,
+                                        Text.begin() + F.ReturnVA + 3 - Entry);
+    // Split the paths before the original join. Each path has its own
+    // complete cookie/chain epilogue and physical RET, but only one may write.
+    const va_t Second = F.ReturnVA + 7;
+    ASSERT_LE(Second + Epilogue.size() + (BothWrite ? 2 : 0), Handler);
+    ASSERT_LE(Second - (F.StoreVA + 4), 127u);
+    Text[F.StoreVA + 3 - Entry] = uint8_t(Second - (F.StoreVA + 4));
+    if (BothWrite)
+      F.overwrite(Second, {0x89, 0x10});
+    const va_t Copy = Second + (BothWrite ? 2 : 0);
+    std::copy(Epilogue.begin(), Epilogue.end(), Text.begin() + Copy - Entry);
+    const va_t CookieCall = Copy + F.ResultVA - 5 - Tail;
+    ASSERT_EQ(Text[CookieCall - Entry], 0xe8);
+    writeLE<uint32_t>(Text.data() + CookieCall + 1 - Entry,
+                      uint32_t(Checker - (CookieCall + 5)));
+    F.Image.ExceptionMetadata = {};
+    coff_loader::parseX86RegistrationExceptions(F.Image);
+    F.Parent.Cells.erase(-28);
+    F.Parent.Registers[x86reg::RCX / x86reg::GeneralRegStride] = {};
+    const std::set<int32_t> Initialized{-96, -95, -94, -93};
+    size_t Work = 0;
+    const auto Effect = proveBoundCxxCallee(F.Image, F.Call, F.Parent, 4, Work,
+                                            {}, &Initialized);
+    ASSERT_TRUE(Effect);
+    ASSERT_EQ(Effect->Returns.size(), 2u);
+    ASSERT_FALSE(Effect->Writes.empty());
+    EXPECT_TRUE(Effect->RequiredInitializedInputs.empty());
+    ASSERT_EQ(Effect->InitializedOnReturn.size(), BothWrite ? 1u : 0u);
+    if (BothWrite) {
+      EXPECT_EQ(Effect->InitializedOnReturn.front().Begin, -28);
+      EXPECT_EQ(Effect->InitializedOnReturn.front().End, -24);
+    }
+  }
 }
 
 TEST(RegistrationConditionalCxx, StackPopPreservesOverlappingPointerBytes) {

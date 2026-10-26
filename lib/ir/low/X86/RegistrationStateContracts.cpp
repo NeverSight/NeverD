@@ -3,6 +3,11 @@
 // NeverD Decompiler
 //
 //===----------------------------------------------------------------------===//
+///
+/// \file
+/// Validate frame-object ownership, initialization and projected call effects.
+///
+//===----------------------------------------------------------------------===//
 
 #include "RegistrationImportLoad.h"
 #include "RegistrationStateSolver.h"
@@ -332,7 +337,7 @@ bool RegistrationStateSolver::projectFrameObject(
     const Domain &State, int32_t Object, std::optional<int32_t> SP,
     llvm::ArrayRef<RegistrationObjectExtent> Extents,
     std::vector<RegistrationObjectExtent> &Projected, bool Reads,
-    bool RecordBorrowedEffects) {
+    bool RecordBorrowedEffects, bool RequireInitializedReads) {
   if (!SP || State.Unknown)
     return false;
   for (const auto &Extent : Extents) {
@@ -355,7 +360,7 @@ bool RegistrationStateSolver::projectFrameObject(
         !frameObjectIsDisjointFromAdministration(Begin, End) ||
         !charge(size_t(End - Begin) + State.Frame.cellCount()))
       return false;
-    if (Reads) {
+    if (Reads && RequireInitializedReads) {
       for (int64_t Byte = Begin; Byte < End; ++Byte)
         if (!State.InitializedFrameBytes.count(int32_t(Byte)))
           return false;

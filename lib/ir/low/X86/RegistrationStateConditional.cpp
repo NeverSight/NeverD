@@ -10,6 +10,9 @@
 
 #include "neverd/lift/X86Regs.h"
 
+#include "llvm/ADT/STLExtras.h"
+
+#include <set>
 #include <utility>
 
 namespace neverd::registration_state {
@@ -53,11 +56,17 @@ RegistrationStateSolver::transferConditionalCxxCall(Domain &After,
 
   // The caller owns the storage and its runtime administration. Check even
   // unused borrows, without inventing a read or a write for their admission.
-  std::vector<RegistrationObjectExtent> Objects, Reads, Writes;
+  std::vector<RegistrationObjectExtent> Objects, Inputs, Reads, Writes,
+      Initialized;
   if (Cxx &&
-      (!projectFrameObject(After, 0, SP, Cxx->Objects, Objects, true, false) ||
-       !projectFrameObject(After, 0, SP, Cxx->Reads, Reads, true) ||
-       !projectFrameObject(After, 0, SP, Cxx->Writes, Writes, false)))
+      (!projectFrameObject(After, 0, SP, Cxx->Objects, Objects, false, false) ||
+       !projectFrameObject(After, 0, SP, Cxx->RequiredInitializedInputs, Inputs,
+                           true, false) ||
+       !projectFrameObject(After, 0, SP, Cxx->Reads, Reads, true, true,
+                           /*RequireInitializedReads=*/false) ||
+       !projectFrameObject(After, 0, SP, Cxx->Writes, Writes, false) ||
+       !projectFrameObject(After, 0, SP, Cxx->InitializedOnReturn, Initialized,
+                           false, false)))
     return std::nullopt;
   const auto &Image = Plain ? Plain->ImageReads : Cxx->ImageReads;
   if (!charge(Image.size() + (Cxx ? Cxx->Returns.size() : 1) + 1))
@@ -84,6 +93,12 @@ RegistrationStateSolver::transferConditionalCxxCall(Domain &After,
   After.InitializedFrameBytes.erase(
       After.InitializedFrameBytes.begin(),
       After.InitializedFrameBytes.lower_bound(End));
+  for (const auto &Range : Initialized) {
+    if (!charge(size_t(int64_t(Range.End) - Range.Begin)))
+      return std::nullopt;
+    for (int64_t Byte = Range.Begin; Byte < Range.End; ++Byte)
+      After.InitializedFrameBytes.insert(int32_t(Byte));
+  }
   for (auto *Frame : {&After.Frame, &After.RuntimeObject})
     discardFrameCellsBelow(Frame->Cells, End);
   // The callback authenticated the unique original five-byte CALL. No
@@ -177,6 +192,13 @@ bool RegistrationStateSolver::checkConditionalMemory(
     return Refuse();
   if (Op.Opcode == NdOp::STORE && Transfer.read(*Memory.StoredValue).MayBeFrame)
     return Refuse();
+  if (KnownCxx && Op.Opcode == NdOp::LOAD) {
+    if (!Initialized || !charge(Memory.AccessSize))
+      return Refuse();
+    for (int64_t Byte = *Address.Offset; Byte < End; ++Byte)
+      if (!Initialized->count(int32_t(Byte)))
+        return Refuse();
+  }
   auto &Effects =
       Op.Opcode == NdOp::LOAD ? Conditional->Reads : Conditional->Writes;
   Effects.emplace(*Address.Offset, int32_t(End));
@@ -205,6 +227,32 @@ bool RegistrationStateSolver::conditionalReturn(const Domain &State,
         std::make_pair(Op.Addr, Op.Seq), Value);
     if (!New)
       It->second = join(It->second, Value);
+    std::set<int32_t> Initialized;
+    // Only caller-owned borrowed bytes survive as an invocation result.
+    // Each visit and each distinct normal return intersects these facts;
+    // an earlier solver visit or an untaken store cannot grant initialization.
+    if (!charge(State.InitializedFrameBytes.size() +
+                Conditional->ReturnInitializedBytes.size()))
+      return false;
+    for (int32_t Byte : State.InitializedFrameBytes) {
+      if (!charge(Conditional->Objects.size() + 1))
+        return false;
+      if (llvm::any_of(Conditional->Objects, [&](const auto &Object) {
+            return Object.Begin <= Byte && Byte < Object.End;
+          }))
+        Initialized.insert(Byte);
+    }
+    const auto [Saved, First] = Conditional->ReturnInitializedBytes.emplace(
+        std::make_pair(Op.Addr, Op.Seq), Initialized);
+    if (!First) {
+      if (!charge(Saved->second.size() + Initialized.size()))
+        return false;
+      for (auto Byte = Saved->second.begin(); Byte != Saved->second.end();)
+        if (!Initialized.count(*Byte))
+          Byte = Saved->second.erase(Byte);
+        else
+          ++Byte;
+    }
   }
   return Valid;
 }

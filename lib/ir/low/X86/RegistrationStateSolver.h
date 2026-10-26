@@ -3,6 +3,11 @@
 // NeverD Decompiler
 //
 //===----------------------------------------------------------------------===//
+///
+/// \file
+/// Solve registration lifetimes, caller-frame ownership and invocation effects.
+///
+//===----------------------------------------------------------------------===//
 
 #ifndef NEVERD_IR_LOW_X86_REGISTRATIONSTATESOLVER_H
 #define NEVERD_IR_LOW_X86_REGISTRATIONSTATESOLVER_H
@@ -440,7 +445,8 @@ private:
                           std::optional<int32_t> SP,
                           llvm::ArrayRef<RegistrationObjectExtent> Extents,
                           std::vector<RegistrationObjectExtent> &Projected,
-                          bool Reads, bool RecordBorrowedEffects = true);
+                          bool Reads, bool RecordBorrowedEffects = true,
+                          bool RequireInitializedReads = true);
   std::optional<int32_t> cookieSlot(int32_t Displacement) const;
   bool cookiesReady(const FrameState &Frame) const;
   bool cxxCookiesReady(const Domain &State) const;

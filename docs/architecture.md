@@ -9057,8 +9057,8 @@ callee effects, a callee-pop parent ABI or complete whole-image lifting.
 The private `proveBoundCxxCallee` query replays a fixed-frame, cleanup-only PE32
 C++ helper under checked caller-frame inputs. It shares ordinary C++ handler,
 cookie and state setup, authenticates the direct call and complete current body,
-and requires a uniform stack-pop extent. Full volatile register facts and
-initialized scalar output words remain distinct from incoming pointer carriers.
+and requires a uniform stack-pop extent. Full volatile register facts, borrowed
+storage and initialized values remain distinct from incoming pointer carriers.
 Its initial graph uses the private ordinary C++ decoder, so missing caller
 inputs refuse before an unrelated unbound native-state closure consumes the
 query budget. The graph supplies no registration states or exceptional edges;
@@ -9081,6 +9081,19 @@ administration separation. Invocation answers never enter the target-only callee
 cache. This query supplies no MedIR receipt, spill-reload exception or native ABI;
 opaque heap inputs, general imports, catches and realigned callees remain outside
 its domain.
+
+An explicit caller initialization domain can supply an output-only scalar word
+without an old value seed. The pointer carrier still requires initialized
+bytes, and the caller still owns storage and administration separation. Every
+borrowed LOAD requires current byte initialization; a checked STORE initializes
+only its written bytes. Entry value seeds produce separate initialization
+preconditions. Read effects after stores do not invent pre-call prerequisites.
+The solver intersects initialized borrowed bytes across visits and all normal
+returns. Nested invocations project this fact separately from may-writes and
+retain old overlapping pointer taint. Exceptional exits receive no definite
+initialization. Without an explicit byte domain, missing cells still refuse.
+This remains a private source-only word borrow, not a root native-call contract
+or permission to extend a borrow to adjacent object fields.
 
 Within that private query, nested cleanup-only C++ calls replay the same source
 owner with their current physical CALL, near RET cleanup, register inputs and

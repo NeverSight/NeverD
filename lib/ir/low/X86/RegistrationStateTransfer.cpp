@@ -3,6 +3,11 @@
 // NeverD Decompiler
 //
 //===----------------------------------------------------------------------===//
+///
+/// \file
+/// Transfer ordinary x86 operations through registration and frame state.
+///
+//===----------------------------------------------------------------------===//
 
 #include "RegistrationFrameEffects.h"
 #include "RegistrationStateSolver.h"
@@ -490,7 +495,17 @@ bool RegistrationStateSolver::transferBlock(size_t I, const Domain &Before,
             if (Conditional && !SP && After.Frame.CallbackEntry)
               SP = After.Frame.load(*Chain.RegistrationOffset - 8, 4).Offset;
             const int64_t End = int64_t(*Address.Offset) + Width;
-            if (SP && *Address.Offset >= *SP && End <= (Conditional ? 4 : 0)) {
+            bool Borrowed = false;
+            if (KnownCxx && Conditional && *Address.Offset >= 8 &&
+                End <= INT32_MAX) {
+              if (!charge(Conditional->Objects.size()))
+                break;
+              Borrowed = llvm::any_of(Conditional->Objects, [&](const auto &R) {
+                return R.Begin <= *Address.Offset && End <= R.End;
+              });
+            }
+            if (Borrowed || (SP && *Address.Offset >= *SP &&
+                             End <= (Conditional ? 4 : 0))) {
               if (!charge(Width))
                 break;
               for (int64_t Byte = *Address.Offset; Byte < End; ++Byte)

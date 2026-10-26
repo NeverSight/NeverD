@@ -513,13 +513,22 @@ proveBoundCxxCallee(const BinaryImage &Image, const LowOp &Op,
     // The exact incoming area ends before the supplied caller word. Saved
     // EBP/PC are outside the caller allocation. Its other administration and
     // object ownership remain preconditions of the caller's frame proof.
-    if (!Object || Object->MayBeFrame ||
+    if ((!Object && !Initialized) ||
         *Value.Offset < int64_t(*SP) + StackArgumentBytes ||
         (!Borrowed && int64_t(*Value.Offset) + 4 > 0) || Offset > INT32_MAX - 4)
       continue;
+    // Storage ownership does not require an old value. Retain overlapping
+    // frame-pointer taint even when some bytes lack initialization; no such
+    // value may enter this scalar borrow through a sparse missing cell.
+    if (!registration_abi::chargeCalleeWork(Work,
+                                            Parent.memoryAccessWork(Value, 4)))
+      return std::nullopt;
+    if (Parent.load(*Value.Offset, 4).MayBeFrame)
+      continue;
     Inputs.Arguments.emplace(8 + Arg, FrameValue::frame(int32_t(Offset)));
     Inputs.Objects.push_back({int32_t(Offset), int32_t(Offset + 4)});
-    Inputs.ObjectCells.emplace(int32_t(Offset), *Object);
+    if (Object)
+      Inputs.ObjectCells.emplace(int32_t(Offset), *Object);
   }
   if (Inputs.Objects.empty())
     return std::nullopt;
@@ -590,14 +599,37 @@ proveBoundCxxCallee(const BinaryImage &Image, const LowOp &Op,
   for (const auto &Object : Inputs.Objects)
     Effect.Objects.push_back(
         {int32_t(Base + Object.Begin), int32_t(Base + Object.End)});
+  if (!registration_abi::chargeCalleeWork(Work, Inputs.ObjectCells.size()))
+    return std::nullopt;
+  for (const auto &[Offset, Value] : Inputs.ObjectCells)
+    Effect.RequiredInitializedInputs.push_back(
+        {int32_t(Base + Offset), int32_t(Base + Offset + 4)});
   Effect.ImageReads = States.ImageReads;
   for (const auto &[Begin, End] : Inputs.Reads)
     Effect.Reads.push_back({int32_t(Base + Begin), int32_t(Base + End)});
   for (const auto &[Begin, End] : Inputs.Writes)
     Effect.Writes.push_back({int32_t(Base + Begin), int32_t(Base + End)});
+  std::optional<std::set<int32_t>> InitializedOnReturn;
   for (const auto &[Identity, Value] : Inputs.ReturnValues) {
-    if (!registration_abi::chargeCalleeWork(Work, Inputs.Objects.size() + 1))
+    if (!registration_abi::chargeCalleeWork(
+            Work,
+            Inputs.Objects.size() + Inputs.ReturnInitializedBytes.size() + 1))
       return std::nullopt;
+    const auto InitializedReturn = Inputs.ReturnInitializedBytes.find(Identity);
+    if (InitializedReturn == Inputs.ReturnInitializedBytes.end() ||
+        !registration_abi::chargeCalleeWork(
+            Work, InitializedReturn->second.size() +
+                      (InitializedOnReturn ? InitializedOnReturn->size() : 0)))
+      return std::nullopt;
+    if (!InitializedOnReturn)
+      InitializedOnReturn = InitializedReturn->second;
+    else
+      for (auto It = InitializedOnReturn->begin();
+           It != InitializedOnReturn->end();)
+        if (!InitializedReturn->second.count(*It))
+          It = InitializedOnReturn->erase(It);
+        else
+          ++It;
     BoundCxxCalleeEffect::Return Return{Identity.first, Identity.second,
                                         projectX86CallReturnValue(Value)};
     if (Value.Offset && Value == FrameValue::frame(*Value.Offset) &&
@@ -606,6 +638,17 @@ proveBoundCxxCallee(const BinaryImage &Image, const LowOp &Op,
         }))
       Return.Value = FrameValue::frame(int32_t(Base + *Value.Offset));
     Effect.Returns.push_back(Return);
+  }
+  if (!InitializedOnReturn ||
+      !registration_abi::chargeCalleeWork(Work, InitializedOnReturn->size()))
+    return std::nullopt;
+  for (int32_t Byte : *InitializedOnReturn) {
+    const int32_t CallerByte = int32_t(Base + Byte);
+    if (!Effect.InitializedOnReturn.empty() &&
+        Effect.InitializedOnReturn.back().End == CallerByte)
+      ++Effect.InitializedOnReturn.back().End;
+    else
+      Effect.InitializedOnReturn.push_back({CallerByte, CallerByte + 1});
   }
   return Effect;
 }

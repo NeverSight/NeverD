@@ -3,11 +3,14 @@
 // NeverD Decompiler
 //
 //===----------------------------------------------------------------------===//
+///
+/// \file
+/// Check invocation-specific registration frame inputs and bounded effects.
+///
+//===----------------------------------------------------------------------===//
 
 #ifndef NEVERD_IR_LOW_X86_REGISTRATIONCONDITIONALFRAME_H
 #define NEVERD_IR_LOW_X86_REGISTRATIONCONDITIONALFRAME_H
-/// \file
-/// Check invocation-specific registration frame inputs and bounded effects.
 
 #include "RegistrationFrame.h"
 #include "RegistrationJumpCapture.h"
@@ -48,8 +51,14 @@ struct BoundCxxCalleeEffect {
   uint32_t StackPopBytes = 0;
   /// Every supplied borrow, including objects that the callee never accesses.
   std::vector<RegistrationObjectExtent> Objects;
+  /// Entry bytes whose initialized values seeded this invocation. A later
+  /// read after a checked store is a read effect, not an entry precondition.
+  std::vector<RegistrationObjectExtent> RequiredInitializedInputs;
   std::vector<RegistrationObjectExtent> Reads;
   std::vector<RegistrationObjectExtent> Writes;
+  /// Bytes initialized on every normal return. These carry no value or
+  /// must-write claim and grant no initialization on exceptional exits.
+  std::vector<RegistrationObjectExtent> InitializedOnReturn;
   std::vector<ExceptionAddressRange> ImageReads;
   struct Return {
     va_t Address = InvalidVA;
@@ -104,6 +113,7 @@ struct ConditionalFrame {
   /// Physical EAX at each ordinary return. Joins retain possible alias taint;
   /// callback returns belong to another invocation and are excluded.
   std::map<std::pair<va_t, int>, FrameValue> ReturnValues;
+  std::map<std::pair<va_t, int>, std::set<int32_t>> ReturnInitializedBytes;
   bool NativeFramePrivate = true;
   bool Complete = true;
   size_t Work = 0;
@@ -141,6 +151,9 @@ std::optional<BoundCalleeEffect> proveBoundSEHCallee(
 /// are replayed; invocation-dependent answers must never enter a target-only
 /// cache. Initialized, when supplied, proves each input byte separately from
 /// its value; an initialized unknown scalar need not have a retained cell.
+/// It also permits output-only storage without a value seed: every read must
+/// then follow checked initialization within this invocation. Without that
+/// explicit byte domain, missing caller cells still supply no borrow.
 std::optional<BoundCxxCalleeEffect>
 proveBoundCxxCallee(const BinaryImage &Image, const LowOp &Op,
                     const FrameState &Parent, uint32_t StackArgumentBytes,
@@ -154,4 +167,4 @@ using BoundCalleeProver = std::function<std::optional<BoundCalleeEffect>(
 
 } // namespace neverd::registration_state
 
-#endif
+#endif // NEVERD_IR_LOW_X86_REGISTRATIONCONDITIONALFRAME_H
