@@ -213,18 +213,16 @@ x64 PLT specifier as an AArch64 page modifier. Late compiler calls such as
 `_Unwind_Resume` can therefore receive a wrong displacement. NeverD checks these
 encoded source-patch references and refuses an invalid image.
 
-The scoped backend correction is included in
-[`cmake/patches/llvm-aarch64-specifier-scope.patch`](../cmake/patches/llvm-aarch64-specifier-scope.patch).
-The integrated build applies this correction to a build-directory copy of the
-single LLVM source file. It preserves the submodule checkout and revision, and
-accepts an already corrected source. An unrecognized source fails configuration
-instead of silently skipping the correction. Use an integrated build:
+The current NeverSight LLVM fork includes the architecture-scoped page fixups,
+i386 GOT anchor arithmetic, and Mach-O data PC bias corrections. Update the fork
+to its latest `main` and use the integrated source build. NeverD compiles that
+source directly; the former build-directory patch overlay is no longer needed.
 
 ```sh
 cmake -S . -B build-source -G Ninja -DCMAKE_BUILD_TYPE=Release \
   -DBUILD_TESTING=ON -DNEVERD_LLVM_PREBUILT=OFF \
   -DNEVERD_SOURCE_PATCH_TEST_CLANG_EXECUTABLE=/path/to/clang
-cmake --build build-source --target neverd NeverDSourcePatchTests \
+python3 scripts/build.py build-source --target neverd NeverDSourcePatchTests \
   NeverDNativeExceptionRewriteContractTests --parallel 4
 ```
 
@@ -232,8 +230,7 @@ Point the test compiler setting at a compatible Clang (22.1.6 was verified),
 which may differ from the system compiler used to build NeverD itself.
 The shared prebuilt cache is not rewritten. Its r3/r4 backend remains subject to
 the displacement check and may refuse an IR patch. The native object route does
-not recompile through this LLVM MC path. The standalone patch can also be applied
-when building the LLVM fork outside NeverD.
+not recompile through this LLVM MC path.
 
 ## SDK and transaction behavior
 

@@ -59,9 +59,6 @@ else()
     set(BUILD_SHARED_LIBS       OFF CACHE BOOL "" FORCE)
     add_subdirectory(third_party/llvm-project/llvm EXCLUDE_FROM_ALL)
 
-    include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/NeverDLLVMAddressModel.cmake)
-    neverd_scope_llvm_address_model()
-
     # DXContainerInfo.cpp consumes the generated revision header.  Keep this
     # ordering edge in the integrating project so a clean Ninja build cannot
     # compile LLVMMC before the header exists.
