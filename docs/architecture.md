@@ -4526,6 +4526,8 @@ LLVM source exports retain the fixed declaration of such a call even when the
 selected output omits its callee, instead of falling back to unknown extern
 varargs. Explicit native stack-word source calls use the same declaration path.
 
+Exact register-call targets use the shared bounded LowIR scalar query. The original indirect occurrence remains the stack-proof key; only the source-bound MedIR call becomes a named call after its target, callee declaration and outgoing bytes agree. Loads, cross-block values, call clobbers and incomplete register bytes cannot supply a target.
+
 Selected callers use the existing omitted-callee reader and its image- and
 summary-sensitive memo. A bounded instruction preflight only avoids unnecessary
 CFG builds; the ordinary complete CFG and MedIR still establish the declaration.

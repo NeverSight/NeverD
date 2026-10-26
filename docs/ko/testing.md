@@ -8,6 +8,8 @@
 
 `NeverDSourceEntryBindingTests`는 x64/ARM64, PE/ELF, HighC/LLVMC의 진입 스택 인수를 컴파일하고 실행합니다. 전체 모듈, 호출자만 선택, 명시적 부동소수점 비트 전달, 캐시 재사용과 초기화를 검증합니다. 부분 쓰기, 좁은 읽기, 프레임 주소 유출 및 정의되지 않은 입력을 거부하는 대조군과 독립 피호출 함수 정의를 통한 고정 선언 검증을 포함합니다. 호스트 실행은 네이티브 Windows ARM64 드라이버 검증이 아닙니다. RBP와 x29/x30 프레임 복원도 검증합니다. 저장 바이트 덮어쓰기, SP만 복원하고 RBP를 변경한 경우, 반환 주소를 매개변수로 사용하는 경우를 거부하며 ELF와 Windows의 보존 레지스터 차이도 확인합니다.
 
+알려진 레지스터 호출은 x64/ARM64 PE/ELF의 두 C 경로에서 전체 모듈과 호출자 선택으로 실행합니다. 원래 LowIR 간접 호출은 유지합니다. 부분 쓰기, 불투명 효과, 임시 값 재사용, 메모리 슬롯, 작업 한도 초과를 거부하는 검사도 포함합니다.
+
 `PEFunctionAddresses.*`는 스택 프레임 없는 x64 PE 리프, 소유 관계와 명령 경계, 거부되는 접두사와 좁은 피연산자, 종료 증명, 취소 및 1/2/4/16 작업자의 결과 일치를 검사합니다. 시그니처 테스트는 16개 조건부 rel32 형식의 양방향 변위, 명시적 진입점 범위와 원본 재배치 제약을 확인합니다. Python 테스트는 각 단일 위치 조건이 모든 원본 충돌 선언을 구별하며 대체 이름과 함께 필요한 위치를 보존하고 기존 선언을 중복하지 않는지 검사합니다.
 
 `DriverKernelSEH.V2*`, `COFFExceptionParser.*V2*` and `DriverSEHV2Execution.*` cover normalized V2 tables, partial restoration, malformed metadata and original linked driver exceptions. Run `NeverDNativeDriverTests`, `NeverDDriverEmulationTests`, `NeverDWindowsProcessTests` and `NeverDCOFFExceptionV2Tests`; unavailable host backends remain explicit skips.

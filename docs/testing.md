@@ -19,6 +19,8 @@ checks integer and floating bit transport, repeated binding, call indices, and
 isolation from machine lifting, patching and analysis. These host executions
 do not qualify native Windows ARM64 drivers.
 
+Known register calls run through both C routes for x64/ARM64 PE/ELF, whole modules and selected callers. Their original LowIR occurrences remain indirect. Scalar-query controls reject stale partial writes, opaque effects, reused instruction temporaries, memory-call slots and exhausted work.
+
 The same target executes automatically recovered stack inputs for complete
 modules and selected callers, checks unchanged results across cached selections,
 and resets the cache before changing the callee bytes. Selected callers also
