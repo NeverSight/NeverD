@@ -9,6 +9,7 @@
 #include "RegistrationABIPrivate.h"
 #include "RegistrationCRTFrame.h"
 #include "RegistrationJumpRuntime.h"
+#include "RegistrationOriginalImage.h"
 #include "RegistrationSEHPrivateCall.h"
 #include "RegistrationStateSolver.h"
 
@@ -80,13 +81,12 @@ SEHCookieInputs getSEHCookieInputs(const BinaryImage &Image,
       Inputs.CheckVA = *Check;
   return Inputs;
 }
-} // namespace
-
 std::optional<BoundCalleeEffect>
-proveBoundSEHCallee(const BinaryImage &Image, const LowOp &Op,
-                    const FrameState &Parent, size_t &Work,
-                    const std::map<int32_t, SEHJumpCapture> *Captures,
-                    const std::set<int32_t> *Initialized) {
+proveBoundSEHCalleeImpl(const BinaryImage &Image, const LowOp &Op,
+                        const FrameState &Parent, size_t &Work,
+                        const std::map<int32_t, SEHJumpCapture> *Captures,
+                        const std::set<int32_t> *Initialized,
+                        OriginalImageFrameProof *OriginalImage) {
   if (Op.Opcode != NdOp::CALL || Op.NumInputs != 1 || !Op.Inputs[0].isConst() ||
       Op.Inputs[0].Size != 4 || Op.Seq < 0 ||
       Op.MemoryAddressSpace != NdMemoryAddressSpace::Default ||
@@ -164,9 +164,27 @@ proveBoundSEHCallee(const BinaryImage &Image, const LowOp &Op,
   }
   if (Inputs.Arguments.empty())
     return std::nullopt;
+  if (OriginalImage) {
+    Inputs.EvaluateOriginalImage =
+        [&](const LowOp &Op, const FrameTransfer &Transfer, size_t &Used) {
+          return OriginalImage->evaluate(Op, Transfer, Used);
+        };
+    Inputs.ProveImageMemory = [&](va_t Address, uint16_t Width, bool Write,
+                                  size_t &Used) {
+      return !Write && OriginalImage->permitsRead(Address, Width, Used);
+    };
+  }
   Inputs.ProveCall = [&](const LowOp &Call, const FrameState &State,
                          const std::set<int32_t> &Initialized,
                          std::optional<FrameValue> &Returned) {
+    if (OriginalImage) {
+      BoundPlainCalleeEffect Plain;
+      if (!registration_abi::hasConditionalCallFrame(
+              Image, Call, State, Inputs.Work, &Initialized, &Returned, &Plain,
+              OriginalImage))
+        return false;
+      return true;
+    }
     return registration_abi::hasConditionalCallFrame(
         Image, Call, State, Inputs.Work, &Initialized, &Returned);
   };
@@ -192,6 +210,8 @@ proveBoundSEHCallee(const BinaryImage &Image, const LowOp &Op,
           return std::nullopt;
       }
     }
+  if (OriginalImage && !OriginalImage->recordCode(Function, Inputs.Work))
+    return std::nullopt;
   const auto Stacks = Index.stackContracts(Function);
   const auto Unwinds = Index.localUnwindContracts(Function);
   const auto Controls = Index.sehControlContracts(Function);
@@ -283,7 +303,7 @@ proveBoundSEHCallee(const BinaryImage &Image, const LowOp &Op,
     Native.TargetVA = Target;
     Native.StackOffset = *SP;
     Native.HasOrdinaryReturn = HasParentReturn;
-    if (Effect.ReturnValue && Effect.ReturnValue->Constant &&
+    if (!OriginalImage && Effect.ReturnValue && Effect.ReturnValue->Constant &&
         *Effect.ReturnValue ==
             FrameValue::constant(*Effect.ReturnValue->Constant))
       Native.ConstantReturn = Effect.ReturnValue->Constant;
@@ -307,6 +327,74 @@ proveBoundSEHCallee(const BinaryImage &Image, const LowOp &Op,
     Effect.NativeCall = std::move(Native);
   }
   return Effect;
+}
+} // namespace
+
+std::optional<BoundCalleeEffect>
+proveBoundSEHCallee(const BinaryImage &Image, const LowOp &Op,
+                    const FrameState &Parent, size_t &Work,
+                    const std::map<int32_t, SEHJumpCapture> *Captures,
+                    const std::set<int32_t> *Initialized) {
+  return proveBoundSEHCalleeImpl(Image, Op, Parent, Work, Captures, Initialized,
+                                 nullptr);
+}
+
+std::optional<OriginalImageSEHInvocation>
+proveBoundOriginalImageSEHCallee(const BinaryImage &Image, const LowOp &Op,
+                                 const FrameState &Parent, size_t &Work,
+                                 const std::set<int32_t> *Initialized) {
+  OriginalImageFrameProof Original(Image);
+  auto Effect = proveBoundSEHCalleeImpl(Image, Op, Parent, Work, nullptr,
+                                        Initialized, &Original);
+  if (!Effect || !Effect->HasOrdinaryReturn || !Effect->NativeCall ||
+      !Effect->Reads.empty() || !Effect->Writes.empty() ||
+      !Effect->JumpResumes.empty() || !Effect->ReturnValue ||
+      !Effect->ReturnValue->Constant ||
+      *Effect->ReturnValue !=
+          FrameValue::constant(*Effect->ReturnValue->Constant))
+    return std::nullopt;
+  OriginalImageSEHInvocation Result;
+  Result.Call = std::move(*Effect->NativeCall);
+  Result.ReturnValue = *Effect->ReturnValue->Constant;
+  for (const auto &Argument : Result.Call.Arguments) {
+    using Kind = RegistrationSEHBoundArgument::Kind;
+    if (!registration_abi::chargeCalleeWork(Work, 1))
+      return std::nullopt;
+    if (Argument.ArgumentKind == Kind::Unused)
+      continue;
+    if (Argument.ArgumentKind != Kind::Scalar)
+      return std::nullopt;
+    const auto Value = registration_abi::readCallerFrameWord(
+        Parent, Argument.Offset, Initialized, Work);
+    if (!Value)
+      return std::nullopt;
+    if (Value->ImageAddress) {
+      if (*Value != FrameValue::imageAddress(*Value->ImageAddress) ||
+          !Original.recordAddress(*Value->ImageAddress, Work))
+        return std::nullopt;
+    } else if (!Value->Constant ||
+               *Value != FrameValue::constant(*Value->Constant))
+      return std::nullopt;
+    Result.Arguments.emplace(Argument.Offset, *Value);
+  }
+  if (!registration_abi::chargeCalleeWork(Work, Original.addresses().size() +
+                                                    Original.reads().size() +
+                                                    Original.code().size()))
+    return std::nullopt;
+  for (const auto &[Address, Read] : Original.reads()) {
+    if (!Read)
+      continue;
+    if (!registration_abi::chargeCalleeWork(Work, Read->Bytes.size()))
+      return std::nullopt;
+    Result.Reads.emplace(Address, *Read);
+  }
+  for (const auto &[Address, Bytes] : Original.code()) {
+    if (!registration_abi::chargeCalleeWork(Work, Bytes.size()))
+      return std::nullopt;
+    Result.Code.emplace(Address, Bytes);
+  }
+  Result.Addresses = Original.addresses();
+  return Result;
 }
 } // namespace neverd::registration_state
 

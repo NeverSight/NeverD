@@ -4,6 +4,10 @@
 //
 //===----------------------------------------------------------------------===//
 
+/// \file
+/// Share bounded PE32 callee frame, storage and invocation proof authorities.
+//===----------------------------------------------------------------------===//
+
 #ifndef NEVERD_IR_LOW_X86_REGISTRATIONABIPRIVATE_H
 #define NEVERD_IR_LOW_X86_REGISTRATIONABIPRIVATE_H
 
@@ -26,7 +30,8 @@ struct Import;
 struct LowInstructionBoundary;
 namespace registration_state {
 struct BoundPlainCalleeEffect;
-}
+class OriginalImageFrameProof;
+} // namespace registration_state
 } // namespace neverd
 
 namespace neverd::registration_abi {
@@ -140,7 +145,8 @@ bool hasConditionalCallFrame(
     const registration_state::FrameState &State, size_t &Work,
     const std::set<int32_t> *Initialized = nullptr,
     std::optional<registration_state::FrameValue> *ReturnValue = nullptr,
-    registration_state::BoundPlainCalleeEffect *Effect = nullptr);
+    registration_state::BoundPlainCalleeEffect *Effect = nullptr,
+    registration_state::OriginalImageFrameProof *OriginalImage = nullptr);
 bool hasClosedRegistrationRaise(const BinaryImage &Image, const LowOp &Op,
                                 const registration_state::FrameState &State);
 bool hasSEHCallbackImageMemory(const BinaryImage &Image, va_t Address,
@@ -151,6 +157,16 @@ bool hasSEHCallbackImageMemory(const BinaryImage &Image, va_t Address,
 std::optional<std::vector<uint8_t>>
 readImmutableRegistrationImageBytes(const BinaryImage &Image, va_t Address,
                                     uint16_t Width, size_t &Work);
+
+/// Checked immutable storage and its optional non-address scalar. Pointer-like
+/// bytes retain storage evidence but never acquire a fixed integer identity.
+struct ImmutableRegistrationScalar {
+  std::vector<uint8_t> Bytes;
+  std::optional<uint32_t> Value;
+};
+std::optional<ImmutableRegistrationScalar>
+readImmutableRegistrationScalar(const BinaryImage &Image, va_t Address,
+                                uint16_t Width, size_t &Work);
 
 struct InitializerFrame {
   uint32_t StackPopBytes = 0;
@@ -212,6 +228,10 @@ struct PrivateFrameOptions {
   /// The bound source consumer owns no nested runtime/callback effects.
   /// Unreached calls remain outside the invocation's memory footprint.
   bool ExcludeCalls = false;
+  /// Only the explicit original-image invocation query supplies this scope.
+  /// It requires the closed plain-callee domain and cannot publish native
+  /// admission or an unscoped layout-independent scalar return.
+  registration_state::OriginalImageFrameProof *OriginalImage = nullptr;
 };
 
 bool hasPrivateCallerFrame(const LowFunc &Function, const BinaryImage &Image,

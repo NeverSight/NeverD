@@ -11,6 +11,8 @@
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/ReadOnlyBytes.h"
 
+#include <utility>
+
 namespace neverd::registration_abi {
 
 std::optional<std::vector<uint8_t>>
@@ -52,6 +54,31 @@ readImmutableRegistrationImageBytes(const BinaryImage &Image, va_t Address,
         !chargeCalleeWork(Work, Image.Segments.size()))
       return std::nullopt;
   return readImmutableImageBytes(Image, Address, Width);
+}
+
+std::optional<ImmutableRegistrationScalar>
+readImmutableRegistrationScalar(const BinaryImage &Image, va_t Address,
+                                uint16_t Width, size_t &Work) {
+  if (Width > 4)
+    return std::nullopt;
+  auto Bytes = readImmutableRegistrationImageBytes(Image, Address, Width, Work);
+  if (!Bytes)
+    return std::nullopt;
+  // Potential one-past addresses inspect each segment's two extents and
+  // their data owners, including nested segment/section lookup.
+  for (size_t I = 0; I != Image.Segments.size(); ++I)
+    for (unsigned Extent = 0; Extent != 2; ++Extent)
+      if (!chargeCalleeWork(Work, Image.Sections.size()) ||
+          !chargeCalleeWork(Work, Image.Segments.size()) ||
+          !chargeCalleeWork(Work, Image.Segments.size()))
+        return std::nullopt;
+  uint32_t Value = 0;
+  for (unsigned I = 0; I != Width; ++I)
+    Value |= uint32_t((*Bytes)[I]) << (I * 8);
+  ImmutableRegistrationScalar Read{std::move(*Bytes), std::nullopt};
+  if (Width != 4 || !Image.isPotentiallyRelocatableAddress(Value))
+    Read.Value = Value;
+  return Read;
 }
 
 bool hasSEHCallbackImageMemory(const BinaryImage &Image, va_t Address,

@@ -9,6 +9,7 @@
 
 #include "../../../lib/ir/low/X86/RegistrationABIPrivate.h"
 #include "../../../lib/ir/low/X86/RegistrationConditionalFrame.h"
+#include "../../../lib/ir/low/X86/RegistrationOriginalImage.h"
 #include "RegistrationSEH4SharedTestUtils.h"
 #include "gtest/gtest.h"
 
@@ -405,5 +406,88 @@ TEST(RegistrationConditionalSEH,
       EXPECT_EQ(bool(Bound), Same || !Observed);
       if (Bound)
         EXPECT_EQ(Bound->begin()->second.ObservesScalarReturn, Observed);
+    }
+}
+
+TEST(RegistrationConditionalSEH, OriginalImageDifferenceStaysScoped) {
+  for (uint32_t Base : {0x400000u, 0x18000000u}) {
+    SCOPED_TRACE(Base);
+    ScalarSEHFixture F(Base, {0x8b, 0x45, 8, 0x2d, 0, 0, 0, 0});
+    const va_t Field = Base + 0x1010;
+    const uint32_t Target = Base + 0x2200;
+    writeLE<uint32_t>(F.Image.Segments.front().Data.data() + 16, Target);
+    F.Image.BaseRelocations.push_back(
+        {Field, llvm::COFF::IMAGE_REL_BASED_HIGHLOW});
+    F.Image.DataAddressRelocOperands[Field] = {Target, Target, 4,
+                                               Base + 0x2000};
+    F.Parent.store(-64, 4, FrameValue::imageAddress(Target + 64));
+    size_t Work = 0;
+    const auto Scoped = proveBoundOriginalImageSEHCallee(
+        F.Image, F.Call, F.Parent, Work, &F.Initialized);
+    ASSERT_TRUE(Scoped);
+    EXPECT_EQ(Scoped->ReturnValue, 64u);
+    EXPECT_FALSE(Scoped->Call.ConstantReturn);
+    EXPECT_EQ(Scoped->Arguments.at(-64), FrameValue::imageAddress(Target + 64));
+    EXPECT_EQ(Scoped->Addresses, (std::set<uint32_t>{Target, Target + 64}));
+    EXPECT_FALSE(Scoped->Code.empty());
+    EXPECT_TRUE(Scoped->Reads.empty());
+    ASSERT_LT(Work, limits::kMaxRegistrationEHStateWork);
+    size_t Exact = limits::kMaxRegistrationEHStateWork - Work;
+    EXPECT_TRUE(proveBoundOriginalImageSEHCallee(F.Image, F.Call, F.Parent,
+                                                 Exact, &F.Initialized));
+    EXPECT_EQ(Exact, limits::kMaxRegistrationEHStateWork);
+    size_t Short = limits::kMaxRegistrationEHStateWork - Work + 1;
+    EXPECT_FALSE(proveBoundOriginalImageSEHCallee(F.Image, F.Call, F.Parent,
+                                                  Short, &F.Initialized));
+    size_t OrdinaryWork = 0;
+    const auto Ordinary = proveBoundSEHCallee(
+        F.Image, F.Call, F.Parent, OrdinaryWork, nullptr, &F.Initialized);
+    ASSERT_TRUE(Ordinary);
+    EXPECT_EQ(Ordinary->ReturnValue, FrameValue{});
+    ASSERT_TRUE(Ordinary->NativeCall);
+    EXPECT_FALSE(Ordinary->NativeCall->ConstantReturn);
+  }
+}
+
+TEST(RegistrationConditionalSEH, OriginalImageReadRecordsExactInputsAndBytes) {
+  for (uint32_t Base : {0x400000u, 0x18000000u})
+    for (unsigned Mode = 0; Mode != 7; ++Mode) {
+      SCOPED_TRACE(Base);
+      SCOPED_TRACE(Mode);
+      ScalarSEHFixture F(Base, {0x8b, 0x45, 8, 0x8b, 0});
+      const uint32_t Address = Base + 0x2300;
+      F.Parent.store(-64, 4, FrameValue::imageAddress(Address));
+      writeLE<uint32_t>(F.Image.Segments.back().Data.data() + 0x300, 37u);
+      if (Mode == 1)
+        F.Image.Segments.back().Flags =
+            SegmentFlags::Readable | SegmentFlags::Writable;
+      if (Mode == 2)
+        writeLE<uint32_t>(F.Image.Segments.back().Data.data() + 0x300, Address);
+      if (Mode == 3)
+        F.Image.BaseRelocations.push_back(
+            {Address, llvm::COFF::IMAGE_REL_BASED_HIGHLOW});
+      if (Mode == 4)
+        F.Parent.store(-64, 4, FrameValue{});
+      if (Mode == 5)
+        F.Initialized.erase(-61);
+      if (Mode == 6)
+        ++F.Call.Addr;
+      size_t Work = 0;
+      const auto Scoped = proveBoundOriginalImageSEHCallee(
+          F.Image, F.Call, F.Parent, Work, &F.Initialized);
+      ASSERT_EQ(bool(Scoped), Mode == 0);
+      if (!Scoped)
+        continue;
+      EXPECT_EQ(Scoped->ReturnValue, 37u);
+      EXPECT_FALSE(Scoped->Call.ConstantReturn);
+      EXPECT_EQ(Scoped->Arguments.at(-64), FrameValue::imageAddress(Address));
+      ASSERT_EQ(Scoped->Reads.size(), 1u);
+      const auto &Read = Scoped->Reads.at({Address, 4});
+      EXPECT_EQ(Read.Value, 37u);
+      ASSERT_EQ(Read.Bytes.size(), 4u);
+      EXPECT_EQ(readLE<uint32_t>(Read.Bytes.data()), 37u);
+      size_t OrdinaryWork = 0;
+      EXPECT_FALSE(proveBoundSEHCallee(F.Image, F.Call, F.Parent, OrdinaryWork,
+                                       nullptr, &F.Initialized));
     }
 }

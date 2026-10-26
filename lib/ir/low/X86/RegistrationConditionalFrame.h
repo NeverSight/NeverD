@@ -116,6 +116,12 @@ struct ConditionalFrame {
   /// Optional closed-image memory authority. It checks mapped storage and
   /// records may-effects without supplying the bytes' runtime values.
   std::function<bool(va_t, uint16_t, bool, size_t &)> ProveImageMemory;
+  /// Explicit source-only original-layout hypothesis. The ordinary/native
+  /// entry points never populate this field; dependent facts require their
+  /// separate invocation evidence and final PE validation.
+  std::function<std::optional<FrameValue>(const LowOp &, const FrameTransfer &,
+                                          size_t &)>
+      EvaluateOriginalImage;
   /// Full-width volatile GPR facts, indexed like FrameState::Registers. A
   /// partial incoming register never supplies an untainted full-word seed.
   std::map<unsigned, FrameValue> Registers;

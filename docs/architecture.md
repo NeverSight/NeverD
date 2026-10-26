@@ -2280,6 +2280,18 @@ it does not substitute the constant or change memory/unwind attributes. COFF
 replays the same source receipt and rejects a new observation of a source result
 that was unused. This grants neither opaque memory access nor fixed differences
 between independently reconstructed image addresses.
+`OriginalImageFrameProof` owns a separate, explicit source-only layout query.
+It records exact mapped address operands, immutable scalar bytes and decoded
+callee code for one image and invocation. The shared scalar reader rejects
+fixups and keeps pointer-like bytes unknown. The scoped SEH entry accepts only
+exact scalar/image inputs and a common ordinary scalar result; nested plain
+helpers must contain no reached calls. The independent registration-state
+library consumes an explicit value callback and retains no loader dependency.
+Its result never populates the native
+layout-independent `ConstantReturn` receipt. Ordinary state analysis does not
+enable this scope. Native use additionally requires original argument identity,
+preserved helper/runtime code and metadata, and a replay against the final PE;
+header movement and added sections invalidate an original-byte-only argument.
 The shared callee-instruction check also accepts PE32 ADD/SUB immediates with
 complete HIGHLOW fields and exactly one matching loader-owned address operand,
 as it does for MOV/PUSH. The decoder/lifter retains that exact address identity.

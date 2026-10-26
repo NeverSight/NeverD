@@ -26,6 +26,7 @@ add_neverd_unittest(NeverDSEHRuntimeMemoryTests
   eh/RegistrationJumpRuntimeTests.cpp
   eh/RegistrationJumpCaptureTests.cpp
   eh/RegistrationCallbackImageTests.cpp
+  eh/RegistrationOriginalImageTests.cpp
   LINK_COMPONENTS Pipeline)
 target_include_directories(NeverDSEHRuntimeMemoryTests PRIVATE
   ${CMAKE_SOURCE_DIR}/lib/pipeline)

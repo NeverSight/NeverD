@@ -109,6 +109,7 @@ add_neverd_component_library(NeverDIRLow
   X86/RegistrationLocalUnwind.cpp
   X86/RegistrationLocalUnwindCall.cpp
   X86/RegistrationCallbackImage.cpp
+  X86/RegistrationOriginalImage.cpp
   X86/RegistrationCFG.cpp
   X86/RegistrationCleanupABI.cpp
   X86/RegistrationCleanupFrame.cpp

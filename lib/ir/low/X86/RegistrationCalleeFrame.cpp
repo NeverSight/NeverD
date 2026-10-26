@@ -4,9 +4,14 @@
 //
 //===----------------------------------------------------------------------===//
 
+/// \file
+/// Check private callee frames and invocation-specific scalar effects.
+//===----------------------------------------------------------------------===//
+
 #include "RegistrationABIPrivate.h"
 #include "RegistrationFrameBranch.h"
 #include "RegistrationFrameEffects.h"
+#include "RegistrationOriginalImage.h"
 #include "RegistrationPrivateFrame.h"
 
 #include "neverd/Limits.h"
@@ -50,26 +55,11 @@ size_t stateWork(const PrivateFrameState &State) {
 std::optional<registration_state::FrameValue>
 immutableScalar(const BinaryImage &Image, va_t Address, uint16_t Width,
                 size_t &Work) {
-  if (Width > 4)
-    return std::nullopt;
-  const auto Bytes =
-      readImmutableRegistrationImageBytes(Image, Address, Width, Work);
-  if (!Bytes)
-    return std::nullopt;
-  // Potential one-past addresses inspect each segment's two extents and
-  // their data owners, including nested segment/section lookup.
-  for (size_t I = 0; I != Image.Segments.size(); ++I)
-    for (unsigned Extent = 0; Extent != 2; ++Extent)
-      if (!chargeCalleeWork(Work, Image.Sections.size()) ||
-          !chargeCalleeWork(Work, Image.Segments.size()) ||
-          !chargeCalleeWork(Work, Image.Segments.size()))
-        return std::nullopt;
-  uint32_t Value = 0;
-  for (unsigned I = 0; I != Width; ++I)
-    Value |= uint32_t((*Bytes)[I]) << (I * 8);
-  if (Width == 4 && Image.isPotentiallyRelocatableAddress(Value))
-    return std::nullopt;
-  return registration_state::FrameValue::constant(Value);
+  const auto Read =
+      readImmutableRegistrationScalar(Image, Address, Width, Work);
+  if (Read && Read->Value)
+    return registration_state::FrameValue::constant(*Read->Value);
+  return std::nullopt;
 }
 } // namespace
 
@@ -100,10 +90,13 @@ bool hasPrivateCallerFrame(const LowFunc &Function, const BinaryImage &Image,
   const auto [BorrowECX, ThrowProof, IndependentScalarReturn,
               DiscardReturnValue, CopyObjectSize, Initializer, Initializers,
               ObjectCallbacks, CallbackStackPopBytes, ScalarArguments,
-              ScalarRegisters, ReturnValue, ExcludeCalls] = Options;
+              ScalarRegisters, ReturnValue, ExcludeCalls, OriginalImage] =
+      Options;
   if (ReturnValue)
     ReturnValue->reset();
   if ((ReturnValue || ScalarRegisters || ExcludeCalls) && !ScalarArguments)
+    return false;
+  if (OriginalImage && (!ScalarArguments || !ExcludeCalls || !ReturnValue))
     return false;
   if (ScalarArguments &&
       (BorrowECX || ThrowProof || DiscardReturnValue || CopyObjectSize ||
@@ -324,8 +317,15 @@ bool hasPrivateCallerFrame(const LowFunc &Function, const BinaryImage &Image,
             if (!Charge(1 + ImageValues.size()))
               return false;
             const auto [It, New] = ImageValues.try_emplace(Key);
-            if (New)
-              It->second = immutableScalar(Image, Key.first, Key.second, Work);
+            if (New) {
+              if (OriginalImage &&
+                  !OriginalImage->permitsRead(Key.first, Key.second, Work))
+                return false;
+              It->second =
+                  OriginalImage
+                      ? OriginalImage->readScalar(Key.first, Key.second, Work)
+                      : immutableScalar(Image, Key.first, Key.second, Work);
+            }
             if (Work >= limits::kMaxRegistrationEHStateWork)
               return false;
             ImageValue = It->second;
@@ -621,6 +621,10 @@ bool hasPrivateCallerFrame(const LowFunc &Function, const BinaryImage &Image,
             return false;
         }
       }
+      if (OriginalImage && Op.Opcode != NdOp::LOAD)
+        ImageValue = OriginalImage->evaluate(Op, Transfer, Work);
+      if (OriginalImage && Work >= limits::kMaxRegistrationEHStateWork)
+        return false;
       Transfer.write(Op, ImageValue.value_or(Transfer.evaluate(Op, false)));
       if (BorrowECX)
         BorrowTransfer.write(Op, BorrowValue);

@@ -9507,6 +9507,13 @@ and one-unit-short budgets. The authored rewrite driver's
 `--observe-callee-result` mode uses a returning helper's actual EAX plus five as
 the later longjmp value, across EH3/EH4/GS, optimized/unoptimized and rebased
 outputs. Native mutation checks retain rejection of new unowned observations.
+The separate `RegistrationOriginalImage` cases check scoped mapped-address
+differences, unchanged generic transfer, immutable scalar widths, pointer-byte
+refusal, conflicting fixups/mappings, image separation and exact/exhausted work.
+`OriginalImageDifferenceStaysScoped` and
+`OriginalImageReadRecordsExactInputsAndBytes` bind authored SEH invocations at
+two bases and keep their source evidence out of native `ConstantReturn`.
+These queries do not qualify final-PE replay or native layout-dependent calls.
 `RelocatedArithmeticKeepsItsAddressIdentity` covers ADD/SUB at two image bases:
 exact HIGHLOW address provenance admits the authored SEH helper while its
 ordinary result remains unknown. Missing, stale or conflicting classifications,

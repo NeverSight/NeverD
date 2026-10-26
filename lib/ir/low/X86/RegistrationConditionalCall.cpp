@@ -8,6 +8,7 @@
 
 #include "RegistrationABIPrivate.h"
 #include "RegistrationConditionalFrame.h"
+#include "RegistrationOriginalImage.h"
 
 #include "neverd/ir/Limits.h"
 #include "neverd/ir/low/CFGBuilder.h"
@@ -75,11 +76,14 @@ bool hasConditionalCallFrame(const BinaryImage &Image, const LowOp &Op,
                              const FrameState &State, size_t &Work,
                              const std::set<int32_t> *Initialized,
                              std::optional<FrameValue> *ReturnValue,
-                             BoundPlainCalleeEffect *Effect) {
+                             BoundPlainCalleeEffect *Effect,
+                             OriginalImageFrameProof *OriginalImage) {
   if (ReturnValue)
     ReturnValue->reset();
   if (Effect)
     *Effect = {};
+  if (OriginalImage && !Effect)
+    return false;
   if (hasClosedRegistrationRaise(Image, Op, State))
     return !Effect && chargeCalleeWork(Work, 10);
   if (Op.Opcode != NdOp::CALL || Op.NumInputs != 1 || !Op.Inputs[0].isConst() ||
@@ -133,8 +137,11 @@ bool hasConditionalCallFrame(const BinaryImage &Image, const LowOp &Op,
           {.ScalarArguments = &Arguments,
            .ScalarRegisters = &Registers,
            .ReturnValue = ReturnValue || Effect ? &Returned : nullptr,
-           .ExcludeCalls = Effect != nullptr}) ||
+           .ExcludeCalls = Effect != nullptr,
+           .OriginalImage = OriginalImage}) ||
       !Effects.Writes.empty() || !Effects.CallerPCWrites.empty())
+    return false;
+  if (OriginalImage && !OriginalImage->recordCode(Callee, Work))
     return false;
   if (Effect && !Returned)
     return false;
