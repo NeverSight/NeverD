@@ -1,3 +1,12 @@
+//===- ReadOnlyBytes.cpp - Immutable image storage queries ---------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Validate mapping, permissions and fixups for typed image reads.
+//===----------------------------------------------------------------------===//
+
 #include "neverd/loader/ReadOnlyBytes.h"
 
 #include "ReadOnlyBytesIndex.h"
@@ -457,8 +466,8 @@ std::optional<va_t> readResolvedPointer(const BinaryImage &Image, va_t Address,
     return std::nullopt;
   return Target;
 }
-std::optional<va_t> readImmutablePEPointer(const BinaryImage &Image,
-                                           va_t Address, bool Code) {
+std::optional<va_t> readImmutablePEPointerStorage(const BinaryImage &Image,
+                                                  va_t Address, bool Code) {
   if (supportedPEImage(Image)) {
     const unsigned Width = Image.getPointerSize();
     const auto &Slots =
@@ -484,8 +493,7 @@ std::optional<va_t> readImmutablePEPointer(const BinaryImage &Image,
     const uint64_t Target = Width == 8 ? llvm::support::endian::read64le(Bytes)
                                        : llvm::support::endian::read32le(Bytes);
     if (!mappedBytes(Image, Target, 1, false, Code) ||
-        (!Code && Image.getSectionFor(Target)->VA != Owner->second) ||
-        (Code && !immutableLocalCodeTarget(Image, Target)))
+        (!Code && Image.getSectionFor(Target)->VA != Owner->second))
       return std::nullopt;
     return Target;
   }
@@ -493,17 +501,33 @@ std::optional<va_t> readImmutablePEPointer(const BinaryImage &Image,
 }
 } // namespace
 
+std::optional<va_t>
+readImmutablePE32CodePointerStorage(const BinaryImage &Image, va_t Address) {
+  if (Image.Arch != Arch::X86 || Image.Bits != Bitness::Bits32 ||
+      Image.Format != BinaryFormat::COFF || Image.Base > UINT32_MAX ||
+      Address > UINT32_MAX - 3)
+    return std::nullopt;
+  const auto Target = readImmutablePEPointerStorage(Image, Address, true);
+  if (!Target || !readImmutableCodeBytes(Image, *Target, 1))
+    return std::nullopt;
+  return Target;
+}
+
 std::optional<va_t> readImmutableImagePointer(const BinaryImage &Image,
                                               va_t Address) {
   if (supportedPEImage(Image))
-    return readImmutablePEPointer(Image, Address, false);
+    return readImmutablePEPointerStorage(Image, Address, false);
   return readResolvedPointer(Image, Address, true);
 }
 
 std::optional<va_t> readImmutableImageCodePointer(const BinaryImage &Image,
                                                   va_t Address) {
-  if (supportedPEImage(Image))
-    return readImmutablePEPointer(Image, Address, true);
+  if (supportedPEImage(Image)) {
+    const auto Target = readImmutablePEPointerStorage(Image, Address, true);
+    if (!Target || !immutableLocalCodeTarget(Image, *Target))
+      return std::nullopt;
+    return Target;
+  }
   if (!supportedImage(Image) || Address % 8 || !Image.MachOHasChainedFixups ||
       !Image.CodePtrRelocSlots.count(Address) ||
       !Image.MachOResolvedChainedPointerSlots.count(Address))

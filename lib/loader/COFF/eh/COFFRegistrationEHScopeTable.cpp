@@ -4,11 +4,16 @@
 //
 //===----------------------------------------------------------------------===//
 
+/// \file
+/// Recover SEH scope records and revalidate their typed immutable storage.
+//===----------------------------------------------------------------------===//
+
 #include "COFFRegistrationEHDetail.h"
 
 #include "neverd/Limits.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/COFF/COFFRegistrationEH.h"
+#include "neverd/loader/ReadOnlyBytes.h"
 #include "neverd/loader/RegistrationScopeGraph.h"
 #include "neverd/support/BinaryEncoding.h"
 
@@ -276,5 +281,76 @@ getX86RegistrationSEHScopeTableRange(const ExceptionFunction &Function) {
   if (Bytes > uint64_t(UINT32_MAX) + 1 - Chain.ScopeTableVA)
     return std::nullopt;
   return ExceptionAddressRange{Chain.ScopeTableVA, Chain.ScopeTableVA + Bytes};
+}
+
+std::optional<std::vector<uint8_t>> getCheckedX86SEHScopeTableBytes(
+    const BinaryImage &Img, const ExceptionFunction &Function, size_t &Work) {
+  const auto Range = getX86RegistrationSEHScopeTableRange(Function);
+  if (!Range || Img.Arch != Arch::X86 || Img.Bits != Bitness::Bits32 ||
+      Img.Format != BinaryFormat::COFF || Img.IsRelocatable)
+    return std::nullopt;
+  auto Charge = [&](size_t Amount) {
+    if (Amount > limits::kMaxRegistrationEHStateWork -
+                     std::min(Work, limits::kMaxRegistrationEHStateWork)) {
+      Work = limits::kMaxRegistrationEHStateWork;
+      return false;
+    }
+    Work += Amount;
+    return true;
+  };
+  const auto &Chain = *Function.Registration;
+  const bool EH4 = Function.Personality == ExceptionPersonality::ExceptHandler4;
+  if (!Charge(Chain.Scopes.size() + Range->size()) ||
+      !hasValidRegistrationScopeGraph(Chain, EH4) ||
+      Chain.SeededTryLevel != registrationOutsideTryLevel(EH4) ||
+      Chain.HasSecurityCookies != (EH4 && Chain.GSCookieOffset != -2))
+    return std::nullopt;
+  std::vector<uint32_t> Words;
+  Words.reserve(Range->size() / 4);
+  if (EH4)
+    Words = {uint32_t(Chain.GSCookieOffset), uint32_t(Chain.GSCookieXOROffset),
+             uint32_t(Chain.EHCookieOffset), uint32_t(Chain.EHCookieXOROffset)};
+  for (const auto &Scope : Chain.Scopes) {
+    Words.push_back(uint32_t(Scope.EnclosingLevel));
+    Words.push_back(uint32_t(Scope.FilterVA));
+    Words.push_back(uint32_t(Scope.HandlerVA));
+  }
+  std::vector<uint8_t> Bytes(Range->size());
+  for (size_t I = 0; I != Words.size(); ++I) {
+    // The strongest read scans exact HIGHLOW multiplicity, source conflicts
+    // and target conflicts. Charge all three inventories for every field.
+    for (unsigned Scan = 0; Scan != 3; ++Scan) {
+      for (size_t Count :
+           {Img.BaseRelocations.size(), Img.Relocations.size(),
+            Img.RuntimeCallablePointerSlots.size(),
+            Img.CodePtrRelocSlots.size(), Img.DataPtrRelocSlots.size(),
+            Img.DataPtrRelocTargetOwners.size(), Img.RelCodeRelocSlots.size(),
+            Img.RelDataPtrRelocSlots.size(),
+            Img.MachOResolvedChainedPointerSlots.size(),
+            Img.ConflictingImportStorageSlots.size(), Img.ImportPtrSlots.size(),
+            Img.ImportStorageSlots.size(), Img.DyldBindSlots.size(),
+            Img.ObjCSourceReferences.size(),
+            Img.DataAddressRelocOperands.size(),
+            Img.CodeAddressRelocOperands.size()})
+        if (!Charge(Count + 1))
+          return std::nullopt;
+      // Each of the three mapping queries performs nested owner lookups.
+      for (unsigned Lookup = 0; Lookup != 8; ++Lookup)
+        if (!Charge(Img.Sections.size()) || !Charge(Img.Segments.size()))
+          return std::nullopt;
+    }
+    const va_t Address = Range->Begin + I * 4;
+    if (const auto Target = Chain.scopePointerTarget(Address)) {
+      if (*Target != Words[I] ||
+          readImmutablePE32CodePointerStorage(Img, Address) != *Target)
+        return std::nullopt;
+    } else {
+      const auto Scalar = readImmutableImageBytes(Img, Address, 4);
+      if (!Scalar || readLE<uint32_t>(Scalar->data()) != Words[I])
+        return std::nullopt;
+    }
+    writeLE<uint32_t>(Bytes.data() + I * 4, Words[I]);
+  }
+  return Bytes;
 }
 } // namespace neverd::coff_loader

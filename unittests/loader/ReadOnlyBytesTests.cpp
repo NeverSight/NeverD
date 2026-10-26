@@ -1,9 +1,21 @@
+//===- ReadOnlyBytesTests.cpp - Immutable storage and fixup boundaries ---===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Check independent instruction, scalar and runtime-pointer storage roles.
+//===----------------------------------------------------------------------===//
+
 #include "../../lib/loader/ReadOnlyBytesIndex.h"
 #include "gtest/gtest.h"
 
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/ReadOnlyBytes.h"
 #include "neverd/support/BinaryEncoding.h"
+
+#include <cstdint>
+#include <utility>
 
 namespace neverd {
 namespace {
@@ -186,6 +198,145 @@ TEST(ImmutablePE32Code, IndexedQueriesChargeColdAndRepeatedWork) {
   EXPECT_FALSE(Index.read(ReadVA, 6, {ReadVA - 1}));
   EXPECT_FALSE(Index.read(ReadVA, 0, {}));
   EXPECT_FALSE(Index.read(UINT64_MAX, 6, {}));
+}
+
+TEST(ImmutablePE32Code, InteriorPointerStorageDoesNotGrantAnOrdinaryEntry) {
+  for (uint32_t Base : {0x400000u, 0x18000000u})
+    for (unsigned Mutation = 0; Mutation != 32; ++Mutation) {
+      SCOPED_TRACE(::testing::Message() << Base << " " << Mutation);
+      auto Image = codeImage();
+      Image.Base = Base;
+      Image.Segments.front().VA = Image.Sections.front().VA = Base + 0x1000;
+      Image.BaseRelocations.clear();
+      va_t Slot = Base + 0x2008;
+      const va_t Target = Base + 0x1010;
+      Segment Data;
+      Data.VA = Base + 0x2000;
+      Data.Flags = SegmentFlags::Readable;
+      Data.Size = Data.FileSz = 0x100;
+      Data.Data.resize(0x100);
+      writeLE<uint32_t>(Data.Data.data() + 8, Target);
+      Section DataSection;
+      DataSection.VA = Data.VA;
+      DataSection.Flags = Data.Flags;
+      DataSection.Size = DataSection.FileSz = Data.Size;
+      Image.Segments.push_back(std::move(Data));
+      Image.Sections.push_back(std::move(DataSection));
+      Image.CodePtrRelocSlots.insert(Slot);
+      Image.BaseRelocations.push_back({Slot, 3});
+      switch (Mutation) {
+      case 1:
+        Image.Symbols.push_back(Symbol::makeFunc(Target));
+        break;
+      case 2:
+        Image.BaseRelocations.clear();
+        break;
+      case 3:
+        Image.BaseRelocations.push_back({Slot, 3});
+        break;
+      case 4:
+        Image.BaseRelocations.front().Type = 10;
+        break;
+      case 5:
+        Image.BaseRelocations.push_back({Slot - 3, 3});
+        break;
+      case 6:
+        Image.CodePtrRelocSlots.clear();
+        break;
+      case 7:
+        Image.DataPtrRelocSlots.insert(Slot);
+        break;
+      case 8:
+        Image.DataPtrRelocTargetOwners.emplace(Slot, Base + 0x1000);
+        break;
+      case 9:
+        Image.RuntimeCallablePointerSlots.push_back({Slot});
+        break;
+      case 10:
+        Image.ConflictingImportStorageSlots.insert(Slot);
+        break;
+      case 11:
+        Image.Segments.back().Flags =
+            SegmentFlags::Readable | SegmentFlags::Writable;
+        break;
+      case 12:
+        Image.Sections.back().Flags =
+            SegmentFlags::Readable | SegmentFlags::Writable;
+        break;
+      case 13:
+        Image.Segments.push_back(Image.Segments.back());
+        break;
+      case 14:
+        Image.Sections.push_back(Image.Sections.back());
+        break;
+      case 15:
+        Image.Segments.back().FileSz = 11;
+        break;
+      case 16:
+        Image.Sections.back().FileSz = 11;
+        break;
+      case 17:
+        Image.Segments.front().Flags =
+            Image.Segments.front().Flags | SegmentFlags::Writable;
+        break;
+      case 18:
+        Image.Sections.front().Flags =
+            Image.Sections.front().Flags | SegmentFlags::Writable;
+        break;
+      case 19:
+        Image.Sections.front().Flags = SegmentFlags::Readable;
+        break;
+      case 20:
+        writeLE<uint32_t>(Image.Segments.back().Data.data() + 8, Base + 0x3000);
+        break;
+      case 21:
+        Image.Bits = Bitness::Bits64;
+        break;
+      case 22:
+        Image.Format = BinaryFormat::ELF;
+        break;
+      case 23:
+        Image.IsRelocatable = true;
+        break;
+      case 24:
+        Image.Arch = Arch::ARM;
+        break;
+      case 25:
+        Image.CodePtrRelocSlots.insert(Slot + 1);
+        break;
+      case 26:
+        Image.BaseRelocations.push_back({Target, 3});
+        break;
+      case 27:
+        Image.BaseRelocations.push_back({Slot - 4, 3});
+        break;
+      case 28:
+        Image.BaseRelocations.push_back({Slot - 7, 10});
+        break;
+      case 29:
+        Image.Segments.front().FileSz = 0x10;
+        break;
+      case 30:
+        Image.Base = uint64_t(UINT32_MAX) + 1;
+        break;
+      case 31:
+        Slot += uint64_t(UINT32_MAX) + 1;
+        Image.Segments.back().VA += uint64_t(UINT32_MAX) + 1;
+        Image.Sections.back().VA = Image.Segments.back().VA;
+        Image.CodePtrRelocSlots = {Slot};
+        Image.BaseRelocations = {{Slot, 3}};
+        break;
+      default:
+        break;
+      }
+      const auto Storage = readImmutablePE32CodePointerStorage(Image, Slot);
+      EXPECT_EQ(Storage.has_value(), Mutation < 2 || Mutation == 27);
+      if (Storage)
+        EXPECT_EQ(*Storage, Target);
+      EXPECT_EQ(readImmutableImageCodePointer(Image, Slot).has_value(),
+                Mutation == 1);
+      EXPECT_FALSE(readImmutableImageBytes(Image, Slot, 4));
+    }
 }
 } // namespace
 } // namespace neverd

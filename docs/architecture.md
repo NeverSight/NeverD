@@ -2289,6 +2289,15 @@ remain separate obligations; a personality dependency record alone grants no
 native replacement permission. The legacy SEH3 identity query keeps its weaker
 analysis role, while the retained dependency query requires immutable code,
 unambiguous eager import storage and matching relocation operands.
+The scope-table owner separately revalidates every immutable SEH3/EH4 word
+against its decoded graph. Scalar fields admit no fixups; nonnull callback
+fields require exact PE32 HIGHLOW storage and immutable executable targets.
+An interior runtime callback does not become an ordinary function entry.
+The shared pointer-storage reader preserves that distinction, and the existing
+ordinary code-pointer reader still requires an authenticated function entry.
+Table revalidation uses the registration work budget and currently requires
+the format's outside-try seed. It establishes no callback ABI, frame installation
+or permission to copy the table into a new image.
 
 `OriginalImageFrameProof` owns a separate, explicit source-only layout query.
 It records exact mapped address operands, immutable scalar bytes and decoded

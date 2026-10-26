@@ -24,6 +24,7 @@
 
 #include "neverd/loader/BinaryImage.h"
 
+#include <cstddef>
 #include <map>
 #include <optional>
 #include <set>
@@ -65,6 +66,15 @@ getCheckedX86CxxFuncInfoRecords(const BinaryImage &Img, va_t FuncInfoVA);
 /// grants neither immutable runtime contents nor permission to copy a table.
 std::optional<ExceptionAddressRange>
 getX86RegistrationSEHScopeTableRange(const ExceptionFunction &Function);
+
+/// Revalidate every current immutable SEH3/EH4 table word against its decoded
+/// scope graph. Pointer fields need exact HIGHLOW storage and their table-owned
+/// callback identity; they never become ordinary callable entries. The shared
+/// registration work counter bounds storage/fixup rechecks. Frame installation,
+/// callback instructions, native admission and final-image replay are separate.
+/// Currently requires the table's format-specific outside-try seed.
+std::optional<std::vector<uint8_t>> getCheckedX86SEHScopeTableBytes(
+    const BinaryImage &Img, const ExceptionFunction &Function, size_t &Work);
 
 /// Reparse an absolute-pointer FuncInfo and require equality with its checked
 /// normalized graph. Only these exact native fields carry runtime callback

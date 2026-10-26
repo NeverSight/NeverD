@@ -9515,6 +9515,14 @@ case rejects changed provider/slot identities, delayed or duplicate imports,
 writable/ambiguous code, malformed fixups and incomplete storage at two bases.
 Run `NeverDRegistrationEHTests` and `NeverDWindowsRegistrationNativeTests` for
 these loader-owned records; they do not qualify a final PE or a native call.
+`ImmutablePE32Code.InteriorPointerStorageDoesNotGrantAnOrdinaryEntry` in
+`NeverDReadOnlyBytesTests` checks callback storage at two bases while preserving
+the ordinary-entry requirement. Its mutations cover fixup multiplicity, width,
+overlap, competing roles, partial storage, target permissions and image kind.
+The three `RegistrationSEH4Shared.TypedScopeStorage*` cases in
+`NeverDRegistrationSEH4EntryTests` check EH3/EH4 except/finally fields, optional
+GS cookies, stale graphs/bytes, table ownership and exact/exhausted work. The
+EH3 table view tests field interpretation only; it does not claim an EH3 frame.
 
 The separate `RegistrationOriginalImage` cases check scoped mapped-address
 differences, unchanged generic transfer, immutable scalar widths, pointer-byte

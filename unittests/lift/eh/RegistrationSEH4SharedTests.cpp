@@ -18,18 +18,209 @@
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/COFF/COFFRegistrationEH.h"
 #include "neverd/loader/COFF/COFFSEH4Entry.h"
+#include "neverd/loader/ReadOnlyBytes.h"
 #include "neverd/support/BinaryEncoding.h"
 
 #include "llvm/ADT/STLExtras.h"
 
 #include <algorithm>
+#include <cstdint>
 #include <iterator>
 #include <string>
+#include <utility>
 #include <vector>
 
 using namespace neverd;
 
 using namespace neverd::registration_test;
+
+namespace {
+std::pair<BinaryImage, ExceptionFunction>
+scopeStorageImage(uint32_t Base, bool EH4, bool Filtered) {
+  auto Image = sharedSEH4Image(Base, false, 32,
+                               Filtered ? SharedSEH4Body::FilteredCall
+                                        : SharedSEH4Body::Plain);
+  auto Function = *Image.ExceptionMetadata.findFunction(Base + 0x1000);
+  auto &Chain = *Function.Registration;
+  // This alternate view authenticates the table's fields only. It does not
+  // claim the EH4 machine frame implements an EH3 invocation.
+  if (!EH4) {
+    Function.Personality = ExceptionPersonality::ExceptHandler3;
+    Function.Encoding = ExceptionEncoding::X86ScopeTableEH3;
+    Chain.ScopeTableVA += 16;
+    Chain.SeededTryLevel = -1;
+    Chain.Scopes.front().EnclosingLevel = -1;
+    writeLE<uint32_t>(Image.Segments.back().Data.data() + 0x110, uint32_t(-1));
+  }
+  for (va_t Slot : {va_t(Base + 0x2114), va_t(Base + 0x2118)})
+    if (Chain.scopePointerTarget(Slot)) {
+      Image.CodePtrRelocSlots.insert(Slot);
+      Image.BaseRelocations.push_back({Slot, 3});
+    }
+  Image.Symbols.clear();
+  return {std::move(Image), std::move(Function)};
+}
+} // namespace
+
+TEST(RegistrationSEH4Shared, TypedScopeStorageKeepsCallbackRoles) {
+  for (uint32_t Base : {0x400000u, 0x18000000u})
+    for (bool EH4 : {false, true})
+      for (bool Filtered : {false, true})
+        for (bool GS : {false, true}) {
+          if (GS && !EH4)
+            continue;
+          SCOPED_TRACE(::testing::Message()
+                       << Base << " " << EH4 << " " << Filtered << " " << GS);
+          auto [Image, Function] = scopeStorageImage(Base, EH4, Filtered);
+          if (GS) {
+            auto &Chain = *Function.Registration;
+            Chain.HasSecurityCookies = true;
+            Chain.GSCookieOffset = -28;
+            writeLE<uint32_t>(Image.Segments.back().Data.data() + 0x100,
+                              uint32_t(-28));
+          }
+          const auto Range =
+              coff_loader::getX86RegistrationSEHScopeTableRange(Function);
+          ASSERT_TRUE(Range);
+          size_t Work = 0;
+          const auto Bytes = coff_loader::getCheckedX86SEHScopeTableBytes(
+              Image, Function, Work);
+          ASSERT_TRUE(Bytes);
+          const auto *Raw = Image.readVA(Range->Begin, Range->size());
+          ASSERT_NE(Raw, nullptr);
+          EXPECT_EQ(*Bytes, std::vector<uint8_t>(Raw, Raw + Range->size()));
+          EXPECT_GT(Work, Range->size());
+          for (va_t Slot : {va_t(Base + 0x2114), va_t(Base + 0x2118)})
+            if (const auto Target =
+                    Function.Registration->scopePointerTarget(Slot)) {
+              EXPECT_EQ(readImmutablePE32CodePointerStorage(Image, Slot),
+                        Target);
+              EXPECT_FALSE(readImmutableImageCodePointer(Image, Slot));
+              EXPECT_FALSE(Image.hasAuthenticatedFunctionEntryAt(*Target));
+            }
+        }
+}
+
+TEST(RegistrationSEH4Shared, TypedScopeStorageRejectsStaleFieldsAndOwners) {
+  for (uint32_t Base : {0x400000u, 0x18000000u})
+    for (bool EH4 : {false, true})
+      for (bool Filtered : {false, true})
+        for (unsigned Mutation = 0; Mutation != 26; ++Mutation) {
+          SCOPED_TRACE(::testing::Message() << Base << " " << EH4 << " "
+                                            << Filtered << " " << Mutation);
+          auto [Image, Function] = scopeStorageImage(Base, EH4, Filtered);
+          auto &Chain = *Function.Registration;
+          switch (Mutation) {
+          case 0:
+            Image.Segments.back().Data[0x110] ^= 1;
+            break;
+          case 1:
+            Image.Segments.back().Data[0x118] ^= 1;
+            break;
+          case 2:
+            if (EH4)
+              ++Chain.EHCookieOffset;
+            else
+              Chain.HasSecurityCookies = true;
+            break;
+          case 3:
+            Chain.Scopes.front().IsFinally = !Chain.Scopes.front().IsFinally;
+            break;
+          case 4:
+            ++Chain.Scopes.front().HandlerVA;
+            break;
+          case 5:
+            Image.Segments.back().Flags =
+                SegmentFlags::Readable | SegmentFlags::Writable;
+            break;
+          case 6:
+            Image.Sections.back().Flags =
+                SegmentFlags::Readable | SegmentFlags::Writable;
+            break;
+          case 7:
+            Image.Segments.push_back(Image.Segments.back());
+            break;
+          case 8:
+            Image.Sections.push_back(Image.Sections.back());
+            break;
+          case 9:
+            Image.Segments.back().FileSz = 0x11b;
+            break;
+          case 10:
+            Image.BaseRelocations.clear();
+            break;
+          case 11:
+            Image.BaseRelocations.push_back(Image.BaseRelocations.back());
+            break;
+          case 12:
+            Image.BaseRelocations.back().Type = 10;
+            break;
+          case 13:
+            Image.CodePtrRelocSlots.erase(Base + 0x2118);
+            break;
+          case 14:
+            Image.BaseRelocations.push_back({Base + 0x2110, 3});
+            break;
+          case 15:
+            Image.Segments.front().Flags =
+                Image.Segments.front().Flags | SegmentFlags::Writable;
+            break;
+          case 16:
+            Chain.Scopes.clear();
+            break;
+          case 17:
+            Function.Encoding = EH4 ? ExceptionEncoding::X86ScopeTableEH3
+                                    : ExceptionEncoding::X86ScopeTableEH4;
+            break;
+          case 18:
+            Chain.Scopes.front().EnclosingLevel = 0;
+            break;
+          case 19:
+            Chain.Scopes.front().HandlerVA = uint64_t(UINT32_MAX) + 1;
+            break;
+          case 20:
+            Chain.SeededTryLevel = EH4 ? -1 : -2;
+            break;
+          case 21:
+            Chain.SeededTryLevel = 0;
+            break;
+          case 22:
+            Image.IsRelocatable = true;
+            break;
+          case 23:
+            Image.Segments.back().Data[0x114] ^= 1;
+            break;
+          case 24:
+            Image.RuntimeCallablePointerSlots.push_back({Base + 0x2118});
+            break;
+          case 25:
+            Chain.ScopeTableVA = UINT32_MAX;
+            break;
+          }
+          size_t Work = 0;
+          EXPECT_FALSE(coff_loader::getCheckedX86SEHScopeTableBytes(
+              Image, Function, Work));
+        }
+}
+
+TEST(RegistrationSEH4Shared, TypedScopeStorageChargesEveryCurrentQuery) {
+  for (bool EH4 : {false, true}) {
+    auto [Image, Function] = scopeStorageImage(0x400000, EH4, true);
+    size_t Required = 0;
+    ASSERT_TRUE(coff_loader::getCheckedX86SEHScopeTableBytes(Image, Function,
+                                                             Required));
+    for (size_t Available : {size_t{0}, Required - 1, Required}) {
+      size_t Work = limits::kMaxRegistrationEHStateWork - Available;
+      EXPECT_EQ(
+          coff_loader::getCheckedX86SEHScopeTableBytes(Image, Function, Work)
+              .has_value(),
+          Available == Required);
+      EXPECT_EQ(Work, limits::kMaxRegistrationEHStateWork);
+      EXPECT_FALSE(
+          coff_loader::getCheckedX86SEHScopeTableBytes(Image, Function, Work));
+    }
+  }
+}
 
 TEST(RegistrationSEH4Shared, FrameCallsLeaveBudgetForOrdinaryCallees) {
   for (uint32_t Base : {0x400000u, 0x18000000u})
