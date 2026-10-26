@@ -27,15 +27,41 @@ that noise range. The iced column measures NeverD's compatibility adapter,
 including its fallback costs; these are CALL-scan results, not full
 decompilation measurements or a comparison of identical full-detail outputs.
 
-A separate nine-trial raw classification comparison used the iced fork at
-`8b8d90b13374fbf38e7279749e48c673f4ec243a`. The six 64-bit system streams with
-matching instruction boundaries measured 1.111x–1.535x iced/native-Capstone
-time ratios. One SSH stream had different iced acceptance and is excluded
-from that comparison. Generated scalar64, scalar32 and SIMD measured 1.066x,
-1.121x and 1.088x. Five PE32 streams measured 1.008x–1.167x; the smallest margin
-is too close to measurement noise to establish a consistent win. Scalar16
-still measured 0.920x, so native Capstone has not surpassed iced across every
-mode and workload. Other hosts and full decompilation remain unqualified.
+Capstone `9a96a08dae5c0621dd3118d59dd4559b750d5197` further combines
+public instruction IDs with scalar terminal decisions and VEX validation
+metadata. This removes the subsequent UID mapping while retaining the same
+admission, checked operand readers, raw state and full output semantics.
+The full Release library was compared with `7d73d561e744b6553aa95eee60a30cbf0a618980`
+on the same Apple M4 Max. Nine rotating fresh-process trials used paired A/A
+controls and about 180 ms of baseline CPU time. Five uncertain cases were
+rechecked over 14 trials with duplicate baseline, candidate and iced controls,
+plus the prototype library. Ratios use paired trials: separately taking each
+variant's median can misrepresent host speed changes within a run.
+
+| Decode workload | Previous / new native batch time | Previous / new public iterator time |
+| --- | ---: | ---: |
+| Scalar64 / scalar32 / SIMD | 1.061x / 1.042x / 1.047x | 1.089x / 1.059x / 1.075x |
+| Six 64-bit system-code streams | 1.057x–1.079x | 1.035x–1.060x |
+| Five PE32 code samples | 1.026x–1.044x | 1.086x–1.104x |
+
+Against native iced `8b8d90b13374fbf38e7279749e48c673f4ec243a`, the batch
+primitive measured 1.209x–1.609x iced/Capstone time on the six system streams,
+and 1.165x / 1.190x / 1.125x on scalar64 / scalar32 / SIMD. PE32 measured
+1.004x–1.265x; the SEH O2 case remains within measurement noise. Scalar16 was
+0.913x in the focused recheck. The public per-instruction API still trails
+iced on several workloads. One SSH stream has different iced acceptance and
+is excluded from iced rankings; tiny controls are also reported separately.
+These results qualify native classification speed on this host. Universal
+superiority, other hosts, full-detail decoding and whole decompilation remain
+unqualified.
+
+Validation included 272,920,462 frozen-baseline scan comparisons, 37,916,536
+full API observations and 864,000 raw-state comparisons. Release passed 116
+tests with one x87 hardware skip on arm64; ASan/UBSan and reduced builds each
+passed six checks, and the optional iced adapter parity check passed.
+Eight AArch64/ARM/Thumb/RISC-V cases retained identical outputs with no stable
+regression. The x86 decoder object grows by about 112 KiB, primarily generated
+read-only metadata.
 
 NeverD can use the pinned NeverSight iced fork for selected x86 32/64-bit
 classification scans. Enable it with `-DNEVERD_ENABLE_ICED=ON`; the
