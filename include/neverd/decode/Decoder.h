@@ -180,6 +180,12 @@ public:
   size_t scanX86Light(const uint8_t *Bytes, size_t Len, va_t Addr,
                       llvm::MutableArrayRef<uint32_t> Output);
 
+  /// Direct near x86 CALL target from an exact instruction span, using the
+  /// same rules as full decode. Invalid input, trailing bytes, other
+  /// instructions and other architectures return InvalidVA. No text or operand
+  /// detail is generated; options and borrowed Raw instructions stay valid.
+  va_t directX86CallTarget(const uint8_t *Bytes, size_t Size, va_t Addr) const;
+
   /// Enable/disable capstone operand-detail generation for subsequent decodes.
   /// Detail is on by default (the lift path needs operands); turning it off for
   /// classification-only scans (which read just Size/Id) skips the per-

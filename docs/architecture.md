@@ -7562,8 +7562,11 @@ checks. Other MOVSXD widths, moffs, loop counters and far transfers retain
 fallback. `X86InstructionScan` scopes
 prefetched records to one immutable input range and unchanged x86 mode.
 Function discovery uses it for serial/parallel CALL sweeps and x64 code-pointer
-scans. Existing code ownership checks remain per instruction, and calls/LEAs
-still read full operands when their targets are needed. A chunk's scan end
+scans. Existing code ownership checks remain per instruction. CALL sweeps use
+`Decoder::directX86CallTarget` on the exact classified instruction span. The
+private Capstone query reuses raw decoding, relative operand translation and
+both printers' target calculation without changing options or borrowed results.
+LEAs still read full operands when their targets are needed. A chunk's scan end
 bounds decoding even when the underlying segment contains more bytes.
 After a short batch, the scoped scan remembers the first invalid position;
 it reports failure there without decoding the same bytes twice. Seeking to a

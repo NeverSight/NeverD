@@ -438,6 +438,16 @@ size_t Decoder::scanX86Light(const uint8_t *Bytes, size_t Len, va_t Addr,
   return Count;
 }
 
+va_t Decoder::directX86CallTarget(const uint8_t *Bytes, size_t Size,
+                                va_t Addr) const {
+  if (!X86 || !Size)
+    return InvalidVA;
+  va_t Target;
+  return X86_scanCallTarget(Handle, Bytes, Size, Addr, &Target) == Size
+             ? Target
+             : InvalidVA;
+}
+
 bool Decoder::decodePrefixedX86Fence(const uint8_t *Bytes, size_t Len,
                                      va_t Addr) {
   if (!X86 || !Bytes || !InsnBuf)

@@ -63,17 +63,15 @@ BinaryImage makeScanImage(Arch A) {
   return Img;
 }
 
-TEST(X86InstructionScan, CallWalkMatchesSingleStepsAtEveryStartAndEnd) {
+TEST(X86InstructionScan, CallWalkMatchesDetailedStepsAtEveryStartAndEnd) {
   for (Arch A : {Arch::X86, Arch::X64}) {
     const BinaryImage Img = makeScanImage(A);
     const Segment &Seg = Img.Segments[0];
     Decoder Single, Batched;
     ASSERT_TRUE(Single.init(A));
     ASSERT_TRUE(Batched.init(A));
-    for (Decoder *Dec : {&Single, &Batched}) {
-      Dec->setText(false);
-      Dec->setDetail(false);
-    }
+    Batched.setText(false);
+    Batched.setDetail(false);
     for (size_t End = 1; End <= Seg.Data.size(); ++End) {
       for (size_t Start = 0; Start < End; ++Start) {
         X86InstructionScan Scan(

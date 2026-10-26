@@ -688,7 +688,11 @@ They also cover a cached failure followed by byte resynchronization. A cache
 covering a wider range must not extend a caller's instruction boundary.
 The CALL sweep tests compare every start/end in a bounded fixture and require
 code ownership across the entire call, rejecting both data-shaped calls and
-instructions whose immediates cross the scan limit. Run the focused
+instructions whose immediates cross the scan limit. The reference walk keeps
+full text and detail enabled, independently checking the compact CALL-target
+query. Decoder option tests also require exact instruction extents, reject
+trailing bytes and preserve borrowed instruction storage across target queries.
+Run the focused
 `NeverDDecoderOptionsTests` with iced both enabled and disabled.
 
 ## Acceleration libraries

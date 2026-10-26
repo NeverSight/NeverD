@@ -66,6 +66,72 @@ void compare(Decoder &D, Arch A, const std::vector<uint8_t> &Bytes, bool Detail,
   cs_close(&Handle);
 }
 
+TEST(DecoderOptions, CallTargetQueryPreservesOptionsAndBorrowedDetails) {
+  const std::vector<std::vector<uint8_t>> Cases = {
+      {0xe8, 0xfb, 0xff, 0xff, 0xff},
+      {0x66, 0xe8, 0, 0x80, 0xff, 0x7f},
+      {0x66, 0x48, 0xe8, 0x34, 0x12, 0, 0},
+      {0x48, 0x66, 0xe8, 0x34, 0x12, 0, 0},
+      {0xf0, 0xe8, 0, 0, 0, 0},
+      {0xff, 0xd0},
+      {0xff, 0x15, 0, 0, 0, 0},
+      {0x9a, 0x34, 0x12, 0, 0, 0x78, 0x56},
+      {0xe9, 0, 0, 0, 0},
+  };
+  for (Arch A : {Arch::X86, Arch::X64}) {
+    Decoder Query, Full;
+    ASSERT_TRUE(Query.init(A));
+    ASSERT_TRUE(Full.init(A));
+    const uint8_t Mov[] = {0x89, 0xc1};
+    DecodedInsn Borrowed;
+    ASSERT_EQ(Query.decodeOneLight(Mov, sizeof(Mov), 0x1000, Borrowed), 2);
+    std::array<uint8_t, sizeof(cs_insn)> Saved;
+    std::array<uint8_t, sizeof(cs_detail)> SavedDetail;
+    std::memcpy(Saved.data(), Borrowed.Raw, Saved.size());
+    std::memcpy(SavedDetail.data(), Borrowed.Raw->detail, SavedDetail.size());
+    for (bool Detail : {false, true}) {
+      for (bool Text : {false, true}) {
+        Query.setDetail(Detail);
+        Query.setText(Text);
+        for (const auto &Bytes : Cases) {
+          for (size_t Len = 0; Len <= Bytes.size(); ++Len) {
+            for (va_t Addr : {va_t(0x1000), va_t(0xfffffffd), InvalidVA - 2}) {
+              DecodedInsn Expected;
+              const int FullSize =
+                  Full.decodeOneLight(Bytes.data(), Len, Addr, Expected);
+              const va_t ExpectedTarget =
+                  FullSize ? Full.directCallTarget(Expected) : InvalidVA;
+              const bool Direct =
+                  FullSize && Expected.Id == X86_INS_CALL &&
+                  Expected.Raw->detail->x86.op_count &&
+                  Expected.Raw->detail->x86.operands[0].type == X86_OP_IMM;
+              EXPECT_EQ(Query.directX86CallTarget(Bytes.data(), Len, Addr),
+                        Direct && FullSize == Len ? ExpectedTarget : InvalidVA);
+              EXPECT_EQ(Query.detailEnabled(), Detail);
+              EXPECT_EQ(Query.textEnabled(), Text);
+              EXPECT_EQ(std::memcmp(Borrowed.Raw, Saved.data(), Saved.size()),
+                        0);
+              EXPECT_EQ(std::memcmp(Borrowed.Raw->detail, SavedDetail.data(),
+                                    SavedDetail.size()),
+                        0);
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+TEST(DecoderOptions, CallTargetQueryRequiresInitializedX86Decoder) {
+  const uint8_t Call[] = {0xe8, 0, 0, 0, 0};
+  Decoder D;
+  EXPECT_EQ(D.directX86CallTarget(Call, sizeof(Call), 0x1000), InvalidVA);
+  for (Arch A : {Arch::ARM, Arch::AArch64}) {
+    ASSERT_TRUE(D.init(A));
+    EXPECT_EQ(D.directX86CallTarget(Call, sizeof(Call), 0x1000), InvalidVA);
+  }
+}
+
 TEST(DecoderOptions, ScanDetailTransitionsAndFallback) {
   Decoder D;
   for (Arch A : {Arch::X64, Arch::ARM, Arch::X86, Arch::AArch64, Arch::X64}) {

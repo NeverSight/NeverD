@@ -5,26 +5,37 @@ Function discovery uses that path with `NEVERD_ENABLE_ICED=OFF`; the option belo
 adds the experimental iced backend. Capstone still owns full operand decoding
 and rendering in both configurations.
 
-The native path was measured on 2026-10-26 on an Apple M4 Max, macOS arm64,
-Release. Seven rotating trials of the actual CALL sweep, calibrated to about
-150 ms of baseline CPU time and including an identical A/A control, matched
-all target-set checksums. The frozen baseline is the previous default
-per-instruction Capstone route. Median baseline/native time ratios were
-1.1249x–1.2542x on seven 64-bit system-code streams and 1.1704x–1.2050x on five
-32-bit PE samples. Generated scalar32, scalar64 and SIMD streams measured
-1.2767x, 1.2395x and 1.5218x respectively. A/A median ratios were
-0.9710x–1.0176x. These are scan results, not full decompilation measurements.
+The native CALL sweep was measured on 2026-10-26 on an Apple M4 Max,
+macOS arm64, Release, with the latest LLVM fork built from source. Its compact
+CALL-target query avoids a second decode into printed text and full operand
+detail. The baseline is the previous native batch implementation at Capstone
+`39f4230cd1a24a39b61ad7e867be612dc80bf6ea`, rebuilt against the same LLVM and
+NeverD libraries. Nine rotating trials used fresh processes, matching thread
+QoS, about 180 ms of baseline CPU time, and separate identical A/A controls
+for native Capstone and the optional iced adapter. All target sets and counts
+matched, including an independent detailed single-step reference.
 
-A separate native-decoder comparison used identical Release architecture
-configuration, seven rotating trials, explicit matching thread QoS and the
-pinned iced fork at `8b8d90b13374fbf38e7279749e48c673f4ec243a`. The six 64-bit
-system streams with matching instruction boundaries measured about
-1.06x–1.36x iced/native-Capstone time ratios. One SSH stream had different iced
-acceptance and is excluded from that comparison. Scalar64, SIMD and some
-optimized PE32 streams remain slower than native iced; the remaining scalar64
-and SIMD gaps are about 17% and 14%. Native iced produces its own Instruction
-representation; this comparison covers classification throughput, not equal
-full-detail output or universal decoder superiority.
+| CALL sweep workload | Previous native / new native time | iced adapter / new native time |
+| --- | ---: | ---: |
+| Seven 64-bit system-code streams | 1.384x–1.861x | 1.152x–1.441x |
+| Five 32-bit PE code samples | 1.773x–1.884x | 1.077x–1.116x |
+| Generated scalar64 / scalar32 / SIMD | 1.054x / 1.022x / 1.006x | 1.182x / 1.232x / 1.198x |
+
+Native A/A medians ranged from 0.988x to 1.032x, and iced A/A medians from
+0.965x to 1.010x under other host workloads. Small synthetic changes are within
+that noise range. The iced column measures NeverD's compatibility adapter,
+including its fallback costs; these are CALL-scan results, not full
+decompilation measurements or a comparison of identical full-detail outputs.
+
+A separate nine-trial raw classification comparison used the iced fork at
+`8b8d90b13374fbf38e7279749e48c673f4ec243a`. The six 64-bit system streams with
+matching instruction boundaries measured 1.111x–1.535x iced/native-Capstone
+time ratios. One SSH stream had different iced acceptance and is excluded
+from that comparison. Generated scalar64, scalar32 and SIMD measured 1.066x,
+1.121x and 1.088x. Five PE32 streams measured 1.008x–1.167x; the smallest margin
+is too close to measurement noise to establish a consistent win. Scalar16
+still measured 0.920x, so native Capstone has not surpassed iced across every
+mode and workload. Other hosts and full decompilation remain unqualified.
 
 NeverD can use the pinned NeverSight iced fork for selected x86 32/64-bit
 classification scans. Enable it with `-DNEVERD_ENABLE_ICED=ON`; the
@@ -68,8 +79,11 @@ instruction is neither emitted nor included in the returned byte extent.
 mode. It remembers an invalid position after a partial batch, avoiding a
 second decode of the same failure; a discontinuous offset starts a new batch.
 Serial/parallel CALL sweeps and x64 code-pointer scans retain their instruction
-ownership checks and decode CALL/LEA operands separately. Text/detail queries
-may interleave only after restoring the classification options. With iced
+ownership checks. CALL targets use Capstone's compact query over the exact
+classified instruction span, sharing full decoding's relative-operand and
+address-wrapping rules without printing or changing options. LEA operands still
+use full detail. Text/detail queries may interleave only after restoring the
+classification options. With iced
 disabled, the same sweeps use Capstone's native batch entry. With iced enabled,
 Capstone batches the suffix that iced declines before the single-instruction
 compatibility fallback is needed.

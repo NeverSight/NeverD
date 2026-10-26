@@ -107,23 +107,15 @@ std::optional<CallScanStep> stepCallsX86(const BinaryImage &Img, Decoder &Dec,
   if (!Owned &&
       !Img.hasExecutableCodeOwnerRange(Cur, static_cast<uint64_t>(Sz)))
     return Step;
-  // Only a call can have a direct target, and an instruction's size and a
-  // call's id depend neither on operand detail nor on printed text, so a sweep
-  // run without them decodes the calls again with both.
+  // Ask the decoder for a CALL's target without rebuilding printed text or
+  // operand detail. Code ownership and the caller's boundary still apply.
+  va_t Tgt;
   if (!Dec.detailEnabled()) {
     if (DI.Id != X86_INS_CALL)
       return Step;
-    const bool PreviousText = Dec.textEnabled();
-    Dec.setText(true);
-    Dec.setDetail(true);
-    const int Again =
-        Dec.decodeOneLight(Seg->Data.data() + Off, Remain, Cur, DI);
-    Dec.setDetail(false);
-    Dec.setText(PreviousText);
-    if (Again != Sz)
-      return Step;
-  }
-  const va_t Tgt = Dec.directCallTarget(DI);
+    Tgt = Dec.directX86CallTarget(Seg->Data.data() + Off, Sz, Cur);
+  } else
+    Tgt = Dec.directCallTarget(DI);
   if (Tgt != InvalidVA && Img.hasExecutableCodeOwnerAt(Tgt))
     Step.Target = Tgt;
   return Step;
