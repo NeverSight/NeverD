@@ -557,6 +557,13 @@ memory error stops at the region's common post-step check before another
 instruction or callback can execute, including before a terminal overrun.
 Public host contracts and architectural register identities are unchanged.
 
+Partitioned Rust keeps saved registers, frame pointers, return PCs and depth
+in one private call-stack object. Shared call helpers record entry faults for
+the post-step check, and combine legacy dispatch with frame entry to avoid
+repeating error propagation in every arm. A legacy host fault stops before
+frame entry; a CALLX frame-entry fault stops before target validation. Saved
+state and frame limits follow the same software calling convention.
+
 The partitioned Rust loop advances the default PC once before dispatch, with
 an extra slot advance for LDDW. Branches, calls and returns replace that default;
 a region handoff retains the original dispatch PC. This removes a repeated

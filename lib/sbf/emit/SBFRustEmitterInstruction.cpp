@@ -97,10 +97,15 @@ void advance(llvm::raw_ostream &OS, const MedInstruction &Instruction,
 }
 
 void emitPushFrameBody(llvm::raw_ostream &OS, llvm::StringRef ReturnPC,
-                       const SBFProgram &Program) {
-  OS << "                if depth + 1 >= MAX_CALL_DEPTH { return Err("
-     << rustSourceErrorName(FaultCode::CallDepth) << "); }\n"
-     << "                return_pc[depth] = " << ReturnPC << ";\n";
+                       const SBFProgram &Program, bool RecordFault = false) {
+  OS << "                if depth + 1 >= MAX_CALL_DEPTH { ";
+  if (RecordFault)
+    OS << "*fault = Some(" << rustSourceErrorName(FaultCode::CallDepth)
+       << "); return; }\n";
+  else
+    OS << "return Err(" << rustSourceErrorName(FaultCode::CallDepth)
+       << "); }\n";
+  OS << "                return_pc[depth] = " << ReturnPC << ";\n";
   for (unsigned Index = 0; Index < kCalleeSavedRegisterCount; ++Index)
     OS << "                saved[depth][" << Index
        << "] = " << reg(kFirstCalleeSavedRegister + Index) << ";\n";
@@ -149,9 +154,16 @@ void pushFrame(llvm::raw_ostream &OS, const MedInstruction &Instruction,
     emitPushFrameBody(OS, std::to_string(Instruction.Slot + 1), Program);
     return;
   }
-  OS << "                nd_push_frame(r, saved, saved_fp, return_pc, &mut "
-        "depth, "
-     << Instruction.Slot + 1 << ")?;\n";
+  const bool Legacy =
+      Instruction.Op == Operation::Call &&
+      Instruction.Dispatch == CallDispatchPolicy::LegacyRuntimeThenFunction;
+  OS << "                "
+     << (Legacy ? "nd_legacy_push_frame(env, r, stack, "
+                : "nd_push_frame(r, stack, ")
+     << Instruction.Slot + 1;
+  if (Legacy)
+    OS << ", 0x" << llvm::utohexstr(Instruction.SyscallHash, true) << "u32";
+  OS << ", &mut fault);\n";
 }
 
 } // namespace
@@ -213,23 +225,33 @@ void emitCallHelpers(llvm::raw_ostream &OS, const SBFProgram &Program) {
   }
   if (NeedsPop) {
     OS << "#[inline(never)]\nfn nd_pop_frame(r: &mut NdRegisters, "
-          "saved: &[[u64; SAVED_REGISTERS]; MAX_CALL_DEPTH], saved_fp: "
-          "&[u64; MAX_CALL_DEPTH], return_pc: &[usize; MAX_CALL_DEPTH], "
-          "depth_address: &mut usize) -> usize {\n"
-          "    let mut depth = *depth_address;\n";
+          "stack: &mut NdCallStack) -> usize {\n"
+          "    let mut depth = stack.depth;\n"
+          "    let saved = &stack.saved; let saved_fp = &stack.saved_fp;\n"
+          "    let return_pc = &stack.return_pc;\n";
     emitPopFrameBody(OS);
-    OS << "    *depth_address = depth; return_pc[depth]\n}\n\n";
+    OS << "    stack.depth = depth; return_pc[depth]\n}\n\n";
   }
   if (!Needed)
     return;
   OS << "#[inline(never)]\nfn nd_push_frame(r: &mut NdRegisters, "
-        "saved: &mut [[u64; SAVED_REGISTERS]; MAX_CALL_DEPTH], saved_fp: &mut "
-        "[u64; MAX_CALL_DEPTH], return_pc: &mut [usize; MAX_CALL_DEPTH], "
-        "depth_address: &mut usize, next_pc: usize) -> Result<(), SbfErrorV2> "
-        "{\n"
-        "    let mut depth = *depth_address;\n";
-  emitPushFrameBody(OS, "next_pc", Program);
-  OS << "    *depth_address = depth; Ok(())\n}\n\n";
+        "stack: &mut NdCallStack, next_pc: usize, "
+        "fault: &mut Option<SbfErrorV2>) {\n"
+        "    let mut depth = stack.depth;\n"
+        "    let saved = &mut stack.saved; let saved_fp = &mut "
+        "stack.saved_fp;\n"
+        "    let return_pc = &mut stack.return_pc;\n";
+  emitPushFrameBody(OS, "next_pc", Program, true);
+  OS << "    stack.depth = depth;\n}\n\n";
+  if (NeedsLegacyRuntime)
+    OS << "#[inline(never)]\nfn nd_legacy_push_frame("
+          "env: &mut dyn SbfEnvironmentV2, r: &mut NdRegisters, "
+          "stack: &mut NdCallStack, next_pc: usize, hash: u32, "
+          "fault: &mut Option<SbfErrorV2>) {\n"
+          "    if let Err(error) = nd_legacy_runtime_call(env, r, hash) {\n"
+          "        *fault = Some(error); return;\n"
+          "    }\n"
+          "    nd_push_frame(r, stack, next_pc, fault);\n}\n\n";
 }
 
 std::string word(uint64_t Value) {
@@ -539,15 +561,11 @@ void emitInstruction(llvm::raw_ostream &OS, const MedInstruction &Instruction,
       return;
     }
     if (Instruction.Call == CallKind::Internal && Instruction.CallTarget) {
-      if (Instruction.Dispatch ==
-          CallDispatchPolicy::LegacyRuntimeThenFunction) {
+      if (!InPartition && Instruction.Dispatch ==
+                              CallDispatchPolicy::LegacyRuntimeThenFunction) {
         const std::string Hash =
             "0x" + llvm::utohexstr(Instruction.SyscallHash, true) + "u32";
-        if (InPartition)
-          OS << "                nd_legacy_runtime_call(env, r, " << Hash
-             << ")?;\n";
-        else
-          emitLegacyRuntimeBody(OS, Hash);
+        emitLegacyRuntimeBody(OS, Hash);
       }
       pushFrame(OS, Instruction, Program, InPartition);
       OS << "                pc = " << *Instruction.CallTarget << ";\n"
@@ -560,6 +578,11 @@ void emitInstruction(llvm::raw_ostream &OS, const MedInstruction &Instruction,
     return;
   case Operation::CallX:
     pushFrame(OS, Instruction, Program, InPartition);
+    // Stack entry faults precede target validation. Direct calls consume
+    // their recorded fault at the region's common post-step check.
+    if (InPartition)
+      OS << "                if let Some(error) = fault { return Err(error); "
+            "}\n";
     OS << "                let target = " << reg(Instruction.CallRegister)
        << ";\n"
           "                if target < TEXT_ADDRESS { return Err("
@@ -575,7 +598,8 @@ void emitInstruction(llvm::raw_ostream &OS, const MedInstruction &Instruction,
           "            }\n";
     return;
   case Operation::Exit:
-    OS << "                if depth == 0 { return Ok(";
+    OS << "                if " << (InPartition ? "stack.depth" : "depth")
+       << " == 0 { return Ok(";
     if (InPartition)
       OS << "Some(";
     OS << reg(kReturnRegister);
@@ -583,8 +607,7 @@ void emitInstruction(llvm::raw_ostream &OS, const MedInstruction &Instruction,
       OS << ")";
     OS << "); }\n";
     if (InPartition)
-      OS << "                pc = nd_pop_frame(r, saved, saved_fp, return_pc, "
-            "&mut depth);\n";
+      OS << "                pc = nd_pop_frame(r, stack);\n";
     else {
       emitPopFrameBody(OS);
       OS << "                pc = return_pc[depth];\n";
