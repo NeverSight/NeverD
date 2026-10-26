@@ -10,9 +10,11 @@
 #define NEVERD_IR_LOW_LOWSCALARCONSTANT_H
 
 #include "neverd/ir/low/LowIR.h"
+#include "neverd/ir/low/SourceCallOccurrence.h"
 
 #include "llvm/ADT/STLFunctionalExtras.h"
 
+#include <map>
 #include <optional>
 
 namespace neverd {
@@ -24,6 +26,13 @@ namespace neverd {
 std::optional<uint64_t> lowScalarConstantResult(
     const LowOp &Operation,
     llvm::function_ref<std::optional<uint64_t>(const NdVar &)> ValueOf);
+
+/// Exact register-call values established in the same basic block. The keys
+/// retain the original indirect occurrences. Calls and opaque operations kill
+/// facts; loads, predecessor values and constant memory-call slots supply none.
+/// These are numeric values, not function ownership or ABI evidence.
+std::map<SourceCallOccurrenceKey, va_t>
+constantRegisterCallTargets(const LowFunc &Function);
 
 } // namespace neverd
 

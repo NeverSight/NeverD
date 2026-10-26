@@ -383,6 +383,9 @@ inline constexpr int kSourceABIValidateSourceABIHintParametersSizeLimit =
 inline constexpr int kSourceABIAssignDarwinSourceABIHintParametersSizeLimit =
     ::neverd::limits::ir::kMaxSourceABIParameters;
 
+// lib/ir/low/LowScalarConstant.cpp
+inline constexpr size_t kConstantRegisterCallOperations = 20000;
+
 // lib/ir/SourceCallABI.cpp
 inline constexpr int
     kSourceCallABINeverdAssignAnalystCallABISignatureParametersSizeLimit = 32;

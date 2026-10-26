@@ -21,6 +21,7 @@
 #include "neverd/Limits.h"
 #include "neverd/ir/Limits.h"
 #include "neverd/ir/SourceCallABI.h"
+#include "neverd/ir/low/LowScalarConstant.h"
 #include "neverd/ir/low/SourceCallOccurrence.h"
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/ir/med/LowToMedError.h"
@@ -294,7 +295,7 @@ void Pipeline::buildMedIR(const BinaryImage &Img, const PipelineOptions &Opts,
   });
 
   // Discover bounded incoming-stack leaves from this conversion, then only
-  // reconvert their definitions and exact direct callers. Call operands must
+  // reconvert their definitions and exact callers. Call operands must
   // be present before SSA; adding a C parameter after lowering loses the
   // caller's store and cannot restore the physical CALL return-address bias.
   if (Opts.usesSourceDeclarations() && supportsIncomingStackSources(Img) &&
@@ -331,18 +332,27 @@ void Pipeline::buildMedIR(const BinaryImage &Img, const PipelineOptions &Opts,
       LocalDefinitions.emplace(Low.Entry, I);
       Affected.insert(I);
     }
-    std::set<va_t> OmittedTargets;
-    for (const auto &Low : Result.LowFuncs)
+    // A register operand can have one exact local value without being a
+    // static machine operand. Keep its original occurrence as the binding key;
+    // numeric agreement alone never supplies a callee signature.
+    std::vector<std::map<SourceCallOccurrenceKey, va_t>> CallTargets(Total);
+    for (size_t I = 0; I < Total; ++I) {
+      const auto &Low = Result.LowFuncs[I];
+      CallTargets[I] = constantRegisterCallTargets(Low);
       for (const auto &Block : Low.Blocks)
-        for (const auto &Op : Block.Ops) {
-          const auto Site = sourceCallOccurrenceKey(Op);
-          if (Site && Site->Opcode == NdOp::CALL && Site->StaticTarget &&
-              !SourceCalleeFunctions.count(*Site->StaticTarget) &&
-              !SourceCalleeHints.count(*Site->StaticTarget) &&
-              !ExplicitCallTargets.count(*Site->StaticTarget) &&
-              !Result.CallUserPrototypes.count(*Site->StaticTarget))
-            OmittedTargets.insert(*Site->StaticTarget);
-        }
+        for (const auto &Op : Block.Ops)
+          if (const auto Site = sourceCallOccurrenceKey(Op);
+              Site && Site->Opcode == NdOp::CALL && Site->StaticTarget)
+            CallTargets[I].emplace(*Site, *Site->StaticTarget);
+    }
+    std::set<va_t> OmittedTargets;
+    for (const auto &Calls : CallTargets)
+      for (const auto &[Site, Target] : Calls)
+        if (!SourceCalleeFunctions.count(Target) &&
+            !SourceCalleeHints.count(Target) &&
+            !ExplicitCallTargets.count(Target) &&
+            !Result.CallUserPrototypes.count(Target))
+          OmittedTargets.insert(Target);
     for (auto &[Entry, Hint] :
          readIncomingStackCallees(Img, Result, OmittedTargets)) {
       SourceCalleeHints.emplace(Entry, std::move(Hint));
@@ -353,22 +363,20 @@ void Pipeline::buildMedIR(const BinaryImage &Img, const PipelineOptions &Opts,
     // Withdraw the candidate as a unit rather than publish incompatible
     // definition and call signatures in a whole-module source projection.
     std::set<va_t> Unavailable;
-    for (const auto &Low : Result.LowFuncs)
-      for (const auto &Block : Low.Blocks)
-        for (const auto &Op : Block.Ops) {
-          const auto Site = sourceCallOccurrenceKey(Op);
-          if (!Site || Site->Opcode != NdOp::CALL || !Site->StaticTarget ||
-              !Inferred.count(*Site->StaticTarget))
-            continue;
-          SourceCallTypeHint Hint;
-          Hint.Signature = SourceCalleeHints.at(*Site->StaticTarget);
-          const auto Bias =
-              sourceCallReturnAddressBias(&Img, Img.Arch, Op.Addr);
-          std::string Diagnostic;
-          if (!Bias || !sourceCallStackArgumentsDefined(
-                           Low, Hint, *Site, Img.Arch, *Bias, Diagnostic))
-            Unavailable.insert(*Site->StaticTarget);
-        }
+    for (size_t I = 0; I < Total; ++I)
+      for (const auto &[Site, Target] : CallTargets[I]) {
+        if (!Inferred.count(Target))
+          continue;
+        SourceCallTypeHint Hint;
+        Hint.Signature = SourceCalleeHints.at(Target);
+        const auto Bias =
+            sourceCallReturnAddressBias(&Img, Img.Arch, Site.Instruction);
+        std::string Diagnostic;
+        if (!Bias ||
+            !sourceCallStackArgumentsDefined(Result.LowFuncs[I], Hint, Site,
+                                             Img.Arch, *Bias, Diagnostic))
+          Unavailable.insert(Target);
+      }
     for (va_t Entry : Unavailable) {
       Inferred.erase(Entry);
       SourceCalleeHints.erase(Entry);
@@ -379,22 +387,19 @@ void Pipeline::buildMedIR(const BinaryImage &Img, const PipelineOptions &Opts,
         Affected.erase(Local->second);
     }
     for (size_t I = 0; I < Total && !Inferred.empty(); ++I)
-      for (const auto &Block : Result.LowFuncs[I].Blocks)
-        for (const auto &Op : Block.Ops) {
-          const auto Site = sourceCallOccurrenceKey(Op);
-          if (!Site || Site->Opcode != NdOp::CALL || !Site->StaticTarget ||
-              !Inferred.count(*Site->StaticTarget))
-            continue;
-          SourceCallTypeHint Hint;
-          Hint.CallKind = SourceCallTypeHint::Kind::Native;
-          Hint.TargetAddress = *Site->StaticTarget;
-          Hint.TargetName = Img.getFunctionNameAt(Hint.TargetAddress);
-          Hint.Signature = SourceCalleeHints.at(Hint.TargetAddress);
-          if (SourceSites[Result.LowFuncs[I].Entry]
-                  .try_emplace(*Site, std::move(Hint))
-                  .second)
-            Affected.insert(I);
-        }
+      for (const auto &[Site, Target] : CallTargets[I]) {
+        if (!Inferred.count(Target))
+          continue;
+        SourceCallTypeHint Hint;
+        Hint.CallKind = SourceCallTypeHint::Kind::Native;
+        Hint.TargetAddress = Target;
+        Hint.TargetName = Img.getFunctionNameAt(Target);
+        Hint.Signature = SourceCalleeHints.at(Target);
+        if (SourceSites[Result.LowFuncs[I].Entry]
+                .try_emplace(Site, std::move(Hint))
+                .second)
+          Affected.insert(I);
+      }
     const std::vector<size_t> Indices(Affected.begin(), Affected.end());
     std::vector<uint64_t> ReconvertWeights;
     for (size_t I : Indices)

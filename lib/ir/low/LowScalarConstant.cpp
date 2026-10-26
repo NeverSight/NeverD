@@ -8,9 +8,12 @@
 
 #include "neverd/ir/low/LowScalarConstant.h"
 
+#include "neverd/ir/Limits.h"
+
 #include "llvm/ADT/APInt.h"
 
 #include <algorithm>
+#include <utility>
 
 namespace neverd {
 
@@ -138,6 +141,87 @@ std::optional<uint64_t> lowScalarConstantResult(
   }
   return Result ? std::optional<uint64_t>{*Result & Mask(Op.Output.Size)}
                 : std::nullopt;
+}
+
+std::map<SourceCallOccurrenceKey, va_t>
+constantRegisterCallTargets(const LowFunc &Function) {
+  std::map<SourceCallOccurrenceKey, va_t> Targets;
+  size_t Work = 0;
+  for (const auto &Block : Function.Blocks) {
+    if (Block.Ops.size() > limits::ir::kConstantRegisterCallOperations - Work)
+      return {};
+    Work += Block.Ops.size();
+    if (std::none_of(Block.Ops.begin(), Block.Ops.end(), [](const LowOp &Op) {
+          return Op.Opcode == NdOp::INDIR_CALL && Op.NumInputs == 1 &&
+                 !Op.Inputs[0].isConst();
+        }))
+      continue;
+    std::map<uint64_t, uint8_t> Registers;
+    std::map<uint64_t, std::pair<uint16_t, uint64_t>> Temps;
+    va_t Instruction = InvalidVA;
+    auto ValueOf = [&](const NdVar &Value) -> std::optional<uint64_t> {
+      if (!Value.Size || Value.Size > sizeof(uint64_t))
+        return {};
+      if (Value.isConst())
+        return Value.Offset & (UINT64_MAX >> ((8 - Value.Size) * 8));
+      if (Value.isTemp()) {
+        const auto It = Temps.find(Value.Offset);
+        if (It != Temps.end() && It->second.first == Value.Size)
+          return It->second.second;
+        return {};
+      }
+      if (!Value.isReg() || Value.Offset > UINT64_MAX - Value.Size)
+        return {};
+      uint64_t Bits = 0;
+      for (unsigned I = 0; I < Value.Size; ++I) {
+        const auto It = Registers.find(Value.Offset + I);
+        if (It == Registers.end())
+          return {};
+        Bits |= uint64_t{It->second} << (I * 8);
+      }
+      return Bits;
+    };
+    for (const auto &Op : Block.Ops) {
+      if (Op.Addr != Instruction) {
+        Temps.clear();
+        Instruction = Op.Addr;
+      }
+      if (const auto Site = sourceCallOccurrenceKey(Op);
+          Site && Site->Opcode == NdOp::INDIR_CALL && !Site->StaticTarget)
+        if (const auto Target = ValueOf(Op.Inputs[0]))
+          Targets.emplace(*Site, *Target);
+      if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL ||
+          Op.Opcode == NdOp::INTRINSIC) {
+        Registers.clear();
+        Temps.clear();
+        continue;
+      }
+      const auto &Output = Op.Output;
+      if (!Output.Size || (!Output.isReg() && !Output.isTemp()))
+        continue;
+      const auto Result =
+          Op.MemoryOrdering == NdMemoryOrdering::None &&
+                  Op.MemoryAddressSpace == NdMemoryAddressSpace::Default
+              ? lowScalarConstantResult(Op, ValueOf)
+              : std::nullopt;
+      if (Output.isTemp()) {
+        if (Result)
+          Temps[Output.Offset] = {Output.Size, *Result};
+        else
+          Temps.erase(Output.Offset);
+      } else if (Output.Offset <= UINT64_MAX - Output.Size) {
+        // Erase overlapping byte facts even for a wide unknown result. Never
+        // interpret an architectural subregister write as a whole GPR write.
+        Registers.erase(Registers.lower_bound(Output.Offset),
+                        Registers.lower_bound(Output.Offset + Output.Size));
+        if (Result)
+          for (unsigned I = 0; I < Output.Size; ++I)
+            Registers.emplace(Output.Offset + I, uint8_t(*Result >> (I * 8)));
+      } else
+        Registers.clear();
+    }
+  }
+  return Targets;
 }
 
 } // namespace neverd

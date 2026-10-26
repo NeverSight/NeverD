@@ -8,6 +8,7 @@
 #include "neverd/ir/SourceABI.h"
 #include "neverd/ir/SourceCallABI.h"
 #include "neverd/ir/TargetRegInfo.h"
+#include "neverd/ir/low/LowScalarConstant.h"
 #include "neverd/ir/low/SourceCallOccurrence.h"
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/loader/BinaryImage.h"
@@ -184,6 +185,7 @@ void LowToMedConverter::bindSourceCalls(MedFunc &Func, const LowFunc &Low,
     return V;
   };
   std::set<SourceCallOccurrenceKey> UnboundCalls;
+  std::optional<std::map<SourceCallOccurrenceKey, va_t>> ConstantCalls;
   for (const auto &Block : Low.Blocks)
     for (const auto &Op : Block.Ops)
       if (const auto Site = sourceCallOccurrenceKey(Op))
@@ -386,8 +388,34 @@ void LowToMedConverter::bindSourceCalls(MedFunc &Func, const LowFunc &Low,
         Ops.push_back(std::move(Op));
         continue;
       }
+      const bool ConstantNativeCall =
+          ExplicitSite && Op.Opcode == NdOp::INDIR_CALL &&
+          !Op.Inputs[0].isConst() &&
+          Hint->CallKind == SourceCallTypeHint::Kind::Native &&
+          Signature.Origin ==
+              SourceFunctionTypeHint::OriginKind::NativeAnalysis;
+      if (ConstantNativeCall) {
+        if (!ConstantCalls)
+          ConstantCalls = constantRegisterCallTargets(Low);
+        const auto Found = ConstantCalls->find(Site);
+        if (Found == ConstantCalls->end() ||
+            Found->second != Hint->TargetAddress) {
+          Ops.push_back(std::move(Op));
+          continue;
+        }
+      }
       // Do this only after every binding check succeeds, so an unavailable
       // or invalid source declaration leaves the generic arguments intact.
+      if (ConstantNativeCall) {
+        // This source operation now names a proved callee and its complete
+        // source declaration. Original LowIR and the physical occurrence key
+        // above retain the register call for byte/stack validation. Never
+        // turn a constant memory-call slot into its apparent code address.
+        Op.Opcode = NdOp::CALL;
+        Op.Inputs[0] =
+            MedVar::makeConst(Hint->TargetAddress, TRI.PointerSize,
+                              ConstantAddressProvenance::CodeAddress);
+      }
       Op.NumInputs = 1;
       Op.IntegerCallSignature.reset();
       Op.ScalarCallSignature.reset();
