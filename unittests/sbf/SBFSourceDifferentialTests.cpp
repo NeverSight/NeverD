@@ -284,6 +284,24 @@ void addSyntheticCases(std::vector<DifferentialCase> &Cases) {
   Add("source-regions-retain-call-frame-registers",
       analyzeProgram(Version::V3, RegionCalls));
 
+  // LDDW crosses the region boundary in both directions through this loop.
+  // Its continuation remains a raw entry that traps, never a fallthrough step.
+  std::vector<test::EncodedInstruction> RegionWide{
+      encode(Opcode::MOV64_IMM, 6, 0, 0, 2)};
+  while (RegionWide.size() + 1 < kMaximumDispatcherRegionSlots)
+    RegionWide.push_back(encode(Opcode::MOV64_REG, 7, 7));
+  const size_t WideSlot = RegionWide.size();
+  const auto WideValue = encodeLDDW(7, UINT64_C(0xabcdef0181234567));
+  RegionWide.insert(RegionWide.end(), WideValue.begin(), WideValue.end());
+  RegionWide.push_back(encode(Opcode::ADD64_REG, 0, 7));
+  RegionWide.push_back(encode(Opcode::SUB64_IMM, 6, 0, 0, 1));
+  RegionWide.push_back(
+      encode(Opcode::JNE64_IMM, 6, 0,
+             static_cast<int16_t>(WideSlot - RegionWide.size() - 1), 0));
+  RegionWide.push_back(encode(Opcode::EXIT));
+  Add("source-region-wide-fallthrough-and-backedge",
+      analyzeProgram(Version::V0, RegionWide));
+
   ExecutionEnvironment InstructionDataEnvironment;
   InstructionDataEnvironment.InstructionData = UINT64_C(0x500000040);
   Add("instruction-data-register",

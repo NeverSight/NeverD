@@ -33,6 +33,25 @@ void emitPartitionedProgram(
         "}\n\n";
   for (const auto &Region : Partition.Regions) {
     bool NeedsFaultCheck = false;
+    bool NeedsFallthroughPC = false;
+    for (size_t Slot : Region.Slots) {
+      const auto Found = BySlot.find(Slot);
+      if (Program.Low.Instructions[Slot].IsContinuation ||
+          Found == BySlot.end())
+        continue;
+      const auto &Instruction = *Found->second;
+      const bool HasNext = Instruction.Slot + Instruction.SlotWidth <
+                           Program.Low.Instructions.size();
+      NeedsFaultCheck |= HasNext && (Instruction.Op == Operation::Load ||
+                                     Instruction.Op == Operation::Store);
+      NeedsFallthroughPC |=
+          HasNext &&
+          ((Instruction.Semantics.Terminator == TerminatorKind::None &&
+            Instruction.Op != Operation::Invalid) ||
+           (Instruction.Op == Operation::Call &&
+            (Instruction.Call == CallKind::Syscall ||
+             Instruction.Call == CallKind::Unresolved)));
+    }
     OS << "#[inline(never)]\nfn " << Region.Name
        << "(env: &mut dyn SbfEnvironmentV2, machine: &mut NdMachine) -> "
           "Result<Option<u64>, SbfErrorV2> {\n"
@@ -44,24 +63,27 @@ void emitPartitionedProgram(
           "    let _ = (&mut *env, &mut pc, &mut depth, &mut fault, &mut *r, "
           "&mut *saved, "
           "&mut *saved_fp, &mut *return_pc);\n"
-          "    loop {\n        match pc {\n";
+          "    loop {\n"
+          "        let current_pc = pc;\n";
+    // One default advance replaces per-arm assignments. A region containing
+    // only transfers/faults has no fallthrough and needs no unused assignment.
+    if (NeedsFallthroughPC)
+      OS << "        pc = pc.wrapping_add(1);\n";
+    OS << "        match current_pc {\n";
     for (size_t Slot : Region.Slots) {
       const auto Found = BySlot.find(Slot);
       if (Program.Low.Instructions[Slot].IsContinuation ||
           Found == BySlot.end()) {
         OS << "            " << Slot
-           << " => { machine.pc = pc; machine.depth = depth; return Err("
+           << " => { machine.pc = current_pc; machine.depth = depth; return "
+              "Err("
            << rustSourceErrorName(FaultCode::InvalidInstruction) << "); },\n";
         continue;
       }
-      const auto &Instruction = *Found->second;
-      NeedsFaultCheck |= (Instruction.Op == Operation::Load ||
-                          Instruction.Op == Operation::Store) &&
-                         Instruction.Slot + Instruction.SlotWidth <
-                             Program.Low.Instructions.size();
       emitInstruction(OS, *Found->second, Program, true);
     }
-    OS << "            _ => { machine.pc = pc; machine.depth = depth; return "
+    OS << "            _ => { machine.pc = current_pc; machine.depth = depth; "
+          "return "
           "Ok(None); },\n"
           "        }\n";
     if (NeedsFaultCheck)

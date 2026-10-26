@@ -80,12 +80,15 @@ void assign(llvm::raw_ostream &OS, const MedInstruction &Instruction,
 }
 
 void advance(llvm::raw_ostream &OS, const MedInstruction &Instruction,
-             size_t Count, bool SharedMemoryFault) {
+             size_t Count, bool InPartition) {
   const size_t Next = Instruction.Slot + Instruction.SlotWidth;
-  if (Next < Count)
-    OS << "                pc = " << Next << ";\n";
-  else {
-    if (SharedMemoryFault)
+  if (Next < Count) {
+    if (!InPartition)
+      OS << "                pc = " << Next << ";\n";
+    else if (Instruction.SlotWidth > 1)
+      OS << "                pc += " << Instruction.SlotWidth - 1 << ";\n";
+  } else {
+    if (InPartition)
       OS << "                if let Some(error) = fault { return Err(error); "
             "}\n";
     OS << "                return Err("

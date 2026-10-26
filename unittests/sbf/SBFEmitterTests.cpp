@@ -660,7 +660,7 @@ TEST(SBFSourceEmitters, DefaultOptionsFallBackForStaticCallFaults) {
 
   auto Rust = emitRust(*ContinuationProgram);
   ASSERT_TRUE(static_cast<bool>(Rust)) << llvm::toString(Rust.takeError());
-  EXPECT_NE(Rust->find("match pc"), std::string::npos);
+  EXPECT_NE(Rust->find("match current_pc"), std::string::npos);
   EXPECT_NE(Rust->find("2 =>"), std::string::npos);
   const size_t RustFrame =
       Rust->find("nd_push_frame(r, saved, saved_fp, return_pc, &mut depth, 1)");
