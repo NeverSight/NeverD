@@ -138,6 +138,18 @@ endings. Release and sanitizer comparisons preserve full API outputs. This
 change leaves x86 and the remaining decoder/core objects unchanged; it does not
 extend iced comparisons beyond x86.
 
+Capstone `fe40ade693c17a7e13f48fa1dd3202da44f2dcfd` reduces public iterator
+call overhead. On supported Clang targets, private decoder and output calls
+preserve additional registers so the iterator needs fewer saves and restores.
+Skip-data handling remains owned by the shared core, including callback-visible
+detail state and restoration. An unprefixed C5 header uses the same VEX reader
+inlined after source-feature selection, retaining operand and legality checks.
+Public API and callback calling conventions are unchanged. Callback tests cover
+success, refusal, oversized skips and detail-pointer replacement. Reduced tests
+explicitly check rejection of generated vector opcodes omitted by that build.
+The native batch path remains the default; broader performance qualification,
+including the remaining public-iterator gaps against iced, is still ongoing.
+
 NeverD can use the pinned NeverSight iced fork for selected x86 32/64-bit
 classification scans. Enable it with `-DNEVERD_ENABLE_ICED=ON`; the
 default remains off because whole-workload and platform qualification is
