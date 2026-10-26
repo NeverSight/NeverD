@@ -18,6 +18,7 @@
 #include <QContextMenuEvent>
 #include <QCoreApplication>
 #include <QCursor>
+#include <QDebug>
 #include <QEnterEvent>
 #include <QGuiApplication>
 #include <QHBoxLayout>
@@ -33,6 +34,10 @@
 #include <QToolButton>
 #include <QVariantAnimation>
 #include <QWindow>
+#ifdef Q_OS_MACOS
+#include <objc/message.h>
+#include <objc/runtime.h>
+#endif
 #include <algorithm>
 #include <cmath>
 #include <kddockwidgets/Config.h>
@@ -477,6 +482,15 @@ protected:
       moveArea_->setMinimumWidth(0);
     }
     if (object == moveArea_) {
+      if (qEnvironmentVariableIsSet("NEVERD_TRACE_NATIVE_DRAG") &&
+          (event->type() == QEvent::MouseButtonPress ||
+           event->type() == QEvent::MouseButtonDblClick ||
+           event->type() == QEvent::MouseButtonRelease ||
+           event->type() == QEvent::MouseMove))
+        qInfo() << "drag-area event" << event->type()
+                << static_cast<QMouseEvent *>(event)->globalPosition()
+                << QWidget::window()->geometry()
+                << QWidget::window()->isActiveWindow();
       if (event->type() == QEvent::MouseButtonDblClick &&
           static_cast<QMouseEvent *>(event)->button() == Qt::LeftButton) {
         titleBar()->onMaximizeClicked();
@@ -484,8 +498,29 @@ protected:
       }
       if (event->type() == QEvent::MouseButtonPress &&
           static_cast<QMouseEvent *>(event)->button() == Qt::LeftButton) {
-        if (auto *handle = QWidget::window()->windowHandle())
-          handle->startSystemMove();
+        if (auto *handle = QWidget::window()->windowHandle()) {
+          if (qEnvironmentVariableIsSet("NEVERD_TRACE_NATIVE_DRAG"))
+            qInfo() << "system-move begin" << handle->geometry();
+#ifdef Q_OS_MACOS
+          if (qEnvironmentVariableIsSet("NEVERD_TRACE_NATIVE_DRAG")) {
+            const auto sendObject =
+                reinterpret_cast<id (*)(id, SEL)>(objc_msgSend);
+            const auto sendInteger =
+                reinterpret_cast<unsigned long (*)(id, SEL)>(objc_msgSend);
+            id application = sendObject(
+                reinterpret_cast<id>(objc_getClass("NSApplication")),
+                sel_registerName("sharedApplication"));
+            id nativeEvent =
+                sendObject(application, sel_registerName("currentEvent"));
+            qInfo() << "native-current-event" << bool(nativeEvent)
+                    << sendInteger(nativeEvent, sel_registerName("type"))
+                    << sendInteger(nativeEvent, sel_registerName("windowNumber"));
+          }
+#endif
+          const bool started = handle->startSystemMove();
+          if (qEnvironmentVariableIsSet("NEVERD_TRACE_NATIVE_DRAG"))
+            qInfo() << "system-move end" << started << handle->geometry();
+        }
         return true;
       }
     }

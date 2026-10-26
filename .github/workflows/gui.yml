@@ -1,342 +1,98 @@
-name: Desktop GUI
+name: Temporary macOS native event loop diagnosis
 
 on:
-  push:
-    branches: [dev]
-    paths: ['tools/neverd-gui/**', 'tools/neverd-worker/**', 'tools/neverd-mcp/**', 'tools/common/**', 'scripts/check_gui_i18n.py', 'scripts/check_gui_icons.py', '.github/workflows/gui.yml']
-  pull_request:
-    # closed cancels this PR's run through its concurrency group; no job runs.
-    types: [opened, synchronize, reopened, closed]
-    paths: ['tools/neverd-gui/**', 'tools/neverd-worker/**', 'tools/neverd-mcp/**', 'tools/common/**', 'scripts/check_gui_i18n.py', 'scripts/check_gui_icons.py', '.github/workflows/gui.yml']
   workflow_dispatch:
 
 permissions:
   contents: read
 
-concurrency:
-  group: desktop-gui-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
-
 jobs:
-  desktop:
-    name: Qt Widgets (${{ matrix.runner }})
-    if: ${{ github.event.action != 'closed' }}
-    runs-on: ${{ matrix.runner }}
-    strategy:
-      # Leave runner slots for the main builds in the shared organization pool.
-      max-parallel: 2
-      fail-fast: false
-      matrix:
-        include:
-          - {runner: ubuntu-24.04, host: linux, arch: linux_gcc_64, qt_dir: gcc_64, library: libneverd_fixture.so}
-          - {runner: macos-15, host: mac, arch: clang_64, qt_dir: macos, library: libneverd_fixture.dylib}
-          - {runner: windows-latest, host: windows, arch: win64_msvc2022_64, qt_dir: msvc2022_64, library: neverd_fixture.dll}
+  native-drag:
+    runs-on: macos-15
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: '3.12'
-      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756
-        if: runner.os == 'Windows'
-        with:
-          arch: x64
-      - name: Install Qt and build tools
-        shell: bash
+      - name: Install matching Qt and build tools
         run: |
           python -m pip install aqtinstall==3.3.0 ninja==1.11.1.3
-          python -m aqt install-qt '${{ matrix.host }}' desktop 6.8.3 '${{ matrix.arch }}' -O "$RUNNER_TEMP/Qt"
-          echo "$RUNNER_TEMP/Qt/6.8.3/${{ matrix.qt_dir }}/bin" >> "$GITHUB_PATH"
-          if [ '${{ runner.os }}' = Linux ]; then
-            sudo apt-get update
-            sudo apt-get install -y libgl1-mesa-dev libxkbcommon-dev libxkbcommon-x11-0 \
-              libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 libxcb-shape0 \
-              xvfb xauth openbox xdotool
-            # Qt's generic xcb startup error can name cursor support even when
-            # another shared library is missing. Check the actual plugin before
-            # spending a build on native tests that cannot start.
-            ldd "$RUNNER_TEMP/Qt/6.8.3/gcc_64/plugins/platforms/libqxcb.so"
-            python - <<'PY'
-          import ctypes
-          import os
-          from pathlib import Path
-
-          plugin = Path(os.environ["RUNNER_TEMP"]) / "Qt/6.8.3/gcc_64/plugins/platforms/libqxcb.so"
-          ctypes.CDLL(str(plugin), mode=os.RTLD_NOW)
-          PY
-          fi
-      - name: Configure Windows offscreen fonts
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          # The offscreen plugin uses FreeType, not the Windows font database.
-          $offscreenFontDir = Join-Path $env:WINDIR 'Fonts'
-          if (-not (Test-Path (Join-Path $offscreenFontDir 'segoeui.ttf'))) {
-            throw 'Windows system fonts are unavailable for offscreen tests'
-          }
-          "QT_QPA_FONTDIR=$offscreenFontDir" >> $env:GITHUB_ENV
-      - name: Build test-only C ABI fixture
-        shell: bash
+          python -m aqt install-qt mac desktop 6.8.3 clang_64 -O "$RUNNER_TEMP/Qt"
+          echo "$RUNNER_TEMP/Qt/6.8.3/macos/bin" >> "$GITHUB_PATH"
+      - name: Build only the docking boundary
         run: |
           cmake -S tools/neverd-gui/tests/mock-sdk -B build-fixture -G Ninja -DCMAKE_BUILD_TYPE=Release
-          cmake --build build-fixture --parallel 3
-      - name: Build workbench with fixture SDK
-        id: build_workbench
-        shell: bash
-        run: |
+          python scripts/build.py build-fixture --parallel 3
           cmake -S tools/neverd-gui -B build-gui -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_PREFIX_PATH="$RUNNER_TEMP/Qt/6.8.3/${{ matrix.qt_dir }}" \
-            -DNEVERD_ENGINE_LIBRARY="$GITHUB_WORKSPACE/build-fixture/bin/${{ matrix.library }}" \
-            -DNEVERD_ENGINE_IMPLIB="$GITHUB_WORKSPACE/build-fixture/bin/neverd_fixture.lib" \
-            -DNEVERD_GUI_CI_DIAGNOSTICS=${{ runner.os != 'Linux' && 'ON' || 'OFF' }} \
+            -DCMAKE_PREFIX_PATH="$RUNNER_TEMP/Qt/6.8.3/macos" \
+            -DNEVERD_ENGINE_LIBRARY="$GITHUB_WORKSPACE/build-fixture/bin/libneverd_fixture.dylib" \
+            -DNEVERD_GUI_CI_DIAGNOSTICS=ON \
             -DNEVERD_WORKER_REAL_ENGINE_TESTS=OFF
-          python scripts/build.py build-gui --parallel 3
-          cp "build-fixture/bin/${{ matrix.library }}" build-gui/bin/
-      - name: Verify native appearance and window gestures before controller regressions
-        if: runner.os != 'Linux'
-        shell: bash
-        run: |
-          mkdir -p build-gui/ci-diagnostics
-          set +e
-          NEVERD_APPEARANCE_CAPTURES=build-gui/ci-diagnostics/appearance \
-            build-gui/bin/neverd-gui-appearance-tests \
-            -o build-gui/ci-diagnostics/native-appearance.txt,txt
-          appearance_status=$?
-          QT_SCALE_FACTOR=1.5 \
-            NEVERD_APPEARANCE_CAPTURES=build-gui/ci-diagnostics/appearance-150 \
-            build-gui/bin/neverd-gui-appearance-tests \
-            -o build-gui/ci-diagnostics/native-appearance-150.txt,txt
-          scaled_appearance_status=$?
-          build-gui/bin/neverd-gui-unit-tests nativeFrameKeepsTheTitleBarOnScreen \
-            toolbarButtonsKeepKeysInTooltips \
-            modelessBrowsersDetachBeforeTheirNativeOwnerChanges \
-            -o build-gui/ci-diagnostics/native-frame.txt,txt
-          frame_status=$?
-          if [ "$frame_status" -ne 0 ]; then
-            QT_LOGGING_RULES='qt.qpa.window=true' \
-              build-gui/bin/neverd-gui-unit-tests nativeFrameKeepsTheTitleBarOnScreen \
-              -o build-gui/ci-diagnostics/native-frame-trace.txt,txt
-          fi
-          # Check representative drops before the full state/drag sequence too,
-          # so a failed native transition cannot hide an independent drag bug.
-          NEVERD_SHORTCUT_CAPTURES=build-gui/ci-diagnostics/docking-samples \
-            build-gui/bin/neverd-gui-docking-tests \
-            dragIntoWorkbench:light-caption-4-separate \
-            dragIntoWorkbench:dark-tab-8-overlap \
-            -o build-gui/ci-diagnostics/native-docking-samples.txt,txt
-          drag_sample_status=$?
-          cat build-gui/ci-diagnostics/native-appearance.txt
-          cat build-gui/ci-diagnostics/native-appearance-150.txt
-          cat build-gui/ci-diagnostics/native-frame.txt
-          cat build-gui/ci-diagnostics/native-docking-samples.txt
-          if [ "$frame_status" -ne 0 ]; then exit "$frame_status"; fi
-          if [ "$drag_sample_status" -ne 0 ]; then exit "$drag_sample_status"; fi
-          if [ "$scaled_appearance_status" -ne 0 ]; then exit "$scaled_appearance_status"; fi
-          exit "$appearance_status"
-      - name: Retain native appearance diagnostics
-        if: ${{ always() && runner.os != 'Linux' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: desktop-gui-${{ runner.os }}-appearance-${{ github.run_id }}-${{ github.run_attempt }}
-          path: |
-            build-gui/ci-diagnostics/native-appearance.txt
-            build-gui/ci-diagnostics/native-appearance-150.txt
-            build-gui/ci-diagnostics/native-frame.txt
-            build-gui/ci-diagnostics/native-frame-trace.txt
-            build-gui/ci-diagnostics/native-docking-samples.txt
-            build-gui/ci-diagnostics/appearance/
-            build-gui/ci-diagnostics/appearance-150/
-            build-gui/ci-diagnostics/docking-samples/
-          if-no-files-found: warn
-          retention-days: 7
-      - name: Verify GUI, IPC, MCP and translation contracts
-        if: ${{ !cancelled() && steps.build_workbench.outcome == 'success' }}
-        shell: bash
-        env:
-          QT_QPA_PLATFORM: offscreen
-        run: |
-          python scripts/check_gui_i18n.py --check-sources
-          python scripts/check_gui_icons.py
-          if [ '${{ runner.os }}' != Linux ]; then
-            mkdir -p build-gui/ci-diagnostics
-            set +e
-            ctest --test-dir build-gui --output-on-failure \
-              --output-junit "$GITHUB_WORKSPACE/build-gui/ci-diagnostics/ctest.xml" \
-              > build-gui/ci-diagnostics/ctest.log 2>&1
-            ctest_status=$?
-            set -e
-            printf '%s\n' "$ctest_status" > build-gui/ci-diagnostics/ctest-exit-code.txt || true
-            cat build-gui/ci-diagnostics/ctest.log || true
-            exit "$ctest_status"
-          fi
-          ctest --test-dir build-gui --output-on-failure
-      - name: Verify native docking drags
-        if: ${{ !cancelled() }}
-        shell: bash
-        run: |
-          mkdir -p build-gui/ci-diagnostics
-          set +e
-          if [ '${{ runner.os }}' = Linux ]; then
-            xvfb-run -a -s '-screen 0 1920x1080x24' sh -c '
-              openbox > build-gui/ci-diagnostics/window-manager.txt 2>&1 &
-              manager=$!
-              trap "kill $manager 2>/dev/null || true" EXIT
-              QT_QPA_PLATFORM=xcb build-gui/bin/neverd-gui-docking-tests \
-                -o build-gui/ci-diagnostics/native-docking.txt,txt
-            '
-          else
-            NEVERD_SHORTCUT_CAPTURES=build-gui/ci-diagnostics/docking \
-              build-gui/bin/neverd-gui-docking-tests \
-              -o build-gui/ci-diagnostics/native-docking.txt,txt
-          fi
-          docking_status=$?
-          cat build-gui/ci-diagnostics/native-docking.txt
-          exit "$docking_status"
-      - name: Retain native docking captures
-        if: ${{ always() && runner.os != 'Linux' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: desktop-gui-${{ runner.os }}-docking-${{ github.run_id }}-${{ github.run_attempt }}
-          path: |
-            build-gui/ci-diagnostics/native-docking.txt
-            build-gui/ci-diagnostics/docking/
-          if-no-files-found: warn
-          retention-days: 7
-      - name: Verify native windows, floating panes and shortcuts
-        timeout-minutes: 10
-        # Exercise native ownership and focus as well as the offscreen
-        # contracts, whatever the earlier contract checks found.
-        if: ${{ !cancelled() && runner.os != 'Linux' }}
-        shell: bash
-        run: |
-          # Windows does not pass a console test's standard output on; read
-          # the log file back on every platform.
-          mkdir -p build-gui/ci-diagnostics
-          set +e
-          build-gui/bin/neverd-gui-tests \
-            floatingDocksReturnToWorkbench \
-            closingWorkbenchClosesDetachedWindows \
-            codeOpensBesideFloatingDisassembly \
-            focusModeGroupsViewsAndRestoresLayout \
-            focusToolbarKeepsWorkbenchCommands \
-            focusFunctionsSidebarTogglesAndNavigates \
-            focusSequenceUsesNativeKeysAndIgnoresTyping \
-            fileReviewWindowsOfferWindowControls \
-            closedFloatingDocksReopenInWorkbench \
-            reopeningPaneDoesNotFollowFloatingAssembly \
-            floatingAnalysisMenusStayWithTheirView \
-            floatingWindowsKeepMouseHistory \
-            floatingCommandDialogsStayWithTheirView \
-            analysisBrowsersStayInteractive \
-            auxiliaryChoosersStayInteractive \
-            jumpBrowserKeepsItsOpeningAddress \
-            commandPaletteReturnsToItsSource \
-            xrefsReturnToTheOriginatingCodeWindow \
-            changedSourceDismissesReferenceBrowsers \
-            localVariableReferencesStayInTheirCodeWindow \
-            localReferencesAllowWorkbenchInteraction \
-            changedSourceDismissesLocalReferences \
-            closingFileDismissesLocalVariableReferences \
-            classicJumpChoosersSelectAndCancel \
-            selectedBytesExportWithIdasKey \
-            shortcutsCanBeFoundByKeyAndScope \
-            commandButtonsExposeTheirKeys \
-            generatedViewsStayClosedAfterReopening \
-            searchResultsStayClosedAfterReopening \
-            -o build-gui/ci-diagnostics/native-interactions.txt,txt \
-            -o build-gui/ci-diagnostics/native-interactions.xml,xml
-          interaction_status=$?
-          cat build-gui/ci-diagnostics/native-interactions.txt
-          exit "$interaction_status"
-      - name: Retain desktop GUI contract diagnostics
-        id: gui_diagnostics
-        if: ${{ always() && runner.os != 'Linux' }}
-        shell: bash
+          python scripts/build.py build-gui --parallel 3 --target neverd-gui-docking-tests
+          cp build-fixture/bin/libneverd_fixture.dylib build-gui/bin/
+      - name: Compare manual polling with the native event loop at unchanged gesture timing
         run: |
           python - <<'PY'
-          import hashlib
-          import json
-          import os
+          import json, os, platform, subprocess, time
           from pathlib import Path
-          import sys
-
-          build = Path("build-gui").resolve()
-          output = Path("build-gui-ci-diagnostics")
-          output.mkdir(exist_ok=False)
-          limit = 4 * 1024 * 1024
-          files = {
-              "units.txt": "ci-diagnostics/units.txt",
-              "controller.txt": "ci-diagnostics/controller.txt",
-              "controller.xml": "ci-diagnostics/controller.xml",
-              "ctest.xml": "ci-diagnostics/ctest.xml",
-              "ctest.log": "ci-diagnostics/ctest.log",
-              "ctest-exit-code.txt": "ci-diagnostics/ctest-exit-code.txt",
-              "native-frame.txt": "ci-diagnostics/native-frame.txt",
-              "native-appearance.txt": "ci-diagnostics/native-appearance.txt",
-              "native-appearance-150.txt": "ci-diagnostics/native-appearance-150.txt",
-              "native-docking.txt": "ci-diagnostics/native-docking.txt",
-              "native-interactions.txt": "ci-diagnostics/native-interactions.txt",
-              "native-interactions.xml": "ci-diagnostics/native-interactions.xml",
-              "LastTest.log": "Testing/Temporary/LastTest.log",
-              "LastTestsFailed.log": "Testing/Temporary/LastTestsFailed.log",
+          out = Path('build-gui/ci-diagnostics/drag-trace')
+          out.mkdir(parents=True, exist_ok=True)
+          binary = 'build-gui/bin/neverd-gui-docking-tests'
+          cases = {
+              'caption': ['lockedDragsStayFloating:caption'],
+              'preceding': ['floatingCaption', 'doubleClickDetachStartsLocked',
+                            'explicitDockIgnoresLock', 'lockedDragsStayFloating'],
+              'full': [],
           }
-          records = []
-          for name, relative in files.items():
-              source = build / relative
-              record = {"name": name, "source": relative}
-              try:
-                  if not source.exists():
-                      record["status"] = "missing"
-                  elif (source.is_symlink() or not source.is_file()
-                        or not source.resolve().is_relative_to(build)):
-                      record["status"] = "rejected_path"
-                  else:
-                      size = source.stat().st_size
-                      with source.open("rb") as stream:
-                          data = stream.read(limit + 1)
-                      captured = data[:limit]
-                      (output / name).write_bytes(captured)
-                      record.update({
-                          "status": "truncated" if len(data) > limit else "copied",
-                          "source_bytes": size,
-                          "captured_bytes": len(captured),
-                          "captured_sha256": hashlib.sha256(captured).hexdigest(),
-                      })
-              except OSError as error:
-                  record.update({"status": "io_error", "error": str(error)[:1024]})
-              records.append(record)
-          complete = all(record["status"] == "copied" or
-                         (record["name"] == "LastTestsFailed.log" and
-                          record["status"] == "missing") for record in records)
-          manifest = {
-              "schema": "neverd-gui-ci-diagnostics-v1",
-              "run_id": os.environ.get("GITHUB_RUN_ID"),
-              "run_attempt": os.environ.get("GITHUB_RUN_ATTEMPT"),
-              "head_sha": os.environ.get("GITHUB_SHA"),
-              "collection_complete": complete,
-              "test_success": "read original CTest exit and child results",
-              "per_file_bytes_cap": limit,
-              "payload_bytes_cap": len(files) * limit,
-              "manifest_bytes_cap": 64 * 1024,
-              "files": records,
-          }
-          encoded = (json.dumps(manifest, indent=2) + "\n").encode("utf-8")
-          if len(encoded) > 64 * 1024:
-              raise RuntimeError("GUI diagnostic manifest exceeds its fixed cap")
-          (output / "manifest.json").write_bytes(encoded)
-          with open(os.environ["GITHUB_OUTPUT"], "a") as stream:
-              stream.write("ready=true\n")
-          if not complete:
-              print("Incomplete GUI diagnostics; inspect the retained manifest.", file=sys.stderr)
-              sys.exit(1)
+          report = {'platform': platform.platform(), 'runs': []}
+          for command in [['sw_vers'], ['clang', '--version'], ['cmake', '--version'], ['git', 'rev-parse', 'HEAD']]:
+              report[' '.join(command)] = subprocess.check_output(command, text=True)
+          for kind, repeats in [('caption', 16), ('preceding', 8), ('full', 2)]:
+              for repeat in range(repeats):
+                  # Alternate order so an environment trend cannot favor one gesture.
+                  for mode in (['poll', 'exec'] if repeat % 2 == 0 else ['exec', 'poll']):
+                      name = f'{kind}-{repeat:02d}-{mode}'
+                      env = {**os.environ, 'NEVERD_TRACE_NATIVE_DRAG': '1'}
+                      if mode == 'exec':
+                          env['NEVERD_TRACE_NATIVE_EVENT_LOOP'] = '1'
+                      start = time.monotonic()
+                      with (out / (name + '.log')).open('w') as log:
+                          try:
+                              result = subprocess.run([binary, *cases[kind]], env=env,
+                                                      stdout=log, stderr=subprocess.STDOUT,
+                                                      timeout=210, check=False)
+                              code = result.returncode
+                          except subprocess.TimeoutExpired:
+                              code = 'timeout'
+                      text = (out / (name + '.log')).read_text()
+                      item = {'name': name, 'exit': code, 'seconds': time.monotonic() - start,
+                              'totals': [line for line in text.splitlines() if line.startswith('Totals:')],
+                              'failures': [line for line in text.splitlines() if line.startswith(('FAIL!', 'SKIP'))]}
+                      report['runs'].append(item)
+                      (out / 'summary.json').write_text(json.dumps(report, indent=2) + '\n')
+                      print(json.dumps(item), flush=True)
+          assert len(report['runs']) == 52
+          candidate = [r for r in report['runs'] if r['name'].endswith('-exec')]
+          control = [r for r in report['runs'] if r['name'].startswith('caption-') and r['name'].endswith('-poll')]
+          expected = {'caption': '3 passed, 0 failed, 0 skipped',
+                      'preceding': '8 passed, 0 failed, 0 skipped',
+                      'full': '73 passed, 0 failed, 1 skipped'}
+          report['controlReproduced'] = any(r['exit'] != 0 for r in control)
+          report['candidatePassed'] = all(r['exit'] == 0 and len(r['totals']) == 1 and expected[r['name'].split('-')[0]] in r['totals'][0] for r in candidate)
+          (out / 'summary.json').write_text(json.dumps(report, indent=2) + '\n')
+          if not report['controlReproduced'] or not report['candidatePassed']:
+              raise SystemExit(1)
           PY
-      - name: Upload desktop GUI contract diagnostics
-        if: ${{ always() && runner.os != 'Linux' && steps.gui_diagnostics.outputs.ready == 'true' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - name: Preserve bounded native evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: desktop-gui-${{ runner.os }}-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
-          path: build-gui-ci-diagnostics/
-          if-no-files-found: error
+          name: macos-event-loop-diagnosis-${{ github.run_id }}
+          path: |
+            build-gui/ci-diagnostics/drag-trace/
+            build-gui/neverd-build-receipt.json
+            build-gui/CMakeCache.txt
           retention-days: 7
-      # These binaries use a deterministic fixture, not the NeverD engine.
-      # Intentionally do not upload or publish them as product artifacts.
+          if-no-files-found: warn

@@ -18,6 +18,7 @@
 #include <QCursor>
 #include <QDebug>
 #include <QDir>
+#include <QEventLoop>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QLabel>
@@ -122,6 +123,25 @@ bool place(QWidget &window, QPoint position) {
           .arg(position.x())
           .arg(position.y()));
 }
+
+#ifdef Q_OS_MACOS
+bool waitForNativeDrag(std::future<std::pair<bool, bool>> &completion) {
+  QEventLoop loop;
+  QTimer ready, deadline;
+  QObject::connect(&ready, &QTimer::timeout, &loop, [&] {
+    if (completion.wait_for(std::chrono::milliseconds(0)) ==
+        std::future_status::ready)
+      loop.quit();
+  });
+  QObject::connect(&deadline, &QTimer::timeout, &loop, &QEventLoop::quit);
+  ready.start(50);
+  deadline.setSingleShot(true);
+  deadline.start(5000);
+  loop.exec();
+  return completion.wait_for(std::chrono::milliseconds(0)) ==
+         std::future_status::ready;
+}
+#endif
 
 class Pointer {
   QPointer<QWidget> Pressed;
@@ -288,6 +308,11 @@ private:
         nullptr, type, CGPointMake(point.x(), point.y()), kCGMouseButtonLeft);
     if (!event)
       return false;
+    if (qEnvironmentVariableIsSet("NEVERD_TRACE_NATIVE_DRAG"))
+      qInfo() << "native-post" << int(type) << point
+              << CGEventGetTimestamp(event)
+              << CGEventGetIntegerValueField(event, kCGMouseEventDeltaX)
+              << CGEventGetIntegerValueField(event, kCGMouseEventDeltaY);
     CGEventPost(kCGHIDEventTap, event);
     CFRelease(event);
     return true;
@@ -562,6 +587,11 @@ private slots:
       start = tabs->tabRect(tabs->currentIndex()).center();
     }
     const QPoint before = floating->pos();
+    qInfo() << "locked-drag before" << tab << floating->geometry()
+            << source->mapToGlobal(start) << source->rect()
+            << desktop.Window.mapToGlobal(desktop.Window.rect().center())
+            << floating->screen()->availableGeometry()
+            << floating->isActiveWindow() << QApplication::activeWindow();
     if (onWayland())
       QVERIFY(shell(
           QStringLiteral("global.neverdBeforeMove = (%1).get_frame_rect();")
@@ -581,9 +611,13 @@ private slots:
     observePreview.start(50);
     auto completion = pointer.finishNativeDrag(
         desktop.Window.mapToGlobal(desktop.Window.rect().center()));
-    QTRY_VERIFY_WITH_TIMEOUT(completion.wait_for(std::chrono::milliseconds(
-                                 0)) == std::future_status::ready,
-                             5000);
+    if (qEnvironmentVariableIsSet("NEVERD_TRACE_NATIVE_EVENT_LOOP")) {
+      QVERIFY(waitForNativeDrag(completion));
+    } else {
+      QTRY_VERIFY_WITH_TIMEOUT(completion.wait_for(std::chrono::milliseconds(
+                                   0)) == std::future_status::ready,
+                               5000);
+    }
     const auto completed = completion.get();
     moved = completed.first;
     released = completed.second;
@@ -600,6 +634,8 @@ private slots:
 #endif
     QTRY_VERIFY_WITH_TIMEOUT(released, 5000);
     QTest::qWait(150);
+    qInfo() << "locked-drag after" << tab << floating->geometry()
+            << QCursor::pos() << floating->isActiveWindow();
     QVERIFY(moved);
     QVERIFY(!preview);
     QVERIFY(desktop.Source.isFloating());
@@ -677,9 +713,13 @@ private slots:
     observePreview.start(50);
     auto completion =
         pointer.finishNativeDrag(floating->mapToGlobal(start + delta));
-    QTRY_VERIFY_WITH_TIMEOUT(completion.wait_for(std::chrono::milliseconds(
-                                 0)) == std::future_status::ready,
-                             5000);
+    if (qEnvironmentVariableIsSet("NEVERD_TRACE_NATIVE_EVENT_LOOP")) {
+      QVERIFY(waitForNativeDrag(completion));
+    } else {
+      QTRY_VERIFY_WITH_TIMEOUT(completion.wait_for(std::chrono::milliseconds(
+                                   0)) == std::future_status::ready,
+                               5000);
+    }
     const auto completed = completion.get();
     moved = completed.first;
     released = completed.second;
