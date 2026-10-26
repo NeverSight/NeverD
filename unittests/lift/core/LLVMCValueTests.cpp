@@ -6722,10 +6722,60 @@ uint64_t ABI observed_callee(uint32_t first, ...) {
   va_list ap; va_start(ap, first); ++calls;
   errors += va_arg(ap, double) != 1.5; va_end(ap); return first;
 }
+
+TEST(LLVMCValues, AFixedCallSiteKeepsItsOwnCallingConvention) {
+  using namespace neverd;
+  if (llvm::Triple(llvm::sys::getDefaultTargetTriple()).getArch() !=
+      llvm::Triple::x86_64)
+    GTEST_SKIP() << "Native Windows x64 ABI execution requires x64";
+  for (bool Preserve : {false, true}) {
+    SCOPED_TRACE(Preserve);
+    llvm::LLVMContext Context;
+    llvm::Module Module("call-site-convention", Context);
+    Module.setDataLayout("e-p:64:64");
+    llvm::IRBuilder<> Builder(Context);
+    auto *Declared = llvm::Function::Create(
+        llvm::FunctionType::get(Builder.getInt64Ty(), {Builder.getInt32Ty()},
+                                false),
+        llvm::GlobalValue::ExternalLinkage, "observed_callee", Module);
+    auto *Caller = llvm::Function::Create(
+        llvm::FunctionType::get(Builder.getInt64Ty(), false),
+        llvm::GlobalValue::ExternalLinkage, "call_site", Module);
+    Builder.SetInsertPoint(llvm::BasicBlock::Create(Context, "entry", Caller));
+    auto *Call = Builder.CreateCall(Declared, {Builder.getInt32(7)});
+    Call->setCallingConv(llvm::CallingConv::Win64);
+    Builder.CreateRet(Call);
+    ASSERT_FALSE(llvm::verifyModule(Module, &llvm::errs()));
+    CEmitterOptions Options;
+    Options.TheArch = Arch::X64;
+    Options.PreserveLLVMFunctionTypes = Preserve;
+    std::string Source;
+    llvm::raw_string_ostream Output(Source);
+    ASSERT_TRUE(LLVMCEmitter().emit(Module, Output, Options));
+    ASSERT_NE(Source.find("observed_callee(uint32_t);"), std::string::npos)
+        << Source;
+    const std::string Harness = R"(
+#include <stdint.h>
+#if defined(_MSC_VER) && defined(_M_X64)
+#define ABI
+#else
+#define ABI __attribute__((ms_abi))
+#endif
+static unsigned calls, errors;
+uint64_t ABI observed_callee(uint32_t first) {
+  ++calls; errors += first != 7; return first;
+}
 extern uint64_t call_site(void);
 int main(void) { return call_site() != 7 || calls != 1 || errors; }
 )";
     for (llvm::StringRef Optimization : {"-O0", "-O2"})
       compileAndRun(Source, Optimization, {}, false, false, {}, Harness);
   }
+}
+extern uint64_t call_site(void);
+int main(void) { return call_site() != 7 || calls != 1 || errors; }
+)";
+    for (llvm::StringRef Optimization : {"-O0", "-O2"})
+      compileAndRun(Source, Optimization, {}, false, false, {}, Harness);
+}
 }

@@ -80,12 +80,16 @@
 namespace neverd {
 
 namespace {
-std::string retainCallSiteCType(const llvm::CallBase &Call,
-                                llvm::StringRef Type, std::string Cast) {
+bool needsCallSiteCType(const llvm::CallBase &Call) {
   const auto *Declared = llvm::dyn_cast<llvm::Function>(
       Call.getCalledOperand()->stripPointerCasts());
-  if (!Declared || (Declared->getFunctionType() == Call.getFunctionType() &&
-                    Declared->getCallingConv() == Call.getCallingConv()))
+  return Declared && (Declared->getFunctionType() != Call.getFunctionType() ||
+                      Declared->getCallingConv() != Call.getCallingConv());
+}
+
+std::string retainCallSiteCType(const llvm::CallBase &Call,
+                                llvm::StringRef Type, std::string Cast) {
+  if (!needsCallSiteCType(Call))
     return Cast;
   // Clang can lower a directly cast function designator using its original
   // declaration's non-variadic ABI, dropping Windows x64's floating GPR copy.
@@ -5778,7 +5782,9 @@ std::string LLVMCWriter::callExpr(const llvm::CallBase &Call, bool Statement) {
   }
 
   std::string CalleeName;
-  if (auto *Callee = Call.getCalledFunction()) {
+  if (needsCallSiteCType(Call)) {
+    CalleeName = preservedIndirectCalleeStr(Call);
+  } else if (auto *Callee = Call.getCalledFunction()) {
     const std::string RawCalleeName = Callee->getName().str();
     const char *CN = llvmIntrinsicToCName(RawCalleeName.c_str());
     if (CN)
