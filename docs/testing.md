@@ -10914,7 +10914,7 @@ parameter/register-spill origins whose numeric values are both unknown,
 constant-return branch pruning with unanimous and conflicting finite values,
 excluding target proofs from impossible caller paths,
 unknown and frame-relative operands, unrelated-input cache churn, equivalent
-generic leaf reuse, later-root reclamation of unreferenced solver variants and
+generic leaf reuse, pressure-triggered later-root reclamation of unreferenced solver variants and
 their orphan parent dependency chains,
 demand-driven root specialization, preserving
 four concrete caller variants before eagerly specializing unknown wrapper

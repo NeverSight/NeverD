@@ -354,11 +354,13 @@ these conditional proof counts are not execution coverage or a promise of
 monotonic growth. Other caller inputs remain open.
 Only final replay of converged entries publishes evidence and dependencies.
 Solver-only summaries not referenced by a final edge or root may be reclaimed
-when a caller loop widens their inputs. Unrelated input alternatives use the
+when a caller loop widens their inputs. Unrelated inputs within one root use the
 existing specialization limit instead of evicting and recomputing each other;
-pinned proofs are never evicted. After a root has finished publishing its
-dependencies, unused temporary parents and their newly unreferenced children
-are reclaimed together before the next root. Function-call-free generic
+pinned proofs are never evicted. When a later root needs a specialization,
+unused earlier parents and their unreferenced children can be reclaimed
+together. Published dependencies and the current root stay live; reusable
+completed inputs remain cached while no specialization needs their space.
+Function-call-free generic
 summaries with identical projected inputs are reused without losing input facts.
 All generic roots remain available, but standalone specialization is skipped
 when the static CFG/direct-call graph cannot reach an unresolved CALLX; actual
