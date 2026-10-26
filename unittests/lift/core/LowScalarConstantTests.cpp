@@ -8,8 +8,11 @@
 
 #include "gtest/gtest.h"
 
+#include "neverd/ir/Limits.h"
 #include "neverd/ir/low/LowScalarConstant.h"
 #include "neverd/ir/low/NdOpEmulator.h"
+
+#include <vector>
 
 namespace {
 using namespace neverd;
@@ -236,5 +239,98 @@ TEST(LowScalarConstant, BitwisePartialMasksAndMalformedWidthsStayUnknown) {
           Op.Output.Size = 0;
         EXPECT_FALSE(lowScalarConstantResult(Op, constant));
       }
+}
+LowFunc registerCall(std::vector<LowOp> Setup, NdVar Target) {
+  LowFunc Function;
+  Function.Blocks.emplace_back();
+  auto &Operations = Function.Blocks.back().Ops;
+  Operations = std::move(Setup);
+  for (size_t I = 0; I < Operations.size(); ++I) {
+    Operations[I].Addr = 0x1000 + I;
+    Operations[I].Seq = 0;
+  }
+  LowOp Call;
+  Call.Opcode = NdOp::INDIR_CALL;
+  Call.Addr = 0x2000;
+  Call.Seq = 1;
+  Call.addInput(Target);
+  Operations.push_back(Call);
+  return Function;
+}
+
+TEST(ConstantRegisterCall, ExactArithmeticRetainsTheOriginalOccurrence) {
+  auto Seed = unary(NdOp::COPY, 8, 0x140001000, 8);
+  auto Add = binary(NdOp::INT_ADD, 8, 0, 0x40);
+  Add.Inputs[0] = Seed.Output;
+  const auto Function = registerCall({Seed, Add}, Add.Output);
+  const auto Targets = constantRegisterCallTargets(Function);
+  ASSERT_EQ(Targets.size(), 1u);
+  EXPECT_EQ(Targets.begin()->second, 0x140001040u);
+  EXPECT_EQ(Targets.begin()->first,
+            sourceCallOccurrenceKey(Function.Blocks.front().Ops.back()));
+  EXPECT_FALSE(Targets.begin()->first.StaticTarget);
+  EXPECT_EQ(Function.Blocks.front().Ops.back().Opcode, NdOp::INDIR_CALL);
+}
+
+TEST(ConstantRegisterCall, UnknownAndPartialWritesNeverRetainAStaleTarget) {
+  const auto Seed = unary(NdOp::COPY, 8, 0x140001040, 8);
+  for (const auto Opcode : {NdOp::COPY, NdOp::LOAD})
+    for (const uint16_t Width : {1, 2, 4, 8, 16}) {
+      SCOPED_TRACE(::testing::Message() << unsigned(Opcode) << ':' << Width);
+      LowOp Overwrite;
+      Overwrite.Opcode = Opcode;
+      Overwrite.Output = NdVar::reg(0, Width);
+      Overwrite.addInput(NdVar::reg(32, Width));
+      EXPECT_TRUE(constantRegisterCallTargets(
+                      registerCall({Seed, Overwrite}, Seed.Output))
+                      .empty());
+    }
+  // Knowing only the low four bytes cannot identify an eight-byte target.
+  auto Narrow = Seed;
+  Narrow.Output.Size = Narrow.Inputs[0].Size = 4;
+  EXPECT_TRUE(
+      constantRegisterCallTargets(registerCall({Narrow}, Seed.Output)).empty());
+}
+
+TEST(ConstantRegisterCall, CallsAndOpaqueEffectsKillEarlierRegisterFacts) {
+  const auto Seed = unary(NdOp::COPY, 8, 0x140001040, 8);
+  for (const auto Opcode : {NdOp::CALL, NdOp::INDIR_CALL, NdOp::INTRINSIC}) {
+    LowOp Effect;
+    Effect.Opcode = Opcode;
+    Effect.addInput(NdVar::cst(0x3000, 8));
+    EXPECT_TRUE(
+        constantRegisterCallTargets(registerCall({Seed, Effect}, Seed.Output))
+            .empty());
+  }
+  auto Function = registerCall({Seed}, Seed.Output);
+  const auto Call = Function.Blocks.front().Ops.back();
+  Function.Blocks.front().Ops.pop_back();
+  Function.Blocks.emplace_back();
+  Function.Blocks.back().Ops.push_back(Call);
+  EXPECT_TRUE(constantRegisterCallTargets(Function).empty());
+}
+
+TEST(ConstantRegisterCall, MemorySlotsAndReusedTemporariesAreNotCodeValues) {
+  const auto Seed = unary(NdOp::COPY, 8, 0x140001040, 8);
+  EXPECT_TRUE(constantRegisterCallTargets(
+                  registerCall({Seed}, NdVar::cst(0x140001040, 8)))
+                  .empty());
+  auto Temp = Seed;
+  Temp.Output = NdVar::tmp(0x10000, 8);
+  EXPECT_TRUE(
+      constantRegisterCallTargets(registerCall({Temp}, Temp.Output)).empty());
+  auto SameInstruction = registerCall({Temp}, Temp.Output);
+  SameInstruction.Blocks.front().Ops.front().Addr = 0x2000;
+  EXPECT_EQ(constantRegisterCallTargets(SameInstruction).size(), 1u);
+}
+
+TEST(ConstantRegisterCall, ExhaustedWorkCannotPublishAPrefix) {
+  const auto Seed = unary(NdOp::COPY, 8, 0x140001040, 8);
+  auto Function = registerCall({Seed}, Seed.Output);
+  ASSERT_EQ(constantRegisterCallTargets(Function).size(), 1u);
+  Function.Blocks.emplace_back();
+  Function.Blocks.back().Ops.resize(
+      limits::ir::kConstantRegisterCallOperations);
+  EXPECT_TRUE(constantRegisterCallTargets(Function).empty());
 }
 } // namespace

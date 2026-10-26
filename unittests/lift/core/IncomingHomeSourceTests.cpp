@@ -17,6 +17,7 @@
 #include "neverd/ir/SourceABI.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/low/CFGBuilder.h"
+#include "neverd/ir/low/LowScalarConstant.h"
 #include "neverd/ir/low/SourceCallOccurrence.h"
 #include "neverd/ir/low/SourceFrameAnalysis.h"
 #include "neverd/ir/med/LowToMed.h"
@@ -223,6 +224,33 @@ void runHomeSourceMatrix(bool Explicit, bool SelectedCaller = false,
             }
             auto Result = Pipeline().run(Image, Context, Options);
             ASSERT_TRUE(Result.Success) << Result.Error;
+            if (Indirect) {
+              const auto Low =
+                  std::find_if(Result.LowFuncs.begin(), Result.LowFuncs.end(),
+                               [](const LowFunc &Function) {
+                                 return Function.Entry == Caller;
+                               });
+              ASSERT_NE(Low, Result.LowFuncs.end());
+              const auto Targets = constantRegisterCallTargets(*Low);
+              ASSERT_EQ(Targets.size(), 1u);
+              EXPECT_EQ(Targets.begin()->second, Callee);
+              EXPECT_EQ(Targets.begin()->first.Opcode, NdOp::INDIR_CALL);
+              EXPECT_FALSE(Targets.begin()->first.StaticTarget);
+              const auto Med =
+                  std::find_if(Result.MedFuncs.begin(), Result.MedFuncs.end(),
+                               [](const MedFunc &Function) {
+                                 return Function.Entry == Caller;
+                               });
+              ASSERT_NE(Med, Result.MedFuncs.end());
+              const auto Call =
+                  std::find_if(Med->CallInfos.begin(), Med->CallInfos.end(),
+                               [](const MedCallInfo &Info) {
+                                 return Info.TargetAddr == Callee;
+                               });
+              ASSERT_NE(Call, Med->CallInfos.end());
+              ASSERT_TRUE(Call->SourceCallHint);
+              EXPECT_EQ(Call->Args.size(), 1u);
+            }
             if (SelectedCaller) {
               ASSERT_EQ(Result.MedFuncs.size(), 1u);
               const auto &Calls = Result.MedFuncs.front().CallInfos;
