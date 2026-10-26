@@ -31,8 +31,10 @@
 
 namespace neverd {
 namespace {
-using Key = std::tuple<MedVar::VarKind, int, int>;
-Key key(const MedVar &Value) { return {Value.Kind, Value.Id, Value.SSAVer}; }
+using Key = std::tuple<MedVar::VarKind, int, uint16_t, int>;
+Key key(const MedVar &Value) {
+  return {Value.Kind, Value.Id, Value.Size, Value.SSAVer};
+}
 
 bool supported(NdOp Opcode) {
   return Opcode == NdOp::COPY || Opcode == NdOp::INT_ADD ||
@@ -189,12 +191,14 @@ inferIncomingStackLeaf(const BinaryImage &Image, const LowFunc &Low,
   enum class Role { Scalar, Address, Saved };
   std::map<Key, Role> Values;
   auto Read = [&](const MedVar &Value) -> std::optional<Role> {
-    if (Value.Size != TRI.PointerSize)
+    if (!Value.Size || Value.Size > TRI.PointerSize)
       return {};
     if (Value.isConst())
       return Role::Scalar;
     if (auto It = Values.find(key(Value)); It != Values.end())
       return It->second;
+    if (Value.Size != TRI.PointerSize)
+      return {};
     if (Value.Kind == MedVar::Param && Value.RegOff == kNoParamReg &&
         Value.Id >= RegisterCount &&
         Value.Id - RegisterCount <=
@@ -273,7 +277,15 @@ inferIncomingStackLeaf(const BinaryImage &Image, const LowFunc &Low,
       Returned = true;
       continue;
     }
-    if (!Result || Op.Output.Size != TRI.PointerSize ||
+    // AArch64 stack ADD/SUB exposes its immediate through a four-byte
+    // temporary even when the pointer arithmetic is eight bytes. This is a
+    // known scalar operand, not permission to infer a narrow incoming word.
+    const bool ScalarImmediate =
+        Op.Opcode == NdOp::COPY && Op.NumInputs == 1 &&
+        Op.Inputs[0].isConst() && Op.Output.Kind == MedVar::Temp &&
+        Op.Output.Size && Op.Output.Size <= TRI.PointerSize &&
+        Op.Inputs[0].Size == Op.Output.Size;
+    if (!Result || (Op.Output.Size != TRI.PointerSize && !ScalarImmediate) ||
         (Op.Output.Kind != MedVar::Reg && Op.Output.Kind != MedVar::Temp) ||
         !Values.emplace(key(Op.Output), *Result).second)
       return {};
