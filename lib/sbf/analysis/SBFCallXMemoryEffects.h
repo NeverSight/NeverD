@@ -17,7 +17,10 @@
 #include "neverd/sbf/analysis/SBFDataflow.h"
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
+#include <map>
+#include <tuple>
 #include <vector>
 
 namespace neverd::sbf::callx_detail {
@@ -46,6 +49,35 @@ struct MemoryEffects {
   bool invalidate(ScratchState &Scratch,
                   const std::array<ProvenValueSet, kRegisterCount> &Entry,
                   const SBFProgram &Program) const;
+};
+
+/// Full-width postconditions at absolute scratch addresses or relative to a
+/// function's entry registers. Symbolic keys are bases and signed
+/// displacements, never synthetic VM addresses. Distinct entry registers may
+/// alias; a write through either invalidates the other's cells. At a CFG join
+/// only identical postconditions survive.
+class MemoryPostconditions {
+public:
+  void clear() { Values.clear(); }
+  void store(const RegisterValue &Address, uint64_t Size,
+             const RegisterValue &Value);
+  RegisterValue read(const RegisterValue &Address) const;
+  void meet(const MemoryPostconditions &Other);
+  void invalidate(const MemoryEffects &Effects, const RegisterState &Entry,
+                  const SBFProgram &Program);
+  void include(const MemoryPostconditions &Callee, const RegisterState &Entry,
+               const SBFProgram &Program);
+  size_t apply(ScratchState &Scratch,
+               const std::array<ProvenValueSet, kRegisterCount> &Entry,
+               const SBFProgram &Program) const;
+  size_t size() const { return Values.size(); }
+  uint64_t retainedByteEstimate() const;
+  bool operator==(const MemoryPostconditions &) const = default;
+
+private:
+  void invalidate(const RegisterValue &Address, uint64_t Size);
+  std::map<std::tuple<RegisterValue::Kind, uint64_t, int64_t>, RegisterValue>
+      Values;
 };
 
 } // namespace neverd::sbf::callx_detail

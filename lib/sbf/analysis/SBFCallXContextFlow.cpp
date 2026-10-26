@@ -66,6 +66,7 @@ struct ContextState {
   ScratchState Scratch;
   RegisterState Origins{};
   ScratchState OriginScratch;
+  MemoryPostconditions Postconditions;
 
   ContextState() = default;
   ContextState(const MachineState &State) : Scratch(State.Scratch) {
@@ -90,6 +91,7 @@ struct ContextState {
     Scratch.Memory.meet(Other.Scratch.Memory);
     Scratch.Values.joinValues(Other.Scratch.Values);
     OriginScratch.meet(Other.OriginScratch);
+    Postconditions.meet(Other.Postconditions);
   }
 };
 
@@ -140,7 +142,8 @@ void pushAbstractFrame(ContextState &State, const SBFProgram &Program) {
 
 uint64_t stateBytes(const ContextState &State) {
   uint64_t Bytes = sizeof(State) + State.Scratch.retainedByteEstimate() +
-                   State.OriginScratch.retainedByteEstimate();
+                   State.OriginScratch.retainedByteEstimate() +
+                   State.Postconditions.retainedByteEstimate();
   for (const auto &Value : State.Registers)
     Bytes += Value.allocatedBytes();
   return Bytes;
@@ -523,10 +526,30 @@ llvm::ArrayRef<RegisterValue> possibleValues(const ProvenValueSet &Values) {
 
 void ContextFlow::transferValues(const MedInstruction &Instruction,
                                  ContextState &State) {
+  const auto OriginAddress = [&](unsigned Register) {
+    RegisterState Entry{};
+    Entry[0] = State.Origins[Register];
+    return substituteOrigin(
+        {RegisterValue::Kind::StackAddress, 1, Instruction.Offset}, Entry,
+        Program);
+  };
+  const auto LoadedOrigin =
+      Instruction.Op == Operation::Load &&
+              Instruction.Semantics.MemoryWidth == kDoubleWordBitWidth
+          ? State.Postconditions.read(OriginAddress(Instruction.Src))
+          : RegisterValue{};
   MachineState Scalar = State.scalar();
   MachineState OriginMemory = Scalar;
   OriginMemory.Scratch = State.OriginScratch;
   if (Instruction.Op == Operation::Store) {
+    State.Postconditions.store(
+        OriginAddress(Instruction.Dst), Instruction.Width / kBitsPerByte,
+        Instruction.Form == OperandForm::StoreReg
+            ? State.Origins[Instruction.Src]
+            : RegisterValue{RegisterValue::Kind::Constant,
+                            normalizeImmediate(Instruction.Immediate,
+                                               Instruction.Semantics.Immediate),
+                            0});
     MedInstruction Store = Instruction;
     if (Store.Form == OperandForm::StoreReg) {
       Store.Src = Store.Dst == 0 ? 1 : 0;
@@ -536,6 +559,9 @@ void ContextFlow::transferValues(const MedInstruction &Instruction,
                   ScratchLoadPolicy::ProvenValues);
     State.OriginScratch = std::move(OriginMemory.Scratch);
   } else if (Instruction.Call != CallKind::None) {
+    if (Instruction.Call != CallKind::Syscall || !Instruction.Syscall ||
+        !preservesCallerMemory(Instruction.Syscall->ID))
+      State.Postconditions.clear();
     applyTransfer(Instruction, OriginMemory, Program.ExecutableImage,
                   ScratchLoadPolicy::ProvenValues);
     State.OriginScratch = std::move(OriginMemory.Scratch);
@@ -547,6 +573,8 @@ void ContextFlow::transferValues(const MedInstruction &Instruction,
     const auto Origin = OriginMemory.Registers[Instruction.Dst];
     if (Origin.ValueKind != RegisterValue::Kind::Unknown)
       State.Origins[Instruction.Dst] = Origin;
+    else if (LoadedOrigin.ValueKind != RegisterValue::Kind::Unknown)
+      State.Origins[Instruction.Dst] = LoadedOrigin;
   }
   if (Instruction.Op == Operation::Store) {
     // Lift the canonical store over the complete base/value alternatives.
@@ -878,6 +906,29 @@ llvm::Expected<bool> ContextFlow::call(FunctionContext &Context,
     else
       PreservedOrigins.clear();
   }
+  MemoryPostconditions PreservedPostconditions = State.Postconditions;
+  ScratchState ReturnScratch;
+  if (Callee && Callee->Return) {
+    ReturnScratch = PreserveInput || ApplyEffects ? std::move(Preserved)
+                                                  : Callee->Return->Scratch;
+    if (Callee->Generic && !EquivalentLeaf && !PreserveInput && !ApplyEffects) {
+      // Generic frame coordinates are a private symbolic anchor. Only
+      // explicitly substituted postconditions can restore caller-frame cells.
+      ReturnScratch.Memory.clear();
+      ReturnScratch.Values.discardFrameCoordinates();
+    }
+    if (!Edge.LegacyRuntime) {
+      PreservedPostconditions.invalidate(Callee->Effects, OriginEntry, Program);
+      PreservedPostconditions.include(Callee->Return->Postconditions,
+                                      OriginEntry, Program);
+      Edge.AppliedStoredValues = Callee->Return->Postconditions.apply(
+          ReturnScratch, ValueEntry.Registers, Program);
+    } else {
+      PreservedPostconditions.clear();
+    }
+  } else {
+    PreservedPostconditions.clear();
+  }
   if (Collect) {
     if (auto Error = retain(sizeof(Edge)))
       return std::move(Error);
@@ -891,15 +942,8 @@ llvm::Expected<bool> ContextFlow::call(FunctionContext &Context,
     if (!Callee->Return)
       return false;
     State.Registers[0] = Callee->Return->Registers[0];
-    State.Scratch = PreserveInput || ApplyEffects ? std::move(Preserved)
-                                                  : Callee->Return->Scratch;
+    State.Scratch = std::move(ReturnScratch);
     if (Callee->Generic && !EquivalentLeaf) {
-      // Generic frame coordinates are a private symbolic anchor. Until an
-      // output is instantiated, only frame-independent values may escape it.
-      if (!PreserveInput && !ApplyEffects) {
-        State.Scratch.Memory.clear();
-        State.Scratch.Values.discardFrameCoordinates();
-      }
       const auto Origin = Callee->Return->Origins[0];
       std::optional<ProvenValueSet> Instantiated;
       if (!Edge.LegacyRuntime &&
@@ -931,6 +975,7 @@ llvm::Expected<bool> ContextFlow::call(FunctionContext &Context,
                            : substituteOrigin(Callee->Return->Origins[0],
                                               OriginEntry, Program);
     State.OriginScratch = std::move(PreservedOrigins);
+    State.Postconditions = std::move(PreservedPostconditions);
   }
   return true;
 }
@@ -1015,6 +1060,7 @@ ContextFlow::summarize(size_t Entry, const ContextState &Incoming, bool Generic,
   ContextState Input = Generic ? genericInput() : Incoming;
   Input.Origins = symbolicInputs();
   Input.OriginScratch.clear();
+  Input.Postconditions.clear();
   for (unsigned R = 0; R < kRegisterCount; ++R)
     if (!(InputRegisters[Entry] & (uint16_t{1} << R))) {
       ProjectedRegisters += !Generic && !Input.Registers[R].unknown();
@@ -1134,7 +1180,8 @@ ContextFlow::summarize(size_t Entry, const ContextState &Incoming, bool Generic,
     if (Merged.Registers == It->second.Entry.Registers &&
         Merged.Scratch == It->second.Entry.Scratch &&
         Merged.Origins == It->second.Entry.Origins &&
-        Merged.OriginScratch == It->second.Entry.OriginScratch)
+        Merged.OriginScratch == It->second.Entry.OriginScratch &&
+        Merged.Postconditions == It->second.Entry.Postconditions)
       return llvm::Error::success();
     const uint64_t OldCharge = StateCharge(It->second.Entry);
     const uint64_t NewCharge = StateCharge(Merged);
@@ -1435,6 +1482,7 @@ llvm::Expected<CallXContextReport> ContextFlow::run() {
         Summary.ReturnInputExpression = std::make_pair(
             static_cast<unsigned>(Origin.Value - 1), Origin.Offset);
       Summary.OutputScratchWords = Context->Return->Scratch.Values.size();
+      Summary.OutputParameterizedWords = Context->Return->Postconditions.size();
     }
     Summary.InputScratchWords = Context->Input.Scratch.Values.size();
     Summary.IsRoot = Context->IsRoot;

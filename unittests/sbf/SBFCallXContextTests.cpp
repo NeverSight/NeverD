@@ -26,7 +26,9 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <optional>
 #include <set>
+#include <utility>
 #include <vector>
 
 namespace neverd::sbf {
@@ -686,6 +688,157 @@ TEST(SBFCallXContexts, ComposesParameterizedWritesAndReturnAddresses) {
       ASSERT_TRUE(static_cast<bool>(Raw)) << llvm::toString(Raw.takeError());
       EXPECT_EQ(Raw->Status, ExecutionStatus::Returned) << Raw->Error;
       EXPECT_EQ(Raw->ReturnValue, 42u);
+    }
+  }
+}
+
+TEST(SBFCallXContexts, InstantiatesMustStoreValuesThroughGeneralizedWrappers) {
+  // Vary both the output address and target past the four retained variants.
+  // The generic leaf and wrapper must express the store using entry inputs,
+  // rather than borrowing a previously specialized caller's memory snapshot.
+  enum class StoreCase {
+    Argument,
+    Constant,
+    Absolute,
+    Logged,
+    Partial,
+    Aliased,
+    Conditional,
+    Conflicting
+  };
+  for (const auto Case :
+       {StoreCase::Argument, StoreCase::Constant, StoreCase::Absolute,
+        StoreCase::Logged, StoreCase::Partial, StoreCase::Aliased,
+        StoreCase::Conditional, StoreCase::Conflicting}) {
+    SCOPED_TRACE(static_cast<unsigned>(Case));
+    const size_t Count = kCallXContextSpecializationsPerEntry + 2;
+    std::vector<test::EncodedInstruction> Text;
+    std::vector<size_t> Calls, CallXs, Literals;
+    const bool Branches =
+        Case == StoreCase::Conditional || Case == StoreCase::Conflicting;
+    const va_t AbsoluteOutput = kHeapStart + 16;
+    if (Branches)
+      Text.push_back(encode(Opcode::MOV64_REG, 6, 1));
+    for (size_t I = 0; I < Count; ++I) {
+      if (Case == StoreCase::Absolute) {
+        const auto Literal = test::loadImm64(1, AbsoluteOutput);
+        Text.insert(Text.end(), Literal.begin(), Literal.end());
+      } else {
+        Text.push_back(encode(Opcode::MOV64_REG, 1, 10));
+        Text.push_back(encode(Opcode::ADD64_IMM, 1, 0, 0,
+                              -static_cast<int32_t>((I + 1) * 16)));
+      }
+      Literals.push_back(Text.size());
+      const auto Literal = test::loadImm64(2, 0);
+      Text.insert(Text.end(), Literal.begin(), Literal.end());
+      Text.push_back(encode(Opcode::MOV64_REG, 3, 1));
+      Text.push_back(encode(Opcode::MOV64_IMM, 4, 0, 0, 0));
+      if (Branches)
+        Text.push_back(encode(Opcode::LD_DW_REG, 5, 6));
+      Calls.push_back(Text.size());
+      Text.push_back({});
+      Text.push_back(encode(Opcode::LD_DW_REG, 2, 0));
+      CallXs.push_back(Text.size());
+      Text.push_back(encode(Opcode::CALL_REG, 2));
+    }
+    Text.push_back(encode(Opcode::EXIT));
+    const size_t Middle = Text.size();
+    Text.push_back(encode(Opcode::MOV64_REG, 6, 1));
+    Text.push_back(encode(Opcode::CALL_IMM, 0, 1, 0, 2));
+    Text.push_back(encode(Opcode::MOV64_REG, 0, 6));
+    Text.push_back(encode(Opcode::EXIT));
+    const size_t Leaf = Text.size();
+    std::optional<size_t> ConstantLiteral;
+    if (Case == StoreCase::Constant) {
+      ConstantLiteral = Text.size();
+      const auto Literal = test::loadImm64(2, 0);
+      Text.insert(Text.end(), Literal.begin(), Literal.end());
+    }
+    if (Case == StoreCase::Absolute) {
+      const auto Literal = test::loadImm64(3, AbsoluteOutput);
+      Text.insert(Text.end(), Literal.begin(), Literal.end());
+    }
+    if (Case == StoreCase::Conditional)
+      Text.push_back(encode(Opcode::JEQ64_IMM, 5, 0, 1, 0));
+    if (Case == StoreCase::Conflicting)
+      Text.push_back(encode(Opcode::JEQ64_IMM, 5, 0, 2, 0));
+    Text.push_back(
+        encode(Opcode::ST_DW_REG, Case == StoreCase::Absolute ? 3 : 1, 2));
+    if (Case == StoreCase::Conflicting) {
+      Text.push_back(encode(Opcode::JA, 0, 0, 1));
+      Text.push_back(encode(Opcode::ST_DW_REG, 1, 4));
+    }
+    if (Case == StoreCase::Logged)
+      Text.push_back(encode(Opcode::CALL_IMM, 0, 0, 0,
+                            getSyscallInfo(Syscall::Log64)->Hash));
+    if (Case == StoreCase::Partial)
+      Text.push_back(encode(Opcode::ST_B_IMM, 1, 0, 0, 0));
+    if (Case == StoreCase::Aliased)
+      Text.push_back(encode(Opcode::ST_DW_REG, 3, 4));
+    Text.push_back(encode(Opcode::EXIT));
+    const size_t Targets = Text.size();
+    for (size_t I = 0; I < Count; ++I) {
+      const auto Literal =
+          test::loadImm64(2, kBytecodeStart + (Targets + I * 2) * 8);
+      std::copy(Literal.begin(), Literal.end(), Text.begin() + Literals[I]);
+      Text[Calls[I]] = encode(Opcode::CALL_IMM, 0, 1, 0, Middle - Calls[I] - 1);
+      Text.push_back(encode(Opcode::MOV64_IMM, 0, 0, 0, 100 + I));
+      Text.push_back(encode(Opcode::EXIT));
+    }
+    if (ConstantLiteral) {
+      const auto Literal = test::loadImm64(2, kBytecodeStart + Targets * 8);
+      std::copy(Literal.begin(), Literal.end(),
+                Text.begin() + *ConstantLiteral);
+    }
+    auto Program = analyze(test::makeImage(Text, {}));
+    ASSERT_TRUE(static_cast<bool>(Program))
+        << llvm::toString(Program.takeError());
+    auto Report = recoverCallXContexts(*Program);
+    ASSERT_TRUE(static_cast<bool>(Report))
+        << llvm::toString(Report.takeError());
+    const bool MustStore =
+        Case == StoreCase::Argument || Case == StoreCase::Constant ||
+        Case == StoreCase::Absolute || Case == StoreCase::Logged;
+    std::set<size_t> Proven;
+    for (const auto &Proof : Report->Contexts) {
+      const auto Found =
+          std::find(CallXs.begin(), CallXs.end(), Proof.CallXSlot);
+      if (Found == CallXs.end() || !Proof.TargetSlot)
+        continue;
+      EXPECT_TRUE(MustStore);
+      const size_t I = Found - CallXs.begin();
+      EXPECT_EQ(Proof.TargetSlot,
+                Targets + (Case == StoreCase::Constant ? 0 : I * 2));
+      Proven.insert(Proof.CallXSlot);
+    }
+    EXPECT_EQ(Proven.size(), MustStore ? Count : 0u);
+    bool GenericStore = false;
+    for (const auto &Edge : Report->SummaryEdges)
+      GenericStore |= Edge.CalleeEntrySlot == Middle &&
+                      Edge.GeneralizedInputs && Edge.AppliedStoredValues != 0;
+    EXPECT_EQ(GenericStore, MustStore || Case == StoreCase::Aliased);
+    if (MustStore) {
+      bool LeafStore = false, WrapperStore = false;
+      for (const auto &Summary : Report->Summaries)
+        if (Summary.GeneralizedInputs && Summary.OutputParameterizedWords) {
+          LeafStore |= Summary.EntrySlot == Leaf;
+          WrapperStore |= Summary.EntrySlot == Middle;
+        }
+      EXPECT_TRUE(LeafStore);
+      EXPECT_TRUE(WrapperStore);
+      ExecutionEnvironment Environment;
+      if (Case == StoreCase::Absolute)
+        Environment.Memory.push_back(
+            {AbsoluteOutput, std::vector<uint8_t>(8), true, "output"});
+      Environment.Syscall =
+          [](uint32_t, const SyscallArguments &) -> std::optional<uint64_t> {
+        return 0;
+      };
+      auto Raw = executeRaw(*Program, std::move(Environment));
+      ASSERT_TRUE(static_cast<bool>(Raw)) << llvm::toString(Raw.takeError());
+      EXPECT_EQ(Raw->Status, ExecutionStatus::Returned) << Raw->Error;
+      EXPECT_EQ(Raw->ReturnValue,
+                Case == StoreCase::Constant ? 100u : 100u + Count - 1);
     }
   }
 }
