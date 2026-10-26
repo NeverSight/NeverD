@@ -1,5 +1,7 @@
 **Languages**: [English](../architecture.md) | [简体中文](../zh-CN/architecture.md) | [繁體中文](../zh-TW/architecture.md) | [日本語](architecture.md) | [한국어](../ko/architecture.md) | [Français](../fr/architecture.md) | [Deutsch](../de/architecture.md) | [Español](../es/architecture.md) | [Italiano](../it/architecture.md) | [Русский](../ru/architecture.md) | [العربية](../ar/architecture.md)
 
+LLVM 呼び出し型と関数宣言が異なる場合、LLVM C はスカラー複合リテラルを介してキャストを評価します。宣言の変更や volatile アクセスなしに、Windows x64 可変引数の浮動小数点レジスタ複製を含む呼び出し ABI を維持します。
+
 [← ドキュメント索引](README.md)
 
 # NeverD アーキテクチャ

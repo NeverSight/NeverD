@@ -1,5 +1,7 @@
 **اللغات**: [English](../architecture.md) | [简体中文](../zh-CN/architecture.md) | [繁體中文](../zh-TW/architecture.md) | [日本語](../ja/architecture.md) | [한국어](../ko/architecture.md) | [Français](../fr/architecture.md) | [Deutsch](../de/architecture.md) | [Español](../es/architecture.md) | [Italiano](../it/architecture.md) | [Русский](../ru/architecture.md) | [العربية](architecture.md)
 
+عندما يختلف نوع استدعاء LLVM عن تصريح الدالة، يقيّم LLVM C التحويل عبر قيمة مركبة قياسية. يحافظ ذلك على ABI لموضع الاستدعاء، بما فيه تكرار القيم العائمة للاستدعاءات متغيرة الوسائط في Windows x64، دون تغيير التصريح أو إضافة وصول volatile.
+
 [← فهرس التوثيق](README.md)
 
 # عمارة NeverD

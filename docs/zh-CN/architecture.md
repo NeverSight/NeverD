@@ -1,5 +1,7 @@
 **语言**: [English](../architecture.md) | [简体中文](architecture.md) | [繁體中文](../zh-TW/architecture.md) | [日本語](../ja/architecture.md) | [한국어](../ko/architecture.md) | [Français](../fr/architecture.md) | [Deutsch](../de/architecture.md) | [Español](../es/architecture.md) | [Italiano](../it/architecture.md) | [Русский](../ru/architecture.md) | [العربية](../ar/architecture.md)
 
+LLVM 调用类型与具名函数声明不同时，LLVM C 通过标量复合字面量取得转换后的函数指针，确保 C 编译器保留调用点 ABI，包括 Windows x64 可变参数浮点寄存器副本；无需修改原声明或添加 volatile 访问。
+
 [← 文档索引](README.md)
 
 # NeverD 架构

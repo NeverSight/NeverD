@@ -1,5 +1,7 @@
 **Idiomas**: [English](../architecture.md) | [简体中文](../zh-CN/architecture.md) | [繁體中文](../zh-TW/architecture.md) | [日本語](../ja/architecture.md) | [한국어](../ko/architecture.md) | [Français](../fr/architecture.md) | [Deutsch](../de/architecture.md) | [Español](architecture.md) | [Italiano](../it/architecture.md) | [Русский](../ru/architecture.md) | [العربية](../ar/architecture.md)
 
+Cuando el tipo de llamada LLVM difiere de la declaración, LLVM C evalúa la conversión mediante un literal compuesto escalar. Conserva la ABI del sitio, incluida la duplicación flotante de llamadas variádicas Windows x64, sin cambiar la declaración ni añadir accesos volatile.
+
 [← Índice de documentación](README.md)
 
 # Arquitectura de NeverD

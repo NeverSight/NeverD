@@ -1,5 +1,7 @@
 **Sprachen**: [English](../architecture.md) | [简体中文](../zh-CN/architecture.md) | [繁體中文](../zh-TW/architecture.md) | [日本語](../ja/architecture.md) | [한국어](../ko/architecture.md) | [Français](../fr/architecture.md) | [Deutsch](architecture.md) | [Español](../es/architecture.md) | [Italiano](../it/architecture.md) | [Русский](../ru/architecture.md) | [العربية](../ar/architecture.md)
 
+Weicht der LLVM-Aufruftyp von der Funktionsdeklaration ab, wertet LLVM C die Umwandlung über ein skalares zusammengesetztes Literal aus. Dies erhält die Aufruf-ABI einschließlich der Gleitkommakopie für Windows-x64-Varargs, ohne Deklarationsänderung oder volatile-Zugriffe.
+
 [← Dokumentationsindex](README.md)
 
 # NeverD-Architektur

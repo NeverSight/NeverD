@@ -1,5 +1,7 @@
 **اللغات**: [English](../testing.md) | [简体中文](../zh-CN/testing.md) | [繁體中文](../zh-TW/testing.md) | [日本語](../ja/testing.md) | [한국어](../ko/testing.md) | [Français](../fr/testing.md) | [Deutsch](../de/testing.md) | [Español](../es/testing.md) | [Italiano](../it/testing.md) | [Русский](../ru/testing.md) | [العربية](testing.md)
 
+يترجم `NeverDLLVMCValueTests` الاستدعاء متغير الوسائط المحوّل وينفذه مع دالة مستقلة تستخدم Windows x64 ABI عند O0/O2 وبوضعي حفظ الأنواع. يتحقق x64 الأصلي من القيمة عبر va_arg، وتتخطى المعماريات الأخرى التنفيذ صراحة.
+
 [← فهرس التوثيق](README.md)
 
 # اختبار NeverD

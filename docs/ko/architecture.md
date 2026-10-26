@@ -1,5 +1,7 @@
 **언어**: [English](../architecture.md) | [简体中文](../zh-CN/architecture.md) | [繁體中文](../zh-TW/architecture.md) | [日本語](../ja/architecture.md) | [한국어](architecture.md) | [Français](../fr/architecture.md) | [Deutsch](../de/architecture.md) | [Español](../es/architecture.md) | [Italiano](../it/architecture.md) | [Русский](../ru/architecture.md) | [العربية](../ar/architecture.md)
 
+LLVM 호출 형식과 함수 선언이 다르면 LLVM C는 스칼라 복합 리터럴을 통해 캐스트를 평가합니다. 선언 변경이나 volatile 접근 없이 Windows x64 가변 인수의 부동소수점 레지스터 복제를 포함한 호출 ABI를 보존합니다.
+
 [← 문서 인덱스](README.md)
 
 # NeverD 아키텍처

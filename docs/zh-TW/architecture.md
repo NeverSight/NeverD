@@ -1,5 +1,7 @@
 **語言**: [English](../architecture.md) | [简体中文](../zh-CN/architecture.md) | [繁體中文](architecture.md) | [日本語](../ja/architecture.md) | [한국어](../ko/architecture.md) | [Français](../fr/architecture.md) | [Deutsch](../de/architecture.md) | [Español](../es/architecture.md) | [Italiano](../it/architecture.md) | [Русский](../ru/architecture.md) | [العربية](../ar/architecture.md)
 
+LLVM 呼叫型別與具名函式宣告不同時，LLVM C 透過純量複合常值取得轉換後的函式指標，保留呼叫點 ABI，包括 Windows x64 可變參數的浮點暫存器副本，無須修改宣告或加入 volatile 存取。
+
 [← 文件索引](README.md)
 
 # NeverD 架構

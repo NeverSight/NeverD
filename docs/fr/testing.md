@@ -1,5 +1,7 @@
 **Langues**: [English](../testing.md) | [简体中文](../zh-CN/testing.md) | [繁體中文](../zh-TW/testing.md) | [日本語](../ja/testing.md) | [한국어](../ko/testing.md) | [Français](testing.md) | [Deutsch](../de/testing.md) | [Español](../es/testing.md) | [Italiano](../it/testing.md) | [Русский](../ru/testing.md) | [العربية](../ar/testing.md)
 
+`NeverDLLVMCValueTests` compile et exécute un appel variadique converti avec une fonction Windows x64 ABI séparée, à O0/O2 et avec les deux réglages de conservation des types. Le lecteur va_arg vérifie la valeur sur x64 natif ; les autres architectures ignorent explicitement cette exécution.
+
 [← Index de la documentation](README.md)
 
 # Tester NeverD

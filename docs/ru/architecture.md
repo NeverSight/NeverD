@@ -1,5 +1,7 @@
 **Языки**: [English](../architecture.md) | [简体中文](../zh-CN/architecture.md) | [繁體中文](../zh-TW/architecture.md) | [日本語](../ja/architecture.md) | [한국어](../ko/architecture.md) | [Français](../fr/architecture.md) | [Deutsch](../de/architecture.md) | [Español](../es/architecture.md) | [Italiano](../it/architecture.md) | [Русский](architecture.md) | [العربية](../ar/architecture.md)
 
+Если тип вызова LLVM отличается от объявления функции, LLVM C выполняет приведение через скалярный составной литерал. Это сохраняет ABI вызова, включая дублирование чисел с плавающей точкой для Windows x64 varargs, без изменения объявления и volatile-доступов.
+
 [← Индекс документации](README.md)
 
 # Архитектура NeverD

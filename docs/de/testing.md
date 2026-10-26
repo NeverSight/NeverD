@@ -1,5 +1,7 @@
 **Sprachen**: [English](../testing.md) | [简体中文](../zh-CN/testing.md) | [繁體中文](../zh-TW/testing.md) | [日本語](../ja/testing.md) | [한국어](../ko/testing.md) | [Français](../fr/testing.md) | [Deutsch](testing.md) | [Español](../es/testing.md) | [Italiano](../it/testing.md) | [Русский](../ru/testing.md) | [العربية](../ar/testing.md)
 
+`NeverDLLVMCValueTests` kompiliert und führt den umgewandelten Varargs-Aufruf mit einer separaten Windows-x64-ABI-Funktion bei O0/O2 und beiden Typbeibehaltungsoptionen aus. Native x64-Hosts prüfen den Wert mit va_arg; andere Architekturen überspringen diese Ausführung ausdrücklich.
+
 [← Dokumentationsindex](README.md)
 
 # NeverD testen

@@ -11945,6 +11945,8 @@ history and replicas. HighC and LLVM C consume the same selected occurrence and
 actual carriers. LLVM C retains ordinary target declarations and uses a typed
 call instruction/pointer cast for the selected occurrence only.
 
+When the LLVM call type differs from the named function declaration, LLVM C evaluates its cast through a scalar compound literal. This preserves the call-site ABI during C compilation, including Windows x64 variadic floating-register duplication, without changing the declaration or adding volatile accesses.
+
 Analyst declarations do not establish library effects, no-return control flow,
 native patch/lift contracts or safety receipts. Native LLVM call normalization
 and validation remain strict by default; only the private source emitter opts

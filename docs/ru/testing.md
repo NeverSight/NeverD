@@ -1,5 +1,7 @@
 **Языки**: [English](../testing.md) | [简体中文](../zh-CN/testing.md) | [繁體中文](../zh-TW/testing.md) | [日本語](../ja/testing.md) | [한국어](../ko/testing.md) | [Français](../fr/testing.md) | [Deutsch](../de/testing.md) | [Español](../es/testing.md) | [Italiano](../it/testing.md) | [Русский](testing.md) | [العربية](../ar/testing.md)
 
+`NeverDLLVMCValueTests` компилирует и выполняет преобразованный вариативный вызов с отдельной функцией Windows x64 ABI при O0/O2 и обоих режимах сохранения типов. Нативный x64 проверяет значение через va_arg; другие архитектуры явно пропускают выполнение.
+
 [← Индекс документации](README.md)
 
 # Тестирование NeverD
