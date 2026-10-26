@@ -322,6 +322,10 @@ memory-coordinate lanes. Arguments and memory enter nested direct calls and
 proven literal CALLX targets; converged returns supply r0 and memory effects.
 The shared transfer owns register clobbers and syscall effects. Callee-saved
 registers survive a return; automatic frames advance by the VM stride.
+Resolved syscalls depend on their five exposed host-ABI argument carriers;
+unexposed return, callee-saved and frame registers do not create new summary
+variants unless the function itself reads them. Unknown calls still depend on
+all registers and memory.
 
 Contextual joins retain complete sets of up to four register/stored-word
 alternatives. Transfers lift the canonical scalar operation over those sets;

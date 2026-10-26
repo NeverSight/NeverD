@@ -437,6 +437,8 @@ llvm::Error ContextFlow::computeInputDependencies() {
   const auto Bit = [](unsigned R) { return uint16_t{1} << R; };
   const uint16_t All = (uint16_t{1} << kRegisterCount) - 1;
   const uint16_t Clobbered = (uint16_t{1} << kFirstCalleeSavedRegister) - 1;
+  const uint16_t Arguments = ((uint16_t{1} << kArgumentRegisterCount) - 1)
+                             << kFirstArgumentRegister;
   while (!Worklist.empty()) {
     const size_t ID = Worklist.front();
     Worklist.pop_front();
@@ -470,6 +472,11 @@ llvm::Error ContextFlow::computeInputDependencies() {
           Uses |= InputRegisters[Entry];
           Memory |= ReadsMemory[Entry];
           CallX |= ReachesCallX[Entry];
+        } else if (I->Call == CallKind::Syscall) {
+          // The host receives the five argument carriers, not the VM's
+          // return/callee-saved/frame registers. Its memory remains opaque.
+          Uses |= Arguments;
+          Memory = true;
         } else {
           Uses |= All;
           Memory = true;

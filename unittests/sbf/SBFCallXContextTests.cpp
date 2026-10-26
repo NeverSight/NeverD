@@ -692,6 +692,72 @@ TEST(SBFCallXContexts, ComposesParameterizedWritesAndReturnAddresses) {
   }
 }
 
+TEST(SBFCallXContexts, SyscallArgumentsDoNotDependOnUnexposedVMRegisters) {
+  const size_t Count = kCallXContextSpecializationsPerEntry + 2;
+  std::vector<test::EncodedInstruction> Text;
+  std::vector<size_t> Calls, CallXs;
+  for (size_t I = 0; I < Count; ++I) {
+    for (unsigned R = kFirstArgumentRegister;
+         R < kFirstArgumentRegister + kArgumentRegisterCount; ++R)
+      Text.push_back(encode(Opcode::MOV64_IMM, R));
+    Text.push_back(encode(Opcode::MOV64_IMM, 7, 0, 0, I));
+    Calls.push_back(Text.size());
+    Text.push_back({});
+    CallXs.push_back(Text.size());
+    Text.push_back(encode(Opcode::CALL_REG, 0));
+  }
+  Text.push_back(encode(Opcode::EXIT));
+  const size_t Leaf = Text.size();
+  Text.push_back(encode(Opcode::MOV64_REG, 6, 1));
+  Text.push_back(
+      encode(Opcode::CALL_IMM, 0, 0, 0, getSyscallInfo(Syscall::Log64)->Hash));
+  Text.push_back(encode(Opcode::JEQ64_IMM, 6, 0, 2, 0));
+  Text.push_back(encode(Opcode::MOV64_IMM, 0));
+  Text.push_back(encode(Opcode::EXIT));
+  const size_t LiteralSlot = Text.size();
+  Text.resize(Text.size() + 2);
+  Text.push_back(encode(Opcode::EXIT));
+  const size_t Target = Text.size();
+  Text.push_back(encode(Opcode::MOV64_IMM, 0, 0, 0, 42));
+  Text.push_back(encode(Opcode::EXIT));
+  const auto Literal = test::loadImm64(0, kBytecodeStart + Target * 8);
+  std::copy(Literal.begin(), Literal.end(), Text.begin() + LiteralSlot);
+  for (size_t Slot : Calls)
+    Text[Slot] = encode(Opcode::CALL_IMM, 0, 1, 0, Leaf - Slot - 1);
+  auto Program = analyze(test::makeImage(Text, {}));
+  ASSERT_TRUE(static_cast<bool>(Program))
+      << llvm::toString(Program.takeError());
+  auto Report = recoverCallXContexts(*Program);
+  ASSERT_TRUE(static_cast<bool>(Report)) << llvm::toString(Report.takeError());
+  std::set<size_t> Proven;
+  for (const auto &Proof : Report->Contexts)
+    if (std::find(CallXs.begin(), CallXs.end(), Proof.CallXSlot) !=
+            CallXs.end() &&
+        Proof.TargetSlot) {
+      EXPECT_EQ(Proof.TargetSlot, Target);
+      Proven.insert(Proof.CallXSlot);
+    }
+  EXPECT_EQ(Proven.size(), Count);
+  size_t Variants = 0;
+  for (const auto &Summary : Report->Summaries)
+    if (Summary.EntrySlot == Leaf) {
+      EXPECT_EQ(Summary.InputRegisterMask &
+                    ((1u << 0) | (1u << 7) | (1u << kFramePointerRegister)),
+                0u);
+      Variants += !Summary.GeneralizedInputs;
+    }
+  EXPECT_EQ(Variants, 1u);
+  ExecutionEnvironment Environment;
+  Environment.Syscall =
+      [](uint32_t, const SyscallArguments &) -> std::optional<uint64_t> {
+    return 0;
+  };
+  auto Raw = executeRaw(*Program, std::move(Environment));
+  ASSERT_TRUE(static_cast<bool>(Raw)) << llvm::toString(Raw.takeError());
+  EXPECT_EQ(Raw->Status, ExecutionStatus::Returned) << Raw->Error;
+  EXPECT_EQ(Raw->ReturnValue, 42u);
+}
+
 TEST(SBFStoredRegisterMemory, ScalarALUDoesNotEvaluateSymbolicAddresses) {
   auto Program = analyze(test::makeImage({encode(Opcode::EXIT)}, {}));
   ASSERT_TRUE(static_cast<bool>(Program))
