@@ -127,6 +127,17 @@ workloads retained identical outputs and measured 0.992x–1.015x; no non-x86
 speedup is claimed. Other hardware, full-detail performance and whole
 application throughput still require separate qualification.
 
+AArch64 also avoids unnecessary operand postprocessing in Capstone
+`ff10148fdc21e37359bc9eb90164e26f44ca7ddf`. Generated flags identify which opcodes
+require implicit SME operands or tied-operand handling. Other instructions skip
+those descriptor walks; flagged instructions retain the original helpers and
+ordering, including failed decodes. The generator reapplies the guards after
+translation and requires review when the owning helper bodies change. A native
+audit checks every descriptor, and generation is independent of checkout line
+endings. Release and sanitizer comparisons preserve full API outputs. This
+change leaves x86 and the remaining decoder/core objects unchanged; it does not
+extend iced comparisons beyond x86.
+
 NeverD can use the pinned NeverSight iced fork for selected x86 32/64-bit
 classification scans. Enable it with `-DNEVERD_ENABLE_ICED=ON`; the
 default remains off because whole-workload and platform qualification is
