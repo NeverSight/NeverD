@@ -72,7 +72,8 @@ bool hasImmutableCalleeInstruction(const BinaryImage &Image,
         X86.encoding.disp_size == 4)
       AbsoluteOperands.push_back(Boundary.Address + X86.encoding.disp_offset);
     if (Operand.type == X86_OP_IMM && X86.encoding.imm_size == 4 &&
-        (Insn.Id == X86_INS_MOV || Insn.Id == X86_INS_PUSH))
+        (Insn.Id == X86_INS_MOV || Insn.Id == X86_INS_PUSH ||
+         Insn.Id == X86_INS_ADD || Insn.Id == X86_INS_SUB))
       AbsoluteOperands.push_back(Boundary.Address + X86.encoding.imm_offset);
   }
   if (!readImmutablePE32CodeBytes(Image, Boundary.Address, Boundary.Size,
@@ -81,6 +82,9 @@ bool hasImmutableCalleeInstruction(const BinaryImage &Image,
   // The stronger frame/memory proof consumes LowIR address identities. A
   // checked opcode alone does not authorize freezing an unclassified fixup's
   // preferred bits. The stack-only proof below may instead forget those bits.
+  // Relocated ADD/SUB immediates retain the lifter's exact address identity;
+  // accepting their encoding never turns an image-address difference into a
+  // constant displacement or a private-frame address.
   const auto Relocations = instructionRelocations(Image, Insn);
   for (va_t Field : AbsoluteOperands)
     if (!readImmutableCodeBytes(Image, Field, 4) &&

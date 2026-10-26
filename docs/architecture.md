@@ -2272,6 +2272,13 @@ Only a complete 32-bit EAX or temporary call output receives this source fact;
 the existing native preserved-helper rule still requires an unused result.
 This grants neither opaque memory access nor fixed differences between
 independently reconstructed image addresses.
+The shared callee-instruction check also accepts PE32 ADD/SUB immediates with
+complete HIGHLOW fields and exactly one matching loader-owned address operand,
+as it does for MOV/PUSH. The decoder/lifter retains that exact address identity.
+Missing or conflicting provenance, partial/duplicate/wrong-width fixups,
+writable code and relative control displacements still refuse. Instruction
+authentication grants no constant address difference, frame coordinate or
+memory-access permission; plain, SEH and C++ callees keep those obligations.
 Registration no-return annotations and ordinary-edge removal bind the same
 current call occurrence, target, instruction extent and operation range. A
 conditional or malformed instruction cannot reuse that receipt. A separate

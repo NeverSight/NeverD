@@ -7,6 +7,7 @@
 /// Bind initialized inputs and ordinary return values of authored SEH helpers.
 //===----------------------------------------------------------------------===//
 
+#include "../../../lib/ir/low/X86/RegistrationABIPrivate.h"
 #include "../../../lib/ir/low/X86/RegistrationConditionalFrame.h"
 #include "RegistrationSEH4SharedTestUtils.h"
 #include "gtest/gtest.h"
@@ -17,6 +18,8 @@
 #include "neverd/lift/X86Regs.h"
 #include "neverd/loader/COFF/COFFRegistrationEH.h"
 #include "neverd/support/BinaryEncoding.h"
+
+#include "llvm/BinaryFormat/COFF.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -237,4 +240,83 @@ TEST(RegistrationConditionalSEH, RootUsesSourceResultWithoutANativeReturnABI) {
       EXPECT_FALSE(getX86RegistrationSEHBoundCalls(Med));
     }
   }
+}
+
+TEST(RegistrationConditionalSEH, RelocatedArithmeticKeepsItsAddressIdentity) {
+  for (uint32_t Base : {0x400000u, 0x18000000u})
+    for (uint8_t Opcode : {uint8_t(0x05), uint8_t(0x2d)})
+      for (unsigned Mode = 0; Mode != 13; ++Mode) {
+        SCOPED_TRACE(Base);
+        SCOPED_TRACE(Opcode);
+        SCOPED_TRACE(Mode);
+        ScalarSEHFixture F(Base,
+                           {0x8b, 0x45, 8, Opcode, 0, 0, 0, 0, 0x90, 0x90});
+        const va_t Field = Base + 0x1010;
+        const uint32_t Target = Base + 0x2200;
+        auto &Text = F.Image.Segments.front().Data;
+        writeLE<uint32_t>(Text.data() + 16, Target);
+        F.Image.BaseRelocations.push_back(
+            {Field, llvm::COFF::IMAGE_REL_BASED_HIGHLOW});
+        F.Image.DataAddressRelocOperands[Field] = {Target, Target, 4,
+                                                   Base + 0x2000};
+        F.Parent.store(-64, 4, FrameValue::imageAddress(Target + 64));
+        if (Mode == 1)
+          F.Image.DataAddressRelocOperands.clear();
+        if (Mode == 2)
+          ++F.Image.DataAddressRelocOperands[Field].EncodedValue;
+        if (Mode == 3)
+          F.Image.DataAddressRelocOperands[Field].TargetVA = 0x7fff0000;
+        if (Mode == 4)
+          F.Image.BaseRelocations.push_back(F.Image.BaseRelocations.front());
+        if (Mode == 5)
+          F.Image.BaseRelocations.front().Type =
+              llvm::COFF::IMAGE_REL_BASED_DIR64;
+        if (Mode == 6)
+          --F.Image.BaseRelocations.front().Address;
+        if (Mode == 7)
+          F.Image.Segments.front().Flags =
+              F.Image.Segments.front().Flags | SegmentFlags::Writable;
+        if (Mode == 8)
+          F.Image.Sections.front().Flags =
+              F.Image.Sections.front().Flags | SegmentFlags::Writable;
+        if (Mode == 9)
+          F.Image.DataAddressRelocOperands[Field].PCRelativeFromInstructionEnd =
+              true;
+        if (Mode == 10)
+          F.Image.CodeAddressRelocOperands[Field] =
+              F.Image.DataAddressRelocOperands[Field];
+        if (Mode == 11)
+          Text[15] = 0xe8; // A control displacement is not an absolute operand.
+        if (Mode == 12) {
+          Text[20] = 0x8b;
+          Text[21] = 0x00; // No storage proof follows from the arithmetic.
+        }
+        Decoder Dec;
+        ASSERT_TRUE(Dec.init(F.Image));
+        LowInstructionBoundary Boundary;
+        Boundary.Address = Field - 1;
+        Boundary.Size = 5;
+        EXPECT_EQ(registration_abi::hasImmutableCalleeInstruction(
+                      F.Image, Boundary, Dec),
+                  Mode == 0 || Mode == 12);
+        size_t Work = 0;
+        const auto Effect = proveBoundSEHCallee(F.Image, F.Call, F.Parent, Work,
+                                                nullptr, &F.Initialized);
+        ASSERT_EQ(bool(Effect), Mode == 0);
+        if (!Effect)
+          continue;
+        // Even subtraction of addresses in this one source data segment
+        // retains an unknown result; independently emitted objects may move.
+        EXPECT_EQ(Effect->ReturnValue, FrameValue{});
+        EXPECT_TRUE(Effect->Reads.empty());
+        EXPECT_TRUE(Effect->Writes.empty());
+        ASSERT_LT(Work, limits::kMaxRegistrationEHStateWork);
+        size_t Exact = limits::kMaxRegistrationEHStateWork - Work;
+        EXPECT_TRUE(proveBoundSEHCallee(F.Image, F.Call, F.Parent, Exact,
+                                        nullptr, &F.Initialized));
+        EXPECT_EQ(Exact, limits::kMaxRegistrationEHStateWork);
+        size_t Short = limits::kMaxRegistrationEHStateWork - Work + 1;
+        EXPECT_FALSE(proveBoundSEHCallee(F.Image, F.Call, F.Parent, Short,
+                                         nullptr, &F.Initialized));
+      }
 }

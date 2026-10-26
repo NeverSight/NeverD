@@ -9499,6 +9499,12 @@ separately checks that a filter's result cannot enter the ordinary EAX join.
 The root-call case passes an actual pushed scalar, uses the returned value
 to guard a frame escape, and retains the independent native refusal for an
 observed preserved-helper result.
+`RelocatedArithmeticKeepsItsAddressIdentity` covers ADD/SUB at two image bases:
+exact HIGHLOW address provenance admits the authored SEH helper while its
+ordinary result remains unknown. Missing, stale or conflicting classifications,
+partial/duplicate/wrong-width fixups, writable mappings and a relocated CALL
+displacement refuse. A dereference of the arithmetic result still lacks a
+storage proof; exact and one-unit-short budgets are checked independently.
 `VolatileInputsDoNotRequireStackArguments` checks all three PE32 volatile GPRs
 at two image bases with constant, image and unknown scalar inputs. It retains
 callee definitions and exact branch selection, rejects partial pointer-bearing
