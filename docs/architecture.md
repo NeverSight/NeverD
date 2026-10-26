@@ -2280,6 +2280,16 @@ it does not substitute the constant or change memory/unwind attributes. COFF
 replays the same source receipt and rejects a new observation of a source result
 that was unused. This grants neither opaque memory access nor fixed differences
 between independently reconstructed image addresses.
+The COFF personality owner exposes the exact immutable forwarding ranges,
+normalizer paths, runtime data-read extents and eager import slot for retained
+EH3/EH4 dispatch. The scalar normalizer reports every decoded path without
+claiming intervening bytes or constant runtime data. Cookie check success,
+failure handling, scope tables, actual call arguments and final-image replay
+remain separate obligations; a personality dependency record alone grants no
+native replacement permission. The legacy SEH3 identity query keeps its weaker
+analysis role, while the retained dependency query requires immutable code,
+unambiguous eager import storage and matching relocation operands.
+
 `OriginalImageFrameProof` owns a separate, explicit source-only layout query.
 It records exact mapped address operands, immutable scalar bytes and decoded
 callee code for one image and invocation. The shared scalar reader rejects

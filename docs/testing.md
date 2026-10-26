@@ -9507,6 +9507,15 @@ and one-unit-short budgets. The authored rewrite driver's
 `--observe-callee-result` mode uses a returning helper's actual EAX plus five as
 the later longjmp value, across EH3/EH4/GS, optimized/unoptimized and rebased
 outputs. Native mutation checks retain rejection of new unowned observations.
+`RegistrationEH4Wrapper` additionally checks exact retained dependencies for
+direct/indirect forwarding, hotpatch prefixes, veneer chains, both normalizer
+branches, gaps between decoded paths and dynamic data reads. The separate
+`RegistrationSEHPersonality.RetainedDependenciesRequireImmutableIdentity`
+case rejects changed provider/slot identities, delayed or duplicate imports,
+writable/ambiguous code, malformed fixups and incomplete storage at two bases.
+Run `NeverDRegistrationEHTests` and `NeverDWindowsRegistrationNativeTests` for
+these loader-owned records; they do not qualify a final PE or a native call.
+
 The separate `RegistrationOriginalImage` cases check scoped mapped-address
 differences, unchanged generic transfer, immutable scalar widths, pointer-byte
 refusal, conflicting fixups/mappings, image separation and exact/exhausted work.

@@ -16,6 +16,9 @@
 #include "llvm/Support/Endian.h"
 
 #include <algorithm>
+#include <cstdint>
+#include <iterator>
+#include <vector>
 
 using namespace neverd;
 
@@ -66,6 +69,9 @@ BinaryImage normalizedWrapper(uint32_t Base = 0x400000) {
   llvm::support::endian::write32le(Text.data() + 0x182, Base + 0x2008);
   Image.Imports.push_back(
       {"vcruntime140.dll", "_except_handler4_common", 0, Base + 0x2008});
+  EXPECT_TRUE(
+      Image.recordImportStorageSlot(Base + 0x2008, "_except_handler4_common", 0,
+                                    ImportStorageEvidence::ImportDirectory));
   return Image;
 }
 
@@ -76,6 +82,35 @@ TEST(RegistrationEH4Wrapper, RetainsScalarNormalizationBeforeRuntimeDispatch) {
     auto Image = normalizedWrapper(Base);
     EXPECT_EQ(coff_loader::getCheckedX86EH4CookieCheck(Image, Base + 0x1000),
               Base + 0x1080);
+    const auto ABI =
+        coff_loader::getCheckedX86EH4PersonalityABI(Image, Base + 0x1000);
+    ASSERT_TRUE(ABI);
+    EXPECT_EQ(ABI->IATVA, Base + 0x2008);
+    EXPECT_EQ(ABI->CookieCheckVA, Base + 0x1080);
+    EXPECT_EQ(ABI->SecurityCookieVA, Base + 0x2000);
+    EXPECT_TRUE(ABI->ImageReads.empty());
+    ASSERT_EQ(ABI->CodeRanges.size(), 3u);
+    EXPECT_EQ(ABI->CodeRanges[0].Begin, Base + 0x1000);
+    EXPECT_EQ(ABI->CodeRanges[0].End, Base + 0x102f);
+    EXPECT_EQ(ABI->CodeRanges[1].Begin, Base + 0x1100);
+    EXPECT_EQ(ABI->CodeRanges[1].End, Base + 0x110b);
+    EXPECT_EQ(ABI->CodeRanges[2].Begin, Base + 0x1180);
+    EXPECT_EQ(ABI->CodeRanges[2].End, Base + 0x1186);
+    for (unsigned Mode = 0; Mode != 5; ++Mode) {
+      auto Bad = Image;
+      if (Mode == 0)
+        Bad.ImportStorageSlots.erase(Base + 0x2008);
+      if (Mode == 1)
+        Bad.ImportStorageSlots.at(Base + 0x2008).Addend = 1;
+      if (Mode == 2)
+        Bad.ConflictingImportStorageSlots.insert(Base + 0x2008);
+      if (Mode == 3)
+        Bad.Segments.back().FileSz = 10;
+      if (Mode == 4)
+        Bad.Segments.push_back(Bad.Segments.back());
+      EXPECT_FALSE(
+          coff_loader::getCheckedX86EH4PersonalityABI(Bad, Base + 0x1000));
+    }
   }
 }
 
@@ -150,6 +185,15 @@ TEST(RegistrationEH4Wrapper, RetainsRuntimeDataAndMXCSRBranches) {
                 Image.Segments.front().Data.begin() + 0x100);
       EXPECT_EQ(coff_loader::getCheckedX86EH4CookieCheck(Image, Base + 0x1000),
                 Base + 0x1080);
+      const auto ABI =
+          coff_loader::getCheckedX86EH4PersonalityABI(Image, Base + 0x1000);
+      ASSERT_TRUE(ABI);
+      ASSERT_EQ(ABI->CodeRanges.size(), 3u);
+      EXPECT_EQ(ABI->CodeRanges[1].Begin, Base + 0x1100);
+      EXPECT_EQ(ABI->CodeRanges[1].End, Base + 0x1100 + Scalar.size());
+      ASSERT_EQ(ABI->ImageReads.size(), 1u);
+      EXPECT_EQ(ABI->ImageReads[0].Begin, Base + 0x2010);
+      EXPECT_EQ(ABI->ImageReads[0].End, Base + 0x2014);
       for (unsigned Mutation = 0; Mutation != 4; ++Mutation) {
         auto Bad = Image;
         if (Mutation == 0)
@@ -165,6 +209,61 @@ TEST(RegistrationEH4Wrapper, RetainsRuntimeDataAndMXCSRBranches) {
             << Mutation;
       }
     }
+}
+
+TEST(RegistrationEH4Wrapper, DirectDependenciesIncludeHotpatchAndEveryVeneer) {
+  for (uint32_t Base : {0x400000u, 0x18000000u})
+    for (bool Hotpatch : {false, true})
+      for (bool Indirect : {false, true}) {
+        SCOPED_TRACE(Base);
+        SCOPED_TRACE(Hotpatch);
+        SCOPED_TRACE(Indirect);
+        auto Image = normalizedWrapper(Base);
+        auto &Text = Image.Segments.front().Data;
+        std::vector<uint8_t> Code;
+        if (Hotpatch)
+          Code.insert(Code.end(), {0x8b, 0xff});
+        const size_t Begin = Code.size();
+        const uint8_t Prefix[] = {0x55, 0x89, 0xe5, 0xff, 0x75, 20,
+                                  0xff, 0x75, 16,   0xff, 0x75, 12,
+                                  0xff, 0x75, 8,    0x68};
+        Code.insert(Code.end(), std::begin(Prefix), std::end(Prefix));
+        auto Word = [&](uint32_t Value) {
+          const auto At = Code.size();
+          Code.resize(At + 4);
+          llvm::support::endian::write32le(Code.data() + At, Value);
+        };
+        Word(Base + 0x1080);
+        Code.push_back(0x68);
+        Word(Base + 0x2000);
+        if (Indirect) {
+          Code.insert(Code.end(), {0xff, 0x15});
+          Word(Base + 0x2008);
+        } else {
+          Code.push_back(0xe8);
+          Word(uint32_t(0x170 - Begin - 30));
+          Text[0x170] = 0xe9;
+          llvm::support::endian::write32le(Text.data() + 0x171, 11);
+        }
+        Code.insert(Code.end(), {0x83, 0xc4, 24, 0x5d, 0xc3});
+        std::copy(Code.begin(), Code.end(), Text.begin());
+        const auto ABI =
+            coff_loader::getCheckedX86EH4PersonalityABI(Image, Base + 0x1000);
+        ASSERT_TRUE(ABI);
+        EXPECT_EQ(ABI->IATVA, Base + 0x2008);
+        EXPECT_EQ(ABI->CookieCheckVA, Base + 0x1080);
+        EXPECT_EQ(ABI->SecurityCookieVA, Base + 0x2000);
+        EXPECT_TRUE(ABI->ImageReads.empty());
+        ASSERT_EQ(ABI->CodeRanges.size(), Indirect ? 1u : 3u);
+        EXPECT_EQ(ABI->CodeRanges[0].Begin, Base + 0x1000);
+        EXPECT_EQ(ABI->CodeRanges[0].End, Base + 0x1000 + Code.size());
+        if (!Indirect) {
+          EXPECT_EQ(ABI->CodeRanges[1].Begin, Base + 0x1170);
+          EXPECT_EQ(ABI->CodeRanges[1].End, Base + 0x1175);
+          EXPECT_EQ(ABI->CodeRanges[2].Begin, Base + 0x1180);
+          EXPECT_EQ(ABI->CodeRanges[2].End, Base + 0x1186);
+        }
+      }
 }
 
 TEST(RegistrationEH4Wrapper, EveryReturnRequiresAnInitializedScalar) {
@@ -201,4 +300,27 @@ TEST(RegistrationEH4Wrapper, RelocationsMustMatchTheDecodedAddressOperands) {
     EXPECT_FALSE(coff_loader::getCheckedX86EH4CookieCheck(Bad, 0x401000))
         << Mutation;
   }
+}
+
+TEST(RegistrationEH4Wrapper, DependenciesCoverBothPathsWithoutOwningGaps) {
+  auto Image = normalizedWrapper();
+  const uint8_t Scalar[] = {
+      0x55, 0x8b, 0xec, 0x51, 0x8b, 0x45, 8,    0x85, 0xc0, 0x74, 5,    0xeb, 8,
+      0xcc, 0xcc, 0xcc, 0x83, 0xf0, 1,    0xeb, 0,    0x8b, 0xe5, 0x5d, 0xc3};
+  std::copy(std::begin(Scalar), std::end(Scalar),
+            Image.Segments.front().Data.begin() + 0x100);
+  const auto ABI = coff_loader::getCheckedX86EH4PersonalityABI(Image, 0x401000);
+  ASSERT_TRUE(ABI);
+  ASSERT_EQ(ABI->CodeRanges.size(), 4u);
+  EXPECT_EQ(ABI->CodeRanges[1].Begin, 0x401100u);
+  EXPECT_EQ(ABI->CodeRanges[1].End, 0x40110du);
+  EXPECT_EQ(ABI->CodeRanges[2].Begin, 0x401110u);
+  EXPECT_EQ(ABI->CodeRanges[2].End, 0x401119u);
+  for (unsigned Offset : {0x104, 0x110, 0x115}) {
+    auto Bad = Image;
+    Bad.Segments.front().Data[Offset] = 0xcc;
+    EXPECT_FALSE(coff_loader::getCheckedX86EH4PersonalityABI(Bad, 0x401000));
+  }
+  Image.Segments.front().Data[0x10d] = 0xc3;
+  EXPECT_TRUE(coff_loader::getCheckedX86EH4PersonalityABI(Image, 0x401000));
 }

@@ -141,6 +141,22 @@ getCheckedX86SimpleCxxThrowInfo(const BinaryImage &Img, va_t Address);
 /// Authenticate an argument-preserving veneer to the known CRT SEH3 import.
 bool isCheckedX86SEH3Personality(const BinaryImage &Img, va_t HandlerVA);
 
+/// Exact retained SEH dispatch dependencies. Code ranges include forwarding
+/// veneers and every decoded scalar-normalizer path. Image reads name current
+/// runtime storage, not constant contents. The checker itself and its failure
+/// path require separate proofs; these ranges do not grant native admission.
+struct X86SEHPersonalityABI {
+  va_t IATVA = InvalidVA;
+  va_t SecurityCookieVA = 0;
+  va_t CookieCheckVA = 0;
+  std::vector<ExceptionAddressRange> CodeRanges;
+  std::vector<ExceptionAddressRange> ImageReads;
+};
+std::optional<X86SEHPersonalityABI>
+getCheckedX86SEH3PersonalityABI(const BinaryImage &Img, va_t HandlerVA);
+std::optional<X86SEHPersonalityABI>
+getCheckedX86EH4PersonalityABI(const BinaryImage &Img, va_t HandlerVA);
+
 /// Separate the per-function EAX/FuncInfo thunk from its argument- and
 /// EAX-preserving CRT dispatch entry. A generated handler must use RuntimeVA;
 /// jumping to the original HandlerVA would reinstall the original FuncInfo.

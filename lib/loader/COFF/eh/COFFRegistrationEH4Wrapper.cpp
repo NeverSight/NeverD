@@ -5,6 +5,10 @@
 //
 //===----------------------------------------------------------------------===//
 
+/// \file
+/// Authenticate retained EH4 forwarding code and its runtime dependencies.
+//===----------------------------------------------------------------------===//
+
 #include "COFFRegistrationScalarLeaf.h"
 
 #include "neverd/loader/BinaryImage.h"
@@ -40,10 +44,11 @@ bool isCommonHandlerSlot(const BinaryImage &Image, va_t Slot) {
          Module.equals_insensitive("vcruntime140d.dll");
 }
 
-bool isCommonHandlerThunk(const BinaryImage &Image, va_t Address);
+bool isCommonHandlerThunk(const BinaryImage &Image, va_t Address,
+                          X86SEHPersonalityABI &Result);
 
-std::optional<va_t> getDirectCookieCheck(const BinaryImage &Image,
-                                         va_t HandlerVA) {
+std::optional<X86SEHPersonalityABI>
+getDirectPersonality(const BinaryImage &Image, va_t HandlerVA) {
   if (Image.Arch != Arch::X86 || Image.Bits != Bitness::Bits32 ||
       Image.Format != BinaryFormat::COFF || Image.Base > UINT32_MAX - 3 ||
       !Image.DynInfo.SecurityCookieRVA ||
@@ -84,22 +89,28 @@ std::optional<va_t> getDirectCookieCheck(const BinaryImage &Image,
   const va_t CheckVA = readLE<uint32_t>(Code + 16);
   if (!Image.isCodeAddress(CheckVA) || !Image.readVA(CheckVA, 1))
     return std::nullopt;
+  X86SEHPersonalityABI Result;
+  Result.SecurityCookieVA = CookieVA;
+  Result.CookieCheckVA = CheckVA;
+  Result.CodeRanges.push_back({HandlerVA, Begin + Tail + 5});
   if (Direct) {
     const va_t Target =
         uint32_t(Begin + 30 + int64_t(readLE<int32_t>(Code + 26)));
-    if (!isCommonHandlerThunk(Image, Target))
+    if (!isCommonHandlerThunk(Image, Target, Result))
       return std::nullopt;
   } else if (Code[26] != 0x15 ||
              !isCommonHandlerSlot(Image, readLE<uint32_t>(Code + 27))) {
     return std::nullopt;
-  }
-  return CheckVA;
+  } else
+    Result.IATVA = readLE<uint32_t>(Code + 27);
+  return Result;
 }
 
 // The retained normalizer and original common-handler wrapper run at their
 // source addresses. Only their frame independence and forwarding ABI are
 // proved here; no exception-code translation is synthesized by NeverD.
-bool isCommonHandlerThunk(const BinaryImage &Image, va_t Address) {
+bool isCommonHandlerThunk(const BinaryImage &Image, va_t Address,
+                          X86SEHPersonalityABI &Result) {
   std::set<va_t> Seen;
   for (unsigned Hop = 0;
        Hop != ::neverd::limits::loader::kMaxRegistrationEH4WrapperHops; ++Hop) {
@@ -111,6 +122,7 @@ bool isCommonHandlerThunk(const BinaryImage &Image, va_t Address) {
           int64_t(Address) + 5 + readLE<int32_t>(Code->data() + 1);
       if (Target <= 0 || Target > UINT32_MAX)
         return false;
+      Result.CodeRanges.push_back({Address, Address + 5});
       Address = va_t(Target);
       continue;
     }
@@ -118,13 +130,17 @@ bool isCommonHandlerThunk(const BinaryImage &Image, va_t Address) {
     if (!Code || (*Code)[0] != 0xff || (*Code)[1] != 0x25)
       return false;
     const va_t Slot = readLE<uint32_t>(Code->data() + 2);
-    return isCommonHandlerSlot(Image, Slot);
+    if (!isCommonHandlerSlot(Image, Slot))
+      return false;
+    Result.CodeRanges.push_back({Address, Address + 6});
+    Result.IATVA = Slot;
+    return true;
   }
   return false;
 }
 
-std::optional<va_t> getNormalizingCookieCheck(const BinaryImage &Image,
-                                              va_t HandlerVA) {
+std::optional<X86SEHPersonalityABI>
+getNormalizingPersonality(const BinaryImage &Image, va_t HandlerVA) {
   if (Image.Arch != Arch::X86 || Image.Bits != Bitness::Bits32 ||
       Image.Format != BinaryFormat::COFF || Image.Base > UINT32_MAX ||
       !Image.DynInfo.SecurityCookieRVA || !HandlerVA ||
@@ -153,20 +169,45 @@ std::optional<va_t> getNormalizingCookieCheck(const BinaryImage &Image,
   const va_t Checker = readLE<uint32_t>(Code + 27);
   if (Normalizer <= 0 || Normalizer > UINT32_MAX || Common <= 0 ||
       Common > UINT32_MAX || !Image.isCodeAddress(Checker) ||
-      !Image.readVA(Checker, 1) ||
-      !isCheckedX86RegistrationScalarLeaf(Image, va_t(Normalizer)) ||
-      !isCommonHandlerThunk(Image, va_t(Common)))
+      !Image.readVA(Checker, 1))
     return std::nullopt;
-  return Checker;
+  const auto Scalar =
+      getCheckedX86RegistrationScalarLeaf(Image, va_t(Normalizer));
+  if (!Scalar)
+    return std::nullopt;
+  X86SEHPersonalityABI Result;
+  Result.SecurityCookieVA = CookieVA;
+  Result.CookieCheckVA = Checker;
+  Result.CodeRanges.push_back({HandlerVA, HandlerVA + 47});
+  Result.CodeRanges.insert(Result.CodeRanges.end(), Scalar->CodeRanges.begin(),
+                           Scalar->CodeRanges.end());
+  Result.ImageReads = Scalar->ImageReads;
+  if (!isCommonHandlerThunk(Image, va_t(Common), Result))
+    return std::nullopt;
+  return Result;
+}
+
+std::optional<X86SEHPersonalityABI> getPersonality(const BinaryImage &Image,
+                                                   va_t HandlerVA) {
+  if (auto ABI = getDirectPersonality(Image, HandlerVA))
+    return ABI;
+  return getNormalizingPersonality(Image, HandlerVA);
 }
 
 } // namespace
 
 std::optional<va_t> getCheckedX86EH4CookieCheck(const BinaryImage &Image,
                                                 va_t HandlerVA) {
-  if (auto Check = getDirectCookieCheck(Image, HandlerVA))
-    return Check;
-  return getNormalizingCookieCheck(Image, HandlerVA);
+  const auto ABI = getPersonality(Image, HandlerVA);
+  return ABI ? std::optional<va_t>(ABI->CookieCheckVA) : std::nullopt;
+}
+
+std::optional<X86SEHPersonalityABI>
+getCheckedX86EH4PersonalityABI(const BinaryImage &Image, va_t HandlerVA) {
+  auto ABI = getPersonality(Image, HandlerVA);
+  if (!ABI || !isFileBackedPEImportSlot(Image, ABI->IATVA))
+    return std::nullopt;
+  return ABI;
 }
 
 } // namespace neverd::coff_loader
