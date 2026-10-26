@@ -3582,9 +3582,59 @@ TEST(RegistrationTryLevel, CxxIncomingPrefixDoesNotGuessPastCallsOrBranches) {
     ASSERT_TRUE(Ordinary.hasCompleteLiftCoverage());
     size_t Work = 0;
     EXPECT_EQ(
-        registration_abi::hasIncomingCxxFramePrefix(Image, Ordinary, Work),
+        registration_abi::hasUnboundCxxEntryBarrier(Image, Ordinary, Work),
         Mutation == 0 || Mutation == 5);
     EXPECT_LT(Work, limits::kMaxRegistrationEHStateWork);
+  }
+}
+
+TEST(RegistrationTryLevel, CxxNativePrefixRejectsOnlyMandatoryIndirectCalls) {
+  for (unsigned Mutation = 0; Mutation != 5; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    auto [Image, Call] = makeCxxSharedEpilogueImage(false, 1, 32);
+    auto &Bytes = Image.Segments.front().Data;
+    const auto Begin = Call - kText - 11;
+    std::fill(Bytes.begin() + Begin, Bytes.begin() + Call - kText, 0x90);
+    Bytes[Begin + 5] = 0xff;
+    Bytes[Begin + 6] = 0xd0; // call eax, after the checked shared entry.
+    if (Mutation == 1) {
+      Bytes[Begin + 6] = 0x15; // A call through memory has the same barrier.
+      writeLE<uint32_t>(Bytes.data() + Begin + 7, kRData);
+    } else if (Mutation == 2) {
+      Bytes[Begin] = 0xe8; // An earlier direct call may never return.
+      writeLE<uint32_t>(Bytes.data() + Begin + 1,
+                        uint32_t(kText + 0xc0 - (kText + Begin + 5)));
+    } else if (Mutation == 3) {
+      Bytes[Begin] = 0x75; // Either branch can bypass the indirect call.
+      Bytes[Begin + 1] = 5;
+    } else if (Mutation == 4) {
+      Bytes[Begin] = 0xeb;
+      Bytes[Begin + 1] = 5;
+    }
+    Image.ExceptionMetadata = {};
+    coff_loader::parseX86RegistrationExceptions(Image);
+    Decoder Decode;
+    ASSERT_TRUE(Decode.init(Image));
+    RegistrationCallCalleeIndex Index(Image);
+    const auto Ordinary = registration_abi::buildOrdinaryCxxFrameGraph(
+        Image, Decode, kText + 0x20, Index);
+    ASSERT_TRUE(Ordinary.hasCompleteLiftCoverage());
+    size_t Work = 0;
+    const auto Reject = [&](size_t &Used) {
+      return registration_abi::hasUnboundCxxEntryBarrier(Image, Ordinary, Used);
+    };
+    ASSERT_EQ(Reject(Work), Mutation < 2);
+    ASSERT_GT(Work, 0u);
+    ASSERT_LT(Work, limits::kMaxRegistrationEHStateWork);
+    if (Mutation < 2) {
+      size_t Exact = limits::kMaxRegistrationEHStateWork - Work;
+      EXPECT_TRUE(Reject(Exact));
+      EXPECT_EQ(Exact, limits::kMaxRegistrationEHStateWork);
+      size_t Short = limits::kMaxRegistrationEHStateWork - Work + 1;
+      EXPECT_FALSE(Reject(Short));
+      EXPECT_EQ(Short, limits::kMaxRegistrationEHStateWork);
+      EXPECT_FALSE(getCheckedX86RegistrationCxxCalleeABI(Image, kText + 0x20));
+    }
   }
 }
 

@@ -80,10 +80,11 @@ RegistrationStateAnalysis solveCheckedCxxStates(
 }
 } // namespace
 
-// Reject only a straight-line, current shared-entry prefix that accesses
-// incoming storage before any ordinary call or branch. A returning stack pop
-// alone cannot reject a zero-argument parent: its calls might never return.
-bool registration_abi::hasIncomingCxxFramePrefix(const BinaryImage &Image,
+// Reject only a current shared-entry prefix that already needs unsupported
+// unbound inputs or call effects before any ordinary call or branch. A later
+// incoming access or RET pop cannot reject a parent: an earlier call might
+// never return.
+bool registration_abi::hasUnboundCxxEntryBarrier(const BinaryImage &Image,
                                                  const LowFunc &Function,
                                                  size_t &Work) {
   using namespace registration_state;
@@ -127,6 +128,11 @@ bool registration_abi::hasIncomingCxxFramePrefix(const BinaryImage &Image,
         Installed = true;
         continue;
       }
+      // The unbound native query has direct-callee contracts only. Its first
+      // indirect call cannot acquire an invocation effect from later callees.
+      // Rejecting here grants no stack cleanup or import-binding semantics.
+      if (Installed && Op.Opcode == NdOp::INDIR_CALL)
+        return true;
       if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL ||
           Op.Opcode == NdOp::BRANCH || Op.Opcode == NdOp::COND_BR ||
           Op.Opcode == NdOp::INDIR_BR || Op.Opcode == NdOp::RETURN ||
@@ -218,7 +224,7 @@ RegistrationCallCalleeIndex::cxxCallee(va_t Target) {
     const LowFunc Ordinary =
         buildOrdinaryCxxFrameGraph(Image, Dec, Target, *this);
     if (!chargeDecodedCallee(Work, Ordinary) ||
-        hasIncomingCxxFramePrefix(Image, Ordinary, Work) ||
+        hasUnboundCxxEntryBarrier(Image, Ordinary, Work) ||
         Work == limits::kMaxRegistrationEHStateWork)
       return std::nullopt;
   }

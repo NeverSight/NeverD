@@ -60,9 +60,10 @@ bool chargeDecodedCallee(size_t &Work, const LowFunc &Function);
 /// memo keyed only by target and SEH level cannot retain these answers.
 bool hasActiveCxxCalleeProof();
 /// Negative-only admission check for a zero-argument native C++ parent.
-/// A checked straight-line shared prefix accesses incoming frame storage
-/// before any ordinary call or branch. Absence proves no calling convention.
-bool hasIncomingCxxFramePrefix(const BinaryImage &Image,
+/// A checked straight-line shared prefix accesses incoming frame storage or
+/// reaches an indirect call before any earlier ordinary call or branch.
+/// Absence proves no calling convention or callee effect.
+bool hasUnboundCxxEntryBarrier(const BinaryImage &Image,
                                const LowFunc &Function, size_t &Work);
 
 /// Plain object/initializer proofs cannot own an EH frame. Check admission

@@ -9054,6 +9054,14 @@ view and recheck current helper bytes. A missing receipt cannot turn a checked
 shared entry into a direct-frame source. This projection does not grant unknown
 callee effects, a callee-pop parent ABI or complete whole-image lifting.
 
+The zero-argument native C++ callee query first inspects its checked shared
+entry prefix. Incoming frame storage or an indirect call before any earlier
+ordinary call or branch already exceeds that unbound contract. Rejecting this
+prefix avoids expanding unrelated callees; it proves neither stack cleanup
+nor import effects. An earlier call or branch ends the check because the
+later operation may never execute. Invocation-specific source borrows retain
+their own input and effect proof.
+
 The private `proveBoundCxxCallee` query replays a fixed-frame, cleanup-only PE32
 C++ helper under checked caller-frame inputs. It shares ordinary C++ handler,
 cookie and state setup, authenticates the direct call and complete current body,

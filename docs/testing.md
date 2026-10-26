@@ -6033,6 +6033,10 @@ callee index. `CxxPhysicalExitRechecksSourceWithoutChainReceipts` binds exact
 operations, instruction boundaries, interior roots and immutable helper bytes.
 `CxxIncomingPrefixDoesNotGuessPastCallsOrBranches` checks incoming reads/writes,
 local storage, lost frame coordinates and the ordinary call/branch boundary.
+`CxxNativePrefixRejectsOnlyMandatoryIndirectCalls` covers register and memory
+indirect calls immediately after that entry, exact/short work budgets, and
+prior direct calls or branches that prevent a mandatory-path rejection.
+These negative admissions grant no native contract or import semantics.
 `RegistrationConditionalCxx.MissingBorrowDoesNotAnalyzeUnboundCalls` checks
 that direct and nested queries reject missing caller words before spending
 the work of an unbound native-state graph, retain the cumulative budget limit,
