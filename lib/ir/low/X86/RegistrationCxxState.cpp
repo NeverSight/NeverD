@@ -47,7 +47,8 @@ RegistrationStateAnalysis solveCheckedCxxStates(
     const std::vector<RegistrationLocalUnwindContract> *LocalUnwinds,
     const std::vector<RegistrationSEHControlContract> *SEHControls,
     registration_state::ConditionalFrame *Inputs = nullptr,
-    size_t *StateWork = nullptr) {
+    size_t *StateWork = nullptr,
+    const registration_state::CxxCallerProof *CxxCalls = nullptr) {
   if (!Function.ExceptionMetadata || !Function.ExceptionMetadata->Registration)
     return {};
   const auto &EH = *Function.ExceptionMetadata;
@@ -72,7 +73,7 @@ RegistrationStateAnalysis solveCheckedCxxStates(
   registration_state::RegistrationStateSolver Solver(
       Function, Cookie, 0, Callees, Cleanups, Stacks, LocalUnwinds, SEHControls,
       Inputs, nullptr, nullptr, Handler ? &*Handler : nullptr,
-      Prologue ? &*Prologue : nullptr, &Epilogues);
+      Prologue ? &*Prologue : nullptr, &Epilogues, nullptr, nullptr, CxxCalls);
   auto Result = Solver.run(StateWork ? *StateWork : 0);
   if (StateWork)
     *StateWork = Solver.workUsed();
@@ -173,13 +174,34 @@ RegistrationStateAnalysis analyzeCheckedX86CxxStates(
     const std::vector<RegistrationSEHControlContract> *SEHControls,
     RegistrationCallCalleeIndex *CalleeIndex) {
   size_t Work = 0;
+  registration_state::CxxCallerProof Calls;
+  for (const auto &Import : Image.Imports) {
+    if (!registration_abi::chargeCalleeWork(Work, 1)) {
+      if (CalleeIndex)
+        CalleeIndex->chargeStateWork(Work);
+      return {};
+    }
+    Calls.ImportSlots.insert(Import.IATAddr);
+  }
+  Calls.ProveCall = [&](const LowFunc &Caller, const LowOp &Call,
+                        const registration_state::FrameState &Frame,
+                        const std::set<int32_t> &Initialized, size_t &Used)
+      -> std::optional<registration_state::BoundCxxCalleeEffect> {
+    if (!Frame.ImportBindingsIntact ||
+        !registration_state::checkedRegistrationDirectCall(Image, Caller, Call,
+                                                           Used))
+      return std::nullopt;
+    return registration_state::proveBoundCxxCallee(
+        Image, Call, Frame, 0, Used, {}, &Initialized, CalleeIndex);
+  };
   auto States =
       solveCheckedCxxStates(Image, Function, Callees, Cleanups, Stacks,
-                            LocalUnwinds, SEHControls, nullptr, &Work);
+                            LocalUnwinds, SEHControls, nullptr, &Work, &Calls);
   if (CalleeIndex && !CalleeIndex->chargeStateWork(Work)) {
     States.Complete = States.CallbackStatesComplete =
         States.RegistrationLifetimeComplete = States.ChainOperationsComplete =
-            States.CallFrameEffectsComplete = false;
+            States.SourceCallFrameEffectsComplete =
+                States.CallFrameEffectsComplete = false;
     States.CallFrameEffects.clear();
     States.CxxPrologue.reset();
     States.Diagnostics.push_back("C++ callee state proof budget exhausted");
@@ -414,8 +436,10 @@ proveBoundCxxCallee(const BinaryImage &Image, const LowOp &Op,
                     const FrameState &Parent, uint32_t StackArgumentBytes,
                     size_t &Work,
                     llvm::ArrayRef<RegistrationObjectExtent> CallerObjects,
-                    const std::set<int32_t> *Initialized) {
-  if (Image.Arch != Arch::X86 || Image.Bits != Bitness::Bits32 ||
+                    const std::set<int32_t> *Initialized,
+                    RegistrationCallCalleeIndex *OwnerIndex) {
+  if ((OwnerIndex && !OwnerIndex->ownsImage(Image)) ||
+      Image.Arch != Arch::X86 || Image.Bits != Bitness::Bits32 ||
       Image.Format != BinaryFormat::COFF || Op.Opcode != NdOp::CALL ||
       Op.Seq < 0 || Op.NumInputs != 1 || !Op.Inputs[0].isConst() ||
       Op.Inputs[0].Size != 4 || Op.Addr > UINT32_MAX - 5 ||
@@ -449,7 +473,12 @@ proveBoundCxxCallee(const BinaryImage &Image, const LowOp &Op,
   Decoder Dec;
   if (!Dec.init(Image))
     return std::nullopt;
-  RegistrationCallCalleeIndex Index(Image, &Work);
+  RegistrationCallCalleeIndex LocalIndex(Image, &Work);
+  // A root already owns the immutable-image callee closure. Reuse only its
+  // context-free contracts; the conditional inputs and solver remain fresh.
+  // The owner bills these queries directly and adds the caller's state work
+  // once at publication, including this invocation's decoded/transfer work.
+  auto &Index = OwnerIndex ? *OwnerIndex : LocalIndex;
   // Invocation inputs belong to the conditional solver below. Building an
   // unbound native state closure here repeats unrelated callee work before
   // those inputs can even be checked. The physical graph grants no states;
@@ -545,7 +574,7 @@ proveBoundCxxCallee(const BinaryImage &Image, const LowOp &Op,
     if (!checkedRegistrationDirectCall(Image, Caller, Call, Used))
       return std::nullopt;
     return proveBoundCxxCallee(Image, Call, State, 0, Used, Inputs.Objects,
-                               &InitializedBytes);
+                               &InitializedBytes, OwnerIndex);
   };
   Inputs.ProvePlainCall =
       [&](const LowFunc &Caller, const LowOp &Call, const FrameState &State,
@@ -590,7 +619,8 @@ proveBoundCxxCallee(const BinaryImage &Image, const LowOp &Op,
   Work = StateWork;
   if (!Inputs.Complete || Inputs.ReturnValues.empty() || !States.Complete ||
       !States.CallbackStatesComplete || !States.RegistrationLifetimeComplete ||
-      !States.ChainOperationsComplete || !States.CallFrameEffectsComplete ||
+      !States.ChainOperationsComplete ||
+      !States.SourceCallFrameEffectsComplete ||
       !States.CleanupFrameEffectsComplete || !States.CxxCatchObjectsComplete ||
       !States.RuntimeObjectAccessesComplete ||
       !States.IncomingFrameAccessesComplete || !States.ImageReadsComplete ||

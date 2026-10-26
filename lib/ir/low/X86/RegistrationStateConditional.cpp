@@ -21,24 +21,29 @@ std::optional<RegistrationStateSolver::CallTransfer>
 RegistrationStateSolver::transferConditionalCxxCall(Domain &After,
                                                     const LowOp &Op,
                                                     const BlockFacts &Facts) {
-  if (!KnownCxx || !Conditional ||
-      (!Conditional->ProveCxxCall && !Conditional->ProvePlainCall) ||
-      After.Unknown || Facts.Invalid || !After.Parent || After.Callback ||
-      !After.Installed || After.Uninstalled || Chain.RealignedFrame ||
-      Op.Opcode != NdOp::CALL || Op.NumInputs != 1 || !Op.Inputs[0].isConst() ||
-      Op.Inputs[0].Size != 4 || Op.Seq < 0)
+  const auto *CxxProof = Conditional && Conditional->ProveCxxCall
+                             ? &Conditional->ProveCxxCall
+                         : CxxCalls ? &CxxCalls->ProveCall
+                                    : nullptr;
+  const bool PlainProof = Conditional && Conditional->ProvePlainCall;
+  if (!KnownCxx || ((!CxxProof || !*CxxProof) && !PlainProof) ||
+      (!Conditional && !After.Frame.ImportBindingsIntact) || After.Unknown ||
+      Facts.Invalid || !After.Parent || After.Callback || !After.Installed ||
+      After.Uninstalled || Chain.RealignedFrame || Op.Opcode != NdOp::CALL ||
+      Op.NumInputs != 1 || !Op.Inputs[0].isConst() || Op.Inputs[0].Size != 4 ||
+      Op.Seq < 0)
     return std::nullopt;
   const auto SP = parentStackOffset(After);
   if (!SP)
     return std::nullopt;
   std::optional<BoundPlainCalleeEffect> Plain;
   std::optional<BoundCxxCalleeEffect> Cxx;
-  if (Conditional->ProvePlainCall)
+  if (PlainProof)
     Plain = Conditional->ProvePlainCall(Function, Op, After.Frame,
                                         After.InitializedFrameBytes, WorkUsed);
-  if (!Plain && Conditional->ProveCxxCall)
-    Cxx = Conditional->ProveCxxCall(Function, Op, After.Frame,
-                                    After.InitializedFrameBytes, WorkUsed);
+  if (!Plain && CxxProof && *CxxProof)
+    Cxx = (*CxxProof)(Function, Op, After.Frame, After.InitializedFrameBytes,
+                      WorkUsed);
   if ((!Plain && !Cxx) ||
       (Cxx && (!Cxx->StackPopBytes || Cxx->Returns.empty())))
     return std::nullopt;
@@ -103,8 +108,11 @@ RegistrationStateSolver::transferConditionalCxxCall(Domain &After,
     discardFrameCellsBelow(Frame->Cells, End);
   // The callback authenticated the unique original five-byte CALL. No
   // context-free CallFrameEffect or native ABI is published for this result.
+  HasSourceOnlyCallEffects = true;
+  // Both source proof kinds exclude image writes. This retains a live IAT
+  // binding without repairing an earlier loss or a cached callable register.
   return CallTransfer{FrameValue::frame(End), false, Op.Addr + 5, Returned,
-                      std::move(Writes)};
+                      std::move(Writes),      true};
 }
 
 bool RegistrationStateSolver::checkConditionalMemory(

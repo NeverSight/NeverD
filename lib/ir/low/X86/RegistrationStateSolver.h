@@ -230,7 +230,8 @@ public:
           nullptr,
       const coff_loader::X86SEH4PrologueCall *SEH4Prologue = nullptr,
       const std::vector<coff_loader::X86SEH4EpilogueCall> *SEH4Epilogues =
-          nullptr);
+          nullptr,
+      const CxxCallerProof *CxxCalls = nullptr);
   RegistrationStateAnalysis run(size_t InitialWork = 0);
   size_t workUsed() const { return WorkUsed; }
 
@@ -479,6 +480,7 @@ private:
   ConditionalFrame *Conditional;
   const BoundCalleeProver *BoundCallees;
   const SEHJumpRuntime *JumpRuntime;
+  const CxxCallerProof *CxxCalls;
   const bool KnownCxx;
   const bool EH4;
   const bool CheckCalls;
@@ -553,6 +555,7 @@ private:
   // Each source still supplies its own frame to every callback transfer.
   std::optional<std::vector<std::pair<va_t, int32_t>>> UnknownCxxCleanupRoots;
   bool CompleteCalls;
+  bool HasSourceOnlyCallEffects = false;
   bool CompleteCleanups;
   bool CompleteCatchObjects;
   bool CompleteRuntimeObjects;

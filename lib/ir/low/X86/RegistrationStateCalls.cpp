@@ -3,6 +3,11 @@
 // NeverD Decompiler
 //
 //===----------------------------------------------------------------------===//
+///
+/// \file
+/// Bind source call effects while retaining independent native call receipts.
+///
+//===----------------------------------------------------------------------===//
 
 #include "RegistrationStateSolver.h"
 
@@ -21,11 +26,12 @@ RegistrationStateSolver::transferCall(size_t I, Domain &After, const LowOp &Op,
                               Op.Inputs[0].isConst() && Op.Inputs[0].Size == 4
                           ? CalleeIndices.find(Op.Inputs[0].Offset)
                           : CalleeIndices.end();
-  // A target-only leaf contract deliberately forgets exact return values.
-  // The conditional source owner must inspect the current invocation before
-  // that general result can discard facts needed by a following branch.
-  if (auto Call = transferConditionalCxxCall(After, Op, Facts))
-    return Call;
+  // A private conditional query needs exact invocation return facts. Root
+  // calls retain an existing native contract; only a missing contract may
+  // fall back to source-only effects without inventing a native call receipt.
+  if (Conditional || Callee == CalleeIndices.end())
+    if (auto Call = transferConditionalCxxCall(After, Op, Facts))
+      return Call;
   auto StackPointer =
       After.Frame.Registers[x86reg::RSP / x86reg::GeneralRegStride];
   std::optional<FrameValue> CallResult;

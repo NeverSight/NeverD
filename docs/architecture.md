@@ -9103,6 +9103,26 @@ initialization. Without an explicit byte domain, missing cells still refuse.
 This remains a private source-only word borrow, not a root native-call contract
 or permission to extend a borrow to adjacent object fields.
 
+An ordinary C++ root can bind that same source query at a missing direct-callee
+contract, using its actual installed frame and initialized argument bytes.
+Existing context-free native contracts retain priority at the root. The caller
+authenticates the original CALL and checks every lent output against its live
+allocation and runtime administration. All image import slots participate in
+binding invalidation, including slots used only by the callee. A source helper
+with closed private effects preserves a currently intact binding; it cannot
+repair a binding lost before the call.
+`SourceCallFrameEffectsComplete` records this source closure separately from
+`CallFrameEffectsComplete`, which still requires native call receipts. A bound
+source invocation publishes no native call receipt, even when its source state,
+cookies and lifetime are complete. Native parent admission checks each physical
+call and cannot be enabled by changing a summary flag alone.
+The root's current-image callee index also owns subsidiary context-free queries,
+so nested source proofs reuse already checked callee and stack evidence. Bound
+inputs, memory effects and returns are replayed for every invocation and never
+enter that target-only cache. The index bills its own queries and receives the
+separate source-state work once at publication; failures consume the same
+unchanged cumulative budget. An index for another image cannot supply evidence.
+
 Within that private query, nested cleanup-only C++ calls replay the same source
 owner with their current physical CALL, near RET cleanup, register inputs and
 initialized stack words. The caller validates every lent object, including

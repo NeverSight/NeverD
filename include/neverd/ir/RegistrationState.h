@@ -1,8 +1,12 @@
-//===- RegistrationState.h - Checked x86 EH state flow -----------*- C++
-//-*-===//
+//===- RegistrationState.h - Checked x86 EH state flow ----------*- C++ -*-===//
 //
 // NeverD Decompiler
 //
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Describe checked source registration states and separate native receipts.
+///
 //===----------------------------------------------------------------------===//
 
 #ifndef NEVERD_IR_REGISTRATIONSTATE_H
@@ -421,8 +425,11 @@ struct RegistrationStateAnalysis {
   std::vector<RegistrationFrameValue> FrameValues;
   bool IncomingFrameAccessesComplete = true;
   std::vector<RegistrationIncomingFrameAccess> IncomingFrameAccesses;
-  /// Per-occurrence stack and initialized-object projections, rechecked from
-  /// callee evidence across every reaching ordinary and runtime path.
+  /// Every reaching call has checked source effects, possibly under an
+  /// invocation-specific binding that grants no native call ABI.
+  bool SourceCallFrameEffectsComplete = false;
+  /// Per-occurrence stack and initialized-object projections with complete
+  /// native call receipts. Source-only invocations cannot set this flag.
   bool CallFrameEffectsComplete = false;
   std::vector<RegistrationCalleeFrameContract> CalleeContracts;
   std::vector<RegistrationCallFrameEffect> CallFrameEffects;

@@ -22,6 +22,15 @@
 namespace neverd::registration_state {
 
 bool RegistrationStateSolver::initializeContracts() {
+  if (CxxCalls) {
+    if (!KnownCxx || !charge(CxxCalls->ImportSlots.size()))
+      return false;
+    for (va_t Slot : CxxCalls->ImportSlots) {
+      if (!Slot || Slot > UINT32_MAX - 3)
+        return false;
+      StackImportSlots.insert(Slot);
+    }
+  }
   if (LocalUnwinds) {
     if (LocalUnwinds->size() >
         ::neverd::limits::ir::

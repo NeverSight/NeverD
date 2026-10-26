@@ -3,6 +3,11 @@
 // NeverD Decompiler
 //
 //===----------------------------------------------------------------------===//
+///
+/// \file
+/// Solve source registration states with separately bound call authorities.
+///
+//===----------------------------------------------------------------------===//
 
 #include "RegistrationStateSolver.h"
 
@@ -31,7 +36,8 @@ RegistrationStateSolver::RegistrationStateSolver(
     const coff_loader::X86CxxPrologueCall *CxxPrologue,
     const std::vector<coff_loader::X86CxxEpilogueCall> *CxxEpilogues,
     const coff_loader::X86SEH4PrologueCall *SEH4Prologue,
-    const std::vector<coff_loader::X86SEH4EpilogueCall> *SEH4Epilogues)
+    const std::vector<coff_loader::X86SEH4EpilogueCall> *SEH4Epilogues,
+    const CxxCallerProof *CxxCalls)
     : Function(Function), EH(*Function.ExceptionMetadata),
       Chain(*EH.Registration), SecurityCookieVA(SecurityCookieVA),
       CookieCheckVA(CookieCheckVA), CxxHandler(CxxHandler),
@@ -40,7 +46,7 @@ RegistrationStateSolver::RegistrationStateSolver(
       Callees(Callees), Cleanups(Cleanups), Stacks(Stacks),
       LocalUnwinds(LocalUnwinds), SEHControls(SEHControls),
       Conditional(Conditional), BoundCallees(BoundCallees),
-      JumpRuntime(JumpRuntime),
+      JumpRuntime(JumpRuntime), CxxCalls(CxxCalls),
       KnownCxx(EH.Encoding == ExceptionEncoding::X86CxxFuncInfo &&
                (EH.Personality == ExceptionPersonality::CxxFrameHandlerX86 ||
                 EH.Personality == ExceptionPersonality::CxxFrameHandler3)),

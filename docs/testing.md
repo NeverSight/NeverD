@@ -7170,6 +7170,18 @@ cookie, metadata, return-pop, input ownership and shared-budget mutations cannot
 reuse a successful invocation. These source-only tests do not authorize native
 calls or caller reloads; every negative input mutation starts from a successful
 fresh baseline.
+`RootInvocationDoesNotGrantNativeCallABI` builds an actual root CFG that lends
+an uninitialized output word. Source effects must close only when every read
+follows initialization and the output avoids runtime administration and outgoing
+arguments. Changed callee bytes and a store to a callee-only/unused IAT slot
+refuse; an ordinary data store remains a positive control. Successful source
+binding still lacks a native call receipt and parent ABI, including after a
+forged native summary flag. Exact and one-work-unit-short cumulative budgets
+exercise the root's shared index and source-state accounting.
+`CallerIndexDoesNotCacheInvocationInputs` reuses one current-image index across
+zero, nonzero and zero inputs. Only the proved zero may bypass a capturing
+branch. Both successful and failed source queries consume cumulative work;
+an index from a different image refuses without supplying evidence.
 Nested C++ cases forward an ancestor output or lend a private initialized word,
 preserve returned aliases through another GS epilogue, and distinguish a scalar
 result store from exact, joined and partial alias stores. Repeated calls check

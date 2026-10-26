@@ -286,7 +286,8 @@ struct BoundCxxFixture {
 
   void addOuter(bool ForwardBorrow = true, bool StoreResult = false,
                 bool RepeatNested = false, va_t Wrapper = Outer,
-                bool CrossPopSpill = false, bool RequireZero = false) {
+                bool CrossPopSpill = false, bool RequireZero = false,
+                std::optional<va_t> ImageWrite = std::nullopt) {
     auto &Text = Image.Segments.front().Data;
     const auto Target = Call.Inputs[0].Offset;
     const va_t WrapperCaller = Wrapper + (OuterCaller - Outer);
@@ -312,6 +313,11 @@ struct BoundCxxFixture {
            0,    0,    0xc7, 0x45, 0xfc, 0,    0,    0,    0});
     if (CrossPopSpill)
       Bytes({0x83, 0xec, 12, 0xc7, 0x45, 0xd4, 0, 0, 0, 0, 0x6a, 0});
+    if (ImageWrite) {
+      Bytes({0xc7, 0x05});
+      Word(*ImageWrite);
+      Word(0);
+    }
     if (ForwardBorrow)
       Bytes({0xff, 0x75, 8}); // Forward the ancestor's output borrow.
     else
@@ -702,6 +708,34 @@ TEST(RegistrationConditionalCxx, ExactReturnedZeroClosesOnlyItsOwnBranch) {
     }
 }
 
+TEST(RegistrationConditionalCxx, CallerIndexDoesNotCacheInvocationInputs) {
+  BoundCxxFixture F(BoundCxxFixture::ReturnMode::Scalar);
+  F.overwrite(F.ResultVA, {0x8b, 0x45, 0xe8}); // Return incoming ECX.
+  F.addOuter(true, false, false, Outer, false, true);
+  size_t TotalWork = 0;
+  RegistrationCallCalleeIndex Index(F.Image, &TotalWork);
+  for (uint32_t Value : {0u, 1u, 0u}) {
+    SCOPED_TRACE(Value);
+    F.Parent.Registers[x86reg::RCX / x86reg::GeneralRegStride] =
+        FrameValue::constant(Value);
+    const auto Before = TotalWork;
+    size_t Work = 0;
+    const auto Effect = proveBoundCxxCallee(F.Image, F.Call, F.Parent, 4, Work,
+                                            {}, nullptr, &Index);
+    EXPECT_EQ(bool(Effect), Value == 0);
+    EXPECT_GT(Work, 0u);
+    ASSERT_TRUE(Index.chargeStateWork(Work));
+    EXPECT_GT(TotalWork, Before);
+  }
+  BoundCxxFixture Other;
+  size_t ForeignWork = 0, Work = 0;
+  RegistrationCallCalleeIndex Foreign(Other.Image, &ForeignWork);
+  EXPECT_FALSE(proveBoundCxxCallee(F.Image, F.Call, F.Parent, 4, Work, {},
+                                   nullptr, &Foreign));
+  EXPECT_EQ(Work, 0u);
+  EXPECT_EQ(ForeignWork, 0u);
+}
+
 TEST(RegistrationConditionalCxx,
      NestedReturnsKeepTheirInvocationAndAddressKind) {
   for (unsigned Depth : {0u, 1u, 2u})
@@ -988,6 +1022,98 @@ TEST(RegistrationConditionalCxx,
     if (BothWrite) {
       EXPECT_EQ(Effect->InitializedOnReturn.front().Begin, -28);
       EXPECT_EQ(Effect->InitializedOnReturn.front().End, -24);
+    }
+  }
+}
+
+TEST(RegistrationConditionalCxx, RootInvocationDoesNotGrantNativeCallABI) {
+  for (unsigned Mutation = 0; Mutation != 7; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    BoundCxxFixture F(
+        BoundCxxFixture::ReturnMode::Scalar, false, false, false, false,
+        std::nullopt,
+        Mutation == 3 ? BoundCxxFixture::OutputAccess::ReadWord
+                      : BoundCxxFixture::OutputAccess::StoreWordThenReadWord);
+    if (Mutation >= 5) {
+      Import Extra;
+      Extra.Module = "authored.dll";
+      Extra.Name = "unused_by_parent";
+      Extra.IATAddr = Data + 12;
+      F.Image.Imports.push_back(Extra);
+    }
+    F.addOuter(false, false, false, Outer, false, false,
+               Mutation >= 5
+                   ? std::optional<va_t>{Data + (Mutation == 5 ? 12 : 16)}
+                   : std::nullopt);
+    auto &Text = F.Image.Segments.front().Data;
+    const std::vector<uint8_t> Save{0x89, 0x4d, 0xe8};
+    const auto Saved = std::search(Text.begin() + Outer - Entry,
+                                   Text.begin() + F.OuterCallVA - Entry,
+                                   Save.begin(), Save.end());
+    ASSERT_NE(Saved, Text.begin() + F.OuterCallVA - Entry);
+    // Give the callee a scalar register, without an invented root input.
+    F.overwrite(Entry + (Saved - Text.begin()), {0x31, 0xc9, 0x90});
+    // The cleanup owns EBP-20. Its separate output at EBP-28 is uninitialized.
+    // Mutations instead lend the state slot or the outgoing argument word.
+    F.overwrite(F.OuterCallVA - 4, {0x8d, 0x45,
+                                    uint8_t(Mutation == 1   ? 0xfc
+                                            : Mutation == 2 ? 0xdc
+                                                            : 0xe4),
+                                    0x50});
+    const std::vector<uint8_t> Return{0x8b, 0xe5, 0x5d, 0xc2, 4, 0};
+    const auto Ret = std::search(Text.begin() + F.OuterResultVA - Entry,
+                                 Text.begin() + OuterCaller - Entry,
+                                 Return.begin(), Return.end());
+    ASSERT_NE(Ret, Text.begin() + OuterCaller - Entry);
+    // A zero-argument parent cannot hide the missing callee native ABI behind
+    // an unrelated rejection of its own RET cleanup.
+    F.overwrite(Entry + (Ret - Text.begin()) + 3, {0xc3, 0x90, 0x90});
+    if (Mutation == 4)
+      F.overwrite(F.StoreVA, {0xcc});
+    F.Image.ExceptionMetadata = {};
+    coff_loader::parseX86RegistrationExceptions(F.Image);
+    Decoder Decode;
+    ASSERT_TRUE(Decode.init(F.Image));
+    size_t Work = 0;
+    RegistrationCallCalleeIndex Index(F.Image, &Work);
+    CFGBuilder Builder;
+    Builder.setRegistrationCalleeIndex(&Index);
+    auto Function = Builder.buildIntegerFrameProof(F.Image, Decode, Outer,
+                                                   "authored-root-borrow");
+    ASSERT_TRUE(Function.hasCompleteLiftCoverage());
+    ASSERT_TRUE(Function.RegistrationStates);
+    auto &States = *Function.RegistrationStates;
+    const bool Valid = Mutation == 0 || Mutation == 6;
+    EXPECT_EQ(States.Complete, Valid);
+    EXPECT_EQ(States.SourceCallFrameEffectsComplete, Valid);
+    EXPECT_FALSE(States.CallFrameEffectsComplete);
+    EXPECT_FALSE(getCheckedX86RegistrationCxxParentABI(Function, F.Image));
+    for (const auto &Effect : States.CallFrameEffects)
+      EXPECT_NE(Effect.Address, F.OuterCallVA);
+    if (Valid) {
+      EXPECT_TRUE(States.SecurityCookiesComplete);
+      EXPECT_TRUE(States.RegistrationLifetimeComplete);
+      // Summary flags cannot replace the missing physical call receipt.
+      States.CallFrameEffectsComplete = true;
+      EXPECT_FALSE(getCheckedX86RegistrationCxxParentABI(Function, F.Image));
+    }
+    if (Mutation == 0) {
+      ASSERT_GT(Work, 0u);
+      ASSERT_LT(Work, limits::kMaxRegistrationEHStateWork);
+      for (unsigned Short : {0u, 1u}) {
+        SCOPED_TRACE(Short);
+        size_t Budget = limits::kMaxRegistrationEHStateWork - Work + Short;
+        RegistrationCallCalleeIndex LimitedIndex(F.Image, &Budget);
+        CFGBuilder LimitedBuilder;
+        LimitedBuilder.setRegistrationCalleeIndex(&LimitedIndex);
+        const auto Limited = LimitedBuilder.buildIntegerFrameProof(
+            F.Image, Decode, Outer, "authored-root-budget");
+        ASSERT_TRUE(Limited.RegistrationStates);
+        EXPECT_EQ(Limited.RegistrationStates->SourceCallFrameEffectsComplete,
+                  Short == 0);
+        EXPECT_FALSE(Limited.RegistrationStates->CallFrameEffectsComplete);
+        EXPECT_EQ(Budget, limits::kMaxRegistrationEHStateWork);
+      }
     }
   }
 }

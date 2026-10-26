@@ -31,6 +31,7 @@
 namespace neverd {
 struct BinaryImage;
 struct LowFunc;
+class RegistrationCallCalleeIndex;
 } // namespace neverd
 
 namespace neverd::registration_state {
@@ -79,6 +80,18 @@ struct BoundPlainCalleeEffect {
   FrameValue ReturnValue = FrameValue::taint(true);
 };
 
+using BoundCxxCalleeProver = std::function<std::optional<BoundCxxCalleeEffect>(
+    const LowFunc &, const LowOp &, const FrameState &,
+    const std::set<int32_t> &, size_t &)>;
+
+/// Root invocations retain their actual caller domain. All image import slots
+/// participate in binding invalidation before this proof can use a callee's
+/// personality or nested import, including slots unused by the caller itself.
+struct CxxCallerProof {
+  BoundCxxCalleeProver ProveCall;
+  std::set<va_t> ImportSlots;
+};
+
 /// Invocation-specific inputs in the callee's established EBP coordinates.
 /// Positive object extents are proved caller storage, disjoint from this
 /// invocation's return PC, private frame and incoming argument slots.
@@ -88,10 +101,7 @@ struct ConditionalFrame {
       ProveCall;
   /// Replays a nested C++ invocation after binding its physical CALL and
   /// current inputs. Only the private conditional solver consumes this hook.
-  std::function<std::optional<BoundCxxCalleeEffect>(
-      const LowFunc &, const LowOp &, const FrameState &,
-      const std::set<int32_t> &, size_t &)>
-      ProveCxxCall;
+  BoundCxxCalleeProver ProveCxxCall;
   std::function<std::optional<BoundPlainCalleeEffect>(
       const LowFunc &, const LowOp &, const FrameState &,
       const std::set<int32_t> &, size_t &)>
@@ -154,12 +164,16 @@ std::optional<BoundCalleeEffect> proveBoundSEHCallee(
 /// It also permits output-only storage without a value seed: every read must
 /// then follow checked initialization within this invocation. Without that
 /// explicit byte domain, missing caller cells still supply no borrow.
+/// OwnerIndex may reuse only context-free evidence for this same image. It
+/// bills its own queries; the caller must also charge Work to that owner once
+/// its state analysis finishes. Invocation inputs/results are never cached.
 std::optional<BoundCxxCalleeEffect>
 proveBoundCxxCallee(const BinaryImage &Image, const LowOp &Op,
                     const FrameState &Parent, uint32_t StackArgumentBytes,
                     size_t &Work,
                     llvm::ArrayRef<RegistrationObjectExtent> CallerObjects = {},
-                    const std::set<int32_t> *Initialized = nullptr);
+                    const std::set<int32_t> *Initialized = nullptr,
+                    RegistrationCallCalleeIndex *OwnerIndex = nullptr);
 
 using BoundCalleeProver = std::function<std::optional<BoundCalleeEffect>(
     const LowOp &, const FrameState &, size_t &,
