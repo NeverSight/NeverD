@@ -9139,6 +9139,17 @@ The query and its word projections share the existing cumulative work and
 borrowed-byte limits. Larger storage grants no native call receipt or permission
 to read an opaque external pointer.
 
+Discarding an opaque read's result does not close its effects. The address
+can reach a live pointer cell, and a failed read can invoke a process exception
+callback that writes state before resuming the original instruction. Retaining
+loaded-value taint addresses the first issue but supplies no mapped-storage or
+resumption proof for the second. A may-read-unknown summary therefore cannot
+replace `ImageReadsComplete` or preserve import bindings by itself. Supporting
+such reads needs current storage/lifetime evidence or a complete exception
+resumption contract, including callback writes. The existing bounded source
+query continues to refuse them. Windows documents this resume behavior in its
+[vectored exception handler example](https://learn.microsoft.com/en-us/windows/win32/debug/using-a-vectored-exception-handler).
+
 Within that private query, nested cleanup-only C++ calls replay the same source
 owner with their current physical CALL, near RET cleanup, register inputs and
 initialized stack words. The caller validates every lent object, including

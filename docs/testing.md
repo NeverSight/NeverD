@@ -7191,6 +7191,12 @@ remains ordinary owned storage, with its actual writes projected back to the
 caller. All successful cases still lack a native call receipt and parent ABI.
 `WordBorrowDoesNotInventAdjacentStorage` keeps the standalone word-only query
 negative even when a neighboring caller value is known and initialized.
+`DiscardingOpaqueReadDoesNotProveItsEffects` compares initialized borrowed reads
+with opaque incoming-address reads, both directly and through a nested C++
+caller. Keeping or discarding the loaded value cannot grant the missing storage
+and exception-resumption proof. A possibly reachable frame pointer outside the
+borrow remains part of the negative case; the initialized borrowed controls
+retain their checked read/write extents and scalar return.
 Nested C++ cases forward an ancestor output or lend a private initialized word,
 preserve returned aliases through another GS epilogue, and distinguish a scalar
 result store from exact, joined and partial alias stores. Repeated calls check

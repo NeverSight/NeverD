@@ -1218,6 +1218,48 @@ TEST(RegistrationConditionalCxx, WordBorrowDoesNotInventAdjacentStorage) {
   EXPECT_FALSE(F.prove(Work));
 }
 
+TEST(RegistrationConditionalCxx, DiscardingOpaqueReadDoesNotProveItsEffects) {
+  for (bool Nested : {false, true}) {
+    for (bool Borrowed : {true, false}) {
+      for (bool Discard : {true, false}) {
+        SCOPED_TRACE(Nested);
+        SCOPED_TRACE(Borrowed);
+        SCOPED_TRACE(Discard);
+        BoundCxxFixture F(
+            BoundCxxFixture::ReturnMode::Scalar, false, false, false, false,
+            std::nullopt,
+            BoundCxxFixture::OutputAccess::StoreBothArmsThenReadWord);
+        F.Parent.Registers[x86reg::RCX / x86reg::GeneralRegStride] = {};
+        // An opaque address can reach a frame pointer outside this borrow.
+        // Even a discarded read still lacks mapped-storage and exception
+        // resumption evidence: a fault callback can write before returning.
+        F.Parent.Cells[-48] = FrameValue::frame(-80);
+        F.overwrite(F.StoreVA, {0x8b, uint8_t(Borrowed ? 0x10 : 0x12),
+                                uint8_t(Discard ? 0x31 : 0x90),
+                                uint8_t(Discard ? 0xd2 : 0x90), 0x89, 0x10,
+                                0x90, 0x90, 0x90, 0x90, 0x90, 0x90});
+        F.Image.ExceptionMetadata = {};
+        coff_loader::parseX86RegistrationExceptions(F.Image);
+        if (Nested)
+          F.addOuter();
+        size_t Work = 0;
+        const auto Effect = F.prove(Work);
+        ASSERT_EQ(bool(Effect), Borrowed);
+        if (Effect) {
+          ASSERT_EQ(Effect->Reads.size(), 1u);
+          EXPECT_EQ(Effect->Reads.front().Begin, -28);
+          EXPECT_EQ(Effect->Reads.front().End, -24);
+          ASSERT_EQ(Effect->Writes.size(), 1u);
+          EXPECT_EQ(Effect->Writes.front().Begin, -28);
+          EXPECT_EQ(Effect->Writes.front().End, -24);
+          ASSERT_EQ(Effect->Returns.size(), 1u);
+          EXPECT_FALSE(Effect->Returns.front().Value.MayBeFrame);
+        }
+      }
+    }
+  }
+}
+
 TEST(RegistrationConditionalCxx, StackPopPreservesOverlappingPointerBytes) {
   BoundCxxFixture F;
   F.overwrite(F.ReturnVA,

@@ -152,6 +152,9 @@ bool RegistrationStateSolver::checkConditionalMemory(
            Refuse();
   if (!Address.Offset) {
     const auto VA = Address.preferredAddress();
+    // A discarded opaque read is not a closed effect. It can read a live
+    // frame pointer or fault into a callback that mutates state and resumes.
+    // Result taint alone proves neither storage nor those callback effects.
     return (VA && !Address.MayBeFrame && Conditional->ProveImageMemory &&
             (Op.Opcode != NdOp::STORE ||
              !Transfer.read(*Memory.StoredValue).MayBeFrame) &&
