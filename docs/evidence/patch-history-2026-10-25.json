@@ -694,7 +694,7 @@
       ]
     }
   ],
-  "memory_driver": "import importlib.util,json,os,sys\nfrom pathlib import Path\nroot=Path('/home/ad/code/NeverD-worktrees/interactive-patching-dev')\na=Path('/mnt/data/neverd-patch-history')\nos.environ['TMPDIR']=str(a/'tmp')\nspec=importlib.util.spec_from_file_location('bench',root/'tools/neverd-bench/patch-scaling.py')\nm=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)\nbase=m.Client\nobservations=[]\nclass Client(base):\n def close(self):\n  status=Path(f'/proc/{self.process.pid}/status').read_text()\n  rss={k:int(v.strip().split()[0]) for line in status.splitlines() if ':' in line for k,v in [line.split(':',1)] if k in ['VmHWM','VmRSS']}\n  observations.append(rss)\n  super().close()\nm.Client=Client\nvariant=sys.argv[1]\nlib=a/variant/'bin/libneverd.so'\nos.environ['LD_LIBRARY_PATH']=str(lib.parent)\nhost=m.HostAPI(m.ctypes.CDLL(str(lib)))\nfor count in [64,8192]:\n for attempt in range(3):\n  m.worker_edit_case(host,str(lib.parent/'neverd-worker'),lib,count,3)\n  observations[-1].update(adjacent_rows=count,attempt=attempt)\nprint(json.dumps({'variant':variant,'library_sha256':m.digest(lib),'worker_sha256':m.digest(lib.parent/'neverd-worker'),'scope':'Linux /proc VmHWM after three checked commits and undos; includes worker startup, input load and whole durable state, not isolated allocations or a timing comparison.','observations':observations},indent=2))\n",
+  "memory_driver": "import importlib.util,json,os,sys\nfrom pathlib import Path\nroot=Path.cwd()\na=Path('/mnt/data/neverd-patch-history')\nos.environ['TMPDIR']=str(a/'tmp')\nspec=importlib.util.spec_from_file_location('bench',root/'tools/neverd-bench/patch-scaling.py')\nm=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)\nbase=m.Client\nobservations=[]\nclass Client(base):\n def close(self):\n  status=Path(f'/proc/{self.process.pid}/status').read_text()\n  rss={k:int(v.strip().split()[0]) for line in status.splitlines() if ':' in line for k,v in [line.split(':',1)] if k in ['VmHWM','VmRSS']}\n  observations.append(rss)\n  super().close()\nm.Client=Client\nvariant=sys.argv[1]\nlib=a/variant/'bin/libneverd.so'\nos.environ['LD_LIBRARY_PATH']=str(lib.parent)\nhost=m.HostAPI(m.ctypes.CDLL(str(lib)))\nfor count in [64,8192]:\n for attempt in range(3):\n  m.worker_edit_case(host,str(lib.parent/'neverd-worker'),lib,count,3)\n  observations[-1].update(adjacent_rows=count,attempt=attempt)\nprint(json.dumps({'variant':variant,'library_sha256':m.digest(lib),'worker_sha256':m.digest(lib.parent/'neverd-worker'),'scope':'Linux /proc VmHWM after three checked commits and undos; includes worker startup, input load and whole durable state, not isolated allocations or a timing comparison.','observations':observations},indent=2))\n",
   "write_counts": {
     "baseline": {
       "atomic_replacements": 10,
@@ -736,7 +736,7 @@
         "command": [
           "ctest",
           "--test-dir",
-          "/home/ad/code/NeverD/build-gui",
+          "build-gui",
           "--output-on-failure",
           "-R",
           "^NeverDWorker(History|Patch|NativePatch|SourceBytePatch|HistoryContributions|FunctionalRegressions|AnalysisSnapshot|LocalTypes|CodeEdits|GitCollaboration|SourceVariableEdits|FunctionEdits|DataPresentation)$"
@@ -751,7 +751,7 @@
           "-a",
           "-s",
           "-screen 0 2560x1600x24",
-          "/home/ad/code/NeverD/build-gui/bin/neverd-gui-patch-tests"
+          "build-gui/bin/neverd-gui-patch-tests"
         ],
         "exit_code": 0,
         "seconds": 38.12956751099955
@@ -761,7 +761,7 @@
         "command": [
           "python3",
           "tools/neverd-gui/tests/run_wayland_docking.py",
-          "/home/ad/code/NeverD/build-gui/bin/neverd-gui-patch-tests"
+          "build-gui/bin/neverd-gui-patch-tests"
         ],
         "exit_code": 0,
         "seconds": 38.66442375599945
