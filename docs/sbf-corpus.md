@@ -173,3 +173,48 @@ Stage completion is not a claim of readable business-source recovery, execution
 equivalence or security. Whole-program dispatcher output and unresolved account
 or call facts remain visible; official VM and behavioral qualification retain
 their separate gates described in `docs/sbf.md`.
+
+## 2026-10-26 P3 qualification
+
+Qualified code: `48b34933ca43b6d7760bb8b30da08de48ec68f20`; worker SHA-256 `5a40173becae26bbbf8931b4d43a97a894c5fa3f063a7c0c525d7817d18abc6a`. The pinned snapshot contains 72 SOs. This local macOS arm64 Release run uses the official LLVM r6 prebuilt package, pinned SBPF/Agave gates, and the original profiles and budgets: 60 seconds/request, sampled process-group RSS 8 GiB, output 512 MiB, jobs 2. Context limits remain 8,388,608 instruction visits, 64 MiB retained-state estimate, and four specialized summaries per entry.
+
+The historical comparison below uses the frozen qualification shipped in #1802. NeverD has since moved to dev, including its Capstone pin; the five managed fork inputs and corpus profiles match. All 216 LLVM/C/Rust exports remain byte-identical. The separate V2/V3 cache-policy comparison uses the same dev and dependency baseline.
+
+| Stage | #1802 frozen run | This run |
+| --- | ---: | ---: |
+| `load` | 72/72 | 72/72 |
+| `runtime_image` | 72/72 | 72/72 |
+| `decode` | 72/72 | 72/72 |
+| `control_flow` | 72/72 | 72/72 |
+| `verification` | 72/72 | 72/72 |
+| `cfg_medir` | 72/72 | 72/72 |
+| `highir` | 72/72 | 72/72 |
+| `solana` | 72/72 | 72/72 |
+| llvm export | 72/72 | 72/72 |
+| c export | 72/72 | 72/72 |
+| rust export | 72/72 | 72/72 |
+| LLVM module verification | 72/72 | 72/72 |
+| c native object compilation | 72/72 | 72/72 |
+| rust native object compilation | 71/72 | 68/72 |
+
+Conditional target sites: **173 → 142**; sites beyond the entry block: **166 → 135**. There are 13 newly recorded sites. All 44 lost sites have raw-SO witnesses excluding every old positive caller context; there are no unclassified site losses. These counts measure conditional facts, not executed handlers, globally closed indirect calls, or monotonically growing coverage.
+
+For example, boop-fun constructors store zero at FP−72 and FP−56 before passing FP−72 to slot 149805. Its first two loads read those zeros; OR produces zero and JEQ at 149809 selects 149862. The old positive contexts for slots 149928, 149946, 149955 and 149966 therefore cannot execute. The audit follows all old positive callers, checks real ELF `.text` bytes and ABI-preserved zero definitions, and refuses unknown/relocated values or legacy-runtime mutation. Other runtime inputs remain open.
+
+The cache-policy control restores Phoenix slots 143914/143953: V2 reaches the unchanged 8,388,608-visit bound; pressure-triggered reclamation takes 6,816,216 visits and retains both sites. Whole-corpus visits are 196,169,086 → 193,054,066; resource-widened samples are 5 → 4. Relative to #1802, resource-widened samples fall from 12 to 4.
+
+Remaining resource-widened samples: `byreal, meteora-dbc, meteora-dlmm, pancakeswap`. Lifinity-v1 CALLX 1963 remains unproven: slot 1960 lacks an all-path value for the loaded field after possible aliasing writes; slot 1971 remains a constructor-derived candidate. Unknown pointer writes are not assumed disjoint from the stack.
+
+
+Remaining full-scan native failures:
+
+| SO | Stage | Disposition | Elapsed | Sampled peak RSS |
+| --- | --- | --- | ---: | ---: |
+| `jupiter-perps` | `rust_native` | timeout | 60.066 s | 3.40 GiB |
+| `pump-fun` | `rust_native` | timeout | 60.047 s | 2.51 GiB |
+| `raydium-clmm` | `rust_native` | timeout | 60.104 s | 1.49 GiB |
+| `raydium-launchlab` | `rust_native` | timeout | 60.061 s | 1.52 GiB |
+
+All use `rustc 1.91.1 (ed61e7d7e 2025-11-07)`. Emitted sources, compiler versions and probe templates match the earlier run. No isolated retry replaces a full-scan failure.
+
+Validation: Release **411/411**, no failures, skips or disabled cases. Both C and Rust cover all **5,899,345 raw slots exactly once**, with matching partitions. Sanitizers, other host platforms and real business-handler replay were not requalified in this run. P3 and the broader semantic-recovery goal remain open.
