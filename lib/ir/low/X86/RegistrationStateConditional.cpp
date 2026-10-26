@@ -235,13 +235,17 @@ bool RegistrationStateSolver::conditionalReturn(const Domain &State,
              !Value.CallbackAddress && !Value.SEHException;
   }
   Conditional->Complete &= Valid;
-  if (Valid && KnownCxx && charge(1)) {
+  if (Valid) {
+    if (!charge(1))
+      return false;
     const auto Value =
         State.Frame.Registers[x86reg::RAX / x86reg::GeneralRegStride];
     const auto [It, New] = Conditional->ReturnValues.emplace(
         std::make_pair(Op.Addr, Op.Seq), Value);
     if (!New)
       It->second = join(It->second, Value);
+    if (!KnownCxx)
+      return true;
     std::set<int32_t> Initialized;
     // Only caller-owned borrowed bytes survive as an invocation result.
     // Each visit and each distinct normal return intersects these facts;

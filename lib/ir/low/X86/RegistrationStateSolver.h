@@ -389,7 +389,8 @@ private:
   bool transferBoundSEHCallee(size_t I, const Domain &Before, Domain &After,
                               const LowOp &Op, BlockFacts &Facts,
                               std::optional<FrameValue> &CallSP,
-                              std::optional<Domain> &CallException);
+                              std::optional<Domain> &CallException,
+                              std::optional<FrameValue> &CallResult);
   bool transferJumpCapture(size_t I, Domain &After, const LowOp &Op,
                            const BlockFacts &Facts,
                            std::optional<FrameValue> &CallSP);

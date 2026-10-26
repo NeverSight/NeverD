@@ -22,6 +22,7 @@ add_neverd_unittest(NeverDSEHRuntimeMemoryTests
   eh/RegistrationSEHControlTests.cpp
   eh/RegistrationSEHEpilogueTests.cpp
   eh/RegistrationConditionalFrameTests.cpp
+  eh/RegistrationConditionalSEHTests.cpp
   eh/RegistrationJumpRuntimeTests.cpp
   eh/RegistrationJumpCaptureTests.cpp
   eh/RegistrationCallbackImageTests.cpp

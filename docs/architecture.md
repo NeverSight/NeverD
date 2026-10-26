@@ -2260,6 +2260,18 @@ requires the helper's own outside-state sentinel and intact cookies. For an
 unchanged preserved helper, cookie-call coverage follows the proved invocation's
 reachable blocks. Unreachable calls grant no effects; a reconstructed parent
 still requires coverage of every source cookie-call occurrence.
+The same bound SEH query accepts scalar/image arguments without an object
+borrow. An explicit initialization inventory must cover every argument and
+borrowed-object byte; without that inventory, current full-word cells remain
+required. Ordinary root SEH analysis uses the latter authority, since it does
+not maintain the conditional solver's byte domain. Complete ordinary returns
+join their physical EAX values after stack, saved-register, chain and cookie
+checks. Filter/finally returns belong to separate invocations and contribute
+no caller result. Callee-owned identities become opaque returned provenance.
+Only a complete 32-bit EAX or temporary call output receives this source fact;
+the existing native preserved-helper rule still requires an unused result.
+This grants neither opaque memory access nor fixed differences between
+independently reconstructed image addresses.
 Registration no-return annotations and ordinary-edge removal bind the same
 current call occurrence, target, instruction extent and operation range. A
 conditional or malformed instruction cannot reuse that receipt. A separate

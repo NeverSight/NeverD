@@ -620,7 +620,7 @@ bool RegistrationStateSolver::transferBlock(size_t I, const Domain &Before,
       }
     }
     if (!transferBoundSEHCallee(I, Before, After, Op, Facts, CallSP,
-                                CallException))
+                                CallException, CallResult))
       break;
     if (!CallSP && !JumpCapture && !JumpResume)
       CallSP = transferPrivateSEHCall(After, Op, Facts);

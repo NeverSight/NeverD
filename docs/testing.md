@@ -9490,6 +9490,15 @@ rejects; an exact old value cannot override a missing initialization byte.
 Both image bases and exhausted/one-unit-short budgets are covered. Run the
 registration state suite as well: its conditional C++ tests consume the same
 caller-word reader and retain overlapping-taint and nested-call coverage.
+`RegistrationConditionalSEH` in `NeverDSEHRuntimeMemoryTests` checks authored
+scalar-only SEH helpers at two image bases, unknown initialized inputs,
+missing bytes, overlapping pointer taint, current call/code identity and exact
+work limits. Ordinary returns retain scalar/image values, join differing
+paths and erase callee-owned identities. A protected ordinary/except pair
+separately checks that a filter's result cannot enter the ordinary EAX join.
+The root-call case passes an actual pushed scalar, uses the returned value
+to guard a frame escape, and retains the independent native refusal for an
+observed preserved-helper result.
 `VolatileInputsDoNotRequireStackArguments` checks all three PE32 volatile GPRs
 at two image bases with constant, image and unknown scalar inputs. It retains
 callee definitions and exact branch selection, rejects partial pointer-bearing

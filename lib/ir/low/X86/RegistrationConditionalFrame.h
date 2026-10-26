@@ -141,6 +141,9 @@ struct BoundCalleeEffect {
   std::vector<RegistrationObjectExtent> Reads;
   std::vector<RegistrationObjectExtent> Writes;
   bool HasOrdinaryReturn = true;
+  /// Joined physical EAX from complete ordinary returns of this invocation.
+  /// This is a source fact, not permission to observe a preserved native call.
+  std::optional<FrameValue> ReturnValue;
   std::vector<BorrowedJumpResume> JumpResumes;
   std::optional<RegistrationSEHBoundCall> NativeCall;
 };
@@ -152,9 +155,13 @@ void checkConditionalNativeFrame(const FrameState &State, const LowOp &Op,
 
 /// Prove one exact original helper using its current caller cells. The caller
 /// separately binds this target to its authenticated physical CALL occurrence.
-std::optional<BoundCalleeEffect> proveBoundSEHCallee(
-    const BinaryImage &Image, const LowOp &Op, const FrameState &Parent,
-    size_t &Work, const std::map<int32_t, SEHJumpCapture> *Captures = nullptr);
+/// Initialized, when supplied, owns argument and object byte initialization;
+/// a sparse unknown scalar cell is not evidence of missing storage.
+std::optional<BoundCalleeEffect>
+proveBoundSEHCallee(const BinaryImage &Image, const LowOp &Op,
+                    const FrameState &Parent, size_t &Work,
+                    const std::map<int32_t, SEHJumpCapture> *Captures = nullptr,
+                    const std::set<int32_t> *Initialized = nullptr);
 
 /// Inspect a fixed-frame cleanup-only C++ helper for one original direct call.
 /// Parent supplies current, initialized caller-frame cells and full-register

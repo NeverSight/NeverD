@@ -85,9 +85,12 @@ SEHCookieInputs getSEHCookieInputs(const BinaryImage &Image,
 std::optional<BoundCalleeEffect>
 proveBoundSEHCallee(const BinaryImage &Image, const LowOp &Op,
                     const FrameState &Parent, size_t &Work,
-                    const std::map<int32_t, SEHJumpCapture> *Captures) {
+                    const std::map<int32_t, SEHJumpCapture> *Captures,
+                    const std::set<int32_t> *Initialized) {
   if (Op.Opcode != NdOp::CALL || Op.NumInputs != 1 || !Op.Inputs[0].isConst() ||
-      Op.Inputs[0].Size != 4)
+      Op.Inputs[0].Size != 4 || Op.Seq < 0 ||
+      Op.MemoryAddressSpace != NdMemoryAddressSpace::Default ||
+      Op.MemoryOrdering != NdMemoryOrdering::None)
     return std::nullopt;
   const va_t Target = Op.Inputs[0].Offset;
   const auto *EH = Image.ExceptionMetadata.findFunction(Target);
@@ -116,7 +119,7 @@ proveBoundSEHCallee(const BinaryImage &Image, const LowOp &Op,
                   kRegistrationConditionalCalleeProveBoundSEHCalleeArgLimit;
        Arg += 4) {
     const auto Cell = registration_abi::readCallerFrameWord(
-        Parent, *SP + Arg - 8, nullptr, Inputs.Work);
+        Parent, *SP + Arg - 8, Initialized, Inputs.Work);
     if (!Cell)
       continue;
     const auto &Value = *Cell;
@@ -139,7 +142,7 @@ proveBoundSEHCallee(const BinaryImage &Image, const LowOp &Op,
         continue;
       }
     const auto Object = registration_abi::readCallerFrameWord(
-        Parent, *Value.Offset, nullptr, Inputs.Work);
+        Parent, *Value.Offset, Initialized, Inputs.Work);
     const int64_t Offset = int64_t(*Value.Offset) - Base;
     if (Captures &&
         !registration_abi::chargeCalleeWork(Inputs.Work, Captures->size()))
@@ -159,7 +162,7 @@ proveBoundSEHCallee(const BinaryImage &Image, const LowOp &Op,
     Inputs.Objects.push_back({int32_t(Offset), int32_t(Offset + 4)});
     Inputs.ObjectCells.emplace(int32_t(Offset), *Object);
   }
-  if (Inputs.Objects.empty() && Inputs.JumpBuffers.empty())
+  if (Inputs.Arguments.empty())
     return std::nullopt;
   Inputs.ProveCall = [&](const LowOp &Call, const FrameState &State,
                          const std::set<int32_t> &Initialized,
@@ -258,6 +261,15 @@ proveBoundSEHCallee(const BinaryImage &Image, const LowOp &Op,
     return std::nullopt;
   BoundCalleeEffect Effect;
   Effect.HasOrdinaryReturn = HasParentReturn;
+  if (HasParentReturn != !Inputs.ReturnValues.empty() ||
+      !registration_abi::chargeCalleeWork(Inputs.Work,
+                                          Inputs.ReturnValues.size()))
+    return std::nullopt;
+  for (const auto &[Identity, Value] : Inputs.ReturnValues) {
+    const auto Projected = projectX86CallReturnValue(Value);
+    Effect.ReturnValue =
+        Effect.ReturnValue ? join(*Effect.ReturnValue, Projected) : Projected;
+  }
   for (const auto &[Identity, Resume] : Inputs.JumpResumes)
     Effect.JumpResumes.push_back(Resume);
   for (const auto &[Begin, End] : Inputs.Reads)
@@ -324,6 +336,8 @@ RegistrationStateAnalysis analyzeCheckedX86SEHStates(
   BoundCalleeProver Prove =
       [&](const LowOp &Op, const FrameState &State, size_t &Work,
           const std::map<int32_t, SEHJumpCapture> &Captures) {
+        // Root SEH states retain complete word cells, but do not own the
+        // conditional solver's byte-initialization inventory.
         return proveBoundSEHCallee(Image, Op, State, Work, &Captures);
       };
   SEHPrivateCallProof PrivateCalls(Image, Function);

@@ -1,0 +1,240 @@
+//===- RegistrationConditionalSEHTests.cpp - Bound SEH scalar results -----===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Bind initialized inputs and ordinary return values of authored SEH helpers.
+//===----------------------------------------------------------------------===//
+
+#include "../../../lib/ir/low/X86/RegistrationConditionalFrame.h"
+#include "RegistrationSEH4SharedTestUtils.h"
+#include "gtest/gtest.h"
+
+#include "neverd/Limits.h"
+#include "neverd/ir/med/LowToMed.h"
+#include "neverd/ir/med/X86RegistrationSEHBoundCall.h"
+#include "neverd/lift/X86Regs.h"
+#include "neverd/loader/COFF/COFFRegistrationEH.h"
+#include "neverd/support/BinaryEncoding.h"
+
+#include <algorithm>
+#include <cstdint>
+#include <initializer_list>
+#include <set>
+#include <vector>
+
+namespace {
+using namespace neverd;
+using namespace neverd::registration_state;
+
+struct ScalarSEHFixture {
+  BinaryImage Image;
+  FrameState Parent;
+  LowOp Call;
+  std::set<int32_t> Initialized;
+  size_t ReturnOffset = 0;
+
+  ScalarSEHFixture(uint32_t Base, std::initializer_list<uint8_t> Body)
+      : Image(registration_test::sharedSEH4Image(Base, false)) {
+    auto &Text = Image.Segments.front().Data;
+    std::fill(Text.begin() + 12, Text.begin() + 0x80, 0xcc);
+    std::vector<uint8_t> Code(Body);
+    // Keep the shared frame protocol; only the authored ordinary body varies.
+    Code.insert(Code.end(), {0xc7, 0x45, 0xfc, 0xfe, 0xff, 0xff, 0xff});
+    const size_t Exit = 12 + Code.size();
+    Code.push_back(0xe8);
+    Code.resize(Code.size() + 4);
+    writeLE<uint32_t>(Code.data() + Code.size() - 4,
+                      uint32_t(0x150 - Exit - 5));
+    ReturnOffset = 12 + Code.size();
+    Code.push_back(0xc3);
+    std::copy(Code.begin(), Code.end(), Text.begin() + 12);
+    Text[0x300] = 0xe8;
+    writeLE<uint32_t>(Text.data() + 0x301, uint32_t(-0x305));
+    Text[0x305] = 0xc3;
+    Image.Symbols.push_back(Symbol::makeFunc(Base + 0x1300));
+    Image.ExceptionMetadata = {};
+    coff_loader::parseX86RegistrationExceptions(Image);
+    Parent.Registers[x86reg::RSP / x86reg::GeneralRegStride] =
+        FrameValue::frame(-64);
+    Parent.store(-64, 4, FrameValue::constant(37));
+    for (int32_t Byte = -64; Byte != -60; ++Byte)
+      Initialized.insert(Byte);
+    Call.Opcode = NdOp::CALL;
+    Call.Addr = Base + 0x1300;
+    Call.Seq = 0;
+    Call.Output = NdVar::reg(x86reg::RAX, 4);
+    Call.addInput(NdVar::cst(Base + 0x1000, 4));
+  }
+};
+} // namespace
+
+TEST(RegistrationConditionalSEH, ScalarInputsNeedNoObjectBorrow) {
+  for (uint32_t Base : {0x400000u, 0x18000000u})
+    for (unsigned Mode = 0; Mode != 14; ++Mode) {
+      SCOPED_TRACE(Base);
+      SCOPED_TRACE(Mode);
+      ScalarSEHFixture F(Base, {0x8b, 0x45, 8});
+      const auto Argument = Mode == 1 ? FrameValue::imageAddress(Base + 0x2200)
+                            : Mode == 2 || Mode == 3 ? FrameValue{}
+                                                     : FrameValue::constant(37);
+      F.Parent.store(-64, 4, Argument);
+      if (Mode == 4)
+        F.Initialized.erase(-61);
+      if (Mode == 5)
+        F.Parent.store(-61, 1, FrameValue::frame(-32));
+      if (Mode == 6)
+        ++F.Call.Addr;
+      if (Mode == 7)
+        F.Image.Segments.front().Data[F.ReturnOffset] = 0xcb;
+      if (Mode == 8)
+        F.Image.Segments.front().Flags =
+            F.Image.Segments.front().Flags | SegmentFlags::Writable;
+      if (Mode == 9)
+        F.Call.Seq = -1;
+      if (Mode == 10)
+        F.Call.MemoryAddressSpace = NdMemoryAddressSpace::X86FS;
+      if (Mode == 11)
+        F.Call.Inputs[0].Size = 8;
+      if (Mode == 12)
+        F.Parent.Registers[x86reg::RSP / x86reg::GeneralRegStride] = {};
+      size_t Work = Mode == 13 ? limits::kMaxRegistrationEHStateWork : 0;
+      const auto *Initialized = Mode == 3 ? nullptr : &F.Initialized;
+      const auto Effect = proveBoundSEHCallee(F.Image, F.Call, F.Parent, Work,
+                                              nullptr, Initialized);
+      ASSERT_EQ(bool(Effect), Mode < 3);
+      if (!Effect)
+        continue;
+      EXPECT_TRUE(Effect->HasOrdinaryReturn);
+      EXPECT_EQ(Effect->ReturnValue, Argument);
+      EXPECT_TRUE(Effect->Reads.empty());
+      EXPECT_TRUE(Effect->Writes.empty());
+      ASSERT_TRUE(Effect->NativeCall);
+      ASSERT_EQ(Effect->NativeCall->Arguments.size(), 1u);
+      EXPECT_EQ(Effect->NativeCall->Arguments[0].ArgumentKind,
+                RegistrationSEHBoundArgument::Kind::Scalar);
+      EXPECT_EQ(Effect->NativeCall->Arguments[0].Offset, -64);
+      ASSERT_GT(Work, 0u);
+      ASSERT_LT(Work, limits::kMaxRegistrationEHStateWork);
+      size_t Exact = limits::kMaxRegistrationEHStateWork - Work;
+      EXPECT_TRUE(proveBoundSEHCallee(F.Image, F.Call, F.Parent, Exact, nullptr,
+                                      Initialized));
+      EXPECT_EQ(Exact, limits::kMaxRegistrationEHStateWork);
+      size_t Short = limits::kMaxRegistrationEHStateWork - Work + 1;
+      EXPECT_FALSE(proveBoundSEHCallee(F.Image, F.Call, F.Parent, Short,
+                                       nullptr, Initialized));
+    }
+}
+
+TEST(RegistrationConditionalSEH, ReturnsJoinWithoutLeakingCalleeIdentities) {
+  for (unsigned Mode = 0; Mode != 6; ++Mode) {
+    SCOPED_TRACE(Mode);
+    ScalarSEHFixture F(
+        0x400000,
+        Mode == 0   ? std::initializer_list<uint8_t>{0x8b, 0xc2}
+        : Mode == 1 ? std::initializer_list<uint8_t>{0x8b, 0xc3}
+        : Mode == 2 ? std::initializer_list<uint8_t>{0x8b, 0x45, 4}
+        : Mode == 3 ? std::initializer_list<uint8_t>{0x8d, 0x45, 0xd0}
+        : Mode == 4 ? std::initializer_list<uint8_t>{0x8b, 0x45, 8, 0x85, 0xc0,
+                                                     0x74, 7, 0xb8, 37, 0, 0, 0,
+                                                     0xeb, 5, 0xb8, 38, 0, 0, 0}
+                    : std::initializer_list<uint8_t>{0x8b, 0x45, 8, 0x8b, 0});
+    F.Parent.store(-64, 4, {});
+    size_t Work = 0;
+    const auto Effect = proveBoundSEHCallee(F.Image, F.Call, F.Parent, Work,
+                                            nullptr, &F.Initialized);
+    ASSERT_EQ(bool(Effect), Mode != 5);
+    if (!Effect)
+      continue;
+    ASSERT_TRUE(Effect->ReturnValue);
+    const auto &Value = *Effect->ReturnValue;
+    EXPECT_FALSE(Value.Offset);
+    EXPECT_FALSE(Value.ReturnPC);
+    EXPECT_EQ(Value.SavedRegister, 0u);
+    if (Mode == 4)
+      EXPECT_EQ(Value, FrameValue{});
+    else {
+      EXPECT_TRUE(Value.MayBeFrame);
+      EXPECT_TRUE(Value.FrameOnlyFromCall);
+    }
+  }
+}
+
+TEST(RegistrationConditionalSEH, FilterResultsDoNotBecomeOrdinaryReturns) {
+  for (unsigned Mode = 0; Mode != 3; ++Mode) {
+    SCOPED_TRACE(Mode);
+    ScalarSEHFixture F(0x400000, {0x8b, 0x45, 8});
+    auto Image = registration_test::sharedSEH4Image(
+        0x400000, false, 32, registration_test::SharedSEH4Body::FilteredCall);
+    auto &Text = Image.Segments.front().Data;
+    std::copy(F.Image.Segments.front().Data.begin() + 0x300,
+              F.Image.Segments.front().Data.begin() + 0x306,
+              Text.begin() + 0x300);
+    if (Mode) {
+      Text[60] = Text[61] = 0x90; // Retain the ordinary/except-body EAX.
+      if (Mode == 2) {
+        writeLE<uint32_t>(Text.data() + 32, 37);
+        writeLE<uint32_t>(Text.data() + 49, 37);
+      }
+    }
+    size_t Work = 0;
+    const auto Effect = proveBoundSEHCallee(Image, F.Call, F.Parent, Work,
+                                            nullptr, &F.Initialized);
+    ASSERT_TRUE(Effect);
+    EXPECT_TRUE(Effect->HasOrdinaryReturn);
+    // The filter returns one. The two parent paths return zero, different
+    // scalars, or the same scalar; only those parent paths own the result.
+    EXPECT_EQ(Effect->ReturnValue, Mode == 0   ? FrameValue::constant(0)
+                                   : Mode == 1 ? FrameValue{}
+                                               : FrameValue::constant(37));
+  }
+}
+
+TEST(RegistrationConditionalSEH, RootUsesSourceResultWithoutANativeReturnABI) {
+  for (uint32_t Argument : {37u, 38u}) {
+    SCOPED_TRACE(Argument);
+    ScalarSEHFixture F(0x400000, {0x8b, 0x45, 8});
+    auto &Text = F.Image.Segments.front().Data;
+    // Relocate the authored scalar helper and reuse the authenticated shared
+    // entry/exit instructions. Each physical relative CALL is adjusted.
+    const size_t CalleeSize = F.ReturnOffset + 1;
+    std::copy_n(Text.begin(), CalleeSize, Text.begin() + 0x300);
+    writeLE<uint32_t>(Text.data() + 0x308, uint32_t(0x100 - 0x30c));
+    const size_t CalleeExit = 0x300 + F.ReturnOffset - 5;
+    writeLE<uint32_t>(Text.data() + CalleeExit + 1,
+                      uint32_t(0x150 - CalleeExit - 5));
+    std::fill(Text.begin() + 12, Text.begin() + 0x80, 0xcc);
+    std::vector<uint8_t> Parent = {
+        0x6a, uint8_t(Argument), // PUSH an initialized scalar argument.
+        0xe8, 0,
+        0,    0,
+        0, // CALL the scalar SEH helper.
+        0x83, 0xc4,
+        4, // Retire the incoming argument.
+        0x83, 0xf8,
+        37,   0x74,
+        2,    0x89,
+        0x28, // A mismatching result exposes EBP.
+        0xe8, 0,
+        0,    0,
+        0,    0xc3};
+    writeLE<uint32_t>(Parent.data() + 3, uint32_t(0x300 - 19));
+    writeLE<uint32_t>(Parent.data() + 18, uint32_t(0x150 - 34));
+    std::copy(Parent.begin(), Parent.end(), Text.begin() + 12);
+    F.Image.ExceptionMetadata = {};
+    coff_loader::parseX86RegistrationExceptions(F.Image);
+    const auto Low = registration_test::liftSharedSEH4(F.Image);
+    ASSERT_TRUE(Low.RegistrationStates);
+    const auto &States = *Low.RegistrationStates;
+    EXPECT_EQ(States.Complete, Argument == 37);
+    EXPECT_TRUE(States.HasBoundSEHCallees);
+    if (Argument == 37) {
+      EXPECT_TRUE(States.SEHBoundCallsComplete);
+      const auto Med =
+          LowToMedConverter().convert(Low, Arch::X86, BinaryFormat::COFF);
+      // Existing preserved-helper lowering still requires an unused result.
+      EXPECT_FALSE(getX86RegistrationSEHBoundCalls(Med));
+    }
+  }
+}
