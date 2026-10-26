@@ -137,7 +137,6 @@ void scanCodePointersX64(const BinaryImage &Img, Decoder &Dec,
     if (!Seg.isExecutable() || Seg.Data.empty())
       continue;
     X86InstructionScan Scan(Dec, Seg.Data, Seg.VA);
-    const bool UseBatch = Dec.usesIcedScan();
     for (size_t Off = 0; Off < Seg.Data.size();) {
       const va_t Cur = Seg.VA + Off;
       const uint8_t *Bytes = Seg.Data.data() + Off;
@@ -145,14 +144,9 @@ void scanCodePointersX64(const BinaryImage &Img, Decoder &Dec,
       DecodedInsn DI;
       Dec.setText(false);
       Dec.setDetail(false);
-      int Size;
-      if (UseBatch) {
-        const ScannedInsn Classified = Scan.decode(Off);
-        Size = Classified.Size;
-        DI.Id = Classified.Id;
-      } else {
-        Size = Dec.decodeOneLight(Bytes, Remain, Cur, DI);
-      }
+      const ScannedInsn Classified = Scan.decode(Off);
+      const int Size = Classified.Size;
+      DI.Id = Classified.Id;
       if (Size <= 0) {
         ++Off;
         continue;
@@ -263,10 +257,9 @@ void scanSegmentCallsX86(const BinaryImage &Img, Decoder &Dec,
       End > Seg->VA ? std::min<uint64_t>(Seg->Data.size(), End - Seg->VA) : 0;
   X86InstructionScan Scan(
       Dec, llvm::ArrayRef<uint8_t>(Seg->Data).take_front(Limit), Seg->VA);
-  X86InstructionScan *Batch = Dec.usesIcedScan() ? &Scan : nullptr;
   for (va_t Cur = Start; Cur < End;) {
     const std::optional<CallScanStep> Step =
-        stepCallsX86(Img, Dec, Seg, Cur, End, Known, Batch);
+        stepCallsX86(Img, Dec, Seg, Cur, End, Known, &Scan);
     if (!Step)
       break;
     if (Step->Target != InvalidVA)

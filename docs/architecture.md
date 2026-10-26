@@ -7532,7 +7532,15 @@ internal C++ class part of the SDK by accident: stable external operations
 belong in the pure C header and one of the focused `lib/sdk/NeverDCAPI*.cpp`
 files.
 
-## Optional iced classification
+## x86 classification scans
+
+`Decoder::scanX86Light` uses Capstone's native bounded batch decoder by default.
+The fork keeps classification inside its decoder translation unit and shares
+the iterator's validated instruction selection, ID mapping and aliases. It
+returns owned ID/length records without copying unused instruction bytes or
+rendering text. NeverD applies its MPX ID normalization and retains the existing
+single-instruction fallback for compatibility forms such as prefixed fences.
+This path requires neither Rust nor `NEVERD_ENABLE_ICED`.
 
 `NeverDDecode` owns the optional x86 32/64-bit iced mapping and registers a
 per-handle scan adapter. Capstone consults it only on vector slow paths and
@@ -7545,8 +7553,8 @@ architecture lifter consumes iced discriminants directly. Full detail and
 text remain with Capstone.
 
 For bounded x86 classification sweeps, `Decoder::scanX86Light` returns owned
-ID/length records. The optional iced batch ABI borrows the whole input window
-for one call and stops before unadmitted instructions; `Decoder` consumes
+ID/length records. When enabled, the optional iced batch ABI borrows the whole
+input window for one call and stops before unadmitted instructions; `Decoder` consumes
 those with the existing Capstone route and fixups. A separate closed map adds
 common scalar and legacy SSE encodings. Its entries mark prefix-sensitive
 control transfers, so ordinary instructions use iced's existing legality

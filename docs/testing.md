@@ -662,6 +662,12 @@ high-risk pull request.
 
 ## iced compatibility scan
 
+The default Capstone batch path uses the same `NeverDDecoderOptionsTests`
+checks with `NEVERD_ENABLE_ICED=OFF`. Capstone's `unit_x86_scan_batch` compares
+bounded output with independent iterator calls in 16/32/64-bit modes, including
+random malformed inputs, capacities and option transitions. `unit_x86_buffer_bounds`
+also checks the native batch entry at inaccessible page boundaries.
+
 [The standalone decoder checks](iced-decoder.md) exercise the real scan
 adapter against Capstone, including prefix and truncation controls. The fork's
 Rust suite replays earlier Capstone bug classes, checks its UD1 profile, and

@@ -1269,10 +1269,9 @@ void FuncDetector::scanCallTargets(const BinaryImage &Img, Decoder &Dec,
             LocalDec,
             llvm::ArrayRef<uint8_t>(Piece.Seg->Data).take_front(Limit),
             Piece.Seg->VA);
-        X86InstructionScan *Batch = LocalDec.usesIcedScan() ? &Scan : nullptr;
         for (va_t Cur = Piece.Start; Cur < Piece.End;) {
           const auto Step = func_detect_detail::stepCallsX86(
-              Img, LocalDec, Piece.Seg, Cur, Piece.RangeEnd, Known, Batch);
+              Img, LocalDec, Piece.Seg, Cur, Piece.RangeEnd, Known, &Scan);
           if (!Step)
             break;
           PieceSteps[Job].push_back(*Step);

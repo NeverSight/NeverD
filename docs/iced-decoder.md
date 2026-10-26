@@ -1,5 +1,31 @@
 # iced compatibility decoder
 
+The default x86 classification path now uses Capstone's native batch decoder.
+Function discovery uses that path with `NEVERD_ENABLE_ICED=OFF`; the option below
+adds the experimental iced backend. Capstone still owns full operand decoding
+and rendering in both configurations.
+
+The native path was measured on 2026-10-26 on an Apple M4 Max, macOS arm64,
+Release. Seven rotating trials of the actual CALL sweep, calibrated to about
+150 ms of baseline CPU time and including an identical A/A control, matched
+all target-set checksums. The frozen baseline is the previous default
+per-instruction Capstone route. Median baseline/native time ratios were
+1.1249x–1.2542x on seven 64-bit system-code streams and 1.1704x–1.2050x on five
+32-bit PE samples. Generated scalar32, scalar64 and SIMD streams measured
+1.2767x, 1.2395x and 1.5218x respectively. A/A median ratios were
+0.9710x–1.0176x. These are scan results, not full decompilation measurements.
+
+A separate native-decoder comparison used identical Release architecture
+configuration, seven rotating trials, explicit matching thread QoS and the
+pinned iced fork at `8b8d90b13374fbf38e7279749e48c673f4ec243a`. The six 64-bit
+system streams with matching instruction boundaries measured about
+1.06x–1.36x iced/native-Capstone time ratios. One SSH stream had different iced
+acceptance and is excluded from that comparison. Scalar64, SIMD and some
+optimized PE32 streams remain slower than native iced; the remaining scalar64
+and SIMD gaps are about 17% and 14%. Native iced produces its own Instruction
+representation; this comparison covers classification throughput, not equal
+full-detail output or universal decoder superiority.
+
 NeverD can use the pinned NeverSight iced fork for selected x86 32/64-bit
 classification scans. Enable it with `-DNEVERD_ENABLE_ICED=ON`; the
 default remains off because whole-workload and platform qualification is
@@ -27,8 +53,9 @@ the adapter returns only a mapped ID and length. NeverD enables Capstone's
 the callback and its state. The private static-link hook does not extend the
 installed Capstone API.
 
-Bounded function-discovery sweeps additionally use `Decoder::scanX86Light`.
-Its separate closed map admits 741 scalar, legacy SSE and vector encodings.
+When iced is enabled, bounded function-discovery sweeps first try its batch
+adapter through `Decoder::scanX86Light`. The separate closed map admits 741
+scalar, legacy SSE and vector encodings.
 The fork decodes up to 64 instructions per call and writes packed ID/length
 records directly into caller-owned storage. Map entries mark prefix-sensitive
 control transfers; ordinary mapped forms reuse iced's full validity checks.
@@ -42,8 +69,10 @@ mode. It remembers an invalid position after a partial batch, avoiding a
 second decode of the same failure; a discontinuous offset starts a new batch.
 Serial/parallel CALL sweeps and x64 code-pointer scans retain their instruction
 ownership checks and decode CALL/LEA operands separately. Text/detail queries
-may interleave only after restoring the classification options. Disabling
-iced preserves the original per-instruction sweep route.
+may interleave only after restoring the classification options. With iced
+disabled, the same sweeps use Capstone's native batch entry. With iced enabled,
+Capstone batches the suffix that iced declines before the single-instruction
+compatibility fallback is needed.
 
 Full text, detail, lifting, AArch64 and ARM keep their existing paths. The fork
 also supplies a detailed primitive with a fixed UD1 r32/rm32 profile; this
@@ -78,8 +107,9 @@ default. These ratios compare NeverD routes; they do not establish superiority
 over native iced. Batch integration must be evaluated separately in the actual
 consumer, with fallback, operand redecoding and output checks preserved.
 
-The batch route was measured separately in the actual `scanSegmentCallsX86`
-consumer on the same host: five rotating trials, calibrated to roughly 150 ms
+Before native Capstone batching, the optional iced batch route was measured
+separately in the actual `scanSegmentCallsX86` consumer on the same host: five
+rotating trials, calibrated to roughly 150 ms
 of baseline CPU time, with an identical A/A baseline control. The baseline
 uses the current single-step helper with no cache. All target-set checksums
 matched. Independent full streams also matched instruction counts, rejected

@@ -11,6 +11,9 @@ add_neverd_component_library(NeverDDecode
   Lift
 )
 
+target_include_directories(NeverDDecode PRIVATE
+  "${PROJECT_SOURCE_DIR}/third_party/capstone")
+
 # Decoder.cpp contains the native AArch64 operand decoder in its hot path.  Keep
 # it explicitly optimized in non-Debug configurations, but let Debug retain the
 # toolchain's unoptimized flags for reliable stepping, local inspection, and

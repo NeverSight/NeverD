@@ -15,6 +15,8 @@
 #include "X86IcedScan.h"
 #endif
 
+#include "arch/X86/X86ScanAdapter.h"
+
 #include "neverd/decode/AArch64NativeDecode.h"
 #include "neverd/decode/Limits.h"
 #include "neverd/ir/X87Context.h"
@@ -37,6 +39,10 @@
 namespace neverd {
 
 namespace {
+unsigned normalizeX86InsnId(unsigned Id) {
+  return Id == X86_INS_BNDLDX || Id == X86_INS_BNDSTX ? X86_INS_NOP : Id;
+}
+
 /// The x86 capstone handles decoders have closed, by mode.  Opening one
 /// builds capstone's instruction tables for that handle anew, which a
 /// decompile did for every decoder it opened: its run's, and each callee
@@ -407,6 +413,19 @@ size_t Decoder::scanX86Light(const uint8_t *Bytes, size_t Len, va_t Addr,
     if (Accepted == Capacity)
       continue;
 #endif
+    const auto Native = X86_scanBatch(
+        Handle, Bytes, Len, Addr, Output.data() + Count, Output.size() - Count);
+    for (size_t I = 0; I < Native.count; ++I) {
+      const auto Insn = ScannedInsn::unpack(Output[Count + I]);
+      Output[Count + I] =
+          ScannedInsn{normalizeX86InsnId(Insn.Id), Insn.Size}.pack();
+    }
+    Count += Native.count;
+    Bytes += Native.bytes;
+    Len -= Native.bytes;
+    Addr += Native.bytes;
+    if (!Len || Count == Output.size())
+      break;
     DecodedInsn Insn;
     const int Size = decodeOneLight(Bytes, Len, Addr, Insn);
     if (Size <= 0)
@@ -647,14 +666,14 @@ void Decoder::fixupX86DisplacementDetail(cs_insn *I) const {
 }
 
 void Decoder::fixupDecodedInsnId(cs_insn *I) const {
-  if (!X86 || !I || (I->id != X86_INS_BNDLDX && I->id != X86_INS_BNDSTX))
+  if (!X86 || !I || normalizeX86InsnId(I->id) == I->id)
     return;
 
   // The x86 compatibility profile treats no-mandatory-prefix 0F 1A/1B as the
   // MPX-disabled form.  Retaining Capstone's BND ids would incorrectly
   // introduce a memory effect during lifting.  Mandatory-prefix forms use
   // distinct ids and remain untouched.
-  I->id = X86_INS_NOP;
+  I->id = normalizeX86InsnId(I->id);
   std::memcpy(I->mnemonic, "nop", 4);
   I->op_str[0] = '\0';
   if (I->detail)
