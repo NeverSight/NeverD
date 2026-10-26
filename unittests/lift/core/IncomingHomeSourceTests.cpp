@@ -132,7 +132,8 @@ homeCallSites(const BinaryImage &Image,
 }
 
 void runHomeSourceMatrix(bool Explicit, bool SelectedCaller = false,
-                         bool Framed = false, bool Allocated = false) {
+                         bool Framed = false, bool Allocated = false,
+                         bool Indirect = false) {
   for (bool Floating : {false, true})
     for (Arch Architecture : {Arch::X64, Arch::AArch64})
       for (BinaryFormat Format : {BinaryFormat::COFF, BinaryFormat::ELF}) {
@@ -173,12 +174,37 @@ void runHomeSourceMatrix(bool Explicit, bool SelectedCaller = false,
           }
           Text.Size = Text.FileSz = Text.Data.size();
         }
+        if (Indirect) {
+          auto &Text = Image.Segments.front();
+          if (Architecture == Arch::X64) {
+            const std::vector<uint8_t> Code{
+                0x48, 0x83, 0xec, 0x28,               // sub rsp,40
+                0x48, 0xc7, 0x04, 0x24, 42,  0, 0, 0, // mov [rsp],42
+                0x4c, 0x8d, 0x1d, 0x2d, 0,   0, 0,    // lea r11,[rip+read_home]
+                0x41, 0xff, 0xd3,                     // call r11
+                0x48, 0x83, 0xc4, 0x28, 0xc3};        // add rsp,40; ret
+            std::copy(Code.begin(), Code.end(), Text.Data.begin());
+          } else {
+            const std::vector<uint8_t> Code{
+                0xff, 0x83, 0x00, 0xd1,  // sub sp,sp,#32
+                0xfe, 0x0b, 0x00, 0xf9,  // str x30,[sp,#16]
+                0x40, 0x05, 0x80, 0xd2,  // mov x0,#42
+                0xe0, 0x03, 0x00, 0xf9,  // str x0,[sp]
+                0x90, 0x01, 0x00, 0x10,  // adr x16,read_home
+                0x00, 0x02, 0x3f, 0xd6,  // blr x16
+                0xfe, 0x0b, 0x40, 0xf9,  // ldr x30,[sp,#16]
+                0xff, 0x83, 0x00, 0x91,  // add sp,sp,#32
+                0xc0, 0x03, 0x5f, 0xd6}; // ret
+            std::copy(Code.begin(), Code.end(), Text.Data.begin());
+          }
+        }
         const auto Signature = homeSignature(Architecture, Floating);
         std::string Diagnostic;
         ASSERT_TRUE(validateSourceABI(Signature, Diagnostic)) << Diagnostic;
         const std::set<va_t> Entries{Caller, Callee};
         const auto Sites = homeCallSites(Image, Signature);
-        ASSERT_EQ(Sites.size(), 1u);
+        if (!Indirect)
+          ASSERT_EQ(Sites.size(), 1u);
         for (bool LLVM : {false, true})
           for (bool NoOpt : {false, true}) {
             SCOPED_TRACE(LLVM);
@@ -353,6 +379,14 @@ TEST(IncomingHomeSource, AutomaticStackInputSurvivesAnAllocatedFrame) {
 
 TEST(IncomingHomeSource, SelectedCallerRetainsAllocatedFrameStackInput) {
   runHomeSourceMatrix(false, true, true, true);
+}
+
+TEST(IncomingHomeSource, KnownRegisterCallKeepsTheSameStackContract) {
+  runHomeSourceMatrix(false, false, false, false, true);
+}
+
+TEST(IncomingHomeSource, SelectedKnownRegisterCallKeepsARealFunctionIdentity) {
+  runHomeSourceMatrix(false, true, false, false, true);
 }
 
 TEST(IncomingHomeSource, CachedSelectionsKeepCurrentStackInputEvidence) {
