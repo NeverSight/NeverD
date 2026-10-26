@@ -26,9 +26,9 @@ void checkConditionalNativeFrame(const FrameState &State, const LowOp &Op,
   if (Op.Opcode != NdOp::COND_BR && Op.Opcode != NdOp::INDIR_BR &&
       Op.Opcode != NdOp::RETURN && Op.Opcode != NdOp::INTRINSIC)
     return;
-  // The native caller must independently prove this invocation's EAX result
-  // unobserved. Internal finally returns retain provenance in the state solver;
-  // only a search filter exposes its result directly to the runtime.
+  // Ordinary EAX observations need the separate joined constant-return proof.
+  // Without it the caller must discard the result. Internal finally returns
+  // retain provenance; a search filter exposes its result to the runtime.
   if (Op.Opcode == NdOp::RETURN && !State.SEHFilterEntry)
     return;
   for (unsigned I = 0; I != Op.NumInputs; ++I) {

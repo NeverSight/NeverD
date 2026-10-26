@@ -2268,10 +2268,18 @@ not maintain the conditional solver's byte domain. Complete ordinary returns
 join their physical EAX values after stack, saved-register, chain and cookie
 checks. Filter/finally returns belong to separate invocations and contribute
 no caller result. Callee-owned identities become opaque returned provenance.
-Only a complete 32-bit EAX or temporary call output receives this source fact;
-the existing native preserved-helper rule still requires an unused result.
-This grants neither opaque memory access nor fixed differences between
-independently reconstructed image addresses.
+Only a complete 32-bit EAX or temporary call output receives this source fact.
+A preserved native helper may expose that result only when all ordinary returns
+join to one layout-independent scalar constant. The invocation receipt retains
+that constant, while the shared MedIR result-use classifier authenticates the
+actual complete SSA observation. Multiple source invocations at the same call
+intersect the constant result without invalidating matching argument/frame
+recipes. Unknown, image, frame and differing returned values still require an
+unused result. LLVM retains the real call and its EAX;
+it does not substitute the constant or change memory/unwind attributes. COFF
+replays the same source receipt and rejects a new observation of a source result
+that was unused. This grants neither opaque memory access nor fixed differences
+between independently reconstructed image addresses.
 The shared callee-instruction check also accepts PE32 ADD/SUB immediates with
 complete HIGHLOW fields and exactly one matching loader-owned address operand,
 as it does for MOV/PUSH. The decoder/lifter retains that exact address identity.

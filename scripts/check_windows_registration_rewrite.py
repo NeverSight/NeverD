@@ -328,6 +328,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="use a stdcall parent with this RET cleanup; callbacks remain cdecl")
     parser.add_argument("--startup-info", action="store_true",
                         help="compare a private STARTUPINFOW output with an independent runtime observation")
+    parser.add_argument("--observe-callee-result", action="store_true",
+                        help="use the returning authored helper's EAX as the longjmp value")
     parser.add_argument("--state-write", choices=("literal", "register", "bitwise"),
                         default="literal", help="source encoding of ordinary SEH state writes")
     args = parser.parse_args(argv)
@@ -340,6 +342,8 @@ def main(argv: list[str] | None = None) -> int:
     gs = args.case.startswith("eh4-gs-")
     helper_gs = gs != args.case.endswith("-mixed-gs")
     jump = "longjmp-" in args.case
+    if args.observe_callee_result and case != 21:
+        parser.error("--observe-callee-result requires a returning-callee case")
     if args.shared_seh4 and (not eh4 or gs or case not in range(9)):
         parser.error("--shared-seh4 requires an ordinary EH4 case without GS")
     if args.parent_pop and case not in (0, 4, 5):
@@ -355,6 +359,7 @@ def main(argv: list[str] | None = None) -> int:
               "shared_seh4": args.shared_seh4,
               "parent_pop": args.parent_pop,
               "startup_info": args.startup_info,
+              "observe_callee_result": args.observe_callee_result,
               "state_write": args.state_write,
               "passed": False, "steps": [], "observations": []}
     environment = os.environ.copy()
@@ -432,6 +437,7 @@ def main(argv: list[str] | None = None) -> int:
                              f"-DREGISTRATION_CASE={case}",
                              f"-DREGISTRATION_PARENT_POP={args.parent_pop}",
                              f"-DREGISTRATION_STARTUP_INFO={int(args.startup_info)}",
+                             f"-DREGISTRATION_OBSERVE_CALLEE_RESULT={int(args.observe_callee_result)}",
                              f"-DREGISTRATION_STATE_WRITE={('literal', 'register', 'bitwise').index(args.state_write)}",
                              f"-DREGISTRATION_LOOP_EH4={int(eh4)}",
                              f"-DREGISTRATION_PARENT_EH4={int(eh4)}",

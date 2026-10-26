@@ -9496,9 +9496,17 @@ missing bytes, overlapping pointer taint, current call/code identity and exact
 work limits. Ordinary returns retain scalar/image values, join differing
 paths and erase callee-owned identities. A protected ordinary/except pair
 separately checks that a filter's result cannot enter the ordinary EAX join.
-The root-call case passes an actual pushed scalar, uses the returned value
-to guard a frame escape, and retains the independent native refusal for an
-observed preserved-helper result.
+The root-call case passes an actual pushed scalar and uses the returned value
+to guard a frame escape. A joined constant-return receipt permits a complete
+native EAX observation; absent receipts, nonreturning calls, another callee kind,
+partial/wrong-register outputs and skipped SSA still refuse. A shared call under
+two live scope levels intersects differing returned constants while retaining
+its unchanged argument recipe and unused-result admission. Result-use tests
+separate observations from malformed definitions and widths, and check exact
+and one-unit-short budgets. The authored rewrite driver's
+`--observe-callee-result` mode uses a returning helper's actual EAX plus five as
+the later longjmp value, across EH3/EH4/GS, optimized/unoptimized and rebased
+outputs. Native mutation checks retain rejection of new unowned observations.
 `RelocatedArithmeticKeepsItsAddressIdentity` covers ADD/SUB at two image bases:
 exact HIGHLOW address provenance admits the authored SEH helper while its
 ordinary result remains unknown. Missing, stale or conflicting classifications,

@@ -337,6 +337,9 @@ struct RegistrationSEHBoundCall {
   /// Zero for the parent frame; otherwise the private callback stack owner.
   va_t EntryVA = 0;
   bool HasOrdinaryReturn = true;
+  /// One layout-independent scalar on every ordinary helper return. This
+  /// permits an exact EAX observation; it never replaces the native call.
+  std::optional<uint32_t> ConstantReturn;
   std::vector<RegistrationSEHBoundArgument> Arguments;
   /// Native argument storage minimum. Preserved helpers additionally require
   /// their independently checked access extents.

@@ -69,8 +69,17 @@ bool RegistrationStateSolver::transferBoundSEHCallee(
           if (Effect->NativeCall) {
             const auto [It, New] = BoundCalls.emplace(
                 std::make_pair(Op.Addr, Op.Seq), *Effect->NativeCall);
-            if (!New && It->second != *Effect->NativeCall)
-              Result.SEHBoundCallsComplete = false;
+            if (!New) {
+              // The same physical call can have several source invocations.
+              // Different ordinary values lose the constant-return fact, not
+              // an otherwise identical private argument/frame contract.
+              if (It->second.ConstantReturn !=
+                  Effect->NativeCall->ConstantReturn)
+                It->second.ConstantReturn.reset();
+              Effect->NativeCall->ConstantReturn = It->second.ConstantReturn;
+              if (It->second != *Effect->NativeCall)
+                Result.SEHBoundCallsComplete = false;
+            }
           } else
             Result.SEHBoundCallsComplete = false;
           CallSP =

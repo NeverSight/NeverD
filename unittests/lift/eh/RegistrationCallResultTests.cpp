@@ -1,8 +1,11 @@
 //===- RegistrationCallResultTests.cpp - PE32 result observations
-//----------===//
+//-----------===//
 //
 // NeverD Decompiler
 //
+//===----------------------------------------------------------------------===//
+/// \file
+/// Classify exact source observations and reject malformed result transports.
 //===----------------------------------------------------------------------===//
 
 #include "gtest/gtest.h"
@@ -150,4 +153,75 @@ TEST_F(RegistrationCallResult, RejectsUnprovedOccurrencesAndExhaustedWork) {
   size_t Work = limits::kMaxRegistrationEHStateWork;
   EXPECT_FALSE(hasUnusedX86RegistrationCallResult(Function, Call, Work));
 }
+
+TEST_F(RegistrationCallResult,
+       ClassifiesObservationsWithoutAdmittingMalformedSSA) {
+  using Use = X86RegistrationCallResultUse;
+  use(NdOp::COPY, value(1), value(2));
+  size_t Work = 0;
+  EXPECT_EQ(getX86RegistrationCallResultUse(Function, Call, Work), Use::Unused);
+  use(NdOp::RETURN, value(2));
+  Work = 0;
+  EXPECT_EQ(getX86RegistrationCallResultUse(Function, Call, Work),
+            Use::Observed);
+  EXPECT_FALSE(unused());
+  const size_t Required = Work;
+  Work = limits::kMaxRegistrationEHStateWork - Required;
+  EXPECT_EQ(getX86RegistrationCallResultUse(Function, Call, Work),
+            Use::Observed);
+  EXPECT_EQ(Work, limits::kMaxRegistrationEHStateWork);
+  Work = limits::kMaxRegistrationEHStateWork - Required + 1;
+  EXPECT_FALSE(getX86RegistrationCallResultUse(Function, Call, Work));
+  const auto Original = Function;
+  for (unsigned Mutation = 0; Mutation != 7; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    Function = Original;
+    auto &Ops = Function.Blocks.front().Ops;
+    if (Mutation == 0)
+      Ops.push_back(Ops.front());
+    if (Mutation == 1)
+      Ops[1].Output.Size = 8;
+    if (Mutation == 2)
+      Ops.back().Inputs[0].Size = 2;
+    if (Mutation == 3)
+      Function.SkippedSSA = true;
+    if (Mutation == 4)
+      Ops[1].Output.SSAVer = -1;
+    if (Mutation == 5)
+      Ops.front().DoesNotReturn = true;
+    if (Mutation == 6)
+      Ops[1].Opcode = NdOp::INT_ZEXT;
+    Work = 0;
+    EXPECT_FALSE(getX86RegistrationCallResultUse(Function, Call, Work));
+  }
+}
+
+TEST_F(RegistrationCallResult, ClassifiesImplicitObservationsWithExactWidths) {
+  using Use = X86RegistrationCallResultUse;
+  const auto Original = Function;
+  for (unsigned Kind = 0; Kind != 3; ++Kind)
+    for (bool Partial : {false, true}) {
+      SCOPED_TRACE(Kind);
+      SCOPED_TRACE(Partial);
+      Function = Original;
+      const auto Input = value(1, Partial ? 2 : 4);
+      if (Kind == 0) {
+        MedCallInfo Info;
+        Info.Args.push_back(Input);
+        Function.CallInfos.push_back(Info);
+      }
+      if (Kind == 1)
+        Function.CallClobbers.push_back({value(2), 4, Input, 2});
+      if (Kind == 2)
+        Function.StructReturnCandidates.push_back({3, {Input}});
+      size_t Work = 0;
+      const auto Result = getX86RegistrationCallResultUse(Function, Call, Work);
+      if (Partial)
+        EXPECT_FALSE(Result);
+      else
+        EXPECT_EQ(Result, Use::Observed);
+      EXPECT_FALSE(unused());
+    }
+}
+
 } // namespace

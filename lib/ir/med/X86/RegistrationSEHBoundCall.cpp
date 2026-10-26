@@ -12,6 +12,7 @@
 #include "neverd/ir/med/MedStackAlignment.h"
 #include "neverd/ir/med/X86RegistrationCallResult.h"
 #include "neverd/ir/med/X86RegistrationSEHBoundCall.h"
+#include "neverd/lift/X86Regs.h"
 
 namespace neverd {
 
@@ -37,6 +38,10 @@ getX86RegistrationSEHBoundCalls(const MedFunc &Function) {
   for (const auto &Call : States.SEHBoundCalls) {
     using CalleeKind = RegistrationSEHBoundCall::Kind;
     using ArgumentKind = RegistrationSEHBoundArgument::Kind;
+    if (Call.ConstantReturn &&
+        (Call.CalleeKind != CalleeKind::PreservedHelper ||
+         !Call.HasOrdinaryReturn))
+      return std::nullopt;
     switch (Call.CalleeKind) {
     case CalleeKind::PreservedHelper:
       if (Call.EntryVA)
@@ -170,16 +175,30 @@ getX86RegistrationSEHBoundCalls(const MedFunc &Function) {
     if (!Call.StackRoot)
       return std::nullopt;
   }
-  for (const auto &[Address, Call] : Result) {
+  for (auto &[Address, Call] : Result) {
     if (Call.Source->CalleeKind == RegistrationSEHBoundCall::Kind::ControlFP) {
       if (Call.Operation->Output.Size != 4)
         return std::nullopt;
+      Call.ObservesScalarReturn = true;
       continue;
     }
     RegistrationCallFrameEffect Effect;
     Effect.Address = Address;
     Effect.OpSeq = Call.Source->OpSeq;
     Effect.Target = Call.Source->TargetVA;
+    if (Call.Source->ConstantReturn) {
+      const auto &Output = Call.Operation->Output;
+      if (Output.Size != 4 ||
+          (Output.Kind != MedVar::Temp &&
+           (Output.Kind != MedVar::Reg || Output.RegOff != x86reg::RAX)))
+        return std::nullopt;
+      const auto Use = getX86RegistrationCallResultUse(Function, Effect, Work);
+      if (!Use)
+        return std::nullopt;
+      Call.ObservesScalarReturn =
+          *Use == X86RegistrationCallResultUse::Observed;
+      continue;
+    }
     if (!hasUnusedX86RegistrationCallResult(
             Function, Effect, Work,
             Call.Source->CalleeKind !=

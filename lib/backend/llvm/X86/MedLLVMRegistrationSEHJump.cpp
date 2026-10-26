@@ -133,8 +133,7 @@ prepareSEHJumps(const MedFunc &Source, llvm::Function &Parent,
   for (const auto &[Call, Address] : Calls) {
     if (const auto Found = Bound->find(Address); Found != Bound->end()) {
       if (!prepareSEHBoundCall(*Call, *Found->second.Source, Frame, EntrySP) ||
-          (Found->second.Source->CalleeKind !=
-               RegistrationSEHBoundCall::Kind::ControlFP &&
+          (!Found->second.ObservesScalarReturn &&
            !collectDiscardedRegistrationResult(
                *const_cast<llvm::CallInst *>(Call), Result.DiscardedResults)))
         return std::nullopt;

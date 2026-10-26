@@ -144,7 +144,13 @@ _registration_entry:
   add esp,168
 #endif
 #if REGISTRATION_CASE == 21
+#if REGISTRATION_OBSERVE_CALLEE_RESULT
+  // Observe the actual helper EAX through the subsequent longjmp value.
+  add eax,5
+  push eax
+#else
   push 42
+#endif
   lea eax,[ebp-96]
   push eax
   call __longjmpex

@@ -118,6 +118,7 @@ TEST(RegistrationConditionalSEH, ScalarInputsNeedNoObjectBorrow) {
       EXPECT_EQ(Effect->NativeCall->Arguments[0].ArgumentKind,
                 RegistrationSEHBoundArgument::Kind::Scalar);
       EXPECT_EQ(Effect->NativeCall->Arguments[0].Offset, -64);
+      EXPECT_EQ(Effect->NativeCall->ConstantReturn, Argument.Constant);
       ASSERT_GT(Work, 0u);
       ASSERT_LT(Work, limits::kMaxRegistrationEHStateWork);
       size_t Exact = limits::kMaxRegistrationEHStateWork - Work;
@@ -155,6 +156,8 @@ TEST(RegistrationConditionalSEH, ReturnsJoinWithoutLeakingCalleeIdentities) {
     EXPECT_FALSE(Value.Offset);
     EXPECT_FALSE(Value.ReturnPC);
     EXPECT_EQ(Value.SavedRegister, 0u);
+    if (Effect->NativeCall)
+      EXPECT_FALSE(Effect->NativeCall->ConstantReturn);
     if (Mode == 4)
       EXPECT_EQ(Value, FrameValue{});
     else {
@@ -194,7 +197,7 @@ TEST(RegistrationConditionalSEH, FilterResultsDoNotBecomeOrdinaryReturns) {
   }
 }
 
-TEST(RegistrationConditionalSEH, RootUsesSourceResultWithoutANativeReturnABI) {
+TEST(RegistrationConditionalSEH, RootBindsAConstantNativeReturn) {
   for (uint32_t Argument : {37u, 38u}) {
     SCOPED_TRACE(Argument);
     ScalarSEHFixture F(0x400000, {0x8b, 0x45, 8});
@@ -236,8 +239,35 @@ TEST(RegistrationConditionalSEH, RootUsesSourceResultWithoutANativeReturnABI) {
       EXPECT_TRUE(States.SEHBoundCallsComplete);
       const auto Med =
           LowToMedConverter().convert(Low, Arch::X86, BinaryFormat::COFF);
-      // Existing preserved-helper lowering still requires an unused result.
-      EXPECT_FALSE(getX86RegistrationSEHBoundCalls(Med));
+      const auto Bound = getX86RegistrationSEHBoundCalls(Med);
+      ASSERT_TRUE(Bound);
+      ASSERT_EQ(Bound->size(), 1u);
+      EXPECT_EQ(Bound->begin()->second.Source->ConstantReturn, 37u);
+      EXPECT_TRUE(Bound->begin()->second.ObservesScalarReturn);
+      for (unsigned Mutation = 0; Mutation != 6; ++Mutation) {
+        SCOPED_TRACE(Mutation);
+        auto Changed = Med;
+        auto &Call = Changed.RegistrationStates->SEHBoundCalls.front();
+        if (Mutation == 0)
+          Call.ConstantReturn.reset();
+        if (Mutation == 1)
+          Call.HasOrdinaryReturn = false;
+        if (Mutation == 2)
+          Call.CalleeKind = RegistrationSEHBoundCall::Kind::ControlFP;
+        if (Mutation == 3)
+          Changed.SkippedSSA = true;
+        for (auto &Block : Changed.Blocks)
+          for (auto &Op : Block.Ops)
+            if (Op.Addr == Call.Address && Op.Opcode == NdOp::CALL) {
+              if (Mutation == 4)
+                Op.Output.Size = 2;
+              if (Mutation == 5) {
+                Op.Output.Kind = MedVar::Reg;
+                Op.Output.RegOff = x86reg::RDX;
+              }
+            }
+        EXPECT_FALSE(getX86RegistrationSEHBoundCalls(Changed));
+      }
     }
   }
 }
@@ -319,4 +349,61 @@ TEST(RegistrationConditionalSEH, RelocatedArithmeticKeepsItsAddressIdentity) {
         EXPECT_FALSE(proveBoundSEHCallee(F.Image, F.Call, F.Parent, Short,
                                          nullptr, &F.Initialized));
       }
+}
+
+TEST(RegistrationConditionalSEH,
+     InvocationJoinsRetainOnlyACommonConstantReturn) {
+  for (bool Same : {false, true})
+    for (bool Observed : {false, true}) {
+      SCOPED_TRACE(Same);
+      SCOPED_TRACE(Observed);
+      ScalarSEHFixture F(0x400000, {0x8b, 0x45, 8});
+      auto &Text = F.Image.Segments.front().Data;
+      std::copy_n(Text.begin(), F.ReturnOffset + 1, Text.begin() + 0x300);
+      writeLE<uint32_t>(Text.data() + 0x308, uint32_t(0x100 - 0x30c));
+      const size_t CalleeExit = 0x300 + F.ReturnOffset - 5;
+      writeLE<uint32_t>(Text.data() + CalleeExit + 1,
+                        uint32_t(0x150 - CalleeExit - 5));
+      std::fill(Text.begin() + 12, Text.begin() + 0x80, 0xcc);
+      // Different live scope levels keep both actual argument states at the
+      // same call. The native signature is shared; its returned value need not
+      // be.
+      std::vector<uint8_t> Body = {
+          0x85, 0xc9, 0x74, 11,   0xc7, 0x45, 0xfc, 0,
+          0,    0,    0,    0x6a, 37,   0xeb, 9,    0xc7,
+          0x45, 0xfc, 0xfe, 0xff, 0xff, 0xff, 0x6a, uint8_t(Same ? 37 : 38)};
+      const auto Call = [&](size_t Target) {
+        const size_t At = 12 + Body.size();
+        Body.push_back(0xe8);
+        Body.resize(Body.size() + 4);
+        writeLE<uint32_t>(Body.data() + Body.size() - 4,
+                          uint32_t(Target - At - 5));
+      };
+      Call(0x300);
+      Body.insert(Body.end(), {0x83, 0xc4, 4});
+      if (Observed)
+        Body.insert(Body.end(), {0x83, 0xc0, 1});
+      else
+        Body.insert(Body.end(), {0x31, 0xc0});
+      Body.insert(Body.end(), {0xc7, 0x45, 0xfc, 0xfe, 0xff, 0xff, 0xff});
+      Call(0x150);
+      Body.push_back(0xc3);
+      std::copy(Body.begin(), Body.end(), Text.begin() + 12);
+      F.Image.ExceptionMetadata = {};
+      coff_loader::parseX86RegistrationExceptions(F.Image);
+      const auto Low = registration_test::liftSharedSEH4(F.Image);
+      ASSERT_TRUE(Low.RegistrationStates);
+      const auto &States = *Low.RegistrationStates;
+      ASSERT_TRUE(States.Complete);
+      ASSERT_TRUE(States.SEHBoundCallsComplete);
+      ASSERT_EQ(States.SEHBoundCalls.size(), 1u);
+      EXPECT_EQ(States.SEHBoundCalls.front().ConstantReturn,
+                Same ? std::optional<uint32_t>{37} : std::nullopt);
+      const auto Med =
+          LowToMedConverter().convert(Low, Arch::X86, BinaryFormat::COFF);
+      const auto Bound = getX86RegistrationSEHBoundCalls(Med);
+      EXPECT_EQ(bool(Bound), Same || !Observed);
+      if (Bound)
+        EXPECT_EQ(Bound->begin()->second.ObservesScalarReturn, Observed);
+    }
 }

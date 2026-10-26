@@ -81,8 +81,7 @@ llvm::Expected<RegistrationSEHJumpContract> bindSEHBoundCalls(
             Call->hasFnAttr(llvm::Attribute::NoCallback) ||
             Call->hasFnAttr(llvm::Attribute::WillReturn) ||
             Call->hasFnAttr(llvm::Attribute::ReturnsTwice) ||
-            (!Call->use_empty() &&
-             Receipt.CalleeKind != RegistrationSEHBoundCall::Kind::ControlFP) ||
+            (!Call->use_empty() && !Bound.ObservesScalarReturn) ||
             Call->doesNotReturn() == Receipt.HasOrdinaryReturn)
           return rejectIR("preserved SEH helper changed its invocation ABI");
         auto Identity = rewrite_source::getOriginalVA(*Callee);

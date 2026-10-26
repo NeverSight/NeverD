@@ -283,6 +283,10 @@ proveBoundSEHCallee(const BinaryImage &Image, const LowOp &Op,
     Native.TargetVA = Target;
     Native.StackOffset = *SP;
     Native.HasOrdinaryReturn = HasParentReturn;
+    if (Effect.ReturnValue && Effect.ReturnValue->Constant &&
+        *Effect.ReturnValue ==
+            FrameValue::constant(*Effect.ReturnValue->Constant))
+      Native.ConstantReturn = Effect.ReturnValue->Constant;
     if (!Inputs.UsedArguments.empty())
       Native.Arguments.resize((*Inputs.UsedArguments.rbegin() - 8) / 4 + 1);
     for (const auto Offset : Inputs.UsedArguments) {

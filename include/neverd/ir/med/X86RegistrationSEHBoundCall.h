@@ -23,6 +23,8 @@ struct X86RegistrationSEHBoundCall {
   const MedOp *Operation = nullptr;
   int Block = -1;
   const MedOp *StackRoot = nullptr;
+  /// Authenticated source use of the complete native scalar result.
+  bool ObservesScalarReturn = false;
 };
 
 /// Bind invocation-specific argument recipes to their exact source operations.
