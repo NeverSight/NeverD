@@ -273,10 +273,20 @@ public:
     // service Qt timers. Deliver motion and release independently of that loop.
     // Only copied screen coordinates cross threads; widgets stay on the GUI
     // thread.
-    return std::async(std::launch::async, [destination] {
+    const QPoint origin = QCursor::pos();
+    const int steps =
+        qEnvironmentVariableIntValue("NEVERD_TRACE_DRAG_STEPS") == 8 ? 8 : 1;
+    return std::async(std::launch::async, [origin, destination, steps] {
       std::this_thread::sleep_for(std::chrono::milliseconds(50));
-      const bool moved = nativeMouse(kCGEventLeftMouseDragged, destination);
-      std::this_thread::sleep_for(std::chrono::milliseconds(200));
+      bool moved = true;
+      for (int i = 1; i <= steps; ++i) {
+        moved &= nativeMouse(kCGEventLeftMouseDragged,
+                             origin + (destination - origin) * i / steps);
+        if (steps == 8)
+          std::this_thread::sleep_for(std::chrono::milliseconds(25));
+      }
+      if (steps == 1)
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
       const bool released = nativeMouse(kCGEventLeftMouseUp, destination);
       return std::make_pair(moved, released);
     });
@@ -288,6 +298,11 @@ private:
         nullptr, type, CGPointMake(point.x(), point.y()), kCGMouseButtonLeft);
     if (!event)
       return false;
+    if (qEnvironmentVariableIsSet("NEVERD_TRACE_NATIVE_DRAG"))
+      qInfo() << "native-post" << int(type) << point
+              << CGEventGetTimestamp(event)
+              << CGEventGetIntegerValueField(event, kCGMouseEventDeltaX)
+              << CGEventGetIntegerValueField(event, kCGMouseEventDeltaY);
     CGEventPost(kCGHIDEventTap, event);
     CFRelease(event);
     return true;
@@ -562,6 +577,11 @@ private slots:
       start = tabs->tabRect(tabs->currentIndex()).center();
     }
     const QPoint before = floating->pos();
+    qInfo() << "locked-drag before" << tab << floating->geometry()
+            << source->mapToGlobal(start) << source->rect()
+            << desktop.Window.mapToGlobal(desktop.Window.rect().center())
+            << floating->screen()->availableGeometry()
+            << floating->isActiveWindow() << QApplication::activeWindow();
     if (onWayland())
       QVERIFY(shell(
           QStringLiteral("global.neverdBeforeMove = (%1).get_frame_rect();")
@@ -600,6 +620,8 @@ private slots:
 #endif
     QTRY_VERIFY_WITH_TIMEOUT(released, 5000);
     QTest::qWait(150);
+    qInfo() << "locked-drag after" << tab << floating->geometry()
+            << QCursor::pos() << floating->isActiveWindow();
     QVERIFY(moved);
     QVERIFY(!preview);
     QVERIFY(desktop.Source.isFloating());

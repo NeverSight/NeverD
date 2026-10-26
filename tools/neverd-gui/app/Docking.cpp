@@ -18,6 +18,7 @@
 #include <QContextMenuEvent>
 #include <QCoreApplication>
 #include <QCursor>
+#include <QDebug>
 #include <QEnterEvent>
 #include <QGuiApplication>
 #include <QHBoxLayout>
@@ -477,6 +478,15 @@ protected:
       moveArea_->setMinimumWidth(0);
     }
     if (object == moveArea_) {
+      if (qEnvironmentVariableIsSet("NEVERD_TRACE_NATIVE_DRAG") &&
+          (event->type() == QEvent::MouseButtonPress ||
+           event->type() == QEvent::MouseButtonDblClick ||
+           event->type() == QEvent::MouseButtonRelease ||
+           event->type() == QEvent::MouseMove))
+        qInfo() << "drag-area event" << event->type()
+                << static_cast<QMouseEvent *>(event)->globalPosition()
+                << QWidget::window()->geometry()
+                << QWidget::window()->isActiveWindow();
       if (event->type() == QEvent::MouseButtonDblClick &&
           static_cast<QMouseEvent *>(event)->button() == Qt::LeftButton) {
         titleBar()->onMaximizeClicked();
@@ -484,8 +494,13 @@ protected:
       }
       if (event->type() == QEvent::MouseButtonPress &&
           static_cast<QMouseEvent *>(event)->button() == Qt::LeftButton) {
-        if (auto *handle = QWidget::window()->windowHandle())
-          handle->startSystemMove();
+        if (auto *handle = QWidget::window()->windowHandle()) {
+          if (qEnvironmentVariableIsSet("NEVERD_TRACE_NATIVE_DRAG"))
+            qInfo() << "system-move begin" << handle->geometry();
+          const bool started = handle->startSystemMove();
+          if (qEnvironmentVariableIsSet("NEVERD_TRACE_NATIVE_DRAG"))
+            qInfo() << "system-move end" << started << handle->geometry();
+        }
         return true;
       }
     }
