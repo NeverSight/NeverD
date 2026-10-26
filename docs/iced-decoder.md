@@ -150,6 +150,20 @@ explicitly check rejection of generated vector opcodes omitted by that build.
 The native batch path remains the default; broader performance qualification,
 including the remaining public-iterator gaps against iced, is still ongoing.
 
+Capstone `c21fe5a506c43d13e296b917fd021e021f9306d8` expands public scan coverage
+for three-operand scalar and ordinary SSE/MMX descriptors. Admission reuses
+existing ordered reads; handlers with the same reads share dispatch. Raw
+selection and inherited size flags retain their previous behavior. Ordinary
+C4 scans also avoid constructing a generic instruction until needed, while
+preserving adapter and source-feature ordering.
+
+ARM and RISC-V use generated tied-operand flags to skip writeback traversals
+that perform no writes. Flagged instructions retain the original helper,
+including on decode failure. Native descriptor audits, full-output comparisons
+and sanitizer checks cover these changes. Performance qualification remains
+specific to each interface and corpus; public-iterator gaps against iced are
+still being investigated.
+
 NeverD can use the pinned NeverSight iced fork for selected x86 32/64-bit
 classification scans. Enable it with `-DNEVERD_ENABLE_ICED=ON`; the
 default remains off because whole-workload and platform qualification is
