@@ -68,6 +68,10 @@ struct SemanticTraits {
 SemanticTraits semanticTraits(const OpcodeInfo &Info, Version V);
 uint64_t normalizeImmediate(uint64_t Immediate, ImmediateExtension Extension);
 uint64_t extendALU32Result(uint32_t Value, ResultExtension Extension);
+/// Evaluate a validated conditional opcode with normalized scalar operands.
+/// Width is the opcode's 32- or 64-bit comparison width.
+bool evaluateBranchCondition(Operation Op, unsigned Width, uint64_t Left,
+                             uint64_t Right);
 int64_t callxRegisterIndex(Version V, uint8_t Dst, uint8_t Src,
                            int32_t Immediate);
 

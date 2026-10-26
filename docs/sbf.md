@@ -344,10 +344,21 @@ return expressions are instantiated before they can escape to a caller.
 Catalog return annotations do not override the configured host callback outcome;
 possible syscall continuations remain in the CFG.
 
-Blocks join every reachable CFG predecessor, including the initial loop entry.
+Blocks join every remaining CFG predecessor, including the initial loop entry.
+A conditional successor is excluded only when every value alternative agrees
+on the outcome using the VM's normalized comparison semantics. Unknown or mixed
+outcomes retain both paths; abstract frame coordinates never stand in for
+scalar VM operands. The raw interpreter shares the comparison evaluator.
+Excluding a proven impossible path can remove an older target-site count;
+these conditional proof counts are not execution coverage or a promise of
+monotonic growth. Other caller inputs remain open.
 Only final replay of converged entries publishes evidence and dependencies.
 Solver-only summaries not referenced by a final edge or root may be reclaimed
-and recomputed; pinned proofs are never evicted. Function-call-free generic
+when a caller loop widens their inputs. Unrelated input alternatives use the
+existing specialization limit instead of evicting and recomputing each other;
+pinned proofs are never evicted. After a root has finished publishing its
+dependencies, unused temporary parents and their newly unreferenced children
+are reclaimed together before the next root. Function-call-free generic
 summaries with identical projected inputs are reused without losing input facts.
 All generic roots remain available, but standalone specialization is skipped
 when the static CFG/direct-call graph cannot reach an unresolved CALLX; actual

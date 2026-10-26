@@ -6,9 +6,48 @@
 
 #include "neverd/sbf/runtime/SBFSemantics.h"
 
+#include "llvm/Support/ErrorHandling.h"
+
 #include <bit>
+#include <type_traits>
 
 namespace neverd::sbf {
+namespace {
+
+template <typename UInt>
+bool evaluateBranchConditionImpl(Operation Op, UInt Left, UInt Right) {
+  const auto Signed = [](UInt Value) {
+    return std::bit_cast<std::make_signed_t<UInt>>(Value);
+  };
+  switch (Op) {
+  case Operation::Eq:
+    return Left == Right;
+  case Operation::Ne:
+    return Left != Right;
+  case Operation::UGt:
+    return Left > Right;
+  case Operation::UGe:
+    return Left >= Right;
+  case Operation::ULt:
+    return Left < Right;
+  case Operation::ULe:
+    return Left <= Right;
+  case Operation::SGt:
+    return Signed(Left) > Signed(Right);
+  case Operation::SGe:
+    return Signed(Left) >= Signed(Right);
+  case Operation::SLt:
+    return Signed(Left) < Signed(Right);
+  case Operation::SLe:
+    return Signed(Left) <= Signed(Right);
+  case Operation::Set:
+    return (Left & Right) != 0;
+  default:
+    llvm_unreachable("expected a normalized SBF conditional operation");
+  }
+}
+
+} // namespace
 
 SemanticTraits semanticTraits(const OpcodeInfo &Info, Version V) {
   SemanticTraits Result;
@@ -95,6 +134,19 @@ uint64_t extendALU32Result(uint32_t Value, ResultExtension Extension) {
     return static_cast<uint64_t>(
         static_cast<int64_t>(std::bit_cast<int32_t>(Value)));
   return Value;
+}
+
+bool evaluateBranchCondition(Operation Op, unsigned Width, uint64_t Left,
+                             uint64_t Right) {
+  switch (Width) {
+  case kWordBitWidth:
+    return evaluateBranchConditionImpl(Op, static_cast<uint32_t>(Left),
+                                       static_cast<uint32_t>(Right));
+  case kDoubleWordBitWidth:
+    return evaluateBranchConditionImpl(Op, Left, Right);
+  default:
+    llvm_unreachable("expected a normalized SBF comparison width");
+  }
 }
 
 int64_t callxRegisterIndex(Version V, uint8_t Dst, uint8_t Src,

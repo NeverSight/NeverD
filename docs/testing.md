@@ -10911,7 +10911,12 @@ unknown absorption, dead-input projection, generic frame writes and writes into
 a caller frame, composed argument-relative writes/returns with aliasing and
 unknown pointers, solver-only cache reclamation after loop widening, distinct
 parameter/register-spill origins whose numeric values are both unknown,
-equivalent generic leaf reuse, demand-driven root specialization, preserving
+constant-return branch pruning with unanimous and conflicting finite values,
+excluding target proofs from impossible caller paths,
+unknown and frame-relative operands, unrelated-input cache churn, equivalent
+generic leaf reuse, later-root reclamation of unreferenced solver variants and
+their orphan parent dependency chains,
+demand-driven root specialization, preserving
 four concrete caller variants before eagerly specializing unknown wrapper
 roots, and a returning host callback despite a catalog never-return annotation.
 A registered legacy runtime invalidates memory even when its file-local callee
