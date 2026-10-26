@@ -242,14 +242,22 @@ void runHomeSourceMatrix(bool Explicit, bool SelectedCaller = false,
                                  return Function.Entry == Caller;
                                });
               ASSERT_NE(Med, Result.MedFuncs.end());
-              const auto Call =
-                  std::find_if(Med->CallInfos.begin(), Med->CallInfos.end(),
-                               [](const MedCallInfo &Info) {
-                                 return Info.TargetAddr == Callee;
-                               });
-              ASSERT_NE(Call, Med->CallInfos.end());
+              const MedOp *Call = nullptr;
+              const auto &Site = Targets.begin()->first;
+              for (const auto &Block : Med->Blocks)
+                for (const auto &Op : Block.Ops)
+                  if (Op.Addr == Site.Instruction &&
+                      Op.OriginSeq == Site.Sequence) {
+                    ASSERT_EQ(Call, nullptr);
+                    Call = &Op;
+                  }
+              ASSERT_NE(Call, nullptr);
+              EXPECT_EQ(Call->Opcode, NdOp::CALL);
               ASSERT_TRUE(Call->SourceCallHint);
-              EXPECT_EQ(Call->Args.size(), 1u);
+              EXPECT_EQ(Call->SourceCallHint->TargetAddress, Callee);
+              ASSERT_EQ(Call->NumInputs, 2u);
+              EXPECT_TRUE(Call->Inputs[0].isConst());
+              EXPECT_EQ(Call->Inputs[0].ConstVal, Callee);
             }
             if (SelectedCaller) {
               ASSERT_EQ(Result.MedFuncs.size(), 1u);
