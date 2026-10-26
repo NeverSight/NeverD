@@ -15,7 +15,6 @@
 #include "neverd/lift/X86Regs.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/COFF/COFFRegistrationEH.h"
-#include "neverd/loader/ReadOnlyBytes.h"
 #include "neverd/support/BinaryEncoding.h"
 
 #include <cstddef>
@@ -51,40 +50,12 @@ size_t stateWork(const PrivateFrameState &State) {
 std::optional<registration_state::FrameValue>
 immutableScalar(const BinaryImage &Image, va_t Address, uint16_t Width,
                 size_t &Work) {
-  if (Image.Arch != Arch::X86 || Image.Bits != Bitness::Bits32 ||
-      Image.Format != BinaryFormat::COFF || Image.IsRelocatable || !Width ||
-      Width > 4 || Address > UINT32_MAX - (Width - 1))
+  if (Width > 4)
     return std::nullopt;
-  for (const size_t Count : {Image.Sections.size(),
-                             Image.Segments.size(),
-                             Image.CodePtrRelocSlots.size(),
-                             Image.DataPtrRelocSlots.size(),
-                             Image.DataPtrRelocTargetOwners.size(),
-                             Image.RelCodeRelocSlots.size(),
-                             Image.RelDataPtrRelocSlots.size(),
-                             Image.MachOResolvedChainedPointerSlots.size(),
-                             Image.ConflictingImportStorageSlots.size(),
-                             Image.ImportPtrSlots.size(),
-                             Image.ImportStorageSlots.size(),
-                             Image.DyldBindSlots.size(),
-                             Image.ObjCSourceReferences.size(),
-                             Image.DataAddressRelocOperands.size(),
-                             Image.CodeAddressRelocOperands.size(),
-                             Image.Relocations.size(),
-                             Image.BaseRelocations.size(),
-                             Image.RuntimeCallablePointerSlots.size(),
-                             Image.RelocDataAddrs.size(),
-                             Image.WritableRelocDataAddrs.size(),
-                             Image.RodataAnchorSeg.size(),
-                             Image.CodeRefTargets.size()})
-    if (!chargeCalleeWork(Work, Count + 1))
-      return std::nullopt;
-  // The mapping and potential-address queries revisit their section and
-  // segment inventories. Charge their complete lookup envelopes as well.
-  for (unsigned I = 0; I != 8; ++I)
-    if (!chargeCalleeWork(Work, Image.Sections.size()) ||
-        !chargeCalleeWork(Work, Image.Segments.size()))
-      return std::nullopt;
+  const auto Bytes =
+      readImmutableRegistrationImageBytes(Image, Address, Width, Work);
+  if (!Bytes)
+    return std::nullopt;
   // Potential one-past addresses inspect each segment's two extents and
   // their data owners, including nested segment/section lookup.
   for (size_t I = 0; I != Image.Segments.size(); ++I)
@@ -93,9 +64,6 @@ immutableScalar(const BinaryImage &Image, va_t Address, uint16_t Width,
           !chargeCalleeWork(Work, Image.Segments.size()) ||
           !chargeCalleeWork(Work, Image.Segments.size()))
         return std::nullopt;
-  const auto Bytes = readImmutableImageBytes(Image, Address, Width);
-  if (!Bytes)
-    return std::nullopt;
   uint32_t Value = 0;
   for (unsigned I = 0; I != Width; ++I)
     Value |= uint32_t((*Bytes)[I]) << (I * 8);

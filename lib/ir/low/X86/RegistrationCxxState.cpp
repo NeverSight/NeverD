@@ -30,6 +30,7 @@
 
 #include "llvm/ADT/ScopeExit.h"
 
+#include <map>
 #include <set>
 #include <utility>
 
@@ -517,6 +518,21 @@ proveBoundCxxCallee(const BinaryImage &Image, const LowOp &Op,
     return std::nullopt;
   const int64_t Base = int64_t(*SP) - 8;
   ConditionalFrame Inputs;
+  std::map<std::pair<va_t, uint16_t>, bool> ImmutableReads;
+  Inputs.ProveImageMemory = [&](va_t Address, uint16_t Width, bool Write,
+                                size_t &Used) {
+    if (!Inputs.Complete || Write ||
+        !registration_abi::chargeCalleeWork(Used, ImmutableReads.size() + 1))
+      return false;
+    const auto [It, New] = ImmutableReads.try_emplace({Address, Width}, false);
+    if (New)
+      It->second = registration_abi::readImmutableRegistrationImageBytes(
+                       Image, Address, Width, Used)
+                       .has_value();
+    // This invocation retains the source LOAD and its exact read footprint.
+    // It gains no copied value, pointer identity, image writes or native ABI.
+    return It->second;
+  };
   auto ReadWord = [&](int32_t Offset) -> std::optional<FrameValue> {
     return registration_abi::readCallerFrameWord(Parent, Offset, Initialized,
                                                  Work);

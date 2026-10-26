@@ -9150,6 +9150,15 @@ resumption contract, including callback writes. The existing bounded source
 query continues to refuse them. Windows documents this resume behavior in its
 [vectored exception handler example](https://learn.microsoft.com/en-us/windows/win32/debug/using-a-vectored-exception-handler).
 
+Exact immutable image-data reads use the loader's existing mapping, permission,
+file-backing and fixup authority. The private C++ query retains these source
+loads and composes their read extents without deriving a value or pointer
+identity. Its image permission cache belongs only to the current invocation;
+writable data, code, conflicting mappings, fixups and image writes still refuse.
+Plain scalar callees share the same immutable-byte reader and work accounting,
+then separately check whether the bytes can supply a scalar value. Neither path
+extends an opaque pointer's storage or grants a native call receipt.
+
 Within that private query, nested cleanup-only C++ calls replay the same source
 owner with their current physical CALL, near RET cleanup, register inputs and
 initialized stack words. The caller validates every lent object, including

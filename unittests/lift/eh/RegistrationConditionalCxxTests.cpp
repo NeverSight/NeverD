@@ -1260,6 +1260,87 @@ TEST(RegistrationConditionalCxx, DiscardingOpaqueReadDoesNotProveItsEffects) {
   }
 }
 
+TEST(RegistrationConditionalCxx, ImageReadsRequireCurrentImmutableStorage) {
+  constexpr va_t ReadData = 0x404000;
+  for (bool Wide : {false, true}) {
+    for (bool Nested : {false, true}) {
+      for (unsigned Mutation = 0; Mutation != 9; ++Mutation) {
+        SCOPED_TRACE(Wide);
+        SCOPED_TRACE(Nested);
+        SCOPED_TRACE(Mutation);
+        BoundCxxFixture F(
+            BoundCxxFixture::ReturnMode::Scalar, false, false, false, false,
+            std::nullopt,
+            BoundCxxFixture::OutputAccess::StoreBothArmsThenReadWord);
+        Segment Storage;
+        Storage.VA = ReadData;
+        Storage.Size = Storage.FileSz = 32;
+        Storage.Flags = SegmentFlags::Readable;
+        Storage.Data.resize(Storage.Size);
+        Section StorageSection;
+        StorageSection.VA = Storage.VA;
+        StorageSection.Size = StorageSection.FileSz = Storage.Size;
+        StorageSection.Flags = Storage.Flags;
+        const unsigned Width = Wide ? 8 : 4;
+        const va_t Address = ReadData + (Mutation == 7 ? 30 : 0);
+        F.overwrite(F.StoreVA,
+                    {uint8_t(Wide ? 0xdd : 0x8b), uint8_t(Wide ? 0x05 : 0x15),
+                     uint8_t(Address), uint8_t(Address >> 8),
+                     uint8_t(Address >> 16), uint8_t(Address >> 24), 0x89, 0x10,
+                     0x90, 0x90, 0x90, 0x90});
+        if (Wide)
+          F.overwrite(F.StoreVA + 6, {0xdd, 0xd8, 0x31, 0xd2, 0x89, 0x10});
+        if (Mutation == 1 || Mutation == 8)
+          StorageSection.Flags = Storage.Flags =
+              SegmentFlags::Readable | SegmentFlags::Writable;
+        if (Mutation == 2)
+          StorageSection.Flags = Storage.Flags =
+              SegmentFlags::Readable | SegmentFlags::Executable;
+        if (Mutation == 3)
+          StorageSection.FileSz = Storage.FileSz = 0;
+        F.Image.Segments.push_back(Storage);
+        F.Image.Sections.push_back(StorageSection);
+        if (Mutation == 4)
+          F.Image.Segments.push_back(Storage);
+        if (Mutation == 5) {
+          StorageSection.VA += 1;
+          StorageSection.Size = StorageSection.FileSz = 4;
+          F.Image.Sections.push_back(StorageSection);
+        }
+        if (Mutation == 6)
+          F.Image.DataPtrRelocSlots.insert(ReadData + 1);
+        if (Mutation == 8) {
+          // Writable mapped data still cannot supply a closed source write.
+          F.overwrite(F.StoreVA, {0x89, 0x15});
+          F.overwrite(F.StoreVA + 6, {0x31, 0xd2, 0x89, 0x10, 0x90, 0x90});
+        }
+        F.Image.ExceptionMetadata = {};
+        coff_loader::parseX86RegistrationExceptions(F.Image);
+        if (Nested)
+          F.addOuter();
+        size_t Work = 0;
+        const auto Effect = F.prove(Work);
+        ASSERT_EQ(bool(Effect), Mutation == 0);
+        if (!Effect)
+          continue;
+        EXPECT_TRUE(llvm::any_of(Effect->ImageReads, [&](const auto &Read) {
+          return Read.Begin <= ReadData && ReadData + Width <= Read.End;
+        }));
+        ASSERT_EQ(Effect->Writes.size(), 1u);
+        EXPECT_EQ(Effect->Writes.front().Begin, -28);
+        EXPECT_EQ(Effect->Writes.front().End, -24);
+        ASSERT_GT(Work, 0u);
+        ASSERT_LT(Work, limits::kMaxRegistrationEHStateWork);
+        for (unsigned Short : {0u, 1u}) {
+          size_t Budget = limits::kMaxRegistrationEHStateWork - Work + Short;
+          EXPECT_EQ(bool(F.prove(Budget)), Short == 0);
+          EXPECT_EQ(Budget, limits::kMaxRegistrationEHStateWork);
+        }
+      }
+    }
+  }
+}
+
 TEST(RegistrationConditionalCxx, StackPopPreservesOverlappingPointerBytes) {
   BoundCxxFixture F;
   F.overwrite(F.ReturnVA,

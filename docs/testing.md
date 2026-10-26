@@ -7197,6 +7197,12 @@ caller. Keeping or discarding the loaded value cannot grant the missing storage
 and exception-resumption proof. A possibly reachable frame pointer outside the
 borrow remains part of the negative case; the initialized borrowed controls
 retain their checked read/write extents and scalar return.
+`ImageReadsRequireCurrentImmutableStorage` checks direct and nested scalar and
+x87 image reads. Read extents survive only for unique, immutable, file-backed
+data. Writable or executable permissions, zero-fill, overlapping sections or
+segments, a partial pointer fixup, a crossed mapping boundary and image writes
+refuse. Exact and one-work-unit-short invocation budgets retain the shared
+reader's accounting; the original plain-scalar image tests remain enabled.
 Nested C++ cases forward an ancestor output or lend a private initialized word,
 preserve returned aliases through another GS epilogue, and distinguish a scalar
 result store from exact, joined and partial alias stores. Repeated calls check

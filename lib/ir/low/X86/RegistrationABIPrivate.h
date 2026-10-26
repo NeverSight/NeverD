@@ -18,6 +18,7 @@
 #include <optional>
 #include <set>
 #include <utility>
+#include <vector>
 
 namespace neverd {
 class Decoder;
@@ -144,6 +145,12 @@ bool hasClosedRegistrationRaise(const BinaryImage &Image, const LowOp &Op,
                                 const registration_state::FrameState &State);
 bool hasSEHCallbackImageMemory(const BinaryImage &Image, va_t Address,
                                uint16_t Width, bool Write, size_t &Work);
+/// The loader owns immutable PE32 data mappings and fixup exclusion. Share
+/// their work accounting across conditional callees; returned bytes grant
+/// neither an address identity nor a native call or object-lifetime receipt.
+std::optional<std::vector<uint8_t>>
+readImmutableRegistrationImageBytes(const BinaryImage &Image, va_t Address,
+                                    uint16_t Width, size_t &Work);
 
 struct InitializerFrame {
   uint32_t StackPopBytes = 0;

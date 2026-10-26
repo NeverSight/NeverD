@@ -13,6 +13,47 @@
 
 namespace neverd::registration_abi {
 
+std::optional<std::vector<uint8_t>>
+readImmutableRegistrationImageBytes(const BinaryImage &Image, va_t Address,
+                                    uint16_t Width, size_t &Work) {
+  if (Image.Arch != Arch::X86 || Image.Bits != Bitness::Bits32 ||
+      Image.Format != BinaryFormat::COFF || Image.IsRelocatable || !Width ||
+      Address > UINT32_MAX - (Width - 1))
+    return std::nullopt;
+  if (!chargeCalleeWork(Work, Width))
+    return std::nullopt;
+  for (const size_t Count : {Image.Sections.size(),
+                             Image.Segments.size(),
+                             Image.CodePtrRelocSlots.size(),
+                             Image.DataPtrRelocSlots.size(),
+                             Image.DataPtrRelocTargetOwners.size(),
+                             Image.RelCodeRelocSlots.size(),
+                             Image.RelDataPtrRelocSlots.size(),
+                             Image.MachOResolvedChainedPointerSlots.size(),
+                             Image.ConflictingImportStorageSlots.size(),
+                             Image.ImportPtrSlots.size(),
+                             Image.ImportStorageSlots.size(),
+                             Image.DyldBindSlots.size(),
+                             Image.ObjCSourceReferences.size(),
+                             Image.DataAddressRelocOperands.size(),
+                             Image.CodeAddressRelocOperands.size(),
+                             Image.Relocations.size(),
+                             Image.BaseRelocations.size(),
+                             Image.RuntimeCallablePointerSlots.size(),
+                             Image.RelocDataAddrs.size(),
+                             Image.WritableRelocDataAddrs.size(),
+                             Image.RodataAnchorSeg.size(),
+                             Image.CodeRefTargets.size()})
+    if (!chargeCalleeWork(Work, Count + 1))
+      return std::nullopt;
+  // Account for the mapping owner's nested section and segment lookups.
+  for (unsigned I = 0; I != 8; ++I)
+    if (!chargeCalleeWork(Work, Image.Sections.size()) ||
+        !chargeCalleeWork(Work, Image.Segments.size()))
+      return std::nullopt;
+  return readImmutableImageBytes(Image, Address, Width);
+}
+
 bool hasSEHCallbackImageMemory(const BinaryImage &Image, va_t Address,
                                uint16_t Width, bool Write, size_t &Work) {
   if (Image.Format != BinaryFormat::COFF || Image.IsRelocatable ||
