@@ -71,44 +71,61 @@ check passed. Eight AArch64/ARM/Thumb/RISC-V cases retained identical outputs
 with no stable regression. The other 107 decoder/core objects are byte-identical
 to the baseline; the x86 decoder object grows by about 26 KiB.
 
-Capstone `9e6e87177334998e122a5ba9d69d06f187ffbf09` further specializes the public iterator's
-byte copy using the successful x86 decoder's 15-byte limit. It removes generic
-truncation, large-copy dispatch and a duplicate size write. Allocated output
-keeps the generic path, leaving the shared core object byte-identical to
-`a0340fe4122fbf43f2a5f7000e20ea49daa7e5ec`. Hot x86 scan entries and metadata
-use explicit alignment. The new adapter boundary check covers every accepted
-length and rejects 16-byte results even with 16 bytes of available input.
+Capstone `44e5f3293124a6bc2c42ad5a6ff4ca9b82bc7962` retains the bounded
+iterator byte copy introduced in `9e6e87177334998e122a5ba9d69d06f187ffbf09`
+and improves three remaining costs. Generated public terminal flags separate
+ModR/M reads from optional immediates while preserving the exact ordered
+reader calls. Admitted terminal output stays separate from the fallback result
+passed by address to cold helpers; fallback selection remains inline. VEX
+W/L/pp select generated references to the existing validated opcode rows.
+Native batches retain their original scalar operand dispatch. No iced source
+was copied, and shared output, detail-pointer and callback policy is unchanged.
+
+The separate result matters for 16-bit decoding: changing operand dispatch
+alone increased register moves on an indexed terminal. An instruction trace of
+`F6 C2 01` grew from 168 to 185 host instructions, including 15 extra register
+moves. Keeping terminal output independent of the fallback result reduced the
+same trace to 161. This diagnosis led to the combined implementation rather
+than a mode-specific bypass.
 
 The same nine-trial, paired fresh-process protocol compared the final Release
-library with `a0340fe4122fbf43f2a5f7000e20ea49daa7e5ec` on 2026-10-27:
+library with `9e6e87177334998e122a5ba9d69d06f187ffbf09` on 2026-10-27:
 
-| Decode workload | Previous / new public iterator time |
-| --- | ---: |
-| Scalar64 / scalar32 / scalar16 | 1.081x / 1.108x / 1.107x |
-| SIMD64 | 1.040x |
-| Six 64-bit system-code streams | 1.031x–1.073x |
-| Five PE32 code samples | 1.053x–1.061x |
+| Decode workload | Previous / new public iterator time | Native iced / new public iterator time |
+| --- | ---: | ---: |
+| Scalar64 / scalar32 / scalar16 | 1.063x / 1.039x / 1.133x | 0.909x / 0.990x / 0.896x |
+| SIMD64 | 1.044x | 0.905x |
+| bash / SQLite | 1.085x / 1.055x | 1.062x / 1.058x |
+| Four held-out system streams | 0.967x–1.008x | 1.194x–1.268x |
+| Two PE32 O0 samples | 1.076x–1.078x | 1.060x–1.061x |
+| Three PE32 O2 samples | 1.049x–1.068x | 0.877x–0.949x |
+
+A separate nine-trial follow-up retained all observations and measured scalar16
+at 1.100x and PE32 SEH O0 at 1.078x against the previous version. The grep and
+sed ratios changed from 0.984x / 0.967x to 0.995x / 0.991x. Those results remain
+small regressions, with variation comparable to some A/A controls; they are not
+reported as wins. Public iteration now leads iced on bash, SQLite and the two
+PE32 O0 samples as well as the four held-out streams, but scalar, SIMD and PE32
+O2 still trail. The broader performance goal remains open.
 
 Native batch decoding remains faster than native iced on all 15 substantive
-matching-boundary cases, measuring 1.122x–1.798x iced/Capstone time. This change
-does not establish a further batch speedup: batch ratios against the previous
-Capstone version ranged from 0.972x to 1.008x. In a follow-up controlled layout
-comparison, AWK changed from 0.972x to 0.994x and the PE32 SEH O0 case from
-0.986x to 0.991x. Every observation is retained. Public iteration still trails
-iced on scalar, SIMD, bash, SQLite and the five substantive PE32 cases; it leads
-on the four other system streams. SSH and the tiny controls retain the exclusions
+matching-boundary cases, measuring 1.161x–1.771x iced/Capstone time. SIMD batch
+decoding improved 1.042x against the previous Capstone version. Most other batch
+results are close to baseline; noisy individual results such as ls do not
+establish additional speedups. SSH and the tiny controls retain the exclusions
 above. These results do not establish universal or full-detail superiority.
 
 The final build again matched 272,920,462 scan, 37,916,536 full API and 864,000
-raw-state observations. Release passed 116 checks with the same hardware skip;
-ASan/UBSan and reduced builds each passed six checks, and adapter parity and
-length-boundary checks passed. The other 105 core/decoder objects are unchanged.
-Eight AArch64/ARM/Thumb/RISC-V workloads retained identical outputs. Small
-AArch64 timing changes remain unresolved under host load: for example, SQLite
-measured 0.981x in final qualification and 1.007x in the follow-up controlled
-comparison. No non-x86 speedup is claimed. Splitting function and table alignment
-did not produce a consistently better overall candidate; rejected layouts and
-pointer-preservation experiments are excluded from the fork.
+raw-state observations. Release passed 116 checks with the same x87 hardware
+skip on arm64; ASan/UBSan and reduced builds each passed six checks. All 72
+callback combinations, optional adapter parity and adapter length-boundary
+checks passed. A generated-data audit confirms that only the intended public
+reader flags changed; raw terminals, indexed decisions and VEX metadata retain
+their original values. The other 107 core/decoder objects, including shared
+`cs.c`, are byte-identical to the baseline. Eight AArch64/ARM/Thumb/RISC-V
+workloads retained identical outputs and measured 0.992x–1.015x; no non-x86
+speedup is claimed. Other hardware, full-detail performance and whole
+application throughput still require separate qualification.
 
 NeverD can use the pinned NeverSight iced fork for selected x86 32/64-bit
 classification scans. Enable it with `-DNEVERD_ENABLE_ICED=ON`; the
