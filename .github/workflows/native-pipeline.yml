@@ -7,6 +7,9 @@ on:
     paths:
       - '.github/workflows/native-pipeline.yml'
       - 'lib/ir/med/abi/**'
+      - 'lib/backend/c/LLVMC/LLVMCStmtWriter.cpp'
+      - 'unittests/lift/core/LLVMCValueTests.cpp'
+      - 'tools/neverd-worker/tests/call_site_types_test.py'
       - 'lib/ir/high/**'
       - 'lib/libc/**'
       - 'lib/loader/ObjectExterns.cpp'
@@ -47,6 +50,9 @@ on:
     paths:
       - '.github/workflows/native-pipeline.yml'
       - 'lib/ir/med/abi/**'
+      - 'lib/backend/c/LLVMC/LLVMCStmtWriter.cpp'
+      - 'unittests/lift/core/LLVMCValueTests.cpp'
+      - 'tools/neverd-worker/tests/call_site_types_test.py'
       - 'lib/ir/high/**'
       - 'lib/libc/**'
       - 'lib/loader/ObjectExterns.cpp'
