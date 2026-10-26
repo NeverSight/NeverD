@@ -1019,6 +1019,141 @@ TEST(SBFCallXContexts, InstantiatesMustStoreValuesThroughGeneralizedWrappers) {
   }
 }
 
+TEST(SBFCallXContexts, RedundantPublishedTargetsDoNotDisplaceNewTargets) {
+  constexpr uint32_t TableAddress = 0x10000;
+  for (bool KnownFirstTarget : {false, true})
+    for (bool NewImageArgument : {false, true})
+      for (bool DistinctDescendants : {false, true})
+        for (bool OpaqueReturn : {false, true}) {
+          SCOPED_TRACE(::testing::Message()
+                       << "known=" << KnownFirstTarget
+                       << ", image=" << NewImageArgument << ", descendants="
+                       << DistinctDescendants << ", opaque=" << OpaqueReturn);
+          std::vector<test::EncodedInstruction> Text{encode(Opcode::EXIT)};
+          std::vector<size_t> Entries, Calls;
+          for (size_t I = 0; I <= kCallXContextSpecializationsPerEntry; ++I) {
+            Entries.push_back(Text.size());
+            Text.push_back(encode(Opcode::MOV64_IMM, 0));
+            Text.push_back(encode(
+                Opcode::MOV64_IMM, 1, 0, 0,
+                TableAddress + (I == kCallXContextSpecializationsPerEntry &&
+                                        NewImageArgument
+                                    ? 8
+                                    : 0)));
+            Text.push_back(
+                encode(Opcode::MOV64_IMM, 3, 0, 0,
+                       I == kCallXContextSpecializationsPerEntry ? 1 : 0));
+            auto Input = test::loadImm64(4, kInputStart);
+            Text.insert(Text.end(), Input.begin(), Input.end());
+            Text.push_back(encode(Opcode::MOV64_IMM, 5));
+            Text.push_back(
+                encode(Opcode::MOV64_IMM, 9, 0, 0, TableAddress + 16 + I * 8));
+            Calls.push_back(Text.size());
+            Text.push_back(encode(Opcode::CALL_IMM, 0, 1));
+            Text.push_back(encode(Opcode::EXIT));
+          }
+          const size_t Leaf = Text.size();
+          for (size_t Call : Calls)
+            Text[Call] = encode(Opcode::CALL_IMM, 0, 1, 0, Leaf - Call - 1);
+          for (const auto &I :
+               {encode(Opcode::MOV64_REG, 6, 1),
+                encode(Opcode::MOV64_REG, 7, 4),
+                encode(Opcode::MOV64_REG, 8, 9),
+                encode(Opcode::JEQ64_IMM, 3, 0, 3),
+                encode(Opcode::LD_DW_REG, 2, 6), encode(Opcode::CALL_REG, 2),
+                encode(Opcode::JA, 0, 0, 2),
+                encode(Opcode::LD_DW_REG, 2, KnownFirstTarget ? 6 : 7),
+                encode(Opcode::CALL_REG, 2),
+                encode(Opcode::LD_DW_REG, 3, 7, 8)})
+            Text.push_back(I);
+          if (OpaqueReturn)
+            Text.push_back(encode(Opcode::MOV64_IMM, 0));
+          Text.push_back(encode(Opcode::ST_DW_IMM, 3));
+          Text.push_back(encode(Opcode::EXIT));
+          const size_t Targets = Text.size();
+          if (DistinctDescendants) {
+            Text.push_back(encode(Opcode::LD_DW_REG, 2, 9));
+            Text.push_back(encode(Opcode::CALL_REG, 2));
+          }
+          for (const auto &I :
+               {encode(Opcode::MOV64_IMM, 0, 0, 0, 42), encode(Opcode::EXIT),
+                encode(Opcode::MOV64_IMM, 0, 0, 0, 43), encode(Opcode::EXIT)})
+            Text.push_back(I);
+          const size_t SecondTarget = Targets + (DistinctDescendants ? 4 : 2);
+          std::vector<uint8_t> Table(16 + Entries.size() * 8);
+          llvm::support::endian::write64le(Table.data(),
+                                           kBytecodeStart + Targets * 8);
+          llvm::support::endian::write64le(Table.data() + 8,
+                                           kBytecodeStart + SecondTarget * 8);
+          for (size_t I = 0; I < Entries.size(); ++I) {
+            llvm::support::endian::write64le(Table.data() + 16 + I * 8,
+                                             kBytecodeStart + Text.size() * 8);
+            Text.push_back(encode(Opcode::MOV64_IMM, 0, 0, 0, 100 + I));
+            Text.push_back(encode(Opcode::EXIT));
+          }
+          auto Image = test::makeImage(Text, Table);
+          Image.Sections[1].VA = TableAddress;
+          Image.SBF->RodataVM.Address = TableAddress;
+          auto Program = analyze(Image);
+          ASSERT_TRUE(static_cast<bool>(Program))
+              << llvm::toString(Program.takeError());
+          auto Report = recoverCallXContexts(*Program);
+          ASSERT_TRUE(static_cast<bool>(Report))
+              << llvm::toString(Report.takeError());
+          bool FirstTarget = false, LaterTarget = false;
+          for (const auto &Site : Report->Contexts) {
+            FirstTarget |=
+                Site.CallXSlot == Leaf + 8 && Site.TargetSlot == Targets;
+            LaterTarget |=
+                Site.CallXSlot == Leaf + 5 &&
+                Site.TargetSlot == (NewImageArgument ? SecondTarget : Targets);
+          }
+          EXPECT_EQ(FirstTarget, KnownFirstTarget);
+          // Replacing a published summary must preserve the scalar result used
+          // by its callers. Equal CALLX targets alone do not authorize
+          // replacement.
+          const bool Replaced =
+              NewImageArgument &&
+              (!KnownFirstTarget || (OpaqueReturn && !DistinctDescendants));
+          EXPECT_EQ(LaterTarget, Replaced);
+          EXPECT_EQ(Report->GeneralizedPublishedSummaries > 0, Replaced);
+          size_t Variants = 0;
+          for (const auto &Summary : Report->Summaries)
+            Variants += Summary.EntrySlot == Leaf && !Summary.GeneralizedInputs;
+          EXPECT_LE(Variants, kCallXContextSpecializationsPerEntry);
+          for (const auto &Edge : Report->SummaryEdges)
+            if (Edge.CalleeSummaryID)
+              EXPECT_TRUE(std::any_of(
+                  Report->Summaries.begin(), Report->Summaries.end(),
+                  [&](const auto &Summary) {
+                    return Summary.ID == *Edge.CalleeSummaryID;
+                  }));
+          for (size_t I = 0; I < Entries.size(); ++I) {
+            Image.Entry = kBytecodeStart + Entries[I] * kInstructionSize;
+            auto Selected = analyze(Image);
+            ASSERT_TRUE(static_cast<bool>(Selected))
+                << llvm::toString(Selected.takeError());
+            ExecutionEnvironment Environment;
+            std::vector<uint8_t> Input(16);
+            llvm::support::endian::write64le(Input.data(),
+                                             kBytecodeStart + Targets * 8);
+            llvm::support::endian::write64le(Input.data() + 8, kHeapStart);
+            Environment.Memory.push_back(
+                {kInputStart, Input, false, "pointer"});
+            Environment.Memory.push_back(
+                {kHeapStart, std::vector<uint8_t>(8), true, "output"});
+            auto Raw = executeRaw(*Selected, std::move(Environment));
+            ASSERT_TRUE(static_cast<bool>(Raw))
+                << llvm::toString(Raw.takeError());
+            EXPECT_EQ(Raw->Status, ExecutionStatus::Returned) << Raw->Error;
+            EXPECT_EQ(Raw->ReturnValue,
+                      OpaqueReturn                                  ? 0u
+                      : I + 1 == Entries.size() && NewImageArgument ? 43u
+                                                                    : 42u);
+          }
+        }
+}
+
 TEST(SBFCallXContexts, ReclaimsSolverOnlyVariantsAfterLoopInputsWiden) {
   std::array<uint8_t, 8> Table;
   llvm::support::endian::write64le(Table.data(), kBytecodeStart + 11 * 8);

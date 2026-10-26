@@ -382,10 +382,22 @@ monotonic growth. Other caller inputs remain open.
 Only final replay of converged entries publishes evidence and dependencies.
 Solver-only summaries not referenced by a final edge or root may be reclaimed
 when a caller loop widens their inputs. Unrelated inputs within one root use the
-existing specialization limit instead of evicting and recomputing each other;
-pinned proofs are never evicted. When a later root needs a specialization,
+existing specialization limit instead of evicting and recomputing each other.
+When a later root supplies a different image-backed argument and all four
+retained variants repeat the same image argument, an old published dependency
+may be generalized only if its caller-visible return and memory transfer agree
+exactly with the completed generic summary. This currently requires unknown
+memory effects, no returned scratch/postcondition cells, the same scalar return
+alternatives and the same constant or unknown return origin. Any target facts
+in the dependency graph must also be covered by an independently published
+sibling. Complete target alternatives, roots and active caller graphs are not
+discarded. Image membership selects work; it does not prove a target or alias
+relationship. Old incoming edges record specialization-limit generalization,
+and `generalized_redundant_published_summaries` counts these replacements. The
+four-variant and resource budgets remain unchanged. Other pinned proofs stay
+live. When a later root needs a specialization,
 unused earlier parents and their unreferenced children can be reclaimed
-together. Published dependencies and the current root stay live; reusable
+together. Other published dependencies and the current root stay live; reusable
 completed inputs remain cached while no specialization needs their space.
 Function-call-free generic
 summaries with identical projected inputs are reused without losing input facts.

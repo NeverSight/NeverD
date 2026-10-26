@@ -161,6 +161,7 @@ struct CallXContextReport {
   size_t ProjectedScratchSnapshots = 0;
   size_t InputDependencyVisits = 0;
   size_t SummaryCacheEvictions = 0;
+  size_t GeneralizedPublishedSummaries = 0;
   size_t EquivalentGenericReuses = 0;
   size_t SkippedNonCallXRootSpecializations = 0;
   size_t SkippedConstantBranchSuccessors = 0;
