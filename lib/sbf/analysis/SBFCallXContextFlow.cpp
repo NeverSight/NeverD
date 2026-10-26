@@ -270,7 +270,11 @@ private:
   std::vector<std::unique_ptr<FunctionContext>> Contexts;
   std::set<size_t> ActiveEntries;
   std::map<size_t, FunctionContext *> GenericContexts;
-  std::map<size_t, size_t> Specializations;
+  // Live variants in creation order. Stable context IDs outlive reclaimed
+  // nodes; scanning that history for each replacement becomes quadratic.
+  std::map<size_t, llvm::SmallVector<FunctionContext *,
+                                     kCallXContextSpecializationsPerEntry>>
+      Specializations;
   std::vector<uint16_t> InputRegisters;
   std::vector<bool> ReadsMemory;
   std::vector<bool> ReachesCallX;
@@ -300,7 +304,8 @@ void ContextFlow::reclaimContext(FunctionContext &Context,
         Unreferenced->push_back(Child.ID);
     }
   RetainedBytes -= Context.RetainedBytes;
-  --Specializations[Context.EntryBlock];
+  auto &Variants = Specializations.at(Context.EntryBlock);
+  Variants.erase(std::find(Variants.begin(), Variants.end(), &Context));
   Contexts[Context.ID].reset();
   ++CacheEvictions;
 }
@@ -332,7 +337,8 @@ void ContextFlow::reclaimOrphanedContexts(size_t Entry) {
            Context->RootGeneration < RootGeneration &&
            !ActiveEntries.contains(Program.Med.Blocks[Entry].StartSlot);
   };
-  if (std::none_of(Contexts.begin(), Contexts.end(), CouldReleaseEntry))
+  const auto &Variants = Specializations.at(Entry);
+  if (std::none_of(Variants.begin(), Variants.end(), CouldReleaseEntry))
     return;
 
   std::vector<bool> Live(Contexts.size());
@@ -357,7 +363,7 @@ void ContextFlow::reclaimOrphanedContexts(size_t Entry) {
         Live[*Edge.CalleeSummaryID] = true;
         Pending.push_back(*Edge.CalleeSummaryID);
       }
-  if (std::none_of(Contexts.begin(), Contexts.end(), [&](const auto &Context) {
+  if (std::none_of(Variants.begin(), Variants.end(), [&](const auto &Context) {
         return CouldReleaseEntry(Context) && !Live[Context->ID];
       }))
     return;
@@ -1100,36 +1106,39 @@ ContextFlow::summarize(size_t Entry, const ContextState &Incoming, bool Generic,
   }
   if (!Generic && SpecializationBudgetExhausted)
     return Generalized(CallXInputGeneralization::ResourceBudget);
-  if (!Generic &&
-      Specializations[Entry] == kCallXContextSpecializationsPerEntry) {
+  if (!Generic && Specializations.contains(Entry) &&
+      Specializations.at(Entry).size() ==
+          kCallXContextSpecializationsPerEntry) {
     // A loop widening can supersede its earlier precise input. Previous
     // roots may also leave unused variants or orphan parents. Preserve
     // unrelated alternatives within this root; reclaim older graphs only
     // when a new specialization actually needs their space.
-    const auto FindVictim = [&] {
-      return std::find_if(
-          Contexts.begin(), Contexts.end(), [&](const auto &Candidate) {
-            if (!Candidate || !Candidate->isUnreferencedSolverNode() ||
-                Candidate->EntryBlock != Entry ||
-                ActiveEntries.contains(Program.Med.Blocks[Entry].StartSlot))
-              return false;
-            if (Candidate->RootGeneration < RootGeneration)
-              return true;
-            ContextState Widened = Candidate->Input;
-            Widened.join(Input);
-            return Widened.Registers == Input.Registers &&
-                   Widened.Scratch == Input.Scratch;
-          });
+    const auto FindVictim = [&]() -> FunctionContext * {
+      if (ActiveEntries.contains(Program.Med.Blocks[Entry].StartSlot))
+        return nullptr;
+      for (auto *Candidate : Specializations.at(Entry)) {
+        if (!Candidate->isUnreferencedSolverNode())
+          continue;
+        if (Candidate->RootGeneration < RootGeneration)
+          return Candidate;
+        ContextState Widened = Candidate->Input;
+        Widened.join(Input);
+        if (Widened.Registers == Input.Registers &&
+            Widened.Scratch == Input.Scratch)
+          return Candidate;
+      }
+      return nullptr;
     };
     auto Victim = FindVictim();
-    if (Victim == Contexts.end()) {
+    if (!Victim) {
       reclaimOrphanedContexts(Entry);
       Victim = FindVictim();
     }
-    if (Specializations[Entry] == kCallXContextSpecializationsPerEntry) {
-      if (Victim == Contexts.end())
+    if (Specializations.at(Entry).size() ==
+        kCallXContextSpecializationsPerEntry) {
+      if (!Victim)
         return Generalized(CallXInputGeneralization::SpecializationLimit);
-      reclaimContext(**Victim);
+      reclaimContext(*Victim);
     }
     // Removing a FoldingSet node invalidates the earlier insertion position.
     Cache.FindNodeOrInsertPos(Key, InsertPosition);
@@ -1138,7 +1147,11 @@ ContextFlow::summarize(size_t Entry, const ContextState &Incoming, bool Generic,
   // Stable IDs retain vector slots and reclamation/graph traversal metadata
   // even after an unreferenced solver-only node has been reclaimed.
   constexpr uint64_t StableIDBytes = 3 * sizeof(size_t);
-  if (auto Error = retain(ContextBytes + StableIDBytes))
+  const uint64_t VariantIndexBytes =
+      !Generic && !Specializations.contains(Entry)
+          ? sizeof(decltype(Specializations)::value_type) + 4 * sizeof(void *)
+          : 0;
+  if (auto Error = retain(ContextBytes + StableIDBytes + VariantIndexBytes))
     return std::move(Error);
   auto Owned =
       std::make_unique<FunctionContext>(Contexts.size(), Entry, Input, Generic);
@@ -1150,7 +1163,7 @@ ContextFlow::summarize(size_t Entry, const ContextState &Incoming, bool Generic,
   if (Generic)
     GenericContexts.emplace(Entry, &Context);
   else
-    ++Specializations[Entry];
+    Specializations[Entry].push_back(&Context);
   const size_t EntrySlot = Program.Med.Blocks[Entry].StartSlot;
   ActiveEntries.insert(EntrySlot);
   const auto Leave = llvm::scope_exit([&] { ActiveEntries.erase(EntrySlot); });
