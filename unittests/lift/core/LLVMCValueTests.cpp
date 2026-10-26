@@ -6722,6 +6722,13 @@ uint64_t ABI observed_callee(uint32_t first, ...) {
   va_list ap; va_start(ap, first); ++calls;
   errors += va_arg(ap, double) != 1.5; va_end(ap); return first;
 }
+extern uint64_t call_site(void);
+int main(void) { return call_site() != 7 || calls != 1 || errors; }
+)";
+    for (llvm::StringRef Optimization : {"-O0", "-O2"})
+      compileAndRun(Source, Optimization, {}, false, false, {}, Harness);
+  }
+}
 
 TEST(LLVMCValues, AFixedCallSiteKeepsItsOwnCallingConvention) {
   using namespace neverd;
@@ -6771,11 +6778,4 @@ int main(void) { return call_site() != 7 || calls != 1 || errors; }
     for (llvm::StringRef Optimization : {"-O0", "-O2"})
       compileAndRun(Source, Optimization, {}, false, false, {}, Harness);
   }
-}
-extern uint64_t call_site(void);
-int main(void) { return call_site() != 7 || calls != 1 || errors; }
-)";
-    for (llvm::StringRef Optimization : {"-O0", "-O2"})
-      compileAndRun(Source, Optimization, {}, false, false, {}, Harness);
-}
 }
