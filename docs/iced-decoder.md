@@ -27,41 +27,49 @@ that noise range. The iced column measures NeverD's compatibility adapter,
 including its fallback costs; these are CALL-scan results, not full
 decompilation measurements or a comparison of identical full-detail outputs.
 
-Capstone `9a96a08dae5c0621dd3118d59dd4559b750d5197` further combines
-public instruction IDs with scalar terminal decisions and VEX validation
-metadata. This removes the subsequent UID mapping while retaining the same
-admission, checked operand readers, raw state and full output semantics.
-The full Release library was compared with `7d73d561e744b6553aa95eee60a30cbf0a618980`
-on the same Apple M4 Max. Nine rotating fresh-process trials used paired A/A
-controls and about 180 ms of baseline CPU time. Five uncertain cases were
-rechecked over 14 trials with duplicate baseline, candidate and iced controls,
-plus the prototype library. Ratios use paired trials: separately taking each
-variant's median can misrepresent host speed changes within a run.
+Capstone `a0340fe4122fbf43f2a5f7000e20ea49daa7e5ec` now enters the
+shared terminal readers directly for common legacy headers. Previously the
+source-extension selector walked prefixes before the terminal reader parsed
+the same header. Existing feature predicates preserve extension precedence,
+including mixed mode flags; admission misses retain the original dispatch.
+Operand reading, legality checks, raw state and full output semantics are
+unchanged. No iced implementation code was copied.
+
+The full Release library was compared with Capstone
+`9a96a08dae5c0621dd3118d59dd4559b750d5197` on 2026-10-27 on the same Apple
+M4 Max. Nine rotating fresh-process trials used about 180 ms of baseline CPU
+time, matching thread QoS, and duplicate baseline, candidate and iced A/A
+controls. Ratios are medians of paired trials; each trial combines duplicate
+timings geometrically. All observations are retained, including host workload
+noise. Separately taking each variant's median can misrepresent speed changes.
 
 | Decode workload | Previous / new native batch time | Previous / new public iterator time |
 | --- | ---: | ---: |
-| Scalar64 / scalar32 / SIMD | 1.061x / 1.042x / 1.047x | 1.089x / 1.059x / 1.075x |
-| Six 64-bit system-code streams | 1.057x–1.079x | 1.035x–1.060x |
-| Five PE32 code samples | 1.026x–1.044x | 1.086x–1.104x |
+| Scalar64 / scalar32 / scalar16 | 1.119x / 1.235x / 1.286x | 1.059x / 1.190x / 1.000x |
+| SIMD64 | 0.997x | 0.995x |
+| Six 64-bit system-code streams | 1.032x–1.124x | 0.979x–1.115x |
+| Five PE32 code samples | 1.168x–1.197x | 1.127x–1.176x |
 
-Against native iced `8b8d90b13374fbf38e7279749e48c673f4ec243a`, the batch
-primitive measured 1.209x–1.609x iced/Capstone time on the six system streams,
-and 1.165x / 1.190x / 1.125x on scalar64 / scalar32 / SIMD. PE32 measured
-1.004x–1.265x; the SEH O2 case remains within measurement noise. Scalar16 was
-0.913x in the focused recheck. The public per-instruction API still trails
-iced on several workloads. One SSH stream has different iced acceptance and
-is excluded from iced rankings; tiny controls are also reported separately.
-These results qualify native classification speed on this host. Universal
-superiority, other hosts, full-detail decoding and whole decompilation remain
-unqualified.
+Against native iced `8b8d90b13374fbf38e7279749e48c673f4ec243a`, native
+batch decoding measured 1.232x–1.743x iced/Capstone time on the six system
+streams, 1.259x / 1.442x / 1.196x on scalar64 / scalar32 / scalar16, 1.126x
+on SIMD, and 1.208x–1.453x on the five PE32 samples. All 15 substantive cases
+with matching instruction boundaries favor native Capstone on this host.
+SIMD's change from the previous Capstone version is within A/A noise; some
+individual system-stream measurements are also noisy. The public iterator
+still trails native iced on scalar, SIMD, two system streams and PE32 cases,
+so the broader performance goal remains open. One SSH stream has different
+iced acceptance and is excluded from iced rankings. Two tiny MinGW controls
+are separate and do not establish broad PE32 performance. Other hosts,
+full-detail decoding and whole decompilation remain unqualified.
 
 Validation included 272,920,462 frozen-baseline scan comparisons, 37,916,536
-full API observations and 864,000 raw-state comparisons. Release passed 116
-tests with one x87 hardware skip on arm64; ASan/UBSan and reduced builds each
-passed six checks, and the optional iced adapter parity check passed.
-Eight AArch64/ARM/Thumb/RISC-V cases retained identical outputs with no stable
-regression. The x86 decoder object grows by about 112 KiB, primarily generated
-read-only metadata.
+full API observations and 864,000 raw-state comparisons, all unchanged.
+Release passed 116 tests with one x87 hardware skip on arm64; ASan/UBSan and
+reduced builds each passed six checks, and the optional iced adapter parity
+check passed. Eight AArch64/ARM/Thumb/RISC-V cases retained identical outputs
+with no stable regression. The other 107 decoder/core objects are byte-identical
+to the baseline; the x86 decoder object grows by about 26 KiB.
 
 NeverD can use the pinned NeverSight iced fork for selected x86 32/64-bit
 classification scans. Enable it with `-DNEVERD_ENABLE_ICED=ON`; the
