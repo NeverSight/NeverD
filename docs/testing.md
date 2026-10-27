@@ -9611,6 +9611,12 @@ volatile frame loads, global loads, aliases, private definitions, foreign
 modules, address-space/TLS/import changes and noncanonical symbols.
 `ImageArgumentIdentityUsesOneWorkBudget` checks exact, short and exhausted work
 and an absent argument index. These are identity checks, not native admission.
+`NativePointerArgumentsKeepOriginalStorage` checks direct and constant-byte-GEP
+native pointers at two bases. Loaded or integer pointers, aliases, changed
+storage, foreign modules, dynamic/typed indices, oversized carriers, signed
+offset loss and preferred-VA overflow refuse. `PointerArgumentIdentityUsesTheSharedBudget`
+checks the same bounded declaration owner and an absent argument index. These
+tests grant no mapped-object extent or atomic-call permission.
 `RegistrationOriginalImageCaller` in `NeverDSEHRuntimeMemoryTests` binds an
 authored parent's actual PUSH to a header-reading SEH helper at two bases.
 A changed header result exposes the private frame and makes the caller

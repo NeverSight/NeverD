@@ -2369,6 +2369,13 @@ declaration in that module. Integer bits, frame/global loads, aliases, private
 definitions, TLS/import storage and another module's declaration cannot supply
 that identity. This bounded primitive supplies no source invocation receipt,
 native call admission or final-image replay permission on its own.
+The native-pointer variant uses the same declaration checks and also accepts
+one constant byte GEP with a nonnegative signed PE32 offset. It rejects integer
+pointers, runtime-loaded pointers, dynamic or typed indexing and preferred-VA
+overflow. This preserves a pointer into an existing original-data region;
+mapped object bounds, access permissions and atomic effects still belong to
+the source/runtime binder. The integer-carrier query remains stricter and does
+not acquire this GEP allowance.
 The separate original-image caller query runs the same state solver over the
 actual reaching parent cells. Its result owns every accepted image invocation
 alongside the dependent caller states; it never changes the input LowFunc or

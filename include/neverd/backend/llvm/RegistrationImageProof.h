@@ -44,6 +44,14 @@ std::optional<uint32_t> originalImageArgumentAddress(const llvm::CallBase &Call,
                                                      unsigned Index,
                                                      size_t &Work);
 
+/// Recover an actual native pointer argument rooted at the same canonical
+/// original-data declaration, optionally with one constant byte GEP. Offsets
+/// must not wrap PE32. Loaded pointers and integer addresses are not identity
+/// evidence; mapped extent, permissions and call effects remain separate.
+std::optional<uint32_t>
+originalImagePointerArgumentAddress(const llvm::CallBase &Call, unsigned Index,
+                                    size_t &Work);
+
 class ImageProof {
 public:
   /// Authenticate effects not resolved as an explicit image/private store.

@@ -217,6 +217,123 @@ TEST(RegistrationImageProof, ImageArgumentIdentityUsesOneWorkBudget) {
   EXPECT_FALSE(llvm::verifyModule(F.Module, &llvm::errs()));
 }
 
+TEST(RegistrationImageProof, NativePointerArgumentsKeepOriginalStorage) {
+  for (uint32_t Address : {0x403010u, 0x18003010u})
+    for (unsigned Mutation = 0; Mutation != 26; ++Mutation) {
+      SCOPED_TRACE(::testing::Message() << Address << " " << Mutation);
+      ImageFixture F;
+      llvm::Module Other("other-image", F.Context);
+      auto *Global = F.global(makeNdDataSymbol(Address));
+      llvm::Value *Value = Global;
+      if (Mutation == 1)
+        Value = F.B.CreateGEP(F.B.getInt8Ty(), Global, F.B.getInt64(16));
+      if (Mutation == 2)
+        Value = F.B.Insert(llvm::GetElementPtrInst::Create(
+            F.B.getInt8Ty(), Global, {F.B.getInt32(8)}));
+      if (Mutation == 3)
+        Global->setInitializer(F.B.getInt32(0));
+      if (Mutation == 4)
+        Global->setLinkage(llvm::GlobalValue::ExternalWeakLinkage);
+      if (Mutation == 5)
+        Global->setThreadLocalMode(
+            llvm::GlobalVariable::GeneralDynamicTLSModel);
+      if (Mutation == 6)
+        Global->setDLLStorageClass(llvm::GlobalValue::DLLImportStorageClass);
+      if (Mutation == 7)
+        Global->setUnnamedAddr(llvm::GlobalValue::UnnamedAddr::Global);
+      if (Mutation == 8)
+        Global->setName((kNdCodePtrPrefix + llvm::utohexstr(Address)).str());
+      if (Mutation == 9)
+        Global->setName("__nd_data_0403010");
+      if (Mutation == 10)
+        Global->setName(makeNdDataSymbol(uint64_t(UINT32_MAX) + 1));
+      if (Mutation == 11)
+        Value = new llvm::GlobalVariable(Other, F.B.getInt32Ty(), false,
+                                         llvm::GlobalValue::ExternalLinkage,
+                                         nullptr, makeNdDataSymbol(Address));
+      if (Mutation == 12) {
+        auto *Read = F.B.CreateLoad(F.B.getPtrTy(), F.Frame);
+        Read->setVolatile(true);
+        Value = Read;
+      }
+      if (Mutation == 13)
+        Value = F.B.CreateIntToPtr(F.B.getInt32(Address), F.B.getPtrTy());
+      if (Mutation == 14)
+        Value = llvm::PoisonValue::get(F.B.getPtrTy());
+      if (Mutation == 15 || Mutation == 16 || Mutation == 24)
+        Value = F.B.CreateGEP(F.B.getInt8Ty(), Global,
+                              F.B.getInt64(Mutation == 15 ? UINT64_MAX
+                                           : Mutation == 16
+                                               ? uint64_t(UINT32_MAX) + 5
+                                               : uint64_t(INT32_MAX) + 1));
+      if (Mutation == 17)
+        Value = F.B.CreateGEP(F.B.getInt32Ty(), Global, F.B.getInt32(4));
+      if (Mutation == 18)
+        F.Module.setDataLayout("e-m:x-p:64:64-i64:64-n8:16:32-S32");
+      if (Mutation == 19)
+        Value = new llvm::GlobalVariable(
+            F.Module, F.B.getInt32Ty(), false,
+            llvm::GlobalValue::ExternalLinkage, nullptr, "address_space",
+            nullptr, llvm::GlobalVariable::NotThreadLocal, 1);
+      if (Mutation == 20) {
+        Global->setInitializer(F.B.getInt32(0));
+        Value = llvm::GlobalAlias::create(F.B.getInt32Ty(), 0,
+                                          llvm::GlobalValue::ExternalLinkage,
+                                          "alias", Global, &F.Module);
+      }
+      if (Mutation == 21) {
+        Global->setName(makeNdDataSymbol(UINT32_MAX - 3));
+        Value = F.B.CreateGEP(F.B.getInt8Ty(), Global, F.B.getInt32(8));
+      }
+      if (Mutation == 22)
+        Value = llvm::ConstantPointerNull::get(F.B.getPtrTy());
+      if (Mutation == 23)
+        Value = F.B.CreateGEP(F.B.getInt8Ty(), Global,
+                              F.B.CreateLoad(F.B.getInt32Ty(), F.Frame));
+      if (Mutation == 25)
+        Value = F.B.CreateGEP(F.B.getInt8Ty(), Global, F.B.getIntN(128, 8));
+      auto Callee = F.Module.getOrInsertFunction(
+          "native_runtime",
+          llvm::FunctionType::get(F.B.getInt32Ty(), {Value->getType()}, false));
+      auto *Call = F.B.CreateCall(Callee, {Value});
+      F.B.CreateRetVoid();
+      size_t Work = 0;
+      const auto Actual = originalImagePointerArgumentAddress(*Call, 0, Work);
+      ASSERT_EQ(bool(Actual), Mutation <= 2);
+      if (Actual)
+        EXPECT_EQ(*Actual, Address + (Mutation == 1   ? 16u
+                                      : Mutation == 2 ? 8u
+                                                      : 0u));
+      EXPECT_FALSE(originalImageArgumentAddress(*Call, 0, Work));
+      if (Mutation == 11)
+        Call->setArgOperand(0, llvm::ConstantPointerNull::get(F.B.getPtrTy()));
+      EXPECT_FALSE(llvm::verifyModule(F.Module, &llvm::errs()));
+    }
+}
+
+TEST(RegistrationImageProof, PointerArgumentIdentityUsesTheSharedBudget) {
+  ImageFixture F;
+  auto *Value = F.B.CreateGEP(
+      F.B.getInt8Ty(), F.global(makeNdDataSymbol(CookieVA)), F.B.getInt32(16));
+  auto Callee = F.Module.getOrInsertFunction(
+      "native_runtime",
+      llvm::FunctionType::get(F.B.getInt32Ty(), {F.B.getPtrTy()}, false));
+  auto *Call = F.B.CreateCall(Callee, {Value});
+  F.B.CreateRetVoid();
+  size_t Required = 0;
+  ASSERT_EQ(originalImagePointerArgumentAddress(*Call, 0, Required),
+            CookieVA + 16);
+  for (size_t Available : {size_t{0}, Required - 1, Required}) {
+    size_t Work = limits::kMaxRegistrationEHStateWork - Available;
+    EXPECT_EQ(bool(originalImagePointerArgumentAddress(*Call, 0, Work)),
+              Available == Required);
+    EXPECT_EQ(Work, limits::kMaxRegistrationEHStateWork);
+  }
+  size_t Work = 0;
+  EXPECT_FALSE(originalImagePointerArgumentAddress(*Call, 1, Work));
+  EXPECT_FALSE(llvm::verifyModule(F.Module, &llvm::errs()));
+}
+
 TEST(RegistrationImageProof, ResolvesOriginalAliasesAndPartialOverlaps) {
   for (const char *Name :
        {"__nd_data_403010", "__nd_codeptr_403010", "__security_cookie"})

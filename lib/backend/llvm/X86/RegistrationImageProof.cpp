@@ -23,9 +23,10 @@
 
 namespace neverd::registration_frame {
 
-std::optional<uint32_t> originalImageArgumentAddress(const llvm::CallBase &Call,
-                                                     unsigned Index,
-                                                     size_t &Work) {
+namespace {
+std::optional<uint32_t> originalArgumentAddress(const llvm::CallBase &Call,
+                                                unsigned Index, size_t &Work,
+                                                bool PointerArgument) {
   if (Work >= limits::kMaxRegistrationEHStateWork) {
     Work = limits::kMaxRegistrationEHStateWork;
     return std::nullopt;
@@ -39,17 +40,36 @@ std::optional<uint32_t> originalImageArgumentAddress(const llvm::CallBase &Call,
       Module->getDataLayout().isNonIntegralAddressSpace(0))
     return std::nullopt;
   const auto *Value = Call.getArgOperand(Index);
-  const auto *Cast = llvm::dyn_cast<llvm::Operator>(Value);
-  if (!Value->getType()->isIntegerTy(32) || !Cast ||
-      Cast->getOpcode() != llvm::Instruction::PtrToInt ||
-      Cast->getNumOperands() != 1)
-    return std::nullopt;
   if (const auto *Instruction = llvm::dyn_cast<llvm::Instruction>(Value);
       Instruction && (!Instruction->getParent() ||
                       Instruction->getParent()->getParent() != Function))
     return std::nullopt;
-  const auto *Global =
-      llvm::dyn_cast<llvm::GlobalVariable>(Cast->getOperand(0));
+  uint32_t Offset = 0;
+  if (PointerArgument) {
+    if (!Value->getType()->isPointerTy() ||
+        Value->getType()->getPointerAddressSpace())
+      return std::nullopt;
+    if (const auto *GEP = llvm::dyn_cast<llvm::GEPOperator>(Value)) {
+      const auto *Index =
+          GEP->getNumIndices() == 1
+              ? llvm::dyn_cast<llvm::ConstantInt>(GEP->getOperand(1))
+              : nullptr;
+      if (!GEP->getSourceElementType()->isIntegerTy(8) || !Index ||
+          (Index->getBitWidth() != 32 && Index->getBitWidth() != 64) ||
+          Index->getValue().isNegative() || Index->getValue().ugt(INT32_MAX))
+        return std::nullopt;
+      Offset = uint32_t(Index->getZExtValue());
+      Value = GEP->getPointerOperand();
+    }
+  } else {
+    const auto *Cast = llvm::dyn_cast<llvm::Operator>(Value);
+    if (!Value->getType()->isIntegerTy(32) || !Cast ||
+        Cast->getOpcode() != llvm::Instruction::PtrToInt ||
+        Cast->getNumOperands() != 1)
+      return std::nullopt;
+    Value = Cast->getOperand(0);
+  }
+  const auto *Global = llvm::dyn_cast<llvm::GlobalVariable>(Value);
   if (!Global || Global->getParent() != Module || !Global->isDeclaration() ||
       !Global->hasExternalLinkage() || Global->isThreadLocal() ||
       Global->getAddressSpace() ||
@@ -68,9 +88,22 @@ std::optional<uint32_t> originalImageArgumentAddress(const llvm::CallBase &Call,
   Work += Name.size() + 1;
   const auto Address = parseNdDataSymbol(Name);
   if (!Address || !*Address || *Address > UINT32_MAX ||
-      Name != makeNdDataSymbol(*Address))
+      Name != makeNdDataSymbol(*Address) || Offset > UINT32_MAX - *Address)
     return std::nullopt;
-  return uint32_t(*Address);
+  return uint32_t(*Address) + Offset;
+}
+} // namespace
+
+std::optional<uint32_t> originalImageArgumentAddress(const llvm::CallBase &Call,
+                                                     unsigned Index,
+                                                     size_t &Work) {
+  return originalArgumentAddress(Call, Index, Work, false);
+}
+
+std::optional<uint32_t>
+originalImagePointerArgumentAddress(const llvm::CallBase &Call, unsigned Index,
+                                    size_t &Work) {
+  return originalArgumentAddress(Call, Index, Work, true);
 }
 
 std::optional<ExceptionAddressRange>
