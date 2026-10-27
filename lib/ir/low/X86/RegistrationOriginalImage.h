@@ -97,6 +97,22 @@ proveBoundOriginalImageSEHCallee(const BinaryImage &Image, const LowOp &Op,
                                  const FrameState &Parent, size_t &Work,
                                  const std::set<int32_t> *Initialized);
 
+/// Two fresh source hypotheses for one invocation at the same preferred base.
+/// The physical CALL is authenticated only in Original; Candidate may retire
+/// it. Root/plain helper bytes, arguments and scalar result must agree, while
+/// header reads may change. Runtime/table dependencies, relocated identities
+/// and native caller/IR admission remain separate obligations.
+struct OriginalImageSEHReplay {
+  OriginalImageSEHInvocation Original;
+  OriginalImageSEHInvocation Candidate;
+};
+
+std::optional<OriginalImageSEHReplay>
+replayBoundOriginalImageSEHCallee(const BinaryImage &Original,
+                                  const BinaryImage &Candidate, const LowOp &Op,
+                                  const FrameState &Parent, size_t &Work,
+                                  const std::set<int32_t> *Initialized);
+
 } // namespace neverd::registration_state
 
 #endif // NEVERD_IR_LOW_X86_REGISTRATIONORIGINALIMAGE_H

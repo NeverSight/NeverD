@@ -2311,6 +2311,13 @@ layout-independent `ConstantReturn` receipt. Ordinary state analysis does not
 enable this scope. Native use additionally requires original argument identity,
 preserved helper/runtime code and metadata, and a replay against the final PE;
 header movement and added sections invalidate an original-byte-only argument.
+The paired source query authenticates the physical call in the original image
+and independently replays the helper in a candidate at the same preferred base.
+It shares one work allowance and requires matching argument recipes, scalar
+results and root/plain helper bytes. Immutable read locations and values may
+change with the header layout. Both records keep `ConstantReturn` absent;
+runtime/table preservation, relocation identity and native caller/IR admission
+remain separate requirements.
 The shared callee-instruction check also accepts PE32 ADD/SUB immediates with
 complete HIGHLOW fields and exactly one matching loader-owned address operand,
 as it does for MOV/PUSH. The decoder/lifter retains that exact address identity.

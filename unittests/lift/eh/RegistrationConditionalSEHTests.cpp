@@ -491,3 +491,83 @@ TEST(RegistrationConditionalSEH, OriginalImageReadRecordsExactInputsAndBytes) {
                                        nullptr, &F.Initialized));
     }
 }
+
+TEST(RegistrationConditionalSEH, CandidateReplayBindsTheOriginalCall) {
+  for (uint32_t Base : {0x400000u, 0x18000000u})
+    for (unsigned Mode = 0; Mode != 11; ++Mode) {
+      SCOPED_TRACE(::testing::Message() << Base << " " << Mode);
+      ScalarSEHFixture F(Base, {0x8b, 0x45, 8, 0x8b, 0, 0x25, 1, 0, 0, 0});
+      const uint32_t Address = Base + 0x2300;
+      F.Parent.store(-64, 4, FrameValue::imageAddress(Address));
+      writeLE<uint32_t>(F.Image.Segments.back().Data.data() + 0x300, 37u);
+      auto Candidate = F.Image;
+      if (Mode)
+        Candidate.Segments.front().Data[0x300] = 0xe9;
+      if (Mode == 2 || Mode == 3)
+        writeLE<uint32_t>(Candidate.Segments.back().Data.data() + 0x300,
+                          Mode == 2 ? 39u : 38u);
+      if (Mode == 4)
+        Candidate.Segments.front().Data[18] = 3; // Same scalar, different code.
+      if (Mode == 5) {
+        F.Image.Segments.front().Data[0x300] = 0xe9;
+        Candidate.Segments.front().Data[0x300] = 0xe8;
+      }
+      if (Mode == 6)
+        Candidate.Base += 0x1000;
+      if (Mode == 7)
+        F.Initialized.erase(-61);
+      if (Mode == 8)
+        Candidate.Segments.back().Flags =
+            SegmentFlags::Readable | SegmentFlags::Writable;
+      if (Mode == 9)
+        Candidate.BaseRelocations.push_back(
+            {Address, llvm::COFF::IMAGE_REL_BASED_HIGHLOW});
+      if (Mode == 10) {
+        auto Tainted = FrameValue::imageAddress(Address);
+        Tainted.MayBeFrame = true;
+        F.Parent.store(-64, 4, Tainted);
+      }
+      size_t Work = 0;
+      const auto Replay = replayBoundOriginalImageSEHCallee(
+          F.Image, Candidate, F.Call, F.Parent, Work, &F.Initialized);
+      ASSERT_EQ(bool(Replay), Mode < 3);
+      if (!Replay)
+        continue;
+      EXPECT_EQ(Replay->Original.ReturnValue, 1u);
+      EXPECT_EQ(Replay->Candidate.ReturnValue, 1u);
+      EXPECT_FALSE(Replay->Original.Call.ConstantReturn);
+      EXPECT_FALSE(Replay->Candidate.Call.ConstantReturn);
+      EXPECT_EQ(Replay->Original.Code, Replay->Candidate.Code);
+      EXPECT_EQ(Replay->Original.Arguments, Replay->Candidate.Arguments);
+      EXPECT_EQ(Replay->Original.Reads.at({Address, 4}).Value, 37u);
+      EXPECT_EQ(Replay->Candidate.Reads.at({Address, 4}).Value,
+                Mode == 2 ? 39u : 37u);
+      if (Mode) {
+        size_t CandidateWork = 0;
+        EXPECT_FALSE(proveBoundOriginalImageSEHCallee(
+            Candidate, F.Call, F.Parent, CandidateWork, &F.Initialized));
+      }
+    }
+}
+
+TEST(RegistrationConditionalSEH, CandidateReplaySharesOneWorkBudget) {
+  ScalarSEHFixture F(0x400000, {0x8b, 0x45, 8, 0x8b, 0});
+  F.Parent.store(-64, 4, FrameValue::imageAddress(0x402300));
+  writeLE<uint32_t>(F.Image.Segments.back().Data.data() + 0x300, 37u);
+  auto Candidate = F.Image;
+  Candidate.Segments.front().Data[0x300] = 0xe9;
+  size_t Required = 0;
+  ASSERT_TRUE(replayBoundOriginalImageSEHCallee(
+      F.Image, Candidate, F.Call, F.Parent, Required, &F.Initialized));
+  ASSERT_GT(Required, 0u);
+  for (size_t Available : {size_t{0}, Required - 1, Required}) {
+    size_t Work = limits::kMaxRegistrationEHStateWork - Available;
+    EXPECT_EQ(replayBoundOriginalImageSEHCallee(F.Image, Candidate, F.Call,
+                                                F.Parent, Work, &F.Initialized)
+                  .has_value(),
+              Available == Required);
+    EXPECT_EQ(Work, limits::kMaxRegistrationEHStateWork);
+    EXPECT_FALSE(replayBoundOriginalImageSEHCallee(
+        F.Image, Candidate, F.Call, F.Parent, Work, &F.Initialized));
+  }
+}

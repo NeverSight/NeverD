@@ -82,8 +82,8 @@ SEHCookieInputs getSEHCookieInputs(const BinaryImage &Image,
   return Inputs;
 }
 std::optional<BoundCalleeEffect>
-proveBoundSEHCalleeImpl(const BinaryImage &Image, const LowOp &Op,
-                        const FrameState &Parent, size_t &Work,
+proveBoundSEHCalleeImpl(const BinaryImage &Image, const BinaryImage &CallImage,
+                        const LowOp &Op, const FrameState &Parent, size_t &Work,
                         const std::map<int32_t, SEHJumpCapture> *Captures,
                         const std::set<int32_t> *Initialized,
                         OriginalImageFrameProof *OriginalImage) {
@@ -101,7 +101,7 @@ proveBoundSEHCalleeImpl(const BinaryImage &Image, const LowOp &Op,
     return std::nullopt;
   if (!registration_abi::chargeCalleeWork(Work, 5))
     return std::nullopt;
-  const auto Call = readImmutableCodeBytes(Image, Op.Addr, 5);
+  const auto Call = readImmutableCodeBytes(CallImage, Op.Addr, 5);
   if (!Call || (*Call)[0] != 0xe8 || Op.Addr > UINT32_MAX - 5 ||
       uint32_t(Op.Addr + 5 + int64_t(readLE<int32_t>(Call->data() + 1))) !=
           Target)
@@ -335,17 +335,19 @@ proveBoundSEHCallee(const BinaryImage &Image, const LowOp &Op,
                     const FrameState &Parent, size_t &Work,
                     const std::map<int32_t, SEHJumpCapture> *Captures,
                     const std::set<int32_t> *Initialized) {
-  return proveBoundSEHCalleeImpl(Image, Op, Parent, Work, Captures, Initialized,
-                                 nullptr);
+  return proveBoundSEHCalleeImpl(Image, Image, Op, Parent, Work, Captures,
+                                 Initialized, nullptr);
 }
 
+namespace {
 std::optional<OriginalImageSEHInvocation>
-proveBoundOriginalImageSEHCallee(const BinaryImage &Image, const LowOp &Op,
-                                 const FrameState &Parent, size_t &Work,
-                                 const std::set<int32_t> *Initialized) {
+proveOriginalImageSEHCallee(const BinaryImage &Image,
+                            const BinaryImage &CallImage, const LowOp &Op,
+                            const FrameState &Parent, size_t &Work,
+                            const std::set<int32_t> *Initialized) {
   OriginalImageFrameProof Original(Image);
-  auto Effect = proveBoundSEHCalleeImpl(Image, Op, Parent, Work, nullptr,
-                                        Initialized, &Original);
+  auto Effect = proveBoundSEHCalleeImpl(Image, CallImage, Op, Parent, Work,
+                                        nullptr, Initialized, &Original);
   if (!Effect || !Effect->HasOrdinaryReturn || !Effect->NativeCall ||
       !Effect->Reads.empty() || !Effect->Writes.empty() ||
       !Effect->JumpResumes.empty() || !Effect->ReturnValue ||
@@ -395,6 +397,50 @@ proveBoundOriginalImageSEHCallee(const BinaryImage &Image, const LowOp &Op,
   }
   Result.Addresses = Original.addresses();
   return Result;
+}
+} // namespace
+
+std::optional<OriginalImageSEHInvocation>
+proveBoundOriginalImageSEHCallee(const BinaryImage &Image, const LowOp &Op,
+                                 const FrameState &Parent, size_t &Work,
+                                 const std::set<int32_t> *Initialized) {
+  return proveOriginalImageSEHCallee(Image, Image, Op, Parent, Work,
+                                     Initialized);
+}
+
+std::optional<OriginalImageSEHReplay>
+replayBoundOriginalImageSEHCallee(const BinaryImage &Original,
+                                  const BinaryImage &Candidate, const LowOp &Op,
+                                  const FrameState &Parent, size_t &Work,
+                                  const std::set<int32_t> *Initialized) {
+  const auto IsPE32 = [](const BinaryImage &Image) {
+    return Image.Arch == Arch::X86 && Image.Bits == Bitness::Bits32 &&
+           Image.Format == BinaryFormat::COFF && !Image.IsRelocatable &&
+           Image.Base <= UINT32_MAX;
+  };
+  if (!IsPE32(Original) || !IsPE32(Candidate) ||
+      Original.Base != Candidate.Base)
+    return std::nullopt;
+  auto Before = proveOriginalImageSEHCallee(Original, Original, Op, Parent,
+                                            Work, Initialized);
+  if (!Before)
+    return std::nullopt;
+  auto After = proveOriginalImageSEHCallee(Candidate, Original, Op, Parent,
+                                           Work, Initialized);
+  if (!After)
+    return std::nullopt;
+  for (const auto *Proof : {&*Before, &*After}) {
+    if (!registration_abi::chargeCalleeWork(
+            Work, Proof->Call.Arguments.size() + Proof->Arguments.size() + 1))
+      return std::nullopt;
+    for (const auto &[Address, Bytes] : Proof->Code)
+      if (!registration_abi::chargeCalleeWork(Work, Bytes.size() + 1))
+        return std::nullopt;
+  }
+  if (Before->Call != After->Call || Before->Arguments != After->Arguments ||
+      Before->ReturnValue != After->ReturnValue || Before->Code != After->Code)
+    return std::nullopt;
+  return OriginalImageSEHReplay{std::move(*Before), std::move(*After)};
 }
 } // namespace neverd::registration_state
 

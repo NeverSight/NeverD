@@ -9531,6 +9531,12 @@ refusal, conflicting fixups/mappings, image separation and exact/exhausted work.
 `OriginalImageReadRecordsExactInputsAndBytes` bind authored SEH invocations at
 two bases and keep their source evidence out of native `ConstantReturn`.
 These queries do not qualify final-PE replay or native layout-dependent calls.
+`CandidateReplayBindsTheOriginalCall` checks a retired candidate CALL, changed
+immutable bytes with an unchanged result, changed results and coincidentally
+equivalent modified code. A valid candidate call cannot repair an invalid
+original call. Base changes, missing initialized inputs, writable/relocated
+reads and tainted arguments refuse. `CandidateReplaySharesOneWorkBudget`
+checks exact, one-unit-short and exhausted allowances for both source queries.
 `RelocatedArithmeticKeepsItsAddressIdentity` covers ADD/SUB at two image bases:
 exact HIGHLOW address provenance admits the authored SEH helper while its
 ordinary result remains unknown. Missing, stale or conflicting classifications,
