@@ -17,6 +17,7 @@
 
 #include <algorithm>
 #include <limits>
+#include <set>
 #include <utility>
 #include <vector>
 
@@ -208,6 +209,83 @@ TEST(MedConstantPropagation,
   block(Func, 0).Succs.push_back(99);
   EXPECT_FALSE(propagateInvariantConstants(Func));
   EXPECT_FALSE(result(Func).isConst());
+}
+
+TEST(MedConstantPropagation, PhiInputsRequireOneArgumentPerIncomingEdge) {
+  for (int Count : {1, 2, 4, 5, 17})
+    for (bool Reverse : {false, true})
+      for (unsigned Mutation = 0; Mutation != 10; ++Mutation) {
+        SCOPED_TRACE(Count);
+        SCOPED_TRACE(Reverse);
+        SCOPED_TRACE(Mutation);
+        MedBlock Block;
+        PhiNode Phi;
+        Phi.Output = variable(1);
+        std::set<int> Incoming;
+        for (int I = 0; I != Count; ++I) {
+          const int Pred = std::numeric_limits<int>::max() - I;
+          Block.Preds.push_back(Pred);
+          Phi.Args.emplace_back(Pred, MedVar::makeConst(73, 8));
+          Incoming.insert(Pred);
+        }
+        if (Reverse)
+          std::reverse(Phi.Args.begin(), Phi.Args.end());
+        switch (Mutation) {
+        case 0:
+          break;
+        case 1:
+          Block.Preds.back() = Count == 1 ? -1 : Block.Preds.front();
+          break;
+        case 2:
+          Phi.Args.back().first = Count == 1 ? -1 : Phi.Args.front().first;
+          break;
+        case 3:
+          Phi.Args.pop_back();
+          break;
+        case 4:
+          Phi.Args.push_back(Phi.Args.front());
+          break;
+        case 5:
+          Phi.Args.back().second.Size = 4;
+          break;
+        case 6:
+          Phi.Output.Size = 0;
+          break;
+        case 7:
+          Phi.ExceptionalEntry = variable(2);
+          break;
+        case 8:
+          Block.Preds.clear();
+          break;
+        case 9:
+          Incoming.erase(Incoming.begin());
+          Incoming.insert(-1);
+          break;
+        }
+        EXPECT_EQ(hasCompleteOrdinaryPhiInputs(Block, Phi, Incoming),
+                  Mutation == 0);
+      }
+}
+
+TEST(MedConstantPropagation, CompletePredecessorsDoNotCompleteAnotherPhi) {
+  for (bool Reverse : {false, true}) {
+    auto Func = loop(MedVar::makeConst(73, 8));
+    auto &Header = block(Func, 1);
+    auto Incomplete = Header.Phis.front();
+    Incomplete.Output = variable(10);
+    Incomplete.Args.pop_back();
+    Header.Phis.push_back(Incomplete);
+    if (Reverse)
+      std::reverse(Header.Phis.begin(), Header.Phis.end());
+    auto &Exit = block(Func, 3);
+    Exit.Ops.insert(Exit.Ops.begin(), operation(NdOp::INT_ADD, variable(11),
+                                                {variable(10), variable(2)}));
+    ASSERT_TRUE(propagateInvariantConstants(Func));
+    EXPECT_EQ(Exit.Ops.front().Inputs[0], variable(10));
+    EXPECT_EQ(Exit.Ops.front().Inputs[1].ConstVal, 73U);
+    EXPECT_TRUE(Exit.Ops.front().Inputs[1].isConst());
+    EXPECT_EQ(result(Func), MedVar::makeConst(73, 8));
+  }
 }
 
 TEST(MedConstantPropagation, EffectsAndOperandRolesSurviveConstantTransport) {

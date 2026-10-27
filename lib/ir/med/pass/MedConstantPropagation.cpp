@@ -100,22 +100,38 @@ std::optional<bool> selfComparisonConstant(NdOp Opcode, const MedVar &A,
   }
 }
 
+namespace {
+bool hasCompleteOrdinaryPredecessors(const MedBlock &Block,
+                                     const std::set<int> &Incoming) {
+  if (Block.Preds.empty() || Block.Preds.size() != Incoming.size())
+    return false;
+  llvm::SmallVector<int, 4> Predecessors(Block.Preds.begin(),
+                                         Block.Preds.end());
+  std::sort(Predecessors.begin(), Predecessors.end());
+  return std::equal(Predecessors.begin(), Predecessors.end(), Incoming.begin());
+}
+
+bool hasCompleteOrdinaryPhiArguments(const PhiNode &Phi,
+                                     const std::set<int> &Incoming) {
+  if (Phi.ExceptionalEntry || !Phi.Output.Size ||
+      Phi.Args.size() != Incoming.size())
+    return false;
+  llvm::SmallVector<int, 4> Edges;
+  for (const auto &[Pred, Value] : Phi.Args) {
+    if (Value.Size != Phi.Output.Size)
+      return false;
+    Edges.push_back(Pred);
+  }
+  std::sort(Edges.begin(), Edges.end());
+  // Equality with the unique incoming edges also rejects duplicate arguments.
+  return std::equal(Edges.begin(), Edges.end(), Incoming.begin());
+}
+} // namespace
+
 bool hasCompleteOrdinaryPhiInputs(const MedBlock &Block, const PhiNode &Phi,
                                   const std::set<int> &Incoming) {
-  if (Phi.ExceptionalEntry || !Phi.Output.Size || Block.Preds.empty() ||
-      Block.Preds.size() != Incoming.size() ||
-      Phi.Args.size() != Block.Preds.size())
-    return false;
-  const std::set<int> Predecessors(Block.Preds.begin(), Block.Preds.end());
-  if (Predecessors.size() != Block.Preds.size() || Predecessors != Incoming ||
-      Phi.Args.size() != Predecessors.size())
-    return false;
-  std::set<int> Edges;
-  for (const auto &[Pred, Value] : Phi.Args)
-    if (Value.Size != Phi.Output.Size || !Predecessors.count(Pred) ||
-        !Edges.insert(Pred).second)
-      return false;
-  return Edges == Predecessors;
+  return hasCompleteOrdinaryPredecessors(Block, Incoming) &&
+         hasCompleteOrdinaryPhiArguments(Phi, Incoming);
 }
 
 bool propagateInvariantConstants(MedFunc &Func) {
@@ -172,17 +188,23 @@ bool propagateInvariantConstants(MedFunc &Func) {
       Node.State = Knowledge::Varying;
   };
   for (const auto &Block : Func.Blocks) {
-    for (const auto &Phi : Block.Phis) {
-      if (Phi.Args.size() > Budget)
-        return false;
-      Budget -= Phi.Args.size();
-      std::vector<MedVar> Values;
-      for (const auto &[Predecessor, Value] : Phi.Args) {
-        Values.push_back(Value);
+    if (!Block.Phis.empty()) {
+      const auto &Predecessors = Incoming[Block.Id];
+      // Every PHI in this block shares the same control-flow predecessors.
+      // Prove that invariant once, then check each PHI's own arguments.
+      const bool Complete =
+          hasCompleteOrdinaryPredecessors(Block, Predecessors);
+      for (const auto &Phi : Block.Phis) {
+        if (Phi.Args.size() > Budget)
+          return false;
+        Budget -= Phi.Args.size();
+        std::vector<MedVar> Values;
+        for (const auto &[Predecessor, Value] : Phi.Args)
+          Values.push_back(Value);
+        // The dispatcher's entry brings a value no predecessor supplies.
+        Add(Phi.Output, std::move(Values),
+            Complete && hasCompleteOrdinaryPhiArguments(Phi, Predecessors));
       }
-      // The dispatcher's entry brings a value no predecessor supplies.
-      Add(Phi.Output, std::move(Values),
-          hasCompleteOrdinaryPhiInputs(Block, Phi, Incoming[Block.Id]));
     }
     for (const auto &Op : Block.Ops) {
       if (Op.NumInputs > Op.Inputs.size())
