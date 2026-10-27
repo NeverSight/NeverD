@@ -20,7 +20,7 @@ llvm::Function *
 MedLLVMEmitter::getX86RegistrationSEHRuntimeTarget(const MedOp &Op) {
   if (TargetArch != Arch::X86 || TargetFormat != BinaryFormat::COFF ||
       !CurMedFunc || !CurMedFunc->RegistrationStates || !FrameAlloca ||
-      Op.Opcode != NdOp::INDIR_CALL)
+      (Op.Opcode != NdOp::INDIR_CALL && Op.Opcode != NdOp::CALL))
     return nullptr;
   const auto Calls = getX86RegistrationSEHBoundCalls(*CurMedFunc);
   if (!Calls)
@@ -34,7 +34,8 @@ MedLLVMEmitter::getX86RegistrationSEHRuntimeTarget(const MedOp &Op) {
   if (!Callee || !Callee->isDeclaration() ||
       Callee->getFunctionType() !=
           getX86RegistrationSEHBoundType(Source, *Ctx) ||
-      !Callee->hasDLLImportStorageClass() ||
+      Callee->hasDLLImportStorageClass() !=
+          usesX86RegistrationSEHImportSlot(Found->second) ||
       Callee->getCallingConv() !=
           getX86RegistrationSEHBoundConvention(Source) ||
       !x86_registration::hasSEHBoundFrameArguments(Source, *FrameAlloca,

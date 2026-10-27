@@ -193,9 +193,14 @@ getX86RegistrationSEHBoundCalls(const MedFunc &Function) {
       auto &Call = Found->second;
       const bool Imported = Call.Source->CalleeKind !=
                             RegistrationSEHBoundCall::Kind::PreservedHelper;
+      const bool CorrectOpcode =
+          Imported ? Op.Opcode == NdOp::INDIR_CALL ||
+                         (Call.Source->CalleeKind ==
+                              RegistrationSEHBoundCall::Kind::ControlFP &&
+                          Op.Opcode == NdOp::CALL)
+                   : Op.Opcode == NdOp::CALL;
       if (Call.Operation || Op.OriginSeq != Call.Source->OpSeq ||
-          Op.Opcode != (Imported ? NdOp::INDIR_CALL : NdOp::CALL) ||
-          Op.NumInputs != 1 || !Op.Inputs[0].isConst() ||
+          !CorrectOpcode || Op.NumInputs != 1 || !Op.Inputs[0].isConst() ||
           Op.Inputs[0].Size != 4 ||
           Op.Inputs[0].ConstVal != Call.Source->TargetVA ||
           Op.MemoryOrdering != NdMemoryOrdering::None ||

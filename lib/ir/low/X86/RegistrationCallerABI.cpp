@@ -5,6 +5,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "RegistrationABIPrivate.h"
+#include "RegistrationCRTFrame.h"
 #include "RegistrationJumpRuntime.h"
 #include "RegistrationSourceCall.h"
 
@@ -144,7 +145,12 @@ bool hasRegistrationCallFrameABI(
         if (Bound != States->SEHBoundCalls.end()) {
           const bool Imported = Bound->CalleeKind !=
                                 RegistrationSEHBoundCall::Kind::PreservedHelper;
-          if (Op.Opcode != (Imported ? NdOp::INDIR_CALL : NdOp::CALL) ||
+          const bool ControlFP =
+              Bound->CalleeKind == RegistrationSEHBoundCall::Kind::ControlFP;
+          if ((ControlFP
+                   ? !registration_state::isCheckedControlFPCall(Image, Op,
+                                                                 Work)
+                   : Op.Opcode != (Imported ? NdOp::INDIR_CALL : NdOp::CALL)) ||
               Op.NumInputs != 1 || !Op.Inputs[0].isConst() ||
               Op.Inputs[0].Size != 4 || Bound->TargetVA != Op.Inputs[0].Offset)
             return false;

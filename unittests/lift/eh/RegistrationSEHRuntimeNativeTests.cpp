@@ -130,7 +130,7 @@ void checkSEHRuntimeEdits(const llvm::Function &Parent,
                           const ExceptionFunction &Source,
                           const BinaryImage &Image) {
 #ifdef LLVM_NEVERD_X86_REGISTRATION_EH
-  for (unsigned Mutation = 0; Mutation != 16; ++Mutation) {
+  for (unsigned Mutation = 0; Mutation != 17; ++Mutation) {
     SCOPED_TRACE(Mutation);
     auto Module = llvm::CloneModule(*Parent.getParent());
     auto *Function = Module->getFunction(Parent.getName());
@@ -166,7 +166,10 @@ void checkSEHRuntimeEdits(const llvm::Function &Parent,
         *ChangedByte = OriginalByte;
     });
     if (Mutation == 0)
-      Callee->setDLLStorageClass(llvm::GlobalValue::DefaultStorageClass);
+      Callee->setDLLStorageClass(
+          Callee->hasDLLImportStorageClass()
+              ? llvm::GlobalValue::DefaultStorageClass
+              : llvm::GlobalValue::DLLImportStorageClass);
     if (Mutation == 1)
       Runtime->setCallingConv(ControlFP ? llvm::CallingConv::X86_StdCall
                                         : llvm::CallingConv::C);
@@ -222,15 +225,22 @@ void checkSEHRuntimeEdits(const llvm::Function &Parent,
                              ControlFP
                                  ? static_cast<llvm::Value *>(B.getInt32(0))
                                  : B.CreateAlloca(B.getInt32Ty()));
-    if (Mutation == 13)
-      Callee->setName("unproved_runtime");
+    if (Mutation == 13) {
+      if (Callee->hasDLLImportStorageClass())
+        Callee->setName("unproved_runtime");
+      else
+        Callee->setMetadata(rewrite_source::FunctionAttachment, nullptr);
+    }
     if (Mutation == 14) {
       auto Identity = rewrite_source::getOriginalVA(*Callee);
       ASSERT_TRUE(bool(Identity)) << llvm::toString(Identity.takeError());
       ASSERT_TRUE(*Identity);
+      const auto *Imported =
+          ControlFP ? Image.findImportAt(**Identity) : nullptr;
+      const va_t Slot = Imported ? Imported->IATAddr : **Identity;
       bool Changed = false;
       for (auto &Import : ChangedImage.Imports)
-        if (Import.IATAddr == **Identity) {
+        if (Import.IATAddr == Slot) {
           Import.Module = "unproved-runtime.dll";
           Changed = true;
         }
@@ -260,6 +270,20 @@ void checkSEHRuntimeEdits(const llvm::Function &Parent,
       // Invalid exception flags or a mask admitting parameter-error hooks
       // must invalidate the source runtime contract, not inherit the old IR.
       *ChangedByte = Precision ? 7 : ControlFP ? 0xff : 2;
+    }
+    if (Mutation == 16) {
+      auto Identity = rewrite_source::getOriginalVA(*Callee);
+      ASSERT_TRUE(bool(Identity)) << llvm::toString(Identity.takeError());
+      ASSERT_TRUE(*Identity);
+      const auto *Stub = ChangedImage.readVA(**Identity, 6);
+      if (!ControlFP || !ChangedImage.isCodeAddress(**Identity) || !Stub ||
+          Stub[0] != 0xff || Stub[1] != 0x25)
+        continue;
+      // A stale import-stub index must not preserve the old runtime receipt
+      // after the immutable jump becomes a different physical instruction.
+      ChangedByte = const_cast<uint8_t *>(Stub + 1);
+      OriginalByte = *ChangedByte;
+      *ChangedByte = 0x15;
     }
     ASSERT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
     auto Error = validateCOFFRegistrationIR(*Function, Source, ChangedImage);

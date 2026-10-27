@@ -69,7 +69,11 @@ _registration_entry:
   lea eax,[ebp-112]
   push eax
 #endif
+#if REGISTRATION_CONTROL_FP_VENEER
+  call .Lcontrol_fp_veneer
+#else
   call dword ptr [__imp___controlfp_s]
+#endif
   add esp,12
   test eax,eax
   jne .Lbad
@@ -389,6 +393,10 @@ _registration_entry:
   mov esp,ebp
   pop ebp
   ret
+#if REGISTRATION_CASE == 24 && REGISTRATION_CONTROL_FP_VENEER
+.Lcontrol_fp_veneer:
+  jmp dword ptr [__imp___controlfp_s]
+#endif
 #if REGISTRATION_EH4_JUMP
 #include "registration_eh4_personality.inc"
 #endif

@@ -7,6 +7,7 @@
 /// Materialize ABI types after the source invocation has been authenticated.
 
 #include "neverd/backend/llvm/X86RegistrationSEHBoundCall.h"
+#include "neverd/ir/med/MedIR.h"
 
 #include "llvm/IR/DerivedTypes.h"
 
@@ -45,6 +46,12 @@ getX86RegistrationSEHBoundImport(const RegistrationSEHBoundCall &Call) {
     return "Sleep";
   }
   llvm_unreachable("unvalidated native SEH callee kind");
+}
+
+bool usesX86RegistrationSEHImportSlot(const X86RegistrationSEHBoundCall &Call) {
+  return Call.Source && Call.Operation &&
+         !getX86RegistrationSEHBoundImport(*Call.Source).empty() &&
+         Call.Operation->Opcode == NdOp::INDIR_CALL;
 }
 
 llvm::FunctionType *

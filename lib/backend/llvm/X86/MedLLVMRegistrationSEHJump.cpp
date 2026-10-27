@@ -99,8 +99,10 @@ void MedLLVMEmitter::declareX86RegistrationJumpRuntimes(const MedFunc &Func) {
                     : Import.str(),
                 getX86RegistrationSEHBoundType(*Call.Source, *Ctx),
                 getX86RegistrationSEHBoundConvention(*Call.Source));
-    if (Callee && !Import.empty())
-      Callee->setDLLStorageClass(llvm::GlobalValue::DLLImportStorageClass);
+    if (Callee)
+      Callee->setDLLStorageClass(usesX86RegistrationSEHImportSlot(Call)
+                                     ? llvm::GlobalValue::DLLImportStorageClass
+                                     : llvm::GlobalValue::DefaultStorageClass);
   }
   for (const auto &[Address, Call] : *Calls) {
     if (Call.Resume)

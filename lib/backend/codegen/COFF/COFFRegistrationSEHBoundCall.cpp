@@ -71,8 +71,10 @@ llvm::Expected<RegistrationSEHJumpContract> bindSEHBoundCalls(
             !Callee->isDeclaration() || !Callee->hasExternalLinkage() ||
             Callee->getCallingConv() != Convention ||
             Call->getCallingConv() != Convention ||
-            Callee->hasDLLImportStorageClass() != !Import.empty() ||
-            (!Import.empty() && Callee->getName() != Import) ||
+            Callee->hasDLLImportStorageClass() !=
+                usesX86RegistrationSEHImportSlot(Bound) ||
+            (usesX86RegistrationSEHImportSlot(Bound) &&
+             Callee->getName() != Import) ||
             Callee->getFunctionType() !=
                 getX86RegistrationSEHBoundType(Receipt, Parent.getContext()) ||
             Call->arg_size() != Receipt.Arguments.size() ||

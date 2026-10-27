@@ -43,6 +43,10 @@ def source_records(source: dict, case: str, trace: int) -> list[dict]:
     if control_fp_mode not in CONTROL_FP_MODES or \
             (control_fp_mode != "output-word" and case != "longjmp-control-fp"):
         raise ValueError("source floating-point control mode is invalid")
+    control_fp_veneer = source.get("control_fp_veneer", False)
+    if not isinstance(control_fp_veneer, bool) or \
+            (control_fp_veneer and case != "longjmp-control-fp"):
+        raise ValueError("source floating-point call form is invalid")
     labels = ["original", "patched", "product-patched", "collision-patched"]
     if source.get("schema") == 2:
         labels.extend(f"cli-{mode}-{kind}" for mode in ("section", "inplace")
@@ -112,7 +116,8 @@ def main(argv: list[str] | None = None) -> int:
             observations = []
             control_fp_mode = source.get("control_fp_mode", "output-word")
             report["source_cases"].append({"case": case, "observations": observations,
-                                           "control_fp_mode": control_fp_mode})
+                                           "control_fp_mode": control_fp_mode,
+                                           "control_fp_veneer": source.get("control_fp_veneer", False)})
             for record in records:
                 try:
                     observation = observe(checked_image(parent, record), record["generated"],

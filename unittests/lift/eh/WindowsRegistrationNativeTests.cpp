@@ -2251,7 +2251,9 @@ TEST(WindowsRegistrationNative, InputPE32PreservesItsCheckedSourceContract) {
             if (auto *Call = llvm::dyn_cast<llvm::CallBase>(&I))
               if (auto *Callee = Call->getCalledFunction();
                   Callee && Callee->isDeclaration() && !Callee->isIntrinsic() &&
-                  !Callee->hasDLLImportStorageClass()) {
+                  !Callee->hasDLLImportStorageClass() &&
+                  // Bound runtimes have their own convention mutation checks.
+                  Callee->getName() != "_controlfp_s") {
                 Callee->setCallingConv(llvm::CallingConv::X86_StdCall);
                 return true;
               }

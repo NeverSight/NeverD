@@ -163,6 +163,81 @@ TEST(RegistrationImportABI, ControlFPBindsCurrentRuntimeProvider) {
     }
 }
 
+TEST(RegistrationImportABI,
+     ControlFPVeneerRequiresBothPhysicalInstructionsAndLiveSlot) {
+  for (const char *Module : {"msvcrt.dll", "MSVCR100.DLL"})
+    for (unsigned Mutation = 0; Mutation != 20; ++Mutation) {
+      SCOPED_TRACE(::testing::Message() << Module << ':' << Mutation);
+      ImportImage F({"_controlfp_s", 3}, true, true);
+      auto &Image = F.Image;
+      auto &Text = Image.Segments.front();
+      Image.Imports[0].Module = Module;
+      constexpr size_t StubOffset = ImportImage::StubVA - ImportImage::TextVA;
+      LowOp Call;
+      Call.Opcode = NdOp::CALL;
+      Call.Addr = F.CallVA;
+      Call.Seq = 0;
+      Call.addInput(NdVar::cst(ImportImage::StubVA, 4));
+      if (Mutation == 1)
+        ++Call.Addr;
+      if (Mutation == 2)
+        ++Call.Inputs[0].Offset;
+      if (Mutation == 3)
+        Text.Data[StubOffset + 1] = 0x15;
+      if (Mutation == 4)
+        writeLE<uint32_t>(Text.Data.data() + StubOffset + 2,
+                          ImportImage::IATVA + 4);
+      if (Mutation == 5)
+        Text.Flags = Text.Flags | SegmentFlags::Writable;
+      if (Mutation == 6)
+        Image.Imports[0].IsDelayImport = true;
+      if (Mutation == 7)
+        Image.Imports[0].Module = "application.dll";
+      if (Mutation == 8)
+        Image.ConflictingImportStorageSlots.insert(ImportImage::IATVA);
+      if (Mutation == 9)
+        Text.FileSz = StubOffset + 5;
+      if (Mutation == 10)
+        Call.Seq = -1;
+      if (Mutation == 11)
+        Call.addInput(NdVar::cst(0, 4));
+      if (Mutation == 12)
+        Call.MemoryOrdering = NdMemoryOrdering::Acquire;
+      if (Mutation == 13)
+        Call.Inputs[0].Offset = uint64_t(UINT32_MAX) + 1;
+      if (Mutation == 15)
+        Text.Data[StubOffset] = 0xe9;
+      if (Mutation == 16)
+        Text.Data[F.CallVA - ImportImage::TextVA] = 0x9a;
+      if (Mutation == 17)
+        Image.Arch = Arch::X64;
+      if (Mutation == 18)
+        Image.Bits = Bitness::Bits64;
+      if (Mutation == 19)
+        Image.Format = BinaryFormat::ELF;
+      size_t Work = Mutation == 14 ? limits::kMaxRegistrationEHStateWork : 0;
+      EXPECT_EQ(registration_state::isCheckedControlFPCall(Image, Call, Work),
+                Mutation == 0);
+      EXPECT_LE(Work, limits::kMaxRegistrationEHStateWork);
+      LowFunc Caller;
+      Caller.Entry = ImportImage::TextVA;
+      auto &Block = Caller.Blocks.emplace_back();
+      Block.StartAddr = Caller.Entry;
+      Block.EndAddr = F.CallVA + 5;
+      Block.Ops.push_back(Call);
+      auto &States = Caller.RegistrationStates.emplace();
+      States.Complete = States.CallbackStatesComplete = true;
+      States.RegistrationLifetimeComplete = States.HasBoundSEHCallees = true;
+      auto &Receipt = States.SEHBoundCalls.emplace_back();
+      Receipt.CalleeKind = RegistrationSEHBoundCall::Kind::ControlFP;
+      Receipt.Address = Call.Addr;
+      Receipt.OpSeq = Call.Seq;
+      Receipt.TargetVA = Call.Inputs[0].Offset;
+      EXPECT_EQ(hasCallerCleanupRegistrationABI(Caller, Image),
+                Mutation == 0 || Mutation == 14);
+    }
+}
+
 TEST(RegistrationImportABI, StartupCleanupRequiresCurrentProviderAndStorage) {
   for (const auto &C : StartupImports)
     for (bool ThroughStub : {false, true})

@@ -6295,6 +6295,11 @@ and private output before capture. Its `--control-fp-mode` additionally selects
 case first sets a different precision before every invocation, then reads the
 actual runtime control word independently after the guarded call. Reports retain
 that word for original, reconstructed, optimized and rebased authored images.
+`--control-fp-veneer` uses an authored near CALL and `FF25` import jump for the
+same cases. `ControlFPVeneerRequiresBothPhysicalInstructionsAndLiveSlot` rejects
+changed CALL displacements, veneer instructions, IAT slots/providers, partial
+or writable code and exhausted proof work. Native mutation replay additionally
+changes the veneer after import-stub discovery to reject stale cached names.
 Sixteen mutations per fixture check the
 runtime ABI, provider/IAT identity, exact argument values, import storage,
 attributes and argument-read ordering. The continuation fixture also checks

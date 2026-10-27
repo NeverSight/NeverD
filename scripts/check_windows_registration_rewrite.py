@@ -348,6 +348,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--control-fp-mode", choices=CONTROL_FP_MODES,
                         default="output-word",
                         help="use a private output word, null query or independently observed x87 precision setting")
+    parser.add_argument("--control-fp-veneer", action="store_true",
+                        help="call _controlfp_s through an authored near CALL and FF25 import veneer")
     parser.add_argument("--observe-callee-result", action="store_true",
                         help="use the returning authored helper's EAX as the longjmp value")
     parser.add_argument("--state-write", choices=("literal", "register", "bitwise"),
@@ -378,6 +380,8 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--thread-stack-base requires a filter or normal-finally case")
     if args.control_fp_mode != "output-word" and case != 24:
         parser.error("--control-fp-mode requires longjmp-control-fp")
+    if args.control_fp_veneer and (case != 24 or eh4):
+        parser.error("--control-fp-veneer requires the SEH3 longjmp-control-fp case")
     if args.state_write != "literal" and case not in (*range(9), 43, 44):
         parser.error("--state-write requires an ordinary filter/finally or shared byte-state case")
     if args.state_write == "bitwise" and case in (1, 2, 4):
@@ -391,6 +395,7 @@ def main(argv: list[str] | None = None) -> int:
               "synchronization": args.synchronization,
               "thread_stack_base": args.thread_stack_base,
               "control_fp_mode": args.control_fp_mode,
+              "control_fp_veneer": args.control_fp_veneer,
               "observe_callee_result": args.observe_callee_result,
               "state_write": args.state_write,
               "passed": False, "steps": [], "observations": []}
@@ -475,6 +480,7 @@ def main(argv: list[str] | None = None) -> int:
                              f"-DREGISTRATION_SYNCHRONIZATION={int(args.synchronization)}",
                              f"-DREGISTRATION_THREAD_STACK_BASE={int(args.thread_stack_base)}",
                              f"-DREGISTRATION_CONTROL_FP_MODE={CONTROL_FP_MODES.index(args.control_fp_mode)}",
+                             f"-DREGISTRATION_CONTROL_FP_VENEER={int(args.control_fp_veneer)}",
                              f"-DREGISTRATION_OBSERVE_CALLEE_RESULT={int(args.observe_callee_result)}",
                              f"-DREGISTRATION_STATE_WRITE={('literal', 'register', 'bitwise').index(args.state_write)}",
                              f"-DREGISTRATION_LOOP_EH4={int(eh4)}",

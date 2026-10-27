@@ -138,6 +138,15 @@ class RegistrationSourceReplayTests(unittest.TestCase):
         source["control_fp_mode"] = "precision-128"
         with self.assertRaises(ValueError):
             source_records(source, "longjmp-control-fp", 23)
+        source = self.evidence()
+        source["control_fp_veneer"] = True
+        with self.assertRaises(ValueError):
+            source_records(source, "longjmp-retired-inner-scope", 23)
+        source["case"] = "longjmp-control-fp"
+        self.assertEqual(len(source_records(source, "longjmp-control-fp", 23)), 20)
+        source["control_fp_veneer"] = "true"
+        with self.assertRaises(ValueError):
+            source_records(source, "longjmp-control-fp", 23)
 
     def test_replay_forwards_fp_mode_to_every_native_observation(self):
         # Check dispatch only. Actual control-word effects belong to the

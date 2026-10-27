@@ -9987,6 +9987,16 @@ validator and native invocation replay bind the actual control and mask values;
 the native call keeps unknown memory effects and gains no callback or unwind
 attributes. Current eager `_controlfp_s` bindings include MSVCR100. Their cdecl
 returning stack fact is separate from these invocation-specific effects.
+Direct import veneers require both the exact near CALL and its immutable
+`FF25` IAT jump. The same source receipt retains the veneer target, physical
+operation identity and current provider through MedIR and native replay;
+a cached import-stub name supplies no instruction or memory-effect authority.
+The shared native ABI transport rule keeps direct veneers as original code
+CALL targets and marks only IAT invocations as `dllimport`. Symbol resolution
+therefore never treats veneer instruction bytes as an import pointer slot.
+Code-call aliases retain the authenticated original address; IAT declarations
+additionally require the exact import spelling. A renamed code target never
+inherits the semantics or address of an import with the same name.
 The returned control word and runtime scalar result remain unknown.
 Authenticated math import cleanup and checked floating-state intrinsic shapes
 supply integer-frame facts only. Their floating effects, traps and original
