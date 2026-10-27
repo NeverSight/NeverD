@@ -19,6 +19,7 @@
 #include "neverd/backend/llvm/LLVMX86AddressSpaces.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/backend/llvm/X86RegistrationFrame.h"
+#include "neverd/backend/llvm/X86RegistrationSEHThread.h"
 #include "neverd/ir/med/I386PicAddress.h"
 #include "neverd/ir/med/MedIntrinsicOutputs.h"
 #include "neverd/ir/med/MedStackAlignment.h"
@@ -967,8 +968,12 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
                       "segmentptr");
     }
     auto *LI = Builder.CreateLoad(ValTy, Ptr, "ld");
+    const bool ThreadSelf =
+        CurMedFunc && CurMedFunc->RegistrationStates &&
+        isX86RegistrationThreadSelfLoad(Op, *CurMedFunc->RegistrationStates);
     if (CurMedFunc && CurMedFunc->RegistrationStates && Op.OriginSeq >= 0 &&
-        Op.MemoryAddressSpace == NdMemoryAddressSpace::Default) {
+        (Op.MemoryAddressSpace == NdMemoryAddressSpace::Default ||
+         ThreadSelf)) {
       auto [It, Inserted] = RegistrationMemoryIR.emplace(
           std::make_pair(Op.Addr, Op.OriginSeq), LI);
       if (!Inserted)
@@ -982,7 +987,7 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
       if (!Inserted)
         It->second = nullptr;
     }
-    if (Op.MemoryAddressSpace == NdMemoryAddressSpace::X86FS &&
+    if (Op.MemoryAddressSpace == NdMemoryAddressSpace::X86FS && !ThreadSelf &&
         Op.OriginSeq >= 0) {
       auto [It, Inserted] = RegistrationChainIR.emplace(
           std::make_pair(Op.Addr, Op.OriginSeq), LI);

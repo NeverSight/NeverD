@@ -28,6 +28,7 @@ add_neverd_component_library(NeverDWindowsRegistrationFrame
   X86/RegistrationEntry.cpp
   X86/RegistrationSEHControl.cpp
   X86/RegistrationSEHException.cpp
+  X86/RegistrationSEHThread.cpp
   X86/RegistrationSEHBoundABI.cpp
   X86/RegistrationSEHJumpCallbackFrame.cpp
   X86/RegistrationSEHJumpStack.cpp

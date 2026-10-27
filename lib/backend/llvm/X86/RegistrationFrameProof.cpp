@@ -59,7 +59,8 @@ llvm::Error validateFramePrivacy(
     const RegistrationSEHJumpContract *Jumps,
     const RegistrationSEHScopeState *Scopes,
     const RegistrationSEHParentExitContract *ParentExits,
-    const RegistrationSEHLocalUnwindContract *LocalUnwinds) {
+    const RegistrationSEHLocalUnwindContract *LocalUnwinds,
+    const std::set<const llvm::LoadInst *> &ThreadReads) {
   const llvm::Instruction *CurrentInstruction = nullptr;
   auto Reject = [&](llvm::StringRef Detail = {}) {
     std::string Message = "coff registration patch: synthetic frame has an "
@@ -441,6 +442,10 @@ llvm::Error validateFramePrivacy(
             auto Where = Locate(Load->getPointerOperand(), 0);
             if (Where && !LiveAt(*Where, *Load))
               return Reject("frame read is outside its allocation lifetime");
+            // The caller binds these exact reads to freshly replayed source
+            // and checks their real Self-derived addresses independently.
+            if (ThreadReads.count(Load))
+              continue;
             if (ChainProtocolReads.count(Load))
               continue;
             if (SEH && SEH->NullReads.count(Load))

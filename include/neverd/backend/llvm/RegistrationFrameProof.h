@@ -30,6 +30,7 @@ class CatchPadInst;
 class CatchReturnInst;
 class Function;
 class Instruction;
+class LoadInst;
 class StoreInst;
 class Value;
 } // namespace llvm
@@ -134,7 +135,8 @@ llvm::Error validateFramePrivacy(
     const RegistrationSEHJumpContract *Jumps = nullptr,
     const RegistrationSEHScopeState *Scopes = nullptr,
     const RegistrationSEHParentExitContract *ParentExits = nullptr,
-    const RegistrationSEHLocalUnwindContract *LocalUnwinds = nullptr);
+    const RegistrationSEHLocalUnwindContract *LocalUnwinds = nullptr,
+    const std::set<const llvm::LoadInst *> &ThreadReads = {});
 
 } // namespace neverd::coff_registration
 

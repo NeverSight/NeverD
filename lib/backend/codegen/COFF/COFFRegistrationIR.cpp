@@ -19,6 +19,7 @@
 #include "COFFRegistrationSEHParentExit.h"
 #include "COFFRegistrationSEHRegisters.h"
 #include "COFFRegistrationSEHState.h"
+#include "COFFRegistrationSEHThread.h"
 
 #include "neverd/Limits.h"
 #include "neverd/backend/RewriteSourceIdentity.h"
@@ -256,6 +257,10 @@ llvm::Error validateCOFFRegistrationIR(const llvm::Function &Function,
       ReplayMed, *Frame, *CallbackMap, ExceptionBridges, NativeFunctions);
   if (!ExceptionFields)
     return ExceptionFields.takeError();
+  auto ThreadReads = coff_registration::bindSEHThreadReads(ReplayMed, Function,
+                                                           NativeFunctions);
+  if (!ThreadReads)
+    return ThreadReads.takeError();
   std::set<const llvm::Instruction *> IncomingAccesses, IncomingSetup;
   if (llvm::Error Error =
           validateIncomingCallerFrame(Function, ReplayMed, NativeFunctions,
@@ -308,6 +313,9 @@ llvm::Error validateCOFFRegistrationIR(const llvm::Function &Function,
         if (Operand->getType()->isPointerTy() &&
             Operand->getType()->getPointerAddressSpace() == 257) {
           const auto *Load = llvm::dyn_cast<llvm::LoadInst>(&Instruction);
+          if (ThreadReads->count(Load) &&
+              Load->getPointerOperand() == Operand.get())
+            continue;
           if (!Load || Load->getPointerOperand() != Operand.get() ||
               !llvm::isa<llvm::ConstantPointerNull>(Operand) ||
               !Load->getType()->isIntegerTy(32) || Load->isAtomic() ||
@@ -568,7 +576,7 @@ llvm::Error validateCOFFRegistrationIR(const llvm::Function &Function,
           IncomingAccesses, SourceCallerPCWrites, ChainProtocolReads,
           States.SecurityCookieVA, ImmutableImageRanges, nullptr,
           &*ExceptionFields, &*Jumps, &*ScopeState, &*ParentExits,
-          &*LocalUnwinds))
+          &*LocalUnwinds, *ThreadReads))
     return Error;
   auto NormalFinallyIR = coff_registration::bindSEHFinallyCalls(
       ReplayMed, Function, *CallbackMap, *SourceSegments, NativeFunctions);
@@ -920,7 +928,8 @@ llvm::Error validateCOFFRegistrationIR(const llvm::Function &Function,
             Function, CallbackFunctions, Frame->Slot, ExceptionBridges,
             IncomingAccesses, GeneratedCallerPCWrites, ChainProtocolReads,
             States.SecurityCookieVA, ImmutableImageRanges, nullptr,
-            &*ExceptionFields, &*Jumps, &*ScopeState, &*ParentExits))
+            &*ExceptionFields, &*Jumps, &*ScopeState, &*ParentExits,
+            &*LocalUnwinds, *ThreadReads))
       return Error;
   return llvm::Error::success();
 #endif

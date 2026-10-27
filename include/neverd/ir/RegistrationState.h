@@ -201,6 +201,24 @@ struct RegistrationSEHExceptionAccess {
   bool operator==(const RegistrationSEHExceptionAccess &) const = default;
 };
 
+/// One read of the current PE32 NT_TIB. Self retains its exact source LOAD;
+/// StackBase is an opaque runtime value, never a regenerated frame coordinate.
+struct RegistrationSEHThreadAccess {
+  static constexpr uint32_t WordBytes = 4;
+  static constexpr uint32_t SelfOffset = 0x18;
+  static constexpr uint32_t StackBaseOffset = 4;
+  /// The lifter zero-extends PE32 effective addresses into its VA carrier.
+  static constexpr bool isAddressWidth(uint16_t Bytes) {
+    return Bytes == WordBytes || Bytes == sizeof(va_t);
+  }
+  enum class Kind : uint8_t { Self, StackBase } Field = Kind::Self;
+  va_t Address = InvalidVA;
+  int OpSeq = -1;
+  va_t RootAddress = InvalidVA;
+  int RootOpSeq = -1;
+  bool operator==(const RegistrationSEHThreadAccess &) const = default;
+};
+
 /// A physical SEH finally invocation ends either by consuming its own near
 /// return PC or by restoring the checked parent SavedESP and branching to an
 /// exact parent instruction. CallVA is zero for a runtime invocation. These
@@ -424,6 +442,8 @@ struct RegistrationStateAnalysis {
   std::vector<RegistrationSEHStateStore> SEHStateStores;
   bool SEHExceptionAccessesComplete = true;
   std::vector<RegistrationSEHExceptionAccess> SEHExceptionAccesses;
+  bool SEHThreadAccessesComplete = true;
+  std::vector<RegistrationSEHThreadAccess> SEHThreadAccesses;
   /// Invocation-specialized original helpers require a separate native plan.
   bool HasBoundSEHCallees = false;
   bool SEHBoundCallsComplete = true;

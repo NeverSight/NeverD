@@ -12,6 +12,7 @@
 #include "neverd/Limits.h"
 #include "neverd/ir/low/RegistrationSharedCall.h"
 #include "neverd/ir/med/MedIR.h"
+#include "neverd/ir/med/X86RegistrationSEHThread.h"
 
 #include "llvm/ADT/ScopeExit.h"
 
@@ -51,11 +52,12 @@ using TempKey = std::pair<int, int>;
 using TempDefinition = std::pair<const MedBlock *, const MedOp *>;
 using TempDefinitions = std::map<TempKey, TempDefinition>;
 
-bool zeroChainOffset(const MedBlock &Block, const MedOp &Access,
-                     const TempDefinitions &Definitions, size_t &Work) {
+bool segmentOffset(const MedBlock &Block, const MedOp &Access,
+                   const TempDefinitions &Definitions, uint32_t Offset,
+                   size_t &Work) {
   MedVar Value = Access.Inputs[0];
   const MedOp *Before = &Access;
-  // The ordinary x86 lifter materializes FS:[0] as COPY(0), optionally
+  // The ordinary x86 lifter materializes a fixed FS offset as COPY, optionally
   // followed by a 32-to-64-bit zero extension. Exceptional CFGs need not
   // have folded these transports. Only unique, earlier definitions in the
   // same source instruction can supply this offset; no PHI or input can.
@@ -64,7 +66,7 @@ bool zeroChainOffset(const MedBlock &Block, const MedOp &Access,
         (Value.Size != 4 && Value.Size != 8))
       return false;
     if (Value.isConst())
-      return Value.ConstVal == 0;
+      return Value.ConstVal == Offset;
     if (Value.Kind != MedVar::Temp)
       return false;
     const auto It = Definitions.find({Value.Id, Value.SSAVer});
@@ -249,6 +251,9 @@ analyzePhysicalCxxFrame(const BinaryImage &Image, const LowFunc &Source,
 bool hasCurrentPhysicalChain(
     const MedFunc &Function,
     const std::vector<RegistrationChainAccess> &ChainAccesses) {
+  const auto Threads = getX86RegistrationSEHThreadAccesses(Function);
+  if (!Threads)
+    return false;
   std::map<std::pair<va_t, int>, const RegistrationChainAccess *> Remaining;
   for (const auto &Access : ChainAccesses)
     Remaining.emplace(std::make_pair(Access.Address, Access.OpSeq), &Access);
@@ -287,12 +292,24 @@ bool hasCurrentPhysicalChain(
       if (Op.MemoryAddressSpace != NdMemoryAddressSpace::X86FS)
         continue;
       const auto Found = Remaining.find({Op.Addr, Op.OriginSeq});
+      const auto Thread = Threads->find({Op.Addr, Op.OriginSeq});
+      if (Thread != Threads->end()) {
+        // Source-bound Self loads are ordinary thread reads, never chain
+        // effects. Recheck their current materialized offset independently.
+        if (Found != Remaining.end() || Op.Dead || Op.Addr < Block.StartAddr ||
+            Op.Addr >= Block.EndAddr ||
+            Thread->second.Field != RegistrationSEHThreadAccess::Kind::Self ||
+            !segmentOffset(Block, Op, Definitions,
+                           RegistrationSEHThreadAccess::SelfOffset, Work))
+          return false;
+        continue;
+      }
       const bool Load = Op.Opcode == NdOp::LOAD;
       if (Found == Remaining.end() || Op.Dead || Op.Addr < Block.StartAddr ||
           Found->second->EndAddress > Block.EndAddr ||
           (!Load && Op.Opcode != NdOp::STORE) ||
           Op.NumInputs != (Load ? 1u : 2u) ||
-          !zeroChainOffset(Block, Op, Definitions, Work) ||
+          !segmentOffset(Block, Op, Definitions, 0, Work) ||
           (Load ? Op.Output.Size : Op.Inputs[1].Size) != 4 ||
           Op.MemoryOrdering != NdMemoryOrdering::None ||
           Load != (Found->second->AccessKind ==

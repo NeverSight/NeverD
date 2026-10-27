@@ -26,6 +26,7 @@
 #include "neverd/backend/llvm/X86RegistrationEntry.h"
 #include "neverd/backend/llvm/X86RegistrationSEHScope.h"
 #include "neverd/backend/llvm/X86RegistrationSEHStateStore.h"
+#include "neverd/backend/llvm/X86RegistrationSEHThread.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/med/X86RegistrationCallback.h"
 #include "neverd/ir/med/X86RegistrationEntry.h"
@@ -220,8 +221,15 @@ bool MedLLVMEmitter::emitNativeX86RegistrationSEH(
     return It == BlocksAt.end() ? nullptr : OriginalBlockMap.at(It->second->Id);
   };
 
+  const std::map<std::pair<va_t, int>, const llvm::Instruction *>
+      ThreadOperations(RegistrationMemoryIR.begin(),
+                       RegistrationMemoryIR.end());
+  const auto ThreadReads =
+      getCheckedX86SEHThreadReads(Func, Parent, ThreadOperations, false);
+  if (!ThreadReads)
+    return false;
   auto ChainProof = x86_registration::getCheckedSEHChainInstructions(
-      Parent, States, RegistrationChainIR);
+      Parent, States, RegistrationChainIR, *ThreadReads);
   if (!ChainProof)
     return false;
   auto &ChainInstructions = *ChainProof;

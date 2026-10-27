@@ -332,6 +332,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="retain the exact process heap terminate-on-corruption request")
     parser.add_argument("--synchronization", action="store_true",
                         help="observe native atomic success, failure, return values and Sleep")
+    parser.add_argument("--thread-stack-base", action="store_true",
+                        help="compare the source thread-block StackBase read with an independent observer")
     parser.add_argument("--observe-callee-result", action="store_true",
                         help="use the returning authored helper's EAX as the longjmp value")
     parser.add_argument("--state-write", choices=("literal", "register", "bitwise"),
@@ -358,6 +360,8 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--heap-termination requires a filter or normal-finally case")
     if args.synchronization and case not in (0, 4):
         parser.error("--synchronization requires a filter or normal-finally case")
+    if args.thread_stack_base and case not in (0, 4):
+        parser.error("--thread-stack-base requires a filter or normal-finally case")
     if args.state_write != "literal" and case not in (*range(9), 43, 44):
         parser.error("--state-write requires an ordinary filter/finally or shared byte-state case")
     if args.state_write == "bitwise" and case in (1, 2, 4):
@@ -369,6 +373,7 @@ def main(argv: list[str] | None = None) -> int:
               "startup_info": args.startup_info,
               "heap_termination": args.heap_termination,
               "synchronization": args.synchronization,
+              "thread_stack_base": args.thread_stack_base,
               "observe_callee_result": args.observe_callee_result,
               "state_write": args.state_write,
               "passed": False, "steps": [], "observations": []}
@@ -451,6 +456,7 @@ def main(argv: list[str] | None = None) -> int:
                              f"-DREGISTRATION_STARTUP_INFO={int(args.startup_info)}",
                              f"-DREGISTRATION_HEAP_TERMINATION={int(args.heap_termination)}",
                              f"-DREGISTRATION_SYNCHRONIZATION={int(args.synchronization)}",
+                             f"-DREGISTRATION_THREAD_STACK_BASE={int(args.thread_stack_base)}",
                              f"-DREGISTRATION_OBSERVE_CALLEE_RESULT={int(args.observe_callee_result)}",
                              f"-DREGISTRATION_STATE_WRITE={('literal', 'register', 'bitwise').index(args.state_write)}",
                              f"-DREGISTRATION_LOOP_EH4={int(eh4)}",

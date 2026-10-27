@@ -24,6 +24,10 @@ static hash_code hash_value(const SEHExceptionAddress &Address) {
   return hash_combine(Address.Storage, Address.Filter, Address.Offset);
 }
 
+static hash_code hash_value(const SEHThreadAddress &Address) {
+  return hash_combine(Address.RootAddress, Address.RootOpSeq, Address.Offset);
+}
+
 static hash_code hash_value(const FrameValue &Value) {
   return hash_combine(
       Value.Offset, Value.Constant, Value.PreviousChain, Value.MayBeFrame,
@@ -31,7 +35,8 @@ static hash_code hash_value(const FrameValue &Value) {
       Value.SecurityCookie, Value.CookieFrameOffset, Value.CookieXOR,
       Value.EntryOffset, Value.CallbackAddress, Value.ExceptionObject,
       Value.SEHException, Value.JumpCapture, Value.FrameOnlyFromSEHScalar,
-      Value.ImageAddress, Value.CookieImageXOR, Value.ImportTarget);
+      Value.ImageAddress, Value.CookieImageXOR, Value.ImportTarget,
+      Value.ThreadAddress);
 }
 
 static hash_code hash_value(const FrameState &Frame) {

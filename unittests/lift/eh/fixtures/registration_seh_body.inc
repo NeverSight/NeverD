@@ -32,9 +32,18 @@
   push 0
   call dword ptr ["__imp__HeapSetInformation@16"]
 #endif
+#if REGISTRATION_THREAD_STACK_BASE
+  mov eax,fs:[0x18]
+  mov eax,[eax+4]
+  mov dword ptr [_registration_thread_stack_base],eax
+#endif
 #if REGISTRATION_SYNCHRONIZATION
   push 17
+#if REGISTRATION_THREAD_STACK_BASE
+  push eax
+#else
   push dword ptr [_registration_atomic_exchange]
+#endif
   .byte 0x68
   .long _registration_atomic_word
   call dword ptr ["__imp__InterlockedCompareExchange@12"]

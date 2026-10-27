@@ -13,6 +13,7 @@
 
 #include "neverd/Limits.h"
 #include "neverd/backend/llvm/X86RegistrationSEHControl.h"
+#include "neverd/backend/llvm/X86RegistrationSEHThread.h"
 #include "neverd/ir/med/X86RegistrationSEHRegisters.h"
 #include "neverd/ir/med/X86RegistrationSEHStateStore.h"
 
@@ -100,7 +101,9 @@ llvm::Expected<std::map<int, SourceSegment>> validateSourceSegments(
       if (!Charge())
         return rejectIR("source execution replay exceeds its work budget");
       if ((Op.Opcode == NdOp::LOAD || Op.Opcode == NdOp::STORE) &&
-          Op.MemoryAddressSpace == NdMemoryAddressSpace::Default)
+          (Op.MemoryAddressSpace == NdMemoryAddressSpace::Default ||
+           (!ReachedCxxSource && Source.RegistrationStates &&
+            isX86RegistrationThreadSelfLoad(Op, *Source.RegistrationStates))))
         Expected[Id].push_back(
             {{Op.Addr, Op.OriginSeq}, uint8_t(Op.Opcode == NdOp::STORE)});
       else if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL)

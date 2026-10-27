@@ -237,6 +237,7 @@ bool RegistrationStateSolver::transferBlock(size_t I, const Domain &Before,
     RuntimeMemory =
         recordRuntimeMemory(I, After, Op, Transfer, RuntimeTransfer, Facts);
     RuntimeMemory |= recordSEHExceptionMemory(I, After, Op, Transfer, Facts);
+    RuntimeMemory |= recordSEHThreadMemory(I, After, Op, Transfer, Facts);
     if (Exhausted)
       break;
 

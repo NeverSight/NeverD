@@ -8,6 +8,7 @@
 
 #include "RegistrationFrameEffects.h"
 
+#include "neverd/ir/RegistrationState.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/ir/low/LowIR.h"
 #include "neverd/ir/low/LowScalarConstant.h"
@@ -207,8 +208,9 @@ FrameValue FrameTransfer::read(const NdVar &Value) const {
   if (Value.isTemp()) {
     auto It = Temps.find(Value.Offset);
     if (It != Temps.end()) {
-      if (It->second.SEHException && Value.Size < 4)
-        return {{}, {}, false, true};
+      if ((It->second.SEHException || It->second.ThreadAddress) &&
+          Value.Size < 4)
+        return FrameValue::taint(It->second.MayBeFrame);
       return It->second;
     }
   }
@@ -290,6 +292,22 @@ FrameValue FrameTransfer::evaluate(const LowOp &Op, bool Installed,
         Op.MemoryOrdering == NdMemoryOrdering::None)
       return FrameValue::importTarget(uint32_t(*ImportLoad));
     const FrameValue Address = read(Op.Inputs[0]);
+    using Thread = RegistrationSEHThreadAccess;
+    if (Op.MemoryAddressSpace == NdMemoryAddressSpace::X86FS &&
+        Address.Constant == Thread::SelfOffset &&
+        Thread::isAddressWidth(Op.Inputs[0].Size) &&
+        Op.Output.Size == Thread::WordBytes &&
+        Op.MemoryOrdering == NdMemoryOrdering::None && Op.Seq >= 0)
+      return FrameValue::threadBlock({Op.Addr, Op.Seq, 0});
+    if (Address.ThreadAddress) {
+      if (Op.MemoryAddressSpace == NdMemoryAddressSpace::Default &&
+          Address.ThreadAddress->Offset == Thread::StackBaseOffset &&
+          Thread::isAddressWidth(Op.Inputs[0].Size) &&
+          Op.Output.Size == Thread::WordBytes &&
+          Op.MemoryOrdering == NdMemoryOrdering::None)
+        return FrameValue::taint(true, true);
+      return FrameValue::taint(true);
+    }
     if (Address.SEHException) {
       if (Op.MemoryAddressSpace == NdMemoryAddressSpace::Default)
         if (const auto Value =
@@ -384,6 +402,23 @@ FrameValue FrameTransfer::evaluate(const LowOp &Op, bool Installed,
       Address.Offset = int32_t(Offset);
       return FrameValue::sehException(Address);
     };
+    auto AddThreadOffset = [&](const FrameValue &Base, int64_t Delta) {
+      if (Op.Output.Size != 4 || Op.Inputs[0].Size != 4 ||
+          Op.Inputs[1].Size != 4)
+        return FrameValue{};
+      auto Address = *Base.ThreadAddress;
+      const int64_t Offset = int64_t(Address.Offset) + Delta;
+      if (Offset < INT32_MIN || Offset > INT32_MAX)
+        return FrameValue{};
+      Address.Offset = int32_t(Offset);
+      return FrameValue::threadBlock(Address);
+    };
+    if (Left.ThreadAddress && Right.Constant)
+      return AddThreadOffset(Left, Op.Opcode == NdOp::INT_ADD
+                                       ? int64_t(int32_t(*Right.Constant))
+                                       : -int64_t(int32_t(*Right.Constant)));
+    if (Op.Opcode == NdOp::INT_ADD && Left.Constant && Right.ThreadAddress)
+      return AddThreadOffset(Right, int32_t(*Left.Constant));
     if (Left.SEHException && Right.Constant)
       if (auto Value = AddExceptionOffset(
               Left, Op.Opcode == NdOp::INT_ADD

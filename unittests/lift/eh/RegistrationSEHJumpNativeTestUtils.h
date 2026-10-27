@@ -43,6 +43,10 @@ void checkSEHStartupInfoEdits(const llvm::Function &Parent,
 void checkSEHSynchronizationEdits(const llvm::Function &Parent,
                                   const ExceptionFunction &Source,
                                   const BinaryImage &Image);
+void checkSEHThreadEdits(const llvm::Function &Parent,
+                         const ExceptionFunction &Source,
+                         const BinaryImage &Image,
+                         const RegistrationStateAnalysis &States);
 void checkSEHHeapPolicyEdits(const llvm::Function &Parent,
                              const ExceptionFunction &Source,
                              const BinaryImage &Image);

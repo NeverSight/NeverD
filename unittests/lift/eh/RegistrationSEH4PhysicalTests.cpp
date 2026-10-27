@@ -26,6 +26,7 @@
 #include "llvm/Support/Error.h"
 
 #include <algorithm>
+#include <optional>
 #include <vector>
 
 using namespace neverd;
@@ -355,5 +356,81 @@ TEST(RegistrationSEH4Physical,
     const auto Med = convertSharedFrame(Image, Low);
     EXPECT_FALSE(Med.RegistrationSEH4PhysicalFrame);
     EXPECT_FALSE(hasCheckedX86RegistrationSEHPhysicalFrame(Image, Med));
+  }
+}
+
+TEST(RegistrationSEH4Physical, KeepsCheckedThreadReadsSeparateFromTheChain) {
+  auto Image = sharedSEH4Image(0x400000, false, 32, SharedSEH4Body::ThreadRead);
+  const auto Low = liftSharedSEH4(Image);
+  ASSERT_TRUE(Low.RegistrationStates);
+  ASSERT_TRUE(Low.RegistrationStates->Complete);
+  ASSERT_EQ(Low.RegistrationStates->SEHThreadAccesses.size(), 2u);
+  const auto Med = convertSharedFrame(Image, Low);
+  ASSERT_TRUE(Med.RegistrationSEH4PhysicalFrame);
+  const auto *Physical = getX86RegistrationSEHPhysicalStates(Med);
+  ASSERT_TRUE(Physical);
+  EXPECT_EQ(Physical->SEHThreadAccesses,
+            Low.RegistrationStates->SEHThreadAccesses);
+  EXPECT_EQ(Physical->ChainAccesses.size(), 3u);
+  ASSERT_TRUE(hasCheckedX86RegistrationSEHPhysicalFrame(Image, Med));
+  llvm::LLVMContext Context;
+  auto Module =
+      MedLLVMEmitter().emit({Med}, Context, "shared-seh4-thread", Arch::X86, {},
+                            &Image, BinaryFormat::COFF);
+  ASSERT_TRUE(Module);
+  ASSERT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
+  const auto *Parent = Module->getFunction(Med.Name);
+  ASSERT_TRUE(Parent);
+  ASSERT_TRUE(Parent->getMetadata(windows_eh_md::NativeAttachment));
+#ifdef LLVM_NEVERD_X86_REGISTRATION_EH
+  auto Error =
+      validateCOFFRegistrationIR(*Parent, *Low.ExceptionMetadata, Image);
+  EXPECT_FALSE(bool(Error)) << llvm::toString(std::move(Error));
+#endif
+  const auto &Self = Low.RegistrationStates->SEHThreadAccesses.front();
+  for (unsigned Mutation = 0; Mutation != 9; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    auto Changed = Med;
+    auto &States = *Changed.RegistrationStates;
+    if (Mutation == 0)
+      States.SEHThreadAccessesComplete = false;
+    if (Mutation == 1)
+      States.SEHThreadAccesses.pop_back();
+    if (Mutation == 2)
+      ++States.SEHThreadAccesses.back().RootOpSeq;
+    bool Edited = Mutation < 3;
+    for (auto &Block : Changed.Blocks) {
+      std::optional<MedOp> Extra;
+      for (auto &Op : Block.Ops) {
+        if (Op.Addr != Self.Address)
+          continue;
+        if (Mutation == 8)
+          for (unsigned I = 0; I != Op.NumInputs; ++I) {
+            auto &Input = Op.Inputs[I];
+            if (Input.isConst() && Input.ConstVal == 0x18) {
+              Input = MedVar::makeConst(0x1c, Input.Size);
+              Edited = true;
+            }
+          }
+        if (Op.OriginSeq != Self.OpSeq)
+          continue;
+        if (Mutation == 3)
+          Op.Inputs[0] = MedVar::makeConst(0, Op.Inputs[0].Size);
+        if (Mutation == 4)
+          ++Op.OriginSeq;
+        if (Mutation == 5)
+          Op.Dead = true;
+        if (Mutation == 6)
+          Extra = Op;
+        if (Mutation == 7)
+          Op.MemoryOrdering = NdMemoryOrdering::SequentiallyConsistent;
+        Edited |= Mutation >= 3 && Mutation <= 7;
+      }
+      if (Extra)
+        Block.Ops.push_back(*Extra);
+    }
+    ASSERT_TRUE(Edited);
+    EXPECT_FALSE(getX86RegistrationSEHPhysicalStates(Changed));
+    EXPECT_FALSE(hasCheckedX86RegistrationSEHPhysicalFrame(Image, Changed));
   }
 }

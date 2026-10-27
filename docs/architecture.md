@@ -9881,6 +9881,20 @@ prove the replacement runtime objects. This supplies the exception-field part
 of the PE32 helper analysis; incoming object arguments and their caller bounds
 still require separate proof.
 
+`RegistrationStateSEHThread` separately owns ordinary PE32 parent reads of
+`NT_TIB.Self` at `FS:0x18` and `StackBase` at Self + 4. Exact source occurrences
+survive complete copies and spills; mixed roots and partial writes lose that
+identity. The loaded StackBase is an opaque runtime scalar with possible address
+bits, never a regenerated frame coordinate. MedIR owns the common source
+occurrence checks; shared SEH4 physical replay compares complete thread receipts
+and independently checks the current FS offset without counting Self as a chain
+read. The shared LLVM thread-read check binds actual DWORD loads to the exact Self read through reaching-store proofs;
+COFF repeats that check against independently lifted source and source-operation
+ordering. These reads remain real volatile memory operations and do not join the
+FS:0 exception-chain replacement set. Other thread fields, writes and callback
+roles remain unsupported. The ABI offsets follow Microsoft's
+[NT_TIB declaration and x86 NtCurrentTeb implementation](https://github.com/microsoft/win32metadata/blob/main/generation/WinSDK/RecompiledIdlHeaders/um/winnt.h).
+
 `RegistrationConditionalCallee` specializes an original EH3/EH4 helper from the
 caller's actual stack cells. It authenticates the physical CALL, complete
 immutable callee instructions and ordinary near returns. Incoming scalar words

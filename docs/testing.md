@@ -10946,3 +10946,17 @@ O0/default and both writer paths. Native mutation checks reject changed
 original pointers, raw equal address bits, pointer loads, scalar sample timing,
 providers, source bytes, ABI and unsound function attributes. These fixtures do
 not execute GOF2 or establish whole-image lift completion.
+
+`RegistrationSEHThread.*` in `NeverDRegistrationStateTests` covers exact Self
+and StackBase reads, complete 32-bit/zero-extended address carriers, partial
+aliases, mixed roots, unknown calls and guarded operations. Add
+`--thread-stack-base` to the authored registration rewrite checker to compare
+Self-indirect reads with the caller's independent direct FS:4 observation.
+With `--synchronization`, StackBase also becomes the actual exchange argument.
+Native edits check runtime roots, field offsets, source bytes, widths, volatile
+and atomic properties, duplicate metadata and extra thread reads/writes. Run
+filter/finally, EH3/EH4/GS/shared EH4, preferred/rebased and both writer paths;
+these authored observations still do not qualify GOF2 whole-image lifting.
+`RegistrationSEH4Physical.KeepsCheckedThreadReadsSeparateFromTheChain` checks
+physical replay and rejects stale, incomplete, duplicated or changed source
+receipts, dead/atomic reads and changed offset materializations.

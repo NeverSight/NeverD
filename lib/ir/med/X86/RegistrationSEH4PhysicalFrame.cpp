@@ -34,9 +34,9 @@ bool complete(const RegistrationStateAnalysis &S) {
          S.IncomingFrameAccessesComplete && S.SecurityCookiesComplete &&
          S.ImageReadsComplete && S.SEHInvocationExitsComplete &&
          S.SEHParentChainComplete && S.SEHStateStoresComplete &&
-         S.SEHExceptionAccessesComplete && S.SEHBoundCallsComplete &&
-         S.SEHLocalUnwindsComplete && S.SEHJumpCapturesComplete &&
-         S.SEHJumpResumptionsComplete;
+         S.SEHExceptionAccessesComplete && S.SEHThreadAccessesComplete &&
+         S.SEHBoundCallsComplete && S.SEHLocalUnwindsComplete &&
+         S.SEHJumpCapturesComplete && S.SEHJumpResumptionsComplete;
 }
 
 bool sameFacts(const RegistrationStateAnalysis &A,
@@ -50,10 +50,11 @@ bool sameFacts(const RegistrationStateAnalysis &A,
     for (size_t Count :
          {S->Blocks.size(), S->SEHControls.size(), S->SEHInvocationExits.size(),
           S->SEHStateStores.size(), S->SEHExceptionAccesses.size(),
-          S->SEHBoundCalls.size(), S->SEHLocalUnwinds.size(),
-          S->SEHJumpCaptures.size(), S->SEHJumpResumptions.size(),
-          S->IncomingFrameAccesses.size(), S->CookieChecks.size(),
-          S->ImageReads.size(), S->FrameValues.size()}) {
+          S->SEHThreadAccesses.size(), S->SEHBoundCalls.size(),
+          S->SEHLocalUnwinds.size(), S->SEHJumpCaptures.size(),
+          S->SEHJumpResumptions.size(), S->IncomingFrameAccesses.size(),
+          S->CookieChecks.size(), S->ImageReads.size(),
+          S->FrameValues.size()}) {
       if (Count > limits::kMaxRegistrationEHStateWork - Work)
         return false;
       Work += Count;
@@ -76,6 +77,7 @@ bool sameFacts(const RegistrationStateAnalysis &A,
       A.SEHInvocationExits != B.SEHInvocationExits ||
       A.SEHStateStores != B.SEHStateStores ||
       A.SEHExceptionAccesses != B.SEHExceptionAccesses ||
+      A.SEHThreadAccesses != B.SEHThreadAccesses ||
       A.HasBoundSEHCallees != B.HasBoundSEHCallees ||
       A.SEHBoundCalls != B.SEHBoundCalls ||
       A.HasSEHLocalUnwinds != B.HasSEHLocalUnwinds ||

@@ -43,6 +43,15 @@ struct SEHExceptionAddress {
   auto operator<=>(const SEHExceptionAddress &) const = default;
 };
 
+/// The current thread block, named by the exact FS Self read. It is neither
+/// the registration chain nor a source-frame or callback-frame coordinate.
+struct SEHThreadAddress {
+  va_t RootAddress = InvalidVA;
+  int RootOpSeq = -1;
+  int32_t Offset = 0;
+  auto operator<=>(const SEHThreadAddress &) const = default;
+};
+
 /// Values in the PE32 address domain. Offset names the runtime establisher;
 /// EntryOffset names the pre-alignment EBP; CallbackAddress names the active
 /// callback's private stack. Unknown values retain possible frame provenance
@@ -91,6 +100,7 @@ struct FrameValue {
   /// A runtime callable loaded from an authenticated eager import slot.
   /// This names the provider binding, never the callable's address bits.
   std::optional<uint32_t> ImportTarget;
+  std::optional<SEHThreadAddress> ThreadAddress;
 
   std::optional<uint32_t> preferredAddress() const {
     return ImageAddress ? ImageAddress : Constant;
@@ -150,6 +160,11 @@ struct FrameValue {
     FrameValue Result;
     Result.MayBeFrame = true;
     Result.SEHException = Address;
+    return Result;
+  }
+  static FrameValue threadBlock(SEHThreadAddress Address) {
+    FrameValue Result;
+    Result.ThreadAddress = Address;
     return Result;
   }
   auto operator<=>(const FrameValue &) const = default;

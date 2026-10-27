@@ -1505,6 +1505,7 @@ add_neverd_unittest(NeverDRegistrationStateTests
   eh/RegistrationOrdinaryFinallyTests.cpp
   eh/RegistrationSEHInvocationTests.cpp
   eh/RegistrationSEHExceptionTests.cpp
+  eh/RegistrationSEHThreadTests.cpp
   eh/RegistrationJumpStateTests.cpp
   eh/RegistrationStartupInfoStateTests.cpp
   eh/RegistrationHeapStateTests.cpp
@@ -1628,6 +1629,7 @@ add_neverd_unittest(NeverDWindowsRegistrationNativeTests
   eh/RegistrationSEHCallbackTests.cpp
   eh/RegistrationSEHStateStoreTests.cpp
   eh/RegistrationSEHExceptionNativeTests.cpp
+  eh/RegistrationSEHThreadNativeTests.cpp
   eh/RegistrationSEHJumpNativeTests.cpp
   eh/RegistrationSEHJumpStateNativeTests.cpp
   eh/RegistrationSEHJumpCaptureNativeTests.cpp

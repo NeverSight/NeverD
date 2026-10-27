@@ -26,13 +26,14 @@
 #include <utility>
 
 namespace neverd::registration_test {
-enum class SharedSEH4Body { Plain, OrdinaryCall, FilteredCall };
+enum class SharedSEH4Body { Plain, OrdinaryCall, FilteredCall, ThreadRead };
 
 inline BinaryImage sharedSEH4Image(uint32_t Base, bool Wide,
                                    uint32_t Allocation = 32,
                                    SharedSEH4Body Kind = SharedSEH4Body::Plain,
                                    uint16_t ParentPop = 0) {
-  const bool CallInBody = Kind != SharedSEH4Body::Plain;
+  const bool CallInBody = Kind == SharedSEH4Body::OrdinaryCall ||
+                          Kind == SharedSEH4Body::FilteredCall;
   const bool Filtered = Kind == SharedSEH4Body::FilteredCall;
   BinaryImage Image;
   Image.Arch = Arch::X86;
@@ -81,6 +82,10 @@ inline BinaryImage sharedSEH4Image(uint32_t Base, bool Wide,
   else
     Text[Body + 7] = 0x90;
   size_t Finish = Body + (CallInBody ? 12 : 8);
+  if (Kind == SharedSEH4Body::ThreadRead) {
+    Put(Body + 7, {0x64, 0xa1, 0x18, 0, 0, 0, 0x8b, 0x40, 4});
+    Finish = Body + 16;
+  }
   if (Filtered) {
     Put(Body + 12,
         {0xc7, 0x45, 0xfc, 0xfe, 0xff, 0xff, 0xff, 0xb8, 9, 0, 0, 0, 0xeb, 15});
@@ -89,6 +94,8 @@ inline BinaryImage sharedSEH4Image(uint32_t Base, bool Wide,
     Finish = Body + 41;
   }
   Put(Finish, {0xc7, 0x45, 0xfc, 0xfe, 0xff, 0xff, 0xff, 0x31, 0xc0});
+  if (Kind == SharedSEH4Body::ThreadRead)
+    Put(Finish + 7, {0x89, 0xc0}); // Return the actual StackBase word in EAX.
   Call(Finish + 9, 0x150);
   Text[Finish + 14] = ParentPop ? 0xc2 : 0xc3;
   if (ParentPop)

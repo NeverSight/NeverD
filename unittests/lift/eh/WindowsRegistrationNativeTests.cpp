@@ -1892,6 +1892,9 @@ TEST(WindowsRegistrationNative, InputPE32PreservesItsCheckedSourceContract) {
                RegistrationSEHBoundCall::Kind::InterlockedCompareExchange;
       }))
     registration_test::checkSEHSynchronizationEdits(*Parent, EH, Image);
+  if (!Low.RegistrationStates->SEHThreadAccesses.empty())
+    registration_test::checkSEHThreadEdits(*Parent, EH, Image,
+                                           *Low.RegistrationStates);
   registration_test::checkSEHCopyEdits(*Parent, EH, Image);
   registration_test::checkSEHFinallyEdits(*Parent, EH, Image);
   registration_test::checkSEHParentExitEdits(*Parent, EH, Image);

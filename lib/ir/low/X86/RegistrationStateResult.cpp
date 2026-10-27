@@ -223,6 +223,19 @@ RegistrationStateAnalysis RegistrationStateSolver::finish() {
     }
   if (!Result.SEHExceptionAccessesComplete)
     Result.SEHExceptionAccesses.clear();
+  Result.SEHThreadAccessesComplete &=
+      Result.Complete && Result.CallbackStatesComplete && !Exhausted;
+  if (Result.SEHThreadAccessesComplete)
+    for (const auto &[Identity, Access] : SEHThreadAccesses) {
+      if (!charge(1)) {
+        Result.SEHThreadAccessesComplete = false;
+        break;
+      }
+      if (Access)
+        Result.SEHThreadAccesses.push_back(*Access);
+    }
+  if (!Result.SEHThreadAccessesComplete)
+    Result.SEHThreadAccesses.clear();
   if (!Result.Complete)
     Result.Diagnostics.push_back(
         "registration state has an unproven transition");
@@ -321,6 +334,8 @@ RegistrationStateAnalysis RegistrationStateSolver::finish() {
                       Result.CleanupFrameEffectsComplete =
                           Result.CxxCatchObjectsComplete =
                               Result.RuntimeObjectAccessesComplete = false;
+      Result.SEHThreadAccessesComplete = false;
+      Result.SEHThreadAccesses.clear();
       Result.CallFrameEffects.clear();
       Result.CleanupFrameEffects.clear();
       Result.CxxCatchObjects.clear();
@@ -347,6 +362,10 @@ RegistrationStateAnalysis RegistrationStateSolver::finish() {
   if (Result.SEHStateStoresComplete && charge(SEHStateStores.size()))
     for (const auto &[Identity, Store] : SEHStateStores)
       Result.SEHStateStores.push_back(Store);
+  if (Exhausted) {
+    Result.SEHThreadAccessesComplete = false;
+    Result.SEHThreadAccesses.clear();
+  }
   return std::move(Result);
 }
 

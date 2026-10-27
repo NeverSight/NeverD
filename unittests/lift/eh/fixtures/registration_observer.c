@@ -36,6 +36,10 @@ unsigned registration_atomic_word;
 unsigned registration_atomic_exchange;
 unsigned registration_atomic_results[2];
 #endif
+#if REGISTRATION_THREAD_STACK_BASE
+unsigned registration_thread_stack_base;
+static unsigned expected_thread_stack_base;
+#endif
 #if REGISTRATION_STARTUP_INFO
 __declspec(dllimport) void __stdcall GetStartupInfoW(void *);
 unsigned registration_startup_snapshot[17];
@@ -158,6 +162,14 @@ void mainCRTStartup(void) {
     registration_atomic_exchange = 23 + iterations;
     registration_atomic_results[0] = registration_atomic_results[1] = 0;
 #endif
+#if REGISTRATION_THREAD_STACK_BASE
+    registration_thread_stack_base = 0;
+    // Observe the field directly, independently of the source's Self load.
+    expected_thread_stack_base = __readfsdword(4);
+#if REGISTRATION_SYNCHRONIZATION
+    registration_atomic_exchange = expected_thread_stack_base;
+#endif
+#endif
 #if REGISTRATION_PARENT_POP
     unsigned stack_before, stack_after;
     volatile unsigned stack_guard[2] = {0x12345678, 0xa5c39e71};
@@ -209,6 +221,13 @@ void mainCRTStartup(void) {
       printf("atomic observation: first=%u second=%u word=%u expected=%u\n",
              registration_atomic_results[0], registration_atomic_results[1],
              registration_atomic_word, registration_atomic_exchange);
+      break;
+    }
+#endif
+#if REGISTRATION_THREAD_STACK_BASE
+    if (registration_thread_stack_base != expected_thread_stack_base) {
+      printf("thread StackBase observation: got=%08x expected=%08x\n",
+             registration_thread_stack_base, expected_thread_stack_base);
       break;
     }
 #endif
