@@ -141,6 +141,24 @@ proveBoundOriginalImageSEHCallee(const BinaryImage &Image, const LowOp &Op,
                                  const FrameState &Parent, size_t &Work,
                                  const std::set<int32_t> *Initialized);
 
+/// A separate source caller analysis whose dependent facts remain owned by
+/// the exact image invocations below. Never publish States as an ordinary
+/// function or callee summary. Incomplete callers may retain provisional
+/// invocations for diagnostics; those records grant no native permission.
+struct OriginalImageSEHCallerProof {
+  RegistrationStateAnalysis States;
+  std::map<std::pair<va_t, int>, OriginalImageSEHInvocation> Invocations;
+  bool InvocationsComplete = false;
+};
+
+/// Bind image hypotheses to the actual reaching caller cells using the same
+/// registration solver. The input is an unmodified source LowFunc. Generic
+/// CFG construction and ordinary callee summaries never enable this query.
+/// All plans, invocations and propagation consume the supplied work allowance.
+OriginalImageSEHCallerProof
+analyzeOriginalImageSEHCaller(const BinaryImage &Image, const LowFunc &Function,
+                              size_t &Work);
+
 /// Two fresh source hypotheses for one invocation at the same preferred base.
 /// The physical CALL is authenticated only in Original; Candidate may retire
 /// it. Root/plain helper bytes, arguments and scalar result must agree, while

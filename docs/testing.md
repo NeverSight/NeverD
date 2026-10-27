@@ -9588,6 +9588,18 @@ volatile frame loads, global loads, aliases, private definitions, foreign
 modules, address-space/TLS/import changes and noncanonical symbols.
 `ImageArgumentIdentityUsesOneWorkBudget` checks exact, short and exhausted work
 and an absent argument index. These are identity checks, not native admission.
+`RegistrationOriginalImageCaller` in `NeverDSEHRuntimeMemoryTests` binds an
+authored parent's actual PUSH to a header-reading SEH helper at two bases.
+A changed header result exposes the private frame and makes the caller
+incomplete. Fresh caller edits cover a different image word, equal scalar bits,
+a missing PUSH, an unknown input and partial initialization. A loop revisits
+one physical CALL with different input identities whose returned bits agree;
+that invocation set must refuse. Exact and short budgets include planning and
+propagation. Ordinary analyses remain incomplete before and after the scoped
+query, and the existing native binder still refuses its observed result.
+`EarlierOrdinaryVisitCannotDisappear` revisits one CALL at different SEH states:
+an ordinary image-valued result precedes a scoped scalar result. Both private
+frames remain valid, but the later recipe cannot describe every invocation.
 `RelocatedArithmeticKeepsItsAddressIdentity` covers ADD/SUB at two image bases:
 exact HIGHLOW address provenance admits the authored SEH helper while its
 ordinary result remains unknown. Missing, stale or conflicting classifications,

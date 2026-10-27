@@ -2369,6 +2369,18 @@ declaration in that module. Integer bits, frame/global loads, aliases, private
 definitions, TLS/import storage and another module's declaration cannot supply
 that identity. This bounded primitive supplies no source invocation receipt,
 native call admission or final-image replay permission on its own.
+The separate original-image caller query runs the same state solver over the
+actual reaching parent cells. Its result owns every accepted image invocation
+alongside the dependent caller states; it never changes the input LowFunc or
+the ordinary CFG/summary entry points. Repeated visits may reuse a receipt only
+when the current stack coordinate and every consumed input still match.
+Different or unknown inputs at one physical call revoke the invocation set,
+even when the resulting scalar bits would agree. An earlier ordinary proof
+also remains a separate observation; a later image proof cannot erase it.
+Planning, nested proofs and propagation share the caller's supplied work
+allowance. Incomplete results can
+retain provisional invocations for diagnosis, but neither those records nor
+the scoped states grant native admission or an independent constant result.
 The shared callee-instruction check also accepts PE32 ADD/SUB immediates with
 complete HIGHLOW fields and exactly one matching loader-owned address operand,
 as it does for MOV/PUSH. The decoder/lifter retains that exact address identity.

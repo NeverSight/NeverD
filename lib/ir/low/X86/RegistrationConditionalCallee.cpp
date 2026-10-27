@@ -501,12 +501,15 @@ unsigned x86SEHStateAnalysisLevel() {
                       kRegistrationConditionalCalleeMaxBoundCallCheckDepth);
 }
 
-RegistrationStateAnalysis analyzeCheckedX86SEHStates(
+namespace {
+RegistrationStateAnalysis solveCheckedX86SEHStates(
     const BinaryImage &Image, const LowFunc &Function,
     const std::vector<RegistrationCalleeStackContract> *Stacks,
     const std::vector<RegistrationLocalUnwindContract> *LocalUnwinds,
     const std::vector<RegistrationSEHControlContract> *Controls,
-    RegistrationCallCalleeIndex *Index) {
+    RegistrationCallCalleeIndex *Index,
+    const BoundCalleeProver *ScopedProver = nullptr,
+    size_t *CumulativeWork = nullptr) {
   unsigned &Depth = SEHStateAnalysisDepth;
   const bool CheckBoundCalls =
       Depth < ::neverd::limits::ir::
@@ -563,12 +566,20 @@ RegistrationStateAnalysis analyzeCheckedX86SEHStates(
           ? getSEHCookieInputs(Image, *Function.ExceptionMetadata)
           : SEHCookieInputs{};
   const SEH4EntryCalls Shared(Image, Function);
+  if (CumulativeWork &&
+      !registration_abi::chargeCalleeWork(*CumulativeWork, Shared.WorkUsed))
+    return {};
   RegistrationStateSolver Solver(
       Function, Cookies.CookieVA, Cookies.CheckVA, nullptr, nullptr, Stacks,
-      LocalUnwinds, Controls, nullptr, CheckBoundCalls ? &Prove : nullptr,
+      LocalUnwinds, Controls, nullptr,
+      CheckBoundCalls ? (ScopedProver ? ScopedProver : &Prove) : nullptr,
       &Jumps, nullptr, nullptr, nullptr,
       Shared.Entry ? &*Shared.Entry : nullptr, &Shared.Exits);
-  auto States = Solver.run();
+  auto States = Solver.run(CumulativeWork ? *CumulativeWork : 0);
+  if (CumulativeWork) {
+    *CumulativeWork = Solver.workUsed();
+    return States;
+  }
   if (Index && (!Index->chargeStateWork(Shared.WorkUsed) ||
                 !Index->chargeStateWork(Solver.workUsed()))) {
     States.Complete = States.CallbackStatesComplete =
@@ -588,6 +599,108 @@ RegistrationStateAnalysis analyzeCheckedX86SEHStates(
     States.Diagnostics.push_back("SEH callee state proof budget exhausted");
   }
   return States;
+}
+} // namespace
+
+RegistrationStateAnalysis analyzeCheckedX86SEHStates(
+    const BinaryImage &Image, const LowFunc &Function,
+    const std::vector<RegistrationCalleeStackContract> *Stacks,
+    const std::vector<RegistrationLocalUnwindContract> *LocalUnwinds,
+    const std::vector<RegistrationSEHControlContract> *Controls,
+    RegistrationCallCalleeIndex *Index) {
+  return solveCheckedX86SEHStates(Image, Function, Stacks, LocalUnwinds,
+                                  Controls, Index);
+}
+
+OriginalImageSEHCallerProof registration_state::analyzeOriginalImageSEHCaller(
+    const BinaryImage &Image, const LowFunc &Function, size_t &Work) {
+  OriginalImageSEHCallerProof Result;
+  if (!registration_abi::chargeCalleeWork(Work, 1) || Image.Arch != Arch::X86 ||
+      Image.Format != BinaryFormat::COFF || Image.Bits != Bitness::Bits32 ||
+      Image.IsRelocatable || !Function.hasCompleteLiftCoverage() ||
+      !Function.ExceptionMetadata ||
+      !Function.ExceptionMetadata->Registration ||
+      Function.ExceptionMetadata->Cxx ||
+      !registration_abi::chargeDecodedCallee(Work, Function))
+    return Result;
+  RegistrationCallCalleeIndex Index(Image, &Work);
+  const auto Stacks = Index.stackContracts(Function);
+  const auto Unwinds = Index.localUnwindContracts(Function);
+  const auto Controls = Index.sehControlContracts(Function);
+  if (!Stacks || !Unwinds || !Controls)
+    return Result;
+  bool Complete = true;
+  std::set<std::pair<va_t, int>> OrdinaryInvocations;
+  BoundCalleeProver Prove =
+      [&](const LowOp &Op, const FrameState &Parent, size_t &Used,
+          const std::map<int32_t, SEHJumpCapture> &Captures)
+      -> std::optional<BoundCalleeEffect> {
+    if (!registration_abi::chargeCalleeWork(
+            Used, Result.Invocations.size() + OrdinaryInvocations.size() + 1))
+      return std::nullopt;
+    const auto Key = std::make_pair(Op.Addr, Op.Seq);
+    auto Found = Result.Invocations.find(Key);
+    if (Found != Result.Invocations.end()) {
+      const auto &Proof = Found->second;
+      if (Op.NumInputs != 1 || !Op.Inputs[0].isConst() ||
+          Op.Inputs[0].Offset != Proof.Call.TargetVA ||
+          Parent.Registers[x86reg::RSP / x86reg::GeneralRegStride].Offset !=
+              Proof.Call.StackOffset) {
+        Complete = false;
+        return std::nullopt;
+      }
+      for (const auto &[Offset, Expected] : Proof.Arguments) {
+        const auto Actual = registration_abi::readCallerFrameWord(
+            Parent, Offset, nullptr, Used);
+        if (!Actual || *Actual != Expected) {
+          Complete = false;
+          return std::nullopt;
+        }
+      }
+    } else {
+      auto Proof =
+          proveBoundOriginalImageSEHCallee(Image, Op, Parent, Used, nullptr);
+      if (!Proof) {
+        if (OrdinaryInvocations.size() >= limits::kMaxRegistrationEHRecords) {
+          Complete = false;
+          return std::nullopt;
+        }
+        OrdinaryInvocations.insert(Key);
+        return proveBoundSEHCallee(Image, Op, Parent, Used, &Captures);
+      }
+      // A prior ordinary invocation may have different or unknown inputs.
+      // A later exact query cannot remove that earlier occurrence from the
+      // recipe merely because both paths preserve the same private frame.
+      if (OrdinaryInvocations.count(Key))
+        Complete = false;
+      if (Result.Invocations.size() >= limits::kMaxRegistrationEHRecords) {
+        Complete = false;
+        return std::nullopt;
+      }
+      Found = Result.Invocations.emplace(Key, std::move(*Proof)).first;
+    }
+    BoundCalleeEffect Effect;
+    Effect.ReturnValue = FrameValue::constant(Found->second.ReturnValue);
+    Effect.NativeCall = Found->second.Call;
+    return Effect;
+  };
+  Result.States = solveCheckedX86SEHStates(Image, Function, &*Stacks, &*Unwinds,
+                                           &*Controls, nullptr, &Prove, &Work);
+  Result.InvocationsComplete = Complete && Result.States.Complete &&
+                               Result.States.CallbackStatesComplete &&
+                               Result.States.RegistrationLifetimeComplete &&
+                               Result.States.ChainOperationsComplete &&
+                               Result.States.SEHBoundCallsComplete &&
+                               (Function.ExceptionMetadata->Personality !=
+                                    ExceptionPersonality::ExceptHandler4 ||
+                                Result.States.SecurityCookiesComplete);
+  for (const auto &[Key, Invocation] : Result.Invocations) {
+    if (!registration_abi::chargeCalleeWork(
+            Work, Result.States.SEHBoundCalls.size() + 1) ||
+        !llvm::is_contained(Result.States.SEHBoundCalls, Invocation.Call))
+      Result.InvocationsComplete = false;
+  }
+  return Result;
 }
 
 bool RegistrationCallCalleeIndex::chargeStateWork(size_t Amount) {
