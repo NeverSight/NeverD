@@ -113,9 +113,13 @@ struct SymCallEffect {
   std::optional<SymState::MemoryKnowledge> MemoryAfter;
 };
 
-/// Shape accepted for a single CMPXCHG preservation commit: default memory,
-/// a 64-bit address, scalar 1/2/4/8-byte values and sequential consistency.
+/// Shape accepted for an atomic ADD, XCHG or CMPXCHG write-policy commit:
+/// default memory, a 64-bit address, scalar 1/2/4/8-byte values and sequential
+/// consistency.
 /// This checks neither access validity nor the caller's separation contract.
+bool supportsAtomicWritePreservation(const LowOp &Op);
+
+/// CMPXCHG-only view of supportsAtomicWritePreservation().
 bool supportsCmpxchgPreservation(const LowOp &Op);
 
 class SymExec {
@@ -132,20 +136,22 @@ public:
   /// fail-closed default used by \c step(const LowOp&).
   StepResult step(const LowOp &Op, const SymCallEffect *CallEffect);
 
-  /// A preservation contract applies to this STORE or supported CMPXCHG write
+  /// A preservation contract applies to this STORE or supported atomic write
   /// occurrence only. Other opcodes execute normally and leave its status
-  /// Invalid. Invalid CMPXCHG shapes, malformed contracts and budget failures
-  /// are unmodelled; a refused CMPXCHG does not publish its old value. The
+  /// Invalid. Invalid atomic shapes, malformed contracts and budget failures
+  /// are unmodelled; a refused atomic write does not publish its old value. The
   /// descriptor records the exact preservation status and charged work.
   StepResult step(const LowOp &Op, const SymCallEffect *CallEffect,
                   SymStorePreservation *Preservation);
 
   /// Execute one operation, conditionally updating current cross-region bytes
-  /// for STORE or a strict scalar CMPXCHG write phase. No separation contract
-  /// is accepted. Other opcodes execute normally and leave Control Invalid.
-  /// Refusal retains ordinary fail-closed memory havoc; CMPXCHG publishes its
-  /// old value only after a successful write. Unmaterialized memory remains
-  /// conservative, including the existing symbolic-store diagnostics.
+  /// for STORE or a strict scalar ADD, XCHG or CMPXCHG atomic write phase.
+  /// No separation contract is accepted. Other opcodes execute normally and
+  /// leave Control Invalid.
+  /// Refusal retains ordinary fail-closed memory havoc; an atomic write
+  /// publishes its old value only after a successful write. Unmaterialized
+  /// memory remains conservative, including the existing symbolic-store
+  /// diagnostics.
   StepResult
   stepWithConditionalStore(const LowOp &Op, SymConditionalStore &Control,
                            const SymCallEffect *CallEffect = nullptr);

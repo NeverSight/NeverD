@@ -2102,7 +2102,7 @@ ctest --test-dir build-release -L "^(NeverDX86ScalarMoveAuditTests|NeverDX86Lega
 
 `SymStorePreservation.Independent*`、`RepeatedRegionsFormAUnionAndChargeEveryScan`、`EmptyIndependentRegionsKeepOriginalWorkAccounting` 和 `ExecutorUsesIndependentRegionsForOnlyOneStore` 覆盖一次 STORE 保留两到三个独立当前根、两种字节序、跨相对零点的部分区间、重叠声明、未保护间隙和写入后的未知值世代。精确预算及少一个单位的预算检查完整计费，缺失区域不得被物化。无效或越界引用、窄或常量基址、空或反向区间，以及实际写入自身的基址均应拒绝且不改变状态。空 `AdditionalRegions` 保持已有单根和 `AdditionalRanges` 计费。执行器检查单次事件、同区域邻接字节及后续普通写入的失效效果。`SymAtomicCmpxchg.IndependentRegionsShareTheWritePhaseAndItsBudget` 覆盖比较匹配和不匹配、精确和不足预算、两个保留根、旧值输出及既有保守拒绝路径。
 
-`NeverDSymConditionalStoreTests` 覆盖独立根的当前字节条件效果、128 位写入、双端序、部分重叠、符号相对坐标环绕及绝对内存，并检查自身区域相邻字节、当前与历史事实、写后未知时期、不支持的输入、精确及少一单位预算。执行器用例覆盖沿用现有段基址处理的 STORE、严格 CMPXCHG 的成功与失败、Old 延后发布、拒绝时 havoc，以及其他操作保持 Invalid。普通写入和保留契约的默认行为不变。这些测试验证有界内存语义，不认证访问权限或完整程序恢复。
+`NeverDSymConditionalStoreTests` 覆盖绝对及符号存储区的有界字节效果、双端序、重叠、环绕、未知时期和精确预算。执行器测试包含 STORE、标量原子 ADD/XCHG/CMPXCHG、地址/值/输出寄存器重叠、Old 延后发布、非法形状及拒绝时 havoc。`SymStorePreservation` 以显式栈帧保留契约检查同一原子写入路径，以及精确和少一单位预算。无描述符的普通执行行为不变；这些检查不认证访问权限或完整程序恢复。
 
 
 `AbsoluteMemoryFactsTests.inc` 覆盖绝对地址目标跨节点传递、冲突汇合、部分重叠及未知别名写入，以及两种字节序和启用/禁用串接时的栈分离证明。独立字节执行器检查保留的副作用；缺少排除范围或预算不足时必须拒绝。`SymStorePreservation.Absolute*` 与 `SymState.AbsoluteProjections*` 检查绝对/符号区域共存、高地址、纯只读有界投影、写入后的未知值世代和事务性拒绝。运行 `NeverDInterpreterSpecializationTests`、`NeverDSymbolicIntegerIntrinsicTests`、`NeverDSymMemoryKnowledgeTests`，随后运行原生独立性与 LowIR 精化测试。

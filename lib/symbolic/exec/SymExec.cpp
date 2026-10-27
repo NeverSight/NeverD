@@ -64,10 +64,16 @@ SymSpace spaceOf(const NdVar &V) {
   return V.isTemp() ? SymSpace::Temporary : SymSpace::Register;
 }
 
+bool isAtomicWrite(NdOp Opcode) {
+  return Opcode == NdOp::ATOMIC_XCHG || Opcode == NdOp::ATOMIC_ADD ||
+         Opcode == NdOp::ATOMIC_CMPXCHG;
+}
+
 } // namespace
 
-bool supportsCmpxchgPreservation(const LowOp &Op) {
-  if (Op.Opcode != NdOp::ATOMIC_CMPXCHG || Op.NumInputs != 3 ||
+bool supportsAtomicWritePreservation(const LowOp &Op) {
+  const bool Compare = Op.Opcode == NdOp::ATOMIC_CMPXCHG;
+  if (!isAtomicWrite(Op.Opcode) || Op.NumInputs != (Compare ? 3u : 2u) ||
       Op.MemoryOrdering != NdMemoryOrdering::SequentiallyConsistent ||
       Op.MemoryAddressSpace != NdMemoryAddressSpace::Default)
     return false;
@@ -80,7 +86,12 @@ bool supportsCmpxchgPreservation(const LowOp &Op) {
          (Op.Output.isReg() || Op.Output.isTemp()) && Scalar(Op.Output) &&
          Op.Inputs[0].Size == 8 && Scalar(Op.Inputs[0]) &&
          Op.Inputs[1].Size == Bytes && Scalar(Op.Inputs[1]) &&
-         Op.Inputs[2].Size == Bytes && Scalar(Op.Inputs[2]);
+         (!Compare || (Op.Inputs[2].Size == Bytes && Scalar(Op.Inputs[2])));
+}
+
+bool supportsCmpxchgPreservation(const LowOp &Op) {
+  return Op.Opcode == NdOp::ATOMIC_CMPXCHG &&
+         supportsAtomicWritePreservation(Op);
 }
 
 //===----------------------------------------------------------------------===//
@@ -679,15 +690,14 @@ StepResult SymExec::stepMemory(const LowOp &Op,
                                SymStorePreservation *Preservation,
                                SymConditionalStore *Conditional) {
   const auto Refuse = [&]() {
-    if (Op.Opcode == NdOp::STORE || Op.Opcode == NdOp::ATOMIC_XCHG ||
-        Op.Opcode == NdOp::ATOMIC_ADD || Op.Opcode == NdOp::ATOMIC_CMPXCHG) {
+    if (Op.Opcode == NdOp::STORE || isAtomicWrite(Op.Opcode)) {
       State.clobberMemory();
       ++MemoryHavocs;
     }
     return unmodelled(Op);
   };
-  if ((Preservation || Conditional) && Op.Opcode == NdOp::ATOMIC_CMPXCHG &&
-      !supportsCmpxchgPreservation(Op))
+  if ((Preservation || Conditional) && isAtomicWrite(Op.Opcode) &&
+      !supportsAtomicWritePreservation(Op))
     return Refuse();
   const LowMemoryOperandView Memory = lowMemoryOperands(Op);
   const SymRef Addr = memoryAddressValue(Op);
@@ -729,13 +739,15 @@ StepResult SymExec::stepMemory(const LowOp &Op,
     if (!Old)
       return Refuse();
     SymRef Value = fit(read(*Memory.StoredValue), widthOf(Op.Output));
-    writeResult(Op.Output, Old);
     SymRef NewValue =
         Op.Opcode == NdOp::ATOMIC_ADD ? Ctx.mkAdd(Old, Value) : Value;
-    if (!State.store(Addr, NewValue)) {
-      ++Unmodelled;
-      ++MemoryHavocs;
-    }
+    if (!Preservation && !Conditional)
+      writeResult(Op.Output, Old);
+    const auto Committed = Commit(NewValue);
+    if (Committed != StepResult::Continue)
+      return Committed;
+    if (Preservation || Conditional)
+      writeResult(Op.Output, Old);
     return StepResult::Continue;
   }
 
@@ -903,11 +915,10 @@ StepResult SymExec::stepImpl(const LowOp &Op, const SymCallEffect *CallEffect,
   if (Preservation) {
     Preservation->Status = SymStorePreservationStatus::Invalid;
     Preservation->WorkUsed = 0;
-    if (Op.Opcode != NdOp::STORE && Op.Opcode != NdOp::ATOMIC_CMPXCHG)
+    if (Op.Opcode != NdOp::STORE && !isAtomicWrite(Op.Opcode))
       return step(Op, CallEffect);
   }
-  if (Conditional && Op.Opcode != NdOp::STORE &&
-      Op.Opcode != NdOp::ATOMIC_CMPXCHG)
+  if (Conditional && Op.Opcode != NdOp::STORE && !isAtomicWrite(Op.Opcode))
     return step(Op, CallEffect);
   switch (Op.Opcode) {
   case NdOp::INT_ADD:

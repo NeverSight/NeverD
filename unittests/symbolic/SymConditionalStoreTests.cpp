@@ -414,6 +414,132 @@ TEST(SymConditionalStore, ExecutorCmpxchgBudgetRefusalDoesNotPublishOld) {
   }
 }
 
+TEST(SymConditionalStore, AtomicAddAndExchangeCommitAliasedInputsInBothOrders) {
+  for (const auto Opcode : {NdOp::ATOMIC_ADD, NdOp::ATOMIC_XCHG}) {
+    for (const auto Order : {llvm::endianness::little, llvm::endianness::big}) {
+      for (const uint16_t Bytes : {1, 2, 4, 8}) {
+        for (const uint64_t Output : {uint64_t(0), uint64_t(8)}) {
+          SymContext C;
+          SymState S(C, Order);
+          SymExec E(C, S);
+          const auto Root = C.mkVar("observer", 64);
+          const llvm::APInt Old(Bytes * 8, UINT64_MAX - 2);
+          const llvm::APInt Value(Bytes * 8, 7);
+          const auto Result =
+              C.mkConst(Opcode == NdOp::ATOMIC_ADD ? Old + Value : Value);
+          S.store(C.mkConst(64, 0x4000), C.mkConst(Old));
+          S.load(Root, Bytes);
+          S.write(SymSpace::Register, 0, C.mkConst(Value));
+          S.write(SymSpace::Register, 8, C.mkConst(64, 0x4000));
+          auto Op = memoryOp(Opcode, NdVar::reg(Output, Bytes),
+                             {NdVar::reg(8, 8), NdVar::reg(0, Bytes)});
+          Op.MemoryOrdering = NdMemoryOrdering::SequentiallyConsistent;
+          SymConditionalStore Control{1000};
+          EXPECT_TRUE(supportsAtomicWritePreservation(Op));
+          EXPECT_FALSE(supportsCmpxchgPreservation(Op));
+          EXPECT_EQ(E.stepWithConditionalStore(Op, Control),
+                    StepResult::Continue);
+          ASSERT_EQ(Control.Status, SymConditionalStoreStatus::Applied);
+          EXPECT_EQ(S.read(SymSpace::Register, Output, Bytes), C.mkConst(Old));
+          EXPECT_EQ(S.load(C.mkConst(64, 0x4000), Bytes), Result);
+          EXPECT_EQ(E.opaqueOperationCount(), 0u);
+          for (unsigned I = 0; I != Bytes; ++I) {
+            const unsigned Lane =
+                Order == llvm::endianness::little ? I : unsigned(Bytes) - I - 1;
+            expectUnsat(
+                C, C.mkAnd(C.mkEq(Root, C.mkConst(64, 0x4000)),
+                           C.mkNe(S.load(C.mkAdd(Root, C.mkConst(64, I)), 1),
+                                  C.mkExtract(Result, Lane * 8, 8))));
+          }
+        }
+      }
+    }
+  }
+}
+
+TEST(SymConditionalStore, AtomicWriteBudgetRefusalDoesNotPublishOld) {
+  for (const auto Opcode : {NdOp::ATOMIC_ADD, NdOp::ATOMIC_XCHG}) {
+    SymContext C;
+    SymState Initial(C);
+    Initial.store(C.mkConst(64, 0x4000), C.mkConst(32, 7));
+    Initial.load(C.mkVar("observer", 64), 4);
+    auto Op = memoryOp(Opcode, NdVar::reg(0, 4),
+                       {NdVar::scalar(0x4000, 8), NdVar::scalar(11, 4)});
+    Op.MemoryOrdering = NdMemoryOrdering::SequentiallyConsistent;
+    for (const uint64_t Budget : {uint64_t(0), uint64_t(33), uint64_t(34)}) {
+      auto S = Initial;
+      SymExec E(C, S);
+      SymConditionalStore Control{Budget};
+      const auto Flow = E.stepWithConditionalStore(Op, Control);
+      EXPECT_LE(Control.WorkUsed, Budget);
+      if (Budget == 34) {
+        EXPECT_EQ(Flow, StepResult::Continue);
+        EXPECT_EQ(Control.Status, SymConditionalStoreStatus::Applied);
+        EXPECT_EQ(Control.WorkUsed, 34u);
+        EXPECT_EQ(S.read(SymSpace::Register, 0, 4), C.mkConst(32, 7));
+        EXPECT_EQ(S.load(C.mkConst(64, 0x4000), 4),
+                  C.mkConst(32, Opcode == NdOp::ATOMIC_ADD ? 18 : 11));
+      } else {
+        EXPECT_EQ(Flow, StepResult::Unmodelled);
+        EXPECT_EQ(Control.Status, SymConditionalStoreStatus::BudgetExceeded);
+        EXPECT_EQ(E.opaqueOperationCount(), 1u);
+        EXPECT_EQ(E.memoryHavocCount(), 1u);
+        EXPECT_FALSE(C.isConst(S.read(SymSpace::Register, 0, 4)));
+        EXPECT_FALSE(C.isConst(S.load(C.mkConst(64, 0x4000), 4)));
+      }
+    }
+  }
+}
+
+TEST(SymConditionalStore, AtomicWriteRejectsMalformedPolicyShapes) {
+  for (const auto Opcode : {NdOp::ATOMIC_ADD, NdOp::ATOMIC_XCHG}) {
+    for (unsigned Case = 0; Case != 8; ++Case) {
+      SymContext C;
+      SymState S(C);
+      SymExec E(C, S);
+      S.store(C.mkConst(64, 0x4000), C.mkConst(64, 7));
+      auto Op = memoryOp(Opcode, NdVar::reg(0, 4),
+                         {NdVar::scalar(0x4000, 8), NdVar::scalar(11, 4)});
+      Op.MemoryOrdering = NdMemoryOrdering::SequentiallyConsistent;
+      switch (Case) {
+      case 0:
+        Op.MemoryOrdering = NdMemoryOrdering::None;
+        break;
+      case 1:
+        Op.MemoryAddressSpace = NdMemoryAddressSpace::X86GS;
+        break;
+      case 2:
+        Op.Inputs[0].Size = 4;
+        break;
+      case 3:
+        Op.Output.Size = Op.Inputs[1].Size = 16;
+        break;
+      case 4:
+        Op.NumInputs = 1;
+        break;
+      case 5:
+        Op.Inputs[1] = NdVar::ram(0x5000, 4);
+        break;
+      case 6:
+        Op.Output = NdVar::ram(0x5000, 4);
+        break;
+      case 7:
+        Op.Inputs[1].Size = 2;
+        break;
+      }
+      EXPECT_FALSE(supportsAtomicWritePreservation(Op));
+      SymConditionalStore Control{1000};
+      EXPECT_EQ(E.stepWithConditionalStore(Op, Control),
+                StepResult::Unmodelled);
+      EXPECT_EQ(Control.Status, SymConditionalStoreStatus::Invalid);
+      EXPECT_EQ(Control.WorkUsed, 0u);
+      EXPECT_EQ(E.memoryHavocCount(), 1u);
+      EXPECT_EQ(E.opaqueOperationCount(), 1u);
+      EXPECT_FALSE(C.isConst(S.load(C.mkConst(64, 0x4000), 4)));
+    }
+  }
+}
+
 TEST(SymConditionalStore, ExecutorStoreDistinguishesAppliedFromRefusedEffects) {
   SymContext C;
   SymState Initial(C);
@@ -506,12 +632,12 @@ TEST(SymConditionalStore, OtherOpcodesIgnorePolicyAndOldDefaultsKeepCosts) {
   EXPECT_EQ(P.WorkUsed, 12u);
   EXPECT_EQ(Preserved.load(A, 4), Old);
 
-  for (const auto Opcode : {NdOp::COPY, NdOp::ATOMIC_ADD, NdOp::ATOMIC_XCHG}) {
+  for (const auto Opcode : {NdOp::COPY, NdOp::INT_ADD}) {
     SymState S(C);
     SymExec E(C, S);
     S.store(C.mkConst(64, 0x4000), C.mkConst(32, 7));
     auto Op = memoryOp(Opcode, NdVar::reg(0, 4),
-                       {NdVar::scalar(0x4000, 8), NdVar::scalar(11, 4)});
+                       {NdVar::scalar(7, 4), NdVar::scalar(11, 4)});
     if (Opcode == NdOp::COPY)
       Op = memoryOp(Opcode, NdVar::reg(0, 4), {NdVar::scalar(11, 4)});
     SymConditionalStore Control{0, 99, SymConditionalStoreStatus::Applied};
@@ -519,11 +645,8 @@ TEST(SymConditionalStore, OtherOpcodesIgnorePolicyAndOldDefaultsKeepCosts) {
     EXPECT_EQ(Control.Status, SymConditionalStoreStatus::Invalid);
     EXPECT_EQ(Control.WorkUsed, 0u);
     EXPECT_EQ(S.read(SymSpace::Register, 0, 4),
-              C.mkConst(32, Opcode == NdOp::COPY ? 11 : 7));
-    EXPECT_EQ(S.load(C.mkConst(64, 0x4000), 4),
-              C.mkConst(32, Opcode == NdOp::COPY         ? 7
-                            : Opcode == NdOp::ATOMIC_ADD ? 18
-                                                         : 11));
+              C.mkConst(32, Opcode == NdOp::COPY ? 11 : 18));
+    EXPECT_EQ(S.load(C.mkConst(64, 0x4000), 4), C.mkConst(32, 7));
   }
 }
 
