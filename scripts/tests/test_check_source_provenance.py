@@ -314,6 +314,28 @@ class ProvenanceScanTests(unittest.TestCase):
                 self.assertEqual(len(findings), 1)
                 self.assertIn(name, findings[0])
 
+    def test_fixture_attribution_allowance_is_scoped_to_its_notice_and_rule(self) -> None:
+        path = "unittests/fixtures/x86/3dnow-context/README.md"
+        notice = "The bootstrap files are adapted from NeverC's pinned fixture.\n"
+        self.assertEqual(self.scan(path, notice), [])
+        for other in (
+            "unittests/fixtures/x86/3dnow-context/guest.c",
+            "unittests/fixtures/x86/another-context/README.md",
+        ):
+            with self.subTest(path=other):
+                findings = self.scan(other, notice)
+                self.assertEqual(len(findings), 1)
+                self.assertIn("provenance-phrase", findings[0])
+        findings = self.scan(path, "/Users/someone/notes.txt\n")
+        self.assertEqual(len(findings), 1)
+        self.assertIn("private-path", findings[0])
+        for name in ("private-path", "foreign-project", "foreign-terminology"):
+            with self.subTest(rule=name):
+                rule = self.term_rule(name, "example-engine")
+                findings = self.scan(path, "example-engine\n", (rule,))
+                self.assertEqual(len(findings), 1)
+                self.assertIn(name, findings[0])
+
     def test_skips_files_it_cannot_read_as_text(self) -> None:
         rule = self.term_rule("foreign-project", "example-engine")
         self.assertEqual(self.scan("a.png", "example-engine\n", (rule,)), [])

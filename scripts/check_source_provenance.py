@@ -295,6 +295,17 @@ class Allowance:
 
 ALLOWED: tuple[Allowance, ...] = (
     Allowance(
+        path="unittests/fixtures/x86/3dnow-context/README.md",
+        rule="provenance-phrase",
+        reason=(
+            "The bootstrap adaptation names NeverC contributors, AGPL-3.0-only "
+            "and the exact source revision "
+            "880d1e96ff48f41c5069c6d8f9839eaa8f37d64a. The notice identifies "
+            "boot.S, boot.ld and payload.ld, links the original fixture and "
+            "repository license, and describes the stack and CR0.NE changes."
+        ),
+    ),
+    Allowance(
         path="cmake/NeverDMimalloc.cmake",
         rule="provenance-phrase",
         reason=(
