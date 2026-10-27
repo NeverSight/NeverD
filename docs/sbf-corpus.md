@@ -118,6 +118,10 @@ write addresses, overlapping fields and uncertain absolute/frame relationships
 still invalidate facts; heap or account types imply no disjointness. Captured
 values can survive a later write when their carrier survives the ABI. Complete
 canonical loaded origins are reused before constructing a guarded expression.
+Complete scratch spills and reloads can retain a captured loaded expression
+across blocks. They use canonical full-width and alias invalidation; partial
+overwrites and unknown writes still lose it. System calls clobber r0-r5
+expression carriers even when their memory effects preserve scratch.
 Full finite target proofs from this path do not by themselves establish
 complete candidate-callee summaries or execution coverage. Expression nodes
 and proof steps consume the existing output, retained-state and work budgets.

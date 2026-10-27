@@ -485,6 +485,17 @@ pointer is declared disjoint because it came from a heap or account type. A
 value captured before a write remains available in a carrier that survives the
 canonical ABI.
 
+Full-width spills also retain that captured expression at a proven scratch
+cell, using the shared typed-cell store and invalidation rules. A matching
+full-width reload can restore it across basic blocks. Partial overwrites,
+unknown destinations, differing expressions at joins and uncertain memory
+effects discard it. These private expression IDs never enter the VM value or
+descriptor-byte lanes. A memory-preserving syscall still clobbers expression
+carriers r0-r5 through the canonical ABI; preserving memory cannot preserve
+its old register result. Function summaries invalidate caller spills through
+their existing write effects. Callee-created spill IDs are not copied into a
+caller's differently bound expression state.
+
 Generic summaries also record `return_value_expression` for a return carrier
 derived from entry parameters and memory, including helpers that contain no
 CALLX. A generic caller can substitute that return template into its own

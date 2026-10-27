@@ -140,6 +140,9 @@ struct ContextState {
   ScratchState OriginScratch;
   MemoryPostconditions Postconditions;
   std::array<std::optional<size_t>, kRegisterCount> InputExpressions{};
+  // Private expression IDs, never VM values. The canonical typed-cell owner
+  // supplies full-width store, overlap and coordinate invalidation semantics.
+  StoredRegisterMemory InputSpills;
   MemoryEffects InputWrites;
 
   ContextState() = default;
@@ -165,6 +168,7 @@ struct ContextState {
     Scratch.Values.joinValues(Other.Scratch.Values);
     OriginScratch.meet(Other.OriginScratch);
     Postconditions.meet(Other.Postconditions);
+    InputSpills.meet(Other.InputSpills);
     for (unsigned R = 0; R < kRegisterCount; ++R)
       if (InputExpressions[R] != Other.InputExpressions[R])
         InputExpressions[R].reset();
@@ -226,6 +230,7 @@ uint64_t stateBytes(const ContextState &State) {
   uint64_t Bytes = sizeof(State) + State.Scratch.retainedByteEstimate() +
                    State.OriginScratch.retainedByteEstimate() +
                    State.Postconditions.retainedByteEstimate() +
+                   State.InputSpills.retainedByteEstimate() +
                    State.InputWrites.Writes.capacity() * sizeof(MemoryWrite);
   for (const auto &Value : State.Registers)
     Bytes += Value.allocatedBytes();
@@ -1143,11 +1148,66 @@ llvm::Expected<std::optional<size_t>> ContextFlow::composeReturnExpression(
 llvm::Error
 ContextFlow::transferInputExpression(const MedInstruction &Instruction,
                                      ContextState &State) {
-  if (Instruction.Op == Operation::Store)
+  if (Instruction.Op == Operation::Store) {
     State.InputWrites.addWrite(storeOrigin(Instruction, State),
                                Instruction.Width / kBitsPerByte, Program);
+    MedInstruction Store = Instruction;
+    Store.Form = OperandForm::StoreReg;
+    Store.Src = Store.Dst == 0 ? 1 : 0;
+    RegisterValue Value;
+    if (Instruction.Form == OperandForm::StoreReg &&
+        Instruction.Width == kDoubleWordBitWidth &&
+        State.Registers[Instruction.Src].unknown() &&
+        State.Origins[Instruction.Src].unknown() &&
+        State.InputExpressions[Instruction.Src])
+      Value = {RegisterValue::Kind::Constant,
+               *State.InputExpressions[Instruction.Src], 0};
+    if (State.InputSpills.empty() &&
+        Value.ValueKind == RegisterValue::Kind::Unknown)
+      return llvm::Error::success();
+    std::optional<StoredRegisterMemory> Output;
+    for (const auto &Base : possibleValues(State.Registers[Instruction.Dst])) {
+      MachineState Spill;
+      Spill.Registers[Store.Dst] = Base;
+      Spill.Registers[Store.Src] = Value;
+      Spill.Scratch.Values = State.InputSpills;
+      applyTransfer(Store, Spill, Program.ExecutableImage,
+                    ScratchLoadPolicy::ProvenValues);
+      if (!Output)
+        Output = std::move(Spill.Scratch.Values);
+      else
+        Output->meet(Spill.Scratch.Values);
+    }
+    State.InputSpills = std::move(*Output);
+  }
   if (!Instruction.Semantics.WritesDestination)
     return llvm::Error::success();
+  if (Instruction.Op == Operation::Load &&
+      Instruction.Semantics.MemoryWidth == kDoubleWordBitWidth) {
+    std::optional<size_t> Stored;
+    for (const auto &Base : possibleValues(State.Registers[Instruction.Src])) {
+      const auto Address = effectiveAddress(Base, Instruction.Offset);
+      const auto Value =
+          Address ? State.InputSpills.read(
+                        *Address,
+                        Base.ValueKind == RegisterValue::Kind::StackAddress
+                            ? MemoryCoordinate::FrameRelative
+                            : MemoryCoordinate::Absolute)
+                  : RegisterValue{};
+      if (Value.ValueKind != RegisterValue::Kind::Constant ||
+          (Stored && *Stored != Value.Value)) {
+        Stored.reset();
+        break;
+      }
+      Stored = Value.Value;
+    }
+    if (Stored) {
+      // The load happened before the spill. Later writes to its original
+      // input cell cannot change the value already captured in this cell.
+      State.InputExpressions[Instruction.Dst] = Stored;
+      return llvm::Error::success();
+    }
+  }
   const bool Copy = Instruction.Op == Operation::Mov &&
                     Instruction.Form == OperandForm::DstSrc &&
                     Instruction.Width == kDoubleWordBitWidth;
@@ -1332,8 +1392,10 @@ void ContextFlow::transferValues(const MedInstruction &Instruction,
     State.OriginScratch = std::move(OriginMemory.Scratch);
   }
   if (Instruction.Call != CallKind::None) {
-    for (unsigned R = 0; R < kFirstCalleeSavedRegister; ++R)
+    for (unsigned R = 0; R < kFirstCalleeSavedRegister; ++R) {
       State.Origins[R] = {};
+      State.InputExpressions[R].reset();
+    }
   } else if (Instruction.Semantics.WritesDestination) {
     if (Instruction.Op == Operation::Load) {
       State.Origins[Instruction.Dst] =
@@ -1812,6 +1874,8 @@ llvm::Expected<bool> ContextFlow::callTarget(FunctionContext &Context,
     if (Context.Generic && (!Instruction.Syscall ||
                             !preservesCallerMemory(Instruction.Syscall->ID)))
       State.InputWrites.Unknown = true;
+    if (!Instruction.Syscall || !preservesCallerMemory(Instruction.Syscall->ID))
+      State.InputSpills.clear();
     if (!Instruction.Syscall) {
       Context.PreservesMemory = false;
       if (Collect)
@@ -1979,6 +2043,13 @@ llvm::Expected<bool> ContextFlow::callTarget(FunctionContext &Context,
         Callee->Effects.WritesFrames;
   }
   if (!PreserveInput) {
+    ScratchState Spills;
+    Spills.Values = std::move(State.InputSpills);
+    if (Callee && !Edge.LegacyRuntime)
+      Callee->Effects.invalidate(Spills, ValueEntry.Registers, Program);
+    else
+      Spills.clear();
+    State.InputSpills = std::move(Spills.Values);
     if (Callee && !Edge.LegacyRuntime)
       Callee->Effects.invalidate(PreservedOrigins, ValueEntry.Registers,
                                  Program);
@@ -2177,6 +2248,7 @@ ContextFlow::summarize(size_t Entry, const ContextState &Incoming, bool Generic,
   Input.OriginScratch.clear();
   Input.Postconditions.clear();
   Input.InputExpressions = {};
+  Input.InputSpills.clear();
   Input.InputWrites = {};
   if (Generic)
     for (unsigned R = 0; R < kRegisterCount; ++R) {
@@ -2361,6 +2433,7 @@ ContextFlow::summarize(size_t Entry, const ContextState &Incoming, bool Generic,
         Merged.OriginScratch == It->second.Entry.OriginScratch &&
         Merged.Postconditions == It->second.Entry.Postconditions &&
         Merged.InputExpressions == It->second.Entry.InputExpressions &&
+        Merged.InputSpills == It->second.Entry.InputSpills &&
         Merged.InputWrites == It->second.Entry.InputWrites &&
         MergedDefinitions == It->second.DefinitelyWritten)
       return llvm::Error::success();
