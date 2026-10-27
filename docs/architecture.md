@@ -9997,7 +9997,21 @@ therefore never treats veneer instruction bytes as an import pointer slot.
 Code-call aliases retain the authenticated original address; IAT declarations
 additionally require the exact import spelling. A renamed code target never
 inherits the semantics or address of an import with the same name.
-The returned control word and runtime scalar result remain unknown.
+The registration-state solver keeps the returned control word and runtime
+scalar result unknown. The separate ordinary returning-stack proof can use a
+zero scalar result for an exact null-output, full-precision invocation. Its
+block-local three-word argument packet admits only complete scalar stores and
+nontrapping integer transfers. Loads, partial or unknown writes, calls and
+block boundaries discard the packet; it cannot feed frame loads or restore a
+saved ESP. The current physical call and live eager import binding remain
+required, and the resulting stack contract retains that IAT dependency.
+A current physical precision-call candidate permits bounded path checking
+when an ordinary terminal precheck would refuse. Other unsupported terminal
+bodies keep the early refusal before recursive callee discovery. Reaching
+branch feasibility then owns which terminals need a return proof; every
+reached unsupported terminal still refuses. The source error branch,
+original CRT call and its floating effects remain intact. This result grants
+no callee memory contract, callback preservation or native-EH admission.
 Authenticated math import cleanup and checked floating-state intrinsic shapes
 supply integer-frame facts only. Their floating effects, traps and original
 calls remain in LowIR. Writes in asynchronous filters withdraw affected jump

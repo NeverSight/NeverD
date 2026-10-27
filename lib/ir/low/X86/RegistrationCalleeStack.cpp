@@ -5,11 +5,13 @@
 //===----------------------------------------------------------------------===//
 
 #include "RegistrationABIPrivate.h"
+#include "RegistrationCRTFrame.h"
 #include "RegistrationFrame.h"
 #include "RegistrationFrameBranch.h"
 #include "RegistrationFrameEffects.h"
 #include "RegistrationImportLoad.h"
 #include "RegistrationOrdinaryGraph.h"
+#include "RegistrationPrecisionArguments.h"
 #include "RegistrationStackOwner.h"
 
 #include "neverd/Limits.h"
@@ -251,6 +253,22 @@ struct StackBody {
     return true;
   }
 
+  bool hasPrecisionResultCandidate() {
+    // This is an admission to bounded path checking, not a result fact.
+    // Actual arguments, current bindings and branch feasibility are proved
+    // during transfer. Other unsupported terminals retain the fast refusal
+    // before recursive callee discovery consumes a sibling's work allowance.
+    for (const auto &[Id, Block] : Blocks) {
+      if (!chargeCalleeWork(Work, Block->Ops.size() + 1))
+        return false;
+      for (const auto &Op : Block->Ops)
+        if ((Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) &&
+            registration_state::isCheckedControlFPCall(Image, Op, Work))
+          return true;
+    }
+    return false;
+  }
+
   bool collectCalleeImports(const NestedStackProof &Nested) {
     // Collect before transfer: a store can invalidate a dependency of a
     // later direct helper, including a veneer hidden behind another helper.
@@ -423,12 +441,13 @@ stackPopForBody(StackBody &Body, va_t Entry, const NestedStackProof &NestedPop,
                 const LowFunc *Registration = nullptr,
                 const std::set<int> *RegistrationParents = nullptr,
                 const CxxStackPaths *CxxPaths = nullptr) {
-  // A plain body cannot borrow a returning-stack fact from an unsupported
-  // terminal, regardless of its callees. Refuse before their recursive import
-  // inventory can exhaust work needed by another caller. Registration paths
-  // retain their separate dispatcher roots and authenticated no-return exits.
+  // Keep the cheap ordinary terminal refusal unless an authenticated CRT
+  // call can supply a result for the bounded path proof. Only the reaching
+  // invocation may prove that result; every reached terminal below still
+  // requires its own return proof. Dispatcher paths retain their own rules.
   if (!Body.Valid || !Body.Entries.count(Entry) ||
-      (!Registration && !CxxPaths && !Body.hasOnlyReturnTerminals(Entry)) ||
+      (!Registration && !CxxPaths && !Body.hasOnlyReturnTerminals(Entry) &&
+       !Body.hasPrecisionResultCandidate()) ||
       !Body.collectCalleeImports(NestedPop))
     return std::nullopt;
   const auto &Image = Body.Image;
@@ -477,6 +496,7 @@ stackPopForBody(StackBody &Body, va_t Entry, const NestedStackProof &NestedPop,
     if (!Body.immutableBlock(Id) || (Registration && !ParentBlocks.count(Id)))
       return std::nullopt;
     FrameTransfer Transfer(State, 0);
+    registration_abi::PrecisionArguments Arguments;
     bool DoesNotReturn = false;
     for (const auto &Op : Block.Ops) {
       size_t Width = Op.Output.Size;
@@ -485,6 +505,11 @@ stackPopForBody(StackBody &Body, va_t Entry, const NestedStackProof &NestedPop,
       if (!chargeCalleeWork(Work, 1 + Width))
         return std::nullopt;
       Transfer.beginInstruction(Op.Addr);
+      const auto Abstract = Body.stackOperation(Op);
+      if (!Registration && !CxxPaths && Op.Opcode != NdOp::CALL &&
+          Op.Opcode != NdOp::INDIR_CALL &&
+          !Arguments.observe(Abstract, Transfer, Work))
+        return std::nullopt;
       if (Op.Opcode == NdOp::INTRINSIC) {
         if (Op.NumInputs &&
             Op.Inputs[0] ==
@@ -598,7 +623,9 @@ stackPopForBody(StackBody &Body, va_t Entry, const NestedStackProof &NestedPop,
         Adjust.addInput(NdVar::cst(*CalleePop, 4));
         CallSP = Transfer.evaluate(Adjust, false);
       }
-      const auto Abstract = Body.stackOperation(Op);
+      const bool PrecisionSuccess =
+          !Registration && !CxxPaths && ImportedCall && CalleePop == 0 &&
+          Arguments.provesSuccessfulCall(Image, Op, State, Work);
       const auto Load = Body.ImportLoads.find({Op.Addr, Op.Seq});
       Transfer.write(Abstract,
                      Transfer.evaluate(Abstract, false,
@@ -608,6 +635,13 @@ stackPopForBody(StackBody &Body, va_t Entry, const NestedStackProof &NestedPop,
                      0, ImportedCall, PreserveImportBindings);
       if (CallSP)
         State.Registers[x86reg::RSP / x86reg::GeneralRegStride] = *CallSP;
+      if (PrecisionSuccess)
+        // The source CALL and its FP effects remain. This exact invocation's
+        // zero ordinary result supplies only the following stack-proof branch.
+        State.Registers[x86reg::RAX / x86reg::GeneralRegStride] =
+            FrameValue::constant(0);
+      if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL)
+        Arguments.clear();
     }
     if (DoesNotReturn)
       continue;

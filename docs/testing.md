@@ -6013,6 +6013,16 @@ register-preservation boundary from all returning-stack facts.
 exception dispatch. `SegmentedWritesNeedAnImageDisjointnessProof` and physical
 FS-store wrappers reject unproved segmented aliases while retaining the exact
 FS:[0] chain word.
+`RegistrationControlFPStack` exercises 1,152 authored machine-code variants
+across three bases, two CRT providers, IAT/veneer calls, all three valid
+precision selections and returning/terminating error paths. Exact null-output
+packets can prove a zero ordinary result and skip the infeasible error path
+for stack checking only. Reserved controls, partial/unknown masks, frame
+outputs, wrong/delayed bindings, opaque reads, partial/unknown writes,
+intervening calls, separate blocks, writable code and exhausted work refuse.
+A pure integer transfer is a positive control. Separate outer callers retain
+the transitive IAT dependency and refuse after rebinding it; neither route
+acquires a registration-leaf memory contract.
 `NestedReturningStackProofIsBoundedAndNonCircular` checks multi-level callee
 cleanup, mismatched pops, recursive dependencies, the depth boundary and shared
 work exhaustion. It does not admit dispatcher-entered parent returns through
