@@ -433,6 +433,70 @@ TEST(ItaniumHandlerBodies, ACleanupOnlyPadBecomesACatchAllThatRethrows) {
   EXPECT_NE(C.find("L_401040: /* landing pad"), std::string::npos) << C;
 }
 
+TEST(ItaniumHandlerBodies, ConditionalCleanupResumesTheSameException) {
+  for (bool WrongException : {false, true}) {
+    std::vector<HighStmt> Body;
+    Body.push_back(assign(1, callAt("risky", kRisky, kCall), kCall));
+    Body.push_back(ret(use(1)));
+    std::vector<HighStmt> Early;
+    Early.push_back(assign(7, exception()));
+    Early.push_back(statement(call("early_dtor", kDtor, {}, true)));
+    Early.push_back(resume(WrongException ? constant(42) : use(7)));
+    std::vector<HighStmt> Pad;
+    Pad.push_back(branch(equals(use(1), 0), std::move(Early)));
+    Pad.push_back(assign(6, exception()));
+    Pad.push_back(statement(call("late_dtor", kDtor + 16, {}, true)));
+    Pad.push_back(resume(use(6)));
+    const HighFunc Func = cleanupFunction(cleanupSites({{kCall, kPad}}),
+                                          std::move(Body), std::move(Pad));
+    const std::string Source = body(emit(Func));
+    if (WrongException) {
+      EXPECT_NE(Source.find("L_401040"), std::string::npos) << Source;
+      EXPECT_NE(Source.find("_Unwind_Resume"), std::string::npos) << Source;
+    } else {
+      EXPECT_NE(Source.find("} catch (...) {"), std::string::npos) << Source;
+      EXPECT_NE(Source.find("early_dtor()"), std::string::npos) << Source;
+      EXPECT_NE(Source.find("late_dtor()"), std::string::npos) << Source;
+      EXPECT_EQ(Source.find("_Unwind_Resume"), std::string::npos) << Source;
+      EXPECT_EQ(Source.find("eh_exception"), std::string::npos) << Source;
+      EXPECT_EQ(Source.find("L_401040"), std::string::npos) << Source;
+    }
+  }
+}
+
+TEST(ItaniumHandlerBodies, ConditionalCleanupSharesOnlyTheWholeContinuation) {
+  for (bool DifferentArgument : {false, true}) {
+    std::vector<HighStmt> Body;
+    Body.push_back(assign(1, callAt("risky", kRisky, kCall), kCall));
+    Body.push_back(ret(use(1)));
+    const auto Shared = [&](uint64_t Argument) {
+      auto Call = call("shared_dtor", kDtor, {constant(Argument)}, true);
+      Call->CallSiteAddr = kPad + 8;
+      return statement(std::move(Call), kPad + 8);
+    };
+    std::vector<HighStmt> Early;
+    Early.push_back(statement(call("early_dtor", kDtor + 16, {}, true)));
+    Early.push_back(Shared(DifferentArgument ? 2 : 1));
+    // Tail duplication can assign the jump PC to the copied statement;
+    // the call itself retains the occurrence that owns its EH coverage.
+    Early.back().Addr = kPad + 4;
+    Early.push_back(resume(exception()));
+    std::vector<HighStmt> Pad;
+    Pad.push_back(branch(equals(use(1), 0), std::move(Early)));
+    Pad.push_back(Shared(1));
+    Pad.push_back(resume(exception()));
+    const auto Source = body(emit(cleanupFunction(
+        cleanupSites({{kCall, kPad}}), std::move(Body), std::move(Pad))));
+    const auto First = Source.find("shared_dtor(");
+    ASSERT_NE(First, std::string::npos) << Source;
+    EXPECT_EQ(Source.find("shared_dtor(", First + 1) != std::string::npos,
+              DifferentArgument)
+        << Source;
+    EXPECT_NE(Source.find("early_dtor()"), std::string::npos) << Source;
+    EXPECT_EQ(Source.find("_Unwind_Resume"), std::string::npos) << Source;
+  }
+}
+
 TEST(ItaniumHandlerBodies, ACleanupScopeHoldsNoCallItsPadDoesNotCover) {
   // risky() and risky2() reach the pad; other() between them reaches none, so
   // a handler must not destroy the object when it throws.

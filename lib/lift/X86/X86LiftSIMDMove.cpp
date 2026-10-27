@@ -994,17 +994,15 @@ bool liftSIMDMove(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
 
   // MMX aliases the x87 bank; exiting it must publish the empty tags.
   case X86_INS_EMMS:
+  case X86_INS_FEMMS:
     if (L.ownsX87Context()) {
-      S.emitVoidIntrinsic(Intrinsic::X87ContextStep,
-                          {NdVar::reg(x86reg::X87ContextHandle, 8),
-                           NdVar::cst(0x770f, 4), NdVar::cst(0, 8),
-                           NdVar::cst(0, 8), NdVar::cst(S.Addr, 8)});
+      S.emitVoidIntrinsic(
+          Intrinsic::X87ContextStep,
+          {NdVar::reg(x86reg::X87ContextHandle, 8),
+           NdVar::cst(Insn->id == X86_INS_EMMS ? 0x770f : 0x0e0f, 4),
+           NdVar::cst(0, 8), NdVar::cst(0, 8), NdVar::cst(S.Addr, 8)});
       break;
     }
-    throw UnliftedInstruction(Insn->address, Insn->mnemonic, Insn->op_str);
-  case X86_INS_FEMMS:
-    // FEMMS additionally leaves the aliased register payloads undefined.
-    // Neither the typed stack nor the current context owns that transition.
     throw UnliftedInstruction(Insn->address, Insn->mnemonic, Insn->op_str);
 
   default:

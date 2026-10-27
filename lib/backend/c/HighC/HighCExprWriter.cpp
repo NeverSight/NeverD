@@ -6909,16 +6909,17 @@ std::string HighCWriter::exprStrImpl(const HighExpr &E, int ParentPrec,
     }
     // A string an aligned access reads is its aligned object instead.
     const auto Aligned = ImageObjects.find(E.ConstVal);
-    if (auto Lit = stringLiteral(E.ConstVal);
+    // The parameter fixes the element width before generic string guessing:
+    // "C\0next\0" is a valid narrow string even though it is not wide text.
+    std::optional<std::string> Literal;
+    if (NarrowStringOperands.count(&E))
+      Literal = imageStringLiteral(Opts.Image, E.ConstVal,
+                                   /*AllowEmpty=*/false, /*Narrow=*/true);
+    if (!Literal)
+      Literal = stringLiteral(E.ConstVal);
+    if (auto Lit = std::move(Literal);
         Lit && !objectOutgrowsLiteral(E.ConstVal, *Lit) &&
         (Aligned == ImageObjects.end() || Aligned->second.AlignedBytes <= 1)) {
-      // A narrow string parameter takes the bytes as a narrow string.
-      if (NarrowStringOperands.count(&E) &&
-          !llvm::StringRef(*Lit).starts_with("\""))
-        if (auto Narrow = imageStringLiteral(Opts.Image, E.ConstVal,
-                                             /*AllowEmpty=*/false,
-                                             /*Narrow=*/true))
-          Lit = std::move(Narrow);
       return LiteralAddressOperands.count(&E)
                  ? PointerInteger("(uintptr_t)" + *Lit)
                  : *Lit;

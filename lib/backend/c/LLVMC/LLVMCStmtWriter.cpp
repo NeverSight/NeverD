@@ -6429,6 +6429,19 @@ std::string LLVMCWriter::callArgStr(const llvm::Value *Arg,
       *PointerSpelling = true;
     return "\"" + escapeCString(String->getAsCString()) + "\"";
   }
+  // A declared C string parameter fixes the byte width, including a short
+  // literal whose following bytes would fail a generic wide-string probe.
+  if (const llvm::Function *Callee = Call.getCalledFunction();
+      Callee && Callee->isDeclaration() &&
+      libc::isCStringParameter(printedCalleeName(Call), ArgIdx))
+    if (const auto Address = imageDataVA(Arg))
+      if (const auto Literal = imageStringLiteral(Img, *Address,
+                                                  /*AllowEmpty=*/true,
+                                                  /*Narrow=*/true)) {
+        if (PointerSpelling)
+          *PointerSpelling = true;
+        return *Literal;
+      }
   const llvm::BasicBlock *BB = Call.getParent();
   if (const llvm::PHINode *Phi = joinPhiForCallArg(Arg, BB))
     return DeferredUnknownFlags.count(Phi) ? valueStr(Phi) : getName(Phi);

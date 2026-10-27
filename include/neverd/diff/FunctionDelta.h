@@ -11,7 +11,10 @@
 /// among the blocks still unpaired, then along matched edges; instructions
 /// of paired blocks align so that identical normalized instructions line
 /// up, then instructions differing only in a constant, then instructions
-/// with the same mnemonic.
+/// with the same mnemonic. Every completed block alignment maximizes the
+/// shared weights (4/3/2 respectively); large ranges use linear frontiers and
+/// bounded dense leaves instead of reducing alignment quality. This remains
+/// structural evidence, and repeated instructions can have multiple optima.
 ///
 /// The delta is evidence about the binaries, not about their source: an
 /// instruction that differs only in an address it refers to has moved, and

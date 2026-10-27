@@ -16,6 +16,7 @@
 
 #include "neverd/Limits.h"
 #include "neverd/decode/Decoder.h"
+#include "neverd/libc/LibCNames.h"
 
 #include "llvm/ADT/STLExtras.h"
 
@@ -146,12 +147,49 @@ bool InternalNoReturnIndex::nothingReturns(va_t Target) const {
       return It->second;
   }
   bool Returns = false;
+  // Straight-line flow ends at a terminator other than a resumable trap, and
+  // at a call to a routine stated or known by name never to return; padding
+  // after either does not resume it. A return there is reached only by a
+  // branch: unless one in the range targets it, nothing reaches it.
+  const auto CallNeverReturns = [&](va_t Callee) {
+    if (const auto Stated = Img.userNoReturnAt(Callee))
+      return *Stated;
+    return libc::isNoReturnTarget(Img, Callee, NoReturnTargets);
+  };
+  // Each such return, with the padding before it: a branch to either reaches
+  // the return.
+  std::vector<va_t> Unreached, Padding;
+  bool FlowEnded = false;
   const bool Decoded =
       decodeScreenedRange(Target, [&](Decoder &Dec, const DecodedInsn &Insn) {
         const std::optional<bool> InsnReturns = Dec.returnsToCaller(Insn);
+        const bool Ended = FlowEnded && Insn.Addr != Target;
+        if (InsnReturns && *InsnReturns && Ended) {
+          Unreached.insert(Unreached.end(), Padding.begin(), Padding.end());
+          Unreached.push_back(Insn.Addr);
+          Padding.clear();
+          return true;
+        }
         Returns = !InsnReturns || *InsnReturns;
-        return !Returns;
+        if (Returns)
+          return false;
+        const va_t Callee = Dec.directCallTarget(Insn);
+        const bool Pads = Ended && Dec.isAlignmentNop(Insn);
+        if (Pads)
+          Padding.push_back(Insn.Addr);
+        else
+          Padding.clear();
+        FlowEnded =
+            (Dec.isFunctionTerminator(Insn) && !Dec.isResumableTrap(Insn)) ||
+            (Callee != InvalidVA && CallNeverReturns(Callee)) || Pads;
+        return true;
       });
+  if (Decoded && !Returns && !Unreached.empty()) {
+    const ScreenedTransfers &Branches = screenedTransfers(Target);
+    Returns = !Branches.Known || llvm::any_of(Unreached, [&](va_t At) {
+      return Branches.Inside.count(At);
+    });
+  }
   std::lock_guard<std::mutex> Lock(Mutex);
   return Screens.emplace(Target, Decoded && !Returns).first->second;
 }

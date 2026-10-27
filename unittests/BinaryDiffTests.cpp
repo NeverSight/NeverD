@@ -25,9 +25,12 @@
 #include "llvm/ADT/StringMap.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <gtest/gtest.h>
 #include <map>
+#include <random>
 #include <string>
 #include <thread>
 #include <vector>
@@ -359,6 +362,131 @@ TEST(BinaryDiff, IndistinguishableDuplicatesStayExplicit) {
     EXPECT_EQ(M.Changes, 0u);
 }
 
+TEST(BinaryDiff, ZeroAmbiguityMarginStillPreservesExactTies) {
+  std::vector<Fn> Fns;
+  for (unsigned I = 0; I < 3; ++I) {
+    Fns.push_back(leaf("duplicate" + std::to_string(I), 7, 1));
+    Fns.back().Source = NameSource::Generated;
+  }
+  const Program P = build(Fns, 0x400000);
+  const Program S = build(Fns, 0x500000, {2, 0, 1});
+  ComparisonSettings Settings;
+  Settings.AmbiguityMargin = 0;
+  for (const auto &[A, B] : {std::pair(&P, &S), std::pair(&S, &P)}) {
+    const auto R = compare(*A, *B, Settings);
+    EXPECT_TRUE(R.Matches.empty());
+    EXPECT_EQ(R.PrimaryCoverage.Ambiguous, 3u);
+    EXPECT_EQ(R.SecondaryCoverage.Ambiguous, 3u);
+  }
+}
+
+TEST(BinaryDiff, ConflictingRepeatedCallPositionsStayUnresolved) {
+  std::vector<Fn> PFns = {leaf("a", 7, 1), leaf("b", 7, 1),
+                          caller("dispatch", 120, {"a", "b", "a"})};
+  std::vector<Fn> SFns = {leaf("x", 7, 1), leaf("y", 7, 1),
+                          caller("dispatch", 120, {"x", "x", "y"})};
+  for (auto *Fns : {&PFns, &SFns})
+    for (unsigned I = 0; I < 2; ++I)
+      (*Fns)[I].Source = NameSource::Generated;
+  const Program P = build(PFns, 0x400000);
+  const Program S = build(SFns, 0x500000);
+  for (const auto &[A, B] : {std::pair(&P, &S), std::pair(&S, &P)}) {
+    const auto R = compare(*A, *B, {});
+    ASSERT_EQ(R.Matches.size(), 1u);
+    EXPECT_EQ(A->Functions[R.Matches[0].Primary].Name, "dispatch");
+    EXPECT_EQ(R.PrimaryCoverage.Ambiguous, 2u);
+    EXPECT_EQ(R.SecondaryCoverage.Ambiguous, 2u);
+  }
+}
+
+TEST(BinaryDiff, LongCallSequencesRetainContextualCorrespondence) {
+  for (unsigned Repeats : {1200u, 70000u}) {
+    std::vector<std::string> Calls = {"a"};
+    Calls.insert(Calls.end(), Repeats, "anchor");
+    Calls.push_back("b");
+    std::vector<Fn> PFns = {leaf("a", 7, 1), leaf("b", 7, 1),
+                            leaf("anchor", 19), caller("dispatch", 120, Calls)};
+    PFns[0].Source = PFns[1].Source = NameSource::Generated;
+    auto SFns = PFns;
+    SFns[0].Name = "x";
+    SFns[1].Name = "y";
+    for (auto &Block : SFns[3].Blocks)
+      for (auto &O : Block) {
+        if (O.Callee == "a")
+          O.Callee = "x";
+        else if (O.Callee == "b")
+          O.Callee = "y";
+      }
+    const Program P = build(PFns, 0x400000);
+    const Program S = build(SFns, 0x800000, {1, 3, 0, 2});
+    const auto R = compare(P, S, {});
+    EXPECT_EQ(counterpart(R, P, S, "a"), "x") << Repeats;
+    EXPECT_EQ(counterpart(R, P, S, "b"), "y") << Repeats;
+    EXPECT_TRUE(R.Ambiguities.empty());
+  }
+}
+
+TEST(BinaryDiff, RepeatedAnchorChoicesDoNotInventCalleePairs) {
+  std::vector<Fn> PFns = {
+      leaf("a", 7, 1), leaf("b", 7, 1), leaf("anchor", 19),
+      caller("dispatch", 120, {"a", "anchor", "b", "anchor"})};
+  std::vector<Fn> SFns = {leaf("x", 7, 1), leaf("y", 7, 1), leaf("anchor", 19),
+                          caller("dispatch", 120, {"x", "anchor", "y"})};
+  for (auto *Fns : {&PFns, &SFns})
+    for (unsigned I = 0; I < 2; ++I)
+      (*Fns)[I].Source = NameSource::Generated;
+  const Program P = build(PFns, 0x400000);
+  const Program S = build(SFns, 0x500000);
+  for (const auto &[A, B] : {std::pair(&P, &S), std::pair(&S, &P)}) {
+    const auto R = compare(*A, *B, {});
+    EXPECT_EQ(R.Matches.size(), 2u);
+    EXPECT_EQ(R.PrimaryCoverage.Ambiguous, 2u);
+    EXPECT_EQ(R.SecondaryCoverage.Ambiguous, 2u);
+  }
+}
+
+TEST(BinaryDiff, UnresolvedCallsKeepTheirPositionAndUncertainty) {
+  std::vector<Fn> PFns = {leaf("a", 7, 1), leaf("b", 7, 1),
+                          caller("dispatch", 120, {"a", "b"})};
+  std::vector<Fn> SFns = {leaf("x", 7, 1), leaf("y", 7, 1),
+                          caller("dispatch", 120, {"x", "y"})};
+  PFns[2].Blocks[1].insert(PFns[2].Blocks[1].begin() + 3,
+                           {"call", "rax", InstructionFlow::Call});
+  for (auto *Fns : {&PFns, &SFns})
+    for (unsigned I = 0; I < 2; ++I)
+      (*Fns)[I].Source = NameSource::Generated;
+  const Program P = build(PFns, 0x400000);
+  const Program S = build(SFns, 0x500000);
+  for (const auto &[A, B] : {std::pair(&P, &S), std::pair(&S, &P)}) {
+    const auto R = compare(*A, *B, {});
+    EXPECT_EQ(R.Matches.size(), 1u);
+    EXPECT_EQ(R.PrimaryCoverage.Ambiguous, 2u);
+    EXPECT_EQ(R.SecondaryCoverage.Ambiguous, 2u);
+  }
+}
+
+TEST(BinaryDiff, ConsistentCallPairsSurviveOtherPositionalConflicts) {
+  for (bool Conflict : {false, true}) {
+    std::vector<Fn> PFns = {leaf("a", 7, 1), leaf("b", 7, 1), leaf("c", 7, 1),
+                            caller("dispatch", 120, {"a", "b", "a", "c", "c"})};
+    std::vector<Fn> SFns = {
+        leaf("x", 7, 1), leaf("y", 7, 1), leaf("z", 7, 1),
+        caller("dispatch", 120,
+               Conflict ? std::vector<std::string>{"x", "x", "y", "z", "z"}
+                        : std::vector<std::string>{"x", "y", "x", "z", "z"})};
+    for (auto *Fns : {&PFns, &SFns})
+      for (unsigned I = 0; I < 3; ++I)
+        (*Fns)[I].Source = NameSource::Generated;
+    const Program P = build(PFns, 0x400000);
+    const Program S = build(SFns, 0x500000, {2, 1, 0, 3});
+    const auto R = compare(P, S, {});
+    EXPECT_EQ(counterpart(R, P, S, "c"), "z");
+    EXPECT_EQ(R.Matches.size(), Conflict ? 2u : 4u);
+    EXPECT_EQ(R.PrimaryCoverage.Ambiguous, Conflict ? 2u : 0u);
+    EXPECT_EQ(R.SecondaryCoverage.Ambiguous, Conflict ? 2u : 0u);
+  }
+}
+
 TEST(BinaryDiff, ContextTellsApartDuplicatesItCalls) {
   // Two identical helpers, each called from one place of a unique caller.
   std::vector<Fn> Fns = sample();
@@ -427,6 +555,213 @@ TEST(BinaryDiff, DuplicateNamesAreNotCollapsed) {
       EXPECT_TRUE(M.identical());
     }
   EXPECT_EQ(Dups, 2u);
+}
+
+TEST(BinaryDiff, LongInstructionAlignmentPreservesSparseInsertions) {
+  Fn Before = leaf("long_body", 41, 6000);
+  auto After = Before;
+  auto &Instructions = After.Blocks.front();
+  Instructions.insert(Instructions.begin() + 1000, 40, {"mov", "r3, 999999"});
+  Instructions.insert(Instructions.begin() + 4040, 32, {"add", "r2, 888888"});
+  const Program P = build({Before}, 0x400000);
+  const Program S = build({After}, 0x500000);
+  for (const bool Reverse : {false, true}) {
+    SCOPED_TRACE(Reverse);
+    const auto &A = Reverse ? S : P;
+    const auto &B = Reverse ? P : S;
+    const auto D = compareFunctions(A, 0, B, 0, {});
+    ASSERT_TRUE(D.ComputationComplete);
+    EXPECT_EQ(D.EqualInstructions, 6001u);
+    unsigned Inserted = 0, Deleted = 0, Other = 0;
+    uint32_t AI = 0, BI = 0;
+    for (const auto &Row : D.Rows) {
+      if (Row.Primary != NoIndex)
+        EXPECT_EQ(Row.Primary, AI++);
+      if (Row.Secondary != NoIndex)
+        EXPECT_EQ(Row.Secondary, BI++);
+      Inserted += Row.Kind == RowKind::Inserted;
+      Deleted += Row.Kind == RowKind::Deleted;
+      Other += Row.Kind != RowKind::Identical && Row.Kind != RowKind::Moved &&
+               Row.Kind != RowKind::Inserted && Row.Kind != RowKind::Deleted;
+    }
+    EXPECT_EQ(AI, A.Instructions.size());
+    EXPECT_EQ(BI, B.Instructions.size());
+    EXPECT_EQ(Inserted, Reverse ? 0u : 72u);
+    EXPECT_EQ(Deleted, Reverse ? 72u : 0u);
+    EXPECT_EQ(Other, 0u);
+  }
+}
+
+TEST(BinaryDiff, LargeInstructionAlignmentMatchesIndependentEditCost) {
+  std::mt19937 Random(0xD1FF6001);
+  for (const auto &[N, M] :
+       {std::pair{2100u, 2200u}, {4700u, 4600u}, {97u, 44000u}}) {
+    SCOPED_TRACE(N);
+    SCOPED_TRACE(M);
+    const auto Make = [&](unsigned Count) {
+      Fn F;
+      F.Name = "weighted";
+      F.Blocks.resize(1);
+      for (unsigned I = 0; I < Count; ++I) {
+        const char *Mnemonics[] = {"mov", "add", "sub", "xor", "or"};
+        F.Blocks[0].push_back(
+            {Mnemonics[Random() % 5], std::string(Random() % 2 ? "r" : "v") +
+                                          std::to_string(Random() % 3) + ", " +
+                                          std::to_string(Random() % 17)});
+      }
+      return F;
+    };
+    const Program P = build({Make(N)}, 0x400000);
+    const Program S = build({Make(M)}, 0x500000);
+    // Independent forward edit-cost oracle: gaps cost two, and replacing
+    // a row costs zero/one/two/four for shape/skeleton/mnemonic/no agreement.
+    // Production maximizes weights, decomposing large ranges at a middle row.
+    std::vector<uint32_t> Previous(M + 1), Current(M + 1);
+    for (size_t J = 0; J <= M; ++J)
+      Previous[J] = 2 * J;
+    for (size_t I = 1; I <= N; ++I) {
+      Current[0] = 2 * I;
+      const auto &X = P.Instructions[I - 1];
+      for (size_t J = 1; J <= M; ++J) {
+        const auto &Y = S.Instructions[J - 1];
+        const unsigned Cost =
+            X.Shape == Y.Shape                                   ? 0
+            : X.Skeleton == Y.Skeleton                           ? 1
+            : P.Mnemonics[X.Mnemonic] == S.Mnemonics[Y.Mnemonic] ? 2
+                                                                 : 4;
+        Current[J] = std::min(
+            {Previous[J] + 2, Current[J - 1] + 2, Previous[J - 1] + Cost});
+      }
+      std::swap(Previous, Current);
+    }
+    for (const bool Reverse : {false, true}) {
+      SCOPED_TRACE(Reverse);
+      const auto &A = Reverse ? S : P;
+      const auto &B = Reverse ? P : S;
+      const auto D = compareFunctions(A, 0, B, 0, {});
+      ASSERT_TRUE(D.ComputationComplete);
+      EXPECT_EQ(D.State, ComparisonState::Complete);
+      uint32_t AI = 0, BI = 0, Cost = 0;
+      for (const auto &Row : D.Rows) {
+        if (Row.Primary != NoIndex)
+          EXPECT_EQ(Row.Primary, AI++);
+        if (Row.Secondary != NoIndex)
+          EXPECT_EQ(Row.Secondary, BI++);
+        switch (Row.Kind) {
+        case RowKind::Identical:
+        case RowKind::Moved:
+          ASSERT_NE(Row.Primary, NoIndex);
+          ASSERT_NE(Row.Secondary, NoIndex);
+          EXPECT_EQ(A.Instructions[Row.Primary].Shape,
+                    B.Instructions[Row.Secondary].Shape);
+          break;
+        case RowKind::Constant:
+          ++Cost;
+          break;
+        case RowKind::Operand:
+        case RowKind::Inserted:
+        case RowKind::Deleted:
+          Cost += 2;
+          break;
+        case RowKind::Replaced:
+          Cost += 4;
+          break;
+        }
+      }
+      EXPECT_EQ(AI, A.Instructions.size());
+      EXPECT_EQ(BI, B.Instructions.size());
+      EXPECT_EQ(Cost, Previous.back());
+    }
+  }
+}
+
+TEST(BinaryDiff, LongConstantEditsRetainEveryUnchangedInstruction) {
+  Fn Before;
+  Before.Name = "constants";
+  Before.Blocks.resize(1);
+  for (unsigned I = 0; I < 100000; ++I)
+    Before.Blocks[0].push_back({"mov", "r0, " + std::to_string(100000 + I)});
+  auto After = Before;
+  for (unsigned I = 0; I < 100000; I += 10000)
+    After.Blocks[0][I].Operands = "r0, " + std::to_string(600000 + I);
+  Program P = build({Before}, 0x400000);
+  Program S = build({After}, 0x800000);
+  // Shape hashes cover the full nonzero uint64_t domain. These valid values
+  // must not be mistaken for a hash container's empty/tombstone sentinels.
+  for (auto *Input : {&P, &S}) {
+    Input->Instructions[1].Shape = UINT64_MAX;
+    Input->Instructions[2].Shape = UINT64_MAX - 1;
+    ASSERT_FALSE(Input->validate());
+  }
+  const auto D = compareFunctions(P, 0, S, 0, {});
+  ASSERT_TRUE(D.ComputationComplete);
+  ASSERT_EQ(D.Rows.size(), 100000u);
+  EXPECT_EQ(D.EqualInstructions, 99990u);
+  for (size_t I = 0; I < D.Rows.size(); ++I) {
+    EXPECT_EQ(D.Rows[I].Primary, I);
+    EXPECT_EQ(D.Rows[I].Secondary, I);
+    EXPECT_EQ(D.Rows[I].Kind,
+              I % 10000 ? RowKind::Identical : RowKind::Constant);
+  }
+}
+
+TEST(BinaryDiff, LongAlignmentStopsWithoutPublishingPartialRows) {
+  const Program P = build({leaf("long", 11, 40000)}, 0x400000);
+  const Program S = build({leaf("long", 91, 40000)}, 0x800000);
+  for (const bool Timed : {false, true}) {
+    SCOPED_TRACE(Timed);
+    std::atomic<bool> Cancel{false};
+    ComparisonControl Control;
+    if (Timed)
+      Control.Deadline =
+          std::chrono::steady_clock::now() + std::chrono::milliseconds(25);
+    else
+      Control.Cancel = &Cancel;
+    std::thread Stop([&] {
+      std::this_thread::sleep_for(std::chrono::milliseconds(25));
+      Cancel.store(true);
+    });
+    const auto D = compareFunctions(P, 0, S, 0, {}, Control);
+    Stop.join();
+    EXPECT_EQ(D.State,
+              Timed ? ComparisonState::TimedOut : ComparisonState::Cancelled);
+    EXPECT_FALSE(D.ComputationComplete);
+    EXPECT_FALSE(D.AnalysisComplete);
+    EXPECT_TRUE(D.Rows.empty());
+    EXPECT_TRUE(D.Blocks.empty());
+    EXPECT_EQ(D.EqualInstructions, 0u);
+  }
+}
+
+TEST(BinaryDiff, LongAlignmentMeasurementsRoundTripAndRefuseStaleScores) {
+  Fn Before = leaf("long_body", 41, 6000);
+  auto After = Before;
+  After.Blocks[0].insert(After.Blocks[0].begin() + 1000, 40,
+                         {"mov", "r3, 999999"});
+  const Program P = build({Before}, 0x400000);
+  const Program S = build({After}, 0x500000);
+  const auto R = compare(P, S, {});
+  ASSERT_EQ(R.Matches.size(), 1u);
+  EXPECT_EQ(R.Matches[0].EqualInstructions, 6001u);
+  std::string Error;
+  auto Read = readComparison(saved(R, P, S), Error);
+  ASSERT_TRUE(bool(Read)) << Error;
+  EXPECT_EQ(Read->MatcherVersion, 4u);
+  ComparisonResult Restored;
+  ASSERT_FALSE(bindComparison(*Read, P, S, Restored));
+  EXPECT_EQ(savedWithoutTimings(R, P, S), savedWithoutTimings(Restored, P, S));
+  // An older version with still-valid measurements may rebind with a warning.
+  Read->MatcherVersion = 2;
+  ASSERT_FALSE(bindComparison(*Read, P, S, Restored));
+  EXPECT_FALSE(Restored.Warnings.empty());
+  const auto Previous = savedWithoutTimings(Restored, P, S);
+  // Historical heuristics or tampering cannot authorize stale measurements.
+  --Read->Matches[0].Match.EqualInstructions;
+  BindFailure Kind;
+  const auto Failure = bindComparison(*Read, P, S, Restored, &Kind);
+  ASSERT_TRUE(Failure);
+  EXPECT_EQ(Kind, BindFailure::InvalidEvidence);
+  EXPECT_EQ(savedWithoutTimings(Restored, P, S), Previous);
 }
 
 TEST(BinaryDiff, SameSizeConstantEditStaysVisible) {
@@ -518,6 +853,49 @@ TEST(BinaryDiff, ChangedBodiesPairBySimilarityWhenStripped) {
   const FunctionMatch &M = matchOf(R, P, "sub_leaf5");
   EXPECT_TRUE(M.Changes & ChangeInstructions) << changeLetters(M.Changes);
   EXPECT_LT(M.Similarity, 1.0);
+}
+
+TEST(BinaryDiff, CandidateAllowanceCanReachPastFourQuickScoreDistractors) {
+  const auto Make = [](std::string Name, unsigned Base, bool Mixed) {
+    Fn F;
+    F.Name = std::move(Name);
+    F.Blocks.resize(1);
+    for (unsigned I = 0; I < 6; ++I)
+      F.Blocks[0].push_back(
+          {"mov", std::string(Mixed && I % 3 == 1 ? "v0, " : "r0, ") +
+                      std::to_string(Base + I)});
+    F.Blocks[0].push_back({"ret", "", InstructionFlow::Return});
+    return F;
+  };
+  // Changing two operand families breaks all three-instruction sketch runs,
+  // while four original instructions and the return remain exact. Decoys
+  // retain the other side's skeleton sequence but change every constant.
+  std::vector<Fn> Left{Make("target", 100000, false)};
+  std::vector<Fn> Right{Make("target", 100000, true)};
+  for (unsigned I = 0; I < 5; ++I) {
+    Left.push_back(Make("left" + std::to_string(I), 300000 + 100 * I, true));
+    Right.push_back(Make("right" + std::to_string(I), 400000 + 100 * I, false));
+  }
+  const auto P = build(Left, 0x400000);
+  const auto S = build(Right, 0x500000);
+  ComparisonSettings Settings;
+  Settings.UseNames = false;
+  Settings.MaxCandidates = 4;
+  EXPECT_EQ(compare(P, S, Settings).secondaryOf(0), NoIndex);
+  for (const unsigned Allowance : {6u, 16u, 256u}) {
+    SCOPED_TRACE(Allowance);
+    Settings.MaxCandidates = Allowance;
+    const auto R = compare(P, S, Settings);
+    ASSERT_EQ(R.secondaryOf(0), 0u);
+    const auto *M = R.matchOfPrimary(0);
+    ASSERT_TRUE(M);
+    EXPECT_EQ(M->Step, FunctionStep::Similarity);
+    EXPECT_EQ(M->EqualInstructions, 5u);
+    EXPECT_TRUE(M->Changes & ChangeOperands);
+    // Indistinguishable distractors remain available for analyst review.
+    EXPECT_EQ(R.Matches.size(), 1u);
+    EXPECT_FALSE(R.Ambiguities.empty());
+  }
 }
 
 TEST(BinaryDiff, SimilarStructureWithOtherInstructionsIsNotIdentical) {
@@ -676,6 +1054,126 @@ TEST(BinaryDiff, OverridesKeepPairsOneToOneAndRevert) {
   EXPECT_EQ(counterpart(Again, P, S, "leaf3"), "leaf4");
   EXPECT_NE(counterpart(Again, P, S, "check0"), "check0");
   EXPECT_EQ(Again.Overrides, Decisions);
+}
+
+TEST(BinaryDiff, ExhaustedAmbiguitiesStaySaveableAndRevertExactly) {
+  for (const auto [PCount, SCount] :
+       {std::pair(1u, 3u), std::pair(3u, 1u), std::pair(3u, 3u)}) {
+    SCOPED_TRACE(PCount);
+    SCOPED_TRACE(SCount);
+    const auto Copies = [](unsigned Count) {
+      std::vector<Fn> Fns;
+      for (unsigned I = 0; I < Count; ++I)
+        Fns.push_back(leaf("copy" + std::to_string(I), 7, 1));
+      return Fns;
+    };
+    const Program P = build(Copies(PCount), 0x400000);
+    const Program S = build(Copies(SCount), 0x800000);
+    ComparisonSettings Settings;
+    Settings.UseNames = false;
+    auto R = compare(P, S, Settings);
+    ASSERT_TRUE(R.Matches.empty());
+    ASSERT_EQ(R.Ambiguities.size(), 1u);
+    std::vector<OverrideEffect> Effects;
+    std::vector<std::string> States{savedWithoutTimings(R, P, S)};
+    const unsigned Pairs = std::min(PCount, SCount);
+    for (unsigned I = 0; I < Pairs; ++I) {
+      OverrideEffect E;
+      ASSERT_FALSE(applyOverride(
+          R, P, S,
+          {OverrideKind::Match, P.Functions[I].Address, S.Functions[I].Address},
+          &E));
+      Effects.push_back(std::move(E));
+      const bool HasCandidates = I + 1 < Pairs;
+      EXPECT_EQ(R.Ambiguities.size(), HasCandidates ? 1u : 0u);
+      EXPECT_EQ(R.PrimaryCoverage.Ambiguous,
+                HasCandidates ? PCount - I - 1 : 0u);
+      EXPECT_EQ(R.SecondaryCoverage.Ambiguous,
+                HasCandidates ? SCount - I - 1 : 0u);
+      EXPECT_EQ(R.PrimaryCoverage.Unmatched,
+                HasCandidates ? 0u : PCount - Pairs);
+      EXPECT_EQ(R.SecondaryCoverage.Unmatched,
+                HasCandidates ? 0u : SCount - Pairs);
+      States.push_back(savedWithoutTimings(R, P, S));
+      std::string Error;
+      const auto Read = readComparison(States.back(), Error);
+      ASSERT_TRUE(Read) << Error;
+      ComparisonResult Reopened;
+      ASSERT_FALSE(bindComparison(*Read, P, S, Reopened));
+      EXPECT_EQ(savedWithoutTimings(Reopened, P, S), States.back());
+    }
+    for (unsigned I = Pairs; I > 0; --I) {
+      revertOverride(R, P, S, Effects[I - 1]);
+      EXPECT_EQ(savedWithoutTimings(R, P, S), States[I - 1]);
+    }
+    for (unsigned I = 0; I < Pairs; ++I) {
+      ASSERT_FALSE(applyOverride(R, P, S, Effects[I].Applied));
+      EXPECT_EQ(savedWithoutTimings(R, P, S), States[I + 1]);
+    }
+  }
+}
+
+TEST(BinaryDiff, CrossGroupOverridesRestoreRemovedAndRetainedAmbiguities) {
+  std::vector<Fn> PFns, SFns;
+  for (unsigned Group = 0; Group < 4; ++Group)
+    for (unsigned Copy = 0; Copy < 2; ++Copy) {
+      const auto F =
+          leaf("group" + std::to_string(Group) + "_" + std::to_string(Copy),
+               Group + 1, Group + 1);
+      if (Group != 1 || Copy == 0)
+        PFns.push_back(F);
+      if (Group != 0 || Copy == 0)
+        SFns.push_back(F);
+    }
+  const Program P = build(PFns, 0x400000);
+  const Program S = build(SFns, 0x800000);
+  ComparisonSettings Settings;
+  Settings.UseNames = false;
+  auto R = compare(P, S, Settings);
+  ASSERT_TRUE(R.Matches.empty());
+  ASSERT_EQ(R.Ambiguities.size(), 4u);
+  // Each edit consumes a whole group and may also shrink a different group.
+  // The untouched fourth group must keep its original order and membership.
+  const std::pair<const char *, const char *> Pairs[] = {
+      {"group2_0", "group0_0"},
+      {"group1_0", "group2_0"},
+      {"group2_1", "group2_1"}};
+  std::vector<OverrideEffect> Effects;
+  std::vector<std::string> States{savedWithoutTimings(R, P, S)};
+  for (const auto &[A, B] : Pairs) {
+    OverrideEffect E;
+    ASSERT_FALSE(applyOverride(
+        R, P, S,
+        {OverrideKind::Match, named(P, A).Address, named(S, B).Address}, &E));
+    Effects.push_back(std::move(E));
+    EXPECT_EQ(R.Ambiguities.size(), 4u - Effects.size());
+    States.push_back(savedWithoutTimings(R, P, S));
+    std::string Error;
+    const auto Read = readComparison(States.back(), Error);
+    ASSERT_TRUE(Read) << Error;
+    ComparisonResult Reopened;
+    ASSERT_FALSE(bindComparison(*Read, P, S, Reopened));
+    EXPECT_EQ(savedWithoutTimings(Reopened, P, S), States.back());
+  }
+  for (size_t I = Effects.size(); I > 0; --I) {
+    revertOverride(R, P, S, Effects[I - 1]);
+    EXPECT_EQ(savedWithoutTimings(R, P, S), States[I - 1]);
+  }
+  for (size_t I = 0; I < Effects.size(); ++I) {
+    ASSERT_FALSE(applyOverride(R, P, S, Effects[I].Applied));
+    EXPECT_EQ(savedWithoutTimings(R, P, S), States[I + 1]);
+  }
+  for (size_t I = Effects.size(); I > 0; --I)
+    revertOverride(R, P, S, Effects[I - 1]);
+  // A single cross-group edit can exhaust both original groups at once.
+  OverrideEffect Both;
+  ASSERT_FALSE(applyOverride(R, P, S,
+                             {OverrideKind::Match, named(P, "group1_0").Address,
+                              named(S, "group0_0").Address},
+                             &Both));
+  EXPECT_EQ(R.Ambiguities.size(), 2u);
+  revertOverride(R, P, S, Both);
+  EXPECT_EQ(savedWithoutTimings(R, P, S), States.front());
 }
 
 TEST(BinaryDiff, StoppedComparisonsKeepWhatTheyHave) {

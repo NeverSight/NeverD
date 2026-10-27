@@ -21,6 +21,7 @@
 #include "neverd/support/SHA256.h"
 
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/BinaryFormat/COFF.h"
 #include "llvm/BinaryFormat/ELF.h"
@@ -163,9 +164,12 @@ llvm::Expected<InputFile> InputFile::open(const std::filesystem::path &Path,
     return llvm::errorCodeToError(EC);
   if (Size > patchLimits::kMaxInputFileBytes)
     return patchError("input exceeds the interactive patch snapshot limit");
+  // LLVM copies a volatile, null-terminated buffer. Volatile alone can
+  // still map large files, letting later writes/truncation change or invalidate
+  // the supposedly immutable patch input.
   // A universal file holds the image the loader read at its slice's offset.
   auto Buffer = llvm::MemoryBuffer::getFile(pathToUTF8(Path), /*IsText=*/false,
-                                            /*RequiresNullTerminator=*/false,
+                                            /*RequiresNullTerminator=*/true,
                                             /*IsVolatile=*/true);
   if (!Buffer)
     return patchError("cannot read the input file " + pathToUTF8(Path) + ": " +
@@ -223,17 +227,25 @@ llvm::Expected<InputFile> InputFile::open(const std::filesystem::path &Path,
   return patchError("the universal input lost the slice its loader read");
 }
 
-llvm::Expected<std::vector<uint8_t>> InputFile::read(uint64_t Offset,
-                                                     uint64_t Count) const {
+llvm::Expected<llvm::ArrayRef<uint8_t>> InputFile::view(uint64_t Offset,
+                                                        uint64_t Count) const {
   if (Offset > Size || Count > Size - Offset)
     return patchError(llvm::formatv(
         "the input file holds {0} bytes; it has no bytes {1}..+{2}", Size,
         hexAddress(Offset), Count));
   if (Count == 0)
-    return std::vector<uint8_t>();
+    return llvm::ArrayRef<uint8_t>();
   const auto *Data =
       reinterpret_cast<const uint8_t *>(Snapshot->getBufferStart()) + Offset;
-  return std::vector<uint8_t>(Data, Data + Count);
+  return llvm::ArrayRef<uint8_t>(Data, Count);
+}
+
+llvm::Expected<std::vector<uint8_t>> InputFile::read(uint64_t Offset,
+                                                     uint64_t Count) const {
+  auto Bytes = view(Offset, Count);
+  if (!Bytes)
+    return Bytes.takeError();
+  return std::vector<uint8_t>(Bytes->begin(), Bytes->end());
 }
 
 // ===--------------------------------------------------------------------===//
@@ -387,12 +399,16 @@ llvm::Expected<WriteTarget> PatchOverlay::admit(const BinaryImage &Img,
         Overlaps(FileOffset - Input.base(), Size, Other.FileOff, OtherSize))
       return patchError("patch bytes have ambiguous segment mappings");
   }
-  auto FileBytes = Input.read(FileOffset, Size);
+  auto FileBytes = Input.view(FileOffset, Size);
   if (!FileBytes)
     return FileBytes.takeError();
-  std::vector<uint8_t> Unpatched(Seg.Data.begin() + Delta,
-                                 Seg.Data.begin() + Delta + Size);
-  restoreOriginal(Address, Unpatched);
+  llvm::ArrayRef<uint8_t> Unpatched(Seg.Data.data() + Delta, Size);
+  llvm::SmallVector<uint8_t> Restored;
+  if (!Rows.empty()) {
+    Restored.assign(Unpatched.begin(), Unpatched.end());
+    restoreOriginal(Address, Restored);
+    Unpatched = Restored;
+  }
   if (Unpatched != *FileBytes) {
     const auto Mismatch =
         std::mismatch(Unpatched.begin(), Unpatched.end(), FileBytes->begin());
@@ -575,6 +591,8 @@ llvm::Error PatchOverlay::replace(BinaryImage &Img, const InputFile &Input,
     const PatchRow *Row;
   };
   std::vector<Placed> Placement;
+  Placement.reserve(NewRows.size());
+  bool Canonical = true;
   uint64_t Total = 0;
   for (const PatchRow &Row : NewRows) {
     const auto Where = [&] {
@@ -597,10 +615,10 @@ llvm::Error PatchOverlay::replace(BinaryImage &Img, const InputFile &Input,
           "the row's address maps to file offset {0}, not {1}: the patches "
           "describe another build or slice of the input{2}",
           hexAddress(Target->FileOffset), hexAddress(Row.FileOffset), Where()));
-    auto FileBytes = Input.read(Row.FileOffset, Row.size());
+    auto FileBytes = Input.view(Row.FileOffset, Row.size());
     if (!FileBytes)
       return FileBytes.takeError();
-    if (*FileBytes != Row.Original)
+    if (*FileBytes != llvm::ArrayRef<uint8_t>(Row.Original))
       return patchError("the input file's bytes are not the row's original "
                         "bytes: the input changed since the patch was made" +
                         Where());
@@ -608,33 +626,47 @@ llvm::Error PatchOverlay::replace(BinaryImage &Img, const InputFile &Input,
       const PatchRow &Last = *Placement.back().Row;
       if (Last.FileOffset + Last.size() > Row.FileOffset)
         return patchError("patch rows overlap" + Where());
+      if (Placement.back().Segment == Target->Segment &&
+          Last.FileOffset + Last.size() == Row.FileOffset &&
+          Last.Kind == Row.Kind)
+        Canonical = false;
     }
+    if (Canonical)
+      Canonical = std::equal(Row.Original.begin(), Row.Original.end(),
+                             Row.Current.begin(),
+                             [](uint8_t Original, uint8_t Current) {
+                               return Original != Current;
+                             });
     Placement.push_back({Target->Segment, &Row});
   }
-  // Canonical runs from the rows, merging neighbours of one kind and
-  // dropping bytes that equal the file's.
+  // All rows have passed input/image admission. Preserve their owning
+  // buffers when every byte differs from the input and no neighbours can
+  // merge. External noncanonical rows still use the complete run builder.
   std::vector<PatchRow> Runs;
-  for (size_t I = 0; I < Placement.size();) {
-    size_t J = I + 1;
-    while (J < Placement.size() &&
-           Placement[J].Segment == Placement[I].Segment &&
-           Placement[J - 1].Row->FileOffset + Placement[J - 1].Row->size() ==
-               Placement[J].Row->FileOffset)
-      ++J;
-    const uint64_t First = Placement[I].Row->FileOffset;
-    std::vector<uint8_t> Original, Current;
-    std::vector<PatchKind> Kinds;
-    for (size_t K = I; K < J; ++K) {
-      const PatchRow &Row = *Placement[K].Row;
-      llvm::append_range(Original, Row.Original);
-      llvm::append_range(Current, Row.Current);
-      Kinds.insert(Kinds.end(), Row.size(), Row.Kind);
+  if (Canonical)
+    Runs = std::move(NewRows);
+  else
+    for (size_t I = 0; I < Placement.size();) {
+      size_t J = I + 1;
+      while (J < Placement.size() &&
+             Placement[J].Segment == Placement[I].Segment &&
+             Placement[J - 1].Row->FileOffset + Placement[J - 1].Row->size() ==
+                 Placement[J].Row->FileOffset)
+        ++J;
+      const uint64_t First = Placement[I].Row->FileOffset;
+      std::vector<uint8_t> Original, Current;
+      std::vector<PatchKind> Kinds;
+      for (size_t K = I; K < J; ++K) {
+        const PatchRow &Row = *Placement[K].Row;
+        llvm::append_range(Original, Row.Original);
+        llvm::append_range(Current, Row.Current);
+        Kinds.insert(Kinds.end(), Row.size(), Row.Kind);
+      }
+      for (auto &Run : canonicalRuns(Img, Placement[I].Segment, Input.base(),
+                                     First, Original, Current, Kinds))
+        Runs.push_back(std::move(Run));
+      I = J;
     }
-    for (auto &Run : canonicalRuns(Img, Placement[I].Segment, Input.base(),
-                                   First, Original, Current, Kinds))
-      Runs.push_back(std::move(Run));
-    I = J;
-  }
   if (Runs.size() > patchLimits::kMaxPatchRows)
     return patchError("normalized patches exceed the patch row limit");
   auto OriginalImage = Img.BytePatchOriginal;

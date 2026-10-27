@@ -65,6 +65,15 @@ entryStackOffsetRanges(const MedFunc &Func, llvm::ArrayRef<MedVar> Values,
                        Arch Architecture, BinaryFormat Format,
                        StackEntryKind Entry = StackEntryKind::Call);
 
+/// The largest displacement from entry SP each of \p Values can have, where
+/// copies, bounded displacements, alignment masks and joins define it and no
+/// cycle among them can raise it. A dynamic allocation in a loop has such a
+/// bound without a lower one.
+std::vector<std::optional<int64_t>>
+entryStackOffsetUpperBounds(const MedFunc &Func, llvm::ArrayRef<MedVar> Values,
+                            Arch Architecture, BinaryFormat Format,
+                            StackEntryKind Entry = StackEntryKind::Call);
+
 /// Full-width SP definitions in the entry block that align an authenticated
 /// entry-stack offset. Each definition is a distinct frame origin; this does
 /// not establish a constant displacement from the unaligned entry SP.

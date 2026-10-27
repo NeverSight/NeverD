@@ -317,6 +317,13 @@ void LowToMedConverter::runDce(MedFunc &Func) {
         continue;
       seedReachingStackPointer(Blk, static_cast<int>(I) - 1);
       const MedOp &Call = Blk.Ops[I];
+      // A dedicated result-buffer register is an implicit call input too.
+      // ABI recovery runs later: deleting AArch64's X8 setup here severs
+      // aggregate results whenever constant folding triggers register DCE.
+      if (TRI.indirectResultReg() &&
+          (Call.Opcode == NdOp::CALL || Call.Opcode == NdOp::INDIR_CALL ||
+           IsTail))
+        seedReachingDef(Blk, static_cast<int>(I) - 1, TRI.indirectResultReg());
       const bool DirectCall =
           Call.Opcode == NdOp::CALL && Call.NumInputs >= 1 &&
           Call.Inputs[0].isConst() &&

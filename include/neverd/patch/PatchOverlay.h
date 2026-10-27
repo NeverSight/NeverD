@@ -86,7 +86,12 @@ public:
            (Offset <= Base ? Base - Offset < Count
                            : Offset - Base < HeaderSize);
   }
-  /// \p Size bytes from \p Offset, an offset in the file.
+  /// Immutable \p Size bytes at file offset \p Offset in the captured input.
+  /// The view remains valid while this input (or a copy retaining the same
+  /// snapshot) is alive.
+  llvm::Expected<llvm::ArrayRef<uint8_t>> view(uint64_t Offset,
+                                               uint64_t Size) const;
+  /// Owning copy of \p Size bytes from \p Offset, an offset in the file.
   llvm::Expected<std::vector<uint8_t>> read(uint64_t Offset,
                                             uint64_t Size) const;
 

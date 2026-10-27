@@ -680,6 +680,8 @@ void MedToHighConverter::structureControlFlow(HighFunc &Func,
       if (IntrinsicSkip.count(OpIdx))
         continue;
       auto &CurOp = CurBlock.Ops[OpIdx];
+      if (ReturnProtectionOps.count(&CurOp))
+        continue;
       const size_t StatementBegin = Func.Body.size();
       switch (CurOp.Opcode) {
       case NdOp::STORE:

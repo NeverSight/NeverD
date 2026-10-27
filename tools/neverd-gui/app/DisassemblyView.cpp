@@ -227,6 +227,18 @@ std::optional<int> DisassemblyView::currentOperand() const {
   return graphMode() ? std::nullopt : listing_->currentOperand();
 }
 
+bool DisassemblyView::onInstruction() const {
+  if (graphMode())
+    return graph_->currentAddress().has_value();
+  const auto *line = listing_->cursorLine();
+  return line && line->kind == QLatin1String("insn");
+}
+
+bool DisassemblyView::onData() const {
+  const auto *line = graphMode() ? nullptr : listing_->cursorLine();
+  return line && line->kind == QLatin1String("data");
+}
+
 QString DisassemblyView::currentToken() const {
   return graphMode() ? graph_->currentToken() : listing_->currentToken();
 }

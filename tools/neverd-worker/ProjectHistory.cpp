@@ -56,6 +56,29 @@ std::string compactText(const Json &value) {
     throw Error("history_invalid", "User history contains invalid JSON text");
   }
 }
+struct StateEncoding {
+  std::string Text;
+  std::map<std::string, std::pair<std::size_t, std::size_t>> Tables;
+
+  StateEncoding(const Json &state, std::size_t previousSize) {
+    Text.reserve(previousSize);
+    Text += '{';
+    for (const auto &[name, value] : state.items()) {
+      if (Text.size() > 1)
+        Text += ',';
+      Text += compactText(name);
+      Text += ':';
+      const auto offset = Text.size();
+      Text += compactText(value);
+      Tables.emplace(name, std::pair{offset, Text.size() - offset});
+    }
+    Text += '}';
+  }
+  std::string_view table(const std::string &name) const {
+    const auto [offset, size] = Tables.at(name);
+    return std::string_view(Text).substr(offset, size);
+  }
+};
 fs::path sidecar(const fs::path &binary, project_files::File file) {
   return project_files::path(binary, file);
 }
@@ -94,11 +117,14 @@ using SidecarWrites =
 // Encode once before publishing the journal. Validate every table's write
 // budget, including unchanged ones, so recovery can still materialize it.
 SidecarWrites prepareSidecars(const fs::path &binary, const Json &state,
-                              const Json *before = nullptr) {
+                              const Json *before = nullptr,
+                              const StateEncoding *encoded = nullptr) {
   SidecarWrites writes;
 #define NEVERD_USER_STATE_TABLE(Table, Kind, Id, Optional)                     \
   {                                                                            \
-    auto text = sidecarContents(Table, state.at(Table));                       \
+    auto text = encoded && !ordered(Table)                                     \
+                    ? formatSidecarText(encoded->table(Table))                 \
+                    : sidecarContents(Table, state.at(Table));                 \
     if (text.size() >                                                          \
         ::neverd::limits::worker::kProjectHistoryMaxStateFileBytes)            \
       throw Error("history_budget_exceeded",                                   \
@@ -327,6 +353,7 @@ bool sameTypedValue(const Json &left, const Json &right) {
 }
 void normalizeTable(std::string_view name, Json &items,
                     const Json *validated = nullptr) {
+  bool sameAddresses = validated && items.size() == validated->size();
   for (std::size_t index = 0; index < items.size(); ++index) {
     auto &item = items[index];
     // Only an identical row from this history's normalized snapshot carries
@@ -338,7 +365,13 @@ void normalizeTable(std::string_view name, Json &items,
       throw Error("history_invalid", "User state item must be an object");
     item["addr"] = hexAddress(parseAddress(stringField(item, "addr")));
     validateRow(name, item);
+    if (sameAddresses && item.at("addr") != (*validated)[index].at("addr"))
+      sameAddresses = false;
   }
+  // Row contents still pass admission above. Identical canonical addresses
+  // retain the snapshot's ordering, uniqueness and ordered-table positions.
+  if (sameAddresses)
+    return;
   // By address, as the CLI orders the tables it writes: one order for
   // both writers keeps a project's files from changing with the tool.
   const auto byAddress = [](const Json &a, const Json &b) {
@@ -774,7 +807,10 @@ void ProjectHistory::persist(Json state) {
     throw Error("foreign_edits", "Sidecars or history changed outside this "
                                  "worker; reload and inspect before editing");
   auto after = normalizeState(std::move(state), &snapshot_->state);
-  auto afterText = compactText(after);
+  // Preserve the compact state spelling and retain each table's byte range.
+  // Sidecars can add layout without walking and encoding the same rows again.
+  auto encoded = StateEncoding(after, snapshot_->stateText.size());
+  auto &afterText = encoded.Text;
   const auto historyText =
       std::make_shared<const std::string>(document(afterText));
   if (historyText->size() >
@@ -813,7 +849,8 @@ void ProjectHistory::persist(Json state) {
     for (const auto part : parts)
       journalText += part;
   }
-  const auto writes = prepareSidecars(binary_, after, &snapshot_->state);
+  const auto writes =
+      prepareSidecars(binary_, after, &snapshot_->state, &encoded);
   if (const auto error = project_files::prepare(binary_))
     throw Error("save_failed",
                 "Cannot create the project folder: " + error.message());

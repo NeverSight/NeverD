@@ -308,16 +308,18 @@ def main() -> None:
     macos, frameworks, resources = (bundle / "Contents" / name for name in ("MacOS", "Frameworks", "Resources"))
     for directory in (macos, frameworks, resources):
         directory.mkdir(parents=True)
-    for name in ("neverd-gui", *ENGINE_HOSTS):
-        shutil.copy2(args.build_dir / "bin" / name, macos / name)
-    shutil.copy2(args.engine, frameworks / "libneverd.dylib")
+    executables = {name: args.build_dir / "bin" / name
+                   for name in ("neverd-gui", *ENGINE_HOSTS)}
+    gui_bundle_binary = args.build_dir / "bin/neverd-gui.app/Contents/MacOS/neverd-gui"
+    if gui_bundle_binary.is_file():
+        executables["neverd-gui"] = gui_bundle_binary
+    inputs = [(name, origin, macos / name) for name, origin in executables.items()]
+    inputs.append(("libneverd.dylib", args.engine, frameworks / "libneverd.dylib"))
+    for name, origin, copied in inputs:
+        shutil.copy2(origin, copied)
     build_inputs = [{"name": name, "source": str(origin.resolve()),
                      "sha256": hashlib.sha256(copied.read_bytes()).hexdigest()}
-                    for name, origin, copied in (
-                        ("neverd-gui", args.build_dir / "bin/neverd-gui", macos / "neverd-gui"),
-                        ("neverd-worker", args.build_dir / "bin/neverd-worker", macos / "neverd-worker"),
-                        ("neverd-mcp", args.build_dir / "bin/neverd-mcp", macos / "neverd-mcp"),
-                        ("libneverd.dylib", args.engine, frameworks / "libneverd.dylib"))]
+                    for name, origin, copied in inputs]
     origins = {args.engine.resolve()}
     for dependency in dependencies(args.engine):
         if dependency.startswith("/") and "/Python.framework/" in dependency:
@@ -355,7 +357,7 @@ def main() -> None:
     with (bundle / "Contents/Info.plist").open("wb") as stream:
         plistlib.dump(plist, stream)
     version = output(args.qt_dir / "bin/qmake", "-query", "QT_VERSION").strip()
-    kddw_source = args.kddw_source or args.build_dir / "_deps/kddockwidgets-src"
+    kddw_source = args.kddw_source or args.build_dir / "_deps/neverd_docking-src"
     json_license = args.json_license or args.build_dir / "_deps/neverd_worker_json-src/LICENSE.MIT"
     copy_notices(bundle, source, origins, version, args.qt_licenses or source / "licenses" / ("Qt-" + version),
                  kddw_source, json_license, args.engine.parent / "licenses")

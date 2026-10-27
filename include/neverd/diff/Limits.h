@@ -60,13 +60,11 @@ inline constexpr uint32_t kMinShapeInstructions = 3;
 /// Largest group of functions sharing one feature that a drill-down splits by
 /// the next features.  Larger groups stay unresolved for context to split.
 inline constexpr size_t kMaxDrillDownGroup = 4096;
-/// Most candidates the approximate stage scores for one function.
+/// Best quick-scored candidates each unmatched function proposes for exact
+/// measurement. Proposals from both directions are measured together.
 inline constexpr unsigned kDefaultMaxCandidates = 16;
 /// Ceiling a caller may raise kDefaultMaxCandidates to.
 inline constexpr unsigned kMaxCandidates = 256;
-/// Of each function's candidates, how many of the best by the quick score
-/// are measured exactly before one is chosen.
-inline constexpr unsigned kMeasuredCandidates = 4;
 /// Most unmatched pairs the approximate stage scores all of; beyond it,
 /// only sketch buckets and neighbors propose candidates.
 inline constexpr size_t kMaxExhaustiveCandidatePairs = 1u << 16;
@@ -79,10 +77,13 @@ inline constexpr double kDefaultMinimumSimilarity = 0.55;
 /// lower than the global threshold because its context already agrees.
 inline constexpr double kDefaultMinimumContextSimilarity = 0.35;
 /// How far the best candidate must lead the second before an approximate
-/// pairing is accepted; closer candidates stay ambiguous.
+/// pairing is accepted; closer candidates and exact ties stay ambiguous.
 inline constexpr double kDefaultAmbiguityMargin = 0.02;
 /// Rounds of caller/callee propagation after the global passes.
 inline constexpr unsigned kMaxPropagationRounds = 64;
+/// Dense storage threshold for call-sequence anchor alignment. Larger ranges
+/// retain exact optimal anchors using linear score frontiers.
+inline constexpr uint64_t kMaxCallAlignmentCells = 1u << 20;
 
 //===----------------------------------------------------------------------===//
 // Structural deltas
@@ -91,10 +92,11 @@ inline constexpr unsigned kMaxPropagationRounds = 64;
 /// Fewest instructions a basic block needs before its byte-exact or
 /// normalized body alone may pair it in the global block passes.
 inline constexpr uint32_t kMinBlockHashInstructions = 2;
-/// Most cells (primary rows times secondary rows) one instruction alignment
-/// fills with dynamic programming; longer blocks align with a linear
-/// greedy diff instead.
+/// Most cells retained in a dense instruction-alignment table. Larger ranges
+/// use exact weighted divide-and-conquer with linear score frontiers.
 inline constexpr uint64_t kMaxAlignmentCells = 1u << 22;
+/// Poll cancellation/deadlines at least this often in instruction/call scores.
+inline constexpr size_t kAlignmentPollCells = 1024;
 
 //===----------------------------------------------------------------------===//
 // Native region hypotheses

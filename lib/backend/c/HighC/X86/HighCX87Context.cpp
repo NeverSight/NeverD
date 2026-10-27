@@ -35,7 +35,15 @@ std::string helperStem(const Key &K) {
                 : "");
   const unsigned Escape = Selector & 0xff, ModRM = (Selector >> 8) & 0xff;
   std::string Name = "operation";
-  if (Selector & X87ContextMemory) {
+  if (Selector & X87ContextThreeDNow) {
+    Name =
+        llvm::StringRef(
+            x86ThreeDNowInstruction(x87ContextThreeDNowOpcode(Selector))->Name)
+            .lower();
+    Name += "_mm" + std::to_string((ModRM >> 3) & 7);
+    Name += (Selector & X87ContextMemory) ? "_m64"
+                                          : "_mm" + std::to_string(ModRM & 7);
+  } else if (Selector & X87ContextMemory) {
     const char *D9[] = {"fld",    "invalid", "fst",     "fstp",
                         "fldenv", "fldcw",   "fnstenv", "fnstcw"};
     const char *DB[] = {"fild",    "fisttp", "fist",    "fistp",

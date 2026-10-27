@@ -174,6 +174,7 @@ continues to reject reserved bits, invalid addressing forms and prefixes.
 | FFREEP | ST(i) | DF | C0–C7 | 0 | true | state-only |
 | WAIT | implicit | 9B | 00 | 0 | true | portable-state-only |
 | EMMS | MMX aliases | 0F | 77 | 0 | false | owned-only-state |
+| FEMMS | MMX aliases | 0F | 0E | 0 | false | owned-only-state |
 
 Unlisted/reserved and legacy FSTPNCE/FSETPM/FDISI/FENI forms remain
 unsupported by this inventory; recognition elsewhere is not admission.

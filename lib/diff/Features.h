@@ -82,7 +82,7 @@ struct ProgramFeatures {
   /// Distinct functions each function calls, and that call it, ascending.
   Adjacency Callees;
   Adjacency Callers;
-  /// Every call each function makes, in instruction order, by callee.
+  /// Every call in instruction order; NoIndex retains an unresolved call.
   Adjacency CallSites;
   /// What each function's thunks lead to: the function itself, or for a
   /// thunk the function it passes control to.

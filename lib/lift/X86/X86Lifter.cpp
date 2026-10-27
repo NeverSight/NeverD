@@ -886,17 +886,15 @@ void X86Lifter::liftImpl(const cs_insn *Insn, std::vector<LowOp> &Ops,
   // operations, including when permissive lifting was asked for: a NOP or
   // generic SYSCALL loses the architectural continuation.  The architectural
   // returns are the exception: far and interrupt returns (liftControl) and the
-  // syscall returns SYSRET/SYSRETQ and SYSEXIT/SYSEXITQ (liftExt / liftLegacyExt)
-  // lift to explicit terminal state-transfer intrinsics that name every cell
-  // the transfer reads, so they are not refused here.  SYSENTER and RSM enter a
-  // handler whose target comes from an MSR or SMRAM, not named operands, and
-  // XBEGIN's abort checkpoint has two exits; those stay refused.
+  // syscall returns SYSRET/SYSRETQ and SYSEXIT/SYSEXITQ (liftExt /
+  // liftLegacyExt) lift to explicit terminal state-transfer intrinsics that
+  // name every cell the transfer reads, so they are not refused here.  SYSENTER
+  // and RSM enter a handler whose target comes from an MSR or SMRAM, not named
+  // operands; those stay refused.  XBEGIN keeps its original abort continuation
+  // as a second exit of its own instruction (liftTransactions).
   switch (Insn->id) {
   case X86_INS_SYSENTER:
   case X86_INS_RSM:
-  // The ordinary _xbegin() value contract has a compiler-local fallback. It
-  // cannot replace the original abort target and architectural checkpoint.
-  case X86_INS_XBEGIN:
     throw UnliftedInstruction(Insn->address, Insn->mnemonic, Insn->op_str);
   default:
     break;
@@ -1429,11 +1427,6 @@ bool X86Lifter::isFunctionTerminator(const cs_insn *I) {
 bool X86Lifter::isReturn(const cs_insn *I) {
   switch (I->id) {
   case X86_INS_RET:
-  case X86_INS_RETF:
-  case X86_INS_RETFQ:
-  case X86_INS_IRET:
-  case X86_INS_IRETD:
-  case X86_INS_IRETQ:
     return true;
   default:
     return false;

@@ -817,18 +817,25 @@ TEST(InternalNoReturn, CallerWithAnUnresolvedBranchStillListsItsCallees) {
 
 TEST(InternalNoReturn, CallToACalleeWithNothingThatReturnsIsProved) {
   // caller: call b; ret -- code follows the call, but b's sized symbol
-  // covers only `int 0x29`, which does not return, so b is proved.  A b that
-  // also holds a `ret`, even one no path reaches, is not worth the proof.
-  for (bool HoldsReturn : {false, true}) {
-    SCOPED_TRACE(HoldsReturn);
+  // covers only `int 0x29`, which does not return, so b is proved.  A `ret`
+  // that only the `int 0x29` precedes is reached by no path, and b is still
+  // proved. A `ret` a branch reaches is worth no proof.
+  struct Case {
+    std::vector<uint8_t> Body;
+    bool Proved;
+  };
+  for (const Case &C :
+       {Case{{0xcd, 0x29}, true}, Case{{0xcd, 0x29, 0xc3}, true},
+        Case{{0x74, 0x02, 0xcd, 0x29, 0xc3}, false}}) {
+    SCOPED_TRACE(testing::PrintToString(C.Body));
     std::vector<uint8_t> Code(0x10, 0xcc);
     putCall(Code, Base, Base + 0x10);
     Code[5] = 0xc3;
-    Code.insert(Code.end(), {0xcd, 0x29, 0xc3});
+    Code.insert(Code.end(), C.Body.begin(), C.Body.end());
     Code.resize(0x20, 0xcc);
     auto Image = imageWith(Code, {{Base, "caller"}, {0x1010, "b"}});
-    Image.Symbols.back().Size = HoldsReturn ? 3 : 2;
-    EXPECT_EQ(callAtBaseEndsItsBlock(Image), !HoldsReturn);
+    Image.Symbols.back().Size = C.Body.size();
+    EXPECT_EQ(callAtBaseEndsItsBlock(Image), C.Proved);
   }
 }
 

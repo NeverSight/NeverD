@@ -190,7 +190,9 @@ std::optional<std::string> imageStringLiteral(const BinaryImage *Img, va_t Addr,
   if (Off >= Seg->Data.size())
     return std::nullopt;
   const uint8_t *Base = Seg->Data.data() + Off;
-  const size_t Remain = Seg->Data.size() - static_cast<size_t>(Off);
+  const size_t Remain =
+      std::min(Seg->Data.size() - static_cast<size_t>(Off),
+               ::neverd::limits::backend::kCTypeFormatStringWindow);
   // A sized data object that holds the bytes must be the string itself.  A
   // literal shorter than its object would leave the bytes past it unread: a
   // struct of a short number and a null pointer reads as a one-character
@@ -224,9 +226,7 @@ std::optional<std::string> imageStringLiteral(const BinaryImage *Img, va_t Addr,
   if (!Narrow && Remain >= 2 && Base[1] == 0) {
     std::string Body;
     unsigned N = 0;
-    for (size_t I = 0;
-         I + 1 < Remain && N < ::neverd::limits::backend::kCTypeFormatMaxLit;
-         I += 2, ++N) {
+    for (size_t I = 0; I + 1 < Remain; I += 2, ++N) {
       const uint16_t Unit = readLE<uint16_t>(Base + I);
       if (Unit == 0) {
         if (!HasStableBytes(I + 2))
@@ -242,9 +242,7 @@ std::optional<std::string> imageStringLiteral(const BinaryImage *Img, va_t Addr,
   }
   std::string Body;
   unsigned N = 0;
-  for (size_t I = 0;
-       I < Remain && N < ::neverd::limits::backend::kCTypeFormatMaxLit;
-       ++I, ++N) {
+  for (size_t I = 0; I < Remain; ++I, ++N) {
     const uint8_t Ch = Base[I];
     if (Ch == 0) {
       if (!HasStableBytes(I + 1))

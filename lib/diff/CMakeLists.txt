@@ -1,4 +1,5 @@
 add_neverd_component_library(NeverDDiff
+  CallAlignment.cpp
   CallImpact.cpp
   CallEffectReview.cpp
   ChangeObservations.cpp

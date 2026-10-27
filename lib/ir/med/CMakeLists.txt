@@ -1,4 +1,5 @@
 add_neverd_component_library(NeverDIRMed
+  AArch64/AArch64ReturnProtection.cpp
   AArch64/AArch64SVEState.cpp
   X86/PortableX87Function.cpp
   X86/PortableX87Validation.cpp

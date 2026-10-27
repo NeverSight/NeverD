@@ -654,6 +654,7 @@ void CodeText::load(Address function, const QString &representation,
   foldAfterLoad_ = same && library_.libraryFolded();
   foldPreludeAfterLoad_ = !same || library_.isFolded(PreludeRegion);
   foldEpilogueAfterLoad_ = !same || library_.isFolded(EpilogueRegion);
+  foldDetailsAfterLoad_ = !same;
   blocksAfterLoad_ = same ? library_.foldedBlocks() : QSet<QString>();
   blockStructureAfterLoad_ = same ? library_.blockStructure() : QString();
   if (!same)
@@ -770,8 +771,10 @@ void CodeText::request(int offset, quint64 serial) {
           library_.setRegionFolded(PreludeRegion, true);
         if (foldEpilogueAfterLoad_)
           library_.setRegionFolded(EpilogueRegion, true);
-        if (!blocksAfterLoad_.isEmpty() &&
-            library_.blockStructure() == blockStructureAfterLoad_)
+        if (foldDetailsAfterLoad_)
+          library_.setFoldedBlocks(library_.defaultDetailBlocks());
+        else if (!blocksAfterLoad_.isEmpty() &&
+                 library_.blockStructure() == blockStructureAfterLoad_)
           library_.setFoldedBlocks(blocksAfterLoad_);
         // Unfolded pages are already colored and mapped. Only a changed
         // projection requires rebuilding earlier lines.

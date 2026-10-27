@@ -156,6 +156,20 @@ the distinct heap address `0x300007DD0` from one to two. Slot 22973 is not
 executed by these two inputs. These finite observations do not establish
 nonaliasing on other paths.
 
+A complete checked-store trace confirms that 22063 is the last overlapping
+writer before the field load at 1960 in both diagnostic runs. Earlier copies
+at 67100/67115 use the same stack address before the descriptor's lifetime;
+the address does not establish a permanent source-language type. The observer
+leaves the guest results and instruction traces byte-identical. Temporary
+host/observer sources are restored before rebuilding the qualification worker.
+
+The static query still needs all-path field and alias proofs. Its global
+`specialization_budget_exhausted` flag can remain false while individual edges
+reach `per_entry_specialization_limit`. These are separate precision limits;
+report the edge reasons alongside missing field/register facts. A finite
+nonoverlapping trace cannot authorize a heap/stack NoAlias assumption or
+remove the dynamic fallback.
+
 The diagnostic host supplies a zeroed 32-KiB heap, checked nonoverlapping memcpy
 and PDA derivation checked against solders 0.29.0. Logging returns zero, and
 three CPI calls explicitly return zero without token or account-state

@@ -318,6 +318,7 @@ if(BUILD_TESTING)
     qt_add_executable(neverd-gui-tests tests/WorkbenchTests.cpp)
     if(APPLE)
       target_sources(neverd-gui-tests PRIVATE tests/platform/NativeWindowStateMac.mm)
+      target_link_libraries(neverd-gui-tests PRIVATE "-framework ApplicationServices")
     endif()
     target_link_libraries(neverd-gui-tests PRIVATE neverd_gui_app Qt6::Test)
     target_compile_definitions(neverd-gui-tests PRIVATE

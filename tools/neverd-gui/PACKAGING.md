@@ -90,6 +90,8 @@ the platform's signing and release qualification process.
 
 Build the GUI and worker in the same configuration as the selected engine, then
 run the packaging helper on macOS. The output path must not already exist.
+The helper reads the GUI from CMake's `bin/neverd-gui.app` bundle when present;
+older builds with a plain `bin/neverd-gui` executable remain supported.
 
 ```sh
 python3 tools/neverd-gui/package_macos.py \

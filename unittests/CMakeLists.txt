@@ -117,6 +117,7 @@ target_include_directories(NeverDGraphCyclesTests PRIVATE
 
 add_neverd_unittest(NeverDBinaryDiffTests
   BinaryDiffTests.cpp
+  BinaryDiffCallAlignmentTests.cpp
   BinaryDiffLineageTests.cpp
   BinaryDiffDataFlowTests.cpp
   BinaryDiffLLVMDataFlowTests.cpp

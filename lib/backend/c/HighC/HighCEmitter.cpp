@@ -4878,6 +4878,9 @@ bool HighCEmitter::emit(const std::vector<HighFunc> &Funcs,
     Expr->forEachChildExpr(CheckRequirement);
   };
   for (const auto &Func : Funcs) {
+    if (Func.ReturnProtection && Opts.TheArch != Arch::AArch64)
+      throw std::invalid_argument(
+          "AArch64 return protection requires AArch64 source emission");
     Seen.clear();
     if (Opts.Image && Opts.TheArch == Arch::AArch64)
       MemoryBases.emplace(Func);

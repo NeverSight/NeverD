@@ -6141,10 +6141,24 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
     const uint32_t OEnd = OBegin + Output.Size;
     const uint32_t QBegin = Query.Begin;
     const uint32_t QEnd = QBegin + Query.Size;
-    if (OBegin <= QBegin && QEnd <= OEnd)
+    if (OBegin <= QBegin && QEnd <= OEnd) {
+      // Decoders can carry a complete guest address in a wider temporary.
+      // Selecting every guest pointer bit without changing the value retains
+      // its address identity. A partial lane, nonzero discarded bits or a
+      // scalar/fragment cannot acquire that authority from numeric equality.
+      if (QBegin == OBegin && Query.Size &&
+          Query.Size == CurrentImg->getPointerSize() &&
+          Query.Size < sizeof(uint64_t) && Query.Size < Full->Size &&
+          Full->K == ResolverValueExpr::Kind::Constant &&
+          isExactAddressProvenance(Full->Provenance) &&
+          (Full->Constant >> (Query.Size * 8u)) == 0)
+        return resolverValue(budgetedResolverConstant(
+            Full->Constant, Query.Size, Full->Provenance, Full->AddressOwnerVA,
+            consumeEvidence));
       return resolverValue(
           resolverSlice(Full, static_cast<uint16_t>(QBegin - OBegin),
                         Query.Size, consumeEvidence, &EvidenceBudgetExhausted));
+    }
     if (!ZeroExtendingWrite)
       return resolverInvalid();
     // A W/E-register write defines the full X/R register.  Bytes above the

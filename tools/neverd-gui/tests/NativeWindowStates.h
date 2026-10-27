@@ -13,6 +13,7 @@
 #include <QEvent>
 #include <QGuiApplication>
 #include <QObject>
+#include <QPoint>
 #include <QWindow>
 #include <functional>
 
@@ -28,6 +29,8 @@ bool nativeWindowIsMinimized(QWidget &Window);
 bool reopenNativeApplication();
 bool hasNativeApplicationModalWindow();
 void quitNativeApplication();
+bool canPostNativePointerEvents();
+bool moveNativePointer(QPoint Position);
 #endif
 
 class NativeWindowStates final : public QObject {

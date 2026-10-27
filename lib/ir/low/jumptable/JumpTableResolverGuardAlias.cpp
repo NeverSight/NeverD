@@ -176,7 +176,6 @@ std::optional<uint64_t> evaluateJumpTableGuardPartialPrimitive(
   return evaluateJumpTableGuardPrimitive(Opcode, OutputSize, Known, InputSizes);
 }
 
-
 namespace {
 
 using symbolic::SymContext;

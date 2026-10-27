@@ -61,6 +61,8 @@ inline std::string renderX87ContextAsm(const X87ContextAsmIdentity &Id,
   if (Step || Restore) {
     Text += ", \"st\", \"st(1)\", \"st(2)\", \"st(3)\", \"st(4)\", \"st(5)\", "
             "\"st(6)\", \"st(7)\"";
+    for (unsigned I = 0; I < 8; ++I)
+      Text += ", \"mm" + std::to_string(I) + "\"";
     for (unsigned I = 0; I < 16; ++I)
       Text += ", \"xmm" + std::to_string(I) + "\"";
   }

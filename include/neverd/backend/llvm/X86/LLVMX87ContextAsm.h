@@ -31,11 +31,13 @@ inline constexpr char X87ContextSnapshotConstraints[] = "r,~{memory}";
 inline constexpr char X87ContextRestoreConstraints[] =
     "r,~{memory},~{st},~{st(1)},~{st(2)},~{st(3)},~{st(4)},~{st(5)},~{st(6)},~{"
     "st(7)},"
+    "~{mm0},~{mm1},~{mm2},~{mm3},~{mm4},~{mm5},~{mm6},~{mm7},"
     "~{xmm0},~{xmm1},~{xmm2},~{xmm3},~{xmm4},~{xmm5},~{xmm6},~{xmm7},"
     "~{xmm8},~{xmm9},~{xmm10},~{xmm11},~{xmm12},~{xmm13},~{xmm14},~{xmm15}";
 inline constexpr char X87ContextStepConstraints[] =
     "r,r,{r10},r,~{rax},~{r11},~{memory},~{flags},~{fpsr},"
     "~{st},~{st(1)},~{st(2)},~{st(3)},~{st(4)},~{st(5)},~{st(6)},~{st(7)},"
+    "~{mm0},~{mm1},~{mm2},~{mm3},~{mm4},~{mm5},~{mm6},~{mm7},"
     "~{xmm0},~{xmm1},~{xmm2},~{xmm3},~{xmm4},~{xmm5},~{xmm6},~{xmm7},"
     "~{xmm8},~{xmm9},~{xmm10},~{xmm11},~{xmm12},~{xmm13},~{xmm14},~{xmm15}";
 
@@ -89,11 +91,31 @@ x87ContextAsm(X87ContextAsmPhase Phase, uint32_t Selector = 0,
         add(0x65);
       else if (Space != NdMemoryAddressSpace::Default)
         llvm::report_fatal_error("unsupported x87 context address space");
-      add(0x41); // The admitted original memory group addresses R10.
+      if (Selector & X87ContextStackReference) {
+        // Keep the compiler's RBP intact. RBP + (address - RBP) retains the
+        // original stack-reference fault class without changing the address.
+        if (Space != NdMemoryAddressSpace::Default)
+          llvm::report_fatal_error("invalid x87 stack-reference address");
+        Text += "movq %r10, %r11\n\tsubq %rbp, %r11\n\t";
+        add(0x42); // R11 index, RBP base, disp8=0.
+      } else {
+        add(0x41); // The admitted original memory group addresses R10.
+      }
     }
     add(Selector & 0xff);
+    if (Spec->ThreeDNow)
+      add(0x0f);
     if ((Selector & 0xff) != 0x9b)
-      add(((Selector >> 8) & 0xff) | ((Selector & X87ContextMemory) ? 2 : 0));
+      add(((Selector >> 8) & 0xff) |
+          ((Selector & X87ContextStackReference) ? 0x44
+           : (Selector & X87ContextMemory)       ? 2
+                                                 : 0));
+    if (Selector & X87ContextStackReference) {
+      add(0x1d);
+      add(0);
+    }
+    if (Spec->ThreeDNow)
+      add(x87ContextThreeDNowOpcode(Selector));
     Text += ".byte " + Bytes + "\n\t";
   }
   if (Spec->WritesFlags)

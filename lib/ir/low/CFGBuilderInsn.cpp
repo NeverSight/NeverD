@@ -538,16 +538,20 @@ void CFGBuilder::rewriteOwnInteriorCall(const BinaryImage &Img, InsnRecord &Rec,
   // A call to an internal label can either return normally or abandon the
   // invocation. Its pushed return address is a value like any other.
   // Whether a return later pops it is for
-  // classifyOwnInteriorCalls to prove.  The function's body is the extent
-  // its own unwind record declares (a function-table entry or a DWARF FDE);
-  // a range recovered from code or shared by several functions bounds
-  // nothing.
+  // classifyOwnInteriorCalls to prove.  A body is the extent an unwind record
+  // declares (a function-table entry or a DWARF FDE); a range recovered from
+  // code or shared by several functions bounds nothing.  The function must own
+  // the record that starts at its entry. A call inside that record is interior
+  // to it; a call this function reaches inside another record's body, after
+  // a jump into code that record owns, is interior to that record instead.
   const va_t Target = *Rec.Immediate;
-  const ExceptionFunction *Own =
+  const ExceptionFunction *Self =
       Img.ExceptionMetadata.findFunction(CurrentFuncEntry);
-  if (!Own || Own->Kind != RuntimeFunctionKind::Primary ||
+  const ExceptionFunction *Own = Img.ExceptionMetadata.findFunction(Rec.Addr);
+  if (!Self || Self->Kind != RuntimeFunctionKind::Primary ||
+      Self->CodeRange.Begin != CurrentFuncEntry || !Own ||
+      Own->Kind != RuntimeFunctionKind::Primary ||
       !exceptionEncodingBoundsOneFunction(Own->Encoding) ||
-      Own->CodeRange.Begin != CurrentFuncEntry ||
       !Own->CodeRange.contains(Rec.Addr) || !Own->CodeRange.contains(Target) ||
       Target == Own->CodeRange.Begin || isKnownFunctionEntry(Target) ||
       KeptOwnInteriorCallTargets.count(Target))

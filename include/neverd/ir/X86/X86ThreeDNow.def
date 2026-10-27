@@ -1,0 +1,35 @@
+//===- X86ThreeDNow.def - Native packed MMX operation inventory ---------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Suffix opcode, destination-read behavior and extended feature requirement.
+/// All operations write one physical MMX register and enter MMX state.
+//===----------------------------------------------------------------------===//
+
+// NAME, SUFFIX, READS_DESTINATION, ENHANCED
+NEVERD_3DNOW(PAVGUSB, 0xbf, true, false)
+NEVERD_3DNOW(PF2ID, 0x1d, false, false)
+NEVERD_3DNOW(PF2IW, 0x1c, false, true)
+NEVERD_3DNOW(PFACC, 0xae, true, false)
+NEVERD_3DNOW(PFADD, 0x9e, true, false)
+NEVERD_3DNOW(PFCMPEQ, 0xb0, true, false)
+NEVERD_3DNOW(PFCMPGE, 0x90, true, false)
+NEVERD_3DNOW(PFCMPGT, 0xa0, true, false)
+NEVERD_3DNOW(PFMAX, 0xa4, true, false)
+NEVERD_3DNOW(PFMIN, 0x94, true, false)
+NEVERD_3DNOW(PFMUL, 0xb4, true, false)
+NEVERD_3DNOW(PFNACC, 0x8a, true, true)
+NEVERD_3DNOW(PFPNACC, 0x8e, true, true)
+NEVERD_3DNOW(PFRCP, 0x96, false, false)
+NEVERD_3DNOW(PFRCPIT1, 0xa6, true, false)
+NEVERD_3DNOW(PFRCPIT2, 0xb6, true, false)
+NEVERD_3DNOW(PFRSQIT1, 0xa7, true, false)
+NEVERD_3DNOW(PFRSQRT, 0x97, false, false)
+NEVERD_3DNOW(PFSUB, 0x9a, true, false)
+NEVERD_3DNOW(PFSUBR, 0xaa, true, false)
+NEVERD_3DNOW(PI2FD, 0x0d, false, false)
+NEVERD_3DNOW(PI2FW, 0x0c, false, true)
+NEVERD_3DNOW(PMULHRW, 0xb7, true, false)
+NEVERD_3DNOW(PSWAPD, 0xbb, false, true)

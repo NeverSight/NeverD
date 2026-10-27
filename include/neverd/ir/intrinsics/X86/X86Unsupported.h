@@ -15,20 +15,18 @@
 
 namespace neverd {
 
-/// These IDs resume at a continuation whose target no named operand carries:
-/// RSM restores the whole processor from SMRAM and XBEGIN's abort path is a
-/// second, non-sequential exit. Keep their serialized identities, but admit
-/// neither an ABI return nor bare assembly.  (The syscall returns SYSRET/
-/// SYSEXIT, like far/interrupt returns, DO name their transfer target in a
-/// register and are lifted to a terminal state-transfer intrinsic instead.)
+/// RSM resumes at a continuation whose target no named operand carries: it
+/// restores the whole processor from SMRAM. Keep its serialized identity, but
+/// admit neither an ABI return nor bare assembly.  (The syscall returns
+/// SYSRET/SYSEXIT, like far/interrupt returns, DO name their transfer target
+/// in a register and are lifted to a terminal state-transfer intrinsic
+/// instead. XBEGIN's abort continuation is an explicit second exit of its
+/// instruction, so its status intrinsic carries no continuation of its own.)
 inline const char *x86NonlocalControlTransferReason(Intrinsic Id) {
   switch (Id) {
   case Intrinsic::Rsm:
     return "x86 nonlocal control transfer requires a complete machine-state "
            "boundary";
-  case Intrinsic::Xbegin:
-    return "x86 transaction begin requires the original abort continuation "
-           "and a complete machine-state checkpoint";
   default:
     return nullptr;
   }

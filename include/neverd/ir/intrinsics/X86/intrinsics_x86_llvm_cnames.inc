@@ -73,6 +73,7 @@
 {"llvm.x86.bmi.pext.64",           "_pext_u64"},
 
 // x86 transactional execution
+{"llvm.x86.xbegin",               "_xbegin"},
 {"llvm.x86.xabort",               "_xabort"},
 {"llvm.x86.xtest",                "_xtest"},
 

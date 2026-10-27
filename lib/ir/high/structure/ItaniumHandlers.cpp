@@ -1123,6 +1123,35 @@ const char *makeHandler(std::vector<HighStmt> &Body, bool CatchAll,
   return nullptr;
 }
 
+/// Cleanup continuations copied into conditional arms can share their
+/// original calls. Match complete continuations, not just a trailing call:
+/// otherwise falling through would run an intervening destructor twice.
+bool sameCleanupStatement(const HighStmt &A, const HighStmt &B,
+                          unsigned Depth = 0) {
+  if (Depth > ::neverd::limits::ir::kItaniumHandlersRewriteDepthLimit ||
+      A.Kind != B.Kind)
+    return false;
+  if (A.Kind == StmtKind::Call) {
+    // A duplicated tail may take the jump's statement address. Its call
+    // occurrence, which owns exception coverage, keeps the original PC.
+    return A.CallExpr && B.CallExpr &&
+           (A.CallExpr->CallSiteAddr || B.CallExpr->CallSiteAddr
+                ? A.CallExpr->CallSiteAddr == B.CallExpr->CallSiteAddr
+                : A.Addr == B.Addr) &&
+           A.CallExpr->structuralEq(*B.CallExpr);
+  }
+  if ((A.Kind != StmtKind::If && A.Kind != StmtKind::IfElse) || !A.Cond ||
+      !B.Cond || !A.Cond->structuralEq(*B.Cond))
+    return false;
+  const auto Same = [&](const HighStmt &L, const HighStmt &R) {
+    return sameCleanupStatement(L, R, Depth + 1);
+  };
+  return std::equal(A.Body.begin(), A.Body.end(), B.Body.begin(), B.Body.end(),
+                    Same) &&
+         std::equal(A.ElseBody.begin(), A.ElseBody.end(), B.ElseBody.begin(),
+                    B.ElseBody.end(), Same);
+}
+
 /// Spell \p Body, the run of a pad that no clause matched, as cleanups: the
 /// statements before \p PrefixEnd, which the pad runs whatever the selector,
 /// into \p Prefix and the rest into \p Rest.  The `_Unwind_Resume` that
@@ -1132,7 +1161,10 @@ const char *makeHandler(std::vector<HighStmt> &Body, bool CatchAll,
 const char *makeCleanup(std::vector<HighStmt> &Body,
                         const std::set<size_t> &SelectorWrites,
                         size_t PrefixEnd, std::vector<HighStmt> &Prefix,
-                        std::vector<HighStmt> &Rest) {
+                        std::vector<HighStmt> &Rest, ExceptionTrack Track = {},
+                        unsigned Depth = 0) {
+  if (Depth > ::neverd::limits::ir::kItaniumHandlersRewriteDepthLimit)
+    return "the cleanup branches too deeply";
   dropAt(Body, SelectorWrites, PrefixEnd);
   if (Body.empty())
     return "the cleanup run is empty";
@@ -1141,7 +1173,40 @@ const char *makeCleanup(std::vector<HighStmt> &Body,
   if ((!Resume || Resume->Operands.size() != 1) &&
       (!EndCleanup || !EndCleanup->Operands.empty()))
     return "the cleanup run does not end resuming the unwind";
-  ExceptionTrack Track;
+  // A conditional destructor can finish unwinding before the common tail.
+  // Prove each such branch against the exception state at its entry, remove
+  // its transport copies and spell its terminal resume as a rethrow. A
+  // branch that falls through keeps its original statements and state.
+  for (size_t I = 0; I + 1 < Body.size(); ++I) {
+    HighStmt &Stmt = Body[I];
+    if (Stmt.Kind != StmtKind::If && Stmt.Kind != StmtKind::IfElse)
+      continue;
+    for (auto *Branch : {&Stmt.Body, &Stmt.ElseBody}) {
+      if (Branch->empty() ||
+          (!runtimeCall(Branch->back(), "_Unwind_Resume") &&
+           !runtimeCall(Branch->back(), "__cxa_end_cleanup")))
+        continue;
+      ExceptionTrack Incoming = Track;
+      Incoming.scan(Body, I);
+      // Base-copy indices belong to the enclosing list, not this branch.
+      // Retain the exception values and spill facts; unfamiliar base-copy
+      // reloads in the branch deliberately remain unprojected.
+      Incoming.BaseCopies.clear();
+      std::vector<HighStmt> Unused, Projected;
+      const va_t ResumeAt = Branch->back().Addr;
+      if (const char *Why = makeCleanup(*Branch, {}, 0, Unused, Projected,
+                                        std::move(Incoming), Depth + 1))
+        return Why;
+      HighStmt Rethrow;
+      Rethrow.Kind = StmtKind::Call;
+      Rethrow.Addr = ResumeAt;
+      Rethrow.CallExpr = HighExpr::makeCall("__cxa_rethrow", 0, {});
+      Rethrow.CallExpr->Type = NdType::makeVoid();
+      Rethrow.CallExpr->DoesNotReturn = true;
+      Projected.push_back(std::move(Rethrow));
+      *Branch = std::move(Projected);
+    }
+  }
   const std::vector<bool> Copying = Track.scan(Body, Body.size() - 1);
   if (Resume && !Track.isException(Resume->Operands[0].get()))
     return "the cleanup resumes something other than the pad's exception";
@@ -1155,6 +1220,24 @@ const char *makeCleanup(std::vector<HighStmt> &Body,
   }
   if (Track.readBy(Prefix) || Track.readBy(Rest))
     return "the cleanup reads the unwinder's state";
+  // The final rethrow is implicit in Rest. A branch whose whole remaining
+  // continuation is already here can fall through to it exactly once.
+  for (size_t I = Rest.size(); I > 0; --I) {
+    HighStmt &Stmt = Rest[I - 1];
+    if (Stmt.Kind != StmtKind::If && Stmt.Kind != StmtKind::IfElse)
+      continue;
+    const size_t TailSize = Rest.size() - I;
+    for (auto *Arm : {&Stmt.Body, &Stmt.ElseBody}) {
+      if (Arm->size() <= TailSize || !runtimeCall(Arm->back(), "__cxa_rethrow"))
+        continue;
+      const size_t Cut = Arm->size() - TailSize - 1;
+      if (std::equal(Rest.begin() + I, Rest.end(), Arm->begin() + Cut,
+                     [](const HighStmt &A, const HighStmt &B) {
+                       return sameCleanupStatement(A, B);
+                     }))
+        Arm->resize(Cut);
+    }
+  }
   return nullptr;
 }
 

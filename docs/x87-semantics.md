@@ -68,6 +68,16 @@ can select the x64 representation explicitly. It does not prove incoming state
 or a floating import/return ABI. Calls and independent CFG roots need their
 existing export/refresh and stack contracts; backedges retain their context.
 MMX addresses physical aliases; EMMS empties tags without initializing payloads.
+Owned x64 FEMMS also empties tags, but invalidates every retained MMX/x87
+payload. The concrete model retains CW/SW, TOP and saved environment, rejects
+pending exceptions before changing tags, and requires subsequent writes to
+establish each physical payload again. A raw snapshot or MMX read cannot
+resurrect the previous bits. The explicit portable x87 profile and unowned
+stack paths still refuse this instruction. Native output executes FEMMS;
+FXRSTOR and context steps declare both MMX and x87 register clobbers because
+LLVM represents the physical aliases as separate registers. See AMD's
+[3DNow! Technology Manual, FEMMS](https://www.amd.com/content/dam/amd/en/documents/archived-tech-docs/programmer-references/21928.pdf)
+for the undefined-payload distinction.
 
 Typed i386 and x64 lifting includes FDECSTP and FFREEP alongside FINCSTP and
 FFREE. `X87Stack.h` owns the distinction between rotation and pop: a rotation

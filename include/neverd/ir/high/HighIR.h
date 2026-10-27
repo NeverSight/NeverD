@@ -20,6 +20,7 @@
 #include "neverd/ir/SourceFrameBytes.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/ir/low/LowIR.h"
+#include "neverd/ir/med/AArch64/AArch64ReturnProtection.h"
 #include "neverd/ir/med/MedIR.h"
 
 #include "llvm/ADT/SmallPtrSet.h"
@@ -583,6 +584,9 @@ struct HighLocal {
 };
 
 struct HighFunc {
+  /// Proven entry-SP PAC/AUT return policy, projected by MedToHigh without
+  /// changing machine IR. C emits a branch-protection target attribute.
+  std::optional<AArch64ReturnProtection> ReturnProtection;
   /// Same original-machine byte observations carried by MedFunc.
   std::vector<SourceFrameBytes> FrameBytes;
   va_t Entry = 0;

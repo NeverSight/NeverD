@@ -18,6 +18,7 @@
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include <optional>
 #include <tuple>
 
 namespace neverd::emulation {
@@ -1190,6 +1191,39 @@ TEST_P(AndroidJNI, ServiceManagerCacheAliasesSurviveCallsAndDetach) {
   ASSERT_EQ(snapshot.binder_proxies.size(), 1u);
   EXPECT_EQ(snapshot.binder_proxies[0].warn_on_blocking, false);
   EXPECT_FALSE(snapshot.manager);
+}
+TEST_P(AndroidJNI,
+       ServiceManagerCacheHitsKeepUnknownBinderStateAndFollowMapMutations) {
+  Options.LinuxTime.emplace().Clocks = {{7, {50, 0}}};
+  Options.Android->ObserveJavaState = true;
+  auto &input =
+      Options.Android->Application.emplace().service_manager.emplace();
+  input.binder_proxies = {{7, std::nullopt}};
+  input.cache = std::vector<
+      mobile::dalvik::AndroidApplicationSnapshot::ServiceManager::CacheEntry>{
+      {"alpha", 7}};
+  for (unsigned remove : {0u, 1u}) {
+    Options.Android->Arguments = {remove};
+    auto result = run("jni_service_manager_lookup");
+    if (remove) {
+      EXPECT_EQ(result.Stop, ProcessStopReason::UnsupportedService);
+      EXPECT_EQ(result.Diagnostic,
+                "Android ServiceManager proxy state is not supplied");
+    } else {
+      EXPECT_EQ(result.Stop, ProcessStopReason::Returned) << result.Diagnostic;
+      EXPECT_EQ(result.ReturnValue, 0u);
+    }
+    ASSERT_TRUE(result.JavaState);
+    EXPECT_EQ(result.JavaState->terminal, bool(remove));
+    ASSERT_TRUE(result.JavaState->framework.service_manager);
+    const auto &state = *result.JavaState->framework.service_manager;
+    EXPECT_TRUE(state.initialized);
+    EXPECT_TRUE(state.cache_known);
+    EXPECT_EQ(state.entries.size(), remove ? 0u : 1u);
+    EXPECT_FALSE(state.manager);
+    ASSERT_EQ(state.binder_proxies.size(), 1u);
+    EXPECT_FALSE(state.binder_proxies[0].warn_on_blocking.has_value());
+  }
 }
 TEST_P(AndroidJNI, ServiceManagerMissingStateAndTransactionsStayExplicit) {
   Options.LinuxTime.emplace().Clocks = {{7, {50, 0}}};

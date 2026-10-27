@@ -611,3 +611,10 @@ Android NDK 26.2.11394342, ARM64 `libc.a(strerror.o)`, `__sys_error_strings`.
 It was converted into a macro catalog on 2026-10-22. The complete original
 [sysroot notices](LICENSES/android-bionic/NOTICE) are retained.
 The guest memory layout and model implementation are authored for NeverD.
+
+## 3DNow verification guest bootstrap
+
+The owned-context QEMU guest adapts three NeverC bootstrap/linker fixture files
+at `880d1e96ff48f41c5069c6d8f9839eaa8f37d64a` (Copyright (C) 2026 NeverC
+contributors, AGPL-3.0-only). [Source and modifications](unittests/fixtures/x86/3dnow-context/README.md)
+are retained beside the fixtures. They are test inputs, not a runtime dependency.

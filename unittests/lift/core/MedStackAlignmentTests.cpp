@@ -104,6 +104,86 @@ TEST(MedStackAlignment, BoundedDynamicOffsetsAreNotExactOffsets) {
     }
 }
 
+TEST(MedStackAlignment, LinearChainsKeepTheirOffsetPastTheDepthLimit) {
+  // A long run of pushes and pops is one chain of displacements, not nested
+  // proofs, so its offset is proved however long the run is.
+  for (Arch Architecture : {Arch::X64, Arch::AArch64, Arch::X86, Arch::ARM})
+    for (BinaryFormat Format :
+         {BinaryFormat::COFF, BinaryFormat::ELF, BinaryFormat::MachO}) {
+      SCOPED_TRACE(static_cast<int>(Architecture));
+      const unsigned Width = getTargetRegInfo(Architecture).PointerSize;
+      auto Func = frameWithEntrySP(Architecture);
+      auto &Ops = Func.Blocks.front().Ops;
+      const unsigned Pushes =
+          3 * unsigned(limits::ir::kMedStackAlignmentResolveDepthLimit);
+      MedVar Previous = reg(0, Architecture);
+      MedVar Deepest;
+      for (unsigned I = 0; I != 2 * Pushes; ++I) {
+        const MedVar Next = temp(100 + I, Architecture);
+        if (I == Pushes) {
+          Ops.push_back(op(NdOp::COPY, Next, Previous));
+          Deepest = Next;
+        } else
+          Ops.push_back(op(I < Pushes ? NdOp::INT_SUB : NdOp::INT_ADD, Next,
+                           Previous, MedVar::makeConst(8, Width)));
+        Previous = Next;
+      }
+      const int64_t Bottom = -8 * int64_t(Pushes);
+      EXPECT_EQ(entryStackOffset(Func, Deepest, Architecture, Format), Bottom);
+      // Pushes-1 pops follow the copy.
+      EXPECT_EQ(entryStackOffset(Func, Previous, Architecture, Format), -8);
+      EXPECT_EQ(
+          entryStackOffsets(Func, {Previous, Deepest}, Architecture, Format),
+          (std::vector<std::optional<int64_t>>{-8, Bottom}));
+    }
+}
+
+TEST(MedStackAlignment, UpperBoundsHoldBelowLoopedDynamicAllocations) {
+  // A loop that allocates an unsigned amount on each turn lowers the stack
+  // pointer without a lower bound; it still never rises above the frame.
+  for (Arch Architecture : {Arch::X64, Arch::AArch64})
+    for (BinaryFormat Format :
+         {BinaryFormat::COFF, BinaryFormat::ELF, BinaryFormat::MachO})
+      for (bool Raises : {false, true}) {
+        SCOPED_TRACE(static_cast<int>(Architecture));
+        SCOPED_TRACE(Raises);
+        auto Func = frameWithEntrySP(Architecture);
+        const MedVar Frame = temp(1, Architecture);
+        const MedVar Head = temp(2, Architecture);
+        const MedVar Lowered = temp(3, Architecture);
+        const MedVar Amount = temp(4, Architecture);
+        Func.Blocks[0].Ops.push_back(op(NdOp::INT_SUB, Frame,
+                                        reg(0, Architecture),
+                                        MedVar::makeConst(64, 8)));
+        MedBlock Loop;
+        Loop.Id = 1;
+        Loop.StartAddr = 0x1010;
+        PhiNode Join;
+        Join.Output = Head;
+        Join.Args = {{0, Frame}, {1, Lowered}};
+        Loop.Phis.push_back(Join);
+        Loop.Ops.push_back(op(NdOp::INT_ZEXT, Amount,
+                              MedVar::makeUnspecified(4, Architecture)));
+        // A raise on every turn has no bound at all.
+        Loop.Ops.push_back(
+            Raises ? op(NdOp::INT_ADD, Lowered, Head, MedVar::makeConst(8, 8))
+                   : op(NdOp::INT_SUB, Lowered, Head, Amount));
+        Func.Blocks.push_back(std::move(Loop));
+        EXPECT_FALSE(entryStackOffset(Func, Lowered, Architecture, Format));
+        const auto Bounds = entryStackOffsetUpperBounds(
+            Func, {Head, Lowered, Frame}, Architecture, Format);
+        ASSERT_EQ(Bounds.size(), 3u);
+        if (Raises) {
+          EXPECT_FALSE(Bounds[0]);
+          EXPECT_FALSE(Bounds[1]);
+        } else {
+          EXPECT_EQ(Bounds[0], -64);
+          EXPECT_EQ(Bounds[1], -64);
+        }
+        EXPECT_EQ(Bounds[2], -64);
+      }
+}
+
 TEST(MedStackAlignment, AGuardedCounterBoundsRepeatedStackAllocations) {
   for (Arch Architecture : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64}) {
     const auto Width = getTargetRegInfo(Architecture).PointerSize;
@@ -1142,12 +1222,16 @@ TEST(MedStackAlignment, BatchedQueriesRestoreStateAfterCyclesAndDepthRefusals) {
           op(NdOp::COPY, temp(13, Architecture), reg(0, Architecture)));
       Loop.Ops.push_back(
           op(NdOp::COPY, temp(13, Architecture), temp(2, Architecture)));
+      // Joins nest their proofs; copies and displacements do not.
       MedVar Deep = reg(0, Architecture);
       for (unsigned I = 0; I <= limits::ir::kMedStackAlignmentResolveDepthLimit;
            ++I) {
-        const MedVar Next = temp(100 + I, Architecture);
-        Loop.Ops.push_back(op(NdOp::COPY, Next, Deep));
-        Deep = Next;
+        PhiNode Next;
+        Next.Output = temp(100 + I, Architecture);
+        // The second way in is cheap: only depth, not work, refuses.
+        Next.Args = {{0, Deep}, {1, reg(0, Architecture)}};
+        Loop.Phis.push_back(Next);
+        Deep = Next.Output;
       }
       Func.Blocks.push_back(std::move(Loop));
       MedVar Narrow = temp(2, Architecture);
@@ -1285,11 +1369,14 @@ TEST(MedStackAlignment, ReusedJoinKeepsTheDepthOfItsNestedInputs) {
       MedVar WithinLimit;
       for (unsigned I = 0; I < limits::ir::kMedStackAlignmentResolveDepthLimit;
            ++I) {
-        const MedVar Next = temp(200 + I, Architecture);
-        Block.Ops.push_back(op(NdOp::COPY, Next, Previous));
-        Previous = Next;
+        PhiNode Next;
+        Next.Output = temp(200 + I, Architecture);
+        // The second way in is cheap: only depth, not work, refuses.
+        Next.Args = {{0, Previous}, {1, reg(0, Architecture)}};
+        Block.Phis.push_back(Next);
+        Previous = Next.Output;
         if (I + 2 == limits::ir::kMedStackAlignmentResolveDepthLimit)
-          WithinLimit = Next;
+          WithinLimit = Next.Output;
       }
       Func.Blocks.push_back(std::move(Block));
       // The shallow query can be reused at the last valid depth, but its
@@ -1362,6 +1449,10 @@ TEST(MedStackAlignment, SharedJoinsKeepThePerQueryWorkLimit) {
           EXPECT_EQ(entryStackOffset(Func, Values[I], Architecture, Format),
                     Expected[I]);
       }
+      // An upper bound visits each shared join once, so the values the exact
+      // proof leaves to its work limit still have one.
+      EXPECT_EQ(entryStackOffsetUpperBounds(Func, Values, Architecture, Format),
+                std::vector<std::optional<int64_t>>(Values.size(), 0));
     }
   }
 }

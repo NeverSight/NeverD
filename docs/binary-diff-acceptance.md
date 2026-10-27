@@ -11,7 +11,7 @@ were understood.
 
 | Requirement | Implemented evidence | Remaining acceptance work |
 | --- | --- | --- |
-| Reproducible same-ISA native comparison | Shared `lib/diff`, input/analysis identities, strict saved binding, x86/x64 and AArch64 readers, ambiguous candidate inventories, original instruction deltas | Broader linked-application, real-world stripped and duplicate-heavy corpora; measured error rates |
+| Reproducible same-ISA native comparison | Shared `lib/diff`, input/analysis identities, strict saved binding, x86/x64 and AArch64 readers, ambiguous candidate inventories, exact weighted large-block alignment, caller-selected candidate measurement and conservative call-position anchors without a size cutoff | Broader linked-application, real-world stripped and duplicate-heavy corpora; measured error rates |
 | CLI and GUI workflow | C ABI and Qt-free worker; bounded pages, CFG/source inspection, edits and undo/redo, save/reopen, input/restore/query cancellation, NDDB project inputs | Continue scenario-based usability and large-input latency qualification; support advanced areas below through the same surfaces |
 | A: transformations and regional matching | Native instruction-run and finite SSA region hypotheses; split/merge/clone/inline/outline/tail evidence; qualified loop progress profiles through v7 | Broad CFG/dataflow transformations and cross-module movement; independent compiler, LTO, PGO and obfuscation qualification; explicit qualified cross-ISA profiles |
 | B: security-fix triage and review | Local change observations, native call-path context, bounded import-effect context, input-bound analyst cases/history and references | Ranked security-fix datasets, interprocedural parameter/return/alias effects, path feasibility, automated patch/backport/revert evidence and reviewer report qualification |
@@ -39,6 +39,49 @@ separate. These diagnostic runs do not close F's real-corpus, fairness,
 performance or statistical acceptance requirements.
 
 ## Verification record boundaries
+
+Manual correspondence edits retain valid two-sided ambiguity groups throughout
+save, reopen and undo/redo. Core regressions cover unequal candidate counts,
+cross-group edits and exact group restoration; native SDK and worker fixtures
+verify remaining-function classification, inventory invalidation and file
+reopen after the last candidate is consumed. These qualify editing and
+persistence, independently of matching accuracy or broader corpus coverage.
+
+Matcher version 4 preserves exact similarity ties at zero ambiguity margin and
+checks repeated call-position proposals before accepting pairs. It retains
+unresolved calls as positional uncertainty and uses only anchors shared by all
+optimal alignments of known corresponding callees. The former 1,024-call cutoff
+is removed; 1,200- and 70,000-call fixtures retain contextual correspondence.
+Independent exhaustive and full-table oracles check mandatory anchors, including
+repetition and unequal sequence sizes. Six core behavioral fixtures and two
+native SDK checks fail against the preceding implementation and pass after the
+repair; the original failure receipts remain retained. This does not qualify
+arbitrary call reordering or establish semantic equivalence.
+
+Matcher version 3 removes two reproduced quality ceilings. A long-block
+insertion no longer triggers greedy instruction alignment; completed alignments
+use the same weighted objective at every size. A separate fixture shows that
+raising `max_candidates` now reaches a correct pair below four misleading sketch
+candidates, with the remaining decoys still ambiguous. Core regressions compare
+large repeated/unequal alignments against an independent edit-cost oracle and
+cover sparse insertions, 100,000-instruction constant edits, stops and stale
+saved measurements. A native x86 SDK fixture checks the original bytes through
+full/paged inspection and save/reopen. These qualify the stated structural
+behaviors, not transformation completeness, semantic equivalence or competitive
+superiority. General weighted alignment remains quadratic in time in the worst
+case; cancellation and deadlines remain available.
+
+Final matcher-v4 matching/alignment/feature objects linked against frozen
+`fd59ee8336` remaining components passed 339 C++ cases without skips, seven
+CLI/worker groups and 120 Python checks. Three selected Qt comparison workflows
+passed in a disposable native Wayland desktop, including candidate selection,
+editing and cancelled-restore retry. The compiler group includes 527 fixture
+comparisons; these are not additional CTest cases. All 23 owned native mapping
+pairs remain correct.
+Separately, 89 historical reports reopen byte-exactly offline and 38 older
+extraction-profile reports retain their intentional live-binding refusal.
+These receipts qualify the named objects and frozen profile; subsequent upstream
+native pipeline changes need their own runtime coverage.
 
 The SBF Rust warning failure described below has a focused repair: the monolithic
 and structured generators borrow their private register bank as partitioned

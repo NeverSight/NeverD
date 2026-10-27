@@ -126,7 +126,9 @@ public:
   /// Whether \p I ends a function's straight-line decode (ret/jmp/ud2/...).
   static bool isFunctionTerminator(const cs_insn *I);
 
-  /// Whether \p I returns to a caller: `ret`, `retf` or `iret`.
+  /// Whether \p I returns to its caller: the near `ret`. Far, interrupt and
+  /// syscall returns are terminal state transfers (see liftControl), not
+  /// returns to the caller of the lifted function.
   static bool isReturn(const cs_insn *I);
 
   /// Whether \p I is a trap that execution can continue past.

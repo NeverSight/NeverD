@@ -11,6 +11,7 @@
 #ifndef NEVERD_IR_X86_X87CONTEXT_H
 #define NEVERD_IR_X86_X87CONTEXT_H
 
+#include "neverd/ir/X86/X86ThreeDNow.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/ir/low/LowIR.h"
 
@@ -71,12 +72,28 @@ struct X87ContextInstruction {
   bool ReadsMemory = false, WritesMemory = false;
   bool ReadsFlags = false, WritesFlags = false, WritesAX = false;
   bool Waiting = true;
+  bool EmptiesTags = false, InvalidatesPayloads = false;
+  bool ThreeDNow = false;
 };
 
 // Memory instructions use the opcode's group, never the original ModRM's
 // address bits. Effective-address calculation remains with the x86 lifter.
 inline std::optional<X87ContextInstruction>
 x87ContextInstruction(uint32_t Selector) {
+  if (Selector & X87ContextThreeDNow) {
+    const unsigned ModRM = (Selector >> 8) & 0xff;
+    const bool Memory = Selector & X87ContextMemory;
+    if ((Selector & ~UINT32_C(0x1ff9ffff)) || (Selector & 0xff) != 0x0f ||
+        !x86ThreeDNowInstruction(x87ContextThreeDNowOpcode(Selector)) ||
+        (Memory ? (ModRM & ~0x38U) != 0 : ModRM < 0xc0) ||
+        (!Memory && (Selector & X87ContextStackReference)))
+      return std::nullopt;
+    X87ContextInstruction Result;
+    Result.ThreeDNow = true;
+    Result.MemoryBytes = Memory ? 8 : 0;
+    Result.ReadsMemory = Memory;
+    return Result;
+  }
   if (Selector & ~UINT32_C(0x7ffffff))
     return std::nullopt;
   const unsigned Escape = Selector & 0xff, ModRM = (Selector >> 8) & 0xff;
@@ -127,7 +144,9 @@ x87ContextInstruction(uint32_t Selector) {
     bool Valid = false;
     switch (Escape) {
     case 0x0f:
-      Valid = Selector == 0x770f;
+      Valid = Selector == 0x770f || Selector == 0x0e0f;
+      Result.EmptiesTags = Valid;
+      Result.InvalidatesPayloads = Selector == 0x0e0f;
       break;
     case 0x9b:
       Valid = ModRM == 0 && Selector == 0x9b;
@@ -237,7 +256,8 @@ inline bool x87ContextLowShapeIsValid(const LowOp &Op, Arch A) {
       Op.Inputs[5].Size != 8)
     return false;
   const auto Spec = x87ContextInstruction(Op.Inputs[2].Offset);
-  if (!Spec)
+  if (!Spec || ((Op.Inputs[2].Offset & X87ContextStackReference) &&
+                Op.MemoryAddressSpace != NdMemoryAddressSpace::Default))
     return false;
   if (!(Op.Inputs[2].Offset & X87ContextMemory) &&
       (!Op.Inputs[3].isConst() || Op.Inputs[3].Offset ||

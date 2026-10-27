@@ -68,6 +68,58 @@ def ambiguity_pages(client, root):
         assert client.call("comparison_functions", {**query, "ambiguous_with": source})["status"] == "error"
 
 
+def exhausted_ambiguities(client, root):
+    """Every saved editing state must reopen, including the last candidate."""
+    body = bytes.fromhex("b80700000083c003c3") + b"\xcc" * 7
+    for counts in ((3, 4), (4, 3), (4, 4)):
+        inputs = []
+        for side, base, count in zip(("primary", "secondary"), (0x1000, 0x8000), counts):
+            path = root / f"resolve-{counts[0]}-{counts[1]}-{side}.bin"
+            path.write_bytes(body * count)
+            inputs.append({"path": str(path), "load_options": {
+                "loader": "binary", "processor": "x86_64", "platform": "sysv", "base": hex(base)}})
+        start = {"primary": inputs[0], "secondary": inputs[1], "options": {"use_names": False}}
+        ok(client, "comparison_start", start)
+        states = [ok(client, "comparison_export")]
+        assert len(states[0]["ambiguities"]) == 1, states[0]
+        group = states[0]["ambiguities"][0]
+        pairs = list(zip(group["primary"], group["secondary"]))
+        assert len(pairs) > 1, group
+        for index, (primary, secondary) in enumerate(pairs):
+            # Prime inventory caches before each mutation.
+            for side in ("primary", "secondary"):
+                ok(client, "comparison_functions", {"side": side, "kind": "ambiguous"})
+            summary = ok(client, "comparison_override", {
+                "kind": "match", "primary": primary, "secondary": secondary})
+            assert summary["counts"]["ambiguities"] == int(index + 1 < len(pairs)), summary
+            states.append(ok(client, "comparison_export"))
+        for side in ("primary", "secondary"):
+            remaining = len(group[side]) - len(pairs)
+            page = ok(client, "comparison_functions", {"side": side, "kind": "ambiguous"})
+            assert page["total"] == 0, page
+            page = ok(client, "comparison_functions", {"side": side, "kind": "unmatched"})
+            assert page["total"] == remaining, page
+        for expected in reversed(states[:-1]):
+            ok(client, "comparison_undo")
+            assert ok(client, "comparison_export") == expected
+        for expected in states[1:]:
+            ok(client, "comparison_redo")
+            assert ok(client, "comparison_export") == expected
+        saved = root / f"resolved-{counts[0]}-{counts[1]}.nddiff"
+        ok(client, "comparison_save", {"path": str(saved)})
+        assert json.loads(saved.read_text()) == states[-1]
+        ok(client, "comparison_start", {**start, "restore_path": str(saved)})
+        assert ok(client, "comparison_export") == states[-1]
+        # Reopen intermediate states as well, without consuming the undo
+        # history used above. Saved bytes retain the analyst's exact choices.
+        for expected in states[:-1]:
+            saved.write_text(json.dumps(expected))
+            restored = ok(client, "comparison_restore", {"path": str(saved)})
+            assert restored["restore_completed"], restored
+            assert ok(client, "comparison_export") == expected
+    print("Resolved ambiguities: unequal sides, last pair, undo/redo and file reopen passed")
+
+
 def cancellable_restore(client, root, start):
     """The restored result is transactional across read, bind and replacement."""
     original = ok(client, "comparison_start", start)
@@ -516,6 +568,7 @@ def main():
                         client.hello["comparison_cancellable_operations"])
             assert client.call("comparison_functions")["error"]["code"] == "comparison_not_loaded"
             ambiguity_pages(client, root)
+            exhausted_ambiguities(client, root)
             aarch64_profiles(client, args, root, fixture)
             optimized_ssa_profiles(client, args, root, fixture)
             parameter_views(client, args, root, fixture)

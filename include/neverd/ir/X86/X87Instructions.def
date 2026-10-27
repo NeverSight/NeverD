@@ -284,3 +284,5 @@ NEVERD_X87_FORM(WAIT, 0x9b, 0x00, 0x00, false, "WAIT", "implicit", true,
                 StateOnly, Wait)
 NEVERD_X87_FORM(EMMS, 0x0f, 0x77, 0x77, false, "EMMS", "MMX aliases", false,
                 StateOnly, None)
+NEVERD_X87_FORM(FEMMS, 0x0f, 0x0e, 0x0e, false, "FEMMS", "MMX aliases", false,
+                StateOnly, None)

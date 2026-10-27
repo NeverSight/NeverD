@@ -26,6 +26,9 @@
 #include "llvm/Support/FormatVariadic.h"
 #include "llvm/Support/JSON.h"
 
+#include <string>
+#include <string_view>
+
 namespace neverd::emulation {
 TEST(ProcessReport,
      CPUStateObservationIsStrictLosslessAndKeepsFailureSeparate) {
@@ -2900,6 +2903,35 @@ TEST(ProcessReport, AndroidServiceManagerPreservesUnknownNullAndProxyKeys) {
     auto parsed = processOptionsFromJSON(wrap(value));
     EXPECT_FALSE(bool(parsed)) << value;
     llvm::consumeError(parsed.takeError());
+  }
+}
+TEST(ProcessReport, AndroidServiceCacheDoesNotSupplyIndependentBinderState) {
+  for (const char *cache : {"[]", R"([{"name":"alpha","binder":null}])",
+                            R"([{"name":"alpha","binder":7}])"}) {
+    auto parsed = processOptionsFromJSON(
+        std::string(R"({"android":{"jni":true,"application_snapshot":{)"
+                    R"("phase":"unattached","service_manager":{)"
+                    R"("binder_proxies":[{"key":7}],"cache":)") +
+        cache + "}}}}");
+    ASSERT_TRUE(bool(parsed)) << llvm::toString(parsed.takeError());
+    ASSERT_TRUE(parsed->Android->Application->service_manager);
+    const auto &state = *parsed->Android->Application->service_manager;
+    ASSERT_TRUE(state.cache);
+    ASSERT_EQ(state.binder_proxies.size(), 1u);
+    EXPECT_EQ(state.binder_proxies[0].key, 7u);
+    EXPECT_FALSE(state.binder_proxies[0].warn_on_blocking.has_value());
+    EXPECT_FALSE(state.manager_proxy.has_value());
+    EXPECT_FALSE(state.context_object.has_value());
+    if (std::string_view(cache) == "[]") {
+      EXPECT_TRUE(state.cache->empty());
+    } else {
+      ASSERT_EQ(state.cache->size(), 1u);
+      EXPECT_EQ(state.cache->at(0).name, "alpha");
+      if (std::string_view(cache).find("null") != std::string_view::npos)
+        EXPECT_FALSE(state.cache->at(0).binder.has_value());
+      else
+        EXPECT_EQ(state.cache->at(0).binder, 7u);
+    }
   }
 }
 TEST(ProcessReport, JavaServiceManagerObservationUsesRetainedIdentities) {

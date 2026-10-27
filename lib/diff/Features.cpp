@@ -205,17 +205,20 @@ ProgramFeatures computeFeatures(const Program &P,
   for (const std::string &M : P.Mnemonics)
     R.MnemonicKeys.push_back(hashText(M));
 
-  // The call graph, from every instruction that names its callee.
+  // Keep unresolved calls as holes in positional evidence; they are not
+  // invented graph edges and must not collapse the surrounding call order.
   std::vector<std::pair<uint32_t, uint32_t>> Sites;
   for (uint32_t FI = 0; FI < N; ++FI)
     for (const Block &B : P.blocks(P.Functions[FI]))
       for (const Instruction &I : P.instructions(B)) {
         if (Control.stop())
           return R;
-        if (I.Callee != NoIndex)
+        if (I.Callee != NoIndex || I.Flow == InstructionFlow::Call)
           Sites.emplace_back(FI, I.Callee);
       }
   R.CallSites = buildAdjacency(N, Sites, false);
+  llvm::erase_if(Sites,
+                 [](const auto &Site) { return Site.second == NoIndex; });
   R.Callees = buildAdjacency(N, Sites, true);
   for (auto &[From, To] : Sites)
     std::swap(From, To);
@@ -325,6 +328,8 @@ ProgramFeatures computeFeatures(const Program &P,
 
       Keys.clear();
       for (uint32_t Callee : R.CallSites.of(Index)) {
+        if (Callee == NoIndex)
+          continue;
         const Function &Target = P.Functions[R.Resolved[Callee]];
         if (Target.has(TraitImport))
           Keys.push_back(hashText(llvm::StringRef(Target.Name).lower()));

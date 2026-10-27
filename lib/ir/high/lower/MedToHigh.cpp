@@ -1416,6 +1416,13 @@ HighFunc MedToHighConverter::convertOnce(const MedFunc &Med, Arch TheArch) {
                          ? sourceABIParameters(*Med.SourceTypeHint)
                          : std::vector<SourceABIParameter>{};
   HighFunc Func;
+  ReturnProtectionOps.clear();
+  if (TheArch == Arch::AArch64)
+    if (auto Projection = findAArch64ReturnProtection(
+            Med, Image ? Image->abiFormat() : BinaryFormat::Unknown)) {
+      Func.ReturnProtection = Projection->Protection;
+      ReturnProtectionOps = std::move(Projection->Operations);
+    }
   Func.Entry = Med.Entry;
   Func.FrameBytes = Med.FrameBytes;
   Func.FrameSize = Med.FrameSize;

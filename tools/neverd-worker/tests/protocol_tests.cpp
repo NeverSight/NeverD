@@ -84,8 +84,48 @@ void backendJson() {
             retained.front().at("text") == "unchanged inventory row",
         "Backend values borrowed parser or input storage");
 }
+void sidecarLayout() {
+  // The original generic pretty serializer is independent of the compact
+  // formatter. Controls with LLVM-specific spelling have literal oracles
+  // below; every other byte, scalar and nested layout must match dump(2).
+  const auto compare = [](const Json &value) {
+    const auto expected = value.dump(2) + '\n';
+    check(sidecarText(value) == expected &&
+              formatSidecarText(value.dump()) == expected,
+          "Sidecar layout differs from the original JSON serializer");
+  };
+  for (const Json &value :
+       {Json(nullptr), Json(true), Json(false), Json::array(), Json::object(),
+        Json(std::numeric_limits<std::uint64_t>::max()),
+        Json(std::numeric_limits<std::int64_t>::min()), Json(-0.0), Json(0.0),
+        Json(std::numeric_limits<double>::max()),
+        Json(std::numeric_limits<double>::min()),
+        Json(std::numeric_limits<double>::denorm_min())})
+    compare(value);
+  for (unsigned c = 0; c < 128; ++c) {
+    if (c == '\b' || c == '\f')
+      continue;
+    const auto value = std::string("\\\"{}[],: 中文") + char(c) + "\\";
+    compare(value);
+    compare(Json{{value, Json::array({value, Json::array(), Json::object(),
+                                      Json{{"number", -0.0}}})}});
+  }
+  Json nested = Json::array({"\\\"", "\\\\\"", "[,]{}:", "中文🙂"});
+  for (unsigned i = 0; i < 24; ++i) {
+    compare(nested);
+    nested = i % 2
+                 ? Json{{"child", std::move(nested)}, {"empty", Json::array()}}
+                 : Json::array({std::move(nested), nullptr, i, true});
+  }
+  compare(Json{{"large", std::string(32768, 'a')}});
+  const Json invalid = std::string("invalid") + char(0xff) + "\"\\";
+  check(sidecarText(invalid) ==
+            invalid.dump(2, ' ', false, Json::error_handler_t::replace) + '\n',
+        "Sidecar replacement handling changed");
+}
 int main() {
   backendJson();
+  sidecarLayout();
   const Json escapedSidecar = Json::array(
       {"plain", "\\b", "\\f", "\\", "\\\b", "\\\f", "\"", "\b", "\f", "中文"});
   check(sidecarText(escapedSidecar) == R"([
@@ -102,8 +142,13 @@ int main() {
 ]
 )",
         "Sidecar escapes differ from LLVM JSON spelling");
+  check(formatSidecarText(escapedSidecar.dump()) == sidecarText(escapedSidecar),
+        "Preencoded sidecars changed LLVM control escapes");
   check(sidecarText(Json{{"\b", "\f"}}) == "{\n  \"\\u0008\": \"\\u000c\"\n}\n",
         "Sidecar object keys lost control escapes");
+  check(formatSidecarText(Json{{"\b", "\f"}}.dump()) ==
+            "{\n  \"\\u0008\": \"\\u000c\"\n}\n",
+        "Preencoded object keys lost control escapes");
   check(sidecarText(Json{{"addr", "0x123"}, {"size", 1}}) ==
             "{\n  \"addr\": \"0x123\",\n  \"size\": 1\n}\n",
         "Unescaped sidecar text changed");

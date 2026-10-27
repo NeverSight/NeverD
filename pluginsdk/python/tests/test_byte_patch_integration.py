@@ -137,6 +137,36 @@ class BytePatchIntegrationTests(unittest.TestCase):
         self.assertEqual(session.byte_patches, expected)
         self.assertEqual(raw.read_bytes(), original)
 
+    def test_large_patch_input_snapshot_survives_rewrite_and_truncation(self) -> None:
+        from neverd_plugin import Session
+
+        host = self._snapshot_host()
+        raw = self.root / "snapshot.raw"
+        original = b"\xcc" * 65536
+        raw.write_bytes(original)
+        pointer = host.call("neverd_session_create")
+        self.assertTrue(pointer)
+        self.addCleanup(host.call, "neverd_session_destroy", pointer)
+        self.assertEqual(host.call("neverd_session_set_load_options", pointer,
+            b'{"loader":"binary","processor":"x86_64","platform":"sysv","base":4096}'), 0)
+        self.assertEqual(host.call("neverd_session_load", pointer, os.fsencode(raw)), 1)
+        session = Session(pointer, _host=host,
+                          _native=SimpleNamespace(session_address=lambda handle: handle))
+        session.apply_byte_patch(4096, kind="bytes", data=b"\x90")
+        expected = b"\x90" + original[1:]
+        changed = original[:-1] + b"\x42"
+        raw.write_bytes(changed)
+        output = self.root / "rewritten-export.raw"
+        session.export_byte_patches(output)
+        self.assertEqual(output.read_bytes(), expected)
+        self.assertEqual(raw.read_bytes(), changed)
+        # A mapped snapshot could fault on pages beyond this new EOF.
+        raw.write_bytes(b"\xcc")
+        output = self.root / "truncated-export.raw"
+        session.export_byte_patches(output)
+        self.assertEqual(output.read_bytes(), expected)
+        self.assertEqual(raw.read_bytes(), b"\xcc")
+
     def test_source_preview_retains_explicit_raw_load_options(self) -> None:
         library = os.environ.get("NEVERD_TEST_LIBNEVERD")
         if not library:

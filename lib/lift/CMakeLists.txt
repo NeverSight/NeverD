@@ -142,6 +142,7 @@ add_neverd_component_library(NeverDLift
   X86/X86LiftVirtualization.cpp
   X86/X86LiftSystemState.cpp
   X86/X86LiftTBM.cpp
+  X86/X86LiftThreeDNow.cpp
   X86/X86LiftBEXTR.cpp
   X86/X86LiftBitCount.cpp
   X86/X86LiftBMI2.cpp

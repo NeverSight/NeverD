@@ -171,6 +171,10 @@ void Pipeline::dumpHighIR(const std::vector<HighFunc> &Funcs,
   OS << "\n=== HighIR Dump ===\n";
   for (auto &HF : Funcs) {
     OS << "func " << HF.Name << " @ 0x" << llvm::utohexstr(HF.Entry) << "\n";
+    if (HF.ReturnProtection)
+      OS << "  return-protection PAC key="
+         << (HF.ReturnProtection->BKey ? "IB" : "IA") << " modifier=entry-SP "
+         << (HF.ReturnProtection->Leaf ? "leaf" : "non-leaf") << "\n";
     dumpExceptionSummary(HF.ExceptionMetadata, OS, "  ");
     for (const auto &Stmt : HF.Body)
       printHighStatementRows(

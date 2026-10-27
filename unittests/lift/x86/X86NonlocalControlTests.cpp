@@ -93,17 +93,37 @@ TEST(X86NonlocalControl, RawTransitionsCannotBecomeReturnsOrSyscalls) {
         Decoder D;
         ASSERT_TRUE(D.init(Target));
         D.setStrict(Strict);
-        std::vector<std::vector<uint8_t>> Encodings{
-            {0x0f, 0x34},
+        const auto Decode = [&](const std::vector<uint8_t> &Bytes,
+                                DecodedInsn &Instruction) {
+          return Fast ? D.decodeOneForLift(Bytes.data(), Bytes.size(), kEntry,
+                                           Instruction)
+                      : D.decodeOne(Bytes.data(), Bytes.size(), kEntry,
+                                    Instruction);
+        };
+        // SYSENTER and RSM take their target from an MSR or SMRAM, and the
+        // 16-bit XBEGIN truncates its fallback: nothing names the
+        // continuation, so nothing is published.
+        for (const auto &Bytes : std::vector<std::vector<uint8_t>>{
+                 {0x0f, 0x34}, {0x0f, 0xaa}, {0x66, 0xc7, 0xf8, 0, 0}}) {
+          SCOPED_TRACE(testing::Message() << unsigned(Target) << Strict << Fast
+                                          << unsigned(Bytes[1]));
+          DecodedInsn Instruction{};
+          ASSERT_EQ(Decode(Bytes, Instruction), Bytes.size());
+          std::vector<LowOp> Ops;
+          EXPECT_THROW(D.liftToLow(Instruction, Ops), UnliftedInstruction);
+          EXPECT_TRUE(Ops.empty());
+        }
+        // Architectural returns end in a terminal state-transfer intrinsic
+        // and XBEGIN branches to its fallback; none is an ordinary return or
+        // syscall.
+        std::vector<std::vector<uint8_t>> Lifted{
             {0x0f, 0x35},
             {0x0f, 0x07},
-            {0x0f, 0xaa},
             {0xcf},
             {0xcb},
             {0xca, 8, 0},
             {0x66, 0xcf},
             {0xc7, 0xf8, 0, 0, 0, 0},
-            {0x66, 0xc7, 0xf8, 0, 0},
             {0xc7, 0xf8, 0xfa, 0xff, 0xff, 0xff}};
         if (Target == Arch::X64)
           for (const auto &Encoding :
@@ -111,19 +131,35 @@ TEST(X86NonlocalControl, RawTransitionsCannotBecomeReturnsOrSyscalls) {
                                                  {0x48, 0x0f, 0x07},
                                                  {0x48, 0xcf},
                                                  {0x48, 0xcb}})
-            Encodings.push_back(Encoding);
-        for (const auto &Bytes : Encodings) {
+            Lifted.push_back(Encoding);
+        for (const auto &Bytes : Lifted) {
           SCOPED_TRACE(testing::Message() << unsigned(Target) << Strict << Fast
-                                          << unsigned(Bytes.back()));
+                                          << testing::PrintToString(Bytes));
           DecodedInsn Instruction{};
-          ASSERT_EQ(Fast ? D.decodeOneForLift(Bytes.data(), Bytes.size(),
-                                              kEntry, Instruction)
-                         : D.decodeOne(Bytes.data(), Bytes.size(), kEntry,
-                                       Instruction),
-                    Bytes.size());
+          ASSERT_EQ(Decode(Bytes, Instruction), Bytes.size());
           std::vector<LowOp> Ops;
-          EXPECT_THROW(D.liftToLow(Instruction, Ops), UnliftedInstruction);
-          EXPECT_TRUE(Ops.empty());
+          ASSERT_NO_THROW(D.liftToLow(Instruction, Ops));
+          ASSERT_FALSE(Ops.empty());
+          for (const LowOp &Op : Ops) {
+            EXPECT_NE(Op.Opcode, NdOp::RETURN);
+            if (Op.Opcode == NdOp::INTRINSIC && Op.NumInputs)
+              EXPECT_NE(Op.Inputs[0].Offset,
+                        static_cast<uint64_t>(Intrinsic::X64Syscall));
+          }
+          if (Bytes[0] != 0xc7)
+            continue;
+          // Only an abort takes the fallback, which the rel32 operand names.
+          const auto Rel = static_cast<int32_t>(
+              uint32_t(Bytes[2]) | uint32_t(Bytes[3]) << 8 |
+              uint32_t(Bytes[4]) << 16 | uint32_t(Bytes[5]) << 24);
+          const va_t Fallback = kEntry + Bytes.size() + int64_t(Rel);
+          ASSERT_EQ(Ops.back().Opcode, NdOp::COND_BR);
+          ASSERT_TRUE(Ops.back().Inputs[0].isConst());
+          EXPECT_EQ(Ops.back().Inputs[0].Offset, Fallback);
+          EXPECT_EQ(Ops.front().Opcode, NdOp::INTRINSIC);
+          EXPECT_EQ(Ops.front().Inputs[0].Offset,
+                    static_cast<uint64_t>(Intrinsic::Xbegin));
+          EXPECT_EQ(Ops.front().Output.Size, 4);
         }
         const uint8_t Ret = 0xc3;
         DecodedInsn Instruction{};
@@ -136,8 +172,7 @@ TEST(X86NonlocalControl, RawTransitionsCannotBecomeReturnsOrSyscalls) {
 }
 
 TEST(X86NonlocalControl, LegacyIRRequiresTheMissingStateBoundary) {
-  for (Intrinsic Id : {Intrinsic::Rsm, Intrinsic::Sysexitq, Intrinsic::Sysretq,
-                       Intrinsic::Xbegin})
+  for (Intrinsic Id : {Intrinsic::Rsm})
     for (bool Result : {false, true}) {
       SCOPED_TRACE(testing::Message() << unsigned(Id) << Result);
       const auto Low = lowFunction(Id, Result);
@@ -156,8 +191,7 @@ TEST(X86NonlocalControl, LegacyIRRequiresTheMissingStateBoundary) {
 }
 
 TEST(X86NonlocalControl, LLVMAdmissionAlsoChecksMaskedFunctions) {
-  for (Intrinsic Id : {Intrinsic::Rsm, Intrinsic::Sysexitq, Intrinsic::Sysretq,
-                       Intrinsic::Xbegin})
+  for (Intrinsic Id : {Intrinsic::Rsm})
     for (bool Result : {false, true})
       for (bool Masked : {false, true}) {
         const auto Function = medFunction(Id, Result);
@@ -172,8 +206,7 @@ TEST(X86NonlocalControl, LLVMAdmissionAlsoChecksMaskedFunctions) {
 }
 
 TEST(X86NonlocalControl, CRenderingCannotPublishBareAssembly) {
-  for (Intrinsic Id : {Intrinsic::Rsm, Intrinsic::Sysexitq, Intrinsic::Sysretq,
-                       Intrinsic::Xbegin})
+  for (Intrinsic Id : {Intrinsic::Rsm})
     for (bool Gnu : {false, true}) {
       bool HasIntrinsics = false;
       EXPECT_THROW(renderX86IntrinsicCall(Id, {}, HasIntrinsics, Gnu),

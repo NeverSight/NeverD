@@ -1675,7 +1675,13 @@ private:
             A.drop_front(Target + 8).take_until([](char C) {
               return C == '"';
             });
-        line("#[target_feature(enable = \"" + Features.str() + "\")]");
+        // Clang's return-signing policy is not a Rust CPU feature. Keep the
+        // policy visible as source metadata, as the Go view does, instead of
+        // inventing a target_feature that Rust does not implement.
+        if (Features.contains("branch-protection="))
+          line("// " + A.str());
+        else
+          line("#[target_feature(enable = \"" + Features.str() + "\")]");
       }
     }
     if (D->Inline)

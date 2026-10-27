@@ -1535,10 +1535,13 @@ TEST(AArch64PAuthSemantics,
   EXPECT_TRUE(LLVMCEmitter().emit(*Module, LowOS, Options));
   auto High = MedToHighConverter().convert(Med, Arch::AArch64);
   EXPECT_TRUE(HighCEmitter().emit({High}, HighOS, Options));
-  for (const std::string *C : {&LowC, &HighC}) {
-    EXPECT_NE(C->find("__builtin_ptrauth_auth"), std::string::npos) << *C;
-    compileArm64eC(*C);
-  }
+  EXPECT_NE(LowC.find("__builtin_ptrauth_auth"), std::string::npos) << LowC;
+  EXPECT_NE(HighC.find("branch-protection=pac-ret+leaf+b-key"),
+            std::string::npos)
+      << HighC;
+  EXPECT_EQ(HighC.find("__builtin_ptrauth_auth"), std::string::npos) << HighC;
+  compileArm64eC(LowC);
+  compileArm64eC(HighC);
 }
 
 TEST(AArch64PAuthSemantics, ExceptionReturnsNeverLoseAuthentication) {
@@ -2028,10 +2031,14 @@ __attribute__((noinline)) word dispatch_after_call(word (*fn)(word), word x) {
         auto NonLeaf = CFGBuilder().build(*Image, Dec, AfterCall->Addr,
                                           "dispatch_after_call");
         unsigned TailCalls = 0, UnresolvedBranches = 0;
+        bool HasFailureTrap = false;
         for (const auto &Block : NonLeaf.Blocks)
           for (const auto &Op : Block.Ops) {
             TailCalls += Op.Opcode == NdOp::INDIR_CALL;
             UnresolvedBranches += Op.Opcode == NdOp::INDIR_BR;
+            HasFailureTrap |=
+                Op.Opcode == NdOp::INTRINSIC && Op.NumInputs &&
+                Op.Inputs[0].Offset == static_cast<uint64_t>(Intrinsic::Brk);
           }
         EXPECT_EQ(TailCalls, 1);
         EXPECT_EQ(UnresolvedBranches, 0);
@@ -2077,7 +2084,27 @@ __attribute__((noinline)) word dispatch_after_call(word (*fn)(word), word x) {
         const auto High =
             MedToHighConverter().convert(NonLeafMed, Arch::AArch64);
         ASSERT_TRUE(HighCEmitter().emit({High}, HighOS, Options));
-        EXPECT_NE(HighC.find("__builtin_return_address(0)"), std::string::npos);
+        // Clang's optimized tail call observes AUT's result in a failure-bit
+        // check. Keep that trap explicit. Its unoptimized normal-return
+        // recipe can instead carry the return-protection attribute.
+        if (HasFailureTrap) {
+          EXPECT_EQ(HighC.find("branch-protection="), std::string::npos)
+              << HighC;
+          EXPECT_NE(HighC.find("__builtin_return_address(0)"),
+                    std::string::npos)
+              << HighC;
+          EXPECT_NE(HighC.find("autib %0, %1"), std::string::npos) << HighC;
+          EXPECT_NE(HighC.find("__builtin_trap()"), std::string::npos) << HighC;
+        } else {
+          EXPECT_NE(HighC.find("branch-protection=pac-ret+b-key"),
+                    std::string::npos)
+              << HighC;
+          EXPECT_EQ(HighC.find("__builtin_return_address(0)"),
+                    std::string::npos)
+              << HighC;
+        }
+        // Authentication of the callback pointer is separate in both forms.
+        EXPECT_NE(HighC.find("__builtin_ptrauth_auth"), std::string::npos);
         EXPECT_EQ(HighC.find("unknown register"), std::string::npos);
         compileArm64eC(LowC);
         compileArm64eC(HighC);

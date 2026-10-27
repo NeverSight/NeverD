@@ -528,6 +528,81 @@ void commandEncodingAndBranches() {
   check(store.next(false).at("after") == "replacement redo branch",
         "Returned command was a mutable alias");
 }
+void stateEncodingAndSidecars() {
+  Fixture fixture;
+  auto store = fixture.open();
+  auto state = store.committedState();
+  state["annotations"] = Json::array({annotation("quoted\"\\\n中文")});
+  state["annotations"][0]["extra"] = {
+      {"array",
+       Json::array({nullptr, true, -0.0, Json::object(), Json::array()})},
+      {"quoted\"key", "\\\\\"{}[,]"}};
+  state["types"] = Json::array({{{"addr", "0x0"},
+                                 {"language", "c"},
+                                 {"source", "typedef int Item;"},
+                                 {"extra", {{"empty", Json::array()}}}}});
+  const auto verify = [&] {
+    store.persist(state);
+    Json expected{{"commands", Json::array()},
+                  {"cursor", 0},
+                  {"engine_version", "fixture"},
+                  {"schema_version", 1},
+                  {"source_sha256", std::string(64, '0')},
+                  {"state", state}};
+    check(text(fixture.path(files::File::History)) == expected.dump(),
+          "Per-table serialization changed compact state bytes");
+    check(text(fixture.path(files::File::Annotations)) ==
+              state["annotations"].dump(2) + '\n',
+          "Encoded table span changed annotation file bytes");
+    auto types = state["types"];
+    for (auto &row : types)
+      row.erase("addr");
+    check(text(fixture.path(files::File::Types)) == types.dump(2) + '\n',
+          "Ordered table encoding retained synthetic addresses");
+  };
+  verify();
+  store = fixture.open();
+  state["annotations"][0]["text"] = "second";
+  verify();
+  // Unknown state fields remain in history, including escaped member names;
+  // they do not become sidecar paths or change another table's byte span.
+  state["unknown\"key"] = {{"value", "nested\n[]"}, {"float", -0.0}};
+  verify();
+}
+void changedAddressSequence() {
+  Fixture fixture;
+  auto store = fixture.open();
+  auto state = store.committedState();
+  state["annotations"] = Json::array({{{"addr", "0xa"}, {"text", "first"}},
+                                      {{"addr", "0x20"}, {"text", "second"}}});
+  state["types"] = Json::array(
+      {{{"addr", "0x0"}, {"language", "c"}, {"source", "typedef int Item;"}}});
+  store.persist(state);
+  fixture.writer.clear();
+  auto duplicate = state;
+  duplicate["annotations"][1]["addr"] = "0xA";
+  rejects([&] { store.persist(duplicate); }, "history_invalid");
+  auto gap = state;
+  gap["types"][0]["addr"] = "0x1";
+  rejects([&] { store.persist(gap); }, "history_invalid");
+  check(fixture.writer.calls.empty() && store.committedState() == state,
+        "Changed address sequence bypassed pre-publication validation");
+  state["annotations"][0]["addr"] = "0xA";
+  state["annotations"][0]["text"] = "same position";
+  store.persist(state);
+  check(store.committedState()["annotations"][0]["addr"] == "0xa",
+        "Equivalent address spelling was not normalized");
+  state["annotations"][0]["addr"] = "0x30";
+  store.persist(state);
+  check(store.committedState()["annotations"][0]["addr"] == "0x20" &&
+            store.committedState()["annotations"][1]["text"] == "same position",
+        "Moved addresses retained stale order");
+  state["annotations"].push_back({{"addr", "0x20"}, {"text", "duplicate"}});
+  fixture.writer.clear();
+  rejects([&] { store.persist(state); }, "history_invalid");
+  check(fixture.writer.calls.empty(),
+        "Changed row count bypassed duplicate-address validation");
+}
 void commandBudgetCountsEncodedBytes() {
   Fixture fixture;
   auto store = fixture.open();
@@ -627,6 +702,8 @@ int main() {
     lossyValuesCannotPublishSnapshots();
     normalization();
     commandEncodingAndBranches();
+    stateEncodingAndSidecars();
+    changedAddressSequence();
     commandBudgetCountsEncodedBytes();
     budgetBeforePublication();
     journalBudgetBeforePublication();

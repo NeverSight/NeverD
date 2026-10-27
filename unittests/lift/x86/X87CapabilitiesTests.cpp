@@ -201,8 +201,8 @@ TEST(X87Capabilities, TypedNativeFormsDoNotQualifyConcreteOrPortableState) {
 }
 
 TEST(X87Capabilities, StateTransportCannotClaimNumericalQualification) {
-  for (uint32_t Selector :
-       {0xe3dbU, 0xe2dbU, 0x9bU, 0x770fU, 0xf6d9U, memory(0xd9, 0x30)}) {
+  for (uint32_t Selector : {0xe3dbU, 0xe2dbU, 0x9bU, 0x770fU, 0x0e0fU, 0xf6d9U,
+                            memory(0xd9, 0x30)}) {
     auto Result = queryX87Capability(query(Selector));
     EXPECT_TRUE(Result.Implemented);
     EXPECT_EQ(Result.Numerical, X87Support::Unknown);
@@ -210,8 +210,8 @@ TEST(X87Capabilities, StateTransportCannotClaimNumericalQualification) {
   }
 }
 
-TEST(X87Capabilities, FnopAndEmmsRequireOwnedStateForEveryConsumer) {
-  for (uint32_t Selector : {0xd0d9U, 0x770fU})
+TEST(X87Capabilities, FnopEmmsAndFemmsRequireOwnedStateForEveryConsumer) {
+  for (uint32_t Selector : {0xd0d9U, 0x770fU, 0x0e0fU})
     for (auto Mode : {X87SourceMode::I386, X87SourceMode::X64})
       for (auto Consumer :
            {X87Consumer::Lift, X87Consumer::Concrete, X87Consumer::LLVM,

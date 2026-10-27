@@ -445,13 +445,13 @@ global's `neverd.image` line names the symbol as the listing does
 double-clicking it goes to the function. A name an image spells with control
 characters, and that no scheme reads, is never copied into a comment.
 
-**Pseudocode** reads in the language the function was written in: a Rust
-function as Rust, a Go function as Go and any other as C. The choice is made
+**Pseudocode** reads in the language the function was written in: a C++
+function as C++, a Rust function as Rust, a Go function as Go and any other as C. The choice is made
 for each function, from its symbol, and for a function without one from the
 language the image was built in; the window says when it is not C
-(`Pseudocode-A (Rust)`). A program with Rust or Go code also offers **C** in
-the window's menu, to read every function as C; a C or C++ program's
-Pseudocode is C, so its menu offers no other language. The Rust and Go views
+(`Pseudocode-A (C++)` or `Pseudocode-A (Rust)`). A program with C++, Rust or Go
+code also offers **C** in the window's menu, to read every function as C; a
+C-only program does not need that duplicate choice. The Rust and Go views
 spell exactly what the C says. Each conversion C makes on its own is written out (`a as u32 + b as u32`,
 `uint32(a) + uint32(b)`), conditions compare with zero (`v != 0`,
 `!p.is_null()`, `p != nil`), memory is read and written through a pointer made
@@ -485,6 +485,13 @@ exporting includes the hidden code. Instruction and local-reference navigation
 and text search expand every fold hiding the target. Refreshing the same function
 preserves block folds while its brace structure is unchanged. Braces in comments
 and quoted strings do not define folding ranges; incomplete source stays expanded.
+
+New source windows also collapse the generated `frame_*` layout and complete
+exception metadata with no fallback regions. Their headers remain visible;
+the same arrows, keyboard controls, search and navigation reveal every hidden
+line. Exception warnings and fallback details stay expanded. Refresh preserves
+the user's expanded or collapsed choice. These folds only change presentation:
+copying and exporting still include the exact layout and exception records.
 
 Strings are found by default in ASCII, UTF-8, UTF-16LE and UTF-32LE (the
 `wchar_t` of Linux and macOS), and C strings that are not UTF-8 in the common
@@ -1276,7 +1283,8 @@ picks, as IDA's keys do: **Hexadecimal** (Q), **Decimal** (H), **Binary** (B),
 **Character** (R, `'ABCD'` when every byte is printable), **Offset** (O, the
 name of the address the number points at), **Change sign** (`_`, the two's
 complement with a minus) and **Bitwise negate** (`~`); **Number** (`#`) goes
-back to the listing's own choice. The number under the cursor changes; with
+back to the listing's own choice. Right-clicking an instruction offers the same
+forms under **Operand type**. The number under the cursor changes; with
 the cursor elsewhere on the line, the line's last number does, and a line
 without one is refused. Only x86 instructions show operand types so far. A form
 the value cannot take, such as characters for unprintable bytes or an offset to

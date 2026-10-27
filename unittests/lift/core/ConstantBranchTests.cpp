@@ -125,6 +125,36 @@ TEST(ConstantBranch, SymbolicScalarIdentitiesRecoverLocalEdges) {
     }
 }
 
+TEST(ConstantBranch, SymbolicProofIsWithdrawnAfterNewBlockEntries) {
+  for (auto Architecture : {Arch::X86, Arch::X64, Arch::AArch64}) {
+    SCOPED_TRACE(unsigned(Architecture));
+    auto Bytes = scalarIdentityBranch(Architecture);
+    // The initially recovered destination branches into the identity after
+    // its first definition. The new block no longer has that definition on
+    // every incoming edge, so its indirect transfer must be restored.
+    const va_t Interior = Architecture == Arch::AArch64 ? 0x1004
+                          : Architecture == Arch::X64   ? 0x1003
+                                                        : 0x1002;
+    if (Architecture == Arch::AArch64)
+      writeLE<uint32_t>(Bytes.data() + 0x80,
+                        0x14000000 | ((Interior - 0x1080) / 4 & 0x03ffffff));
+    else {
+      Bytes[0x80] = 0xe9;
+      writeLE<uint32_t>(Bytes.data() + 0x81, Interior - 0x1085);
+    }
+    const auto Function = build(std::move(Bytes), Architecture);
+    bool Indirect = false;
+    for (const auto &Block : Function.Blocks)
+      for (const auto &Op : Block.Ops) {
+        Indirect |=
+            Op.Opcode == NdOp::INDIR_BR || Op.Opcode == NdOp::INDIR_CALL;
+        EXPECT_FALSE(Op.Opcode == NdOp::BRANCH && Op.NumInputs == 1 &&
+                     Op.Inputs[0].isConst() && Op.Inputs[0].Offset == 0x1080);
+      }
+    EXPECT_TRUE(Indirect);
+  }
+}
+
 TEST(ConstantBranch, SimilarScalarExpressionsKeepTheirInputDependence) {
   for (auto Architecture : {Arch::X86, Arch::X64, Arch::AArch64}) {
     auto Bytes = scalarIdentityBranch(Architecture);

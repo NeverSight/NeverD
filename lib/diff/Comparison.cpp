@@ -14,6 +14,7 @@
 
 #include "neverd/diff/Comparison.h"
 
+#include "CallAlignment.h"
 #include "Features.h"
 #include "Matching.h"
 
@@ -464,50 +465,82 @@ FunctionDelta Matcher::delta(uint32_t A, uint32_t B) const {
 }
 
 void Matcher::callSites(uint32_t A, uint32_t B) {
-  // Calls line up in order: between two calls of corresponding functions,
-  // equally many calls on both sides pair in order when they look alike.
+  // Only anchors shared by every optimal alignment separate call intervals.
+  // A repeated callee must not select one arbitrary alignment for new pairs.
   const auto X = PF.CallSites.of(A), Y = SF.CallSites.of(B);
-  if (X.empty() || Y.empty() || X.size() > 1024 || Y.size() > 1024)
+  if (X.empty() || Y.empty())
     return;
-  const size_t N = X.size(), M = Y.size();
-  std::vector<uint16_t> L((N + 1) * (M + 1), 0);
-  const auto At = [&](size_t I, size_t J) -> uint16_t & {
-    return L[I * (M + 1) + J];
-  };
-  const auto Same = [&](size_t I, size_t J) {
-    return PMatch[X[I]] != NoIndex && PMatch[X[I]] == Y[J];
-  };
-  for (size_t I = N; I-- > 0;)
-    for (size_t J = M; J-- > 0;)
-      At(I, J) = Same(I, J) ? At(I + 1, J + 1) + 1
-                            : std::max(At(I + 1, J), At(I, J + 1));
-  std::vector<std::pair<size_t, size_t>> Anchors;
-  for (size_t I = 0, J = 0; I < N && J < M;) {
-    if (Same(I, J)) {
-      Anchors.emplace_back(I, J);
-      ++I;
-      ++J;
-    } else if (At(I + 1, J) >= At(I, J + 1)) {
-      ++I;
-    } else {
-      ++J;
-    }
+  std::vector<uint32_t> XP, YP;
+  for (uint32_t C : X) {
+    if (stopNow())
+      return;
+    XP.push_back(C == NoIndex ? NoIndex : PMatch[C]);
   }
-  Anchors.emplace_back(N, M);
+  for (uint32_t D : Y) {
+    if (stopNow())
+      return;
+    YP.push_back(D == NoIndex || SMatch[D] == NoIndex ? NoIndex : D);
+  }
+  auto Anchors = uniqueCallAnchors(XP, YP, Control);
+  if (!Anchors) {
+    stopNow();
+    return;
+  }
+  Anchors->emplace_back(X.size(), Y.size());
+  std::vector<std::pair<uint32_t, uint32_t>> Proposals;
   size_t I = 0, J = 0;
-  for (const auto &[AI, AJ] : Anchors) {
-    if (AI - I == AJ - J)
-      for (size_t K = 0; I + K < AI; ++K) {
+  for (const auto &[AI, AJ] : *Anchors) {
+    if (stopNow())
+      return;
+    if (AI - I == AJ - J) {
+      bool Clear = true;
+      for (size_t K = 0; K < AI - I; ++K) {
+        if (stopNow())
+          return;
         const uint32_t C = X[I + K], D = Y[J + K];
-        if (PMatch[C] != NoIndex || SMatch[D] != NoIndex ||
-            !P.Functions[C].hasBody() || !S.Functions[D].hasBody())
-          continue;
-        if (!Rejected.contains(pairKey(C, D)) && !namesConflict(C, D) &&
-            delta(C, D).Similarity >= Settings.MinimumContextSimilarity)
-          pair(C, D, FunctionStep::CallSite, true);
+        // An unresolved call or an already matched call without a mandatory
+        // anchor leaves this interval's positional correspondence uncertain.
+        if (C == NoIndex || D == NoIndex || PMatch[C] != NoIndex ||
+            SMatch[D] != NoIndex) {
+          Clear = false;
+          break;
+        }
       }
+      if (Clear)
+        for (size_t K = 0; K < AI - I; ++K) {
+          if (stopNow())
+            return;
+          Proposals.emplace_back(X[I + K], Y[J + K]);
+        }
+    }
     I = AI + 1;
     J = AJ + 1;
+  }
+  // Check every occurrence before committing anything: a->x, b->x, a->y
+  // cannot become a->x followed by a fabricated lone-neighbor b->y match.
+  llvm::sort(Proposals);
+  Proposals.erase(std::unique(Proposals.begin(), Proposals.end()),
+                  Proposals.end());
+  llvm::DenseMap<uint32_t, size_t> ByPrimary, BySecondary;
+  for (const auto &[C, D] : Proposals) {
+    if (stopNow())
+      return;
+    ++ByPrimary[C];
+    ++BySecondary[D];
+  }
+  for (const auto &[C, D] : Proposals) {
+    if (stopNow())
+      return;
+    if (ByPrimary[C] != 1 || BySecondary[D] != 1 || !P.Functions[C].hasBody() ||
+        !S.Functions[D].hasBody() || Rejected.contains(pairKey(C, D)) ||
+        namesConflict(C, D))
+      continue;
+    const auto Delta = delta(C, D);
+    if (stopNow())
+      return;
+    if (Delta.ComputationComplete &&
+        Delta.Similarity >= Settings.MinimumContextSimilarity)
+      pair(C, D, FunctionStep::CallSite, true);
   }
 }
 
@@ -526,13 +559,20 @@ void Matcher::context(uint32_t A, uint32_t B, bool Loose) {
     // of a call, and a single remaining neighbor on both sides.
     if (Calls)
       callSites(A, B);
+    if (stopNow())
+      return;
     As = unmatchedNeighbors(PF, AG, A, 0);
     Bs = unmatchedNeighbors(SF, BG, B, 1);
     if (As.size() == 1 && Bs.size() == 1 &&
         !Rejected.contains(pairKey(As[0], Bs[0])) &&
-        !namesConflict(As[0], Bs[0]) &&
-        delta(As[0], Bs[0]).Similarity >= Settings.MinimumContextSimilarity)
-      pair(As[0], Bs[0], FunctionStep::Neighborhood, true);
+        !namesConflict(As[0], Bs[0])) {
+      const auto Delta = delta(As[0], Bs[0]);
+      if (stopNow())
+        return;
+      if (Delta.ComputationComplete &&
+          Delta.Similarity >= Settings.MinimumContextSimilarity)
+        pair(As[0], Bs[0], FunctionStep::Neighborhood, true);
+    }
   }
 }
 
@@ -642,8 +682,7 @@ unsigned Matcher::approximate() {
     if (!Rejected.contains(K) && !namesConflict(A, B))
       Pairs.push_back({A, B, quickScore(A, B)});
   }
-  const unsigned Keep =
-      std::min(Settings.MaxCandidates, limits::kMeasuredCandidates);
+  const unsigned Keep = Settings.MaxCandidates;
   std::vector<uint8_t> Measure(Pairs.size(), 0);
   for (bool BySecondary : {false, true}) {
     std::vector<uint32_t> Index(Pairs.size());
@@ -707,13 +746,15 @@ unsigned Matcher::approximate() {
     for (uint32_t Other : ByA[Pair.A]) {
       const Scored &O = Pairs[Other];
       if (Other != I && SMatch[O.B] == NoIndex &&
-          Pair.Exact - O.Exact < Settings.AmbiguityMargin)
+          (O.Exact >= Pair.Exact ||
+           Pair.Exact - O.Exact < Settings.AmbiguityMargin))
         RivalsOfA.push_back(O.B);
     }
     for (uint32_t Other : ByB[Pair.B]) {
       const Scored &O = Pairs[Other];
       if (Other != I && PMatch[O.A] == NoIndex &&
-          Pair.Exact - O.Exact < Settings.AmbiguityMargin)
+          (O.Exact >= Pair.Exact ||
+           Pair.Exact - O.Exact < Settings.AmbiguityMargin))
         RivalsOfB.push_back(O.A);
     }
     if (!RivalsOfA.empty() || !RivalsOfB.empty()) {
@@ -1252,7 +1293,7 @@ std::optional<std::string> applyOverride(ComparisonResult &R,
       Kept.push_back(*E.Added);
     R.Matches = std::move(Kept);
     // Paired functions leave their ambiguities.
-    if (E.Added)
+    if (E.Added) {
       for (uint32_t I = 0; I < R.Ambiguities.size(); ++I) {
         Ambiguity &Amb = R.Ambiguities[I];
         const bool HasA = llvm::is_contained(Amb.Primary, *A);
@@ -1263,6 +1304,13 @@ std::optional<std::string> applyOverride(ComparisonResult &R,
         llvm::erase(Amb.Primary, *A);
         llvm::erase(Amb.Secondary, *B);
       }
+      // A remaining function without any opposite-side candidates is
+      // unmatched. Keep the original groups in the effect for undo, rather
+      // than retaining one-sided or empty groups in the live result.
+      llvm::erase_if(R.Ambiguities, [](const Ambiguity &Amb) {
+        return Amb.Primary.empty() || Amb.Secondary.empty();
+      });
+    }
     reindex(R, Primary.Functions.size(), Secondary.Functions.size());
     // The new pair, and every pair calling a function whose counterpart
     // changed, measure again.
@@ -1320,9 +1368,28 @@ void revertOverride(ComparisonResult &R, const Program &Primary,
     for (const FunctionMatch &M : E.Removed)
       Kept.push_back(M);
     R.Matches = std::move(Kept);
-    for (const auto &[Index, Before] : E.Ambiguities)
-      if (Index < R.Ambiguities.size())
-        R.Ambiguities[Index] = Before;
+    if (!E.Ambiguities.empty()) {
+      // Effects retain original indices in increasing order. Merge changed
+      // and removed groups back into the surviving sequence in linear time.
+      std::vector<Ambiguity> Restored;
+      Restored.reserve(R.Ambiguities.size() + E.Ambiguities.size());
+      size_t Current = 0;
+      for (const auto &[Index, Before] : E.Ambiguities) {
+        while (Restored.size() < Index)
+          Restored.push_back(std::move(R.Ambiguities[Current++]));
+        Restored.push_back(Before);
+        const bool Retained =
+            llvm::any_of(Before.Primary,
+                         [&](uint32_t A) { return A != E.Added->Primary; }) &&
+            llvm::any_of(Before.Secondary,
+                         [&](uint32_t B) { return B != E.Added->Secondary; });
+        if (Retained)
+          ++Current;
+      }
+      while (Current < R.Ambiguities.size())
+        Restored.push_back(std::move(R.Ambiguities[Current++]));
+      R.Ambiguities = std::move(Restored);
+    }
     reindex(R, Primary.Functions.size(), Secondary.Functions.size());
     for (const FunctionMatch &Before : E.Remeasured)
       if (const uint32_t I = R.PrimaryMatch[Before.Primary]; I != NoIndex)

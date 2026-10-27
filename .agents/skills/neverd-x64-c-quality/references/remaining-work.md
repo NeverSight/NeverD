@@ -62,8 +62,11 @@ HighC, native LLVM and LLVMC. Their ordered effects survive unused results and
 source optimization; scalar emulation cannot silently claim completion.
 Instruction IDs remain unchanged, and native RTM code generation enables its
 required feature. The architectural returns — far, interrupt and syscall
-returns — now have the terminal state-transfer source boundary described below;
-only RSM and XBEGIN stay refused.
+returns — now have the terminal state-transfer source boundary described below.
+XBEGIN rel32 lifts as a two-exit instruction: the `_xbegin()` status, EAX
+written only on abort, and a branch to the encoded fallback, which keeps the
+original abort continuation and checkpoint in both C routes. The 16-bit form
+truncates its fallback and RSM stay refused.
 CLZERO's implicit address no longer depends on Capstone exposing a register
 operand. Address width, FS/GS offsets, unchanged flags and native cache-line
 effects remain explicit; generated code does not replace the instruction with
@@ -85,6 +88,16 @@ HighC already did; this does not recover that stack or authorize native output.
 Bounded callee register summaries repair stack-probe frame proofs. Replaced-PC
 tail calls and closed recursive internal-call groups have separate checked
 return-slot proofs. Arbitrary changed-stack returns remain outside them.
+Own-interior call proofs keep the x64 stack pointer across ordinary calls, end a
+path at a direct tail call into a callee proved never to return, and treat a
+call inside another function's unwind record, reached through a jump into that
+body, as interior to that record. No-return screens skip returns that only a
+terminator or a known no-return call precedes and no branch targets; far and
+interrupt returns no longer count as returns to the caller. Entry-stack offset
+proofs follow long copy/displacement chains without a depth limit, and CALL
+return-slot observations accept an upper bound below a dynamic allocation in a
+loop. A live-frame jump through a dispatch thunk and a computed jump into an
+unrolled copy remain refused.
 
 x86 architectural returns now lift to a terminal, non-returning state-transfer
 intrinsic that names every cell the transfer reads. Far and interrupt returns
@@ -97,9 +110,9 @@ block; the intrinsic grants no source ABI or memory contract and reconstructs
 no privilege, segment or flag change. An ordinary C return, a bare `iret`
 assembly statement, or an opaque call with only a stack-pointer operand still
 loses that observable machine state and stays rejected. RSM (whole-processor
-restore from SMRAM) and XBEGIN (two-exit abort checkpoint) have no such named
-target and keep the explicit refusal in permissive decoding and both source
-routes; old RSM IR cannot bypass it through direct emission. Native
+restore from SMRAM) has no such named target and keeps the explicit refusal in
+permissive decoding and both source routes; old RSM IR cannot bypass it through
+direct emission. Native
 reconstruction of the architectural returns remains a
 separate contract this source boundary does not grant.
 Known fixed argument positions now

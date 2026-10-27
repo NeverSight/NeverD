@@ -27,6 +27,7 @@
 #include "neverd/ir/med/MedCallTarget.h"
 #include "neverd/ir/med/MedCallingConvDetail.h"
 #include "neverd/ir/med/MedReturnArguments.h"
+#include "neverd/ir/med/MedStackAlignment.h"
 #include "neverd/ir/med/MedTypePass.h"
 #include "neverd/ir/med/X86/X86RegistrationCall.h"
 #include "neverd/ir/med/X86/X86RegistrationSEHCall.h"
@@ -1690,6 +1691,57 @@ void recoverCallAbi(
         return relStackOff(Func, TRI, Address, CallSpOffsets, 0, &DefSites);
       };
 
+      // A call-site split (including an EH boundary) does not clobber the
+      // dedicated result register. Find one reaching setup and reuse it for
+      // both the variadic decision and the final hidden argument. A join
+      // needs its SSA PHI; choosing one predecessor would change the buffer.
+      std::vector<const MedBlock *> ResultSetupPredecessors;
+      const auto [ResultPointer,
+                  FrameResult] = [&]() -> std::pair<MedVar, bool> {
+        const uint64_t IRR = TRI.indirectResultReg();
+        if (!IRR || !BlockIds.unique())
+          return {};
+        const MedBlock *Setup = &Blk;
+        size_t End = OI;
+        std::set<int> Seen;
+        while (Setup && Seen.insert(Setup->Id).second) {
+          for (size_t J = End; J > 0; --J) {
+            const auto &Prev = Setup->Ops[J - 1];
+            if (isAbiRecoveryBarrier(Prev))
+              return {};
+            if (Prev.Output.Kind == MedVar::Reg && Prev.Output.RegOff == IRR &&
+                Prev.Output.Size) {
+              if (Prev.Output.Size != TRI.PointerSize)
+                return {};
+              return {Prev.Output,
+                      derivesFromFrameReg(*Setup, TRI, Prev.Output) ||
+                          entryStackOffset(Func, Prev.Output, TheArch,
+                                           Img ? Img->abiFormat()
+                                               : BinaryFormat::Unknown)
+                              .has_value()};
+            }
+          }
+          if (!Setup->ExceptionalPreds.empty())
+            return {};
+          for (const PhiNode &Phi : Setup->Phis)
+            if (Phi.Output.Kind == MedVar::Reg && Phi.Output.RegOff == IRR &&
+                Phi.Output.Size == TRI.PointerSize)
+              return {Phi.Output, entryStackOffset(Func, Phi.Output, TheArch,
+                                                   Img ? Img->abiFormat()
+                                                       : BinaryFormat::Unknown)
+                                      .has_value()};
+          if (Setup->Preds.size() != 1)
+            return {};
+          Setup = BlockIds.first(Setup->Preds.front());
+          if (Setup) {
+            End = Setup->Ops.size();
+            ResultSetupPredecessors.push_back(Setup);
+          }
+        }
+        return {};
+      }();
+      const bool IndirectSretSetup = CI.IsIndirect && FrameResult;
+
       AbiCallContext Ctx{Func,
                          Blk,
                          static_cast<int>(OI),
@@ -1825,21 +1877,37 @@ void recoverCallAbi(
       for (const auto &Promoted : PromoteParams)
         PromotedBefore.insert(Promoted.first);
       bool Arg0FromInBlock = FoundMask[0];
-      if (IntRegArgsApply)
-        if (const auto *Setup = authenticatedTailSetup(Blk, Op, BlockIds))
-          for (int J = static_cast<int>(Setup->Ops.size()) - 1; J >= 0; --J) {
-            const auto &Prev = Setup->Ops[J];
+      if (IntRegArgsApply) {
+        const auto CollectSetup = [&](const MedBlock &Setup,
+                                      bool ForwardCallResult) {
+          for (int J = static_cast<int>(Setup.Ops.size()) - 1; J >= 0; --J) {
+            const auto &Prev = Setup.Ops[J];
+            const bool Barrier = isAbiRecoveryBarrier(Prev);
+            if (Barrier && !ForwardCallResult)
+              break;
             if (Prev.Output.Kind == MedVar::Reg && Prev.Output.Size) {
               const int K = regToIntArgIdx(Prev.Output.RegOff);
               if (K >= 0 && K < MaxArgs && !FoundMask[K]) {
                 Found[K] =
-                    argRegSourceValueInBlock(*Setup, J, TRI, IntegerLayout);
+                    argRegSourceValueInBlock(Setup, J, TRI, IntegerLayout);
                 FoundMask[K] = true;
               }
             }
-            if (isAbiRecoveryBarrier(Prev))
+            if (Barrier)
               break;
           }
+        };
+        // The authenticated tail proof also preserves a prior call result
+        // forwarded to the authenticated target (return fp(target(x))).
+        if (const auto *Setup = authenticatedTailSetup(Blk, Op, BlockIds))
+          CollectSetup(*Setup, true);
+        // The result-buffer setup proves the call's setup continues across
+        // these unambiguous splits. Keep the accompanying ordinary arguments
+        // too; otherwise the recovered result pointer would become arg0.
+        if (CI.IsIndirect && FrameResult)
+          for (const MedBlock *Setup : ResultSetupPredecessors)
+            CollectSetup(*Setup, false);
+      }
       if ((!CI.IsIndirect || UseExternalArity || UseVariableArity ||
            HeaderVariadic) &&
           IntRegArgsApply)
@@ -3009,20 +3077,6 @@ void recoverCallAbi(
         if (!HeaderVariadic && CalleeArgs > 0 && CalleeArgs < AssembleEnd)
           AssembleEnd = CalleeArgs;
       }
-      bool IndirectSretSetup = false;
-      if (CI.IsIndirect && TRI.indirectResultReg() != 0) {
-        uint64_t IRR = TRI.indirectResultReg();
-        for (int J = static_cast<int>(OI) - 1; IRR != 0 && J >= 0; --J) {
-          auto &Prev = Blk.Ops[J];
-          if (Prev.Opcode == NdOp::CALL || Prev.Opcode == NdOp::INDIR_CALL)
-            break;
-          if (Prev.Output.Kind == MedVar::Reg && Prev.Output.RegOff == IRR &&
-              Prev.Output.Size > 0) {
-            IndirectSretSetup = derivesFromFrameReg(Blk, TRI, Prev.Output);
-            break;
-          }
-        }
-      }
       std::vector<MedVar> IntPart, StackPart;
       // The register slot each of IntPart's arguments was found in.
       std::vector<int> IntPartSlots;
@@ -3280,68 +3334,26 @@ void recoverCallAbi(
         }
       }
 
-      // AArch64 indirect-result (sret) pointer: a callee returning a by-value
-      // aggregate too large for the return registers receives the result buffer
-      // in x8.  Recover the buffer pointer set just before the call (add x8,
-      // sp,#k) and append it as the trailing argument matching the callee's
-      // hidden sret parameter (detectIndirectResultParam appends it last).
-      //
-      // Direct call: trust the callee's recorded sret flag.  Indirect call (a
-      // function pointer returning a by-value aggregate, `struct R (*fp)();
-      // fp()`): the callee is unknown so CalleeHasSret cannot be consulted --
-      // detect the pattern structurally.  x8 is the ABI's reserved
-      // indirect-result register, so an x8 set to a STACK buffer pointer (add
-      // x8, sp/fp, #k) immediately before the call is the sret buffer; the
-      // stackPtrDelta guard rejects an unrelated scratch x8.  NeverD rebuilds a
-      // self-consistent ABI (the buffer is just a trailing pointer argument
-      // both sides agree on), so appending it at the indirect call site matches
-      // the callee's recovered sret parameter exactly as the direct path does
-      // -- no x8-specific emitter support needed.
+      // The dedicated indirect-result buffer is the callee's last parameter
+      // (detectIndirectResultParam). Direct callees state the contract;
+      // unknown indirect calls require frame-derived storage in that register.
       bool DirectSret = false;
       if (!CI.IsIndirect && !IsRelocExtern && CalleeHasSret) {
         auto SIt = CalleeHasSret->find(CI.TargetAddr);
         DirectSret = SIt != CalleeHasSret->end() && SIt->second;
       }
-      // A dedicated indirect-result register (AArch64 x8) carries an
-      // indirect callee's result buffer too.
-      bool IndirectSret =
-          CI.IsIndirect && !HeaderVariadic && TRI.indirectResultReg() != 0;
-      if (DirectSret || IndirectSret) {
-        uint64_t IRR = TRI.indirectResultReg();
-        for (int J = static_cast<int>(OI) - 1; IRR != 0 && J >= 0; --J) {
-          auto &Prev = Blk.Ops[J];
-          if (Prev.Opcode == NdOp::CALL || Prev.Opcode == NdOp::INDIR_CALL)
-            break;
-          if (Prev.Output.Kind == MedVar::Reg && Prev.Output.RegOff == IRR &&
-              Prev.Output.Size > 0) {
-            // Indirect call: the nearest x8 write is the only candidate --
-            // require it to be a stack buffer pointer (an sret callee always
-            // receives a caller-allocated stack slot, addressed off SP or the
-            // frame pointer); otherwise it is scratch, not sret, so give up.  A
-            // direct sret callee is already proven by CalleeHasSret.
-            if (CI.IsIndirect && !derivesFromFrameReg(Blk, TRI, Prev.Output))
-              break;
-            // The sret buffer is the callee's LAST parameter (appended after
-            // the ordinary register/stack arguments).  The register-argument
-            // scan can over-recover a parameter register that is live at the
-            // call but is NOT an argument of this callee -- a caller forwarding
-            // its own `argv` (x1) into a one-argument sret callee, say:
-            // findReachingArgReg returns x1 because it is a real parameter of
-            // the *caller*, even though the callee takes only x0 plus the x8
-            // buffer.  Appending the buffer after that spurious slot pushes it
-            // past the callee's parameter count, and the emitter (which
-            // truncates surplus arguments) then drops the buffer -- so the
-            // callee reads the spurious value as its sret pointer and writes
-            // the aggregate to a wild address.  Truncate to the callee's true
-            // (non-sret) arity so the buffer lands exactly at the sret
-            // parameter's index.
-            if (CalleeArgs >= 0 &&
-                static_cast<int>(CI.Args.size()) > CalleeArgs)
-              CI.Args.resize(CalleeArgs);
-            CI.Args.push_back(Prev.Output);
-            break;
-          }
-        }
+      if (TRI.indirectResultReg() &&
+          (DirectSret || (IndirectSretSetup && !HeaderVariadic))) {
+        // Surplus ordinary-register guesses cannot push the result pointer
+        // past the callee's declared arity and make emission drop it.
+        if (CalleeArgs >= 0 && static_cast<int>(CI.Args.size()) > CalleeArgs)
+          CI.Args.resize(CalleeArgs);
+        // A declared result contract still consumes this position when the
+        // machine value is unavailable. Omitting it would hide the missing
+        // output storage and shift the recovered signature.
+        CI.Args.push_back(ResultPointer.Size ? ResultPointer
+                                             : MedVar::makeUnspecified(
+                                                   TRI.PointerSize, TheArch));
       }
 
       if (HeaderVariadic)

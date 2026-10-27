@@ -22,6 +22,7 @@
 
 #include <algorithm>
 #include <tuple>
+#include <unordered_map>
 
 namespace neverd::diff {
 
@@ -529,6 +530,16 @@ private:
   const Side &A;
   const Side &B;
   std::vector<uint32_t> Score;
+  using InstructionPairs = std::vector<std::pair<uint32_t, uint32_t>>;
+
+  void dense(llvm::ArrayRef<Instruction> Xs, llvm::ArrayRef<Instruction> Ys,
+             uint32_t XBegin, uint32_t YBegin, InstructionPairs &Pairs);
+  std::vector<uint64_t> frontier(llvm::ArrayRef<Instruction> Xs,
+                                 llvm::ArrayRef<Instruction> Ys, bool Reverse);
+  bool diagonal(llvm::ArrayRef<Instruction> Xs, llvm::ArrayRef<Instruction> Ys,
+                uint32_t XBegin, uint32_t YBegin, InstructionPairs &Pairs);
+  void match(llvm::ArrayRef<Instruction> Xs, llvm::ArrayRef<Instruction> Ys,
+             uint32_t XBegin, uint32_t YBegin, InstructionPairs &Pairs);
 
   /// How well two instructions line up: 0 when they cannot.
   unsigned weight(const Instruction &X, const Instruction &Y) const {
@@ -553,6 +564,183 @@ private:
   }
 };
 
+void Aligner::dense(llvm::ArrayRef<Instruction> Xs,
+                    llvm::ArrayRef<Instruction> Ys, uint32_t XBegin,
+                    uint32_t YBegin, InstructionPairs &Pairs) {
+  const size_t N = Xs.size(), M = Ys.size();
+  Score.assign((N + 1) * (M + 1), 0);
+  const auto At = [&](size_t I, size_t J) -> uint32_t & {
+    return Score[I * (M + 1) + J];
+  };
+  for (size_t I = N; I-- > 0;) {
+    A.poll();
+    for (size_t J = M; J-- > 0;) {
+      if (J % limits::diff::kAlignmentPollCells == 0)
+        A.poll();
+      uint32_t Best = std::max(At(I + 1, J), At(I, J + 1));
+      if (const unsigned W = weight(Xs[I], Ys[J]))
+        Best = std::max(Best, At(I + 1, J + 1) + W);
+      At(I, J) = Best;
+    }
+  }
+  for (size_t I = 0, J = 0; I < N && J < M;) {
+    A.poll();
+    const unsigned W = weight(Xs[I], Ys[J]);
+    if (W && At(I, J) == At(I + 1, J + 1) + W) {
+      Pairs.emplace_back(XBegin + I, YBegin + J);
+      ++I;
+      ++J;
+    } else if (At(I, J) == At(I + 1, J)) {
+      ++I;
+    } else {
+      ++J;
+    }
+  }
+}
+
+std::vector<uint64_t> Aligner::frontier(llvm::ArrayRef<Instruction> Xs,
+                                        llvm::ArrayRef<Instruction> Ys,
+                                        bool Reverse) {
+  std::vector<uint64_t> Scores(Ys.size() + 1, 0);
+  for (size_t I = 0; I < Xs.size(); ++I) {
+    A.poll();
+    uint64_t Diagonal = 0;
+    const auto &X = Xs[Reverse ? Xs.size() - I - 1 : I];
+    for (size_t J = 0; J < Ys.size(); ++J) {
+      if (J % limits::diff::kAlignmentPollCells == 0)
+        A.poll();
+      const auto &Y = Ys[Reverse ? Ys.size() - J - 1 : J];
+      const uint64_t Previous = Scores[J + 1];
+      Scores[J + 1] = std::max({Previous, Scores[J], Diagonal + weight(X, Y)});
+      Diagonal = Previous;
+    }
+  }
+  return Scores;
+}
+
+bool Aligner::diagonal(llvm::ArrayRef<Instruction> Xs,
+                       llvm::ArrayRef<Instruction> Ys, uint32_t XBegin,
+                       uint32_t YBegin, InstructionPairs &Pairs) {
+  const size_t Count = std::min(Xs.size(), Ys.size());
+  size_t Exact = 0;
+  for (size_t I = 0; I < Count; ++I) {
+    A.poll();
+    if (Xs[I].Shape == Ys[I].Shape)
+      ++Exact;
+    else if (Xs[I].Skeleton != Ys[I].Skeleton)
+      return false;
+  }
+  // A non-exact pair scores at most three. Ignoring order, the multiset
+  // intersection bounds the number of four-point pairs. If this diagonal
+  // attains both bounds, no search can improve it. This keeps large sparse
+  // constant edits linear without assuming that equal mnemonics are equal code.
+  std::unordered_map<uint64_t, uint32_t> Shapes;
+  for (const auto &Y : Ys) {
+    A.poll();
+    ++Shapes[Y.Shape];
+  }
+  size_t Possible = 0;
+  for (const auto &X : Xs) {
+    A.poll();
+    if (auto It = Shapes.find(X.Shape); It != Shapes.end() && It->second) {
+      --It->second;
+      ++Possible;
+    }
+  }
+  if (Exact != Possible)
+    return false;
+  for (size_t I = 0; I < Count; ++I) {
+    A.poll();
+    Pairs.emplace_back(XBegin + I, YBegin + I);
+  }
+  return true;
+}
+
+void Aligner::match(llvm::ArrayRef<Instruction> Xs,
+                    llvm::ArrayRef<Instruction> Ys, uint32_t XBegin,
+                    uint32_t YBegin, InstructionPairs &Pairs) {
+  A.poll();
+  if (Xs.empty() || Ys.empty())
+    return;
+  if (uint64_t(Xs.size()) + 1 <=
+      limits::diff::kMaxAlignmentCells / (uint64_t(Ys.size()) + 1)) {
+    dense(Xs, Ys, XBegin, YBegin, Pairs);
+    return;
+  }
+
+  // Equal shapes receive the maximum weight, so taking common ends cannot
+  // lower the optimum. Sparse edits in long blocks then need little search.
+  size_t Prefix = 0;
+  while (Prefix < Xs.size() && Prefix < Ys.size() &&
+         Xs[Prefix].Shape == Ys[Prefix].Shape) {
+    A.poll();
+    Pairs.emplace_back(XBegin + Prefix, YBegin + Prefix);
+    ++Prefix;
+  }
+  Xs = Xs.drop_front(Prefix);
+  Ys = Ys.drop_front(Prefix);
+  XBegin += Prefix;
+  YBegin += Prefix;
+  size_t Suffix = 0;
+  while (Suffix < Xs.size() && Suffix < Ys.size() &&
+         Xs[Xs.size() - Suffix - 1].Shape == Ys[Ys.size() - Suffix - 1].Shape) {
+    A.poll();
+    ++Suffix;
+  }
+  const auto XMiddle = Xs.drop_back(Suffix), YMiddle = Ys.drop_back(Suffix);
+  if (Prefix || Suffix) {
+    match(XMiddle, YMiddle, XBegin, YBegin, Pairs);
+  } else if (diagonal(Xs, Ys, XBegin, YBegin, Pairs)) {
+    return;
+  } else if (Xs.size() == 1 || Ys.size() == 1) {
+    // A very unequal pair can exceed the dense allowance even with one row.
+    unsigned Best = 0;
+    size_t BestX = 0, BestY = 0;
+    for (size_t I = 0; I < Xs.size(); ++I)
+      for (size_t J = 0; J < Ys.size(); ++J) {
+        A.poll();
+        if (const unsigned W = weight(Xs[I], Ys[J]); W > Best) {
+          Best = W;
+          BestX = I;
+          BestY = J;
+        }
+      }
+    if (Best)
+      Pairs.emplace_back(XBegin + BestX, YBegin + BestY);
+  } else {
+    // Hirschberg decomposition of the same weighted recurrence as dense().
+    // Every optimal path crosses the middle row. Its forward/backward scores
+    // select a crossing without retaining the Cartesian table. Release both
+    // frontiers before recursion; equal scores use the first crossing.
+    const size_t Middle = Xs.size() / 2;
+    size_t Split = 0;
+    uint64_t Best = 0;
+    {
+      const auto Forward = frontier(Xs.take_front(Middle), Ys, false);
+      const auto Backward = frontier(Xs.drop_front(Middle), Ys, true);
+      for (size_t J = 0; J <= Ys.size(); ++J) {
+        if (J % limits::diff::kAlignmentPollCells == 0)
+          A.poll();
+        if (const uint64_t Total = Forward[J] + Backward[Ys.size() - J];
+            Total > Best) {
+          Best = Total;
+          Split = J;
+        }
+      }
+    }
+    if (Best) {
+      match(Xs.take_front(Middle), Ys.take_front(Split), XBegin, YBegin, Pairs);
+      match(Xs.drop_front(Middle), Ys.drop_front(Split), XBegin + Middle,
+            YBegin + Split, Pairs);
+    }
+  }
+  for (size_t I = 0; I < Suffix; ++I) {
+    A.poll();
+    Pairs.emplace_back(XBegin + XMiddle.size() + I,
+                       YBegin + YMiddle.size() + I);
+  }
+}
+
 void Aligner::align(uint32_t XBlock, uint32_t YBlock,
                     std::vector<DeltaRow> &Rows) {
   const auto Xs = A.instructions(XBlock);
@@ -560,69 +748,28 @@ void Aligner::align(uint32_t XBlock, uint32_t YBlock,
   const uint32_t XBase = A.firstInstruction(XBlock);
   const uint32_t YBase = B.firstInstruction(YBlock);
   const size_t N = Xs.size(), M = Ys.size();
-  // Pairs of aligned instructions, in order.
-  std::vector<std::pair<uint32_t, uint32_t>> Pairs;
-  if (uint64_t(N + 1) * (M + 1) <= limits::diff::kMaxAlignmentCells) {
-    Score.assign((N + 1) * (M + 1), 0);
-    const auto At = [&](size_t I, size_t J) -> uint32_t & {
-      return Score[I * (M + 1) + J];
-    };
-    for (size_t I = N; I-- > 0;) {
-      A.poll();
-      for (size_t J = M; J-- > 0;) {
-        uint32_t Best = std::max(At(I + 1, J), At(I, J + 1));
-        if (const unsigned W = weight(Xs[I], Ys[J]))
-          Best = std::max(Best, At(I + 1, J + 1) + W);
-        At(I, J) = Best;
-      }
-    }
-    for (size_t I = 0, J = 0; I < N && J < M;) {
-      A.poll();
-      const unsigned W = weight(Xs[I], Ys[J]);
-      if (W && At(I, J) == At(I + 1, J + 1) + W) {
-        Pairs.emplace_back(I, J);
-        ++I;
-        ++J;
-      } else if (At(I, J) == At(I + 1, J)) {
-        ++I;
-      } else {
-        ++J;
-      }
-    }
-  } else {
-    // Too long to align exactly: line up equal shapes greedily in order.
-    for (size_t I = 0, J = 0; I < N && J < M;) {
-      A.poll();
-      if (weight(Xs[I], Ys[J])) {
-        Pairs.emplace_back(I, J);
-        ++I;
-        ++J;
-        continue;
-      }
-      size_t Ahead = J + 1;
-      while (Ahead < M && Ahead < J + 16 && Xs[I].Shape != Ys[Ahead].Shape)
-        ++Ahead;
-      if (Ahead < M && Xs[I].Shape == Ys[Ahead].Shape)
-        J = Ahead;
-      else
-        ++I;
-    }
-  }
+  InstructionPairs Pairs;
+  match(Xs, Ys, 0, 0, Pairs);
   // Unaligned runs between aligned pairs are shown side by side.
   size_t I = 0, J = 0;
   const auto Gap = [&](size_t IEnd, size_t JEnd) {
     while (I < IEnd && J < JEnd) {
+      A.poll();
       Rows.push_back({XBase + uint32_t(I), YBase + uint32_t(J), XBlock, YBlock,
                       RowKind::Replaced});
       ++I;
       ++J;
     }
-    for (; I < IEnd; ++I)
+    for (; I < IEnd; ++I) {
+      A.poll();
       Rows.push_back(
           {XBase + uint32_t(I), NoIndex, XBlock, NoIndex, RowKind::Deleted});
-    for (; J < JEnd; ++J)
+    }
+    for (; J < JEnd; ++J) {
+      A.poll();
       Rows.push_back(
           {NoIndex, YBase + uint32_t(J), NoIndex, YBlock, RowKind::Inserted});
+    }
   };
   for (const auto &[PI, PJ] : Pairs) {
     A.poll();

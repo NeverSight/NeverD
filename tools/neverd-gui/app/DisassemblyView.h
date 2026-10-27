@@ -45,6 +45,10 @@ public:
   /// The instruction operand the cursor is on (ListingView::currentOperand);
   /// none in the graph.
   std::optional<int> currentOperand() const;
+  /// Whether the cursor is on an instruction's own line, as every graph row
+  /// is, or on a data item's, rather than a name or comment line around it.
+  bool onInstruction() const;
+  bool onData() const;
   QString currentToken() const;
   QString selectedText() const;
   void setSyncName(const QString &name) {

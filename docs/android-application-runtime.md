@@ -646,6 +646,17 @@ key retains the same Java object across cached services and manager references.
 
 Cached lookups and `initServiceCache` operate on the shared mutable HashMap.
 An absent snapshot is never converted into a successful empty cache lookup.
+An empty cache or a null-valued entry establishes a cache miss, not service
+absence. Both `getService` and `checkService` then require manager/context
+observations; supplying a context object does not establish manager state.
+A nonnull cached proxy can be returned while manager, context and warning
+state remain unknown. The hit preserves its warning state and does not start
+another StatLogger clock read. JNI normal, varargs and array calls use the
+same retained object. Guest mutations of `sCache` affect subsequent lookups.
+
+For synthetic scenarios, declare the complete assumed cache and its referenced
+Java proxy keys explicitly. A hypothetical cached proxy establishes neither a
+device service observation nor a native Binder peer or callable remote service.
 Cache misses require explicit manager/context state and stop before unmodeled
 Binder transactions; local Binder objects, native object translation and RPC
 responses remain outside this subset. With `observe_java_state`, the optional

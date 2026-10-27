@@ -142,17 +142,17 @@ TEST(X86LegacyAdmission, StateInstructionsCannotBecomeNopsWithoutOwnership) {
         if (Prefix)
           Bytes.insert(Bytes.begin(), Prefix);
         ASSERT_NO_FATAL_FAILURE(checkRefusal(Target, Instruction.Id, Bytes));
-        // An ownership request cannot supply an i386 context or the missing
-        // FEMMS payload-invalidation contract.
-        if (Target == Arch::X86 || Instruction.Id == X86_INS_FEMMS)
+        // An ownership request cannot supply an i386 context.
+        if (Target == Arch::X86)
           ASSERT_NO_FATAL_FAILURE(
               checkRefusal(Target, Instruction.Id, Bytes, true));
       }
 }
 
-TEST(X86LegacyAdmission, OwnedX64FnopAndEmmsRetainTheirStateOperation) {
+TEST(X86LegacyAdmission, OwnedX64FnopEmmsAndFemmsRetainTheirStateOperation) {
   for (const auto &Bytes :
-       {std::vector<uint8_t>{0xd9, 0xd0}, std::vector<uint8_t>{0x0f, 0x77}})
+       {std::vector<uint8_t>{0xd9, 0xd0}, std::vector<uint8_t>{0x0f, 0x77},
+        std::vector<uint8_t>{0x0f, 0x0e}})
     for (bool Strict : {false, true}) {
       Decoder D;
       ASSERT_TRUE(D.init(Arch::X64));

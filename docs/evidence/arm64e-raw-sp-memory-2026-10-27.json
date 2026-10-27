@@ -1,4 +1,5 @@
 {
+  "published_command_path_normalization": "Absolute checkout prefixes in published commands are rendered as <repository>/. Arguments, original artifact digests and recorded outcomes are otherwise unchanged.",
   "schema": 1,
   "date": "2026-10-27",
   "scope": "Explicit no-image external raw-SP parameters for GPR/SIMD single writeback, scalar/SIMD pair and baseline NEON structure memory. Full values, completed SP and all neighboring bytes. Normal and SP-alignment-fault primitive qualification only.",
@@ -7082,5 +7083,226 @@
     "text_bytes": 1920,
     "text_sha256": "82aa2f6cabfd5ee4677d691b5c43eb8500fd0f8f2c22cba4cc96f4dd0a37b76c",
     "junit_sha256": "0adc8f0cdedbb62240d8557e096f54ccb2961d4e6cbf0109d0d7274ed53126d3"
+  },
+  "integration_validation": {
+    "current_source_revision": "0e72cd6007e63beb4beb21f7d79d86ab6999f427",
+    "regression": {
+      "source_head": "0e72cd6007e63beb4beb21f7d79d86ab6999f427",
+      "command": [
+        "ctest",
+        "--test-dir",
+        "<repository>/build-arm64e/arm64e-sp-call-evidence/current-registered-tests",
+        "--build-config",
+        "Release",
+        "-E",
+        "^(AArch64Stack(Writeback|VectorWriteback|Pair)Memory\\.|AllBatches/AArch64StructureMemoryProjection\\.RawSP)",
+        "--parallel",
+        "2",
+        "--output-on-failure",
+        "--output-junit",
+        "<repository>/build-arm64e/arm64e-sp-call-evidence/integrated-regression.xml"
+      ],
+      "elapsed_seconds": 997.3357642089977,
+      "exit_code": 0,
+      "registered": 1100,
+      "passed": 1094,
+      "skipped": [
+        "AArch64OrderedMemoryNative.SIMDFamiliesExecuteBothSourcesAndLLVM",
+        "AArch64PAuthSemantics.NativeKeysAgreeWithBothCProjections",
+        "AArch64PAuthLRSemantics.NativeTwoModifierKeysAgreeWithBothCProjections",
+        "AArch64PACMSemantics.NativePrefixModesAgreeWithBothCProjections",
+        "A64FastClassifyParity.OptionalRealBinaryWalk",
+        "Scratch.DumpRealBinary"
+      ],
+      "failed": [],
+      "binary_sha256": {
+        "NeverDArm64eAnalysisTests": "ff868883a16163c9882b10f4a6bd6ca2211c3cf190a40dc6948091fa21c2e6ec",
+        "NeverDLanguageEHTests": "b2c0550a78a62f36f3251bef4224f9c451a7f93d43ebe95968903bfcbf408ccf",
+        "NeverDNativeExceptionRewriteContractTests": "16f4cab03cd77d30e6778b14c46b6b5516f057e7d3ecbb0b458e85cc589b2fbf",
+        "NeverDAAPCS64CallContractTests": "92eed0d5a49f65d572caea36cee715f5bce41d31928b92a4590feb00ae02f0f2",
+        "NeverDLLVMCVectorTests": "c6f54cdbe465851126d59653dc4f5a8f7ff467dfc2455233c199fa34aed29303",
+        "NeverDLowInstructionBoundaryTests": "9abba3951aabe8c59bf685d897ae6d3d49c09e1fda06cfe1b6c1fde9ca6f4ee5",
+        "NeverDSourceStackFrameTests": "d56b9f00333dabfcf178ed53f0bf5fca52930e8815a4d177b90b211fc902fdc8",
+        "NeverDLowUndefinedDigestTests": "2b343bfd0329467909eaa15aa30dc6b3e263e8cdf08320d7aa4da0f2cb9fb6a5"
+      },
+      "junit_sha256": "83c2000ee825e3d2d4b873a5c4ce7196cf3895a275bfa981fc57ba993e8f0f38",
+      "inventory_sha256": "f1d7a216a70c4a6962c6c8c3adc13a17cef20df40361912bb2378da6ebd11c3a",
+      "sp_tests": 28,
+      "sp_artifacts_identical": true
+    },
+    "sp_generated_input_equivalence": {
+      "source_head": "0e72cd6007e63beb4beb21f7d79d86ab6999f427",
+      "qualified_generator": "54d3a8fed8c28c524668384f8e4ce0042ef57cd5",
+      "identical_artifacts": 135,
+      "changed_artifacts": [],
+      "all_artifacts_identical": true
+    },
+    "scope": "Fresh Release rebuild after integrating dev, actual generated registrations of only the eight rebuilt targets, all raw-SP exports and unchanged original case timeouts. Official model and native fault qualification inputs remain byte-identical.",
+    "native_signed_unwind_qualified": false
+  },
+  "native_signed_unwind_a_only_diagnostic": {
+    "scope": "Independent A-only signed-frame original control; no NeverD product or full ABI qualification",
+    "frame_sha256": "26dbfcd4f5609af85b817133b8fb33833e83aced92ddcfde65ffcdd5252f877f",
+    "harness_sha256": "98570517bf6bc19e5dace6e815060f3f1af5126a376daf83f2bd18f273817b7b",
+    "observations": [
+      {
+        "optimization": "O0",
+        "compile_command": [
+          "/usr/bin/xcrun",
+          "clang++",
+          "-arch",
+          "arm64",
+          "-O0",
+          "-std=c++20",
+          "-Wall",
+          "-Wextra",
+          "-Werror",
+          "-femit-dwarf-unwind=always",
+          "<repository>/build-arm64e/arm64e-sp-call-evidence/signed-unwind-prototype/harness.cpp",
+          "<repository>/build-arm64e/arm64e-sp-call-evidence/signed-unwind-prototype/a-key-control/frame-a.s",
+          "-o",
+          "<repository>/build-arm64e/arm64e-sp-call-evidence/signed-unwind-prototype/a-key-control/arm64-signed-a-O0"
+        ],
+        "native_signed_unwind_qualified": false,
+        "compile_returncode": 0,
+        "compile_stdout": "",
+        "compile_stderr": "",
+        "execute_returncode": -6,
+        "execute_stdout": "",
+        "execute_stderr": "PC=100a9c62c\nPC=100a9caa4\nPC=100a9c62c\nPC=100a9caa4\nlibc++abi: terminating due to uncaught exception of type unsigned long long\n",
+        "binary_sha256": "3bcc2dd545d2f848b020cc7df83a5e7ce1424ffce90ba6dc2b352f1df41b99de"
+      },
+      {
+        "optimization": "O2",
+        "compile_command": [
+          "/usr/bin/xcrun",
+          "clang++",
+          "-arch",
+          "arm64",
+          "-O2",
+          "-std=c++20",
+          "-Wall",
+          "-Wextra",
+          "-Werror",
+          "-femit-dwarf-unwind=always",
+          "<repository>/build-arm64e/arm64e-sp-call-evidence/signed-unwind-prototype/harness.cpp",
+          "<repository>/build-arm64e/arm64e-sp-call-evidence/signed-unwind-prototype/a-key-control/frame-a.s",
+          "-o",
+          "<repository>/build-arm64e/arm64e-sp-call-evidence/signed-unwind-prototype/a-key-control/arm64-signed-a-O2"
+        ],
+        "native_signed_unwind_qualified": false,
+        "compile_returncode": 0,
+        "compile_stdout": "",
+        "compile_stderr": "",
+        "execute_returncode": -6,
+        "execute_stdout": "",
+        "execute_stderr": "PC=102df0630\nPC=102df0888\nPC=102df0630\nPC=102df0888\nlibc++abi: terminating due to uncaught exception of type unsigned long long\n",
+        "binary_sha256": "ae8b42a4a749c07a65d3aecb175263407a9f4e9a8076a19691fe194ba7636f50"
+      }
+    ],
+    "conclusion": "The B-key-only hypothesis is disproved: independently signed A-only frames also stop unwinding and terminate the C++ throw at both O0/O2. No native arm64e or NeverD call/unwind qualification is inferred."
+  },
+  "implementation_pull_request": "https://github.com/NeverSight/NeverD/pull/1853",
+  "implementation_merge_revision": "75e7187ca22018a9c164d7b0b1618289163a5431",
+  "postmerge_validation": {
+    "source_head": "75e7187ca22018a9c164d7b0b1618289163a5431",
+    "sp_tests": 28,
+    "identical_qualified_artifacts": 135,
+    "qualified_generator": "54d3a8fed8c28c524668384f8e4ce0042ef57cd5",
+    "suites": [
+      {
+        "suite": "support",
+        "command": [
+          "ctest",
+          "--test-dir",
+          "<repository>/build-arm64e/arm64e-sp-call-evidence/postmerge-support-tests",
+          "--build-config",
+          "Release",
+          "--parallel",
+          "2",
+          "--output-on-failure",
+          "--output-junit",
+          "<repository>/build-arm64e/arm64e-sp-call-evidence/postmerge-support.xml"
+        ],
+        "registered": 737,
+        "passed": 736,
+        "skipped": [
+          "Scratch.DumpRealBinary"
+        ],
+        "failed": [],
+        "exit_code": 0,
+        "elapsed_seconds": 168.88257129199337,
+        "binary_sha256": {
+          "NeverDLanguageEHTests": "18f7360a8f44d22a3e9a5759c02e0942da3a35c0501dad55aed54619e0af1b09",
+          "NeverDNativeExceptionRewriteContractTests": "f4e547d3ac274652a2b6b3b0e116e9af506ef4176be1a9e3308c92d24ddd9978",
+          "NeverDAAPCS64CallContractTests": "9617009adf2f52e6c035e91b02db9d67d9c58f38877da5a915c616d16f97c42a",
+          "NeverDLLVMCVectorTests": "7b2b0c916d43657d320e77c32f3d387ff079d69641190e0ffc88f0054713ee5c",
+          "NeverDLowInstructionBoundaryTests": "d9013fe8802750564c7da6b24b3964dfa9373679dc09cdbd942acafb9f46c52a",
+          "NeverDSourceStackFrameTests": "d56b9f00333dabfcf178ed53f0bf5fca52930e8815a4d177b90b211fc902fdc8",
+          "NeverDLowUndefinedDigestTests": "2b343bfd0329467909eaa15aa30dc6b3e263e8cdf08320d7aa4da0f2cb9fb6a5"
+        },
+        "junit_sha256": "5af17b56cb9a88d0f3f47154ac88b3ae184ebd9475e498b262f83ee6014e774a"
+      },
+      {
+        "suite": "authentication",
+        "command": [
+          "ctest",
+          "--test-dir",
+          "<repository>/build-arm64e/arm64e-sp-call-evidence/current-registered-tests",
+          "--build-config",
+          "Release",
+          "-R",
+          "^(AArch64PAuth|AArch64CPA|AArch64PACM|AArch64ExceptionReturn|A64FastClassifyParity|MachOArm64e|MachOBindingIdentity|MachOThreadedBind)",
+          "--parallel",
+          "2",
+          "--output-on-failure",
+          "--output-junit",
+          "<repository>/build-arm64e/arm64e-sp-call-evidence/postmerge-authentication.xml"
+        ],
+        "registered": 106,
+        "passed": 103,
+        "skipped": [
+          "AArch64PAuthSemantics.NativeKeysAgreeWithBothCProjections",
+          "AArch64PAuthLRSemantics.NativeTwoModifierKeysAgreeWithBothCProjections",
+          "AArch64PACMSemantics.NativePrefixModesAgreeWithBothCProjections"
+        ],
+        "failed": [],
+        "exit_code": 0,
+        "elapsed_seconds": 36.993598915985785,
+        "binary_sha256": {
+          "NeverDArm64eAnalysisTests": "b96674fc73e15bc788fcac135d884882aad0d8741dbdac5a3e6314400942da83"
+        },
+        "junit_sha256": "81dd93070b7eefd323d509682da27c054cfbd36ef83ae9aeecc8445af2a498af"
+      }
+    ],
+    "native_signed_unwind_qualified": false,
+    "whole_image_arm64e_qualified": false,
+    "registered_total": 871,
+    "passed_total": 867,
+    "skipped_total": 4
+  },
+  "postmerge_source_execution": {
+    "source_head": "75e7187ca22018a9c164d7b0b1618289163a5431",
+    "binary_sha256": "b96674fc73e15bc788fcac135d884882aad0d8741dbdac5a3e6314400942da83",
+    "registered_tests": 28,
+    "exit_code": 0,
+    "command": [
+      "ctest",
+      "--test-dir",
+      "build-arm64e",
+      "--build-config",
+      "Release",
+      "-L",
+      "^NeverDArm64eAnalysisTests$",
+      "-R",
+      "^(AArch64Stack(Writeback|VectorWriteback|Pair)Memory\\.|AllBatches/AArch64StructureMemoryProjection\\.RawSP)",
+      "--parallel",
+      "1",
+      "--output-on-failure"
+    ],
+    "elapsed_seconds": 205.34620229099528,
+    "receipt_sha256": "37dd2de28dd9047ddec4acfe63e374c0245d6bff65542ded79d9cc6afc740bfc",
+    "artifacts_equal_to_qualified_generator": true,
+    "identical_artifacts": 135
   }
 }

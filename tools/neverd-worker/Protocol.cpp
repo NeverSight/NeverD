@@ -109,6 +109,76 @@ std::string sidecarText(const Json &value) {
   return text;
 }
 
+std::string formatSidecarText(std::string_view encoded) {
+  std::string text;
+  text.reserve(encoded.size() + encoded.size() / 2);
+  std::size_t indent = 0;
+  const auto newline = [&] {
+    text += '\n';
+    text.append(indent, ' ');
+  };
+  for (std::size_t i = 0; i < encoded.size(); ++i) {
+    const char c = encoded[i];
+    switch (c) {
+    case '"': {
+      // Copy string spans together. Bound each escape search by the next
+      // quote so many short strings never rescan the remaining document.
+      auto start = i, cursor = i + 1;
+      auto quote = encoded.find('"', cursor);
+      for (;;) {
+        auto escape = encoded.substr(cursor, quote - cursor).find('\\');
+        if (escape == std::string_view::npos) {
+          text.append(encoded.substr(start, quote + 1 - start));
+          i = quote;
+          break;
+        }
+        escape += cursor;
+        const char escaped = encoded[escape + 1];
+        // LLVM spells these controls with Unicode escapes. Consume whole
+        // escapes so a literal backslash followed by b/f stays literal.
+        if (escaped == 'b' || escaped == 'f') {
+          text.append(encoded.substr(start, escape - start));
+          text += escaped == 'b' ? "\\u0008" : "\\u000c";
+          start = escape + 2;
+        }
+        cursor = escape + 2;
+        if (cursor > quote)
+          quote = encoded.find('"', cursor);
+      }
+      break;
+    }
+    case '[':
+    case '{':
+      text += c;
+      if (encoded[i + 1] == (c == '[' ? ']' : '}'))
+        text += encoded[++i];
+      else {
+        indent += 2;
+        newline();
+      }
+      break;
+    case ']':
+    case '}':
+      indent -= 2;
+      newline();
+      text += c;
+      break;
+    case ',':
+      text += c;
+      newline();
+      break;
+    case ':':
+      text += ": ";
+      break;
+    default:
+      text += c;
+      break;
+    }
+  }
+  text += '\n';
+  return text;
+}
+
 namespace {
 std::string frameBody(const std::string &body) {
   if (body.size() > MaxFrameBytes)

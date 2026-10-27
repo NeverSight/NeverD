@@ -42,7 +42,7 @@ inline constexpr unsigned OldestComparisonSchemaVersion = 2;
 /// The version of the matcher, the features and the delta; part of a
 /// comparison's identity.  Raise it whenever a change could pair functions
 /// differently or measure a pair differently.
-inline constexpr unsigned MatcherVersion = 2;
+inline constexpr unsigned MatcherVersion = 4;
 
 /// Writes \p Result of \p Primary and \p Secondary as a saved comparison.
 /// SummaryOnly emits bounded metadata and counts without inventories or pairs.

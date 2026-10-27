@@ -6283,12 +6283,21 @@ void HighCWriter::writeFunctionProjection(const HighFunc &Func) {
   }
 
   if (EmitFunctionWrapper) {
-    const std::string TargetFeatures =
+    std::string TargetFeatures =
         Opts.TheArch == Arch::X86 || Opts.TheArch == Arch::X64
             ? x86CIntrinsicTargetFeatures(Func)
         : Opts.TheArch == Arch::ARM || Opts.TheArch == Arch::AArch64
             ? armCIntrinsicTargetFeatures(Func)
             : std::string();
+    if (Opts.TheArch == Arch::AArch64 && Func.ReturnProtection) {
+      if (!TargetFeatures.empty())
+        TargetFeatures += ",";
+      TargetFeatures += "branch-protection=pac-ret";
+      if (Func.ReturnProtection->Leaf)
+        TargetFeatures += "+leaf";
+      if (Func.ReturnProtection->BKey)
+        TargetFeatures += "+b-key";
+    }
     if (!TargetFeatures.empty())
       OS << "__attribute__((target(\"" << TargetFeatures << "\")))\n";
 

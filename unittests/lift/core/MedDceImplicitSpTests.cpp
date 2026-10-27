@@ -76,6 +76,43 @@ TEST(MedDceImplicitSp, KeepsPredecessorStackPointerAtCall) {
   EXPECT_EQ(CallBlock.Ops.front().Opcode, NdOp::CALL);
 }
 
+TEST(MedDCE, KeepsDedicatedIndirectResultSetupAcrossPredecessors) {
+  const auto &TRI = getTargetRegInfo(Arch::AArch64);
+  for (NdOp CallKind : {NdOp::CALL, NdOp::INDIR_CALL})
+    for (bool Split : {false, true}) {
+      SCOPED_TRACE(static_cast<unsigned>(CallKind));
+      SCOPED_TRACE(Split);
+      MedFunc Func;
+      Func.Blocks.resize(Split ? 2 : 1);
+      auto &Setup = Func.Blocks.front();
+      Setup.Id = 0;
+      MedVar Buffer = reg(2, 1, 8, TRI.indirectResultReg());
+      Buffer.TheArch = Arch::AArch64;
+      MedVar Stack = reg(1, 0, 8, TRI.StackPointer);
+      Stack.TheArch = Arch::AArch64;
+      MedOp Address;
+      Address.Opcode = NdOp::INT_ADD;
+      Address.Output = Buffer;
+      Address.addInput(Stack);
+      Address.addInput(MedVar::makeConst(32, 8));
+      Setup.Ops.push_back(Address);
+      auto &Calls = Func.Blocks.back();
+      if (Split) {
+        Setup.Succs = {1};
+        Calls.Id = 1;
+        Calls.Preds = {0};
+      }
+      MedOp Call;
+      Call.Opcode = CallKind;
+      Call.addInput(MedVar::makeConst(0x2000, 8));
+      Calls.Ops.push_back(Call);
+      LowToMedConverter().runRegisterDce(Func, Arch::AArch64);
+      ASSERT_FALSE(Setup.Ops.empty());
+      EXPECT_EQ(Setup.Ops.front().Opcode, NdOp::INT_ADD);
+      EXPECT_EQ(Setup.Ops.front().Output, Buffer);
+    }
+}
+
 TEST(MedDCE, KeepsLivePhiCyclesAndDropsDeadCyclesInEitherBlockOrder) {
   for (Arch Architecture : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64})
     for (bool Reverse : {false, true}) {

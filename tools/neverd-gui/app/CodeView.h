@@ -326,6 +326,7 @@ private:
   std::optional<QVector<QJsonObject>> refreshPages_;
   bool interrupted_ = false;
   bool foldPreludeAfterLoad_ = true;
+  bool foldDetailsAfterLoad_ = true;
   QSet<QString> blocksAfterLoad_;
   QString blockStructureAfterLoad_;
   /// The first page's prelude: lines and end_byte.

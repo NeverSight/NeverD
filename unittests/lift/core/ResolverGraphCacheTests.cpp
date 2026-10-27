@@ -1476,6 +1476,28 @@ struct ResolverGraphCacheTestAccess {
     Q.Relation = Relation::ConstantAddress;
     return Q;
   }
+  static void useWideAddressContainers(CFGBuilder &B, unsigned SliceOffset) {
+    for (va_t Address : {0x101, 0x102}) {
+      auto &Ops = B.Insns.at(Address).Ops;
+      const auto Destination = Ops.front().Output;
+      LowOp Seed = Ops.front();
+      Seed.Output = NdVar::tmp(1, 8);
+      LowOp Slice;
+      Slice.Addr = Address;
+      Slice.Seq = 1;
+      Slice.Opcode = NdOp::SUBBYTES;
+      Slice.Output = NdVar::tmp(2, Destination.Size);
+      Slice.addInput(Seed.Output);
+      Slice.addInput(NdVar::scalar(SliceOffset, 1));
+      LowOp Store = Ops.front();
+      Store.Seq = 2;
+      Store.Inputs[0] = Slice.Output;
+      Ops.front() = Seed;
+      Ops.insert(Ops.begin() + 1, {Slice, Store});
+      if (Ops.size() > 3)
+        Ops.back().Seq = 3;
+    }
+  }
   static void addAddressUseRoot(CFGBuilder &B) {
     B.PersistentCFGRoots.insert(0x103);
   }
@@ -1640,6 +1662,37 @@ TEST(ResolverConstantAddress, EveryArchitectureAndFormatRequiresOneAddress) {
           EXPECT_EQ(Access::addressBatch(B, {Q}), Result);
         }
       }
+    }
+}
+
+TEST(ResolverConstantAddress, WideContainersRetainOnlyTheCompleteGuestPointer) {
+  for (Arch Target : {Arch::X86, Arch::ARM})
+    for (BinaryFormat Format :
+         {BinaryFormat::ELF, BinaryFormat::COFF, BinaryFormat::MachO}) {
+      auto Image = image();
+      Image.Arch = Target;
+      Image.Format = Format;
+      Image.Bits = Bitness::Bits32;
+      for (const NdVar Value :
+           {NdVar::address(0x4000, 8), NdVar::address(0x100004000, 8),
+            NdVar::scalar(0x4000, 8), NdVar::addressFragment(0x4000, 8),
+            NdVar::cst(0x4000, 8), NdVar::reg(24, 8)})
+        for (unsigned Offset : {0u, 1u}) {
+          SCOPED_TRACE(::testing::Message()
+                       << unsigned(Target) << ':' << unsigned(Format) << ':'
+                       << unsigned(Value.Provenance) << ':' << Value.Offset
+                       << ':' << Offset);
+          CFGBuilder B;
+          const auto Q = Access::seedAddressJoin(B, Image, Value, Value);
+          Access::useWideAddressContainers(B, Offset);
+          const auto Result = Access::addressBatch(B, {Q});
+          ASSERT_TRUE(Result.Complete);
+          const bool Exact = Value == NdVar::address(0x4000, 8) && Offset == 0;
+          EXPECT_EQ(Result.Values, (std::vector<bool>{Exact}));
+          EXPECT_EQ(Result.Addresses,
+                    (std::vector<std::optional<va_t>>{
+                        Exact ? std::optional<va_t>(0x4000) : std::nullopt}));
+        }
     }
 }
 

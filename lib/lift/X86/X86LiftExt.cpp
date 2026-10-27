@@ -776,6 +776,7 @@ bool X86Lifter::liftExt(LiftState &S, const cs_insn *Insn, const cs_x86 &X86) {
     break;
   }
 
+  case X86_INS_XBEGIN:
   case X86_INS_XABORT:
   case X86_INS_XEND:
   case X86_INS_XTEST:

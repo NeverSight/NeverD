@@ -12,6 +12,7 @@
 #include "../NativeWindowStates.h"
 
 #import <AppKit/AppKit.h>
+#import <ApplicationServices/ApplicationServices.h>
 #include <QGuiApplication>
 #include <QTest>
 #include <QWidget>
@@ -25,6 +26,21 @@ bool nativeWindowIsMinimized(QWidget &Window) {
 bool hasNativeApplicationModalWindow() { return NSApp.modalWindow != nil; }
 
 void quitNativeApplication() { [NSApp terminate:nil]; }
+
+bool canPostNativePointerEvents() { return CGPreflightPostEventAccess(); }
+
+bool moveNativePointer(QPoint Position) {
+  if (!canPostNativePointerEvents())
+    return false;
+  CGEventRef Event = CGEventCreateMouseEvent(
+      nullptr, kCGEventMouseMoved, CGPointMake(Position.x(), Position.y()),
+      kCGMouseButtonLeft);
+  if (!Event)
+    return false;
+  CGEventPost(kCGHIDEventTap, Event);
+  CFRelease(Event);
+  return true;
+}
 
 bool reopenNativeApplication() {
   auto *Event = [NSAppleEventDescriptor

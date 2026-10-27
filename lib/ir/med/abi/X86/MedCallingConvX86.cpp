@@ -515,34 +515,51 @@ void preserveFPStackHomes(
     const MedFunc &Func, int64_t Base, unsigned Slot,
     llvm::function_ref<std::optional<int64_t>(const MedVar &)> Trace,
     std::set<int64_t> &MutableSlots) {
-  // A write or escaped pointer to one part of a memory operand keeps every
-  // covered slot in its physical home. Packed reads retain alignment/fault
-  // ownership even when all incoming bytes are otherwise immutable.
-  bool Changed;
-  do {
-    Changed = false;
-    for (const auto &Block : Func.Blocks)
-      for (const auto &Op : Block.Ops) {
-        const auto Read = stackMemoryRead(Op);
-        if (!Read || Read->AddressInput != 1)
-          continue;
-        const auto Offset = Trace(Op.Inputs[Read->AddressInput]);
-        if (!Offset)
-          continue;
-        const int64_t First = Base + ((*Offset - Base) / Slot) * Slot;
-        const int64_t Last =
-            Base + ((*Offset - Base + Read->Bytes - 1) / Slot) * Slot;
-        const unsigned ByteOffset = *Offset - First;
-        const bool Pair = ByteOffset == 0 && Slot == 4 && Read->Bytes == 8;
-        bool Keep =
-            !Read->ScalarFP || (!Pair && ByteOffset + Read->Bytes > Slot);
+  // Packed and straddling reads require physical homes regardless of prior
+  // writes. Other multi-slot reads propagate mutability between their homes.
+  // Resolve each immutable entry-SP query once instead of rescanning the
+  // whole function for every step through a chain of overlapping reads.
+  llvm::SmallVector<std::pair<int64_t, int64_t>, 8> DependentRanges;
+  for (const auto &Block : Func.Blocks)
+    for (const auto &Op : Block.Ops) {
+      const auto Read = stackMemoryRead(Op);
+      if (!Read || Read->AddressInput != 1)
+        continue;
+      const auto Offset = Trace(Op.Inputs[Read->AddressInput]);
+      if (!Offset)
+        continue;
+      const int64_t First = Base + ((*Offset - Base) / Slot) * Slot;
+      const int64_t Last =
+          Base + ((*Offset - Base + Read->Bytes - 1) / Slot) * Slot;
+      const unsigned ByteOffset = *Offset - First;
+      const bool Pair = ByteOffset == 0 && Slot == 4 && Read->Bytes == 8;
+      const bool Keep =
+          !Read->ScalarFP || (!Pair && ByteOffset + Read->Bytes > Slot);
+      if (Keep) {
         for (int64_t Home = First; Home <= Last; Home += Slot)
-          Keep |= MutableSlots.count(Home) != 0;
-        if (Keep)
-          for (int64_t Home = First; Home <= Last; Home += Slot)
-            Changed |= MutableSlots.insert(Home).second;
+          MutableSlots.insert(Home);
+      } else if (First < Last) {
+        DependentRanges.emplace_back(First, Last);
       }
-  } while (Changed);
+      // A read contained in one slot cannot add a new mutable home.
+    }
+
+  if (DependentRanges.empty() || MutableSlots.empty())
+    return;
+  llvm::sort(DependentRanges);
+  for (size_t I = 0; I < DependentRanges.size();) {
+    const int64_t First = DependentRanges[I].first;
+    int64_t Last = DependentRanges[I++].second;
+    // Overlap connects homes; merely adjacent ranges remain independent.
+    while (I < DependentRanges.size() && DependentRanges[I].first <= Last)
+      Last = std::max(Last, DependentRanges[I++].second);
+    bool Keep = false;
+    for (int64_t Home = First; Home <= Last && !Keep; Home += Slot)
+      Keep = MutableSlots.count(Home) != 0;
+    if (Keep)
+      for (int64_t Home = First; Home <= Last; Home += Slot)
+        MutableSlots.insert(Home);
+  }
 }
 
 void recoverFPStackReads(

@@ -29,6 +29,84 @@ using namespace neverd;
 
 namespace {
 
+TEST(CSourcePresentation, KnownNarrowStringCallsDoNotRequireAWideLiteral) {
+  for (Arch Architecture : {Arch::AArch64, Arch::X64}) {
+    BinaryImage Image;
+    Image.Arch = Architecture;
+    Image.Format = BinaryFormat::ELF;
+    Image.Bits = Bitness::Bits64;
+    Segment Data;
+    Data.VA = 0x2000;
+    // A one-character C string followed immediately by another string.
+    Data.Data = {'C', 0, 'n', 'e', 'x', 't', 0};
+    Data.Size = Data.FileSz = Data.Data.size();
+    Data.Flags = SegmentFlags::Readable;
+    Image.Segments.push_back(std::move(Data));
+    HighFunc Function;
+    Function.Entry = 0x1000;
+    Function.Name = "print_message";
+    Function.ReturnType = NdType::makeVoid();
+    HighStmt Call;
+    Call.Kind = StmtKind::Call;
+    Call.CallExpr =
+        HighExpr::makeCall("puts", 0x3000, {HighExpr::makeConst(0x2000, 8)});
+    Function.Body.push_back(std::move(Call));
+    llvm::LLVMContext Context;
+    llvm::SMDiagnostic Diagnostic;
+    auto Module = llvm::parseAssemblyString(R"(
+      target datalayout = "e-p:64:64"
+      declare i32 @puts(ptr)
+      define void @print_message() {
+        call i32 @puts(ptr inttoptr (i64 8192 to ptr))
+        ret void
+      }
+    )",
+                                            Diagnostic, Context);
+    ASSERT_TRUE(Module);
+    for (bool LLVM : {false, true}) {
+      SCOPED_TRACE(LLVM);
+      CEmitterOptions Options;
+      Options.TheArch = Architecture;
+      Options.Format = Image.Format;
+      Options.Image = &Image;
+      std::string Text;
+      llvm::raw_string_ostream Out(Text);
+      ASSERT_TRUE(
+          LLVM ? LLVMCEmitter().emit(*Module, Out, Options, nullptr, &Image)
+               : HighCEmitter().emit({Function}, Out, Options));
+      EXPECT_NE(Text.find("puts(\"C\")"), std::string::npos) << Text;
+    }
+    // Without a narrow consumer, a non-ASCII wide string must not become
+    // its one-byte prefix. The typed call above supplies the missing width.
+    EXPECT_FALSE(imageStringLiteral(&Image, 0x2000));
+  }
+}
+
+TEST(CSourcePresentation, LiteralMessagesUseTheFullStringReadWindow) {
+  for (unsigned Length : {66u, 4095u, 4096u}) {
+    BinaryImage Image;
+    Image.Arch = Arch::AArch64;
+    Image.Format = BinaryFormat::ELF;
+    Image.Bits = Bitness::Bits64;
+    Segment Data;
+    Data.VA = 0x2000;
+    Data.Data.assign(Length, 'x');
+    Data.Data.push_back(0);
+    Data.Size = Data.FileSz = Data.Data.size();
+    Data.Flags = SegmentFlags::Readable;
+    Image.Segments.push_back(std::move(Data));
+    const auto Literal = imageStringLiteral(&Image, 0x2000);
+    if (Length < 4096)
+      EXPECT_EQ(Literal, std::optional<std::string>(
+                             "\"" + std::string(Length, 'x') + "\""));
+    else
+      EXPECT_FALSE(Literal);
+    // Expanding presentation length never makes fixup storage into text.
+    Image.DataPtrRelocSlots.insert(0x2000 + Length / 2);
+    EXPECT_FALSE(imageStringLiteral(&Image, 0x2000));
+  }
+}
+
 TEST(CSourcePresentation, AggregateStorageIsNotAnIntegerVariable) {
   for (llvm::StringRef Storage : {"[248 x i8]", "[16 x i8]", "{ i64, i64 }"}) {
     llvm::LLVMContext Context;

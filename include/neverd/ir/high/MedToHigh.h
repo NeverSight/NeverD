@@ -624,6 +624,7 @@ private:
   /// anchor ahead of its first top-level statement, so its label stays.
   void anchorDispatcherEntries(HighFunc &Func) const;
   const MedFunc *CurMed = nullptr;
+  std::set<const MedOp *> ReturnProtectionOps;
   /// Entry-relative stack slots CurMed loads anywhere or whose address
   /// escapes; such a slot is a local, not an outgoing argument (cached per
   /// function).

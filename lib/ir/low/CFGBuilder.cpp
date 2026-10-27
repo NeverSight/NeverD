@@ -752,7 +752,8 @@ CFGBuilder::classifyOwnInteriorCalls(const BinaryImage &Img,
   const size_t N = Func.Blocks.size();
   if (N == 0)
     return Verdict;
-  const StackFrameModel M(getTargetRegInfo(Img.Arch), Img.abiFormat());
+  StackFrameModel M(getTargetRegInfo(Img.Arch), Img.abiFormat());
+  M.CallsKeepStackPointer = Img.Arch == Arch::X64;
   const StackOffsetKey &StackPointerKey = M.StackPointer;
   // Offsets from the entry stack pointer.  Any other root, including a block
   // an exceptional edge enters, starts with nothing known.
@@ -805,6 +806,18 @@ CFGBuilder::classifyOwnInteriorCalls(const BinaryImage &Img,
   auto NoteUnproven = [&](va_t Addr) {
     if (!Verdict.Unproven)
       Verdict.Unproven = Addr;
+  };
+  // A direct tail call lifts as `call target; ret`. Where the target is
+  // proved never to return, as this build's own calls are, that RET never
+  // executes: the path ends there without popping anything.
+  auto EndsInNoReturnTail = [&](const LowOp &Op) {
+    if (Op.Opcode != NdOp::RETURN)
+      return false;
+    const auto It = Insns.find(Op.Addr);
+    return It != Insns.end() && It->second.IsCall && It->second.IsRet &&
+           !It->second.IsIndirect && It->second.Immediate &&
+           calleeNeverReturns(Img, *It->second.Immediate, NoReturnTargets,
+                              NoReturnCallees, NoReturnCalleeDepth);
   };
 
   // A retpoline replaces an internal call's pushed PC, then pops it as an
@@ -990,6 +1003,8 @@ CFGBuilder::classifyOwnInteriorCalls(const BinaryImage &Img,
           Discards = true;
           break;
         }
+        if (EndsInNoReturnTail(Op))
+          break;
         const bool Replayed = Op.Seq == 0 && ReplayedReturns.count(Op.Addr);
         if (Op.Opcode == NdOp::RETURN || Replayed) {
           auto SP = S.find(StackPointerKey);
@@ -1045,7 +1060,7 @@ CFGBuilder::classifyOwnInteriorCalls(const BinaryImage &Img,
       Valid &= Call != Insns.end();
       const va_t Continuation =
           Call == Insns.end() ? InvalidVA : Call->first + Call->second.Size;
-      const auto *Own = Img.ExceptionMetadata.findFunction(Func.Entry);
+      const auto *Own = Img.ExceptionMetadata.findFunction(*Sites.begin());
       Valid &= Own && Own->CodeRange.contains(Continuation) &&
                Own->describesUnwindOnly();
       std::optional<size_t> Caller;
@@ -1163,7 +1178,7 @@ CFGBuilder::classifyOwnInteriorCalls(const BinaryImage &Img,
     for (const LowOp &Op : Func.Blocks[B].Ops) {
       if (Op.Opcode == NdOp::RETURN) {
         if (Verdict.Returns.count(Op.Addr) ||
-            Verdict.TailReturns.count(Op.Addr))
+            Verdict.TailReturns.count(Op.Addr) || EndsInNoReturnTail(Op))
           continue;
         auto SP = S.find(StackPointerKey);
         if (SP != S.end() && SP->second.Base == 0 && SP->second.Hi < 0) {

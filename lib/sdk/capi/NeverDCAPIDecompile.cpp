@@ -152,6 +152,12 @@ void emitHighView(const HighFunc &F, const LowFunc *Low,
   Sink("; Params: " + std::to_string(F.Params.size()) +
            ", Locals: " + std::to_string(F.Locals.size()) + "\n",
        {Prefix + ":frame", "header"});
+  if (F.ReturnProtection)
+    Sink(std::string("; Return protection: PAC, key=") +
+             (F.ReturnProtection->BKey ? "IB" : "IA") +
+             ", modifier=entry SP, " +
+             (F.ReturnProtection->Leaf ? "leaf" : "non-leaf") + "\n",
+         {Prefix + ":return-protection", "header"});
   Sink("\n", {Prefix + ":blank"});
   size_t Row = 0;
   for (const auto &S : F.Body)

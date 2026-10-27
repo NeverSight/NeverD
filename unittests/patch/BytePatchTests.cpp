@@ -25,8 +25,10 @@
 #include "llvm/Support/Endian.h"
 #include "llvm/Support/FileSystem.h"
 
+#include <algorithm>
 #include <fstream>
 #include <iterator>
+#include <utility>
 
 using namespace neverd;
 using namespace neverd::patch;
@@ -478,6 +480,181 @@ TEST_F(BytePatch, OverlapAndPartialRevertReplayMatchesAByteOracle) {
     ASSERT_FALSE(Overlay.replace(Img, *Input, std::move(*Rows)));
     EXPECT_TRUE(std::equal(Expected.begin(), Expected.end(),
                            Img.Segments[0].Data.begin()));
+  }
+}
+
+TEST_F(BytePatch, ImmutableInputViewsRetainBoundsAndSnapshotOwnership) {
+  reset(std::vector<uint8_t>(16384, 0xcc));
+  auto Retained = *Input;
+  auto View = Retained.view(1, 3);
+  ASSERT_TRUE(bool(View)) << llvm::toString(View.takeError());
+  EXPECT_EQ(*View, llvm::ArrayRef<uint8_t>(Original).slice(1, 3));
+  {
+    std::ofstream Changed(Path, std::ios::binary | std::ios::trunc);
+    Changed << "different bytes";
+  }
+  Input.reset();
+  EXPECT_EQ(*View, llvm::ArrayRef<uint8_t>(Original).slice(1, 3));
+  auto Owned = Retained.read(1, 3);
+  ASSERT_TRUE(bool(Owned)) << llvm::toString(Owned.takeError());
+  (*Owned)[0] ^= 0xff;
+  EXPECT_EQ((*View)[0], Original[1]);
+  auto Empty = Retained.view(Original.size(), 0);
+  ASSERT_TRUE(bool(Empty)) << llvm::toString(Empty.takeError());
+  EXPECT_TRUE(Empty->empty());
+  auto EmptyCopy = Retained.read(Original.size(), 0);
+  ASSERT_TRUE(bool(EmptyCopy)) << llvm::toString(EmptyCopy.takeError());
+  EXPECT_TRUE(EmptyCopy->empty());
+  for (auto [Offset, Size] : {std::pair<uint64_t, uint64_t>{Original.size(), 1},
+                              {Original.size() + 1, 0},
+                              {1, UINT64_MAX},
+                              {UINT64_MAX, 1}}) {
+    SCOPED_TRACE(Offset);
+    auto Bad = Retained.view(Offset, Size);
+    ASSERT_FALSE(bool(Bad));
+    llvm::consumeError(Bad.takeError());
+    auto BadCopy = Retained.read(Offset, Size);
+    ASSERT_FALSE(bool(BadCopy));
+    llvm::consumeError(BadCopy.takeError());
+  }
+}
+
+TEST_F(BytePatch, FragmentedReplayMatchesIndependentByteAndKindOracles) {
+  reset(std::vector<uint8_t>(128, 0xcc));
+  uint32_t State = 0x639c03ae;
+  const auto Next = [&] {
+    State ^= State << 13;
+    State ^= State >> 17;
+    State ^= State << 5;
+    return State;
+  };
+  for (unsigned Step = 0; Step < 64; ++Step) {
+    SCOPED_TRACE(Step);
+    auto Expected = Original;
+    std::vector<PatchKind> Kinds(Original.size(), PatchKind::Bytes);
+    std::vector<PatchRow> Rows;
+    for (size_t First = 0; First < Original.size();) {
+      const size_t Size =
+          std::min<size_t>(1 + Next() % 9, Original.size() - First);
+      const auto Kind = Next() % 3 ? PatchKind::Bytes : PatchKind::Nop;
+      PatchRow Row{
+          First, 0x1000 + First, std::vector<uint8_t>(Size, 0xcc), {}, Kind};
+      for (size_t I = 0; I < Size; ++I) {
+        const auto Byte = uint8_t(Next() % 4 ? 0x90 : 0xcc);
+        Row.Current.push_back(Byte);
+        Expected[First + I] = Byte;
+        Kinds[First + I] = Kind;
+      }
+      Rows.push_back(std::move(Row));
+      First += Size;
+    }
+    // Persisted input may split one canonical run, include unchanged bytes,
+    // arrive out of order or alternate kinds at adjacent byte boundaries.
+    for (size_t I = Rows.size(); I > 1; --I)
+      std::swap(Rows[I - 1], Rows[Next() % I]);
+    ASSERT_FALSE(Overlay.replace(Img, *Input, std::move(Rows)));
+    EXPECT_TRUE(std::equal(Expected.begin(), Expected.end(),
+                           Img.Segments[0].Data.begin()));
+    EXPECT_EQ(Img.Sections[0].Data, Img.Segments[0].Data);
+    auto Row = Overlay.rows().begin();
+    uint64_t Changed = 0;
+    for (size_t First = 0; First < Expected.size();) {
+      if (Expected[First] == Original[First]) {
+        ++First;
+        continue;
+      }
+      size_t End = First + 1;
+      while (End < Expected.size() && Expected[End] != Original[End] &&
+             Kinds[End] == Kinds[First])
+        ++End;
+      ASSERT_NE(Row, Overlay.rows().end());
+      EXPECT_EQ(Row->second.FileOffset, First);
+      EXPECT_EQ(Row->second.Address, 0x1000 + First);
+      EXPECT_EQ(Row->second.Kind, Kinds[First]);
+      EXPECT_EQ(Row->second.Original,
+                (std::vector<uint8_t>(Original.begin() + First,
+                                      Original.begin() + End)));
+      EXPECT_EQ(Row->second.Current,
+                (std::vector<uint8_t>(Expected.begin() + First,
+                                      Expected.begin() + End)));
+      Changed += End - First;
+      ++Row;
+      First = End;
+    }
+    EXPECT_EQ(Row, Overlay.rows().end());
+    EXPECT_EQ(Overlay.bytes(), Changed);
+    Overlay.clear(Img);
+    EXPECT_TRUE(std::equal(Original.begin(), Original.end(),
+                           Img.Segments[0].Data.begin()));
+  }
+}
+
+TEST_F(BytePatch, CanonicalReplayKeepsAdjacentSegmentsSeparate) {
+  reset(std::vector<uint8_t>(32, 0xcc));
+  auto &First = Img.Segments[0];
+  First.Size = First.FileSz = 16;
+  First.Data.resize(16);
+  Segment Second = First;
+  Second.VA = 0x1010;
+  Second.FileOff = 16;
+  Img.Segments.push_back(Second);
+  Img.Sections[0].Size = Img.Sections[0].FileSz = 32;
+  Img.Sections[0].Data.resize(32);
+  std::vector<PatchRow> Rows;
+  for (uint64_t Offset : {16, 0})
+    Rows.push_back({Offset, 0x1000 + Offset, std::vector<uint8_t>(16, 0xcc),
+                    std::vector<uint8_t>(16, 0x90), PatchKind::Bytes});
+  ASSERT_FALSE(Overlay.replace(Img, *Input, std::move(Rows)));
+  ASSERT_EQ(Overlay.rows().size(), 2u);
+  EXPECT_EQ(Overlay.rows().at(0).size(), 16u);
+  EXPECT_EQ(Overlay.rows().at(16).size(), 16u);
+  EXPECT_EQ(Img.Sections[0].Data, (std::vector<uint8_t>(32, 0x90)));
+  auto Reverted = Overlay.revert(Img, 0x100f, 2);
+  ASSERT_TRUE(bool(Reverted)) << llvm::toString(Reverted.takeError());
+  EXPECT_EQ(*Reverted, 2u);
+  EXPECT_EQ(Img.Segments[0].Data.back(), 0xcc);
+  EXPECT_EQ(Img.Segments[1].Data.front(), 0xcc);
+  EXPECT_EQ(Overlay.rows().at(0).size(), 15u);
+  EXPECT_EQ(Overlay.rows().at(17).size(), 15u);
+  Overlay.clear(Img);
+  EXPECT_EQ(Img.Sections[0].Data, Original);
+}
+
+TEST_F(BytePatch, LateInvalidReplayPreservesEveryLiveImageCopy) {
+  reset(std::vector<uint8_t>(16, 0xcc));
+  ASSERT_FALSE(Overlay.apply(Img, *Input, 0x1001, {0x91}, PatchKind::Bytes));
+  const auto BeforeRows = Overlay.rows();
+  const auto BeforeSegment = Img.Segments[0].Data;
+  const auto BeforeSections = Img.Sections[0].Data;
+  const auto BeforeOriginal = Img.BytePatchOriginal;
+  for (unsigned Failure = 0; Failure < 4; ++Failure) {
+    SCOPED_TRACE(Failure);
+    std::vector<PatchRow> Rows{
+        {0, 0x1000, {0xcc, 0xcc}, {0x90, 0x90}, PatchKind::Nop},
+        {8, 0x1008, {0xcc}, {0x91}, PatchKind::Bytes}};
+    switch (Failure) {
+    case 0:
+      Rows.back().Original[0] = 0xcd;
+      break;
+    case 1:
+      Rows.back().FileOffset = 1;
+      Rows.back().Address = 0x1001;
+      break;
+    case 2:
+      Rows.back().Current.clear();
+      break;
+    case 3:
+      Rows.back().Address = 0x1009;
+      break;
+    }
+    auto Error = Overlay.replace(Img, *Input, std::move(Rows));
+    ASSERT_TRUE(bool(Error));
+    llvm::consumeError(std::move(Error));
+    EXPECT_EQ(Overlay.rows(), BeforeRows);
+    EXPECT_EQ(Overlay.bytes(), 1u);
+    EXPECT_EQ(Img.Segments[0].Data, BeforeSegment);
+    EXPECT_EQ(Img.Sections[0].Data, BeforeSections);
+    EXPECT_EQ(Img.BytePatchOriginal, BeforeOriginal);
   }
 }
 

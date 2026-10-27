@@ -1,7 +1,8 @@
 # Arrays, alignment and enum operands
 
 The disassembly **Edit** menu includes **Make array** (`*`) and **Make
-alignment** (`L`). **Operand type → Enum operand** (`M`) selects an enumeration
+alignment** (`L`); the disassembly's context menu offers both on a data item.
+**Operand type → Enum operand** (`M`) selects an enumeration
 declared in Local Types. The normal operand format reset (`#`) restores numeric
 spelling; `U` undefines a complete array or a manually marked alignment span.
 All three edits use project undo/redo, sidecars and database/replica state.

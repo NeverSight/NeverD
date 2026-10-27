@@ -1454,6 +1454,10 @@ HighSwiftEmitter::emit(const HighFunc &Function,
                        const std::vector<std::string> &ReservedNames) const {
   SwiftEmissionResult Result;
   try {
+    if (Function.ReturnProtection)
+      throw Unsupported(
+          "Swift source cannot express the recovered PAC return-protection "
+          "attribute; use the C/C++ projection.");
     Writer SourceWriter(Function, Signature, Callees, ReservedNames);
     Result.Source = SourceWriter.emit();
     Result.MemberSource = SourceWriter.memberSource();

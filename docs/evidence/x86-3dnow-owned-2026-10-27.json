@@ -1,0 +1,461 @@
+{
+  "scope": "All 24 3DNow operations in the owned x64 MMX/x87 context",
+  "goal_complete": false,
+  "sources": {
+    "neverd_fixed_code": "00dad5a56d34289974b7c79e5ba7cee91f7f8809",
+    "neverd_base": "1e00efbad5ee68ed00bf51252ac26a8d769a0911",
+    "llvm": "cf2bde2743795897aef1f1f3712a9fd40a19252d",
+    "neverc": "880d1e96ff48f41c5069c6d8f9839eaa8f37d64a",
+    "production_sdk": "neverd-llvm-v23.0.0-r6",
+    "production_sdk_commit": "06788fb19109851e6a6b9f109a2b8027a606f0c6",
+    "production_llvm_gitlink": "03270359c2ed8f6806533d3832a947bf883a6f69",
+    "capstone_gitlink": "88f3e3966565fb9383cd4fbb20c051c9aa22f309",
+    "release_and_pins_changed": false
+  },
+  "artifact_root": "/mnt/data/neverd-x86-3dnow-owned",
+  "validation": {
+    "pinned": {
+      "test_reports": [
+        {
+          "path": "final-pinned-three-d-now.xml",
+          "sha256": "231bfa3c0723b53f9c772af31f64d0e521aabf71236ce85eac3cb12d954b8b4b",
+          "tests": 8,
+          "failures": 0,
+          "errors": 0,
+          "disabled": 0,
+          "skipped": 0
+        },
+        {
+          "path": "final-pinned-NeverDX87MMXStateTests.xml",
+          "sha256": "bbbde710d2de6ceee95532a95740226d2a8e270f6a44e8e4ec095551dc574f27",
+          "tests": 5,
+          "failures": 0,
+          "errors": 0,
+          "disabled": 0,
+          "skipped": 0
+        },
+        {
+          "path": "final-pinned-NeverDX86LegacyAdmissionTests.xml",
+          "sha256": "e6a86a35a29afaf30fffb8a07fe0cac152e73fab7390f52d671adbed688e812e",
+          "tests": 5,
+          "failures": 0,
+          "errors": 0,
+          "disabled": 0,
+          "skipped": 0
+        },
+        {
+          "path": "final-pinned-NeverDX87CapabilityTests.xml",
+          "sha256": "d25f466994e5b17bfba5622687ce38992d3c95cf55e4183a3bdca7fae751321a",
+          "tests": 13,
+          "failures": 0,
+          "errors": 0,
+          "disabled": 0,
+          "skipped": 0
+        },
+        {
+          "path": "final-pinned-NeverDX86X87ConvertStateTests.xml",
+          "sha256": "e0337079cde12e577b1b98b05672c5f5b8a12ba174143cfb96106906f68aaaeb",
+          "tests": 85,
+          "failures": 0,
+          "errors": 0,
+          "disabled": 0,
+          "skipped": 0
+        }
+      ],
+      "distinct_tests": 116,
+      "build_log": {
+        "path": "final-pinned-build.log",
+        "sha256": "99877414b0112e0b6c0c356f514036e1f35a16182ac5ea785f3cb021135c979e"
+      },
+      "exported_objects": 960,
+      "qemu_report": {
+        "path": "qemu-final-pinned/qualification.json",
+        "sha256": "917f0fac883caa39afc1985c69e194b43d13663f91aacc0d28afc6ede6d7d9e0"
+      },
+      "qemu_results": [
+        {
+          "cpu": "max",
+          "state_comparisons": 368640,
+          "fault_comparisons": 720,
+          "unqualified_pending_mf_differentials": 1440,
+          "unqualified_stack_ss_differentials": 240,
+          "fwait_mf_control": "passed"
+        },
+        {
+          "cpu": "max,-3dnow,-3dnowext",
+          "state_comparisons": 0,
+          "fault_comparisons": 3360,
+          "unqualified_pending_mf_differentials": 0,
+          "unqualified_stack_ss_differentials": 0,
+          "fwait_mf_control": "passed"
+        }
+      ]
+    },
+    "native": {
+      "test_reports": [
+        {
+          "path": "final-native-three-d-now.xml",
+          "sha256": "8d02eed69659a252866e46b8126f9c30f6651aef398a84784d531834ad730a24",
+          "tests": 8,
+          "failures": 0,
+          "errors": 0,
+          "disabled": 0,
+          "skipped": 0
+        },
+        {
+          "path": "final-native-NeverDX87MMXStateTests.xml",
+          "sha256": "7b2f0c683c156802f2da9097047f8ac88fa2912f21867e64bf919a1511b03e63",
+          "tests": 5,
+          "failures": 0,
+          "errors": 0,
+          "disabled": 0,
+          "skipped": 0
+        },
+        {
+          "path": "final-native-NeverDX86LegacyAdmissionTests.xml",
+          "sha256": "262c671c765ffe981089f6d9d9ce15c91fb9472063549ce47bd64124ab85858b",
+          "tests": 5,
+          "failures": 0,
+          "errors": 0,
+          "disabled": 0,
+          "skipped": 0
+        },
+        {
+          "path": "final-native-NeverDX87CapabilityTests.xml",
+          "sha256": "0f0e0e18c79a2544e3d10cb6c5ffdcc9b7d1ea2bd56b457abac97be9f240e293",
+          "tests": 13,
+          "failures": 0,
+          "errors": 0,
+          "disabled": 0,
+          "skipped": 0
+        },
+        {
+          "path": "final-native-NeverDX86X87ConvertStateTests.xml",
+          "sha256": "daf93895124f8eb368e704db608a54e9432482b54d1b44a72e27a04b2976de67",
+          "tests": 85,
+          "failures": 0,
+          "errors": 0,
+          "disabled": 0,
+          "skipped": 0
+        }
+      ],
+      "distinct_tests": 116,
+      "build_log": {
+        "path": "final-native-build.log",
+        "sha256": "fccd119e62994f1d9d33afbe0f469f145224c70efb698bc50af12844650785cc"
+      },
+      "exported_objects": 960,
+      "qemu_report": {
+        "path": "qemu-final-native/qualification.json",
+        "sha256": "16c601451eeae01f3fb87745c12887d119f635f233e9d45bc32d020678ef7dad"
+      },
+      "qemu_results": [
+        {
+          "cpu": "max",
+          "state_comparisons": 368640,
+          "fault_comparisons": 720,
+          "unqualified_pending_mf_differentials": 1440,
+          "unqualified_stack_ss_differentials": 240,
+          "fwait_mf_control": "passed"
+        },
+        {
+          "cpu": "max,-3dnow,-3dnowext",
+          "state_comparisons": 0,
+          "fault_comparisons": 3360,
+          "unqualified_pending_mf_differentials": 0,
+          "unqualified_stack_ss_differentials": 0,
+          "fwait_mf_control": "passed"
+        }
+      ]
+    }
+  },
+  "admission": {
+    "operations": 24,
+    "enhanced_operations": 5,
+    "register_prefix_decoder_checks": 110592,
+    "memory_address_checks": 32256,
+    "malformed_detail_checks": 60,
+    "native_feature_memory_register_checks": 48,
+    "typed_unowned_i386": "Explicit refusal retained"
+  },
+  "emission": {
+    "forms": [
+      "mm0,mm1",
+      "mm3,mm3",
+      "mm5,[argument]",
+      "mm7,[rbp]"
+    ],
+    "pipelines": [
+      "default",
+      "NoOpt"
+    ],
+    "projections": [
+      "LLVM object",
+      "HighC O0",
+      "HighC O2",
+      "LLVMC O0",
+      "LLVMC O2"
+    ],
+    "object_format": "x64 ELF",
+    "objects_per_sdk": 960,
+    "mmx_operations_decoded_per_object": 1,
+    "highc_instruction_helper_names_checked": true
+  },
+  "qemu": {
+    "version": "10.2.2",
+    "cpus": [
+      "max",
+      "max,-3dnow,-3dnowext"
+    ],
+    "machine": "pc,accel=tcg",
+    "clang": "Ubuntu clang 23.1.2 (069ef0e7cb36)",
+    "state_fields": [
+      "CW",
+      "SW",
+      "abridged tags",
+      "FOP",
+      "FIP",
+      "FDP",
+      "eight raw 80-bit payloads",
+      "input memory and canaries"
+    ],
+    "cases_per_object": 384,
+    "physical_hardware_executed": false,
+    "complete_exception_continuation_qualified": false,
+    "independent_fwait_mf_control": "Passed with both CPU configurations and both SDKs"
+  },
+  "model_counterexamples": [
+    {
+      "case": "Pending x87 exception does not raise #MF on the original 3DNow instruction; FWAIT control does.",
+      "report": {
+        "path": "qemu-original-mf-counterexample.log",
+        "sha256": "3ad4580252004994226bbf8a5e0224d95a531ce92fefe23e4d8be6c4bfae2dd4"
+      },
+      "unqualified_per_sdk": 1440,
+      "source": "https://github.com/qemu/qemu/blob/v10.2.2/target/i386/tcg/emit.c.inc",
+      "symbol": "gen_3dnow"
+    },
+    {
+      "case": "Original noncanonical RBP memory reference raises #GP instead of #SS.",
+      "report": {
+        "path": "qemu-original-ss-counterexample.log",
+        "sha256": "038de35e4fb50d9465d72ca18165387899812b3bc433fe08442a263f5bd23c77"
+      },
+      "unqualified_per_sdk": 240,
+      "source": "https://github.com/qemu/qemu/blob/v10.2.2/target/i386/tcg/system/excp_helper.c",
+      "symbol": "mmu_translate"
+    }
+  ],
+  "semantics": {
+    "reference": "https://www.amd.com/content/dam/amd/en/documents/archived-tech-docs/programmer-references/21928.pdf",
+    "approach": "Retain original packed instruction inside complete owned context; no scalar IEEE substitute. Strict/portable concrete execution refuses; native reference mode checks CPUID and actual source provenance before mutation.",
+    "unknown_payloads": "After FEMMS, only actually written destination becomes known; all-valid tags do not certify other payloads.",
+    "model_gap_options": "Default harness fails. Explicit --allow-missing-mf and --allow-stack-gp preserve separate unqualified counts and still reject original/translated mismatches."
+  },
+  "remaining": [
+    "Typed/unowned and i386 3DNow state",
+    "Physical 3DNow results and pending-#MF/stack-#SS fault behavior",
+    "Full exception/machine continuation ownership",
+    "Other instruction/state gaps in docs/x86-instruction-support.md"
+  ],
+  "integration": {
+    "neverd_fixed_code": "d0559ca48ebecf608ead8804637486336dd8e460",
+    "remote_exact_sha": "0c7bbba9faaca0da59dbeb187c0d43356e10d97b",
+    "qualification": {
+      "pinned": {
+        "tests": 85,
+        "reports": [
+          {
+            "path": "integrated-pinned-NeverDMedStackAlignmentTests.xml",
+            "sha256": "6753e2dfcdb040ca059c55cd67d505c2cc840a0c7a11474dc25ba1c94a238ee2",
+            "tests": 38,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0
+          },
+          {
+            "path": "integrated-pinned-NeverDX86LegacyAdmissionTests.xml",
+            "sha256": "5165d4bce52da3e27e5aa4929a3ddfa7bd928782569f931aba5585748c1f6ab1",
+            "tests": 5,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0
+          },
+          {
+            "path": "integrated-pinned-NeverDX86NonlocalControlTests.xml",
+            "sha256": "f90222071dc47ef8f1041717f950c1f2776a8b7217536308b11b48ae1660eaa5",
+            "tests": 4,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0
+          },
+          {
+            "path": "integrated-pinned-NeverDX87CapabilityTests.xml",
+            "sha256": "72a0344717ef8a7f70d45d8736e9f68c38915167d168552700300756b1019d69",
+            "tests": 13,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0
+          },
+          {
+            "path": "integrated-pinned-NeverDX87MMXStateTests.xml",
+            "sha256": "e6a0d9b4d0a07aea17698d86c3b922fd6ab03a67fd2df53e609f101fa44bf944",
+            "tests": 5,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0
+          },
+          {
+            "path": "integrated-pinned-context-control.xml",
+            "sha256": "5c88107aeb65fb706354aefe44adcca9ad1e61547afa10a6945a0c2a6af8aa55",
+            "tests": 12,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0
+          },
+          {
+            "path": "integrated-pinned-three-d-now.xml",
+            "sha256": "653eca0b02447fb98ab10d0211a9af59666358891b1f045cb633e6095cd30522",
+            "tests": 8,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0
+          }
+        ],
+        "context_filter": "*Call*:*Root*:*Edge*:*Backedge*:*Stack*",
+        "qemu_report": {
+          "path": "qemu-integrated-pinned/qualification.json",
+          "sha256": "7f9b4b5e494a868d9f5880116642cf6eb876f96a9e68d25450e99c6ff3b788ba"
+        },
+        "qemu_results": [
+          {
+            "cpu": "max",
+            "state_comparisons": 368640,
+            "fault_comparisons": 720,
+            "unqualified_pending_mf_differentials": 1440,
+            "unqualified_stack_ss_differentials": 240,
+            "fwait_mf_control": "passed"
+          },
+          {
+            "cpu": "max,-3dnow,-3dnowext",
+            "state_comparisons": 0,
+            "fault_comparisons": 3360,
+            "unqualified_pending_mf_differentials": 0,
+            "unqualified_stack_ss_differentials": 0,
+            "fwait_mf_control": "passed"
+          }
+        ],
+        "objects": 960,
+        "build": {
+          "path": "integrated-pinned-build.log",
+          "sha256": "ac1cfdb5ec406a4583c98d688f5cab61e3e9057dcf303a2918babadb3b2313b0"
+        }
+      },
+      "native": {
+        "tests": 85,
+        "reports": [
+          {
+            "path": "integrated-native-NeverDMedStackAlignmentTests.xml",
+            "sha256": "ad27cd8be7e7606702c787720dd6f66c93f31870e650d9ef44d004ea11a400bc",
+            "tests": 38,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0
+          },
+          {
+            "path": "integrated-native-NeverDX86LegacyAdmissionTests.xml",
+            "sha256": "105e2e44759437f1afa9340bf756c37c57767dd69f693843d76187b9ef591370",
+            "tests": 5,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0
+          },
+          {
+            "path": "integrated-native-NeverDX86NonlocalControlTests.xml",
+            "sha256": "200dddc2849119d0e5beab86990691f932e28a43d9e31521f1e4f7193007b727",
+            "tests": 4,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0
+          },
+          {
+            "path": "integrated-native-NeverDX87CapabilityTests.xml",
+            "sha256": "8068f668f01fd866da041097d468c070898f2e329edb453bd298b50696563d1d",
+            "tests": 13,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0
+          },
+          {
+            "path": "integrated-native-NeverDX87MMXStateTests.xml",
+            "sha256": "765494fe235ed13078c426ed34539aa39a6a71510daf8ae65dc71585e7e3a662",
+            "tests": 5,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0
+          },
+          {
+            "path": "integrated-native-context-control.xml",
+            "sha256": "35a27a63789bc92ba4e77b16ebe31085be67cf5dffed16d2e41e1d0306481dc8",
+            "tests": 12,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0
+          },
+          {
+            "path": "integrated-native-three-d-now.xml",
+            "sha256": "fc2f2ad55cb10c05a3e2cbc253704374e01e792c1da2e9284c6023821f46c8a2",
+            "tests": 8,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0
+          }
+        ],
+        "context_filter": "*Call*:*Root*:*Edge*:*Backedge*:*Stack*",
+        "qemu_report": {
+          "path": "qemu-integrated-native/qualification.json",
+          "sha256": "76165e0c3276a216a3f2d0117b83b8b5f5702796a64a0ed0ffbd15d4ec22978d"
+        },
+        "qemu_results": [
+          {
+            "cpu": "max",
+            "state_comparisons": 368640,
+            "fault_comparisons": 720,
+            "unqualified_pending_mf_differentials": 1440,
+            "unqualified_stack_ss_differentials": 240,
+            "fwait_mf_control": "passed"
+          },
+          {
+            "cpu": "max,-3dnow,-3dnowext",
+            "state_comparisons": 0,
+            "fault_comparisons": 3360,
+            "unqualified_pending_mf_differentials": 0,
+            "unqualified_stack_ss_differentials": 0,
+            "fwait_mf_control": "passed"
+          }
+        ],
+        "objects": 960,
+        "build": {
+          "path": "integrated-native-build.log",
+          "sha256": "08792f500852eac153b6bbc3c23c4660e56100275cf1ddc7c759b18fccd215e8"
+        }
+      }
+    },
+    "llvm_main_verified": "cf2bde2743795897aef1f1f3712a9fd40a19252d",
+    "neverc_dev_verified": "880d1e96ff48f41c5069c6d8f9839eaa8f37d64a"
+  }
+}

@@ -63,11 +63,11 @@
 #include <QCompleter>
 #include <QContextMenuEvent>
 #include <QCryptographicHash>
+#include <QCursor>
 #include <QDateTime>
 #include <QDebug>
 #include <QDialogButtonBox>
 #include <QDir>
-#include <QCursor>
 #include <QDragEnterEvent>
 #include <QDragLeaveEvent>
 #include <QDragMoveEvent>
@@ -392,6 +392,35 @@ void withCodeMenu(CodeText *code, const std::function<void(QMenu *)> &use) {
   }
 }
 
+/// As withCodeMenu, for a right click on \p assembly's text or graph.
+void withAssemblyMenu(DisassemblyView *assembly,
+                      const std::function<void(QMenu *)> &use) {
+  const QPointer<QWidget> window = assembly->window();
+  QTimer probe;
+  QObject::connect(&probe, &QTimer::timeout, &probe, [&] {
+    auto *menu = qobject_cast<QMenu *>(QApplication::activePopupWidget());
+    if (!menu)
+      return;
+    probe.stop();
+    use(menu);
+    menu->close();
+  });
+  probe.start(5);
+  QWidget *surface = assembly->graphMode()
+                         ? static_cast<QWidget *>(assembly->graph())
+                         : assembly->listing()->viewport();
+  const QPoint point(40, 40);
+  QContextMenuEvent context(QContextMenuEvent::Mouse, point,
+                            surface->mapToGlobal(point));
+  QApplication::sendEvent(surface, &context);
+  if (window && window->isVisible() &&
+      (!QApplication::activeWindow() ||
+       QApplication::activeWindow() == window)) {
+    window->activateWindow();
+    QVERIFY(QTest::qWaitForWindowActive(window));
+  }
+}
+
 class LoadDialogAcceptor {
 public:
   LoadDialogAcceptor() {
@@ -708,6 +737,7 @@ private slots:
     QCOMPARE(hex.size(), 0);
     // Both the drawn close button and a desktop close request leave focus
     // mode through the same layout restoration as the F sequence.
+    bool nativePointerUnavailable = false;
     for (bool button : {true, false}) {
       mode->trigger();
       workspace = assembly->window();
@@ -732,6 +762,13 @@ private slots:
       QVERIFY(output->findChild<QPlainTextEdit *>()->toPlainText().contains(
           "help"));
       if (button && !floating) {
+#ifdef Q_OS_MACOS
+        if (QGuiApplication::platformName() == QLatin1String("cocoa") &&
+            !test::canPostNativePointerEvents()) {
+          nativePointerUnavailable = true;
+          continue;
+        }
+#endif
         auto *bar =
             bench.window->findChild<TitleBar *>(Qt::FindDirectChildrenOnly);
         QVERIFY(bar);
@@ -749,23 +786,27 @@ private slots:
           // for the restored window. A QWindow test event does not move the
           // system pointer or establish that native tracking transition.
           if (QGuiApplication::platformName() == QLatin1String("cocoa")) {
-            QCursor::setPos(bench.window->mapToGlobal(position));
-            return;
+            return test::moveNativePointer(bench.window->mapToGlobal(position));
           }
 #endif
           QTest::mouseMove(bench.window->windowHandle(), position);
+          return true;
         };
-        movePointer(bench.window->rect().center());
+        QVERIFY(movePointer(bench.window->rect().center()));
         QTRY_VERIFY(!close->underMouse());
-        movePointer(close->mapTo(bench.window.get(), close->rect().center()));
+        QVERIFY(movePointer(
+            close->mapTo(bench.window.get(), close->rect().center())));
         QTRY_VERIFY(close->underMouse());
         QCOMPARE(background(),
                  theme.chrome(QStringLiteral("WindowCloseHover")));
-        movePointer(bench.window->rect().center());
+        QVERIFY(movePointer(bench.window->rect().center()));
         QTRY_VERIFY(!close->underMouse() && !close->isDown());
         QCOMPARE(background(), theme.chrome(QStringLiteral("TitleBar")));
       }
     }
+    if (nativePointerUnavailable)
+      QSKIP("Layout and close paths passed; native hover requires macOS input "
+            "permission");
   }
 
   void fileReviewWindowsOfferWindowControls_data() {
@@ -1486,6 +1527,103 @@ private slots:
     if (viewKind == QLatin1String("listing"))
       QTRY_VERIFY(renameSeen);
     QVERIFY(dock->isFloating());
+  }
+
+  void disassemblyMenuOffersTheLinesEdits() {
+    // An instruction of a function offers the function's stack variables,
+    // the SP the instruction leaves and its operand's forms; a data item its
+    // array and alignment. A pseudocode window offers none of them.
+    QTemporaryDir directory;
+    Workbench bench;
+    LoadDialogAcceptor loads;
+    bench.window->openFile(writeFixture(directory, "line-edits.bin"));
+    QTRY_VERIFY_WITH_TIMEOUT(bench.session.loaded(), OpenTimeoutMs);
+    auto *assembly = bench.window->disassembly();
+    QTRY_VERIFY(assembly->currentAddress().has_value());
+    bench.window->activateWindow();
+    QVERIFY(QTest::qWaitForWindowActive(bench.window.get()));
+    const auto offers = [&](QMenu *menu, ActionId id) {
+      return menu->actions().contains(bench.action(id));
+    };
+    const auto checkInstruction = [&](QMenu *menu) {
+      QVERIFY(offers(menu, ActionId::EditStackFrame));
+      QVERIFY(offers(menu, ActionId::EditStackPointer));
+      QVERIFY(!offers(menu, ActionId::EditMakeArray));
+      QVERIFY(!offers(menu, ActionId::EditMakeAlignment));
+      auto *forms = menu->findChild<QMenu *>(QStringLiteral("operandTypeMenu"));
+      QVERIFY(forms);
+      const auto operand = forms->actions();
+      for (const auto id :
+           {ActionId::EditOperandNumber, ActionId::EditOperandHex,
+            ActionId::EditOperandDecimal, ActionId::EditOperandBinary,
+            ActionId::EditOperandChar, ActionId::EditOperandOffset,
+            ActionId::EditOperandEnum, ActionId::EditOperandNegate,
+            ActionId::EditOperandInvert, ActionId::EditStackOperand})
+        QVERIFY(operand.contains(bench.action(id)));
+      // The structure offset keeps its own entry.
+      QVERIFY(offers(menu, ActionId::EditOperandStruct));
+      QVERIFY(!operand.contains(bench.action(ActionId::EditOperandStruct)));
+    };
+    const Address function = Base + 0x140;
+    assembly->navigate(function);
+    QTRY_COMPARE(assembly->currentFunction(), std::optional<Address>(function));
+    assembly->focusContent();
+    QTRY_VERIFY(assembly->listing()->hasFocus());
+    QTRY_VERIFY(assembly->onInstruction());
+    bool shown = false;
+    withAssemblyMenu(assembly, [&](QMenu *menu) {
+      shown = true;
+      checkInstruction(menu);
+    });
+    QVERIFY(shown);
+    assembly->setGraphMode(true);
+    QTRY_COMPARE(assembly->currentFunction(), std::optional<Address>(function));
+    QTRY_VERIFY(assembly->onInstruction());
+    shown = false;
+    withAssemblyMenu(assembly, [&](QMenu *menu) {
+      shown = true;
+      checkInstruction(menu);
+    });
+    QVERIFY(shown);
+    assembly->setGraphMode(false);
+
+    // A pointer of the read-only data section.
+    const Address slot = Base + 0x3000;
+    assembly->navigate(slot);
+    QTRY_COMPARE(assembly->currentAddress(), std::optional<Address>(slot));
+    QTRY_VERIFY(assembly->onData());
+    assembly->focusContent();
+    QTRY_VERIFY(assembly->listing()->hasFocus());
+    shown = false;
+    withAssemblyMenu(assembly, [&](QMenu *menu) {
+      shown = true;
+      QVERIFY(offers(menu, ActionId::EditMakeArray));
+      QVERIFY(offers(menu, ActionId::EditMakeAlignment));
+      QVERIFY(!offers(menu, ActionId::EditStackFrame));
+      QVERIFY(!offers(menu, ActionId::EditStackPointer));
+      QVERIFY(!menu->findChild<QMenu *>(QStringLiteral("operandTypeMenu")));
+    });
+    QVERIFY(shown);
+
+    // Its function can differ from the disassembly's, which these edit.
+    assembly->navigate(function);
+    QTRY_COMPARE(assembly->currentFunction(), std::optional<Address>(function));
+    bench.action(ActionId::ViewPseudocode)->trigger();
+    auto *view = bench.codeView(QStringLiteral("source"));
+    QVERIFY(view);
+    QTRY_VERIFY(!view->text()->loading() && view->text()->lineCount());
+    view->text()->setFocus();
+    QTRY_VERIFY(view->text()->hasFocus());
+    shown = false;
+    withCodeMenu(view->text(), [&](QMenu *menu) {
+      shown = true;
+      for (const auto id :
+           {ActionId::EditStackFrame, ActionId::EditStackPointer,
+            ActionId::EditMakeArray, ActionId::EditMakeAlignment})
+        QVERIFY(!offers(menu, id));
+      QVERIFY(!menu->findChild<QMenu *>(QStringLiteral("operandTypeMenu")));
+    });
+    QVERIFY(shown);
   }
 
   void floatingWindowsKeepMouseHistory() {
@@ -3192,8 +3330,7 @@ private slots:
     auto *code = view->text();
     QTRY_VERIFY(!code->loading() && code->lineCount() == 19);
     const QString original = code->allText();
-    bench.window->activateWindow();
-    QVERIFY(QTest::qWaitForWindowActive(bench.window.get()));
+    QVERIFY(activateTestWindow(bench.window.get()));
     code->setFocus();
     QTRY_VERIFY(code->hasFocus());
     assembly->navigate(Base + 0x180);
@@ -5009,7 +5146,19 @@ private slots:
     QVERIFY(!note->contains(QStringLiteral("mapped_address")));
   }
 
+  void frameRecordsGoToTheirFunctionAndMembersToTheirUses_data() {
+    QTest::addColumn<bool>("dark");
+    QTest::newRow("dark") << true;
+    QTest::newRow("light") << false;
+  }
+
   void frameRecordsGoToTheirFunctionAndMembersToTheirUses() {
+    QFETCH(bool, dark);
+    auto &theme = Theme::instance();
+    const auto previous = theme.mode();
+    const auto restoreTheme = qScopeGuard([&] { theme.setMode(previous); });
+    theme.setMode(dark ? Theme::Mode::Dark : Theme::Mode::Light);
+    theme.apply();
     // The record HighC declares for a function's stack names the function:
     // a double-click on it, or on its storage, takes the disassembly to where
     // the function begins, and on a member to the instruction that first
@@ -5027,11 +5176,20 @@ private slots:
     auto *view = bench.codeView(QStringLiteral("source"));
     QVERIFY(view);
     auto *code = view->text();
-    QTRY_VERIFY(!code->loading() && code->lineCount() > 10);
-    bench.window->activateWindow();
-    QVERIFY(QTest::qWaitForWindowActive(bench.window.get()));
+    QTRY_VERIFY(!code->loading() && code->lineCount() == 8);
+    QVERIFY(code->allText().contains(QStringLiteral("gap0[54]")));
+    QVERIFY(activateTestWindow(bench.window.get()));
     code->setFocus();
     QTRY_VERIFY(code->hasFocus());
+    const auto capture = [&](const QString &state) {
+      const QString captures = qEnvironmentVariable("NEVERD_SHORTCUT_CAPTURES");
+      if (captures.isEmpty())
+        return true;
+      QDir().mkpath(captures);
+      return view->grab().save(captures + "/frame-" + state +
+                               (dark ? "-dark.png" : "-light.png"));
+    };
+    QVERIFY(capture(QStringLiteral("folded")));
     QSignalSpy names(code, &CodeText::nameActivated);
     const auto doubleClick = [&] {
       const QPointF point(code->viewport()->width() / 2.0, 1);
@@ -5063,6 +5221,8 @@ private slots:
     // A member's declaration goes to the statement that first writes it.
     code->setCursorLine(0);
     QVERIFY(code->findText(QStringLiteral("var_m30"), true));
+    QCOMPARE(code->lineCount(), 12);
+    QVERIFY(capture(QStringLiteral("expanded")));
     QCOMPARE(code->currentToken(), QStringLiteral("var_m30"));
     QVERIFY(code->cursorLine() < recordRow + 5);
     doubleClick();
@@ -5078,6 +5238,18 @@ private slots:
                  std::optional<Address>(function));
     QCOMPARE(names.size(), 0);
     QCOMPARE(code->function(), std::optional<Address>(function));
+    // A refresh preserves an expanded layout as well as a collapsed one.
+    code->load(function, QStringLiteral("source"));
+    QTRY_VERIFY(!code->loading() && code->lineCount() == 12);
+    code->setCursorLine(0);
+    QVERIFY(code->findText(record, true));
+    QVERIFY(code->setCurrentBlockFolded(true));
+    QCOMPARE(code->lineCount(), 8);
+    code->load(function, QStringLiteral("source"));
+    QTRY_VERIFY(!code->loading() && code->lineCount() == 8);
+    code->setCursorLine(0);
+    QVERIFY(code->findText(QStringLiteral("gap0"), true));
+    QCOMPARE(code->lineCount(), 12);
   }
 
   void codeEditKeepsThePlaceInALongFunction() {

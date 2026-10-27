@@ -398,9 +398,38 @@ bool validateSourceCallReturnReads(const MedFunc &Func,
             Found != HandlerBounds.end())
           End = Found->second;
   }
+  // A CALL writes its return slot below the stack pointer it runs at. Where
+  // that position has no bounded range, as below a dynamic allocation in a
+  // loop, an upper bound alone still keeps the slot off every byte above it.
+  std::map<const MedOp *, int64_t> CallBelow;
+  {
+    std::vector<const MedOp *> Pending;
+    std::vector<MedVar> PendingStacks;
+    for (const auto &[Call, End] : CallEnds)
+      if (!End)
+        if (const auto Found = StackPointers.find(Call);
+            Found != StackPointers.end()) {
+          Pending.push_back(Call);
+          PendingStacks.push_back(Found->second);
+        }
+    if (!Pending.empty()) {
+      if (!charge(Remaining, Pending.size()))
+        return Exhausted();
+      const auto Bounds = entryStackOffsetUpperBounds(
+          Func, PendingStacks, Image.Arch, Image.abiFormat(), Func.EntryKind);
+      for (size_t I = 0; I < Pending.size(); ++I)
+        if (Bounds[I])
+          CallBelow.emplace(Pending[I], *Bounds[I]);
+    }
+  }
   std::vector<std::pair<int64_t, int64_t>> Ranges;
   bool UnknownLocation = false;
   for (const auto &[Call, End] : CallEnds) {
+    if (!End)
+      if (const auto Below = CallBelow.find(Call); Below != CallBelow.end()) {
+        Ranges.emplace_back(std::numeric_limits<int64_t>::min(), Below->second);
+        continue;
+      }
     if (!End || End->Min < std::numeric_limits<int64_t>::min() + Width) {
       UnknownLocation = true;
       continue;
@@ -499,11 +528,14 @@ bool validateSourceCallReturnReads(const MedFunc &Func,
               It != Stores.end() && It->second.contains(Byte))
             continue;
           const auto Call = CallEnds.find(&Op);
+          const auto Below = CallBelow.find(&Op);
           if (Call != CallEnds.end() &&
-              (!Call->second ||
-               Call->second->Min <
-                   std::numeric_limits<int64_t>::min() + Width ||
-               (Byte < Call->second->Max && Byte >= Call->second->Min - Width)))
+              (!Call->second
+                   ? Below == CallBelow.end() || Byte < Below->second
+                   : Call->second->Min <
+                             std::numeric_limits<int64_t>::min() + Width ||
+                         (Byte < Call->second->Max &&
+                          Byte >= Call->second->Min - Width)))
             return Refuse("load at 0x" + llvm::utohexstr(Load.Op->Addr) +
                           " observes a physical CALL return slot from 0x" +
                           llvm::utohexstr(Op.Addr) +

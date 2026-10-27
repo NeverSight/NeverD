@@ -1894,6 +1894,42 @@ int jni_service_manager_clock(unsigned advancing) {
   CHECK(!C(e, U8, 228));
   return C(vm, int, 5);
 }
+int jni_service_manager_lookup(unsigned remove_cached) {
+  Handle e = attach();
+  CHECK(e);
+  Ref type = C(e, Ref, 6, "android/os/ServiceManager");
+  Ref get = C(e, Ref, 113, type, "getService",
+              "(Ljava/lang/String;)Landroid/os/IBinder;");
+  Ref check = C(e, Ref, 113, type, "checkService",
+                "(Ljava/lang/String;)Landroid/os/IBinder;");
+  CHECK(type && get && check);
+  Ref key = C(e, Ref, 167, "alpha");
+  Ref equal_key = C(e, Ref, 167, "alpha");
+  CHECK(key && equal_key && !same_ref(e, key, equal_key));
+  Ref first = C(e, Ref, 114, type, get, key);
+  CHECK(first);
+  U64 arguments[] = {equal_key};
+  for (unsigned i = 0; i != 2; ++i) {
+    Ref method = i ? check : get;
+    CHECK(same_ref(e, first, C(e, Ref, 114, type, method, equal_key)));
+    CHECK(same_ref(e, first, service_get_v(e, type, method, equal_key)));
+    CHECK(same_ref(e, first, C(e, Ref, 116, type, method, arguments)));
+  }
+  if (remove_cached) {
+    Ref cache_field = C(e, Ref, 144, type, "sCache", "Ljava/util/HashMap;");
+    Ref cache = C(e, Ref, 145, type, cache_field);
+    Ref map_type = C(e, Ref, 6, "java/util/HashMap");
+    Ref remove = C(e, Ref, 33, map_type, "remove",
+                   "(Ljava/lang/Object;)Ljava/lang/Object;");
+    CHECK(cache_field && cache && map_type && remove);
+    CHECK(same_ref(e, first, C(e, Ref, 34, cache, remove, equal_key)));
+    // The next call must use the changed shared map and reach the miss path.
+    C(e, Ref, 114, type, get, key);
+    return __LINE__;
+  }
+  CHECK(!C(e, U8, 228));
+  return C(vm, int, 5);
+}
 int jni_service_manager_metadata(unsigned mode) {
   Handle e = attach();
   CHECK(e);

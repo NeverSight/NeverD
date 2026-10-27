@@ -528,6 +528,11 @@ callers can still demand return/memory specializations. Remaining roots retain
 ascending entry-slot order: eagerly specializing small unknown-input wrappers
 can consume all four cached variants before their concrete callers are analyzed.
 Completed cache hits remain usable after specialization work is exhausted.
+`specialization_budget_exhausted` reports exhaustion of the query-wide work,
+retained-state or output budget. It does not summarize the per-entry variant
+limit: an edge can record `per_entry_specialization_limit` while that global
+flag remains false. Inspect each edge/context's `input_generalization` when
+attributing an unknown target to budget generalization or missing input facts.
 Schema 6 records input projection, bounded alternatives, return expressions,
 memory footprints,
 `input_memory_guards` referenced by deferred loads, summary dependencies,

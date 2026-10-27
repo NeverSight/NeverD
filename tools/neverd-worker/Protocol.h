@@ -52,6 +52,9 @@ std::string frame(const Json &message, const EncodedJson &payload);
 /// diffs and merges line by line under version control. Size budgets measure
 /// this text, the bytes a later read checks.
 std::string sidecarText(const Json &value);
+/// Apply the same file layout to compact, serializer-produced JSON. Callers
+/// must supply a complete encoded value, not unvalidated file or IPC text.
+std::string formatSidecarText(std::string_view encoded);
 } // namespace neverd::worker
 
 // Preserve interface spellings; resource values are defined by Limits.h.

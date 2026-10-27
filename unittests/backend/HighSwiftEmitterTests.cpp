@@ -99,6 +99,15 @@ std::pair<HighFunc, SwiftSourceSignature> wideFunction(bool Memory) {
 }
 } // namespace
 
+TEST(HighSwiftEmitter, ReturnProtectionCannotDisappearFromNativeSource) {
+  auto F = function();
+  F.ReturnProtection = AArch64ReturnProtection{true, true};
+  const auto Result = HighSwiftEmitter().emit(F, signature());
+  EXPECT_FALSE(Result.Recovered);
+  EXPECT_TRUE(Result.Source.empty());
+  EXPECT_NE(Result.Reason.find("PAC return-protection"), std::string::npos);
+}
+
 TEST(HighSwiftEmitter, StackScalarBindingsDoNotInventPhysicalStackWrites) {
   for (Arch Architecture : {Arch::X64, Arch::AArch64}) {
     for (unsigned Kind = 0; Kind != 3; ++Kind) {

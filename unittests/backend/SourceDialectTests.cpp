@@ -92,6 +92,23 @@ TEST(SourceDialect, CxxUsesQualifiedNamesAndExactLibraryAliases) {
       "ATL::CStringT<wchar_t, ATL::StrTraitATL<wchar_t>>");
 }
 
+TEST(SourceDialect, ReturnProtectionRemainsVisibleInEveryDialect) {
+  const char *C =
+      "__attribute__((target(\"branch-protection=pac-ret+leaf+b-key\")))\n"
+      "int protected_return(void) { return 7; }\n";
+  for (SourceDialect Dialect :
+       {SourceDialect::Cpp, SourceDialect::Rust, SourceDialect::Go}) {
+    const auto Text = spell(C, Dialect);
+    EXPECT_TRUE(Text.Unread.empty());
+    EXPECT_NE(Text.Text.find("branch-protection=pac-ret+leaf+b-key"),
+              std::string::npos)
+        << Text.Text;
+    EXPECT_EQ(Text.Text.find("target_feature(enable = \"branch-protection"),
+              std::string::npos)
+        << Text.Text;
+  }
+}
+
 TEST(SourceDialect, CxxOverloadsShareTheirName) {
   // The two __do_deallocate_handle_size overloads of the NDK's libc++, which
   // C names `handle` and `handle_2`, are both the one C++ name, as IDA prints

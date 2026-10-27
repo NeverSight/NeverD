@@ -12,6 +12,8 @@
 
 #include <bit>
 #include <memory>
+#include <optional>
+#include <string_view>
 #include <vector>
 
 namespace neverd::mobile::dalvik {
@@ -212,6 +214,82 @@ TEST(AndroidServiceManagerTest,
   EXPECT_EQ(s.clocks, 2u);
   EXPECT_FALSE(s.runtime->snapshot().terminal);
   EXPECT_EQ(s.runtime->snapshot().framework.service_manager->entries, before);
+}
+
+TEST(AndroidServiceManagerTest,
+     CacheHitsNeedNoManagerContextWarningOrAdditionalClockObservation) {
+  for (const auto warning : {std::optional<bool>{}, std::optional<bool>{false},
+                             std::optional<bool>{true}}) {
+    Snapshot input;
+    auto &config = input.service_manager.emplace();
+    config.binder_proxies = {{7, warning}};
+    config.cache = std::vector<ServiceState::CacheEntry>{{"example", 7}};
+    State s(input);
+    s.services.elapsed_realtime_nanoseconds = [&] {
+      return ++s.clocks == 1
+                 ? ExecutionResult{ExecutionStop::Returned, 50987654321}
+                 : ExecutionResult{ExecutionStop::Unsupported,
+                                   0,
+                                   {},
+                                   "unexpected cache-hit clock read"};
+    };
+    s.runtime = std::make_unique<Runtime>(s.program, s.heap, input, s.services);
+    const auto key = s.heap->literal("example")->Identity;
+    const auto get = s.lookup("getService", key);
+    ASSERT_EQ(get.stop, ExecutionStop::Returned) << get.diagnostic;
+    ASSERT_NE(get.value, 0u);
+    const auto check = s.lookup("checkService", key);
+    ASSERT_EQ(check.stop, ExecutionStop::Returned) << check.diagnostic;
+    EXPECT_EQ(check.value, get.value);
+    EXPECT_EQ(s.clocks, 1u);
+    EXPECT_EQ(s.field("sGetServiceAccumulatedCallCount", "I"), 0u);
+    const auto snapshot = s.runtime->snapshot();
+    EXPECT_FALSE(snapshot.terminal);
+    ASSERT_TRUE(snapshot.framework.service_manager);
+    const auto &state = *snapshot.framework.service_manager;
+    EXPECT_TRUE(state.initialized);
+    EXPECT_TRUE(state.cache_known);
+    EXPECT_FALSE(state.manager);
+    ASSERT_EQ(state.entries.size(), 1u);
+    EXPECT_EQ(state.entries[0].binder, get.value);
+    ASSERT_EQ(state.binder_proxies.size(), 1u);
+    EXPECT_EQ(state.binder_proxies[0].warn_on_blocking, warning);
+  }
+}
+
+TEST(AndroidServiceManagerTest,
+     NullAndAbsentCacheEntriesRequireManagerStateBeforeContext) {
+  for (const char *method : {"getService", "checkService"}) {
+    SCOPED_TRACE(method);
+    for (bool null_entry : {false, true}) {
+      SCOPED_TRACE(null_entry);
+      Snapshot input;
+      auto &config = input.service_manager.emplace();
+      config.cache.emplace();
+      if (null_entry)
+        config.cache->push_back({"example", std::nullopt});
+      config.binder_proxies = {{7, true}};
+      config.context_object.emplace(7);
+      State s(input);
+      const auto result =
+          s.lookup(method, s.heap->literal("example")->Identity);
+      EXPECT_EQ(result.stop, ExecutionStop::Unsupported);
+      EXPECT_EQ(result.diagnostic,
+                "Android ServiceManager proxy state is not supplied");
+      EXPECT_EQ(s.clocks, std::string_view(method) == "getService" ? 2u : 1u);
+      const auto snapshot = s.runtime->snapshot();
+      EXPECT_TRUE(snapshot.terminal);
+      ASSERT_TRUE(snapshot.framework.service_manager);
+      const auto &state = *snapshot.framework.service_manager;
+      EXPECT_TRUE(state.initialized);
+      EXPECT_TRUE(state.cache_known);
+      EXPECT_FALSE(state.manager);
+      EXPECT_TRUE(state.binder_proxies.empty());
+      ASSERT_EQ(state.entries.size(), null_entry ? 1u : 0u);
+      if (null_entry)
+        EXPECT_EQ(state.entries[0].binder, 0u);
+    }
+  }
 }
 
 TEST(AndroidServiceManagerTest,

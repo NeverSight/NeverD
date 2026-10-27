@@ -4569,6 +4569,17 @@ void MainWindow::contextMenu(const QPoint &globalPosition) {
   // IDA offers the function's own dialog after its cross references.
   if (auto *edit = actions_.action(ActionId::EditFunction); edit->isEnabled())
     menu.addAction(edit);
+  // The disassembly's function also opens its stack variables, and an
+  // instruction the SP it leaves, where a wrong SP shows. A pseudocode
+  // window's function can differ from the disassembly's, which these edit.
+  if (!focusedCodeView()) {
+    if (auto *frame = actions_.action(ActionId::EditStackFrame);
+        frame->isEnabled())
+      menu.addAction(frame);
+    if (auto *pointer = actions_.action(ActionId::EditStackPointer);
+        pointer->isEnabled() && disassembly_->onInstruction())
+      menu.addAction(pointer);
+  }
   // IDA's Pathfinding: the function under the cursor joins the call path,
   // or starts a new one.
   if (auto *add = actions_.action(ActionId::PathfinderAddWaypoint);
@@ -4612,12 +4623,35 @@ void MainWindow::contextMenu(const QPoint &globalPosition) {
   if (auto *structure = actions_.action(ActionId::EditOperandStruct);
       structure->isEnabled() && !focusedCodeView())
     menu.addAction(structure);
+  // An instruction's other operand forms, as the Edit menu's Operand type
+  // lists them.
+  if (const auto *forms = actions_.menu(QStringLiteral("EditOperandType"));
+      forms && !focusedCodeView() && disassembly_->onInstruction()) {
+    QMenu *operand = nullptr;
+    for (auto *action : forms->actions()) {
+      if (action->isSeparator()) {
+        if (operand)
+          operand->addSeparator();
+      } else if (action->isEnabled() && !menu.actions().contains(action)) {
+        if (!operand) {
+          operand = menu.addMenu(forms->icon(), forms->title());
+          operand->setObjectName(QStringLiteral("operandTypeMenu"));
+        }
+        operand->addAction(action);
+      }
+    }
+  }
   for (const auto id :
        {ActionId::EditCreateFunction, ActionId::EditDeleteFunction,
         ActionId::EditDefineCode, ActionId::EditDefineData,
         ActionId::EditDefineString, ActionId::EditUndefine})
     if (auto *action = actions_.action(id); action->isEnabled())
       menu.addAction(action);
+  // A data item also takes an array or an alignment.
+  if (!focusedCodeView() && disassembly_->onData())
+    for (const auto id : {ActionId::EditMakeArray, ActionId::EditMakeAlignment})
+      if (auto *action = actions_.action(id); action->isEnabled())
+        menu.addAction(action);
   menu.addSeparator();
   menu.addAction(actions_.action(ActionId::ViewToggleGraph));
   // Tab, the switch to the other pane's row, with its key; a code window

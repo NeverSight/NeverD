@@ -16,6 +16,7 @@
 #include "X86FPEncoding.h"
 #include "X86LiftDetail.h"
 #include "X86LiftTBM.h"
+#include "X86LiftThreeDNow.h"
 
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
@@ -358,34 +359,14 @@ bool liftLegacyExt(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
   unsigned InsnId = Insn->id;
   switch (InsnId) {
 
-  // ========================================================================
-  // 3DNow! requires packed lanes, its own floating-point rules and the MMX/
-  // x87 state transition. Neither scalar FLOAT_* nor COPY is that contract.
-  // ========================================================================
-  case X86_INS_PFADD:
-  case X86_INS_PFACC:
-  case X86_INS_PFNACC:
-  case X86_INS_PFPNACC:
-  case X86_INS_PFSUB:
-  case X86_INS_PFSUBR:
-  case X86_INS_PFMUL:
-  case X86_INS_PFMAX:
-  case X86_INS_PFMIN:
-  case X86_INS_PFCMPEQ:
-  case X86_INS_PFCMPGE:
-  case X86_INS_PFCMPGT:
-  case X86_INS_PFRCP:
-  case X86_INS_PFRCPIT1:
-  case X86_INS_PFRCPIT2:
-  case X86_INS_PFRSQIT1:
-  case X86_INS_PFRSQRT:
-  case X86_INS_PF2ID:
-  case X86_INS_PF2IW:
-  case X86_INS_PI2FD:
-  case X86_INS_PI2FW:
-  case X86_INS_PSWAPD:
-  case X86_INS_PMULHRW:
-  case X86_INS_PAVGUSB:
+    // ========================================================================
+    // 3DNow! owns its packed arithmetic and the complete MMX/x87 transition.
+    // ========================================================================
+#define NEVERD_3DNOW(Name, Opcode, Reads, Enhanced) case X86_INS_##Name:
+#include "neverd/ir/X86/X86ThreeDNow.def"
+#undef NEVERD_3DNOW
+    if (liftThreeDNow(L, S, Insn, X86))
+      return true;
     throw UnliftedInstruction(Insn->address, Insn->mnemonic, Insn->op_str);
 
   // ========================================================================
@@ -842,13 +823,13 @@ bool liftLegacyExt(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
   // no source ABI contract and reconstructs no privilege or segment change.
   case X86_INS_SYSEXITQ:
     // SYSEXITQ: RIP <- RDX, RSP <- RCX.
-    S.emitVoidIntrinsic(Intrinsic::Sysexitq,
-                        {NdVar::reg(x86reg::RDX, 8), NdVar::reg(x86reg::RCX, 8)});
+    S.emitVoidIntrinsic(Intrinsic::Sysexitq, {NdVar::reg(x86reg::RDX, 8),
+                                              NdVar::reg(x86reg::RCX, 8)});
     break;
   case X86_INS_SYSRETQ:
     // SYSRETQ: RIP <- RCX, RFLAGS <- R11.
-    S.emitVoidIntrinsic(Intrinsic::Sysretq,
-                        {NdVar::reg(x86reg::RCX, 8), NdVar::reg(x86reg::R11, 8)});
+    S.emitVoidIntrinsic(Intrinsic::Sysretq, {NdVar::reg(x86reg::RCX, 8),
+                                             NdVar::reg(x86reg::R11, 8)});
     break;
   case X86_INS_WBNOINVD:
     S.emitIntrinsic(Intrinsic::Wbnoinvd, NdVar());
