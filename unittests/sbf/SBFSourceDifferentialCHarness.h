@@ -62,7 +62,9 @@ inline std::string makeCHarness(
     RuntimeFeature ProgramRuntimeFeatures,
     const std::vector<MemoryRegion> &Memory,
     const std::vector<DifferentialCase::HostFault> &HostFaults,
-    std::optional<FaultCode> LoadFault, std::optional<FaultCode> StoreFault) {
+    std::optional<FaultCode> LoadFault, std::optional<FaultCode> StoreFault,
+    llvm::StringRef FunctionName = kEntryFunctionName,
+    llvm::StringRef DriverName = "main") {
   std::string Buffer;
   llvm::raw_string_ostream OS(Buffer);
   const RuntimeFeature ResolvedRuntimeFeatures =
@@ -236,7 +238,8 @@ static uint64_t writable_hash(void) {
   return hash;
 }
 
-int main(void) {
+)";
+  OS << "int " << DriverName << R"((void) {
   runtime_context context;
   neverd_sbf_environment_v2 environment;
   neverd_sbf_status_v2 status;
@@ -261,7 +264,7 @@ int main(void) {
 )";
   if (Environment.RuntimeFeatures)
     OS << "  environment.runtime_features = &runtime_features;\n";
-  OS << "  status = " << kEntryFunctionName << "_v2(&environment, UINT64_C(0x"
+  OS << "  status = " << FunctionName << "_v2(&environment, UINT64_C(0x"
      << llvm::utohexstr(Environment.Input) << "), UINT64_C(0x"
      << llvm::utohexstr(Environment.InstructionData) << "), &result);\n"
      << "  if (status != " << cStatus(Expected) << ") return 10;\n";

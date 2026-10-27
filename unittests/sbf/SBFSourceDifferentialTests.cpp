@@ -32,6 +32,7 @@
 #include <filesystem>
 #include <fstream>
 #include <limits>
+#include <memory>
 #include <optional>
 #include <string>
 #include <utility>
@@ -51,7 +52,8 @@ using test::makeRustHarness;
 using test::SourceBackend;
 using test::TemporaryFile;
 
-void compileAndRun(SourceBackend Backend, llvm::StringRef Source) {
+void compileAndRun(SourceBackend Backend, llvm::StringRef Source,
+                   llvm::ArrayRef<std::string> Modules = {}) {
   const llvm::StringRef CompilerName = compilerName(Backend);
   auto Compiler = llvm::sys::findProgramByName(CompilerName);
   ASSERT_TRUE(static_cast<bool>(Compiler))
@@ -91,7 +93,18 @@ void compileAndRun(SourceBackend Backend, llvm::StringRef Source) {
     Arguments.append({"-C", LinkerArgument});
 #endif
   }
-  Arguments.append({SourceFile.str(), "-o", Executable.str()});
+  Arguments.push_back(SourceFile.str());
+  std::vector<std::unique_ptr<TemporaryFile>> ModuleFiles;
+  for (const auto &Module : Modules) {
+    auto File = std::make_unique<TemporaryFile>("c");
+    ASSERT_FALSE(File->error()) << File->error().message();
+    std::ofstream Output(File->str().str(), std::ios::binary);
+    ASSERT_TRUE(Output);
+    Output << Module;
+    Arguments.push_back(File->str());
+    ModuleFiles.push_back(std::move(File));
+  }
+  Arguments.append({"-o", Executable.str()});
   std::string Error;
   ASSERT_EQ(llvm::sys::ExecuteAndWait(*Compiler, Arguments, std::nullopt, {}, 0,
                                       0, &Error),
@@ -102,7 +115,8 @@ void compileAndRun(SourceBackend Backend, llvm::StringRef Source) {
 }
 
 void runDifferential(SourceBackend Backend, const DifferentialCase &Case,
-                     bool Partitioned, std::string *RustModule = nullptr) {
+                     bool Partitioned, std::string *Module = nullptr,
+                     llvm::StringRef CModuleName = {}) {
   SCOPED_TRACE(Case.Name);
   SCOPED_TRACE(Partitioned ? "partitioned" : "monolithic");
   ExecutionEnvironment OracleEnvironment = Case.Environment;
@@ -133,14 +147,21 @@ void runDifferential(SourceBackend Backend, const DifferentialCase &Case,
     CEmitterOptions Options;
     Options.PreferStructuredControlFlow = false;
     Options.PartitionDispatcher = Partitioned;
+    if (!CModuleName.empty())
+      Options.FunctionName = CModuleName.str();
     auto Source = emitC(Case.Program, Options);
     ASSERT_TRUE(static_cast<bool>(Source))
         << llvm::toString(Source.takeError());
     *Source = "#include <string.h>\n" + *Source +
-              makeCHarness(Case.Environment, *Expected,
-                           Case.Program.ActiveRuntimeFeatures, Memory,
-                           Case.HostFaults, Case.LoadFault, Case.StoreFault);
-    compileAndRun(Backend, *Source);
+              makeCHarness(
+                  Case.Environment, *Expected,
+                  Case.Program.ActiveRuntimeFeatures, Memory, Case.HostFaults,
+                  Case.LoadFault, Case.StoreFault, Options.FunctionName,
+                  CModuleName.empty() ? "main" : (CModuleName + "_run").str());
+    if (Module)
+      *Module = std::move(*Source);
+    else
+      compileAndRun(Backend, *Source);
     return;
   }
 
@@ -152,8 +173,8 @@ void runDifferential(SourceBackend Backend, const DifferentialCase &Case,
   *Source += makeRustHarness(Case.Environment, *Expected,
                              Case.Program.ActiveRuntimeFeatures, Memory,
                              Case.HostFaults, Case.LoadFault, Case.StoreFault);
-  if (RustModule)
-    *RustModule = std::move(*Source);
+  if (Module)
+    *Module = std::move(*Source);
   else
     compileAndRun(Backend, *Source);
 }
@@ -634,21 +655,25 @@ void runAllSourceCases(SourceBackend Backend) {
   ASSERT_GE(Cases.size(), 6u);
   std::string RustModules;
   std::string RustDriver = "fn main() {\n";
+  std::vector<std::string> CModules;
+  std::string CDeclarations = "#include <assert.h>\n#include <stdio.h>\n";
+  std::string CDriver = "int main(void) {\n";
   size_t ModuleIndex = 0;
   for (const DifferentialCase &Case : Cases) {
     for (bool Partitioned : {false, true}) {
-      if (Backend != SourceBackend::Rust) {
-        runDifferential(Backend, Case, Partitioned);
+      std::string Source;
+      const std::string Name = "nd_case_" + std::to_string(ModuleIndex++);
+      runDifferential(Backend, Case, Partitioned, &Source,
+                      Backend == SourceBackend::C ? Name : llvm::StringRef{});
+      ASSERT_FALSE(Source.empty()) << Case.Name;
+      if (Backend == SourceBackend::C) {
+        CModules.push_back(std::move(Source));
+        CDeclarations += "int " + Name + "_run(void);\n";
+        CDriver += "    fputs(\"" + Name + ": " + Case.Name +
+                   (Partitioned ? " partitioned" : " monolithic") +
+                   "\\n\", stderr); assert(" + Name + "_run() == 0);\n";
         continue;
       }
-      // Compile every generated module and execute every oracle assertion,
-      // while paying compiler/linker startup once for this synthetic suite.
-      // Corpus native qualification continues to compile each complete SO's
-      // source independently with its original resource budgets.
-      std::string Source;
-      runDifferential(Backend, Case, Partitioned, &Source);
-      ASSERT_FALSE(Source.empty()) << Case.Name;
-      const std::string Name = "nd_case_" + std::to_string(ModuleIndex++);
       RustModules += "pub mod " + Name + " {\n" + Source +
                      "\npub fn run() { main(); }\n}\n";
       RustDriver += "    eprintln!(\"" + Name + ": " + Case.Name +
@@ -656,7 +681,14 @@ void runAllSourceCases(SourceBackend Backend) {
                     Name + "::run();\n";
     }
   }
-  if (Backend == SourceBackend::Rust)
+  // Keep every module and raw-oracle assertion, with one link and native
+  // process startup for this synthetic suite. C remains separate C11
+  // translation units; Rust uses modules. Real corpus requests still compile
+  // every complete SO separately with their original budgets.
+  if (Backend == SourceBackend::C)
+    compileAndRun(Backend, CDeclarations + CDriver + "return 0;\n}\n",
+                  CModules);
+  else
     compileAndRun(Backend, RustModules + RustDriver + "}\n");
 }
 

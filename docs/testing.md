@@ -12129,9 +12129,12 @@ addition to structured control flow. The caller/callee register test crosses
 multiple source regions. Terminal memory cases preserve fault precedence over
 overrun, and a faulting load prevents a following host call. Strict compiler
 warnings also cover continuation-only and no-EXIT regions.
-The synthetic Rust cases compile together as separate public modules, and the
-driver executes every case in both layouts. This amortizes compiler/linker
-startup without changing the independent, budgeted per-SO corpus compilations.
+The synthetic C cases compile as separate C11 translation units with distinct
+entrypoints and one linked driver. Rust cases compile as separate public
+modules. Both drivers execute every raw-oracle assertion in both layouts and
+print the active case before running it. This amortizes linker and native
+process startup without changing the test timeout or the independent, budgeted
+per-SO corpus compilations.
 `SBFSourcePartition` checks exact raw-slot
 coverage, shared tails and malformed ranges. `SBFImmutableLoad` checks that the
 register fixed point and instruction replay agree on complete immutable loads,
