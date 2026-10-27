@@ -1,168 +1,51 @@
-# iced compatibility decoder
+# Native decoding and optional iced adapter
 
-The default x86 classification path now uses Capstone's native batch decoder.
-Function discovery uses that path with `NEVERD_ENABLE_ICED=OFF`; the option below
-adds the experimental iced backend. Capstone still owns full operand decoding
-and rendering in both configurations.
+The default x86 classification path uses Capstone's native batch decoder.
+Function discovery uses that path with `NEVERD_ENABLE_ICED=OFF`; the optional
+backend below enables iced for selected instructions. Capstone owns full
+operand decoding and rendering in both configurations.
 
-The native CALL sweep was measured on 2026-10-26 on an Apple M4 Max,
-macOS arm64, Release, with the latest LLVM fork built from source. Its compact
-CALL-target query avoids a second decode into printed text and full operand
-detail. The baseline is the previous native batch implementation at Capstone
-`39f4230cd1a24a39b61ad7e867be612dc80bf6ea`, rebuilt against the same LLVM and
-NeverD libraries. Nine rotating trials used fresh processes, matching thread
-QoS, about 180 ms of baseline CPU time, and separate identical A/A controls
-for native Capstone and the optional iced adapter. All target sets and counts
-matched, including an independent detailed single-step reference.
+Native classification reuses the decoder's bounded readers and legality
+checks. Generated terminals cover proven scalar, SSE/MMX and VEX operand
+sequences; unsupported shapes retain ordinary decoding. Public IDs and lengths
+are projected from the same generated decisions. Full detail, text, raw-state
+and callback policies remain in their existing owners.
 
-| CALL sweep workload | Previous native / new native time | iced adapter / new native time |
-| --- | ---: | ---: |
-| Seven 64-bit system-code streams | 1.384x–1.861x | 1.152x–1.441x |
-| Five 32-bit PE code samples | 1.773x–1.884x | 1.077x–1.116x |
-| Generated scalar64 / scalar32 / SIMD | 1.054x / 1.022x / 1.006x | 1.182x / 1.232x / 1.198x |
+Capstone `991f4d6214c3c599bb84e8a6490ae034d819641e` combines C5/8F exclusion checks in the shared
+prefix byte classifier. The public iterator selects its terminal descriptor
+from a bounded ModR/M peek before consuming SIB and displacement bytes. The
+complete addressing reader still runs before invalid-ID rejection, including
+truncated input. Native batches retain their established addressing read
+order. The change does not expand compact admission or change operand readers.
 
-Native A/A medians ranged from 0.988x to 1.032x, and iced A/A medians from
-0.965x to 1.010x under other host workloads. Small synthetic changes are within
-that noise range. The iced column measures NeverD's compatibility adapter,
-including its fallback costs; these are CALL-scan results, not full
-decompilation measurements or a comparison of identical full-detail outputs.
+Earlier native improvements avoid repeated header classification, share
+ordered operand handlers, defer generic instruction construction until needed,
+and preserve iterator registers across private helper calls on supported
+Clang targets. Skip-data callbacks retain their original detail-pointer
+handling. The native CALL query reads its compact target directly instead of
+performing a second decode with rendered text and full operands.
 
-Capstone `a0340fe4122fbf43f2a5f7000e20ea49daa7e5ec` now enters the
-shared terminal readers directly for common legacy headers. Previously the
-source-extension selector walked prefixes before the terminal reader parsed
-the same header. Existing feature predicates preserve extension precedence,
-including mixed mode flags; admission misses retain the original dispatch.
-Operand reading, legality checks, raw state and full output semantics are
-unchanged. No iced implementation code was copied.
+AArch64, ARM and RISC-V use generated descriptor flags to skip operand
+postprocessing only when it would perform no writes. Flagged instructions
+retain the owning helper and its failure ordering. Native descriptor audits
+and full-output comparisons cover those flags. The current x86 change leaves
+all non-x86 and shared core objects unchanged in the qualified Release build.
 
-The full Release library was compared with Capstone
-`9a96a08dae5c0621dd3118d59dd4559b750d5197` on 2026-10-27 on the same Apple
-M4 Max. Nine rotating fresh-process trials used about 180 ms of baseline CPU
-time, matching thread QoS, and duplicate baseline, candidate and iced A/A
-controls. Ratios are medians of paired trials; each trial combines duplicate
-timings geometrically. All observations are retained, including host workload
-noise. Separately taking each variant's median can misrepresent speed changes.
+Qualification compares native Capstone and native iced separately for batch
+classification and the public iterator, with text and detail disabled. It
+uses fresh processes, matching thread QoS, rotating order, duplicate A/A
+controls and paired timing ratios. Full executable sections remain intact;
+streams whose instruction boundaries differ are excluded from iced rankings
+and retained for comparisons against the previous Capstone version. Tiny
+controls are separate from substantive workloads. Machine-specific samples
+and timing records belong in external investigation artifacts, not this guide.
 
-| Decode workload | Previous / new native batch time | Previous / new public iterator time |
-| --- | ---: | ---: |
-| Scalar64 / scalar32 / scalar16 | 1.119x / 1.235x / 1.286x | 1.059x / 1.190x / 1.000x |
-| SIMD64 | 0.997x | 0.995x |
-| Six 64-bit system-code streams | 1.032x–1.124x | 0.979x–1.115x |
-| Five PE32 code samples | 1.168x–1.197x | 1.127x–1.176x |
-
-Against native iced `8b8d90b13374fbf38e7279749e48c673f4ec243a`, native
-batch decoding measured 1.232x–1.743x iced/Capstone time on the six system
-streams, 1.259x / 1.442x / 1.196x on scalar64 / scalar32 / scalar16, 1.126x
-on SIMD, and 1.208x–1.453x on the five PE32 samples. All 15 substantive cases
-with matching instruction boundaries favor native Capstone on this host.
-SIMD's change from the previous Capstone version is within A/A noise; some
-individual system-stream measurements are also noisy. The public iterator
-still trails native iced on scalar, SIMD, two system streams and PE32 cases,
-so the broader performance goal remains open. One SSH stream has different
-iced acceptance and is excluded from iced rankings. Two tiny MinGW controls
-are separate and do not establish broad PE32 performance. Other hosts,
-full-detail decoding and whole decompilation remain unqualified.
-
-Validation included 272,920,462 frozen-baseline scan comparisons, 37,916,536
-full API observations and 864,000 raw-state comparisons, all unchanged.
-Release passed 116 tests with one x87 hardware skip on arm64; ASan/UBSan and
-reduced builds each passed six checks, and the optional iced adapter parity
-check passed. Eight AArch64/ARM/Thumb/RISC-V cases retained identical outputs
-with no stable regression. The other 107 decoder/core objects are byte-identical
-to the baseline; the x86 decoder object grows by about 26 KiB.
-
-Capstone `44e5f3293124a6bc2c42ad5a6ff4ca9b82bc7962` retains the bounded
-iterator byte copy introduced in `9e6e87177334998e122a5ba9d69d06f187ffbf09`
-and improves three remaining costs. Generated public terminal flags separate
-ModR/M reads from optional immediates while preserving the exact ordered
-reader calls. Admitted terminal output stays separate from the fallback result
-passed by address to cold helpers; fallback selection remains inline. VEX
-W/L/pp select generated references to the existing validated opcode rows.
-Native batches retain their original scalar operand dispatch. No iced source
-was copied, and shared output, detail-pointer and callback policy is unchanged.
-
-The separate result matters for 16-bit decoding: changing operand dispatch
-alone increased register moves on an indexed terminal. An instruction trace of
-`F6 C2 01` grew from 168 to 185 host instructions, including 15 extra register
-moves. Keeping terminal output independent of the fallback result reduced the
-same trace to 161. This diagnosis led to the combined implementation rather
-than a mode-specific bypass.
-
-The same nine-trial, paired fresh-process protocol compared the final Release
-library with `9e6e87177334998e122a5ba9d69d06f187ffbf09` on 2026-10-27:
-
-| Decode workload | Previous / new public iterator time | Native iced / new public iterator time |
-| --- | ---: | ---: |
-| Scalar64 / scalar32 / scalar16 | 1.063x / 1.039x / 1.133x | 0.909x / 0.990x / 0.896x |
-| SIMD64 | 1.044x | 0.905x |
-| bash / SQLite | 1.085x / 1.055x | 1.062x / 1.058x |
-| Four held-out system streams | 0.967x–1.008x | 1.194x–1.268x |
-| Two PE32 O0 samples | 1.076x–1.078x | 1.060x–1.061x |
-| Three PE32 O2 samples | 1.049x–1.068x | 0.877x–0.949x |
-
-A separate nine-trial follow-up retained all observations and measured scalar16
-at 1.100x and PE32 SEH O0 at 1.078x against the previous version. The grep and
-sed ratios changed from 0.984x / 0.967x to 0.995x / 0.991x. Those results remain
-small regressions, with variation comparable to some A/A controls; they are not
-reported as wins. Public iteration now leads iced on bash, SQLite and the two
-PE32 O0 samples as well as the four held-out streams, but scalar, SIMD and PE32
-O2 still trail. The broader performance goal remains open.
-
-Native batch decoding remains faster than native iced on all 15 substantive
-matching-boundary cases, measuring 1.161x–1.771x iced/Capstone time. SIMD batch
-decoding improved 1.042x against the previous Capstone version. Most other batch
-results are close to baseline; noisy individual results such as ls do not
-establish additional speedups. SSH and the tiny controls retain the exclusions
-above. These results do not establish universal or full-detail superiority.
-
-The final build again matched 272,920,462 scan, 37,916,536 full API and 864,000
-raw-state observations. Release passed 116 checks with the same x87 hardware
-skip on arm64; ASan/UBSan and reduced builds each passed six checks. All 72
-callback combinations, optional adapter parity and adapter length-boundary
-checks passed. A generated-data audit confirms that only the intended public
-reader flags changed; raw terminals, indexed decisions and VEX metadata retain
-their original values. The other 107 core/decoder objects, including shared
-`cs.c`, are byte-identical to the baseline. Eight AArch64/ARM/Thumb/RISC-V
-workloads retained identical outputs and measured 0.992x–1.015x; no non-x86
-speedup is claimed. Other hardware, full-detail performance and whole
-application throughput still require separate qualification.
-
-AArch64 also avoids unnecessary operand postprocessing in Capstone
-`ff10148fdc21e37359bc9eb90164e26f44ca7ddf`. Generated flags identify which opcodes
-require implicit SME operands or tied-operand handling. Other instructions skip
-those descriptor walks; flagged instructions retain the original helpers and
-ordering, including failed decodes. The generator reapplies the guards after
-translation and requires review when the owning helper bodies change. A native
-audit checks every descriptor, and generation is independent of checkout line
-endings. Release and sanitizer comparisons preserve full API outputs. This
-change leaves x86 and the remaining decoder/core objects unchanged; it does not
-extend iced comparisons beyond x86.
-
-Capstone `fe40ade693c17a7e13f48fa1dd3202da44f2dcfd` reduces public iterator
-call overhead. On supported Clang targets, private decoder and output calls
-preserve additional registers so the iterator needs fewer saves and restores.
-Skip-data handling remains owned by the shared core, including callback-visible
-detail state and restoration. An unprefixed C5 header uses the same VEX reader
-inlined after source-feature selection, retaining operand and legality checks.
-Public API and callback calling conventions are unchanged. Callback tests cover
-success, refusal, oversized skips and detail-pointer replacement. Reduced tests
-explicitly check rejection of generated vector opcodes omitted by that build.
-The native batch path remains the default; broader performance qualification,
-including the remaining public-iterator gaps against iced, is still ongoing.
-
-Capstone `c21fe5a506c43d13e296b917fd021e021f9306d8` expands public scan coverage
-for three-operand scalar and ordinary SSE/MMX descriptors. Admission reuses
-existing ordered reads; handlers with the same reads share dispatch. Raw
-selection and inherited size flags retain their previous behavior. Ordinary
-C4 scans also avoid constructing a generic instruction until needed, while
-preserving adapter and source-feature ordering.
-
-ARM and RISC-V use generated tied-operand flags to skip writeback traversals
-that perform no writes. Flagged instructions retain the original helper,
-including on decode failure. Native descriptor audits, full-output comparisons
-and sanitizer checks cover these changes. Performance qualification remains
-specific to each interface and corpus; public-iterator gaps against iced are
-still being investigated.
+The current change passed frozen-baseline scan, full API, raw-state and callback
+comparisons, full Release CTest, ASan/UBSan, reduced-build checks, optional
+adapter parity and x86_64 ABI checks under Rosetta. The physical x87 environment
+test remains skipped on arm64. Timing on one host does not establish native
+x86-host, full-detail or whole-decompilation performance; those require their
+own measurements.
 
 NeverD can use the pinned NeverSight iced fork for selected x86 32/64-bit
 classification scans. Enable it with `-DNEVERD_ENABLE_ICED=ON`; the
