@@ -40,6 +40,9 @@ void checkSEHRuntimeEdits(const llvm::Function &Parent,
 void checkSEHStartupInfoEdits(const llvm::Function &Parent,
                               const ExceptionFunction &Source,
                               const BinaryImage &Image);
+void checkSEHHeapPolicyEdits(const llvm::Function &Parent,
+                             const ExceptionFunction &Source,
+                             const BinaryImage &Image);
 void checkSEHComputedStateEdits(const llvm::Function &Parent,
                                 const ExceptionFunction &Source,
                                 const BinaryImage &Image,

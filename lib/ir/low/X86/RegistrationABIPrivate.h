@@ -127,6 +127,10 @@ bool isCheckedRegistrationStartupInfoSlot(const BinaryImage &Image,
                                           va_t Target);
 bool isCheckedRegistrationStartupInfoCall(const BinaryImage &Image,
                                           const LowOp &Op, size_t &Work);
+bool isCheckedRegistrationHeapTerminationSlot(const BinaryImage &Image,
+                                              va_t Target);
+bool isCheckedRegistrationHeapTerminationCall(const BinaryImage &Image,
+                                              const LowOp &Op, size_t &Work);
 bool callerPCIsNotReadBack(const ImageFrameEffects &Effects);
 /// Initialization and value knowledge are independent. Without an explicit
 /// byte inventory, only a retained full-word cell supplies an input.

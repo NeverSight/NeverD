@@ -1882,6 +1882,11 @@ TEST(WindowsRegistrationNative, InputPE32PreservesItsCheckedSourceContract) {
                RegistrationSEHBoundCall::Kind::GetStartupInfoW;
       }))
     registration_test::checkSEHStartupInfoEdits(*Parent, EH, Image);
+  if (llvm::any_of(Low.RegistrationStates->SEHBoundCalls, [](const auto &Call) {
+        return Call.CalleeKind ==
+               RegistrationSEHBoundCall::Kind::HeapTermination;
+      }))
+    registration_test::checkSEHHeapPolicyEdits(*Parent, EH, Image);
   registration_test::checkSEHCopyEdits(*Parent, EH, Image);
   registration_test::checkSEHFinallyEdits(*Parent, EH, Image);
   registration_test::checkSEHParentExitEdits(*Parent, EH, Image);

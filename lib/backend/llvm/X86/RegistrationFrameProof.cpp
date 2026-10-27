@@ -308,7 +308,10 @@ llvm::Error validateFramePrivacy(
         return true;
       }
     }
-    if (Jumps)
+    if (Jumps) {
+      if (Jumps->NoFrameBorrowCalls.count(Call))
+        return !Cxx && SEH && Jumps->Calls.count(Call) &&
+               SEHCallbacksPreserve && SEHCallbacksPreserve(Slot, Bytes);
       if (const auto Found = Jumps->RuntimeOutputs.find(Call);
           Found != Jumps->RuntimeOutputs.end()) {
         const auto &Output = Found->second;
@@ -316,6 +319,7 @@ llvm::Error validateFramePrivacy(
                Disjoint(Output.Frame, Output.Offset, Output.Bytes) &&
                SEHCallbacksPreserve && SEHCallbacksPreserve(Slot, Bytes);
       }
+    }
     if ((LocalUnwinds && LocalUnwinds->Calls.count(Call)) ||
         (Jumps && Jumps->Calls.count(Call)) ||
         (ParentExits && ParentExits->Calls.count(Call)))

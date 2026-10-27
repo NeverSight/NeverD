@@ -25,6 +25,13 @@
 #if REGISTRATION_STARTUP_INFO
 #include "registration_startup_info.inc"
 #endif
+#if REGISTRATION_HEAP_TERMINATION
+  push 0
+  push 0
+  push 1
+  push 0
+  call dword ptr ["__imp__HeapSetInformation@16"]
+#endif
 #if REGISTRATION_CASE == 4
   call _registration_no_raise
 #else

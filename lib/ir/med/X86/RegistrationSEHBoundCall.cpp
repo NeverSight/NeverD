@@ -69,6 +69,16 @@ getX86RegistrationSEHBoundCalls(const MedFunc &Function) {
           Call.Arguments[0].ArgumentKind != ArgumentKind::Object)
         return std::nullopt;
       break;
+    case CalleeKind::HeapTermination:
+      if (Call.EntryVA || !Call.HasOrdinaryReturn ||
+          Call.Arguments.size() !=
+              RegistrationSEHBoundCall::HeapTerminationArguments.size() ||
+          Call.Arguments[0].ArgumentKind != ArgumentKind::NullPointer ||
+          Call.Arguments[1].ArgumentKind != ArgumentKind::ConstantScalar ||
+          Call.Arguments[2].ArgumentKind != ArgumentKind::NullPointer ||
+          Call.Arguments[3].ArgumentKind != ArgumentKind::ConstantScalar)
+        return std::nullopt;
+      break;
     default:
       return std::nullopt;
     }
@@ -85,7 +95,8 @@ getX86RegistrationSEHBoundCalls(const MedFunc &Function) {
     for (size_t I = 0; I != Call.Arguments.size(); ++I) {
       const auto &Arg = Call.Arguments[I];
       using Kind = RegistrationSEHBoundArgument::Kind;
-      if (++Work > limits::kMaxRegistrationEHStateWork)
+      if (++Work > limits::kMaxRegistrationEHStateWork ||
+          (Arg.ArgumentKind != Kind::ConstantScalar && Arg.ScalarValue))
         return std::nullopt;
       switch (Arg.ArgumentKind) {
       case Kind::Unused:
@@ -109,8 +120,17 @@ getX86RegistrationSEHBoundCalls(const MedFunc &Function) {
           return std::nullopt;
         break;
       case Kind::NullPointer:
-        if (Call.CalleeKind != CalleeKind::RaiseException || I != 3 ||
+        if (!((Call.CalleeKind == CalleeKind::RaiseException && I == 3) ||
+              (Call.CalleeKind == CalleeKind::HeapTermination &&
+               (I == 0 || I == 2))) ||
             Arg.Capture || Arg.Offset)
+          return std::nullopt;
+        break;
+      case Kind::ConstantScalar:
+        if (Call.CalleeKind != CalleeKind::HeapTermination ||
+            (I != 1 && I != 3) || Arg.Capture || Arg.Offset ||
+            Arg.ScalarValue !=
+                RegistrationSEHBoundCall::HeapTerminationArguments[I])
           return std::nullopt;
         break;
       case Kind::JumpBuffer:

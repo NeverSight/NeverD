@@ -407,6 +407,9 @@ private:
   transferStartupInfo(const Domain &Before, Domain &After, const LowOp &Op,
                       const BlockFacts &Facts,
                       std::optional<Domain> &CallException);
+  std::optional<FrameValue> transferHeapTermination(const Domain &State,
+                                                    const LowOp &Op,
+                                                    const BlockFacts &Facts);
   void recordSEHRuntimeCall(const Domain &State, const LowOp &Op,
                             RegistrationSEHBoundCall::Kind Kind,
                             std::optional<int32_t> Output = std::nullopt);

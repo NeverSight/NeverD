@@ -9467,6 +9467,24 @@ combine it with `--shared-seh4` or an EH4/GS case as needed. Both observations
 start with the same poison so untouched fields remain observable. The native
 validator rejects changed call/provider identity, output offsets, source bytes,
 calling conventions and invented memory, unwind or parameter attributes.
+`RegistrationHeapPolicy` exercises the exact no-borrow heap-policy tuple under
+EH3, EH4 and GS. Changed words, an unknown input, partial initialization,
+full/partial IAT writes, another expired import and failed authentication
+cannot publish a native call. Unrelated storage writes remain admissible and
+an exhausted budget refuses. The shared physical-invocation import test also
+checks both startup-output and heap-policy providers against changed bytes,
+slots, ABI shape, delay imports and work exhaustion.
+`check_windows_registration_rewrite.py --heap-termination` adds the authored
+request to filter and normal-finally cases, and can combine it with
+`--startup-info`. Native mutation checks alter required constants, substitute
+a volatile load, change null pointers, provider/source identity and ABI, or
+add memory/exception/parameter claims. Fresh source replay also rejects a
+changed physical PUSH even when the emitted LLVM constants remain unchanged.
+`RegistrationSEHRuntimeFrame` checks saved frame-address recovery across the
+independently bound no-borrow call. Missing effects, another unbound runtime,
+overlapping callback writes and unknown callback calls still refuse; a disjoint
+callback write preserves the saved address. Shared EH4 filter and finally cases
+exercise this projection through the physical saved-stack and epilogue paths.
 `RelocatedLeafAddressesKeepMemoryIdentity` retains exact image-read extents
 through a relocated address and a stable offset, while rejecting missing
 operand classification. `RegistrationFrameScalar` separately checks address

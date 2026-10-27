@@ -68,6 +68,9 @@ struct RegistrationSEHJumpContract {
   std::set<const llvm::CallBase *> Calls;
   /// Current source-bound runtime output borrows, not definite initialization.
   std::map<const llvm::CallBase *, Output> RuntimeOutputs;
+  /// Current source-bound runtimes that borrow no caller storage. Image,
+  /// exception and callback effects still need their independent proofs.
+  std::set<const llvm::CallBase *> NoFrameBorrowCalls;
   std::set<const llvm::StoreInst *> StateRestores;
   std::vector<std::pair<int64_t, int64_t>> SourceBuffers;
   bool readsSourceBuffer(int64_t Offset, uint64_t Bytes) const;

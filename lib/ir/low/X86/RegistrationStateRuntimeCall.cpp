@@ -10,6 +10,9 @@
 
 #include "neverd/lift/X86Regs.h"
 
+#include <cstddef>
+#include <utility>
+
 namespace neverd::registration_state {
 
 void RegistrationStateSolver::recordSEHRuntimeCall(
@@ -18,7 +21,8 @@ void RegistrationStateSolver::recordSEHRuntimeCall(
   if (Conditional || KnownCxx || State.Unknown || !State.Installed ||
       (EH4 && (!CompleteCookies ||
                (Kind != RegistrationSEHBoundCall::Kind::RaiseException &&
-                Kind != RegistrationSEHBoundCall::Kind::GetStartupInfoW))) ||
+                Kind != RegistrationSEHBoundCall::Kind::GetStartupInfoW &&
+                Kind != RegistrationSEHBoundCall::Kind::HeapTermination))) ||
       State.Uninstalled)
     return;
   const auto &SP =
@@ -52,9 +56,17 @@ void RegistrationStateSolver::recordSEHRuntimeCall(
         {Argument::Scalar, Call.StackOffset + int32_t(I * 4), 0});
   if (Kind == RegistrationSEHBoundCall::Kind::RaiseException)
     Call.Arguments.back() = {Argument::NullPointer, 0, 0};
-  else if ((Kind == RegistrationSEHBoundCall::Kind::ControlFP ||
-            Kind == RegistrationSEHBoundCall::Kind::GetStartupInfoW) &&
-           Output)
+  else if (Kind == RegistrationSEHBoundCall::Kind::HeapTermination) {
+    for (size_t I = 0; I != Call.Arguments.size(); ++I)
+      Call.Arguments[I] =
+          I == 0 || I == 2
+              ? RegistrationSEHBoundArgument{Argument::NullPointer}
+              : RegistrationSEHBoundArgument{
+                    Argument::ConstantScalar, 0, 0,
+                    RegistrationSEHBoundCall::HeapTerminationArguments[I]};
+  } else if ((Kind == RegistrationSEHBoundCall::Kind::ControlFP ||
+              Kind == RegistrationSEHBoundCall::Kind::GetStartupInfoW) &&
+             Output)
     Call.Arguments.front() = {Argument::Object, *Output, 0};
   else
     return;

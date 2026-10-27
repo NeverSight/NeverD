@@ -229,6 +229,8 @@ proveBoundSEHCalleeImpl(const BinaryImage &Image, const BinaryImage &CallImage,
         isCheckedControlFPSlot(Image, Imported.IATAddr) ||
         registration_abi::isCheckedRegistrationStartupInfoSlot(
             Image, Imported.IATAddr) ||
+        registration_abi::isCheckedRegistrationHeapTerminationSlot(
+            Image, Imported.IATAddr) ||
         registration_abi::isCheckedRegistrationRaiseSlot(Image,
                                                          Imported.IATAddr))
       Jumps.ImportSlots.insert(Imported.IATAddr);
@@ -246,6 +248,10 @@ proveBoundSEHCalleeImpl(const BinaryImage &Image, const BinaryImage &CallImage,
   Jumps.StartupInfo = [&](const LowOp &Op, size_t &Used) {
     return registration_abi::isCheckedRegistrationStartupInfoCall(Image, Op,
                                                                   Used);
+  };
+  Jumps.HeapTermination = [&](const LowOp &Op, size_t &Work) {
+    return registration_abi::isCheckedRegistrationHeapTerminationCall(Image, Op,
+                                                                      Work);
   };
   Jumps.ImageMemory = [&](va_t Address, uint16_t Width, bool Write,
                           size_t &Used) {
@@ -534,6 +540,8 @@ RegistrationStateAnalysis solveCheckedX86SEHStates(
         isCheckedControlFPSlot(Image, Imported.IATAddr) ||
         registration_abi::isCheckedRegistrationStartupInfoSlot(
             Image, Imported.IATAddr) ||
+        registration_abi::isCheckedRegistrationHeapTerminationSlot(
+            Image, Imported.IATAddr) ||
         registration_abi::isCheckedRegistrationRaiseSlot(Image,
                                                          Imported.IATAddr))
       Jumps.ImportSlots.insert(Imported.IATAddr);
@@ -555,6 +563,10 @@ RegistrationStateAnalysis solveCheckedX86SEHStates(
   Jumps.StartupInfo = [&](const LowOp &Op, size_t &Work) {
     return registration_abi::isCheckedRegistrationStartupInfoCall(Image, Op,
                                                                   Work);
+  };
+  Jumps.HeapTermination = [&](const LowOp &Op, size_t &Work) {
+    return registration_abi::isCheckedRegistrationHeapTerminationCall(Image, Op,
+                                                                      Work);
   };
   Jumps.ImageMemory = [&](va_t Address, uint16_t Width, bool Write,
                           size_t &Work) {

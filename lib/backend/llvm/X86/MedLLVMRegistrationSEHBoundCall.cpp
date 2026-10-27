@@ -81,6 +81,9 @@ projectSEHBoundArguments(const RegistrationSEHBoundCall &Source,
     case Kind::Unused:
       Arguments.push_back(B.getInt32(0));
       break;
+    case Kind::ConstantScalar:
+      Arguments.push_back(B.getInt32(Arg.ScalarValue));
+      break;
     case Kind::NullPointer:
       Arguments.push_back(llvm::ConstantPointerNull::get(B.getPtrTy()));
       break;

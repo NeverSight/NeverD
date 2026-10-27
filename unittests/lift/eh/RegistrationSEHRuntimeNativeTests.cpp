@@ -16,12 +16,114 @@
 #include "neverd/loader/BinaryImage.h"
 
 #include "llvm/ADT/ScopeExit.h"
+#include "llvm/IR/Constants.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 
+#include <cstdint>
+#include <utility>
+
 namespace neverd::registration_test {
+
+void checkSEHHeapPolicyEdits(const llvm::Function &Parent,
+                             const ExceptionFunction &Source,
+                             const BinaryImage &Image) {
+#ifdef LLVM_NEVERD_X86_REGISTRATION_EH
+  for (unsigned Mutation = 0; Mutation != 18; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    auto Module = llvm::CloneModule(*Parent.getParent());
+    auto *Function = Module->getFunction(Parent.getName());
+    llvm::CallBase *Runtime = nullptr;
+    for (auto &Block : *Function)
+      for (auto &I : Block)
+        if (auto *Call = llvm::dyn_cast<llvm::CallBase>(&I))
+          if (const auto *Callee = Call->getCalledFunction();
+              Callee && Callee->getName() == "HeapSetInformation") {
+            ASSERT_FALSE(Runtime);
+            Runtime = Call;
+          }
+    ASSERT_TRUE(Runtime);
+    ASSERT_EQ(Runtime->arg_size(), 4u);
+    auto *Callee = Runtime->getCalledFunction();
+    auto ChangedImage = Image;
+    uint8_t *ChangedByte = nullptr;
+    uint8_t OriginalByte = 0;
+    auto Restore = llvm::scope_exit([&] {
+      if (ChangedByte)
+        *ChangedByte = OriginalByte;
+    });
+    llvm::IRBuilder<> B(Runtime);
+    if (Mutation == 0)
+      Runtime->setCallingConv(llvm::CallingConv::C);
+    if (Mutation == 1)
+      Callee->setCallingConv(llvm::CallingConv::C);
+    if (Mutation == 2)
+      Callee->setName("unproved_heap_policy");
+    if (Mutation == 3)
+      rewrite_source::setOriginalVA(*Callee, Source.CodeRange.Begin);
+    if (Mutation == 4 || Mutation == 5)
+      Runtime->setArgOperand(Mutation == 4 ? 0 : 2,
+                             B.CreateIntToPtr(B.getInt32(1), B.getPtrTy()));
+    if (Mutation == 6 || Mutation == 7)
+      Runtime->setArgOperand(Mutation == 6 ? 1 : 3, B.getInt32(2));
+    if (Mutation == 8) {
+      auto *Storage = B.CreateAlloca(B.getInt32Ty());
+      B.CreateStore(B.getInt32(1), Storage);
+      auto *Value = B.CreateLoad(B.getInt32Ty(), Storage);
+      Value->setVolatile(true);
+      Runtime->setArgOperand(1, Value);
+    }
+    if (Mutation == 9)
+      Runtime->addFnAttr(llvm::Attribute::NoUnwind);
+    if (Mutation == 10)
+      Runtime->setMemoryEffects(llvm::MemoryEffects::readOnly());
+    if (Mutation == 11)
+      Runtime->addFnAttr(llvm::Attribute::NoCallback);
+    if (Mutation == 12) {
+      auto Identity = rewrite_source::getOriginalVA(*Callee);
+      ASSERT_TRUE(bool(Identity)) << llvm::toString(Identity.takeError());
+      ASSERT_TRUE(*Identity);
+      bool Changed = false;
+      for (auto &Import : ChangedImage.Imports)
+        if (Import.IATAddr == **Identity) {
+          Import.Module = "unproved-runtime.dll";
+          Changed = true;
+        }
+      ASSERT_TRUE(Changed);
+    }
+    if (Mutation == 13) {
+      const auto *Marker =
+          Runtime->getMetadata(windows_eh_md::RegistrationOperationAttachment);
+      ASSERT_TRUE(Marker);
+      const auto *Address =
+          llvm::mdconst::dyn_extract<llvm::ConstantInt>(Marker->getOperand(1));
+      ASSERT_TRUE(Address);
+      const auto *Argument =
+          ChangedImage.readVA(Address->getZExtValue() - 4, 2);
+      ASSERT_TRUE(Argument);
+      ASSERT_EQ(Argument[0], 0x6a);
+      ASSERT_EQ(Argument[1], 1);
+      ChangedByte = const_cast<uint8_t *>(Argument + 1);
+      OriginalByte = *ChangedByte;
+      *ChangedByte = 2;
+    }
+    if (Mutation == 14)
+      Runtime->addParamAttr(0, llvm::Attribute::NoAlias);
+    if (Mutation == 15)
+      Callee->setDLLStorageClass(llvm::GlobalValue::DefaultStorageClass);
+    if (Mutation == 16)
+      Runtime->addFnAttr(llvm::Attribute::NoReturn);
+    if (Mutation == 17)
+      Runtime->setArgOperand(1, llvm::UndefValue::get(B.getInt32Ty()));
+    ASSERT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
+    auto Error = validateCOFFRegistrationIR(*Function, Source, ChangedImage);
+    EXPECT_TRUE(bool(Error));
+    llvm::consumeError(std::move(Error));
+  }
+#endif
+}
 
 void checkSEHRuntimeEdits(const llvm::Function &Parent,
                           const ExceptionFunction &Source,

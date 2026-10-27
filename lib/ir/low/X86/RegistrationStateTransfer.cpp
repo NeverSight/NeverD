@@ -606,6 +606,11 @@ bool RegistrationStateSolver::transferBlock(size_t I, const Domain &Before,
         // bindings that were still live before the checked call.
         CallPreservesImportBindings = true;
       }
+    if (!CallSP)
+      if (auto HeapSP = transferHeapTermination(After, Op, Facts)) {
+        CallSP = *HeapSP;
+        CallPreservesImportBindings = true;
+      }
     if (!CallSP && JumpRuntime && JumpRuntime->Raise &&
         After.JumpBindingsIntact && !After.Unknown && !Facts.Invalid &&
         After.Installed && !After.Uninstalled &&

@@ -2589,6 +2589,25 @@ import bindings. Generic CALL invalidation consumes that checked effect, so a
 subsequent imported stack contract remains usable. A preceding import-slot
 write remains invalid; neither a stack-pop fact nor the API name alone can
 restore or preserve the binding.
+`RegistrationStateHeap` separately admits the exact process-wide
+`HeapSetInformation(NULL, HeapEnableTerminationOnCorruption, NULL, 0)` request.
+It authenticates the current eager Kernel32 slot and physical direct import
+call, then requires four complete, exact caller words in private outgoing
+storage. This mode changes heap policy without borrowing caller storage;
+other modes, handles, buffers, lengths and expired bindings supply no effect.
+The [SDK contract](https://learn.microsoft.com/en-us/windows/win32/api/heapapi/nf-heapapi-heapsetinformation)
+requires a null information buffer and zero length for this mode. Its normal
+return retains live import bindings and the sixteen-byte stack adjustment.
+The native call retains unknown memory and exception effects, and this first
+projection requires its BOOL result to be unobserved. Null pointers and exact
+scalar arguments are emitted as actual LLVM constants and independently
+checked against a fresh source proof by COFF validation; a volatile load from
+the right slot cannot replace a required constant. The tuple has one owner in
+`RegistrationSEHBoundCall`, and no target-wide heap-purity summary is added.
+The checked invocation also supplies a no-frame-borrow projection to the shared
+LLVM frame proof. Reaching saved stack addresses across that call still requires
+every SEH callback to preserve the queried bytes; binding a runtime call alone
+does not imply frame-memory preservation.
 Cleanup relay caching uses the existing unwind-record bound, independently of
 the smaller ordinary-callee cache. Successful and failed lookups still consume
 the same cumulative work budget. Within one dispatch snapshot, each unwind

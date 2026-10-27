@@ -16,7 +16,9 @@ llvm::CallingConv::ID
 getX86RegistrationSEHBoundConvention(const RegistrationSEHBoundCall &Call) {
   return Call.CalleeKind == RegistrationSEHBoundCall::Kind::RaiseException ||
                  Call.CalleeKind ==
-                     RegistrationSEHBoundCall::Kind::GetStartupInfoW
+                     RegistrationSEHBoundCall::Kind::GetStartupInfoW ||
+                 Call.CalleeKind ==
+                     RegistrationSEHBoundCall::Kind::HeapTermination
              ? llvm::CallingConv::X86_StdCall
              : llvm::CallingConv::C;
 }
@@ -32,6 +34,8 @@ getX86RegistrationSEHBoundImport(const RegistrationSEHBoundCall &Call) {
     return "_controlfp_s";
   case RegistrationSEHBoundCall::Kind::GetStartupInfoW:
     return "GetStartupInfoW";
+  case RegistrationSEHBoundCall::Kind::HeapTermination:
+    return "HeapSetInformation";
   }
   llvm_unreachable("unvalidated native SEH callee kind");
 }

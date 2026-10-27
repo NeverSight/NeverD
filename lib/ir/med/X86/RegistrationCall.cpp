@@ -43,7 +43,9 @@ std::optional<uint32_t> registrationCallStackPop(const LowFunc &Func,
             (Bound.CalleeKind !=
                  RegistrationSEHBoundCall::Kind::RaiseException &&
              Bound.CalleeKind !=
-                 RegistrationSEHBoundCall::Kind::GetStartupInfoW))
+                 RegistrationSEHBoundCall::Kind::GetStartupInfoW &&
+             Bound.CalleeKind !=
+                 RegistrationSEHBoundCall::Kind::HeapTermination))
           return std::nullopt;
         Runtime = &Bound;
       }

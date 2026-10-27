@@ -64,6 +64,28 @@ bool isStartupInfoProvider(const Import &Import) {
   return Import.Name == "GetStartupInfoW" &&
          llvm::StringRef(Import.Module).equals_insensitive("kernel32.dll");
 }
+
+bool isHeapTerminationProvider(const Import &Import) {
+  return Import.Name == "HeapSetInformation" &&
+         llvm::StringRef(Import.Module).equals_insensitive("kernel32.dll");
+}
+
+bool checkedDirectRuntimeCall(const BinaryImage &Image, const LowOp &Op,
+                              size_t &Work, bool (*Provider)(const Import &)) {
+  if (Op.Opcode != NdOp::INDIR_CALL || Op.NumInputs != 1 || Op.Seq < 0 ||
+      !Op.Inputs[0].isConst() || Op.Inputs[0].Size != 4 ||
+      Op.MemoryAddressSpace != NdMemoryAddressSpace::Default ||
+      Op.MemoryOrdering != NdMemoryOrdering::None || Op.Addr > UINT32_MAX - 6 ||
+      !chargeCalleeWork(Work, 10))
+    return false;
+  const auto *Import = checkedRuntimeImportSlot(Image, Op.Inputs[0].Offset);
+  if (!Import || !Provider(*Import))
+    return false;
+  const auto Bytes =
+      readImmutablePE32CodeBytes(Image, Op.Addr, 6, {Op.Addr + 2});
+  return Bytes && (*Bytes)[0] == 0xff && (*Bytes)[1] == 0x15 &&
+         readLE<uint32_t>(Bytes->data() + 2) == Op.Inputs[0].Offset;
+}
 } // namespace
 
 bool isCheckedRegistrationRaiseSlot(const BinaryImage &Image, va_t Target) {
@@ -79,17 +101,18 @@ bool isCheckedRegistrationStartupInfoSlot(const BinaryImage &Image,
 
 bool isCheckedRegistrationStartupInfoCall(const BinaryImage &Image,
                                           const LowOp &Op, size_t &Work) {
-  if (Op.Opcode != NdOp::INDIR_CALL || Op.NumInputs != 1 || Op.Seq < 0 ||
-      !Op.Inputs[0].isConst() || Op.Inputs[0].Size != 4 ||
-      Op.MemoryAddressSpace != NdMemoryAddressSpace::Default ||
-      Op.MemoryOrdering != NdMemoryOrdering::None || Op.Addr > UINT32_MAX - 6 ||
-      !chargeCalleeWork(Work, 10) ||
-      !isCheckedRegistrationStartupInfoSlot(Image, Op.Inputs[0].Offset))
-    return false;
-  const auto Bytes =
-      readImmutablePE32CodeBytes(Image, Op.Addr, 6, {Op.Addr + 2});
-  return Bytes && (*Bytes)[0] == 0xff && (*Bytes)[1] == 0x15 &&
-         readLE<uint32_t>(Bytes->data() + 2) == Op.Inputs[0].Offset;
+  return checkedDirectRuntimeCall(Image, Op, Work, isStartupInfoProvider);
+}
+
+bool isCheckedRegistrationHeapTerminationSlot(const BinaryImage &Image,
+                                              va_t Target) {
+  const auto *Import = checkedRuntimeImportSlot(Image, Target);
+  return Import && isHeapTerminationProvider(*Import);
+}
+
+bool isCheckedRegistrationHeapTerminationCall(const BinaryImage &Image,
+                                              const LowOp &Op, size_t &Work) {
+  return checkedDirectRuntimeCall(Image, Op, Work, isHeapTerminationProvider);
 }
 
 std::optional<uint32_t>

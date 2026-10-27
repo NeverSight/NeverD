@@ -173,6 +173,7 @@ bindSEHJumps(const MedFunc &Source, const llvm::Function &Parent,
     return Bound.takeError();
   Result.Calls.insert(Bound->Calls.begin(), Bound->Calls.end());
   Result.RuntimeOutputs = std::move(Bound->RuntimeOutputs);
+  Result.NoFrameBorrowCalls = std::move(Bound->NoFrameBorrowCalls);
   for (const auto &[Address, Capture] : Captures) {
     const auto *Call = Calls.at(Address);
     const auto &Receipt = *Expected->at(Address).Capture;

@@ -16,6 +16,7 @@
 #include "neverd/loader/ExceptionCommon.h"
 
 #include <algorithm>
+#include <array>
 #include <compare>
 #include <cstdint>
 #include <memory>
@@ -310,10 +311,20 @@ struct RegistrationSEHJumpResume {
 /// Scalar slots and borrowed objects use the caller's established EBP;
 /// opaque buffers name a capture whose native allocation replaces the source.
 struct RegistrationSEHBoundArgument {
-  enum class Kind : uint8_t { Unused, Scalar, Object, JumpBuffer, NullPointer };
+  enum class Kind : uint8_t {
+    Unused,
+    Scalar,
+    Object,
+    JumpBuffer,
+    NullPointer,
+    ConstantScalar
+  };
   Kind ArgumentKind = Kind::Unused;
   int32_t Offset = 0;
   va_t Capture = 0;
+  /// An invocation requirement emitted and checked as an actual i32 value.
+  /// A frame-slot location alone cannot establish this constant.
+  uint32_t ScalarValue = 0;
   bool operator==(const RegistrationSEHBoundArgument &) const = default;
 };
 
@@ -325,10 +336,14 @@ struct RegistrationSEHBoundCall {
     PreservedHelper,
     RaiseException,
     ControlFP,
-    GetStartupInfoW
+    GetStartupInfoW,
+    HeapTermination
   };
   /// SDK PE32 STARTUPINFOW extent, including the conditional standard handles.
   static constexpr uint32_t StartupInfoBytes = 68;
+  /// HeapSetInformation(NULL, HeapEnableTerminationOnCorruption, NULL, 0).
+  static constexpr std::array<uint32_t, 4> HeapTerminationArguments = {0, 1, 0,
+                                                                       0};
   Kind CalleeKind = Kind::PreservedHelper;
   va_t Address = InvalidVA;
   int OpSeq = -1;

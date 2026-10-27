@@ -118,6 +118,11 @@ llvm::Expected<RegistrationSEHJumpContract> bindSEHBoundCalls(
               return rejectIR("unused SEH helper argument gained a value");
             continue;
           }
+          if (Arg.ArgumentKind == Kind::ConstantScalar) {
+            if (integer(Value, 32) != Arg.ScalarValue)
+              return rejectIR("SEH runtime changed its exact scalar argument");
+            continue;
+          }
           if (Arg.ArgumentKind == Kind::JumpBuffer) {
             const auto Buffer = Buffers.find(Arg.Capture);
             if (Buffer == Buffers.end() || !Buffer->second ||
@@ -179,6 +184,9 @@ llvm::Expected<RegistrationSEHJumpContract> bindSEHBoundCalls(
               Call, RegistrationSEHJumpContract::Output{
                         Storage, Base + Receipt.Arguments.front().Offset,
                         Receipt.borrowedObjectBytes()});
+        if (Receipt.CalleeKind ==
+            RegistrationSEHBoundCall::Kind::HeapTermination)
+          Result.NoFrameBorrowCalls.insert(Call);
       }
   if (Result.Calls.size() != Expected->size())
     return rejectIR("preserved SEH helper call set is incomplete");
