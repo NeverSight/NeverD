@@ -1540,6 +1540,68 @@ llvm::Error ContextFlow::instantiateTargetInputs(FunctionContext &Caller,
                                                  const FunctionContext &Callee,
                                                  const ContextState &Input,
                                                  ContextCall &Edge) {
+  if (Callee.Sites.empty())
+    return llvm::Error::success();
+  bool CheckedPath = false;
+  std::optional<size_t> FirstCall;
+  const auto SelectFirstCall = [&]() -> llvm::Expected<std::optional<size_t>> {
+    // Local caller facts cannot authorize a callee's conditional site unless
+    // they select its path. Follow only known successors, stop at every call,
+    // and never turn an unknown branch or a repeated block into reachability.
+    uint64_t Bytes = stateBytes(Input);
+    if (auto Error = retain(Bytes))
+      return std::move(Error);
+    const auto Release = llvm::scope_exit([&] { RetainedBytes -= Bytes; });
+    ContextState Prefix = Input;
+    std::set<size_t> Seen;
+    uint64_t SeenBytes = 0;
+    size_t BlockID = Callee.EntryBlock;
+    while (!Seen.contains(BlockID)) {
+      constexpr uint64_t NodeBytes = sizeof(size_t) + 4 * sizeof(void *);
+      if (auto Error = retain(NodeBytes))
+        return std::move(Error);
+      SeenBytes += NodeBytes;
+      Bytes += NodeBytes;
+      Seen.insert(BlockID);
+      const auto &Block = Program.Med.Blocks[BlockID];
+      for (size_t Slot = Block.StartSlot; Slot < Block.EndSlot; ++Slot) {
+        const auto *Instruction = Index.find(Slot);
+        if (!Instruction)
+          continue;
+        if (auto Error = visit())
+          return std::move(Error);
+        if (Instruction->Call != CallKind::None)
+          return std::optional<size_t>(Slot);
+        transferValues(*Instruction, Prefix);
+        const uint64_t NewBytes = stateBytes(Prefix) + SeenBytes;
+        if (NewBytes > Bytes) {
+          if (auto Error = retain(NewBytes - Bytes))
+            return std::move(Error);
+        } else {
+          RetainedBytes -= Bytes - NewBytes;
+        }
+        Bytes = NewBytes;
+      }
+      const auto *Last = Index.find(Block.EndSlot - 1);
+      const auto Selected = knownBranchSuccessor(Last, Prefix);
+      if (!Selected && Last &&
+          Last->Semantics.Terminator == TerminatorKind::ConditionalJump)
+        break;
+      std::optional<size_t> Next;
+      for (size_t E = Offsets[BlockID]; E < Offsets[BlockID + 1]; ++E) {
+        if (Selected &&
+            Program.Med.Blocks[Successors[E]].StartSlot != *Selected)
+          continue;
+        if (Next)
+          return std::optional<size_t>{};
+        Next = Successors[E];
+      }
+      if (!Next)
+        break;
+      BlockID = *Next;
+    }
+    return std::optional<size_t>{};
+  };
   for (const auto &Template : Callee.Sites) {
     if (!Template.InputExpression || Template.TargetAddress ||
         Template.Result == CallXContextResult::ProvenTargetSet)
@@ -1560,6 +1622,17 @@ llvm::Error ContextFlow::instantiateTargetInputs(FunctionContext &Caller,
          std::any_of(InputExpressions[Leaf].Alternatives.begin(),
                      InputExpressions[Leaf].Alternatives.end(), Unbound)))
       continue;
+    if (Caller.Generic) {
+      if (!CheckedPath) {
+        auto Selected = SelectFirstCall();
+        if (!Selected)
+          return Selected.takeError();
+        FirstCall = *Selected;
+        CheckedPath = true;
+      }
+      if (FirstCall != Template.CallXSlot)
+        continue;
+    }
     const size_t Depth = InputExpressions[Root].Depth;
     const uint64_t TemporaryBytes =
         Depth * (sizeof(size_t) + sizeof(CallXInputExpressionValue) +
@@ -1822,13 +1895,30 @@ llvm::Expected<bool> ContextFlow::callTarget(FunctionContext &Context,
     Edge.CalleeSummaryID = Callee->ID;
     Edge.GeneralizedInputs = Callee->Generic;
     Edge.InputGeneralization = Generalization;
-    if (Collect && !Context.Generic && Callee->Generic && !Edge.LegacyRuntime &&
-        !SpecializationBudgetExhausted)
+    if (Collect && Callee->Generic && !Callee->Sites.empty() &&
+        !Edge.LegacyRuntime && !SpecializationBudgetExhausted) {
+      uint64_t InputBytes = 0;
+      if (Context.Generic) {
+        InputBytes = sizeof(Input.Registers) +
+                     State.Scratch.Values.retainedByteEstimate();
+        for (const auto &Value : State.Registers)
+          InputBytes += Value.allocatedBytes();
+        if (auto Error = retain(InputBytes))
+          return std::move(Error);
+      }
+      const auto ReleaseInput =
+          llvm::scope_exit([&] { RetainedBytes -= InputBytes; });
+      if (Context.Generic) {
+        Input.Registers = State.Registers;
+        Input.Scratch.Values = State.Scratch.Values;
+        pushAbstractFrame(Input, Program);
+      }
       if (auto Error = instantiateTargetInputs(Context, *Callee, Input, Edge)) {
         if (!SpecializationBudgetExhausted)
           return std::move(Error);
         llvm::consumeError(std::move(Error));
       }
+    }
   }
   Context.PreservesMemory &=
       Callee && Callee->PreservesMemory && !Edge.LegacyRuntime;

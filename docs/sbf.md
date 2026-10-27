@@ -522,6 +522,15 @@ counts computations, including solver contexts that may later be reclaimed.
 These target proofs do not create candidate-callee summary edges, establish
 that every candidate was summarized, or close unknown runtime callers.
 
+Generic callers can also supply their locally proven parameters and full-width
+scratch fields. Before publishing such a target, a caller-seeded replay selects
+only known CFG successors up to the first call. Unknown branch outcomes,
+repeated blocks and an earlier call prevent publication for a later site;
+locally known arguments cannot authorize a callee branch they make impossible.
+The replay uses the canonical value and branch transfers and charges its
+instructions and temporary state to the existing query budgets. It neither
+allocates another specialization nor changes the generic return/memory result.
+
 All generic roots remain available, but standalone specialization is skipped
 when the static CFG/direct-call graph cannot reach an unresolved CALLX; actual
 callers can still demand return/memory specializations. Remaining roots retain

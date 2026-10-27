@@ -1080,6 +1080,147 @@ TEST(SBFCallXContexts, GenericTargetInputsSurviveSpecializationCapacity) {
   }
 }
 
+TEST(SBFCallXContexts, GenericCallersRequireAProvenPathToTheFirstCall) {
+  for (unsigned Selector : {0u, 1u, 2u})
+    for (bool Conditional : {false, true}) {
+      SCOPED_TRACE(::testing::Message() << "selector=" << Selector
+                                        << ", conditional=" << Conditional);
+      std::vector<test::EncodedInstruction> Text{
+          encode(Opcode::CALL_IMM, 0, 1, 0, 1), encode(Opcode::EXIT)};
+      const size_t Wrapper = Text.size();
+      const size_t Literal = Text.size();
+      const auto Placeholder = test::loadImm64(3, 0);
+      Text.insert(Text.end(), Placeholder.begin(), Placeholder.end());
+      if (Selector == 2)
+        Text.push_back(encode(Opcode::LD_DW_REG, 4, 1));
+      else
+        Text.push_back(encode(Opcode::MOV64_IMM, 4, 0, 0, Selector));
+      Text.push_back(encode(Opcode::ST_DW_REG, 10, 3, -8));
+      Text.push_back(encode(Opcode::MOV64_REG, 1, 10));
+      Text.push_back(encode(Opcode::ADD64_IMM, 1, 0, 0, -8));
+      const size_t Call = Text.size();
+      Text.push_back({});
+      Text.push_back(encode(Opcode::EXIT));
+      const size_t Leaf = Text.size();
+      if (Conditional)
+        Text.push_back(encode(Opcode::JEQ64_IMM, 4, 0, 2));
+      Text.push_back(encode(Opcode::LD_DW_REG, 2, 1));
+      const size_t CallX = Text.size();
+      Text.push_back(encode(Opcode::CALL_REG, 2));
+      Text.push_back(encode(Opcode::EXIT));
+      const size_t Target = Text.size();
+      Text.push_back(encode(Opcode::MOV64_IMM, 0, 0, 0, 42));
+      Text.push_back(encode(Opcode::EXIT));
+      Text[Call] = encode(Opcode::CALL_IMM, 0, 1, 0, Leaf - Call - 1);
+      const auto Address = test::loadImm64(3, kBytecodeStart + Target * 8);
+      std::copy(Address.begin(), Address.end(), Text.begin() + Literal);
+      auto Program = analyze(test::makeImage(Text, {}));
+      ASSERT_TRUE(static_cast<bool>(Program))
+          << llvm::toString(Program.takeError());
+      auto Report = recoverCallXContexts(*Program);
+      ASSERT_TRUE(static_cast<bool>(Report))
+          << llvm::toString(Report.takeError());
+      bool GenericProof = false;
+      for (const auto &Site : Report->Contexts) {
+        if (Site.EntryPrefixOnly || Site.CallerSlot != Call ||
+            Site.CallXSlot != CallX || !Site.TargetSlot ||
+            !Site.CallerSummaryID)
+          continue;
+        const auto Caller =
+            std::find_if(Report->Summaries.begin(), Report->Summaries.end(),
+                         [&](const auto &Summary) {
+                           return Summary.ID == *Site.CallerSummaryID;
+                         });
+        ASSERT_NE(Caller, Report->Summaries.end());
+        if (Caller->GeneralizedInputs && Caller->EntrySlot == Wrapper) {
+          EXPECT_EQ(Site.TargetSlot, Target);
+          EXPECT_FALSE(Site.InputExpressionValues.empty());
+          GenericProof = true;
+        }
+      }
+      EXPECT_EQ(GenericProof, !Conditional || Selector == 1);
+      checkSummaryReferences(*Report);
+      auto Raw = executeSelector(*Program, 0);
+      ASSERT_TRUE(static_cast<bool>(Raw)) << llvm::toString(Raw.takeError());
+      EXPECT_EQ(Raw->Status, ExecutionStatus::Returned) << Raw->Error;
+      const bool Executed = !Conditional || Selector == 1;
+      EXPECT_EQ(Raw->ReturnValue, Executed ? 42u : 0u);
+      EXPECT_EQ(
+          std::any_of(Raw->Trace.begin(), Raw->Trace.end(),
+                      [&](const auto &Step) { return Step.Slot == CallX; }),
+          Executed);
+    }
+}
+
+TEST(SBFCallXContexts, GenericCallerPathStopsBeforeAnEarlierCallee) {
+  for (unsigned Selector : {0u, 1u}) {
+    SCOPED_TRACE(Selector);
+    std::vector<test::EncodedInstruction> Text{
+        encode(Opcode::CALL_IMM, 0, 1, 0, 1), encode(Opcode::EXIT)};
+    const size_t Wrapper = Text.size();
+    const size_t Literal = Text.size();
+    const auto Placeholder = test::loadImm64(3, 0);
+    Text.insert(Text.end(), Placeholder.begin(), Placeholder.end());
+    Text.push_back(encode(Opcode::ST_DW_REG, 10, 3, -8));
+    Text.push_back(encode(Opcode::MOV64_REG, 1, 10));
+    Text.push_back(encode(Opcode::ADD64_IMM, 1, 0, 0, -8));
+    Text.push_back(encode(Opcode::MOV64_IMM, 4, 0, 0, Selector));
+    const size_t Call = Text.size();
+    Text.push_back({});
+    Text.push_back(encode(Opcode::EXIT));
+    const size_t Leaf = Text.size();
+    Text.push_back(encode(Opcode::MOV64_REG, 6, 1));
+    const size_t Earlier = Text.size();
+    Text.push_back({});
+    Text.push_back(encode(Opcode::LD_DW_REG, 2, 6));
+    const size_t CallX = Text.size();
+    Text.push_back(encode(Opcode::CALL_REG, 2));
+    Text.push_back(encode(Opcode::EXIT));
+    const size_t Helper = Text.size();
+    Text.push_back(encode(Opcode::JNE64_IMM, 4, 0, 1));
+    Text.push_back(encode(Opcode::JA, 0, 0, -1));
+    Text.push_back(encode(Opcode::EXIT));
+    const size_t Target = Text.size();
+    Text.push_back(encode(Opcode::MOV64_IMM, 0, 0, 0, 42));
+    Text.push_back(encode(Opcode::EXIT));
+    Text[Call] = encode(Opcode::CALL_IMM, 0, 1, 0, Leaf - Call - 1);
+    Text[Earlier] = encode(Opcode::CALL_IMM, 0, 1, 0, Helper - Earlier - 1);
+    const auto Address = test::loadImm64(3, kBytecodeStart + Target * 8);
+    std::copy(Address.begin(), Address.end(), Text.begin() + Literal);
+    auto Program = analyze(test::makeImage(Text, {}));
+    ASSERT_TRUE(static_cast<bool>(Program))
+        << llvm::toString(Program.takeError());
+    auto Report = recoverCallXContexts(*Program);
+    ASSERT_TRUE(static_cast<bool>(Report))
+        << llvm::toString(Report.takeError());
+    for (const auto &Site : Report->Contexts) {
+      if (Site.EntryPrefixOnly || Site.CallerSlot != Call ||
+          Site.CallXSlot != CallX || !Site.CallerSummaryID)
+        continue;
+      const auto Caller =
+          std::find_if(Report->Summaries.begin(), Report->Summaries.end(),
+                       [&](const auto &Summary) {
+                         return Summary.ID == *Site.CallerSummaryID;
+                       });
+      ASSERT_NE(Caller, Report->Summaries.end());
+      if (Caller->GeneralizedInputs && Caller->EntrySlot == Wrapper)
+        EXPECT_FALSE(Site.TargetSlot);
+    }
+    checkSummaryReferences(*Report);
+    InterpreterOptions Options;
+    Options.MaxSteps = 128;
+    auto Raw = executeRaw(*Program, {}, Options);
+    ASSERT_TRUE(static_cast<bool>(Raw)) << llvm::toString(Raw.takeError());
+    EXPECT_EQ(Raw->Status, Selector ? ExecutionStatus::Returned
+                                    : ExecutionStatus::StepLimit);
+    EXPECT_EQ(std::any_of(Raw->Trace.begin(), Raw->Trace.end(),
+                          [&](const auto &Step) { return Step.Slot == CallX; }),
+              Selector != 0);
+    if (Selector)
+      EXPECT_EQ(Raw->ReturnValue, 42u);
+  }
+}
+
 TEST(SBFCallXContexts, GenericTargetLoadsUseTheCorrectMemorySnapshot) {
   for (bool CaptureBeforeWrite : {false, true}) {
     SCOPED_TRACE(CaptureBeforeWrite);
