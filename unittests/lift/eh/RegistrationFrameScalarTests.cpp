@@ -175,6 +175,70 @@ TEST(RegistrationFrameScalar, AddressBitsAreNotAffineScalarConstants) {
   }
 }
 
+TEST(RegistrationFrameScalar, IdenticalImageAddressesHaveExactRelations) {
+  for (uint32_t Address : {0u, 0x401000u, 0x80000000u, UINT32_MAX})
+    for (NdOp Opcode :
+         {NdOp::INT_SUB, NdOp::INT_EQUAL, NdOp::INT_NOTEQUAL, NdOp::INT_LESS,
+          NdOp::INT_LESSEQUAL, NdOp::INT_SLESS, NdOp::INT_SLESSEQUAL})
+      for (unsigned Mutation = 0; Mutation != 18; ++Mutation) {
+        SCOPED_TRACE(::testing::Message()
+                     << Address << ':' << unsigned(Opcode) << ':' << Mutation);
+        auto Left = FrameValue::imageAddress(Address);
+        auto Right = Left;
+        auto Op = operation(Opcode);
+        if (Mutation == 1)
+          Right = FrameValue::imageAddress(Address + 1);
+        if (Mutation == 2)
+          Right = FrameValue::constant(Address);
+        if (Mutation == 3)
+          Left = FrameValue::constant(Address);
+        if (Mutation == 4)
+          Right.MayBeFrame = true;
+        if (Mutation == 5)
+          Right.SecurityCookie = true;
+        if (Mutation == 6)
+          Right.Offset = 0;
+        if (Mutation == 7)
+          Right.ImportTarget = Address;
+        if (Mutation == 8)
+          Right.SavedRegister = 1;
+        if (Mutation == 9)
+          Op.Inputs[0].Size = 2;
+        if (Mutation == 10)
+          Op.Inputs[1].Size = 8;
+        if (Mutation == 11)
+          Op.Output.Size = Opcode == NdOp::INT_SUB ? 1 : 4;
+        if (Mutation == 12)
+          Op.NumInputs = 1;
+        if (Mutation == 13)
+          Right = join(Right, {});
+        if (Mutation == 14)
+          Right.FrameOnlyFromCall = true;
+        if (Mutation == 15)
+          Right.CookieImageXOR = Address;
+        if (Mutation == 16)
+          Right.ThreadAddress = SEHThreadAddress{0x1000, 0, 0};
+        if (Mutation == 17)
+          Right.FrameOnlyFromSEHScalar = true;
+        const auto Result = evaluate(Left, Right, Op);
+        if (Mutation) {
+          EXPECT_FALSE(Result.Constant);
+        } else {
+          const bool Reflexive = Opcode == NdOp::INT_EQUAL ||
+                                 Opcode == NdOp::INT_LESSEQUAL ||
+                                 Opcode == NdOp::INT_SLESSEQUAL;
+          EXPECT_EQ(Result, FrameValue::constant(Reflexive));
+          // Rebase, wraparound and movement of this one image object cannot
+          // change a relation between two complete copies of its identity.
+          FrameState Spilled;
+          Spilled.store(-4, 4, Right);
+          EXPECT_EQ(evaluate(Left, Spilled.load(-4, 4), Op), Result);
+          Spilled.store(-3, 1, {});
+          EXPECT_FALSE(evaluate(Left, Spilled.load(-4, 4), Op).Constant);
+        }
+      }
+}
+
 TEST(RegistrationFrameScalar, ImportedCallablesAreNotAddressesOrScalars) {
   const auto Callable = FrameValue::importTarget(0x403000);
   EXPECT_FALSE(Callable.Constant);

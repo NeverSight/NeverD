@@ -4,6 +4,8 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "../../../lib/ir/low/X86/RegistrationABIPrivate.h"
+#include "../../../lib/ir/low/X86/RegistrationConditionalFrame.h"
 #include "../../../lib/ir/low/X86/RegistrationStackOwner.h"
 #include "gtest/gtest.h"
 
@@ -14,6 +16,7 @@
 #include "neverd/ir/low/RegistrationCallEffects.h"
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/ir/med/MedABIPass.h"
+#include "neverd/lift/X86Regs.h"
 #include "neverd/loader/COFF/COFFLoader.h"
 #include "neverd/loader/COFF/COFFRegistrationEH.h"
 #include "neverd/loader/PointerRelocation.h"
@@ -412,6 +415,109 @@ TEST(RegistrationCallABI, RelocatedLeafAddressesKeepMemoryIdentity) {
         EXPECT_EQ(Proof->ImageReads[0].Begin, Address);
         EXPECT_EQ(Proof->ImageReads[0].End, Address + 4);
         EXPECT_TRUE(Proof->ImageWrites.empty());
+      }
+    }
+}
+
+TEST(RegistrationCallABI, EmptyImageRangeExcludesOnlyProvedUnreachedCalls) {
+  using namespace registration_state;
+  for (uint32_t Base : {0x400000u, 0x18000000u, 0xf0000000u})
+    for (unsigned Mutation = 0; Mutation != 12; ++Mutation) {
+      SCOPED_TRACE(Base);
+      SCOPED_TRACE(Mutation);
+      BinaryImage Image;
+      Image.Arch = Arch::X86;
+      Image.Bits = Bitness::Bits32;
+      Image.Format = BinaryFormat::COFF;
+      Image.Base = Base;
+      Image.Entry = Base + 0x1000;
+      const va_t DataVA = Base + 0x3000;
+      const va_t CallVA = Image.Entry + 0x40;
+      Segment Text;
+      Text.Name = ".text";
+      Text.VA = Image.Entry;
+      Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+      // Two image identities, CMP/JAE, an opaque CALL EDX, then RET.
+      Text.Data = {0xb8, 0,    0,    0,    0, 0xb9, 0,    0,   0,
+                   0,    0x3b, 0xc1, 0x73, 2, 0xff, 0xd2, 0xc3};
+      const va_t Right = Mutation == 1   ? DataVA + 4
+                         : Mutation == 2 ? DataVA - 4
+                                         : DataVA;
+      writeLE<uint32_t>(Text.Data.data() + 1, DataVA);
+      writeLE<uint32_t>(Text.Data.data() + 6, Right);
+      Image.BaseRelocations = {{Text.VA + 1, 3}, {Text.VA + 6, 3}};
+      Image.DataAddressRelocOperands[Text.VA + 1] = {DataVA, DataVA, 4, DataVA};
+      Image.DataAddressRelocOperands[Text.VA + 6] = {Right, Right, 4, DataVA};
+      if (Mutation == 3 || Mutation == 4) {
+        Image.BaseRelocations.pop_back();
+        Image.DataAddressRelocOperands.erase(Text.VA + 6);
+      }
+      if (Mutation == 4) {
+        Text.Data[5] = 0x66;
+        Text.Data[6] = 0xb9;
+        writeLE<uint16_t>(Text.Data.data() + 7, uint16_t(Right));
+        Text.Data[9] = 0x90;
+      }
+      if (Mutation == 5)
+        Text.Data.insert(Text.Data.begin() + 10, {0xff, 0xd2});
+      if (Mutation == 6)
+        Text.Data[12] = 0x72; // JB reaches the opaque call on equal inputs.
+      if (Mutation == 7)
+        Text.Flags = Text.Flags | SegmentFlags::Writable;
+      if (Mutation == 8)
+        Image.BaseRelocations[1].Type = llvm::COFF::IMAGE_REL_BASED_DIR64;
+      if (Mutation == 9)
+        Image.BaseRelocations.push_back(Image.BaseRelocations[0]);
+      if (Mutation == 10)
+        Text.Data.insert(Text.Data.begin() + 16, {0x83, 0xc4, 4});
+      if (Mutation == 11)
+        Text.Data[0] = 0xa1; // Loading through the address loses its identity.
+      Text.Data.resize(0x40, 0xcc);
+      Text.Data.push_back(0xe8);
+      const size_t Field = Text.Data.size();
+      Text.Data.resize(Field + 4);
+      writeLE<uint32_t>(Text.Data.data() + Field,
+                        uint32_t(Image.Entry - (CallVA + 5)));
+      Text.Data.push_back(0xc3);
+      Text.Size = Text.FileSz = Text.Data.size();
+      Image.Segments.push_back(Text);
+      Segment Data;
+      Data.Name = ".data";
+      Data.VA = DataVA;
+      Data.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+      Data.Data.resize(16);
+      Data.Size = Data.FileSz = Data.Data.size();
+      Image.Segments.push_back(Data);
+      for (const auto &Segment : Image.Segments) {
+        Section Section;
+        Section.Name = Segment.Name;
+        Section.VA = Segment.VA;
+        Section.Size = Section.FileSz = Segment.Size;
+        Section.Flags = Segment.Flags;
+        Image.Sections.push_back(Section);
+      }
+      const bool Accepted = Mutation == 0;
+      EXPECT_EQ(getCheckedX86CalleeStackPop(Image, Image.Entry),
+                Accepted ? std::optional<uint32_t>{0} : std::nullopt);
+      LowOp Call;
+      Call.Opcode = NdOp::CALL;
+      Call.Addr = CallVA;
+      Call.Seq = 0;
+      Call.Output = NdVar::reg(x86reg::RAX, 4);
+      Call.addInput(NdVar::cst(Image.Entry, 4));
+      FrameState State;
+      State.Registers[x86reg::RSP / x86reg::GeneralRegStride] =
+          FrameValue::frame(-16);
+      std::set<int32_t> Initialized;
+      std::optional<FrameValue> Return;
+      BoundPlainCalleeEffect Effect;
+      size_t Work = 0;
+      EXPECT_EQ(registration_abi::hasConditionalCallFrame(
+                    Image, Call, State, Work, &Initialized, &Return, &Effect),
+                Accepted);
+      if (Accepted) {
+        EXPECT_EQ(Effect.StackPopBytes, 0u);
+        EXPECT_TRUE(Effect.ImageReads.empty());
       }
     }
 }

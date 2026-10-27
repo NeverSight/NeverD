@@ -5897,6 +5897,15 @@ alignment, disagreeing return pops, missing restoration, volatile anchors,
 memory-only saved pointers, far/tail returns, writable code, wrong targets and
 exhausted work. `StackCleanupIncludesCheckedNestedImportCleanup` verifies
 provider and exact-slot identity before a nested stdcall can balance its caller.
+`EmptyImageRangeExcludesOnlyProvedUnreachedCalls` checks an empty relocated
+pointer range at three image bases through both returning-stack and bound
+plain-callee effect queries. Changed endpoints, equal numeric bits without
+address provenance, partial register writes, opaque calls, reversed branches,
+mutable code, malformed fixups, an unbalanced return and pointer dereferences
+must refuse. `IdenticalImageAddressesHaveExactRelations` checks zero difference
+and signed/unsigned self-comparisons, full spills, partial aliases, mismatched
+widths and mixed frame, cookie, import or thread provenance. The earlier frame
+coordinate and numeric-address cancellation negatives remain required.
 `RegistrationImportABI.DivideGuardKeepsOnlyTheNormalReturnStack` checks signed
 and unsigned 8/16/32-bit register and memory divides followed by a stdcall. The
 exact divide guard remains in LowIR and the shared frame policy still refuses

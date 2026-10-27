@@ -2483,8 +2483,17 @@ Partial addresses and unsupported arithmetic lose exact identity. Memory and
 runtime metadata consumers explicitly request the preferred address, while
 branch, stack and try-level proofs consume only integer constants. EH4
 cookie XOR expressions retain their address term separately from integer
-masks. Equality and snapshot hashes include both address fields. Strong
-callee proofs also authenticate instruction fields and require relocated
+masks. Equality and snapshot hashes include both address fields. The shared
+frame transfer can derive a zero difference or a reflexive comparison from
+two complete copies of the same image-address identity. Different image
+addresses and an address versus its preferred numeric bits remain unknown;
+neither image layout nor base-dependent ordering becomes a scalar fact.
+Ordinary returning-stack proofs reuse the shared constant-branch authority,
+which requires both exact physical CFG edges. Unknown conditions retain both
+successors. Registration dispatcher graphs retain their independent complete
+parent-path obligations. This invocation reasoning removes no source blocks
+and grants no native rewrite permission.
+Strong callee proofs also authenticate instruction fields and require relocated
 operands to have the loader classification consumed by LowIR; an unclassified
 fixup cannot acquire the stack-only query's permission to ignore its bits.
 SEH callees additionally require the complete shared registration

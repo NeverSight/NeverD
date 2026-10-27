@@ -6,6 +6,7 @@
 
 #include "RegistrationABIPrivate.h"
 #include "RegistrationFrame.h"
+#include "RegistrationFrameBranch.h"
 #include "RegistrationFrameEffects.h"
 #include "RegistrationImportLoad.h"
 #include "RegistrationOrdinaryGraph.h"
@@ -612,10 +613,27 @@ stackPopForBody(StackBody &Body, va_t Entry, const NestedStackProof &NestedPop,
       continue;
     if (Block.Succs.empty() && !endsInReturn(Block))
       return std::nullopt;
+    std::optional<va_t> KnownSuccessor;
+    if (!Registration && !CxxPaths) {
+      if (!chargeCalleeWork(Work, Block.Succs.size() + 1))
+        return std::nullopt;
+      KnownSuccessor = registration_state::knownFrameBranchTarget(
+          Block, Transfer, [&](va_t Address) -> std::optional<int> {
+            const auto Found = Body.Entries.find(Address);
+            return Found == Body.Entries.end()
+                       ? std::nullopt
+                       : std::optional<int>{Found->second};
+          });
+    }
     for (int Successor : Block.Succs) {
       if (!Blocks.count(Successor) ||
           !chargeCalleeWork(Work, State.OtherRegisterBytes.size() + 9))
         return std::nullopt;
+      // Both physical edges were checked by the shared frame-branch owner.
+      // An unknown condition still visits both. Dispatcher-entered paths keep
+      // their separate complete-parent graph obligation above.
+      if (KnownSuccessor && *KnownSuccessor != Blocks.at(Successor)->StartAddr)
+        continue;
       auto [It, New] = Incoming.emplace(Successor, State);
       if ((New || It->second.merge(State)) && Queued.insert(Successor).second)
         Pending.push_back(Successor);
