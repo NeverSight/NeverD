@@ -2584,6 +2584,11 @@ unknown effects. Fresh COFF replay checks its current source, ABI, argument and
 full output extent. A queried frame cell can survive this call only when it is
 disjoint from the output and every possible SEH callback preserves it. This
 invocation-specific borrow supplies no general import purity or no-unwind fact.
+On normal return, its private output extent preserves any still-live image
+import bindings. Generic CALL invalidation consumes that checked effect, so a
+subsequent imported stack contract remains usable. A preceding import-slot
+write remains invalid; neither a stack-pop fact nor the API name alone can
+restore or preserve the binding.
 Cleanup relay caching uses the existing unwind-record bound, independently of
 the smaller ordinary-callee cache. Successful and failed lookups still consume
 the same cumulative work budget. Within one dispatch snapshot, each unwind

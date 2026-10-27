@@ -9456,6 +9456,11 @@ write, including all three conditional standard-handle fields. The import tests
 also require the exact current direct-call instruction and bounded proof work.
 Earlier full or partial writes to its IAT slot invalidate the output borrow; an
 unrelated image write does not.
+`CheckedOutputPreservesOnlyLiveImportBindings` follows the checked output with
+a second imported call and a stack write. EH3, EH4 and GS retain the second
+call's stack coordinate only while its binding is live. Full or partial writes
+to that other IAT slot, an invalid output extent and failed authentication
+still refuse; an unrelated image write preserves the proof.
 `check_windows_registration_rewrite.py --startup-info` adds an independently
 sampled `GetStartupInfoW` output oracle to filter and normal-finally cases;
 combine it with `--shared-seh4` or an EH4/GS case as needed. Both observations

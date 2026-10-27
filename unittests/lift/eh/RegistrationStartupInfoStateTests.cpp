@@ -14,6 +14,8 @@
 
 #include <cstdint>
 #include <iterator>
+#include <utility>
+#include <vector>
 
 using namespace neverd;
 using namespace neverd::registration_state;
@@ -142,6 +144,62 @@ TEST(RegistrationStartupInfo, EarlierImportWritesInvalidateTheOutputBorrow) {
       EXPECT_EQ(Result.HasBoundSEHCallees, Mutation == 0);
       if (!Mutation)
         EXPECT_TRUE(Result.Complete);
+    }
+}
+
+TEST(RegistrationStartupInfo, CheckedOutputPreservesOnlyLiveImportBindings) {
+  for (unsigned Protocol = 0; Protocol != 3; ++Protocol)
+    for (unsigned Mutation = 0; Mutation != 6; ++Mutation) {
+      SCOPED_TRACE(::testing::Message() << Protocol << ' ' << Mutation);
+      auto F = makeStartupFrame(Protocol, Mutation == 4 ? -24 : -108);
+      if (Mutation >= 1 && Mutation <= 3) {
+        auto &Setup = F.Blocks[1];
+        emitOp(Setup, 0x1086, NdOp::STORE, {},
+               {NdVar::cst(Mutation == 1   ? 0x4400
+                           : Mutation == 2 ? 0x4300
+                                           : 0x4303,
+                           4),
+                NdVar::cst(0, Mutation == 3 ? 1 : 4)});
+        ++Setup.InstructionBoundaries.back().OpCount;
+      }
+      F.Blocks[3].Succs = {10};
+      LowBlock Next;
+      Next.Id = 10;
+      Next.StartAddr = 0x1180;
+      Next.EndAddr = 0x118f;
+      Next.Succs = {5};
+      emitOp(Next, 0x1180, NdOp::INT_SUB, NdVar::reg(x86reg::RSP, 4),
+             {NdVar::reg(x86reg::RSP, 4), NdVar::cst(4, 4)});
+      emitOp(Next, 0x1180, NdOp::STORE, {},
+             {NdVar::reg(x86reg::RSP, 4), NdVar::cst(0, 4)});
+      emitOp(Next, 0x1182, NdOp::INDIR_CALL, NdVar::reg(x86reg::RAX, 4),
+             {NdVar::cst(0x4300, 4)});
+      // This later stack store needs the second import's returning ABI.
+      // The output borrow may preserve a live binding, never restore one.
+      emitOp(Next, 0x1188, NdOp::STORE, {},
+             {NdVar::reg(x86reg::RSP, 4), NdVar::cst(37, 4)});
+      Next.InstructionBoundaries = {
+          {0x1180, 2, 0, 2}, {0x1182, 6, 2, 1}, {0x1188, 7, 3, 1}};
+      auto &Call = Next.InstructionBoundaries[1];
+      Call.Control = LowInstructionControl::Call;
+      Call.ControlFlags =
+          LowInstructionControlFlag::Call | LowInstructionControlFlag::Indirect;
+      Call.Immediate = 0x4300;
+      F.Blocks.push_back(std::move(Next));
+      const std::vector<RegistrationCalleeStackContract> Stacks = {
+          {0x4200, 4, true}, {0x4300, 4, true}};
+      SEHJumpRuntime Runtime;
+      Runtime.ImportSlots.insert(0x4200);
+      Runtime.StartupInfo = [Mutation](const LowOp &Op, size_t &) {
+        return Mutation != 5 && Op.Opcode == NdOp::INDIR_CALL &&
+               Op.Addr == 0x1100;
+      };
+      RegistrationStateSolver Solver(F, Protocol ? 0x4000 : 0, 0, nullptr,
+                                     nullptr, &Stacks, nullptr, nullptr,
+                                     nullptr, nullptr, &Runtime);
+      const auto Result = Solver.run();
+      EXPECT_EQ(Result.Complete, Mutation <= 1);
+      EXPECT_EQ(Result.SEHBoundCalls.size(), Mutation <= 1 ? 1u : 0u);
     }
 }
 
