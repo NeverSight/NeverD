@@ -756,7 +756,7 @@ TEST(RegistrationConditionalFrame, OriginalHelperResumesItsBorrowedCapture) {
 }
 TEST(RegistrationCRTFrame, ControlFPRequiresItsImportAndPhysicalCall) {
   using namespace registration_state;
-  for (unsigned Mutation = 0; Mutation != 10; ++Mutation) {
+  for (unsigned Mutation = 0; Mutation != 11; ++Mutation) {
     SCOPED_TRACE(Mutation);
     auto Image = loadXCPT4();
     ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
@@ -796,8 +796,11 @@ TEST(RegistrationCRTFrame, ControlFPRequiresItsImportAndPhysicalCall) {
     if (Mutation == 9)
       Image->Imports.push_back(
           {"application.dll", "_controlfp_s", 0, 0x4080e0});
+    if (Mutation == 10)
+      Import->Module = "MSVCR100.DLL";
     size_t Work = 0;
-    EXPECT_EQ(isCheckedControlFPCall(*Image, Call, Work), Mutation == 0);
+    EXPECT_EQ(isCheckedControlFPCall(*Image, Call, Work),
+              Mutation == 0 || Mutation == 10);
   }
 }
 TEST(RegistrationCRTFrame, MathHelperStackFactsDoNotGrantMemoryEffects) {

@@ -5,6 +5,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "RegistrationABIPrivate.h"
+#include "RegistrationCRTFrame.h"
 #include "RegistrationImportLoad.h"
 
 #include "neverd/Limits.h"
@@ -157,6 +158,8 @@ checkedRegistrationImportStackPop(const BinaryImage &Image, va_t Target) {
     return 16;
   if (isStartupInfoProvider(*Import))
     return 4;
+  if (registration_state::isCheckedControlFPSlot(Image, Target))
+    return 0;
   const llvm::StringRef Module = Import->Module;
   const llvm::StringRef Name = Import->Name;
   if (Module.equals_insensitive("kernel32.dll")) {

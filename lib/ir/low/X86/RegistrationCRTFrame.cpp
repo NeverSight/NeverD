@@ -30,7 +30,8 @@ bool isCheckedControlFPSlot(const BinaryImage &Image, va_t Slot) {
          Module.equals_insensitive("api-ms-win-crt-runtime-l1-1-0.dll") ||
          Module.equals_insensitive("ucrtbase.dll") ||
          Module.equals_insensitive("ucrtbased.dll") ||
-         Module.equals_insensitive("msvcrt.dll");
+         Module.equals_insensitive("msvcrt.dll") ||
+         Module.equals_insensitive("msvcr100.dll");
 }
 
 bool isCheckedControlFPCall(const BinaryImage &Image, const LowOp &Op,

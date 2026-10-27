@@ -8,6 +8,7 @@
 /// Validate source identities and argument recipes for preserved SEH calls.
 
 #include "neverd/Limits.h"
+#include "neverd/ir/RegistrationCRTControl.h"
 #include "neverd/ir/med/MedIR.h"
 #include "neverd/ir/med/MedStackAlignment.h"
 #include "neverd/ir/med/X86RegistrationCallResult.h"
@@ -38,6 +39,14 @@ getX86RegistrationSEHBoundCalls(const MedFunc &Function) {
   for (const auto &Call : States.SEHBoundCalls) {
     using CalleeKind = RegistrationSEHBoundCall::Kind;
     using ArgumentKind = RegistrationSEHBoundArgument::Kind;
+    const bool ControlFPPrecision =
+        Call.CalleeKind == CalleeKind::ControlFP &&
+        Call.Arguments.size() == 3 &&
+        Call.Arguments[0].ArgumentKind == ArgumentKind::NullPointer &&
+        Call.Arguments[1].ArgumentKind == ArgumentKind::ConstantScalar &&
+        Call.Arguments[2].ArgumentKind == ArgumentKind::ConstantScalar &&
+        registration_crt::isX86ControlFPPrecisionSetting(
+            Call.Arguments[1].ScalarValue, Call.Arguments[2].ScalarValue);
     if (Call.ConstantReturn &&
         (Call.CalleeKind != CalleeKind::PreservedHelper ||
          !Call.HasOrdinaryReturn))
@@ -58,9 +67,11 @@ getX86RegistrationSEHBoundCalls(const MedFunc &Function) {
     case CalleeKind::ControlFP:
       if (Call.EntryVA || !Call.HasOrdinaryReturn ||
           Call.Arguments.size() != 3 ||
-          Call.Arguments[0].ArgumentKind != ArgumentKind::Object ||
-          Call.Arguments[1].ArgumentKind != ArgumentKind::Scalar ||
-          Call.Arguments[2].ArgumentKind != ArgumentKind::Scalar)
+          (!ControlFPPrecision &&
+           ((Call.Arguments[0].ArgumentKind != ArgumentKind::Object &&
+             Call.Arguments[0].ArgumentKind != ArgumentKind::NullPointer) ||
+            Call.Arguments[1].ArgumentKind != ArgumentKind::Scalar ||
+            Call.Arguments[2].ArgumentKind != ArgumentKind::Scalar)))
         return std::nullopt;
       break;
     case CalleeKind::GetStartupInfoW:
@@ -136,16 +147,19 @@ getX86RegistrationSEHBoundCalls(const MedFunc &Function) {
         break;
       case Kind::NullPointer:
         if (!((Call.CalleeKind == CalleeKind::RaiseException && I == 3) ||
+              (Call.CalleeKind == CalleeKind::ControlFP && I == 0) ||
               (Call.CalleeKind == CalleeKind::HeapTermination &&
                (I == 0 || I == 2))) ||
             Arg.Capture || Arg.Offset)
           return std::nullopt;
         break;
       case Kind::ConstantScalar:
-        if (Call.CalleeKind != CalleeKind::HeapTermination ||
-            (I != 1 && I != 3) || Arg.Capture || Arg.Offset ||
-            Arg.ScalarValue !=
-                RegistrationSEHBoundCall::HeapTerminationArguments[I])
+        if (Arg.Capture || Arg.Offset ||
+            !((ControlFPPrecision && (I == 1 || I == 2)) ||
+              (Call.CalleeKind == CalleeKind::HeapTermination &&
+               (I == 1 || I == 3) &&
+               Arg.ScalarValue ==
+                   RegistrationSEHBoundCall::HeapTerminationArguments[I])))
           return std::nullopt;
         break;
       case Kind::ImagePointer:

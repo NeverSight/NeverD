@@ -8,6 +8,7 @@
 
 #include "RegistrationStateSolver.h"
 
+#include "neverd/ir/RegistrationCRTControl.h"
 #include "neverd/lift/X86Regs.h"
 
 #include <cstddef>
@@ -77,9 +78,22 @@ void RegistrationStateSolver::recordSEHRuntimeCall(
     Call.Arguments.front() = {Argument::ImagePointer, 0, 0, 0, ImageOutput};
   else if (Kind == RegistrationSEHBoundCall::Kind::Sleep) {
     // The duration is sampled at the actual source invocation.
-  } else if ((Kind == RegistrationSEHBoundCall::Kind::ControlFP ||
-              Kind == RegistrationSEHBoundCall::Kind::GetStartupInfoW) &&
-             Output)
+  } else if (Kind == RegistrationSEHBoundCall::Kind::ControlFP) {
+    Call.Arguments.front() =
+        Output ? RegistrationSEHBoundArgument{Argument::Object, *Output, 0}
+               : RegistrationSEHBoundArgument{Argument::NullPointer};
+    const auto Mask = State.Frame.load(Call.StackOffset + 8, 4);
+    if (!Output &&
+        Mask.Constant == registration_crt::kX86ControlFPPrecisionMask) {
+      const auto Control = State.Frame.load(Call.StackOffset + 4, 4);
+      if (!Control.Constant ||
+          !registration_crt::isX86ControlFPPrecisionSetting(*Control.Constant,
+                                                            *Mask.Constant))
+        return;
+      Call.Arguments[1] = {Argument::ConstantScalar, 0, 0, *Control.Constant};
+      Call.Arguments[2] = {Argument::ConstantScalar, 0, 0, *Mask.Constant};
+    }
+  } else if (Kind == RegistrationSEHBoundCall::Kind::GetStartupInfoW && Output)
     Call.Arguments.front() = {Argument::Object, *Output, 0};
   else
     return;

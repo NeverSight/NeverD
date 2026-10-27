@@ -742,6 +742,81 @@ TEST(RegistrationCRTCall, ControlFPWritesOnlyADisjointScalarWord) {
   }
 }
 
+TEST(RegistrationCRTCall, NullControlFPHasNoOutputBorrow) {
+  struct Setting {
+    uint32_t Control;
+    uint32_t Mask;
+    bool Accepted;
+  };
+  for (const auto &Setting :
+       {Setting{0, 0, true}, Setting{0, 0x8001f, true},
+        Setting{0x10000, 0x30000, true}, Setting{0x20000, 0x30000, true},
+        Setting{0, 0x30000, true}, Setting{0x30000, 0x30000, false},
+        Setting{0x10000, 0x10000, false}, Setting{0, 0x70000, false}})
+    for (unsigned Mutation = 0; Mutation != 5; ++Mutation) {
+      SCOPED_TRACE(::testing::Message() << Setting.Control << ':'
+                                        << Setting.Mask << ':' << Mutation);
+      auto F = makeJumpFrame(0);
+      auto &Setup = F.Blocks[1];
+      auto Output = NdVar::cst(0, 4);
+      if (Mutation == 1)
+        Output = NdVar::reg(x86reg::RBP, 4);
+      if (Mutation == 2)
+        Output.Provenance = ConstantAddressProvenance::DataAddress;
+      emitOp(Setup, 0x1086, NdOp::STORE, {},
+             {NdVar::reg(x86reg::RSP, 4), Output});
+      for (unsigned I = 1; I != 3; ++I) {
+        emitOp(Setup, 0x1086, NdOp::INT_ADD, NdVar::tmp(0, 4),
+               {NdVar::reg(x86reg::RSP, 4), NdVar::cst(I * 4, 4)});
+        emitOp(Setup, 0x1086, NdOp::STORE, {},
+               {NdVar::tmp(0, 4),
+                Mutation == 3 && I == 1
+                    ? NdVar::reg(x86reg::RBP, 4)
+                    : NdVar::cst(I == 1 ? Setting.Control : Setting.Mask, 4)});
+      }
+      Setup.InstructionBoundaries.back().OpCount = 5;
+      auto &Call = F.Blocks[2];
+      Call.Ops[0].Opcode = NdOp::INDIR_CALL;
+      Call.Ops[0].Inputs[0] = NdVar::cst(0x4200, 4);
+      Call.InstructionBoundaries[0].Immediate = 0x4200;
+      Call.InstructionBoundaries[0].ControlFlags |=
+          LowInstructionControlFlag::Indirect;
+      auto &Resume = F.Blocks[3];
+      Resume.Ops.erase(Resume.Ops.begin());
+      Resume.Ops.pop_back();
+      Resume.Succs = {5};
+      Resume.EndAddr = 0x110b;
+      Resume.InstructionBoundaries = {{0x1108, 3, 0, 1}};
+      SEHJumpRuntime Runtime;
+      Runtime.ControlFP = [Mutation](const LowOp &Op, size_t &) {
+        return Mutation != 4 && Op.Opcode == NdOp::INDIR_CALL &&
+               Op.Addr == 0x1100;
+      };
+      RegistrationStateSolver Solver(F, 0, 0, nullptr, nullptr, nullptr,
+                                     nullptr, nullptr, nullptr, nullptr,
+                                     &Runtime);
+      const auto Result = Solver.run();
+      const bool Accepted = Setting.Accepted && Mutation == 0;
+      EXPECT_EQ(Result.HasBoundSEHCallees, Accepted);
+      if (Accepted) {
+        EXPECT_TRUE(Result.Complete);
+        ASSERT_EQ(Result.SEHBoundCalls.size(), 1u);
+        const auto &Args = Result.SEHBoundCalls.front().Arguments;
+        ASSERT_EQ(Args.size(), 3u);
+        EXPECT_EQ(Args[0].ArgumentKind,
+                  RegistrationSEHBoundArgument::Kind::NullPointer);
+        const bool Precision = Setting.Mask == 0x30000;
+        EXPECT_EQ(Args[1].ArgumentKind,
+                  Precision ? RegistrationSEHBoundArgument::Kind::ConstantScalar
+                            : RegistrationSEHBoundArgument::Kind::Scalar);
+        if (Precision) {
+          EXPECT_EQ(Args[1].ScalarValue, Setting.Control);
+          EXPECT_EQ(Args[2].ScalarValue, Setting.Mask);
+        }
+      }
+    }
+}
+
 TEST(RegistrationJumpState, CallbackStateReloadControlsDirectResumption) {
   for (int32_t Written : {0, -1, 2}) {
     SCOPED_TRACE(Written);

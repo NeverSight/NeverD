@@ -9978,7 +9978,16 @@ remains part of the language analysis. A returning call can precede a block's
 terminator; its physical fallthrough grants no memory contract by itself.
 
 Checked `_controlfp_s` queries and exception-mask changes can write only a
-disjoint caller-owned DWORD. Its returned control word remains unknown.
+disjoint caller-owned DWORD or use an exact scalar null output pointer. Null
+output borrows no frame storage. PE32 SEH3 parents also admit a complete
+precision mask with a constant 24-, 53- or 64-bit selection; partial masks and
+the reserved precision encoding refuse. `RegistrationCRTControl.h` owns the
+shared control-word fields and validity rule. The source solver, MedIR recipe
+validator and native invocation replay bind the actual control and mask values;
+the native call keeps unknown memory effects and gains no callback or unwind
+attributes. Current eager `_controlfp_s` bindings include MSVCR100. Their cdecl
+returning stack fact is separate from these invocation-specific effects.
+The returned control word and runtime scalar result remain unknown.
 Authenticated math import cleanup and checked floating-state intrinsic shapes
 supply integer-frame facts only. Their floating effects, traps and original
 calls remain in LowIR. Writes in asynchronous filters withdraw affected jump

@@ -6290,7 +6290,12 @@ must preserve `optnone` runtime callback roots and register snapshots.
 `longjmp-runtime-raise` and `longjmp-runtime-continue` call the original
 `RaiseException` import after resumption and exercise handler entry and filter
 continuation. `longjmp-control-fp` observes both `_controlfp_s`'s scalar result
-and private output before capture. Sixteen mutations per fixture check the
+and private output before capture. Its `--control-fp-mode` additionally selects
+`null-query`, `precision-24`, `precision-53` or `precision-64`. Each precision
+case first sets a different precision before every invocation, then reads the
+actual runtime control word independently after the guarded call. Reports retain
+that word for original, reconstructed, optimized and rebased authored images.
+Sixteen mutations per fixture check the
 runtime ABI, provider/IAT identity, exact argument values, import storage,
 attributes and argument-read ordering. The continuation fixture also checks
 that a helper immediately following a closed registration body does not
@@ -9372,7 +9377,13 @@ RaiseException case checks a call before a finally return; conditional and
 guarded instructions and an absent memory contract still refuse.
 CRT regressions check the exact `_controlfp_s` binding and output DWORD,
 floating-state intrinsic shapes and import cleanup without granting memory
-effects. Scalar comparison tests cover signedness, input widths and unknown
+effects. `RegistrationCRTCall.NullControlFPHasNoOutputBorrow` covers null
+output queries and all three valid PE32 precision encodings, while retaining
+refusals for reserved/partial masks, frame-valued controls, ambiguous null
+provenance and unauthenticated calls. The unconditional callee-stack target's
+`RegistrationImportABI.ControlFPBindsCurrentRuntimeProvider` checks MSVCRT and
+MSVCR100 identities, storage conflicts, delayed imports and changed source
+calls. Scalar comparison tests cover signedness, input widths and unknown
 values. Distinct direct registration prologues inside one guessed function
 range must retain separate owners; a damaged prefix supplies no new entry.
 

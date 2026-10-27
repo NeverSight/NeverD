@@ -7,6 +7,7 @@
 /// Keep imported stack cleanup separate from dispatch and memory effects.
 
 #include "../../../lib/ir/low/X86/RegistrationABIPrivate.h"
+#include "../../../lib/ir/low/X86/RegistrationCRTFrame.h"
 #include "../../../lib/ir/low/X86/RegistrationFrameEffects.h"
 #include "gtest/gtest.h"
 
@@ -117,6 +118,50 @@ struct ImportImage {
   }
 };
 } // namespace
+
+TEST(RegistrationImportABI, ControlFPBindsCurrentRuntimeProvider) {
+  for (const char *Module : {"msvcrt.dll", "MSVCR100.DLL"})
+    for (unsigned Mutation = 0; Mutation != 10; ++Mutation) {
+      SCOPED_TRACE(::testing::Message() << Module << ':' << Mutation);
+      ImportImage F({"_controlfp_s", 3}, false, true);
+      auto &Image = F.Image;
+      Image.Imports[0].Module = Module;
+      LowOp Call;
+      Call.Opcode = NdOp::INDIR_CALL;
+      Call.Addr = F.CallVA;
+      Call.Seq = 0;
+      Call.addInput(NdVar::cst(ImportImage::IATVA, 4));
+      if (Mutation == 1)
+        Image.Imports[0].IsDelayImport = true;
+      if (Mutation == 2)
+        Image.Imports[0].Module = "application.dll";
+      if (Mutation == 3) {
+        Image.Imports.push_back(Image.Imports[0]);
+        Image.Imports.back().Module = "application.dll";
+      }
+      if (Mutation == 4)
+        Image.Segments[1].FileSz = 3;
+      if (Mutation == 5)
+        ++Call.Addr;
+      if (Mutation == 6)
+        Image.ImportStorageSlots.at(ImportImage::IATVA).Name = "different";
+      if (Mutation == 7)
+        Image.Segments[0].Flags =
+            Image.Segments[0].Flags | SegmentFlags::Writable;
+      if (Mutation == 8)
+        Call.Seq = -1;
+      if (Mutation == 9)
+        Image.Arch = Arch::X64;
+      size_t Work = 0;
+      EXPECT_EQ(registration_state::isCheckedControlFPCall(Image, Call, Work),
+                Mutation == 0);
+      EXPECT_EQ(registration_abi::checkedRegistrationImportStackPop(
+                    Image, ImportImage::IATVA),
+                Mutation == 0 || Mutation == 5 || Mutation == 7 || Mutation == 8
+                    ? std::optional<uint32_t>(0)
+                    : std::nullopt);
+    }
+}
 
 TEST(RegistrationImportABI, StartupCleanupRequiresCurrentProviderAndStorage) {
   for (const auto &C : StartupImports)

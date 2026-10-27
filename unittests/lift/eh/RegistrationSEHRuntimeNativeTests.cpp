@@ -14,6 +14,7 @@
 #include "neverd/backend/llvm/WindowsEHMetadata.h"
 #include "neverd/ir/RegistrationState.h"
 #include "neverd/loader/BinaryImage.h"
+#include "neverd/support/BinaryEncoding.h"
 
 #include "llvm/ADT/ScopeExit.h"
 #include "llvm/IR/Constants.h"
@@ -149,7 +150,13 @@ void checkSEHRuntimeEdits(const llvm::Function &Parent,
     const bool ControlFP = Callee->getName() == "_controlfp_s";
     auto *Scalar = llvm::dyn_cast<llvm::LoadInst>(
         Runtime->getArgOperand(ControlFP ? 1 : 0));
-    ASSERT_TRUE(Scalar);
+    const auto *Precision =
+        ControlFP ? llvm::dyn_cast<llvm::ConstantInt>(Runtime->getArgOperand(1))
+                  : nullptr;
+    const bool NullControlFP =
+        ControlFP &&
+        llvm::isa<llvm::ConstantPointerNull>(Runtime->getArgOperand(0));
+    ASSERT_TRUE(Scalar || (Precision && NullControlFP));
     llvm::IRBuilder<> B(Runtime);
     auto ChangedImage = Image;
     uint8_t *ChangedByte = nullptr;
@@ -174,18 +181,32 @@ void checkSEHRuntimeEdits(const llvm::Function &Parent,
                  ? B.CreateInBoundsGEP(B.getInt8Ty(), Runtime->getArgOperand(0),
                                        B.getInt32(4))
                  : static_cast<llvm::Value *>(B.getInt32(42)));
-    if (Mutation == 5)
-      Scalar->setVolatile(false);
+    if (Mutation == 5) {
+      if (Precision)
+        Runtime->setArgOperand(1, llvm::UndefValue::get(B.getInt32Ty()));
+      else
+        Scalar->setVolatile(false);
+    }
     if (Mutation == 6) {
-      B.SetInsertPoint(Scalar);
-      Scalar->setOperand(0, B.CreateInBoundsGEP(B.getInt8Ty(),
-                                                Scalar->getPointerOperand(),
-                                                B.getInt32(4)));
+      if (Precision)
+        Runtime->setArgOperand(2, B.getInt32(0x20000));
+      else {
+        B.SetInsertPoint(Scalar);
+        Scalar->setOperand(0, B.CreateInBoundsGEP(B.getInt8Ty(),
+                                                  Scalar->getPointerOperand(),
+                                                  B.getInt32(4)));
+      }
     }
     if (Mutation == 7) {
-      B.SetInsertPoint(Scalar->getNextNode());
-      B.CreateStore(B.getInt32(0), Scalar->getPointerOperand())
-          ->setVolatile(true);
+      if (Precision)
+        Runtime->setArgOperand(
+            1, B.getInt32(Precision->getZExtValue() == 0x10000 ? 0x20000
+                                                               : 0x10000));
+      else {
+        B.SetInsertPoint(Scalar->getNextNode());
+        B.CreateStore(B.getInt32(0), Scalar->getPointerOperand())
+            ->setVolatile(true);
+      }
     }
     if (Mutation == 8)
       Runtime->addFnAttr(llvm::Attribute::NoUnwind);
@@ -222,16 +243,23 @@ void checkSEHRuntimeEdits(const llvm::Function &Parent,
       const auto *Address =
           llvm::mdconst::dyn_extract<llvm::ConstantInt>(Marker->getOperand(1));
       ASSERT_TRUE(Address);
-      const auto *Push =
-          ChangedImage.readVA(Address->getZExtValue() - (ControlFP ? 8 : 7), 2);
+      const unsigned Distance = Precision
+                                    ? 5 + (Precision->isZero() ? 2 : 5) + 2
+                                : ControlFP ? (NullControlFP ? 6 : 8)
+                                            : 7;
+      const auto *Push = ChangedImage.readVA(Address->getZExtValue() - Distance,
+                                             Precision ? 5 : 2);
       ASSERT_TRUE(Push);
-      ASSERT_EQ(Push[0], 0x6a);
-      ASSERT_LE(Push[1], ControlFP ? 0 : 1);
-      ChangedByte = const_cast<uint8_t *>(Push + 1);
+      ASSERT_EQ(Push[0], Precision ? 0x68 : 0x6a);
+      if (Precision)
+        ASSERT_EQ(readLE<uint32_t>(Push + 1), 0x30000u);
+      else
+        ASSERT_LE(Push[1], ControlFP ? 0 : 1);
+      ChangedByte = const_cast<uint8_t *>(Push + (Precision ? 3 : 1));
       OriginalByte = *ChangedByte;
       // Invalid exception flags or a mask admitting parameter-error hooks
       // must invalidate the source runtime contract, not inherit the old IR.
-      *ChangedByte = ControlFP ? 0xff : 2;
+      *ChangedByte = Precision ? 7 : ControlFP ? 0xff : 2;
     }
     ASSERT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
     auto Error = validateCOFFRegistrationIR(*Function, Source, ChangedImage);

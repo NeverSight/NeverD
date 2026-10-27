@@ -195,7 +195,10 @@ llvm::Expected<RegistrationSEHJumpContract> bindSEHBoundCalls(
                 RegistrationSEHBoundCall::Kind::HeapTermination ||
             Receipt.CalleeKind ==
                 RegistrationSEHBoundCall::Kind::InterlockedCompareExchange ||
-            Receipt.CalleeKind == RegistrationSEHBoundCall::Kind::Sleep)
+            Receipt.CalleeKind == RegistrationSEHBoundCall::Kind::Sleep ||
+            (Receipt.CalleeKind == RegistrationSEHBoundCall::Kind::ControlFP &&
+             Receipt.Arguments.front().ArgumentKind ==
+                 RegistrationSEHBoundArgument::Kind::NullPointer))
           Result.NoFrameBorrowCalls.insert(Call);
       }
   if (Result.Calls.size() != Expected->size())

@@ -31,6 +31,17 @@ unsigned registration_parameter_after;
 #endif
 static unsigned observed_caller;
 unsigned registration_trace;
+#if REGISTRATION_CASE == 24 && REGISTRATION_CONTROL_FP_MODE
+__declspec(dllimport) int __cdecl _controlfp_s(unsigned *, unsigned, unsigned);
+static unsigned observed_control_fp;
+#if REGISTRATION_CONTROL_FP_MODE == 2
+#define EXPECTED_CONTROL_FP_PRECISION 0x20000
+#elif REGISTRATION_CONTROL_FP_MODE == 3
+#define EXPECTED_CONTROL_FP_PRECISION 0x10000
+#else
+#define EXPECTED_CONTROL_FP_PRECISION 0
+#endif
+#endif
 #if REGISTRATION_SYNCHRONIZATION
 unsigned registration_atomic_word;
 unsigned registration_atomic_exchange;
@@ -178,6 +189,14 @@ void mainCRTStartup(void) {
 #if REGISTRATION_STARTUP_INFO
     prepare_startup_observation();
 #endif
+#if REGISTRATION_CASE == 24 && REGISTRATION_CONTROL_FP_MODE >= 2
+    // Set a different precision before every call so a dropped or moved
+    // source request cannot pass merely by inheriting the old control word.
+    if (_controlfp_s(
+            0, EXPECTED_CONTROL_FP_PRECISION == 0x20000 ? 0x10000 : 0x20000,
+            0x30000))
+      break;
+#endif
 #if (REGISTRATION_CASE >= 36 && REGISTRATION_CASE <= 49) ||                    \
     (REGISTRATION_CASE == 52 || REGISTRATION_CASE == 57 ||                     \
      REGISTRATION_CASE == 64 || REGISTRATION_CASE == 65 ||                     \
@@ -205,6 +224,14 @@ void mainCRTStartup(void) {
     value = registration_entry();
 #endif
     chain_ok &= __readfsdword(0) == chain;
+#if REGISTRATION_CASE == 24 && REGISTRATION_CONTROL_FP_MODE
+    if (_controlfp_s(&observed_control_fp, 0, 0))
+      break;
+#if REGISTRATION_CONTROL_FP_MODE >= 2
+    if ((observed_control_fp & 0x30000) != EXPECTED_CONTROL_FP_PRECISION)
+      break;
+#endif
+#endif
 #if REGISTRATION_PARENT_POP
     __asm mov stack_after, esp
     chain_ok &= stack_before == stack_after && stack_guard[0] == 0x12345678 &&
@@ -235,8 +262,17 @@ void mainCRTStartup(void) {
       break;
   }
   printf("neverd-registration-rewrite: value=%d caller=%08x entry=%08x "
-         "chain=%d iterations=%u trace=%u\n",
+         "chain=%d iterations=%u trace=%u"
+#if REGISTRATION_CASE == 24 && REGISTRATION_CONTROL_FP_MODE
+         " fp=%08x"
+#endif
+         "\n",
          value, observed_caller, (unsigned)&registration_entry, chain_ok,
-         iterations, registration_trace);
+         iterations, registration_trace
+#if REGISTRATION_CASE == 24 && REGISTRATION_CONTROL_FP_MODE
+         ,
+         observed_control_fp
+#endif
+  );
   ExitProcess(value == 7 && chain_ok && iterations == 4 ? 0 : 1);
 }

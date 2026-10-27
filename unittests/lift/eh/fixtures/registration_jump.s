@@ -48,17 +48,35 @@ _registration_entry:
   mov dword ptr [ebp-112],0
 #endif
 #if REGISTRATION_CASE == 24
+#if REGISTRATION_CONTROL_FP_MODE >= 2
+  push 0x30000
+#if REGISTRATION_CONTROL_FP_MODE == 2
+  push 0x20000
+#elif REGISTRATION_CONTROL_FP_MODE == 3
+  push 0x10000
+#else
+  push 0
+#endif
+  push 0
+#elif REGISTRATION_CONTROL_FP_MODE == 1
+  push 0
+  push 0
+  push 0
+#else
   mov dword ptr [ebp-112],0xdeadbeef
   push 0
   push 0
   lea eax,[ebp-112]
   push eax
+#endif
   call dword ptr [__imp___controlfp_s]
   add esp,12
   test eax,eax
   jne .Lbad
+#if !REGISTRATION_CONTROL_FP_MODE
   cmp dword ptr [ebp-112],0xdeadbeef
   je .Lbad
+#endif
 #endif
 #if RETIRED_JUMP
   mov dword ptr [ebp-108],0
