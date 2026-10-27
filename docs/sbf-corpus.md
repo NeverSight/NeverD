@@ -156,6 +156,15 @@ the distinct heap address `0x300007DD0` from one to two. Slot 22973 is not
 executed by these two inputs. These finite observations do not establish
 nonaliasing on other paths.
 
+A separate observer at the canonical checked-store boundary recorded 9,088
+successful writes in each run, including diagnostic memcpy/PDA writes. It
+confirms that 22063 is the last overlapping writer of `0x200006DC8` before
+1960. Earlier copies at 67100/67115 also use that stack address before its
+vtable lifetime; an address is not a permanent source-language type. The
+observer leaves the complete recorded results and traces byte-identical to
+the original runs. Its temporary source overlays were restored, and the
+canonical worker was rebuilt with the same frozen binary hash.
+
 The diagnostic host supplies a zeroed 32-KiB heap, checked nonoverlapping memcpy
 and PDA derivation checked against solders 0.29.0. Logging returns zero, and
 three CPI calls explicitly return zero without token or account-state
@@ -314,3 +323,82 @@ Remaining full-scan native failures:
 All use `rustc 1.91.1 (ed61e7d7e 2025-11-07)`. Emitted sources, compiler versions and probe templates match the earlier run. No isolated retry replaces a full-scan failure.
 
 Validation: Release **411/411**, no failures, skips or disabled cases. Both C and Rust cover all **5,899,345 raw slots exactly once**, with matching partitions. Sanitizers, other host platforms and real business-handler replay were not requalified in this run. P3 and the broader semantic-recovery goal remain open.
+
+## Guarded-load and block-input qualification (2026-10-27)
+
+The analysis code was built and tested at
+`ac9141c885f9e1e9eabf2d2c55336dfad0990bd1`, against qualified baseline
+`9d716dcebcc1cdec42c4ff2c7114e2ebff20f236`. The immutable worker SHA-256 is
+`c42c79b6eb9bae645cf00c285d27b3b58bc69465bb6d61a4fa99eecf648de340`.
+The 72 pinned assets, runtime profiles, dependencies, compilers, native probe
+and qualification budgets are unchanged. Required Release SBF checks pass
+443/443, with no skipped or disabled cases, including pinned SBPF/Agave,
+protocol ceilings and C/Rust execution differential tests.
+
+| Full-scan result | Baseline | This round |
+| --- | ---: | ---: |
+| Each load/decode/verification/IR/Solana stage | 72/72 | 72/72 |
+| Optional CALLX query completion | 72/72 | 72/72 |
+| LLVM export | 72/72 | 71/72 |
+| C / Rust export | 72/72 each | 72/72 each |
+| Native C objects | 72/72 | 69/72 |
+| Native Rust objects | 72/72 | 57/72 |
+| Conditional singleton / finite-set sites | 177 / 31 | 177 / 31 |
+| Distinct recorded expression input/value conditions | 7,488 | 7,511 |
+| Internally work-limited samples | 5 | 4 |
+| Whole-program structured CFG | 0/72 | 0/72 |
+
+Two additional literal target relations occur at Mercurial CALLX slots
+19490/19584, both targeting raw slot 20810. Six caller/address relations are
+added across Mercurial and Perena. No prior address, caller, finite-set or
+serialized expression condition is lost. These are additional conditions and
+addresses at existing sites, not new globally closed sites or business
+execution coverage. Instruction visits fall from 205,059,134 to 194,951,095.
+Stabble CLMM now completes at 8,056,746 visits; byreal, meteora-dbc,
+meteora-dlmm and pancakeswap still reach the original 8,388,608 bound. Peak
+retained-state estimate is 58,754,389 bytes, below the original 64-MiB bound.
+
+The complete budget round is **not accepted**. Jupiter-perps LLVM export and
+18 native compilations hit the original 60-second request deadline. C timeouts
+are boop-fun, byreal and jupiter-perps. Rust timeouts are bonkswap, boop-fun,
+byreal, crema, cropper, goosefx-gamma, guacswap, heaven, invariant,
+jupiter-perps, lifinity-v1, metadao-futarchy, meteora-damm-v1, meteora-dbc and
+meteora-dlmm. All 72 C/Rust source files in each language match the baseline,
+as do the 71 completed LLVM files. Native compiler versions, flags and probe
+templates also match. Shared-host observations include load averages above
+100 on 16 logical CPUs and sampled compiler CPU times around 10--13 seconds
+at the 60-second wall deadline. These support a contention explanation, not
+an independent attribution of every timeout. Separate isolation controls do
+not replace the full-scan outcomes or turn them into passes.
+
+The two finite Lifinity runs reach 1960/1963 and identify the last writer and
+concrete nonoverlap under their explicit synthetic host. The static slot-1963
+query still has 24 unknown contexts: seven lack a complete field value and
+17 lack an incoming register; Lifinity does not reach an internal budget
+limit. Heap/account field provenance, potentially aliasing writes and opaque
+CPI effects remain open. Globally, 7,366 sites in 71 samples still lack any
+conditional address proof; all 7,574 raw unresolved CALLX sites retain dynamic
+fallback. Real account/CPI-state replay and byte-identical reconstruction
+remain unqualified.
+
+A second fresh, complete72 source/native confirmation uses the **same frozen
+worker and original configuration**. It passes every analysis stage and all
+72 C/Rust exports; LLVM passes 71/72, native C 67/72 and native Rust 57/72.
+This round is also **not accepted**. Its LLVM timeout is meteora-dlmm. Native C
+timeouts are meteora-dlmm, omnipair, openbook-v2, orca-whirlpool and pump-fun;
+Rust timeouts are jupiter-perps, meteora-damm-v2, meteora-dbc, meteora-dlmm,
+moonit, obric-v2, omnipair, openbook-v2, orca-whirlpool, pancakeswap, perena,
+phoenix, pump-fun, pump-swap and raydium-clmm. Every completed output matches
+the baseline SHA-256. The first round is retained with its different timeout
+set.
+
+All 19 independent, same-budget controls for the first round's timeouts pass,
+including Jupiter LLVM with its original output hash. Across the two complete
+rounds and separately labeled controls, every artifact has at least one
+successful LLVM export and C/Rust native-object build under the original
+budgets. That per-artifact fact is separate from complete-round stability:
+neither complete round passes every deadline. The analysis change is validated
+by the required 443 SBF checks, all72 optional queries and complete retained
+proof comparisons; native-budget stability and global semantic closure remain
+open. Follow-up documentation does not change the qualified analysis code at
+`ac9141c885f9e1e9eabf2d2c55336dfad0990bd1`.
