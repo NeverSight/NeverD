@@ -424,8 +424,10 @@ exactly with the completed generic summary. This currently requires unknown
 memory effects, no returned scratch/postcondition cells, the same scalar return
 alternatives and the same constant or unknown return origin. Any target facts
 in the dependency graph must also be covered by an independently published
-sibling. Complete target alternatives, roots and active caller graphs are not
-discarded. Image membership selects work; it does not prove a target or alias
+sibling under the same caller entry and call instruction. A node's own proven
+targets must also be established by the generic replacement, preserving the
+proofs on incoming caller edges. Complete target alternatives, roots and active
+caller graphs are not discarded. Image membership selects work; it does not prove a target or alias
 relationship. Old incoming edges record specialization-limit generalization,
 and `generalized_redundant_published_summaries` counts these replacements. The
 four-variant and resource budgets remain unchanged. Other pinned proofs stay
@@ -597,6 +599,13 @@ proving an address does not prove call success. Unknown indirect entries,
 partial loads, runtime/account contents, recursive effects, unresolved aliasing
 and unproved expressions remain open. No result rewrites global CALLX dispatch
 or closes its target set; dynamic fallback is mandatory.
+
+Contextual keys retain the typed full-width cells consumed by CALLX proofs.
+Descriptor-byte buffers have no reader in this optional analysis and are
+projected out, so unread byte differences do not split equivalent inputs or
+consume the retained-state budget. Canonical store/copy transfers retain their
+full-width tags and partial-overwrite invalidation. CFG scheduling and all-path
+joins are unchanged.
 
 `CallXContextSpecializationsPerEntry` still bounds each entry to four cached
 specializations. Further inputs use explicitly marked generic summaries.

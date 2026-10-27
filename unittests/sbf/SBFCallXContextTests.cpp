@@ -3802,9 +3802,7 @@ TEST(SBFCallXContexts, RedundantPublishedTargetsDoNotDisplaceNewTargets) {
           // Replacing a published summary must preserve the scalar result used
           // by its callers. Equal CALLX targets alone do not authorize
           // replacement.
-          const bool Replaced =
-              NewImageArgument &&
-              (!KnownFirstTarget || (OpaqueReturn && !DistinctDescendants));
+          const bool Replaced = NewImageArgument && !KnownFirstTarget;
           EXPECT_TRUE(LaterTarget);
           EXPECT_EQ(SpecializedLaterTarget, Replaced);
           EXPECT_EQ(Report->GeneralizedPublishedSummaries > 0, Replaced);
@@ -4555,6 +4553,244 @@ TEST(SBFStoredRegisterMemory,
   applyTransfer(Load, State, Program->ExecutableImage,
                 ScratchLoadPolicy::ProvenValues);
   EXPECT_EQ(State.Registers[1], Pointer);
+}
+
+TEST(SBFCallXContexts, ReclamationPreservesDistinctCallerEntryEvidence) {
+  constexpr uint32_t TableAddress = 0x10000;
+  std::vector<test::EncodedInstruction> Text{encode(Opcode::EXIT)};
+  std::vector<size_t> RootCalls;
+  for (size_t I = 0; I <= kCallXContextSpecializationsPerEntry; ++I) {
+    Text.push_back(encode(
+        Opcode::MOV64_IMM, 1, 0, 0,
+        TableAddress + (I == kCallXContextSpecializationsPerEntry ? 8 : 0)));
+    Text.push_back(encode(Opcode::MOV64_IMM, 2, 0, 0, I));
+    Text.push_back(encode(Opcode::MOV64_IMM, 3, 0, 0, I != 0));
+    const auto Input = test::loadImm64(4, kInputStart);
+    Text.insert(Text.end(), Input.begin(), Input.end());
+    RootCalls.push_back(Text.size());
+    Text.push_back({});
+    Text.push_back(encode(Opcode::EXIT));
+  }
+  const size_t Dispatcher = Text.size();
+  Text.push_back(encode(Opcode::MOV64_REG, 6, 1));
+  Text.push_back(encode(Opcode::MOV64_REG, 7, 4));
+  Text.push_back(encode(Opcode::ST_DW_REG, 10, 2, -8));
+  Text.push_back(encode(Opcode::JEQ64_IMM, 3, 0, 3));
+  Text.push_back(encode(Opcode::MOV64_REG, 1, 6));
+  const size_t SelectB = Text.size();
+  Text.push_back({});
+  Text.push_back(encode(Opcode::JA, 0, 0, 2));
+  Text.push_back(encode(Opcode::MOV64_REG, 1, 6));
+  const size_t SelectA = Text.size();
+  Text.push_back({});
+  Text.push_back(encode(Opcode::LD_DW_REG, 3, 7, 8));
+  Text.push_back(encode(Opcode::MOV64_IMM, 0));
+  Text.push_back(encode(Opcode::ST_DW_IMM, 3));
+  Text.push_back(encode(Opcode::EXIT));
+  const size_t A = Text.size();
+  const size_t CallA = Text.size();
+  Text.push_back({});
+  Text.push_back(encode(Opcode::EXIT));
+  const size_t B = Text.size();
+  const size_t CallB = Text.size();
+  Text.push_back({});
+  Text.push_back(encode(Opcode::EXIT));
+  const size_t Shared = Text.size();
+  Text.push_back(encode(Opcode::LD_DW_REG, 2, 1));
+  const size_t Site = Text.size();
+  Text.push_back(encode(Opcode::CALL_REG, 2));
+  Text.push_back(encode(Opcode::EXIT));
+  const size_t FirstTarget = Text.size();
+  Text.push_back(encode(Opcode::MOV64_IMM, 0, 0, 0, 42));
+  Text.push_back(encode(Opcode::EXIT));
+  const size_t SecondTarget = Text.size();
+  Text.push_back(encode(Opcode::MOV64_IMM, 0, 0, 0, 43));
+  Text.push_back(encode(Opcode::EXIT));
+  const auto BindCall = [&](size_t Call, size_t Target) {
+    Text[Call] = encode(Opcode::CALL_IMM, 0, 1, 0, Target - Call - 1);
+  };
+  for (size_t Call : RootCalls)
+    BindCall(Call, Dispatcher);
+  BindCall(SelectA, A);
+  BindCall(SelectB, B);
+  BindCall(CallA, Shared);
+  BindCall(CallB, Shared);
+  std::vector<uint8_t> Table(16);
+  llvm::support::endian::write64le(Table.data(),
+                                   kBytecodeStart + FirstTarget * 8);
+  llvm::support::endian::write64le(Table.data() + 8,
+                                   kBytecodeStart + SecondTarget * 8);
+  auto Image = test::makeImage(Text, Table);
+  Image.Sections[1].VA = TableAddress;
+  Image.SBF->RodataVM.Address = TableAddress;
+  auto Program = analyze(Image);
+  ASSERT_TRUE(static_cast<bool>(Program))
+      << llvm::toString(Program.takeError());
+  auto Report = recoverCallXContexts(*Program);
+  ASSERT_TRUE(static_cast<bool>(Report)) << llvm::toString(Report.takeError());
+  const auto ProvenFrom = [&](size_t Caller, size_t Call, size_t Target) {
+    return llvm::any_of(Report->Contexts, [&](const auto &Evidence) {
+      if (!Evidence.CallerSummaryID || Evidence.CallerSlot != Call ||
+          Evidence.CallXSlot != Site || Evidence.TargetSlot != Target)
+        return false;
+      return llvm::any_of(Report->Summaries, [&](const auto &Summary) {
+        return Summary.ID == *Evidence.CallerSummaryID &&
+               Summary.EntrySlot == Caller;
+      });
+    });
+  };
+  EXPECT_TRUE(ProvenFrom(A, CallA, FirstTarget));
+  EXPECT_TRUE(ProvenFrom(B, CallB, SecondTarget));
+  EXPECT_GT(Report->GeneralizedPublishedSummaries, 0u);
+  for (size_t Entry : {Dispatcher, A, B, Shared})
+    EXPECT_LE(llvm::count_if(Report->Summaries,
+                             [&](const auto &Summary) {
+                               return Summary.EntrySlot == Entry &&
+                                      !Summary.GeneralizedInputs;
+                             }),
+              kCallXContextSpecializationsPerEntry);
+}
+
+TEST(SBFCallXContexts, ReclamationRetainsIncomingProofsOfOwnSites) {
+  for (bool IndependentTarget : {false, true}) {
+    SCOPED_TRACE(IndependentTarget);
+    constexpr uint32_t TableAddress = 0x10000;
+    std::vector<test::EncodedInstruction> Text{encode(Opcode::EXIT)};
+    std::vector<size_t> Entries, Calls;
+    for (size_t I = 0; I <= kCallXContextSpecializationsPerEntry; ++I) {
+      Entries.push_back(Text.size());
+      Text.push_back(encode(
+          Opcode::MOV64_IMM, 1, 0, 0,
+          TableAddress + (I == kCallXContextSpecializationsPerEntry ? 8 : 0)));
+      Text.push_back(encode(Opcode::MOV64_IMM, 2, 0, 0, I));
+      const auto Input = test::loadImm64(4, kInputStart);
+      Text.insert(Text.end(), Input.begin(), Input.end());
+      Calls.push_back(Text.size());
+      Text.push_back({});
+      Text.push_back(encode(Opcode::EXIT));
+    }
+    const size_t Leaf = Text.size();
+    Text.push_back(encode(Opcode::MOV64_REG, 6, 1));
+    Text.push_back(encode(Opcode::MOV64_REG, 7, 4));
+    Text.push_back(encode(Opcode::ST_DW_REG, 10, 2, -8));
+    const size_t PureCall = Text.size();
+    Text.push_back({});
+    if (IndependentTarget)
+      Text.push_back(encode(Opcode::MOV64_REG, 6, 0));
+    Text.push_back(encode(Opcode::LD_DW_REG, 2, 6));
+    const size_t Site = Text.size();
+    Text.push_back(encode(Opcode::CALL_REG, 2));
+    Text.push_back(encode(Opcode::LD_DW_REG, 3, 7, 8));
+    Text.push_back(encode(Opcode::MOV64_IMM, 0));
+    Text.push_back(encode(Opcode::ST_DW_IMM, 3));
+    Text.push_back(encode(Opcode::EXIT));
+    const size_t Pure = Text.size();
+    Text.push_back(encode(Opcode::MOV64_IMM, 0, 0, 0,
+                          IndependentTarget ? TableAddress : 0));
+    Text.push_back(encode(Opcode::EXIT));
+    const size_t FirstTarget = Text.size();
+    Text.push_back(encode(Opcode::MOV64_IMM, 0, 0, 0, 42));
+    Text.push_back(encode(Opcode::EXIT));
+    const size_t SecondTarget = Text.size();
+    Text.push_back(encode(Opcode::MOV64_IMM, 0, 0, 0, 43));
+    Text.push_back(encode(Opcode::EXIT));
+    for (size_t Call : Calls)
+      Text[Call] = encode(Opcode::CALL_IMM, 0, 1, 0, Leaf - Call - 1);
+    Text[PureCall] = encode(Opcode::CALL_IMM, 0, 1, 0, Pure - PureCall - 1);
+    std::vector<uint8_t> Table(16);
+    llvm::support::endian::write64le(Table.data(),
+                                     kBytecodeStart + FirstTarget * 8);
+    llvm::support::endian::write64le(Table.data() + 8,
+                                     kBytecodeStart + SecondTarget * 8);
+    auto Image = test::makeImage(Text, Table);
+    Image.Sections[1].VA = TableAddress;
+    Image.SBF->RodataVM.Address = TableAddress;
+    auto Program = analyze(Image);
+    ASSERT_TRUE(static_cast<bool>(Program))
+        << llvm::toString(Program.takeError());
+    auto Report = recoverCallXContexts(*Program);
+    ASSERT_TRUE(static_cast<bool>(Report))
+        << llvm::toString(Report.takeError());
+    for (size_t I = 0; I < Calls.size(); ++I) {
+      const size_t Target =
+          !IndependentTarget && I == kCallXContextSpecializationsPerEntry
+              ? SecondTarget
+              : FirstTarget;
+      EXPECT_TRUE(llvm::any_of(Report->Contexts,
+                               [&](const auto &Proof) {
+                                 return Proof.CallerSlot == Calls[I] &&
+                                        Proof.CallXSlot == Site &&
+                                        Proof.TargetSlot == Target;
+                               }))
+          << "caller " << I;
+      Image.Entry = kBytecodeStart + Entries[I] * kInstructionSize;
+      auto Selected = analyze(Image);
+      ASSERT_TRUE(static_cast<bool>(Selected))
+          << llvm::toString(Selected.takeError());
+      ExecutionEnvironment Environment;
+      std::vector<uint8_t> Input(16);
+      llvm::support::endian::write64le(Input.data() + 8, kHeapStart + 16);
+      Environment.Memory.push_back({kInputStart, Input, false, "input"});
+      Environment.Memory.push_back(
+          {kHeapStart, std::vector<uint8_t>(64), true, "heap"});
+      auto Raw = executeRaw(*Selected, std::move(Environment));
+      ASSERT_TRUE(static_cast<bool>(Raw)) << llvm::toString(Raw.takeError());
+      EXPECT_EQ(Raw->Status, ExecutionStatus::Returned) << Raw->Error;
+      EXPECT_EQ(Raw->ReturnValue, 0u);
+      EXPECT_TRUE(llvm::any_of(
+          Raw->Trace, [&](const auto &Step) { return Step.Slot == Target; }));
+    }
+    EXPECT_EQ(Report->GeneralizedPublishedSummaries > 0, IndependentTarget);
+  }
+}
+
+TEST(SBFCallXContexts, UnreadDescriptorBytesDoNotDisplaceTypedCallerFacts) {
+  std::vector<test::EncodedInstruction> Text;
+  const auto TargetAddress = test::loadImm64(6, 0);
+  Text.insert(Text.end(), TargetAddress.begin(), TargetAddress.end());
+  Text.push_back(encode(Opcode::ST_DW_REG, 10, 6, -16));
+  std::vector<size_t> Calls;
+  for (unsigned I = 0; I < kCallXContextSpecializationsPerEntry + 2; ++I) {
+    Text.push_back(encode(Opcode::ST_B_IMM, 10, 0, -64, I));
+    Text.push_back(encode(Opcode::MOV64_REG, 1, 10));
+    Text.push_back(encode(Opcode::ADD64_IMM, 1, 0, 0, -16));
+    Text.push_back(encode(Opcode::MOV64_IMM, 0));
+    Calls.push_back(Text.size());
+    Text.push_back({});
+  }
+  Text.push_back(encode(Opcode::EXIT));
+  const size_t Leaf = Text.size();
+  Text.push_back(encode(Opcode::LD_DW_REG, 2, 1));
+  Text.push_back(encode(Opcode::CALL_REG, 2));
+  Text.push_back(encode(Opcode::EXIT));
+  const size_t Target = Text.size();
+  Text.push_back(encode(Opcode::MOV64_IMM, 0, 0, 0, 42));
+  Text.push_back(encode(Opcode::EXIT));
+  const auto Literal = test::loadImm64(6, kBytecodeStart + Target * 8);
+  std::copy(Literal.begin(), Literal.end(), Text.begin());
+  for (size_t Slot : Calls)
+    Text[Slot] = encode(Opcode::CALL_IMM, 0, 1, 0, Leaf - Slot - 1);
+  auto Program = analyze(test::makeImage(Text, {}));
+  ASSERT_TRUE(static_cast<bool>(Program))
+      << llvm::toString(Program.takeError());
+  auto Report = recoverCallXContexts(*Program);
+  ASSERT_TRUE(static_cast<bool>(Report)) << llvm::toString(Report.takeError());
+  EXPECT_EQ(llvm::count_if(Report->Summaries,
+                           [&](const auto &Summary) {
+                             return Summary.EntrySlot == Leaf &&
+                                    !Summary.GeneralizedInputs &&
+                                    Summary.Inputs[1].ValueKind !=
+                                        RegisterValue::Kind::Unknown;
+                           }),
+            1);
+  for (size_t Slot : Calls)
+    EXPECT_TRUE(llvm::any_of(Report->Contexts, [&](const auto &Site) {
+      return Site.CallerSlot == Slot && Site.TargetSlot == Target;
+    }));
+  auto Raw = executeRaw(*Program);
+  ASSERT_TRUE(static_cast<bool>(Raw)) << llvm::toString(Raw.takeError());
+  EXPECT_EQ(Raw->Status, ExecutionStatus::Returned) << Raw->Error;
+  EXPECT_EQ(Raw->ReturnValue, 42u);
 }
 
 } // namespace

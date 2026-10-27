@@ -147,6 +147,7 @@ struct ContextState {
 
   ContextState() = default;
   ContextState(const MachineState &State) : Scratch(State.Scratch) {
+    Scratch.Memory.clear();
     for (unsigned R = 0; R < kRegisterCount; ++R)
       Registers[R] = State.Registers[R];
   }
@@ -588,7 +589,7 @@ ContextFlow::generalizeRedundantPublishedContext(size_t Entry,
   if (!OpaqueReturn(Generic))
     return false;
 
-  using TargetKey = std::pair<size_t, va_t>;
+  using TargetKey = std::tuple<size_t, size_t, size_t, va_t>;
   std::set<TargetKey> Required, Covered;
   constexpr uint64_t TargetBytes = sizeof(TargetKey) + 4 * sizeof(void *);
   uint64_t TemporaryBytes = 0;
@@ -626,8 +627,15 @@ ContextFlow::generalizeRedundantPublishedContext(size_t Entry,
         // singleton contexts; do not discard that distinction here.
         if (Site.TargetValueAlternatives.values().size() > 1)
           return false;
+        const auto &Caller = Edge ? *Contexts[Edge->CallerSummaryID] : Context;
+        const size_t CallerEntry =
+            Program.Med.Blocks[Caller.EntryBlock].StartSlot;
+        const size_t CallerSlot = Edge ? Edge->CallerSlot : CallerEntry;
         if (Site.TargetAddress &&
-            Targets.emplace(Site.CallXSlot, *Site.TargetAddress).second) {
+            Targets
+                .emplace(CallerEntry, CallerSlot, Site.CallXSlot,
+                         *Site.TargetAddress)
+                .second) {
           if (auto Error = this->retain(TargetBytes))
             return std::move(Error);
           TemporaryBytes += TargetBytes;
@@ -689,6 +697,22 @@ ContextFlow::generalizeRedundantPublishedContext(size_t Entry,
         !OpaqueReturn(*Candidate) ||
         Candidate->Return->Registers[0] != Generic.Return->Registers[0] ||
         Candidate->Return->Origins[0] != Generic.Return->Origins[0])
+      continue;
+    // Replacing this node also rewrites its incoming edges. Only the generic
+    // node's own targets can preserve those incoming caller proofs. Descendant
+    // proofs instead retain their actual caller entries and call instructions.
+    if (std::any_of(Candidate->Sites.begin(), Candidate->Sites.end(),
+                    [&](const auto &Site) {
+                      return Site.TargetAddress &&
+                             std::none_of(Generic.Sites.begin(),
+                                          Generic.Sites.end(),
+                                          [&](const auto &Replacement) {
+                                            return Replacement.CallXSlot ==
+                                                       Site.CallXSlot &&
+                                                   Replacement.TargetAddress ==
+                                                       Site.TargetAddress;
+                                          });
+                    }))
       continue;
     ClearTargets(Required);
     auto Collected = CollectTargets(*Candidate, Candidate->ID, Required);
@@ -1383,6 +1407,7 @@ void ContextFlow::transferValues(const MedInstruction &Instruction,
         }
       }
     State.OriginScratch = std::move(*OriginOutput);
+    State.OriginScratch.Memory.clear();
   } else if (Instruction.Call != CallKind::None) {
     if (Instruction.Call != CallKind::Syscall || !Instruction.Syscall ||
         !preservesCallerMemory(Instruction.Syscall->ID))
@@ -1392,6 +1417,7 @@ void ContextFlow::transferValues(const MedInstruction &Instruction,
     applyTransfer(Instruction, OriginMemory, Program.ExecutableImage,
                   ScratchLoadPolicy::ProvenValues);
     State.OriginScratch = std::move(OriginMemory.Scratch);
+    State.OriginScratch.Memory.clear();
   }
   if (Instruction.Call != CallKind::None) {
     for (unsigned R = 0; R < kFirstCalleeSavedRegister; ++R) {
@@ -1433,12 +1459,14 @@ void ContextFlow::transferValues(const MedInstruction &Instruction,
         }
       }
     State.Scratch = std::move(*Output);
+    State.Scratch.Memory.clear();
     return;
   }
   if (Instruction.Call != CallKind::None) {
     applyTransfer(Instruction, Scalar, Program.ExecutableImage,
                   ScratchLoadPolicy::ProvenValues);
     State.Scratch = std::move(Scalar.Scratch);
+    State.Scratch.Memory.clear();
     for (unsigned R = 0; R < kFirstCalleeSavedRegister; ++R)
       State.Registers[R] = {};
     return;
@@ -2096,6 +2124,7 @@ llvm::Expected<bool> ContextFlow::callTarget(FunctionContext &Context,
       return false;
     State.Registers[0] = Callee->Return->Registers[0];
     State.Scratch = std::move(ReturnScratch);
+    State.Scratch.Memory.clear();
     if (Callee->Generic && !EquivalentLeaf) {
       const auto Instantiated =
           Edge.LegacyRuntime ? ProvenValueSet{}
@@ -2112,6 +2141,7 @@ llvm::Expected<bool> ContextFlow::callTarget(FunctionContext &Context,
     }
     State.Origins[0] = ReturnOrigins;
     State.OriginScratch = std::move(PreservedOrigins);
+    State.OriginScratch.Memory.clear();
     State.Postconditions = std::move(PreservedPostconditions);
   }
   if (Context.Generic) {
@@ -2244,6 +2274,10 @@ ContextFlow::summarize(size_t Entry, const ContextState &Incoming, bool Generic,
     *Generalization = Generic ? CallXInputGeneralization::UnknownCaller
                               : CallXInputGeneralization::None;
   ContextState Input = Generic ? genericInput() : Incoming;
+  // CALLX proofs consume typed full-width cells and immutable image bytes.
+  // Descriptor-byte buffers have no proof reader and must not split otherwise
+  // equivalent caller inputs or consume their retained-state budget.
+  Input.Scratch.Memory.clear();
   const auto Origins = symbolicInputs();
   for (unsigned R = 0; R < kRegisterCount; ++R)
     Input.Origins[R] = Origins[R];
