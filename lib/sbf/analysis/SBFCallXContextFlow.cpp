@@ -606,7 +606,7 @@ ContextFlow::generalizeRedundantPublishedContext(size_t Entry,
           return false;
         if (Site.TargetAddress &&
             Targets.emplace(Site.CallXSlot, *Site.TargetAddress).second) {
-          if (auto Error = retain(TargetBytes))
+          if (auto Error = this->retain(TargetBytes))
             return std::move(Error);
           TemporaryBytes += TargetBytes;
         }
