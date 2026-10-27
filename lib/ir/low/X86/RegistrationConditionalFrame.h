@@ -119,8 +119,10 @@ struct ConditionalFrame {
   /// Explicit source-only original-layout hypothesis. The ordinary/native
   /// entry points never populate this field; dependent facts require their
   /// separate invocation evidence and final PE validation.
+  /// The final flag identifies an existing cookie-protocol value. The hook
+  /// observes its address but cannot replace it with original image bits.
   std::function<std::optional<FrameValue>(const LowOp &, const FrameTransfer &,
-                                          size_t &)>
+                                          size_t &, bool)>
       EvaluateOriginalImage;
   /// Full-width volatile GPR facts, indexed like FrameState::Registers. A
   /// partial incoming register never supplies an untainted full-word seed.

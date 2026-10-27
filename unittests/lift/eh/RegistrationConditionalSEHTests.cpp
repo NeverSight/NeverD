@@ -25,6 +25,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <initializer_list>
+#include <map>
 #include <set>
 #include <vector>
 
@@ -105,6 +106,37 @@ struct HeaderReadSEHFixture : ScalarSEHFixture {
     Parent.store(-64, 4, FrameValue::imageAddress(Base + 0x86));
   }
 };
+
+void bindRetainedProtocolStorage(ScalarSEHFixture &F, uint32_t Base) {
+  auto &Image = F.Image;
+  auto &Text = Image.Segments.front().Data;
+  const uint8_t Checker[] = {0x3b, 0x0d, 0, 0, 0, 0, 0x75, 32, 0xc3};
+  std::copy(std::begin(Checker), std::end(Checker), Text.begin() + 0x280);
+  writeLE<uint32_t>(Text.data() + 0x282, Base + 0x2080);
+  // The authored root also reads the current cookie before returning its
+  // scalar argument. The read must keep protocol identity, never cookie bits.
+  writeLE<uint32_t>(Text.data() + 14, Base + 0x2080);
+  // An unused relocated immediate still belongs to preserved code. Deleting
+  // its fixup and classification cannot shrink the candidate's obligations.
+  writeLE<uint32_t>(Text.data() + 22, Base + 0x2300);
+  for (uint32_t RVA : {0x1003, 0x100e, 0x1016, 0x1101, 0x111e, 0x1210, 0x1215,
+                       0x1282, 0x1292, 0x2118})
+    Image.BaseRelocations.push_back({Base + RVA, 3});
+  for (const auto &[Address, Target] :
+       std::map<va_t, va_t>{{Base + 0x1003, Base + 0x2100},
+                            {Base + 0x100e, Base + 0x2080},
+                            {Base + 0x1016, Base + 0x2300}}) {
+    RelocatedAddressField Field;
+    Field.Width = 4;
+    Field.TargetVA = Field.EncodedValue = Target;
+    Field.TargetOwnerVA = Base + 0x2000;
+    Image.DataAddressRelocOperands.emplace(Address, Field);
+  }
+  Image.CodePtrRelocSlots.insert(Base + 0x2118);
+  ASSERT_TRUE(
+      Image.recordImportStorageSlot(Base + 0x2008, "_except_handler4_common", 0,
+                                    ImportStorageEvidence::ImportDirectory));
+}
 } // namespace
 
 TEST(RegistrationConditionalSEH, PlainImageReadsRequireAnEffectOwner) {
@@ -732,4 +764,200 @@ TEST(RegistrationConditionalSEH, ReadAddressIdentityRequiresEveryObservation) {
       EXPECT_EQ(Work, limits::kMaxRegistrationEHStateWork);
     }
   }
+}
+
+TEST(RegistrationConditionalSEH, ScopedProofRetainsSharedFrameProtocols) {
+  for (uint32_t Base : {0x400000u, 0x18000000u}) {
+    ScalarSEHFixture F(Base, {0x8b, 0x45, 8});
+    size_t Required = 0;
+    const auto Proof = proveBoundOriginalImageSEHCallee(
+        F.Image, F.Call, F.Parent, Required, &F.Initialized);
+    ASSERT_TRUE(Proof);
+    EXPECT_EQ(Proof->ProtocolCode.size(), 4u);
+    EXPECT_EQ(Proof->ProtocolOperands,
+              (std::map<va_t, va_t>{{Base + 0x1003, Base + 0x2100},
+                                    {Base + 0x1101, Base + 0x1200},
+                                    {Base + 0x111e, Base + 0x2080}}));
+    EXPECT_EQ(Proof->ProtocolCode.at(Base + 0x1100).size(), 69u);
+    EXPECT_EQ(Proof->ProtocolCode.at(Base + 0x1150).size(), 20u);
+    EXPECT_TRUE(Proof->CookieReadAddressIdentities.empty());
+    EXPECT_FALSE(Proof->Call.ConstantReturn);
+    for (size_t Available : {Required - 1, Required}) {
+      size_t Work = limits::kMaxRegistrationEHStateWork - Available;
+      EXPECT_EQ(bool(proveBoundOriginalImageSEHCallee(F.Image, F.Call, F.Parent,
+                                                      Work, &F.Initialized)),
+                Available == Required);
+      EXPECT_EQ(Work, limits::kMaxRegistrationEHStateWork);
+    }
+  }
+}
+
+TEST(RegistrationConditionalSEH, CookieAddressObservationsKeepProtocolValues) {
+  for (uint32_t Base : {0x400000u, 0x18000000u})
+    for (bool ImageAddress : {false, true}) {
+      SCOPED_TRACE(::testing::Message() << Base << " " << ImageAddress);
+      ScalarSEHFixture F(Base, {0x8b, 0x55, 8, 0x8b, 0x12, 0xb8, 37, 0, 0, 0});
+      F.Parent.store(-64, 4,
+                     ImageAddress ? FrameValue::imageAddress(Base + 0x2080)
+                                  : FrameValue::constant(Base + 0x2080));
+      size_t Work = 0;
+      const auto Proof = proveBoundOriginalImageSEHCallee(
+          F.Image, F.Call, F.Parent, Work, &F.Initialized);
+      ASSERT_TRUE(Proof);
+      EXPECT_EQ(Proof->ReturnValue, 37u);
+      EXPECT_TRUE(Proof->Reads.empty());
+      EXPECT_TRUE(Proof->ReadAddressIdentities.empty());
+      EXPECT_EQ(Proof->CookieReadAddressIdentities,
+                (std::map<va_t, bool>{{Base + 0x2080, ImageAddress}}));
+      EXPECT_FALSE(Proof->Call.ConstantReturn);
+    }
+}
+
+TEST(RegistrationConditionalSEH, RetainedReplayClosesProtocolDependencies) {
+  for (uint32_t Base : {0x400000u, 0x18000000u}) {
+    ScalarSEHFixture F(
+        Base, {0x8b, 0x15, 0, 0, 0, 0, 0x8b, 0x45, 8, 0xb9, 0, 0, 0, 0});
+    bindRetainedProtocolStorage(F, Base);
+    size_t ControlWork = 0;
+    ASSERT_TRUE(replayBoundOriginalImageSEHCallee(
+        F.Image, F.Image, F.Call, F.Parent, ControlWork, &F.Initialized));
+    const auto *EH = F.Image.ExceptionMetadata.findFunction(Base + 0x1000);
+    ASSERT_TRUE(EH);
+    ASSERT_TRUE(coff_loader::getCheckedX86SEHScopeTableBytes(F.Image, *EH,
+                                                             ControlWork));
+    ASSERT_TRUE(
+        coff_loader::getCheckedX86SEHRuntimeCode(F.Image, *EH, ControlWork));
+    size_t Required = 0;
+    const auto Initial = replayRetainedOriginalImageSEHCallee(
+        F.Image, F.Image, F.Call, F.Parent, Required, &F.Initialized);
+    ASSERT_TRUE(Initial);
+    EXPECT_EQ(Initial->Invocation.Original.ReturnValue, 37u);
+    EXPECT_FALSE(Initial->Invocation.Original.Call.ConstantReturn);
+    EXPECT_EQ(Initial->Invocation.Original.ProtocolCode.size(), 4u);
+    EXPECT_EQ(Initial->ScopeRange.Begin, Base + 0x2100);
+    EXPECT_EQ(Initial->ScopeBytes.size(), 28u);
+    EXPECT_EQ(Initial->Runtime.AbsoluteOperands.size(), 4u);
+    for (size_t Available : {size_t{0}, Required - 1, Required}) {
+      size_t Work = limits::kMaxRegistrationEHStateWork - Available;
+      EXPECT_EQ(bool(replayRetainedOriginalImageSEHCallee(
+                    F.Image, F.Image, F.Call, F.Parent, Work, &F.Initialized)),
+                Available == Required);
+      EXPECT_EQ(Work, limits::kMaxRegistrationEHStateWork);
+    }
+    for (unsigned Mutation = 0; Mutation != 11; ++Mutation) {
+      SCOPED_TRACE(::testing::Message() << Base << " " << Mutation);
+      auto Original = F.Image;
+      auto Candidate = F.Image;
+      if (Mutation == 0)
+        Candidate.Segments.front().Data[0x300] = 0xe9;
+      else if (Mutation == 1)
+        Original.Segments.front().Data[0x300] = 0xe9;
+      else if (Mutation == 6)
+        Candidate.Imports.front().Module = "ucrtbase.dll";
+      else if (Mutation == 9)
+        Candidate.Segments.front().Data[0x150] ^= 1;
+      else {
+        const va_t Operand = Base + (Mutation == 2   ? 0x1003
+                                     : Mutation == 3 ? 0x111e
+                                     : Mutation == 4 ? 0x1282
+                                     : Mutation == 5 ? 0x100e
+                                     : Mutation == 7 ? 0x1292
+                                     : Mutation == 8 ? 0x2118
+                                                     : 0x1016);
+        std::erase_if(Candidate.BaseRelocations,
+                      [&](const auto &R) { return R.Address == Operand; });
+        Candidate.DataAddressRelocOperands.erase(Operand);
+      }
+      size_t Work = 0;
+      if ((Mutation >= 2 && Mutation <= 8) || Mutation == 10) {
+        // These inputs still have the same source result and shared bytes.
+        // Native retention must additionally require the missing dependency.
+        ASSERT_TRUE(replayBoundOriginalImageSEHCallee(
+            Original, Candidate, F.Call, F.Parent, Work, &F.Initialized));
+        Work = 0;
+      }
+      EXPECT_EQ(
+          bool(replayRetainedOriginalImageSEHCallee(
+              Original, Candidate, F.Call, F.Parent, Work, &F.Initialized)),
+          Mutation == 0);
+    }
+  }
+}
+
+TEST(RegistrationConditionalSEH, RetainedReplayChecksLiveCookieStorage) {
+  const uint32_t Base = 0x400000;
+  ScalarSEHFixture F(Base,
+                     {0x8b, 0x15, 0, 0, 0, 0, 0x8b, 0x45, 8, 0xb9, 0, 0, 0, 0});
+  bindRetainedProtocolStorage(F, Base);
+  // Give the live cookie its own mapping so a permission change cannot be
+  // accidentally rejected through the unrelated typed scope table.
+  auto Data = F.Image.Segments.back();
+  F.Image.Segments.pop_back();
+  F.Image.Sections.pop_back();
+  for (const auto &[Begin, End] :
+       {std::pair{0u, 0x80u}, std::pair{0x80u, 0x84u},
+        std::pair{0x84u, 0x400u}}) {
+    auto Segment = Data;
+    Segment.VA += Begin;
+    Segment.Size = Segment.FileSz = End - Begin;
+    Segment.Data = {Data.Data.begin() + Begin, Data.Data.begin() + End};
+    Section Section;
+    Section.VA = Segment.VA;
+    Section.Size = Section.FileSz = Segment.Size;
+    Section.Flags = Segment.Flags;
+    F.Image.Segments.push_back(std::move(Segment));
+    F.Image.Sections.push_back(Section);
+  }
+  for (auto &[Address, Field] : F.Image.DataAddressRelocOperands)
+    Field.TargetOwnerVA = F.Image.getSectionFor(Field.TargetVA)->VA;
+  size_t Work = 0;
+  ASSERT_TRUE(replayRetainedOriginalImageSEHCallee(
+      F.Image, F.Image, F.Call, F.Parent, Work, &F.Initialized));
+  for (unsigned Mutation = 0; Mutation != 7; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    auto Original = F.Image;
+    auto Candidate = F.Image;
+    if (Mutation == 0)
+      writeLE<uint32_t>(Candidate.Segments[2].Data.data(), 0x12345678u);
+    else if (Mutation == 1)
+      Candidate.Sections[2].Flags = SegmentFlags::None;
+    else if (Mutation == 2)
+      Candidate.Segments[2].Flags = SegmentFlags::None;
+    else if (Mutation == 3)
+      Original.Sections[2].Flags = SegmentFlags::None;
+    else if (Mutation == 4)
+      Original.Segments[2].Flags = SegmentFlags::None;
+    else if (Mutation == 5)
+      Candidate.Sections[2].Flags =
+          Candidate.Sections[2].Flags | SegmentFlags::Executable;
+    else
+      Candidate.Segments.push_back(Candidate.Segments[2]);
+    Work = 0;
+    EXPECT_EQ(bool(replayRetainedOriginalImageSEHCallee(
+                  Original, Candidate, F.Call, F.Parent, Work, &F.Initialized)),
+              Mutation == 0);
+  }
+}
+
+TEST(RegistrationConditionalSEH, OrdinaryReadsCannotFoldLiveCookieBytes) {
+  for (uint32_t Base : {0x400000u, 0x18000000u})
+    for (bool Nested : {false, true})
+      for (bool FixedResult : {false, true}) {
+        SCOPED_TRACE(::testing::Message()
+                     << Base << " " << Nested << " " << FixedResult);
+        HeaderReadSEHFixture F(Base, 5, FixedResult);
+        F.Parent.store(-64, 4, FrameValue::imageAddress(Base + 0x2080));
+        writeLE<uint32_t>(F.Image.Segments[1].Data.data() + 0x80, 37u);
+        if (!Nested) {
+          std::vector<uint8_t> Body{0x8b, 0x45, 8, 0x0f, 0xb7, 0};
+          if (FixedResult)
+            Body.insert(Body.end(), {0xb8, 37, 0, 0, 0});
+          Body.resize(11, 0x90);
+          std::copy(Body.begin(), Body.end(),
+                    F.Image.Segments.front().Data.begin() + 12);
+        }
+        size_t Work = 0;
+        EXPECT_FALSE(proveBoundOriginalImageSEHCallee(F.Image, F.Call, F.Parent,
+                                                      Work, &F.Initialized));
+      }
 }

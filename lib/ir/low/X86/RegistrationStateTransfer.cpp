@@ -161,9 +161,10 @@ bool RegistrationStateSolver::transferBlock(size_t I, const Domain &Before,
                               : std::optional<va_t>{ImportLoad->second});
     std::optional<FrameValue> CallResult;
     if (Conditional) {
-      if (Conditional->EvaluateOriginalImage && !Value.SecurityCookie)
-        if (const auto Original =
-                Conditional->EvaluateOriginalImage(Op, Transfer, WorkUsed))
+      if (Conditional->EvaluateOriginalImage)
+        if (const auto Original = Conditional->EvaluateOriginalImage(
+                Op, Transfer, WorkUsed, Value.SecurityCookie);
+            Original && !Value.SecurityCookie)
           Value = *Original;
       // The caller's physical registration address changes during native
       // reconstruction. Preserve its provenance through arithmetic and spills

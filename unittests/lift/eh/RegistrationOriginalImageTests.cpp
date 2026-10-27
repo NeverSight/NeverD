@@ -166,6 +166,24 @@ TEST(RegistrationOriginalImage, ScalarStorageKeepsPointerBytesUnknown) {
   }
 }
 
+TEST(RegistrationOriginalImage, OrdinaryStorageExcludesLiveCookieOverlaps) {
+  auto Image = scalarImage(0x400000);
+  Image.DynInfo.SecurityCookieRVA = 0x2008;
+  for (uint16_t Width : {1, 2, 4})
+    for (int32_t Offset : {-4, -1, 0, 1, 3, 4}) {
+      SCOPED_TRACE(::testing::Message() << Width << " " << Offset);
+      const bool Overlap = Offset < 4 && Offset + Width > 0;
+      OriginalImageFrameProof Scope(Image);
+      size_t Work = 0;
+      const va_t Address = uint32_t(0x402008 + Offset);
+      EXPECT_EQ(Scope.permitsRead(Address, Width, Work), !Overlap);
+      if (Overlap) {
+        EXPECT_FALSE(Scope.readScalar(Address, Width, Work));
+        EXPECT_FALSE(Scope.permitsRead(Address, Width, Work));
+      }
+    }
+}
+
 TEST(RegistrationOriginalImage, ReadDependsOnTheCurrentImageAndWorkBudget) {
   auto First = scalarImage(0x400000);
   auto Second = First;

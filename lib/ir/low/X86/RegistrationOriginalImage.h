@@ -14,6 +14,8 @@
 #include "RegistrationFrame.h"
 
 #include "neverd/ir/RegistrationState.h"
+#include "neverd/loader/COFF/COFFRegistrationEH.h"
+#include "neverd/loader/ExceptionCommon.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -53,12 +55,28 @@ public:
   bool recordReadAddress(const FrameValue &Address, uint16_t Width,
                          size_t &Work);
   bool recordCode(const LowFunc &Function, size_t &Work);
+  bool recordCookieRead(const LowOp &Op, const FrameTransfer &Transfer,
+                        size_t &Work);
+  /// Record an already checked shared frame protocol without granting native
+  /// relocation or installation permission.
+  bool recordProtocol(const ExceptionAddressRange &Range,
+                      const std::map<va_t, va_t> &Operands, size_t &Work);
+  const std::map<va_t, bool> &cookieReadAddressIdentities() const {
+    return CookieReadAddressIdentities;
+  }
+  const std::map<va_t, std::vector<uint8_t>> &protocolCode() const {
+    return ProtocolCode;
+  }
+  const std::map<va_t, va_t> &protocolOperands() const {
+    return ProtocolOperands;
+  }
 
   /// All successfully consumed operands and storage, including reads whose
   /// bytes cannot be interpreted as a non-address scalar. Failed lookups are
   /// cached only inside this invocation and do not become dependencies.
   const std::set<uint32_t> &addresses() const { return Addresses; }
   const std::map<va_t, std::vector<uint8_t>> &code() const { return Code; }
+  const std::map<va_t, va_t> &codeOperands() const { return CodeOperands; }
   const std::map<std::pair<va_t, uint16_t>, bool> &
   readAddressIdentities() const {
     return ReadAddressIdentities;
@@ -74,10 +92,14 @@ private:
   const registration_abi::ImmutableRegistrationScalar *
   read(va_t Address, uint16_t Width, size_t &Work);
 
+  std::map<va_t, bool> CookieReadAddressIdentities;
+  std::map<va_t, std::vector<uint8_t>> ProtocolCode;
+  std::map<va_t, va_t> ProtocolOperands;
   const BinaryImage &Image;
   std::set<uint32_t> Addresses;
   std::map<uint32_t, bool> Mapped;
   std::map<va_t, std::vector<uint8_t>> Code;
+  std::map<va_t, va_t> CodeOperands;
   std::map<std::pair<va_t, uint16_t>, bool> ReadAddressIdentities;
   std::map<std::pair<va_t, uint16_t>,
            std::optional<registration_abi::ImmutableRegistrationScalar>>
@@ -94,6 +116,9 @@ struct OriginalImageSEHInvocation {
   std::map<int32_t, FrameValue> Arguments;
   std::set<uint32_t> Addresses;
   std::map<va_t, std::vector<uint8_t>> Code;
+  /// Absolute root/plain helper fields, including directly addressed memory
+  /// whose LowIR address identity alone does not prove a base relocation.
+  std::map<va_t, va_t> CodeOperands;
   std::map<std::pair<va_t, uint16_t>,
            registration_abi::ImmutableRegistrationScalar>
       Reads;
@@ -102,6 +127,13 @@ struct OriginalImageSEHInvocation {
   /// Missing entries prove nothing. Actual caller and final-image binding are
   /// still separate requirements, including the cookie/runtime protocol.
   std::map<std::pair<va_t, uint16_t>, bool> ReadAddressIdentities;
+  /// Cookie loads retain protocol identity; their runtime bits are never read
+  /// as original-image constants. Private cookie spills are not image reads.
+  std::map<va_t, bool> CookieReadAddressIdentities;
+  /// Exact shared entry/exit caller and helper bytes, with decoded absolute
+  /// operands. Native retention still needs complete relocation validation.
+  std::map<va_t, std::vector<uint8_t>> ProtocolCode;
+  std::map<va_t, va_t> ProtocolOperands;
 };
 
 std::optional<OriginalImageSEHInvocation>
@@ -124,6 +156,25 @@ replayBoundOriginalImageSEHCallee(const BinaryImage &Original,
                                   const BinaryImage &Candidate, const LowOp &Op,
                                   const FrameState &Parent, size_t &Work,
                                   const std::set<int32_t> *Initialized);
+
+/// One budgeted source/candidate replay with relocated ordinary/cookie read
+/// addresses, preserved shared protocols, typed scope storage and retained
+/// runtime code. Actual source/LLVM caller arguments, cookie failure
+/// reachability and final-writer installation still require their own owners.
+/// This record grants no native ConstantReturn or dependent-fact propagation.
+struct RetainedOriginalImageSEHReplay {
+  OriginalImageSEHReplay Invocation;
+  coff_loader::X86SEHRuntimeCode Runtime;
+  ExceptionAddressRange ScopeRange;
+  std::vector<uint8_t> ScopeBytes;
+};
+
+std::optional<RetainedOriginalImageSEHReplay>
+replayRetainedOriginalImageSEHCallee(const BinaryImage &Original,
+                                     const BinaryImage &Candidate,
+                                     const LowOp &Op, const FrameState &Parent,
+                                     size_t &Work,
+                                     const std::set<int32_t> *Initialized);
 
 } // namespace neverd::registration_state
 

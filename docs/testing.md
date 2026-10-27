@@ -9561,6 +9561,27 @@ equivalent modified code. A valid candidate call cannot repair an invalid
 original call. Base changes, missing initialized inputs, writable/relocated
 reads and tainted arguments refuse. `CandidateReplaySharesOneWorkBudget`
 checks exact, one-unit-short and exhausted allowances for both source queries.
+`ScopedProofRetainsSharedFrameProtocols` checks the shared caller and helper
+extents and all decoded table/handler/cookie operands at two bases.
+`CookieAddressObservationsKeepProtocolValues` records exact versus preferred-only
+cookie addresses without reading the cookie's initial bytes as constants.
+`RetainedReplayClosesProtocolDependencies` composes source, shared protocols,
+typed tables and runtime code under one exact/short/empty budget. Its negative
+controls remove individual address relocations or change an otherwise valid
+provider after the weaker source replay has accepted the same ordinary result.
+This includes a directly addressed cookie read whose LowIR address identity
+survives removal of its HIGHLOW field; retained replay must still refuse it.
+An unused absolute immediate checks the separate inventory comparison: deleting
+both its fixup and its classification preserves the weaker source result but
+must never reduce the retained candidate's relocation obligations.
+`RetainedReplayChecksLiveCookieStorage` isolates the cookie from scope-table
+storage and rejects unreadable, executable or overlapping mappings in either
+image. Changing only the cookie's initial bytes remains valid and supplies no
+constant cookie value.
+`OrdinaryReadsCannotFoldLiveCookieBytes` and
+`OrdinaryStorageExcludesLiveCookieOverlaps` reject root/nested ordinary reads
+and partial overlaps with a read-only source cookie. Discarding the read does
+not remove this dependency; adjacent nonoverlapping storage remains readable.
 `RelocatedArithmeticKeepsItsAddressIdentity` covers ADD/SUB at two image bases:
 exact HIGHLOW address provenance admits the authored SEH helper while its
 ordinary result remains unknown. Missing, stale or conflicting classifications,

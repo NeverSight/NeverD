@@ -166,9 +166,15 @@ proveBoundSEHCalleeImpl(const BinaryImage &Image, const BinaryImage &CallImage,
     return std::nullopt;
   if (OriginalImage) {
     Inputs.EvaluateOriginalImage =
-        [&](const LowOp &Op, const FrameTransfer &Transfer, size_t &Used) {
-          return OriginalImage->evaluate(Op, Transfer, Used);
-        };
+        [&](const LowOp &Op, const FrameTransfer &Transfer, size_t &Used,
+            bool Cookie) -> std::optional<FrameValue> {
+      if (Cookie) {
+        if (!OriginalImage->recordCookieRead(Op, Transfer, Used))
+          Inputs.Complete = false;
+        return std::nullopt;
+      }
+      return OriginalImage->evaluate(Op, Transfer, Used);
+    };
     Inputs.ProveImageMemory = [&](va_t Address, uint16_t Width, bool Write,
                                   size_t &Used) {
       return !Write && OriginalImage->permitsRead(Address, Width, Used);
@@ -263,6 +269,18 @@ proveBoundSEHCalleeImpl(const BinaryImage &Image, const BinaryImage &CallImage,
       (EH->Personality == ExceptionPersonality::ExceptHandler4 &&
        !States.SecurityCookiesComplete))
     return std::nullopt;
+  if (OriginalImage && Shared.Entry) {
+    if (!OriginalImage->recordProtocol(Shared.Entry->Caller,
+                                       Shared.Entry->AbsoluteOperands,
+                                       Inputs.Work) ||
+        !OriginalImage->recordProtocol(
+            Shared.Entry->Helper, Shared.Entry->AbsoluteOperands, Inputs.Work))
+      return std::nullopt;
+    for (const auto &Exit : Shared.Exits)
+      if (!OriginalImage->recordProtocol(Exit.Caller, {}, Inputs.Work) ||
+          !OriginalImage->recordProtocol(Exit.Helper, {}, Inputs.Work))
+        return std::nullopt;
+  }
   // Filter/finally returns belong to runtime invocations. They cannot prove
   // an ordinary returning call when the helper's own epilogue does not return.
   bool HasParentReturn = false;
@@ -399,6 +417,19 @@ proveOriginalImageSEHCallee(const BinaryImage &Image,
           Work, Original.readAddressIdentities().size()))
     return std::nullopt;
   Result.ReadAddressIdentities = Original.readAddressIdentities();
+  if (!registration_abi::chargeCalleeWork(
+          Work, Original.protocolOperands().size() +
+                    Original.codeOperands().size() +
+                    Original.cookieReadAddressIdentities().size()))
+    return std::nullopt;
+  Result.ProtocolOperands = Original.protocolOperands();
+  Result.CodeOperands = Original.codeOperands();
+  Result.CookieReadAddressIdentities = Original.cookieReadAddressIdentities();
+  for (const auto &[Address, Bytes] : Original.protocolCode()) {
+    if (!registration_abi::chargeCalleeWork(Work, Bytes.size() + 1))
+      return std::nullopt;
+    Result.ProtocolCode.emplace(Address, Bytes);
+  }
   Result.Addresses = Original.addresses();
   return Result;
 }
@@ -437,12 +468,19 @@ replayBoundOriginalImageSEHCallee(const BinaryImage &Original,
     if (!registration_abi::chargeCalleeWork(
             Work, Proof->Call.Arguments.size() + Proof->Arguments.size() + 1))
       return std::nullopt;
-    for (const auto &[Address, Bytes] : Proof->Code)
-      if (!registration_abi::chargeCalleeWork(Work, Bytes.size() + 1))
-        return std::nullopt;
+    for (const auto *Code : {&Proof->Code, &Proof->ProtocolCode})
+      for (const auto &[Address, Bytes] : *Code)
+        if (!registration_abi::chargeCalleeWork(Work, Bytes.size() + 1))
+          return std::nullopt;
+    if (!registration_abi::chargeCalleeWork(Work,
+                                            Proof->ProtocolOperands.size()))
+      return std::nullopt;
   }
   if (Before->Call != After->Call || Before->Arguments != After->Arguments ||
-      Before->ReturnValue != After->ReturnValue || Before->Code != After->Code)
+      Before->ReturnValue != After->ReturnValue ||
+      Before->Code != After->Code ||
+      Before->ProtocolCode != After->ProtocolCode ||
+      Before->ProtocolOperands != After->ProtocolOperands)
     return std::nullopt;
   return OriginalImageSEHReplay{std::move(*Before), std::move(*After)};
 }

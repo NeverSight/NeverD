@@ -2328,6 +2328,10 @@ For every ordinary read, the scope separately records whether every observed
 address carries exact image provenance. Preferred integer bits do not establish
 that identity, and a later image address cannot repair an earlier integer
 observation. These records do not cover the separate cookie/runtime protocol.
+The state owner separately identifies cookie-protocol loads so the scope can
+record their address provenance while preserving the opaque live cookie value.
+Shared SEH4 caller, prologue and epilogue bytes and decoded absolute operands
+remain attached to the invocation, including helpers outside its ordinary CFG.
 Its result never populates the native
 layout-independent `ConstantReturn` receipt. Ordinary state analysis does not
 enable this scope. Native use additionally requires original argument identity,
@@ -2340,6 +2344,25 @@ results and root/plain helper bytes. Immutable read locations and values may
 change with the header layout. Both records keep `ConstantReturn` absent;
 runtime/table preservation, relocation identity and native caller/IR admission
 remain separate requirements.
+The composed retained replay rechecks ordinary and cookie address identities,
+all root/plain helper and shared protocol relocations, both typed tables and
+both runtime-code records under that same allowance. It preserves the original
+call authentication and rejects changed retained code or provider identity.
+This still grants no native
+argument binding, cookie-failure elision, dependent-fact propagation or final PE
+installation permission.
+Absolute memory operands carry LowIR address identity even without a loader
+fixup. Retained replay therefore records their physical fields separately and
+requires exact HIGHLOW coverage and the same root/plain operand inventory on
+both images. Removing a fixup and its classification cannot shrink the
+candidate's obligations. Overlapping root and shared caller bytes are
+united before the loader validates each contiguous range under the same budget.
+The runtime cookie must retain uniquely mapped, readable, nonexecutable data
+storage in both images. Its initial bytes are never compared or folded into
+the source result; the live runtime value remains opaque.
+Ordinary immutable reads overlapping that live cookie are rejected, including
+partial-width and nested plain-helper reads from a read-only source section.
+Only the state owner's explicit cookie-protocol path may consume the value.
 The shared callee-instruction check also accepts PE32 ADD/SUB immediates with
 complete HIGHLOW fields and exactly one matching loader-owned address operand,
 as it does for MOV/PUSH. The decoder/lifter retains that exact address identity.
