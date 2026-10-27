@@ -13,6 +13,7 @@
 #include "neverd/decode/Decoder.h"
 #include "neverd/loader/Limits.h"
 #include "neverd/loader/ReadOnlyBytes.h"
+#include "neverd/support/BinaryEncoding.h"
 
 #include <algorithm>
 #include <iterator>
@@ -69,6 +70,7 @@ class ScalarLeafProof {
   Decoder Dec;
   std::map<va_t, va_t> Instructions;
   std::set<va_t> ImageReads;
+  std::map<va_t, va_t> AbsoluteOperands;
 
   // Distinct paths may reach one instruction with different initialized
   // registers. Check each state; neither a favorable path nor a join supplies
@@ -144,6 +146,7 @@ public:
     }
     for (const auto Address : ImageReads)
       Result.ImageReads.push_back({Address, Address + 4});
+    Result.AbsoluteOperands = AbsoluteOperands;
     return Result;
   }
 
@@ -255,6 +258,8 @@ public:
             unsigned(X.encoding.disp_offset) + 4 > Insn.Size)
           return false;
         Operands.push_back(State.Address + X.encoding.disp_offset);
+        AbsoluteOperands.emplace(
+            Operands.back(), readLE<uint32_t>(Bytes + X.encoding.disp_offset));
       }
       if (!readImmutablePE32CodeBytes(Image, State.Address, Insn.Size,
                                       Operands))

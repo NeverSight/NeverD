@@ -9,6 +9,7 @@
 
 #include "gtest/gtest.h"
 
+#include "neverd/Limits.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/COFF/COFFRegistrationEH.h"
 
@@ -18,6 +19,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <iterator>
+#include <map>
 #include <vector>
 
 using namespace neverd;
@@ -89,6 +91,10 @@ TEST(RegistrationEH4Wrapper, RetainsScalarNormalizationBeforeRuntimeDispatch) {
     EXPECT_EQ(ABI->CookieCheckVA, Base + 0x1080);
     EXPECT_EQ(ABI->SecurityCookieVA, Base + 0x2000);
     EXPECT_TRUE(ABI->ImageReads.empty());
+    EXPECT_EQ(ABI->AbsoluteOperands,
+              (std::map<va_t, va_t>{{Base + 0x101b, Base + 0x1080},
+                                    {Base + 0x1020, Base + 0x2000},
+                                    {Base + 0x1182, Base + 0x2008}}));
     ASSERT_EQ(ABI->CodeRanges.size(), 3u);
     EXPECT_EQ(ABI->CodeRanges[0].Begin, Base + 0x1000);
     EXPECT_EQ(ABI->CodeRanges[0].End, Base + 0x102f);
@@ -194,6 +200,8 @@ TEST(RegistrationEH4Wrapper, RetainsRuntimeDataAndMXCSRBranches) {
       ASSERT_EQ(ABI->ImageReads.size(), 1u);
       EXPECT_EQ(ABI->ImageReads[0].Begin, Base + 0x2010);
       EXPECT_EQ(ABI->ImageReads[0].End, Base + 0x2014);
+      ASSERT_EQ(ABI->AbsoluteOperands.size(), 4u);
+      EXPECT_EQ(ABI->AbsoluteOperands.at(Base + 0x1106), Base + 0x2010);
       for (unsigned Mutation = 0; Mutation != 4; ++Mutation) {
         auto Bad = Image;
         if (Mutation == 0)
@@ -254,6 +262,12 @@ TEST(RegistrationEH4Wrapper, DirectDependenciesIncludeHotpatchAndEveryVeneer) {
         EXPECT_EQ(ABI->CookieCheckVA, Base + 0x1080);
         EXPECT_EQ(ABI->SecurityCookieVA, Base + 0x2000);
         EXPECT_TRUE(ABI->ImageReads.empty());
+        EXPECT_EQ(ABI->AbsoluteOperands,
+                  (std::map<va_t, va_t>{
+                      {Base + 0x1000 + Begin + 16, Base + 0x1080},
+                      {Base + 0x1000 + Begin + 21, Base + 0x2000},
+                      {Indirect ? Base + 0x1000 + Begin + 27 : Base + 0x1182,
+                       Base + 0x2008}}));
         ASSERT_EQ(ABI->CodeRanges.size(), Indirect ? 1u : 3u);
         EXPECT_EQ(ABI->CodeRanges[0].Begin, Base + 0x1000);
         EXPECT_EQ(ABI->CodeRanges[0].End, Base + 0x1000 + Code.size());
@@ -323,4 +337,73 @@ TEST(RegistrationEH4Wrapper, DependenciesCoverBothPathsWithoutOwningGaps) {
   }
   Image.Segments.front().Data[0x10d] = 0xc3;
   EXPECT_TRUE(coff_loader::getCheckedX86EH4PersonalityABI(Image, 0x401000));
+}
+
+TEST(RegistrationEH4Wrapper, RetainedRuntimeRequiresEveryAddressRelocation) {
+  for (uint32_t Base : {0x400000u, 0x18000000u}) {
+    SCOPED_TRACE(Base);
+    auto Image = normalizedWrapper(Base);
+    auto &Text = Image.Segments.front().Data;
+    const uint8_t Checker[] = {0x3b, 0x0d, 0, 0, 0, 0, 0x75, 24, 0xc3};
+    std::copy(std::begin(Checker), std::end(Checker), Text.begin() + 0x80);
+    llvm::support::endian::write32le(Text.data() + 0x82, Base + 0x2000);
+    ExceptionFunction Function;
+    Function.ParseStatus = ExceptionParseStatus::Complete;
+    Function.Personality = ExceptionPersonality::ExceptHandler4;
+    Function.PersonalityVA = Base + 0x1000;
+    Function.Registration.emplace();
+    Function.Registration->HandlerVA = Function.PersonalityVA;
+    const std::map<va_t, va_t> Operands{{Base + 0x101b, Base + 0x1080},
+                                        {Base + 0x1020, Base + 0x2000},
+                                        {Base + 0x1082, Base + 0x2000},
+                                        {Base + 0x1182, Base + 0x2008}};
+    for (const auto &[Address, Target] : Operands)
+      Image.BaseRelocations.push_back({Address, 3});
+    size_t Required = 0;
+    const auto Original =
+        coff_loader::getCheckedX86SEHRuntimeCode(Image, Function, Required);
+    ASSERT_TRUE(Original);
+    EXPECT_EQ(Original->AbsoluteOperands, Operands);
+    EXPECT_EQ(Original->Code.size(), 4u);
+    EXPECT_EQ(Original->IATVA, Base + 0x2008);
+    EXPECT_EQ(Original->CookieCheckVA, Base + 0x1080);
+    EXPECT_EQ(Original->CookieFailureVA, Base + 0x10a0);
+    EXPECT_EQ(Original->SecurityCookieVA, Base + 0x2000);
+    EXPECT_EQ(Original->ImportModule, "vcruntime140.dll");
+    EXPECT_EQ(Original->ImportName, "_except_handler4_common");
+    for (size_t Missing = 0; Missing != Operands.size(); ++Missing) {
+      auto Changed = Image;
+      Changed.BaseRelocations.erase(Changed.BaseRelocations.begin() + Missing);
+      // Source shape alone still decodes; a retained address must relocate.
+      ASSERT_TRUE(coff_loader::getCheckedX86EH4PersonalityABI(
+          Changed, Function.PersonalityVA));
+      size_t Work = 0;
+      EXPECT_FALSE(
+          coff_loader::getCheckedX86SEHRuntimeCode(Changed, Function, Work));
+    }
+    for (size_t Available : {size_t{0}, Required - 1, Required}) {
+      size_t Work = limits::kMaxRegistrationEHStateWork - Available;
+      EXPECT_EQ(
+          bool(coff_loader::getCheckedX86SEHRuntimeCode(Image, Function, Work)),
+          Available == Required);
+      EXPECT_EQ(Work, limits::kMaxRegistrationEHStateWork);
+    }
+    auto Changed = Image;
+    Changed.Imports.front().Module = "ucrtbase.dll";
+    size_t Work = 0;
+    const auto Other =
+        coff_loader::getCheckedX86SEHRuntimeCode(Changed, Function, Work);
+    ASSERT_TRUE(Other);
+    EXPECT_NE(Other, Original);
+    // A dynamic normalizer needs its own storage-identity preservation proof.
+    const uint8_t Read[] = {0xa1, 0, 0, 0, 0, 0x8b, 0xe5, 0x5d, 0xc3};
+    std::copy(std::begin(Read), std::end(Read), Text.begin() + 0x104);
+    llvm::support::endian::write32le(Text.data() + 0x105, Base + 0x2010);
+    Image.BaseRelocations.push_back({Base + 0x1105, 3});
+    ASSERT_TRUE(coff_loader::getCheckedX86EH4PersonalityABI(
+        Image, Function.PersonalityVA));
+    Work = 0;
+    EXPECT_FALSE(
+        coff_loader::getCheckedX86SEHRuntimeCode(Image, Function, Work));
+  }
 }

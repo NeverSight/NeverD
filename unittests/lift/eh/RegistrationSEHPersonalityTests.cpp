@@ -17,6 +17,7 @@
 #include "llvm/Support/Endian.h"
 
 #include <cstdint>
+#include <map>
 #include <utility>
 
 using namespace neverd;
@@ -146,10 +147,30 @@ TEST(RegistrationSEHPersonality, RetainedDependenciesRequireImmutableIdentity) {
       EXPECT_EQ(ABI->SecurityCookieVA, 0u);
       EXPECT_EQ(ABI->CookieCheckVA, 0u);
       EXPECT_TRUE(ABI->ImageReads.empty());
+      EXPECT_EQ(ABI->AbsoluteOperands,
+                (std::map<va_t, va_t>{{Base + 0x1012, Base + 0x2000}}));
       ASSERT_EQ(ABI->CodeRanges.size(), 2u);
       EXPECT_EQ(ABI->CodeRanges[0].Begin, Base + 0x1000);
       EXPECT_EQ(ABI->CodeRanges[0].End, Base + 0x1005);
       EXPECT_EQ(ABI->CodeRanges[1].Begin, Base + 0x1010);
       EXPECT_EQ(ABI->CodeRanges[1].End, Base + 0x1016);
+      ExceptionFunction Function;
+      Function.ParseStatus = ExceptionParseStatus::Complete;
+      Function.Personality = ExceptionPersonality::ExceptHandler3;
+      Function.PersonalityVA = Base + 0x1000;
+      Function.Registration.emplace();
+      Function.Registration->HandlerVA = Function.PersonalityVA;
+      size_t Work = 0;
+      const auto Runtime =
+          coff_loader::getCheckedX86SEHRuntimeCode(Image, Function, Work);
+      ASSERT_TRUE(Runtime);
+      EXPECT_EQ(Runtime->AbsoluteOperands, ABI->AbsoluteOperands);
+      EXPECT_EQ(Runtime->Code.size(), 2u);
+      EXPECT_EQ(Runtime->IATVA, Base + 0x2000);
+      EXPECT_EQ(Runtime->ImportName, "_except_handler3");
+      Image.BaseRelocations.clear();
+      Work = 0;
+      EXPECT_FALSE(
+          coff_loader::getCheckedX86SEHRuntimeCode(Image, Function, Work));
     }
 }

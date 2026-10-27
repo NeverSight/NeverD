@@ -26,6 +26,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <iterator>
+#include <map>
 #include <string>
 #include <utility>
 #include <vector>
@@ -347,6 +348,13 @@ TEST(RegistrationSEH4Shared, OrdinaryAnalysisOwnsTheInstalledFrame) {
       ASSERT_EQ(EH->ParseStatus, ExceptionParseStatus::Complete);
       EXPECT_EQ(EH->Registration->RegistrationOffset, -16);
       EXPECT_EQ(EH->Registration->TryLevelOffset, -4);
+      const auto Entry = coff_loader::getCheckedX86SEH4PrologueCall(Image, *EH);
+      ASSERT_TRUE(Entry);
+      EXPECT_EQ(Entry->AbsoluteOperands,
+                (std::map<va_t, va_t>{
+                    {Entry->CallVA - 4, Entry->ScopeTableVA},
+                    {Entry->Helper.Begin + 1, Entry->HandlerVA},
+                    {Entry->Helper.Begin + 30, Entry->SecurityCookieVA}}));
       auto Low = liftSharedSEH4(Image);
       ASSERT_TRUE(Low.hasCompleteLiftCoverage());
       ASSERT_TRUE(Low.RegistrationStates);

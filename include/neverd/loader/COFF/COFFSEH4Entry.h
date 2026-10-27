@@ -13,6 +13,7 @@
 #include "neverd/loader/ExceptionInfo.h"
 
 #include <cstdint>
+#include <map>
 #include <optional>
 #include <vector>
 
@@ -56,6 +57,9 @@ struct X86SEH4PrologueCall {
   uint32_t AllocationBytes;
   int32_t PostCallStackOffset;
   std::vector<X86SEH4PrologueWrite> Writes;
+  /// Decoded table, handler and cookie address fields in Caller and Helper.
+  /// Retained native use separately requires complete HIGHLOW coverage.
+  std::map<va_t, va_t> AbsoluteOperands;
 };
 
 struct X86SEH4EpilogueCall {

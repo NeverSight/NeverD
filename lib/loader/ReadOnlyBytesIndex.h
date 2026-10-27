@@ -3,6 +3,9 @@
 // NeverD Decompiler
 //
 //===----------------------------------------------------------------------===//
+/// \file
+/// Bound immutable storage queries and scoped PE32 instruction indexes.
+//===----------------------------------------------------------------------===//
 
 #ifndef NEVERD_LIB_LOADER_READONLYBYTESINDEX_H
 #define NEVERD_LIB_LOADER_READONLYBYTESINDEX_H
@@ -27,6 +30,14 @@ readImmutableImageBytes(const BinaryImage &Image, va_t Address, uint32_t Size,
 std::optional<va_t>
 readImmutablePE32CodePointerStorage(const BinaryImage &Image, va_t Address,
                                     size_t &Work, size_t Limit);
+
+/// Stronger PE32 instruction storage: every supplied absolute operand must
+/// have exactly one HIGHLOW relocation. Uses the ordinary code validator and
+/// bounds fresh ordered lookups without constructing or caching an index.
+/// The caller still owns instruction meaning and the target's runtime role.
+std::optional<std::vector<uint8_t>> readRelocatedPE32CodeBytes(
+    const BinaryImage &Image, va_t Address, uint32_t Size,
+    const std::vector<va_t> &AbsoluteOperands, size_t &Work, size_t Limit);
 
 namespace read_only_detail {
 struct PE32CodeFixup {

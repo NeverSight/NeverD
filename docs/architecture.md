@@ -2294,6 +2294,14 @@ remain separate obligations; a personality dependency record alone grants no
 native replacement permission. The legacy SEH3 identity query keeps its weaker
 analysis role, while the retained dependency query requires immutable code,
 unambiguous eager import storage and matching relocation operands.
+Those records also retain the exact decoded absolute operand locations and
+preferred targets for wrappers, scalar normalizers, cookie checks and shared
+SEH4 entry helpers. The separate retained-runtime code query requires complete
+HIGHLOW coverage and records the eager import identity, forwarding bytes and
+cookie-success bytes under one work allowance. Its code and relocation reader
+shares the ordinary immutable instruction validator and bounds fresh ordered
+lookups, including malformed wide normalized fields. Dynamic normalizer storage,
+cookie equality and failure reachability still require separate proofs.
 The scope-table owner separately revalidates every immutable SEH3/EH4 word
 against its decoded graph. Scalar fields admit no fixups; nonnull callback
 fields require exact PE32 HIGHLOW storage and immutable executable targets.

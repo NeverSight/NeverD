@@ -9515,6 +9515,14 @@ case rejects changed provider/slot identities, delayed or duplicate imports,
 writable/ambiguous code, malformed fixups and incomplete storage at two bases.
 Run `NeverDRegistrationEHTests` and `NeverDWindowsRegistrationNativeTests` for
 these loader-owned records; they do not qualify a final PE or a native call.
+`RetainedRuntimeRequiresEveryAddressRelocation` checks all wrapper, thunk and
+cookie operands at two bases. Missing individual HIGHLOWs, dynamic normalizers
+and exhausted work refuse; changing the valid runtime provider changes the
+retained record. Existing EH3, shared-entry, cookie and wrapper cases verify
+their exact operand inventories. `RetainedOperandsRequireCompleteRelocations`
+checks partially relocated code, a large unrelated ordered inventory, malformed
+wide overlaps, repeated queries and exact/short/empty work allowances. The
+existing instruction-fixup mutation matrix also runs the stronger reader.
 `ImmutablePE32Code.InteriorPointerStorageDoesNotGrantAnOrdinaryEntry` in
 `NeverDReadOnlyBytesTests` checks callback storage at two bases while preserving
 the ordinary-entry requirement. Its mutations cover fixup multiplicity, width,

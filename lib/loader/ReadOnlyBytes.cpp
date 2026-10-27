@@ -322,8 +322,20 @@ namespace {
 using PE32CodeFixup = read_only_detail::PE32CodeFixup;
 
 template <typename Visitor>
-bool visitPE32CodeFixups(const BinaryImage &Image, Visitor Visit) {
+bool visitPE32CodeFixups(
+    const BinaryImage &Image, Visitor Visit,
+    const std::optional<ExceptionAddressRange> &Range = std::nullopt) {
   using Kind = PE32CodeFixup::Kind;
+  const auto Ordered = [&](const auto &Items, uint64_t Width, auto Key,
+                           auto Make) {
+    const va_t First =
+        Range && Range->Begin >= Width - 1 ? Range->Begin - (Width - 1) : 0;
+    auto It = Range ? Items.lower_bound(First) : Items.begin();
+    for (; It != Items.end() && (!Range || Key(*It) < Range->End); ++It)
+      if (!Visit(Make(*It)))
+        return false;
+    return true;
+  };
   for (const auto &R : Image.BaseRelocations)
     if (R.Type &&
         !Visit(PE32CodeFixup{
@@ -336,15 +348,20 @@ bool visitPE32CodeFixups(const BinaryImage &Image, Visitor Visit) {
       return false;
   for (const auto *Fields :
        {&Image.CodeAddressRelocOperands, &Image.DataAddressRelocOperands})
-    for (const auto &[Slot, Field] : *Fields)
-      if (!Visit(PE32CodeFixup{Kind::Operand, Slot, Field.Width, 0, &Field}))
-        return false;
+    if (!Ordered(
+            *Fields, UINT8_MAX, [](const auto &Item) { return Item.first; },
+            [](const auto &Item) {
+              return PE32CodeFixup{Kind::Operand, Item.first, Item.second.Width,
+                                   0, &Item.second};
+            }))
+      return false;
   for (const auto *Slots :
        {&Image.CodePtrRelocSlots, &Image.DataPtrRelocSlots,
         &Image.RelCodeRelocSlots, &Image.RelDataPtrRelocSlots})
-    for (va_t Slot : *Slots)
-      if (!Visit(PE32CodeFixup{Kind::Forbidden, Slot, 4}))
-        return false;
+    if (!Ordered(
+            *Slots, 4, [](va_t Slot) { return Slot; },
+            [](va_t Slot) { return PE32CodeFixup{Kind::Forbidden, Slot, 4}; }))
+      return false;
   for (const auto &Slot : Image.RuntimeCallablePointerSlots)
     if (!Visit(PE32CodeFixup{Kind::Forbidden, Slot.SlotVA, 4}))
       return false;
@@ -354,7 +371,8 @@ bool visitPE32CodeFixups(const BinaryImage &Image, Visitor Visit) {
 template <typename FixupQuery>
 std::optional<std::vector<uint8_t>>
 readPE32CodeBytes(const BinaryImage &Image, va_t Address, uint32_t Size,
-                  const std::vector<va_t> &AbsoluteOperands, FixupQuery Query) {
+                  const std::vector<va_t> &AbsoluteOperands, FixupQuery Query,
+                  bool RequireRelocations = false) {
   if (Image.Format != BinaryFormat::COFF || Image.IsRelocatable ||
       Image.Arch != Arch::X86 || Image.Bits != Bitness::Bits32 || !Size ||
       Size > ::neverd::limits::loader::kMaxImageReadBytes ||
@@ -399,6 +417,8 @@ readPE32CodeBytes(const BinaryImage &Image, va_t Address, uint32_t Size,
   for (va_t Slot : FieldSlots)
     if (!Relocated.count(Slot))
       return std::nullopt;
+  if (RequireRelocations && Relocated != Operands)
+    return std::nullopt;
   return std::vector<uint8_t>(Bytes, Bytes + Size);
 }
 } // namespace
@@ -410,6 +430,48 @@ readImmutablePE32CodeBytes(const BinaryImage &Image, va_t Address,
   return readPE32CodeBytes(
       Image, Address, Size, AbsoluteOperands,
       [&](auto Visit) { return visitPE32CodeFixups(Image, Visit); });
+}
+
+std::optional<std::vector<uint8_t>> readRelocatedPE32CodeBytes(
+    const BinaryImage &Image, va_t Address, uint32_t Size,
+    const std::vector<va_t> &AbsoluteOperands, size_t &Work, size_t Limit) {
+  // The scalar storage charge already bounds mapping scans, all vector
+  // inventories and the four-byte ordered slot windows used by code queries.
+  if (!chargeStorageQuery(Image, Size, false, Work, Limit))
+    return std::nullopt;
+  const auto Charge = [&](size_t Amount) {
+    if (Amount > Limit - std::min(Work, Limit)) {
+      Work = Limit;
+      return false;
+    }
+    Work += Amount;
+    return true;
+  };
+  // Normalized instruction fields have an explicit uint8_t width, unlike
+  // data-pointer slots. Include malformed wide fields preceding this range.
+  for (size_t Count : {Image.CodeAddressRelocOperands.size(),
+                       Image.DataAddressRelocOperands.size()})
+    if (!Charge(
+            size_t(std::min<uint64_t>(Count, uint64_t(Size) + UINT8_MAX - 1))))
+      return std::nullopt;
+  // Operand validation and the relocated/normalized field sets use balanced
+  // trees. Successful insertions are bounded by the supplied operand count;
+  // one additional conflicting entry can terminate the query.
+  const size_t SetWork =
+      6 * (2 * std::bit_width(AbsoluteOperands.size()) + 1) + 6;
+  if (AbsoluteOperands.size() > (Limit - std::min(Work, Limit)) / SetWork) {
+    Work = Limit;
+    return std::nullopt;
+  }
+  if (!Charge(AbsoluteOperands.size() * SetWork) || !Charge(SetWork))
+    return std::nullopt;
+  return readPE32CodeBytes(
+      Image, Address, Size, AbsoluteOperands,
+      [&](auto Visit) {
+        return visitPE32CodeFixups(
+            Image, Visit, ExceptionAddressRange{Address, Address + Size});
+      },
+      true);
 }
 
 bool IndexedPE32CodeBytes::charge(size_t Amount) {

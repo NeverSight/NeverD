@@ -1,5 +1,4 @@
-//===- COFFRegistrationScalarLeaf.h - Retained PE32 scalar helpers -*- C++
-//-*-===//
+//===- COFFRegistrationScalarLeaf.h - Scalar helper proof ----*- C++ -*-===//
 //
 // NeverD Decompiler
 //
@@ -13,6 +12,7 @@
 #include "neverd/Common.h"
 #include "neverd/loader/ExceptionCommon.h"
 
+#include <map>
 #include <optional>
 #include <vector>
 
@@ -26,6 +26,7 @@ namespace coff_loader {
 struct X86RegistrationScalarLeaf {
   std::vector<ExceptionAddressRange> CodeRanges;
   std::vector<ExceptionAddressRange> ImageReads;
+  std::map<va_t, va_t> AbsoluteOperands;
 };
 std::optional<X86RegistrationScalarLeaf>
 getCheckedX86RegistrationScalarLeaf(const BinaryImage &Image, va_t Entry);

@@ -49,6 +49,7 @@
 
 #include <algorithm>
 #include <cstdlib>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -385,6 +386,14 @@ TEST(RegistrationTryLevel, GSCookieCheckerHasOnlyTheCheckedLeafSuccessPath) {
       Image.DynInfo.SecurityCookieRVA = kRData - kBase;
       ASSERT_TRUE(
           coff_loader::hasCheckedX86CookieCheckSuccessPath(Image, kText));
+      const auto Success =
+          coff_loader::getCheckedX86CookieCheckSuccessPath(Image, kText);
+      ASSERT_TRUE(Success);
+      EXPECT_EQ(Success->AbsoluteOperands,
+                (std::map<va_t, va_t>{{kText + 2, kRData}}));
+      EXPECT_EQ(Success->CodeRange.Begin, kText);
+      EXPECT_EQ(Success->CodeRange.End, kText + Return + (RepReturn ? 2 : 1));
+      EXPECT_EQ(Success->FailureVA, kText + 32);
       // A relocated absolute cookie operand preserves the checked operation.
       // Its normalized field must agree with both the bytes and the fixup.
       Image.BaseRelocations.push_back({kText + 2, 3});

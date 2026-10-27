@@ -1,5 +1,4 @@
-//===- COFFRegistrationEH4Wrapper.cpp - Retained PE32 EH4 wrappers
-//----------===//
+//===- COFFRegistrationEH4Wrapper.cpp - Retained PE32 EH4 wrappers --------===//
 //
 // NeverD Decompiler
 //
@@ -93,6 +92,8 @@ getDirectPersonality(const BinaryImage &Image, va_t HandlerVA) {
   Result.SecurityCookieVA = CookieVA;
   Result.CookieCheckVA = CheckVA;
   Result.CodeRanges.push_back({HandlerVA, Begin + Tail + 5});
+  Result.AbsoluteOperands.emplace(Begin + 16, CheckVA);
+  Result.AbsoluteOperands.emplace(Begin + 21, CookieVA);
   if (Direct) {
     const va_t Target =
         uint32_t(Begin + 30 + int64_t(readLE<int32_t>(Code + 26)));
@@ -101,8 +102,10 @@ getDirectPersonality(const BinaryImage &Image, va_t HandlerVA) {
   } else if (Code[26] != 0x15 ||
              !isCommonHandlerSlot(Image, readLE<uint32_t>(Code + 27))) {
     return std::nullopt;
-  } else
+  } else {
     Result.IATVA = readLE<uint32_t>(Code + 27);
+    Result.AbsoluteOperands.emplace(Begin + 27, Result.IATVA);
+  }
   return Result;
 }
 
@@ -134,6 +137,7 @@ bool isCommonHandlerThunk(const BinaryImage &Image, va_t Address,
       return false;
     Result.CodeRanges.push_back({Address, Address + 6});
     Result.IATVA = Slot;
+    Result.AbsoluteOperands.emplace(Address + 2, Slot);
     return true;
   }
   return false;
@@ -178,6 +182,9 @@ getNormalizingPersonality(const BinaryImage &Image, va_t HandlerVA) {
   X86SEHPersonalityABI Result;
   Result.SecurityCookieVA = CookieVA;
   Result.CookieCheckVA = Checker;
+  Result.AbsoluteOperands = Scalar->AbsoluteOperands;
+  Result.AbsoluteOperands.emplace(HandlerVA + 27, Checker);
+  Result.AbsoluteOperands.emplace(HandlerVA + 32, CookieVA);
   Result.CodeRanges.push_back({HandlerVA, HandlerVA + 47});
   Result.CodeRanges.insert(Result.CodeRanges.end(), Scalar->CodeRanges.begin(),
                            Scalar->CodeRanges.end());

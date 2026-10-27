@@ -164,6 +164,10 @@ TEST(ImmutablePE32Code, IndexedAndOrdinaryReadersKeepEveryFixupBoundary) {
     const auto Indexed = Index.read(ReadVA, 6, {OperandVA});
     EXPECT_EQ(Ordinary.has_value(), Expected);
     EXPECT_EQ(Indexed, Ordinary);
+    size_t RelocatedWork = 0;
+    EXPECT_EQ(readRelocatedPE32CodeBytes(Image, ReadVA, 6, {OperandVA},
+                                         RelocatedWork, 10000),
+              Ordinary);
     EXPECT_GT(Work, 0u);
     if (Expected) {
       ASSERT_TRUE(Indexed);
@@ -389,6 +393,55 @@ TEST(ImmutablePE32Code, BudgetedStorageQueriesReplayCurrentInputs) {
     EXPECT_FALSE(Query(Work, 10000));
     EXPECT_GT(Work, First * 2);
   }
+}
+
+TEST(ImmutablePE32Code, RetainedOperandsRequireCompleteRelocations) {
+  auto Image = codeImage();
+  auto &Code = Image.Segments.front().Data;
+  Code[0x15] = 0xb9;
+  writeLE<uint32_t>(Code.data() + 0x16, TargetVA + 4);
+  Code[0x1a] = 0xc3;
+  const std::vector<va_t> Operands{OperandVA, ReadVA + 6};
+  Image.BaseRelocations.clear();
+  for (unsigned Count = 0; Count != 3; ++Count) {
+    SCOPED_TRACE(Count);
+    const auto Ordinary =
+        readImmutablePE32CodeBytes(Image, ReadVA, 11, Operands);
+    ASSERT_TRUE(Ordinary);
+    size_t Work = 0;
+    const auto Retained =
+        readRelocatedPE32CodeBytes(Image, ReadVA, 11, Operands, Work, 10000);
+    EXPECT_EQ(bool(Retained), Count == 2);
+    if (Retained)
+      EXPECT_EQ(Retained, Ordinary);
+    if (Count < 2)
+      Image.BaseRelocations.push_back({Operands[Count], 3});
+  }
+  for (uint32_t I = 0; I != 250000; ++I) {
+    RelocatedAddressField Field;
+    Field.Width = 4;
+    Field.TargetVA = Field.EncodedValue = 0x70000000;
+    Image.DataAddressRelocOperands.emplace(0x60000000 + I * 4, Field);
+  }
+  const auto Query = [&](size_t &Work, size_t Limit) {
+    return readRelocatedPE32CodeBytes(Image, ReadVA, 11, Operands, Work, Limit);
+  };
+  size_t Required = 0;
+  ASSERT_TRUE(Query(Required, 10000));
+  for (size_t Limit : {size_t{0}, Required - 1, Required}) {
+    size_t Work = 0;
+    EXPECT_EQ(bool(Query(Work, Limit)), Limit == Required);
+    EXPECT_EQ(Work, Limit);
+  }
+  size_t Work = 0;
+  ASSERT_TRUE(Query(Work, 10000));
+  ASSERT_TRUE(Query(Work, 10000));
+  EXPECT_EQ(Work, Required * 2);
+  RelocatedAddressField Wide;
+  Wide.Width = UINT8_MAX;
+  Image.DataAddressRelocOperands.emplace(ReadVA - UINT8_MAX + 1, Wide);
+  EXPECT_FALSE(Query(Work, 10000));
+  EXPECT_GT(Work, Required * 2);
 }
 } // namespace
 } // namespace neverd

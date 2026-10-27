@@ -96,7 +96,11 @@ getCheckedX86SEH4PrologueCall(const BinaryImage &Image,
                              Cookie,
                              uint32_t(Allocation),
                              -32 - Allocation,
+                             {},
                              {}};
+  Result.AbsoluteOperands = {{Entry + Push + 1, Chain.ScopeTableVA},
+                             {Target + 1, Chain.HandlerVA},
+                             {Target + 30, Cookie}};
   using Value = X86SEH4PrologueWrite::Value;
   Result.Writes = {{-8, Value::ReturnPC},
                    {-12, Value::Handler},
