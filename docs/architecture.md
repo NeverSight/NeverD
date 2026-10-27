@@ -2534,6 +2534,14 @@ caller-owned arguments on normal return. The documented
 declarations and the native SDK `_onexit` declaration use cdecl. A stack fact
 proves neither that a lock returns nor that callback registration is free of
 memory effects; managed `_onexit_m` and other providers receive no inferred ABI.
+The same exact legacy CRT providers supply cdecl returning-stack facts for
+`__set_app_type`, `__setusermatherr` and `_configthreadlocale`. The exact Kernel32
+`IsProcessorFeaturePresent` and `SetUnhandledExceptionFilter` imports instead
+pop one PE32 argument. These conventions agree with the existing Windows CRT
+prototype catalog and SDK declarations. Registering an exception or math-error
+callback and changing locale or application state still need their own effects;
+none of these imports inherits pointer-transform binding preservation, private
+memory access, exception dispatch or a constant result from its stack ABI.
 The returning-stack contract retains each direct callee's transitive IAT
 dependencies, including imports behind an immutable veneer or another helper.
 Callers collect those dependencies before interpreting any stores. A preceding

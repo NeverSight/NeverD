@@ -162,7 +162,9 @@ checkedRegistrationImportStackPop(const BinaryImage &Image, va_t Target) {
   if (Module.equals_insensitive("kernel32.dll")) {
     // The SDK's PE32 WINAPI declarations use 32-bit stack carriers. Exact
     // exports matter: neither similarly named APIs nor other DLLs inherit it.
-    if (Name == "DecodePointer" || Name == "EncodePointer" || Name == "Sleep")
+    if (Name == "DecodePointer" || Name == "EncodePointer" || Name == "Sleep" ||
+        Name == "IsProcessorFeaturePresent" ||
+        Name == "SetUnhandledExceptionFilter")
       return 4;
     if (Name == "InterlockedExchange")
       return 8;
@@ -177,8 +179,10 @@ checkedRegistrationImportStackPop(const BinaryImage &Image, va_t Target) {
        Name == "free" || Name == "memcpy" || Name == "memmove" ||
        Name == "memset" || Name == "_initterm" || Name == "_initterm_e" ||
        Name == "_lock" || Name == "_unlock" || Name == "_onexit" ||
-       Name == "??2@YAPAXI@Z" || Name == "??_U@YAPAXI@Z" ||
-       Name == "??3@YAXPAX@Z" || Name == "??_V@YAXPAX@Z"))
+       Name == "__set_app_type" || Name == "__setusermatherr" ||
+       Name == "_configthreadlocale" || Name == "??2@YAPAXI@Z" ||
+       Name == "??_U@YAPAXI@Z" || Name == "??3@YAXPAX@Z" ||
+       Name == "??_V@YAXPAX@Z"))
     return 0;
   if ((Name == "log" || Name == "exp") &&
       (Module.equals_insensitive("api-ms-win-crt-math-l1-1-0.dll") ||

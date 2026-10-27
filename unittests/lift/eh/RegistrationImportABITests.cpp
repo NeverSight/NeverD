@@ -41,7 +41,9 @@ constexpr ImportCase StartupImports[] = {{"GetStartupInfoW", 1},
                                          {"InterlockedExchange", 2},
                                          {"DecodePointer", 1},
                                          {"EncodePointer", 1},
-                                         {"Sleep", 1}};
+                                         {"Sleep", 1},
+                                         {"IsProcessorFeaturePresent", 1},
+                                         {"SetUnhandledExceptionFilter", 1}};
 
 struct ImportImage {
   static constexpr va_t TextVA = 0x401000;
@@ -209,7 +211,11 @@ TEST(RegistrationImportABI, StackCleanupCannotAuthorizeDispatchOrObservation) {
        {ImportCase{"RaiseException", 4}, ImportCase{"HeapSetInformation", 4},
         ImportCase{"malloc", 4}, ImportCase{"_initterm", 2},
         ImportCase{"_initterm_e", 2}, ImportCase{"_lock", 1},
-        ImportCase{"_unlock", 1}, ImportCase{"_onexit", 1}}) {
+        ImportCase{"_unlock", 1}, ImportCase{"_onexit", 1},
+        ImportCase{"__set_app_type", 1}, ImportCase{"__setusermatherr", 1},
+        ImportCase{"_configthreadlocale", 1},
+        ImportCase{"IsProcessorFeaturePresent", 1},
+        ImportCase{"SetUnhandledExceptionFilter", 1}}) {
     SCOPED_TRACE(C.Name);
     const bool IsRaise = llvm::StringRef(C.Name) == "RaiseException";
     const bool IsCRT = llvm::StringRef(C.Name) == "malloc" ||
@@ -217,7 +223,10 @@ TEST(RegistrationImportABI, StackCleanupCannotAuthorizeDispatchOrObservation) {
                        llvm::StringRef(C.Name) == "_initterm_e" ||
                        llvm::StringRef(C.Name) == "_lock" ||
                        llvm::StringRef(C.Name) == "_unlock" ||
-                       llvm::StringRef(C.Name) == "_onexit";
+                       llvm::StringRef(C.Name) == "_onexit" ||
+                       llvm::StringRef(C.Name) == "__set_app_type" ||
+                       llvm::StringRef(C.Name) == "__setusermatherr" ||
+                       llvm::StringRef(C.Name) == "_configthreadlocale";
     ImportImage F(C, false, IsCRT);
     if (IsCRT)
       F.Image.Imports[0].Module = "msvcrt.dll";
@@ -241,9 +250,12 @@ TEST(RegistrationImportABI, StackCleanupCannotAuthorizeDispatchOrObservation) {
 }
 
 TEST(RegistrationImportABI, LegacyCRTCallsRetainTheirCallerStackCleanup) {
-  for (const auto &C : {ImportCase{"_initterm", 2},
-                        ImportCase{"_initterm_e", 2}, ImportCase{"_lock", 1},
-                        ImportCase{"_unlock", 1}, ImportCase{"_onexit", 1}})
+  for (const auto &C :
+       {ImportCase{"_initterm", 2}, ImportCase{"_initterm_e", 2},
+        ImportCase{"_lock", 1}, ImportCase{"_unlock", 1},
+        ImportCase{"_onexit", 1}, ImportCase{"__set_app_type", 1},
+        ImportCase{"__setusermatherr", 1},
+        ImportCase{"_configthreadlocale", 1}})
     for (const char *Module : {"msvcrt.dll", "MSVCR100.DLL"})
       for (bool ThroughStub : {false, true})
         for (unsigned Mutation = 0; Mutation != 13; ++Mutation) {

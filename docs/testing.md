@@ -5908,8 +5908,9 @@ conflicting-slot, addend, backing-byte, metadata, architecture and caller-cleanu
 mutations must refuse; every accepted stack fact still lacks an object or
 initializer memory contract.
 `LegacyCRTCallsRetainTheirCallerStackCleanup` checks `_initterm`, `_initterm_e`,
-`_lock`, `_unlock` and `_onexit` from both legacy CRT providers through direct
-IAT calls and jump veneers. Missing or partial caller cleanup, wrong providers or decorated
+`_lock`, `_unlock`, `_onexit`, `__set_app_type`, `__setusermatherr` and
+`_configthreadlocale` from both legacy CRT providers through direct IAT calls
+and jump veneers. Missing or partial caller cleanup, wrong providers or decorated
 names, delayed or conflicting imports, incomplete storage, writable or changed
 code and a different architecture must refuse. Current call occurrences retain
 zero callee cleanup, while private object/initializer borrows and exception
@@ -9453,7 +9454,8 @@ image writes at two bases, including stable address arithmetic. Disjoint writes
 retain the imported stack adjustment; full and partial IAT overlaps, duplicate
 or malformed fixups and conflicting address receipts reject it. Cached import
 tests apply the same alias rule before and after loading a callable target.
-`RegistrationImportABI` covers the seven checked Kernel32 startup imports
+`RegistrationImportABI` covers the nine checked Kernel32 startup imports,
+including `IsProcessorFeaturePresent` and `SetUnhandledExceptionFilter`,
 through direct IAT calls and decoded jump veneers. Wrong providers, delay
 imports, conflicting or truncated storage, missing import-directory evidence,
 mutable code and unbalanced argument cleanup refuse the stack proof. The same
