@@ -122,6 +122,11 @@ Complete scratch spills and reloads can retain a captured loaded expression
 across blocks. They use canonical full-width and alias invalidation; partial
 overwrites and unknown writes still lose it. System calls clobber r0-r5
 expression carriers even when their memory effects preserve scratch.
+Validated automatic-frame translation bounds can exclude an absolute write
+from a complete relative cell, in either direction, through the shared
+typed-cell owner. Reports expose the bound in `frame_coordinates`; manual
+frames remain unbounded. A translated interval that can overlap still loses
+its facts, including frame-relative arithmetic reaching heap addresses.
 Full finite target proofs from this path do not by themselves establish
 complete candidate-callee summaries or execution coverage. Expression nodes
 and proof steps consume the existing output, retained-state and work budgets.
@@ -159,6 +164,18 @@ parent descriptor+96 through the boxed Amm/account record; slot 22188 updates
 the distinct heap address `0x300007DD0` from one to two. Slot 22973 is not
 executed by these two inputs. These finite observations do not establish
 nonaliasing on other paths.
+
+The static field loss is distinct from enumerating the two vtables. Both
+candidates remain present immediately before 22188/22973; the unknown header
+write then removes the field. In a specialized deposit context, 22177 names
+the parent descriptor field but has no full-width pointer value for it. The
+constructor's allocator result at 32470 is already unknown before 32926 stores
+the boxed pointer into output+96. The account-header pointer stored at 49845
+has the same allocation-provenance gap. Allocator 30171 reads an unbound heap
+cursor, so finite constants and affine parameter origins cannot describe its
+result. Automatic-frame translation bounds do not turn those loaded pointers
+into proven heap objects or authorize preserving the vtable across their
+writes.
 
 A complete checked-store trace confirms that 22063 is the last overlapping
 writer before the field load at 1960 in both diagnostic runs. Earlier copies

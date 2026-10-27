@@ -13,6 +13,7 @@
 #include "neverd/sbf/analysis/SBFCallXContexts.h"
 
 #include "neverd/sbf/analysis/SBFAnalysisLimits.h"
+#include "neverd/sbf/runtime/SBFVMConfig.h"
 
 #include "llvm/Support/FormatVariadic.h"
 
@@ -461,8 +462,19 @@ llvm::json::Object callXContextReportJSON(const SBFProgram &Program,
         {"may_write_callee_frames", Guard.WritesCalleeFrames},
         {"may_write_intervals", std::move(Writes)}});
   }
+  const auto Translation =
+      frameTranslationLimit(Program.Low.TheVersion, Program.Config);
   return llvm::json::Object{
       {"schema", 6},
+      {"frame_coordinates",
+       llvm::json::Object{
+           {"stack_frame_bytes",
+            static_cast<int64_t>(Program.Config.StackFrameSize)},
+           {"max_call_depth",
+            static_cast<int64_t>(Program.Config.MaxCallDepth)},
+           {"maximum_translation_bytes",
+            Translation ? llvm::json::Value(static_cast<int64_t>(*Translation))
+                        : llvm::json::Value(nullptr)}}},
       {"scope", "context_keyed_whole_function_cfg_summaries"},
       {"caller_entry_assumption", "recognized_cfg_and_function_roots"},
       {"unknown_indirect_entries_are_not_closed", true},

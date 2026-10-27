@@ -219,6 +219,11 @@ TEST(SBFCallXContexts, JoinsEveryFiniteCalleeReturnAndMemoryOutcome) {
         EXPECT_TRUE(CompleteSet);
         const auto JSON = callXContextReportJSON(*Program, *Report);
         EXPECT_EQ(JSON.getInteger("schema"), 6);
+        const auto *Frame = JSON.getObject("frame_coordinates");
+        ASSERT_NE(Frame, nullptr);
+        const auto Translation =
+            frameTranslationLimit(Program->Low.TheVersion, Program->Config);
+        EXPECT_EQ(Frame->getInteger("maximum_translation_bytes"), Translation);
         EXPECT_EQ(JSON.getInteger("callx_sites_with_proven_context"), 1);
         EXPECT_EQ(JSON.getInteger("callx_sites_with_proven_target_set_context"),
                   1);
@@ -1676,6 +1681,81 @@ TEST(SBFCallXContexts, LoadedExpressionsSurviveCompleteSpillsOnly) {
     EXPECT_EQ(Raw->Status, ExecutionStatus::Returned) << Raw->Error;
     EXPECT_EQ(Raw->ReturnValue, 400u + Count - 1);
   }
+}
+
+TEST(SBFCallXContexts, BoundedFramesPreserveOnlyDisjointAbsoluteWrites) {
+  for (Version V : {Version::V0, Version::V3})
+    for (bool Heap : {false, true}) {
+      SCOPED_TRACE(::testing::Message() << static_cast<unsigned>(V) << Heap);
+      const size_t Count = kCallXContextSpecializationsPerEntry + 2;
+      std::vector<test::EncodedInstruction> Text;
+      std::vector<size_t> Literals, Calls;
+      for (size_t I = 0; I < Count; ++I) {
+        Literals.push_back(Text.size());
+        const auto Address = test::loadImm64(3, 0);
+        Text.insert(Text.end(), Address.begin(), Address.end());
+        Text.push_back(encode(Opcode::ST_DW_REG, 10, 3, -8));
+        Text.push_back(encode(Opcode::MOV64_REG, 1, 10));
+        Text.push_back(encode(Opcode::ADD64_IMM, 1, 0, 0, -8));
+        Calls.push_back(Text.size());
+        Text.push_back({});
+      }
+      Text.push_back(encode(Opcode::EXIT));
+      const size_t Helper = Text.size();
+      const auto Destination = test::loadImm64(
+          2, Heap ? kHeapStart : initialFramePointer(V, SBFVMConfig{}) - 8);
+      Text.insert(Text.end(), Destination.begin(), Destination.end());
+      Text.push_back(encode(Opcode::ST_DW_IMM, 2));
+      Text.push_back(encode(Opcode::LD_DW_REG, 2, 1));
+      const size_t CallX = Text.size();
+      Text.push_back(V == Version::V0 ? encode(Opcode::CALL_REG, 0, 0, 0, 2)
+                                      : encode(Opcode::CALL_REG, 2));
+      Text.push_back(encode(Opcode::EXIT));
+      const size_t Targets = Text.size();
+      for (size_t I = 0; I < Count; ++I) {
+        Text.push_back(encode(Opcode::MOV64_IMM, 0, 0, 0, 500 + I));
+        Text.push_back(encode(Opcode::EXIT));
+        const auto Target =
+            test::loadImm64(3, kBytecodeStart + (Targets + I * 2) * 8);
+        std::copy(Target.begin(), Target.end(), Text.begin() + Literals[I]);
+        Text[Calls[I]] =
+            encode(Opcode::CALL_IMM, 0, 1, 0, Helper - Calls[I] - 1);
+      }
+      auto Image = test::makeImage(Text, {});
+      Image.SBF->Version = V;
+      Image.SBF->ELFFlags = static_cast<uint32_t>(V);
+      Image.SBF->StrictLayout = V == Version::V3;
+      auto Program = analyze(Image);
+      ASSERT_TRUE(static_cast<bool>(Program))
+          << llvm::toString(Program.takeError());
+      auto Report = recoverCallXContexts(*Program);
+      ASSERT_TRUE(static_cast<bool>(Report))
+          << llvm::toString(Report.takeError());
+      for (size_t I = kCallXContextSpecializationsPerEntry; I < Count; ++I) {
+        const auto Site =
+            std::find_if(Report->Contexts.begin(), Report->Contexts.end(),
+                         [&](const auto &Site) {
+                           return !Site.EntryPrefixOnly &&
+                                  Site.CallerSlot == Calls[I] &&
+                                  Site.CallXSlot == CallX;
+                         });
+        ASSERT_NE(Site, Report->Contexts.end());
+        EXPECT_EQ(Site->TargetSlot.has_value(), Heap);
+        if (Heap)
+          EXPECT_EQ(Site->TargetSlot, Targets + I * 2);
+      }
+      ExecutionEnvironment Environment;
+      Environment.Memory.push_back(
+          {kHeapStart, std::vector<uint8_t>(8), true, "explicit heap cell"});
+      auto Raw = executeRaw(*Program, std::move(Environment));
+      ASSERT_TRUE(static_cast<bool>(Raw)) << llvm::toString(Raw.takeError());
+      EXPECT_EQ(Raw->Status,
+                Heap ? ExecutionStatus::Returned : ExecutionStatus::Faulted)
+          << Raw->Error;
+      if (Heap)
+        EXPECT_EQ(Raw->ReturnValue, 500u + Count - 1);
+      checkSummaryReferences(*Report);
+    }
 }
 
 TEST(SBFCallXContexts, SyscallsClobberLoadedInputExpressions) {
@@ -4345,6 +4425,67 @@ TEST(SBFStoredRegisterMemory, FrameCoordinatesAreNotAbsoluteStackAddresses) {
   EXPECT_EQ(Memory.read(kHeapStart), Number);
   Memory.write(kStackStart + 8, Number, MemoryCoordinate::FrameRelative);
   EXPECT_EQ(Memory.read(kHeapStart), RegisterValue{});
+}
+
+TEST(SBFStoredRegisterMemory, BoundedFrameTranslationStillChecksEveryOverlap) {
+  const RegisterValue Number{RegisterValue::Kind::Constant, 42, 0};
+  const auto Limit = *frameTranslationLimit(Version::V0, SBFVMConfig{});
+  const va_t Cell = kStackStart + 8;
+  for (bool AbsoluteWrite : {false, true}) {
+    SCOPED_TRACE(AbsoluteWrite);
+    StoredRegisterMemory Memory;
+    Memory.setFrameTranslationLimit(Limit);
+    if (AbsoluteWrite) {
+      Memory.write(Cell, Number, MemoryCoordinate::FrameRelative);
+      Memory.write(kHeapStart, Number);
+    } else {
+      Memory.write(kHeapStart, Number);
+      Memory.write(Cell, Number, MemoryCoordinate::FrameRelative);
+    }
+    EXPECT_EQ(Memory.read(Cell, MemoryCoordinate::FrameRelative), Number);
+    EXPECT_EQ(Memory.read(kHeapStart), Number);
+  }
+  for (uint64_t Delta : {uint64_t{0}, Limit / 2, Limit}) {
+    StoredRegisterMemory Memory;
+    Memory.setFrameTranslationLimit(Limit);
+    Memory.write(Cell, Number, MemoryCoordinate::FrameRelative);
+    Memory.invalidate(Cell + Delta + 7, 1);
+    EXPECT_TRUE(Memory.empty());
+    Memory.write(Cell + Delta, Number);
+    Memory.invalidate(Cell + 7, 1, MemoryCoordinate::FrameRelative);
+    EXPECT_TRUE(Memory.empty());
+  }
+  StoredRegisterMemory Memory;
+  Memory.setFrameTranslationLimit(Limit);
+  // Frame-relative arithmetic can reach the heap. Numeric VM regions alone
+  // never prove that this cell is on a stack, even with a bounded translation.
+  Memory.write(kHeapStart - Limit, Number, MemoryCoordinate::FrameRelative);
+  Memory.invalidate(kHeapStart, 8);
+  EXPECT_TRUE(Memory.empty());
+  Memory.write(Cell, Number, MemoryCoordinate::FrameRelative);
+  Memory.invalidate(Cell + Limit + 8, 8);
+  EXPECT_EQ(Memory.read(Cell, MemoryCoordinate::FrameRelative), Number);
+}
+
+TEST(SBFStoredRegisterMemory, JoinsWidenFrameTranslationBounds) {
+  const RegisterValue Number{RegisterValue::Kind::Constant, 42, 0};
+  const auto Limit = *frameTranslationLimit(Version::V0, SBFVMConfig{});
+  const va_t Cell = kStackStart + 8;
+  for (bool Unknown : {false, true})
+    for (bool Alternatives : {false, true}) {
+      StoredRegisterMemory Left, Right;
+      Left.setFrameTranslationLimit(0);
+      if (!Unknown)
+        Right.setFrameTranslationLimit(Limit);
+      Left.write(Cell, Number, MemoryCoordinate::FrameRelative);
+      Right.write(Cell, Number, MemoryCoordinate::FrameRelative);
+      if (Alternatives)
+        Left.joinValues(Right);
+      else
+        Left.meet(Right);
+      Left.invalidate(Unknown ? kHeapStart : Cell + Limit, 8);
+      EXPECT_TRUE(Left.empty());
+    }
 }
 
 TEST(SBFStoredRegisterMemory,

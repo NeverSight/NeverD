@@ -13,6 +13,7 @@
 #include "neverd/sbf/runtime/SBFRuntimeEnvironment.h"
 #include "neverd/sbf/runtime/SBFRuntimeProfile.h"
 #include "neverd/sbf/runtime/SBFSyscalls.h"
+#include "neverd/sbf/runtime/SBFVMConfig.h"
 #include "neverd/sbf/solana/SBFPubkey.h"
 
 #include "llvm/Support/Error.h"
@@ -27,6 +28,23 @@
 
 namespace neverd::sbf {
 namespace {
+
+TEST(SBFMetadata, FrameTranslationUsesValidatedVersionAndDepth) {
+  for (Version V :
+       {Version::V0, Version::V1, Version::V2, Version::V3, Version::V4})
+    for (bool Gaps : {false, true})
+      for (size_t Depth : {size_t{1}, size_t{8}, kDefaultMaxCallDepth}) {
+        SBFVMConfig Config;
+        Config.EnableStackFrameGaps = Gaps;
+        Config.MaxCallDepth = Depth;
+        ASSERT_FALSE(static_cast<bool>(validateVMConfig(Config)));
+        const auto Limit = frameTranslationLimit(V, Config);
+        if (versionHasFeature(V, VersionFeature::ManualStackFrames))
+          EXPECT_FALSE(Limit);
+        else
+          EXPECT_EQ(Limit, automaticFrameStride(V, Config) * (Depth - 1));
+      }
+}
 
 constexpr RuntimeFeature kUnknownRuntimeFeatureForTest =
     static_cast<RuntimeFeature>(

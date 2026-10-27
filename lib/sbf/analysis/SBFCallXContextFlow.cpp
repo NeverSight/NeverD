@@ -751,6 +751,8 @@ ContextFlow::generalizeRedundantPublishedContext(size_t Entry,
 
 ContextState ContextFlow::genericInput() const {
   ContextState Input;
+  Input.Scratch.Values.setFrameTranslationLimit(
+      frameTranslationLimit(Program.Low.TheVersion, Program.Config));
   if (!versionHasFeature(Program.Low.TheVersion,
                          VersionFeature::ManualStackFrames))
     Input.Registers[kFramePointerRegister] = RegisterValue{
@@ -2250,6 +2252,11 @@ ContextFlow::summarize(size_t Entry, const ContextState &Incoming, bool Generic,
   Input.InputExpressions = {};
   Input.InputSpills.clear();
   Input.InputWrites = {};
+  const auto Translation =
+      frameTranslationLimit(Program.Low.TheVersion, Program.Config);
+  Input.Scratch.Values.setFrameTranslationLimit(Translation);
+  Input.OriginScratch.Values.setFrameTranslationLimit(Translation);
+  Input.InputSpills.setFrameTranslationLimit(Translation);
   if (Generic)
     for (unsigned R = 0; R < kRegisterCount; ++R) {
       CallXInputExpression Expression;

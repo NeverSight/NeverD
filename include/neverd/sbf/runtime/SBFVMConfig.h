@@ -13,6 +13,8 @@
 #include "llvm/Support/Error.h"
 
 #include <cstddef>
+#include <cstdint>
+#include <optional>
 
 namespace neverd::sbf {
 
@@ -61,6 +63,16 @@ constexpr uint64_t initialFramePointer(Version V, const SBFVMConfig &Config) {
 constexpr uint64_t automaticFrameStride(Version V, const SBFVMConfig &Config) {
   return Config.StackFrameSize *
          (usesStackFrameGaps(V, Config) ? kStackFrameGapMultiplier : 1);
+}
+
+/// Unknown function-entry depth translates automatic frame coordinates by
+/// zero through this many bytes. Manual frames have no such translation bound.
+/// Config must already have passed validateVMConfig().
+constexpr std::optional<uint64_t>
+frameTranslationLimit(Version V, const SBFVMConfig &Config) {
+  if (versionHasFeature(V, VersionFeature::ManualStackFrames))
+    return std::nullopt;
+  return automaticFrameStride(V, Config) * (Config.MaxCallDepth - 1);
 }
 
 } // namespace neverd::sbf

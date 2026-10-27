@@ -576,7 +576,20 @@ Full-width stored values retain pointer provenance independently of descriptor
 bytes. Frame-relative coordinates and absolute VM addresses occupy separate
 lanes: a potentially aliasing write forgets facts in the other lane. Partial
 writes invalidate the overlapping word, and memmove snapshots before writing.
-Abstract frame coordinates never authorize an immutable-image load.
+Validated automatic frames supply a bounded translation from analysis
+coordinates to absolute addresses: zero through the automatic frame stride
+times `MaxCallDepth - 1`. The typed-cell owner compares the entire translated
+write/cell intervals before preserving opposite-coordinate facts. Manual
+frames and unconfigured models have no such bound and retain conservative
+invalidation. Arbitrary frame-relative arithmetic may still reach the heap;
+neither the address tag nor its numeric VM region proves separation. Joins
+widen translation bounds, and summary keys retain them. An unknown write
+address still invalidates all potentially aliased cells.
+
+Schema 6's additive `frame_coordinates` metadata records stack frame bytes,
+maximum call depth and `maximum_translation_bytes` (null for manual frames).
+Abstract frame coordinates never authorize an immutable-image load, including
+when a translation bound is available.
 
 Every result remains conditional on recognized CFG/function entries and its
 recorded caller facts. Unaligned targets and continuation slots use raw VM rules;

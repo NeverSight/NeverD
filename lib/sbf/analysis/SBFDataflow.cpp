@@ -295,9 +295,27 @@ void StoredRegisterMemory::invalidate(va_t Address, uint64_t Size,
   const va_t End = Address + Size;
   for (auto It = Values.begin(); It != Values.end();) {
     const auto [OtherCoordinate, Start] = It->first;
-    if (OtherCoordinate == Coordinate &&
-        (Start >= End ||
-         (Start < Address && Address - Start >= sizeof(uint64_t))))
+    bool Disjoint = OtherCoordinate == Coordinate &&
+                    (Start >= End ||
+                     (Start < Address && Address - Start >= sizeof(uint64_t)));
+    if (OtherCoordinate != Coordinate && FrameTranslationLimit) {
+      const bool FrameWrite = Coordinate == MemoryCoordinate::FrameRelative;
+      const va_t FrameStart = FrameWrite ? Address : Start;
+      const uint64_t FrameBytes = FrameWrite ? Size : sizeof(uint64_t);
+      const va_t AbsoluteStart = FrameWrite ? Start : Address;
+      const uint64_t AbsoluteBytes = FrameWrite ? sizeof(uint64_t) : Size;
+      // The complete translated interval must be disjoint. Arbitrary frame
+      // arithmetic can reach another VM region or wrap; a frame tag itself
+      // never supplies NoAlias against an absolute heap/stack address.
+      const auto Last = std::numeric_limits<va_t>::max();
+      if (*FrameTranslationLimit <= Last - FrameStart &&
+          FrameBytes <= Last - FrameStart - *FrameTranslationLimit)
+        Disjoint =
+            FrameStart + *FrameTranslationLimit + FrameBytes <= AbsoluteStart ||
+            (AbsoluteStart <= FrameStart &&
+             AbsoluteBytes <= FrameStart - AbsoluteStart);
+    }
+    if (Disjoint)
       ++It;
     else
       It = Values.erase(It);
@@ -351,6 +369,11 @@ StoredRegisterMemory::readValues(va_t Address,
 }
 
 void StoredRegisterMemory::meet(const StoredRegisterMemory &Other) {
+  if (!FrameTranslationLimit || !Other.FrameTranslationLimit)
+    FrameTranslationLimit.reset();
+  else
+    FrameTranslationLimit =
+        std::max(*FrameTranslationLimit, *Other.FrameTranslationLimit);
   for (auto It = Values.begin(); It != Values.end();) {
     if (It->second != Other.readValues(It->first.second, It->first.first))
       It = Values.erase(It);
@@ -360,6 +383,11 @@ void StoredRegisterMemory::meet(const StoredRegisterMemory &Other) {
 }
 
 void StoredRegisterMemory::joinValues(const StoredRegisterMemory &Other) {
+  if (!FrameTranslationLimit || !Other.FrameTranslationLimit)
+    FrameTranslationLimit.reset();
+  else
+    FrameTranslationLimit =
+        std::max(*FrameTranslationLimit, *Other.FrameTranslationLimit);
   for (auto It = Values.begin(); It != Values.end();) {
     It->second.join(Other.readValues(It->first.second, It->first.first));
     if (It->second.unknown())
@@ -379,6 +407,9 @@ void MemoryModel::profile(llvm::FoldingSetNodeID &ID) const {
 }
 
 void StoredRegisterMemory::profile(llvm::FoldingSetNodeID &ID) const {
+  ID.AddBoolean(FrameTranslationLimit.has_value());
+  if (FrameTranslationLimit)
+    ID.AddInteger(*FrameTranslationLimit);
   ID.AddInteger(Values.size());
   for (const auto &[Key, Value] : Values) {
     ID.AddInteger(static_cast<unsigned>(Key.first));

@@ -12,6 +12,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "neverd/sbf/analysis/SBFDataflow.h"
+#include "neverd/sbf/runtime/SBFVMConfig.h"
 
 #include <algorithm>
 #include <deque>
@@ -27,6 +28,10 @@ namespace neverd::sbf {
 ScratchFlow::ScratchFlow(const SBFProgram &Program,
                          const MedInstructionIndex &Index,
                          ScratchLoadPolicy Loads) {
+  ScratchState Boundary;
+  Boundary.Values.setFrameTranslationLimit(
+      frameTranslationLimit(Program.Low.TheVersion, Program.Config));
+  Empty = std::make_shared<const ScratchState>(std::move(Boundary));
   const size_t Count =
       std::min(Program.Med.Blocks.size(), Program.Low.Blocks.size());
   Stats.IndexedBlockCount = Count;

@@ -136,14 +136,21 @@ private:
 
 class StoredRegisterMemory {
 public:
+  /// Frame coordinates denote the same addresses translated by an unknown
+  /// delta in [0, Limit]. Only an established automatic-frame invariant may
+  /// supply this limit; unset coordinates retain conservative aliasing.
+  void setFrameTranslationLimit(std::optional<uint64_t> Limit) {
+    FrameTranslationLimit = Limit;
+  }
   /// The store/copy owner must first validate the complete scratch range.
   void write(va_t Address, const RegisterValue &Value,
              MemoryCoordinate Coordinate = MemoryCoordinate::Absolute);
   void writeValues(va_t Address, ProvenValueSet Value,
                    MemoryCoordinate Coordinate = MemoryCoordinate::Absolute);
   /// A write in either coordinate system may alias any value in the other:
-  /// the current function's absolute call depth is not known. Forget those
-  /// values rather than equating an abstract frame with an absolute address.
+  /// the current function's absolute call depth is not known. A validated
+  /// translation bound can exclude overlap, but cannot equate a frame with
+  /// one absolute address. Unbounded coordinates invalidate conservatively.
   void invalidate(va_t Address, uint64_t Size,
                   MemoryCoordinate Coordinate = MemoryCoordinate::Absolute);
   void invalidateFrom(va_t Address,
@@ -173,6 +180,7 @@ public:
 
 private:
   std::map<std::pair<MemoryCoordinate, va_t>, ProvenValueSet> Values;
+  std::optional<uint64_t> FrameTranslationLimit;
 };
 
 /// What the register fixed point does not carry: the scratch bytes a program
