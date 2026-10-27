@@ -31,12 +31,6 @@
 namespace neverd::sbf {
 namespace {
 
-MemoryCoordinate memoryCoordinate(const RegisterValue &Base) {
-  return Base.ValueKind == RegisterValue::Kind::StackAddress
-             ? MemoryCoordinate::FrameRelative
-             : MemoryCoordinate::Absolute;
-}
-
 uint64_t normalizeResult(const MedInstruction &Instruction, uint64_t Value) {
   if (Instruction.Width == kWordBitWidth)
     return extendALU32Result(static_cast<uint32_t>(Value),
@@ -60,7 +54,22 @@ void applyAddSubImmediate(const MedInstruction &Instruction,
     return;
   }
 
+  if (Value.ValueKind == RegisterValue::Kind::UnsignedRange &&
+      Instruction.Width == kDoubleWordBitWidth &&
+      !Instruction.Semantics.SwapOperands) {
+    const auto Range = *unsignedValueRange(Value);
+    const uint64_t Delta =
+        Instruction.Op == Operation::Add ? Immediate : uint64_t{0} - Immediate;
+    const bool Negative = std::bit_cast<int64_t>(Delta) < 0;
+    if ((!Negative && Delta <= UINT64_MAX - Range.Upper) ||
+        (Negative && uint64_t{0} - Delta <= Range.Lower))
+      Value = unsignedRangeValue({Range.Lower + Delta, Range.Upper + Delta});
+    else
+      Value = {};
+    return;
+  }
   const bool IsAddress =
+      Value.ValueKind == RegisterValue::Kind::SymbolicAddress ||
       Value.ValueKind == RegisterValue::Kind::StackAddress ||
       Value.ValueKind == RegisterValue::Kind::RodataAddress ||
       Value.ValueKind == RegisterValue::Kind::InstructionDataAddress;
@@ -109,36 +118,47 @@ storedBytes(const RegisterValue &Value, unsigned ByteWidth) {
 
 void applyStore(const MedInstruction &Instruction, MachineState &State,
                 bool TrackValues) {
-  const std::optional<va_t> Address =
-      effectiveAddress(State.Registers[Instruction.Dst], Instruction.Offset);
+  const auto &Base = State.Registers[Instruction.Dst];
+  const auto Address = memoryAddress(Base, Instruction.Offset);
   const RegisterValue Value = storedValue(Instruction, State.Registers);
   const unsigned ByteWidth = Instruction.Width / kBitsPerByte;
-
-  // A store whose address is unknown could land on any byte the model holds.
   if (!Address) {
+    // A range can constrain invalidation, but it cannot name the value that
+    // a later load dereferences. Unknown writes still invalidate everything.
+    RegisterState Shifted{};
+    Shifted[0] = Base;
+    MedInstruction Add;
+    Add.Op = Operation::Add;
+    Add.Form = OperandForm::DstImm;
+    Add.Width = kDoubleWordBitWidth;
+    Add.Immediate = static_cast<uint64_t>(Instruction.Offset);
+    Add.Semantics.Immediate = ImmediateExtension::Full64;
+    Add.Semantics.WritesDestination = true;
+    applyRegisterTransfer(Add, Shifted, {});
+    State.Scratch.Values.invalidate(Shifted[0], ByteWidth);
+    State.Scratch.Memory.clear();
+    return;
+  }
+  State.Scratch.Values.invalidate(*Address, ByteWidth);
+  if (Address->ValueKind == RegisterValue::Kind::SymbolicAddress) {
+    if (TrackValues && ByteWidth == sizeof(uint64_t))
+      State.Scratch.Values.writeValues(*Address, Value);
+    State.Scratch.Memory.clear();
+    return;
+  }
+  const va_t Number = Address->Value;
+  if (!isScratchAddress(Number))
+    return;
+  if (!isScratchRange(Number, ByteWidth)) {
     State.Scratch.clear();
     return;
   }
-  const MemoryCoordinate Coordinate =
-      memoryCoordinate(State.Registers[Instruction.Dst]);
-  State.Scratch.Values.invalidate(*Address, ByteWidth, Coordinate);
-  if (!isScratchAddress(*Address))
-    return;
-  if (!isScratchRange(*Address, ByteWidth)) {
-    // The runtime validates the whole access before writing. Execution cannot
-    // continue after this fault, so retaining prior scratch facts would let a
-    // later recovery visitor make claims about an unreachable state.
-    State.Scratch.clear();
-    return;
-  }
-
   if (TrackValues && ByteWidth == sizeof(uint64_t))
-    State.Scratch.Values.write(*Address, Value, Coordinate);
-  if (const std::optional<llvm::SmallVector<uint8_t, 8>> Bytes =
-          storedBytes(Value, ByteWidth))
-    State.Scratch.Memory.write(*Address, *Bytes);
+    State.Scratch.Values.writeValues(*Address, Value);
+  if (const auto Bytes = storedBytes(Value, ByteWidth))
+    State.Scratch.Memory.write(Number, *Bytes);
   else
-    State.Scratch.Memory.invalidate(*Address, ByteWidth);
+    State.Scratch.Memory.invalidate(Number, ByteWidth);
 }
 
 /// The bytes at \p Address that either the program's own scratch or the loaded
@@ -171,45 +191,33 @@ std::optional<uint64_t> constantArgument(const MachineState &State,
 
 /// Forget everything one declared window of a syscall can overwrite.
 void applySyscallWindow(const SyscallMemoryInfo &Window, MachineState &State) {
-  const std::optional<va_t> Base =
-      effectiveAddress(State.Registers[argumentRegister(Window.Argument)], 0);
-  // A write through an address this analysis cannot name could land anywhere.
-  if (!Base) {
-    State.Scratch.clear();
-    return;
-  }
-  const MemoryCoordinate Coordinate =
-      memoryCoordinate(State.Registers[argumentRegister(Window.Argument)]);
-
+  const auto &Base = State.Registers[argumentRegister(Window.Argument)];
+  const auto Number = effectiveAddress(Base, 0);
   const auto InvalidateKnownRange = [&](uint64_t Bytes) {
-    State.Scratch.Values.invalidate(*Base, Bytes, Coordinate);
-    if (!isScratchAddress(*Base))
-      return;
-    if (!isScratchRange(*Base, Bytes)) {
-      // Runtime memory validation is atomic for one declared window. A known
-      // range that crosses a VM region cannot return, so no scratch fact is
-      // reachable after the call.
-      State.Scratch.clear();
-      return;
+    State.Scratch.Values.invalidate(Base, Bytes);
+    if (!Number) {
+      State.Scratch.Memory.clear();
+    } else if (isScratchAddress(*Number)) {
+      if (!isScratchRange(*Number, Bytes))
+        State.Scratch.clear();
+      else
+        State.Scratch.Memory.invalidate(*Number, Bytes);
     }
-    State.Scratch.Memory.invalidate(*Base, Bytes);
   };
-
-  if (const std::optional<uint64_t> Bytes = Window.fixedBytes()) {
+  if (const auto Bytes = Window.fixedBytes()) {
     InvalidateKnownRange(*Bytes);
     return;
   }
-  if (const std::optional<SyscallArgument> Length = Window.lengthArgument())
-    if (const std::optional<uint64_t> Bytes =
-            constantArgument(State, *Length)) {
+  if (const auto Length = Window.lengthArgument())
+    if (const auto Bytes = constantArgument(State, *Length)) {
       InvalidateKnownRange(*Bytes);
       return;
     }
-  // An unbounded write through an abstract frame pointer has no known
-  // absolute VM-region end. Retain no typed value across that uncertainty.
   State.Scratch.Values.clear();
-  if (isScratchAddress(*Base))
-    State.Scratch.Memory.invalidateFrom(*Base);
+  if (!Number)
+    State.Scratch.Memory.clear();
+  else if (isScratchAddress(*Number))
+    State.Scratch.Memory.invalidateFrom(*Number);
 }
 
 /// Record what the byte-moving syscalls leave behind.
@@ -219,19 +227,14 @@ void applySyscallWindow(const SyscallMemoryInfo &Window, MachineState &State) {
 /// assembles an invocation payload gets it into place with one of these, and
 /// without following them the payload at the invocation reads as unproven.
 struct ModeledMemoryTransfer {
-  va_t Destination = 0;
+  RegisterValue Destination;
   uint64_t Size = 0;
   llvm::SmallVector<uint8_t> Bytes;
   StoredRegisterMemory Values;
-  MemoryCoordinate Coordinate = MemoryCoordinate::Absolute;
 };
 
-/// Snapshot a byte-moving syscall's result from its pre-call state.
-///
-/// In particular, memmove permits overlapping source and destination ranges.
-/// The generic syscall write-window invalidation therefore cannot run before
-/// this read: doing so would erase part of the source and lose a fact that the
-/// runtime preserves by definition.
+/// Snapshot before invalidation: memmove permits overlapping ranges. Captured
+/// addresses carry typed cells only; they never authorize an image/byte fold.
 std::optional<ModeledMemoryTransfer>
 modelMemoryTransfer(const MedInstruction &Instruction,
                     const MachineState &State, const ProgramImage &Image,
@@ -240,28 +243,23 @@ modelMemoryTransfer(const MedInstruction &Instruction,
   if (Which != Syscall::Memcpy && Which != Syscall::Memmove &&
       Which != Syscall::Memset)
     return std::nullopt;
-
-  const std::optional<va_t> Destination = effectiveAddress(
-      State.Registers[argumentRegister(SyscallArgument::Arg1)], 0);
-  const std::optional<uint64_t> Length =
-      constantArgument(State, SyscallArgument::Arg3);
+  const auto Destination =
+      memoryAddress(State.Registers[argumentRegister(SyscallArgument::Arg1)]);
+  const auto Length = constantArgument(State, SyscallArgument::Arg3);
   if (!Destination || !Length || *Length == 0 ||
       *Length > kMaxModeledScratchBytes ||
-      !isScratchRange(*Destination, *Length))
+      (Destination->ValueKind != RegisterValue::Kind::SymbolicAddress &&
+       !isScratchRange(Destination->Value, *Length)))
     return std::nullopt;
-
+  ModeledMemoryTransfer Transfer{*Destination, *Length, {}, {}};
+  Transfer.Values.setSymbolicAddresses(
+      State.Scratch.Values.symbolicAddresses());
   if (Which == Syscall::Memset) {
-    const std::optional<uint64_t> Fill =
-        constantArgument(State, SyscallArgument::Arg2);
+    const auto Fill = constantArgument(State, SyscallArgument::Arg2);
     if (!Fill)
       return std::nullopt;
-    ModeledMemoryTransfer Transfer{
-        *Destination,
-        *Length,
-        llvm::SmallVector<uint8_t>(*Length, static_cast<uint8_t>(*Fill)),
-        {}};
-    Transfer.Coordinate = memoryCoordinate(
-        State.Registers[argumentRegister(SyscallArgument::Arg1)]);
+    if (Destination->ValueKind != RegisterValue::Kind::SymbolicAddress)
+      Transfer.Bytes.assign(*Length, static_cast<uint8_t>(*Fill));
     uint64_t Word = 0;
     for (unsigned Byte = 0; Byte < sizeof(Word); ++Byte)
       Word |= static_cast<uint64_t>(static_cast<uint8_t>(*Fill))
@@ -269,41 +267,42 @@ modelMemoryTransfer(const MedInstruction &Instruction,
     if (TrackValues)
       for (uint64_t Offset = 0; Offset + sizeof(Word) <= *Length;
            Offset += sizeof(Word))
-        Transfer.Values.write(*Destination + Offset,
-                              {RegisterValue::Kind::Constant, Word, 0},
-                              Transfer.Coordinate);
+        if (const auto Address = memoryAddress(*Destination, Offset))
+          Transfer.Values.writeValues(
+              *Address, RegisterValue{RegisterValue::Kind::Constant, Word, 0});
     return Transfer;
   }
-
-  const std::optional<va_t> Source = effectiveAddress(
-      State.Registers[argumentRegister(SyscallArgument::Arg2)], 0);
+  const auto Source =
+      memoryAddress(State.Registers[argumentRegister(SyscallArgument::Arg2)]);
   if (!Source)
     return std::nullopt;
-  const llvm::ArrayRef<uint8_t> Bytes =
-      readProven(State, Image, *Source, *Length);
-  if (Bytes.empty() && (!TrackValues || !isScratchRange(*Source, *Length)))
+  llvm::ArrayRef<uint8_t> Bytes;
+  if (Source->ValueKind != RegisterValue::Kind::SymbolicAddress) {
+    if (Source->ValueKind == RegisterValue::Kind::StackAddress)
+      Bytes = State.Scratch.Memory.read(Source->Value, *Length);
+    else
+      Bytes = readProven(State, Image, Source->Value, *Length);
+  }
+  if (Bytes.empty() &&
+      (!TrackValues ||
+       (Source->ValueKind != RegisterValue::Kind::SymbolicAddress &&
+        !isScratchRange(Source->Value, *Length))))
     return std::nullopt;
-  ModeledMemoryTransfer Transfer{
-      *Destination,
-      *Length,
-      llvm::SmallVector<uint8_t>(Bytes.begin(), Bytes.end()),
-      {}};
-  Transfer.Coordinate = memoryCoordinate(
-      State.Registers[argumentRegister(SyscallArgument::Arg1)]);
-  const MemoryCoordinate SourceCoordinate = memoryCoordinate(
-      State.Registers[argumentRegister(SyscallArgument::Arg2)]);
+  if (Destination->ValueKind != RegisterValue::Kind::SymbolicAddress)
+    Transfer.Bytes.assign(Bytes.begin(), Bytes.end());
   if (TrackValues)
     Transfer.Values.copyFrom(State.Scratch.Values, *Source, *Destination,
-                             *Length, SourceCoordinate, Transfer.Coordinate);
-  if (TrackValues && SourceCoordinate == MemoryCoordinate::Absolute &&
-      Image.findRegion(*Source, *Length, /*DataAccess=*/true))
+                             *Length);
+  if (TrackValues && Source->ValueKind == RegisterValue::Kind::Constant &&
+      Image.findRegion(Source->Value, *Length, /*DataAccess=*/true))
     for (uint64_t Offset = 0; Offset + sizeof(uint64_t) <= *Length;
          Offset += sizeof(uint64_t))
-      Transfer.Values.write(
-          *Destination + Offset,
-          {RegisterValue::Kind::Constant,
-           llvm::support::endian::read64le(Bytes.data() + Offset), 0},
-          Transfer.Coordinate);
+      if (const auto Address = memoryAddress(*Destination, Offset))
+        Transfer.Values.writeValues(
+            *Address,
+            RegisterValue{
+                RegisterValue::Kind::Constant,
+                llvm::support::endian::read64le(Bytes.data() + Offset), 0});
   return Transfer;
 }
 
@@ -328,10 +327,9 @@ void applyCall(const MedInstruction &Instruction, MachineState &State,
       applySyscallWindow(Window, State);
   if (Transfer) {
     if (!Transfer->Bytes.empty())
-      State.Scratch.Memory.write(Transfer->Destination, Transfer->Bytes);
+      State.Scratch.Memory.write(Transfer->Destination.Value, Transfer->Bytes);
     State.Scratch.Values.copyFrom(Transfer->Values, Transfer->Destination,
-                                  Transfer->Destination, Transfer->Size,
-                                  Transfer->Coordinate, Transfer->Coordinate);
+                                  Transfer->Destination, Transfer->Size);
   }
 }
 
@@ -376,8 +374,9 @@ void applyRegisterTransfer(const MedInstruction &Instruction,
     const auto Address = effectiveAddress(Base, Instruction.Offset);
     State[Instruction.Dst] = {};
     const unsigned Width = Instruction.Semantics.MemoryWidth;
-    if (Address && Scratch && Width == kDoubleWordBitWidth)
-      State[Instruction.Dst] = Scratch->read(*Address, memoryCoordinate(Base));
+    if (Scratch && Width == kDoubleWordBitWidth)
+      if (const auto Key = memoryAddress(Base, Instruction.Offset))
+        State[Instruction.Dst] = Scratch->readValues(*Key).singleton();
     if (Address && Base.ValueKind != RegisterValue::Kind::StackAddress &&
         (Width == kBitsPerByte || Width == kHalfWordBitWidth ||
          Width == kWordBitWidth || Width == kDoubleWordBitWidth)) {

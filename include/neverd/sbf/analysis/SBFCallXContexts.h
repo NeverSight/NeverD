@@ -144,6 +144,8 @@ struct CallXSummaryEdge {
   bool PreservedOlderFrames = false;
   bool AppliedMemoryEffects = false;
   size_t AppliedStoredValues = 0;
+  std::optional<size_t> InstantiatedCopySlot;
+  uint64_t InstantiatedCopyBytes = 0;
   bool GeneralizedInputs = false;
   CallXInputGeneralization InputGeneralization = CallXInputGeneralization::None;
 };
@@ -151,7 +153,8 @@ struct CallXSummaryEdge {
 enum class CallXMemoryWriteBase : uint8_t {
   InputRegister,
   FramePointer,
-  Absolute
+  Absolute,
+  UnsignedRange
 };
 
 struct CallXMemoryWrite {
@@ -198,6 +201,7 @@ struct CallXFunctionSummary {
   size_t InputScratchWords = 0;
   size_t OutputScratchWords = 0;
   size_t OutputParameterizedWords = 0;
+  size_t OutputMemoryCopies = 0;
 };
 
 struct CallXContextReport {
@@ -220,6 +224,7 @@ struct CallXContextReport {
   size_t EquivalentSpecializedReuses = 0;
   size_t SkippedNonCallXRootSpecializations = 0;
   size_t SkippedConstantBranchSuccessors = 0;
+  std::vector<UnsignedValueRange> CapturedAddresses;
   std::vector<CallXInputExpression> InputExpressions;
   std::vector<CallXInputMemoryGuard> InputMemoryGuards;
   size_t InstantiatedTargetInputExpressions = 0;

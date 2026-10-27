@@ -50,7 +50,7 @@ caller-context query and retains `output.callx-contexts.json` for every sample.
 It uses the same loader, execution profile, process isolation and request
 budgets. This query is not added to the default export kinds. Target evidence
 is conditional on the recorded summary/caller and recognized entry model;
-every site retains dynamic fallback. Schema 6 covers complete function CFGs,
+every site retains dynamic fallback. Schema 7 covers complete function CFGs,
 nested parameters, return values and typed scratch effects. It retains prior
 entry-prefix evidence under a separate scope and records generalized inputs,
 summary dependencies and resource/recursion barriers. It also records projected
@@ -120,8 +120,9 @@ values can survive a later write when their carrier survives the ABI. Complete
 canonical loaded origins are reused before constructing a guarded expression.
 Complete scratch spills and reloads can retain a captured loaded expression
 across blocks. They use canonical full-width and alias invalidation; partial
-overwrites and unknown writes still lose it. System calls clobber r0-r5
-expression carriers even when their memory effects preserve scratch.
+overwrites and unknown writes still lose it. Resolved syscalls clobber the r0
+expression carrier and preserve r1-r10;
+guest and legacy mixed-dispatch calls retain their wider ABI clobbers.
 Validated automatic-frame translation bounds can exclude an absolute write
 from a complete relative cell, in either direction, through the shared
 typed-cell owner. Reports expose the bound in `frame_coordinates`; manual
@@ -169,13 +170,16 @@ The static field loss is distinct from enumerating the two vtables. Both
 candidates remain present immediately before 22188/22973; the unknown header
 write then removes the field. In a specialized deposit context, 22177 names
 the parent descriptor field but has no full-width pointer value for it. The
-constructor's allocator result at 32470 is already unknown before 32926 stores
-the boxed pointer into output+96. The account-header pointer stored at 49845
-has the same allocation-provenance gap. Allocator 30171 reads an unbound heap
-cursor, so finite constants and affine parameter origins cannot describe its
-result. Automatic-frame translation bounds do not turn those loaded pointers
-into proven heap objects or authorize preserving the vtable across their
-writes.
+constructor now retains a nullable bounded allocator result at 32470 and its
+captured identity along the successful 624-byte copy. At 32493 that path joins
+an error-helper path whose reloaded payload and tag remain unknown; r8 becomes
+unknown before 32926 stores it into output+96. The account-header pointer stored
+at 49845 needs the same complete parent/object chain. Allocator 30171 reads an
+unbound heap cursor; its captured return carries numeric bounds and equality,
+not a guessed literal address or allocation freshness. The extra copy and
+field facts do not establish an all-path field at 32926. Automatic-frame
+translation bounds alone cannot authorize preserving the vtable across an
+unresolved header write.
 
 A complete checked-store trace confirms that 22063 is the last overlapping
 writer before the field load at 1960 in both diagnostic runs. Earlier copies

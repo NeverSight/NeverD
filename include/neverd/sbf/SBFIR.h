@@ -326,6 +326,12 @@ struct RegisterValue {
     /// constant to invent for it would be wrong, and a wrong one would let a
     /// load through it be reported as a named account field.
     InstructionDataAddress,
+    /// Inclusive unsigned bounds: Value is the lower bound and Offset holds
+    /// the bit representation of the upper bound. Neither is an exact value.
+    UnsignedRange,
+    /// An opaque captured value plus an affine displacement. Value indexes
+    /// the analysis-local address space; it is never a numeric VM address.
+    SymbolicAddress,
   };
   Kind ValueKind = Kind::Unknown;
   uint64_t Value = 0;

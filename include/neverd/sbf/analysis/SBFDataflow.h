@@ -110,6 +110,32 @@ private:
   uint64_t TrackedBytes = 0;
 };
 
+/// Inclusive unsigned interval. Scalar/capture bounds do not wrap; may-write
+/// intervals can wrap (Lower > Upper) to preserve modular address arithmetic.
+struct UnsignedValueRange {
+  uint64_t Lower = 0;
+  uint64_t Upper = UINT64_MAX;
+  bool operator==(const UnsignedValueRange &) const = default;
+};
+
+/// Bounds of immutable, analysis-local captured values. Distinct entries may
+/// alias: capture identity proves equality only, never allocation freshness.
+using SymbolicAddressSpace = std::vector<UnsignedValueRange>;
+
+RegisterValue unsignedRangeValue(UnsignedValueRange Range);
+std::optional<UnsignedValueRange>
+unsignedValueRange(const RegisterValue &Value,
+                   const SymbolicAddressSpace *Addresses = nullptr);
+/// Includes wrapped address intervals; unlike unsignedValueRange it does not
+/// widen an affine address merely because the displacement can wrap.
+std::optional<UnsignedValueRange>
+addressValueRange(const RegisterValue &Value,
+                  const SymbolicAddressSpace *Addresses = nullptr);
+/// Normalize an exact/affine address into a typed memory key. Unknown ranges
+/// have no identity and cannot name a cell.
+std::optional<RegisterValue> memoryAddress(const RegisterValue &Base,
+                                           int64_t Displacement = 0);
+
 /// Full-width stored values, retaining address provenance independently of the
 /// descriptor byte view. In particular, a frame-relative pointer is never a
 /// literal integer merely because its analysis coordinates were serialized.
@@ -134,14 +160,39 @@ private:
   llvm::SmallVector<RegisterValue, 1> Values;
 };
 
+/// Immutable coordinate configuration shared by every state of one analysis.
+struct StoredMemoryCoordinates {
+  std::optional<uint64_t> FrameTranslationLimit;
+  std::shared_ptr<const SymbolicAddressSpace> Addresses;
+};
+
 class StoredRegisterMemory {
 public:
+  void setCoordinates(std::shared_ptr<const StoredMemoryCoordinates> Context) {
+    Coordinates = std::move(Context);
+  }
+  void setSymbolicAddresses(std::shared_ptr<const SymbolicAddressSpace> Space);
+  const std::shared_ptr<const SymbolicAddressSpace> &symbolicAddresses() const;
+  std::optional<uint64_t> frameTranslationBound() const;
+  void writeValues(const RegisterValue &Address, ProvenValueSet Value);
+  const ProvenValueSet &readValues(const RegisterValue &Address) const;
+  void invalidate(const RegisterValue &Address, uint64_t Size);
+  void copyFrom(const StoredRegisterMemory &Source,
+                const RegisterValue &SourceAddress,
+                const RegisterValue &Destination, uint64_t Size);
+  /// Rebase captured values at a call boundary, or widen them to ranges at a
+  /// loop boundary. Dropping an address identity also drops its keyed cells.
+  void transformSymbols(llvm::function_ref<RegisterValue(RegisterValue)> Map);
+  void visitCells(
+      llvm::function_ref<void(const RegisterValue &, const ProvenValueSet &)>
+          Visit) const;
+  /// Overlay simultaneous must-facts after the caller has applied may-writes.
+  void includeCells(const StoredRegisterMemory &Other,
+                    llvm::function_ref<bool(const RegisterValue &)> Include);
   /// Frame coordinates denote the same addresses translated by an unknown
   /// delta in [0, Limit]. Only an established automatic-frame invariant may
   /// supply this limit; unset coordinates retain conservative aliasing.
-  void setFrameTranslationLimit(std::optional<uint64_t> Limit) {
-    FrameTranslationLimit = Limit;
-  }
+  void setFrameTranslationLimit(std::optional<uint64_t> Limit);
   /// The store/copy owner must first validate the complete scratch range.
   void write(va_t Address, const RegisterValue &Value,
              MemoryCoordinate Coordinate = MemoryCoordinate::Absolute);
@@ -176,11 +227,13 @@ public:
            va_t Destination, uint64_t Size,
            MemoryCoordinate SourceCoordinate = MemoryCoordinate::Absolute,
            MemoryCoordinate DestinationCoordinate = MemoryCoordinate::Absolute);
-  bool operator==(const StoredRegisterMemory &) const = default;
+  bool operator==(const StoredRegisterMemory &Other) const;
 
 private:
-  std::map<std::pair<MemoryCoordinate, va_t>, ProvenValueSet> Values;
-  std::optional<uint64_t> FrameTranslationLimit;
+  // Coordinate 0 is absolute, 1 is frame-relative, and N+2 denotes capture N.
+  // The second word is a numeric coordinate or a signed capture displacement.
+  std::map<std::pair<uint64_t, uint64_t>, ProvenValueSet> Values;
+  std::shared_ptr<const StoredMemoryCoordinates> Coordinates;
 };
 
 /// What the register fixed point does not carry: the scratch bytes a program

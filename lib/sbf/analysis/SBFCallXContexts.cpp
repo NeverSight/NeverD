@@ -61,11 +61,22 @@ llvm::json::Object valueJSON(const RegisterValue &Value) {
       return "rodata_address";
     case RegisterValue::Kind::InstructionDataAddress:
       return "instruction_data_address";
+    case RegisterValue::Kind::UnsignedRange:
+      return "unsigned_range";
+    case RegisterValue::Kind::SymbolicAddress:
+      return "captured_address";
     }
     llvm_unreachable("unknown register value kind");
   };
   llvm::json::Object Result{{"kind", Kind()}};
-  if (Value.ValueKind != RegisterValue::Kind::Unknown) {
+  if (Value.ValueKind == RegisterValue::Kind::UnsignedRange) {
+    const auto Range = *unsignedValueRange(Value);
+    Result["lower"] = addressText(Range.Lower);
+    Result["upper"] = addressText(Range.Upper);
+  } else if (Value.ValueKind == RegisterValue::Kind::SymbolicAddress) {
+    Result["capture"] = static_cast<int64_t>(Value.Value);
+    Result["offset"] = Value.Offset;
+  } else if (Value.ValueKind != RegisterValue::Kind::Unknown) {
     Result["base"] = addressText(Value.Value);
     Result["offset"] = Value.Offset;
   }
@@ -76,6 +87,13 @@ llvm::json::Object memoryWriteJSON(const CallXMemoryWrite &Write) {
   llvm::json::Object Row{{"offset", Write.Offset},
                          {"bytes", static_cast<int64_t>(Write.Size)}};
   switch (Write.Base) {
+  case CallXMemoryWriteBase::UnsignedRange:
+    Row["base"] = "unsigned_range";
+    Row["lower"] = addressText(Write.Address);
+    Row["upper"] = addressText(static_cast<uint64_t>(Write.Offset));
+    Row["wraps"] = Write.Address > static_cast<uint64_t>(Write.Offset);
+    Row.erase("offset");
+    break;
   case CallXMemoryWriteBase::Absolute:
     Row["base"] = "absolute";
     Row["address"] = addressText(Write.Address);
@@ -417,6 +435,8 @@ llvm::json::Object callXContextReportJSON(const SBFProgram &Program,
          static_cast<int64_t>(Summary.InputScratchWords)},
         {"output_scratch_words",
          static_cast<int64_t>(Summary.OutputScratchWords)},
+        {"output_memory_copies",
+         static_cast<int64_t>(Summary.OutputMemoryCopies)},
         {"output_parameterized_words",
          static_cast<int64_t>(Summary.OutputParameterizedWords)}};
     if (Summary.ReturnValueExpression)
@@ -437,6 +457,12 @@ llvm::json::Object callXContextReportJSON(const SBFProgram &Program,
         static_cast<int64_t>(Edge.AppliedStoredValues);
     Row["generalized_unknown_inputs"] = Edge.GeneralizedInputs;
     Row["input_generalization"] = generalizationName(Edge.InputGeneralization);
+    if (Edge.InstantiatedCopySlot) {
+      Row["instantiated_copy_syscall_slot"] =
+          static_cast<int64_t>(*Edge.InstantiatedCopySlot);
+      Row["instantiated_copy_bytes"] =
+          static_cast<int64_t>(Edge.InstantiatedCopyBytes);
+    }
     if (Edge.CalleeSummaryID)
       Row["callee_summary_id"] = static_cast<int64_t>(*Edge.CalleeSummaryID);
     if (Edge.CalleeEntrySlot)
@@ -462,10 +488,20 @@ llvm::json::Object callXContextReportJSON(const SBFProgram &Program,
         {"may_write_callee_frames", Guard.WritesCalleeFrames},
         {"may_write_intervals", std::move(Writes)}});
   }
+  llvm::json::Array Captures;
+  for (size_t ID = 0; ID < Report.CapturedAddresses.size(); ++ID) {
+    const auto Bounds = Report.CapturedAddresses[ID];
+    Captures.push_back(
+        llvm::json::Object{{"capture", static_cast<int64_t>(ID)},
+                           {"lower", addressText(Bounds.Lower)},
+                           {"upper", addressText(Bounds.Upper)}});
+  }
   const auto Translation =
       frameTranslationLimit(Program.Low.TheVersion, Program.Config);
   return llvm::json::Object{
-      {"schema", 6},
+      {"schema", 7},
+      {"captured_addresses", std::move(Captures)},
+      {"distinct_captures_prove_no_alias", false},
       {"frame_coordinates",
        llvm::json::Object{
            {"stack_frame_bytes",
