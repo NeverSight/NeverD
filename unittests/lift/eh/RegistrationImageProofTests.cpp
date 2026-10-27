@@ -15,6 +15,7 @@
 #include "neverd/backend/llvm/RegistrationImageProof.h"
 #include "neverd/loader/BinaryImage.h"
 
+#include "llvm/IR/GlobalAlias.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/Module.h"
@@ -110,6 +111,111 @@ struct CatchImageFixture : ImageFixture {
     B.CreateRetVoid();
   }
 };
+
+TEST(RegistrationImageProof, ActualImageArgumentsRequireCanonicalValues) {
+  for (uint32_t Address : {0x403010u, 0x18003010u})
+    for (unsigned Mutation = 0; Mutation != 20; ++Mutation) {
+      SCOPED_TRACE(::testing::Message() << Address << " " << Mutation);
+      ImageFixture F;
+      llvm::Module Other("other-image", F.Context);
+      auto *Global = F.global(makeNdDataSymbol(Address));
+      llvm::Value *Pointer = Global;
+      if (Mutation == 1)
+        Global->setInitializer(F.B.getInt32(0));
+      if (Mutation == 2)
+        Global->setLinkage(llvm::GlobalValue::ExternalWeakLinkage);
+      if (Mutation == 3)
+        Global->setThreadLocalMode(
+            llvm::GlobalVariable::GeneralDynamicTLSModel);
+      if (Mutation == 4)
+        Global->setDLLStorageClass(llvm::GlobalValue::DLLImportStorageClass);
+      if (Mutation == 5)
+        Global->setUnnamedAddr(llvm::GlobalValue::UnnamedAddr::Global);
+      if (Mutation == 6)
+        Global->setName((kNdCodePtrPrefix + llvm::utohexstr(Address)).str());
+      if (Mutation == 7)
+        Global->setName("__nd_data_0403010");
+      if (Mutation == 8)
+        Global->setName(makeNdDataSymbol(uint64_t(UINT32_MAX) + 1));
+      if (Mutation == 9)
+        Pointer = new llvm::GlobalVariable(Other, F.B.getInt32Ty(), false,
+                                           llvm::GlobalValue::ExternalLinkage,
+                                           nullptr, makeNdDataSymbol(Address));
+      if (Mutation == 10)
+        Pointer = F.B.CreateGEP(F.B.getInt8Ty(), Global, F.B.getInt32(1));
+      if (Mutation == 11) {
+        Global->setInitializer(F.B.getInt32(0));
+        Pointer = llvm::GlobalAlias::create(F.B.getInt32Ty(), 0,
+                                            llvm::GlobalValue::ExternalLinkage,
+                                            "alias", Global, &F.Module);
+      }
+      if (Mutation == 12)
+        F.Module.setDataLayout("e-m:x-p:64:64-i64:64-n8:16:32-S32");
+      if (Mutation == 13)
+        Pointer = new llvm::GlobalVariable(
+            F.Module, F.B.getInt32Ty(), false,
+            llvm::GlobalValue::ExternalLinkage, nullptr, "address_space",
+            nullptr, llvm::GlobalVariable::NotThreadLocal, 1);
+      llvm::Value *Value = F.B.CreatePtrToInt(Pointer, F.B.getInt32Ty());
+      if (Mutation == 14)
+        Value = F.B.getInt32(Address);
+      if (Mutation == 15) {
+        auto *Load = F.B.CreateLoad(F.B.getInt32Ty(), F.Frame);
+        Load->setVolatile(true);
+        Value = Load;
+      }
+      if (Mutation == 16)
+        Value = F.B.CreateLoad(F.B.getInt32Ty(), Global);
+      if (Mutation == 17)
+        Value = llvm::PoisonValue::get(F.B.getInt32Ty());
+      if (Mutation == 18)
+        Value = F.B.Insert(new llvm::PtrToIntInst(Global, F.B.getInt32Ty()));
+      if (Mutation == 19)
+        Value = F.B.CreateAdd(Value, F.B.getInt32(1));
+      auto *Callee =
+          F.Module
+              .getOrInsertFunction(
+                  "retained", llvm::FunctionType::get(
+                                  F.B.getInt32Ty(), {F.B.getInt32Ty()}, false))
+              .getCallee();
+      auto *Call = F.B.CreateCall(
+          llvm::FunctionType::get(F.B.getInt32Ty(), {F.B.getInt32Ty()}, false),
+          Callee, {Value});
+      F.B.CreateRetVoid();
+      size_t Work = 0;
+      const auto Actual = originalImageArgumentAddress(*Call, 0, Work);
+      ASSERT_EQ(bool(Actual), Mutation == 0 || Mutation == 18);
+      if (Actual)
+        EXPECT_EQ(*Actual, Address);
+      // A foreign global is deliberately malformed input to the boundary;
+      // remove it before independently checking the remaining authored IR.
+      if (Mutation == 9)
+        Call->setArgOperand(0, F.B.getInt32(0));
+      EXPECT_FALSE(llvm::verifyModule(F.Module, &llvm::errs()));
+    }
+}
+
+TEST(RegistrationImageProof, ImageArgumentIdentityUsesOneWorkBudget) {
+  ImageFixture F;
+  auto *Value = F.B.CreatePtrToInt(F.global(makeNdDataSymbol(CookieVA)),
+                                   F.B.getInt32Ty());
+  auto Callee = F.Module.getOrInsertFunction(
+      "retained",
+      llvm::FunctionType::get(F.B.getInt32Ty(), {F.B.getInt32Ty()}, false));
+  auto *Call = F.B.CreateCall(Callee, {Value});
+  F.B.CreateRetVoid();
+  size_t Required = 0;
+  ASSERT_EQ(originalImageArgumentAddress(*Call, 0, Required), CookieVA);
+  for (size_t Available : {size_t{0}, Required - 1, Required}) {
+    size_t Work = limits::kMaxRegistrationEHStateWork - Available;
+    EXPECT_EQ(bool(originalImageArgumentAddress(*Call, 0, Work)),
+              Available == Required);
+    EXPECT_EQ(Work, limits::kMaxRegistrationEHStateWork);
+  }
+  size_t Work = 0;
+  EXPECT_FALSE(originalImageArgumentAddress(*Call, 1, Work));
+  EXPECT_FALSE(llvm::verifyModule(F.Module, &llvm::errs()));
+}
 
 TEST(RegistrationImageProof, ResolvesOriginalAliasesAndPartialOverlaps) {
   for (const char *Name :

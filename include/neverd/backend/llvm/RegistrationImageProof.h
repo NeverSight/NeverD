@@ -22,6 +22,11 @@
 #include <optional>
 #include <utility>
 
+namespace llvm {
+class CallBase;
+class Module;
+} // namespace llvm
+
 namespace neverd::registration_frame {
 
 /// The original PE32 interval denoted by an external image declaration.
@@ -29,6 +34,15 @@ namespace neverd::registration_frame {
 /// Mapping, permissions and source occurrence ownership remain separate proofs.
 std::optional<ExceptionAddressRange>
 imageRange(const Cell &Where, uint64_t Bytes, va_t SecurityCookieVA = 0);
+
+/// Recover the PE32 address of one actual call argument only when it is a
+/// direct ptrtoint of the module's canonical external original-data global.
+/// Preferred integer bits, loaded stack contents and aliases supply no such
+/// identity. This proves the current argument expression only; the source
+/// invocation, mapped storage and final image still need independent binding.
+std::optional<uint32_t> originalImageArgumentAddress(const llvm::CallBase &Call,
+                                                     unsigned Index,
+                                                     size_t &Work);
 
 class ImageProof {
 public:

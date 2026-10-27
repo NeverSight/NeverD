@@ -9582,6 +9582,12 @@ constant cookie value.
 `OrdinaryStorageExcludesLiveCookieOverlaps` reject root/nested ordinary reads
 and partial overlaps with a read-only source cookie. Discarding the read does
 not remove this dependency; adjacent nonoverlapping storage remains readable.
+`RegistrationImageProof.ActualImageArgumentsRequireCanonicalValues` checks
+actual LLVM arguments at two preferred addresses, including equal numeric bits,
+volatile frame loads, global loads, aliases, private definitions, foreign
+modules, address-space/TLS/import changes and noncanonical symbols.
+`ImageArgumentIdentityUsesOneWorkBudget` checks exact, short and exhausted work
+and an absent argument index. These are identity checks, not native admission.
 `RelocatedArithmeticKeepsItsAddressIdentity` covers ADD/SUB at two image bases:
 exact HIGHLOW address provenance admits the authored SEH helper while its
 ordinary result remains unknown. Missing, stale or conflicting classifications,

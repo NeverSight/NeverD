@@ -15,12 +15,63 @@
 #include "llvm/IR/GlobalVariable.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/Module.h"
+#include "llvm/IR/Operator.h"
 #include "llvm/Support/ModRef.h"
 
 #include <set>
 #include <vector>
 
 namespace neverd::registration_frame {
+
+std::optional<uint32_t> originalImageArgumentAddress(const llvm::CallBase &Call,
+                                                     unsigned Index,
+                                                     size_t &Work) {
+  if (Work >= limits::kMaxRegistrationEHStateWork) {
+    Work = limits::kMaxRegistrationEHStateWork;
+    return std::nullopt;
+  }
+  ++Work;
+  const auto *Function =
+      Call.getParent() ? Call.getParent()->getParent() : nullptr;
+  const auto *Module = Function ? Function->getParent() : nullptr;
+  if (!Module || Index >= Call.arg_size() ||
+      Module->getDataLayout().getPointerSizeInBits(0) != 32 ||
+      Module->getDataLayout().isNonIntegralAddressSpace(0))
+    return std::nullopt;
+  const auto *Value = Call.getArgOperand(Index);
+  const auto *Cast = llvm::dyn_cast<llvm::Operator>(Value);
+  if (!Value->getType()->isIntegerTy(32) || !Cast ||
+      Cast->getOpcode() != llvm::Instruction::PtrToInt ||
+      Cast->getNumOperands() != 1)
+    return std::nullopt;
+  if (const auto *Instruction = llvm::dyn_cast<llvm::Instruction>(Value);
+      Instruction && (!Instruction->getParent() ||
+                      Instruction->getParent()->getParent() != Function))
+    return std::nullopt;
+  const auto *Global =
+      llvm::dyn_cast<llvm::GlobalVariable>(Cast->getOperand(0));
+  if (!Global || Global->getParent() != Module || !Global->isDeclaration() ||
+      !Global->hasExternalLinkage() || Global->isThreadLocal() ||
+      Global->getAddressSpace() ||
+      Global->getDLLStorageClass() != llvm::GlobalValue::DefaultStorageClass ||
+      Global->getUnnamedAddr() != llvm::GlobalValue::UnnamedAddr::None)
+    return std::nullopt;
+  // PE32 names have at most eight hexadecimal digits. Refuse an overlong
+  // name before parsing it, then bill the bounded spelling comparison.
+  const auto Name = Global->getName();
+  if (Name.size() > makeNdDataSymbol(UINT32_MAX).size())
+    return std::nullopt;
+  if (Name.size() + 1 > limits::kMaxRegistrationEHStateWork - Work) {
+    Work = limits::kMaxRegistrationEHStateWork;
+    return std::nullopt;
+  }
+  Work += Name.size() + 1;
+  const auto Address = parseNdDataSymbol(Name);
+  if (!Address || !*Address || *Address > UINT32_MAX ||
+      Name != makeNdDataSymbol(*Address))
+    return std::nullopt;
+  return uint32_t(*Address);
+}
 
 std::optional<ExceptionAddressRange>
 imageRange(const Cell &Where, uint64_t Bytes, va_t SecurityCookieVA) {

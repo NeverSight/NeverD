@@ -2363,6 +2363,12 @@ the source result; the live runtime value remains opaque.
 Ordinary immutable reads overlapping that live cookie are rejected, including
 partial-width and nested plain-helper reads from a read-only source section.
 Only the state owner's explicit cookie-protocol path may consume the value.
+The LLVM argument-identity query inspects the actual call operand. It accepts
+only PE32 `ptrtoint` of a canonical, address-significant external original-data
+declaration in that module. Integer bits, frame/global loads, aliases, private
+definitions, TLS/import storage and another module's declaration cannot supply
+that identity. This bounded primitive supplies no source invocation receipt,
+native call admission or final-image replay permission on its own.
 The shared callee-instruction check also accepts PE32 ADD/SUB immediates with
 complete HIGHLOW fields and exactly one matching loader-owned address operand,
 as it does for MOV/PUSH. The decoder/lifter retains that exact address identity.
