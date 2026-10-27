@@ -2446,6 +2446,25 @@ pollute its contract or exhaust its callee budget. Registration parent queries
 retain their complete dispatcher-root analysis. Every scoped view preserves
 all ordinary successors, checks its current source instructions and charges
 the shared work budget; it supplies no memory or native EH permission.
+
+Absolute relocation root discovery uses the loader's checked PE32 runtime
+pointer roles across the image. A FuncInfo callback field belongs to its
+runtime protocol even when another function's conservative decode envelope
+contains its target. `AbsoluteRelocationRootIndex` keeps the raw sources for
+ownership arbitration and a separate ordinary-source query for discovery.
+Only the exact checked source/target pair is excluded; an independent alias
+to the same callback retains its ordinary role. Absent, inconsistent or
+budget-exhausted runtime-role evidence excludes nothing. The index belongs to
+one unchanged image operation, and an unrelated index falls back to current
+input. Ordinary CFG and integer-frame proof construction share this rule.
+Raw-source queries do not parse runtime roles. The first ordinary query
+publishes them once for concurrent readers of the same immutable index.
+One build reuses its local index across CFG reconstruction and resets it before
+another build. Nested registration proofs may share their callee owner's
+image-only index even across different frame/work contexts; this lends no
+callee fact or work-budget exemption. Changing bytes or metadata requires a
+new owning operation.
+
 For this stack-only query, decoded full-width absolute instruction fields may
 carry checked PE32 HIGHLOW relocations, including arithmetic operands. Their
 unclassified values are unknown in the affine replay. Loader-proved addresses

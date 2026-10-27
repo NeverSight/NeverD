@@ -17,6 +17,7 @@
 
 #include "../../../lib/ir/low/X86/RegistrationABIPrivate.h"
 #include "../../../lib/ir/low/X86/RegistrationOrdinaryGraph.h"
+#include "../../../lib/ir/low/X86/RegistrationStackOwner.h"
 #include "../../../lib/ir/low/X86/RegistrationStateSolver.h"
 #include "gtest/gtest.h"
 
@@ -50,6 +51,7 @@
 #include <algorithm>
 #include <cstdlib>
 #include <map>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -5196,6 +5198,120 @@ TEST(RegistrationTryLevel, CxxFuncInfoPointersKeepTheirRuntimeEntryRole) {
     if (Block.StartAddr == kText + 0xa0)
       for (const auto &Op : Block.Ops)
         EXPECT_EQ(Op.RegistrationRoot, MedOp::RegistrationRootKind::None);
+}
+
+TEST(RegistrationTryLevel, ForeignCxxTablesDoNotSeedOrdinaryRoots) {
+  constexpr va_t Entry = kText + 0x90;
+  constexpr va_t Callback = kText + 0xa0;
+  const std::set<va_t> Entries{kText, Entry, kPersonality};
+  for (unsigned Mutation = 0; Mutation != 6; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    auto Img = makeCxxContinuationImage();
+    Img.Segments[0].Data[Entry - kText] = 0xc3;
+    auto &EH = Img.ExceptionMetadata.Functions.front();
+    EH.CodeRange.End = Entry;
+    EH.FragmentRanges = {{Callback, Callback + 6}};
+    va_t ExpectedTarget = Callback;
+    if (Mutation == 1) {
+      // An ordinary alias keeps its own role even at a runtime callback VA.
+      llvm::support::endian::write32le(Img.Segments[1].Data.data() + 0x80,
+                                       Callback);
+      Img.CodePtrRelocSlots.insert(kRData + 0x80);
+    }
+    if (Mutation == 2)
+      EH.Cxx->IPMap.push_back({kText, -1});
+    if (Mutation == 3)
+      EH.ParseStatus = ExceptionParseStatus::Partial;
+    if (Mutation == 4)
+      Img.ExceptionMetadata.Functions.clear();
+    if (Mutation == 5) {
+      ExpectedTarget = Callback + 8;
+      Img.Segments[0].Data[ExpectedTarget - kText] = 0xc3;
+      llvm::support::endian::write32le(Img.Segments[1].Data.data() + 0x6c,
+                                       ExpectedTarget);
+    }
+    Img.ExceptionMetadata.rebuildIndex();
+    ASSERT_FALSE(Img.ExceptionMetadata.findFunction(Entry));
+    const detail::AbsoluteRelocationRootIndex Index(Img);
+    auto Other = makeCxxContinuationImage();
+    const detail::AbsoluteRelocationRootIndex OtherIndex(Other);
+    size_t Work = 0, OtherWork = 0;
+    RegistrationCallCalleeIndex Owner(Img, &Work);
+    RegistrationCallCalleeIndex OtherOwner(Other, &OtherWork);
+    // Runtime classification never erases raw relocation provenance.
+    std::map<va_t, std::set<va_t>> RawSources;
+    ASSERT_TRUE(Index.collectSources(Img, Entry, kPersonality, RawSources));
+    ASSERT_TRUE(RawSources[ExpectedTarget].count(kRData + 0x6c));
+    std::map<va_t, std::set<va_t>> OrdinarySources;
+    ASSERT_TRUE(Index.collectOrdinarySources(Img, Entry, kPersonality,
+                                             OrdinarySources));
+    auto ExpectedSources = RawSources;
+    if (Mutation < 2) {
+      ExpectedSources[Callback].erase(kRData + 0x6c);
+      if (ExpectedSources[Callback].empty())
+        ExpectedSources.erase(Callback);
+    }
+    EXPECT_EQ(OrdinarySources, ExpectedSources);
+    EXPECT_FALSE(OtherIndex.collectOrdinarySources(Img, Entry, kPersonality,
+                                                   OrdinarySources));
+    EXPECT_EQ(OrdinarySources, ExpectedSources);
+    Decoder Dec;
+    ASSERT_TRUE(Dec.init(Img));
+    for (unsigned Indexed = 0; Indexed != 6; ++Indexed) {
+      SCOPED_TRACE(Indexed);
+      CFGBuilder Builder;
+      Builder.setKnownFuncEntries(&Entries);
+      if (Indexed == 1 || Indexed == 2)
+        Builder.setAbsoluteRelocationRootIndex(Indexed == 1 ? &Index
+                                                            : &OtherIndex);
+      if (Indexed == 3)
+        Builder.setRegistrationCalleeIndex(&Owner);
+      std::optional<registration_abi::StackProofOwnerScope> Scope;
+      if (Indexed >= 4)
+        Scope.emplace(Indexed == 4 ? Owner : OtherOwner,
+                      Indexed == 4 ? Work : OtherWork);
+      for (bool IntegerOnly : {false, true}) {
+        SCOPED_TRACE(IntegerOnly);
+        auto Low = IntegerOnly ? Builder.buildIntegerFrameProof(Img, Dec, Entry,
+                                                                "ordinary")
+                               : Builder.build(Img, Dec, Entry);
+        ASSERT_TRUE(Low.hasCompleteLiftCoverage());
+        EXPECT_FALSE(Low.ExceptionMetadata);
+        EXPECT_EQ(Low.OrdinaryModuleAnalysisRoots.count(ExpectedTarget),
+                  Mutation != 0);
+        EXPECT_EQ(Low.ModuleAnalysisRoots.count(ExpectedTarget), Mutation != 0);
+        EXPECT_EQ(Low.blockFor(ExpectedTarget) != nullptr, Mutation != 0);
+        if (!Mutation)
+          EXPECT_EQ(Low.Blocks.size(), 1u);
+      }
+    }
+  }
+}
+
+TEST(RegistrationTryLevel, OrdinaryRootRolesRefreshAfterImageChanges) {
+  constexpr va_t Entry = kText + 0x90;
+  constexpr va_t Callback = kText + 0xa0;
+  auto Img = makeCxxContinuationImage();
+  Img.Segments[0].Data[Entry - kText] = 0xc3;
+  auto &EH = Img.ExceptionMetadata.Functions.front();
+  EH.CodeRange.End = Entry;
+  EH.FragmentRanges = {{Callback, Callback + 6}};
+  Img.ExceptionMetadata.rebuildIndex();
+  const std::set<va_t> Entries{kText, Entry, kPersonality};
+  Decoder Dec;
+  ASSERT_TRUE(Dec.init(Img));
+  CFGBuilder Builder;
+  Builder.setKnownFuncEntries(&Entries);
+  // Same image address, pointer bytes and slot count; only the checked
+  // metadata changes between separate build operations.
+  for (bool Complete : {true, false, true}) {
+    SCOPED_TRACE(Complete);
+    EH.ParseStatus = Complete ? ExceptionParseStatus::Complete
+                              : ExceptionParseStatus::Partial;
+    const auto Low = Builder.build(Img, Dec, Entry);
+    ASSERT_TRUE(Low.hasCompleteLiftCoverage());
+    EXPECT_EQ(Low.OrdinaryModuleAnalysisRoots.count(Callback), !Complete);
+  }
 }
 
 TEST(RegistrationTryLevel, CxxCallbackRolesSurviveModuleFunctionDiscovery) {

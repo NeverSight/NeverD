@@ -44,6 +44,13 @@ StackProofOwnerScope::StackProofOwnerScope(RegistrationCallCalleeIndex &Index,
 
 StackProofOwnerScope::~StackProofOwnerScope() { Current = Previous; }
 
+const detail::AbsoluteRelocationRootIndex *
+StackProofOwnerScope::relocationRoots(const BinaryImage &Image) {
+  return Current && Current->Index.ownsImage(Image)
+             ? &Current->Index.absoluteRelocationRoots()
+             : nullptr;
+}
+
 RegistrationCallCalleeIndex *
 StackProofOwnerScope::find(const BinaryImage &Image, size_t *CumulativeWork) {
   if (!Current || !CumulativeWork || !Current->Index.ownsImage(Image) ||

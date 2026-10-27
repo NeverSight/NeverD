@@ -13,6 +13,7 @@
 
 #include <array>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <utility>
@@ -24,6 +25,9 @@ struct LowFunc;
 struct LowOp;
 struct RegistrationStateAnalysis;
 class RegistrationCallCalleeIndex;
+namespace detail {
+class AbsoluteRelocationRootIndex;
+}
 
 RegistrationStateAnalysis analyzeCheckedX86SEHStates(
     const BinaryImage &Image, const LowFunc &Function,
@@ -307,6 +311,9 @@ public:
   RegistrationCallCalleeIndex &
   operator=(const RegistrationCallCalleeIndex &) = delete;
   bool ownsImage(const BinaryImage &Other) const { return &Image == &Other; }
+  /// Share immutable image bytes and runtime pointer roles, never entry- or
+  /// budget-dependent callee conclusions, across this invocation closure.
+  const detail::AbsoluteRelocationRootIndex &absoluteRelocationRoots();
   /// Bill decoded state propagation, including unsuccessful helper analyses,
   /// to this invocation closure's cumulative work budget.
   bool chargeStateWork(size_t Amount);
@@ -335,6 +342,7 @@ private:
   std::map<va_t, std::optional<RegistrationCleanupRelayABI>> CleanupCache;
   // Independent entries only; parent-graph witnesses stay in their query.
   std::map<va_t, std::optional<RegistrationCalleeStackContract>> StackCache;
+  std::shared_ptr<const detail::AbsoluteRelocationRootIndex> RelocationRoots;
 };
 
 /// Native registration lowering currently emits caller-cleanup calls. Require

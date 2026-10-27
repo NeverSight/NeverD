@@ -433,14 +433,9 @@ void CFGBuilder::rebuildBlocks(LowFunc &Func) {
   // qualify suppression; they must not seed otherwise unreachable table arms.
   if (CurrentImg && CurrentFuncRange) {
     std::map<va_t, std::set<va_t>> AbsoluteSources;
-    if (!AbsoluteRelocationRoots ||
-        !AbsoluteRelocationRoots->collectSources(
-            *CurrentImg, CurrentFuncRange->first, CurrentFuncRange->second,
-            AbsoluteSources)) {
-      const detail::AbsoluteRelocationRootIndex LocalIndex(*CurrentImg);
-      LocalIndex.collectSources(*CurrentImg, CurrentFuncRange->first,
-                                CurrentFuncRange->second, AbsoluteSources);
-    }
+    absoluteRelocationRootIndex(*CurrentImg)
+        .collectSources(*CurrentImg, CurrentFuncRange->first,
+                        CurrentFuncRange->second, AbsoluteSources);
     for (const auto &[Target, Sources] : AbsoluteSources) {
       if (!Insns.count(Target))
         continue;

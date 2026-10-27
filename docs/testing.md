@@ -9366,6 +9366,20 @@ effects. Scalar comparison tests cover signedness, input widths and unknown
 values. Distinct direct registration prologues inside one guessed function
 range must retain separate owners; a damaged prefix supplies no new entry.
 
+`RegistrationTryLevel.ForeignCxxTablesDoNotSeedOrdinaryRoots` places an
+unrelated returning function before a foreign C++ callback. Ordinary and
+integer-frame CFGs exclude only the checked runtime source, with and without
+a matching relocation index. Independent aliases, changed pointer bytes,
+partial or mismatched FuncInfo graphs and missing metadata retain ordinary
+roots. A foreign-image index must use the current input, and raw relocation
+provenance remains available. Run `NeverDRegistrationEHTests` with the
+registration stack/native and Mach-O pointer-relocation boundary suites after
+changing this shared discovery path.
+The same cases exercise a borrowed callee index and matching or foreign
+scoped owners. `OrdinaryRootRolesRefreshAfterImageChanges` reuses a builder
+while changing only the exception metadata, requiring each new operation to
+recompute the runtime role.
+
 `PipelineOutcome.SourceEHRefusalsAgreeAcrossSingleAndShardedEmission` checks optimized and unoptimized source projection across PE32, ELF and Mach-O on x86, x64 and AArch64. Single-function and sharded LLVM emission retain the same explicit incomplete native EH contract; binary rewriting still rejects it.
 
 `RegistrationCallNoReturn` rejects changed instruction extents, targets, operation ranges, conditional calls and foreign architecture/format use. The realigned PE32 probe checks both an independently terminal decoded call and a retained fallthrough requiring a current receipt; invalid memory evidence cannot recreate an already absent ordinary edge.

@@ -9,12 +9,21 @@
 
 #include "neverd/Limits.h"
 #include "neverd/ir/Limits.h"
+#include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/ir/low/LowIR.h"
 
 namespace neverd {
 namespace {
 using registration_abi::chargeCalleeWork;
 } // namespace
+
+const detail::AbsoluteRelocationRootIndex &
+RegistrationCallCalleeIndex::absoluteRelocationRoots() {
+  if (!RelocationRoots)
+    RelocationRoots =
+        std::make_shared<const detail::AbsoluteRelocationRootIndex>(Image);
+  return *RelocationRoots;
+}
 
 std::optional<std::vector<RegistrationCalleeFrameContract>>
 RegistrationCallCalleeIndex::contracts(const LowFunc &Function) {

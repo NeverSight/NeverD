@@ -15,6 +15,9 @@
 namespace neverd {
 struct BinaryImage;
 class RegistrationCallCalleeIndex;
+namespace detail {
+class AbsoluteRelocationRootIndex;
+}
 } // namespace neverd
 
 namespace neverd::registration_abi {
@@ -30,6 +33,10 @@ public:
 
   static RegistrationCallCalleeIndex *find(const BinaryImage &Image,
                                            std::size_t *CumulativeWork);
+  /// Image-only root roles are independent of the caller's frame, work
+  /// counter and nesting level. This returns no callee proof or ABI fact.
+  static const detail::AbsoluteRelocationRootIndex *
+  relocationRoots(const BinaryImage &Image);
 
 private:
   RegistrationCallCalleeIndex &Index;

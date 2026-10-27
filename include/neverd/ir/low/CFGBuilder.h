@@ -641,20 +641,34 @@ void mergeRelativeRelocationRootSources(
     const std::vector<std::pair<va_t, va_t>> &SortedSources,
     const std::set<va_t> &Roots, std::map<va_t, std::set<va_t>> &RootSources);
 
-/// Absolute relocation bytes for one unchanged image operation. All aliases
-/// remain distinct; current-function ownership is checked by each CFG build.
+/// Absolute relocation bytes and checked runtime pointer roles for one
+/// unchanged image operation. All aliases remain distinct; current-function
+/// ownership is checked by each CFG build.
 class AbsoluteRelocationRootIndex {
 public:
   explicit AbsoluteRelocationRootIndex(const BinaryImage &Image);
+  bool ownsImage(const BinaryImage &Other) const { return Image == &Other; }
 
   /// Merge sources strictly between Begin and End. A different image returns
   /// false without changing RootSources, so the caller can scan live input.
   bool collectSources(const BinaryImage &Image, va_t Begin, va_t End,
                       std::map<va_t, std::set<va_t>> &RootSources) const;
 
+  /// As above, excluding exact loader-checked runtime-only source fields.
+  /// Independent aliases to the same target retain their ordinary role.
+  bool
+  collectOrdinarySources(const BinaryImage &Image, va_t Begin, va_t End,
+                         std::map<va_t, std::set<va_t>> &RootSources) const;
+
 private:
+  bool collectSources(const BinaryImage &Image, va_t Begin, va_t End,
+                      std::map<va_t, std::set<va_t>> &RootSources,
+                      bool OrdinaryOnly) const;
+
   const BinaryImage *Image;
   std::vector<std::pair<va_t, va_t>> Sources;
+  struct RuntimeRoleCache;
+  std::shared_ptr<RuntimeRoleCache> RuntimeRoles;
 };
 } // namespace detail
 
@@ -1401,6 +1415,8 @@ private:
   /// Decode relocation-proven and same-function-discovered address-taken
   /// blocks as disconnected CFG roots, without splitting decoded instructions.
   void exploreAddressTakenRoots(const BinaryImage &Img, Decoder &Dec);
+  const detail::AbsoluteRelocationRootIndex &
+  absoluteRelocationRootIndex(const BinaryImage &Img);
   bool isOwnedInteriorTarget(const BinaryImage &Img, va_t Target) const;
 
   //===--------------------------------------------------------------------===//
@@ -3043,6 +3059,8 @@ private:
   const NoReturnCalleeProver *NoReturnCallees = nullptr;
   unsigned NoReturnCalleeDepth = 0;
   const detail::AbsoluteRelocationRootIndex *AbsoluteRelocationRoots = nullptr;
+  std::optional<detail::AbsoluteRelocationRootIndex>
+      LocalAbsoluteRelocationRoots;
   const ExecutableCodeOwnerIndex *ExecutableCodeOwners = nullptr;
   /// Sorted normalized addresses of \ref BinaryImage function symbols, so a
   /// jump-table target check is a lookup, not a scan of every symbol.  Rebuilt

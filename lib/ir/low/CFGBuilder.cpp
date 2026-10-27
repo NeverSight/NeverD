@@ -1096,6 +1096,7 @@ LowFunc CFGBuilder::buildOnce(const BinaryImage &Img, Decoder &Dec,
   DurableCFGRoots.clear();
   CurrentExceptionalEntries.clear();
   RelocationCFGRootSources.clear();
+  LocalAbsoluteRelocationRoots.reset();
   ActiveJumpTableProofRoots.reset();
   ActiveJumpTableCandidateAddr = InvalidVA;
   ActiveJumpTableCandidateProofRank = 0;
