@@ -9519,10 +9519,16 @@ these loader-owned records; they do not qualify a final PE or a native call.
 `NeverDReadOnlyBytesTests` checks callback storage at two bases while preserving
 the ordinary-entry requirement. Its mutations cover fixup multiplicity, width,
 overlap, competing roles, partial storage, target permissions and image kind.
-The three `RegistrationSEH4Shared.TypedScopeStorage*` cases in
+The `RegistrationSEH4Shared.TypedScopeStorage*` cases in
 `NeverDRegistrationSEH4EntryTests` check EH3/EH4 except/finally fields, optional
 GS cookies, stale graphs/bytes, table ownership and exact/exhausted work. The
 EH3 table view tests field interpretation only; it does not claim an EH3 frame.
+`BudgetedStorageQueriesReplayCurrentInputs` checks fresh scalar and callback
+queries, repeated charges, changed fixups and exact/short/empty allowances.
+The budgeted callback reader also runs the existing storage mutation matrix.
+`TypedScopeStorageBoundsOrderedInventoryQueries` adds a large unrelated ordered
+inventory without exhausting the remaining work, then introduces an overlapping
+field and requires refusal under the same allowance.
 
 The separate `RegistrationOriginalImage` cases check scoped mapped-address
 differences, unchanged generic transfer, immutable scalar widths, pointer-byte
@@ -9531,6 +9537,10 @@ refusal, conflicting fixups/mappings, image separation and exact/exhausted work.
 `OriginalImageReadRecordsExactInputsAndBytes` bind authored SEH invocations at
 two bases and keep their source evidence out of native `ConstantReturn`.
 These queries do not qualify final-PE replay or native layout-dependent calls.
+`OriginalImageReadsRetainAddressProvenance` separates scalar and image addresses
+for direct and nested header reads, including overwritten results, at two bases.
+`ReadAddressIdentityRequiresEveryObservation` intersects mixed observations in
+both orders and checks distinct widths and exact/short/empty allowances.
 `PlainImageReadsRequireAnEffectOwner` checks exact immutable header reads,
 ignored results, fixed results and exact/short budgets. Queries without an
 image-effect owner refuse and clear their result. The nested SEH regression

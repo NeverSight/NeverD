@@ -308,8 +308,12 @@ bool hasPrivateCallerFrame(const LowFunc &Function, const BinaryImage &Image,
                     Owner->Size - (uint64_t(*ImageVA) - Owner->VA))
               return false;
           }
-          if (ImageVA && Op.Opcode != NdOp::STORE)
+          if (ImageVA && Op.Opcode != NdOp::STORE) {
             Effects.Reads.emplace(*ImageVA, va_t(*ImageVA) + Memory.AccessSize);
+            if (OriginalImage && !OriginalImage->recordReadAddress(
+                                     Address, Memory.AccessSize, Work))
+              return false;
+          }
           if (ScalarArguments && ImageVA && !Address.MayBeFrame &&
               Op.MemoryOrdering == NdMemoryOrdering::None &&
               Op.Opcode == NdOp::LOAD && Memory.AccessSize == Op.Output.Size) {

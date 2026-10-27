@@ -222,6 +222,33 @@ TEST(RegistrationSEH4Shared, TypedScopeStorageChargesEveryCurrentQuery) {
   }
 }
 
+TEST(RegistrationSEH4Shared, TypedScopeStorageBoundsOrderedInventoryQueries) {
+  auto [Image, Function] = scopeStorageImage(0x400000, true, true);
+  size_t InitialWork = 0;
+  const auto Initial = coff_loader::getCheckedX86SEHScopeTableBytes(
+      Image, Function, InitialWork);
+  ASSERT_TRUE(Initial);
+  // Unrelated ordered operand entries are reached by lower_bound, not by a
+  // scan of the whole inventory for each scalar word and callback pointer.
+  for (uint32_t I = 0; I != 250000; ++I) {
+    RelocatedAddressField Field;
+    Field.Width = 4;
+    Field.TargetVA = Field.EncodedValue = 0x70000000;
+    Image.DataAddressRelocOperands.emplace(0x60000000 + I * 4, Field);
+  }
+  size_t Work = limits::kMaxRegistrationEHStateWork - 10000;
+  EXPECT_EQ(coff_loader::getCheckedX86SEHScopeTableBytes(Image, Function, Work),
+            Initial);
+  EXPECT_LT(Work, limits::kMaxRegistrationEHStateWork);
+  // The bounded overlap walk must still see a partial conflict on a scalar
+  // field even with the large unrelated inventory present.
+  Image.DataAddressRelocOperands.emplace(
+      Function.Registration->ScopeTableVA - 3, RelocatedAddressField{});
+  Work = limits::kMaxRegistrationEHStateWork - 10000;
+  EXPECT_FALSE(
+      coff_loader::getCheckedX86SEHScopeTableBytes(Image, Function, Work));
+}
+
 TEST(RegistrationSEH4Shared, FrameCallsLeaveBudgetForOrdinaryCallees) {
   for (uint32_t Base : {0x400000u, 0x18000000u})
     for (bool Wide : {false, true}) {

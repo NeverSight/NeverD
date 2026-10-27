@@ -18,6 +18,8 @@
 #include "llvm/BinaryFormat/ELF.h"
 #include "llvm/Support/Endian.h"
 
+#include <algorithm>
+#include <bit>
 #include <set>
 
 namespace neverd {
@@ -45,6 +47,68 @@ bool BinaryImage::readOnlyAfterRelocations(va_t Addr, uint64_t Width) const {
 }
 
 namespace {
+// Keep the cost model beside the storage readers it bounds. No index is
+// cached across image changes, and an exhausted query grants no partial read.
+bool chargeStorageQuery(const BinaryImage &Image, uint32_t Size,
+                        bool CodePointer, size_t &Work, size_t Limit) {
+  if (Image.Arch != Arch::X86 || Image.Bits != Bitness::Bits32 ||
+      Image.Format != BinaryFormat::COFF || Image.IsRelocatable)
+    return false;
+  const auto Charge = [&](size_t Amount) {
+    if (Amount > Limit - std::min(Work, Limit)) {
+      Work = Limit;
+      return false;
+    }
+    Work += Amount;
+    return true;
+  };
+  const auto Lookup = [&](size_t Count, uint64_t Window) {
+    // A balanced-tree search visits at most twice the binary height. Unique
+    // integer keys bound the following overlap walk independently of size.
+    return Charge(2 * std::bit_width(Count) + 1) &&
+           Charge(size_t(std::min<uint64_t>(Count, Window)));
+  };
+  const auto Mapping = [&] {
+    // Include the nested getSectionFor/getSegmentFor calls, mapping end,
+    // permission checks, sectionless/execute-only fallbacks, overlap scans
+    // and the final readVA lookup.
+    for (unsigned I = 0; I != 12; ++I)
+      if (!Charge(Image.Sections.size()) || !Charge(Image.Segments.size()))
+        return false;
+    return true;
+  };
+  const auto Fixups = [&](uint32_t Extent) {
+    const uint64_t Window = uint64_t(Extent) + Image.getPointerSize() - 1;
+    for (size_t Count :
+         {Image.CodePtrRelocSlots.size(), Image.DataPtrRelocSlots.size(),
+          Image.DataPtrRelocTargetOwners.size(), Image.RelCodeRelocSlots.size(),
+          Image.RelDataPtrRelocSlots.size(),
+          Image.MachOResolvedChainedPointerSlots.size(),
+          Image.ConflictingImportStorageSlots.size(),
+          Image.ImportPtrSlots.size(), Image.ImportStorageSlots.size(),
+          Image.DyldBindSlots.size(), Image.ObjCSourceReferences.size(),
+          Image.DataAddressRelocOperands.size(),
+          Image.CodeAddressRelocOperands.size()})
+      if (!Lookup(Count, Window))
+        return false;
+    for (size_t Count : {Image.Relocations.size(), Image.BaseRelocations.size(),
+                         Image.RuntimeCallablePointerSlots.size()})
+      if (!Charge(Count) || !Charge(1))
+        return false;
+    return true;
+  };
+  if (!Charge(Size))
+    return false;
+  if (!CodePointer)
+    return Mapping() && Fixups(Size ? Size : 1);
+  // PE32 code-pointer storage checks the exact HIGHLOW multiplicity, source
+  // conflicts, raw executable target and immutable first target byte.
+  return Lookup(Image.CodePtrRelocSlots.size(), 0) &&
+         Lookup(Image.DataPtrRelocTargetOwners.size(), 0) &&
+         Charge(Image.BaseRelocations.size()) && Charge(1) && Mapping() &&
+         Fixups(4) && Mapping() && Mapping() && Fixups(1) && Charge(1);
+}
+
 bool supportedImage(const BinaryImage &Image) {
   return Image.Format == BinaryFormat::MachO && Image.Bits == Bitness::Bits64 &&
          supportsImmutableImageReads(Image);
@@ -215,6 +279,14 @@ readImmutableImageBytes(const BinaryImage &Image, va_t Address, uint32_t Size) {
   if (!Bytes || hasConflictingFixups(Image, Address, Extent, false))
     return std::nullopt;
   return std::vector<uint8_t>(Bytes, Bytes + Size);
+}
+
+std::optional<std::vector<uint8_t>>
+readImmutableImageBytes(const BinaryImage &Image, va_t Address, uint32_t Size,
+                        size_t &Work, size_t Limit) {
+  if (!chargeStorageQuery(Image, Size, false, Work, Limit))
+    return std::nullopt;
+  return readImmutableImageBytes(Image, Address, Size);
 }
 
 std::optional<std::vector<uint8_t>>
@@ -511,6 +583,14 @@ readImmutablePE32CodePointerStorage(const BinaryImage &Image, va_t Address) {
   if (!Target || !readImmutableCodeBytes(Image, *Target, 1))
     return std::nullopt;
   return Target;
+}
+
+std::optional<va_t>
+readImmutablePE32CodePointerStorage(const BinaryImage &Image, va_t Address,
+                                    size_t &Work, size_t Limit) {
+  if (!chargeStorageQuery(Image, 4, true, Work, Limit))
+    return std::nullopt;
+  return readImmutablePE32CodePointerStorage(Image, Address);
 }
 
 std::optional<va_t> readImmutableImagePointer(const BinaryImage &Image,

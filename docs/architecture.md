@@ -2303,6 +2303,11 @@ ordinary code-pointer reader still requires an authenticated function entry.
 Table revalidation uses the registration work budget and currently requires
 the format's outside-try seed. It establishes no callback ABI, frame installation
 or permission to copy the table into a new image.
+The loader owns the budgeted scalar and callback-storage queries. Ordered
+fixup inventories charge logarithmic lookup and their bounded overlap window;
+vector inventories and nested mapping searches still charge full scans. Each
+query checks the current image, shares the caller's remaining allowance and
+grants no partial read on exhaustion.
 
 `OriginalImageFrameProof` owns a separate, explicit source-only layout query.
 It records exact mapped address operands, immutable scalar bytes and decoded
@@ -2311,6 +2316,10 @@ fixups and keeps pointer-like bytes unknown. The scoped SEH entry accepts only
 exact scalar/image inputs and a common ordinary scalar result; nested plain
 helpers must contain no reached calls. The independent registration-state
 library consumes an explicit value callback and retains no loader dependency.
+For every ordinary read, the scope separately records whether every observed
+address carries exact image provenance. Preferred integer bits do not establish
+that identity, and a later image address cannot repair an earlier integer
+observation. These records do not cover the separate cookie/runtime protocol.
 Its result never populates the native
 layout-independent `ConstantReturn` receipt. Ordinary state analysis does not
 enable this scope. Native use additionally requires original argument identity,

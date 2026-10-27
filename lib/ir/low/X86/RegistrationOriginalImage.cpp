@@ -50,6 +50,22 @@ bool OriginalImageFrameProof::recordAddress(uint32_t Address, size_t &Work) {
   return true;
 }
 
+bool OriginalImageFrameProof::recordReadAddress(const FrameValue &Address,
+                                                uint16_t Width, size_t &Work) {
+  const auto VA = Address.preferredAddress();
+  if (!VA || !Width ||
+      !registration_abi::chargeCalleeWork(Work,
+                                          ReadAddressIdentities.size() + 1))
+    return false;
+  const bool Exact = Address.ImageAddress &&
+                     Address == FrameValue::imageAddress(*Address.ImageAddress);
+  const auto [It, New] =
+      ReadAddressIdentities.emplace(std::make_pair(*VA, Width), Exact);
+  if (!New)
+    It->second &= Exact;
+  return true;
+}
+
 bool OriginalImageFrameProof::recordCode(const LowFunc &Function,
                                          size_t &Work) {
   std::vector<ExceptionAddressRange> Ranges;
@@ -109,6 +125,9 @@ OriginalImageFrameProof::evaluate(const LowOp &Op,
       (Op.Inputs[0].Size == 4 ||
        (Op.Inputs[0].isTemp() && Op.Inputs[0].Size == 8))) {
     const auto Address = Transfer.read(Op.Inputs[0]);
+    if (Address.preferredAddress() &&
+        !recordReadAddress(Address, Op.Output.Size, Work))
+      return std::nullopt;
     if (Address.ImageAddress &&
         Address == FrameValue::imageAddress(*Address.ImageAddress))
       return readScalar(*Address.ImageAddress, Op.Output.Size, Work);

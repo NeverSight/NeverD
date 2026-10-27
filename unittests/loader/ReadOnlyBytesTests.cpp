@@ -330,6 +330,10 @@ TEST(ImmutablePE32Code, InteriorPointerStorageDoesNotGrantAnOrdinaryEntry) {
         break;
       }
       const auto Storage = readImmutablePE32CodePointerStorage(Image, Slot);
+      size_t BudgetWork = 0;
+      EXPECT_EQ(
+          readImmutablePE32CodePointerStorage(Image, Slot, BudgetWork, 100000),
+          Storage);
       EXPECT_EQ(Storage.has_value(), Mutation < 2 || Mutation == 27);
       if (Storage)
         EXPECT_EQ(*Storage, Target);
@@ -337,6 +341,54 @@ TEST(ImmutablePE32Code, InteriorPointerStorageDoesNotGrantAnOrdinaryEntry) {
                 Mutation == 1);
       EXPECT_FALSE(readImmutableImageBytes(Image, Slot, 4));
     }
+}
+
+TEST(ImmutablePE32Code, BudgetedStorageQueriesReplayCurrentInputs) {
+  for (bool Pointer : {false, true}) {
+    SCOPED_TRACE(Pointer);
+    auto Image = codeImage();
+    Image.BaseRelocations.clear();
+    Segment Data;
+    Data.VA = 0x402000;
+    Data.Flags = SegmentFlags::Readable;
+    Data.Size = Data.FileSz = 0x100;
+    Data.Data.resize(0x100);
+    writeLE<uint32_t>(Data.Data.data(), 37);
+    writeLE<uint32_t>(Data.Data.data() + 8, ReadVA);
+    Section Owner;
+    Owner.VA = Data.VA;
+    Owner.Flags = Data.Flags;
+    Owner.Size = Owner.FileSz = Data.Size;
+    Image.Segments.push_back(std::move(Data));
+    Image.Sections.push_back(std::move(Owner));
+    Image.CodePtrRelocSlots.insert(0x402008);
+    Image.BaseRelocations.push_back({0x402008, 3});
+    const auto Query = [&](size_t &Work, size_t Limit) {
+      if (Pointer)
+        return readImmutablePE32CodePointerStorage(Image, 0x402008, Work, Limit)
+            .has_value();
+      return readImmutableImageBytes(Image, 0x402000, 4, Work, Limit)
+          .has_value();
+    };
+    size_t Required = 0;
+    ASSERT_TRUE(Query(Required, 10000));
+    ASSERT_GT(Required, 0u);
+    for (size_t Limit : {size_t{0}, Required - 1, Required}) {
+      size_t Work = 0;
+      EXPECT_EQ(Query(Work, Limit), Limit == Required);
+      EXPECT_EQ(Work, Limit);
+      EXPECT_FALSE(Query(Work, Limit));
+      EXPECT_EQ(Work, Limit);
+    }
+    size_t Work = 0;
+    ASSERT_TRUE(Query(Work, 10000));
+    const size_t First = Work;
+    ASSERT_TRUE(Query(Work, 10000));
+    EXPECT_EQ(Work, First * 2);
+    Image.BaseRelocations.push_back({Pointer ? 0x402008u : 0x402000u, 3});
+    EXPECT_FALSE(Query(Work, 10000));
+    EXPECT_GT(Work, First * 2);
+  }
 }
 } // namespace
 } // namespace neverd

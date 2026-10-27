@@ -671,3 +671,65 @@ TEST(RegistrationConditionalSEH, CandidateReplaySharesOneWorkBudget) {
         F.Image, Candidate, F.Call, F.Parent, Work, &F.Initialized));
   }
 }
+
+TEST(RegistrationConditionalSEH, OriginalImageReadsRetainAddressProvenance) {
+  for (uint32_t Base : {0x400000u, 0x18000000u})
+    for (bool Nested : {false, true})
+      for (bool FixedResult : {false, true})
+        for (bool IntegerAddress : {false, true}) {
+          SCOPED_TRACE(::testing::Message()
+                       << Base << " " << Nested << " " << FixedResult << " "
+                       << IntegerAddress);
+          HeaderReadSEHFixture F(Base, 5, FixedResult);
+          if (!Nested) {
+            std::vector<uint8_t> Body = {0x8b, 0x45, 8, 0x0f, 0xb7, 0};
+            if (FixedResult)
+              Body.insert(Body.end(), {0xb8, 37, 0, 0, 0});
+            Body.resize(11, 0x90);
+            std::copy(Body.begin(), Body.end(),
+                      F.Image.Segments.front().Data.begin() + 12);
+          }
+          if (IntegerAddress)
+            F.Parent.store(-64, 4, FrameValue::constant(Base + 0x86));
+          size_t Work = 0;
+          const auto Proof = proveBoundOriginalImageSEHCallee(
+              F.Image, F.Call, F.Parent, Work, &F.Initialized);
+          ASSERT_EQ(bool(Proof), Nested || FixedResult || !IntegerAddress);
+          if (!Proof)
+            continue;
+          EXPECT_EQ(Proof->ReturnValue, FixedResult ? 37u : 5u);
+          EXPECT_FALSE(Proof->Call.ConstantReturn);
+          ASSERT_EQ(Proof->Reads.size(), 1u);
+          ASSERT_EQ(Proof->ReadAddressIdentities.size(), 1u);
+          EXPECT_EQ(Proof->ReadAddressIdentities.at({Base + 0x86, 2}),
+                    !IntegerAddress);
+        }
+}
+
+TEST(RegistrationConditionalSEH, ReadAddressIdentityRequiresEveryObservation) {
+  HeaderReadSEHFixture F(0x400000, 5, false);
+  for (bool ImageFirst : {false, true}) {
+    SCOPED_TRACE(ImageFirst);
+    const auto Observe = [&](size_t &Work) {
+      OriginalImageFrameProof Proof(F.Image);
+      const auto Image = FrameValue::imageAddress(0x400086);
+      const auto Integer = FrameValue::constant(0x400086);
+      if (!Proof.recordReadAddress(ImageFirst ? Image : Integer, 2, Work) ||
+          !Proof.recordReadAddress(ImageFirst ? Integer : Image, 2, Work) ||
+          !Proof.recordReadAddress(Image, 2, Work) ||
+          !Proof.recordReadAddress(Image, 1, Work))
+        return false;
+      EXPECT_FALSE(Proof.readAddressIdentities().at({0x400086, 2}));
+      EXPECT_TRUE(Proof.readAddressIdentities().at({0x400086, 1}));
+      return true;
+    };
+    size_t Required = 0;
+    ASSERT_TRUE(Observe(Required));
+    ASSERT_GT(Required, 0u);
+    for (size_t Available : {size_t{0}, Required - 1, Required}) {
+      size_t Work = limits::kMaxRegistrationEHStateWork - Available;
+      EXPECT_EQ(Observe(Work), Available == Required);
+      EXPECT_EQ(Work, limits::kMaxRegistrationEHStateWork);
+    }
+  }
+}

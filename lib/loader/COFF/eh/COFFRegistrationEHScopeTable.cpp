@@ -8,6 +8,7 @@
 /// Recover SEH scope records and revalidate their typed immutable storage.
 //===----------------------------------------------------------------------===//
 
+#include "../../ReadOnlyBytesIndex.h"
 #include "COFFRegistrationEHDetail.h"
 
 #include "neverd/Limits.h"
@@ -317,35 +318,16 @@ std::optional<std::vector<uint8_t>> getCheckedX86SEHScopeTableBytes(
   }
   std::vector<uint8_t> Bytes(Range->size());
   for (size_t I = 0; I != Words.size(); ++I) {
-    // The strongest read scans exact HIGHLOW multiplicity, source conflicts
-    // and target conflicts. Charge all three inventories for every field.
-    for (unsigned Scan = 0; Scan != 3; ++Scan) {
-      for (size_t Count :
-           {Img.BaseRelocations.size(), Img.Relocations.size(),
-            Img.RuntimeCallablePointerSlots.size(),
-            Img.CodePtrRelocSlots.size(), Img.DataPtrRelocSlots.size(),
-            Img.DataPtrRelocTargetOwners.size(), Img.RelCodeRelocSlots.size(),
-            Img.RelDataPtrRelocSlots.size(),
-            Img.MachOResolvedChainedPointerSlots.size(),
-            Img.ConflictingImportStorageSlots.size(), Img.ImportPtrSlots.size(),
-            Img.ImportStorageSlots.size(), Img.DyldBindSlots.size(),
-            Img.ObjCSourceReferences.size(),
-            Img.DataAddressRelocOperands.size(),
-            Img.CodeAddressRelocOperands.size()})
-        if (!Charge(Count + 1))
-          return std::nullopt;
-      // Each of the three mapping queries performs nested owner lookups.
-      for (unsigned Lookup = 0; Lookup != 8; ++Lookup)
-        if (!Charge(Img.Sections.size()) || !Charge(Img.Segments.size()))
-          return std::nullopt;
-    }
     const va_t Address = Range->Begin + I * 4;
     if (const auto Target = Chain.scopePointerTarget(Address)) {
       if (*Target != Words[I] ||
-          readImmutablePE32CodePointerStorage(Img, Address) != *Target)
+          readImmutablePE32CodePointerStorage(
+              Img, Address, Work, limits::kMaxRegistrationEHStateWork) !=
+              *Target)
         return std::nullopt;
     } else {
-      const auto Scalar = readImmutableImageBytes(Img, Address, 4);
+      const auto Scalar = readImmutableImageBytes(
+          Img, Address, 4, Work, limits::kMaxRegistrationEHStateWork);
       if (!Scalar || readLE<uint32_t>(Scalar->data()) != Words[I])
         return std::nullopt;
     }

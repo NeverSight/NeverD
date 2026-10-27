@@ -395,6 +395,10 @@ proveOriginalImageSEHCallee(const BinaryImage &Image,
       return std::nullopt;
     Result.Code.emplace(Address, Bytes);
   }
+  if (!registration_abi::chargeCalleeWork(
+          Work, Original.readAddressIdentities().size()))
+    return std::nullopt;
+  Result.ReadAddressIdentities = Original.readAddressIdentities();
   Result.Addresses = Original.addresses();
   return Result;
 }

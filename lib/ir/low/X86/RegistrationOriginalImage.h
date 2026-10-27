@@ -50,6 +50,8 @@ public:
   std::optional<FrameValue> readScalar(va_t Address, uint16_t Width,
                                        size_t &Work);
   bool recordAddress(uint32_t Address, size_t &Work);
+  bool recordReadAddress(const FrameValue &Address, uint16_t Width,
+                         size_t &Work);
   bool recordCode(const LowFunc &Function, size_t &Work);
 
   /// All successfully consumed operands and storage, including reads whose
@@ -57,6 +59,10 @@ public:
   /// cached only inside this invocation and do not become dependencies.
   const std::set<uint32_t> &addresses() const { return Addresses; }
   const std::map<va_t, std::vector<uint8_t>> &code() const { return Code; }
+  const std::map<std::pair<va_t, uint16_t>, bool> &
+  readAddressIdentities() const {
+    return ReadAddressIdentities;
+  }
   const std::map<std::pair<va_t, uint16_t>,
                  std::optional<registration_abi::ImmutableRegistrationScalar>> &
   reads() const {
@@ -72,6 +78,7 @@ private:
   std::set<uint32_t> Addresses;
   std::map<uint32_t, bool> Mapped;
   std::map<va_t, std::vector<uint8_t>> Code;
+  std::map<std::pair<va_t, uint16_t>, bool> ReadAddressIdentities;
   std::map<std::pair<va_t, uint16_t>,
            std::optional<registration_abi::ImmutableRegistrationScalar>>
       Reads;
@@ -90,6 +97,11 @@ struct OriginalImageSEHInvocation {
   std::map<std::pair<va_t, uint16_t>,
            registration_abi::ImmutableRegistrationScalar>
       Reads;
+  /// True only when every observed address of this ordinary read has exact
+  /// original-image provenance. Preferred integer bits are recorded as false.
+  /// Missing entries prove nothing. Actual caller and final-image binding are
+  /// still separate requirements, including the cookie/runtime protocol.
+  std::map<std::pair<va_t, uint16_t>, bool> ReadAddressIdentities;
 };
 
 std::optional<OriginalImageSEHInvocation>

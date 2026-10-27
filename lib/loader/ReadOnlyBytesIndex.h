@@ -1,5 +1,4 @@
-//===- ReadOnlyBytesIndex.h - Private immutable PE32 query index -*- C++
-//-*-===//
+//===- ReadOnlyBytesIndex.h - Budgeted storage queries --------*- C++ -*-===//
 //
 // NeverD Decompiler
 //
@@ -17,6 +16,17 @@
 namespace neverd {
 struct BinaryImage;
 struct RelocatedAddressField;
+
+/// PE32-only budgeted forms of the shared immutable storage validators. Ordered
+/// fixup inventories pay for logarithmic lookup and only the bounded overlap
+/// window; vector inventories and nested mapping ownership still pay their full
+/// scans.
+std::optional<std::vector<uint8_t>>
+readImmutableImageBytes(const BinaryImage &Image, va_t Address, uint32_t Size,
+                        size_t &Work, size_t Limit);
+std::optional<va_t>
+readImmutablePE32CodePointerStorage(const BinaryImage &Image, va_t Address,
+                                    size_t &Work, size_t Limit);
 
 namespace read_only_detail {
 struct PE32CodeFixup {
