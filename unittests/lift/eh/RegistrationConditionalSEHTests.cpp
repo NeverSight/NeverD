@@ -72,7 +72,107 @@ struct ScalarSEHFixture {
     Call.addInput(NdVar::cst(Base + 0x1000, 4));
   }
 };
+
+struct HeaderReadSEHFixture : ScalarSEHFixture {
+  HeaderReadSEHFixture(uint32_t Base, uint16_t Count, bool FixedResult)
+      : ScalarSEHFixture(Base,
+                         {0xff, 0x75, 8, 0xe8, 0x6c, 1, 0, 0, 0x83, 0xc4, 4}) {
+    // Forward the actual image argument to an ordinary helper. Its immutable
+    // NumberOfSections read must not become a layout-independent SEH result.
+    std::vector<uint8_t> Helper = {0x55, 0x8b, 0xec, 0x8b, 0x45,
+                                   8,    0x0f, 0xb7, 0};
+    if (FixedResult)
+      Helper.insert(Helper.end(), {0xb8, 37, 0, 0, 0});
+    Helper.insert(Helper.end(), {0x5d, 0xc3});
+    std::copy(Helper.begin(), Helper.end(),
+              Image.Segments.front().Data.begin() + 0x180);
+    Image.Symbols.push_back(Symbol::makeFunc(Base + 0x1180));
+    Segment Header;
+    Header.VA = Base;
+    Header.Size = Header.FileSz = 0x400;
+    Header.Flags = SegmentFlags::Readable;
+    Header.Data.resize(Header.Size);
+    writeLE<uint16_t>(Header.Data.data(), 0x5a4d);
+    writeLE<uint32_t>(Header.Data.data() + 0x3c, 0x80);
+    writeLE<uint32_t>(Header.Data.data() + 0x80, 0x4550);
+    writeLE<uint16_t>(Header.Data.data() + 0x86, Count);
+    Section HeaderSection;
+    HeaderSection.VA = Base;
+    HeaderSection.Size = HeaderSection.FileSz = Header.Size;
+    HeaderSection.Flags = Header.Flags;
+    Image.Segments.push_back(std::move(Header));
+    Image.Sections.push_back(std::move(HeaderSection));
+    Parent.store(-64, 4, FrameValue::imageAddress(Base + 0x86));
+  }
+};
 } // namespace
+
+TEST(RegistrationConditionalSEH, PlainImageReadsRequireAnEffectOwner) {
+  for (uint32_t Base : {0x400000u, 0x18000000u})
+    for (bool FixedResult : {false, true}) {
+      SCOPED_TRACE(::testing::Message() << Base << " " << FixedResult);
+      HeaderReadSEHFixture F(Base, 5, FixedResult);
+      auto Call = F.Call;
+      Call.Addr = Base + 0x100f;
+      Call.Inputs[0] = NdVar::cst(Base + 0x1180, 4);
+      size_t Work = 0;
+      std::optional<FrameValue> Returned = FrameValue::constant(UINT32_MAX);
+      EXPECT_FALSE(registration_abi::hasConditionalCallFrame(
+          F.Image, Call, F.Parent, Work, &F.Initialized, &Returned));
+      EXPECT_FALSE(Returned);
+      Work = 0;
+      EXPECT_FALSE(registration_abi::hasConditionalCallFrame(
+          F.Image, Call, F.Parent, Work, &F.Initialized));
+      Work = 0;
+      BoundPlainCalleeEffect Effect;
+      ASSERT_TRUE(registration_abi::hasConditionalCallFrame(
+          F.Image, Call, F.Parent, Work, &F.Initialized, &Returned, &Effect));
+      EXPECT_EQ(Returned, FrameValue::constant(FixedResult ? 37 : 5));
+      EXPECT_EQ(Effect.ReturnValue, *Returned);
+      ASSERT_EQ(Effect.ImageReads.size(), 1u);
+      EXPECT_EQ(Effect.ImageReads.front().Begin, Base + 0x86);
+      EXPECT_EQ(Effect.ImageReads.front().End, Base + 0x88);
+      size_t Exact = limits::kMaxRegistrationEHStateWork - Work;
+      EXPECT_TRUE(registration_abi::hasConditionalCallFrame(
+          F.Image, Call, F.Parent, Exact, &F.Initialized, &Returned, &Effect));
+      EXPECT_EQ(Exact, limits::kMaxRegistrationEHStateWork);
+      size_t Short = limits::kMaxRegistrationEHStateWork - Work + 1;
+      EXPECT_FALSE(registration_abi::hasConditionalCallFrame(
+          F.Image, Call, F.Parent, Short, &F.Initialized, &Returned, &Effect));
+      EXPECT_FALSE(Returned);
+      EXPECT_TRUE(Effect.ImageReads.empty());
+    }
+}
+
+TEST(RegistrationConditionalSEH, NestedHeaderReadsCannotBecomeNativeConstants) {
+  for (uint32_t Base : {0x400000u, 0x18000000u})
+    for (bool FixedResult : {false, true})
+      for (uint16_t Count : {uint16_t(5), uint16_t(6)}) {
+        SCOPED_TRACE(::testing::Message()
+                     << Base << " " << FixedResult << " " << Count);
+        HeaderReadSEHFixture F(Base, Count, FixedResult);
+        size_t Work = 0;
+        EXPECT_FALSE(proveBoundSEHCallee(F.Image, F.Call, F.Parent, Work,
+                                         nullptr, &F.Initialized));
+        Work = 0;
+        const auto Scoped = proveBoundOriginalImageSEHCallee(
+            F.Image, F.Call, F.Parent, Work, &F.Initialized);
+        ASSERT_TRUE(Scoped);
+        EXPECT_EQ(Scoped->ReturnValue, FixedResult ? 37u : Count);
+        EXPECT_FALSE(Scoped->Call.ConstantReturn);
+        ASSERT_EQ(Scoped->Reads.size(), 1u);
+        EXPECT_EQ(Scoped->Reads.at({Base + 0x86, 2}).Value, Count);
+        auto Candidate = F.Image;
+        writeLE<uint16_t>(Candidate.Segments.back().Data.data() + 0x86,
+                          uint16_t(Count + 1));
+        Work = 0;
+        EXPECT_EQ(replayBoundOriginalImageSEHCallee(F.Image, Candidate, F.Call,
+                                                    F.Parent, Work,
+                                                    &F.Initialized)
+                      .has_value(),
+                  FixedResult);
+      }
+}
 
 TEST(RegistrationConditionalSEH, ScalarInputsNeedNoObjectBorrow) {
   for (uint32_t Base : {0x400000u, 0x18000000u})

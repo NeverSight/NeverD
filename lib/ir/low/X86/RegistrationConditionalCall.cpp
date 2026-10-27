@@ -139,7 +139,8 @@ bool hasConditionalCallFrame(const BinaryImage &Image, const LowOp &Op,
            .ReturnValue = ReturnValue || Effect ? &Returned : nullptr,
            .ExcludeCalls = Effect != nullptr,
            .OriginalImage = OriginalImage}) ||
-      !Effects.Writes.empty() || !Effects.CallerPCWrites.empty())
+      !Effects.Writes.empty() || !Effects.CallerPCWrites.empty() ||
+      (!Effect && !Effects.Reads.empty()))
     return false;
   if (OriginalImage && !OriginalImage->recordCode(Callee, Work))
     return false;

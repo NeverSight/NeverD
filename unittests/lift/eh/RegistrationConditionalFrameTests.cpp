@@ -324,17 +324,21 @@ TEST(RegistrationConditionalFrame, UnknownScalarArgumentsNeedInitializedBytes) {
       const auto *Bytes =
           Mutation == 3 || Mutation == 4 ? nullptr : &Initialized;
       size_t Work = 0;
-      EXPECT_EQ(registration_abi::hasConditionalCallFrame(Image, Call, Parent,
-                                                          Work, Bytes),
+      BoundPlainCalleeEffect Effect;
+      EXPECT_EQ(registration_abi::hasConditionalCallFrame(
+                    Image, Call, Parent, Work, Bytes, nullptr, &Effect),
                 Mutation <= 3);
       size_t Exhausted = limits::kMaxRegistrationEHStateWork;
       EXPECT_FALSE(registration_abi::hasConditionalCallFrame(
-          Image, Call, Parent, Exhausted, Bytes));
+          Image, Call, Parent, Exhausted, Bytes, nullptr, &Effect));
       if (Mutation <= 3) {
         ASSERT_GT(Work, 0u);
         size_t Incomplete = limits::kMaxRegistrationEHStateWork - Work + 1;
         EXPECT_FALSE(registration_abi::hasConditionalCallFrame(
-            Image, Call, Parent, Incomplete, Bytes));
+            Image, Call, Parent, Incomplete, Bytes, nullptr, &Effect));
+        size_t Unretained = 0;
+        EXPECT_FALSE(registration_abi::hasConditionalCallFrame(
+            Image, Call, Parent, Unretained, Bytes));
       }
     }
 }
@@ -408,23 +412,34 @@ TEST(RegistrationConditionalFrame, BoundImmutableScansKeepTheirMemoryExtent) {
                                    : FrameValue::imageAddress(Data.VA));
         size_t Work = 0;
         std::optional<FrameValue> Returned = FrameValue::constant(UINT32_MAX);
+        BoundPlainCalleeEffect Effect;
         EXPECT_EQ(registration_abi::hasConditionalCallFrame(
-                      Image, Call, Parent, Work, nullptr, &Returned),
+                      Image, Call, Parent, Work, nullptr, &Returned, &Effect),
                   Mutation == 0);
-        if (Mutation == 0)
+        if (Mutation == 0) {
           EXPECT_EQ(Returned,
                     FrameValue::constant(7 * Count * (Count + 1) / 2));
-        else
+          EXPECT_EQ(Effect.ReturnValue, *Returned);
+          ASSERT_FALSE(Effect.ImageReads.empty());
+          for (const auto &Read : Effect.ImageReads) {
+            EXPECT_GE(Read.Begin, Data.VA);
+            EXPECT_LE(Read.End, Data.VA + (Count + 1) * 4);
+          }
+        } else
           EXPECT_FALSE(Returned);
         size_t Exhausted = limits::kMaxRegistrationEHStateWork;
         EXPECT_FALSE(registration_abi::hasConditionalCallFrame(
-            Image, Call, Parent, Exhausted, nullptr, &Returned));
+            Image, Call, Parent, Exhausted, nullptr, &Returned, &Effect));
         EXPECT_FALSE(Returned);
         if (Mutation == 0) {
           ASSERT_GT(Work, 0u);
           size_t Incomplete = limits::kMaxRegistrationEHStateWork - Work + 1;
           EXPECT_FALSE(registration_abi::hasConditionalCallFrame(
-              Image, Call, Parent, Incomplete, nullptr, &Returned));
+              Image, Call, Parent, Incomplete, nullptr, &Returned, &Effect));
+          EXPECT_FALSE(Returned);
+          size_t Unretained = 0;
+          EXPECT_FALSE(registration_abi::hasConditionalCallFrame(
+              Image, Call, Parent, Unretained, nullptr, &Returned));
           EXPECT_FALSE(Returned);
         }
       }

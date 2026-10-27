@@ -9531,6 +9531,12 @@ refusal, conflicting fixups/mappings, image separation and exact/exhausted work.
 `OriginalImageReadRecordsExactInputsAndBytes` bind authored SEH invocations at
 two bases and keep their source evidence out of native `ConstantReturn`.
 These queries do not qualify final-PE replay or native layout-dependent calls.
+`PlainImageReadsRequireAnEffectOwner` checks exact immutable header reads,
+ignored results, fixed results and exact/short budgets. Queries without an
+image-effect owner refuse and clear their result. The nested SEH regression
+changes the authored header count at two preferred bases: only scoped proofs
+retain the read, no native constant is granted, and candidate replay rejects a
+changed ordinary result while accepting unchanged results with different reads.
 `CandidateReplayBindsTheOriginalCall` checks a retired candidate CALL, changed
 immutable bytes with an unchanged result, changed results and coincidentally
 equivalent modified code. A valid candidate call cannot repair an invalid

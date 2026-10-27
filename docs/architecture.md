@@ -2280,6 +2280,11 @@ it does not substitute the constant or change memory/unwind attributes. COFF
 replays the same source receipt and rejects a new observation of a source result
 that was unused. This grants neither opaque memory access nor fixed differences
 between independently reconstructed image addresses.
+An ordinary conditional plain-helper query must retain its image reads in an
+effect record. Without that owner it refuses the invocation, even if the caller
+ignores the result: original bytes may also select the paths used to prove the
+private frame. A nested header read cannot become an unqualified SEH return
+constant. The scoped original-image query retains those dependencies separately.
 The COFF personality owner exposes the exact immutable forwarding ranges,
 normalizer paths, runtime data-read extents and eager import slot for retained
 EH3/EH4 dispatch. The scalar normalizer reports every decoded path without

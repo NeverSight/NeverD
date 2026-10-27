@@ -140,6 +140,8 @@ readCallerFrameWord(const registration_state::FrameState &State, int32_t Offset,
 /// Effect additionally requires a closed returning graph with no reached
 /// calls. Its stack cleanup, image reads and projected result share this same
 /// input-bound analysis; failure clears the complete effect.
+/// Image reads require Effect even when the returned value is ignored: both
+/// the result and private-frame proof may depend on those original bytes.
 bool hasConditionalCallFrame(
     const BinaryImage &Image, const LowOp &Op,
     const registration_state::FrameState &State, size_t &Work,
