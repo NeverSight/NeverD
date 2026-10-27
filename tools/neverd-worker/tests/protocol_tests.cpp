@@ -4,7 +4,11 @@
 #include <cstdlib>
 #include <iostream>
 #include <limits>
+#include <sstream>
+#include <stdexcept>
 #include <string>
+#include <utility>
+#include <vector>
 
 using namespace neverd::worker;
 void check(bool condition, const char *message) {
@@ -124,7 +128,114 @@ void sidecarLayout() {
             invalid.dump(2, ' ', false, Json::error_handler_t::replace) + '\n',
         "Sidecar replacement handling changed");
 }
+void generatedArrays() {
+  using neverd::transport::serializeJson;
+  using neverd::transport::serializeJsonArray;
+  const Json Values = Json::array(
+      {nullptr, true, -0.0, std::numeric_limits<std::int64_t>::min(),
+       std::numeric_limits<std::uint64_t>::max(),
+       std::string("a\0b", 3) + "\"\\\b\f\n中文",
+       Json{{"nested", {Json::array(), Json{{"quoted\"key", false}}}}},
+       std::string(1, '\xff')});
+  const Json::object_t Fields{{"a", Json{{"text", "\\\n中文"}}}, {"z", -0.0}};
+  for (const auto &Key : std::vector<std::string>{"", "middle\"\\\n", "zz"}) {
+    for (const std::size_t Count :
+         {std::size_t{0}, std::size_t{1}, Values.size()}) {
+      Json Expected(Fields);
+      Expected[Key] = Json::array();
+      for (std::size_t I = 0; I < Count; ++I)
+        Expected[Key].push_back(Values.at(I));
+      std::size_t Calls = 0;
+      Json Row;
+      const EncodedJson Encoded(
+          Fields, Key, Count, [&](std::size_t I) -> const Json & {
+            check(I == Calls++, "Generated rows lost order");
+            Row = Values.at(I);
+            return Row;
+          });
+      check(Calls == Count &&
+                Encoded.text() == Expected.dump(-1, ' ', false,
+                                                Json::error_handler_t::replace),
+            "Generated array changed complete JSON bytes");
+      // Neither the producer nor its reused borrowed row is retained.
+      Row = nullptr;
+      const auto Wire = frame(Json{{"request_id", "later"}}, Encoded);
+      const auto Decoded = parseJson(std::string_view(Wire).substr(4));
+      check(Decoded.at("request_id") == "later" &&
+                Decoded.at("payload") == parseJson(Encoded.text()) &&
+                Calls == Count,
+            "Generated payload retained a row or an old envelope");
+    }
+  }
+  const Json Valid = Json::array({nullptr, "\"\\\n中文", -0.0});
+  const auto Item = [&](std::size_t I) -> const Json & { return Valid.at(I); };
+  const Json Expected{{"items", Valid}};
+  const auto Exact = Expected.dump();
+  check(serializeJson(Expected, Exact.size()) == Exact &&
+            serializeJsonArray({}, "items", Valid.size(), Item, Exact.size()) ==
+                Exact,
+        "Exact bounded output differs from the existing codec");
+  rejects([&] { serializeJson(Expected, Exact.size() - 1); },
+          "Ordinary JSON exceeded its exact budget");
+  rejects(
+      [&] {
+        serializeJsonArray({}, "items", Valid.size(), Item, Exact.size() - 1);
+      },
+      "Generated array exceeded its exact budget");
+  rejects([&] { serializeJsonArray({}, "items", 0, Item, 0); },
+          "Empty generated output ignored a zero budget");
+  rejects(
+      [&] {
+        EncodedJson(Json::object_t{{"items", nullptr}}, "items", 0, Item);
+      },
+      "Generated array duplicated an existing object key");
+  const Json Invalid = std::string(1, '\xff');
+  bool Strict = false;
+  try {
+    (void)serializeJson(Invalid);
+  } catch (const Json::type_error &) {
+    Strict = true;
+  }
+  check(Strict, "Ordinary bounded JSON changed strict UTF-8 errors");
+  Strict = false;
+  try {
+    (void)serializeJsonArray(
+        {}, "items", 1, [&](std::size_t) -> const Json & { return Invalid; });
+  } catch (const Json::type_error &) {
+    Strict = true;
+  }
+  check(Strict, "Generated JSON changed strict UTF-8 errors");
+  bool Failed = false;
+  std::size_t Calls = 0;
+  try {
+    (void)EncodedJson({}, "items", 3, [&](std::size_t I) -> const Json & {
+      ++Calls;
+      if (I == 1)
+        throw std::runtime_error("producer failure");
+      return Valid.at(I);
+    });
+  } catch (const std::runtime_error &E) {
+    Failed = std::string(E.what()) == "producer failure";
+  }
+  check(Failed && Calls == 2, "Generated array swallowed a producer failure");
+  Json Text = "";
+  const auto TextItem = [&](std::size_t) -> const Json & { return Text; };
+  const auto Overhead =
+      frame(Json::object(), EncodedJson({}, "items", 1, TextItem)).size() - 4;
+  Text = std::string(MaxFrameBytes - Overhead, 'x');
+  check(frame(Json::object(), EncodedJson({}, "items", 1, TextItem)).size() -
+                4 ==
+            MaxFrameBytes,
+        "Exact generated frame budget was rejected");
+  Text.get_ref<std::string &>() += 'x';
+  rejects([&] { frame(Json::object(), EncodedJson({}, "items", 1, TextItem)); },
+          "Generated payload ignored response-envelope bytes");
+  Text = std::string(MaxFrameBytes, '\1');
+  rejects([&] { EncodedJson({}, "items", 1, TextItem); },
+          "Escaping exceeded the generated payload budget");
+}
 int main() {
+  generatedArrays();
   {
     using namespace std::chrono_literals;
     LoadProgress progress;
@@ -188,6 +299,16 @@ int main() {
                      std::numeric_limits<std::uint64_t>::max()})
     check(parseAddress(hexAddress(value)) == value,
           "Address round trip lost precision");
+  for (unsigned shift = 0; shift < 64; shift += 4) {
+    const auto power = std::uint64_t(1) << shift;
+    for (const auto value : {power - 1, power, power + 1,
+                             std::numeric_limits<std::uint64_t>::max()}) {
+      std::ostringstream expected;
+      expected << "0x" << std::hex << value;
+      check(hexAddress(value) == expected.str(),
+            "Address formatting changed hexadecimal spelling");
+    }
+  }
   for (const auto *value :
        {"", "123", "0x", "0x-1", "0x10000000000000000", "0x123g", "0x1 "})
     rejects([&] { parseAddress(value); }, "Malformed address accepted");
@@ -218,7 +339,12 @@ int main() {
     Json envelope{{"request_id", id},
                   {"payload", nullptr},
                   {"cancellation_requested", true}};
+    const auto original = envelope;
     const auto wire = frame(envelope, saved);
+    check(envelope == original, "Encoded framing modified a borrowed envelope");
+    auto disposable = envelope;
+    check(frame(std::move(disposable), saved) == wire,
+          "Disposable framing changed encoded wire bytes");
     envelope["payload"] = payload;
     check(parseJson(std::string_view(wire).substr(4)) == envelope,
           "Encoded payload changed data or reused an old response envelope");
@@ -238,6 +364,11 @@ int main() {
             EncodedJson(Json(std::string(MaxFrameBytes - overhead, 'x'))));
   check(full.size() - 4 == MaxFrameBytes,
         "Exact-limit encoded payload was not framed");
+  const Json emptyEnvelope = Json::object();
+  check(frame(emptyEnvelope,
+              EncodedJson(Json(std::string(MaxFrameBytes - overhead, 'x')))) ==
+            full,
+        "Borrowed exact-limit framing differs from disposable framing");
   rejects(
       [&] {
         frame(
@@ -245,6 +376,22 @@ int main() {
             EncodedJson(Json(std::string(MaxFrameBytes - overhead + 1, 'x'))));
       },
       "Over-budget encoded payload was accepted");
+  Json failedEnvelope{{"request_id", "oversized"},
+                      {"protocol_major", 1},
+                      {"revision", "17"},
+                      {"project_id", "project"},
+                      {"cancellation_requested", true},
+                      {"payload", nullptr}};
+  auto failedMetadata = failedEnvelope;
+  failedMetadata.erase("payload");
+  rejects(
+      [&] {
+        frame(std::move(failedEnvelope),
+              EncodedJson(Json(std::string(MaxFrameBytes, 'x'))));
+      },
+      "Disposable over-budget frame was accepted");
+  check(failedEnvelope == failedMetadata,
+        "Failed disposable framing lost error-response metadata");
   rejects([&] { frame(Json::array(), saved); },
           "Encoded payload accepted a non-object envelope");
   rejects(

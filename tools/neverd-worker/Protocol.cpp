@@ -18,9 +18,12 @@
 namespace neverd::worker {
 
 std::string hexAddress(std::uint64_t value) {
-  char buffer[16];
-  const auto result = std::to_chars(buffer, buffer + sizeof buffer, value, 16);
-  return "0x" + std::string(buffer, result.ptr);
+  char buffer[18]; // 16 hexadecimal digits and the prefix.
+  buffer[0] = '0';
+  buffer[1] = 'x';
+  const auto result =
+      std::to_chars(buffer + 2, buffer + sizeof buffer, value, 16);
+  return std::string(buffer, result.ptr);
 }
 
 std::uint64_t parseAddress(std::string_view text) {
@@ -79,6 +82,13 @@ std::uint32_t frameSize(const unsigned char *header) {
 
 EncodedJson::EncodedJson(const Json &value)
     : text_(value.dump(-1, ' ', false, Json::error_handler_t::replace)) {}
+
+EncodedJson::EncodedJson(const Json::object_t &fields,
+                         const std::string &arrayKey, std::size_t count,
+                         const std::function<const Json &(std::size_t)> &item)
+    : text_(transport::serializeJsonArray(fields, arrayKey, count, item,
+                                          MaxFrameBytes,
+                                          Json::error_handler_t::replace)) {}
 
 std::string sidecarText(const Json &value) {
   std::string dumped =
@@ -180,14 +190,21 @@ std::string formatSidecarText(std::string_view encoded) {
 }
 
 namespace {
+// Callers admit the complete body before reserving its final framed size.
+std::string frameHeader(std::size_t bodySize) {
+  const auto size = static_cast<std::uint32_t>(bodySize);
+  std::string result(4, '\0');
+  result.reserve(4 + bodySize);
+  for (unsigned i = 0; i < 4; ++i)
+    result[i] = static_cast<char>(size >> (24 - 8 * i));
+  return result;
+}
+
 std::string frameBody(const std::string &body) {
   if (body.size() > MaxFrameBytes)
     throw Error("budget_exceeded",
                 "Response exceeds the 8 MiB transport budget");
-  const auto size = static_cast<std::uint32_t>(body.size());
-  std::string result(4, '\0');
-  for (unsigned i = 0; i < 4; ++i)
-    result[i] = static_cast<char>(size >> (24 - 8 * i));
+  auto result = frameHeader(body.size());
   result += body;
   return result;
 }
@@ -199,22 +216,27 @@ std::string frame(const Json &message) {
 }
 
 std::string frame(const Json &message, const EncodedJson &payload) {
+  return frame(Json(message), payload);
+}
+
+std::string frame(Json &&message, const EncodedJson &payload) {
   if (!message.is_object())
     throw Error("invalid_request", "A response envelope must be an object");
-  Json envelope = message;
-  envelope.erase("payload");
+  message.erase("payload");
   std::string body =
-      envelope.dump(-1, ' ', false, Json::error_handler_t::replace);
+      message.dump(-1, ' ', false, Json::error_handler_t::replace);
   body.pop_back();
-  if (!envelope.empty())
+  if (!message.empty())
     body += ',';
   body += "\"payload\":";
   if (body.size() >= MaxFrameBytes ||
       payload.text().size() >= MaxFrameBytes - body.size())
     throw Error("budget_exceeded",
                 "Response exceeds the 8 MiB transport budget");
-  body += payload.text();
-  body += '}';
-  return frameBody(body);
+  auto result = frameHeader(body.size() + payload.text().size() + 1);
+  result += body;
+  result += payload.text();
+  result += '}';
+  return result;
 }
 } // namespace neverd::worker

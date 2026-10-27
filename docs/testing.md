@@ -15573,6 +15573,19 @@ encoding after reopen. `NeverDWorkerNativePatch` accepts an exact patch-state
 budget and rejects a one-byte excess without changing live or persisted bytes;
 run it with both typed-snapshot and legacy JSON-only SDKs for adapter changes.
 
+Protocol tests compare generated-array output byte for byte with the ordinary
+serializer, including sorted/escaped keys, controls, Unicode, numeric extremes,
+empty inventories, exact encoded/frame limits, invalid UTF-8 replacement and
+producer failures. The same checks exercise the scalar parser configuration.
+Borrowed and disposable envelopes must produce identical encoded wire bytes;
+failed disposable framing retains all non-payload error-response metadata.
+Shared WebMCP protocol tests retain strict UTF-8 and escaped-output budgets.
+Compare `Engine::execute` DOM output and `executeResponse` encoded output for
+native snapshots, and run complete worker ranges against both older SDK paths.
+Native range checks cover empty, small and streamed inventories around the
+encoding crossover, with short and high unsigned addresses and unchanged
+input/sidecar bytes across repeated queries.
+
 Protocol tests compare preencoded sidecar layout with the original generic
 pretty serializer and literal LLVM control-escape fixtures, including nested
 containers, quoted keys, Unicode and numeric extremes. History tests check exact

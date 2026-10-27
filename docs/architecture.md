@@ -1391,6 +1391,20 @@ window used to route branch arrows. Revision and navigation fences still apply.
 <!-- i18n-section: interactive-patch-ownership -->
 ## Interactive patch ownership
 
+The shared transport owns bounded JSON output through the existing nlohmann
+serializer's output adapter. Every append checks the same encoded-byte limit.
+Typed generated arrays encode one borrowed row synchronously in sorted object
+key order, without a whole-array DOM or retained producer. Range responses keep
+the SDK metadata snapshot alive through encoding. Small inventories keep one
+DOM encoding with their envelope; the crossover lives in worker resource
+limits. DOM callers and older SDKs retain their existing paths.
+`EncodedJson` accepts typed values only and keeps
+worker UTF-8 replacement behavior. Framing still accounts for the complete
+response envelope; shared ordinary JSON output retains strict UTF-8 errors.
+Disposable worker envelopes preserve non-payload metadata for error responses.
+After admission, framing reserves its known final size and copies encoded
+payloads directly into the prefixed frame.
+
 `lib/patch` owns byte admission, LLVM MC encoding, the immutable input snapshot, canonical overlay runs and exclusive export. The SDK proves source targets against exact emitted C, canonical LowIR occurrences and decoded operands; a navigation anchor alone does not authorize an edit. The worker journals optional `patches.json` rows with ordinary undo/redo and invalidates analysis after edits. Signature names read original bytes; patched routines lose identity-derived library effects. GUI, CLI and Python share these APIs. Whole-function replacement still uses `neverd_patch_source` and requires exporting and reopening any byte overlay first.
 
 Patch persistence reads typed, owning rows directly from a validated SIMD JSON tape when `NEVERD_ENABLE_SIMDJSON` is enabled. The LLVM reader remains available when acceleration is disabled or the input is outside the SIMD parser’s domain. Both readers share field admission and resource limits, including the existing last-duplicate-key and integer-only size rules; no borrowed parser strings escape. Overlay replay still validates every row against the immutable input.

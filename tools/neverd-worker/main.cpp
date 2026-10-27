@@ -23,6 +23,7 @@
 #include <mutex>
 #include <set>
 #include <thread>
+#include <utility>
 #ifdef _WIN32
 #include <fcntl.h>
 #include <io.h>
@@ -61,10 +62,10 @@ public:
     ::close(descriptor_);
 #endif
   }
-  bool send(const Json &message, const EncodedJson *payload = nullptr) {
+  bool send(Json message, const EncodedJson *payload = nullptr) {
     std::string encoded;
     try {
-      encoded = payload ? frame(message, *payload) : frame(message);
+      encoded = payload ? frame(std::move(message), *payload) : frame(message);
     } catch (const Error &) {
       Json failure = message;
       failure["status"] = "budget_exceeded";
@@ -460,9 +461,9 @@ void executeLoop(State &state, Transport &transport) {
             // starting a replica. Notify them now, then admit their request
             // before starting a potentially expensive derived-list rebuild.
             // The same idle grace wakes immediately when a request arrives.
-            const auto message = heartbeatMessage(state);
+            auto message = heartbeatMessage(state);
             lock.unlock();
-            const bool sent = transport.send(message);
+            const bool sent = transport.send(std::move(message));
             lock.lock();
             if (!sent)
               throw Error("transport_closed", "Cannot publish discovery state");
@@ -583,7 +584,7 @@ void executeLoop(State &state, Transport &transport) {
         state.pending.erase(value["request_id"].get<std::string>());
         state.active.reset();
       }
-      if (!transport.send(result, encodedPayload.get()))
+      if (!transport.send(std::move(result), encodedPayload.get()))
         break;
     }
   } catch (const std::exception &error) {
@@ -637,9 +638,9 @@ int main(int argc, char **argv) {
                     ::neverd::limits::worker::kMainMainHeartbeatSeconds),
                 [&] { return state.finished; }))
           break;
-        const auto message = heartbeatMessage(state);
+        auto message = heartbeatMessage(state);
         lock.unlock();
-        transport.send(message);
+        transport.send(std::move(message));
         lock.lock();
       }
     });
@@ -668,7 +669,7 @@ int main(int argc, char **argv) {
             auto result =
                 response(value, state.revision, state.projectId, "ok", hello());
             lock.unlock();
-            transport.send(result);
+            transport.send(std::move(result));
           } else if (op == "cancel") {
             const auto target = stringField(
                 payload, "request_id", {},

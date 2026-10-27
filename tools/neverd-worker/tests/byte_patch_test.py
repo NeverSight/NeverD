@@ -245,6 +245,41 @@ def pe_export(executable):
     print("PE export, UTF-8 paths, exclusive output, unchanged input and temporary cleanup passed")
 
 
+def range_projection(executable):
+    for base in (0x1000, 0xffff800012340000):
+        for count in (0, 1, 16, 31, 32, 33, 64):
+            with tempfile.TemporaryDirectory(prefix="neverd-patch-ranges-") as directory:
+                root = Path(directory)
+                binary = root / "input.bin"
+                original = b"\xcc" * (count + 16)
+                binary.write_bytes(original)
+                options = {"path": str(binary), "loader": "binary", "processor": "x86_64",
+                           "base": hex(base), "analysis": False}
+                with Client(executable) as seed:
+                    ok(seed, "open", options)
+                    ok(seed, "patch_apply", {"address": hex(base), "kind": "bytes", "bytes": "90"})
+                sidecar, = root.rglob("patches.json")
+                history, = root.rglob("history.json")
+                history.unlink()
+                rows = [{"addr": hex(i), "file_off": hex(i), "va": hex(base + i),
+                         "size": 1, "original": "cc", "current": "90",
+                         "kind": "nop" if i % 2 else "bytes"} for i in range(count)]
+                saved = json.dumps(rows, separators=(",", ":")).encode()
+                sidecar.write_bytes(saved)
+                timestamp = sidecar.stat().st_mtime_ns
+                expected = {"items": [{"address": hex(base + i), "size": 1}
+                                       for i in range(count)],
+                            "total": count, "complete": True}
+                with Client(executable) as worker:
+                    ok(worker, "open", options)
+                    for _ in range(2):
+                        assert ok(worker, "patches", {"ranges_only": True}) == expected
+                    assert sidecar.read_bytes() == saved
+                    assert sidecar.stat().st_mtime_ns == timestamp
+                assert binary.read_bytes() == original
+    print("small/streamed range projection, high addresses and unchanged source/state passed")
+
+
 def patch_budget_boundary(executable):
     # Patch state reserves half the advertised frame allowance. Construct an
     # exact compact-JSON boundary independently of the native size counter.
@@ -311,4 +346,5 @@ if __name__ == "__main__":
         split_row_history(sys.argv[1])
         noncanonical_history_row(sys.argv[1])
         pe_export(sys.argv[1])
+        range_projection(sys.argv[1])
         patch_budget_boundary(sys.argv[1])

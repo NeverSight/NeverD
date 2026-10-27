@@ -18,10 +18,9 @@
 #endif
 
 #include <cstdint>
+#include <memory>
 #include <optional>
-#include <ostream>
 #include <set>
-#include <streambuf>
 #include <vector>
 
 namespace neverd::transport {
@@ -151,26 +150,25 @@ std::optional<Json> parseWithSIMD(std::string_view Text, DuplicateKeys Keys) {
 }
 #endif
 
-class BoundedBuffer final : public std::streambuf {
+// Feed the existing codec directly: an ostream adds sentry/virtual calls for
+// each fragment. The adapter still checks every append before growing output.
+class BoundedOutput final
+    : public nlohmann::detail::output_adapter_protocol<char> {
   std::size_t Maximum;
-
-  std::streamsize xsputn(const char *Data, std::streamsize Count) override {
-    if (Count < 0 || static_cast<uint64_t>(Count) > Maximum - Bytes.size())
-      throw Error("budget_exceeded", "Encoded JSON exceeds the output budget");
-    Bytes.append(Data, static_cast<std::size_t>(Count));
-    return Count;
-  }
-  int_type overflow(int_type Character) override {
-    if (traits_type::eq_int_type(Character, traits_type::eof()))
-      return traits_type::not_eof(Character);
-    const auto C = traits_type::to_char_type(Character);
-    xsputn(&C, 1);
-    return Character;
-  }
 
 public:
   std::string Bytes;
-  explicit BoundedBuffer(std::size_t Maximum) : Maximum(Maximum) {}
+  explicit BoundedOutput(std::size_t Maximum) : Maximum(Maximum) {}
+  void write_character(char Character) override {
+    if (Bytes.size() == Maximum)
+      throw Error("budget_exceeded", "Encoded JSON exceeds the output budget");
+    Bytes.push_back(Character);
+  }
+  void write_characters(const char *Data, std::size_t Count) override {
+    if (Count > Maximum - Bytes.size())
+      throw Error("budget_exceeded", "Encoded JSON exceeds the output budget");
+    Bytes.append(Data, Count);
+  }
 };
 } // namespace
 
@@ -250,10 +248,53 @@ Json parseBackendJson(std::string_view Text) {
 }
 
 std::string serializeJson(const Json &Value, std::size_t MaxBytes) {
-  BoundedBuffer Buffer(MaxBytes);
-  std::ostream Output(&Buffer);
-  Output.exceptions(std::ios::badbit | std::ios::failbit);
-  Output << Value;
-  return std::move(Buffer.Bytes);
+  auto Output = std::make_shared<BoundedOutput>(MaxBytes);
+  nlohmann::detail::serializer<Json> Serializer(Output, ' ');
+  Serializer.dump(Value, false, false, 0);
+  return std::move(Output->Bytes);
+}
+
+std::string
+serializeJsonArray(const Json::object_t &Fields, const std::string &ArrayKey,
+                   std::size_t Count,
+                   const std::function<const Json &(std::size_t)> &Item,
+                   std::size_t MaxBytes, Json::error_handler_t Errors) {
+  const auto ArrayPosition = Fields.lower_bound(ArrayKey);
+  if (ArrayPosition != Fields.end() && ArrayPosition->first == ArrayKey)
+    throw Error("invalid_request",
+                "Generated array key duplicates an object field");
+  auto Output = std::make_shared<BoundedOutput>(MaxBytes);
+  nlohmann::detail::serializer<Json> Serializer(Output, ' ', Errors);
+  const auto Write = [&](const Json &Value) {
+    Serializer.dump(Value, false, false, 0);
+  };
+  bool HasField = false;
+  const auto Key = [&](const std::string &Name) {
+    if (HasField)
+      Output->write_character(',');
+    HasField = true;
+    Write(Name);
+    Output->write_character(':');
+  };
+  Output->write_character('{');
+  auto Field = Fields.begin();
+  for (; Field != ArrayPosition; ++Field) {
+    Key(Field->first);
+    Write(Field->second);
+  }
+  Key(ArrayKey);
+  Output->write_character('[');
+  for (std::size_t I = 0; I < Count; ++I) {
+    if (I)
+      Output->write_character(',');
+    Write(Item(I));
+  }
+  Output->write_character(']');
+  for (; Field != Fields.end(); ++Field) {
+    Key(Field->first);
+    Write(Field->second);
+  }
+  Output->write_character('}');
+  return std::move(Output->Bytes);
 }
 } // namespace neverd::transport

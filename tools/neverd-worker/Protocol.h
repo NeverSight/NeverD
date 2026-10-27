@@ -14,7 +14,9 @@
 #include "ResourceLimits.h"
 #include "common/transport/Json.h"
 
+#include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <string_view>
 
@@ -36,6 +38,11 @@ std::string frame(const Json &message);
 class EncodedJson {
 public:
   explicit EncodedJson(const Json &value);
+  /// Encode generated rows without retaining a complete array DOM. The row
+  /// producer is synchronous and never escapes this construction.
+  EncodedJson(const Json::object_t &fields, const std::string &arrayKey,
+              std::size_t count,
+              const std::function<const Json &(std::size_t)> &item);
   const std::string &text() const { return text_; }
   std::size_t storageBytes() const {
     return sizeof(*this) + text_.capacity() + 1;
@@ -45,6 +52,9 @@ private:
   std::string text_;
 };
 std::string frame(const Json &message, const EncodedJson &payload);
+/// Avoid copying a disposable envelope. Only its payload field is removed;
+/// other metadata remains available to construct an error response on failure.
+std::string frame(Json &&message, const EncodedJson &payload);
 /// The text of a user state file beside the input: JSON indented by two
 /// spaces with sorted keys and a final newline, byte for byte as the engine's
 /// writer (SessionSidecar.cpp) prints the same files. The CLI and the

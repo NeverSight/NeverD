@@ -32,6 +32,9 @@ inline constexpr std::size_t kPatchStateBytes =
     ::neverd::limits::transport::kJsonMaxJsonBytes / 2;
 inline constexpr std::size_t kPatchTextBytes =
     ::neverd::limits::patch::kMaxAssemblyTextBytes;
+/// Smaller inventories cost less to encode with their envelope in one pass.
+/// Paired Clang/GCC requests cross over to streamed range rows at 32 entries.
+inline constexpr std::size_t kPatchMinEncodedRangeRows = 32;
 
 // tools/neverd-worker/Engine.cpp
 // The most source one declaration reads.

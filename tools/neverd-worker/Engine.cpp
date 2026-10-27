@@ -4506,7 +4506,7 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
       operation == "patch_preview" || operation == "patch_apply" ||
       operation == "patch_revert" || operation == "patches" ||
       operation == "patch_export")
-    return patchOperation(operation, p);
+    return patchOperation(operation, p, encoded);
   if (operation != "disasm" && operation != "bytes" &&
       operation != "annotation_set" && operation != "rename" &&
       operation != "function_create" && operation != "function_delete" &&

@@ -171,7 +171,8 @@ bool Engine::reloadBytePatches(bool knownChanged) {
     functionsChanged();
   return true;
 }
-Json Engine::patchOperation(const std::string &Operation, const Json &P) {
+Json Engine::patchOperation(const std::string &Operation, const Json &P,
+                            EncodedPayload *Encoded) {
   requireLoaded();
   if (Operation == "source_patch" || Operation == "source_patch_context") {
     const auto Context =
@@ -274,6 +275,26 @@ Json Engine::patchOperation(const std::string &Operation, const Json &P) {
             Snapshot(F.rangeSnapshot(session_), F.freeRangeSnapshot);
         if (!Snapshot)
           throw Error("engine_error", error());
+        if (Encoded &&
+            Snapshot->range_count >=
+                ::neverd::limits::worker::kPatchMinEncodedRangeRows) {
+          // Keep the SDK owner alive while one reusable row is encoded. The
+          // envelope still supplies current request metadata and frame limits.
+          Json Item = {{"address", ""}, {"size", 0u}};
+          auto &Address = Item.at("address").get_ref<std::string &>();
+          auto &Size = Item.at("size");
+          *Encoded = std::make_shared<EncodedJson>(
+              Json::object_t{{"complete", true},
+                             {"total", Snapshot->range_count}},
+              "items", Snapshot->range_count,
+              [&](std::size_t I) -> const Json & {
+                const auto &Range = Snapshot->ranges[I];
+                Address = hexAddress(Range.address);
+                Size = Range.size;
+                return Item;
+              });
+          return Json(nullptr);
+        }
         Json::array_t Ranges;
         Ranges.reserve(Snapshot->range_count);
         for (size_t I = 0; I < Snapshot->range_count; ++I) {

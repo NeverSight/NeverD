@@ -292,7 +292,8 @@ private:
   /// A committed patch command already proves invalidation is necessary;
   /// ordinary reloads must discover changes from the before/after inventories.
   bool reloadBytePatches(bool knownChanged = false);
-  Json patchOperation(const std::string &Operation, const Json &Payload);
+  Json patchOperation(const std::string &Operation, const Json &Payload,
+                      EncodedPayload *Encoded = nullptr);
   /// Read the operand formats sidecar: true when it loaded or the engine
   /// keeps no operand formats.  Changed formats show in the listing.
   bool reloadOperandFormats();
