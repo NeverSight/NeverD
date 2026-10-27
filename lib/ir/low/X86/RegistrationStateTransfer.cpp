@@ -495,7 +495,7 @@ bool RegistrationStateSolver::transferBlock(size_t I, const Domain &Before,
           if (!charge(After.Frame.memoryAccessWork(Address, Width, true) + 1))
             break;
           After.Frame.store(*Address.Offset, Width, Stored);
-          if (CheckCalls || Conditional) {
+          if (CheckCalls || Conditional || TrackRuntimeArguments) {
             auto SP = parentStackOffset(After);
             if (Conditional && !SP && After.Frame.CallbackEntry)
               SP = After.Frame.load(*Chain.RegistrationOffset - 8, 4).Offset;
@@ -539,18 +539,21 @@ bool RegistrationStateSolver::transferBlock(size_t I, const Domain &Before,
             Invalidate();
           else
             After.Frame.storeEntry(*Address.EntryOffset, Width, Stored);
-        } else if (Stored.MayBeFrame) {
-          // A frame pointer escaped to storage whose future aliases cannot
-          // be bounded by this frame-value domain.
+        } else if (!Stored.isFrameIndependentScalar()) {
+          // A frame-derived value escaped to storage whose future aliases
+          // cannot be bounded here. Opaque runtime scalars remain independent
+          // of frame placement; their address bits supply no dereference proof.
           Invalidate();
         }
-        if (CheckCalls && !RuntimeMemory && !Address.Offset &&
-            !Address.EntryOffset && !Address.CallbackAddress &&
-            !Address.preferredAddress()) {
+        if ((CheckCalls || TrackRuntimeArguments) && !RuntimeMemory &&
+            !Address.Offset && !Address.EntryOffset &&
+            !Address.CallbackAddress && !Address.preferredAddress()) {
           After.InitializedFrameBytes.clear();
-          if (!charge(After.Frame.cellCount()))
-            break;
-          After.Frame.forgetCellValues();
+          if (CheckCalls) {
+            if (!charge(After.Frame.cellCount()))
+              break;
+            After.Frame.forgetCellValues();
+          }
         }
       }
     }
@@ -611,6 +614,12 @@ bool RegistrationStateSolver::transferBlock(size_t I, const Domain &Before,
         CallSP = *HeapSP;
         CallPreservesImportBindings = true;
       }
+    if (!CallSP)
+      if (auto RuntimeSP =
+              transferSynchronization(After, Op, Facts, CallResult)) {
+        CallSP = *RuntimeSP;
+        CallPreservesImportBindings = true;
+      }
     if (!CallSP && JumpRuntime && JumpRuntime->Raise &&
         After.JumpBindingsIntact && !After.Unknown && !Facts.Invalid &&
         After.Installed && !After.Uninstalled &&
@@ -645,6 +654,9 @@ bool RegistrationStateSolver::transferBlock(size_t I, const Domain &Before,
         !JumpCapture && !JumpResume && !CallSP && !Facts.InvocationAtExit &&
         (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL ||
          (Op.Opcode == NdOp::INTRINSIC && !isFramePreservingIntrinsic(Op)));
+    if (TrackRuntimeArguments &&
+        (UnprovedCallEffects || JumpCapture || JumpResume))
+      After.InitializedFrameBytes.clear();
     if (UnprovedCallEffects) {
       if (After.Callback)
         for (const auto &[Offset, Capture] : After.JumpCaptures)
@@ -757,8 +769,20 @@ bool RegistrationStateSolver::transferBlock(size_t I, const Domain &Before,
         break;
       After.Frame.trimCallbackCells();
     }
-    if (CallSP)
+    if (CallSP) {
       After.Frame.Registers[x86reg::RSP / x86reg::GeneralRegStride] = *CallSP;
+      if (TrackRuntimeArguments) {
+        if (!CallSP->Offset)
+          After.InitializedFrameBytes.clear();
+        else {
+          if (!charge(After.InitializedFrameBytes.size()))
+            break;
+          After.InitializedFrameBytes.erase(
+              After.InitializedFrameBytes.begin(),
+              After.InitializedFrameBytes.lower_bound(*CallSP->Offset));
+        }
+      }
+    }
     if (CallResult) {
       After.Frame.Registers[x86reg::RAX / x86reg::GeneralRegStride] =
           *CallResult;
@@ -772,7 +796,7 @@ bool RegistrationStateSolver::transferBlock(size_t I, const Domain &Before,
     if (const auto SP = parentStackOffset(After))
       std::erase_if(After.JumpCaptures,
                     [&](const auto &Capture) { return *SP > Capture.first; });
-    if ((CheckCalls || Conditional) &&
+    if ((CheckCalls || Conditional || TrackRuntimeArguments) &&
         !(Conditional &&
           After.Frame.Registers[x86reg::RSP / x86reg::GeneralRegStride]
               .CallbackAddress) &&

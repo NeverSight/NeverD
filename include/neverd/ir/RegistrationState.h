@@ -317,7 +317,8 @@ struct RegistrationSEHBoundArgument {
     Object,
     JumpBuffer,
     NullPointer,
-    ConstantScalar
+    ConstantScalar,
+    ImagePointer
   };
   Kind ArgumentKind = Kind::Unused;
   int32_t Offset = 0;
@@ -325,6 +326,8 @@ struct RegistrationSEHBoundArgument {
   /// An invocation requirement emitted and checked as an actual i32 value.
   /// A frame-slot location alone cannot establish this constant.
   uint32_t ScalarValue = 0;
+  /// Original mapped storage, distinct from a scalar with equal address bits.
+  va_t ImageVA = 0;
   bool operator==(const RegistrationSEHBoundArgument &) const = default;
 };
 
@@ -337,7 +340,9 @@ struct RegistrationSEHBoundCall {
     RaiseException,
     ControlFP,
     GetStartupInfoW,
-    HeapTermination
+    HeapTermination,
+    InterlockedCompareExchange,
+    Sleep
   };
   /// SDK PE32 STARTUPINFOW extent, including the conditional standard handles.
   static constexpr uint32_t StartupInfoBytes = 68;

@@ -57,6 +57,7 @@ add_neverd_component_library(NeverDIRRegistrationState
   X86/RegistrationStateCRTCall.cpp
   X86/RegistrationStateStartupInfo.cpp
   X86/RegistrationStateHeap.cpp
+  X86/RegistrationStateSynchronization.cpp
   X86/RegistrationStateRuntimeCall.cpp
   X86/RegistrationStateOccurrences.cpp
   X86/RegistrationStateOrder.cpp
@@ -80,6 +81,7 @@ add_neverd_component_library(NeverDIRRegistrationState
   X86/RegistrationImportLoad.cpp
   X86/RegistrationFrameScalar.cpp
   X86/RegistrationFrameMemory.cpp
+  X86/RegistrationFrameInputs.cpp
   X86/RegistrationFrameCallback.cpp
   X86/RegistrationFrameSEHException.cpp
   X86/RegistrationJumpBuffer.cpp

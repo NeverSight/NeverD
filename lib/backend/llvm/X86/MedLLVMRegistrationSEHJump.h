@@ -35,11 +35,11 @@ bool prepareSEHBoundCall(const llvm::CallInst &Call,
                          const llvm::AllocaInst &Frame, uint64_t EntrySP);
 bool hasSEHBoundFrameArguments(const RegistrationSEHBoundCall &Source,
                                const llvm::AllocaInst &Frame, uint64_t EntrySP);
-llvm::SmallVector<llvm::Value *, 8>
-projectSEHBoundArguments(const RegistrationSEHBoundCall &Source,
-                         llvm::IRBuilder<> &Builder, llvm::AllocaInst &Frame,
-                         uint64_t EntrySP,
-                         const std::map<va_t, llvm::AllocaInst *> &Buffers);
+llvm::SmallVector<llvm::Value *, 8> projectSEHBoundArguments(
+    const RegistrationSEHBoundCall &Source, llvm::IRBuilder<> &Builder,
+    llvm::AllocaInst &Frame, uint64_t EntrySP,
+    const std::map<va_t, llvm::AllocaInst *> &Buffers,
+    const std::map<va_t, llvm::Value *> &ImagePointers = {});
 
 std::map<llvm::CallInst *, llvm::CallInst *>
 emitSEHBoundCalls(const SEHJumpPlan &Plan, llvm::AllocaInst &Frame,

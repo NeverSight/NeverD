@@ -70,6 +70,16 @@ bool isHeapTerminationProvider(const Import &Import) {
          llvm::StringRef(Import.Module).equals_insensitive("kernel32.dll");
 }
 
+bool isInterlockedProvider(const Import &Import) {
+  return Import.Name == "InterlockedCompareExchange" &&
+         llvm::StringRef(Import.Module).equals_insensitive("kernel32.dll");
+}
+
+bool isSleepProvider(const Import &Import) {
+  return Import.Name == "Sleep" &&
+         llvm::StringRef(Import.Module).equals_insensitive("kernel32.dll");
+}
+
 bool checkedDirectRuntimeCall(const BinaryImage &Image, const LowOp &Op,
                               size_t &Work, bool (*Provider)(const Import &)) {
   if (Op.Opcode != NdOp::INDIR_CALL || Op.NumInputs != 1 || Op.Seq < 0 ||
@@ -113,6 +123,27 @@ bool isCheckedRegistrationHeapTerminationSlot(const BinaryImage &Image,
 bool isCheckedRegistrationHeapTerminationCall(const BinaryImage &Image,
                                               const LowOp &Op, size_t &Work) {
   return checkedDirectRuntimeCall(Image, Op, Work, isHeapTerminationProvider);
+}
+
+bool isCheckedRegistrationInterlockedSlot(const BinaryImage &Image,
+                                          va_t Target) {
+  const auto *Import = checkedRuntimeImportSlot(Image, Target);
+  return Import && isInterlockedProvider(*Import);
+}
+
+bool isCheckedRegistrationInterlockedCall(const BinaryImage &Image,
+                                          const LowOp &Op, size_t &Work) {
+  return checkedDirectRuntimeCall(Image, Op, Work, isInterlockedProvider);
+}
+
+bool isCheckedRegistrationSleepSlot(const BinaryImage &Image, va_t Target) {
+  const auto *Import = checkedRuntimeImportSlot(Image, Target);
+  return Import && isSleepProvider(*Import);
+}
+
+bool isCheckedRegistrationSleepCall(const BinaryImage &Image, const LowOp &Op,
+                                    size_t &Work) {
+  return checkedDirectRuntimeCall(Image, Op, Work, isSleepProvider);
 }
 
 std::optional<uint32_t>
@@ -202,16 +233,6 @@ bool callerPCIsNotReadBack(const ImageFrameEffects &Effects) {
     if (Read != Effects.Reads.end() && Read->first < End)
       return false;
   }
-  return true;
-}
-
-bool chargeCalleeWork(size_t &Work, size_t Amount) {
-  if (Work > limits::kMaxRegistrationEHStateWork ||
-      Amount > limits::kMaxRegistrationEHStateWork - Work) {
-    Work = limits::kMaxRegistrationEHStateWork;
-    return false;
-  }
-  Work += Amount;
   return true;
 }
 

@@ -32,6 +32,22 @@
   push 0
   call dword ptr ["__imp__HeapSetInformation@16"]
 #endif
+#if REGISTRATION_SYNCHRONIZATION
+  push 17
+  push dword ptr [_registration_atomic_exchange]
+  .byte 0x68
+  .long _registration_atomic_word
+  call dword ptr ["__imp__InterlockedCompareExchange@12"]
+  mov dword ptr [_registration_atomic_results], eax
+  push 17
+  push 91
+  .byte 0x68
+  .long _registration_atomic_word
+  call dword ptr ["__imp__InterlockedCompareExchange@12"]
+  mov dword ptr [_registration_atomic_results+4], eax
+  push 0
+  call dword ptr ["__imp__Sleep@4"]
+#endif
 #if REGISTRATION_CASE == 4
   call _registration_no_raise
 #else

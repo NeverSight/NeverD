@@ -895,13 +895,21 @@ TEST(RegistrationImportABI, ImportAliasesCannotReplaceCurrentVeneerBytes) {
 
 TEST(RegistrationImportABI,
      PrivateRuntimeEffectsRequireTheExactPhysicalInvocation) {
-  for (bool Heap : {false, true})
+  const ImportCase Cases[] = {{"GetStartupInfoW", 1},
+                              {"HeapSetInformation", 4},
+                              {"InterlockedCompareExchange", 3},
+                              {"Sleep", 1}};
+  using Check = bool (*)(const BinaryImage &, const LowOp &, size_t &);
+  const Check Checks[] = {
+      registration_abi::isCheckedRegistrationStartupInfoCall,
+      registration_abi::isCheckedRegistrationHeapTerminationCall,
+      registration_abi::isCheckedRegistrationInterlockedCall,
+      registration_abi::isCheckedRegistrationSleepCall};
+  for (unsigned Provider = 0; Provider != 4; ++Provider)
     for (unsigned Mutation = 0; Mutation != 13; ++Mutation) {
       SCOPED_TRACE(Mutation);
-      SCOPED_TRACE(Heap);
-      ImportImage F(Heap ? ImportCase{"HeapSetInformation", 4}
-                         : ImportCase{"GetStartupInfoW", 1},
-                    false);
+      SCOPED_TRACE(Provider);
+      ImportImage F(Cases[Provider], false);
       LowOp Call;
       Call.Opcode = NdOp::INDIR_CALL;
       Call.Addr = F.CallVA;
@@ -938,12 +946,7 @@ TEST(RegistrationImportABI,
       }
       if (Mutation == 12)
         Work = limits::kMaxRegistrationEHStateWork;
-      EXPECT_EQ(
-          (Heap ? registration_abi::isCheckedRegistrationHeapTerminationCall(
-                      F.Image, Call, Work)
-                : registration_abi::isCheckedRegistrationStartupInfoCall(
-                      F.Image, Call, Work)),
-          Mutation == 0);
+      EXPECT_EQ(Checks[Provider](F.Image, Call, Work), Mutation == 0);
       EXPECT_LE(Work, limits::kMaxRegistrationEHStateWork);
     }
 }

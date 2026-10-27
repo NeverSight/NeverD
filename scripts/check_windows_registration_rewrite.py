@@ -330,6 +330,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="compare a private STARTUPINFOW output with an independent runtime observation")
     parser.add_argument("--heap-termination", action="store_true",
                         help="retain the exact process heap terminate-on-corruption request")
+    parser.add_argument("--synchronization", action="store_true",
+                        help="observe native atomic success, failure, return values and Sleep")
     parser.add_argument("--observe-callee-result", action="store_true",
                         help="use the returning authored helper's EAX as the longjmp value")
     parser.add_argument("--state-write", choices=("literal", "register", "bitwise"),
@@ -354,6 +356,8 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--startup-info requires a filter or normal-finally case")
     if args.heap_termination and case not in (0, 4):
         parser.error("--heap-termination requires a filter or normal-finally case")
+    if args.synchronization and case not in (0, 4):
+        parser.error("--synchronization requires a filter or normal-finally case")
     if args.state_write != "literal" and case not in (*range(9), 43, 44):
         parser.error("--state-write requires an ordinary filter/finally or shared byte-state case")
     if args.state_write == "bitwise" and case in (1, 2, 4):
@@ -364,6 +368,7 @@ def main(argv: list[str] | None = None) -> int:
               "parent_pop": args.parent_pop,
               "startup_info": args.startup_info,
               "heap_termination": args.heap_termination,
+              "synchronization": args.synchronization,
               "observe_callee_result": args.observe_callee_result,
               "state_write": args.state_write,
               "passed": False, "steps": [], "observations": []}
@@ -390,7 +395,8 @@ def main(argv: list[str] | None = None) -> int:
             runtime_exports += "_seh_longjmp_unwind4\n" if eh4 else "_seh_longjmp_unwind\n"
         definitions = [("kernel32", KERNEL32 +
                         ("_GetStartupInfoW@4\n" if args.startup_info else "") +
-                        ("_HeapSetInformation@16\n" if args.heap_termination else ""))]
+                        ("_HeapSetInformation@16\n" if args.heap_termination else "") +
+                        ("_InterlockedCompareExchange@12\n_Sleep@4\n" if args.synchronization else ""))]
         if args.runtime_root:
             runtime, report["seh_runtime"] = load_runtime(args.runtime_root.resolve())
             shutil.copy2(runtime, output / runtime.name)
@@ -444,6 +450,7 @@ def main(argv: list[str] | None = None) -> int:
                              f"-DREGISTRATION_PARENT_POP={args.parent_pop}",
                              f"-DREGISTRATION_STARTUP_INFO={int(args.startup_info)}",
                              f"-DREGISTRATION_HEAP_TERMINATION={int(args.heap_termination)}",
+                             f"-DREGISTRATION_SYNCHRONIZATION={int(args.synchronization)}",
                              f"-DREGISTRATION_OBSERVE_CALLEE_RESULT={int(args.observe_callee_result)}",
                              f"-DREGISTRATION_STATE_WRITE={('literal', 'register', 'bitwise').index(args.state_write)}",
                              f"-DREGISTRATION_LOOP_EH4={int(eh4)}",
@@ -509,7 +516,8 @@ def main(argv: list[str] | None = None) -> int:
                 undecorate_kernel32_imports(
                     output / "kernel32.lib",
                     ((b"_GetStartupInfoW@4",) if args.startup_info else ()) +
-                    ((b"_HeapSetInformation@16",) if args.heap_termination else ()))
+                    ((b"_HeapSetInformation@16",) if args.heap_termination else ()) +
+                    ((b"_InterlockedCompareExchange@12", b"_Sleep@4") if args.synchronization else ()))
         tests = ET.parse(output / "rewrite.xml").getroot()
         if int(tests.get("tests", "0")) != 1 or tests.findall(".//skipped"):
             raise ValueError("source reconstruction was not executed")

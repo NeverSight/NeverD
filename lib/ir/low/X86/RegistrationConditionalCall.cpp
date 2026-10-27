@@ -16,31 +16,8 @@
 #include "neverd/loader/ReadOnlyBytes.h"
 #include "neverd/support/BinaryEncoding.h"
 
-#include <bit>
-
 namespace neverd::registration_abi {
 using namespace registration_state;
-
-std::optional<FrameValue>
-readCallerFrameWord(const FrameState &State, int32_t Offset,
-                    const std::set<int32_t> *Initialized, size_t &Work) {
-  if (Offset > INT32_MAX - 4 ||
-      !chargeCalleeWork(Work,
-                        State.memoryAccessWork(FrameValue::frame(Offset), 4)))
-    return std::nullopt;
-  if (Initialized) {
-    if (!chargeCalleeWork(Work,
-                          4 * (1 + 2 * std::bit_width(Initialized->size()))))
-      return std::nullopt;
-    for (int64_t Byte = Offset; Byte < int64_t(Offset) + 4; ++Byte)
-      if (!Initialized->count(int32_t(Byte)))
-        return std::nullopt;
-  } else if (!State.Cells.count(Offset))
-    return std::nullopt;
-  // Sparse storage omits unknown scalars. Read through the memory owner so
-  // a partial overlapping pointer store cannot become an untainted argument.
-  return State.load(Offset, 4);
-}
 
 bool hasClosedRegistrationRaise(const BinaryImage &Image, const LowOp &Op,
                                 const FrameState &State) {

@@ -31,6 +31,11 @@ unsigned registration_parameter_after;
 #endif
 static unsigned observed_caller;
 unsigned registration_trace;
+#if REGISTRATION_SYNCHRONIZATION
+unsigned registration_atomic_word;
+unsigned registration_atomic_exchange;
+unsigned registration_atomic_results[2];
+#endif
 #if REGISTRATION_STARTUP_INFO
 __declspec(dllimport) void __stdcall GetStartupInfoW(void *);
 unsigned registration_startup_snapshot[17];
@@ -148,6 +153,11 @@ void mainCRTStartup(void) {
   int value = 0, chain_ok = 1;
   for (; iterations != 4; ++iterations) {
     registration_trace = 0;
+#if REGISTRATION_SYNCHRONIZATION
+    registration_atomic_word = 17;
+    registration_atomic_exchange = 23 + iterations;
+    registration_atomic_results[0] = registration_atomic_results[1] = 0;
+#endif
 #if REGISTRATION_PARENT_POP
     unsigned stack_before, stack_after;
     volatile unsigned stack_guard[2] = {0x12345678, 0xa5c39e71};
@@ -191,6 +201,16 @@ void mainCRTStartup(void) {
 #if REGISTRATION_STARTUP_INFO
     if (!startup_observation_matches())
       break;
+#endif
+#if REGISTRATION_SYNCHRONIZATION
+    if (registration_atomic_results[0] != 17 ||
+        registration_atomic_results[1] != registration_atomic_exchange ||
+        registration_atomic_word != registration_atomic_exchange) {
+      printf("atomic observation: first=%u second=%u word=%u expected=%u\n",
+             registration_atomic_results[0], registration_atomic_results[1],
+             registration_atomic_word, registration_atomic_exchange);
+      break;
+    }
 #endif
     if (value != 7 || !chain_ok || registration_trace != EXPECTED_TRACE)
       break;

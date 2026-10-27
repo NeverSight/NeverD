@@ -52,6 +52,8 @@ RegistrationStateSolver::RegistrationStateSolver(
                 EH.Personality == ExceptionPersonality::CxxFrameHandler3)),
       EH4(EH.Personality == ExceptionPersonality::ExceptHandler4),
       CheckCalls(Callees != nullptr),
+      TrackRuntimeArguments(!KnownCxx && !Conditional && JumpRuntime &&
+                            (JumpRuntime->Interlocked || JumpRuntime->Sleep)),
       CheckRuntimeObjects(KnownCxx && CheckCalls),
       CheckCleanups(KnownCxx && Cleanups != nullptr),
       InvalidBlocks(Function.Blocks.size()), States(Function.Blocks.size()),

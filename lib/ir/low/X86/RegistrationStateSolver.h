@@ -410,9 +410,14 @@ private:
   std::optional<FrameValue> transferHeapTermination(const Domain &State,
                                                     const LowOp &Op,
                                                     const BlockFacts &Facts);
+  std::optional<FrameValue>
+  transferSynchronization(const Domain &State, const LowOp &Op,
+                          const BlockFacts &Facts,
+                          std::optional<FrameValue> &CallResult);
   void recordSEHRuntimeCall(const Domain &State, const LowOp &Op,
                             RegistrationSEHBoundCall::Kind Kind,
-                            std::optional<int32_t> Output = std::nullopt);
+                            std::optional<int32_t> Output = std::nullopt,
+                            va_t ImageOutput = 0);
   bool resumeJumpCapture(Domain &After, BlockFacts &Facts, const LowOp &Op,
                          const SEHJumpCapture &Saved, const FrameValue &Value,
                          va_t CalleeVA = 0, va_t ResumeVA = 0);
@@ -490,6 +495,7 @@ private:
   const bool KnownCxx;
   const bool EH4;
   const bool CheckCalls;
+  const bool TrackRuntimeArguments;
   const bool CheckRuntimeObjects;
   const bool CheckCleanups;
   RegistrationStateAnalysis Result;

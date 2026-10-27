@@ -1508,6 +1508,7 @@ add_neverd_unittest(NeverDRegistrationStateTests
   eh/RegistrationJumpStateTests.cpp
   eh/RegistrationStartupInfoStateTests.cpp
   eh/RegistrationHeapStateTests.cpp
+  eh/RegistrationSynchronizationStateTests.cpp
   eh/RegistrationMultiStateJumpTests.cpp
   eh/RegistrationReplacementJumpTests.cpp
   eh/RegistrationPrivateCallStateTests.cpp
@@ -1637,6 +1638,7 @@ add_neverd_unittest(NeverDWindowsRegistrationNativeTests
   eh/RegistrationRecoveredCopyTests.cpp
   eh/RegistrationSEHBoundNativeTests.cpp
   eh/RegistrationSEHRuntimeNativeTests.cpp
+  eh/RegistrationSEHSynchronizationNativeTests.cpp
   eh/RegistrationSEHBoundSourceTests.cpp
   eh/RegistrationSEHBoundCookieTests.cpp
   eh/RegistrationSEHDynamicScopeTests.cpp
@@ -1756,6 +1758,7 @@ add_neverd_unittest(NeverDRegistrationCallResultTests
   eh/RegistrationCallResultTests.cpp
   eh/RegistrationSEHLocalUnwindTests.cpp
   eh/RegistrationSEHRuntimeReturnTests.cpp
+  eh/RegistrationSynchronizationABITests.cpp
   eh/RegistrationLLVMCallResultTests.cpp
   LINK_COMPONENTS IRMed BackendLLVM
 )

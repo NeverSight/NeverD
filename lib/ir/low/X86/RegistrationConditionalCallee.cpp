@@ -224,16 +224,25 @@ proveBoundSEHCalleeImpl(const BinaryImage &Image, const BinaryImage &CallImage,
   if (!Stacks || !Unwinds || !Controls)
     return std::nullopt;
   SEHJumpRuntime Jumps;
-  for (const auto &Imported : Image.Imports)
+  bool HasInterlocked = false, HasSleep = false;
+  for (const auto &Imported : Image.Imports) {
+    const bool Atomic = registration_abi::isCheckedRegistrationInterlockedSlot(
+        Image, Imported.IATAddr);
+    const bool Sleep = registration_abi::isCheckedRegistrationSleepSlot(
+        Image, Imported.IATAddr);
+    HasInterlocked |= Atomic;
+    HasSleep |= Sleep;
     if (checkedJumpRuntime(Image, Imported.IATAddr, true) ||
         isCheckedControlFPSlot(Image, Imported.IATAddr) ||
         registration_abi::isCheckedRegistrationStartupInfoSlot(
             Image, Imported.IATAddr) ||
         registration_abi::isCheckedRegistrationHeapTerminationSlot(
             Image, Imported.IATAddr) ||
+        Atomic || Sleep ||
         registration_abi::isCheckedRegistrationRaiseSlot(Image,
                                                          Imported.IATAddr))
       Jumps.ImportSlots.insert(Imported.IATAddr);
+  }
   Jumps.Resume = [&](const LowOp &Resume, size_t &Used) {
     const auto Binding = checkedJumpRuntimeCall(Image, Function, Resume, Used);
     return Binding && Binding->Routine == JumpRuntimeBinding::Kind::Resume;
@@ -253,6 +262,15 @@ proveBoundSEHCalleeImpl(const BinaryImage &Image, const BinaryImage &CallImage,
     return registration_abi::isCheckedRegistrationHeapTerminationCall(Image, Op,
                                                                       Work);
   };
+  if (HasInterlocked)
+    Jumps.Interlocked = [&](const LowOp &Op, size_t &Work) {
+      return registration_abi::isCheckedRegistrationInterlockedCall(Image, Op,
+                                                                    Work);
+    };
+  if (HasSleep)
+    Jumps.Sleep = [&](const LowOp &Op, size_t &Work) {
+      return registration_abi::isCheckedRegistrationSleepCall(Image, Op, Work);
+    };
   Jumps.ImageMemory = [&](va_t Address, uint16_t Width, bool Write,
                           size_t &Used) {
     return registration_abi::hasSEHCallbackImageMemory(Image, Address, Width,
@@ -525,8 +543,8 @@ RegistrationStateAnalysis solveCheckedX86SEHStates(
   BoundCalleeProver Prove =
       [&](const LowOp &Op, const FrameState &State, size_t &Work,
           const std::map<int32_t, SEHJumpCapture> &Captures) {
-        // Root SEH states retain complete word cells, but do not own the
-        // conditional solver's byte-initialization inventory.
+        // General bound helpers still require complete value cells. The
+        // runtime argument byte inventory supplies no helper-borrow authority.
         return proveBoundSEHCallee(Image, Op, State, Work, &Captures);
       };
   SEHPrivateCallProof PrivateCalls(Image, Function);
@@ -535,16 +553,25 @@ RegistrationStateAnalysis solveCheckedX86SEHStates(
     Jumps.PrivateCall = [&](const LowOp &Op, size_t &Work) {
       return PrivateCalls.preservesFrame(Op, Work);
     };
-  for (const auto &Imported : Image.Imports)
+  bool HasInterlocked = false, HasSleep = false;
+  for (const auto &Imported : Image.Imports) {
+    const bool Atomic = registration_abi::isCheckedRegistrationInterlockedSlot(
+        Image, Imported.IATAddr);
+    const bool Sleep = registration_abi::isCheckedRegistrationSleepSlot(
+        Image, Imported.IATAddr);
+    HasInterlocked |= Atomic;
+    HasSleep |= Sleep;
     if (checkedJumpRuntime(Image, Imported.IATAddr, true) ||
         isCheckedControlFPSlot(Image, Imported.IATAddr) ||
         registration_abi::isCheckedRegistrationStartupInfoSlot(
             Image, Imported.IATAddr) ||
         registration_abi::isCheckedRegistrationHeapTerminationSlot(
             Image, Imported.IATAddr) ||
+        Atomic || Sleep ||
         registration_abi::isCheckedRegistrationRaiseSlot(Image,
                                                          Imported.IATAddr))
       Jumps.ImportSlots.insert(Imported.IATAddr);
+  }
   Jumps.Capture = [&](const LowOp &Op, const FrameState &State, bool Installed,
                       size_t &Work) {
     return prepareSEHJumpCapture(Image, Function, Op, State, Installed, Work);
@@ -568,6 +595,15 @@ RegistrationStateAnalysis solveCheckedX86SEHStates(
     return registration_abi::isCheckedRegistrationHeapTerminationCall(Image, Op,
                                                                       Work);
   };
+  if (HasInterlocked)
+    Jumps.Interlocked = [&](const LowOp &Op, size_t &Work) {
+      return registration_abi::isCheckedRegistrationInterlockedCall(Image, Op,
+                                                                    Work);
+    };
+  if (HasSleep)
+    Jumps.Sleep = [&](const LowOp &Op, size_t &Work) {
+      return registration_abi::isCheckedRegistrationSleepCall(Image, Op, Work);
+    };
   Jumps.ImageMemory = [&](va_t Address, uint16_t Width, bool Write,
                           size_t &Work) {
     return registration_abi::hasSEHCallbackImageMemory(Image, Address, Width,

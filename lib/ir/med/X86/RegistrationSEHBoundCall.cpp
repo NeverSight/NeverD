@@ -79,6 +79,20 @@ getX86RegistrationSEHBoundCalls(const MedFunc &Function) {
           Call.Arguments[3].ArgumentKind != ArgumentKind::ConstantScalar)
         return std::nullopt;
       break;
+    case CalleeKind::InterlockedCompareExchange:
+      if (Call.EntryVA || !Call.HasOrdinaryReturn ||
+          Call.Arguments.size() != 3 ||
+          Call.Arguments[0].ArgumentKind != ArgumentKind::ImagePointer ||
+          Call.Arguments[1].ArgumentKind != ArgumentKind::Scalar ||
+          Call.Arguments[2].ArgumentKind != ArgumentKind::Scalar)
+        return std::nullopt;
+      break;
+    case CalleeKind::Sleep:
+      if (Call.EntryVA || !Call.HasOrdinaryReturn ||
+          Call.Arguments.size() != 1 ||
+          Call.Arguments[0].ArgumentKind != ArgumentKind::Scalar)
+        return std::nullopt;
+      break;
     default:
       return std::nullopt;
     }
@@ -96,7 +110,8 @@ getX86RegistrationSEHBoundCalls(const MedFunc &Function) {
       const auto &Arg = Call.Arguments[I];
       using Kind = RegistrationSEHBoundArgument::Kind;
       if (++Work > limits::kMaxRegistrationEHStateWork ||
-          (Arg.ArgumentKind != Kind::ConstantScalar && Arg.ScalarValue))
+          (Arg.ArgumentKind != Kind::ConstantScalar && Arg.ScalarValue) ||
+          (Arg.ArgumentKind != Kind::ImagePointer && Arg.ImageVA))
         return std::nullopt;
       switch (Arg.ArgumentKind) {
       case Kind::Unused:
@@ -131,6 +146,12 @@ getX86RegistrationSEHBoundCalls(const MedFunc &Function) {
             (I != 1 && I != 3) || Arg.Capture || Arg.Offset ||
             Arg.ScalarValue !=
                 RegistrationSEHBoundCall::HeapTerminationArguments[I])
+          return std::nullopt;
+        break;
+      case Kind::ImagePointer:
+        if (Call.CalleeKind != CalleeKind::InterlockedCompareExchange || I ||
+            Arg.Capture || Arg.Offset || !Arg.ImageVA ||
+            Arg.ImageVA > UINT32_MAX - 3 || Arg.ImageVA % 4)
           return std::nullopt;
         break;
       case Kind::JumpBuffer:
@@ -196,7 +217,9 @@ getX86RegistrationSEHBoundCalls(const MedFunc &Function) {
       return std::nullopt;
   }
   for (auto &[Address, Call] : Result) {
-    if (Call.Source->CalleeKind == RegistrationSEHBoundCall::Kind::ControlFP) {
+    if (Call.Source->CalleeKind == RegistrationSEHBoundCall::Kind::ControlFP ||
+        Call.Source->CalleeKind ==
+            RegistrationSEHBoundCall::Kind::InterlockedCompareExchange) {
       if (Call.Operation->Output.Size != 4)
         return std::nullopt;
       Call.ObservesScalarReturn = true;

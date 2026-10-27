@@ -73,7 +73,8 @@ std::optional<SEHFrameValues> getPrivateSEHFrameValues(
   // source frame. Discharge that taint only for a pure scalar use closure;
   // combining it with any actual frame address keeps the existing restriction.
   const auto ExceptionAccesses = getX86RegistrationSEHExceptionAccesses(Func);
-  if (!ExceptionAccesses)
+  const auto Bound = getX86RegistrationSEHBoundCalls(Func);
+  if (!ExceptionAccesses || !Bound)
     return std::nullopt;
   std::set<ValueKey> RuntimeScalars;
   for (const MedBlock &Block : Func.Blocks)
@@ -86,6 +87,15 @@ std::optional<SEHFrameValues> getPrivateSEHFrameValues(
                RegistrationSEHExceptionAccess::Kind::ExceptionFlags))
         RuntimeScalars.insert(Key(Op.Output));
     }
+  for (const auto &[Address, Call] : *Bound) {
+    if (++Work > limits::kMaxRegistrationEHStateWork)
+      return std::nullopt;
+    // The original atomic word is a runtime scalar. Keep its real CALL and
+    // reuse the scalar use/spill closure; no frame coordinate follows.
+    if (Call.Source->CalleeKind ==
+        RegistrationSEHBoundCall::Kind::InterlockedCompareExchange)
+      RuntimeScalars.insert(Key(Call.Operation->Output));
+  }
   auto IsScalar = [&](const MedVar &V) {
     return !V.isConst() && RuntimeScalars.count(Key(V));
   };
@@ -131,7 +141,6 @@ std::optional<SEHFrameValues> getPrivateSEHFrameValues(
   for (const auto &Value : RuntimeScalars)
     FrameValues.erase(Value);
   const auto Jumps = getX86RegistrationSEHJumpCalls(Func);
-  const auto Bound = getX86RegistrationSEHBoundCalls(Func);
   const auto LocalUnwinds = getX86RegistrationSEHLocalUnwinds(Func);
   if (!Jumps || !Bound || !LocalUnwinds)
     return std::nullopt;

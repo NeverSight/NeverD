@@ -73,7 +73,8 @@ llvm::SmallVector<llvm::Value *, 8>
 projectSEHBoundArguments(const RegistrationSEHBoundCall &Source,
                          llvm::IRBuilder<> &B, llvm::AllocaInst &Frame,
                          uint64_t EntrySP,
-                         const std::map<va_t, llvm::AllocaInst *> &Buffers) {
+                         const std::map<va_t, llvm::AllocaInst *> &Buffers,
+                         const std::map<va_t, llvm::Value *> &ImagePointers) {
   llvm::SmallVector<llvm::Value *, 8> Arguments;
   for (const auto &Arg : Source.Arguments) {
     using Kind = RegistrationSEHBoundArgument::Kind;
@@ -83,6 +84,9 @@ projectSEHBoundArguments(const RegistrationSEHBoundCall &Source,
       break;
     case Kind::ConstantScalar:
       Arguments.push_back(B.getInt32(Arg.ScalarValue));
+      break;
+    case Kind::ImagePointer:
+      Arguments.push_back(ImagePointers.at(Arg.ImageVA));
       break;
     case Kind::NullPointer:
       Arguments.push_back(llvm::ConstantPointerNull::get(B.getPtrTy()));

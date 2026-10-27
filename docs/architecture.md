@@ -2615,6 +2615,28 @@ The checked invocation also supplies a no-frame-borrow projection to the shared
 LLVM frame proof. Reaching saved stack addresses across that call still requires
 every SEH callback to preserve the queried bytes; binding a runtime call alone
 does not imply frame-memory preservation.
+`RegistrationStateSynchronization` binds ordinary parent invocations of
+`InterlockedCompareExchange` and `Sleep` to current eager Kernel32 slots and
+immutable direct import instructions. The atomic destination must be an exact,
+aligned original-image DWORD in writable, non-executable mapped storage,
+disjoint from imports, cookies and the scope table. Exchange/comparand and
+sleep duration are actual initialized caller words, not guessed constants.
+The pure caller-word reader and shared budget live in the frame-state component,
+without a reverse dependency on the image/CFG caller. The existing byte inventory
+tracks full writes independently of value knowledge;
+it intersects at joins, retires popped bytes, and loses authority on unknown
+stores, unproved calls and nonlocal transfers. A failed reaching invocation
+revokes an earlier receipt for the same physical call. This inventory supplies
+no general bound-helper input authority.
+The native atomic pointer uses the existing original-data region and an exact
+byte GEP when necessary. Fresh COFF replay checks that actual LLVM pointer
+against the source destination; equal integer bits, loaded pointers and separate
+replacement storage do not satisfy it. Scalar inputs are volatile frame loads
+at the call. The real atomic call supplies its opaque old-word result; neither
+it nor `Sleep` gains memory, unwind, callback or termination attributes. Their
+normal-return import and stack effects do not authorize conditional helpers,
+C++ frames, realigned frames, TIB reads or initializer callbacks. The shared
+frame proof still requires every SEH callback to preserve each queried cell.
 Cleanup relay caching uses the existing unwind-record bound, independently of
 the smaller ordinary-callee cache. Successful and failed lookups still consume
 the same cumulative work budget. Within one dispatch snapshot, each unwind

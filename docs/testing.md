@@ -10926,3 +10926,23 @@ Absolute-memory regressions cover bounded contiguous and sparse batches, complet
 `NativeQueryTrace.*` covers independent query answers, all four zero extensions, selector/count/order mutations, undefined selectors, ordinary-read interleaving, every branch, unaffected state, strict byte/detail audits, malformed bundles, budgets, digest binding and static/inductive refusal. `NativeScalarQueryDescriptor.*` tests the generic descriptor limits and the actual receipt binding.
 
 `NeverDOriginalBinaryUndefinedIndependenceTests`, `NeverDInterpreterSpecializationTests`, `NeverDLowIRRefinementTests`, `NeverDLowIRUndefinedIndependenceTests`, `NeverDX86NativeStateAuditTests`, `NeverDX86LegacyGSRecoveryTests`, `NeverDPEFixedImageTests`.
+
+### Bound synchronization calls in ordinary PE32 SEH parents
+
+`RegistrationSynchronization` covers initialized opaque scalar words separately
+from unknown/unwritten bytes, complete half-word stores, partial pointer taint,
+popped/reallocated storage, incoming-path intersections, expired import slots,
+and atomic destination provenance, alignment, cookie/scope overlap and mapping.
+`RegistrationImportABI.PrivateRuntimeEffectsRequireTheExactPhysicalInvocation`
+checks four runtime providers against physical-call, import and budget mutations.
+
+`scripts/check_windows_registration_rewrite.py --synchronization` adds two
+retained `InterlockedCompareExchange` calls and `Sleep(0)` to an authored filter
+or normal-finally fixture. Independent caller observations require successful
+exchange, failed comparison, both actual old-word returns, and the final image
+word on each iteration. It composes with `--startup-info`, `--heap-termination`,
+EH4/GS and shared EH4 entry/exit helpers. Run the existing preferred/rebased,
+O0/default and both writer paths. Native mutation checks reject changed
+original pointers, raw equal address bits, pointer loads, scalar sample timing,
+providers, source bytes, ABI and unsound function attributes. These fixtures do
+not execute GOF2 or establish whole-image lift completion.

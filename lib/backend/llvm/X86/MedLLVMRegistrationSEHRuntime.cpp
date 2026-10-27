@@ -12,6 +12,8 @@
 
 #include "llvm/IR/Module.h"
 
+#include <map>
+
 namespace neverd {
 
 llvm::Function *
@@ -68,8 +70,16 @@ llvm::Function *MedLLVMEmitter::prepareX86RegistrationSEHRuntimeCall(
     }
     return Callee;
   }
+  std::map<va_t, llvm::Value *> ImagePointers;
+  for (const auto &Arg : Source.Arguments)
+    if (Arg.ArgumentKind == RegistrationSEHBoundArgument::Kind::ImagePointer) {
+      auto *Pointer = tryResolveGlobalData(Arg.ImageVA, 4);
+      if (!Pointer)
+        return nullptr;
+      ImagePointers.emplace(Arg.ImageVA, Pointer);
+    }
   const auto Projected = x86_registration::projectSEHBoundArguments(
-      Source, Builder, *FrameAlloca, FrameEntrySPOffset, {});
+      Source, Builder, *FrameAlloca, FrameEntrySPOffset, {}, ImagePointers);
   Arguments.assign(Projected.begin(), Projected.end());
   return Callee;
 }

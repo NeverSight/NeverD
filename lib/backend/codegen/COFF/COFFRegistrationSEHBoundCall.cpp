@@ -11,6 +11,7 @@
 
 #include "neverd/Limits.h"
 #include "neverd/backend/RewriteSourceIdentity.h"
+#include "neverd/backend/llvm/RegistrationImageProof.h"
 #include "neverd/backend/llvm/X86RegistrationSEHBoundCall.h"
 #include "neverd/backend/llvm/X86RegistrationSEHJump.h"
 
@@ -123,6 +124,12 @@ llvm::Expected<RegistrationSEHJumpContract> bindSEHBoundCalls(
               return rejectIR("SEH runtime changed its exact scalar argument");
             continue;
           }
+          if (Arg.ArgumentKind == Kind::ImagePointer) {
+            if (registration_frame::originalImagePointerArgumentAddress(
+                    *Call, Index, Work) != Arg.ImageVA)
+              return rejectIR("SEH runtime changed its original image pointer");
+            continue;
+          }
           if (Arg.ArgumentKind == Kind::JumpBuffer) {
             const auto Buffer = Buffers.find(Arg.Capture);
             if (Buffer == Buffers.end() || !Buffer->second ||
@@ -185,7 +192,10 @@ llvm::Expected<RegistrationSEHJumpContract> bindSEHBoundCalls(
                         Storage, Base + Receipt.Arguments.front().Offset,
                         Receipt.borrowedObjectBytes()});
         if (Receipt.CalleeKind ==
-            RegistrationSEHBoundCall::Kind::HeapTermination)
+                RegistrationSEHBoundCall::Kind::HeapTermination ||
+            Receipt.CalleeKind ==
+                RegistrationSEHBoundCall::Kind::InterlockedCompareExchange ||
+            Receipt.CalleeKind == RegistrationSEHBoundCall::Kind::Sleep)
           Result.NoFrameBorrowCalls.insert(Call);
       }
   if (Result.Calls.size() != Expected->size())

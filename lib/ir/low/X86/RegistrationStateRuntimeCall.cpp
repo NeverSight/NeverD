@@ -17,12 +17,15 @@ namespace neverd::registration_state {
 
 void RegistrationStateSolver::recordSEHRuntimeCall(
     const Domain &State, const LowOp &Op, RegistrationSEHBoundCall::Kind Kind,
-    std::optional<int32_t> Output) {
+    std::optional<int32_t> Output, va_t ImageOutput) {
   if (Conditional || KnownCxx || State.Unknown || !State.Installed ||
-      (EH4 && (!CompleteCookies ||
-               (Kind != RegistrationSEHBoundCall::Kind::RaiseException &&
-                Kind != RegistrationSEHBoundCall::Kind::GetStartupInfoW &&
-                Kind != RegistrationSEHBoundCall::Kind::HeapTermination))) ||
+      (EH4 &&
+       (!CompleteCookies ||
+        (Kind != RegistrationSEHBoundCall::Kind::RaiseException &&
+         Kind != RegistrationSEHBoundCall::Kind::GetStartupInfoW &&
+         Kind != RegistrationSEHBoundCall::Kind::HeapTermination &&
+         Kind != RegistrationSEHBoundCall::Kind::InterlockedCompareExchange &&
+         Kind != RegistrationSEHBoundCall::Kind::Sleep))) ||
       State.Uninstalled)
     return;
   const auto &SP =
@@ -48,9 +51,13 @@ void RegistrationStateSolver::recordSEHRuntimeCall(
   Call.TargetVA = Op.Inputs[0].Offset;
   using Argument = RegistrationSEHBoundArgument::Kind;
   const unsigned Count =
-      Kind == RegistrationSEHBoundCall::Kind::GetStartupInfoW ? 1
-      : Kind == RegistrationSEHBoundCall::Kind::ControlFP     ? 3
-                                                              : 4;
+      Kind == RegistrationSEHBoundCall::Kind::GetStartupInfoW ||
+              Kind == RegistrationSEHBoundCall::Kind::Sleep
+          ? 1
+      : Kind == RegistrationSEHBoundCall::Kind::ControlFP ||
+              Kind == RegistrationSEHBoundCall::Kind::InterlockedCompareExchange
+          ? 3
+          : 4;
   for (unsigned I = 0; I != Count; ++I)
     Call.Arguments.push_back(
         {Argument::Scalar, Call.StackOffset + int32_t(I * 4), 0});
@@ -64,6 +71,12 @@ void RegistrationStateSolver::recordSEHRuntimeCall(
               : RegistrationSEHBoundArgument{
                     Argument::ConstantScalar, 0, 0,
                     RegistrationSEHBoundCall::HeapTerminationArguments[I]};
+  } else if (Kind ==
+                 RegistrationSEHBoundCall::Kind::InterlockedCompareExchange &&
+             ImageOutput)
+    Call.Arguments.front() = {Argument::ImagePointer, 0, 0, 0, ImageOutput};
+  else if (Kind == RegistrationSEHBoundCall::Kind::Sleep) {
+    // The duration is sampled at the actual source invocation.
   } else if ((Kind == RegistrationSEHBoundCall::Kind::ControlFP ||
               Kind == RegistrationSEHBoundCall::Kind::GetStartupInfoW) &&
              Output)
