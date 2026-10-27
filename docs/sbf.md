@@ -320,8 +320,15 @@ fixed point. Scratch inputs are omitted only when the callee neither reads nor
 writes memory. Other keys include both scratch views, pointer kinds and
 memory-coordinate lanes. Arguments and memory enter nested direct calls and
 proven literal CALLX targets; converged returns supply r0 and memory effects.
-The shared transfer owns register clobbers and syscall effects. Callee-saved
-registers survive a return; automatic frames advance by the VM stride.
+The shared transfer owns register clobbers and syscall effects. A returning
+syscall replaces only r0; r1-r5 retain their argument values, including values
+loaded before a memory-writing syscall. Memory windows still invalidate stored
+facts, so retaining a loaded register does not authorize a later reload.
+Calls that may execute guest code keep the conservative r0-r5 clobber before
+proven summary outputs are applied. Callee-saved registers survive a return;
+automatic frames advance by the VM stride. The same call-register rule drives
+ordinary block transfer, contextual values, origins, input expressions,
+input dependencies and missing-fact attribution.
 Resolved syscalls depend on their five exposed host-ABI argument carriers;
 unexposed return, callee-saved and frame registers do not create new summary
 variants unless the function itself reads them. Unknown calls still depend on

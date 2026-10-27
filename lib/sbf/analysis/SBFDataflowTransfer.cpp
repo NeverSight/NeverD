@@ -450,8 +450,8 @@ void applyRegisterTransfer(const MedInstruction &Instruction,
   }
 
   if (Instruction.Call != CallKind::None)
-    for (unsigned Register = 0; Register < kFirstCalleeSavedRegister;
-         ++Register)
+    for (unsigned Register = 0;
+         Register < callClobberedRegisterCount(Instruction.Call); ++Register)
       State[Register] = {};
 }
 

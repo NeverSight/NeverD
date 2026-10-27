@@ -47,8 +47,6 @@ constexpr uint16_t registerBit(unsigned Register) {
 }
 
 constexpr uint16_t AllRegisters = (uint16_t{1} << kRegisterCount) - 1;
-constexpr uint16_t CallerClobbered =
-    (uint16_t{1} << kFirstCalleeSavedRegister) - 1;
 
 struct CallInputs {
   uint16_t Registers = AllRegisters;
@@ -67,7 +65,7 @@ InstructionDependencies instructionDependencies(const MedInstruction &I,
   if (I.Semantics.WritesDestination)
     Result.Writes = registerBit(I.Dst);
   if (I.Call != CallKind::None) {
-    Result.Writes |= CallerClobbered;
+    Result.Writes |= (uint16_t{1} << callClobberedRegisterCount(I.Call)) - 1;
     if (I.Call == CallKind::Syscall) {
       // The host sees only its five argument carriers. Its memory is opaque.
       Result.Reads = ((uint16_t{1} << kArgumentRegisterCount) - 1)
@@ -1420,7 +1418,8 @@ void ContextFlow::transferValues(const MedInstruction &Instruction,
     State.OriginScratch.Memory.clear();
   }
   if (Instruction.Call != CallKind::None) {
-    for (unsigned R = 0; R < kFirstCalleeSavedRegister; ++R) {
+    for (unsigned R = 0; R < callClobberedRegisterCount(Instruction.Call);
+         ++R) {
       State.Origins[R] = {};
       State.InputExpressions[R].reset();
     }
@@ -1467,7 +1466,7 @@ void ContextFlow::transferValues(const MedInstruction &Instruction,
                   ScratchLoadPolicy::ProvenValues);
     State.Scratch = std::move(Scalar.Scratch);
     State.Scratch.Memory.clear();
-    for (unsigned R = 0; R < kFirstCalleeSavedRegister; ++R)
+    for (unsigned R = 0; R < callClobberedRegisterCount(Instruction.Call); ++R)
       State.Registers[R] = {};
     return;
   }
@@ -1970,7 +1969,8 @@ llvm::Expected<bool> ContextFlow::callTarget(FunctionContext &Context,
       // Legacy runtime dispatch precedes the function. Its effects cannot be
       // bypassed using the file-local target or the original arguments.
       Input.Scratch.clear();
-      for (unsigned R = 0; R < kFirstCalleeSavedRegister; ++R)
+      for (unsigned R = 0; R < callClobberedRegisterCount(Instruction.Call);
+           ++R)
         Input.Registers[R] = {};
     }
     pushAbstractFrame(Input, Program);
@@ -2145,7 +2145,7 @@ llvm::Expected<bool> ContextFlow::callTarget(FunctionContext &Context,
     State.Postconditions = std::move(PreservedPostconditions);
   }
   if (Context.Generic) {
-    for (unsigned R = 0; R < kFirstCalleeSavedRegister; ++R)
+    for (unsigned R = 0; R < callClobberedRegisterCount(Instruction.Call); ++R)
       State.InputExpressions[R].reset();
     if (NeedsReturnExpression && !ReturnExpression && !Edge.LegacyRuntime) {
       auto Expression = inputOriginExpression(State.Origins[kReturnRegister]);
@@ -2232,7 +2232,8 @@ llvm::Expected<bool> ContextFlow::replay(FunctionContext &Context,
       if (!*Continues)
         return false;
       if (Collect)
-        for (unsigned R = 0; R < kFirstCalleeSavedRegister; ++R) {
+        for (unsigned R = 0; R < callClobberedRegisterCount(Instruction->Call);
+             ++R) {
           Missing[R] = {};
           if (State.Registers[R].unknown()) {
             Missing[R].Kind = CallXMissingFactKind::FunctionReturn;

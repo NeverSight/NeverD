@@ -17,11 +17,13 @@
 #include "neverd/sbf/analysis/SBFCallXContexts.h"
 #include "neverd/sbf/analysis/SBFDataflow.h"
 #include "neverd/sbf/image/SBFProgramImage.h"
+#include "neverd/sbf/image/SBFRelocations.h"
 #include "neverd/sbf/runtime/SBFInterpreter.h"
 #include "neverd/sbf/runtime/SBFSemantics.h"
 #include "neverd/sbf/runtime/SBFSyscalls.h"
 #include "neverd/sbf/runtime/SBFVMConfig.h"
 
+#include "llvm/BinaryFormat/ELF.h"
 #include "llvm/Support/Endian.h"
 #include "llvm/Support/Error.h"
 
@@ -1755,6 +1757,161 @@ TEST(SBFCallXContexts, BoundedFramesPreserveOnlyDisjointAbsoluteWrites) {
       if (Heap)
         EXPECT_EQ(Raw->ReturnValue, 500u + Count - 1);
       checkSummaryReferences(*Report);
+    }
+}
+
+void addLegacySyscallRelocation(BinaryImage &Image, size_t Slot,
+                                const SyscallInfo &Syscall) {
+  RelocationEntry Reloc;
+  Reloc.Address = kBytecodeStart + Slot * kInstructionSize;
+  Reloc.Type = static_cast<uint32_t>(Relocation::Call32);
+  Reloc.SymbolName = Syscall.Name.str();
+  Reloc.ELF.emplace();
+  Reloc.ELF->Source = ELFRelocationSource::ProgramDynamicTable;
+  Reloc.ELF->RawOffset = Slot * kInstructionSize;
+  Reloc.ELF->Symbol.emplace();
+  Reloc.ELF->Symbol->Name = Syscall.Name.str();
+  Reloc.ELF->Symbol->SectionIndex = llvm::ELF::SHN_UNDEF;
+  Reloc.ELF->Symbol->Type = llvm::ELF::STT_NOTYPE;
+  Reloc.ELF->Symbol->Binding = llvm::ELF::STB_GLOBAL;
+  Image.Relocations.push_back(std::move(Reloc));
+}
+
+TEST(SBFCallXContexts, SyscallsPreserveArgumentValuesLoadedBeforeTheCall) {
+  const size_t Count = kCallXContextSpecializationsPerEntry + 2;
+  for (Version V : {Version::V0, Version::V3})
+    for (unsigned Register = kFirstArgumentRegister;
+         Register < kFirstCalleeSavedRegister; ++Register)
+      for (bool WritesMemory : {false, true}) {
+        if (WritesMemory &&
+            Register < kFirstArgumentRegister +
+                           getSyscallInfo(Syscall::Memset)->ArgumentCount)
+          continue;
+        SCOPED_TRACE(::testing::Message() << unsigned(V) << ":r" << Register
+                                          << ":writes=" << WritesMemory);
+        std::vector<test::EncodedInstruction> Text;
+        std::vector<size_t> Literals, Calls;
+        for (size_t I = 0; I < Count; ++I) {
+          Literals.push_back(Text.size());
+          const auto Literal = test::loadImm64(3, 0);
+          Text.insert(Text.end(), Literal.begin(), Literal.end());
+          Text.push_back(encode(Opcode::ST_DW_REG, 10, 3, -64));
+          Text.push_back(encode(Opcode::MOV64_REG, 1, 10));
+          Text.push_back(encode(Opcode::ADD64_IMM, 1, 0, 0, -64));
+          Calls.push_back(Text.size());
+          Text.push_back({});
+        }
+        Text.push_back(encode(Opcode::EXIT));
+        const size_t Wrapper = Text.size();
+        Text.push_back(encode(Opcode::LD_DW_REG, Register, 1));
+        if (WritesMemory) {
+          // The guest performs this same zero fill before the host call, so
+          // the callback's no-op is a faithful memset for these actual inputs.
+          // The loaded register must retain its earlier value nonetheless.
+          Text.push_back(encode(Opcode::ST_DW_IMM, 1));
+          Text.push_back(encode(Opcode::MOV64_IMM, 2));
+          Text.push_back(encode(Opcode::MOV64_IMM, 3, 0, 0, 8));
+        }
+        const auto *Syscall = getSyscallInfo(
+            WritesMemory ? Syscall::Memset : Syscall::GetStackHeight);
+        const size_t SyscallSlot = Text.size();
+        Text.push_back(encode(Opcode::CALL_IMM, 0, 0, 0,
+                              V == Version::V0 ? kLegacyUnresolvedCallImmediate
+                                               : Syscall->Hash));
+        const size_t CallX = Text.size();
+        Text.push_back(V == Version::V0
+                           ? encode(Opcode::CALL_REG, 0, 0, 0, Register)
+                           : encode(Opcode::CALL_REG, Register));
+        Text.push_back(encode(Opcode::EXIT));
+        const size_t Targets = Text.size();
+        for (size_t I = 0; I < Count; ++I) {
+          Text.push_back(encode(Opcode::MOV64_IMM, 0, 0, 0, 42 + I));
+          Text.push_back(encode(Opcode::EXIT));
+          const auto Target =
+              test::loadImm64(3, kBytecodeStart + (Targets + I * 2) * 8);
+          std::copy(Target.begin(), Target.end(), Text.begin() + Literals[I]);
+          Text[Calls[I]] =
+              encode(Opcode::CALL_IMM, 0, 1, 0, Wrapper - Calls[I] - 1);
+        }
+        auto Image = test::makeImage(Text, {});
+        Image.SBF->Version = V;
+        Image.SBF->ELFFlags = static_cast<uint32_t>(V);
+        Image.SBF->StrictLayout = V == Version::V3;
+        if (V == Version::V0)
+          addLegacySyscallRelocation(Image, SyscallSlot, *Syscall);
+        auto Program = analyze(Image);
+        ASSERT_TRUE(static_cast<bool>(Program))
+            << llvm::toString(Program.takeError());
+        auto Report = recoverCallXContexts(*Program);
+        ASSERT_TRUE(static_cast<bool>(Report))
+            << llvm::toString(Report.takeError());
+        for (size_t I = 0; I < Count; ++I)
+          EXPECT_TRUE(llvm::any_of(Report->Contexts, [&](const auto &Site) {
+            return !Site.EntryPrefixOnly && Site.CallerSlot == Calls[I] &&
+                   Site.CallXSlot == CallX &&
+                   Site.TargetSlot == Targets + I * 2;
+          })) << I;
+        checkSummaryReferences(*Report);
+        ExecutionEnvironment Environment;
+        Environment.HostSyscall = [&](uint32_t Hash,
+                                      const SyscallArguments &Args) {
+          if (Hash != Syscall->Hash)
+            return SyscallOutcome::unregistered();
+          if (WritesMemory) {
+            EXPECT_EQ(Args[1], 0u);
+            EXPECT_EQ(Args[2], 8u);
+          }
+          return SyscallOutcome::returned(0);
+        };
+        auto Raw = executeRaw(*Program, std::move(Environment));
+        ASSERT_TRUE(static_cast<bool>(Raw)) << llvm::toString(Raw.takeError());
+        EXPECT_EQ(Raw->Status, ExecutionStatus::Returned) << Raw->Error;
+        EXPECT_EQ(Raw->ReturnValue, 42u + Count - 1);
+        EXPECT_EQ(Raw->Syscalls.size(), Count);
+      }
+}
+
+TEST(SBFCallXContexts, SyscallConstantsReachTheGlobalCallResolver) {
+  for (Version V : {Version::V0, Version::V3})
+    for (unsigned Register = kFirstArgumentRegister;
+         Register < kFirstCalleeSavedRegister; ++Register) {
+      SCOPED_TRACE(::testing::Message() << unsigned(V) << ":r" << Register);
+      auto Text = test::loadImm64(Register, kBytecodeStart + 5 * 8);
+      const auto *Syscall = getSyscallInfo(Syscall::GetStackHeight);
+      Text.push_back(encode(Opcode::CALL_IMM, 0, 0, 0,
+                            V == Version::V0 ? kLegacyUnresolvedCallImmediate
+                                             : Syscall->Hash));
+      Text.push_back(V == Version::V0
+                         ? encode(Opcode::CALL_REG, 0, 0, 0, Register)
+                         : encode(Opcode::CALL_REG, Register));
+      Text.push_back(encode(Opcode::EXIT));
+      Text.push_back(encode(Opcode::MOV64_IMM, 0, 0, 0, 42));
+      Text.push_back(encode(Opcode::EXIT));
+      auto Image = test::makeImage(Text, {});
+      Image.SBF->Version = V;
+      Image.SBF->ELFFlags = static_cast<uint32_t>(V);
+      Image.SBF->StrictLayout = V == Version::V3;
+      if (V == Version::V0)
+        addLegacySyscallRelocation(Image, 2, *Syscall);
+      auto Program = analyze(Image);
+      ASSERT_TRUE(static_cast<bool>(Program))
+          << llvm::toString(Program.takeError());
+      const auto *Call = MedInstructionIndex(Program->Med).find(3);
+      ASSERT_NE(Call, nullptr);
+      EXPECT_EQ(Call->Call, CallKind::Internal);
+      EXPECT_EQ(Call->CallTarget, 5u);
+      auto Report = recoverCallXContexts(*Program);
+      ASSERT_TRUE(static_cast<bool>(Report))
+          << llvm::toString(Report.takeError());
+      EXPECT_TRUE(Report->UnresolvedCallXSlots.empty());
+      ExecutionEnvironment Environment;
+      Environment.HostSyscall = [](uint32_t, const SyscallArguments &) {
+        return SyscallOutcome::returned(0);
+      };
+      auto Raw = executeRaw(*Program, std::move(Environment));
+      ASSERT_TRUE(static_cast<bool>(Raw)) << llvm::toString(Raw.takeError());
+      EXPECT_EQ(Raw->Status, ExecutionStatus::Returned) << Raw->Error;
+      EXPECT_EQ(Raw->ReturnValue, 42u);
     }
 }
 
@@ -3971,7 +4128,9 @@ TEST(SBFCallXContexts, ReclaimsOrphanParentsBeforeLaterChildSpecializations) {
 
 TEST(SBFCallXContexts, CatalogNeverReturnDoesNotOverrideTheHostOutcome) {
   const uint32_t Hash = findSyscallByName("abort")->Hash;
-  auto Text = test::loadImm64(2, kBytecodeStart + 6 * 8);
+  auto Text = test::loadImm64(2, kBytecodeStart + 8 * 8);
+  Text.push_back(encode(Opcode::ST_DW_REG, 10, 2, -8));
+  Text.push_back(encode(Opcode::LD_DW_REG, 2, 10, -8));
   for (const auto &I :
        {encode(Opcode::CALL_IMM, 0, 0, 0, Hash), encode(Opcode::CALL_REG, 2),
         encode(Opcode::EXIT), encode(Opcode::EXIT),
@@ -3993,7 +4152,7 @@ TEST(SBFCallXContexts, CatalogNeverReturnDoesNotOverrideTheHostOutcome) {
   EXPECT_EQ(Raw->Status, ExecutionStatus::Returned) << Raw->Error;
   EXPECT_EQ(Raw->ReturnValue, 42u);
   EXPECT_TRUE(std::any_of(Raw->Trace.begin(), Raw->Trace.end(),
-                          [](const auto &Step) { return Step.Slot == 3; }));
+                          [](const auto &Step) { return Step.Slot == 5; }));
 }
 
 TEST(SBFCallXContexts, UnknownValuesStillMeetTheirDistinctParameterOrigins) {

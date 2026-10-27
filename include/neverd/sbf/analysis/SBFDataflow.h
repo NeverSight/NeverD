@@ -222,6 +222,16 @@ private:
   std::vector<const MedInstruction *> BySlot;
 };
 
+/// Number of leading registers whose values a call can replace. A returning
+/// runtime syscall replaces only r0; its five arguments are passed by value.
+/// Calls that can execute guest code retain the conservative r0-r5 clobber.
+constexpr unsigned callClobberedRegisterCount(CallKind Kind) {
+  if (Kind == CallKind::None)
+    return 0;
+  return Kind == CallKind::Syscall ? kFirstArgumentRegister
+                                   : kFirstCalleeSavedRegister;
+}
+
 /// Apply one instruction's effect to \p State.
 ///
 /// This is the only transfer function of the SBF value lattice. The block fixed
