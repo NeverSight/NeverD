@@ -415,6 +415,28 @@ class HistoryAllowance:
 
 HISTORY_ALLOWED: tuple[HistoryAllowance, ...] = (
     HistoryAllowance(
+        path="docs/evidence/arm64e-typed-call-abi-2026-10-28.json",
+        rule="private-path",
+        commits=frozenset({"8163d15c17052bd5242d6ff35e1cd18f8c04ca03"}),
+        line="",
+        reason=(
+            "Reviewed deletion of local checkout prefixes from the Darwin "
+            "ABI receipt. Only command paths were normalized; statuses, "
+            "timings and artifact hashes are unchanged. Exact historical "
+            "line digests permit no current or future path occurrence."
+        ),
+        line_sha256=frozenset({
+            "170cdc8c9dc54ea4f66ba902295daba256b38d72ef1d0fa377f2298be5c21344",
+            "376438c318647fa4451e6df22d7876aa23fe17932d41c4570ab0311f9f6215d1",
+            "3a2d102b3ea98311af5243a8293b6aa439a41c9c2440f77fdc388a0024c601cc",
+            "611378506823a6b25f13f298d47f8d3cd1ef877407b845250bba58f8669a1c32",
+            "bddcd1df1e73de0db4e1c59b9517be44390737cacc478437b85169a0fa6f9254",
+            "df2f2c3fc5b2eb257259e60019f35709f8f5a18980319750ce3a5bd0e1d684ef",
+            "ef5eb909a1791810c74b4f0de1fc3df79fea8f8a7afb280647cf6288c957bc17",
+            "ff632c8149ef79e2c4cbdf8292ab0f7f78816cbe03f0d71e8bcf8d8928418914",
+        }),
+    ),
+    HistoryAllowance(
         path="docs/evidence/x86-skinit-2026-10-27.json",
         rule="private-path",
         commits=frozenset({
