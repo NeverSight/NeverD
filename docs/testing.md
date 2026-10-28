@@ -10501,6 +10501,12 @@ Integer calls and returns retain explicit pointer conversions with preserved
 LLVM function types enabled and disabled; pointer calls and ordinary integer
 constants keep their own types. The x64/ARM64 source cases execute at O0/O2 with
 undefined-behavior traps.
+`LLVMCPointerAddresses.ReadonlyImageStringsRespectCalleeCharacterWidth`
+passes the same immutable UTF-16 bytes to a narrow `puts` declaration and a
+wide `wcslen` declaration. It retains the wide-literal check and executes
+both emitted calls at O0/O2 with two-byte `wchar_t`, independent providers,
+and pointer-type diagnostics enabled. The providers check the consumed
+characters, return value and call count without using the host wide C ABI.
 
 `LinkedLiteralAddsToTheDataItNames` links an ARM getter whose
 `ldr r0, [pc, r0]` reads its literal right after `bx lr`. It requires the

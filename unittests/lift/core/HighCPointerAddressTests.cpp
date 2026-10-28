@@ -2672,41 +2672,65 @@ TEST(HighCPointerAddresses, NonAsciiImageBytesStayAddress) {
   EXPECT_NE(Source.find("0x140003600"), std::string::npos) << Source;
 }
 
-TEST(LLVMCPointerAddresses, ReadonlyWideImageStringPrintsLLiteral) {
+TEST(LLVMCPointerAddresses, ReadonlyImageStringsRespectCalleeCharacterWidth) {
+  // The same immutable bytes mean "%" to puts and L"%s" to wcslen on
+  // Windows. A byte-string declaration must not request a wide literal.
   BinaryImage Img = makeImageObjectFixture(
       0x140003400, {0x25, 0x00, 0x73, 0x00, 0x00, 0x00}, false);
-  llvm::LLVMContext Context;
-  llvm::Module Module("llvm-c-wide-string", Context);
-  llvm::Type *I8 = llvm::Type::getInt8Ty(Context);
-  llvm::Type *I64 = llvm::Type::getInt64Ty(Context);
-  llvm::FunctionType *PutsTy =
-      llvm::FunctionType::get(llvm::Type::getVoidTy(Context),
-                              {llvm::PointerType::getUnqual(I8)}, false);
-  llvm::Function *Puts = llvm::Function::Create(
-      PutsTy, llvm::GlobalValue::ExternalLinkage, "puts", Module);
-  llvm::FunctionType *FnTy =
-      llvm::FunctionType::get(llvm::Type::getVoidTy(Context), false);
-  llvm::Function *Function = llvm::Function::Create(
-      FnTy, llvm::GlobalValue::ExternalLinkage, "format_s", Module);
-  llvm::IRBuilder<> Builder(
-      llvm::BasicBlock::Create(Context, "entry", Function));
-  auto *Ptr =
-      llvm::ConstantExpr::getIntToPtr(llvm::ConstantInt::get(I64, 0x140003400),
-                                      llvm::PointerType::getUnqual(I8));
-  Builder.CreateCall(Puts, {Ptr});
-  Builder.CreateRetVoid();
+  for (bool Wide : {false, true}) {
+    SCOPED_TRACE(Wide);
+    llvm::LLVMContext Context;
+    llvm::Module Module("llvm-c-string-width", Context);
+    auto *PointerTy = llvm::PointerType::getUnqual(Context);
+    auto *I64 = llvm::Type::getInt64Ty(Context);
+    auto *ResultTy = Wide ? I64 : llvm::Type::getInt32Ty(Context);
+    auto *Callee = llvm::Function::Create(
+        llvm::FunctionType::get(ResultTy, {PointerTy}, false),
+        llvm::GlobalValue::ExternalLinkage, Wide ? "wcslen" : "puts", Module);
+    auto *Function = llvm::Function::Create(
+        llvm::FunctionType::get(ResultTy, false),
+        llvm::GlobalValue::ExternalLinkage, "read_string", Module);
+    llvm::IRBuilder<> Builder(
+        llvm::BasicBlock::Create(Context, "entry", Function));
+    auto *Pointer = llvm::ConstantExpr::getIntToPtr(
+        llvm::ConstantInt::get(I64, 0x140003400), PointerTy);
+    Builder.CreateRet(Builder.CreateCall(Callee, {Pointer}));
 
-  std::string Source;
-  llvm::raw_string_ostream OS(Source);
-  CEmitterOptions Options;
-  Options.TheArch = Arch::X64;
-  Options.Format = BinaryFormat::COFF;
-  Options.EmitIncludes = false;
-  ASSERT_TRUE(
-      LLVMCEmitter().emit(Module, OS, Options, nullptr, &Img, Function));
-  OS.flush();
-  EXPECT_NE(Source.find("L\"%s\""), std::string::npos) << Source;
-  EXPECT_EQ(Source.find("0x140003400"), std::string::npos) << Source;
+    std::string Source;
+    llvm::raw_string_ostream OS(Source);
+    CEmitterOptions Options;
+    Options.TheArch = Arch::X64;
+    Options.Format = BinaryFormat::COFF;
+    Options.EmitIncludes = false;
+    ASSERT_TRUE(
+        LLVMCEmitter().emit(Module, OS, Options, nullptr, &Img, Function));
+    OS.flush();
+    EXPECT_NE(Source.find(Wide ? "L\"%s\"" : "\"%\""), std::string::npos)
+        << Source;
+    EXPECT_EQ(Source.find("0x140003400"), std::string::npos) << Source;
+
+    // Use providers with the declared character widths, without depending on
+    // the host C library's wchar_t ABI. Compile for Windows' two-byte wchar_t.
+    const std::string Program = R"c(
+#include <stdint.h>
+#include <stddef.h>
+static unsigned calls;
+int puts(const char *s) {
+  ++calls;
+  return s[0] == 0x25 && s[1] == 0 ? 1 : -1;
+}
+size_t wcslen(const wchar_t *s) {
+  ++calls;
+  return sizeof(wchar_t) == 2 && s[0] == 0x25 && s[1] == 0x73 && s[2] == 0
+             ? 2 : 0;
+}
+)c" + Source + "\nint main(void) { return read_string() != " +
+                                (Wide ? "2" : "1") + " || calls != 1; }\n";
+    for (llvm::StringRef Level : {"-O0", "-O2"})
+      source_call_execution_test::compileAndRun(
+          Program, {Level, "-fno-builtin", "-fshort-wchar",
+                    "-Werror=incompatible-pointer-types"});
+  }
 }
 
 TEST(HighCPointerAddresses, StatedLiteralsKeepEveryCharacterAndTheirZeros) {
