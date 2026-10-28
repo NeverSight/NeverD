@@ -1978,6 +1978,7 @@ target_compile_definitions(NeverDHighCIntegerWidthTests PRIVATE
 
 add_neverd_unittest(NeverDCPointerProjectionTests
   core/HighCPointerAddressTests.cpp
+  core/LLVMCFrameAccessTests.cpp
   LINK_COMPONENTS Pipeline BackendC
 )
 target_include_directories(NeverDCPointerProjectionTests PRIVATE

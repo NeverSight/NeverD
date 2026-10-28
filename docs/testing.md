@@ -10507,6 +10507,11 @@ wide `wcslen` declaration. It retains the wide-literal check and executes
 both emitted calls at O0/O2 with two-byte `wchar_t`, independent providers,
 and pointer-type diagnostics enabled. The providers check the consumed
 characters, return value and call count without using the host wide C ABI.
+`LLVMCFrameAccess.DeclaredMembersKeepLoadCarriersAcrossMutation` reads
+declared pointer fields through integer LLVM loads and integer fields
+through pointer loads. For ELF, COFF and Mach-O output it executes at O0/O2,
+checking both the value captured before an external mutation and the later
+read composed at its use. Pointer/integer conversion diagnostics are errors.
 
 `LinkedLiteralAddsToTheDataItNames` links an ARM getter whose
 `ldr r0, [pc, r0]` reads its literal right after `bx lr`. It requires the
