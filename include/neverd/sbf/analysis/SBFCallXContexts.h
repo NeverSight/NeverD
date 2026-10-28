@@ -184,7 +184,6 @@ struct CallXFunctionSummary {
   bool ReadsInputMemory = true;
   uint16_t ReuseInputRegisterMask = 0;
   bool ReuseReadsInputMemory = true;
-  bool ReuseReadsNarrowMemory = true;
   RegisterState Inputs{};
   std::vector<std::pair<unsigned, ProvenValueSet>> InputAlternatives;
   RegisterValue ReturnValue;

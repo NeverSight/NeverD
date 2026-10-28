@@ -247,7 +247,8 @@ public:
            MemoryCoordinate SourceCoordinate = MemoryCoordinate::Absolute,
            MemoryCoordinate DestinationCoordinate = MemoryCoordinate::Absolute);
   bool operator==(const StoredRegisterMemory &Other) const;
-  bool equalWords(const StoredRegisterMemory &Other) const;
+  void discardNarrowCells();
+  void discardWordCells();
 
 private:
   // Coordinate 0 is absolute, 1 is frame-relative, and N+2 denotes capture N.

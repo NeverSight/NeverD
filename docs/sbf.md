@@ -743,13 +743,16 @@ memory estimate. Full-width word counters keep their old meaning; separate
 counts include both widths. This does not preserve tag/payload correlations
 between distinct return paths.
 
-Contextual keys include these exact-width cells. The separate untyped descriptor
-byte buffer has no reader in this optional analysis and remains projected out.
-A completed, memory-preserving summary that never reads narrow memory can reuse
-identical full-width inputs despite different narrow cells. The caller retains
-its actual current memory. A narrow load or an unknown call prevents that
-equivalence; `conditional_reuse_reads_narrow_memory` records the dependency.
-Mutating summaries still require their complete input memory to agree.
+Contextual input keys retain full-width cells. Incoming narrow cells are
+projected to unknown before specialization; they cannot consume the four slots
+merely because a caller left different byte values in unrelated memory.
+The callee can still read immutable image bytes and publish locally established
+narrow output fields. Narrow caller facts survive a call only after canonical
+may-write invalidation, then new output postconditions are applied. Unknown
+writes cannot restore a saved byte from an older invocation. The separate
+untyped descriptor byte buffer also remains projected out. Consuming caller
+narrow fields inside another function needs read-dependent input summaries and
+remains an explicit precision gap; this round does not claim that capability.
 Concrete functions whose
 completed generic summary contains CALLX sites process CFG joins in reverse
 postorder. Generic summaries and concrete forwarding wrappers retain FIFO

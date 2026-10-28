@@ -74,7 +74,7 @@ struct MemoryEffects {
                   const SBFProgram &Program) const;
 };
 
-/// Full-width postconditions at absolute scratch addresses or relative to a
+/// Exact-width postconditions at absolute scratch addresses or relative to a
 /// function's entry registers. Symbolic keys are bases and signed
 /// displacements, never synthetic VM addresses. Distinct entry registers may
 /// alias; a write through either invalidates the other's cells. CFG joins meet

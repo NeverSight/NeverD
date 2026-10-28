@@ -53,14 +53,12 @@ constexpr uint16_t AllRegisters = (uint16_t{1} << kRegisterCount) - 1;
 struct CallInputs {
   uint16_t Registers = AllRegisters;
   bool Memory = true;
-  bool NarrowMemory = true;
 };
 
 struct InstructionDependencies {
   uint16_t Reads = 0;
   uint16_t Writes = 0;
   bool Memory = false;
-  bool NarrowMemory = false;
 };
 
 InstructionDependencies instructionDependencies(const MedInstruction &I,
@@ -75,11 +73,9 @@ InstructionDependencies instructionDependencies(const MedInstruction &I,
       Result.Reads = ((uint16_t{1} << kArgumentRegisterCount) - 1)
                      << kFirstArgumentRegister;
       Result.Memory = true;
-      Result.NarrowMemory = true;
     } else {
       Result.Reads = Callee.Registers;
       Result.Memory = Callee.Memory;
-      Result.NarrowMemory = Callee.NarrowMemory;
     }
     if (I.Op == Operation::CallX)
       Result.Reads |= registerBit(I.CallRegister);
@@ -88,8 +84,6 @@ InstructionDependencies instructionDependencies(const MedInstruction &I,
   if (I.Op == Operation::Exit)
     Result.Reads |= registerBit(kReturnRegister);
   Result.Memory = I.Op == Operation::Load;
-  Result.NarrowMemory =
-      Result.Memory && I.Semantics.MemoryWidth != kDoubleWordBitWidth;
   switch (I.Form) {
   case OperandForm::Dst:
   case OperandForm::Endian:
@@ -485,7 +479,6 @@ struct FunctionContext : llvm::FoldingSetNode {
   // cannot repeatedly rediscover the same exploratory image binding.
   uint16_t ExploredImageRegisters = 0;
   bool ReuseReadsMemory = false;
-  bool ReuseReadsNarrowMemory = false;
   MemoryEffects Effects;
   size_t RootGeneration = 0;
   size_t IncomingReferences = 0;
@@ -3158,6 +3151,13 @@ llvm::Expected<bool> ContextFlow::callTarget(FunctionContext &Context,
                             !Callee->Effects.Unknown && !Edge.LegacyRuntime;
   if (PreserveInput || ApplyEffects)
     Preserved = State.Scratch;
+  else if (Callee && !Edge.LegacyRuntime) {
+    // These cells were projected out of the callee input. Keep the caller's
+    // current facts only where the callee's complete may-writes cannot touch.
+    Preserved.Values = State.Scratch.Values;
+    Preserved.Values.discardWordCells();
+    Callee->Effects.invalidate(Preserved, ValueEntry.Registers, Program);
+  }
   if (!PreserveInput && ApplyEffects) {
     Edge.AppliedMemoryEffects = true;
     Edge.PreservedOlderFrames =
@@ -3186,6 +3186,8 @@ llvm::Expected<bool> ContextFlow::callTarget(FunctionContext &Context,
     if (!PreserveInput && !ApplyEffects) {
       rebaseReturnedFrame(ReturnScratch.Values, ReturnFrameDelta);
       ReturnScratch.Values.transformSymbols(BindCapture);
+      ReturnScratch.Values.includeCells(
+          Preserved.Values, [](const RegisterValue &) { return true; });
     }
     if (Callee->Generic && !EquivalentLeaf && !PreserveInput && !ApplyEffects) {
       // Generic frame coordinates are a private symbolic anchor. Only
@@ -3368,7 +3370,7 @@ llvm::Expected<bool> ContextFlow::replay(FunctionContext &Context,
         return Continues.takeError();
       CallInputs Callee;
       if (Collect) {
-        Callee = {0, false, false};
+        Callee = {0, false};
         for (size_t I = FirstEdge; I < Context.Calls.size(); ++I) {
           const auto &Edge = Context.Calls[I];
           if (Edge.Barrier != CallXSummaryBarrier::None || Edge.LegacyRuntime) {
@@ -3376,7 +3378,6 @@ llvm::Expected<bool> ContextFlow::replay(FunctionContext &Context,
             break;
           }
           const auto &Summary = *Contexts[*Edge.CalleeSummaryID];
-          Callee.NarrowMemory |= Summary.ReuseReadsNarrowMemory;
           if (Summary.Generic) {
             Callee.Registers |= InputRegisters[Summary.EntryBlock];
             Callee.Memory |= ReadsMemory[Summary.EntryBlock];
@@ -3390,7 +3391,6 @@ llvm::Expected<bool> ContextFlow::replay(FunctionContext &Context,
       if (Collect) {
         Context.ReuseInputRegisters |= Dependencies.Reads & ~Defined;
         Context.ReuseReadsMemory |= Dependencies.Memory;
-        Context.ReuseReadsNarrowMemory |= Dependencies.NarrowMemory;
       }
       Defined |= Dependencies.Writes;
       if (!*Continues)
@@ -3410,7 +3410,6 @@ llvm::Expected<bool> ContextFlow::replay(FunctionContext &Context,
       if (Collect) {
         Context.ReuseInputRegisters |= Dependencies.Reads & ~Defined;
         Context.ReuseReadsMemory |= Dependencies.Memory;
-        Context.ReuseReadsNarrowMemory |= Dependencies.NarrowMemory;
       }
       Defined |= Dependencies.Writes;
       if (Instruction->Op == Operation::Store)
@@ -3438,9 +3437,13 @@ ContextFlow::summarize(size_t Entry, const ContextState &Incoming, bool Generic,
     *Generalization = Generic ? CallXInputGeneralization::UnknownCaller
                               : CallXInputGeneralization::None;
   ContextState Input = Generic ? genericInput() : Incoming;
-  // Contexts consume typed exact-width cells and immutable image bytes. The
-  // separate untyped descriptor byte buffer has no reader in this analysis.
+  // Narrow output cells propagate within the caller, but arbitrary incoming
+  // byte snapshots must not displace its four full-word specializations.
+  // Project them to unknown at the entry boundary until narrow read
+  // dependencies can be represented. Caller memory is restored only after
+  // may-write checks.
   Input.Scratch.Memory.clear();
+  Input.Scratch.Values.discardNarrowCells();
   const auto Origins = symbolicInputs();
   for (unsigned R = 0; R < kRegisterCount; ++R)
     Input.Origins[R] = Origins[R];
@@ -3526,17 +3529,10 @@ ContextFlow::summarize(size_t Entry, const ContextState &Incoming, bool Generic,
           Same = false;
           break;
         }
-      if (!Same)
+      if (!Same ||
+          ((Candidate->ReuseReadsMemory || !Candidate->PreservesMemory) &&
+           Candidate->Input.Scratch != Input.Scratch))
         continue;
-      if ((Candidate->ReuseReadsMemory || !Candidate->PreservesMemory) &&
-          Candidate->Input.Scratch != Input.Scratch) {
-        // A pure completed body that does not read narrow cells can reuse
-        // its word facts. Its caller retains the actual current memory;
-        // importing an older mutating snapshot is never authorized here.
-        if (!Candidate->PreservesMemory || Candidate->ReuseReadsNarrowMemory ||
-            !Candidate->Input.Scratch.Values.equalWords(Input.Scratch.Values))
-          continue;
-      }
       ++CacheHits;
       ++EquivalentSpecializedReuses;
       *Generalization = CallXInputGeneralization::EquivalentSpecializedInputs;
@@ -3996,7 +3992,6 @@ llvm::Expected<CallXContextReport> ContextFlow::run() {
     Summary.ReadsInputMemory = ReadsMemory[Context->EntryBlock];
     Summary.ReuseInputRegisterMask = Context->ReuseInputRegisters;
     Summary.ReuseReadsInputMemory = Context->ReuseReadsMemory;
-    Summary.ReuseReadsNarrowMemory = Context->ReuseReadsNarrowMemory;
     for (unsigned R = 0; R < kRegisterCount; ++R) {
       Summary.Inputs[R] = Context->Input.Registers[R].singleton();
       if (Context->Input.Registers[R].values().size() > 1)

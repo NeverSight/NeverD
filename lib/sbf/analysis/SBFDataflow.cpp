@@ -409,25 +409,16 @@ bool StoredRegisterMemory::operator==(const StoredRegisterMemory &Other) const {
          symbolicAddresses() == Other.symbolicAddresses();
 }
 
-bool StoredRegisterMemory::equalWords(const StoredRegisterMemory &Other) const {
-  if (frameTranslationBound() != Other.frameTranslationBound() ||
-      symbolicAddresses() != Other.symbolicAddresses())
-    return false;
-  auto Left = Values.begin();
-  auto Right = Other.Values.begin();
-  while (true) {
-    while (Left != Values.end() && std::get<2>(Left->first) != sizeof(uint64_t))
-      ++Left;
-    while (Right != Other.Values.end() &&
-           std::get<2>(Right->first) != sizeof(uint64_t))
-      ++Right;
-    if (Left == Values.end() || Right == Other.Values.end())
-      return Left == Values.end() && Right == Other.Values.end();
-    if (*Left != *Right)
-      return false;
-    ++Left;
-    ++Right;
-  }
+void StoredRegisterMemory::discardNarrowCells() {
+  std::erase_if(Values, [](const auto &Cell) {
+    return std::get<2>(Cell.first) != sizeof(uint64_t);
+  });
+}
+
+void StoredRegisterMemory::discardWordCells() {
+  std::erase_if(Values, [](const auto &Cell) {
+    return std::get<2>(Cell.first) == sizeof(uint64_t);
+  });
 }
 
 void StoredRegisterMemory::write(va_t Address, const RegisterValue &Value,

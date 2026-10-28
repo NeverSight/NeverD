@@ -6383,8 +6383,9 @@ TEST(SBFCallXContexts, ReclamationRetainsIncomingProofsOfOwnSites) {
 }
 
 TEST(SBFCallXContexts, UnreadDescriptorBytesDoNotDisplaceTypedCallerFacts) {
-  for (bool ReadsNarrow : {false, true}) {
-    SCOPED_TRACE(ReadsNarrow);
+  for (unsigned Mode : {0u, 1u, 2u, 3u}) {
+    SCOPED_TRACE(Mode);
+    const bool ReadsNarrow = Mode == 2;
     const unsigned Count =
         ReadsNarrow ? 2 : kCallXContextSpecializationsPerEntry + 2;
     std::vector<test::EncodedInstruction> Text;
@@ -6404,12 +6405,16 @@ TEST(SBFCallXContexts, UnreadDescriptorBytesDoNotDisplaceTypedCallerFacts) {
     }
     Text.push_back(encode(Opcode::EXIT));
     const size_t Leaf = Text.size();
-    if (ReadsNarrow)
+    if (ReadsNarrow || Mode == 3)
       Text.push_back(encode(Opcode::MOV64_REG, 6, 1));
+    if (Mode == 1)
+      Text.push_back(encode(Opcode::ST_B_IMM, 10, 0, -8, 99));
     Text.push_back(encode(Opcode::LD_DW_REG, 2, 1));
     Text.push_back(encode(Opcode::CALL_REG, 2));
     if (ReadsNarrow)
       Text.push_back(encode(Opcode::LD_B_REG, 0, 6, -48));
+    if (Mode == 3)
+      Text.push_back(encode(Opcode::ST_B_IMM, 6, 0, -48, 17));
     Text.push_back(encode(Opcode::EXIT));
     const size_t Target = Text.size();
     Text.push_back(encode(Opcode::MOV64_IMM, 0, 0, 0, 42));
@@ -6431,7 +6436,7 @@ TEST(SBFCallXContexts, UnreadDescriptorBytesDoNotDisplaceTypedCallerFacts) {
                                       Summary.Inputs[1].ValueKind !=
                                           RegisterValue::Kind::Unknown;
                              }),
-              ReadsNarrow ? 2 : 1);
+              1);
     for (size_t Slot : Calls)
       EXPECT_TRUE(llvm::any_of(Report->Contexts, [&](const auto &Site) {
         return Site.CallerSlot == Slot && Site.TargetSlot == Target;
@@ -6439,11 +6444,16 @@ TEST(SBFCallXContexts, UnreadDescriptorBytesDoNotDisplaceTypedCallerFacts) {
     auto Raw = executeRaw(*Program);
     ASSERT_TRUE(static_cast<bool>(Raw)) << llvm::toString(Raw.takeError());
     EXPECT_EQ(Raw->Status, ExecutionStatus::Returned) << Raw->Error;
-    EXPECT_EQ(Raw->ReturnValue, Count - 1);
+    EXPECT_EQ(Raw->ReturnValue, Mode == 3 ? 17 : Count - 1);
     EXPECT_TRUE(llvm::any_of(Report->Summaries, [&](const auto &Summary) {
-      return Summary.EntrySlot == 0 && !Summary.GeneralizedInputs &&
-             Summary.ReturnValue.ValueKind == RegisterValue::Kind::Constant &&
-             Summary.ReturnValue.Value == Count - 1;
+      if (Summary.EntrySlot != 0 || Summary.GeneralizedInputs)
+        return false;
+      // Incoming narrow memory is intentionally projected out. A callee that
+      // reads it cannot publish a concrete byte from an older invocation.
+      if (ReadsNarrow)
+        return Summary.ReturnValue.ValueKind == RegisterValue::Kind::Unknown;
+      return Summary.ReturnValue.ValueKind == RegisterValue::Kind::Constant &&
+             Summary.ReturnValue.Value == (Mode == 3 ? 17 : Count - 1);
     }));
   }
 }
