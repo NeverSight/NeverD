@@ -70,6 +70,25 @@ SymRef SymContext::mkAdd(llvm::ArrayRef<SymRef> Ops) {
         const SymRef Pair[] = {A, B};
         return intern(SymOp::Add, W, Pair, 0);
       }
+    } else {
+      // Distinct coefficient bases cannot combine. The collector would keep
+      // each original term and order it by that base, without changing either
+      // coefficient. Masks and nested sums still need the complete collector.
+      auto BaseOf = [&](SymRef R) {
+        const auto Op = op(R);
+        if (Op == SymOp::Add || (Op == SymOp::And && isConst(operand(R, 0))))
+          return SymRef();
+        if (Op == SymOp::Mul && isConst(operand(R, 0)))
+          return numOperands(R) == 2 ? operand(R, 1) : SymRef();
+        return R;
+      };
+      const auto BaseA = BaseOf(A), BaseB = BaseOf(B);
+      if (BaseA && BaseB && BaseA != BaseB) {
+        if (BaseB < BaseA)
+          std::swap(A, B);
+        const SymRef Pair[] = {A, B};
+        return intern(SymOp::Add, W, Pair, 0);
+      }
     }
   }
 

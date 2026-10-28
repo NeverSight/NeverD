@@ -3549,8 +3549,10 @@ creation may grow the context arena; the snapshot remains valid without a
 second temporary operand array.
 The compact two-word hash key uses one 64-bit bucket mix, without hashing its
 halves independently. A sum of a literal and one canonical term reuses that
-literal and term directly. Nested sums, masked terms and long coefficient
-products retain the full collector, preserving flattening and mask recovery.
+literal and term directly. Two nonliteral addends with distinct coefficient
+bases likewise retain their original terms in base-index order. Equal bases,
+nested sums, masked terms and long coefficient products retain the full
+collector, preserving coefficient cancellation, flattening and mask recovery.
 Other sums collect small coefficient maps in inline storage and sort completed
 entries by base-node index before rebuilding.
 Larger sums retain hashed lookup; cancellation, recollection and canonical node
