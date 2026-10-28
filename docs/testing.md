@@ -6023,6 +6023,17 @@ intervening calls, separate blocks, writable code and exhausted work refuse.
 A pure integer transfer is a positive control. Separate outer callers retain
 the transitive IAT dependency and refuse after rebinding it; neither route
 acquires a registration-leaf memory contract.
+`RegistrationCRTDataStack` exercises 2,016 authored machine-code variants
+across three bases, both legacy CRT providers, `_fmode`/`_commode`, accumulator
+and ModRM loads, complete GPR copies and repeated fresh data receipts.
+Wrong or delayed providers, missing storage, partial or segmented writes,
+atomic exchanges, opaque reads and calls, address arithmetic, separate blocks,
+writable code and exhausted work refuse. Outer callers retain both data and
+callable IAT dependencies and refuse after rebinding the data slot. Another
+1,344 cases mutate the raw instruction, LowIR, boundary, provider or storage
+after decoding; only the unchanged typed load succeeds. The default callable
+policy refuses every data receipt. No positive acquires a registration-leaf
+memory contract or public ordinary binding-preservation flag.
 `NestedReturningStackProofIsBoundedAndNonCircular` checks multi-level callee
 cleanup, mismatched pops, recursive dependencies, the depth boundary and shared
 work exhaustion. It does not admit dispatcher-entered parent returns through

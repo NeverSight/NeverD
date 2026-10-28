@@ -21,10 +21,14 @@ struct LowBlock;
 struct LowInstructionBoundary;
 
 namespace registration_abi {
+enum class RegistrationImportLoadPolicy { CallableOnly, IncludeCRTData };
+
 struct RegistrationImportLoad {
+  enum class Kind { Callable, CRTData };
   va_t Slot = InvalidVA;
   int OpSeq = -1;
   uint64_t Register = 0;
+  Kind Storage = Kind::Callable;
 };
 
 /// Match the complete current LowIR MOV, including its address and final GPR.
@@ -36,7 +40,9 @@ registrationImportLoad(const LowBlock &Block,
 std::optional<RegistrationImportLoad>
 checkedRegistrationImportLoad(const BinaryImage &Image, const LowBlock &Block,
                               const LowInstructionBoundary &Boundary,
-                              size_t &Work);
+                              size_t &Work,
+                              RegistrationImportLoadPolicy Policy =
+                                  RegistrationImportLoadPolicy::CallableOnly);
 } // namespace registration_abi
 } // namespace neverd
 

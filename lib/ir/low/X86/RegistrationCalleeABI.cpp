@@ -5,6 +5,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "RegistrationABIPrivate.h"
+#include "RegistrationCRTData.h"
 #include "RegistrationCRTFrame.h"
 #include "RegistrationImportLoad.h"
 
@@ -210,15 +211,21 @@ bool preservesRegistrationImportBindings(const BinaryImage &Image,
 std::optional<RegistrationImportLoad>
 checkedRegistrationImportLoad(const BinaryImage &Image, const LowBlock &Block,
                               const LowInstructionBoundary &Boundary,
-                              size_t &Work) {
+                              size_t &Work,
+                              RegistrationImportLoadPolicy Policy) {
   if (!chargeCalleeWork(Work, 1) || Boundary.OpCount != 4 ||
       !chargeCalleeWork(Work, 16))
     return std::nullopt;
-  const auto Load = registrationImportLoad(Block, Boundary);
+  auto Load = registrationImportLoad(Block, Boundary);
   if (!Load || (Boundary.Size != 5 && Boundary.Size != 6) ||
-      Boundary.Address > UINT32_MAX - Boundary.Size ||
-      !checkedRegistrationImportStackPop(Image, Load->Slot))
+      Boundary.Address > UINT32_MAX - Boundary.Size)
     return std::nullopt;
+  if (!checkedRegistrationImportStackPop(Image, Load->Slot)) {
+    if (Policy != RegistrationImportLoadPolicy::IncludeCRTData ||
+        !isCheckedRegistrationCRTDataSlot(Image, Load->Slot))
+      return std::nullopt;
+    Load->Storage = RegistrationImportLoad::Kind::CRTData;
+  }
   const unsigned Field = Boundary.Size - 4;
   const auto Bytes = readImmutablePE32CodeBytes(
       Image, Boundary.Address, Boundary.Size, {Boundary.Address + Field});

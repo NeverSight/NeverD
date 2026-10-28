@@ -140,6 +140,8 @@ add_neverd_component_library(NeverDIRLow
   X86/RegistrationCallEffects.cpp
   X86/RegistrationCalleeStack.cpp
   X86/RegistrationPrecisionArguments.cpp
+  X86/RegistrationScalarPackets.cpp
+  X86/RegistrationCRTData.cpp
   X86/RegistrationSEHControl.cpp
   X86/RegistrationSEHCallNext.cpp
   X86/RegistrationSEHParentEpilogue.cpp

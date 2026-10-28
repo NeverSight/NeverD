@@ -2596,6 +2596,21 @@ value. Segment-relative writes require their own disjointness proof; only the
 exact PE32 FS:[0] chain word has a known non-image address here. Returning-stack
 and registration-state analyses share these transfers;
 cached identities grant no callee memory, callback or native EH authority.
+The ordinary returning-stack proof can separately authenticate eager
+MSVCRT/MSVCR100 `_fmode` and `_commode` data imports with that same current MOV
+receipt. Its explicit data policy never turns the address into a callable
+identity. `RegistrationCRTData` tracks complete DWORD addresses within one
+block, across full GPR copies and the lifter's canonical address extension.
+One complete DWORD store to the exported CRT int is disjoint from the caller
+image's IAT. It consumes the receipt; a later store needs a fresh authenticated
+load and a still-live binding. Partial writes, arithmetic on the address,
+opaque reads, calls, trapping operations and block boundaries withdraw it.
+`RegistrationScalarPackets` owns the shared nontrapping integer barrier rule
+for this receipt and the precision-call argument packet. Required data slots
+remain transitive import dependencies. This side proof supplies no scalar
+value, frame-memory cell, saved-stack restoration or public callee memory and
+binding-preservation contract; registration-state and native EH consumers
+receive no new authority.
 The same owner checks the exact Kernel32 PE32 exports `GetStartupInfoW`,
 `HeapSetInformation`, `InterlockedCompareExchange`, `InterlockedExchange`,
 `DecodePointer`, `EncodePointer` and `Sleep` for their SDK stdcall adjustment.

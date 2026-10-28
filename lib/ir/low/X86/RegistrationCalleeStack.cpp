@@ -5,6 +5,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "RegistrationABIPrivate.h"
+#include "RegistrationCRTData.h"
 #include "RegistrationCRTFrame.h"
 #include "RegistrationFrame.h"
 #include "RegistrationFrameBranch.h"
@@ -147,6 +148,7 @@ struct StackBody {
   std::map<int, bool> Immutable;
   std::map<va_t, std::set<uint32_t>> VariantConstants;
   std::map<std::pair<va_t, int>, va_t> ImportLoads;
+  std::map<std::pair<va_t, int>, va_t> ImportDataLoads;
   std::set<va_t> ImportSlots;
   bool Valid = false;
 
@@ -196,20 +198,38 @@ struct StackBody {
                     [&](const auto &E) { return !Reached.count(E.second); });
     }
     bool HasCachedCall = false;
+    bool HasCRTData = false;
     for (const auto &[Id, Block] : Blocks) {
       if (!chargeCalleeWork(Work, Block->Ops.size() + 1))
         return;
-      HasCachedCall |= llvm::any_of(Block->Ops, [](const auto &Op) {
-        return Op.Opcode == NdOp::INDIR_CALL && Op.NumInputs == 1 &&
-               Op.Inputs[0].Size == 4 && !Op.Inputs[0].isConst();
-      });
+      for (const auto &Op : Block->Ops) {
+        HasCachedCall |= Op.Opcode == NdOp::INDIR_CALL && Op.NumInputs == 1 &&
+                         Op.Inputs[0].Size == 4 && !Op.Inputs[0].isConst();
+        // A possible absolute MOV requests the complete shared instruction
+        // receipt below. A literal matching an IAT address proves nothing.
+        if (!HasCRTData && OrdinaryEntry != InvalidVA &&
+            !Function.ExceptionMetadata && Op.Opcode == NdOp::COPY &&
+            Op.NumInputs == 1 && Op.Inputs[0].isConst() &&
+            Op.Inputs[0].Size == 4)
+          HasCRTData = registration_abi::isCheckedRegistrationCRTDataSlot(
+              Image, Op.Inputs[0].Offset);
+      }
     }
-    if (HasCachedCall)
+    if (HasCachedCall || HasCRTData)
       for (const auto &[Id, Block] : Blocks)
         for (const auto &Boundary : Block->InstructionBoundaries) {
           if (auto Load = registration_abi::checkedRegistrationImportLoad(
-                  Image, *Block, Boundary, Work)) {
-            if (!ImportLoads
+                  Image, *Block, Boundary, Work,
+                  HasCRTData ? registration_abi::RegistrationImportLoadPolicy::
+                                   IncludeCRTData
+                             : registration_abi::RegistrationImportLoadPolicy::
+                                   CallableOnly)) {
+            auto &Loads =
+                Load->Storage ==
+                        registration_abi::RegistrationImportLoad::Kind::CRTData
+                    ? ImportDataLoads
+                    : ImportLoads;
+            if (!Loads
                      .emplace(std::make_pair(Boundary.Address, Load->OpSeq),
                               Load->Slot)
                      .second)
@@ -497,6 +517,7 @@ stackPopForBody(StackBody &Body, va_t Entry, const NestedStackProof &NestedPop,
       return std::nullopt;
     FrameTransfer Transfer(State, 0);
     registration_abi::PrecisionArguments Arguments;
+    registration_abi::CRTDataStoreProof CRTData;
     bool DoesNotReturn = false;
     for (const auto &Op : Block.Ops) {
       size_t Width = Op.Output.Size;
@@ -506,6 +527,16 @@ stackPopForBody(StackBody &Body, va_t Entry, const NestedStackProof &NestedPop,
         return std::nullopt;
       Transfer.beginInstruction(Op.Addr);
       const auto Abstract = Body.stackOperation(Op);
+      bool CRTDataStore = false;
+      if (!Body.ImportDataLoads.empty() && !Registration && !CxxPaths) {
+        const auto DataLoad = Body.ImportDataLoads.find({Op.Addr, Op.Seq});
+        if (!CRTData.transfer(Abstract,
+                              DataLoad == Body.ImportDataLoads.end()
+                                  ? std::nullopt
+                                  : std::optional<va_t>{DataLoad->second},
+                              State.ImportBindingsIntact, Work, CRTDataStore))
+          return std::nullopt;
+      }
       if (!Registration && !CxxPaths && Op.Opcode != NdOp::CALL &&
           Op.Opcode != NdOp::INDIR_CALL &&
           !Arguments.observe(Abstract, Transfer, Work))
@@ -527,7 +558,7 @@ stackPopForBody(StackBody &Body, va_t Entry, const NestedStackProof &NestedPop,
         if (!registration_state::isFramePreservingIntrinsic(Op))
           return std::nullopt;
       }
-      if (!Body.ImportSlots.empty()) {
+      if (!CRTDataStore && !Body.ImportSlots.empty()) {
         if (!chargeCalleeWork(Work, Body.ImportSlots.size() + 1))
           return std::nullopt;
         Transfer.invalidateImportBindings(Op, Body.ImportSlots);
