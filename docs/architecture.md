@@ -2604,6 +2604,18 @@ value. Segment-relative writes require their own disjointness proof; only the
 exact PE32 FS:[0] chain word has a known non-image address here. Returning-stack
 and registration-state analyses share these transfers;
 cached identities grant no callee memory, callback or native EH authority.
+An ordinary returning-stack proof also withdraws current bindings after a
+read without a separate permission. A continuing fault handler can replace
+an IAT while the physical GPR context remains unchanged. The private
+`RegistrationReadEffects` owner admits complete eager-import receipts,
+the current entry frame, known Win32 thread fields and mapped image data.
+An argument read additionally needs a uniform current near-return cleanup;
+the maximum `CalleePopBytes` over other returns cannot establish its extent.
+The permission carries no read value, frame cell, saved-SP restoration or
+native mapping. An earlier resident callable remains a separate register
+identity, while later loads and direct slot calls require reaching bindings.
+SEH/C++ dispatch consumers retain their independent source and memory proofs;
+this ordinary read permission supplies none of those effects.
 The ordinary returning-stack proof can separately authenticate eager
 MSVCRT/MSVCR100 `_fmode` and `_commode` data imports with that same current MOV
 receipt. Its explicit data policy never turns the address into a callable

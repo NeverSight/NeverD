@@ -13,6 +13,7 @@
 #include "RegistrationImportLoad.h"
 #include "RegistrationOrdinaryGraph.h"
 #include "RegistrationPrecisionArguments.h"
+#include "RegistrationReadEffects.h"
 #include "RegistrationStackOwner.h"
 
 #include "neverd/Limits.h"
@@ -150,6 +151,8 @@ struct StackBody {
   std::map<std::pair<va_t, int>, va_t> ImportLoads;
   std::map<std::pair<va_t, int>, va_t> ImportDataLoads;
   std::set<va_t> ImportSlots;
+  uint32_t ArgumentReadBytes = 0;
+  bool CheckedArgumentReadBytes = false;
   bool Valid = false;
 
   StackBody(const BinaryImage &Image, const LowFunc &Function, size_t &Work,
@@ -348,6 +351,26 @@ struct StackBody {
     return true;
   }
 
+  uint32_t callerArgumentReadBytes() {
+    if (CheckedArgumentReadBytes)
+      return ArgumentReadBytes;
+    CheckedArgumentReadBytes = true;
+    std::optional<uint32_t> Pop;
+    for (const auto &[Id, Block] : Blocks) {
+      if (!chargeCalleeWork(Work, Block->InstructionBoundaries.size() + 1))
+        return 0;
+      for (const auto &Boundary : Block->InstructionBoundaries)
+        if (Boundary.Control == LowInstructionControl::Return) {
+          const auto Current = nearReturnPop(Image, Boundary.Address);
+          if (!Current || (Pop && *Pop != *Current))
+            return 0;
+          Pop = Current;
+        }
+    }
+    ArgumentReadBytes = Pop.value_or(0);
+    return ArgumentReadBytes;
+  }
+
   LowOp stackOperation(const LowOp &Op) const {
     LowOp Abstract = Op;
     const auto Constants = VariantConstants.find(Op.Addr);
@@ -527,6 +550,16 @@ stackPopForBody(StackBody &Body, va_t Entry, const NestedStackProof &NestedPop,
         return std::nullopt;
       Transfer.beginInstruction(Op.Addr);
       const auto Abstract = Body.stackOperation(Op);
+      if (!Registration && !CxxPaths && State.ImportBindingsIntact &&
+          !Body.ImportSlots.empty() && Op.Opcode == NdOp::LOAD &&
+          !Body.ImportLoads.count({Op.Addr, Op.Seq}) &&
+          !Body.ImportDataLoads.count({Op.Addr, Op.Seq}) &&
+          !registration_abi::hasClosedOrdinaryRegistrationRead(
+              Image, Abstract, Transfer, Body.callerArgumentReadBytes(), Work))
+        // A continuing fault handler can replace an IAT without changing the
+        // physical GPR context. Earlier resident callable identities remain
+        // separate; no subsequent load or direct slot call gets a new binding.
+        State.ImportBindingsIntact = false;
       bool CRTDataStore = false;
       if (!Body.ImportDataLoads.empty() && !Registration && !CxxPaths) {
         const auto DataLoad = Body.ImportDataLoads.find({Op.Addr, Op.Seq});

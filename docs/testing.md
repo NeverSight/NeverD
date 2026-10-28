@@ -6022,6 +6022,14 @@ register-preservation boundary from all returning-stack facts.
 exception dispatch. `SegmentedWritesNeedAnImageDisjointnessProof` and physical
 FS-store wrappers reject unproved segmented aliases while retaining the exact
 FS:[0] chain word.
+`OpaqueReadsCannotCertifyLaterImportBindings` checks 18 physical variants of
+direct slot calls, fresh cached loads, retained register targets and later
+reloads. Unknown-pointer and unmapped absolute reads withdraw future bindings;
+an authenticated eager slot read and an earlier resident target are positive
+controls. The ordinary read permission checks current frame and caller-cleanup
+extents without introducing a cell value or saved-SP fact. Existing nested
+wrappers and memory-divisor cases retain their separately checked uniform
+near-return argument extent.
 `RegistrationControlFPStack` exercises 1,152 authored machine-code variants
 across three bases, two CRT providers, IAT/veneer calls, all three valid
 precision selections and returning/terminating error paths. Exact null-output

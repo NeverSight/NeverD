@@ -918,6 +918,44 @@ TEST(RegistrationImportABI, CachedLoadReceiptsBindCurrentBytesAndLowIR) {
     }
 }
 
+TEST(RegistrationImportABI, OpaqueReadsCannotCertifyLaterImportBindings) {
+  for (unsigned Form = 0; Form != 6; ++Form)
+    for (unsigned Memory = 0; Memory != 3; ++Memory) {
+      SCOPED_TRACE(::testing::Message() << Form << ':' << Memory);
+      ImportImage F({"Sleep", 1}, false);
+      auto &Image = F.Image;
+      auto &Text = Image.Segments.front();
+      auto &Bytes = Text.Data;
+      Bytes.clear();
+      const auto LoadTarget = [&] {
+        Bytes.insert(Bytes.end(), {0x8b, 0x35, 0, 0x30, 0x40, 0});
+      };
+      if (Form >= 3)
+        LoadTarget();
+      if (Form) {
+        if (!Memory)
+          Bytes.insert(Bytes.end(), {0x8b, 0x01});
+        else
+          Bytes.insert(Bytes.end(), {0xa1, 0, uint8_t(Memory == 1 ? 0 : 0x30),
+                                     uint8_t(Memory == 1 ? 0 : 0x40),
+                                     uint8_t(Memory == 1 ? 0x70 : 0)});
+      }
+      if (Form == 2 || Form == 4)
+        LoadTarget();
+      Bytes.insert(Bytes.end(), {0x6a, 0});
+      if (Form == 2 || Form == 3 || Form == 4)
+        Bytes.insert(Bytes.end(), {0xff, 0xd6});
+      else
+        Bytes.insert(Bytes.end(), {0xff, 0x15, 0, 0x30, 0x40, 0});
+      Bytes.insert(Bytes.end(), {0x31, 0xc0, 0xc3});
+      Text.Size = Text.FileSz = Bytes.size();
+      Image.Sections.front().Size = Image.Sections.front().FileSz = Text.Size;
+      const bool Valid = Form == 0 || Form == 3 || Memory == 2;
+      EXPECT_EQ(getCheckedX86CalleeStackPop(Image, Image.Entry),
+                Valid ? std::optional<uint32_t>{0} : std::nullopt);
+    }
+}
+
 TEST(RegistrationImportABI, TransitiveImportDependenciesRespectCumulativeWork) {
   ImportImage F({"Sleep", 1}, true);
   size_t Used = 0;
