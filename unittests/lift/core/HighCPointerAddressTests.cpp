@@ -2672,6 +2672,45 @@ TEST(HighCPointerAddresses, NonAsciiImageBytesStayAddress) {
   EXPECT_NE(Source.find("0x140003600"), std::string::npos) << Source;
 }
 
+TEST(LLVMCPointerAddresses, ReadonlyWideImageStringPrintsLLiteral) {
+  BinaryImage Img = makeImageObjectFixture(
+      0x140003400, {0x25, 0x00, 0x73, 0x00, 0x00, 0x00}, false);
+  llvm::LLVMContext Context;
+  llvm::Module Module("llvm-c-wide-string", Context);
+  llvm::Type *I8 = llvm::Type::getInt8Ty(Context);
+  llvm::Type *I64 = llvm::Type::getInt64Ty(Context);
+  // As in the HighC twin, a routine without a C library prototype: puts's
+  // declared narrow parameter reads these bytes as "%".
+  llvm::FunctionType *FormatTy =
+      llvm::FunctionType::get(llvm::Type::getVoidTy(Context),
+                              {llvm::PointerType::getUnqual(I8)}, false);
+  llvm::Function *Format = llvm::Function::Create(
+      FormatTy, llvm::GlobalValue::ExternalLinkage, "Format", Module);
+  llvm::FunctionType *FnTy =
+      llvm::FunctionType::get(llvm::Type::getVoidTy(Context), false);
+  llvm::Function *Function = llvm::Function::Create(
+      FnTy, llvm::GlobalValue::ExternalLinkage, "format_s", Module);
+  llvm::IRBuilder<> Builder(
+      llvm::BasicBlock::Create(Context, "entry", Function));
+  auto *Ptr =
+      llvm::ConstantExpr::getIntToPtr(llvm::ConstantInt::get(I64, 0x140003400),
+                                      llvm::PointerType::getUnqual(I8));
+  Builder.CreateCall(Format, {Ptr});
+  Builder.CreateRetVoid();
+
+  std::string Source;
+  llvm::raw_string_ostream OS(Source);
+  CEmitterOptions Options;
+  Options.TheArch = Arch::X64;
+  Options.Format = BinaryFormat::COFF;
+  Options.EmitIncludes = false;
+  ASSERT_TRUE(
+      LLVMCEmitter().emit(Module, OS, Options, nullptr, &Img, Function));
+  OS.flush();
+  EXPECT_NE(Source.find("L\"%s\""), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("0x140003400"), std::string::npos) << Source;
+}
+
 TEST(LLVMCPointerAddresses, ReadonlyImageStringsRespectCalleeCharacterWidth) {
   // The same immutable bytes mean "%" to puts and L"%s" to wcslen on
   // Windows. A byte-string declaration must not request a wide literal.
