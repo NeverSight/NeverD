@@ -596,8 +596,11 @@ GP/FP registers, mixed operands, exact result bits and Darwin variadic tails
 across both keys, zero/dynamic discriminators and raw controls. The matrix also
 checks signed/unsigned 128-bit values, single/pair integer and pointer records,
 a padded 32-bit/64-bit pair, and one-to-four-member f32/f64 HFAs with nested and
-whole-stack cases. All 200 typed
-groups emit actual Mach-O objects on five routes. Narrow register arguments
+whole-stack cases. CTest registers each of the 40 type shapes separately,
+retaining all five authentication variants and both C routes at O0/O2 within
+the ordinary per-test timeout. Stable shape names identify failures and permit
+parallel scheduling. All 200 typed groups emit actual Mach-O objects on five
+routes. Narrow register arguments
 and results require the correct LLVM extension attribute; stack arguments
 retain their source width. The outer fixture explicitly writes the complete
 X0 return carrier, and a constant result cannot stand in for the callback's
