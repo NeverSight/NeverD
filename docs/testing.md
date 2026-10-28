@@ -2332,6 +2332,16 @@ overshifts and remainder by zero preserve the normalized scratch-slot invariant.
 `NativeLiteralOverloadsKeepEveryWidthAndWordBoundary` checks literal identity,
 constant-only plans and unchanged step counts at every width from 1 through
 257 bits. Constant plans must not request variable values.
+`SharedRootSubstitutionKeepsSimultaneousReplacements` covers shared descendants,
+repeated roots, and overlapping replacement keys at native and wide widths.
+Independent arithmetic checks that replacement values are not substituted again.
+`NativeProductsKeepAllInputsAfterModularOverflow` checks repeated even and odd
+factors against APInt arithmetic at 1–64 bits and counts every input lookup.
+`PreparedWideArithmeticKeepsEveryInputAcrossEvaluations` alternates zero,
+all-ones, signed-boundary and random inputs through one prepared arithmetic
+plan at 1/8/64/65/127/128/129/257 bits. Independent full-word arithmetic checks
+repeated factors, every associative bitwise operator, narrow input promotion
+and missing input values after earlier nonzero evaluations.
 `SymMBAWidePairs.SharedAllowancesPreserveDecisionWorkAndMemo` checks fresh and
 previously spent request budgets, local caps under unlimited requests, zero and
 short storage, exact completion boundaries and saturated unlimited accounting.

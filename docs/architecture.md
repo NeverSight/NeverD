@@ -3530,6 +3530,23 @@ same minimum-reading predicate, including constant-minus-variable forms;
 an all-ones offset still permits the cheaper complement spelling.
 General operators retain the shared APInt semantics in a separate call, keeping
 their operand construction and cleanup out of the native evaluator's hot frame.
+Prepared arbitrary-width evaluation reuses each output slot's allocation for
+associative arithmetic and bitwise operations, starting from the first operand.
+A product stops multiplying after its complete word becomes zero; all input
+steps have already been evaluated. Standalone and prepared evaluation use the
+same operator implementation. Validation keeps its original full-width input
+assignments and sample count.
+Native long products stop when the initial operand pair is zero modulo the
+declared width, retaining the tight fold for other inputs. Their prepared steps
+keep the width mask in the unused product payload, without enlarging a step
+or skipping input evaluation.
+Batch substitution uses one table for scheduled nodes and completed results.
+It checks the replacement map once per reachable node, keeps replacements
+simultaneous, and reuses its owned root array for the ordered results. Shared
+roots and descendants retain one bottom-up reconstruction.
+Mask abstraction also rewrites its owned operand snapshot in place. Mask
+creation may grow the context arena; the snapshot remains valid without a
+second temporary operand array.
 The compact two-word hash key uses one 64-bit bucket mix, without hashing its
 halves independently. Sum construction collects small coefficient maps in
 inline storage and sorts completed entries by base-node index before rebuilding.
@@ -3773,6 +3790,8 @@ temporary expression nodes; wide literal prefixes are copied and charged once
 per search. Word and pairing-signature caches share this normalization without
 changing any source constant or wider reading. Neutral observed constants
 reuse the operand directly.
+Native key construction reads inline constants without entering the wide
+literal reader.
 Decision identity hits and terminal two-input Boolean operations return before
 entering the allocation and recursive expansion helpers. Three-input carry and
 parity operations keep their cache lookup and recursive expansion in one

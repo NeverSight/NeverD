@@ -1118,6 +1118,44 @@ TEST(SymExpr, SubstitutionRebuildsThroughTheCanonicalisingBuilders) {
   EXPECT_EQ(Ctx.substituteVar(Sum, Ctx.varId(Y), Ctx.mkZero(W32)), X);
 }
 
+TEST(SymExpr, SharedRootSubstitutionKeepsSimultaneousReplacements) {
+  std::mt19937_64 Random(0x7375627374697475);
+  for (unsigned Width : {8u, 64u, 65u, 257u}) {
+    SCOPED_TRACE(Width);
+    SymContext C;
+    const auto X = C.mkVar("x", Width), Y = C.mkVar("y", Width);
+    const auto Z = C.mkVar("z", Width), Shared = C.mkAdd(X, Y);
+    const auto Left = C.mkXor(Shared, Z), Right = C.mkAnd(Shared, Z);
+    const auto Product = C.mkMul(Left, Right);
+    const std::array Roots{Product, Shared, Product, Left, X, Y};
+    std::unordered_map<uint32_t, SymRef> Replacements{{X.index(), Y},
+                                                      {Y.index(), Z}};
+    for (bool ReplaceShared : {false, true}) {
+      if (ReplaceShared)
+        Replacements.emplace(Shared.index(), X);
+      const auto Results = C.substituteAll(Roots, Replacements);
+      ASSERT_EQ(Results.size(), Roots.size());
+      EXPECT_EQ(Results[0], Results[2]);
+      EXPECT_EQ(Results[4], Y);
+      EXPECT_EQ(Results[5], Z);
+      for (unsigned Trial = 0; Trial < 64; ++Trial) {
+        std::array<llvm::APInt, 3> Values;
+        for (auto &V : Values) {
+          V = llvm::APInt(Width, 0);
+          for (unsigned Bit = 0; Bit < Width; Bit += 64)
+            V |= llvm::APInt(Width, Random()).shl(Bit);
+        }
+        const auto S = ReplaceShared ? Values[0] : Values[1] + Values[2];
+        const auto L = S ^ Values[2];
+        const auto P = L * (S & Values[2]);
+        const std::array Expected{P, S, P, L, Values[1], Values[2]};
+        for (size_t I = 0; I < Results.size(); ++I)
+          EXPECT_EQ(C.eval(Results[I], Values), Expected[I]);
+      }
+    }
+  }
+}
+
 TEST(SymExpr, RebuildingMergedMasksRetainsDemandedSimplification) {
   for (unsigned Width : {8u, 64u, 257u}) {
     SCOPED_TRACE(Width);
@@ -1730,6 +1768,77 @@ TEST(SymExpr, AWordWiderThanSixtyFourBitsIsOrdinary) {
   V[Ctx.varId(X)] = Big;
   EXPECT_EQ(Ctx.eval(E, V), -Big);
   EXPECT_EQ(SymEvalPlan(Ctx, E).eval(V), -Big);
+}
+
+TEST(SymExpr, PreparedWideArithmeticKeepsEveryInputAcrossEvaluations) {
+  std::mt19937_64 Random(0x4150494e54524555);
+  for (unsigned Width : {1u, 8u, 64u, 65u, 127u, 128u, 129u, 257u}) {
+    SCOPED_TRACE(Width);
+    SymContext C;
+    const auto X = C.mkVar("x", Width), Y = C.mkVar("y", Width);
+    const auto Z = C.mkVar("z", Width);
+    const auto Mask = llvm::APInt::getAllOnes(Width).lshr(1);
+    const auto M = C.mkConst(Mask), K = C.mkConst(Width, 3);
+    const auto Root = C.mkAdd({C.mkMul({K, X, Y, Z, X}), C.mkAnd({X, Y, Z, M}),
+                               C.mkOr({X, Y, Z, M}), C.mkXor({X, Y, Z, M})});
+    SymEvalPlan Plan(C, Root);
+    for (unsigned Trial = 0; Trial < 128; ++Trial) {
+      std::array<llvm::APInt, 3> Inputs, Values;
+      for (unsigned I = 0; I < Inputs.size(); ++I) {
+        auto &Input = Inputs[I];
+        Input = llvm::APInt(Width, 0);
+        for (unsigned Bit = 0; Bit < Width; Bit += 64)
+          Input |= llvm::APInt(Width, Random()).shl(Bit);
+        if (Trial % 8 == 0)
+          Input.clearAllBits();
+        else if (Trial % 8 == 1)
+          Input.setAllBits();
+        else if (Trial % 8 == 2)
+          Input = llvm::APInt::getSignMask(Width) + I;
+        if (I == 1 && Trial % 3 == 0)
+          Input = Input.zextOrTrunc(8);
+        Values[I] = I == 2 && Trial % 7 == 0 ? llvm::APInt(Width, 0)
+                                             : Input.zextOrTrunc(Width);
+      }
+      auto Expected =
+          llvm::APInt(Width, 3) * Values[0] * Values[1] * Values[2] * Values[0];
+      Expected += Values[0] & Values[1] & Values[2] & Mask;
+      Expected += Values[0] | Values[1] | Values[2] | Mask;
+      Expected += Values[0] ^ Values[1] ^ Values[2] ^ Mask;
+      EXPECT_EQ(Plan.evalWith([&](uint32_t I) -> const llvm::APInt * {
+        return I == 2 && Trial % 7 == 0 ? nullptr : &Inputs[I];
+      }),
+                Expected);
+    }
+  }
+}
+
+TEST(SymExpr, NativeProductsKeepAllInputsAfterModularOverflow) {
+  for (unsigned Width : {1u, 8u, 16u, 31u, 32u, 63u, 64u}) {
+    SCOPED_TRACE(Width);
+    SymContext C;
+    const auto X = C.mkVar("x", Width), Y = C.mkVar("y", Width);
+    const auto Z = C.mkVar("z", Width);
+    llvm::SmallVector<SymRef, 72> Factors(64, X);
+    Factors.append({Y, Z});
+    SymEvalPlan Plan(C, C.mkMul(Factors));
+    for (uint64_t First : std::array<uint64_t, 5>{0, 1, 2, 3, ~uint64_t(0)}) {
+      const std::array<uint64_t, 3> Values{First, 7, 13};
+      std::array<unsigned, 3> Reads{};
+      const auto Result = Plan.evalU64With([&](uint32_t Id) {
+        ++Reads[Id];
+        return Values[Id];
+      });
+      EXPECT_EQ(Reads, (std::array<unsigned, 3>{1, 1, 1}));
+      llvm::APInt Expected(Width, 1);
+      const llvm::APInt Input(Width, First, false, true);
+      for (unsigned I = 0; I < 64; ++I)
+        Expected *= Input;
+      Expected *= llvm::APInt(Width, Values[1], false, true);
+      Expected *= llvm::APInt(Width, Values[2], false, true);
+      EXPECT_EQ(Result, Expected.getZExtValue());
+    }
+  }
 }
 
 TEST(SymExpr, IncrementalProductsKeepCanonicalCoefficientsAndRepeatedFactors) {

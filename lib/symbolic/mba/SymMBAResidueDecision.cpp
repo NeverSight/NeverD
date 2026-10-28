@@ -714,27 +714,29 @@ class LowWordDecisions {
   }
 
   LLVM_ATTRIBUTE_NOINLINE
+  uint64_t wideLiteralPrefix(SymRef Constant) {
+    if (!charge())
+      return 0;
+    auto It = WideLiteralPrefixes.find(Constant.index());
+    if (It == WideLiteralPrefixes.end()) {
+      const auto Literal = literal(Constant);
+      if (!Literal ||
+          !charge(1, sizeof(decltype(WideLiteralPrefixes)::value_type) +
+                         4 * sizeof(void *)))
+        return 0;
+      It = WideLiteralPrefixes
+               .emplace(Constant.index(), Literal->getLoBits(8).getZExtValue())
+               .first;
+    }
+    return It->second;
+  }
+
   uint64_t constantWordKey(SymRef R, unsigned Count) {
     static_assert(limits::kMaxAffineResidueTableBits <= 8);
     const auto Constant = Ctx.operand(R, 0);
-    uint64_t Value = Ctx.node(Constant).Aux;
-    if (Ctx.width(Constant) > 64) {
-      if (!charge())
-        return 0;
-      auto It = WideLiteralPrefixes.find(Constant.index());
-      if (It == WideLiteralPrefixes.end()) {
-        const auto Literal = literal(Constant);
-        if (!Literal ||
-            !charge(1, sizeof(decltype(WideLiteralPrefixes)::value_type) +
-                           4 * sizeof(void *)))
-          return 0;
-        It =
-            WideLiteralPrefixes
-                .emplace(Constant.index(), Literal->getLoBits(8).getZExtValue())
-                .first;
-      }
-      Value = It->second;
-    }
+    const uint64_t Value = Ctx.width(Constant) > 64
+                               ? wideLiteralPrefix(Constant)
+                               : Ctx.node(Constant).Aux;
     // The marker separates these exact quotient keys from node/width keys.
     // The other node occupies 32 bits; operation, literal and width each
     // occupy one byte. No source expression or full-width constant changes.

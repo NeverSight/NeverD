@@ -1299,37 +1299,34 @@ abstractToMBAImpl(SymContext &Ctx, SymRef Root, bool AllowProducts,
     }
 
     auto SourceOperands = Ctx.operands(R);
-    llvm::SmallVector<SymRef, 8> Ops(SourceOperands.begin(),
-                                     SourceOperands.end());
-    if (Ops.empty()) {
+    if (SourceOperands.empty()) {
       Rewritten[Index] = R;
       continue;
     }
-    llvm::SmallVector<SymRef, 8> NewOps;
-    NewOps.reserve(Ops.size());
+    llvm::SmallVector<SymRef, 8> Ops(SourceOperands.begin(),
+                                     SourceOperands.end());
     const SymOp Op = Ctx.op(R);
     const bool IsBitwise =
         Op == SymOp::And || Op == SymOp::Or || Op == SymOp::Xor;
-    for (SymRef C : Ops) {
+    for (SymRef &C : Ops) {
       if (!IsBitwise || Roles.lookup(C.index()) != Role::Literal) {
-        NewOps.push_back(Rewritten.lookup(C.index()));
+        C = Rewritten.lookup(C.index());
         continue;
       }
 
       // Hiding a complementary mask can create NOT and grow Ctx's operand
-      // pool. Ops owns this iteration's source references across that growth.
-      NewOps.push_back(Hide(C));
+      // pool. Rewrite the owned snapshot in place across that growth.
+      C = Hide(C);
     }
 
     // Spend the complement identity where it buys linearity and nowhere else:
     // over a bitwise operand `~z` is already something the measurement reads,
     // and rewriting it there would only make the answer longer.
     if (Ctx.op(R) == SymOp::Not && Roles.lookup(Index) == Role::Linear) {
-      Rewritten[Index] =
-          Ctx.mkSub(Ctx.mkNeg(NewOps[0]), Ctx.mkOne(Ctx.width(R)));
+      Rewritten[Index] = Ctx.mkSub(Ctx.mkNeg(Ops[0]), Ctx.mkOne(Ctx.width(R)));
       continue;
     }
-    Rewritten[Index] = Ctx.rebuild(R, NewOps);
+    Rewritten[Index] = Ctx.rebuild(R, Ops);
   }
 
   Out.IndependentBody = Rewritten.lookup(Root.index());
