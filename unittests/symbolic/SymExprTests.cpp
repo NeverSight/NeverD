@@ -180,6 +180,53 @@ TEST(SymExpr, LongOperandIdentityPreservesOrderAcrossGrowthAndCopies) {
   }
 }
 
+TEST(SymExpr, LiteralOffsetsKeepCanonicalTermsAndWidths) {
+  std::mt19937_64 Random(0x6f666673657473);
+  for (unsigned Width : {1u, 8u, 16u, 32u, 64u, 65u, 128u, 257u}) {
+    SCOPED_TRACE(Width);
+    SymContext C;
+    const auto X = C.mkVar("x", Width), Y = C.mkVar("y", Width);
+    const llvm::APInt Three(Width, 3, false, true);
+    const auto Mask = llvm::APInt::getLowBitsSet(Width, (Width + 1) / 2);
+    const std::array Terms{X,
+                           C.mkNot(X),
+                           C.mkXor(X, Y),
+                           C.mkAnd(X, Y),
+                           C.mkAnd(C.mkConst(Mask), X),
+                           C.mkAdd(X, Y),
+                           C.mkMul(C.mkConst(Three), X),
+                           C.mkMul({C.mkConst(Three), X, Y})};
+    for (const auto &Offset : {llvm::APInt(Width, 0), llvm::APInt(Width, 1),
+                               llvm::APInt::getAllOnes(Width),
+                               llvm::APInt::getOneBitSet(Width, Width - 1)}) {
+      const auto K = C.mkConst(Offset);
+      for (size_t I = 0; I < Terms.size(); ++I) {
+        const auto Root = C.mkAdd(K, Terms[I]);
+        EXPECT_EQ(Root, C.mkAdd(Terms[I], K));
+        EXPECT_EQ(Root, C.mkAdd({K, Terms[I], C.mkZero(Width)}));
+        SymEvalPlan Plan(C, Root);
+        for (unsigned Sample = 0; Sample < 32; ++Sample) {
+          llvm::APInt A(Width, Random(), false, true);
+          llvm::APInt B(Width, Random(), false, true);
+          if (Sample & 1)
+            A.setBit(Width - 1);
+          if (Sample & 2)
+            B.setBit(Width - 1);
+          const std::array Values{A, B};
+          const std::array Expected{A,        ~A,    A ^ B,     A & B,
+                                    A & Mask, A + B, Three * A, Three * A * B};
+          EXPECT_EQ(Plan.eval(Values), Offset + Expected[I]);
+          if (Width <= 64) {
+            const std::array Native{A.getZExtValue(), B.getZExtValue()};
+            EXPECT_EQ(Plan.evalU64(Native),
+                      (Offset + Expected[I]).getZExtValue());
+          }
+        }
+      }
+    }
+  }
+}
+
 TEST(SymExpr, CommutativeOperandsAreSorted) {
   SymContext Ctx;
   SymRef X = Ctx.mkVar("x", W32);

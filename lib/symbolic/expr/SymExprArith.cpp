@@ -51,6 +51,28 @@ SymRef SymContext::mkAdd(llvm::ArrayRef<SymRef> Ops) {
   assert(!Ops.empty() && "mkAdd needs at least one operand");
   uint32_t W = width(Ops[0]);
 
+  // A literal and one already-canonical term need no coefficient map. Keep
+  // nested sums, masked terms and coefficient-bearing long products on the
+  // collector path, where flattening or mask recovery can expose more terms.
+  if (Ops.size() == 2) {
+    SymRef A = Ops[0], B = Ops[1];
+    assert(width(B) == W && "mkAdd operands must share a width");
+    if (isConst(B))
+      std::swap(A, B);
+    if (isConst(A)) {
+      if (isConst(B))
+        return mkConst(constValue(A) + constValue(B));
+      const auto Op = op(B);
+      if (Op != SymOp::Add && Op != SymOp::And &&
+          (Op != SymOp::Mul || numOperands(B) == 2)) {
+        if (constValue(A).isZero())
+          return B;
+        const SymRef Pair[] = {A, B};
+        return intern(SymOp::Add, W, Pair, 0);
+      }
+    }
+  }
+
   llvm::APInt ConstTerm(W, 0);
   // Small sums need no separately allocated tree nodes. Sort the completed
   // entries by base index before rebuilding, preserving canonical order.

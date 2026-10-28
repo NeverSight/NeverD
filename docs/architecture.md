@@ -3548,8 +3548,11 @@ Mask abstraction also rewrites its owned operand snapshot in place. Mask
 creation may grow the context arena; the snapshot remains valid without a
 second temporary operand array.
 The compact two-word hash key uses one 64-bit bucket mix, without hashing its
-halves independently. Sum construction collects small coefficient maps in
-inline storage and sorts completed entries by base-node index before rebuilding.
+halves independently. A sum of a literal and one canonical term reuses that
+literal and term directly. Nested sums, masked terms and long coefficient
+products retain the full collector, preserving flattening and mask recovery.
+Other sums collect small coefficient maps in inline storage and sort completed
+entries by base-node index before rebuilding.
 Larger sums retain hashed lookup; cancellation, recollection and canonical node
 order are unchanged.
 Dense implicant rounds look up exact one-bit neighbors when that requires
