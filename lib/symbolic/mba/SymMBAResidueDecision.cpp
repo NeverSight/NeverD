@@ -101,6 +101,7 @@ class LowWordDecisions {
   llvm::DenseMap<uint64_t, std::pair<uint32_t, uint32_t>> Adders;
   llvm::DenseMap<uint64_t, uint32_t> Parities;
   std::unordered_map<uint64_t, Bits> Words;
+  std::unordered_map<uint32_t, uint64_t> WideLiteralPrefixes;
   std::unordered_map<uint32_t, unsigned> Zeros;
   struct WordOperation {
     SymOp Op;
@@ -712,6 +713,36 @@ class LowWordDecisions {
     return Result;
   }
 
+  LLVM_ATTRIBUTE_NOINLINE
+  uint64_t constantWordKey(SymRef R, unsigned Count) {
+    static_assert(limits::kMaxAffineResidueTableBits <= 8);
+    const auto Constant = Ctx.operand(R, 0);
+    uint64_t Value = Ctx.node(Constant).Aux;
+    if (Ctx.width(Constant) > 64) {
+      if (!charge())
+        return 0;
+      auto It = WideLiteralPrefixes.find(Constant.index());
+      if (It == WideLiteralPrefixes.end()) {
+        const auto Literal = literal(Constant);
+        if (!Literal ||
+            !charge(1, sizeof(decltype(WideLiteralPrefixes)::value_type) +
+                           4 * sizeof(void *)))
+          return 0;
+        It =
+            WideLiteralPrefixes
+                .emplace(Constant.index(), Literal->getLoBits(8).getZExtValue())
+                .first;
+      }
+      Value = It->second;
+    }
+    // The marker separates these exact quotient keys from node/width keys.
+    // The other node occupies 32 bits; operation, literal and width each
+    // occupy one byte. No source expression or full-width constant changes.
+    const auto Low = Value & ((uint64_t(1) << Count) - 1);
+    return (uint64_t(1) << 63) | (uint64_t(Ctx.operand(R, 1).index()) << 24) |
+           (uint64_t(Ctx.op(R)) << 16) | (Low << 8) | Count;
+  }
+
   // References into unordered_map elements survive recursive insertions.
   // Cached words are immutable until the parity assumption changes; no view
   // escapes that phase. Cache hits pay for lookup, without copying each bit.
@@ -725,31 +756,26 @@ class LowWordDecisions {
     const auto &Empty = EmptyWords[Count];
     if (!charge())
       return Empty;
-    // This cache describes only Count low bits. Canonicalize native constant
-    // operands in that quotient before interning its key, so different source
-    // offsets/masks reuse the same low-word view. The original expression and
-    // every wider cache entry retain their complete constant. Native constants
-    // are inline; wide constants keep the existing APInt accounting below.
+    // The complete low-word key preserves the source expression and avoids
+    // reconstructing temporary nodes for every repeated offset or mask.
     const auto InitialOp = Ctx.op(R);
+    uint64_t Key = (uint64_t(R.index()) << 8) | Count;
     if ((InitialOp == SymOp::Add || InitialOp == SymOp::And ||
          InitialOp == SymOp::Or || InitialOp == SymOp::Xor) &&
-        Ctx.numOperands(R) == 2 &&
-        Ctx.width(R) <= std::numeric_limits<uint64_t>::digits &&
-        Ctx.isConst(Ctx.operand(R, 0))) {
-      const auto Constant = Ctx.operand(R, 0), Other = Ctx.operand(R, 1);
-      const uint64_t Value = Ctx.node(Constant).Aux;
-      const uint64_t Low = Value & ((uint64_t(1) << Count) - 1);
-      if (Low != Value) {
-        if (!charge(2, 2 * (sizeof(SymNode) + 4 * sizeof(SymRef))))
-          return Empty;
-        const auto K = Ctx.mkConst(Ctx.width(R), Low);
-        R = InitialOp == SymOp::Add   ? Ctx.mkAdd(K, Other)
-            : InitialOp == SymOp::And ? Ctx.mkAnd(K, Other)
-            : InitialOp == SymOp::Or  ? Ctx.mkOr(K, Other)
-                                      : Ctx.mkXor(K, Other);
-      }
+        Ctx.numOperands(R) == 2 && Ctx.isConst(Ctx.operand(R, 0))) {
+      Key = constantWordKey(R, Count);
+      if (Failed)
+        return Empty;
+      const auto Low = (Key >> 8) & 255;
+      const auto All = (uint64_t(1) << Count) - 1;
+      if ((!Low && InitialOp != SymOp::And) ||
+          (Low == All && InitialOp == SymOp::And))
+        return word(Ctx.operand(R, 1), Count, Depth + 1);
+      if (!Low && InitialOp == SymOp::And)
+        return Empty;
+      if (Low == All && InitialOp == SymOp::Or)
+        return word(Ctx.operand(R, 0), Count, Depth + 1);
     }
-    const uint64_t Key = (uint64_t(R.index()) << 8) | Count;
     if (auto It = Words.find(Key); It != Words.end())
       return It->second;
     if (!charge(Count) || Depth >= limits::kMaxResidueDecisionDepth) {
@@ -1420,10 +1446,16 @@ class LowWordDecisions {
       Failed = true;
       return {};
     }
-    const uint64_t Key = (uint64_t(R.index()) << 8) | Count;
+    uint64_t Key = (uint64_t(R.index()) << 8) | Count;
+    const auto Op = Ctx.op(R);
+    if ((Op == SymOp::Add || Op == SymOp::And || Op == SymOp::Xor) &&
+        Ctx.numOperands(R) == 2 && Ctx.isConst(Ctx.operand(R, 0))) {
+      Key = constantWordKey(R, Count);
+      if (Failed)
+        return {};
+    }
     if (auto It = State.Words.find(Key); It != State.Words.end())
       return It->second;
-    const auto Op = Ctx.op(R);
     const uint64_t Top = uint64_t(1) << (Count - 1);
     ResidueSignature Result;
     if (Ctx.isConst(R)) {
@@ -1662,12 +1694,18 @@ class LowWordDecisions {
       Failed = true;
       return {};
     }
-    const uint64_t Key = (uint64_t(R.index()) << 8) | Count;
+    uint64_t Key = (uint64_t(R.index()) << 8) | Count;
+    const auto Op = Ctx.op(R);
+    if ((Op == SymOp::Add || Op == SymOp::And || Op == SymOp::Xor) &&
+        Ctx.numOperands(R) == 2 && Ctx.isConst(Ctx.operand(R, 0))) {
+      Key = constantWordKey(R, Count);
+      if (Failed)
+        return {};
+    }
     if (auto It = State.Words.find(Key);
         It != State.Words.end() && (IdentityOnly || It->second.Complete))
       return It->second;
     const uint64_t Unit = uint64_t(1) << (Count - 2);
-    const auto Op = Ctx.op(R);
     WideSignature Result;
     auto Delta = [](const WideSignature &S) {
       return Bits(S.Delta.begin(), S.Delta.end());
@@ -1840,32 +1878,45 @@ class LowWordDecisions {
         std::sort(Children.begin(), Children.end());
         Children.insert(Children.begin(), {uint64_t(Op) + 1, Count});
         Save(internSignature(State, std::move(Children)), D);
-      } else if (Count == State.NarrowPrecision) {
-        // Fewer than four effective product bits can retain cross terms
-        // between the corrections. Compute these bits exactly instead of
-        // assuming linear corrections or hiding the whole product as an
-        // opaque identity. Equal lower decisions share a zero-extended
-        // representative; the two actual upper bits are its additive delta.
-        const auto &Value = word(R, IdentityOnly ? Count - 2 : Count);
-        if (Failed || !charge(Count, 2 * Count * sizeof(uint64_t)))
-          return {};
-        SignatureKey Identity{UINT64_MAX - 1, Count};
-        uint64_t Literal = 0;
-        bool Constant = true;
-        for (unsigned I = 0; I < Count - 2; ++I) {
-          Identity.push_back(Value[I]);
-          Constant &= Value[I] <= 1;
-          Literal |= uint64_t(Value[I] & 1) << I;
+      } else {
+        const Bits *Value = nullptr;
+        if (Count == State.NarrowPrecision)
+          Value = &word(R, IdentityOnly ? Count - 2 : Count);
+        else if (Count < State.NarrowPrecision) {
+          if (!charge())
+            return {};
+          const auto It =
+              Words.find((uint64_t(R.index()) << 8) | State.NarrowPrecision);
+          if (It != Words.end())
+            Value = &It->second;
         }
-        Bits D(2, 0);
-        if constexpr (!IdentityOnly)
-          D = {Value[Count - 2], Value[Count - 1]};
-        Save(Constant ? internSignature(State, {0, Count, Literal})
-                      : internSignature(State, std::move(Identity)),
-             D);
-      } else
-        Result = {internSignature(State, {UINT64_MAX, Count, R.index()}),
-                  {0, 0}};
+        if (!Value) {
+          Result = {internSignature(State, {UINT64_MAX, Count, R.index()}),
+                    {0, 0}};
+        } else {
+          // Fewer than four effective product bits can retain cross terms
+          // between the corrections. Compute these bits exactly instead of
+          // assuming linear corrections or hiding the whole product as an
+          // opaque identity. Equal lower decisions share a zero-extended
+          // representative; the two actual upper bits are its additive delta.
+          if (Failed || !charge(Count, 2 * Count * sizeof(uint64_t)))
+            return {};
+          SignatureKey Identity{UINT64_MAX - 1, Count};
+          uint64_t Literal = 0;
+          bool Constant = true;
+          for (unsigned I = 0; I < Count - 2; ++I) {
+            Identity.push_back((*Value)[I]);
+            Constant &= (*Value)[I] <= 1;
+            Literal |= uint64_t((*Value)[I] & 1) << I;
+          }
+          Bits D(2, 0);
+          if constexpr (!IdentityOnly)
+            D = {(*Value)[Count - 2], (*Value)[Count - 1]};
+          Save(Constant ? internSignature(State, {0, Count, Literal})
+                        : internSignature(State, std::move(Identity)),
+               D);
+        }
+      }
     } else
       Result = {internSignature(State, {UINT64_MAX, Count, R.index()}), {0, 0}};
     Result.Complete = !IdentityOnly;
@@ -1880,6 +1931,33 @@ class LowWordDecisions {
       State.Words.emplace(Key, Result);
     }
     return Result;
+  }
+
+  template <typename Signature>
+  bool appendUnpaired(
+      const std::unordered_map<uint32_t, std::pair<SymRef, Signature>>
+          &Unpaired,
+      llvm::SmallVectorImpl<SymRef> &Rest) {
+    if (Unpaired.empty())
+      return true;
+    if (Unpaired.size() == 1) {
+      Rest.push_back(Unpaired.begin()->second.first);
+      return true;
+    }
+    // Pair lookup needs no ordering. Sort only the unmatched identities so
+    // reconstruction keeps the established deterministic factor order.
+    if (!charge(Unpaired.size() * (2 + std::bit_width(Unpaired.size())),
+                2 * Unpaired.size() * sizeof(std::pair<uint32_t, SymRef>)))
+      return false;
+    llvm::SmallVector<std::pair<uint32_t, SymRef>, 16> Ordered;
+    Ordered.reserve(Unpaired.size());
+    for (const auto &[Identity, Value] : Unpaired)
+      Ordered.emplace_back(Identity, Value.first);
+    std::sort(Ordered.begin(), Ordered.end(),
+              [](const auto &A, const auto &B) { return A.first < B.first; });
+    for (const auto &[Identity, Factor] : Ordered)
+      Rest.push_back(Factor);
+    return true;
   }
 
   // With U=2^(N-2), matched odd factors satisfy B=A+U*d. Thus
@@ -1899,7 +1977,7 @@ class LowWordDecisions {
     }
     if (!charge(Factors.size(), 2 * Factors.size() * sizeof(SymRef)))
       return {};
-    std::map<uint32_t, std::pair<SymRef, WideSignature>> Unpaired;
+    std::unordered_map<uint32_t, std::pair<SymRef, WideSignature>> Unpaired;
     llvm::SmallVector<SymRef, 16> Pairs, Rest;
     Bits Correction(2, 0);
     llvm::SmallVector<Bits, 16> Corrections;
@@ -1911,7 +1989,7 @@ class LowWordDecisions {
     }
     for (auto Factor : Factors) {
       auto S = wideSignature(*State.Wide, Factor, Count);
-      if (Failed || !charge(1 + std::bit_width(Unpaired.size())))
+      if (Failed || !charge())
         return {};
       auto It = Unpaired.find(S.Identity);
       if (It == Unpaired.end()) {
@@ -1924,6 +2002,11 @@ class LowWordDecisions {
         const auto &D = It->second.second.Delta;
         auto Change = difference(Bits(S.Delta.begin(), S.Delta.end()),
                                  Bits(D.begin(), D.end()));
+        Pairs.push_back(A);
+        Unpaired.erase(It);
+        // Equal complete signatures contribute only their square.
+        if (!Change[0] && !Change[1])
+          continue;
         // Both factors were proved odd. Their low word is only needed for
         // the upper cross term when the correction's low bit is nonzero.
         if (Change[0])
@@ -1940,8 +2023,6 @@ class LowWordDecisions {
         } else {
           Correction = sumCorrection(Correction, Change);
         }
-        Pairs.push_back(A);
-        Unpaired.erase(It);
       }
     }
     if (Pairs.empty())
@@ -1965,8 +2046,8 @@ class LowWordDecisions {
       return {};
     Inner.push_back(0);
     auto Result = calculate(SymOp::Mul, Inner, Inner);
-    for (const auto &[Identity, Value] : Unpaired)
-      Rest.push_back(Value.first);
+    if (!appendUnpaired(Unpaired, Rest))
+      return {};
     if (Retained) {
       if (!charge(Rest.size(), Rest.size() * sizeof(SymRef)))
         return {};
@@ -1995,12 +2076,12 @@ class LowWordDecisions {
       return product(Factors, Count);
     if (!charge(Factors.size(), 2 * Factors.size() * sizeof(SymRef)))
       return {};
-    std::map<uint32_t, std::pair<SymRef, uint32_t>> Unpaired;
+    std::unordered_map<uint32_t, std::pair<SymRef, uint32_t>> Unpaired;
     llvm::SmallVector<SymRef, 16> Pairs, Rest;
     uint32_t Correction = 0;
     for (auto Factor : Factors) {
       const auto Signature = residueSignature(State, Factor, Count);
-      if (Failed || !charge(1 + std::bit_width(Unpaired.size())))
+      if (Failed || !charge())
         return {};
       auto It = Unpaired.find(Signature.Identity);
       if (It == Unpaired.end()) {
@@ -2023,8 +2104,8 @@ class LowWordDecisions {
       return {};
     Inner.push_back(0);
     auto Result = calculate(SymOp::Mul, Inner, Inner);
-    for (const auto &[Identity, Value] : Unpaired)
-      Rest.push_back(Value.first);
+    if (!appendUnpaired(Unpaired, Rest))
+      return {};
     auto Other = product(Rest, Count);
     if (Failed || Other.empty())
       return {};
@@ -2383,12 +2464,10 @@ public:
           Nonconstants.size() > WideProbeBlock &&
           charge(1, sizeof(WidePairingState))) {
         State.Wide = std::make_unique<WidePairingState>();
-        // Partial bitwise blocks may have equal narrow nonlinear residues
-        // that their syntax cannot expose. Affine, complete and isolated
-        // subgroup readings retain their existing search; recursive pairing
-        // keeps structural corrections at lower precisions.
-        State.Wide->NarrowPrecision =
-            !FullBlock && XorFactors && RetainedFactors.empty() ? Observed : 0;
+        // Partial bitwise blocks, including isolated parity subgroups, may
+        // share narrow nonlinear residues that syntax cannot expose. Lower
+        // recursive precisions reuse completed outer words when available.
+        State.Wide->NarrowPrecision = !FullBlock && XorFactors ? Observed : 0;
         const auto A =
             FullBlock
                 ? wideSignature<true>(*State.Wide, Nonconstants.front(),
@@ -2417,11 +2496,12 @@ public:
       // can do so too; retain nonlinear residual words instead of expanding
       // another mixed product after the pair proof. The original parity scan
       // already proved the complete product zero on the other branch.
-      auto *Unpaired = !ProjectFactors && RetainedFactors.empty() &&
-                               ((Nonconstants.size() & 1) ||
-                                (!FullBlock && HasNonlinearFactor))
-                           ? &RetainedFactors
-                           : nullptr;
+      auto *Unpaired =
+          !ProjectFactors && (RetainedFactors.empty() || HasNonlinearFactor) &&
+                  ((Nonconstants.size() & 1) ||
+                   (!FullBlock && HasNonlinearFactor))
+              ? &RetainedFactors
+              : nullptr;
       if (Wide) {
         // Complete blocks and odd residual blocks combine their correction
         // columns. Partial even blocks retain streaming work so an unfinished

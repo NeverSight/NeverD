@@ -335,13 +335,37 @@ bool hasNonzeroProductWitness(SymContext &Ctx, llvm::ArrayRef<SymRef> Factors,
     if (Res.Failed || Work >= limits::kMaxResidueWitnessWork)
       return false;
   }
+  struct WitnessEvaluation {
+    std::unique_ptr<SymEvalPlan> Plan;
+    size_t Work, Bytes;
+  };
+  std::map<uint32_t, WitnessEvaluation> WideEvaluations;
   auto ZerosAt = [&](SymRef Factor) -> std::optional<unsigned> {
+    const bool Wide = Ctx.width(Factor) > 64;
+    if (Wide) {
+      if (Work >= limits::kMaxResidueWitnessWork || !Res.charge(1))
+        return std::nullopt;
+      ++Work;
+      if (auto It = WideEvaluations.find(Factor.index());
+          It != WideEvaluations.end()) {
+        const auto EvaluationWork = It->second.Work;
+        if (EvaluationWork > limits::kMaxResidueWitnessWork - Work ||
+            !Res.charge(EvaluationWork, It->second.Bytes))
+          return std::nullopt;
+        Work += EvaluationWork;
+        const llvm::APInt Input(64, VariableValue);
+        return It->second.Plan->evalWith([&](uint32_t) { return &Input; })
+            .countr_zero();
+      }
+    }
+    size_t EvaluationWork = (size_t(Ctx.width(Factor)) - 1) / 64 + 1;
+    size_t EvaluationBytes =
+        sizeof(llvm::APInt) + EvaluationWork * sizeof(uint64_t);
     llvm::SmallVector<SymRef, 16> Pending{Factor};
     llvm::SmallDenseSet<uint32_t, 16> Seen;
     while (!Pending.empty()) {
       const auto R = Pending.pop_back_val();
-      if (Ctx.width(R) > 64 || Work >= limits::kMaxResidueWitnessWork ||
-          !Res.charge(1))
+      if (Work >= limits::kMaxResidueWitnessWork || !Res.charge(1))
         return std::nullopt;
       ++Work;
       if (Seen.contains(R.index()))
@@ -355,18 +379,65 @@ bool hasNonzeroProductWitness(SymContext &Ctx, llvm::ArrayRef<SymRef> Factors,
                   Count * (2 * sizeof(SymRef) + sizeof(uint32_t))))
         return std::nullopt;
       Work += Units;
+      size_t Words = (size_t(Ctx.width(R)) - 1) / 64 + 1;
+      for (auto Child : Ctx.operands(R))
+        Words = std::max(Words, (size_t(Ctx.width(Child)) - 1) / 64 + 1);
+      size_t Scale = 1;
+      if (Words > 1) {
+        const auto Op = Ctx.op(R);
+        const bool Quadratic = Op == SymOp::Mul || Op == SymOp::UDiv ||
+                               Op == SymOp::SDiv || Op == SymOp::URem ||
+                               Op == SymOp::SRem;
+        const size_t Available =
+            1 + (limits::kMaxResidueWitnessWork - Work) / Units;
+        if (Words > Available || (Quadratic && Words > Available / Words))
+          return std::nullopt;
+        Scale = Words * (Quadratic ? Words : 1);
+        const size_t Extra = Units * (Scale - 1);
+        if (!Res.charge(Extra,
+                        3 * sizeof(llvm::APInt) + 4 * Words * sizeof(uint64_t)))
+          return std::nullopt;
+        Work += Extra;
+      }
+      if (Wide && !Ctx.isConst(R)) {
+        EvaluationWork += std::max(size_t(1), size_t(Count)) * Scale;
+        EvaluationBytes +=
+            3 * sizeof(llvm::APInt) + 4 * Words * sizeof(uint64_t);
+      }
       Seen.insert(R.index());
       Pending.append(Ctx.operands(R).begin(), Ctx.operands(R).end());
     }
     SymEvalPlan Plan(Ctx, Factor);
-    const auto Value =
-        Plan.evalU64With([&](uint32_t) { return VariableValue; });
-    return unsigned(std::countr_zero(Value));
+    if (Plan.fitsU64()) {
+      const auto Value =
+          Plan.evalU64With([&](uint32_t) { return VariableValue; });
+      return unsigned(std::countr_zero(Value));
+    }
+    const llvm::APInt Input(64, VariableValue);
+    const auto Zeros =
+        Plan.evalWith([&](uint32_t) { return &Input; }).countr_zero();
+    const size_t Bytes = sizeof(decltype(WideEvaluations)::value_type) +
+                         4 * sizeof(void *) + sizeof(SymEvalPlan);
+    if (Wide && Work < limits::kMaxResidueWitnessWork && Bytes <= Res.Storage &&
+        Res.Budget.canConsume(1)) {
+      Res.charge(1, Bytes);
+      ++Work;
+      WideEvaluations.emplace(
+          Factor.index(),
+          WitnessEvaluation{std::make_unique<SymEvalPlan>(std::move(Plan)),
+                            EvaluationWork, EvaluationBytes});
+    }
+    return Zeros;
   };
   for (uint64_t Input : {uint64_t(0), uint64_t(1), uint64_t(2)}) {
     VariableValue = Input;
     Values.clear();
-    unsigned TotalZeros = 0;
+    llvm::SmallVector<SymRef, 8> EvenFactors;
+    const size_t Capacity = std::min({Factors.size(), size_t(Needed),
+                                      limits::kMaxResidueWitnessWork - Work});
+    if (!Res.charge(0, Capacity * sizeof(SymRef)))
+      return false;
+    EvenFactors.reserve(Capacity);
     bool Complete = true;
     for (size_t I = 0; I < Factors.size(); ++I) {
       auto V = Parity(I);
@@ -375,14 +446,25 @@ bool hasNonzeroProductWitness(SymContext &Ctx, llvm::ArrayRef<SymRef> Factors,
         break;
       }
       if (!*V) {
-        auto Zeros = ZerosAt(Factors[I]);
+        EvenFactors.push_back(Factors[I]);
+        // Enough even factors already prove this assignment zero. Avoid
+        // building evaluation plans before trying the next concrete input.
+        if (EvenFactors.size() >= Needed) {
+          Complete = false;
+          break;
+        }
+      }
+    }
+    unsigned TotalZeros = 0;
+    if (Complete)
+      for (auto Factor : EvenFactors) {
+        auto Zeros = ZerosAt(Factor);
         if (!Zeros || *Zeros >= Needed - TotalZeros) {
           Complete = false;
           break;
         }
         TotalZeros += *Zeros;
       }
-    }
     if (Complete)
       return true;
     if (Res.Failed || Work >= limits::kMaxResidueWitnessWork)

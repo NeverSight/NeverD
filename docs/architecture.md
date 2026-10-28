@@ -3767,6 +3767,12 @@ low prefix before the remaining interleaved bits. Dense decision and carry
 caches prepay their bucket growth. Immutable word views avoid repeated copies
 and are discarded when the assumption changes; polynomial views remain valid
 throughout reconstruction.
+Constant binary operands use exact low-word cache keys containing the other
+operand, operation, literal residue and precision. Native literals need no
+temporary expression nodes; wide literal prefixes are copied and charged once
+per search. Word and pairing-signature caches share this normalization without
+changing any source constant or wider reading. Neutral observed constants
+reuse the operand directly.
 Decision identity hits and terminal two-input Boolean operations return before
 entering the allocation and recursive expansion helpers. Three-input carry and
 parity operations keep their cache lookup and recursive expansion in one
@@ -3789,12 +3795,14 @@ Products spanning the complete observed domain also normalize their factors
 once. Each operand needs only the bits still observable after the other
 factors' proved trailing zeros; the projection cache includes that precision.
 Neutral low-word constants bypass reconstruction of identity operations.
-For a whole partial block of XOR factors, narrow nonlinear products can use
+For a partial block of XOR factors, narrow nonlinear products can use
 exact lower decision bits as pairing identities. Their two actual upper bits
 form the additive correction, including cross terms that cannot be discarded
-when fewer than four product bits remain. This search applies at the block's
-observed precision; affine factors, complete blocks, isolated subgroups and
-recursive lower precisions retain their existing structural path.
+when fewer than four product bits remain. This also applies to a separately
+proved parity subgroup with complete residual words. Recursive lower
+precisions can reuse a completed wider decision word; they do not start a new
+narrow expansion. Affine factors and complete blocks retain their structural
+path.
 Small products can group by parity alone after affine synthesis, retaining
 multiple independently valued residual words. A complete count must still
 prove the other branch zero; a majority by itself does not suffice. Large
@@ -3830,6 +3838,8 @@ blocks and projected groups keep their joint reconstruction. Degree-block
 admission only orders this search; it never establishes a pair or oddness.
 Pairing indexes are constructed only for an admitted search and are confined
 to its active odd assumption, avoiding setup in ordinary low-word searches.
+Pair lookup uses exact hashed identities. Only unmatched identities are sorted,
+preserving the established factor order without sorting every successful pair.
 All signature, pairing and reconstruction work uses the existing cumulative
 work/storage allowances and decision-node limit.
 Full-block two-bit admission caches structural identities before constructing
@@ -3842,7 +3852,9 @@ by CLI and GUI source optimization.
 Complete blocks and odd residual blocks combine two-bit correction columns
 before constructing their carry graph. Literal corrections sum directly modulo
 four; repeated or complementary variable bits cancel or move to the next
-column through the existing exact word adder. Partial even blocks preserve
+column through the existing exact word adder. Identical complete signatures
+need only their shared square, with no zero correction to accumulate.
+Partial even blocks preserve
 streaming accumulation so unfinished proofs leave the established headroom
 for child rewrites. Both strategies retain the same cumulative resource limits.
 Boolean polynomial reconstruction can factor shared cofactors across groups
@@ -3869,8 +3881,13 @@ product proof; multiple high-degree products retain their joint search order.
 A concrete nonzero
 witness may reject further zero-proof attempts but never authorizes a rewrite.
 All-odd assignments retain their cheap parity path. If they fail, bounded
-native-width evaluations can count trailing zeros in even factors at complete
-input assignments. Their sum must be below the observed width. Evaluation
+complete-word evaluations can count trailing zeros in even factors at complete
+input assignments. Their sum must be below the observed width. A complete
+parity scan first rejects assignments with enough even factors to force zero,
+avoiding their evaluation plans. Wide evaluations charge limb counts, including
+quadratic arithmetic, within the same witness limit. Repeated assignments reuse
+the prepared wide plan but reevaluate every variable and expression; each use
+still pays its evaluation work and scratch storage. Evaluation
 reuses the ordinary word evaluator, keeps correlated inputs consistent, and
 shares the existing witness work and storage allowance.
 When a prefix attempt has completed every coefficient map, its witness reuses

@@ -2342,6 +2342,15 @@ partial blocks must reduce their cost by at least half below 32,768 work units.
 An independent multiplication oracle exhausts all 262,144 relevant low-word
 assignments for one complemented product. Keep the existing 9,500-work complete
 block regression alongside these tests to protect its structural path.
+`NarrowParityNeighborsFinishWithCompleteResidualWords` adds 21 degree-47
+neighbors across 8/16/32/64/65/128/257 bits, including complemented and reversed
+construction. They must finish below the existing 65,536-work limit with cost
+at most 128 and derivation evidence with verification sampling disabled.
+Independent full-width multiplication checks both parity branches and retained
+factors. A complemented case is zero at the first two witness assignments and
+nonzero at the third, checking that cached wide plans use the new inputs.
+Real worker and CLI source tests also execute degree-47 and degree-95
+nonlinear neighbors through all six source routes at O0/O2.
 `DenseFrequenciesFinishWidePartialProducts` checks degree-62 partial products
 at 8/64/65/128 bits against independent complete-word multiplication. The
 non-native cases must finish below 60,000 work units with output cost at most
