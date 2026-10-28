@@ -678,3 +678,84 @@ SHA-256 is
 report SHA-256 is
 `1b69b0633d61e5e88029c6a71ca122b30533f13ed42ec143bb45aa50bdb39267`.
 These local results do not claim all GitHub platform checks passed.
+
+## 2026-10-28 P3 inline memory-transfer qualification
+
+Small copies in lifinity-v1's formatter execute guest load/store loops rather
+than the wrapper's memcpy syscall branch. A generic wrapper previously erased
+captured fields at that boundary. Schema 12 replays a proven scalar path through
+canonical memory transfers without allocating a fifth specialization. Unknown
+branches, other guest calls and repeated block/register states cannot establish
+a returning path. Temporary snapshots, effects and instructions use the existing
+budgets; store effects cover complete destination alternatives, with no heap
+freshness or non-aliasing assumption. Inline edge counters remain distinct from
+actual copy-syscall slots.
+
+The same-dependency baseline is `051d38a42cef8f371eeed8b23ecb8d0f91cfa29d`;
+the isolated fix is `57ff53aa4b698cafe96b7a3975846a3bd0e64c5f`. Its worker SHA-256 is
+`76961ae9a2566b8e19f43425ed73d57668b8495d59e16e6466238dae9b3f6a5f`;
+report SHA-256 is
+`c7676f05c1606832171dbc087c044b0ee6b8c01515b950fbb68988096de8f120`.
+The full independent 72-SO run retains the original 60-second request limit,
+8 GiB sampled process-group RSS, 512 MiB output, two concurrent assets and all
+internal limits above. Input hashes, profiles, compilers/flags and dependencies
+match. No isolated retry is substituted.
+
+All fourteen stages in the preceding table remain 72/72: load, runtime image,
+decode, control flow, requisite verification, CFG/MedIR, HighIR processing,
+Solana metadata, LLVM/C/Rust export, context queries and both native object
+compilations. Required SBF tests remain 471/471, with zero skipped/disabled
+tests; official SBPF, Agave and protocol-ceiling checks are mandatory. Additional
+raw controls exercise a two-iteration copy after four live specializations,
+an unknown selector, aliased allocation addresses and a nonreturning loop that
+must not publish provisional stores. The integrated fixture restores the known
+source after warm-up so rejection controls reach the intended replay boundary.
+
+| Metric | Before | After |
+|---|---:|---:|
+| Singleton CALLX sites | 590 | 590 |
+| Finite-set CALLX sites | 49 | 49 |
+| Either conditional address proof | 639 | 639 |
+| Sites without a conditional address proof | 6,935 | 6,935 |
+| Global-budget-limited samples | 0 | 0 |
+| Unknown-write summaries | 91,801 | 90,942 |
+| Output parameterized fields | 48,841 | 50,253 |
+| Applied stored values | 445,717 | 447,074 |
+| Instantiated inline memory-path edges | 0 | 2,219 |
+| Context instruction visits | 106,683,295 | 107,082,728 |
+
+No target-address, caller-slot or caller-entry relation is added or lost.
+All 601 serialized expression witness forms remain unchanged, also after frame
+normalization. These field improvements are not new target-site coverage.
+All 216 LLVM/C/Rust files remain byte-identical to the baseline. Each source
+backend covers 5,899,345 raw slots exactly once, with all 72 partitions agreeing.
+There are no crashes, timeouts or native compiler failures.
+
+Lifinity-v1 retains 19 singleton sites. Helpers 182, 60926 and 3034 each reduce
+unknown-write summaries from five to two; helper 182 gains six parameterized
+output fields. Slot 1963 remains unproven in ten contexts: six lack the full
+field at 1960 and four lack an incoming register. A same-output state observer
+confirms that 32470/32478 preserve the allocation/copy, while the generic helper
+at 32487 loses tag/payload facts before the 32493 merge and out+96 at 32926.
+The constructor's five summaries still all contain unknown writes. A separate
+raw slice identifies a narrow-tag boundary: 4334 stores one byte at out+621,
+and 32465 loads FP-3. Typed narrow facts and tag/payload correlations remain
+unimplemented; that observation does not prove the final target.
+
+The latest-dev integration is `ca361fed2c2c0676fbad9da9cb5a7f8f555b81b9` against
+`f7d924bd0fc802cdf74099c3463ea2d37bafa05d`. Dev updates Capstone from
+`3c00e8faf` to `8e962575d`; this is separately qualified rather than relabelled
+as the same-dependency comparison. Production SBF/protocol sources match the
+isolated fix, while the rejection fixture is strengthened. A rebuild passes
+471 mandatory tests and another independent full72 under the original budget.
+All 288 LLVM/C/Rust/query outputs and all 72 analysis stage details match the
+isolated fix. Integrated worker SHA-256:
+`105cb716fdacfb8f966e199b93df784c2cd3fb28d20cb2508e317119cf2796cf`;
+report SHA-256:
+`23d4104a5edb39d23c7b8550c07d537720e5a73a45653b5605dde2f91a8473c0`.
+
+Whole-program structuring remains 0/72, and all 7,574 raw CALLX sites keep
+dynamic fallback. Seventy-one samples retain unproven sites. The previous
+11 caller-entry precision losses and three unestablished witness equivalences
+remain open. Real bank/CPI replay, all-platform GitHub CI and byte-identical
+source reconstruction are not established by these local tests.

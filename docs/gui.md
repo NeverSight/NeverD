@@ -205,7 +205,13 @@ code reads or writes is laid out as wide as those accesses, under the name its
 operands and the pseudocode use (`qword_A410 dq ?`, or `unk_` where the widths
 differ); other unwritten bytes run as `db N dup(?)` up to the next item. Only a window of lines around the viewport is held; the scroll bar
 maps to the linear address space. The arrow gutter draws branches, and clicking
-an identifier highlights every occurrence. Names the engine leaves generic take
+an identifier highlights every occurrence; a register brings the registers that
+share it along, `eax` and `al` with `rax` or `w0` with `x0`, as in IDA.
+**Search → Lock highlight** keeps up to eight words highlighted, each in its
+own color, in every disassembly and code window while the cursor's highlight
+moves on: Ctrl+Alt+1 through Ctrl+Alt+8 lock the word under the cursor in that
+color or free the color again, and Ctrl+Alt+0 locks it in the first free color
+or unlocks it. Closing the file frees every color. Names the engine leaves generic take
 their classic forms in the listing, function list, jumps and source views:
 import thunks after their import and the entry point `start` (`DllEntryPoint`
 for a PE DLL). Pure direct forwarders carry a thunk attribute; a DLL entry's
@@ -223,7 +229,11 @@ char **envp)`; a rename of the function still wins over that name.
 **Graph view** (Space) lays the current function out in layers with the
 conditional (green/red) and unconditional edges routed around blocks; panning
 and zooming are local, and text is dropped at low zoom. The graph overview
-shows the whole function and the visible area.
+shows the whole function and the visible area. As in IDA, a click on an edge
+selects it and draws it over the others until the next click, and resting the
+pointer on an edge shows the block at its far end: beside its arrow the block
+it comes from, named by its branching instruction, and elsewhere the block it
+goes to, a long block by its first and last rows.
 
 Opening a file or database starts with disassembly and keeps pseudocode and
 IR windows closed, including when a saved desktop had them open. Generate the
@@ -556,7 +566,10 @@ keys makes Copy take bytes again.
 **Imports**, **Exports**, **Names**, **Strings**, **Segments** and
 **Bookmarks** are choosers with a quick filter and sortable columns. **Jump
 anywhere** (G) takes an address, a name or an expression such as `main+0x10`
-and suggests names as you type. Cross references (X, Ctrl+X, Ctrl+J) list call
+and suggests names as you type. Beside the suggestions a disassembly preview
+shows where Enter goes, the chosen suggestion or else the typed expression, as
+in IDA; text that names nothing yet leaves the preview empty, and the typing
+stays in the field. Cross references (X, Ctrl+X, Ctrl+J) list call
 (`p`), jump (`j`), read (`r`), write (`w`) and offset (`o`) references from the
 worker's reference index.
 
@@ -706,6 +719,7 @@ Knowledge Exchange assets, and it registers only the `neverd://` scheme.
 | Ctrl+P / Ctrl+L / Ctrl+S / Ctrl+E | Choose a function / name / segment / entry point |
 | Alt+T, Ctrl+T / Alt+B, Ctrl+B | Search text / bytes, and repeat |
 | Alt+Up / Alt+Down | Previous / next occurrence of the highlighted identifier |
+| Ctrl+Alt+1 … Ctrl+Alt+8 / Ctrl+Alt+0 | Lock or free a highlight color / lock or unlock in the first free color |
 | Ctrl+Shift+Up / Ctrl+Shift+Down | Previous / next function |
 | Shift+F3, Shift+F4, Shift+F7, Shift+F12 | Functions, Names, Segments, Strings |
 | Shift+F11 | Type libraries |

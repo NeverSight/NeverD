@@ -1,0 +1,42 @@
+{
+  "triple": "arm64e-apple-macos13",
+  "page_size": 256,
+  "routes": ["c", "llvmc"],
+  "optimizations": ["-O0", "-O2"],
+  "compile_flags": ["-std=c11", "-fblocks", "-fno-strict-aliasing", "-Werror=implicit-function-declaration", "-Werror=return-type"],
+  "declarations": "typedef struct Pair { long long low, high; } Pair; typedef struct Padded { int tag; long long value; } Padded; typedef struct Node { struct Node *next; long long value; } Node; typedef struct HFA { double a, b; } HFA; typedef struct FloatPair { float a, b; } FloatPair; typedef struct Nested { FloatPair first, second; } Nested; typedef struct Big { long long a, b, c; } Big; typedef struct LargeHFA { double a, b, c, d, e, f; } LargeHFA; typedef struct __attribute__((packed)) Packed { int a; long long b; } Packed; typedef union Union { double a; long long b; } Union; typedef struct __neverd_record_destination { long long low, high; } __neverd_record_destination; typedef struct __neverd_record_source { long long low, high; } __neverd_record_source;",
+  "assembly_prefix": ".text\n.p2align 2\n",
+  "assembly_entry": ".globl _{name}\n_{name}:\n  sub sp,sp,#16\n  str x30,[sp,#8]\n  mov x16,x0\n  mov x17,x1\n",
+  "arguments": {
+    "gp": "  mov x0,x2\n  mov x1,x3\n",
+    "fp": "  fmov d0,x2\n  fmov d1,x3\n",
+    "nested": "  fmov d0,x2\n  lsr x9,x2,#32\n  fmov s1,w9\n  fmov d2,x3\n  lsr x9,x3,#32\n  fmov s3,w9\n"
+  },
+  "call": "  blraa x16,x17\n",
+  "results": {
+    "scalar": "",
+    "gp": "  eor x0,x0,x1\n",
+    "padded": "  mov w0,w0\n  eor x0,x0,x1\n",
+    "fp": "  fmov x0,d0\n  fmov x1,d1\n  eor x0,x0,x1\n",
+    "nested": "  fmov w9,s0\n  fmov w10,s1\n  eor w9,w9,w10\n  fmov w10,s2\n  eor w9,w9,w10\n  fmov w10,s3\n  eor w0,w9,w10\n"
+  },
+  "assembly_exit": "  ldr x30,[sp,#8]\n  add sp,sp,#16\n  ret\n.p2align 2\n",
+  "cases": [
+    {"name": "pair_scalar", "arguments": "gp", "result": "scalar", "declaration": "long long dispatch(Pair value)"},
+    {"name": "pair_result", "arguments": "gp", "result": "gp", "declaration": "Pair dispatch(Pair value)"},
+    {"name": "padded_result", "arguments": "gp", "result": "padded", "declaration": "Padded dispatch(Padded value)"},
+    {"name": "node_result", "arguments": "gp", "result": "gp", "declaration": "Node dispatch(Node value)"},
+    {"name": "hfa_result", "arguments": "fp", "result": "fp", "declaration": "HFA dispatch(HFA value)"},
+    {"name": "nested_result", "arguments": "nested", "result": "nested", "declaration": "Nested dispatch(Nested value)"},
+    {"name": "signed_wide", "arguments": "gp", "result": "gp", "declaration": "__int128 dispatch(__int128 value)"},
+    {"name": "unsigned_wide", "arguments": "gp", "result": "gp", "declaration": "unsigned __int128 dispatch(unsigned __int128 value)"},
+    {"name": "destination_name", "arguments": "gp", "result": "gp", "declaration": "__neverd_record_destination dispatch(__neverd_record_destination value)"},
+    {"name": "source_name", "arguments": "gp", "result": "gp", "declaration": "__neverd_record_source dispatch(__neverd_record_source value)"}
+  ],
+  "refused": [
+    "Big dispatch(Pair value)",
+    "long long dispatch(LargeHFA value)",
+    "long long dispatch(Packed value)",
+    "long long dispatch(Union value)"
+  ]
+}

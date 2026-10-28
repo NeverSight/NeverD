@@ -417,13 +417,18 @@ HISTORY_ALLOWED: tuple[HistoryAllowance, ...] = (
     HistoryAllowance(
         path="docs/evidence/arm64e-typed-call-abi-2026-10-28.json",
         rule="private-path",
-        commits=frozenset({"8163d15c17052bd5242d6ff35e1cd18f8c04ca03"}),
+        commits=frozenset({
+            "64a8b64a1d54543d27524c31aed896b89acb0fd6",
+            "16e426cb58317ec165b80ae3119c8e1d54901bf0",
+            "8163d15c17052bd5242d6ff35e1cd18f8c04ca03",
+        }),
         line="",
         reason=(
-            "Reviewed deletion of local checkout prefixes from the Darwin "
-            "ABI receipt. Only command paths were normalized; statuses, "
-            "timings and artifact hashes are unchanged. Exact historical "
-            "line digests permit no current or future path occurrence."
+            "Reviewed removal of checkout prefixes from twelve arm64e retry "
+            "command arguments. Test identities, outcomes, limits, timings and "
+            "artifact hashes are unchanged. Only these exact historical line "
+            "digests in the publication and cleanup commits are covered; "
+            "current and future private paths remain findings."
         ),
         line_sha256=frozenset({
             "170cdc8c9dc54ea4f66ba902295daba256b38d72ef1d0fa377f2298be5c21344",

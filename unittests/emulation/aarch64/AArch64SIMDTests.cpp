@@ -666,7 +666,7 @@ TEST_P(AArch64SIMD, SignedZeroComparisonRejectsScalablePredicate) {
   expectRejected(0x25002020);
 }
 TEST_P(AArch64SIMD, IntegerComparisonsAndReductionsPreserveFullState) {
-  enum Operation { Equal, Zero, Unzip, Narrow, NarrowHigh, Maximum };
+  enum Operation { Equal, Zero, Unzip, Narrow, NarrowHigh, Maximum, Minimum };
   struct LaneCase {
     Operation Op;
     uint32_t Word;
@@ -682,12 +682,16 @@ TEST_P(AArch64SIMD, IntegerComparisonsAndReductionsPreserveFullState) {
       {0, 0},
       {UINT64_MAX, UINT64_MAX},
       {0x80ff7f000102ff80ULL, 0xffffffff00000001ULL},
-      {0x1234000056780000ULL, 0x8000000000000000ULL}};
+      {0x1234000056780000ULL, 0x8000000000000000ULL},
+      {0xfffefffdffffffffULL, 0x807f807f807f807fULL},
+      {0x0203040506070809ULL, 0x1112131415161701ULL}};
   constexpr RegisterValue Right[] = {
       {UINT64_MAX, 0},
       {UINT64_MAX, UINT64_MAX},
       {0x7fff80000102fe80ULL, 0x7fffffff00000002ULL},
-      {0x1234000056780000ULL, 0x8000000000000000ULL}};
+      {0x1234000056780000ULL, 0x8000000000000000ULL},
+      {0xfffefffdffffffffULL, 0x807f807f807f807fULL},
+      {0x0203040506070809ULL, 0x1112131415161701ULL}};
   llvm::cantFail(CPU->setReg(AArch64Register::FPCR,
                              DefaultNaN | FlushToZero | (1u << RoundingShift)));
   llvm::cantFail(CPU->setReg(AArch64Register::FPSR, InitialFPSR));
@@ -715,6 +719,8 @@ TEST_P(AArch64SIMD, IntegerComparisonsAndReductionsPreserveFullState) {
           return (Value[Index * Width / 64] >> (Index * Width % 64)) & Mask;
         };
         RegisterValue Expected{};
+        if (Case.Op == Minimum)
+          Expected[0] = Mask;
         if (Case.Op == NarrowHigh)
           Expected[0] = ExpectedVectors[Destination][0];
         for (unsigned I = 0; I < Count; ++I) {
@@ -731,7 +737,10 @@ TEST_P(AArch64SIMD, IntegerComparisonsAndReductionsPreserveFullState) {
           else if (Case.Op == Narrow || Case.Op == NarrowHigh)
             Value = Element(Left[Input], I, Bits * 2) & Mask;
           else {
-            Expected[0] = std::max(Expected[0], Element(Left[Input], I, Bits));
+            Expected[0] =
+                Case.Op == Minimum
+                    ? std::min(Expected[0], Element(Left[Input], I, Bits))
+                    : std::max(Expected[0], Element(Left[Input], I, Bits));
             continue;
           }
           const unsigned At = I * Bits + (Case.Op == NarrowHigh ? 64 : 0);
@@ -760,6 +769,9 @@ REJECT_REDUCTION(NarrowBeyond64BitElements, 0x0ee1283f)
 REJECT_REDUCTION(TwoLaneWordMaximum, 0x2eb0a83f)
 REJECT_REDUCTION(DoubleWordMaximum, 0x6ef0a83f)
 REJECT_REDUCTION(ScalableMaximum, 0x0409203f)
+REJECT_REDUCTION(TwoLaneWordMinimum, 0x2eb1a83f)
+REJECT_REDUCTION(DoubleWordMinimum, 0x6ef1a83f)
+REJECT_REDUCTION(ScalableMinimum, 0x040b203f)
 REJECT_REDUCTION(ScalableUnzip, 0x0522683f)
 #undef REJECT_REDUCTION
 TEST_P(AArch64SIMD, CMHIReservedSingleLaneVectorIsRejected) {

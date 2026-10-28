@@ -344,6 +344,50 @@
         <translation>移至醒目提示識別碼的下一個出現位置</translation>
     </message>
     <message>
+        <source>Lock or &amp;unlock</source>
+        <translation>鎖定或解除鎖定(&amp;U)</translation>
+    </message>
+    <message>
+        <source>Keep the highlighted word highlighted in the first free color, or unlock it</source>
+        <translation>以第一個可用色彩持續醒目提示目前醒目提示的單字，或解除鎖定</translation>
+    </message>
+    <message>
+        <source>Color &amp;1</source>
+        <translation>色彩 1(&amp;1)</translation>
+    </message>
+    <message>
+        <source>Color &amp;2</source>
+        <translation>色彩 2(&amp;2)</translation>
+    </message>
+    <message>
+        <source>Color &amp;3</source>
+        <translation>色彩 3(&amp;3)</translation>
+    </message>
+    <message>
+        <source>Color &amp;4</source>
+        <translation>色彩 4(&amp;4)</translation>
+    </message>
+    <message>
+        <source>Color &amp;5</source>
+        <translation>色彩 5(&amp;5)</translation>
+    </message>
+    <message>
+        <source>Color &amp;6</source>
+        <translation>色彩 6(&amp;6)</translation>
+    </message>
+    <message>
+        <source>Color &amp;7</source>
+        <translation>色彩 7(&amp;7)</translation>
+    </message>
+    <message>
+        <source>Color &amp;8</source>
+        <translation>色彩 8(&amp;8)</translation>
+    </message>
+    <message>
+        <source>Lock the highlighted word in this color, or unlock the color</source>
+        <translation>以此色彩鎖定醒目提示的單字，或解除此色彩的鎖定</translation>
+    </message>
+    <message>
         <source>&amp;Find in view...</source>
         <translation>在檢視中尋找(&amp;F)...</translation>
     </message>
@@ -1612,6 +1656,10 @@
         <translation>搜尋(&amp;S)</translation>
     </message>
     <message>
+        <source>&amp;Lock highlight</source>
+        <translation>鎖定醒目提示(&amp;L)</translation>
+    </message>
+    <message>
         <source>&amp;View</source>
         <translation>檢視(&amp;V)</translation>
     </message>
@@ -2290,6 +2338,14 @@ Double-click to go to the declaration.</source>
     <message>
         <source>Laying out graph…</source>
         <translation>正在配置圖形版面…</translation>
+    </message>
+    <message>
+        <source>From %1</source>
+        <translation>來自 %1</translation>
+    </message>
+    <message>
+        <source>To %1</source>
+        <translation>前往 %1</translation>
     </message>
 </context>
 <context>

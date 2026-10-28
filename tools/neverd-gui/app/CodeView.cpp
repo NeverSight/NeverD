@@ -452,6 +452,8 @@ CodeText::CodeText(Session &session, QWidget *parent)
     updateMetrics();
     viewport()->update();
   });
+  connect(&session_.highlightLocks(), &HighlightLocks::changed, viewport(),
+          qOverload<>(&QWidget::update));
   connect(&session_, &Session::revisionChanged, this, [this] {
     if (!function_)
       return;
@@ -1671,20 +1673,31 @@ void CodeText::paintEvent(QPaintEvent *) {
     painter.setClipRect(QRect(
         gutterRight, y, std::max(0, area.width() - gutterRight), lineHeight_));
     auto &layout = lines_[i].styled.layout(font, styleStamp_, codeColor);
-    if ((!SearchHighlight.Text.isEmpty() || !highlight_.isEmpty()) &&
-        layout.lineCount()) {
+    if (layout.lineCount()) {
       const QTextLine textLine = layout.lineAt(0);
-      const bool searching = !SearchHighlight.Text.isEmpty();
-      const auto matches =
-          searching ? SearchHighlight.matches(lines_[i].styled.text)
-                    : tokenOccurrences(lines_[i].styled.text, highlight_, dots);
-      const int length =
-          searching ? SearchHighlight.Text.size() : highlight_.size();
-      for (const int at : matches) {
-        const qreal x0 = textLine.cursorToX(at);
-        const qreal x1 = textLine.cursorToX(at + length);
+      const auto fill = [&](int first, int last, ColorRole role) {
+        const qreal x0 = textLine.cursorToX(first);
+        const qreal x1 = textLine.cursorToX(last);
         painter.fillRect(QRectF(left + x0, y, x1 - x0, lineHeight_),
-                         theme.color(ColorRole::ListingHighlight));
+                         theme.color(role));
+      };
+      if (!SearchHighlight.Text.isEmpty()) {
+        for (const int at : SearchHighlight.matches(lines_[i].styled.text))
+          fill(at, at + int(SearchHighlight.Text.size()),
+               ColorRole::ListingHighlight);
+      } else {
+        // Locked words keep their colors under the cursor's highlight.
+        const auto mark = [&](const QString &word, ColorRole role) {
+          for (const auto &[first, last] :
+               highlightRanges(lines_[i].styled, word, std::nullopt, dots))
+            fill(first, last, role);
+        };
+        const auto &locks = session_.highlightLocks();
+        for (int slot = 0; slot < HighlightLocks::Colors; ++slot)
+          if (const QString word = locks.word(slot); !word.isEmpty())
+            mark(word, highlightLockRole(slot));
+        if (!highlight_.isEmpty())
+          mark(highlight_, ColorRole::ListingHighlight);
       }
     }
     QList<QTextLayout::FormatRange> selection;

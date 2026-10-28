@@ -149,6 +149,8 @@ struct CallXSummaryEdge {
   bool InstantiatedReturnInputExpression = false;
   std::optional<size_t> InstantiatedCopySlot;
   uint64_t InstantiatedCopyBytes = 0;
+  size_t InstantiatedMemoryPathInstructions = 0;
+  size_t InstantiatedMemoryPathStores = 0;
   bool GeneralizedInputs = false;
   CallXInputGeneralization InputGeneralization = CallXInputGeneralization::None;
 };

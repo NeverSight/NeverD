@@ -53,6 +53,74 @@ TEST(SourceCallABI, PlacesFixedScalarArgumentsByPlatform) {
       Windows.Signature.Parameters[1].Location.RegisterOffset,
       getTargetRegInfo(Arch::X64).floatingParamRegs(BinaryFormat::COFF)[1]);
 }
+TEST(SourceCallABI, DarwinWidePrototypeKeepsBothWordsAndOddRegisters) {
+  const auto &TRI = getTargetRegInfo(Arch::AArch64);
+  for (bool Signed : {false, true})
+    for (unsigned Prefix = 0; Prefix <= kDarwinRegisterArguments; ++Prefix) {
+      std::vector<TypeRef> Types(Prefix, NdType::makeInt(kDarwinRegisterBytes));
+      Types.push_back(NdType::makeInt(kDarwinWideBytes, Signed));
+      auto Hint = contract(Types);
+      Hint.Signature.ReturnType = Types.back();
+      std::string Error;
+      ASSERT_TRUE(
+          assignAnalystCallABI(Hint, Arch::AArch64, BinaryFormat::MachO, Error))
+          << Error;
+      const auto &Parts = Hint.Signature.Parameters.back().Components;
+      ASSERT_EQ(Parts.size(), kDarwinPairWords);
+      ASSERT_EQ(Hint.Signature.ReturnComponents.size(), kDarwinPairWords);
+      for (unsigned I = 0; I < kDarwinPairWords; ++I) {
+        EXPECT_EQ(Parts[I].ValueBytes, kDarwinRegisterBytes);
+        if (Prefix + kDarwinPairWords <= kDarwinRegisterArguments) {
+          EXPECT_EQ(Parts[I].Kind, SourceABICarrierKind::IntegerRegister);
+          EXPECT_EQ(Parts[I].RegisterOffset, TRI.IntParamRegs[Prefix + I]);
+        } else {
+          EXPECT_EQ(Parts[I].Kind, SourceABICarrierKind::Stack);
+          EXPECT_EQ(Parts[I].EntryStackOffset, I * kDarwinRegisterBytes);
+        }
+      }
+      EXPECT_EQ(sourceABIParameters(Hint.Signature).size(),
+                Prefix + kDarwinPairWords);
+      auto Missing = Hint.Signature;
+      Missing.Parameters.back().Components.pop_back();
+      EXPECT_FALSE(validateSourceABI(Missing, Error));
+    }
+}
+
+TEST(SourceCallABI, DarwinRecordPrototypeKeepsHFAAndWholeStackSpills) {
+  const auto Word = NdType::makeInt(kDarwinRegisterBytes);
+  const auto Pair = NdType::makeStruct({Word, Word});
+  const auto Float = NdType::makeFloat(kDarwinFloatBytes);
+  const auto HFA =
+      NdType::makeStruct(std::vector<TypeRef>(kDarwinHFAMembers, Float));
+  for (const auto Record : {Pair, HFA})
+    for (unsigned Prefix = 0; Prefix <= kDarwinRegisterArguments; ++Prefix) {
+      const bool Floating = Record == HFA;
+      const unsigned Members = Floating ? kDarwinHFAMembers : kDarwinPairWords;
+      std::vector<TypeRef> Types(Prefix, Floating ? Float : Word);
+      Types.push_back(Record);
+      Types.push_back(Floating ? Float : Word);
+      auto Hint = contract(Types);
+      Hint.Signature.ReturnType = Record;
+      std::string Error;
+      ASSERT_TRUE(
+          assignAnalystCallABI(Hint, Arch::AArch64, BinaryFormat::MachO, Error))
+          << Error;
+      const auto &Parts = Hint.Signature.Parameters[Prefix].Components;
+      ASSERT_EQ(Parts.size(), Members);
+      ASSERT_EQ(Hint.Signature.ReturnComponents.size(), Members);
+      if (Prefix + Members > kDarwinRegisterArguments) {
+        for (unsigned I = 0; I < Members; ++I) {
+          EXPECT_EQ(Parts[I].Kind, SourceABICarrierKind::Stack);
+          EXPECT_EQ(Parts[I].EntryStackOffset,
+                    I * (Floating ? kDarwinFloatBytes : kDarwinRegisterBytes));
+        }
+        EXPECT_EQ(Hint.Signature.Parameters.back().Location.Kind,
+                  SourceABICarrierKind::Stack);
+        EXPECT_EQ(Hint.Signature.Parameters.back().Location.EntryStackOffset,
+                  Record->Size);
+      }
+    }
+}
 TEST(SourceCallABI, WindowsARM64FixedScalarsKeepSeparateBanksAndStackSlots) {
   std::vector<TypeRef> Types;
   for (unsigned I = 0; I < 9; ++I) {
@@ -247,6 +315,51 @@ LowOp op(NdOp Code, NdVar Output, std::initializer_list<NdVar> Inputs) {
     O.addInput(V);
   return O;
 }
+TEST(SourceCallABI, CompositeStackArgumentsRequireEveryDefinedMemberByte) {
+  const auto Word = NdType::makeInt(kDarwinRegisterBytes);
+  const auto Float = NdType::makeFloat(kDarwinFloatBytes);
+  const auto Wide = NdType::makeInt(kDarwinWideBytes);
+  const auto HFA =
+      NdType::makeStruct(std::vector<TypeRef>(kDarwinHFAMembers, Float));
+  const auto &TRI = getTargetRegInfo(Arch::AArch64);
+  for (const auto Type : {Wide, HFA}) {
+    std::vector<TypeRef> Types(kDarwinRegisterArguments,
+                               Type == Wide ? Word : Float);
+    Types.push_back(Type);
+    auto Hint = contract(Types);
+    std::string Error;
+    ASSERT_TRUE(
+        assignAnalystCallABI(Hint, Arch::AArch64, BinaryFormat::MachO, Error))
+        << Error;
+    const auto SP = NdVar::reg(TRI.StackPointer, kDarwinRegisterBytes);
+    const auto Address =
+        NdVar::tmp(kDarwinRegisterArguments, kDarwinRegisterBytes);
+    LowFunc Function;
+    LowBlock Block;
+    Block.Ops = {
+        op(NdOp::STORE, {}, {SP, NdVar::cst(0, kDarwinRegisterBytes)}),
+        op(NdOp::INT_ADD, Address,
+           {SP, NdVar::cst(kDarwinRegisterBytes, kDarwinRegisterBytes)}),
+        op(NdOp::STORE, {}, {Address, NdVar::cst(0, kDarwinRegisterBytes)}),
+        op(NdOp::CALL, {},
+           {NdVar::cst(*Hint.AnalystSite->StaticTarget,
+                       kDarwinRegisterBytes)})};
+    Block.Ops.back().Addr = Hint.AnalystSite->Instruction;
+    Block.Ops.back().Seq = Hint.AnalystSite->Sequence;
+    Function.Blocks.push_back(std::move(Block));
+    EXPECT_TRUE(sourceCallStackArgumentsDefined(Function, Hint, Arch::AArch64,
+                                                0, Error))
+        << Error;
+    Function.Blocks.front().Ops.erase(Function.Blocks.front().Ops.begin() +
+                                      kDarwinPairWords);
+    EXPECT_FALSE(sourceCallStackArgumentsDefined(Function, Hint, Arch::AArch64,
+                                                 0, Error));
+    Hint.Signature.Parameters.back().Components.pop_back();
+    EXPECT_FALSE(sourceCallStackArgumentsDefined(Function, Hint, Arch::AArch64,
+                                                 0, Error));
+  }
+}
+
 TEST(SourceCallABI, VariadicFloatingNeedsTheActualVectorCount) {
   auto H = contract({NdType::makeInt(4), NdType::makeFloat(8)}, 1);
   std::string Error;
@@ -437,6 +550,56 @@ TEST(SourceCallABI, AcceptsOnlyTheExactPromotedEntryRegisterMarker) {
   std::string Error;
   EXPECT_TRUE(sourceCallArgumentsDefined(F, *H.AnalystSite, Error)) << Error;
   F.Blocks[0].Ops[0].Inputs[1].SSAVer = 1;
+  EXPECT_FALSE(sourceCallArgumentsDefined(F, *H.AnalystSite, Error));
+}
+
+TEST(SourceCallABI, RecordMemberProjectionDoesNotRequirePaddingOrDefineIt) {
+  auto H = contract({NdType::makeInt(kDarwinFloatBytes)});
+  MedFunc F;
+  MedVar Parameter = value(1);
+  Parameter.Kind = MedVar::Param;
+  Parameter.RegOff = 0;
+  Parameter.Size = kDarwinFloatBytes;
+  F.Params = {Parameter};
+  auto Input = Parameter;
+  Input.Kind = MedVar::Reg;
+  Input.Size = kDarwinRegisterBytes;
+  MedOp Copy;
+  Copy.Opcode = NdOp::COPY;
+  Copy.Output = value(2);
+  Copy.Output.Size = kDarwinRegisterBytes;
+  Copy.addInput(Input);
+  MedOp Extract;
+  Extract.Opcode = NdOp::SUBBYTES;
+  Extract.Output = value(3);
+  Extract.Output.Size = kDarwinFloatBytes;
+  Extract.addInput(Copy.Output);
+  Extract.addInput(MedVar::makeConst(0, kDarwinFloatBytes));
+  MedOp Call;
+  Call.Opcode = NdOp::CALL;
+  Call.SourceCallHint = std::make_shared<SourceCallTypeHint>(H);
+  Call.addInput(MedVar::makeConst(0x2000, kDarwinRegisterBytes));
+  Call.addInput(Extract.Output);
+  F.Blocks.emplace_back();
+  F.Blocks.front().Ops = {Copy, Extract, Call};
+  std::string Error;
+  EXPECT_TRUE(sourceCallArgumentsDefined(F, *H.AnalystSite, Error)) << Error;
+  const auto Good = F;
+  F.Blocks.front().Ops.back().Inputs[1] = Copy.Output;
+  EXPECT_FALSE(sourceCallArgumentsDefined(F, *H.AnalystSite, Error));
+  F = Good;
+  F.Blocks.front().Ops[1].Inputs[1].ConstVal = kDarwinFloatBytes;
+  EXPECT_FALSE(sourceCallArgumentsDefined(F, *H.AnalystSite, Error));
+  F = Good;
+  F.Blocks.front().Ops.front().Inputs[0].SSAVer = 1;
+  EXPECT_FALSE(sourceCallArgumentsDefined(F, *H.AnalystSite, Error));
+  F = Good;
+  F.Blocks.front().Ops.front().Inputs[0].RegOff = kDarwinRegisterBytes;
+  EXPECT_FALSE(sourceCallArgumentsDefined(F, *H.AnalystSite, Error));
+  F = Good;
+  F.Blocks.front().Ops.front().Opcode = NdOp::INT_ADD;
+  F.Blocks.front().Ops.front().addInput(
+      MedVar::makeConst(0, kDarwinRegisterBytes));
   EXPECT_FALSE(sourceCallArgumentsDefined(F, *H.AnalystSite, Error));
 }
 } // namespace

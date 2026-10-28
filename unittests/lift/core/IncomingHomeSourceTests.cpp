@@ -362,114 +362,127 @@ TEST(IncomingHomeSource, AutomaticStackCarrierReachesBothCPaths) {
   runHomeSourceMatrix(false);
 }
 
-TEST(IncomingHomeSource, NarrowStackInputsKeepTheirExactWidth) {
-  for (Arch Architecture : {Arch::X64, Arch::AArch64})
-    for (BinaryFormat Format : {BinaryFormat::COFF, BinaryFormat::ELF})
-      for (uint16_t Width : {1, 2, 4})
-        for (bool Signed : {false, true})
-          for (bool Selected : {false, true}) {
-            SCOPED_TRACE(static_cast<unsigned>(Architecture));
-            SCOPED_TRACE(static_cast<unsigned>(Format));
-            SCOPED_TRACE(Width);
-            SCOPED_TRACE(Signed);
-            SCOPED_TRACE(Selected);
-            auto Image = homeImage(Architecture, Format);
-            auto &Text = Image.Segments.front();
-            Text.Data.resize(Callee - Caller);
-            if (Architecture == Arch::X64) {
-              // Write only the bytes the callee reads. Padding NOPs preserve
-              // the original call displacement, not the unwritten home bytes.
-              std::vector<uint8_t> Store;
-              if (Width == 1)
-                Store = {0xc6, 0x04, 0x24, 0xd5};
-              else if (Width == 2)
-                Store = {0x66, 0xc7, 0x04, 0x24, 0xd5, 0xff};
-              else
-                Store = {0xc7, 0x04, 0x24, 0xd5, 0xff, 0xff, 0xff};
-              Store.resize(8, 0x90);
-              std::copy(Store.begin(), Store.end(), Text.Data.begin() + 4);
-              if (Signed)
-                Text.Data.push_back(0x48); // Extend the signed input to RAX.
-              if (Width < 4)
-                Text.Data.insert(
-                    Text.Data.end(),
-                    {0x0f,
-                     static_cast<uint8_t>((Width == 1 ? 0xb6 : 0xb7) +
-                                          (Signed ? 8 : 0)),
-                     0x44, 0x24, 8, 0xc3});
-              else
-                Text.Data.insert(Text.Data.end(),
-                                 {static_cast<uint8_t>(Signed ? 0x63 : 0x8b),
-                                  0x44, 0x24, 8, 0xc3});
-            } else {
-              const uint8_t Encoding = Width == 1   ? 0x39
-                                       : Width == 2 ? 0x79
-                                                    : 0xb9;
-              Text.Data[11] =
-                  0x92; // movn x0,#42: every stored width has its sign bit set.
-              Text.Data[15] = Encoding; // strb/strh/str w0,[sp]
-              Text.Data.insert(Text.Data.end(),
-                               {0xe0, 0x03,
-                                static_cast<uint8_t>(Signed ? 0x80 : 0x40),
-                                Encoding, 0xc0, 0x03, 0x5f,
-                                0xd6}); // signed/unsigned load; ret
-            }
-            Text.Size = Text.FileSz = Text.Data.size();
-            for (bool LLVM : {false, true}) {
-              SCOPED_TRACE(LLVM);
-              llvm::LLVMContext Context;
-              PipelineOptions Options;
-              Options.EmitDumpOutput = false;
-              Options.OnlyFunctionEntries =
-                  Selected ? std::set<va_t>{Caller}
-                           : std::set<va_t>{Caller, Callee};
-              Options.SourceProjection = LLVM;
-              Options.LiftMode = LLVM;
-              auto Result = Pipeline().run(Image, Context, Options);
-              ASSERT_TRUE(Result.Success) << Result.Error;
-              const auto Hints =
-                  readIncomingStackCallees(Image, Result, {Callee});
-              ASSERT_TRUE(Hints.contains(Callee));
-              const auto &Hint = Hints.at(Callee);
-              ASSERT_EQ(Hint.Parameters.size(), 1u);
-              EXPECT_EQ(Hint.Parameters.front().Type->Size, Width);
-              EXPECT_EQ(Hint.Parameters.front().Location.ValueBytes, Width);
-              std::string Source;
-              llvm::raw_string_ostream Out(Source);
-              CEmitterOptions COptions;
-              COptions.TheArch = Architecture;
-              COptions.Format = Format;
-              COptions.Image = &Image;
-              if (LLVM) {
-                ASSERT_TRUE(Result.LlvmModule);
-                ASSERT_FALSE(llvm::verifyModule(*Result.LlvmModule));
-                ASSERT_TRUE(
-                    LLVMCEmitter().emit(*Result.LlvmModule, Out, COptions));
-              } else
-                ASSERT_TRUE(
-                    HighCEmitter().emit(Result.HighFuncs, Out, COptions));
-              ASSERT_EQ(Source.find("__builtin_trap"), std::string::npos)
-                  << Source;
-              const auto Expected =
-                  Signed ? uint64_t(-43) : (uint64_t(1) << (Width * 8)) - 43;
-              const std::string SourceType =
-                  "int" + std::to_string(Width * 8) + "_t";
-              const std::string Oracle =
-                  (Selected ? "\nuint64_t read_home(u" + SourceType +
-                                  " value) { return " +
-                                  (Signed ? "(" + SourceType + ")" : "") +
-                                  "value; }\n"
-                            : "") +
-                  "\nint main(void) { return caller_home() != UINT64_C(" +
-                  std::to_string(Expected) + "); }\n";
-              for (llvm::StringRef Level : {"-O0", "-O2"})
-                source_call_execution_test::compileAndRun(
-                    Source + Oracle,
-                    {Level, "-ftrivial-auto-var-init=pattern",
-                     "-fsanitize=undefined", "-fsanitize-trap=all"});
-            }
-          }
+struct IncomingHomeSourceNarrowProfile {
+  const char *Name;
+  Arch Architecture;
+  BinaryFormat Format;
+  uint16_t Width;
+  bool Signed;
+};
+
+constexpr IncomingHomeSourceNarrowProfile NarrowProfiles[] = {
+#define INCOMING_HOME_NARROW_PROFILE(Name, Architecture, Format, Bytes,        \
+                                     Signed)                                   \
+  {#Name, Architecture, Format, Bytes, Signed},
+#include "IncomingHomeSourceNarrowProfiles.def"
+};
+
+class IncomingHomeSourceNarrow
+    : public ::testing::TestWithParam<IncomingHomeSourceNarrowProfile> {};
+
+TEST_P(IncomingHomeSourceNarrow, NarrowStackInputsKeepTheirExactWidth) {
+  const auto &Profile = GetParam();
+  const Arch Architecture = Profile.Architecture;
+  const BinaryFormat Format = Profile.Format;
+  const uint16_t Width = Profile.Width;
+  const bool Signed = Profile.Signed;
+  for (bool Selected : {false, true}) {
+    SCOPED_TRACE(static_cast<unsigned>(Architecture));
+    SCOPED_TRACE(static_cast<unsigned>(Format));
+    SCOPED_TRACE(Width);
+    SCOPED_TRACE(Signed);
+    SCOPED_TRACE(Selected);
+    auto Image = homeImage(Architecture, Format);
+    auto &Text = Image.Segments.front();
+    Text.Data.resize(Callee - Caller);
+    if (Architecture == Arch::X64) {
+      // Write only the bytes the callee reads. Padding NOPs preserve
+      // the original call displacement, not the unwritten home bytes.
+      std::vector<uint8_t> Store;
+      if (Width == 1)
+        Store = {0xc6, 0x04, 0x24, 0xd5};
+      else if (Width == 2)
+        Store = {0x66, 0xc7, 0x04, 0x24, 0xd5, 0xff};
+      else
+        Store = {0xc7, 0x04, 0x24, 0xd5, 0xff, 0xff, 0xff};
+      Store.resize(8, 0x90);
+      std::copy(Store.begin(), Store.end(), Text.Data.begin() + 4);
+      if (Signed)
+        Text.Data.push_back(0x48); // Extend the signed input to RAX.
+      if (Width < 4)
+        Text.Data.insert(Text.Data.end(),
+                         {0x0f,
+                          static_cast<uint8_t>((Width == 1 ? 0xb6 : 0xb7) +
+                                               (Signed ? 8 : 0)),
+                          0x44, 0x24, 8, 0xc3});
+      else
+        Text.Data.insert(
+            Text.Data.end(),
+            {static_cast<uint8_t>(Signed ? 0x63 : 0x8b), 0x44, 0x24, 8, 0xc3});
+    } else {
+      const uint8_t Encoding = Width == 1 ? 0x39 : Width == 2 ? 0x79 : 0xb9;
+      Text.Data[11] =
+          0x92; // movn x0,#42: every stored width has its sign bit set.
+      Text.Data[15] = Encoding; // strb/strh/str w0,[sp]
+      Text.Data.insert(Text.Data.end(),
+                       {0xe0, 0x03, static_cast<uint8_t>(Signed ? 0x80 : 0x40),
+                        Encoding, 0xc0, 0x03, 0x5f,
+                        0xd6}); // signed/unsigned load; ret
+    }
+    Text.Size = Text.FileSz = Text.Data.size();
+    for (bool LLVM : {false, true}) {
+      SCOPED_TRACE(LLVM);
+      llvm::LLVMContext Context;
+      PipelineOptions Options;
+      Options.EmitDumpOutput = false;
+      Options.OnlyFunctionEntries =
+          Selected ? std::set<va_t>{Caller} : std::set<va_t>{Caller, Callee};
+      Options.SourceProjection = LLVM;
+      Options.LiftMode = LLVM;
+      auto Result = Pipeline().run(Image, Context, Options);
+      ASSERT_TRUE(Result.Success) << Result.Error;
+      const auto Hints = readIncomingStackCallees(Image, Result, {Callee});
+      ASSERT_TRUE(Hints.contains(Callee));
+      const auto &Hint = Hints.at(Callee);
+      ASSERT_EQ(Hint.Parameters.size(), 1u);
+      EXPECT_EQ(Hint.Parameters.front().Type->Size, Width);
+      EXPECT_EQ(Hint.Parameters.front().Location.ValueBytes, Width);
+      std::string Source;
+      llvm::raw_string_ostream Out(Source);
+      CEmitterOptions COptions;
+      COptions.TheArch = Architecture;
+      COptions.Format = Format;
+      COptions.Image = &Image;
+      if (LLVM) {
+        ASSERT_TRUE(Result.LlvmModule);
+        ASSERT_FALSE(llvm::verifyModule(*Result.LlvmModule));
+        ASSERT_TRUE(LLVMCEmitter().emit(*Result.LlvmModule, Out, COptions));
+      } else
+        ASSERT_TRUE(HighCEmitter().emit(Result.HighFuncs, Out, COptions));
+      ASSERT_EQ(Source.find("__builtin_trap"), std::string::npos) << Source;
+      const auto Expected =
+          Signed ? uint64_t(-43) : (uint64_t(1) << (Width * 8)) - 43;
+      const std::string SourceType = "int" + std::to_string(Width * 8) + "_t";
+      const std::string Oracle =
+          (Selected
+               ? "\nuint64_t read_home(u" + SourceType + " value) { return " +
+                     (Signed ? "(" + SourceType + ")" : "") + "value; }\n"
+               : "") +
+          "\nint main(void) { return caller_home() != UINT64_C(" +
+          std::to_string(Expected) + "); }\n";
+      for (llvm::StringRef Level : {"-O0", "-O2"})
+        source_call_execution_test::compileAndRun(
+            Source + Oracle, {Level, "-ftrivial-auto-var-init=pattern",
+                              "-fsanitize=undefined", "-fsanitize-trap=all"});
+    }
+  }
 }
+
+INSTANTIATE_TEST_SUITE_P(
+    ByWidth, IncomingHomeSourceNarrow, ::testing::ValuesIn(NarrowProfiles),
+    [](const ::testing::TestParamInfo<IncomingHomeSourceNarrowProfile> &Info) {
+      return Info.param.Name;
+    });
 
 struct IncomingHomeSourceProfile {
   const char *Name;

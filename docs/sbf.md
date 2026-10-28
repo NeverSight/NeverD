@@ -704,13 +704,21 @@ when a later destination write may overlap. Only generic summaries retain a
 complete entry-relative write history for deferred copies. A specialized caller
 applies them to its current memory and retains the resulting typed facts; it
 cannot replay them against an earlier entry snapshot. A caller can also
-instantiate a generic copy wrapper along a completely proven scalar path to a single
-`memcpy`/`memmove` syscall and a return suffix with no memory operations or
-other calls. This consumes the existing instruction budget and records the
-syscall slot and length on the summary edge; it creates no cached specialization.
-Unknown branches, loops, earlier loads/stores/calls and additional suffix memory
-operations cannot establish that path. This propagation is demanded by a
-captured source field or pointer. `captured_addresses`, bounded may-write
+instantiate a generic memory-transfer wrapper along a completely proven scalar
+path. Schema 12 also follows inline loads/stores and counted loops through the
+canonical typed-memory transfer. The requested length remains bounded by the
+existing modeled-scratch limit. Every instruction, temporary state, write
+footprint and visited register snapshot consumes the existing work or retained
+memory budget; this creates no cached specialization. Unknown branches, other
+guest calls, multiple copy syscalls and repeated block/register states cannot
+establish a returning path. Ignoring memory in the repeated-state check can
+reject a memory-driven loop, but cannot prove a path that did not return.
+`instantiated_memory_path_instructions` and `instantiated_memory_path_stores`
+record successful inline paths; `instantiated_copy_syscall_slot` and
+`instantiated_copy_bytes` still refer only to an actual `memcpy`/`memmove`
+syscall. Store effects include every complete destination alternative, without
+assuming that different captures are disjoint. This propagation is demanded by
+a captured source field or pointer. `captured_addresses`, bounded may-write
 intervals and `output_memory_copies` describe these additional facts separately
 from literal CALLX target proofs.
 

@@ -15,6 +15,7 @@
 #include "Docking.h"
 #include "Expression.h"
 #include "FlowLayout.h"
+#include "HighlightLocks.h"
 #include "Icons.h"
 #include "ItemViewActivation.h"
 #include "LinkDispatch.h"
@@ -527,6 +528,81 @@ private slots:
     StyledLine copy = line;
     QCOMPARE(copy.text, line.text);
     QCOMPARE(copy.spans.size(), line.spans.size());
+  }
+
+  void registerFamiliesShareTheirParts() {
+    const auto family = [](const char *word) {
+      QStringList members = registerFamily(QString::fromLatin1(word));
+      members.sort();
+      return members;
+    };
+    const QStringList rax{"ah", "al", "ax", "eax", "rax"};
+    QCOMPARE(family("rax"), rax);
+    QCOMPARE(family("al"), rax);
+    QCOMPARE(family("r8d"), (QStringList{"r8", "r8b", "r8d", "r8w"}));
+    QCOMPARE(family("w5"), (QStringList{"w5", "x5"}));
+    QCOMPARE(family("d3"), (QStringList{"b3", "d3", "h3", "q3", "s3", "v3"}));
+    // x86's sp and AArch64's join; a listing spells only its own.
+    QVERIFY(family("sp").contains(QStringLiteral("rsp")));
+    QVERIFY(family("sp").contains(QStringLiteral("wsp")));
+    QVERIFY(family("main").isEmpty());
+  }
+
+  void highlightsCoverRegistersSharingTheWord() {
+    // "mov eax, [rax+8] ; rax": registers in spans, the last in a comment.
+    StyledLine line;
+    line.text = QStringLiteral("mov eax, [rax+8] ; rax");
+    constexpr int Register = 2, Comment = 13;
+    line.spans = {{4, 3, Register, std::nullopt},
+                  {10, 3, Register, std::nullopt},
+                  {17, 5, Comment, std::nullopt}};
+    auto ranges = highlightRanges(line, QStringLiteral("rax"), Register);
+    std::sort(ranges.begin(), ranges.end());
+    QCOMPARE(ranges, (QVector<std::pair<int, int>>{{4, 7}, {10, 13}, {19, 22}}));
+    // Outside register spans only the word itself matches.
+    QCOMPARE(highlightRanges(line, QStringLiteral("rax"), std::nullopt),
+             (QVector<std::pair<int, int>>{{10, 13}, {19, 22}}));
+    QCOMPARE(highlightRanges(line, QStringLiteral("ax"), Register),
+             (QVector<std::pair<int, int>>{{4, 7}, {10, 13}}));
+  }
+
+  void highlightLocksToggleAsIdaDoes() {
+    HighlightLocks locks;
+    QSignalSpy changed(&locks, &HighlightLocks::changed);
+    // Ctrl+Alt+0 locks in the first free color and unlocks a locked word,
+    // a register by any of its names.
+    locks.toggle(QStringLiteral("rbp"));
+    QCOMPARE(locks.word(0), QStringLiteral("rbp"));
+    locks.toggle(QStringLiteral("rax"));
+    QCOMPARE(locks.word(1), QStringLiteral("rax"));
+    QCOMPARE(locks.slotOf(QStringLiteral("eax")), std::optional<int>(1));
+    locks.toggle(QStringLiteral("eax"));
+    QVERIFY(locks.word(1).isEmpty());
+    // Ctrl+Alt+N unlocks a taken color whatever the word, or locks the word
+    // in a free one, moving it from another color.
+    locks.toggleColor(0, QStringLiteral("rbx"));
+    QVERIFY(locks.word(0).isEmpty());
+    locks.toggleColor(2, QStringLiteral("rbx"));
+    QCOMPARE(locks.word(2), QStringLiteral("rbx"));
+    locks.toggleColor(4, QStringLiteral("rbx"));
+    QVERIFY(locks.word(2).isEmpty());
+    QCOMPARE(locks.word(4), QStringLiteral("rbx"));
+    locks.toggleColor(5, QString());
+    QVERIFY(locks.word(5).isEmpty());
+    // With every color taken another word stays unlocked.
+    for (int slot = 0; slot < HighlightLocks::Colors; ++slot)
+      if (locks.word(slot).isEmpty())
+        locks.toggleColor(slot, QStringLiteral("w%1").arg(slot));
+    const int before = int(changed.count());
+    locks.toggle(QStringLiteral("rcx"));
+    QCOMPARE(int(changed.count()), before);
+    QVERIFY(!locks.slotOf(QStringLiteral("rcx")));
+    locks.clear();
+    for (int slot = 0; slot < HighlightLocks::Colors; ++slot)
+      QVERIFY(locks.word(slot).isEmpty());
+    QCOMPARE(highlightLockRole(0), ColorRole::HighlightLock1);
+    QCOMPARE(highlightLockRole(HighlightLocks::Colors - 1),
+             ColorRole::HighlightLock8);
   }
 
   void pseudocodeWordsSplitMemberAccessesAtTheirDot() {

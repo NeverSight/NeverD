@@ -3,13 +3,16 @@
 #include "../Config.h"
 #include "Session.h"
 #include "Theme.h"
+#include "WorkerCodes.h"
 
 #include <QHash>
+#include <QHelpEvent>
 #include <QJsonArray>
 #include <QKeyEvent>
 #include <QPainter>
 #include <QPainterPath>
 #include <QTextLine>
+#include <QToolTip>
 #include <algorithm>
 #include <cmath>
 
@@ -26,6 +29,18 @@ QColor edgeColor(const QString &type) {
   if (type == QLatin1String("false"))
     return theme.color(ColorRole::GraphEdgeFalse);
   return theme.color(ColorRole::GraphEdgeNormal);
+}
+
+/// Distance from \p point to the segment from \p a to \p b.
+qreal segmentDistance(QPointF point, QPointF a, QPointF b) {
+  const QPointF along = b - a;
+  const qreal length = QPointF::dotProduct(along, along);
+  const qreal t =
+      length > 0
+          ? std::clamp(QPointF::dotProduct(point - a, along) / length, 0.0, 1.0)
+          : 0.0;
+  const QPointF nearest = a + along * t;
+  return std::hypot(point.x() - nearest.x(), point.y() - nearest.y());
 }
 } // namespace
 
@@ -50,6 +65,8 @@ GraphView::GraphView(Session &session, QWidget *parent)
       showFunction(*function_, pendingCursor_);
     update();
   });
+  connect(&session_.highlightLocks(), &HighlightLocks::changed, this,
+          qOverload<>(&QWidget::update));
   connect(&session_, &Session::revisionChanged, this, [this] {
     if (function_ && (!session_.queries().localNamesOnly() || waiting_))
       showFunction(*function_, pendingCursor_);
@@ -63,6 +80,7 @@ GraphView::GraphView(Session &session, QWidget *parent)
     session_.cancelAnalysisReads(this);
     nodes_.clear();
     edges_.clear();
+    selectedEdge_.reset();
     function_.reset();
     pendingCursor_.reset();
     bounds_ = {};
@@ -95,6 +113,7 @@ void GraphView::showFunction(Address function, std::optional<Address> cursor) {
     // leaving the outstanding request to overwrite that navigation.
     nodes_.clear();
     edges_.clear();
+    selectedEdge_.reset();
     bounds_ = {};
     cursorNode_ = -1;
     layoutRevision_.clear();
@@ -144,6 +163,7 @@ void GraphView::request(int nodeOffset, int edgeOffset, const QString &layout,
           }
           nodes_.clear();
           edges_.clear();
+          selectedEdge_.reset();
           waiting_ = false;
           update();
           emit viewChanged();
@@ -163,6 +183,7 @@ void GraphView::accept(const QJsonObject &payload, quint64 serial) {
   if (firstPage) {
     nodes_.clear();
     edges_.clear();
+    selectedEdge_.reset();
     waiting_ = false;
     layoutRevision_ = layout;
     const auto bounds = summary.value("bounds").toObject();
@@ -412,6 +433,84 @@ std::pair<int, int> GraphView::hit(QPointF widget) const {
   return {-1, -1};
 }
 
+std::optional<int> GraphView::edgeAt(QPointF widget) const {
+  const QPointF scene = toScene(widget);
+  const qreal reach = ::neverd::limits::gui_config::kGraphViewEdgeReachPixels /
+                      std::max<qreal>(scale_, 0.01);
+  std::optional<int> nearest;
+  qreal best = reach;
+  for (int e = 0; e < edges_.size(); ++e) {
+    const auto &edge = edges_[e];
+    if (!edge.box.adjusted(-reach, -reach, reach, reach).contains(scene))
+      continue;
+    for (int i = 1; i < edge.points.size(); ++i)
+      if (const qreal distance =
+              segmentDistance(scene, edge.points[i - 1], edge.points[i]);
+          distance <= best) {
+        best = distance;
+        nearest = e;
+      }
+  }
+  return nearest;
+}
+
+QString GraphView::hintAt(QPointF widget) const {
+  if (hit(widget).first >= 0)
+    return {};
+  const auto index = edgeAt(widget);
+  if (!index)
+    return {};
+  const auto &edge = edges_[*index];
+  const QPointF scene = toScene(widget);
+  const auto distance = [&scene](QPointF point) {
+    return std::hypot(scene.x() - point.x(), scene.y() - point.y());
+  };
+  // Beside its arrow an edge says where it comes from; elsewhere, where it
+  // goes.
+  const bool arriving =
+      distance(edge.points.back()) < distance(edge.points.front());
+  const int end = arriving ? edge.from : edge.to;
+  if (end < 0 || end >= nodes_.size() || nodes_[end].rows.isEmpty())
+    return {};
+  const auto &rows = nodes_[end].rows;
+  // The block whole, or its first rows and the rows that branch.
+  const int limit = ::neverd::limits::gui_config::kGraphViewEdgeHintRows;
+  QStringList lines;
+  for (int r = 0; r < rows.size(); ++r) {
+    if (rows.size() > limit && r == limit / 2) {
+      lines.append(QStringLiteral("\u2026"));
+      r = int(rows.size()) - (limit - limit / 2);
+    }
+    lines.append(rows[r].styled.text.toHtmlEscaped());
+  }
+  // A branch is named by its instruction, a destination by its start.
+  Address at = nodes_[end].start;
+  if (arriving)
+    for (auto row = rows.crbegin(); row != rows.crend(); ++row)
+      if (row->kind == QLatin1String("insn")) {
+        at = row->address;
+        break;
+      }
+  const QString title =
+      (arriving ? tr("From %1") : tr("To %1"))
+          .arg(displayAddress(at, session_.bitness() == 64 ? 16 : 8));
+  return QStringLiteral("<b>%1</b><pre style=\"font-family:'%2'; "
+                        "margin:0\">%3</pre>")
+      .arg(title.toHtmlEscaped(), Theme::instance().codeFont().family(),
+           lines.join(QLatin1Char('\n')));
+}
+
+bool GraphView::event(QEvent *event) {
+  if (event->type() != QEvent::ToolTip)
+    return QWidget::event(event);
+  const auto *help = static_cast<QHelpEvent *>(event);
+  if (const QString text = hintAt(help->pos()); !text.isEmpty())
+    QToolTip::showText(help->globalPos(), text, this);
+  else
+    QToolTip::hideText();
+  return true;
+}
+
 int GraphView::columnAt(const Row &row, const Node &node, QPointF scene) const {
   auto &layout = row.styled.layout(
       Theme::instance().codeFont(), styleStamp_,
@@ -472,14 +571,25 @@ void GraphView::paintNode(QPainter &painter, int index, bool text) const {
       auto &layout = row.styled.layout(font, styleStamp_, colorOf);
       const qreal x =
           box.left() + ::neverd::limits::gui_config::kGraphViewNodePadding;
-      if (!highlight_.isEmpty() && layout.lineCount()) {
+      if (layout.lineCount()) {
         const QTextLine line = layout.lineAt(0);
-        for (const int at : tokenOccurrences(row.styled.text, highlight_)) {
-          const qreal x0 = line.cursorToX(at);
-          const qreal x1 = line.cursorToX(at + int(highlight_.size()));
-          painter.fillRect(QRectF(x + x0, y, x1 - x0, lineHeight_),
-                           theme.color(ColorRole::ListingHighlight));
-        }
+        // Locked words keep their colors under the cursor's highlight.
+        const auto mark = [&](const QString &word, ColorRole role) {
+          for (const auto &[first, last] :
+               highlightRanges(row.styled, word,
+                               static_cast<int>(ListingRole::Register))) {
+            const qreal x0 = line.cursorToX(first);
+            const qreal x1 = line.cursorToX(last);
+            painter.fillRect(QRectF(x + x0, y, x1 - x0, lineHeight_),
+                             theme.color(role));
+          }
+        };
+        const auto &locks = session_.highlightLocks();
+        for (int slot = 0; slot < HighlightLocks::Colors; ++slot)
+          if (const QString word = locks.word(slot); !word.isEmpty())
+            mark(word, highlightLockRole(slot));
+        if (!highlight_.isEmpty())
+          mark(highlight_, ColorRole::ListingHighlight);
       }
       layout.draw(&painter, QPointF(x, y));
     }
@@ -536,13 +646,13 @@ void GraphView::paintEvent(QPaintEvent *) {
   painter.translate(-origin_);
   painter.setRenderHint(QPainter::Antialiasing, scale_ < 1.0);
   // Edges first, nodes on top.  Edges touching the current node draw last.
-  const auto drawEdge = [&](const Edge &edge, bool highlighted) {
+  const auto drawEdge = [&](const Edge &edge, const QColor &color,
+                            qreal width) {
     if (!edge.box.intersects(view))
       return;
-    QPen pen(highlighted ? theme.color(ColorRole::GraphEdgeHighlight)
-                         : edgeColor(edge.type));
+    QPen pen(color);
     pen.setCosmetic(true);
-    pen.setWidthF(highlighted ? 2.0 : 1.2);
+    pen.setWidthF(width);
     painter.setPen(pen);
     painter.setBrush(Qt::NoBrush);
     painter.drawPolyline(edge.points.constData(), int(edge.points.size()));
@@ -566,10 +676,13 @@ void GraphView::paintEvent(QPaintEvent *) {
   };
   for (const auto &edge : edges_)
     if (edge.from != cursorNode_ && edge.to != cursorNode_)
-      drawEdge(edge, false);
+      drawEdge(edge, edgeColor(edge.type), 1.2);
   for (const auto &edge : edges_)
     if (edge.from == cursorNode_ || edge.to == cursorNode_)
-      drawEdge(edge, true);
+      drawEdge(edge, theme.color(ColorRole::GraphEdgeHighlight), 2.0);
+  if (selectedEdge_ && *selectedEdge_ < edges_.size())
+    drawEdge(edges_[*selectedEdge_], theme.color(ColorRole::GraphEdgeSelected),
+             3.0);
   const bool text = scale_ * lineHeight_ >=
                     ::neverd::limits::gui_config::kGraphViewTextPixelThreshold;
   for (int i = 0; i < nodes_.size(); ++i)
@@ -621,6 +734,19 @@ void GraphView::wheelEvent(QWheelEvent *event) {
 void GraphView::mousePressEvent(QMouseEvent *event) {
   setFocus(Qt::MouseFocusReason);
   const auto [node, row] = hit(event->position());
+  // A click on an edge selects it, as in IDA; a click elsewhere lets it go.
+  if (event->button() == Qt::LeftButton ||
+      event->button() == Qt::RightButton) {
+    const auto edge = node < 0 && event->button() == Qt::LeftButton
+                          ? edgeAt(event->position())
+                          : std::nullopt;
+    if (selectedEdge_ != edge) {
+      selectedEdge_ = edge;
+      update();
+    }
+    if (edge)
+      return;
+  }
   if (event->button() == Qt::MiddleButton ||
       (event->button() == Qt::LeftButton && node < 0)) {
     dragging_ = true;

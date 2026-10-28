@@ -16,6 +16,7 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/Errc.h"
 
+#include <algorithm>
 #include <limits>
 #include <optional>
 #include <set>
@@ -269,6 +270,8 @@ proveInFrameCFG(const LowFunc &Low, va_t Handler, const TargetRegInfo &TRI,
   // reaches this scope, that scope joins the certificate as well.
   std::vector<bool> Relevant(N, false);
   std::vector<bool> ProtectedBlock(N, false);
+  // The end of the furthest SEH guarded range each protected block overlaps.
+  std::vector<va_t> GuardedEnd(N, 0);
   std::vector<int> Work;
   auto AddProtectedBlocks = [&](va_t ScopeHandler) -> llvm::Expected<bool> {
     const size_t Before = Work.size();
@@ -382,6 +385,7 @@ proveInFrameCFG(const LowFunc &Low, va_t Handler, const TargetRegInfo &TRI,
       for (int B : Guarded->second) {
         Work.push_back(B);
         ProtectedBlock[B] = true;
+        GuardedEnd[B] = std::max(GuardedEnd[B], Range->End);
       }
     }
     return Work.size() != Before;
@@ -508,6 +512,23 @@ proveInFrameCFG(const LowFunc &Low, va_t Handler, const TargetRegInfo &TRI,
     for (const auto &Insn : Low.Blocks[B].InstructionBoundaries)
       if (Insn.Address == Last)
         CheckedEnd[B] = Insn.Address + Insn.Size;
+  }
+  // An SEH scope guards the instructions that start inside its range, such
+  // as the one at a protected call's return address that clang-cl includes.
+  // A fault after the range belongs to no handler of this scope, so the
+  // block's later epilogue is likewise left unchecked.
+  for (size_t B = 0; B < N; ++B) {
+    if (!GuardedEnd[B] || CheckedEnd[B] != InvalidVA ||
+        llvm::any_of(Low.Blocks[B].Succs, [&](int S) { return Relevant[S]; }))
+      continue;
+    if (!Charge(Low.Blocks[B].InstructionBoundaries.size()))
+      return Fail("frame propagation budget exhausted");
+    va_t Last = InvalidVA;
+    for (const auto &Insn : Low.Blocks[B].InstructionBoundaries)
+      if (Insn.Address < GuardedEnd[B])
+        Last = Insn.Address + Insn.Size;
+    if (Last != InvalidVA && Last < Low.Blocks[B].EndAddr)
+      CheckedEnd[B] = Last;
   }
 
   // X64 CodeOffset is the byte offset of the prologue instruction end,

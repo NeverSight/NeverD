@@ -581,14 +581,16 @@ private:
   llvm::Expected<bool> call(FunctionContext &Context,
                             const MedInstruction &Instruction,
                             ContextState &State, bool Collect);
-  struct CopyInstantiation {
+  struct MemoryTransferInstantiation {
     ContextState Output;
     MemoryEffects Effects;
-    size_t Slot = 0;
-    uint64_t Size = 0;
+    std::optional<size_t> CopySlot;
+    uint64_t CopySize = 0;
+    size_t Instructions = 0;
+    size_t Stores = 0;
   };
-  llvm::Expected<std::optional<CopyInstantiation>>
-  instantiateCopyWrapper(size_t Entry, const ContextState &Input);
+  llvm::Expected<std::optional<MemoryTransferInstantiation>>
+  instantiateMemoryTransferPath(size_t Entry, const ContextState &Input);
   llvm::Expected<bool> callTarget(FunctionContext &Context,
                                   const MedInstruction &Instruction,
                                   ContextState &State, bool Collect);
@@ -610,8 +612,9 @@ private:
   inputUnionExpression(llvm::ArrayRef<size_t> Alternatives);
   llvm::Error joinStates(ContextState &State, const ContextState &Other);
   llvm::Expected<std::optional<size_t>> inputMemoryGuard(MemoryEffects Effects);
-  RegisterValue storeOrigin(const MedInstruction &Instruction,
-                            const ContextState &State) const;
+  void addStoreEffects(MemoryEffects &Effects,
+                       const MedInstruction &Instruction,
+                       const ContextState &State) const;
   llvm::Expected<std::optional<size_t>>
   inputOriginExpression(const ProvenValueSet &Origins);
   llvm::Expected<std::optional<size_t>> composeReturnExpression(
@@ -1402,13 +1405,31 @@ registerResult(const MedInstruction &Instruction,
   return *Output;
 }
 
-RegisterValue ContextFlow::storeOrigin(const MedInstruction &Instruction,
-                                       const ContextState &State) const {
-  RegisterState Base{};
-  Base[0] = State.Origins[Instruction.Dst].singleton();
-  return substituteOrigin(
-      {RegisterValue::Kind::StackAddress, 1, Instruction.Offset}, Base,
-      Program);
+void ContextFlow::addStoreEffects(MemoryEffects &Effects,
+                                  const MedInstruction &Instruction,
+                                  const ContextState &State) const {
+  auto Origins = State.Origins[Instruction.Dst];
+  // Literal addresses and captures can replace lost origins, but an actual
+  // frame coordinate must never be reinterpreted as a formal entry register.
+  if (Origins.unknown() &&
+      llvm::all_of(State.Registers[Instruction.Dst].values(),
+                   [](const RegisterValue &Value) {
+                     return Value.ValueKind == RegisterValue::Kind::Constant ||
+                            Value.ValueKind ==
+                                RegisterValue::Kind::UnsignedRange ||
+                            Value.ValueKind ==
+                                RegisterValue::Kind::SymbolicAddress;
+                   }))
+    Origins = State.Registers[Instruction.Dst];
+  for (const auto &Origin : possibleValues(Origins)) {
+    RegisterState Base{};
+    Base[0] = Origin;
+    Effects.addWrite(substituteOrigin({RegisterValue::Kind::StackAddress, 1,
+                                       Instruction.Offset},
+                                      Base, Program),
+                     Instruction.Width / kBitsPerByte, Program,
+                     CapturedAddresses.get());
+  }
 }
 
 llvm::Expected<std::optional<size_t>>
@@ -1718,9 +1739,7 @@ llvm::Error
 ContextFlow::transferInputExpression(const MedInstruction &Instruction,
                                      ContextState &State) {
   if (Instruction.Op == Operation::Store) {
-    State.InputWrites.addWrite(storeOrigin(Instruction, State),
-                               Instruction.Width / kBitsPerByte, Program,
-                               CapturedAddresses.get());
+    addStoreEffects(State.InputWrites, Instruction, State);
     MedInstruction Store = Instruction;
     Store.Form = OperandForm::StoreReg;
     Store.Src = Store.Dst == 0 ? 1 : 0;
@@ -2578,22 +2597,79 @@ llvm::Expected<bool> ContextFlow::call(FunctionContext &Context,
   return true;
 }
 
-/// Instantiate the already completed generic summary along a proven scalar
-/// path to one byte-moving syscall and a write-free return suffix. This does
-/// not create another cached specialization. Loops, memory reads/writes before
-/// the syscall, other calls and unknown branches do not establish this proof.
-llvm::Expected<std::optional<ContextFlow::CopyInstantiation>>
-ContextFlow::instantiateCopyWrapper(size_t Entry, const ContextState &Input) {
-  CopyInstantiation Result;
+/// Replay a short memory-transfer path using actual caller values and the
+/// canonical load/store owner. This creates no cached specialization. Only
+/// known branch successors and a matched return establish a postcondition;
+/// unknown branches, other calls and repeated register states do not.
+llvm::Expected<std::optional<ContextFlow::MemoryTransferInstantiation>>
+ContextFlow::instantiateMemoryTransferPath(size_t Entry,
+                                           const ContextState &Input) {
+  const auto Requested = Input.Registers[3].singleton();
+  if (Requested.ValueKind != RegisterValue::Kind::Constant ||
+      Requested.Value > kMaxModeledScratchBytes)
+    return std::optional<MemoryTransferInstantiation>{};
+  constexpr uint64_t ResultOverhead =
+      sizeof(MemoryTransferInstantiation) - sizeof(ContextState);
+  uint64_t StateBytes = stateBytes(Input) + ResultOverhead;
+  if (auto Error = retain(StateBytes))
+    return std::move(Error);
+  uint64_t SeenBytes = 0;
+  const auto Release =
+      llvm::scope_exit([&] { RetainedBytes -= StateBytes + SeenBytes; });
+  MemoryTransferInstantiation Result;
   Result.Output = Input;
   auto &State = Result.Output;
+  const auto RetainState = [&]() -> llvm::Error {
+    const uint64_t NewBytes =
+        stateBytes(State) + ResultOverhead +
+        Result.Effects.Writes.capacity() * sizeof(MemoryWrite);
+    if (NewBytes > StateBytes) {
+      if (auto Error = retain(NewBytes - StateBytes))
+        return Error;
+    } else {
+      RetainedBytes -= StateBytes - NewBytes;
+    }
+    StateBytes = NewBytes;
+    return llvm::Error::success();
+  };
   State.InputExpressions = {};
   pushAbstractFrame(State, Program);
   pushAbstractFrame(State.Origins, Program);
-  std::set<size_t> Seen;
+  struct PathState {
+    size_t Block;
+    std::array<ProvenValueSet, kRegisterCount> Registers;
+
+    bool operator<(const PathState &Other) const {
+      if (Block != Other.Block)
+        return Block < Other.Block;
+      for (unsigned R = 0; R < kRegisterCount; ++R) {
+        if (Registers[R] == Other.Registers[R])
+          continue;
+        return std::lexicographical_compare(
+            Registers[R].values().begin(), Registers[R].values().end(),
+            Other.Registers[R].values().begin(),
+            Other.Registers[R].values().end(),
+            [](const RegisterValue &L, const RegisterValue &R) {
+              return std::tie(L.ValueKind, L.Value, L.Offset) <
+                     std::tie(R.ValueKind, R.Value, R.Offset);
+            });
+      }
+      return false;
+    }
+  };
+  std::set<PathState> Seen;
   size_t BlockID = Entry;
-  bool Copied = false;
-  while (Seen.insert(BlockID).second) {
+  while (true) {
+    uint64_t NodeBytes = sizeof(PathState) + 4 * sizeof(void *);
+    for (const auto &Value : State.Registers)
+      NodeBytes += Value.allocatedBytes();
+    if (auto Error = retain(NodeBytes))
+      return std::move(Error);
+    SeenBytes += NodeBytes;
+    // Ignoring memory here can reject a progressing memory-driven loop, but
+    // cannot manufacture a returning path. Counted loops change registers.
+    if (!Seen.insert({BlockID, State.Registers}).second)
+      return std::optional<MemoryTransferInstantiation>{};
     const auto &Block = Program.Med.Blocks[BlockID];
     const MedInstruction *Last = nullptr;
     for (size_t Slot = Block.StartSlot; Slot < Block.EndSlot; ++Slot) {
@@ -2602,61 +2678,78 @@ ContextFlow::instantiateCopyWrapper(size_t Entry, const ContextState &Input) {
         continue;
       if (auto Error = visit())
         return std::move(Error);
+      ++Result.Instructions;
       Last = Instruction;
       if (Instruction->Op == Operation::Exit) {
-        if (!Copied)
-          return std::optional<CopyInstantiation>{};
+        if (!Result.CopySlot && !Result.Stores)
+          return std::optional<MemoryTransferInstantiation>{};
         for (unsigned R = kFirstCalleeSavedRegister; R < kRegisterCount; ++R) {
           State.Registers[R] = Input.Registers[R];
           State.Origins[R] = Input.Origins[R];
           State.InputExpressions[R] = Input.InputExpressions[R];
         }
-        return std::optional<CopyInstantiation>(std::move(Result));
+        if (auto Error = RetainState())
+          return std::move(Error);
+        return std::optional<MemoryTransferInstantiation>(std::move(Result));
       }
       if (Instruction->Call != CallKind::None) {
         const auto Length = State.Registers[3].singleton();
-        if (Copied || Instruction->Call != CallKind::Syscall ||
-            !Instruction->Syscall ||
+        if (Result.CopySlot || Result.Stores ||
+            Instruction->Call != CallKind::Syscall || !Instruction->Syscall ||
             (Instruction->Syscall->ID != Syscall::Memcpy &&
              Instruction->Syscall->ID != Syscall::Memmove) ||
             Length.ValueKind != RegisterValue::Kind::Constant ||
             Length.Value > kMaxModeledScratchBytes)
-          return std::optional<CopyInstantiation>{};
+          return std::optional<MemoryTransferInstantiation>{};
         const auto Source = State.Origins[2].singleton();
         const auto Destination = State.Origins[1].singleton();
+        const uint64_t BeforeBytes =
+            sizeof(MemoryEffects) +
+            State.InputWrites.Writes.capacity() * sizeof(MemoryWrite);
+        if (auto Error = retain(BeforeBytes))
+          return std::move(Error);
+        const auto ReleaseBefore =
+            llvm::scope_exit([&] { RetainedBytes -= BeforeBytes; });
         const auto Before = State.InputWrites;
-        Result.Effects.addWrite(Destination, Length.Value, Program,
-                                CapturedAddresses.get());
+        for (const auto &Address : possibleValues(State.Origins[1]))
+          Result.Effects.addWrite(Address, Length.Value, Program,
+                                  CapturedAddresses.get());
         State.InputWrites.include(Result.Effects, symbolicInputs(), Program);
         State.InputSpills.clear();
         transferValues(*Instruction, State);
         State.Postconditions.recordInputCopy(Source, Destination, Length.Value,
                                              Before);
-        Result.Slot = Slot;
-        Result.Size = Length.Value;
-        Copied = true;
+        Result.CopySlot = Slot;
+        Result.CopySize = Length.Value;
       } else {
-        if (Instruction->Op == Operation::Load ||
-            Instruction->Op == Operation::Store)
-          return std::optional<CopyInstantiation>{};
+        if (Instruction->Op == Operation::Store) {
+          addStoreEffects(Result.Effects, *Instruction, State);
+          State.InputWrites.include(Result.Effects, symbolicInputs(), Program);
+          State.InputSpills.clear();
+          ++Result.Stores;
+        }
         transferValues(*Instruction, State);
       }
+      if (auto Error = RetainState())
+        return std::move(Error);
     }
     const auto Selected = knownBranchSuccessor(Last, State);
+    if (!Selected && Last &&
+        Last->Semantics.Terminator == TerminatorKind::ConditionalJump)
+      return std::optional<MemoryTransferInstantiation>{};
     std::optional<size_t> Next;
     for (size_t E = Offsets[BlockID]; E < Offsets[BlockID + 1]; ++E) {
       const size_t Candidate = Successors[E];
       if (Selected && Program.Med.Blocks[Candidate].StartSlot != *Selected)
         continue;
       if (Next)
-        return std::optional<CopyInstantiation>{};
+        return std::optional<MemoryTransferInstantiation>{};
       Next = Candidate;
     }
     if (!Next)
-      return std::optional<CopyInstantiation>{};
+      return std::optional<MemoryTransferInstantiation>{};
     BlockID = *Next;
   }
-  return std::optional<CopyInstantiation>{};
 }
 
 llvm::Expected<bool> ContextFlow::callTarget(FunctionContext &Context,
@@ -2871,14 +2964,18 @@ llvm::Expected<bool> ContextFlow::callTarget(FunctionContext &Context,
   }
   if (CopiesCapturedValue && !Edge.LegacyRuntime &&
       !SpecializationBudgetExhausted) {
-    auto Copy = instantiateCopyWrapper(Callee->EntryBlock, State);
+    auto Copy = instantiateMemoryTransferPath(Callee->EntryBlock, State);
     if (!Copy)
       return Copy.takeError();
     if (*Copy) {
       Context.PreservesMemory = false;
       Edge.AppliedMemoryEffects = true;
-      Edge.InstantiatedCopySlot = (**Copy).Slot;
-      Edge.InstantiatedCopyBytes = (**Copy).Size;
+      Edge.InstantiatedCopySlot = (**Copy).CopySlot;
+      Edge.InstantiatedCopyBytes = (**Copy).CopySize;
+      if ((**Copy).Stores) {
+        Edge.InstantiatedMemoryPathInstructions = (**Copy).Instructions;
+        Edge.InstantiatedMemoryPathStores = (**Copy).Stores;
+      }
       if (Collect) {
         Context.Effects.include((**Copy).Effects, symbolicInputs(), Program);
         if (auto Error = retain(sizeof(Edge)))
@@ -3309,11 +3406,8 @@ llvm::Expected<bool> ContextFlow::replay(FunctionContext &Context,
       Defined |= Dependencies.Writes;
       if (Instruction->Op == Operation::Store)
         Context.PreservesMemory = false;
-      if (Collect && Instruction->Op == Operation::Store) {
-        Context.Effects.addWrite(storeOrigin(*Instruction, State),
-                                 Instruction->Width / kBitsPerByte, Program,
-                                 CapturedAddresses.get());
-      }
+      if (Collect && Instruction->Op == Operation::Store)
+        addStoreEffects(Context.Effects, *Instruction, State);
       if (Context.Generic)
         if (auto Error = transferInputExpression(*Instruction, State))
           return std::move(Error);

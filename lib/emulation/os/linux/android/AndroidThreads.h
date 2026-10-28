@@ -41,6 +41,7 @@ public:
   uint64_t id() const { return current().Kernel.ID; }
   uint64_t tls() const { return current().Report.TLS; }
   bool isEntry() const { return Current == 0; }
+  BinderThreadState &binder() { return current().Binder; }
   linux_model::ThreadContext *kernel() {
     return enabled() ? &current().Kernel : nullptr;
   }
@@ -104,6 +105,7 @@ private:
   struct Thread {
     NativeThreadSnapshot Report;
     linux_model::ThreadContext Kernel;
+    BinderThreadState Binder;
     std::array<uint8_t, thread_attribute_abi::ObjectBytes> Attributes{};
     std::unique_ptr<BackendContext> Context;
     std::vector<PendingCallback> Callbacks;

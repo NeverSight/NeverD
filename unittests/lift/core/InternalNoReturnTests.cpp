@@ -377,6 +377,34 @@ TEST(InternalNoReturn, CallThroughALoaderBoundNoReturnSlotEndsItsBlock) {
   }
 }
 
+TEST(InternalNoReturn, UniversalCRTTerminateNeverReturns) {
+  // corecrt_terminate.h declares the Universal CRT's terminate
+  // __declspec(noreturn).  The name alone decides nothing: a program may
+  // export a terminate of its own that returns.
+  for (const char *Module :
+       {"api-ms-win-crt-runtime-l1-1-0.dll", "UCRTBASE.DLL", "engine.dll"}) {
+    SCOPED_TRACE(Module);
+    std::vector<uint8_t> Code(0x40, 0xcc);
+    // call qword ptr [rip + 0x1ffa] (the IAT slot at 0x3000); ret
+    const uint8_t Call[] = {0xff, 0x15, 0xfa, 0x1f, 0x00, 0x00, 0xc3};
+    std::copy(std::begin(Call), std::end(Call), Code.begin());
+    auto Image = imageWith(Code, {{Base, "caller"}});
+    Image.Format = BinaryFormat::COFF;
+    Segment Iat;
+    Iat.VA = 0x3000;
+    Iat.Size = Iat.FileSz = 8;
+    Iat.Data.resize(8);
+    Iat.Flags = SegmentFlags::Readable;
+    Image.Segments.push_back(std::move(Iat));
+    Image.Imports.push_back({Module, "terminate", 0, 0x3000});
+    const bool Runtime = std::string_view(Module) != "engine.dll";
+    EXPECT_EQ(libc::isNoReturnTarget(Image, 0x3000), Runtime);
+    EXPECT_EQ(libc::NoReturnTargetIndex(Image).contains(Image, 0x3000),
+              Runtime);
+    EXPECT_EQ(callAtBaseEndsItsBlock(Image), Runtime);
+  }
+}
+
 TEST(InternalNoReturn, CallToACalleeEndingInFastFailEndsItsBlock) {
   // callee: int 0x29.
   const auto Image =

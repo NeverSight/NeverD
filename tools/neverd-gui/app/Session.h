@@ -3,6 +3,7 @@
 #include "Address.h"
 #include "AnalysisService.h"
 #include "EngineClient.h"
+#include "HighlightLocks.h"
 #include "QueryService.h"
 #include "UnwindInfoWords.h"
 
@@ -299,6 +300,9 @@ public:
   }
   bool hasBytePatch(Address address, Address size = 1) const;
   bool hasBytePatches() const { return !patchRanges_.isEmpty(); }
+  /// The words Lock highlight keeps colored in every view of this file.
+  HighlightLocks &highlightLocks() { return highlightLocks_; }
+  const HighlightLocks &highlightLocks() const { return highlightLocks_; }
   void refreshBytePatches();
   bool keepsBytePatches() const {
     return capabilities_.contains(QStringLiteral("patch_apply"));
@@ -431,6 +435,7 @@ signals:
   void projectFileChanged(const QString &suffix);
 
 private:
+  HighlightLocks highlightLocks_;
   /// The operations the worker offers (its hello).
   QSet<QString> capabilities_;
   using Callback = std::function<void(const QJsonObject &payload)>;

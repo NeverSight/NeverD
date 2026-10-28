@@ -15,6 +15,9 @@ uint64_t Bionic::tlsAddress() const {
 uint64_t Bionic::threadID() const {
   return Threads ? Threads->id() : linux_model::ThreadID;
 }
+BinderThreadState &Bionic::binderThread() {
+  return Threads ? Threads->binder() : SingleThreadBinder;
+}
 BionicResult Bionic::unsupportedImport(const NativeCallEvent &Call) {
   Result.Stop = ProcessStopReason::UnsupportedService;
   Result.Diagnostic = diagnostic::ImportPrefix + Call.Name;

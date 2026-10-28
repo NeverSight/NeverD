@@ -17,6 +17,7 @@
 #include "GnomeWindowEdges.h"
 #include "GraphView.h"
 #include "HexView.h"
+#include "HighlightLocks.h"
 #include "Icons.h"
 #include "ItemViewActivation.h"
 #include "JumpDialog.h"
@@ -91,6 +92,8 @@
 #include <QMessageBox>
 #include <QMimeData>
 #include <QMouseEvent>
+#include <QPainter>
+#include <QPixmap>
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QSaveFile>
@@ -125,6 +128,16 @@
 namespace neverd::gui {
 namespace {
 using KDDockWidgets::InitialOption;
+
+/// Lock highlight's command for color \p slot.
+ActionId lockColorAction(int slot) {
+  static_assert(static_cast<int>(ActionId::SearchLockHighlight8) -
+                        static_cast<int>(ActionId::SearchLockHighlight1) + 1 ==
+                    HighlightLocks::Colors,
+                "Actions.def holds one Lock highlight command per color");
+  return static_cast<ActionId>(
+      static_cast<int>(ActionId::SearchLockHighlight1) + slot);
+}
 
 constexpr char LayoutFileName[] = "desktop.json";
 // Application settings own main-window geometry. Automatic pane restoration
@@ -2092,6 +2105,26 @@ void MainWindow::connectActions() {
   on(ActionId::FindRegisterValue, [this] { queryRegister("value"); });
   on(ActionId::SearchHighlightUp, [this] { searchHighlight(false); });
   on(ActionId::SearchHighlightDown, [this] { searchHighlight(true); });
+  on(ActionId::SearchLockHighlight, [this] { lockHighlight(std::nullopt); });
+  for (int slot = 0; slot < HighlightLocks::Colors; ++slot)
+    on(lockColorAction(slot), [this, slot] { lockHighlight(slot); });
+  // Each color's entry shows its color.
+  const auto paintLockSwatches = [this] {
+    const auto &theme = Theme::instance();
+    for (int slot = 0; slot < HighlightLocks::Colors; ++slot) {
+      QPixmap swatch(32, 32);
+      swatch.fill(Qt::transparent);
+      QPainter painter(&swatch);
+      painter.setRenderHint(QPainter::Antialiasing);
+      painter.setPen(QPen(theme.color(ColorRole::ListingPlain), 1.5));
+      painter.setBrush(theme.color(highlightLockRole(slot)));
+      painter.drawRoundedRect(QRectF(5, 5, 22, 22), 5, 5);
+      painter.end();
+      actions_.action(lockColorAction(slot))->setIcon(QIcon(swatch));
+    }
+  };
+  paintLockSwatches();
+  connect(&Theme::instance(), &Theme::changed, this, paintLockSwatches);
   on(ActionId::SearchInView, [this] {
     auto *code = focusedCodeView();
     if (!FindDialog)
@@ -3269,7 +3302,7 @@ void MainWindow::jumpAnywhere() {
   const auto base = currentAddress();
   const QPointer<DisassemblyView> assembly = disassembly_;
   const bool hex = hexActive_;
-  auto *dialog = new JumpDialog(session_, commandView());
+  auto *dialog = new JumpDialog(session_, space_, base, commandView());
   dialog->setObjectName(QStringLiteral("jumpDialog"));
   connect(dialog, &QDialog::accepted, this,
           [this, dialog, epoch, base, assembly, hex] {
@@ -3859,6 +3892,19 @@ void MainWindow::searchHighlight(bool forward) {
   const QString token = disassembly_->currentToken();
   if (!token.isEmpty())
     disassembly_->listing()->findInLoaded(token, forward);
+}
+
+void MainWindow::lockHighlight(std::optional<int> slot) {
+  // The word under the cursor of the code window with the focus, else of
+  // the disassembly.
+  const auto *code = focusedCodeView();
+  const QString word =
+      code ? code->text()->cursorWord() : disassembly_->currentToken();
+  auto &locks = session_.highlightLocks();
+  if (slot)
+    locks.toggleColor(*slot, word);
+  else
+    locks.toggle(word);
 }
 
 void MainWindow::stepFunction(bool forward) {

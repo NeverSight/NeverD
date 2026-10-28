@@ -344,6 +344,50 @@
         <translation>Zum nächsten Vorkommen des hervorgehobenen Bezeichners wechseln</translation>
     </message>
     <message>
+        <source>Lock or &amp;unlock</source>
+        <translation>Sperren oder &amp;entsperren</translation>
+    </message>
+    <message>
+        <source>Keep the highlighted word highlighted in the first free color, or unlock it</source>
+        <translation>Das hervorgehobene Wort in der ersten freien Farbe hervorgehoben lassen oder es entsperren</translation>
+    </message>
+    <message>
+        <source>Color &amp;1</source>
+        <translation>Farbe &amp;1</translation>
+    </message>
+    <message>
+        <source>Color &amp;2</source>
+        <translation>Farbe &amp;2</translation>
+    </message>
+    <message>
+        <source>Color &amp;3</source>
+        <translation>Farbe &amp;3</translation>
+    </message>
+    <message>
+        <source>Color &amp;4</source>
+        <translation>Farbe &amp;4</translation>
+    </message>
+    <message>
+        <source>Color &amp;5</source>
+        <translation>Farbe &amp;5</translation>
+    </message>
+    <message>
+        <source>Color &amp;6</source>
+        <translation>Farbe &amp;6</translation>
+    </message>
+    <message>
+        <source>Color &amp;7</source>
+        <translation>Farbe &amp;7</translation>
+    </message>
+    <message>
+        <source>Color &amp;8</source>
+        <translation>Farbe &amp;8</translation>
+    </message>
+    <message>
+        <source>Lock the highlighted word in this color, or unlock the color</source>
+        <translation>Das hervorgehobene Wort in dieser Farbe sperren oder die Farbe freigeben</translation>
+    </message>
+    <message>
         <source>&amp;Find in view...</source>
         <translation>&amp;In Ansicht suchen...</translation>
     </message>
@@ -1612,6 +1656,10 @@
         <translation>&amp;Suchen</translation>
     </message>
     <message>
+        <source>&amp;Lock highlight</source>
+        <translation>Hervorhebung &amp;sperren</translation>
+    </message>
+    <message>
         <source>&amp;View</source>
         <translation>&amp;Ansicht</translation>
     </message>
@@ -2295,6 +2343,14 @@ Doppelklicken, um zur Deklaration zu springen.</translation>
     <message>
         <source>Laying out graph…</source>
         <translation>Graph wird angeordnet…</translation>
+    </message>
+    <message>
+        <source>From %1</source>
+        <translation>Von %1</translation>
+    </message>
+    <message>
+        <source>To %1</source>
+        <translation>Nach %1</translation>
     </message>
 </context>
 <context>

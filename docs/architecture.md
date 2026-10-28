@@ -649,24 +649,51 @@ and exact fault-PC equality remain unqualified. Whole-image arm64e rebuilding
 still requires the separate
 authenticated storage, relocation and signed-unwind ABI contract.
 
-The shared AAPCS64 parameter placement owner describes Darwin fixed scalar
+The shared AAPCS64 parameter placement owner describes Darwin fixed value
 spills with their natural size and alignment after either register bank is
 exhausted. ELF and Windows ARM64 retain eight-byte stack slots. Darwin variadic
 tails keep their separate eight-byte placement rule. Darwin integer pairs may
 start at odd-numbered registers; an entire 128-bit scalar moves to a 16-byte
 aligned stack slot when the remaining registers cannot hold it. ELF and COFF
-retain even-register alignment. Apple aggregate spills still need their own
-complete layout contract. The limits for this placement owner live in
+retain even-register alignment. Complete aggregate spills exhaust their bank
+and preserve each field's declared offset. The limits for this owner live in
 `SourceParameterPlacementAAPCS64.def`.
 
-Fixed analyst call prototypes reuse `assignDarwinScalarSourceABI`, as Darwin
-variadic prefixes and recovered declarations already do. Narrow integer
+Fixed arm64 analyst call prototypes reuse `assignDarwinFixedSourceABI` and its
+shared AAPCS64 parameter placement. Darwin variadic prefixes retain their
+separate promoted-scalar contract. Narrow integer
 register parameters and AArch64 narrow results retain the ABI's 32-bit
 sign/zero-extension guarantee separately from their source width. LLVM source
 call emission consumes those validated guarantees as `signext`/`zeroext`
 attributes; signed source spelling alone does not grant them. Narrow stack
-arguments keep their original storage width. This scalar call contract does
-not admit 128-bit or aggregate analyst call prototypes.
+arguments keep their original storage width. A 128-bit argument retains two
+unsigned physical words before SSA; HighC reconstructs it with CONCAT and LLVM
+uses an i128 parameter. Supported natural-layout records retain their logical
+type and complete physical members. LLVM uses arrays for HFA and word-record
+arguments so register exhaustion cannot split a logical value. Results flatten
+back to the declared source offsets, preserving padding as non-value bytes.
+LLVM C admits these grouped Darwin parameters independently of the register
+count; ELF/x86 array restrictions remain in place.
+
+`sourceCallTypeOf` retains natural C record fields from the SDK's type library
+without changing the ordinary display conversion. Names, sizes, alignment and
+field offsets must agree with the natural layout; packed, overlapping,
+bitfield and incomplete value records fail. Pointer pointees keep their opaque
+display identity and supply no by-value layout or field-access authority.
+Both C routes retain the library's record and member names. LLVM source value
+types share one grouping owner with the producer. Conversion between an LLVM
+aggregate wrapper and the declared C record captures each value once and
+copies only its logical members; padding is excluded from integer observations.
+The call argument definedness proof follows byte ranges through copies and
+slices, so an observed 32-bit member can cross a wider register without
+requiring its padding bits. Other operations still require their full inputs;
+neither padding nor a later SSA version becomes an incoming parameter.
+The explicit call path currently supports one/two-word integer/pointer records,
+the padded 32-bit/64-bit integer pair and one-to-four-member f32/f64 HFAs,
+including nested records and complete stack spills. Array fields, arbitrary
+small mixed records, indirect by-value copies and indirect results still need
+their complete source storage and ABI contracts. These source declarations
+supply no authenticated whole-image or native signed-unwind ABI.
 
 The DWARF reader keeps an image-derived arm64e return ABI flag separate from
 the encoded CIE augmentation. Classic arm64e and arm64e.x1 select IB even when
@@ -3073,9 +3100,10 @@ integer on AArch64. Locally supplied header records get complete value
 definitions; records supplied by an included header are not redefined.
 LLVM C uses its validated import prototype for the record conversions even
 when a call through an import slot has no separate debug-function identity.
-Padded or over-aligned HFAs, special conventions and Apple stack packing remain
-outside this adapter. A source aggregate return for an untyped wrapper still
-needs independent source or caller evidence.
+Padded or over-aligned HFAs and special conventions remain outside this adapter.
+Shared placement also describes natural Darwin stack packing; explicit Darwin
+call prototypes use the source ABI path above. A source aggregate return for an
+untyped wrapper still needs independent source or caller evidence.
 
 LLVM-C also uses `integerCallArguments` to admit fixed scalar header import
 signatures. Every printed call of a symbol must agree before the writer uses
@@ -3139,7 +3167,10 @@ writers read it, so that a caller returning what a `void` routine left in
 RAX returns nothing too. A routine never returns where its name says so, as
 the tables (`isNoReturnFunction`) or a `_Noreturn` prototype
 (`resolvePrototype`) do: an import, a symbol, or an export the image's own
-code calls (`NoReturnTargetIndex`). Its cached and demand-loaded lookups share
+code calls (`NoReturnTargetIndex`). A name a program may also give a routine
+of its own decides only together with the module that exports it
+(`isNoReturnImport`, `WindowsNoReturnImports.inc`): the Universal CRT's
+`terminate` never returns. Its cached and demand-loaded lookups share
 the image's executable-veneer admission, exact IAT precedence and first
 non-section symbol rule; unregistered x86 thunks and tagged Thumb entries
 resolve through the same veneer owner. Function discovery reads no header, so
@@ -4738,6 +4769,15 @@ proof is shared by structured clauses and fallback annotations before any
 native filter code moves. Side-effecting filters retain their original body.
 The COFF C renderer emits lexical SEH/C++ protection only for reducible nodes;
 fallback views preserve native dispatch annotations and original statements.
+Table SEH scopes sharing one range print as nested single-clause `__try`
+statements, the first innermost, the order the runtime tries them in. Only the
+outermost arm takes its handler block: an inner handler lies outside the range,
+so outside the outer tries as well, and stays where it is.
+A catch funclet is outside the try block it handles, although MSVC maps the
+funclet's continuation tail back to a state of that try. The funclet gets no
+region of it, and the fallback view of a function under an IP-to-state map
+lists only the try blocks holding its own states and the cleanups those states
+run.
 The fixed LLVM C++ prologue has its own COFF decoder. It authenticates the
 saved-register prefix, allocation, all node fields and six-byte FS publication.
 `RegistrationChainInfo` owns translation from runtime EBP to the source frame;
@@ -6518,6 +6558,13 @@ follows its `bx lr`: the PC then equals a literal-pool address, and treating it
 as a reference to that word made the rebuilt access depend on where the copied
 code sat.
 
+ARM and Thumb control comes from the decoded instruction
+(`ARMLifter::classifyControl`). A load of PC returns only when it pops:
+`pop {..., pc}`, an LDM from SP, or `ldr pc, [sp], #N` with N a positive
+multiple of four. MSVC uses that last form to release the register arguments
+a function homed above its saved return address. Any other load of PC is an
+indirect branch.
+
 After ARM call-arity recovery, MedIR propagates a proven pointer parameter
 through direct calls only when the argument is the exact incoming parameter;
 computed register versions do not inherit that role. HighC uses the same
@@ -7290,7 +7337,10 @@ the descent decodes that instruction whole and falls into the guess, while
 real padding stops it at the int3. Off the 16-byte grid the scan takes only
 the frame setup itself, `push ebp; mov ebp, esp` (55 8B EC or 55 89 E5): a
 byte 0x55 followed by any move opcode starts no function inside an
-instruction.
+instruction. Code no function reaches is not rechecked this way, so the
+padding scan itself takes no byte 0x40-0x4F after an int3 in a 32-bit image
+(`isPrologueAt`): those are REX prefixes only in 64-bit code, and IA-32 decodes
+them as INC/DEC, as in the operand of `mov [0x4048cc], eax`.
 
 A whole unit (`neverd_decompile_all`, in every language, or the unit of a
 selection `neverd_decompile_functions` writes) begins with a
@@ -10316,7 +10366,7 @@ reversal within each 64-bit block. Both 64-bit and 128-bit vectors use the
 existing vector-effect owner; narrow results clear the upper half. Reserved
 offsets, reserved element sizes and scalable encodings remain unsupported.
 
-Baseline integer CMEQ, UZP1, XTN/XTN2 and UMAXV use that same admission owner.
+Baseline integer CMEQ, UZP1, XTN/XTN2, UMAXV and UMINV use that same admission owner.
 The original instructions execute on the selected checked CPU transport; OS
 models do not replace them with scalar stubs. Optional/scalable forms still fail
 admission. Independent lane and full-state oracles cover both execution levels.
@@ -12580,7 +12630,7 @@ DarwinFiles keeps Pselect timespec/mask import and signal-state refusal in Darwi
 
 `proveLowSEHEstablisherFrame` owns the decoded Windows x64 parent-frame proof shared by LowIR and SSA. It checks normalized unwind actions, complete instruction/CFG provenance and every reaching protected prefix under a bounded query. SSA additionally checks converted ABI effects. A certified handler entry supplies only its fixed SP coordinate; it restores no saved memory facts. Ordinary catch-return analysis keeps its original entry domain, while a separate local-unwind address inventory visits declared activation roots without carrying register values across exceptional edges. Runtime identity, exact continuation uses and whole-module exclusivity remain independent publication requirements.
 
-Each whole-function frame query validates its immutable CFG once and indexes protected blocks by handler. Budgets charge visited work. SEH finally callbacks retain a separate invocation stack, so an overlapping finally entry cannot establish an except body's parent SP.
+Each whole-function frame query validates its immutable CFG once and indexes protected blocks by handler. Budgets charge visited work. SEH finally callbacks retain a separate invocation stack, so an overlapping finally entry cannot establish an except body's parent SP. An SEH scope guards the instructions that start inside its range. clang-cl ends a range one byte past its last call's return address, so the instruction there is checked; an epilogue later in that block, which no scope guards, is not checked.
 
 `med/X86/SEHFrame` rechecks converted SP effects and projects protected sources
 by their native operation addresses. CFG compaction and entry splitting change
@@ -13495,11 +13545,30 @@ This follows the pinned API 28
 [Java Parcel](https://android.googlesource.com/platform/frameworks/base/+/android-9.0.0_r1/core/java/android/os/Parcel.java),
 [JNI adapter](https://android.googlesource.com/platform/frameworks/base/+/android-9.0.0_r1/core/jni/android_os_Parcel.cpp)
 and [native data contract](https://android.googlesource.com/platform/frameworks/native/+/android-9.0.0_r1/libs/binder/Parcel.cpp).
-In the ServiceManagerProxy call sequence, both obtains now have shared semantics;
-`writeInterfaceToken` remains the next boundary because it reads Binder-thread
-StrictMode policy. No default policy or native Binder handle is inferred from
-Java proxy keys. Borrowed native Parcels, object/FD translation, custom string
-helpers, capacity/size mutation, floating methods and RPC remain unsupported.
+`BinderThreadState` belongs to each native guest thread, with the same state
+shape for Bionic's single-thread fallback. API 28 native IPCThreadState starts
+its StrictMode policy at zero. JNI detach/reattach does not reset this state,
+and newly created pthreads do not inherit the parent's policy. `AndroidDex`
+connects RuntimeServices to the current native thread; shared Dalvik Binder
+get/set methods and Parcel token writing use those services. A standalone
+Runtime without the service stops explicitly. The native policy is distinct
+from Java StrictMode/BlockGuard and from kernel Binder handle state.
+
+`writeInterfaceToken` writes the current 32-bit native policy OR `0x00400000`
+(PENALTY_GATHER), then reuses the shared String encoder. It leaves the local
+policy unchanged, adds no later-platform WorkSource header and requires a
+nonnull interface String. Its completed policy/length writes survive model
+resource stops just like ordinary Parcel writes. This follows API 28
+[Binder natives](https://android.googlesource.com/platform/frameworks/base/+/android-9.0.0_r1/core/jni/android_util_Binder.cpp)
+and [IPCThreadState](https://android.googlesource.com/platform/frameworks/native/+/android-9.0.0_r1/libs/binder/IPCThreadState.cpp).
+
+The ServiceManagerProxy sequence now has shared obtain, token and name-writing
+semantics. Its next transport boundary is `BinderProxy.transact`: Java proxy
+keys do not identify native handles, peer state or reply object translations.
+`enforceInterface` also remains unmodeled: its incoming transaction flags and
+Java StrictMode policy-change upcall cannot be omitted. Borrowed native Parcels,
+object/FD translation, custom string helpers, capacity/size mutation, floating
+methods and RPC remain unsupported.
 
 
 `KernelFileSystem` owns the validated volume/node state; `KernelModel` owns canonical device topology and references. `DriverFileSystemJSON` is transport only. `DeviceOwnerKind` distinguishes Guest, PnpProvider and FileSystemProvider; only PnP routes use `isPnpProviderDevice`. Volume devices exist before DriverEntry, and four shared route guards reject unimplemented file I/O before publication. Owner snapshots remain independent of guest object projections and configuration.

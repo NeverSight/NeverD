@@ -136,6 +136,8 @@ public:
   /// for, or, as in IDA, the name or word under the cursor, which the
   /// highlight marks; nothing on blank space.
   QString copyText() const;
+  /// The source name or token under the cursor; none in a folded summary.
+  QString cursorWord() const;
   QString allText() const;
   bool findText(const QString &text, bool forward);
   /// Source coordinates, independent of the current fold projection.
@@ -265,8 +267,6 @@ private:
   int epilogueLine() const;
   /// The token at a line and column; in LLVM IR, a name with its sigil.
   QString tokenAt(int line, int column) const;
-  /// The source name or token under the cursor; none in a folded summary.
-  QString cursorWord() const;
   /// How this page's words take dots: pseudocode, in any of its languages,
   /// splits member accesses; IR keeps dotted names.
   TokenDots tokenDots() const;

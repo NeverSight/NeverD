@@ -471,6 +471,12 @@ llvm::json::Object callXContextReportJSON(const SBFProgram &Program,
       Row["instantiated_copy_bytes"] =
           static_cast<int64_t>(Edge.InstantiatedCopyBytes);
     }
+    if (Edge.InstantiatedMemoryPathStores) {
+      Row["instantiated_memory_path_instructions"] =
+          static_cast<int64_t>(Edge.InstantiatedMemoryPathInstructions);
+      Row["instantiated_memory_path_stores"] =
+          static_cast<int64_t>(Edge.InstantiatedMemoryPathStores);
+    }
     if (Edge.CalleeSummaryID)
       Row["callee_summary_id"] = static_cast<int64_t>(*Edge.CalleeSummaryID);
     if (Edge.CalleeEntrySlot)
@@ -507,7 +513,7 @@ llvm::json::Object callXContextReportJSON(const SBFProgram &Program,
   const auto Translation =
       frameTranslationLimit(Program.Low.TheVersion, Program.Config);
   return llvm::json::Object{
-      {"schema", 11},
+      {"schema", 12},
       {"captured_addresses", std::move(Captures)},
       {"distinct_captures_prove_no_alias", false},
       {"frame_coordinates",

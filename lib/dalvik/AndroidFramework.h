@@ -46,6 +46,7 @@ public:
   definingLoader(std::string_view type, const Program &program) const;
 
 private:
+  ExecutionResult binderThreadPolicy();
   ExecutionResult parcel(Heap &heap, const LibraryMethod &method,
                          uint64_t receiver, std::span<const uint64_t> arguments,
                          const AdmitInstruction &admit);

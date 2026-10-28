@@ -21,9 +21,11 @@
 #endif
 
 #include <charconv>
+#include <limits>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <vector>
 
 using namespace neverd::patch;
@@ -156,8 +158,21 @@ llvm::Expected<PatchRow> readRow(const RowFields &Fields, uint64_t &Total) {
   PatchRow Row;
   const auto ReadAddress = [](std::optional<llvm::StringRef> Text,
                               uint64_t &Out) {
-    return Text && Text->consume_front("0x") && !Text->empty() &&
-           !Text->getAsInteger(16, Out);
+    if (!Text || !Text->consume_front("0x") || Text->empty())
+      return false;
+    // Preserve leading zeroes without converting excess significant digits.
+    constexpr size_t MaxDigits = std::numeric_limits<uint64_t>::digits / 4;
+    if (Text->size() > MaxDigits) {
+      *Text = Text->ltrim('0');
+      if (Text->empty()) {
+        Out = 0;
+        return true;
+      }
+      if (Text->size() > MaxDigits)
+        return false;
+    }
+    const auto Parsed = std::from_chars(Text->begin(), Text->end(), Out, 16);
+    return Parsed.ec == std::errc{} && Parsed.ptr == Text->end();
   };
   const auto Kind = Fields.Kind ? parsePatchKind(*Fields.Kind) : std::nullopt;
   if (!ReadAddress(Fields.FileOffset, Row.FileOffset) ||
@@ -210,7 +225,9 @@ neverd::patch::parsePatchRows(llvm::StringRef Text) {
   if (Text.size() > patchLimits::kMaxPatchesFileBytes)
     return invalid("patches.json exceeds its size limit");
 #if NEVERD_USE_SIMDJSON
-  {
+  // An empty StringRef may have null storage. Keep its legacy syntax error
+  // without passing that pointer to the SIMD parser's input copy.
+  if (!Text.empty()) {
     // Extract typed rows from the validated tape; no per-row JSON object tree
     // or parser storage survives this call. Borrowed strings are decoded into
     // owning byte vectors before the temporary parser is destroyed.

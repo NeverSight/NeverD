@@ -1,0 +1,16 @@
+//===- LocalTypesSourceValues.def - Complete C value layouts ---*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// The type library measures member positions in bits; source IR uses bytes.
+//===----------------------------------------------------------------------===//
+
+#ifndef LOCAL_TYPE_SOURCE_VALUE
+#define LOCAL_TYPE_SOURCE_VALUE(Type, Name, Value)
+#endif
+
+LOCAL_TYPE_SOURCE_VALUE(unsigned, kSourceValueByteBits, 8)
+
+#undef LOCAL_TYPE_SOURCE_VALUE

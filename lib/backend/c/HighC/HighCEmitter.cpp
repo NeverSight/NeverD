@@ -4686,7 +4686,7 @@ void HighCWriter::writeAll(const std::vector<HighFunc> &Funcs) {
   writeIncludes(Funcs);
   std::set<std::string> Records;
   std::function<void(const TypeRef &)> RecordType = [&](const TypeRef &Type) {
-    if (!Type || Type->Kind != NdTypeKind::Struct)
+    if (!Type || Type->Kind != NdTypeKind::Struct || !Type->SourceName.empty())
       return;
     const auto Name = typeToC(Type);
     if (!Records.insert(Name).second)

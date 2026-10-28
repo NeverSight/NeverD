@@ -1031,6 +1031,48 @@ TEST(MedSEHEstablisherFrame, SourceRequiresExplicitIndependentEntry) {
   }
 }
 
+// clang-cl ends a guarded range one byte past the return address of its
+// last call, so the instruction there is guarded: here the first one of the
+// join the handler resumes at.  The epilogue after it is guarded by no
+// scope, so its stack release cannot unsettle a handler's frame; inside the
+// range it would.
+TEST(MedSEHEstablisherFrame, EpilogueAfterTheGuardedRangeIsUnchecked) {
+  for (va_t RangeEnd : {0x16, 0x1a}) {
+    SCOPED_TRACE(RangeEnd);
+    auto Img = makeFixedSEHFrameImage();
+    auto &Code = Img.Segments.front().Data;
+    std::fill(Code.begin() + 0x10, Code.end(), 0xcc);
+    // 0x10: call 0x38; 0x15: mov eax,[rsp+36]; add rsp,128; pop rdi; ret.
+    const uint8_t Join[] = {0xe8, 0x23, 0,    0,    0, 0x8b, 0x44, 0x24, 0x24,
+                            0x48, 0x81, 0xc4, 0x80, 0, 0,    0,    0x5f, 0xc3};
+    std::copy(std::begin(Join), std::end(Join), Code.begin() + 0x10);
+    // 0x28: eax=[rsp+36]; eax+=20; [rsp+36]=eax; jmp 0x15.
+    const uint8_t Handler[] = {0x8b, 0x44, 0x24, 0x24, 0x83, 0xc0, 20,
+                               0x89, 0x44, 0x24, 0x24, 0xeb, 0xe0};
+    std::copy(std::begin(Handler), std::end(Handler), Code.begin() + 0x28);
+    Code[0x38] = 0xc3;
+    auto &EH = Img.ExceptionMetadata.Functions.front();
+    EH.CodeRange.End = Img.Entry + 0x35;
+    Img.Symbols.front().Size = 0x35;
+    auto &Scope = EH.SEH->Scopes.front();
+    Scope.GuardedRange = {Img.Entry + 0x10, Img.Entry + RangeEnd};
+    Scope.HandlerVA = Img.Entry + 0x28;
+    Img.ExceptionMetadata.rebuildIndex();
+    auto Low = decodeFixedSEHFrame(Img);
+    ASSERT_NE(Low.blockFor(Img.Entry + 0x15), nullptr);
+    size_t Work = limits::kMaxSEHEstablisherFrameWork;
+    auto Frame = proveLowSEHEstablisherFrame(
+        Low, Img.Entry + 0x28, getTargetRegInfo(Arch::X64), false, Work);
+    const bool Proven = bool(Frame);
+    const std::string Error = Proven ? "" : llvm::toString(Frame.takeError());
+    EXPECT_EQ(Proven, RangeEnd == 0x16) << Error;
+    if (!Proven)
+      EXPECT_NE(Error.find("SP is not stable"), std::string::npos) << Error;
+    else
+      EXPECT_EQ(Frame->FrameBytes, 136u);
+  }
+}
+
 LowFunc makeFixedCxxContinuationFrame(
     const BinaryImage &Image = makeFixedSEHFrameImage()) {
   auto Low = decodeFixedSEHFrame(Image);

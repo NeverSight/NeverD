@@ -344,6 +344,50 @@
         <translation>Vai all&apos;occorrenza successiva dell&apos;identificatore evidenziato</translation>
     </message>
     <message>
+        <source>Lock or &amp;unlock</source>
+        <translation>Blocca o s&amp;blocca</translation>
+    </message>
+    <message>
+        <source>Keep the highlighted word highlighted in the first free color, or unlock it</source>
+        <translation>Mantieni evidenziata la parola evidenziata nel primo colore libero, oppure sbloccala</translation>
+    </message>
+    <message>
+        <source>Color &amp;1</source>
+        <translation>Colore &amp;1</translation>
+    </message>
+    <message>
+        <source>Color &amp;2</source>
+        <translation>Colore &amp;2</translation>
+    </message>
+    <message>
+        <source>Color &amp;3</source>
+        <translation>Colore &amp;3</translation>
+    </message>
+    <message>
+        <source>Color &amp;4</source>
+        <translation>Colore &amp;4</translation>
+    </message>
+    <message>
+        <source>Color &amp;5</source>
+        <translation>Colore &amp;5</translation>
+    </message>
+    <message>
+        <source>Color &amp;6</source>
+        <translation>Colore &amp;6</translation>
+    </message>
+    <message>
+        <source>Color &amp;7</source>
+        <translation>Colore &amp;7</translation>
+    </message>
+    <message>
+        <source>Color &amp;8</source>
+        <translation>Colore &amp;8</translation>
+    </message>
+    <message>
+        <source>Lock the highlighted word in this color, or unlock the color</source>
+        <translation>Blocca la parola evidenziata in questo colore, oppure libera il colore</translation>
+    </message>
+    <message>
         <source>&amp;Find in view...</source>
         <translation>Trova nella &amp;vista...</translation>
     </message>
@@ -1612,6 +1656,10 @@
         <translation>&amp;Cerca</translation>
     </message>
     <message>
+        <source>&amp;Lock highlight</source>
+        <translation>B&amp;locca evidenziazione</translation>
+    </message>
+    <message>
         <source>&amp;View</source>
         <translation>&amp;Visualizza</translation>
     </message>
@@ -2295,6 +2343,14 @@ Fai doppio clic per andare alla dichiarazione.</translation>
     <message>
         <source>Laying out graph…</source>
         <translation>Calcolo della disposizione del grafo…</translation>
+    </message>
+    <message>
+        <source>From %1</source>
+        <translation>Da %1</translation>
+    </message>
+    <message>
+        <source>To %1</source>
+        <translation>Verso %1</translation>
     </message>
 </context>
 <context>

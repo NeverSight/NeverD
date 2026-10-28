@@ -344,6 +344,50 @@
         <translation>Перейти к следующему вхождению подсвеченного идентификатора</translation>
     </message>
     <message>
+        <source>Lock or &amp;unlock</source>
+        <translation>Закрепить или &amp;открепить</translation>
+    </message>
+    <message>
+        <source>Keep the highlighted word highlighted in the first free color, or unlock it</source>
+        <translation>Оставить подсвеченное слово подсвеченным первым свободным цветом или открепить его</translation>
+    </message>
+    <message>
+        <source>Color &amp;1</source>
+        <translation>Цвет &amp;1</translation>
+    </message>
+    <message>
+        <source>Color &amp;2</source>
+        <translation>Цвет &amp;2</translation>
+    </message>
+    <message>
+        <source>Color &amp;3</source>
+        <translation>Цвет &amp;3</translation>
+    </message>
+    <message>
+        <source>Color &amp;4</source>
+        <translation>Цвет &amp;4</translation>
+    </message>
+    <message>
+        <source>Color &amp;5</source>
+        <translation>Цвет &amp;5</translation>
+    </message>
+    <message>
+        <source>Color &amp;6</source>
+        <translation>Цвет &amp;6</translation>
+    </message>
+    <message>
+        <source>Color &amp;7</source>
+        <translation>Цвет &amp;7</translation>
+    </message>
+    <message>
+        <source>Color &amp;8</source>
+        <translation>Цвет &amp;8</translation>
+    </message>
+    <message>
+        <source>Lock the highlighted word in this color, or unlock the color</source>
+        <translation>Закрепить подсвеченное слово этим цветом или освободить цвет</translation>
+    </message>
+    <message>
         <source>&amp;Find in view...</source>
         <translation>&amp;Найти в представлении...</translation>
     </message>
@@ -1612,6 +1656,10 @@
         <translation>По&amp;иск</translation>
     </message>
     <message>
+        <source>&amp;Lock highlight</source>
+        <translation>&amp;Закрепить подсветку</translation>
+    </message>
+    <message>
         <source>&amp;View</source>
         <translation>&amp;Вид</translation>
     </message>
@@ -2300,6 +2348,14 @@ Double-click to go to the declaration.</source>
     <message>
         <source>Laying out graph…</source>
         <translation>Построение графа…</translation>
+    </message>
+    <message>
+        <source>From %1</source>
+        <translation>Из %1</translation>
+    </message>
+    <message>
+        <source>To %1</source>
+        <translation>В %1</translation>
     </message>
 </context>
 <context>

@@ -23,6 +23,8 @@
 
 namespace neverd::sdk {
 namespace {
+#define LOCAL_TYPE_SOURCE_VALUE(Type, Name, Value) constexpr Type Name = Value;
+#include "LocalTypesSourceValues.def"
 
 /// Whether emitted C takes the type \p Name from the headers it includes
 /// (CHeaderNames.def) rather than declaring it.
@@ -65,8 +67,10 @@ displayedEnumerators(const types::EnumDef &Enum, unsigned Bytes) {
 class Converter {
 public:
   explicit Converter(const types::TypeLibrary &Library,
-                     const types::TypeSpeller *PrototypeSpeller = nullptr)
-      : Library(Library), PrototypeSpeller(PrototypeSpeller) {}
+                     const types::TypeSpeller *PrototypeSpeller = nullptr,
+                     bool CompleteValues = false)
+      : Library(Library), PrototypeSpeller(PrototypeSpeller),
+        CompleteValues(CompleteValues) {}
 
   TypeRef convert(const types::TypeExpr &Type, unsigned Depth) {
     if (Depth > kMaxLocalTypeConversionDepth)
@@ -78,7 +82,11 @@ public:
       // A pointer's own value is all a decompiled signature needs: what it
       // points to only names it, so a pointee it cannot describe is void.
       TypeRef Pointee =
-          Type.Element ? convert(*Type.Element, Depth + 1) : NdType::makeVoid();
+          Type.Element
+              ? (CompleteValues ? Converter(Library, PrototypeSpeller)
+                                      .convert(*Type.Element, Depth + 1)
+                                : convert(*Type.Element, Depth + 1))
+              : NdType::makeVoid();
       if (!Pointee)
         Pointee = NdType::makeVoid();
       TypeRef Pointer = NdType::makePtr(Pointee);
@@ -166,6 +174,8 @@ private:
       return Type->Function ? function(*Type->Function, Depth) : nullptr;
     case types::TypeKind::Struct:
     case types::TypeKind::Union:
+      if (CompleteValues && Type->Kind == types::TypeKind::Union)
+        return nullptr;
       if (!Type->Record)
         return nullptr;
       if (auto Done = Records.find(Name); Done != Records.end())
@@ -267,6 +277,32 @@ private:
       if (!Complete)
         Named->ScalarLeaves.clear();
     }
+    if (CompleteValues) {
+      if (!Record.Defined)
+        return nullptr;
+      std::vector<TypeRef> Fields;
+      std::vector<uint16_t> Offsets;
+      for (const auto &Field : Record.Members) {
+        if (!Field.Type || Field.isBitfield() ||
+            Field.BitOffset % kSourceValueByteBits ||
+            Field.BitOffset / kSourceValueByteBits > Record.Size)
+          return nullptr;
+        Fields.push_back(convert(*Field.Type, Depth + 1));
+        Offsets.push_back(
+            static_cast<uint16_t>(Field.BitOffset / kSourceValueByteBits));
+      }
+      const auto Natural = NdType::makeStruct(std::move(Fields));
+      if (!Natural || Natural->Size != Record.Size ||
+          Natural->Alignment != Alignment || Natural->FieldOffsets != Offsets)
+        return nullptr;
+      Named->Fields = Natural->Fields;
+      Named->FieldOffsets = Natural->FieldOffsets;
+      Named->FieldDisplayNames.clear();
+      Named->FieldDisplayOffsets = Natural->FieldOffsets;
+      Named->FieldDisplayTypes = Natural->Fields;
+      for (const auto &Field : Record.Members)
+        Named->FieldDisplayNames.push_back(Field.Name);
+    }
     return Named;
   }
 
@@ -341,6 +377,7 @@ private:
 
   const types::TypeLibrary &Library;
   const types::TypeSpeller *PrototypeSpeller;
+  bool CompleteValues;
   llvm::StringMap<TypeRef> Records;
 };
 
@@ -367,6 +404,11 @@ bool membersAgree(const NdType &Record, const types::RecordDef &Def) {
 TypeRef decompilerTypeOf(const types::TypeLibrary &Library,
                          const types::TypeExpr &Type) {
   return Converter(Library).convert(Type, 0);
+}
+
+TypeRef sourceCallTypeOf(const types::TypeLibrary &Library,
+                         const types::TypeExpr &Type) {
+  return Converter(Library, nullptr, true).convert(Type, 0);
 }
 
 std::optional<FunctionSym>

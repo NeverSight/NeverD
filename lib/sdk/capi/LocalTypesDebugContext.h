@@ -54,6 +54,12 @@ namespace neverd::sdk {
 TypeRef decompilerTypeOf(const types::TypeLibrary &Library,
                          const types::TypeExpr &Type);
 
+/// A call-site value keeps a complete natural C record layout. Packed,
+/// overlapping, bitfield and incomplete records remain unavailable. Pointer
+/// pointees retain the ordinary display representation and need no value ABI.
+TypeRef sourceCallTypeOf(const types::TypeLibrary &Library,
+                         const types::TypeExpr &Type);
+
 /// \p Function's signature, named \p Name, as the decompiler's types
 /// describe it. Variadic declarations retain their fixed prefix and ellipsis.
 /// A prototype speller keeps scalar C conversions consistent with its

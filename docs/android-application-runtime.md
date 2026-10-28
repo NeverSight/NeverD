@@ -690,9 +690,19 @@ negative lengths leave the Parcel unchanged. Byte-array exports are independent
 copies. DEX and all three JNI call forms share these objects and the existing
 work/heap budgets, without requiring an application snapshot.
 
-`writeInterfaceToken` stops explicitly at the unmodeled Binder-thread StrictMode
-policy. A supplied Java Binder key does not supply that policy or a native
-transaction endpoint. Raw allocated Parcel instances, access after recycle,
+`Binder.getThreadStrictModePolicy` and `setThreadStrictModePolicy` access the
+current native thread's 32-bit policy. New native threads start at zero; JNI
+detach/reattach preserves the policy and pthread children start independently.
+`writeInterfaceToken` writes that policy OR `0x00400000`, followed by the shared
+UTF-16 String encoding, without changing local policy. It requires a nonnull
+String. Standalone Dalvik callers must supply the native policy services; no
+application or ServiceManager snapshot is needed for Android native callers.
+This does not change the separate Java StrictMode/BlockGuard state.
+
+The next ServiceManagerProxy transport boundary is `BinderProxy.transact`.
+A supplied Java Binder key does not supply a native handle or transaction
+endpoint. `enforceInterface` still needs incoming Binder flags and the Java
+policy-change upcall. Raw allocated Parcel instances, access after recycle,
 invalid native import ranges and exporting or writing an uninitialized cursor
 gap also stop explicitly. Native borrowed Parcels, object/FD translation,
 capacity/size changes, float/double methods and custom read/write helpers are

@@ -53,6 +53,8 @@ ListingView::ListingView(Session &session, const AddressSpace &space,
                          QWidget *parent)
     : QAbstractScrollArea(parent), session_(session), space_(space) {
   setFocusPolicy(Qt::StrongFocus);
+  connect(&session_.highlightLocks(), &HighlightLocks::changed, viewport(),
+          qOverload<>(&QWidget::update));
   connect(&session_, &Session::bytePatchesChanged, viewport(),
           qOverload<>(&QWidget::update));
   setFrameShape(QFrame::NoFrame);
@@ -1032,15 +1034,25 @@ void ListingView::paintEvent(QPaintEvent *) {
       painter.drawText(QPointF(prefixLeft, y + ascent_), line.prefix);
     }
     auto &layout = line.styled.layout(font, styleStamp_, colorOf);
-    if (SearchHighlight.Text.isEmpty() && !highlight_.isEmpty() &&
-        layout.lineCount()) {
+    if (SearchHighlight.Text.isEmpty() && layout.lineCount()) {
       const QTextLine textLine = layout.lineAt(0);
-      for (const int at : tokenOccurrences(line.styled.text, highlight_)) {
-        const qreal x0 = textLine.cursorToX(at);
-        const qreal x1 = textLine.cursorToX(at + int(highlight_.size()));
-        painter.fillRect(QRectF(left + x0, y, x1 - x0, lineHeight_),
-                         theme.color(ColorRole::ListingHighlight));
-      }
+      // Locked words keep their colors under the cursor's highlight.
+      const auto mark = [&](const QString &word, ColorRole role) {
+        for (const auto &[first, last] :
+             highlightRanges(line.styled, word,
+                             static_cast<int>(ListingRole::Register))) {
+          const qreal x0 = textLine.cursorToX(first);
+          const qreal x1 = textLine.cursorToX(last);
+          painter.fillRect(QRectF(left + x0, y, x1 - x0, lineHeight_),
+                           theme.color(role));
+        }
+      };
+      const auto &locks = session_.highlightLocks();
+      for (int slot = 0; slot < HighlightLocks::Colors; ++slot)
+        if (const QString word = locks.word(slot); !word.isEmpty())
+          mark(word, highlightLockRole(slot));
+      if (!highlight_.isEmpty())
+        mark(highlight_, ColorRole::ListingHighlight);
     }
     QList<QTextLayout::FormatRange> selection;
     if (selected && end > 0) {

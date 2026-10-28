@@ -55,6 +55,11 @@ public:
   /// highlight marks; nothing on blank space.
   QString copyText() const;
   bool loaded() const { return !nodes_.isEmpty(); }
+  /// The edge a click selected, drawn over the others until another click.
+  std::optional<int> selectedEdge() const { return selectedEdge_; }
+  /// The hint a hover at \p widget shows: near an edge, the block at its far
+  /// end, where it comes from beside its arrow and where it goes elsewhere.
+  QString hintAt(QPointF widget) const;
   /// A layout is on its way and nothing is drawn yet.
   bool waiting() const { return waiting_ && nodes_.isEmpty(); }
   /// Say, in \p area, that a layout is on its way.
@@ -84,6 +89,7 @@ protected:
   void mouseMoveEvent(QMouseEvent *event) override;
   void mouseReleaseEvent(QMouseEvent *event) override;
   void mouseDoubleClickEvent(QMouseEvent *event) override;
+  bool event(QEvent *event) override;
   void keyPressEvent(QKeyEvent *event) override;
   void contextMenuEvent(QContextMenuEvent *event) override;
   void resizeEvent(QResizeEvent *event) override;
@@ -97,6 +103,8 @@ private:
   QPointF toWidget(QPointF scene) const;
   /// Node and row under a widget position; row -1 for the title strip.
   std::pair<int, int> hit(QPointF widget) const;
+  /// The edge whose line passes nearest \p widget, within reach.
+  std::optional<int> edgeAt(QPointF widget) const;
   int columnAt(const Row &row, const Node &node, QPointF scene) const;
   void ensureCursorVisible();
   void moveCursor(int node, int row);
@@ -115,6 +123,7 @@ private:
   QPointF origin_; // Scene point at the widget's top-left.
   int cursorNode_ = -1, cursorRow_ = 0, cursorColumn_ = 0;
   QString highlight_;
+  std::optional<int> selectedEdge_;
   QPointF dragStart_, dragOrigin_;
   bool dragging_ = false;
   qreal charWidth_ = 8, lineHeight_ = 16, ascent_ = 12;

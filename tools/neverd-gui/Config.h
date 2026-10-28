@@ -114,9 +114,26 @@ inline constexpr double kGraphViewWholeGraphExtent = 9e8;
 inline constexpr qreal kGraphViewWheelZoomStep = 1.15;
 inline constexpr qreal kGraphViewArrowLength = 9.0;
 inline constexpr qreal kGraphViewArrowHalfWidth = 4.5;
+/// How near an edge's line, in screen pixels, a click selects it and a hover
+/// shows its other end.
+inline constexpr qreal kGraphViewEdgeReachPixels = 4.0;
+/// The rows an edge's hover shows of the block at its other end; a longer
+/// block shows its first and last rows.
+inline constexpr int kGraphViewEdgeHintRows = 12;
 
 // tools/neverd-gui/app/HexView.cpp
 inline constexpr int kHexViewMargin = 6;
+
+// tools/neverd-gui/app/HighlightLocks.cpp
+/// The colors IDA's Lock highlight offers, one word each.
+inline constexpr int kHighlightLockColors = 8;
+
+// tools/neverd-gui/app/JumpDialog.cpp
+/// The dialog's first size: the matches beside a preview of where Enter goes.
+inline constexpr int kJumpDialogWidth = 980;
+inline constexpr int kJumpDialogHeight = 480;
+/// The match list's first width; the preview takes the rest.
+inline constexpr int kJumpDialogListWidth = 320;
 
 // tools/neverd-gui/app/WheelInput.cpp
 inline constexpr int kTextViewWheelLinesPerNotch = 3;

@@ -24,6 +24,8 @@
 
 namespace neverd::mobile::dalvik {
 namespace {
+// API 28 libbinder adds PENALTY_GATHER to the wire policy, not local state.
+constexpr uint32_t kStrictModePenaltyGather = 0x00400000;
 struct Stop {
   ExecutionResult result;
 };
@@ -104,11 +106,6 @@ ExecutionResult AndroidFramework::parcel(Heap &heap,
       position = next;
       return returned();
     }
-    if (name == "writeInterfaceToken")
-      return unsupported(
-          "Android Parcel interface token requires modeled Binder "
-          "thread StrictMode state");
-
     // No allocator bytes are invented for a cursor beyond initialized data.
     auto write = [&](std::span<const uint8_t> input, size_t zeros = 0) {
       if (position > bytes.size())
@@ -145,8 +142,17 @@ ExecutionResult AndroidFramework::parcel(Heap &heap,
     }
     if (name == "readInt" || name == "readLong")
       return returned(readInteger(name == "readInt" ? 4 : 8));
-    if (name == "writeString") {
+    if (name == "writeString" || name == "writeInterfaceToken") {
       const auto string = heap.get(arguments[0]);
+      if (name == "writeInterfaceToken") {
+        if (!string)
+          return unsupported("Android Parcel interface token requires a "
+                             "nonnull native String");
+        auto policy = binderThreadPolicy();
+        if (policy.stop != ExecutionStop::Returned)
+          return policy;
+        integer(uint32_t(policy.value) | kStrictModePenaltyGather, 4);
+      }
       integer(string ? string->Length : UINT32_MAX, 4);
       if (string) {
         const auto size = string->Bytes.size();

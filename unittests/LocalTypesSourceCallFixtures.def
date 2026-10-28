@@ -1,0 +1,41 @@
+//===- LocalTypesSourceCallFixtures.def - Complete call types --*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Independent C declarations for the source call type conversion boundary.
+//===----------------------------------------------------------------------===//
+
+#ifndef LOCAL_SOURCE_CALL_TEXT
+#define LOCAL_SOURCE_CALL_TEXT(Name, Text)
+#endif
+#ifndef LOCAL_SOURCE_CALL_VALUE
+#define LOCAL_SOURCE_CALL_VALUE(Type, Name, Value)
+#endif
+
+LOCAL_SOURCE_CALL_TEXT(kSourceValueDeclarations, R"(
+  typedef struct Pair { long long low, high; } Pair;
+  typedef struct HFA { float a, b, c, d; } HFA;
+  typedef struct Mixed { int low; long long high; } Mixed;
+  typedef struct Node { struct Node *next; long long value; } Node;
+  #pragma pack(push, 1)
+  typedef struct Packed { char tag; long long value; } Packed;
+  #pragma pack(pop)
+  typedef union Choice { long long word; double real; } Choice;
+  struct Incomplete;
+)")
+LOCAL_SOURCE_CALL_TEXT(
+    kSourceValueCall,
+    "Node dispatch(Pair pair, HFA lanes, Mixed mixed, Node node, "
+    "__int128 wide, unsigned __int128 unsigned_wide)")
+LOCAL_SOURCE_CALL_TEXT(kUnsupportedSourceValueCall,
+                       "void dispatch(Packed packed, Choice choice, "
+                       "struct Incomplete incomplete)")
+LOCAL_SOURCE_CALL_VALUE(unsigned, kSourceValuePhysicalArguments, 14)
+LOCAL_SOURCE_CALL_VALUE(unsigned, kSourceValueWideBytes, 16)
+LOCAL_SOURCE_CALL_VALUE(unsigned, kSourceValueRecordFields, 2)
+LOCAL_SOURCE_CALL_TEXT(kDifferentOpaqueRecordName, "OtherNode")
+
+#undef LOCAL_SOURCE_CALL_TEXT
+#undef LOCAL_SOURCE_CALL_VALUE

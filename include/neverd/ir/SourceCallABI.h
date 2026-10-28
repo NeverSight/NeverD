@@ -9,8 +9,9 @@ struct BinaryImage;
 std::optional<int64_t> sourceCallReturnAddressBias(const BinaryImage *Image,
                                                    Arch Architecture,
                                                    va_t Address);
-/// Place a bounded analyst scalar/pointer declaration with the ordinary image
-/// ABI. This does not authenticate the declaration or authorize native effects.
+/// Place a bounded analyst declaration with the ordinary image ABI. Fixed
+/// Darwin ARM64 calls include complete 128-bit and supported direct records.
+/// This does not authenticate the declaration or authorize native effects.
 bool assignAnalystCallABI(SourceCallTypeHint &Hint, Arch Architecture,
                           BinaryFormat Format, std::string &Diagnostic);
 /// System V x64 variadic floating operands also need the original AL vector
@@ -35,6 +36,8 @@ bool sourceCallStackArgumentsDefined(const LowFunc &Function,
                                      std::string &Diagnostic);
 /// Require actual SSA inputs, including an indirect target; unknown clobbers,
 /// incomplete live-ins, ambiguous occurrences and unseeded cycles refuse.
+/// Bit-preserving copies/slices require only the source bytes they observe;
+/// unused record padding cannot supply a defined argument value.
 bool sourceCallArgumentsDefined(const MedFunc &Function,
                                 const SourceCallOccurrenceKey &Site,
                                 std::string &Diagnostic);

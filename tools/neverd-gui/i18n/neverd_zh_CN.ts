@@ -344,6 +344,50 @@
         <translation>移动到高亮标识符的下一处出现位置</translation>
     </message>
     <message>
+        <source>Lock or &amp;unlock</source>
+        <translation>锁定或解锁(&amp;U)</translation>
+    </message>
+    <message>
+        <source>Keep the highlighted word highlighted in the first free color, or unlock it</source>
+        <translation>用第一个空闲颜色保持高亮当前高亮的单词，或取消锁定</translation>
+    </message>
+    <message>
+        <source>Color &amp;1</source>
+        <translation>颜色 1(&amp;1)</translation>
+    </message>
+    <message>
+        <source>Color &amp;2</source>
+        <translation>颜色 2(&amp;2)</translation>
+    </message>
+    <message>
+        <source>Color &amp;3</source>
+        <translation>颜色 3(&amp;3)</translation>
+    </message>
+    <message>
+        <source>Color &amp;4</source>
+        <translation>颜色 4(&amp;4)</translation>
+    </message>
+    <message>
+        <source>Color &amp;5</source>
+        <translation>颜色 5(&amp;5)</translation>
+    </message>
+    <message>
+        <source>Color &amp;6</source>
+        <translation>颜色 6(&amp;6)</translation>
+    </message>
+    <message>
+        <source>Color &amp;7</source>
+        <translation>颜色 7(&amp;7)</translation>
+    </message>
+    <message>
+        <source>Color &amp;8</source>
+        <translation>颜色 8(&amp;8)</translation>
+    </message>
+    <message>
+        <source>Lock the highlighted word in this color, or unlock the color</source>
+        <translation>用此颜色锁定高亮的单词，或解除此颜色的锁定</translation>
+    </message>
+    <message>
         <source>&amp;Find in view...</source>
         <translation>在视图中查找(&amp;F)...</translation>
     </message>
@@ -1612,6 +1656,10 @@
         <translation>搜索(&amp;S)</translation>
     </message>
     <message>
+        <source>&amp;Lock highlight</source>
+        <translation>锁定高亮(&amp;L)</translation>
+    </message>
+    <message>
         <source>&amp;View</source>
         <translation>视图(&amp;V)</translation>
     </message>
@@ -2290,6 +2338,14 @@ Double-click to go to the declaration.</source>
     <message>
         <source>Laying out graph…</source>
         <translation>正在进行图形布局…</translation>
+    </message>
+    <message>
+        <source>From %1</source>
+        <translation>来自 %1</translation>
+    </message>
+    <message>
+        <source>To %1</source>
+        <translation>去往 %1</translation>
     </message>
 </context>
 <context>

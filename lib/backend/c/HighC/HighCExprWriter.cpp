@@ -7422,14 +7422,24 @@ std::string HighCWriter::exprStrImpl(const HighExpr &E, int ParentPrec,
     }
     return Result + "}";
   }
-  case ExprKind::Field:
+  case ExprKind::Field: {
     if (E.Operands.size() != 1 || !E.Operands[0] || !E.Operands[0]->Type ||
         E.Operands[0]->Type->Kind != NdTypeKind::Struct ||
         E.ConstVal >= E.Operands[0]->Type->Fields.size() ||
         !equalSourceTypes(E.Type, E.Operands[0]->Type->Fields[E.ConstVal]))
       llvm::report_fatal_error("HighC cannot render an invalid source field");
+    const auto &Record = E.Operands[0]->Type;
+    if (!Record->SourceName.empty()) {
+      const auto Field = Record->displayFieldPathAt(
+          Record->FieldOffsets[E.ConstVal], E.Type->Size,
+          /*EnterNestedAtZero=*/false);
+      if (!Field)
+        throw std::runtime_error(c_detail::kUnknownNamedRecordField);
+      return "(" + exprStr(*E.Operands[0]) + ")." + *Field;
+    }
     return "(" + exprStr(*E.Operands[0]) + ").field_" +
            std::to_string(E.ConstVal);
+  }
   default:
     return "/* unknown expr */";
   }

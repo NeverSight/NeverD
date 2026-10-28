@@ -76,6 +76,13 @@ TypeRef typedParameter(char Kind) {
   if (Kind == kPointerKind)
     return NdType::makePtr(NdType::makeVoid());
   switch (Kind) {
+#define A64_CALL_RECORD_TYPE(Kind, Fields)                                     \
+  case Kind: {                                                                 \
+    std::vector<TypeRef> Members;                                              \
+    for (char Field : llvm::StringRef(Fields))                                 \
+      Members.push_back(typedParameter(Field));                                \
+    return NdType::makeStruct(std::move(Members));                             \
+  }
 #define A64_CALL_INTEGER_TYPE(Kind, Bytes, Signed)                             \
   case Kind:                                                                   \
     return NdType::makeInt(Bytes, Signed);
@@ -381,15 +388,25 @@ TEST(AArch64AuthenticatedCall, ExplicitTypesKeepAuthenticationOnTheCall) {
       // All entry carriers remain full-width integers so the independently
       // compiled ELF probe and Darwin wrapper have the same outer ABI. Only
       // the inner call projects the original scalar types and PCS.
+      auto Hint = std::make_shared<SourceCallTypeHint>();
+      Hint->AnalystFixedCount = Shape.Fixed;
+      const auto ReturnType = typedParameter(Shape.ReturnKind);
+      Hint->Signature.ReturnType = ReturnType;
+      for (char Kind : Shape.Parameters)
+        Hint->Signature.Parameters.push_back(
+            {kTypedArgument, typedParameter(Kind)});
+      std::string Diagnostic;
+      ASSERT_TRUE(assignAnalystCallABI(*Hint, Arch::AArch64,
+                                       BinaryFormat::MachO, Diagnostic))
+          << Diagnostic;
+      const auto Bindings = sourceABIParameters(Hint->Signature);
       auto Function =
-          function(Variant.Key, false, Shape.Parameters.size(), Variant.Raw);
+          function(Variant.Key, false, Bindings.size(), Variant.Raw);
       auto &Block = Function.Blocks.front();
       MedOp Call = Block.Ops[Variant.Raw ? 0 : 1];
-      auto Hint = std::make_shared<SourceCallTypeHint>();
       Hint->CallKind = SourceCallTypeHint::Kind::Analyst;
       Call.Addr = kEntryAddress;
       Call.OriginSeq = 0;
-      const auto ReturnType = typedParameter(Shape.ReturnKind);
       Call.Output.Size = ReturnType->Size;
       Hint->AnalystSite = SourceCallOccurrenceKey{Call.Addr, Call.OriginSeq,
                                                   NdOp::INDIR_CALL, 0};
@@ -397,9 +414,8 @@ TEST(AArch64AuthenticatedCall, ExplicitTypesKeepAuthenticationOnTheCall) {
       Hint->Signature.ReturnType = ReturnType;
       std::vector<MedOp> Setup;
       std::vector<MedVar> Arguments;
-      for (unsigned I = 0; I < Shape.Parameters.size(); ++I) {
-        const auto Type = typedParameter(Shape.Parameters[I]);
-        Hint->Signature.Parameters.push_back({kTypedArgument, Type});
+      for (unsigned I = 0; I < Bindings.size(); ++I) {
+        const auto Type = Bindings[I].Type;
         auto Argument = Function.Params[I + 2];
         if (Type->Size < Argument.Size) {
           MedOp Narrow;
@@ -414,10 +430,6 @@ TEST(AArch64AuthenticatedCall, ExplicitTypesKeepAuthenticationOnTheCall) {
         Call.addInput(Argument);
         Arguments.push_back(Argument);
       }
-      std::string Diagnostic;
-      ASSERT_TRUE(assignAnalystCallABI(*Hint, Arch::AArch64,
-                                       BinaryFormat::MachO, Diagnostic))
-          << Diagnostic;
       Call.SourceCallHint = Hint;
       if (!Variant.Raw) {
         auto Authentication = Block.Ops.front();
@@ -429,6 +441,9 @@ TEST(AArch64AuthenticatedCall, ExplicitTypesKeepAuthenticationOnTheCall) {
       Info.OpIdx = Setup.size();
       Info.Args = std::move(Arguments);
       Info.SourceCallHint = Hint;
+      if (ReturnType->Kind == NdTypeKind::Struct ||
+          ReturnType->Size > kPointerBytes)
+        Call.Output.Kind = MedVar::Temp;
       Setup.push_back(Call);
       auto Return = Block.Ops.back();
       Return.Inputs[0] = Call.Output;
@@ -443,6 +458,47 @@ TEST(AArch64AuthenticatedCall, ExplicitTypesKeepAuthenticationOnTheCall) {
         Widen.addInput(Call.Output);
         Return.Inputs[0] = Widen.Output;
         Setup.push_back(std::move(Widen));
+      }
+      if (ReturnType->Kind == NdTypeKind::Struct ||
+          ReturnType->Size > kPointerBytes) {
+        MedVar Accumulator = MedVar::makeConst(0, kPointerBytes);
+        int Id = kTypedTemporaryId + Bindings.size();
+        unsigned Version = Call.Output.SSAVer;
+        for (const auto &Member : sourceABIValueMembers(ReturnType)) {
+          MedOp Extract;
+          Extract.Opcode = NdOp::SUBBYTES;
+          Extract.Output.Kind = MedVar::Temp;
+          Extract.Output.Id = Id++;
+          Extract.Output.Size = Member.Type->Size;
+          Extract.addInput(Call.Output);
+          Extract.addInput(
+              MedVar::makeConst(Member.ByteOffset, kPromotedIntegerBytes));
+          auto Value = Extract.Output;
+          Setup.push_back(std::move(Extract));
+          if (Value.Size < kPointerBytes) {
+            MedOp Extend;
+            Extend.Opcode = NdOp::INT_ZEXT;
+            Extend.Output.Kind = MedVar::Temp;
+            Extend.Output.Id = Id++;
+            Extend.Output.Size = kPointerBytes;
+            Extend.addInput(Value);
+            Value = Extend.Output;
+            Setup.push_back(std::move(Extend));
+          }
+          MedOp Mix;
+          Mix.Opcode = NdOp::INT_XOR;
+          Mix.Output = Return.Inputs[0];
+          Mix.Output.Kind = MedVar::Reg;
+          Mix.Output.Id = Id++;
+          Mix.Output.RegOff = a64reg::X0;
+          Mix.Output.Size = kPointerBytes;
+          Mix.Output.SSAVer = ++Version;
+          Mix.addInput(Accumulator);
+          Mix.addInput(Value);
+          Accumulator = Mix.Output;
+          Setup.push_back(std::move(Mix));
+        }
+        Return.Inputs[0] = Accumulator;
       }
       Setup.push_back(std::move(Return));
       Block.Ops = std::move(Setup);
@@ -468,10 +524,10 @@ TEST(AArch64AuthenticatedCall, ExplicitTypesKeepAuthenticationOnTheCall) {
               EXPECT_EQ(Type->getNumParams(), Shape.Fixed >= 0
                                                   ? unsigned(Shape.Fixed)
                                                   : Shape.Parameters.size());
-              const auto Width = [](const llvm::Type *Type) {
-                return Type->isPointerTy()
-                           ? kPointerBytes * kBitsPerByte
-                           : Type->getPrimitiveSizeInBits().getFixedValue();
+              const auto Width = [&](llvm::Type *Type) {
+                return Candidate.getDataLayout()
+                    .getTypeStoreSizeInBits(Type)
+                    .getFixedValue();
               };
               EXPECT_EQ(Width(Call->getType()),
                         ReturnType->Size * kBitsPerByte);
@@ -483,7 +539,7 @@ TEST(AArch64AuthenticatedCall, ExplicitTypesKeepAuthenticationOnTheCall) {
                                                  ? llvm::Attribute::SExt
                                                  : llvm::Attribute::ZExt));
               for (unsigned I = 0; I < Shape.Parameters.size(); ++I) {
-                const auto *Argument = Call->getArgOperand(I)->getType();
+                auto *Argument = Call->getArgOperand(I)->getType();
                 const auto Expected = typedParameter(Shape.Parameters[I]);
                 EXPECT_EQ(Width(Argument), Expected->Size * kBitsPerByte);
                 if (Expected->Kind == NdTypeKind::Int &&

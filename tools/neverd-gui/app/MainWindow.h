@@ -109,6 +109,7 @@ public:
   InstanceServer &instanceServer() { return instances_; }
   /// The active disassembly view; Alt+Enter can open independent views.
   DisassemblyView *disassembly() const { return disassembly_; }
+  const AddressSpace &addressSpace() const { return space_; }
   ActionRegistry &actions() { return actions_; }
   /// The window's menus, which sit in its title bar when it draws its own
   /// frame.  This hides QMainWindow::menuBar(), which would replace that
@@ -301,6 +302,8 @@ private:
   void searchBinary(const QString &kind, bool again);
   void queryRegister(const QString &kind);
   void searchHighlight(bool forward);
+  /// Lock highlight: color \p slot, or the first free color.
+  void lockHighlight(std::optional<int> slot);
   void stepFunction(bool forward);
   void showCalculator();
   void showAbout();

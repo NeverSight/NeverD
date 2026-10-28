@@ -134,17 +134,13 @@ TEST(FloatingCallArguments, HFAPlacementKeepsCompleteRecordsAndResultFields) {
         Overflow.push_back(Record);
         const auto Spilled =
             floatingCallArguments(Arch::AArch64, Format, Scalar, Overflow);
-        if (Format == BinaryFormat::MachO) {
-          EXPECT_FALSE(Spilled);
-        } else {
-          ASSERT_TRUE(Spilled);
-          ASSERT_EQ(Spilled->Scalars.size(), 9u);
-          for (unsigned I = 0; I < Count; ++I) {
-            const auto &Member = Spilled->Scalars[9 - Count + I];
-            EXPECT_EQ(Member.Kind, SourceABICarrierKind::Stack);
-            EXPECT_EQ(Member.StackOffset, I * Bytes);
-            EXPECT_EQ(Member.Bytes, Bytes);
-          }
+        ASSERT_TRUE(Spilled);
+        ASSERT_EQ(Spilled->Scalars.size(), 9u);
+        for (unsigned I = 0; I < Count; ++I) {
+          const auto &Member = Spilled->Scalars[9 - Count + I];
+          EXPECT_EQ(Member.Kind, SourceABICarrierKind::Stack);
+          EXPECT_EQ(Member.StackOffset, I * Bytes);
+          EXPECT_EQ(Member.Bytes, Bytes);
         }
       }
       Record->Size += Bytes;

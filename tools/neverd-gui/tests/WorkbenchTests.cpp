@@ -4786,6 +4786,185 @@ private slots:
       QCOMPARE(copyAt(QStringLiteral("Device->"), 1), QStringLiteral("Device"));
   }
 
+  void lockedHighlightsStayAcrossMovesAndViews() {
+    // IDA's Lock highlight keeps words colored as the cursor moves on:
+    // Ctrl+Alt+1..8 lock or free a color and Ctrl+Alt+0 takes the first free
+    // one, from the disassembly or a code window.
+    QTemporaryDir directory;
+    Workbench bench;
+    bench.window->openFile(writeFixture(directory, "fixture.bin"));
+    QTRY_VERIFY_WITH_TIMEOUT(bench.session.loaded(), OpenTimeoutMs);
+    auto *assembly = bench.window->disassembly();
+    assembly->navigate(Base + 0x50);
+    QTRY_COMPARE(assembly->currentFunction(),
+                 std::optional<Address>(Base + 0x50));
+    bench.window->activateWindow();
+    QVERIFY(QTest::qWaitForWindowActive(bench.window.get()));
+    auto *listing = assembly->listing();
+    QTRY_VERIFY(listing->cursorLine());
+    listing->setFocus();
+    QTRY_VERIFY(listing->hasFocus());
+    const auto &locks = bench.session.highlightLocks();
+    const auto key = [](QWidget *view, Qt::Key digit) {
+      QTest::keyClick(view, digit, Qt::ControlModifier | Qt::AltModifier);
+    };
+    // The cursor on `rbx` of function_5's `push rbx`.
+    for (int i = 0; i < 40 && !listing->cursorLine()->styled.text.contains(
+                                  QStringLiteral("rbx"));
+         ++i)
+      QTest::keyClick(listing, Qt::Key_Down);
+    const QString row = listing->cursorLine()->styled.text;
+    const int at = int(row.indexOf(QStringLiteral("rbx")));
+    QVERIFY2(at >= 0, qPrintable(row));
+    QTest::keyClick(listing, Qt::Key_Home);
+    for (int i = 0; i <= at; ++i)
+      QTest::keyClick(listing, Qt::Key_Right);
+    QCOMPARE(listing->currentToken(), QStringLiteral("rbx"));
+    key(listing, Qt::Key_1);
+    QCOMPARE(locks.word(0), QStringLiteral("rbx"));
+    // The word keeps its color with the cursor gone from it.
+    const QRect onWord = listing->cursorViewportRect();
+    QTest::keyClick(listing, Qt::Key_Home);
+    const QImage shown = listing->viewport()->grab().toImage();
+    const qreal ratio = shown.devicePixelRatio();
+    QCOMPARE(shown.pixelColor(int(onWord.x() * ratio),
+                              int((onWord.y() + 1) * ratio)),
+             Theme::instance().color(ColorRole::HighlightLock1));
+    QTest::keyClick(listing, Qt::Key_Down);
+    QCOMPARE(locks.word(0), QStringLiteral("rbx"));
+    key(listing, Qt::Key_1);
+    QVERIFY(locks.word(0).isEmpty());
+    QTest::keyClick(listing, Qt::Key_Up);
+    QTest::keyClick(listing, Qt::Key_Home);
+    for (int i = 0; i <= at; ++i)
+      QTest::keyClick(listing, Qt::Key_Right);
+    QCOMPARE(listing->currentToken(), QStringLiteral("rbx"));
+    key(listing, Qt::Key_0);
+    QCOMPARE(locks.word(0), QStringLiteral("rbx"));
+
+    // A code window locks the word under its own cursor.
+    bench.action(ActionId::ViewPseudocode)->trigger();
+    auto *code = bench.codeView(QStringLiteral("source"))->text();
+    QTRY_VERIFY_WITH_TIMEOUT(code->complete(), OpenTimeoutMs);
+    code->setFocus();
+    QTRY_VERIFY(code->hasFocus());
+    code->setCursorLine(0);
+    const int word = int(code->selectedText().indexOf(QStringLiteral("code")));
+    QVERIFY2(word >= 0, qPrintable(code->selectedText()));
+    QTest::keyClick(code, Qt::Key_Home);
+    for (int i = 0; i <= word; ++i)
+      QTest::keyClick(code, Qt::Key_Right);
+    QCOMPARE(code->cursorWord(), QStringLiteral("code"));
+    key(code, Qt::Key_2);
+    QCOMPARE(locks.word(1), QStringLiteral("code"));
+    QCOMPARE(locks.word(0), QStringLiteral("rbx"));
+
+    // Search > Lock highlight lists the commands, each color with its swatch.
+    auto *menu = bench.window->findChild<QMenu *>(
+        QStringLiteral("menuLockHighlight"));
+    QVERIFY(menu);
+    QStringList commands;
+    for (auto *action : menu->actions())
+      if (!action->isSeparator()) {
+        commands.append(action->shortcut().toString(QKeySequence::PortableText));
+        QVERIFY(!action->icon().isNull());
+      }
+    QCOMPARE(commands, (QStringList{"Ctrl+Alt+0", "Ctrl+Alt+1", "Ctrl+Alt+2",
+                                    "Ctrl+Alt+3", "Ctrl+Alt+4", "Ctrl+Alt+5",
+                                    "Ctrl+Alt+6", "Ctrl+Alt+7", "Ctrl+Alt+8"}));
+
+    // Closing the file frees every color.
+    bench.session.closeFile();
+    QTRY_VERIFY_WITH_TIMEOUT(!bench.session.loaded(), OpenTimeoutMs);
+    QVERIFY(locks.word(0).isEmpty());
+    QVERIFY(locks.word(1).isEmpty());
+  }
+
+  void graphEdgesSelectAndShowTheirOtherEnd() {
+    // As in IDA, a click on a graph edge selects it and a hover shows the
+    // block at its far end: where it comes from beside its arrow, where it
+    // goes elsewhere.
+    QTemporaryDir directory;
+    Workbench bench;
+    bench.window->openFile(writeFixture(directory, "fixture.bin"));
+    QTRY_VERIFY_WITH_TIMEOUT(bench.session.loaded(), OpenTimeoutMs);
+    auto *assembly = bench.window->disassembly();
+    // function_6 branches around a push and joins again.
+    assembly->navigate(Base + 0x60);
+    QTRY_COMPARE(assembly->currentFunction(),
+                 std::optional<Address>(Base + 0x60));
+    assembly->setGraphMode(true);
+    auto *graph = assembly->graph();
+    QTRY_VERIFY(assembly->graphMode() && graph->loaded());
+    bench.window->activateWindow();
+    QVERIFY(QTest::qWaitForWindowActive(bench.window.get()));
+    graph->setFocus();
+    QTest::keyClick(graph, Qt::Key_1);
+    // The middle of the longest segment of an edge with both ends.
+    int chosen = -1;
+    QPointF first, second;
+    qreal longest = 0;
+    for (int e = 0; e < graph->edges().size(); ++e) {
+      const auto &edge = graph->edges()[e];
+      if (edge.from < 0 || edge.to < 0)
+        continue;
+      for (int i = 1; i < edge.points.size(); ++i) {
+        const QPointF step = edge.points[i] - edge.points[i - 1];
+        if (const qreal length = std::hypot(step.x(), step.y());
+            length > longest) {
+          longest = length;
+          chosen = e;
+          first = edge.points[i - 1];
+          second = edge.points[i];
+        }
+      }
+    }
+    QVERIFY(chosen >= 0 && longest > 20);
+    const auto edge = graph->edges()[chosen];
+    // A scene point, brought into view, in the graph's coordinates.
+    const auto widgetOf = [graph](QPointF scene) {
+      graph->centerOn(scene);
+      const QRectF view = graph->visibleScene();
+      const qreal scale = graph->width() / view.width();
+      return QPoint(qRound((scene.x() - view.left()) * scale),
+                    qRound((scene.y() - view.top()) * scale));
+    };
+    // A point on the edge a little way from \p end toward \p next.
+    const auto beside = [](QPointF end, QPointF next) {
+      QPointF along = next - end;
+      const qreal length = std::hypot(along.x(), along.y());
+      return end + along / length * std::min<qreal>(12, length / 2);
+    };
+    QTest::mouseClick(graph, Qt::LeftButton, Qt::NoModifier,
+                      widgetOf((first + second) / 2));
+    QCOMPARE(graph->selectedEdge(), std::optional<int>(chosen));
+
+    const auto &source = graph->nodes()[edge.from];
+    const auto &target = graph->nodes()[edge.to];
+    const QString from = graph->hintAt(widgetOf(
+        beside(edge.points.back(), edge.points[edge.points.size() - 2])));
+    QVERIFY2(from.startsWith(QStringLiteral("<b>From ")), qPrintable(from));
+    QVERIFY2(from.contains(source.rows.back().styled.text.toHtmlEscaped()),
+             qPrintable(from));
+    const QString to =
+        graph->hintAt(widgetOf(beside(edge.points.front(), edge.points[1])));
+    QVERIFY2(to.startsWith(QStringLiteral("<b>To ") +
+                           displayAddress(target.start, 16)),
+             qPrintable(to));
+    QVERIFY2(to.contains(target.rows.front().styled.text.toHtmlEscaped()),
+             qPrintable(to));
+    // A hover asks for the same hint.
+    const QPoint near = widgetOf(beside(edge.points.front(), edge.points[1]));
+    QHelpEvent help(QEvent::ToolTip, near, graph->mapToGlobal(near));
+    QApplication::sendEvent(graph, &help);
+    QVERIFY(help.isAccepted());
+
+    // A click on a block lets the edge go.
+    QTest::mouseClick(graph, Qt::LeftButton, Qt::NoModifier,
+                      widgetOf(source.box.center()));
+    QVERIFY(!graph->selectedEdge());
+  }
+
   void tabFromCodeUsesSelectedInstruction_data() {
     QTest::addColumn<QString>("representation");
     QTest::addColumn<bool>("native");
@@ -12942,7 +13121,8 @@ private slots:
     });
     const QString recent = hexAddress(Base + 0x40);
     QSettings().setValue(QStringLiteral("jump/history"), QStringList{recent});
-    JumpDialog dialog(bench.session, bench.window.get());
+    JumpDialog dialog(bench.session, bench.window->addressSpace(),
+                      std::nullopt, bench.window.get());
     auto *input = dialog.findChild<QLineEdit *>();
     auto *matches = dialog.findChild<QListWidget *>();
     QVERIFY(input && matches);
@@ -12958,6 +13138,38 @@ private slots:
     input->setText(QStringLiteral("function_2"));
     QVERIFY2(!matches->currentItem(),
              "The previous expression kept its jump target.");
+  }
+
+  void jumpDialogPreviewsWhereEnterGoes() {
+    // Beside the matches the dialog previews where Enter goes: the chosen
+    // match, else the typed expression; text naming nothing shows nothing.
+    QTemporaryDir directory;
+    Workbench bench;
+    bench.window->openFile(
+        writeFixture(directory, QStringLiteral("fixture.bin")));
+    QTRY_VERIFY_WITH_TIMEOUT(
+        bench.session.indexReady() && !bench.session.busy(), OpenTimeoutMs);
+    JumpDialog dialog(bench.session, bench.window->addressSpace(), Base,
+                      bench.window.get());
+    auto *input = dialog.findChild<QLineEdit *>();
+    auto *matches = dialog.findChild<QListWidget *>();
+    auto *preview =
+        dialog.findChild<ListingView *>(QStringLiteral("jumpPreview"));
+    QVERIFY(input && matches && preview);
+    QCOMPARE(preview->focusPolicy(), Qt::NoFocus);
+    input->setText(displayAddress(Base + 0x140, 16));
+    QTRY_COMPARE_WITH_TIMEOUT(preview->currentItem(),
+                              std::optional<Address>(Base + 0x140),
+                              OpenTimeoutMs);
+    input->setText(QStringLiteral("function_5"));
+    QTRY_VERIFY_WITH_TIMEOUT(matches->count() > 0, OpenTimeoutMs);
+    matches->setCurrentRow(0);
+    QCOMPARE(matches->item(0)->text(), QStringLiteral("function_5"));
+    QTRY_COMPARE_WITH_TIMEOUT(preview->currentItem(),
+                              std::optional<Address>(Base + 0x50),
+                              OpenTimeoutMs);
+    input->setText(QStringLiteral("no_such_name_anywhere"));
+    QTRY_VERIFY_WITH_TIMEOUT(!preview->currentItem(), OpenTimeoutMs);
   }
 
   void viewsFollowTheSessionAndNavigation() {

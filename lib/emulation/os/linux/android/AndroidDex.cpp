@@ -120,6 +120,15 @@ llvm::Error Bionic::initializeDex() {
           (uint64_t(Now->Seconds) * 1000000000 + Now->Nanoseconds) / Divisor};
     };
     mobile::dalvik::RuntimeServices Services;
+    Services.binder_thread_policy = [this] {
+      return mobile::dalvik::ExecutionResult{
+          mobile::dalvik::ExecutionStop::Returned,
+          binderThread().StrictModePolicy};
+    };
+    Services.set_binder_thread_policy = [this](uint32_t Policy) {
+      binderThread().StrictModePolicy = Policy;
+      return mobile::dalvik::ExecutionResult{};
+    };
     Services.event_log_write = [this](std::span<const uint8_t> Payload) {
       using mobile::dalvik::ExecutionResult;
       using mobile::dalvik::ExecutionStop;

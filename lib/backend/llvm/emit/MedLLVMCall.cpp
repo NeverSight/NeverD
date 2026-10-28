@@ -18,6 +18,7 @@
 #include "neverd/backend/llvm/LLVMCallContract.h"
 #include "neverd/backend/llvm/LLVMFloatingCall.h"
 #include "neverd/backend/llvm/LLVMName.h"
+#include "neverd/backend/llvm/LLVMSourceCallValue.h"
 #include "neverd/backend/llvm/LLVMSourceMap.h"
 #include "neverd/backend/llvm/LLVMSourceTypeHints.h"
 #include "neverd/backend/llvm/LanguageEHMetadata.h"
@@ -851,6 +852,9 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
   if (CI && CI->SourceCallHint &&
       CI->SourceCallHint->CallKind == SourceCallTypeHint::Kind::Analyst) {
     const auto &Hint = *CI->SourceCallHint;
+#define LLVM_SOURCE_CALL_VALUE(Type, Name, Value) constexpr Type Name = Value;
+#define LLVM_SOURCE_CALL_TEXT(Name, Text) constexpr char Name[] = Text;
+#include "MedLLVMSourceCall.def"
     std::string Diagnostic;
     auto Refuse = [&](llvm::StringRef Reason) {
       syncError() << "source call contract: " << Reason << "\n";
@@ -861,14 +865,16 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
         Hint.AnalystSite->Sequence != Op.OriginSeq ||
         Hint.Signature.Architecture != TargetArch ||
         !validateSourceABI(Hint.Signature, Diagnostic) ||
-        Args.size() != Hint.Signature.Parameters.size()) {
+        Args.size() != sourceABIParameters(Hint.Signature).size()) {
       Refuse("invalid or non-source-only occurrence binding");
       return;
     }
     std::vector<llvm::Type *> Types;
     std::vector<llvm::Value *> Values;
+    const auto Bindings = sourceABIParameters(Hint.Signature);
+    std::vector<llvm::Value *> Carriers;
     for (unsigned I = 0; I < Args.size(); ++I) {
-      auto *Type = mapNdtype(Hint.Signature.Parameters[I].Type);
+      auto *Type = mapNdtype(Bindings[I].Type);
       auto *Value = Args[I];
       const auto Bits = [](llvm::Type *T) -> unsigned {
         return T->isPointerTy() ? 64
@@ -876,7 +882,7 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
       };
       if (!Type || Bits(Type) != Bits(Value->getType()) ||
           llvm::isa<llvm::UndefValue, llvm::PoisonValue>(Value)) {
-        Refuse("a complete argument carrier is unavailable");
+        Refuse(kSourceCallCarrierMissing);
         return;
       }
       if (Type != Value->getType()) {
@@ -887,7 +893,63 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
         else
           Value = Builder.CreateBitCast(Value, Type);
       }
-      Types.push_back(Type);
+      Carriers.push_back(Value);
+    }
+    const auto IntegerBits = [&](llvm::Value *Value) -> llvm::Value * {
+      if (Value->getType()->isPointerTy())
+        return Builder.CreatePtrToInt(Value, I64Ty);
+      if (Value->getType()->isIntegerTy())
+        return Value;
+      return Builder.CreateBitCast(
+          Value, llvm::Type::getIntNTy(
+                     *Ctx, Value->getType()->getPrimitiveSizeInBits()));
+    };
+    const auto Pack = [&](llvm::ArrayRef<llvm::Value *> Parts,
+                          llvm::ArrayRef<SourceAggregateMember> Members,
+                          unsigned Bytes) {
+      auto *Integer = llvm::Type::getIntNTy(*Ctx, Bytes * kSourceCallByteBits);
+      llvm::Value *Value = llvm::ConstantInt::get(Integer, 0);
+      for (unsigned I = 0; I < Parts.size(); ++I) {
+        auto *Part = Builder.CreateZExtOrTrunc(IntegerBits(Parts[I]), Integer);
+        if (Members[I].ByteOffset)
+          Part = Builder.CreateShl(Part,
+                                   Members[I].ByteOffset * kSourceCallByteBits);
+        Value = Builder.CreateOr(Value, Part);
+      }
+      return Value;
+    };
+    size_t At = 0;
+    for (const auto &Parameter : Hint.Signature.Parameters) {
+      if (Parameter.Components.empty()) {
+        Types.push_back(Carriers[At]->getType());
+        Values.push_back(Carriers[At++]);
+        continue;
+      }
+      const auto Members = sourceABIValueMembers(Parameter.Type);
+      const llvm::ArrayRef<llvm::Value *> Parts(Carriers.data() + At,
+                                                Members.size());
+      At += Members.size();
+      auto *Packed = Pack(Parts, Members, Parameter.Type->Size);
+      if (Parameter.Type->Kind == NdTypeKind::Int) {
+        Types.push_back(Packed->getType());
+        Values.push_back(Packed);
+        continue;
+      }
+      const bool Floating = Members.front().Type->Kind == NdTypeKind::Float;
+      auto *Array = llvm::cast<llvm::ArrayType>(
+          llvmSourceCallValueType(*Ctx, Parameter.Type, /*Parameter=*/true));
+      const unsigned Count = Array->getNumElements();
+      llvm::Value *Value = llvm::PoisonValue::get(Array);
+      for (unsigned I = 0; I < Count; ++I) {
+        auto *Part =
+            Floating ? Parts[I]
+                     : Builder.CreateZExtOrTrunc(
+                           Builder.CreateLShr(Packed, I * kSourceCallWordBytes *
+                                                          kSourceCallByteBits),
+                           I64Ty);
+        Value = Builder.CreateInsertValue(Value, Part, {I});
+      }
+      Types.push_back(Array);
       Values.push_back(Value);
     }
     const unsigned Fixed =
@@ -897,8 +959,12 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
       return;
     }
     std::vector<llvm::Type *> Prefix(Types.begin(), Types.begin() + Fixed);
-    auto *FT = llvm::FunctionType::get(mapNdtype(Hint.Signature.ReturnType),
-                                       Prefix, Hint.AnalystFixedCount >= 0);
+    auto *ReturnType = llvmSourceCallValueType(*Ctx, Hint.Signature.ReturnType,
+                                               /*Parameter=*/false);
+    const auto ReturnMembers =
+        sourceAggregateMembers(Hint.Signature.ReturnType);
+    auto *FT = llvm::FunctionType::get(ReturnType, Prefix,
+                                       Hint.AnalystFixedCount >= 0);
     llvm::Value *Callable = Target;
     if (!Callable) {
       auto Name = resolveCalleeName();
@@ -969,8 +1035,27 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
       Builder.CreateUnreachable();
       return;
     }
-    if (Op.Output.Size && !Call->getType()->isVoidTy())
-      setVar(Op.Output, Call, Builder);
+    if (Op.Output.Size && !Call->getType()->isVoidTy()) {
+      llvm::Value *Value = Call;
+      if (!ReturnMembers.empty()) {
+        std::vector<llvm::Value *> Parts;
+        std::vector<SourceAggregateMember> Members;
+        const bool Floating =
+            ReturnMembers.front().Type->Kind == NdTypeKind::Float;
+        const unsigned Count =
+            llvm::cast<llvm::StructType>(ReturnType)->getNumElements();
+        for (unsigned I = 0; I < Count; ++I) {
+          Parts.push_back(Builder.CreateExtractValue(Call, {I}));
+          Members.push_back(
+              Floating ? ReturnMembers[I]
+                       : SourceAggregateMember{
+                             NdType::makeInt(kSourceCallWordBytes, false),
+                             uint16_t(I * kSourceCallWordBytes)});
+        }
+        Value = Pack(Parts, Members, Hint.Signature.ReturnType->Size);
+      }
+      setVar(Op.Output, Value, Builder);
+    }
     defineCallClobbers(Op, Builder);
     return;
   }

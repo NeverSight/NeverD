@@ -380,6 +380,10 @@ static const LibraryMethod Methods[] = {
     {"android/os/Parcel", "unmarshall", "([BII)V", ParcelData, false, true},
     {"android/os/Parcel", "writeInterfaceToken", "(Ljava/lang/String;)V",
      ParcelData, false, true},
+    {"android/os/Binder", "getThreadStrictModePolicy", "()I",
+     BinderGetStrictMode, true, true},
+    {"android/os/Binder", "setThreadStrictModePolicy", "(I)V",
+     BinderSetStrictMode, true, true},
 };
 
 struct LibraryStop {
@@ -506,7 +510,8 @@ ExecutionResult executeLibrary(Heap &heap, const LibraryMethod &M,
         M.Op == ServiceCheck || M.Op == ServiceInitCache ||
         M.Op == BinderAllowBlocking || M.Op == BinderQueryLocalInterface ||
         M.Op == ServiceAsBinder || M.Op == EventLogWrite ||
-        M.Op == ParcelData ||
+        M.Op == ParcelData || M.Op == BinderGetStrictMode ||
+        M.Op == BinderSetStrictMode ||
         (M.Op == Construct &&
          (std::string_view(M.Class) == "android/os/Handler" ||
           std::string_view(M.Class) ==

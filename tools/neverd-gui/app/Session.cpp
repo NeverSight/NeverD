@@ -178,6 +178,7 @@ Session::Session(QString workerPath, QObject *parent)
   connect(this, &Session::unloaded, this, [this] {
     patchRanges_.clear();
     emit bytePatchesChanged();
+    highlightLocks_.clear();
   });
   queries_.setCacheBudgetMiB(::neverd::limits::gui::kSessionCacheMiB);
   connect(&analysis_, &AnalysisPool::diagnostic, this,

@@ -2768,12 +2768,22 @@ static void validateArrayValueBoundaries(const llvm::Module &Mod,
     unsigned ArgumentWords = 0;
     bool WordParameters = true;
     bool HFAParameters = true;
+    bool DarwinRecordParameters = Target.isAArch64() && Target.isOSDarwin();
     CheckType(Ty->getReturnType(), false);
     for (auto *Param : Ty->params()) {
       HasArray |= containsArrayValue(Param);
       HasArrayParameter |= containsArrayValue(Param);
       CheckType(Param, true);
       const bool HFA = HFAABI && isAAPCS64HFAArray(Param);
+      DarwinRecordParameters &=
+          HFA || isDarwinAArch64WordArray(Param) || Param->isFloatTy() ||
+          Param->isDoubleTy() ||
+          (Param->isIntegerTy() &&
+           (Param->getIntegerBitWidth() <=
+                llvm::Type::getInt64Ty(Param->getContext())
+                    ->getIntegerBitWidth() ||
+            Param == llvm::Type::getInt128Ty(Param->getContext()))) ||
+          (Param->isPointerTy() && Param->getPointerAddressSpace() == 0);
       HasHFA |= HFA;
       HFAParameters &=
           HFA || Param->isFloatTy() || Param->isDoubleTy() ||
@@ -2806,8 +2816,9 @@ static void validateArrayValueBoundaries(const llvm::Module &Mod,
     // the raw aggregate. Do not infer that stack-argument ABI from its type.
     const unsigned RegisterWords = Target.isAArch64() ? 8 : 6;
     const bool ParametersFit =
-        HasHFA ? HFAParameters
-               : WordParameters && ArgumentWords <= RegisterWords;
+        DarwinRecordParameters ||
+        (HasHFA ? HFAParameters
+                : WordParameters && ArgumentWords <= RegisterWords);
     if (HasArrayParameter && (!ParametersFit || Ty->isVarArg()))
       throw std::runtime_error(
           "C projection has an unsupported array argument ABI");

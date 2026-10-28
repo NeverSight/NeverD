@@ -1159,15 +1159,23 @@ bool duplicateSmallReturnTails(std::vector<HighStmt> &Body, bool PrintedSize,
   // A tail that cannot raise an exception runs the same in any protection
   // made only of __except clauses: no handler can catch it, and none runs
   // on the way out of the try the way a __finally would.
-  std::set<TryContext::value_type> ExceptOnly;
+  // Nested SEH tries may share a range, and so a context entry: it is
+  // except-only when every try with that range is.
+  std::set<TryContext::value_type> ExceptOnly, WithFinally;
   walkStmts(Body, [&](const HighStmt &S) {
-    if (S.Kind == StmtKind::SEHTry && !S.EHClauses.empty() &&
+    if (S.Kind != StmtKind::SEHTry)
+      return;
+    if (!S.EHClauses.empty() &&
         std::all_of(S.EHClauses.begin(), S.EHClauses.end(),
                     [](const HighEHClause &Clause) {
                       return Clause.Kind == HighEHClauseKind::SEHExcept;
                     }))
       ExceptOnly.emplace(S.Kind, S.EHRange.Begin, S.EHRange.End);
+    else
+      WithFinally.emplace(S.Kind, S.EHRange.Begin, S.EHRange.End);
   });
+  for (const auto &Key : WithFinally)
+    ExceptOnly.erase(Key);
   auto SameProtection = [&](const TryContext &A, const TryContext &B,
                             const std::vector<HighStmt> &Tail) {
     if (A == B)

@@ -495,6 +495,24 @@ bool isIndirectCallDispatchThunk(std::string_view Name) {
       .Default(false);
 }
 
+namespace {
+/// A routine \p Imp's module exports under a name a program may also give a
+/// returning routine of its own (WindowsNoReturnImports.inc).
+bool isNoReturnModuleExport(const Import &Imp) {
+  const llvm::StringRef Module(Imp.Module);
+#define LIBC_NO_RETURN_IMPORT(Library, Routine)                                \
+  if (Imp.Name == Routine && Module.equals_insensitive(Library))               \
+    return true;
+#include "neverd/libc/WindowsNoReturnImports.inc"
+#undef LIBC_NO_RETURN_IMPORT
+  return false;
+}
+} // namespace
+
+bool isNoReturnImport(const Import &Imp) {
+  return isNoReturnFunction(Imp.Name) || isNoReturnModuleExport(Imp);
+}
+
 bool isNoReturnTarget(const BinaryImage &Img, va_t Target) {
   if (Target == InvalidVA)
     return false;
@@ -505,7 +523,7 @@ bool isNoReturnTarget(const BinaryImage &Img, va_t Target) {
     return false;
   const Import *Imp = Img.findImportAt(Target);
   if (Imp)
-    if (isNoReturnFunction(Imp->Name))
+    if (isNoReturnImport(*Imp))
       return true;
   // A pointer slot the loader binds to an import (an ELF GLOB_DAT or
   // JUMP_SLOT, a Mach-O bind): x86 calls through it as `call [slot]`.
@@ -538,14 +556,17 @@ NoReturnTargetIndex::NoReturnTargetIndex(const BinaryImage &Img,
     return isNoReturnFunction(Name) ||
            (this->Declared && !Name.empty() && this->Declared(Name));
   };
+  const auto NoReturnImport = [&](const Import &Imp) {
+    return NoReturn(Imp.Name) || isNoReturnModuleExport(Imp);
+  };
   // Preserve first-IAT precedence even when its name is empty or returning.
   // Only an address absent from the IAT map can use an exact stub spelling.
   for (const Import &Imp : Img.Imports)
-    if (ImportAddresses.insert(Imp.IATAddr).second && NoReturn(Imp.Name))
+    if (ImportAddresses.insert(Imp.IATAddr).second && NoReturnImport(Imp))
       Targets.insert(Imp.IATAddr);
   for (const auto &[Address, Index] : Img.ImportStubIndices)
     if (!ImportAddresses.count(Address) && Index < Img.Imports.size() &&
-        NoReturn(Img.Imports[Index].Name) && Img.findImportStubAt(Address))
+        NoReturnImport(Img.Imports[Index]) && Img.findImportStubAt(Address))
       Targets.insert(Address);
   // Pointer slots the loader binds to imports, which x86 calls through as
   // `call [slot]`; an import directory entry for the same slot decides.
@@ -612,7 +633,7 @@ bool NoReturnTargetIndex::contains(const BinaryImage &Img, va_t Target) const {
   };
   if (ResolveImport)
     if (const Import *Imp = Img.findImportStubAt(Target))
-      It->second = NoReturn(Imp->Name);
+      It->second = NoReturn(Imp->Name) || isNoReturnModuleExport(*Imp);
   if (SymbolsIndexed || It->second)
     return It->second;
   if (const Symbol *Sym = Img.findSymbolAt(Target))

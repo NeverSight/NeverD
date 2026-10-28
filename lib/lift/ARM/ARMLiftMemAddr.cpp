@@ -93,6 +93,15 @@ void ARMLifter::emitLdrdStrdWriteback(LiftState &S, const cs_insn *Insn,
   }
 }
 
+int64_t postIndexImmediate(const cs_arm &ARM, const cs_arm_op &MemOp) {
+  int64_t Offset = MemOp.mem.disp;
+  if (ARM.op_count >= 3 && ARM.operands[2].type == ARM_OP_IMM)
+    Offset = ARM.operands[2].imm;
+  if (MemOp.subtracted)
+    Offset = -(Offset < 0 ? -Offset : Offset);
+  return Offset;
+}
+
 NdVar ARMLifter::emitSingleMemAddr(LiftState &S, const cs_insn *Insn,
                                    const cs_arm &ARM, const cs_arm_op &MemOp) {
   // Post-indexed access uses the UNMODIFIED base; the entire offset (register
@@ -152,11 +161,7 @@ NdVar ARMLifter::emitSingleMemAddr(LiftState &S, const cs_insn *Insn,
       // Register post-index: base advances by the (shifted/signed) index.
       S.emit(NdOp::INT_ADD, BaseReg, {BaseReg, IndexOff});
     } else {
-      int64_t WBOffset = MemOp.mem.disp;
-      if (ARM.op_count >= 3 && ARM.operands[2].type == ARM_OP_IMM)
-        WBOffset = ARM.operands[2].imm;
-      if (MemOp.subtracted)
-        WBOffset = -(WBOffset < 0 ? -WBOffset : WBOffset);
+      const int64_t WBOffset = postIndexImmediate(ARM, MemOp);
       if (WBOffset != 0)
         S.emit(NdOp::INT_ADD, BaseReg,
                {BaseReg, NdVar::cst(static_cast<uint64_t>(

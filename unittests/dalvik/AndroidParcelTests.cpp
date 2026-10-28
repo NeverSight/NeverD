@@ -16,10 +16,12 @@
 #include <array>
 #include <cstdint>
 #include <initializer_list>
+#include <iterator>
 #include <map>
 #include <memory>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace neverd::mobile::dalvik {
@@ -31,8 +33,25 @@ struct State {
   std::shared_ptr<Heap> heap;
   AndroidFramework framework;
   explicit State(uint64_t bytes = ::neverd::limits::dalvik::kHeapByteLimit,
-                 uint32_t objects = ::neverd::limits::dalvik::kHeapObjectLimit)
-      : heap(std::make_shared<Heap>(bytes, objects)), framework({}, program) {}
+                 uint32_t objects = ::neverd::limits::dalvik::kHeapObjectLimit,
+                 RuntimeServices services = {})
+      : heap(std::make_shared<Heap>(bytes, objects)),
+        framework({}, program, std::move(services)) {}
+  explicit State(RuntimeServices services)
+      : State(::neverd::limits::dalvik::kHeapByteLimit,
+              ::neverd::limits::dalvik::kHeapObjectLimit, std::move(services)) {
+  }
+  ExecutionResult binder(const char *name, const char *signature,
+                         std::initializer_list<uint64_t> args = {},
+                         const AdmitInstruction &admit = Admit) {
+    auto [parameters, result] = prototype(signature);
+    const auto *entry =
+        libraryMethod({"Landroid/os/Binder;", name, parameters, result}, true);
+    EXPECT_NE(entry, nullptr);
+    return entry ? executeLibrary(*heap, *entry, 0, args, admit, false,
+                                  &program, &framework)
+                 : ExecutionResult{ExecutionStop::Invalid};
+  }
   ExecutionResult call(const char *name, const char *signature, uint64_t object,
                        std::initializer_list<uint64_t> args = {},
                        const AdmitInstruction &admit = Admit) {
@@ -283,6 +302,184 @@ TEST(AndroidParcelTest, InterfaceTokenStopsBeforeInventingBinderThreadPolicy) {
   EXPECT_NE(result.diagnostic.find("StrictMode"), std::string::npos);
   EXPECT_EQ(s.query(data, "dataSize"), 0u);
   EXPECT_EQ(s.query(reply, "dataSize"), 0u);
+}
+
+RuntimeServices policyServices(uint32_t &policy) {
+  RuntimeServices services;
+  services.binder_thread_policy = [&policy] {
+    return ExecutionResult{ExecutionStop::Returned, policy};
+  };
+  services.set_binder_thread_policy = [&policy](uint32_t value) {
+    policy = value;
+    return ExecutionResult{};
+  };
+  return services;
+}
+
+TEST(AndroidParcelTest, BinderPolicyUsesServicesAndAllJavaIntBits) {
+  uint32_t policy = 0x81234567;
+  State s(policyServices(policy));
+  const auto *get = libraryMethod(
+      {"Landroid/os/Binder;", "getThreadStrictModePolicy", {}, "I"}, true);
+  ASSERT_NE(get, nullptr);
+  EXPECT_TRUE(get->Final && get->Public);
+  EXPECT_EQ(s.binder("getThreadStrictModePolicy", "()I").value, policy);
+  for (uint64_t value :
+       {0ULL, 0x80000000ULL, 0xffffffffULL, 0xfeedface12345678ULL}) {
+    EXPECT_EQ(s.binder("setThreadStrictModePolicy", "(I)V", {value}).stop,
+              ExecutionStop::Returned);
+    EXPECT_EQ(policy, uint32_t(value));
+    EXPECT_EQ(s.binder("getThreadStrictModePolicy", "()I").value,
+              uint64_t(uint32_t(value)));
+  }
+  EXPECT_EQ(s.binder("setThreadStrictModePolicy", "(I)V", {0},
+                     [] { return ExecutionStop::InstructionLimit; })
+                .stop,
+            ExecutionStop::InstructionLimit);
+  EXPECT_EQ(policy, 0x12345678u);
+  State missing;
+  EXPECT_EQ(missing.binder("getThreadStrictModePolicy", "()I").stop,
+            ExecutionStop::Unsupported);
+  EXPECT_EQ(missing.binder("setThreadStrictModePolicy", "(I)V", {0}).stop,
+            ExecutionStop::Unsupported);
+}
+
+TEST(AndroidParcelTest, InterfaceTokenUsesCurrentPolicyAndExactUTF16WireBytes) {
+  uint32_t policy = 0;
+  State s(policyServices(policy));
+  auto string = s.heap->allocate(Object::String, "java/lang/String", 6);
+  ASSERT_NE(string, nullptr);
+  string->Length = 3;
+  string->Bytes = {0, 0, 0, 0xd8, 'X', 0};
+  const auto id = s.obtain();
+  struct Case {
+    uint32_t policy;
+    std::array<uint8_t, 4> wire;
+  };
+  for (auto test :
+       {Case{0, {0, 0, 0x40, 0}}, Case{0x80000001, {1, 0, 0x40, 0x80}},
+        Case{0x00400000, {0, 0, 0x40, 0}},
+        Case{0xffffffff, {0xff, 0xff, 0xff, 0xff}}}) {
+    policy = test.policy;
+    s.seek(id, 0);
+    auto result = s.call("writeInterfaceToken", "(Ljava/lang/String;)V", id,
+                         {string->Identity});
+    ASSERT_EQ(result.stop, ExecutionStop::Returned) << result.diagnostic;
+    std::vector<uint8_t> expected(test.wire.begin(), test.wire.end());
+    const uint8_t tail[] = {3, 0, 0, 0, 0, 0, 0, 0xd8, 'X', 0, 0, 0};
+    expected.insert(expected.end(), std::begin(tail), std::end(tail));
+    EXPECT_EQ(s.heap->get(id)->Bytes, expected);
+    EXPECT_EQ(s.query(id, "dataPosition"), 16u);
+    EXPECT_EQ(policy, test.policy);
+  }
+  const auto empty = s.obtain();
+  policy = 7;
+  ASSERT_EQ(s.call("writeInterfaceToken", "(Ljava/lang/String;)V", empty,
+                   {s.heap->literal("")->Identity})
+                .stop,
+            ExecutionStop::Returned);
+  EXPECT_EQ(s.heap->get(empty)->Bytes,
+            (std::vector<uint8_t>{7, 0, 0x40, 0, 0, 0, 0, 0, 0, 0, 0, 0}));
+}
+
+TEST(AndroidParcelTest, InterfaceTokenRefusesNullAndPropagatesServiceStops) {
+  unsigned reads = 0;
+  RuntimeServices services;
+  services.binder_thread_policy = [&] {
+    ++reads;
+    return ExecutionResult{ExecutionStop::Timeout, 0, {}, "policy stop"};
+  };
+  State s(std::move(services));
+  const auto id = s.obtain();
+  auto null = s.call("writeInterfaceToken", "(Ljava/lang/String;)V", id, {0});
+  EXPECT_EQ(null.stop, ExecutionStop::Unsupported);
+  EXPECT_NE(null.diagnostic.find("nonnull"), std::string::npos);
+  EXPECT_EQ(reads, 0u);
+  auto stopped = s.call("writeInterfaceToken", "(Ljava/lang/String;)V", id,
+                        {s.heap->literal("x")->Identity});
+  EXPECT_EQ(stopped.stop, ExecutionStop::Timeout);
+  EXPECT_EQ(stopped.diagnostic, "policy stop");
+  EXPECT_EQ(reads, 1u);
+  EXPECT_EQ(s.query(id, "dataPosition"), 0u);
+  EXPECT_TRUE(s.heap->get(id)->Bytes.empty());
+}
+
+TEST(AndroidParcelTest, InterfaceTokenWorkStopsPreserveCompletedHeaderWrites) {
+  uint32_t policy = 0x80000001;
+  for (unsigned budget : {1u, 3u, 5u}) {
+    State s(policyServices(policy));
+    const auto id = s.obtain();
+    unsigned remaining = budget;
+    auto result = s.call("writeInterfaceToken", "(Ljava/lang/String;)V", id,
+                         {s.heap->literal("abc")->Identity}, [&] {
+                           if (!remaining)
+                             return ExecutionStop::InstructionLimit;
+                           --remaining;
+                           return ExecutionStop::Returned;
+                         });
+    EXPECT_EQ(result.stop, ExecutionStop::InstructionLimit);
+    std::vector<uint8_t> expected = {1, 0, 0x40, 0x80, 3, 0, 0, 0};
+    expected.resize((budget - 1) * 2);
+    EXPECT_EQ(s.heap->get(id)->Bytes, expected);
+    EXPECT_EQ(s.query(id, "dataPosition"), expected.size());
+    EXPECT_EQ(policy, 0x80000001u);
+  }
+}
+
+TEST(AndroidParcelTest, DexBinderAndTokenCallsReuseRuntimeServices) {
+  constexpr auto Binder = "Landroid/os/Binder;";
+  Class caller;
+  caller.name = "Ltest/BinderCaller;";
+  caller.superclass = "Ljava/lang/Object;";
+  caller.access = {"public"};
+  Method method;
+  method.reference = {
+      caller.name, "write", {"I", Parcel, "Ljava/lang/String;"}, "I"};
+  method.access = {"public", "static"};
+  method.registers = 3;
+  Instruction set;
+  set.pc = 0;
+  set.opcode = "invoke-static";
+  set.registers = {0};
+  set.reference = MethodRef{Binder, "setThreadStrictModePolicy", {"I"}, "V"};
+  Instruction token;
+  token.pc = 3;
+  token.opcode = "invoke-virtual";
+  token.registers = {1, 2};
+  token.reference =
+      MethodRef{Parcel, "writeInterfaceToken", {"Ljava/lang/String;"}, "V"};
+  Instruction get;
+  get.pc = 6;
+  get.opcode = "invoke-static";
+  get.reference = MethodRef{Binder, "getThreadStrictModePolicy", {}, "I"};
+  Instruction move;
+  move.pc = 9;
+  move.opcode = "move-result";
+  move.registers = {0};
+  Instruction ret;
+  ret.pc = 10;
+  ret.opcode = "return";
+  ret.registers = {0};
+  method.instructions = {set, token, get, move, ret};
+  caller.methods.push_back(method);
+  Program program({caller}, std::map<std::string, std::string>{});
+  auto heap = std::make_shared<Heap>();
+  uint32_t policy = 17;
+  Runtime runtime(program, heap, {}, policyServices(policy));
+  const auto *obtain = libraryMethod({Parcel, "obtain", {}, Parcel}, true);
+  ASSERT_NE(obtain, nullptr);
+  auto data = runtime.library(*obtain, 0, {}, Admit);
+  ASSERT_EQ(data.stop, ExecutionStop::Returned);
+  const uint64_t args[] = {0x80000003, data.value,
+                           heap->literal("x")->Identity};
+  const auto *body = program.findMethod(method.reference, true);
+  ASSERT_NE(body, nullptr);
+  auto result = runtime.execute(*body, args, Admit, 65536);
+  ASSERT_EQ(result.stop, ExecutionStop::Returned) << result.diagnostic;
+  EXPECT_EQ(result.value, 0x80000003u);
+  EXPECT_EQ(policy, 0x80000003u);
+  EXPECT_EQ(heap->get(data.value)->Bytes,
+            (std::vector<uint8_t>{3, 0, 0x40, 0x80, 1, 0, 0, 0, 'x', 0, 0, 0}));
 }
 
 TEST(AndroidParcelTest, WorkStopsKeepTheAlreadyWrittenStringLength) {

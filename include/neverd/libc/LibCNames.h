@@ -379,6 +379,11 @@ std::optional<StackProbeEffect> stackProbeEffect(const BinaryImage &Img,
 /// panic, abort or exit) are known by their demangled path.
 bool isNoReturnFunction(std::string_view Name);
 
+/// True if \p Imp never returns: by its name (isNoReturnFunction), or as the
+/// routine its module exports under a name a program may also define for
+/// itself, as the Universal CRT exports `terminate`.
+bool isNoReturnImport(const Import &Imp);
+
 /// True if \p Target resolves through \p Img to a known no-return import
 /// veneer, or to a function the image exports or a symbol names so.  This is
 /// the image-aware counterpart of isNoReturnFunction() shared by discovery

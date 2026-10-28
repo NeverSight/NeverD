@@ -8,6 +8,8 @@
 #include "gtest/gtest.h"
 
 #include "neverd/backend/c/render/CTypeFormat.h"
+#include "neverd/ir/SourceABI.h"
+#include "neverd/ir/SourceCallABI.h"
 #include "neverd/types/TypeParse.h"
 
 #include <map>
@@ -17,6 +19,9 @@
 #include <vector>
 
 namespace {
+#define LOCAL_SOURCE_CALL_TEXT(Name, Text) constexpr char Name[] = Text;
+#define LOCAL_SOURCE_CALL_VALUE(Type, Name, Value) constexpr Type Name = Value;
+#include "LocalTypesSourceCallFixtures.def"
 
 /// Debug information that names functions and types none, as a PDB of
 /// public symbols does.
@@ -45,6 +50,52 @@ public:
 };
 
 } // namespace
+
+TEST(LocalTypesDebugContext, SourceCallDeclarationsRetainCompleteValueLayouts) {
+  using namespace neverd;
+  types::TypeLibrary Library(types::DataModel::LP64);
+  ASSERT_TRUE(types::parseCTypes(kSourceValueDeclarations, Library).ok());
+  const auto Parsed =
+      types::parseFunctionDeclaration(kSourceValueCall, Library);
+  ASSERT_TRUE(Parsed.ok());
+  ASSERT_TRUE(Parsed.Function);
+  SourceCallTypeHint Hint;
+  Hint.CallKind = SourceCallTypeHint::Kind::Analyst;
+  Hint.Signature.ReturnType =
+      sdk::sourceCallTypeOf(Library, *Parsed.Function->Return);
+  ASSERT_TRUE(Hint.Signature.ReturnType);
+  EXPECT_EQ(Hint.Signature.ReturnType->Fields.size(), kSourceValueRecordFields);
+  EXPECT_TRUE(
+      Hint.Signature.ReturnType->Fields.front()->Pointee->Fields.empty());
+  const auto Pointer = Hint.Signature.ReturnType->Fields.front();
+  auto OtherPointee = std::make_shared<NdType>(*Pointer->Pointee);
+  EXPECT_TRUE(equalSourceTypes(Pointer, NdType::makePtr(OtherPointee)));
+  OtherPointee->SourceName = kDifferentOpaqueRecordName;
+  EXPECT_FALSE(equalSourceTypes(Pointer, NdType::makePtr(OtherPointee)));
+  EXPECT_FALSE(equalSourceTypes(OtherPointee, OtherPointee));
+  for (const auto &Parameter : Parsed.Function->Params) {
+    const auto Value = sdk::sourceCallTypeOf(Library, *Parameter.Type);
+    ASSERT_TRUE(Value);
+    EXPECT_EQ(Value->Size, kSourceValueWideBytes);
+    if (Value->Kind == NdTypeKind::Struct) {
+      EXPECT_FALSE(Value->Fields.empty());
+      EXPECT_TRUE(
+          sdk::decompilerTypeOf(Library, *Parameter.Type)->Fields.empty());
+    }
+    Hint.Signature.Parameters.push_back({Parameter.Name, Value});
+  }
+  std::string Diagnostic;
+  ASSERT_TRUE(assignAnalystCallABI(Hint, Arch::AArch64, BinaryFormat::MachO,
+                                   Diagnostic))
+      << Diagnostic;
+  EXPECT_EQ(sourceABIParameters(Hint.Signature).size(),
+            kSourceValuePhysicalArguments);
+  const auto Unsupported =
+      types::parseFunctionDeclaration(kUnsupportedSourceValueCall, Library);
+  ASSERT_TRUE(Unsupported.ok());
+  for (const auto &Parameter : Unsupported.Function->Params)
+    EXPECT_FALSE(sdk::sourceCallTypeOf(Library, *Parameter.Type));
+}
 
 TEST(LocalTypesDebugContext,
      CallbackConventionsSurviveParameterAndReturnTypes) {

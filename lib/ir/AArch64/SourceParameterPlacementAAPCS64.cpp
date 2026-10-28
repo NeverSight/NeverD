@@ -11,7 +11,7 @@
 /// of at most 16 bytes in consecutive X registers, larger ones by the address
 /// of a copy.  Values the registers no longer hold go to 8-byte stack slots;
 /// Apple's arm64 packs fixed scalar spills by their natural size and
-/// alignment. Aggregate spills on Apple remain undescribed. An indirect
+/// alignment, including complete aggregate spills. An indirect
 /// result's address travels in X8, apart from the parameters.
 ///
 //===----------------------------------------------------------------------===//
@@ -70,10 +70,9 @@ std::optional<SourceParameterPlacement> source_placement::placeAAPCS64(
   size_t NextInteger = 0, NextVector = 0;
   int64_t NextStack = Layout.EntryStackBase;
   bool Undescribed = false;
-  auto OnStack = [&](uint16_t Bytes, uint16_t Align, bool Indirect = false,
-                     bool Scalar = false) {
+  auto OnStack = [&](uint16_t Bytes, uint16_t Align, bool Indirect = false) {
     std::vector<SourceParameterPiece> Pieces;
-    if ((F == BinaryFormat::MachO && !Scalar) || !Align) {
+    if (!Align) {
       Undescribed = true;
       return Pieces;
     }
@@ -88,18 +87,15 @@ std::optional<SourceParameterPlacement> source_placement::placeAAPCS64(
             : static_cast<int64_t>(llvm::alignTo(Bytes, kRegisterBytes));
     return Pieces;
   };
-  auto Integers = [&](uint16_t Bytes, bool EvenPair, bool Scalar = false) {
+  auto Integers = [&](uint16_t Bytes, uint16_t Align) {
     std::vector<SourceParameterPiece> Pieces;
     const size_t Count = (Bytes + kRegisterBytes - 1) / kRegisterBytes;
-    if (EvenPair && F != BinaryFormat::MachO)
+    if (Align == kIntegerPairRegisters * kRegisterBytes &&
+        F != BinaryFormat::MachO)
       NextInteger = llvm::alignTo(NextInteger, kIntegerPairRegisters);
     if (NextInteger + Count > Integer.size()) {
       NextInteger = Integer.size();
-      return OnStack(Bytes,
-                     Scalar ? Bytes
-                            : (EvenPair ? kIntegerPairRegisters * kRegisterBytes
-                                        : kRegisterBytes),
-                     /*Indirect=*/false, Scalar);
+      return OnStack(Bytes, Align);
     }
     for (size_t I = 0; I < Count; ++I) {
       const uint16_t Offset = static_cast<uint16_t>(I * kRegisterBytes);
@@ -129,21 +125,19 @@ std::optional<SourceParameterPlacement> source_placement::placeAAPCS64(
       if ((!isIntegerScalar(Type) && !isFloatingScalar(Type)) || !Type->Size ||
           Type->Size > kRegisterBytes)
         break;
-      Pieces = Integers(Type->Size, false);
+      Pieces = Integers(Type->Size, Type->Size);
       Placement.Parameters.push_back(std::move(Pieces));
       continue;
     }
     if (isIntegerScalar(Type) &&
         Type->Size <= kIntegerPairRegisters * kRegisterBytes) {
-      Pieces = Integers(Type->Size, Type->Size > kRegisterBytes,
-                        /*Scalar=*/true);
+      Pieces = Integers(Type->Size, Type->Size);
     } else if (isFloatingScalar(Type)) {
       if (NextVector < Vector.size()) {
         Pieces.push_back(registerPiece(SourceABICarrierKind::FloatingRegister,
                                        Vector[NextVector++], 0, Type->Size));
       } else {
-        Pieces = OnStack(Type->Size, Type->Size, /*Indirect=*/false,
-                         Type->Size <= kRegisterBytes);
+        Pieces = OnStack(Type->Size, Type->Size);
       }
     } else if (isRecord(Type) &&
                Type->Passing == NdRecordPassing::ByReference) {
@@ -171,8 +165,7 @@ std::optional<SourceParameterPlacement> source_placement::placeAAPCS64(
         // A 16-byte-aligned record starts at an even register outside Darwin.
         if (!scalarLeaves(Type) || !Type->Alignment)
           break;
-        Pieces = Integers(Type->Size, Type->Alignment == kIntegerPairRegisters *
-                                                             kRegisterBytes);
+        Pieces = Integers(Type->Size, Type->Alignment);
       }
     } else {
       break;

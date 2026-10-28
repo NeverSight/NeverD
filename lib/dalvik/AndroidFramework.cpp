@@ -1510,6 +1510,15 @@ ExecutionResult AndroidFramework::readClock(LibraryOperation operation) {
   return result;
 }
 
+ExecutionResult AndroidFramework::binderThreadPolicy() {
+  if (!services.binder_thread_policy)
+    return {ExecutionStop::Unsupported,
+            0,
+            {},
+            "Android Binder thread StrictMode service is not supplied"};
+  return services.binder_thread_policy();
+}
+
 ExecutionResult AndroidFramework::execute(Heap &heap, const Program &program,
                                           const LibraryMethod &method,
                                           uint64_t receiver,
@@ -1517,6 +1526,16 @@ ExecutionResult AndroidFramework::execute(Heap &heap, const Program &program,
                                           const AdmitInstruction &admit) {
   if (method.Op == ParcelData)
     return parcel(heap, method, receiver, arguments, admit);
+  if (method.Op == BinderGetStrictMode)
+    return binderThreadPolicy();
+  if (method.Op == BinderSetStrictMode) {
+    if (!services.set_binder_thread_policy)
+      return {ExecutionStop::Unsupported,
+              0,
+              {},
+              "Android Binder thread StrictMode setter is not supplied"};
+    return services.set_binder_thread_policy(uint32_t(arguments[0]));
+  }
   if (method.Op == EventLogWrite)
     return eventLog(heap, program, method, arguments, admit);
   if (method.Op == ServiceGet || method.Op == ServiceCheck ||

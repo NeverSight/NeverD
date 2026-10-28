@@ -1,0 +1,18 @@
+//===- LLVMSourceCallValue.def - Source value widths -----------*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// The byte and register widths of admitted Darwin source call values.
+//===----------------------------------------------------------------------===//
+
+#ifndef LLVM_SOURCE_VALUE
+#define LLVM_SOURCE_VALUE(Type, Name, Value)
+#endif
+
+LLVM_SOURCE_VALUE(unsigned, kSourceValueByteBits, 8)
+LLVM_SOURCE_VALUE(unsigned, kSourceValueWordBytes, 8)
+LLVM_SOURCE_VALUE(unsigned, kSourceValueFloatBytes, 4)
+
+#undef LLVM_SOURCE_VALUE

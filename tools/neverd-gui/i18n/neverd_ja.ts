@@ -344,6 +344,50 @@
         <translation>ハイライトされた識別子の次の出現位置へ移動します</translation>
     </message>
     <message>
+        <source>Lock or &amp;unlock</source>
+        <translation>ロックまたはロック解除(&amp;U)</translation>
+    </message>
+    <message>
+        <source>Keep the highlighted word highlighted in the first free color, or unlock it</source>
+        <translation>ハイライトされた単語を最初の空いている色でハイライトしたままにするか、ロックを解除します</translation>
+    </message>
+    <message>
+        <source>Color &amp;1</source>
+        <translation>色 1(&amp;1)</translation>
+    </message>
+    <message>
+        <source>Color &amp;2</source>
+        <translation>色 2(&amp;2)</translation>
+    </message>
+    <message>
+        <source>Color &amp;3</source>
+        <translation>色 3(&amp;3)</translation>
+    </message>
+    <message>
+        <source>Color &amp;4</source>
+        <translation>色 4(&amp;4)</translation>
+    </message>
+    <message>
+        <source>Color &amp;5</source>
+        <translation>色 5(&amp;5)</translation>
+    </message>
+    <message>
+        <source>Color &amp;6</source>
+        <translation>色 6(&amp;6)</translation>
+    </message>
+    <message>
+        <source>Color &amp;7</source>
+        <translation>色 7(&amp;7)</translation>
+    </message>
+    <message>
+        <source>Color &amp;8</source>
+        <translation>色 8(&amp;8)</translation>
+    </message>
+    <message>
+        <source>Lock the highlighted word in this color, or unlock the color</source>
+        <translation>ハイライトされた単語をこの色でロックするか、この色のロックを解除します</translation>
+    </message>
+    <message>
         <source>&amp;Find in view...</source>
         <translation>ビュー内を検索(&amp;F)...</translation>
     </message>
@@ -1612,6 +1656,10 @@
         <translation>検索(&amp;S)</translation>
     </message>
     <message>
+        <source>&amp;Lock highlight</source>
+        <translation>ハイライトのロック(&amp;L)</translation>
+    </message>
+    <message>
         <source>&amp;View</source>
         <translation>表示(&amp;V)</translation>
     </message>
@@ -2290,6 +2338,14 @@ Double-click to go to the declaration.</source>
     <message>
         <source>Laying out graph…</source>
         <translation>グラフをレイアウト中…</translation>
+    </message>
+    <message>
+        <source>From %1</source>
+        <translation>%1 から</translation>
+    </message>
+    <message>
+        <source>To %1</source>
+        <translation>%1 へ</translation>
     </message>
 </context>
 <context>

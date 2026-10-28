@@ -222,7 +222,7 @@ TEST(SBFCallXContexts, JoinsEveryFiniteCalleeReturnAndMemoryOutcome) {
           }
         EXPECT_TRUE(CompleteSet);
         const auto JSON = callXContextReportJSON(*Program, *Report);
-        EXPECT_EQ(JSON.getInteger("schema"), 11);
+        EXPECT_EQ(JSON.getInteger("schema"), 12);
         const auto *Frame = JSON.getObject("frame_coordinates");
         ASSERT_NE(Frame, nullptr);
         EXPECT_EQ(Frame->getString("namespace").value_or(""),
@@ -5529,7 +5529,7 @@ TEST(SBFCallXContexts, LoadedFieldValuesCrossGeneralizedOutputWrappers) {
 }
 
 TEST(SBFCallXContexts, CapturedReturnsSurviveObjectFieldsAndCompleteCopies) {
-  for (unsigned Mode = 0; Mode < 7; ++Mode) {
+  for (unsigned Mode = 0; Mode < 11; ++Mode) {
     SCOPED_TRACE(Mode);
     std::vector<test::EncodedInstruction> Text;
     const auto Literal = [&](unsigned R, uint64_t V) {
@@ -5548,26 +5548,40 @@ TEST(SBFCallXContexts, CapturedReturnsSurviveObjectFieldsAndCompleteCopies) {
     Text.push_back(encode(Opcode::ST_DW_REG, 6, 2, 8));
     Text.push_back(encode(Opcode::ST_DW_REG, 10, Mode == 6 ? 2 : 6, -24));
     std::vector<size_t> WarmCopies;
-    if (Mode == 4 || Mode == 6)
+    std::optional<size_t> ReinitializeTarget;
+    if (Mode == 4 || Mode == 6 || Mode >= 7)
       for (unsigned I = 0; I < kCallXContextSpecializationsPerEntry; ++I) {
         Text.push_back(encode(Opcode::MOV64_REG, 1, 10));
         Text.push_back(encode(Opcode::ADD64_IMM, 1, 0, 0, -256 - I * 32));
         Text.push_back(encode(Opcode::MOV64_REG, 2, 10));
-        Text.push_back(encode(Opcode::ADD64_IMM, 2, 0, 0, -24));
-        Text.push_back(encode(Opcode::MOV64_IMM, 3, 0, 0, 8 + I * 8));
+        Text.push_back(
+            encode(Opcode::ADD64_IMM, 2, 0, 0, Mode >= 7 ? -128 : -24));
+        Text.push_back(
+            encode(Opcode::MOV64_IMM, 3, 0, 0, Mode >= 7 ? 8 : 8 + I * 8));
         WarmCopies.push_back(Text.size());
         Text.push_back({});
       }
+    if (Mode >= 7) {
+      // Keep the real copy's input known even when a warm call had unknown
+      // effects. In particular, the unknown-selector control must reach the
+      // path-instantiation boundary with a captured source field.
+      ReinitializeTarget = Literal(2, 0);
+      Text.push_back(encode(Opcode::ST_DW_REG, 6, 2, 8));
+      Text.push_back(encode(Opcode::ST_DW_REG, 10, 6, -24));
+    }
     Text.push_back(encode(Opcode::MOV64_REG, 1, 10));
     Text.push_back(encode(Opcode::ADD64_IMM, 1, 0, 0, -16));
     Text.push_back(encode(Opcode::MOV64_REG, 2, 10));
     Text.push_back(encode(Opcode::ADD64_IMM, 2, 0, 0, -24));
-    Text.push_back(encode(Opcode::MOV64_IMM, 3, 0, 0, Mode == 1 ? 7 : 8));
+    Text.push_back(encode(Opcode::MOV64_IMM, 3, 0, 0,
+                          Mode >= 7   ? 16
+                          : Mode == 1 ? 7
+                                      : 8));
     const size_t CopyCall = Text.size();
     Text.push_back({});
     if (Mode == 2)
       Text.push_back(encode(Opcode::ST_B_IMM, 6, 0, 9));
-    if (Mode == 3) {
+    if (Mode == 3 || Mode == 9) {
       Literal(1, kInputStart + 8);
       const size_t OtherCall = Text.size();
       Text.push_back(encode(Opcode::CALL_IMM, 0, 1));
@@ -5628,7 +5642,53 @@ TEST(SBFCallXContexts, CapturedReturnsSurviveObjectFieldsAndCompleteCopies) {
       Text.push_back(encode(Opcode::LD_DW_REG, 4, 2));
       Text.push_back(encode(Opcode::ST_DW_REG, 1, 4));
     }
-    if (Mode == 5) {
+    if (Mode >= 7) {
+      // Fill the specialization cache before the real copy. A short copy
+      // follows a concrete word loop; its large-count sibling is a syscall.
+      // The extra unknown selector must prevent path instantiation in mode 8.
+      size_t UnknownBranch = 0;
+      if (Mode == 8) {
+        Literal(4, kInputStart + 8);
+        Text.push_back(encode(Opcode::LD_DW_REG, 4, 4));
+        UnknownBranch = Text.size();
+        Text.push_back({});
+      }
+      const size_t LargeCopy = Text.size();
+      Text.push_back({});
+      size_t SpinBranch = 0;
+      if (Mode == 10) {
+        SpinBranch = Text.size();
+        Text.push_back({});
+      }
+      Text.push_back(encode(Opcode::MOV64_IMM, 4));
+      const size_t Loop = Text.size();
+      Text.push_back(encode(Opcode::LD_DW_REG, 5, 2));
+      Text.push_back(encode(Opcode::ST_DW_REG, 1, 5));
+      Text.push_back(encode(Opcode::ADD64_IMM, 1, 0, 0, 8));
+      Text.push_back(encode(Opcode::ADD64_IMM, 2, 0, 0, 8));
+      Text.push_back(encode(Opcode::ADD64_IMM, 4, 0, 0, 8));
+      const size_t Back = Text.size();
+      Text.push_back(encode(Opcode::JLT64_REG, 4, 3, Loop - Back - 1));
+      const size_t Exit = Text.size();
+      Text.push_back(encode(Opcode::EXIT));
+      const size_t Syscall = Text.size();
+      Text.push_back(encode(Opcode::CALL_IMM, 0, 0, 0,
+                            getSyscallInfo(Syscall::Memmove)->Hash));
+      if (Mode == 10) {
+        Text.push_back(encode(Opcode::EXIT));
+        const size_t Spin = Text.size();
+        Text.push_back(encode(Opcode::LD_DW_REG, 4, 2));
+        Text.push_back(encode(Opcode::ST_DW_REG, 1, 4));
+        Text.push_back(encode(Opcode::JA, 0, 0, -3));
+        Text[SpinBranch] =
+            encode(Opcode::JEQ64_IMM, 3, 0, Spin - SpinBranch - 1, 16);
+      }
+      Text[LargeCopy] =
+          encode(Opcode::JGT64_IMM, 3, 0, Syscall - LargeCopy - 1, 64);
+      if (Mode == 8)
+        Text[UnknownBranch] =
+            encode(Opcode::JNE64_IMM, 4, 0, Exit - UnknownBranch - 1);
+    } else if (Mode == 5) {
       Text.push_back(encode(Opcode::LD_DW_REG, 4, 2));
       Text.push_back(encode(Opcode::ST_DW_REG, 1, 4));
     } else {
@@ -5666,6 +5726,9 @@ TEST(SBFCallXContexts, CapturedReturnsSurviveObjectFieldsAndCompleteCopies) {
     const auto TargetAddress = test::loadImm64(2, kBytecodeStart + Target * 8);
     std::copy(TargetAddress.begin(), TargetAddress.end(),
               Text.begin() + TargetLiteral);
+    if (ReinitializeTarget)
+      std::copy(TargetAddress.begin(), TargetAddress.end(),
+                Text.begin() + *ReinitializeTarget);
     auto Program = analyze(test::makeImage(Text, {}));
     ASSERT_TRUE(static_cast<bool>(Program))
         << llvm::toString(Program.takeError());
@@ -5675,11 +5738,32 @@ TEST(SBFCallXContexts, CapturedReturnsSurviveObjectFieldsAndCompleteCopies) {
     bool Proven = false;
     for (const auto &Site : Report->Contexts)
       Proven |= Site.CallXSlot == CallX && Site.TargetSlot == Target;
-    EXPECT_EQ(Proven, Mode == 0 || Mode == 4 || Mode == 5);
+    EXPECT_EQ(Proven, Mode == 0 || Mode == 4 || Mode == 5 || Mode == 7);
     if (Mode == 4)
       EXPECT_TRUE(llvm::any_of(Report->SummaryEdges, [&](const auto &Edge) {
         return Edge.CallerSlot == CopyCall && Edge.InstantiatedCopySlot;
       }));
+    if (Mode == 7)
+      EXPECT_TRUE(llvm::any_of(Report->SummaryEdges, [&](const auto &Edge) {
+        return Edge.CallerSlot == CopyCall &&
+               Edge.InstantiatedMemoryPathStores == 2 &&
+               Edge.InstantiatedMemoryPathInstructions > 1 &&
+               !Edge.InstantiatedCopySlot;
+      }));
+    if (Mode == 8 || Mode == 10)
+      EXPECT_FALSE(llvm::any_of(Report->SummaryEdges, [&](const auto &Edge) {
+        return Edge.CallerSlot == CopyCall &&
+               Edge.InstantiatedMemoryPathStores != 0;
+      }));
+    if (Mode >= 7) {
+      EXPECT_LE(llvm::count_if(Report->Summaries,
+                               [&](const auto &Summary) {
+                                 return Summary.EntrySlot == Copy &&
+                                        !Summary.GeneralizedInputs;
+                               }),
+                kCallXContextSpecializationsPerEntry);
+      EXPECT_FALSE(Report->SpecializationBudgetExhausted);
+    }
     EXPECT_FALSE(Report->CapturedAddresses.empty());
     if (Mode == 6) {
       // The unknown write changes the source after the caller's entry. A
@@ -5712,16 +5796,30 @@ TEST(SBFCallXContexts, CapturedReturnsSurviveObjectFieldsAndCompleteCopies) {
       EXPECT_TRUE(llvm::any_of(
           Raw->Trace, [&](const auto &Step) { return Step.Slot == CallX; }));
     }
-    if (Mode == 5)
+    if (Mode == 5 || Mode >= 7)
       for (uint64_t Pointer : {uint64_t{0}, kHeapStart + 16}) {
         ExecutionEnvironment Environment;
         std::vector<uint8_t> Input(16);
         llvm::support::endian::write64le(Input.data(), Pointer);
+        if (Mode == 9)
+          llvm::support::endian::write64le(Input.data() + 8, Pointer);
         Environment.Memory.push_back({kInputStart, Input, false, "pointer"});
         Environment.Memory.push_back(
             {kHeapStart, std::vector<uint8_t>(256), true, "heap"});
-        auto Raw = executeRaw(*Program, std::move(Environment));
+        InterpreterOptions Options;
+        Options.MaxSteps = 4096;
+        auto Raw = executeRaw(*Program, std::move(Environment), Options);
         ASSERT_TRUE(static_cast<bool>(Raw)) << llvm::toString(Raw.takeError());
+        if (Pointer != 0 && (Mode == 9 || Mode == 10)) {
+          EXPECT_EQ(Raw->Status, Mode == 9 ? ExecutionStatus::Faulted
+                                           : ExecutionStatus::StepLimit)
+              << Raw->Error;
+          EXPECT_EQ(llvm::any_of(
+                        Raw->Trace,
+                        [&](const auto &Step) { return Step.Slot == CallX; }),
+                    Mode == 9);
+          continue;
+        }
         EXPECT_EQ(Raw->Status, ExecutionStatus::Returned) << Raw->Error;
         EXPECT_EQ(Raw->ReturnValue, Pointer == 0 ? 0u : 42u);
         EXPECT_EQ(

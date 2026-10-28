@@ -50,6 +50,19 @@ bool anyOperandIsPC(const cs_arm &ARM, unsigned First) {
   return false;
 }
 
+/// `ldr pc, [sp], #N`: `pop {pc}` that also releases the N - 4 bytes above
+/// the saved return address, where MSVC homes a function's register
+/// arguments. A load of PC from anywhere else branches.
+bool popsPCWithItsStack(const cs_insn *I, const cs_arm &ARM) {
+  if (!I->detail->writeback || !ARM.post_index || ARM.op_count < 2 ||
+      ARM.operands[1].type != ARM_OP_MEM ||
+      ARM.operands[1].mem.base != ARM_REG_SP ||
+      ARM.operands[1].mem.index != ARM_REG_INVALID)
+    return false;
+  const int64_t Released = postIndexImmediate(ARM, ARM.operands[1]);
+  return Released >= 4 && Released % 4 == 0;
+}
+
 bool isExplicitExceptionReturn(unsigned Id) {
   switch (Id) {
   case ARM_INS_ERET:
@@ -431,8 +444,9 @@ ARMLifter::ControlInfo ARMLifter::classifyControl(const cs_insn *I,
     return Result;
   case ARM_INS_LDR:
     if (ARM.op_count >= 1 && operandIsPC(ARM.operands[0])) {
-      Result.Kind = isAliasMnemonic(I, "pop") ? ControlKind::Return
-                                              : ControlKind::IndirectBranch;
+      Result.Kind = isAliasMnemonic(I, "pop") || popsPCWithItsStack(I, ARM)
+                        ? ControlKind::Return
+                        : ControlKind::IndirectBranch;
       Result.TargetMode = LowInstructionTargetMode::FromTargetBit0;
     }
     return Result;

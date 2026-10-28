@@ -344,6 +344,50 @@
         <translation>강조 표시된 식별자가 나오는 다음 위치로 이동합니다</translation>
     </message>
     <message>
+        <source>Lock or &amp;unlock</source>
+        <translation>고정 또는 고정 해제(&amp;U)</translation>
+    </message>
+    <message>
+        <source>Keep the highlighted word highlighted in the first free color, or unlock it</source>
+        <translation>강조 표시된 단어를 첫 번째 빈 색으로 계속 강조 표시하거나 고정을 해제합니다</translation>
+    </message>
+    <message>
+        <source>Color &amp;1</source>
+        <translation>색 1(&amp;1)</translation>
+    </message>
+    <message>
+        <source>Color &amp;2</source>
+        <translation>색 2(&amp;2)</translation>
+    </message>
+    <message>
+        <source>Color &amp;3</source>
+        <translation>색 3(&amp;3)</translation>
+    </message>
+    <message>
+        <source>Color &amp;4</source>
+        <translation>색 4(&amp;4)</translation>
+    </message>
+    <message>
+        <source>Color &amp;5</source>
+        <translation>색 5(&amp;5)</translation>
+    </message>
+    <message>
+        <source>Color &amp;6</source>
+        <translation>색 6(&amp;6)</translation>
+    </message>
+    <message>
+        <source>Color &amp;7</source>
+        <translation>색 7(&amp;7)</translation>
+    </message>
+    <message>
+        <source>Color &amp;8</source>
+        <translation>색 8(&amp;8)</translation>
+    </message>
+    <message>
+        <source>Lock the highlighted word in this color, or unlock the color</source>
+        <translation>강조 표시된 단어를 이 색으로 고정하거나 이 색의 고정을 해제합니다</translation>
+    </message>
+    <message>
         <source>&amp;Find in view...</source>
         <translation>보기에서 찾기(&amp;F)...</translation>
     </message>
@@ -1612,6 +1656,10 @@
         <translation>검색(&amp;S)</translation>
     </message>
     <message>
+        <source>&amp;Lock highlight</source>
+        <translation>강조 표시 고정(&amp;L)</translation>
+    </message>
+    <message>
         <source>&amp;View</source>
         <translation>보기(&amp;V)</translation>
     </message>
@@ -2290,6 +2338,14 @@ Double-click to go to the declaration.</source>
     <message>
         <source>Laying out graph…</source>
         <translation>그래프 배치 중…</translation>
+    </message>
+    <message>
+        <source>From %1</source>
+        <translation>%1에서</translation>
+    </message>
+    <message>
+        <source>To %1</source>
+        <translation>%1(으)로</translation>
     </message>
 </context>
 <context>
