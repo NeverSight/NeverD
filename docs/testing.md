@@ -5992,6 +5992,15 @@ malformed dependency lists and disjoint or later writes.
 `PointerTransformsRetainOnlyLiveImportBindings` checks consecutive direct,
 cached-load and veneer invocations with intervening writes or opaque calls;
 `Sleep` remains a control without a binding-preservation effect.
+`RegistrationCRTBindings` checks 1,152 authored machine-code variants across
+three bases, two CRT providers, four startup exports and direct, cached-load
+or veneer invocations. Only the exact eager MSVCR100 `__set_app_type` profile
+retains reaching bindings, including negative, boundary and unknown int
+arguments. Prior or intervening IAT writes, opaque calls, wrong/delayed
+providers, missing/conflicting storage, writable code and exhausted work
+refuse. A final IAT write can retain stack balance without granting a public
+ordinary binding-preservation flag; an outer caller cannot borrow one.
+Positive cases still acquire no private leaf, object or initializer contract.
 `ImportVeneersPreserveCachedNonvolatileTargets` checks nonvolatile callable
 identity across exact stdcall and zero-pop legacy CRT veneers, refusing a
 modified binding or local callee.

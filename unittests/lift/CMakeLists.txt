@@ -37,6 +37,7 @@ if(NEVERD_ENABLE_BINARY_CORPUS_TESTS)
 endif()
 
 add_neverd_unittest(NeverDRegistrationCalleeStackTests
+  eh/RegistrationCRTBindingsTests.cpp
   eh/RegistrationCRTDataStackTests.cpp
   eh/RegistrationCallTests.cpp
   eh/RegistrationControlFPStackTests.cpp

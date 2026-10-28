@@ -200,11 +200,20 @@ checkedRegistrationImportStackPop(const BinaryImage &Image, va_t Target) {
 bool preservesRegistrationImportBindings(const BinaryImage &Image,
                                          va_t Target) {
   const auto *Import = checkedRuntimeImportSlot(Image, Target);
+  if (!Import)
+    return false;
+  const llvm::StringRef Module = Import->Module;
+  // The legacy MSVCR100 setter copies its complete int argument into CRT
+  // state without replacing the caller image's IAT. Keep that write and the
+  // runtime scalar opaque: this is no private-frame or callback contract.
+  // Other CRT providers and the modern _set_app_type have separate contracts.
+  if (Module.equals_insensitive("msvcr100.dll") &&
+      Import->Name == "__set_app_type")
+    return true;
   // These APIs transform pointer bits with a process-specific secret, without
   // replacing the caller image's import slots. Keep the runtime result opaque;
   // in particular, decoding does not establish frame-independent provenance.
-  return Import &&
-         llvm::StringRef(Import->Module).equals_insensitive("kernel32.dll") &&
+  return Module.equals_insensitive("kernel32.dll") &&
          (Import->Name == "DecodePointer" || Import->Name == "EncodePointer");
 }
 

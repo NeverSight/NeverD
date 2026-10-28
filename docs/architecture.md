@@ -2549,8 +2549,16 @@ The same exact legacy CRT providers supply cdecl returning-stack facts for
 pop one PE32 argument. These conventions agree with the existing Windows CRT
 prototype catalog and SDK declarations. Registering an exception or math-error
 callback and changing locale or application state still need their own effects;
-none of these imports inherits pointer-transform binding preservation, private
-memory access, exception dispatch or a constant result from its stack ABI.
+none of these imports inherits private memory access, exception dispatch or a
+constant result from its stack ABI. A separate normal-return binding profile
+recognizes MSVCR100's legacy
+[`__set_app_type`](https://learn.microsoft.com/en-us/cpp/c-runtime-library/internal-set-app-type)
+assignment into CRT-owned application state. Its complete int input remains
+runtime data; the effect retains only already-live caller IAT bindings. Direct
+IAT calls, authenticated cached loads and immutable veneers share the same
+provider/storage owner. It grants no frame, callback, unwind or native memory
+contract. MSVCRT's similarly named export, modern `_set_app_type`, callback
+registration and locale changes do not inherit that binding profile.
 The returning-stack contract retains each direct callee's transitive IAT
 dependencies, including imports behind an immutable veneer or another helper.
 Callers collect those dependencies before interpreting any stores. A preceding
