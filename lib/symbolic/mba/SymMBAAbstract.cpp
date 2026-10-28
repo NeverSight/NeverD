@@ -1308,15 +1308,17 @@ abstractToMBAImpl(SymContext &Ctx, SymRef Root, bool AllowProducts,
     const SymOp Op = Ctx.op(R);
     const bool IsBitwise =
         Op == SymOp::And || Op == SymOp::Or || Op == SymOp::Xor;
+    bool Changed = false;
     for (SymRef &C : Ops) {
+      const auto Original = C;
       if (!IsBitwise || Roles.lookup(C.index()) != Role::Literal) {
         C = Rewritten.lookup(C.index());
-        continue;
+      } else {
+        // Hiding a complementary mask can create NOT and grow Ctx's operand
+        // pool. Rewrite the owned snapshot in place across that growth.
+        C = Hide(C);
       }
-
-      // Hiding a complementary mask can create NOT and grow Ctx's operand
-      // pool. Rewrite the owned snapshot in place across that growth.
-      C = Hide(C);
+      Changed |= C != Original;
     }
 
     // Spend the complement identity where it buys linearity and nowhere else:
@@ -1326,7 +1328,7 @@ abstractToMBAImpl(SymContext &Ctx, SymRef Root, bool AllowProducts,
       Rewritten[Index] = Ctx.mkSub(Ctx.mkNeg(Ops[0]), Ctx.mkOne(Ctx.width(R)));
       continue;
     }
-    Rewritten[Index] = Ctx.rebuild(R, Ops);
+    Rewritten[Index] = Changed ? Ctx.rebuild(R, Ops) : R;
   }
 
   Out.IndependentBody = Rewritten.lookup(Root.index());

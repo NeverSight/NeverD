@@ -3546,7 +3546,9 @@ simultaneous, and reuses its owned root array for the ordered results. Shared
 roots and descendants retain one bottom-up reconstruction.
 Mask abstraction also rewrites its owned operand snapshot in place. Mask
 creation may grow the context arena; the snapshot remains valid without a
-second temporary operand array.
+second temporary operand array. Unchanged operand lists retain their existing
+node without rerunning its builder; linear complements still receive their
+required arithmetic rewrite.
 The compact two-word hash key uses one 64-bit bucket mix, without hashing its
 halves independently. A sum of a literal and one canonical term reuses that
 literal and term directly. Two nonliteral addends with distinct coefficient
@@ -3803,9 +3805,10 @@ parity operations keep their cache lookup and recursive expansion in one
 function, avoiding another call frame on the frequent cache misses. Lookup,
 depth admission, charging and insertion keep their original order, including
 failure paths.
-Application keys place their operation tag in the unused high bit of the
-low edge word, so the integer hash distinguishes AND and XOR for identical
-operands. Full edge identity and the existing node bound remain authoritative.
+Application keys pack both complete bounded edges and their operation into
+one 32-bit word, halving the application-cache bucket size. The 64-bit integer
+mixer includes every identity bit in small tables' bucket selection. Full edge
+identity, sentinel separation and the existing node bound remain authoritative.
 A dominant exact low prefix may be proved separately from unmatched product
 factors. A majority vote, weighted by exact projected-word multiplicities,
 only nominates the prefix; complete decision equality and the exact factor

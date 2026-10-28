@@ -89,7 +89,14 @@ class LowWordDecisions {
   // zero and one are the two edges of the single terminal node.
   std::vector<Decision> Nodes{{UINT64_MAX, 0, 0}};
   llvm::DenseMap<uint64_t, uint32_t> Unique;
-  llvm::DenseMap<uint64_t, uint32_t> Applied;
+  struct ApplicationKeyInfo : llvm::DenseMapInfo<uint32_t> {
+    static unsigned getHashValue(uint32_t Key) {
+      // Mix the complete packed identity; the ordinary 32-bit multiply
+      // leaves the upper edge outside small tables' bucket masks.
+      return llvm::DenseMapInfo<uint64_t>::getHashValue(Key);
+    }
+  };
+  llvm::DenseMap<uint32_t, uint32_t, ApplicationKeyInfo> Applied;
   // Retain all three bounded edges in one exact key, including complements.
   // High bits remain unused, so no valid key aliases a dense-map sentinel.
   static uint64_t carryKey(uint32_t A, uint32_t B, uint32_t C) {
@@ -214,7 +221,7 @@ class LowWordDecisions {
   // The caller has already normalized its edges and charged the same lookup.
   LLVM_ATTRIBUTE_NOINLINE
   uint32_t expandApplication(Operation Op, uint32_t A, uint32_t B,
-                             unsigned Depth, uint64_t Key,
+                             unsigned Depth, uint32_t Key,
                              uint32_t Complement) {
     // Recursive insertion may reallocate Nodes; copy both decisions first.
     const auto Left = decision(A), Right = decision(B);
@@ -266,11 +273,13 @@ class LowWordDecisions {
       Failed = true;
       return 0;
     }
-    // Edges use twice the bounded node index. Bit 31 of the low word is free
-    // for AND/XOR. Unlike bit 63, it participates in the integer map's hash;
-    // the same operands with different operations need not share a bucket.
-    static_assert(limits::kMaxResidueDecisionNodes <= UINT32_MAX / 4);
-    const uint64_t Key = (uint64_t(A) << 32) | (uint64_t(Op == Xor) << 31) | B;
+    // The complete bounded edge pair and operation fit in one word, halving
+    // application buckets while retaining exact equality and both sentinels.
+    constexpr unsigned EdgeBits =
+        std::bit_width(2 * limits::kMaxResidueDecisionNodes - 1);
+    static_assert(2 * EdgeBits + 1 < 32);
+    const uint32_t Key =
+        (A << EdgeBits) | B | (uint32_t(Op == Xor) << (2 * EdgeBits));
     if (auto It = Applied.find(Key); It != Applied.end())
       return It->second ^ Complement;
     return expandApplication(Op, A, B, Depth, Key, Complement);
