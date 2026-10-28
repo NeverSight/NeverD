@@ -53,12 +53,14 @@ constexpr uint16_t AllRegisters = (uint16_t{1} << kRegisterCount) - 1;
 struct CallInputs {
   uint16_t Registers = AllRegisters;
   bool Memory = true;
+  bool NarrowMemory = true;
 };
 
 struct InstructionDependencies {
   uint16_t Reads = 0;
   uint16_t Writes = 0;
   bool Memory = false;
+  bool NarrowMemory = false;
 };
 
 InstructionDependencies instructionDependencies(const MedInstruction &I,
@@ -73,9 +75,11 @@ InstructionDependencies instructionDependencies(const MedInstruction &I,
       Result.Reads = ((uint16_t{1} << kArgumentRegisterCount) - 1)
                      << kFirstArgumentRegister;
       Result.Memory = true;
+      Result.NarrowMemory = true;
     } else {
       Result.Reads = Callee.Registers;
       Result.Memory = Callee.Memory;
+      Result.NarrowMemory = Callee.NarrowMemory;
     }
     if (I.Op == Operation::CallX)
       Result.Reads |= registerBit(I.CallRegister);
@@ -84,6 +88,8 @@ InstructionDependencies instructionDependencies(const MedInstruction &I,
   if (I.Op == Operation::Exit)
     Result.Reads |= registerBit(kReturnRegister);
   Result.Memory = I.Op == Operation::Load;
+  Result.NarrowMemory =
+      Result.Memory && I.Semantics.MemoryWidth != kDoubleWordBitWidth;
   switch (I.Form) {
   case OperandForm::Dst:
   case OperandForm::Endian:
@@ -479,6 +485,7 @@ struct FunctionContext : llvm::FoldingSetNode {
   // cannot repeatedly rediscover the same exploratory image binding.
   uint16_t ExploredImageRegisters = 0;
   bool ReuseReadsMemory = false;
+  bool ReuseReadsNarrowMemory = false;
   MemoryEffects Effects;
   size_t RootGeneration = 0;
   size_t IncomingReferences = 0;
@@ -636,9 +643,9 @@ private:
                                       const FunctionContext &Callee,
                                       const ContextState &Input,
                                       ContextCall &Edge);
-  ProvenValueSet loadFullWord(const MedInstruction &Instruction,
-                              const ProvenValueSet &Bases,
-                              const StoredRegisterMemory &Memory) const;
+  ProvenValueSet loadTypedValue(const MedInstruction &Instruction,
+                                const ProvenValueSet &Bases,
+                                const StoredRegisterMemory &Memory) const;
   ProvenValueSet loadOrigin(const MedInstruction &Instruction,
                             const ContextState &State) const;
   void classifyTarget(CallXContextEvidence &Evidence,
@@ -1887,19 +1894,20 @@ ContextFlow::transferInputExpression(const MedInstruction &Instruction,
 }
 
 ProvenValueSet
-ContextFlow::loadFullWord(const MedInstruction &Instruction,
-                          const ProvenValueSet &Bases,
-                          const StoredRegisterMemory &Memory) const {
+ContextFlow::loadTypedValue(const MedInstruction &Instruction,
+                            const ProvenValueSet &Bases,
+                            const StoredRegisterMemory &Memory) const {
   std::optional<ProvenValueSet> Output;
   for (const auto &Base : possibleValues(Bases)) {
     const auto Address = memoryAddress(Base, Instruction.Offset);
     const auto Stored =
-        Address ? Memory.readValues(*Address) : ProvenValueSet{};
+        Address ? Memory.readValues(*Address, Instruction.Width / kBitsPerByte)
+                : ProvenValueSet{};
     for (const auto &Value : possibleValues(Stored)) {
       StoredRegisterMemory Cell;
       Cell.setCoordinates(Coordinates);
       if (Address && !Stored.unknown())
-        Cell.writeValues(*Address, Value);
+        Cell.writeValues(*Address, Value, Instruction.Width / kBitsPerByte);
       RegisterState Registers{};
       Registers[Instruction.Src] = Base;
       applyRegisterTransfer(Instruction, Registers, Program.ExecutableImage,
@@ -1916,15 +1924,17 @@ ContextFlow::loadFullWord(const MedInstruction &Instruction,
 
 ProvenValueSet ContextFlow::loadOrigin(const MedInstruction &Instruction,
                                        const ContextState &State) const {
-  auto Origin = loadFullWord(Instruction, State.Registers[Instruction.Src],
-                             State.OriginScratch.Values);
+  auto Origin = loadTypedValue(Instruction, State.Registers[Instruction.Src],
+                               State.OriginScratch.Values);
   if (!Origin.unknown())
     return Origin;
   RegisterState Entry{};
   Entry[0] = State.Origins[Instruction.Src].singleton();
-  return State.Postconditions.read(substituteOrigin(
-      {RegisterValue::Kind::StackAddress, 1, Instruction.Offset}, Entry,
-      Program));
+  return State.Postconditions.read(
+      substituteOrigin(
+          {RegisterValue::Kind::StackAddress, 1, Instruction.Offset}, Entry,
+          Program),
+      Instruction.Width / kBitsPerByte);
 }
 
 void ContextFlow::transferValues(const MedInstruction &Instruction,
@@ -1936,12 +1946,11 @@ void ContextFlow::transferValues(const MedInstruction &Instruction,
         {RegisterValue::Kind::StackAddress, 1, Instruction.Offset}, Entry,
         Program);
   };
-  const bool FullWordLoad =
-      Instruction.Op == Operation::Load &&
-      Instruction.Semantics.MemoryWidth == kDoubleWordBitWidth;
+  const bool ScalarLoad = Instruction.Op == Operation::Load;
   const auto LoadedOrigin =
-      FullWordLoad ? State.Postconditions.read(OriginAddress(Instruction.Src))
-                   : ProvenValueSet{};
+      ScalarLoad ? State.Postconditions.read(OriginAddress(Instruction.Src),
+                                             Instruction.Width / kBitsPerByte)
+                 : ProvenValueSet{};
   MachineState Scalar = State.scalar();
   if (Instruction.Op == Operation::Store) {
     ProvenValueSet StoredOrigin =
@@ -2024,27 +2033,28 @@ void ContextFlow::transferValues(const MedInstruction &Instruction,
     State.OriginScratch.Memory.clear();
     if (KnownTransfer) {
       const auto Destination = memoryAddress(Scalar.Registers[1]);
-      State.OriginScratch.Values.visitCells([&](const RegisterValue &Address,
-                                                const ProvenValueSet &Value) {
-        if (!Destination || Address.ValueKind != Destination->ValueKind ||
-            (Address.ValueKind == RegisterValue::Kind::SymbolicAddress &&
-             Address.Value != Destination->Value))
-          return;
-        const uint64_t Delta =
-            Address.ValueKind == RegisterValue::Kind::SymbolicAddress
-                ? static_cast<uint64_t>(Address.Offset) -
-                      static_cast<uint64_t>(Destination->Offset)
-                : Address.Value - Destination->Value;
-        if (Delta >= Length.Value || sizeof(uint64_t) > Length.Value - Delta)
-          return;
-        RegisterState Entry{};
-        Entry[0] = DestinationOrigin;
-        State.Postconditions.store(
-            substituteOrigin({RegisterValue::Kind::StackAddress, 1,
-                              static_cast<int64_t>(Delta)},
-                             Entry, Program),
-            sizeof(uint64_t), Value);
-      });
+      State.OriginScratch.Values.visitScalarCells(
+          [&](const RegisterValue &Address, unsigned Width,
+              const ProvenValueSet &Value) {
+            if (!Destination || Address.ValueKind != Destination->ValueKind ||
+                (Address.ValueKind == RegisterValue::Kind::SymbolicAddress &&
+                 Address.Value != Destination->Value))
+              return;
+            const uint64_t Delta =
+                Address.ValueKind == RegisterValue::Kind::SymbolicAddress
+                    ? static_cast<uint64_t>(Address.Offset) -
+                          static_cast<uint64_t>(Destination->Offset)
+                    : Address.Value - Destination->Value;
+            if (Delta >= Length.Value || Width > Length.Value - Delta)
+              return;
+            RegisterState Entry{};
+            Entry[0] = DestinationOrigin;
+            State.Postconditions.store(
+                substituteOrigin({RegisterValue::Kind::StackAddress, 1,
+                                  static_cast<int64_t>(Delta)},
+                                 Entry, Program),
+                Width, Value);
+          });
     }
   }
   if (Instruction.Call != CallKind::None) {
@@ -2055,11 +2065,7 @@ void ContextFlow::transferValues(const MedInstruction &Instruction,
     }
   } else if (Instruction.Semantics.WritesDestination) {
     if (Instruction.Op == Operation::Load) {
-      State.Origins[Instruction.Dst] =
-          FullWordLoad ? loadOrigin(Instruction, State)
-                       : registerResult(Instruction, State.Registers,
-                                        Program.ExecutableImage,
-                                        &State.OriginScratch.Values);
+      State.Origins[Instruction.Dst] = loadOrigin(Instruction, State);
       if (State.Origins[Instruction.Dst].unknown())
         State.Origins[Instruction.Dst] = LoadedOrigin;
     } else {
@@ -2102,8 +2108,8 @@ void ContextFlow::transferValues(const MedInstruction &Instruction,
   }
   if (!Instruction.Semantics.WritesDestination)
     return;
-  if (FullWordLoad) {
-    State.Registers[Instruction.Dst] = loadFullWord(
+  if (ScalarLoad) {
+    State.Registers[Instruction.Dst] = loadTypedValue(
         Instruction, State.Registers[Instruction.Src], State.Scratch.Values);
     if (State.Registers[Instruction.Dst].unknown() &&
         std::all_of(LoadedOrigin.values().begin(), LoadedOrigin.values().end(),
@@ -2352,9 +2358,9 @@ llvm::Expected<ProvenValueSet> ContextFlow::evaluateInputExpression(
           ScratchState Memory;
           Memory.Values = EntryMemory.Values;
           Effects.invalidate(Memory, Input.Registers, Program);
-          Values = loadFullWord(Instruction, Values, Memory.Values);
+          Values = loadTypedValue(Instruction, Values, Memory.Values);
         } else {
-          Values = loadFullWord(Instruction, Values, EntryMemory.Values);
+          Values = loadTypedValue(Instruction, Values, EntryMemory.Values);
         }
       } else {
         std::optional<ProvenValueSet> Output;
@@ -3362,7 +3368,7 @@ llvm::Expected<bool> ContextFlow::replay(FunctionContext &Context,
         return Continues.takeError();
       CallInputs Callee;
       if (Collect) {
-        Callee = {0, false};
+        Callee = {0, false, false};
         for (size_t I = FirstEdge; I < Context.Calls.size(); ++I) {
           const auto &Edge = Context.Calls[I];
           if (Edge.Barrier != CallXSummaryBarrier::None || Edge.LegacyRuntime) {
@@ -3370,6 +3376,7 @@ llvm::Expected<bool> ContextFlow::replay(FunctionContext &Context,
             break;
           }
           const auto &Summary = *Contexts[*Edge.CalleeSummaryID];
+          Callee.NarrowMemory |= Summary.ReuseReadsNarrowMemory;
           if (Summary.Generic) {
             Callee.Registers |= InputRegisters[Summary.EntryBlock];
             Callee.Memory |= ReadsMemory[Summary.EntryBlock];
@@ -3383,6 +3390,7 @@ llvm::Expected<bool> ContextFlow::replay(FunctionContext &Context,
       if (Collect) {
         Context.ReuseInputRegisters |= Dependencies.Reads & ~Defined;
         Context.ReuseReadsMemory |= Dependencies.Memory;
+        Context.ReuseReadsNarrowMemory |= Dependencies.NarrowMemory;
       }
       Defined |= Dependencies.Writes;
       if (!*Continues)
@@ -3402,6 +3410,7 @@ llvm::Expected<bool> ContextFlow::replay(FunctionContext &Context,
       if (Collect) {
         Context.ReuseInputRegisters |= Dependencies.Reads & ~Defined;
         Context.ReuseReadsMemory |= Dependencies.Memory;
+        Context.ReuseReadsNarrowMemory |= Dependencies.NarrowMemory;
       }
       Defined |= Dependencies.Writes;
       if (Instruction->Op == Operation::Store)
@@ -3429,9 +3438,8 @@ ContextFlow::summarize(size_t Entry, const ContextState &Incoming, bool Generic,
     *Generalization = Generic ? CallXInputGeneralization::UnknownCaller
                               : CallXInputGeneralization::None;
   ContextState Input = Generic ? genericInput() : Incoming;
-  // CALLX proofs consume typed full-width cells and immutable image bytes.
-  // Descriptor-byte buffers have no proof reader and must not split otherwise
-  // equivalent caller inputs or consume their retained-state budget.
+  // Contexts consume typed exact-width cells and immutable image bytes. The
+  // separate untyped descriptor byte buffer has no reader in this analysis.
   Input.Scratch.Memory.clear();
   const auto Origins = symbolicInputs();
   for (unsigned R = 0; R < kRegisterCount; ++R)
@@ -3518,10 +3526,17 @@ ContextFlow::summarize(size_t Entry, const ContextState &Incoming, bool Generic,
           Same = false;
           break;
         }
-      if (!Same ||
-          ((Candidate->ReuseReadsMemory || !Candidate->PreservesMemory) &&
-           Candidate->Input.Scratch != Input.Scratch))
+      if (!Same)
         continue;
+      if ((Candidate->ReuseReadsMemory || !Candidate->PreservesMemory) &&
+          Candidate->Input.Scratch != Input.Scratch) {
+        // A pure completed body that does not read narrow cells can reuse
+        // its word facts. Its caller retains the actual current memory;
+        // importing an older mutating snapshot is never authorized here.
+        if (!Candidate->PreservesMemory || Candidate->ReuseReadsNarrowMemory ||
+            !Candidate->Input.Scratch.Values.equalWords(Input.Scratch.Values))
+          continue;
+      }
       ++CacheHits;
       ++EquivalentSpecializedReuses;
       *Generalization = CallXInputGeneralization::EquivalentSpecializedInputs;
@@ -3981,6 +3996,7 @@ llvm::Expected<CallXContextReport> ContextFlow::run() {
     Summary.ReadsInputMemory = ReadsMemory[Context->EntryBlock];
     Summary.ReuseInputRegisterMask = Context->ReuseInputRegisters;
     Summary.ReuseReadsInputMemory = Context->ReuseReadsMemory;
+    Summary.ReuseReadsNarrowMemory = Context->ReuseReadsNarrowMemory;
     for (unsigned R = 0; R < kRegisterCount; ++R) {
       Summary.Inputs[R] = Context->Input.Registers[R].singleton();
       if (Context->Input.Registers[R].values().size() > 1)
@@ -4010,15 +4026,23 @@ llvm::Expected<CallXContextReport> ContextFlow::run() {
           }
           Summary.ReturnInputAlternatives.push_back(Expression);
         }
-      Summary.OutputScratchWords = Context->Return->Scratch.Values.size();
-      Summary.OutputParameterizedWords = Context->Return->Postconditions.size();
+      Summary.OutputScratchWords = Context->Return->Scratch.Values.wordCount();
+      Summary.OutputNarrowScalarCells =
+          Context->Return->Scratch.Values.size() - Summary.OutputScratchWords;
+      Summary.OutputParameterizedWords =
+          Context->Return->Postconditions.wordCount();
+      Summary.OutputNarrowParameterizedFields =
+          Context->Return->Postconditions.size() -
+          Summary.OutputParameterizedWords;
       Summary.OutputFieldValueExpressions =
           Context->Return->Postconditions.expressionCount();
     }
     Summary.OutputMemoryCopies =
         Context->Return ? Context->Return->Postconditions.copyCount() : 0;
     ReturnInputElements += Summary.OutputMemoryCopies;
-    Summary.InputScratchWords = Context->Input.Scratch.Values.size();
+    Summary.InputScratchWords = Context->Input.Scratch.Values.wordCount();
+    Summary.InputNarrowScalarCells =
+        Context->Input.Scratch.Values.size() - Summary.InputScratchWords;
     Summary.IsRoot = Context->IsRoot;
     Summary.GeneralizedInputs = Context->Generic;
     Summary.PreservesCallerMemory = Context->PreservesMemory;

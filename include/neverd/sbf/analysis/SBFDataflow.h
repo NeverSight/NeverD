@@ -30,6 +30,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -160,6 +161,11 @@ private:
   llvm::SmallVector<RegisterValue, 1> Values;
 };
 
+/// Narrow stores retain only literal integer bits, never pointer fragments.
+/// Unsupported widths and incomplete alternatives carry no scalar fact.
+ProvenValueSet truncateStoredValue(const ProvenValueSet &Value,
+                                   uint64_t ByteWidth);
+
 /// Immutable coordinate configuration shared by every state of one analysis.
 struct StoredMemoryCoordinates {
   std::optional<uint64_t> FrameTranslationLimit;
@@ -178,8 +184,10 @@ public:
   /// coordinates may need translation; this proves neither validity nor
   /// separation of a runtime address.
   bool canModelRange(const RegisterValue &Address, uint64_t Size) const;
-  void writeValues(const RegisterValue &Address, ProvenValueSet Value);
-  const ProvenValueSet &readValues(const RegisterValue &Address) const;
+  void writeValues(const RegisterValue &Address, ProvenValueSet Value,
+                   unsigned ByteWidth = sizeof(uint64_t));
+  const ProvenValueSet &readValues(const RegisterValue &Address,
+                                   unsigned ByteWidth = sizeof(uint64_t)) const;
   void invalidate(const RegisterValue &Address, uint64_t Size);
   void copyFrom(const StoredRegisterMemory &Source,
                 const RegisterValue &SourceAddress,
@@ -190,6 +198,9 @@ public:
   void visitCells(
       llvm::function_ref<void(const RegisterValue &, const ProvenValueSet &)>
           Visit) const;
+  void visitScalarCells(llvm::function_ref<void(const RegisterValue &, unsigned,
+                                                const ProvenValueSet &)>
+                            Visit) const;
   /// Overlay simultaneous must-facts after the caller has applied may-writes.
   void includeCells(const StoredRegisterMemory &Other,
                     llvm::function_ref<bool(const RegisterValue &)> Include);
@@ -229,17 +240,20 @@ public:
   void joinValues(const StoredRegisterMemory &Other);
   void profile(llvm::FoldingSetNodeID &ID) const;
   size_t size() const { return Values.size(); }
+  size_t wordCount() const;
   void
   copyFrom(const StoredRegisterMemory &Source, va_t SourceAddress,
            va_t Destination, uint64_t Size,
            MemoryCoordinate SourceCoordinate = MemoryCoordinate::Absolute,
            MemoryCoordinate DestinationCoordinate = MemoryCoordinate::Absolute);
   bool operator==(const StoredRegisterMemory &Other) const;
+  bool equalWords(const StoredRegisterMemory &Other) const;
 
 private:
   // Coordinate 0 is absolute, 1 is frame-relative, and N+2 denotes capture N.
-  // The second word is a numeric coordinate or a signed capture displacement.
-  std::map<std::pair<uint64_t, uint64_t>, ProvenValueSet> Values;
+  // The second word is a numeric coordinate or a signed capture displacement;
+  // the third is the exact byte width of the typed cell.
+  std::map<std::tuple<uint64_t, uint64_t, unsigned>, ProvenValueSet> Values;
   std::shared_ptr<const StoredMemoryCoordinates> Coordinates;
 };
 

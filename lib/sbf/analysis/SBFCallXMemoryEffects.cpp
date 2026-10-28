@@ -37,13 +37,14 @@ bool isOwnOrChildFrame(const RegisterValue &Address,
          Address.Offset >= -static_cast<int64_t>(Program.Config.StackFrameSize);
 }
 
-bool admitsPostconditionWord(const RegisterValue &Address) {
+bool admitsPostconditionValue(const RegisterValue &Address, uint64_t Size) {
   int64_t End;
   return ((Address.ValueKind == RegisterValue::Kind::StackAddress ||
            Address.ValueKind == RegisterValue::Kind::SymbolicAddress) &&
-          !llvm::AddOverflow(Address.Offset, int64_t{sizeof(uint64_t)}, End)) ||
+          !llvm::AddOverflow(Address.Offset, static_cast<int64_t>(Size),
+                             End)) ||
          (Address.ValueKind == RegisterValue::Kind::Constant &&
-          isScratchRange(Address.Value, sizeof(uint64_t)));
+          isScratchRange(Address.Value, Size));
 }
 
 } // namespace
@@ -311,25 +312,24 @@ void MemoryPostconditions::invalidate(const RegisterValue &Address,
             Address.Offset < Other.Offset + static_cast<int64_t>(Copy.Size));
   });
   std::erase_if(Values, [&](const auto &Cell) {
-    const auto &[Kind, Base, Offset] = Cell.first;
+    const auto &[Kind, Base, Offset, Width] = Cell.first;
     // Independent formal names prove no separation of the actual pointers.
     if (Kind != Address.ValueKind)
       return true;
     if (Absolute)
-      return Base < Address.Value + Size &&
-             Address.Value < Base + sizeof(uint64_t);
+      return Base < Address.Value + Size && Address.Value < Base + Width;
     return Base != Address.Value ||
            (Offset < End &&
-            Address.Offset < Offset + static_cast<int64_t>(sizeof(uint64_t)));
+            Address.Offset < Offset + static_cast<int64_t>(Width));
   });
 }
 
 void MemoryPostconditions::store(const RegisterValue &Address, uint64_t Size,
                                  const ProvenValueSet &Value) {
   invalidate(Address, Size);
-  if (Size == sizeof(uint64_t) && admitsPostconditionWord(Address) &&
-      !Value.unknown() &&
-      std::all_of(Value.values().begin(), Value.values().end(),
+  const auto Stored = truncateStoredValue(Value, Size);
+  if (!Stored.unknown() && admitsPostconditionValue(Address, Size) &&
+      std::all_of(Stored.values().begin(), Stored.values().end(),
                   [](const auto &Alternative) {
                     return Alternative.ValueKind ==
                                RegisterValue::Kind::Constant ||
@@ -340,12 +340,13 @@ void MemoryPostconditions::store(const RegisterValue &Address, uint64_t Size,
                            Alternative.ValueKind ==
                                RegisterValue::Kind::SymbolicAddress;
                   }))
-    Values[{Address.ValueKind, Address.Value, Address.Offset}] = Value;
+    Values[{Address.ValueKind, Address.Value, Address.Offset, Size}] = Stored;
 }
 
-ProvenValueSet MemoryPostconditions::read(const RegisterValue &Address) const {
-  const auto Found =
-      Values.find({Address.ValueKind, Address.Value, Address.Offset});
+ProvenValueSet MemoryPostconditions::read(const RegisterValue &Address,
+                                          uint64_t ByteWidth) const {
+  const auto Found = Values.find(
+      {Address.ValueKind, Address.Value, Address.Offset, ByteWidth});
   if (Found == Values.end())
     return {};
   const auto *Origins = std::get_if<ProvenValueSet>(&Found->second);
@@ -355,14 +356,15 @@ ProvenValueSet MemoryPostconditions::read(const RegisterValue &Address) const {
 void MemoryPostconditions::storeExpression(const RegisterValue &Address,
                                            size_t Expression) {
   invalidate(Address, sizeof(uint64_t));
-  if (admitsPostconditionWord(Address))
-    Values[{Address.ValueKind, Address.Value, Address.Offset}] = Expression;
+  if (admitsPostconditionValue(Address, sizeof(uint64_t)))
+    Values[{Address.ValueKind, Address.Value, Address.Offset,
+            sizeof(uint64_t)}] = Expression;
 }
 
 std::optional<size_t>
 MemoryPostconditions::readExpression(const RegisterValue &Address) const {
-  const auto Found =
-      Values.find({Address.ValueKind, Address.Value, Address.Offset});
+  const auto Found = Values.find(
+      {Address.ValueKind, Address.Value, Address.Offset, sizeof(uint64_t)});
   if (Found == Values.end())
     return std::nullopt;
   const auto *Expression = std::get_if<size_t>(&Found->second);
@@ -387,7 +389,9 @@ void MemoryPostconditions::visitValues(
         Visit) const {
   const ProvenValueSet Unknown;
   for (const auto &[Cell, Value] : Values) {
-    const auto &[Kind, Base, Offset] = Cell;
+    const auto &[Kind, Base, Offset, Width] = Cell;
+    if (Width != sizeof(uint64_t))
+      continue;
     if (const auto *Origins = std::get_if<ProvenValueSet>(&Value))
       Visit({Kind, Base, Offset}, *Origins, std::nullopt);
     else
@@ -398,9 +402,9 @@ void MemoryPostconditions::visitValues(
 void MemoryPostconditions::copyFrom(const RegisterValue &Source,
                                     const RegisterValue &Destination,
                                     uint64_t Size, const SBFProgram &Program) {
-  std::vector<std::pair<RegisterValue, StoredValue>> Copied;
+  std::vector<std::tuple<RegisterValue, uint64_t, StoredValue>> Copied;
   for (const auto &[Cell, Value] : Values) {
-    const auto &[Kind, Base, Offset] = Cell;
+    const auto &[Kind, Base, Offset, Width] = Cell;
     if (Kind != Source.ValueKind ||
         (Kind != RegisterValue::Kind::Constant && Base != Source.Value))
       continue;
@@ -408,21 +412,21 @@ void MemoryPostconditions::copyFrom(const RegisterValue &Source,
                                ? Base - Source.Value
                                : static_cast<uint64_t>(Offset) -
                                      static_cast<uint64_t>(Source.Offset);
-    if (Delta >= Size || sizeof(uint64_t) > Size - Delta || Delta > INT64_MAX)
+    if (Delta >= Size || Width > Size - Delta || Delta > INT64_MAX)
       continue;
     RegisterState Registers{};
     Registers[0] = Destination;
     Copied.emplace_back(substituteOrigin({RegisterValue::Kind::StackAddress, 1,
                                           static_cast<int64_t>(Delta)},
                                          Registers, Program),
-                        Value);
+                        Width, Value);
   }
   invalidate(Destination, Size);
-  for (const auto &[Address, Value] : Copied)
+  for (const auto &[Address, Width, Value] : Copied)
     if (Address.ValueKind == RegisterValue::Kind::Constant ||
         Address.ValueKind == RegisterValue::Kind::StackAddress ||
         Address.ValueKind == RegisterValue::Kind::SymbolicAddress)
-      Values[{Address.ValueKind, Address.Value, Address.Offset}] = Value;
+      Values[{Address.ValueKind, Address.Value, Address.Offset, Width}] = Value;
 }
 
 void MemoryPostconditions::recordInputCopy(const RegisterValue &Source,
@@ -515,21 +519,21 @@ void MemoryPostconditions::include(
         Copy.Size, Guard);
   }
   for (const auto &[Cell, Value] : Callee.Values) {
-    const auto &[Kind, Base, Offset] = Cell;
+    const auto &[Kind, Base, Offset, Width] = Cell;
     const RegisterValue Address{Kind, Base, Offset};
     const auto Destination =
         substituteOrigins(Address, Entry, Program).singleton();
     if (const auto *Origins = std::get_if<ProvenValueSet>(&Value))
-      store(Destination, sizeof(uint64_t),
-            substituteOrigins(*Origins, Entry, Program));
+      store(Destination, Width, substituteOrigins(*Origins, Entry, Program));
     else
       storeExpression(Destination, std::get<size_t>(Value));
   }
 }
 
-size_t applyStoredWord(ScratchState &Scratch, const RegisterValue &Address,
-                       const ProvenValueSet &Stored,
-                       const SBFProgram &Program) {
+static size_t applyStoredScalar(ScratchState &Scratch,
+                                const RegisterValue &Address,
+                                const ProvenValueSet &Stored,
+                                const SBFProgram &Program, uint64_t Width) {
   if (Address.ValueKind == RegisterValue::Kind::Unknown || Stored.unknown())
     return 0;
   MedInstruction Store;
@@ -537,7 +541,7 @@ size_t applyStoredWord(ScratchState &Scratch, const RegisterValue &Address,
   Store.Form = OperandForm::StoreReg;
   Store.Dst = 0;
   Store.Src = 1;
-  Store.Width = Store.Semantics.MemoryWidth = kDoubleWordBitWidth;
+  Store.Width = Store.Semantics.MemoryWidth = Width * kBitsPerByte;
   std::optional<ScratchState> Output;
   for (const auto &Alternative : Stored.values()) {
     MachineState State;
@@ -554,7 +558,13 @@ size_t applyStoredWord(ScratchState &Scratch, const RegisterValue &Address,
     }
   }
   Scratch = std::move(*Output);
-  return !Scratch.Values.readValues(Address).unknown();
+  return !Scratch.Values.readValues(Address, Width).unknown();
+}
+
+size_t applyStoredWord(ScratchState &Scratch, const RegisterValue &Address,
+                       const ProvenValueSet &Stored,
+                       const SBFProgram &Program) {
+  return applyStoredScalar(Scratch, Address, Stored, Program, sizeof(uint64_t));
 }
 
 size_t MemoryPostconditions::apply(
@@ -579,15 +589,15 @@ size_t MemoryPostconditions::apply(
     }
   size_t Applied = 0;
   for (const auto &[Cell, Value] : Values) {
-    const auto &[Kind, Base, Offset] = Cell;
+    const auto &[Kind, Base, Offset, Width] = Cell;
     const auto Address =
         substituteOrigins(RegisterValue{Kind, Base, Offset}, Entry, Program)
             .singleton();
     const auto *Origins = std::get_if<ProvenValueSet>(&Value);
     if (Origins)
-      Applied +=
-          applyStoredWord(Scratch, Address,
-                          substituteOrigins(*Origins, Entry, Program), Program);
+      Applied += applyStoredScalar(Scratch, Address,
+                                   substituteOrigins(*Origins, Entry, Program),
+                                   Program, Width);
   }
   return Applied;
 }
@@ -608,7 +618,7 @@ void MemoryPostconditions::transformSymbols(
   });
   decltype(Values) Transformed;
   for (const auto &[Cell, Value] : Values) {
-    const auto &[Kind, Base, Offset] = Cell;
+    const auto &[Kind, Base, Offset, Width] = Cell;
     RegisterValue Address{Kind, Base, Offset};
     if (Kind == RegisterValue::Kind::SymbolicAddress)
       Address = Map(Address);
@@ -617,7 +627,7 @@ void MemoryPostconditions::transformSymbols(
         Address.ValueKind != RegisterValue::Kind::SymbolicAddress)
       continue;
     if (const auto *Expression = std::get_if<size_t>(&Value)) {
-      Transformed[{Address.ValueKind, Address.Value, Address.Offset}] =
+      Transformed[{Address.ValueKind, Address.Value, Address.Offset, Width}] =
           *Expression;
       continue;
     }
@@ -631,9 +641,16 @@ void MemoryPostconditions::transformSymbols(
         Stored->join(Alternative);
     }
     if (Stored && !Stored->unknown())
-      Transformed[{Address.ValueKind, Address.Value, Address.Offset}] = *Stored;
+      Transformed[{Address.ValueKind, Address.Value, Address.Offset, Width}] =
+          *Stored;
   }
   Values = std::move(Transformed);
+}
+
+size_t MemoryPostconditions::wordCount() const {
+  return llvm::count_if(Values, [](const auto &Cell) {
+    return std::get<3>(Cell.first) == sizeof(uint64_t);
+  });
 }
 
 uint64_t MemoryPostconditions::retainedByteEstimate() const {
