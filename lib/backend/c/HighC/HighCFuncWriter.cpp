@@ -162,7 +162,7 @@ struct X86CIntrinsicFeatures {
 
 X86CIntrinsicFeatures collectX86CIntrinsicFeatures(const HighFunc &Func) {
   X86CIntrinsicFeatures Features;
-  std::set<const HighExpr *> Seen;
+  HighExprSet Seen;
   std::function<void(const HighExpr &)> Visit = [&](const HighExpr &Expr) {
     if (!Seen.insert(&Expr).second)
       return;
@@ -217,7 +217,7 @@ X86CIntrinsicFeatures collectX86CIntrinsicFeatures(const HighFunc &Func) {
 /// (ARMIntrinsicTargetFeatures.def), comma separated.
 std::string armCIntrinsicTargetFeatures(const HighFunc &Func) {
   std::set<std::string> Features;
-  std::set<const HighExpr *> Seen;
+  HighExprSet Seen;
   std::function<void(const HighExpr &)> Visit = [&](const HighExpr &Expr) {
     if (!Seen.insert(&Expr).second)
       return;
@@ -3426,7 +3426,7 @@ bool HighCWriter::readsThroughForwards(const HighExpr &E,
   std::set<std::string> Followed;
   // Expressions share subexpressions: one explored without finding the name
   // does not read it from anywhere else either.
-  std::set<const HighExpr *> Explored;
+  HighExprSet Explored;
   std::function<bool(const HighExpr &)> Reads = [&](const HighExpr &Cur) {
     if (!Explored.insert(&Cur).second)
       return false;
@@ -5899,7 +5899,7 @@ void HighCWriter::writeFunctionProjection(const HighFunc &Func) {
     MemoryIdentifiers.allocate(Param.Name);
   for (const auto &Local : Func.Locals)
     MemoryIdentifiers.allocate(Local.Name);
-  std::set<const HighExpr *> MemorySeen;
+  HighExprSet MemorySeen;
   std::function<void(const ExprPtr &)> ReserveNames = [&](const ExprPtr &E) {
     if (!E || !MemorySeen.insert(E.get()).second)
       return;
