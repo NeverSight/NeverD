@@ -6057,9 +6057,12 @@ intervening calls, separate blocks, writable code and exhausted work refuse.
 A pure integer transfer is a positive control. Separate outer callers retain
 the transitive IAT dependency and refuse after rebinding it; neither route
 acquires a registration-leaf memory contract.
-`RegistrationCRTDataStack` exercises 2,016 authored machine-code variants
+`RegistrationCRTDataStack` exercises 2,604 authored machine-code variants
 across three bases, both legacy CRT providers, `_fmode`/`_commode`, accumulator
 and ModRM loads, complete GPR copies and repeated fresh data receipts.
+Mapped scalar reads and allocated private-stack reads keep an unchanged data
+carrier. Unknown or unmapped reads, accesses crossing a mapping end, reads
+below the current SP, and full or partial carrier overwrites refuse it.
 Wrong or delayed providers, missing storage, partial or segmented writes,
 atomic exchanges, opaque reads and calls, address arithmetic, separate blocks,
 writable code and exhausted work refuse. Outer callers retain both data and

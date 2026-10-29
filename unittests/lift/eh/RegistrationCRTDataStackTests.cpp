@@ -70,6 +70,21 @@ BinaryImage dataImage(uint32_t Base, const char *Module, const char *Name,
     Code.insert(Code.end(), {0x83, uint8_t(0xc0 + Carrier), 0});
   if (Mutation == 9)
     load(Slot + 12, Scratch, false);
+  if (Mutation == 25 || Mutation == 27)
+    load(Slot + (Mutation == 25 ? 16 : 13), Scratch, false);
+  if (Mutation == 26)
+    Code.insert(Code.end(), {0x8b, uint8_t(Scratch * 9)});
+  if (Mutation == 28 || Mutation == 29) {
+    if (Mutation == 28)
+      Code.push_back(0x66);
+    load(Slot + 12, Carrier, false);
+  }
+  if (Mutation == 30) {
+    Code.insert(Code.end(), {0x83, 0xec, 4, 0x8b, uint8_t(4 + Scratch * 8),
+                             0x24, 0x83, 0xc4, 4});
+  }
+  if (Mutation == 31)
+    Code.insert(Code.end(), {0x8b, uint8_t(0x44 + Scratch * 8), 0x24, 0xfc});
   if (Mutation == 13) {
     Code.insert(Code.end(), {0xc7, 0x05});
     word(Slot);
@@ -183,12 +198,39 @@ TEST(RegistrationCRTDataStack, CompleteCurrentDataStoresPreserveOnlyBindings) {
               const auto Pop =
                   getCheckedX86CalleeStackPop(Image, Image.Entry, &Work);
               const bool Valid = Mutation == 0 || Mutation == 7 ||
-                                 Mutation == 20 || Mutation == 22;
+                                 Mutation == 9 || Mutation == 20 ||
+                                 Mutation == 22;
               EXPECT_EQ(Pop, Valid ? std::optional<uint32_t>{0} : std::nullopt);
               EXPECT_LE(Work, limits::kMaxRegistrationEHStateWork);
               if (!Mutation)
                 EXPECT_FALSE(
                     getCheckedX86RegistrationLeafCalleeABI(Image, Image.Entry));
+            }
+          }
+}
+
+TEST(RegistrationCRTDataStack, ClosedReadsRetainOnlyUnchangedDataCarriers) {
+  for (uint32_t Base : {0x400000u, 0x18000000u, 0x50000000u})
+    for (const char *Module : {"msvcrt.dll", "MSVCR100.DLL"})
+      for (const char *Name : {"_fmode", "_commode"})
+        for (unsigned Register : {0u, 1u, 2u, 3u, 6u, 7u})
+          for (bool Moffs : {false, true}) {
+            if (Moffs && Register)
+              continue;
+            for (unsigned Mutation = 25; Mutation != 32; ++Mutation) {
+              SCOPED_TRACE(::testing::Message()
+                           << Base << ':' << Module << ':' << Name << ':'
+                           << Register << ':' << Moffs << ':' << Mutation);
+              const auto Image =
+                  dataImage(Base, Module, Name, Register, Moffs, Mutation);
+              // Only the allocated private read is closed and leaves the
+              // carrier untouched. The others read unknown/unmapped storage,
+              // overrun a mapping, or overwrite all/part of the carrier.
+              EXPECT_EQ(getCheckedX86CalleeStackPop(Image, Image.Entry),
+                        Mutation == 30 ? std::optional<uint32_t>{0}
+                                       : std::nullopt);
+              EXPECT_FALSE(
+                  getCheckedX86RegistrationLeafCalleeABI(Image, Image.Entry));
             }
           }
 }

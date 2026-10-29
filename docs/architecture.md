@@ -2647,6 +2647,11 @@ MSVCRT/MSVCR100 `_fmode` and `_commode` data imports with that same current MOV
 receipt. Its explicit data policy never turns the address into a callable
 identity. `RegistrationCRTData` tracks complete DWORD addresses within one
 block, across full GPR copies and the lifter's canonical address extension.
+Scalar reads admitted by `RegistrationMemoryPermissions` retain only untouched
+data-address carriers. The read produces no new address receipt, and a full or
+partial destination alias still invalidates its earlier carrier. This reuses
+the ordinary current-frame and mapped-read permission instead of deciding
+readability from numerical addresses or file contents in the data tracker.
 One complete DWORD store to the exported CRT int is disjoint from the caller
 image's IAT. It consumes the receipt; a later store needs a fresh authenticated
 load and a still-live binding. Partial writes, arithmetic on the address,

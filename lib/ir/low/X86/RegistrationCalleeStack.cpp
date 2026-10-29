@@ -560,11 +560,17 @@ stackPopForBody(StackBody &Body, va_t Entry, const NestedStackProof &NestedPop,
       bool CRTDataStore = false;
       if (!Body.ImportDataLoads.empty() && !Registration && !CxxPaths) {
         const auto DataLoad = Body.ImportDataLoads.find({Op.Addr, Op.Seq});
+        const bool ClosedRead =
+            Op.Opcode == NdOp::LOAD &&
+            registration_abi::preservesOrdinaryRegistrationBindings(
+                Image, Abstract, Transfer, Body.callerArgumentReadBytes(),
+                Work);
         if (!CRTData.transfer(Abstract,
                               DataLoad == Body.ImportDataLoads.end()
                                   ? std::nullopt
                                   : std::optional<va_t>{DataLoad->second},
-                              State.ImportBindingsIntact, Work, CRTDataStore))
+                              State.ImportBindingsIntact, ClosedRead, Work,
+                              CRTDataStore))
           return std::nullopt;
       }
       if (!Registration && !CxxPaths && State.ImportBindingsIntact &&

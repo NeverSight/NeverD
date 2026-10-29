@@ -79,8 +79,8 @@ void CRTDataStoreProof::write(const NdVar &Var, std::optional<Pointer> Value) {
 
 bool CRTDataStoreProof::transfer(const LowOp &Op,
                                  std::optional<va_t> AuthenticatedLoad,
-                                 bool BindingsLive, size_t &Work,
-                                 bool &DisjointStore) {
+                                 bool BindingsLive, bool ClosedRead,
+                                 size_t &Work, bool &DisjointStore) {
   DisjointStore = false;
   if (Instruction != Op.Addr) {
     Temps.clear();
@@ -99,7 +99,10 @@ bool CRTDataStoreProof::transfer(const LowOp &Op,
   if (Op.Opcode == NdOp::LOAD) {
     // An opaque read can dispatch a continuing handler. It must not preserve
     // an earlier register address, even if that register is not the output.
-    clear();
+    // A separately closed current read retains only untouched carriers;
+    // write() still invalidates any full or partial destination alias below.
+    if (!ClosedRead)
+      clear();
     if (AuthenticatedLoad && BindingsLive && Op.NumInputs == 1 &&
         Op.Output.isTemp() && Op.Output.Size == 4)
       Value = Pointer{*AuthenticatedLoad, 4};

@@ -48,8 +48,11 @@ class CRTDataStoreProof {
 public:
   /// AuthenticatedLoad names only this exact current LOAD's typed import
   /// receipt. A current binding is required to introduce its runtime address.
+  /// ClosedRead retains other carriers only through the shared current scalar
+  /// memory-access proof. It supplies no value for this LOAD's destination.
   bool transfer(const LowOp &Op, std::optional<va_t> AuthenticatedLoad,
-                bool BindingsLive, size_t &Work, bool &DisjointStore);
+                bool BindingsLive, bool ClosedRead, size_t &Work,
+                bool &DisjointStore);
 };
 
 } // namespace registration_abi
