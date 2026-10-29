@@ -2573,12 +2573,15 @@ none of these imports inherits private memory access, exception dispatch or a
 constant result from its stack ABI. A separate normal-return binding profile
 recognizes MSVCR100's legacy
 [`__set_app_type`](https://learn.microsoft.com/en-us/cpp/c-runtime-library/internal-set-app-type)
-assignment into CRT-owned application state. Its complete int input remains
-runtime data; the effect retains only already-live caller IAT bindings. Direct
-IAT calls, authenticated cached loads and immutable veneers share the same
-provider/storage owner. It grants no frame, callback, unwind or native memory
-contract. MSVCRT's similarly named export, modern `_set_app_type`, callback
-registration and locale changes do not inherit that binding profile.
+assignment into CRT-owned application state, and
+[`__setusermatherr`](https://learn.microsoft.com/en-us/cpp/c-runtime-library/setusermatherr)
+storing an encoded pointer for later math-error dispatch. Installing the callback
+does not invoke it; the int input and callback bits remain runtime data. The
+effect retains only already-live caller IAT bindings. Direct IAT calls,
+authenticated cached loads and immutable veneers share the same provider and
+storage owner. It grants no frame, callback, result, unwind or native memory
+contract. Other CRT providers, modern `_set_app_type`, locale changes and other
+callback registration APIs do not inherit these exact legacy profiles.
 The returning-stack contract retains each direct callee's transitive IAT
 dependencies, including imports behind an immutable veneer or another helper.
 Callers collect those dependencies before interpreting any stores. A preceding

@@ -146,8 +146,7 @@ BinaryImage setterImage(uint32_t Base, const char *Module, const char *Name,
   return Image;
 }
 
-TEST(RegistrationCRTBindings,
-     LegacyApplicationSetterRetainsOnlyReachingBindings) {
+TEST(RegistrationCRTBindings, LegacySettersRetainOnlyReachingBindings) {
   for (uint32_t Base : {0x400000u, 0x18000000u, 0x50000000u})
     for (const char *Module : {"msvcrt.dll", "MSVCR100.DLL"})
       for (const char *Name : {"__set_app_type", "__setusermatherr",
@@ -160,7 +159,8 @@ TEST(RegistrationCRTBindings,
             const auto Image = setterImage(Base, Module, Name, Form, Mutation);
             const bool Setter =
                 llvm::StringRef(Module).equals_insensitive("msvcr100.dll") &&
-                llvm::StringRef(Name) == "__set_app_type";
+                (llvm::StringRef(Name) == "__set_app_type" ||
+                 llvm::StringRef(Name) == "__setusermatherr");
             const bool Valid = Setter && (Mutation == 0 || Mutation >= 12);
             size_t Work =
                 Mutation == 9 ? limits::kMaxRegistrationEHStateWork : 0;

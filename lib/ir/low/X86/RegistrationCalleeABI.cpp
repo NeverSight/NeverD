@@ -203,12 +203,13 @@ bool preservesRegistrationImportBindings(const BinaryImage &Image,
   if (!Import)
     return false;
   const llvm::StringRef Module = Import->Module;
-  // The legacy MSVCR100 setter copies its complete int argument into CRT
-  // state without replacing the caller image's IAT. Keep that write and the
-  // runtime scalar opaque: this is no private-frame or callback contract.
+  // The legacy MSVCR100 setters retain an int or encoded callback pointer in
+  // CRT state without replacing the caller image's IAT. __setusermatherr does
+  // not invoke that callback while setting it. Keep the write and runtime
+  // values opaque: this is no frame, callback, result or no-throw contract.
   // Other CRT providers and the modern _set_app_type have separate contracts.
   if (Module.equals_insensitive("msvcr100.dll") &&
-      Import->Name == "__set_app_type")
+      (Import->Name == "__set_app_type" || Import->Name == "__setusermatherr"))
     return true;
   // These APIs transform pointer bits with a process-specific secret, without
   // replacing the caller image's import slots. Keep the runtime result opaque;
