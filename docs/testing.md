@@ -16768,3 +16768,11 @@ caller-before-callee order, typedefs, selected externals and preserved LLVM
 prototypes. The native pointer suite compiles a complete public MinGW toy and
 checks both matching CRT layouts and rejection of mismatched MSVCRT/UCRT
 headers or same-offset fields of a different type. These source checks do not certify native kernel or ARM64 execution.
+
+## Repeated image memory in C
+
+`X86RepState.ImageCopiesRetainEveryAccessedByte` recompiles both C routes at
+O0/O2 with UBSan. Its x64 COFF, ELF and Mach-O cases copy complete image words
+in both directions and repeat the check after filling the same image storage.
+The independently calculated result observes every copied byte. The generated
+code executes on x64 hosts; other hosts explicitly skip this execution check.

@@ -44,6 +44,7 @@
 #include "neverd/ir/intrinsics/AArch64/AArch64ExceptionReturn.h"
 #include "neverd/ir/intrinsics/X86/X86CompressExpand.h"
 #include "neverd/ir/intrinsics/X86/X86FourSource.h"
+#include "neverd/ir/intrinsics/X86/X86RepState.h"
 #include "neverd/ir/intrinsics/X86/X86Unsupported.h"
 #include "neverd/loader/AArch64MemoryImage.h"
 
@@ -3625,6 +3626,57 @@ void HighCWriter::collectImageObjects(const std::vector<HighFunc> &Funcs) {
         else if (const HighExpr *Base = indexedImageBase(*E.Operands[0]))
           NoteWhole(Base->ConstVal, NdType::makeInt(Bytes, false), false);
       }
+    // A bounded repeated copy/fill reaches every element, including bytes
+    // beyond a guessed scalar or an embedded string's first terminator.
+    // Record its memory operands before visiting their address constants so
+    // the ordinary overlapping-object owner supplies one complete backing.
+    if (E.Kind == ExprKind::Call &&
+        (E.IntrinsicId == Intrinsic::X86RepMovsState ||
+         E.IntrinsicId == Intrinsic::X86RepStosState) &&
+        E.Operands.size() == 5 && E.Operands[3] && E.Operands[4] &&
+        E.Operands[3]->Kind == ExprKind::Const &&
+        E.Operands[4]->Kind == ExprKind::Const &&
+        E.Operands[4]->ConstVal <= UINT32_MAX) {
+      const bool Copy = E.IntrinsicId == Intrinsic::X86RepMovsState;
+      const auto &Count = E.Operands[Copy ? 2 : 1];
+      const auto Control =
+          x86RepControl(E.IntrinsicId, Opts.TheArch,
+                        static_cast<uint32_t>(E.Operands[4]->ConstVal));
+      if (Control && !Control->Segment &&
+          Control->AddressBytes == pointerBytes(Opts.TheArch) && Count &&
+          Count->Kind == ExprKind::Const && Count->ConstVal) {
+        const bool Backward =
+            (E.Operands[3]->ConstVal >> X86RepDirectionShift) & 1;
+        for (unsigned I = 0; I < (Copy ? 2u : 1u); ++I) {
+          if (!E.Operands[I])
+            continue;
+          const auto Address = constAddress(*E.Operands[I]);
+          if (!Address || !isImageDataAddress(*Address))
+            continue;
+          const auto *Segment = Opts.Image->getSegmentFor(*Address);
+          const uint64_t Available = Segment->Size;
+          const uint64_t Offset = *Address - Segment->VA;
+          const uint64_t Width = Control->ElementBytes;
+          if (Count->ConstVal > Available / Width)
+            throw std::invalid_argument(
+                "repeated image access exceeds its mapped storage");
+          const uint64_t Bytes = Count->ConstVal * Width;
+          const uint64_t Before = Backward ? Bytes - Width : 0;
+          if (Offset < Before || Offset - Before > Available - Bytes)
+            throw std::invalid_argument(
+                "repeated image access crosses its mapped storage");
+          const va_t Begin = *Address - Before;
+          const bool Written = !Copy || I == 1;
+          const auto ElementType = NdType::makeInt(Width, false);
+          NoteAccessAddress(E.Operands[I].get());
+          noteImageObject(Begin, ElementType, Written, true);
+          noteImageObject(*Address, ElementType, Written, true);
+          ImageObject &Object = ImageObjects[Begin];
+          Object.IndexedBytes = std::max(Object.IndexedBytes, Bytes);
+          Object.AddressTaken = true;
+        }
+      }
+    }
     // A read-modify-write reads and writes the object it addresses.
     if (E.Kind == ExprKind::BinOp &&
         (E.Op == NdOp::ATOMIC_ADD || E.Op == NdOp::ATOMIC_XCHG ||

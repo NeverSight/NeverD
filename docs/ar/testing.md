@@ -2273,3 +2273,5 @@ QT_QPA_PLATFORM=offscreen NEVERD_PATCH_NATIVE_WORKER="$PWD/build-gui/bin/neverd-
 يفحص `RelroKeepsPartialPagesAndStaticStartupWritable` حدود صفحات x86 وx64 وARM وARM64 وضمانات المُحمّل الصريحة. تنفّذ اختبارات المؤشرات الأصلية أمثلة Linux x64 مستقلة ذات RELRO جزئي أو بلا مُحمّل ديناميكي، وتكتب المتغير العام ثم تقرؤه. يفحص `NeverDDataSymbolBindingTests` حماية المؤشر بالكامل ومساري C. لا تثبت هذه الاختبارات اعتماد تكوينات صفحات ARM الأصلية.
 
 تختبر `NeverDLowScalarConstantTests` و`NeverDIndirectCallValueSourceTests` الاستدعاءات بين الكتل وحدود الرفض مع تنفيذ مساري C. تنفذ `NeverDLLVMCSourcePointerTests` المؤشرات وردود النداء والأسماء البديلة والتصريحات الخارجية عند O0/O2 مع UBSan. تختبر المجموعة الأصلية ترجمة مثال MinGW علني وترفض اختلاف تخطيطات MSVCRT/UCRT. لا يثبت ذلك تنفيذًا أصليًا للنواة أو ARM64.
+
+يتحقق `X86RepState.ImageCopiesRetainEveryAccessedByte` من النسخ في الاتجاهين ومن النسخ بعد ملء المخزن نفسه لتنسيقات x64 COFF وELF وMach-O. يُترجم مسارا C ويُنفذان عند O0/O2 مع UBSan، وتفحص نتيجة محسوبة بصورة مستقلة كل بايت منسوخ. تتخطى الأجهزة غير x64 اختبار التنفيذ صراحةً.

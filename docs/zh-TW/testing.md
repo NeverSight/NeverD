@@ -2193,3 +2193,5 @@ MedIR 的常數傳播與複製傳播共用 `canPropagateConstantToOperand`：計
 `RelroKeepsPartialPagesAndStaticStartupWritable` 檢查 x86、x64、ARM、ARM64 的頁面邊界與明確的載入器保證。原生指標測試執行獨立的 Linux x64 部分頁 RELRO 與無載入器靜態範例，驗證全域變數先寫後讀。`NeverDDataSymbolBindingTests` 檢查完整指標保護與兩條 C 路徑；這些檢查不代表原生 ARM 頁面配置認證。
 
 `NeverDLowScalarConstantTests` 與 `NeverDIndirectCallValueSourceTests` 涵蓋跨區塊呼叫及拒絕邊界，並執行兩條 C 路線。`NeverDLLVMCSourcePointerTests` 以 O0/O2 及 UBSan 檢查物件指標、回呼、別名及外部宣告。原生指標套件編譯公開 MinGW 範例並拒絕 MSVCRT/UCRT 配置不符；不代表原生核心或 ARM64 執行驗證。
+
+`X86RepState.ImageCopiesRetainEveryAccessedByte` 在 x64 COFF、ELF 和 Mach-O 下執行雙向映像複製，以及填入後複製。兩條 C 路線均以 O0/O2 加 UBSan 編譯執行，獨立計算的結果檢查每個複製位元組；非 x64 主機明確略過執行檢查。

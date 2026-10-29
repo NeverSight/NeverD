@@ -14422,3 +14422,12 @@ their own contracts. Materialized record-member loads use the same pointer-to-
 integer bridge as inlined reads. Embedded CRT records reuse a target header
 only with size, field-offset and member-type checks; MSVCRT and UCRT sharing `_iobuf` does
 not establish layout compatibility.
+
+## Bounded repeated image objects
+
+HighC records constant-count, constant-direction, natural-address-width MOVS
+and STOS accesses in its existing image-object collector. Their complete mapped
+ranges share the ordinary overlapping byte backing, including backwards access
+and copies extending beyond a guessed scalar or string terminator. A range
+crossing its mapped segment refuses source emission. This does not infer the
+extent of a dynamic count, a segmented address or an address-size override.

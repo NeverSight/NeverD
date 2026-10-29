@@ -11,6 +11,7 @@
 
 #include "../../../lib/backend/c/render/X86/X86NativeFeatures.h"
 #include "../../../lib/backend/c/render/X86/X86RepState.h"
+#include "../core/SourceCallExecution.h"
 #include "gtest/gtest.h"
 
 #include "neverd/backend/c/HighC/HighCEmitter.h"
@@ -698,3 +699,135 @@ TEST(X86RepState, ExportFullMatrixForIndependentOracle) {
 }
 
 } // namespace
+
+TEST(X86RepState, ImageCopiesRetainEveryAccessedByte) {
+#if !defined(__x86_64__) && !defined(_M_X64)
+  GTEST_SKIP() << "executing x64 REP source requires an x64 host";
+#endif
+  constexpr va_t CodeVA = 0x140001000, DataVA = 0x140002000;
+  for (auto Format :
+       {BinaryFormat::COFF, BinaryFormat::ELF, BinaryFormat::MachO})
+    for (bool Fill : {false, true})
+      for (bool Backward : {false, true}) {
+        SCOPED_TRACE(static_cast<unsigned>(Format));
+        SCOPED_TRACE(Backward);
+        SCOPED_TRACE(Fill);
+        BinaryImage Image;
+        Image.Arch = Arch::X64;
+        Image.Bits = Bitness::Bits64;
+        Image.Format = Format;
+        Image.Base = Image.Entry = CodeVA;
+        Segment Data;
+        Data.Name = ".rdata";
+        Data.VA = DataVA;
+        Data.Flags = SegmentFlags::Readable;
+        if (Fill)
+          Data.Flags = Data.Flags | SegmentFlags::Writable;
+        Data.Data = {0x41, 0x42, 0,    0x43, 0xff, 0x12, 0x80, 0x26,
+                     0x8a, 0xf5, 0,    0x7d, 0x31, 0x99, 0x02, 0xe4,
+                     0xee, 0x81, 0x21, 0,    0x43, 0x90, 0xfe, 0x72};
+        Data.Size = Data.FileSz = Data.Data.size();
+        uint64_t Expected = 0;
+        for (unsigned I = 0; I < Data.Data.size(); ++I)
+          Expected ^= uint64_t(Data.Data[I]) << (8 * (I % 8));
+        constexpr uint64_t FillValue = 0x17365879BADCF05A;
+        if (Fill)
+          Expected = FillValue;
+        Segment Text;
+        Text.Name = ".text";
+        Text.VA = CodeVA;
+        Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+        // Preserve the string registers, copy three complete words to a local
+        // object and observe every byte independently of source declarations.
+        Text.Data = {0x56, 0x57, 0x48, 0x83, 0xec, 0x28};
+        if (Fill) {
+          Text.Data.insert(Text.Data.end(), {0x48, 0x8d, 0x3d});
+          const uint32_t FillDisplacement =
+              DataVA + (Backward ? 16 : 0) - (CodeVA + Text.Data.size() + 4);
+          for (unsigned I = 0; I < 4; ++I)
+            Text.Data.push_back(
+                static_cast<uint8_t>(FillDisplacement >> (8 * I)));
+          Text.Data.insert(Text.Data.end(), {0x48, 0xb8});
+          for (unsigned I = 0; I < 8; ++I)
+            Text.Data.push_back(static_cast<uint8_t>(FillValue >> (8 * I)));
+          Text.Data.insert(Text.Data.end(),
+                           {0xb9, 3, 0, 0, 0,
+                            static_cast<uint8_t>(Backward ? 0xfd : 0xfc), 0xf3,
+                            0x48, 0xab, 0xfc});
+        }
+        Text.Data.insert(Text.Data.end(),
+                         {0x48, 0x8d, 0x7c, 0x24,
+                          static_cast<uint8_t>(Backward ? 0x18 : 0x08), 0x48,
+                          0x8d, 0x35});
+        const uint32_t Displacement =
+            DataVA + (Backward ? 16 : 0) - (CodeVA + Text.Data.size() + 4);
+        for (unsigned I = 0; I < 4; ++I)
+          Text.Data.push_back(static_cast<uint8_t>(Displacement >> (8 * I)));
+        Text.Data.insert(
+            Text.Data.end(),
+            {0xb9, 3,    0,
+             0,    0,    static_cast<uint8_t>(Backward ? 0xfd : 0xfc),
+             0xf3, 0x48, 0xa5,
+             0xfc, 0x48, 0x8b,
+             0x44, 0x24, 0x08,
+             0x48, 0x33, 0x44,
+             0x24, 0x10, 0x48,
+             0x33, 0x44, 0x24,
+             0x18, 0x48, 0x83,
+             0xc4, 0x28, 0x5f,
+             0x5e, 0xc3});
+        Text.Size = Text.FileSz = Text.Data.size();
+        auto Symbol = Symbol::makeFunc(CodeVA, Text.Size);
+        Symbol.Name = "copy_image_words";
+        Image.Symbols.push_back(std::move(Symbol));
+        Image.Segments.push_back(std::move(Text));
+        Image.Segments.push_back(std::move(Data));
+        PipelineOptions Options;
+        Options.EmitDumpOutput = false;
+        Options.OnlyFunctionEntries = {CodeVA};
+        llvm::LLVMContext Context;
+        auto Result = Pipeline().run(Image, Context, Options);
+        ASSERT_TRUE(Result.Success) << Result.Error;
+        auto Module = MedLLVMEmitter().emit(Result.MedFuncs, Context, "copy",
+                                            Arch::X64, {}, &Image, Format);
+        ASSERT_TRUE(Module);
+        CEmitterOptions COptions;
+        COptions.TheArch = Arch::X64;
+        COptions.Format = Format;
+        COptions.Image = &Image;
+        for (bool LLVMRoute : {false, true}) {
+          SCOPED_TRACE(LLVMRoute);
+          std::string Source;
+          llvm::raw_string_ostream Out(Source);
+          ASSERT_TRUE(
+              LLVMRoute
+                  ? LLVMCEmitter().emit(*Module, Out, COptions, nullptr, &Image)
+                  : HighCEmitter().emit(Result.HighFuncs, Out, COptions));
+          Out.flush();
+          const auto Arguments = Format == BinaryFormat::COFF ? "" : "0, 0";
+          const auto Oracle = "\nint main(void) { return copy_image_words(" +
+                              std::string(Arguments) +
+                              ") != " + std::to_string(Expected) + "ULL; }\n";
+          for (const auto Level : {"-O0", "-O2"})
+            source_call_execution_test::compileAndRun(
+                Source + Oracle,
+                {Level, "-fsanitize=undefined", "-fsanitize-trap=all"});
+        }
+        // A complete image span is required even when its starting address
+        // remains mapped. Truncate the far end in either direction.
+        auto &Truncated = Image.Segments.back();
+        if (Backward) {
+          Truncated.VA += 8;
+          Truncated.Data.erase(Truncated.Data.begin(),
+                               Truncated.Data.begin() + 8);
+        }
+        // File padding beyond the mapping is not accessible image storage.
+        Truncated.Size = 16;
+        Truncated.FileSz = Truncated.Data.size();
+        std::string Refused;
+        llvm::raw_string_ostream RefusedOut(Refused);
+        EXPECT_THROW(
+            HighCEmitter().emit(Result.HighFuncs, RefusedOut, COptions),
+            std::invalid_argument);
+      }
+}

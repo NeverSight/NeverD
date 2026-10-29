@@ -2212,3 +2212,5 @@ MedIR 的常量传播和复制传播共用 `canPropagateConstantToOperand`：计
 `RelroKeepsPartialPagesAndStaticStartupWritable` 检查 x86、x64、ARM、ARM64 的页边界和显式加载器保证。原生指针测试执行独立的 Linux x64 部分页 RELRO 与无加载器静态样例，验证全局变量先写后读。`NeverDDataSymbolBindingTests` 检查完整指针保护和两条 C 路径；这些检查不代表原生 ARM 页配置认证。
 
 `NeverDLowScalarConstantTests` 和 `NeverDIndirectCallValueSourceTests` 覆盖跨块调用及拒绝边界，并执行两条 C 路线。`NeverDLLVMCSourcePointerTests` 在 O0/O2 加 UBSan 下检查对象指针、回调、别名和选中函数的外部声明。原生指针套件编译公开 MinGW 样例，拒绝 MSVCRT/UCRT 布局不符；这些不等于原生内核或 ARM64 执行验证。
+
+`X86RepState.ImageCopiesRetainEveryAccessedByte` 在 x64 COFF、ELF 和 Mach-O 下执行双向镜像复制，以及填充后复制。两条 C 路线均以 O0/O2 加 UBSan 编译运行，独立计算的结果检查每个复制字节；非 x64 主机明确跳过执行检查。

@@ -777,3 +777,9 @@ conditional memory, invocation lifetime and both C routes remain open.
    corpus producer verification when corpus code changes.
 4. Keep private binaries, PDBs, decompiler comparisons, addresses, names, and
    timing logs in local scratch storage, outside Git.
+
+- Bounded natural-width REP MOVS/STOS now contribute their complete forward or
+  backward image ranges to HighC's shared object backing. The x64 COFF, ELF and
+  Mach-O execution matrix compares both C routes at O0/O2 and rejects ranges
+  beyond mapped storage, including extra file padding. Dynamic counts,
+  segmented operands and address-size overrides retain their previous limits.
