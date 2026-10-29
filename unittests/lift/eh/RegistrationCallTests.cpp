@@ -499,6 +499,19 @@ TEST(RegistrationCallABI, EmptyImageRangeExcludesOnlyProvedUnreachedCalls) {
       const bool Accepted = Mutation == 0;
       EXPECT_EQ(getCheckedX86CalleeStackPop(Image, Image.Entry),
                 Accepted ? std::optional<uint32_t>{0} : std::nullopt);
+      for (auto Result : {RegistrationLeafResult::Observed,
+                          RegistrationLeafResult::Discarded}) {
+        const auto Leaf = getCheckedX86RegistrationLeafCalleeABI(
+            Image, Image.Entry, nullptr, Result);
+        EXPECT_EQ(bool(Leaf), Accepted);
+        if (Leaf) {
+          EXPECT_EQ(Leaf->StackPopBytes, 0u);
+          EXPECT_TRUE(Leaf->ImageReads.empty());
+          EXPECT_TRUE(Leaf->ImageWrites.empty());
+          EXPECT_TRUE(Leaf->ECXReads.empty());
+          EXPECT_TRUE(Leaf->ECXWrites.empty());
+        }
+      }
       LowOp Call;
       Call.Opcode = NdOp::CALL;
       Call.Addr = CallVA;

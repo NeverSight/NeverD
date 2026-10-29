@@ -673,22 +673,21 @@ bool hasPrivateCallerFrame(const LowFunc &Function, const BinaryImage &Image,
     }
     if (Threw)
       continue;
-    std::optional<va_t> BoundSuccessor;
     const auto &Block = *Blocks.at(Id);
-    if (ScalarArguments) {
-      if (!Charge(1 + Entries.size()))
-        return false;
-      BoundSuccessor = knownFrameBranchTarget(
-          Block, Transfer, [&](va_t Address) -> std::optional<int> {
-            const auto Found = Entries.find(Address);
-            return Found == Entries.end() ? std::nullopt
-                                          : std::optional<int>{Found->second};
-          });
-    }
+    if (!Charge(1 + Block.Succs.size()))
+      return false;
+    const auto KnownSuccessor = knownFrameBranchTarget(
+        Block, Transfer, [&](va_t Address) -> std::optional<int> {
+          const auto Found = Entries.find(Address);
+          return Found == Entries.end() ? std::nullopt
+                                        : std::optional<int>{Found->second};
+        });
     for (int Successor : Blocks.at(Id)->Succs) {
       if (!Blocks.count(Successor))
         return false;
-      if (BoundSuccessor && *BoundSuccessor != Blocks.at(Successor)->StartAddr)
+      // Both physical edges must exist. Ordinary joins can lose a constant
+      // on a later visit, in which case both successors are checked again.
+      if (KnownSuccessor && *KnownSuccessor != Blocks.at(Successor)->StartAddr)
         continue;
       if (ScalarArguments) {
         if (!Charge(1 + stateWork(State)))

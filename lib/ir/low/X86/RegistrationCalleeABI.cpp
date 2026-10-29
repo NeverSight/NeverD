@@ -388,9 +388,13 @@ std::optional<RegistrationLeafCalleeABI> registration_abi::checkedLeafCalleeABI(
     for (const auto &Op : Block.Ops) {
       if (Op.Opcode != NdOp::CALL && Op.Opcode != NdOp::INDIR_CALL)
         continue;
-      if ((!Context && !Callbacks) || Op.Opcode != NdOp::CALL ||
-          Op.NumInputs != 1 || !Op.Inputs[0].isConst() ||
-          Op.Inputs[0].Size != 4 || Op.Seq < 0 ||
+      // The private-frame interpreter rejects every reached ordinary leaf
+      // call. Do not reject a call on a proved infeasible edge before that
+      // shared traversal. Object graphs retain their separate closure check.
+      if (!Context && !Callbacks)
+        continue;
+      if (Op.Opcode != NdOp::CALL || Op.NumInputs != 1 ||
+          !Op.Inputs[0].isConst() || Op.Inputs[0].Size != 4 || Op.Seq < 0 ||
           Initializers.size() + ObjectCallbacks.size() >=
               kMaxObjectCallbackNodes)
         return std::nullopt;

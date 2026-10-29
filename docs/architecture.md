@@ -2491,9 +2491,14 @@ frame transfer can derive a zero difference or a reflexive comparison from
 two complete copies of the same image-address identity. Different image
 addresses and an address versus its preferred numeric bits remain unknown;
 neither image layout nor base-dependent ordering becomes a scalar fact.
-Ordinary returning-stack proofs reuse the shared constant-branch authority,
-which requires both exact physical CFG edges. Unknown conditions retain both
-successors. Registration dispatcher graphs retain their independent complete
+Ordinary returning-stack and private-frame effect proofs reuse the shared
+constant-branch authority, which requires both exact physical CFG edges.
+Unknown conditions retain both successors, including after an ordinary state
+join loses a previously known condition. A leaf rejects calls when its frame
+interpreter reaches them; a proved unreachable call contributes no memory
+effects. All retained instruction bytes and near returns still require their
+independent authentication. Object and initializer call graphs retain their
+closure checks, and registration dispatcher graphs retain their complete
 parent-path obligations. This invocation reasoning removes no source blocks
 and grants no native rewrite permission.
 Strong callee proofs also authenticate instruction fields and require relocated

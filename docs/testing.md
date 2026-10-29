@@ -5898,14 +5898,21 @@ memory-only saved pointers, far/tail returns, writable code, wrong targets and
 exhausted work. `StackCleanupIncludesCheckedNestedImportCleanup` verifies
 provider and exact-slot identity before a nested stdcall can balance its caller.
 `EmptyImageRangeExcludesOnlyProvedUnreachedCalls` checks an empty relocated
-pointer range at three image bases through both returning-stack and bound
-plain-callee effect queries. Changed endpoints, equal numeric bits without
+pointer range at three image bases through returning-stack, bound plain-callee
+and observed/discarded leaf effect queries. Changed endpoints, equal numeric bits without
 address provenance, partial register writes, opaque calls, reversed branches,
 mutable code, malformed fixups, an unbalanced return and pointer dereferences
 must refuse. `IdenticalImageAddressesHaveExactRelations` checks zero difference
 and signed/unsigned self-comparisons, full spills, partial aliases, mismatched
 widths and mixed frame, cookie, import or thread provenance. The earlier frame
 coordinate and numeric-address cancellation negatives remain required.
+`RegistrationLeafBranch` checks taken and fallthrough choices around direct
+and indirect calls and image writes. Mutable zero-filled data remains unknown;
+reachable calls refuse, and reachable writes retain their exact effect extent.
+Backedges that replace a constant with a different value or an unknown load
+must reopen the previously excluded call path. Exhausted work refuses every
+otherwise accepted leaf query. The shared physical-edge tests also cover
+missing, duplicated and mismatched successors in either enumeration order.
 `RegistrationImportABI.DivideGuardKeepsOnlyTheNormalReturnStack` checks signed
 and unsigned 8/16/32-bit register and memory divides without a later import
 dependency. The exact divide guard remains in LowIR and the shared frame policy

@@ -42,6 +42,7 @@ add_neverd_unittest(NeverDRegistrationCalleeStackTests
   eh/RegistrationCallTests.cpp
   eh/RegistrationControlFPStackTests.cpp
   eh/RegistrationImportABITests.cpp
+  eh/RegistrationLeafBranchTests.cpp
   eh/RegistrationCalleeRecursionTests.cpp
   LINK_COMPONENTS Pipeline)
 
