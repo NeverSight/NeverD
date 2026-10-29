@@ -269,4 +269,82 @@ TEST(PipelineSourceStackAccesses, BoundedCalleeKeepsDynamicFrameRestores) {
       }
 }
 
+TEST(PipelineSourceStackAccesses, AlignedUnboundedFramesKeepSeparatedReads) {
+  const unsigned Previous = workerThreadOverride().load();
+  const auto Reset = llvm::scope_exit([&] { setWorkerThreadCount(Previous); });
+  for (unsigned Threads : {1, 4})
+    for (BinaryFormat Format :
+         {BinaryFormat::COFF, BinaryFormat::ELF, BinaryFormat::MachO})
+      for (bool Overlap : {false, true})
+        for (bool LLVM : {false, true}) {
+          SCOPED_TRACE(::testing::Message() << Threads << ':' << int(Format)
+                                            << ':' << Overlap << ':' << LLVM);
+          setWorkerThreadCount(Threads);
+          BinaryImage Image;
+          Image.Arch = Arch::X64;
+          Image.Bits = Bitness::Bits64;
+          Image.Format = Format;
+          Image.Entry = 0x1000;
+          Segment Text;
+          Text.Name = ".text";
+          Text.VA = Image.Entry;
+          Text.Size = Text.FileSz = 0x1006;
+          Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+          Text.Data.assign(Text.Size, 0xcc);
+          const uint8_t Argument = Format == BinaryFormat::COFF ? 0x4d : 0x7d;
+          const uint8_t Slot = Overlap ? 8 : 16;
+          // Entry-relative SP is -40 minus any multiple of 16. CALL writes
+          // residues 0..7; the saved RBP and the returned local occupy 8..15.
+          // The negative control instead puts the local in residues 0..7.
+          std::vector<uint8_t> Caller = {
+              0x55, // push rbp
+              0x48, 0x83, 0xec,
+              0x20,             // sub rsp, 32
+              0x48, 0x89, 0xe5, // mov rbp, rsp
+              0x48, 0x89, Argument,
+              Slot, // mov [rbp+slot], rcx/rdi
+              0x48, 0x8b, uint8_t(Format == BinaryFormat::COFF ? 0x01 : 0x07),
+              0x48, 0x83, 0xe0,
+              0xf0,              // and rax, -16
+              0x48, 0x29, 0xc4}; // sub rsp, rax
+          const uint32_t Offset = 0x2000 - (Image.Entry + Caller.size() + 5);
+          Caller.push_back(0xe8);
+          for (unsigned I = 0; I != 4; ++I)
+            Caller.push_back(Offset >> (I * 8));
+          const uint8_t Restore[] = {
+              0x48, 0x8b, 0x45, Slot, // mov rax, [rbp+slot]
+              0x48, 0x8d, 0x65, 0x20, // lea rsp, [rbp+32]
+              0x5d, 0xc3};            // pop rbp; ret
+          Caller.insert(Caller.end(), std::begin(Restore), std::end(Restore));
+          std::copy(Caller.begin(), Caller.end(), Text.Data.begin());
+          // Retain an observable call without writing its shadow area.
+          const uint8_t Sink[] = {
+              0xc6, uint8_t(Format == BinaryFormat::COFF ? 0x01 : 0x07),
+              0x01, 0x31,
+              0xc0, 0xc3};
+          std::copy(std::begin(Sink), std::end(Sink),
+                    Text.Data.begin() + 0x1000);
+          Image.Segments.push_back(std::move(Text));
+          Image.Symbols = {Symbol::makeFunc(0x1000, Caller.size()),
+                           Symbol::makeFunc(0x2000, sizeof(Sink))};
+          PipelineOptions Options;
+          Options.LiftMode = Options.SourceProjection = LLVM;
+          Options.NoOpt = true;
+          Options.OnlyFunctionEntries = {0x1000, 0x2000};
+          llvm::LLVMContext Context;
+          const auto Result = Pipeline().run(Image, Context, Options);
+          ASSERT_EQ(Result.Success, !Overlap) << Result.Error;
+          if (Overlap) {
+            EXPECT_NE(Result.Error.find("physical CALL return slot"),
+                      std::string::npos)
+                << Result.Error;
+          } else if (LLVM) {
+            ASSERT_NE(Result.LlvmModule, nullptr);
+            EXPECT_FALSE(llvm::verifyModule(*Result.LlvmModule));
+          } else {
+            EXPECT_EQ(Result.HighFuncs.size(), 2u);
+          }
+        }
+}
+
 } // namespace

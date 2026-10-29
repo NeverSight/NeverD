@@ -9253,6 +9253,15 @@ both C routes at O0/O2 on COFF/ELF/Mach-O; its observing callee remains a negati
 control. Run these with `NeverDMedStackAlignmentTests`,
 `NeverDHighControlFlowTests`, the SysV/i386/Win64/AAPCS64 call-contract owners and
 `NeverDPipelineOutcomeTests` after changing source stack-access analysis.
+The stack-alignment owner checks modular displacements across x86, x64, ARM
+and AArch64 with all three formats, including signed-boundary wrapping,
+extensions, ambiguous occurrences and seeded/cyclic joins. The call-return
+owner independently enumerates overlapping bytes for aligned unbounded sizes
+on x86/x64; wide reads, multiple CALL residues, unknown encodings and deferred
+observations retain their guards. `AlignedUnboundedFramesKeepSeparatedReads`
+runs separated and overlapping machine-code fixtures through both source
+pipelines with one/four threads on COFF/ELF/Mach-O. These proof tests do not
+qualify execution of arbitrary negative stack allocations.
 `PipelineSourceStackAccesses` checks source, LLVM source projection, machine
 lift, patch and analysis requests on ARM32 and x64, including a restore the
 body consumes. The Mach-O ARM/Thumb five-input MBA source tests execute both

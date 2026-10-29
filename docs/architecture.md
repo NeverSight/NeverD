@@ -13842,6 +13842,16 @@ It reuses the ABI owner's current-SP walk and original call/jump encoding
 policy; a synthetic tail call supplies no push. Explicit later stores kill only
 the bytes they write on each incoming path. Unknown call positions, incomplete
 candidate graphs and exhausted observation budgets cannot grant separation.
+When a dynamic CALL position has neither a range nor an upper bound, the same
+entry-stack owner can prove its displacement modulo a power of two. Masked
+sizes, native-width additions/subtractions and agreeing seeded PHI/copy
+components preserve this residue even if a size is negative or wraps. The
+observation guard aggregates the possible return-slot bytes within two pointer
+widths and excludes only loads disjoint from every CALL. This requires an
+authenticated native-width CALL encoding; unknown encodings retain their
+conservative footprint. Residues do not establish signed bounds or authorize
+other frame projections. Ambiguous definitions, conflicting or unseeded joins
+and exhausted proofs stay unknown.
 Each such load is recorded on its function, not refused at conversion. Whether
 the function observes the loaded value depends on call arguments and returns
 that only call ABI recovery settles. A GCC `pop` that discards an argument
