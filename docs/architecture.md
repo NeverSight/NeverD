@@ -642,6 +642,10 @@ its display name. Authenticated special-language bindings without a complete
 call ABI reject explicitly.
 Ordinary raw indirect calls use a feature-gated signing bridge so an
 arm64e C compiler does not impose its default authentication on a raw BLR.
+The mobile source assembler admits that exact shared C prefix before
+declarations, including after the floating-point contraction policy, and
+preserves it during method assembly. Modified prefixes and arbitrary
+conditional or mutating directives remain unsupported.
 Clang O0 can retain an intermediate resign and produce a different invalid-PAC
 diagnostic from the original branch; this is not exact exception-syndrome
 equivalence. Model rejection evidence compares exception classes; complete ESR

@@ -6029,6 +6029,13 @@ Rosetta forces exception masks even for raw SSE, so its unmasked-trap coverage
 is unavailable. `SwiftSourceProperties` compiles actual class members with
 file-level compiler declarations. `MobileIOSNative` rejects false source,
 missing or malformed preamble prefixes and mismatched method identities.
+Its raw-call prefix cases preserve function counts, method bodies and the
+shared AArch64 signing bridge, alone or after the floating-point policy.
+Changed keys, truncated guards, injected declarations, macro overrides and
+prefixes inside a method or after a declaration remain rejected. Run
+`NeverDMobileTests` and the native Objective-C calls/Blocks acceptance workflow
+when changing this source-assembly boundary; Linux source recovery does not
+qualify native macOS execution.
 The unchanged `scripts/test_mobile_swift_backend.py` acceptance workflow
 recompiles and executes arm64/x86_64 with classic/default fixups, checks all
 858 original behavior oracles per variant, and verifies the callable inventory.
