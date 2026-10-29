@@ -10,6 +10,7 @@
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/low/CFGBuilder.h"
+#include "neverd/ir/low/RegistrationABI.h"
 #include "neverd/support/BinaryEncoding.h"
 
 #include <algorithm>
@@ -892,6 +893,54 @@ struct ResolverGraphCacheTestAccess {
     Q.Alternatives = {
         {Q.Candidate, Before, First->second.Ops.front().Seq, false}};
     return Q;
+  }
+
+  static void changeNativeStackCall(CFGBuilder &B, va_t Address,
+                                    unsigned Mutation) {
+    auto &Call = B.Insns.at(Address);
+    switch (Mutation) {
+    case 0:
+      Call.Size = 4;
+      break;
+    case 1:
+      Call.IsCall = false;
+      break;
+    case 2:
+      Call.IsCond = true;
+      break;
+    case 3:
+      Call.IsIndirect = true;
+      break;
+    case 4:
+      Call.IsInstructionGuard = true;
+      break;
+    case 5:
+      Call.IsNoReturnCall = true;
+      break;
+    case 6:
+      Call.Ops.front().Output =
+          NdVar::reg(getTargetRegInfo(B.CurrentImg->Arch).StackPointer, 4);
+      break;
+    case 7:
+      Call.Ops.front().addInput(NdVar::scalar(0, 4));
+      break;
+    case 8:
+      ++Call.Ops.front().Seq;
+      break;
+    case 9:
+      Call.Ops.front().MemoryOrdering = NdMemoryOrdering::Acquire;
+      break;
+    case 10:
+      Call.Ops.front().MemoryAddressSpace = NdMemoryAddressSpace::X86FS;
+      break;
+    case 11:
+      Call.Immediate = *Call.Immediate + 1;
+      break;
+    }
+  }
+
+  static void rawIntegerProofMode(CFGBuilder &B, bool Enabled) {
+    B.SkipX87StackFixup = Enabled;
   }
 
   static Query seedImportedCopyStackEpoch(CFGBuilder &B, BinaryImage &Image,
@@ -3190,54 +3239,227 @@ TEST(ResolverFrameModes, CallsDoNotInventI386StackEpochs) {
         }
 }
 
-TEST(ResolverFrameModes, NativeRetImmediateCannotPreserveCallerESP) {
-  for (unsigned Pop : {0u, 12u})
+struct NativeStackCaller {
+  BinaryImage Image;
+  std::set<va_t> Entries;
+  va_t Call = 0;
+  va_t Use = 0;
+
+  NativeStackCaller(const std::vector<uint8_t> &Callee, bool Restore = false,
+                    bool ObserveMemory = false) {
+    Image.Arch = Arch::X86;
+    Image.Bits = Bitness::Bits32;
+    Image.Format = BinaryFormat::COFF;
+    Image.Base = 0x400000;
+    Image.Entry = 0x401000;
+    Segment Text;
+    Text.VA = Image.Entry;
+    Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+    Text.Data = {0x55, 0x89, 0xe5, 0x83, 0xec, 0x10};
+    if (ObserveMemory)
+      Text.Data.insert(Text.Data.end(), {0xc7, 0x04, 0x24, 6, 0, 0, 0});
+    Call = Text.VA + Text.Data.size();
+    Text.Data.insert(Text.Data.end(), {0xe8, 0, 0, 0, 0});
+    writeLE<uint32_t>(Text.Data.data() + Call - Text.VA + 1,
+                      uint32_t(Text.VA + 0x100 - (Call + 5)));
+    if (Restore)
+      Text.Data.insert(Text.Data.end(), {0x8d, 0x65, 0xf0});
+    if (ObserveMemory)
+      Text.Data.insert(Text.Data.end(), {0x8b, 0x04, 0x24});
+    Use = Text.VA + Text.Data.size();
+    Text.Data.insert(Text.Data.end(), {0x89, 0xe1, 0x89, 0xec, 0x5d, 0xc3});
+    Text.Data.resize(0x100, 0xcc);
+    Text.Data.insert(Text.Data.end(), Callee.begin(), Callee.end());
+    Text.Size = Text.FileSz = Text.Data.size();
+    Image.Segments.push_back(Text);
+    Section Code;
+    Code.VA = Text.VA;
+    Code.Size = Code.FileSz = Text.Size;
+    Code.Flags = Text.Flags;
+    Code.Data = Text.Data;
+    Image.Sections.push_back(Code);
+    Entries = {Image.Entry, Image.Entry + 0x100};
+    for (const auto Entry : Entries)
+      Image.Symbols.push_back(Symbol::makeFunc(Entry));
+  }
+
+  LowFunc build(CFGBuilder &Builder) {
+    Decoder Dec;
+    EXPECT_TRUE(Dec.init(Image));
+    Builder.setKnownFuncEntries(&Entries);
+    return Builder.buildIntegerFrameProof(Image, Dec, Image.Entry, "caller");
+  }
+};
+
+TEST(ResolverFrameModes, NativeReturnCleanupRequiresTheCurrentCalleeProof) {
+  for (unsigned Pop : {0u, 4u, 12u, 65532u})
     for (bool Restore : {false, true}) {
       SCOPED_TRACE(::testing::Message() << Pop << ':' << Restore);
-      BinaryImage Image;
-      Image.Arch = Arch::X86;
-      Image.Bits = Bitness::Bits32;
-      Image.Format = BinaryFormat::COFF;
-      Image.Base = 0x400000;
-      Image.Entry = 0x401000;
-      Segment Text;
-      Text.VA = Image.Entry;
-      Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
-      // Save EBP, allocate four words and call a separate near-RET helper.
-      Text.Data = {0x55, 0x89, 0xe5, 0x83, 0xec, 0x10, 0xe8, 0, 0, 0, 0};
-      writeLE<uint32_t>(Text.Data.data() + 7, 0x100 - 11);
-      if (Restore)
-        Text.Data.insert(Text.Data.end(), {0x8d, 0x65, 0xf0}); // ESP = EBP-16.
-      const va_t Use = Text.VA + Text.Data.size();
-      Text.Data.insert(Text.Data.end(), {0x89, 0xe1, 0x89, 0xec, 0x5d, 0xc3});
-      Text.Data.resize(0x100, 0xcc);
-      Text.Data.insert(Text.Data.end(), {0xc2, uint8_t(Pop), 0});
-      Text.Size = Text.FileSz = Text.Data.size();
-      Image.Segments.push_back(Text);
-      Section Code;
-      Code.VA = Text.VA;
-      Code.Size = Code.FileSz = Text.Size;
-      Code.Flags = Text.Flags;
-      Code.Data = Text.Data;
-      Image.Sections.push_back(Code);
-      const std::set<va_t> Entries{Image.Entry, Image.Entry + 0x100};
-      for (const auto Entry : Entries)
-        Image.Symbols.push_back(Symbol::makeFunc(Entry));
-      Decoder Dec;
-      ASSERT_TRUE(Dec.init(Image));
+      NativeStackCaller F({0xc2, uint8_t(Pop), uint8_t(Pop >> 8)}, Restore);
       CFGBuilder B;
-      B.setKnownFuncEntries(&Entries);
-      const auto Function =
-          B.buildIntegerFrameProof(Image, Dec, Image.Entry, "caller");
-      ASSERT_TRUE(Function.hasCompleteLiftCoverage());
-      const auto Q = Access::nativeCallStackEpoch(B, Image.Entry + 6, Use);
+      ASSERT_TRUE(F.build(B).hasCompleteLiftCoverage());
+      auto Q = Access::nativeCallStackEpoch(B, F.Call, F.Use);
       ASSERT_GE(Q.UseSeq, 0);
       const auto Answer = Access::batch(B, {Q});
       ASSERT_TRUE(Answer.Complete);
-      // No callee-stack receipt participates in this query. Even RET 0
-      // needs that separate proof; the explicit EBP restoration is local.
-      EXPECT_EQ(Answer.Values, (std::vector<bool>{Restore}));
+      // A nonzero pop changes ESP; explicit restoration supersedes it.
+      EXPECT_EQ(Answer.Values, (std::vector<bool>{Restore || Pop == 0}));
+      Q.FrameByteAddend = Restore ? 0 : -int64_t(Pop);
+      const auto Adjusted = Access::batch(B, {Q});
+      EXPECT_TRUE(Adjusted.Complete);
+      EXPECT_EQ(Adjusted.Values, (std::vector<bool>{true}));
+      EXPECT_EQ(Access::batch(B, {Q}), Adjusted);
+      Access::clear(B);
+      EXPECT_EQ(Access::batch(B, {Q}), Adjusted);
     }
+}
+
+TEST(ResolverFrameModes, IndependentStackProofRetainsCalleeRefusals) {
+  const std::vector<std::vector<uint8_t>> Bodies = {
+      {0x85, 0xc0, 0x74, 3, 0xc2, 0, 0, 0xc2, 4, 0},
+      {0x83, 0xec, 4, 0xc3},
+      {0xff, 0xd0, 0xc3},
+      {0x89, 0x64, 0x24, 0xfc, 0x8b, 0x64, 0x24, 0xfc, 0xc3},
+      {0x5c, 0xc3},
+      {0xff, 0xe0},
+      {0xcb},
+      {0xe8, 0xfb, 0xff, 0xff, 0xff, 0xc3},
+      {0x6a, 0, 0x6a, 0, 0x6a, 0, 0x6a, 0, 0xff, 0x15, 0, 0x20, 0x40, 0, 0xc3}};
+  for (unsigned I = 0; I != Bodies.size(); ++I) {
+    SCOPED_TRACE(I);
+    NativeStackCaller F(Bodies[I]);
+    if (I + 1 == Bodies.size()) {
+      Segment Data;
+      Data.VA = 0x402000;
+      Data.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+      Data.Data.resize(4);
+      Data.Size = Data.FileSz = 4;
+      F.Image.Segments.push_back(Data);
+      Section Storage;
+      Storage.VA = Data.VA;
+      Storage.Flags = Data.Flags;
+      Storage.Size = Storage.FileSz = Data.Size;
+      F.Image.Sections.push_back(Storage);
+      Import Imported;
+      Imported.Module = "KERNEL32.dll";
+      Imported.Name = "RaiseException";
+      Imported.IATAddr = Data.VA;
+      F.Image.Imports.push_back(Imported);
+      ASSERT_TRUE(F.Image.recordImportStorageSlot(
+          Data.VA, Imported.Name, 0, ImportStorageEvidence::ImportDirectory));
+      const auto Contract =
+          RegistrationCallCalleeIndex(F.Image).stackContract(0x401100);
+      ASSERT_TRUE(Contract);
+      ASSERT_EQ(Contract->StackPopBytes, 0u);
+      ASSERT_FALSE(Contract->RequiredImports.empty());
+    }
+    CFGBuilder B;
+    ASSERT_TRUE(F.build(B).hasCompleteLiftCoverage());
+    const auto Q = Access::nativeCallStackEpoch(B, F.Call, F.Use);
+    const auto Answer = Access::batch(B, {Q});
+    EXPECT_EQ(Answer.Values, (std::vector<bool>{false}));
+    EXPECT_EQ(Access::batch(B, {Q}), Answer);
+  }
+}
+
+TEST(ResolverFrameModes, IndependentStackProofBindsTheActualCall) {
+  for (unsigned Mutation = 0; Mutation != 12; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    NativeStackCaller F({0xc3});
+    CFGBuilder B;
+    ASSERT_TRUE(F.build(B).hasCompleteLiftCoverage());
+    const auto Q = Access::nativeCallStackEpoch(B, F.Call, F.Use);
+    ASSERT_EQ(Access::batch(B, {Q}).Values, (std::vector<bool>{true}));
+    Access::changeNativeStackCall(B, F.Call, Mutation);
+    const auto Answer = Access::batch(B, {Q});
+    EXPECT_TRUE(std::none_of(Answer.Values.begin(), Answer.Values.end(),
+                             [](bool Value) { return Value; }));
+    Access::clear(B);
+    EXPECT_EQ(Access::batch(B, {Q}), Answer);
+  }
+}
+
+TEST(ResolverFrameModes, IndependentStackProofReplaysCurrentImageAndBudget) {
+  NativeStackCaller F({0xc2, 4, 0});
+  CFGBuilder B;
+  ASSERT_TRUE(F.build(B).hasCompleteLiftCoverage());
+  auto Q = Access::nativeCallStackEpoch(B, F.Call, F.Use);
+  Q.FrameByteAddend = -4;
+  constexpr size_t Budget = 1000000;
+  const auto Answer = Access::batch(B, {Q}, Budget);
+  ASSERT_TRUE(Answer.Complete);
+  ASSERT_EQ(Answer.Values, (std::vector<bool>{true}));
+  const size_t Work = Budget - Answer.Remaining;
+  ASSERT_GT(Work, 1u);
+  for (size_t Limit : {size_t{0}, size_t{1}, Work - 1, Work}) {
+    const auto Warm = Access::batch(B, {Q}, Limit);
+    Access::clear(B);
+    EXPECT_EQ(Access::batch(B, {Q}, Limit), Warm);
+    EXPECT_EQ(Warm.Complete, Limit == Work);
+    if (Limit == Work)
+      EXPECT_EQ(Warm.Values, (std::vector<bool>{true}));
+    else
+      EXPECT_TRUE(std::none_of(Warm.Values.begin(), Warm.Values.end(),
+                               [](bool Value) { return Value; }));
+  }
+  auto &Bytes = F.Image.Segments.front().Data;
+  for (unsigned Pop : {8u, 4u, 8u, 4u}) {
+    Bytes[0x101] = uint8_t(Pop);
+    const auto Changed = Access::batch(B, {Q}, Budget);
+    EXPECT_EQ(Changed.Values, (std::vector<bool>{Pop == 4}));
+    Access::clear(B);
+    EXPECT_EQ(Access::batch(B, {Q}, Budget), Changed);
+  }
+  for (unsigned Mutation = 0; Mutation != 3; ++Mutation) {
+    const auto Original = Bytes;
+    if (Mutation == 0)
+      Bytes[F.Call - F.Image.Entry] = 0xe9;
+    if (Mutation == 1)
+      ++Bytes[F.Call - F.Image.Entry + 1];
+    if (Mutation == 2)
+      F.Image.BaseRelocations.push_back({F.Call + 1, 3});
+    const auto Changed = Access::batch(B, {Q}, Budget);
+    EXPECT_EQ(Changed.Values, (std::vector<bool>{false}));
+    Bytes = Original;
+    F.Image.BaseRelocations.clear();
+    EXPECT_EQ(Access::batch(B, {Q}, Budget).Values, (std::vector<bool>{true}));
+  }
+}
+
+TEST(ResolverFrameModes, IndependentStackProofGrantsNoFrameMemoryPreservation) {
+  // This callee restores ESP but changes the caller's first outgoing word.
+  NativeStackCaller F({0xc7, 0x44, 0x24, 4, 9, 0, 0, 0, 0xc3}, false, true);
+  CFGBuilder B;
+  ASSERT_TRUE(F.build(B).hasCompleteLiftCoverage());
+  const auto Frame = Access::nativeCallStackEpoch(B, F.Call, F.Use);
+  Access::Query Value;
+  Value.Candidate = NdVar::reg(getTargetRegInfo(Arch::X86).IntReturnReg, 4);
+  Value.UseAddr = F.Use;
+  Value.UseSeq = 0;
+  Value.Alternatives = {{NdVar::scalar(6, 4), F.Use, 0, false}};
+  for (bool Reverse : {false, true}) {
+    const auto Queries =
+        Reverse ? std::vector{Value, Frame} : std::vector{Frame, Value};
+    const auto Answer = Access::batch(B, Queries);
+    EXPECT_TRUE(Answer.Complete);
+    EXPECT_EQ(Answer.Values, Reverse ? (std::vector<bool>{false, true})
+                                     : (std::vector<bool>{true, false}));
+    EXPECT_EQ(Access::batch(B, Queries), Answer);
+  }
+}
+
+TEST(ResolverFrameModes, IndependentStackProofDoesNotReenterIntegerProofs) {
+  NativeStackCaller F({0xc3});
+  CFGBuilder B;
+  ASSERT_TRUE(F.build(B).hasCompleteLiftCoverage());
+  const auto Q = Access::nativeCallStackEpoch(B, F.Call, F.Use);
+  for (bool Raw : {true, false, true, false}) {
+    Access::rawIntegerProofMode(B, Raw);
+    const auto Answer = Access::batch(B, {Q});
+    EXPECT_TRUE(Answer.Complete);
+    EXPECT_EQ(Answer.Values, (std::vector<bool>{!Raw}));
+    EXPECT_EQ(Access::batch(B, {Q}), Answer);
+  }
 }
 
 TEST(ResolverFrameModes, ImportedCopyStackReceiptRequiresExactNativeCall) {

@@ -3974,6 +3974,19 @@ successes and refusals are replayed on each query rather than retained in a
 structural graph's value cache. This projection needs no FuncInfo or native EH
 receipt, and grants none: personality, cookies, registration lifetime, memory
 effects and ordinary callee contracts retain their separate checks.
+For an ordinary PE32 direct CALL, the same frame resolver may consume a fresh
+standalone returning-stack contract only when its transitive import dependency
+set is empty. The source-call owner authenticates the exact immutable E8 bytes
+and target; the resolver also checks the current instruction and LowIR shape.
+Zero cleanup preserves ESP, while nonzero cleanup adjusts its incoming affine
+coordinate. The returning-stack owner still requires every ordinary return to
+restore entry ESP and agree on its RET immediate. This supplies no memory
+preservation, argument initialization, return-value or native EH fact.
+Current-image successes and refusals stay outside the structural value cache.
+The callee proof spends the caller's remaining allowance under the existing
+registration work ceiling, and its nested bodies share that same account.
+Optional resolver queries do not start independent callee analyses inside raw
+integer proof builds or an active registration proof owner.
 An exact absolute singleton may seed decoding of its owned destination before
 publication is possible. Its finite-domain replay remains active through that
 graph growth; the existing closure and minimum-cardinality checks still decide

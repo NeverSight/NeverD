@@ -220,6 +220,10 @@ TEST(RegistrationCallABI, StackCleanupRequiresEveryRestoredNearReturn) {
     Text.Data = Cases[I].Code;
     MapText(F.Image);
     EXPECT_EQ(getCheckedX86CalleeStackPop(F.Image, Text.VA), Cases[I].Pop);
+    size_t Work = 0;
+    EXPECT_EQ(getCheckedX86IndependentCalleeStackPop(
+                  F.Image, Text.VA, Work, limits::kMaxRegistrationEHStateWork),
+              Cases[I].Pop);
   }
   for (unsigned Mutation = 0; Mutation != 5; ++Mutation) {
     SCOPED_TRACE(Mutation);
@@ -566,6 +570,17 @@ TEST(RegistrationCallABI, StackCleanupIncludesCheckedNestedImportCleanup) {
       Text.Data[0] = Text.Data[1] = 0x90; // One argument was not pushed.
     EXPECT_EQ(getCheckedX86CalleeStackPop(F.Image, Text.VA),
               Mutation == 0 ? std::optional<uint32_t>{0} : std::nullopt);
+    size_t Work = 0;
+    EXPECT_FALSE(getCheckedX86IndependentCalleeStackPop(
+        F.Image, Text.VA, Work, limits::kMaxRegistrationEHStateWork));
+    if (Mutation == 0) {
+      RegistrationCallCalleeIndex Index(F.Image);
+      const auto Contract = Index.stackContract(Text.VA);
+      ASSERT_TRUE(Contract);
+      EXPECT_EQ(Contract->StackPopBytes, 0u);
+      EXPECT_EQ(Contract->RequiredImports,
+                (std::vector<va_t>{ThrowImage::IATVA}));
+    }
   }
 }
 
@@ -836,6 +851,24 @@ TEST(RegistrationCallABI, RecordedStackPopsChargeTheirFreshWork) {
   ASSERT_EQ(Fresh, std::optional<uint32_t>{4});
   ASSERT_GT(FreshWork, 1u);
 
+  // The independent query uses the same nested proof under an outer budget,
+  // including when that caller has already spent part of its allowance.
+  size_t IndependentWork = 0;
+  ASSERT_EQ(getCheckedX86IndependentCalleeStackPop(
+                F.Image, Text.VA, IndependentWork,
+                limits::kMaxRegistrationEHStateWork),
+            Fresh);
+  ASSERT_GT(IndependentWork, 1u);
+  for (size_t Before : {size_t{0}, size_t{17}})
+    for (size_t Remaining :
+         {size_t{0}, size_t{1}, IndependentWork - 1, IndependentWork}) {
+      size_t Used = Before;
+      EXPECT_EQ(getCheckedX86IndependentCalleeStackPop(F.Image, Text.VA, Used,
+                                                       Before + Remaining),
+                Remaining == IndependentWork ? Fresh : std::nullopt);
+      EXPECT_EQ(Used, Before + Remaining);
+    }
+
   RegistrationStackPopMemo Memo(F.Image);
   RegistrationStackPopMemoScope Scope(Memo);
   // The first query records its answer; later ones replay it with its work.
@@ -897,6 +930,10 @@ TEST(RegistrationCallABI, OwnedStackQueriesKeepImageAndBudgetBoundaries) {
   ASSERT_LT(HitWork, FreshWork);
   {
     registration_abi::StackProofOwnerScope Scope(Index, Work);
+    size_t IndependentWork = 0;
+    EXPECT_FALSE(getCheckedX86IndependentCalleeStackPop(
+        F.Image, Target, IndependentWork, limits::kMaxRegistrationEHStateWork));
+    EXPECT_EQ(IndependentWork, 0u);
     const size_t BeforeOwned = Work;
     EXPECT_EQ(getCheckedX86CalleeStackPop(F.Image, Target, &Work), 4u);
     EXPECT_EQ(Work - BeforeOwned, HitWork);
@@ -923,6 +960,32 @@ TEST(RegistrationCallABI, OwnedStackQueriesKeepImageAndBudgetBoundaries) {
   const size_t BeforeIndependent = Work;
   EXPECT_EQ(getCheckedX86CalleeStackPop(F.Image, Target, &Work), 4u);
   EXPECT_EQ(Work - BeforeIndependent, FreshWork);
+}
+
+TEST(RegistrationCallABI, DirectCallStorageUsesTheOuterBudget) {
+  ThrowImage F;
+  size_t Required = 0;
+  ASSERT_TRUE(hasCheckedX86RegistrationDirectCallBytes(
+      F.Image, F.CallVA, ThrowImage::ImportVA, Required, 10000));
+  ASSERT_GT(Required, 1u);
+  for (size_t Before : {size_t{0}, size_t{17}})
+    for (size_t Remaining : {size_t{0}, Required - 1, Required}) {
+      size_t Work = Before;
+      EXPECT_EQ(hasCheckedX86RegistrationDirectCallBytes(
+                    F.Image, F.CallVA, ThrowImage::ImportVA, Work,
+                    Before + Remaining),
+                Remaining == Required);
+      EXPECT_EQ(Work, Before + Remaining);
+    }
+  auto &Opcode = F.Image.Segments.front().Data[F.CallVA - ThrowImage::TextVA];
+  for (uint8_t Byte : {uint8_t{0xe9}, uint8_t{0xe8}}) {
+    Opcode = Byte;
+    size_t Work = 0;
+    EXPECT_EQ(hasCheckedX86RegistrationDirectCallBytes(
+                  F.Image, F.CallVA, ThrowImage::ImportVA, Work, 10000),
+              Byte == 0xe8);
+    EXPECT_EQ(Work, Required);
+  }
 }
 
 TEST(RegistrationCallABI, ReturningStackProofDoesNotNormalizeTheX87Stack) {

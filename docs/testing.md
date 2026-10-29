@@ -3259,9 +3259,18 @@ publication. Both belong to `NeverDJumpTableTests`.
 
 `CallsDoNotInventI386StackEpochs` checks direct and indirect calls in affine
 and scalar queries, explicit restoration, changed partial lanes, cold/warm
-answers, four architectures and three formats. `NativeRetImmediateCannotPreserveCallerESP`
-decodes self-authored PE32 callers and `RET 0`/`RET 12` helpers: without a
-callee-cleanup receipt only an explicit caller restoration proves equality.
+answers, four architectures and three formats.
+`NativeReturnCleanupRequiresTheCurrentCalleeProof` decodes authored PE32 callers
+and helpers with zero and nonzero RET cleanup, including explicit caller
+restoration. `IndependentStackProof*` checks disagreeing returns, unbalanced
+stacks, opaque calls, recursion, saved-SP memory, tail/far returns and retained
+IAT dependencies. It also changes native CALL bytes, fixups, instruction facts
+and callee cleanup without rebuilding the caller, checks exact/short cold and
+warm budgets, and requires frame-memory queries to retain their call barrier.
+Registration callee tests exercise the same shared proof and cumulative
+budgets through nested wrappers; loader tests compare budgeted and ordinary
+PE32 code reads across every existing fixup mutation and incomplete relocation
+set. These are static decoded-source checks, not native GOF2 execution.
 `ImportedCopyStackReceiptRequiresExactNativeCall` checks the ELF object copy
 ABI receipt in scalar and affine modes, cold/warm budget boundaries and
 refusals for local names, data imports, ambiguous owners, indirect calls,

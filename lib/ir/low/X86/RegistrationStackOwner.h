@@ -33,6 +33,8 @@ public:
 
   static RegistrationCallCalleeIndex *find(const BinaryImage &Image,
                                            std::size_t *CumulativeWork);
+  /// A separate optional query must not give any active owner a fresh budget.
+  static bool active() { return Current != nullptr; }
   /// Image-only root roles are independent of the caller's frame, work
   /// counter and nesting level. This returns no callee proof or ABI fact.
   static const detail::AbsoluteRelocationRootIndex *

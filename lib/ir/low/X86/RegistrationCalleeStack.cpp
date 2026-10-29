@@ -1193,12 +1193,39 @@ std::optional<uint32_t> getCheckedX86CalleeStackPop(const BinaryImage &Image,
 }
 
 std::optional<uint32_t> RegistrationCallCalleeIndex::stackPop(va_t Target) {
+  const auto Proof = stackContract(Target);
+  return Proof ? std::optional<uint32_t>{Proof->StackPopBytes} : std::nullopt;
+}
+
+std::optional<RegistrationCalleeStackContract>
+RegistrationCallCalleeIndex::stackContract(va_t Target) {
   if (!isPE32(Image))
     return std::nullopt;
-  const auto Proof =
-      ReturningStackProof(Image, Work, StackCache, *this, StackDepth)
-          .prove(Target);
-  return Proof ? std::optional<uint32_t>{Proof->StackPopBytes} : std::nullopt;
+  return ReturningStackProof(Image, Work, StackCache, *this, StackDepth)
+      .prove(Target);
+}
+
+std::optional<uint32_t>
+getCheckedX86IndependentCalleeStackPop(const BinaryImage &Image, va_t Target,
+                                       size_t &Work, size_t Limit) {
+  if (!isPE32(Image) || Work >= Limit || !ActiveStackProofs.empty() ||
+      registration_abi::StackProofOwnerScope::active() ||
+      registration_abi::hasActiveCxxCalleeProof() || x86SEHStateAnalysisLevel())
+    return std::nullopt;
+  // Embed the caller's remaining allowance in the existing cumulative work
+  // account. Nested bodies share this exact counter and owner; they never
+  // acquire a new allowance. A short outer budget stops the proof itself,
+  // rather than merely rejecting an answer after unbounded work was done.
+  const size_t Allowance =
+      std::min(Limit - Work, limits::kMaxRegistrationEHStateWork);
+  const size_t Before = limits::kMaxRegistrationEHStateWork - Allowance;
+  size_t CalleeWork = Before;
+  RegistrationCallCalleeIndex Index(Image, &CalleeWork);
+  const auto Proof = Index.stackContract(Target);
+  Work += CalleeWork - Before;
+  if (!Proof || !Proof->RequiredImports.empty())
+    return std::nullopt;
+  return Proof->StackPopBytes;
 }
 
 std::optional<std::vector<RegistrationCalleeStackContract>>

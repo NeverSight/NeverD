@@ -46,6 +46,9 @@ unsigned x86SEHStateAnalysisLevel();
 /// supplies no source occurrence, argument, frame or exception-effect proof.
 bool hasCheckedX86RegistrationDirectCallBytes(const BinaryImage &Image,
                                               va_t Address, va_t Target);
+bool hasCheckedX86RegistrationDirectCallBytes(const BinaryImage &Image,
+                                              va_t Address, va_t Target,
+                                              size_t &Work, size_t Limit);
 
 /// Prove the entry ESP is restored at every ordinary near return and that
 /// all return-pop immediates agree. Unchecked calls invalidate ESP; an explicit
@@ -62,6 +65,16 @@ bool hasCheckedX86RegistrationDirectCallBytes(const BinaryImage &Image,
 std::optional<uint32_t>
 getCheckedX86CalleeStackPop(const BinaryImage &Image, va_t Target,
                             size_t *CumulativeWork = nullptr);
+
+/// A fresh standalone returning-stack proof with no entry IAT dependencies.
+/// Charge the existing callee proof to Work, up to Limit and the ordinary
+/// registration work ceiling. This optional query never starts a fresh proof
+/// from inside another callee or registration-state analysis. Neither success
+/// nor failure survives an image change. The consumer must independently bind
+/// its actual direct CALL; memory effects and native ABI remain separate.
+std::optional<uint32_t>
+getCheckedX86IndependentCalleeStackPop(const BinaryImage &Image, va_t Target,
+                                       size_t &Work, size_t Limit);
 
 /// The answers of getCheckedX86CalleeStackPop for one unchanged image, each
 /// with the work its computation charged, per callee and
@@ -321,6 +334,8 @@ public:
   /// Prove a standalone entry. Local witnesses from stackContracts() cannot
   /// satisfy this entry's admission or its transitive callee dependencies.
   std::optional<uint32_t> stackPop(va_t Target);
+  /// The same standalone proof, retaining every entry import dependency.
+  std::optional<RegistrationCalleeStackContract> stackContract(va_t Target);
   std::optional<std::vector<RegistrationCalleeFrameContract>>
   contracts(const LowFunc &Function);
   std::optional<std::vector<RegistrationCleanupFrameContract>>

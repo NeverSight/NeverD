@@ -432,9 +432,11 @@ readImmutablePE32CodeBytes(const BinaryImage &Image, va_t Address,
       [&](auto Visit) { return visitPE32CodeFixups(Image, Visit); });
 }
 
-std::optional<std::vector<uint8_t>> readRelocatedPE32CodeBytes(
-    const BinaryImage &Image, va_t Address, uint32_t Size,
-    const std::vector<va_t> &AbsoluteOperands, size_t &Work, size_t Limit) {
+namespace {
+std::optional<std::vector<uint8_t>>
+readBudgetedPE32CodeBytes(const BinaryImage &Image, va_t Address, uint32_t Size,
+                          const std::vector<va_t> &AbsoluteOperands,
+                          size_t &Work, size_t Limit, bool RequireRelocations) {
   // The scalar storage charge already bounds mapping scans, all vector
   // inventories and the four-byte ordered slot windows used by code queries.
   if (!chargeStorageQuery(Image, Size, false, Work, Limit))
@@ -471,7 +473,22 @@ std::optional<std::vector<uint8_t>> readRelocatedPE32CodeBytes(
         return visitPE32CodeFixups(
             Image, Visit, ExceptionAddressRange{Address, Address + Size});
       },
-      true);
+      RequireRelocations);
+}
+} // namespace
+
+std::optional<std::vector<uint8_t>> readRelocatedPE32CodeBytes(
+    const BinaryImage &Image, va_t Address, uint32_t Size,
+    const std::vector<va_t> &AbsoluteOperands, size_t &Work, size_t Limit) {
+  return readBudgetedPE32CodeBytes(Image, Address, Size, AbsoluteOperands, Work,
+                                   Limit, true);
+}
+
+std::optional<std::vector<uint8_t>> readImmutablePE32CodeBytes(
+    const BinaryImage &Image, va_t Address, uint32_t Size,
+    const std::vector<va_t> &AbsoluteOperands, size_t &Work, size_t Limit) {
+  return readBudgetedPE32CodeBytes(Image, Address, Size, AbsoluteOperands, Work,
+                                   Limit, false);
 }
 
 bool IndexedPE32CodeBytes::charge(size_t Amount) {

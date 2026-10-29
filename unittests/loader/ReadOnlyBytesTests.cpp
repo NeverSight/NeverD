@@ -164,6 +164,11 @@ TEST(ImmutablePE32Code, IndexedAndOrdinaryReadersKeepEveryFixupBoundary) {
     const auto Indexed = Index.read(ReadVA, 6, {OperandVA});
     EXPECT_EQ(Ordinary.has_value(), Expected);
     EXPECT_EQ(Indexed, Ordinary);
+    size_t BoundedWork = 0;
+    EXPECT_EQ(readImmutablePE32CodeBytes(Image, ReadVA, 6, {OperandVA},
+                                         BoundedWork, 10000),
+              Ordinary);
+    EXPECT_GT(BoundedWork, 0u);
     size_t RelocatedWork = 0;
     EXPECT_EQ(readRelocatedPE32CodeBytes(Image, ReadVA, 6, {OperandVA},
                                          RelocatedWork, 10000),
@@ -408,6 +413,18 @@ TEST(ImmutablePE32Code, RetainedOperandsRequireCompleteRelocations) {
     const auto Ordinary =
         readImmutablePE32CodeBytes(Image, ReadVA, 11, Operands);
     ASSERT_TRUE(Ordinary);
+    size_t OrdinaryWork = 0;
+    EXPECT_EQ(readImmutablePE32CodeBytes(Image, ReadVA, 11, Operands,
+                                         OrdinaryWork, 10000),
+              Ordinary);
+    ASSERT_GT(OrdinaryWork, 0u);
+    for (size_t Limit : {size_t{0}, OrdinaryWork - 1, OrdinaryWork}) {
+      size_t Used = 0;
+      EXPECT_EQ(bool(readImmutablePE32CodeBytes(Image, ReadVA, 11, Operands,
+                                                Used, Limit)),
+                Limit == OrdinaryWork);
+      EXPECT_EQ(Used, Limit);
+    }
     size_t Work = 0;
     const auto Retained =
         readRelocatedPE32CodeBytes(Image, ReadVA, 11, Operands, Work, 10000);

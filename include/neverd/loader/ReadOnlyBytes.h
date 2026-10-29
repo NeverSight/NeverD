@@ -12,6 +12,7 @@
 
 #include "neverd/Common.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <vector>
@@ -56,6 +57,12 @@ std::optional<std::vector<uint8_t>>
 readImmutablePE32CodeBytes(const BinaryImage &Image, va_t Address,
                            uint32_t Size,
                            const std::vector<va_t> &AbsoluteOperands);
+
+/// The same current-storage proof under one cumulative work allowance.
+/// Exhaustion returns no bytes and saturates Work at Limit.
+std::optional<std::vector<uint8_t>> readImmutablePE32CodeBytes(
+    const BinaryImage &Image, va_t Address, uint32_t Size,
+    const std::vector<va_t> &AbsoluteOperands, size_t &Work, size_t Limit);
 
 /// Read the complete runtime bits of one exact, resolved Mach-O chained
 /// rebase in unique immutable storage. Competing or overlapping fixups are

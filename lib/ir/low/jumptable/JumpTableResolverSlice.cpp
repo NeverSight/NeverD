@@ -31,6 +31,7 @@
 #include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/ir/low/ImportedMemoryCopy.h"
+#include "neverd/ir/low/RegistrationABI.h"
 #include "neverd/ir/low/RegistrationSharedCall.h"
 #include "neverd/libc/LibCNames.h"
 #include "neverd/loader/PointerRelocation.h"
@@ -5394,7 +5395,7 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
   // Pointer-named opaque values and merges have allocation-dependent lengths,
   // hence allocation-dependent evidence charges. Do not cache those batches.
   bool UsedPointerSymbol = false;
-  bool UsedPhysicalEntryEvidence = false;
+  bool UsedCurrentImageEvidence = false;
   // Graph construction is only the first half of one evidence query.  Keep
   // charging the same candidate-local account while reconstructing frame,
   // memory and value state, and while matching/symbolizing the resulting DAG.
@@ -5743,7 +5744,7 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
           return std::nullopt;
         // The graph cache contains structural inputs, not mutable image
         // bytes. Even a failed physical check must be replayed next time.
-        UsedPhysicalEntryEvidence = true;
+        UsedCurrentImageEvidence = true;
         if (!consumeEvidence(Graph.RootBlocks.size()))
           return std::nullopt;
         for (int Root : Graph.RootBlocks)
@@ -5768,6 +5769,70 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
     }
     return PhysicalEntry && PhysicalEntry->CallVA == Call.Addr ? &*PhysicalEntry
                                                                : nullptr;
+  };
+  std::map<std::pair<va_t, int>, std::optional<uint32_t>> IndependentCallPops;
+  auto independentCallPop = [&](const LowOp &Call) -> std::optional<uint32_t> {
+    if (CurrentImg->Arch != Arch::X86 || !CurrentImg->isCOFF() ||
+        CurrentImg->getPointerSize() != sizeof(uint32_t) ||
+        Call.Opcode != NdOp::CALL || Call.NumInputs != 1 ||
+        !Call.Inputs[0].isConst() || Call.Inputs[0].Size != sizeof(uint32_t) ||
+        Call.Output != NdVar::reg(TRI.IntReturnReg, sizeof(uint32_t)) ||
+        Call.Seq != 0 || Call.ConsumesX87Argument || Call.X87ScratchSlots ||
+        Call.X87ImportArguments ||
+        Call.MemoryAddressSpace != NdMemoryAddressSpace::Default ||
+        Call.MemoryOrdering != NdMemoryOrdering::None ||
+        (PhysicalEntry &&
+         PhysicalEntry->Helper.contains(Call.Inputs[0].Offset)))
+      return std::nullopt;
+    // Both negative and positive answers depend on current caller/callee
+    // bytes. The structural graph may be reused; no value batch may retain
+    // this image-dependent result beyond the current query transaction.
+    UsedCurrentImageEvidence = true;
+    // Raw integer/callee graph builds have their own cumulative proof owner.
+    // They cannot recursively start this optional returning-stack analysis
+    // with a fresh value-query allowance. Normal queries after the scoped
+    // build returns can use it, with no saved negative batch from that mode.
+    if (SkipX87StackFixup)
+      return std::nullopt;
+    constexpr size_t KeyWork = 2;
+    if (!consumeMemoLookup(KeyWork, IndependentCallPops.size()))
+      return std::nullopt;
+    const auto Key = std::make_pair(Call.Addr, Call.Seq);
+    if (const auto It = IndependentCallPops.find(Key);
+        It != IndependentCallPops.end())
+      return It->second;
+    if (!consumeMemoInsert(KeyWork, IndependentCallPops.size()))
+      return std::nullopt;
+    auto &Result = IndependentCallPops.emplace(Key, std::nullopt).first->second;
+    if (!consumeEvidenceSum({orderedSetLookupWork(Insns.size()), 16}))
+      return std::nullopt;
+    const auto It = Insns.find(Call.Addr);
+    if (It == Insns.end())
+      return std::nullopt;
+    const auto &Record = It->second;
+    if (Record.Size != 5 || !Record.IsCall || Record.IsCond ||
+        Record.IsIndirect || Record.IsBranch || Record.IsRet ||
+        Record.IsOpaqueTerminator || Record.IsResumableTerminator ||
+        Record.IsInstructionGuard || Record.IsNoReturnCall ||
+        Record.Mode != InstructionMode::Default ||
+        Record.TargetMode != LowInstructionTargetMode::Preserve ||
+        Record.Immediate != Call.Inputs[0].Offset || Record.Ops.size() != 1 ||
+        Record.Ops.front() != Call)
+      return std::nullopt;
+    size_t Work = 0;
+    const size_t Limit =
+        GraphWorkBudget ? *GraphWorkBudget : std::numeric_limits<size_t>::max();
+    if (hasCheckedX86RegistrationDirectCallBytes(
+            *CurrentImg, Call.Addr, Call.Inputs[0].Offset, Work, Limit))
+      Result = getCheckedX86IndependentCalleeStackPop(
+          *CurrentImg, Call.Inputs[0].Offset, Work, Limit);
+    if (!consumeEvidence(Work))
+      return std::nullopt;
+    if (!Result && Work == Limit) {
+      EvidenceBudgetExhausted = true;
+      Complete = false;
+    }
+    return Result;
   };
   auto callPreservesLane = [&](const LowOp &Call, const LaneView &Query) {
     if (!Query.Valid || Query.Begin > InvalidVA - Query.Container)
@@ -5801,7 +5866,8 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
       return true;
     return Query.Space == VnodeSpace::REG && Begin >= TRI.StackPointer &&
            End <= TRI.StackPointer + TRI.PointerSize &&
-           importedCopyHasCallerCleanup(Call);
+           (importedCopyHasCallerCleanup(Call) ||
+            independentCallPop(Call) == 0);
   };
 
   using LaneKey = std::tuple<int, int, uint8_t, uint64_t, uint16_t>;
@@ -6552,6 +6618,14 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
               false);
           break;
         }
+        if (BaseReg == TRI.StackPointer)
+          if (const auto Pop = independentCallPop(Def)) {
+            Found = true;
+            Result = FrameStates.adjust(
+                resolveFrameBase(Block, I, TRI.StackPointer, Depth + 1), *Pop,
+                false);
+            break;
+          }
         const bool QueryPreserved = callPreservesLane(Def, Query);
         if (!QueryPreserved) {
           Found = true;
@@ -10729,7 +10803,7 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
       HasRepeatableRefusal && !NonRepeatableAnalysisIncomplete;
   if ((Complete || RepeatableRefusal) && !EvidenceBudgetExhausted &&
       !SymbolBudgetExhausted && !UsedPointerSymbol &&
-      !UsedPhysicalEntryEvidence && ReusedGraph)
+      !UsedCurrentImageEvidence && ReusedGraph)
     ReusedGraph->rememberValueBatch(
         *this, Queries, MaxResolverDepth, InitialMatchBudget, Complete, Results,
         QueryAnalysisComplete, QueryUnsignedFeasibleMasks,
