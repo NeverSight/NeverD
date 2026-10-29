@@ -343,6 +343,81 @@ TEST(RegistrationConditionalFrame, UnknownScalarArgumentsNeedInitializedBytes) {
     }
 }
 
+TEST(RegistrationConditionalFrame, BoundReadsKeepRuntimeCookieValuesOpaque) {
+  using namespace registration_state;
+  for (va_t Base : {0x400000u, 0x18000000u})
+    for (uint16_t Width : {1, 2, 4})
+      for (int32_t Offset : {-4, -1, 0, 1, 3, 4})
+        for (bool Cookie : {false, true})
+          for (bool Guard : {false, true}) {
+            SCOPED_TRACE(::testing::Message()
+                         << Base << " " << Width << " " << Offset << " "
+                         << Cookie << " " << Guard);
+            BinaryImage Image;
+            Image.Arch = Arch::X86;
+            Image.Bits = Bitness::Bits32;
+            Image.Format = BinaryFormat::COFF;
+            Image.Base = Base;
+            Image.Entry = Base + 0x1000;
+            Image.DynInfo.SecurityCookieRVA = Cookie ? 0x3008 : 0;
+            Segment Text;
+            Text.VA = Image.Entry;
+            Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+            if (Width == 4)
+              Text.Data = {0x8b, 0x01}; // mov eax, [ecx]
+            else
+              Text.Data = {0x0f, uint8_t(Width == 1 ? 0xb6 : 0xb7), 0x01};
+            if (Guard)
+              // Initial zero bytes hide an otherwise unproved memory read.
+              Text.Data.insert(Text.Data.end(),
+                               {0x85, 0xc0, 0x74, 0x02, 0x8b, 0x02});
+            Text.Data.push_back(0xc3);
+            Segment Data;
+            Data.VA = Base + 0x3000;
+            Data.Flags = SegmentFlags::Readable;
+            Data.Data.resize(32);
+            for (auto *Segment : {&Text, &Data}) {
+              Segment->Size = Segment->FileSz = Segment->Data.size();
+              Section Section;
+              Section.VA = Segment->VA;
+              Section.Size = Section.FileSz = Segment->Size;
+              Section.Flags = Segment->Flags;
+              Image.Sections.push_back(Section);
+              Image.Segments.push_back(*Segment);
+            }
+            FrameState Parent;
+            Parent.Registers[x86reg::RSP / x86reg::GeneralRegStride] =
+                FrameValue::frame(-64);
+            Parent.Registers[x86reg::RCX / x86reg::GeneralRegStride] =
+                FrameValue::imageAddress(uint32_t(Data.VA + 8 + Offset));
+            Parent.Registers[x86reg::RDX / x86reg::GeneralRegStride] =
+                FrameValue::taint(true);
+            LowOp Call;
+            Call.Opcode = NdOp::CALL;
+            Call.addInput(NdVar::cst(Image.Entry, 4));
+            size_t Work = 0;
+            std::optional<FrameValue> Returned;
+            BoundPlainCalleeEffect Effect;
+            const bool Opaque = Cookie && Offset < 4 && Offset + Width > 0;
+            const bool Valid = registration_abi::hasConditionalCallFrame(
+                Image, Call, Parent, Work, nullptr, &Returned, &Effect);
+            EXPECT_EQ(Valid, !(Opaque && Guard));
+            if (!Valid) {
+              EXPECT_FALSE(Returned);
+              continue;
+            }
+            ASSERT_TRUE(Returned);
+            EXPECT_EQ(Returned->Constant.has_value(), !Opaque);
+            EXPECT_EQ(Effect.ReturnValue.Constant.has_value(), !Opaque);
+            if (!Opaque)
+              EXPECT_EQ(Returned, FrameValue::constant(0));
+            ASSERT_EQ(Effect.ImageReads.size(), 1u);
+            EXPECT_EQ(Effect.ImageReads.front().Begin, Data.VA + 8 + Offset);
+            EXPECT_EQ(Effect.ImageReads.front().End,
+                      Data.VA + 8 + Offset + Width);
+          }
+}
+
 TEST(RegistrationConditionalFrame, BoundImmutableScansKeepTheirMemoryExtent) {
   using namespace registration_state;
   for (va_t Base : {0x400000u, 0x18000000u})

@@ -59,8 +59,20 @@ readImmutableRegistrationImageBytes(const BinaryImage &Image, va_t Address,
 std::optional<ImmutableRegistrationScalar>
 readImmutableRegistrationScalar(const BinaryImage &Image, va_t Address,
                                 uint16_t Width, size_t &Work) {
-  if (Width > 4)
+  if (Width > sizeof(uint32_t) || !chargeCalleeWork(Work, 1))
     return std::nullopt;
+  // A runtime cookie remains opaque even in read-only source storage. Share
+  // this exclusion with ordinary bound helpers as well as layout-scoped
+  // proofs; neither narrow reads nor an initial zero may freeze its value.
+  const auto RVA = Image.DynInfo.SecurityCookieRVA;
+  constexpr va_t CookieBytes = sizeof(uint32_t);
+  if (RVA && Image.Base <= UINT32_MAX - (CookieBytes - 1) &&
+      RVA <= UINT32_MAX - (CookieBytes - 1) - Image.Base) {
+    const va_t Cookie = Image.Base + RVA;
+    if (Width && (Address <= Cookie ? Cookie - Address < Width
+                                    : Address - Cookie < CookieBytes))
+      return std::nullopt;
+  }
   auto Bytes = readImmutableRegistrationImageBytes(Image, Address, Width, Work);
   if (!Bytes)
     return std::nullopt;

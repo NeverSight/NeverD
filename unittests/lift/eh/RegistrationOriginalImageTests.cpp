@@ -176,6 +176,10 @@ TEST(RegistrationOriginalImage, OrdinaryStorageExcludesLiveCookieOverlaps) {
       OriginalImageFrameProof Scope(Image);
       size_t Work = 0;
       const va_t Address = uint32_t(0x402008 + Offset);
+      size_t ScalarWork = 0;
+      EXPECT_EQ(bool(registration_abi::readImmutableRegistrationScalar(
+                    Image, Address, Width, ScalarWork)),
+                !Overlap);
       EXPECT_EQ(Scope.permitsRead(Address, Width, Work), !Overlap);
       if (Overlap) {
         EXPECT_FALSE(Scope.readScalar(Address, Width, Work));

@@ -2363,6 +2363,11 @@ the source result; the live runtime value remains opaque.
 Ordinary immutable reads overlapping that live cookie are rejected, including
 partial-width and nested plain-helper reads from a read-only source section.
 Only the state owner's explicit cookie-protocol path may consume the value.
+The shared registration scalar reader owns this exclusion for ordinary bound
+helpers too. A retained ordinary LOAD may keep its runtime value and read
+footprint, but initial cookie bytes cannot supply a constant result or prune a
+branch. C++ memory-only checks still retain their source reads without copying
+values; they do not use the scalar reader.
 The LLVM argument-identity query inspects the actual call operand. It accepts
 only PE32 `ptrtoint` of a canonical, address-significant external original-data
 declaration in that module. Integer bits, frame/global loads, aliases, private

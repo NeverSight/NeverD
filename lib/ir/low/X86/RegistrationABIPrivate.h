@@ -171,7 +171,7 @@ std::optional<std::vector<uint8_t>>
 readImmutableRegistrationImageBytes(const BinaryImage &Image, va_t Address,
                                     uint16_t Width, size_t &Work);
 
-/// Checked immutable storage and its optional non-address scalar. Pointer-like
+/// Checked immutable storage excludes live security-cookie bytes. Pointer-like
 /// bytes retain storage evidence but never acquire a fixed integer identity.
 struct ImmutableRegistrationScalar {
   std::vector<uint8_t> Bytes;

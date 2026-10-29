@@ -9714,6 +9714,12 @@ constant cookie value.
 `OrdinaryStorageExcludesLiveCookieOverlaps` reject root/nested ordinary reads
 and partial overlaps with a read-only source cookie. Discarding the read does
 not remove this dependency; adjacent nonoverlapping storage remains readable.
+`BoundReadsKeepRuntimeCookieValuesOpaque` checks the same scalar owner through
+144 ordinary helper variants: two bases, byte/word/dword loads, six overlapping
+or adjacent offsets, present/absent cookie metadata and guarded/plain reads.
+Plain reads retain an opaque result and exact footprint. A branch on initially
+zero cookie bytes cannot hide an otherwise unproved load. The direct shared
+reader and original-image scope must agree on cookie overlaps.
 `RegistrationImageProof.ActualImageArgumentsRequireCanonicalValues` checks
 actual LLVM arguments at two preferred addresses, including equal numeric bits,
 volatile frame loads, global loads, aliases, private definitions, foreign

@@ -38,22 +38,9 @@ OriginalImageFrameProof::read(va_t Address, uint16_t Width, size_t &Work) {
   if (!registration_abi::chargeCalleeWork(Work, Reads.size() + 1))
     return nullptr;
   const auto [It, New] = Reads.try_emplace({Address, Width});
-  if (New) {
-    // A runtime cookie is an opaque protocol value even when its source
-    // section is marked read-only. Ordinary/narrow and nested helper reads
-    // must not turn its file bytes into a constant. Root protocol loads use
-    // recordCookieRead instead and retain the state owner's live identity.
-    const auto RVA = Image.DynInfo.SecurityCookieRVA;
-    if (RVA && Image.Base <= UINT32_MAX - 3 &&
-        RVA <= UINT32_MAX - 3 - Image.Base) {
-      const va_t Cookie = Image.Base + RVA;
-      if (Width &&
-          (Address <= Cookie ? Cookie - Address < Width : Address - Cookie < 4))
-        return nullptr;
-    }
+  if (New)
     It->second = registration_abi::readImmutableRegistrationScalar(
         Image, Address, Width, Work);
-  }
   return It->second ? &*It->second : nullptr;
 }
 
