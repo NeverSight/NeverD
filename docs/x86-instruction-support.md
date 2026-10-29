@@ -2932,3 +2932,5 @@ its native calls. Those source-oracle checks are separate from the six native
 compiler qualification profiles. The [qualification ledger](evidence/x86-x87-environment-2026-10-28.json)
 records source identities, both SDK matrices, stable compiler inputs and
 rehashed artifacts, including the initial failures and their focused repair.
+The two NeverC executable paths omit the host checkout prefix and are relative
+to that compiler's original checkout; the manifest identities are unchanged.

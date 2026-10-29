@@ -171,7 +171,7 @@
         "sha256": "7eb233e335f6bc82d0249737a2988a4ffca1e1b39e388510b382b842458213cb"
       },
       "environment": {
-        "NEVERD_TEST_NEVERC": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc",
+        "NEVERD_TEST_NEVERC": "build-neverc/bin/neverc",
         "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "pinned-final-artifacts",
         "NEVERD_REP_EXPORT_DIR": "pinned-final-rep-artifacts"
       },
@@ -220,7 +220,7 @@
         "sha256": "0981e109d3ad2debcedacfed73b51ad9f378a8f88d0cc737b6e8e31cd40baed6"
       },
       "environment": {
-        "NEVERD_TEST_NEVERC": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc",
+        "NEVERD_TEST_NEVERC": "build-neverc/bin/neverc",
         "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "native-final-artifacts",
         "NEVERD_REP_EXPORT_DIR": "native-final-rep-artifacts"
       },
