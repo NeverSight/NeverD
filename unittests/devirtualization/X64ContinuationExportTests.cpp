@@ -206,6 +206,56 @@ int main(void) {
   }
 }
 
+TEST_F(X64ContinuationExportTest, FarReturnStopsBeforeTargetAndKeepsCleanup) {
+  load({0x48, 0xca, 7, 0, 0xb8, 7, 0, 0, 0});
+  const auto Request = request(R"("instructions":[4096,4100])");
+  for (bool LLVM : {false, true}) {
+    SCOPED_TRACE(LLVM);
+    auto [Source, Manifest] = source(Request, LLVM);
+    auto Parsed = llvm::json::parse(Manifest);
+    ASSERT_TRUE(bool(Parsed));
+    EXPECT_EQ(Parsed->getAsObject()->getInteger("native_requests"), 0);
+    execute(Source, std::string(Seed) + R"C(
+int main(void) {
+    uint64_t gdt[5]={0,0,0,0x00af9a000000ffffULL,0x00cf92000000ffffULL};
+    unsigned char stack[128];
+    for(unsigned cpl=0;cpl<4;++cpl) {
+        neverd_x64_state_v6 s=seed();uint64_t budget=0,sp=(uintptr_t)stack;
+        s.GPR[4]=sp;s.GDTR.Base=(uintptr_t)gdt;s.GDTR.Limit=sizeof(gdt)-1;
+        gdt[3]=0x00af9a000000ffffULL|((uint64_t)cpl<<45);
+        gdt[4]=0x00cf92000000ffffULL|((uint64_t)cpl<<45);
+        uint64_t pc=0x1004,cs=24|cpl,new_sp=UINT64_MAX-3,ss=32|cpl;
+        memcpy(stack,&pc,8);memcpy(stack+8,&cs,8);
+        memcpy(stack+23,&new_sp,8);memcpy(stack+31,&ss,8);
+        neverd_x64_state_v6 saved=s;
+        CHECK(neverd_x64_continue_v6(&s,&budget)==9 && !memcmp(&s,&saved,sizeof(s)));
+        --s.GDTR.Limit;budget=2;
+        if(cpl) {
+            saved=s;CHECK(neverd_x64_continue_v6(&s,&budget)==5 && budget==2);
+            CHECK(!memcmp(&s,&saved,sizeof(s)) && !(gdt[3]&(1ULL<<40)));
+        }
+        ++s.GDTR.Limit;
+        CHECK(neverd_x64_continue_v6(&s,&budget)==6 && budget==1);
+        CHECK(s.PC==0x1004 && s.GPR[0]==saved.GPR[0]);
+        CHECK(s.GPR[4]==(cpl?3:sp+23) && s.RFlags==0x246 && s.NMIBlocked==1);
+        CHECK(s.CS.Selector==(24|cpl) && (gdt[3]&(1ULL<<40)));
+        if(!cpl) {
+            CHECK(neverd_x64_continue_v6(&s,&budget)==9 && budget==0);
+            CHECK(s.PC==0x1009 && s.GPR[0]==7);
+            budget=1;saved=s;
+            CHECK(neverd_x64_continue_v6(&s,&budget)==8 && budget==1);
+            CHECK(!memcmp(&s,&saved,sizeof(s)));
+        } else {
+            saved=s;CHECK(neverd_x64_continue_v6(&s,&budget)==5 && budget==1);
+            CHECK(!memcmp(&s,&saved,sizeof(s)));
+        }
+    }
+    return 0;
+}
+)C");
+  }
+}
+
 TEST_F(X64ContinuationExportTest, DriverRetainsPhysicalCallsPivotsAndReentry) {
   load({0x48, 0x89, 0x4c, 0x24, 0x08,         // mov [rsp+8],rcx
         0xe8, 0x06, 0x00, 0x00, 0x00,         // call 1010

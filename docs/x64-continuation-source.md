@@ -86,13 +86,23 @@ A native request or invalid-state refusal executes nothing and consumes none.
 The invocation domain is CPL0, 64-bit entry with valid descriptor caches,
 CET/FRED disabled, successful sequential ordinary RAM accesses and immutable
 original instruction bytes. It excludes MMIO, concurrent writers, asynchronous
-events and faulting execution. IRETQ can produce CPL0–3 long-mode contexts;
+events and faulting execution. IRETQ and canonical RETFQ (`48 CB`,
+`48 CA imm16`) can produce CPL0–3 long-mode contexts;
 INT3 and canonical `INT imm8` (`CD 00` through `CD FF`) install a CPL0
 interrupt/trap-gate context with optional IST. Each vector reads its own live
 IDT entry, including vectors ordinarily used for OS services. Software INT
 does not push a hardware exception's error code or acquire NMI blocking for
 vector 2. These transfers stop before the target executes. Status 5 is not
 emulated fault delivery. Other prefixed encodings remain native requests.
+
+RETFQ reads RIP/CS alone for a same-privilege return and retains SS. For a
+return to an outer privilege level, its unsigned imm16 skips parameter bytes
+before saved RSP/SS and also adjusts the restored RSP. The transition preserves
+NMI blocking and flags within the existing non-interrupt entry domain (TF/RF,
+IOPL and VIF/VIP remain excluded). It consumes one driver step and stops even
+when the return target is selected; a returned CPL1–3 context cannot reenter
+this supervisor profile. Compatibility-mode and 16-/32-bit far returns still
+require native execution.
 
 ## Native environment bindings
 
@@ -161,6 +171,12 @@ unchanged native/invalid boundaries, and successful privilege-exit accounting.
 It compiles and executes both C routes at O0/O2 with ASan and UBSan. The semantic
 suite separately compares supported privileged transitions with native KVM
 fixtures; missing KVM coverage is reported as skipped.
+
+The [RETFQ qualification record](evidence/x86-retfq-continuation-2026-10-29.json)
+records 6,628 complete state/RAM comparisons, all 65,536 imm16 encoding audits,
+guard-page and read-only descriptor checks, and 378 passing continuation,
+export and proof regressions on the recorded source and toolchain. It qualifies
+the V6 transition domain above, not an ordinary C return ABI.
 
 `X64ContinuationIntegerTest` compares complete state and memory with original
 native instructions for audited legacy vector transfers, XOR and byte shifts,

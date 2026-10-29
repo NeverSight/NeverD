@@ -102,7 +102,8 @@ struct X64ContinuationSegmentMetadata {
   uint16_t Attributes = 0;
 };
 
-/// V6 owns descriptor and interruptibility state for IRETQ, INT3 and INT imm8.
+/// V6 owns descriptor and interruptibility state for RETFQ, IRETQ and software
+/// interrupts.
 /// Unusable bits correspond to CS, SS, DS, ES, FS, GS, LDTR, TR in that order.
 /// For an unusable segment, its selector and unusable bit are meaningful; its
 /// cached limit/attributes and non-FS/GS base are not architectural outputs.
@@ -178,15 +179,16 @@ enum class X64ContinuationProfile : uint8_t {
   /// Initial CS must describe CPL0 64-bit code. CET/FRED and asynchronous
   /// events remain disabled. Earlier state layouts are never extended.
   KernelReturnNoFaultV5,
-  /// V5 plus live GDT/LDT/IDT/TSS RAM and explicit segment caches. IRETQ may
-  /// return to 64-bit code at CPL0..3; INT3 and canonical INT imm8 enter a CPL0
-  /// 64-bit interrupt or trap gate, with any IST. They exit before target
-  /// execution. NMI blocking
-  /// is explicit; no NMI is delivered. CET/FRED, faulting execution, MMIO,
-  /// concurrent writers and asynchronous events remain outside the domain.
-  /// Descriptor accessed-bit writes may alias the frame or TSS and retain
-  /// their instruction-local ordering. No host privilege transfer is made.
-  /// Segment caches must describe an architecturally valid entry context.
+  /// V5 plus live GDT/LDT/IDT/TSS RAM and explicit segment caches. IRETQ and
+  /// canonical RETFQ (with or without imm16) may return to 64-bit code at
+  /// CPL0..3. RETFQ preserves NMI blocking and applies unsigned stack cleanup;
+  /// IRETQ unblocks NMIs. INT3 and canonical INT imm8 enter a CPL0 64-bit
+  /// interrupt or trap gate, with any IST. They exit before target execution.
+  /// NMI blocking is explicit; no NMI is delivered. CET/FRED, faulting
+  /// execution, MMIO, concurrent writers and asynchronous events remain outside
+  /// the domain. Descriptor accessed-bit writes may alias the frame or TSS and
+  /// retain their instruction-local ordering. No host privilege transfer is
+  /// made. Segment caches must describe an architecturally valid entry context.
   /// Software interrupts accept TF/RF, all IOPL values and VIF/VIP in the input
   /// flags. Other steps retain the earlier entry-flags domain. IRETQ may
   /// produce these flags but exits before their target-instruction effects.

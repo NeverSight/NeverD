@@ -1235,6 +1235,34 @@ TEST(OriginalBinaryUndefinedIndependence,
 }
 
 TEST(OriginalBinaryUndefinedIndependence,
+     AuditedFarReturnCannotAcquireAnOrdinaryReturnContract) {
+  for (const auto Bytes : {std::initializer_list<uint8_t>{0x48, 0xcb},
+                           {0x48, 0xca, 0, 0},
+                           {0x48, 0xca, 0xff, 0xff}}) {
+    for (bool Sibling : {false, true}) {
+      SCOPED_TRACE(Bytes.size());
+      SCOPED_TRACE(Sibling);
+      Program P({});
+      if (Sibling)
+        P.append(
+            {0x72, 1, 0xc3}); // One feasible ordinary return is insufficient.
+      P.append(Bytes);
+      for (bool Flags : {false, true}) {
+        if (Flags)
+          P.flagsProfile(InterpreterMachineStateProfile::KernelX64NoFaultV1);
+        const auto Checked = P.check();
+        EXPECT_FALSE(Checked.proved()) << Checked.Proof.Diagnostic;
+        EXPECT_FALSE(Checked.Certificate.has_value());
+        const auto Ordinary =
+            specializeBinaryInterpreter(P.Image, Entry, P.Options);
+        EXPECT_FALSE(Ordinary.complete()) << Ordinary.Diagnostic;
+        EXPECT_TRUE(Ordinary.Residual.Blocks.empty());
+      }
+    }
+  }
+}
+
+TEST(OriginalBinaryUndefinedIndependence,
      FeasibleTrapCannotPublishAnyCompletedSibling) {
   // jc trap; ret; int3. An ordinary input can select either path. A completed
   // return cannot authorize the sibling exception path under this contract.

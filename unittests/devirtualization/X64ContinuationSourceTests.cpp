@@ -376,6 +376,194 @@ int main(void) {
       false, eventOptions(), {}, true);
 }
 
+class X64FarReturnTest : public X64ContinuationSourceTest,
+                         public ::testing::WithParamInterface<unsigned> {};
+
+TEST_P(X64FarReturnTest, MatchesNativeFramesCleanupFlagsAndSegments) {
+  const unsigned Encoding = GetParam();
+  const unsigned Discard = Encoding == 65536 ? 0 : Encoding;
+  const std::vector<uint8_t> Bytes =
+      Encoding == 65536 ? std::vector<uint8_t>{0x48, 0xcb}
+                        : std::vector<uint8_t>{0x48, 0xca, uint8_t(Discard),
+                                               uint8_t(Discard >> 8)};
+  std::string Harness = EventHarness;
+  llvm::raw_string_ostream OS(Harness);
+  OS << "\n#define DISCARD " << Discard << "\n#define QUERY "
+     << (Encoding == 65536 ? 5 : 6) << "\n";
+  OS << R"C(
+int main(void) {
+  unsigned char before[4096],after[4096],frame_before[65584],frame_after[65584];
+  const uint64_t flags[]={2,3,6,18,66,130,514,1026,2050,16386,262146,2097154,0x244ed7};
+  for(unsigned local=0;local<2;++local)for(unsigned cpl=0;cpl<4;++cpl)
+    for(unsigned nullss=0;nullss<2;++nullss)for(unsigned f=0;f<13;++f) {
+      if(cpl==3 && nullss)continue;
+      event_state_t s=event_seed(0x8000);
+      s.gpr[4]=0x210000+(f&7);s.flags=flags[f];s.nmi_blocked=f&1;
+      memset((void *)0x210000,0xa5,sizeof(frame_before));
+      unsigned cs=local?4:24,ss=local?12:32;
+      uint64_t table=local?s.ldt.base:s.gdt.base;
+      event_word(table+(cs&~7),0x00af9a000000ffffULL|((uint64_t)cpl<<45));
+      event_word(table+(ss&~7),0x00cf92000000ffffULL|((uint64_t)cpl<<45));
+      event_word(s.gpr[4],0x1800);
+      event_word(s.gpr[4]+8,0x1234567800000000ULL|cs|cpl);
+      uint64_t new_sp=f&1?0x0800000000000000ULL:UINT64_MAX-DISCARD+7;
+      if(cpl) {
+        event_word(s.gpr[4]+16+DISCARD,new_sp);
+        event_word(s.gpr[4]+24+DISCARD,0x1234567800000000ULL|(nullss?cpl:ss|cpl));
+      } else if(nullss) {s.ss.selector=0;s.unusable|=2;}
+      event_state_t want=s;memcpy(before,(void *)0x8000,4096);
+      memcpy(frame_before,(void *)0x210000,sizeof(frame_before));
+      __asm__ volatile("outb %%al,$0xe9"::"a"(QUERY),"D"(&want),"S"(DISCARD):"memory");
+      memcpy(after,(void *)0x8000,4096);memcpy(frame_after,(void *)0x210000,sizeof(frame_after));
+      memcpy((void *)0x8000,before,4096);memcpy((void *)0x210000,frame_before,sizeof(frame_before));
+      CHECK(neverd_step_v6_1000(ARG(&s))==6);
+      CHECK(!memcmp(&s,&want,sizeof(s)) && !memcmp((void *)0x8000,after,4096));
+      CHECK(!memcmp((void *)0x210000,frame_after,sizeof(frame_after)));
+      CHECK(s.flags==flags[f] && s.nmi_blocked==(f&1));
+    }
+  return 0;
+}
+)C";
+  OS.flush();
+  run(Bytes, {0x1000}, Harness, false, eventOptions(), {}, true);
+}
+
+INSTANTIATE_TEST_SUITE_P(UnsignedCleanup, X64FarReturnTest,
+                         ::testing::Values(65536, 0, 1, 7, 8, 255, 32768,
+                                           65535));
+
+TEST_F(X64ContinuationSourceTest,
+       FarReturnMatchesNativeDescriptorsAndAliasing) {
+  run({0x48, 0xcb}, {0x1000}, std::string(EventHarness) + R"C(
+static void compare_return(event_state_t s) {
+  unsigned char before[4096],after[4096];event_state_t want=s;
+  memcpy(before,(void *)0x8000,4096);
+  __asm__ volatile("outb %%al,$0xe9"::"a"(5),"D"(&want):"memory");
+  memcpy(after,(void *)0x8000,4096);memcpy((void *)0x8000,before,4096);
+  CHECK(neverd_step_v6_1000(ARG(&s))==6);
+  CHECK(!memcmp(&s,&want,sizeof(s)) && !memcmp((void *)0x8000,after,4096));
+}
+static event_state_t return_frame(unsigned cpl) {
+  event_state_t s=event_seed(0x8000);
+  event_word(s.gdt.base+24,0x00af9a000000ffffULL|((uint64_t)cpl<<45));
+  event_word(s.gdt.base+32,0x00cf92000000ffffULL|((uint64_t)cpl<<45));
+  event_word(s.gpr[4],0x1800);event_word(s.gpr[4]+8,24|cpl);
+  event_word(s.gpr[4]+16,0x220000);event_word(s.gpr[4]+24,32|cpl);
+  return s;
+}
+int main(void) {
+  for(unsigned bank=0;bank<2;++bank)for(unsigned bit=0;bit<64;++bit) {
+    uint64_t descriptor=(bank?0x00cff2000000ffffULL:0x00affa000000ffffULL)^(1ULL<<bit);
+    uint64_t access=descriptor>>40;
+    if(bank?((access&0xfa)!=0xf2):((access&0x60f8)!=0x20f8))continue;
+    event_state_t s=return_frame(3);event_word(s.gdt.base+(bank?32:24),descriptor);
+    compare_return(s);
+  }
+  const unsigned types[]={0x91,0x93,0x95,0x97,0x9b,0x9f};
+  for(unsigned cpl=1;cpl<4;++cpl)for(unsigned dpl=0;dpl<4;++dpl)
+    for(unsigned type=0;type<6;++type) {
+      event_state_t s=return_frame(cpl);
+      s.ds.attributes=s.es.attributes=0xc000|types[type]|(dpl<<5);
+      s.fs.attributes=s.gs.attributes=s.ds.attributes;compare_return(s);
+    }
+  for(unsigned cpl=0;cpl<4;++cpl)for(unsigned dpl=0;dpl<=cpl;++dpl) {
+    event_state_t s=return_frame(cpl);
+    event_word(s.gdt.base+24,0x00af9e000000ffffULL|((uint64_t)dpl<<45));
+    compare_return(s);
+  }
+  for(unsigned cpl=1;cpl<3;++cpl)for(unsigned skew=0;skew<2;++skew) {
+    event_state_t s=return_frame(cpl);
+    /* The CS accessed byte overlaps the restored RSP (also when unaligned). */
+    uint64_t descriptor=s.gpr[4]+16-(skew?5:0);
+    event_word(descriptor,0x00209a0000000000ULL|((uint64_t)cpl<<45));
+    event_word(s.gpr[4]+8,8|cpl);event_word(s.gpr[4]+24,cpl);
+    s.gdt.base=descriptor-8;s.gdt.limit=15;
+    compare_return(s);
+  }
+  return 0;
+}
+)C",
+      false, eventOptions(), {}, true);
+}
+
+TEST_F(X64ContinuationSourceTest, FarReturnSamePrivilegeDoesNotReadOuterFrame) {
+#if !defined(__linux__)
+  GTEST_SKIP() << "guard-page fixture requires Linux mmap";
+#else
+  run({0x48, 0xcb, 0x48, 0xca, 0xff, 0xff}, {0x1000, 0x1002},
+      std::string(EventHarness) + R"C(
+#include <sys/mman.h>
+#include <unistd.h>
+int main(void) {
+  long page=sysconf(_SC_PAGESIZE);CHECK(page>=4096);
+  unsigned char *m=mmap(0,3*page,PROT_NONE,MAP_PRIVATE|MAP_ANONYMOUS,-1,0);
+  CHECK(m!=MAP_FAILED && !mprotect(m+page,page,PROT_READ|PROT_WRITE));
+  unsigned char memory[4096];
+  for(unsigned imm=0;imm<2;++imm)for(unsigned unusable=0;unusable<2;++unusable) {
+    event_state_t s=event_seed((uintptr_t)memory);s.pc=0x1000+2*imm;
+    s.gpr[4]=(uintptr_t)(m+2*page-16);s.unusable|=unusable*2;
+    event_word(s.gpr[4],0x1800);event_word(s.gpr[4]+8,24);
+    /* The current SS cache is not revalidated or replaced at the same CPL. */
+    s.ss.selector=unusable?0:16;s.ss.base=0x12340000;
+    event_segment_t ss=s.ss;uint64_t sp=s.gpr[4],flags=s.flags;
+    CHECK((imm?neverd_step_v6_1002(ARG(&s)):neverd_step_v6_1000(ARG(&s)))==6);
+    CHECK(s.pc==0x1800 && s.gpr[4]==sp+16+(imm?65535:0));
+    CHECK(!memcmp(&s.ss,&ss,sizeof(ss)) && (s.unusable&2)==unusable*2);
+    CHECK(s.flags==flags && s.nmi_blocked==1);
+  }
+  CHECK(!munmap(m,3*page));return 0;
+}
+)C",
+      false, eventOptions());
+#endif
+}
+
+TEST_F(X64ContinuationSourceTest, FarReturnRejectsInvalidStateBeforeAnyWrite) {
+  for (unsigned Bits : {48u, 57u}) {
+    auto O = eventOptions();
+    O.PagingAddressBits = Bits;
+    run({0x48, 0xca, 7, 0}, {0x1000}, std::string(EventHarness) + R"C(
+int main(void) {
+  unsigned char memory[4096],before[4096];
+  for(unsigned bad=0;bad<22;++bad) {
+    event_state_t s=event_seed((uintptr_t)memory);
+    event_word(s.gdt.base+24,0x00affa000000ffffULL);
+    event_word(s.gdt.base+32,0x00cff2000000ffffULL);
+    event_word(s.gpr[4],0x1800);event_word(s.gpr[4]+8,27);
+    event_word(s.gpr[4]+23,0x220000);event_word(s.gpr[4]+31,35);
+    if(bad==0)event_word(s.gpr[4],0x0100000000000000ULL);
+    if(bad==1)event_word(s.gpr[4]+8,0);
+    if(bad==2)s.gdt.limit=30;
+    if(bad==3)event_word(s.gdt.base+24,0x00af7a000000ffffULL);
+    if(bad==4)event_word(s.gdt.base+24,0x00cffa000000ffffULL);
+    if(bad==5)event_word(s.gdt.base+24,0x00af9a000000ffffULL);
+    if(bad==6)event_word(s.gpr[4]+31,3);
+    if(bad==7)event_word(s.gpr[4]+31,32);
+    if(bad==8)event_word(s.gdt.base+32,0x00cff0000000ffffULL);
+    if(bad==9)event_word(s.gdt.base+32,0x00cf72000000ffffULL);
+    if(bad==10)s.nmi_blocked=2;
+    if(bad==11)s.unusable|=1;
+    if(bad==12){event_word(s.gpr[4]+8,7);s.unusable|=64;}
+    if(bad==13)s.gdt.base=UINT64_MAX-16;
+    if(bad==14)s.cs.attributes|=0x4000;
+    if(bad==15)s.cs.selector|=3;
+    if(bad==16)s.pc++;
+    if(bad==17)s.flags|=0x10000;
+    if(bad==18)s.gpr[4]=UINT64_MAX-7;
+    if(bad==19)s.gpr[4]=0x0100000000000000ULL;
+    if(bad==20)s.gdt.limit=38;
+    if(bad==21){event_word(s.gpr[4]+31,15);s.ldt.attributes=0;}
+    event_state_t want=s;memcpy(before,memory,4096);
+    CHECK(neverd_step_v6_1000(ARG(&s))==5);
+    CHECK(!memcmp(&s,&want,sizeof(s)) && !memcmp(memory,before,4096));
+  }
+  return 0;
+}
+)C",
+        false, O);
+  }
+}
+
 TEST_F(X64ContinuationSourceTest, Int3MatchesNativeGatesStacksAndFlags) {
   run({0xcc}, {0x1000}, std::string(EventHarness) + R"C(
 int main(void) {
@@ -522,11 +710,29 @@ TEST_F(X64ContinuationSourceTest, EventsLeaveEarlierStateLayoutsUnsupported) {
   V5.PagingAddressBits = 48;
   for (auto O : {options(), controlsOptions(), smapOptions(), V4, V5}) {
     auto Units = buildX64ContinuationSource(
-        image({0x48, 0xcf, 0xcc, 0xcd, 0, 0xcd, 3, 0xcd, 0x2d, 0xcd, 0xff}),
-        {0x1000, 0x1002, 0x1003, 0x1005, 0x1007, 0x1009}, O);
+        image({0x48, 0xcf, 0xcc, 0xcd, 0, 0xcd, 3, 0xcd, 0x2d, 0xcd, 0xff, 0x48,
+               0xcb, 0x48, 0xca, 0xff, 0xff}),
+        {0x1000, 0x1002, 0x1003, 0x1005, 0x1007, 0x1009, 0x100b, 0x100d}, O);
     ASSERT_TRUE(bool(Units)) << llvm::toString(Units.takeError());
     for (const auto &U : *Units)
       EXPECT_TRUE(U.RequiresNativeExecution);
+  }
+}
+
+TEST_F(X64ContinuationSourceTest, UnqualifiedFarReturnEncodingsRemainNative) {
+  for (const auto &Bytes :
+       std::vector<std::vector<uint8_t>>{{0xcb},
+                                         {0xca, 0, 0},
+                                         {0x66, 0xcb},
+                                         {0x66, 0x48, 0xcb},
+                                         {0x49, 0xcb},
+                                         {0x67, 0x48, 0xca, 0xff, 0xff}}) {
+    auto Units =
+        buildX64ContinuationSource(image(Bytes), {0x1000}, eventOptions());
+    ASSERT_TRUE(bool(Units)) << llvm::toString(Units.takeError());
+    ASSERT_EQ(Units->size(), 1u);
+    EXPECT_TRUE(Units->front().RequiresNativeExecution);
+    EXPECT_EQ(Units->front().Bytes, Bytes);
   }
 }
 
@@ -546,7 +752,8 @@ TEST_F(X64ContinuationSourceTest, AccessedDescriptorsMayRemainReadOnly) {
 #if !defined(__linux__)
   GTEST_SKIP() << "read-only mapping fixture requires Linux mmap";
 #else
-  run({0x48, 0xcf, 0xcc}, {0x1000, 0x1002}, std::string(EventHarness) + R"C(
+  run({0x48, 0xcf, 0xcc, 0x48, 0xcb}, {0x1000, 0x1002, 0x1003},
+      std::string(EventHarness) + R"C(
 #include <sys/mman.h>
 #include <unistd.h>
 int main(void) {
@@ -567,6 +774,9 @@ int main(void) {
   s.gdt.base=(uintptr_t)table;
   CHECK(neverd_step_v6_1002(ARG(&s))==7 && s.pc==0x1800);
   uint64_t saved;memcpy(&saved,(void *)(uintptr_t)s.gpr[4],8);CHECK(saved==0x1003);
+  s=event_seed((uintptr_t)memory);s.pc=0x1003;s.gdt.base=(uintptr_t)table;
+  uint64_t sp=s.gpr[4];event_word(sp,0x1800);event_word(sp+8,24);
+  CHECK(neverd_step_v6_1003(ARG(&s))==6 && s.gpr[4]==sp+16);
   CHECK(munmap(table,page)==0);
   return 0;
 }

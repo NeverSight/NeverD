@@ -992,6 +992,97 @@ TEST(X86NativeStateAudit, InterruptVectorsBindUnsignedImmediateAndExtent) {
   }
 }
 
+TEST(X86NativeStateAudit, FarReturnsBindCleanupEncodingWithoutOpaqueProof) {
+  Decoder Dec;
+  ASSERT_TRUE(Dec.init(Arch::X64));
+  Dec.setStrict(true);
+  for (unsigned Value : {65536u, 0u, 1u, 255u, 32767u, 32768u, 65535u}) {
+    SCOPED_TRACE(Value);
+    const std::vector<uint8_t> Bytes =
+        Value == 65536 ? std::vector<uint8_t>{0x48, 0xcb}
+                       : std::vector<uint8_t>{0x48, 0xca, uint8_t(Value),
+                                              uint8_t(Value >> 8)};
+    const auto Ops = lift(Bytes);
+    ASSERT_EQ(Ops.size(), 4u);
+    EXPECT_EQ(Ops.back().Inputs[0], NdVar::cst(uint64_t(Intrinsic::Retf), 2));
+    const auto Decode = [&] {
+      DecodedInsn I{};
+      EXPECT_EQ(
+          Dec.decodeOneForLift(Bytes.data(), Bytes.size(), CodeAddress, I),
+          int(Bytes.size()));
+      return I;
+    };
+    auto Insn = Decode();
+    EXPECT_TRUE(nativestateaudit::farReturnForm(Insn.Raw, Arch::X64));
+    EXPECT_FALSE(nativestateaudit::farReturnForm(Insn.Raw, Arch::X86));
+    for (unsigned Mutation = 0; Mutation != 16; ++Mutation) {
+      SCOPED_TRACE(Mutation);
+      Insn = Decode();
+      auto &X = Insn.Raw->detail->x86;
+      switch (Mutation) {
+      case 0:
+        Insn.Raw->bytes[0] ^= 1;
+        break;
+      case 1:
+        Insn.Raw->bytes[1] ^= 1;
+        break;
+      case 2:
+        X.opcode[0] ^= 1;
+        break;
+      case 3:
+        X.rex ^= 1;
+        break;
+      case 4:
+        X.addr_size = 4;
+        break;
+      case 5:
+        X.prefix[2] = 0x66;
+        break;
+      case 6:
+        X.eflags = X86_EFLAGS_MODIFY_CF;
+        break;
+      case 7:
+        X.op_count ^= 1;
+        break;
+      case 8:
+        X.encoding.imm_offset ^= 1;
+        break;
+      case 9:
+        X.encoding.imm_size ^= 1;
+        break;
+      case 10:
+        X.encoding.disp_size = 1;
+        break;
+      case 11:
+        X.modrm = 0xc0;
+        break;
+      default:
+        if (Value == 65536) {
+          X.avx_sae = true;
+          break;
+        }
+        if (Mutation == 12)
+          X.operands[0].imm += 65536;
+        if (Mutation == 13)
+          X.operands[0].size = 2;
+        if (Mutation == 14)
+          X.operands[0].access = CS_AC_READ;
+        if (Mutation == 15)
+          Insn.Raw->bytes[2] ^= 1;
+      }
+      expectUnaudited(Dec, Insn);
+    }
+  }
+  // Independently decode every imm16, including Capstone's signed display
+  // half. The architectural unsigned cleanup value is bound by these bytes.
+  for (unsigned Value = 0; Value != 65536; ++Value) {
+    const uint8_t Bytes[] = {0x48, 0xca, uint8_t(Value), uint8_t(Value >> 8)};
+    DecodedInsn Insn{};
+    ASSERT_EQ(Dec.decodeOneForLift(Bytes, sizeof(Bytes), CodeAddress, Insn), 4);
+    ASSERT_TRUE(nativestateaudit::farReturnForm(Insn.Raw, Arch::X64)) << Value;
+  }
+}
+
 TEST(X86NativeStateAudit, CR3EncodingKeepsArbitraryFlagsAndRejectsForgedBank) {
   Decoder Dec;
   ASSERT_TRUE(Dec.init(Arch::X64));

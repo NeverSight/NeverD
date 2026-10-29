@@ -270,14 +270,14 @@ softwareInterruptVector(const SpecializationInstruction &Instruction) {
   return Vector;
 }
 
-bool iretInstruction(const SpecializationInstruction &Instruction) {
-  if (Instruction.NativeBytes != std::vector<uint8_t>{0x48, 0xcf} ||
-      Instruction.Origin.Control != LowInstructionControl::Terminator ||
-      Instruction.Ops.size() != 10 ||
-      !eventIntrinsic(Instruction.Ops.back(), Intrinsic::Iret, 6))
+bool returnFrameInstruction(const SpecializationInstruction &Instruction,
+                            Intrinsic Id, unsigned Fields) {
+  if (Instruction.Origin.Control != LowInstructionControl::Terminator ||
+      Instruction.Ops.size() != Fields * 2 ||
+      !eventIntrinsic(Instruction.Ops.back(), Id, Fields + 1))
     return false;
   const auto &Transfer = Instruction.Ops.back();
-  for (unsigned I = 0; I != 5; ++I) {
+  for (unsigned I = 0; I != Fields; ++I) {
     const auto &Read = Instruction.Ops[I ? I * 2 : 0];
     NdVar Address = NdVar::reg(x86reg::RSP, 8);
     if (I) {
@@ -298,6 +298,18 @@ bool iretInstruction(const SpecializationInstruction &Instruction) {
       return false;
   }
   return true;
+}
+
+std::optional<uint16_t>
+farReturnDiscard(const SpecializationInstruction &Instruction) {
+  const auto &Bytes = Instruction.NativeBytes;
+  if (!returnFrameInstruction(Instruction, Intrinsic::Retf, 2))
+    return std::nullopt;
+  if (Bytes == std::vector<uint8_t>{0x48, 0xcb})
+    return 0;
+  if (Bytes.size() == 4 && Bytes[0] == 0x48 && Bytes[1] == 0xca)
+    return uint16_t(Bytes[2] | uint16_t(Bytes[3]) << 8);
+  return std::nullopt;
 }
 
 bool pageTableIntrinsic(const LowOp &Op,
@@ -976,13 +988,16 @@ buildInstruction(SpecializationInstruction Instruction,
       PrivilegeReturn && Instruction.Ops.size() == 1 &&
       sysretIntrinsic(Instruction.Ops.front(), Options) &&
       Instruction.Origin.Control == LowInstructionControl::Terminator;
-  const bool Iret = Events && iretInstruction(Instruction);
+  const bool Iret =
+      Events && Instruction.NativeBytes == std::vector<uint8_t>{0x48, 0xcf} &&
+      returnFrameInstruction(Instruction, Intrinsic::Iret, 5);
+  const auto FarReturn = Events ? farReturnDiscard(Instruction) : std::nullopt;
   const auto Interrupt =
       Events ? softwareInterruptVector(Instruction) : std::nullopt;
   if (Instruction.ProfileProjection != InterpreterProfileProjection::None ||
       Instruction.UndefinedEffects.Coverage != LowUndefinedCoverage::Complete ||
       (Instruction.Origin.Control == LowInstructionControl::Terminator &&
-       !Sysret && !Iret && !Interrupt))
+       !Sysret && !Iret && !FarReturn && !Interrupt))
     RequireNative("instruction requires an explicit native environment");
   if (Instruction.UndefinedEffects.Effects.size() >
       std::size(State{}.Undefined))
@@ -1002,7 +1017,7 @@ buildInstruction(SpecializationInstruction Instruction,
                                            NdVar::tmp(ScratchBase - 16, 16))
           : std::nullopt;
   for (const LowOp &Op : Instruction.Ops) {
-    if (!Timestamp && !Sysret && !Iret && !Interrupt &&
+    if (!Timestamp && !Sysret && !Iret && !FarReturn && !Interrupt &&
         !supportedOperation(Op, Options, WideDivision)) {
       std::string Detail = "unsupported continuation operation: ";
       Detail += ndOpName(Op.Opcode);
@@ -1111,10 +1126,12 @@ buildInstruction(SpecializationInstruction Instruction,
   Writer W{Function, &Body, Options};
   if (Result.RequiresNativeExecution) {
     W.leave(Exit::NativeInstruction);
-  } else if (Iret || Interrupt) {
+  } else if (Iret || FarReturn || Interrupt) {
     detail::X64ContinuationEvents<Writer> Event(W, *Options.PagingAddressBits);
     if (Iret)
       Event.iret();
+    else if (FarReturn)
+      Event.farReturn(*FarReturn);
     else
       Event.softwareInterrupt(*Interrupt, Instruction.Fallthrough.Address);
   } else if (Sysret) {

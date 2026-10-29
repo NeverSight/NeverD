@@ -9316,11 +9316,27 @@ proof still rejects every feasible trap path, and a provider cannot forge
 either an audit upgrade or downgrade. This separation is checked through
 synthetic providers and original linked binaries.
 
+`UnsignedCleanup/X64FarReturnTest` runs original RETFQ bytes on the independent
+KVM CPU, comparing every represented state cell plus descriptor and frame RAM
+with HighC/LLVMC at O0/O2. It covers the no-immediate encoding and cleanup counts
+0, 1, 7, 8, 255, 32768 and 65535, including unaligned frames, GDT/LDT selectors,
+CPL0..3, null SS, preserved flags/NMI blocking and wrapped or noncanonical
+restored stack pointers. Additional native cases exercise descriptor bits,
+conforming return code, outer-return data-segment invalidation and descriptor
+accessed writes aliased with saved RSP. Guard pages prove same-level returns
+never read an absent saved SS:RSP; read-only tables prove no redundant accessed
+write. Invalid 48-/57-bit requests preserve all state and RAM under ASan/UBSan.
+The byte/detail audit checks all 65,536 imm16 encodings, including the decoder's
+signed display half, without granting opaque-state preservation. Public SDK
+tests check both stack adjustments, budget accounting, atomic rejection and
+stopping before a selected return target. Earlier profiles and noncanonical
+RETF encodings remain native requests.
+
 Read-only mappings additionally check already-accessed descriptors through
 HighC/LLVMC at O0/O2 under ASan/UBSan. Invalid NT, RIP, selectors, descriptor
 attributes, bounds, IST stacks and entry state reject without changing RAM or
-state. Earlier layout profiles retain native boundaries for IRETQ and software
-interrupts.
+state. Earlier layout profiles retain native boundaries for IRETQ, RETFQ and
+software interrupts.
 These tests qualify instruction transitions, not complete Windows kernel
 execution or an ordinary C calling convention for an interrupt entry.
 

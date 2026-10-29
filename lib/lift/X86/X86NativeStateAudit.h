@@ -140,6 +140,40 @@ inline bool longModeEventForm(const cs_insn *Insn, Arch Target) {
          X.eflags == (Return ? ReturnFlags : TrapFlags);
 }
 
+inline bool farReturnForm(const cs_insn *Insn, Arch Target) {
+  if (!Insn || !Insn->detail || Target != Arch::X64 ||
+      Insn->id != X86_INS_RETFQ || (Insn->size != 2 && Insn->size != 4) ||
+      Insn->bytes[0] != 0x48)
+    return false;
+  const bool Immediate = Insn->size == 4;
+  const auto &X = Insn->detail->x86;
+  const uint8_t Opcode = Immediate ? 0xca : 0xcb;
+  if (Insn->bytes[1] != Opcode || X.op_count != (Immediate ? 1 : 0) ||
+      X.encoding.imm_offset != (Immediate ? 2 : 0) ||
+      X.encoding.imm_size != (Immediate ? 2 : 0))
+    return false;
+  if (Immediate) {
+    const unsigned Encoded = Insn->bytes[2] | unsigned(Insn->bytes[3]) << 8;
+    // Capstone sign-extends this imm16 into a four-byte operand. Authenticate
+    // that representation; the event owner takes the unsigned discard count
+    // from the original encoding, never from this display-oriented value.
+    const int64_t Decoded =
+        Encoded < 0x8000 ? Encoded : int64_t(Encoded) - 0x10000;
+    const auto &Operand = X.operands[0];
+    if (Operand.type != X86_OP_IMM || Operand.size != 4 || Operand.access ||
+        Operand.imm != Decoded || Operand.avx_zero_opmask ||
+        Operand.avx_bcast != X86_AVX_BCAST_INVALID)
+      return false;
+  }
+  return !X.prefix[0] && !X.prefix[1] && !X.prefix[2] && !X.prefix[3] &&
+         X.opcode[0] == Opcode && !X.opcode[1] && !X.opcode[2] &&
+         !X.opcode[3] && X.rex == 0x48 && X.addr_size == 8 && !X.modrm &&
+         !X.sib && !X.disp && !X.encoding.modrm_offset &&
+         !X.encoding.disp_offset && !X.encoding.disp_size && !X.avx_sae &&
+         X.avx_rm == X86_AVX_RM_INVALID && X.avx_cc == X86_AVX_CC_INVALID &&
+         !X.eflags;
+}
+
 inline bool swapgsForm(const cs_insn *Insn, Arch Target) {
   if (!Insn || !Insn->detail || Target != Arch::X64 ||
       Insn->id != X86_INS_SWAPGS || Insn->size != 3 || Insn->bytes[0] != 0x0f ||
@@ -237,7 +271,8 @@ inline bool form(const cs_insn *Insn, Arch Target) {
         Insn->id == X86_INS_XOR)
       return lockedlogicaudit::form(Insn, Target);
   }
-  if (sysretqForm(Insn, Target) || longModeEventForm(Insn, Target))
+  if (sysretqForm(Insn, Target) || longModeEventForm(Insn, Target) ||
+      farReturnForm(Insn, Target))
     return true;
   if (descriptorqueryaudit::form(Insn, Target))
     return true;

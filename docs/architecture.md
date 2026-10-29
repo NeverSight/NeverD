@@ -8434,12 +8434,13 @@ no stack scratch. Return inference accepts the validated primary completion,
 while strict scalar emulation refuses the environment-dependent operation.
 ENCLU's entry, exit, resume and asynchronous continuation remain unsupported.
 Far/interrupt returns do not use the bounded system contract or ordinary ABI
-RETURN. RETF/IRET strict lifting refuses until architectural frame restoration
-and its nonlocal continuation are represented.
-The same boundary excludes SYSENTER/SYSEXIT/SYSRET and RSM, including permissive
-decoding. Legacy nonlocal intrinsic IDs retain their serialized identities;
-LowIR validation, MedIR conversion, verification and both source routes reject
-them before an ordinary return, generic syscall or bare assembly can be emitted.
+RETURN. Their terminal LowIR intrinsics retain the original instruction
+boundary; ordinary source still refuses the unowned frame and nonlocal
+continuation. The separate explicit V6 continuation owns the qualified IRETQ
+and RETFQ transitions described below. Ordinary source also excludes
+SYSENTER/SYSEXIT/SYSRET and RSM, including permissive decoding. Legacy nonlocal
+intrinsic IDs retain their serialized identities; they cannot become an
+ordinary return, generic syscall or bare assembly without a semantic owner.
 The same contract owns CET shadow-stack writes and long-mode ENQCMD/ENQCMDS.
 Their historical intrinsic IDs remain stable. Both enqueue operands are
 addresses; only the command-source address inherits FS/GS, while the portal
@@ -9400,8 +9401,18 @@ transfer for every vector, including the ordinary source projections of
 Windows debug, assertion and fast-fail services. No service return in RAX is
 invented; software interrupts push no error code and preserve NMI blocking.
 `Exception` exits before handler execution; IRETQ uses
-`PrivilegeReturn` even for a same-privilege return. Earlier layouts remain
-unsupported for both instructions.
+`PrivilegeReturn` even for a same-privilege return.
+
+Canonical RETFQ (`48 CB` and `48 CA imm16`) uses the same return-code,
+return-stack and data-segment owners. At the same privilege level it consumes
+only RIP and CS, preserving the current SS cache. At an outer privilege level
+it skips the unsigned immediate's parameter bytes before reading saved RSP/SS,
+then adds that count to the restored RSP as well. It preserves the admitted
+flags and NMI blocking, and exits with `PrivilegeReturn` before target
+execution. The original bytes supply the unsigned discard count; the native
+audit separately authenticates Capstone's signed display value. Same-level
+returns never read an absent outer frame. Earlier layouts remain unsupported
+for these event transitions.
 
 `X64ContinuationEvents` owns these transitions in LowIR above both C routes.
 Validation precedes all state and memory writes. Deferred descriptor accessed
@@ -9414,8 +9425,10 @@ CET/FRED, compatibility returns, concurrent writers, MMIO and asynchronous
 execution. Input segment caches must describe a valid hardware context.
 Software interrupts admit the full defined long-mode flags set; other steps retain the
 previous input flag restrictions. Fault delivery remains outside this profile.
-The [Intel instruction reference](https://cdrdv2-public.intel.com/868140/253666-089-sdm-vol-2a.pdf)
-and native instruction comparisons govern these event semantics.
+The Intel instruction references for
+[interrupts](https://cdrdv2-public.intel.com/868140/253666-089-sdm-vol-2a.pdf) and
+[returns](https://cdrdv2-public.intel.com/835757/325383-sdm-vol-2abcd.pdf),
+together with native instruction comparisons, govern these event semantics.
 
 A separate native CR3 option preserves actual reads and writes on the bound
 supervisor CPU, including PCID/paging and TLB effects. Generated code, its

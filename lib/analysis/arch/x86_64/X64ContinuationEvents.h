@@ -4,7 +4,7 @@
 //
 //===----------------------------------------------------------------------===//
 /// \file
-/// IRETQ and software-interrupt transitions through the continuation writer.
+/// Far returns, IRETQ and software interrupts through the continuation writer.
 //===----------------------------------------------------------------------===//
 
 #ifndef NEVERD_LIB_ANALYSIS_ARCH_X86_64_X64CONTINUATIONEVENTS_H
@@ -79,11 +79,13 @@ template <class Writer> class X64ContinuationEvents {
     W.rejectIf(ne(V, Signed));
   }
 
-  void range(NdVar Address, uint64_t LastByte) {
-    W.rejectIf(less(k(UINT64_MAX - LastByte), Address));
+  void range(NdVar Address, NdVar LastByte) {
+    W.rejectIf(less(op(NdOp::INT_SUB, {k(UINT64_MAX), LastByte}), Address));
     canonical(Address);
-    canonical(op(NdOp::INT_ADD, {Address, k(LastByte)}));
+    canonical(op(NdOp::INT_ADD, {Address, LastByte}));
   }
+
+  void range(NdVar Address, uint64_t LastByte) { range(Address, k(LastByte)); }
 
   NdVar readMemory(NdVar Address) {
     auto Value = op(NdOp::LOAD, {Address});
@@ -177,6 +179,40 @@ template <class Writer> class X64ContinuationEvents {
     return op(NdOp::INT_OR, {Unusable, choose(Invalidate, k(Bit), k(0))});
   }
 
+  Descriptor returnCode(NdVar CS, NdVar CPL) {
+    W.rejectIf(eq(masked(CS, 0xfffc), k(0)));
+    const auto Code = descriptor(CS);
+    const auto Access = shifted(Code.Value, 40);
+    const auto DPL = masked(shifted(Access, 5), 3);
+    W.rejectIf(ne(masked(Access, 0x6098), k(0x2098)));
+    W.rejectIf(
+        choose(ne(masked(Access, 4), k(0)), less(CPL, DPL), ne(CPL, DPL)));
+    AccessedAddress = op(NdOp::INT_ADD, {Code.Address, k(5)});
+    return Code;
+  }
+
+  Descriptor returnStack(NdVar CS, NdVar CPL, NdVar SS, NdVar NullSS) {
+    W.rejectIf(ne(masked(SS, 3), CPL));
+    W.rejectIf(both(NullSS, eq(CPL, k(3))));
+    // A null SS requires no table access. The already validated CS provides
+    // a safe speculative read; its accessed bit is already pending. It cannot
+    // acquire another write, and sequential RAM makes the read unobservable.
+    const auto Stack = descriptor(choose(NullSS, CS, SS));
+    const auto StackAccess = masked(shifted(Stack.Value, 40), 0xfa);
+    const auto Expected =
+        op(NdOp::INT_OR, {k(0x92), op(NdOp::INT_LEFT, {CPL, k(5)})});
+    W.rejectIf(both(ne(masked(SS, 0xfffc), k(0)), ne(StackAccess, Expected)));
+    return Stack;
+  }
+
+  void returnData(NdVar CPL, NdVar Unusable) {
+    Unusable = returnedData(offsetof(V6, DS), true, 4, CPL, Unusable);
+    Unusable = returnedData(offsetof(V6, ES), true, 8, CPL, Unusable);
+    Unusable = returnedData(offsetof(V6, FS), false, 16, CPL, Unusable);
+    Unusable = returnedData(offsetof(V6, GS), false, 32, CPL, Unusable);
+    W.store(offsetof(V6, Unusable), narrow(Unusable, 1));
+  }
+
 public:
   X64ContinuationEvents(Writer &Output, unsigned Bits)
       : W(Output), AddressBits(Bits) {}
@@ -189,44 +225,63 @@ public:
     const auto CS = masked(readMemory(op(NdOp::INT_ADD, {SP, k(8)})), 0xffff);
     const auto Flags = readMemory(op(NdOp::INT_ADD, {SP, k(16)}));
     canonical(PC);
-    W.rejectIf(eq(masked(CS, 0xfffc), k(0)));
     const auto CPL = masked(CS, 3);
-    const auto Code = descriptor(CS);
-    const auto Access = shifted(Code.Value, 40);
-    const auto DPL = masked(shifted(Access, 5), 3);
-    W.rejectIf(ne(masked(Access, 0x6098), k(0x2098)));
-    W.rejectIf(
-        choose(ne(masked(Access, 4), k(0)), less(CPL, DPL), ne(CPL, DPL)));
-    AccessedAddress = op(NdOp::INT_ADD, {Code.Address, k(5)});
+    const auto Code = returnCode(CS, CPL);
     const auto NewSP = readMemory(op(NdOp::INT_ADD, {SP, k(24)}));
     const auto SS = masked(readMemory(op(NdOp::INT_ADD, {SP, k(32)})), 0xffff);
-    W.rejectIf(ne(masked(SS, 3), CPL));
     const auto NullSS = eq(masked(SS, 0xfffc), k(0));
-    W.rejectIf(both(NullSS, eq(CPL, k(3))));
-    // A null SS requires no table access. The already validated CS provides
-    // a safe speculative read; its accessed bit is already pending. It cannot
-    // acquire another write, and sequential RAM makes the read unobservable.
-    const auto Stack = descriptor(choose(NullSS, CS, SS));
-    const auto StackAccess = masked(shifted(Stack.Value, 40), 0xfa);
-    const auto Expected =
-        op(NdOp::INT_OR, {k(0x92), op(NdOp::INT_LEFT, {CPL, k(5)})});
-    W.rejectIf(both(ne(masked(SS, 0xfffc), k(0)), ne(StackAccess, Expected)));
+    const auto Stack = returnStack(CS, CPL, SS, NullSS);
     accessed(Code);
     accessed(Stack);
     segment(offsetof(V5, CS), CS, Code.Value);
     segment(offsetof(V5, SS), SS, Stack.Value, NullSS);
-    auto Unusable =
+    const auto Unusable =
         op(NdOp::INT_OR, {masked(load(offsetof(V6, Unusable), 1), 0xfc),
                           choose(NullSS, k(2), k(0))});
-    Unusable = returnedData(offsetof(V6, DS), true, 4, CPL, Unusable);
-    Unusable = returnedData(offsetof(V6, ES), true, 8, CPL, Unusable);
-    Unusable = returnedData(offsetof(V6, FS), false, 16, CPL, Unusable);
-    Unusable = returnedData(offsetof(V6, GS), false, 32, CPL, Unusable);
-    W.store(offsetof(V6, Unusable), narrow(Unusable, 1));
+    returnData(CPL, Unusable);
     W.store(offsetof(V6, NMIBlocked), NdVar::scalar(0, 1));
     W.store(offsetof(State, GPR) + x86reg::RSP, NewSP);
     W.store(offsetof(State, RFlags),
             op(NdOp::INT_OR, {masked(Flags, 0x3d7fd7), k(2)}));
+    W.leave(Exit::PrivilegeReturn, PC);
+  }
+
+  void farReturn(uint16_t Discard) {
+    const auto SP = load(offsetof(State, GPR) + x86reg::RSP);
+    range(SP, 15);
+    const auto PC = readMemory(SP);
+    const auto CS = masked(readMemory(op(NdOp::INT_ADD, {SP, k(8)})), 0xffff);
+    canonical(PC);
+    const auto CPL = masked(CS, 3);
+    const auto Outer = ne(CPL, k(0));
+    const auto Code = returnCode(CS, CPL);
+    range(SP, choose(Outer, k(31 + Discard), k(15)));
+    // Same-privilege RETFQ has only two frame words. Use already validated
+    // RAM for the unused SELECT arm; never touch an absent saved SS:RSP.
+    const auto Frame =
+        choose(Outer, op(NdOp::INT_ADD, {SP, k(16 + Discard)}), SP);
+    const auto NewSP =
+        choose(Outer, readMemory(Frame), op(NdOp::INT_ADD, {SP, k(16)}));
+    const auto SS = choose(
+        Outer, masked(readMemory(op(NdOp::INT_ADD, {Frame, k(8)})), 0xffff),
+        k(0));
+    const auto NullSS = eq(masked(SS, 0xfffc), k(0));
+    const auto Stack = returnStack(CS, CPL, SS, NullSS);
+    accessed(Code);
+    accessed(Stack);
+    segment(offsetof(V5, CS), CS, Code.Value);
+    segment(offsetof(V5, SS),
+            choose(Outer, SS,
+                   load(offsetof(V5, SS) + offsetof(Segment, Selector), 2)),
+            Stack.Value, NullSS);
+    const auto Unusable = masked(load(offsetof(V6, Unusable), 1), 0xfe);
+    returnData(CPL, choose(Outer,
+                           op(NdOp::INT_OR, {masked(Unusable, 0xfd),
+                                             choose(NullSS, k(2), k(0))}),
+                           Unusable));
+    W.store(offsetof(State, GPR) + x86reg::RSP,
+            op(NdOp::INT_ADD, {NewSP, k(Discard)}));
+    // RETFQ preserves flags and NMI blocking in the admitted entry domain.
     W.leave(Exit::PrivilegeReturn, PC);
   }
 

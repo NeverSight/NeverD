@@ -164,7 +164,7 @@ static void event_record_segment(event_segment_t *s, struct kvm_segment native,
 
 static int event_query(int cpu, struct kvm_run *run, uint8_t *memory,
                        const struct kvm_sregs *initial, event_state_t *q,
-                       unsigned kind, unsigned vector) {
+                       unsigned kind, unsigned immediate) {
   struct kvm_sregs before = *initial;
   event_segment_t fs = {q->fs_base, q->fs.limit, q->fs.selector,
                         q->fs.attributes};
@@ -199,12 +199,22 @@ static int event_query(int cpu, struct kvm_run *run, uint8_t *memory,
   debug.arch.debugreg[1] = 0x1801;
   debug.arch.debugreg[7] = 0x405;
   REQUIRE(ioctl(cpu, KVM_SET_GUEST_DEBUG, &debug) == 0);
-  memory[registers.rip] = kind == 2 ? 0x48 : kind == 4 ? 0xcd : 0xcc;
+  memory[registers.rip] = kind == 2 || kind >= 5 ? 0x48
+                          : kind == 4            ? 0xcd
+                                                 : 0xcc;
   if (kind == 2)
     memory[registers.rip + 1] = 0xcf;
   if (kind == 4) {
-    REQUIRE(vector <= UINT8_MAX);
-    memory[registers.rip + 1] = vector;
+    REQUIRE(immediate <= UINT8_MAX);
+    memory[registers.rip + 1] = immediate;
+  }
+  if (kind >= 5) {
+    memory[registers.rip + 1] = kind == 5 ? 0xcb : 0xca;
+    if (kind == 6) {
+      REQUIRE(immediate <= UINT16_MAX);
+      memory[registers.rip + 2] = immediate;
+      memory[registers.rip + 3] = immediate >> 8;
+    }
   }
   memory[0x1800] = memory[0x1801] = 0x90;
   REQUIRE(ioctl(cpu, KVM_RUN, 0) == 0);
@@ -331,8 +341,9 @@ int main(int argc, char **argv) {
     REQUIRE(run->io.direction == KVM_EXIT_IO_OUT && run->io.port == 0xe9 &&
             run->io.size == 1 && run->io.count == 1);
     const unsigned kind = *((uint8_t *)run + run->io.data_offset);
-    REQUIRE(kind >= 1 && kind <= 4);
+    REQUIRE(kind >= 1 && kind <= 6);
     REQUIRE(kind != 4 || registers.rsi <= UINT8_MAX);
+    REQUIRE(kind != 6 || registers.rsi <= UINT16_MAX);
     REQUIRE(registers.rdi <= memory_size - (kind == 1
                                                 ? sizeof(struct return_query)
                                                 : sizeof(event_state_t)));

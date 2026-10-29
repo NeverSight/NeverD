@@ -1,0 +1,137 @@
+{
+  "scope": "Canonical RETFQ and RETFQ imm16 under the explicit KernelEventsNoFaultV6 continuation profile",
+  "goal_complete": false,
+  "validation_complete": true,
+  "artifact_set": "neverd-retfq-20261029",
+  "neverd_base": "bd02624bee7c77b728f62d1ea9d51d4a68358be0",
+  "qualified_source": {
+    "path": "qualified-source.json",
+    "sha256": "f0116ec721eb3cd3fccd9d1a8b97d0e96c111bd3b8d6805c84c23e061745ce71",
+    "bytes": 1516
+  },
+  "qualification_driver": {
+    "path": "make-evidence.py",
+    "sha256": "05722f4d041c3f7fe6414aa3e6d90964d761ce1c446f4f67323d065adda7e3bf",
+    "bytes": 6808
+  },
+  "reference": {
+    "manual": "Intel SDM 325462-085US, October 2024, RET in IA-32e mode",
+    "url": "https://cdrdv2-public.intel.com/835757/325383-sdm-vol-2abcd.pdf"
+  },
+  "native_oracle": {
+    "host": "Intel Core i9-13900H, Linux x64 KVM",
+    "instructions": [
+      "48 CB",
+      "48 CA iw"
+    ],
+    "compiler": "Ubuntu clang version 23.1.2 (++20260910044155+069ef0e7cb36-1~exp1~20260910044205.69)",
+    "paging_address_bits": 48,
+    "profiles": [
+      "HighC O0",
+      "HighC O2",
+      "LLVMC O0",
+      "LLVMC O2"
+    ],
+    "immediates": [
+      null,
+      0,
+      1,
+      7,
+      8,
+      255,
+      32768,
+      65535
+    ],
+    "state_and_ram_comparisons": 6628,
+    "frame_cases_per_encoding_per_profile": 182,
+    "descriptor_bit_cases_per_profile": [
+      57,
+      58
+    ],
+    "data_segment_cases_per_profile": 72,
+    "conforming_code_cases_per_profile": 10,
+    "aliased_descriptor_cases_per_profile": 4,
+    "compared": [
+      "all represented V6 state",
+      "4096 bytes of descriptor RAM",
+      "65584 bytes of frame RAM in the cleanup matrix",
+      "NMI blocking"
+    ],
+    "coverage": [
+      "GDT and LDT including LDT entry zero",
+      "CPL0..3",
+      "null SS",
+      "unaligned frames and cleanup",
+      "same-level SS cache preservation",
+      "unsigned cleanup on old and restored stacks",
+      "wrapped and noncanonical restored RSP",
+      "admitted flags",
+      "conforming code descriptors",
+      "outer-return data-segment invalidation",
+      "accessed-bit writes forwarded into aliased restored RSP"
+    ]
+  },
+  "checks": {
+    "qualification": {
+      "tests": 119,
+      "passed": 119,
+      "skipped": 0,
+      "artifact": "final-qualification.xml",
+      "sha256": "0767c4c4e00a1192c5c0f12758c8b0bb26507ffe964fff7aad60d52ea9001307",
+      "bytes": 125673
+    },
+    "proof_regressions": {
+      "tests": 259,
+      "passed": 259,
+      "skipped": 0,
+      "artifact": "final-proof-tests.xml",
+      "sha256": "57ce8e3176dc1ac7001128dde0189c9fbe306072030e4f8e6874a139b67fdd99",
+      "bytes": 278592
+    },
+    "immediate_audit_positive_cases": 65536,
+    "audit_malformed_cases": 112,
+    "invalid_state_comparisons": 176,
+    "page_boundary_comparisons": 16,
+    "read_only_accessed_descriptors": "passed for RETFQ, IRETQ and INT3",
+    "ordinary_return_contract": "12 direct/feasible-sibling and flag-profile combinations refused by both original proof and source recovery",
+    "sdk_driver": "HighC/LLVMC O0/O2: budget, rejection, both stack adjustments, stop before selected target and CPL entry enforcement",
+    "format_and_docs": "pinned clang-format and localized Markdown/link checks passed"
+  },
+  "build": {
+    "configuration": "Release",
+    "receipt": {
+      "path": "neverd-build-receipt.json",
+      "sha256": "23c389fe317c903c846a912b2e8cd83b134b23c657fe2ed95a10a6795fe07732",
+      "bytes": 3571
+    },
+    "proof_receipt": {
+      "path": "proof-build-receipt.json",
+      "sha256": "ea765529d2ec1a15c31ac87030514285bbb8c11f03b22e244faa330b81bda17b",
+      "bytes": 3700
+    },
+    "dependency_inputs": {
+      "path": "neverd-dependency-inputs.json",
+      "sha256": "0d185e80e033e56c739f8efa6c9652c56f7005bd399558403138262879bfc48c",
+      "bytes": 524
+    }
+  },
+  "validation_fix": "The first SDK regression expected outside-selection after consuming its last budget unit. The driver correctly reports budget exhaustion first; the regression now checks that result and a separate outside-selection invocation. Native semantics and both C routes already passed.",
+  "sources": {
+    "llvm": "a7738f3f28e71edc72651e475ea930a9e8946d27",
+    "neverc": "111055529fb4b18e18858983c80c8731bf5bbcb1",
+    "production_sdk": "neverd-llvm-v23.0.0-r6",
+    "production_sdk_commit": "06788fb19109851e6a6b9f109a2b8027a606f0c6",
+    "production_llvm_gitlink": "03270359c2ed8f6806533d3832a947bf883a6f69",
+    "release_and_pins_changed": false
+  },
+  "limitations": [
+    "CPL0 long-mode entry only",
+    "successful sequential ordinary RAM only; no fault delivery",
+    "CET/FRED, asynchronous delivery and concurrent writers excluded",
+    "TF/RF, nonzero IOPL and VIF/VIP remain outside the RETFQ entry domain",
+    "other prefixed encodings, 16-/32-bit and compatibility returns remain native requests",
+    "no ordinary C ABI or arbitrary target execution",
+    "no new LLVM/NeverC raw-stack return intrinsic in this change",
+    "the remaining global x86 gaps and NeverC full-CI qualification remain open"
+  ]
+}
