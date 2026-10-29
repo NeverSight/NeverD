@@ -90,7 +90,8 @@ BinaryImage setterImage(uint32_t Base, const char *Module, const char *Name,
   Code.resize(Stub - Image.Entry, 0xcc);
   Code.insert(Code.end(), {0xff, 0x25});
   word(Slot);
-  Code.push_back(0xc3);
+  // The intervening helper must have an unproved effect, not just a RET.
+  Code.insert(Code.end(), {0x8b, 0x00, 0xc3});
   Code.resize(0x90, 0xcc);
   direct(Image.Entry);
   invoke(Slot + 4, false);

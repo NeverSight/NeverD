@@ -61,9 +61,9 @@ struct RegistrationCalleeStackContract {
   /// An exact immutable FF25 tail veneer to RequiredImports' single slot.
   /// Under that binding it inherits the import's nonvolatile register ABI.
   bool ImportVeneer = false;
-  /// A separate normal-return effect of an authenticated import or veneer:
-  /// existing eager-IAT bindings survive. This never restores a lost binding
-  /// or grants frame access, result provenance, native EH or no-throw facts.
+  /// A separate normal-return effect: existing eager-IAT bindings survive.
+  /// Imports, veneers and closed ordinary helpers never restore lost bindings
+  /// or grant frame access, result provenance, native EH or no-throw facts.
   bool PreservesImportBindings = false;
 };
 

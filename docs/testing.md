@@ -9544,6 +9544,16 @@ also pops sixteen bytes; neither it nor a cdecl CRT import gains caller-frame
 observation permission. Returning-stack facts still grant no object borrow or
 initialized memory. These are static authored-machine tests, not execution of
 GOF2 or qualification of its full image.
+`OrdinaryHelpersNeedIndependentBindingEffects` checks integer helpers, private
+push/pop and scalar accesses, mapped reads, and a proved unreachable opaque
+call before a subsequent eager import. Unknown or unmapped reads, image writes,
+return-PC and caller-argument writes, unallocated stack writes, division, FP
+waits, reached opaque calls and unknown branches cannot retain bindings. A
+caller that already replaced its slot remains rejected even when the helper's
+independent binding effect succeeds. The same matrix composes through a second
+ordinary helper, and a loop backedge reopening an unknown read withdraws the
+summary. Registration-state consumers retain live slots through this effect
+while still discarding cached register targets at an ordinary call.
 `RegistrationStartupInfo` checks the complete 68-byte output against outgoing
 arguments, registration fields and cookies under EH3, EH4 and GS. Full and
 partial frame-pointer spills retain their provenance after a possible runtime

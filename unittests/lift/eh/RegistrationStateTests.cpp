@@ -930,7 +930,7 @@ TEST(RegistrationState, ImportBindingAndRegisterEffectsRemainIndependent) {
     for (bool Veneer : {false, true})
       for (bool PreservesBindings : {false, true})
         for (bool CachedCall : {false, true})
-          for (unsigned Mutation = 0; Mutation != 6; ++Mutation) {
+          for (unsigned Mutation = 0; Mutation != 8; ++Mutation) {
             SCOPED_TRACE(::testing::Message()
                          << EH4 << ' ' << Veneer << ' ' << PreservesBindings
                          << ' ' << CachedCall << ' ' << Mutation);
@@ -971,10 +971,11 @@ TEST(RegistrationState, ImportBindingAndRegisterEffectsRemainIndependent) {
               emitOp(Calls, 0x1110, NdOp::STORE, {},
                      {NdVar::cst(0x2100, 4), NdVar::cst(0, 4)});
             }
-            if (Mutation == 2) {
+            if (Mutation == 2 || Mutation == 6 || Mutation == 7) {
               Boundary(0x1110, 5, true);
               emitOp(Calls, 0x1110, NdOp::CALL, {}, {NdVar::cst(0x2300, 4)});
               Stacks.push_back({0x2300, 0, false});
+              Stacks.back().PreservesImportBindings = Mutation == 6;
             }
             if (Mutation == 3) {
               if (Veneer)
@@ -983,7 +984,7 @@ TEST(RegistrationState, ImportBindingAndRegisterEffectsRemainIndependent) {
                 Stacks[0].ImportVeneer = true;
             }
             if (Mutation == 5) {
-              Stacks.push_back({0x2300, 0, false});
+              Stacks.push_back({0x2300, uint32_t(UINT16_MAX) + 1, false});
               Stacks.back().PreservesImportBindings = true;
             }
             Boundary(0x1120, Veneer ? 5 : 6, true);
@@ -1010,7 +1011,8 @@ TEST(RegistrationState, ImportBindingAndRegisterEffectsRemainIndependent) {
                                                      nullptr, nullptr, &Stacks);
             EXPECT_EQ(A.Complete,
                       (Mutation == 0 && (CachedCall || PreservesBindings)) ||
-                          (Mutation == 4 && CachedCall));
+                          (Mutation == 4 && CachedCall) ||
+                          (Mutation == 6 && !CachedCall && PreservesBindings));
             EXPECT_FALSE(A.CallFrameEffectsComplete);
             EXPECT_TRUE(A.CallFrameEffects.empty());
             EXPECT_TRUE(A.SEHBoundCalls.empty());

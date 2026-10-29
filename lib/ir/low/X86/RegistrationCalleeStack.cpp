@@ -153,6 +153,7 @@ struct StackBody {
   std::set<va_t> ImportSlots;
   uint32_t ArgumentReadBytes = 0;
   bool CheckedArgumentReadBytes = false;
+  bool PreservesImportBindings = false;
   bool Valid = false;
 
   StackBody(const BinaryImage &Image, const LowFunc &Function, size_t &Work,
@@ -530,6 +531,7 @@ stackPopForBody(StackBody &Body, va_t Entry, const NestedStackProof &NestedPop,
     }
   }
   std::optional<uint32_t> Pop;
+  bool PreservesEntryImports = !Registration && !CxxPaths;
   while (!Pending.empty()) {
     const int Id = Pending.front();
     Pending.pop_front();
@@ -550,6 +552,11 @@ stackPopForBody(StackBody &Body, va_t Entry, const NestedStackProof &NestedPop,
         return std::nullopt;
       Transfer.beginInstruction(Op.Addr);
       const auto Abstract = Body.stackOperation(Op);
+      if (PreservesEntryImports && Op.Opcode != NdOp::CALL &&
+          Op.Opcode != NdOp::INDIR_CALL &&
+          !registration_abi::preservesOrdinaryRegistrationBindings(
+              Image, Abstract, Transfer, Body.callerArgumentReadBytes(), Work))
+        PreservesEntryImports = false;
       bool CRTDataStore = false;
       if (!Body.ImportDataLoads.empty() && !Registration && !CxxPaths) {
         const auto DataLoad = Body.ImportDataLoads.find({Op.Addr, Op.Seq});
@@ -699,6 +706,8 @@ stackPopForBody(StackBody &Body, va_t Entry, const NestedStackProof &NestedPop,
       const bool PrecisionSuccess =
           !Registration && !CxxPaths && ImportedCall && CalleePop == 0 &&
           Arguments.provesSuccessfulCall(Image, Op, State, Work);
+      if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL)
+        PreservesEntryImports &= PreserveImportBindings;
       const auto Load = Body.ImportLoads.find({Op.Addr, Op.Seq});
       Transfer.write(Abstract,
                      Transfer.evaluate(Abstract, false,
@@ -750,6 +759,9 @@ stackPopForBody(StackBody &Body, va_t Entry, const NestedStackProof &NestedPop,
     for (int Id : ParentBlocks)
       if (!Incoming.count(Id))
         return std::nullopt;
+  // A single reached effect withdraws this summary for the entire invocation.
+  // Revisited joins can only weaken it; no partial traversal publishes it.
+  Body.PreservesImportBindings = Pop && PreservesEntryImports;
   return Pop;
 }
 
@@ -1055,13 +1067,15 @@ public:
                               .prove(Callee);
     };
     const auto Record = [&](StackBody &Body, std::optional<uint32_t> Pop) {
-      if (Pop && chargeCalleeWork(Work, Body.ImportSlots.size() + 1))
+      if (Pop && chargeCalleeWork(Work, Body.ImportSlots.size() + 1)) {
         Result = RegistrationCalleeStackContract{
             Target,
             *Pop,
             false,
             {},
             {Body.ImportSlots.begin(), Body.ImportSlots.end()}};
+        Result->PreservesImportBindings = Body.PreservesImportBindings;
+      }
     };
     if (LocalEntry) {
       StackBody EntryBody(Image, Parent->Source, Work, Target);

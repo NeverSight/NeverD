@@ -31,6 +31,15 @@ bool hasClosedOrdinaryRegistrationMemoryAccess(
     const registration_state::FrameTransfer &Transfer,
     uint32_t CallerArgumentBytes, size_t &Work);
 
+/// An ordinary returning helper may retain every existing import binding
+/// only through closed integer effects. Calls compose their own receipts;
+/// faults, FP/intrinsics and writes outside its current private frame do not
+/// inherit the weaker integer-stack preservation policy.
+bool preservesOrdinaryRegistrationBindings(
+    const BinaryImage &Image, const LowOp &Op,
+    const registration_state::FrameTransfer &Transfer,
+    uint32_t CallerArgumentBytes, size_t &Work);
+
 } // namespace registration_abi
 } // namespace neverd
 

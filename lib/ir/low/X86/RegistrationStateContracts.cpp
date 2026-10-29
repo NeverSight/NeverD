@@ -95,8 +95,9 @@ bool RegistrationStateSolver::initializeContracts() {
         StackImportVeneers.insert(Stack.Target);
       }
       if (Stack.PreservesImportBindings) {
-        if (!Stack.Indirect && !Stack.ImportVeneer)
-          return false;
+        // Ordinary helpers can supply an independently proved normal-return
+        // binding effect too. Only ImportVeneer grants imported-target GPR
+        // preservation; retaining slots never grants that separate identity.
         StackBindingPreservers.emplace(Stack.Target, Stack.Indirect);
       }
       if (Stack.Indirect) {

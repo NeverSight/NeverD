@@ -2449,6 +2449,18 @@ pollute its contract or exhaust its callee budget. Registration parent queries
 retain their complete dispatcher-root analysis. Every scoped view preserves
 all ordinary successors, checks its current source instructions and charges
 the shared work budget; it supplies no memory or native EH permission.
+An ordinary helper can separately retain existing caller import bindings when
+every reached operation has a closed integer effect. Scalar reads reuse the
+current memory-permission authority, and writes must remain inside the current
+private frame below its original return PC. Image, unknown and caller-storage
+writes do not qualify. Division, floating operations and intrinsics withdraw
+this stronger effect even when their normal path preserves integer ESP.
+Checked calls compose only their own normal-return binding effect under live
+transitive dependencies. One unproved effect on any visited path withdraws the
+summary permanently, including when a loop or join loses an earlier constant.
+Only a completed ordinary returning-stack proof publishes it; dispatcher paths
+retain no such summary. This neither restores a lost binding nor grants frame,
+loaded-value, nonthrowing or native-rewrite authority.
 
 Absolute relocation root discovery uses the loader's checked PE32 runtime
 pointer roles across the image. A FuncInfo callback field belongs to its

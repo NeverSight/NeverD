@@ -22,6 +22,7 @@
 
 #include "llvm/ADT/StringRef.h"
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <initializer_list>
@@ -537,6 +538,10 @@ TEST(RegistrationImportABI, CachedImportTargetsKeepOnlyTheirReturningStackABI) {
         Bytes.resize(ImportImage::StubVA - Text.VA, 0xcc);
         if (Mutation == 14)
           Bytes.insert(Bytes.end(), {0x31, uint8_t(0xc0 + Register * 9)});
+        // A plain RET now has its own binding-preservation proof. Keep this
+        // helper opaque through an actual unknown memory read instead.
+        if (Mutation == 9 || Mutation == 10)
+          Bytes.insert(Bytes.end(), {0x8b, 0x00});
         Bytes.push_back(0xc3);
         Text.Size = Text.FileSz = Bytes.size();
         Image.Sections[0].Size = Image.Sections[0].FileSz = Text.Size;
@@ -773,7 +778,8 @@ TEST(RegistrationImportABI, PointerTransformsRetainOnlyLiveImportBindings) {
         Bytes.insert(Bytes.end(), {0x31, 0xc0, 0xc3});
         ASSERT_LE(Bytes.size(), ImportImage::StubVA - Text.VA);
         Bytes.resize(ImportImage::StubVA - Text.VA, 0xcc);
-        Bytes.insert(Bytes.end(), {0xff, 0x25, 0, 0x30, 0x40, 0, 0xc3});
+        Bytes.insert(Bytes.end(),
+                     {0xff, 0x25, 0, 0x30, 0x40, 0, 0x8b, 0x00, 0xc3});
         Text.Size = Text.FileSz = Bytes.size();
         Image.Sections[0].Size = Image.Sections[0].FileSz = Text.Size;
         if (Mutation == 4)
@@ -1212,6 +1218,98 @@ TEST(RegistrationImportABI, ReturningHelperMayReplaceRuntimeSlot) {
   ASSERT_EQ(Contracts->front().ImageWrites.size(), 1u);
   EXPECT_EQ(Contracts->front().ImageWrites.front().Begin, ImportImage::IATVA);
   EXPECT_EQ(Contracts->front().ImageWrites.front().End, ImportImage::IATVA + 4);
+}
+
+TEST(RegistrationImportABI, OrdinaryHelpersNeedIndependentBindingEffects) {
+  struct Case {
+    const char *Name;
+    std::vector<uint8_t> Code;
+    bool Preserves;
+  };
+  const Case Cases[] = {
+      {"integer", {0x31, 0xc0, 0xc3}, true},
+      {"private-push", {0x50, 0x58, 0xc3}, true},
+      {"private-write",
+       {0x83, 0xec, 8, 0x89, 0x04, 0x24, 0x8b, 0x04, 0x24, 0x83, 0xc4, 8, 0xc3},
+       true},
+      {"mapped-read", {0xa1, 4, 0x30, 0x40, 0, 0xc3}, true},
+      {"unreached-call",
+       {0x31, 0xc0, 0x85, 0xc0, 0x74, 2, 0xff, 0xd2, 0xc3},
+       true},
+      {"unmapped-read", {0xa1, 0, 0, 0x90, 0, 0xc3}, false},
+      {"unknown-read", {0x8b, 0x00, 0xc3}, false},
+      {"iat-write", {0xa3, 0, 0x30, 0x40, 0, 0xc3}, false},
+      {"other-image-write", {0xa3, 4, 0x30, 0x40, 0, 0xc3}, false},
+      {"caller-pc-write", {0x89, 0x04, 0x24, 0xc3}, false},
+      {"caller-argument-write", {0x89, 0x44, 0x24, 4, 0xc3}, false},
+      {"below-sp-write", {0x89, 0x44, 0x24, 0xfc, 0xc3}, false},
+      {"divide", {0xf7, 0xf1, 0xc3}, false},
+      {"fp-wait", {0x9b, 0xc3}, false},
+      {"opaque-call",
+       {0x55, 0x8b, 0xec, 0xff, 0xd2, 0x8b, 0xe5, 0x5d, 0xc3},
+       false},
+      {"unknown-branch",
+       {0x85, 0xc0, 0x74, 5, 0xa1, 0, 0, 0x90, 0, 0xc3},
+       false},
+      {"reopened-backedge",
+       {0x31, 0xc9, 0x85, 0xc9, 0x74, 2, 0x8b, 0x00, 0x85, 0xd2, 0x74, 3, 0x41,
+        0xeb, 0xf3, 0xc3},
+       false},
+  };
+  for (const auto &C : Cases)
+    for (bool BindingsLive : {false, true}) {
+      SCOPED_TRACE(::testing::Message() << C.Name << ':' << BindingsLive);
+      ImportImage F({"EncodePointer", 1}, false);
+      auto &Image = F.Image;
+      auto &Text = Image.Segments[0];
+      Text.Data = C.Code;
+      Text.Data.resize(0x40, 0xcc);
+      const va_t Wrapper = Text.VA + Text.Data.size();
+      if (!BindingsLive)
+        Text.Data.insert(Text.Data.end(), {0xa3, 0, 0x30, 0x40, 0});
+      const size_t Call = Text.Data.size();
+      Text.Data.insert(Text.Data.end(), {0xe8, 0, 0, 0, 0});
+      writeLE<uint32_t>(Text.Data.data() + Call + 1,
+                        uint32_t(-int64_t(Call + 5)));
+      Text.Data.insert(Text.Data.end(),
+                       {0x6a, 0, 0xff, 0x15, 0, 0x30, 0x40, 0, 0xc3});
+      Text.Size = Text.FileSz = Text.Data.size();
+      Image.Sections[0].Size = Image.Sections[0].FileSz = Text.Size;
+      Image.Symbols.push_back(Symbol::makeFunc(Text.VA, C.Code.size()));
+      Image.Symbols.push_back(Symbol::makeFunc(Wrapper, Text.Size - 0x40));
+      EXPECT_EQ(getCheckedX86CalleeStackPop(Image, Text.VA), 0u);
+      RegistrationCallCalleeIndex Index(Image);
+      const auto Stacks = Index.stackContracts(F.caller());
+      ASSERT_TRUE(Stacks);
+      ASSERT_EQ(Stacks->size(), 1u);
+      EXPECT_EQ(Stacks->front().PreservesImportBindings, C.Preserves);
+      EXPECT_TRUE(Stacks->front().RequiredImports.empty());
+      EXPECT_EQ(getCheckedX86CalleeStackPop(Image, Wrapper),
+                C.Preserves && BindingsLive ? std::optional<uint32_t>{0}
+                                            : std::nullopt);
+
+      // Insert a second ordinary helper. Its summary must compose the exact
+      // nested effect, including a withdrawal discovered on a later backedge.
+      constexpr size_t NestedOffset = 0x20;
+      ASSERT_LE(C.Code.size(), NestedOffset);
+      const std::vector<uint8_t> Nested = {0xe8, 0xdb, 0xff, 0xff, 0xff, 0xc3};
+      std::copy(Nested.begin(), Nested.end(), Text.Data.begin() + NestedOffset);
+      writeLE<uint32_t>(Text.Data.data() + Call + 1,
+                        uint32_t(int64_t(NestedOffset) - int64_t(Call + 5)));
+      Image.Symbols.push_back(
+          Symbol::makeFunc(Text.VA + NestedOffset, Nested.size()));
+      auto NestedCaller = F.caller();
+      NestedCaller.Blocks[0].Ops[0].Inputs[0].Offset += NestedOffset;
+      RegistrationCallCalleeIndex NestedIndex(Image);
+      const auto NestedStacks = NestedIndex.stackContracts(NestedCaller);
+      ASSERT_TRUE(NestedStacks);
+      ASSERT_EQ(NestedStacks->size(), 1u);
+      EXPECT_EQ(NestedStacks->front().PreservesImportBindings, C.Preserves);
+      EXPECT_TRUE(NestedStacks->front().RequiredImports.empty());
+      EXPECT_EQ(getCheckedX86CalleeStackPop(Image, Wrapper),
+                C.Preserves && BindingsLive ? std::optional<uint32_t>{0}
+                                            : std::nullopt);
+    }
 }
 
 TEST(RegistrationImportABI, DivideFaultCannotCertifyLaterImportBindings) {
