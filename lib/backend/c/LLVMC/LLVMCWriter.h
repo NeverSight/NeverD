@@ -622,6 +622,10 @@ public:
     explicit operator bool() const { return !Name.empty(); }
   };
   LibraryCallee libraryCallee(const llvm::CallBase &Call) const;
+  /// A runtime declaration for an opaque import address, never for a symbol
+  /// whose relocation identifies data or whose declaration the user owns.
+  const libc::LibCPrototype *
+  addressedImportPrototype(const llvm::GlobalVariable &Global) const;
   /// Whether the unit declares \p Call's callee to return nothing where the
   /// call's own type returns a value: a routine declared void, or the
   /// module's definition whose result is settled as none, which prints as

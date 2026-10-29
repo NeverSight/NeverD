@@ -1,5 +1,14 @@
 # Remaining x64 C-quality work
 
+Address-only imported runtime symbols now retain their import origin separately
+from relocated data. LLVM C uses the existing format-specific runtime prototype
+for their aliases, including headers and weak linkage. This closes the MinGW
+whole-module Clang object-generation crash when a global initializer names
+`__C_specific_handler` before an SEH function. Data objects with the same name
+and unknown imports retain opaque aliases. O0/O2 object checks cover the reduced
+case and the existing MinGW whole-module fixture; these checks do not establish
+native regenerated exception execution or remove dynamic-stack proof failures.
+
 Use public fixtures and emitter tests as the durable contract. Private binary
 analysis and comparison output belong outside the repository.
 

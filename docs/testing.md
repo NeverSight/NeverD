@@ -15091,7 +15091,17 @@ AArch64's `cset w8, eq; and w8, w8, #1` as the comparison itself, or its
 negation, and keeps a selection by a value that may hold another number.
 `NativePointerRelocationBoundary.MinGWProgramWholeModuleLLVMCCompiles` links
 a program against the MinGW-w64 runtime, when its compiler is installed, and
-compiles the program's whole-module LLVM C for x86-64 MinGW. The LLVMCValues
+compiles the program's whole-module LLVM C for x86-64 MinGW, including actual
+object generation at O0 and O2. Syntax-only checking cannot detect a data
+alias colliding with Clang's implicit SEH personality.
+`COFFExceptionIR.LLVMCAddressedImportKeepsItsRuntimeFunctionDeclaration`
+isolates an address initializer preceding SEH and compiles both optimization
+levels. Object relocations with the same name and other object formats retain
+their data declarations. `HighCAddressedRuntimeFunctionPrecedesSEH` checks the
+same ordering through HighC. `LLVMCAddressedImportUsesPrototypeHeadersAndWeakLinkage`
+checks prototype-owned headers, weak linkage and an unknown import control.
+These are compilation checks; native Windows exception execution remains a
+separate gate. The LLVMCValues
 cases it rests on compile and run on the host:
 `ACallerWithUnwindInformationSeesItsCalleeDeclared` declares a callee whose
 caller carries an unwind record;

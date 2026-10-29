@@ -6705,9 +6705,16 @@ words. They are not import storage: the program may store another function
 there, so the listing keeps the variable's name, and no call through the word
 takes the function's name or its no-return contract. LLVM emission treats the
 word as callable storage, loads it for each call, and starts its mirror field at
-the function's address rather than at the file's zero. Until a call proves the
-function's type, C names it through the same opaque assembly-name alias as
-undefined data. Weak symbols, addends and words two relocations name
+the function's address rather than at the file's zero. Address-only imports
+retain their origin in `neverd.data-symbol` metadata. LLVM C uses the existing
+format-specific runtime prototype when one describes that import, including
+its required headers and calling convention. An initializer can therefore
+name an SEH personality before a protected function without declaring the
+compiler's personality symbol as an object. Data relocations with the same
+name, user-owned declarations and imports without a runtime prototype keep
+their opaque assembly-name aliases. This source declaration does not invent
+a machine call signature or make mutable import storage immutable.
+Weak symbols, addends and words two relocations name
 differently stay unknown, and a call through them still fails closed.
 
 The shared i386 get-PC recognizer requires the complete `mov r32,[esp]; ret`

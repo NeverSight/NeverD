@@ -914,12 +914,13 @@ MedLLVMEmitter::importedSymbolIdentity(llvm::StringRef ImportName) {
     return nullptr;
   }
   if (!Symbol) {
-    // Only the symbol's address is known here; C reaches it through an
-    // opaque alias until a call proves its type.
+    // Only the symbol's address is known here. Keep its import origin so C
+    // can use an established runtime prototype, or an opaque alias if none
+    // describes it. This does not invent a machine-level call signature.
     auto *Placeholder = new llvm::GlobalVariable(
         *Mod, llvm::Type::getInt8Ty(*Ctx), /*isConstant=*/false,
         llvm::GlobalValue::ExternalLinkage, /*Initializer=*/nullptr, Name);
-    data_symbol::mark(*Placeholder);
+    data_symbol::markImport(*Placeholder);
     ImportedSymbolPlaceholders[Name] = Placeholder;
     Symbol = Placeholder;
   }
