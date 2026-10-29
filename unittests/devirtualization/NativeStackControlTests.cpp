@@ -477,7 +477,7 @@ SpecializationInstruction trapInstruction(llvm::ArrayRef<uint8_t> Bytes) {
   return Result;
 }
 
-TEST(NativeStackControl, TrapExitRetainsExactUnauditedInstruction) {
+TEST(NativeStackControl, TrapExitRetainsExactInstructionAudit) {
   for (const auto &Bytes : TrapEncodings) {
     SCOPED_TRACE(unsigned(Bytes.front()));
     const auto Insn = trapInstruction(Bytes);
@@ -488,7 +488,9 @@ TEST(NativeStackControl, TrapExitRetainsExactUnauditedInstruction) {
     validBoundary(*Result);
     EXPECT_EQ(Result->Boundary.Control, LowInstructionControl::Terminator);
     EXPECT_EQ(Result->Boundary.ControlFlags, Insn.Origin.ControlFlags);
-    EXPECT_EQ(Result->UndefinedEffects.Coverage, LowUndefinedCoverage::Missing);
+    EXPECT_EQ(Result->UndefinedEffects.Coverage,
+              Bytes.front() == 0xf1 ? LowUndefinedCoverage::Missing
+                                    : LowUndefinedCoverage::Complete);
     EXPECT_TRUE(Result->UndefinedEffects.Effects.empty());
     EXPECT_EQ(Result->Receipt.ExpandedOperationDigest,
               lowUndefinedOperationDigest(Insn.Ops));
@@ -522,7 +524,10 @@ TEST(NativeStackControl, TrapExitRejectsForgedArchitectureEvidence) {
         Insn.Origin.Immediate = 0x200;
         break;
       case 4:
-        Insn.UndefinedEffects.Coverage = LowUndefinedCoverage::Complete;
+        Insn.UndefinedEffects.Coverage =
+            Insn.UndefinedEffects.Coverage == LowUndefinedCoverage::Complete
+                ? LowUndefinedCoverage::Missing
+                : LowUndefinedCoverage::Complete;
         break;
       }
       auto Result = expandX64MachineExit(Insn, Exit, Scratch);

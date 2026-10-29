@@ -170,7 +170,10 @@ TEST(RegistrationRealignedLayout, RequiresOwnedCompletePublicationBytes) {
         --F.Image.Sections[0].FileSz;
         break;
       case 4:
+        // A PE section and the segment that maps it share one set of
+        // characteristics.
         Text.Flags = SegmentFlags::Readable;
+        F.Image.Sections[0].Flags = SegmentFlags::Readable;
         break;
       case 5:
         F.Image.Bits = Bitness::Bits64;

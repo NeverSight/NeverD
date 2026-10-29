@@ -1681,6 +1681,15 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
 
   if (Callee) {
     auto *CalleeTy = Callee->getFunctionType();
+    // A formatted call's recovered arguments are the inputs its format
+    // names, in the source's order (MedOp::ExactArguments).
+    const auto ExactFloatingInput = [&](int Index) {
+      return Op.ExactArguments && CI && Index >= 0 && Index < 64 &&
+             static_cast<size_t>(Index) < CI->Args.size() &&
+             static_cast<unsigned>(Index) + 1 < Op.NumInputs &&
+             ((Op.ExactFloatInputs >> Index) & 1) &&
+             CI->Args[Index] == Op.Inputs[Index + 1];
+    };
     std::vector<llvm::Value *> CoercedArgs;
     for (size_t AI = 0; AI < Args.size(); ++AI) {
       llvm::Value *AV = Args[AI];
@@ -1714,6 +1723,25 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
           if (llvm::Value *Sym = tryResolvePointerArg(
                   CI->Args[SourceIndex], /*FailClosed=*/false, Builder))
             AV = Builder.CreatePtrToInt(Sym, Want);
+        // The callee reads only the scalar in this floating argument
+        // register's low lane (MedCallInfo::ArgReadBytes), though its
+        // parameter takes the whole vector register.  The lanes above pass
+        // nothing: a scalar instruction such as `cvtsi2sd` or `mulsd` keeps
+        // them as the caller found them, its own unknown entry value where
+        // nothing set them.  Pass the scalar with zero above it, as HighC
+        // passes the scalar alone.
+        if (const unsigned Bits = AV->getType()->getPrimitiveSizeInBits();
+            Want->isVectorTy() && Bits && !AV->getType()->isPointerTy() && CI &&
+            SourceIndex >= 0 &&
+            static_cast<size_t>(SourceIndex) < CI->ArgReadBytes.size())
+          if (const unsigned ReadBits = CI->ArgReadBytes[SourceIndex] * 8u;
+              ReadBits && ReadBits < Bits)
+            AV = Builder.CreateTrunc(
+                AV->getType()->isIntegerTy()
+                    ? AV
+                    : Builder.CreateBitCast(AV,
+                                            llvm::Type::getIntNTy(*Ctx, Bits)),
+                llvm::Type::getIntNTy(*Ctx, ReadBits), "read_lane");
         if (AV->getType() != Want) {
           llvm::Type *AT = AV->getType();
           if (AT->isIntegerTy() && Want->isIntegerTy()) {
@@ -1758,6 +1786,16 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
             }
           }
         }
+      } else if (CalleeTy->isVarArg() &&
+                 ExactFloatingInput(ArgumentIndices[AI]) &&
+                 AV->getType()->isIntegerTy(64)) {
+        // A variadic argument keeps its own type.  A formatted call's
+        // floating one is the scalar its routine's conversion reads
+        // (MedOp::ExactFloatInputs): pass that value, which the convention
+        // carries in a vector register.  Its integer bits would travel in an
+        // integer register, where the routine reads no floating argument.
+        AV = Builder.CreateBitCast(AV, llvm::Type::getDoubleTy(*Ctx),
+                                   "formatted_double");
       }
       CoercedArgs.push_back(AV);
     }

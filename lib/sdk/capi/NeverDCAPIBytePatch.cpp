@@ -15,6 +15,7 @@
 #include "neverd/decode/Decoder.h"
 #include "neverd/patch/Limits.h"
 #include "neverd/patch/PatchActions.h"
+#include "neverd/patch/PatchIO.h"
 #include "neverd/support/FilePath.h"
 #include "neverd/support/ProjectFiles.h"
 #include "neverd/support/ProjectWriteLock.h"
@@ -266,8 +267,7 @@ const char *neverd_byte_patches_json(neverd_session_t Sess) {
   std::string Text;
   llvm::raw_string_ostream Stream(Text);
   Stream.SetBuffered();
-  llvm::json::OStream Output(Stream);
-  patch::writePatchRows(Output, S->BytePatches);
+  patch::writePatchRows(Stream, S->BytePatches);
   Stream.flush();
   return copyJSONResult(Text);
 }
@@ -321,15 +321,7 @@ const char *neverd_byte_patch_ranges_json(neverd_session_t Sess) {
   std::string Text;
   llvm::raw_string_ostream Stream(Text);
   Stream.SetBuffered();
-  llvm::json::OStream Output(Stream);
-  // Stream admitted ranges in the overlay's existing file-offset order.
-  Output.array([&] {
-    for (const auto &[Offset, Row] : S->BytePatches.rows())
-      Output.object([&] {
-        Output.attribute("address", "0x" + llvm::utohexstr(Row.Address, true));
-        Output.attribute("size", Row.size());
-      });
-  });
+  patch::writePatchRanges(Stream, S->BytePatches);
   Stream.flush();
   return copyJSONResult(Text);
 }
@@ -433,7 +425,9 @@ int neverd_byte_patches_save(neverd_session_t Sess) {
           project_files::path(S->projectInputPath(),
                               project_files::File::Patches),
           [&](llvm::json::OStream &Output) {
-            patch::writePatchRows(Output, S->BytePatches);
+            Output.rawValue([&](llvm::raw_ostream &Stream) {
+              patch::writePatchSidecarRows(Stream, S->BytePatches);
+            });
           },
           "byte patches"))
     return -1;

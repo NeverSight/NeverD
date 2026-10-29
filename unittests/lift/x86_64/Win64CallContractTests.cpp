@@ -39,6 +39,7 @@
 #include "neverd/lift/X86/X86Regs.h"
 #include "neverd/pipeline/Pipeline.h"
 
+#include "llvm/ADT/ArrayRef.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Instructions.h"
@@ -46,6 +47,7 @@
 #include "llvm/IR/Verifier.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include <algorithm>
 #include <array>
 #include <cstring>
 #include <functional>
@@ -755,6 +757,91 @@ TEST(SummarizedCallArguments, UnreadRegisterTailsDoNotBecomeArguments) {
     }
 }
 
+TEST(SummarizedCallArguments, LaterStackParametersKeepUnreadRegisterPositions) {
+  for (unsigned Count : {0u, 1u, 3u, 4u})
+    for (bool Stored : {false, true})
+      for (bool Scratch : {false, true}) {
+        SCOPED_TRACE(Count);
+        SCOPED_TRACE(Stored);
+        SCOPED_TRACE(Scratch);
+        BinaryImage Image;
+        Image.Arch = Arch::X64;
+        Image.Format = BinaryFormat::COFF;
+        Image.Bits = Bitness::Bits64;
+        MedFunc Function;
+        Function.Entry = 0x1000;
+        Function.Name = "caller";
+        MedBlock Block;
+        Block.Id = 0;
+        const auto Register = [](uint64_t Offset, int Version) {
+          MedVar Value;
+          Value.Kind = MedVar::Reg;
+          Value.TheArch = Arch::X64;
+          Value.Id = Offset / 8 + 1;
+          Value.RegOff = Offset;
+          Value.SSAVer = Version;
+          Value.Size = 8;
+          return Value;
+        };
+        const auto Registers =
+            getTargetRegInfo(Arch::X64).integerParamRegs(Image.Format);
+        if (Scratch)
+          for (unsigned I = Count; I < Registers.size(); ++I) {
+            MedOp Setup;
+            Setup.Opcode = NdOp::COPY;
+            Setup.Output = Register(Registers[I], 1);
+            Setup.addInput(MedVar::makeConst(100 + I, 8));
+            Block.Ops.push_back(Setup);
+          }
+        const auto Pointer = MedVar::makeConst(0x3000, 8);
+        if (Stored) {
+          MedOp Address;
+          Address.Opcode = NdOp::INT_ADD;
+          Address.Output.Kind = MedVar::Temp;
+          Address.Output.Id = 100;
+          Address.Output.SSAVer = 1;
+          Address.Output.Size = 8;
+          Address.Output.TheArch = Arch::X64;
+          Address.addInput(Register(x86reg::RSP, 0));
+          Address.addInput(MedVar::makeConst(32, 8));
+          Block.Ops.push_back(Address);
+          MedOp Store;
+          Store.Opcode = NdOp::STORE;
+          Store.addInput(Address.Output);
+          Store.addInput(Pointer);
+          Block.Ops.push_back(Store);
+        }
+        MedOp Call;
+        Call.Opcode = NdOp::CALL;
+        Call.Addr = 0x1010;
+        Call.addInput(MedVar::makeConst(0x2000, 8));
+        for (unsigned I = 0; I < Count; ++I)
+          Call.addInput(I ? MedVar::makeConst(7 + I, 8)
+                          : MedVar::makeUnspecified(8, Arch::X64));
+        Call.CalleeRegisterArgs = Count;
+        Call.CalleeVectorArgs = 0;
+        // Memory reached through an incoming pointer can leave the early
+        // stack summary unknown. The recovered callee still owns five slots.
+        Call.CalleeStackArgs = -1;
+        Block.Ops.push_back(Call);
+        Function.Blocks.push_back(std::move(Block));
+        std::map<va_t, int> RegisterArity{{0x2000, 4}};
+        std::map<va_t, int> TotalArity{{0x2000, 5}};
+        for (unsigned Repeat = 0; Repeat < 2; ++Repeat) {
+          recoverCallAbi(Function, Arch::X64, {{0x2000, "consumer"}}, &Image,
+                         &RegisterArity, &TotalArity);
+          ASSERT_EQ(Function.CallInfos.size(), 1u);
+          const auto &Arguments = Function.CallInfos.front().Args;
+          ASSERT_EQ(Arguments.size(), 5u);
+          for (unsigned I = 0; I < 4; ++I)
+            EXPECT_EQ(Arguments[I],
+                      I < Count ? Call.Inputs[I + 1] : MedVar::makeConst(0, 8));
+          EXPECT_EQ(Arguments[4],
+                    Stored ? Pointer : MedVar::makeUnspecified(8, Arch::X64));
+        }
+      }
+}
+
 TEST(SummarizedCallArguments, CountOnlyContractsStillReadTheirSetup) {
   for (Arch Architecture : {Arch::ARM, Arch::AArch64}) {
     SCOPED_TRACE(static_cast<unsigned>(Architecture));
@@ -882,6 +969,61 @@ int main(void) {
 
 constexpr va_t Text = 0x140001000;
 constexpr va_t Iat = 0x140003000;
+
+/// Execute the original fixture at a fresh mapping. Its observed return word
+/// must have the same instruction-relative offset as the fixed-image source.
+/// The two imported providers, when present, also check the caller's string.
+std::string nativeReturnPCOracle(llvm::ArrayRef<uint8_t> Code, va_t ReturnPC,
+                                 bool Windows, bool Imports) {
+  std::string Source;
+  llvm::raw_string_ostream Out(Source);
+  Out << "\n#if defined(__linux__) && defined(__x86_64__)\n"
+         "#include <sys/mman.h>\n#include <string.h>\n";
+  if (Imports) {
+    const char *ABI = Windows ? "__attribute__((ms_abi)) " : "";
+    Out << "static " << ABI
+        << "int machine_rand(void) { return spill_provider(); }\n"
+        << "static " << ABI
+        << "size_t machine_strlen(const char *p) {\n"
+           "  if (p[0] != 97 || p[1] != 0) __builtin_trap();\n"
+           "  return spill_strlen_provider(p);\n}\n";
+  }
+  Out << "static int check_native_return_pc(void) {\n"
+         "  static const uint8_t original[] = {";
+  for (uint8_t Byte : Code)
+    Out << unsigned(Byte) << ',';
+  const size_t Bytes = std::max<size_t>(Code.size(), Iat - Text + 16);
+  Out << "};\n  const size_t size = " << Bytes
+      << ";\n"
+         // UBSan probes for a compiled-function signature before an indirect
+         // target. Keep that prefix mapped for this raw machine-code entry.
+         "  uint8_t *mapping = mmap(0, size + 16, PROT_READ | PROT_WRITE | "
+         "PROT_EXEC,\n"
+         "      MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);\n"
+         "  if (mapping == MAP_FAILED) return 1;\n"
+         "  uint8_t *code = mapping + 16;\n"
+         "  memcpy(code, original, sizeof(original));\n";
+  if (Imports)
+    Out << "  uintptr_t random = (uintptr_t)machine_rand;\n"
+           "  uintptr_t reader = (uintptr_t)machine_strlen;\n"
+           "  memcpy(code + "
+        << Iat - Text << ", &random, 8);\n"
+        << "  memcpy(code + " << Iat - Text + 8
+        << ", &reader, 8);\n"
+           "  calls = 0;\n";
+  Out << "  __builtin___clear_cache((char *)code, (char *)code + size);\n"
+         "  uint64_t actual = ((uint64_t ("
+      << (Windows ? "__attribute__((ms_abi)) " : "")
+      << "*)(void))code)();\n"
+         "  int bad = actual != (uintptr_t)code + "
+      << ReturnPC - Text << (Imports ? " || calls != 2" : "") << ";\n";
+  if (Imports)
+    Out << "  calls = 0;\n";
+  Out << "  if (munmap(mapping, size + 16)) return 1;\n  return bad;\n}\n"
+         "#else\nstatic int check_native_return_pc(void) { return 0; }\n"
+         "#endif\n";
+  return Source;
+}
 
 void put(std::vector<uint8_t> &Code, va_t At, std::vector<uint8_t> Bytes) {
   std::copy(Bytes.begin(), Bytes.end(), Code.begin() + (At - Text));
@@ -1495,6 +1637,314 @@ int main(void) { return read_neighbor() != 37 || observed != 1; }
   }
 }
 
+TEST(Win64CallContract,
+     ParameterCopiesDistinguishEntrySeedsFromFirstDefinitions) {
+  for (unsigned Mode = 0; Mode < 4; ++Mode) {
+    SCOPED_TRACE(Mode);
+    BinaryImage Image;
+    Image.Arch = Arch::X64;
+    Image.Format = BinaryFormat::COFF;
+    Image.Bits = Bitness::Bits64;
+    const auto Register = [](int Id, uint64_t Offset, int Version = 0) {
+      MedVar V;
+      V.Kind = MedVar::Reg;
+      V.TheArch = Arch::X64;
+      V.Id = Id;
+      V.RegOff = Offset;
+      V.SSAVer = Version;
+      V.Size = 8;
+      return V;
+    };
+    const auto RCX = Register(10, x86reg::RCX);
+    const auto RDX = Register(11, x86reg::RDX);
+    const auto RDI = Register(12, x86reg::RDI, 1);
+    MedFunc Func;
+    Func.Entry = Text;
+    Func.Name = "copy_value";
+    Func.CC = CallingConv::Win64;
+    Func.ReturnType = NdType::makeInt(8, false);
+    for (const auto &Input : {RCX, RDX}) {
+      auto Param = Input;
+      Param.Kind = MedVar::Param;
+      Func.Params.push_back(Param);
+    }
+    MedBlock Block;
+    Block.Id = 0;
+    Block.StartAddr = Func.Entry;
+    const auto Append = [&](NdOp Opcode, MedVar Output, MedVar Input) {
+      MedOp Op;
+      Op.Opcode = Opcode;
+      Op.Output = Output;
+      Op.addInput(Input);
+      Block.Ops.push_back(Op);
+    };
+    if (Mode == 1)
+      Append(NdOp::COPY, RCX, RCX);
+    if (Mode == 2) {
+      Append(NdOp::COPY, RDX, RDX);
+      Append(NdOp::INT_NEGATE, RCX, RDX);
+    }
+    if (Mode == 3) {
+      Append(NdOp::COPY, RDX, RDX);
+      Append(NdOp::BRANCH, {}, MedVar::makeConst(Text + 0x10, 8));
+      Block.Succs = {1};
+      Func.Blocks.push_back(std::move(Block));
+      Block = MedBlock{};
+      Block.Id = 1;
+      Block.StartAddr = Text + 0x10;
+      Block.Preds = {0};
+      PhiNode Phi;
+      Phi.Output = RCX;
+      Phi.Args = {{0, RDX}};
+      Block.Phis.push_back(std::move(Phi));
+    }
+    Append(NdOp::COPY, RDI, RCX);
+    Append(NdOp::RETURN, {}, RDI);
+    Func.Blocks.push_back(std::move(Block));
+    for (bool LLVM : {false, true}) {
+      SCOPED_TRACE(LLVM);
+      std::string Source;
+      llvm::raw_string_ostream Output(Source);
+      CEmitterOptions Options;
+      Options.TheArch = Image.Arch;
+      Options.Format = Image.Format;
+      Options.Image = &Image;
+      if (LLVM) {
+        llvm::LLVMContext Context;
+        auto Module =
+            MedLLVMEmitter().emit({Func}, Context, "entry_copies", Arch::X64,
+                                  {}, &Image, BinaryFormat::COFF);
+        ASSERT_TRUE(Module);
+        ASSERT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
+        ASSERT_TRUE(LLVMCEmitter().emit(*Module, Output, Options));
+      } else {
+        MedToHighConverter Converter;
+        Converter.setBinaryImage(&Image);
+        auto High = Converter.convert(Func, Arch::X64);
+        ASSERT_TRUE(HighCEmitter().emit({High}, Output, Options));
+      }
+      const std::string Harness = R"(
+int main(void) {
+  uint64_t a = UINT64_C(0xfedcba9876543210);
+  for (unsigned i = 0; i < 64; ++i) {
+    uint64_t b = a ^ UINT64_C(0x1020304050607080);
+    uint64_t expected = MODE == 3 ? b : MODE == 2 ? ~b : a;
+    if ((uint64_t)copy_value(a, b) != expected) return 1;
+    a ^= a << 13;
+    a ^= a >> 7;
+    a ^= a << 17;
+  }
+  return 0;
+}
+)";
+      for (llvm::StringRef Level : {"-O0", "-O2"})
+        source_call_execution_test::compileAndRun(
+            Source + "\n#define MODE " + std::to_string(Mode) + "\n" + Harness,
+            {Level, "-fsanitize=undefined", "-fsanitize-trap=all"});
+    }
+  }
+}
+
+TEST(Win64CallContract, SavedParameterReplacedByCallResultKeepsTheNewValue) {
+  constexpr va_t Provider = Text + 0x80;
+  for (bool Narrow : {false, true}) {
+    SCOPED_TRACE(Narrow);
+    std::vector<uint8_t> Code(0x90, 0xCC);
+    std::vector<uint8_t> Caller = {
+        0x57, // push rdi
+        0x48, 0x83,
+        0xEC, 0x20, // sub rsp,32
+        0x48, 0x89,
+        0xCF,       // mov rdi,rcx: save the incoming parameter
+        0x85, 0xD2, // test edx,edx
+        0x74, uint8_t(Narrow ? 7 : 8),
+        0xE8};
+    const auto Displacement = rel32(Text + Caller.size() + 4, Provider);
+    Caller.insert(Caller.end(), Displacement.begin(), Displacement.end());
+    if (!Narrow)
+      Caller.push_back(0x48);
+    Caller.insert(Caller.end(), {0x89, 0xC7}); // mov [e/r]di,[e/r]ax
+    if (!Narrow)
+      Caller.push_back(0x48);
+    Caller.insert(Caller.end(),
+                  {0x89, 0xF8,             // mov [e/r]ax,[e/r]di: observe join
+                   0x48, 0x83, 0xC4, 0x20, // add rsp,32
+                   0x5F, 0xC3});
+    put(Code, Text, Caller);
+    put(Code, Provider,
+        {0x48, 0x89, 0xC8,         // mov rax,rcx
+         0x48, 0xF7, 0xD0, 0xC3}); // not rax; ret
+    const auto Image = makeImage(
+        Code, {{Text, "replace_saved"}, {Provider, "replacement_value"}}, {});
+    std::string Native;
+    llvm::raw_string_ostream Oracle(Native);
+    Oracle << R"(
+#include <string.h>
+#if defined(__x86_64__) && defined(__linux__)
+#include <sys/mman.h>
+static int check_native(uint64_t value, uint32_t flag, uint64_t expected) {
+  static const uint8_t bytes[] = {)";
+    for (uint8_t Byte : Code)
+      Oracle << unsigned(Byte) << ',';
+    Oracle << R"(};
+  uint8_t *mapping = mmap(0, sizeof(bytes) + 16,
+      PROT_READ | PROT_WRITE | PROT_EXEC, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  if (mapping == MAP_FAILED) return 1;
+  uint8_t *code = mapping + 16;
+  memcpy(code, bytes, sizeof(bytes));
+  __builtin___clear_cache((char *)code, (char *)code + sizeof(bytes));
+  uint64_t actual = ((uint64_t (__attribute__((ms_abi)) *)(uint64_t, uint32_t))code)(value, flag);
+  int bad = actual != expected;
+  return munmap(mapping, sizeof(bytes) + 16) ? 1 : bad;
+}
+#else
+static int check_native(uint64_t value, uint32_t flag, uint64_t expected) { return 0; }
+#endif
+)";
+    for (bool OmitCallee : {false, true})
+      for (bool NoOpt : {false, true})
+        for (bool LLVM : {false, true}) {
+          SCOPED_TRACE(testing::Message()
+                       << OmitCallee << ':' << NoOpt << ':' << LLVM);
+          llvm::LLVMContext Context;
+          PipelineOptions Options;
+          Options.EmitDumpOutput = false;
+          Options.OnlyFunctionEntries = {Text};
+          if (!OmitCallee)
+            Options.OnlyFunctionEntries.insert(Provider);
+          Options.SourceProjection = true;
+          Options.NoOpt = NoOpt;
+          Options.LiftMode = LLVM;
+          auto Result = Pipeline().run(Image, Context, Options);
+          ASSERT_TRUE(Result.Success) << Result.Error;
+          std::string Source;
+          llvm::raw_string_ostream Output(Source);
+          CEmitterOptions COptions;
+          COptions.TheArch = Image.Arch;
+          COptions.Format = Image.Format;
+          COptions.Image = &Image;
+          ASSERT_TRUE(
+              LLVM ? LLVMCEmitter().emit(*Result.LlvmModule, Output, COptions,
+                                         nullptr, &Image)
+                   : HighCEmitter().emit(Result.HighFuncs, Output, COptions));
+          EXPECT_EQ(Source.find("__builtin_trap"), std::string::npos) << Source;
+          const std::string ProviderSource =
+              OmitCallee ? (LLVM ? "uint64_t replacement_value(uint64_t value) "
+                                   "{ return ~value; }\n"
+                                 : "int64_t replacement_value(int64_t value) { "
+                                   "return ~value; }\n")
+                         : "";
+          const std::string Harness = R"(
+int main(void) {
+  uint64_t value = UINT64_C(0xfedcba9876543210);
+  for (unsigned i = 0; i < 64; ++i) {
+    for (uint32_t flag = 0; flag < 2; ++flag) {
+      uint64_t expected = flag ? ~value : value;
+      if (NARROW_RESULT) expected = (uint32_t)expected;
+      if (check_native(value, flag, expected)) return 1;
+      uint64_t actual = (uint64_t)replace_saved(value, flag);
+      if (NARROW_RESULT) actual = (uint32_t)actual;
+      if (actual != expected) return 2;
+    }
+    value ^= value << 13;
+    value ^= value >> 7;
+    value ^= value << 17;
+  }
+  return 0;
+}
+)";
+          for (llvm::StringRef Level : {"-O0", "-O2"})
+            source_call_execution_test::compileAndRun(
+                Source + ProviderSource + Native + "\n#define NARROW_RESULT " +
+                    std::to_string(Narrow) + "\n" + Harness,
+                {Level, "-fsanitize=undefined", "-fsanitize-trap=all"});
+        }
+  }
+}
+
+TEST(Win64CallContract, PartialOverwriteBeforeBorrowDropsOnlyUnreadBytes) {
+  constexpr va_t Consumer = Text + 0x80;
+  for (bool Home : {false, true})
+    for (bool ReadsNeighbor : {false, true}) {
+      SCOPED_TRACE(Home);
+      SCOPED_TRACE(ReadsNeighbor);
+      std::vector<uint8_t> Code(0x90, 0xCC);
+      std::vector<uint8_t> Caller = {0x48, 0x83, 0xEC, 0x38};
+      const auto Random = throughSlot(Text + Caller.size(), Iat);
+      Caller.insert(Caller.end(), Random.begin(), Random.end());
+      // The call leaves RCX unavailable. Only the low byte of its spill is
+      // overwritten before this complete leaf borrow. Positive offsets use
+      // the caller's incoming home storage, outside the nested call's home.
+      const uint8_t Slot = Home ? 0x40 : 0x28;
+      Caller.insert(Caller.end(),
+                    {0x48, 0x89, 0x4C, 0x24, Slot, 0xC6, 0x44, 0x24, Slot, 37,
+                     0x48, 0x8D, 0x4C, 0x24, Slot, 0xE8});
+      const auto Displacement = rel32(Text + Caller.size() + 4, Consumer);
+      Caller.insert(Caller.end(), Displacement.begin(), Displacement.end());
+      Caller.insert(Caller.end(), {0x48, 0x83, 0xC4, 0x38, 0xC3});
+      put(Code, Text, Caller);
+      put(Code, Consumer,
+          ReadsNeighbor ? std::vector<uint8_t>{0x0F, 0xB6, 0x41, 1, 0xC3}
+                        : std::vector<uint8_t>{0x0F, 0xB6, 0x01, 0xC3});
+      const auto Image =
+          makeImage(Code, {{Text, "partial_borrow"}, {Consumer, "byte_reader"}},
+                    {"rand"});
+      for (bool OmitCallee : {false, true})
+        for (bool NoOpt : {false, true})
+          for (bool LLVM : {false, true}) {
+            SCOPED_TRACE(OmitCallee);
+            SCOPED_TRACE(NoOpt);
+            SCOPED_TRACE(LLVM);
+            llvm::LLVMContext Context;
+            PipelineOptions Options;
+            Options.EmitDumpOutput = false;
+            Options.OnlyFunctionEntries = {Text};
+            if (!OmitCallee)
+              Options.OnlyFunctionEntries.insert(Consumer);
+            Options.NoOpt = NoOpt;
+            Options.SourceProjection = true;
+            Options.LiftMode = LLVM;
+            auto Result = Pipeline().run(Image, Context, Options);
+            ASSERT_TRUE(Result.Success) << Result.Error;
+            std::string Source;
+            llvm::raw_string_ostream Output(Source);
+            CEmitterOptions COptions;
+            COptions.TheArch = Image.Arch;
+            COptions.Format = Image.Format;
+            COptions.Image = &Image;
+            ASSERT_TRUE(
+                LLVM ? LLVMCEmitter().emit(*Result.LlvmModule, Output, COptions,
+                                           nullptr, &Image)
+                     : HighCEmitter().emit(Result.HighFuncs, Output, COptions));
+            const bool Unknown =
+                Source.find("__builtin_trap") != std::string::npos;
+            EXPECT_EQ(Unknown, ReadsNeighbor) << Source;
+            if (ReadsNeighbor || Unknown)
+              continue;
+            std::string Oracle;
+            if (OmitCallee)
+              Oracle = R"(
+#define SYMBOL_PREFIX_(prefix) #prefix
+#define SYMBOL_PREFIX(prefix) SYMBOL_PREFIX_(prefix)
+uint64_t byte_provider(uint64_t address)
+    __asm__(SYMBOL_PREFIX(__USER_LABEL_PREFIX__) "byte_reader");
+uint64_t byte_provider(uint64_t address) {
+  return *(uint8_t *)(uintptr_t)address;
+}
+)";
+            Oracle += R"(
+static unsigned observed;
+int rand(void) { ++observed; return 17; }
+int main(void) { return partial_borrow() != 37 || observed != 1; }
+)";
+            for (llvm::StringRef Level : {"-O0", "-O2"})
+              source_call_execution_test::compileAndRun(
+                  Source + Oracle,
+                  {Level, "-fsanitize=undefined", "-fsanitize-trap=all"});
+          }
+    }
+}
+
 TEST(Win64CallContract, BoundIntegerOperandsAgreeAcrossSourceRoutes) {
   constexpr va_t Consumer = Text + 0x80;
   std::vector<uint8_t> Code(0xA0, 0xCC);
@@ -1727,6 +2177,172 @@ TEST(Win64CallContract, UnreadRegisterHolesBeforeStackArgumentsStayUnread) {
     }
 }
 
+TEST(Win64CallContract, BranchStackArgumentsKeepTheirEdgeValues) {
+  for (bool ByteArgument : {false, true})
+    for (bool Nested : {false, true}) {
+      SCOPED_TRACE(ByteArgument);
+      SCOPED_TRACE(Nested);
+      constexpr va_t Consumer = Text + 0x100;
+      std::vector<uint8_t> Code(0x140, 0xCC);
+      std::vector<uint8_t> Caller = {
+          0x48, 0x83, 0xEC, 0x48,        // sub rsp,48h
+          0x48, 0x89, 0x54, 0x24, 0x30,  // mov [rsp+30h],rdx
+          0x48, 0x8D, 0x42, 17,          // lea rax,[rdx+17]
+          0x48, 0x89, 0x44, 0x24, 0x38}; // mov [rsp+38h],rax
+      size_t OuterJump = 0;
+      if (Nested) {
+        Caller.insert(Caller.end(), {0xF6, 0xC1, 2, 0x75, 0});
+        OuterJump = Caller.size() - 1;
+      }
+      Caller.insert(Caller.end(), {0xF6, 0xC1, 1, 0x75, 0});
+      const size_t OtherJump = Caller.size() - 1;
+      Caller.insert(Caller.end(),
+                    {0x48, 0x8D, 0x44, 0x24, 0x30, // lea rax,[rsp+30h]
+                     0x48, 0x89, 0x44, 0x24, 0x20});
+      if (!ByteArgument)
+        Caller.push_back(0x48);
+      Caller.insert(Caller.end(), {uint8_t(ByteArgument ? 0x88 : 0x89), 0x54,
+                                   0x24, 0x28, 0xEB, 0});
+      const size_t JoinJump = Caller.size() - 1;
+      Caller[OtherJump] = Caller.size() - OtherJump - 1;
+      Caller.insert(Caller.end(),
+                    {0x48, 0x8D, 0x44, 0x24, 0x38, // lea rax,[rsp+38h]
+                     0x48, 0x89, 0x44, 0x24, 0x20, 0x48, 0x8D, 0x42,
+                     29}); // lea rax,[rdx+29]
+      if (!ByteArgument)
+        Caller.push_back(0x48);
+      Caller.insert(Caller.end(),
+                    {uint8_t(ByteArgument ? 0x88 : 0x89), 0x44, 0x24, 0x28});
+      Caller[JoinJump] = Caller.size() - JoinJump - 1;
+      if (Nested) {
+        // The two inner stores first meet here, then meet a third definition
+        // at the call. Each join needs its own edge-selected memory value.
+        Caller.insert(Caller.end(), {0x4C, 0x8D, 0x42, 7, 0xEB, 0});
+        // r8 = value + 7 keeps the inner join observable through the call.
+        const size_t FinalJump = Caller.size() - 1;
+        Caller[OuterJump] = Caller.size() - OuterJump - 1;
+        Caller.insert(Caller.end(), {0x48, 0x8D, 0x44, 0x24, 0x30, 0x48, 0x89,
+                                     0x44, 0x24, 0x20, 0x48, 0x8D, 0x42, 53});
+        if (!ByteArgument)
+          Caller.push_back(0x48);
+        Caller.insert(Caller.end(),
+                      {uint8_t(ByteArgument ? 0x88 : 0x89), 0x44, 0x24, 0x28});
+        Caller.insert(Caller.end(), {0x41, 0xB8, 11, 0, 0, 0});
+        Caller[FinalJump] = Caller.size() - FinalJump - 1;
+      }
+      Caller.insert(Caller.end(), {0x31, 0xC9, 0x31, 0xD2});
+      if (!Nested)
+        Caller.insert(Caller.end(), {0x45, 0x31, 0xC0});
+      Caller.insert(Caller.end(), {0x45, 0x31, 0xC9, 0xE8});
+      const auto Call = rel32(Text + Caller.size() + 4, Consumer);
+      Caller.insert(Caller.end(), Call.begin(), Call.end());
+      Caller.insert(Caller.end(), {0x48, 0x83, 0xC4, 0x48, 0xC3});
+      put(Code, Text, Caller);
+      std::vector<uint8_t> Body = {0x48, 0x8B, 0x44, 0x24,
+                                   0x28, 0x48, 0x8B, 0x00};
+      if (ByteArgument)
+        Body.insert(Body.end(), {0x0F, 0xB6, 0x54, 0x24, 0x30});
+      else
+        Body.insert(Body.end(), {0x48, 0x8B, 0x54, 0x24, 0x30});
+      Body.insert(Body.end(), {0x48, 0x01, 0xD0});
+      if (Nested)
+        Body.insert(Body.end(), {0x4C, 0x01, 0xC0});
+      Body.push_back(0xC3);
+      put(Code, Consumer, Body);
+      const auto Image = makeImage(
+          Code,
+          {{Text, "branch_stack_values"}, {Consumer, "read_branch_stack"}}, {});
+      std::string Oracle;
+      llvm::raw_string_ostream Native(Oracle);
+      Native << "\n#define NESTED_JOIN " << unsigned(Nested) << "\n";
+      Native << R"(
+#include <string.h>
+#if defined(__linux__) && defined(__x86_64__)
+#include <sys/mman.h>
+static int check_native(uint64_t flag, uint64_t value, uint64_t expected) {
+  static const uint8_t original[] = {
+)";
+      for (uint8_t B : Code)
+        Native << unsigned(B) << ',';
+      Native << R"(};
+  uint8_t *mapping = mmap(0, sizeof(original) + 16,
+                          PROT_READ | PROT_WRITE | PROT_EXEC,
+                          MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  if (mapping == MAP_FAILED) return 1;
+  // UBSan's indirect-function check may inspect the preceding type tag.
+  uint8_t *code = mapping + 16;
+  memcpy(code, original, sizeof(original));
+  __builtin___clear_cache((char *)code, (char *)code + sizeof(original));
+  uint64_t actual = ((uint64_t (__attribute__((ms_abi)) *)(uint64_t, uint64_t))code)(flag, value);
+  int bad = actual != expected;
+  if (munmap(mapping, sizeof(original) + 16)) return 1;
+  return bad;
+}
+#else
+static int check_native(uint64_t flag, uint64_t value, uint64_t expected) { return 0; }
+#endif
+int main(void) {
+  uint64_t value = UINT64_C(0xfedcba9876543210);
+  for (unsigned i = 0; i < 64; ++i) {
+    for (uint64_t flag = 0; flag != (NESTED_JOIN ? 4 : 2); ++flag) {
+      uint64_t extra = value + (flag & 2 ? 53 : flag & 1 ? 29 : 0);
+)";
+      if (ByteArgument)
+        Native << "      extra = (uint8_t)extra;\n";
+      Native << R"(
+      uint64_t expected = value + ((flag & 1) && !(flag & 2) ? 17 : 0) + extra;
+      if (NESTED_JOIN) expected += flag & 2 ? 11 : value + 7;
+      if (check_native(flag, value, expected)) return 1;
+      if ((uint64_t)branch_stack_values(flag, value) != expected) return 2;
+    }
+    value ^= value << 13; value ^= value >> 7; value ^= value << 17;
+  }
+  return 0;
+}
+)";
+      for (bool OmitCallee : {false, true})
+        for (bool LLVM : {false, true})
+          for (bool NoOpt : {false, true}) {
+            SCOPED_TRACE(testing::Message()
+                         << OmitCallee << ':' << LLVM << ':' << NoOpt);
+            llvm::LLVMContext Context;
+            PipelineOptions Options;
+            Options.EmitDumpOutput = false;
+            Options.OnlyFunctionEntries = {Text};
+            if (!OmitCallee)
+              Options.OnlyFunctionEntries.insert(Consumer);
+            Options.LiftMode = LLVM;
+            Options.SourceProjection = true;
+            Options.NoOpt = NoOpt;
+            auto Result = Pipeline().run(Image, Context, Options);
+            ASSERT_TRUE(Result.Success) << Result.Error;
+            std::string Source;
+            llvm::raw_string_ostream Output(Source);
+            CEmitterOptions COptions;
+            COptions.TheArch = Image.Arch;
+            COptions.Format = Image.Format;
+            COptions.Image = &Image;
+            if (LLVM) {
+              ASSERT_TRUE(Result.LlvmModule);
+              ASSERT_FALSE(
+                  llvm::verifyModule(*Result.LlvmModule, &llvm::errs()));
+              ASSERT_TRUE(LLVMCEmitter().emit(*Result.LlvmModule, Output,
+                                              COptions, nullptr, &Image));
+            } else
+              ASSERT_TRUE(
+                  HighCEmitter().emit(Result.HighFuncs, Output, COptions));
+            EXPECT_EQ(Source.find("unknown value"), std::string::npos)
+                << Source;
+            if (OmitCallee || Source.find("unknown value") != std::string::npos)
+              continue;
+            for (llvm::StringRef Level : {"-O0", "-O2"})
+              source_call_execution_test::compileAndRun(
+                  Source + Oracle,
+                  {Level, "-fsanitize=undefined", "-fsanitize-trap=all"});
+          }
+    }
+}
+
 TEST(Win64CallContract, DebugNamedOmittedRuntimeKeepsItsFixedArity) {
   constexpr va_t Runtime = Text + 0x80;
   class PublicNames : public NullDebugContext {
@@ -1929,6 +2545,416 @@ TEST(CallExitRegisters, OverwrittenEntrySpillsAreNotValueReads) {
   }
 }
 
+TEST(CallExitRegisters, ImageReadBeforeHomeResetDoesNotDemandSpilledInput) {
+  for (unsigned Variant : {0, 1, 2, 3, 4, 5, 6, 7, 8}) {
+    SCOPED_TRACE(Variant);
+    const bool WholeRegisterForward = Variant >= 6;
+    const bool ChainedForward = Variant == 7;
+    const bool GSForward = Variant == 8;
+    const bool CallAfterConsumer = Variant >= 3;
+    const unsigned PrefixBytes =
+        WholeRegisterForward ? 0 : (CallAfterConsumer ? 1 : Variant);
+    const unsigned ExpectedCalls =
+        ChainedForward ? 3 : (CallAfterConsumer ? 2 : 1);
+    const bool ThroughWrapper = PrefixBytes != 0 || WholeRegisterForward;
+    const unsigned Flag = GSForward          ? 1
+                          : PrefixBytes == 1 ? 0x5A
+                          : PrefixBytes == 2 ? 0xA55A
+                                             : 0;
+    constexpr va_t Wrapper = Text + 0x40;
+    constexpr va_t Consumer = Text + 0x80;
+    constexpr va_t Outer = Text + 0x100;
+    constexpr va_t CookieCheck = Text + 0x180;
+    constexpr va_t Global = Iat + 0x100;
+    std::vector<uint8_t> Code(GSForward        ? 0x1A0
+                              : ChainedForward ? 0x140
+                                               : 0xC0,
+                              0xCC);
+    std::vector<uint8_t> Caller = {0x48, 0x83, 0xEC, 0x28};
+    const auto Random = throughSlot(Text + Caller.size(), Iat);
+    Caller.insert(Caller.end(), Random.begin(), Random.end());
+    if (PrefixBytes == 1)
+      Caller.insert(Caller.end(), {0xB1, 0x5A}); // mov cl,5Ah
+    else if (PrefixBytes == 2)
+      Caller.insert(Caller.end(), {0x66, 0xB9, 0x5A, 0xA5}); // mov cx,A55Ah
+    Caller.push_back(0xE8);
+    const auto Call =
+        rel32(Text + Caller.size() + 4, ChainedForward   ? Outer
+                                        : ThroughWrapper ? Wrapper
+                                                         : Consumer);
+    Caller.insert(Caller.end(), Call.begin(), Call.end());
+    Caller.insert(Caller.end(), {0x48, 0x83, 0xC4, 0x28, 0xC3});
+    put(Code, Text, Caller);
+    std::vector<uint8_t> Body = {0x48, 0x89, 0x4C, 0x24, 8, // mov [rsp+8],rcx
+                                 0x53,                      // push rbx
+                                 0x48, 0x83, 0xEC, 0x20};   // sub rsp,20h
+    if (Variant == 5) {
+      Body.insert(Body.end(),
+                  {0x31, 0xC0,                   // xor eax,eax
+                   0x48, 0x21, 0x44, 0x24, 0x30, // and [rsp+30h],rax
+                   0x48, 0x8B, 0x5C, 0x24, 0x50, // mov rbx,[rsp+50h]
+                   0x48, 0x8B, 0x1B});           // mov rbx,[rbx]
+    } else {
+      Body.insert(Body.end(), {0x48, 0x8B, 0x1D}); // mov rbx,[rip+global]
+      const auto Data = rel32(Consumer + Body.size() + 4, Global);
+      Body.insert(Body.end(), Data.begin(), Data.end());
+      Body.insert(Body.end(),
+                  {0x48, 0x83, 0x64, 0x24, 0x30, 0}); // and [rsp+30h],0
+    }
+    if (Variant >= 4)
+      Body.insert(Body.end(),
+                  {0xF6, 0xC3, 1,                // test bl,1
+                   0x74, 7,                      // jz other overwrite
+                   0x48, 0x8D, 0x4C, 0x24, 0x30, // lea rcx,[rsp+30h]
+                   0xEB, 5});                    // jmp reader
+    Body.insert(Body.end(), {0x48, 0x8D, 0x4C, 0x24, 0x30});
+    const auto Read = throughSlot(Consumer + Body.size(), Iat + 8);
+    Body.insert(Body.end(), Read.begin(), Read.end());
+    Body.insert(Body.end(), {0x48, 0x01, 0xD8, // add rax,rbx
+                             0x48, 0x83, 0xC4, 0x20, 0x5B, 0xC3});
+    put(Code, Consumer, Body);
+    std::vector<uint8_t> Forwarder = {0x53,                   // push rbx
+                                      0x0F, 0xB6, 0xD9,       // movzx ebx,cl
+                                      0x48, 0x83, 0xEC, 0x20, // sub rsp,20h
+                                      0xE8};
+    if (PrefixBytes == 2)
+      Forwarder[2] = 0xB7; // movzx ebx,cx
+    if (WholeRegisterForward) {
+      // No narrow entry view or spill in this wrapper: its complete incoming
+      // register only flows into the consumer that destroys it on both arms.
+      Forwarder.erase(Forwarder.begin() + 1, Forwarder.begin() + 4);
+    }
+    if (GSForward) {
+      Forwarder[4] = 0x30;
+      Forwarder.pop_back();
+      Forwarder.insert(Forwarder.end(),
+                       {0xB8, 0x34, 0x12, 0, 0,       // mov eax,1234h
+                        0x48, 0x31, 0xE0,             // xor rax,rsp
+                        0x48, 0x89, 0x44, 0x24, 0x28, // cookie above call home
+                        0xE8});
+    }
+    if (Variant == 5) {
+      Forwarder[7] = 0x30; // room for the consumer's fifth argument
+      Forwarder.pop_back();
+      Forwarder.insert(Forwarder.end(), {0x48, 0x8D, 0x05});
+      const auto Pointer = rel32(Wrapper + Forwarder.size() + 4, Global);
+      Forwarder.insert(Forwarder.end(), Pointer.begin(), Pointer.end());
+      Forwarder.insert(Forwarder.end(), {0x48, 0x89, 0x44, 0x24, 0x20, 0xE8});
+    }
+    const auto Forward = rel32(Wrapper + Forwarder.size() + 4, Consumer);
+    Forwarder.insert(Forwarder.end(), Forward.begin(), Forward.end());
+    if (CallAfterConsumer) {
+      // The later opaque call can observe stale RCX unless the consumer's
+      // original control flow destroys it without leaving a live copy.
+      Forwarder.insert(
+          Forwarder.end(),
+          {0x48, uint8_t(WholeRegisterForward ? 0x89 : 0x01), 0xC3});
+      // mov rbx,rax for a whole-register forward; otherwise add rbx,rax.
+      const auto Observe = throughSlot(Wrapper + Forwarder.size(), Iat);
+      Forwarder.insert(Forwarder.end(), Observe.begin(), Observe.end());
+      Forwarder.insert(Forwarder.end(), {0x48, 0x89, 0xD8}); // mov rax,rbx
+    } else {
+      Forwarder.insert(Forwarder.end(), {0x48, 0x01, 0xD8}); // add rax,rbx
+    }
+    if (GSForward) {
+      Forwarder.insert(Forwarder.end(),
+                       {0x48, 0x8B, 0x4C, 0x24, 0x28, // mov rcx,[rsp+28h]
+                        0x48, 0x31, 0xE1,             // xor rcx,rsp
+                        0xE8});
+      const auto Check = rel32(Wrapper + Forwarder.size() + 4, CookieCheck);
+      Forwarder.insert(Forwarder.end(), Check.begin(), Check.end());
+      Forwarder.insert(Forwarder.end(), {0x48, 0x01, 0xD8});
+      put(Code, CookieCheck,
+          {0x48, 0x81, 0xF9, 0x34, 0x12, 0, 0, // cmp rcx,1234h
+           0x0F, 0x94, 0xC0,                   // sete al
+           0x0F, 0xB6, 0xC0, 0xC3});           // movzx eax,al; ret
+    }
+    Forwarder.insert(Forwarder.end(),
+                     {0x48, 0x83, 0xC4,
+                      uint8_t(Variant == 5 || GSForward ? 0x30 : 0x20), 0x5B,
+                      0xC3}); // restore rsp; pop rbx; ret
+    put(Code, Wrapper, Forwarder);
+    if (ChainedForward) {
+      std::vector<uint8_t> OuterBody = {0x53, 0x48, 0x83, 0xEC, 0x20, 0xE8};
+      const auto Inner = rel32(Outer + OuterBody.size() + 4, Wrapper);
+      OuterBody.insert(OuterBody.end(), Inner.begin(), Inner.end());
+      OuterBody.insert(OuterBody.end(), {0x48, 0x89, 0xC3});
+      const auto Observe = throughSlot(Outer + OuterBody.size(), Iat);
+      OuterBody.insert(OuterBody.end(), Observe.begin(), Observe.end());
+      OuterBody.insert(OuterBody.end(),
+                       {0x48, 0x89, 0xD8, 0x48, 0x83, 0xC4, 0x20, 0x5B, 0xC3});
+      put(Code, Outer, OuterBody);
+    }
+    auto Image = makeImage(Code,
+                           {{Text, "reset_spill"},
+                            {Wrapper, "forward_low_byte"},
+                            {Consumer, "read_reset_home"}},
+                           {"rand", "strlen"});
+    if (ChainedForward)
+      Image.addSymbol("forward_whole_register", Outer, 0, true);
+    if (GSForward) {
+      Image.addSymbol("check_frame_cookie", CookieCheck, 0, true);
+      ExceptionFunction EH;
+      EH.CodeRange = {Wrapper, Wrapper + Forwarder.size()};
+      EH.Encoding = ExceptionEncoding::X64UnwindV1;
+      EH.UnwindVersion = 1;
+      EH.UnwindFlags = 3;
+      EH.PrologueSize = 18;
+      EH.Personality = ExceptionPersonality::GSHandlerCheck;
+      EH.PersonalityVA = Iat + 0x20;
+      EH.PersonalityName = "__GSHandlerCheck";
+      EH.HandlerDataVA = Iat + 0x28;
+      EH.LanguageTablesResolved = true;
+      UnwindOperation Allocation, Save;
+      Allocation.Kind = UnwindOperationKind::AllocateSmall;
+      Allocation.CodeOffset = 5;
+      Allocation.StackOffset = 48;
+      Save.Kind = UnwindOperationKind::PushNonVolatile;
+      Save.CodeOffset = 1;
+      Save.Register = 3;
+      EH.UnwindOperations = {Allocation, Save};
+      EH.GSCookie.emplace();
+      EH.GSCookie->ParseStatus = ExceptionParseStatus::Complete;
+      EH.GSCookie->CookieOffset = 40;
+      EH.GSCookie->Payload = {40, 0, 0, 0};
+      Image.ExceptionMetadata.Functions.push_back(std::move(EH));
+      Image.ExceptionMetadata.rebuildIndex();
+    }
+    Segment Storage;
+    Storage.Name = ".data";
+    Storage.VA = Global;
+    Storage.Size = Storage.FileSz = 8;
+    Storage.Data.resize(8);
+    Storage.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+    Image.Segments.push_back(std::move(Storage));
+    Symbol Object;
+    Object.Addr = Global;
+    Object.Name = "spill_global";
+    Object.Size = 8;
+    Image.Symbols.push_back(std::move(Object));
+    std::string NativeOracle;
+    llvm::raw_string_ostream Native(NativeOracle);
+    Native << R"(
+#if defined(__linux__) && defined(__x86_64__)
+#include <sys/mman.h>
+static uint64_t incoming_seed;
+static __attribute__((ms_abi)) int machine_rand(void) {
+  int value = rand();
+  __asm__ volatile("movq %0, %%rcx" : : "r"(incoming_seed) : "rcx");
+  return value;
+}
+static __attribute__((ms_abi)) size_t machine_strlen(const char *p) {
+  return strlen(p);
+}
+static int check_native(uint64_t value, uint64_t seed) {
+  static const uint8_t original[] = {
+)";
+    for (uint8_t Byte : Code)
+      Native << unsigned(Byte) << ',';
+    const size_t Bytes = Global - Text + sizeof(uint64_t);
+    Native << "};\n  const size_t size = " << Bytes << R"(;
+  uint8_t *mapping = mmap(0, size + 16, PROT_READ | PROT_WRITE | PROT_EXEC,
+                          MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  if (mapping == MAP_FAILED) return 1;
+  uint8_t *code = mapping + 16;
+  memcpy(code, original, sizeof(original));
+  uintptr_t random = (uintptr_t)machine_rand;
+  uintptr_t reader = (uintptr_t)machine_strlen;
+)";
+    Native << "  memcpy(code + " << Iat - Text << ", &random, 8);\n"
+           << "  memcpy(code + " << Iat - Text + 8 << ", &reader, 8);\n"
+           << "  memcpy(code + " << Global - Text << ", &value, 8);\n"
+           << R"(
+  incoming_seed = seed;
+  calls = 0;
+  __builtin___clear_cache((char *)code, (char *)code + size);
+  uint64_t actual = ((uint64_t (__attribute__((ms_abi)) *)(void))code)();
+  int bad = actual != value + )"
+           << Flag << " || calls != " << ExpectedCalls << R"(;
+  if (munmap(mapping, size + 16)) return 1;
+  return bad;
+}
+#else
+static int check_native(uint64_t value, uint64_t seed) { return 0; }
+#endif
+)";
+    for (bool OmitCallee : {false, true})
+      for (bool LLVM : {false, true})
+        for (bool NoOpt : {false, true}) {
+          SCOPED_TRACE(testing::Message()
+                       << OmitCallee << ':' << LLVM << ':' << NoOpt);
+          llvm::LLVMContext Context;
+          PipelineOptions Options;
+          Options.EmitDumpOutput = false;
+          Options.OnlyFunctionEntries = {Text};
+          if (!OmitCallee) {
+            Options.OnlyFunctionEntries.insert(Consumer);
+            if (ThroughWrapper)
+              Options.OnlyFunctionEntries.insert(Wrapper);
+            if (ChainedForward)
+              Options.OnlyFunctionEntries.insert(Outer);
+            if (GSForward)
+              Options.OnlyFunctionEntries.insert(CookieCheck);
+          }
+          Options.LiftMode = LLVM;
+          Options.SourceProjection = true;
+          Options.NoOpt = NoOpt;
+          auto Result = Pipeline().run(Image, Context, Options);
+          ASSERT_TRUE(Result.Success) << Result.Error;
+          std::string Source;
+          llvm::raw_string_ostream Output(Source);
+          CEmitterOptions COptions;
+          COptions.TheArch = Image.Arch;
+          COptions.Format = Image.Format;
+          COptions.Image = &Image;
+          ASSERT_TRUE(
+              LLVM ? LLVMCEmitter().emit(*Result.LlvmModule, Output, COptions,
+                                         nullptr, &Image)
+                   : HighCEmitter().emit(Result.HighFuncs, Output, COptions));
+          EXPECT_EQ(Source.find("__builtin_trap"), std::string::npos) << Source;
+          if (OmitCallee || Source.find("__builtin_trap") != std::string::npos)
+            continue;
+          const std::string Providers = R"(
+#include <string.h>
+static unsigned calls;
+int rand(void) { ++calls; return 17; }
+)";
+          const std::string Oracle = R"(
+int main(void) {
+  uint64_t seed = UINT64_C(0xfedcba9876543210);
+  for (unsigned i = 0; i < 64; ++i) {
+    uint64_t value = i ? seed : 37;
+    if (check_native(value, seed)) return 1;
+    memcpy(&spill_global, &value, sizeof(value));
+    calls = 0;
+    if ((uint64_t)reset_spill() != value + EXPECTED_LOW || calls != EXPECTED_CALLS) return 2;
+    seed ^= seed << 13;
+    seed ^= seed >> 7;
+    seed ^= seed << 17;
+  }
+  return 0;
+}
+)";
+          for (llvm::StringRef Level : {"-O0", "-O2"})
+            source_call_execution_test::compileAndRun(
+                Source + Providers + NativeOracle + "\n#define EXPECTED_LOW " +
+                    std::to_string(Flag) + "\n#define EXPECTED_CALLS " +
+                    std::to_string(ExpectedCalls) + "\n" + Oracle,
+                {Level, "-fsanitize=undefined", "-fsanitize-trap=all"});
+        }
+  }
+}
+
+TEST(CallExitRegisters, UnusedIncomingStackSlotsDoNotRequireValues) {
+  constexpr va_t Wrapper = Text + 0x80;
+  std::vector<uint8_t> Code(0xC0, 0xCC);
+  std::vector<uint8_t> Caller = {
+      0x48, 0x83, 0xEC, 0x38,       // sub rsp,38h
+      0x48, 0x89, 0x4C, 0x24, 0x28, // mov [rsp+28h],rcx
+      0x48, 0x89, 0x54, 0x24, 0x30, // mov [rsp+30h],rdx
+      0xE8};
+  const auto ToWrapper = rel32(Text + Caller.size() + 4, Wrapper);
+  Caller.insert(Caller.end(), ToWrapper.begin(), ToWrapper.end());
+  Caller.insert(Caller.end(), {0x48, 0x83, 0xC4, 0x38, 0xC3});
+  put(Code, Text, Caller);
+  std::vector<uint8_t> Body = {
+      0x53,                          // push rbx
+      0x48, 0x83, 0xEC, 0x20,        // sub rsp,20h
+      0x48, 0x8B, 0x5C, 0x24, 0x58,  // mov rbx,[rsp+58h] (argument 5)
+      0x48, 0x03, 0x5C, 0x24, 0x60}; // add rbx,[rsp+60h] (argument 6)
+  const auto Random = throughSlot(Wrapper + Body.size(), Iat);
+  Body.insert(Body.end(), Random.begin(), Random.end());
+  Body.insert(Body.end(), {0x48, 0x01, 0xD8, // add rax,rbx
+                           0x48, 0x83, 0xC4, 0x20, 0x5B, 0xC3});
+  put(Code, Wrapper, Body);
+  const auto Image = makeImage(
+      Code, {{Text, "stack_hole"}, {Wrapper, "stack_wrapper"}}, {"rand"});
+  std::string NativeOracle;
+  llvm::raw_string_ostream Native(NativeOracle);
+  Native << R"(
+#if defined(__linux__) && defined(__x86_64__)
+#include <sys/mman.h>
+static __attribute__((ms_abi)) int machine_rand(void) { return rand(); }
+static int check_native(uint64_t a, uint64_t b) {
+  static const uint8_t original[] = {
+)";
+  for (uint8_t Byte : Code)
+    Native << unsigned(Byte) << ',';
+  Native << "};\n  const size_t size = " << Iat - Text + 8 << R"(;
+  uint8_t *mapping = mmap(0, size + 16, PROT_READ | PROT_WRITE | PROT_EXEC,
+                       MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  if (mapping == MAP_FAILED) return 1;
+  uint8_t *code = mapping + 16;
+  memcpy(code, original, sizeof(original));
+  uintptr_t random = (uintptr_t)machine_rand;
+)";
+  Native << "  memcpy(code + " << Iat - Text << ", &random, 8);\n";
+  Native << R"(
+  calls = 0;
+  __builtin___clear_cache((char *)code, (char *)code + size);
+  uint64_t actual = ((uint64_t (__attribute__((ms_abi)) *)(uint64_t,uint64_t))code)(a,b);
+  int bad = actual != a + b + 17 || calls != 1;
+  if (munmap(mapping, size + 16)) return 1;
+  return bad;
+}
+#else
+static int check_native(uint64_t a, uint64_t b) { return 0; }
+#endif
+)";
+  for (bool OmitCallee : {false, true})
+    for (bool LLVM : {false, true})
+      for (bool NoOpt : {false, true}) {
+        SCOPED_TRACE(testing::Message()
+                     << OmitCallee << ':' << LLVM << ':' << NoOpt);
+        llvm::LLVMContext Context;
+        PipelineOptions Options;
+        Options.EmitDumpOutput = false;
+        Options.OnlyFunctionEntries = {Text};
+        if (!OmitCallee)
+          Options.OnlyFunctionEntries.insert(Wrapper);
+        Options.LiftMode = LLVM;
+        Options.SourceProjection = true;
+        Options.NoOpt = NoOpt;
+        auto Result = Pipeline().run(Image, Context, Options);
+        ASSERT_TRUE(Result.Success) << Result.Error;
+        std::string Source;
+        llvm::raw_string_ostream Output(Source);
+        CEmitterOptions COptions;
+        COptions.TheArch = Image.Arch;
+        COptions.Format = Image.Format;
+        COptions.Image = &Image;
+        ASSERT_TRUE(
+            LLVM ? LLVMCEmitter().emit(*Result.LlvmModule, Output, COptions,
+                                       nullptr, &Image)
+                 : HighCEmitter().emit(Result.HighFuncs, Output, COptions));
+        EXPECT_EQ(Source.find("__builtin_trap"), std::string::npos) << Source;
+        if (OmitCallee || Source.find("__builtin_trap") != std::string::npos)
+          continue;
+        const std::string Providers = R"(
+#include <string.h>
+static unsigned calls;
+int rand(void) { ++calls; return 17; }
+)";
+        const std::string Oracle = R"(
+int main(void) {
+  uint64_t a = UINT64_C(0xfedcba9876543210);
+  for (unsigned i = 0; i < 64; ++i) {
+    uint64_t b = a ^ UINT64_C(0x123456789abcdef0);
+    if (check_native(a, b)) return 1;
+    calls = 0;
+    if ((uint64_t)stack_hole(a, b) != a + b + 17 || calls != 1) return 2;
+    a ^= a << 13; a ^= a >> 7; a ^= a << 17;
+  }
+  return 0;
+}
+)";
+        for (llvm::StringRef Level : {"-O0", "-O2"})
+          source_call_execution_test::compileAndRun(
+              Source + Providers + NativeOracle + Oracle,
+              {Level, "-fsanitize=undefined", "-fsanitize-trap=all"});
+      }
+}
+
 TEST(CallExitRegisters, EntrySpillProofKeepsObservedBytesAndEscapes) {
   for (unsigned Version : {0u, 3u})
     for (unsigned Mode = 0; Mode < 7; ++Mode) {
@@ -2031,6 +3057,7 @@ TEST_P(OverwrittenCallClobberSpills, AreNotValueReads) {
     std::vector<uint8_t> Code = {0x48, 0x83, 0xEC, 0x28};
     Code.insert(Code.end(), Call.begin(), Call.end());
     constexpr va_t Callee = Text + 0x80;
+    va_t ObservedReturnPC = 0;
     if ((Variant >= 3 && Variant <= 4) || Variant >= 7) {
       // PUSHF explicitly overwrites the released push slot after ADD.
       // Passing another frame member to strlen keeps the frame observable.
@@ -2051,13 +3078,14 @@ TEST_P(OverwrittenCallClobberSpills, AreNotValueReads) {
                                0x24, 0x10});
       const auto Read = throughSlot(Text + Code.size(), slot(1));
       Code.insert(Code.end(), Read.begin(), Read.end());
+      ObservedReturnPC = Text + Code.size();
       if (Variant == 8)
         // A complete explicit write after CALL supplies real source bytes.
         Code.insert(Code.end(), {0x48, 0xc7, 0x44, 0x24, 0xf8, 19, 0, 0, 0});
       if (Variant == 4 || Variant >= 7)
         // The old slot can hold an unavailable register OR a known constant.
-        // Neither represents the CALL's new return address. Variant 8 alone
-        // supplies the complete later write before the observed load.
+        // Neither represents the CALL's new return address. Source preparation
+        // must materialize that exact word; variant 8 overwrites it again.
         Code.insert(Code.end(), {0x48, 0x8b, 0x44, 0x24, 0xf8});
       Code.insert(Code.end(), {0x48, 0x83, 0xc4, 0x28, 0xc3});
     } else {
@@ -2113,13 +3141,6 @@ TEST_P(OverwrittenCallClobberSpills, AreNotValueReads) {
         Options.SourceProjection = true;
         Options.NoOpt = NoOpt;
         auto Result = Pipeline().run(Image, Context, Options);
-        if (Variant == 4 || Variant == 7) {
-          EXPECT_FALSE(Result.Success);
-          EXPECT_NE(Result.Error.find("physical CALL return slot"),
-                    std::string::npos)
-              << Result.Error;
-          continue;
-        }
         ASSERT_TRUE(Result.Success) << Result.Error;
         std::string Source;
         llvm::raw_string_ostream Output(Source);
@@ -2169,13 +3190,19 @@ static size_t spill_strlen_provider(const char *p) {
 #define rand spill_provider
 #define strlen spill_strlen_provider
 )";
-        const std::string Oracle =
+        std::string Oracle =
             Variant == 3   ? "int main(void) { return reused_scratch() != 1 || "
                              "calls != 2; }"
             : Variant == 8 ? "int main(void) { return reused_scratch() != 19 "
                              "|| calls != 2; }"
                            : "int main(void) { return reused_scratch() != 19 "
                              "|| calls != 1; }";
+        if (Variant == 4 || Variant == 7)
+          Oracle = nativeReturnPCOracle(Code, ObservedReturnPC,
+                                        Format == BinaryFormat::COFF, true) +
+                   "int main(void) { if (check_native_return_pc()) return 2; "
+                   "return (uint64_t)reused_scratch() != UINT64_C(" +
+                   std::to_string(ObservedReturnPC) + ") || calls != 2; }";
         for (llvm::StringRef Level : {"-O0", "-O2"})
           source_call_execution_test::compileAndRun(
               Provider + Native + Oracle,
@@ -4143,8 +5170,8 @@ void checkPointerQualifiers(bool Local) {
               " *input = &value;\n  uint32_t output = 41;\n"
               "  " +
               (VoidResult ? "" : "uintptr_t result = ") +
-              "forward_qualified((uintptr_t)" + (Nested ? "&input" : "input") +
-              ", (uintptr_t)&output);\n"
+              "forward_qualified((void*)" + (Nested ? "&input" : "input") +
+              ", &output);\n"
               "  return " +
               (VoidResult ? "" : "result != (uintptr_t)&value || ") +
               "output != 42;\n}\n";
@@ -5136,7 +6163,7 @@ TEST(CallExitRegisters, PureRegisterLeafKeepsDynamicExtraResults) {
 #endif
   for (BinaryFormat Format :
        {BinaryFormat::COFF, BinaryFormat::ELF, BinaryFormat::MachO})
-    for (unsigned Mutation : {0u, 9u, 10u}) {
+    for (unsigned Mutation : {0u, 7u, 9u, 10u}) {
       auto Image = registerQueryImage(Mutation);
       Image.Format = Format;
       PipelineAnalysisCache Cache;
@@ -5198,6 +6225,12 @@ int main(void) {
             Oracle.replace(Oracle.find(Whole), Whole.size(),
                            "(((c ^ UINT32_C(0xFEDCBA98)) >> 8) & 255)");
           }
+          if (Mutation == 7)
+            Oracle = nativeReturnPCOracle(Image.Segments.front().Data, Text + 9,
+                                          Format == BinaryFormat::COFF, false) +
+                     "int main(void) { return check_native_return_pc() || "
+                     "(uint64_t)observe_cpu_words() != UINT64_C(" +
+                     std::to_string(Text + 9) + "); }";
           for (llvm::StringRef Level : {"-O0", "-O2"})
             source_call_execution_test::compileAndRun(
                 Source + Oracle,
@@ -5208,7 +6241,7 @@ int main(void) {
 
 TEST(CallExitRegisters, RegisterQueryKeepsUnprovedBoundaries) {
   constexpr va_t Producer = Text + 0x80;
-  for (unsigned Mutation : {1u, 2u, 3u, 4u, 5u, 6u, 7u, 8u, 12u, 13u, 14u, 15u})
+  for (unsigned Mutation : {1u, 2u, 3u, 4u, 5u, 6u, 8u, 12u, 13u, 14u, 15u})
     for (bool LLVM : {false, true})
       for (bool NoOpt : {false, true}) {
         SCOPED_TRACE(Mutation);
@@ -5223,13 +6256,6 @@ TEST(CallExitRegisters, RegisterQueryKeepsUnprovedBoundaries) {
         Options.LiftMode = LLVM;
         Options.NoOpt = NoOpt;
         auto Result = Pipeline().run(Image, Context, Options);
-        if (Mutation == 7) {
-          EXPECT_FALSE(Result.Success);
-          EXPECT_NE(Result.Error.find("physical CALL return slot"),
-                    std::string::npos)
-              << Result.Error;
-          continue;
-        }
         ASSERT_TRUE(Result.Success) << Result.Error;
         bool CallsOriginal = false;
         for (const auto &Function : Result.MedFuncs)

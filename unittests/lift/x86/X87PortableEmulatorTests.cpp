@@ -95,6 +95,59 @@ TEST(X87PortableEmulator, LiftedInstructionsRetainBeyondBinary64Precision) {
   }
 }
 
+TEST(X87PortableEmulator, LiftedResetsPreserveOrForgetPhysicalPayloads) {
+  auto Img = image();
+  for (bool Strict : {false, true})
+    for (unsigned Top = 0; Top != 8; ++Top)
+      for (const auto Bytes : {std::array<uint8_t, 2>{0xd9, 0xd0},
+                               std::array<uint8_t, 2>{0x0f, 0x77},
+                               std::array<uint8_t, 2>{0x0f, 0x0e}}) {
+        NdOpEmulator E(Img);
+        E.setStrictMode(Strict);
+        E.setX87PortableMode(true);
+        ASSERT_TRUE(E.setX86LinearAddressBits(48));
+        EXPECT_FALSE(instruction(E, Bytes));
+        std::array<uint8_t, 512> State{};
+        State[0] = 0x7f;
+        State[1] = 3;
+        State[3] = Top << 3;
+        State[4] = 0xff;
+        for (unsigned I = 32; I != 160; ++I)
+          State[I] = I ^ 0xa5;
+        ASSERT_TRUE(E.setX87Context(State));
+        ASSERT_TRUE(instruction(E, Bytes));
+        EXPECT_EQ(E.getRegister(x86reg::FPU_SW),
+                  Bytes[0] == 0xd9 ? Top << 11 : 0);
+        if (Bytes[1] != 0x0e) {
+          if (Bytes[0] == 0xd9) {
+            for (unsigned I = 0; I != 8; ++I)
+              State[8 + I] = Entry >> (I * 8);
+          } else {
+            const auto Before = State;
+            State[3] = 0;
+            State[4] = 0;
+            for (unsigned Physical = 0; Physical != 8; ++Physical)
+              std::copy_n(Before.begin() + 32 + ((Physical + 8 - Top) & 7) * 16,
+                          16, State.begin() + 32 + Physical * 16);
+          }
+          EXPECT_EQ(E.getX87Context(), State);
+          continue;
+        }
+        EXPECT_FALSE(E.getX87Context());
+        for (unsigned I = 0; I != 8; ++I)
+          EXPECT_FALSE(E.getRegisterBytes(x86reg::stReg(I)));
+        E.setRegister(x86reg::RAX, DataAddress);
+        const auto One = X87Binary80{IntegerBit, 0x3fff}.bytes();
+        for (unsigned I = 0; I != 8; ++I) {
+          ASSERT_TRUE(instruction(E, std::array<uint8_t, 2>{0xdb, 0x28}));
+          const unsigned Written = 7 - I;
+          EXPECT_EQ(E.getRegisterBytes(x86reg::stReg(Written)),
+                    std::vector<uint8_t>(One.begin(), One.end()));
+          EXPECT_EQ(bool(E.getX87Context()), I == 7);
+        }
+      }
+}
+
 TEST(X87PortableEmulator, UnsupportedMemoryAndExternalStateFailClosed) {
   auto Img = image();
   for (bool Strict : {false, true}) {

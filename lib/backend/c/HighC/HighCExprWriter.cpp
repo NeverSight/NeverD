@@ -26,6 +26,7 @@
 #include "../render/X86/X86Sgx.h"
 #include "../render/X86/X86SystemState.h"
 #include "../render/X86/X86Virtualization.h"
+#include "../render/X86/X87NativeState.h"
 #include "HighCWriter.h"
 
 #include "neverd/ArchSupport.h"
@@ -2196,15 +2197,13 @@ std::string HighCWriter::renderCallExpr(const HighExpr &E) {
       llvm::report_fatal_error("invalid HighC x87 constant/control contract");
     const std::string Word = MemoryIdentifiers.allocate("x87_control");
     if (E.IntrinsicId == Intrinsic::X87ReadControl)
-      return "({ uint16_t " + Word +
-             "; __asm__ volatile(\"fnstcw %0\" : \"=m\"(" + Word +
-             ") :: \"memory\"); " + Word + "; })";
+      return "({ uint16_t " + Word + ";" +
+             renderX87ControlAccess(false, "&" + Word) + Word + "; })";
     const unsigned Index = E.IntrinsicId == Intrinsic::X87LoadConstant ? 1 : 0;
     const std::string Init = "({ uint16_t " + Word + " = (uint16_t)(" +
                              exprStr(*E.Operands[Index]) + "); ";
     if (E.IntrinsicId == Intrinsic::X87WriteControl)
-      return Init + "__asm__ volatile(\"fldcw %0\" :: \"m\"(" + Word +
-             ") : \"memory\"); })";
+      return Init + renderX87ControlAccess(true, "&" + Word) + "})";
     const std::string Value = MemoryIdentifiers.allocate("x87_constant");
     return Init + "unsigned _BitInt(80) " + Value +
            " = 0; __asm__ volatile(\"fldcw (%1)\\n\\t" +
@@ -2866,6 +2865,13 @@ std::string HighCWriter::renderCallExpr(const HighExpr &E) {
         Source < ArityIntegers + ArityFloats)
       FloatParam =
           NdType::makeFloat(Arity->FpIsFloat ? sizeof(float) : sizeof(double));
+    // A floating argument no parameter types, such as a double a formatted
+    // call passes past its format (MedOp::ExactFloatInputs), passes as its
+    // own value: bits it reads from read-only data print as that constant
+    // (`2.5`).  The integer immediate the bits make would travel in an
+    // integer register.
+    if (!FloatParam && Op->Type && Op->Type->Kind == NdTypeKind::Float)
+      FloatParam = Op->Type;
     if (FloatParam && FloatParam->Kind == NdTypeKind::Float) {
       if (PointerArgument)
         PointerArgumentOperands.erase(PointerArgument);
@@ -3679,8 +3685,11 @@ std::string HighCWriter::addrStr(const HighExpr &E, int ParentPrec,
           return "&" + *Slot;
         // The constant is the table and the rest the offset into it.  The
         // offset prints as the operand is, not as what peeling found under
-        // it: `(u64)(u8)i` indexes by the low byte of `i`, not by `i`.
-        if (Base->Kind != ExprKind::Const && indexedImageBase(*Inner) == Off)
+        // it: `(u64)(u8)i` indexes by the low byte of `i`, not by `i`.  A
+        // header address is `__ImageBase`'s, which the rest is added to.
+        if (Base->Kind != ExprKind::Const &&
+            (indexedImageBase(*Inner) == Off ||
+             (!Minus && isImageBaseConstant(*Off))))
           if (auto Table = imageBackingAddress(Off->ConstVal)) {
             constexpr int AddPrec = 9;
             const HighExpr &Index =
@@ -5815,8 +5824,10 @@ std::string HighCWriter::unknownVarUse(const HighExpr &E,
       !(CurrentFunc &&
         isSyntheticEntryStackPointer(E.Var, *CurrentFunc, Opts.TheArch))) {
     const auto &TRI = getTargetRegInfo(Opts.TheArch);
-    if (Opts.TheArch == Arch::AArch64 && E.Var.Kind == MedVar::Reg &&
-        TRI.isLinkRegister(E.Var.RegOff) && E.Var.Size == TRI.PointerSize)
+    // The link register's full entry value is the return address, as the
+    // LLVM route reads it: AArch64 x30 and ARM LR alike (x86 has none).
+    if (E.Var.Kind == MedVar::Reg && TRI.isLinkRegister(E.Var.RegOff) &&
+        E.Var.Size == TRI.PointerSize)
       return "(uintptr_t)__builtin_return_address(0)";
     if (x87HelperFor(E) == X87CHelper::ControlWord)
       return useX87Helper(X87CHelper::ControlWord) + "()";
@@ -7810,7 +7821,11 @@ std::optional<va_t> HighCWriter::constAddress(const HighExpr &E) const {
 }
 
 bool isImageDataAt(const BinaryImage &Img, va_t Addr) {
-  if (Addr == 0 || Addr == InvalidVA)
+  // The image's own headers are `__ImageBase`, never a copied object, and
+  // another module's storage an undefined data symbol names is no object of
+  // the image's.
+  if (Addr == 0 || Addr == InvalidVA || Img.imageBaseOffset(Addr) ||
+      declaredObjectExternAt(Img, Addr))
     return false;
   const Segment *Seg = Img.getSegmentFor(Addr);
   if (!Seg || !Seg->isReadable())
@@ -7938,6 +7953,8 @@ HighCWriter::sizedObjectAt(va_t Addr) const {
 
 std::optional<std::pair<va_t, uint64_t>>
 HighCWriter::indexedObjectAt(va_t Addr) const {
+  if (Opts.Image && Opts.Image->imageBaseOffset(Addr))
+    return std::nullopt;
   if (auto Object = sizedObjectAt(Addr))
     return Object;
   if (!Opts.Image)

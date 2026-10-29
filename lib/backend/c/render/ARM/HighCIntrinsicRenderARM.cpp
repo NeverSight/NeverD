@@ -12,6 +12,7 @@
 
 #include "neverd/backend/c/render/AArch64/AArch64AddressMemoryC.h"
 #include "neverd/backend/c/render/AArch64/AArch64CPAC.h"
+#include "neverd/backend/c/render/AArch64/AArch64ExclusiveC.h"
 #include "neverd/backend/c/render/AArch64/AArch64PAuthC.h"
 #include "neverd/backend/c/render/AArch64/AArch64PAuthLoadC.h"
 #include "neverd/backend/c/render/AArch64/AArch64SVECPAC.h"
@@ -176,20 +177,9 @@ std::string renderArmStatusInstruction(Intrinsic Id,
 /// The C type an exclusive access of \p Size bytes moves, or null for a
 /// size no exclusive access has.
 const char *exclusiveAccessType(llvm::StringRef Size) {
-  switch (constantOperand(Size).value_or(0)) {
-  case 1:
-    return "uint8_t";
-  case 2:
-    return "uint16_t";
-  case 4:
-    return "uint32_t";
-  case 8:
-    return "uint64_t";
-  case 16:
-    return "unsigned __int128";
-  default:
-    return nullptr;
-  }
+  return aarch64ExclusiveAccessType(
+      static_cast<unsigned>(constantOperand(Size).value_or(0)),
+      "unsigned __int128");
 }
 
 std::string
@@ -1293,11 +1283,9 @@ std::string renderARMIntrinsicCall(Intrinsic Id,
     const char *Type = exclusiveAccessType(Ops[1]);
     if (!Type)
       return {};
-    const bool Acquire = Id == I::A64_Ldaxr || Id == I::A64_Ldaxp;
     HasCIntrinsics = true;
-    return std::string(Acquire ? "__builtin_arm_ldaex"
-                               : "__builtin_arm_ldrex") +
-           "((const volatile " + Type + " *)(uintptr_t)(" + Ops[0] + "))";
+    return aarch64ExclusiveLoadC(Id == I::A64_Ldaxr || Id == I::A64_Ldaxp, Type,
+                                 Ops[0]);
   }
   case I::A64_Stxr:
   case I::A64_Stlxr:
@@ -1308,12 +1296,9 @@ std::string renderARMIntrinsicCall(Intrinsic Id,
     const char *Type = exclusiveAccessType(Ops[2]);
     if (!Type)
       return {};
-    const bool Release = Id == I::A64_Stlxr || Id == I::A64_Stlxp;
     HasCIntrinsics = true;
-    return std::string(Release ? "__builtin_arm_stlex"
-                               : "__builtin_arm_strex") +
-           "((" + Type + ")(" + Ops[0] + "), (volatile " + Type +
-           " *)(uintptr_t)(" + Ops[1] + "))";
+    return aarch64ExclusiveStoreC(Id == I::A64_Stlxr || Id == I::A64_Stlxp,
+                                  Type, Ops[0], Ops[1]);
   }
   case I::A64_Famax:
   case I::A64_Famin: {

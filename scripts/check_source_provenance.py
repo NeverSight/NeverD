@@ -834,6 +834,25 @@ HISTORY_ALLOWED: tuple[HistoryAllowance, ...] = (
             "line, including its deletion; it permits no new path occurrences."
         ),
     ),
+    HistoryAllowance(
+        path="docs/evidence/x86-x87-environment-2026-10-28.json",
+        rule="private-path",
+        commits=frozenset({
+            "2880984410f70f32505cd0b147818e14d18c43ac",
+            "579734bbe2a48b79784aefee2ce83e540f10bfaa",
+        }),
+        line="",
+        reason=(
+            "Reviewed normalization of the published NeverC executable path "
+            "relative to its pinned checkout. Source revisions, test results "
+            "and artifact hashes are unchanged. Only this exact line digest "
+            "in the publication and cleanup commits is covered; current and "
+            "future private paths remain findings."
+        ),
+        line_sha256=frozenset({
+            "8507f9dd32a05243f4878770a6f932d5712d9cd9f705846a506ecd83482cdbdd",
+        }),
+    ),
 )
 
 

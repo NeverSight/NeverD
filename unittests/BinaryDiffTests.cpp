@@ -1239,6 +1239,169 @@ TEST(BinaryDiff, CallGraphDegreeCannotOverrideContradictingImportTargets) {
   EXPECT_EQ(R.matchOfPrimary(indexOf(P, "wrapper_a")), nullptr);
 }
 
+TEST(BinaryDiff, InlinedTailPreludeKeepsWholeFunctionIdentityAmbiguous) {
+  Fn Helper = leaf("helper", 19, 18);
+  Helper.Source = NameSource::Generated;
+  Fn Caller;
+  Caller.Name = "caller";
+  Caller.Source = NameSource::Generated;
+  Caller.Blocks = {{{"store", "[state], r4"},
+                    {"store", "[flag], 1"},
+                    {"jmp", "", InstructionFlow::Jump, "helper"}}};
+  Fn Merged = Helper;
+  Merged.Name = "merged";
+  Merged.Blocks[0].insert(Merged.Blocks[0].begin() + 2,
+                          Caller.Blocks[0].begin(), Caller.Blocks[0].end() - 1);
+  for (bool Reverse : {false, true})
+    for (bool Reorder : {false, true})
+      for (bool Approximate : {false, true}) {
+        SCOPED_TRACE(::testing::Message() << Reverse << Reorder << Approximate);
+        // A shared weak feature must not bypass the boundary check.
+        Helper.Strings = Merged.Strings = {"output pipe"};
+        const Program A = build({Caller, Helper}, 0x400000,
+                                Reorder ? std::vector<size_t>{1, 0}
+                                        : std::vector<size_t>{0, 1});
+        const Program B = build({Merged}, 0x500000);
+        const Program &P = Reverse ? B : A, &S = Reverse ? A : B;
+        ComparisonSettings Settings;
+        Settings.Approximate = Approximate;
+        const auto R = compare(P, S, Settings);
+        EXPECT_TRUE(R.Matches.empty());
+        std::set<std::pair<std::string, std::string>> Candidates;
+        for (const auto &Group : R.Ambiguities)
+          for (uint32_t X : Group.Primary)
+            for (uint32_t Y : Group.Secondary)
+              Candidates.emplace(P.Functions[X].Name, S.Functions[Y].Name);
+        const std::set<std::pair<std::string, std::string>> Expected =
+            Reverse ? std::set<std::pair<std::string, std::string>>{{"merged",
+                                                                     "helper"},
+                                                                    {"merged",
+                                                                     "caller"}}
+                    : std::set<std::pair<std::string, std::string>>{
+                          {"helper", "merged"}, {"caller", "merged"}};
+        EXPECT_EQ(Candidates, Expected);
+        std::string Error;
+        const auto Read = readComparison(saved(R, P, S), Error);
+        ASSERT_TRUE(bool(Read)) << Error;
+        ComparisonResult Edited;
+        ASSERT_FALSE(bindComparison(*Read, P, S, Edited));
+        const auto Original = savedWithoutTimings(R, P, S);
+        EXPECT_EQ(savedWithoutTimings(Edited, P, S), Original);
+        OverrideEffect Effect;
+        const Override Choice{
+            OverrideKind::Match,
+            P.Functions[indexOf(P, Reverse ? "merged" : "caller")].Address,
+            S.Functions[indexOf(S, Reverse ? "caller" : "merged")].Address};
+        ASSERT_FALSE(applyOverride(Edited, P, S, Choice, &Effect));
+        EXPECT_EQ(counterpart(Edited, P, S, Reverse ? "merged" : "caller"),
+                  Reverse ? "caller" : "merged");
+        revertOverride(Edited, P, S, Effect);
+        EXPECT_EQ(savedWithoutTimings(Edited, P, S), Original);
+        const auto Forced = compare(P, S, Settings, {Choice});
+        EXPECT_EQ(counterpart(Forced, P, S, Reverse ? "merged" : "caller"),
+                  Reverse ? "caller" : "merged");
+        Override Rejected = Choice;
+        Rejected.Kind = OverrideKind::Unmatch;
+        const auto WithoutCaller = compare(P, S, Settings, {Rejected});
+        EXPECT_EQ(
+            counterpart(WithoutCaller, P, S, Reverse ? "merged" : "helper"),
+            Reverse ? "helper" : "merged");
+      }
+}
+
+TEST(BinaryDiff, TailPreludeNeedsCompleteAndIndependentContribution) {
+  Fn Helper = leaf("helper", 29, 18);
+  Helper.Source = NameSource::Generated;
+  Fn Caller;
+  Caller.Name = "caller";
+  Caller.Source = NameSource::Generated;
+  Caller.Blocks = {{{"store", "[state], r4"},
+                    {"store", "[flag], 1"},
+                    {"jmp", "", InstructionFlow::Jump, "helper"}}};
+  for (unsigned Variant = 0; Variant < 6; ++Variant) {
+    SCOPED_TRACE(Variant);
+    Fn C = Caller, Changed = Helper;
+    Changed.Name = "changed_helper";
+    if (Variant == 0) // Only part of the caller survives.
+      Changed.Blocks[0].insert(Changed.Blocks[0].begin(), C.Blocks[0][0]);
+    else if (Variant == 1) { // A changed operand is not the same prelude.
+      Changed.Blocks[0].insert(Changed.Blocks[0].begin(), C.Blocks[0].begin(),
+                               C.Blocks[0].end() - 1);
+      Changed.Blocks[0][1].Operands = "[other_flag], 1";
+    } else if (Variant == 2) { // Shared helper instructions add no evidence.
+      C.Blocks[0][0] = Helper.Blocks[0][0];
+      C.Blocks[0][1] = Helper.Blocks[0][1];
+      Changed.Blocks[0].insert(Changed.Blocks[0].begin(), {"sub", "r3, 71"});
+    } else { // A call or an unresolved jump is not an admitted tail edge.
+      Changed.Blocks[0].insert(Changed.Blocks[0].begin(), C.Blocks[0].begin(),
+                               C.Blocks[0].end() - 1);
+      if (Variant == 3)
+        C.Blocks[0].back().Flow = InstructionFlow::Call;
+      else if (Variant == 4)
+        C.Blocks[0].back().Callee.clear();
+    }
+    std::vector<Fn> After{Changed};
+    if (Variant == 5) { // Independent identity already accounts for the caller.
+      C.Source = NameSource::Symbol;
+      Fn SurvivingCaller = C;
+      SurvivingCaller.Blocks[0].back().Callee = "changed_helper";
+      After.push_back(SurvivingCaller);
+    }
+    for (bool Reverse : {false, true}) {
+      const Program A = build({C, Helper}, 0x400000);
+      const Program B = build(After, 0x500000);
+      const Program &P = Reverse ? B : A, &S = Reverse ? A : B;
+      const auto R = compare(P, S, {});
+      EXPECT_EQ(counterpart(R, P, S, Reverse ? "changed_helper" : "helper"),
+                Reverse ? "helper" : "changed_helper");
+    }
+  }
+}
+
+TEST(BinaryDiff, EachInlinedTailCallerRetainsOnlyItsOwnMergedCandidate) {
+  Fn Helper = leaf("helper", 39, 18);
+  Helper.Source = NameSource::Generated;
+  std::vector<Fn> Before{Helper}, After;
+  for (unsigned I = 0; I < 2; ++I) {
+    Fn Caller;
+    Caller.Name = "caller" + std::to_string(I);
+    Caller.Source = NameSource::Generated;
+    Caller.Blocks = {{{"store", "[state" + std::to_string(I) + "], r4"},
+                      {"store", "[flag" + std::to_string(I) + "], 1"},
+                      {"jmp", "", InstructionFlow::Jump, "helper"}}};
+    Fn Merged = Helper;
+    Merged.Name = "merged" + std::to_string(I);
+    Merged.Blocks[0].insert(Merged.Blocks[0].begin() + 2,
+                            Caller.Blocks[0].begin(),
+                            Caller.Blocks[0].end() - 1);
+    Before.push_back(Caller);
+    After.push_back(Merged);
+  }
+  for (bool Reverse : {false, true})
+    for (bool Reorder : {false, true}) {
+      const Program A = build(Before, 0x400000);
+      const Program B = build(After, 0x500000,
+                              Reorder ? std::vector<size_t>{1, 0}
+                                      : std::vector<size_t>{0, 1});
+      const Program &P = Reverse ? B : A, &S = Reverse ? A : B;
+      const auto R = compare(P, S, {});
+      EXPECT_TRUE(R.Matches.empty());
+      std::set<std::pair<std::string, std::string>> Expected, Actual;
+      for (unsigned I = 0; I < 2; ++I)
+        for (const std::string &Source :
+             {std::string("helper"), "caller" + std::to_string(I)}) {
+          const std::string Target = "merged" + std::to_string(I);
+          Expected.emplace(Reverse ? Target : Source,
+                           Reverse ? Source : Target);
+        }
+      for (const auto &Group : R.Ambiguities)
+        for (uint32_t X : Group.Primary)
+          for (uint32_t Y : Group.Secondary)
+            Actual.emplace(P.Functions[X].Name, S.Functions[Y].Name);
+      EXPECT_EQ(Actual, Expected);
+    }
+}
+
 TEST(BinaryDiff, ExactReferenceCandidatesStillCompeteWithoutApproximation) {
   Fn A = leaf("old", 12);
   A.Source = NameSource::Generated;
@@ -1400,6 +1563,18 @@ TEST(BinaryDiff, SimilarStructureWithOtherInstructionsIsNotIdentical) {
 
 TEST(BinaryDiff, ResultsDoNotDependOnThreadCount) {
   std::vector<Fn> Old = sample(), New = sample();
+  Fn Helper = leaf("tail_helper", 1200, 25), Prelude;
+  Prelude.Name = "tail_caller";
+  Prelude.Blocks = {{{"store", "[state], r4"},
+                     {"store", "[flag], 1"},
+                     {"jmp", "", InstructionFlow::Jump, "tail_helper"}}};
+  Old.push_back(Prelude);
+  Old.push_back(Helper);
+  Helper.Name = "tail_merged";
+  Helper.Blocks[0].insert(Helper.Blocks[0].begin() + 2,
+                          Prelude.Blocks[0].begin(),
+                          Prelude.Blocks[0].end() - 1);
+  New.push_back(Helper);
   for (unsigned I = 0; I < 40; ++I) {
     Old.push_back(leaf("bulk" + std::to_string(I), 1000 + I, 4 + I % 5));
     New.push_back(
@@ -1447,8 +1622,18 @@ TEST(BinaryDiff, SavedComparisonsRoundTripAndRefuseOtherInputs) {
   EXPECT_EQ(Why, BindFailure::StaleInput);
   const Program Reanalyzed =
       build(Old, 0x400000, {}, std::string(64, 'b'), "other settings");
-  EXPECT_TRUE(bindComparison(*Read, Reanalyzed, S, Bound, &Why));
+  const auto SettingsError = bindComparison(*Read, Reanalyzed, S, Bound, &Why);
+  ASSERT_TRUE(SettingsError);
+  EXPECT_NE(SettingsError->find("other settings"), std::string::npos);
   EXPECT_EQ(Why, BindFailure::StaleAnalysis);
+  auto Recovered = P;
+  Recovered.Identity.Revision = "newly-discovered-functions";
+  const auto SnapshotError = bindComparison(*Read, Recovered, S, Bound, &Why);
+  ASSERT_TRUE(SnapshotError);
+  EXPECT_NE(SnapshotError->find("analyzed snapshot"), std::string::npos);
+  EXPECT_EQ(SnapshotError->find("other settings"), std::string::npos);
+  EXPECT_EQ(Why, BindFailure::StaleAnalysis);
+  EXPECT_EQ(savedWithoutTimings(Bound, P, S), savedWithoutTimings(R, P, S));
   std::vector<Fn> Fewer = Old;
   llvm::erase_if(Fewer, [](const Fn &F) { return F.Name == "leaf3"; });
   const Program Lost = build(Fewer, 0x400000, {}, std::string(64, 'b'));
@@ -1491,6 +1676,38 @@ TEST(BinaryDiff, MalformedSavedComparisonsFailClearly) {
   Rejects(
       Replace("\"functions\":{\"primary\":[", "\"functions\":{\"primary\":[5,"),
       "a function must be");
+}
+
+TEST(BinaryDiff, CandidateOnlyStepsCannotPublishAcceptedMatches) {
+  const Program P = build({leaf("body", 3, 5)}, 0x400000);
+  const Program S = build({leaf("body", 3, 5)}, 0x800000);
+  const ComparisonResult Original = compare(P, S, {});
+  ASSERT_EQ(Original.Matches.size(), 1u);
+  const std::string Before = saved(Original, P, S);
+  std::string Error;
+  const auto Parsed = readComparison(Before, Error);
+  ASSERT_TRUE(Parsed) << Error;
+  for (bool Confirmed : {false, true}) {
+    SCOPED_TRACE(Confirmed);
+    auto Invalid = Original;
+    Invalid.Matches.front().Step = FunctionStep::InlinedTailCall;
+    Invalid.Matches.front().Confirmed = Confirmed;
+    EXPECT_FALSE(readComparison(saved(Invalid, P, S), Error));
+    EXPECT_NE(Error.find("can only describe ambiguous candidates"),
+              std::string::npos)
+        << Error;
+
+    // Typed saved state uses the same validator and cannot replace a result
+    // already published to its caller when the evidence is invalid.
+    auto Mutated = *Parsed;
+    Mutated.Matches.front().Match.Step = FunctionStep::InlinedTailCall;
+    Mutated.Matches.front().Match.Confirmed = Confirmed;
+    auto Bound = Original;
+    BindFailure Why;
+    EXPECT_TRUE(bindComparison(Mutated, P, S, Bound, &Why));
+    EXPECT_EQ(Why, BindFailure::InvalidEvidence);
+    EXPECT_EQ(saved(Bound, P, S), Before);
+  }
 }
 
 TEST(BinaryDiff, OverridesKeepPairsOneToOneAndRevert) {
@@ -1898,7 +2115,7 @@ TEST(BinaryDiff, SavedMeasurementsAreRecomputedBeforePublication) {
 }
 
 TEST(BinaryDiff, VocabularyRoundTrips) {
-  for (unsigned I = 0; I <= unsigned(FunctionStep::Similarity); ++I) {
+  for (unsigned I = 0; I <= unsigned(FunctionStep::InlinedTailCall); ++I) {
     const auto Step = static_cast<FunctionStep>(I);
     EXPECT_EQ(functionStepNamed(stepName(Step)), Step);
     EXPECT_FALSE(stepDescription(Step).empty());
@@ -2008,6 +2225,250 @@ TEST(BinaryDiff, RegionInlineAndOutlineUseObservedInternalCalls) {
   const auto Reverse = findRegions(B, A, enabledRegions(), {});
   ASSERT_EQ(Reverse.Hypotheses.size(), 1u);
   EXPECT_TRUE(explains(Reverse.Hypotheses[0], RegionKind::Outline));
+}
+
+namespace {
+Fn callRegionBody(std::string Name, std::string Target) {
+  Fn F;
+  F.Name = std::move(Name);
+  F.Blocks = {body(411, 3)};
+  F.Blocks[0].push_back({"call", "", InstructionFlow::Call, std::move(Target)});
+  const auto Suffix = body(527, 3);
+  F.Blocks[0].insert(F.Blocks[0].end(), Suffix.begin(), Suffix.end());
+  F.Blocks[0].push_back({"ret", "", InstructionFlow::Return});
+  return F;
+}
+Fn callRegionTarget(std::string Name, unsigned Seed) {
+  auto F = leaf(std::move(Name), Seed, 1);
+  F.Blocks[0].back().Flow = InstructionFlow::Return;
+  return F;
+}
+} // namespace
+
+TEST(BinaryDiff, CallRegionsRetainMovedBodiesAndExactTargetAssumptions) {
+  const auto P =
+      build({callRegionBody("old", "callee"), callRegionTarget("callee", 77)},
+            0x1000);
+  auto Public = callRegionBody("public", "callee_new");
+  const auto Prefix = body(619, 6);
+  Public.Blocks[0].insert(Public.Blocks[0].begin(), Prefix.begin(),
+                          Prefix.end());
+  const auto S =
+      build({Public, callRegionBody("private", "callee_new"),
+             callRegionBody("wrong", "other"),
+             callRegionTarget("callee_new", 77), callRegionTarget("other", 91)},
+            0x8000);
+  FunctionMatch M;
+  M.Primary = 1;
+  M.Secondary = 3;
+  auto Settings = enabledRegions();
+  const auto Legacy = findRegions(P, S, Settings, {}, {M});
+  EXPECT_TRUE(Legacy.Anchors.empty());
+  Settings.Calls = true;
+  const auto R = findRegions(P, S, Settings, {}, {M});
+  ASSERT_EQ(R.State, ComparisonState::Complete);
+  ASSERT_EQ(R.Anchors.size(), 2u);
+  ASSERT_EQ(R.Hypotheses.size(), 1u);
+  EXPECT_TRUE(R.Hypotheses[0].Ambiguous);
+  EXPECT_TRUE(explains(R.Hypotheses[0], RegionKind::Clone));
+  EXPECT_EQ(R.Hypotheses[0].PrimaryInstructions, 7u);
+  EXPECT_EQ(R.Hypotheses[0].SecondaryInstructions, 14u);
+  for (const auto &A : R.Anchors) {
+    EXPECT_EQ(A.Primary.Function, 0u);
+    EXPECT_LT(A.Secondary.Function, 2u);
+    EXPECT_EQ(A.Primary.InstructionCount, 7u);
+  }
+  EXPECT_FALSE(validateRegions(R, Settings, P, S, {}, {M}));
+  EXPECT_TRUE(validateRegions(R, Settings, P, S));
+  EXPECT_TRUE(findRegions(P, S, Settings, {}).Anchors.empty());
+  std::swap(M.Primary, M.Secondary);
+  const auto Back = findRegions(S, P, Settings, {}, {M});
+  ASSERT_EQ(Back.Anchors.size(), 2u);
+  EXPECT_FALSE(validateRegions(Back, Settings, S, P, {}, {M}));
+  EXPECT_THROW(findRegions(S, P, Settings, {}, {M, M}), std::invalid_argument);
+
+  for (const auto Flow :
+       {InstructionFlow::IndirectCall, InstructionFlow::Unknown}) {
+    auto Changed = S;
+    Changed.Instructions[Changed.Blocks[0].FirstInstruction + 9].Flow = Flow;
+    std::swap(M.Primary, M.Secondary);
+    const auto Limited = findRegions(P, Changed, Settings, {}, {M});
+    ASSERT_EQ(Limited.Anchors.size(), 1u);
+    EXPECT_EQ(Limited.Anchors[0].Secondary.Function, 1u);
+    std::swap(M.Primary, M.Secondary);
+  }
+}
+
+TEST(BinaryDiff, ShortRepeatedCallRegionsNeedDistinctMappedTargets) {
+  for (bool Distinct : {false, true}) {
+    Fn Before;
+    Before.Name = "old";
+    auto Shared = body(713, 2);
+    Shared.push_back({"call", "", InstructionFlow::Call, "one"});
+    const auto Middle = body(719, 2);
+    Shared.insert(Shared.end(), Middle.begin(), Middle.end());
+    Shared.push_back(
+        {"call", "", InstructionFlow::Call, Distinct ? "two" : "one"});
+    Shared.push_back(body(727, 1)[0]);
+    Before.Blocks = {body(100, 20), Shared};
+    auto Public = Before, Private = Before;
+    Public.Name = "public";
+    Public.Blocks[0] = body(200, 20);
+    Private.Name = "private";
+    Private.Blocks[0] = body(300, 20);
+    const auto P = build(
+        {Before, callRegionTarget("one", 77), callRegionTarget("two", 91)},
+        0x1000);
+    const auto S = build({Public, Private, callRegionTarget("one", 77),
+                          callRegionTarget("two", 91)},
+                         0x8000);
+    FunctionMatch One, Two;
+    One.Primary = 1;
+    One.Secondary = 2;
+    Two.Primary = 2;
+    Two.Secondary = 3;
+    auto Settings = enabledRegions();
+    Settings.Calls = true;
+    const auto R = findRegions(P, S, Settings, {}, {One, Two});
+    EXPECT_EQ(R.State, ComparisonState::Complete);
+    EXPECT_EQ(R.Anchors.size(), Distinct ? 2u : 0u);
+    EXPECT_FALSE(validateRegions(R, Settings, P, S, {}, {One, Two}));
+    if (Distinct) {
+      ASSERT_EQ(R.Hypotheses.size(), 1u);
+      EXPECT_TRUE(R.Hypotheses[0].Ambiguous);
+      EXPECT_TRUE(explains(R.Hypotheses[0], RegionKind::Clone));
+      EXPECT_EQ(R.Hypotheses[0].PrimaryInstructions, 7u);
+      EXPECT_EQ(R.Hypotheses[0].SecondaryInstructions, 14u);
+      Settings.MaxOccurrences = 1;
+      const auto Frequent = findRegions(P, S, Settings, {}, {One, Two});
+      EXPECT_TRUE(Frequent.Anchors.empty());
+      EXPECT_GT(Frequent.FrequentSeedGroups, 0u);
+    } else {
+      EXPECT_GT(R.WeakCandidates, 0u);
+    }
+  }
+}
+
+TEST(BinaryDiff, CallRegionsKeepCleanupTailsBesideChangedCalls) {
+  for (const auto Flow : {InstructionFlow::Return, InstructionFlow::Jump,
+                          InstructionFlow::Branch}) {
+    Fn Old;
+    Old.Name = "old";
+    auto Ops = body(817, 3);
+    Ops.push_back({"call", "", InstructionFlow::Call, "before"});
+    const auto Suffix = body(823, 2);
+    Ops.insert(Ops.end(), Suffix.begin(), Suffix.end());
+    Ops.push_back({"call", "", InstructionFlow::Call, "cleanup"});
+    Ops.push_back(body(827, 1)[0]);
+    Ops.push_back({"transfer", "", Flow});
+    Old.Blocks = {body(100, 20), Ops};
+    auto New = Old, Copy = Old;
+    New.Name = "new";
+    New.Blocks[0] = body(200, 20);
+    New.Blocks[1][3].Callee = "changed";
+    Copy.Name = "copy";
+    Copy.Blocks[0] = body(300, 20);
+    Copy.Blocks[1][3].Callee = "changed";
+    const auto P = build(
+        {Old, callRegionTarget("before", 77), callRegionTarget("cleanup", 91)},
+        0x1000);
+    const auto S = build({New, Copy, callRegionTarget("before", 77),
+                          callRegionTarget("changed", 99),
+                          callRegionTarget("cleanup", 91)},
+                         0x8000);
+    FunctionMatch Before, Cleanup;
+    Before.Primary = 1;
+    Before.Secondary = 2;
+    Cleanup.Primary = 2;
+    Cleanup.Secondary = 4;
+    auto Settings = enabledRegions();
+    Settings.Calls = true;
+    const auto R = findRegions(P, S, Settings, {}, {Before, Cleanup});
+    EXPECT_EQ(R.Anchors.size(), Flow == InstructionFlow::Branch ? 0u : 2u);
+    for (const auto &A : R.Anchors) {
+      EXPECT_EQ(A.Primary.FirstInstruction, 4u);
+      EXPECT_EQ(A.Primary.InstructionCount, 4u);
+      EXPECT_EQ(A.Secondary.FirstInstruction, 4u);
+    }
+    EXPECT_FALSE(validateRegions(R, Settings, P, S, {}, {Before, Cleanup}));
+    // The unresolved cleanup call cannot supply terminal support either.
+    EXPECT_TRUE(findRegions(P, S, Settings, {}, {Before}).Anchors.empty());
+  }
+}
+
+TEST(BinaryDiff, CallRegionsBindSavedEvidenceAndMappingEditsTransactionally) {
+  const auto P = build(
+      {callRegionBody("caller", "callee"), callRegionTarget("callee", 77)},
+      0x1000);
+  const auto S = build(
+      {callRegionBody("caller", "callee"), callRegionTarget("callee", 77)},
+      0x8000);
+  ComparisonSettings Settings;
+  Settings.Regions = enabledRegions();
+  Settings.Regions.Calls = true;
+  auto R = compare(P, S, Settings);
+  ASSERT_EQ(R.Regions.Anchors.size(), 1u);
+  const auto Initial = regionAnalysisJSON(R.Regions);
+  EXPECT_EQ(Initial.getString("profile"), "native-call-runs-v1");
+  EXPECT_EQ(Initial.getString("call_evidence"),
+            "current_function_correspondence");
+  EXPECT_EQ(readRegionSettings(regionSettingsJSON(Settings.Regions)),
+            Settings.Regions);
+  EXPECT_THROW(readRegionSettings(llvm::json::Object{{"calls", 1}}),
+               std::invalid_argument);
+  auto Forged = Initial;
+  Forged["call_evidence"] = "semantic_equivalence";
+  EXPECT_THROW(readRegionAnalysis(std::move(Forged), Settings.Regions),
+               std::invalid_argument);
+  auto OldSettings = Settings.Regions;
+  OldSettings.Calls = false;
+  EXPECT_THROW(readRegionAnalysis(llvm::json::Object(Initial), OldSettings),
+               std::invalid_argument);
+  EXPECT_FALSE(regionSettingsJSON(OldSettings).get("calls"));
+
+  std::string Error;
+  const auto Saved = readComparison(saved(R, P, S), Error);
+  ASSERT_TRUE(Saved) << Error;
+  ComparisonResult Bound;
+  ASSERT_FALSE(bindComparison(*Saved, P, S, Bound));
+  EXPECT_EQ(regionAnalysisJSON(Bound.Regions), Initial);
+  Override O{OverrideKind::Unmatch, P.Functions[1].Address,
+             S.Functions[1].Address};
+  std::atomic<bool> Cancel = false;
+  ComparisonControl Control;
+  Control.Cancel = &Cancel;
+  Control.Progress = [&](llvm::StringRef Phase, uint64_t, uint64_t) {
+    if (Phase == "regions:call-context")
+      Cancel = true;
+  };
+  OverrideEffect Effect;
+  EXPECT_THROW(applyOverride(R, P, S, O, &Effect, Control),
+               ComparisonInterrupted);
+  EXPECT_TRUE(R.Overrides.empty());
+  EXPECT_EQ(regionAnalysisJSON(R.Regions), Initial);
+  ASSERT_FALSE(applyOverride(R, P, S, O, &Effect));
+  EXPECT_TRUE(R.Regions.Anchors.empty());
+  const auto Edited = readComparison(saved(R, P, S), Error);
+  ASSERT_TRUE(Edited) << Error;
+  EXPECT_FALSE(bindComparison(*Edited, P, S, Bound));
+  auto Stale = *Edited;
+  Stale.Regions = Saved->Regions;
+  EXPECT_TRUE(bindComparison(Stale, P, S, Bound));
+  Cancel = false;
+  EXPECT_THROW(revertOverride(R, P, S, Effect, Control), ComparisonInterrupted);
+  EXPECT_TRUE(R.Regions.Anchors.empty());
+  EXPECT_EQ(R.Overrides.size(), 1u);
+  revertOverride(R, P, S, Effect);
+  EXPECT_EQ(regionAnalysisJSON(R.Regions), Initial);
+  EXPECT_FALSE(
+      validateRegions(R.Regions, Settings.Regions, P, S, {}, R.Matches));
+  auto Limited = Settings.Regions;
+  Limited.MaxWork = 1;
+  const auto Stopped = findRegions(P, S, Limited, {}, R.Matches);
+  EXPECT_EQ(Stopped.State, ComparisonState::ResourceLimited);
+  EXPECT_EQ(Stopped.Work, 1u);
+  EXPECT_TRUE(Stopped.Anchors.empty());
+  EXPECT_FALSE(validateRegions(Stopped, Limited, P, S, {}, R.Matches));
 }
 
 TEST(BinaryDiff, RegionClonesRemainCompetingOverlappingEvidence) {

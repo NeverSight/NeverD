@@ -207,7 +207,9 @@ TEST(ObjectExterns, UndefinedAndCommonSymbolsResolveOnEveryArchitecture) {
     EXPECT_EQ(PutBody.find("first("), std::string::npos) << PutBody;
 
     // A direct reference prints its symbol.  A GOT entry's load folds to the
-    // address the entry holds, which prints as a number.
+    // address the entry holds, which prints as a number for the object's own
+    // data.  Data another module defines prints, either way, through the
+    // declaration the unit gives it, which binds the symbol.
     auto ExpectData = [&](const char *Function, const Symbol &Data) {
       const std::string Body = definitionBody(Source, Function);
       ASSERT_FALSE(Body.empty()) << Source;
@@ -221,12 +223,18 @@ TEST(ObjectExterns, UndefinedAndCommonSymbolsResolveOnEveryArchitecture) {
     ExpectData("bump", *Counter);
     ExpectData("read_defined", *Defined);
     ExpectData("read_tentative", *Tentative);
-    if (Fixture.CallArgumentsKnown) {
-      if (Fixture.PositionIndependent)
-        EXPECT_TRUE(mentionsAddress(PutBody, Stdout->Addr)) << PutBody;
-      else
-        EXPECT_NE(PutBody.find("stdout"), std::string::npos) << PutBody;
-    }
+    EXPECT_NE(definitionBody(Source, "bump").find("neverd_data_counter"),
+              std::string::npos)
+        << Source;
+    EXPECT_NE(Source.find("extern unsigned char neverd_data_counter[] "
+                          "__asm__(\"counter\");"),
+              std::string::npos)
+        << Source;
+    if (Fixture.CallArgumentsKnown)
+      EXPECT_NE(PutBody.find(Fixture.PositionIndependent ? "neverd_data_stdout"
+                                                         : "stdout"),
+                std::string::npos)
+          << PutBody;
   }
 }
 

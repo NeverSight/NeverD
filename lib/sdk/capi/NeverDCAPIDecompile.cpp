@@ -31,6 +31,7 @@
 #include "neverd/ir/NdOps.h"
 #include "neverd/ir/high/HighIRPrint.h"
 #include "neverd/ir/high/HighVariableEdits.h"
+#include "neverd/ir/high/SEHFinallyBodies.h"
 #include "neverd/loader/ARM/ARMModeCLIStrings.h"
 #include "neverd/loader/COFF/COFFException.h"
 #include "neverd/loader/LanguageRuntime.h"
@@ -314,6 +315,25 @@ std::string refusedFunctionNotes(const PipelineResult &Result) {
   return Notes.empty() ? Notes : Notes + "\n";
 }
 
+/// A note for each function the unit's LLVM module declares only, which
+/// follows the pipeline's: its body refused a stale address, for the reason
+/// the emitter gives.
+std::string leftOutDefinitionNotes(const PipelineResult &Result) {
+  std::vector<const PipelineFunctionAudit *> LeftOut;
+  for (const PipelineFunctionAudit &Audit : Result.FunctionAudits)
+    if (!Audit.LLVMDiagnostic.empty())
+      LeftOut.push_back(&Audit);
+  llvm::sort(LeftOut,
+             [](const auto *A, const auto *B) { return A->Entry < B->Entry; });
+  std::string Notes;
+  for (const PipelineFunctionAudit *Audit : LeftOut)
+    Notes += notDecompiledNote(
+        Audit->Name.empty() ? "sub_" + llvm::utohexstr(Audit->Entry)
+                            : Audit->Name,
+        Audit->Entry, "llvm-emission-failed; " + Audit->LLVMDiagnostic);
+  return Notes.empty() ? Notes : Notes + "\n";
+}
+
 /// A note for each definition the unit's C left out, which follows the
 /// pipeline's: its C could not be written, for the reason the writer gives.
 std::string refusedDefinitionNotes(
@@ -566,8 +586,24 @@ static const char *decompileHighC(neverd_session_t Sess, neverd_va_t FuncEntry,
     ByEntry[Func.Entry] = &Func;
   std::set<va_t> Included = {HF->Entry};
   std::vector<const HighFunc *> Needed = {HF};
+  // Termination handlers are out-of-line funclets gathered only so their
+  // bodies can fill a `__finally`; unlike C++ catch funclets they are not
+  // themselves printed in this view, so keep them out of the requested set.
+  std::set<va_t> SEHFuncletSources;
   for (size_t I = 0; I < Needed.size(); ++I)
     walkStmts(Needed[I]->Body, [&](const HighStmt &Stmt) {
+      if (Stmt.Kind == StmtKind::SEHTry) {
+        for (const auto &Clause : Stmt.EHClauses)
+          if (Clause.Kind == HighEHClauseKind::SEHFinally &&
+              Clause.FilterOrActionVA != FuncEntry)
+            if (auto It = ByEntry.find(Clause.FilterOrActionVA);
+                It != ByEntry.end() &&
+                Included.insert(Clause.FilterOrActionVA).second) {
+              Needed.push_back(It->second);
+              SEHFuncletSources.insert(Clause.FilterOrActionVA);
+            }
+        return;
+      }
       if (Stmt.Kind != StmtKind::CxxTry)
         return;
       for (const auto &Clause : Stmt.EHClauses) {
@@ -583,6 +619,7 @@ static const char *decompileHighC(neverd_session_t Sess, neverd_va_t FuncEntry,
   Related.reserve(Needed.size());
   for (const HighFunc *Func : Needed)
     Related.push_back(*Func);
+  attachSEHFinallyBodies(Related, S->Img.Arch);
   if (!PlainC)
     attachCxxFuncletBodies(Related);
   const HighFunc *Attached = nullptr;
@@ -595,8 +632,14 @@ static const char *decompileHighC(neverd_session_t Sess, neverd_va_t FuncEntry,
     Attached = HF;
 
   std::vector<HighFunc> Single = {*Attached};
-  if (PlainC)
-    Single = std::move(Related);
+  if (PlainC) {
+    // The plain-C view keeps every related function (e.g. C++ catch funclets)
+    // except termination handlers gathered only to fill a `__finally`.
+    Single.clear();
+    for (HighFunc &Func : Related)
+      if (!SEHFuncletSources.count(Func.Entry))
+        Single.push_back(std::move(Func));
+  }
   std::string Out;
   llvm::raw_string_ostream OS(Out);
 
@@ -2138,8 +2181,11 @@ static const char *decompileAllImpl(neverd_session_t Sess,
     Opts.OnlyFunctionEntries = *Only;
     Opts.OmitRefusedFunctions = true;
   }
-  if (UseLlvmRoute)
+  if (UseLlvmRoute) {
     Opts.LiftMode = true;
+    // The unit names a body the LLVM emitter refuses and leaves it out.
+    Opts.OmitRefusedLLVMBodies = true;
+  }
   Opts.SourceProjection = true;
   // Symbolic source simplification is the caller's explicit choice for the
   // whole program, never a default.
@@ -2293,14 +2339,22 @@ static const char *decompileAllImpl(neverd_session_t Sess,
     COpts.UserNames = S ? &S->Renames : nullptr;
     COpts.AccessWidths = AccessWidths ? &*AccessWidths : nullptr;
     recordDefinitions(COpts);
+    // As in HighC's unit, a definition whose C cannot be written is left out
+    // and named.
+    std::vector<CEmitterOptions::RefusedDefinition> RefusedDefinitions;
+    COpts.RefusedDefinitions = &RefusedDefinitions;
+    std::string Unit;
     try {
+      llvm::raw_string_ostream UnitOS(Unit);
       LLVMCEmitter Emitter;
-      Emitter.emit(*R.Result.LlvmModule, OS, COpts, Debug, &R.Img);
+      Emitter.emit(*R.Result.LlvmModule, UnitOS, COpts, Debug, &R.Img);
     } catch (const std::exception &Error) {
       if (S)
         S->setError(emissionFailure(Error));
       return nullptr;
     }
+    OS << leftOutDefinitionNotes(R.Result)
+       << refusedDefinitionNotes(RefusedDefinitions) << Unit;
   } else {
     CEmitterOptions COpts;
     COpts.TheArch = R.Img.Arch;

@@ -6,6 +6,8 @@
 
 #pragma once
 
+#include "X86/LLVMHostX87Fixture.h"
+
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/AsmParser/LLLexer.h"
 #include "llvm/IR/IRBuilder.h"
@@ -147,6 +149,11 @@ inline void printHostCompilerFixture(const llvm::Module &Module,
     RemoveNewAnnotations(Function, Function.arg_size());
     for (auto &Block : Function)
       for (auto &Instruction : llvm::make_early_inc_range(Block)) {
+        // Stock host Clang does not register the fork's ambient x87 APIs.
+        // Native qualification uses the original IR and the fork toolchain;
+        // source-oracle fixtures retain the instructions in this clone.
+        if (lowerHostX87State(Instruction))
+          continue;
         if (auto *Call = llvm::dyn_cast<llvm::CallBase>(&Instruction))
           RemoveNewAnnotations(*Call, Call->arg_size());
         lowerHostConversionAnnotations(Instruction);

@@ -1239,6 +1239,22 @@ TEST_F(JTE_X86_32, StackMemcpyTableNeedsDedicatedEvidenceCeiling) {
            Low.JumpTables.front().Targets.size() == 8;
   };
 
+  // The table's initializer lies in the object's .data.rel.ro, which the
+  // loader maps read-only once relocated, as a linker's RELRO does. The
+  // budget proof starts only with that protection.
+  ASSERT_GE(Image.CodePtrRelocSlots.size(), 8u);
+  auto Initializer = std::find_if(
+      Image.Segments.begin(), Image.Segments.end(), [&](const auto &S) {
+        return S.contains(*Image.CodePtrRelocSlots.begin());
+      });
+  ASSERT_NE(Initializer, Image.Segments.end());
+  ASSERT_TRUE(Initializer->isWritable());
+  ASSERT_TRUE(Initializer->ReadOnlyAfterRelocations);
+  Initializer->ReadOnlyAfterRelocations = false;
+  EXPECT_FALSE(Recovered(
+      BuildWithBudget(neverd::limits::kMaxJumpTableStackEvidenceWork)));
+  Initializer->ReadOnlyAfterRelocations = true;
+
   const neverd::LowFunc Full =
       BuildWithBudget(neverd::limits::kMaxJumpTableStackEvidenceWork);
   ASSERT_TRUE(Recovered(Full));
@@ -10222,11 +10238,18 @@ a64StrictSourceSpanImage(bool RightWritable = false) {
   neverd::Segment Mapped;
   Mapped.Name = "rodata";
   Mapped.VA = 0x1000;
-  Mapped.Size = 0x20;
-  Mapped.FileSz = 0x20;
+  Mapped.Size = RightWritable ? 0x10 : 0x20;
+  Mapped.FileSz = Mapped.Size;
   Mapped.Flags = neverd::SegmentFlags::Readable;
-  Mapped.Data.resize(0x20);
+  Mapped.Data.resize(Mapped.Size);
   Image.Segments.push_back(std::move(Mapped));
+  if (RightWritable) {
+    // Runtime permissions belong to mappings, not finer section metadata.
+    neverd::Segment Writable = Image.Segments.front();
+    Writable.VA = 0x1010;
+    Writable.Flags = Writable.Flags | neverd::SegmentFlags::Writable;
+    Image.Segments.push_back(std::move(Writable));
+  }
 
   neverd::Section Left;
   Left.Name = ".rodata.left";
@@ -11869,6 +11892,16 @@ int scalar_record(int input) {
       << llvm::toString(ImageOrErr.takeError());
   auto &Image = *ImageOrErr;
   ASSERT_EQ(Image.DataPtrRelocSlots.size(), 2u);
+  auto Records = std::find_if(
+      Image.Segments.begin(), Image.Segments.end(), [&](const auto &S) {
+        return S.contains(*Image.DataPtrRelocSlots.begin());
+      });
+  ASSERT_NE(Records, Image.Segments.end());
+  ASSERT_TRUE(Records->isWritable());
+  // The loader maps the object's .data.rel.ro read-only once relocated, which
+  // supplies the immutable-source contract separately from pointer evidence.
+  EXPECT_TRUE(Records->ReadOnlyAfterRelocations);
+  EXPECT_TRUE(Image.readOnlyAfterRelocations(Records->VA, Records->Size));
   auto Valid = runPipelineWithEvidenceBudget(Image, 256);
   ASSERT_TRUE(Valid.Result.Success) << Valid.Result.Error;
 

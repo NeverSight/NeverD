@@ -137,15 +137,19 @@ bool functionOverlapsWanted(const ExceptionFunction &F,
     return true;
   if (!F.CodeRange.isValid())
     return false;
-  for (va_t Addr : Wanted)
-    if (F.CodeRange.contains(Addr) || F.CodeRange.Begin == Addr)
-      return true;
-  return false;
+  const auto At = Wanted.lower_bound(F.CodeRange.Begin);
+  return At != Wanted.end() && F.CodeRange.contains(*At);
+}
+
+void finishLanguageDecode(ExceptionFunction &F) {
+  F.DecodeProvenance->Language = {F.ParseStatus, std::move(F.Diagnostics)};
+  F.rebuildParseSummary();
 }
 
 } // namespace
 
 void ensureExceptionHandlers(BinaryImage &Img, const std::set<va_t> &Entries) {
+  Img.ExceptionMetadata.captureUnstructuredParseContributions();
   std::set<va_t> Wanted = Entries;
   if (Wanted.empty())
     Wanted = Img.LoadOnlyFunctionEntries;
@@ -209,6 +213,11 @@ void ensureExceptionHandlers(BinaryImage &Img, const std::set<va_t> &Entries) {
       if (!functionOverlapsWanted(F, Wanted))
         continue;
 
+      // Native unwind faults and language-table faults have separate owners.
+      // Later debug names may replace the latter without erasing the former.
+      F.establishDecodeProvenance();
+      F.ParseStatus = ExceptionParseStatus::Complete;
+      F.Diagnostics.clear();
       auto [It, Inserted] = PersonalityCache.try_emplace(F.PersonalityVA);
       if (Inserted)
         It->second = detail::resolvePersonality(Img, F.PersonalityVA);
@@ -268,8 +277,7 @@ void ensureExceptionHandlers(BinaryImage &Img, const std::set<va_t> &Entries) {
                 ? "unknown Windows language personality"
                 : "unknown Windows personality, installed with no language "
                   "data");
-        Img.ExceptionMetadata.ParseStatus = mergeExceptionParseStatus(
-            Img.ExceptionMetadata.ParseStatus, F.ParseStatus);
+        finishLanguageDecode(F);
         F.LanguageTablesResolved = true;
         Progress = true;
         continue;
@@ -346,8 +354,7 @@ void ensureExceptionHandlers(BinaryImage &Img, const std::set<va_t> &Entries) {
       default:
         break;
       }
-      Img.ExceptionMetadata.ParseStatus = mergeExceptionParseStatus(
-          Img.ExceptionMetadata.ParseStatus, F.ParseStatus);
+      finishLanguageDecode(F);
       F.LanguageTablesResolved = true;
       Progress = true;
       std::vector<va_t> ExtraBodies;
@@ -405,7 +412,36 @@ void ensureExceptionHandlers(BinaryImage &Img, const std::set<va_t> &Entries) {
       }
     }
   }
+  Img.ExceptionMetadata.captureUnstructuredParseContributions();
+  Img.ExceptionMetadata.rebuildParseSummary();
   Img.ExceptionMetadata.rebuildIndex();
+}
+
+void refreshExceptionHandlerNames(BinaryImage &Img) {
+  std::unordered_map<va_t, ExceptionPersonality> Named;
+  std::set<va_t> Entries;
+  Img.ExceptionMetadata.captureUnstructuredParseContributions();
+  for (ExceptionFunction &F : Img.ExceptionMetadata.Functions) {
+    if (!F.LanguageTablesResolved || !F.PersonalityVA ||
+        F.model() != ExceptionModel::WindowsTable ||
+        F.Personality != ExceptionPersonality::Unknown)
+      continue;
+    auto [At, Added] = Named.try_emplace(F.PersonalityVA);
+    if (Added)
+      At->second = detail::classifyPersonality(
+          detail::resolvePersonality(Img, F.PersonalityVA).second);
+    if (At->second == ExceptionPersonality::Unknown ||
+        At->second == ExceptionPersonality::None)
+      continue;
+    if (F.DecodeProvenance) {
+      F.DecodeProvenance->Language = {};
+      F.rebuildParseSummary();
+    }
+    F.LanguageTablesResolved = false;
+    Entries.insert(F.CodeRange.Begin);
+  }
+  if (!Entries.empty())
+    ensureExceptionHandlers(Img, Entries);
 }
 
 ExceptionHandlerState exceptionHandlerState(const BinaryImage &Img) {

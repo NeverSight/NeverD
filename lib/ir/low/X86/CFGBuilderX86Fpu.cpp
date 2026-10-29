@@ -81,8 +81,11 @@ bool replacesX87Tags(Intrinsic Kind) {
   switch (Kind) {
   case Intrinsic::X87Op:
   case Intrinsic::X87Fldenv:
+  case Intrinsic::X87Fldenv16:
   case Intrinsic::X87Frstor:
+  case Intrinsic::X87Frstor16:
   case Intrinsic::X87Fnsave:
+  case Intrinsic::X87Fnsave16:
   case Intrinsic::Fxrstor:
   case Intrinsic::Fxrstor64Mem:
   case Intrinsic::Xrstor:
@@ -116,6 +119,28 @@ bool isX87GuardedValueOperation(const LowOp &Op) {
              static_cast<Intrinsic>(Op.Inputs[0].Offset));
 }
 
+/// One integer operation of a lowered x87 instruction at \p Address. A
+/// constant in a numeric operand position is a number, as the lifter's own
+/// emission makes it (isNumericConstantOperand): never an address its value
+/// happens to name in an image.
+LowOp loweredX87Op(NdOp Code, va_t Address, size_t Seq, NdVar Output,
+                   std::initializer_list<NdVar> Inputs) {
+  LowOp Op;
+  Op.Opcode = Code;
+  Op.Addr = Address;
+  Op.Seq = Seq;
+  Op.Output = Output;
+  unsigned Index = 0;
+  for (NdVar V : Inputs) {
+    if (V.isConst() && V.Provenance == ConstantAddressProvenance::Unknown &&
+        isNumericConstantOperand(Code, Index))
+      V.Provenance = ConstantAddressProvenance::Scalar;
+    Op.addInput(V);
+    ++Index;
+  }
+  return Op;
+}
+
 // All signed FILD source widths fit exactly in binary80's 64-bit
 // significand, independently of PC/RC. Construct bits with integer LowIR so
 // neither C emitter depends on the host long double ABI. The tag prover must
@@ -124,15 +149,9 @@ std::vector<LowOp> lowerX87IntegerLoad(const LowOp &Load, uint64_t &NextTemp) {
   std::vector<LowOp> Ops;
   auto emit = [&](NdOp Code, unsigned Width,
                   std::initializer_list<NdVar> Inputs) {
-    LowOp Op;
-    Op.Opcode = Code;
-    Op.Addr = Load.Addr;
-    Op.Seq = Ops.size();
-    Op.Output = NdVar::tmp(NextTemp++, Width);
-    for (const auto &V : Inputs)
-      Op.addInput(V);
-    Ops.push_back(Op);
-    return Op.Output;
+    Ops.push_back(loweredX87Op(Code, Load.Addr, Ops.size(),
+                               NdVar::tmp(NextTemp++, Width), Inputs));
+    return Ops.back().Output;
   };
   const NdVar Value = Load.Inputs[0].Size == 8
                           ? Load.Inputs[0]
@@ -170,15 +189,9 @@ std::vector<LowOp> lowerX87Sign(const LowOp &Sign, uint64_t &NextTemp) {
   std::vector<LowOp> Ops;
   auto emit = [&](NdOp Code, unsigned Width,
                   std::initializer_list<NdVar> Inputs) {
-    LowOp Op;
-    Op.Opcode = Code;
-    Op.Addr = Sign.Addr;
-    Op.Seq = Ops.size();
-    Op.Output = NdVar::tmp(NextTemp++, Width);
-    for (const auto &V : Inputs)
-      Op.addInput(V);
-    Ops.push_back(Op);
-    return Op.Output;
+    Ops.push_back(loweredX87Op(Code, Sign.Addr, Ops.size(),
+                               NdVar::tmp(NextTemp++, Width), Inputs));
+    return Ops.back().Output;
   };
   const NdVar Significand =
       emit(NdOp::SUBBYTES, 8, {Sign.Inputs[0], NdVar::cst(0, 4)});
@@ -213,15 +226,9 @@ std::vector<LowOp> lowerX87Examine(const LowOp &Exam, bool Empty,
   std::vector<LowOp> Ops;
   auto emit = [&](NdOp Code, unsigned Width,
                   std::initializer_list<NdVar> Inputs) {
-    LowOp Op;
-    Op.Opcode = Code;
-    Op.Addr = Exam.Addr;
-    Op.Seq = Ops.size();
-    Op.Output = NdVar::tmp(NextTemp++, Width);
-    for (const auto &V : Inputs)
-      Op.addInput(V);
-    Ops.push_back(Op);
-    return Op.Output;
+    Ops.push_back(loweredX87Op(Code, Exam.Addr, Ops.size(),
+                               NdVar::tmp(NextTemp++, Width), Inputs));
+    return Ops.back().Output;
   };
   auto n = [](uint64_t Bits, unsigned Width = 2) {
     return NdVar::scalar(Bits, Width);

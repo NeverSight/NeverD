@@ -168,10 +168,18 @@ int shifts(int a) {
 
 // At -O0 a local label table is copied from its read-only initializer, an
 // object no symbol names: the copy reads the object the output declares,
-// not the address the image gives it.
+// not the address the image gives it. Without PIC the initializer lies in
+// .rodata; with PIC in .data.rel.ro, which the loader maps read-only once
+// relocated, as a linker does.
 TEST_F(X86_64_ImageTable, AnUnnamedInitializerIsDeclared) {
   KernelOptimization = "-O0";
-  expectRunsLikeSource(R"C(
+  for (const bool PIC : {false, true}) {
+    SCOPED_TRACE(PIC ? "PIC" : "-fno-pic");
+    std::vector<std::string> Flags = {"-target", "x86_64-linux-gnu"};
+    if (!PIC)
+      Flags.push_back("-fno-pic");
+    ASSERT_NO_FATAL_FAILURE(expectHighCRunsLikeSource(Flags,
+                                                      R"C(
 int loc8(int a) {
   const void *tab[8] = {&&L0, &&L1, &&L2, &&L3, &&L4, &&L5, &&L6, &&L7};
   unsigned acc = (unsigned)a;
@@ -214,7 +222,9 @@ int loc8(int a) {
   return (int)acc;
 }
 )C",
-                       "loc8", {"loc8"});
+                                                      "loc8", {"loc8"},
+                                                      {-3, 0, 1, 77}));
+  }
 }
 
 // `SA[i - 1]` takes one from a sum of SA's address and an index: SA is the
@@ -282,6 +292,29 @@ int offptr(int a) {
 // table no symbol sizes, whose strings the object's layout puts before it.
 // The code adds an entry back to the table in a variable it then reads
 // through, so one object spans from the first string through the table.
+// The object's constant pool, its writable G and its strings lie in that order
+// within a few bytes.  G is no part of the constants around it, so both
+// routes read G itself.
+TEST_F(X86_64_ImageTable, AnObjectBetweenConstantSectionsIsItsOwn) {
+  for (const bool Route : {false, true}) {
+    SCOPED_TRACE(Route ? "LLVM C" : "HighC");
+    LLVMC = Route;
+    ASSERT_NO_FATAL_FAILURE(expectRunsLikeSource(R"C(
+volatile double G = 2.5;
+int gp(double x, int a) __attribute__((noinline));
+int gp(double x, int a) {
+  const char *s = (a & 1) ? "odd" : "even";
+  return (int)(x * 4 + a * 0.5 + 0.25 * s[a & 3]);
+}
+int pf(int a) __attribute__((noinline));
+int pf(int a) { return gp(G, a); }
+int entry(int a) { return pf(a) + pf(a + 1) * 3; }
+)C",
+                                                 "entry",
+                                                 {"entry", "gp", "pf", "G"}));
+  }
+}
+
 TEST_F(X86_64_ImageTable, ASwitchTableReachesTheStringsBeforeIt) {
   expectRunsLikeSource(R"C(
 int strsw(int a) {

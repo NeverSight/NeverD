@@ -25,6 +25,7 @@ EXPECTED_TESTS = {
     "X87Translation.RefusesMissingStateUnsupportedFormAndForgedAddressSpace",
     "X87Translation.RefusesUnqualifiedHostPolicyAndProfile",
     "X87Translation.PureIntegerArtifactsStillHaveDifferentRuntimeAndCacheIdentity",
+    "X87Translation.ResetObjectsRetainTheInstructionAndOwnedProfile",
     "X87TranslationNative.IntegerInvocationCannotEnterLargerProfileEvenWithoutX87Calls",
     "X87TranslationNative.EveryTopAndPrecisionRoundingRetainsExactMemoryAndState",
     "X87TranslationNative.RefusalsAndMemoryFaultRetainCommittedPrefix",
@@ -33,6 +34,9 @@ EXPECTED_TESTS = {
     "X87TranslationNative.BranchesAndBackedgesPreserveTheOwnedStack",
     "X87TranslationNative.BudgetStopAndRestoreKeepExplicitState",
     "X87TranslationNative.FrozenObjectsMatchProductionSessionsAcrossControls",
+    "X87TranslationNative.FnopObjectsAndSessionsRetainStateAndRefusedPrefix",
+    "X87TranslationNative.EmmsObjectsAndSessionsRetainStateAndRefusedPrefix",
+    "X87TranslationNative.FemmsObjectsAndSessionsRetainStateAndRefusedPrefix",
 }
 
 
@@ -97,6 +101,59 @@ def audit_observations(observations):
             "session_and_block_agreement": True, "optimization_agreement": True}, objects
 
 
+def audit_reset_observations(observations):
+    expected = {(kind, case, level) for kind in range(3)
+                for case in range(75) for level in (0, 2)}
+    seen, objects, canonical = set(), set(), {}
+    for row in observations:
+        key = row["kind"], row["case"], row["level"]
+        if key not in expected or key in seen:
+            raise ValueError("unexpected or duplicate reset observation")
+        seen.add(key)
+        kind, case, level = key
+        refused = case >= 72
+        block_count = 1 if refused else 2
+        if (row["exit_reason"] != (6 if refused else 1) or
+                row["guest_instructions"] != (2 if refused else 3) or
+                row["blocks_translated"] != block_count or row["generated_bytes"] <= 0):
+            raise ValueError("unexpected reset session completion")
+        if row["after"] != row["session_after"] or not bytes.fromhex(row["before"]):
+            raise ValueError("reset direct invocation and session state disagree")
+        if len(row["blocks"]) != block_count:
+            raise ValueError("missing reset native block observation")
+        states = [row["before"], row["after"]]
+        for index, block in enumerate(row["blocks"]):
+            name = f"reset-{kind}-{case}-O{level}-block-{index}.o"
+            if block["object"] != name or name in objects:
+                raise ValueError("duplicate or unexpected reset object")
+            objects.add(name)
+            code = "C3" if index else "48C7C022110000" + ("D9D0", "0F77", "0F0E")[kind]
+            portable_status = 1 if index else (2, 6, 5)[case - 72] if refused else 0
+            if (block["guest_bytes"] != code or
+                    block["entry_pc"] != ("4009" if index else "4000") or
+                    block["status"] != (261 if refused else 260 if index else 256) or
+                    block["audit_stages"] != 511 or not block["registry"] or
+                    not block["artifact_identity"] or
+                    block["attempted"] is not (index == 0) or
+                    block["completed"] is not (index == 0 and not refused) or
+                    block["portable_status"] != portable_status):
+                raise ValueError("incomplete reset audit or wrong terminal block protocol")
+            if not bytes.fromhex(block["after"]):
+                raise ValueError("empty reset architectural state")
+            states.append(block["after"])
+        if states[-1] != row["after"]:
+            raise ValueError("final reset block state differs from observation")
+        identity = kind, case
+        if identity in canonical and canonical[identity] != states:
+            raise ValueError("reset LLVM optimization levels disagree")
+        canonical[identity] = states
+    if seen != expected:
+        raise ValueError("missing reset state observation")
+    return {"cases": len(canonical), "observations": len(seen), "objects": len(objects),
+            "refusals": 18, "session_and_block_agreement": True,
+            "optimization_agreement": True}, objects
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--driver", type=Path, required=True)
@@ -147,6 +204,10 @@ def main():
         record["tests"] = audit_tests(xml)
         observations = [json.loads(line) for line in (artifacts / "observations.jsonl").read_text().splitlines()]
         record["coverage"], objects = audit_observations(observations)
+        resets = [json.loads(line) for kind in range(3)
+                  for line in (artifacts / f"reset-observations-{kind}.jsonl").read_text().splitlines()]
+        record["reset_coverage"], reset_objects = audit_reset_observations(resets)
+        objects |= reset_objects
         if {path.name for path in artifacts.glob("*.o")} != objects:
             raise ValueError("missing or unexpected native object")
         for name in objects:

@@ -16,6 +16,7 @@
 
 #include "neverd/support/BinaryEncoding.h"
 
+#include "llvm/ADT/StringRef.h"
 #include "llvm/BinaryFormat/COFF.h"
 #include "llvm/Object/COFF.h"
 #include "llvm/Support/MathExtras.h"
@@ -24,6 +25,10 @@
 #include <cstring>
 
 namespace neverd {
+
+/// The symbol a PE linker defines at the image's own DOS header: code reaches
+/// the image's headers as `__ImageBase` plus an offset.
+inline constexpr llvm::StringLiteral kPEImageBaseSymbol("__ImageBase");
 
 constexpr uint64_t kPE32PlusOrdinalFlag = 1ULL << 63;
 constexpr uint64_t kPE32OrdinalFlag = 1ULL << 31;

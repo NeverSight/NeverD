@@ -66,28 +66,28 @@ struct Token {
   size_t start, end;
   unsigned kind = 0;
 };
-llvm::StringRef sourcePrefix(llvm::StringRef source) {
-  for (llvm::StringRef prefix : {llvm::StringRef(c_float::ContractionPolicy),
-                                 llvm::StringRef(kAArch64PAuthCRawCallHeader)})
-    if (source.starts_with(prefix))
-      return prefix;
-  return {};
-}
 std::vector<Token> tokens(std::string_view s) {
   std::vector<Token> result;
   size_t p = 0;
-  bool inPrefix = true;
+  bool inPreamble = true;
   while (p < s.size()) {
     auto start = p;
-    // Admit the backend's exact policy prefixes together before declarations.
-    // Their pragmas and raw-call bridge stay intact in the assembled source;
-    // arbitrary macros, conditional bodies and modified text remain refused.
-    if (inPrefix)
-      if (auto prefix = sourcePrefix(s.substr(p)); !prefix.empty()) {
-        p += prefix.size();
-        result.push_back({prefix.str(), start, p, 2});
+    // Keep the C backend's exact compiler policies as complete leading
+    // units. Other directives and changed helper bodies retain their
+    // ordinary validation, including a helper nested inside a condition.
+    if (inPreamble) {
+      const llvm::StringRef remaining(s.substr(p));
+      llvm::StringRef preamble;
+      if (remaining.starts_with(c_float::ContractionPolicy))
+        preamble = c_float::ContractionPolicy;
+      else if (remaining.starts_with(kAArch64PAuthCRawCallHeader))
+        preamble = kAArch64PAuthCRawCallHeader;
+      if (!preamble.empty()) {
+        p += preamble.size();
+        result.push_back({preamble.str(), start, p, 2});
         continue;
       }
+    }
     char c = s[p];
     if (std::isspace(static_cast<unsigned char>(c))) {
       ++p;
@@ -117,7 +117,7 @@ std::vector<Token> tokens(std::string_view s) {
       p = end + 2;
       continue;
     }
-    inPrefix = false;
+    inPreamble = false;
     size_t prefix = 0;
     for (auto pre : {"u8", "u", "U", "L"}) {
       auto n = std::char_traits<char>::length(pre);
@@ -220,7 +220,8 @@ std::vector<Definition> definitions(const std::vector<Token> &t,
   for (size_t i = 0; i < t.size(); ++i) {
     auto v = t[i].text;
     if (t[i].kind == 2) {
-      if (llvm::StringRef(v) == sourcePrefix(v)) {
+      if (llvm::StringRef(v) == c_float::ContractionPolicy ||
+          llvm::StringRef(v) == kAArch64PAuthCRawCallHeader) {
         start = i + 1;
         continue;
       }

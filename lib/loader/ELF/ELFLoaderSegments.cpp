@@ -16,6 +16,7 @@
 
 #include "neverd/Limits.h"
 #include "neverd/loader/BinaryImageFlags.h"
+#include "neverd/object/SectionNames.h"
 #include "neverd/support/BinaryEncoding.h"
 
 #include "llvm/BinaryFormat/ELF.h"
@@ -135,6 +136,14 @@ llvm::Error buildSegments(const llvm::object::ELFFile<ELFT> &ELF,
       Seg.FileOff = SH.sh_offset;
       Seg.FileSz = SH.sh_type == SHT_NOBITS ? 0 : SH.sh_size;
       Seg.Flags = elfSHFlagsToNd(SH.sh_flags);
+      // A compiler places constant data that needs relocations in
+      // `.data.rel.ro`, which a linker maps read-only once relocated (RELRO).
+      // The loader is the one that maps an object's sections, so it gives
+      // that mapping the same protection.
+      if (hasFlag(Seg.Flags, SegmentFlags::Writable) &&
+          SH.sh_type != SHT_NOBITS &&
+          section_names::isDataRelRoSectionName(Name))
+        Seg.ReadOnlyAfterRelocations = true;
       if (Seg.Size > InvalidVA - Seg.VA)
         return llvm::make_error<llvm::StringError>(
             "elf: allocatable section range overflows",

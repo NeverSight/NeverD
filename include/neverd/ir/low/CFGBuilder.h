@@ -1213,10 +1213,14 @@ private:
     LowInstructionTargetMode TargetMode = LowInstructionTargetMode::Preserve;
     std::vector<va_t> JumpTableTargets;
 
-    /// Original operand of an exact scalar branch. Keep it for revalidation
-    /// when newly decoded paths split the producer's basic block.
+    /// Original operand of a scalar branch. A finite cover retains INDIR_BR
+    /// and JumpTableTargets without granting any table-storage ownership.
+    /// Keep it for revalidation when new paths split the producer's block.
     std::optional<NdVar> ScalarBranchInput;
     bool RejectedScalarBranch = false;
+    /// All-path finite scalar target set, independent of memory-table proofs.
+    bool ComputedScalarTargets = false;
+    bool RejectedComputedTargets = false;
 
     /// x87 stack-top (TOP) at this instruction's entry/exit in lift (worklist)
     /// order, and whether it absolute-resets TOP (FNINIT/FNCLEX). fixupFpuStack
@@ -1250,7 +1254,7 @@ private:
                                      InsnRecord &Rec);
   using ScalarImageFacts =
       std::map<std::pair<va_t, uint16_t>, std::optional<uint64_t>>;
-  /// Close exact scalar constant branches on the completed CFG.
+  /// Close constant and finite scalar branches on the completed CFG.
   /// Every new path revalidates earlier proofs before the graph is published.
   bool recoverScalarConstantBranches(const BinaryImage &Img, Decoder &Dec,
                                      LowFunc &Func, size_t &RemainingWork,
@@ -1260,6 +1264,8 @@ private:
   /// jump table, the exact slot has one fixed target, so the safe model is a
   /// direct intra-function branch.
   bool resolveRelocatedInteriorBranch(const BinaryImage &Img, InsnRecord &Rec);
+  bool recoverComputedScalarBranches(const BinaryImage &Img, Decoder &Dec,
+                                     LowFunc &Func, size_t &RemainingWork);
   LowInstructionBoundary makeInstructionBoundary(const InsnRecord &Rec,
                                                  uint64_t FirstOp) const;
 

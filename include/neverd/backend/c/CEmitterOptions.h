@@ -142,10 +142,13 @@ struct CEmitterOptions {
     std::string Reason;
   };
   /// Where a unit lists the definitions it leaves out rather than failing:
-  /// one whose C throws is omitted with what it threw, in the unit's order,
-  /// and the others are written.  Null fails the unit at the first, as one
-  /// function's view does.  A rendering that records positions, a source
-  /// map or source names still fails, as its text follows one pass.
+  /// one whose source requirements fail, then one whose C throws, each in the
+  /// unit's order, is omitted with what it threw, and the others are written.
+  /// Null fails the unit at the first, as one function's view does.  A
+  /// rendering that records positions, a source map or source names still
+  /// fails, as its text follows one pass, and so does one whose requirements
+  /// fail under structured exception syntax, which writes funclets inside
+  /// their parents, or in a function whose body fills another's `__finally`.
   std::vector<RefusedDefinition> *RefusedDefinitions = nullptr;
   /// Given the named records a unit's types reach, through pointers and
   /// arrays, the definitions the program's local types give them.  A record

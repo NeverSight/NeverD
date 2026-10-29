@@ -259,9 +259,22 @@ compilation unit, declaration file and linkage name (or stated source name).
 Only unique, concrete, contiguous bodies starting at a unique native function
 entry are eligible. Aliases, overlapping ranges, entries inside fragments,
 compiler clones and ambiguous identities are excluded with counts and reasons.
-Origin/specification references use their owning compilation unit; cyclic
-references fail. Code must lie in executable allocated sections and file-backed
+Declaration file indexes use their owning compilation unit. Abstract-origin
+chains retain the original definition's source unit, including when GCC LTO
+places the concrete body in an artificial unit. A specification's declaration
+unit does not replace that definition unit; same-named local functions from
+different source units remain distinct. Cyclic references fail, and missing
+source origins remain excluded. Code must lie in executable allocated sections and file-backed
 executable load segments. Unsupported layouts fail rather than guessing a base.
+
+For PGO inputs, retain the instrumented build commands, training inputs and
+round-trip results, collected profile files and final profile-use build logs.
+Keep configure probes outside the profiling build: their reused temporary
+names do not identify stable program units. Require matching profile data for
+the actual compared units, and check that the generated configuration stays
+the same. A successful build or training run is not a matching-quality result.
+Treat opposite comparison directions and multiple builds of one project as
+correlated cases, not independent projects or release pairs.
 
 Preparation copies the debug binaries and provenance into `truth/`, emits
 `inputs/primary.elf` and `inputs/secondary.elf` with static symbols/debug data

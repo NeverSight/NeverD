@@ -6,6 +6,7 @@
 
 #include "../../../lib/ir/low/X86/RegistrationABIPrivate.h"
 #include "../../../lib/ir/low/X86/RegistrationCRTFrame.h"
+#include "../core/MappedSectionFlags.h"
 #include "gtest/gtest.h"
 
 #include "neverd/Limits.h"
@@ -2474,8 +2475,8 @@ TEST(RegistrationCallABI, CxxPersonalityRejectsStorageAndRuntimeConflicts) {
           Image.Segments[0].Flags | SegmentFlags::Writable;
       break;
     case 7:
-      Image.Sections[0].Flags =
-          Image.Sections[0].Flags | SegmentFlags::Writable;
+      setMappedSectionFlags(Image, Image.Sections[0],
+                            Image.Sections[0].Flags | SegmentFlags::Writable);
       break;
     case 8:
       Image.Segments.push_back(Image.Segments[0]);

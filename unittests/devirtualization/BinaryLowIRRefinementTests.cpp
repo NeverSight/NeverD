@@ -2880,7 +2880,7 @@ TEST(BinaryLowIRRefinement, PartitionedCoverageKeepsAllNativeAndCandidateArms) {
     EXPECT_EQ(Good.Proof.OriginalPaths, Paths);
     EXPECT_EQ(Good.Proof.CandidatePaths, Paths);
     EXPECT_EQ(Good.Proof.TerminalPairs, Paths * Paths);
-    EXPECT_EQ(Good.Proof.SolverQueries, Branches == 2 ? 88U : 270U);
+    EXPECT_EQ(Good.Proof.SolverQueries, Branches == 2 ? 77U : 201U);
     Limits.Execution.MaxSolverQueries = Good.Proof.SolverQueries;
     ASSERT_TRUE(
         P.check(Recovery.Residual, Witness::LiftedBits, Limits).proved());
@@ -2918,51 +2918,61 @@ TEST(BinaryLowIRRefinement, PartitionedCoverageKeepsAllNativeAndCandidateArms) {
 
 TEST(BinaryLowIRRefinement,
      OpaquePreservationCannotUpgradeSelectedUndefinedChoices) {
-  // CMP establishes AF=0; XOR then leaves AF undefined. LiftedBits keeps the
-  // old zero and ZeroBits selects zero. Another architectural choice reaches
-  // the vector write through LAHF and TEST. Entry flags remain arbitrary.
-  Program P({0x39, 0xc0, 0x31, 0xc0, 0x9f, 0xf6, 0xc4, 0x10, 0x75, 1, 0xc3,
-             0x66, 0x0f, 0xef, 0xf6, 0xc3});
-  P.Contract.RetainUnauditedNativeBoundaries = true;
-  P.Contract.NativePreservedState = LowIRNativePreservationRequirement{
-      LowPreservedStateSet::LegacyIntegerOpaqueV1,
-      LowIRNativePreservationQuantifier::SelectedWitness};
-  // Recover an independently safe candidate. Ordinary specialization also
-  // visits the vector arm and cannot model its 128-bit operation. The native
-  // proof must establish that this arm is unreachable for each named witness.
-  auto Safe = P;
-  std::fill_n(Safe.Image.Segments.front().Data.begin() + 11, 4, 0x90);
-  const auto Recovery = Safe.recover();
-  ASSERT_TRUE(Recovery.complete()) << Recovery.Diagnostic;
-  for (auto W : {Witness::LiftedBits, Witness::ZeroBits}) {
-    SCOPED_TRACE(static_cast<unsigned>(W));
-    const auto R = P.check(Recovery.Residual, W);
-    ASSERT_TRUE(R.proved()) << R.Proof.Diagnostic;
-    ASSERT_TRUE(R.Certificate->Relation.NativePreservation);
-    EXPECT_EQ(R.Certificate->Relation.NativePreservation->Quantifier,
-              LowIRNativePreservationQuantifier::SelectedWitness);
-    ASSERT_EQ(R.Certificate->Relation.NativeAuditBoundaries.size(), 1U);
-    EXPECT_EQ(
-        R.Certificate->Relation.NativeAuditBoundaries.front().Kind,
-        LowIRNativeAuditBoundaryKind::MissingUndefinedOutputsAndPreservedState);
+  // PXOR has an undefined-output audit but changes the opaque vector bank.
+  // PAND has neither audit. Both still require an unreachable vector arm;
+  // learning its undefined outputs cannot prove preservation of that bank.
+  for (const uint8_t Opcode : {uint8_t{0xef}, uint8_t{0xdb}}) {
+    SCOPED_TRACE(static_cast<unsigned>(Opcode));
+    const uint8_t Registers = Opcode == 0xef ? 0xf6 : 0xf7;
+    // CMP establishes AF=0; XOR then leaves AF undefined. LiftedBits keeps the
+    // old zero and ZeroBits selects zero. Another architectural choice reaches
+    // the vector write through LAHF and TEST. Entry flags remain arbitrary.
+    Program P({0x39, 0xc0, 0x31, 0xc0, 0x9f, 0xf6, 0xc4, 0x10, 0x75, 1, 0xc3,
+               0x66, 0x0f, Opcode, Registers, 0xc3});
+    P.Contract.RetainUnauditedNativeBoundaries = true;
+    P.Contract.NativePreservedState = LowIRNativePreservationRequirement{
+        LowPreservedStateSet::LegacyIntegerOpaqueV1,
+        LowIRNativePreservationQuantifier::SelectedWitness};
+    // Recover an independently safe candidate. Ordinary specialization also
+    // visits the vector arm and cannot model its 128-bit operation. The native
+    // proof must establish that this arm is unreachable for each named witness.
+    auto Safe = P;
+    std::fill_n(Safe.Image.Segments.front().Data.begin() + 11, 4, 0x90);
+    const auto Recovery = Safe.recover();
+    ASSERT_TRUE(Recovery.complete()) << Recovery.Diagnostic;
+    for (auto W : {Witness::LiftedBits, Witness::ZeroBits}) {
+      SCOPED_TRACE(static_cast<unsigned>(W));
+      const auto R = P.check(Recovery.Residual, W);
+      ASSERT_TRUE(R.proved()) << R.Proof.Diagnostic;
+      ASSERT_TRUE(R.Certificate->Relation.NativePreservation);
+      EXPECT_EQ(R.Certificate->Relation.NativePreservation->Quantifier,
+                LowIRNativePreservationQuantifier::SelectedWitness);
+      ASSERT_EQ(R.Certificate->Relation.NativeAuditBoundaries.size(), 1U);
+      EXPECT_EQ(R.Certificate->Relation.NativeAuditBoundaries.front().Kind,
+                Opcode == 0xef
+                    ? LowIRNativeAuditBoundaryKind::MissingPreservedState
+                    : LowIRNativeAuditBoundaryKind::
+                          MissingUndefinedOutputsAndPreservedState);
+      P.Contract.NativePreservedState->Quantifier =
+          LowIRNativePreservationQuantifier::AllUndefinedChoices;
+      refused(P.check(Recovery.Residual, W), Status::Unsupported);
+      P.Contract.NativePreservedState->Quantifier =
+          LowIRNativePreservationQuantifier::SelectedWitness;
+    }
     P.Contract.NativePreservedState->Quantifier =
         LowIRNativePreservationQuantifier::AllUndefinedChoices;
-    refused(P.check(Recovery.Residual, W), Status::Unsupported);
+    const auto All =
+        checkBinaryUndefinedIndependence(P.Image, Entry, P.Options, P.Contract);
+    EXPECT_EQ(All.Proof.Status, LowIRIndependenceStatus::Dependent)
+        << All.Proof.Diagnostic;
+    EXPECT_FALSE(All.Certificate);
     P.Contract.NativePreservedState->Quantifier =
         LowIRNativePreservationQuantifier::SelectedWitness;
+    // The safe chosen branch was essential, not permission to execute the
+    // vector operation, even when its undefined outputs have been audited.
+    P.Image.Segments.front().Data[8] = 0x74;
+    refused(P.check(Recovery.Residual), Status::Unsupported);
   }
-  P.Contract.NativePreservedState->Quantifier =
-      LowIRNativePreservationQuantifier::AllUndefinedChoices;
-  const auto All =
-      checkBinaryUndefinedIndependence(P.Image, Entry, P.Options, P.Contract);
-  EXPECT_EQ(All.Proof.Status, LowIRIndependenceStatus::Dependent)
-      << All.Proof.Diagnostic;
-  EXPECT_FALSE(All.Certificate);
-  P.Contract.NativePreservedState->Quantifier =
-      LowIRNativePreservationQuantifier::SelectedWitness;
-  // The safe chosen branch was essential, not permission to execute PXOR.
-  P.Image.Segments.front().Data[8] = 0x74;
-  refused(P.check(Recovery.Residual), Status::Unsupported);
 }
 
 TEST(BinaryLowIRLoopInference, OpaquePreservationNeedsEveryInductiveSource) {

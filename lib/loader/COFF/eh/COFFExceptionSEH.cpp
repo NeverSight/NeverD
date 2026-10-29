@@ -89,8 +89,8 @@ bool parseSEH(ExceptionFunction &F, const BinaryImage &Img) {
     return false;
   }
   const uint8_t *Records = nullptr;
-  if (!readBytes(Img, F.HandlerDataVA + 4, static_cast<size_t>(ByteSize),
-                 Records)) {
+  if (ByteSize && !readBytes(Img, F.HandlerDataVA + 4,
+                             static_cast<size_t>(ByteSize), Records)) {
     diagnose(F, ExceptionParseStatus::Malformed,
              "truncated __C_specific_handler scope table");
     return false;

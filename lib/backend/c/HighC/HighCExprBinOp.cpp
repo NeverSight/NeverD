@@ -11,6 +11,7 @@
 
 #include "../CDeferredValue.h"
 #include "../UnalignedMemory.h"
+#include "../render/X86/X86AtomicRmw.h"
 #include "HighCWriter.h"
 
 #include "neverd/Limits.h"
@@ -492,6 +493,14 @@ std::string HighCWriter::renderBinOpOperands(const HighExpr &E,
            " : " + exprStr(*E.Operands[2]) + ")";
   }
   auto atomicMemberAddr = [&]() -> std::string {
+    if (E.SourceReturnSlotOffset) {
+      auto Address = renderX86ReturnSlotAddress(
+          MemoryIdentifiers.allocate("llvm_return_slot"));
+      if (*E.SourceReturnSlotOffset)
+        Address = "((unsigned char *)" + Address + " + " +
+                  std::to_string(*E.SourceReturnSlotOffset) + ")";
+      return Address;
+    }
     if (E.Operands.empty() || !E.Operands[0])
       return {};
     if (E.MemoryAddressSpace == NdMemoryAddressSpace::Default)

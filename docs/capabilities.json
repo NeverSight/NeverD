@@ -1657,6 +1657,7 @@
           "neverd diff --profile",
           "neverd diff --region",
           "neverd diff --region-anchor",
+          "neverd diff --region-calls",
           "neverd diff --region-kind",
           "neverd diff --regions",
           "neverd diff --reopen",

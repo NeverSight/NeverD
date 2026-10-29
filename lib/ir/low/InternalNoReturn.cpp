@@ -32,6 +32,15 @@ bool statesNoReturn(const BinaryImage &Img) {
   return llvm::any_of(Img.UserNoReturn,
                       [](const auto &Stated) { return Stated.second; });
 }
+
+/// Whether a call to \p Callee never comes back by what the user states of
+/// it or by its name.
+bool callNeverReturns(const BinaryImage &Img, va_t Callee,
+                      const libc::NoReturnTargetIndex *Names) {
+  if (const auto Stated = Img.userNoReturnAt(Callee))
+    return *Stated;
+  return libc::isNoReturnTarget(Img, Callee, Names);
+}
 } // namespace
 
 InternalNoReturnIndex::InternalNoReturnIndex(
@@ -146,15 +155,23 @@ bool InternalNoReturnIndex::nothingReturns(va_t Target) const {
     if (auto It = Screens.find(Target); It != Screens.end())
       return It->second;
   }
+  // An x64, ARM or ARM64 image unwinds through a table entry for each
+  // function but a leaf, so no metadata may give a leaf routine its range;
+  // its straight-line flow can still end where nothing resumes it. An x86
+  // image has no such table, and no entry there marks a leaf.
+  if (screenedEnd(Target) == InvalidVA && Img.Format == BinaryFormat::COFF &&
+      Img.Arch != Arch::X86) {
+    const bool Ends = entryFlowNeverResumes(Target);
+    std::lock_guard<std::mutex> Lock(Mutex);
+    return Screens.emplace(Target, Ends).first->second;
+  }
   bool Returns = false;
   // Straight-line flow ends at a terminator other than a resumable trap, and
   // at a call to a routine stated or known by name never to return; padding
   // after either does not resume it. A return there is reached only by a
   // branch: unless one in the range targets it, nothing reaches it.
   const auto CallNeverReturns = [&](va_t Callee) {
-    if (const auto Stated = Img.userNoReturnAt(Callee))
-      return *Stated;
-    return libc::isNoReturnTarget(Img, Callee, NoReturnTargets);
+    return callNeverReturns(Img, Callee, NoReturnTargets);
   };
   // Each such return, with the padding before it: a branch to either reaches
   // the return.
@@ -192,6 +209,48 @@ bool InternalNoReturnIndex::nothingReturns(va_t Target) const {
   }
   std::lock_guard<std::mutex> Lock(Mutex);
   return Screens.emplace(Target, Decoded && !Returns).first->second;
+}
+
+bool InternalNoReturnIndex::entryFlowNeverResumes(va_t Target) const {
+  const Segment *Seg = Img.getSegmentFor(Target);
+  Decoder Dec;
+  if (!Seg || Target < Seg->VA || Target - Seg->VA >= Seg->Data.size() ||
+      !Dec.init(Img))
+    return false;
+  const va_t Limit =
+      Target + std::min<uint64_t>(limits::kMaxNoReturnScreenBytes,
+                                  Seg->VA + Seg->Data.size() - Target);
+  for (va_t At = Target; At < Limit;) {
+    DecodedInsn Insn;
+    const int Size =
+        Dec.selectMode(Img, At)
+            ? Dec.decodeOne(Seg->Data.data() + (At - Seg->VA),
+                            static_cast<size_t>(Limit - At), At, Insn)
+            : 0;
+    if (Size <= 0)
+      return false;
+    const va_t Callee = Dec.directCallTarget(Insn);
+    if (Callee != InvalidVA && callNeverReturns(Img, Callee, NoReturnTargets))
+      return true;
+    std::vector<LowOp> Ops;
+    try {
+      Dec.liftToLow(Insn, Ops);
+    } catch (const UnliftedInstruction &) {
+      return false;
+    }
+    for (const LowOp &Op : Ops) {
+      if (isArchitecturalNoReturn(Op))
+        return true;
+      if (Op.Opcode == NdOp::RETURN || Op.Opcode == NdOp::BRANCH ||
+          Op.Opcode == NdOp::COND_BR || Op.Opcode == NdOp::INDIR_BR)
+        return false;
+    }
+    // A resumable trap, or a terminator no lifted branch names.
+    if (Dec.isFunctionTerminator(Insn))
+      return false;
+    At += static_cast<va_t>(Size);
+  }
+  return false;
 }
 
 const std::vector<InternalNoReturnIndex::ScreenedInstruction> &

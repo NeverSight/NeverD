@@ -88,9 +88,22 @@ scroll; keyboard navigation also brings offscreen commands into view.
 
 Double-clicking a function name in a code view follows it in that same window,
 keeping its C or LLVM C representation even when the window is locked. Back and
-forward navigation also stays in the active code window, and within a function
-takes its cursor to the row of the place it returns to. Imports and global
-objects continue to open at their addresses in the disassembly or hex view.
+forward navigation also stays in the active code window and returns it to where
+it left, as Hex-Rays' Esc does: Back from the function puts the cursor on the
+name that was double-clicked, with the view scrolled as it was, and Forward
+returns to the place the function was left; within a function the cursor goes
+to the row of the place it returns to. As in IDA, each jump adds one stop to
+the history, and the stop follows the cursor: clicks and keys after a jump, in
+the code or the disassembly, add none, so Back returns to where the jump began
+and Forward to where the user left. The arrow beside the Back or Forward
+toolbar button lists the stops it reaches, nearest first, as IDA's does: each
+names its place, `main+1DA (2A2A)` or a segment and address outside a
+function, then the instruction or data the listing shows there. With a code
+window in focus, a stop it left names the line Back returns it to, numbered as
+its margin numbers it: `main:83 (2A2A)`. Picking one goes that many steps at
+once, and the stops on both sides stay. Imports and
+global objects continue to open at their addresses in the disassembly or hex
+view.
 Double-clicking a goto's label (`goto L_14024FAB5;`) moves the cursor to the
 label and the disassembly to the block it labels, as IDA's labels do; Back
 returns to the goto. Pseudocode and C name a label after its block's address,
@@ -366,9 +379,15 @@ operations in C can fold into one-line summaries too. Click a summary or press
 Keypad + on it to expand it; Keypad - folds the declarations again, and the
 context menu expands or collapses either kind. Hovering a type or macro the code
 declares, such as an unaligned access type, shows its declaration, and
-double-clicking it goes there. Double-clicking a function's name shows that
-function's pseudocode in place; an import's name opens its thunk, or its slot
-when it has none, in the disassembly, as do other names of data. Memory reads
+double-clicking it goes there. Hovering the name of an import a call names
+shows its type, as Hex-Rays' hint does, without the name the code already
+shows (`int32_t(char* __s1, char* __s2)` on `strcmp`), and under it each
+parameter after where it is passed (`rdi  char *__s1`); the hint goes once the
+mouse leaves the name. A function of the image shows no type there: only
+decompiling it types it, which could hold up the next jump for seconds.
+Double-clicking a function's name shows that function's pseudocode in place;
+an import's name opens its thunk, or its slot when it has none, in the
+disassembly, as do other names of data. Memory reads
 and writes print through the standard scalar types, `*(uint64_t *)p`. That C
 reads scalars at any address and through any type, so it is built for a target
 that allows unaligned access and with `-fno-strict-aliasing`, as its prelude
@@ -382,7 +401,10 @@ while it is held beyond an edge, extend with Shift and the arrows or a Shift
 click, or press **Ctrl+A** (also **Select all** in the context menu) for the
 whole function; **Ctrl+C** or the context menu's **Copy** copies it, and a
 right click inside the selection keeps it. Without a selection they copy the
-highlighted word under the cursor (see **Edit → Copy**).
+highlighted word under the cursor (see **Edit → Copy**). As in Hex-Rays, the
+bracket the cursor is on stands boxed with its partner, nested or lines away:
+a parenthesis, square bracket or brace of the code, not one in a string or
+comment.
 
 Global data is declared the way C source declares it, with the value the image
 holds: a string the code reaches by its address is its array

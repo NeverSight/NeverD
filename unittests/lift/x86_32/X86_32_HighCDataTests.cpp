@@ -23,6 +23,8 @@ class X86_32_HighCData : public HighCHostExecutionTest {};
 // through `.rodata@GOTOFF(%ebx,%eax,8)`.  The table is declared all the same,
 // as the bytes up to the end of its section.
 TEST_F(X86_32_HighCData, AnUnnamedTableIndexedThroughTheGotIsDeclared) {
+  // The C computes the table's 32-bit image addresses.
+  HostFlags = {"-m32"};
   expectHighCRunsLikeSource({"-target", "i386-linux-gnu", "-march=pentium4"},
                             R"C(
 int mix(int a) {

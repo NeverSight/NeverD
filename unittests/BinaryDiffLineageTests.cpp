@@ -695,35 +695,126 @@ TEST(BinaryDiffLineage, SourceRegionPagesDoNotBecomeAcceptedAssociations) {
     writeComparison(OS, Result, A, B);
     return Text;
   };
-  const auto L = load({Save()});
+  for (const bool Calls : {false, true}) {
+    Result.Settings.Regions.Calls = Calls;
+    Result.Regions.Calls = Calls;
+    Result.Regions.Hypotheses[0].Anchors = {0};
+    const auto L = load({Save()});
+    ASSERT_TRUE(L);
+    EXPECT_TRUE(L->edges().empty());
+    auto Query = readLineageQuery(
+        llvm::json::Object{{"kind", "native_regions"},
+                           {"revision", L->revision()},
+                           {"report", L->reports()[0].Evidence->ID}});
+    auto Page = lineagePage(*L, Query, {});
+    const auto &Row = *Page.JSON.getArray("items")->front().getAsObject();
+    EXPECT_EQ(Row.getNumber("confidence"), 0.75);
+    EXPECT_EQ(Row.getBoolean("native_authenticated"), false);
+    EXPECT_EQ(Row.getInteger("anchor_count"), 1);
+    EXPECT_EQ(Row.getString("profile"), regionProfile(Calls));
+    if (Calls)
+      EXPECT_EQ(Row.getString("call_evidence"),
+                "current_function_correspondence");
+    else
+      EXPECT_FALSE(Row.get("call_evidence"));
+    std::string Error;
+    const auto Saved = writeLineage(*L);
+    const auto Reopened = readLineage(Saved, {}, Error);
+    ASSERT_TRUE(Reopened) << Error;
+    EXPECT_EQ(writeLineage(*Reopened), Saved);
+    const auto ReopenedPage = lineagePage(*Reopened, Query, {});
+    const auto &ReopenedRow =
+        *ReopenedPage.JSON.getArray("items")->front().getAsObject();
+    EXPECT_EQ(ReopenedRow.getString("profile"), Row.getString("profile"));
+    EXPECT_EQ(ReopenedRow.getString("call_evidence"),
+              Row.getString("call_evidence"));
+    Query.Kind = "native_region_anchors";
+    Page = lineagePage(*L, Query, {});
+    const auto &Anchor = *Page.JSON.getArray("items")->front().getAsObject();
+    EXPECT_EQ(Anchor.getInteger("primary_function_index"), 0);
+    EXPECT_EQ(Anchor.getInteger("secondary_function_index"), 1);
+    EXPECT_FALSE(Anchor.get("primary_address"));
+    EXPECT_EQ(Anchor.getString("profile"), regionProfile(Calls));
+    EXPECT_EQ(Anchor.getBoolean("native_authenticated"), false);
+    EXPECT_EQ(Anchor.getString("semantic_validation"), "not_performed");
+    if (Calls)
+      EXPECT_EQ(Anchor.getString("call_evidence"),
+                "current_function_correspondence");
+    else
+      EXPECT_FALSE(Anchor.get("call_evidence"));
+    Query.Index = 1;
+    EXPECT_THROW((void)lineagePage(*L, Query, {}), std::invalid_argument);
+    // Detached native evidence has no fresh binding. Invalid stored coordinates
+    // must fail explicitly when queried rather than indexing unchecked memory.
+    Result.Regions.Hypotheses[0].Anchors = {999};
+    const auto Invalid = load({Save()});
+    ASSERT_TRUE(Invalid);
+    Query.Revision = Invalid->revision().str();
+    Query.Report = Invalid->reports()[0].Evidence->ID;
+    Query.Index = 0;
+    EXPECT_THROW((void)lineagePage(*Invalid, Query, {}), std::invalid_argument);
+  }
+}
+
+TEST(BinaryDiffLineage, UngroupedNativeAnchorsRetainEveryCoordinateAndPage) {
+  const auto A = program(0), B = program(1);
+  auto R = compare(A, B, {});
+  R.Settings.Regions.Enabled = true;
+  R.Settings.Regions.Calls = true;
+  R.Regions.Calls = true;
+  R.Regions.State = ComparisonState::ResourceLimited;
+  R.Regions.StoppedPhase = "regions:relationships";
+  for (uint32_t I = 0; I != 601; ++I)
+    R.Regions.Anchors.push_back(
+        {{I % 2, 0, 0, 1}, {(I + 1) % 2, 0, 0, 1}, false});
+  std::string Text;
+  llvm::raw_string_ostream OS(Text);
+  writeComparison(OS, R, A, B);
+  const auto L = load({Text});
   ASSERT_TRUE(L);
-  EXPECT_TRUE(L->edges().empty());
-  auto Query = readLineageQuery(
-      llvm::json::Object{{"kind", "native_regions"},
+  EXPECT_EQ(lineageSummary(*L).getBoolean("supports_all_region_anchors"), true);
+  auto Q = readLineageQuery(
+      llvm::json::Object{{"kind", "native_anchors"},
                          {"revision", L->revision()},
-                         {"report", L->reports()[0].Evidence->ID}});
-  auto Page = lineagePage(*L, Query, {});
-  const auto &Row = *Page.JSON.getArray("items")->front().getAsObject();
-  EXPECT_EQ(Row.getNumber("confidence"), 0.75);
+                         {"report", L->reports()[0].Evidence->ID},
+                         {"offset", 599},
+                         {"limit", 2}});
+  auto Page = lineagePage(*L, Q).JSON;
+  EXPECT_EQ(Page.getInteger("total"), 601);
+  ASSERT_EQ(Page.getArray("items")->size(), 2);
+  const auto &Row = *Page.getArray("items")->back().getAsObject();
+  EXPECT_EQ(Row.getInteger("index"), 600);
+  EXPECT_EQ(Row.getInteger("primary_function_index"), 0);
+  EXPECT_EQ(Row.getInteger("secondary_function_index"), 1);
+  EXPECT_EQ(Row.getString("profile"), "native-call-runs-v1");
+  EXPECT_EQ(Row.getString("call_evidence"), "current_function_correspondence");
   EXPECT_EQ(Row.getBoolean("native_authenticated"), false);
-  EXPECT_EQ(Row.getInteger("anchor_count"), 1);
-  Query.Kind = "native_region_anchors";
-  Page = lineagePage(*L, Query, {});
-  const auto &Anchor = *Page.JSON.getArray("items")->front().getAsObject();
-  EXPECT_EQ(Anchor.getInteger("primary_function_index"), 0);
-  EXPECT_EQ(Anchor.getInteger("secondary_function_index"), 1);
-  EXPECT_FALSE(Anchor.get("primary_address"));
-  Query.Index = 1;
-  EXPECT_THROW((void)lineagePage(*L, Query, {}), std::invalid_argument);
-  // Detached native evidence has no fresh binding. Invalid stored coordinates
-  // must fail explicitly when queried rather than indexing unchecked memory.
-  Result.Regions.Hypotheses[0].Anchors = {999};
-  const auto Invalid = load({Save()});
-  ASSERT_TRUE(Invalid);
-  Query.Revision = Invalid->revision().str();
-  Query.Report = Invalid->reports()[0].Evidence->ID;
-  Query.Index = 0;
-  EXPECT_THROW((void)lineagePage(*Invalid, Query, {}), std::invalid_argument);
+  EXPECT_EQ(Row.getString("report"), L->reports()[0].Evidence->ID);
+  EXPECT_FALSE(Row.get("hypothesis_id"));
+  EXPECT_FALSE(Row.get("hypothesis_index"));
+  EXPECT_TRUE(Page.get("next_offset")->getAsNull());
+  const auto Work = *Page.getInteger("work");
+  Q.MaxWork = Work;
+  EXPECT_EQ(lineagePage(*L, Q).JSON.getInteger("total"), 601);
+  Q.MaxWork = Work - 1;
+  expectStop(ComparisonState::ResourceLimited, [&] { lineagePage(*L, Q); });
+  Q.MaxWork = Work;
+  Q.Offset = 602;
+  EXPECT_THROW((void)lineagePage(*L, Q), std::invalid_argument);
+  Q.Offset = 601;
+  Page = lineagePage(*L, Q).JSON;
+  EXPECT_EQ(Page.getInteger("total"), 601);
+  EXPECT_TRUE(Page.getArray("items")->empty());
+  std::atomic<bool> Cancel = true;
+  ComparisonControl Control;
+  Control.Cancel = &Cancel;
+  expectStop(ComparisonState::Cancelled, [&] { lineagePage(*L, Q, Control); });
+  std::string Error;
+  const auto Reopened = readLineage(writeLineage(*L), {}, Error);
+  ASSERT_TRUE(Reopened) << Error;
+  Q.Offset = 599;
+  EXPECT_EQ(lineagePage(*Reopened, Q).JSON.getInteger("total"), 601);
+  EXPECT_EQ(Reopened->edges().size(), L->edges().size());
 }
 
 TEST(BinaryDiffLineage, HistoricalDecisionsOutsideInventoryRemainWarnings) {
@@ -859,6 +950,29 @@ TEST(BinaryDiffLineage, SSARegionPagesKeepOriginalAnchorsAndRespectStops) {
       Page.getArray("items")->front().getAsObject()->getInteger("primary_root"),
       1);
   EXPECT_TRUE(Page.get("next_offset")->getAsNull());
+  R.FlowRegions.Hypotheses.clear();
+  std::string UngroupedText;
+  llvm::raw_string_ostream UngroupedOS(UngroupedText);
+  writeComparison(UngroupedOS, R, A, B);
+  const auto Ungrouped = load({UngroupedText});
+  ASSERT_TRUE(Ungrouped);
+  const auto AllQuery = readLineageQuery(
+      llvm::json::Object{{"kind", "flow_anchors"},
+                         {"revision", Ungrouped->revision()},
+                         {"report", Ungrouped->reports()[0].Evidence->ID},
+                         {"offset", 1},
+                         {"limit", 1}});
+  const auto AllPage = lineagePage(*Ungrouped, AllQuery).JSON;
+  EXPECT_EQ(AllPage.getInteger("total"), 2);
+  const auto &AllRow = *AllPage.getArray("items")->front().getAsObject();
+  EXPECT_EQ(AllRow.getInteger("index"), 1);
+  EXPECT_EQ(AllRow.getInteger("primary_root"), 1);
+  EXPECT_EQ(AllRow.getBoolean("open_control_frontier"), true);
+  EXPECT_EQ(AllRow.getString("profile"), R.FlowRegions.Profile);
+  EXPECT_EQ(AllRow.getBoolean("native_authenticated"), false);
+  EXPECT_FALSE(AllRow.get("hypothesis_id"));
+  EXPECT_FALSE(AllRow.get("hypothesis_index"));
+  EXPECT_EQ(Ungrouped->edges().size(), Edges);
   Q.MaxWork = 1;
   expectStop(ComparisonState::ResourceLimited,
              [&] { (void)lineagePage(*L, Q, {}); });

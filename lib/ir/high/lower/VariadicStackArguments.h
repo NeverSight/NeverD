@@ -52,9 +52,11 @@ const PhiNode *registerPhi(const MedFunc &Func, const MedBlock &Block,
 /// The register at \p RegOff as it enters \p Block of \p Func: the block's
 /// phi of it, else the last definition along the first predecessor path that
 /// has one, else at function entry the copy that names its incoming value.
+/// With \p ParameterAtEntry, a register the function takes as a parameter
+/// and its entry holds no copy of enters as that parameter.
 bool reachingRegisterAtBlockEntry(const MedFunc &Func, const MedBlock &Block,
                                   uint64_t RegOff, const TargetRegInfo &TRI,
-                                  MedVar &Out);
+                                  MedVar &Out, bool ParameterAtEntry = false);
 
 /// The integer argument register at \p RegOff as the call at \p CallIdx of
 /// \p Block reads it: the block's last write to it before the call, else as
@@ -75,10 +77,14 @@ bool reachingRegisterAtCall(const MedFunc &Func, const MedBlock &Block,
 /// The values the call at \p CallIdx in \p Block stores to the pointer-wide
 /// slots from the stack pointer it is made with up, in slot order as far as
 /// they run unbroken.  A slot holds the latest store at its start since the
-/// block's previous call.
+/// block's previous call.  One that holds only a scratch register's undefined
+/// incoming value under the convention of a \p Format image passes nothing
+/// (holdsUndefinedIncomingScratch), as call-argument recovery decides: above
+/// the arguments it is left out, and below one it passes zero.
 std::vector<StackSlotValue>
 storedStackArguments(const MedFunc &Func, const MedBlock &Block, size_t CallIdx,
-                     Arch TheArch, HighEntryStackOffsets &Offsets);
+                     Arch TheArch, BinaryFormat Format,
+                     HighEntryStackOffsets &Offsets);
 
 } // namespace neverd::detail
 

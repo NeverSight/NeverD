@@ -20,6 +20,7 @@
 
 #include "neverd/ir/Limits.h"
 #include "neverd/ir/high/MedToHigh.h"
+#include "neverd/loader/BinaryImage.h"
 #include "neverd/support/Diagnostic.h"
 
 #include "llvm/ADT/DenseMap.h"
@@ -868,6 +869,8 @@ void MedToHighConverter::eliminateDeadStmts(HighFunc &Func) {
   // registers until DCE. Revisit home-slot preservation after those reads
   // disappear, while addresses still have their original SSA identities.
   stripPrologueEpilogue(Func);
+  if (Image)
+    elimUndefinedEntryScratchStores(Func, TargetArch, Image->abiFormat());
   elimUnreadPrivateFrameStores(Func, TargetArch);
   narrowSourceConcatLocals(Func);
   // Removing a vector carrier can expose a second, narrower scalar copy

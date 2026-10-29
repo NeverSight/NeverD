@@ -26,6 +26,7 @@
 #include "neverd/ir/med/LowToMedError.h"
 #include "neverd/ir/med/MedABIPass.h"
 #include "neverd/ir/med/MedCallConvention.h"
+#include "neverd/ir/med/MedPrologueSaves.h"
 #include "neverd/ir/med/MedReturnArguments.h"
 #include "neverd/ir/med/MedStackAlignment.h"
 #include "neverd/ir/med/MedTypePass.h"
@@ -33,6 +34,7 @@
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/ExecutableCodeOwnerIndex.h"
 #include "neverd/pipeline/Pipeline.h"
+#include "neverd/support/Parallel.h"
 
 #include "llvm/ADT/STLExtras.h"
 
@@ -338,6 +340,18 @@ OmittedCalleeMemo::keep(Callee &Holder, Conversion Converted) {
         (Converted.CalleesRead.size() + Converted.DirectCallTargets.size()) *
         sizeof(va_t);
   }
+  if (Converted.SourceOriginalBlocks) {
+    Converted.Bytes +=
+        sizeof(std::vector<LowBlock>) +
+        Converted.SourceOriginalBlocks->capacity() * sizeof(LowBlock);
+    for (const LowBlock &Block : *Converted.SourceOriginalBlocks)
+      Converted.Bytes +=
+          Block.Ops.capacity() * sizeof(LowOp) +
+          (Block.Succs.capacity() + Block.Preds.capacity()) * sizeof(int) +
+          (Block.ExceptionalSuccs.capacity() +
+           Block.ExceptionalPreds.capacity()) *
+              sizeof(ExceptionalEdge);
+  }
   Converted.Bytes += Converted.SourceStackInputs.capacity() *
                      sizeof(std::pair<int64_t, uint16_t>);
   if (Holder.Conversions.size() == MaxConversions) {
@@ -391,8 +405,7 @@ std::vector<va_t> calleesToRead(const MedFunc &F, const BinaryImage &Img,
   // even when that summary already proves that there are no stack arguments.
   std::set<const MedOp *> FrameBorrows;
   if (Img.Arch == Arch::X64 && Img.abiFormat() == BinaryFormat::COFF &&
-      F.CC == CallingConv::Win64 && F.EntryKind == StackEntryKind::Call &&
-      F.FrameSize > 0) {
+      F.CC == CallingConv::Win64 && F.EntryKind == StackEntryKind::Call) {
     std::vector<MedVar> Arguments;
     std::vector<const MedOp *> Calls;
     for (const MedBlock &Block : F.Blocks)
@@ -407,7 +420,8 @@ std::vector<va_t> calleesToRead(const MedFunc &F, const BinaryImage &Img,
     const auto Offsets =
         entryStackOffsets(F, Arguments, Img.Arch, Img.abiFormat(), F.EntryKind);
     for (size_t I = 0; I < Offsets.size(); ++I)
-      if (Offsets[I] && *Offsets[I] >= -F.FrameSize && *Offsets[I] < 0)
+      if (Offsets[I] && isSourcePrivateFrameAccess(F, Img.Arch, Img.abiFormat(),
+                                                   *Offsets[I], 1))
         FrameBorrows.insert(Calls[I]);
   }
   // A call through a function-pointer variable passes the arguments of the
@@ -440,6 +454,67 @@ std::vector<va_t> calleesToRead(const MedFunc &F, const BinaryImage &Img,
             Callees.push_back(Source->second);
     }
   return Callees;
+}
+
+/// Cheap source-query candidates, not an observation proof. Register spills,
+/// narrow entry views, forwarded entry registers, assembled partial arguments
+/// and positional stack holes may need a body even when native arity is known.
+std::vector<va_t> sourcePrefixCallees(const MedFunc &Func,
+                                      const BinaryImage &Image) {
+  std::vector<va_t> Result;
+  if (Image.Arch != Arch::X64 || Image.abiFormat() != BinaryFormat::COFF ||
+      Func.CC != CallingConv::Win64 || Func.Blocks.empty() ||
+      Func.SourceTypeHint || Func.SourceParametersBound)
+    return Result;
+  const auto &TRI = getTargetRegInfo(Image.Arch);
+  const auto Layout = TRI.integerArgumentLayout(Image.abiFormat());
+  std::map<uint64_t, uint16_t> Narrow;
+  for (const auto &Op : Func.Blocks.front().Ops) {
+    if (Op.Opcode != NdOp::COPY)
+      break;
+    if (Op.NumInputs == 1 && Op.Inputs[0].Kind == MedVar::Reg &&
+        Op.Inputs[0].SSAVer == 0 && Op.Inputs[0].Size < TRI.PointerSize &&
+        Layout.registerIndex(Op.Inputs[0].RegOff) >= 0)
+      Narrow.emplace(Op.Inputs[0].RegOff, Op.Inputs[0].Size);
+  }
+  using Key = std::tuple<MedVar::VarKind, int, int>;
+  const auto KeyOf = [](const MedVar &V) -> Key {
+    return {V.Kind, V.Id, V.SSAVer};
+  };
+  std::set<Key> Assembled;
+  std::vector<const MedOp *> Calls;
+  for (const auto &Block : Func.Blocks)
+    for (const auto &Op : Block.Ops) {
+      if (Op.Opcode == NdOp::STORE && Op.NumInputs == 2 &&
+          Op.Inputs[1].Kind == MedVar::Reg && Op.Inputs[1].SSAVer == 0 &&
+          Layout.registerIndex(Op.Inputs[1].RegOff) >= 0)
+        Narrow.try_emplace(Op.Inputs[1].RegOff, 0);
+      if (Op.Opcode == NdOp::CONCAT && Op.NumInputs == 2 &&
+          Op.Output.Size == TRI.PointerSize &&
+          Op.Inputs[1].Size < TRI.PointerSize)
+        Assembled.insert(KeyOf(Op.Output));
+      if (Op.Opcode == NdOp::CALL && Op.NumInputs && Op.Inputs[0].isConst() &&
+          !Op.SourceCallHint) {
+        Calls.push_back(&Op);
+        if (Op.CalleeStackArgs > int(Layout.Registers.size()) ||
+            forwardsSourceEntryRegister(Op, Layout))
+          Result.push_back(Op.Inputs[0].ConstVal);
+      }
+    }
+  if (Narrow.empty() && Assembled.empty())
+    return Result;
+  for (const auto *Op : Calls)
+    for (unsigned K = 1; K < Op->NumInputs; ++K) {
+      const auto &Argument = Op->Inputs[K];
+      const auto At = Narrow.find(Argument.RegOff);
+      if ((Argument.Kind == MedVar::Reg && At != Narrow.end() &&
+           At->second < Argument.Size) ||
+          Assembled.count(KeyOf(Argument))) {
+        Result.push_back(Op->Inputs[0].ConstVal);
+        break;
+      }
+    }
+  return Result;
 }
 
 /// The target of each direct call of \p F, in order.
@@ -593,6 +668,52 @@ public:
     }
     OmittedCalleeMemo::Conversion Converted{std::move(Body), {}};
     if (Converted.Body) {
+      if (Img.Arch == Arch::X64 && Img.abiFormat() == BinaryFormat::COFF &&
+          Lifted.hasCompleteLiftCoverage() &&
+          Lifted.UnsafeIndirectBranchAddresses.empty() &&
+          !Lifted.Blocks.empty() && Lifted.Blocks.front().StartAddr == Target &&
+          Lifted.Blocks.front().Preds.empty()) {
+        const auto Layout =
+            getTargetRegInfo(Img.Arch).integerArgumentLayout(Img.abiFormat());
+        if ((Lifted.Blocks.size() == 1 &&
+             Converted.Body->Params.size() > Layout.Registers.size()) ||
+            llvm::any_of(Converted.Body->Params,
+                         [&](const MedVar &Parameter) {
+                           return Parameter.Size <
+                                      getTargetRegInfo(Img.Arch).PointerSize &&
+                                  Layout.registerIndex(Parameter.RegOff) >= 0;
+                         }) ||
+            llvm::any_of(Lifted.Blocks.front().Ops,
+                         [&](const LowOp &Op) {
+                           return Op.Opcode == NdOp::STORE &&
+                                  Op.NumInputs == 2 && Op.Inputs[1].isReg() &&
+                                  Layout.registerIndex(Op.Inputs[1].Offset) >=
+                                      0;
+                         }) ||
+            llvm::any_of(Converted.Body->Blocks, [&](const MedBlock &Block) {
+              return llvm::any_of(Block.Ops, [&](const MedOp &Op) {
+                return forwardsSourceEntryRegister(Op, Layout);
+              });
+            })) {
+          // Keep the original operations and edges under this conversion's
+          // existing memory budget. Instruction boundaries are not read by
+          // the source input proof and need not be duplicated in the cache.
+          auto Blocks = std::make_shared<std::vector<LowBlock>>();
+          Blocks->reserve(Lifted.Blocks.size());
+          for (const LowBlock &Original : Lifted.Blocks) {
+            auto &Block = Blocks->emplace_back();
+            Block.Id = Original.Id;
+            Block.StartAddr = Original.StartAddr;
+            Block.EndAddr = Original.EndAddr;
+            Block.Ops = Original.Ops;
+            Block.Succs = Original.Succs;
+            Block.Preds = Original.Preds;
+            Block.ExceptionalSuccs = Original.ExceptionalSuccs;
+            Block.ExceptionalPreds = Original.ExceptionalPreds;
+          }
+          Converted.SourceOriginalBlocks = std::move(Blocks);
+        }
+      }
       if (auto Hint = inferIncomingStackLeaf(Img, Lifted, *Converted.Body)) {
         MedFunc Bound = *Converted.Body;
         Bound.SourceTypeHint = *Hint;
@@ -652,10 +773,11 @@ private:
   CFGBuilder Builder;
 };
 
-std::vector<std::shared_ptr<const MedFunc>>
-omittedDirectCalleeSignatures(const BinaryImage &Img,
-                              const PipelineResult &Result,
-                              bool SourceDeclarations) {
+std::vector<std::shared_ptr<const MedFunc>> omittedDirectCalleeSignatures(
+    const BinaryImage &Img, const PipelineResult &Result,
+    bool SourceDeclarations, bool SourceParameterReads,
+    std::map<va_t, std::shared_ptr<const std::vector<LowBlock>>>
+        &SourceBlocks) {
   const auto *Convention = callArgumentConvention(Img.Arch, Img.abiFormat());
   if (!needsCallSignatureRecovery(Convention) || Img.IsRelocatable)
     return {};
@@ -679,6 +801,32 @@ omittedDirectCalleeSignatures(const BinaryImage &Img,
   };
   for (const MedFunc &F : Result.MedFuncs)
     enqueueCallees(calleesToRead(F, Img, Result));
+  const auto enqueueSourcePrefixes = [&](const MedFunc &Func) {
+    if (SourceParameterReads)
+      for (va_t Target : sourcePrefixCallees(Func, Img))
+        if (!Result.CallPrototypeArguments.count(Target) &&
+            !Result.CallUserPrototypes.count(Target))
+          enqueue(Target);
+  };
+  if (SourceParameterReads) {
+    std::vector<uint64_t> Weights;
+    for (const auto &Func : Result.MedFuncs) {
+      uint64_t Weight = 1;
+      for (const auto &Block : Func.Blocks)
+        Weight += Block.Ops.size();
+      Weights.push_back(Weight);
+    }
+    std::vector<std::vector<va_t>> Prefixes(Result.MedFuncs.size());
+    parallelForEachWeighted(Weights, [&](auto Claim, size_t N) {
+      for (size_t I; (I = Claim()) < N;)
+        Prefixes[I] = sourcePrefixCallees(Result.MedFuncs[I], Img);
+    });
+    for (const auto &Targets : Prefixes)
+      for (va_t Target : Targets)
+        if (!Result.CallPrototypeArguments.count(Target) &&
+            !Result.CallUserPrototypes.count(Target))
+          enqueue(Target);
+  }
   // A complete entry-read summary proves argument count, not pointer types.
   // Source LLVM also needs the typed declarations of these direct callees.
   // Share the existing read budget and memo; descendants still follow only
@@ -732,7 +880,17 @@ omittedDirectCalleeSignatures(const BinaryImage &Img,
       enqueueCallees(Conversion.CalleesRead);
     else
       enqueueCallees(calleesToRead(*Conversion.Body, Img, Result));
+    // Descendants retain this reader's deterministic breadth-first budget:
+    // a late child cannot consume another direct callee's support allowance.
+    enqueueSourcePrefixes(*Conversion.Body);
+    // System V's model takes every register a variadic prologue saves: as an
+    // omitted callee's signature it would make its callers pass registers
+    // they never set.
+    if (Conversion.Body->takesVectorArgumentRegisters())
+      continue;
     Signatures.push_back(Conversion.Body);
+    if (SourceParameterReads && Conversion.SourceOriginalBlocks)
+      SourceBlocks.emplace(Target, Conversion.SourceOriginalBlocks);
   }
   return Signatures;
 }
@@ -839,12 +997,14 @@ std::optional<MedFunc> scalarCalleeDeclaration(const BinaryImage &Image,
 
 /// The integer register arguments a call to \p Func passes through: its
 /// register parameters through \p MaxRegisterIndex, but only the named ones
-/// of a variadic function whose save area spills the rest.
+/// of a variadic function whose save area spills the rest, as AAPCS's save
+/// area (VariadicFirstRegister) or System V's va_start (VaStartNamedGPRs)
+/// counts them.  Past them a call passes what its caller sets.
 int callRegisterArity(const MedFunc &Func, int MaxRegisterIndex) {
   const int Arity = MaxRegisterIndex + 1;
-  return Func.IsVariadic && Func.VariadicFirstRegister >= 0
-             ? std::min(Arity, Func.VariadicFirstRegister)
-             : Arity;
+  const int Named = Func.VariadicFirstRegister >= 0 ? Func.VariadicFirstRegister
+                                                    : Func.VaStartNamedGPRs;
+  return Func.IsVariadic && Named >= 0 ? std::min(Arity, Named) : Arity;
 }
 
 /// Count FP arguments a callee takes from its entry-block live-in self-copies
@@ -1349,7 +1509,8 @@ readIncomingStackCallees(const BinaryImage &Image, PipelineResult &Result,
 
 void confirmOmittedStructReturns(
     const BinaryImage &Image, const PipelineResult &Result,
-    std::map<va_t, std::vector<MedReturnReg>> &Candidates) {
+    std::map<va_t, std::vector<MedReturnReg>> &Candidates,
+    const std::set<va_t> &FirstWordObserved) {
   if (Candidates.empty())
     return;
   if (auto *Memo = Result.CalleeSignatureMemo.get())
@@ -1383,7 +1544,8 @@ void confirmOmittedStructReturns(
             Reader.conversion(It->first, Read, &Read != &Local, Low);
         Proven = Conversion.Body && !Conversion.Body->SourceParametersBound &&
                  returnsStructFields(*Conversion.Body, It->second, Image.Arch,
-                                     Image.abiFormat());
+                                     Image.abiFormat(),
+                                     FirstWordObserved.count(It->first) != 0);
       }
     }
     if (Proven)
@@ -1434,7 +1596,7 @@ AnalysisCacheWarmup warmOmittedCallees(const BinaryImage &Img,
 
 void recoverModuleCallAbi(const BinaryImage &Img, PipelineResult &Result,
                           const std::map<va_t, std::string> &AllFuncNames,
-                          bool SourceDeclarations) {
+                          bool SourceDeclarations, bool SourceParameterReads) {
   Result.OmittedCalleeDeclarations.clear();
   const CallArgumentConvention *Convention =
       callArgumentConvention(Img.Arch, Img.abiFormat());
@@ -1460,12 +1622,19 @@ void recoverModuleCallAbi(const BinaryImage &Img, PipelineResult &Result,
   if (Memo)
     Memo->adopt(Img, Result);
   if (!Result.OmittedCallees || Result.OmittedCallees->Functions != Functions ||
-      Result.OmittedCallees->IncludesSourceDeclarations != SourceDeclarations)
+      Result.OmittedCallees->IncludesSourceDeclarations != SourceDeclarations ||
+      Result.OmittedCallees->IncludesSourceParameterReads !=
+          SourceParameterReads) {
+    OmittedCalleeBodies Omitted;
+    Omitted.Functions = Functions;
+    Omitted.IncludesSourceDeclarations = SourceDeclarations;
+    Omitted.IncludesSourceParameterReads = SourceParameterReads;
+    Omitted.Bodies = omittedDirectCalleeSignatures(
+        Img, Result, SourceDeclarations, SourceParameterReads,
+        Omitted.SourceOriginalBlocks);
     Result.OmittedCallees =
-        std::make_shared<const OmittedCalleeBodies>(OmittedCalleeBodies{
-            Functions,
-            omittedDirectCalleeSignatures(Img, Result, SourceDeclarations),
-            SourceDeclarations});
+        std::make_shared<const OmittedCalleeBodies>(std::move(Omitted));
+  }
   // The passes before recovery read the kept bodies in place.
   const std::vector<std::shared_ptr<const MedFunc>> &OmittedCallees =
       Result.OmittedCallees->Bodies;

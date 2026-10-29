@@ -174,4 +174,41 @@ TEST(SourceStackFrame, RequiresTheWholeTemporaryToSurviveAnInstruction) {
   F.FunctionTemporaries = {{Pointer.Offset, 8}};
   ASSERT_EQ(analyzeSourceStackFrame(F, Arch::X64).Accesses.size(), 1u);
 }
+TEST(SourceStackFrame, EntryPrefixRetainsOnlyExactCoordinates) {
+  for (unsigned Mode = 0; Mode < 9; ++Mode) {
+    SCOPED_TRACE(Mode);
+    auto F = fixture();
+    const auto SP = F.Blocks[0].Ops[0].Output;
+    const auto FP = NdVar::reg(getTargetRegInfo(Arch::X64).FramePointer, 8);
+    const auto Address = NdVar::tmp(TmpBase, 8);
+    auto &Ops = F.Blocks[0].Ops;
+    Ops = {op(NdOp::INT_SUB, 0x1000, SP, {SP, NdVar::scalar(32, 8)}),
+           op(NdOp::COPY, 0x1004, FP, {SP}),
+           op(NdOp::INT_ADD, 0x1008, Address, {FP, NdVar::scalar(72, 8)}),
+           op(NdOp::LOAD, 0x1008, NdVar::reg(0, 8), {Address})};
+    Ops.back().Seq = 1;
+    if (Mode == 1)
+      Ops[1].Output.Size = 4;
+    if (Mode == 2)
+      Ops.back().Addr = 0x100C;
+    if (Mode == 3)
+      Ops[2].Opcode = NdOp::INT_OR;
+    if (Mode == 4)
+      Ops[2].Inputs[1] = NdVar::scalar(UINT64_MAX >> 1, 8);
+    if (Mode >= 5 && Mode <= 7)
+      Ops.insert(Ops.begin() + 2, op(Mode == 5   ? NdOp::CALL
+                                     : Mode == 6 ? NdOp::BRANCH
+                                                 : NdOp::INTRINSIC,
+                                     0x1006, {}, {NdVar::scalar(0x2000, 8)}));
+    size_t Remaining = Mode == 8 ? 1 : 256;
+    const auto Accesses = sourceEntryStackAccesses(Ops, Arch::X64, Remaining);
+    if (Mode == 0) {
+      ASSERT_EQ(Accesses.size(), 1u);
+      EXPECT_EQ(Accesses.front().Offset, 40);
+      EXPECT_EQ(Accesses.front().Bytes, 8);
+      EXPECT_EQ(Accesses.front().Sequence, 1);
+    } else
+      EXPECT_TRUE(Accesses.empty());
+  }
+}
 } // namespace

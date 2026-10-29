@@ -9,6 +9,7 @@
 #include "RecoveryDigest.h"
 
 #include "neverd/ir/low/LowRawEnvironment.h"
+#include "neverd/ir/low/LowUndefinedEffects.h"
 
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/Endian.h"
@@ -122,7 +123,15 @@ llvm::Expected<std::string> graphDigest(const LowFunc &F) {
       !F.UnprovenReturnAddresses.empty() || !F.TruncatedPathAddresses.empty() ||
       F.CalleePopBytes || !F.CodeRefTargets.empty())
     return invalid("raw environment graph carries unsupported sidecars");
-  RecoveryDigest H("neverd-raw-environment-graph-v1");
+  // Graphs whose operations fit six stored input slots keep the v1 bytes.
+  // Extended operands or stored extension bits select v2, binding every slot.
+  const bool V1 = llvm::all_of(F.Blocks, [](const auto &B) {
+    return llvm::all_of(B.Ops, lowOperationFitsV1InputSlots);
+  });
+  const size_t InputSlots =
+      V1 ? kLowUndefinedV1InputSlots : std::size(LowOp{}.Inputs);
+  RecoveryDigest H(V1 ? "neverd-raw-environment-graph-v1"
+                      : "neverd-raw-environment-graph-v2");
   H.number(F.Entry);
   H.number(F.OriginalSize);
   H.text(F.Name);
@@ -151,7 +160,7 @@ llvm::Expected<std::string> graphDigest(const LowFunc &F) {
     for (const auto &Op : B.Ops) {
       if (Op.NumInputs > std::size(Op.Inputs))
         return invalid("raw environment graph has an invalid operand count");
-      H.operation(Op);
+      H.operation(Op, InputSlots);
     }
     H.number(B.InstructionBoundaries.size());
     for (const auto &Boundary : B.InstructionBoundaries)
@@ -164,7 +173,15 @@ llvm::Expected<std::string> graphDigest(const LowFunc &F) {
 }
 
 std::string evidenceDigest(const SpecializationResult &R) {
-  RecoveryDigest H("neverd-raw-environment-evidence-v1");
+  // As for the graph: exits whose original operations fit six stored input
+  // slots keep the v1 bytes, and any other exit selects v2.
+  const bool V1 = llvm::all_of(R.ExternalExits, [](const auto &E) {
+    return llvm::all_of(E.Original.Ops, lowOperationFitsV1InputSlots);
+  });
+  const size_t InputSlots =
+      V1 ? kLowUndefinedV1InputSlots : std::size(LowOp{}.Inputs);
+  RecoveryDigest H(V1 ? "neverd-raw-environment-evidence-v1"
+                      : "neverd-raw-environment-evidence-v2");
   H.number(R.Origins.size());
   for (const auto &O : R.Origins) {
     H.number(O.ResidualAddress);
@@ -188,7 +205,7 @@ std::string evidenceDigest(const SpecializationResult &R) {
     // operation digest deliberately ignores. Raw receipt integrity is exact.
     H.number(E.Original.Ops.size());
     for (const auto &Op : E.Original.Ops)
-      H.operation(Op);
+      H.operation(Op, InputSlots);
   }
   H.number(static_cast<unsigned>(R.Status));
   H.text(R.Diagnostic);

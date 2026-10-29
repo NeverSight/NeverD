@@ -58,8 +58,17 @@ def save(path: Path, value: dict) -> None:
         output.write("\n")
 
 
+def recorded_path(path: Path, root: Path) -> str:
+    try:
+        return os.path.relpath(path, root)
+    except ValueError:
+        # Windows cannot express a relative path across drive letters. The
+        # receipt reader also accepts an absolute path and still checks its hash.
+        return str(path.resolve())
+
+
 def artifact(path: Path, root: Path) -> dict:
-    return {"path": os.path.relpath(path, root), "sha256": digest(path)}
+    return {"path": recorded_path(path, root), "sha256": digest(path)}
 
 
 def checked_artifact(record: dict, root: Path) -> Path:

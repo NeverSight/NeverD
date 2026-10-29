@@ -271,8 +271,11 @@ void fillUnstructuredGotoSkeleton(HighFunc &Func, const MedFunc &Med);
 /// widest direct call stores from the call's stack pointer up, which MedToHigh
 /// seeds where its va_arg walk reads its overflow.  For a convention whose
 /// calls take their arguments from callee summaries, which recover no call
-/// arguments for finalizeVariadicCallees to count.
-void sizeVariadicOverflowFromStores(std::vector<MedFunc> &Funcs, Arch TheArch);
+/// arguments for finalizeVariadicCallees to count.  A slot holding only a
+/// scratch register's undefined incoming value under the convention of a
+/// \p Format image is no argument (holdsUndefinedIncomingScratch).
+void sizeVariadicOverflowFromStores(std::vector<MedFunc> &Funcs, Arch TheArch,
+                                    BinaryFormat Format);
 
 /// What its name says of a call target outside \p Funcs, or of one named as
 /// a C library routine (markVaListCalls): how many integer parameters it
@@ -608,12 +611,11 @@ private:
   const MedCallClobber *findCallClobber(const MedVar &V) const;
   /// Per-function indexes for the Win64 callee-save parameter mapping in
   /// medvarToExpr: register COPYs whose source is an entry parameter (in
-  /// block/op order, with that parameter's index), and every (Id, SSAVer)
-  /// with a computed def (anything but a COPY of a register or parameter).
+  /// block/op order, with that parameter's index), and every defined SSA value.
   /// Built lazily for \c ParamCopyIndexFunc.
   const MedFunc *ParamCopyIndexFunc = nullptr;
   std::vector<std::pair<const MedOp *, int>> ParamSourceCopies;
-  std::set<std::pair<int, int>> ComputedVersions;
+  VarKeySet DefinedVersions;
   /// A native read is evaluated at its statement, then used as an SSA value.
   /// Re-expanding it at a use could cross an aliasing write or repeat the read.
   VarKeySet MemoryReadOutputs;

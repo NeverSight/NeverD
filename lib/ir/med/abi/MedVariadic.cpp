@@ -29,10 +29,14 @@
 
 #include "llvm/ADT/STLExtras.h"
 
+#include <algorithm>
+#include <cstddef>
 #include <functional>
 #include <map>
 #include <optional>
 #include <set>
+#include <utility>
+#include <vector>
 
 namespace neverd {
 namespace med_variadic_detail {
@@ -224,9 +228,11 @@ void detectVariadic(MedFunc &Func, const TargetRegInfo &TRI, Arch TargetArch,
   std::optional<int> FirstVariadicRegister;
   std::optional<int> FirstVariadicVectorRegister;
   std::optional<uint64_t> X64VaStartWord;
+  std::vector<std::pair<size_t, size_t>> UnreadVectorSpills;
   Func.VaListDisplacement.reset();
   Func.VaRegisterSaveArea.reset();
   Func.VaNamedIntegerRegisters = -1;
+  Func.VaStartNamedGPRs = -1;
   switch (TargetArch) {
   case Arch::X64: {
     uint64_t VaStartWord = 0;
@@ -250,8 +256,11 @@ void detectVariadic(MedFunc &Func, const TargetRegInfo &TRI, Arch TargetArch,
       Marked = hasDarwinVariadicPrologue(S);
     } else {
       Marked = hasAAPCS64VariadicPrologue(S);
-      if (Marked)
+      if (Marked) {
         FirstVariadicRegister = aapcs64FirstVariadicRegister(S);
+        UnreadVectorSpills =
+            unreadAAPCS64VectorSpills(S, FirstVariadicRegister.value_or(-1));
+      }
     }
     break;
   case Arch::ARM:
@@ -298,6 +307,25 @@ void detectVariadic(MedFunc &Func, const TargetRegInfo &TRI, Arch TargetArch,
       Func.VaNamedIntegerRegisters = static_cast<int>(
           (*X64VaStartWord & 0xFFFFFFFFu) / limits::kX64VaGpOffsetStep);
     }
+  // gp_offset alone counts the named integer registers, whatever the rest of
+  // the va_list shows (va_arg's update of overflow_arg_area hides where
+  // va_start pointed it).  Past them a call passes what its caller sets.
+  if (X64VaStartWord)
+    if (const auto Named = x64VaStartNamedGPRs(S, *X64VaStartWord))
+      Func.VaStartNamedGPRs = *Named;
+  // q0-q7 carry only the floating and vector arguments a caller passes, and
+  // this function's va_arg reads none: it saves them where no read observes
+  // them, so neither C route writes their unknown entry values.  The stores
+  // go last, as the scan above indexes the operations.
+  std::map<size_t, std::vector<size_t>> UnreadByBlock;
+  for (const auto &[Block, Index] : UnreadVectorSpills)
+    UnreadByBlock[Block].push_back(Index);
+  for (auto &[Block, Indices] : UnreadByBlock) {
+    std::sort(Indices.begin(), Indices.end(), std::greater<size_t>());
+    auto &Ops = Func.Blocks[Block].Ops;
+    for (size_t Index : Indices)
+      Ops.erase(Ops.begin() + static_cast<std::ptrdiff_t>(Index));
+  }
 }
 
 } // namespace neverd

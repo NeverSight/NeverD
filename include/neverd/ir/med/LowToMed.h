@@ -281,6 +281,10 @@ private:
   /// Keep the architectural data registers of checked ordinary SEH callbacks
   /// on explicit state edges before SSA applies the ordinary calling ABI.
   void modelSEHFinallyRegisters(MedFunc &Func);
+  /// Replace each certified same-frame Windows local unwind by the
+  /// termination-handler calls it makes and a jump to its target, before SSA
+  /// (MedFunc::SEHLocalUnwindExits).
+  void modelSEHLocalUnwindExits(MedFunc &Func, const LowFunc &Low);
 
   // --- Architecture-specific sub-register fixups (LLVM target-dispatch) ---
   // Each helper guards on TargetArch internally and is a no-op on other
@@ -315,6 +319,14 @@ private:
   RelativeLiteralOutputs armRelativeLiteralOutputs(const LowFunc &Low,
                                                    Arch TheArch,
                                                    BinaryFormat Fmt) const;
+  /// x86-64: the zero extensions that complete a relocated 32-bit address,
+  /// keyed by instruction and op sequence of the extension.  `mov r32, imm32`
+  /// sets the low register to the field and zero-extends it into the full
+  /// register; where the field's occurrence names a target that is its zero
+  /// extension (R_X86_64_32), the full register holds that whole address
+  /// (LowToMedX86.cpp).  Empty for other targets.
+  std::map<std::pair<va_t, int>, const RelocatedInstructionAddressOccurrence *>
+  x86ZeroExtendedAddressOutputs(const LowFunc &Low, Arch TheArch) const;
   /// ARM/AArch64: reconstruct a full-width NEON Q read from its two more-recent
   /// 8-byte D halves within a block (LowToMedARM.cpp, Phase B3).
   void mergeWideVectorReadsARM(MedFunc &Func);
@@ -394,6 +406,7 @@ private:
   void runDce(MedFunc &Func);
   void propagate(MedFunc &Func);
   void resolveSwitchSelectorPlans(MedFunc &Func);
+  void projectOriginalAddressSelectors(MedFunc &Func);
   void resolveScalarAddressModels(
       MedFunc &Func,
       const std::vector<RelocatedInstructionScalarModelOccurrence> &Models);

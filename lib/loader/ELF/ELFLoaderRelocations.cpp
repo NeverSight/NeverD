@@ -787,14 +787,9 @@ llvm::Error applyRelocations(const llvm::object::ELFFile<ELFT> &ELF,
         if (!OwnerSeg || !OwnerSeg->isReadable())
           return;
         va_t OwnerBegin = OwnerSeg->VA;
-        bool OwnerWritable = OwnerSeg->isWritable();
+        const bool OwnerWritable = isRuntimeWritableAddress(Img, TargetOwnerVA);
         if (const Section *OwnerSec = Img.getSectionFor(TargetOwnerVA)) {
           OwnerBegin = OwnerSec->VA;
-          OwnerWritable =
-              OwnerSec->isWritable() &&
-              !section_names::isReadOnlyAfterRelocSectionName(OwnerSec->Name) &&
-              !section_names::isReadOnlyAfterRelocSectionName(
-                  OwnerSec->SegmentName);
         }
         const bool OwnerIsCode = Img.hasExecutableCodeOwnerAt(TargetOwnerVA);
         const RelocatedAddressField Field{EncodedValue, TargetVA,

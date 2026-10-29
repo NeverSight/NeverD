@@ -8,6 +8,7 @@
 /// Dead store elimination passes for HighIR:
 ///   - Consecutive dead store elimination (same-destination rewrites)
 ///   - Private frame byte liveness (unobserved stores and integer tails)
+///   - Private frame stores of undefined entry scratch registers
 ///   - Source-local CONCAT values with unobserved upper bytes
 ///
 /// See also:
@@ -25,6 +26,7 @@
 #include "neverd/ir/SourceABI.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/high/HighIR.h"
+#include "neverd/ir/med/MedCallConvention.h"
 
 #include "llvm/Support/MathExtras.h"
 
@@ -1070,15 +1072,13 @@ void narrowUnreadRegisterBytes(HighFunc &Func, Arch Architecture) {
   }
 }
 
-void elimUnreadPrivateFrameStores(HighFunc &Func, Arch Architecture) {
-  if (Func.FrameSize <= 0 || Architecture == Arch::Unknown ||
-      Func.StructuredExceptionRegions || Func.UnstructuredExceptionRegions)
-    return;
+/// The frame addresses that a contiguous entry prefix of single-definition
+/// pointer-width assignments names (`v0 = RSP - 32`). \p Statements receives
+/// those assignments.
+static VarKeyMap<ExprPtr>
+entryFrameAliases(const HighFunc &Func, Arch Architecture, size_t &Budget,
+                  std::unordered_set<const HighStmt *> *Statements = nullptr) {
   const auto &TRI = getTargetRegInfo(Architecture);
-  if (TRI.PointerSize != 4 && TRI.PointerSize != 8)
-    return;
-  size_t Budget = ::neverd::limits::ir::
-      kHighDeadStoreElimElimUnreadPrivateFrameStoresBudget;
   VarKeyMap<unsigned> Definitions;
   walkStmts(Func.Body, [&](const HighStmt &S) {
     if (!Budget)
@@ -1091,7 +1091,6 @@ void elimUnreadPrivateFrameStores(HighFunc &Func, Arch Architecture) {
   // addresses dominate all later uses without assuming arbitrary HighIR SSA
   // definitions dominate their uses across branches or exceptional paths.
   VarKeyMap<ExprPtr> Aliases;
-  std::unordered_set<const HighStmt *> AliasStatements;
   for (const auto &S : Func.Body) {
     if (S.Kind != StmtKind::Assign || !S.Dst || !S.Val ||
         S.Dst->Kind != ExprKind::Var || !S.Dst->Type ||
@@ -1106,8 +1105,24 @@ void elimUnreadPrivateFrameStores(HighFunc &Func, Arch Architecture) {
                                          &Aliases))
       break;
     Aliases.emplace(varKey(S.Dst->Var), S.Val);
-    AliasStatements.insert(&S);
+    if (Statements)
+      Statements->insert(&S);
   }
+  return Aliases;
+}
+
+void elimUnreadPrivateFrameStores(HighFunc &Func, Arch Architecture) {
+  if (Func.FrameSize <= 0 || Architecture == Arch::Unknown ||
+      Func.StructuredExceptionRegions || Func.UnstructuredExceptionRegions)
+    return;
+  const auto &TRI = getTargetRegInfo(Architecture);
+  if (TRI.PointerSize != 4 && TRI.PointerSize != 8)
+    return;
+  size_t Budget = ::neverd::limits::ir::
+      kHighDeadStoreElimElimUnreadPrivateFrameStoresBudget;
+  std::unordered_set<const HighStmt *> AliasStatements;
+  const VarKeyMap<ExprPtr> Aliases =
+      entryFrameAliases(Func, Architecture, Budget, &AliasStatements);
   const auto Address = [&](const ExprPtr &E, uint16_t Bytes) {
     auto At = high_detail::frameAddressOffset(E, Func, Architecture, Budget, 0,
                                               &Aliases);
@@ -1244,6 +1259,123 @@ void elimUnreadPrivateFrameStores(HighFunc &Func, Arch Architecture) {
       if (Kept < Bytes)
         S->StoreVal = frameValuePrefix(S->StoreVal, Kept);
     }
+  }
+}
+
+void elimUndefinedEntryScratchStores(HighFunc &Func, Arch Architecture,
+                                     BinaryFormat Format) {
+  // A variadic prologue spills what its caller passed in argument registers,
+  // the AL vector count's XMM0-7 and AArch64's Q0-7 among them.
+  if (Func.FrameSize <= 0 || Func.IsVariadic ||
+      Func.StructuredExceptionRegions || Func.UnstructuredExceptionRegions)
+    return;
+  const CallArgumentConvention *Convention =
+      callArgumentConvention(Architecture, Format);
+  if (!Convention || !Convention->UndefinedIncomingScratchRegisters)
+    return;
+  const auto &TRI = getTargetRegInfo(Architecture);
+  if (TRI.PointerSize != 4 && TRI.PointerSize != 8)
+    return;
+  const IntegerArgumentLayout Arguments = TRI.integerArgumentLayout(Format);
+  size_t Budget = ::neverd::limits::ir::
+      kHighDeadStoreElimElimUndefinedEntryScratchStoresBudget;
+  const VarKeyMap<ExprPtr> Aliases =
+      entryFrameAliases(Func, Architecture, Budget);
+  // HighIR's version 0 also names values a statement defines, such as a
+  // call's result: only one that no statement assigns is the incoming value.
+  VarKeySet Assigned;
+  walkStmts(Func.Body, [&](const HighStmt &S) {
+    if (S.Dst && S.Dst->Kind == ExprKind::Var)
+      Assigned.insert(varKey(S.Dst->Var));
+  });
+  struct Candidate {
+    HighStmt *Statement;
+    int64_t Offset;
+    uint16_t Bytes;
+  };
+  std::vector<Candidate> Undefined;
+  walkStmts(Func.Body, [&](HighStmt &S) {
+    if (!Budget || S.Kind != StmtKind::Store || !S.StoreAddr || !S.StoreVal ||
+        S.StoreVal->Kind != ExprKind::Var || !S.StoreVal->Type ||
+        S.StoreVal->Type->Size != S.StoreVal->Var.Size ||
+        S.MemoryOrdering != NdMemoryOrdering::None ||
+        S.MemoryAddressSpace != NdMemoryAddressSpace::Default ||
+        !S.Body.empty() || !S.ElseBody.empty() || !S.Cases.empty() ||
+        !S.DefaultBody.empty() || !S.EHClauseBodies.empty() ||
+        !isUndefinedIncomingScratch(TRI, Architecture, Convention,
+                                    Arguments.Registers, S.StoreVal->Var) ||
+        Assigned.count(varKey(S.StoreVal->Var)))
+      return;
+    --Budget;
+    // The convention gives the stored bits no value: the function's own
+    // frame bytes below the entry stack pointer held none before the store
+    // and hold none after it.
+    const uint16_t Bytes = S.StoreVal->Type->Size;
+    const auto At = high_detail::frameAddressOffset(
+        S.StoreAddr, Func, Architecture, Budget, 0, &Aliases);
+    if (At && Bytes && *At >= -Func.FrameSize && *At < 0 &&
+        uint64_t(Bytes) <= uint64_t(-*At))
+      Undefined.push_back({&S, *At, Bytes});
+  });
+  if (Undefined.empty() || !Budget)
+    return;
+  // A read of those bytes must still fail where it uses the value, rather
+  // than read a slot nothing wrote: keep each store the function reads back.
+  std::set<int64_t> ReadBytes;
+  const auto RecordRead = [&](int64_t At, uint64_t Bytes) {
+    if (Bytes > Budget) {
+      Budget = 0;
+      return;
+    }
+    Budget -= Bytes;
+    for (uint64_t I = 0; I < Bytes; ++I)
+      ReadBytes.insert(At + int64_t(I));
+  };
+  HighExprSet Seen;
+  walkStmts(Func.Body, [&](const HighStmt &S) {
+    forEachExpr(S, [&](const ExprPtr &Root) {
+      std::vector<const HighExpr *> Pending{Root.get()};
+      if (S.Kind == StmtKind::Store && &Root == &S.StoreAddr &&
+          high_detail::frameAddressOffset(S.StoreAddr, Func, Architecture,
+                                          Budget, 0, &Aliases))
+        Pending.clear();
+      while (!Pending.empty() && Budget) {
+        const HighExpr *E = Pending.back();
+        Pending.pop_back();
+        if (!E || !Seen.insert(E).second)
+          continue;
+        --Budget;
+        if (E->Kind == ExprKind::Load && E->Type && E->Operands.size() == 1)
+          if (const auto At = high_detail::frameAddressOffset(
+                  E->Operands[0], Func, Architecture, Budget, 0, &Aliases)) {
+            RecordRead(*At, E->Type->Size);
+            continue;
+          }
+        // A stack slot's value, or its address, which may be read through.
+        const HighExpr *Slot =
+            E->Kind == ExprKind::Addr && E->Operands.size() == 1
+                ? E->Operands[0].get()
+                : E;
+        if (Slot && Slot->Kind == ExprKind::Var &&
+            Slot->Var.Kind == MedVar::Stack && Slot->Var.StackOff < 0) {
+          RecordRead(Slot->Var.StackOff, Slot->Var.Size);
+          continue;
+        }
+        for (const auto &Operand : E->Operands)
+          Pending.push_back(Operand.get());
+      }
+    });
+  });
+  if (!Budget)
+    return;
+  for (const auto &[S, At, Bytes] : Undefined) {
+    if (ReadBytes.lower_bound(At) != ReadBytes.lower_bound(At + Bytes))
+      continue;
+    // Preserve a possible branch destination at the eliminated write.
+    const va_t Address = S->Addr;
+    *S = HighStmt{};
+    S->Kind = StmtKind::Block;
+    S->Addr = Address;
   }
 }
 

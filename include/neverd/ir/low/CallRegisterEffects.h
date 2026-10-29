@@ -105,6 +105,13 @@ struct RegisterStep {
   /// \p Callee is entered by a tail call (a branch into its entry or a
   /// rewritten tail jump), so it receives this function's registers.
   bool TailCallee = false;
+  /// The constant the call's own setup loads into AL, the count of vector
+  /// registers a System V caller passes a variadic callee
+  /// (lowByteConstantAtCall), or -1 where it loads none.  A callee whose
+  /// register save area holds the vector registers
+  /// (LocalRegisterEffect::SavesVectorArguments) reads the low double of
+  /// each of that many as an argument.
+  int8_t VectorCount = -1;
   /// Control leaves for code that no summary describes: an import tail
   /// call or an indirect tail jump.
   bool UnknownTailCall = false;
@@ -192,6 +199,13 @@ struct LocalRegisterEffect {
   /// the first of those slots on as the va_list.  Those spills are not
   /// argument reads: a caller passes exactly the variadic arguments it sets.
   int VariadicFrom = -1;
+  /// A System V variadic function whose prologue tests AL and, where it is
+  /// not zero, saves the vector argument registers to its register save
+  /// area (findRegisterSaveAreaSpills).  Those spills are not argument reads
+  /// either: va_arg reads the floating arguments a caller passes there, the
+  /// first AL of them, each promoted to double.  A call that loads AL with a
+  /// constant passes that many (RegisterStep::VectorCount).
+  bool SavesVectorArguments = false;
 };
 
 /// Summarize \p F.  A call into a function \p NoReturnTargets names as
@@ -232,7 +246,9 @@ struct CallRegisterSummaries {
   std::map<va_t, GPRExitConstants> ExitConstants;
   /// Bytes of each family read before being written on some path from
   /// entry, including through callees.  A pass-through argument counts; a
-  /// register a nested call merely receives does not.
+  /// register a nested call merely receives does not.  The vector registers
+  /// a call's AL counts for a callee that saves them
+  /// (LocalRegisterEffect::SavesVectorArguments) are read as doubles.
   std::map<va_t, GPRReadWidths> EntryReads;
   /// Non-result/control GPR families whose incoming values no path can observe.
   /// Preserved-register exit transport still needs the caller's ABI check.

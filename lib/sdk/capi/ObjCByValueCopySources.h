@@ -187,7 +187,7 @@ replayCurrentFunction(const BinaryImage &Image, const PipelineResult &Result,
   // body. A changed prologue store must remain visible to machine replay.
   MedFunc CurrentMed = *Current->Med;
   markSourceStackAccesses(CurrentMed, Image.Arch, Image.abiFormat(),
-                          CurrentMed.EntryKind);
+                          CurrentMed.EntryKind, &Image);
   const auto MedReplay = Converter.convert(CurrentMed, Image.Arch);
   if (!objc_value_copy_detail::sameBody(*Rebuilt->High, *Current->High) ||
       !objc_value_copy_detail::sameBody(*Rebuilt->High, MedReplay))

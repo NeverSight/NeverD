@@ -1,6 +1,9 @@
 #ifndef NEVERD_IR_MED_MEDSOURCEPARAMETERUSES_H
 #define NEVERD_IR_MED_MEDSOURCEPARAMETERUSES_H
 
+#include "neverd/Common.h"
+#include "neverd/ir/NdTypes.h"
+
 #include <cstdint>
 #include <map>
 #include <optional>
@@ -39,5 +42,14 @@ std::optional<std::set<uint64_t>> observedMedSourceEntryRegisters(
 /// This refines source projection candidates only: it neither mutates MedIR
 /// types nor establishes address provenance, ownership, or rewrite authority.
 std::vector<bool> inferMedSourcePointerParameters(const MedFunc &Function);
+
+/// The same whole-value use proof, including recovered call arguments whose
+/// fixed scalar declarations the caller has admitted for this architecture.
+/// Entries map callee identity to source parameter order. Missing declarations,
+/// incompatible counts and conflicting scalar observations supply no pointer
+/// evidence. This does not bind a source ABI or grant address provenance.
+std::vector<bool> inferMedSourcePointerParameters(
+    const MedFunc &Function, Arch Architecture,
+    const std::map<va_t, std::vector<TypeRef>> &CalleeParameters);
 } // namespace neverd
 #endif

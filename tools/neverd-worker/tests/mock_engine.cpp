@@ -2529,6 +2529,7 @@ const char *neverd_ir_view_json(neverd_session_t s, neverd_va_t address,
       session(s)->path.ends_with("code-frame.bin") ||
       session(s)->path.ends_with("code-folding.bin") ||
       session(s)->path.ends_with("code-folding-cpp.bin") ||
+      session(s)->path.ends_with("code-brackets.bin") ||
       session(s)->path.ends_with("local-references.bin") ||
       session(s)->path.ends_with("local-references-cpp.bin") ||
       session(s)->path.ends_with("tab-sync-paged.bin")) {
@@ -2618,6 +2619,18 @@ const char *neverd_ir_view_json(neverd_session_t s, neverd_va_t address,
              "    break;\n"
              "  }\n"
              "  return v7;\n"
+             "}\n";
+    // Brackets of the code, nested and across lines, beside brackets of a
+    // string and a comment.
+    if (session(s)->path.ends_with("code-brackets.bin"))
+      full = "#include <stdint.h>\n"
+             "int32_t function_20(int32_t v0) {\n"
+             "  const char *message = \"(v0]\";\n"
+             "  int32_t v1[2] = {v0, (v0 + 1)};\n"
+             "  if (v0) {\n"
+             "    v1[(v0 & 1)] = function_22(v1[0]); /* ) */\n"
+             "  }\n"
+             "  return v1[0];\n"
              "}\n";
     if (localReferences)
       full = "#include <stdint.h>\n"

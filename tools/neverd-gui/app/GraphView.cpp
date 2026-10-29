@@ -575,9 +575,8 @@ void GraphView::paintNode(QPainter &painter, int index, bool text) const {
         const QTextLine line = layout.lineAt(0);
         // Locked words keep their colors under the cursor's highlight.
         const auto mark = [&](const QString &word, ColorRole role) {
-          for (const auto &[first, last] :
-               highlightRanges(row.styled, word,
-                               static_cast<int>(ListingRole::Register))) {
+          for (const auto &[first, last] : highlightRanges(
+                   row.styled, word, static_cast<int>(ListingRole::Register))) {
             const qreal x0 = line.cursorToX(first);
             const qreal x1 = line.cursorToX(last);
             painter.fillRect(QRectF(x + x0, y, x1 - x0, lineHeight_),
@@ -735,8 +734,7 @@ void GraphView::mousePressEvent(QMouseEvent *event) {
   setFocus(Qt::MouseFocusReason);
   const auto [node, row] = hit(event->position());
   // A click on an edge selects it, as in IDA; a click elsewhere lets it go.
-  if (event->button() == Qt::LeftButton ||
-      event->button() == Qt::RightButton) {
+  if (event->button() == Qt::LeftButton || event->button() == Qt::RightButton) {
     const auto edge = node < 0 && event->button() == Qt::LeftButton
                           ? edgeAt(event->position())
                           : std::nullopt;

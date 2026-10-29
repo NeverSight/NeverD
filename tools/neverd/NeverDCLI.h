@@ -365,6 +365,8 @@ extern llvm::cl::opt<bool> DumpHigh;
 
 // Decompile.
 extern llvm::cl::opt<bool> LlvmRoute;
+extern llvm::cl::opt<std::string> X64Continuation;
+extern llvm::cl::opt<std::string> ContinuationReport;
 extern llvm::cl::opt<bool> SourceSymbolic;
 extern llvm::cl::opt<bool> StackFrameInfo;
 extern llvm::cl::opt<std::string> StackFrameFile;
@@ -502,9 +504,10 @@ extern llvm::cl::opt<std::string> DiffProfile, DiffOptions, DiffSave,
     DiffValidationSide, DiffListSide, DiffListSearch, DiffListSort,
     DiffAmbiguousWith, DiffSourceFunction, DiffSourceSide,
     DiffSourceRepresentation, DiffDataFlowProfile;
-extern llvm::cl::opt<bool> DiffIgnoreNames, DiffRegions, DiffDataFlow,
-    DiffSliceDataOnly, DiffFlowRegions, DiffFlowFragments, DiffReviewLatest,
-    DiffListDescending, DiffSourceDifference, DiffSourcePrelude;
+extern llvm::cl::opt<bool> DiffIgnoreNames, DiffRegions, DiffRegionCalls,
+    DiffDataFlow, DiffSliceDataOnly, DiffFlowRegions, DiffFlowFragments,
+    DiffReviewLatest, DiffListDescending, DiffSourceDifference,
+    DiffSourcePrelude;
 extern llvm::cl::opt<double> DiffMinSimilarity;
 extern llvm::cl::opt<unsigned long long> DiffTimeout;
 extern llvm::cl::opt<unsigned long long> DiffImpactWork, DiffChangesWork,
@@ -828,6 +831,7 @@ bool configureAnalysisSession(neverd_session_t Sess);
 int runPlugins(const char *Argv0);
 int runLift(neverd_session_t Sess);
 int runDecompile(neverd_session_t Sess);
+int runX64Continuation(neverd_session_t Sess);
 int runPatch(neverd_session_t Sess);
 
 } // namespace neverd::cli

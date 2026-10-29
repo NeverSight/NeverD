@@ -34,6 +34,7 @@
 #include <QToolButton>
 #include <QToolTip>
 #include <QVBoxLayout>
+#include <QtMath>
 #include <algorithm>
 #include <limits>
 #include <utility>
@@ -151,6 +152,50 @@ QColor codeColor(int role) {
       ColorRole::CodePunctuation, ColorRole::CodePreprocessor};
   return Theme::instance().color(
       Map[role >= 0 && role < int(std::size(Map)) ? role : 0]);
+}
+
+/// What resting on a function's name shows, from the worker's function_type:
+/// its type, which Hex-Rays' hint spells without the name the code already
+/// shows, then each parameter after where it is passed.
+QString functionHint(const QJsonObject &type) {
+  QString declaration = type.value("declaration").toString();
+  const QString name = type.value("name").toString();
+  if (const auto at = declaration.indexOf(name + QLatin1Char('('));
+      !name.isEmpty() && at >= 0)
+    declaration =
+        declaration.left(at).trimmed() + declaration.mid(at + name.size());
+  // A long type breaks after its commas.
+  QStringList rows;
+  const QStringList pieces = declaration.split(QStringLiteral(", "));
+  for (int i = 0; i < pieces.size(); ++i) {
+    const QString piece =
+        pieces[i] + (i + 1 < pieces.size() ? QStringLiteral(",") : QString());
+    if (!rows.isEmpty() && rows.last().size() + 1 + piece.size() <=
+                               ::neverd::limits::gui::kCodeViewHintColumns)
+      rows.last() += QLatin1Char(' ') + piece;
+    else
+      rows.append(rows.isEmpty() ? piece : QStringLiteral("    ") + piece);
+  }
+  const QJsonArray parameters = type.value("parameters").toArray();
+  qsizetype width = 0;
+  for (const auto &parameter : parameters)
+    width = std::max(width,
+                     parameter.toObject().value("location").toString().size());
+  if (width > 0)
+    for (const auto &value : parameters) {
+      const QJsonObject parameter = value.toObject();
+      const QString kind = parameter.value("type").toString();
+      const QString parameterName = parameter.value("name").toString();
+      rows.append(parameter.value("location").toString().leftJustified(width) +
+                  QStringLiteral("  ") + kind +
+                  (parameterName.isEmpty() || kind.endsWith(QLatin1Char('*'))
+                       ? QString()
+                       : QStringLiteral(" ")) +
+                  parameterName);
+    }
+  return QStringLiteral("<pre style=\"font-family:'%1'; margin:0\">%2</pre>")
+      .arg(Theme::instance().codeFont().family(),
+           rows.join(QLatin1Char('\n')).toHtmlEscaped());
 }
 
 /// A source language's words: control flow, other keywords and types.
@@ -454,6 +499,12 @@ CodeText::CodeText(Session &session, QWidget *parent)
   });
   connect(&session_.highlightLocks(), &HighlightLocks::changed, viewport(),
           qOverload<>(&QWidget::update));
+  // Scrolling moves another name under the mouse.
+  for (auto *bar : {verticalScrollBar(), horizontalScrollBar()})
+    connect(bar, &QScrollBar::valueChanged, this, [this] {
+      ++hintSerial_;
+      hintRect_ = {};
+    });
   connect(&session_, &Session::revisionChanged, this, [this] {
     if (!function_)
       return;
@@ -564,6 +615,7 @@ void CodeText::clear() {
   cancel();
   selectedAddress_.reset();
   placeAfterLoad_.reset();
+  keptPlaces_.clear();
   source_.clear();
   sourceBytes_ = renderedChars_ = renderedRows_ = widestLine_ = 0;
   interrupted_ = false;
@@ -580,6 +632,7 @@ void CodeText::clear() {
   blocksAfterLoad_.clear();
   blockStructureAfterLoad_.clear();
   lines_.clear();
+  ++linesStamp_;
   function_.reset();
   sourceOptions_ = {};
   renderedOptions_ = {};
@@ -624,11 +677,7 @@ void CodeText::load(Address function, const QString &representation,
     selectAllAfterLoad_ = false;
   } else if (!placeAfterLoad_ && !loading_ && !interrupted_ &&
              cursorLine_ < lines_.size())
-    placeAfterLoad_ =
-        SourcePlace{lines_[cursorLine_].sourceLine, cursorColumn_,
-                    lines_[std::clamp(verticalScrollBar()->value(), 0,
-                                      int(lines_.size()) - 1)]
-                        .sourceLine};
+    placeAfterLoad_ = currentPlace();
   cancel();
   selectedAddress_.reset();
   if (nameRefresh)
@@ -641,6 +690,7 @@ void CodeText::load(Address function, const QString &representation,
   if (!same) {
     renderedOptions_ = {};
     lines_.clear();
+    ++linesStamp_;
     widestLine_ = 0;
     cursorLine_ = cursorColumn_ = 0;
     anchor_.reset();
@@ -853,18 +903,11 @@ void CodeText::request(int offset, quint64 serial) {
           placeAfterLoad_.reset();
         } else if (const auto place = std::exchange(placeAfterLoad_, {});
                    place && !lines_.isEmpty()) {
-          // The first shown line at or after a source line.
-          const auto shown = [this](int source) {
-            for (int i = 0; i < lines_.size(); ++i)
-              if (lines_[i].sourceLine >= source)
-                return i;
-            return int(lines_.size()) - 1;
-          };
-          cursorLine_ = shown(place->cursorLine);
+          cursorLine_ = shownLine(place->cursorLine);
           cursorColumn_ =
               std::clamp(place->cursorColumn, 0,
                          int(lines_[cursorLine_].styled.text.size()));
-          verticalScrollBar()->setValue(shown(place->topLine));
+          verticalScrollBar()->setValue(shownLine(place->topLine));
         }
         const auto mapping = payload.value("mapping_status").toString();
         status_ = session_.metadata().value("analyzed").toBool()
@@ -963,6 +1006,7 @@ void CodeText::request(int offset, quint64 serial) {
         line.styled.text = message;
         line.styled.spans = {{0, int(message.size()), Comment, std::nullopt}};
         lines_.append(std::move(line));
+        ++linesStamp_;
         widestLine_ = message.size();
         status_ = message;
         updateRange();
@@ -1240,6 +1284,7 @@ void CodeText::rebuildLines(bool append) {
   gutterChars_ = std::max(3, int(QString::number(lastSourceLine).size()));
   cursorLine_ =
       std::clamp(previousLine, 0, std::max(0, int(lines_.size()) - 1));
+  ++linesStamp_;
   updateRange();
   updateMouseCursor(viewport()->mapFromGlobal(QCursor::pos()));
   viewport()->update();
@@ -1283,10 +1328,13 @@ void CodeText::updateMouseCursor(const QPoint &position) {
 }
 
 bool CodeText::viewportEvent(QEvent *event) {
-  if (event->type() == QEvent::Enter)
+  if (event->type() == QEvent::Enter) {
     updateMouseCursor(viewport()->mapFromGlobal(QCursor::pos()));
-  else if (event->type() == QEvent::Leave)
+  } else if (event->type() == QEvent::Leave) {
     viewport()->setCursor(Qt::IBeamCursor);
+    ++hintSerial_;
+    hintRect_ = {};
+  }
   return QAbstractScrollArea::viewportEvent(event);
 }
 
@@ -1360,6 +1408,9 @@ bool CodeText::event(QEvent *event) {
   if (event->type() == QEvent::ToolTip) {
     auto *help = static_cast<QHelpEvent *>(event);
     const QPoint local = viewport()->mapFrom(this, help->pos());
+    // A new rest of the mouse drops the hint still on its way.
+    ++hintSerial_;
+    hintRect_ = {};
     if (const QString id = blockAt(local); !id.isEmpty()) {
       QToolTip::showText(
           help->globalPos(),
@@ -1458,10 +1509,87 @@ bool CodeText::event(QEvent *event) {
           return true;
         }
     QToolTip::hideText();
+    // A function's name shows its type and where its arguments go.
+    if (const int line = lineAt(local.y()); line >= 0 && line < lines_.size())
+      if (hintFunction(line, columnAt(line, local.x()), help->globalPos()))
+        return true;
     event->ignore();
     return true;
   }
   return QAbstractScrollArea::event(event);
+}
+
+bool CodeText::hintFunction(int line, int column,
+                            const QPoint &globalPosition) {
+  if (!function_ || !session_.typesFunctions() ||
+      !sourceDialect(dialectOf(representation_, pageLanguage_)))
+    return false;
+  // A name the code calls; a member an object calls is not the binary's.
+  const auto &styled = lines_[line].styled;
+  const auto [begin, end] = tokenRange(styled.text, column, tokenDots());
+  const auto *span = styled.spanAt(begin);
+  const QStringView before = QStringView(styled.text).left(begin);
+  if (begin == end || !span || span->role != Function ||
+      before.endsWith(u'.') || before.endsWith(u"->"))
+    return false;
+  const QString token = styled.text.mid(begin, end - begin);
+  const QString query = linkedSymbol(token).value_or(token);
+  // The hint goes once the mouse leaves the name.
+  auto &layout =
+      styled.layout(Theme::instance().codeFont(), styleStamp_, codeColor);
+  if (!layout.lineCount())
+    return false;
+  const QTextLine text = layout.lineAt(0);
+  const int top = (line - verticalScrollBar()->value()) * lineHeight_;
+  const QRect rect(QPoint(textLeft() + qFloor(text.cursorToX(begin)), top),
+                   QPoint(textLeft() + qCeil(text.cursorToX(end)) - 1,
+                          top + lineHeight_ - 1));
+  hintRect_ = rect;
+  const auto show = [this, rect, globalPosition](const QString &hint) {
+    if (!hint.isEmpty())
+      QToolTip::showText(globalPosition, hint, viewport(), rect);
+  };
+  if (hintsVersion_ != DocumentVersion) {
+    functionHints_.clear();
+    hintsVersion_ = DocumentVersion;
+  }
+  if (const auto known = functionHints_.constFind(query);
+      known != functionHints_.cend()) {
+    show(*known);
+    return true;
+  }
+  // The name resolves as a double-click resolves it. Only an import's thunk
+  // has a hint: its type is the library's, read at once, while a function of
+  // the image is typed only by decompiling it, which can hold the worker for
+  // seconds and with it the next jump; a hover must not.
+  const quint64 serial = hintSerial_, document = DocumentVersion;
+  const auto keep = [this, query, document](const QString &hint) {
+    if (document == DocumentVersion)
+      functionHints_.insert(query, hint);
+  };
+  const auto none = [keep](const QString &, const QString &) { keep({}); };
+  session_.read(
+      QStringLiteral("resolve"), {{"query", query}}, this,
+      [this, serial, document, show, keep, none](const QJsonObject &payload) {
+        const auto address = addressValue(payload.value("address"));
+        if (!address || !payload.value("import").toBool() ||
+            addressValue(payload.value("function_address")) != address) {
+          keep({});
+          return;
+        }
+        session_.read(
+            QStringLiteral("function_type"),
+            {{"address", hexAddress(*address)}}, this,
+            [this, serial, document, show, keep](const QJsonObject &type) {
+              const QString hint = functionHint(type);
+              keep(hint);
+              if (serial == hintSerial_ && document == DocumentVersion)
+                show(hint);
+            },
+            none);
+      },
+      none);
+  return true;
 }
 
 void CodeText::highlightLine(Line &line, bool &inComment) const {
@@ -1660,6 +1788,7 @@ void CodeText::paintEvent(QPaintEvent *) {
   const auto selectionFirst = anchor_ ? std::min(*anchor_, cursor) : cursor;
   const auto selectionLast = anchor_ ? std::max(*anchor_, cursor) : cursor;
   const TokenDots dots = tokenDots();
+  const auto brackets = bracketPair();
   for (int i = first; i <= last; ++i) {
     const int y = (i - first) * lineHeight_;
     const QRect row(0, y, area.width(), lineHeight_);
@@ -1699,6 +1828,20 @@ void CodeText::paintEvent(QPaintEvent *) {
         if (!highlight_.isEmpty())
           mark(highlight_, ColorRole::ListingHighlight);
       }
+      // The bracket under the cursor and its partner stand boxed.
+      if (brackets)
+        for (const auto &[line, column] :
+             {std::pair{brackets->line, brackets->column},
+              std::pair{brackets->partnerLine, brackets->partnerColumn}})
+          if (line == i) {
+            const QRectF box(left + textLine.cursorToX(column), y,
+                             textLine.cursorToX(column + 1) -
+                                 textLine.cursorToX(column),
+                             lineHeight_);
+            painter.fillRect(box, theme.color(ColorRole::CodeBracketMatch));
+            painter.setPen(theme.color(ColorRole::CodeBracketMatchBorder));
+            painter.drawRect(box.adjusted(0.5, 0.5, -0.5, -0.5));
+          }
     }
     QList<QTextLayout::FormatRange> selection;
     if (anchor_ && selectionFirst != selectionLast &&
@@ -1846,6 +1989,74 @@ void CodeText::revealAddress(Address address) {
     selectedAddress_ = address;
   marked_ = rows;
   viewport()->update();
+}
+
+CodeText::SourcePlace CodeText::currentPlace() const {
+  return {lines_[cursorLine_].sourceLine, cursorColumn_,
+          lines_[std::clamp(verticalScrollBar()->value(), 0,
+                            int(lines_.size()) - 1)]
+              .sourceLine};
+}
+
+int CodeText::shownLine(int sourceLine) const {
+  // Folding keeps the source order, so the shown lines' source lines rise.
+  const auto shown = std::partition_point(
+      lines_.cbegin(), lines_.cend(),
+      [sourceLine](const Line &line) { return line.sourceLine < sourceLine; });
+  return shown == lines_.cend() ? int(lines_.size()) - 1
+                                : int(shown - lines_.cbegin());
+}
+
+void CodeText::keepPlace(Address address) {
+  if (!function_ || loading_ || interrupted_ || cursorLine_ >= lines_.size())
+    return;
+  keptPlaces_.removeIf(
+      [address](const KeptPlace &kept) { return kept.address == address; });
+  if (keptPlaces_.size() >=
+      qsizetype(::neverd::limits::gui::kDisassemblyViewMaxHistory))
+    keptPlaces_.removeFirst();
+  keptPlaces_.append(
+      {address, *function_, representation_, sourceOptions_, currentPlace()});
+}
+
+const CodeText::KeptPlace *CodeText::keptPlace(Address address) const {
+  const auto kept = std::find_if(
+      keptPlaces_.cbegin(), keptPlaces_.cend(),
+      [address](const KeptPlace &kept) { return kept.address == address; });
+  // Another representation or option set lays out other lines.
+  if (kept == keptPlaces_.cend() || kept->representation != representation_ ||
+      kept->options != sourceOptions_)
+    return nullptr;
+  return &*kept;
+}
+
+std::optional<int> CodeText::keptLine(Address address, Address function) const {
+  if (const KeptPlace *kept = keptPlace(address);
+      kept && kept->function == function)
+    return kept->place.cursorLine + 1;
+  return std::nullopt;
+}
+
+bool CodeText::returnToPlace(Address address) {
+  const KeptPlace *kept = keptPlace(address);
+  // Another function lays out other lines too.
+  if (!kept || kept->function != function_ || interrupted_)
+    return false;
+  if (loading_) {
+    placeAfterLoad_ = kept->place;
+    return true;
+  }
+  if (lines_.isEmpty())
+    return false;
+  const auto place = kept->place;
+  {
+    const QScopedValueRollback<bool> following(following_, true);
+    moveCursor(shownLine(place.cursorLine), place.cursorColumn, false);
+  }
+  verticalScrollBar()->setValue(shownLine(place.topLine));
+  if (lines_[cursorLine_].addresses.contains(address))
+    selectedAddress_ = address;
+  return true;
 }
 
 QString CodeText::currentToken() const {
@@ -2099,12 +2310,54 @@ QString CodeText::selectedText() const {
 
 QString CodeText::cursorWord() const {
   if (cursorLine_ < 0 || cursorLine_ >= lines_.size() ||
-      !library_.regionAt(displayPosition(cursorLine_, cursorColumn_))
-           .isEmpty())
+      !library_.regionAt(displayPosition(cursorLine_, cursorColumn_)).isEmpty())
     return {};
   if (const auto name = sourceNameAt(cursorLine_, cursorColumn_))
     return name->first;
   return tokenAt(cursorLine_, cursorColumn_);
+}
+
+std::optional<CodeText::BracketPair> CodeText::bracketPair() const {
+  const std::tuple at{cursorLine_, cursorColumn_, linesStamp_};
+  if (at == bracketsAt_)
+    return brackets_;
+  bracketsAt_ = at;
+  brackets_.reset();
+  // A bracket of the code itself; one in a string, a comment or a folded
+  // summary is text.
+  const auto bracket = [this](int line, int column) {
+    const auto *span = lines_[line].styled.spanAt(column);
+    return span && span->role == Punctuation;
+  };
+  const QStringView Opening = u"([{", Closing = u")]}";
+  if (cursorLine_ < 0 || cursorLine_ >= lines_.size() ||
+      cursorColumn_ >= lines_[cursorLine_].styled.text.size())
+    return brackets_;
+  // Hex-Rays pairs the bracket the cursor is on, not the one before it.
+  const QChar on = lines_[cursorLine_].styled.text.at(cursorColumn_);
+  const auto opening = Opening.indexOf(on), closing = Closing.indexOf(on);
+  if ((opening < 0 && closing < 0) || !bracket(cursorLine_, cursorColumn_))
+    return brackets_;
+  const QChar partner =
+      opening >= 0 ? Closing.at(opening) : Opening.at(closing);
+  const int step = opening >= 0 ? 1 : -1;
+  int depth = 0;
+  for (int line = cursorLine_; line >= 0 && line < lines_.size();
+       line += step) {
+    const QString &text = lines_[line].styled.text;
+    int column = line != cursorLine_ ? (step > 0 ? 0 : int(text.size()) - 1)
+                                     : cursorColumn_;
+    for (; column >= 0 && column < text.size(); column += step) {
+      const QChar c = text.at(column);
+      if ((c != on && c != partner) || !bracket(line, column))
+        continue;
+      if ((depth += c == on ? 1 : -1) == 0) {
+        brackets_ = BracketPair{cursorLine_, cursorColumn_, line, column};
+        return brackets_;
+      }
+    }
+  }
+  return brackets_;
 }
 
 QString CodeText::copyText() const {
@@ -2112,8 +2365,7 @@ QString CodeText::copyText() const {
     return selectedText();
   // A folded summary copies the code it stands for.
   if (cursorLine_ >= 0 && cursorLine_ < lines_.size() &&
-      !library_.regionAt(displayPosition(cursorLine_, cursorColumn_))
-           .isEmpty())
+      !library_.regionAt(displayPosition(cursorLine_, cursorColumn_)).isEmpty())
     return selectedText();
   return cursorWord();
 }
@@ -2402,6 +2654,10 @@ void CodeText::mousePressEvent(QMouseEvent *event) {
 
 void CodeText::mouseMoveEvent(QMouseEvent *event) {
   updateMouseCursor(event->position().toPoint());
+  if (!hintRect_.contains(event->position().toPoint())) {
+    ++hintSerial_;
+    hintRect_ = {};
+  }
   if (!selecting_ || !(event->buttons() & Qt::LeftButton) || lines_.isEmpty())
     return;
   dragPoint_ = event->position().toPoint();

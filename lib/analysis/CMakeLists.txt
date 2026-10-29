@@ -9,6 +9,7 @@ add_neverd_component_library(NeverDLLVMMemoryAnalysis
 
 add_neverd_component_library(NeverDBinaryInterpreterSpecialization
   arch/x86_64/BinaryInterpreterSpecialization.cpp
+  arch/x86_64/X64ContinuationSource.cpp
   LINK_COMPONENTS InterpreterSpecialization Decode Loader
 )
 

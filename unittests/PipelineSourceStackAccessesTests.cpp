@@ -116,6 +116,15 @@ TEST(PipelineSourceStackAccesses, MachineRequestsKeepCallerStateOperations) {
         Options.MedAnalysisOnly = C.Analysis;
         Options.SourceProjection = C.Projection;
         auto F = savedCallerRegister(Architecture, ReadsRestore);
+        MedOp Atomic;
+        Atomic.Opcode = NdOp::ATOMIC_ADD;
+        Atomic.MemoryOrdering = NdMemoryOrdering::SequentiallyConsistent;
+        Atomic.Output = F.Blocks[0].Ops[5].Output;
+        Atomic.Output.Id = 9;
+        Atomic.Output.Size = 1;
+        Atomic.addInput(F.Blocks[0].Ops[5].Inputs[0]);
+        Atomic.addInput(MedVar::makeConst(0, 1));
+        F.Blocks[0].Ops.insert(F.Blocks[0].Ops.end() - 1, Atomic);
         // These ARM/x64 fixtures have no x86 registration-state provenance.
         LowFunc Source;
         Source.Entry = F.Entry;
@@ -123,7 +132,9 @@ TEST(PipelineSourceStackAccesses, MachineRequestsKeepCallerStateOperations) {
         EXPECT_EQ(F.Blocks[0].Ops[3].PrologueSave, C.Source && !ReadsRestore);
         EXPECT_EQ(F.Blocks[0].Ops[5].ReturnAddressRead,
                   C.Source && Architecture == Arch::X64);
-        EXPECT_EQ(F.Blocks[0].Ops.size(), 7u);
+        EXPECT_EQ(F.Blocks[0].Ops[6].SourceReturnSlotOffset.has_value(),
+                  C.Source && Architecture == Arch::X64);
+        EXPECT_EQ(F.Blocks[0].Ops.size(), 8u);
         EXPECT_EQ(F.Blocks[0].Ops[3].Opcode, NdOp::STORE);
         EXPECT_EQ(F.Blocks[0].Ops[4].Opcode, NdOp::LOAD);
       }

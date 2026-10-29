@@ -22,6 +22,11 @@ public:
   bool parse(const std::vector<uint8_t> &Binary, Arch TargetArch) override;
 
   bool populateFromImage(const BinaryImage &Image, Arch TargetArch) override;
+
+private:
+  /// Resolve the linker's `__ImageBase` (kPEImageBaseSymbol), which names a
+  /// linked image's own headers, to \p ImageBase.
+  void addImageBase(uint64_t ImageBase);
 };
 
 } // namespace neverd

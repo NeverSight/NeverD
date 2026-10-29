@@ -1192,6 +1192,10 @@ struct JumpTable {
   /// selector plan after SSA/copy propagation; absence or ambiguity is a hard
   /// failure for shapes that require exact selector ownership.
   std::vector<JumpTableSelectorUseRef> SelectorUseRefs;
+  /// A table-free finite cover compares the branch value with original image
+  /// addresses. Low-to-Med preserves that numeric coordinate in a separate
+  /// selector slice; observable code-pointer uses retain their address roles.
+  bool OriginalAddressSelector = false;
   /// Exact composite recipe for a runtime-selected table base.  This is kept
   /// separate from SelectorUseRefs because its selector lives in the final
   /// byte-address coordinate and also depends on a certified
@@ -1513,6 +1517,11 @@ struct LowFunc {
   std::vector<va_t> CodeRefTargets;
 
   LowBlock *blockFor(va_t Addr) {
+    // Overlapping x86 instruction streams can share bytes. An exact entry
+    // belongs to its own stream even when an earlier instruction covers it.
+    for (auto &B : Blocks)
+      if (Addr == B.StartAddr)
+        return &B;
     for (auto &B : Blocks)
       if (Addr >= B.StartAddr && Addr < B.EndAddr)
         return &B;

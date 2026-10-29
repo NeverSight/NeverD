@@ -58,4 +58,10 @@ NEVERD_X86_APPENDED_SYSTEM_STATE(X86LoadSegmentLimit, "lsl", AccessRights, -1)
 NEVERD_X86_APPENDED_SYSTEM_STATE(X86LoadSegmentLimitMemory, "lsl", AccessRights,
                                  0)
 NEVERD_X86_APPENDED_SYSTEM_STATE(X86Skinit, "skinit", SecureLaunch, -1)
+NEVERD_X86_APPENDED_SYSTEM_STATE(X86LockedAnd, "lock and", LockedLogic, 0)
+NEVERD_X86_APPENDED_SYSTEM_STATE(X86LockedOr, "lock or", LockedLogic, 0)
+NEVERD_X86_APPENDED_SYSTEM_STATE(X86LockedXor, "lock xor", LockedLogic, 0)
+NEVERD_X86_APPENDED_SYSTEM_STATE(X86LockedBts, "lock bts", LockedBit, 0)
+NEVERD_X86_APPENDED_SYSTEM_STATE(X86LockedBtr, "lock btr", LockedBit, 0)
+NEVERD_X86_APPENDED_SYSTEM_STATE(X86LockedBtc, "lock btc", LockedBit, 0)
 #endif

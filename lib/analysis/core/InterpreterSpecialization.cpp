@@ -4435,8 +4435,8 @@ SpecializationResult Specializer::run() {
   }
   if (Options.X64CR8State &&
       (!Options.ExplicitMachineState || !Options.NormalNonfaultingExecution ||
-       Options.X64FlagsProfile !=
-           InterpreterMachineStateProfile::KernelX64NoFaultV1)) {
+       !Options.X64FlagsProfile ||
+       !isKernelX64MachineStateProfile(*Options.X64FlagsProfile))) {
     fail(SpecializationStatus::InvalidInput,
          "CR8 state requires an explicit nonfaulting kernel machine profile");
     return std::move(Result);
@@ -4722,6 +4722,18 @@ specializeInterpreter(SpecializationProvider &Provider,
   if (Options.EntryFrameAlignment && Options.EntryFrameAlignment->valid())
     Refinement.FrameMask = Options.EntryFrameAlignment->Alignment - 1;
   SpecializationResult Result;
+  std::string LastRecoveryFrontier;
+  const auto Finish = [&]() {
+    // Refinement can exhaust a shared ledger while replaying an earlier
+    // prefix. Keep the last semantic failure as context for that limit,
+    // without treating its abstract path as a feasible execution or changing
+    // the terminal status, counters or publication decision.
+    if (Result.Status == SpecializationStatus::BudgetExceeded &&
+        !LastRecoveryFrontier.empty() &&
+        Result.Diagnostic != LastRecoveryFrontier)
+      Result.Diagnostic += "; last recovery frontier: " + LastRecoveryFrontier;
+    return std::move(Result);
+  };
   for (;;) {
     Refinement.DeferredProducerDemands.clear();
     Refinement.DeferredGuardDemands.clear();
@@ -4730,12 +4742,17 @@ specializeInterpreter(SpecializationProvider &Provider,
                         Options.ControlFrameSlots.size(), Refinement,
                         std::move(Result), RawDomain);
     Result = Attempt.run();
+    if (Result.complete())
+      LastRecoveryFrontier.clear();
+    else if (Result.Status == SpecializationStatus::Unsupported ||
+             Result.Status == SpecializationStatus::UnresolvedControl)
+      LastRecoveryFrontier = Result.Diagnostic;
     Result.DiscoveryVisits = Refinement.Visits;
     // Precision hints can survive a frame-partition retry. They never revive
     // a terminal failure or authorize more work after a budget is exhausted.
     if (Result.Status == SpecializationStatus::BudgetExceeded ||
         Result.Status == SpecializationStatus::InvalidInput)
-      return Result;
+      return Finish();
     if (Result.complete() && RawDomain) {
       if (auto Error = sealRawEnvironment(Result, RawDomain, Options)) {
         llvm::handleAllErrors(
@@ -4753,7 +4770,7 @@ specializeInterpreter(SpecializationProvider &Provider,
         Result.ExternalExits.clear();
         Result.RawEnvironment.reset();
       }
-      return Result;
+      return Finish();
     }
     const auto TryFiniteGuards = [&]() {
       if (!Options.DiscoverControlState || Refinement.DiscoverFiniteGuards ||
@@ -4803,7 +4820,7 @@ specializeInterpreter(SpecializationProvider &Provider,
            Attempt.sawFiniteDispatch()))) {
       if (TryFramePartition())
         continue;
-      return Result;
+      return Finish();
     }
     bool HasCandidates = !Refinement.Registers.empty() ||
                          !Refinement.Slots.empty() ||
@@ -4917,7 +4934,7 @@ specializeInterpreter(SpecializationProvider &Provider,
          Result.ControlRefinements >= Options.MaxControlRefinements)) {
       Result.Status = SpecializationStatus::BudgetExceeded;
       Result.Diagnostic = "control-state discovery/refinement budget exhausted";
-      return Result;
+      return Finish();
     }
     if (!HasCandidates) {
       bool Partitioned = false;
@@ -4925,7 +4942,7 @@ specializeInterpreter(SpecializationProvider &Provider,
       if (Partitioned)
         continue;
       if (Result.Status == SpecializationStatus::BudgetExceeded)
-        return Result;
+        return Finish();
       // Frame masks are optional precision nominations gathered throughout
       // the attempted graph. A business value can nominate a wide mask with
       // no bearing on the failed address, transfer or guard. Give actual
@@ -4936,18 +4953,18 @@ specializeInterpreter(SpecializationProvider &Provider,
       if (TryFramePartition())
         continue;
       if (Result.Status == SpecializationStatus::BudgetExceeded)
-        return Result;
+        return Finish();
       Result = Attempt.refineTargetContexts(std::move(Result), Partitioned);
       if (Partitioned)
         continue;
       if (TryFiniteGuards())
         continue;
-      return Result;
+      return Finish();
     }
     Result = Attempt.closeProducerDemands(std::move(Result));
     if (Result.Status == SpecializationStatus::BudgetExceeded ||
         Result.Status == SpecializationStatus::InvalidInput)
-      return Result;
+      return Finish();
     // Rebuild field IDs only at the fresh-graph boundary. Persistent producer
     // demands retain their original locations and masks, so a later wider
     // carrier can replace earlier ordinary subranges without dropping bits.

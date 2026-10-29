@@ -113,7 +113,8 @@ void record(llvm::raw_ostream &Out, llvm::StringRef Artifact,
             const PortableX87StateV1 &After, uint32_t Status, uint64_t Result,
             const GuestMemoryRuntime &Memory,
             const PortableX87ExecutionV1 &Execution,
-            const X87OriginalObservation *Original = nullptr) {
+            const X87OriginalObservation *Original = nullptr,
+            uint16_t NativeStatusMask = 0xbaff) {
   llvm::json::Array Regions;
   for (const auto &Region : Memory.snapshotMemoryRegions())
     Regions.push_back(llvm::json::Object{
@@ -124,13 +125,14 @@ void record(llvm::raw_ostream &Out, llvm::StringRef Artifact,
   llvm::json::Value Reference = nullptr;
   if (Original) {
     const auto &Image = Original->Image;
-    // C0/C2/C3 and relocated host pointers are not defined comparisons here.
+    // Defined status bits depend on the instruction. Relocated host pointers
+    // are not compared here.
     Reference = llvm::json::Object{
         {"return_defined",
          llvm::utohexstr(Original->Return & ~UINT64_C(0x4500))},
         {"control", unsigned(Image[0]) | unsigned(Image[1]) << 8},
         {"status_defined",
-         (unsigned(Image[2]) | unsigned(Image[3]) << 8) & ~0x4500u},
+         (unsigned(Image[2]) | unsigned(Image[3]) << 8) & NativeStatusMask},
         {"tags", unsigned(Image[4])},
         {"retained_result",
          llvm::toHex(llvm::ArrayRef(Image).slice(32 + 7 * 16, 10))},
@@ -168,6 +170,125 @@ struct Loaded {
 using Leaf = uint32_t (*)(uint64_t, uint64_t, uint64_t, void *, uint64_t *);
 using Control = uint32_t (*)(uint64_t, uint64_t, uint64_t, uint64_t, void *,
                              uint64_t *);
+
+std::vector<uint8_t> resetBytes(unsigned Kind) {
+  // lea rax,[rdi+rsi]; add rax,rdx; FNOP/EMMS/FEMMS; ret.
+  // Keep an ordinary three-integer ABI independent of the x87 bank.
+  return {0x48,
+          0x8d,
+          0x04,
+          0x37,
+          0x48,
+          0x01,
+          0xd0,
+          uint8_t(Kind == 0 ? 0xd9 : 0x0f),
+          uint8_t(Kind == 0   ? 0xd0
+                  : Kind == 1 ? 0x77
+                              : 0x0e),
+          0xc3};
+}
+
+void executeReset(void *Symbol, unsigned Kind, llvm::ArrayRef<uint8_t> Bytes,
+                  llvm::StringRef Artifact, llvm::raw_ostream &Records) {
+  auto Original = X87PortableOriginal::create(Bytes);
+  ASSERT_TRUE(static_cast<bool>(Original))
+      << llvm::toString(Original.takeError());
+  auto Memory = memory({});
+  const auto Invoke = [&](PortableX87ExecutionV1 *Execution, uint64_t *Result) {
+    return reinterpret_cast<Leaf>(Symbol)(0x1000, 1, 0x3001, Execution, Result);
+  };
+  unsigned Observations = 0, NativeObservations = 0;
+  for (unsigned Top = 0; Top != 8; ++Top)
+    for (uint8_t Tags : {0, 0x55, 0xff})
+      for (uint8_t Known : {0, 0x96, 0xff}) {
+        auto State = environment(0x37f, Top);
+        State.Image[2] = 0x25;
+        State.Image[3] |= 0x47;
+        State.Image[4] = Tags;
+        State.KnownPayload = Known;
+        State.Image[6] = 0x71;
+        State.Image[7] = 5;
+        State.Image[8] = 0x45;
+        State.Image[16] = 0x67;
+        const auto Before = State;
+        auto Expected = Before;
+        if (Kind == 0) {
+          for (unsigned I = 0; I != 8; ++I)
+            Expected.Image[8 + I] = (kPortableX87FixtureEntry + 7) >> (8 * I);
+        } else {
+          Expected.Image[3] = 0x47;
+          Expected.Image[4] = 0;
+          for (unsigned Physical = 0; Physical != 8; ++Physical)
+            std::copy_n(Before.Image.begin() + 32 +
+                            ((Physical + 8 - Top) & 7) * 16,
+                        16, Expected.Image.begin() + 32 + Physical * 16);
+        }
+        if (Kind == 2)
+          Expected.KnownPayload = 0;
+        PortableX87ExecutionV1 Execution(State, *Memory);
+        uint64_t Result = UINT64_MAX;
+        const auto Status = Invoke(&Execution, &Result);
+        ASSERT_EQ(Status, NVD_X87_STATUS_COMPLETED);
+        EXPECT_EQ(Result, 0x4002U);
+        EXPECT_EQ(std::memcmp(&State, &Expected, sizeof(State)), 0);
+        EXPECT_TRUE(Execution.lastStep().InstructionCompleted);
+        EXPECT_FALSE(Execution.lastStep().MemoryAccess);
+        EXPECT_FALSE(Execution.lastStep().HasScalarResult);
+        std::optional<X87OriginalObservation> Native;
+        // FEMMS is absent on this Intel-compatible native reference profile.
+        // Its undefined payloads are checked through provenance, never by
+        // comparing an arbitrary hardware-selected value.
+        if (*Original && Kind != 2 && Known == 0xff) {
+          Native = (*Original)->run(Before, 0, 0, {}, {});
+          const unsigned StatusMask = Kind == 0 ? 0xb8ff : 0xffff;
+          const auto &Image = Native->Image;
+          EXPECT_EQ(unsigned(Image[0]) | unsigned(Image[1]) << 8,
+                    word(State, 0));
+          EXPECT_EQ((unsigned(Image[2]) | unsigned(Image[3]) << 8) & StatusMask,
+                    word(State, 2) & StatusMask);
+          EXPECT_EQ(Image[4], State.Image[4]);
+          for (unsigned I = 0; I != 8; ++I)
+            EXPECT_TRUE(std::equal(Image.begin() + 32 + I * 16,
+                                   Image.begin() + 42 + I * 16,
+                                   State.Image.begin() + 32 + I * 16));
+          ++NativeObservations;
+        }
+        const auto Case = "reset-" + std::to_string(Top) + "-" +
+                          std::to_string(Tags) + "-" + std::to_string(Known);
+        record(Records, Artifact, Case, Before, State, Status, Result, *Memory,
+               Execution, Native ? &*Native : nullptr,
+               Kind == 0 ? 0xb8ff : 0xffff);
+        ++Observations;
+      }
+  for (unsigned Refusal = 0; Refusal != 3; ++Refusal) {
+    auto State = environment();
+    State.KnownPayload = State.Image[4] = 0xff;
+    if (Refusal == 0)
+      State.EnvironmentKnown = 0;
+    else if (Refusal == 1) {
+      State.Image[0] &= ~1U;
+      State.Image[2] = 0x81;
+    } else {
+      State.Image[1] = 1; // Reserved precision control.
+    }
+    const auto Before = State;
+    PortableX87ExecutionV1 Execution(State, *Memory);
+    uint64_t Result = UINT64_MAX;
+    const auto Status = Invoke(&Execution, &Result);
+    const unsigned Expected[] = {NVD_X87_STATUS_UNKNOWN_ENVIRONMENT,
+                                 NVD_X87_STATUS_PENDING_EXCEPTION,
+                                 NVD_X87_STATUS_INVALID_CONTROL};
+    EXPECT_EQ(Status, Expected[Refusal]);
+    EXPECT_EQ(Result, UINT64_MAX);
+    EXPECT_EQ(std::memcmp(&State, &Before, sizeof(State)), 0);
+    EXPECT_FALSE(Execution.lastStep().InstructionCompleted);
+    EXPECT_FALSE(Execution.lastStep().MemoryAccess);
+    record(Records, Artifact, "reset-refusal-" + std::to_string(Refusal),
+           Before, State, Status, Result, *Memory, Execution);
+  }
+  EXPECT_EQ(Observations, 72U);
+  EXPECT_EQ(NativeObservations, *Original && Kind != 2 ? 24U : 0U);
+}
 
 void execute(void *Symbol, unsigned Shape, llvm::ArrayRef<uint8_t> Bytes,
              llvm::StringRef Artifact, llvm::raw_ostream &Records) {
@@ -342,7 +463,7 @@ void execute(void *Symbol, unsigned Shape, llvm::ArrayRef<uint8_t> Bytes,
   EXPECT_EQ(rawState(State), rawState(Before));
 }
 
-TEST(X87PortableGenerated, AllRoutesExecuteExactStateAndRefusalBoundaries) {
+void checkGenerated(bool Resets) {
 #if defined(_WIN32)
   GTEST_SKIP() << "The standalone generated-library harness currently covers "
                   "ELF and Mach-O hosts";
@@ -365,11 +486,11 @@ TEST(X87PortableGenerated, AllRoutesExecuteExactStateAndRefusalBoundaries) {
   if (EvidenceRoot && *EvidenceRoot) {
     ASSERT_FALSE(llvm::sys::fs::create_directories(EvidenceRoot));
     llvm::SmallString<256> Prefix(EvidenceRoot);
-    llvm::sys::path::append(Prefix, "x87-generated");
+    llvm::sys::path::append(Prefix, Resets ? "x87-resets" : "x87-generated");
     ASSERT_FALSE(llvm::sys::fs::createUniqueDirectory(Prefix, Directory));
   } else {
-    ASSERT_FALSE(
-        llvm::sys::fs::createUniqueDirectory("x87-generated", Directory));
+    ASSERT_FALSE(llvm::sys::fs::createUniqueDirectory(
+        Resets ? "x87-resets" : "x87-generated", Directory));
   }
   llvm::errs() << "Portable generated artifacts: " << Directory << '\n';
   const auto Remove = llvm::scope_exit([&] {
@@ -388,7 +509,8 @@ TEST(X87PortableGenerated, AllRoutesExecuteExactStateAndRefusalBoundaries) {
   ASSERT_FALSE(EC);
   for (bool NoOpt : {false, true})
     for (unsigned Shape = 0; Shape != 3; ++Shape) {
-      const auto Bytes = Shape == 0   ? portableX87LeafBytes()
+      const auto Bytes = Resets       ? resetBytes(Shape)
+                         : Shape == 0 ? portableX87LeafBytes()
                          : Shape == 1 ? portableX87BranchBytes()
                                       : portableX87LoopBytes();
       auto Source = liftPortableX87Fixture(Bytes, NoOpt);
@@ -468,13 +590,24 @@ TEST(X87PortableGenerated, AllRoutesExecuteExactStateAndRefusalBoundaries) {
           auto *Symbol = Library.Library.getAddressOfSymbol(
               Prepared->name().str().c_str());
           ASSERT_NE(Symbol, nullptr);
-          execute(Symbol, Shape, Bytes, Name, Records);
+          if (Resets)
+            executeReset(Symbol, Shape, Bytes, Name, Records);
+          else
+            execute(Symbol, Shape, Bytes, Name, Records);
           Records.flush();
           ASSERT_FALSE(::testing::Test::HasFailure())
               << "Artifacts retained at " << Directory.str().str();
         }
     }
 #endif
+}
+
+TEST(X87PortableGenerated, AllRoutesExecuteExactStateAndRefusalBoundaries) {
+  checkGenerated(false);
+}
+
+TEST(X87PortableGenerated, AllRoutesExecuteFnopEmmsAndFemms) {
+  checkGenerated(true);
 }
 
 } // namespace

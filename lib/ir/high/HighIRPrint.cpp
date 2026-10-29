@@ -201,6 +201,8 @@ bool HighExpr::structuralEq(const HighExpr &Other) const {
     return false;
   if (MemoryAddressSpace != Other.MemoryAddressSpace)
     return false;
+  if (SourceReturnSlotOffset != Other.SourceReturnSlotOffset)
+    return false;
   if ((Kind == ExprKind::Record || Kind == ExprKind::Field ||
        (Type && Type->Kind == NdTypeKind::Struct)) &&
       !equalSourceTypes(Type, Other.Type))

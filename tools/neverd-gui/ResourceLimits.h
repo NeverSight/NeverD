@@ -112,6 +112,9 @@ inline constexpr int kCodeViewPageLines = 256;
 /// the interactive first load small, and retry it if a batch exceeds bytes.
 inline constexpr int kCodeViewNameRefreshPageLines =
     ::neverd::sdk::kMaxCodeViewPageLines;
+/// The characters a function's hint holds on a line before its type breaks
+/// after a comma.
+inline constexpr int kCodeViewHintColumns = 96;
 
 // tools/neverd-gui/app/FindInViewDialog.cpp
 inline constexpr int kFindInViewDebounceMs = 120;
@@ -160,6 +163,8 @@ inline constexpr int kMainWindowMaxStringMinLength =
 inline constexpr int kMainWindowMaxOpcodeBytes = 12;
 // As much as one declaration of the editor takes.
 inline constexpr qint64 kMainWindowMaxHeaderBytes = 4 << 20;
+/// The stops the Back or Forward button's list shows, nearest first.
+inline constexpr std::size_t kMainWindowHistoryListStops = 30;
 
 // tools/neverd-gui/app/MicrosoftSymbols.cpp
 /// How long to wait for another modal dialog to close before asking.

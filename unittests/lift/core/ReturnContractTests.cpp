@@ -14,6 +14,7 @@
 #include "gtest/gtest.h"
 
 #include "neverd/debug/DebugContext.h"
+#include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/med/MedIR.h"
 #include "neverd/ir/med/MedTypePass.h"
 #include "neverd/lift/X86/X86Regs.h"
@@ -624,6 +625,64 @@ TEST(ReturnContracts, AStubOfAnImportDeclaredVoidReturnsNoValue) {
               returning(rax(1))})})};
   settleReturnContracts(Image, Result, &Debug);
   EXPECT_TRUE(Result.MedFuncs.front().ReturnsNoValue);
+}
+
+TEST(ReturnContracts, CopiedImportSlotsShareTheCallABIProvenance) {
+  constexpr va_t Slot = 0x4018;
+  for (Arch Architecture : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64})
+    for (BinaryFormat Format :
+         {BinaryFormat::COFF, BinaryFormat::ELF, BinaryFormat::MachO})
+      for (unsigned Mutation = 0; Mutation < 6; ++Mutation) {
+        SCOPED_TRACE(unsigned(Architecture));
+        SCOPED_TRACE(unsigned(Format));
+        SCOPED_TRACE(Mutation);
+        BinaryImage Image;
+        Image.Arch = Architecture;
+        Image.Format = Format;
+        const auto &Registers = getTargetRegInfo(Architecture);
+        const auto Width = Registers.PointerSize;
+        Import Entry;
+        Entry.Name = "release_text";
+        Entry.IATAddr = Slot;
+        Image.Imports.push_back(Entry);
+        DeclaringDebugContext Debug;
+        Debug.Prototypes[Entry.Name] =
+            Mutation == 5 ? NdType::makeInt(Width) : NdType::makeVoid();
+        const auto Temporary = [&](int Id) {
+          auto Value = temporary(Id);
+          Value.TheArch = Architecture;
+          Value.Size = Width;
+          return Value;
+        };
+        auto Result = rax(1);
+        Result.TheArch = Architecture;
+        Result.RegOff = Registers.IntReturnReg;
+        Result.Size = Width;
+        const auto Address = Temporary(10);
+        const auto Loaded = Temporary(11);
+        const auto Target = Temporary(12);
+        auto Load = operation(NdOp::LOAD, Loaded, {Address});
+        if (Mutation == 4)
+          Load.MemoryAddressSpace = NdMemoryAddressSpace::X86GS;
+        std::vector<MedOp> Ops{
+            operation(NdOp::COPY, Address,
+                      {Mutation == 2 ? Temporary(13)
+                                     : MedVar::makeConst(Slot, Width)}),
+            Load,
+            operation(NdOp::COPY, Target,
+                      {Mutation == 1   ? MedVar::makeConst(Slot, Width)
+                       : Mutation == 3 ? Target
+                                       : Loaded}),
+            operation(NdOp::INDIR_CALL, Result, {Target}), returning(Result)};
+        PipelineResult Pipeline;
+        Pipeline.MedFuncs = {function(CallerEntry, {block(std::move(Ops))})};
+        settleReturnContracts(Image, Pipeline, &Debug);
+        // An address copied before the load and the loaded callable copied
+        // afterward retain the import. A numerically equal callable value,
+        // dynamic address, cycle, segment override or nonvoid declaration
+        // cannot acquire the void contract of that storage slot.
+        EXPECT_EQ(Pipeline.MedFuncs.front().ReturnsNoValue, Mutation == 0);
+      }
 }
 
 TEST(ReturnContracts, ADeclaredReturnTypeStays) {

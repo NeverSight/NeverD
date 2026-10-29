@@ -17,6 +17,7 @@
 #include "../abi/MedABIPassDetail.h"
 
 #include "neverd/Limits.h"
+#include "neverd/decode/Decoder.h"
 #include "neverd/ir/Limits.h"
 #include "neverd/ir/SourceCallABI.h"
 #include "neverd/ir/TargetRegInfo.h"
@@ -67,6 +68,34 @@ bool charge(size_t &Remaining, size_t Count) {
   }
   Remaining -= Count;
   return true;
+}
+
+// Decode only potential represented writes, never every call in an ordinary
+// function. Instruction length belongs to the decoder, not to a C spelling or
+// the next recovered operation's address.
+std::optional<va_t> callFallthrough(const BinaryImage &Image, va_t Address,
+                                    Decoder &Decode) {
+  const auto Bias = sourceCallReturnAddressBias(&Image, Image.Arch, Address);
+  if (!Bias || *Bias != getTargetRegInfo(Image.Arch).PointerSize)
+    return std::nullopt;
+  const uint8_t *Bytes = nullptr;
+  size_t Size = 15;
+  for (; Size && !(Bytes = Image.readVA(Address, Size)); --Size) {
+  }
+  DecodedInsn I{};
+  if (!Size || !Decode.decodeOne(Bytes, Size, Address, I) ||
+      I.Id != X86_INS_CALL || !I.Raw->detail ||
+      I.Raw->detail->x86.op_count != 1 ||
+      I.Raw->detail->x86.operands[0].size !=
+          getTargetRegInfo(Image.Arch).PointerSize ||
+      Address >= InvalidVA - I.Size)
+    return std::nullopt;
+  if (Image.Arch == Arch::X86) {
+    if (Address > UINT32_MAX)
+      return std::nullopt;
+    return uint32_t(Address + I.Size);
+  }
+  return Address + I.Size;
 }
 
 /// The registration owner follows SavedESP through memory and runtime entry
@@ -307,13 +336,12 @@ RegistrationCalls registrationCalls(
 }
 } // namespace
 
-bool validateSourceCallReturnReads(const MedFunc &Func,
-                                   const BinaryImage &Image,
-                                   std::string &Diagnostic, size_t WorkLimit,
-                                   const LowFunc *FreshSource,
-                                   const MedCallReturnRanges *CallReturns,
-                                   std::vector<MedCallReturnRead> *Deferred,
-                                   bool *NeedsCalleeFacts) {
+static bool checkSourceCallReturnReads(
+    const MedFunc &Func, const BinaryImage &Image, std::string &Diagnostic,
+    size_t &Remaining, const LowFunc *FreshSource,
+    std::set<const MedOp *> *ObservedCalls,
+    const MedCallReturnRanges *CallReturns,
+    std::vector<MedCallReturnRead> *Deferred, bool *NeedsCalleeFacts) {
   Diagnostic.clear();
   if (NeedsCalleeFacts)
     *NeedsCalleeFacts = false;
@@ -333,7 +361,6 @@ bool validateSourceCallReturnReads(const MedFunc &Func,
     return Refuse("CALL return-slot observation analysis exceeded its work "
                   "budget; refusing an unproved frame projection");
   };
-  size_t Remaining = WorkLimit;
   std::vector<const MedOp *> Calls;
   std::vector<const MedOp *> Memory;
   std::map<const MedOp *, std::pair<int, size_t>> Positions;
@@ -415,6 +442,43 @@ bool validateSourceCallReturnReads(const MedFunc &Func,
       CallEnds.emplace(Calls[I], EntryStackOffsetRange{*Offset, *Offset});
     else
       CallEnds.emplace(Calls[I], std::nullopt);
+  // An explicit store of this CALL's actual next PC already represents its
+  // implicit write. Check the current operations and stack coordinates anew;
+  // no persisted annotation may exempt a changed source or changed image.
+  std::optional<Decoder> Decode;
+  std::map<std::pair<int, size_t>, const Access *> StoresByPosition;
+  for (const auto &[Op, A] : Stores)
+    StoresByPosition.emplace(std::pair{A.Block, A.Position}, &A);
+  for (auto It = CallEnds.begin(); It != CallEnds.end();) {
+    const MedOp *Call = It->first;
+    const auto [BlockId, Position] = Positions.at(Call);
+    const MedOp *Store = nullptr;
+    if (Position && It->second) {
+      const auto Previous = StoresByPosition.find({BlockId, Position - 1});
+      if (Previous != StoresByPosition.end()) {
+        const auto &A = *Previous->second;
+        if (It->second->Min >= std::numeric_limits<int64_t>::min() + Width &&
+            A.Begin == It->second->Min - Width && A.End == It->second->Max &&
+            A.Op->Inputs[1].isConst())
+          Store = A.Op;
+      }
+    }
+    if (Store) {
+      if (!Decode) {
+        Decode.emplace();
+        if (!Decode->init(Image))
+          return Refuse("CALL return-slot encoding decoder is unavailable");
+      }
+      if (!charge(Remaining, 1))
+        return Exhausted();
+      const auto PC = callFallthrough(Image, Call->Addr, *Decode);
+      if (PC && Store->Inputs[1].ConstVal == *PC) {
+        It = CallEnds.erase(It);
+        continue;
+      }
+    }
+    ++It;
+  }
   const auto CallSlotBegin =
       [&](const EntryStackOffsetRange &End) -> std::optional<int64_t> {
     // SP can fit while the implicit push crosses the native coordinate.
@@ -817,19 +881,23 @@ bool validateSourceCallReturnReads(const MedFunc &Func,
         const Write &Item = Row[State - 1];
         if (const uint64_t Hit = Current & Mask(Item.Range, Word)) {
           if (Item.Call) {
-            const Access *Load = Witness(Word, Index, State, Hit);
-            const std::string Reason =
-                Observed(Load) +
-                "observes a physical CALL return slot from 0x" +
-                llvm::utohexstr(Item.Op->Addr) +
-                "; the ordinary C frame does not represent that write; "
-                "refusing a stale frame value";
-            if (!Defer || !Load)
-              return Refuse(Reason);
-            Defer->push_back(
-                {Load->Op->Addr, Load->Op->OriginSeq, Explain(Reason)});
-            Leaving = Load;
-            return false;
+            if (ObservedCalls) {
+              ObservedCalls->insert(Item.Op);
+            } else {
+              const Access *Load = Witness(Word, Index, State, Hit);
+              const std::string Reason =
+                  Observed(Load) +
+                  "observes a physical CALL return slot from 0x" +
+                  llvm::utohexstr(Item.Op->Addr) +
+                  "; the ordinary C frame does not represent that write; "
+                  "refusing a stale frame value";
+              if (!Defer || !Load)
+                return Refuse(Reason);
+              Defer->push_back(
+                  {Load->Op->Addr, Load->Op->OriginSeq, Explain(Reason)});
+              Leaving = Load;
+              return false;
+            }
           }
           Current &= ~Hit;
         }
@@ -889,7 +957,13 @@ bool validateSourceCallReturnReads(const MedFunc &Func,
     // has its own allowance: a refusal or exhaustion leaves the bounded
     // proof its whole budget.
     size_t Allowance = Remaining;
-    if (Observe(CallEnds, {}, Allowance, nullptr))
+    if (ObservedCalls) {
+      const bool Complete = Observe(CallEnds, {}, Allowance, nullptr);
+      const bool HasWrites = !ObservedCalls->empty();
+      ObservedCalls->clear();
+      if (Complete && !HasWrites)
+        return true;
+    } else if (Observe(CallEnds, {}, Allowance, nullptr))
       return true;
     Diagnostic.clear();
     // Only a PE32 registration frame reads the exact accesses by operation.
@@ -1346,6 +1420,139 @@ bool validateObservedCallReturnReads(
                               : Observer);
       return false;
     }
+  return true;
+}
+
+bool validateSourceCallReturnReads(const MedFunc &Func,
+                                   const BinaryImage &Image,
+                                   std::string &Diagnostic, size_t WorkLimit,
+                                   const LowFunc *FreshSource,
+                                   const MedCallReturnRanges *CallReturns,
+                                   std::vector<MedCallReturnRead> *Deferred,
+                                   bool *NeedsCalleeFacts) {
+  size_t Remaining = WorkLimit;
+  return checkSourceCallReturnReads(Func, Image, Diagnostic, Remaining,
+                                    FreshSource, nullptr, CallReturns, Deferred,
+                                    NeedsCalleeFacts);
+}
+
+bool preserveSourceCallReturnWrites(MedFunc &Func, const BinaryImage &Image,
+                                    std::string &Diagnostic, size_t WorkLimit,
+                                    const LowFunc *FreshSource,
+                                    const MedCallReturnRanges *CallReturns,
+                                    std::vector<MedCallReturnRead> *Deferred,
+                                    bool *NeedsCalleeFacts) {
+  std::set<const MedOp *> Observed;
+  size_t Remaining = WorkLimit;
+  if (!checkSourceCallReturnReads(Func, Image, Diagnostic, Remaining,
+                                  FreshSource, &Observed, CallReturns, nullptr,
+                                  NeedsCalleeFacts))
+    return false;
+  if (Observed.empty())
+    return true;
+  const auto Refuse = [&] {
+    return validateSourceCallReturnReads(Func, Image, Diagnostic, WorkLimit,
+                                         FreshSource, CallReturns, Deferred,
+                                         NeedsCalleeFacts);
+  };
+  if (!Func.CallInfos.empty())
+    return Refuse();
+  const auto Stacks = sourceCallStackPointers(Func, Image.Arch, Remaining);
+  std::vector<MedVar> Values;
+  for (const MedOp *Call : Observed) {
+    const auto Found = Stacks.find(Call);
+    if (Found == Stacks.end())
+      return Refuse();
+    Values.push_back(Found->second);
+  }
+  if (!charge(Remaining, Observed.size()))
+    return Refuse();
+  const auto Offsets = entryStackOffsets(Func, Values, Image.Arch,
+                                         Image.abiFormat(), Func.EntryKind);
+  Decoder Decode;
+  if (!Decode.init(Image))
+    return Refuse();
+  struct Write {
+    MedVar Stack;
+    va_t PC;
+  };
+  std::map<const MedOp *, Write> Writes;
+  const auto Width = getTargetRegInfo(Image.Arch).PointerSize;
+  int64_t FrameSize = Func.FrameSize;
+  size_t Index = 0;
+  for (const MedOp *Call : Observed) {
+    const auto Offset = Offsets[Index++];
+    if (!Offset || *Offset > 0 ||
+        *Offset < -limits::ir::kSourceStackFrameMaxFrame + Width)
+      return Refuse();
+    const auto PC = callFallthrough(Image, Call->Addr, Decode);
+    if (!PC)
+      return Refuse();
+    Writes.emplace(Call, Write{Stacks.at(Call), *PC});
+    FrameSize = std::max(FrameSize, Width - *Offset);
+  }
+  int MaximumId = 0;
+  const auto Visit = [&](const MedVar &V) {
+    if (!V.isConst())
+      MaximumId = std::max(MaximumId, V.Id);
+  };
+  for (const MedVar &V : Func.Params)
+    Visit(V);
+  for (const MedVar &V : Func.Locals)
+    Visit(V);
+  for (const MedCallClobber &Clobber : Func.CallClobbers) {
+    Visit(Clobber.Value);
+    Visit(Clobber.PreservedInput);
+  }
+  for (const MedBlock &Block : Func.Blocks) {
+    if (!charge(Remaining, Block.Ops.size() + Block.Phis.size()))
+      return Refuse();
+    for (const PhiNode &Phi : Block.Phis) {
+      Visit(Phi.Output);
+      for (const auto &[Pred, V] : Phi.Args)
+        Visit(V);
+      if (Phi.ExceptionalEntry)
+        Visit(*Phi.ExceptionalEntry);
+    }
+    for (const MedOp &Op : Block.Ops) {
+      Visit(Op.Output);
+      for (unsigned I = 0; I < Op.NumInputs; ++I)
+        Visit(Op.Inputs[I]);
+    }
+  }
+  if (Observed.size() > size_t(std::numeric_limits<int>::max() - MaximumId))
+    return Refuse();
+  // All proof and budget failures precede mutation. Each inserted address is
+  // the current SSA stack value; the real target load still precedes the push.
+  for (MedBlock &Block : Func.Blocks) {
+    std::vector<MedOp> Ops;
+    for (const MedOp &Op : Block.Ops) {
+      if (const auto Found = Writes.find(&Op); Found != Writes.end()) {
+        MedVar Address;
+        Address.Kind = MedVar::Temp;
+        Address.TheArch = Image.Arch;
+        Address.Id = ++MaximumId;
+        Address.Size = Width;
+        MedOp Subtract;
+        Subtract.Opcode = NdOp::INT_SUB;
+        Subtract.Output = Address;
+        Subtract.Addr = Op.Addr;
+        Subtract.addInput(Found->second.Stack);
+        Subtract.addInput(MedVar::makeConst(Width, Width));
+        Ops.push_back(std::move(Subtract));
+        MedOp Store;
+        Store.Opcode = NdOp::STORE;
+        Store.Addr = Op.Addr;
+        Store.addInput(Address);
+        Store.addInput(MedVar::makeConst(Found->second.PC, Width,
+                                         ConstantAddressProvenance::Scalar));
+        Ops.push_back(std::move(Store));
+      }
+      Ops.push_back(Op);
+    }
+    Block.Ops = std::move(Ops);
+  }
+  Func.FrameSize = FrameSize;
   return true;
 }
 } // namespace neverd

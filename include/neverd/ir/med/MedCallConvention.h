@@ -29,6 +29,7 @@
 #include "neverd/ir/med/MedIR.h"
 
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringRef.h"
 
 #include <cstddef>
@@ -144,7 +145,7 @@ struct CallArgumentConvention {
   std::optional<size_t> (*PrototypeArgCount)(llvm::StringRef Name) = nullptr;
   /// The complete integer operands such a platform prototype gives a named
   /// function, each with the width it declares, its stack operands included;
-  /// nullopt where it gives none or no stack operand.  The operands bind
+  /// nullopt where no complete contract is available.  The operands bind
   /// before SSA, as a parsed declaration's do (importPrototypeArguments).
   std::optional<FixedIntegerCallArguments> (*PrototypeIntegerArguments)(
       llvm::StringRef Name) = nullptr;
@@ -194,6 +195,38 @@ inline bool isIncomingRegisterSave(const TargetRegInfo &TRI, const MedVar &V) {
   return V.Kind == MedVar::Reg && V.SSAVer == 0 &&
          (TRI.isCalleeSaveReg(V.RegOff) || TRI.isLinkRegister(V.RegOff));
 }
+
+/// The incoming value of a scratch register that carries no argument is
+/// undefined where the convention says so: storing it, as an alignment
+/// `push rax` does, passes nothing and defines no byte (call-argument
+/// recovery and HighIR dead-store elimination apply the same rule).  Only a
+/// general-purpose register qualifies; vector argument registers keep their
+/// values.  The incoming value is version 0 of the register, which no
+/// renaming made a local: HighIR's renamed locals are version 0 as well.
+inline bool isUndefinedIncomingScratch(const TargetRegInfo &TRI, Arch TheArch,
+                                       const CallArgumentConvention *Convention,
+                                       llvm::ArrayRef<uint64_t> ArgRegs,
+                                       const MedVar &V) {
+  if (!Convention || !Convention->UndefinedIncomingScratchRegisters ||
+      V.Kind != MedVar::Reg || V.SSAVer != 0 || V.RenameTag >= 0 ||
+      TRI.isStackPointer(V.RegOff) || TRI.isCalleeSaveReg(V.RegOff) ||
+      TRI.isLinkRegister(V.RegOff))
+    return false;
+  const std::optional<unsigned> Family = gprFamilyOf(TheArch, V.RegOff);
+  return Family && llvm::none_of(ArgRegs, [&](uint64_t Reg) {
+           return gprFamilyOf(TheArch, Reg) == Family;
+         });
+}
+
+/// Whether \p V, a value \p Func stores before one of its calls, is only a
+/// scratch register's undefined incoming value (isUndefinedIncomingScratch
+/// under the convention of \p TheArch code in a \p Format image): no
+/// operation, join or call clobber of \p Func defines it, as MedSSA numbers a
+/// register's first write zero where no value enters in it, and \p Func takes
+/// no parameter in that register.  The stack slot it fills, as an alignment
+/// `push rax` fills one, passes the call nothing.
+bool holdsUndefinedIncomingScratch(const MedFunc &Func, Arch TheArch,
+                                   BinaryFormat Format, const MedVar &V);
 
 } // namespace neverd
 

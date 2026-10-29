@@ -15,6 +15,8 @@
 
 #include "neverd/ir/med/MedIntegerReturnRange.h"
 
+#include "llvm/ADT/ArrayRef.h"
+
 #include <cstddef>
 #include <map>
 #include <string>
@@ -41,20 +43,28 @@ MedStackProjection medStackProjection(const PipelineOptions &Options);
 /// deferred only because a CALL's stack position had no local range refuses
 /// this attempt instead, before any annotation: the caller retries it once
 /// callee return ranges are known.
+/// CallFreeMachineSource is reserved for the output of
+/// wrapInterpreterMachineStateX64, which rejects remaining CALL/INDIR_CALL
+/// operations. Its guest call writes are explicit memory effects, so there
+/// are no omitted native CALL writes to check. A source type hint alone does
+/// not establish this property.
 void prepareMedStackAccesses(MedFunc &Func, const LowFunc &Source,
                              const BinaryImage &Image,
                              MedStackProjection Projection,
                              const MedCallReturnRanges *CallReturns = nullptr,
-                             bool WaitForCalleeFacts = false);
+                             bool WaitForCalleeFacts = false,
+                             bool CallFreeMachineSource = false);
 
 /// Read complete local leaf results in parallel after conversion has joined.
 /// The returned facts are immutable during the following source checks.
 MedCallReturnRanges sourceCallReturnRanges(const BinaryImage &Image,
                                            const PipelineResult &Result);
 
-/// Shared source-only frame observation proof after call ABI recovery.
+/// Shared source-only frame observation proof after call ABI recovery. Borrow
+/// the original LowIR coverage from the pipeline or SDK's immutable result.
 void prepareRecoveredSourceStackAccesses(const BinaryImage &Image,
-                                         PipelineResult &Result);
+                                         PipelineResult &Result,
+                                         llvm::ArrayRef<LowFunc> Originals);
 
 /// Whether a function MedIR refuses fails the run of \p Options rather than
 /// leaving it out (PipelineOptions::OmitRefusedFunctions).

@@ -111,6 +111,25 @@ public:
   std::string sourceImportDeclaration(const FunctionSym &Function,
                                       llvm::StringRef Name);
   std::map<std::string, FunctionSym> SourceImportPrototypes;
+  struct SourcePointerType {
+    TypeRef Type;
+    std::string Alias;
+    std::string declaration(llvm::StringRef Name = {}) const;
+  };
+  struct DefinitionPointerTypes {
+    std::vector<SourcePointerType> Parameters;
+    SourcePointerType Result;
+  };
+  /// The pointer types actually printed by a definition, shared by its
+  /// signature and direct calls regardless of module order. Declarations
+  /// outside the selected projection keep their own LLVM/source contract.
+  const DefinitionPointerTypes &
+  definitionPointerTypes(const llvm::Function &Fn) const;
+  mutable std::map<const llvm::Function *, DefinitionPointerTypes>
+      DefinitionPointers;
+  std::optional<DebugParamBindings>
+  debugArgumentBindings(const llvm::Function &Fn,
+                        const FunctionSym &Signature) const;
   /// Records which symbol each function identifier stands for
   /// (CSourceMap::Names), as HighC does, from the ordinary render.
   void recordSourceNames(const llvm::Module &Mod);
@@ -150,6 +169,17 @@ public:
   void writeReferencedImageObjects(llvm::ArrayRef<const llvm::Function *> Fns,
                                    llvm::StringRef Text);
   void writeForwardDecls(llvm::Module &Mod);
+
+  //--- PE image headers (COFF/LLVMCImageBase.cpp) ---
+  /// Whether \p Global is the linker's `__ImageBase`, through which the
+  /// module reaches the image's own PE headers
+  /// (MedLLVMEmitter::tryResolveImageHeaderData), not a data symbol binding.
+  static bool isImageBaseDeclaration(const llvm::GlobalVariable &Global);
+  /// Name \p Global `__ImageBase` in C, or another identifier when a name
+  /// the unit already gave holds that spelling.
+  void allocateImageBaseIdentifier(const llvm::GlobalVariable &Global);
+  /// Declare `__ImageBase` as \p Identifier, bound to the linker's symbol.
+  void writeImageBaseDeclaration(llvm::StringRef Identifier);
 
   //--- Function rendering (LLVMCFuncWriter.cpp) ---
   bool isAnalysisOnlyFunction(const llvm::Function &Fn) const;
@@ -601,6 +631,7 @@ public:
   /// \p Call's text \p Expr as a value of the call's own type: the pointer a
   /// library routine returns as the integer that holds it, and the result a
   /// callee that returns nothing leaves undefined as zero.
+  static bool needsCallSiteCType(const llvm::CallBase &Call);
   std::string callResult(const llvm::CallBase &Call, std::string Expr) const;
   /// MSVC ctor/dtor that returns `this` and whose result is unread. A store
   /// into an alloca that nothing loads does not count. Print the call as a
@@ -675,6 +706,13 @@ public:
   bool declaredParameterIsInteger(const llvm::CallBase &Call,
                                   llvm::StringRef CalleeName,
                                   unsigned ArgIdx) const;
+  /// Whether \p Text, \p Pointer as the call spells it, is the address of a
+  /// frame member whose type, which the frame record lays the member out as,
+  /// \p Declared does not point to: C converts it to such a parameter only
+  /// through void *.  A void * parameter takes it as it is; where no
+  /// declaration types the parameter, any such address counts.
+  bool frameAddressOfOtherType(const llvm::Value &Pointer, llvm::StringRef Text,
+                               const TypeRef &Declared) const;
   std::optional<std::string> enumeratorDisplay(const TypeRef &Ty,
                                                uint64_t Val) const;
   TypeRef enumTypeUsedAsCallArg(const llvm::AllocaInst *Slot) const;
@@ -750,9 +788,12 @@ public:
   std::optional<va_t>
   uniqueAllocaImageImmediate(const llvm::AllocaInst *Slot) const;
   std::string namedImageObject(va_t Addr) const;
-  /// Recognized image text beside the load that reads it, even when the
-  /// object's declaration is folded out of the displayed function body.
-  std::string imageLoadComment(const llvm::LoadInst &Load) const;
+  /// Recognized image text at a proved data address, shared by loads and
+  /// pointer arguments even when the image declaration is folded away.
+  std::string imagePointerComment(const llvm::Value *Pointer) const;
+  /// Annotate a checked pointer argument without replacing its storage.
+  std::string imagePointerArgument(const llvm::Value *Pointer,
+                                   std::string Text) const;
   std::optional<va_t> imageDataVA(const llvm::Value *V) const;
   static unsigned imageIntegerAccessSize(const llvm::Type *Ty) {
     if (!Ty || !Ty->isIntegerTy())
@@ -1152,6 +1193,10 @@ public:
   std::map<const llvm::AllocaInst *, std::string> ForwardedFieldArgs;
   /// Cleanup-return targets printed after the wrap. The resume goto is omitted.
   std::set<const llvm::BasicBlock *> OmitCleanupRetTo;
+  /// While a __try wraps every printed block, the flag a return out of it
+  /// sets first, as its __finally reads it: C counts that return as an
+  /// abnormal termination, as it does an exception.
+  std::string WrappedFinallyNormalExit;
   /// While printing a phi-fed call at an incoming edge, that slot's argument
   /// prints the value stored on the edge.
   const llvm::AllocaInst *PhiTailSlot = nullptr;

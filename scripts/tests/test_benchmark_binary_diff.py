@@ -148,6 +148,16 @@ class ArtifactTests(unittest.TestCase):
         corpus_path = self.write("corpus.json", {"schema": bench.CORPUS_SCHEMA, "cases": [self.case]})
         return corpus_path, self.write("run.json", run), run
 
+    def test_absolute_artifact_retains_hash_checks_when_relative_paths_are_unavailable(self):
+        source = self.inputs[0]
+        with mock.patch.object(bench.os.path, "relpath", side_effect=ValueError("different drives")):
+            record = bench.artifact(source, self.root)
+        self.assertEqual(record["path"], str(source.resolve()))
+        self.assertEqual(bench.checked_artifact(record, self.root), source.resolve())
+        source.write_bytes(b"changed after recording")
+        with self.assertRaisesRegex(ValueError, "SHA-256 mismatch"):
+            bench.checked_artifact(record, self.root)
+
     def test_complete_report_scores_only_accepted_matches(self):
         corpus, run, _ = self.receipt()
         result = bench.evaluate(corpus, run)
@@ -155,6 +165,7 @@ class ArtifactTests(unittest.TestCase):
         self.assertEqual(result["metrics"]["accepted_pairs"], 1)
         self.assertEqual(result["input_binding"], "native-and-receipt")
 
+    @unittest.skipUnless(sys.platform.startswith("linux"), "Linux CLI/runtime execution")
     def test_runner_retains_bad_output_and_distinguishes_mapping_from_body_coverage(self):
         report = copy.deepcopy(self.report)
         report["coverage"] = {"primary": {"incomplete": 2}, "unmeasured": 0}

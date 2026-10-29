@@ -287,12 +287,16 @@ TEST(X86InstructionCoverage, PinnedDecoderCorpusHasExplicitLiftResults) {
                               [&](const auto &E) { return E.Id == I.Id; }) ||
           std::ranges::any_of(test::X86ThreeDNowEncodings,
                               [&](const auto &E) { return E.Id == I.Id; });
-      // The architectural returns (far, interrupt and syscall returns:
-      // RETF/RETFQ, IRET/IRETD/IRETQ, SYSRET/SYSRETQ, SYSEXIT/SYSEXITQ) now lift
-      // to a faithful terminal state-transfer intrinsic, so they take the
-      // ordinary lift path below.  SYSENTER and RSM enter through an MSR/SMRAM
-      // target with no named operand and stay refused.
-      if (I.Id == X86_INS_SYSENTER || I.Id == X86_INS_RSM || LegacyGap) {
+      // These instructions need the owned x87 state, even with no explicit
+      // operands. The corpus census deliberately uses the unowned entrypoint.
+      const bool UnownedX87State =
+          I.Id == X86_INS_FNOP || I.Id == X86_INS_EMMS || I.Id == X86_INS_FEMMS;
+      // Far, interrupt and syscall returns take the ordinary lift path through
+      // analysis-only terminal intrinsics. This census does not qualify native
+      // restoration or continuation. SYSENTER and RSM enter through an
+      // MSR/SMRAM target with no named operand and stay refused.
+      if (I.Id == X86_INS_SYSENTER || I.Id == X86_INS_RSM || LegacyGap ||
+          UnownedX87State) {
         EXPECT_THROW(D.liftToLow(I, Ops), UnliftedInstruction);
         EXPECT_TRUE(Ops.empty());
         ++Refused;

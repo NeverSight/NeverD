@@ -61,6 +61,10 @@ MedLLVMEmitter::writableDataSegOf(const MedVar &AddrVar,
         ExactOccurrence->AddressOwnerVA != InvalidVA;
     if (C == 0 && !HasOwner)
       return nullptr;
+    // Another module's storage an undefined data symbol names is no writable
+    // data of the image's: its address is the symbol's at run time.
+    if (Img->objectExternDataAt(C))
+      return nullptr;
 
     // An occurrence-local relocation owner is authoritative. In particular,
     // `&rodata[N]` may numerically equal the next writable section's start;

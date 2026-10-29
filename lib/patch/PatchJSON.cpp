@@ -14,12 +14,14 @@
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringSwitch.h"
+#include "llvm/Support/Compiler.h"
 #include "llvm/Support/raw_ostream.h"
 
 #if NEVERD_USE_SIMDJSON
 #include "simdjson.h"
 #endif
 
+#include <algorithm>
 #include <charconv>
 #include <limits>
 #include <optional>
@@ -52,7 +54,131 @@ neverd::patch::parseHex(llvm::StringRef Text, uint64_t Limit) {
   return Bytes;
 }
 
-// Only formatter-produced hexadecimal text reaches this helper. It is ASCII
+namespace {
+// This root-array writer accepts only the fixed patch inventory schema keys.
+// Pretty selects the canonical two-space sidecar format. General string
+// values still use LLVM's JSON escaping. Keep the small attribute sink chain
+// inline so schema keys reach raw_ostream as constants.
+template <bool Pretty> class PatchOutput {
+  llvm::raw_ostream &Stream;
+  bool FirstObject = true;
+  bool FirstAttribute = true;
+
+  LLVM_ATTRIBUTE_ALWAYS_INLINE void attributeBegin(llvm::StringLiteral Key) {
+    if (!FirstAttribute)
+      Stream << ',';
+    FirstAttribute = false;
+    if constexpr (Pretty)
+      Stream << "\n    ";
+    Stream << '"' << Key << (Pretty ? "\": " : "\":");
+  }
+
+public:
+  explicit PatchOutput(llvm::raw_ostream &Stream) : Stream(Stream) {}
+
+  template <typename Callback> void array(Callback Emit) {
+    Stream << '[';
+    Emit();
+    if constexpr (Pretty)
+      if (!FirstObject)
+        Stream << '\n';
+    Stream << ']';
+  }
+
+  template <typename Callback> void object(Callback Emit) {
+    if (!FirstObject)
+      Stream << ',';
+    if constexpr (Pretty)
+      Stream << "\n  ";
+    FirstObject = false;
+    FirstAttribute = true;
+    Stream << '{';
+    Emit();
+    if constexpr (Pretty)
+      Stream << "\n  ";
+    Stream << '}';
+  }
+
+  LLVM_ATTRIBUTE_ALWAYS_INLINE void attribute(llvm::StringLiteral Key,
+                                              llvm::StringRef Text) {
+    attributeBegin(Key);
+    Stream << llvm::json::Value(Text);
+  }
+
+  LLVM_ATTRIBUTE_ALWAYS_INLINE void attribute(llvm::StringLiteral Key,
+                                              uint64_t Value) {
+    attributeBegin(Key);
+    Stream << Value;
+  }
+
+  LLVM_ATTRIBUTE_ALWAYS_INLINE void hexAttribute(llvm::StringLiteral Key,
+                                                 llvm::StringRef Text) {
+    attributeBegin(Key);
+    Stream << '"' << Text << '"';
+  }
+};
+
+class HexValue {
+public:
+  static constexpr size_t MaxSize =
+      2 + std::numeric_limits<uint64_t>::digits / 4;
+
+private:
+  char Buffer[MaxSize] = {'0', 'x'};
+
+public:
+  llvm::StringRef format(uint64_t Value) {
+    const auto End =
+        std::to_chars(Buffer + 2, Buffer + sizeof Buffer, Value, 16).ptr;
+    return llvm::StringRef(Buffer, End - Buffer);
+  }
+};
+
+// Estimate compact output capacity from metadata without a second row scan.
+// Skip small output that fits in the remaining stream buffer. This is only
+// an allocation hint; the stream remains growable as usual.
+template <bool FullRows>
+static void reserveCompactOutput(llvm::raw_ostream &Stream,
+                                 const PatchOverlay &Overlay) {
+  if (Overlay.empty())
+    return;
+  // Remove the representative decimal zero and the string terminator.
+  constexpr size_t RowSyntaxBytes =
+      (FullRows
+           ? sizeof(
+                 R"({"addr":"","current":"","file_off":"","kind":"","original":"","size":0,"va":""})")
+           : sizeof(R"({"address":"","size":0})")) -
+      sizeof("0");
+  constexpr size_t MaxKindSize = std::max({
+#define NEVERD_PATCH_KIND(Id, Spelling) sizeof(Spelling) - 1,
+#include "neverd/patch/PatchKinds.def"
+  });
+  constexpr size_t MaxSizeDigits = std::numeric_limits<uint64_t>::digits10 + 1;
+  const uint64_t Count = Overlay.rows().size();
+  const uint64_t HexBytes = FullRows ? 4 * Overlay.bytes() : 0;
+  constexpr uint64_t MaxRowOverhead =
+      RowSyntaxBytes + (FullRows ? 3 : 1) * HexValue::MaxSize +
+      (FullRows ? MaxKindSize : 0) + MaxSizeDigits;
+  const auto BufferRemaining =
+      Stream.GetBufferSize() - Stream.GetNumBytesInBuffer();
+  if (2 + (Count - 1) + Count * MaxRowOverhead + HexBytes <= BufferRemaining)
+    return;
+  char SizeBuffer[MaxSizeDigits];
+  const auto SizeEnd =
+      std::to_chars(SizeBuffer, SizeBuffer + sizeof SizeBuffer, Overlay.bytes())
+          .ptr;
+  uint64_t RowOverhead =
+      RowSyntaxBytes + HexValue::MaxSize + (SizeEnd - SizeBuffer);
+  if constexpr (FullRows) {
+    HexValue Hex;
+    const auto FileOffsetSize =
+        Hex.format(Overlay.rows().rbegin()->first).size();
+    RowOverhead += 2 * FileOffsetSize + MaxKindSize;
+  }
+  Stream.reserveExtraSpace(2 + (Count - 1) + Count * RowOverhead + HexBytes);
+}
+
+// Only formatter-produced hexadecimal text reaches these helpers. It is ASCII
 // without quotes or escapes, so generic string validation/escaping is
 // redundant.
 static void writeHexAttribute(llvm::json::OStream &Output, llvm::StringRef Key,
@@ -63,20 +189,22 @@ static void writeHexAttribute(llvm::json::OStream &Output, llvm::StringRef Key,
   Output.attributeEnd();
 }
 
-void neverd::patch::writePatchRows(llvm::json::OStream &Output,
-                                   const PatchOverlay &Overlay) {
+template <bool Pretty>
+LLVM_ATTRIBUTE_ALWAYS_INLINE void writeHexAttribute(PatchOutput<Pretty> &Output,
+                                                    llvm::StringLiteral Key,
+                                                    llvm::StringRef Text) {
+  Output.hexAttribute(Key, Text);
+}
+
+template <typename OutputT>
+void writeRows(OutputT &Output, const PatchOverlay &Overlay) {
   llvm::SmallString<32> Bytes;
-  char Buffer[18] = {'0', 'x'}; // Prefix and up to sixteen hexadecimal digits.
-  const auto Hex = [&](uint64_t Value) {
-    const auto End =
-        std::to_chars(Buffer + 2, Buffer + sizeof Buffer, Value, 16).ptr;
-    return llvm::StringRef(Buffer, End - Buffer);
-  };
+  HexValue Hex;
   // Each view is consumed before the next conversion reuses its storage.
   Output.array([&] {
     for (const auto &[Offset, Row] : Overlay.rows())
       Output.object([&] {
-        const auto FileOffset = Hex(Offset);
+        const auto FileOffset = Hex.format(Offset);
         writeHexAttribute(Output, "addr", FileOffset);
         llvm::toHex(Row.Current, true, Bytes);
         writeHexAttribute(Output, "current", Bytes);
@@ -85,7 +213,40 @@ void neverd::patch::writePatchRows(llvm::json::OStream &Output,
         llvm::toHex(Row.Original, true, Bytes);
         writeHexAttribute(Output, "original", Bytes);
         Output.attribute("size", Row.size());
-        writeHexAttribute(Output, "va", Hex(Row.Address));
+        writeHexAttribute(Output, "va", Hex.format(Row.Address));
+      });
+  });
+}
+} // namespace
+
+void neverd::patch::writePatchRows(llvm::json::OStream &Output,
+                                   const PatchOverlay &Overlay) {
+  writeRows(Output, Overlay);
+}
+
+void neverd::patch::writePatchRows(llvm::raw_ostream &Stream,
+                                   const PatchOverlay &Overlay) {
+  reserveCompactOutput<true>(Stream, Overlay);
+  PatchOutput<false> Output(Stream);
+  writeRows(Output, Overlay);
+}
+
+void neverd::patch::writePatchSidecarRows(llvm::raw_ostream &Stream,
+                                          const PatchOverlay &Overlay) {
+  PatchOutput<true> Output(Stream);
+  writeRows(Output, Overlay);
+}
+
+void neverd::patch::writePatchRanges(llvm::raw_ostream &Stream,
+                                     const PatchOverlay &Overlay) {
+  reserveCompactOutput<false>(Stream, Overlay);
+  PatchOutput<false> Output(Stream);
+  HexValue Hex;
+  Output.array([&] {
+    for (const auto &[Offset, Row] : Overlay.rows())
+      Output.object([&] {
+        writeHexAttribute(Output, "address", Hex.format(Row.Address));
+        Output.attribute("size", Row.size());
       });
   });
 }

@@ -236,6 +236,41 @@ LowFunc multipleReturns(bool Loop = false) {
   return F;
 }
 
+TEST(InterpreterMachineStateTest, SourceWrapperRefusesUnloweredCalls) {
+  for (auto Format :
+       {BinaryFormat::ELF, BinaryFormat::COFF, BinaryFormat::MachO})
+    for (auto Layout : {InterpreterMachineStateLayout::InlineReturns,
+                        InterpreterMachineStateLayout::SharedGPRExit})
+      for (auto Opcode : {NdOp::CALL, NdOp::INDIR_CALL, NdOp::INDIR_BR}) {
+        SCOPED_TRACE(static_cast<unsigned>(Format));
+        SCOPED_TRACE(static_cast<unsigned>(Layout));
+        SCOPED_TRACE(static_cast<unsigned>(Opcode));
+        const bool Direct = Opcode == NdOp::CALL;
+        auto F =
+            function({{operation(Opcode, {},
+                                 {Direct ? NdVar::codeAddress(0x2000, 8, 0x2000)
+                                         : NdVar::reg(x86reg::RAX, 8)})}});
+        auto &Boundary = F.Blocks.front().InstructionBoundaries.front();
+        Boundary.Control = Opcode == NdOp::INDIR_BR
+                               ? LowInstructionControl::Branch
+                               : LowInstructionControl::Call;
+        Boundary.ControlFlags = Opcode == NdOp::INDIR_BR
+                                    ? LowInstructionControlFlag::Branch
+                                    : LowInstructionControlFlag::Call;
+        if (Direct)
+          Boundary.Immediate = 0x2000;
+        else
+          Boundary.ControlFlags |= LowInstructionControlFlag::Indirect;
+        auto Wrapped = wrapInterpreterMachineStateX64(
+            F, Format, InterpreterMachineStateProfile::UserX64NoFaultV1,
+            std::nullopt, Layout);
+        ASSERT_FALSE(static_cast<bool>(Wrapped));
+        EXPECT_NE(llvm::toString(Wrapped.takeError())
+                      .find("requires resolved call-free control flow"),
+                  std::string::npos);
+      }
+}
+
 TEST(InterpreterMachineStateTest, SharedReturnStateWritesStayBounded) {
   const auto F = multipleReturns();
   for (auto Format :

@@ -674,6 +674,12 @@ TEST_F(DevirtualizationSourceTest, CLIRefinementBudgetControlsBothSourceABIs) {
         EXPECT_EQ(Object->getBoolean("controlComplete"), Complete);
         EXPECT_EQ(Object->getInteger("maxControlRefinements"), Limit);
         EXPECT_EQ(Object->getInteger("controlRefinements"), Limit);
+        if (!Complete) {
+          const auto Error = Object->getString("error");
+          ASSERT_TRUE(Error.has_value());
+          EXPECT_TRUE(Error->contains("budget exhausted"));
+          EXPECT_TRUE(Error->contains("last recovery frontier: at 0x"));
+        }
         for (const char *Key : {"controlRegisters", "controlFrameSlots"}) {
           const auto *Fields = Object->getArray(Key);
           ASSERT_NE(Fields, nullptr);

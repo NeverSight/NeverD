@@ -38,6 +38,35 @@ class DwarfIntervalTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "cyclic"):
             corpus.inherited_attribute(root, "DW_AT_decl_file")
 
+    def test_definition_unit_follows_origin_but_not_a_declaration_specification(self):
+        root = Path("/source-corpus").resolve()
+
+        def unit(name):
+            top = SimpleNamespace(attributes={
+                "DW_AT_name": SimpleNamespace(value=name.encode()),
+                "DW_AT_comp_dir": SimpleNamespace(value=str(root).encode())})
+            return SimpleNamespace(get_top_DIE=lambda: top, header=SimpleNamespace(version=4))
+
+        def die(offset, cu, attributes=None, references=None):
+            edges = references or {}
+            values = {key: SimpleNamespace(value=value) for key, value in (attributes or {}).items()}
+            values.update(dict.fromkeys(edges))
+            return SimpleNamespace(offset=offset, cu=cu, attributes=values,
+                                   get_DIE_from_attribute=edges.__getitem__)
+
+        declaration = die(4, unit("other.c"), {"DW_AT_decl_file": 1, "DW_AT_name": b"helper"})
+        definition = die(3, unit("definition.c"), references={"DW_AT_specification": declaration})
+        intermediate = die(2, unit("<artificial>"), references={"DW_AT_abstract_origin": definition})
+        concrete = die(1, unit("<artificial>"), references={"DW_AT_abstract_origin": intermediate})
+        dwarf = SimpleNamespace(line_program_for_CU=lambda cu: {
+            "file_entry": [SimpleNamespace(name=b"declarations.h", dir_index=0)]})
+        expected = ("definition.c", "declarations.h", "helper")
+        self.assertEqual(corpus.source_identity(concrete, dwarf, root), expected)
+        self.assertEqual(corpus.source_identity(definition, dwarf, root), expected)
+        intermediate.get_DIE_from_attribute = lambda key: concrete
+        with self.assertRaisesRegex(ValueError, "cyclic DWARF abstract origin"):
+            corpus.source_identity(concrete, dwarf, root)
+
 
 @unittest.skipUnless(sys.platform.startswith("linux") and shutil.which("gcc") and
                      shutil.which("strip") and importlib.util.find_spec("elftools"),
@@ -75,6 +104,20 @@ class SourceCorpusTests(unittest.TestCase):
         self.assertNotIn(("main.c", "main.c", "original"), functions)
         self.assertGreater(inventory["excluded_reasons"]["aliased-native-entry"], 0)
         self.assertEqual(inventory["image_base"], "0x0")
+
+    def test_lto_uses_original_source_units_and_keeps_duplicate_names_distinct(self):
+        source = self.sources[0]
+        linked = self.root / "lto.elf"
+        subprocess.run([shutil.which("gcc"), "-O1", "-g", "-gdwarf-4", "-fno-inline",
+                        "-flto=2", "-fPIE", "-pie", str(source / "one/worker.c"),
+                        str(source / "two/worker.c"), str(source / "main.c"),
+                        "-o", str(linked)], check=True, capture_output=True)
+        expected, _, _ = corpus.inspect_elf(self.binaries[0], source)
+        actual, inventory, _ = corpus.inspect_elf(linked, source)
+        self.assertEqual(set(actual), set(expected))
+        self.assertIn(("one/worker.c", "one/worker.c", "duplicate"), actual)
+        self.assertIn(("two/worker.c", "two/worker.c", "duplicate"), actual)
+        self.assertGreater(inventory["excluded_reasons"]["aliased-native-entry"], 0)
 
     def test_real_stripping_preserves_runtime_data_and_excludes_truth(self):
         functions, _, sections = corpus.inspect_elf(self.binaries[0], self.sources[0])

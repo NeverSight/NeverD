@@ -20,6 +20,7 @@
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/X86/X86FPState.h"
 #include "neverd/ir/med/X86/I386PicAddress.h"
+#include "neverd/ir/med/X86/X86RepAddresses.h"
 #include "neverd/loader/ReadOnlyBytes.h"
 #include "neverd/loader/RelocationProvenance.h"
 #include "neverd/support/Diagnostic.h"
@@ -2090,13 +2091,13 @@ bool MedLLVMEmitter::valueIsOpaqueRuntimeOffset(const MedVar &Value) const {
     const auto OwnerEnd = Img->mappedObjectOwnerEnd(VA);
     if (!Seg || !Seg->isReadable() || !Seg->isWritable() ||
         Seg->isExecutable() || Img->isCodeAddress(VA) ||
-        isReadOnlyAfterReloc(Seg) || Seg->Size > InvalidVA - Seg->VA ||
+        Img->readOnlyAfterRelocations(VA, Width) ||
+        Seg->Size > InvalidVA - Seg->VA ||
         !rangeInBounds(VA - Seg->VA, Width, Seg->Size) ||
         !rangeInBounds(VA - Seg->VA, Width, Seg->Data.size()) ||
         LayoutOwner == InvalidVA || !OwnerEnd || *OwnerEnd < VA + Width ||
         (OwnerVA != InvalidVA && OwnerVA != LayoutOwner) ||
-        (Sec && (!Sec->isWritable() || Sec->isExecutable() ||
-                 section_names::isReadOnlyAfterRelocSectionName(Sec->Name))))
+        (Sec && Sec->isExecutable()))
       return false;
     auto overlaps = [&](va_t Start, uint64_t Size) {
       return Size && (Start <= VA ? VA - Start < Size : Start - VA < Width);
@@ -4899,6 +4900,8 @@ std::optional<uint64_t> MedLLVMEmitter::traceSSAConst(const MedVar &V) const {
     const MedOp *Def = lookupDef(Cur);
     if (!Def)
       return std::nullopt;
+    if (auto Address = x86RepConstantAddressOutput(*Def, Cur, TargetArch))
+      return Address;
     if (Def->Opcode == NdOp::COPY && Def->NumInputs >= 1) {
       if (Def->Output.Size == 0 || Def->Inputs[0].Size == 0 ||
           Def->Output.Size < Def->Inputs[0].Size)

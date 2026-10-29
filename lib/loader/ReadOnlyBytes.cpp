@@ -4,6 +4,7 @@
 
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/Limits.h"
+#include "neverd/object/ELFLayout.h"
 
 #include "llvm/BinaryFormat/COFF.h"
 #include "llvm/BinaryFormat/ELF.h"
@@ -16,23 +17,37 @@ namespace neverd {
 
 bool BinaryImage::readOnlyAfterRelocations(va_t Addr, uint64_t Width) const {
   const Segment *Seg = getSegmentFor(Addr);
-  if (!Seg || !Width || Width > Seg->Size - (Addr - Seg->VA))
+  if (!Seg || !Width || Seg->Size > InvalidVA - Seg->VA ||
+      Width > Seg->Size - (Addr - Seg->VA))
     return false;
-  if (!Seg->isWritable() || Seg->ReadOnlyAfterRelocations ||
-      section_names::isReadOnlyAfterRelocSectionName(Seg->Name))
+  if (!Seg->isWritable() || Seg->ReadOnlyAfterRelocations)
     return true;
-  if (const Section *Sec = getSectionFor(Addr);
-      Sec && Width <= Sec->Size - (Addr - Sec->VA) &&
-      (section_names::isReadOnlyAfterRelocSectionName(Sec->Name) ||
-       section_names::isReadOnlyAfterRelocSectionName(Sec->SegmentName)))
-    return true;
-  if (ELFMetadata)
-    for (const ELFProgramHeader &Header : ELFMetadata->ProgramHeaders)
-      if (Header.Type == llvm::ELF::PT_GNU_RELRO &&
-          Addr >= Header.VirtualAddress &&
-          Addr - Header.VirtualAddress <= Header.MemorySize &&
-          Width <= Header.MemorySize - (Addr - Header.VirtualAddress))
-        return true;
+  // Names describe linker conventions, not runtime protection. In particular,
+  // -z norelro leaves .data.rel.ro writable and a Mach-O __DATA_CONST mapping
+  // without the loader's SG_READ_ONLY guarantee need not become immutable.
+  if (Format != BinaryFormat::ELF || IsRelocatable || !ELFMetadata)
+    return false;
+  // GNU_RELRO is a dynamic-loader action, not a kernel PT_LOAD permission.
+  // An executable without an interpreter may never protect it; a DSO has no
+  // independent process entry. Explicit loader guarantees above remain valid.
+  const bool DynamicImage =
+      (ELFMetadata->Type == llvm::ELF::ET_DYN && !Entry) ||
+      ((ELFMetadata->Type == llvm::ELF::ET_DYN ||
+        ELFMetadata->Type == llvm::ELF::ET_EXEC) &&
+       !ELFMetadata->Interpreter.empty());
+  const uint64_t Page = maximumELFProtectionPageSize(Arch);
+  if (!DynamicImage || !Page)
+    return false;
+  for (const ELFProgramHeader &Header : ELFMetadata->ProgramHeaders) {
+    if (Header.Type != llvm::ELF::PT_GNU_RELRO ||
+        Header.MemorySize > InvalidVA - Header.VirtualAddress)
+      continue;
+    // Relocation protection excludes an incomplete final page. Use the
+    // target's largest possible granule, never this analysis host's page.
+    const va_t End = (Header.VirtualAddress + Header.MemorySize) & ~(Page - 1);
+    if (Addr >= Header.VirtualAddress && Addr < End && Width <= End - Addr)
+      return true;
+  }
   return false;
 }
 

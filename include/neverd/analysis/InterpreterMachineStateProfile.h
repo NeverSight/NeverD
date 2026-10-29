@@ -31,7 +31,19 @@ enum class InterpreterMachineStateProfile : uint8_t {
   /// exception-dispatch or source-ABI evidence. User machine-source projection
   /// continues to reject it rather than applying CPL=3 semantics.
   KernelX64NoFaultV1,
+  /// The supervisor V1 domain with CPUID.07H.00H:EBX.SMAP[20]=1 and a live
+  /// AC bit. STAC/CLAC and POPFQ may change AC; TF and IOPL remain zero.
+  /// Successful ordinary memory accesses are still an explicit precondition
+  /// for every step, including the page-access permissions selected by AC.
+  /// This does not model page tables, SMAP faults or user-mode execution.
+  KernelX64SmapNoFaultV2,
 };
+
+constexpr bool
+isKernelX64MachineStateProfile(InterpreterMachineStateProfile Profile) {
+  return Profile == InterpreterMachineStateProfile::KernelX64NoFaultV1 ||
+         Profile == InterpreterMachineStateProfile::KernelX64SmapNoFaultV2;
+}
 
 /// A provider-owned projection whose meaning requires an explicit environment.
 /// It never promotes the original architectural undefined-output sidecar.

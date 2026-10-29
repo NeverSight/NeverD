@@ -6827,6 +6827,14 @@ Reference identities: unresolved. Some call or data targets cannot be compared. 
         <translation>
 參照身分：未解析。部分呼叫或資料目標無法比較。僅憑這一點無法認定發生了變更。</translation>
     </message>
+    <message>
+        <source>Include matched calls</source>
+        <translation>包含已配對的呼叫</translation>
+    </message>
+    <message>
+        <source>Extend shared regions across direct calls whose targets are paired. Results depend on the current function pairs and are recomputed when pairs change. This does not validate call behavior.</source>
+        <translation>允許共用區域跨越目標已配對的直接呼叫。結果取決於目前的函式配對，並在配對變更時重新計算。這不驗證呼叫行為。</translation>
+    </message>
 </context>
 <context>
     <name>neverd::gui::ComparisonFlowDialog</name>
@@ -7979,6 +7987,30 @@ External input producers are not compared or counted as shared code.</source>
 SSA recipe: %1</source>
         <translation>
 SSA 分析方案：%1</translation>
+    </message>
+    <message>
+        <source>
+Calls use current function pairs; behavior is not validated.</source>
+        <translation>
+呼叫依據目前的函式配對；尚未驗證行為。</translation>
+    </message>
+    <message>
+        <source>Call context…</source>
+        <translation>呼叫脈絡…</translation>
+    </message>
+    <message>
+        <source>Primary</source>
+        <translation>主要輸入</translation>
+    </message>
+    <message>
+        <source>Secondary</source>
+        <translation>次要輸入</translation>
+    </message>
+    <message>
+        <source>%1 primary / %2 secondary functions · %3 shared spans
+Coverage: %4% / %5% of eligible instructions, including paired direct calls. Function pairs condition this evidence; behavior is not validated.</source>
+        <translation>%1 個主要輸入函式 / %2 個次要輸入函式 · %3 個共用片段
+涵蓋率：符合條件的指令中占 %4% / %5%，包括已配對的直接呼叫。此證據以函式配對為條件；尚未驗證行為。</translation>
     </message>
 </context>
 <context>
@@ -9524,6 +9556,18 @@ Ambiguities and manual decisions remain report-local. Region hypotheses retain t
     <message>
         <source>Releases</source>
         <translation>發布版本</translation>
+    </message>
+    <message>
+        <source>Calls in these saved spans rely on the source report's function pairs. They do not prove equivalent callee behavior.</source>
+        <translation>這些已儲存片段中的呼叫依據來源報告的函式配對。它們不能證明被呼叫函式的行為等價。</translation>
+    </message>
+    <message>
+        <source>All native spans</source>
+        <translation>全部原生片段</translation>
+    </message>
+    <message>
+        <source>All SSA spans</source>
+        <translation>全部 SSA 片段</translation>
     </message>
 </context>
 <context>

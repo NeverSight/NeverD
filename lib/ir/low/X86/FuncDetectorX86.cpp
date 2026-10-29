@@ -209,11 +209,12 @@ std::optional<CallScanStep> stepCallsX86(const BinaryImage &Img, Decoder &Dec,
   if (!Owned &&
       !Img.hasExecutableCodeOwnerRange(Cur, static_cast<uint64_t>(Sz)))
     return Step;
-  // Linked PE leaf callbacks need not have unwind metadata or a prologue.
+  // Linked PE/ELF callbacks need not have unwind metadata or a prologue.
   // The size/id sweep already proves the instruction boundary. Its canonical
   // RIP-relative encoding supplies the target without a second decode.
   if (DI.Id == X86_INS_LEA && Img.Arch == Arch::X64 &&
-      Img.Format == BinaryFormat::COFF && !Img.IsRelocatable) {
+      (Img.Format == BinaryFormat::COFF || Img.Format == BinaryFormat::ELF) &&
+      !Img.IsRelocatable) {
     const auto Bytes = llvm::ArrayRef(Seg->Data).slice(Off, Sz);
     if (x86::isRipRelativeAddressInstruction(Bytes)) {
       const va_t Target =
@@ -754,9 +755,12 @@ std::set<va_t> FuncDetector::rejectX86InteriorEntries(
           if (Addr == Owner || !Candidates.count(Addr))
             return true;
           // Only a jump can be a tail call, and a frame prologue right after
-          // a call can follow one that does not return.
+          // a call can follow one that does not return. In x64, preserve
+          // every guess after a call: the x86 frame pattern proves nothing
+          // about its callee's return behavior.
           if (How == X86Reach::Jump ||
-              (How == X86Reach::AfterCall && isX86StrongFramePrologue(Bytes)))
+              (How == X86Reach::AfterCall &&
+               (Img.Arch == Arch::X64 || isX86StrongFramePrologue(Bytes))))
             return false;
           Interior.insert(Addr);
           return true;

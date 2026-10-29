@@ -222,7 +222,15 @@ private:
                         bool selectSourceAddress = false);
   void navigateCodeFunction(CodeView *view, Address address, Address function,
                             std::optional<Address> from);
-  void navigateHistory(bool forward);
+  /// Go \p steps stops back or forward, the code window in focus along.
+  void navigateHistory(bool forward, std::size_t steps = 1);
+  /// Give the toolbar's Back and Forward buttons the lists of their stops,
+  /// as IDA's do.
+  void addHistoryLists(QToolBar &toolbar);
+  /// List the stops Back, or Forward, reaches, nearest first, each as the
+  /// listing names its place, or as its line in the code in focus, and what
+  /// is there.
+  void showHistoryList(QMenu &menu, bool forward);
   void synchronize(Address address, QObject *source);
   /// The pseudocode and IR windows that are showing.
   QVector<CodeView *> visibleCodeViews() const;

@@ -767,6 +767,7 @@ MedLLVMEmitter::emit(const std::vector<MedFunc> &Funcs, llvm::LLVMContext &LCtx,
                      bool MergeableGlobals_,
                      const std::vector<char> *BodyMask) {
 
+  RefusedBodies.clear();
   if (!AnalystSourceProjection)
     for (const auto &F : Funcs)
       if (F.AnalystStackFrame)
@@ -790,9 +791,29 @@ MedLLVMEmitter::emit(const std::vector<MedFunc> &Funcs, llvm::LLVMContext &LCtx,
   // Module prepasses inspect every supplied function, including masked
   // bodies. Validate mutable storage and metadata before any such traversal,
   // then reuse the same plan during emission.
-  for (const auto &Func : Funcs) {
+  // Filtering hides no requirement: a body the module only declares must
+  // also be one whose contract its LLVM can keep, unless another module of
+  // the unit writes it or the unit notes it left out
+  // (setMaskedBodiesOwnedElsewhere). A refused body the module writes is
+  // named (RefusedBodies), and the rest are checked before the first refusal
+  // is thrown, so that a unit that leaves such bodies out can emit again
+  // without them. A malformed operation fails at once.
+  for (size_t Index = 0; Index != Funcs.size(); ++Index) {
+    const MedFunc &Func = Funcs[Index];
+    const bool WritesBody = !BodyMask || (*BodyMask)[Index];
+    const bool ChecksBody = WritesBody || !MaskedBodiesOwnedElsewhere;
+    std::optional<std::string> Refusal;
+    const auto Refuse = [&](std::string Reason) {
+      // The first refusal in order is the one thrown.
+      if (!WritesBody)
+        throw std::runtime_error(RefusedBodies.empty()
+                                     ? std::move(Reason)
+                                     : RefusedBodies.front().Reason);
+      if (!Refusal)
+        Refusal = std::move(Reason);
+    };
     std::optional<AArch64ImmediateMedBases> MemoryBases;
-    if (TheArch == Arch::AArch64)
+    if (TheArch == Arch::AArch64 && ChecksBody)
       MemoryBases.emplace(Func);
     if (const char *Error = validateAArch64SVEState(Func, TheArch))
       throw std::runtime_error(Error);
@@ -825,10 +846,11 @@ MedLLVMEmitter::emit(const std::vector<MedFunc> &Funcs, llvm::LLVMContext &LCtx,
               ((TheArch != Arch::X86 && TheArch != Arch::X64) ||
                !x86CompactShapeIsValid(Id, x86CompactMedShape(Op, TheArch))))
             throw std::invalid_argument(X86CompactMalformed);
-          if (isAArch64ExceptionReturnIntrinsic(Id))
-            throw std::runtime_error(kAArch64ExceptionReturnUnsupported);
-          if (const char *Reason = x86NonlocalControlTransferReason(Id))
-            throw std::runtime_error(Reason);
+          if (ChecksBody && isAArch64ExceptionReturnIntrinsic(Id))
+            Refuse(kAArch64ExceptionReturnUnsupported);
+          if (const char *Reason =
+                  ChecksBody ? x86NonlocalControlTransferReason(Id) : nullptr)
+            Refuse(Reason);
           if (isAArch64AddressMemoryIntrinsic(Id)) {
             if (TheArch != Arch::AArch64 ||
                 !aarch64AddressMemoryMedShapeIsValid(Op))
@@ -836,15 +858,18 @@ MedLLVMEmitter::emit(const std::vector<MedFunc> &Funcs, llvm::LLVMContext &LCtx,
             const auto Instruction = *aarch64AddressMemoryInstruction(
                 Op.Inputs[kAddressMemoryWordOperand + 1].ConstVal);
             const auto &Base = Op.Inputs[kAddressMemoryBaseOperand + 1];
-            if (Img_ && !Instruction.hasRegisterIndex() &&
+            if (ChecksBody && Img_ && !Instruction.hasRegisterIndex() &&
                 !MemoryBases->supports(*Img_, Instruction, Base))
-              throw std::runtime_error(kAddressMemoryImmediateImageUnsupported);
-            if (const char *Reason = Instruction.sourceBaseFailure(
-                    Img_ != nullptr, Instruction.stackBase() && !Img_ &&
-                                         MemoryBases->supportsRawSP(Base)))
-              throw std::runtime_error(Reason);
+              Refuse(kAddressMemoryImmediateImageUnsupported);
+            if (const char *Reason =
+                    ChecksBody ? Instruction.sourceBaseFailure(
+                                     Img_ != nullptr,
+                                     Instruction.stackBase() && !Img_ &&
+                                         MemoryBases->supportsRawSP(Base))
+                               : nullptr)
+              Refuse(Reason);
           }
-          if (isAArch64WritebackMemoryIntrinsic(Id)) {
+          if (ChecksBody && isAArch64WritebackMemoryIntrinsic(Id)) {
             const auto Instruction = *aarch64WritebackMemoryInstruction(
                 Op.Inputs[kWritebackWordOperand + 1].ConstVal);
             if (const char *Reason = Instruction.sourceBaseFailure(
@@ -852,11 +877,11 @@ MedLLVMEmitter::emit(const std::vector<MedFunc> &Funcs, llvm::LLVMContext &LCtx,
                     Instruction.stackBase() && !Img_ &&
                         MemoryBases->supportsRawSP(
                             Op.Inputs[kWritebackBaseOperand + 1])))
-              throw std::runtime_error(Reason);
+              Refuse(Reason);
             if (Img_ &&
                 !MemoryBases->supports(*Img_, Instruction,
                                        Op.Inputs[kWritebackBaseOperand + 1]))
-              throw std::runtime_error(kAddressMemoryImmediateImageUnsupported);
+              Refuse(kAddressMemoryImmediateImageUnsupported);
           }
           if (isAArch64PAuthLoadIntrinsic(Id)) {
             if (TheArch != Arch::AArch64 ||
@@ -864,11 +889,14 @@ MedLLVMEmitter::emit(const std::vector<MedFunc> &Funcs, llvm::LLVMContext &LCtx,
               throw std::runtime_error(kPAuthLoadMalformed);
             const auto Instruction =
                 *aarch64PAuthLoadInstruction(Op.Inputs[2].ConstVal);
-            if (const char *Reason = Instruction.sourceBaseFailure(
-                    Img_ != nullptr,
-                    Instruction.stackBase() && !Img_ &&
-                        MemoryBases->supportsRawSP(Op.Inputs[1])))
-              throw std::runtime_error(Reason);
+            if (const char *Reason =
+                    ChecksBody
+                        ? Instruction.sourceBaseFailure(
+                              Img_ != nullptr,
+                              Instruction.stackBase() && !Img_ &&
+                                  MemoryBases->supportsRawSP(Op.Inputs[1]))
+                        : nullptr)
+              Refuse(Reason);
           }
           if (isPortableX87Intrinsic(Id) && &Func != PortableBody)
             throw std::invalid_argument(
@@ -891,13 +919,16 @@ MedLLVMEmitter::emit(const std::vector<MedFunc> &Funcs, llvm::LLVMContext &LCtx,
             llvm::report_fatal_error(
                 "invalid guarded x87 value/control contract");
         }
-        if (Op.Opcode == NdOp::INTRINSIC && Op.NumInputs &&
+        if (ChecksBody && Op.Opcode == NdOp::INTRINSIC && Op.NumInputs &&
             Op.Inputs[0].isConst() &&
             Op.Inputs[0].ConstVal == static_cast<uint64_t>(Intrinsic::X87Fxam))
-          throw std::runtime_error(
-              "FXAM requires a proven x87 slot tag and payload in " +
-              Func.Name);
+          Refuse("FXAM requires a proven x87 slot tag and payload in " +
+                 Func.Name);
       }
+    if (Refusal) {
+      RefusedBodies.push_back({Index, std::move(*Refusal)});
+      continue;
+    }
     if (!Func.SkippedSSA)
       continue;
     if (Img_)
@@ -909,6 +940,8 @@ MedLLVMEmitter::emit(const std::vector<MedFunc> &Funcs, llvm::LLVMContext &LCtx,
       throw std::runtime_error(Error);
     MutableSourcePlans.emplace(&Func, std::move(*Plan));
   }
+  if (!RefusedBodies.empty())
+    throw std::runtime_error(RefusedBodies.front().Reason);
 
   Ctx = &LCtx;
   auto Mod_ = std::make_unique<llvm::Module>(ModName, LCtx);
@@ -1256,6 +1289,13 @@ MedLLVMEmitter::emit(const std::vector<MedFunc> &Funcs, llvm::LLVMContext &LCtx,
   const auto Declarations = PreserveUnknownSourceValues
                                 ? SourceCalleeDeclarations
                                 : llvm::ArrayRef<MedFunc>{};
+  // Two functions can carry one name, as the local symbols of one Rust
+  // generic in two codegen units of a Mach-O. Each needs its own LLVM
+  // function, or the second's body and calls land in the first's: the first
+  // named keeps the name, and a later one takes its entry address after it,
+  // as an import's namesake does. Every shard names the same functions in
+  // the same order, so all agree.
+  std::map<std::string, va_t, std::less<>> NameOwners;
   const auto NameFunction = [&](const MedFunc &F) {
     std::string EmittedName = F.Name;
     auto Personality = NativePersonalityNames.find(F.Entry);
@@ -1291,6 +1331,17 @@ MedLLVMEmitter::emit(const std::vector<MedFunc> &Funcs, llvm::LLVMContext &LCtx,
                                                     F.Entry, EmittedName)
                                : std::nullopt)
       EmittedName = std::move(*Shadow);
+    if (!EmittedName.empty()) {
+      for (;;) {
+        const auto [Owner, Named] =
+            NameOwners.try_emplace(EmittedName, F.Entry);
+        if (Named || Owner->second == F.Entry)
+          break;
+        // A real symbol can already use the address suffix. Reserve the
+        // final spelling before declarations or bodies can share it.
+        EmittedName += "_" + llvm::utohexstr(F.Entry);
+      }
+    }
     EmittedFuncNames[F.Entry] = EmittedName;
     FuncNames[F.Entry] = std::move(EmittedName);
   };
@@ -1470,10 +1521,20 @@ MedLLVMEmitter::emit(const std::vector<MedFunc> &Funcs, llvm::LLVMContext &LCtx,
     const auto &Func = Funcs[I];
     if (Func.Name.empty())
       continue;
+    // A refusal belongs to the body that made it, so that a unit can leave
+    // that body out instead of every other one.
+    const bool CodeRefused = std::exchange(FatalCodePointerResolution, false);
+    const bool DataRefused = std::exchange(FatalDataPointerResolution, false);
+    DiagnosticCapture Diagnostics;
     ActiveCxxContinuationPlan = I;
     if (!tryEmitX86NativeMemoryFunction(Func))
       emitFunc(Func);
     ActiveCxxContinuationPlan.reset();
+    if (FatalCodePointerResolution || FatalDataPointerResolution)
+      RefusedBodies.push_back(
+          {I, llvm::StringRef(Diagnostics.text()).trim().str()});
+    FatalCodePointerResolution |= CodeRefused;
+    FatalDataPointerResolution |= DataRefused;
   }
   ActiveCxxContinuationPlan.reset();
   finalizeCxxContinuationPlans();

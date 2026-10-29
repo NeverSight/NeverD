@@ -128,6 +128,18 @@ x86SystemStateLayout(Intrinsic Id, Arch TargetArch, uint16_t Width,
     if (C.MemoryArgument == 0)
       return X86SystemStateLayout{1, 2, {8, 2}, 0, true};
     return X86SystemStateLayout{4, 2, {2, 2}, 2, true};
+  case K::LockedBit:
+    if ((Width != 2 && Width != 4 && Width != 8) ||
+        (TargetArch == Arch::X86 && Width == 8))
+      return std::nullopt;
+    return X86SystemStateLayout{1, 2, {8, Width}, 0, true};
+  case K::LockedLogic:
+    if ((Width != 1 && Width != 2 && Width != 4 && Width != 8) ||
+        (TargetArch == Arch::X86 && Width == 8))
+      return std::nullopt;
+    // PF and ZF occupy separate bytes of a word; SF is the upper flag byte.
+    // No unlocked read is used to reconstruct the transaction's result.
+    return X86SystemStateLayout{4, 2, {8, Width}, 2, true};
   case K::ShadowWrite:
   case K::DirectStore:
     if ((Width != 4 && Width != 8) || (TargetArch == Arch::X86 && Width != 4))
@@ -158,6 +170,8 @@ x86SystemStateLayout(Intrinsic Id, Arch TargetArch, uint16_t Width,
 inline uint16_t x86SystemStateWidth(Intrinsic Id,
                                     const X86SystemStateShape &Shape) {
   switch (x86SystemStateContract(Id).Kind) {
+  case X86SystemStateKind::LockedBit:
+  case X86SystemStateKind::LockedLogic:
   case X86SystemStateKind::ShadowWrite:
   case X86SystemStateKind::DirectStore:
     return Shape.InputSizes[1];
@@ -179,6 +193,8 @@ inline uint16_t x86SystemStateMemoryBytes(Intrinsic Id, uint16_t Width) {
     // carrier must not cause an eager load, an alignment guard or a fixed-size
     // software clear of bytes starting at the possibly unaligned address.
     return 1;
+  case X86SystemStateKind::LockedBit:
+  case X86SystemStateKind::LockedLogic:
   case X86SystemStateKind::ShadowWrite:
   case X86SystemStateKind::DirectStore:
     return Width;
@@ -200,7 +216,11 @@ inline bool x86SystemStateShapeIsValid(Intrinsic Id,
   const auto L =
       x86SystemStateLayout(Id, Shape.TargetArch, x86SystemStateWidth(Id, Shape),
                            Shape.SegmentedBlockSelector);
-  if (!L || !Shape.ValidId || Shape.MemoryOrdering != NdMemoryOrdering::None ||
+  const auto Ordering = (C.Kind == X86SystemStateKind::LockedLogic ||
+                         C.Kind == X86SystemStateKind::LockedBit)
+                            ? NdMemoryOrdering::SequentiallyConsistent
+                            : NdMemoryOrdering::None;
+  if (!L || !Shape.ValidId || Shape.MemoryOrdering != Ordering ||
       !isKnownMemoryAddressSpace(Shape.MemoryAddressSpace) ||
       ((C.MemoryArgument < 0 || C.Kind == X86SystemStateKind::MsrList) &&
        Shape.MemoryAddressSpace != NdMemoryAddressSpace::Default) ||

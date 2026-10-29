@@ -244,12 +244,19 @@ struct MedOp {
   bool Dead = false;
   /// Source views only: this STORE saves a callee-saved register's entry
   /// value into prologue storage, or a scalar into scratch bytes
-  /// proved unobserved before overwrite/return (markSourceStackAccesses).
+  /// proved unobserved before overwrite/return (markSourceStackAccesses), or
+  /// a scratch register's undefined incoming value into frame bytes nothing
+  /// reads as that value (markUndefinedScratchStores).
   /// Source emitters leave it out. Binary lifting and patching never set it.
   bool PrologueSave = false;
   /// Source views only: this LOAD reads the return address the call pushed,
   /// in a function that never overwrites it (markReturnAddressReads).
   bool ReturnAddressRead = false;
+  /// Source views only: a neutral atomic transaction whose unread old value
+  /// permits addressing the compiled function's real CALL return slot.
+  /// The complete access lies within that slot, at this byte offset. The
+  /// transaction stays observable; this never authorizes its removal.
+  std::optional<uint16_t> SourceReturnSlotOffset;
   bool PreservesCallerSaved = false;
   /// GPR families (see CallRegisterEffects.h) the direct callee provably
   /// never writes, so SSA keeps their pre-call values across this call.
@@ -442,6 +449,10 @@ struct MedCallReturnRead {
 struct MedStructReturnCandidate {
   uint32_t CallSiteId = 0;
   std::vector<MedVar> Fields;
+  /// The caller read only the second integer word; the first is proposed.
+  /// A second word the callee leaves untouched is then the caller's own
+  /// residue, not a returned argument: the callee must write each field.
+  bool SecondWordOnly = false;
 };
 
 struct MedTypedLocal {
@@ -485,6 +496,56 @@ struct MedCallInfo {
   /// -1 when recovery ended them elsewhere.
   int TargetRegisterArgIdx = -1;
   uint16_t StackArgumentSlotBytes = 0;
+};
+
+/// A same-frame Windows local unwind (`_local_unwind(EstablisherFrame, T)`)
+/// that LowToMed replaced by its effect: a call of each termination handler
+/// the unwind runs, with the abnormal-termination flag set and this frame's
+/// EstablisherFrame, innermost first, then a jump to T.  The calls keep the
+/// runtime call's instruction address, so HighIR can find them and run a
+/// handler through its filled `__finally` clause instead (SEHFinallyBodies.h).
+struct MedSEHLocalUnwindExit {
+  struct Handler {
+    /// The termination handler's entry.
+    va_t Entry = InvalidVA;
+    /// The scope it terminates, as an index of the SEH scope table.
+    uint32_t ScopeIndex = 0;
+    bool operator==(const Handler &) const = default;
+  };
+  /// The address of the runtime call this exit replaces, and its LowIR
+  /// operation sequence.
+  va_t CallAddr = InvalidVA;
+  int CallSeq = -1;
+  /// Where the unwind resumes, in this function.
+  va_t Target = InvalidVA;
+  /// The frame the call passed, relative to the entry stack pointer.
+  int64_t TargetFrame = 0;
+  /// Nothing else enters Target: no other code of the function, no handler
+  /// or funclet nested in it and no relocation names it, and every certified
+  /// call to it is an exit.  It is then no independent root: proofs over the
+  /// decoded CFG enter it from these exits (LowSEHLocalUnwindExitSource).
+  bool OwnsTarget = false;
+  /// The handlers the unwind calls, innermost first.
+  std::vector<Handler> Handlers;
+  bool operator==(const MedSEHLocalUnwindExit &) const = default;
+};
+
+/// A parent's value of one callee-saved register throughout the protected
+/// ranges a termination handler ends, in a form no later pass renames or
+/// removes: a fixed offset from the entry stack pointer, the register an
+/// incoming argument arrives in, or a constant.
+struct SEHFuncletRegisterValue {
+  enum class Kind : uint8_t { EntryStackOffset, EntryArgument, Constant };
+  Kind ValueKind = Kind::Constant;
+  /// EntryStackOffset: bytes from the entry stack pointer.
+  int64_t Offset = 0;
+  /// EntryArgument: the argument register's offset.
+  uint64_t RegOff = 0;
+  /// Constant: the register's bits, and the address they name if any.
+  uint64_t Value = 0;
+  ConstantAddressProvenance Provenance = ConstantAddressProvenance::Unknown;
+  uint64_t AddressOwnerVA = InvalidVA;
+  bool operator==(const SEHFuncletRegisterValue &) const = default;
 };
 
 struct MedFunc {
@@ -625,6 +686,15 @@ struct MedFunc {
   std::optional<int64_t> VaListDisplacement;
   std::optional<int64_t> VaRegisterSaveArea;
   int VaNamedIntegerRegisters = -1;
+  /// System V x86-64: how many general-purpose registers carry named
+  /// parameters, as the gp_offset va_start stores counts them (gp_offset is
+  /// 8 x that count), where the function stores that constant into a
+  /// va_list's gp_offset field, whether or not the rest of the va_list is
+  /// proved (VaNamedIntegerRegisters); -1 otherwise.  Call recovery reads it
+  /// as AAPCS's VariadicFirstRegister (callRegisterArity): past those
+  /// registers a call passes what its caller sets, and the function still
+  /// takes every saved register as a parameter.
+  int VaStartNamedGPRs = -1;
   /// The calls that pass that va_list's address, by call site: true where
   /// they pass the va_list, false where they may pass another object in its
   /// slot, such as a buffer the compiler placed there after va_end
@@ -694,6 +764,22 @@ struct MedFunc {
   /// Source analysis retained unknown machine entries instead of asserting a
   /// common SEH invocation frame. This function cannot be lowered to LLVM.
   bool HasUnresolvedSEHFrame = false;
+  /// Windows x64 termination handlers (out-of-line `__finally` callbacks) of
+  /// this function by entry: how far below the entry SP the EstablisherFrame
+  /// they receive lies (proveLowSEHTerminationFrame). A handler whose frame
+  /// LowIR did not certify is absent.
+  std::map<va_t, uint64_t> SEHTerminationFrameBytes;
+  /// ARM and AArch64 termination handlers read the parent's callee-saved
+  /// registers, which the unwinder restores to their values where the
+  /// exception struck. By handler entry and register offset: a full-width
+  /// callee-saved register's value throughout every protected range the
+  /// handler ends, where no protected operation writes it and the ranges agree
+  /// (buildSsa). A register absent here has no such value.
+  std::map<va_t, std::map<uint64_t, SEHFuncletRegisterValue>>
+      SEHFuncletRegisters;
+  /// The certified same-frame local unwinds this function makes, each
+  /// already replaced by its handler calls and jump, by call address.
+  std::vector<MedSEHLocalUnwindExit> SEHLocalUnwindExits;
   std::optional<RegistrationStateAnalysis> RegistrationStates;
   /// Independent replay of expanded shared helpers. The source states above
   /// retain their original call occurrences and prologue receipt.

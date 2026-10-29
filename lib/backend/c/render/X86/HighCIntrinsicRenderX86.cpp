@@ -16,6 +16,7 @@
 #include "X86FPStateHelpers.h"
 #include "X86ScalarSystem.h"
 #include "X86SystemRegister.h"
+#include "X87NativeState.h"
 
 #include "neverd/Limits.h"
 #include "neverd/backend/c/render/CTypeFormat.h"
@@ -133,11 +134,6 @@ const char *x87CHelperName(X87CHelper Helper) {
   llvm_unreachable("unknown x87 C helper");
 }
 
-bool isX87ControlWord(Arch TheArch, const MedVar &V) {
-  return (TheArch == Arch::X86 || TheArch == Arch::X64) &&
-         V.Kind == MedVar::Reg && V.RegOff == x86reg::FPU_CW && V.Size == 2;
-}
-
 /// The operands the x87 value instruction of \p Helper reads.
 static unsigned x87ValueHelperOperands(X87CHelper Helper) {
   switch (Helper) {
@@ -250,8 +246,8 @@ void writeX87CHelpers(llvm::raw_ostream &OS, bool UsesExtended,
   if (Used.count(X87CHelper::ControlWord))
     OS << "static inline uint16_t neverd_x87_control_word(void) {\n"
           "    uint16_t word;\n"
-          "    __asm__ volatile(\"fnstcw %0\" : \"=m\"(word));\n"
-          "    return word;\n"
+       << renderX87ControlAccess(false, "&word")
+       << "    return word;\n"
           "}\n\n";
   if (!Used.count(X87CHelper::Fprem))
     return;
@@ -1033,9 +1029,13 @@ bool isStateSnapshotMemoryIntrinsic(Intrinsic Id) {
   case I::Xrstor64:
   case I::Xrstors64:
   case I::X87Fldenv:
+  case I::X87Fldenv16:
   case I::X87Fnstenv:
+  case I::X87Fnstenv16:
   case I::X87Frstor:
+  case I::X87Frstor16:
   case I::X87Fnsave:
+  case I::X87Fnsave16:
     return true;
   default:
     return false;
@@ -1043,7 +1043,8 @@ bool isStateSnapshotMemoryIntrinsic(Intrinsic Id) {
 }
 
 /// The <immintrin.h> spelling of a state save/restore instruction, or null
-/// for the x87 environment forms, which have no compiler intrinsic.
+/// for the x87 environment forms, whose portable builtins are selected
+/// separately.
 const char *stateSnapshotCIntrinsic(Intrinsic Id) {
   using I = Intrinsic;
   switch (Id) {
@@ -1115,6 +1116,11 @@ constexpr const char *kHardwareStateNote =
 std::string
 renderStateSnapshot(const HighExpr &Call,
                     std::function<std::string(const HighExpr &)> ExprFn) {
+  if (const auto *Spec = x87NativeStateOfIntrinsic(Call.IntrinsicId);
+      Spec && Spec->ImageBytes)
+    if (Call.Operands.size() != 1 || !Call.IntrinsicOutputs.empty())
+      llvm::report_fatal_error(
+          "x87 image intrinsic requires exactly one address");
   const bool TakesMask = stateSnapshotTakesMask(Call.IntrinsicId);
   const size_t Required = TakesMask ? 3 : 1;
   if (Call.Operands.size() < Required)
@@ -1133,6 +1139,11 @@ renderStateSnapshot(const HighExpr &Call,
       TakesMask ? "((uint64_t)(uint32_t)(" + ExprFn(*Call.Operands[2]) +
                       ") << 32 | (uint32_t)(" + ExprFn(*Call.Operands[1]) + "))"
                 : std::string();
+
+  if (const auto *Spec = x87NativeStateOfIntrinsic(Call.IntrinsicId))
+    return std::string(kHardwareStateNote) +
+           renderX87NativeState(*Spec, "(uintptr_t)(" + Address + ")", {},
+                                Segment);
 
   const char *CName = stateSnapshotCIntrinsic(Call.IntrinsicId);
   if (CName && *Segment == '\0')
@@ -1190,7 +1201,9 @@ renderFlatMemoryIntrinsic(const HighExpr &Call,
     return "_mm_prefetch((const char *)" + Address + ", " + Hint + ");\n";
   switch (Call.IntrinsicId) {
   case Intrinsic::PrefetchW:
-    return "_m_prefetchw((void *)" + Address + ");\n";
+    // Generic compiler prefetch builtins may turn a write hint into PREFETCHT0
+    // without a target feature flag. The GNU path below retains PREFETCHW.
+    return MsvcIntrinsics ? "_m_prefetchw((void *)" + Address + ");\n" : "";
   case Intrinsic::Ldmxcsr:
     return "do {\n    uint32_t neverd_csr;\n"
            "    __builtin_memcpy(&neverd_csr, (const void *)" +
@@ -1414,6 +1427,8 @@ bool x86UsesMsvcIntrinsicHeader(Intrinsic Id) {
   switch (Id) {
   // What Microsoft's <intrin.h> declares and the GNU headers do not.
   case Intrinsic::Cpuid:
+  case Intrinsic::Rdtsc:
+  case Intrinsic::Rdtscp:
   case Intrinsic::CetWrss:
   case Intrinsic::CetWruss:
   case Intrinsic::Lidt:
@@ -1487,6 +1502,8 @@ bool x86UsesImplicitRegisterAsm(Intrinsic Id) {
 bool x86UsesGnuIntrinsicHeader(Intrinsic Id) {
   switch (Id) {
   case Intrinsic::PrefetchW:
+  case Intrinsic::Rdtsc:
+  case Intrinsic::Rdtscp:
   // __readeflags and __writeeflags (ia32intrin.h), which immintrin.h does
   // not declare.
   case Intrinsic::Pushf:
@@ -2211,6 +2228,10 @@ std::string renderX86IntrinsicCall(Intrinsic Id,
   // An x87 state instruction runs where the compiler keeps no value of its
   // own in the register stack it changes: the clobbers say which.
   if (GnuToolchain && Ops.empty())
+    if (const auto *Spec = x87NativeStateOfIntrinsic(Id);
+        Spec && !Spec->HasPointer)
+      return "({ " + renderX87NativeState(*Spec) + "})";
+  if (GnuToolchain && Ops.empty())
     if (const auto Effect = x87StateEffectOfIntrinsic(Id))
       return std::string("__asm__ volatile(\"") + intrinsicAsmMnemonic(Id) +
              "\" ::: " + x87StateCClobbers(*Effect).str() + ")";
@@ -2277,8 +2298,6 @@ const char *hiloCollapseExpr(Intrinsic Id) {
   switch (Id) {
   case I::Rdtsc:
     return "__rdtsc()";
-  case I::Rdtscp:
-    return "__rdtscp()";
   default:
     return nullptr;
   }

@@ -316,6 +316,72 @@ std::vector<uint8_t> makeTwoFunctionX64PE() {
   return Bytes;
 }
 
+TEST_F(COFFFunctionListingTest, LocalUnwindFaultsDoNotPoisonDirectoryCoverage) {
+  for (Arch A : Architectures)
+    for (bool BrokenDirectory : {false, true}) {
+      SCOPED_TRACE(testing::Message() << unsigned(A) << ':' << BrokenDirectory);
+      auto Bytes = makePE(A, false, false, true);
+      const size_t Directories = 0x98 + (A == Arch::ARM ? 96 : 112);
+      if (A == Arch::X64)
+        Bytes[XDataOffset] = 7; // unsupported native unwind version
+      else if (A == Arch::ARM)
+        // A chained frame must save LR, but C=1 and L=0 here.
+        put32(Bytes, PDataOffset + 4,
+              1u | (functionSize(A) / 2 << 2) | (1u << 21));
+      else
+        // Ten integer saves exceed the declared sixteen-byte frame.
+        put32(Bytes, PDataOffset + 4,
+              1u | functionSize(A) | (10u << 16) | (1u << 23));
+      if (BrokenDirectory)
+        put32(Bytes, Directories + 3 * 8 + 4, A == Arch::X64 ? 13 : 9);
+      auto Image = loadBinary(writeFixture(Bytes));
+      ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+      const auto &Info = Image->ExceptionMetadata;
+      ASSERT_TRUE(Info.StructuralDecode);
+      EXPECT_EQ(Info.StructuralDecode->ParseStatus,
+                BrokenDirectory ? ExceptionParseStatus::Malformed
+                                : ExceptionParseStatus::Complete);
+      EXPECT_EQ(Info.StructuralDecode->Diagnostics.empty(), !BrokenDirectory);
+      ASSERT_FALSE(Info.Functions.empty());
+      EXPECT_NE(Info.Functions.front().ParseStatus,
+                ExceptionParseStatus::Complete);
+      EXPECT_NE(Info.ParseStatus, ExceptionParseStatus::Complete);
+    }
+}
+
+TEST_F(COFFFunctionListingTest, ARMUnwindFaultOwnershipRequiresAKnownRange) {
+  for (Arch A : {Arch::ARM, Arch::AArch64})
+    for (bool UnknownHeader : {false, true}) {
+      SCOPED_TRACE(testing::Message() << unsigned(A) << ':' << UnknownHeader);
+      auto Bytes = makePE(A, false, false, true);
+      const size_t Sections = 0x98 + (A == Arch::ARM ? 224 : 240);
+      put32(Bytes, PDataOffset + 4, 0x3000); // unpacked xdata
+      // One code word is declared, but only the header is mapped.
+      put32(Bytes, Sections + 2 * 40 + 8, 4);
+      put32(Bytes, Sections + 2 * 40 + 16, 4);
+      put32(Bytes, XDataOffset,
+            functionSize(A) / (A == Arch::ARM ? 2 : 4) |
+                (1u << (A == Arch::ARM ? 28 : 27)) |
+                (UnknownHeader ? 3u << 18 : 0));
+      auto Image = loadBinary(writeFixture(Bytes));
+      ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+      const auto &Info = Image->ExceptionMetadata;
+      ASSERT_TRUE(Info.StructuralDecode);
+      EXPECT_EQ(Info.StructuralDecode->ParseStatus,
+                UnknownHeader ? ExceptionParseStatus::Malformed
+                              : ExceptionParseStatus::Complete);
+      EXPECT_EQ(Info.Functions.empty(), UnknownHeader);
+      if (!UnknownHeader) {
+        ASSERT_EQ(Info.Functions.size(), 1u);
+        EXPECT_EQ(Info.Functions.front().CodeRange.Begin,
+                  imageBase(A) + TextRVA);
+        EXPECT_EQ(Info.Functions.front().ParseStatus,
+                  ExceptionParseStatus::Malformed);
+      }
+      EXPECT_EQ(Info.ParseStatus, ExceptionParseStatus::Malformed);
+    }
+}
+
 TEST_F(COFFFunctionListingTest,
        LoadOnlyFunctionEntriesSkipsUnrelatedPdataBodies) {
   const auto Bytes = makeTwoFunctionX64PE();

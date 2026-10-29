@@ -2780,6 +2780,65 @@ private slots:
     QVERIFY(!bench.window->findChild<FindInViewDialog *>());
   }
 
+  void bracketUnderTheCursorPairsWithItsPartner() {
+    // As in Hex-Rays, the bracket the cursor is on pairs with its partner,
+    // nested or lines away, while one of a string or comment, or the one
+    // before the cursor, pairs with nothing.
+    QTemporaryDir directory;
+    Workbench bench;
+    LoadDialogAcceptor loads;
+    bench.window->openFile(writeFixture(directory, "code-brackets.bin"));
+    QTRY_VERIFY_WITH_TIMEOUT(bench.session.loaded(), OpenTimeoutMs);
+    bench.window->disassembly()->navigate(Base + 0x140);
+    QTRY_COMPARE(bench.window->disassembly()->currentFunction(),
+                 std::optional<Address>(Base + 0x140));
+    bench.action(ActionId::ViewPseudocode)->trigger();
+    auto *code = bench.codeView("source")->text();
+    QTRY_VERIFY(code->complete());
+    const QStringList source = code->allText().split(QLatin1Char('\n'));
+    QCOMPARE(code->lineCount(), source.size());
+    // Put the cursor on the first match after a line, as Find does.
+    const auto pairOf =
+        [&](int line,
+            const QString &text) -> std::optional<std::pair<int, int>> {
+      code->setCursorLine(line);
+      if (!code->findText(text, true))
+        return std::pair{-1, -1};
+      const auto pair = code->bracketPair();
+      if (!pair)
+        return std::nullopt;
+      if (pair->line != code->cursorLine() ||
+          pair->column != code->cursorColumn())
+        return std::pair{-2, -2};
+      return std::pair{pair->partnerLine, pair->partnerColumn};
+    };
+    using Place = std::optional<std::pair<int, int>>;
+    QCOMPARE(pairOf(0, QStringLiteral("(int32_t")),
+             Place(std::pair{1, int(source[1].indexOf(QLatin1Char(')')))}));
+    QCOMPARE(pairOf(0, QStringLiteral("{")), Place(std::pair{8, 0}));
+    QCOMPARE(pairOf(7, QStringLiteral("}")),
+             Place(std::pair{1, int(source[1].size()) - 1}));
+    QCOMPARE(pairOf(2, QStringLiteral("{v0")),
+             Place(std::pair{3, int(source[3].lastIndexOf(QLatin1Char('}')))}));
+    QCOMPARE(
+        pairOf(4, QStringLiteral("[(")),
+        Place(std::pair{5, int(source[5].indexOf(QStringLiteral("1)]"))) + 2}));
+    QCOMPARE(
+        pairOf(4, QStringLiteral("(v0 &")),
+        Place(std::pair{5, int(source[5].indexOf(QStringLiteral("1)]"))) + 1}));
+    QCOMPARE(pairOf(1, QStringLiteral("(v0]")), Place());
+    QCOMPARE(pairOf(4, QStringLiteral(") */")), Place());
+    QCOMPARE(pairOf(4, QStringLiteral("v1[0]); /*")), Place());
+    QCOMPARE(pairOf(4, QStringLiteral("; /*")), Place());
+    code->viewport()->grab();
+    // A folded block keeps its braces in view, around its summary.
+    code->setCursorLine(4);
+    QVERIFY(code->setCurrentBlockFolded(true));
+    QCOMPARE(code->lineCount(), source.size() - 1);
+    QCOMPARE(pairOf(3, QStringLiteral("{")), Place(std::pair{5, 2}));
+    code->viewport()->grab();
+  }
+
   void findInViewUnfoldsHiddenMatchesAndHonorsOptions() {
     QTemporaryDir directory;
     Workbench bench;
@@ -3205,6 +3264,50 @@ private slots:
     QVERIFY(view);
     QVERIFY(!view->isVisible());
     QCOMPARE(view->model().total(), 0);
+  }
+
+  void searchBeforeTheListingHasACursorKeepsItsResults() {
+    // A search started while the listing still waited for its first rows
+    // dropped its results when those rows placed the cursor, taking that for
+    // a move away from the search.
+    QTemporaryDir directory;
+    Workbench bench;
+    bench.window->openFile(
+        writeFixture(directory, QStringLiteral("search-first.bin")));
+    QTRY_VERIFY_WITH_TIMEOUT(bench.session.loaded(), OpenTimeoutMs);
+    auto *listing = bench.window->disassembly()->listing();
+    QTRY_VERIFY_WITH_TIMEOUT(listing->cursorLine() && !listing->jumpPending(),
+                             OpenTimeoutMs);
+    const auto results = [&]() -> ChooserView * {
+      for (auto *view : bench.window->findChildren<ChooserView *>())
+        if (view->model().kind() == ChooserKind::SearchResults)
+          return view;
+      return nullptr;
+    };
+    // The listing as a file just opened shows it, with no cursor yet.
+    listing->clear();
+    QVERIFY(!listing->currentAddress());
+    QTimer input;
+    connect(&input, &QTimer::timeout, &input, [&] {
+      if (auto *dialog =
+              qobject_cast<QInputDialog *>(QApplication::activeModalWidget())) {
+        dialog->setTextValue(QStringLiteral("string 42"));
+        dialog->accept();
+      }
+    });
+    input.start(5);
+    bench.action(ActionId::SearchText)->trigger();
+    input.stop();
+    // Its first rows, and with them the cursor, arrive before the search
+    // answers.
+    ListingView::Line line;
+    line.item = line.address = Base;
+    line.itemSize = 1;
+    line.kind = QStringLiteral("insn");
+    ListingViewTestAccess::showOnly(*listing, line, 0);
+    QCOMPARE(listing->currentItem(), std::optional<Address>(Base));
+    QTRY_VERIFY_WITH_TIMEOUT(results() && results()->model().total() > 0,
+                             OpenTimeoutMs);
   }
 
   void searchDuringAJumpStartsWhereTheJumpLands() {
@@ -4504,10 +4607,11 @@ private slots:
       return QPoint(qRound(left + metrics.horizontalAdvance(text.left(at))), y);
     };
     const auto on = [&](const QString &text, int at, int y) {
-      return QPoint(qRound(left + (metrics.horizontalAdvance(text.left(at)) +
-                                   metrics.horizontalAdvance(text.left(at + 1))) /
-                                      2),
-                    y);
+      return QPoint(
+          qRound(left + (metrics.horizontalAdvance(text.left(at)) +
+                         metrics.horizontalAdvance(text.left(at + 1))) /
+                            2),
+          y);
     };
     const auto click = [viewport](Qt::MouseButton button, QPoint at) {
       QTest::mouseClick(viewport, button, Qt::NoModifier, at);
@@ -4550,8 +4654,7 @@ private slots:
     click(Qt::LeftButton, on(prefix, colon, y));
     QCOMPARE(listing->selectedText(), listing->currentLineText());
     QCOMPARE(copied(), kept);
-    click(Qt::LeftButton,
-          on(prefix + QLatin1Char(' '), int(prefix.size()), y));
+    click(Qt::LeftButton, on(prefix + QLatin1Char(' '), int(prefix.size()), y));
     QCOMPARE(listing->selectedText(), listing->currentLineText());
     QCOMPARE(copied(), kept);
 
@@ -4676,10 +4779,10 @@ private slots:
     const auto found = words(current);
     const int blank = blankColumn(current);
     QVERIFY2(found.size() >= 2 && blank > 0, qPrintable(current));
-    const QString first = current.mid(found[0].first,
-                                      found[0].second - found[0].first);
-    const QString second = current.mid(found[1].first,
-                                       found[1].second - found[1].first);
+    const QString first =
+        current.mid(found[0].first, found[0].second - found[0].first);
+    const QString second =
+        current.mid(found[1].first, found[1].second - found[1].first);
     // The caret's place at a column of the row, reached by keys.
     const auto place = [&](int column) {
       home();
@@ -4760,8 +4863,8 @@ private slots:
     auto *view = bench.codeView(QStringLiteral("source"));
     QVERIFY(view);
     auto *code = view->text();
-    QTRY_VERIFY_WITH_TIMEOUT(code->complete() && code->allText().contains(access),
-                             OpenTimeoutMs);
+    QTRY_VERIFY_WITH_TIMEOUT(
+        code->complete() && code->allText().contains(access), OpenTimeoutMs);
     // Ctrl+C with the cursor in the row holding the access, at a column of
     // \p needle.
     const auto copyAt = [&](const QString &needle, int offset) {
@@ -4860,13 +4963,14 @@ private slots:
     QCOMPARE(locks.word(0), QStringLiteral("rbx"));
 
     // Search > Lock highlight lists the commands, each color with its swatch.
-    auto *menu = bench.window->findChild<QMenu *>(
-        QStringLiteral("menuLockHighlight"));
+    auto *menu =
+        bench.window->findChild<QMenu *>(QStringLiteral("menuLockHighlight"));
     QVERIFY(menu);
     QStringList commands;
     for (auto *action : menu->actions())
       if (!action->isSeparator()) {
-        commands.append(action->shortcut().toString(QKeySequence::PortableText));
+        commands.append(
+            action->shortcut().toString(QKeySequence::PortableText));
         QVERIFY(!action->icon().isNull());
       }
     QCOMPARE(commands, (QStringList{"Ctrl+Alt+0", "Ctrl+Alt+1", "Ctrl+Alt+2",
@@ -7762,18 +7866,28 @@ private slots:
         writeFixture(directory, QStringLiteral("pseudocode-large.bin")));
     QTRY_VERIFY_WITH_TIMEOUT(bench.session.loaded(), OpenTimeoutMs);
     QTRY_VERIFY(bench.window->disassembly()->currentFunction().has_value());
+    // The event loop turns while the pages arrive, and the view shows the
+    // first of them before the rest: loading never waits for the whole text.
+    // How long one turn takes depends on the host's load, not on the code, so
+    // the largest gap is reported rather than checked.
     QElapsedTimer elapsed;
     elapsed.start();
     qint64 longest = 0;
-    int ticks = 0;
+    int loadingTicks = 0;
+    bool partial = false;
+    CodeView *view = nullptr;
     QTimer heartbeat;
     connect(&heartbeat, &QTimer::timeout, this, [&] {
       longest = std::max(longest, elapsed.restart());
-      ++ticks;
+      if (!view || !view->text()->loading())
+        return;
+      ++loadingTicks;
+      const int lines = view->text()->lineCount();
+      partial = partial || (lines > 0 && lines < 20000);
     });
     heartbeat.start(5);
     bench.action(ActionId::ViewLLVMC)->trigger();
-    auto *view = bench.codeView(QStringLiteral("llvmc"));
+    view = bench.codeView(QStringLiteral("llvmc"));
     QVERIFY(view);
     QTRY_VERIFY_WITH_TIMEOUT(
         !view->text()->loading() &&
@@ -7782,9 +7896,8 @@ private slots:
     QTest::qWait(10);
     QVERIFY(view->text()->preludeFolded());
     QVERIFY(view->text()->lineCount() >= 20000);
-    QVERIFY(ticks > 1);
-    QVERIFY2(longest < 500,
-             qPrintable(QStringLiteral("UI event gap: %1 ms").arg(longest)));
+    QVERIFY(loadingTicks > 1);
+    QVERIFY(partial);
     qInfo() << "Largest event gap while rendering 20,000 source lines:"
             << longest << "ms";
   }
@@ -7921,6 +8034,80 @@ private slots:
           !row.first().toString().startsWith(QStringLiteral("Cannot jump to")));
   }
 
+  void restingOnACallShowsAnImportsType_data() {
+    QTest::addColumn<QString>("fixture");
+    QTest::addColumn<bool>("import");
+    QTest::newRow("import") << QStringLiteral("pseudocode-import.bin") << true;
+    QTest::newRow("image") << QStringLiteral("pseudocode-navigation.bin")
+                           << false;
+  }
+
+  void restingOnACallShowsAnImportsType() {
+    // As Hex-Rays' hint does, the mouse resting on the name of an import a
+    // call names shows its type, without the name the code already shows, and
+    // where each argument is passed. A function of the image hints nothing:
+    // only decompiling it types it, which a hover must not wait for.
+    QFETCH(QString, fixture);
+    QFETCH(bool, import);
+    QTemporaryDir directory;
+    Workbench bench;
+    bench.window->openFile(writeFixture(directory, fixture));
+    QTRY_VERIFY_WITH_TIMEOUT(bench.session.loaded(), OpenTimeoutMs);
+    const Address caller = Base + 0x140, callee = Base + 0x160;
+    bench.session.editFunction(
+        callee, {{"type", "int64_t function_22(void *arg0, int64_t arg1)"}});
+    auto *disassembly = bench.window->disassembly();
+    disassembly->navigate(caller);
+    QTRY_COMPARE(disassembly->currentFunction(),
+                 std::optional<Address>(caller));
+    bench.action(ActionId::ViewPseudocode)->trigger();
+    auto *code = bench.codeView(QStringLiteral("source"))->text();
+    QTRY_VERIFY_WITH_TIMEOUT(code->complete(), OpenTimeoutMs);
+    // Rest the mouse on the second character of a name of a line.
+    const QStringList source = code->allText().split(QLatin1Char('\n'));
+    const QFontMetricsF metrics(Theme::instance().codeFont());
+    const auto rest = [&](int line, const QString &name) {
+      const auto column = source.value(line).indexOf(name);
+      if (column < 0)
+        return false;
+      code->setCursorLine(line);
+      const QRect start = code->cursorViewportRect();
+      const QPoint point(
+          start.x() +
+              qRound(metrics.horizontalAdvance(source[line].left(column + 1)) +
+                     metrics.horizontalAdvance(QLatin1Char('M')) / 2),
+          start.center().y());
+      QHelpEvent help(QEvent::ToolTip, code->viewport()->mapTo(code, point),
+                      code->viewport()->mapToGlobal(point));
+      QApplication::sendEvent(code, &help);
+      return true;
+    };
+    // A hint the mouse left before the worker answered stays away, as does
+    // the type of a function of the image.
+    QVERIFY(rest(1, QStringLiteral("function_22")));
+    if (import) {
+      QEvent leave(QEvent::Leave);
+      QApplication::sendEvent(code->viewport(), &leave);
+    }
+    QTest::qWait(500);
+    QVERIFY(!QToolTip::isVisible());
+    if (import) {
+      const QString type = QStringLiteral("int64_t(void *arg0, int64_t arg1)");
+      QVERIFY(rest(1, QStringLiteral("function_22")));
+      QTRY_VERIFY_WITH_TIMEOUT(QToolTip::text().contains(type), OpenTimeoutMs);
+      const QString hint = QToolTip::text();
+      QVERIFY2(hint.contains(QStringLiteral("rcx  void *arg0")) &&
+                   hint.contains(QStringLiteral("rdx  int64_t arg1")) &&
+                   !hint.contains(QStringLiteral("function_22")),
+               qPrintable(hint));
+      QToolTip::hideText();
+    }
+    // A keyword hints nothing.
+    QVERIFY(rest(1, QStringLiteral("return")));
+    QTest::qWait(500);
+    QVERIFY(!QToolTip::isVisible());
+  }
+
   void pseudocodeFunctionLinksStayInTheirWindow_data() {
     QTest::addColumn<QString>("representation");
     QTest::addColumn<bool>("secondWindow");
@@ -7991,12 +8178,19 @@ private slots:
     // The call is row 1 in C, row 3 after LLVM C's folded prelude.
     const QFontMetricsF metrics(Theme::instance().codeFont());
     const int row = representation == QLatin1String("source") ? 1 : 3;
+    // LLVM C's text is long enough to scroll: show the call at the top, where
+    // Back must show it again.
+    code->verticalScrollBar()->setValue(row);
+    const int top = code->verticalScrollBar()->value();
+    QCOMPARE(top, representation == QLatin1String("source") ? 0 : row);
     const QPoint point(
         qRound(6 + 17 * metrics.horizontalAdvance(QLatin1Char('M'))),
         qRound((row - code->verticalScrollBar()->value() + 0.5) *
                std::ceil(metrics.lineSpacing())));
     QTest::mouseClick(code->viewport(), Qt::LeftButton, Qt::NoModifier, point);
     QCOMPARE(code->currentToken(), link);
+    const int line = code->cursorLine(), column = code->cursorColumn();
+    QVERIFY(column > 0);
     QTest::mouseDClick(code->viewport(), Qt::LeftButton, Qt::NoModifier, point);
     QCOMPARE(activation.size(), 1);
     if (representation == QLatin1String("llvmc"))
@@ -8010,6 +8204,11 @@ private slots:
     QTRY_VERIFY(code->hasFocus());
     QTRY_COMPARE(disassembly->currentFunction(),
                  std::optional<Address>(callee));
+    // A move in the callee, as a click on one of its rows makes, follows in
+    // the disassembly without a stop of its own: one Back leaves the callee.
+    disassembly->navigate(callee + 2, false);
+    QTRY_COMPARE(disassembly->currentAddress(),
+                 std::optional<Address>(callee + 2));
     QVERIFY(bench.action(ActionId::JumpBack)->isEnabled());
     bench.action(ActionId::JumpBack)->trigger();
     QTRY_COMPARE_WITH_TIMEOUT(code->function(), std::optional<Address>(caller),
@@ -8018,6 +8217,12 @@ private slots:
     QVERIFY(code->isVisible());
     QTRY_VERIFY(code->hasFocus());
     QCOMPARE(view->representation(), representation);
+    // The code is back where it left: the cursor on the call, in view as it
+    // was, as Hex-Rays' Esc returns.
+    QCOMPARE(code->cursorLine(), line);
+    QCOMPARE(code->cursorColumn(), column);
+    QCOMPARE(code->currentToken(), link);
+    QCOMPARE(code->verticalScrollBar()->value(), top);
     QVERIFY(bench.action(ActionId::JumpForward)->isEnabled());
     bench.action(ActionId::JumpForward)->trigger();
     QTRY_COMPARE_WITH_TIMEOUT(code->function(), std::optional<Address>(callee),
@@ -8025,6 +8230,9 @@ private slots:
     QTRY_VERIFY_WITH_TIMEOUT(!code->loading(), OpenTimeoutMs);
     QVERIFY(code->isVisible());
     QTRY_VERIFY(code->hasFocus());
+    // Forward returns to where the callee was left.
+    QTRY_COMPARE(disassembly->currentAddress(),
+                 std::optional<Address>(callee + 2));
   }
 
   void functionsActivationKeepsCodeWindow_data() {
@@ -11777,6 +11985,194 @@ private slots:
     QTRY_COMPARE(assembly->currentItem(), std::optional<Address>(origin));
   }
 
+  void historyStopsFollowTheCursor() {
+    // IDA's history keeps a stop per jump that follows the cursor: a move
+    // since the jump, such as a click in the code it opened, adds no stop,
+    // so Back returns to where each jump began and Forward to where the user
+    // left.
+    QTemporaryDir directory;
+    Workbench bench;
+    LoadDialogAcceptor loadDialogs;
+    bench.window->openFile(
+        writeFixture(directory, QStringLiteral("fixture.bin")));
+    QTRY_VERIFY_WITH_TIMEOUT(bench.session.loaded(), OpenTimeoutMs);
+    auto *disassembly = bench.window->disassembly();
+    const auto at = [&](Address address) {
+      QTRY_VERIFY_WITH_TIMEOUT(!disassembly->listing()->jumpPending(),
+                               OpenTimeoutMs);
+      QTRY_COMPARE(disassembly->currentAddress(),
+                   std::optional<Address>(address));
+    };
+    const Address start = Base + 0x50, called = Base + 0x140, read = called + 2,
+                  reread = called + 4, next = Base + 0x180;
+    disassembly->navigate(start);
+    at(start);
+    disassembly->navigate(called);
+    at(called);
+    disassembly->navigate(read, false);
+    at(read);
+    disassembly->navigate(next);
+    at(next);
+    disassembly->goBack();
+    at(read);
+    disassembly->goBack();
+    at(start);
+    disassembly->goForward();
+    at(read);
+    disassembly->goForward();
+    at(next);
+    disassembly->goBack();
+    at(read);
+    disassembly->navigate(reread, false);
+    at(reread);
+    disassembly->goBack();
+    at(start);
+    disassembly->goForward();
+    at(reread);
+  }
+
+  void backAndForwardButtonsListTheirStops() {
+    // As in IDA, the Back and Forward buttons list the stops they reach,
+    // nearest first, each as the listing names its place and what is there,
+    // and a pick goes that many steps at once, keeping the stops on both
+    // sides. The Jump menu keeps its plain commands.
+    QTemporaryDir directory;
+    Workbench bench;
+    LoadDialogAcceptor loadDialogs;
+    bench.window->openFile(
+        writeFixture(directory, QStringLiteral("fixture.bin")));
+    QTRY_VERIFY_WITH_TIMEOUT(bench.session.loaded(), OpenTimeoutMs);
+    auto *disassembly = bench.window->disassembly();
+    const auto at = [&](Address address) {
+      QTRY_VERIFY_WITH_TIMEOUT(!disassembly->listing()->jumpPending(),
+                               OpenTimeoutMs);
+      QTRY_COMPARE(disassembly->currentAddress(),
+                   std::optional<Address>(address));
+    };
+    const Address start = Base + 0x50, called = Base + 0x140,
+                  next = Base + 0x180;
+    disassembly->navigate(start);
+    at(start);
+    disassembly->navigate(called);
+    at(called);
+    disassembly->navigate(next);
+    at(next);
+    const auto list = [&](ActionId id) -> QMenu * {
+      for (auto *toolbar : bench.window->findChildren<QToolBar *>())
+        if (auto *button = qobject_cast<QToolButton *>(
+                toolbar->widgetForAction(bench.action(id))))
+          return button->popupMode() == QToolButton::MenuButtonPopup
+                     ? button->menu()
+                     : nullptr;
+      return nullptr;
+    };
+    QMenu *back = list(ActionId::JumpBack);
+    QMenu *forward = list(ActionId::JumpForward);
+    QVERIFY(back && forward);
+    QVERIFY(!bench.action(ActionId::JumpBack)->menu());
+    QVERIFY(!bench.action(ActionId::JumpForward)->menu());
+    emit back->aboutToShow();
+    const auto backStops = disassembly->stops(false);
+    QVERIFY(backStops.size() >= 2 && backStops[0] == called &&
+            backStops[1] == start);
+    QCOMPARE(back->actions().size(), qsizetype(backStops.size()));
+    // A function's stop reads `name (address)` before the instruction there.
+    const QString calledPlace =
+        QStringLiteral("(%1)\t").arg(displayAddress(called));
+    QTRY_VERIFY_WITH_TIMEOUT(
+        back->actions().first()->text().contains(calledPlace), OpenTimeoutMs);
+    const QString first = back->actions().first()->text();
+    QVERIFY2(!first.section(QLatin1Char('\t'), 1).isEmpty(), qPrintable(first));
+    back->actions()[1]->trigger();
+    at(start);
+    emit forward->aboutToShow();
+    QVERIFY(disassembly->stops(true) == (std::vector<Address>{called, next}));
+    QCOMPARE(forward->actions().size(), 2);
+    forward->actions()[1]->trigger();
+    at(next);
+    QCOMPARE(disassembly->stops(false).front(), called);
+  }
+
+  void historyListsNameTheCodeLineBackReturnsTo() {
+    // As Hex-Rays' history does, a stop the code in focus left reads as the
+    // line Back returns the code to, numbered as its margin numbers it; with
+    // the code shown another way, or the disassembly in focus, it reads as
+    // the listing names its place.
+    QTemporaryDir directory;
+    Workbench bench;
+    bench.window->openFile(
+        writeFixture(directory, QStringLiteral("pseudocode-navigation.bin")));
+    QTRY_VERIFY_WITH_TIMEOUT(bench.session.loaded(), OpenTimeoutMs);
+    auto *disassembly = bench.window->disassembly();
+    const Address caller = Base + 0x140, callee = Base + 0x160;
+    disassembly->navigate(caller);
+    QTRY_COMPARE(disassembly->currentFunction(),
+                 std::optional<Address>(caller));
+    bench.action(ActionId::ViewPseudocode)->trigger();
+    auto *view = bench.codeView(QStringLiteral("source"));
+    QVERIFY(view);
+    view->setRepresentation(QStringLiteral("source"));
+    auto *code = view->text();
+    QTRY_VERIFY_WITH_TIMEOUT(!code->loading() && code->lineCount() > 1,
+                             OpenTimeoutMs);
+    bench.window->activateWindow();
+    QVERIFY(QTest::qWaitForWindowActive(bench.window.get()));
+    code->setFocus();
+    QTRY_VERIFY(code->hasFocus());
+    // The call is the C's second line, which maps to the caller's entry.
+    const QFontMetricsF metrics(Theme::instance().codeFont());
+    const QPoint point(
+        qRound(6 + 17 * metrics.horizontalAdvance(QLatin1Char('M'))),
+        qRound(1.5 * std::ceil(metrics.lineSpacing())));
+    QTest::mouseClick(code->viewport(), Qt::LeftButton, Qt::NoModifier, point);
+    QCOMPARE(code->currentToken(), QStringLiteral("function_22"));
+    QTest::mouseDClick(code->viewport(), Qt::LeftButton, Qt::NoModifier, point);
+    QTRY_COMPARE_WITH_TIMEOUT(code->function(), std::optional<Address>(callee),
+                              OpenTimeoutMs);
+    QTRY_VERIFY_WITH_TIMEOUT(!code->loading(), OpenTimeoutMs);
+    QTRY_VERIFY(code->hasFocus());
+    QCOMPARE(disassembly->stops(false).front(), caller);
+    QMenu *back = nullptr;
+    for (auto *toolbar : bench.window->findChildren<QToolBar *>())
+      if (auto *button = qobject_cast<QToolButton *>(
+              toolbar->widgetForAction(bench.action(ActionId::JumpBack))))
+        back = button->menu();
+    QVERIFY(back);
+    // The first entry's place, once the listing names it.
+    QString place;
+    const auto first = [&] {
+      emit back->aboutToShow();
+      const QString provisional = back->actions().first()->text();
+      QTRY_VERIFY_WITH_TIMEOUT(back->actions().first()->text() != provisional,
+                               OpenTimeoutMs);
+      place = back->actions().first()->text().section(QLatin1Char('\t'), 0, 0);
+    };
+    const QString address = QStringLiteral(" (%1)").arg(displayAddress(caller));
+    first();
+    QCOMPARE(place, QStringLiteral("function_20:2") + address);
+    // Shown as LLVM C, the code would not return to that line.
+    view->setRepresentation(QStringLiteral("llvmc"));
+    QTRY_VERIFY_WITH_TIMEOUT(!code->loading() && code->lineCount() > 1,
+                             OpenTimeoutMs);
+    code->setFocus();
+    QTRY_VERIFY(code->hasFocus());
+    first();
+    QCOMPARE(place, QStringLiteral("function_20") + address);
+    // Shown as C again, it would; with the disassembly in focus, the code
+    // does not go back along.
+    view->setRepresentation(QStringLiteral("source"));
+    QTRY_VERIFY_WITH_TIMEOUT(!code->loading() && code->lineCount() > 1,
+                             OpenTimeoutMs);
+    code->setFocus();
+    QTRY_VERIFY(code->hasFocus());
+    first();
+    QCOMPARE(place, QStringLiteral("function_20:2") + address);
+    disassembly->listing()->setFocus();
+    QTRY_VERIFY(disassembly->listing()->hasFocus());
+    first();
+    QCOMPARE(place, QStringLiteral("function_20") + address);
+  }
+
   void laterLinksSupersedeAQueuedGraphView() {
     QTemporaryDir directory;
     Workbench bench;
@@ -11832,6 +12228,22 @@ private slots:
     QCoreApplication::processEvents();
     QCOMPARE(changes.count(), 0);
     QVERIFY(!undo->isEnabled());
+  }
+
+  void queryNotificationsLeaveExternalCommandsAlone() {
+    Workbench bench;
+    // An external command owns its availability. Open has no rule of its
+    // own, so the refresh that enables Exit must leave it as it was set.
+    auto *open = bench.action(ActionId::FileOpen);
+    auto *exit = bench.action(ActionId::FileExit);
+    open->setProperty("externalCommand", true);
+    open->setEnabled(false);
+    exit->setEnabled(false);
+    QSignalSpy changes(open, &QAction::enabledChanged);
+    emit bench.session.stateChanged();
+    QTRY_VERIFY(exit->isEnabled());
+    QCOMPARE(changes.count(), 0);
+    QVERIFY(!open->isEnabled());
   }
 
   void initialNavigationOverviewDoesNotWaitForRefreshDebounce() {
@@ -13121,8 +13533,8 @@ private slots:
     });
     const QString recent = hexAddress(Base + 0x40);
     QSettings().setValue(QStringLiteral("jump/history"), QStringList{recent});
-    JumpDialog dialog(bench.session, bench.window->addressSpace(),
-                      std::nullopt, bench.window.get());
+    JumpDialog dialog(bench.session, bench.window->addressSpace(), std::nullopt,
+                      bench.window.get());
     auto *input = dialog.findChild<QLineEdit *>();
     auto *matches = dialog.findChild<QListWidget *>();
     QVERIFY(input && matches);

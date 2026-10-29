@@ -634,10 +634,6 @@ TEST(RecordCallContract, CachedImportsInvalidateDenseStackArgumentsAndPadding) {
       Parameters.push_back(Float);
       const auto Signature = floatingCallArguments(
           Arch::AArch64, F.Image.abiFormat(), Float, Parameters);
-      if (Format == BinaryFormat::MachO) {
-        EXPECT_FALSE(Signature); // Apple stack packing remains undescribed.
-        continue;
-      }
       ASSERT_TRUE(Signature);
       F.Signatures[0x2000] = *Signature;
       auto &Ops = F.Function.Blocks[0].Ops;

@@ -34,6 +34,7 @@
 #include <vector>
 
 namespace neverd {
+class DebugContext;
 
 struct BinaryImage;
 struct AnalysisCacheWarmup;
@@ -202,6 +203,10 @@ struct OmittedCalleeMemo {
     /// LowIR, as entry-SP offset and observed byte width. These inputs do not
     /// alter Body's machine calling convention.
     std::vector<std::pair<int64_t, uint16_t>> SourceStackInputs;
+    /// Original blocks of a complete Win64 spill or stack-parameter
+    /// candidate, retained under the same image and conversion identity as
+    /// Body.
+    std::shared_ptr<const std::vector<LowBlock>> SourceOriginalBlocks;
     /// Whether \p Result's summaries read as they did for the conversion.
     bool readsHold(const PipelineResult &Result) const;
   };
@@ -309,6 +314,13 @@ private:
 void copyCallSignatureFacts(const PipelineResult &Source,
                             PipelineResult &Destination);
 
+/// Refine source-only integer carriers whose complete uses forward pointers
+/// to admitted imported declarations. Shared by HighC and LLVM-to-C; native
+/// lifting and patching retain their independent machine type contracts.
+void refineSourcePointerParameters(const BinaryImage &Image,
+                                   PipelineResult &Result,
+                                   const DebugContext *Debug);
+
 /// Recover every call's arguments in \p Result, and the parameters each
 /// forwarder passes straight through, from the setup its caller writes
 /// before the call (recoverCallAbi).  Each callee's recovered signature
@@ -320,14 +332,18 @@ void copyCallSignatureFacts(const PipelineResult &Source,
 /// the types the functions have already been given (inferMedTypes).
 void recoverModuleCallAbi(const BinaryImage &Img, PipelineResult &Result,
                           const std::map<va_t, std::string> &AllFuncNames,
-                          bool SourceDeclarations = false);
+                          bool SourceDeclarations = false,
+                          bool SourceParameterReads = false);
 
 /// Confirm caller-observed return shapes in omitted local callees. Uses the
 /// signature reader's complete lifts, conversion memo and work bounds; support
 /// bodies never become output functions. Candidates with no proof are removed.
+/// A target outside \p FirstWordObserved had only second-word readers, so an
+/// argument register its body never writes supplies no field.
 void confirmOmittedStructReturns(
     const BinaryImage &Image, const PipelineResult &Result,
-    std::map<va_t, std::vector<MedReturnReg>> &Candidates);
+    std::map<va_t, std::vector<MedReturnReg>> &Candidates,
+    const std::set<va_t> &FirstWordObserved);
 
 /// Read the signature bodies of \p Functions into
 /// \p Summaries.CalleeSignatureMemo as a restricted run under \p Summaries'

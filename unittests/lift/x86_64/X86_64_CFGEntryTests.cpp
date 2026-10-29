@@ -1639,6 +1639,35 @@ TEST(CFGBuilderCoverage, LocalUnwindTargetRequiresExclusiveSameFrameUses) {
         EXPECT_EQ(Stack->Inputs[1].ConstVal, 40u);
       }
     });
+    // With the image the converter authenticates the runtime import, and
+    // the saved-frame protocol certifies the call (SEHLocalUnwindProtocol.h):
+    // it becomes the jump it makes, which enters Target as an ordinary edge.
+    // No scope it leaves has a termination handler to call first.
+    EXPECT_NO_THROW({
+      LowToMedConverter Converter;
+      Converter.setBinaryImage(&Img);
+      auto Med = Converter.convert(Low, Arch::X64, BinaryFormat::COFF);
+      EXPECT_TRUE(verifyMedFunc(Med, "local-unwind-exit"));
+      ASSERT_EQ(Med.SEHLocalUnwindExits.size(), 1u);
+      const MedSEHLocalUnwindExit &Exit = Med.SEHLocalUnwindExits.front();
+      EXPECT_EQ(Exit.Target, Target);
+      EXPECT_TRUE(Exit.Handlers.empty());
+      const auto Resume = llvm::find_if(Med.Blocks, [&](const auto &Block) {
+        return Block.StartAddr == Target;
+      });
+      ASSERT_NE(Resume, Med.Blocks.end());
+      EXPECT_TRUE(llvm::any_of(Resume->Preds, [&](int Pred) {
+        return llvm::any_of(Med.Blocks[Pred].Ops, [&](const MedOp &Op) {
+          return Op.Addr == Exit.CallAddr && Op.Opcode == NdOp::BRANCH;
+        });
+      }));
+      EXPECT_FALSE(llvm::any_of(Med.Blocks, [&](const auto &Block) {
+        return llvm::any_of(Block.Ops, [&](const MedOp &Op) {
+          return Op.Opcode == NdOp::CALL && Op.NumInputs &&
+                 Op.Inputs[0].isConst() && Op.Inputs[0].ConstVal == Stub;
+        });
+      }));
+    });
     // An unchanged call address cannot retain proof after its arguments change.
     auto Changed = Low;
     bool ChangedArgument = false;

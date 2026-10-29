@@ -6863,6 +6863,14 @@ Reference identities: unresolved. Some call or data targets cannot be compared. 
         <translation>
 Identidades de las referencias: sin resolver. Algunos destinos de llamadas o datos no se pueden comparar. Esto por sí solo no demuestra un cambio.</translation>
     </message>
+    <message>
+        <source>Include matched calls</source>
+        <translation>Incluir llamadas emparejadas</translation>
+    </message>
+    <message>
+        <source>Extend shared regions across direct calls whose targets are paired. Results depend on the current function pairs and are recomputed when pairs change. This does not validate call behavior.</source>
+        <translation>Extender las regiones compartidas a través de llamadas directas cuyos destinos estén emparejados. Los resultados dependen de los pares de funciones actuales y se recalculan cuando cambian. Esto no valida el comportamiento de las llamadas.</translation>
+    </message>
 </context>
 <context>
     <name>neverd::gui::ComparisonFlowDialog</name>
@@ -8015,6 +8023,30 @@ Los productores de las entradas externas no se comparan ni se cuentan como códi
 SSA recipe: %1</source>
         <translation>
 Método SSA: %1</translation>
+    </message>
+    <message>
+        <source>
+Calls use current function pairs; behavior is not validated.</source>
+        <translation>
+Las llamadas usan los pares de funciones actuales; el comportamiento no está validado.</translation>
+    </message>
+    <message>
+        <source>Call context…</source>
+        <translation>Contexto de llamadas…</translation>
+    </message>
+    <message>
+        <source>Primary</source>
+        <translation>Principal</translation>
+    </message>
+    <message>
+        <source>Secondary</source>
+        <translation>Secundario</translation>
+    </message>
+    <message>
+        <source>%1 primary / %2 secondary functions · %3 shared spans
+Coverage: %4% / %5% of eligible instructions, including paired direct calls. Function pairs condition this evidence; behavior is not validated.</source>
+        <translation>%1 funciones principales / %2 secundarias · %3 intervalos compartidos
+Cobertura: %4% / %5% de las instrucciones admitidas, incluidas las llamadas directas emparejadas. Esta evidencia depende de los pares de funciones; el comportamiento no está validado.</translation>
     </message>
 </context>
 <context>
@@ -9560,6 +9592,18 @@ Las ambigüedades y decisiones manuales se limitan al informe. Las hipótesis de
     <message>
         <source>Releases</source>
         <translation>Versiones publicadas</translation>
+    </message>
+    <message>
+        <source>Calls in these saved spans rely on the source report's function pairs. They do not prove equivalent callee behavior.</source>
+        <translation>Las llamadas de estos fragmentos guardados se basan en los pares de funciones del informe original. No demuestran que el comportamiento de las funciones llamadas sea equivalente.</translation>
+    </message>
+    <message>
+        <source>All native spans</source>
+        <translation>Todos los fragmentos nativos</translation>
+    </message>
+    <message>
+        <source>All SSA spans</source>
+        <translation>Todos los fragmentos SSA</translation>
     </message>
 </context>
 <context>

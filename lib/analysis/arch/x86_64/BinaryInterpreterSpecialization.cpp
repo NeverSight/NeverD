@@ -9,6 +9,7 @@
 #include "../../../lift/X86/X86CetEncoding.h"
 #include "../../core/NativeUndefinedIndependence.h"
 #include "../../core/RawEnvironment.h"
+#include "BinaryContinuationInstructions.h"
 #include "NativeStackControl.h"
 #include "X64Recovery.h"
 
@@ -63,6 +64,10 @@ class ImageProvider final : public SpecializationProvider {
   std::string FixedPEDiagnostic;
   bool FixedPEBudgetExceeded = false;
   const bool PreserveOpaqueState;
+  // Continuation source binds the exact original instruction bytes explicitly
+  // at runtime. It never claims a Windows loader/fixed-image theorem and never
+  // folds data reads. Other users retain the complete PE evidence boundary.
+  const bool ContinuationSnapshot;
   std::map<va_t, SpecializationTerminalImport> TerminalImports;
   std::shared_ptr<const SpecializationRawEnvironment> RawDomain;
 
@@ -114,17 +119,20 @@ class ImageProvider final : public SpecializationProvider {
         return nullptr;
       Owner = &S;
     }
-    if (!Owner || (FixedPE ? !FixedPE->read(Address, Bytes, Executable)
-                           : touchesFixup(Address, Bytes)))
+    if (!Owner || (!ContinuationSnapshot &&
+                   (FixedPE ? !FixedPE->read(Address, Bytes, Executable)
+                            : touchesFixup(Address, Bytes))))
       return nullptr;
     return Owner;
   }
 
 public:
   ImageProvider(const BinaryImage &Image, const SpecializationOptions &Options,
-                bool PreserveOpaqueState = false)
+                bool PreserveOpaqueState = false,
+                bool ContinuationSnapshot = false)
       : Image(Image), Options(Options),
-        PreserveOpaqueState(PreserveOpaqueState) {
+        PreserveOpaqueState(PreserveOpaqueState),
+        ContinuationSnapshot(ContinuationSnapshot) {
     Decode.init(Arch::X64);
     Decode.setStrict(true);
     auto RawCost = x64::validateRawEnvironmentDeclarations(Options);
@@ -144,7 +152,8 @@ public:
         return;
       }
     }
-    if (Image.Format == BinaryFormat::COFF && !Image.Raw.empty()) {
+    if (!ContinuationSnapshot && Image.Format == BinaryFormat::COFF &&
+        !Image.Raw.empty()) {
       auto View = PEFixedImageView::create(
           Image, {.MaxBytes = Options.MaxImagePreparationBytes - RawCost->Bytes,
                   .MaxRecords =
@@ -368,6 +377,11 @@ public:
           B.Immediate = Op.Inputs[0].Offset;
         break;
       case NdOp::RETURN:
+        if (Insn.Id != X86_INS_RET && ContinuationSnapshot) {
+          B.Control = LowInstructionControl::Terminator;
+          B.ControlFlags = LowInstructionControlFlag::Terminator;
+          break;
+        }
         if (Insn.Id != X86_INS_RET)
           return llvm::createStringError(
               llvm::errc::not_supported,
@@ -409,7 +423,8 @@ public:
     }
     if (Decode.isFunctionTerminator(Insn) &&
         B.Control == LowInstructionControl::None) {
-      if (!Decode.isResumableTrap(Insn) && Insn.Id != X86_INS_UD2)
+      if (!ContinuationSnapshot && !Decode.isResumableTrap(Insn) &&
+          Insn.Id != X86_INS_UD2)
         return llvm::createStringError(llvm::errc::not_supported,
                                        "unsupported machine terminator");
       // Preserve strictly lifted traps for whole-original-graph inspection.
@@ -449,7 +464,8 @@ public:
 
   std::optional<SpecializationImmutableRead>
   immutableRead(va_t Address, uint16_t Bytes) override {
-    if (!FixedPEDiagnostic.empty() || !Bytes || Address > InvalidVA - Bytes)
+    if (ContinuationSnapshot || !FixedPEDiagnostic.empty() || !Bytes ||
+        Address > InvalidVA - Bytes)
       return std::nullopt;
     if (RawDomain) {
       // Any overlap with a declared slot is excluded from ordinary reads.
@@ -556,6 +572,34 @@ validateBinaryImage(const BinaryImage &Image,
   return std::nullopt;
 }
 } // namespace
+
+llvm::Expected<std::vector<SpecializationInstruction>>
+readBinaryX64ContinuationInstructions(const BinaryImage &Image,
+                                      llvm::ArrayRef<va_t> Addresses) {
+  SpecializationOptions Options;
+  Options.ExplicitMachineState = true;
+  Options.NormalNonfaultingExecution = true;
+  Options.X64CetDisabled = true;
+  if (auto Failure = validateBinaryImage(Image, Options))
+    return llvm::createStringError(llvm::errc::not_supported,
+                                   Failure->Diagnostic);
+  ImageProvider Provider(Image, Options, false, true);
+  SpecializationResult Preparation;
+  if (Provider.preparationFailed(Preparation))
+    return llvm::createStringError(llvm::errc::not_supported,
+                                   Preparation.Diagnostic);
+  std::vector<SpecializationInstruction> Result;
+  for (va_t Address : Addresses) {
+    auto Instruction = Provider.instruction({Address, Image.Mode});
+    if (!Instruction)
+      return llvm::createStringError(
+          llvm::errc::not_supported, "continuation instruction 0x%s: %s",
+          llvm::utohexstr(Address).c_str(),
+          llvm::toString(Instruction.takeError()).c_str());
+    Result.push_back(std::move(*Instruction));
+  }
+  return Result;
+}
 
 SpecializationResult
 specializeBinaryInterpreter(const BinaryImage &Image, va_t Entry,

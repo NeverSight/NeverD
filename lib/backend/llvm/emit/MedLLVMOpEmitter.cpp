@@ -1289,8 +1289,18 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
     llvm::Type *ValTy = sizeToType(Op.Output.Size);
     if (Val->getType() != ValTy)
       Val = Builder.CreateIntCast(Val, ValTy, false, "atomic_rmw_val");
-    llvm::Value *Ptr = resolveAtomicMemoryPtr(
-        Op.Inputs[0], Op.Output.Size, ValTy, Builder, Op.MemoryAddressSpace);
+    llvm::Value *Ptr;
+    if (Op.SourceReturnSlotOffset) {
+      Ptr = Builder.CreateIntrinsic(llvm::Intrinsic::addressofreturnaddress,
+                                    {Builder.getPtrTy()}, {}, nullptr,
+                                    "return_slot");
+      if (*Op.SourceReturnSlotOffset)
+        Ptr = Builder.CreateConstGEP1_64(Builder.getInt8Ty(), Ptr,
+                                         *Op.SourceReturnSlotOffset);
+    } else {
+      Ptr = resolveAtomicMemoryPtr(Op.Inputs[0], Op.Output.Size, ValTy, Builder,
+                                   Op.MemoryAddressSpace);
+    }
     if (const auto Plan = x86AtomicRmwPlan(
             TargetArch, Op.Opcode, Op.Output.Size, Op.MemoryAddressSpace)) {
       // Generic atomicrmw with natural alignment would assert a fact the

@@ -9,6 +9,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "../../../lib/loader/COFF/eh/COFFRegistrationEHDetail.h"
+#include "../core/MappedSectionFlags.h"
 #include "gtest/gtest.h"
 
 namespace {
@@ -218,8 +219,9 @@ TEST(RegistrationInstructionRange,
           Image.Segments.front().Flags | SegmentFlags::Writable;
       break;
     case 3:
-      Image.Sections.front().Flags =
-          Image.Sections.front().Flags | SegmentFlags::Writable;
+      setMappedSectionFlags(Image, Image.Sections.front(),
+                            Image.Sections.front().Flags |
+                                SegmentFlags::Writable);
       break;
     case 4:
       Image.BaseRelocations.push_back({0x1001, 3});

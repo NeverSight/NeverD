@@ -1247,7 +1247,13 @@ TEST(HighCIntegerWidths, SegmentedOffsetsDoNotAliasOverlappingImageBacking) {
       << Source;
   EXPECT_NE(Body("read_gs_compound").find(" + 0x140002000"), std::string::npos)
       << Source;
-  EXPECT_NE(Body("atomic_gs_coincident").find("__atomic_fetch_add"),
+  // x86 keeps the decoded LOCK XADD on its segment (X86AtomicRmw.h): an
+  // arbitrary address cannot carry __atomic_fetch_add's alignment promise.
+  EXPECT_NE(Body("atomic_gs_coincident")
+                .find("__asm__ __volatile__(\"lock xaddq %0, %%gs:(%1)\""),
+            std::string::npos)
+      << Source;
+  EXPECT_EQ(Body("atomic_gs_coincident").find("__atomic_fetch_add"),
             std::string::npos)
       << Source;
 }

@@ -61,6 +61,9 @@ struct FunctionFeatures {
   uint32_t Edges = 0;
   uint32_t Loops = 0;
   uint32_t Calls = 0;
+  /// A single-block, straight-line prelude followed by an admitted tail jump.
+  /// Thunks, recursive jumps and other control transfers are not eligible.
+  uint32_t TailCallee = NoIndex;
   struct AddressSite {
     uint32_t Target;
     uint32_t Instruction;
@@ -101,6 +104,8 @@ struct ProgramFeatures {
   Adjacency Referrers;
   /// Every call in instruction order; NoIndex retains an unresolved call.
   Adjacency CallSites;
+  /// Eligible straight-line tail callers, indexed by their direct callee.
+  Adjacency TailCallers;
   /// What each function's thunks lead to: the function itself, or for a
   /// thunk the function it passes control to.
   std::vector<uint32_t> Resolved;

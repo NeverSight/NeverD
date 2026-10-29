@@ -241,11 +241,20 @@ TEST(RegistrationSEHJumpABI, RuntimeArityDoesNotInventMissingStackArguments) {
              Op.Inputs[0].Kind == MedVar::Temp && Op.Inputs[0].Id == 11;
     });
   // The retained source receipt proves the ABI, not newly edited SSA values.
-  // A gap in current stores must truncate recovery rather than synthesize zero.
+  // A gap in current stores keeps its position as an explicit unspecified
+  // word rather than a synthesized zero, and the later words keep theirs.
   F.recover();
   ASSERT_EQ(F.Function.CallInfos.size(), 2u);
+  const auto &Capture = F.Function.CallInfos[0];
+  const auto &Resume = F.Function.CallInfos[1];
+  ASSERT_EQ(Capture.Args.size(), 4u);
+  ASSERT_EQ(Resume.Args.size(), 2u);
   for (const auto &Call : F.Function.CallInfos)
-    EXPECT_EQ(Call.Args.size(), 1u);
+    EXPECT_EQ(Call.Args[1].Kind, MedVar::Unspecified);
+  EXPECT_EQ(Capture.Args[0], F.Buffer);
+  EXPECT_EQ(Capture.Args[2].ConstVal, 0x3000u);
+  EXPECT_EQ(Capture.Args[3].ConstVal, 0u);
+  EXPECT_EQ(Resume.Args[0], F.ResumeBuffer);
 }
 
 TEST(RegistrationSEHJumpABI,

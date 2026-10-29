@@ -6863,6 +6863,14 @@ Reference identities: unresolved. Some call or data targets cannot be compared. 
         <translation>
 Referenzidentitäten: ungeklärt. Einige Aufruf- oder Datenziele können nicht verglichen werden. Dies allein belegt keine Änderung.</translation>
     </message>
+    <message>
+        <source>Include matched calls</source>
+        <translation>Zugeordnete Aufrufe einbeziehen</translation>
+    </message>
+    <message>
+        <source>Extend shared regions across direct calls whose targets are paired. Results depend on the current function pairs and are recomputed when pairs change. This does not validate call behavior.</source>
+        <translation>Gemeinsame Bereiche über direkte Aufrufe mit zugeordneten Zielen hinweg erweitern. Die Ergebnisse hängen von den aktuellen Funktionspaaren ab und werden bei Änderungen neu berechnet. Das Aufrufverhalten wird dabei nicht validiert.</translation>
+    </message>
 </context>
 <context>
     <name>neverd::gui::ComparisonFlowDialog</name>
@@ -8015,6 +8023,30 @@ Erzeuger externer Eingaben werden weder verglichen noch als gemeinsamer Code gez
 SSA recipe: %1</source>
         <translation>
 SSA-Verfahren: %1</translation>
+    </message>
+    <message>
+        <source>
+Calls use current function pairs; behavior is not validated.</source>
+        <translation>
+Aufrufe verwenden die aktuellen Funktionspaare; das Verhalten ist nicht validiert.</translation>
+    </message>
+    <message>
+        <source>Call context…</source>
+        <translation>Aufrufkontext…</translation>
+    </message>
+    <message>
+        <source>Primary</source>
+        <translation>Primär</translation>
+    </message>
+    <message>
+        <source>Secondary</source>
+        <translation>Sekundär</translation>
+    </message>
+    <message>
+        <source>%1 primary / %2 secondary functions · %3 shared spans
+Coverage: %4% / %5% of eligible instructions, including paired direct calls. Function pairs condition this evidence; behavior is not validated.</source>
+        <translation>%1 primäre / %2 sekundäre Funktionen · %3 gemeinsame Bereiche
+Abdeckung: %4% / %5% der zulässigen Anweisungen einschließlich zugeordneter direkter Aufrufe. Diese Evidenz setzt die Funktionspaare voraus; das Verhalten ist nicht validiert.</translation>
     </message>
 </context>
 <context>
@@ -9560,6 +9592,18 @@ Mehrdeutigkeiten und manuelle Entscheidungen gelten nur im jeweiligen Bericht. R
     <message>
         <source>Releases</source>
         <translation>Releases</translation>
+    </message>
+    <message>
+        <source>Calls in these saved spans rely on the source report's function pairs. They do not prove equivalent callee behavior.</source>
+        <translation>Aufrufe in diesen gespeicherten Abschnitten beruhen auf den Funktionspaaren des Quellberichts. Sie beweisen kein gleichwertiges Verhalten der aufgerufenen Funktionen.</translation>
+    </message>
+    <message>
+        <source>All native spans</source>
+        <translation>Alle nativen Abschnitte</translation>
+    </message>
+    <message>
+        <source>All SSA spans</source>
+        <translation>Alle SSA-Abschnitte</translation>
     </message>
 </context>
 <context>

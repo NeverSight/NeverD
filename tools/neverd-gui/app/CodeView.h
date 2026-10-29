@@ -16,6 +16,7 @@
 #include <QVector>
 #include <QWidget>
 #include <optional>
+#include <tuple>
 
 class QComboBox;
 class QLabel;
@@ -92,6 +93,17 @@ public:
   /// row mapped to it and mark the others, without unfolding, waiting or
   /// reporting an instruction no row maps. Neither move says locationChanged.
   void revealAddress(Address address);
+  /// Keep the cursor's row and column and the first shown row as the place
+  /// to come back to at \p address, the jump history's stop for it.
+  void keepPlace(Address address);
+  /// Go back to the place kept at \p address, as Hex-Rays' Esc does: now, or
+  /// once the text on its way completes. Only the same function, shown the
+  /// same way, has that place; false otherwise.
+  bool returnToPlace(Address address);
+  /// The number the margin shows for the line Back returns to at
+  /// \p address, when the place kept there is in \p function and the code is
+  /// shown as it was then.
+  std::optional<int> keptLine(Address address, Address function) const;
   QString currentToken() const;
   /// The selected source name's image address or declared-local identity.
   std::optional<QJsonObject> renameTarget() const;
@@ -151,6 +163,14 @@ public:
   void selectAll();
   /// The displayed line the cursor is on.
   int cursorLine() const { return cursorLine_; }
+  int cursorColumn() const { return cursorColumn_; }
+  /// The bracket the cursor is on and the one it pairs with, as shown lines
+  /// and columns, which Hex-Rays marks together; none off a bracket, for one
+  /// in a string or comment, or while its partner is not in the text.
+  struct BracketPair {
+    int line = 0, column = 0, partnerLine = 0, partnerColumn = 0;
+  };
+  std::optional<BracketPair> bracketPair() const;
   int lineCount() const { return int(lines_.size()); }
   /// Recognized library operations that can fold into one-line summaries.
   int foldableCount() const { return library_.foldableCount(); }
@@ -320,6 +340,19 @@ private:
     int cursorLine = 0, cursorColumn = 0, topLine = 0;
   };
   std::optional<SourcePlace> placeAfterLoad_;
+  /// The places keepPlace kept, newest last, with the text they were in.
+  struct KeptPlace {
+    Address address = 0, function = 0;
+    QString representation;
+    QJsonObject options;
+    SourcePlace place;
+  };
+  QVector<KeptPlace> keptPlaces_;
+  /// The place kept at \p address, if the code is shown as it was then.
+  const KeptPlace *keptPlace(Address address) const;
+  SourcePlace currentPlace() const;
+  /// The first shown line at or after a source line.
+  int shownLine(int sourceLine) const;
   QString representation_, status_, highlight_;
   ViewSearchQuery SearchHighlight;
   /// Why the source on its way is not the one asked for (showOrdinary).
@@ -353,6 +386,18 @@ private:
   /// The global last activated by its name, whose declaration shows if the
   /// binary does not name it.
   QString unresolvedDeclaration_;
+  /// Hint the type of the import a call at \p line and \p column names, and
+  /// where its arguments go, as Hex-Rays' hint does, once the worker answers;
+  /// false where no call is named.
+  bool hintFunction(int line, int column, const QPoint &globalPosition);
+  /// This document's hints by the name asked about, empty for a name that
+  /// names no function.
+  QHash<QString, QString> functionHints_;
+  quint64 hintsVersion_ = 0;
+  /// The hint on its way, which another hover, a move off its name or a
+  /// scroll drops, and the rectangle of its name.
+  quint64 hintSerial_ = 0;
+  QRect hintRect_;
   /// The language the first page names, and how many declarations it shows
   /// as C because that language could not spell them.
   QString pageLanguage_;
@@ -381,6 +426,11 @@ private:
   const Declarations &declarations() const;
   mutable std::optional<Declarations> declarations_;
   int cursorLine_ = 0, cursorColumn_ = 0;
+  /// Changes whenever the shown lines do, so the bracket pair found for a
+  /// cursor place is found again.
+  quint64 linesStamp_ = 0;
+  mutable std::optional<BracketPair> brackets_;
+  mutable std::tuple<int, int, quint64> bracketsAt_{-1, -1, 0};
   std::optional<std::pair<int, int>> anchor_;
   bool selecting_ = false;
   /// Extend the selection to a point of the viewport, as dragging does; a

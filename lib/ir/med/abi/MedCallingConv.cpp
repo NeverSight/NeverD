@@ -52,6 +52,9 @@ void detectFPParams(
 
 // ---- x86-specific helpers (MedCallingConvX86.cpp) ----
 void detectCdeclStackParams(MedFunc &Func, Arch TargetArch);
+void detectSummaryVectorParams(MedFunc &Func, const TargetRegInfo &TRI,
+                               const GPRReadWidths &Summary, Arch TargetArch,
+                               BinaryFormat Fmt);
 
 // ---- variadic (...) prologue detection (MedVariadic.cpp) ----
 void detectVariadic(MedFunc &Func, const TargetRegInfo &TRI, Arch TargetArch,
@@ -828,21 +831,18 @@ void detectStackParams(MedFunc &Func, Arch TargetArch, BinaryFormat Fmt,
   // Offset of \p V relative to the entry stack pointer (folding the COPY /
   // zext / subpiece / push-sub chain detectCc sees before copy propagation),
   // or nullopt when V is not entry-SP-derived.
+  //
+  // PHI webs share their inputs, as SEH handler roots joining the protected
+  // range's SP with the normal path do, and a walk revisits them along every
+  // path. Below a value no cycle was cut, its offset at one depth depends on
+  // its definitions alone and is computed once; a cut only ever yields
+  // nullopt, so the memo changes no result.
   llvm::DenseSet<ValueKey> ActiveTrace;
-  std::function<std::optional<int64_t>(const MedVar &, int)> traceOff =
-      [&](const MedVar &V, int Depth) -> std::optional<int64_t> {
-    if (Depth > ::neverd::limits::ir::
-                    kMedCallingConvDetectStackParamsTraceOffDepthLimit)
-      return std::nullopt;
-    const ValueKey Key = med_calling_conv_detail::valueKey(V);
-    if (!ActiveTrace.insert(Key).second)
-      return std::nullopt;
-    struct PopActive {
-      llvm::DenseSet<ValueKey> &Set;
-      ValueKey Key;
-      ~PopActive() { Set.erase(Key); }
-    } Guard{ActiveTrace, Key};
-
+  llvm::DenseMap<std::pair<ValueKey, int>, std::optional<int64_t>> TraceMemo;
+  unsigned CycleCuts = 0;
+  std::function<std::optional<int64_t>(const MedVar &, int)> traceOff;
+  auto traceDef = [&](const MedVar &V, const ValueKey &Key,
+                      int Depth) -> std::optional<int64_t> {
     if (AmbiguousPhis.count(Key))
       return std::nullopt;
     if (auto It = UniquePhis.find(Key); It != UniquePhis.end()) {
@@ -905,6 +905,29 @@ void detectStackParams(MedFunc &Func, Arch TargetArch, BinaryFormat Fmt,
     default:
       return std::nullopt;
     }
+  };
+  traceOff = [&](const MedVar &V, int Depth) -> std::optional<int64_t> {
+    if (Depth > ::neverd::limits::ir::
+                    kMedCallingConvDetectStackParamsTraceOffDepthLimit)
+      return std::nullopt;
+    const ValueKey Key = med_calling_conv_detail::valueKey(V);
+    if (ActiveTrace.count(Key)) {
+      ++CycleCuts;
+      return std::nullopt;
+    }
+    if (auto It = TraceMemo.find({Key, Depth}); It != TraceMemo.end())
+      return It->second;
+    ActiveTrace.insert(Key);
+    struct PopActive {
+      llvm::DenseSet<ValueKey> &Set;
+      ValueKey Key;
+      ~PopActive() { Set.erase(Key); }
+    } Guard{ActiveTrace, Key};
+    const unsigned CutsBefore = CycleCuts;
+    const std::optional<int64_t> Offset = traceDef(V, Key, Depth);
+    if (CycleCuts == CutsBefore)
+      TraceMemo.try_emplace({Key, Depth}, Offset);
+    return Offset;
   };
 
   // Offset of a stack read relative to the entry stack pointer, bounded to the
@@ -1403,6 +1426,17 @@ void LowToMedConverter::detectCc(MedFunc &Func, Arch TheArch,
     // promoted to double, and va_arg reads them from the area.
     if (!Func.IsVariadic) {
       detectFPParams(Func, Entry, TRI, RegVarMap, TargetArch, TargetFormat);
+      // Where a summary gives the floating arguments each in the next
+      // vector register (System V x86-64), it lists those a variadic call
+      // reads too, which no entry copy shows.
+      if (Summary && Convention->VectorArgumentsFromCalleeSummary &&
+          !Convention->PositionalArgumentSlots &&
+          !(Convention->PrototypeArgCount &&
+            Convention->PrototypeArgCount(Func.Name)) &&
+          !(Convention->SummaryListsNoParameters &&
+            Convention->SummaryListsNoParameters(*Summary)))
+        detectSummaryVectorParams(Func, TRI, *Summary, TargetArch,
+                                  TargetFormat);
     } else if (Func.takesVectorArgumentRegisters()) {
       detectFPParams(Func, Entry, TRI, RegVarMap, TargetArch, TargetFormat);
       const auto VectorRegs = TRI.floatingParamRegs(TargetFormat);

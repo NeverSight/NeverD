@@ -558,7 +558,8 @@ private slots:
                   {17, 5, Comment, std::nullopt}};
     auto ranges = highlightRanges(line, QStringLiteral("rax"), Register);
     std::sort(ranges.begin(), ranges.end());
-    QCOMPARE(ranges, (QVector<std::pair<int, int>>{{4, 7}, {10, 13}, {19, 22}}));
+    QCOMPARE(ranges,
+             (QVector<std::pair<int, int>>{{4, 7}, {10, 13}, {19, 22}}));
     // Outside register spans only the word itself matches.
     QCOMPARE(highlightRanges(line, QStringLiteral("rax"), std::nullopt),
              (QVector<std::pair<int, int>>{{10, 13}, {19, 22}}));

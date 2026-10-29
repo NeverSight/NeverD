@@ -564,8 +564,7 @@ void HexView::mousePressEvent(QMouseEvent *event) {
       row &&
       !(event->modifiers() & (Qt::ShiftModifier | Qt::ControlModifier))) {
     for (int b = 0; b < BytesPerRow; ++b)
-      if (const Address address = *row + Address(b);
-          space_.regionOf(address)) {
+      if (const Address address = *row + Address(b); space_.regionOf(address)) {
         moveCurrent(address, false);
         addressRow_ = row;
         emit locationChanged(address);

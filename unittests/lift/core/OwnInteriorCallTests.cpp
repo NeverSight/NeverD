@@ -10,6 +10,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "../../../lib/ir/low/LowScalarTargets.h"
 #include "../../../lib/ir/low/X86/FrameEffects.h"
 #include "gtest/gtest.h"
 
@@ -19,6 +20,7 @@
 #include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/loader/ExceptionFunction.h"
 #include "neverd/pipeline/Pipeline.h"
+#include "neverd/pipeline/X64ContinuationExport.h"
 
 #include "llvm/ADT/SmallString.h"
 #include "llvm/IR/LLVMContext.h"
@@ -30,6 +32,7 @@
 #include "llvm/Support/raw_ostream.h"
 
 #include <algorithm>
+#include <initializer_list>
 #include <string>
 #include <vector>
 
@@ -121,7 +124,7 @@ Lifted lift(std::vector<uint8_t> Code, const Platform &P = Win64) {
   return Out;
 }
 
-void compileAndRun(const std::string &Source) {
+void compileAndRun(const std::string &Source, bool Loops = false) {
 #ifdef NEVERD_TEST_CLANG
   const std::string Compiler = NEVERD_TEST_CLANG;
 #else
@@ -166,8 +169,14 @@ void compileAndRun(const std::string &Source) {
                          << (Errors ? (*Errors)->getBuffer().str() : "") << '\n'
                          << Source;
     Result = llvm::sys::ExecuteAndWait(BinaryPath, {BinaryPath}, std::nullopt,
-                                       Redirects, 30, 0, &Error);
+                                       Redirects, Loops ? 1 : 30, 0, &Error);
     Errors = llvm::MemoryBuffer::getFile(ErrorPath);
+    if (Loops) {
+      ASSERT_EQ(Result, -2) << Error << '\n' << Source;
+      ASSERT_NE(Error.find("timed out"), std::string::npos) << Error << '\n'
+                                                            << Source;
+      continue;
+    }
     ASSERT_EQ(Result, 0) << Error
                          << (Errors ? (*Errors)->getBuffer().str() : "") << '\n'
                          << Source;
@@ -177,6 +186,701 @@ void compileAndRun(const std::string &Source) {
 constexpr const char *ReturnsSeven = R"(
 int main(void) { return sub_140001000() == 7 ? 0 : 1; }
 )";
+
+void checkComputedSource(const BinaryImage &Image, const std::string &Harness,
+                         bool Loops = false, const std::string &Prelude = {}) {
+  for (bool LLVM : {false, true})
+    for (bool NoOpt : {false, true}) {
+      SCOPED_TRACE(LLVM);
+      SCOPED_TRACE(NoOpt);
+      llvm::LLVMContext Context;
+      PipelineOptions Options;
+      Options.EmitDumpOutput = false;
+      Options.LiftMode = LLVM;
+      Options.SourceProjection = true;
+      Options.NoOpt = NoOpt;
+      Options.OnlyFunctionEntries = {Image.Entry};
+      auto Result = Pipeline().run(Image, Context, Options);
+      ASSERT_TRUE(Result.Success) << Result.Error;
+      std::string Source;
+      llvm::raw_string_ostream Output(Source);
+      CEmitterOptions COptions;
+      COptions.TheArch = Image.Arch;
+      COptions.Format = Image.Format;
+      COptions.Image = &Image;
+      if (LLVM) {
+        ASSERT_TRUE(Result.LlvmModule);
+        ASSERT_FALSE(llvm::verifyModule(*Result.LlvmModule, &llvm::errs()));
+        ASSERT_TRUE(LLVMCEmitter().emit(*Result.LlvmModule, Output, COptions));
+      } else
+        ASSERT_TRUE(HighCEmitter().emit(Result.HighFuncs, Output, COptions));
+      compileAndRun(Prelude + Source + Harness, Loops);
+    }
+}
+
+TEST(NativeTimestampSource, CounterOnlyKeepsTheAuxiliaryOperandValid) {
+  const auto Image = makeImage({0x0f, 0x01, 0xf9,       // rdtscp
+                                0x48, 0xc1, 0xe2, 0x20, // shl rdx,32
+                                0x48, 0x09, 0xd0, 0xc3},
+                               SysV64); // or rax,rdx; ret
+  checkComputedSource(Image, R"C(
+int main(void) {
+  _mm_lfence();
+  uint64_t before=__rdtsc();
+  _mm_lfence();
+  uint64_t value=sub_140001000();
+  _mm_lfence();
+  uint64_t after=__rdtsc();
+  return value<before || value>after;
+}
+)C");
+}
+
+TEST(SourceCallReturnWrites, ActualNextPCSurvivesAnOrdinarySourceCall) {
+  // The second load observes the physical CALL's pushed next PC, not the
+  // earlier explicit constant and not the source compiler's own return PC.
+  std::vector<uint8_t> Code = {0x48, 0x83, 0xec, 0x28, // sub rsp,40
+                               0x48, 0xc7, 0x44, 0x24, 0xf8,
+                               19,   0,    0,    0,           // mov [rsp-8],19
+                               0xe8, 0x2e, 0,    0,    0,     // call +64
+                               0x48, 0x8b, 0x44, 0x24, 0xf8,  // mov rax,[rsp-8]
+                               0x48, 0x83, 0xc4, 0x28, 0xc3}; // add rsp,40; ret
+  const auto End = Entry + Code.size();
+  Code.resize(64, 0xcc);
+  Code.insert(Code.end(), {0xb8, 7, 0, 0, 0, 0xc3});
+  auto Image = makeImage(Code, Win64);
+  Image.ExceptionMetadata.Functions[0].CodeRange.End = End;
+  Image.ExceptionMetadata.rebuildIndex();
+  auto Callee = Symbol::makeFunc(Entry + 64);
+  Callee.Name = "return_slot_helper";
+  Image.Symbols.push_back(Callee);
+  checkComputedSource(Image, R"C(
+static unsigned calls;
+__typeof__(return_slot_helper()) return_slot_helper(void) { ++calls; return 7; }
+int main(void) {
+  return (uint64_t)sub_140001000() != 0x140001012ULL || calls != 1;
+}
+)C");
+}
+
+TEST(SourceCallReturnWrites, PartialOutputKeepsAnEarlierPhysicalReturnPC) {
+  std::vector<uint8_t> Code = {
+      0x48, 0x83, 0xec, 0x28,        // sub rsp,40
+      0xe8, 0x37, 0,    0,    0,     // call +64; return PC +9
+      0x48, 0x83, 0xec, 0x10,        // sub rsp,16
+      0x48, 0x8d, 0x4c, 0x24, 8,     // lea rcx,[rsp+8]
+      0xe8, 0x39, 0,    0,    0,     // call +80
+      0x48, 0x8b, 0x44, 0x24, 8,     // mov rax,[rsp+8]
+      0x48, 0x83, 0xc4, 0x38, 0xc3}; // add rsp,56; ret
+  const auto End = Entry + Code.size();
+  Code.resize(64, 0xcc);
+  Code.insert(Code.end(), {0xb8, 7, 0, 0, 0, 0xc3});
+  Code.resize(80, 0xcc);
+  Code.insert(Code.end(),
+              {0xc7, 0x01, 0x78, 0x56, 0x34, 0x12, // mov dword[rcx],...
+               0xb8, 7, 0, 0, 0, 0xc3});
+  auto Image = makeImage(Code, Win64);
+  Image.ExceptionMetadata.Functions[0].CodeRange.End = End;
+  Image.ExceptionMetadata.rebuildIndex();
+  for (const auto &[Offset, Name] : {std::pair{64, "return_slot_helper"},
+                                     std::pair{80, "partial_output_helper"}}) {
+    auto Callee = Symbol::makeFunc(Entry + Offset);
+    Callee.Name = Name;
+    Image.Symbols.push_back(Callee);
+  }
+  checkComputedSource(Image, R"C(
+static unsigned calls;
+__typeof__(return_slot_helper()) return_slot_helper(void) { ++calls; return 7; }
+__typeof__(partial_output_helper(0)) partial_output_helper(void *output) {
+  ++calls;
+  uint32_t word = 0x12345678;
+  __builtin_memcpy(output, &word, sizeof(word));
+  return 7;
+}
+int main(void) {
+  return (uint64_t)sub_140001000() != 0x112345678ULL || calls != 2;
+}
+)C");
+}
+
+TEST(WindowsKernelABI, ResumeThreadDoesNotTakeTheDispatchersAmbientRegisters) {
+  std::vector<uint8_t> Code = {0x48, 0x83, 0xec, 0x28,    // sub rsp,40
+                               0xba, 7,    0,    0,    0, // mov edx,7
+                               0xe8, 0x12, 0,    0,    0, // call +32
+                               0x48, 0x83, 0xc4, 0x28, 0xc3};
+  Code.resize(32, 0xcc);
+  // A service implementation can observe ambient registers. Its declared
+  // two-argument interface still owns the caller's source operands.
+  Code.insert(Code.end(), {0x4c, 0x89, 0x01,       // mov [rcx],r8
+                           0x4c, 0x89, 0x49, 8,    // mov [rcx+8],r9
+                           0x48, 0x8d, 0x04, 0x11, // lea rax,[rcx+rdx]
+                           0xc3});
+  auto Image = makeImage(Code, Win64);
+  Symbol Service = Symbol::makeFunc(Entry + 32);
+  Service.Name = "ZwResumeThread";
+  Image.Symbols.push_back(Service);
+  checkComputedSource(Image, R"(
+int64_t ZwResumeThread(int64_t handle, int64_t previous) {
+  return handle + previous * 3;
+}
+uint64_t sub_140001020(uint64_t handle, uint64_t previous) {
+  return handle + previous * 3;
+}
+int main(void) { return sub_140001000(11) != 32; }
+)",
+                      false,
+                      "#include <stdint.h>\n"
+                      "int64_t ZwResumeThread(int64_t, int64_t);\n");
+}
+
+TEST(WindowsKernelABI, NativeServiceKeepsItsDeclaredStackArgument) {
+  std::vector<uint8_t> Code = {
+      0x48, 0x83, 0xec, 0x28,                    // sub rsp,40
+      0xb9, 11,   0,    0,    0,                 // mov ecx,11
+      0xba, 22,   0,    0,    0,                 // mov edx,22
+      0x41, 0xb8, 33,   0,    0,    0,           // mov r8d,33
+      0x41, 0xb9, 44,   0,    0,    0,           // mov r9d,44
+      0x48, 0xc7, 0x44, 0x24, 32,                // mov qword [rsp+32],55
+      55,   0,    0,    0,    0xe8, 24, 0, 0, 0, // call +64
+      0x48, 0x83, 0xc4, 0x28, 0xc3};
+  Code.resize(64, 0xcc);
+  Code.insert(Code.end(), {0x31, 0xc0, 0xc3});
+  auto Image = makeImage(Code, Win64);
+  Symbol Service = Symbol::makeFunc(Entry + 64);
+  Service.Name = "ZwQueryLicenseValue";
+  Image.Symbols.push_back(Service);
+  checkComputedSource(Image, R"(
+int64_t ZwQueryLicenseValue(int64_t a, int64_t b, int64_t c,
+                           uint32_t d, int64_t e) {
+  return a + 2*b + 3*c + 4*d + 5*e;
+}
+uint64_t sub_140001040(uint64_t a, uint64_t b, uint64_t c,
+                     uint32_t d, uint64_t e) {
+  return a + 2*b + 3*c + 4*d + 5*e;
+}
+int main(void) { return sub_140001000() != 605; }
+)",
+                      false,
+                      "#include <stdint.h>\n"
+                      "int64_t ZwQueryLicenseValue(int64_t, int64_t, int64_t, "
+                      "uint32_t, int64_t);\n");
+}
+
+TEST(WindowsKernelABI, RegisterOnlyServiceDoesNotTakeAdjacentFrameStores) {
+  std::vector<uint8_t> Code = {
+      0x48, 0x83, 0xec, 0x38,                   // sub rsp,56
+      0xb9, 11,   0,    0,    0,                // mov ecx,11
+      0xba, 22,   0,    0,    0,                // mov edx,22
+      0x4c, 0x8d, 0x44, 0x24, 32,               // lea r8,[rsp+32]
+      0x41, 0xb9, 44,   1,    0,   0,           // mov r9d,300 (BOOLEAN 44)
+      0x48, 0xc7, 0x44, 0x24, 32,  55, 0, 0, 0, // mov qword [rsp+32],55
+      0x48, 0xc7, 0x44, 0x24, 40,  66, 0, 0, 0, // mov qword [rsp+40],66
+      0xe8, 48,   0,    0,    0,                // call +96
+      0x48, 0x83, 0xc4, 0x38, 0xc3};
+  Code.resize(96, 0xcc);
+  Code.insert(Code.end(), {0x31, 0xc0, 0xc3});
+  auto Image = makeImage(Code, Win64);
+  Symbol Service = Symbol::makeFunc(Entry + 96);
+  Service.Name = "ZwCreateMutant";
+  Image.Symbols.push_back(Service);
+  checkComputedSource(Image, R"(
+int64_t ZwCreateMutant(int64_t a, uint32_t b, int64_t object, uint32_t d) {
+  const uint64_t *p = (const uint64_t *)(uintptr_t)object;
+  return a + 2*b + 3*p[0] + 4*d + 5*p[1];
+}
+uint64_t sub_140001060(uint64_t a, uint32_t b, uint64_t object, uint8_t d) {
+  return ZwCreateMutant(a, b, object, d);
+}
+int main(void) { return sub_140001000() != 726; }
+)",
+                      false,
+                      "#include <stdint.h>\n"
+                      "int64_t ZwCreateMutant(int64_t, uint32_t, int64_t, "
+                      "uint32_t);\n");
+}
+
+TEST(WindowsKernelABI, EmptyServiceContractDoesNotAcquireAmbientOperands) {
+  std::vector<uint8_t> Code = {0x48, 0x83, 0xec, 0x28,    // sub rsp,40
+                               0xb9, 13,   0,    0,    0, // mov ecx,13
+                               0x48, 0xc7, 0x44, 0x24, 32,
+                               55,   0,    0,    0, // mov qword [rsp+32],55
+                               0xe8, 41,   0,    0,    0, // call +64
+                               0x48, 0x83, 0xc4, 0x28, 0xc3};
+  Code.resize(64, 0xcc);
+  Code.insert(Code.end(), {0x48, 0x89, 0xc8, 0xc3}); // mov rax,rcx; ret
+  auto Image = makeImage(Code, Win64);
+  Symbol Service = Symbol::makeFunc(Entry + 64);
+  Service.Name = "KeGetCurrentThread";
+  Image.Symbols.push_back(Service);
+  checkComputedSource(Image, R"(
+int64_t KeGetCurrentThread(void) { return 7; }
+uint64_t sub_140001040(void) { return 7; }
+int main(void) { return sub_140001000() != 7; }
+)",
+                      false,
+                      "#include <stdint.h>\n"
+                      "int64_t KeGetCurrentThread(void);\n");
+}
+
+TEST(WindowsKernelABI, WdkServiceBoundsAmbientReadsThroughAnOrdinaryCaller) {
+  // The native service's body observes R9. Its three-argument WDK contract
+  // must also bound the summary of an ordinary wrapper; otherwise a caller
+  // of that wrapper acquires an unavailable fourth argument transitively.
+  std::vector<uint8_t> Code = {0x48, 0x83, 0xec, 0x28,         // sub rsp,40
+                               0xba, 22,   0,    0,    0,      // mov edx,22
+                               0x41, 0xb8, 33,   0,    0,   0, // mov r8d,33
+                               0xe8, 44,   0,    0,    0,      // call +64
+                               0x48, 0x83, 0xc4, 0x28, 0xc3};
+  Code.resize(64, 0xcc);
+  Code.insert(Code.end(), {0x48, 0x83, 0xec, 0x28, // sub rsp,40
+                           0xe8, 55, 0, 0, 0,      // call +128
+                           0x48, 0x83, 0xc4, 0x28, 0xc3});
+  Code.resize(128, 0xcc);
+  Code.insert(Code.end(), {0x4c, 0x89, 0xc8, 0xc3}); // mov rax,r9; ret
+  auto Image = makeImage(Code, Win64);
+  Image.Symbols.push_back(Symbol::makeFunc(Entry + 64));
+  Symbol Service = Symbol::makeFunc(Entry + 128);
+  Service.Name = "ZwSetSecurityObject";
+  Image.Symbols.push_back(Service);
+  checkComputedSource(Image, R"(
+/* The two emitters differ in this untyped wrapper's return signedness. */
+__typeof__(sub_140001040(0, 0, 0))
+sub_140001040(uint64_t handle, uint32_t information, uint64_t descriptor) {
+  return handle + 2 * information + 3 * descriptor;
+}
+int main(void) { return sub_140001000(11) != 154; }
+)");
+}
+
+TEST(WindowsKernelABI, WdkServiceKeepsItsNarrowFirstParameter) {
+  std::vector<uint8_t> Code = {
+      0x48, 0x83, 0xec, 0x28,    // sub rsp,40
+      0xb9, 11,   1,    0,    0, // mov ecx,267 (BOOLEAN 11)
+      0xba, 22,   0,    0,    0, // mov edx,22
+      0xe8, 45,   0,    0,    0, // call +64
+      0x48, 0x83, 0xc4, 0x28, 0xc3};
+  Code.resize(64, 0xcc);
+  Code.insert(Code.end(), {0x4c, 0x89, 0xc8, 0xc3}); // mov rax,r9; ret
+  auto Image = makeImage(Code, Win64);
+  Symbol Service = Symbol::makeFunc(Entry + 64);
+  Service.Name = "ZwQueryDefaultLocale";
+  Image.Symbols.push_back(Service);
+  checkComputedSource(Image, R"(
+int64_t ZwQueryDefaultLocale(uint32_t user, int64_t locale) {
+  return user + 3 * locale;
+}
+uint64_t sub_140001040(uint8_t user, uint64_t locale) {
+  return user + 3 * locale;
+}
+int main(void) { return sub_140001000() != 77; }
+)",
+                      false,
+                      "#include <stdint.h>\n"
+                      "int64_t ZwQueryDefaultLocale(uint32_t, int64_t);\n");
+}
+
+TEST(WindowsKernelABI, WdkServiceKeepsNarrowAndStackArgumentsTogether) {
+  std::vector<uint8_t> Code = {
+      0x48, 0x83, 0xec, 0x28,                   // sub rsp,40
+      0xb9, 11,   0,    0,    0,                // mov ecx,11
+      0xba, 22,   0,    0,    0,                // mov edx,22
+      0x41, 0xb8, 33,   1,    0,   0,           // mov r8d,289 (BOOLEAN 33)
+      0x41, 0xb9, 44,   0,    0,   0,           // mov r9d,44
+      0x48, 0xc7, 0x44, 0x24, 32,  55, 0, 0, 0, // mov qword [rsp+32],55
+      0xe8, 24,   0,    0,    0,                // call +64
+      0x48, 0x83, 0xc4, 0x28, 0xc3};
+  Code.resize(64, 0xcc);
+  Code.insert(Code.end(), {0x31, 0xc0, 0xc3});
+  auto Image = makeImage(Code, Win64);
+  Symbol Service = Symbol::makeFunc(Entry + 64);
+  Service.Name = "ZwOpenThreadTokenEx";
+  Image.Symbols.push_back(Service);
+  checkComputedSource(
+      Image, R"(
+int64_t ZwOpenThreadTokenEx(int64_t a, uint32_t b, uint32_t c,
+                          uint32_t d, int64_t e) {
+  return a + 2*b + 3*c + 4*d + 5*e;
+}
+uint64_t sub_140001040(uint64_t a, uint32_t b, uint8_t c,
+                     uint32_t d, uint64_t e) {
+  return a + 2*b + 3*c + 4*d + 5*e;
+}
+int main(void) { return sub_140001000() != 605; }
+)",
+      false,
+      "#include <stdint.h>\n"
+      "int64_t ZwOpenThreadTokenEx(int64_t, uint32_t, uint32_t, "
+      "uint32_t, int64_t);\n");
+}
+
+TEST(WindowsKernelABI, WdkZeroArgumentServiceDoesNotAcquireAmbientOperands) {
+  std::vector<uint8_t> Code = {0x48, 0x83, 0xec, 0x28,    // sub rsp,40
+                               0xb9, 13,   0,    0,    0, // mov ecx,13
+                               0x48, 0xc7, 0x44, 0x24, 32,
+                               55,   0,    0,    0, // mov qword [rsp+32],55
+                               0xe8, 41,   0,    0,    0, // call +64
+                               0x48, 0x83, 0xc4, 0x28, 0xc3};
+  Code.resize(64, 0xcc);
+  Code.insert(Code.end(), {0x48, 0x89, 0xc8, 0xc3}); // mov rax,rcx; ret
+  auto Image = makeImage(Code, Win64);
+  Symbol Service = Symbol::makeFunc(Entry + 64);
+  Service.Name = "ZwYieldExecution";
+  Image.Symbols.push_back(Service);
+  checkComputedSource(Image, R"(
+int64_t ZwYieldExecution(void) { return 7; }
+uint64_t sub_140001040(void) { return 7; }
+int main(void) { return sub_140001000() != 7; }
+)",
+                      false,
+                      "#include <stdint.h>\n"
+                      "int64_t ZwYieldExecution(void);\n");
+}
+
+TEST(ComputedCodeBranch, OverlappingInstructionStreamsKeepTheirFallthrough) {
+  // The branch enters after the REX prefix. Both ADDs finish at +11; the
+  // full-width path must not execute the overlapping 32-bit ADD as well.
+  const std::vector<uint8_t> Code = {0x48, 0x89, 0xc8, // mov rax,rcx
+                                     0x85, 0xd2,       // test edx,edx
+                                     0x74, 0x01,       // je +8
+                                     0x48, 0x83, 0xc0,
+                                     0x01,  // add rax,1 / add eax,1
+                                     0xc3}; // ret
+  auto Image = makeImage(Code, Win64);
+  Decoder Dec;
+  ASSERT_TRUE(Dec.init(Image));
+  auto F = CFGBuilder().build(Image, Dec, Entry);
+  const auto *Wide = F.blockFor(Entry + 7);
+  ASSERT_NE(Wide, nullptr);
+  ASSERT_EQ(Wide->Succs.size(), 1u);
+  EXPECT_EQ(F.Blocks[Wide->Succs[0]].StartAddr, Entry + 11);
+  const auto *Narrow = F.blockFor(Entry + 8);
+  ASSERT_NE(Narrow, nullptr);
+  EXPECT_EQ(Narrow->StartAddr, Entry + 8);
+  ASSERT_EQ(Narrow->Succs.size(), 1u);
+  EXPECT_EQ(F.Blocks[Narrow->Succs[0]].StartAddr, Entry + 11);
+  checkComputedSource(Image, R"(
+int main(void) {
+  return sub_140001000(0x100000000ULL, 1) != 0x100000001ULL ||
+         sub_140001000(0x100000000ULL, 0) != 1;
+}
+)");
+}
+
+TEST(ComputedCodeBranch, MaskedArithmeticNeedsNoMemoryTable) {
+  std::vector<uint8_t> Code = {0x89, 0xc8,       // mov eax,ecx
+                               0x83, 0xe0, 0x03, // and eax,3
+                               0xc1, 0xe0, 0x03, // shl eax,3
+                               0x4c, 0x8d, 0x1d, 0x31,
+                               0,    0,    0,     // lea r11,[+0x40]
+                               0x49, 0x29, 0xc3,  // sub r11,rax
+                               0x41, 0xff, 0xe3}; // jmp r11
+  Code.resize(0x48, 0xcc);
+  for (unsigned I = 0; I != 4; ++I) {
+    const auto Offset = 0x40 - I * 8;
+    Code[Offset] = 0xb8; // mov eax,I; ret
+    Code[Offset + 1] = I;
+    Code[Offset + 2] = Code[Offset + 3] = Code[Offset + 4] = 0;
+    Code[Offset + 5] = 0xc3;
+  }
+  auto Image = makeImage(Code, Win64);
+  Decoder Dec;
+  ASSERT_TRUE(Dec.init(Image));
+  auto F = CFGBuilder().build(Image, Dec, Entry);
+  ASSERT_EQ(F.JumpTables.size(), 1u);
+  EXPECT_EQ(F.JumpTables.front().Targets,
+            (std::vector<va_t>{Entry + 0x28, Entry + 0x30, Entry + 0x38,
+                               Entry + 0x40}));
+  const std::string Harness = R"(
+int main(void) {
+  for (unsigned long long i = 0; i != 64; ++i)
+    if (sub_140001000(i) != (i & 3)) return 1;
+  return 0;
+}
+)";
+  checkComputedSource(Image, Harness);
+  // This arithmetic is independent of PE metadata and the incoming ABI.
+  Code[1] = 0xf8; // mov eax,edi: first integer argument under System V
+  for (BinaryFormat Format : {BinaryFormat::ELF, BinaryFormat::MachO}) {
+    Platform P = SysV64;
+    P.Format = Format;
+    SCOPED_TRACE(static_cast<int>(Format));
+    checkComputedSource(makeImage(Code, P), Harness);
+  }
+}
+
+TEST(ComputedCodeBranch, DataAddressArithmeticUsesTheSameNumericCoordinate) {
+  std::vector<uint8_t> Code = {
+      0x89, 0xc8, 0x83, 0xe0, 3,    0xc1, 0xe0, 3,
+      0x4c, 0x8d, 0x1d, 0x31, 0x10, 0,    0, // lea r11,[data+0x40]
+      0x49, 0x29, 0xc3,                      // sub r11,rax
+      0x49, 0x81, 0xeb, 0,    0x10, 0,    0, // sub r11,0x1000
+      0x41, 0xff, 0xe3};
+  Code.resize(0x48, 0xcc);
+  for (unsigned I = 0; I != 4; ++I) {
+    const auto Offset = 0x40 - I * 8;
+    Code[Offset] = 0xb8;
+    Code[Offset + 1] = I;
+    Code[Offset + 2] = Code[Offset + 3] = Code[Offset + 4] = 0;
+    Code[Offset + 5] = 0xc3;
+  }
+  auto Image = makeImage(Code, Win64);
+  Segment Data;
+  Data.Name = ".data";
+  Data.VA = Entry + 0x1000;
+  Data.Size = 0x80;
+  Data.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+  Data.Data.resize(Data.Size);
+  Image.Segments.push_back(std::move(Data));
+  checkComputedSource(Image, R"(
+int main(void) {
+  for (unsigned i = 0; i != 64; ++i)
+    if (sub_140001000(i) != (i & 3)) return 1;
+  return 0;
+}
+)");
+}
+
+TEST(ComputedCodeBranch, I386ArithmeticKeepsItsTargetWidth) {
+  std::vector<uint8_t> Code = {0x8b, 0x44, 0x24, 4, // mov eax,[esp+4]
+                               0x83, 0xe0, 3,    0xc1, 0xe0,
+                               3, // and eax,3; shl eax,3
+                               0xba, 0,    0,    0,    0, // mov edx,base
+                               0x29, 0xc2, 0xff, 0xe2}; // sub edx,eax; jmp edx
+  for (unsigned I = 0; I != 4; ++I)
+    Code[11 + I] = uint8_t((I386.Entry + 0x40) >> (I * 8));
+  Code.resize(0x48, 0xcc);
+  for (unsigned I = 0; I != 4; ++I) {
+    const auto Offset = 0x40 - I * 8;
+    Code[Offset] = 0xb8;
+    Code[Offset + 1] = I;
+    Code[Offset + 2] = Code[Offset + 3] = Code[Offset + 4] = 0;
+    Code[Offset + 5] = 0xc3;
+  }
+  auto Image = makeImage(Code, I386);
+  Decoder Dec;
+  ASSERT_TRUE(Dec.init(Image));
+  const auto F = CFGBuilder().build(Image, Dec, I386.Entry);
+  ASSERT_EQ(F.JumpTables.size(), 1u);
+  EXPECT_EQ(F.JumpTables[0].SelectorUseRefs[0].ExpectedSize, 4u);
+  checkComputedSource(Image, R"(
+int main(void) {
+  for (unsigned i = 0; i != 64; ++i)
+    if (sub_8049000(i) != (i & 3)) return 1;
+  return 0;
+}
+)");
+}
+
+TEST(ComputedCodeBranch, EveryMaskedValueIncludesTheOverlappingLoop) {
+  std::vector<uint8_t> Code = {
+      0x89, 0xc8, 0x83, 0xe0, 15, 0xc1, 0xe0, 3,
+      0x4c, 0x8d, 0x1d, 0x79, 0,  0,    0, // lea r11,[+0x88]
+      0x49, 0x29, 0xc3,                    // sub r11,rax; +16: sub ebx,eax
+      0x41, 0xff, 0xe3};                   // +18: jmp r11
+  Code.resize(0x90, 0xcc);
+  for (unsigned I = 0; I != 15; ++I) {
+    const auto Offset = 0x88 - I * 8;
+    Code[Offset] = 0xb8;
+    Code[Offset + 1] = I;
+    Code[Offset + 2] = Code[Offset + 3] = Code[Offset + 4] = 0;
+    Code[Offset + 5] = 0xc3;
+  }
+  auto Image = makeImage(Code, Win64);
+  Decoder Dec;
+  ASSERT_TRUE(Dec.init(Image));
+  auto F = CFGBuilder().build(Image, Dec, Entry);
+  ASSERT_EQ(F.JumpTables.size(), 1u);
+  EXPECT_EQ(F.JumpTables[0].Targets.size(), 16u);
+  EXPECT_EQ(F.JumpTables[0].Targets.front(), Entry + 16);
+  const auto *Loop = F.blockFor(Entry + 16);
+  ASSERT_NE(Loop, nullptr);
+  EXPECT_EQ(Loop->StartAddr, Entry + 16);
+  ASSERT_EQ(Loop->Succs.size(), 1u);
+  EXPECT_EQ(F.Blocks[Loop->Succs[0]].StartAddr, Entry + 18);
+  checkComputedSource(Image, R"(
+int main(void) {
+  for (unsigned long long i = 0; i != 15; ++i)
+    if (sub_140001000(i) != i) return 1;
+  sub_140001000(15);
+  return 1;
+}
+)",
+                      true);
+}
+
+TEST(ComputedCodeBranch, X64Immediate32CodeBaseKeepsItsOriginalCoordinate) {
+  const Platform LowELF = {Arch::X64, BinaryFormat::ELF,
+                           ExceptionEncoding::DwarfFDE, 0x400000};
+  std::vector<uint8_t> Code = {0x89, 0xf8, 0x83, 0xe0, 3, 0xc1, 0xe0, 3,
+                               0x41, 0xbb, 0,    0,    0, 0, // mov r11d,base
+                               0x49, 0x29, 0xc3,             // sub r11,rax
+                               0x41, 0xff, 0xe3};            // jmp r11
+  for (unsigned I = 0; I != 4; ++I)
+    Code[10 + I] = uint8_t((LowELF.Entry + 0x40) >> (I * 8));
+  Code.resize(0x48, 0xcc);
+  for (unsigned I = 0; I != 4; ++I) {
+    const auto Offset = 0x40 - I * 8;
+    Code[Offset] = 0xb8;
+    Code[Offset + 1] = I;
+    Code[Offset + 2] = Code[Offset + 3] = Code[Offset + 4] = 0;
+    Code[Offset + 5] = 0xc3;
+  }
+  auto Image = makeImage(Code, LowELF);
+  Decoder Dec;
+  ASSERT_TRUE(Dec.init(Image));
+  const auto F = CFGBuilder().build(Image, Dec, LowELF.Entry);
+  ASSERT_EQ(F.JumpTables.size(), 1u);
+  checkComputedSource(Image, R"(
+int main(void) {
+  for (unsigned i = 0; i != 64; ++i)
+    if (sub_400000(i) != (i & 3)) return 1;
+  return 0;
+}
+)");
+}
+
+TEST(ComputedCodeBranch, NewlyDiscoveredUnknownBackedgeWithdrawsAllTargets) {
+  std::vector<uint8_t> Code = {
+      0x89, 0xc8, 0x83, 0xe0, 1,    0xc1, 0xe0, 3,
+      0x4c, 0x8d, 0x1d, 0x41, 0,    0,    0,    // lea r11,[+0x50]
+      0x49, 0x29, 0xc3, 0x49, 0x83, 0xeb, 0x10, // sub r11,rax; sub r11,16
+      0x41, 0xff, 0xe3};
+  // The address-taken anchor is not a case: the unknown arm is first
+  // discovered through computed-target exploration, not a LEA root.
+  Code.resize(0x58, 0xcc);
+  Code[0x38] = 0xc3;
+  // The newly discovered arm supplies an arbitrary RDX at the original JMP.
+  // A target set inferred before discovering that edge has no final authority.
+  const std::vector<uint8_t> Arm = {0x49, 0x89, 0xd3, // mov r11,rdx
+                                    0xe9, 0xce, 0xff, 0xff, 0xff};
+  std::copy(Arm.begin(), Arm.end(), Code.begin() + 0x40);
+  auto Image = makeImage(Code, Win64);
+  Decoder Dec;
+  ASSERT_TRUE(Dec.init(Image));
+  const auto F = CFGBuilder().build(Image, Dec, Entry);
+  EXPECT_TRUE(F.JumpTables.empty());
+  EXPECT_TRUE(F.UnsafeIndirectBranchAddresses.count(Entry + 22));
+}
+
+TEST(ComputedCodeBranch, EscapingCodeIdentityCannotBecomeNumericLayout) {
+  std::vector<uint8_t> Code = {0x89, 0xc8, 0x83, 0xe0, 1,    0xc1, 0xe0,
+                               3,    0x4c, 0x8d, 0x1d, 0x31, 0,    0,
+                               0,    0x49, 0x29, 0xc3, 0x41, 0xff, 0xe3};
+  Code.resize(0x48, 0xcc);
+  for (unsigned Offset : {0x38u, 0x40u}) {
+    // Both arms return the computed code pointer. A numeric switch alone
+    // cannot establish the relocated identity of this independently observed
+    // pointer, even though its set of machine destinations is complete.
+    const std::vector<uint8_t> Arm = {0x4c, 0x89, 0xd8, 0xc3};
+    std::copy(Arm.begin(), Arm.end(), Code.begin() + Offset);
+  }
+  auto Image = makeImage(Code, Win64);
+  for (bool LLVM : {false, true}) {
+    llvm::LLVMContext Context;
+    PipelineOptions Options;
+    Options.EmitDumpOutput = false;
+    Options.LiftMode = LLVM;
+    Options.SourceProjection = true;
+    Options.OnlyFunctionEntries = {Entry};
+    auto Result = Pipeline().run(Image, Context, Options);
+    EXPECT_FALSE(Result.Success);
+    EXPECT_NE(Result.Error.find("escaping or unproved numeric selector"),
+              std::string::npos)
+        << Result.Error;
+  }
+}
+
+LowOp scalarTestOp(va_t Address, NdOp Opcode, NdVar Output,
+                   std::initializer_list<NdVar> Inputs) {
+  LowOp Op;
+  Op.Addr = Address;
+  Op.Opcode = Opcode;
+  Op.Output = Output;
+  for (auto Input : Inputs)
+    Op.addInput(Input);
+  return Op;
+}
+
+TEST(ComputedCodeBranch, AllPredecessorsAndLoopIterationsOwnTheDomain) {
+  for (bool Reverse : {false, true})
+    for (bool UnknownArm : {false, true})
+      for (unsigned Root = 0; Root != 3; ++Root) {
+        LowFunc F;
+        F.Entry = 0x1000;
+        F.Blocks.resize(4);
+        for (int I = 0; I != 4; ++I) {
+          F.Blocks[I].Id = I;
+          F.Blocks[I].StartAddr = F.Entry + I * 16;
+        }
+        const auto Index = NdVar::reg(0, 4), Target = NdVar::reg(8, 4);
+        F.Blocks[0].Succs =
+            Reverse ? std::vector<int>{2, 1} : std::vector<int>{1, 2};
+        for (int I : {1, 2}) {
+          F.Blocks[I].Preds = {0};
+          F.Blocks[I].Succs = {3};
+        }
+        F.Blocks[1].Ops = {scalarTestOp(0x1010, NdOp::INT_AND, Index,
+                                        {NdVar::reg(16, 4), NdVar::cst(3, 4)})};
+        if (!UnknownArm)
+          F.Blocks[2].Ops = {
+              scalarTestOp(0x1020, NdOp::COPY, Index, {NdVar::cst(7, 4)})};
+        F.Blocks[3].Preds =
+            Reverse ? std::vector<int>{3, 2, 1} : std::vector<int>{1, 2, 3};
+        F.Blocks[3].Succs = {3};
+        F.Blocks[3].Ops = {scalarTestOp(0x1030, NdOp::INT_ADD, Target,
+                                        {Index, NdVar::cst(0x1040, 4)}),
+                           scalarTestOp(0x1031, NdOp::INDIR_BR, {}, {Target})};
+        if (Root == 1)
+          F.ModuleAnalysisRoots.insert(F.Blocks[3].StartAddr);
+        if (Root == 2)
+          F.OrdinaryModuleAnalysisRoots.insert(F.Blocks[3].StartAddr);
+        size_t Work = 10000;
+        const auto Result = finiteScalarBranchTargets(F, Work);
+        ASSERT_TRUE(Result);
+        if (UnknownArm || Root)
+          EXPECT_TRUE(Result->empty());
+        else {
+          ASSERT_TRUE(Result->count(0x1031));
+          EXPECT_EQ(
+              Result->at(0x1031),
+              (std::vector<va_t>{0x1040, 0x1041, 0x1042, 0x1043, 0x1047}));
+        }
+        Work = 1;
+        EXPECT_FALSE(finiteScalarBranchTargets(F, Work));
+      }
+}
+
+TEST(ComputedCodeBranch, PartialWritesCallsAndLargeMasksCannotBorrowFacts) {
+  for (unsigned Variant = 0; Variant != 5; ++Variant) {
+    LowFunc F;
+    F.Entry = 0x1000;
+    LowBlock Block;
+    Block.Id = 0;
+    Block.StartAddr = F.Entry;
+    const auto Index = NdVar::reg(0, 4);
+    Block.Ops = {scalarTestOp(
+        0x1000, NdOp::INT_AND, Index,
+        {NdVar::reg(16, 4), NdVar::cst(Variant == 3 ? 127 : 3, 4)})};
+    if (Variant == 1)
+      Block.Ops.push_back(scalarTestOp(0x1001, NdOp::COPY, NdVar::reg(1, 1),
+                                       {NdVar::reg(24, 1)}));
+    if (Variant == 2)
+      Block.Ops.push_back(
+          scalarTestOp(0x1001, NdOp::CALL, {}, {NdVar::cst(0x2000, 8)}));
+    if (Variant == 4) {
+      auto Fragment = NdVar::cst(0x1000, 4);
+      Fragment.Provenance = ConstantAddressProvenance::AddressFragment;
+      Block.Ops.push_back(
+          scalarTestOp(0x1001, NdOp::INT_ADD, Index, {Index, Fragment}));
+    }
+    Block.Ops.push_back(scalarTestOp(0x1002, NdOp::INDIR_BR, {}, {Index}));
+    F.Blocks = {Block};
+    size_t Work = 10000;
+    const auto Result = finiteScalarBranchTargets(F, Work);
+    ASSERT_TRUE(Result);
+    EXPECT_EQ(Result->count(0x1002), Variant == 0 ? 1u : 0u);
+  }
+}
 
 TEST(OwnInteriorCall, CallsForTheirReturnAddressPushAndJump) {
   // Each call skips an int3 to the next instruction; the stack pointer is
@@ -335,6 +1039,45 @@ TEST(OwnInteriorCall, ReturnAfterAStackSwitchIsRefused) {
                          0xc3});                       // ret
   EXPECT_TRUE(L.Source.empty()) << L.Source;
   EXPECT_EQ(L.UnprovenReturns, std::vector<va_t>{0x140001009});
+}
+
+TEST(OwnInteriorCall,
+     RejectedReturnsRetainOnlyTheirNativeInstructionSelection) {
+  auto Image =
+      makeImage({0xe8, 1, 0, 0, 0, 0xcc, 0x48, 0x8b, 0x21, 0xc3}, SysV64);
+  Image.Segments.front().FileSz = Image.Segments.front().Data.size();
+  PipelineOptions Options;
+  Options.OnlyFunctionEntries = {Entry};
+  Options.EmitDumpOutput = false;
+  Options.DeferMedIR = true;
+  llvm::LLVMContext Context;
+  auto Selected = Pipeline().run(Image, Context, Options);
+  ASSERT_TRUE(Selected.Success) << Selected.Error;
+  EXPECT_TRUE(Selected.LowFuncs.empty());
+  EXPECT_TRUE(Selected.MedFuncs.empty());
+  ASSERT_EQ(Selected.FunctionAudits.size(), 1u);
+  const auto &Audit = Selected.FunctionAudits.front();
+  EXPECT_FALSE(Audit.HasLowIR);
+  EXPECT_EQ(Audit.UnprovenReturns, std::vector<va_t>{Entry + 9});
+  // The interior CALL is a physical push-and-jump. Its old fallthrough is
+  // outside the recovered region until the environment resumes there.
+  EXPECT_EQ(Audit.NativeInstructionAddresses,
+            (std::vector<va_t>{Entry, Entry + 6, Entry + 9}));
+  const std::string Request =
+      R"({"profile":"kernel-events-v6","mxcsr_mask":65471,"paging_address_bits":48,"entries":[)" +
+      std::to_string(Entry) + "]}";
+  for (bool LLVM : {false, true}) {
+    auto Source = exportX64Continuation(Image, Request, LLVM);
+    ASSERT_TRUE(bool(Source)) << llvm::toString(Source.takeError());
+    EXPECT_NE(Source->Source.find("neverd_x64_continue_v6"), std::string::npos);
+    EXPECT_NE(Source->Manifest.find("rejected-incomplete"), std::string::npos);
+  }
+  Options.DeferMedIR = false;
+  auto Ordinary = Pipeline().run(Image, Context, Options);
+  EXPECT_TRUE(Ordinary.LowFuncs.empty());
+  EXPECT_TRUE(Ordinary.MedFuncs.empty());
+  EXPECT_EQ(Ordinary.FunctionAudits.front().UnprovenReturns,
+            std::vector<va_t>{Entry + 9});
 }
 
 TEST(OwnInteriorCall, SystemVCallsForTheirReturnAddressPushAndJump) {

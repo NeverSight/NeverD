@@ -69,8 +69,9 @@ static_assert(static_cast<int>(ColorRole::HighlightLock8) -
               "ThemeColors.def holds one HighlightLock role per color");
 
 ColorRole highlightLockRole(int slot) {
-  return static_cast<ColorRole>(static_cast<int>(ColorRole::HighlightLock1) +
-                                std::clamp(slot, 0, HighlightLocks::Colors - 1));
+  return static_cast<ColorRole>(
+      static_cast<int>(ColorRole::HighlightLock1) +
+      std::clamp(slot, 0, HighlightLocks::Colors - 1));
 }
 
 void HighlightLocks::clear() {

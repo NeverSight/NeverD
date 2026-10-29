@@ -105,6 +105,7 @@ TEST(I386CallContract, PhysicalCallReturnSlotsDoNotKeepOldSourceConstants) {
       std::vector<uint8_t> Code = {0x83, 0xec, 16, 0x6a, 19, 0x83, 0xc4, 4};
       const auto Call = callThroughSlot(Iat);
       Code.insert(Code.end(), Call.begin(), Call.end());
+      const va_t ReturnPC = Text + Code.size();
       if (Rewrite)
         Code.insert(Code.end(), {0xc7, 0x44, 0x24, 0xfc, 19, 0, 0, 0});
       Code.insert(Code.end(), {0x8b, 0x44, 0x24, 0xfc, 0x83, 0xc4, 16, 0xc3});
@@ -126,13 +127,6 @@ TEST(I386CallContract, PhysicalCallReturnSlotsDoNotKeepOldSourceConstants) {
           Options.SourceProjection = true;
           Options.NoOpt = NoOpt;
           const auto Result = Pipeline().run(Image, Context, Options);
-          if (!Rewrite) {
-            EXPECT_FALSE(Result.Success);
-            EXPECT_NE(Result.Error.find("physical CALL return slot"),
-                      std::string::npos)
-                << Result.Error;
-            continue;
-          }
           ASSERT_TRUE(Result.Success) << Result.Error;
           std::string Source;
           llvm::raw_string_ostream Output(Source);
@@ -155,12 +149,53 @@ TEST(I386CallContract, PhysicalCallReturnSlotsDoNotKeepOldSourceConstants) {
           source_call_execution_test::checkSyntax(
               Standalone, {"--target=i686-pc-windows-msvc", "-ffreestanding"});
 #if defined(__linux__) && (defined(__i386__) || defined(__x86_64__))
+          std::string Oracle;
+          llvm::raw_string_ostream Native(Oracle);
+          Native << R"(
+#include <sys/mman.h>
+#include <string.h>
+static unsigned calls;
+int rand(void) { ++calls; return 13; }
+static int check_native(void) {
+  static const uint8_t original[] = {)";
+          for (uint8_t Byte : Code)
+            Native << unsigned(Byte) << ',';
+          Native << "};\n  const size_t size = " << Iat - Text + 4 << ";\n"
+                 << R"(
+  uint8_t *mapping = mmap(0, size + 16, PROT_READ | PROT_WRITE | PROT_EXEC,
+                          MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  if (mapping == MAP_FAILED) return 1;
+  // UBSan reads its function-type prefix before an indirect call target.
+  uint8_t *code = mapping + 16;
+  memcpy(code, original, sizeof(original));
+  uint32_t target = (uint32_t)(uintptr_t)rand;
+)";
+          Native << "  uint32_t slot = (uint32_t)(uintptr_t)(code + "
+                 << Iat - Text << ");\n"
+                 << "  memcpy(code + " << Iat - Text << ", &target, 4);\n"
+                 << "  memcpy(code + " << ReturnPC - Text - 4
+                 << ", &slot, 4);\n"
+                 << "  uint32_t expected = "
+                 << (Rewrite ? "19"
+                             : "(uint32_t)(uintptr_t)(code + " +
+                                   std::to_string(ReturnPC - Text) + ")")
+                 << ";\n"
+                 << R"(
+  calls = 0;
+  __builtin___clear_cache((char *)code, (char *)code + size);
+  uint32_t actual = ((uint32_t (*)(void))code)();
+  int bad = actual != expected || calls != 1;
+  if (munmap(mapping, size + 16)) return 1;
+  return bad;
+}
+int main(void) {
+  if (check_native()) return 1;
+  calls = 0;
+  return (uint32_t)wrap() != )"
+                 << (Rewrite ? 19 : ReturnPC) << " || calls != 1;\n}\n";
           for (llvm::StringRef Level : {"-O0", "-O2"})
             source_call_execution_test::compileAndRun(
-                Standalone +
-                    "\nstatic unsigned calls;\n"
-                    "int rand(void) { ++calls; return 13; }\n"
-                    "int main(void) { return wrap() != 19 || calls != 1; }\n",
+                "#define _GNU_SOURCE\n" + Standalone + Oracle,
                 {"-m32", Level, "-fsanitize=undefined", "-fsanitize-trap=all"});
 #else
           RecordProperty("native_i386_execution", "requires Linux x86");

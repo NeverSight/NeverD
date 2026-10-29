@@ -2173,6 +2173,10 @@ ctest --test-dir build-release -L "^(NeverDX86ScalarMoveAuditTests|NeverDX86Lega
 
 `NeverDObjCSourceCallTests`（`SourceFrameAnalysis.*`）と `NeverDCSourcePresentationTests` を実行し、バイトの由来、経路の一致、上書きまたは逸出した記憶領域、不変のイメージ範囲、予算、文字コード、メタデータ境界を確認します。`NeverDWorkerStackText` は公開の x64/ARM64 PE 例をコンパイルし、未知の上書きを含めて両方の C 経路を検証します。Clang と lld-link が必要で、Windows のネイティブ実行は別途検証します。
 
+検証済みのポインター引数は、LLVM がアドレスを整数で保持する場合も同じイメージ文字列注釈を使います。x86/x64/ARM64 の COFF、ELF、Mach-O で、拒否された宣言、同じ数値の整数、動的アドレス、書き込み可能な記憶領域、注釈の無効化とエスケープを検証します。引数は元のアドレスを保持し、初期バイトの表示は不変性の証明にはなりません。
+
+戻り値の型解析は、呼び出し ABI の復元と同じ有界のインポートスロット証明を使い、インポートアドレスと読み込まれた呼び出し先のコピーを追跡します。x86/x64/ARM32/ARM64 の COFF、ELF、Mach-O で、数値の一致、動的アドレス、循環、セグメント指定、非 void 宣言を検証します。
+
 <!-- i18n-section: interactive-byte-patches -->
 ## 対話的パッチの責務
 
@@ -2229,3 +2233,36 @@ HFA インポートスロットのテストは厳密な C プロトタイプを�
 `MemoryAdditionReturnsItsSnapshotThroughBothRoutes` と交換の対照テストは O0/O2 と UBSan で両 C 経路を実行し、x64 の全4幅、非整列アドレス、旧値、隣接バイトを確認します。`LLVMCIntrinsicSemantics.NativeAddition*` / `NativeExchange*` は元の LLVM IR も実行し、未使用結果の書き込みを保持し、変更されたアセンブリ契約を拒否します。FS/GS はコンパイルのみでホスト TLS に触れません。実行には x64 ホストが必要で、競合やハードウェア障害の認証ではありません。
 
 `X86LegacyAtomic.LockedArithmetic*` は x86/x64 の幅、独立した算術フラグ、入力レジスタとキャリーの保持、符号付き即値、非整列の隣接バイト、読み取り専用・部分マッピング、FS/GS、ロックなしの対照を検証します。未対応のロック付き演算を通常のストアに変換しません。`InterpreterLLVMRefinement.RawAtomicsStopBeforeLLVMProof` は四種類の命令の特化と、順序付きメモリの証明拒否を確認します。
+
+`X86LegacyAtomic.NeutralLogic*` は各幅と FS/GS でメモリ、定義済みフラグ、DF を保持し、書き込み拒否、不完全なアクセス、他の即値、HLE を検証します。`NeverDX86NeutralAtomicSourceTests` は x64 ホストで COFF/ELF/MachO の両 C 経路を O0/O2 と UBSan で実行し、上位ビットと八つのバイト位置を検証します。宣言型の変更には `NeverDHighControlFlowTests` と `NeverDHighCIntegerWidthTests` も実行します。
+
+## スカラー分岐の検証
+
+`NeverDConstantBranchTests` は x86/x64/ARM64 と PE、ELF、Mach-O で直接先行辺、全経路が一致する合流、不変読み取りを検証します。未証明の候補、未定義入力、呼び出しによる破壊、独立入口では動的分岐を維持します。`NeverDConstantBranchSourceTests` は最適化の有無、O0/O2、UBSan で x64/ARM64 の両 C 経路をコンパイルして実行します。整数のみの関数本体にはホスト標準ヘッダーを使い、ネイティブ ARM64 や Windows ドライバーの認証とは区別します。worker の独立した ELF x64 機械語との比較は、コールド状態の移動、参照、飛び越された E9 バイトも検証します。
+
+まず現在の基本ブロックだけで証明できる対象を調べ、無関係な先行経路による予算消費を避けます。長い先行経路の回帰テストでもこの境界を検証します。
+
+MedIR の定数伝播とコピー伝播は `canPropagateConstantToOperand` を共有します。計算された間接呼び出し先は SSA 値のまま保持し、定数化したビットをポインター格納先と解釈しません。直接呼び出しと通常の引数は引き続き畳み込みます。`NeverDImageAnalysisBoundaryTests` は x86/x64/ARM32/ARM64 の変換を、`NeverDIndirectCallValueSourceTests` は三つのネイティブ形式で x64/ARM64 の両 C 経路を検証します。元のイメージの表示では構文と余分なメモリー読み取りがないことを確認し、イメージ提供者なしでは実行しません。
+
+`NeverDReadOnlyProtectionSourceTests` は PE、ELF、Mach-O の x64/ARM64 入力から HighC と LLVM C を生成し、ホスト Clang の O0/O2 と UBSan でグローバル変数の読み書きを実行する。両方のパイプライン最適化モードと紛らわしい定数セクション名を含む。`NeverDReadOnlyBytesTests` はマッピング権限、RELRO の完全な範囲と不正範囲を検査し、ポインター境界スイートは同じ ELF を relro と norelro でリンクする。再構成 C のホスト実行は ARM64 ネイティブや Windows カーネルの実行検証ではない。
+
+`RelroKeepsPartialPagesAndStaticStartupWritable` は x86、x64、ARM、ARM64 のページ境界と明示的なローダー保証を確認します。ネイティブポインターテストは Linux x64 の部分 RELRO とローダーなし静的プログラムを独立に実行し、グローバル変数への書き込み後の読み出しを検証します。`NeverDDataSymbolBindingTests` はポインター全体の保護と両 C 経路を確認します。実機 ARM のページ構成を認証するものではありません。
+
+`NeverDLowScalarConstantTests` と `NeverDIndirectCallValueSourceTests` はブロック間呼び出しと拒否条件を両 C 経路の実行で検証します。`NeverDLLVMCSourcePointerTests` はポインター、コールバック、別名、外部宣言を O0/O2 と UBSan で実行します。ネイティブ境界テストは公開 MinGW 例をコンパイルし、MSVCRT/UCRT の配置不一致を拒否します。カーネルや ARM64 のネイティブ実行を保証するものではありません。
+
+`X86RepState.ImageCopiesRetainEveryAccessedByte` は x64 COFF、ELF、Mach-O で両方向のコピーと同一領域の埋め込み後のコピーを検証します。両 C 経路を O0/O2 と UBSan でコンパイルして実行し、独立に計算した結果で全コピー済みバイトを確認します。x64 以外のホストでは実行検証を明示的にスキップします。
+
+`NeverDFiniteScalarBranchTests` は x86/x64/AArch64、COFF/ELF/Mach-O のテーブルなし算術分岐、疎なマスク、剰余算術、部分書き込み、破壊、テンポラリーの寿命、予算、外部入口、新しい辺を検証します。`NeverDFiniteScalarBranchSourceTests` は最適化の有無、O0/O2、UBSan で両 C 経路の全ケースを実行し、同時に保存するコードポインターの識別と SSA 省略時の拒否も確認します。
+
+`NeverDCalleeSourceCLI` は独自に符号化した x64 PE/ELF 呼び出し列を実際の CLI で確認します。アドレス・名前選択、推移的な定義、無関係な関数の除外、単一関数出力、深さ上限の境界と超過、循環、ルートと呼び出し先の拒否を検査します。閉包が失敗した場合は既存出力を保存します。三関数の完全な C 単位を O0/O2 でコンパイル・実行し、独立した期待値を確認します。再帰例は検査のみです。
+
+反復イメージアクセスの回帰は、同じ領域内の無関係な関数ポインター再配置、イメージ内の宛先、アドレスに似た整数の埋め込み値、完了後のソース変位と両レジスターを使った後続の読み取りも検査する。`ConstantAddressFactsExcludeUnprovedAndNonAddressResults` は x86/x64 で動的入力、セグメント、縮小幅、不正なインターフェース、非アドレス出力を除外する。`ZeroCountAndOffsetFormsKeepTheirNumericInputs` は入力の保持を検査し、自然幅のゼロ回数ケースだけをホストで実行する。完全範囲の検査は切り詰められたマッピングと回数のオーバーフローを拒否する。LLVM に対応するネイティブ intrinsic がない検査は明示的にスキップする。
+
+## 戻りアドレス領域の中立なアトミック操作
+
+`NeverDMedPrologueSavesTests` は幅、オフセット、生きた値、フラグ/PHI の参照、編集後の証拠失効を検査します。`NeverDPipelineOutcomeTests` は機械・パッチ要求の分離を検査します。`NeverDX86NeutralAtomicSourceTests` は独立に作成した元命令と COFF/ELF/MachO の両 C 経路を比較し、スタックポインタ変更も含め O0/O2 と UBSan で実行します。この実行比較には Linux x64 が必要です。i386 の証明テストはネイティブ実行の検証ではありません。
+
+
+## 標準のスーパーバイザー読み取り監査
+
+`InterpreterSpecialization.SupervisorRead*` は実際の厳密なリフトを使用し、`Missing` に格下げした監査を拒否します。`BinaryLowIRRefinement.SupervisorReadCompletesOnlyRawRecovery` は元のバイト列の復元境界を検査し、ネイティブ証明とソースラップの拒否も確認します。

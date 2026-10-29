@@ -126,19 +126,22 @@ def require_clean_source_record(directory, record):
         raise ValueError("frozen execution requires clean committed sources")
 
 
-def generated_observations(directory, native):
-    root = directory / "evidence"
+def generated_observations(directory, native, profile="arithmetic"):
+    root = directory / ("reset-evidence" if profile == "resets" else "evidence")
     record = read_verified(root)
     require_clean_source_record(root, record)
     if (not record["passed"] or not record["stable_inputs"] or
+            record.get("profile", "arithmetic") != profile or
             record["environment"]["machine"] != ("x86_64" if native else "aarch64")):
         raise ValueError("generated execution lacks passing native-host evidence")
-    observations = list(root.glob("artifacts/x87-generated*/observations.jsonl"))
+    observations = list(root.glob("artifacts/" + (
+        "x87-resets*/observations.jsonl" if profile == "resets" else
+        "x87-generated*/observations.jsonl")))
     if len(observations) != 1:
         raise ValueError("missing or ambiguous generated observations")
     rows = [json.loads(line) for line in observations[0].read_text().splitlines()]
     commands = [json.loads(line) for line in observations[0].with_name("commands.jsonl").read_text().splitlines()]
-    audit_observations(commands, rows, native)
+    audit_observations(commands, rows, native, profile)
     return record, {(row["artifact"], row["case"]):
                     {k: v for k, v in row.items() if k != "native_reference"} for row in rows}
 
@@ -148,7 +151,8 @@ def compare(args):
     output.mkdir(parents=True, exist_ok=False)
     result = {"protocol": "neverd-x87-cross-host-qualification-v1", "passed": False,
               "exclusions": ["all CPUs", "general OS exception delivery", "unlisted instructions",
-                             "arbitrary-program or formal equivalence", "speed claims"], "mismatches": [], "generated_mismatches": []}
+                             "arbitrary-program or formal equivalence", "speed claims"],
+              "mismatches": [], "generated_mismatches": [], "reset_mismatches": []}
     try:
         x64, arm = args.x64.resolve(strict=True), args.arm64.resolve(strict=True)
         xr, xo = generated_observations(x64, True)
@@ -163,6 +167,14 @@ def compare(args):
                     "aarch64": {field: ao[key].get(field) for field in sorted(fields)}})
         result["git_head"] = xr["git_head"]
         result["generated_observations_per_host"] = len(xo)
+        xrr, xro = generated_observations(x64, True, "resets")
+        arr, aro = generated_observations(arm, False, "resets")
+        if xrr["git_head"] != result["git_head"] or arr["git_head"] != result["git_head"]:
+            raise ValueError("reset hosts used different source commits")
+        for key in sorted(xro):
+            if xro[key] != aro[key]:
+                result["reset_mismatches"].append({"artifact": key[0], "case": key[1]})
+        result["reset_observations_per_host"] = len(xro)
         reference = read_verified(x64 / "arithmetic-evidence")
         portable = read_verified(arm / "arithmetic-evidence")
         for item, machine in ((reference, "x86_64"), (portable, "aarch64")):
@@ -184,13 +196,13 @@ def compare(args):
         result["reference_cpu"] = reference["cpu"]
         result["destination_cpu"] = portable["cpu"]
         result["record_sha256"] = {str(root / name / "record.json"): sha256(root / name / "record.json")
-            for root in (x64, arm) for name in ("evidence", "arithmetic-evidence")}
-        result["passed"] = not result["mismatches"] and not result["generated_mismatches"]
+            for root in (x64, arm) for name in ("evidence", "reset-evidence", "arithmetic-evidence")}
+        result["passed"] = not (result["mismatches"] or result["generated_mismatches"] or result["reset_mismatches"])
     except (OSError, ValueError, KeyError, TypeError) as error:
         result["error"] = str(error)
     (output / "record.json").write_text(json.dumps(result, indent=2) + "\n")
     print(json.dumps({k: result.get(k) for k in ("passed", "generated_observations_per_host",
-                                               "arithmetic_observations_per_host", "error")}, indent=2))
+                                               "reset_observations_per_host", "arithmetic_observations_per_host", "error")}, indent=2))
     return result["passed"]
 
 

@@ -489,6 +489,22 @@ enum class Intrinsic : uint16_t {
   // Append-only: secure-loader launch abandons the calling machine context.
   X86Skinit,
 
+  // Append-only: operand-size-16 legacy x87 memory images.
+  X87Fldenv16,
+  X87Fnstenv16,
+  X87Frstor16,
+  X87Fnsave16,
+
+  // Append-only: one locked logical transaction returns its completed flags.
+  X86LockedAnd,
+  X86LockedOr,
+  X86LockedXor,
+
+  // Append-only: one locked bit-string update returns the original bit.
+  X86LockedBts,
+  X86LockedBtr,
+  X86LockedBtc,
+
   _Count = 16000
 };
 
@@ -527,7 +543,9 @@ enum class X86SystemStateKind : uint8_t {
   SegmentedBlock,
   CacheZero,
   TransactionAbort,
-  SecureLaunch
+  SecureLaunch,
+  LockedLogic,
+  LockedBit
 };
 
 struct X86SystemStateContract {
@@ -935,9 +953,13 @@ constexpr bool intrinsicSupportsMemoryAddressSpace(Intrinsic Id) {
   case Intrinsic::Xrstor64:
   case Intrinsic::Xrstors64:
   case Intrinsic::X87Fldenv:
+  case Intrinsic::X87Fldenv16:
   case Intrinsic::X87Fnstenv:
+  case Intrinsic::X87Fnstenv16:
   case Intrinsic::X87Frstor:
+  case Intrinsic::X87Frstor16:
   case Intrinsic::X87Fnsave:
+  case Intrinsic::X87Fnsave16:
   case Intrinsic::X86Lgdt16:
   case Intrinsic::X86Lidt16:
   case Intrinsic::X86Sgdt16:
@@ -1198,6 +1220,16 @@ constexpr bool intrinsicMemoryAddressSpaceShapeIsValid(
            (MaskSize == 8 || MaskSize == 16 || MaskSize == 32 ||
             MaskSize == 64) &&
            DataSize == MaskSize;
+  case Intrinsic::X87Fldenv:
+  case Intrinsic::X87Fldenv16:
+  case Intrinsic::X87Fnstenv:
+  case Intrinsic::X87Fnstenv16:
+  case Intrinsic::X87Frstor:
+  case Intrinsic::X87Frstor16:
+  case Intrinsic::X87Fnsave:
+  case Intrinsic::X87Fnsave16:
+    return NumInputs == 2 && OutputSize == 0 &&
+           (AddressSize == 4 || AddressSize == 8);
   case Intrinsic::Clflush:
   case Intrinsic::Clflushopt:
   case Intrinsic::Clwb:
@@ -1214,10 +1246,6 @@ constexpr bool intrinsicMemoryAddressSpaceShapeIsValid(
   case Intrinsic::Fxrstor:
   case Intrinsic::Fxsave64Mem:
   case Intrinsic::Fxrstor64Mem:
-  case Intrinsic::X87Fldenv:
-  case Intrinsic::X87Fnstenv:
-  case Intrinsic::X87Frstor:
-  case Intrinsic::X87Fnsave:
   case Intrinsic::X86Lgdt16:
   case Intrinsic::X86Lidt16:
   case Intrinsic::X86Sgdt16:

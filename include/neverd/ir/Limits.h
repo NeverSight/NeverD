@@ -92,6 +92,10 @@ inline constexpr size_t kSourceVariableFlowMaxWork = 2000000;
 inline constexpr size_t kUnwrittenSourceFrameReadWork = 262144;
 // Shared per-function budget for source-only scratch spill overwrite proofs.
 inline constexpr size_t kSourceEntrySpillWork = 262144;
+// Per-function budget for proving that a call receives the slot of an
+// undefined scratch store before anything reads it
+// (markUndefinedScratchStores).
+inline constexpr size_t kUndefinedScratchEscapeWork = 262144;
 // Bounded scalar/CPUID leaf summaries and total source expansion per function.
 inline constexpr size_t kSourceRegisterLeafOps = 256;
 inline constexpr size_t kSourceRegisterCallOps = 4096;
@@ -128,6 +132,8 @@ inline constexpr size_t kHighDeadStoreElimNarrowSourceConcatLocalsBudget =
 inline constexpr size_t kHighDeadStoreElimBudget = 200000;
 inline constexpr size_t kHighDeadStoreElimElimUnreadPrivateFrameStoresBudget =
     100000;
+inline constexpr size_t
+    kHighDeadStoreElimElimUndefinedEntryScratchStoresBudget = 100000;
 
 // lib/ir/high/pass/HighDemandedBytes.cpp
 inline constexpr size_t kHighDemandedBytesVisitBudget = 2000000;
@@ -335,6 +341,11 @@ inline constexpr size_t kMedImmutableTableScansMaxEvaluationWork = 65536;
 inline constexpr unsigned kMedImmutableTableScansMaxEvaluationDepth = 64;
 inline constexpr unsigned kMedImmutableTableScansMaxScanIterations = 4096;
 inline constexpr unsigned kMedImmutableTableScansMaxFoldRounds = 4;
+
+// lib/ir/med/pass/MedSSA.cpp
+// COPY and constant-step definitions one termination handler register value
+// is traced through before it has no stable form.
+inline constexpr unsigned kMedSSASEHFuncletRegisterChainLimit = 32;
 
 // lib/ir/med/pass/MedMutableSource.cpp
 inline constexpr size_t kMedMutableSourceMaxBlocks = 4096;

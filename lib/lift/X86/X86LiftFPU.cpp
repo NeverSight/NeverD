@@ -817,6 +817,25 @@ bool X86Lifter::liftFPU(LiftState &S, const cs_insn *Insn, const cs_x86 &X86) {
     default:
       break;
     }
+    // Operand size selects the image layout independently of address size.
+    if (X86.prefix[2] == 0x66 && !(X86.rex & 0x08)) {
+      switch (Id) {
+      case Intrinsic::X87Fldenv:
+        Id = Intrinsic::X87Fldenv16;
+        break;
+      case Intrinsic::X87Fnstenv:
+        Id = Intrinsic::X87Fnstenv16;
+        break;
+      case Intrinsic::X87Frstor:
+        Id = Intrinsic::X87Frstor16;
+        break;
+      case Intrinsic::X87Fnsave:
+        Id = Intrinsic::X87Fnsave16;
+        break;
+      default:
+        break;
+      }
+    }
     if (X86.op_count < 1 || !S.emitMemoryIntrinsic(Id, X86.operands[0]))
       return false;
     break;

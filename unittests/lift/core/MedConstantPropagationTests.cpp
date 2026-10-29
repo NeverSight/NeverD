@@ -311,6 +311,78 @@ TEST(MedConstantPropagation, EffectsAndOperandRolesSurviveConstantTransport) {
   EXPECT_EQ(Exit.Ops[2].Inputs[1], variable(9));
 }
 
+TEST(MedConstantPropagation, IndirectCallValuesCannotBecomeStorageAddresses) {
+  for (auto Provenance :
+       {ConstantAddressProvenance::Unknown, ConstantAddressProvenance::Scalar,
+        ConstantAddressProvenance::CodeAddress}) {
+    SCOPED_TRACE(unsigned(Provenance));
+    const auto Value = MedVar::makeConst(0x2000, 8, Provenance);
+    auto Func = loop(Value);
+    auto &Exit = block(Func, 3);
+    Exit.Ops = {
+        operation(NdOp::INDIR_CALL, variable(5), {variable(2), variable(2)}),
+        operation(NdOp::INDIR_CALL, variable(6), {Value, variable(2)}),
+        operation(NdOp::CALL, variable(7), {variable(2), variable(2)}),
+        operation(NdOp::RETURN, {}, {variable(7)})};
+    ASSERT_TRUE(propagateInvariantConstants(Func));
+    EXPECT_EQ(Exit.Ops[0].Inputs[0], variable(2));
+    EXPECT_EQ(Exit.Ops[0].Inputs[1], Value);
+    EXPECT_EQ(Exit.Ops[1].Inputs[0], Value);
+    EXPECT_EQ(Exit.Ops[1].Inputs[1], Value);
+    EXPECT_EQ(Exit.Ops[2].Inputs[0], Value);
+    EXPECT_EQ(Exit.Ops[2].Inputs[1], Value);
+    EXPECT_FALSE(propagateInvariantConstants(Func));
+  }
+}
+
+TEST(MedConstantPropagation, CallValueRoleSurvivesLowConversionAndCopyFolding) {
+  for (auto Architecture : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64})
+    for (auto Format :
+         {BinaryFormat::ELF, BinaryFormat::COFF, BinaryFormat::MachO}) {
+      SCOPED_TRACE(::testing::Message()
+                   << unsigned(Architecture) << ':' << unsigned(Format));
+      const auto &TRI = getTargetRegInfo(Architecture);
+      const auto Target = NdVar::reg(TRI.IntReturnReg, TRI.PointerSize);
+      LowFunc Low;
+      Low.Entry = 0x1000;
+      Low.Name = "indirect_call_value";
+      Low.Blocks.resize(2);
+      for (unsigned I = 0; I != Low.Blocks.size(); ++I) {
+        auto &Block = Low.Blocks[I];
+        Block.Id = I;
+        Block.StartAddr = Low.Entry + I * 0x10;
+        Block.EndAddr = Block.StartAddr + 0x10;
+      }
+      Low.Blocks[0].Succs = {1};
+      Low.Blocks[1].Preds = {0};
+      const auto Add = [&](unsigned Block, NdOp Opcode, NdVar Output,
+                           std::initializer_list<NdVar> Inputs) {
+        LowOp Op;
+        Op.Opcode = Opcode;
+        Op.Output = Output;
+        Op.Addr = Low.Blocks[Block].StartAddr;
+        for (const auto &Input : Inputs)
+          Op.addInput(Input);
+        Low.Blocks[Block].Ops.push_back(Op);
+      };
+      Add(0, NdOp::COPY, Target, {NdVar::cst(0x2000, TRI.PointerSize)});
+      Add(0, NdOp::BRANCH, {}, {NdVar::cst(0x1010, TRI.PointerSize)});
+      Add(1, NdOp::INDIR_CALL, Target, {Target});
+      Add(1, NdOp::RETURN, {}, {Target});
+      const auto Med = LowToMedConverter().convert(Low, Architecture, Format);
+      ASSERT_TRUE(verifyMedFunc(Med, "indirect-call-value"));
+      unsigned Calls = 0;
+      for (const auto &Block : Med.Blocks)
+        for (const auto &Op : Block.Ops)
+          if (Op.Opcode == NdOp::INDIR_CALL) {
+            ++Calls;
+            ASSERT_GE(Op.NumInputs, 1U);
+            EXPECT_FALSE(Op.Inputs[0].isConst());
+          }
+      EXPECT_EQ(Calls, 1U);
+    }
+}
+
 TEST(MedConstantPropagation, BudgetExhaustionLeavesAllOperandsUnchanged) {
   auto Func = loop(MedVar::makeConst(73, 8));
   for (int I = 10; I < 65546; ++I)
@@ -581,6 +653,87 @@ TEST(MedConstantPropagation,
                 if (!Op.Dead)
                   RetainsOuter |= Op.Opcode == Outer;
             EXPECT_EQ(RetainsOuter, Mutation != 0);
+          }
+}
+TEST(MedConstantPropagation, AnnihilatingMaskKeepsMemoryEffectsAndProvenance) {
+  for (auto Architecture : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64})
+    for (auto Format :
+         {BinaryFormat::ELF, BinaryFormat::MachO, BinaryFormat::COFF})
+      for (bool Reverse : {false, true})
+        for (bool CopyMask : {false, true})
+          for (auto Provenance : {ConstantAddressProvenance::Scalar,
+                                  ConstantAddressProvenance::DataAddress}) {
+            SCOPED_TRACE(testing::Message()
+                         << unsigned(Architecture) << ':' << unsigned(Format)
+                         << ':' << Reverse << ':' << CopyMask << ':'
+                         << unsigned(Provenance));
+            const auto &TRI = getTargetRegInfo(Architecture);
+            const auto Width = TRI.PointerSize;
+            const auto Address = NdVar::reg(TRI.IntParamRegs.front(), Width);
+            const auto Loaded = NdVar::tmp(0, Width);
+            const auto Result = NdVar::reg(TRI.IntReturnReg, Width);
+            auto Mask = NdVar::cst(0, Width);
+            Mask.Provenance = Provenance;
+            LowFunc Low;
+            Low.Entry = 0x1000;
+            Low.Name = "annihilating_mask";
+            Low.Blocks.resize(1);
+            auto &Block = Low.Blocks.front();
+            Block.Id = 0;
+            Block.StartAddr = Low.Entry;
+            Block.EndAddr = Low.Entry + 4;
+            const auto Add = [&](NdOp Opcode, NdVar Output,
+                                 std::initializer_list<NdVar> Inputs) {
+              LowOp Op;
+              Op.Opcode = Opcode;
+              Op.Output = Output;
+              Op.Addr = Low.Entry;
+              for (const auto &Value : Inputs)
+                Op.addInput(Value);
+              Block.Ops.push_back(Op);
+            };
+            Add(NdOp::LOAD, Loaded, {Address});
+            Block.Ops.back().MemoryOrdering = NdMemoryOrdering::Acquire;
+            if (CopyMask) {
+              const auto Temporary = NdVar::tmp(1, Width);
+              Add(NdOp::COPY, Temporary, {Mask});
+              Mask = Temporary;
+            }
+            Add(NdOp::INT_AND, Result,
+                {Reverse ? Mask : Loaded, Reverse ? Loaded : Mask});
+            Add(NdOp::STORE, {}, {Address, Result});
+            Add(NdOp::RETURN, {}, {NdVar::cst(0, Width)});
+            const auto Med =
+                LowToMedConverter().convert(Low, Architecture, Format);
+            ASSERT_TRUE(verifyMedFunc(Med, "annihilating-mask"));
+            const auto &Ops = Med.Blocks.front().Ops;
+            const auto Store =
+                std::find_if(Ops.begin(), Ops.end(), [](const MedOp &Op) {
+                  return Op.Opcode == NdOp::STORE;
+                });
+            ASSERT_NE(Store, Ops.end());
+            const MedVar *Stored = &Store->Inputs[1];
+            // A fold can leave one named COPY until the next substitution
+            // phase. Its scalar result must no longer depend on the load.
+            if (!Stored->isConst())
+              for (const auto &Op : Ops)
+                if (Op.Output == *Stored && Op.Opcode == NdOp::COPY &&
+                    Op.NumInputs == 1 && Op.Output.Size == Op.Inputs[0].Size) {
+                  Stored = &Op.Inputs[0];
+                  break;
+                }
+            EXPECT_EQ(Stored->isConst(),
+                      Provenance == ConstantAddressProvenance::Scalar);
+            if (Stored->isConst()) {
+              EXPECT_EQ(Stored->ConstVal, 0U);
+              EXPECT_EQ(Stored->Size, Width);
+              EXPECT_EQ(Stored->Provenance, ConstantAddressProvenance::Scalar);
+            }
+            EXPECT_TRUE(
+                std::any_of(Ops.begin(), Ops.end(), [](const MedOp &Op) {
+                  return Op.Opcode == NdOp::LOAD &&
+                         Op.MemoryOrdering == NdMemoryOrdering::Acquire;
+                }));
           }
 }
 } // namespace

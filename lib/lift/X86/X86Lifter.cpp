@@ -13,6 +13,8 @@
 #include "neverd/lift/X86/X86Lifter.h"
 
 #include "X86BitTestUndefined.h"
+#include "X86ControlMoveUndefined.h"
+#include "X86DivisionUndefined.h"
 #include "X86DoubleShiftUndefined.h"
 #include "X86LegacyVectorMoveAudit.h"
 #include "X86LiftADX.h"
@@ -22,6 +24,7 @@
 #include "X86LiftBitCount.h"
 #include "X86LiftDetail.h"
 #include "X86LiftTBM.h"
+#include "X86MultiplyUndefined.h"
 #include "X86NativeStateAudit.h"
 #include "X86OpaqueStateAudit.h"
 #include "X86ShiftUndefined.h"
@@ -1332,6 +1335,18 @@ void X86Lifter::liftImpl(const cs_insn *Insn, std::vector<LowOp> &Ops,
             ? bmilogic::matches(
                   Insn, llvm::ArrayRef<LowOp>(Ops).drop_front(S.OpsStart),
                   EffectsDraft)
+        : controlmoveundefined::form(Insn, TargetArch)
+            ? controlmoveundefined::matches(
+                  llvm::ArrayRef<LowOp>(Ops).drop_front(S.OpsStart),
+                  EffectsDraft)
+        : multiplyundefined::form(Insn, TargetArch)
+            ? multiplyundefined::matches(
+                  llvm::ArrayRef<LowOp>(Ops).drop_front(S.OpsStart),
+                  EffectsDraft)
+        : divisionundefined::form(Insn, TargetArch)
+            ? divisionundefined::matches(
+                  llvm::ArrayRef<LowOp>(Ops).drop_front(S.OpsStart),
+                  EffectsDraft)
         : Logic ? HasLogicEffect
                 : EffectsDraft.Effects.empty();
     if (!Strict) {
@@ -1341,6 +1356,9 @@ void X86Lifter::liftImpl(const cs_insn *Insn, std::vector<LowOp> &Ops,
                (!hasAuditedLegacyIntegerForm(Insn, TargetArch) &&
                 !vectormoveaudit::form(Insn, TargetArch) &&
                 !nativestateaudit::form(Insn, TargetArch) &&
+                !controlmoveundefined::form(Insn, TargetArch) &&
+                !divisionundefined::form(Insn, TargetArch) &&
+                !multiplyundefined::form(Insn, TargetArch) &&
                 !tbm::form(Insn, TargetArch) &&
                 !bextr::form(Insn, TargetArch) &&
                 !bitcount::form(Insn, TargetArch) &&

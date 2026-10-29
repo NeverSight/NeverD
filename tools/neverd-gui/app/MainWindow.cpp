@@ -111,6 +111,7 @@
 #include <QTableWidget>
 #include <QTextStream>
 #include <QToolBar>
+#include <QToolButton>
 #include <QTreeView>
 #include <QTreeWidget>
 #include <QUrl>
@@ -583,6 +584,8 @@ void MainWindow::buildMenusAndToolbars() {
     fillPlaceholder(menu, name);
   });
   const auto toolbars = actions_.buildToolbars(this);
+  for (auto *toolbar : toolbars)
+    addHistoryLists(*toolbar);
   // The navigation band spans its own row under the toolbars.
   addToolBarBreak(Qt::TopToolBarArea);
   auto *bandBar = new QToolBar(tr("Navigation band"), this);
@@ -1701,6 +1704,9 @@ void MainWindow::navigateCodeFunction(CodeView *view, Address address,
                                       std::optional<Address> from) {
   // The shared history and background listing follow without changing the
   // originating code window or its representation, including a pinned view.
+  // Back returns the code to the place it leaves, at the stop it leaves.
+  if (const auto origin = from ? from : disassembly_->currentAddress())
+    view->text()->keepPlace(*origin);
   disassembly_->navigate(address, true, from);
   if (view->text()->function() != function)
     view->showFunction(function);
@@ -1801,12 +1807,15 @@ void MainWindow::navigateExpression(const QString &text) {
       });
 }
 
-void MainWindow::navigateHistory(bool forward) {
+void MainWindow::navigateHistory(bool forward, std::size_t steps) {
   const auto serial = ++codeNavigationSerial_;
   hexFollower_.clear();
   if (forward ? !disassembly_->canGoForward() : !disassembly_->canGoBack())
     return;
   if (auto *view = focusedCodeView()) {
+    // Coming back to this stop returns the code to where it is now.
+    if (const auto address = disassembly_->currentAddress())
+      view->text()->keepPlace(*address);
     const auto epoch = session_.epoch();
     connect(
         disassembly_->listing(), &ListingView::jumpSettled, view,
@@ -1814,22 +1823,104 @@ void MainWindow::navigateHistory(bool forward) {
           if (serial != codeNavigationSerial_ || epoch != session_.epoch() ||
               !view->isVisible())
             return;
+          // The listing has landed; a graph may still be laying it out.
           const auto function = disassembly_->listing()->currentFunction();
-          if (function && view->text()->function() != function)
+          const auto address = disassembly_->listing()->currentAddress();
+          if (function && view->text()->function() != function) {
             view->showFunction(*function);
+            // The code goes back to the cursor and view it left there, as
+            // Hex-Rays' Esc does; a stop it never made opens the function.
+            if (address)
+              view->text()->returnToPlace(*address);
+          }
           // Within the function the code goes back to the row it left, such
-          // as the goto whose label it went to.
-          else if (const auto address = disassembly_->currentAddress())
+          // as the goto whose label it went to, and to its place there.
+          else if (address) {
             view->text()->revealAddress(*address);
+            view->text()->returnToPlace(*address);
+          }
           view->text()->setFocus();
         },
         Qt::SingleShotConnection);
   }
   QScopedValueRollback<bool> guard(codeHistoryNavigation_, true);
   if (forward)
-    disassembly_->goForward();
+    disassembly_->goForward(steps);
   else
-    disassembly_->goBack();
+    disassembly_->goBack(steps);
+}
+
+void MainWindow::addHistoryLists(QToolBar &toolbar) {
+  for (const bool forward : {false, true}) {
+    auto *button = qobject_cast<QToolButton *>(toolbar.widgetForAction(
+        actions_.action(forward ? ActionId::JumpForward : ActionId::JumpBack)));
+    if (!button)
+      continue;
+    // The button's own list: the Jump menu keeps its commands.
+    auto *menu = new QMenu(button);
+    connect(menu, &QMenu::aboutToShow, this,
+            [this, menu, forward] { showHistoryList(*menu, forward); });
+    button->setMenu(menu);
+    button->setPopupMode(QToolButton::MenuButtonPopup);
+  }
+}
+
+void MainWindow::showHistoryList(QMenu &menu, bool forward) {
+  menu.clear();
+  const auto stops = disassembly_->stops(forward);
+  const int digits = session_.bitness() == 64 ? 16 : 8;
+  // The code in focus goes back along: a stop it left names the line it
+  // returns to, as Hex-Rays' history names it.
+  const QPointer<CodeView> code = focusedCodeView();
+  for (std::size_t i = 0;
+       i < std::min(stops.size(),
+                    ::neverd::limits::gui::kMainWindowHistoryListStops);
+       ++i) {
+    const Address address = stops[i];
+    auto *action = menu.addAction(displayAddress(address, digits));
+    connect(action, &QAction::triggered, this, [this, forward, steps = i + 1] {
+      navigateHistory(forward, steps);
+    });
+    // As in IDA's list, the stop's place, then the instruction or data there.
+    session_.read(
+        QStringLiteral("listing"),
+        {{"address", hexAddress(address)},
+         {"before", 0},
+         {"after", 0},
+         {"complete_anchor_item", true}},
+        action,
+        [this, action, address, digits, code](const QJsonObject &payload) {
+          for (const auto &value : payload.value("lines").toArray()) {
+            const auto line = value.toObject();
+            const auto kind = line.value("kind").toString();
+            if (kind != QLatin1String("insn") && kind != QLatin1String("data"))
+              continue;
+            QString place;
+            if (const auto function =
+                    addressValue(line.value("function_address"))) {
+              place = line.value("function").toString();
+              if (const auto kept =
+                      code ? code->text()->keptLine(address, *function)
+                           : std::nullopt)
+                place += QLatin1Char(':') + QString::number(*kept);
+              else if (address != *function)
+                place += QLatin1Char('+') + displayAddress(address - *function);
+              place += QStringLiteral(" (%1)").arg(displayAddress(address));
+            } else if (const auto *region = space_.regionOf(address)) {
+              place = region->name + QLatin1Char(':') +
+                      displayAddress(address, digits);
+            } else {
+              place = displayAddress(address, digits);
+            }
+            action->setText(
+                (place + QLatin1Char('\t') +
+                 line.value("text").toString().simplified())
+                    .replace(QLatin1Char('&'), QStringLiteral("&&")));
+            return;
+          }
+        },
+        [](const QString &, const QString &) {});
+  }
 }
 
 void MainWindow::synchronize(Address address, QObject *source) {
@@ -2433,8 +2524,9 @@ void MainWindow::updateActions() {
   const bool location = loaded && currentAddress().has_value();
   // Compute the final state before touching QActions. Enabling every loaded
   // action and then disabling unavailable ones emits two change events on
-  // every query notification, even when no command state changed.
-  std::array<bool, static_cast<size_t>(ActionId::Count)> states;
+  // every query notification, even when no command state changed. An
+  // external command keeps its own state unless a rule below names it.
+  std::array<std::optional<bool>, static_cast<size_t>(ActionId::Count)> states;
   const auto enable = [&](ActionId id, bool enabled) {
     states[static_cast<size_t>(id)] = enabled;
   };
@@ -2596,7 +2688,8 @@ void MainWindow::updateActions() {
        {ActionId::PathfinderNewPath, ActionId::PathfinderAddWaypoint})
     enable(id, callPaths && pathfinderTarget().has_value());
   for (size_t index = 0; index < states.size(); ++index)
-    actions_.action(static_cast<ActionId>(index))->setEnabled(states[index]);
+    if (states[index])
+      actions_.action(static_cast<ActionId>(index))->setEnabled(*states[index]);
 }
 
 void MainWindow::updateTitle() {
@@ -3706,11 +3799,15 @@ void MainWindow::searchBinary(const QString &kind, bool again) {
     if (serial != searchSerial_ || epoch != session_.epoch() ||
         revision != session_.revision() || !session_.loaded())
       return;
-    const auto from = currentAddress().value_or(0);
+    // A listing still loading its first rows has no cursor yet: the search
+    // starts from the beginning, and the cursor its rows bring is not a move
+    // away from the search.
+    const auto origin = currentAddress();
+    const auto from = origin.value_or(0);
     auto request = std::make_shared<std::function<void(bool)>>();
     const std::weak_ptr<std::function<void(bool)>> weak = request;
-    *request = [this, kind, pattern, from, backward, serial, epoch, revision,
-                weak](bool wrapped) {
+    *request = [this, kind, pattern, origin, from, backward, serial, epoch,
+                revision, weak](bool wrapped) {
       auto keep = weak.lock();
       if (!keep)
         return;
@@ -3722,11 +3819,11 @@ void MainWindow::searchBinary(const QString &kind, bool again) {
         query["from"] = hexAddress(from);
       searchSubscription_ = session_.read(
           QStringLiteral("search"), query, this,
-          [this, kind, pattern, serial, epoch, revision, from, backward,
+          [this, kind, pattern, serial, epoch, revision, origin, backward,
            wrapped, keep](const QJsonObject &payload) {
             if (serial != searchSerial_ || epoch != session_.epoch() ||
                 revision != session_.revision() || !session_.loaded() ||
-                currentAddress().value_or(0) != from)
+                (origin && currentAddress() != origin))
               return;
             if (payload.value("building").toBool()) {
               QTimer::singleShot(
@@ -5676,6 +5773,7 @@ void MainWindow::toggleFocusMode() {
   showPseudocode(code->representation());
   floating->showMaximized();
   focusToolbar_ = actions_.buildFocusToolbar(floating);
+  addHistoryLists(*focusToolbar_);
   if (!addFloatingWindowToolbar(*floating, *focusToolbar_))
     delete focusToolbar_.data();
   floating->raise();

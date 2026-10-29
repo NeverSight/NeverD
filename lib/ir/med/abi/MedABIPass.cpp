@@ -590,8 +590,6 @@ bool hasBoundIntegerCallArguments(const MedOp &Op) {
       return false;
     HasStack |= Parameter.Kind == SourceABICarrierKind::Stack;
   }
-  if (!HasStack)
-    return false;
   return true;
 }
 
@@ -1533,6 +1531,22 @@ void recoverCallAbi(
           Op.NumInputs >= 1u + Op.CalleeRegisterArgs;
       if (SummarizedIntegerOperands)
         CalleeRegArgs = Op.CalleeRegisterArgs;
+      // A summary that also lists floating arguments, each in the next
+      // vector register (System V), still counts the integer ones: the call
+      // sets no integer register past them, though the callee's own recovery
+      // took more as forwarded parameters (a register it passes on untouched
+      // to a variadic call).  Those take zero, before the floating arguments
+      // that follow them.
+      int ZeroedRegArgs = -1;
+      if (!SummarizedIntegerOperands && Convention &&
+          Convention->RegisterArgumentsFromCalleeSummary &&
+          Convention->VectorArgumentsFromCalleeSummary &&
+          !Convention->PositionalArgumentSlots && Op.CalleeRegisterArgs >= 0 &&
+          Op.CalleeVectorSlots == 0 && Op.CalleeVectorArgs > 0 &&
+          CalleeRegArgs > Op.CalleeRegisterArgs) {
+        ZeroedRegArgs = CalleeRegArgs;
+        CalleeRegArgs = Op.CalleeRegisterArgs;
+      }
       // Slots filled by the stack-store scan (vs the register scan).  On i386 a
       // stack-argument slot index can fall into the integer-register slot range
       // (0,1) when the callee takes no integer register argument but does take
@@ -1759,6 +1773,26 @@ void recoverCallAbi(
                          CallRelativeStackOffset,
                          &BlockIds};
 
+      // A variadic routine of the image keeps its arity open for the
+      // overflow its callers pass (callRecoveryTotalArity), which says
+      // nothing of what a tail jump to it passes on untouched.  Its stack
+      // arguments are the slots a call fills, but not one that holds only a
+      // scratch register's undefined incoming value, as the alignment
+      // `push rax` of `long f(void) { return logv("y") + 1; }` does
+      // (holdsUndefinedIncomingScratch).
+      bool OpenVariadicArity = false;
+      if (!CI.IsIndirect && !UseExternalArity && CalleeIsVariadic)
+        if (const auto VIt = CalleeIsVariadic->find(CI.TargetAddr);
+            VIt != CalleeIsVariadic->end())
+          OpenVariadicArity = VIt->second;
+      const bool UndefinedScratchSlots =
+          OpenVariadicArity && Convention &&
+          Convention->UndefinedIncomingScratchRegisters;
+      auto UndefinedScratchSlot = [&](const MedVar &Stored) {
+        return UndefinedScratchSlots &&
+               holdsUndefinedIncomingScratch(Func, TheArch, Fmt, Stored);
+      };
+
       // A value spilled to the call frame before the call (an outgoing `push` /
       // `str [sp,#k]` landing at or above the call SP) means the ABI has run
       // out of parameter registers — so every parameter register is necessarily
@@ -1775,7 +1809,8 @@ void recoverCallAbi(
             Prev.MemoryAddressSpace == NdMemoryAddressSpace::Default)
           if (auto Rel = CallRelativeStackOffset(Prev.Inputs[0]);
               Rel && *Rel >= 0) {
-            if (*Rel < CallLayout.CallStackBase)
+            if (*Rel < CallLayout.CallStackBase ||
+                UndefinedScratchSlot(Prev.Inputs[1]))
               continue;
             HasStackArg = true;
             const int64_t FirstStackOff = CallLayout.CallStackBase;
@@ -1786,9 +1821,31 @@ void recoverCallAbi(
           }
       }
       // A branch or EH boundary may split the setup from the call on any
-      // architecture. Keep only stores agreed upon by every incoming path.
-      const auto ReachingStackStores = callSetupStackStores(Ctx);
+      // architecture. Keep common stores and, for fixed Win64 scalar calls,
+      // an edge-complete plan through nested joins for differing values.
+      CallSetupStackJoins StackJoins;
+      const bool RecoverStackJoins =
+          TheArch == Arch::X64 && Fmt == BinaryFormat::COFF && !CI.IsIndirect &&
+          !CI.ArgumentsInCalleeRegisterOrder && !Op.SourceCallHint &&
+          !Op.IsTailCall && !HeaderVariadic && !OpenVariadicArity &&
+          Op.CalleeVectorArgs <= 0 && !Op.CalleeVectorSlots &&
+          CalleeArgs > int(IntParamRegs.size());
+      const auto ReachingStackStores =
+          callSetupStackStores(Ctx, RecoverStackJoins ? &StackJoins : nullptr);
+      std::erase_if(StackJoins.Slots, [&](const auto &Item) {
+        const int64_t Slot =
+            int64_t(IntParamRegs.size()) +
+            (Item.first - CallLayout.CallStackBase) / CallLayout.SlotBytes;
+        return Slot >= CalleeArgs || Slot >= MaxArgs;
+      });
+      if (!StackJoins.Slots.empty()) {
+        HasStackArg = true;
+        HasStackArgAtCallSP |=
+            StackJoins.Slots.count(CallLayout.CallStackBase) != 0;
+      }
       for (const auto &[Offset, Value] : ReachingStackStores) {
+        if (UndefinedScratchSlot(Value))
+          continue;
         HasStackArg = true;
         if (Offset == CallLayout.CallStackBase &&
             !(Value.Kind == MedVar::Reg && TRI.isFrameOrLinkReg(Value.RegOff)))
@@ -2411,16 +2468,61 @@ void recoverCallAbi(
         FoundMask[Slot] = true;
         FromStackScan[Slot] = true;
       }
+      std::vector<std::optional<MedVar>> JoinedValues(StackJoins.Nodes.size());
+      const auto Materialize = [&](auto &&Self, size_t Index) -> MedVar {
+        if (JoinedValues[Index])
+          return *JoinedValues[Index];
+        const auto &Node = StackJoins.Nodes[Index];
+        PhiNode Join;
+        // Each edge keeps its original store width; no absent byte is filled.
+        Join.Output.Kind = MedVar::Temp;
+        Join.Output.Id = FreshId++;
+        Join.Output.Size = Node.Bytes;
+        Join.Output.TheArch = TheArch;
+        for (const auto &[Predecessor, Value] : Node.Args) {
+          const auto *Scalar = std::get_if<MedVar>(&Value);
+          Join.Args.emplace_back(Predecessor,
+                                 Scalar ? *Scalar
+                                        : Self(Self, std::get<size_t>(Value)));
+        }
+        const MedVar Output = Join.Output;
+        // The proof's block index remains valid: ABI recovery changes only
+        // operations and PHIs. Children are materialized before their users.
+        const auto Owner = BlockIds.first(Node.BlockId) - Func.Blocks.data();
+        Func.Blocks[Owner].Phis.push_back(std::move(Join));
+        JoinedValues[Index] = Output;
+        return Output;
+      };
+      bool MaterializedJoin = false;
+      for (const auto &[Offset, Index] : StackJoins.Slots) {
+        const int64_t Slot =
+            ReachingStackBase +
+            (Offset - CallLayout.CallStackBase) / CallLayout.SlotBytes;
+        if (Slot < 0 || Slot >= MaxArgs || Slot >= CalleeArgs ||
+            FoundMask[Slot])
+          continue;
+        Found[Slot] = Materialize(Materialize, Index);
+        FoundMask[Slot] = true;
+        FromStackScan[Slot] = true;
+        MaterializedJoin = true;
+      }
+      if (MaterializedJoin)
+        DefSites.invalidate();
 
       // A call that takes every argument from the stack is passed nothing by
       // what a scratch register held at entry where this function takes no
       // parameter in it: the alignment `push eax` above a call's arguments
-      // stores what no caller set.  On top of the arguments it is dropped;
-      // below one it keeps its place, as zero.
-      if (StackOnlyCall && !CheckedStackCall && !CI.IsIndirect) {
+      // stores what no caller set.  Nor is a call to a variadic routine of
+      // the image by a scratch register's undefined incoming value (the
+      // alignment `push rax`, UndefinedScratchSlot).  On top of the arguments
+      // such a slot is dropped; below one it keeps its place, as zero.
+      if ((StackOnlyCall && !CheckedStackCall && !CI.IsIndirect) ||
+          UndefinedScratchSlots) {
         // Version zero alone does not make an entry value: a call's result
         // can be bound to a fresh variable that no rename touched.
         auto unsetIncoming = [&](const MedVar &V) {
+          if (UndefinedScratchSlots)
+            return UndefinedScratchSlot(V);
           if (V.Kind != MedVar::Reg || V.SSAVer != 0 || V.Size == 0 ||
               V.Size > TRI.PointerSize || TRI.isStackPointer(V.RegOff) ||
               TRI.isCalleeSaveReg(V.RegOff) || TRI.isLinkRegister(V.RegOff) ||
@@ -2721,14 +2823,6 @@ void recoverCallAbi(
               }))
             ++CallerStackBase;
       }
-      // A variadic routine of the image keeps its arity open for the
-      // overflow its callers pass (callRecoveryTotalArity), which says
-      // nothing of what a tail jump to it passes on untouched.
-      bool OpenVariadicArity = false;
-      if (!CI.IsIndirect && !UseExternalArity && CalleeIsVariadic)
-        if (const auto VIt = CalleeIsVariadic->find(CI.TargetAddr);
-            VIt != CalleeIsVariadic->end())
-          OpenVariadicArity = VIt->second;
       if (IsTailJump &&
           (!CI.IsIndirect || ImportStackArgs || UseExternalArity ||
            UseVariableArity) &&
@@ -2801,6 +2895,14 @@ void recoverCallAbi(
             KnownFPCallee = true;
           }
         }
+        // A variadic callee that saves the vector registers (System V) reads
+        // as many as the call's AL counts.  Past them a register holds what
+        // earlier code left there, which the call passes on no more than
+        // HighIR's scan takes it (an unknown count bounds nothing).
+        if (!CI.IsIndirect && Op.VariadicVectorCount >= 0 &&
+            VectorArgumentCallees &&
+            VectorArgumentCallees->count(CI.TargetAddr))
+          FPLimit = std::min<int>(FPLimit, Op.VariadicVectorCount);
         // Width and count of FP arguments a pure tail-call forwarder passes
         // straight through.  External libc callees are NOT in CalleeFPArity
         // (that map is intra-module only), so consult the libc signature
@@ -3032,12 +3134,25 @@ void recoverCallAbi(
         auto FIt = CalleeFPArity->find(CI.TargetAddr);
         CalleeHasFP = FIt != CalleeFPArity->end() && FIt->second > 0;
       }
-      // A complete pre-SSA read summary already supplies the register
-      // operands, including positional padding. Setup scans may find live
-      // scratch registers, but cannot extend that authoritative prefix.
-      int IntCap = SummarizedIntegerOperands             ? Op.CalleeRegisterArgs
-                   : (CalleeHasFP && CalleeRegArgs >= 0) ? CalleeRegArgs
-                                                         : NumIntRegArgs;
+      // A complete pre-SSA read summary owns the register values. A later
+      // recovered stack parameter can still require the unused positional
+      // slots between that prefix and the stack. Keep those slots as padding;
+      // setup scans cannot turn their scratch registers into arguments.
+      const bool SummarizedRegisterPadding =
+          PositionalSlots && NoVectorArguments && !CalleeHasFP &&
+          !CI.IsIndirect && !CI.ArgumentsInCalleeRegisterOrder &&
+          !HeaderVariadic && !OpenVariadicArity && CalleeArgs > NumIntRegArgs;
+      // A variadic callee that takes its vector argument registers (System
+      // V) takes every integer one before them, past its named ones too.
+      const bool EveryIntegerPosition =
+          !CI.IsIndirect && VectorArgumentCallees &&
+          VectorArgumentCallees->count(CI.TargetAddr);
+      int IntCap =
+          SummarizedRegisterPadding   ? NumIntRegArgs
+          : SummarizedIntegerOperands ? Op.CalleeRegisterArgs
+          : (CalleeHasFP && CalleeRegArgs >= 0 && !EveryIntegerPosition)
+              ? CalleeRegArgs
+              : NumIntRegArgs;
 
       // Where 64-bit arguments are pair-aligned (ARM AAPCS: an even-odd
       // register pair, an 8-byte aligned stack slot), argument lanes are not
@@ -3091,10 +3206,15 @@ void recoverCallAbi(
                                    : static_cast<int>(IntParamRegs.size());
       std::vector<int64_t> StackPartOffsets;
       for (int K = 0; K < AssembleEnd; ++K) {
-        const bool Gap = !FoundMask[K];
+        const bool SummarizedPadding = SummarizedRegisterPadding &&
+                                       K >= Op.CalleeRegisterArgs &&
+                                       K < StackArgBase;
+        const bool Gap = !FoundMask[K] || SummarizedPadding;
         const bool UnreadRegisterPosition =
-            UseExternalArity && PrototypeArguments && CalleeRegArgs >= 0 &&
-            K >= CalleeRegArgs && K < StackArgBase && CalleeArgs > StackArgBase;
+            SummarizedPadding ||
+            (UseExternalArity && PrototypeArguments && CalleeRegArgs >= 0 &&
+             K >= CalleeRegArgs && K < StackArgBase &&
+             CalleeArgs > StackArgBase);
         // A known fixed signature can consume a later stack slot even when
         // no store defines an interior slot. Keep that missing machine value
         // explicit; truncating here would also discard every later argument.
@@ -3213,6 +3333,9 @@ void recoverCallAbi(
               MedVar::makeConst(0, static_cast<uint16_t>(TRI.PointerSize));
         }
       }
+      while (static_cast<int>(IntPart.size()) < ZeroedRegArgs)
+        IntPart.push_back(
+            MedVar::makeConst(0, static_cast<uint16_t>(TRI.PointerSize)));
       // A variadic callee that takes its vector argument registers as
       // parameters (System V) takes every integer and vector argument
       // register, which a call passes in that order before its stack
@@ -3386,6 +3509,22 @@ void recoverCallAbi(
                   Lane != It->second.end() && Lane->second <= Arg.Size)
                 CI.ArgReadBytes[I] = Lane->second;
         }
+      // A formatted call's inputs are every argument it passes, in the
+      // source's order (MedOp::ExactArguments), a floating one as the scalar
+      // in its vector register's low lane, which the routine's conversion
+      // reads alone (MedOp::ExactFloatInputs).  An import takes exactly
+      // those, as HighIR passes them; the scan above, which keeps a vector
+      // register whole, still finds the registers this function passes on.
+      // A routine of the image takes what its own parameters do.
+      if (Op.ExactArguments &&
+          (IsDirectImport || IsIndirectImport || IsRelocExtern)) {
+        CI.Args.assign(Op.Inputs.begin() + 1, Op.Inputs.begin() + Op.NumInputs);
+        CI.ArgReadBytes.clear();
+        CI.IntegerRegisterArgCount = -1;
+        CI.FloatingRegisterArgCount = -1;
+        CI.StackArgumentOffsets.clear();
+        CI.StackArgumentSlotBytes = 0;
+      }
       Func.CallInfos.push_back(std::move(CI));
       if (!CallLaneOps.empty())
         Pending.push_back(

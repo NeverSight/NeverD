@@ -394,8 +394,9 @@ bool propagateInvariantConstants(MedFunc &Func) {
           Op.Opcode == NdOp::INT_LEFT || Op.Opcode == NdOp::INT_RIGHT ||
           Op.Opcode == NdOp::INT_ASHR || Op.Opcode == NdOp::INT_MULT;
       for (uint8_t I = 0; I < Op.NumInputs; ++I)
-        Replace(Op.Inputs[I], isNumericConstantOperand(Op.Opcode, I),
-                KeepsViews);
+        if (canPropagateConstantToOperand(Op.Opcode, I))
+          Replace(Op.Inputs[I], isNumericConstantOperand(Op.Opcode, I),
+                  KeepsViews);
     }
   }
   return Changed;

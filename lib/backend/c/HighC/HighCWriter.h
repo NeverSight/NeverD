@@ -122,6 +122,14 @@ bool printsTruthValue(const HighExpr &E);
 /// import (HighCWriter::isImageDataAddress).
 bool isImageDataAt(const BinaryImage &Img, va_t Addr);
 
+/// The undefined data symbol of a relocatable object whose storage holds
+/// \p Addr (BinaryImage::objectExternDataAt), and the offset of \p Addr into
+/// it, where C reaches it through the symbol's declaration.  The object a C
+/// library header declares stays the header's at its own address
+/// (LibCDataObjects.def).
+std::optional<std::pair<const BinaryImage::ObjectExternData *, uint64_t>>
+declaredObjectExternAt(const BinaryImage &Img, va_t Addr);
+
 class HighCWriter {
 public:
   static llvm::StringRef
@@ -1715,8 +1723,38 @@ public:
     /// The bytes are a C library header's object (ImageObject::Header),
     /// reached through its address: the unit defines none of its own.
     bool Header = false;
+    /// The bytes are the image's own PE headers, the linker's `__ImageBase`
+    /// (addImageBaseBacking): the unit declares them and defines none.
+    bool External = false;
   };
   std::vector<ImageBacking> ImageBackings;
+  /// The walk found the unit printing an address in the image's own PE
+  /// headers (BinaryImage::imageBaseOffset), and the identifier it declares
+  /// `__ImageBase` by, empty while it reaches none.
+  bool ReachesImageBase = false;
+  std::string ImageBaseIdentifier;
+  /// The undefined data symbols of a relocatable object whose storage the
+  /// unit prints an address in, by their extern address
+  /// (declaredObjectExternAt).  Each is an external backing the unit
+  /// declares by the symbol and defines nothing of.
+  std::set<va_t> ReachedObjectExterns;
+  /// Note that the unit prints \p Addr, which may lie in such storage.
+  void noteObjectExternAddress(va_t Addr);
+  /// Add an external backing for each reached symbol, and declare them.
+  void addObjectExternBackings();
+  void writeObjectExternDeclarations();
+  /// The identifier the unit declares data symbol \p Symbol another module
+  /// defines by, shared with the GOT slots that bind it (DataSymbolBinding).
+  std::string externalDataIdentifier(const std::string &Symbol);
+  /// Note that the unit prints \p Addr through `__ImageBase`.
+  void noteImageBaseAddress(va_t Addr);
+  /// Whether \p E is an address in the image's headers by its provenance.
+  bool isImageBaseConstant(const HighExpr &E) const;
+  /// Add the `__ImageBase` backing once the walk has found the unit
+  /// reaching it, among the image's own backings.
+  void addImageBaseBacking();
+  /// Declare `__ImageBase` for a unit that reaches it.
+  void writeImageBaseDeclaration();
   /// The symbol the object a backing is named after has in its comment, as
   /// the backing's `neverd.image` line names it; empty for a name the
   /// emitter made.

@@ -501,6 +501,12 @@ bound analysis. Budget exhaustion and unsupported semantics publish no residual
 function. A complete control graph is distinct from successful source emission;
 the public API checks both and reports the distinction.
 
+When control refinement later exhausts a budget, the error retains the last
+unresolved or unsupported recovery frontier alongside the exhausted limit.
+This identifies the earlier analysis failure even when replay stops at a
+different instruction. It does not establish that the abstract failing path
+is feasible. Successful recovery clears earlier failure context.
+
 Finite read-address sets, joint control tuples and control-field counts also
 have explicit limits. Global solver-query limits and per-query limits on gates,
 conflicts, propagations and watched-literal visits bound proof work;

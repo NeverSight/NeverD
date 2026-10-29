@@ -96,6 +96,9 @@ struct HighExpr {
   NdOp Op = NdOp::NOP;
   NdMemoryOrdering MemoryOrdering = NdMemoryOrdering::None;
   NdMemoryAddressSpace MemoryAddressSpace = NdMemoryAddressSpace::Default;
+  /// ATOMIC_ADD's source-only return-slot address, proved by MedIR. Preserve
+  /// the transaction but address the compiled function's actual return slot.
+  std::optional<uint16_t> SourceReturnSlotOffset;
   TypeRef Type;
 
   /// For Var
@@ -361,6 +364,11 @@ struct HighStmt {
   /// short (nameRepeatedValues).  Folding it back into a reader would print
   /// the value there in full again.
   bool KeepsName = false;
+  /// A goto that ends a local unwind whose `__finally` clauses now run the
+  /// termination handlers (SEHFinallyBodies.h): C runs a filled clause as an
+  /// abnormal termination only when the goto leaves its `__try` as a jump,
+  /// so the writer prints it neither as a fall-through nor as `__leave`.
+  bool AbnormalExit = false;
 
   std::string str(int Indent = 0) const;
 };
@@ -658,6 +666,13 @@ struct HighFunc {
   /// unchanged. Use only after every pad has become a C++ clause.
   std::vector<std::pair<MedVar, ExprPtr>> ItaniumCallFrameOffsets;
   bool HasUnresolvedSEHFrame = false;
+  /// MedFunc::SEHTerminationFrameBytes.
+  std::map<va_t, uint64_t> SEHTerminationFrameBytes;
+  /// MedFunc::SEHFuncletRegisters.
+  std::map<va_t, std::map<uint64_t, SEHFuncletRegisterValue>>
+      SEHFuncletRegisters;
+  /// MedFunc::SEHLocalUnwindExits.
+  std::vector<MedSEHLocalUnwindExit> SEHLocalUnwindExits;
   std::set<va_t> CxxContinuationTargets;
   unsigned StructuredExceptionRegions = 0;
   unsigned UnstructuredExceptionRegions = 0;

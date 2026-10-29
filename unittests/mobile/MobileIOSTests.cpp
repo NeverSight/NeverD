@@ -792,52 +792,55 @@ TEST(MobileIOSNative, ChangedOrConditionalFloatingPoliciesRemainUnsupported) {
                    "recovered_method_count"),
             0);
 }
-TEST(MobileIOSNative, RawCallPrefixPreservesFunctionCountAndSource) {
-  const std::string raw = neverd::kAArch64PAuthCRawCallHeader;
+TEST(MobileIOSNative, SharedRawCallPreamblePreservesSourceAndFunctionCount) {
+  const std::string rawCall = neverd::kAArch64PAuthCRawCallHeader;
   const std::string floating = neverd::c_float::ContractionPolicy.str();
-  const std::string body =
-      "return __neverd_aarch64_raw_call((int64_t (*)(int64_t, int64_t))"
-      "objc_self)(arg0, arg1);";
-  for (const auto &prefix :
-       {raw, floating + raw, floating + "/* source policy */\n" + raw}) {
+  for (const auto &prefix : {rawCall, floating + rawCall, rawCall + floating}) {
     SCOPED_TRACE(prefix);
     EXPECT_EQ(nativeFunctionCount(prefix), 0u);
-    Budget budget;
-    auto [batch, metadata] = objcFixture(body);
+    EXPECT_EQ(nativeFunctionCount(prefix +
+                                  "static inline int helper(){return 1;}\n"
+                                  "int real(){return helper();}\n"),
+              1u);
+    Budget b;
+    auto [batch, metadata] = objcFixture("return arg0 + arg1;");
     auto &method = *batch.getArray("methods")->front().getAsObject();
     method["source"] = prefix + requiredString(method, "source");
-    EXPECT_EQ(nativeFunctionCount(requiredString(method, "source")), 1u);
-    const auto result = objcSources(batch, metadata, 8, budget);
+    const auto result = objcSources(batch, metadata, 8, b);
     EXPECT_EQ(number(result.coverage, "recovered_method_count"), 1);
-    EXPECT_NE(result.source.find(prefix), std::string::npos);
-    EXPECT_NE(result.source.find(body), std::string::npos);
+    EXPECT_NE(result.source.find(prefix), result.source.npos);
+    EXPECT_NE(result.source.find("return arg0 + arg1;"), result.source.npos);
   }
 }
-TEST(MobileIOSNative, ChangedOrConditionalRawCallPrefixesRemainUnsupported) {
-  const std::string raw = neverd::kAArch64PAuthCRawCallHeader;
-  const std::string floating = neverd::c_float::ContractionPolicy.str();
-  auto changed = raw;
-  changed.replace(changed.find("((fn), 0, 0)"), 12, "((fn), 1, 0)");
-  auto injected = raw;
-  injected.insert(injected.find("#endif"), "int hidden(){return 1;}\n");
-  for (const auto &prefix :
-       {changed, floating + changed, injected,
-        raw.substr(0, raw.find("#endif")), "#if 0\n" + raw + "#endif\n",
-        "#define __neverd_aarch64_raw_call(fn) 0\n" + raw,
-        "int earlier(){return 1;}\n" + raw}) {
+TEST(MobileIOSNative, ChangedOrNestedRawCallPreamblesRemainUnsupported) {
+  const std::string rawCall = neverd::kAArch64PAuthCRawCallHeader;
+  std::vector<std::string> rejected = {
+      rawCall.substr(0, rawCall.find("#endif")),
+      "#if 0\n" + rawCall + "#endif\n",
+      "#define __neverd_aarch64_raw_call(fn) (0)\n" + rawCall,
+      rawCall + "#undef __neverd_aarch64_raw_call\n",
+      "int earlier;\n" + rawCall};
+  auto changed = rawCall;
+  changed.replace(changed.find("(fn), 0, 0"), 10, "(fn), 1, 0");
+  rejected.push_back(changed);
+  changed = rawCall;
+  changed.insert(changed.find("#endif"), "int hidden(){return 1;}\n");
+  rejected.push_back(changed);
+  for (const auto &prefix : rejected) {
     SCOPED_TRACE(prefix);
-    Budget budget;
-    auto [batch, metadata] = objcFixture();
+    EXPECT_THROW(nativeFunctionCount(prefix + "int real(){return 1;}\n"),
+                 Error);
+    Budget b;
+    auto [batch, metadata] = objcFixture("return arg0 + arg1;");
     auto &method = *batch.getArray("methods")->front().getAsObject();
     method["source"] = prefix + requiredString(method, "source");
-    EXPECT_THROW(nativeFunctionCount(requiredString(method, "source")), Error);
-    EXPECT_EQ(number(objcSources(batch, metadata, 8, budget).coverage,
+    EXPECT_EQ(number(objcSources(batch, metadata, 8, b).coverage,
                      "recovered_method_count"),
               0);
   }
-  Budget budget;
-  auto [batch, metadata] = objcFixture("\n" + raw + "return arg0 + arg1;");
-  EXPECT_EQ(number(objcSources(batch, metadata, 8, budget).coverage,
+  Budget b;
+  auto [batch, metadata] = objcFixture("\n" + rawCall + "return arg0 + arg1;");
+  EXPECT_EQ(number(objcSources(batch, metadata, 8, b).coverage,
                    "recovered_method_count"),
             0);
 }

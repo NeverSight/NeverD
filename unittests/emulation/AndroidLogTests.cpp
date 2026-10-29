@@ -11,7 +11,6 @@
 #include "neverd/emulation/ProcessReport.h"
 #include "neverd/emulation/ProcessSession.h"
 
-#include <array>
 #include <tuple>
 
 namespace neverd::emulation {
@@ -333,7 +332,8 @@ TEST(AndroidLogOptions, EventWriteSchemaPreservesAbsenceBytesAndSignedResults) {
   ASSERT_TRUE(bool(Empty));
   ASSERT_TRUE(Empty->Android->EventLogWrites);
   EXPECT_TRUE(Empty->Android->EventLogWrites->empty());
-  for (int64_t Result : std::array<int64_t, 4>{INT32_MIN, -11, 0, INT32_MAX}) {
+  for (int64_t Result :
+       {int64_t(INT32_MIN), int64_t(-11), int64_t(0), int64_t(INT32_MAX)}) {
     auto Good = Parse("[{\"payload\":\"008000ff\",\"result\":" +
                       std::to_string(Result) + "}]");
     ASSERT_TRUE(bool(Good)) << llvm::toString(Good.takeError());

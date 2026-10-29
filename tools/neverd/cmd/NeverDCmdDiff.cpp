@@ -344,11 +344,16 @@ int runStructuralDiff() {
         (DiffEffectRecords.getNumOccurrences() ||
          DiffEffectWork.getNumOccurrences()))
       throw std::runtime_error("effect options require --impact-kind effects");
-    if (DiffRegions || NativeRegionsView) {
+    if (DiffRegions || DiffRegionCalls || NativeRegionsView) {
       if (auto *Regions = Options->getObject("regions"))
         (*Regions)["enabled"] = true;
       else
         (*Options)["regions"] = true;
+    }
+    if (DiffRegionCalls) {
+      if (!Options->getObject("regions"))
+        (*Options)["regions"] = llvm::json::Object{{"enabled", true}};
+      (*Options->getObject("regions"))["calls"] = true;
     }
     if (DiffFlowRegions || DiffFlowFragments || FlowRegionsView) {
       if (auto *Regions = Options->getObject("flow_regions"))

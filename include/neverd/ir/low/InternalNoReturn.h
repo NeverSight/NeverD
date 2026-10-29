@@ -50,8 +50,12 @@ public:
 
   /// True when the code range unwind or symbol metadata gives the function at
   /// \p Target holds no instruction that returns, decoded in order from its
-  /// start.  Without such a range, past limits::kMaxNoReturnScreenBytes, or
-  /// where a byte does not decode, the function may return.  Where the user
+  /// start.  Without such a range in an x64, ARM or ARM64 PE image, whose
+  /// functions but leaves have unwind entries, true when straight-line flow
+  /// from the start ends where nothing resumes it (entryFlowNeverResumes),
+  /// as a __fastfail stub's does.  Otherwise without such a range, past
+  /// limits::kMaxNoReturnScreenBytes, or where a byte does not decode, the
+  /// function may return.  Where the user
   /// states of some function that it never returns, also true when each
   /// return in that range follows a call that cannot come back
   /// (returnsFollowStatedCalls): the function still holds its return,
@@ -102,6 +106,11 @@ private:
   /// Whether the screened range of the function at \p Target holds no
   /// instruction that returns.  Memoized.
   bool nothingReturns(va_t Target) const;
+  /// Whether straight-line flow from \p Target, within
+  /// limits::kMaxNoReturnScreenBytes, reaches an architectural trap that
+  /// never resumes, or a call stated or known by name never to return,
+  /// before any instruction branches or returns.
+  bool entryFlowNeverResumes(va_t Target) const;
   /// The instructions of the screened range of the function at \p Target;
   /// empty where a byte does not decode.  Memoized.
   const std::vector<ScreenedInstruction> &

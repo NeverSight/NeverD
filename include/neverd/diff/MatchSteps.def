@@ -5,9 +5,10 @@
 //===----------------------------------------------------------------------===//
 //
 // NEVERD_DIFF_FUNCTION_STEP(Id, Name, Confidence, Description): one way the
-// comparison pairs two functions, in the order the global passes try them.
-// Name is the stable spelling saved comparisons and the C API use; Confidence
-// is the step's prior, a heuristic weight rather than a probability.
+// comparison pairs two functions or retains candidates. Global matching steps
+// appear in the order the passes try them; InlinedTailCall only retains
+// ambiguity. Name is the stable spelling saved comparisons and the C API use;
+// Confidence is the step's prior, a heuristic weight rather than a probability.
 //
 // NEVERD_DIFF_BLOCK_STEP(Id, Name, Confidence, Description): one way two
 // basic blocks of a matched pair were paired, in the order they are tried.
@@ -62,6 +63,10 @@ NEVERD_DIFF_FUNCTION_STEP(Neighborhood, "neighborhood", 0.75,
                           "functions on both sides")
 NEVERD_DIFF_FUNCTION_STEP(Similarity, "similarity", 0.60,
                           "The most similar remaining body by a clear margin")
+NEVERD_DIFF_FUNCTION_STEP(
+    InlinedTailCall, "inlined_tail_call", 0.60,
+    "A similar body also contains an unmatched tail "
+    "caller's prelude; whole-function identity is ambiguous")
 
 NEVERD_DIFF_BLOCK_STEP(BlockEntry, "entry", 0.90, "Both function entries")
 NEVERD_DIFF_BLOCK_STEP(BlockBytes, "bytes", 1.00, "Byte-identical blocks")

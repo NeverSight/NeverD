@@ -14,22 +14,47 @@
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/object/PELayout.h"
 
+#include <algorithm>
 #include <cstring>
 
 namespace neverd::coff_loader {
 namespace {
 constexpr uint64_t PageSize = 4096;
+/// A PE image's preferred base is a multiple of 64 KiB.
+constexpr uint64_t ImageBaseAlignment = 65536;
 constexpr char HeaderName[] = "<PE headers>";
+
+PEHeaderPtrs locateHeaders(llvm::ArrayRef<uint8_t> Bytes) {
+  // locatePEHeaders is read-only; its mutable pointer is also used by writers.
+  return Bytes.size() >= 2 && Bytes[0] == 'M' && Bytes[1] == 'Z'
+             ? locatePEHeaders(const_cast<uint8_t *>(Bytes.data()),
+                               Bytes.size())
+             : PEHeaderPtrs{};
+}
 } // namespace
+
+uint32_t getPEHeaderBytes(llvm::ArrayRef<uint8_t> Bytes) {
+  const auto PE = locateHeaders(Bytes);
+  if (!PE.valid() || !PE.SectionTable)
+    return 0;
+  const uint64_t Base = getPEImageBase(PE);
+  uint64_t Size =
+      std::min<uint64_t>(getPESizeOfHeaders(PE), getPESizeOfImage(PE));
+  if (!Base || Base % ImageBaseAlignment || Size > InvalidVA - Base ||
+      (!PE.Is64 && Base + Size > (uint64_t{1} << 32)))
+    return 0;
+  // A section's mapping owns every address it covers.
+  forEachPESection(PE, [&](const PESectionFields &Section, uint16_t) {
+    if (getPESectionContentSize(Section.VirtualSize, Section.SizeOfRawData))
+      Size = std::min<uint64_t>(Size, Section.VirtualAddress);
+  });
+  return static_cast<uint32_t>(Size);
+}
 
 llvm::Expected<PEHeaderMapping>
 getPEHeaderMapping(llvm::ArrayRef<uint8_t> Bytes,
                    PEHeaderInitializationWork *Work) {
-  // locatePEHeaders is read-only; its mutable pointer is also used by writers.
-  const auto PE =
-      Bytes.size() >= 2 && Bytes[0] == 'M' && Bytes[1] == 'Z'
-          ? locatePEHeaders(const_cast<uint8_t *>(Bytes.data()), Bytes.size())
-          : PEHeaderPtrs{};
+  const auto PE = locateHeaders(Bytes);
   if (!PE.valid() || !PE.SectionTable)
     return llvm::createStringError("missing complete PE header inventory");
   const uint64_t Base = getPEImageBase(PE);
@@ -47,7 +72,8 @@ getPEHeaderMapping(llvm::ArrayRef<uint8_t> Bytes,
   if (!llvm::isPowerOf2_64(FileAlignment) || FileAlignment < 512 ||
       FileAlignment > 65536 || !llvm::isPowerOf2_64(SectionAlignment) ||
       SectionAlignment < PageSize || SectionAlignment < FileAlignment ||
-      Base % 65536 || Size % FileAlignment || ImageSize % SectionAlignment)
+      Base % ImageBaseAlignment || Size % FileAlignment ||
+      ImageSize % SectionAlignment)
     return llvm::createStringError(
         "PE headers require an aligned, separate page mapping");
 

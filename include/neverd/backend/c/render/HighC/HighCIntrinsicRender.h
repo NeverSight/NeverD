@@ -23,6 +23,7 @@
 #include "neverd/Common.h"
 #include "neverd/ir/high/HighIR.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
+#include "neverd/ir/med/X86/X87ControlWord.h"
 
 #include "llvm/ADT/ArrayRef.h"
 
@@ -83,8 +84,6 @@ enum class X87CHelper : uint8_t {
 const char *x87CHelperName(X87CHelper Helper);
 /// The helper that runs the x87 value intrinsic \p Id, if it is one.
 std::optional<X87CHelper> x87ValueHelper(Intrinsic Id);
-/// Whether \p V is the x87 control word of an \p TheArch function.
-bool isX87ControlWord(Arch TheArch, const MedVar &V);
 /// Write what the x87 values of a unit need: when \p UsesExtended, the
 /// assertions that the compiler's `long double` is the x87 extended format
 /// with the size of the `unsigned _BitInt(80)` its bits travel in, then each

@@ -1,5 +1,6 @@
 #include "../../../lib/loader/MachO/DarwinSourceDeclarations.h"
 #include "../../../lib/sdk/capi/ObjCSourceBindings.h"
+#include "MappedSectionFlags.h"
 #include "gtest/gtest.h"
 
 #include "neverd/backend/c/HighC/HighCEmitter.h"
@@ -4837,7 +4838,8 @@ TEST(ObjCCallHints, SwiftWillThrowRevalidatesErrorABIAndImport) {
       if (Mutation == 5)
         Bad.ConflictingImportStorageSlots.insert(0x2180);
       if (Mutation == 6)
-        Bad.Sections[1].Flags = Bad.Sections[1].Flags | SegmentFlags::Writable;
+        setMappedSectionFlags(Bad, Bad.Sections[1],
+                              Bad.Sections[1].Flags | SegmentFlags::Writable);
       if (Mutation == 7)
         Bad.Sections[1].Type = llvm::MachO::S_THREAD_LOCAL_VARIABLES;
       if (Mutation == 8)
@@ -5038,7 +5040,7 @@ TEST(ObjCCallHints, ImmutableBytesRejectAliasingWritableAndRelocatedStorage) {
     Data.Flags = Data.Flags | SegmentFlags::Executable;
     ASSERT_TRUE(readImmutableImageBytes(Image, 0x2200, 5));
     if (Mutation == 0)
-      Data.Flags = Data.Flags | SegmentFlags::Writable;
+      setMappedSectionFlags(Image, Data, Data.Flags | SegmentFlags::Writable);
     if (Mutation == 1)
       Image.Segments[0].Flags =
           Image.Segments[0].Flags | SegmentFlags::Writable;
@@ -9730,8 +9732,8 @@ TEST(ObjCCallHints, SDKRecordDataRechecksCurrentImportProviderAndStorage) {
       else if (Mutation == 9)
         Image.ImportPtrSlots[0x2180] = "_different";
       else if (Mutation == 10)
-        Image.Sections[1].Flags =
-            Image.Sections[1].Flags | SegmentFlags::Writable;
+        setMappedSectionFlags(Image, Image.Sections[1],
+                              Image.Sections[1].Flags | SegmentFlags::Writable);
       else if (Mutation == 11)
         Image.Segments[1].Flags =
             Image.Segments[1].Flags | SegmentFlags::Writable;

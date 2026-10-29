@@ -167,16 +167,16 @@ void JumpDialog::updatePreview() {
   }
   // The expression resolves as Enter resolves it; text that names nothing
   // yet shows nothing rather than an older place.
-  resolveExpression(session_, this, text, here_,
-                    [this, serial](std::optional<Address> value,
-                                   const QString &) {
-                      if (serial != previewSerial_)
-                        return;
-                      if (value)
-                        preview_->jumpTo(*value);
-                      else
-                        preview_->clear();
-                    });
+  resolveExpression(
+      session_, this, text, here_,
+      [this, serial](std::optional<Address> value, const QString &) {
+        if (serial != previewSerial_)
+          return;
+        if (value)
+          preview_->jumpTo(*value);
+        else
+          preview_->clear();
+      });
 }
 
 bool JumpDialog::eventFilter(QObject *object, QEvent *event) {

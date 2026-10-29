@@ -34,6 +34,13 @@ QToolButton { background: transparent; color: ${WindowText}; border: 1px solid t
 QToolButton:hover { background: ${ToolBarHover}; }
 QToolButton:pressed, QToolButton:checked { background: ${Highlight}; color: ${HighlightedText}; }
 QToolButton::menu-indicator { image: none; width: 0; }
+/* A button with a list beside its command, as Back lists its stops, opens the
+   list from a narrow chevron, flat as the button; a disabled one shows none. */
+QToolButton[popupMode="1"] { padding-right: 10px; }
+QToolButton::menu-button { background: transparent; border: none; border-radius: 3px; width: 10px; }
+QToolButton::menu-button:hover { background: ${ToolBarHover}; }
+QToolButton::menu-arrow { image: url(:/neverd/icons/chevron_down-${Mode}.svg); width: 8px; height: 8px; }
+QToolButton::menu-arrow:disabled { image: none; }
 /* Arrow buttons point with the chevrons the other controls draw. */
 QToolButton::up-arrow { image: url(:/neverd/icons/chevron_up-${Mode}.svg); }
 QToolButton::down-arrow { image: url(:/neverd/icons/chevron_down-${Mode}.svg); }

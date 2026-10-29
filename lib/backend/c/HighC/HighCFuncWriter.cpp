@@ -697,14 +697,26 @@ void HighCWriter::emitLocalDecls(const HighFunc &Func,
   });
   for (const std::string &Name : Retyped)
     TransportedPointers.erase(Name);
-  std::map<std::string, std::string> ExplicitDeclarations;
+  std::map<std::string, DeferredDecl> ExplicitDeclarations;
+  auto EmitDeclaration = [&](const std::string &Name, TypeRef Type,
+                             const auto &Explicit) {
+    const DeferredDecl Decl = Explicit == ExplicitDeclarations.end()
+                                  ? DeferredDecl{cDisplayType(Type), {}}
+                                  : Explicit->second;
+    // Retain the actual declaration's type even when an operation requires
+    // a different carrier than the local's inferred type.
+    if (Decl.Type)
+      DeclaredCTypes[Name] = Decl.Type;
+    OS << (Decl.Text.empty() ? declarationToC(Decl.Type, Name) : Decl.Text)
+       << ";\n";
+  };
   const auto VectorNames =
       aarch64SVEVectorLocalNames(Func, Opts.TheArch, VarFn);
   std::set<std::string> CanonicalVectorNames;
   auto DeclareVector = [&](const std::string &Name) {
     if (!Name.empty()) {
       CanonicalVectorNames.insert(Name);
-      ExplicitDeclarations[Name] =
+      ExplicitDeclarations[Name].Text =
           llvm::formatv(kVectorDeclaration, Name).str();
     }
   };
@@ -730,10 +742,10 @@ void HighCWriter::emitLocalDecls(const HighFunc &Func,
               (S.Val->Op == NdOp::ATOMIC_ADD ||
                S.Val->Op == NdOp::ATOMIC_CMPXCHG) &&
               S.Val->Type) {
-            ExplicitDeclarations[Name] = declarationToC(S.Val->Type, Name);
+            ExplicitDeclarations[Name] = {S.Val->Type, {}};
           } else if (S.Val->Kind == ExprKind::Call &&
                      S.Val->IntrinsicId == Intrinsic::A64_SvePtrue) {
-            ExplicitDeclarations[Name] = "svbool_t " + Name;
+            ExplicitDeclarations[Name].Text = "svbool_t " + Name;
           }
         }
         const HighExpr *Call =
@@ -891,10 +903,9 @@ void HighCWriter::emitLocalDecls(const HighFunc &Func,
     });
     for (const auto &[Name, Ty] : AllVars)
       if (!Name.empty() && !UsedVars.count(Name))
-        DeferredDecls.emplace(
-            Name, DeferredDecl{Ty, ExplicitDeclarations.count(Name)
-                                       ? ExplicitDeclarations.at(Name)
-                                       : std::string()});
+        DeferredDecls.emplace(Name, ExplicitDeclarations.count(Name)
+                                        ? ExplicitDeclarations.at(Name)
+                                        : DeferredDecl{Ty, {}});
   }
 
   std::set<std::string> DeclaredNames(ParamNames);
@@ -933,12 +944,8 @@ void HighCWriter::emitLocalDecls(const HighFunc &Func,
         Stated && !CanonicalVectorNames.count(Name)) {
       Ty = Stated;
       ExplicitTy = ExplicitDeclarations.end();
-      DeclaredCTypes[Name] = Stated;
     }
-    OS << (ExplicitTy == ExplicitDeclarations.end()
-               ? declarationToC(cDisplayType(Ty), Name)
-               : ExplicitTy->second)
-       << ";\n";
+    EmitDeclaration(Name, Ty, ExplicitTy);
   }
 
   for (auto &[Name, Ty] : UsedVars) {
@@ -996,10 +1003,9 @@ void HighCWriter::emitLocalDecls(const HighFunc &Func,
     }
     if (CopyForward.count(Name) && !VisibleAssigned.count(Name)) {
       auto ExplicitTy = ExplicitDeclarations.find(Name);
-      DeferredDecls.emplace(
-          Name, DeferredDecl{Ty, ExplicitTy == ExplicitDeclarations.end()
-                                     ? std::string()
-                                     : ExplicitTy->second});
+      DeferredDecls.emplace(Name, ExplicitTy == ExplicitDeclarations.end()
+                                      ? DeferredDecl{Ty, {}}
+                                      : ExplicitTy->second);
       continue;
     }
     // Frame-pointer temps and other HighIR names that never appear as a
@@ -1011,12 +1017,7 @@ void HighCWriter::emitLocalDecls(const HighFunc &Func,
     DeclaredNames.insert(Name);
     emitIndent(1);
     auto ExplicitTy = ExplicitDeclarations.find(Name);
-    if (ExplicitTy == ExplicitDeclarations.end())
-      DeclaredCTypes.emplace(Name, cDisplayType(Ty));
-    OS << (ExplicitTy == ExplicitDeclarations.end()
-               ? declarationToC(cDisplayType(Ty), Name)
-               : ExplicitTy->second)
-       << ";\n";
+    EmitDeclaration(Name, Ty, ExplicitTy);
   }
   DeclaredCNames.insert(DeclaredNames.begin(), DeclaredNames.end());
   if (DeclaredNames.size() > Parameters)

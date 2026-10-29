@@ -6,6 +6,7 @@ add_neverd_component_library(NeverDPipeline
   StateSourceBank.cpp
   evidence/ConstantStores.cpp
   Pipeline.cpp
+  X64ContinuationExport.cpp
   NativeSourceHints.cpp
   NativeSourcePreservation.cpp
   PipelineCallAbi.cpp
@@ -13,6 +14,7 @@ add_neverd_component_library(NeverDPipeline
   PipelineFormattedCalls.cpp
   PipelineFuncDetect.cpp
   PipelineHighIR.cpp
+  PipelineSourcePointerParameters.cpp
   PipelineLLVM.cpp
   PipelineLibraryRecognition.cpp
   PipelineLowIR.cpp

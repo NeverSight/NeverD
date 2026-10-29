@@ -39,10 +39,12 @@
 #include "neverd/ir/high/HighSourceFlow.h"
 #include "neverd/ir/high/HighSwiftErrorProjection.h"
 #include "neverd/ir/high/ItaniumHandlers.h"
+#include "neverd/ir/high/SEHFinallyBodies.h"
 #include "neverd/ir/high/X86/X86FPStateShape.h"
 #include "neverd/ir/intrinsics/AArch64/AArch64ExceptionReturn.h"
 #include "neverd/ir/intrinsics/X86/X86CompressExpand.h"
 #include "neverd/ir/intrinsics/X86/X86FourSource.h"
+#include "neverd/ir/intrinsics/X86/X86RepState.h"
 #include "neverd/ir/intrinsics/X86/X86Unsupported.h"
 #include "neverd/loader/AArch64MemoryImage.h"
 
@@ -2216,6 +2218,11 @@ void HighCWriter::writeForwardDecls(const std::vector<HighFunc> &Funcs) {
     // would conflict with the compiler's own.
     if (llvm::StringRef(Name).starts_with("__builtin_"))
       continue;
+    // `AbnormalTermination()` in a projected `__finally` is an <excpt.h>
+    // intrinsic, included wherever an SEH region is printed; declaring it
+    // would conflict with that header.
+    if (Name == "AbnormalTermination")
+      continue;
 
     std::string CleanName = Name;
     if (!CleanName.empty() && CleanName[0] == '_')
@@ -2603,6 +2610,9 @@ void HighCWriter::writeForwardDecls(const std::vector<HighFunc> &Funcs) {
 void HighCWriter::collectImageObjects(const std::vector<HighFunc> &Funcs) {
   ImageObjects.clear();
   ImageBackings.clear();
+  ReachesImageBase = false;
+  ReachedObjectExterns.clear();
+  ImageBaseIdentifier.clear();
   OriginalMemoryBases.clear();
   OriginalMemoryObjects.clear();
   DataSymbolBindings = Opts.Image ? collectDataSymbolBindings(*Opts.Image)
@@ -3382,6 +3392,13 @@ void HighCWriter::collectImageObjects(const std::vector<HighFunc> &Funcs) {
     if (const HighExpr *Inner = unwrapIntegerView(Address);
         Inner && Inner->Kind == ExprKind::Const)
       AccessAddresses.insert(Inner);
+    // An access the image's headers hold prints through `__ImageBase`, and
+    // one in another module's storage through its symbol's declaration.
+    if (Address)
+      if (const auto VA = constAddress(*Address)) {
+        noteImageBaseAddress(*VA);
+        noteObjectExternAddress(*VA);
+      }
   };
   // An atomic access needs its address as aligned in C as in the image.
   auto NoteAtomic = [&](const HighExpr &Address, const TypeRef &Access) {
@@ -3456,6 +3473,11 @@ void HighCWriter::collectImageObjects(const std::vector<HighFunc> &Funcs) {
     }
     if (E.Kind == ExprKind::Const && isAddressProvenance(E.ConstProvenance))
       noteFunctionAddress(functionAddressKey(E), Funcs);
+    if (isImageBaseConstant(E))
+      ReachesImageBase = true;
+    if (E.Kind == ExprKind::Const &&
+        isExactAddressProvenance(E.ConstProvenance))
+      noteObjectExternAddress(E.ConstVal);
     // An address anchored before its owner's section reaches the section's
     // first object, which the code indexes from there; what lies at the
     // address itself is no object the code uses.
@@ -3604,6 +3626,52 @@ void HighCWriter::collectImageObjects(const std::vector<HighFunc> &Funcs) {
         else if (const HighExpr *Base = indexedImageBase(*E.Operands[0]))
           NoteWhole(Base->ConstVal, NdType::makeInt(Bytes, false), false);
       }
+    // A bounded repeated copy/fill reaches every element, including bytes
+    // beyond a guessed scalar or an embedded string's first terminator.
+    // Record its memory operands before visiting their address constants so
+    // the ordinary overlapping-object owner supplies one complete backing.
+    if (E.Kind == ExprKind::Call &&
+        (E.IntrinsicId == Intrinsic::X86RepMovsState ||
+         E.IntrinsicId == Intrinsic::X86RepStosState) &&
+        E.Operands.size() == 5 && E.Operands[3] && E.Operands[4] &&
+        E.Operands[3]->Kind == ExprKind::Const &&
+        E.Operands[4]->Kind == ExprKind::Const &&
+        E.Operands[4]->ConstVal <= UINT32_MAX) {
+      const bool Copy = E.IntrinsicId == Intrinsic::X86RepMovsState;
+      const auto &Count = E.Operands[Copy ? 2 : 1];
+      const auto Control =
+          x86RepControl(E.IntrinsicId, Opts.TheArch,
+                        static_cast<uint32_t>(E.Operands[4]->ConstVal));
+      if (Control && !Control->Segment &&
+          Control->AddressBytes == pointerBytes(Opts.TheArch) && Count &&
+          Count->Kind == ExprKind::Const && Count->ConstVal) {
+        const bool Backward =
+            (E.Operands[3]->ConstVal >> X86RepDirectionShift) & 1;
+        for (unsigned I = 0; I < (Copy ? 2u : 1u); ++I) {
+          if (!E.Operands[I])
+            continue;
+          const auto Address = constAddress(*E.Operands[I]);
+          if (!Address || !isImageDataAddress(*Address))
+            continue;
+          const auto *Segment = Opts.Image->getSegmentFor(*Address);
+          const auto Span =
+              x86RepAccessSpan(*Address, Count->ConstVal, *Control, Backward,
+                               Segment->VA, Segment->Size);
+          if (!Span)
+            throw std::invalid_argument(
+                "repeated image access crosses its mapped storage");
+          const bool Written = !Copy || I == 1;
+          const auto ElementType =
+              NdType::makeInt(Control->ElementBytes, false);
+          NoteAccessAddress(E.Operands[I].get());
+          noteImageObject(Span->Begin, ElementType, Written, true);
+          noteImageObject(*Address, ElementType, Written, true);
+          ImageObject &Object = ImageObjects[Span->Begin];
+          Object.IndexedBytes = std::max(Object.IndexedBytes, Span->Bytes);
+          Object.AddressTaken = true;
+        }
+      }
+    }
     // A read-modify-write reads and writes the object it addresses.
     if (E.Kind == ExprKind::BinOp &&
         (E.Op == NdOp::ATOMIC_ADD || E.Op == NdOp::ATOMIC_XCHG ||
@@ -3863,9 +3931,14 @@ void HighCWriter::collectImageObjects(const std::vector<HighFunc> &Funcs) {
           continue;
         const va_t Target = PointerBytes == 8 ? readLE<uint64_t>(Bytes)
                                               : readLE<uint32_t>(Bytes);
+        // A slot holding a header address holds `__ImageBase`'s.
+        const bool HeaderTarget = !Opts.Image->CodePtrRelocSlots.count(*Slot) &&
+                                  Opts.Image->imageBaseOffset(Target);
         if (Opts.Image->CodePtrRelocSlots.count(*Slot)) {
           noteFunctionAddress(Target, Funcs);
           noteFunctionAddress(Target & ~va_t{1}, Funcs);
+        } else if (HeaderTarget) {
+          ReachesImageBase = true;
         } else if (sizedObjectAt(Target)) {
           NoteWhole(Target, nullptr, false);
         }
@@ -3874,7 +3947,8 @@ void HighCWriter::collectImageObjects(const std::vector<HighFunc> &Funcs) {
             Opts.Image->CodePtrRelocSlots.count(*Slot)
                 ? FunctionAddressNames.count(Target) ||
                       FunctionAddressNames.count(Target & ~va_t{1})
-                : sizedObjectAt(Target) || ImageObjects.count(Target) ||
+                : HeaderTarget || sizedObjectAt(Target) ||
+                      ImageObjects.count(Target) ||
                       stringLiteral(Target).has_value();
       }
     }
@@ -4047,6 +4121,8 @@ void HighCWriter::collectImageObjects(const std::vector<HighFunc> &Funcs) {
       NeedsBacking |= Width && (Width & (Width - 1)) != 0;
   }
   FinishGroup();
+  addImageBaseBacking();
+  addObjectExternBackings();
 }
 
 void HighCWriter::noteFunctionAddress(va_t Addr,
@@ -4093,6 +4169,8 @@ bool HighCWriter::imageFunctionOwnsLinkIdentifier(llvm::StringRef Name) {
 }
 
 void HighCWriter::writeImageObjects() {
+  writeImageBaseDeclaration();
+  writeObjectExternDeclarations();
   for (const auto &[Base, Object] : OriginalMemoryObjects) {
     (void)Base;
     const auto &[Storage, Name] = Object;
@@ -4130,7 +4208,7 @@ void HighCWriter::writeImageObjects() {
   if (ImageObjects.empty())
     return;
   for (const ImageBacking &Backing : ImageBackings) {
-    if (!Backing.Words.empty() || Backing.Header)
+    if (!Backing.Words.empty() || Backing.Header || Backing.External)
       continue;
     if (Opts.EmitComments)
       OS << "/* neverd.image: 0x" << llvm::utohexstr(Backing.Base) << " .. 0x"
@@ -4982,28 +5060,60 @@ bool HighCEmitter::emit(const std::vector<HighFunc> &Funcs,
           "raw environment requirement has no C runtime contract");
     Expr->forEachChildExpr(CheckRequirement);
   };
-  for (const auto &Func : Funcs) {
-    if (Func.ReturnProtection && Opts.TheArch != Arch::AArch64)
-      throw std::invalid_argument(
-          "AArch64 return protection requires AArch64 source emission");
-    Seen.clear();
-    if (Opts.TheArch == Arch::AArch64)
-      MemoryBases.emplace(Func);
-    walkStmts(Func.Body, [&](const HighStmt &Stmt) {
-      RequirementStatement = &Stmt;
+  // A unit that names the definitions it leaves out leaves out a function
+  // whose requirements fail, as the pipeline leaves out one it refused: no
+  // rendering reads it, and its callers call it as one outside the unit.
+  // Recorded positions, a source map and source names follow one pass's
+  // text, and structured exception syntax writes funclets inside their
+  // parents, so those units fail at the first failure, as they do for a
+  // function without a definition of its own or one whose body fills
+  // another's `__finally`.
+  const bool LeavesOut = Opts.RefusedDefinitions && !Opts.SourceMap &&
+                         !Opts.SourceNames && !Opts.StructuredExceptionSyntax;
+  std::set<va_t> FinallyBodies;
+  if (LeavesOut)
+    for (const HighFunc &Func : Funcs)
+      for (const auto &Entry : Func.SEHTerminationFrameBytes)
+        FinallyBodies.insert(Entry.first);
+  std::vector<CEmitterOptions::RefusedDefinition> Unmet;
+  std::vector<bool> LeftOut(Funcs.size(), false);
+  const auto Check = [&](size_t I, const auto &Requirements) {
+    try {
+      Requirements(Funcs[I]);
+    } catch (const std::exception &Error) {
+      if (!LeavesOut || Funcs[I].Name.empty() ||
+          FinallyBodies.count(Funcs[I].Entry))
+        throw;
+      Unmet.push_back({Funcs[I].Entry, Funcs[I].Name, Error.what()});
+      LeftOut[I] = true;
+    }
+  };
+  for (size_t I = 0; I < Funcs.size(); ++I)
+    Check(I, [&](const HighFunc &Func) {
+      if (Func.ReturnProtection && Opts.TheArch != Arch::AArch64)
+        throw std::invalid_argument(
+            "AArch64 return protection requires AArch64 source emission");
       Seen.clear();
-      forEachExpr(Stmt, CheckRequirement);
-      for (const auto &Clause : Stmt.EHClauses)
-        CheckRequirement(Clause.FilterValue);
+      if (Opts.TheArch == Arch::AArch64)
+        MemoryBases.emplace(Func);
+      walkStmts(Func.Body, [&](const HighStmt &Stmt) {
+        RequirementStatement = &Stmt;
+        Seen.clear();
+        forEachExpr(Stmt, CheckRequirement);
+        for (const auto &Clause : Stmt.EHClauses)
+          CheckRequirement(Clause.FilterValue);
+      });
     });
-  }
-  for (const auto &Func : Funcs)
-    if (Func.SourceTypeHint &&
-        (hasIndirectSourceParameters(*Func.SourceTypeHint) ||
-         (hasSwiftErrorResult(*Func.SourceTypeHint) &&
-          !isSwiftErrorEntryProjected(Func, Opts.TheArch))))
-      throw std::invalid_argument("Indirect record or error-register source "
-                                  "entries need a projection proof");
+  for (size_t I = 0; I < Funcs.size(); ++I)
+    if (!LeftOut[I])
+      Check(I, [&](const HighFunc &Func) {
+        if (Func.SourceTypeHint &&
+            (hasIndirectSourceParameters(*Func.SourceTypeHint) ||
+             (hasSwiftErrorResult(*Func.SourceTypeHint) &&
+              !isSwiftErrorEntryProjected(Func, Opts.TheArch))))
+          throw std::invalid_argument("Indirect record or error-register "
+                                      "source entries need a projection proof");
+      });
   // The records the code reads members of through others, as
   // `l->head->child` reads a node, which only a rendering finds: each
   // rendering asks the local types for those an earlier one found.
@@ -5011,10 +5121,18 @@ bool HighCEmitter::emit(const std::vector<HighFunc> &Funcs,
   std::set<std::string> Asked;
   auto Render = [&](llvm::raw_ostream &OS, CSourceRecorder *Recorder,
                     std::vector<TypeRef> *Wanted = nullptr) {
-    // The definitions the unit leaves out are those of the text it keeps.
+    // The definitions the unit leaves out are those whose requirements
+    // failed, then those of the text it keeps.
     if (Opts.RefusedDefinitions)
-      Opts.RefusedDefinitions->clear();
-    std::vector<HighFunc> Working = Funcs;
+      *Opts.RefusedDefinitions = Unmet;
+    std::vector<HighFunc> Working;
+    Working.reserve(Funcs.size());
+    for (size_t I = 0; I < Funcs.size(); ++I)
+      if (!LeftOut[I])
+        Working.push_back(Funcs[I]);
+    // MSVC SEH `__try`/`__finally` is plain C, so a termination handler's body
+    // fills its `__finally` in the plain-C view as well as the C++ one.
+    attachSEHFinallyBodies(Working, Opts.TheArch);
     if (Opts.StructuredExceptionSyntax) {
       attachCxxFuncletBodies(Working);
       for (HighFunc &Func : Working) {

@@ -268,6 +268,64 @@ int main(void) {
         << Source;
 }
 
+// An atomic store keeps its order in C, as an atomic load does: through a
+// pointer, and into a local whose address the function publishes.
+TEST(LLVMCValues, AtomicStoresKeepTheirOrder) {
+  llvm::LLVMContext Context;
+  llvm::Module Module("atomic_stores", Context);
+  Module.setDataLayout("e-p:64:64");
+  llvm::IRBuilder<> B(Context);
+  auto *F = llvm::Function::Create(
+      llvm::FunctionType::get(
+          B.getInt32Ty(), {B.getPtrTy(), B.getPtrTy(), B.getInt32Ty()}, false),
+      llvm::GlobalValue::ExternalLinkage, "publish", Module);
+  B.SetInsertPoint(llvm::BasicBlock::Create(Context, "entry", F));
+  auto Store = [&](llvm::Value *Value, llvm::Value *Address,
+                   llvm::AtomicOrdering Ordering) {
+    auto *Instruction = B.CreateStore(Value, Address);
+    Instruction->setAtomic(Ordering);
+    Instruction->setAlignment(llvm::Align(4));
+  };
+  llvm::Value *Words = F->getArg(0);
+  llvm::Value *Value = F->getArg(2);
+  Store(Value, Words, llvm::AtomicOrdering::Release);
+  Store(B.CreateAdd(Value, B.getInt32(1)),
+        B.CreateConstInBoundsGEP1_64(B.getInt32Ty(), Words, 1),
+        llvm::AtomicOrdering::SequentiallyConsistent);
+  Store(B.CreateAdd(Value, B.getInt32(2)),
+        B.CreateConstInBoundsGEP1_64(B.getInt32Ty(), Words, 2),
+        llvm::AtomicOrdering::Monotonic);
+  auto *Local = B.CreateAlloca(B.getInt32Ty(), nullptr, "local");
+  B.CreateStore(Local, F->getArg(1));
+  Store(B.CreateAdd(Value, B.getInt32(3)), Local,
+        llvm::AtomicOrdering::Release);
+  auto *Load = B.CreateLoad(B.getInt32Ty(), Local);
+  Load->setAtomic(llvm::AtomicOrdering::Acquire);
+  Load->setAlignment(llvm::Align(4));
+  B.CreateRet(Load);
+  ASSERT_FALSE(llvm::verifyModule(Module, &llvm::errs()));
+  neverd::CEmitterOptions Options;
+  Options.TheArch = neverd::Arch::X64;
+  std::string Source;
+  llvm::raw_string_ostream Stream(Source);
+  ASSERT_TRUE(neverd::LLVMCEmitter().emit(Module, Stream, Options));
+  EXPECT_EQ(llvm::StringRef(Source).count("__atomic_store("), 4u) << Source;
+  EXPECT_EQ(llvm::StringRef(Source).count("__ATOMIC_RELEASE"), 2u) << Source;
+  EXPECT_EQ(llvm::StringRef(Source).count("__ATOMIC_SEQ_CST"), 1u) << Source;
+  EXPECT_EQ(llvm::StringRef(Source).count("__ATOMIC_RELAXED"), 1u) << Source;
+  Source += R"(
+int main(void) {
+  uint32_t words[3] = {0, 0, 0};
+  void *published = 0;
+  if (publish(words, &published, 40) != 43)
+    return 1;
+  return words[0] != 40 || words[1] != 41 || words[2] != 42;
+}
+)";
+  for (llvm::StringRef Level : {"-O0", "-O2"})
+    compileAndRun(Source, Level, {}, true);
+}
+
 TEST(LLVMCValues, PrefetchRejectsChangedAssemblyContracts) {
   for (unsigned Mutation = 0; Mutation != 6; ++Mutation) {
     SCOPED_TRACE(Mutation);
@@ -1399,6 +1457,106 @@ static int check_fault(void (*operation)(uint64_t,uint64_t,uint64_t,void*),
 #endif
 }
 
+TEST(LLVMCValues, NativeAssemblyKeepsOperandSnapshotsAcrossBranches) {
+#if !defined(__linux__) || !defined(__x86_64__)
+  GTEST_SKIP() << "requires native Linux i386/x64 execution";
+#else
+  for (bool NativeI386 : {false, true}) {
+    llvm::LLVMContext Context;
+    llvm::Module Module("native-operand-snapshot", Context);
+    Module.setTargetTriple(
+        llvm::Triple(NativeI386 ? "i386-linux-gnu" : "x86_64-linux-gnu"));
+    Module.setDataLayout(NativeI386 ? "e-p:32:32" : "e-p:64:64-i128:128");
+    llvm::IRBuilder<> Builder(Context);
+    std::string Prototypes, Body;
+    for (unsigned Bits : {32U, 64U}) {
+      if (NativeI386 && Bits == 64)
+        continue;
+      auto *Word = Builder.getIntNTy(Bits);
+      auto *Wide = Builder.getIntNTy(Bits * 2);
+      const uint64_t Mask = Bits == 32 ? UINT32_MAX : UINT64_MAX;
+      for (bool Signed : {false, true}) {
+        const std::string Name =
+            "snapshot_" + std::to_string(Bits) + "_" + std::to_string(Signed);
+        auto *Function = llvm::Function::Create(
+            llvm::FunctionType::get(Builder.getInt64Ty(),
+                                    {Builder.getPtrTy(), Builder.getInt1Ty()},
+                                    false),
+            llvm::GlobalValue::ExternalLinkage, Name, Module);
+        auto *Entry = llvm::BasicBlock::Create(Context, "entry", Function);
+        auto *Left = llvm::BasicBlock::Create(Context, "left", Function);
+        auto *Right = llvm::BasicBlock::Create(Context, "right", Function);
+        auto *Join = llvm::BasicBlock::Create(Context, "join", Function);
+        Builder.SetInsertPoint(Entry);
+        auto *Slot = Builder.CreateAlloca(Wide);
+        auto *Source =
+            Builder.CreateLoad(Builder.getInt64Ty(), Function->getArg(0));
+        auto *Divisor = Builder.CreateZExtOrTrunc(Source, Wide);
+        Builder.CreateStore(Divisor, Slot);
+        // The source is overwritten after the snapshot. Re-reading guest
+        // memory at the asm call would divide by zero instead of by Source.
+        Builder.CreateStore(Builder.getInt64(0), Function->getArg(0));
+        Builder.CreateCondBr(Function->getArg(1), Left, Right);
+        for (auto *Block : {Left, Right}) {
+          Builder.SetInsertPoint(Block);
+          auto *Marker = Builder.CreateConstGEP1_64(Builder.getInt64Ty(),
+                                                    Function->getArg(0), 1);
+          Builder
+              .CreateStore(Builder.getInt64(Block == Left ? 71 : 73), Marker)
+              ->setVolatile(true);
+          Builder.CreateBr(Join);
+        }
+        Builder.SetInsertPoint(Join);
+        auto *Pair = llvm::StructType::get(Context, {Word, Word});
+        auto *Assembly = llvm::InlineAsm::get(
+            llvm::FunctionType::get(Pair, {Word, Word, Word}, false),
+            neverd::x86DivRemAssembly({Bits, Signed}),
+            neverd::X86DivRemAsmConstraints, true);
+        auto *Result = Builder.CreateCall(
+            Assembly,
+            {llvm::ConstantInt::get(Word, Signed ? uint64_t(-43) : 43),
+             llvm::ConstantInt::get(Word, Signed ? Mask : 0),
+             Builder.CreateTrunc(Builder.CreateLoad(Wide, Slot), Word)});
+        auto *Quotient = Builder.CreateZExtOrTrunc(
+            Builder.CreateExtractValue(Result, 0), Builder.getInt64Ty());
+        auto *Remainder = Builder.CreateZExtOrTrunc(
+            Builder.CreateExtractValue(Result, 1), Builder.getInt64Ty());
+        Builder.CreateRet(Builder.CreateXor(
+            Quotient, Builder.CreateShl(Remainder, Builder.getInt64(8))));
+        Prototypes += "extern uint64_t ref_" + Name + "(void*, uint8_t);\n";
+        Body += "for(unsigned choose=0;choose<2;++choose) {\n"
+                "uint64_t actual[2]={6,0}, expected[2]={6,0};\n"
+                "uint64_t a=" +
+                Name + "(actual,choose), b=ref_" + Name +
+                "(expected,choose);\nif(a!=b || a!=" +
+                std::to_string(((Signed ? uint64_t(-7) : 7) & Mask) ^
+                               (((Signed ? UINT64_MAX : 1) & Mask) << 8)) +
+                "ULL || actual[0]!=0 || expected[0]!=0 || "
+                "actual[1]!=(choose?71:73) || expected[1]!=actual[1]) return "
+                "1;\n}\n";
+      }
+    }
+    ASSERT_FALSE(llvm::verifyModule(Module, &llvm::errs()));
+    neverd::CEmitterOptions Options;
+    Options.TheArch = NativeI386 ? neverd::Arch::X86 : neverd::Arch::X64;
+    Options.PreserveLLVMFunctionTypes = true;
+    std::string Source;
+    llvm::raw_string_ostream Out(Source);
+    ASSERT_TRUE(neverd::LLVMCEmitter().emit(Module, Out, Options));
+    for (auto &Function : Module)
+      Function.setName("ref_" + Function.getName());
+    std::string Reference;
+    llvm::raw_string_ostream ReferenceOut(Reference);
+    Module.print(ReferenceOut, nullptr);
+    const std::string Main =
+        Prototypes + "\nint main(void) {\n" + Body + "return 0;\n}\n";
+    for (const char *Optimization : {"-O0", "-O2"})
+      compileAndRun(Source + Main, Optimization, Reference,
+                    /*CheckUndefinedBehavior=*/true, NativeI386);
+  }
+#endif
+}
+
 TEST(LLVMCValues, RepeatedParameterFieldAddressesPreserveMemoryObservations) {
   const char *IR = R"ir(
 target datalayout = "e-p:64:64"
@@ -1605,6 +1763,44 @@ int main(void) {
     for (StringRef Level : {"-O0", "-O2"})
       compileAndRun(Source + Driver, Level, Reference, true);
   }
+}
+
+TEST(LLVMCValues, AbsoluteGuestStoresDoNotInventHostObjectBounds) {
+  llvm::LLVMContext Context;
+  llvm::SMDiagnostic Diagnostic;
+  auto Module = llvm::parseAssemblyString(R"(
+target datalayout = "e-p:64:64"
+define i32 @guest_store(i1 %enabled, i32 %value) {
+entry:
+  br i1 %enabled, label %write, label %done
+write:
+  store i32 %value, ptr inttoptr (i64 -140737488351232 to ptr), align 1
+  br label %done
+done:
+  ret i32 %value
+}
+)",
+                                          Diagnostic, Context);
+  ASSERT_TRUE(Module);
+  Module->setTargetTriple(llvm::Triple(llvm::sys::getDefaultTargetTriple()));
+  neverd::CEmitterOptions Options;
+  Options.PreserveLLVMFunctionTypes = true;
+  Options.UseUnalignedPointers = false;
+  std::string Source;
+  llvm::raw_string_ostream Out(Source);
+  ASSERT_TRUE(neverd::LLVMCEmitter().emit(*Module, Out, Options));
+  // The guest mapping belongs to its invocation environment. The host test
+  // only executes the disabled path; its compiler must retain the write
+  // without claiming the numeric address names a zero-sized host object.
+  const std::string Driver = R"(
+int main(void) {
+  return guest_store(0, 731) != 731;
+}
+)";
+  for (const char *Optimization : {"-O0", "-O2"})
+    compileAndRun("#pragma clang diagnostic error \"-Wfortify-source\"\n" +
+                      Source + Driver,
+                  Optimization, {}, true);
 }
 
 TEST(LLVMCValues, RawMemoryUpdatesRetainObserversAliasesAndOrderedAccesses) {
@@ -6934,4 +7130,59 @@ int main(void) { return call_site() != 7 || calls != 1 || errors; }
     for (llvm::StringRef Optimization : {"-O0", "-O2"})
       compileAndRun(Source, Optimization, {}, false, false, {}, Harness);
   }
+}
+
+TEST(LLVMCValues, AUnitLeavesOutOnlyTheDefinitionItCannotWrite) {
+  // LLVM C refuses a compare-exchange whose synchronization scope the C
+  // builtin cannot state: a unit that lists what it leaves out keeps the
+  // others.
+  llvm::LLVMContext Context;
+  llvm::SMDiagnostic Error;
+  auto Module = llvm::parseAssemblyString(R"ir(
+define i64 @before_exchange(i64 %x) {
+  %r = add i64 %x, 1
+  ret i64 %r
+}
+define i1 @scoped_exchange(ptr %p, i64 %expected, i64 %desired) {
+  %exchange = cmpxchg ptr %p, i64 %expected, i64 %desired syncscope("singlethread") seq_cst seq_cst
+  %ok = extractvalue { i64, i1 } %exchange, 1
+  ret i1 %ok
+}
+define i64 @after_exchange(i64 %x) {
+  %r = mul i64 %x, 3
+  ret i64 %r
+}
+)ir",
+                                          Error, Context);
+  ASSERT_TRUE(Module) << Error.getMessage().str();
+  Module->setTargetTriple(llvm::Triple("aarch64-linux-gnu"));
+  Module->setDataLayout("e-m:e-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128");
+  neverd::CEmitterOptions Options;
+  Options.TheArch = neverd::Arch::AArch64;
+  Options.EmitIncludes = false;
+  std::vector<neverd::CEmitterOptions::RefusedDefinition> Refused;
+  Options.RefusedDefinitions = &Refused;
+  std::string Source;
+  llvm::raw_string_ostream OS(Source);
+  ASSERT_TRUE(neverd::LLVMCEmitter().emit(*Module, OS, Options));
+  ASSERT_EQ(Refused.size(), 1u) << Source;
+  EXPECT_EQ(Refused.front().Name, "scoped_exchange");
+  EXPECT_EQ(Refused.front().Reason, "unsupported LLVM C cmpxchg shape");
+  // Each kept definition is written; the left-out one is only declared.
+  const auto Defines = [&](llvm::StringRef Name) {
+    llvm::SmallVector<llvm::StringRef> Lines;
+    llvm::StringRef(Source).split(Lines, '\n');
+    return llvm::any_of(Lines, [&](llvm::StringRef Line) {
+      return Line.contains((Name + "(").str()) && Line.ends_with(") {");
+    });
+  };
+  EXPECT_TRUE(Defines("before_exchange")) << Source;
+  EXPECT_TRUE(Defines("after_exchange")) << Source;
+  EXPECT_FALSE(Defines("scoped_exchange")) << Source;
+  // Without the list, the definition fails the unit.
+  Options.RefusedDefinitions = nullptr;
+  std::string Unit;
+  llvm::raw_string_ostream UnitOS(Unit);
+  EXPECT_THROW(neverd::LLVMCEmitter().emit(*Module, UnitOS, Options),
+               std::runtime_error);
 }

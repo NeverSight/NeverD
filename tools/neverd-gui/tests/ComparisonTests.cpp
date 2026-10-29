@@ -8,6 +8,7 @@
 /// Authored machine code is inspected but never executed.
 //===----------------------------------------------------------------------===//
 
+#include "../ResourceLimits.h"
 #include "ComparisonChangesDialog.h"
 #include "ComparisonCounterpartDialog.h"
 #include "ComparisonDialog.h"
@@ -25,6 +26,7 @@
 #include <QApplication>
 #include <QCheckBox>
 #include <QComboBox>
+#include <QCryptographicHash>
 #include <QDebug>
 #include <QDir>
 #include <QElapsedTimer>
@@ -2174,6 +2176,384 @@ private slots:
     delete Dialog;
   }
 
+  void callRegionSettingsAndEvidenceSurviveEditsAndReopen() {
+    const auto Path = Directory.filePath("call-regions.bin");
+    auto Code =
+        QByteArray::fromHex("89f883c00383f017e8130000006bc00783c00983f025c3");
+    Code.append(QByteArray(32 - Code.size(), char(0x90)));
+    Code.append(QByteArray::fromHex("89f883c00bc3"));
+    QVERIFY(write(Path, Code));
+    ComparisonDialog View(TEST_COMPARISON_WORKER);
+    auto &Session = View.session();
+    QSignalSpy Failures(&Session, &ComparisonSession::failed);
+    View.show();
+    QTRY_VERIFY_WITH_TIMEOUT(Session.ready(), Timeout);
+    View.findChild<QLineEdit *>("comparisonPrimary")->setText(Path);
+    View.findChild<QLineEdit *>("comparisonSecondary")->setText(Path);
+    for (const auto *Name : {"primaryLoader", "secondaryLoader"})
+      View.findChild<QComboBox *>(Name)->setCurrentIndex(1);
+    View.findChild<QLineEdit *>("primaryBase")->setText("0x1000");
+    View.findChild<QLineEdit *>("secondaryBase")->setText("0x8000");
+    auto *Calls = View.findChild<QCheckBox *>("comparisonRegionCalls");
+    auto *Regions = View.findChild<QCheckBox *>("comparisonAnalyzeRegions");
+    QVERIFY(Calls && Regions);
+    View.findChild<QToolButton *>("comparisonSettings")->setChecked(true);
+    Calls->setFocus();
+    QTest::keyClick(Calls, Qt::Key_Space);
+    QVERIFY(Regions->isChecked());
+    QTest::mouseClick(View.findChild<QPushButton *>("comparisonStart"),
+                      Qt::LeftButton);
+    QTRY_VERIFY_WITH_TIMEOUT(!Session.busy() && !Session.revision().isEmpty(),
+                             Timeout);
+    QCOMPARE(Session.summary()["regions"].toObject()["profile"].toString(),
+             QString("native-call-runs-v1"));
+    QCOMPARE(Session.summary()["regions"].toObject()["anchor_count"].toInt(),
+             1);
+    View.findChild<QPushButton *>("comparisonRegionReview")
+        ->menu()
+        ->actions()[0]
+        ->trigger();
+    auto *Dialog =
+        View.findChild<ComparisonRegionsDialog *>("comparisonRegions");
+    QVERIFY(Dialog);
+    auto *Instructions = Dialog->findChild<QTableView *>("regionInstructions");
+    QTRY_COMPARE_WITH_TIMEOUT(Instructions->model()->rowCount(), 7, Timeout);
+    QVERIFY(Dialog->findChild<QLabel *>("regionSummary")
+                ->text()
+                .contains("function pairs"));
+    const auto PreviousMode = Theme::instance().mode();
+    const auto RestoreTheme =
+        qScopeGuard([&] { Theme::instance().setMode(PreviousMode); });
+    const auto Captures = qEnvironmentVariable("NEVERD_DIFF_SCREENSHOTS");
+    if (!Captures.isEmpty())
+      for (const auto Mode : {Theme::Mode::Light, Theme::Mode::Dark}) {
+        Theme::instance().setMode(Mode);
+        QTest::qWait(40);
+        QVERIFY(
+            Dialog->grab().save(Captures + (Mode == Theme::Mode::Dark
+                                                ? "/dark-call-regions.png"
+                                                : "/light-call-regions.png")));
+        QVERIFY(View.grab().save(Captures +
+                                 (Mode == Theme::Mode::Dark
+                                      ? "/dark-call-region-settings.png"
+                                      : "/light-call-region-settings.png")));
+      }
+    auto *Context = Dialog->findChild<QPushButton *>("regionCallContext");
+    QVERIFY(Context && Context->isEnabled());
+    Context->menu()->actions()[1]->trigger();
+    auto *Impact =
+        View.findChild<ComparisonImpactDialog *>("comparisonImpactDialog");
+    QVERIFY(Impact);
+    QCOMPARE(Impact->findChild<QLineEdit *>("impactSeed")->text(),
+             QString("0x8000"));
+    QCOMPARE(
+        Impact->findChild<QComboBox *>("impactSide")->currentData().toString(),
+        QString("secondary"));
+    QTRY_VERIFY_WITH_TIMEOUT(Impact->findChild<QTableView *>("impactFunctions")
+                                     ->model()
+                                     ->rowCount() > 0,
+                             Timeout);
+    Impact->hide();
+    const auto Input = [&](const char *Base) {
+      return QJsonObject{{"path", Path},
+                         {"load_options", QJsonObject{{"loader", "binary"},
+                                                      {"processor", "x86_64"},
+                                                      {"base", Base}}}};
+    };
+    // The full FFmpeg workflow needs larger allowances than the defaults.
+    // Retain both custom capacity and quality settings through the ordinary
+    // desktop reopen and Compare actions, without exposing test-only controls.
+    Session.start(Input("0x1000"), Input("0x8000"),
+                  {{"regions", QJsonObject{{"calls", true},
+                                           {"max_seeds", 4194304},
+                                           {"max_work", 268435456},
+                                           {"max_anchors", 1000000},
+                                           {"min_instructions", 5},
+                                           {"min_repeated_instructions", 9}}}});
+    QTRY_VERIFY_WITH_TIMEOUT(!Session.busy(), Timeout);
+    QVERIFY2(Failures.isEmpty(),
+             qPrintable(Failures.isEmpty()
+                            ? QString{}
+                            : Failures.last().first().toString()));
+    QTRY_COMPARE_WITH_TIMEOUT(Instructions->model()->rowCount(), 7, Timeout);
+    auto SavedRegions =
+        Session.summary()["settings"].toObject()["regions"].toObject();
+    QCOMPARE(SavedRegions["max_seeds"].toInt(), 4194304);
+    QCOMPARE(SavedRegions["min_instructions"].toInt(), 5);
+    const auto Saved = Directory.filePath("call-regions.nddiff");
+    Session.command("comparison_save", {{"path", Saved}});
+    QTRY_VERIFY_WITH_TIMEOUT(!Session.busy() && QFile::exists(Saved), Timeout);
+    Session.command(
+        "comparison_override",
+        {{"kind", "unmatch"}, {"primary", "0x1020"}, {"secondary", "0x8020"}});
+    QTRY_VERIFY_WITH_TIMEOUT(!Session.busy(), Timeout);
+    QTRY_COMPARE_WITH_TIMEOUT(Instructions->model()->rowCount(), 0, Timeout);
+    QVERIFY(!Context->isEnabled());
+    Session.command("comparison_undo");
+    QTRY_VERIFY_WITH_TIMEOUT(!Session.busy(), Timeout);
+    QTRY_COMPARE_WITH_TIMEOUT(Instructions->model()->rowCount(), 7, Timeout);
+    Dialog->hide();
+    Regions->setChecked(false);
+    QVERIFY(!Calls->isChecked());
+    bool Selected = false;
+    QTimer Select;
+    connect(&Select, &QTimer::timeout, this, [&] {
+      if (auto *File =
+              qobject_cast<QFileDialog *>(QApplication::activeModalWidget())) {
+        File->selectFile(Saved);
+        if (auto *Name = File->findChild<QLineEdit *>("fileNameEdit"))
+          Name->setText(Saved);
+        Selected = true;
+        static_cast<QDialog *>(File)->accept();
+      }
+    });
+    Select.start(10);
+    QTest::mouseClick(View.findChild<QPushButton *>("comparisonReopen"),
+                      Qt::LeftButton);
+    Select.stop();
+    QVERIFY(Selected);
+    QTRY_VERIFY_WITH_TIMEOUT(!Session.busy() && Calls->isChecked(), Timeout);
+    QVERIFY(Regions->isChecked());
+    auto *Compare = View.findChild<QPushButton *>("comparisonStart");
+    QTest::mouseClick(Compare, Qt::LeftButton);
+    QTRY_VERIFY_WITH_TIMEOUT(!Session.busy(), Timeout);
+    QCOMPARE(Session.summary()["settings"].toObject()["regions"].toObject(),
+             SavedRegions);
+    Calls->setChecked(false);
+    QTest::mouseClick(Compare, Qt::LeftButton);
+    QTRY_VERIFY_WITH_TIMEOUT(!Session.busy(), Timeout);
+    SavedRegions.remove("calls");
+    QCOMPARE(Session.summary()["settings"].toObject()["regions"].toObject(),
+             SavedRegions);
+    QCOMPARE(Failures.size(), 0);
+  }
+
+  void regionSelectionResolvesAfterAnUnloadedPageArrives() {
+    constexpr int Count = ::neverd::limits::gui::kComparisonPageSize * 2 + 17;
+    QByteArray Code;
+    for (int I = 0; I != Count; ++I) {
+      // Five distinct immediate-bearing operations per function, followed by
+      // return/padding. Every four-operation seed identifies just this body.
+      for (const auto *Opcode : {"b8", "05", "35", "69c0", "05"}) {
+        Code.append(QByteArray::fromHex(Opcode));
+        for (unsigned Byte = 0; Byte != 4; ++Byte)
+          Code.append(char((unsigned(I + 17) >> (Byte * 8)) & 0xff));
+      }
+      Code.append(char(0xc3));
+      Code.append(QByteArray(5, char(0xcc)));
+    }
+    const auto Path = Directory.filePath("paged-regions.bin");
+    QVERIFY(write(Path, Code));
+    ComparisonSession Session(TEST_COMPARISON_WORKER);
+    QSignalSpy Failures(&Session, &ComparisonSession::failed);
+    QTRY_VERIFY_WITH_TIMEOUT(Session.ready(), Timeout);
+    const auto Input = [&](const QString &Base) {
+      return QJsonObject{{"path", Path},
+                         {"load_options", QJsonObject{{"loader", "binary"},
+                                                      {"processor", "x86_64"},
+                                                      {"base", Base}}}};
+    };
+    Session.start(Input("0x1000"), Input("0x8000"), {{"regions", true}});
+    QTRY_VERIFY_WITH_TIMEOUT(!Session.busy(), Timeout);
+    QCOMPARE(Failures.size(), 0);
+    ComparisonRegionsDialog Dialog(Session, nullptr);
+    Dialog.setAttribute(Qt::WA_DeleteOnClose, false);
+    Dialog.show();
+    auto *Hypotheses = Dialog.findChild<QTableView *>("regionHypotheses");
+    auto *Spans = Dialog.findChild<QTableView *>("regionAnchors");
+    auto *Instructions = Dialog.findChild<QTableView *>("regionInstructions");
+    auto *Groups = qobject_cast<ComparisonModel *>(Hypotheses->model());
+    auto *Anchors = qobject_cast<ComparisonModel *>(Spans->model());
+    auto *Rows = qobject_cast<ComparisonModel *>(Instructions->model());
+    QTRY_COMPARE_WITH_TIMEOUT(Groups->rowCount(), Count, Timeout);
+    QTRY_VERIFY_WITH_TIMEOUT(!Rows->row(0).isEmpty(), Timeout);
+    const auto FirstAddress =
+        Rows->row(0)["primary"].toObject()["address"].toString();
+    const int Last = Count - 1;
+    QVERIFY(Groups->row(Last).isEmpty());
+    Hypotheses->setCurrentIndex(Groups->index(Last, 0));
+    QTRY_VERIFY_WITH_TIMEOUT(!Groups->row(Last).isEmpty(), Timeout);
+    QTRY_COMPARE_WITH_TIMEOUT(Rows->rowCount(), 5, Timeout);
+    QTRY_VERIFY_WITH_TIMEOUT(
+        !Rows->row(0).isEmpty() &&
+            Rows->row(0)["primary"].toObject()["address"].toString() !=
+                FirstAddress,
+        Timeout);
+    const auto SelectedAddress =
+        Rows->row(0)["primary"].toObject()["address"].toString();
+    QCOMPARE(Anchors->row(0)["primary"].toObject()["function"].toString(),
+             SelectedAddress);
+    QVERIFY(Groups->cachedPages() >= 2);
+
+    auto *Kind = Dialog.findChild<QComboBox *>("regionKind");
+    Kind->setCurrentIndex(Kind->findData("raw_anchors"));
+    QTRY_COMPARE_WITH_TIMEOUT(Anchors->rowCount(), Count, Timeout);
+    QTRY_VERIFY_WITH_TIMEOUT(!Rows->row(0).isEmpty(), Timeout);
+    const auto FirstRawAddress =
+        Rows->row(0)["primary"].toObject()["address"].toString();
+    QVERIFY(Anchors->row(Last).isEmpty());
+    Spans->setCurrentIndex(Anchors->index(Last, 0));
+    QTRY_VERIFY_WITH_TIMEOUT(!Anchors->row(Last).isEmpty(), Timeout);
+    const auto LastAddress =
+        Anchors->row(Last)["primary"].toObject()["function"].toString();
+    QVERIFY(LastAddress != FirstRawAddress);
+    QTRY_COMPARE_WITH_TIMEOUT(
+        Rows->row(0)["primary"].toObject()["address"].toString(), LastAddress,
+        Timeout);
+    QCOMPARE(Rows->rowCount(), 5);
+    QVERIFY(Anchors->cachedPages() >= 2);
+    auto *Context = Dialog.findChild<QPushButton *>("regionCallContext");
+    QVERIFY(Context->isEnabled());
+    QSignalSpy Inspect(&Dialog, &ComparisonRegionsDialog::inspectCallContext);
+    Context->menu()->actions()[0]->trigger();
+    QCOMPARE(Inspect.size(), 1);
+    QCOMPARE(Inspect[0][1].toString(), LastAddress);
+    QCOMPARE(Failures.size(), 0);
+  }
+
+  void retainedLargeCallRegionWorkflow() {
+    const auto ReportPath =
+        qEnvironmentVariable("NEVERD_DIFF_CALL_REGIONS_REPORT");
+    const auto WorkflowPath =
+        qEnvironmentVariable("NEVERD_DIFF_REGION_WORKFLOW");
+    if (ReportPath.isEmpty() && WorkflowPath.isEmpty())
+      QSKIP(
+          "Set NEVERD_DIFF_CALL_REGIONS_REPORT and NEVERD_DIFF_REGION_WORKFLOW "
+          "to a retained large call-region report and its native witnesses.");
+    QFile ReportFile(ReportPath), WorkflowFile(WorkflowPath);
+    QVERIFY(ReportFile.open(QIODevice::ReadOnly));
+    QVERIFY(WorkflowFile.open(QIODevice::ReadOnly));
+    const auto ReportBytes = ReportFile.readAll();
+    const auto Report = QJsonDocument::fromJson(ReportBytes).object();
+    const auto Workflow =
+        QJsonDocument::fromJson(WorkflowFile.readAll()).object();
+    QCOMPARE(Workflow["status"].toString(), QString("passed"));
+    QCOMPARE(Workflow["report_sha256"].toString(),
+             QString::fromLatin1(QCryptographicHash::hash(
+                                     ReportBytes, QCryptographicHash::Sha256)
+                                     .toHex()));
+    QCOMPARE(Report["regions"].toObject()["profile"].toString(),
+             QString("native-call-runs-v1"));
+    const int AnchorCount =
+        Report["regions"].toObject()["anchors"].toArray().size();
+    QVERIFY(AnchorCount > 10000);
+    QJsonObject Witness;
+    int AnchorIndex = -1;
+    for (const auto &Value : Workflow["members"].toArray()) {
+      const auto Member = Value.toObject();
+      const auto Site = Member["public_tail_transfer"].toObject();
+      if (Site.isEmpty())
+        continue;
+      for (const auto &TargetValue : Member["members"].toArray()) {
+        const auto Target = TargetValue.toObject();
+        if (Target["address"] == Site["callee"].toObject()["address"]) {
+          const auto Indices = Target["direct_anchor_indices"].toArray();
+          if (!Indices.isEmpty()) {
+            Witness = Site;
+            AnchorIndex = Indices.first().toInt(-1);
+          }
+        }
+      }
+    }
+    QVERIFY(!Witness.isEmpty());
+    QVERIFY(AnchorIndex >= ::neverd::limits::gui::kComparisonPageSize);
+    const auto Seed = Witness["callee"].toObject()["address"].toString();
+    const auto Public = Witness["caller"].toObject()["address"].toString();
+    // Restoring the complete large fixture includes decoding and native
+    // binding. Keep this allowance local to the opt-in corpus test.
+    constexpr int LargeFixtureTimeout = 120000;
+    ComparisonDialog View(TEST_COMPARISON_WORKER);
+    View.setAttribute(Qt::WA_DeleteOnClose, false);
+    View.show();
+    auto &Session = View.session();
+    QSignalSpy Failures(&Session, &ComparisonSession::failed);
+    QTRY_VERIFY_WITH_TIMEOUT(Session.ready(), Timeout);
+    Session.start({{"path", Report["primary"].toObject()["path"]}},
+                  {{"path", Report["secondary"].toObject()["path"]}}, {},
+                  ReportPath);
+    QTRY_VERIFY_WITH_TIMEOUT(!Session.busy() && !Session.revision().isEmpty(),
+                             LargeFixtureTimeout);
+    QCOMPARE(Failures.size(), 0);
+    View.findChild<QPushButton *>("comparisonRegionReview")
+        ->menu()
+        ->actions()[0]
+        ->trigger();
+    auto *Regions =
+        View.findChild<ComparisonRegionsDialog *>("comparisonRegions");
+    QVERIFY(Regions);
+    auto *Kind = Regions->findChild<QComboBox *>("regionKind");
+    Kind->setCurrentIndex(Kind->findData("raw_anchors"));
+    QVERIFY(Kind->isVisible());
+    QVERIFY(!Regions->findChild<QTableView *>("regionHypotheses")->isVisible());
+    auto *Table = Regions->findChild<QTableView *>("regionAnchors");
+    auto *Anchors = qobject_cast<ComparisonModel *>(Table->model());
+    auto *Instructions = Regions->findChild<QTableView *>("regionInstructions");
+    auto *Rows = qobject_cast<ComparisonModel *>(Instructions->model());
+    QTRY_COMPARE_WITH_TIMEOUT(Anchors->rowCount(), AnchorCount, Timeout);
+    QVERIFY(Anchors->row(AnchorIndex).isEmpty());
+    Table->setCurrentIndex(Anchors->index(AnchorIndex, 0));
+    Table->scrollTo(Table->currentIndex());
+    QTRY_COMPARE_WITH_TIMEOUT(Anchors->row(AnchorIndex)["secondary"]
+                                  .toObject()["function"]
+                                  .toString(),
+                              Seed, Timeout);
+    QTRY_VERIFY_WITH_TIMEOUT(!Rows->row(0).isEmpty(), Timeout);
+    QVERIFY(Anchors->cachedPages() >= 2);
+    QVERIFY(Anchors->cachedPages() <=
+            ::neverd::limits::gui::kComparisonCachedPages);
+    QTRY_VERIFY_WITH_TIMEOUT(Table->viewport()->rect().contains(
+                                 Table->visualRect(Table->currentIndex())),
+                             Timeout);
+    auto *Context = Regions->findChild<QPushButton *>("regionCallContext");
+    QTRY_VERIFY_WITH_TIMEOUT(Context->isEnabled(), Timeout);
+    Context->menu()->actions()[1]->trigger();
+    auto *Impact =
+        View.findChild<ComparisonImpactDialog *>("comparisonImpactDialog");
+    QVERIFY(Impact);
+    QCOMPARE(Impact->findChild<QLineEdit *>("impactSeed")->text(), Seed);
+    QCOMPARE(
+        Impact->findChild<QComboBox *>("impactSide")->currentData().toString(),
+        QString("secondary"));
+    QTRY_VERIFY_WITH_TIMEOUT(!Session.cancellable(), Timeout);
+    Impact->findChild<QSpinBox *>("impactDepth")->setValue(1);
+    Impact->findChild<QPushButton *>("impactTrace")->click();
+    auto *Functions = Impact->findChild<QTableView *>("impactFunctions");
+    auto *FunctionRows = qobject_cast<ComparisonModel *>(Functions->model());
+    QTRY_VERIFY_WITH_TIMEOUT(FunctionRows->rowCount() > 1, Timeout);
+    int PublicRow = -1;
+    for (int I = 0; I != FunctionRows->rowCount(); ++I) {
+      QTRY_VERIFY_WITH_TIMEOUT(!FunctionRows->row(I).isEmpty(), Timeout);
+      if (FunctionRows->row(I)["address"].toString() == Public) {
+        PublicRow = I;
+        QCOMPARE(FunctionRows->row(I)["depth"].toInt(), 1);
+      }
+    }
+    QVERIFY(PublicRow >= 0);
+    Functions->setCurrentIndex(FunctionRows->index(PublicRow, 0));
+    auto *Sites = Impact->findChild<QTableView *>("impactSites");
+    auto *SiteRows = qobject_cast<ComparisonModel *>(Sites->model());
+    QTRY_COMPARE_WITH_TIMEOUT(SiteRows->rowCount(), 1, Timeout);
+    QTRY_VERIFY_WITH_TIMEOUT(!SiteRows->row(0).isEmpty(), Timeout);
+    for (const auto *Field : {"caller", "callee", "instruction"})
+      QCOMPARE(SiteRows->row(0)[Field], Witness[Field]);
+    const auto PreviousMode = Theme::instance().mode();
+    const auto RestoreTheme =
+        qScopeGuard([&] { Theme::instance().setMode(PreviousMode); });
+    if (const auto Captures = qEnvironmentVariable("NEVERD_DIFF_SCREENSHOTS");
+        !Captures.isEmpty()) {
+      QVERIFY(QDir().mkpath(Captures));
+      for (const auto Mode : {Theme::Mode::Light, Theme::Mode::Dark}) {
+        Theme::instance().setMode(Mode);
+        QTest::qWait(60);
+        QVERIFY(Regions->grab().save(Captures + "/large-call-regions-" +
+                                     Theme::modeName(Mode) + ".png"));
+        QVERIFY(Impact->grab().save(Captures + "/large-call-context-" +
+                                    Theme::modeName(Mode) + ".png"));
+      }
+    }
+    QCOMPARE(Failures.size(), 0);
+  }
+
   void regionReviewUsesBoundedPagesAndOriginalBytes() {
     const auto Path = Directory.filePath("region.bin");
     QVERIFY(write(Path, QByteArray::fromHex("89f883c00383f0176bc00783c009c3")));
@@ -2217,8 +2597,13 @@ private slots:
                                                     : "/light-regions.png")));
       }
     auto *Kind = Dialog->findChild<QComboBox *>("regionKind");
+    Kind->setCurrentIndex(Kind->findData("raw_anchors"));
+    QTRY_COMPARE_WITH_TIMEOUT(Spans->model()->rowCount(), 1, Timeout);
+    QVERIFY(Kind->isVisible());
+    QVERIFY(!Functions->isVisible());
     Kind->setCurrentIndex(
         1); // This one-to-one fixture has no split hypothesis.
+    QVERIFY(Functions->isVisible());
     QTRY_COMPARE_WITH_TIMEOUT(Functions->model()->rowCount(), 0, Timeout);
     QCOMPARE(Spans->model()->rowCount(), 0);
     QCOMPARE(Instructions->model()->rowCount(), 0);
@@ -2237,6 +2622,7 @@ private slots:
     QTRY_COMPARE_WITH_TIMEOUT(Spans->model()->rowCount(), 1, Timeout);
     QTRY_COMPARE_WITH_TIMEOUT(Instructions->model()->rowCount(), 5, Timeout);
     QVERIFY(!Functions->isEnabled());
+    QVERIFY(!Functions->isVisible());
     Session.start(Input("0x1000"), Input("0x8000"), {{"regions", false}});
     QTRY_VERIFY_WITH_TIMEOUT(!Session.busy(), Timeout);
     QTRY_COMPARE_WITH_TIMEOUT(Spans->model()->rowCount(), 0, Timeout);

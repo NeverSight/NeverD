@@ -18,6 +18,7 @@
 #include "neverd/debug/MapFile.h"
 #include "neverd/debug/PDBLoader.h"
 #include "neverd/loader/BinaryImage.h"
+#include "neverd/loader/COFF/COFFException.h"
 #include "neverd/loader/PointerRelocation.h"
 #include "neverd/loader/StringLiteralSymbols.h"
 #include "neverd/support/FilePath.h"
@@ -724,6 +725,8 @@ unsigned applyDebugSymbols(BinaryImage &Img, const DebugContext &Dbg) {
   // Static functions of several modules share names (ntoskrnl's PDB names
   // thirteen twice).
   Img.numberSharedFunctionNames();
+  if (Applied && Img.Format == BinaryFormat::COFF)
+    coff_loader::refreshExceptionHandlerNames(Img);
   LLVM_DEBUG(llvm::dbgs() << "debug-discovery: published " << Applied << " of "
                           << DbgFuncs.size() << " debug function symbols\n");
   return Applied;

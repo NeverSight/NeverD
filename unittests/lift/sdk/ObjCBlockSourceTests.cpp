@@ -1,4 +1,5 @@
 #include "../../../lib/sdk/capi/ObjCBlockSources.h"
+#include "../core/MappedSectionFlags.h"
 #include "gtest/gtest.h"
 
 #include "neverd/loader/ObjC/ObjCEncoding.h"
@@ -3650,8 +3651,8 @@ TEST(ObjCBlockSources,
   for (unsigned Mutation = 0; Mutation != 6; ++Mutation) {
     OwnedSourceFixture F(Arch::AArch64);
     if (Mutation == 1)
-      F.Image.Sections[1].Flags =
-          SegmentFlags::Readable | SegmentFlags::Writable;
+      setMappedSectionFlags(F.Image, F.Image.Sections[1],
+                            SegmentFlags::Readable | SegmentFlags::Writable);
     if (Mutation == 2)
       F.Image.Segments[1].Flags =
           SegmentFlags::Readable | SegmentFlags::Writable;

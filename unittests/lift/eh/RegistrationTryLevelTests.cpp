@@ -15,6 +15,7 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "../core/MappedSectionFlags.h"
 #include "gtest/gtest.h"
 
 #include "neverd/Limits.h"
@@ -433,7 +434,8 @@ TEST(RegistrationTryLevel, GSCookieCheckerHasOnlyTheCheckedLeafSuccessPath) {
         if (Mutation == 0)
           Text.Flags = Text.Flags | SegmentFlags::Writable;
         if (Mutation == 1)
-          Section.Flags = Section.Flags | SegmentFlags::Writable;
+          setMappedSectionFlags(Changed, Section,
+                                Section.Flags | SegmentFlags::Writable);
         if (Mutation == 2)
           Text.Flags = SegmentFlags::Executable;
         if (Mutation == 3)
@@ -4265,8 +4267,8 @@ TEST(RegistrationTryLevel,
       Text.Flags = Text.Flags | SegmentFlags::Writable;
       break;
     case 6:
-      Image.Sections[0].Flags =
-          Image.Sections[0].Flags | SegmentFlags::Writable;
+      setMappedSectionFlags(Image, Image.Sections[0],
+                            Image.Sections[0].Flags | SegmentFlags::Writable);
       break;
     case 7:
       Text.Data.pop_back();

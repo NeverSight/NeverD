@@ -13,6 +13,7 @@
 #include "neverd/Limits.h"
 #include "neverd/ir/Limits.h"
 #include "neverd/ir/TargetRegInfo.h"
+#include "neverd/ir/low/BlockRegisterConstant.h"
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/ir/med/MedConstantPropagation.h"
 #include "neverd/loader/BinaryImage.h"
@@ -101,6 +102,9 @@ void LowToMedConverter::propagate(MedFunc &Func) {
               Def->RegistrationRoot == MedOp::RegistrationRootKind::None &&
               Def->Inputs[0].Size == Op.Inputs[I].Size) {
             MedVar Replacement = Def->Inputs[0];
+            if (Replacement.isConst() &&
+                !canPropagateConstantToOperand(Op.Opcode, I))
+              continue;
             // COPY is value transport, so an untagged immediate remains
             // role-neutral at its definition.  Once SSA substitutes it into a
             // numeric operand, classify only this occurrence as scalar.  Exact
@@ -289,6 +293,34 @@ void LowToMedConverter::propagate(MedFunc &Func) {
           continue;
         }
         auto B = ResolveConst(Op.Inputs[1]);
+        // An absorbing scalar mask observes none of the other operand's bits.
+        // Keep that operand's producer and memory effects for ordinary DCE;
+        // only this pure value operation becomes a constant. An address
+        // whose original VA is zero is not a scalar zero after relocation.
+        if ((Op.Opcode == NdOp::INT_AND || Op.Opcode == NdOp::INT_OR) &&
+            Op.NumInputs == 2 && Op.Output.Size &&
+            Op.Output.Size <= sizeof(uint64_t) &&
+            Op.Inputs[0].Size == Op.Output.Size &&
+            Op.Inputs[1].Size == Op.Output.Size && !Op.Dead &&
+            Op.RegistrationRoot == MedOp::RegistrationRootKind::None &&
+            !Op.SourceCallHint && Op.IntrinsicOutputs.empty() &&
+            Op.MemoryOrdering == NdMemoryOrdering::None &&
+            Op.MemoryAddressSpace == NdMemoryAddressSpace::Default) {
+          std::optional<uint64_t> Absorbed;
+          for (const auto *Value : {&A, &B})
+            if (*Value && (*Value)->IsStableScalar)
+              if (auto Bits = absorbingBitwiseConstant(
+                      Op.Opcode, Op.Output.Size, (*Value)->Value))
+                Absorbed = Bits;
+          if (Absorbed) {
+            Op.Opcode = NdOp::COPY;
+            Op.Inputs[0] = MedVar::makeConst(*Absorbed, Op.Output.Size,
+                                             ConstantAddressProvenance::Scalar);
+            Op.NumInputs = 1;
+            Changed = true;
+            continue;
+          }
+        }
         if (!A || !B)
           continue;
 

@@ -13,7 +13,7 @@ were understood.
 | --- | --- | --- |
 | Reproducible same-ISA native comparison | Shared `lib/diff`, input/analysis identities, strict saved binding, x86/x64 and AArch64 readers, ambiguous candidate inventories, exact weighted large-block alignment, caller-selected candidate measurement, conservative call-position anchors, and separate observed changes/reference uncertainty | Additional ISA/format and compiler/transformation qualification; adjudication of unlabelled real-program mappings |
 | CLI and GUI workflow | C ABI and Qt-free worker; bounded pages, CFG/source inspection, edits and undo/redo, save/reopen, input/restore/query/edit cancellation, NDDB project inputs | Continue scenario-based usability and large-input latency qualification; support advanced areas below through the same surfaces |
-| A: transformations and regional matching | Native instruction-run and finite SSA region hypotheses; split/merge/clone/inline/outline/tail evidence; qualified loop progress profiles through v7 | Broad CFG/dataflow transformations and cross-module movement; independent compiler, LTO, PGO and obfuscation qualification; explicit qualified cross-ISA profiles |
+| A: transformations and regional matching | Native instruction-run and finite SSA region hypotheses; optional call-conditioned runs with transactional mapping updates; split/merge/clone/inline/outline/tail evidence; qualified loop progress profiles through v7 | Broad CFG/dataflow transformations and cross-module movement; independent compiler, LTO, PGO and obfuscation qualification; explicit qualified cross-ISA profiles |
 | B: security-fix triage and review | Local change observations, native call-path context, bounded import-effect context, input-bound analyst cases/history and references, and source-line localization of a public curl fix | Ranked security-fix datasets, interprocedural parameter/return/alias effects, path feasibility, automated patch/backport/revert evidence and reviewer report qualification |
 | C: optional semantic validation | Bounded pure scalar-return profile with explicit models, budgets, non-success outcomes and native provenance | Additional memory/call/loop profiles, precondition and coverage qualification; no general equivalence or vulnerability-elimination claim |
 | D: version and branch lineage | Offline snapshot graph, direct/indirect/parallel/cyclic associations, grouped conflicts, exact-byte reuse, report-local assessments, CLI/Python/GUI persistence, release aliases with declared chronology/parents, real release-report integration, and a reproducible synthetic scale harness | Package-wide graphs, automated patch/backport/revert evidence and broader real-corpus quality/latency; annotation application remains #99 |
@@ -40,6 +40,84 @@ performance or statistical acceptance requirements.
 
 ## Verification record boundaries
 
+The optional `native-call-runs-v1` profile conditions direct-call coordinates
+on the current accepted function pairs. Unknown, indirect, unpaired and changed
+targets remain barriers; original scalar and register operands still constrain
+the surrounding run. Short repeated call fragments require distinct mapped
+targets or a shared terminal cleanup boundary, alongside the existing length
+and frequency checks. Mapping edits and undo recompute these regions
+transactionally, and saved binding checks them against the saved correspondence.
+The GUI exposes the same native call-path context from a selected region.
+Shared instructions and a wrapper's call relationship remain separate evidence.
+These contracts do not establish callee equivalence, source ancestry, arbitrary
+transformation recovery or patch presence.
+
+The consumed full OpenSSL release pair produced 68,727 call-conditioned native
+anchors and 3,637 hypotheses. Both public and private OBJ implementations have
+direct shared spans. The private NID implementation has direct spans; its public
+wrapper is inspectable through the original tail transfer at `0x242555`
+(`E9B6FDFFFF`) to `0x242310`. That wrapper still has no directly shared span with
+the old body. Fresh CLI/API results agree outside timings, and saved restoration
+is exact. The desktop workflow selects an initially uncached anchor above row
+46,000 and follows this same native caller witness. The separate 417-function
+fixture covers both unloaded hypothesis and unloaded anchor selection.
+
+Full FFmpeg inputs contain 17,556 / 17,557 functions and approximately 2.77
+million instructions per side. The default call-region search exhausts its
+1,048,576-seed allowance while indexing the primary input and retains zero
+anchors; that result remains explicitly resource limited. With caller-selected
+allowances of 4,194,304 seeds per input, 268,435,456 work units and 1,000,000
+anchors, the search completes with 264,971 anchors and 9,148 hypotheses.
+Exact saved restoration and the last anchor's original five instruction rows
+are checked separately. These are capacity, persistence and inspection results
+on consumed inputs, not new accuracy or transformation-truth qualification.
+The desktop retains saved native-region allowances and quality thresholds when
+the user compares again or changes the matched-call setting.
+Offline lineage projections retain the original native profile and conditional
+call evidence on both hypotheses and anchor rows. The desktop explains that
+these calls rely on the source report's function associations; collection
+restoration preserves that scope and the original report bytes.
+All-span native and SSA queries and desktop tabs also retain unclassified
+anchors. They do not depend on successful grouping or invent hypotheses
+for those anchors. Direct indexed pages preserve work accounting while
+rendering only the requested rows.
+
+Integration of upstream atomicity admission `77d94bfd0a` changes the native
+coverage of 385 distinct functions across the SQLite and FFmpeg inputs. All
+original instruction rows and accepted function pairs remain unchanged. Every
+added block boundary and removed fallthrough is accounted for by unsupported
+`LOCK OR` instructions, which must not become ordinary non-atomic stores.
+Five other known reports remain identical outside timings. The original full
+report equality check remains a failed equality check, accompanied by this
+coordinate-level adjudication; it is not relabelled as an identical result.
+The subsequent nine-report delivery replay is identical outside timings.
+The existing source-identity truth, exclusions and numeric gates are unchanged.
+
+The later integration of neutral locked logical operations (`52d4c2a59c`)
+changes 383 distinct SQLite function inventories. Every original native row is
+unchanged; 522 removed block boundaries and six restored fallthrough edges occur
+immediately after `LOCK OR memory,0`. The upstream implementation retains the
+atomic transaction and logical flags. These are coverage changes, separate from
+function-matching quality. In the consumed zstd assembly input, an additional
+unmatched, incomplete candidate lies inside a hand-written `NOTYPE` assembly
+routine, and an existing interior candidate's recovered extent changes. These
+unlabelled function boundaries remain unqualified. All nine prior report pairs
+retain exactly the same accepted associations and labelled scores; full report
+equality is not claimed across these analysis changes.
+
+The subsequent shared discovery fix recovers all four addressed hand-written
+assembly bodies in the two consumed zstd inputs. Their original instruction
+bytes and complete CFGs are checked independently of the partial source-body
+truth, and both assembly routines pair with their corresponding release
+versions. Reachable code refutes the interior padding/data guesses; independent
+symbols, calls and relocations remain separate entry evidence. A referenced
+ENDBR64 keeps long bodies available for formal analysis without relaxing that
+analysis's unsupported-instruction handling. The SDK retains the complete
+function body, and changed native snapshots refuse stale live restoration
+without replacing the current comparison. This closes the identified zstd
+assembly boundary defect; it does not relabel the original failed release
+qualification or establish coverage of all native discovery cases.
+
 Matcher version 9 adds bounded mnemonic/CFG candidate groups when instruction
 sketches are too common. Direction/layout controls above the exhaustive-pair
 limit recover distinct bodies while retaining true duplicates as ambiguous.
@@ -57,6 +135,37 @@ The scope is x64 ELF, GCC/Clang O2 and partial unique source-body correspondence
 Git's GNU C11 compatibility amendment preceded truth preparation and comparison.
 Unlabelled mappings remain unscored. This does not close the failed original
 cohort or qualify other advanced areas, common-input fairness or superiority.
+
+The subsequent XZ Utils 5.4.6 optimization cohort failed its frozen precision,
+recall and macro-F1 gates. GCC 15.2 O2 was compared with LTO, PGO and combined
+PGO/LTO in both directions using the frozen `ab55f7f3cb57` native runtime.
+All six mapping runs and their independent score replay completed; the six
+cases are correlated builds/directions of one project, not independent cohorts.
+Each built program passed six compression/decompression roundtrips. Profile-use
+builds reject missing profiles and coverage mismatches; unused static-archive
+units have explicitly registered zero counts, which do not establish execution
+coverage. The original failed qualification remains retained, and these inputs
+are now development data. These results leave compiler-optimization matching
+quality open.
+
+Matcher version 10 retains a helper and its tail caller as separate identity
+candidates when the changed helper body also contains the caller's complete
+straight-line prelude. Independent instruction contribution and reference-aware
+alignment constrain the deferral; it does not assert source ancestry. Authored
+core/native controls cover direction, layout, multiple inlining destinations,
+negative examples, analyst choices, persistence and thread-count consistency.
+The consumed XZ replay removes the helper-as-caller misassociation in all four
+LTO-containing directions without losing a correct labelled pair. Pure PGO
+results are unchanged. The original numeric gates still fail, and the original
+failed cohort remains retained.
+
+The DWARF adapter now follows an LTO concrete body's abstract-origin chain to
+its original definition unit. A specification declaration supplies its own
+file metadata without replacing that definition unit. Multi-unit local names,
+aliases and origin cycles are covered separately. Eligible source-body labels
+for the previous zstd, OpenSSL, Git, libarchive and FFmpeg inputs are unchanged;
+older FFmpeg exclusion records differ only by subsequently added end bounds.
+The original full-inventory equality failure and its adjudication are both kept.
 
 Retained SQLite, curl and FFmpeg reports also exercise a seven-snapshot offline
 collection: all association edges are checked against their source reports,

@@ -6827,6 +6827,14 @@ Reference identities: unresolved. Some call or data targets cannot be compared. 
         <translation>
 참조 식별 정보: 미확인. 일부 호출 또는 데이터 대상을 비교할 수 없습니다. 이 사실만으로 변경이 발생했다고 판단할 수는 없습니다.</translation>
     </message>
+    <message>
+        <source>Include matched calls</source>
+        <translation>대응된 호출 포함</translation>
+    </message>
+    <message>
+        <source>Extend shared regions across direct calls whose targets are paired. Results depend on the current function pairs and are recomputed when pairs change. This does not validate call behavior.</source>
+        <translation>호출 대상이 대응된 직접 호출을 넘어 공유 영역을 확장합니다. 결과는 현재 함수 대응에 따라 달라지며 대응이 변경되면 다시 계산됩니다. 호출 동작을 검증하지는 않습니다.</translation>
+    </message>
 </context>
 <context>
     <name>neverd::gui::ComparisonFlowDialog</name>
@@ -7979,6 +7987,30 @@ External input producers are not compared or counted as shared code.</source>
 SSA recipe: %1</source>
         <translation>
 SSA 분석 방식: %1</translation>
+    </message>
+    <message>
+        <source>
+Calls use current function pairs; behavior is not validated.</source>
+        <translation>
+호출은 현재 함수 대응을 기준으로 합니다. 동작은 검증되지 않았습니다.</translation>
+    </message>
+    <message>
+        <source>Call context…</source>
+        <translation>호출 컨텍스트…</translation>
+    </message>
+    <message>
+        <source>Primary</source>
+        <translation>주 입력</translation>
+    </message>
+    <message>
+        <source>Secondary</source>
+        <translation>보조 입력</translation>
+    </message>
+    <message>
+        <source>%1 primary / %2 secondary functions · %3 shared spans
+Coverage: %4% / %5% of eligible instructions, including paired direct calls. Function pairs condition this evidence; behavior is not validated.</source>
+        <translation>주 입력 함수 %1개 / 보조 입력 함수 %2개 · 공유 구간 %3개
+대상 명령어의 범위: %4% / %5% (대응된 직접 호출 포함). 이 증거는 함수 대응을 전제로 하며 동작은 검증되지 않았습니다.</translation>
     </message>
 </context>
 <context>
@@ -9524,6 +9556,18 @@ Ambiguities and manual decisions remain report-local. Region hypotheses retain t
     <message>
         <source>Releases</source>
         <translation>릴리스</translation>
+    </message>
+    <message>
+        <source>Calls in these saved spans rely on the source report's function pairs. They do not prove equivalent callee behavior.</source>
+        <translation>저장된 구간의 호출은 원본 보고서의 함수 대응에 근거합니다. 호출 대상의 동작이 동등함을 증명하지는 않습니다.</translation>
+    </message>
+    <message>
+        <source>All native spans</source>
+        <translation>모든 네이티브 구간</translation>
+    </message>
+    <message>
+        <source>All SSA spans</source>
+        <translation>모든 SSA 구간</translation>
     </message>
 </context>
 <context>

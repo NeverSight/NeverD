@@ -8,6 +8,7 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import check_x87_cross_host as recorder
+from scripts.tests.test_check_x87_portable_generated import reset_fixture
 
 
 class CrossHostEvidenceTests(unittest.TestCase):
@@ -73,6 +74,31 @@ class CrossHostEvidenceTests(unittest.TestCase):
                 record["untracked_source_sha256"] = untracked
                 with self.assertRaisesRegex(ValueError, "clean committed"):
                     recorder.require_clean_source_record(directory, record)
+
+    def test_reset_cross_host_reader_requires_every_seeded_observation(self):
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            directory = root / "reset-evidence"
+            artifacts = directory / "artifacts" / "x87-resets-test"
+            artifacts.mkdir(parents=True)
+            commands, rows = reset_fixture()
+            (directory / "source.patch").write_bytes(b"")
+            (artifacts / "commands.jsonl").write_text("\n".join(map(json.dumps, commands)))
+            observations = artifacts / "observations.jsonl"
+            observations.write_text("\n".join(map(json.dumps, rows)))
+            record = {"passed": True, "stable_inputs": True, "profile": "resets",
+                      "environment": {"machine": "aarch64"}, "untracked_source_sha256": {}}
+            def write_record():
+                record["files"] = {k: v for k, v in recorder.file_manifest(directory).items()
+                                   if k != "record.json"}
+                (directory / "record.json").write_text(json.dumps(record))
+            write_record()
+            _, actual = recorder.generated_observations(root, False, "resets")
+            self.assertEqual(len(actual), 2700)
+            observations.write_text("\n".join(map(json.dumps, rows[:-1])))
+            write_record()
+            with self.assertRaisesRegex(ValueError, "missing reset"):
+                recorder.generated_observations(root, False, "resets")
 
 
 if __name__ == "__main__":

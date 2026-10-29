@@ -269,6 +269,8 @@ ComparisonDialog::ComparisonDialog(const QString &Worker,
               auto &View = SSA ? FlowRegionsView : RegionsView;
               if (!View) {
                 View = new ComparisonRegionsDialog(Session, this, SSA);
+                connect(View, &ComparisonRegionsDialog::inspectCallContext,
+                        this, &ComparisonDialog::showImpact);
                 connect(View, &ComparisonRegionsDialog::inspectFunction, this,
                         [this](const auto &Side, const auto &Address) {
                           selectFunction(Side, Address);
@@ -315,6 +317,20 @@ ComparisonDialog::ComparisonDialog(const QString &Worker,
   AnalyzeRegions->setToolTip(
       tr("Bounded native instruction-run analysis for split, merge, inline and "
          "clone hypotheses. This does not validate behavior."));
+  RegionCalls = new QCheckBox(tr("Include matched calls"), Settings);
+  RegionCalls->setObjectName("comparisonRegionCalls");
+  RegionCalls->setToolTip(
+      tr("Extend shared regions across direct calls whose targets are paired. "
+         "Results depend on the current function pairs and are recomputed when "
+         "pairs change. This does not validate call behavior."));
+  connect(RegionCalls, &QCheckBox::toggled, this, [this](bool Checked) {
+    if (Checked)
+      AnalyzeRegions->setChecked(true);
+  });
+  connect(AnalyzeRegions, &QCheckBox::toggled, this, [this](bool Checked) {
+    if (!Checked)
+      RegionCalls->setChecked(false);
+  });
   AnalyzeDataFlow = new QCheckBox(tr("Dependency evidence"), Settings);
   AnalyzeDataFlow->setObjectName("comparisonAnalyzeDataFlow");
   FlowProfile = new QComboBox(Settings);
@@ -408,16 +424,17 @@ ComparisonDialog::ComparisonDialog(const QString &Worker,
   SettingsLayout->addWidget(Threshold, 0, 3);
   SettingsLayout->addWidget(new QLabel(tr("Deadline"), Settings), 0, 4);
   SettingsLayout->addWidget(Timeout, 0, 5);
-  SettingsLayout->addWidget(AnalyzeDataFlow, 1, 0);
-  SettingsLayout->addWidget(new QLabel(tr("Functions per input"), Settings), 1,
+  SettingsLayout->addWidget(RegionCalls, 1, 1, 1, 3);
+  SettingsLayout->addWidget(AnalyzeDataFlow, 2, 0);
+  SettingsLayout->addWidget(new QLabel(tr("Functions per input"), Settings), 2,
                             1);
-  SettingsLayout->addWidget(FlowFunctions, 1, 2);
-  SettingsLayout->addWidget(AnalyzeFlowRegions, 1, 3, 1, 3);
+  SettingsLayout->addWidget(FlowFunctions, 2, 2);
+  SettingsLayout->addWidget(AnalyzeFlowRegions, 2, 3, 1, 3);
   auto *ProfileLabel = new QLabel(tr("SSA representation"), Settings);
   ProfileLabel->setBuddy(FlowProfile);
-  SettingsLayout->addWidget(ProfileLabel, 2, 0);
-  SettingsLayout->addWidget(FlowProfile, 2, 1, 1, 3);
-  SettingsLayout->addWidget(FlowFragments, 2, 4, 1, 2);
+  SettingsLayout->addWidget(ProfileLabel, 3, 0);
+  SettingsLayout->addWidget(FlowProfile, 3, 1, 1, 3);
+  SettingsLayout->addWidget(FlowFragments, 3, 4, 1, 2);
   SettingsLayout->setColumnStretch(6, 1);
   Settings->setVisible(false);
   Root->addWidget(Settings);
@@ -781,10 +798,19 @@ void ComparisonDialog::run(const QString &Restore) {
   }
   Status->setText(tr("Loading comparison inputs…"));
   RestoreSettings = !Restore.isEmpty();
+  // Saved reports may carry caller-selected search thresholds and allowances.
+  // Keep those when rerunning; these controls own only enabled and calls.
+  auto NativeRegions =
+      Session.summary()["settings"].toObject()["regions"].toObject();
+  NativeRegions["enabled"] = AnalyzeRegions->isChecked();
+  if (RegionCalls->isChecked())
+    NativeRegions["calls"] = true;
+  else
+    NativeRegions.remove("calls");
   Session.start(
       Inputs[0], Inputs[1],
       {{"use_names", Names->isChecked()},
-       {"regions", AnalyzeRegions->isChecked()},
+       {"regions", NativeRegions},
        {"flow_regions",
         QJsonObject{{"enabled", AnalyzeFlowRegions->isChecked()},
                     {"fragments", FlowFragments->isChecked()}}},
@@ -815,6 +841,8 @@ void ComparisonDialog::update() {
     Names->setChecked(Settings["use_names"].toBool());
     AnalyzeRegions->setChecked(
         Settings["regions"].toObject()["enabled"].toBool());
+    RegionCalls->setChecked(AnalyzeRegions->isChecked() &&
+                            Settings["regions"].toObject()["calls"].toBool());
     const auto Flow = Settings["dataflow"].toObject();
     AnalyzeDataFlow->setChecked(Flow["enabled"].toBool());
     FlowProfile->setCurrentIndex(FlowProfile->findData(

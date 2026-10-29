@@ -25,6 +25,7 @@
 #include "neverd/ir/low/ImportCallee.h"
 #include "neverd/ir/low/InternalNoReturn.h"
 #include "neverd/ir/low/LowIntrinsicEffects.h"
+#include "neverd/ir/low/LowScalarConstant.h"
 #include "neverd/ir/low/RegistrationABI.h"
 #include "neverd/ir/low/SEHFrameProof.h"
 #include "neverd/ir/med/LowToMed.h"
@@ -4093,10 +4094,25 @@ static LocalRegisterEffect summarizeRecoveredCallRegisters(
   // such call is summarized in place.
   std::optional<CallRegisterBody> Projection;
   size_t Work = limits::ir::kSourceFrameAnalysisRemaining;
+  std::optional<std::map<SourceCallOccurrenceKey, va_t>> ScalarTargets;
   if (!Img.IsRelocatable)
-    for (size_t B = 0; B < Body.Blocks.size(); ++B)
-      for (const auto &[Index, Target] :
-           resolveLowBlockCallTargets(Body.Blocks[B], Img.Arch, &Work)) {
+    for (size_t B = 0; B < Body.Blocks.size(); ++B) {
+      auto Targets =
+          resolveLowBlockCallTargets(Body.Blocks[B], Img.Arch, &Work);
+      for (size_t I = 0; I < Body.Blocks[B].Ops.size(); ++I)
+        if (const auto &Call = Body.Blocks[B].Ops[I];
+            !Targets.count(I) && Call.Opcode == NdOp::INDIR_CALL &&
+            Call.NumInputs == 1 && !Call.Inputs[0].isConst()) {
+          const auto Site = sourceCallOccurrenceKey(Call);
+          if (!Site)
+            continue;
+          if (!ScalarTargets)
+            ScalarTargets = constantRegisterCallTargets(Body);
+          if (const auto Found = ScalarTargets->find(*Site);
+              Found != ScalarTargets->end())
+            Targets.try_emplace(I, MedCallTarget{Found->second, false});
+        }
+      for (const auto &[Index, Target] : Targets) {
         if (Target.ThroughSlot ? importCalleeName(Img, Target.Address).empty()
                                : !Img.hasExecutableCodeOwnerAt(Target.Address))
           continue;
@@ -4114,6 +4130,7 @@ static LocalRegisterEffect summarizeRecoveredCallRegisters(
         Call.Opcode = Target.ThroughSlot ? NdOp::INDIR_CALL : NdOp::CALL;
         Call.Inputs[0] = NdVar::cst(Target.Address, Call.Inputs[0].Size);
       }
+    }
   return localRegisterEffect(
       Img, Projection ? CallRegisterBodyView(*Projection) : Body,
       &NoReturnTargets, &FixedCallReads, &ArgumentSources, &StackProbes);
@@ -4397,8 +4414,10 @@ void computeCallRegisterEffects(
   std::set<va_t> DispatchThunks;
   std::map<va_t, GPRReadWidths> FixedEntryReads;
   std::map<va_t, int> FixedEntryStackArgs;
+  std::map<va_t, FixedIntegerCallArguments> FixedEntryIntegerArguments;
   if (Win64) {
     DispatchThunks = GuardForwarders;
+    const auto *Convention = callArgumentConvention(Img.Arch, Img.abiFormat());
     auto Classify = [&](va_t Entry, llvm::StringRef Name) {
       if (Name.empty() || Entry == InvalidVA)
         return;
@@ -4411,6 +4430,12 @@ void computeCallRegisterEffects(
       if (!Proto)
         return;
       Result.CallPrototypeArguments.insert(Entry);
+      // Internal named routines use the same complete operand contract as
+      // imports. Counts alone leave register-only calls open to incidental
+      // frame stores during later argument recovery.
+      if (Convention && Convention->PrototypeIntegerArguments)
+        if (auto Integer = Convention->PrototypeIntegerArguments(Name))
+          FixedEntryIntegerArguments.emplace(Entry, std::move(*Integer));
       static constexpr uint64_t Win64Args[] = {x86reg::RCX, x86reg::RDX,
                                                x86reg::R8, x86reg::R9};
       GPRReadWidths Widths{};
@@ -4492,7 +4517,8 @@ void computeCallRegisterEffects(
         Change(Effect->second)->StackArgs = Count;
     Result.CallFloatReturns = std::move(Prototyped.FloatReturns);
     Result.CallEntryFloatingArguments = std::move(Prototyped.FloatingArguments);
-    Result.CallEntryIntegerArguments = std::move(Prototyped.IntegerArguments);
+    Result.CallEntryIntegerArguments = std::move(FixedEntryIntegerArguments);
+    Result.CallEntryIntegerArguments.merge(Prototyped.IntegerArguments);
     Result.CallEntryVariadicArguments = std::move(Prototyped.VariadicArguments);
   }
   CallRegisterSummaries Summaries =
@@ -5445,6 +5471,16 @@ void Pipeline::buildLowIR(
       AuditIt->UnsupportedInstructions = Low.UnsupportedInstructionAddresses;
       AuditIt->UnprovenReturns = Low.UnprovenReturnAddresses;
       AuditIt->TruncatedPaths = Low.TruncatedPathAddresses;
+      if (Opts.DeferMedIR) {
+        std::set<va_t> Addresses;
+        for (const auto &Block : Low.Blocks)
+          for (const auto &Instruction : Block.InstructionBoundaries)
+            Addresses.insert(Instruction.Address);
+        Addresses.insert(Low.UnsupportedInstructionAddresses.begin(),
+                         Low.UnsupportedInstructionAddresses.end());
+        AuditIt->NativeInstructionAddresses.assign(Addresses.begin(),
+                                                   Addresses.end());
+      }
     }
 
     if (Opts.MaxFunctions > 0 && FuncCount >= Opts.MaxFunctions) {

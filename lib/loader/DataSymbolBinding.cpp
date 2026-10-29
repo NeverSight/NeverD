@@ -43,7 +43,19 @@ bool immutableSlot(const BinaryImage &Image, va_t Slot) {
 std::map<va_t, DataSymbolBinding>
 collectDataSymbolBindings(const BinaryImage &Image) {
   std::map<va_t, DataSymbolBinding> Bindings;
-  if (!Image.isELF() || Image.IsRelocatable)
+  // A relocatable object's GOT cell holds the address ObjectExterns gives an
+  // undefined data symbol: the cell binds that symbol, which another module
+  // defines.
+  if (Image.IsRelocatable) {
+    for (const auto &[Cell, Name] : Image.ObjectExternDataCells) {
+      DataSymbolBinding Binding;
+      Binding.Name = Name;
+      Binding.Immutable = immutableSlot(Image, Cell);
+      Bindings.emplace(Cell, std::move(Binding));
+    }
+    return Bindings;
+  }
+  if (!Image.isELF())
     return Bindings;
   for (const auto &Relocation : Image.Relocations) {
     if (!isDataSlot(Image.Arch, Relocation.Type) || !Relocation.ELF ||

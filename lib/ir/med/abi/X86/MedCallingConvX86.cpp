@@ -5,12 +5,14 @@
 //===----------------------------------------------------------------------===//
 ///
 /// \file
-/// i386 CDECL and register calling-convention parameter recovery.
+/// i386 CDECL and register calling-convention parameter recovery, and the
+/// System V x86-64 vector parameters only a variadic call reads.
 ///
 //===----------------------------------------------------------------------===//
 
 #include "neverd/ir/Limits.h"
 #include "neverd/ir/TargetRegInfo.h"
+#include "neverd/ir/low/CallRegisterEffects.h"
 #include "neverd/ir/med/IntrinsicShapes.h"
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/ir/med/MedCallingConvDetail.h"
@@ -469,6 +471,60 @@ void detectCdeclStackParams(MedFunc &Func, Arch TargetArch) {
   }
   med_calling_conv_detail::recoverFPStackReads(
       Func, TargetArch, 4, 4, BaseIdx, rawStackArgOffset, MutableArgOffsets);
+}
+
+//===----------------------------------------------------------------------===//
+// System V x86-64 vector parameters only a variadic call reads
+//===----------------------------------------------------------------------===//
+
+void detectSummaryVectorParams(MedFunc &Func, const TargetRegInfo &TRI,
+                               const GPRReadWidths &Summary, Arch TargetArch,
+                               BinaryFormat Fmt) {
+  // Every caller passes the vector argument registers this function's
+  // entry-read summary lists (LowToMed).  One the body reads, if only as an
+  // operand of a call it passes the register to, has an entry copy that
+  // detectFPParams follows.  A call to a variadic function that saves the
+  // vector registers for va_arg has no such operand: it passes the doubles
+  // its AL counts, which the summary reads (RegisterStep::VectorCount), a
+  // register this function only passes on included.  `long gd(double x)
+  // {return logv("y", x);}` is `lea rdi; mov al, 1; jmp logv`.  Such a
+  // register is the double parameter it carries, as a register the summary
+  // lists that the body never reads still holds its integer parameter's
+  // position (detectRegisterParams).
+  if (Func.Blocks.empty())
+    return;
+  auto CopiedAtEntry = [&](uint64_t Register) {
+    for (const MedOp &Op : Func.Blocks.front().Ops) {
+      if (Op.Opcode != NdOp::COPY)
+        return false;
+      if (med_calling_conv_detail::isEntryLiveInCopy(Op, Register))
+        return true;
+    }
+    return false;
+  };
+  const auto VectorRegs = TRI.floatingParamRegs(Fmt);
+  for (size_t K = 0; K < VectorRegs.size() && K < kX64VectorArgumentFamilies;
+       ++K) {
+    const uint64_t Register = VectorRegs[K];
+    const uint8_t Width = Summary[kX64VectorFamilyBase + K];
+    if (!Width || CopiedAtEntry(Register) ||
+        llvm::any_of(Func.Params,
+                     [&](const MedVar &P) { return P.RegOff == Register; }))
+      continue;
+    MedVar Param;
+    Param.Kind = MedVar::Param;
+    Param.Id = -1;
+    Param.Size = TRI.FPABIRegWidth;
+    Param.RegOff = Register;
+    Param.TheArch = TargetArch;
+    // The floating parameters follow the integer ones in register order.
+    auto At = llvm::find_if(Func.Params, [&](const MedVar &P) {
+      return TRI.isFPArgReg(P.RegOff, Fmt) && P.RegOff > Register;
+    });
+    Func.Params.insert(At, Param);
+    if (Width == sizeof(float) || Width == sizeof(double))
+      Func.FPParamScalarBytes[Register] = Width;
+  }
 }
 
 namespace med_calling_conv_detail {

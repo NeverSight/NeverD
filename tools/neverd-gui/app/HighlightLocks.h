@@ -27,7 +27,8 @@ namespace neverd::gui {
 class HighlightLocks final : public QObject {
   Q_OBJECT
 public:
-  static constexpr int Colors = ::neverd::limits::gui_config::kHighlightLockColors;
+  static constexpr int Colors =
+      ::neverd::limits::gui_config::kHighlightLockColors;
 
   using QObject::QObject;
 

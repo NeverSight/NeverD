@@ -256,7 +256,8 @@ bool runtimeFlagsIntrinsic(
     return Op.NumInputs == 1 && Op.Output.isTemp() && Op.Output.Size == 8;
   if (Id == Intrinsic::Popf)
     return Op.NumInputs == 2 && Op.Output.Size == 0 && Op.Inputs[1].Size == 8;
-  return Profile && detail::x64InterruptFlagValue(Op, *Profile).has_value();
+  return Profile && (detail::x64InterruptFlagValue(Op, *Profile).has_value() ||
+                     detail::x64AccessCheckFlagValue(Op, *Profile).has_value());
 }
 
 namespace {
@@ -268,23 +269,23 @@ std::array<NdVar, 2> cpuQuerySelectors() {
 }
 
 bool runtimeReadBundle(const SpecializationInstruction &I, NdVar Sample,
-                       uint8_t Encoding, size_t Count) {
+                       uint8_t Encoding, size_t Count,
+                       std::optional<uint8_t> Third = std::nullopt) {
   const auto &B = I.Origin;
-  if (I.NativeBytes.size() != 2 || I.NativeBytes[0] != 0x0f ||
-      I.NativeBytes[1] != Encoding || B.Size != 2 ||
-      B.Mode != InstructionMode::Default || B.FirstOp != 0 ||
+  const unsigned Size = Third ? 3 : 2;
+  if (I.NativeBytes.size() != Size || I.NativeBytes[0] != 0x0f ||
+      I.NativeBytes[1] != Encoding || (Third && I.NativeBytes[2] != *Third) ||
+      B.Size != Size || B.Mode != InstructionMode::Default || B.FirstOp != 0 ||
       B.OpCount != Count || B.Control != LowInstructionControl::None ||
       B.ControlFlags != LowInstructionControlFlag::None || B.Immediate ||
       B.TargetMode != LowInstructionTargetMode::Preserve ||
-      B.Address > InvalidVA - 2 ||
-      I.Fallthrough != SpecializationCursor{B.Address + 2, B.Mode} ||
+      B.Address > InvalidVA - Size ||
+      I.Fallthrough != SpecializationCursor{B.Address + Size, B.Mode} ||
       I.IsNativeCall || I.TerminalImport ||
       I.NativeStackControl != SpecializationNativeStackControl::None ||
       I.ProfileProjection != InterpreterProfileProjection::None ||
       I.Ops.size() != Count ||
-      I.UndefinedEffects.Coverage != (Encoding == 0xa2
-                                          ? LowUndefinedCoverage::Complete
-                                          : LowUndefinedCoverage::Missing) ||
+      I.UndefinedEffects.Coverage != LowUndefinedCoverage::Complete ||
       I.UndefinedEffects.OpCount != Count ||
       !I.UndefinedEffects.Effects.empty() ||
       I.UndefinedEffects.OperationDigest !=
@@ -364,7 +365,7 @@ runtimeReadOutputs(const SpecializationInstruction &I, NdVar Sample,
 std::optional<RuntimeRegisterRead>
 lowerRuntimeMsrRead(const SpecializationInstruction &I, NdVar Sample,
                     std::optional<InterpreterMachineStateProfile> Profile) {
-  if (Profile != InterpreterMachineStateProfile::KernelX64NoFaultV1 ||
+  if (!Profile || !isKernelX64MachineStateProfile(*Profile) ||
       !runtimeReadBundle(I, Sample, 0x32, 6))
     return std::nullopt;
   const NdVar Value = I.Ops[0].Output;
@@ -424,6 +425,24 @@ lowerRuntimeMsrRead(const SpecializationInstruction &I, NdVar Sample,
 }
 
 } // namespace
+
+std::optional<llvm::ArrayRef<uint64_t>>
+runtimeTimestampRegisters(const SpecializationInstruction &I, NdVar Scratch) {
+  static constexpr uint64_t Counter[]{x86reg::RAX, x86reg::RDX};
+  static constexpr uint64_t Auxiliary[]{x86reg::RAX, x86reg::RDX, x86reg::RCX};
+  const bool Aux = I.NativeBytes.size() == 3;
+  const llvm::ArrayRef<uint64_t> Registers =
+      Aux ? llvm::ArrayRef<uint64_t>(Auxiliary)
+          : llvm::ArrayRef<uint64_t>(Counter);
+  if (!runtimeReadBundle(I, Scratch, Aux ? 0x01 : 0x31,
+                         1 + 2 * Registers.size(),
+                         Aux ? std::optional<uint8_t>(0xf9) : std::nullopt) ||
+      !runtimeReadOutputCarriers(I.Ops,
+                                 Aux ? Intrinsic::Rdtscp : Intrinsic::Rdtsc,
+                                 Registers, {}, true, Scratch))
+    return std::nullopt;
+  return Registers;
+}
 
 // Intel SDM Vol.2B, RDTSC: the low/high words go to EAX/EDX and both
 // upper halves clear. The existing multi-output bundle keeps the runtime read;
@@ -515,9 +534,9 @@ describeCPUQuery(llvm::ArrayRef<LowOp> Operations) {
   return Query;
 }
 
-// A retained trap has exact semantics even though its exception-state outputs
-// have no undefined-effect audit. It may only be collected, never executed in
-// this nonfaulting proof. Do not turn its Missing sidecar into Complete.
+// A retained trap keeps its exact lift and undefined-output audit. Neither
+// supplies an exception continuation: this nonfaulting proof may collect an
+// unreachable trap but cannot execute one or change its coverage grade.
 bool isRetainedNativeTrap(const SpecializationInstruction &Insn) {
   if (Insn.Origin.Control != LowInstructionControl::Terminator ||
       Insn.Origin.Immediate || Insn.IsNativeCall ||
@@ -527,7 +546,6 @@ bool isRetainedNativeTrap(const SpecializationInstruction &Insn) {
       Insn.NativeBytes.size() > x86::kMaxInstructionLen ||
       Insn.NativeBytes.size() != Insn.Origin.Size || Insn.Ops.size() != 1 ||
       !Insn.UndefinedEffects.Effects.empty() ||
-      Insn.UndefinedEffects.Coverage != LowUndefinedCoverage::Missing ||
       Insn.UndefinedEffects.OpCount != Insn.Ops.size() ||
       Insn.PreservedState != LowInstructionPreservedState{} ||
       Insn.UndefinedEffects.OperationDigest !=
@@ -550,7 +568,9 @@ bool isRetainedNativeTrap(const SpecializationInstruction &Insn) {
     return false;
   // Use the decoder's trap classification and exact lift, including INT1 and
   // both INT3 spellings. A self-consistent sidecar cannot authenticate bytes
-  // which describe a different operation or exception.
+  // which describe a different operation or exception. The lift owns whether
+  // undefined-output coverage is Complete or Missing; neither supplies an
+  // exception continuation or permits executing a feasible trap in this proof.
   std::vector<LowOp> Expected;
   LowInstructionUndefinedEffects Effects;
   try {

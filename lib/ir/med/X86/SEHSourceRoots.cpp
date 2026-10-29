@@ -10,6 +10,8 @@
 
 #include "neverd/ir/low/LowIR.h"
 
+#include "llvm/ADT/STLExtras.h"
+
 namespace neverd::x86_seh {
 
 void seedSourceEntries(MedFunc &Func, const LowFunc &Low,
@@ -20,7 +22,13 @@ void seedSourceEntries(MedFunc &Func, const LowFunc &Low,
   // addressable entry. This is a conservative source approximation, not a
   // memory-preservation or native entry contract.
   for (size_t B = 1; B < Func.Blocks.size(); ++B) {
-    if (!Low.OrdinaryModuleAnalysisRoots.count(Func.Blocks[B].StartAddr))
+    const va_t Start = Func.Blocks[B].StartAddr;
+    // A local unwind's target only its exits enter is entered by ordinary
+    // flow alone.
+    if (!Low.OrdinaryModuleAnalysisRoots.count(Start) ||
+        llvm::any_of(Func.SEHLocalUnwindExits, [&](const auto &Exit) {
+          return Exit.OwnsTarget && Exit.Target == Start;
+        }))
       continue;
     std::vector<MedOp> Seeds;
     for (int Id : LiveIn[B]) {

@@ -22,7 +22,7 @@ namespace neverd::analysis::detail {
 
 /// Explicit native flags profiles. Intel SDM 253667-093, Table 4-20 and 64-bit
 /// POPFQ pseudocode (4-408/409), PUSHFQ (4-528/529). RF is cleared; TF/AC
-/// are architecturally writable but deliberately excluded by both profiles.
+/// are architecturally writable but deliberately excluded by V1 profiles.
 /// CPL=0 also writes IF/IOPL. KernelX64NoFaultV1 explicitly requires IOPL=0
 /// throughout the admitted execution, so a nonzero popped IOPL is refused.
 struct X64MachineFlags {
@@ -38,6 +38,7 @@ struct X64MachineFlags {
   static constexpr uint64_t KernelRejectedWriteMask =
       UserRejectedWriteMask | IOPLMask;
   static constexpr uint64_t ResumeMask = uint64_t{1} << 16;
+  static constexpr uint64_t AlignmentCheckMask = uint64_t{1} << 18;
   static constexpr uint64_t SnapshotClearMask =
       ResumeMask | (uint64_t{1} << 17);
   static constexpr uint64_t EntryMask =
@@ -52,7 +53,14 @@ struct X64MachineFlags {
 
   static bool supportsProfile(InterpreterMachineStateProfile Profile) {
     return Profile == InterpreterMachineStateProfile::UserX64NoFaultV1 ||
-           Profile == InterpreterMachineStateProfile::KernelX64NoFaultV1;
+           isKernelX64MachineStateProfile(Profile);
+  }
+
+  static constexpr uint64_t entryMask(InterpreterMachineStateProfile Profile) {
+    return EntryMask |
+           (Profile == InterpreterMachineStateProfile::KernelX64SmapNoFaultV2
+                ? AlignmentCheckMask
+                : 0);
   }
 };
 
@@ -61,7 +69,7 @@ struct X64MachineFlags {
 /// privilege transitions, including observation of STI's interrupt inhibition.
 inline std::optional<bool>
 x64InterruptFlagValue(const LowOp &Op, InterpreterMachineStateProfile Profile) {
-  if (Profile != InterpreterMachineStateProfile::KernelX64NoFaultV1 ||
+  if (!isKernelX64MachineStateProfile(Profile) ||
       Op.Opcode != NdOp::INTRINSIC || Op.NumInputs != 1 || Op.Output.Size ||
       Op.MemoryOrdering != NdMemoryOrdering::None ||
       Op.MemoryAddressSpace != NdMemoryAddressSpace::Default ||
@@ -70,6 +78,25 @@ x64InterruptFlagValue(const LowOp &Op, InterpreterMachineStateProfile Profile) {
   if (Op.Inputs[0].Offset == static_cast<uint64_t>(Intrinsic::Cli))
     return false;
   if (Op.Inputs[0].Offset == static_cast<uint64_t>(Intrinsic::Sti))
+    return true;
+  return std::nullopt;
+}
+
+/// Intel SDM 253666-089, CLAC and 253667-080, STAC: at CPL=0 with SMAP
+/// available, only AC changes. This admission is separate from the V1
+/// domains, which require AC=0 throughout their execution.
+inline std::optional<bool>
+x64AccessCheckFlagValue(const LowOp &Op,
+                        InterpreterMachineStateProfile Profile) {
+  if (Profile != InterpreterMachineStateProfile::KernelX64SmapNoFaultV2 ||
+      Op.Opcode != NdOp::INTRINSIC || Op.NumInputs != 1 || Op.Output.Size ||
+      Op.MemoryOrdering != NdMemoryOrdering::None ||
+      Op.MemoryAddressSpace != NdMemoryAddressSpace::Default ||
+      !Op.Inputs[0].isConst() || Op.Inputs[0].Size != 2)
+    return std::nullopt;
+  if (Op.Inputs[0].Offset == static_cast<uint64_t>(Intrinsic::Clac))
+    return false;
+  if (Op.Inputs[0].Offset == static_cast<uint64_t>(Intrinsic::Stac))
     return true;
   return std::nullopt;
 }
@@ -100,7 +127,8 @@ lowerX64MachineFlags(const LowOp &IntrinsicOp, NdVar System,
   const auto Kind = IntrinsicOp.Inputs[0].Offset;
   const bool Push = Kind == static_cast<uint64_t>(Intrinsic::Pushf);
   const auto Interrupt = x64InterruptFlagValue(IntrinsicOp, Profile);
-  if (!Interrupt &&
+  const auto AccessCheck = x64AccessCheckFlagValue(IntrinsicOp, Profile);
+  if (!Interrupt && !AccessCheck &&
       (Push ? (IntrinsicOp.NumInputs != 1 || !IntrinsicOp.Output.isTemp() ||
                IntrinsicOp.Output.Size != 8)
             : (Kind != static_cast<uint64_t>(Intrinsic::Popf) ||
@@ -124,18 +152,26 @@ lowerX64MachineFlags(const LowOp &IntrinsicOp, NdVar System,
     constexpr uint64_t IF = uint64_t{1} << 9;
     Emit(*Interrupt ? NdOp::INT_OR : NdOp::INT_AND, System,
          {System, Constant(*Interrupt ? IF : ~IF)});
+  } else if (AccessCheck) {
+    const uint64_t AC = X64MachineFlags::AlignmentCheckMask;
+    Emit(*AccessCheck ? NdOp::INT_OR : NdOp::INT_AND, System,
+         {System, Constant(*AccessCheck ? AC : ~AC)});
   } else if (Push) {
     Emit(NdOp::INT_AND, IntrinsicOp.Output,
          {System, Constant(~X64MachineFlags::SnapshotClearMask)});
   } else {
     const NdVar Image = IntrinsicOp.Inputs[1];
-    const bool Kernel =
-        Profile == InterpreterMachineStateProfile::KernelX64NoFaultV1;
-    const uint64_t WriteMask = Kernel ? X64MachineFlags::KernelSystemWriteMask
-                                      : X64MachineFlags::UserSystemWriteMask;
-    const uint64_t RejectMask = Kernel
-                                    ? X64MachineFlags::KernelRejectedWriteMask
-                                    : X64MachineFlags::UserRejectedWriteMask;
+    const bool Kernel = isKernelX64MachineStateProfile(Profile);
+    const bool Smap =
+        Profile == InterpreterMachineStateProfile::KernelX64SmapNoFaultV2;
+    const uint64_t AC = Smap ? X64MachineFlags::AlignmentCheckMask : 0;
+    const uint64_t WriteMask = (Kernel ? X64MachineFlags::KernelSystemWriteMask
+                                       : X64MachineFlags::UserSystemWriteMask) |
+                               AC;
+    const uint64_t RejectMask =
+        (Kernel ? X64MachineFlags::KernelRejectedWriteMask
+                : X64MachineFlags::UserRejectedWriteMask) &
+        ~AC;
     const NdVar BadBits = Temporary(8), Bad = Temporary(1);
     Emit(NdOp::INT_AND, BadBits, {Image, Constant(RejectMask)});
     Emit(NdOp::INT_NOTEQUAL, Bad, {BadBits, Constant(0)});

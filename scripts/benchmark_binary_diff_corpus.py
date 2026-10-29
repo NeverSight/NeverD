@@ -57,7 +57,17 @@ def source_path(value, directory, root):
 
 
 def source_identity(die, dwarf, root):
-    top = die.cu.get_top_DIE()
+    # GCC LTO places concrete bodies in an artificial compilation unit. The
+    # abstract instance retains their original unit, including the distinction
+    # between same-named local functions defined by different source files.
+    # A specification can name a declaration in another unit, so it must not
+    # replace this definition's unit. Missing origin information stays unknown.
+    original, visited = die, set()
+    while "DW_AT_abstract_origin" in original.attributes:
+        bench.require(original.offset not in visited, "cyclic DWARF abstract origin")
+        visited.add(original.offset)
+        original = original.get_DIE_from_attribute("DW_AT_abstract_origin")
+    top = original.cu.get_top_DIE()
     directory = text(top.attributes.get("DW_AT_comp_dir").value) if "DW_AT_comp_dir" in top.attributes else ""
     unit = source_path(top.attributes["DW_AT_name"].value, directory, root)
     owner, file_index = inherited_attribute(die, "DW_AT_decl_file")

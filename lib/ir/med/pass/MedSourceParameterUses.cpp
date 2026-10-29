@@ -2,6 +2,7 @@
 
 #include "neverd/ir/Limits.h"
 #include "neverd/ir/SourceABI.h"
+#include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/med/MedIR.h"
 #include "neverd/ir/med/MedNoReturn.h"
 
@@ -273,7 +274,9 @@ observedMedSourceEntryRegisters(const MedFunc &Function,
   return Registers;
 }
 
-std::vector<bool> inferMedSourcePointerParameters(const MedFunc &Function) {
+static std::vector<bool> inferPointerParameters(
+    const MedFunc &Function, unsigned PointerBytes,
+    const std::map<va_t, std::vector<TypeRef>> *CalleeParameters) {
   std::vector<bool> Result(Function.Params.size(), false);
   std::map<ValueKey, ValueUses> Values;
   std::set<ValueKey> Definitions;
@@ -289,16 +292,27 @@ std::vector<bool> inferMedSourcePointerParameters(const MedFunc &Function) {
       return Result;
   }
 
+  // SSA version zero can be the first implicit definition after a call.
+  // Its physical register alone is not evidence of an incoming parameter.
+  std::set<ValueKey> Clobbered;
+  for (const auto &Clobber : Function.CallClobbers)
+    Clobbered.insert(key(Clobber.Value));
+  std::map<std::pair<int, int>, const MedCallInfo *> Calls;
+  for (const auto &Call : Function.CallInfos)
+    Calls.emplace(std::pair(Call.BlockId, Call.OpIdx), &Call);
+
   bool Ambiguous = false;
   auto Observe = [&](const MedVar &Value) {
-    if (Value.Kind == MedVar::Reg && Value.SSAVer == 0) {
+    if (Value.Kind == MedVar::Reg && Value.SSAVer == 0 &&
+        !Clobbered.count(key(Value))) {
       const auto Found = EntryRegisters.find(Value.RegOff);
       if (Found != EntryRegisters.end()) {
         // Generic ABI inference records Params separately from SSA live-ins.
         // Only the entry version at that exact physical location represents
         // the parameter; later versions of the register are unrelated.
         Values[key(Value)].Inputs.emplace_back(
-            key(*Found->second), Value.Size == 8 && Found->second->Size == 8);
+            key(*Found->second),
+            Value.Size == PointerBytes && Found->second->Size == PointerBytes);
       }
     }
     if (Value.Kind != MedVar::Param)
@@ -311,20 +325,22 @@ std::vector<bool> inferMedSourcePointerParameters(const MedFunc &Function) {
   auto Seed = [&](const MedVar &Value, unsigned Role) {
     Observe(Value);
     if (!Value.isConst())
-      Pending.emplace_back(key(Value),
-                           Role == Pointer && Value.Size != 8 ? Scalar : Role);
+      Pending.emplace_back(
+          key(Value),
+          Role == Pointer && Value.Size != PointerBytes ? Scalar : Role);
   };
   auto Connect = [&](const MedVar &Output, const MedVar &Input) {
     Observe(Input);
     if (!Input.isConst())
-      Values[key(Output)].Inputs.emplace_back(key(Input), Output.Size == 8 &&
-                                                              Input.Size == 8);
+      Values[key(Output)].Inputs.emplace_back(key(Input),
+                                              Output.Size == PointerBytes &&
+                                                  Input.Size == PointerBytes);
   };
   auto Define = [&](const MedVar &Output) {
     if (Output.Size && !Output.isConst() &&
         (Output.Kind == MedVar::Param ||
          (Output.Kind == MedVar::Reg && Output.SSAVer == 0 &&
-          EntryRegisters.count(Output.RegOff)) ||
+          Output.Size == PointerBytes && EntryRegisters.count(Output.RegOff)) ||
          !Definitions.insert(key(Output)).second))
       Ambiguous = true;
   };
@@ -335,7 +351,8 @@ std::vector<bool> inferMedSourcePointerParameters(const MedFunc &Function) {
       for (const auto &[Predecessor, Input] : Phi.Args)
         Connect(Phi.Output, Input);
     }
-    for (const auto &Op : Block.Ops) {
+    for (size_t OpIndex = 0; OpIndex < Block.Ops.size(); ++OpIndex) {
+      const auto &Op = Block.Ops[OpIndex];
       if (Op.Opcode == NdOp::COPY && Op.NumInputs == 1 &&
           Op.Output == Op.Inputs[0] && Op.Output.Size == Op.Inputs[0].Size)
         continue;
@@ -343,7 +360,7 @@ std::vector<bool> inferMedSourcePointerParameters(const MedFunc &Function) {
       if (Op.Opcode == NdOp::COPY && Op.NumInputs == 1) {
         Connect(Op.Output, Op.Inputs[0]);
         // A narrowed view is a scalar use even if its result is dead.
-        if (Op.Output.Size != 8 || Op.Inputs[0].Size != 8)
+        if (Op.Output.Size != PointerBytes || Op.Inputs[0].Size != PointerBytes)
           Seed(Op.Inputs[0], Scalar);
         continue;
       }
@@ -356,11 +373,65 @@ std::vector<bool> inferMedSourcePointerParameters(const MedFunc &Function) {
           Op.SourceCallHint &&
           validateSourceABI(Op.SourceCallHint->Signature, Error) &&
           Op.NumInputs == Parameters.size() + 1;
+      if (!BoundCall &&
+          (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL)) {
+        const auto Found = Calls.find({Block.Id, static_cast<int>(OpIndex)});
+        if (Found != Calls.end()) {
+          const auto &Call = *Found->second;
+          const std::vector<TypeRef> *Types = nullptr;
+          if (CalleeParameters && !Op.SourceCallHint &&
+              !Call.ArgumentsInCalleeRegisterOrder)
+            if (auto Declared = CalleeParameters->find(Call.TargetAddr);
+                Declared != CalleeParameters->end() &&
+                Declared->second.size() == Call.Args.size())
+              Types = &Declared->second;
+          // Explicit operands and a recovered list must describe the same
+          // call before a declaration can assign roles to those operands.
+          bool SameArguments = Op.NumInputs == 1;
+          if (Op.NumInputs == Call.Args.size() + 1) {
+            SameArguments = true;
+            for (size_t I = 0; I < Call.Args.size(); ++I)
+              SameArguments &= Op.Inputs[I + 1] == Call.Args[I] &&
+                               Op.Inputs[I + 1].Size == Call.Args[I].Size;
+          }
+          for (size_t I = 0; I < Call.Args.size(); ++I) {
+            const auto Type = Types ? (*Types)[I] : nullptr;
+            Seed(Call.Args[I], SameArguments && Type &&
+                                       Type->Kind == NdTypeKind::Ptr &&
+                                       Type->Size == PointerBytes
+                                   ? Pointer
+                                   : Scalar);
+          }
+          if (SameArguments) {
+            if (Op.NumInputs)
+              Seed(Op.Inputs[0], Scalar);
+            continue;
+          }
+        } else if (CalleeParameters && !Op.SourceCallHint && Op.NumInputs &&
+                   Op.Inputs[0].isConst()) {
+          // Fixed scalar declarations also bind explicit source-order operands
+          // before SSA. Independent register-bank routes may have no CallInfo.
+          if (const auto Declared =
+                  CalleeParameters->find(Op.Inputs[0].ConstVal);
+              Declared != CalleeParameters->end() &&
+              Op.NumInputs == Declared->second.size() + 1) {
+            Seed(Op.Inputs[0], Scalar);
+            for (size_t I = 0; I < Declared->second.size(); ++I) {
+              const auto &Type = Declared->second[I];
+              Seed(Op.Inputs[I + 1], Type && Type->Kind == NdTypeKind::Ptr &&
+                                             Type->Size == PointerBytes
+                                         ? Pointer
+                                         : Scalar);
+            }
+            continue;
+          }
+        }
+      }
       for (unsigned Index = 0; Index < Op.NumInputs; ++Index) {
         unsigned Role = Scalar;
         if (BoundCall && Index) {
           const auto &Type = Parameters[Index - 1].Type;
-          if (Type->Kind == NdTypeKind::Ptr && Type->Size == 8)
+          if (Type->Kind == NdTypeKind::Ptr && Type->Size == PointerBytes)
             Role = Pointer;
         }
         // Other operations may consume integer bits, compare addresses, or
@@ -387,9 +458,19 @@ std::vector<bool> inferMedSourcePointerParameters(const MedFunc &Function) {
   for (size_t Index = 0; Index < Function.Params.size(); ++Index) {
     const auto &Parameter = Function.Params[Index];
     const auto Found = Values.find(key(Parameter));
-    Result[Index] = Parameter.Id >= 0 && Parameter.Size == 8 &&
+    Result[Index] = Parameter.Id >= 0 && Parameter.Size == PointerBytes &&
                     Found != Values.end() && Found->second.Roles == Pointer;
   }
   return Result;
+}
+std::vector<bool> inferMedSourcePointerParameters(const MedFunc &Function) {
+  return inferPointerParameters(Function, 8, nullptr);
+}
+
+std::vector<bool> inferMedSourcePointerParameters(
+    const MedFunc &Function, Arch Architecture,
+    const std::map<va_t, std::vector<TypeRef>> &CalleeParameters) {
+  return inferPointerParameters(
+      Function, getTargetRegInfo(Architecture).PointerSize, &CalleeParameters);
 }
 } // namespace neverd

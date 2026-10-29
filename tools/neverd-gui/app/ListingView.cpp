@@ -551,8 +551,8 @@ int ListingView::columnAt(const Line &line, int x) const {
   return layout.lineAt(0).xToCursor(x - textLeft());
 }
 
-std::optional<std::pair<int, int>>
-ListingView::prefixWordAt(const Line &line, int x) const {
+std::optional<std::pair<int, int>> ListingView::prefixWordAt(const Line &line,
+                                                             int x) const {
   const int column = columnAt(line, x);
   if (column >= 0 || x < arrowsWidth_)
     return std::nullopt;
@@ -1038,9 +1038,8 @@ void ListingView::paintEvent(QPaintEvent *) {
       const QTextLine textLine = layout.lineAt(0);
       // Locked words keep their colors under the cursor's highlight.
       const auto mark = [&](const QString &word, ColorRole role) {
-        for (const auto &[first, last] :
-             highlightRanges(line.styled, word,
-                             static_cast<int>(ListingRole::Register))) {
+        for (const auto &[first, last] : highlightRanges(
+                 line.styled, word, static_cast<int>(ListingRole::Register))) {
           const qreal x0 = textLine.cursorToX(first);
           const qreal x1 = textLine.cursorToX(last);
           painter.fillRect(QRectF(left + x0, y, x1 - x0, lineHeight_),

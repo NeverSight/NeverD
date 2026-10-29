@@ -579,8 +579,9 @@ TEST(OriginalBinaryUndefinedIndependence,
 
 TEST(OriginalBinaryUndefinedIndependence,
      UnreachableUnauditedBoundariesRequireOptInAndRetainExactReceipts) {
-  for (const auto &Bytes : std::vector<std::vector<uint8_t>>{
-           {0xd1, 0xd0}, {0xf0, 0x0f, 0xc1, 0x08}, {0xf3, 0xa4}}) {
+  for (const auto &Bytes :
+       std::vector<std::vector<uint8_t>>{{0xd1, 0xd0}, {0xf3, 0xa4}}) {
+    SCOPED_TRACE(::testing::PrintToString(Bytes));
     // CMP EAX,EAX; JNE boundary; MOV EAX,7; RET; boundary: body; RET.
     Program P({0x39, 0xc0, 0x75, 6, 0xb8, 7, 0, 0, 0, 0xc3});
     P.Image.Segments.front().Data.insert(P.Image.Segments.front().Data.end(),
@@ -624,6 +625,35 @@ TEST(OriginalBinaryUndefinedIndependence,
     Limits.MaxSolverQueries = Good.Proof.SolverQueries - 1;
     expectRefusal(P, Status::BudgetExceeded, Limits);
     // Making the branch feasible cannot turn the boundary into an empty body.
+    P.Image.Segments.front().Data[2] = 0x74;
+    expectRefusal(P, Status::Unsupported);
+  }
+}
+
+TEST(OriginalBinaryUndefinedIndependence,
+     UnreachableAuditedAtomicRetainsCompleteCoverage) {
+  for (bool RetainUnaudited : {false, true}) {
+    SCOPED_TRACE(RetainUnaudited);
+    // CMP EAX,EAX; JNE atomic; MOV EAX,7; RET;
+    // atomic: LOCK XADD [RAX],ECX; RET.
+    Program P({0x39, 0xc0, 0x75, 6, 0xb8, 7, 0, 0, 0, 0xc3, 0xf0, 0x0f, 0xc1,
+               0x08, 0xc3});
+    P.Contract.RetainUnauditedNativeBoundaries = RetainUnaudited;
+    const auto Good = P.check();
+    ASSERT_TRUE(Good.proved()) << Good.Proof.Diagnostic;
+    EXPECT_TRUE(Good.Certificate->LowIR.NativeAuditBoundaries.empty());
+    const auto &Instructions = Good.Certificate->Instructions;
+    const auto Atomic = std::find_if(
+        Instructions.begin(), Instructions.end(),
+        [](const auto &I) { return I.Origin.Address == Entry + 10; });
+    ASSERT_NE(Atomic, Instructions.end());
+    EXPECT_EQ(Atomic->NativeBytes,
+              (std::vector<uint8_t>{0xf0, 0x0f, 0xc1, 0x08}));
+    EXPECT_EQ(Atomic->UndefinedEffects.Coverage,
+              LowUndefinedCoverage::Complete);
+    EXPECT_EQ(Atomic->UndefinedEffects.OperationDigest,
+              lowUndefinedOperationDigest(Atomic->Ops));
+    // A complete undefined-output audit supplies no memory contract for RAX.
     P.Image.Segments.front().Data[2] = 0x74;
     expectRefusal(P, Status::Unsupported);
   }
@@ -1139,7 +1169,7 @@ TEST(OriginalBinaryUndefinedIndependence,
 }
 
 TEST(OriginalBinaryUndefinedIndependence,
-     UnreachableTrapRetainsBytesAndMissingEffects) {
+     UnreachableTrapRetainsBytesAndExactEffectAudit) {
   // xor eax,eax; jne trap; ret; trap. No bytes follow the trap, so inventing
   // a resumption edge would fail even though the original branch is untaken.
   const std::initializer_list<uint8_t> Encodings[] = {
@@ -1162,7 +1192,10 @@ TEST(OriginalBinaryUndefinedIndependence,
         hasLowInstructionControlFlag(It->Origin.ControlFlags,
                                      LowInstructionControlFlag::Resumable),
         *Bytes.begin() != 0x0f);
-    EXPECT_EQ(It->UndefinedEffects.Coverage, LowUndefinedCoverage::Missing);
+    EXPECT_EQ(It->UndefinedEffects.Coverage,
+              *Bytes.begin() == 0xcc || *Bytes.begin() == 0xcd
+                  ? LowUndefinedCoverage::Complete
+                  : LowUndefinedCoverage::Missing);
     EXPECT_EQ(It->UndefinedEffects.OperationDigest,
               lowUndefinedOperationDigest(It->Ops));
   }
@@ -1183,6 +1216,22 @@ TEST(OriginalBinaryUndefinedIndependence,
       std::any_of(R.Independence.Certificate->Instructions.begin(),
                   R.Independence.Certificate->Instructions.end(),
                   [](const auto &I) { return I.Origin.Address == Entry + 5; }));
+}
+
+TEST(OriginalBinaryUndefinedIndependence,
+     SoftwareInterruptCannotAcquireAnImplicitHandlerContract) {
+  for (uint8_t Vector : {0, 2, 0x29, 0x2c, 0x2d, 0x80, 0xff}) {
+    SCOPED_TRACE(unsigned(Vector));
+    // Overwriting the ordinary source service result cannot hide the actual
+    // interrupt's memory, stack, segment and control effects.
+    Program P({0xcd, Vector, 0xb8, 7, 0, 0, 0, 0xc3});
+    const auto Checked = P.check();
+    EXPECT_FALSE(Checked.proved()) << Checked.Proof.Diagnostic;
+    EXPECT_FALSE(Checked.Certificate.has_value());
+    const auto Ordinary =
+        specializeBinaryInterpreter(P.Image, Entry, P.Options);
+    EXPECT_FALSE(Ordinary.complete()) << Ordinary.Diagnostic;
+  }
 }
 
 TEST(OriginalBinaryUndefinedIndependence,

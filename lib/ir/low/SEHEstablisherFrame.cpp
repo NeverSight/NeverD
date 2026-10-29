@@ -8,6 +8,7 @@
 
 #include "SEHFrameProofDetail.h"
 
+#include "neverd/Limits.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/X86/X87Context.h"
 #include "neverd/ir/low/SEHFrameProof.h"
@@ -121,7 +122,8 @@ static llvm::Expected<LowSEHEstablisherFrame>
 proveInFrameCFG(const LowFunc &Low, va_t Handler, const TargetRegInfo &TRI,
                 bool OrdinaryEntry, size_t &WorkRemaining,
                 llvm::StringRef LocalUnwindDigest, bool CxxContinuation,
-                std::optional<FrameCFG> &CachedCFG, LowSEHFrameUse Use) {
+                std::optional<FrameCFG> &CachedCFG, LowSEHFrameUse Use,
+                llvm::ArrayRef<LowSEHLocalUnwindExitSource> Exits = {}) {
   auto Fail = [](const std::string &Why) {
     return llvm::createStringError(llvm::errc::not_supported, Why);
   };
@@ -255,6 +257,29 @@ proveInFrameCFG(const LowFunc &Low, va_t Handler, const TargetRegInfo &TRI,
       if (Target <= 0 || Source < 0 || Entry.FrameOffset >= 0)
         return Fail("stale local-unwind continuation certificate");
       LocalUnwindSources[Target].emplace_back(Source, Entry.FrameOffset);
+      LocalUnwindSuccessors[Source].push_back(Target);
+    }
+  // A certified exit enters its target from its call, as the evidence above
+  // does from a call the runtime still makes.
+  if (!CxxContinuation)
+    for (const LowSEHLocalUnwindExitSource &Exit : Exits) {
+      if (!Charge(N + 1))
+        return Fail("frame propagation budget exhausted");
+      int Target = -1, Source = -1;
+      for (size_t B = 0; B < N; ++B) {
+        if (Low.Blocks[B].StartAddr == Exit.Target)
+          Target = static_cast<int>(B);
+        if (!Charge(Low.Blocks[B].Ops.size()))
+          return Fail("frame propagation budget exhausted");
+        if (llvm::any_of(Low.Blocks[B].Ops, [&](const LowOp &Op) {
+              return Op.Addr == Exit.CallAddr && Op.Seq == Exit.CallSeq &&
+                     Op.Opcode == NdOp::CALL;
+            }))
+          Source = static_cast<int>(B);
+      }
+      if (Target <= 0 || Source < 0 || Exit.FrameOffset >= 0)
+        return Fail("stale local-unwind exit");
+      LocalUnwindSources[Target].emplace_back(Source, Exit.FrameOffset);
       LocalUnwindSuccessors[Source].push_back(Target);
     }
   const bool IsLocalUnwindTarget = LocalUnwindSources.count(HandlerId);
@@ -760,15 +785,372 @@ proveInFrameCFG(const LowFunc &Low, va_t Handler, const TargetRegInfo &TRI,
   return Result;
 }
 
-llvm::Expected<LowSEHEstablisherFrame>
-proveLowSEHEstablisherFrame(const LowFunc &Low, va_t Handler,
-                            const TargetRegInfo &TRI, bool OrdinaryEntry,
-                            size_t &WorkRemaining,
-                            llvm::StringRef LocalUnwindDigest,
-                            bool CxxContinuation, LowSEHFrameUse Use) {
+llvm::Expected<LowSEHEstablisherFrame> proveLowSEHEstablisherFrame(
+    const LowFunc &Low, va_t Handler, const TargetRegInfo &TRI,
+    bool OrdinaryEntry, size_t &WorkRemaining,
+    llvm::StringRef LocalUnwindDigest, bool CxxContinuation, LowSEHFrameUse Use,
+    llvm::ArrayRef<LowSEHLocalUnwindExitSource> Exits) {
   std::optional<FrameCFG> CFG;
   return proveInFrameCFG(Low, Handler, TRI, OrdinaryEntry, WorkRemaining,
-                         LocalUnwindDigest, CxxContinuation, CFG, Use);
+                         LocalUnwindDigest, CxxContinuation, CFG, Use, Exits);
+}
+
+namespace {
+/// What every termination handler of one parent shares, validated once: the
+/// unwind contract, the decoded ordinary CFG with its predecessors, and the
+/// prologue's allocations by unwind-code offset. A handler's proof then walks
+/// only the code its scopes guard, as proveInFrameCFG reuses its frame CFG.
+struct TerminationFrame {
+  std::vector<std::vector<int>> Preds;
+  std::map<uint32_t, uint64_t> ExpectedAdjustments;
+  uint64_t FrameBytes = 0;
+  va_t PrologueEnd = 0;
+};
+
+llvm::Error terminationFrameError(const std::string &Why) {
+  return llvm::createStringError(llvm::errc::not_supported,
+                                 "termination handler frame: " + Why);
+}
+
+bool chargeTerminationWork(size_t &WorkRemaining, size_t Amount = 1) {
+  if (Amount > WorkRemaining) {
+    WorkRemaining = 0;
+    return false;
+  }
+  WorkRemaining -= Amount;
+  return true;
+}
+
+/// The runtime enters a termination handler only while it unwinds, never with
+/// an SP of its own: the handler sees the parent's frame solely through the
+/// EstablisherFrame argument. RtlVirtualUnwind takes that argument from the
+/// parent's SP at the unwound instruction when the parent has no frame
+/// register, so every instruction a scope guards must run with one certified
+/// SP. This repeats the unwind-action accounting of the in-function proof
+/// above, and the unit tests require both to agree.
+llvm::Expected<TerminationFrame>
+prepareTerminationFrame(const LowFunc &Low, const TargetRegInfo &TRI,
+                        size_t &WorkRemaining) {
+  auto Fail = terminationFrameError;
+  auto Charge = [&](size_t Amount = 1) {
+    return chargeTerminationWork(WorkRemaining, Amount);
+  };
+  if (TRI.TheArch != Arch::X64 || TRI.PointerSize != 8 ||
+      !Low.ExceptionMetadata || !Low.ExceptionMetadata->SEH)
+    return Fail("unsupported architecture or missing exception metadata");
+  const ExceptionFunction &EH = *Low.ExceptionMetadata;
+  const bool UnwindV1 =
+      EH.Encoding == ExceptionEncoding::X64UnwindV1 && EH.UnwindVersion == 1;
+  const bool UnwindV2 =
+      EH.Encoding == ExceptionEncoding::X64UnwindV2 && EH.UnwindVersion == 2;
+  // A frame register establishes the frame from that register instead; its
+  // allocations after UWOP_SET_FPREG do not move the establisher.
+  if (EH.ParseStatus != ExceptionParseStatus::Complete ||
+      (!UnwindV1 && !UnwindV2) || EH.Kind != RuntimeFunctionKind::Primary ||
+      EH.ChainedPrimaryRange || EH.ChainedUnwindInfoRVA ||
+      EH.PrimaryFunctionIndex || (EH.UnwindFlags & ~3u) || EH.FrameRegister ||
+      EH.FrameOffset || EH.CodeRange.Begin != Low.Entry)
+    return Fail("unsupported unwind or frame-register contract");
+  if (!Low.hasCompleteLiftCoverage() || Low.Blocks.empty() ||
+      Low.Blocks.front().StartAddr != Low.Entry ||
+      EH.PrologueSize > EH.CodeRange.End - Low.Entry)
+    return Fail("missing decoded prologue");
+  TerminationFrame Frame;
+  Frame.PrologueEnd = Low.Entry + EH.PrologueSize;
+  if (Low.Blocks.front().EndAddr < Frame.PrologueEnd)
+    return Fail("nonlinear prologue is not certified");
+
+  const size_t N = Low.Blocks.size();
+  std::map<int, size_t> Positions;
+  for (size_t B = 0; B < N; ++B) {
+    if (!Charge())
+      return Fail("work budget exhausted");
+    if (Low.Blocks[B].Id != static_cast<int>(B))
+      return Fail("noncanonical block identity");
+    Positions.emplace(Low.Blocks[B].Id, B);
+  }
+  if (!completeLowSEHFrameCFG(Low, Positions, WorkRemaining))
+    return Fail("incomplete decoded CFG");
+  Frame.Preds.resize(N);
+  for (size_t B = 0; B < N; ++B) {
+    if (!Charge(Low.Blocks[B].Succs.size() + 1))
+      return Fail("work budget exhausted");
+    for (int S : Low.Blocks[B].Succs) {
+      if (S < 0 || static_cast<size_t>(S) >= N)
+        return Fail("invalid ordinary CFG");
+      Frame.Preds[S].push_back(static_cast<int>(B));
+    }
+  }
+  if (!Frame.Preds[0].empty())
+    return Fail("ordinary control flow re-enters the prologue");
+
+  // X64 CodeOffset is the byte offset of the prologue instruction end.
+  uint32_t PreviousOffset = EH.PrologueSize;
+  for (const UnwindOperation &Op : EH.UnwindOperations) {
+    if (!Charge())
+      return Fail("work budget exhausted");
+    if (UnwindV2 && Op.Kind == UnwindOperationKind::Epilog)
+      continue;
+    if (!Op.CodeOffset || Op.CodeOffset > PreviousOffset)
+      return Fail("invalid unwind instruction offset");
+    PreviousOffset = Op.CodeOffset;
+    uint64_t Bytes = 0;
+    switch (Op.Kind) {
+    case UnwindOperationKind::PushNonVolatile:
+      Bytes = 8;
+      break;
+    case UnwindOperationKind::AllocateSmall:
+    case UnwindOperationKind::AllocateLarge:
+      Bytes = Op.StackOffset;
+      if (!Bytes || Bytes % 8)
+        return Fail("invalid fixed allocation");
+      break;
+    case UnwindOperationKind::SaveNonVolatile:
+    case UnwindOperationKind::SaveNonVolatileFar:
+    case UnwindOperationKind::SaveXMM128:
+    case UnwindOperationKind::SaveXMM128Far:
+      break;
+    default:
+      return Fail("unwind action has no certified fixed SP effect");
+    }
+    if (Bytes &&
+        (!Frame.ExpectedAdjustments.emplace(Op.CodeOffset, Bytes).second ||
+         Bytes >
+             uint64_t(std::numeric_limits<int64_t>::max()) - Frame.FrameBytes))
+      return Fail("conflicting or overflowing allocation");
+    Frame.FrameBytes += Bytes;
+  }
+  return Frame;
+}
+
+/// One handler's half of the proof against \p Frame: the scopes it
+/// terminates, every ordinary path into their guarded code, and the SP writes
+/// on those paths.
+llvm::Expected<uint64_t> proveTerminationHandler(const LowFunc &Low,
+                                                 const TerminationFrame &Frame,
+                                                 va_t Handler,
+                                                 const TargetRegInfo &TRI,
+                                                 size_t &WorkRemaining) {
+  auto Fail = terminationFrameError;
+  auto Charge = [&](size_t Amount = 1) {
+    return chargeTerminationWork(WorkRemaining, Amount);
+  };
+  const ExceptionFunction &EH = *Low.ExceptionMetadata;
+  if (!Handler || EH.ownsCode(Handler))
+    return Fail("unsupported unwind or frame-register contract");
+  const va_t PrologueEnd = Frame.PrologueEnd;
+  const auto &Preds = Frame.Preds;
+  const size_t N = Low.Blocks.size();
+
+  // Blocks an instruction of a scope guards, with the end of the guarded part
+  // of each: an exception can only unwind from inside the range.
+  std::vector<va_t> GuardedEnd(N, 0);
+  std::vector<int> Work;
+  auto AddScope = [&](const SEHScopeRecord &Scope) -> llvm::Error {
+    const auto Range = getSemanticSEHGuardedRange(Scope, Arch::X64, EH);
+    if (Scope.ParseStatus != ExceptionParseStatus::Complete || !Range ||
+        (Range->Begin < PrologueEnd && Range->End > Low.Entry))
+      return Fail("protected scope overlaps an incomplete prologue");
+    if (!Charge(N))
+      return Fail("work budget exhausted");
+    bool Any = false;
+    for (size_t B = 0; B < N; ++B) {
+      const LowBlock &Block = Low.Blocks[B];
+      if (Block.StartAddr >= Range->End || Block.EndAddr <= Range->Begin)
+        continue;
+      GuardedEnd[B] =
+          std::max(GuardedEnd[B], std::min(Range->End, Block.EndAddr));
+      Work.push_back(static_cast<int>(B));
+      Any = true;
+    }
+    if (!Any)
+      return Fail("protected scope has no decoded code");
+    return llvm::Error::success();
+  };
+  bool Terminates = false;
+  for (const SEHScopeRecord &Scope : EH.SEH->Scopes) {
+    if (!Charge())
+      return Fail("work budget exhausted");
+    if (Scope.FilterOrFinallyVA != Handler)
+      continue;
+    if (Scope.Kind != SEHScopeKind::Finally)
+      return Fail("handler is also a filter callback");
+    if (auto Error = AddScope(Scope))
+      return std::move(Error);
+    Terminates = true;
+  }
+  if (!Terminates)
+    return Fail("handler terminates no scope of this function");
+
+  // Every ordinary path into a guarded instruction participates. A root the
+  // dispatcher resumes is an __except handler of this function, entered with
+  // the SP of its own scope, whose instructions then join the proof.
+  std::vector<bool> Relevant(N, false);
+  while (!Work.empty()) {
+    if (!Charge())
+      return Fail("work budget exhausted");
+    const int B = Work.back();
+    Work.pop_back();
+    if (Relevant[B])
+      continue;
+    Relevant[B] = true;
+    if (!Charge(Preds[B].size()))
+      return Fail("work budget exhausted");
+    Work.insert(Work.end(), Preds[B].begin(), Preds[B].end());
+    if (B == 0 || !Preds[B].empty())
+      continue;
+    const va_t Start = Low.Blocks[B].StartAddr;
+    if (Low.OrdinaryModuleAnalysisRoots.count(Start) ||
+        llvm::any_of(Low.SEHLocalUnwindContinuations,
+                     [&](const auto &Entry) { return Entry.Target == Start; }))
+      return Fail("protected code has an independent entry");
+    bool Resumed = false;
+    for (const SEHScopeRecord &Scope : EH.SEH->Scopes) {
+      if (!Charge())
+        return Fail("work budget exhausted");
+      if (Scope.HandlerVA != Start || Scope.Kind == SEHScopeKind::Finally)
+        continue;
+      if (auto Error = AddScope(Scope))
+        return std::move(Error);
+      Resumed = true;
+    }
+    if (!Resumed)
+      return Fail("protected code has an independent entry");
+  }
+  if (!Relevant[0])
+    return Fail("protected code is unreachable from the entry");
+
+  // The prologue's SP writes are exactly those allocations. Nothing else on
+  // the way to or inside the guarded code writes SP; after the last guarded
+  // instruction of a block that leads nowhere relevant, an epilogue may.
+  std::map<uint32_t, uint64_t> ActualAdjustments;
+  for (size_t B = 0; B < N; ++B) {
+    if (!Relevant[B])
+      continue;
+    const LowBlock &Block = Low.Blocks[B];
+    if (!Charge(Block.Ops.size() + Block.InstructionBoundaries.size() +
+                Block.Succs.size() + 1))
+      return Fail("work budget exhausted");
+    const bool LeadsOn = llvm::any_of(
+        Block.Succs, [&](int S) { return Relevant[static_cast<size_t>(S)]; });
+    const va_t CheckedEnd =
+        LeadsOn || !GuardedEnd[B] ? Block.EndAddr : GuardedEnd[B];
+    for (const LowInstructionBoundary &Boundary : Block.InstructionBoundaries) {
+      if (Boundary.Address >= CheckedEnd)
+        continue;
+      for (size_t I = Boundary.FirstOp; I < Boundary.FirstOp + Boundary.OpCount;
+           ++I) {
+        const LowOp &Op = Block.Ops[I];
+        if (!Op.Output.isReg() || !Op.Output.Size ||
+            Op.Output.Offset >= TRI.StackPointer + 8 ||
+            Op.Output.Offset + Op.Output.Size <= TRI.StackPointer)
+          continue;
+        if (B != 0 || Boundary.Address + Boundary.Size > PrologueEnd ||
+            Op.Opcode != NdOp::INT_SUB || Op.Output.Size != 8 ||
+            Op.Output.Offset != TRI.StackPointer || Op.NumInputs != 2 ||
+            Op.Inputs[0] != NdVar::reg(TRI.StackPointer, 8) ||
+            !Op.Inputs[1].isConst() || Op.Inputs[1].Size != 8)
+          return Fail("SP is not stable from prologue through protected scope");
+        const uint32_t Offset =
+            static_cast<uint32_t>(Boundary.Address + Boundary.Size - Low.Entry);
+        if (!ActualAdjustments.emplace(Offset, Op.Inputs[1].Offset).second)
+          return Fail("multiple SP definitions at an unwind instruction");
+      }
+    }
+  }
+  if (Frame.ExpectedAdjustments != ActualAdjustments)
+    return Fail("decoded prologue disagrees with unwind allocation");
+  return Frame.FrameBytes;
+}
+} // namespace
+
+llvm::Expected<uint64_t> proveLowSEHTerminationFrame(const LowFunc &Low,
+                                                     va_t Handler,
+                                                     const TargetRegInfo &TRI,
+                                                     size_t &WorkRemaining) {
+  auto Frame = prepareTerminationFrame(Low, TRI, WorkRemaining);
+  if (!Frame)
+    return Frame.takeError();
+  return proveTerminationHandler(Low, *Frame, Handler, TRI, WorkRemaining);
+}
+
+llvm::Expected<uint64_t> proveLowSEHFixedFrame(const LowFunc &Low,
+                                               const TargetRegInfo &TRI,
+                                               size_t &WorkRemaining) {
+  auto Frame = prepareTerminationFrame(Low, TRI, WorkRemaining);
+  if (!Frame)
+    return Frame.takeError();
+  // The decoded prologue makes exactly the allocations the unwind codes
+  // record, at the same instruction ends.
+  std::map<uint32_t, uint64_t> ActualAdjustments;
+  const LowBlock &Prologue = Low.Blocks.front();
+  if (!chargeTerminationWork(WorkRemaining,
+                             Prologue.Ops.size() +
+                                 Prologue.InstructionBoundaries.size()))
+    return terminationFrameError("work budget exhausted");
+  for (const LowInstructionBoundary &Boundary :
+       Prologue.InstructionBoundaries) {
+    if (Boundary.Address >= Frame->PrologueEnd)
+      break;
+    for (size_t I = Boundary.FirstOp;
+         I < Boundary.FirstOp + Boundary.OpCount && I < Prologue.Ops.size();
+         ++I) {
+      const LowOp &Op = Prologue.Ops[I];
+      if (!Op.Output.isReg() || !Op.Output.Size ||
+          Op.Output.Offset >= TRI.StackPointer + 8 ||
+          Op.Output.Offset + Op.Output.Size <= TRI.StackPointer)
+        continue;
+      if (Op.Opcode != NdOp::INT_SUB || Op.Output.Size != 8 ||
+          Op.Output.Offset != TRI.StackPointer || Op.NumInputs != 2 ||
+          Op.Inputs[0] != NdVar::reg(TRI.StackPointer, 8) ||
+          !Op.Inputs[1].isConst() || Op.Inputs[1].Size != 8 ||
+          !ActualAdjustments
+               .emplace(static_cast<uint32_t>(Boundary.Address + Boundary.Size -
+                                              Low.Entry),
+                        Op.Inputs[1].Offset)
+               .second)
+        return terminationFrameError(
+            "prologue SP write is not an unwind allocation");
+    }
+  }
+  if (ActualAdjustments != Frame->ExpectedAdjustments)
+    return terminationFrameError(
+        "decoded prologue disagrees with unwind allocation");
+  return Frame->FrameBytes;
+}
+
+std::map<va_t, uint64_t> collectLowSEHTerminationFrames(const LowFunc &Low,
+                                                        Arch TargetArch) {
+  std::map<va_t, uint64_t> Frames;
+  if (TargetArch != Arch::X64 || !Low.ExceptionMetadata ||
+      !Low.ExceptionMetadata->SEH)
+    return Frames;
+  std::set<va_t> Handlers;
+  for (const SEHScopeRecord &Scope : Low.ExceptionMetadata->SEH->Scopes)
+    if (Scope.Kind == SEHScopeKind::Finally && Scope.FilterOrFinallyVA)
+      Handlers.insert(Scope.FilterOrFinallyVA);
+  if (Handlers.empty())
+    return Frames;
+  // The CFG and prologue facts are the parent's, so validate them once; each
+  // handler then has its own budget for the code its scopes guard.
+  const TargetRegInfo &TRI = getTargetRegInfo(TargetArch);
+  size_t PrepareWork = limits::kMaxSEHEstablisherFrameWork;
+  auto Frame = prepareTerminationFrame(Low, TRI, PrepareWork);
+  if (!Frame) {
+    llvm::consumeError(Frame.takeError());
+    return Frames;
+  }
+  for (va_t Handler : Handlers) {
+    size_t WorkRemaining = limits::kMaxSEHEstablisherFrameWork;
+    auto Bytes =
+        proveTerminationHandler(Low, *Frame, Handler, TRI, WorkRemaining);
+    if (!Bytes) {
+      llvm::consumeError(Bytes.takeError());
+      continue;
+    }
+    Frames.emplace(Handler, *Bytes);
+  }
+  return Frames;
 }
 
 std::map<va_t, LowSEHEstablisherFrame>

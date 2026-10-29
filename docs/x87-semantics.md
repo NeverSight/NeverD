@@ -67,13 +67,15 @@ values and the shared CFG stack/tag projection. `BinaryImage::X87ContextOverride
 can select the x64 representation explicitly. It does not prove incoming state
 or a floating import/return ABI. Calls and independent CFG roots need their
 existing export/refresh and stack contracts; backedges retain their context.
-MMX addresses physical aliases; EMMS empties tags without initializing payloads.
+MMX addresses physical aliases; EMMS clears TOP and empties tags without
+initializing physical payloads.
 Owned x64 FEMMS also empties tags, but invalidates every retained MMX/x87
-payload. The concrete model retains CW/SW, TOP and saved environment, rejects
+payload. Both reset TOP to zero, retaining the other CW/SW bits and saved
+environment. The concrete model rejects
 pending exceptions before changing tags, and requires subsequent writes to
 establish each physical payload again. A raw snapshot or MMX read cannot
-resurrect the previous bits. The explicit portable x87 profile and unowned
-stack paths still refuse this instruction. Native output executes FEMMS;
+resurrect the previous bits. The explicit portable x87 profile shares this
+transition; unowned stack paths still refuse it. Native output executes FEMMS;
 FXRSTOR and context steps declare both MMX and x87 register clobbers because
 LLVM represents the physical aliases as separate registers. See AMD's
 [3DNow! Technology Manual, FEMMS](https://www.amd.com/content/dam/amd/en/documents/archived-tech-docs/programmer-references/21928.pdf)
@@ -289,6 +291,32 @@ All data instructions in this initial slice require all six exception masks,
 including raw transport, FILD and sign changes. FLDCW admits only all-masked
 input; nonwaiting control/status operations retain their separate behavior.
 
+The explicit profile also admits FNOP, EMMS and FEMMS. All three check pending
+waiting exceptions before changing state, require no operand memory or known
+payloads, and permit valid unmasked controls when no exception is pending.
+FNOP updates the guest FIP; its undefined C0/C1/C2/C3 bits retain the incoming
+profile values. EMMS clears TOP to zero and empties the tags while retaining
+the remaining environment, physical payload bytes and their provenance.
+FXSAVE64 logical slots rotate to preserve those physical identities.
+FEMMS additionally clears all
+eight physical known-payload bits. Retained backing bytes are not known values;
+later completed writes authenticate only their own physical slots. The same
+dispatch admits these operations in the concrete interpreter, explicit generated
+Step V1 interface and portable translation selector gate. General MMX data
+operations and i386 owned state remain outside this contract.
+
+FNOP follows the [Intel instruction contract](https://cdrdv2-public.intel.com/868137/325462-089-sdm-vol-1-2abcd-3abcd-4.pdf).
+The TOP reset follows [Intel SDM volume 3A, section 12.2 and table 12-2](https://www.intel.com/content/dam/www/public/us/en/documents/manuals/64-ia-32-architectures-software-developer-vol-3a-part-1-manual.pdf#page=453).
+The FEMMS extension uses the [AMD architectural distinction from EMMS](https://docs.amd.com/api/khub/documents/sfvvekC9mDflu6vd3R0NXA/content).
+The existing profile and C ABI identities are unchanged; adding FEMMS to the
+software profile does not assert its availability on Intel hardware.
+Unicorn's Haswell model incorrectly retains TOP for EMMS, so that reference
+is excluded from the portable context comparison. The generated-code reset
+suite uses original FNOP/EMMS instructions on native x64 instead; FEMMS payload
+invalidation remains a software provenance contract without a hardware claim.
+The [reset evidence](evidence/x86-x87-resets-2026-10-28.json) records the original
+EMMS counterexample, both SDK profiles and the native compiler FNOP checks.
+
 The existing FXSAVE64 context remains authoritative. TOP changes rotate logical
 slots while preserving physical payloads, physical tags and the physical
 known-payload mask. A pop retains the empty register's bits. FNINIT resets the
@@ -405,7 +433,7 @@ execution/resumption contract, not a proof that an arbitrary loop terminates.
 queries, generated preparation and translation. Step V1 has no integer-flag
 operands: the concrete interpreter's FCOMI/FUCOMI support does not admit those
 forms at this boundary. Unsupported x87 instructions, floating source/call ABIs,
-MMX and general save/restore operations remain explicit failures. Rejecting an
+MMX data operations and general save/restore remain explicit failures. Rejecting an
 unsupported later block preserves the last completed prefix.
 
 The object, runtime registry, cache identity and checked invocation bind the

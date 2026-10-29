@@ -13,6 +13,7 @@
 #include "../CDeferredValue.h"
 #include "../CDisplayFieldPath.h"
 #include "../CDisplayFrameRecord.h"
+#include "LLVMCAtomicOrdering.h"
 #include "LLVMCFrameLayout.h"
 #include "LLVMCStorage.h"
 #include "LLVMCVariableEdits.h"
@@ -343,7 +344,8 @@ std::string LLVMCWriter::resolveNdDataName(llvm::StringRef Name) const {
 }
 
 bool LLVMCWriter::isImageDataAddress(va_t Addr) const {
-  if (!Img || Addr == 0 || Addr == InvalidVA)
+  // The image's own headers are `__ImageBase`, never a copied object.
+  if (!Img || Addr == 0 || Addr == InvalidVA || Img->imageBaseOffset(Addr))
     return false;
   const Segment *Seg = Img->getSegmentFor(Addr);
   if (!Seg || !Seg->isReadable())
@@ -413,7 +415,9 @@ LLVMCWriter::uniqueAllocaImageImmediate(const llvm::AllocaInst *Slot) const {
 
 std::optional<std::pair<std::string, std::string>>
 LLVMCWriter::imageDataSymbolName(va_t Addr) const {
-  if (!Img)
+  // An undefined data symbol names another module's storage, never the
+  // image's own at its extern address.
+  if (!Img || Img->ObjectExternDataSymbols.count(Addr))
     return std::nullopt;
   const Symbol *Sym = Img->findSymbolAt(Addr);
   if (!Sym || Sym->IsFunc || Sym->Name.empty() ||
@@ -485,15 +489,26 @@ std::string LLVMCWriter::namedImageObject(va_t Addr) const {
   return Name;
 }
 
-std::string LLVMCWriter::imageLoadComment(const llvm::LoadInst &Load) const {
-  if (!Opts.EmitComments || Load.getPointerAddressSpace() != 0)
+std::string LLVMCWriter::imagePointerComment(const llvm::Value *Pointer) const {
+  if (!Opts.EmitComments || (Pointer->getType()->isPointerTy() &&
+                             Pointer->getType()->getPointerAddressSpace() != 0))
     return {};
-  const auto Addr = imageDataVA(Load.getPointerOperand());
+  const auto Addr = imageDataVA(Pointer);
   if (!Addr)
     return {};
   namedImageObject(*Addr);
   const auto It = ImageObjectStrings.find(*Addr);
   return It == ImageObjectStrings.end() ? std::string() : It->second;
+}
+
+std::string LLVMCWriter::imagePointerArgument(const llvm::Value *Pointer,
+                                              std::string Text) const {
+  // A literal already exposes its text. Integer carriers need the checked
+  // source pointer contract from call rendering before reaching this helper.
+  if (Text.find('"') == std::string::npos)
+    if (const auto Comment = imagePointerComment(Pointer); !Comment.empty())
+      Text += " /* " + Comment + " */";
+  return Text;
 }
 
 std::string LLVMCWriter::imageObjectSymbolLine(llvm::StringRef Name) const {
@@ -672,7 +687,8 @@ std::optional<uint64_t> LLVMCWriter::foldReadonlyScalar(va_t Addr,
                   llvm::dyn_cast<llvm::ArrayType>(Global.getValueType());
               Array && Addr >= *Base && Addr - *Base < Array->getNumElements())
             return std::nullopt;
-  if (!Img)
+  // A header byte describes the image that runs, never this file's copy.
+  if (!Img || Img->imageBaseOffset(Addr))
     return std::nullopt;
   const Segment *Seg = Img->getSegmentFor(Addr);
   if (!Seg || Seg->isWritable())
@@ -4081,7 +4097,8 @@ std::string LLVMCWriter::aggregateMemberPath(llvm::Type *Ty,
 std::string LLVMCWriter::renderInline(const llvm::Instruction &Inst) {
   std::string Text = renderInlineImpl(Inst);
   if (const auto *Load = llvm::dyn_cast<llvm::LoadInst>(&Inst))
-    if (const auto Comment = imageLoadComment(*Load); !Comment.empty())
+    if (const auto Comment = imagePointerComment(Load->getPointerOperand());
+        !Comment.empty())
       Text += " /* " + Comment + " */";
   return SourceRecorder ? SourceRecorder->expression(Inst, std::move(Text))
                         : Text;
@@ -4267,27 +4284,7 @@ std::string LLVMCWriter::atomicRMWText(const llvm::AtomicRMWInst &AI) {
   default:
     llvm::report_fatal_error("unsupported atomicrmw operation");
   }
-  const char *Ord = nullptr;
-  switch (AI.getOrdering()) {
-  case llvm::AtomicOrdering::Unordered:
-  case llvm::AtomicOrdering::Monotonic:
-    Ord = "__ATOMIC_RELAXED";
-    break;
-  case llvm::AtomicOrdering::Acquire:
-    Ord = "__ATOMIC_ACQUIRE";
-    break;
-  case llvm::AtomicOrdering::Release:
-    Ord = "__ATOMIC_RELEASE";
-    break;
-  case llvm::AtomicOrdering::AcquireRelease:
-    Ord = "__ATOMIC_ACQ_REL";
-    break;
-  case llvm::AtomicOrdering::SequentiallyConsistent:
-    Ord = "__ATOMIC_SEQ_CST";
-    break;
-  default:
-    llvm::report_fatal_error("unsupported atomic ordering");
-  }
+  const char *Ord = llvmCAtomicOrderingToken(AI.getOrdering());
   HasCIntrinsics = true;
   std::string Ptr = valueStr(AI.getPointerOperand());
   bool TypedPointer = false;

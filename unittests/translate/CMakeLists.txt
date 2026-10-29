@@ -195,6 +195,7 @@ add_neverd_unittest(NeverDX87TranslationRuntimeTests
 add_neverd_unittest(NeverDX87TranslationTests
   x86/X87TranslationTests.cpp
   x86/X87TranslationFrozenTests.cpp
+  x86/X87TranslationResetTests.cpp
 
   LINK_COMPONENTS
   Translate

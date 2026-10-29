@@ -64,7 +64,7 @@ const char *coverageClass(const X87InstructionForm &Form) {
     if (!isPortableX87RuntimeInstruction(representativeSelector(Form)))
       return "portable-flags-value-projection";
     if (Form.ValueClass == X87ValueClass::StateOnly)
-      return "portable-state-only";
+      return Form.TypedLift ? "portable-state-only" : "portable-owned-state";
     return Form.ValueClass == X87ValueClass::ExactValue
                ? "portable-exact-value-projection"
                : "portable-value-projection";
@@ -232,7 +232,8 @@ X87Capability queryX87Capability(const X87CapabilityQuery &Q) {
         "InvalidateOnExecutableWrite; RejectExecutableWrites requires no "
         "writable executable mappings; masked finite instruction domain; no "
         "integer-flag "
-        "x87 forms, floating call ABI, MMX or general environment operations; "
+        "x87 forms, floating call ABI, MMX data operations or general "
+        "environment operations; FNOP/EMMS/FEMMS retain their state effects; "
         "legacy C/Python/CLI translation object interfaces remain scalar-only";
     Result.Evidence =
         "unittests/translate/x86/RuntimeX87HelpersTests.cpp; "
@@ -284,7 +285,9 @@ X87Capability queryX87Capability(const X87CapabilityQuery &Q) {
           "exception masks; FLDCW admits only all-masked input; arithmetic/"
           "comparisons/integer stores require canonical finite operands; "
           "raw m80/register moves retain "
-          "encodings; undefined C0/C2/C3/FOP/register FDP are not CPU identity";
+          "encodings; FNOP retains undefined condition codes, EMMS preserves "
+          "payload provenance and FEMMS invalidates it; undefined "
+          "C0/C2/C3/FOP/register FDP are not CPU identity";
       Result.Evidence = "unittests/lift/x86/X87PortableContextTests.cpp; "
                         "unittests/lift/x86/X87PortableEmulatorTests.cpp; "
                         "scripts/check_x87_arithmetic_replay.py";
@@ -339,7 +342,8 @@ X87Capability queryX87Capability(const X87CapabilityQuery &Q) {
         "authenticated state and exact-span memory; masked finite instruction "
         "domain; raw transport preserves encodings; no integer-flag x87 forms, "
         "floating/call ABI, ordinary guest "
-        "memory operations, MMX or general environment handoffs; failure "
+        "memory operations, MMX data operations or general environment "
+        "handoffs; FNOP/EMMS/FEMMS retain their state effects; failure "
         "preserves completed prefix and leaves source result unpublished";
     Result.Evidence =
         "unittests/translate/x86/X87PortablePreparationTests.cpp; "

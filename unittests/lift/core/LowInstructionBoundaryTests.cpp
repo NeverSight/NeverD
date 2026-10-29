@@ -6,6 +6,7 @@
 
 #include "neverd/backend/c/HighC/HighCEmitter.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
+#include "neverd/backend/llvm/X86/X86AtomicRmw.h"
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/high/MedToHigh.h"
@@ -3008,9 +3009,9 @@ TEST(LowInstructionBoundary,
   EXPECT_NE(MaskedHighC.find("address_space(257)"), std::string::npos);
   EXPECT_TRUE(validHighC(MaskedHighC));
 
-  // Generic atomic opcodes share the same pointer-resolution owner as scalar
-  // loads/stores.  A segmented atomic must bypass image-global resolution and
-  // reach LLVM and High-C with its target address space intact.
+  // Atomic opcodes share the pointer-resolution owner with scalar accesses.
+  // Native x86 RMW uses unaligned-safe inline assembly; its segment operand
+  // must bypass image-global resolution and retain the target address space.
   auto AtomicTemp = [](int Id) {
     MedVar Var;
     Var.Kind = MedVar::Temp;
@@ -3064,15 +3065,32 @@ TEST(LowInstructionBoundary,
                                             "segment-atomics", Arch::X64);
   ASSERT_NE(AtomicModule, nullptr);
   EXPECT_TRUE(validLLVMModule(*AtomicModule));
+  // x86 ATOMIC_ADD stays one native LOCK XADD, whose pointer operand keeps the
+  // segment's address space.
+  const auto NativeAtomicAddPointer =
+      [](const llvm::Instruction &I) -> const llvm::Value * {
+    const auto *Call = llvm::dyn_cast<llvm::CallInst>(&I);
+    const auto *Asm =
+        Call ? llvm::dyn_cast<llvm::InlineAsm>(Call->getCalledOperand())
+             : nullptr;
+    if (Asm && llvm::StringRef(Asm->getAsmString())
+                   .starts_with(kX86AtomicAddAsmMarker)) {
+      EXPECT_EQ(Call->arg_size(), 2u);
+      EXPECT_TRUE(Asm->hasSideEffects());
+    }
+    return Asm && Call->arg_size() == 2 &&
+                   llvm::StringRef(Asm->getAsmString())
+                       .starts_with(kX86AtomicAddAsmMarker)
+               ? Call->getArgOperand(0)
+               : nullptr;
+  };
   unsigned FSAtomicRMW = 0;
   unsigned GSAtomicCmpXchg = 0;
   for (const llvm::Function &Function : *AtomicModule)
     for (const llvm::BasicBlock &Block : Function)
       for (const llvm::Instruction &Instruction : Block) {
-        if (const auto *RMW = llvm::dyn_cast<llvm::AtomicRMWInst>(&Instruction))
-          FSAtomicRMW +=
-              RMW->getPointerOperand()->getType()->getPointerAddressSpace() ==
-              257;
+        if (const llvm::Value *Pointer = NativeAtomicAddPointer(Instruction))
+          FSAtomicRMW += Pointer->getType()->getPointerAddressSpace() == 257;
         if (const auto *CmpXchg =
                 llvm::dyn_cast<llvm::AtomicCmpXchgInst>(&Instruction))
           GSAtomicCmpXchg += CmpXchg->getPointerOperand()
@@ -3102,9 +3120,11 @@ TEST(LowInstructionBoundary,
   llvm::raw_string_ostream AtomicHighCOS(AtomicHighC);
   ASSERT_TRUE(HighCEmitter().emit({AtomicHigh}, AtomicHighCOS, HighCOptions));
   AtomicHighCOS.flush();
-  EXPECT_NE(AtomicHighC.find("__atomic_fetch_add"), std::string::npos);
+  // The FS addition is the native LOCK XADD with its segment prefix.
+  EXPECT_NE(AtomicHighC.find("lock xaddq %0, %%fs:(%1)"), std::string::npos)
+      << AtomicHighC;
   EXPECT_NE(AtomicHighC.find("__atomic_compare_exchange_n"), std::string::npos);
-  EXPECT_NE(AtomicHighC.find("address_space(257)"), std::string::npos);
+  EXPECT_EQ(AtomicHighC.find("__atomic_fetch_add"), std::string::npos);
   EXPECT_NE(AtomicHighC.find("address_space(256)"), std::string::npos);
   EXPECT_TRUE(validHighC(AtomicHighC));
 
@@ -3219,10 +3239,9 @@ TEST(LowInstructionBoundary,
         if (const auto *Load = llvm::dyn_cast<llvm::LoadInst>(&Instruction))
           if (Load->getPointerAddressSpace() == 257)
             RawScalarPointers += IsRawSegmentPointer(Load->getPointerOperand());
-        if (const auto *RMW = llvm::dyn_cast<llvm::AtomicRMWInst>(&Instruction))
-          if (RMW->getPointerOperand()->getType()->getPointerAddressSpace() ==
-              256)
-            RawAtomicPointers += IsRawSegmentPointer(RMW->getPointerOperand());
+        if (const llvm::Value *Pointer = NativeAtomicAddPointer(Instruction))
+          if (Pointer->getType()->getPointerAddressSpace() == 256)
+            RawAtomicPointers += IsRawSegmentPointer(Pointer);
         if (const auto *Call = llvm::dyn_cast<llvm::CallBase>(&Instruction))
           if (Call->getCalledFunction() &&
               Call->getCalledFunction()->getName().starts_with(

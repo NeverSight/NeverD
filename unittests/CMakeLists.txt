@@ -293,6 +293,12 @@ if(TARGET neverd_shared)
   set_property(DIRECTORY APPEND PROPERTY TEST_INCLUDE_FILES
     "${CMAKE_CURRENT_SOURCE_DIR}/ObjCRuntimeTestProperties.cmake")
   if(Python3_EXECUTABLE AND NEVERD_TEST_CLANG_EXECUTABLE)
+    add_test(NAME NeverDCalleeSourceCLI
+      COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/callee_source_cli_test.py"
+        --neverd $<TARGET_FILE:neverd>
+        --compiler "${NEVERD_TEST_CLANG_EXECUTABLE}")
+    set_tests_properties(NeverDCalleeSourceCLI PROPERTIES
+      TIMEOUT 180 LABELS "NeverDCalleeSourceCLI")
     if(APPLE)
       add_test(NAME NeverDArm64eSourceCallSDK
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/arm64e_source_calls_test.py"

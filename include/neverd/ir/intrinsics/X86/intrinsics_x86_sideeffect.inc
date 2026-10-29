@@ -129,7 +129,8 @@ SIDEEFFECT(Intrinsic::Scasw);
 SIDEEFFECT(Intrinsic::Scasd);
 SIDEEFFECT(Intrinsic::Scasq);
 SIDEEFFECT(Intrinsic::MaskedStoreB);
-// Legacy MPX / HLE / generic SHA identities retain effects, never implicit NOPs.
+// Legacy MPX / HLE / generic SHA identities retain effects, never implicit
+// NOPs.
 SIDEEFFECT(Intrinsic::BndMk);
 SIDEEFFECT(Intrinsic::BndMov);
 SIDEEFFECT(Intrinsic::BndCl);
@@ -288,3 +289,7 @@ SIDEEFFECT(Intrinsic::X86LegacyRaoAnd);
 SIDEEFFECT(Intrinsic::X86LegacyRaoOr);
 SIDEEFFECT(Intrinsic::X86LegacyRaoXor);
 SIDEEFFECT(Intrinsic::X86LegacyCmpccXadd);
+SIDEEFFECT(Intrinsic::X87Fldenv16);
+SIDEEFFECT(Intrinsic::X87Fnstenv16);
+SIDEEFFECT(Intrinsic::X87Frstor16);
+SIDEEFFECT(Intrinsic::X87Fnsave16);

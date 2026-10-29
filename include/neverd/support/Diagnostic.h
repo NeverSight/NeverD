@@ -16,6 +16,7 @@
 #include "llvm/Support/raw_ostream.h"
 
 #include <mutex>
+#include <string>
 
 namespace neverd {
 
@@ -24,6 +25,31 @@ inline std::mutex &diagnosticMutex() {
   static std::mutex M;
   return M;
 }
+
+/// Receives, while it lives, the text of each synchronized error diagnostic
+/// the constructing thread writes, so that a caller can say why the work it
+/// ran refused.  The innermost capture of a thread receives.
+class DiagnosticCapture {
+public:
+  DiagnosticCapture() : Previous(active()) { active() = this; }
+  DiagnosticCapture(const DiagnosticCapture &) = delete;
+  DiagnosticCapture &operator=(const DiagnosticCapture &) = delete;
+  ~DiagnosticCapture() { active() = Previous; }
+
+  /// What the errors said, in order, without their severity prefix.
+  const std::string &text() const { return Text; }
+
+  /// The capture this thread's errors go to, or null.
+  static DiagnosticCapture *&active() {
+    thread_local DiagnosticCapture *Active = nullptr;
+    return Active;
+  }
+
+private:
+  friend class SyncDiag;
+  std::string Text;
+  DiagnosticCapture *Previous;
+};
 
 /// Holds \c diagnosticMutex() for the lifetime of one diagnostic statement.
 ///
@@ -45,13 +71,19 @@ class SyncDiag {
 public:
   enum class Level { Warning, Error };
 
-  explicit SyncDiag(Level L) : Lock(diagnosticMutex()), OS(open(L)) {}
+  explicit SyncDiag(Level L)
+      : Lock(diagnosticMutex()), OS(open(L)),
+        Capture(L == Level::Error ? DiagnosticCapture::active() : nullptr) {}
 
   SyncDiag(const SyncDiag &) = delete;
   SyncDiag &operator=(const SyncDiag &) = delete;
 
   template <typename T> SyncDiag &operator<<(const T &Val) {
     OS << Val;
+    if (Capture) {
+      llvm::raw_string_ostream Copy(Capture->Text);
+      Copy << Val;
+    }
     return *this;
   }
 
@@ -66,6 +98,7 @@ private:
   // last on destruction.
   std::lock_guard<std::mutex> Lock;
   llvm::raw_ostream &OS;
+  DiagnosticCapture *Capture;
 };
 
 /// Thread-safe replacement for `llvm::WithColor::warning()`.

@@ -5,6 +5,7 @@
 #include "../../../lib/sdk/capi/ObjCByValueCopySources.h"
 #include "../../../lib/sdk/capi/ObjCNativeSwiftReceiverSources.h"
 #include "../../../lib/sdk/capi/SourceSwiftValueConstructorProjection.h"
+#include "MappedSectionFlags.h"
 #include "SourceCallExecution.h"
 #include "gtest/gtest.h"
 
@@ -1534,8 +1535,8 @@ TEST(SwiftFieldReceiver,
       F.Image.RelDataPtrRelocSlots.insert(F.FirstSlot + 4);
       break;
     case 6:
-      F.Image.Sections[1].Flags =
-          SegmentFlags::Readable | SegmentFlags::Writable;
+      setMappedSectionFlags(F.Image, F.Image.Sections[1],
+                            SegmentFlags::Readable | SegmentFlags::Writable);
       break;
     case 7:
       F.Image.Sections[1].Type = llvm::MachO::S_THREAD_LOCAL_REGULAR;
@@ -3839,8 +3840,9 @@ TEST(SwiftFixedRecordConstructor, MessageReplayRejectsChangedCurrentEvidence) {
       F.Image.Sections[3].Type = llvm::MachO::S_THREAD_LOCAL_VARIABLES;
       break;
     case 32:
-      F.Image.Sections.back().Flags =
-          F.Image.Sections.back().Flags | SegmentFlags::Writable;
+      setMappedSectionFlags(F.Image, F.Image.Sections.back(),
+                            F.Image.Sections.back().Flags |
+                                SegmentFlags::Writable);
       break;
     case 33:
       F.text(0x3c60, "removeAllAnimations");
@@ -3908,8 +3910,9 @@ TEST(SwiftFixedRecordConstructor,
             F.Image.ObjCSourceReferences[F.Selector];
         break;
       case 19:
-        F.Image.Sections[3].Flags =
-            F.Image.Sections[3].Flags | SegmentFlags::Writable;
+        setMappedSectionFlags(F.Image, F.Image.Sections[3],
+                              F.Image.Sections[3].Flags |
+                                  SegmentFlags::Writable);
         break;
       case 20:
         F.Image.Sections.push_back(F.Image.Sections[1]);

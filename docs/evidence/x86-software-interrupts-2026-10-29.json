@@ -1,0 +1,114 @@
+{
+  "scope": "Canonical x64 INT imm8 under the explicit KernelEventsNoFaultV6 continuation profile",
+  "goal_complete": false,
+  "validation_complete": true,
+  "artifact_set": "neverd-software-interrupts-20261029",
+  "neverd_base": "553e11ae8b7c7bc84eb792f6dc061bf59bb5e860",
+  "qualified_source": {
+    "path": "qualified-source.json",
+    "sha256": "85db7d0424da225987774cd78940fad7c627165e66abee3b093dd896a59d0ae0",
+    "bytes": 2176
+  },
+  "qualification_driver": {
+    "path": "make-evidence.py",
+    "sha256": "31bef3313fe3c051f05dd32d967780d04d19afd3127c435b20d71bf6b16dddb7",
+    "bytes": 6347
+  },
+  "sources": {
+    "llvm": "a7738f3f28e71edc72651e475ea930a9e8946d27",
+    "neverc": "111055529fb4b18e18858983c80c8731bf5bbcb1",
+    "production_sdk": "neverd-llvm-v23.0.0-r6",
+    "production_sdk_commit": "06788fb19109851e6a6b9f109a2b8027a606f0c6",
+    "production_llvm_gitlink": "03270359c2ed8f6806533d3832a947bf883a6f69",
+    "release_and_pins_changed": false
+  },
+  "native_oracle": {
+    "host": "Intel Core i9-13900H, Linux x64 KVM",
+    "instruction": "Original two-byte CD imm8 on an independent vCPU",
+    "paging_address_bits": 48,
+    "compiler": "Ubuntu clang version 23.1.2 (++20260910044155+069ef0e7cb36-1~exp1~20260910044205.69)",
+    "profiles": [
+      "HighC O0",
+      "HighC O2",
+      "LLVMC O0",
+      "LLVMC O2"
+    ],
+    "vectors": 256,
+    "cases_per_vector_per_profile": 64,
+    "state_and_ram_comparisons": 65536,
+    "compared": [
+      "all represented V6 state",
+      "8192 bytes of descriptor and stack RAM",
+      "five-word frame with the exact two-byte fallthrough",
+      "NMI blocking"
+    ],
+    "coverage": [
+      "all IST indices",
+      "interrupt and trap gates",
+      "all gate DPLs",
+      "null and non-null SS",
+      "all flag bit positions",
+      "both NMI-blocking states",
+      "selected gate at exact IDT limit"
+    ]
+  },
+  "build": {
+    "configuration": "Release",
+    "proof_fixture_receipt": {
+      "path": "proof-build-receipt.json",
+      "sha256": "a1c90f8170db7be0f8a9d0fcc841e22d3cf1c4f11ffab4b41143dfa1a94e3229",
+      "bytes": 3507
+    },
+    "receipt": {
+      "path": "neverd-build-receipt.json",
+      "sha256": "1b53636e54d73092083c83a7f84003595cd562ce4238cbab8be36895aeca9abf",
+      "bytes": 3700
+    },
+    "dependency_inputs": {
+      "path": "neverd-dependency-inputs.json",
+      "sha256": "0d185e80e033e56c739f8efa6c9652c56f7005bd399558403138262879bfc48c",
+      "bytes": 524
+    }
+  },
+  "checks": {
+    "qualification": {
+      "tests": 105,
+      "passed": 105,
+      "skipped": 0,
+      "artifact": "final-qualification.xml",
+      "sha256": "a0883e93c254ddd3c6afea9984c1dff46de48526fc77a520e2eafb445db58572",
+      "bytes": 110445
+    },
+    "proof_regressions": {
+      "tests": 258,
+      "passed": 258,
+      "skipped": 0,
+      "artifact": "final-proof-tests.xml",
+      "sha256": "182809d5c6f9e710836afb5cc70bfcb2c3b080b5c0b706d8377621c5a60b2cf9",
+      "bytes": 277407
+    },
+    "invalid_descriptor_requests": 144,
+    "immediate_audit_positive_cases": 256,
+    "immediate_audit_malformed_cases": 2304,
+    "llvm_int_intrinsic_lit": "passed for i686 and x86_64",
+    "neverc_interrupt_tests": "4 passed",
+    "neverc_docs_navigation": "16 layout tests passed; navigation validated for 747 pages across 11 locales after linking the audit source references",
+    "neverc_generated_target_manifest": "exact manifest and header scans pass after updating the reviewed immutable TargetInfos digest",
+    "neverc_full_ci": "not qualified: preceding full CI reports unresolved linker/plugin/C++ frontend failures; the local global-state check also reports absent Python-plugin symbols in the stage1 artifact. The docs-only follow-up navigation jobs are queued at recording time."
+  },
+  "fixes_found_during_validation": [
+    "The unaudited-boundary fixture still classified LOCK XADD as Missing after upstream 231641451100f0b75bdc58750d3d60e9e3be69de added its exact audit. Its own regression now requires Complete coverage on unreachable paths and refusal when feasible without a memory contract; RCL and REP MOVSB retain the unaudited-boundary checks.",
+    "NeverC docs-navigation CI required the newly documented audit source paths to be links; both references were corrected and the complete navigation check passed.",
+    "Test-only function pointer table replaced with direct calls to support HighC uint8_t* and LLVMC void* parameters without incompatible function calls.",
+    "Trap retention now authenticates the strict lift's exact undefined-output audit. Complete coverage does not grant exception execution; feasible traps and forged audit upgrades/downgrades remain rejected."
+  ],
+  "limitations": [
+    "CPL0 long-mode entry only",
+    "successful sequential ordinary RAM only; no fault delivery",
+    "CET/FRED, asynchronous delivery and concurrent writers excluded",
+    "other prefixed encodings and INT1 remain native requests",
+    "no arbitrary handler execution or ordinary C ABI inference",
+    "i386 explicit interrupt state not covered",
+    "AMX SP/BP row addressing and the other global x86 gaps remain open"
+  ]
+}

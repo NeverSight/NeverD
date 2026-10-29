@@ -11,6 +11,7 @@
 #include "neverd/diff/LineageJSON.h"
 
 #include "neverd/diff/FlowRegionsJSON.h"
+#include "neverd/diff/RegionsJSON.h"
 
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringExtras.h"
@@ -147,6 +148,39 @@ llvm::json::Object conflict(const Lineage &L, uint32_t I) {
       {"members", C.Members.size()}};
 }
 
+llvm::json::Object nativeAnchor(const RegionAnalysis &R, uint64_t Index) {
+  require(Index < R.Anchors.size(),
+          "saved native region anchor is outside its inventory");
+  const auto &A = R.Anchors[Index];
+  // These are original snapshot coordinates, not freshly resolved VAs.
+  llvm::json::Object Row{
+      {"index", Index},
+      {"primary_function_index", A.Primary.Function},
+      {"secondary_function_index", A.Secondary.Function},
+      {"primary_block_index", A.Primary.Block},
+      {"secondary_block_index", A.Secondary.Block},
+      {"primary_instruction_index", A.Primary.FirstInstruction},
+      {"secondary_instruction_index", A.Secondary.FirstInstruction},
+      {"primary_instruction_count", A.Primary.InstructionCount},
+      {"secondary_instruction_count", A.Secondary.InstructionCount},
+      {"unique_seed", A.UniqueSeed},
+      {"native_authenticated", false},
+      {"semantic_validation", "not_performed"}};
+  addRegionEvidenceFields(Row, R.Calls);
+  return Row;
+}
+
+llvm::json::Object flowAnchor(const FlowRegionAnalysis &R, uint64_t Index) {
+  require(Index < R.Anchors.size(),
+          "saved SSA region anchor is outside its inventory");
+  auto Row = flowRegionAnchorJSON(R.Anchors[Index]);
+  Row["index"] = Index;
+  Row["profile"] = R.Profile;
+  Row["native_authenticated"] = false;
+  Row["semantic_validation"] = "not_performed";
+  return Row;
+}
+
 struct PageBuilder {
   const LineageQuery &Query;
   const ComparisonControl &Control;
@@ -196,6 +230,19 @@ struct PageBuilder {
       throw ComparisonInterrupted(ComparisonState::ResourceLimited);
     Bytes += Text.size();
     Rows.push_back(std::move(Row));
+  }
+  // Direct inventories have no filter or membership scan. Charge the same
+  // record allowance as append(), but render only the requested page.
+  template <typename Render> void indexed(uint64_t Count, Render Make) {
+    const auto Base = Total;
+    const auto Begin = Offset > Base ? std::min(Count, Offset - Base) : 0;
+    const auto End =
+        Begin + std::min<uint64_t>(Count - Begin, Query.Limit - Rows.size());
+    charge(Count - (End - Begin));
+    Total += Begin;
+    for (auto I = Begin; I < End; ++I)
+      append([&] { return Make(I); });
+    Total = Base + Count;
   }
 };
 
@@ -269,6 +316,8 @@ LineageQuery readLineageQuery(const llvm::json::Object &O) {
                                                      "ambiguity_primary",
                                                      "ambiguity_secondary",
                                                      "warnings",
+                                                     "native_anchors",
+                                                     "flow_anchors",
                                                      "native_regions",
                                                      "native_region_anchors",
                                                      "flow_regions",
@@ -295,6 +344,7 @@ LineageQuery readLineageQuery(const llvm::json::Object &O) {
   const bool ReportQuery =
       Q.Kind == "decisions" || Q.Kind == "ambiguities" ||
       Q.Kind == "ambiguity_primary" || Q.Kind == "ambiguity_secondary" ||
+      Q.Kind == "native_anchors" || Q.Kind == "flow_anchors" ||
       Q.Kind == "warnings" || Q.Kind == "native_regions" ||
       Q.Kind == "native_region_anchors" || Q.Kind == "flow_regions" ||
       Q.Kind == "flow_region_anchors";
@@ -352,6 +402,7 @@ llvm::json::Object lineageSummary(const Lineage &L,
       {"reviews", Reviews},
       {"ambiguities", Ambiguities},
       {"region_hypotheses", Regions},
+      {"supports_all_region_anchors", true},
       {"historical_decision_warnings", HistoricalWarnings},
       {"source_bytes", L.sourceBytes()},
       {"admission_work", L.work()}};
@@ -545,6 +596,12 @@ LineagePage lineagePage(const Lineage &L, const LineageQuery &Q,
                          : O.Kind == OverrideKind::Unmatch ? "unmatch"
                                                            : "confirm"}};
           });
+      } else if (Q.Kind == "native_anchors") {
+        B.indexed(S.Regions.Anchors.size(),
+                  [&](uint64_t I) { return nativeAnchor(S.Regions, I); });
+      } else if (Q.Kind == "flow_anchors") {
+        B.indexed(S.FlowRegions.Anchors.size(),
+                  [&](uint64_t I) { return flowAnchor(S.FlowRegions, I); });
       } else if (Q.Kind == "native_regions") {
         for (uint32_t I = 0; I < S.Regions.Hypotheses.size(); ++I)
           B.append([&] {
@@ -552,7 +609,7 @@ LineagePage lineagePage(const Lineage &L, const LineageQuery &Q,
             llvm::json::Array Explanations;
             for (const auto K : H.Explanations)
               Explanations.push_back(regionKindName(K));
-            return llvm::json::Object{
+            auto Row = llvm::json::Object{
                 {"index", I},
                 {"id", H.Id},
                 {"anchor_count", H.Anchors.size()},
@@ -568,29 +625,17 @@ LineagePage lineagePage(const Lineage &L, const LineageQuery &Q,
                 {"analysis_complete", H.AnalysisComplete},
                 {"native_authenticated", false},
                 {"semantic_validation", "not_performed"}};
+            addRegionEvidenceFields(Row, S.Regions.Calls);
+            return Row;
           });
       } else if (Q.Kind == "native_region_anchors") {
         require(Q.Index < S.Regions.Hypotheses.size(),
                 "unknown native region hypothesis");
         for (const auto I : S.Regions.Hypotheses[Q.Index].Anchors)
           B.append([&] {
-            require(I < S.Regions.Anchors.size(),
-                    "saved native region anchor is outside its inventory");
-            const auto &A = S.Regions.Anchors[I];
-            // These are original snapshot coordinates, not freshly resolved
-            // VAs.
-            return llvm::json::Object{
-                {"index", I},
-                {"hypothesis_id", S.Regions.Hypotheses[Q.Index].Id},
-                {"primary_function_index", A.Primary.Function},
-                {"secondary_function_index", A.Secondary.Function},
-                {"primary_block_index", A.Primary.Block},
-                {"secondary_block_index", A.Secondary.Block},
-                {"primary_instruction_index", A.Primary.FirstInstruction},
-                {"secondary_instruction_index", A.Secondary.FirstInstruction},
-                {"primary_instruction_count", A.Primary.InstructionCount},
-                {"secondary_instruction_count", A.Secondary.InstructionCount},
-                {"unique_seed", A.UniqueSeed}};
+            auto Row = nativeAnchor(S.Regions, I);
+            Row["hypothesis_id"] = S.Regions.Hypotheses[Q.Index].Id;
+            return Row;
           });
       } else if (Q.Kind == "flow_regions") {
         for (uint32_t I = 0; I < S.FlowRegions.Hypotheses.size(); ++I)
@@ -606,10 +651,7 @@ LineagePage lineagePage(const Lineage &L, const LineageQuery &Q,
                 "unknown SSA region hypothesis");
         for (const auto I : S.FlowRegions.Hypotheses[Q.Index].Anchors)
           B.append([&] {
-            require(I < S.FlowRegions.Anchors.size(),
-                    "saved SSA region anchor is outside its inventory");
-            auto Row = flowRegionAnchorJSON(S.FlowRegions.Anchors[I]);
-            Row["index"] = I;
+            auto Row = flowAnchor(S.FlowRegions, I);
             Row["hypothesis_id"] = S.FlowRegions.Hypotheses[Q.Index].Id;
             return Row;
           });

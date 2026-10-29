@@ -23,9 +23,11 @@
 
 namespace neverd {
 
-std::optional<uint64_t>
-constantScalarExpression(llvm::ArrayRef<LowOp> Operations, const NdVar &Value,
-                         va_t QueryInstruction, size_t &RemainingWork) {
+symbolic::SymRef symbolicScalarExpression(
+    symbolic::SymContext &Ctx, llvm::ArrayRef<LowOp> Operations,
+    const NdVar &Value, va_t QueryInstruction, size_t &RemainingWork,
+    llvm::function_ref<std::optional<uint64_t>(const LowOp &, uint64_t)>
+        ReadImage) {
   const auto Scalar = [](const NdVar &V) {
     return V.Size && V.Size <= sizeof(uint64_t) &&
            (V.isConst() || V.isReg() || V.isTemp()) &&
@@ -42,7 +44,6 @@ constantScalarExpression(llvm::ArrayRef<LowOp> Operations, const NdVar &Value,
   };
   if (!Spend(Operations.size()))
     return {};
-  symbolic::SymContext Ctx;
   symbolic::SymState State(Ctx);
   std::map<uint64_t, std::pair<uint16_t, symbolic::SymRef>> Temps;
   va_t Instruction = InvalidVA;
@@ -81,6 +82,12 @@ constantScalarExpression(llvm::ArrayRef<LowOp> Operations, const NdVar &Value,
       return {};
     const size_t Before = Ctx.numNodes();
     std::optional<symbolic::SymRef> Result;
+    if (ReadImage && Op.Opcode == NdOp::LOAD && Op.NumInputs == 1 &&
+        Scalar(Op.Inputs[0]) && Op.MemoryOrdering == NdMemoryOrdering::None &&
+        Op.MemoryAddressSpace == NdMemoryAddressSpace::Default)
+      if (const auto Address = Ctx.asConst(Read(Op.Inputs[0])))
+        if (const auto Bits = ReadImage(Op, Address->getZExtValue()))
+          Result = Ctx.mkConst(Op.Output.Size * 8, *Bits);
     // The scalar evaluator owns the accepted arities and widths. Supplying
     // zero here asks only whether the operation has that total scalar shape;
     // these test values are never inserted into the symbolic state.
@@ -104,7 +111,7 @@ constantScalarExpression(llvm::ArrayRef<LowOp> Operations, const NdVar &Value,
                                                     Op.Output.Size, Inputs);
     }
     // Every unresolved load or scalar definition is a distinct observation.
-    // In particular two loads at the same address cannot cancel each other.
+    // Equal addresses alone cannot make two unproved loads cancel.
     const auto Bits = Result.value_or(symbolic::SymRef{});
     const auto Written =
         Bits ? Bits : Ctx.mkFreshVar(Op.Output.Size * 8, "unknown-write");
@@ -125,6 +132,19 @@ constantScalarExpression(llvm::ArrayRef<LowOp> Operations, const NdVar &Value,
   if (!Spend(1 + Value.Size + Ctx.numNodes() - BeforeQuery) ||
       Ctx.numNodes() > limits::kMaxScalarBranchSymbolicNodes)
     return {};
+  return Expression;
+}
+
+std::optional<uint64_t> constantScalarExpression(
+    llvm::ArrayRef<LowOp> Operations, const NdVar &Value, va_t QueryInstruction,
+    size_t &RemainingWork,
+    llvm::function_ref<std::optional<uint64_t>(const LowOp &, uint64_t)>
+        ReadImage) {
+  symbolic::SymContext Ctx;
+  const auto Expression = symbolicScalarExpression(
+      Ctx, Operations, Value, QueryInstruction, RemainingWork, ReadImage);
+  if (!Expression)
+    return {};
   if (const auto Constant = Ctx.asConst(Expression))
     return Constant->getZExtValue();
   symbolic::MBAOptions Options;
@@ -136,8 +156,10 @@ constantScalarExpression(llvm::ArrayRef<LowOp> Operations, const NdVar &Value,
       std::min(RemainingWork, limits::kMaxScalarBranchSymbolicRewriteWork);
   Options.MaxTableBytes = limits::kMaxScalarBranchSymbolicTableBytes;
   const auto Simplified = symbolic::simplifyMBADeep(Ctx, Expression, Options);
-  if (!Spend(Simplified.Work) ||
-      Simplified.Evidence != symbolic::MBAEvidence::Derivation ||
+  if (Simplified.Work > RemainingWork)
+    return {};
+  RemainingWork -= Simplified.Work;
+  if (Simplified.Evidence != symbolic::MBAEvidence::Derivation ||
       Simplified.Outcome == symbolic::MBAOutcome::BudgetExhausted)
     return {};
   const auto Constant = Ctx.asConst(Simplified.Expr);

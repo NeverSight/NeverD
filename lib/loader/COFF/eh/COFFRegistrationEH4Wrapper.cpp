@@ -26,12 +26,15 @@ std::optional<va_t> getDirectCookieCheck(const BinaryImage &Img,
       Img.Base > UINT32_MAX || !Img.DynInfo.SecurityCookieRVA)
     return std::nullopt;
   const va_t CookieVA = Img.Base + Img.DynInfo.SecurityCookieRVA;
-  const auto *Code = Img.readVA(HandlerVA, 36);
-  if (!Code || !Img.hasExecutableCodeOwnerRange(HandlerVA, 36) ||
-      CookieVA > UINT32_MAX - 3 || !Img.readVA(CookieVA, 4) ||
-      Code[0] != 0x55 ||
-      !((Code[1] == 0x89 && Code[2] == 0xe5) ||
-        (Code[1] == 0x8b && Code[2] == 0xec)))
+  // Executable, immutable storage whose only absolute operands are the pushed
+  // checker and cookie and the runtime's IAT slot, as for the normalizer.
+  const auto Bytes = readImmutablePE32CodeBytes(
+      Img, HandlerVA, 36, {HandlerVA + 16, HandlerVA + 21, HandlerVA + 27});
+  if (!Bytes || CookieVA > UINT32_MAX - 3 || !Img.readVA(CookieVA, 4))
+    return std::nullopt;
+  const auto *Code = Bytes->data();
+  if (Code[0] != 0x55 || !((Code[1] == 0x89 && Code[2] == 0xe5) ||
+                           (Code[1] == 0x8b && Code[2] == 0xec)))
     return std::nullopt;
   for (unsigned Arg = 0; Arg != 4; ++Arg)
     if (Code[3 + Arg * 3] != 0xff || Code[4 + Arg * 3] != 0x75 ||

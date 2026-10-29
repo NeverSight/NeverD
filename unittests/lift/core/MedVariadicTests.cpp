@@ -9,7 +9,9 @@
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/med/MedIR.h"
 
+#include <cstdint>
 #include <initializer_list>
+#include <vector>
 
 namespace neverd {
 
@@ -228,6 +230,54 @@ TEST(MedVariadic, DefinitionLookupIsFreshForEachFunctionAndEdit) {
   }
 }
 
+// A System V va_start stores gp_offset, eight for each integer register that
+// carries a named parameter, into its va_list's first field: that store
+// alone counts them (MedFunc::VaStartNamedGPRs), the word whole or its two
+// halves side by side.  The word in a register no store puts in the frame,
+// or stored through an address that is no frame slot, counts nothing.
+TEST(MedVariadic, X64NamedRegistersComeOnlyFromAStoredGpOffset) {
+  const auto &TRI = getTargetRegInfo(Arch::X64);
+  const uint64_t Word = (uint64_t{48} << 32) | 16;
+  const auto Variadic = [&](auto Edit) {
+    MedFunc F = homeFunction(Arch::X64);
+    auto &Ops = F.Blocks[0].Ops;
+    Ops.push_back(op(NdOp::STORE, {},
+                     {Ops[1].Output, reg(20, 0, 8, TRI.IntParamRegs[2])}));
+    Edit(Ops);
+    classify(F, Arch::X64);
+    EXPECT_TRUE(F.IsVariadic);
+    return F.VaStartNamedGPRs;
+  };
+  EXPECT_EQ(Variadic([&](std::vector<MedOp> &Ops) {
+              Ops.push_back(op(NdOp::STORE, {},
+                               {Ops[1].Output, MedVar::makeConst(Word, 8)}));
+            }),
+            2);
+  EXPECT_EQ(
+      Variadic([&](std::vector<MedOp> &Ops) {
+        const MedVar FpField = temp(4);
+        Ops.push_back(
+            op(NdOp::STORE, {}, {Ops[1].Output, MedVar::makeConst(16, 4)}));
+        Ops.push_back(op(NdOp::INT_ADD, FpField,
+                         {Ops[1].Inputs[0],
+                          MedVar::makeConst(static_cast<uint64_t>(-12), 8)}));
+        Ops.push_back(op(NdOp::STORE, {}, {FpField, MedVar::makeConst(48, 4)}));
+      }),
+      2);
+  EXPECT_EQ(Variadic([&](std::vector<MedOp> &Ops) {
+              Ops.push_back(op(NdOp::COPY,
+                               reg(21, 1, 8, TRI.IntReturnRegs.front()),
+                               {MedVar::makeConst(Word, 8)}));
+            }),
+            -1);
+  EXPECT_EQ(Variadic([&](std::vector<MedOp> &Ops) {
+              Ops.push_back(op(NdOp::STORE, {},
+                               {reg(22, 0, 8, TRI.IntParamRegs[0]),
+                                MedVar::makeConst(Word, 8)}));
+            }),
+            -1);
+}
+
 TEST(MedVariadic, I386RequiresAHomedPointerAndAReloadOrAdvancedRead) {
   for (int Mode = 0; Mode < 10; ++Mode) {
     SCOPED_TRACE(Mode);
@@ -359,6 +409,196 @@ TEST(MedVariadic, ProofAndCopyDepthLimitsRemainPerRoot) {
   classify(F);
   EXPECT_TRUE(F.IsVariadic);
   EXPECT_EQ(F.VariadicOverflowBase, 16);
+}
+
+// What clang -O2 emits for `int f(int n, ...)` whose va_arg reads ints only:
+// x1-x7 and q0-q7 saved at entry SP - 0x58 and - 0xE0, and one va_list at
+// entry SP - 0x20 whose walk loads __stack, __gr_top and __gr_offs.
+struct AAPCS64VaStart {
+  static constexpr int64_t Frame = 0xE0;
+  static constexpr int64_t VaList = 0xC0; // from the lowered SP
+  MedFunc F;
+  MedVar SP, Lowered;
+  int Next = 1000;
+  bool Built = false;
+
+  AAPCS64VaStart() {
+    const auto &TRI = getTargetRegInfo(Arch::AArch64);
+    SP = reg(100, 0, 8, TRI.StackPointer);
+    Lowered = reg(100, 1, 8, TRI.StackPointer);
+    F.Blocks.resize(1);
+    F.Blocks[0].Id = 0;
+    add(op(NdOp::INT_SUB, Lowered, {SP, MedVar::makeConst(Frame, 8)}));
+    for (size_t K = 1; K < TRI.IntParamRegs.size(); ++K)
+      add(op(NdOp::STORE, {},
+             {at(0x88 + 8 * static_cast<int64_t>(K - 1)),
+              reg(10 + static_cast<int>(K), 0, 8, TRI.IntParamRegs[K])}));
+    for (size_t K = 0; K < TRI.FPParamRegs.size(); ++K)
+      add(op(NdOp::STORE, {},
+             {at(16 * static_cast<int64_t>(K)),
+              reg(30 + static_cast<int>(K), 0, 16, TRI.FPParamRegs[K])}));
+    add(op(NdOp::STORE, {}, {at(VaList), at(Frame)}));
+    add(op(NdOp::STORE, {}, {at(VaList + 8), at(VaList)}));
+    add(op(NdOp::STORE, {}, {at(VaList + 16), at(0x80)}));
+    // MOVK builds both offsets, -56 and -128, from an AND and an OR.
+    const MedVar Low = reg(8, 1, 8, TRI.indirectResultReg());
+    const MedVar Masked = temp(Next++);
+    const MedVar Offsets = reg(8, 2, 8, TRI.indirectResultReg());
+    add(op(NdOp::COPY, Low, {MedVar::makeConst(0xFFFFFFFFFFFFFFC8, 8)}));
+    add(op(NdOp::INT_AND, Masked,
+           {Low, MedVar::makeConst(0xFFFF0000FFFFFFFF, 8)}));
+    add(op(NdOp::INT_OR, Offsets,
+           {Masked, MedVar::makeConst(0xFF8000000000, 8)}));
+    add(op(NdOp::STORE, {}, {at(VaList + 24), Offsets}));
+    // va_arg: __gr_top + __gr_offs, or __stack.
+    const MedVar Top = temp(Next++), Offset = temp(Next++, 4);
+    const MedVar Wide = temp(Next++), Arg = temp(Next++),
+                 Value = temp(Next++, 4);
+    add(op(NdOp::LOAD, temp(Next++), {at(VaList)}));
+    add(op(NdOp::LOAD, Top, {at(VaList + 8)}));
+    add(op(NdOp::LOAD, Offset, {at(VaList + 24)}));
+    add(op(NdOp::INT_SEXT, Wide, {Offset}));
+    add(op(NdOp::INT_ADD, Arg, {Top, Wide}));
+    add(op(NdOp::LOAD, Value, {Arg}));
+    add(op(NdOp::RETURN, {}, {}));
+    Built = true;
+  }
+
+  /// Append \p Op, or insert it before the RETURN once that is in place.
+  void add(MedOp Op) {
+    auto &Ops = F.Blocks[0].Ops;
+    Ops.insert(Built ? Ops.end() - 1 : Ops.end(), std::move(Op));
+  }
+  /// A new temporary holding the lowered SP plus \p Offset.
+  MedVar at(int64_t Offset) {
+    const MedVar Address = temp(Next++);
+    add(op(NdOp::INT_ADD, Address,
+           {Lowered, MedVar::makeConst(static_cast<uint64_t>(Offset), 8)}));
+    return Address;
+  }
+  /// The STORE to the lowered SP plus \p Offset.
+  MedOp &storeAt(int64_t Offset) {
+    auto &Ops = F.Blocks[0].Ops;
+    for (MedOp &Op : Ops)
+      if (Op.Opcode == NdOp::STORE)
+        for (const MedOp &Address : Ops)
+          if (Address.Opcode == NdOp::INT_ADD &&
+              Address.Output == Op.Inputs[0] && Address.Inputs[0] == Lowered &&
+              Address.Inputs[1].ConstVal == static_cast<uint64_t>(Offset))
+            return Op;
+    ADD_FAILURE() << "no store at " << Offset;
+    return Ops.front();
+  }
+
+  size_t vectorSpills() const {
+    const auto &TRI = getTargetRegInfo(Arch::AArch64);
+    size_t Count = 0;
+    for (const MedOp &Op : F.Blocks[0].Ops)
+      Count += Op.Opcode == NdOp::STORE && TRI.isFPArgReg(Op.Inputs[1].RegOff);
+    return Count;
+  }
+};
+
+TEST(MedVariadic, AAPCS64DropsTheVectorSaveAreaNoReadObserves) {
+  const auto &TRI = getTargetRegInfo(Arch::AArch64);
+  const MedVar X0 = reg(1, 5, 8, TRI.IntParamRegs[0]);
+  const MedVar Q1 = reg(51, 5, 16, TRI.FPParamRegs[1]);
+  for (int Mode = 0; Mode < 22; ++Mode) {
+    SCOPED_TRACE(Mode);
+    AAPCS64VaStart V;
+    BinaryFormat Format = BinaryFormat::ELF;
+    switch (Mode) {
+    case 1: // FP va_arg reads __vr_top and __vr_offs.
+      V.add(op(NdOp::LOAD, temp(1), {V.at(V.VaList + 16)}));
+      break;
+    case 2:
+      V.add(op(NdOp::LOAD, temp(1, 4), {V.at(V.VaList + 28)}));
+      break;
+    case 3: // A read of a saved vector register.
+      V.add(op(NdOp::LOAD, temp(1), {V.at(0x18)}));
+      break;
+    case 4: // `vprintf(fmt, ap)` passes the va_list on.
+      V.add(op(NdOp::COPY, X0, {V.at(V.VaList)}));
+      V.add(op(NdOp::CALL, {}, {MedVar::makeConst(0x4000, 8)}));
+      break;
+    case 5: // A frame address stored where the proof does not follow it.
+      V.add(op(NdOp::STORE, {}, {MedVar::makeConst(0x8000, 8), V.at(0)}));
+      break;
+    case 6: { // No __vr_top: nothing ties the area to a va_list.
+      const MedVar Inside = V.at(0x70);
+      V.storeAt(V.VaList + 16).Inputs[1] = Inside;
+      break;
+    }
+    case 7: // __vr_offs for seven saved registers.
+      for (MedOp &Op : V.F.Blocks[0].Ops)
+        if (Op.Opcode == NdOp::INT_OR)
+          Op.Inputs[1] = MedVar::makeConst(0xFF9000000000, 8);
+      break;
+    case 8: // q3 is missing from the area.
+      V.storeAt(0x30).Inputs[1] = temp(1, 16);
+      break;
+    case 9: { // A load at a frame address with no fixed offset.
+      const MedVar Indexed = temp(2);
+      V.add(op(NdOp::INT_ADD, Indexed,
+               {V.at(0x88), reg(12, 0, 8, TRI.IntParamRegs[2])}));
+      V.add(op(NdOp::LOAD, temp(1, 4), {Indexed}));
+      break;
+    }
+    case 10: // Apple arm64 passes every variadic argument on the stack.
+      Format = BinaryFormat::MachO;
+      break;
+    case 11: // A frame address in a vector register.
+      V.add(op(NdOp::COPY, Q1, {V.at(V.VaList)}));
+      break;
+    case 12: // The va_list's address reaches the return in x0.
+      V.add(op(NdOp::COPY, X0, {V.at(V.VaList)}));
+      break;
+    case 13: // ... or is overwritten first.
+      V.add(op(NdOp::COPY, X0, {V.at(V.VaList)}));
+      V.add(op(NdOp::COPY, reg(1, 6, 8, TRI.IntParamRegs[0]),
+               {MedVar::makeConst(0, 8)}));
+      V.add(op(NdOp::CALL, {}, {MedVar::makeConst(0x4000, 8)}));
+      break;
+    case 14: // An intrinsic may access what it is given.
+      V.add(op(NdOp::INTRINSIC, temp(1),
+               {MedVar::makeConst(1, 4), V.at(V.VaList)}));
+      break;
+    case 15: // The exception dispatcher enters with what no edge shows.
+      V.F.Blocks[0].ExceptionalPreds.emplace_back(1, 0x2000);
+      break;
+    case 16: // A narrow write leaves the address's upper bytes in x0.
+      V.add(op(NdOp::COPY, X0, {V.at(V.VaList)}));
+      V.add(op(NdOp::COPY, reg(2, 6, 4, TRI.IntParamRegs[0]),
+               {MedVar::makeConst(0, 4)}));
+      V.add(op(NdOp::CALL, {}, {MedVar::makeConst(0x4000, 8)}));
+      break;
+    case 17: // Windows ARM64: the save area decides, not the format.
+      Format = BinaryFormat::COFF;
+      break;
+    case 18: // q7 saved twice.
+      V.add(op(NdOp::STORE, {},
+               {V.at(0x100), reg(37, 0, 16, TRI.FPParamRegs[7])}));
+      break;
+    case 19: // A load next to __vr_top reads __gr_top only.
+      V.add(op(NdOp::LOAD, temp(1), {V.at(V.VaList + 8)}));
+      break;
+    case 20: // __stack later pointing into the area would bring it back.
+      V.add(op(NdOp::STORE, {}, {V.at(V.VaList), V.at(0x10)}));
+      break;
+    case 21: // So would another __vr_top.
+      V.add(op(NdOp::STORE, {}, {V.at(V.VaList + 16), V.at(0x20)}));
+      break;
+    }
+    V.F.IsVariadic = false;
+    detectVariadic(V.F, TRI, Arch::AArch64, Format);
+    EXPECT_TRUE(V.F.IsVariadic);
+    const bool Dropped = Mode == 0 || Mode == 13 || Mode == 17 || Mode == 19;
+    EXPECT_EQ(V.vectorSpills(),
+              Dropped ? 0u
+                      : TRI.FPParamRegs.size() - (Mode == 8) + (Mode == 18));
+    if (Mode != 10)
+      EXPECT_EQ(V.F.VariadicFirstRegister, 1);
+  }
 }
 
 } // namespace

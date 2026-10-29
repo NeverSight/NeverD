@@ -172,7 +172,9 @@ void checkStandaloneSEHSource(llvm::StringRef Source,
               "void *_exception_info(void);\n"
               "#define exception_code _exception_code\n"
               "#define GetExceptionCode() _exception_code()\n"
-              "#define GetExceptionInformation() _exception_info()\n";
+              "#define GetExceptionInformation() _exception_info()\n"
+              "int _abnormal_termination(void);\n"
+              "#define AbnormalTermination _abnormal_termination\n";
   }
   const auto Result = runCCompiler(
       Source, {"--target=x86_64-pc-windows-msvc", "-fms-extensions", "-std=c11",
@@ -2977,10 +2979,258 @@ TEST(COFFExceptionIR, LLVMCFinallyWrapContainsCleanupBody) {
   EXPECT_NE(FinallyAt, std::string::npos) << Source;
   EXPECT_NE(CallAt, std::string::npos) << Source;
   EXPECT_LT(FinallyAt, CallAt) << Source;
+  // The cleanup pad runs only while an exception unwinds the try; a C
+  // __finally runs on its normal exit as well. This try holds the return,
+  // which AbnormalTermination() would count, so the return sets a flag.
+  const auto GuardAt = Source.find("if (!neverd_seh_normal) {", FinallyAt);
+  EXPECT_LT(GuardAt, CallAt) << Source;
+  const auto ReturnAt = Source.find("return;");
+  ASSERT_NE(ReturnAt, std::string::npos) << Source;
+  EXPECT_LT(ReturnAt, FinallyAt) << Source;
+  EXPECT_EQ(Source.rfind("neverd_seh_normal = 1;", ReturnAt),
+            Source.rfind(";", ReturnAt - 1) + 1 -
+                std::string("neverd_seh_normal = 1;").size())
+      << Source;
   EXPECT_EQ(Source.find(
                 "/* recovered handler labels remain in the protected body */"),
             std::string::npos)
       << Source;
+}
+
+// A cleanup pad runs only while an exception unwinds its try, but C runs a
+// __finally for a return out of the try as well, and AbnormalTermination()
+// is then true too. Such a range takes the per-block normal-exit flag, which
+// the return sets before it leaves.
+TEST(COFFExceptionIR, LLVMCFinallyReturnInsideTheTrySkipsTheCleanup) {
+  llvm::LLVMContext Context;
+  llvm::Module Module("llvm-c-seh-finally-exit", Context);
+  Module.setTargetTriple(llvm::Triple("x86_64-pc-windows-msvc"));
+  llvm::Type *Void = llvm::Type::getVoidTy(Context);
+  llvm::Type *I1 = llvm::Type::getInt1Ty(Context);
+  llvm::FunctionType *VoidType = llvm::FunctionType::get(Void, false);
+  llvm::FunctionType *BoolType = llvm::FunctionType::get(I1, false);
+  llvm::FunctionType *PersonalityType = llvm::FunctionType::get(
+      llvm::Type::getInt32Ty(Context), /*isVarArg=*/true);
+  llvm::Function *Personality = llvm::Function::Create(
+      PersonalityType, llvm::GlobalValue::ExternalLinkage,
+      "__C_specific_handler", Module);
+  llvm::Function *Function = llvm::Function::Create(
+      VoidType, llvm::GlobalValue::ExternalLinkage, "seh_finally_exit", Module);
+  Function->setPersonalityFn(Personality);
+  llvm::BasicBlock *Entry =
+      llvm::BasicBlock::Create(Context, "entry", Function);
+  llvm::BasicBlock *Body = llvm::BasicBlock::Create(Context, "body", Function);
+  llvm::BasicBlock *Test = llvm::BasicBlock::Create(Context, "test", Function);
+  llvm::BasicBlock *More = llvm::BasicBlock::Create(Context, "more", Function);
+  llvm::BasicBlock *End = llvm::BasicBlock::Create(Context, "end", Function);
+  llvm::BasicBlock *Early =
+      llvm::BasicBlock::Create(Context, "early", Function);
+  llvm::BasicBlock *Finally =
+      llvm::BasicBlock::Create(Context, "finally", Function);
+  llvm::BasicBlock *Cont = llvm::BasicBlock::Create(Context, "cont", Function);
+  llvm::Function *Raise = llvm::Function::Create(
+      BoolType, llvm::GlobalValue::ExternalLinkage, "may_raise", Module);
+  llvm::Function *Again = llvm::Function::Create(
+      VoidType, llvm::GlobalValue::ExternalLinkage, "raise_again", Module);
+  llvm::Function *CleanupFn = llvm::Function::Create(
+      VoidType, llvm::GlobalValue::ExternalLinkage, "run_finally", Module);
+  llvm::Function *Leave = llvm::Function::Create(
+      VoidType, llvm::GlobalValue::ExternalLinkage, "leave_early", Module);
+  auto *TryBegin = llvm::Intrinsic::getOrInsertDeclaration(
+      &Module, llvm::Intrinsic::seh_try_begin);
+  auto *TryEnd = llvm::Intrinsic::getOrInsertDeclaration(
+      &Module, llvm::Intrinsic::seh_try_end);
+  llvm::IRBuilder<>(Entry).CreateInvoke(TryBegin, Body, Finally);
+  llvm::Value *Flag = nullptr;
+  {
+    llvm::IRBuilder<> B(Body);
+    Flag = B.CreateInvoke(Raise, Test, Finally);
+  }
+  llvm::IRBuilder<>(Test).CreateCondBr(Flag, Early, More);
+  llvm::IRBuilder<>(More).CreateInvoke(Again, End, Finally);
+  llvm::IRBuilder<>(End).CreateInvoke(TryEnd, Cont, Finally);
+  {
+    llvm::IRBuilder<> B(Early);
+    B.CreateCall(Leave);
+    B.CreateRetVoid();
+  }
+  llvm::IRBuilder<> FinallyBuilder(Finally);
+  llvm::CleanupPadInst *Cleanup =
+      FinallyBuilder.CreateCleanupPad(llvm::ConstantTokenNone::get(Context));
+  FinallyBuilder.CreateCall(CleanupFn, {},
+                            {llvm::OperandBundleDef("funclet", Cleanup)});
+  FinallyBuilder.CreateCleanupRet(Cleanup, nullptr);
+  llvm::IRBuilder<>(Cont).CreateRetVoid();
+  std::string Source = emitLLVMC(Module);
+  EXPECT_EQ(Source.find("AbnormalTermination"), std::string::npos) << Source;
+  const auto LeaveAt = Source.find("leave_early();");
+  ASSERT_NE(LeaveAt, std::string::npos) << Source;
+  const auto NormalAt = Source.find("neverd_seh_normal = 1;", LeaveAt);
+  const auto ReturnAt = Source.find("return;", LeaveAt);
+  ASSERT_NE(NormalAt, std::string::npos) << Source;
+  ASSERT_NE(ReturnAt, std::string::npos) << Source;
+  EXPECT_LT(NormalAt, ReturnAt) << Source;
+  // Every __finally runs the cleanup only after an exception.
+  size_t Finallies = 0;
+  for (size_t At = Source.find("} __finally {"); At != std::string::npos;
+       At = Source.find("} __finally {", At + 1), ++Finallies)
+    EXPECT_EQ(Source.find_first_not_of(" \n", At + 13),
+              Source.find("if (!neverd_seh_normal) {", At))
+        << Source;
+  EXPECT_GT(Finallies, 0u) << Source;
+  if (hasHostFixtureCompiler()) {
+    const std::string Prelude =
+        "#include <stdint.h>\n"
+        "uint8_t may_raise(void);\nvoid raise_again(void);\n"
+        "void run_finally(void);\nvoid leave_early(void);\n";
+    CompilerResult Syntax = runCCompiler(
+        Prelude + Source, {"--target=x86_64-pc-windows-msvc", "-fms-extensions",
+                           "-std=c11", "-fsyntax-only"});
+    EXPECT_EQ(Syntax.ExitCode, 0) << Syntax.Error << "\n" << Source;
+  }
+}
+
+// One finally range with a protected block laid out past its end marker:
+// lexically that block would print outside the try, reached by a jump out of
+// it and back in. The per-block normal-exit flag renders the range exactly.
+TEST(COFFExceptionIR, LLVMCFinallyRangeLaidOutPastItsEndUsesTheExitFlag) {
+  llvm::LLVMContext Context;
+  llvm::Module Module("llvm-c-seh-finally-layout", Context);
+  Module.setTargetTriple(llvm::Triple("x86_64-pc-windows-msvc"));
+  llvm::FunctionType *VoidType =
+      llvm::FunctionType::get(llvm::Type::getVoidTy(Context), false);
+  llvm::FunctionType *BoolType =
+      llvm::FunctionType::get(llvm::Type::getInt1Ty(Context), false);
+  llvm::Function *Personality = llvm::Function::Create(
+      llvm::FunctionType::get(llvm::Type::getInt32Ty(Context),
+                              /*isVarArg=*/true),
+      llvm::GlobalValue::ExternalLinkage, "__C_specific_handler", Module);
+  llvm::Function *Function =
+      llvm::Function::Create(VoidType, llvm::GlobalValue::ExternalLinkage,
+                             "seh_finally_layout", Module);
+  Function->setPersonalityFn(Personality);
+  auto Block = [&](const char *Name) {
+    return llvm::BasicBlock::Create(Context, Name, Function);
+  };
+  llvm::BasicBlock *Entry = Block("entry");
+  llvm::BasicBlock *Body = Block("body");
+  llvm::BasicBlock *Test = Block("test");
+  llvm::BasicBlock *End = Block("end");
+  llvm::BasicBlock *Cont = Block("cont");
+  llvm::BasicBlock *Far = Block("far");
+  llvm::BasicBlock *Finally = Block("finally");
+  auto Declare = [&](llvm::FunctionType *Type, const char *Name) {
+    return llvm::Function::Create(Type, llvm::GlobalValue::ExternalLinkage,
+                                  Name, Module);
+  };
+  llvm::Function *Raise = Declare(BoolType, "may_raise");
+  llvm::Function *Again = Declare(VoidType, "raise_again");
+  llvm::Function *CleanupFn = Declare(VoidType, "run_finally");
+  auto *TryBegin = llvm::Intrinsic::getOrInsertDeclaration(
+      &Module, llvm::Intrinsic::seh_try_begin);
+  auto *TryEnd = llvm::Intrinsic::getOrInsertDeclaration(
+      &Module, llvm::Intrinsic::seh_try_end);
+  llvm::IRBuilder<>(Entry).CreateInvoke(TryBegin, Body, Finally);
+  llvm::Value *Flag =
+      llvm::IRBuilder<>(Body).CreateInvoke(Raise, Test, Finally);
+  llvm::IRBuilder<>(Test).CreateCondBr(Flag, Far, End);
+  llvm::IRBuilder<>(Far).CreateInvoke(Again, End, Finally);
+  llvm::IRBuilder<>(End).CreateInvoke(TryEnd, Cont, Finally);
+  llvm::IRBuilder<>(Cont).CreateRetVoid();
+  llvm::IRBuilder<> FinallyBuilder(Finally);
+  llvm::CleanupPadInst *Cleanup =
+      FinallyBuilder.CreateCleanupPad(llvm::ConstantTokenNone::get(Context));
+  FinallyBuilder.CreateCall(CleanupFn, {},
+                            {llvm::OperandBundleDef("funclet", Cleanup)});
+  FinallyBuilder.CreateCleanupRet(Cleanup, nullptr);
+
+  std::string Source = emitLLVMC(Module);
+  EXPECT_EQ(Source.find("AbnormalTermination"), std::string::npos) << Source;
+  // raise_again() stays protected, and every __finally runs the cleanup
+  // only after an exception.
+  const auto AgainAt = Source.find("raise_again();");
+  ASSERT_NE(AgainAt, std::string::npos) << Source;
+  const auto TryAt = Source.rfind("__try {", AgainAt);
+  ASSERT_NE(TryAt, std::string::npos) << Source;
+  EXPECT_EQ(Source.find('}', TryAt), Source.find("} __finally {", TryAt))
+      << Source;
+  size_t Finallies = 0;
+  for (size_t At = Source.find("} __finally {"); At != std::string::npos;
+       At = Source.find("} __finally {", At + 1), ++Finallies)
+    EXPECT_EQ(Source.find_first_not_of(" \n", At + 13),
+              Source.find("if (!neverd_seh_normal) {", At))
+        << Source;
+  EXPECT_GT(Finallies, 0u) << Source;
+  if (hasHostFixtureCompiler()) {
+    const std::string Prelude =
+        "#include <stdint.h>\n"
+        "uint8_t may_raise(void);\nvoid raise_again(void);\n"
+        "void run_finally(void);\n";
+    CompilerResult Syntax = runCCompiler(
+        Prelude + Source, {"--target=x86_64-pc-windows-msvc", "-fms-extensions",
+                           "-std=c11", "-fsyntax-only"});
+    EXPECT_EQ(Syntax.ExitCode, 0) << Syntax.Error << "\n" << Source;
+  }
+}
+
+// A jump out of the try that bypasses its end marker reaches a continuation
+// the end marker also reaches outside the range. C would run the __finally
+// on that jump, and no block scope fits the shared continuation, so LLVMC
+// refuses the function instead of running the cleanup on a normal path.
+TEST(COFFExceptionIR, LLVMCFinallyJumpPastItsEndMarkerIsRefused) {
+  llvm::LLVMContext Context;
+  llvm::Module Module("llvm-c-seh-finally-jump", Context);
+  Module.setTargetTriple(llvm::Triple("x86_64-pc-windows-msvc"));
+  llvm::FunctionType *VoidType =
+      llvm::FunctionType::get(llvm::Type::getVoidTy(Context), false);
+  llvm::FunctionType *BoolType =
+      llvm::FunctionType::get(llvm::Type::getInt1Ty(Context), false);
+  llvm::Function *Personality = llvm::Function::Create(
+      llvm::FunctionType::get(llvm::Type::getInt32Ty(Context),
+                              /*isVarArg=*/true),
+      llvm::GlobalValue::ExternalLinkage, "__C_specific_handler", Module);
+  llvm::Function *Function = llvm::Function::Create(
+      VoidType, llvm::GlobalValue::ExternalLinkage, "seh_finally_jump", Module);
+  Function->setPersonalityFn(Personality);
+  auto Block = [&](const char *Name) {
+    return llvm::BasicBlock::Create(Context, Name, Function);
+  };
+  llvm::BasicBlock *Entry = Block("entry");
+  llvm::BasicBlock *Body = Block("body");
+  llvm::BasicBlock *Test = Block("test");
+  llvm::BasicBlock *Early = Block("early");
+  llvm::BasicBlock *More = Block("more");
+  llvm::BasicBlock *End = Block("end");
+  llvm::BasicBlock *Cont = Block("cont");
+  llvm::BasicBlock *Finally = Block("finally");
+  auto Declare = [&](llvm::FunctionType *Type, const char *Name) {
+    return llvm::Function::Create(Type, llvm::GlobalValue::ExternalLinkage,
+                                  Name, Module);
+  };
+  llvm::Function *Raise = Declare(BoolType, "may_raise");
+  llvm::Function *Again = Declare(VoidType, "raise_again");
+  llvm::Function *Leave = Declare(VoidType, "leave_early");
+  llvm::Function *CleanupFn = Declare(VoidType, "run_finally");
+  auto *TryBegin = llvm::Intrinsic::getOrInsertDeclaration(
+      &Module, llvm::Intrinsic::seh_try_begin);
+  auto *TryEnd = llvm::Intrinsic::getOrInsertDeclaration(
+      &Module, llvm::Intrinsic::seh_try_end);
+  llvm::IRBuilder<>(Entry).CreateInvoke(TryBegin, Body, Finally);
+  llvm::Value *Flag =
+      llvm::IRBuilder<>(Body).CreateInvoke(Raise, Test, Finally);
+  llvm::IRBuilder<>(Test).CreateCondBr(Flag, Early, More);
+  llvm::IRBuilder<>(Early).CreateInvoke(Leave, Cont, Finally);
+  llvm::IRBuilder<>(More).CreateInvoke(Again, End, Finally);
+  llvm::IRBuilder<>(End).CreateInvoke(TryEnd, Cont, Finally);
+  llvm::IRBuilder<>(Cont).CreateRetVoid();
+  llvm::IRBuilder<> FinallyBuilder(Finally);
+  llvm::CleanupPadInst *Cleanup =
+      FinallyBuilder.CreateCleanupPad(llvm::ConstantTokenNone::get(Context));
+  FinallyBuilder.CreateCall(CleanupFn, {},
+                            {llvm::OperandBundleDef("funclet", Cleanup)});
+  FinallyBuilder.CreateCleanupRet(Cleanup, nullptr);
+
+  EXPECT_THROW((void)emitLLVMC(Module), std::runtime_error);
 }
 
 TEST(COFFExceptionIR, LLVMCFinallyContinuationFollowsCleanup) {
@@ -3064,6 +3314,8 @@ TEST(COFFExceptionIR, LLVMCFinallyContinuationFollowsCleanup) {
   EXPECT_LT(FinallyAt, RunAt) << Source;
   EXPECT_LT(RunAt, FinallyClose) << Source;
   EXPECT_LT(FinallyClose, AfterAt) << Source;
+  EXPECT_LT(Source.find("if (AbnormalTermination()) {", FinallyAt), RunAt)
+      << Source;
   EXPECT_EQ(
       Source.substr(FinallyOpen, FinallyClose - FinallyOpen).find("return"),
       std::string::npos)
@@ -3308,6 +3560,8 @@ TEST(COFFExceptionIR, LLVMCNestedFinallyInsideExceptContainsBothBodies) {
   if (hasHostFixtureCompiler()) {
     const std::string Prelude =
         "#include <stdint.h>\n#define EXCEPTION_EXECUTE_HANDLER 1\n"
+        "int _abnormal_termination(void);\n"
+        "#define AbnormalTermination _abnormal_termination\n"
         "extern uint32_t ProbeSink;\n"
         "void arm_region(void);\nvoid may_raise(void);\n"
         "void outer_step(void);\nvoid run_finally(void);\n"

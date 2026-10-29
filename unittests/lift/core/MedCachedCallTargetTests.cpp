@@ -704,4 +704,44 @@ int main(void) {
             {Level, "-fsanitize=undefined", "-fsanitize-trap=all"});
     }
 }
+
+TEST(MedCachedCallTarget, AffineCodeValuesKeepTheirAddressRole) {
+  for (uint16_t Width : {uint16_t(4), uint16_t(8)})
+    for (NdOp Opcode : {NdOp::INT_ADD, NdOp::INT_SUB}) {
+      MedBlock B;
+      auto Result = value(1, Width);
+      const uint64_t Base = Width == 4 ? UINT32_MAX : UINT64_MAX;
+      B.Ops = {
+          op(Opcode, Result,
+             {MedVar::makeConst(Base, Width), MedVar::makeConst(17, Width)})};
+      const auto Target = resolvePreSSAMedCallTarget(
+          B, Result, Width == 4 ? Arch::X86 : Arch::X64);
+      ASSERT_TRUE(Target);
+      EXPECT_FALSE(Target->ThroughSlot);
+      EXPECT_EQ(Target->Address, Opcode == NdOp::INT_ADD ? 16u : Base - 17);
+      B.Ops.push_back(op(NdOp::LOAD, value(2, Width), {Result}));
+      const auto Slot = resolvePreSSAMedCallTarget(
+          B, value(2, Width), Width == 4 ? Arch::X86 : Arch::X64);
+      ASSERT_TRUE(Slot);
+      EXPECT_TRUE(Slot->ThroughSlot);
+      EXPECT_EQ(Slot->Address, Target->Address);
+    }
+}
+
+TEST(MedCachedCallTarget, AffineCodeProofRejectsUnknownOrFutureInputs) {
+  MedBlock B;
+  B.Ops = {op(NdOp::INT_ADD, value(1), {value(2), MedVar::makeConst(17, 8)})};
+  EXPECT_FALSE(resolvePreSSAMedCallTarget(B, value(1), Arch::X64));
+  // A later definition cannot become evidence for a value at this call.
+  B.Ops.push_back(op(NdOp::COPY, value(2), {MedVar::makeConst(0x1000, 8)}));
+  EXPECT_FALSE(resolveMedCallTarget(B, 1, value(1)));
+  B.Ops.front().Inputs[0] = MedVar::makeConst(0x1000, 4);
+  EXPECT_FALSE(resolvePreSSAMedCallTarget(B, value(1), Arch::X64));
+  B.Ops.front().Inputs[0] = MedVar::makeConst(0x1000, 8);
+  B.Ops.front().MemoryOrdering = NdMemoryOrdering::SequentiallyConsistent;
+  EXPECT_FALSE(resolvePreSSAMedCallTarget(B, value(1), Arch::X64));
+  B.Ops.front().MemoryOrdering = NdMemoryOrdering::None;
+  size_t Work = 0;
+  EXPECT_FALSE(resolvePreSSAMedCallTarget(B, value(1), Arch::X64, &Work));
+}
 } // namespace

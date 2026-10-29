@@ -278,7 +278,11 @@ bool Pipeline::runPatchLiftMode(const BinaryImage &Img, llvm::LLVMContext &Ctx,
   settleReturnContracts(Img, Result, Opts.SourceProjection ? Dbg : nullptr);
 
   recoverModuleCallAbi(Img, Result, AllFuncNames,
+                       Opts.SourceProjection && !Opts.PatchMode,
                        Opts.SourceProjection && !Opts.PatchMode);
+
+  if (Opts.SourceProjection && !Opts.PatchMode)
+    refineSourcePointerParameters(Img, Result, Dbg);
 
   remodelStructReturnForwarderCalls(Img, Result);
 
@@ -323,7 +327,7 @@ bool Pipeline::runPatchLiftMode(const BinaryImage &Img, llvm::LLVMContext &Ctx,
     return true;
 
   if (medStackProjection(Opts) == MedStackProjection::Source) {
-    prepareRecoveredSourceStackAccesses(Img, Result);
+    prepareRecoveredSourceStackAccesses(Img, Result, Result.LowFuncs);
     // The proof can refuse a requested function, or every one.
     if (!refuseObservedCallReturnReads(Img, Result, refusalFailsRun(Opts),
                                        Dbg) ||
@@ -354,6 +358,8 @@ bool Pipeline::runPatchLiftMode(const BinaryImage &Img, llvm::LLVMContext &Ctx,
                    Result.MedFuncs.size() >= 8 &&
                    !requiresSerialLLVMEmission(Result.MedFuncs, Img);
 
+  // The bodies the module declares only, by index into MedFuncs, with why.
+  std::vector<std::pair<size_t, std::string>> LeftOut;
   if (UseShards) {
     LLVMEmissionResult Emission =
         emitLLVMSharded(Result.MedFuncs, Ctx, Img.Arch, ImportMap, Img,
@@ -364,7 +370,8 @@ bool Pipeline::runPatchLiftMode(const BinaryImage &Img, llvm::LLVMContext &Ctx,
                         SourceViewOptions{.Symbolic = Opts.SymbolicLLVMSource},
                         &Result.CallPrototypeArguments,
                         Opts.SourceProjection && !Opts.PatchMode,
-                        Result.OmittedCalleeDeclarations);
+                        Result.OmittedCalleeDeclarations,
+                        Opts.OmitRefusedLLVMBodies && !Opts.PatchMode);
     Result.BackendUnhandledValueIntrinsics = Emission.UnhandledValueIntrinsics;
     Result.LLVMVerifierFailed = Emission.LLVMVerifierFailed;
     Result.LlvmModule = std::move(Emission.Module);
@@ -373,38 +380,67 @@ bool Pipeline::runPatchLiftMode(const BinaryImage &Img, llvm::LLVMContext &Ctx,
       Result.Error = std::move(Emission.Error);
       return false;
     }
+    LeftOut = std::move(Emission.LeftOut);
   } else {
-    MedLLVMEmitter MedEmitter;
-    MedEmitter.setPreserveUnknownSourceValues(Opts.SourceProjection &&
-                                              !Opts.PatchMode);
-    MedEmitter.setSourceCalleeDeclarations(Result.OmittedCalleeDeclarations);
-    MedEmitter.setDebugContext(Dbg);
-    MedEmitter.setPrototypeArgumentCallees(&Result.CallPrototypeArguments);
-    if (Opts.RetainLLVMSourceObservations ||
-        !Result.LibraryRecognitions.empty()) {
-      Result.LLVMSources = std::make_shared<LLVMSourceMap>();
-      MedEmitter.setSourceMap(Result.LLVMSources.get());
-    }
     // A recovered machine wrapper uses fixed guest addresses. The original
     // image remains available to recovery proofs and reports, but must not
     // authorize source globals or rebased LOAD/STORE addresses. This recovery
     // route has one call-free function, with its source ABI already bound.
     const BinaryImage *EmissionImage =
         Result.InterpreterMachineSourceABI ? nullptr : &Img;
-    try {
-      Result.LlvmModule =
-          MedEmitter.emit(Result.MedFuncs, Ctx, "neverd_output", Img.Arch,
-                          ImportMap, EmissionImage, Img.abiFormat());
-    } catch (const std::exception &Error) {
-      // Keep semantic refusals inside the pipeline result, as the sharded
-      // path does. No partially observed module may escape through the SDK.
-      Result.LlvmModule.reset();
+    // As a shard does where the unit names what it leaves out, a body that
+    // refuses a stale address, or whose contract the emitter refuses before
+    // any module, stays declared only and the rest are emitted again without
+    // it. A patch rewrites every function it lifts, so there one refusal
+    // still fails the lift.
+    const bool OmitRefused = Opts.OmitRefusedLLVMBodies && !Opts.PatchMode &&
+                             !Result.InterpreterMachineSourceABI;
+    std::vector<char> Mask;
+    uint64_t UnhandledValueIntrinsics = 0;
+    for (;;) {
+      MedLLVMEmitter MedEmitter;
+      // The mask holds only bodies the unit notes left out.
+      MedEmitter.setMaskedBodiesOwnedElsewhere(!Mask.empty());
+      MedEmitter.setPreserveUnknownSourceValues(Opts.SourceProjection &&
+                                                !Opts.PatchMode);
+      MedEmitter.setSourceCalleeDeclarations(Result.OmittedCalleeDeclarations);
+      MedEmitter.setDebugContext(Dbg);
+      MedEmitter.setPrototypeArgumentCallees(&Result.CallPrototypeArguments);
       Result.LLVMSources.reset();
-      Result.Error = Error.what();
-      return false;
+      if (Opts.RetainLLVMSourceObservations ||
+          !Result.LibraryRecognitions.empty()) {
+        Result.LLVMSources = std::make_shared<LLVMSourceMap>();
+        MedEmitter.setSourceMap(Result.LLVMSources.get());
+      }
+      try {
+        Result.LlvmModule = MedEmitter.emit(
+            Result.MedFuncs, Ctx, "neverd_output", Img.Arch, ImportMap,
+            EmissionImage, Img.abiFormat(), /*MergeableGlobals=*/false,
+            Mask.empty() ? nullptr : &Mask);
+      } catch (const std::exception &Error) {
+        // Keep semantic refusals inside the pipeline result, as the sharded
+        // path does. No partially observed module may escape through the
+        // SDK.
+        Result.LlvmModule.reset();
+        Result.LLVMSources.reset();
+        if (!OmitRefused || MedEmitter.refusedBodies().empty()) {
+          Result.Error = Error.what();
+          return false;
+        }
+      }
+      UnhandledValueIntrinsics = MedEmitter.unhandledValueIntrinsicCount();
+      if (Result.LlvmModule || !OmitRefused ||
+          MedEmitter.refusedBodies().empty())
+        break;
+      if (Mask.empty())
+        Mask.assign(Result.MedFuncs.size(), 1);
+      for (const MedLLVMEmitter::RefusedBody &Refused :
+           MedEmitter.refusedBodies()) {
+        Mask[Refused.Index] = 0;
+        LeftOut.emplace_back(Refused.Index, Refused.Reason);
+      }
     }
-    Result.BackendUnhandledValueIntrinsics =
-        MedEmitter.unhandledValueIntrinsicCount();
+    Result.BackendUnhandledValueIntrinsics = UnhandledValueIntrinsics;
     if (Result.LLVMSources)
       Result.LLVMSources->preserveExpressionOrigins(Result.LibraryRecognitions);
 
@@ -473,6 +509,11 @@ bool Pipeline::runPatchLiftMode(const BinaryImage &Img, llvm::LLVMContext &Ctx,
         std::binary_search(Result.LLVMDefinitionNames.begin(),
                            Result.LLVMDefinitionNames.end(), Audit.Name);
   }
+  for (const auto &[Index, Reason] : LeftOut)
+    for (auto &Audit : Result.FunctionAudits)
+      if (Audit.Entry == Result.MedFuncs[Index].Entry)
+        Audit.LLVMDiagnostic =
+            Reason.empty() ? "its body refused LLVM emission" : Reason;
 
   std::string FinalVerifyError;
   llvm::raw_string_ostream FinalVerifyStream(FinalVerifyError);

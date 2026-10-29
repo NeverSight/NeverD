@@ -342,6 +342,10 @@ public:
     }
     if (Op.Opcode == NdOp::LOAD && Op.NumInputs == 1 && A->isConst()) {
       const auto Slot = A->ConstVal;
+      // The image's own headers describe the image that runs, not this
+      // file: a read of them stays a read (BinaryImage::imageBaseOffset).
+      if (Image.imageBaseOffset(Slot))
+        return std::nullopt;
       if (pointer(*A) && A->AddressOwnerVA != InvalidVA) {
         const auto *Owner = Image.getSectionFor(A->AddressOwnerVA);
         if (!Owner || Image.getSectionFor(Slot) != Owner)

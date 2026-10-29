@@ -1,0 +1,296 @@
+{
+  "scope": "Native x87 FNSTCW/FLDCW pointer intrinsics, NeverC builtins and NeverD control-word projections",
+  "goal_complete": false,
+  "validation_complete": true,
+  "artifact_set": "neverd-x87-control-word-20261028",
+  "sources": {
+    "neverd_code": "84c725263a",
+    "neverd_tested": "5d9c6f1f876a0252a2da8e3e99ad05adddafdcad",
+    "llvm": "d6719fa9d041bb4b8f4f53ce9b8f8dfdf547923b",
+    "neverc": "2537751e7d19915010b32c2b8f71698977886b34",
+    "llvm_source_manifest": {
+      "path": "llvm-published-source.json",
+      "sha256": "2e47fb8bb7cd93ea726c787df2ba9962e04ca0ad0ae28068ed5113e29be02807"
+    },
+    "neverc_source_manifest": {
+      "path": "neverc-published-source.json",
+      "sha256": "9e4607b2c81c608ea8727231678c2579535692bf4bb2ce375a19cf83c3e560fc"
+    },
+    "production_sdk": "neverd-llvm-v23.0.0-r6",
+    "production_sdk_commit": "06788fb19109851e6a6b9f109a2b8027a606f0c6",
+    "production_llvm_gitlink": "03270359c2ed8f6806533d3832a947bf883a6f69",
+    "release_and_pins_changed": false
+  },
+  "contract": {
+    "llvm": [
+      "void llvm.x86.fnstcw(ptr)",
+      "void llvm.x86.fldcw(ptr)"
+    ],
+    "neverc": [
+      "void __builtin_ia32_fnstcw(unsigned short *)",
+      "void __builtin_ia32_fldcw(const unsigned short *)"
+    ],
+    "memory_bytes": 2,
+    "alignment_bytes": 1,
+    "effects": "Conservative IR effects; volatile native memory operation; FNSTCW is nonwaiting; FLDCW uses prior FPCW/FPSW and may raise an FP exception.",
+    "c_projection": "One X86 rendering helper and one LLVM-call validator; invalid calls are rejected before function filtering.",
+    "compatibility": "Registered LLVM interfaces and available NeverC builtins take the native path; the old r6 SDK and compilers without these builtins retain the owned assembly compatibility path."
+  },
+  "compiler_validation": {
+    "llvm": {
+      "path": "llvm-control-tests.xml",
+      "sha256": "e10187643c27bd7fda63acf355ba5fb01caea6dc46fabf6325dc13a44df37e8a",
+      "tests": 8,
+      "passed": 8,
+      "failed": 0,
+      "skipped": 0
+    },
+    "llvm_build": {
+      "path": "llvm-build-result.json",
+      "sha256": "ba1bc9f865afa35ea519508ff695de35c32772560f8d3570bd00aa71334a7e90"
+    },
+    "neverc_frontend": {
+      "path": "neverc-x86-regression.xml",
+      "sha256": "49816400ec1ccef55bade81ff75d122808214e66205cee5ac6041e108265ebdd",
+      "tests": 111,
+      "passed": 111,
+      "failed": 0,
+      "skipped": 0
+    },
+    "neverc_backend": {
+      "path": "neverc-control-backend.xml",
+      "sha256": "17ac8731908acf89483da95b2d309530d3562c6cde5312fe242d14dee9f4f8ca",
+      "tests": 5,
+      "passed": 5,
+      "failed": 0,
+      "skipped": 0
+    },
+    "neverc_build": {
+      "path": "neverc-build-result.json",
+      "sha256": "6ac4161b32210ce751d9c74e9cf886aa903521573660f85c4e78603047855720"
+    },
+    "generators": {
+      "path": "generator-final-checks.json",
+      "sha256": "7e30ef4bc259687a9b02e3107f881f5d9427edb002c1ef8772b56d52ac3fa202",
+      "tests": 15,
+      "failed_tests": 0,
+      "default_synchronizer_checks_passed": 2,
+      "note": "The synchronizers check by default. Initial --check invocations rejected that unsupported command-line option; corrected default invocations pass."
+    }
+  },
+  "native_pointer_qualification": {
+    "path": "compilers-native-qualified/qualification.json",
+    "sha256": "6ee36cc57b2989448c56ea1fa6c4c8d5583ca2db6872600a228cdd7ed9cd1310",
+    "audit": {
+      "path": "compilers-native-audit.json",
+      "sha256": "201b6dab3dcfa60823000d60330086ec075924973b9b57151994ea1ec630c631"
+    },
+    "profiles": 6,
+    "manifest_files_rehashed": 63,
+    "cross_compiler_output_sha256": "f8e5366c46e0b4b7d98a9f8b63f15128697b104e8c1a8c7a9cc59030bf6fdf45",
+    "state_observations": 6912,
+    "fault_observations": 120,
+    "fault_and_nonfault_cases": 156,
+    "boundary_observations": 24,
+    "passed": true,
+    "cpu": "Intel Core i9-13900H",
+    "os": "Linux x64",
+    "reference": "Independently authored D9 /7 and D9 /5 opcodes; child signal handlers inspect fault PC, opcode, trap, prefix marker and saved CW/SW without resuming generated code.",
+    "oracle_negative_controls": {
+      "path": "harness-negative-controls/results.json",
+      "sha256": "6e50e441740053bfdff9e1c0853ff23651570f93286743ff5d89b7882c4102cc",
+      "qualification_scope": "Oracle preflight only; missing store, early operand read, lost marker and widened load are rejected."
+    }
+  },
+  "neverd_validation": {
+    "pinned": {
+      "source_commit": "5d9c6f1f876a0252a2da8e3e99ad05adddafdcad",
+      "validation": {
+        "path": "pinned-control-validation.json",
+        "sha256": "30871d9f0ba5f5a4482475fd9ae836114162ac9f47bd33da80256c45d360f740"
+      },
+      "tests": {
+        "path": "pinned-control-tests.xml",
+        "sha256": "5440f08dc56913425cd5cfbd27b2c3e059229e347033c7d37f59c611a1ceeb48",
+        "tests": 1885,
+        "passed": 1825,
+        "failed": 0,
+        "skipped": 60
+      },
+      "build": {
+        "path": "pinned-qualified-v2-build-result.json",
+        "sha256": "71d2dee5b758ee04b85d6c5d33976e2240c322ce1d59d23c8f3a38a202b61b84"
+      },
+      "build_receipt": {
+        "path": "pinned-qualified-v2-build-receipt.json",
+        "sha256": "b871de349db1fad757d28f6df596d575a37a02641aeea502db9af7d9fba3cc98"
+      },
+      "resets": {
+        "path": "pinned-control-resets-generated/record.json",
+        "sha256": "48c55e91d6eee309ff66a97dceefc925de8b51035228bb73c9563b048751cd1d",
+        "coverage": {
+          "artifacts": 36,
+          "observations": 2700,
+          "distinct_cases": 225,
+          "statuses": {
+            "0": 2592,
+            "2": 36,
+            "6": 36,
+            "5": 36
+          },
+          "native_x64_original_comparisons": 576,
+          "cross_route_and_optimization_agreement": true,
+          "canonical_state_sha256": "3362158a3de5e339d298621e4d396102f9d96ae28035fbeb097955cd362047c0"
+        }
+      },
+      "arithmetic": {
+        "path": "pinned-control-arithmetic-generated/record.json",
+        "sha256": "964876840d789df3cb9673e2ffaa84356923fa12f74b88aa131a46cc347d3444",
+        "coverage": {
+          "artifacts": 36,
+          "observations": 6096,
+          "distinct_cases": 508,
+          "statuses": {
+            "0": 5772,
+            "2": 36,
+            "6": 36,
+            "5": 36,
+            "9": 36,
+            "10": 36,
+            "12": 36,
+            "13": 36,
+            "1": 72
+          },
+          "native_x64_original_comparisons": 5760,
+          "cross_route_and_optimization_agreement": true
+        }
+      },
+      "later_neverc_branch": {
+        "path": "pinned-native-control-c.xml",
+        "sha256": "456c24f27b42a4cd89f97a87848903b7287909deda26eaf41ae1b31ce2117144",
+        "tests": 1,
+        "passed": 1,
+        "failed": 0,
+        "skipped": 0
+      },
+      "native_ir_audit": {
+        "path": "pinned-native-control-c-ir-audit.json",
+        "sha256": "10d3bd983130b9ed5008706fdaa497017b421d07dcf512458e21b04909cfc946"
+      },
+      "combined_counts": {
+        "total": 1885,
+        "passed": 1826,
+        "failed": 0,
+        "skipped": 59
+      }
+    },
+    "native": {
+      "source_commit": "5d9c6f1f876a0252a2da8e3e99ad05adddafdcad",
+      "validation": {
+        "path": "native-control-validation.json",
+        "sha256": "84a7bf1c90433069ddc1d6bb63aa753ab08e2f1f57e2d3c2a33d58488c206bcc"
+      },
+      "tests": {
+        "path": "native-control-tests.xml",
+        "sha256": "b98a8d41c39451172a217947c1e6700e397daad39d299edf8c1ab99f3992d1da",
+        "tests": 1883,
+        "passed": 1827,
+        "failed": 0,
+        "skipped": 56
+      },
+      "build": {
+        "path": "native-qualified-v2-build-result.json",
+        "sha256": "1a99e2814bab34c693ad2eae10cbaf0e994441c0982dc1a1acdcfc1cac7f52af"
+      },
+      "build_receipt": {
+        "path": "native-qualified-v2-build-receipt.json",
+        "sha256": "24b933392584792bc5a7046994864b504882217293dce385e082911e71dc8d06"
+      },
+      "resets": {
+        "path": "native-control-resets-generated/record.json",
+        "sha256": "8881f9736eb376bf547d83ffea42332d94a1087b05bd631fc2d919f7e6d5810b",
+        "coverage": {
+          "artifacts": 36,
+          "observations": 2700,
+          "distinct_cases": 225,
+          "statuses": {
+            "0": 2592,
+            "2": 36,
+            "6": 36,
+            "5": 36
+          },
+          "native_x64_original_comparisons": 576,
+          "cross_route_and_optimization_agreement": true,
+          "canonical_state_sha256": "3362158a3de5e339d298621e4d396102f9d96ae28035fbeb097955cd362047c0"
+        }
+      },
+      "arithmetic": {
+        "path": "native-control-arithmetic-generated/record.json",
+        "sha256": "68ec3db4aa5debb37c70830e3af988baf5d31af130b0e011d8cc75b3d31c9e3a",
+        "coverage": {
+          "artifacts": 36,
+          "observations": 6096,
+          "distinct_cases": 508,
+          "statuses": {
+            "0": 5772,
+            "2": 36,
+            "6": 36,
+            "5": 36,
+            "9": 36,
+            "10": 36,
+            "12": 36,
+            "13": 36,
+            "1": 72
+          },
+          "native_x64_original_comparisons": 5760,
+          "cross_route_and_optimization_agreement": true
+        }
+      }
+    },
+    "skip_reasons": {
+      "native_aarch64_on_x64": 52,
+      "windows_only_observer": 1,
+      "unavailable_public_seh_fixtures": 3,
+      "pinned_only_missing_native_virtualization_descriptor_intrinsics": 3
+    },
+    "native_configuration_exclusions": "Two Unicorn reference tests are enabled only in the pinned SDK profile."
+  },
+  "c_program_replay": {
+    "path": "neverd-neverc-source-qualified/qualification.json",
+    "sha256": "89f93e6d1c20e0908092610cdf7fc804352e443b3c3a66a865fb7a73f7eed848",
+    "audit": {
+      "path": "native-completed-artifact-audit.json",
+      "sha256": "46665af3dbc42539b62654bf78f754d8b36b4f3301e6939fd6725c1ad1abaca5"
+    },
+    "programs": 56,
+    "profiles": 112,
+    "comparisons": 86016,
+    "coverage": "All seven x87 constants with incoming/loaded CW, HighC/LLVM-C, default/NoOpt source and NeverC O0/O2; each profile checks 768 PC/RC/exception-mask inputs against original native instructions. Native control-word IR calls are required in the generated source.",
+    "limitations": "Combined x87 constant-load operations retain their existing assembly contract."
+  },
+  "validation_repairs": [
+    {
+      "artifact": {
+        "path": "initial-llvm-control-tests.xml",
+        "sha256": "bd53e7302a235c165c2958ee7232d32bdd1cf0b09e12e972a77c82c14cc5fcd5"
+      },
+      "change": "Permit the legal dead annotation on the FPCW implicit definition. Exact register uses/defs and volatile two-byte alignment-one memory effects remain required."
+    },
+    {
+      "artifact": {
+        "path": "neverd-pinned-build.log",
+        "sha256": "722a6f1f594c49da7f8ce302a31070749b0ff1ac0aabf887f077d3f84f982567"
+      },
+      "change": "The malformed-call regression initially used a C++ conditional across sibling derived pointer types. Use a Type pointer and explicit assignment; product sources compiled successfully."
+    }
+  ],
+  "exclusions": [
+    "all x86 instructions and state/continuation contracts",
+    "other CPU models or operating systems",
+    "native i386 runtime for these new APIs; i386 object generation is covered",
+    "privileged #NM and alignment-check exception delivery",
+    "full machine-state or fault-PC equivalence of typed scalar x87 projection",
+    "elimination of combined constant-load assembly",
+    "complete architectural or formal equivalence"
+  ]
+}

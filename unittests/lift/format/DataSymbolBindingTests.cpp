@@ -8,6 +8,7 @@
 #include "neverd/backend/c/HighC/HighCEmitter.h"
 #include "neverd/backend/c/LLVMC/LLVMCEmitter.h"
 #include "neverd/loader/DataSymbolBinding.h"
+#include "neverd/object/ELFLayout.h"
 #include "neverd/pipeline/Pipeline.h"
 #include "neverd/support/BinaryLoading.h"
 
@@ -65,8 +66,13 @@ protected:
         exec(NEVERD_TEST_CLANG, {"--target=" + Target.str(), "-fPIC", "-O1",
                                  "-c", Source.string(), "-o", Object.string()});
     EXPECT_TRUE(Compile.ok()) << Compile.err;
-    auto Link = exec("ld.lld", {"-shared", "-z", Relro ? "relro" : "norelro",
-                                Object.string(), "-o", Library.string()});
+    // A portable immutable slot must fit the largest supported Arm page,
+    // including when this cross-target fixture is built on an x86 host.
+    const auto Page = std::to_string(kELFArmMaxProtectionPageSize);
+    auto Link = exec("ld.lld",
+                     {"-shared", "-z", Relro ? "relro" : "norelro", "-z",
+                      "max-page-size=" + Page, "-z", "common-page-size=" + Page,
+                      Object.string(), "-o", Library.string()});
     EXPECT_TRUE(Link.ok()) << Link.err;
     if (Sectionless) {
       std::ifstream Input(Library, std::ios::binary);
@@ -1151,7 +1157,7 @@ TEST(DataSymbolBindings, ExactSymbolKindAddendAndPermissionsOwnTheBinding) {
   Image.Arch = Arch::AArch64;
   Image.Bits = Bitness::Bits64;
   Segment Data;
-  Data.VA = 0x1000;
+  Data.VA = 0x10000 - 8;
   Data.Size = 32;
   Data.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
   Data.Data.assign(Data.Size, 0xa5); // File bytes are not a RELA addend.
@@ -1176,6 +1182,7 @@ TEST(DataSymbolBindings, ExactSymbolKindAddendAndPermissionsOwnTheBinding) {
   EXPECT_EQ(Binding().Addend, -8);
   EXPECT_FALSE(Binding().Immutable);
   Image.ELFMetadata.emplace();
+  Image.ELFMetadata->Type = llvm::ELF::ET_DYN;
   Image.ELFMetadata->ProgramHeaders.push_back(
       {llvm::ELF::PT_GNU_RELRO, 0, 0, Data.VA, 7, 7, 1});
   EXPECT_FALSE(Binding().Immutable); // A partial pointer is not read-only.
@@ -1286,6 +1293,47 @@ TEST(DataSymbolBindings, ExternalFunctionPointersNeedAnExactAbsoluteSymbol) {
     // A relocatable object's relocations are not the dynamic loader's.
     Image.IsRelocatable = true;
     EXPECT_TRUE(collectExternalFunctionPointers(Image).empty());
+  }
+}
+
+// FILD of an integer lowers to integer operations that build the binary80
+// exponent as 0x403E minus the leading zeros. In a shared library whose first,
+// read-only segment at VA 0 spans 0x403E, that bias is still a number: LLVM C
+// read it as an address into the library's own bytes.
+TEST_F(DataSymbolBindingTest, IntegerX87LoadsKeepTheirExponentBias) {
+  if (!CanRunX64ELF)
+    GTEST_SKIP() << "ELF execution requires a Linux x64 host";
+  if (!hasCrossTargetClang())
+    GTEST_SKIP() << "requires cross-target Clang and ld.lld";
+  const auto Library =
+      sharedLibrary("x86_64-linux-gnu", "widen",
+                    "const unsigned char blob[0x5000] = {1, 2, 3};\n"
+                    "long double widen(long x) { return x; }\n");
+  auto Loaded = loadBinary(Library);
+  ASSERT_TRUE(bool(Loaded)) << llvm::toString(Loaded.takeError());
+  const Segment *Seg = Loaded->getSegmentFor(0x403e);
+  ASSERT_NE(Seg, nullptr);
+  ASSERT_EQ(Seg->VA, 0u);
+  const auto Harness = tmpFile("widen-main.c");
+  std::ofstream(Harness)
+      << "long double widen(long x);\n"
+         "int main(void) {\n"
+         "  return widen(0) != 0.0L || widen(-5) != -5.0L ||\n"
+         "         widen(1L << 40) != 1099511627776.0L;\n"
+         "}\n";
+  for (bool LLVM : {false, true}) {
+    SCOPED_TRACE(LLVM);
+    const auto C = source(*Loaded, LLVM, {"widen"});
+    EXPECT_EQ(C.find("unk_0"), std::string::npos) << C;
+    const auto Output = tmpFile(LLVM ? "widen-llvm.c" : "widen-high.c");
+    std::ofstream(Output) << C;
+    const auto Program = tmpFile(LLVM ? "widen-llvm" : "widen-high");
+    auto Compile =
+        exec(NEVERD_TEST_CLANG, {"-O2", "-fno-strict-aliasing", Output.string(),
+                                 Harness.string(), "-o", Program.string()});
+    ASSERT_TRUE(Compile.ok()) << Compile.err << C;
+    const auto Run = exec(Program.string(), {});
+    EXPECT_TRUE(Run.ok()) << Run.err << C;
   }
 }
 } // namespace

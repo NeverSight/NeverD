@@ -6863,6 +6863,14 @@ Reference identities: unresolved. Some call or data targets cannot be compared. 
         <translation>
 Identités des références : non résolues. Certaines cibles d’appel ou de données ne peuvent pas être comparées. Cela ne suffit pas à établir une modification.</translation>
     </message>
+    <message>
+        <source>Include matched calls</source>
+        <translation>Inclure les appels associés</translation>
+    </message>
+    <message>
+        <source>Extend shared regions across direct calls whose targets are paired. Results depend on the current function pairs and are recomputed when pairs change. This does not validate call behavior.</source>
+        <translation>Étendre les régions communes au-delà des appels directs dont les cibles sont associées. Les résultats dépendent des paires de fonctions actuelles et sont recalculés lorsque celles-ci changent. Le comportement des appels n’est pas validé.</translation>
+    </message>
 </context>
 <context>
     <name>neverd::gui::ComparisonFlowDialog</name>
@@ -8015,6 +8023,30 @@ Les producteurs des entrées externes ne sont ni comparés ni comptés comme cod
 SSA recipe: %1</source>
         <translation>
 Méthode SSA : %1</translation>
+    </message>
+    <message>
+        <source>
+Calls use current function pairs; behavior is not validated.</source>
+        <translation>
+Les appels utilisent les paires de fonctions actuelles ; le comportement n’est pas validé.</translation>
+    </message>
+    <message>
+        <source>Call context…</source>
+        <translation>Contexte des appels…</translation>
+    </message>
+    <message>
+        <source>Primary</source>
+        <translation>Principal</translation>
+    </message>
+    <message>
+        <source>Secondary</source>
+        <translation>Secondaire</translation>
+    </message>
+    <message>
+        <source>%1 primary / %2 secondary functions · %3 shared spans
+Coverage: %4% / %5% of eligible instructions, including paired direct calls. Function pairs condition this evidence; behavior is not validated.</source>
+        <translation>%1 fonctions principales / %2 secondaires · %3 plages communes
+Couverture : %4% / %5% des instructions admissibles, y compris les appels directs associés. Ces éléments dépendent des paires de fonctions ; le comportement n’est pas validé.</translation>
     </message>
 </context>
 <context>
@@ -9560,6 +9592,18 @@ Les ambiguïtés et décisions manuelles restent propres au rapport. Les hypoth�
     <message>
         <source>Releases</source>
         <translation>Versions publiées</translation>
+    </message>
+    <message>
+        <source>Calls in these saved spans rely on the source report's function pairs. They do not prove equivalent callee behavior.</source>
+        <translation>Les appels de ces fragments enregistrés reposent sur les paires de fonctions du rapport source. Ils ne prouvent pas l’équivalence du comportement des fonctions appelées.</translation>
+    </message>
+    <message>
+        <source>All native spans</source>
+        <translation>Tous les fragments natifs</translation>
+    </message>
+    <message>
+        <source>All SSA spans</source>
+        <translation>Tous les fragments SSA</translation>
     </message>
 </context>
 <context>

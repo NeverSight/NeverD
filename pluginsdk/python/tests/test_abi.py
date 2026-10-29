@@ -16,6 +16,16 @@ from scripts.check_python_plugin_sdk import (
 
 
 class ABIInventoryTests(unittest.TestCase):
+    def test_continuation_source_preserves_both_owned_addresses(self) -> None:
+        from neverd_plugin import abi
+
+        spec = abi.FUNCTION_SPECS["neverd_x64_continuation_source_v1"]
+        self.assertIs(spec.ownership, abi.Ownership.OWNED_STRING)
+        self.assertIs(spec.restype, ctypes.c_void_p)
+        self.assertEqual(spec.argtypes,
+                         (ctypes.c_void_p, ctypes.c_char_p, ctypes.c_size_t,
+                          ctypes.c_int, ctypes.POINTER(ctypes.c_void_p)))
+
     def test_metadata_visitor_preserves_borrowed_layout_and_callback(self) -> None:
         from neverd_plugin import abi
 

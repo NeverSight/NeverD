@@ -70,6 +70,8 @@ struct ExternLayout {
   /// segment.  A called one is an import there, data a symbol.
   std::map<std::string, va_t> SymbolSlots;
   std::set<std::string> CalledSymbols;
+  /// The bytes each undefined data symbol's address keeps past it.
+  std::map<std::string, uint64_t> SymbolBytes;
   /// Each common symbol, by name: its storage in the extern segment, and the
   /// bytes of it.
   std::map<std::string, va_t> CommonSlots;

@@ -776,8 +776,11 @@ CFGBuilder::classifyOwnInteriorCalls(const BinaryImage &Img,
   for (size_t B = 0; B < N; ++B)
     BlockAt[Func.Blocks[B].StartAddr] = B;
   auto StateBefore = [&](va_t Addr) -> std::optional<StackOffsetState> {
+    const auto Exact = BlockAt.find(Addr);
     for (size_t B = 0; B < N; ++B) {
       const LowBlock &Block = Func.Blocks[B];
+      if (Exact != BlockAt.end() && Exact->second != B)
+        continue;
       if (Addr < Block.StartAddr || Addr >= Block.EndAddr)
         continue;
       if (!FromEntry[B])
@@ -1580,6 +1583,13 @@ LowFunc CFGBuilder::buildOnce(const BinaryImage &Img, Decoder &Dec,
                                        ImageScalars))
     multiStageResolve(Img, Dec, Func);
 
+  size_t ComputedBranchWork = limits::kMaxComputedBranchEvidenceWork;
+  while (recoverComputedScalarBranches(Img, Dec, Func, ComputedBranchWork)) {
+    multiStageResolve(Img, Dec, Func);
+    recoverScalarConstantBranches(Img, Dec, Func, ScalarBranchWork,
+                                  ImageScalars);
+  }
+
   // PAGEOFF output provenance is consumed only after lifting, so authenticate
   // it on the final resolver CFG rather than during linear instruction
   // discovery.  In particular, an ADD that is also an address-taken/exception
@@ -2220,7 +2230,8 @@ LowFunc CFGBuilder::buildOnce(const BinaryImage &Img, Decoder &Dec,
                   Func.UnsupportedInstructionAddresses);
   PublishFailures(TruncatedPathAddresses, Func.TruncatedPathAddresses);
   for (const auto &[Addr, Rec] : Insns)
-    if (Rec.RejectedScalarBranch && ReachableInsnAddrs.count(Addr))
+    if ((Rec.RejectedScalarBranch || Rec.RejectedComputedTargets) &&
+        ReachableInsnAddrs.count(Addr))
       Func.UnsafeIndirectBranchAddresses.insert(Addr);
   if (UnsafeJumpTableBranches)
     for (va_t Addr : *UnsafeJumpTableBranches)
@@ -4582,7 +4593,7 @@ void CFGBuilder::multiStageResolve(const BinaryImage &Img, Decoder &Dec,
   auto RememberPublishedJumpTables = [&]() {
     for (const auto &[Addr, Rec] : Insns)
       if (Rec.IsBranch && Rec.IsIndirect && !Rec.IsCall &&
-          !Rec.JumpTableTargets.empty())
+          !Rec.ScalarBranchInput && !Rec.JumpTableTargets.empty())
         EverPublishedJumpTableBranches.insert(Addr);
   };
   RememberPublishedJumpTables();
@@ -5054,7 +5065,9 @@ void CFGBuilder::multiStageResolve(const BinaryImage &Img, Decoder &Dec,
     }
     CandidateAddrs.reserve(Insns.size());
     for (auto &[Addr, Rec] : Insns) {
-      if (!Rec.IsBranch || !Rec.IsIndirect || Rec.IsCall)
+      if (!Rec.IsBranch || !Rec.IsIndirect || Rec.IsCall ||
+          Rec.ComputedScalarTargets || Rec.RejectedComputedTargets ||
+          Rec.ScalarBranchInput)
         continue;
       auto Info = ResolvedTableInfo.find(Addr);
       const bool NeedsRevalidation = Info != ResolvedTableInfo.end() &&
@@ -6162,6 +6175,8 @@ void CFGBuilder::multiStageResolve(const BinaryImage &Img, Decoder &Dec,
       bool RemovedTableEdges = false;
       for (auto &[Addr, Rec] : Insns) {
         (void)Addr;
+        if (Rec.ScalarBranchInput)
+          continue;
         RemovedTableEdges |= !Rec.JumpTableTargets.empty();
         Rec.JumpTableTargets.clear();
       }

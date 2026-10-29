@@ -12,6 +12,11 @@
 #include "neverd/backend/llvm/X86/LLVMX87ConstantAsm.h"
 #include "neverd/ir/high/X86/X87ConstantShape.h"
 
+#include "llvm/IR/Constants.h"
+#include "llvm/IR/Intrinsics.h"
+
+#include <cstdlib>
+
 namespace {
 LowOp constantOp(unsigned Selector, uint16_t Control) {
   LowOp Op;
@@ -222,7 +227,10 @@ TEST(X87ConstantContract, OwnedAssemblyRetainsExactSelectorTypesAndClobbers) {
     auto *Call = B.CreateCall(Asm, Args);
     Call->setMetadata(X87ConstantAsmMetadata, llvm::MDNode::get(C, {}));
     EXPECT_EQ(classifyX87ConstantAsm(*Call), Selector);
-    auto *Bad = llvm::InlineAsm::get(Ty, Text, "r", true);
+    // Keep LLVM's operand count valid so this reaches our clobber check even
+    // when the linked LLVM was built with assertions enabled.
+    auto *Bad =
+        llvm::InlineAsm::get(Ty, Text, Selector < 7 ? "r,r" : "r", true);
     Call->setCalledOperand(Bad);
     EXPECT_DEATH_IF_SUPPORTED(classifyX87ConstantAsm(*Call),
                               "invalid owned x87");
@@ -311,4 +319,148 @@ INSTANTIATE_TEST_SUITE_P(AllSeven, X87Constants,
                                "Log10Two", "LnTwo",   "Zero"};
                            return Names[Info.param - 0xe8];
                          }));
+class X87ControlProjectionFixture : public X86FPStateFixture {
+protected:
+  void checkNativeCalls(llvm::StringRef SourceCompiler) {
+#if defined(__x86_64__) || defined(_M_X64)
+    llvm::LLVMContext Context;
+    llvm::Module Module("control-access", Context);
+    Module.setTargetTriple(llvm::Triple(llvm::sys::getDefaultTargetTriple()));
+    auto *Ptr = llvm::PointerType::get(Context, 0);
+    auto *Type =
+        llvm::FunctionType::get(llvm::Type::getVoidTy(Context), {Ptr}, false);
+    auto *Function = llvm::Function::Create(
+        Type, llvm::GlobalValue::ExternalLinkage, "control_probe", Module);
+    llvm::IRBuilder<> Builder(
+        llvm::BasicBlock::Create(Context, "entry", Function));
+    const auto Store = Module.getOrInsertFunction("llvm.x86.fnstcw", Type);
+    const auto Load = Module.getOrInsertFunction("llvm.x86.fldcw", Type);
+    const auto Pointer = [&](unsigned Offset) {
+      return Builder.CreateGEP(Builder.getInt8Ty(), Function->getArg(0),
+                               Builder.getInt64(Offset));
+    };
+    Builder.CreateCall(Store, {Pointer(1)});
+    Builder.CreateCall(Load, {Pointer(3)});
+    Builder.CreateCall(Store, {Pointer(5)});
+    Builder.CreateCall(Load, {Pointer(1)});
+    Builder.CreateRetVoid();
+    ASSERT_FALSE(llvm::verifyModule(Module, &llvm::errs()));
+    CEmitterOptions Options;
+    Options.TheArch = Arch::X64;
+    Options.Format = hostFormat();
+    Options.PreserveLLVMFunctionTypes = true;
+    std::string Source;
+    llvm::raw_string_ostream Stream(Source);
+    ASSERT_TRUE(LLVMCEmitter().emit(Module, Stream, Options));
+    EXPECT_NE(Source.find("__builtin_ia32_fnstcw"), std::string::npos);
+    EXPECT_NE(Source.find("__builtin_ia32_fldcw"), std::string::npos);
+    const auto Unit = file("control-projection.c");
+    write(Unit, Source + R"(
+#include <string.h>
+int main(void) {
+  unsigned short saved;
+  __asm__ volatile("fnstcw %0" : "=m"(saved));
+  for (unsigned pc = 0; pc < 4; ++pc) {
+    if (pc == 1) continue;
+    for (unsigned rc = 0; rc < 4; ++rc) {
+      unsigned char bytes[16], expected[16];
+      memset(bytes, 0xa5, sizeof(bytes));
+      const unsigned short input = 0x7f | pc << 8 | rc << 10;
+      memcpy(bytes + 3, &input, 2);
+      memcpy(expected, bytes, sizeof(bytes));
+      memcpy(expected + 1, &saved, 2);
+      memcpy(expected + 5, &input, 2);
+      control_probe(bytes);
+      unsigned short after;
+      __asm__ volatile("fnstcw %0" : "=m"(after));
+      if (memcmp(bytes, expected, sizeof(bytes)) || after != saved) return 1;
+    }
+  }
+  return 0;
+}
+)");
+    retainFile("control-projection.c", Unit);
+    for (const char *Optimization : {"-O0", "-O2"}) {
+      SCOPED_TRACE(Optimization);
+      const auto Object = file(std::string("control") + Optimization + ".o");
+      const auto Binary = file(std::string("control") + Optimization + ".exe");
+      auto Result = command(SourceCompiler,
+                            {Optimization, "-fno-lto", "-fno-builtin-mimalloc",
+                             "-c", Unit, "-o", Object});
+      ASSERT_EQ(Result.Status, 0) << Result.Error << Source;
+      Result = command(Compiler, {Object, "-o", Binary});
+      ASSERT_EQ(Result.Status, 0) << Result.Error;
+      Result = command(Binary, {});
+      EXPECT_EQ(Result.Status, 0) << Result.Out << Result.Error;
+    }
+#else
+    GTEST_SKIP() << "native x64 control-word execution required";
+#endif
+  }
+};
+
+TEST_F(X87ControlProjectionFixture, NativeMemoryCallsExecuteThroughClang) {
+  checkNativeCalls(Compiler);
+}
+
+TEST_F(X87ControlProjectionFixture, NativeMemoryCallsExecuteThroughNeverC) {
+  const char *NeverC = std::getenv("NEVERD_TEST_NEVERC");
+  if (!NeverC || !*NeverC)
+    GTEST_SKIP()
+        << "NEVERD_TEST_NEVERC is required for the native builtin branch";
+  checkNativeCalls(NeverC);
+}
+
+TEST_F(X87ControlProjectionFixture, SourceLLVMUsesRegisteredControlIntrinsics) {
+  X87ContextOverride = false;
+#if defined(_WIN32)
+  const uint8_t Base = 1;
+#else
+  const uint8_t Base = 7;
+#endif
+  const std::vector<uint8_t> Bytes = {0xd9,
+                                      uint8_t(0x38 | Base),
+                                      0xd9,
+                                      uint8_t(0x68 | Base),
+                                      2,
+                                      0xd9,
+                                      uint8_t(0x78 | Base),
+                                      4,
+                                      0xd9,
+                                      uint8_t(0x28 | Base),
+                                      0xc3};
+  for (bool NoOpt : {false, true}) {
+    auto Image = image(Bytes);
+    llvm::LLVMContext Context;
+    PipelineOptions Options;
+    Options.LiftMode = true;
+    Options.SourceProjection = true;
+    Options.NoOpt = NoOpt;
+    Options.EmitDumpOutput = false;
+    Options.OnlyFunctionEntries = {Entry};
+    const auto Result = Pipeline().run(Image, Context, Options);
+    ASSERT_TRUE(Result.Success) << Result.Error;
+    ASSERT_NE(Result.LlvmModule, nullptr);
+    unsigned Stores = 0, Loads = 0;
+    for (const auto &Function : *Result.LlvmModule)
+      for (const auto &Block : Function)
+        for (const auto &Instruction : Block)
+          if (const auto *Call = llvm::dyn_cast<llvm::CallInst>(&Instruction)) {
+            if (const auto *Callee = Call->getCalledFunction()) {
+              Stores += Callee->getName() == "llvm.x86.fnstcw";
+              Loads += Callee->getName() == "llvm.x86.fldcw";
+            } else if (auto Selector = classifyX87ConstantAsm(*Call)) {
+              Stores += *Selector == 7;
+              Loads += *Selector == 8;
+              if (*Selector >= 7)
+                EXPECT_EQ(
+                    llvm::Intrinsic::lookupIntrinsicID(
+                        *Selector == 7 ? "llvm.x86.fnstcw" : "llvm.x86.fldcw"),
+                    llvm::Intrinsic::not_intrinsic);
+            }
+          }
+    EXPECT_GT(Stores, 0U);
+    EXPECT_GT(Loads, 0U);
+  }
+}
 } // namespace

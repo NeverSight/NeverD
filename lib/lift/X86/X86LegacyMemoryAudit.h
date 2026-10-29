@@ -4,7 +4,7 @@
 //
 //===----------------------------------------------------------------------===//
 /// \file
-/// Shared raw/detail agreement for unsegmented legacy ModRM memory operands.
+/// Shared raw/detail agreement for legacy ModRM memory operands.
 //===----------------------------------------------------------------------===//
 
 #ifndef NEVERD_LIB_LIFT_X86_X86LEGACYMEMORYAUDIT_H
@@ -18,11 +18,11 @@ namespace neverd::legacyaudit {
 // passes the first SIB/displacement position for a memory (mod != 3) operand.
 inline bool memoryOperand(const cs_insn *Insn, const cs_x86_op &D,
                           unsigned Width, unsigned AddressSize, bool Long,
-                          uint8_t Rex, size_t Pos) {
+                          uint8_t Rex, size_t Pos, size_t TrailingBytes = 0,
+                          x86_reg Segment = X86_REG_INVALID) {
   const auto &X = Insn->detail->x86;
   const unsigned Mod = X.modrm >> 6, RM = X.modrm & 7;
-  if (D.type != X86_OP_MEM || D.size != Width ||
-      D.mem.segment != X86_REG_INVALID)
+  if (D.type != X86_OP_MEM || D.size != Width || D.mem.segment != Segment)
     return false;
   unsigned DispSize = Mod == 1 ? 1 : Mod == 2 ? (AddressSize == 2 ? 2 : 4) : 0;
   uint8_t Sib = 0;
@@ -75,7 +75,7 @@ inline bool memoryOperand(const cs_insn *Insn, const cs_x86_op &D,
         D.mem.scale != int(Scale))
       return false;
   }
-  if (X.sib != Sib || Pos + DispSize != Insn->size ||
+  if (X.sib != Sib || Pos + DispSize + TrailingBytes != Insn->size ||
       X.encoding.disp_size != DispSize ||
       X.encoding.disp_offset != (DispSize ? Pos : 0))
     return false;

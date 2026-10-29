@@ -12,6 +12,7 @@
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/high/MedToHigh.h"
 #include "neverd/ir/med/MedABIPass.h"
+#include "neverd/ir/med/MedCallConvention.h"
 #include "neverd/ir/med/MedCallLeftovers.h"
 
 #include <algorithm>
@@ -281,11 +282,12 @@ bool registerEntering(const MedFunc &Func, const MedBlock &Block,
 
 bool reachingRegisterAtBlockEntry(const MedFunc &Func, const MedBlock &Block,
                                   uint64_t RegOff, const TargetRegInfo &TRI,
-                                  MedVar &Out) {
+                                  MedVar &Out, bool ParameterAtEntry) {
   std::optional<MedVar> Left;
   bool ReachedEntry = false;
   return registerEntering(Func, Block, RegOff, TRI, /*Calls=*/nullptr,
-                          /*Size=*/0, Out, Left, ReachedEntry);
+                          /*Size=*/0, Out, Left, ReachedEntry,
+                          ParameterAtEntry);
 }
 
 bool reachingRegisterAtCall(const MedFunc &Func, const MedBlock &Block,
@@ -325,7 +327,8 @@ bool reachingRegisterAtCall(const MedFunc &Func, const MedBlock &Block,
 
 std::vector<StackSlotValue>
 storedStackArguments(const MedFunc &Func, const MedBlock &Block, size_t CallIdx,
-                     Arch TheArch, HighEntryStackOffsets &Offsets) {
+                     Arch TheArch, BinaryFormat Format,
+                     HighEntryStackOffsets &Offsets) {
   const auto &TRI = getTargetRegInfo(TheArch);
   const int64_t Slot = TRI.PointerSize;
   std::vector<StackSlotValue> Arguments;
@@ -366,12 +369,24 @@ storedStackArguments(const MedFunc &Func, const MedBlock &Block, size_t CallIdx,
   }
   for (int64_t Offset = 0; Slots.count(Offset); Offset += Slot)
     Arguments.push_back(Slots.at(Offset));
+  // A slot that holds only a scratch register's undefined incoming value, as
+  // an alignment `push rax` fills one, is no argument: above the arguments it
+  // is left out, and below one it keeps its place, as zero.
+  const auto Undefined = [&](const StackSlotValue &Argument) {
+    return holdsUndefinedIncomingScratch(Func, TheArch, Format, Argument.Value);
+  };
+  while (!Arguments.empty() && Undefined(Arguments.back()))
+    Arguments.pop_back();
+  for (StackSlotValue &Argument : Arguments)
+    if (Undefined(Argument))
+      Argument = {MedVar::makeConst(0, static_cast<uint16_t>(Slot)), 0};
   return Arguments;
 }
 
 } // namespace detail
 
-void sizeVariadicOverflowFromStores(std::vector<MedFunc> &Funcs, Arch TheArch) {
+void sizeVariadicOverflowFromStores(std::vector<MedFunc> &Funcs, Arch TheArch,
+                                    BinaryFormat Format) {
   const auto &TRI = getTargetRegInfo(TheArch);
   std::map<va_t, MedFunc *> Callees;
   for (MedFunc &F : Funcs)
@@ -391,9 +406,10 @@ void sizeVariadicOverflowFromStores(std::vector<MedFunc> &Funcs, Arch TheArch) {
           continue;
         if (!Offsets)
           Offsets.emplace(Caller, TheArch);
-        const int Stored = static_cast<int>(
-            detail::storedStackArguments(Caller, Block, I, TheArch, *Offsets)
-                .size());
+        const int Stored =
+            static_cast<int>(detail::storedStackArguments(
+                                 Caller, Block, I, TheArch, Format, *Offsets)
+                                 .size());
         int &Count = Widest[Call.Inputs[0].ConstVal];
         Count = std::max(Count, Stored);
       }

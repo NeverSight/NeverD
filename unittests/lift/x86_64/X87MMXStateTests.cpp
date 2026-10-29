@@ -65,7 +65,7 @@ std::array<uint8_t, 512> incoming(unsigned Top, uint8_t Tags) {
   return State;
 }
 
-TEST(X87MMXState, ResetClearsTagsAndOnlyFemmsForgetsEveryPayload) {
+TEST(X87MMXState, ResetClearsTopAndTagsAndOnlyFemmsForgetsEveryPayload) {
   BinaryImage Img;
   Img.Arch = Arch::X64;
   for (bool Strict : {false, true})
@@ -80,10 +80,14 @@ TEST(X87MMXState, ResetClearsTagsAndOnlyFemmsForgetsEveryPayload) {
           ASSERT_TRUE(E.setX87Context(Before));
           ASSERT_TRUE(E.step(resetStep(Selector)));
           EXPECT_EQ(E.getRegister(x86reg::FPU_CW), 0x037f);
-          EXPECT_EQ(E.getRegister(x86reg::FPU_SW), 0x4725 | (Top << 11));
+          EXPECT_EQ(E.getRegister(x86reg::FPU_SW), 0x4725);
           if (Selector == 0x770f) {
             auto Expected = Before;
+            Expected[3] = 0x47;
             Expected[4] = 0;
+            for (unsigned Physical = 0; Physical != 8; ++Physical)
+              std::copy_n(Before.begin() + 32 + ((Physical + 8 - Top) & 7) * 16,
+                          16, Expected.begin() + 32 + Physical * 16);
             EXPECT_EQ(E.getX87Context(), Expected);
             continue;
           }
@@ -157,13 +161,13 @@ TEST(X87MMXState, FreshX87LoadsRebuildOnlyTheWrittenPayloadsAfterFemms) {
       Load.Inputs[3] = NdVar::cst(Data.VA, 8);
       for (unsigned I = 0; I < 8; ++I) {
         ASSERT_TRUE(E.step(Load)); // All eight original tags must be empty.
-        const unsigned Physical = (Top + 7 - I) & 7;
+        const unsigned Physical = 7 - I;
         EXPECT_EQ(E.getRegisterBytes(x86reg::stReg(Physical)), Data.Data);
         EXPECT_EQ(bool(E.getX87Context()), I == 7);
       }
       ASSERT_TRUE(E.getX87Context());
       EXPECT_EQ((*E.getX87Context())[4], 0xff);
-      EXPECT_EQ((*E.getRegister(x86reg::FPU_SW) >> 11) & 7, Top);
+      EXPECT_EQ((*E.getRegister(x86reg::FPU_SW) >> 11) & 7, 0U);
     }
 }
 

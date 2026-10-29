@@ -492,10 +492,10 @@ void LLVMCWriter::planExpressionMaterialization(llvm::Function &Fn) {
   // The bounded walk also keeps this planning linear in the instruction count.
   for (const auto &BB : Fn) {
     for (const auto &I : BB) {
-      // An RMW's result is the snapshot produced at this position. Expanding
+      // An atomic update's result is the snapshot produced here. Expanding
       // a single-use result at its consumer can move the write past a load
       // or call, or give C permission to evaluate other operands first.
-      if (llvm::isa<llvm::AtomicRMWInst>(&I)) {
+      if (llvm::isa<llvm::AtomicRMWInst, llvm::AtomicCmpXchgInst>(&I)) {
         MaterializedExpressions.insert(&I);
         continue;
       }
@@ -1067,6 +1067,56 @@ TypeRef debugCallArgPointer(const FunctionSym &FS, unsigned Index,
   return isNamedPointerDisplay(Arg) ? Arg : TypeRef{};
 }
 
+/// Whether the SEH range that unwinds to \p PadBlock can leave other than at
+/// its end marker. A lexical try spans the blocks laid out from its begin
+/// marker to its end marker, and C counts a return or a jump out of it as an
+/// abnormal termination, as it does an exception. Nested handlers print
+/// inside the try, so the normal code they return to counts as well.
+bool sehRangeLeavesEarly(const llvm::Function &Fn,
+                         const llvm::BasicBlock *PadBlock) {
+  auto Marker = [&](const llvm::BasicBlock &BB,
+                    llvm::Intrinsic::ID ID) -> const llvm::InvokeInst * {
+    const auto *Invoke = llvm::dyn_cast<llvm::InvokeInst>(BB.getTerminator());
+    const llvm::Function *Callee =
+        Invoke ? Invoke->getCalledFunction() : nullptr;
+    return Callee && Callee->getIntrinsicID() == ID &&
+                   Invoke->getUnwindDest() == PadBlock
+               ? Invoke
+               : nullptr;
+  };
+  llvm::SmallPtrSet<const llvm::BasicBlock *, 16> Span, Seen;
+  // Each block with whether it belongs to a nested handler funclet.
+  llvm::SmallVector<std::pair<const llvm::BasicBlock *, bool>, 16> Work;
+  bool Inside = false;
+  for (const llvm::BasicBlock &BB : Fn) {
+    if (const auto *Begin = Marker(BB, llvm::Intrinsic::seh_try_begin)) {
+      Work.emplace_back(Begin->getNormalDest(), false);
+      Inside = true;
+      continue;
+    }
+    if (Inside)
+      Span.insert(&BB);
+    if (Marker(BB, llvm::Intrinsic::seh_try_end))
+      Inside = false;
+  }
+  while (!Work.empty()) {
+    const auto [BB, Funclet] = Work.pop_back_val();
+    if (BB == PadBlock || !Seen.insert(BB).second)
+      continue;
+    if (!Funclet && !Span.count(BB))
+      return true;
+    const llvm::Instruction *Term = BB->getTerminator();
+    if (!Funclet && Marker(*BB, llvm::Intrinsic::seh_try_end))
+      continue;
+    if (llvm::isa<llvm::ReturnInst>(Term))
+      return true;
+    const bool ToNormal = llvm::isa<llvm::CatchReturnInst>(Term);
+    for (const llvm::BasicBlock *Succ : llvm::successors(BB))
+      Work.emplace_back(Succ, !ToNormal && (Funclet || Succ->isEHPad()));
+  }
+  return false;
+}
+
 } // namespace
 
 std::vector<LLVMCWriter::EHWrapClause>
@@ -1355,14 +1405,34 @@ void LLVMCWriter::writeEHWrapClose(const EHWrapClause &Clause, int Indent) {
     OS << "}\n";
     break;
   case EHWrapClause::Kind::SEHFinally: {
+    // A cleanup pad runs only while an exception unwinds the try. A C
+    // __finally also runs when the try falls through, where the source path
+    // already holds its own copy of the termination code. A range try leaves
+    // only by falling through or by an exception, which
+    // renderFunctionProjection checks, so AbnormalTermination() tells the two
+    // apart. A try around every block also returns, and its returns set the
+    // normal-exit flag.
+    if (!WrappedFinallyNormalExit.empty()) {
+      emitIndent(Indent + 1);
+      OS << WrappedFinallyNormalExit << " = 1;\n";
+    }
     OS << "} __finally {\n";
+    emitIndent(Indent + 1);
+    if (WrappedFinallyNormalExit.empty())
+      OS << "if (AbnormalTermination()) {\n";
+    else
+      OS << "if (!" << WrappedFinallyNormalExit << ") {\n";
     // Unwinding to the caller is implicit at the end of a structured finally.
     // An explicit return here would suppress unwinding and skip continuation.
     const bool AlreadyOmitted = OmitCleanupRetTo.count(nullptr);
     OmitCleanupRetTo.insert(nullptr);
+    ++Indent;
     WriteBody();
+    --Indent;
     if (!AlreadyOmitted)
       OmitCleanupRetTo.erase(nullptr);
+    emitIndent(Indent + 1);
+    OS << "}\n";
     emitIndent(Indent);
     OS << "}\n";
     break;
@@ -2588,6 +2658,7 @@ void LLVMCWriter::setupFunction(llvm::Function &Fn) {
   EHMovedContinuationBlocks.clear();
   EHFallthroughLabelCandidates.clear();
   OmitCleanupRetTo.clear();
+  WrappedFinallyNormalExit.clear();
   PhiTailSlot = nullptr;
   PhiTailIncoming = nullptr;
 
@@ -2841,15 +2912,13 @@ void LLVMCWriter::setupFunction(llvm::Function &Fn) {
   collectDeferredUnknowns(Fn);
 }
 
-void LLVMCWriter::bindDebugArguments(const llvm::Function &Fn) {
-  ArgDebugBindings.clear();
-  ArgDebugNames.clear();
-  DebugArgsBound = false;
+std::optional<DebugParamBindings>
+LLVMCWriter::debugArgumentBindings(const llvm::Function &Fn,
+                                   const FunctionSym &Signature) const {
   // An MSVC indirect result keeps its arguments' positions.
-  if (!DebugFn ||
-      (!Opts.PreserveLLVMFunctionTypes &&
-       isMsvcIndirectReturn(DebugFn->ReturnType, Opts.TheArch, Opts.Format)))
-    return;
+  if (!Opts.PreserveLLVMFunctionTypes &&
+      isMsvcIndirectReturn(Signature.ReturnType, Opts.TheArch, Opts.Format))
+    return std::nullopt;
   // Where each argument arrives, as the lifted function records it; an
   // argument of no recorded place binds by position, as an integer prefix.
   const auto Recorded = parameter_sites::getParameterSites(Fn);
@@ -2865,9 +2934,19 @@ void LLVMCWriter::bindDebugArguments(const llvm::Function &Fn) {
           Fn.getDataLayout().getTypeStoreSize(Arg.getType()));
     Sites.push_back(Site);
   }
-  DebugParamBindings Bound =
-      bindDebugParams(Opts.TheArch, Opts.Format, *DebugFn, Sites, Dbg);
-  ArgDebugBindings = std::move(Bound.Params);
+  return bindDebugParams(Opts.TheArch, Opts.Format, Signature, Sites, Dbg);
+}
+
+void LLVMCWriter::bindDebugArguments(const llvm::Function &Fn) {
+  ArgDebugBindings.clear();
+  ArgDebugNames.clear();
+  DebugArgsBound = false;
+  if (!DebugFn)
+    return;
+  auto Bound = debugArgumentBindings(Fn, *DebugFn);
+  if (!Bound)
+    return;
+  ArgDebugBindings = std::move(Bound->Params);
   DebugArgsBound = true;
   // A piece's name, `result` or a source name can meet another argument's;
   // every argument keeps its machine name then.
@@ -2880,6 +2959,110 @@ void LLVMCWriter::bindDebugArguments(const llvm::Function &Fn) {
       break;
     }
   }
+}
+
+std::string
+LLVMCWriter::SourcePointerType::declaration(llvm::StringRef Name) const {
+  if (!Alias.empty())
+    return Name.empty() ? Alias : Alias + " " + Name.str();
+  return declarationToC(Type, Name);
+}
+
+namespace {
+std::optional<size_t>
+wholeDebugParameter(const FunctionSym &Signature,
+                    std::optional<llvm::ArrayRef<DebugParamBinding>> Bindings,
+                    unsigned Arg, int Sret) {
+  if (Bindings) {
+    if (Arg >= Bindings->size())
+      return {};
+    const auto &Binding = (*Bindings)[Arg];
+    if (!Binding.Whole || Binding.Index < 0 ||
+        static_cast<size_t>(Binding.Index) >= Signature.Params.size())
+      return {};
+    return static_cast<size_t>(Binding.Index);
+  }
+  const size_t Source =
+      Sret >= 0 && static_cast<int>(Arg) > Sret ? Arg - 1 : Arg;
+  return Source < Signature.Params.size() ? std::optional(Source)
+                                          : std::nullopt;
+}
+} // namespace
+
+const LLVMCWriter::DefinitionPointerTypes &
+LLVMCWriter::definitionPointerTypes(const llvm::Function &Fn) const {
+  auto [It, Inserted] = DefinitionPointers.try_emplace(&Fn);
+  auto &Types = It->second;
+  if (!Inserted || Opts.PreserveLLVMFunctionTypes || Fn.isDeclaration() ||
+      (OnlyFunction && OnlyFunction != &Fn) || !Dbg)
+    return Types;
+  // setupFunction admits a definition's signature only at its original entry.
+  // Symbol-name fallback is for external declarations, not this projection.
+  auto Entry = rewrite_source::getOriginalVA(Fn);
+  if (!Entry) {
+    llvm::consumeError(Entry.takeError());
+    return Types;
+  }
+  // An object's first function sits at address zero, an entry like any.
+  if (!*Entry)
+    return Types;
+  const auto Signature = Dbg->resolveFunction(static_cast<va_t>(**Entry));
+  if (!Signature)
+    return Types;
+  const bool Indirect =
+      isMsvcIndirectReturn(Signature->ReturnType, Opts.TheArch, Opts.Format);
+  const bool Member = Indirect && !Signature->Params.empty() &&
+                      Signature->Params[0].first == "this";
+  const int Sret = !Indirect ? -1 : (Member ? 1 : 0);
+  const auto Bindings = debugArgumentBindings(Fn, *Signature);
+  std::optional<llvm::ArrayRef<DebugParamBinding>> Bound;
+  if (Bindings)
+    Bound.emplace(Bindings->Params);
+  const auto SameWidth = [&](const TypeRef &Type, llvm::Type *Held) {
+    return Opts.RecordDefinitions && Type && Type->Kind == NdTypeKind::Ptr &&
+           Type->Pointee && Type->Size && Held->isIntegerTy() &&
+           Held->getIntegerBitWidth() == Type->Size * 8u;
+  };
+  const auto Project = [&](TypeRef Type, llvm::Type *Held) {
+    SourcePointerType Result;
+    Result.Type = std::move(Type);
+    if (SameWidth(Result.Type, Held) && !Result.Type->TypedefName.empty())
+      Result.Alias = cNamedTypeSpelling(Result.Type->TypedefName);
+    return Result;
+  };
+  const bool ProgramMain = !Indirect && declaresProgramMain(*Signature);
+  Types.Parameters.resize(Fn.arg_size());
+  for (const llvm::Argument &Arg : Fn.args()) {
+    if (static_cast<int>(Arg.getArgNo()) == Sret) {
+      if (const auto *Record = msvcIndirectReturnRecord(
+              Signature->ReturnType, Opts.TheArch, Opts.Format))
+        if (!cNamedTypeSpelling(Record->SourceName).empty())
+          Types.Parameters[Arg.getArgNo()] = Project(
+              NdType::makePtr(NdType::makeNamedRecord(
+                  cNamedTypeSpelling(Record->SourceName), Record->Size)),
+              Arg.getType());
+      continue;
+    }
+    const auto DebugIndex =
+        wholeDebugParameter(*Signature, Bound, Arg.getArgNo(), Sret);
+    if (!DebugIndex)
+      continue;
+    const auto &Type = Signature->Params[*DebugIndex].second;
+    if (!Type || Type->Kind != NdTypeKind::Ptr || !Type->Pointee)
+      continue;
+    const bool Record = Type->Pointee->Kind == NdTypeKind::Struct &&
+                        !Type->Pointee->SourceName.empty() &&
+                        !cNamedTypeSpelling(Type->Pointee->SourceName).empty();
+    if (ProgramMain || Record || SameWidth(Type, Arg.getType()))
+      Types.Parameters[Arg.getArgNo()] = Project(Type, Arg.getType());
+  }
+  if (Indirect) {
+    if (Sret >= 0 && static_cast<size_t>(Sret) < Types.Parameters.size())
+      Types.Result = Types.Parameters[Sret];
+  } else if (SameWidth(Signature->ReturnType, Fn.getReturnType()) &&
+             Signature->ReturnType->Pointee->Kind != NdTypeKind::Func)
+    Types.Result = Project(Signature->ReturnType, Fn.getReturnType());
+  return Types;
 }
 
 std::string LLVMCWriter::debugArgumentName(const llvm::Argument &Arg) const {
@@ -2897,21 +3080,10 @@ std::optional<size_t> LLVMCWriter::debugParamIndexOf(unsigned ArgNo,
                                                      int SretParamIdx) const {
   if (!DebugFn)
     return std::nullopt;
-  if (DebugArgsBound) {
-    if (ArgNo >= ArgDebugBindings.size())
-      return std::nullopt;
-    const DebugParamBinding &Binding = ArgDebugBindings[ArgNo];
-    if (!Binding.Whole || Binding.Index < 0 ||
-        static_cast<size_t>(Binding.Index) >= DebugFn->Params.size())
-      return std::nullopt;
-    return static_cast<size_t>(Binding.Index);
-  }
-  size_t DebugIdx = ArgNo;
-  if (SretParamIdx >= 0 && static_cast<int>(ArgNo) > SretParamIdx)
-    DebugIdx = static_cast<size_t>(static_cast<int>(ArgNo) - 1);
-  if (DebugIdx >= DebugFn->Params.size())
-    return std::nullopt;
-  return DebugIdx;
+  std::optional<llvm::ArrayRef<DebugParamBinding>> Bound;
+  if (DebugArgsBound)
+    Bound.emplace(ArgDebugBindings);
+  return wholeDebugParameter(*DebugFn, Bound, ArgNo, SretParamIdx);
 }
 
 std::optional<FunctionSym>
@@ -3176,6 +3348,11 @@ bool LLVMCWriter::isResultParamValue(const llvm::Value *V) const {
 unsigned LLVMCWriter::printedCallArgLimit(const llvm::CallBase &Call,
                                           llvm::StringRef CalleeName) const {
   const unsigned Have = Call.arg_size();
+  // Inline assembly has an exact input contract, not an inferred C call ABI.
+  // A trailing input loaded from a cross-block snapshot is still required;
+  // dropping its producers leaves the assembly using an uninitialized local.
+  if (Call.isInlineAsm())
+    return Have;
   const MsvcCallee *Msvc = msvcCallee(CalleeName, Opts.Format);
   auto Clamp = [&](size_t Limit) {
     return static_cast<unsigned>(std::min(Limit, static_cast<size_t>(Have)));
@@ -9437,13 +9614,20 @@ std::optional<SEHBlockScopes> planSEHBlockScopes(const llvm::Function &Fn) {
       }
   }
   // Keep the lexical renderer for a single closed range. This plan owns
-  // fragmented or independently nested ranges whose block order is immaterial.
-  if (Plan.Clauses.empty() || !Begins || !Ends || (Begins == 1 && Ends == 1))
+  // fragmented or independently nested ranges whose block order is immaterial,
+  // and a finally range that leaves before its end: only the per-block
+  // normal-exit flag tells that exit from an exception.
+  const bool CleanupLeavesEarly =
+      llvm::any_of(Plan.Clauses, [&](const auto &Entry) {
+        return Entry.second.Cleanup && sehRangeLeavesEarly(Fn, Entry.first);
+      });
+  if (Plan.Clauses.empty() || !Begins || !Ends ||
+      (Begins == 1 && Ends == 1 && !CleanupLeavesEarly))
     return std::nullopt;
   // The existing lexical renderer also owns one closed finally nested in
   // one closed except. Preserve that compact source form when each clause
   // has exactly one marker pair.
-  if (Plan.Clauses.size() == 2 &&
+  if (!CleanupLeavesEarly && Plan.Clauses.size() == 2 &&
       llvm::count_if(Plan.Clauses,
                      [](const auto &Entry) {
                        return Entry.second.Dispatch != nullptr;
@@ -9535,11 +9719,8 @@ std::optional<SEHBlockScopes> planSEHBlockScopes(const llvm::Function &Fn) {
     if (llvm::isa<llvm::CatchSwitchInst, llvm::CatchReturnInst,
                   llvm::CleanupReturnInst, llvm::IndirectBrInst>(Term))
       return std::nullopt;
-    if (llvm::isa<llvm::ReturnInst>(Term) &&
-        llvm::any_of(Incoming, [&](const auto *Scope) {
-          return Plan.Clauses.at(Scope).Cleanup != nullptr;
-        }))
-      return std::nullopt;
+    // A return inside a finally scope sets the normal-exit flag first, as an
+    // edge out of it does.
     for (const auto *Next : llvm::successors(BB))
       Work.emplace_back(Next, Incoming);
   }
@@ -9660,6 +9841,7 @@ void LLVMCWriter::renderFunctionProjection(llvm::Function &Fn) {
   // an argument held as an integer converts where the code uses it.
   const bool ProgramMain = !Opts.PreserveLLVMFunctionTypes && DebugFn &&
                            SretParamIdx < 0 && declaresProgramMain(*DebugFn);
+  const auto &DefinitionTypes = definitionPointerTypes(Fn);
   auto BindParam = [&](llvm::Argument &Arg, unsigned) { return getName(&Arg); };
   auto ParamTypeStr = [&](llvm::Argument &Arg, unsigned ParamIdx) {
     if (Opts.PreserveLLVMFunctionTypes)
@@ -9672,20 +9854,6 @@ void LLVMCWriter::renderFunctionProjection(llvm::Function &Fn) {
         debugParamIndexOf(ParamIdx, SretParamIdx);
     if (DebugIdx) {
       TypeRef Ty = DebugFn->Params[*DebugIdx].second;
-      if (Ty && Ty->Kind == NdTypeKind::Ptr && Ty->Pointee &&
-          Ty->Pointee->Kind == NdTypeKind::Struct &&
-          !Ty->Pointee->SourceName.empty()) {
-        if (std::string Pointer = recordPointerSpelling(*Ty->Pointee);
-            !Pointer.empty()) {
-          if (Opts.RecordDefinitions && Arg.getType()->isIntegerTy())
-            PointerParams.insert(&Arg);
-          // The typedef the prototype names the pointer by, as PRKDPC, in a
-          // unit that defines the program's types.
-          if (Opts.RecordDefinitions && !Ty->TypedefName.empty())
-            return cNamedTypeSpelling(Ty->TypedefName);
-          return Pointer;
-        }
-      }
       if (Ty && Ty->Kind == NdTypeKind::Struct && Ty->IsEnum &&
           !Ty->SourceName.empty()) {
         const std::string Tag = cNamedTypeSpelling(Ty->SourceName);
@@ -9696,19 +9864,10 @@ void LLVMCWriter::renderFunctionProjection(llvm::Function &Fn) {
     return typeToCLLVM(Arg.getType());
   };
 
-  // A pointer the debug information or the local types give a parameter or
-  // the result, which the code holds as an integer of its width, in a unit
-  // that defines the program's records: its uses convert it.
-  auto PointerDebugType = [&](const TypeRef &Ty, const llvm::Type *Held) {
-    return Opts.RecordDefinitions && !Opts.PreserveLLVMFunctionTypes && Ty &&
-           Ty->Kind == NdTypeKind::Ptr && Ty->Pointee && Held &&
-           Held->isIntegerTy() && Ty->Size &&
-           Held->getIntegerBitWidth() == Ty->Size * 8u;
-  };
   // The typedef a prototype names a parameter's or the result's type by
   // (NdType::TypedefName), where the unit defines the program's types and
-  // the typedef holds what the code does: a pointer it holds as an integer
-  // of its width, or an integer or enumeration of the width it holds.
+  // the integer or enumeration has the width the code holds. Pointer
+  // spellings belong to definitionPointerTypes, including the call bridges.
   auto Alias = [&](const TypeRef &Ty, const llvm::Type *Held) -> std::string {
     if (!Opts.RecordDefinitions || Opts.PreserveLLVMFunctionTypes || !Ty ||
         Ty->TypedefName.empty() || !Held)
@@ -9717,32 +9876,33 @@ void LLVMCWriter::renderFunctionProjection(llvm::Function &Fn) {
                           (Ty->Kind == NdTypeKind::Struct && Ty->IsEnum)) &&
                          Held->isIntegerTy() && Ty->Size &&
                          Held->getIntegerBitWidth() == Ty->Size * 8u;
-    if (!Integer && !PointerDebugType(Ty, Held))
+    if (!Integer)
       return {};
     return cNamedTypeSpelling(Ty->TypedefName);
   };
   auto ParamDecl = [&](llvm::Argument &Arg, unsigned ParamIdx) {
+    if (ParamIdx < DefinitionTypes.Parameters.size()) {
+      const auto &Pointer = DefinitionTypes.Parameters[ParamIdx];
+      if (Pointer.Type) {
+        if (Arg.getType()->isIntegerTy())
+          PointerParams.insert(&Arg);
+        if (Pointer.Type->Pointee->Kind == NdTypeKind::Struct)
+          (void)recordPointerSpelling(*Pointer.Type->Pointee);
+        return Pointer.declaration(BindParam(Arg, ParamIdx));
+      }
+    }
     const std::optional<size_t> DebugIdx =
         debugParamIndexOf(ParamIdx, SretParamIdx);
     const bool Sret =
         SretParamIdx >= 0 && static_cast<int>(ParamIdx) == SretParamIdx;
     if (ProgramMain && DebugIdx) {
       const TypeRef &Ty = DebugFn->Params[*DebugIdx].second;
-      if (Ty->Kind == NdTypeKind::Ptr && Arg.getType()->isIntegerTy())
-        PointerParams.insert(&Arg);
       return declarationToC(Ty, BindParam(Arg, ParamIdx));
     }
     if (!Sret && DebugIdx) {
       const TypeRef &Ty = DebugFn->Params[*DebugIdx].second;
       if (const std::string Name = Alias(Ty, Arg.getType()); !Name.empty()) {
-        if (PointerDebugType(Ty, Arg.getType()))
-          PointerParams.insert(&Arg);
         return Name + " " + BindParam(Arg, ParamIdx);
-      }
-      if (PointerDebugType(Ty, Arg.getType()) &&
-          Ty->Pointee->Kind != NdTypeKind::Struct) {
-        PointerParams.insert(&Arg);
-        return declarationToC(Ty, BindParam(Arg, ParamIdx));
       }
     }
     return ParamTypeStr(Arg, ParamIdx) + " " + BindParam(Arg, ParamIdx);
@@ -9754,20 +9914,12 @@ void LLVMCWriter::renderFunctionProjection(llvm::Function &Fn) {
         InferredVoid ? "void" : typeToCLLVM(FuncTy->getReturnType());
     if (std::string Ty = IndirectReturnTypeStr(); !Ty.empty())
       RetStr = std::move(Ty);
-    else if (!InferredVoid && DebugFn &&
-             PointerDebugType(DebugFn->ReturnType, FuncTy->getReturnType()) &&
-             DebugFn->ReturnType->Pointee->Kind != NdTypeKind::Func) {
-      RetStr = typeToC(DebugFn->ReturnType);
-      PointerReturnType = RetStr;
-      if (std::string Name =
-              Alias(DebugFn->ReturnType, FuncTy->getReturnType());
-          !Name.empty())
-        RetStr = PointerReturnType = std::move(Name);
+    else if (!InferredVoid && DefinitionTypes.Result.Type) {
+      RetStr = PointerReturnType = DefinitionTypes.Result.declaration();
     } else if (!InferredVoid && DebugFn) {
       if (std::string Name =
               Alias(DebugFn->ReturnType, FuncTy->getReturnType());
-          !Name.empty() &&
-          !PointerDebugType(DebugFn->ReturnType, FuncTy->getReturnType()))
+          !Name.empty())
         RetStr = std::move(Name);
     }
     if (ProgramMain && !InferredVoid)
@@ -10368,6 +10520,17 @@ void LLVMCWriter::renderFunctionProjection(llvm::Function &Fn) {
     }
   }
 
+  // A range __finally guards its cleanup with AbnormalTermination(), which C
+  // also sets when the try returns or jumps out. planSEHBlockScopes owns the
+  // ranges that can, so refuse a range try that still could.
+  if (UseRanges)
+    for (const EHWrapClause &Clause : EHWraps)
+      if (Clause.Kind == EHWrapClause::Kind::SEHFinally &&
+          sehRangeLeavesEarly(Fn, PadBlock(Clause)))
+        throw std::runtime_error("LLVMC lexical __finally cannot tell a "
+                                 "return or jump out of its try from an "
+                                 "exception");
+
   for (const llvm::BasicBlock &BB : Fn) {
     const auto *Br = llvm::dyn_cast<llvm::UncondBrInst>(BB.getTerminator());
     if (!Br || !Br->getSuccessor(0))
@@ -10474,6 +10637,12 @@ void LLVMCWriter::renderFunctionProjection(llvm::Function &Fn) {
         emitIndent(Indent);
         OS << "}\n";
       } else {
+        // A return leaves the try normally, as an edge does: that path holds
+        // its own copy of the termination code.
+        if (InCleanup && llvm::isa<llvm::ReturnInst>(Term)) {
+          emitIndent(Indent);
+          OS << NormalExit << " = 1;\n";
+        }
         writeInstruction(*Term, Indent);
       }
       for (const auto *Entry : llvm::reverse(Scope->second)) {
@@ -10536,6 +10705,17 @@ void LLVMCWriter::renderFunctionProjection(llvm::Function &Fn) {
       if (!SkipInTry.contains(&BB) && !AfterWrap.contains(&BB) &&
           SehRangeInvoke(BB, llvm::Intrinsic::seh_try_end))
         EHBoundaryBlocks.insert(&BB);
+    // These wraps hold every printed block, so a __finally among them also
+    // sees the function's returns.
+    if (llvm::any_of(EHWraps, [](const EHWrapClause &Clause) {
+          return Clause.Kind == EHWrapClause::Kind::SEHFinally;
+        })) {
+      WrappedFinallyNormalExit = "neverd_seh_normal";
+      while (!UsedNames.insert(WrappedFinallyNormalExit).second)
+        WrappedFinallyNormalExit += "_";
+      emitIndent(1);
+      OS << "volatile unsigned char " << WrappedFinallyNormalExit << " = 0;\n";
+    }
     for (const EHWrapClause &Clause : EHWraps) {
       writeEHWrapOpen(Clause, 1 + EHTryDepth);
       ++EHTryDepth;
@@ -10568,6 +10748,7 @@ void LLVMCWriter::renderFunctionProjection(llvm::Function &Fn) {
       writeEHWrapClose(EHWraps[static_cast<size_t>(EHTryDepth)],
                        1 + EHTryDepth);
     }
+    WrappedFinallyNormalExit.clear();
     auto ClearPhiImmediates = [&](const llvm::BasicBlock &BB) {
       for (const llvm::Instruction &Inst : BB) {
         const auto *Phi = llvm::dyn_cast<llvm::PHINode>(&Inst);

@@ -1629,8 +1629,9 @@ MedToHighConverter::collectCallArgs(const MedBlock &CurBlock, size_t CallIdx,
     std::vector<ExprPtr> Stack;
     if (CurMed) {
       indexMedDefinitions();
-      for (const detail::StackSlotValue &Slot : detail::storedStackArguments(
-               *CurMed, CurBlock, CallIdx, TargetArch, *EntryStackOffsets)) {
+      for (const detail::StackSlotValue &Slot :
+           detail::storedStackArguments(*CurMed, CurBlock, CallIdx, TargetArch,
+                                        Format, *EntryStackOffsets)) {
         ExprPtr Value = medvarToExpr(Slot.Value);
         if (Slot.Value.Size > TRI.PointerSize) {
           Value = HighExpr::makeBinop(NdOp::SUBBYTES, Value,
@@ -1701,16 +1702,24 @@ MedToHighConverter::collectCallArgs(const MedBlock &CurBlock, size_t CallIdx,
         continue;
       }
       std::optional<MedVar> Reaching;
+      bool AfterCall = false;
       for (size_t J = CallIdx; J-- > 0 && !Reaching;) {
         const MedOp &Prev = Ops[J];
-        if (Prev.Opcode == NdOp::CALL || Prev.Opcode == NdOp::INDIR_CALL)
+        if (Prev.Opcode == NdOp::CALL || Prev.Opcode == NdOp::INDIR_CALL) {
+          AfterCall = true;
           break;
+        }
         if (Prev.Output.Kind == MedVar::Reg && Prev.Output.Size > 0 &&
             Prev.Output.RegOff == Vector)
           Reaching = Prev.Output;
       }
+      // A parameter this function only passes on, which its entry holds no
+      // copy of, enters as that parameter (detectSummaryVectorParams).
       MedVar LiveIn;
-      if (!Reaching && reachingRegAtBlockEntry(CurBlock, Vector, LiveIn))
+      if (!Reaching && CurMed &&
+          detail::reachingRegisterAtBlockEntry(
+              *CurMed, CurBlock, Vector, getTargetRegInfo(TargetArch), LiveIn,
+              /*ParameterAtEntry=*/!AfterCall))
         Reaching = LiveIn;
       ExprPtr Value = Reaching ? medvarToExpr(*Reaching)
                                : HighExpr::makeUndef(sizeof(double));

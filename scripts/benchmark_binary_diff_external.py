@@ -7,6 +7,7 @@ import signal
 import shutil
 import sqlite3
 import subprocess
+import sys
 import time
 
 if __package__:
@@ -28,7 +29,9 @@ def stage(folder: Path, name: str, command: list[str], env: dict,
     executable = command[0]
     if os.sep in executable and not Path(executable).is_absolute():
         executable = str(folder / executable)
-    if timer.is_file() and shutil.which(executable, path=env.get("PATH")):
+    # The retained resource receipt uses GNU time's Linux options and units.
+    # macOS has a different /usr/bin/time; it must not replace the tool's exit.
+    if sys.platform.startswith("linux") and timer.is_file() and shutil.which(executable, path=env.get("PATH")):
         record["measurement_tool"] = {"path": str(timer), "sha256": bench.digest(timer)}
         measured_command = [str(timer), "--quiet", "--format=%U %S %M %e", "--output=" + str(resource_path), *command]
     cancelled = False

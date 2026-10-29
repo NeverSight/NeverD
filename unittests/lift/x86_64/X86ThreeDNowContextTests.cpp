@@ -19,6 +19,7 @@
 #include "llvm/Object/ObjectFile.h"
 
 #include <functional>
+#include <iterator>
 
 #if (defined(__x86_64__) || defined(_M_X64)) &&                                \
     (defined(__clang__) || defined(__GNUC__))
@@ -314,7 +315,8 @@ TEST(X86ThreeDNowContext,
   }
 }
 
-class X86ThreeDNowEmissionTest : public X86FPStateFixture {
+class X86ThreeDNowEmissionTest : public X86FPStateFixture,
+                                 public testing::WithParamInterface<unsigned> {
 protected:
   X86ThreeDNowEmissionTest() { X87ContextOverride = true; }
   void checkObject(llvm::StringRef Bytes, unsigned Id) {
@@ -343,97 +345,104 @@ protected:
   }
 };
 
-TEST_F(X86ThreeDNowEmissionTest,
+TEST_P(X86ThreeDNowEmissionTest,
        OriginalOperationsSurviveAllNativeProjections) {
-  for (const auto &E : test::X86ThreeDNowEncodings)
-    for (unsigned Form = 0; Form < 4; ++Form) {
-      SCOPED_TRACE(E.Id);
-      SCOPED_TRACE(Form);
-      std::vector<uint8_t> Bytes;
-      if (Form == 3)
-        Bytes = {0x55, 0x48, 0x89,
-                 uint8_t(hostFormat() == BinaryFormat::COFF ? 0xcd : 0xfd)};
-      const uint8_t ModRM = Form == 0   ? 0xc1
-                            : Form == 1 ? 0xdb
-                            : Form == 2 ? uint8_t(0x28 | memoryModRM())
-                                        : 0x7d;
-      Bytes.insert(Bytes.end(), {0x0f, 0x0f, ModRM});
-      if (Form == 3)
-        Bytes.push_back(0);
-      Bytes.push_back(E.Opcode);
-      if (Form == 3)
-        Bytes.push_back(0x5d);
-      Bytes.insert(Bytes.end(), {0x31, 0xc0, 0xc3});
-      llvm::json::Array Raw;
-      for (auto Byte : Bytes)
-        Raw.push_back(Byte);
-      retain("probe.json",
-             llvm::formatv(
-                 "{0:2}",
-                 llvm::json::Value(llvm::json::Object{
-                     {"opcode", E.Opcode},
-                     {"form", Form},
-                     {"bytes", std::move(Raw)},
-                     {"format",
-                      hostFormat() == BinaryFormat::ELF ? "ELF" : "other"}}))
-                 .str());
-      for (bool NoOpt : {false, true})
-        for (unsigned Route = 0; Route < 3; ++Route) {
-          auto Img = image(Bytes);
-          llvm::LLVMContext Context;
-          PipelineOptions Options;
-          Options.LiftMode = Route != 1;
-          Options.SourceProjection = Route == 2;
-          Options.NoOpt = NoOpt;
-          Options.EmitDumpOutput = false;
-          Options.OnlyFunctionEntries = {Entry};
-          auto Lifted = Pipeline().run(Img, Context, Options);
-          ASSERT_TRUE(Lifted.Success) << Lifted.Error;
-          if (Route == 0) {
-            ASSERT_NE(Lifted.LlvmModule, nullptr);
-            ASSERT_FALSE(llvm::verifyModule(*Lifted.LlvmModule, &llvm::errs()));
-            auto Object =
-                Codegen().compile(*Lifted.LlvmModule, Arch::X64, hostFormat());
-            ASSERT_TRUE(Object.Success);
-            const llvm::StringRef Data(
-                reinterpret_cast<const char *>(Object.ObjectData.data()),
-                Object.ObjectData.size());
-            checkObject(Data, E.Id);
-            retain(NoOpt ? "llvm-noopt.o" : "llvm-default.o", Data);
-            continue;
-          }
-          CEmitterOptions Emit;
-          Emit.TheArch = Arch::X64;
-          Emit.Format = hostFormat();
-          Emit.Image = &Img;
-          Emit.PreserveLLVMFunctionTypes = true;
-          std::string Source;
-          llvm::raw_string_ostream OS(Source);
-          ASSERT_TRUE(Route == 1
-                          ? HighCEmitter().emit(Lifted.HighFuncs, OS, Emit)
-                          : LLVMCEmitter().emit(*Lifted.LlvmModule, OS, Emit,
-                                                nullptr, &Img));
-          const auto Stem = std::string(Route == 1 ? "high" : "llvm-c") +
-                            (NoOpt ? "-noopt" : "-default");
-          if (Route == 1) {
-            const auto Name =
-                llvm::StringRef(x86ThreeDNowInstruction(E.Opcode)->Name)
-                    .lower();
-            EXPECT_NE(Source.find(Name + "_mm"), std::string::npos);
-          }
-          const auto Unit = file(Stem + ".c");
-          write(Unit, Source);
-          retain(Stem + ".c", Source);
-          for (const char *Opt : {"-O0", "-O2"}) {
-            const auto Output = file(Stem + Opt + ".o");
-            const auto Built =
-                command(Compiler, {Opt, "-c", Unit, "-o", Output});
-            ASSERT_EQ(Built.Status, 0) << Built.Error << Source;
-            checkObject(contents(Output), E.Id);
-            retainFile(Stem + Opt + ".o", Output);
-          }
-        }
-      ++ProbeNumber;
+  const auto &E = test::X86ThreeDNowEncodings[GetParam() / 4];
+  const unsigned Form = GetParam() % 4;
+  ProbeNumber = GetParam();
+  SCOPED_TRACE(E.Id);
+  SCOPED_TRACE(Form);
+  std::vector<uint8_t> Bytes;
+  if (Form == 3)
+    Bytes = {0x55, 0x48, 0x89,
+             uint8_t(hostFormat() == BinaryFormat::COFF ? 0xcd : 0xfd)};
+  const uint8_t ModRM = Form == 0   ? 0xc1
+                        : Form == 1 ? 0xdb
+                        : Form == 2 ? uint8_t(0x28 | memoryModRM())
+                                    : 0x7d;
+  Bytes.insert(Bytes.end(), {0x0f, 0x0f, ModRM});
+  if (Form == 3)
+    Bytes.push_back(0);
+  Bytes.push_back(E.Opcode);
+  if (Form == 3)
+    Bytes.push_back(0x5d);
+  Bytes.insert(Bytes.end(), {0x31, 0xc0, 0xc3});
+  llvm::json::Array Raw;
+  for (auto Byte : Bytes)
+    Raw.push_back(Byte);
+  retain(
+      "probe.json",
+      llvm::formatv(
+          "{0:2}",
+          llvm::json::Value(llvm::json::Object{
+              {"opcode", E.Opcode},
+              {"form", Form},
+              {"bytes", std::move(Raw)},
+              {"format", hostFormat() == BinaryFormat::ELF ? "ELF" : "other"}}))
+          .str());
+  for (bool NoOpt : {false, true})
+    for (unsigned Route = 0; Route < 3; ++Route) {
+      auto Img = image(Bytes);
+      llvm::LLVMContext Context;
+      PipelineOptions Options;
+      Options.LiftMode = Route != 1;
+      Options.SourceProjection = Route == 2;
+      Options.NoOpt = NoOpt;
+      Options.EmitDumpOutput = false;
+      Options.OnlyFunctionEntries = {Entry};
+      auto Lifted = Pipeline().run(Img, Context, Options);
+      ASSERT_TRUE(Lifted.Success) << Lifted.Error;
+      if (Route == 0) {
+        ASSERT_NE(Lifted.LlvmModule, nullptr);
+        ASSERT_FALSE(llvm::verifyModule(*Lifted.LlvmModule, &llvm::errs()));
+        auto Object =
+            Codegen().compile(*Lifted.LlvmModule, Arch::X64, hostFormat());
+        ASSERT_TRUE(Object.Success);
+        const llvm::StringRef Data(
+            reinterpret_cast<const char *>(Object.ObjectData.data()),
+            Object.ObjectData.size());
+        checkObject(Data, E.Id);
+        retain(NoOpt ? "llvm-noopt.o" : "llvm-default.o", Data);
+        continue;
+      }
+      CEmitterOptions Emit;
+      Emit.TheArch = Arch::X64;
+      Emit.Format = hostFormat();
+      Emit.Image = &Img;
+      Emit.PreserveLLVMFunctionTypes = true;
+      std::string Source;
+      llvm::raw_string_ostream OS(Source);
+      ASSERT_TRUE(Route == 1 ? HighCEmitter().emit(Lifted.HighFuncs, OS, Emit)
+                             : LLVMCEmitter().emit(*Lifted.LlvmModule, OS, Emit,
+                                                   nullptr, &Img));
+      const auto Stem = std::string(Route == 1 ? "high" : "llvm-c") +
+                        (NoOpt ? "-noopt" : "-default");
+      if (Route == 1) {
+        const auto Name =
+            llvm::StringRef(x86ThreeDNowInstruction(E.Opcode)->Name).lower();
+        EXPECT_NE(Source.find(Name + "_mm"), std::string::npos);
+      }
+      const auto Unit = file(Stem + ".c");
+      write(Unit, Source);
+      retain(Stem + ".c", Source);
+      for (const char *Opt : {"-O0", "-O2"}) {
+        const auto Output = file(Stem + Opt + ".o");
+        const auto Built = command(Compiler, {Opt, "-c", Unit, "-o", Output});
+        ASSERT_EQ(Built.Status, 0) << Built.Error << Source;
+        checkObject(contents(Output), E.Id);
+        retainFile(Stem + Opt + ".o", Output);
+      }
     }
 }
+
+// Give each instruction/form its own ordinary CTest deadline while retaining
+// all ten compilation profiles and the stable probe number used by the guest.
+INSTANTIATE_TEST_SUITE_P(
+    AllOperationsAndForms, X86ThreeDNowEmissionTest,
+    testing::Range(0u, unsigned(std::size(test::X86ThreeDNowEncodings) * 4)),
+    [](const testing::TestParamInfo<unsigned> &Info) {
+      const auto &E = test::X86ThreeDNowEncodings[Info.param / 4];
+      return std::string(x86ThreeDNowInstruction(E.Opcode)->Name) + "Form" +
+             std::to_string(Info.param % 4);
+    });
 } // namespace

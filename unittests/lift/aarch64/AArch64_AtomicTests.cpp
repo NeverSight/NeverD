@@ -130,6 +130,45 @@ TEST_F(AArch64_Atomic, HighCExclusiveOpsUseStandardBuiltinsAndCompile) {
   expectPairedClangSyntax(cFile, source);
 }
 
+// LLVM C writes the builtins HighC writes, where it called undeclared
+// `llvm_aarch64_ldxr_p0`-style functions, and they build back to the same
+// exclusive instructions.
+TEST_F(AArch64_Atomic, LLVMCExclusiveOpsUseStandardBuiltinsAndCompile) {
+  auto r = decompileToC(testObj());
+  ASSERT_EQ(r.exitCode, 0) << r.err;
+
+  auto cFile = tmpFile("decompiled.c");
+  std::ifstream input(cFile);
+  ASSERT_TRUE(input.good());
+  std::string source((std::istreambuf_iterator<char>(input)),
+                     std::istreambuf_iterator<char>());
+  EXPECT_EQ(source.find("llvm_aarch64_"), std::string::npos) << source;
+  EXPECT_EQ(source.find("neverd.not-decompiled"), std::string::npos) << source;
+  for (const char *Builtin :
+       {"__builtin_arm_ldrex((const volatile uint32_t *)",
+        "__builtin_arm_ldaex(", "__builtin_arm_strex(", "__builtin_arm_stlex(",
+        "__builtin_arm_clrex()",
+        "__builtin_arm_ldrex((const volatile __uint128_t *)"})
+    EXPECT_NE(source.find(Builtin), std::string::npos) << Builtin << "\n"
+                                                       << source;
+
+  const auto Assembly = tmpFile("exclusive-rebuilt.s");
+  auto Built = runHighCClang(cFile,
+                             {"-target", "aarch64-linux-gnu",
+                              "-march=armv9.4-a+lse128+the+d128+rcpc3",
+                              "-ffreestanding", "-std=gnu11"},
+                             {"-O2", "-S", "-o", Assembly.string()});
+  ASSERT_EQ(Built.exitCode, 0) << Built.err << "\n" << source;
+  std::ifstream Rebuilt(Assembly);
+  const std::string Text((std::istreambuf_iterator<char>(Rebuilt)),
+                         std::istreambuf_iterator<char>());
+  for (const char *Mnemonic :
+       {"ldxr", "ldaxr", "stxr", "stlxr", "ldxp", "stxp"})
+    EXPECT_NE(Text.find("\t" + std::string(Mnemonic) + "\t"), std::string::npos)
+        << Mnemonic << "\n"
+        << Text;
+}
+
 TEST_F(AArch64_Atomic, BarrierLifted) {
   auto r = liftToLowIR(testObj());
   ASSERT_EQ(r.exitCode, 0);
@@ -716,6 +755,86 @@ TEST_F(AArch64_Atomic, CasAndCaspHighCUseStandardCompareExchangeAndCompile) {
       std::string::npos);
 
   expectPairedClangSyntax(cFile, source);
+}
+
+// LLVM C writes CASP's pair through the 16-byte builtin, as HighC does,
+// instead of leaving the definitions out, and the C builds back to the same
+// instructions.
+TEST_F(AArch64_Atomic, CaspLLVMCUsesStandardCompareExchangeAndCompiles) {
+  if (!hasCrossTargetClang())
+    GTEST_SKIP() << "assembling AArch64 requires Clang";
+  constexpr const char *Mnemonics[] = {"casp", "caspa", "caspal", "caspl"};
+  const auto Assembly = tmpFile("casp.s");
+  const auto Object = tmpFile("casp.o");
+  {
+    std::ofstream Out(Assembly);
+    Out << ".text\n";
+    for (const char *Mnemonic : Mnemonics)
+      Out << ".globl test_" << Mnemonic << "\n.type test_" << Mnemonic
+          << ",%function\ntest_" << Mnemonic << ":\n"
+          << "  mov x10, x0\n  mov x6, x1\n  mov x7, x2\n  mov x8, x3\n"
+          << "  mov x9, x4\n  " << Mnemonic << " x6, x7, x8, x9, [x10]\n"
+          << "  mov x0, x6\n  mov x1, x7\n  ret\n.size test_" << Mnemonic
+          << ",.-test_" << Mnemonic << "\n";
+  }
+  const auto Assembled =
+      exec(NEVERD_TEST_CLANG,
+           {"-target", "aarch64-linux-gnu", "-march=armv8.1-a+lse", "-c",
+            Assembly.string(), "-o", Object.string()});
+  ASSERT_EQ(Assembled.exitCode, 0) << Assembled.err;
+  auto r = decompileToC(Object);
+  ASSERT_EQ(r.exitCode, 0) << r.err;
+
+  auto cFile = tmpFile("decompiled.c");
+  std::ifstream input(cFile);
+  ASSERT_TRUE(input.good());
+  std::string source((std::istreambuf_iterator<char>(input)),
+                     std::istreambuf_iterator<char>());
+  EXPECT_EQ(source.find("neverd.not-decompiled"), std::string::npos) << source;
+
+  // The unit declares each function before it defines it.
+  const auto Definition = [&](const std::string &Name) -> std::string {
+    for (size_t Pos = source.find(" " + Name + "("); Pos != std::string::npos;
+         Pos = source.find(" " + Name + "(", Pos + 1)) {
+      const auto Line = source.find('\n', Pos);
+      if (Line == std::string::npos || source[Line - 1] != '{')
+        continue;
+      const auto End = source.find("\n}", Line);
+      if (End == std::string::npos)
+        return {};
+      return source.substr(Pos, End + 2 - Pos);
+    }
+    return {};
+  };
+  const char *Orders[] = {"__ATOMIC_RELAXED, __ATOMIC_RELAXED",
+                          "__ATOMIC_ACQUIRE, __ATOMIC_ACQUIRE",
+                          "__ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE",
+                          "__ATOMIC_RELEASE, __ATOMIC_RELAXED"};
+  for (size_t I = 0; I != std::size(Mnemonics); ++I) {
+    SCOPED_TRACE(Mnemonics[I]);
+    const auto F = Definition(std::string("test_") + Mnemonics[I]);
+    ASSERT_FALSE(F.empty()) << source;
+    EXPECT_EQ(
+        llvm::StringRef(F).count("__atomic_compare_exchange_n((__uint128_t *)"),
+        1u)
+        << F;
+    EXPECT_NE(F.find(Orders[I]), std::string::npos) << F;
+  }
+
+  const auto Rebuilt = tmpFile("casp-rebuilt.s");
+  auto Built =
+      runHighCClang(cFile,
+                    {"-target", "aarch64-linux-gnu", "-march=armv8.1-a+lse",
+                     "-ffreestanding", "-std=gnu11"},
+                    {"-O2", "-S", "-o", Rebuilt.string()});
+  ASSERT_EQ(Built.exitCode, 0) << Built.err << "\n" << source;
+  std::ifstream RebuiltInput(Rebuilt);
+  const std::string Text((std::istreambuf_iterator<char>(RebuiltInput)),
+                         std::istreambuf_iterator<char>());
+  for (const char *Mnemonic : Mnemonics)
+    EXPECT_NE(Text.find("\t" + std::string(Mnemonic) + "\t"), std::string::npos)
+        << Mnemonic << "\n"
+        << Text;
 }
 
 TEST_F(AArch64_Atomic, LdiappUsesOneAcquireI128LoadAndKeepsHighHalf) {

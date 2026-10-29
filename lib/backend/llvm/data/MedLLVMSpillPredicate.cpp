@@ -17,6 +17,7 @@
 #include "neverd/backend/Limits.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/ir/TargetRegInfo.h"
+#include "neverd/ir/med/X86/X86RepAddresses.h"
 #include "neverd/object/SectionNames.h"
 
 #define DEBUG_TYPE "neverd-med-llvm-global-data"
@@ -1621,6 +1622,9 @@ std::optional<uint64_t> MedLLVMEmitter::traceValueVA(const MedVar &V,
     const MedOp *Def = lookupDef(Cur);
     if (Def) {
       switch (Def->Opcode) {
+      case NdOp::INTRINSIC:
+        Result = x86RepConstantAddressOutput(*Def, Cur, TargetArch);
+        break;
       case NdOp::COPY:
       case NdOp::INT_ZEXT:
         if (Def->NumInputs >= 1)

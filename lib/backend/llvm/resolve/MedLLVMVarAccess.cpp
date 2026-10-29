@@ -23,6 +23,8 @@
 #include "neverd/backend/Limits.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/ir/TargetRegInfo.h"
+#include "neverd/ir/med/X86/X86RepAddresses.h"
+#include "neverd/ir/med/X86/X87ControlWord.h"
 #include "neverd/support/Diagnostic.h"
 
 #include "llvm/ADT/StringExtras.h"
@@ -89,9 +91,15 @@ void MedLLVMEmitter::ensureDefPhiIndex() const {
   // linear scans' "return the first match" behavior.
   for (const MedBlock &Blk : CurMedFunc->Blocks) {
     UniqueBlockIds &= UniqueBlockIndex.emplace(Blk.Id, &Blk).second;
-    for (const MedOp &Op : Blk.Ops)
+    for (const MedOp &Op : Blk.Ops) {
       if (!Op.Output.isConst())
         DefIndex.try_emplace(medVarDefKey(Op.Output), &Op);
+      // A bounded REP's second address is an actual SSA definition too. Only
+      // index the address result this owner can prove, not its count/flags.
+      for (const MedVar &Output : Op.IntrinsicOutputs)
+        if (x86RepConstantAddressOutput(Op, Output, TargetArch))
+          DefIndex.try_emplace(medVarDefKey(Output), &Op);
+    }
     for (const PhiNode &P : Blk.Phis) {
       PhiBlocks.try_emplace(&P, &Blk);
       if (!P.Output.isConst())
@@ -1422,11 +1430,18 @@ llvm::Value *MedLLVMEmitter::getVar(const MedVar &V,
   llvm::IRBuilder<> AllocBuilder(&Entry, Entry.begin());
   auto *Ty = sizeToType(V.Size);
   auto *Alloca = AllocBuilder.CreateAlloca(Ty, nullptr, V.display());
-  llvm::Value *Initial =
-      PreserveUnknownSourceValues
-          ? llvm_source_unknown::createEntrySeed(
-                AllocBuilder, llvm::cast<llvm::IntegerType>(Ty))
-          : llvm::ConstantInt::get(Ty, 0);
+  // The x87 control word the function entered with is still the unit's until
+  // the function writes one: source output reads it back, as HighC does,
+  // rather than leaving it unavailable.  Native output keeps its own entry
+  // contract.
+  llvm::Value *Initial = nullptr;
+  if (!PreserveUnknownSourceValues)
+    Initial = llvm::ConstantInt::get(Ty, 0);
+  else if (isX87ControlWord(TargetArch, V))
+    Initial = emitX87ControlRead(AllocBuilder);
+  else
+    Initial = llvm_source_unknown::createEntrySeed(
+        AllocBuilder, llvm::cast<llvm::IntegerType>(Ty));
   AllocBuilder.CreateStore(Initial, Alloca);
   VarAllocs[Key] = Alloca;
   return Builder.CreateLoad(Ty, Alloca, V.display() + "_v");

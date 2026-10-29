@@ -1,0 +1,293 @@
+{
+  "qualification_driver": {
+    "path": "run-final-neverd.py",
+    "sha256": "fc12bfa386309734d2ee7f3ad13290ac7561b83bf4e2290b883564be134c2b3a"
+  },
+  "scope": "Native x87 FNSTENV/FLDENV/FNSAVE/FRSTOR image formats, NeverC builtins and NeverD projections",
+  "goal_complete": false,
+  "validation_complete": true,
+  "artifact_set": "neverd-x87-environment-20261028",
+  "sources": {
+    "llvm": "f35c3ce214cd0bb12849ea46fdb826864444786b",
+    "neverc": "5382a3f7f8aaebb26cf04f2f53f217e456ad0bc5",
+    "neverd_feature": "02adae41c2dd9269b559ef70dfa5d65ed9144d9a",
+    "neverd_tested": "fd261b092bc2ccf324f130f3b8e8f166e94654ae",
+    "integrated_upstream": "52d4c2a59cc87a9006d474376f6692cf24d639a1",
+    "manifests": [
+      {
+        "path": "llvm-published-source.json",
+        "sha256": "63c49b91ebdaa98738a59faab2ca9d9fb5a859d17290049eacdd5714e391a5a0"
+      },
+      {
+        "path": "neverc-published-source.json",
+        "sha256": "d8061a144fc271c65b65e4895b0ad17f269a03a243ff8a7d5e248991a770d3fc"
+      },
+      {
+        "path": "neverd-final-source.json",
+        "sha256": "67600fd13428ee4cf0e34b60e7e038fe8d55984920b1a3fd214723a4f25d0c80"
+      }
+    ],
+    "production_sdk": "neverd-llvm-v23.0.0-r6",
+    "production_sdk_commit": "06788fb19109851e6a6b9f109a2b8027a606f0c6",
+    "production_llvm_gitlink": "03270359c2ed8f6806533d3832a947bf883a6f69",
+    "release_and_pins_changed": false
+  },
+  "contract": {
+    "interfaces": {
+      "llvm.x86.fnstenv16": {
+        "bytes": 14,
+        "loads_image": false,
+        "replaces_bank": false
+      },
+      "llvm.x86.fnstenv32": {
+        "bytes": 28,
+        "loads_image": false,
+        "replaces_bank": false
+      },
+      "llvm.x86.fldenv16": {
+        "bytes": 14,
+        "loads_image": true,
+        "replaces_bank": true
+      },
+      "llvm.x86.fldenv32": {
+        "bytes": 28,
+        "loads_image": true,
+        "replaces_bank": true
+      },
+      "llvm.x86.fnsave16": {
+        "bytes": 94,
+        "loads_image": false,
+        "replaces_bank": true
+      },
+      "llvm.x86.fnsave32": {
+        "bytes": 108,
+        "loads_image": false,
+        "replaces_bank": true
+      },
+      "llvm.x86.frstor16": {
+        "bytes": 94,
+        "loads_image": true,
+        "replaces_bank": true
+      },
+      "llvm.x86.frstor32": {
+        "bytes": 108,
+        "loads_image": true,
+        "replaces_bank": true
+      }
+    },
+    "llvm_signature": "void (ptr), flat address space, volatile exact-sized memory and byte alignment",
+    "neverc_signature": "void __builtin_ia32_<operation><format>(void *); restores take const void *",
+    "effects": "All forms are scheduling boundaries. FNSTENV masks exceptions; FNSAVE also initializes the FPU. Loads check incoming pending exceptions before the memory read and defer newly loaded exceptions until a waiting instruction. TOP/tag/payload replacement invalidates compiler FP/ST/MMX values.",
+    "neverd": "Four append-only operand16 identities fix discarded short formats. Native LLVM calls and old-SDK assembly share image/effect ownership; both C routes share builtin selection and preserve FS/GS in assembly. Owned restore/operation/save remains one atomic context boundary."
+  },
+  "compiler_validation": {
+    "llvm": {
+      "path": "llvm-regression.log",
+      "sha256": "74db3bfbb01bbaf3a6d5f1e5ab54bc1f1699780b38f851e35f07dc086f3f2b61",
+      "tests": 43,
+      "passed": 43,
+      "failed": 0
+    },
+    "neverc_frontend": {
+      "path": "neverc-frontend.xml",
+      "sha256": "286642e7ef15d4fe8954135703797b79a8f236c01271b922eb1961667ab3ce6e",
+      "tests": 115,
+      "passed": 115,
+      "failed": 0,
+      "skipped": []
+    },
+    "neverc_backend": {
+      "path": "neverc-backend.xml",
+      "sha256": "c0af04e86fd4daac73fd302809e7c00ec546185131cc2e8d287be728ab409777",
+      "tests": 7,
+      "passed": 7,
+      "failed": 0,
+      "skipped": []
+    },
+    "neverc_commands": {
+      "path": "neverc-validation-commands.json",
+      "sha256": "4cf0fd769af8f7efb7533e65847a6b68f85805eb6eb8096e80a124c02e7fc0f9"
+    },
+    "generator_tests": {
+      "path": "generators.log",
+      "sha256": "6cbc3bbbcdbf87afb9d888b0987e8d1cc8f64b00f2bdf3a00db75b73cd701ffa",
+      "passed": 60
+    },
+    "synchronization": {
+      "path": "all-generator-checks.json",
+      "sha256": "01f8df6d9ba9e07fd5cd718ab8e06cbf2e063827d1c8e54c6508826b0c908aa4",
+      "passed": 16
+    },
+    "documentation": [
+      {
+        "path": "neverc-docs-links-final.log",
+        "sha256": "125529d1a9a46607a5341c15e641a1b96abdc6af34c1749b990638171483521f"
+      },
+      {
+        "path": "neverc-docs-facts-final.log",
+        "sha256": "c301ac6b3b5369439af026074cbb2a50ec8c8bf63d8cc21e3aceaf5b03e10d52"
+      },
+      {
+        "path": "neverc-docs-layout-final.log",
+        "sha256": "6042241faf6d6dc85ca8ad6eda1c486a62a7a704b17a98d67330ab7e96bbf7c6"
+      }
+    ]
+  },
+  "native_compiler_qualification": {
+    "path": "compilers-qualified/qualification.json",
+    "sha256": "0b40a5bded183060438870f086861e1beb1ce2e6925b02ee39a96e2b1ecf8e86",
+    "audit": {
+      "path": "compilers-qualified-audit.json",
+      "sha256": "0bf8489c02dd1d03b34eface82e167b59b10ecc00de80d299d8ea6d8108492ec"
+    },
+    "profiles": 6,
+    "totals": {
+      "state_observations": 55296,
+      "fault_observations": 480,
+      "fault_and_nonfault_cases": 624,
+      "boundary_observations": 96,
+      "live_value_cases": 3072
+    },
+    "manifest_files_rehashed": 63,
+    "same_observation_stream": "50b0bad414d983a0c71ea97f4d7e9b10fa2161f0947b040ecd7a236093ca3c20",
+    "host": "Intel Core i9-13900H, Linux x64",
+    "reference": "Intel SDM 325462, Vol. 1 section 8.7.1 and Vol. 2A: FLDENV, FRSTOR, FSAVE/FNSAVE, FSTENV/FNSTENV. https://cdrdv2-public.intel.com/835781/325462-sdm-vol-1-2abcd-3abcd-4.pdf",
+    "oracle_negative_controls": {
+      "path": "oracle-negative-controls.json",
+      "sha256": "6d831496b81d69e296bba2d63cdc13cfd5b25cae6f5bdda5e7f85655e8562425",
+      "scope": "Oracle-only preflight before deferred-exception cases were added; no compiler qualification",
+      "rejected": 3
+    },
+    "rexw_preflight": {
+      "path": "rexw-env-preflight.json",
+      "sha256": "c1e6c9e42b2c7c627eac4e4e971985653eb2c985d031880fe4902bae75cb28fd",
+      "scope": "Original FNSTENV with both 66 and REX.W writes the 28-byte format on this host"
+    }
+  },
+  "neverd_validation": {
+    "environment_path_base": "NEVERD_TEST_NEVERC is relative to the NeverC checkout at sources.neverc; machine-local build prefixes are omitted.",
+    "pinned": {
+      "commands": {
+        "path": "neverd-pinned-final-commands.json",
+        "sha256": "7eb233e335f6bc82d0249737a2988a4ffca1e1b39e388510b382b842458213cb"
+      },
+      "environment": {
+        "NEVERD_TEST_NEVERC": "build-neverc/bin/neverc",
+        "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "pinned-final-artifacts",
+        "NEVERD_REP_EXPORT_DIR": "pinned-final-rep-artifacts"
+      },
+      "build": {
+        "path": "neverd-pinned-final-build.log",
+        "sha256": "e87c242399929a29f76586e19282eb048c60950769557d6194c6e606341d1ea5"
+      },
+      "receipt": {
+        "path": "neverd-pinned-final-build-receipt.json",
+        "sha256": "45dd44246a4f63c1aa7698e3dffe99b289b5c72aa8d1473908f1763238b3987e"
+      },
+      "dependencies": {
+        "path": "neverd-pinned-final-dependency-inputs.json",
+        "sha256": "0d185e80e033e56c739f8efa6c9652c56f7005bd399558403138262879bfc48c"
+      },
+      "tests": {
+        "path": "neverd-pinned-final-tests.xml",
+        "sha256": "e729ca827fc0c84ae30598876be2a513af6b0ad117363acf0defeab0f0775bef",
+        "tests": 349,
+        "passed": 348,
+        "failed": 0,
+        "skipped": [
+          "X86RepState.NativeContractsRejectWrongModeEffectsAndControls"
+        ]
+      },
+      "native_c_ir": {
+        "path": "pinned-native-c-ir/audit.json",
+        "sha256": "73bf9d0ff47aebc16ca36eb5bceaa32361e82ca6519b1fbcdfa611e9afe3a022"
+      },
+      "new_environment_coverage": {
+        "decoder_combinations": 144,
+        "segment_overrides": 16,
+        "segment_c_routes": 2,
+        "c_execution_profiles": 8,
+        "c_route_comparisons_with_original": 3072,
+        "host_fixture_compile_profiles": 4,
+        "host_fixture_state_interfaces": 15,
+        "native_c_ir_profiles": 4,
+        "native_intrinsic_functions_per_ir_profile": 16,
+        "malformed_native_state_variants": 344
+      }
+    },
+    "native": {
+      "commands": {
+        "path": "neverd-native-final-commands.json",
+        "sha256": "0981e109d3ad2debcedacfed73b51ad9f378a8f88d0cc737b6e8e31cd40baed6"
+      },
+      "environment": {
+        "NEVERD_TEST_NEVERC": "build-neverc/bin/neverc",
+        "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "native-final-artifacts",
+        "NEVERD_REP_EXPORT_DIR": "native-final-rep-artifacts"
+      },
+      "build": {
+        "path": "neverd-native-final-build.log",
+        "sha256": "6e46b1062779d09945647a0c0b4a7c04930d09ecaf0c586c3b26ed978c3d0ce0"
+      },
+      "receipt": {
+        "path": "neverd-native-final-build-receipt.json",
+        "sha256": "9d6920d3da6c97552d95f4d50de00cec6a28ee0840f57db9d3b1b1a9f731b5ef"
+      },
+      "dependencies": {
+        "path": "neverd-native-final-dependency-inputs.json",
+        "sha256": "0d185e80e033e56c739f8efa6c9652c56f7005bd399558403138262879bfc48c"
+      },
+      "tests": {
+        "path": "neverd-native-final-tests.xml",
+        "sha256": "ac0ff645c99c014923333bad38d6d29894e10a7fe525b3ccbcbd8d7785be5263",
+        "tests": 347,
+        "passed": 347,
+        "failed": 0,
+        "skipped": []
+      },
+      "native_c_ir": {
+        "path": "native-native-c-ir/audit.json",
+        "sha256": "d24cfc52af0f22045071f7350db64961655b41869dee13249df26a2841c29c4c"
+      },
+      "new_environment_coverage": {
+        "decoder_combinations": 144,
+        "segment_overrides": 16,
+        "segment_c_routes": 2,
+        "c_execution_profiles": 8,
+        "c_route_comparisons_with_original": 3072,
+        "host_fixture_compile_profiles": 4,
+        "host_fixture_state_interfaces": 15,
+        "native_c_ir_profiles": 4,
+        "native_intrinsic_functions_per_ir_profile": 16,
+        "malformed_native_state_variants": 344
+      }
+    }
+  },
+  "host_fixture_compatibility": {
+    "initial_failure": {
+      "path": "neverd-native-integrated-tests.xml",
+      "sha256": "4644c2923dfc5432cd8d4db07e62e77cad0b8313438fce0a259949ebe38fe835"
+    },
+    "failed_cases": 11,
+    "cause": "Stock host Clang did not register the fork state APIs and emitted undefined external symbols.",
+    "fix": "Adapt only cloned source-oracle fixtures with the shared instruction/effect contract; preserve production native IR. Direct native compiler qualification is separate.",
+    "focused_regression": {
+      "path": "neverd-host-adapter-focused.xml",
+      "sha256": "4e0255d8245fc39950f24faa885a0437868176a373a27c5e1e7ef6a6a3b88e6c",
+      "tests": 2,
+      "passed": 2,
+      "failed": 0,
+      "skipped": []
+    }
+  },
+  "sdk_profile_difference": "Two Unicorn reference tests are registered only in the pinned profile; the r6 REP-native-contract case is an expected skip.",
+  "exclusions": [
+    "All x86 instructions and complete machine-state/continuation contracts",
+    "Other CPU models, historical processors and operating systems",
+    "i386 runtime for these APIs; i386 object generation is tested",
+    "Privileged #NM and alignment-check exception delivery",
+    "Code16 operation and non-flat descriptor environments",
+    "General opaque x87 context equivalence, including fault-PC equivalence",
+    "Elimination of owned atomic restore/step/save assembly"
+  ]
+}

@@ -632,6 +632,20 @@ struct BinaryImage {
   /// objects by ObjectExterns. Their extern storage is not executable code or
   /// an IAT pointer slot, but a relocated direct branch may tail-call them.
   std::set<va_t> ObjectExternFunctionEntries;
+  /// An undefined data symbol of a relocatable object, whose storage
+  /// ObjectExterns places in the `extern` segment.  Another module defines
+  /// it, so the object neither owns nor sizes it; Bytes is the room kept past
+  /// its address for the offsets the object's relocations reach.
+  struct ObjectExternData {
+    std::string Name;
+    uint64_t Bytes = 0;
+    bool operator==(const ObjectExternData &) const = default;
+  };
+  /// Each such symbol, by the address ObjectExterns gives it.
+  std::map<va_t, ObjectExternData> ObjectExternDataSymbols;
+  /// The pointer cells (ELF and Mach-O GOT entries) holding such a symbol's
+  /// address, by cell address: the symbol's name.
+  std::map<va_t, std::string> ObjectExternDataCells;
   /// Half-open executable intervals occupied by linker/dynamic-loader import
   /// machinery whose individual entries may not be recoverable (ELF PLT
   /// families, Mach-O symbol stubs and stub helper).
@@ -683,6 +697,11 @@ struct BinaryImage {
   /// produced the objects the linker combined.  Empty for other formats and
   /// for images a non-Microsoft linker produced.
   std::optional<RichHeader> COFFRichHeader;
+  /// The header bytes a linked PE image's loader maps at Base: SizeOfHeaders,
+  /// up to the first section that maps over them, whether or not this image
+  /// maps them as `<PE headers>`.  Zero for every other image, and for one
+  /// without a nonzero 64 KiB-aligned base (imageBaseOffset).
+  uint32_t PEHeaderBytes = 0;
   /// Checked, normalized table-based unwind and language exception metadata.
   /// Empty for formats/targets without a supported exception directory.
   ExceptionInfo ExceptionMetadata;
@@ -917,13 +936,41 @@ struct BinaryImage {
     return !segmentHasReadableSectionMetadata(*Seg) && !Seg->isExecutable();
   }
 
+  /// The offset of \p Addr into the image's own PE headers
+  /// ([Base, Base + PEHeaderBytes)), mapped or not.  The linker's
+  /// `__ImageBase` names these bytes: an emitter spells such an address from
+  /// it and never copies or folds a header byte, since the headers describe
+  /// the image that runs.  A base of zero would make every small number a
+  /// header address, so such an image records no headers.
+  std::optional<uint64_t> imageBaseOffset(va_t Addr) const {
+    if (!PEHeaderBytes || Addr < Base || Addr - Base >= PEHeaderBytes)
+      return std::nullopt;
+    return Addr - Base;
+  }
+
+  /// The undefined data symbol of a relocatable object whose extern storage
+  /// holds \p Addr (ObjectExternDataSymbols), and the offset of \p Addr into
+  /// it.  An emitter reaches such an address through the symbol's
+  /// declaration: the storage is another module's, never one to define or
+  /// copy.
+  std::optional<std::pair<const ObjectExternData *, uint64_t>>
+  objectExternDataAt(va_t Addr) const {
+    auto It = ObjectExternDataSymbols.upper_bound(Addr);
+    if (It == ObjectExternDataSymbols.begin())
+      return std::nullopt;
+    --It;
+    if (Addr - It->first >= It->second.Bytes)
+      return std::nullopt;
+    return std::pair(&It->second, Addr - It->first);
+  }
+
   /// Loader/layout-only upper bound for constants whose numeric value may
   /// change when the image is rebuilt.  This deliberately ignores use-site
   /// heuristics: callers may conservatively retain arithmetic or CFG edges,
   /// but must never freeze a relation between two independently emitted
   /// symbols.  Keeping this fact on BinaryImage gives every format and every
   /// semantic stage one owner for mapped, anchored, relocation-proven, and
-  /// one-past-end address candidates.
+  /// one-past-end address candidates, and for the image's own headers.
   bool isPotentiallyRelocatableAddress(va_t Addr) const {
     const bool LoaderProven = RelocDataAddrs.count(Addr) != 0 ||
                               WritableRelocDataAddrs.count(Addr) != 0 ||
@@ -938,6 +985,10 @@ struct BinaryImage {
     // all ordinary zero arithmetic in that object.
     if (Addr == 0)
       return false;
+
+    // The headers move with the image whether or not the loader maps them.
+    if (imageBaseOffset(Addr))
+      return true;
 
     if (const Segment *Seg = getSegmentFor(Addr))
       return Seg->isReadable();
@@ -1002,10 +1053,8 @@ struct BinaryImage {
   /// Whether the \p Width bytes at \p Addr keep, once loading is done, what
   /// the loader left there: they lie in a read-only segment, in one the
   /// format makes read-only once relocated (Segment::ReadOnlyAfterRelocations),
-  /// in a segment or section of relocated constants (`.data.rel.ro`,
-  /// `__DATA_CONST`), or in a range ELF's PT_GNU_RELRO covers.  A linked
-  /// ELF's load segment holds sections of both kinds, so its name says
-  /// nothing of the bytes.
+  /// or in a range a linked ELF's PT_GNU_RELRO covers. Segment and section
+  /// names alone never establish immutability.
   bool readOnlyAfterRelocations(va_t Addr, uint64_t Width) const;
 
   /// Return the mapped format-native section that owns \p Addr.
@@ -1058,7 +1107,9 @@ struct BinaryImage {
                   ? TargetVA < End && hasExecutableCodeOwnerAt(TargetVA, Index)
                   : TargetVA <= End);
     }
-    return false;
+    // Unmapped headers own their addresses as `<PE headers>` does.
+    return PEHeaderBytes && OwnerVA == Base && TargetVA >= Base &&
+           TargetVA - Base <= PEHeaderBytes;
   }
 
   /// The owner of an address the image computes from its own fixed layout,

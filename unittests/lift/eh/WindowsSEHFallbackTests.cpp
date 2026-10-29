@@ -9,6 +9,7 @@
 
 #include "gtest/gtest.h"
 
+#include "neverd/backend/c/CSourceMap.h"
 #include "neverd/backend/c/HighC/HighCEmitter.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/high/MedToHigh.h"
@@ -186,6 +187,61 @@ TEST(WindowsSEHFallback, AUnitLeavesOutOnlyTheDefinitionItCannotWrite) {
           << Source;
     // Without the list, the first definition that fails fails the unit.
     Options.RefusedDefinitions = nullptr;
+    std::string Unit;
+    llvm::raw_string_ostream UnitOS(Unit);
+    EXPECT_THROW(HighCEmitter().emit(Functions, UnitOS, Options),
+                 std::invalid_argument);
+  }
+}
+
+TEST(WindowsSEHFallback, AUnitLeavesOutADefinitionWhoseRequirementsFail) {
+  std::vector<HighFunc> Functions;
+  for (size_t I = 0; I < 4; ++I) {
+    Functions.push_back(fallbackFunction());
+    Functions.back().Name = "native_seh_" + std::to_string(I);
+    Functions.back().Entry = 0x1000 + 0x1000 * I;
+  }
+  // The second one's C cannot be written; x86 C cannot meet the third one's
+  // requirements, which are checked before anything is rendered.
+  Functions[1].Body.front().EHClauseBodies.front() =
+      Functions[1].Body.front().Body;
+  Functions[2].ReturnProtection.emplace();
+  // As a whole unit is written without a C++ dialect.
+  CEmitterOptions Options;
+  Options.EmitIncludes = false;
+  Options.StructuredExceptionSyntax = false;
+  Options.TheArch = Arch::X86;
+  Options.Format = BinaryFormat::COFF;
+  std::vector<CEmitterOptions::RefusedDefinition> Refused;
+  Options.RefusedDefinitions = &Refused;
+  std::string Source;
+  llvm::raw_string_ostream OS(Source);
+  ASSERT_TRUE(HighCEmitter().emit(Functions, OS, Options));
+  ASSERT_EQ(Refused.size(), 2u) << Source;
+  EXPECT_EQ(Refused[0].Entry, Functions[2].Entry);
+  EXPECT_EQ(Refused[0].Name, Functions[2].Name);
+  EXPECT_EQ(Refused[0].Reason,
+            "AArch64 return protection requires AArch64 source emission");
+  EXPECT_EQ(Refused[1].Entry, Functions[1].Entry);
+  EXPECT_EQ(Refused[1].Reason,
+            "unstructured SEH view requires the original native handler "
+            "body");
+  for (size_t I = 0; I < Functions.size(); ++I)
+    EXPECT_EQ(Source.find(Functions[I].Name + "(void) {") != std::string::npos,
+              I == 0 || I == 3)
+        << Functions[I].Name << "\n"
+        << Source;
+  // No rendering reads the function whose requirements failed.
+  EXPECT_EQ(Source.find(Functions[2].Name), std::string::npos) << Source;
+  // Without the list, with source names, or with structured exception
+  // syntax, which writes funclets inside their parents, the requirements fail
+  // the unit.
+  for (unsigned Variant = 0; Variant != 3; ++Variant) {
+    SCOPED_TRACE(Variant);
+    std::vector<CSourceName> SourceNames;
+    Options.RefusedDefinitions = Variant ? &Refused : nullptr;
+    Options.SourceNames = Variant == 1 ? &SourceNames : nullptr;
+    Options.StructuredExceptionSyntax = Variant == 2;
     std::string Unit;
     llvm::raw_string_ostream UnitOS(Unit);
     EXPECT_THROW(HighCEmitter().emit(Functions, UnitOS, Options),

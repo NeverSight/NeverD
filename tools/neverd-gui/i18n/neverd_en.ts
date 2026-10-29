@@ -6863,6 +6863,14 @@ Reference identities: unresolved. Some call or data targets cannot be compared. 
         <translation>
 Reference identities: unresolved. Some call or data targets cannot be compared. This alone does not establish a change.</translation>
     </message>
+    <message>
+        <source>Include matched calls</source>
+        <translation>Include matched calls</translation>
+    </message>
+    <message>
+        <source>Extend shared regions across direct calls whose targets are paired. Results depend on the current function pairs and are recomputed when pairs change. This does not validate call behavior.</source>
+        <translation>Extend shared regions across direct calls whose targets are paired. Results depend on the current function pairs and are recomputed when pairs change. This does not validate call behavior.</translation>
+    </message>
 </context>
 <context>
     <name>neverd::gui::ComparisonFlowDialog</name>
@@ -8015,6 +8023,30 @@ External input producers are not compared or counted as shared code.</translatio
 SSA recipe: %1</source>
         <translation>
 SSA recipe: %1</translation>
+    </message>
+    <message>
+        <source>
+Calls use current function pairs; behavior is not validated.</source>
+        <translation>
+Calls use current function pairs; behavior is not validated.</translation>
+    </message>
+    <message>
+        <source>Call context…</source>
+        <translation>Call context…</translation>
+    </message>
+    <message>
+        <source>Primary</source>
+        <translation>Primary</translation>
+    </message>
+    <message>
+        <source>Secondary</source>
+        <translation>Secondary</translation>
+    </message>
+    <message>
+        <source>%1 primary / %2 secondary functions · %3 shared spans
+Coverage: %4% / %5% of eligible instructions, including paired direct calls. Function pairs condition this evidence; behavior is not validated.</source>
+        <translation>%1 primary / %2 secondary functions · %3 shared spans
+Coverage: %4% / %5% of eligible instructions, including paired direct calls. Function pairs condition this evidence; behavior is not validated.</translation>
     </message>
 </context>
 <context>
@@ -9560,6 +9592,18 @@ Ambiguities and manual decisions remain report-local. Region hypotheses retain t
     <message>
         <source>Releases</source>
         <translation>Releases</translation>
+    </message>
+    <message>
+        <source>Calls in these saved spans rely on the source report's function pairs. They do not prove equivalent callee behavior.</source>
+        <translation>Calls in these saved spans rely on the source report's function pairs. They do not prove equivalent callee behavior.</translation>
+    </message>
+    <message>
+        <source>All native spans</source>
+        <translation>All native spans</translation>
+    </message>
+    <message>
+        <source>All SSA spans</source>
+        <translation>All SSA spans</translation>
     </message>
 </context>
 <context>

@@ -169,19 +169,56 @@ verified `0f 01 de` instruction; they do not execute SKINIT or qualify reset,
 attestation, successful launch or architectural faults. Global completion and
 the later LLVM release/SDK/gitlink update remain separate work.
 
+## Native far-pointer compiler interfaces
+
+The LLVM fork provides `llvm.x86.lds16/32`, `llvm.x86.les16/32` and
+`llvm.x86.lfs16/32/64`, `llvm.x86.lgs16/32/64`, `llvm.x86.lss16/32/64`.
+Each takes a packed pointer image and returns its integer offset only after the
+native instruction completes. One instruction owns the 4/6/10-byte image read,
+selector validation, hidden segment installation and descriptor accessed-bit
+effects. Unknown descriptor reads/writes remain separate from the exact image
+read. Segment definitions and scheduling boundaries retain the state change;
+unused integer results do not remove it. NeverC exposes the nine valid long-mode
+`__builtin_ia32_lfs*`, `__builtin_ia32_lgs*` and `__builtin_ia32_lss*` spellings
+without inline assembly. LDS/LES require 32-bit code; 64-bit results require long
+mode, and code16 is explicitly refused.
+
+The selected segment remains ambient CPU state. Callers must maintain compiler
+ABI invariants, including TLS and the stack. The interface does not carry an
+original instruction's source segment, address-size/default-stack provenance,
+or an owned continuation. LSS's interrupt/debug inhibition applies to the next
+compiler-selected instruction. Consequently, NeverD still refuses far-pointer
+lifting in both policies until its GPR, selector, hidden descriptor and
+continuation have one complete state owner.
+
+Compiler checks cover both code modes, ELF/COFF/Mach-O, O0/O2, exact memory
+extents, segment effects, malformed signatures and invalid mode diagnostics.
+Six Linux x64 execution profiles compare LLVM, NeverC and NeverC IR through LLVM
+against original bytes. Each checks 4,320 paired state observations, 18 exact
+page boundaries and 186 faults. Faults retain the destination and all other
+GPRs, arithmetic flags/DF, selectors and FS/GS bases; page faults also check CR2.
+The 1,440 null-selector observations use the immediate debugger stop because a
+retained host reproduction shows Linux SIGTRAP return clearing selectors 1..3.
+They qualify the instruction result before return to userspace, without
+claiming post-interrupt continuation. No failing sample is retried or counted
+as passed. i386 execution, privileged descriptor-page faults, alignment checks
+and the LSS interrupt/debug shadow remain unqualified. See the exact tools,
+sources, host diagnosis and results in
+[the qualification record](evidence/x86-far-pointer-native-2026-10-29.json).
+
 ## Known remaining gaps
 
 | Instructions or family | Missing contract |
 | --- | --- |
-| LDS, LES, LSS, LFS, LGS | Coupled GPR/segment-selector completion, hidden descriptor state and fault ordering. The former ordinary load/COPY approximation is now explicitly refused in both strict and permissive lifting. |
+| LDS, LES, LSS, LFS, LGS | LLVM now provides 13 native far-pointer load interfaces and NeverC exposes the nine valid long-mode builtins. NeverD still needs coupled GPR/selector completion, hidden descriptor state and original-instruction continuation. Native compiler support alone does not authorize strict or permissive lifting; both continue to refuse the former ordinary load/COPY approximation. |
 | Unowned and i386 3DNow! operations | All 24 operations now retain their original instruction inside the owned x64 MMX/x87 context, qualified below. Typed/unowned and i386 paths still require a state contract. Strict and portable concrete execution refuse processor-dependent values. Physical execution and pending-#MF/stack-#SS behavior remain unqualified. LLVM and NeverC provide the native packed-value interfaces. |
-| Unowned FNOP/EMMS/FEMMS | Waiting behavior and tag/payload transitions require an owned x87 context. Owned x64 paths now retain all three instructions, including FEMMS payload invalidation; typed/unowned and i386 paths still refuse rather than emit NOP. The explicit portable x87 profile does not admit MMX resets. |
+| Unowned FNOP/EMMS/FEMMS | Waiting behavior and tag/payload transitions require an owned x87 context. Owned x64 native and explicit portable paths retain all three instructions, including FEMMS payload invalidation; typed/unowned and i386 paths still refuse rather than emit NOP. Portable MMX data operations remain outside the admitted profile. |
 | VMRUN | Complete guest/host transition, including guest-modified unsaved GPRs and floating/vector state, plus the VM-exit continuation. |
 | GETSEC transferring or unproved leaves | Measured-environment entry/exit and a complete-machine-state continuation. Leaves 0 and 6..8 now use the bounded contract below when natural-width AX is proven constant. |
 | ENCLU entry/exit/resume or unproved leaves | Enclave entry/exit/resume and asynchronous exit state. Leaves 0, 1 and 5..11 now use the bounded contract below when natural-width AX is proven constant. |
 | ERETS, ERETU, UIRET | Return-frame and nonlocal control-transfer ownership. FRED returns explicitly fail decoding instead of aliasing CLAC; UIRET is not decoded. |
-| RETF/RETFQ, IRET/IRETD/IRETQ | Complete frame, privilege, segment and flag restoration. The integrated `af8d5e86a5` change supplies terminal analysis intrinsics with explicit frame-cell operands; the named no-return calls do not implement native restoration or an executable continuation. |
-| SYSENTER, SYSEXIT/SYSEXITQ, SYSRET/SYSRETQ, RSM | Complete register, privilege, segment and SMM continuation state. Integrated `c464c93243` supplies terminal analysis intrinsics for SYSRET/SYSEXIT with explicit target state; their named no-return calls do not implement native restoration. SYSENTER and RSM remain refused. |
+| RETF/RETFQ, IRET/IRETD/IRETQ | Ordinary source still lacks complete frame, privilege, segment and flag restoration. The separate [explicit x64 continuation](x64-continuation-source.md) V6 profile owns successful IRETQ to long-mode CPL0..3, including hidden caches, descriptor accesses and NMI unblocking. It does not cover faulting execution, compatibility returns, CET/FRED or the other far-return forms. |
+| SYSENTER, SYSEXIT/SYSEXITQ, SYSRET/SYSRETQ, RSM | Ordinary source still lacks complete register, privilege, segment and SMM continuation state. The separate explicit x64 continuation V5/V6 profiles own successful SYSRETQ with STAR and CS/SS caches. Other forms and faulting transitions remain unqualified; SYSENTER and RSM remain refused. |
 | BNDMK, BNDMOV, BNDCL, BNDCU, BNDCN, BNDLDX, BNDSTX | MPX bounds-register bank, bounds-table translation, enable state and #BR/partial-fault behavior. The old COPY/NOP approximations are removed. |
 | XACQUIRE/XRELEASE | HLE prefix ownership belongs to the associated memory operation. Prefixed LOCK operations, implicit-lock XCHG and XRELEASE MOV stores are explicitly refused before ordinary memory lowering; native transactional completion remains missing. |
 | XBEGIN and full RTM regions | The two-exit lift retains rel16 and rel32 fallbacks at the full code width, with conditional EAX updates. The pinned decoder's i386 displacement-sign errors are normalized before CFG discovery. Full register/memory checkpoint, nesting, fallback faults and hardware rollback remain unqualified; a status result alone does not establish these contracts. |
@@ -711,8 +748,21 @@ registers and stack restoration. Each route also passes 524 Linux x64 native
 sigreturn comparisons and four unhandled-fault checks against independent
 INT 2C bytes. Both C routes retain two Microsoft assertion contracts through
 object emission. All 54 focused intrinsic/header tests and 81 binary
-regressions pass. This does not qualify privileged interrupt gates or an
-arbitrary handler's machine-state ABI.
+regressions pass. Those raw compiler-interface checks do not qualify privileged
+interrupt gates or an arbitrary handler's machine-state ABI.
+
+The separate [explicit x64 continuation](x64-continuation-source.md) V6 profile
+now owns canonical `INT3` and all 256 `INT imm8` vectors at CPL0. It reads the
+selected IDT gate, applies descriptor accessed-bit effects, writes the complete
+five-word stack frame and returns the handler state before executing it. The
+source uses explicit architectural state instead of an inferred service ABI,
+including vectors 0x29/0x2c/0x2d. Both C routes at O0/O2 compare 65,536 INT imm8
+state/RAM outcomes against original bytes on an independent KVM vCPU. The
+[qualification record](evidence/x86-software-interrupts-2026-10-29.json)
+binds these checks and 363 passing continuation, audit, export and proof
+regressions to the tested sources and dependency snapshots. This
+does not cover prefixed encodings, INT1, CPL3 entry, hardware exception error
+codes, fault delivery, CET/FRED or execution of an arbitrary handler.
 
 REP qualification adds 1,000 LLVM cases across both code modes and 544 cases
 on each NeverC builtin spelling and the NeverC-to-fork route. MOVS/STOS execute
@@ -1221,12 +1271,12 @@ qualified by the compiler fork's CPL0 QEMU fixtures, not physical hardware.
 Build these targets in a configured test build (see [testing.md](testing.md)):
 
 ```sh
-cmake --build build-x86 --target \
+python3 scripts/build.py build-x86 --target \
   NeverDX86InstructionCoverageTests NeverDX86SystemStateTests \
   NeverDX86SHA512Tests NeverDX86VectorEncodingModeTests NeverDX86FPEncodingTests \
   NeverDX86VirtualizationTests NeverDX86VirtualizationSourceTests \
   NeverDX86SystemSideeffectTests NeverDX86F16CStateTests \
-  NeverDX86EncodingAccuracyTests NeverDLLVMCVectorTests
+  NeverDX86EncodingAccuracyTests NeverDLLVMCVectorTests --parallel 4
 ctest --test-dir build-x86 --output-on-failure \
   -L '^(NeverDX86(InstructionCoverage|SystemState|SHA512|VectorEncodingMode|FPEncoding|Virtualization|VirtualizationSource|SystemSideeffect|F16CState|EncodingAccuracy)Tests|NeverDLLVMCVectorTests)$'
 ```
@@ -2423,13 +2473,18 @@ The production LLVM release pin and submodule remain unchanged.
 ## Owned FEMMS completion
 
 The shared x87 selector contract now admits `0F 0E`. Its concrete transition
-clears all tags and all payload provenance, preserving the defined control,
-status and saved environment. Waiting exceptions and unknown incoming state
+clears TOP, all tags and all payload provenance, preserving the other control
+and status bits and saved environment. Logical FXSAVE slots rotate to retain
+physical register identity. Waiting exceptions and unknown incoming state
 refuse before mutation. MMX writes establish only the written physical slot;
 all eight must be known before exporting a complete raw snapshot. Native
 LLVM, HighC and LLVMC keep FEMMS within the existing context step. Restore and
 step constraints now name MM0–MM7 as well as ST0–ST7: LLVM does not model them
 as overlapping physical registers.
+
+The counts in the following historical records predate the
+[TOP-reset correction](#portable-owned-fnop-and-mmx-resets); they did not
+establish that transition.
 
 `NeverDX87MMXStateTests` checks all eight TOP values, three tag patterns,
 both strictness modes and both reset instructions, plus refusal, feature
@@ -2712,3 +2767,218 @@ the exported i386 C's operand values and storage. i386 native objects and C ABI
 checks use LLVM and ordinary Clang. The independent controlled completion
 oracle does not establish descriptor faults, physical atomicity, coherence or
 WB memory behavior.
+
+## Portable owned FNOP and MMX resets
+
+The explicit owned x64 portable profile now admits FNOP, EMMS and FEMMS across
+the concrete interpreter, generated LLVM/HighC/LLVM-C interface and portable
+translation selector gate. Pending waiting exceptions, invalid control words
+and unknown incoming control/status refuse before mutation. FNOP updates guest
+FIP while retaining the profile's undefined condition-code bits. EMMS and FEMMS
+clear TOP and empty the tags; FEMMS also invalidates every physical payload's
+provenance. General MMX data operations and typed/unowned or i386 state are
+still outside this profile.
+
+Original EMMS execution exposed an incorrect TOP-preservation assumption in
+both the ordinary owned interpreter and the portable path. A shared private
+state helper now resets TOP while rotating FXSAVE logical slots to preserve
+physical register identities. Physical tags and known-payload masks do not
+rotate. Unicorn's Haswell model reproduces the old incorrect TOP behavior, so
+EMMS uses the original native instruction as its reference instead.
+
+LLVM commit `ce2ee24b501f0aad3a8291a378e016848b0727b2` adds the void,
+zero-argument `llvm.x86.fnop()` intrinsic with waiting, status and scheduling
+effects. NeverC commit `29ed2c9372030696d16ec54c313b542aa67a11c1` adds
+`__builtin_ia32_fnop()` and synchronized frontend/backend tables. LLVM IR,
+NeverC and its LLVM bridge execute six O0/O2 profiles on the recorded Intel
+x64 host, covering 288 state observations and 12 pending-#MF deliveries at
+the actual FNOP instruction. This does not add a Clang frontend builtin.
+
+The [qualification ledger](evidence/x86-x87-resets-2026-10-28.json) binds all
+results to their tested commits and artifacts. Each SDK passes 36 generated
+reset artifacts with 2,700 state observations and 576 original-instruction
+comparisons; the prior arithmetic fixture separately passes 36 artifacts with
+6,096 observations and 5,760 original comparisons. Publication commit
+`710180d84eb925e6ee07fe6721774781055a0f20` passes 1,227 pinned-SDK and 1,225 full-SDK tests with no failures. Each skips 49 native
+AArch64 tests on the x64 host and one Windows-only single-step observer.
+The full SDK configuration excludes two Unicorn reference tests.
+The pinned suite's sole aggregate 3DNow timeout is repaired by giving each
+instruction/form its own ordinary CTest deadline: all 103 cases pass and keep
+all 960 objects. The existing QEMU guest consumes those exports and passes
+368,640 state and 4,080 fault comparisons, while its 1,440 pending-#MF and
+240 stack-#SS differentials remain unqualified.
+
+Native ARM64 [run 40680179646](https://github.com/NeverSight/NeverD/actions/runs/40680179646)
+executes all 36 new reset artifacts and 2,700 observations at the same publication
+commit. Its 225 distinct seeded state transitions match both local x64 SDKs.
+The later [run 40697970738](https://github.com/NeverSight/NeverD/actions/runs/40697970738)
+at `c27c87a9a1d2f816cf38392278d4017d96d7f832` also passes all seventeen native
+AArch64 translation tests. Reset sessions retain 450 observations and 882 direct
+JITLink objects, including eighteen refusal cases and completed-prefix checks.
+Both native host jobs and their comparison pass; independent downloaded-artifact
+audits confirm zero differences across 2,700 reset, 6,096 prior generated and
+57,888 arithmetic observations per host.
+
+The local pinned SDK passes 1,544 tests at `c27c87a9a1`; the full asserting SDK
+passes 1,542 at `05307e249b4f16b1f2d42821a296060dd7c34e3e`. Each skips 56
+platform/fixture-dependent tests. The latter commit only repairs the parameter
+count of a negative inline-assembly fixture so LLVM assertions allow the intended
+missing-clobber check to run. All nineteen pinned constant/control tests and both
+SDKs' generated reset/arithmetic checks pass after that repair. Physical FEMMS,
+privileged #NM behavior and complete architectural equivalence remain
+unqualified. LLVM release, production SDK pinning and the LLVM gitlink remain
+unchanged while the global instruction gaps are open.
+
+## Native x87 control-word interfaces
+
+LLVM `d6719fa9d041bb4b8f4f53ce9b8f8dfdf547923b` supplies the fixed
+`void llvm.x86.fnstcw(ptr)` and `void llvm.x86.fldcw(ptr)` interfaces. NeverC
+`2537751e7d19915010b32c2b8f71698977886b34` supplies
+`__builtin_ia32_fnstcw(unsigned short *)` and
+`__builtin_ia32_fldcw(const unsigned short *)`. Their native operations access
+exactly two bytes without assuming pointer alignment. FNSTCW is nonwaiting;
+FLDCW checks prior pending exceptions before accessing its operand. A control
+word that newly unmasks an exception leaves delivery to a subsequent waiting
+operation. The LLVM effects retain repeated calls and surrounding memory
+operations, and the machine descriptor retains FPCW/FPSW dependencies.
+
+NeverD uses these LLVM interfaces when registered. Its entry control read,
+HighC expressions and LLVM-C calls share the private X86 C rendering helper,
+which selects the NeverC builtin when available. The old r6 SDK and compilers
+without the new builtins keep the existing owned assembly path. One LLVM-call
+validator rejects malformed, retyped, aliased, defined, variadic or non-x86
+calls before function filtering. Combined constant-load assembly and the
+existing typed scalar/state contracts are unchanged; these interfaces do not
+establish full fault-PC equivalence for the lifted typed projection.
+
+The [qualification ledger](evidence/x86-x87-control-word-2026-10-28.json) records
+eight LLVM code-generation/effect tests, 111 NeverC x86 frontend tests, five
+backend tests and fifteen generator tests. LLVM checks i386/x64 ELF, COFF and
+Mach-O; NeverC checks its supported x64 targets. Six direct LLVM, NeverC and
+text-IR bridge O0/O2 profiles on the recorded Intel Linux host pass 6,912 state
+observations, 120 expected faults and 24 page-boundary accesses. Fault checks
+observe the actual opcode, saved CW/SW and completed prefix without resuming
+generated code. Independent negative controls reject missing stores, early
+operand reads, lost prefixes and widened memory accesses.
+
+At `5d9c6f1f876a0252a2da8e3e99ad05adddafdcad`, the pinned SDK passes 1,825
+tests and skips sixty; a separate successful NeverC run fills one of those
+skips, giving 1,826 passed and 59 skipped. The full SDK passes 1,827 and skips
+56. Both repeat the generated reset/arithmetic checks and capability audit.
+All 56 retained HighC/LLVM-C constant/control programs also compile through
+NeverC at O0/O2, require native control-word IR calls, and pass 86,016 exact
+binary80/control comparisons against original instructions. Physical
+qualification remains limited to the recorded x64 host; i386 runtime, #NM,
+alignment-check delivery and complete architectural equivalence are not
+claimed. The production SDK pin and LLVM gitlink remain unchanged.
+
+## Native x87 status, reset and wait interfaces
+
+The LLVM fork now supplies `i16 llvm.x86.fnstsw()`,
+`void llvm.x86.fnstsw.mem(ptr)`, `void llvm.x86.fnclex()`,
+`void llvm.x86.fninit()` and `void llvm.x86.fwait()`. NeverC exposes the
+corresponding header-free `__builtin_ia32_fnstsw`,
+`__builtin_ia32_fnstsw_mem`, `__builtin_ia32_fnclex`,
+`__builtin_ia32_fninit` and `__builtin_ia32_fwait` builtins. FNSTSW retains
+separate AX and two-byte DD /7 memory forms. Both have conservative IR effects
+and FPSW dependencies; unused reads still execute. FWAIT keeps its pending
+exception check. FNCLEX and FNINIT remain nonwaiting operations.
+
+FNINIT invalidates compiler-owned FP/ST/MMX values through its register
+clobbers and scheduling boundary. Live values must survive through spills and
+reloads. This describes register allocation, not physical payload erasure.
+The old SDK assembly fallback now also declares the MMX clobbers. Ordinary
+unconstrained floating-point IR retains its existing environment assumptions.
+
+NeverD's typed FNINIT/FNCLEX/FWAIT operations select registered native calls.
+One X86 state-call contract now validates all seven control/status interfaces
+before function filtering, and one private X86 helper renders their C builtin
+and assembly alternatives for HighC and LLVM-C. Malformed declarations,
+retyped calls, aliases, definitions, invokes, calling conventions, address
+spaces and non-x86 use are rejected. The former control-only validator has
+been replaced by this shared contract and its broader negative tests.
+
+An owned context still executes its restore/operation/save/host-restore as one
+assembly unit. Typed `X87ReadStatus` still consumes the status sampled by its
+own operation; replacing it with ambient FNSTSW would read the wrong state.
+
+The [qualification ledger](evidence/x86-x87-status-2026-10-28.json) binds LLVM
+`5740ed1d13baa01ca5f82d82ebc927e656620b39` and NeverC
+`a26c5ba817626a13f58ec0a19d6e238999f8af0d` to forty LLVM code-generation tests,
+113 NeverC x86 frontend tests, six backend tests and 53 generator unit tests.
+Six direct LLVM, NeverC and text-IR bridge O0/O2 profiles pass 34,560 state
+observations, sixty expected faults, twelve page-boundary accesses and 1,536
+live-value cases on the recorded Intel Linux x64 host. All profile outputs
+agree. The shared qualification driver also repeats the existing control-word
+matrix, with unchanged generated sources and all six profiles passing.
+
+At `6f7912079bda8880c2b32597c17ad050875a27a9`, both NeverD SDK profiles run
+502 tests: r6 passes 487 and skips fifteen; the native fork passes 490 and
+skips twelve. Both execute the Clang and NeverC C projections. Eleven skips
+require native AArch64 and one requires Windows single stepping; r6 additionally
+lacks three native virtualization/descriptor interfaces. The later dev
+integration at `0329646f8c3b9d90cd323a4a625d73c7a9aacf91` repeats 42 affected
+x87 interface, source-stack and machine-state tests on each SDK, all passing.
+
+These native interfaces do not close the complete-machine-state, continuation
+or physical qualification gaps listed above. LLVM release, the production SDK
+pin and the LLVM gitlink remain unchanged until those global gaps close.
+
+## Native x87 environment and register-image interfaces
+
+The LLVM fork and NeverC provide eight fixed interfaces for
+`FNSTENV / FLDENV / FNSAVE / FRSTOR`: the `16` suffix selects 14-byte
+environments or 94-byte register images, and `32` selects 28 or 108 bytes.
+Each LLVM interface takes one pointer; NeverC exposes matching header-free
+`__builtin_ia32_<operation><format>` builtins, with const pointers for restores.
+Their volatile native memory accesses retain exact sizes and byte alignment.
+
+FNSTENV masks exceptions after saving the incoming environment. FNSAVE also
+saves register payloads and initializes the FPU. Restores check already
+pending exceptions before reading memory and defer exceptions loaded from the
+image until a later waiting operation. Changes to TOP/tags invalidate
+compiler-owned x87/MMX values even when physical payloads survive; scheduling
+boundaries and register clobbers preserve those compiler values through
+spills/reloads.
+
+The unowned NeverD lifter now retains operand-size-16 images explicitly.
+Previously the generic memory path discarded that format and could issue a
+28/108-byte access for a 14/94-byte operand. REX.W retains its precedence over
+66 in long mode. The LLVM emitter selects registered native APIs when
+available; r6 retains exact format prefixes and full state clobbers in its
+fallback. HighC and LLVM-C share builtin/fallback rendering, including FS/GS
+overrides. Owned restore/operation/save sequences remain atomic in their
+existing context boundary.
+
+Full LLVM `f35c3ce214cd0bb12849ea46fdb826864444786b` and NeverC
+`5382a3f7f8aaebb26cf04f2f53f217e456ad0bc5` pass six native Linux x64
+profiles: direct LLVM, NeverC and NeverC IR through full LLVM at O0/O2.
+Independent raw-byte references check 55,296 state observations, 480 expected
+faults in 624 fault/nonfault cases, 96 protected-page boundaries and 3,072
+live x87/MMX cases. All six observation streams match byte-for-byte. The
+compiler regression includes 43 LLVM tests, 115 NeverC frontend tests, seven
+backend tests, 60 generator tests and 16 synchronization checks.
+
+Physical evidence is limited to the recorded Intel Core i9-13900H Linux x64
+host. i386 runtime, privileged #NM, alignment-check exceptions and historical
+processors remain unqualified. These pointer APIs do not establish a complete
+opaque machine context. Global completion and the LLVM release/production
+pin update remain separate work.
+
+NeverD feature `02adae41c2` and integrated source
+`fd261b092bc2ccf324f130f3b8e8f166e94654ae` pass the final 18-target matrix:
+r6 passes 348 of 349 cases, with the existing REP native-contract case skipped
+because that SDK does not register its APIs; the local native SDK passes all
+347 cases. The native profile excludes two optional Unicorn references.
+Both profiles include 144 decoder combinations, 16 FS/GS variants through
+both C routes, and 3,072 C-route comparisons per SDK against original bytes.
+NeverC IR audits confirm native calls in all 16 generated environment functions
+at O0/O2 for direct-call and legacy-assembly inputs.
+
+The wider run exposed a stock-Clang fixture gap for the fork's older control,
+status and reset APIs. `LLVMHostX87Fixture.h` now adapts only the cloned
+host-compiler fixture; a regression confirms the production module retains
+its native calls. Those source-oracle checks are separate from the six native
+compiler qualification profiles. The [qualification ledger](evidence/x86-x87-environment-2026-10-28.json)
+records source identities, both SDK matrices, stable compiler inputs and
+rehashed artifacts, including the initial failures and their focused repair.

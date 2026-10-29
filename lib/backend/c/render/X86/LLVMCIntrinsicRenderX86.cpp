@@ -28,6 +28,7 @@
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/InlineAsm.h"
 #include "llvm/IR/Instructions.h"
+#include "llvm/IR/IntrinsicsX86.h"
 #include "llvm/Support/AtomicOrdering.h"
 #include "llvm/Support/ModRef.h"
 
@@ -36,6 +37,40 @@
 #include <utility>
 
 namespace neverd {
+
+std::optional<InlineAsmRender>
+renderX86TimestampCall(Arch TheArch, const llvm::CallBase &Call,
+                       const std::string &ResultName, bool ResultLive) {
+  const auto *Callee = Call.getCalledFunction();
+  if (!Callee || Callee->getName() != "llvm.x86.rdtscp")
+    return std::nullopt;
+  const auto *Pair = llvm::dyn_cast<llvm::StructType>(Call.getType());
+  const auto Attributes = llvm::Intrinsic::getAttributes(
+      Call.getContext(), llvm::Intrinsic::x86_rdtscp,
+      Callee->getFunctionType());
+  if ((TheArch != Arch::X86 && TheArch != Arch::X64) ||
+      !Callee->isIntrinsic() || !Callee->isDeclaration() ||
+      Callee->getIntrinsicID() != llvm::Intrinsic::x86_rdtscp ||
+      !Call.arg_empty() || Call.getNumOperandBundles() ||
+      Call.getFunctionType()->isVarArg() ||
+      Call.getCallingConv() != llvm::CallingConv::C || Call.doesNotReturn() ||
+      Call.getMemoryEffects() != Attributes.getMemoryEffects() ||
+      Callee->hasFnAttribute(llvm::Attribute::Speculatable) ||
+      Call.hasFnAttr(llvm::Attribute::Speculatable) || !Pair ||
+      Pair->isPacked() || Pair->hasName() || Pair->getNumElements() != 2 ||
+      !Pair->getElementType(0)->isIntegerTy(64) ||
+      !Pair->getElementType(1)->isIntegerTy(32) ||
+      (ResultLive && ResultName.empty()))
+    throw std::invalid_argument("unsupported x86 RDTSCP call contract");
+  if (ResultLive)
+    return InlineAsmRender{ResultName + ".field_0 = __rdtscp(&" + ResultName +
+                               ".field_1);\n",
+                           true};
+  return InlineAsmRender{
+      "do { unsigned int neverd_tsc_aux; (void)__rdtscp(&neverd_tsc_aux); } "
+      "while (0);\n",
+      true};
+}
 
 namespace {
 

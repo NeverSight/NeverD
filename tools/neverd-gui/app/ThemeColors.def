@@ -143,6 +143,9 @@ NEVERD_THEME_COLOR(CodePunctuation, "#3B3B3B", "#D4D4D4")
 NEVERD_THEME_COLOR(CodePreprocessor, "#AF00DB", "#C586C0")
 NEVERD_THEME_COLOR(CodeLineNumber, "#237893", "#858585")
 NEVERD_THEME_COLOR(CodeFold, "#E8F0FE", "#2A3A4A")
+// The bracket under the cursor and its partner, as the editor's bracket match.
+NEVERD_THEME_COLOR(CodeBracketMatch, "#E5EFE5", "#1B251B")
+NEVERD_THEME_COLOR(CodeBracketMatchBorder, "#B9B9B9", "#888888")
 
 // Structural comparison states also carry a text label.
 NEVERD_THEME_COLOR(DiffAdded, "#26712A", "#89D185")

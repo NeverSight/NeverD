@@ -67,6 +67,27 @@ struct X86RepControl {
   bool NotEqual;
 };
 
+struct X86RepAccessSpan {
+  uint64_t Begin;
+  uint64_t Bytes;
+};
+
+/// The complete nonempty access of a bounded MOVS/STOS, inside one mapping.
+/// Control must already be validated; callers own flat/native-width admission.
+constexpr std::optional<X86RepAccessSpan>
+x86RepAccessSpan(uint64_t Address, uint64_t Count, const X86RepControl &Control,
+                 bool Backward, uint64_t StorageBegin, uint64_t StorageBytes) {
+  if (!Count || StorageBytes > UINT64_MAX - StorageBegin ||
+      Count > StorageBytes / Control.ElementBytes || Address < StorageBegin)
+    return std::nullopt;
+  const uint64_t Bytes = Count * Control.ElementBytes;
+  const uint64_t Before = Backward ? Bytes - Control.ElementBytes : 0;
+  const uint64_t Offset = Address - StorageBegin;
+  if (Offset < Before || Offset - Before > StorageBytes - Bytes)
+    return std::nullopt;
+  return X86RepAccessSpan{Address - Before, Bytes};
+}
+
 constexpr std::optional<X86RepControl> x86RepControl(Intrinsic Id, Arch A,
                                                      uint32_t Descriptor) {
   const auto C = x86RepContract(Id);

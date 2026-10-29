@@ -414,7 +414,11 @@ renderX86SystemStateCall(Arch TargetArch, const llvm::CallInst &Call,
   for (const auto Id : Inventory) {
     const auto C = x86SystemStateContract(Id);
     const bool Segmented = C.Kind == X86SystemStateKind::SegmentedBlock;
+    const bool Locked = C.Kind == X86SystemStateKind::LockedLogic ||
+                        C.Kind == X86SystemStateKind::LockedBit;
     if (!(Segmented &&
+          llvm::StringRef(Asm->getAsmString()).starts_with(C.Mnemonic)) &&
+        !(Locked &&
           llvm::StringRef(Asm->getAsmString()).starts_with(C.Mnemonic)) &&
         Mnemonic != C.Mnemonic &&
         !(C.Kind == X86SystemStateKind::ShadowWrite &&
@@ -422,7 +426,7 @@ renderX86SystemStateCall(Arch TargetArch, const llvm::CallInst &Call,
            Mnemonic == std::string(C.Mnemonic) + "q")))
       continue;
     Known = true;
-    std::vector<uint16_t> Widths = {0, 2, 4, 8};
+    std::vector<uint16_t> Widths = {0, 1, 2, 4, 8};
     if (Segmented) {
       Widths.clear();
       for (uint16_t S = 0; S < X86SegmentedBlockSelectorLimit; ++S)

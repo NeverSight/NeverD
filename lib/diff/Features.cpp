@@ -273,6 +273,19 @@ ProgramFeatures computeFeatures(const Program &P,
       if (!F.hasBody())
         continue;
 
+      if (F.BlockCount == 1 && !F.EdgeCount && !F.has(TraitThunk)) {
+        const auto Instructions = P.instructions(P.blocks(F).front());
+        if (Instructions.size() > limits::diff::kMinTailPreludeContribution &&
+            Instructions.back().Flow == InstructionFlow::Jump &&
+            Instructions.back().Callee != NoIndex &&
+            Instructions.back().Callee != Index &&
+            llvm::all_of(Instructions.drop_back(), [](const Instruction &I) {
+              return I.Flow == InstructionFlow::None && I.Callee == NoIndex &&
+                     !I.UnresolvedCallee;
+            }))
+          Out.TailCallee = Instructions.back().Callee;
+      }
+
       StableHash Bytes, Shape, Mnemonics;
       uint64_t Prime = 1;
       Skeletons.clear();
@@ -396,6 +409,7 @@ ProgramFeatures computeFeatures(const Program &P,
     return R;
   // Features that look at neighbors, once every function has its own.
   std::vector<uint32_t> Roots, Leaves;
+  std::vector<std::pair<uint32_t, uint32_t>> TailCalls;
   for (uint32_t FI = 0; FI < N; ++FI) {
     if (Control.stop())
       return R;
@@ -403,7 +417,10 @@ ProgramFeatures computeFeatures(const Program &P,
       Roots.push_back(FI);
     if (R.Callees.of(FI).empty())
       Leaves.push_back(FI);
+    if (R.Functions[FI].TailCallee != NoIndex)
+      TailCalls.emplace_back(R.Functions[FI].TailCallee, FI);
   }
+  R.TailCallers = buildAdjacency(N, std::move(TailCalls), true);
   const std::vector<uint32_t> Top = levels(
       N, Roots,
       [&](uint32_t Node, auto Visit) {

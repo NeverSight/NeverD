@@ -43,6 +43,12 @@ namespace {
 
 using FunctionSymbolIndex = std::map<va_t, std::vector<size_t>>;
 
+void diagnoseDirectory(BinaryImage &Img, llvm::StringRef Message) {
+  auto &State = *Img.ExceptionMetadata.StructuralDecode;
+  State.mergeStatus(ExceptionParseStatus::Malformed);
+  State.Diagnostics.push_back(Message.str());
+}
+
 FunctionSymbolIndex indexFunctionSymbols(const BinaryImage &Img) {
   // A section or data label must not suppress independent unwind discovery.
   FunctionSymbolIndex Result;
@@ -174,9 +180,7 @@ void parseX64Exceptions(const COFFObjectFile &Obj, BinaryImage &Img,
   uintptr_t ExcPtr;
   if (auto Err = Obj.getRvaPtr(ExcDir->RelativeVirtualAddress, ExcPtr)) {
     llvm::consumeError(std::move(Err));
-    Img.ExceptionMetadata.ParseStatus = ExceptionParseStatus::Malformed;
-    Img.ExceptionMetadata.Diagnostics.push_back(
-        "x64 exception directory RVA is not file-backed");
+    diagnoseDirectory(Img, "x64 exception directory RVA is not file-backed");
     return;
   }
 
@@ -192,9 +196,7 @@ void parseX64Exceptions(const COFFObjectFile &Obj, BinaryImage &Img,
   size_t Count =
       std::min<size_t>(ExcDir->Size, AvailBytes) / sizeof(RuntimeFunc);
   if (ExcDir->Size > AvailBytes || ExcDir->Size % sizeof(RuntimeFunc) != 0) {
-    Img.ExceptionMetadata.ParseStatus = ExceptionParseStatus::Malformed;
-    Img.ExceptionMetadata.Diagnostics.push_back(
-        "truncated or misaligned x64 exception directory");
+    diagnoseDirectory(Img, "truncated or misaligned x64 exception directory");
   }
   const auto *RFBytes = reinterpret_cast<const uint8_t *>(ExcPtr);
 
@@ -232,9 +234,8 @@ void parseX64Exceptions(const COFFObjectFile &Obj, BinaryImage &Img,
       continue;
     }
     if (SawZeroEntry && !DiagnosedInteriorPadding) {
-      Img.ExceptionMetadata.ParseStatus = ExceptionParseStatus::Malformed;
-      Img.ExceptionMetadata.Diagnostics.push_back(
-          "x64 exception directory contains non-trailing zero padding");
+      diagnoseDirectory(
+          Img, "x64 exception directory contains non-trailing zero padding");
       DiagnosedInteriorPadding = true;
     }
     uint64_t RecordRVA64 = uint64_t(ExcDir->RelativeVirtualAddress) +
@@ -401,9 +402,7 @@ void parseARMExceptions(const COFFObjectFile &Obj, BinaryImage &Img,
   uintptr_t ExcPtr;
   if (auto Err = Obj.getRvaPtr(ExcDir->RelativeVirtualAddress, ExcPtr)) {
     llvm::consumeError(std::move(Err));
-    Img.ExceptionMetadata.ParseStatus = ExceptionParseStatus::Malformed;
-    Img.ExceptionMetadata.Diagnostics.push_back(
-        "ARM exception directory RVA is not file-backed");
+    diagnoseDirectory(Img, "ARM exception directory RVA is not file-backed");
     return;
   }
 
@@ -415,9 +414,7 @@ void parseARMExceptions(const COFFObjectFile &Obj, BinaryImage &Img,
   constexpr size_t EntrySize = 2 * sizeof(uint32_t);
   size_t Count = std::min<size_t>(ExcDir->Size, AvailBytes) / EntrySize;
   if (ExcDir->Size > AvailBytes || ExcDir->Size % EntrySize != 0) {
-    Img.ExceptionMetadata.ParseStatus = ExceptionParseStatus::Malformed;
-    Img.ExceptionMetadata.Diagnostics.push_back(
-        "truncated or misaligned ARM exception directory");
+    diagnoseDirectory(Img, "truncated or misaligned ARM exception directory");
   }
   const auto *RFBytes = reinterpret_cast<const uint8_t *>(ExcPtr);
   Img.ExceptionMetadata.Functions.reserve(Count);
@@ -428,11 +425,8 @@ void parseARMExceptions(const COFFObjectFile &Obj, BinaryImage &Img,
   const bool IsAArch64 = Img.Arch == Arch::AArch64;
   [[maybe_unused]] const char *ArchName = IsAArch64 ? "ARM64" : "ARM32";
   auto DiagnoseEntry = [&](size_t Index, llvm::StringRef Message) {
-    Img.ExceptionMetadata.ParseStatus = mergeExceptionParseStatus(
-        Img.ExceptionMetadata.ParseStatus, ExceptionParseStatus::Malformed);
-    Img.ExceptionMetadata.Diagnostics.push_back(
-        std::string(ArchName) + " pdata entry " + std::to_string(Index) + ": " +
-        Message.str());
+    diagnoseDirectory(Img, std::string(ArchName) + " pdata entry " +
+                               std::to_string(Index) + ": " + Message.str());
   };
 
   [[maybe_unused]] size_t Added = 0;
@@ -449,10 +443,9 @@ void parseARMExceptions(const COFFObjectFile &Obj, BinaryImage &Img,
       continue;
     }
     if (SawZeroEntry && !DiagnosedInteriorPadding) {
-      Img.ExceptionMetadata.ParseStatus = ExceptionParseStatus::Malformed;
-      Img.ExceptionMetadata.Diagnostics.push_back(
-          std::string(ArchName) +
-          " exception directory contains non-trailing zero padding");
+      diagnoseDirectory(Img, std::string(ArchName) +
+                                 " exception directory contains non-trailing "
+                                 "zero padding");
       DiagnosedInteriorPadding = true;
     }
 
@@ -474,7 +467,6 @@ void parseARMExceptions(const COFFObjectFile &Obj, BinaryImage &Img,
     ExceptionParseStatus EntryStatus = ExceptionParseStatus::Complete;
     std::vector<std::string> EntryDiagnostics;
     auto DiagnoseUnwindBody = [&](llvm::StringRef Message) {
-      DiagnoseEntry(I, Message);
       EntryStatus = mergeExceptionParseStatus(EntryStatus,
                                               ExceptionParseStatus::Malformed);
       EntryDiagnostics.push_back(Message.str());
@@ -976,6 +968,8 @@ bool ensureX64RuntimeFunction(BinaryImage &Img, va_t Address) {
 void parseExceptions(const COFFObjectFile &Obj, BinaryImage &Img,
                      uint64_t ImageBase) {
   Img.ExceptionMetadata = ExceptionInfo{};
+  // Establish the directory owner before aggregating localized frame faults.
+  Img.ExceptionMetadata.captureUnstructuredParseContributions();
   if (const data_directory *ExcDir =
           Obj.getDataDirectory(llvm::COFF::EXCEPTION_TABLE)) {
     Img.ExceptionMetadata.DirectoryRVA = ExcDir->RelativeVirtualAddress;
@@ -985,6 +979,8 @@ void parseExceptions(const COFFObjectFile &Obj, BinaryImage &Img,
     parseX64Exceptions(Obj, Img, ImageBase);
   else if (Img.Arch == Arch::AArch64 || Img.Arch == Arch::ARM)
     parseARMExceptions(Obj, Img, ImageBase);
+  Img.ExceptionMetadata.captureUnstructuredParseContributions();
+  Img.ExceptionMetadata.rebuildParseSummary();
 }
 
 } // namespace coff_loader

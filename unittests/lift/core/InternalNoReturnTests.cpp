@@ -740,6 +740,59 @@ TEST(InternalNoReturn, CallFollowedByCodeIsNotProved) {
   EXPECT_FALSE(callAtBaseEndsItsBlock(Image));
 }
 
+TEST(InternalNoReturn,
+     LeafWithoutAnUnwindEntryIsScreenedByItsStraightLineFlow) {
+  // caller: call b; ret -- code follows the call and nothing gives b a code
+  // range.  In an x64 PE image every function but a leaf has an unwind
+  // entry, so straight-line flow from b's entry that reaches `int 0x29`
+  // sends b to the proof, as a __fastfail stub without one is sent.  A b
+  // that branches first may reach a return the screen does not read, and an
+  // x86 image, whose functions have no such entries, keeps the fall-through.
+  struct Case {
+    Arch Architecture;
+    std::vector<uint8_t> Body;
+    bool Proved;
+  };
+  for (const Case &C : {Case{Arch::X64, {0xcd, 0x29}, true},
+                        Case{Arch::X64, {0x89, 0xc8, 0xcd, 0x29}, true},
+                        Case{Arch::X64, {0x74, 0x02, 0xcd, 0x29, 0xc3}, false},
+                        Case{Arch::X86, {0xcd, 0x29}, false}}) {
+    SCOPED_TRACE(testing::PrintToString(C.Body) +
+                 (C.Architecture == Arch::X86 ? " on x86" : " on x64"));
+    std::vector<uint8_t> Code(0x10, 0xcc);
+    putCall(Code, Base, Base + 0x10);
+    Code[5] = 0xc3;
+    Code.insert(Code.end(), C.Body.begin(), C.Body.end());
+    Code.resize(0x20, 0xcc);
+    auto Image = imageWith(Code, {{Base, "caller"}, {0x1010, "b"}});
+    Image.Arch = C.Architecture;
+    Image.Bits =
+        C.Architecture == Arch::X86 ? Bitness::Bits32 : Bitness::Bits64;
+    Image.Format = BinaryFormat::COFF;
+    EXPECT_EQ(callAtBaseEndsItsBlock(Image), C.Proved);
+  }
+}
+
+TEST(InternalNoReturn, AArch64FastFailStubWithoutUnwindDataEndsItsBlock) {
+  // caller: bl stub; mov w0, #7; ret.  A Windows ARM64 leaf needs no .pdata,
+  // so nothing gives the stub a code range.  `brk #0xf003` is __fastfail and
+  // never resumes; `brk #0xf000` is __debugbreak, which does.
+  for (const auto &[Stub, Proved] :
+       std::initializer_list<std::pair<uint32_t, bool>>{{0xd43e0060, true},
+                                                        {0xd43e0000, false}}) {
+    SCOPED_TRACE(Stub);
+    std::vector<uint8_t> Code;
+    for (const uint32_t Word : {0x94000004u, 0x528000e0u, 0xd65f03c0u,
+                                0xd503201fu, Stub, 0xd65f03c0u})
+      for (unsigned I = 0; I < 4; ++I)
+        Code.push_back(static_cast<uint8_t>(Word >> (8 * I)));
+    auto Image = imageWith(Code, {{Base, "caller"}, {Base + 0x10, "stub"}});
+    Image.Arch = Arch::AArch64;
+    Image.Format = BinaryFormat::COFF;
+    EXPECT_EQ(callAtBaseEndsItsBlock(Image), Proved);
+  }
+}
+
 TEST(InternalNoReturn, RecognizesX86AlignmentNoOps) {
   struct Case {
     std::vector<uint8_t> Bytes;

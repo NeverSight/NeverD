@@ -133,14 +133,17 @@ Object location(const Program &P, const RegionSpan &A) {
 } // namespace
 
 Object regionSettingsJSON(const RegionSettings &S) {
-  return Object{{"enabled", S.Enabled},
-                {"min_instructions", S.MinimumInstructions},
-                {"min_repeated_instructions", S.MinimumRepeatedInstructions},
-                {"max_occurrences", S.MaxOccurrences},
-                {"max_seeds", S.MaxSeeds},
-                {"max_work", S.MaxWork},
-                {"max_anchors", S.MaxAnchors},
-                {"max_hypotheses", S.MaxHypotheses}};
+  Object O{{"enabled", S.Enabled},
+           {"min_instructions", S.MinimumInstructions},
+           {"min_repeated_instructions", S.MinimumRepeatedInstructions},
+           {"max_occurrences", S.MaxOccurrences},
+           {"max_seeds", S.MaxSeeds},
+           {"max_work", S.MaxWork},
+           {"max_anchors", S.MaxAnchors},
+           {"max_hypotheses", S.MaxHypotheses}};
+  if (S.Calls)
+    O["calls"] = true;
+  return O;
 }
 RegionSettings readRegionSettings(const Value &V) {
   RegionSettings S;
@@ -151,13 +154,14 @@ RegionSettings readRegionSettings(const Value &V) {
   const auto &O = object(V);
   for (const auto &[K, Ignore] : O) {
     (void)Ignore;
-    require(K == "enabled" || K == "min_instructions" ||
+    require(K == "enabled" || K == "calls" || K == "min_instructions" ||
                 K == "min_repeated_instructions" || K == "max_occurrences" ||
                 K == "max_seeds" || K == "max_work" || K == "max_anchors" ||
                 K == "max_hypotheses",
             "unknown setting " + K.str());
   }
   S.Enabled = O.get("enabled") ? boolean(*O.get("enabled")) : true;
+  S.Calls = O.get("calls") ? boolean(*O.get("calls")) : false;
   S.MinimumInstructions = count(O, "min_instructions", S.MinimumInstructions,
                                 limits::kMaxRegionMinInstructions);
   S.MinimumRepeatedInstructions =
@@ -175,9 +179,15 @@ RegionSettings readRegionSettings(const Value &V) {
     throw std::invalid_argument(*E);
   return S;
 }
+void addRegionEvidenceFields(Object &O, bool Calls) {
+  O["profile"] = regionProfile(Calls);
+  if (Calls)
+    O["call_evidence"] = "current_function_correspondence";
+  else
+    O.erase("call_evidence");
+}
 Object regionAnalysisJSON(const RegionAnalysis &R, bool SummaryOnly) {
-  Object O{{"profile", "native-runs-v1"},
-           {"state", R.State ? Value(stateName(*R.State)) : Value(nullptr)},
+  Object O{{"state", R.State ? Value(stateName(*R.State)) : Value(nullptr)},
            {"stopped_phase", R.StoppedPhase},
            {"work", R.Work},
            {"primary_seeds", R.PrimarySeeds},
@@ -190,6 +200,7 @@ Object regionAnalysisJSON(const RegionAnalysis &R, bool SummaryOnly) {
            {"anchor_count", R.Anchors.size()},
            {"hypothesis_count", R.Hypotheses.size()},
            {"semantic_validation", "not_performed"}};
+  addRegionEvidenceFields(O, R.Calls);
   if (!SummaryOnly) {
     Array Anchors, Hypotheses;
     for (const auto &A : R.Anchors)
@@ -228,9 +239,16 @@ RegionAnalysis readRegionAnalysis(const Value &V,
                                   const ComparisonControl &Control) {
   Control.check();
   const auto &O = object(V);
-  require(text(field(O, "profile")) == "native-runs-v1",
-          "unsupported region profile");
+  require(text(field(O, "profile")) == regionProfile(Settings.Calls),
+          "region profile disagrees with its settings");
   RegionAnalysis R;
+  R.Calls = Settings.Calls;
+  if (R.Calls)
+    require(text(field(O, "call_evidence")) ==
+                "current_function_correspondence",
+            "unsupported region call evidence");
+  else
+    require(!O.get("call_evidence"), "call evidence requires call regions");
   const auto &State = field(O, "state");
   if (!State.getAsNull()) {
     R.State = stateNamed(text(State));

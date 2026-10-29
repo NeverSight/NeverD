@@ -38687,7 +38687,9 @@ TEST(LLVMCPointerAddresses, IndirectCallPrintsLoadedCalleePlusOffset) {
       << Source;
   EXPECT_NE(Source.find("this->m_pBadge.p"), std::string::npos) << Source;
   EXPECT_NE(Source.find(" + 0x58))"), std::string::npos) << Source;
-  EXPECT_NE(Source.find("(this->m_pBadge.p, result)"), std::string::npos)
+  // The callee takes integers, so the record pointer converts explicitly.
+  EXPECT_NE(Source.find("(this->m_pBadge.p, ((uint64_t)(uintptr_t)result))"),
+            std::string::npos)
       << Source;
   EXPECT_EQ(Source.find("((void*)"), std::string::npos) << Source;
   EXPECT_EQ(Source.find("*(uint64_t*)"), std::string::npos) << Source;
@@ -42018,13 +42020,15 @@ TEST(LLVMCPointerAddresses, CorpusFuncLoadSehProbeHasSingleWin64Arg) {
   EXPECT_EQ(Source.find("*(uint64_t*)0"), std::string::npos) << Source;
 }
 
-// A load certified immutable by MedIR can fold to its exact exception code.
+// A load certified immutable by MedIR can fold to its exact exception code,
+// including the signed decimal spelling converted by the uint32_t parameter.
 // Otherwise the LLVM projection must preserve its captured volatile value.
 void expectCapturedSehExceptionCode(const std::string &Source) {
   const auto Folded = lastCallArguments(
       sourceLineContaining(Source, "    RaiseException("), "RaiseException");
   if (Folded && Folded->size() == 4 &&
-      ((*Folded)[0] == "3762425857" || (*Folded)[0] == "0xE0421001")) {
+      ((*Folded)[0] == "3762425857" || (*Folded)[0] == "0xE0421001" ||
+       (*Folded)[0] == "-532541439")) {
     for (size_t I = 1; I < Folded->size(); ++I)
       EXPECT_EQ(llvm::StringRef((*Folded)[I]).trim(), "0") << Source;
     return;
@@ -42538,6 +42542,7 @@ TEST(LLVMCPointerAddresses, CorpusFuncLoadGsWrappedSehLlvmcNestsHandlerBodies) {
             "*);\n"
             "void *GetExceptionInformation(void);\n"
             "unsigned long GetExceptionCode(void);\n"
+            "int AbnormalTermination(void);\n"
          << Source;
     }
     llvm::SmallVector<llvm::StringRef, 16> Args{

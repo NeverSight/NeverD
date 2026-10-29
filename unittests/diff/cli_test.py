@@ -219,6 +219,34 @@ def ambiguity_pages(args, root):
     run([args.neverd, "diff", "-a", str(paths[0]), "-b", str(paths[1]), "--list-search", "copy"], {1})
 
 
+def mapped_call_regions(args, root):
+    code = bytes.fromhex('89f883c00383f017e8130000006bc00783c00983f025c3')
+    code += b'\x90' * (32 - len(code)) + bytes.fromhex('89f883c00bc3')
+    paths = [root / 'call-regions-before.bin', root / 'call-regions-after.bin']
+    for path, address in zip(paths, ('0x1000', '0x8000')):
+        path.write_bytes(code)
+        project = pathlib.Path(str(path) + '.neverd')
+        project.mkdir()
+        (project / 'load.json').write_text(json.dumps({
+            'loader': 'binary', 'processor': 'x86_64', 'platform': 'sysv', 'base': address}))
+    base = [args.neverd, 'diff', '--structural', '-a', str(paths[0]), '-b', str(paths[1])]
+    report = root / 'call-regions.nddiff'
+    legacy = json.loads(run(base + ['--regions', '--json'], {0, 2, 3}).stdout)
+    assert legacy['regions']['anchor_count'] == 0, legacy['regions']
+    result = json.loads(run(base + ['--region-calls', '--json', '--save', str(report)], {0, 2, 3}).stdout)
+    assert result['regions']['profile'] == 'native-call-runs-v1'
+    assert result['regions']['call_evidence'] == 'current_function_correspondence'
+    assert result['regions']['anchor_count'] == 1, result['regions']
+    assert result['regions']['semantic_validation'] == 'not_performed'
+    assert json.loads(run(base + ['--reopen', str(report), '--json'], {0, 2, 3}).stdout) == result
+    rows = json.loads(run(base + ['--reopen', str(report), '--region-anchor', '0'], {0, 2, 3}).stdout)
+    assert rows['total'] == 7 and rows['rows'][3]['primary']['bytes'] == 'E813000000', rows
+    overrides = root / 'call-regions-overrides.json'
+    overrides.write_text(json.dumps([{'kind': 'unmatch', 'primary': '0x1020', 'secondary': '0x8020'}]))
+    edited = json.loads(run(base + ['--reopen', str(report), '--overrides', str(overrides), '--json'], {2, 3}).stdout)
+    assert edited['regions']['anchor_count'] == 0, edited['regions']
+
+
 def unresolved_reference_evidence(args, root):
     paths = [root / "reference-before.bin", root / "reference-after.bin"]
     code = bytearray(24)
@@ -298,6 +326,7 @@ def main():
         root = pathlib.Path(folder)
         ambiguity_pages(args, root)
         unresolved_reference_evidence(args, root)
+        mapped_call_regions(args, root)
         mixed_reference_evidence(args, root)
         cancel_mapping_edits(args, root)
         for limit in (17, 9):

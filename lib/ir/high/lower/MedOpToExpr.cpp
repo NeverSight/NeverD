@@ -312,6 +312,7 @@ ExprPtr MedToHighConverter::medOpToExprImpl(const MedOp &Op) {
       Expr->Type = NdType::makeInt(Op.Output.Size, false);
       Expr->MemoryOrdering = Op.MemoryOrdering;
       Expr->MemoryAddressSpace = Op.MemoryAddressSpace;
+      Expr->SourceReturnSlotOffset = Op.SourceReturnSlotOffset;
       return Expr;
     }
     break;

@@ -171,7 +171,9 @@ bool appendStatedLiteralCharacter(uint32_t Ch, std::string &Out) {
 
 std::optional<std::string> imageStringLiteral(const BinaryImage *Img, va_t Addr,
                                               bool AllowEmpty, bool Narrow) {
-  if (!Img || Addr == 0 || Addr == InvalidVA)
+  // The image's own headers describe the image that runs, not this file:
+  // none of their bytes is a literal (BinaryImage::imageBaseOffset).
+  if (!Img || Addr == 0 || Addr == InvalidVA || Img->imageBaseOffset(Addr))
     return std::nullopt;
   if (Img->findImportAt(Addr) || !terminatesStrings(*Img))
     return std::nullopt;

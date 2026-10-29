@@ -1353,8 +1353,7 @@ private slots:
     if (key == Qt::Key_C) {
       const auto capture = qEnvironmentVariable("NEVERD_PATCH_CAPTURE_DIR");
       if (!capture.isEmpty()) {
-        JumpDialog jump(session, window.addressSpace(), std::nullopt,
-                        &window);
+        JumpDialog jump(session, window.addressSpace(), std::nullopt, &window);
         jump.show();
         QVERIFY(activate(jump));
         QTRY_VERIFY(sizes.settled(&jump));

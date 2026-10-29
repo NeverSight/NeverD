@@ -45,7 +45,6 @@ neverd::fixedIntegerCallArguments(Arch A, BinaryFormat F,
       Placement->Parameters.size() != Parameters.size())
     return std::nullopt;
   FixedIntegerCallArguments Result;
-  bool HasStack = false;
   for (size_t I = 0; I < Parameters.size(); ++I) {
     const auto &Pieces = Placement->Parameters[I];
     if (Pieces.size() != 1 || Pieces[0].Indirect || Pieces[0].Offset ||
@@ -55,12 +54,11 @@ neverd::fixedIntegerCallArguments(Arch A, BinaryFormat F,
     if (Location.Kind != SourceABICarrierKind::IntegerRegister &&
         Location.Kind != SourceABICarrierKind::Stack)
       return std::nullopt;
-    HasStack |= Location.Kind == SourceABICarrierKind::Stack;
     Result.Parameters.push_back({Location.Kind, Location.RegisterOffset,
                                  Location.EntryStackOffset,
                                  Location.ValueBytes});
   }
-  return HasStack ? std::optional(std::move(Result)) : std::nullopt;
+  return Result;
 }
 
 std::optional<IntegerCallArguments>

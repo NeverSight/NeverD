@@ -959,9 +959,11 @@ TEST(X86_32_FunctionDiscovery, LiftsMmxPunpckldq) {
   ASSERT_TRUE(Dec.init(Arch::X86));
   CFGBuilder CFG;
   auto LF = CFG.build(Img, Dec, 0x401000, "mmx_punpck");
-  EXPECT_TRUE(LF.hasCompleteInstructionLift())
-      << "unsupported=" << LF.UnsupportedInstructionAddresses.size()
-      << " decode_fail=" << LF.DecodeFailureAddresses.size();
+  // PUNPCKLDQ lifts. EMMS empties the x87 tags, a state i386 has no owner
+  // for, so it alone is refused rather than lifted as a NOP
+  // (X86LegacyAdmission.StateInstructionsCannotBecomeNopsWithoutOwnership).
+  EXPECT_TRUE(LF.DecodeFailureAddresses.empty());
+  EXPECT_EQ(LF.UnsupportedInstructionAddresses, std::vector<va_t>{0x401003});
 }
 
 TEST(X86_32_FunctionDiscovery, LiftsMmxPunpckldqFromMemory) {
@@ -975,11 +977,9 @@ TEST(X86_32_FunctionDiscovery, LiftsMmxPunpckldqFromMemory) {
   ASSERT_TRUE(Dec.init(Arch::X86));
   CFGBuilder CFG;
   auto LF = CFG.build(Img, Dec, 0x401000, "mmx_punpck_mem");
-  EXPECT_TRUE(LF.hasCompleteInstructionLift())
-      << "unsupported=" << LF.UnsupportedInstructionAddresses.size()
-      << (LF.UnsupportedInstructionAddresses.empty()
-              ? ""
-              : " at " + std::to_string(LF.UnsupportedInstructionAddresses[0]));
+  // As above, only the EMMS is refused.
+  EXPECT_TRUE(LF.DecodeFailureAddresses.empty());
+  EXPECT_EQ(LF.UnsupportedInstructionAddresses, std::vector<va_t>{0x401007});
 }
 
 TEST(X86_32_FunctionDiscovery,

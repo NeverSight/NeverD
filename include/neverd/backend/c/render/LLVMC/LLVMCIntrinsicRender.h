@@ -68,6 +68,10 @@ std::optional<X86RepMovs> classifyX86RepMovs(Arch TheArch,
                                              const llvm::CallInst &Call);
 
 //--- Arch-specific (LLVMCIntrinsicRenderX86.cpp) ---
+/// Render the native RDTSCP pair without losing its auxiliary result or read.
+std::optional<InlineAsmRender>
+renderX86TimestampCall(Arch TheArch, const llvm::CallBase &Call,
+                       const std::string &ResultName, bool ResultLive);
 /// Recognize the complete scalar MSR/port call with ordered native effects.
 bool isX86DescriptorStateNativeName(llvm::StringRef Name);
 std::optional<InlineAsmRender>

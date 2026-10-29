@@ -359,8 +359,10 @@ TEST_F(IndirectTailFrame, ExclusiveReleaseCallsItsVirtualSlotInEveryRoute) {
         << Source;
     // Both routes write the slot offset in its natural base.
     const std::string Slot = "0x20";
+    // The native raw-call wrapper may enclose the pointer cast. Check the
+    // loaded slot independently of that call wrapper's parentheses.
     EXPECT_NE(Source.find("(*(void **)((uintptr_t)(*(void **)(arg0)) + " +
-                          Slot + ")))("),
+                          Slot + "))"),
               std::string::npos)
         << Source;
     if (Route)

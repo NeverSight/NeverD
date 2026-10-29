@@ -656,6 +656,7 @@ void LineageDialog::source(const QString &Report) {
           if (!Row.contains("index"))
             return;
           auto *Detail = new QDialog(D);
+          Detail->setObjectName("lineageRegionAnchors");
           Detail->setWindowTitle(tr("Original region anchors"));
           Detail->resize(limits::kComparisonCounterpartInitialWidth,
                          limits::kComparisonCounterpartInitialHeight);
@@ -665,6 +666,15 @@ void LineageDialog::source(const QString &Report) {
                  "association. Copy a row to inspect all retained fields; "
                  "export the source for complete SSA node mappings."),
               Detail));
+          if (Row["call_evidence"] == "current_function_correspondence") {
+            auto *Notice = label(
+                tr("Calls in these saved spans rely on the source report's "
+                   "function pairs. They do not prove equivalent callee "
+                   "behavior."),
+                Detail);
+            Notice->setObjectName("lineageRegionCallEvidence");
+            Layout->addWidget(Notice);
+          }
           const bool Native = QByteArray(AnchorKind) == "native_region_anchors";
           auto *P = page(
               Session,
@@ -689,6 +699,49 @@ void LineageDialog::source(const QString &Report) {
                        {"index", Row["index"]}});
           showModelessDialog(Detail, D);
         });
+    const bool Native = QByteArray(AnchorKind) == "native_region_anchors";
+    if (!Session.summary()["supports_all_region_anchors"].toBool())
+      continue;
+    const auto *AllKind = Native ? "native_anchors" : "flow_anchors";
+    auto *AllPane = new QWidget(T);
+    auto *AllLayout = new QVBoxLayout(AllPane);
+    AllLayout->addWidget(
+        label(tr("Saved region evidence is not an accepted function "
+                 "association. Copy a row to inspect all retained fields; "
+                 "export the source for complete SSA node mappings."),
+              AllPane));
+    auto *CallNotice = label(
+        tr("Calls in these saved spans rely on the source report's "
+           "function pairs. They do not prove equivalent callee behavior."),
+        AllPane);
+    CallNotice->setObjectName("lineageRegionCallEvidence");
+    CallNotice->hide();
+    AllLayout->addWidget(CallNotice);
+    auto *All = page(
+        Session,
+        Native ? QStringList{tr("Anchor"), tr("Primary function index"),
+                             tr("Secondary function index"),
+                             tr("Primary instructions"),
+                             tr("Secondary instructions")}
+               : QStringList{tr("Anchor"), tr("Primary function"),
+                             tr("Secondary function"), tr("SSA nodes"),
+                             tr("Open control frontier")},
+        Native ? QStringList{"index", "primary_function_index",
+                             "secondary_function_index",
+                             "primary_instruction_count",
+                             "secondary_instruction_count"}
+               : QStringList{"index", "primary_function", "secondary_function",
+                             "node_count", "open_control_frontier"},
+        AllKind, AllPane);
+    AllLayout->addWidget(All);
+    T->addTab(AllPane, Native ? tr("All native spans") : tr("All SSA spans"));
+    connect(All, &LineagePageView::pageChanged, CallNotice,
+            [CallNotice](const QJsonArray &Rows) {
+              CallNotice->setVisible(!Rows.isEmpty() &&
+                                     Rows.first().toObject()["call_evidence"] ==
+                                         "current_function_correspondence");
+            });
+    All->setQuery({{"kind", AllKind}, {"report", Report}});
   }
   connect(
       Ambiguities, &LineagePageView::activated, D,

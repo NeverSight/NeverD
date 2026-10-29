@@ -80,6 +80,10 @@ inline constexpr double kDefaultMinimumContextSimilarity = 0.35;
 /// pairing is accepted; closer candidates without decisive call-position
 /// evidence stay ambiguous.
 inline constexpr double kDefaultAmbiguityMargin = 0.02;
+/// A tail caller must contribute more than a lone shared instruction to a
+/// changed helper body before a possible inlining defers whole-function
+/// identity.
+inline constexpr unsigned kMinTailPreludeContribution = 2;
 /// Rounds of global refinement; call and address chains use a growing worklist.
 inline constexpr unsigned kMaxPropagationRounds = 64;
 /// Dense storage threshold for call-sequence anchor alignment. Larger ranges
@@ -106,8 +110,15 @@ inline constexpr size_t kAlignmentPollCells = 1024;
 inline constexpr unsigned kRegionSeedInstructions = 3;
 inline constexpr unsigned kDefaultRegionMinInstructions = 4;
 inline constexpr unsigned kDefaultRegionMinRepeatedInstructions = 8;
+/// In the call profile, two distinct mapped targets support a short repeated
+/// run without treating one common or repeated callee as distinctive context.
+inline constexpr unsigned kRegionMinDistinctCallTargets = 2;
+/// A paired cleanup call at a shared return/direct-jump boundary can support
+/// a short terminal run; the minimum run length and seed frequency still apply.
+inline constexpr unsigned kRegionMinTerminalCallTargets = 1;
 /// Short repeated runs still qualify when they cover this share of either
-/// participating function's decoded non-transfer instructions.
+/// participating function's eligible instructions (also paired direct calls
+/// when the call profile is enabled).
 inline constexpr double kRegionMinShortRunFunctionCoverage = 0.5;
 inline constexpr unsigned kMaxRegionMinInstructions = 256;
 inline constexpr unsigned kDefaultRegionMaxOccurrences = 16;

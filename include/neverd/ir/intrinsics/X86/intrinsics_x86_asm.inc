@@ -222,3 +222,7 @@ A(Intrinsic::X86EncluPending, "enclu.pending");
 A(Intrinsic::X86GetsecPending, "getsec.pending");
 A(Intrinsic::X86EncluBounded, "enclu");
 A(Intrinsic::X86GetsecBounded, "getsec");
+A(Intrinsic::X87Fldenv16, "data16 fldenv");
+A(Intrinsic::X87Fnstenv16, "data16 fnstenv");
+A(Intrinsic::X87Frstor16, "data16 frstor");
+A(Intrinsic::X87Fnsave16, "data16 fnsave");

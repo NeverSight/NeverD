@@ -25,6 +25,12 @@
 ///   system's types may be named: it is undefined for the header's
 ///   definitions and defined again after them.
 ///
+/// NEVERD_PRELUDE_RECORD(Name, Platform, Header, Declared)
+///   A standard header's record tag, including records supplied by several
+///   incompatible runtime versions. Embedded C with layout checks reuses
+///   the declaration only under Platform and Declared; all size/member
+///   checks still run, so a different runtime layout fails explicitly.
+///
 //===----------------------------------------------------------------------===//
 
 #ifndef NEVERD_PRELUDE_TYPE
@@ -33,6 +39,14 @@
 #ifndef NEVERD_PRELUDE_MACRO
 #define NEVERD_PRELUDE_MACRO(Name)
 #endif
+#ifndef NEVERD_PRELUDE_RECORD
+#define NEVERD_PRELUDE_RECORD(Name, Platform, Header, Declared)
+#endif
+
+// MSVCRT and UCRT both own this tag, with different layouts. The compiler's
+// stdio header chooses its runtime; the program's layout checks validate it.
+NEVERD_PRELUDE_RECORD(_iobuf, "defined(_WIN32)", "stdio.h",
+                      "defined(_FILE_DEFINED)")
 
 NEVERD_PRELUDE_TYPE(size_t, "1")
 NEVERD_PRELUDE_TYPE(ptrdiff_t, "1")
@@ -102,3 +116,4 @@ NEVERD_PRELUDE_MACRO(__unavailable)
 
 #undef NEVERD_PRELUDE_TYPE
 #undef NEVERD_PRELUDE_MACRO
+#undef NEVERD_PRELUDE_RECORD

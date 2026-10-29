@@ -98,6 +98,14 @@ jobs:
           --compiler /usr/lib/llvm-23/bin/clang
           --build-dir build-x87-portable
           --output-dir build-x87-portable/evidence
+      - name: Freeze generated FNOP and MMX reset state transitions
+        run: >-
+          python scripts/check_x87_portable_generated.py --profile resets
+          --driver build-x87-portable/bin/NeverDX87PortableGeneratedTests
+          --runtime build-x87-portable/bin/libneverd_x87_runtime_v1.so
+          --compiler /usr/lib/llvm-23/bin/clang
+          --build-dir build-x87-portable
+          --output-dir build-x87-portable/reset-evidence
       - name: Freeze native AArch64 translation objects and sessions
         if: ${{ matrix.arch == 'aarch64' }}
         run: >-
@@ -126,6 +134,7 @@ jobs:
           name: x87-portable-generated-${{ matrix.arch }}-${{ github.sha }}
           path: |
             build-x87-portable/evidence/
+            build-x87-portable/reset-evidence/
             build-x87-portable/translation-evidence/
             build-x87-portable/arithmetic-evidence/
             build-x87-portable/performance-evidence/

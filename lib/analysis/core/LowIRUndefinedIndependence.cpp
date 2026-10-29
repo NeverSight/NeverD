@@ -3264,9 +3264,10 @@ public:
       } else {
         if (Contract.X64FlagsProfile) {
           const auto Raw = Ctx.mkFreshVar(64, "entry_flags");
-          const auto Packed =
-              Ctx.mkOr(Ctx.mkAnd(Raw, Ctx.mkConst(64, FlagProfile::EntryMask)),
-                       Ctx.mkConst(64, 2));
+          const auto Packed = Ctx.mkOr(
+              Ctx.mkAnd(Raw, Ctx.mkConst(64, FlagProfile::entryMask(
+                                                 *Contract.X64FlagsProfile))),
+              Ctx.mkConst(64, 2));
           EntrySystem =
               Ctx.mkAnd(Packed, Ctx.mkConst(64, ~FlagProfile::SplitMask));
           for (const auto &[Offset, Bit] : FlagProfile::Flags)

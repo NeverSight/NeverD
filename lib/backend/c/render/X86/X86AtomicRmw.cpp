@@ -20,6 +20,13 @@
 
 namespace neverd {
 
+std::string renderX86ReturnSlotAddress(const std::string &IntrinsicName) {
+  // A frame-pointer bias is not equivalent under stack realignment.
+  return "({ extern void *" + IntrinsicName +
+         "(void) __asm__(\"llvm.addressofreturnaddress.p0\"); " +
+         IntrinsicName + "(); })";
+}
+
 std::string renderX86AtomicRmw(const X86AtomicRmwPlan &Plan,
                                const std::string &Address,
                                const std::string &Value) {

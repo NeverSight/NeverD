@@ -7,6 +7,8 @@
 /// A complete x87 snapshot, with explicit provenance for retained payloads.
 //===----------------------------------------------------------------------===//
 
+#include "X87ContextState.h"
+
 #include "neverd/Limits.h"
 #include "neverd/ir/X86/X87Capabilities.h"
 #include "neverd/ir/X86/X87Context.h"
@@ -100,11 +102,7 @@ bool NdOpEmulator::executeX87Context(const LowOp &Op) {
                   8);
       writeOutput(Op.Output, Value);
     } else if (Id == Intrinsic::X87ContextMMXEnter) {
-      const auto Old = X87ContextState;
-      for (unsigned I = 0; I < 8; ++I)
-        std::copy_n(Old.begin() + 32 + ((I + 8 - Top) & 7) * 16, 16,
-                    X87ContextState.begin() + 32 + I * 16);
-      X87ContextState[3] &= 0xc7;
+      setX87ContextTop(X87ContextState, 0);
       X87ContextState[4] = 0xff;
       Registers[x86reg::FPU_SW] = SW & 0xc7ff;
     } else if (Id == Intrinsic::X87ContextMMXWrite) {
@@ -147,6 +145,7 @@ bool NdOpEmulator::executeX87Context(const LowOp &Op) {
     // These transitions need no host instruction or retained payload values.
     // FEMMS leaves every payload undefined; empty tags alone cannot authorize
     // reusing the old bits through MMX reads, environment loads or saves.
+    setX87ContextTop(State, 0);
     State[4] = 0;
     if (Spec->InvalidatesPayloads)
       X87PayloadKnown = 0;

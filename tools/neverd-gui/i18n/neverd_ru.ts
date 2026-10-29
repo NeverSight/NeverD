@@ -6899,6 +6899,14 @@ Reference identities: unresolved. Some call or data targets cannot be compared. 
         <translation>
 Идентичности ссылок: не определены. Некоторые цели вызовов или ссылки на данные нельзя сравнить. Само по себе это не доказывает наличие изменения.</translation>
     </message>
+    <message>
+        <source>Include matched calls</source>
+        <translation>Включить сопоставленные вызовы</translation>
+    </message>
+    <message>
+        <source>Extend shared regions across direct calls whose targets are paired. Results depend on the current function pairs and are recomputed when pairs change. This does not validate call behavior.</source>
+        <translation>Расширять общие области через прямые вызовы с сопоставленными целями. Результаты зависят от текущих пар функций и пересчитываются при их изменении. Поведение вызовов при этом не проверяется.</translation>
+    </message>
 </context>
 <context>
     <name>neverd::gui::ComparisonFlowDialog</name>
@@ -8051,6 +8059,30 @@ External input producers are not compared or counted as shared code.</source>
 SSA recipe: %1</source>
         <translation>
 Метод SSA: %1</translation>
+    </message>
+    <message>
+        <source>
+Calls use current function pairs; behavior is not validated.</source>
+        <translation>
+Вызовы используют текущие пары функций; поведение не проверено.</translation>
+    </message>
+    <message>
+        <source>Call context…</source>
+        <translation>Контекст вызовов…</translation>
+    </message>
+    <message>
+        <source>Primary</source>
+        <translation>Основной</translation>
+    </message>
+    <message>
+        <source>Secondary</source>
+        <translation>Вторичный</translation>
+    </message>
+    <message>
+        <source>%1 primary / %2 secondary functions · %3 shared spans
+Coverage: %4% / %5% of eligible instructions, including paired direct calls. Function pairs condition this evidence; behavior is not validated.</source>
+        <translation>%1 основных / %2 вторичных функций · %3 общих диапазонов
+Покрытие: %4% / %5% допустимых инструкций, включая сопоставленные прямые вызовы. Эти данные зависят от пар функций; поведение не проверено.</translation>
     </message>
 </context>
 <context>
@@ -9596,6 +9628,18 @@ Ambiguities and manual decisions remain report-local. Region hypotheses retain t
     <message>
         <source>Releases</source>
         <translation>Выпуски</translation>
+    </message>
+    <message>
+        <source>Calls in these saved spans rely on the source report's function pairs. They do not prove equivalent callee behavior.</source>
+        <translation>Вызовы в этих сохранённых фрагментах опираются на пары функций из исходного отчёта. Они не доказывают эквивалентность поведения вызываемых функций.</translation>
+    </message>
+    <message>
+        <source>All native spans</source>
+        <translation>Все машинные фрагменты</translation>
+    </message>
+    <message>
+        <source>All SSA spans</source>
+        <translation>Все фрагменты SSA</translation>
     </message>
 </context>
 <context>

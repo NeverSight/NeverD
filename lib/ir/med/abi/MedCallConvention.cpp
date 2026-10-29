@@ -29,6 +29,42 @@ const CallArgumentConvention *callArgumentConvention(Arch A, BinaryFormat F) {
   return nullptr;
 }
 
+bool holdsUndefinedIncomingScratch(const MedFunc &Func, Arch TheArch,
+                                   BinaryFormat Format, const MedVar &V) {
+  const TargetRegInfo &TRI = getTargetRegInfo(TheArch);
+  if (!isUndefinedIncomingScratch(
+          TRI, TheArch, callArgumentConvention(TheArch, Format),
+          TRI.integerArgumentLayout(Format).Registers, V))
+    return false;
+  const std::optional<unsigned> Family = gprFamilyOf(TheArch, V.RegOff);
+  if (llvm::any_of(Func.Params, [&](const MedVar &Param) {
+        return Param.RegOff != kNoParamReg &&
+               gprFamilyOf(TheArch, Param.RegOff) == Family;
+      }))
+    return false;
+  const auto Defines = [&](const MedVar &Value) {
+    return Value.Kind == V.Kind && Value.Id == V.Id && Value.SSAVer == V.SSAVer;
+  };
+  if (llvm::any_of(Func.CallClobbers, [&](const MedCallClobber &Clobber) {
+        return Defines(Clobber.Value);
+      }))
+    return false;
+  for (const MedBlock &Block : Func.Blocks) {
+    if (llvm::any_of(Block.Phis,
+                     [&](const PhiNode &Phi) { return Defines(Phi.Output); }))
+      return false;
+    for (const MedOp &Op : Block.Ops) {
+      // An entry self-copy names the incoming value; it defines none.
+      if ((Defines(Op.Output) &&
+           !(Op.Opcode == NdOp::COPY && Op.NumInputs >= 1 &&
+             Op.Inputs[0] == Op.Output)) ||
+          llvm::any_of(Op.IntrinsicOutputs, Defines))
+        return false;
+    }
+  }
+  return true;
+}
+
 std::optional<CallingConv> callingConventionOf(Arch A, BinaryFormat F) {
   switch (A) {
   case Arch::X64:

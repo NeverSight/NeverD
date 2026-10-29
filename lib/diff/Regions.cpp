@@ -15,6 +15,7 @@
 #include "neverd/diff/StableHash.h"
 
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringExtras.h"
 
 #include <algorithm>
@@ -73,16 +74,56 @@ struct Seed {
   uint64_t Key;
   uint32_t Function, Block, Instruction, Begin, End;
 };
-bool eligible(const Instruction &I) { return I.Flow == InstructionFlow::None; }
-bool equal(const Program &P, uint32_t A, const Program &S, uint32_t B) {
+/// Canonical call targets in the secondary inventory. Build once per search;
+/// an unpaired target is a barrier, never a wildcard or a numeric RVA match.
+struct CallContext {
+  std::vector<uint32_t> Primary, Secondary;
+
+  CallContext(const Program &P, const Program &S, bool Enabled,
+              llvm::ArrayRef<FunctionMatch> Matches, Budget &Work) {
+    if (!Enabled)
+      return;
+    Work.phase("regions:call-context");
+    for (size_t I = 0; I < P.Functions.size() + S.Functions.size(); ++I)
+      Work.charge();
+    Primary.assign(P.Functions.size(), NoIndex);
+    Secondary.assign(S.Functions.size(), NoIndex);
+    for (const auto &M : Matches) {
+      Work.charge();
+      if (M.Primary >= Primary.size() || M.Secondary >= Secondary.size() ||
+          Primary[M.Primary] != NoIndex || Secondary[M.Secondary] != NoIndex)
+        throw std::invalid_argument("region call context needs a valid "
+                                    "one-to-one function correspondence");
+      Primary[M.Primary] = Secondary[M.Secondary] = M.Secondary;
+    }
+  }
+};
+bool eligible(const Instruction &I, llvm::ArrayRef<uint32_t> Calls) {
+  return I.Flow == InstructionFlow::None ||
+         (I.Flow == InstructionFlow::Call && I.Callee != NoIndex &&
+          !I.UnresolvedCallee && !I.HasUnresolvedData &&
+          !I.AddressReferenceCount && !Calls.empty() &&
+          Calls[I.Callee] != NoIndex);
+}
+uint64_t instructionKey(const Instruction &I, llvm::ArrayRef<uint32_t> Calls) {
+  return I.Flow == InstructionFlow::Call
+             ? StableHash().add(I.Shape).add(Calls[I.Callee]).value()
+             : I.Shape;
+}
+bool equal(const Program &P, uint32_t A, const Program &S, uint32_t B,
+           const CallContext &Calls) {
   const auto &X = P.Instructions[A], &Y = S.Instructions[B];
-  return eligible(X) && eligible(Y) && X.Shape == Y.Shape &&
-         P.mnemonic(X) == S.mnemonic(Y);
+  return eligible(X, Calls.Primary) && eligible(Y, Calls.Secondary) &&
+         X.Flow == Y.Flow && X.Shape == Y.Shape &&
+         P.mnemonic(X) == S.mnemonic(Y) &&
+         (X.Flow != InstructionFlow::Call ||
+          Calls.Primary[X.Callee] == Calls.Secondary[Y.Callee]);
 }
 
 std::vector<Seed> index(const Program &P, const RegionSettings &Settings,
                         Budget &Work, uint64_t &Count, uint64_t &Instructions,
-                        std::vector<uint32_t> &FunctionInstructions) {
+                        std::vector<uint32_t> &FunctionInstructions,
+                        llvm::ArrayRef<uint32_t> Calls) {
   FunctionInstructions.assign(P.Functions.size(), 0);
   std::vector<Seed> Seeds;
   for (uint32_t F = 0; F < P.Functions.size(); ++F) {
@@ -93,12 +134,12 @@ std::vector<Seed> index(const Program &P, const RegionSettings &Settings,
       const uint32_t End = Block.FirstInstruction + Block.InstructionCount;
       for (uint32_t I = Block.FirstInstruction; I < End;) {
         Work.charge();
-        if (!eligible(P.Instructions[I])) {
+        if (!eligible(P.Instructions[I], Calls)) {
           ++I;
           continue;
         }
         const auto Begin = I;
-        while (I < End && eligible(P.Instructions[I])) {
+        while (I < End && eligible(P.Instructions[I], Calls)) {
           Work.charge();
           ++I;
           ++Instructions;
@@ -113,7 +154,7 @@ std::vector<Seed> index(const Program &P, const RegionSettings &Settings,
             Work.exhausted();
           StableHash H;
           for (unsigned K = 0; K < limits::kRegionSeedInstructions; ++K)
-            H.add(P.Instructions[At + K].Shape);
+            H.add(instructionKey(P.Instructions[At + K], Calls));
           Seeds.push_back({H.value(), F, B, At, Begin, I});
           ++Count;
         }
@@ -129,6 +170,14 @@ std::vector<Seed> index(const Program &P, const RegionSettings &Settings,
 }
 
 using Alignment = std::tuple<uint32_t, uint32_t, uint32_t, uint32_t, int64_t>;
+bool tail(const Program &P, const RegionSpan &Span) {
+  const auto Insns =
+      P.instructions(P.blocks(P.Functions[Span.Function])[Span.Block]);
+  const auto End = Span.FirstInstruction + Span.InstructionCount;
+  return End + 1 == Insns.size() &&
+         (Insns[End].Flow == InstructionFlow::Return ||
+          Insns[End].Flow == InstructionFlow::Jump);
+}
 Alignment alignment(const RegionAnchor &A) {
   return {A.Primary.Function, A.Primary.Block, A.Secondary.Function,
           A.Secondary.Block,
@@ -166,7 +215,7 @@ void normalizeAnchors(RegionAnalysis &R, Budget &Work) {
 void anchors(const Program &P, const Program &S, const std::vector<Seed> &A,
              const std::vector<Seed> &B, const RegionSettings &Settings,
              RegionAnalysis &R, Budget &Work, llvm::ArrayRef<uint32_t> PCount,
-             llvm::ArrayRef<uint32_t> SCount) {
+             llvm::ArrayRef<uint32_t> SCount, const CallContext &Calls) {
   // An interval index per alignment prevents every overlapping seed from
   // re-extending an already checked long run. Its size is bounded by anchors.
   std::map<Alignment, std::map<uint32_t, uint32_t>> Covered;
@@ -215,7 +264,8 @@ void anchors(const Program &P, const Program &S, const std::vector<Seed> &A,
                SA.Instruction + Right < SA.End &&
                Right < limits::kRegionExtensionInstructions) {
           Work.charge();
-          if (!equal(P, PA.Instruction + Right, S, SA.Instruction + Right))
+          if (!equal(P, PA.Instruction + Right, S, SA.Instruction + Right,
+                     Calls))
             break;
           ++Right;
         }
@@ -225,20 +275,51 @@ void anchors(const Program &P, const Program &S, const std::vector<Seed> &A,
                Left < SA.Instruction - SA.Begin &&
                Left + Right < limits::kRegionExtensionInstructions) {
           Work.charge();
-          if (!equal(P, PA.Instruction - Left - 1, S,
-                     SA.Instruction - Left - 1))
+          if (!equal(P, PA.Instruction - Left - 1, S, SA.Instruction - Left - 1,
+                     Calls))
             break;
           ++Left;
         }
         if (Left + Right < Settings.MinimumInstructions)
           continue;
         const bool UniqueSeed = AE - I == 1 && BE - J == 1;
+        const auto PB =
+            P.blocks(P.Functions[PA.Function])[PA.Block].FirstInstruction;
+        const auto SB =
+            S.blocks(S.Functions[SA.Function])[SA.Block].FirstInstruction;
+        const RegionAnchor Candidate{
+            {PA.Function, PA.Block, PA.Instruction - Left - PB, Left + Right},
+            {SA.Function, SA.Block, SA.Instruction - Left - SB, Left + Right},
+            UniqueSeed};
         if (!UniqueSeed &&
             Left + Right < Settings.MinimumRepeatedInstructions &&
             Left + Right < std::min(PCount[PA.Function], SCount[SA.Function]) *
                                limits::kRegionMinShortRunFunctionCoverage) {
-          ++R.WeakCandidates;
-          continue;
+          // Several distinct, paired targets supply additional context for
+          // short call-heavy runs. A terminal cleanup run can use one paired
+          // target. Calls to one target inside a block lack that support. The
+          // same occurrence bounds, exact checks and clone ambiguity apply.
+          llvm::SmallVector<uint32_t, limits::kRegionMinDistinctCallTargets>
+              Targets;
+          if (Settings.Calls)
+            for (uint32_t At = PA.Instruction - Left;
+                 At < PA.Instruction + Right; ++At) {
+              Work.charge();
+              const auto &Insn = P.Instructions[At];
+              if (Insn.Flow == InstructionFlow::Call &&
+                  !llvm::is_contained(Targets, Insn.Callee))
+                Targets.push_back(Insn.Callee);
+              if (Targets.size() == limits::kRegionMinDistinctCallTargets)
+                break;
+            }
+          const bool TerminalCall =
+              Targets.size() >= limits::kRegionMinTerminalCallTargets &&
+              tail(P, Candidate.Primary) && tail(S, Candidate.Secondary);
+          if (Targets.size() < limits::kRegionMinDistinctCallTargets &&
+              !TerminalCall) {
+            ++R.WeakCandidates;
+            continue;
+          }
         }
         if (R.Anchors.size() == Settings.MaxAnchors)
           Work.exhausted();
@@ -255,14 +336,7 @@ void anchors(const Program &P, const Program &S, const std::vector<Seed> &A,
           At = Ranges.erase(At);
         }
         Ranges[MergedBegin] = MergedEnd;
-        const auto PB =
-            P.blocks(P.Functions[PA.Function])[PA.Block].FirstInstruction;
-        const auto SB =
-            S.blocks(S.Functions[SA.Function])[SA.Block].FirstInstruction;
-        R.Anchors.push_back(
-            {{PA.Function, PA.Block, Begin - PB, Left + Right},
-             {SA.Function, SA.Block, SA.Instruction - Left - SB, Left + Right},
-             UniqueSeed});
+        R.Anchors.push_back(Candidate);
       }
     I = AE;
     J = BE;
@@ -294,18 +368,10 @@ bool internalCall(const Program &P, const std::vector<uint32_t> &Functions,
       }
   return false;
 }
-bool tail(const Program &P, const RegionSpan &Span) {
-  const auto Insns =
-      P.instructions(P.blocks(P.Functions[Span.Function])[Span.Block]);
-  const auto End = Span.FirstInstruction + Span.InstructionCount;
-  return End + 1 == Insns.size() &&
-         (Insns[End].Flow == InstructionFlow::Return ||
-          Insns[End].Flow == InstructionFlow::Jump);
-}
 RegionHypothesis summarize(const Program &P, const Program &S,
                            const RegionAnalysis &R,
                            std::vector<uint32_t> Members,
-                           Budget *Work = nullptr) {
+                           const CallContext &Calls, Budget *Work = nullptr) {
   RegionHypothesis H;
   H.AnalysisComplete =
       P.Identity.DiscoveryComplete && S.Identity.DiscoveryComplete;
@@ -315,7 +381,9 @@ RegionHypothesis summarize(const Program &P, const Program &S,
   uint64_t Sum = 0, Unique = 0;
   std::set<std::pair<uint32_t, uint32_t>> PrimaryTails;
   StableHash Id;
-  Id.add("native-regions-v1").add(P.Identity.Revision).add(S.Identity.Revision);
+  Id.add(R.Calls ? regionProfile(true) : "native-regions-v1")
+      .add(P.Identity.Revision)
+      .add(S.Identity.Revision);
   for (uint32_t N : H.Anchors) {
     if (Work)
       Work->charge();
@@ -346,7 +414,8 @@ RegionHypothesis summarize(const Program &P, const Program &S,
   H.SecondaryFunctions.assign(SF.begin(), SF.end());
   H.PrimaryInstructions = covered(std::move(PR));
   H.SecondaryInstructions = covered(std::move(SR));
-  const auto Eligible = [&](const Program &Input, const auto &Functions) {
+  const auto Eligible = [&](const Program &Input, const auto &Functions,
+                            llvm::ArrayRef<uint32_t> Targets) {
     uint64_t Count = 0;
     for (auto F : Functions) {
       H.AnalysisComplete &= !Input.Functions[F].has(TraitIncomplete);
@@ -354,13 +423,15 @@ RegionHypothesis summarize(const Program &P, const Program &S,
         for (const auto &I : Input.instructions(B)) {
           if (Work)
             Work->charge();
-          Count += eligible(I);
+          Count += eligible(I, Targets);
         }
     }
     return Count;
   };
-  H.PrimaryCoverage = double(H.PrimaryInstructions) / Eligible(P, PF);
-  H.SecondaryCoverage = double(H.SecondaryInstructions) / Eligible(S, SF);
+  H.PrimaryCoverage =
+      double(H.PrimaryInstructions) / Eligible(P, PF, Calls.Primary);
+  H.SecondaryCoverage =
+      double(H.SecondaryInstructions) / Eligible(S, SF, Calls.Secondary);
   const bool Copies =
       Sum > H.PrimaryInstructions || Sum > H.SecondaryInstructions;
   H.Ambiguous = Copies || PF.size() > 1 || SF.size() > 1;
@@ -419,7 +490,7 @@ std::map<uint32_t, std::vector<uint32_t>> components(const Program &P,
   return Members;
 }
 void groups(const Program &P, const Program &S, const RegionSettings &Settings,
-            RegionAnalysis &R, Budget &Work) {
+            RegionAnalysis &R, Budget &Work, const CallContext &Calls) {
   auto Members = components(P, S, R, Work);
   for (auto &[Owner, Set] : Members) {
     (void)Owner;
@@ -430,7 +501,7 @@ void groups(const Program &P, const Program &S, const RegionSettings &Settings,
     }
     if (R.Hypotheses.size() == Settings.MaxHypotheses)
       Work.exhausted();
-    R.Hypotheses.push_back(summarize(P, S, R, std::move(Set), &Work));
+    R.Hypotheses.push_back(summarize(P, S, R, std::move(Set), Calls, &Work));
   }
 }
 } // namespace
@@ -471,7 +542,10 @@ std::string RegionSettings::describe() const {
          ":" + std::to_string(MinimumRepeatedInstructions) + ":" +
          std::to_string(MaxOccurrences) + ":" + std::to_string(MaxSeeds) + ":" +
          std::to_string(MaxWork) + ":" + std::to_string(MaxAnchors) + ":" +
-         std::to_string(MaxHypotheses);
+         std::to_string(MaxHypotheses) + (Calls ? ":calls" : "");
+}
+llvm::StringRef regionProfile(bool Calls) {
+  return Calls ? "native-call-runs-v1" : "native-runs-v1";
 }
 std::optional<std::string> RegionSettings::validate() const {
   if (MinimumInstructions < limits::kRegionSeedInstructions ||
@@ -489,7 +563,8 @@ std::optional<std::string> RegionSettings::validate() const {
 }
 RegionAnalysis findRegions(const Program &P, const Program &S,
                            const RegionSettings &Settings,
-                           const ComparisonControl &Control) {
+                           const ComparisonControl &Control,
+                           llvm::ArrayRef<FunctionMatch> Matches) {
   if (auto Error = Settings.validate())
     throw std::invalid_argument(*Error);
   for (const auto *Input : {&P, &S})
@@ -502,22 +577,25 @@ RegionAnalysis findRegions(const Program &P, const Program &S,
     throw std::invalid_argument("native regions require the same admitted ISA, "
                                 "ABI and normalization profile");
   RegionAnalysis R;
+  R.Calls = Settings.Calls;
   if (!Settings.Enabled)
     return R;
   R.State = ComparisonState::Complete;
   Budget Work(R, Settings, Control);
   try {
+    const CallContext Calls(P, S, Settings.Calls, Matches, Work);
     std::vector<uint32_t> PCount, SCount;
     Work.phase("regions:index-primary");
     const auto A = index(P, Settings, Work, R.PrimarySeeds,
-                         R.PrimaryEligibleInstructions, PCount);
+                         R.PrimaryEligibleInstructions, PCount, Calls.Primary);
     Work.phase("regions:index-secondary");
-    const auto B = index(S, Settings, Work, R.SecondarySeeds,
-                         R.SecondaryEligibleInstructions, SCount);
+    const auto B =
+        index(S, Settings, Work, R.SecondarySeeds,
+              R.SecondaryEligibleInstructions, SCount, Calls.Secondary);
     Work.phase("regions:anchors");
-    anchors(P, S, A, B, Settings, R, Work, PCount, SCount);
+    anchors(P, S, A, B, Settings, R, Work, PCount, SCount, Calls);
     Work.phase("regions:groups");
-    groups(P, S, Settings, R, Work);
+    groups(P, S, Settings, R, Work, Calls);
     Work.poll();
   } catch (const Interrupted &) {
     // Keep only completed anchors and hypotheses; the stop reason is separate
@@ -532,12 +610,15 @@ namespace {
 /// first seed was found. Neither score nor saved membership proves uniqueness.
 std::map<uint32_t, uint32_t> uniqueWindows(const Program &P, const Program &S,
                                            const RegionSettings &Settings,
-                                           Budget &Work) {
+                                           Budget &Work,
+                                           const CallContext &Calls) {
   uint64_t Count = 0, Instructions = 0;
   std::vector<uint32_t> Eligible;
-  const auto A = index(P, Settings, Work, Count, Instructions, Eligible);
+  const auto A =
+      index(P, Settings, Work, Count, Instructions, Eligible, Calls.Primary);
   Count = Instructions = 0;
-  const auto B = index(S, Settings, Work, Count, Instructions, Eligible);
+  const auto B =
+      index(S, Settings, Work, Count, Instructions, Eligible, Calls.Secondary);
   std::map<uint32_t, uint32_t> Unique;
   size_t I = 0, J = 0;
   while (I < A.size() && J < B.size()) {
@@ -567,11 +648,14 @@ std::map<uint32_t, uint32_t> uniqueWindows(const Program &P, const Program &S,
 }
 } // namespace
 
-std::optional<std::string> validateRegions(const RegionAnalysis &R,
-                                           const RegionSettings &Settings,
-                                           const Program &P, const Program &S,
-                                           const ComparisonControl &Control) {
+std::optional<std::string>
+validateRegions(const RegionAnalysis &R, const RegionSettings &Settings,
+                const Program &P, const Program &S,
+                const ComparisonControl &Control,
+                llvm::ArrayRef<FunctionMatch> Matches) {
   Control.check();
+  if (R.Calls != Settings.Calls)
+    return "region profile disagrees with its settings";
   if (!R.State)
     return R.Anchors.empty() && R.Hypotheses.empty()
                ? std::optional<std::string>()
@@ -585,9 +669,11 @@ std::optional<std::string> validateRegions(const RegionAnalysis &R,
   RegionAnalysis Checked;
   Budget Work(Checked, Settings, Control);
   try {
+    const CallContext Calls(P, S, Settings.Calls && !R.Anchors.empty(), Matches,
+                            Work);
     std::map<uint32_t, uint32_t> Unique;
     if (llvm::any_of(R.Anchors, [](const auto &A) { return A.UniqueSeed; }))
-      Unique = uniqueWindows(P, S, Settings, Work);
+      Unique = uniqueWindows(P, S, Settings, Work, Calls);
     const auto Span = [&](const Program &Input, const RegionSpan &A) {
       if (A.Function >= Input.Functions.size())
         return false;
@@ -614,7 +700,7 @@ std::optional<std::string> validateRegions(const RegionAnalysis &R,
       bool HasUniqueWindow = false;
       for (uint32_t I = 0; I < A.Primary.InstructionCount; ++I) {
         Work.charge();
-        if (!equal(P, PI + I, S, SI + I))
+        if (!equal(P, PI + I, S, SI + I, Calls))
           return "region anchor does not have the stated normalized-run "
                  "evidence";
         if (A.Primary.InstructionCount - I >= limits::kRegionSeedInstructions) {
@@ -654,7 +740,7 @@ std::optional<std::string> validateRegions(const RegionAnalysis &R,
           return "region hypothesis repeats or invents an anchor";
       if (H.Anchors != *Membership[H.Anchors.front()])
         return "region hypothesis does not describe a connected component";
-      const auto Actual = summarize(P, S, R, H.Anchors, &Work);
+      const auto Actual = summarize(P, S, R, H.Anchors, Calls, &Work);
       if (H.Id != Actual.Id || H.PrimaryFunctions != Actual.PrimaryFunctions ||
           H.SecondaryFunctions != Actual.SecondaryFunctions ||
           H.Explanations != Actual.Explanations ||

@@ -15,11 +15,13 @@
 #include "ComparisonSession.h"
 #include "Icons.h"
 
+#include <QAction>
 #include <QComboBox>
 #include <QHBoxLayout>
 #include <QHeaderView>
 #include <QItemSelectionModel>
 #include <QLabel>
+#include <QMenu>
 #include <QPushButton>
 #include <QSignalBlocker>
 #include <QSplitter>
@@ -98,7 +100,7 @@ ComparisonRegionsDialog::ComparisonRegionsDialog(ComparisonSession &S,
   auto *Left = new QWidget(Split);
   auto *LeftLayout = new QVBoxLayout(Left);
   LeftLayout->setContentsMargins(0, 0, 0, 0);
-  Kind = new QComboBox(Left);
+  Kind = new QComboBox(this);
   Kind->setObjectName("regionKind");
   Kind->setAccessibleName(tr("Possible transformation"));
   for (const auto &[Name, Key] : {std::pair{tr("All hypotheses"), "all"},
@@ -113,7 +115,7 @@ ComparisonRegionsDialog::ComparisonRegionsDialog(ComparisonSession &S,
                                   {tr("Shared region"), "shared_region"}})
     Kind->addItem(Name, Key);
   Kind->addItem(tr("All shared spans (including unclassified)"), "raw_anchors");
-  LeftLayout->addWidget(Kind);
+  Layout->insertWidget(Layout->indexOf(Split), Kind);
   Hypotheses = new ComparisonModel(Session,
                                    Flow ? ComparisonModel::Kind::FlowRegions
                                         : ComparisonModel::Kind::Regions,
@@ -146,21 +148,23 @@ ComparisonRegionsDialog::ComparisonRegionsDialog(ComparisonSession &S,
     auto *Button = new QPushButton(Name, AnchorPane);
     Navigation->addWidget(Button);
     connect(Button, &QPushButton::clicked, this, [this, Side] {
-      if (Flow) {
-        const auto Address = Anchors
-                                 ->row(AnchorTable->currentIndex()
-                                           .row())[QString(Side) + "_function"]
-                                 .toString();
-        if (!Address.isEmpty())
-          emit inspectFunction(Side, Address);
-        return;
-      }
-      const auto Location =
-          Anchors->row(AnchorTable->currentIndex().row())[Side].toObject();
-      if (!Location.isEmpty())
-        emit inspectFunction(Side, Location["function"].toString());
+      const auto Address = anchorFunction(Side);
+      if (!Address.isEmpty())
+        emit inspectFunction(Side, Address);
     });
   }
+  CallContext = new QPushButton(tr("Call context…"), AnchorPane);
+  CallContext->setObjectName("regionCallContext");
+  auto *CallMenu = new QMenu(CallContext);
+  CallContext->setMenu(CallMenu);
+  for (const auto &[Name, Side] :
+       {std::pair{tr("Primary"), "primary"}, {tr("Secondary"), "secondary"}})
+    connect(CallMenu->addAction(Name), &QAction::triggered, this, [this, Side] {
+      const auto Address = anchorFunction(Side);
+      if (!Address.isEmpty())
+        emit inspectCallContext(Side, Address);
+    });
+  Navigation->addWidget(CallContext);
   Navigation->addStretch();
   AnchorLayout->addLayout(Navigation);
   Instructions =
@@ -205,15 +209,15 @@ ComparisonRegionsDialog::ComparisonRegionsDialog(ComparisonSession &S,
           &ComparisonRegionsDialog::filter);
   connect(HypothesisTable->selectionModel(),
           &QItemSelectionModel::currentChanged, this,
-          [this](const QModelIndex &Index) {
-            RegionId = Hypotheses->row(Index.row())["id"].toString();
-            Anchors->setQuery(RegionId.isEmpty()
-                                  ? QJsonObject{}
-                                  : QJsonObject{{"region_id", RegionId}});
-            Instructions->setQuery({});
-          });
+          &ComparisonRegionsDialog::selectHypothesis);
+  // Selecting an unloaded row starts a page request. Its arrival does not
+  // change the selection, so resolve the selected evidence again then.
+  connect(Hypotheses, &ComparisonModel::pageReady, this,
+          &ComparisonRegionsDialog::selectHypothesis);
   connect(AnchorTable->selectionModel(), &QItemSelectionModel::currentChanged,
           this, &ComparisonRegionsDialog::selectAnchor);
+  connect(Anchors, &ComparisonModel::pageReady, this,
+          &ComparisonRegionsDialog::selectAnchor);
   connect(Anchors, &ComparisonModel::pageReady, this, [this](const auto &Page) {
     const auto H = Page["hypothesis"].toObject();
     if (H.isEmpty()) {
@@ -236,10 +240,16 @@ ComparisonRegionsDialog::ComparisonRegionsDialog(ComparisonSession &S,
                    "functions. "
                    "Control and external effects remain open; hover for "
                    "original bytes.")
-              : tr("%1 primary / %2 secondary functions · %3 shared spans\n"
-                   "Coverage: %4% / %5% of decoded non-transfer instructions. "
-                   "Calls "
-                   "and control transfers need separate review."))
+         : Page["analysis"].toObject()["call_evidence"] ==
+                 "current_function_correspondence"
+             ? tr("%1 primary / %2 secondary functions · %3 shared spans\n"
+                  "Coverage: %4% / %5% of eligible instructions, including "
+                  "paired direct calls. Function pairs condition this "
+                  "evidence; behavior is not validated.")
+             : tr("%1 primary / %2 secondary functions · %3 shared spans\n"
+                  "Coverage: %4% / %5% of decoded non-transfer instructions. "
+                  "Calls "
+                  "and control transfers need separate review."))
             .arg(H["primary_function_count"].toInt())
             .arg(H["secondary_function_count"].toInt())
             .arg(H["anchor_count"].toInt())
@@ -252,8 +262,27 @@ ComparisonRegionsDialog::ComparisonRegionsDialog(ComparisonSession &S,
           &ComparisonRegionsDialog::refresh);
   refresh();
 }
+QString ComparisonRegionsDialog::anchorFunction(const QString &Side) const {
+  const auto A = Anchors->row(AnchorTable->currentIndex().row());
+  return Flow ? A[Side + "_function"].toString()
+              : A[Side].toObject()["function"].toString();
+}
+void ComparisonRegionsDialog::selectHypothesis() {
+  if (Kind->currentData().toString() == "raw_anchors")
+    return;
+  const auto Id =
+      Hypotheses->row(HypothesisTable->currentIndex().row())["id"].toString();
+  if (Id == RegionId)
+    return;
+  RegionId = Id;
+  Anchors->setQuery(RegionId.isEmpty() ? QJsonObject{}
+                                       : QJsonObject{{"region_id", RegionId}});
+  selectAnchor();
+}
 void ComparisonRegionsDialog::selectAnchor() {
   const auto A = Anchors->row(AnchorTable->currentIndex().row());
+  CallContext->setEnabled(!A.isEmpty() && !Session.busy() &&
+                          !Session.summary()["stale"].toBool());
   QJsonObject Query;
   if (!A.isEmpty())
     Query = {{"region_id", RegionId}, {"anchor", A["anchor"]}};
@@ -276,11 +305,15 @@ void ComparisonRegionsDialog::selectAnchor() {
               .arg(A["frontier_count"].toInt()));
     }
   }
-  Instructions->setQuery(Query);
+  if (Query != InstructionQuery) {
+    InstructionQuery = Query;
+    Instructions->setQuery(Query);
+  }
 }
 void ComparisonRegionsDialog::refresh() {
   const auto &S = Session.summary();
   const bool Usable = !Session.busy() && !S["stale"].toBool();
+  CallContext->setEnabled(Usable && !anchorFunction("primary").isEmpty());
   for (auto *View : {HypothesisTable, AnchorTable, InstructionTable})
     View->setEnabled(Usable);
   HypothesisTable->setEnabled(Usable &&
@@ -324,6 +357,10 @@ void ComparisonRegionsDialog::refresh() {
                 .arg(R["state"].toString().replace('_', ' '))
           : tr("Enable region analysis in comparison Settings, then compare "
                "again."));
+  if (!Flow && R["call_evidence"] == "current_function_correspondence")
+    Summary->setText(
+        Summary->text() +
+        tr("\nCalls use current function pairs; behavior is not validated."));
   if (Flow)
     Summary->setText(
         Summary->text() +
@@ -345,7 +382,10 @@ void ComparisonRegionsDialog::refresh() {
 }
 void ComparisonRegionsDialog::filter() {
   const bool Raw = Kind->currentData().toString() == "raw_anchors";
+  RegionId.clear();
+  InstructionQuery = {};
   HypothesisTable->setEnabled(!Session.busy() && !Raw);
+  HypothesisTable->parentWidget()->setVisible(!Raw);
   if (Raw) {
     Hypotheses->clear();
     Anchors->setQuery({{"all_anchors", true}});
@@ -354,7 +394,6 @@ void ComparisonRegionsDialog::filter() {
     Anchors->clear();
   }
   Instructions->clear();
-  RegionId.clear();
   selectAnchor();
 }
 } // namespace neverd::gui

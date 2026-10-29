@@ -34,9 +34,11 @@ namespace neverd {
 // A caller's field reads propose a shape. Each finite path to a return must
 // pass a complete, defined write, or preserve an observed argument. A loop
 // backedge alone supplies no initial value, and calls cut off older writes.
+// A caller that reads only the second word observed no argument passed
+// through: an untouched register is then what the caller itself left.
 bool returnsStructFields(const MedFunc &Function,
                          llvm::ArrayRef<MedReturnReg> Shape, Arch Architecture,
-                         BinaryFormat Format) {
+                         BinaryFormat Format, bool PreservedArguments) {
   if (Function.SkippedSSA || Function.Blocks.empty())
     return false;
   const auto &TRI = getTargetRegInfo(Architecture);
@@ -111,7 +113,8 @@ bool returnsStructFields(const MedFunc &Function,
 
   bool SawReturn = false;
   for (const auto &Field : Shape) {
-    if (returnsArgumentUnchanged(Function, Field, TRI, Format))
+    if (PreservedArguments &&
+        returnsArgumentUnchanged(Function, Field, TRI, Format))
       continue;
     // A block end is checked once per field even when many returns share
     // predecessors. The first visit enqueues every path before marking it.
@@ -534,6 +537,8 @@ void recoverStructReturnFromBody(const BinaryImage &Img, PipelineResult &Result,
     // agrees on it and it names consecutive FP return registers of one width.
     std::map<va_t, std::vector<MedReturnReg>> CallerHFAShapes;
     std::set<va_t> ConflictingCallerShapes;
+    // Targets with a caller that read the first word as well.
+    std::set<va_t> FirstWordObserved;
     for (const auto &Caller : Result.MedFuncs)
       for (const MedStructReturnCandidate &Candidate :
            Caller.StructReturnCandidates) {
@@ -573,6 +578,8 @@ void recoverStructReturnFromBody(const BinaryImage &Img, PipelineResult &Result,
         if (!Complete)
           continue;
         const va_t Target = Call->Inputs[0].ConstVal;
+        if (!Candidate.SecondWordOnly)
+          FirstWordObserved.insert(Target);
         auto [It, Inserted] = CallerHFAShapes.emplace(Target, Shape);
         if (!Inserted &&
             !std::equal(It->second.begin(), It->second.end(), Shape.begin(),
@@ -591,7 +598,8 @@ void recoverStructReturnFromBody(const BinaryImage &Img, PipelineResult &Result,
         continue;
       if (auto Shape = CallerHFAShapes.find(MF.Entry);
           Shape != CallerHFAShapes.end() &&
-          returnsStructFields(MF, Shape->second, Img.Arch, Img.abiFormat())) {
+          returnsStructFields(MF, Shape->second, Img.Arch, Img.abiFormat(),
+                              FirstWordObserved.count(MF.Entry) != 0)) {
         MF.MultiReturn = Shape->second;
         continue;
       }

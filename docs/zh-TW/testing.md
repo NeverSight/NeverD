@@ -2119,6 +2119,10 @@ ctest --test-dir build-release -L "^(NeverDX86ScalarMoveAuditTests|NeverDX86Lega
 
 執行 `NeverDObjCSourceCallTests`（`SourceFrameAnalysis.*`）和 `NeverDCSourcePresentationTests`，檢查位元組來源、路徑一致性、遭覆寫或逸出的儲存、不可變映像範圍、預算、編碼及中繼資料邊界。`NeverDWorkerStackText` 編譯公開的 x64/ARM64 PE 樣例並透過兩條 C 路徑驗證，包括未知的覆寫。此測試需要 Clang 和 lld-link；Windows 原生執行需要另外驗證。
 
+已驗證的指標呼叫參數即使由 LLVM 整數承載位址，也使用相同的映像文字註解。案例涵蓋 x86/x64/ARM64 的 COFF、ELF 和 Mach-O，包括遭拒的宣告、相同數值的整數、動態位址、可寫儲存及停用或跳脫的註解。參數仍保留原位址；顯示初始位元組不代表儲存不可變。
+
+回傳型別分析與呼叫 ABI 還原共用有界匯入槽證明，追蹤匯入位址和已載入目標的複製。測試涵蓋 x86/x64/ARM32/ARM64 的 COFF、ELF 和 Mach-O，以及數值碰撞、動態位址、循環、區段覆寫與非 void 宣告。
+
 <!-- i18n-section: interactive-byte-patches -->
 ## 互動式修補的職責
 
@@ -2175,3 +2179,36 @@ HFA 匯入槽測試編譯嚴格的 C 原型，並對標頭宣告及本機宣告�
 `MemoryAdditionReturnsItsSnapshotThroughBothRoutes` 與交換對照在 O0/O2 及 UBSan 下執行兩條 C 輸出路線，涵蓋四種 x64 寬度、未對齊位址、舊值及所有相鄰位元組。`LLVMCIntrinsicSemantics.NativeAddition*` / `NativeExchange*` 也執行原始 LLVM IR、保留未使用結果的寫入，並拒絕變更的組合語言契約。FS/GS 形式僅編譯，不存取宿主 TLS；執行需要 x64 宿主。這些檢查不認證並行競爭或硬體故障。
 
 `X86LegacyAtomic.LockedArithmetic*` 檢查 x86/x64 純量寬度、獨立算術旗標、來源暫存器與進位保留、有號立即數、未對齊鄰接位元組、唯讀及截斷映射、FS/GS 位址與無鎖對照。不支援的帶鎖核心運算不能發布一般儲存。`InterpreterLLVMRefinement.RawAtomicsStopBeforeLLVMProof` 也檢查四種帶鎖算術的原始特化，並保留有序記憶體證明拒絕。
+
+`X86LegacyAtomic.NeutralLogic*` 檢查各寬度與 FS/GS 下的恆等帶鎖邏輯，保留記憶體、已定義旗標和 DF，並拒絕無寫入權限、不完整存取、其他立即數及 HLE。`NeverDX86NeutralAtomicSourceTests` 在 x64 主機以 O0/O2 與 UBSan 執行 COFF/ELF/MachO 的兩條 C 路線，涵蓋高位輸入與八種位元組偏移。宣告型別變更還需執行 `NeverDHighControlFlowTests` 與 `NeverDHighCIntegerWidthTests`。
+
+## 純量跳轉驗證
+
+`NeverDConstantBranchTests` 涵蓋 x86/x64/ARM64 與 PE、ELF、Mach-O 的直接前驅、所有前驅一致的匯合及不可變讀取；未證明的備選、未定義輸入、呼叫破壞和獨立入口保留動態跳轉。`NeverDConstantBranchSourceTests` 在最佳化開啟/關閉時，編譯並執行 x64/ARM64 的兩條 C 路徑，涵蓋 O0/O2 與 UBSan。純整數函式本體使用主機標準標頭；這不等同原生 ARM64 或 Windows 驅動程式驗證。worker 的獨立 ELF x64 機器碼比對也檢查冷啟動導覽、參照及跳過的 E9 位元組。
+
+先驗證目前基本區塊能獨立證明的目標，避免無關前驅耗盡其工作預算。長前驅回歸也驗證此邊界。
+
+MedIR 的常數傳播與複製傳播共用 `canPropagateConstantToOperand`：計算所得的間接呼叫目標保留 SSA 值身分，不能因位元模式成為常數而被當作指標儲存位址；直接呼叫和一般參數繼續摺疊。`NeverDImageAnalysisBoundaryTests` 檢查 x86/x64/ARM32/ARM64 的轉換，`NeverDIndirectCallValueSourceTests` 在三種原生格式下執行 x64/ARM64 兩條 C 路徑；原映像檢視僅檢查語法及沒有憑空增加的記憶體讀取，不能脫離映像提供者執行。
+
+`NeverDReadOnlyProtectionSourceTests` 將 PE、ELF、Mach-O 的 x64/ARM64 輸入指令產生為 HighC 和 LLVM C，並以主機 Clang 在 O0/O2 加 UBSan 下執行全域變數讀寫。涵蓋兩種管線最佳化模式及具誤導性的常數區段名稱。`NeverDReadOnlyBytesTests` 檢查映射權限、完整 RELRO 範圍與非法範圍；原生指標邊界套件以 relro 和 norelro 連結相同 ELF 範例。重建 C 的主機執行不等於原生 ARM64 或 Windows 核心驗證。
+
+`RelroKeepsPartialPagesAndStaticStartupWritable` 檢查 x86、x64、ARM、ARM64 的頁面邊界與明確的載入器保證。原生指標測試執行獨立的 Linux x64 部分頁 RELRO 與無載入器靜態範例，驗證全域變數先寫後讀。`NeverDDataSymbolBindingTests` 檢查完整指標保護與兩條 C 路徑；這些檢查不代表原生 ARM 頁面配置認證。
+
+`NeverDLowScalarConstantTests` 與 `NeverDIndirectCallValueSourceTests` 涵蓋跨區塊呼叫及拒絕邊界，並執行兩條 C 路線。`NeverDLLVMCSourcePointerTests` 以 O0/O2 及 UBSan 檢查物件指標、回呼、別名及外部宣告。原生指標套件編譯公開 MinGW 範例並拒絕 MSVCRT/UCRT 配置不符；不代表原生核心或 ARM64 執行驗證。
+
+`X86RepState.ImageCopiesRetainEveryAccessedByte` 在 x64 COFF、ELF 和 Mach-O 下執行雙向映像複製，以及填入後複製。兩條 C 路線均以 O0/O2 加 UBSan 編譯執行，獨立計算的結果檢查每個複製位元組；非 x64 主機明確略過執行檢查。
+
+`NeverDFiniteScalarBranchTests` 涵蓋 x86/x64/AArch64 與 COFF/ELF/Mach-O 的無表算術分派、稀疏遮罩、模運算、部分寫入、呼叫破壞、暫存量生命期、預算、外部入口及新增邊。`NeverDFiniteScalarBranchSourceTests` 在最佳化開關、O0/O2、UBSan 下執行兩條 C 路徑的所有案例，並驗證同時儲存程式碼指標的獨立身分及略過 SSA 的拒絕行為。
+
+`NeverDCalleeSourceCLI` 透過正式 CLI 檢查獨立編碼的 x64 PE/ELF 呼叫鏈：位址與名稱選取、遞移呼叫定義、排除無關函式、普通單函式輸出、剛好達到與超過深度上限、循環以及根函式與被呼叫函式的拒絕。呼叫閉包失敗時保留既有輸出。完整三函式 C 單元在 O0/O2 編譯執行並傳回獨立預期值；遞迴案例只做檢查。
+
+重複映像存取回歸亦涵蓋同一資料擁有者內的無關函式指標重定位、映像內目標、位元類似位址的整數填充值、來源暫存器完成位移，以及透過更新後的來源與目標暫存器再次讀取。`ConstantAddressFactsExcludeUnprovedAndNonAddressResults` 檢查 x86/x64 邊界：動態輸入、分段或縮減位址寬度、異常介面與非位址輸出不能取得完成事實。`ZeroCountAndOffsetFormsKeepTheirNumericInputs` 檢查輸入保持，僅自然寬度的零次數案例在主機執行。完整範圍測試拒絕截斷映射與溢出次數。本機 LLVM 缺少原生 intrinsic 時，相應測試明確跳過。
+
+## 返回槽上的中性原子操作
+
+`NeverDMedPrologueSavesTests` 涵蓋槽寬度、偏移、活躍值、旗標/PHI 讀取及修改後的證據失效。`NeverDPipelineOutcomeTests` 檢查機器與修補請求不會取得此投影。`NeverDX86NeutralAtomicSourceTests` 以獨立撰寫的原始指令對照 COFF/ELF/MachO 的兩條 C 路線，包含調整後的堆疊指標，並以 O0/O2 和 UBSan 執行。執行對照需要 Linux x64；i386 證明測試不代表原生 i386 執行涵蓋。
+
+
+## 標準監督態讀取稽核
+
+`InterpreterSpecialization.SupervisorRead*` 使用實際嚴格提升，並拒絕降級為 `Missing` 的稽核。`BinaryLowIRRefinement.SupervisorReadCompletesOnlyRawRecovery` 檢查原始位元組復原邊界，同時繼續拒絕原生證明和原始碼包裝。

@@ -38,6 +38,20 @@ protected:
 #endif
   }
 
+  /// Expect the C of both routes, HighC and then the LLVM route's, to run
+  /// like \p Kernel built for System V x86-64 (expectHighCRunsLikeSource).
+  void expectBothRoutesRunLikeSource(const std::string &Kernel,
+                                     const std::string &Entry,
+                                     std::initializer_list<const char *> Names,
+                                     std::initializer_list<int> Values) {
+    for (const bool Route : {false, true}) {
+      SCOPED_TRACE(Route ? "LLVM C" : "HighC");
+      LLVMC = Route;
+      ASSERT_NO_FATAL_FAILURE(expectHighCRunsLikeSource(
+          {"-target", "x86_64-linux-gnu"}, Kernel, Entry, Names, Values));
+    }
+  }
+
   /// Lifts \p Source's object to LLVM IR, links it with \p Source renamed,
   /// and compares \p Entry with the original over a range of arguments.
   /// \p Callee is the source's other function.
@@ -407,6 +421,89 @@ static double sb4(B4 s, double e) {
                             {0, 1, -1, 0x10, 77, 1000});
 }
 
+// `cvtsi2sd` and `mulsd` write xmm0's low double and keep its upper lane,
+// which ep never set, and `cvtsi2ss` and `mulss` the twelve bytes above
+// ef's float.  gp and hf read only the scalar, so each call passes it
+// alone: the LLVM route, whose parameter takes the whole register, passes
+// zero above it, and neither C reads the caller's unknown entry value.
+TEST_F(X86_64_CallAbi, AScalarArgumentPassesOnlyItsLowLane) {
+  expectBothRoutesRunLikeSource(R"C(
+int gp(double x) __attribute__((noinline));
+int hf(float y) __attribute__((noinline));
+int ep(int a) __attribute__((noinline));
+int ef(int a) __attribute__((noinline));
+int gp(double x) { return (int)(x * 4.0) + 1; }
+int hf(float y) { return (int)(y * 2.0f) + 3; }
+int ep(int a) { return gp(a * 0.5); }
+int ef(int a) { return hf(a * 1.5f); }
+int lane_e(int a) { return ep(a) + ef(a) * 3; }
+)C",
+                                "lane_e", {"lane_e", "gp", "hf", "ep", "ef"},
+                                {0, 1, -1, 7, 1000});
+}
+
+// A printf-family call whose format is a constant string passes the
+// arguments its conversions name, a double in the low lane of its vector
+// register, which AL counts.  Each call passes its doubles as doubles, the
+// ones `cvtsi2sd`, `mulsd` and `addsd` leave beside an upper lane the caller
+// never set as well as one `movsd` loads whole, and the constants pc and sf
+// load from read-only data, which C passes as their values; as integer bits,
+// C would pass them in integer registers, where these routines read none.
+// sf hashes the text snprintf formats.
+TEST_F(X86_64_CallAbi, AFormattedCallPassesItsDoublesAsDoubles) {
+  expectBothRoutesRunLikeSource(
+      R"C(
+#include <stdio.h>
+char Buf[96];
+int gp(double x) __attribute__((noinline));
+int ep(int a) __attribute__((noinline));
+int pf(int a, const double *p) __attribute__((noinline));
+int pc(int a) __attribute__((noinline));
+int df(int a) __attribute__((noinline));
+int sf(int a) __attribute__((noinline));
+int gp(double x) { return printf("%f\n", x); }
+int ep(int a) { return gp(a * 0.5); }
+int pf(int a, const double *p) { return printf("%f %d\n", *p, a); }
+int pc(int a) { return printf("%f %d\n", 2.5, a); }
+int df(int a) { return dprintf(1, "%d %.2f %e\n", a, a * 2.5, a + 0.5); }
+int sf(int a) {
+  int n = snprintf(Buf, sizeof Buf, "%.3f|%d|%g|%.2f", a * 2.5, a, a * 0.25,
+                   0.75);
+  unsigned h = 0;
+  for (int i = 0; i < n && i < (int)sizeof Buf; i++)
+    h = h * 31 + (unsigned char)Buf[i];
+  return (int)h;
+}
+int fmt_e(int a) {
+  double v[2] = {a * 0.75, a - 0.5};
+  return ep(a) + pf(a, &v[1]) * 3 + df(a) * 5 + sf(a) * 7 + pc(a) * 11;
+}
+)C",
+      "fmt_e", {"fmt_e", "gp", "ep", "pf", "pc", "df", "sf", "Buf"},
+      {0, 1, -1, 7, 1000});
+}
+
+// sb formats into a stack buffer.  The LLVM route's frame record lays the
+// buffer's start out as a `uint64_t` member, whose address C converts to the
+// `char *` <stdio.h> declares for snprintf's buffer only through void *.
+// The hash of the text the call formats matches the kernel's.
+TEST_F(X86_64_CallAbi, AStackBufferPassesAsTheHeadersPointer) {
+  expectBothRoutesRunLikeSource(R"C(
+#include <stdio.h>
+int sb(int a) __attribute__((noinline));
+int sb(int a) {
+  char b[96];
+  int n = snprintf(b, sizeof b, "%d|%d", a, a * 3);
+  unsigned h = 0;
+  for (int i = 0; i < n && i < (int)sizeof b; i++)
+    h = h * 31 + (unsigned char)b[i];
+  return (int)h;
+}
+int buf_e(int a) { return sb(a); }
+)C",
+                                "buf_e", {"buf_e", "sb"}, {0, 1, -1, 7, 1000});
+}
+
 // A pointer walking a string is compared against its end through `~W`, the
 // bitwise complement of the string's address: the operator takes the address
 // as the integer it is, never the array.
@@ -490,6 +587,56 @@ TEST_F(X86_64_CallAbi, ALiftedVariadicCalleeTakesItsDoubleArguments) {
   expectLiftedRunsLikeSource(VariadicDoubles, "vsum_d", "sd");
 }
 
+static const char *const ForwardedDoubles = R"C(
+long logv(const char *f, ...) __attribute__((noinline));
+long gd(double x) __attribute__((noinline));
+long gdc(double x) __attribute__((noinline));
+long gm(double x) __attribute__((noinline));
+long g2d(double a, double b) __attribute__((noinline));
+long gd(double x) { return logv("y", x); }
+long gdc(double x) { return logv("y", x) + 1; }
+long gm(double x) { return logv("z", x, 2.5); }
+long g2d(double a, double b) { return logv("w", a, b); }
+long logv(const char *f, ...) {
+  __builtin_va_list ap;
+  __builtin_va_start(ap, f);
+  long s = f[0];
+  if (s == 'y') {
+    s += (long)(__builtin_va_arg(ap, double) * 4);
+  } else {
+    double a = __builtin_va_arg(ap, double);
+    s += (long)(a * (s == 'z' ? 8 : 16) - __builtin_va_arg(ap, double) * 2);
+  }
+  __builtin_va_end(ap);
+  return s;
+}
+int fwd_e(int a) {
+  return (int)(gd(a * 0.5) + gdc(a * 0.25) * 3 + gm(a + 0.5) * 5 +
+               g2d(a * 1.5, a - 2.0) * 7);
+}
+)C";
+
+// A call loads AL with the number of vector registers it passes a variadic
+// callee, which saves them for va_arg.  gd (`lea rdi; mov al, 1; jmp logv`),
+// gdc, which calls logv, gm, which sets XMM1 and passes on XMM0, and g2d pass
+// their own doubles on untouched below that count: each takes them as its
+// parameters, and fwd_e passes the doubles it computes.
+TEST_F(X86_64_CallAbi, AVariadicCallPassesOnTheDoublesALCounts) {
+  expectHighCRunsLikeSource(
+      {"-target", "x86_64-linux-gnu"}, ForwardedDoubles, "fwd_e",
+      {"fwd_e", "gd", "gdc", "gm", "g2d", "logv"}, {0, 1, -1, 7, 1000});
+}
+
+// The LLVM route's C passes them alike, though it holds a vector register
+// whole: the upper lanes a scalar conversion leaves as fwd_e's entry value
+// pass as zero, and gdc's alignment `push rax` passes logv nothing.
+TEST_F(X86_64_CallAbi, ALiftedVariadicCallPassesOnTheDoublesALCounts) {
+  LLVMC = true;
+  expectHighCRunsLikeSource(
+      {"-target", "x86_64-linux-gnu"}, ForwardedDoubles, "fwd_e",
+      {"fwd_e", "gd", "gdc", "gm", "g2d", "logv"}, {0, 1, -1, 7, 1000});
+}
+
 static const char *const VariadicStackIntegers = R"C(
 #include <stdarg.h>
 static int sb(int n, ...) __attribute__((noinline));
@@ -524,6 +671,197 @@ TEST_F(X86_64_CallAbi, AVariadicCalleeTakesItsStackArguments) {
 // caller left unset, as the callee takes them in that order.
 TEST_F(X86_64_CallAbi, ALiftedVariadicCalleeTakesItsStackArguments) {
   expectLiftedRunsLikeSource(VariadicStackIntegers, "vsum_big", "sb");
+}
+
+// logv's va_start stores gp_offset 8: one integer register carries a named
+// parameter, and past it va_arg reads no more arguments than a caller
+// passes.  gdc passes RSI to R9 on untouched, and g2's second call finds in
+// them only what its first call left.  Neither sets them for logv, so each
+// C passes zero there, and the LLVM route's, like HighC, gives gdc no
+// parameter.
+TEST_F(X86_64_CallAbi, AVariadicCallPassesZeroInRegistersItLeavesUnset) {
+  expectBothRoutesRunLikeSource(R"C(
+long logv(const char *f, ...) __attribute__((noinline));
+long gdc(void) __attribute__((noinline));
+long g2(void) __attribute__((noinline));
+long gdc(void) { return logv("y") + 1; }
+long g2(void) {
+  long a = logv("y");
+  return a + logv("y") * 2;
+}
+long logv(const char *f, ...) {
+  __builtin_va_list ap;
+  __builtin_va_start(ap, f);
+  long s = f[0] == 'x' ? __builtin_va_arg(ap, long) : 3;
+  __builtin_va_end(ap);
+  return s;
+}
+int unset_e(int a) { return (int)(gdc() + g2() * 5) + a; }
+)C",
+                                "unset_e", {"unset_e", "gdc", "g2", "logv"},
+                                {0, 1, -1, 7, 1000});
+  if (HasFatalFailure() || IsSkipped())
+    return;
+  std::ifstream Input(tmpFile("decompiled.c"));
+  const std::string C((std::istreambuf_iterator<char>(Input)),
+                      std::istreambuf_iterator<char>());
+  EXPECT_TRUE(std::regex_search(C, std::regex("\\bgdc\\((void)?\\) \\{"))) << C;
+}
+
+// gdc aligns its stack for the call with `push rax`, which stores RAX's
+// incoming value where a stack argument would go, and g7 with one above the
+// two longs it pushes.  RAX holds nothing at entry, so neither slot passes
+// logv an argument.  g6 overwrites its pushed slot with its sixth long and g8
+// pushes three below a `sub rsp, 8`: each passes its own, which logv's
+// va_arg reads.
+TEST_F(X86_64_CallAbi, AnAlignmentPushPassesNoVariadicStackArgument) {
+  expectBothRoutesRunLikeSource(R"C(
+long logv(const char *f, ...) __attribute__((noinline));
+long gdc(void) __attribute__((noinline));
+long g6(long a) __attribute__((noinline));
+long g7(long a) __attribute__((noinline));
+long g8(long a) __attribute__((noinline));
+long gdc(void) { return logv("y") + 1; }
+long g6(long a) {
+  return logv("llllll", a, a + 1, a + 2, a + 3, a + 4, a * 5) + 1;
+}
+long g7(long a) {
+  return logv("lllllll", a, a + 1, a + 2, a + 3, a + 4, a * 5, a ^ 6) + 1;
+}
+long g8(long a) {
+  return logv("llllllll", a, a + 1, a + 2, a + 3, a + 4, a * 5, a ^ 6, a - 7) +
+         1;
+}
+long logv(const char *f, ...) {
+  __builtin_va_list ap;
+  __builtin_va_start(ap, f);
+  long s = 0;
+  for (const char *p = f; *p; ++p)
+    s = s * 31 + (*p == 'l' ? __builtin_va_arg(ap, long) : 1);
+  __builtin_va_end(ap);
+  return s;
+}
+int slots_e(int a) { return (int)(gdc() + g6(a) * 3 + g7(a) * 5 + g8(a) * 7); }
+)C",
+                                "slots_e",
+                                {"slots_e", "gdc", "g6", "g7", "g8", "logv"},
+                                {0, 1, -1, 7, 1000});
+}
+
+// ef reserves its local double's slot with `push rax`, which stores RAX's
+// incoming value there, and overwrites it before it passes the slot's
+// address to pf; ep passes its local's address to put, which writes it.
+// RAX holds nothing at entry and neither function reads the slot back, so
+// neither C stores an unknown value there.
+TEST_F(X86_64_CallAbi, AnUnreadAlignmentPushStoresNoUnknownValue) {
+  expectBothRoutesRunLikeSource(R"C(
+int Sink;
+void put(int *p, int a) __attribute__((noinline));
+int pf(int a, const double *p) __attribute__((noinline));
+int ef(int a) __attribute__((noinline));
+int ep(int a) __attribute__((noinline));
+void put(int *p, int a) {
+  *p = a * 7 + 1;
+  Sink += a;
+}
+int pf(int a, const double *p) { return (int)(*p * 2.0) + a; }
+int ef(int a) {
+  double v = a * 0.75;
+  return pf(a, &v);
+}
+int ep(int a) {
+  int x;
+  put(&x, a);
+  return Sink;
+}
+int slot_e(int a) { return ef(a) + ep(a) * 3; }
+)C",
+                                "slot_e",
+                                {"slot_e", "Sink", "put", "pf", "ef", "ep"},
+                                {0, 1, -1, 7, 1000});
+}
+
+// out_e reserves its local's slot with `push rax` and passes the slot's
+// address to get, which fills it, before it reads the local back.  RAX
+// carries nothing into a function that is not variadic, so the read sees
+// what get wrote: neither C stores RAX's unknown incoming value there.
+TEST_F(X86_64_CallAbi, ALocalARoutineFillsBehindAPushHoldsWhatItWrote) {
+  expectBothRoutesRunLikeSource(R"C(
+void get(int *p, int a) __attribute__((noinline));
+void get(int *p, int a) { *p = a * 7 + 1; }
+int out_e(int a) {
+  int x;
+  get(&x, a);
+  return x + 2;
+}
+)C",
+                                "out_e", {"out_e", "get"}, {0, 1, -1, 7, 1000});
+}
+
+/// The definition of \p Name in \p C, from the line that opens it to its
+/// closing brace; empty where \p C defines no such function.
+static std::string definitionOf(const std::string &C, const std::string &Name) {
+  std::smatch Head;
+  if (!std::regex_search(
+          C, Head,
+          std::regex("(^|\n)[^\n;]*\\b" + Name + "\\([^\n;]*\\) \\{\n")))
+    return {};
+  const size_t Begin = static_cast<size_t>(Head.position(0));
+  return C.substr(Begin, C.find("\n}\n", Begin) - Begin);
+}
+
+// spill reads back the slot of its `push rax` before any routine has the
+// slot's address, a value it keeps across its body, and chain saves R10, a
+// nested function's static chain, where a routine fills the slot: neither
+// is a local filled behind an alignment push, and each C still fails where
+// it uses the register's unknown incoming value.
+TEST_F(X86_64_CallAbi, AReadBackScratchSaveKeepsItsUnknownValue) {
+  if (!hasCrossTargetClang())
+    GTEST_SKIP() << "cross-target compilation requires Clang";
+  const auto Source = tmpFile("kernel.c");
+  const auto Object = tmpFile("kernel.o");
+  std::ofstream(Source) << R"C(
+long spill(long a);
+long chain(long a);
+void fill(long *p, long a) __attribute__((noinline));
+void fill(long *p, long a) { *p = a * 3; }
+__asm__(".text\n"
+        ".globl spill\n"
+        ".type spill,@function\n"
+        "spill:\n"
+        "  pushq %rax\n"
+        "  leaq 1(%rdi), %rax\n"
+        "  popq %rcx\n"
+        "  addq %rcx, %rax\n"
+        "  retq\n"
+        ".globl chain\n"
+        ".type chain,@function\n"
+        "chain:\n"
+        "  pushq %r10\n"
+        "  movq %rdi, %rsi\n"
+        "  movq %rsp, %rdi\n"
+        "  callq fill\n"
+        "  popq %rax\n"
+        "  retq\n");
+)C";
+  const auto Compiled =
+      exec(NEVERD_TEST_CLANG, {"-target", "x86_64-linux-gnu", "-O2", "-c",
+                               Source.string(), "-o", Object.string()});
+  ASSERT_EQ(Compiled.exitCode, 0) << Compiled.err;
+  for (const bool Route : {false, true}) {
+    SCOPED_TRACE(Route ? "LLVM C" : "HighC");
+    const auto Decompiled =
+        Route ? decompileToC(Object) : decompileToHighC(Object);
+    ASSERT_EQ(Decompiled.exitCode, 0) << Decompiled.err;
+    std::ifstream Input(tmpFile(Route ? "decompiled.c" : "decompiled_high.c"));
+    const std::string C((std::istreambuf_iterator<char>(Input)),
+                        std::istreambuf_iterator<char>());
+    for (const char *Name : {"spill", "chain"}) {
+      const std::string Body = definitionOf(C, Name);
+      ASSERT_FALSE(Body.empty()) << Name << "\n" << C;
+      EXPECT_NE(Body.find("unknown"), std::string::npos) << Body;
+    }
+  }
 }
 
 static const char *const VariadicForwarders = R"C(

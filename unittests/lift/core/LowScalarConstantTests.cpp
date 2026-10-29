@@ -9,6 +9,7 @@
 #include "gtest/gtest.h"
 
 #include "neverd/ir/Limits.h"
+#include "neverd/ir/low/CallRegisterBody.h"
 #include "neverd/ir/low/LowScalarConstant.h"
 #include "neverd/ir/low/NdOpEmulator.h"
 
@@ -405,6 +406,135 @@ TEST(ConstantRegisterCall, ExhaustedWorkCannotPublishAPrefix) {
       limits::ir::kConstantRegisterCallOperations);
   EXPECT_TRUE(constantRegisterCallTargets(Function).empty());
 }
+
+LowFunc directEdgeCall() {
+  auto Seed = unary(NdOp::COPY, 8, 0x140001040, 8);
+  auto F = registerCall({Seed}, Seed.Output);
+  auto &Pred = F.Blocks.front();
+  auto Call = Pred.Ops.back();
+  Pred.Ops.pop_back();
+  Pred.Id = 0;
+  Pred.StartAddr = F.Entry = 0x1000;
+  Pred.EndAddr = 0x1003;
+  Pred.Succs = {1};
+  LowOp Jump;
+  Jump.Opcode = NdOp::BRANCH;
+  Jump.Addr = 0x1001;
+  Jump.addInput(NdVar::cst(0x2000, 8));
+  Pred.Ops.push_back(Jump);
+  LowInstructionBoundary Edge;
+  Edge.Address = Jump.Addr;
+  Edge.Size = 2;
+  Edge.FirstOp = 1;
+  Edge.OpCount = 1;
+  Edge.Control = LowInstructionControl::Branch;
+  Edge.ControlFlags = LowInstructionControlFlag::Branch;
+  Edge.Immediate = 0x2000;
+  Pred.InstructionBoundaries.push_back(Edge);
+  F.Blocks.emplace_back();
+  auto &Current = F.Blocks.back();
+  Current.Id = 1;
+  Current.StartAddr = Call.Addr;
+  Current.EndAddr = Call.Addr + 2;
+  Current.Preds = {0};
+  Current.Ops = {Call};
+  F.DecodedInstructionCount = F.LiftedInstructionCount = 3;
+  return F;
+}
+
+TEST(ConstantRegisterCall, DirectPredecessorsAndCachedBodiesShareTheProof) {
+  auto F = directEdgeCall();
+  const auto Expected = constantRegisterCallTargets(F);
+  ASSERT_EQ(Expected.size(), 1u);
+  EXPECT_EQ(Expected.begin()->second, 0x140001040u);
+  EXPECT_EQ(Expected.begin()->first,
+            sourceCallOccurrenceKey(F.Blocks.back().Ops.front()));
+  CallRegisterBody Cached;
+  Cached.Blocks = F.Blocks;
+  Cached.Complete = true;
+  EXPECT_EQ(constantRegisterCallTargets(CallRegisterBodyView(Cached)),
+            Expected);
+  // AL and other physical register queries still use only their call block.
+  const auto Value =
+      constantRegisterValueAtCall(F, Expected.begin()->first, NdVar::reg(0, 8));
+  EXPECT_TRUE(Value.OccurrenceFound);
+  EXPECT_FALSE(Value.Value);
+  auto &Edge = F.Blocks.front().InstructionBoundaries.back();
+  Edge.Control = LowInstructionControl::None;
+  Edge.ControlFlags = LowInstructionControlFlag::None;
+  Edge.Immediate.reset();
+  F.Blocks.front().EndAddr = F.Blocks.back().StartAddr;
+  Edge.Address = F.Blocks.front().EndAddr - Edge.Size;
+  F.Blocks.front().Ops.back().Addr = Edge.Address;
+  EXPECT_EQ(constantRegisterCallTargets(F), Expected);
+}
+
+TEST(ConstantRegisterCall,
+     PredecessorProofRejectsAlternateStateAndStaleValues) {
+  for (unsigned Mutation = 0; Mutation != 15; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    auto F = directEdgeCall();
+    auto &Pred = F.Blocks.front();
+    auto &Call = F.Blocks.back();
+    if (Mutation == 0)
+      F.ModuleAnalysisRoots.insert(Call.StartAddr);
+    if (Mutation == 1)
+      F.TruncatedPathAddresses.push_back(Call.StartAddr);
+    if (Mutation == 2)
+      Call.Preds.push_back(7);
+    if (Mutation == 3)
+      Pred.Succs.push_back(7);
+    if (Mutation == 4)
+      Pred.ExceptionalSuccs.emplace_back();
+    if (Mutation == 5)
+      Call.ExceptionalPreds.emplace_back();
+    if (Mutation == 6)
+      Pred.InstructionBoundaries.back().Immediate = 0x3000;
+    if (Mutation == 7)
+      Pred.InstructionBoundaries.back().ControlFlags =
+          LowInstructionControlFlag::Indirect;
+    if (Mutation == 8)
+      Pred.InstructionBoundaries.back().ControlFlags =
+          LowInstructionControlFlag::Conditional;
+    if (Mutation == 9) {
+      auto Unknown = unary(NdOp::COPY, 4, 0, 4);
+      Unknown.Inputs[0] = NdVar::reg(32, 4);
+      Unknown.Addr = 0x1001;
+      Pred.Ops.insert(Pred.Ops.begin() + 1, Unknown);
+      Pred.InstructionBoundaries.back().FirstOp = 2;
+    }
+    if (Mutation == 10) {
+      auto Effect = Pred.Ops.back();
+      Effect.Opcode = NdOp::CALL;
+      Pred.Ops.insert(Pred.Ops.begin() + 1, Effect);
+      Pred.InstructionBoundaries.back().FirstOp = 2;
+    }
+    if (Mutation == 11)
+      Pred.InstructionBoundaries.back().Size = 0;
+    if (Mutation == 12)
+      Pred.InstructionBoundaries.back().Address = Pred.EndAddr;
+    if (Mutation == 13)
+      Pred.InstructionBoundaries.back().FirstOp = Pred.Ops.size() + 1;
+    if (Mutation == 14)
+      Pred.InstructionBoundaries.back().OpCount = 0;
+    EXPECT_TRUE(constantRegisterCallTargets(F).empty());
+  }
+  auto F = directEdgeCall();
+  F.Blocks.front().Preds = {1};
+  F.Blocks.back().Succs = {0};
+  auto Backedge = F.Blocks.front().InstructionBoundaries.back();
+  Backedge.Address = F.Blocks.back().StartAddr;
+  Backedge.FirstOp = 0;
+  Backedge.OpCount = F.Blocks.back().Ops.size();
+  Backedge.Immediate = F.Blocks.front().StartAddr;
+  F.Blocks.back().InstructionBoundaries.push_back(Backedge);
+  LowBlock Entry;
+  Entry.Id = 2;
+  Entry.StartAddr = F.Entry = 0x900;
+  F.Blocks.insert(F.Blocks.begin(), Entry);
+  EXPECT_TRUE(constantRegisterCallTargets(F).empty());
+}
+
 TEST(CallRegisterConstant, ExactOccurrenceAndRegisterByteWidths) {
   const auto Seed = unary(NdOp::COPY, 8, 0x1234567800000302, 8);
   auto Function = registerCall({Seed}, Seed.Output);
@@ -523,6 +653,61 @@ TEST(CallRegisterConstant, PartialWritesMatchIndependentByteStorage) {
                 << "read byte " << Begin << " width " << Size;
           }
       }
+}
+
+TEST(LowScalarConstant, AbsorbersRequireCurrentNumericBytes) {
+  for (unsigned Mode = 0; Mode < 13; ++Mode) {
+    SCOPED_TRACE(Mode);
+    LowBlock Block;
+    auto Set = unary(NdOp::COPY, 8, Mode == 1 ? 1 : 0, 8);
+    Set.Addr = 0x1000;
+    auto Mask = binary(NdOp::INT_AND, 8, 0, 0);
+    Mask.Addr = 0x1004;
+    Mask.Output = NdVar::tmp(TmpBase + 16, 8);
+    Mask.Inputs[0] = NdVar::tmp(TmpBase + 8, 8);
+    Mask.Inputs[1] = Set.Output;
+    Block.Ops = {Set, Mask};
+    if (Mode >= 2 && Mode <= 4) {
+      LowOp Barrier;
+      Barrier.Addr = 0x1002;
+      Barrier.Opcode = Mode == 2   ? NdOp::CALL
+                       : Mode == 3 ? NdOp::INDIR_CALL
+                                   : NdOp::INTRINSIC;
+      Block.Ops.insert(Block.Ops.begin() + 1, Barrier);
+    }
+    if (Mode == 5)
+      Block.Ops.front().Inputs[0].Provenance =
+          ConstantAddressProvenance::Address;
+    if (Mode == 6) {
+      auto Partial = unary(NdOp::COPY, 1, 1, 1);
+      Partial.Output.Offset = 3;
+      Block.Ops.insert(Block.Ops.begin() + 1, Partial);
+    }
+    if (Mode == 7 || Mode == 8) {
+      Block.Ops.front().Output = NdVar::tmp(TmpBase, 8);
+      Block.Ops.back().Inputs[1] = Block.Ops.front().Output;
+      Block.Ops.back().Addr = Set.Addr;
+      if (Mode == 8) {
+        auto Partial = unary(NdOp::COPY, 1, 1, 1);
+        Partial.Addr = Set.Addr;
+        Partial.Output = NdVar::tmp(TmpBase + 3, 1);
+        Block.Ops.insert(Block.Ops.begin() + 1, Partial);
+      }
+    }
+    if (Mode == 9)
+      Block.Ops.back().Inputs[1].Size = 4;
+    if (Mode == 10)
+      Block.Ops.front().MemoryAddressSpace = NdMemoryAddressSpace::X86FS;
+    std::vector<LowBlock> Blocks{Block};
+    if (Mode == 11) {
+      Blocks.emplace_back();
+      Blocks.back().Ops = {Blocks.front().Ops.back()};
+      Blocks.front().Ops.pop_back();
+    }
+    size_t Remaining = Mode == 12 ? 0 : 128;
+    const auto Absorbed = lowBlockAbsorbingConstants(Blocks, Remaining);
+    EXPECT_EQ(Absorbed.size(), Mode == 0 || Mode == 7 ? 1u : 0u);
+  }
 }
 
 } // namespace

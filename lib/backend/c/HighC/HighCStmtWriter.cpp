@@ -1608,7 +1608,10 @@ void HighCWriter::writeStmtImpl(const HighStmt &Stmt, int Indent) {
          << llvm::utohexstr(Stmt.Addr) << " */\n";
       break;
     }
-    if (llvm::is_contained(LeaveTargets, Stmt.GotoTarget)) {
+    // `__leave` ends a `__try` normally; a local unwind's goto ends it as a
+    // jump, which a filled `__finally` runs its termination handler for.
+    if (llvm::is_contained(LeaveTargets, Stmt.GotoTarget) &&
+        !Stmt.AbnormalExit) {
       OS << "__leave;\n";
       break;
     }
@@ -1701,16 +1704,16 @@ void HighCWriter::writeStmtImpl(const HighStmt &Stmt, int Indent) {
     emitIndent(Indent);
     if (Clause.Kind == HighEHClauseKind::SEHFinally) {
       OS << "} __finally {\n";
+      // Keep the termination handler's address visible whether or not its
+      // body was projected into the clause.
+      emitIndent(Indent + 1);
+      OS << "/* finally handler @ 0x"
+         << llvm::utohexstr(Clause.FilterOrActionVA) << " */\n";
       {
         const bool SavedHandler = InEHClauseBody;
         InEHClauseBody = true;
         writeStmtsIsolated(Stmt.EHClauseBodies.front(), Indent + 1);
         InEHClauseBody = SavedHandler;
-      }
-      if (Stmt.EHClauseBodies.front().empty()) {
-        emitIndent(Indent + 1);
-        OS << "/* finally handler @ 0x"
-           << llvm::utohexstr(Clause.FilterOrActionVA) << " */\n";
       }
     } else {
       OS << "} __except (";
@@ -2505,9 +2508,8 @@ void HighCWriter::writeStmts(const std::vector<HighStmt> &Stmts, int Indent,
       continue;
     }
     if (InEHClauseBody && !exceptionClausesUseFunctionFrame() &&
-        S.Kind == StmtKind::Return &&
-        S.CxxContinuationReturnTargets.empty() && S.RetVal &&
-        S.RetVal->Kind == ExprKind::Var) {
+        S.Kind == StmtKind::Return && S.CxxContinuationReturnTargets.empty() &&
+        S.RetVal && S.RetVal->Kind == ExprKind::Var) {
       const std::string Name = varName(S.RetVal->Var);
       // The except arm captures this value before its explicit statements.
       bool AssignedHere = S.RetVal->Var.Kind == MedVar::SEHExceptionCode &&
@@ -2738,7 +2740,9 @@ void HighCWriter::decideTryExits(const std::vector<HighStmt> &Stmts,
         const HighStmt &Last = Body[K - 1];
         if (stmtHiddenFromC(Last))
           continue;
-        if (Last.Kind != StmtKind::Goto || isLabelAddress(Last.Addr))
+        // A local unwind's goto stays a jump (HighStmt::AbnormalExit).
+        if (Last.Kind != StmtKind::Goto || isLabelAddress(Last.Addr) ||
+            Last.AbnormalExit)
           break;
         Run.push_back(&Last);
       }

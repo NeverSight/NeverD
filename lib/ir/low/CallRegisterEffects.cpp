@@ -158,11 +158,14 @@ struct Spill {
 /// where the branch rejoins (Clang -O0).  Such a spill reads no parameter: a
 /// caller passes exactly the variadic arguments it sets.  The vector argument
 /// registers spilled in the block a test of AL alone branches around are the
-/// save area's too: a caller passes the vector arguments AL counts.
+/// save area's too, which \p SavesVectors reports: a caller passes the vector
+/// arguments AL counts.
 std::set<std::pair<size_t, size_t>>
 findRegisterSaveAreaSpills(const BinaryImage &Img, CallRegisterBodyView F,
-                           const std::map<int, size_t> &IndexOfId) {
+                           const std::map<int, size_t> &IndexOfId,
+                           bool &SavesVectors) {
   std::set<std::pair<size_t, size_t>> Spills;
+  SavesVectors = false;
   if (Img.Arch != Arch::X64 || Img.abiFormat() == BinaryFormat::COFF ||
       F.Blocks.empty())
     return Spills;
@@ -330,8 +333,10 @@ findRegisterSaveAreaSpills(const BinaryImage &Img, CallRegisterBodyView F,
         continue;
       if (const auto Family = registerFamilyOf(Img.Arch, Op.Inputs[1].Offset);
           Family && Family->first >= kX64VectorFamilyBase &&
-          Family->second == 0)
+          Family->second == 0) {
         Spills.insert({*VectorSpillBlock, I});
+        SavesVectors = true;
+      }
     }
   }
   return Spills;
@@ -1293,7 +1298,23 @@ localRegisterEffect(const BinaryImage &Img, CallRegisterBodyView F,
            Out.Offset < FPReturn + 16 && FPReturn < Out.Offset + Out.Size;
   };
   const std::set<std::pair<size_t, size_t>> SaveAreaSpills =
-      findRegisterSaveAreaSpills(Img, F, IndexOfId);
+      findRegisterSaveAreaSpills(Img, F, IndexOfId,
+                                 Effect.SavesVectorArguments);
+  // System V's AL: how many vector registers a call passes a variadic callee
+  // that saves them, where the call's own setup loads a constant there.
+  const size_t VectorArguments =
+      Img.Arch == Arch::X64 && Img.abiFormat() != BinaryFormat::COFF
+          ? getTargetRegInfo(Img.Arch).floatingParamRegs(Img.abiFormat()).size()
+          : 0;
+  auto VectorCountAt = [&](const LowBlock &Block, size_t Call) -> int8_t {
+    if (const std::optional<uint8_t> Count =
+            VectorArguments
+                ? lowByteConstantAtCall(Block.Ops, Call, x86reg::RAX)
+                : std::nullopt;
+        Count && *Count <= VectorArguments)
+      return static_cast<int8_t>(*Count);
+    return -1;
+  };
   for (size_t BI = 0; BI < F.Blocks.size(); ++BI) {
     const LowBlock &Block = F.Blocks[BI];
     Effect.UnknownObservers |= !Block.ExceptionalSuccs.empty();
@@ -1499,6 +1520,7 @@ localRegisterEffect(const BinaryImage &Img, CallRegisterBodyView F,
             Effect.NoReturnCallees.insert(Op.Inputs[0].Offset);
           Step.Callee = Op.Inputs[0].Offset;
           Step.TailCallee = true;
+          Step.VectorCount = VectorCountAt(Block, I);
           Step.Exits = EntersNoReturnFunction && Op.Opcode == NdOp::BRANCH;
         }
         break;
@@ -1523,6 +1545,7 @@ localRegisterEffect(const BinaryImage &Img, CallRegisterBodyView F,
           const va_t Callee = OwnRoutine ? *OwnRoutine : Op.Inputs[0].Offset;
           Step.Callee = Callee;
           Step.TailCallee = TailCall;
+          Step.VectorCount = VectorCountAt(Block, I);
           if (!NoReturnCall)
             Effect.Callees.insert(Callee);
           else if (!EntersNoReturnFunction || Img.userNoReturnAt(Callee))
@@ -1547,13 +1570,15 @@ localRegisterEffect(const BinaryImage &Img, CallRegisterBodyView F,
 
 namespace {
 /// Bytes of each family live on entry to \p F, given the current callee
-/// summaries.
+/// summaries.  A call to one of \p VectorArgumentCallees reads the vector
+/// registers its AL counts.
 GPRReadWidths entryLiveWidths(const LocalRegisterEffect &F,
                               const std::map<va_t, GPRFamilyMask> &MayWrite,
                               const std::map<va_t, GPRReadWidths> &EntryReads,
                               GPRFamilyMask VolatileFamilies,
                               GPRFamilyMask ArgumentFamilies,
-                              const std::set<va_t> &DispatchThunks) {
+                              const std::set<va_t> &DispatchThunks,
+                              const std::set<va_t> &VectorArgumentCallees) {
   auto Clear = [](GPRReadWidths &Live, GPRFamilyMask Mask) {
     for (size_t I = 0; I < Live.size(); ++I)
       if ((Mask >> I) & 1)
@@ -1597,8 +1622,17 @@ GPRReadWidths entryLiveWidths(const LocalRegisterEffect &F,
       } else if (Step.Callee != InvalidVA) {
         auto W = MayWrite.find(Step.Callee);
         Clear(Live, W != MayWrite.end() ? W->second : VolatileFamilies);
-        if (auto R = EntryReads.find(Step.Callee); R != EntryReads.end())
+        if (auto R = EntryReads.find(Step.Callee); R != EntryReads.end()) {
           joinReads(Live, R->second);
+          // The callee's summary leaves out the vector registers it saves
+          // for va_arg; the call passes the low double of each its AL
+          // counts, a register the caller only passes on included.
+          if (Step.VectorCount > 0 && VectorArgumentCallees.count(Step.Callee))
+            for (int K = 0; K < Step.VectorCount; ++K) {
+              uint8_t &Width = Live[kX64VectorFamilyBase + K];
+              Width = std::max<uint8_t>(Width, sizeof(double));
+            }
+        }
       }
       // The bytes of the copy that later reads need, before the copy's
       // write ends their life.
@@ -1760,6 +1794,10 @@ CallRegisterSummaries solveCallRegisterEffects(
       Reads[Entry] = GPRReadWidths{};
   for (const auto &[Entry, Widths] : FixedEntryReads)
     Reads[Entry] = Widths;
+  std::set<va_t> VectorArgumentCallees;
+  for (const auto &[Entry, Effect] : Funcs)
+    if (Effect->SavesVectorArguments)
+      VectorArgumentCallees.insert(Entry);
   // A function's entry reads depend only on those of the routines its steps
   // name, so a change revisits just their readers.  Visiting callees before
   // their callers reaches the same least fixed point while visiting most
@@ -1818,7 +1856,7 @@ CallRegisterSummaries solveCallRegisterEffects(
     GPRReadWidths Next = Widths;
     joinReads(Next, entryLiveWidths(*Funcs.at(Solved[I]), Writes, Reads,
                                     VolatileFamilies, ArgumentFamilies,
-                                    DispatchThunks));
+                                    DispatchThunks, VectorArgumentCallees));
     if (Next == Widths)
       continue;
     Widths = Next;

@@ -37,6 +37,7 @@ add_neverd_component_library(NeverDBackendLLVM
   AArch64/MedLLVMAArch64ValueEmitter.cpp
   ARM/MedLLVMARMSideeffect.cpp
   ARM/MedLLVMARMValueEmitter.cpp
+  COFF/MedLLVMPEImageBase.cpp
   X86/MedLLVMX86CryptoEmitter.cpp
   X86/MedLLVMX86GlobalData.cpp
   X86/MedLLVMX86ShuffleEmitter.cpp

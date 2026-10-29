@@ -206,10 +206,12 @@ void addObjectExterns(const MachOObjectFile &Obj, const ObjectExterns &Externs,
       if (auto It = Externs.SymbolSlots.find(*Name);
           It != Externs.SymbolSlots.end()) {
         Address = It->second;
-        if (Externs.CalledSymbols.count(*Name))
+        if (Externs.CalledSymbols.count(*Name)) {
           ImportEntries.push_back({CellVA, *Name});
-        else
+        } else {
           OwnerVA = Externs.ExternBase;
+          Img.ObjectExternDataCells[CellVA] = *Name;
+        }
       }
     } else if ((N.Type & llvm::MachO::N_TYPE) == llvm::MachO::N_SECT &&
                N.Sect > 0 && N.Sect <= Img.Sections.size()) {
@@ -226,7 +228,10 @@ void addObjectExterns(const MachOObjectFile &Obj, const ObjectExterns &Externs,
         Externs, Contents,
         static_cast<size_t>((CellVA - Externs.CellBase) / Externs.PointerBytes),
         *Address);
-    if (OwnerVA != InvalidVA)
+    // An undefined data symbol's cell binds that symbol, as a linked GOT
+    // slot does (collectDataSymbolBindings): it points into no storage of
+    // the object's.
+    if (OwnerVA != InvalidVA && !Img.ObjectExternDataCells.count(CellVA))
       PointerEntries.push_back({CellVA, {*Address, OwnerVA}});
   }
   object_externs::addCellSegment(Externs, section_names::macho::Got,

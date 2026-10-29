@@ -446,9 +446,9 @@ expandX64MachineExit(const SpecializationInstruction &Instruction,
   }
   const auto OriginalDigest = lowUndefinedOperationDigest(Instruction.Ops);
   if (Declaration.Kind == Kind::Trap) {
-    // The trap has no exception-state audit. Authenticate the retained effect
-    // without upgrading Missing coverage or accepting invented arbitrary
-    // outputs or preservation claims from the provider.
+    // The trap has no exception continuation here. Authenticate the lift's
+    // exact undefined-output coverage without changing it or accepting
+    // invented arbitrary outputs or opaque-state preservation claims.
     if (lowUndefinedOperationDigest(Expected) != OriginalDigest ||
         Instruction.UndefinedEffects.Coverage != Effects.Coverage ||
         Instruction.UndefinedEffects.OpCount != Effects.OpCount ||

@@ -250,9 +250,9 @@ Int3 = 1000, // int3  -> @llvm.debugtrap
 
     // Append-only: contiguous packed memory forms of EVEX compress/expand.  The
     // control byte stores the element width in its low nibble, FP opcode family
-    // in bit 4, and expand {z} in bit 7.  These are distinct from ordinary masked loads/stores: active
-    // lanes consume consecutive memory elements rather than lane-strided
-    // addresses.
+    // in bit 4, and expand {z} in bit 7.  These are distinct from ordinary
+    // masked loads/stores: active lanes consume consecutive memory elements
+    // rather than lane-strided addresses.
     EVEXCompressStore, EVEXExpandLoad,
 
     // Append-only: exact VFPCLASS classification.  The control byte selects
@@ -368,3 +368,7 @@ Int3 = 1000, // int3  -> @llvm.debugtrap
     // vvvv source and r/m source retain their original order. Memory owns r/m
     // access; both contracts carry explicit incoming and outgoing MXCSR.
     X86FPFmaState, X86FPFmaMemoryState,
+
+    // Every identity the Intrinsic enum lists after this file is published.
+    // A new x86 intrinsic appends at the end of that enum (Intrinsics.h), not
+    // here.

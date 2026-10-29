@@ -8,6 +8,7 @@
 
 #include "neverd/Limits.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
+#include "neverd/backend/llvm/X86/X86AtomicRmw.h"
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
@@ -21,6 +22,7 @@
 #include "llvm/BinaryFormat/COFF.h"
 #include "llvm/BinaryFormat/MachO.h"
 #include "llvm/IR/Constants.h"
+#include "llvm/IR/InlineAsm.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/Object/ObjectFile.h"
@@ -1355,9 +1357,10 @@ BinaryImage makeChainedImage() {
   Data.VA = DataVA;
   Data.Size = 0x100;
   Data.FileSz = Data.Size;
-  // Mach-O keeps __DATA_CONST writable while dyld applies fixups even though
-  // the segment is immutable once loading completes.
+  // Model the loader's SG_READ_ONLY guarantee while retaining fixup-time
+  // permissions. The segment name alone does not grant this protection.
   Data.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+  Data.ReadOnlyAfterRelocations = true;
   Data.Data.resize(Data.Size);
 
   dyld_chained_ptr_64_bind Bind{};
@@ -1714,8 +1717,10 @@ makeSpilledConstTableImage(Arch TargetArch,
     Data.Size = 0x40;
     Data.FileSz = Data.Size;
     Data.Flags = SegmentFlags::Readable;
-    if (IsMachO || Format == BinaryFormat::ELF)
+    if (IsMachO || Format == BinaryFormat::ELF) {
       Data.Flags = Data.Flags | SegmentFlags::Writable;
+      Data.ReadOnlyAfterRelocations = true;
+    }
     Data.Data.assign(Data.Size, 0);
     fillTables(Data.Data, 0);
     Image.Segments.push_back(std::move(Data));
@@ -1784,6 +1789,7 @@ BinaryImage makeWritablePointerTableImage(Arch TargetArch,
       continue;
     Seg.Name = Format == BinaryFormat::MachO ? "__DATA" : ".data";
     Seg.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+    Seg.ReadOnlyAfterRelocations = false;
   }
   for (Section &Sec : Image.Sections) {
     if (!Sec.contains(SpilledConstTableVA))
@@ -6749,6 +6755,7 @@ InteriorPointerFixture makeInteriorPointerFixture(Arch TargetArch) {
   Data.Size = 0x60;
   Data.FileSz = Data.Size;
   Data.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+  Data.ReadOnlyAfterRelocations = true;
   Data.Data.assign(Data.Size, 0);
   for (size_t I = 0; I < Fixture.InteriorTargets.size(); ++I) {
     const va_t NameSlot = TableVA + I * 16;
@@ -7874,6 +7881,7 @@ TEST(MachOInteriorCodePointerCFG, DoesNotFoldWritableOrUnprovenRelay) {
   {
     InteriorPointerFixture Fixture = makeInteriorPointerFixture(Arch::AArch64);
     Fixture.Image.Segments.back().Name = section_names::macho::DataSeg;
+    Fixture.Image.Segments.back().ReadOnlyAfterRelocations = false;
     Fixture.Image.Segments.back().Flags =
         Fixture.Image.Segments.back().Flags | SegmentFlags::Writable;
     LowFunc Func = buildInteriorPointerCFG(Fixture);
@@ -8145,6 +8153,7 @@ TEST(MachOInteriorCodePointerCFG,
         Entries.insert(RejectedTarget);
       } else if (TestCase == Writable) {
         Fixture.Image.Segments.back().Name = section_names::macho::DataSeg;
+        Fixture.Image.Segments.back().ReadOnlyAfterRelocations = false;
       } else if (TestCase == Unproven) {
         Fixture.Image.CodePtrRelocSlots.clear();
       } else {
@@ -12990,6 +12999,58 @@ TEST(LLVMDataPointerInvariantBoundary,
       }
 }
 
+// The emitter names the body that refused, with the error it wrote, so that
+// a whole unit can declare that function only and emit every other one.
+TEST(LLVMDataPointerInvariantBoundary,
+     NamesTheRefusedBodySoTheOthersEmitWithoutIt) {
+  constexpr Arch TargetArch = Arch::X64;
+  for (BinaryFormat Format :
+       {BinaryFormat::MachO, BinaryFormat::ELF, BinaryFormat::COFF}) {
+    SCOPED_TRACE(formatTraceName(Format));
+    BinaryImage Image = makeSpilledConstTableImage(TargetArch, Format);
+    MedFunc Plain;
+    Plain.Entry = TextVA + 0x600;
+    Plain.Name = "plain_leaf";
+    Plain.ReturnType = NdType::makeVoid();
+    MedBlock Block;
+    Block.Id = 0;
+    Block.StartAddr = Plain.Entry;
+    Block.EndAddr = Plain.Entry + 4;
+    MedOp Return;
+    Return.Opcode = NdOp::RETURN;
+    Block.Ops.push_back(std::move(Return));
+    Plain.Blocks.push_back(std::move(Block));
+    const std::vector<MedFunc> Funcs = {
+        Plain, makeDifferentBaseRematerializedRecurrentTableLookup(TargetArch)};
+
+    llvm::LLVMContext Context;
+    MedLLVMEmitter Emitter;
+    testing::internal::CaptureStderr();
+    auto Refused = Emitter.emit(Funcs, Context, "refused-body", TargetArch, {},
+                                &Image, Format);
+    (void)testing::internal::GetCapturedStderr();
+    EXPECT_EQ(Refused.get(), nullptr);
+    ASSERT_EQ(Emitter.refusedBodies().size(), 1u);
+    EXPECT_EQ(Emitter.refusedBodies()[0].Index, 1u);
+    const std::string &Reason = Emitter.refusedBodies()[0].Reason;
+    EXPECT_NE(Reason.find("refusing stale-address fallback"), std::string::npos)
+        << Reason;
+    EXPECT_NE(Reason.find(Funcs[1].Name), std::string::npos) << Reason;
+
+    const std::vector<char> Mask = {1, 0};
+    auto Module = MedLLVMEmitter().emit(Funcs, Context, "refused-body",
+                                        TargetArch, {}, &Image, Format,
+                                        /*MergeableGlobals=*/false, &Mask);
+    ASSERT_NE(Module, nullptr);
+    const llvm::Function *Lookup = Module->getFunction(Funcs[1].Name);
+    ASSERT_NE(Lookup, nullptr);
+    EXPECT_TRUE(Lookup->isDeclaration());
+    const llvm::Function *Kept = Module->getFunction(Plain.Name);
+    ASSERT_NE(Kept, nullptr);
+    EXPECT_FALSE(Kept->isDeclaration());
+  }
+}
+
 TEST(LLVMDataPointerInvariantBoundary,
      RejectsNumericCoincidenceAsRematerializedTableBase) {
   for (BinaryFormat Format :
@@ -16266,6 +16327,7 @@ TEST(LLVMDataPointerInvariantBoundary,
         append(NdOp::RETURN, {}, {Scaled});
         const bool Expected = C == Case::Direct || C == Case::Nested ||
                               C == Case::ZeroFilled || C == Case::Nonzero ||
+                              C == Case::ReadOnlySection ||
                               C == Case::ObjectFootprint;
         MedLLVMEmitter Proof;
         MedLLVMProvenanceTestPeer::prepareFreshAnalysis(Proof, F, Image, A,
@@ -21420,6 +21482,24 @@ TEST(LLVMCodePointerInvariantBoundary,
         std::vector<llvm::Value *> Observed;
         for (llvm::BasicBlock &Block : *EmittedCaller)
           for (llvm::Instruction &Instruction : Block) {
+            if (auto *Call = llvm::dyn_cast<llvm::CallInst>(&Instruction))
+              if (auto *Assembly = llvm::dyn_cast<llvm::InlineAsm>(
+                      Call->getCalledOperand())) {
+                ASSERT_EQ(TargetArch, Arch::X64);
+                ASSERT_EQ(Sink, ExactCodeAddressAtomicSink::Exchange);
+                const auto Plan =
+                    x86AtomicRmwPlan(TargetArch, NdOp::ATOMIC_XCHG, 8,
+                                     NdMemoryAddressSpace::Default);
+                ASSERT_TRUE(Plan);
+                EXPECT_EQ(Assembly->getAsmString(), Plan->assembly());
+                EXPECT_EQ(Assembly->getConstraintString(), Plan->constraints());
+                EXPECT_TRUE(Assembly->hasSideEffects());
+                ASSERT_EQ(Call->arg_size(), 2u);
+                EXPECT_TRUE(Call->getArgOperand(0)->getType()->isPointerTy());
+                EXPECT_TRUE(Call->getType()->isIntegerTy(64));
+                EXPECT_EQ(Call->getArgOperand(1)->getType(), Call->getType());
+                Observed.push_back(Call->getArgOperand(1));
+              }
             if (auto *RMW = llvm::dyn_cast<llvm::AtomicRMWInst>(&Instruction))
               Observed.push_back(RMW->getValOperand());
             if (auto *CompareExchange =

@@ -42,8 +42,14 @@ TEST(FixedIntegerCallArguments, RetainsTargetStackOffsetsAndValueWidths) {
     SCOPED_TRACE(static_cast<unsigned>(Target.Architecture));
     SCOPED_TRACE(static_cast<unsigned>(Target.Format));
     std::vector<TypeRef> Parameters(Target.Registers, NdType::makeInt(8));
-    EXPECT_FALSE(fixedIntegerCallArguments(Target.Architecture, Target.Format,
-                                           NdType::makeInt(4), Parameters));
+    const auto RegisterOnly = fixedIntegerCallArguments(
+        Target.Architecture, Target.Format, NdType::makeInt(4), Parameters);
+    ASSERT_TRUE(RegisterOnly);
+    ASSERT_EQ(RegisterOnly->Parameters.size(), Target.Registers);
+    for (const auto &Parameter : RegisterOnly->Parameters) {
+      EXPECT_EQ(Parameter.Kind, SourceABICarrierKind::IntegerRegister);
+      EXPECT_EQ(Parameter.Bytes, 8u);
+    }
     Parameters.insert(Parameters.end(), {NdType::makeInt(1), NdType::makeInt(2),
                                          NdType::makePtr()});
     for (const auto &Return : {NdType::makeInt(4), NdType::makeInt(8),

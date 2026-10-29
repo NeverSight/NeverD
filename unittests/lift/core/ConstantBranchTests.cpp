@@ -17,6 +17,7 @@
 
 #include "llvm/Support/Error.h"
 
+#include <algorithm>
 #include <initializer_list>
 #include <set>
 #include <vector>
@@ -343,6 +344,203 @@ TEST(ConstantBranch, ArithmeticTargetSkipsUnreachableOpcode) {
     }
 }
 
+TEST(ConstantBranch, LocalTargetProofDoesNotWalkAnUnrelatedPrefix) {
+  // These direct predecessors do not contribute to the final dispatch. Walking
+  // their register writes would consume the function's evidence budget before
+  // the cheap independent target can be revalidated after discovery.
+  std::vector<uint8_t> Bytes;
+  for (unsigned I = 0; I != 4096; ++I)
+    Bytes.insert(Bytes.end(),
+                 {0x49, 0xba, 0xef, 0xcd, 0xab, 0x89, 0x67, 0x45, 0x23,
+                  0x01,               // mov r10,0x123456789abcdef
+                  0xeb, 0x01, 0xcc}); // jmp past one unreachable byte
+  const va_t Target = 0x1000 + Bytes.size() + 8;
+  const size_t Dispatch = Bytes.size();
+  Bytes.insert(Bytes.end(), {0xb8, 0, 0, 0, 0,         // mov eax,target
+                             0xff, 0xe0, 0xe9, 0xc3}); // jmp rax; db E9; ret
+  writeLE<uint32_t>(Bytes.data() + Dispatch + 1, static_cast<uint32_t>(Target));
+  for (auto Format :
+       {BinaryFormat::ELF, BinaryFormat::COFF, BinaryFormat::MachO}) {
+    SCOPED_TRACE(unsigned(Format));
+    const auto Function = build(Bytes, Arch::X64, Format);
+    EXPECT_TRUE(addresses(Function).count(Target));
+    EXPECT_TRUE(Function.UnsafeIndirectBranchAddresses.empty());
+  }
+}
+
+TEST(ConstantBranch, ADirectPredecessorCarriesTheComputedTarget) {
+  // The dispatch register is defined before a direct edge and adjusted in
+  // its successor. No entry value or guessed memory is needed for the target.
+  for (auto Format :
+       {BinaryFormat::ELF, BinaryFormat::COFF, BinaryFormat::MachO})
+    for (auto Architecture : {Arch::X86, Arch::X64, Arch::AArch64}) {
+      SCOPED_TRACE(::testing::Message()
+                   << unsigned(Architecture) << ':' << unsigned(Format));
+      std::vector<uint8_t> Bytes;
+      if (Architecture == Arch::AArch64) {
+        Bytes = {0x00, 0x04, 0x82, 0xd2,  // mov x0,0x1020
+                 0x03, 0x00, 0x00, 0x14}; // b 0x1010
+        Bytes.resize(0x10, 0);
+        Bytes.insert(Bytes.end(), {0x00, 0x40, 0x00, 0x91,   // add x0,x0,16
+                                   0x00, 0x00, 0x1f, 0xd6}); // br x0
+        Bytes.resize(0x30, 0);
+        Bytes.insert(Bytes.end(), {0x60, 0x05, 0x80, 0x52,   // mov w0,43
+                                   0xc0, 0x03, 0x5f, 0xd6}); // ret
+      } else {
+        Bytes = {0xb8, 0x20, 0x10, 0, 0, 0xeb, 9};
+        Bytes.resize(0x10, 0xcc);
+        Bytes.insert(Bytes.end(), {0x83, 0xc0, 0x10, 0xff, 0xe0});
+        Bytes.resize(0x30, 0xcc);
+        Bytes.insert(Bytes.end(), {0xb8, 43, 0, 0, 0, 0xc3});
+      }
+      const auto Function = build(std::move(Bytes), Architecture, Format);
+      EXPECT_TRUE(addresses(Function).count(0x1030));
+      EXPECT_TRUE(Function.UnsafeIndirectBranchAddresses.empty());
+    }
+}
+
+TEST(ConstantBranch, ScalarIdentitiesSpanDirectPredecessors) {
+  for (auto Architecture : {Arch::X86, Arch::X64, Arch::AArch64})
+    for (bool ChangedOperand : {false, true}) {
+      auto Bytes = scalarIdentityBranch(Architecture);
+      const bool ARM64 = Architecture == Arch::AArch64;
+      const size_t Split = Architecture == Arch::X64 ? 12 : 8;
+      const size_t End = ARM64 ? 32 : Architecture == Arch::X64 ? 31 : 23;
+      const std::vector<uint8_t> Suffix(Bytes.begin() + Split,
+                                        Bytes.begin() + End);
+      std::fill(Bytes.begin() + Split, Bytes.begin() + 0x80, ARM64 ? 0 : 0xcc);
+      if (ARM64)
+        writeLE<uint32_t>(Bytes.data() + Split,
+                          0x14000000 | ((0x40 - Split) / 4));
+      else {
+        Bytes[Split] = 0xeb;
+        Bytes[Split + 1] = 0x40 - Split - 2;
+      }
+      std::copy(Suffix.begin(), Suffix.end(), Bytes.begin() + 0x40);
+      if (ChangedOperand) {
+        if (ARM64)
+          Bytes[7] = 0xca; // eor instead of and
+        else
+          Bytes[Architecture == Arch::X64 ? 10 : 6] = 0x31;
+      }
+      const auto Function = build(std::move(Bytes), Architecture);
+      EXPECT_EQ(addresses(Function).count(0x1080), !ChangedOperand);
+    }
+}
+
+TEST(ConstantBranch, EveryPredecessorMustProveACompleteTargetCover) {
+  for (auto Architecture : {Arch::X86, Arch::X64, Arch::AArch64})
+    for (auto Format :
+         {BinaryFormat::ELF, BinaryFormat::COFF, BinaryFormat::MachO})
+      for (unsigned Alternative = 0; Alternative != 3; ++Alternative) {
+        SCOPED_TRACE(::testing::Message()
+                     << unsigned(Architecture) << ':' << unsigned(Format) << ':'
+                     << Alternative);
+        std::vector<uint8_t> Bytes;
+        if (Architecture == Arch::AArch64) {
+          Bytes = {0x80, 0x00, 0x00, 0xb4,  // cbz x0,0x1010
+                   0x10, 0x06, 0x82, 0xd2,  // mov x16,0x1030
+                   0x06, 0x00, 0x00, 0x14}; // b 0x1020
+          Bytes.resize(0x10, 0);
+          Bytes.insert(Bytes.end(),
+                       {0x10, 0x06, 0x82, 0xd2, 0x03, 0x00, 0x00, 0x14});
+          if (Alternative == 1)
+            writeLE<uint32_t>(Bytes.data() + 0x10, 0xd503201f); // nop: no x16
+          if (Alternative == 2)
+            writeLE<uint32_t>(Bytes.data() + 0x10,
+                              0xd2820810); // mov x16,0x1040
+          Bytes.resize(0x20, 0);
+          Bytes.insert(Bytes.end(), {0x00, 0x02, 0x1f, 0xd6}); // br x16
+          Bytes.resize(0x44, 0);
+          writeLE<uint32_t>(Bytes.data() + 0x30, 0xd65f03c0);
+          writeLE<uint32_t>(Bytes.data() + 0x40, 0xd65f03c0);
+        } else {
+          Bytes = {0x85, 0xff, 0x74, 0x0c, 0xb8, 0x30, 0x10, 0, 0, 0xeb, 21};
+          Bytes.resize(0x10, 0xcc);
+          Bytes.insert(Bytes.end(), {0xb8, 0x30, 0x10, 0, 0, 0xeb, 9});
+          if (Alternative == 1)
+            std::fill(Bytes.begin() + 0x10, Bytes.begin() + 0x15, 0x90);
+          if (Alternative == 2)
+            Bytes[0x11] = 0x40;
+          Bytes.resize(0x20, 0xcc);
+          Bytes.insert(Bytes.end(), {0xff, 0xe0});
+          Bytes.resize(0x41, 0xcc);
+          Bytes[0x30] = Bytes[0x40] = 0xc3;
+        }
+        const auto Function = build(std::move(Bytes), Architecture, Format);
+        EXPECT_EQ(addresses(Function).count(0x1030), Alternative != 1);
+        if (Alternative == 2) {
+          ASSERT_EQ(Function.JumpTables.size(), 1u);
+          EXPECT_EQ(Function.JumpTables.front().Targets,
+                    (std::vector<va_t>{0x1030, 0x1040}));
+        } else
+          EXPECT_TRUE(Function.JumpTables.empty());
+      }
+}
+
+TEST(ConstantBranch, ConflictingPredecessorsKeepTheDispatchDynamic) {
+  for (auto Architecture : {Arch::X86, Arch::X64}) {
+    // Both paths are possible and supply distinct dispatch registers.
+    std::vector<uint8_t> Bytes = {
+        0x85, 0xff, 0x74, 0x0c,               // test edi,edi; jz 0x1010
+        0xb8, 0x30, 0x10, 0,    0, 0xeb, 21}; // mov eax,0x1030; jmp 0x1020
+    Bytes.resize(0x10, 0xcc);
+    Bytes.insert(Bytes.end(), {0xb8, 0x40, 0x10, 0, 0, 0xeb, 9});
+    Bytes.resize(0x20, 0xcc);
+    Bytes.insert(Bytes.end(), {0xff, 0xe0});
+    Bytes.resize(0x41, 0xcc);
+    Bytes[0x30] = Bytes[0x40] = 0xc3;
+    const auto Function = build(std::move(Bytes), Architecture);
+    for (const auto &Block : Function.Blocks)
+      for (const auto &Op : Block.Ops)
+        if (Op.Addr == 0x1020)
+          EXPECT_FALSE(Op.Opcode == NdOp::BRANCH && Op.NumInputs == 1 &&
+                       Op.Inputs[0].isConst());
+  }
+}
+
+TEST(ConstantBranch, PredecessorCallsAndPartialWritesSupplyNoTarget) {
+  for (auto Architecture : {Arch::X86, Arch::X64})
+    for (bool Partial : {false, true}) {
+      std::vector<uint8_t> Bytes;
+      if (Partial)
+        Bytes = {0x66, 0xb8, 0x30, 0x10, 0xeb, 10}; // only AX is defined
+      else
+        Bytes = {0xb8, 0x30, 0x10, 0, 0,           // mov eax,0x1030
+                 0xe8, 0xf6, 0x00, 0, 0, 0xeb, 4}; // call 0x1100
+      Bytes.resize(0x10, 0xcc);
+      Bytes.insert(Bytes.end(), {0xff, 0xe0});
+      Bytes.resize(0x31, 0xcc);
+      Bytes[0x30] = 0xc3;
+      const auto Function = build(std::move(Bytes), Architecture);
+      EXPECT_FALSE(addresses(Function).count(0x1030));
+    }
+}
+
+TEST(ConstantBranch, IndependentRootsDoNotInheritAPredecessorsRegisters) {
+  std::vector<uint8_t> Bytes = {0xb8, 0x30, 0x10, 0, 0, 0xeb, 9};
+  Bytes.resize(0x10, 0xcc);
+  Bytes.insert(Bytes.end(), {0xff, 0xe0});
+  Bytes.resize(0x31, 0xcc);
+  Bytes[0x30] = 0xc3;
+  auto Image = image(std::move(Bytes), Arch::X64, BinaryFormat::COFF);
+  ExceptionFunction Unwind;
+  Unwind.FunctionEntry = Image.Base;
+  Unwind.CodeRange = {Image.Base, Image.Base + Image.Segments.front().Size};
+  Unwind.Kind = RuntimeFunctionKind::Primary;
+  Unwind.Encoding = ExceptionEncoding::X64UnwindV1;
+  Image.ExceptionMetadata.Functions.push_back(Unwind);
+  Image.ExceptionMetadata.rebuildIndex();
+  Decoder Dec;
+  ASSERT_TRUE(Dec.init(Image));
+  const std::set<va_t> Roots{0x1010};
+  CFGBuilder Builder;
+  Builder.setCrossFunctionContinuationRoots(&Roots);
+  const auto Function = Builder.build(Image, Dec, 0x1000);
+  ASSERT_TRUE(Function.ModuleAnalysisRoots.count(0x1010));
+  EXPECT_FALSE(addresses(Function).count(0x1030));
+}
+
 TEST(ConstantBranch, SelfDifferenceRecoversTheActualInstructionBoundary) {
   for (auto Architecture : {Arch::X86, Arch::X64, Arch::AArch64})
     for (auto Format :
@@ -406,6 +604,70 @@ TEST(ConstantBranch,
     }
 }
 
+TEST(ConstantBranch, ImmutableReadsParticipateInScalarIdentities) {
+  for (auto Architecture : {Arch::X86, Arch::X64, Arch::AArch64})
+    for (auto Format :
+         {BinaryFormat::ELF, BinaryFormat::COFF, BinaryFormat::MachO})
+      for (bool Writable : {false, true}) {
+        SCOPED_TRACE(::testing::Message()
+                     << unsigned(Architecture) << ':' << unsigned(Format) << ':'
+                     << Writable);
+        auto Image = scalarLoadImage(Architecture, Format);
+        auto &Text = Image.Segments.front();
+        // Two equal immutable words cancel around an unknown argument.
+        // Writable storage can change between observations and cannot cancel.
+        if (Architecture == Arch::AArch64)
+          Text.Data = {0x01, 0x80, 0x00, 0x18,  // ldr w1,0x2000
+                       0x22, 0x00, 0x00, 0x4a,  // eor w2,w1,w0
+                       0xc1, 0x7f, 0x00, 0x18,  // ldr w1,0x2000
+                       0x42, 0x00, 0x01, 0x4a,  // eor w2,w2,w1
+                       0x42, 0x00, 0x00, 0x4a,  // eor w2,w2,w0
+                       0x10, 0x10, 0x82, 0xd2,  // mov x16,0x1080
+                       0x42, 0x00, 0x10, 0x8b,  // add x2,x2,x16
+                       0x40, 0x00, 0x1f, 0xd6}; // br x2
+        else if (Architecture == Arch::X64)
+          Text.Data = {0x8b, 0x04, 0x25, 0, 0x20, 0,    0, // mov eax,[0x2000]
+                       0x31, 0xf8,                         // xor eax,edi
+                       0x33, 0x04, 0x25, 0, 0x20, 0,    0, // xor eax,[0x2000]
+                       0x31, 0xf8,                         // xor eax,edi
+                       0x05, 0x80, 0x10, 0, 0,    0xff, 0xe0};
+        else
+          Text.Data = {0xa1, 0,    0x20, 0,    0,    // mov eax,[0x2000]
+                       0x31, 0xf8,                   // xor eax,edi
+                       0x33, 0x05, 0,    0x20, 0, 0, // xor eax,[0x2000]
+                       0x31, 0xf8,                   // xor eax,edi
+                       0x05, 0x80, 0x10, 0,    0, 0xff, 0xe0};
+        Text.Data.resize(0x80, Architecture == Arch::AArch64 ? 0 : 0xcc);
+        if (Architecture == Arch::AArch64)
+          Text.Data.insert(Text.Data.end(), {0xc0, 0x03, 0x5f, 0xd6});
+        else
+          Text.Data.push_back(0xc3);
+        Text.Size = Text.FileSz = Text.Data.size();
+        Image.Sections.front().Size = Image.Sections.front().FileSz = Text.Size;
+        if (Writable) {
+          Image.Segments.back().Flags =
+              SegmentFlags::Readable | SegmentFlags::Writable;
+          Image.Sections.back().Flags = Image.Segments.back().Flags;
+        }
+        const auto Function = build(Image);
+        EXPECT_EQ(addresses(Function).count(0x1080), !Writable);
+      }
+}
+
+TEST(ConstantBranch, ReadOnlyMappingsOwnSectionLoadPermissions) {
+  // Section metadata cannot make a read-only mapping writable. The shared
+  // loader proof owns post-relocation permissions, including RELRO.
+  for (auto Architecture : {Arch::X86, Arch::X64, Arch::AArch64})
+    for (auto Format :
+         {BinaryFormat::ELF, BinaryFormat::COFF, BinaryFormat::MachO}) {
+      auto Image = scalarLoadImage(Architecture, Format);
+      Image.Sections.back().Flags =
+          SegmentFlags::Readable | SegmentFlags::Writable;
+      EXPECT_TRUE(addresses(build(Image))
+                      .count(Architecture == Arch::AArch64 ? 0x1014 : 0x1011));
+    }
+}
+
 TEST(ConstantBranch, UnprovedLoadsDoNotRecoverATarget) {
   for (auto Architecture : {Arch::X86, Arch::X64, Arch::AArch64})
     for (auto Format :
@@ -421,8 +683,9 @@ TEST(ConstantBranch, UnprovedLoadsDoNotRecoverATarget) {
               SegmentFlags::Readable | SegmentFlags::Writable;
           break;
         case 1:
-          Image.Sections.back().Flags =
+          Image.Segments.back().Flags =
               SegmentFlags::Readable | SegmentFlags::Writable;
+          Image.Sections.back().Flags = Image.Segments.back().Flags;
           break;
         case 2:
           Image.BaseRelocations.push_back({0x2000, 3});

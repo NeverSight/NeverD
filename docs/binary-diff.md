@@ -64,6 +64,17 @@ otherwise identical wrappers after layout changes. Their original bytes remain
 inspectable; separate normalized features, names and call context can still
 establish correspondence, while indistinguishable candidates remain ambiguous.
 
+Matcher version 10 also defers a similar helper body when its changed entry
+contains the complete straight-line prelude of an unmatched direct tail caller,
+with at least two caller instructions beyond the helper's aligned body. Both
+the helper and caller remain candidates under `inlined_tail_call`, in either
+comparison direction. Unknown address identities can support this ambiguity;
+they do not establish identity or equivalence. This check reuses reference-aware
+instruction alignment and respects stated names and analyst decisions. It
+recognizes this boundary pattern, not arbitrary compiler inlining or outlining.
+Saved comparisons reject this candidate-only step on an accepted match. Failed
+restoration preserves the current comparison and its undo/redo history.
+
 ## Command line
 
 ```sh
@@ -220,13 +231,41 @@ the ordinary function delta. Memory effects, register renaming, scheduling,
 source-level dataflow and cross-ISA semantics are not validated by this profile.
 An unchanged shared run does not hide a changed constant elsewhere in the body.
 
-Repeated runs shorter than the default eight instructions are omitted unless
+`--region-calls` (desktop **Settings → Include matched calls**) selects the
+separate `native-call-runs-v1` profile and enables region analysis. It extends
+block-local runs across direct calls whose native targets have a current
+one-to-one function correspondence. The run retains exact normalized operands
+and register identities. Unknown, indirect, unpaired or differently paired call
+targets interrupt it; branches and returns still interrupt it. These results
+are conditioned on the heuristic or analyst-selected function pairs, **not** on
+validated call behavior or argument equivalence. The report records
+`call_evidence: current_function_correspondence`, and the review window displays
+this scope alongside the original instructions.
+
+Call-profile coverage also counts admitted direct calls. In that profile, a
+short repeated run can additionally qualify when it contains at least two
+distinct paired call targets, or a paired call in a run ending at a return or
+direct-jump boundary on both sides. The ordinary minimum length, occurrence
+bounds, exact operand checks and clone ambiguity still apply. Repeated calls to
+one target inside a block do not supply that additional support. This lets short call-heavy
+fragments survive extraction or duplication without discarding their competing
+destinations. It does not infer equivalent register values, memory effects or
+control paths. Changed calls and constants outside a shared fragment remain
+visible; matching a cleanup tail does not make its preceding call unchanged.
+
+Mapping edits and undo recompute call-profile regions within the existing
+work/storage allowance. Cancellation preserves the previous mapping and regions;
+resource exhaustion publishes only completed evidence with its stop reason.
+Saved binding validates call targets against the saved correspondence and exact
+native snapshots. The default `native-runs-v1` search and encoding are unchanged.
+
+In the default profile, repeated runs shorter than eight instructions are omitted unless
 they cover at least half the eligible instructions of either function. This
 limits components formed from common short sequences; it is a heuristic
 abstention, not evidence that a transformation is absent. Unique seeds retain
 the ordinary minimum run length.
 
-`regions` may be an object with `enabled`, `min_instructions`,
+`regions` may be an object with `enabled`, `calls`, `min_instructions`,
 `min_repeated_instructions`, `max_occurrences`, `max_seeds`, `max_work`,
 `max_anchors` and `max_hypotheses`. Work/storage admission
 and defaults have one owner in `diff/Limits.h`. Frequent seed groups and oversized
@@ -236,6 +275,28 @@ No feature hash, score or region explanation is a semantic certificate.
 The **All shared spans (including unclassified)** filter and `--list region-anchors`
 also page anchors retained before grouping could finish. Use the saved report
 when revisiting a partial result: anchor indices belong to that exact result.
+
+For large inputs, pass explicit allowances with `--options large-regions.json`.
+For example, the following settings completed the retained full FFmpeg
+call-region search; they are a workload-specific configuration, not a change to
+the defaults or an accuracy guarantee:
+
+```json
+{"regions":{"calls":true,"max_seeds":4194304,"max_work":268435456,"max_anchors":1000000}}
+```
+
+Save that result with `--save comparison.nddiff` and reopen it in the desktop
+for bounded inspection. Its native-region thresholds and allowances survive
+Reopen and the next **Compare**, including when **Include matched calls** is
+toggled. The **All shared spans** view gives the full width to the spans and
+their original instructions.
+
+Select a shared span and use **Call context… → Primary / Secondary** to trace
+its callers through the same native call-path review. This also exposes a public
+wrapper that delegates to a moved private body, even when the wrapper contains
+no directly shared instructions. Calls and tail transfers retain their original
+instruction witnesses. Reachability is conditional on observed native edges;
+it does not establish path feasibility, source ancestry or patch presence.
 
 ## Dependency evidence and slices
 
