@@ -3949,6 +3949,19 @@ reads keep their own occurrence. The structural memory scan also retains
 ordered accesses, including loads, so synchronization cannot carry an older
 frame value through a numerically disjoint access. FS/GS writes cannot use
 numeric frame offsets to claim disjointness without their segment base.
+The frame resolver can also project an exact PE32 shared C++ entry call. The
+loader's existing caller/helper instruction parser owns its physical protocol;
+a budgeted reader rechecks current immutable storage and fixups. LowIR relifts
+the three-instruction prefix and matches its operations, boundaries and rooted
+entry before relating post-call EBP, ESP and EAX to pre-call ESP. The ordinary
+ABI must not preserve the old EBP or EAX across that physical call. Later calls
+into the same checked helper also invalidate these registers, but cannot reuse
+the entry's coordinate projection; an explicit local restoration can recover a
+frame identity. Image-bound
+successes and refusals are replayed on each query rather than retained in a
+structural graph's value cache. This projection needs no FuncInfo or native EH
+receipt, and grants none: personality, cookies, registration lifetime, memory
+effects and ordinary callee contracts retain their separate checks.
 An exact absolute singleton may seed decoding of its owned destination before
 publication is possible. Its finite-domain replay remains active through that
 graph growth; the existing closure and minimum-cardinality checks still decide

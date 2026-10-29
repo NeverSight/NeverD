@@ -55,6 +55,79 @@
 #include <string>
 #include <vector>
 
+namespace neverd::detail {
+
+struct RegistrationFrameQueryTestAccess {
+  struct Answer {
+    std::vector<bool> Values;
+    std::vector<bool> Completions;
+    bool Complete = false;
+    size_t Remaining = 0;
+    bool operator==(const Answer &) const = default;
+  };
+
+  static Answer
+  query(CFGBuilder &Builder, const coff_loader::X86CxxPrologueCall &Call,
+        size_t Budget = limits::kMaxJumpTableCandidateEvidenceWork,
+        va_t Use = InvalidVA) {
+    const auto &Before = Builder.Insns.at(Call.CallVA);
+    if (Use == InvalidVA)
+      Use = Call.Caller.End;
+    const auto &After = Builder.Insns.at(Use);
+    std::vector<CFGBuilder::JumpTableValueQuery> Queries;
+    for (const auto &[Reg, Addend] :
+         {std::pair<uint64_t, int64_t>{x86reg::RBP, 0},
+          {x86reg::RSP, -int64_t(Call.PostCallStackOffset)},
+          {x86reg::RAX, -int64_t(Call.RegistrationOffset)}}) {
+      CFGBuilder::JumpTableValueQuery Query;
+      Query.Candidate = NdVar::reg(Reg, 4);
+      Query.UseAddr = Use;
+      Query.UseSeq = After.Ops.front().Seq;
+      Query.Relation =
+          CFGBuilder::JumpTableValueRelation::SameCanonicalFrameAddress;
+      Query.FrameByteAddend = Addend;
+      Query.Alternatives = {{NdVar::reg(x86reg::RSP, 4), Call.CallVA,
+                             Before.Ops.front().Seq, false}};
+      Queries.push_back(Query);
+    }
+    const bool Complete = Builder.JumpTableProofContextComplete;
+    Builder.JumpTableProofContextComplete = true;
+    Answer Result;
+    Result.Remaining = Budget;
+    Result.Values = Builder.tableValuesMatchAtUses(
+        Queries, &Result.Complete, &Result.Completions, InvalidVA, nullptr,
+        &Result.Remaining);
+    Builder.JumpTableProofContextComplete = Complete;
+    return Result;
+  }
+
+  static void clear(CFGBuilder &Builder) {
+    Builder.CachedResolverGraph.reset();
+  }
+
+  static void mutate(CFGBuilder &Builder,
+                     const coff_loader::X86CxxPrologueCall &Call,
+                     unsigned Mutation) {
+    auto &Record = Builder.Insns.at(Call.CallVA);
+    if (Mutation == 1)
+      Record.Mode = InstructionMode::Thumb;
+    if (Mutation == 2)
+      Record.Ops.back().Inputs[0].Offset += 1;
+    if (Mutation == 3)
+      Record.IsInstructionGuard = true;
+    if (Mutation == 4)
+      Builder.PersistentCFGRoots.insert(Call.CallVA);
+    if (Mutation == 5) {
+      Builder.PersistentCFGRoots.insert(Call.Caller.End);
+      Builder.BlockStarts.insert(Call.Caller.End);
+    }
+    if (Mutation == 6)
+      Builder.Insns.at(Call.Caller.Begin).Ops.back().Inputs[1].Offset += 1;
+  }
+};
+
+} // namespace neverd::detail
+
 namespace {
 
 using namespace neverd;
@@ -1572,6 +1645,155 @@ BinaryImage makeCxxEAXStateImage(bool Wide, unsigned Variant,
   Image.ExceptionMetadata = {};
   coff_loader::parseX86RegistrationExceptions(Image);
   return Image;
+}
+
+TEST(RegistrationTryLevel, CxxPhysicalPrefixSuppliesResolverFrameRelations) {
+  using Access = detail::RegistrationFrameQueryTestAccess;
+  for (bool Wide : {false, true})
+    for (unsigned Variant : {0, 1, 2})
+      for (uint32_t Allocation : {0, 1, 4, 8, 16, 32, 64, 96}) {
+        SCOPED_TRACE(::testing::Message()
+                     << Wide << " " << Variant << " " << Allocation);
+        auto Image = makeCxxEAXStateImage(Wide, Variant, Allocation);
+        Decoder Decode;
+        ASSERT_TRUE(Decode.init(Image));
+        CFGBuilder Builder;
+        auto Function = Builder.buildIntegerFrameProof(
+            Image, Decode, kText + 0x20, "physical-prefix");
+        ASSERT_TRUE(Function.hasCompleteLiftCoverage());
+        const auto Call =
+            getCheckedX86RegistrationCxxProloguePrefix(Image, Function);
+        ASSERT_TRUE(Call);
+        Function.RegistrationStates.reset();
+        EXPECT_FALSE(getCheckedX86RegistrationCxxPrologueCall(Image, Function));
+        const auto Cold = Access::query(Builder, *Call);
+        EXPECT_TRUE(Cold.Complete);
+        EXPECT_EQ(Cold.Values, std::vector<bool>(3, true));
+        EXPECT_EQ(Cold.Completions, std::vector<bool>(3, true));
+        EXPECT_EQ(Access::query(Builder, *Call), Cold);
+        const size_t Used =
+            limits::kMaxJumpTableCandidateEvidenceWork - Cold.Remaining;
+        ASSERT_GT(Used, 0u);
+        Access::clear(Builder);
+        auto Exact = Access::query(Builder, *Call, Used);
+        EXPECT_TRUE(Exact.Complete);
+        EXPECT_EQ(Exact.Values, Cold.Values);
+        EXPECT_EQ(Exact.Remaining, 0u);
+        const auto Short = Access::query(Builder, *Call, Used - 1);
+        EXPECT_FALSE(Short.Complete);
+        EXPECT_EQ(Short.Values, std::vector<bool>(3, false));
+        EXPECT_EQ(Short.Completions, std::vector<bool>(3, false));
+      }
+}
+
+TEST(RegistrationTryLevel, CxxResolverFrameRelationsRecheckCurrentEvidence) {
+  using Access = detail::RegistrationFrameQueryTestAccess;
+  for (unsigned Mutation = 1; Mutation != 11; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    auto Image = makeCxxEAXStateImage(false, 1);
+    Decoder Decode;
+    ASSERT_TRUE(Decode.init(Image));
+    CFGBuilder Builder;
+    const auto Function = Builder.buildIntegerFrameProof(
+        Image, Decode, kText + 0x20, "physical-prefix");
+    ASSERT_TRUE(Function.hasCompleteLiftCoverage());
+    const auto Call =
+        getCheckedX86RegistrationCxxProloguePrefix(Image, Function);
+    ASSERT_TRUE(Call);
+    EXPECT_EQ(Access::query(Builder, *Call).Values, std::vector<bool>(3, true));
+    const auto OriginalImage = Image;
+    Access::mutate(Builder, *Call, Mutation);
+    if (Mutation == 7)
+      Image.Segments.front().Data[0x100 + 20] = 0x30;
+    if (Mutation == 8)
+      Image.Segments.front().Flags =
+          Image.Segments.front().Flags | SegmentFlags::Writable;
+    if (Mutation == 9)
+      Image.DynInfo.SecurityCookieRVA = 0;
+    if (Mutation == 10)
+      Image.Segments.front().Data[0x21] = 33;
+    const auto Warm = Access::query(Builder, *Call);
+    EXPECT_TRUE(Warm.Complete);
+    EXPECT_EQ(Warm.Values, std::vector<bool>(3, false));
+    Access::clear(Builder);
+    EXPECT_EQ(Access::query(Builder, *Call), Warm);
+    if (Mutation >= 7) {
+      Image = OriginalImage;
+      EXPECT_EQ(Access::query(Builder, *Call).Values,
+                std::vector<bool>(3, true));
+    }
+  }
+}
+
+TEST(RegistrationTryLevel, CxxResolverFrameNeedsNoNativeMetadataReceipt) {
+  auto Image = makeCxxEAXStateImage(false, 1);
+  const auto *Metadata = Image.ExceptionMetadata.findFunction(kText + 0x20);
+  ASSERT_NE(Metadata, nullptr);
+  const auto Call = coff_loader::getCheckedX86CxxPrologueCall(Image, *Metadata);
+  ASSERT_TRUE(Call);
+  Image.ExceptionMetadata = {};
+  // Changing the live cookie's initial bits cannot change these coordinates.
+  writeLE<uint32_t>(Image.Segments.back().Data.data() + 0xf0, 0x10203040);
+  Decoder Decode;
+  ASSERT_TRUE(Decode.init(Image));
+  CFGBuilder Builder;
+  const auto Function = Builder.buildIntegerFrameProof(
+      Image, Decode, kText + 0x20, "physical-prefix-no-eh");
+  ASSERT_TRUE(Function.hasCompleteLiftCoverage());
+  EXPECT_FALSE(Function.ExceptionMetadata);
+  EXPECT_FALSE(getCheckedX86RegistrationCxxPrologueCall(Image, Function));
+  const auto Result =
+      detail::RegistrationFrameQueryTestAccess::query(Builder, *Call);
+  EXPECT_TRUE(Result.Complete);
+  EXPECT_EQ(Result.Values, std::vector<bool>(3, true));
+}
+
+TEST(RegistrationTryLevel,
+     CxxResolverFrameDoesNotReuseEntryForLaterHelperCalls) {
+  using Access = detail::RegistrationFrameQueryTestAccess;
+  for (bool Restore : {false, true}) {
+    SCOPED_TRACE(Restore);
+    auto Image = makeCxxEAXHelperImage(false, 1);
+    const auto *Metadata = Image.ExceptionMetadata.findFunction(kText + 0x20);
+    ASSERT_NE(Metadata, nullptr);
+    const auto Call =
+        coff_loader::getCheckedX86CxxPrologueCall(Image, *Metadata);
+    ASSERT_TRUE(Call);
+    auto &Text = Image.Segments.front().Data;
+    const std::vector<uint8_t> Prefix(Text.begin() + 0x20,
+                                      Text.begin() + Call->Caller.End - kText);
+    size_t Cursor = Call->Caller.End - kText;
+    if (Restore) {
+      Text[Cursor++] = 0x89;
+      Text[Cursor++] = 0xef; // EDI retains the first frame's EBP.
+    }
+    std::copy(Prefix.begin(), Prefix.end(), Text.begin() + Cursor);
+    writeLE<uint32_t>(
+        Text.data() + Cursor + 8,
+        uint32_t(Call->Helper.Begin - kText - Cursor - Prefix.size()));
+    Cursor += Prefix.size();
+    if (Restore) {
+      Text[Cursor++] = 0x89;
+      Text[Cursor++] = 0xfd; // Restore EBP explicitly from EDI.
+    }
+    Text[Cursor] = 0xc3;
+    Image.ExceptionMetadata = {};
+    Decoder Decode;
+    ASSERT_TRUE(Decode.init(Image));
+    CFGBuilder Builder;
+    const auto Function = Builder.buildIntegerFrameProof(
+        Image, Decode, kText + 0x20, "two-physical-entries");
+    ASSERT_TRUE(Function.hasCompleteLiftCoverage());
+    const auto Result = Access::query(
+        Builder, *Call, limits::kMaxJumpTableCandidateEvidenceWork,
+        kText + Cursor);
+    EXPECT_TRUE(Result.Complete);
+    EXPECT_EQ(Result.Values, (std::vector<bool>{Restore, false, false}));
+    EXPECT_EQ(Access::query(Builder, *Call,
+                            limits::kMaxJumpTableCandidateEvidenceWork,
+                            kText + Cursor),
+              Result);
+  }
 }
 
 TEST(RegistrationTryLevel, CxxEAXHelperOwnsItsDecodedStateTransitions) {

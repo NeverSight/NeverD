@@ -11,6 +11,7 @@
 #include "neverd/Limits.h"
 #include "neverd/decode/Decoder.h"
 #include "neverd/decode/InstructionRelocations.h"
+#include "neverd/ir/Limits.h"
 #include "neverd/ir/low/LowIR.h"
 
 #include <algorithm>
@@ -35,17 +36,17 @@ bool hasChainOccurrence(const LowFunc &Source, va_t Address, va_t End, int Seq,
 }
 
 template <typename Protocol>
-bool matchesEntry(const BinaryImage &Image, const LowFunc &Source,
-                  const LowBlock &Entry, const Protocol &Call) {
-  if (Source.Entry != Call.Caller.Begin || Entry.StartAddr != Source.Entry ||
+bool matchesEntry(const BinaryImage &Image, va_t SourceEntry,
+                  const std::set<va_t> &Roots, const LowBlock &Entry,
+                  const Protocol &Call) {
+  if (SourceEntry != Call.Caller.Begin || Entry.StartAddr != SourceEntry ||
       Entry.EndAddr != Call.Caller.End || !Entry.Preds.empty() ||
       !Entry.ExceptionalPreds.empty() ||
-      Entry.InstructionBoundaries.size() != 3 || Entry.Ops.size() > 64)
+      Entry.InstructionBoundaries.size() != 3 ||
+      Entry.Ops.size() > limits::ir::kMaxRegistrationSharedPrefixOps)
     return false;
-  const auto Root =
-      Source.OrdinaryModuleAnalysisRoots.upper_bound(Source.Entry);
-  if (Root != Source.OrdinaryModuleAnalysisRoots.end() &&
-      *Root < Call.Caller.End)
+  const auto Root = Roots.upper_bound(SourceEntry);
+  if (Root != Roots.end() && *Root < Call.Caller.End)
     return false;
   Decoder Dec;
   if (!Dec.init(Image))
@@ -123,6 +124,47 @@ bool matchesExit(const BinaryImage &Image, const LowFunc &Source,
 
 } // namespace
 
+std::optional<coff_loader::X86CxxPrologueCall>
+getCheckedX86CxxPhysicalProloguePrefix(const BinaryImage &Image, va_t Entry,
+                                       const LowBlock &Prefix,
+                                       const std::set<va_t> &Roots,
+                                       size_t &Work, size_t Limit) {
+  if (Image.Arch != Arch::X86 || !Image.isCOFF() || Prefix.StartAddr != Entry ||
+      !Prefix.Preds.empty() || !Prefix.ExceptionalPreds.empty() ||
+      Prefix.InstructionBoundaries.size() != 3 ||
+      Prefix.Ops.size() > limits::ir::kMaxRegistrationSharedPrefixOps)
+    return std::nullopt;
+  const auto Charge = [&](size_t Cost) {
+    if (Cost > Limit - std::min(Work, Limit)) {
+      Work = Limit;
+      return false;
+    }
+    Work += Cost;
+    return true;
+  };
+  // Prepay relifting, copying and comparison, and the instruction-relocation
+  // owner's nested mapping/identity searches for every possible prefix op.
+  // The loader below separately charges its exact code and fixup reads.
+  if (!Charge(Roots.size()))
+    return std::nullopt;
+  for (size_t I = 0; I != limits::ir::kMaxRegistrationSharedPrefixOps; ++I)
+    for (size_t Cost :
+         {size_t{1}, Image.Segments.size(), Image.Sections.size(),
+          Image.Symbols.size(), Image.Imports.size(),
+          Image.ImportStubRanges.size(), Image.ImportStubIndices.size(),
+          Image.RuntimeFunctionAddrs.size(),
+          Image.VerifiedFunctionEntries.size(), Image.KnownCodeRanges.size(),
+          Image.RodataAnchorSeg.size(), Image.CodeAddressRelocOperands.size(),
+          Image.DataAddressRelocOperands.size()})
+      if (!Charge(Cost))
+        return std::nullopt;
+  const auto Call = coff_loader::getCheckedX86CxxPhysicalPrologueCall(
+      Image, Entry, Work, Limit);
+  return Call && matchesEntry(Image, Entry, Roots, Prefix, *Call)
+             ? Call
+             : std::nullopt;
+}
+
 std::optional<coff_loader::X86SEH4PrologueCall>
 getCheckedX86RegistrationSEH4ProloguePrefix(const BinaryImage &Image,
                                             const LowFunc &Source) {
@@ -140,8 +182,11 @@ getCheckedX86RegistrationSEH4ProloguePrefix(const BinaryImage &Image,
         return std::nullopt;
       Entry = &Block;
     }
-  return Entry && matchesEntry(Image, Source, *Entry, *Call) ? Call
-                                                             : std::nullopt;
+  return Entry &&
+                 matchesEntry(Image, Source.Entry,
+                              Source.OrdinaryModuleAnalysisRoots, *Entry, *Call)
+             ? Call
+             : std::nullopt;
 }
 
 std::optional<coff_loader::X86SEH4PrologueCall>
@@ -212,8 +257,11 @@ getCheckedX86RegistrationCxxProloguePrefix(const BinaryImage &Image,
         return std::nullopt;
       Entry = &Block;
     }
-  return Entry && matchesEntry(Image, Source, *Entry, *Call) ? Call
-                                                             : std::nullopt;
+  return Entry &&
+                 matchesEntry(Image, Source.Entry,
+                              Source.OrdinaryModuleAnalysisRoots, *Entry, *Call)
+             ? Call
+             : std::nullopt;
 }
 
 std::optional<coff_loader::X86CxxPrologueCall>

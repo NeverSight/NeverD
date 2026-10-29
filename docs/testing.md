@@ -6922,6 +6922,18 @@ ECX/EDX inputs. Decoded-prefix clobbers and nonvolatile refinements reject.
 `CxxEAXHelperBindsAnActualCaller` repeats these inputs through a physical CALL,
 complete callee and RET cleanup, including exact and one-unit-short budgets.
 These conditional source proofs grant no native ABI or object ownership.
+`CxxPhysicalPrefixSuppliesResolverFrameRelations` checks the generic resolver's
+EBP/ESP/EAX coordinates over 48 short/wide prefix, helper layout and allocation
+combinations. Cold/warm queries and exact versus one-unit-short work allowances
+must agree. `CxxResolverFrameRelationsRecheckCurrentEvidence` changes current
+instructions, LowIR, roots, writable storage, helper bytes and cookie identity;
+an earlier positive or negative query cannot survive a changed image.
+`CxxResolverFrameNeedsNoNativeMetadataReceipt` proves only physical coordinates
+without EH metadata, retaining the separate native-ABI refusal and treating the
+cookie's initial contents as irrelevant to those coordinates.
+`CxxResolverFrameDoesNotReuseEntryForLaterHelperCalls` rejects retaining the
+first frame across a second invocation of the same non-ABI helper, while
+allowing an explicit EBP restoration from a preserved register.
 `CxxEAXHelperRefutesOnlyReachedInteriorGuesses` checks short/wide
 prologues reached from an image entry, a separate calling entry and a previously
 authenticated physical frame. Stated boundaries, noninterior guesses,

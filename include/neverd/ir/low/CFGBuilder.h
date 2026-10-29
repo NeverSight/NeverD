@@ -72,6 +72,7 @@ bool calleeNeverReturns(const BinaryImage &Img, va_t Target,
 
 namespace detail {
 struct ResolverGraphCacheTestAccess;
+struct RegistrationFrameQueryTestAccess;
 struct X87CallGraphCacheTestAccess;
 struct NoReturnProofTestAccess;
 using JumpTableProofPoint = std::pair<va_t, int>;
@@ -1150,6 +1151,7 @@ public:
 
 private:
   friend struct detail::ResolverGraphCacheTestAccess;
+  friend struct detail::RegistrationFrameQueryTestAccess;
   friend struct detail::X87CallGraphCacheTestAccess;
   friend struct detail::NoReturnProofTestAccess;
   std::array<size_t, 3> x87CallGraphCacheStatsForTesting() const;

@@ -49,6 +49,9 @@ inline constexpr unsigned kMedToHighSemanticThreadLimit = 1;
 inline constexpr size_t kCFGBuilderMaxRounds = 8;
 inline constexpr size_t kCFGBuilderMaxDependencies = 4096;
 
+/// Maximum lifted operations in an authenticated shared entry prefix.
+inline constexpr size_t kMaxRegistrationSharedPrefixOps = 64;
+
 // include/neverd/ir/med/MedLibraryRecognition.h
 inline constexpr size_t
     kMedLibraryRecognitionRecognizeMedLibraryOperationsMaxWork = 250000;

@@ -6,6 +6,7 @@
 /// \file
 /// Authenticate EAX-handler prologue calls without granting a native frame ABI.
 
+#include "../../ReadOnlyBytesIndex.h"
 #include "COFFRegistrationEHDetail.h"
 
 #include "neverd/loader/COFF/COFFRegistrationEH.h"
@@ -27,8 +28,40 @@ struct HelperProtocol {
 };
 using HelperCache = std::map<va_t, std::optional<HelperProtocol>>;
 
-std::optional<HelperProtocol>
-readCxxEAXPrologue(const BinaryImage &Img, va_t Entry, HelperCache &Checked) {
+struct PrologueReads {
+  const BinaryImage &Image;
+  size_t *Work = nullptr;
+  size_t Limit = 0;
+  std::optional<IndexedPE32CodeBytes> Code;
+
+  explicit PrologueReads(const BinaryImage &Image) : Image(Image) {}
+  PrologueReads(const BinaryImage &Image, size_t &Work, size_t Limit)
+      : Image(Image), Work(&Work), Limit(Limit),
+        Code(std::in_place, Image, Work, Limit) {}
+
+  const uint8_t *read(va_t Address, size_t Size) {
+    if (Work)
+      for (size_t Cost : {Size, Image.Segments.size()}) {
+        if (Cost > Limit - std::min(*Work, Limit)) {
+          *Work = Limit;
+          return nullptr;
+        }
+        *Work += Cost;
+      }
+    return Image.readVA(Address, Size);
+  }
+
+  std::optional<std::vector<uint8_t>>
+  immutable(va_t Address, uint32_t Size, const std::vector<va_t> &Operands) {
+    return Code ? Code->read(Address, Size, Operands)
+                : readImmutablePE32CodeBytes(Image, Address, Size, Operands);
+  }
+};
+
+std::optional<HelperProtocol> readCxxEAXPrologue(const BinaryImage &Img,
+                                                 va_t Entry,
+                                                 HelperCache &Checked,
+                                                 PrologueReads &Reads) {
   const auto Existing = Checked.find(Entry);
   if (Existing != Checked.end())
     return Existing->second;
@@ -40,7 +73,7 @@ readCxxEAXPrologue(const BinaryImage &Img, va_t Entry, HelperCache &Checked) {
   static constexpr uint8_t Tail[] = {0xff, 0x75, 0xfc, 0xc7, 0x45, 0xfc, 0xff,
                                      0xff, 0xff, 0xff, 0x8d, 0x45, 0xf4, 0x64,
                                      0xa3, 0,    0,    0,    0,    0xc3};
-  const auto *Bytes = Img.readVA(Entry, 51);
+  const auto *Bytes = Reads.read(Entry, 51);
   if (!Bytes || !std::equal(std::begin(Prefix), std::end(Prefix), Bytes))
     return std::nullopt;
   // Cache only actual helper-shaped candidates, not arbitrary call targets.
@@ -51,7 +84,7 @@ readCxxEAXPrologue(const BinaryImage &Img, va_t Entry, HelperCache &Checked) {
     return std::nullopt;
   const va_t Cookie = Img.Base + Img.DynInfo.SecurityCookieRVA;
   if (Cookie > UINT32_MAX - 3 || readLE<uint32_t>(Bytes + 24) != Cookie ||
-      !Img.readVA(Cookie, 4) || Bytes[28] != 0x33 || Bytes[29] != 0xc5 ||
+      !Reads.read(Cookie, 4) || Bytes[28] != 0x33 || Bytes[29] != 0xc5 ||
       Bytes[30] != 0x50)
     return std::nullopt;
   size_t Suffix = 31;
@@ -64,11 +97,10 @@ readCxxEAXPrologue(const BinaryImage &Img, va_t Entry, HelperCache &Checked) {
                                       : ExtraFrameStore::EncodedCookie;
     Suffix += 3;
   }
-  Bytes = Img.readVA(Entry, Suffix + sizeof(Tail));
+  Bytes = Reads.read(Entry, Suffix + sizeof(Tail));
   if (!Bytes || !std::equal(std::begin(Tail), std::end(Tail), Bytes + Suffix) ||
       Entry > UINT32_MAX - (Suffix + sizeof(Tail) - 1) ||
-      !readImmutablePE32CodeBytes(Img, Entry, Suffix + sizeof(Tail),
-                                  {Entry + 24}))
+      !Reads.immutable(Entry, Suffix + sizeof(Tail), {Entry + 24}))
     return std::nullopt;
   Result->second =
       HelperProtocol{{Entry, Entry + Suffix + sizeof(Tail)}, Cookie, Extra};
@@ -77,28 +109,29 @@ readCxxEAXPrologue(const BinaryImage &Img, va_t Entry, HelperCache &Checked) {
 
 std::optional<X86CxxPrologueCall> readCxxEAXPrologueCall(const BinaryImage &Img,
                                                          va_t Entry,
-                                                         HelperCache &Checked) {
+                                                         HelperCache &Checked,
+                                                         PrologueReads &Reads) {
   if (Img.Arch != Arch::X86 || Img.Bits != Bitness::Bits32 ||
       Img.Format != BinaryFormat::COFF || Entry > UINT32_MAX - 14)
     return std::nullopt;
-  const auto *Bytes = Img.readVA(Entry, 12);
+  const auto *Bytes = Reads.read(Entry, 12);
   if (!Bytes || (Bytes[0] != 0x6a && Bytes[0] != 0x68))
     return std::nullopt;
   const uint32_t PushSize = Bytes[0] == 0x6a ? 2 : 5;
   const uint32_t Size = PushSize + 10;
-  Bytes = Img.readVA(Entry, Size);
+  Bytes = Reads.read(Entry, Size);
   if (!Bytes || Bytes[PushSize] != 0xb8 || Bytes[PushSize + 5] != 0xe8)
     return std::nullopt;
   const int32_t Allocation =
       PushSize == 2 ? int8_t(Bytes[1]) : readLE<int32_t>(Bytes + 1);
   if (Allocation < 0 || Allocation > limits::kMaxSourceCallBorrowedBytes ||
-      !readImmutablePE32CodeBytes(Img, Entry, Size, {Entry + PushSize + 1}))
+      !Reads.immutable(Entry, Size, {Entry + PushSize + 1}))
     return std::nullopt;
   const va_t Call = Entry + PushSize + 5;
   const auto Target = registration_detail::addSignedOffset(
       Call + 5, readLE<int32_t>(Bytes + PushSize + 6));
   const auto Helper =
-      Target ? readCxxEAXPrologue(Img, *Target, Checked) : std::nullopt;
+      Target ? readCxxEAXPrologue(Img, *Target, Checked, Reads) : std::nullopt;
   if (!Helper)
     return std::nullopt;
   X86CxxPrologueCall Result;
@@ -142,6 +175,16 @@ std::optional<va_t> eaxCallerEntry(const Segment &Seg, size_t CallOffset) {
 } // namespace
 
 std::optional<X86CxxPrologueCall>
+getCheckedX86CxxPhysicalPrologueCall(const BinaryImage &Img, va_t Entry,
+                                     size_t &Work, size_t Limit) {
+  if (Img.Arch != Arch::X86 || Img.Bits != Bitness::Bits32 || !Img.isCOFF())
+    return std::nullopt;
+  PrologueReads Reads(Img, Work, Limit);
+  HelperCache Checked;
+  return readCxxEAXPrologueCall(Img, Entry, Checked, Reads);
+}
+
+std::optional<X86CxxPrologueCall>
 getCheckedX86CxxPrologueCall(const BinaryImage &Img,
                              const ExceptionFunction &Function) {
   if (Function.ParseStatus != ExceptionParseStatus::Complete ||
@@ -149,7 +192,9 @@ getCheckedX86CxxPrologueCall(const BinaryImage &Img,
       !Function.Registration || !Function.CodeRange.isValid())
     return std::nullopt;
   HelperCache Checked;
-  auto Call = readCxxEAXPrologueCall(Img, Function.CodeRange.Begin, Checked);
+  PrologueReads Reads(Img);
+  auto Call =
+      readCxxEAXPrologueCall(Img, Function.CodeRange.Begin, Checked, Reads);
   if (!Call || Call->Caller.End > Function.CodeRange.End ||
       Function.CodeRange.overlaps(Call->Helper) ||
       Call->HandlerVA != Function.PersonalityVA ||
@@ -172,6 +217,7 @@ std::vector<InstallSite> findCxxEAXPrologueCallers(
   std::vector<InstallSite> Deferred;
   std::map<va_t, va_t> PrecedingGuesses;
   HelperCache Helpers;
+  PrologueReads Reads(Img);
   std::set<va_t> Entries;
   size_t BoundaryWork = 0;
   for (const auto &Seg : Img.Segments) {
@@ -187,7 +233,7 @@ std::vector<InstallSite> findCxxEAXPrologueCallers(
       if (!Entry)
         continue;
       const va_t CallVA = Seg.VA + I;
-      const auto Protocol = readCxxEAXPrologueCall(Img, *Entry, Helpers);
+      const auto Protocol = readCxxEAXPrologueCall(Img, *Entry, Helpers, Reads);
       if (!Protocol || Protocol->CallVA != CallVA)
         continue;
       const va_t Handler = Protocol->HandlerVA;

@@ -274,6 +274,13 @@ struct X86CxxPrologueCall {
   int32_t PostCallStackOffset = 0;
   std::vector<X86CxxPrologueWrite> Writes;
 };
+/// Authenticate only the immutable physical entry/helper protocol, charging
+/// the supplied cumulative work account. No FuncInfo, personality, SafeSEH,
+/// source occurrence or native EH contract is granted by this query.
+std::optional<X86CxxPrologueCall>
+getCheckedX86CxxPhysicalPrologueCall(const BinaryImage &Img, va_t Entry,
+                                     size_t &Work, size_t Limit);
+
 std::optional<X86CxxPrologueCall>
 getCheckedX86CxxPrologueCall(const BinaryImage &Img,
                              const ExceptionFunction &Function);

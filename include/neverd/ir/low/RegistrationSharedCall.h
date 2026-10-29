@@ -12,9 +12,22 @@
 #include "neverd/loader/COFF/COFFRegistrationEH.h"
 #include "neverd/loader/COFF/COFFSEH4Entry.h"
 
+#include <cstddef>
+#include <set>
+
 namespace neverd {
 struct LowFunc;
 struct LowBlock;
+
+/// Recheck one rooted, immutable physical C++ entry prefix with the loader's
+/// shared instruction protocol. The prefix must be taken from the current
+/// graph. This grants frame dataflow only, independently of EH metadata,
+/// personality identity, ordinary callee ABI and native registration receipts.
+std::optional<coff_loader::X86CxxPrologueCall>
+getCheckedX86CxxPhysicalProloguePrefix(const BinaryImage &Image, va_t Entry,
+                                       const LowBlock &Prefix,
+                                       const std::set<va_t> &Roots,
+                                       size_t &Work, size_t Limit);
 
 /// Re-lift the immutable three-instruction SEH4 entry before applying its
 /// physical frame effects to the current LowIR.

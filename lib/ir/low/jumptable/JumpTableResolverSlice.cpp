@@ -31,6 +31,7 @@
 #include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/ir/low/ImportedMemoryCopy.h"
+#include "neverd/ir/low/RegistrationSharedCall.h"
 #include "neverd/libc/LibCNames.h"
 #include "neverd/loader/PointerRelocation.h"
 #include "neverd/solver/BitVectorSolver.h"
@@ -5393,6 +5394,7 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
   // Pointer-named opaque values and merges have allocation-dependent lengths,
   // hence allocation-dependent evidence charges. Do not cache those batches.
   bool UsedPointerSymbol = false;
+  bool UsedPhysicalEntryEvidence = false;
   // Graph construction is only the first half of one evidence query.  Keep
   // charging the same candidate-local account while reconstructing frame,
   // memory and value state, and while matching/symbolizing the resulting DAG.
@@ -5695,6 +5697,78 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
            uint32_t(Call.Addr + 5 + readLE<uint32_t>(Bytes + 1)) ==
                Call.Inputs[0].Offset;
   };
+  bool CheckedPhysicalEntry = false;
+  std::optional<coff_loader::X86CxxPrologueCall> PhysicalEntry;
+  auto physicalEntryAt =
+      [&](const LowOp &Call) -> const coff_loader::X86CxxPrologueCall * {
+    if (CurrentImg->Arch != Arch::X86 || !CurrentImg->isCOFF())
+      return nullptr;
+    if (!CheckedPhysicalEntry) {
+      CheckedPhysicalEntry = true;
+      const auto Check =
+          [&]() -> std::optional<coff_loader::X86CxxPrologueCall> {
+        if (!consumeEvidenceSum(
+                {orderedSetLookupWork(Insns.size()),
+                 orderedSetLookupWork(Graph.InsnToBlock.size())}))
+          return std::nullopt;
+        const auto EntryLocation = Graph.InsnToBlock.find(CurrentFuncEntry);
+        if (EntryLocation == Graph.InsnToBlock.end())
+          return std::nullopt;
+        const auto &Entry = Graph.Blocks[EntryLocation->second];
+        if (Entry.Start != CurrentFuncEntry || !Entry.Preds.empty())
+          return std::nullopt;
+        LowBlock Prefix;
+        Prefix.StartAddr = Prefix.EndAddr = CurrentFuncEntry;
+        auto Insn = Insns.find(CurrentFuncEntry);
+        for (unsigned I = 0; I != 3; ++I, ++Insn) {
+          if (Insn == Insns.end() || Insn->first != Prefix.EndAddr)
+            return std::nullopt;
+          const auto &Record = Insn->second;
+          if (!Record.Size || Record.Size > InvalidVA - Record.Addr ||
+              Record.Ops.size() > limits::ir::kMaxRegistrationSharedPrefixOps -
+                                      Prefix.Ops.size() ||
+              Prefix.Ops.size() > Entry.Ops.size() ||
+              Record.Ops.size() > Entry.Ops.size() - Prefix.Ops.size() ||
+              !consumeEvidenceProduct(Record.Ops.size() + 1, 3) ||
+              !std::equal(Record.Ops.begin(), Record.Ops.end(),
+                          Entry.Ops.begin() + Prefix.Ops.size()))
+            return std::nullopt;
+          Prefix.InstructionBoundaries.push_back(
+              makeInstructionBoundary(Record, Prefix.Ops.size()));
+          Prefix.Ops.insert(Prefix.Ops.end(), Record.Ops.begin(),
+                            Record.Ops.end());
+          Prefix.EndAddr = Record.Addr + Record.Size;
+        }
+        if (Prefix.Ops.empty() || Prefix.Ops.back().Opcode != NdOp::CALL)
+          return std::nullopt;
+        // The graph cache contains structural inputs, not mutable image
+        // bytes. Even a failed physical check must be replayed next time.
+        UsedPhysicalEntryEvidence = true;
+        if (!consumeEvidence(Graph.RootBlocks.size()))
+          return std::nullopt;
+        for (int Root : Graph.RootBlocks)
+          if (Graph.Blocks[Root].Start > Prefix.StartAddr &&
+              Graph.Blocks[Root].Start < Prefix.EndAddr)
+            return std::nullopt;
+        size_t Work = 0;
+        const size_t Limit = GraphWorkBudget
+                                 ? *GraphWorkBudget
+                                 : std::numeric_limits<size_t>::max();
+        auto Result = getCheckedX86CxxPhysicalProloguePrefix(
+            *CurrentImg, CurrentFuncEntry, Prefix, ProofRoots, Work, Limit);
+        if (!consumeEvidence(Work))
+          return std::nullopt;
+        if (!Result && Work == Limit) {
+          EvidenceBudgetExhausted = true;
+          Complete = false;
+        }
+        return Result;
+      };
+      PhysicalEntry = Check();
+    }
+    return PhysicalEntry && PhysicalEntry->CallVA == Call.Addr ? &*PhysicalEntry
+                                                               : nullptr;
+  };
   auto callPreservesLane = [&](const LowOp &Call, const LaneView &Query) {
     if (!Query.Valid || Query.Begin > InvalidVA - Query.Container)
       return false;
@@ -5702,6 +5776,20 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
     if (Query.Size > InvalidVA - Begin)
       return false;
     const uint64_t End = Begin + Query.Size;
+    const auto *Entry = physicalEntryAt(Call);
+    // This helper is not an ordinary ABI callee at a later occurrence either.
+    // Only the checked entry can project coordinates; other calls into the
+    // known helper must forget its frame/result registers until a local
+    // definition reestablishes them.
+    const bool CallsPhysicalHelper =
+        PhysicalEntry && Call.Opcode == NdOp::CALL && Call.NumInputs >= 1 &&
+        Call.Inputs[0].isConst() &&
+        PhysicalEntry->Helper.contains(Call.Inputs[0].Offset);
+    if ((Entry || CallsPhysicalHelper) && Query.Space == VnodeSpace::REG)
+      for (uint64_t Register :
+           {TRI.StackPointer, TRI.FramePointer, TRI.IntReturnReg})
+        if (Begin < Register + TRI.PointerSize && Register < End)
+          return false;
     if (!consumeEvidence(CallPreservedRanges.size()))
       return false;
     if (std::any_of(CallPreservedRanges.begin(), CallPreservedRanges.end(),
@@ -6443,6 +6531,22 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
         break;
       const LowOp &Def = B.Ops[I];
       if (Def.Opcode == NdOp::CALL || Def.Opcode == NdOp::INDIR_CALL) {
+        if (const auto *Entry = physicalEntryAt(Def);
+            Entry &&
+            (BaseReg == TRI.FramePointer || BaseReg == TRI.StackPointer ||
+             BaseReg == TRI.IntReturnReg)) {
+          // The checked physical protocol establishes EBP from pre-call ESP;
+          // its ESP and EAX are exact offsets from that same frame origin.
+          const int64_t Offset =
+              BaseReg == TRI.StackPointer   ? Entry->PostCallStackOffset
+              : BaseReg == TRI.IntReturnReg ? Entry->RegistrationOffset
+                                            : 0;
+          Found = true;
+          Result = FrameStates.adjust(
+              resolveFrameBase(Block, I, TRI.StackPointer, Depth + 1), Offset,
+              false);
+          break;
+        }
         const bool QueryPreserved = callPreservesLane(Def, Query);
         if (!QueryPreserved) {
           Found = true;
@@ -10557,7 +10661,8 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
   const bool RepeatableRefusal =
       HasRepeatableRefusal && !NonRepeatableAnalysisIncomplete;
   if ((Complete || RepeatableRefusal) && !EvidenceBudgetExhausted &&
-      !SymbolBudgetExhausted && !UsedPointerSymbol && ReusedGraph)
+      !SymbolBudgetExhausted && !UsedPointerSymbol &&
+      !UsedPhysicalEntryEvidence && ReusedGraph)
     ReusedGraph->rememberValueBatch(
         *this, Queries, MaxResolverDepth, InitialMatchBudget, Complete, Results,
         QueryAnalysisComplete, QueryUnsignedFeasibleMasks,
