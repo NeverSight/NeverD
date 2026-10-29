@@ -583,9 +583,11 @@ stackPopForBody(StackBody &Body, va_t Entry, const NestedStackProof &NestedPop,
             intrinsicX86DivPreconditionShapeIsValid(
                 Intrinsic::X86RequireDivPrecondition,
                 x86DivPreconditionLowShape(Op, Arch::X86))) {
-          // The successful divide guard writes no register or memory. Only
-          // this ordinary-return proof skips its abstract transfer; the
-          // original fault guard and the shared frame/EH policy remain intact.
+          // Normal continuation preserves the physical integer coordinates.
+          // A continuing divide-fault handler can still replace an IAT by
+          // repairing memory alone. Keep earlier resident callable identities,
+          // but no fresh binding; the source guard and EH policy stay intact.
+          State.ImportBindingsIntact = false;
           continue;
         }
         if (!registration_state::isFramePreservingIntrinsic(Op))

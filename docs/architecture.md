@@ -2434,9 +2434,12 @@ explicit restoration through an ABI-preserved register can recover it. Memory
 loads do not acquire a saved-stack identity in the ordinary-body analysis.
 The validated integer DIV/IDIV precondition has no register or memory write on
 its successful path, so the returning-stack query can retain its coordinates
-and current import bindings across that guard. The guard stays in LowIR with
-its original divide faults. This local rule does not change the shared frame
-privacy, memory-effect, finally-return or native EH policies.
+across that guard. It withdraws fresh import bindings: a continuing divide-fault
+handler can repair a memory divisor and replace an IAT without editing the
+physical GPR context. An earlier resident callable remains a separate identity.
+The guard stays in LowIR with its original divide faults. This local rule does
+not change the shared frame privacy, memory-effect, finally-return or native EH
+policies.
 An ordinary returning-stack query collects direct callees, cached import loads
 and IAT dependencies only from the ordinary graph reachable from its requested
 entry. Disconnected address-taken entries remain in the source CFG and receive

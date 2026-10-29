@@ -5907,10 +5907,13 @@ and signed/unsigned self-comparisons, full spills, partial aliases, mismatched
 widths and mixed frame, cookie, import or thread provenance. The earlier frame
 coordinate and numeric-address cancellation negatives remain required.
 `RegistrationImportABI.DivideGuardKeepsOnlyTheNormalReturnStack` checks signed
-and unsigned 8/16/32-bit register and memory divides followed by a stdcall. The
-exact divide guard remains in LowIR and the shared frame policy still refuses
-it. Extra pushes, changed IAT bindings and an unknown-effect intrinsic reject;
-accepted stack contracts retain the actual import dependency.
+and unsigned 8/16/32-bit register and memory divides without a later import
+dependency. The exact divide guard remains in LowIR and the shared frame policy
+still refuses it. Extra pushes, changed IAT bindings and an unknown-effect
+intrinsic reject. `DivideFaultCannotCertifyLaterImportBindings` adds 72 physical
+variants of direct slot calls, fresh cached loads, retained register targets and
+reloads. A potential divide fault withdraws later bindings while a target held
+before the divide remains a separate positive control.
 `CRTMemoryImportsProveOnlyReturningStackCleanup` checks eleven legacy CRT
 imports through both IAT calls and jump veneers. Provider, name, delayed-import,
 conflicting-slot, addend, backing-byte, metadata, architecture and caller-cleanup

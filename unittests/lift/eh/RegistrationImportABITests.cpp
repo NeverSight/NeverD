@@ -1145,6 +1145,46 @@ TEST(RegistrationImportABI, ReturningHelperMayReplaceRuntimeSlot) {
   EXPECT_EQ(Contracts->front().ImageWrites.front().End, ImportImage::IATVA + 4);
 }
 
+TEST(RegistrationImportABI, DivideFaultCannotCertifyLaterImportBindings) {
+  for (unsigned Form = 0; Form != 6; ++Form)
+    for (bool Signed : {false, true})
+      for (bool Memory : {false, true})
+        for (unsigned Width : {1u, 2u, 4u}) {
+          SCOPED_TRACE(::testing::Message() << Form << ':' << Signed << ':'
+                                            << Memory << ':' << Width);
+          ImportImage F({"Sleep", 1}, false);
+          auto &Text = F.Image.Segments[0];
+          auto &Bytes = Text.Data;
+          Bytes.clear();
+          const auto LoadTarget = [&] {
+            Bytes.insert(Bytes.end(), {0x8b, 0x35, 0, 0x30, 0x40, 0});
+          };
+          if (Form >= 3)
+            LoadTarget();
+          if (Form) {
+            if (Width == 2)
+              Bytes.push_back(0x66);
+            Bytes.push_back(Width == 1 ? 0xf6 : 0xf7);
+            Bytes.push_back((Memory ? 0x74 : 0xf1) + (Signed ? 8 : 0));
+            if (Memory)
+              Bytes.insert(Bytes.end(), {0x24, 4});
+          }
+          if (Form == 2 || Form == 4)
+            LoadTarget();
+          Bytes.insert(Bytes.end(), {0x6a, 0});
+          if (Form == 2 || Form == 3 || Form == 4)
+            Bytes.insert(Bytes.end(), {0xff, 0xd6});
+          else
+            Bytes.insert(Bytes.end(), {0xff, 0x15, 0, 0x30, 0x40, 0});
+          Bytes.insert(Bytes.end(), {0xc2, 4, 0});
+          Text.Size = Text.FileSz = Bytes.size();
+          F.Image.Sections[0].Size = F.Image.Sections[0].FileSz = Text.Size;
+          EXPECT_EQ(getCheckedX86CalleeStackPop(F.Image, Text.VA),
+                    Form == 0 || Form == 3 ? std::optional<uint32_t>{4}
+                                           : std::nullopt);
+        }
+}
+
 TEST(RegistrationImportABI, DivideGuardKeepsOnlyTheNormalReturnStack) {
   for (bool Signed : {false, true})
     for (bool Memory : {false, true})
@@ -1167,8 +1207,9 @@ TEST(RegistrationImportABI, DivideGuardKeepsOnlyTheNormalReturnStack) {
             if (Memory)
               Text.Data.insert(Text.Data.end(), {0x24, 4}); // [ESP + 4].
           }
-          Text.Data.insert(Text.Data.end(),
-                           {0x6a, 0, 0xff, 0x15, 0, 0x30, 0x40, 0});
+          if (Mutation == 2)
+            Text.Data.insert(Text.Data.end(),
+                             {0x6a, 0, 0xff, 0x15, 0, 0x30, 0x40, 0});
           if (Mutation == 1)
             Text.Data.push_back(0x50); // An unmatched push still rejects.
           Text.Data.insert(Text.Data.end(), {0xc2, 4, 0});
@@ -1203,8 +1244,7 @@ TEST(RegistrationImportABI, DivideGuardKeepsOnlyTheNormalReturnStack) {
           ASSERT_EQ(Contracts->size(), Mutation ? 0u : 1u);
           if (!Mutation) {
             EXPECT_EQ(Contracts->front().StackPopBytes, 4u);
-            EXPECT_EQ(Contracts->front().RequiredImports,
-                      std::vector<va_t>{ImportImage::IATVA});
+            EXPECT_TRUE(Contracts->front().RequiredImports.empty());
           }
         }
 }
