@@ -12,6 +12,13 @@ configurations remain separate coverage.
 
 ## Open
 
+Neutral immediate locked logic now keeps one ordered read-modify-write and
+its defined logical flags across both C routes. HighC retains explicit atomic
+result types when rendering signed comparisons. Public execution regressions
+cover all scalar widths, formats, offsets and optimization levels; this does
+not supply missing entry-frame state or a general model for other locked
+logical operands, MMIO or concurrency.
+
 LLVM C compare-exchange now retains the old value, success flag and memory
 effect at the original instruction position. Native 8/16/32/64-bit integers
 and ordinary pointers retain weak/strong, volatile and memory-order semantics,

@@ -14412,7 +14412,7 @@ below a proved mask window; no runtime input value is assumed. A root rewrite
 keeps its retained words verbatim, so the deep simplifier walks them under the
 same work allowance before returning.
 
-`X86LiftCoreArith` lowers legacy memory `LOCK ADD/SUB/INC/DEC` to one sequentially consistent `ATOMIC_ADD`. Flags use the returned old value after the memory operation; `INC/DEC` preserve CF. FS/GS address spaces remain attached. Other locked core arithmetic is refused until it has an ordered model. This is a LowIR lifting contract; emitted native alignment and fault behavior need their own qualification.
+`X86LiftCoreArith` lowers legacy memory `LOCK ADD/SUB/INC/DEC` to one sequentially consistent `ATOMIC_ADD`. Flags use the returned old value after the transaction; `INC/DEC` preserve CF and FS/GS address spaces remain attached. Neutral immediate `LOCK OR/XOR 0` and `LOCK AND -1` use that same transaction with a zero addend. Their logical flags use the old value, clear CF/OF and leave AF undefined. Other logical values, register sources and HLE remain refused. HighC retains the type of an explicit atomic-result declaration so signed comparisons use its actual C carrier. This does not establish missing frame inputs, MMIO behavior or concurrent execution equivalence.
 
 LLVM C owns one cached pointer-type projection per emitted definition. Its
 parameter-location binding selects the same object/function pointer declarations

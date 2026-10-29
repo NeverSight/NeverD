@@ -525,9 +525,12 @@ bool liftCoreArith(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
   }
 
   if (X86.prefix[0] == X86_PREFIX_LOCK) {
+    const bool Logical =
+        InsnId == X86_INS_AND || InsnId == X86_INS_OR || InsnId == X86_INS_XOR;
     const bool Unary = InsnId == X86_INS_INC || InsnId == X86_INS_DEC;
     const bool Subtract = InsnId == X86_INS_SUB || InsnId == X86_INS_DEC;
-    if ((!Unary && InsnId != X86_INS_ADD && InsnId != X86_INS_SUB) ||
+    if ((!Unary && !Logical && InsnId != X86_INS_ADD &&
+         InsnId != X86_INS_SUB) ||
         ApxBinary.Present || ApxUnary.Present || ApxImul.Present ||
         X86.op_count != (Unary ? 1 : 2))
       return false;
@@ -540,9 +543,26 @@ bool liftCoreArith(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
                      X86.operands[1].type != X86_OP_IMM) ||
                     X86.operands[1].size != Memory.size)))
       return false;
-    const NdVar Address = S.computeEA(Memory);
     const NdVar Source = Unary ? NdVar::scalar(1, Memory.size)
                                : readArithmeticOperand(X86.operands[1]);
+    if (Logical) {
+      const uint64_t Mask = UINT64_MAX >> (64 - Memory.size * 8);
+      // Neutral logic still writes memory and orders other accesses. The
+      // shared atomic add of zero keeps that transaction, including faults;
+      // only its value result is used to publish the logical status flags.
+      if (X86.operands[1].type != X86_OP_IMM || !Source.isConst() ||
+          Source.Provenance != ConstantAddressProvenance::Scalar ||
+          (Source.Offset & Mask) != (InsnId == X86_INS_AND ? Mask : 0))
+        return false;
+      const NdVar Address = S.computeEA(Memory);
+      const NdVar Old = S.makeTemp(Memory.size);
+      S.emit(NdOp::ATOMIC_ADD, Old, {Address, NdVar::scalar(0, Memory.size)},
+             NdMemoryOrdering::SequentiallyConsistent,
+             X86Lifter::LiftState::memoryAddressSpace(Memory));
+      L.emitFlagsLogic(S, Old);
+      return true;
+    }
+    const NdVar Address = S.computeEA(Memory);
     const NdVar Value = S.makeTemp(Memory.size);
     S.emit(NdOp::COPY, Value, {Source});
     NdVar Addend = Value;

@@ -2234,6 +2234,8 @@ HFA インポートスロットのテストは厳密な C プロトタイプを�
 
 `X86LegacyAtomic.LockedArithmetic*` は x86/x64 の幅、独立した算術フラグ、入力レジスタとキャリーの保持、符号付き即値、非整列の隣接バイト、読み取り専用・部分マッピング、FS/GS、ロックなしの対照を検証します。未対応のロック付き演算を通常のストアに変換しません。`InterpreterLLVMRefinement.RawAtomicsStopBeforeLLVMProof` は四種類の命令の特化と、順序付きメモリの証明拒否を確認します。
 
+`X86LegacyAtomic.NeutralLogic*` は各幅と FS/GS でメモリ、定義済みフラグ、DF を保持し、書き込み拒否、不完全なアクセス、他の即値、HLE を検証します。`NeverDX86NeutralAtomicSourceTests` は x64 ホストで COFF/ELF/MachO の両 C 経路を O0/O2 と UBSan で実行し、上位ビットと八つのバイト位置を検証します。宣言型の変更には `NeverDHighControlFlowTests` と `NeverDHighCIntegerWidthTests` も実行します。
+
 ## スカラー分岐の検証
 
 `NeverDConstantBranchTests` は x86/x64/ARM64 と PE、ELF、Mach-O で直接先行辺、全経路が一致する合流、不変読み取りを検証します。競合、未定義入力、呼び出しによる破壊、独立入口では動的分岐を維持します。`NeverDConstantBranchSourceTests` は最適化の有無、O0/O2、UBSan で x64/ARM64 の両 C 経路をコンパイルして実行します。整数のみの関数本体にはホスト標準ヘッダーを使い、ネイティブ ARM64 や Windows ドライバーの認証とは区別します。worker の独立した ELF x64 機械語との比較は、コールド状態の移動、参照、飛び越された E9 バイトも検証します。

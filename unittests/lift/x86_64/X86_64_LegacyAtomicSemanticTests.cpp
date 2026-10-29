@@ -1012,6 +1012,165 @@ TEST(X86LegacyAtomic, LockedArithmeticRetainsSegmentedAddresses) {
       }
 }
 
+std::vector<uint8_t> neutralLogicBytes(unsigned Group, unsigned Width,
+                                       uint8_t Segment = 0) {
+  std::vector<uint8_t> Bytes;
+  if (Segment)
+    Bytes.push_back(Segment);
+  Bytes.push_back(0xf0);
+  if (Width == 2)
+    Bytes.push_back(0x66);
+  if (Width == 8)
+    Bytes.push_back(0x48);
+  Bytes.push_back(Width == 1 ? 0x80 : 0x83);
+  Bytes.push_back(static_cast<uint8_t>((Group << 3) | 7));
+  Bytes.push_back(Group == 4 ? 0xff : 0);
+  return Bytes;
+}
+
+TEST(X86LegacyAtomic, NeutralLogicKeepsTheTransactionAndDefinedFlags) {
+  for (Arch Target : {Arch::X86, Arch::X64})
+    for (unsigned Width : {1u, 2u, 4u, 8u}) {
+      if (Target == Arch::X86 && Width == 8)
+        continue;
+      const uint64_t Mask = UINT64_MAX >> (64 - Width * 8);
+      const uint64_t Sign = uint64_t{1} << (Width * 8 - 1);
+      for (unsigned Group : {1u, 4u, 6u})
+        for (uint8_t Segment : {0, 0x64, 0x65}) {
+          SCOPED_TRACE(testing::Message()
+                       << static_cast<unsigned>(Target) << '/' << Width << '/'
+                       << Group << '/' << unsigned(Segment));
+          const auto Ops =
+              lift(neutralLogicBytes(Group, Width, Segment), Target);
+          const auto *Atomic = findAtomic(Ops, NdOp::ATOMIC_ADD);
+          ASSERT_NE(Atomic, nullptr);
+          EXPECT_EQ(Atomic->Output.Size, Width);
+          EXPECT_EQ(Atomic->MemoryOrdering,
+                    NdMemoryOrdering::SequentiallyConsistent);
+          EXPECT_EQ(std::count_if(Ops.begin(), Ops.end(),
+                                  [](const LowOp &Op) {
+                                    return Op.Opcode == NdOp::ATOMIC_ADD;
+                                  }),
+                    1);
+          EXPECT_EQ(std::count_if(Ops.begin(), Ops.end(),
+                                  [](const LowOp &Op) {
+                                    return Op.Opcode == NdOp::LOAD ||
+                                           Op.Opcode == NdOp::STORE;
+                                  }),
+                    0);
+          const auto Space = Segment == 0x64   ? NdMemoryAddressSpace::X86FS
+                             : Segment == 0x65 ? NdMemoryAddressSpace::X86GS
+                                               : NdMemoryAddressSpace::Default;
+          EXPECT_EQ(Atomic->MemoryAddressSpace, Space);
+          for (uint64_t Value : {uint64_t{0}, uint64_t{1}, uint64_t{15},
+                                 uint64_t{16}, Sign - 1, Sign, Mask}) {
+            std::vector<uint8_t> Contents(16, 0xa5);
+            for (unsigned I = 0; I < Width; ++I)
+              Contents[I + 1] = Value >> (8 * I);
+            auto Image = memoryImage(
+                Contents.size(),
+                SegmentFlags::Readable | SegmentFlags::Writable, Contents);
+            Image.Arch = Target;
+            Image.Bits =
+                Target == Arch::X64 ? Bitness::Bits64 : Bitness::Bits32;
+            NdOpEmulator Emulator(Image);
+            Emulator.setStrictMode(true);
+            const uint64_t Address = Segment ? 1 : kMemoryAddress + 1;
+            Emulator.setRegister(x86reg::RDI, Address);
+            Emulator.setRegister(x86reg::RCX, 0x87654321);
+            Emulator.setRegister(x86reg::DF, 1);
+            if (Segment)
+              ASSERT_TRUE(
+                  Emulator.setMemoryAddressSpaceBase(Space, kMemoryAddress));
+            setFlags(Emulator, 1);
+            ASSERT_EQ(Emulator.run(Ops), Ops.size());
+            EXPECT_FALSE(Emulator.skips().any());
+            EXPECT_EQ(Emulator.getRegister(x86reg::RDI), Address);
+            EXPECT_EQ(Emulator.getRegister(x86reg::RCX), 0x87654321u);
+            EXPECT_EQ(Emulator.getRegister(x86reg::DF), 1u);
+            EXPECT_EQ(Emulator.getRegister(x86reg::CF), 0u);
+            EXPECT_EQ(Emulator.getRegister(x86reg::OF), 0u);
+            EXPECT_EQ(Emulator.getRegister(x86reg::ZF), Value == 0);
+            EXPECT_EQ(Emulator.getRegister(x86reg::SF), (Value & Sign) != 0);
+            EXPECT_EQ(Emulator.getRegister(x86reg::PF),
+                      std::popcount(static_cast<uint8_t>(Value)) % 2 == 0);
+            ASSERT_TRUE(Emulator.step(loadMemory(Contents.size(), 0x76800000)));
+            EXPECT_EQ(Emulator.getRegisterBytes(0x76800000), Contents);
+          }
+        }
+    }
+}
+
+TEST(X86LegacyAtomic, NeutralLogicStillRequiresTheCompleteWritableAccess) {
+  for (Arch Target : {Arch::X86, Arch::X64})
+    for (unsigned Width : {1u, 2u, 4u, 8u}) {
+      if (Target == Arch::X86 && Width == 8)
+        continue;
+      for (unsigned Group : {1u, 4u, 6u}) {
+        const auto Ops = lift(neutralLogicBytes(Group, Width), Target);
+        for (bool Truncated : {false, true}) {
+          SCOPED_TRACE(testing::Message()
+                       << static_cast<unsigned>(Target) << '/' << Width << '/'
+                       << Group << '/' << Truncated);
+          if (Truncated && Width == 1)
+            continue;
+          const unsigned Size = Width - unsigned(Truncated);
+          const std::vector<uint8_t> Contents(Size, 0xa5);
+          auto Image = memoryImage(Size,
+                                   Truncated ? SegmentFlags::Readable |
+                                                   SegmentFlags::Writable
+                                             : SegmentFlags::Readable,
+                                   Contents);
+          Image.Arch = Target;
+          Image.Bits = Target == Arch::X64 ? Bitness::Bits64 : Bitness::Bits32;
+          NdOpEmulator Emulator(Image);
+          Emulator.setStrictMode(true);
+          Emulator.setRegister(x86reg::RDI, kMemoryAddress);
+          setFlags(Emulator, 1);
+          EXPECT_LT(Emulator.run(Ops), Ops.size());
+          expectFlags(Emulator, 1);
+          EXPECT_EQ(Emulator.getRegister(x86reg::RDI), kMemoryAddress);
+          for (unsigned I = 0; I < Size; ++I) {
+            auto Load = loadMemory(1, 0x76800001);
+            Load.Inputs[0] = NdVar::cst(kMemoryAddress + I, 8);
+            ASSERT_TRUE(Emulator.step(Load));
+            EXPECT_EQ(Emulator.getRegister(0x76800001), Contents[I]);
+          }
+        }
+      }
+    }
+}
+
+TEST(X86LegacyAtomic, NeutralLogicDoesNotAdmitOtherValuesOrElision) {
+  for (Arch Target : {Arch::X86, Arch::X64})
+    for (unsigned Group : {1u, 4u, 6u}) {
+      const auto Base = neutralLogicBytes(Group, 4);
+      std::vector<std::vector<uint8_t>> Cases;
+      auto Changed = Base;
+      Changed.back() ^= 1;
+      Cases.push_back(Changed);
+      for (uint8_t Hint : {0xf2, 0xf3})
+        for (unsigned Position : {0u, 1u}) {
+          auto Elided = Base;
+          Elided.insert(Elided.begin() + Position, Hint);
+          Cases.push_back(Elided);
+        }
+      for (const auto &Bytes : Cases) {
+        Decoder Decode;
+        ASSERT_TRUE(Decode.init(Target));
+        DecodedInsn Instruction;
+        ASSERT_EQ(Decode.decodeOneForLift(Bytes.data(), Bytes.size(),
+                                          kInstructionAddress, Instruction),
+                  static_cast<int>(Bytes.size()));
+        std::vector<LowOp> Ops(1);
+        Ops[0].Opcode = NdOp::COPY;
+        EXPECT_THROW(Decode.liftToLow(Instruction, Ops), UnliftedInstruction);
+        ASSERT_EQ(Ops.size(), 1u);
+        EXPECT_EQ(Ops[0].Opcode, NdOp::COPY);
+      }
+    }
+}
+
 TEST(X86LegacyAtomic, UnsupportedLockedArithmeticCannotBecomePlainStores) {
   for (Arch Target : {Arch::X86, Arch::X64})
     for (bool Strict : {false, true}) {

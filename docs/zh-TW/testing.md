@@ -2180,6 +2180,8 @@ HFA 匯入槽測試編譯嚴格的 C 原型，並對標頭宣告及本機宣告�
 
 `X86LegacyAtomic.LockedArithmetic*` 檢查 x86/x64 純量寬度、獨立算術旗標、來源暫存器與進位保留、有號立即數、未對齊鄰接位元組、唯讀及截斷映射、FS/GS 位址與無鎖對照。不支援的帶鎖核心運算不能發布一般儲存。`InterpreterLLVMRefinement.RawAtomicsStopBeforeLLVMProof` 也檢查四種帶鎖算術的原始特化，並保留有序記憶體證明拒絕。
 
+`X86LegacyAtomic.NeutralLogic*` 檢查各寬度與 FS/GS 下的恆等帶鎖邏輯，保留記憶體、已定義旗標和 DF，並拒絕無寫入權限、不完整存取、其他立即數及 HLE。`NeverDX86NeutralAtomicSourceTests` 在 x64 主機以 O0/O2 與 UBSan 執行 COFF/ELF/MachO 的兩條 C 路線，涵蓋高位輸入與八種位元組偏移。宣告型別變更還需執行 `NeverDHighControlFlowTests` 與 `NeverDHighCIntegerWidthTests`。
+
 ## 純量跳轉驗證
 
 `NeverDConstantBranchTests` 涵蓋 x86/x64/ARM64 與 PE、ELF、Mach-O 的直接前驅、所有前驅一致的匯合及不可變讀取；衝突、未定義輸入、呼叫破壞和獨立入口保留動態跳轉。`NeverDConstantBranchSourceTests` 在最佳化開啟/關閉時，編譯並執行 x64/ARM64 的兩條 C 路徑，涵蓋 O0/O2 與 UBSan。純整數函式本體使用主機標準標頭；這不等同原生 ARM64 或 Windows 驅動程式驗證。worker 的獨立 ELF x64 機器碼比對也檢查冷啟動導覽、參照及跳過的 E9 位元組。

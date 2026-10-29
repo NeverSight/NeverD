@@ -2350,6 +2350,8 @@ Bei Änderungen dieser Speicher-Nachbedingung gemeinsam `NeverDSymbolicCallEffec
 
 `X86LegacyAtomic.LockedArithmetic*` prüft x86/x64-Breiten, unabhängige Rechenflags, Quellregister und Carry, vorzeichenbehaftete Sofortwerte, unaligned Nachbarbytes, schreibgeschützte und verkürzte Mappings, FS/GS sowie ungesperrte Kontrollen. Nicht unterstützte gesperrte Operationen dürfen keine normalen Stores veröffentlichen. `InterpreterLLVMRefinement.RawAtomicsStopBeforeLLVMProof` prüft alle vier Formen und erhält die Beweisablehnung für geordneten Speicher.
 
+`X86LegacyAtomic.NeutralLogic*` prüft Breiten, FS/GS, unveränderten Speicher, definierte Flags und DF sowie abgelehnte Schreibzugriffe, unvollständige Zugriffe, andere Sofortwerte und HLE. `NeverDX86NeutralAtomicSourceTests` führt beide C-Wege für COFF/ELF/MachO mit O0/O2 und UBSan, gesetzten hohen Bits und acht Byte-Offsets auf einem x64-Host aus. Bei Deklarationstypen zusätzlich `NeverDHighControlFlowTests` und `NeverDHighCIntegerWidthTests` ausführen.
+
 ## Prüfung skalarer Sprünge
 
 `NeverDConstantBranchTests` prüft x86/x64/ARM64 mit PE, ELF und Mach-O: direkte Vorgänger, übereinstimmende Zusammenführungen und unveränderliche Lesezugriffe. Widersprüche, undefinierte Eingaben, durch Aufrufe zerstörte Register und unabhängige Einstiege bleiben dynamisch. `NeverDConstantBranchSourceTests` kompiliert und führt beide C-Wege für x64/ARM64 mit und ohne Pipeline-Optimierung bei O0/O2 und mit UBSan aus. Reine Ganzzahl-Funktionskörper verwenden Standardheader des Hosts; dies zertifiziert weder natives ARM64 noch Windows-Treiber. Der Worker-Vergleich mit unabhängigem ELF-x64-Maschinencode prüft außerdem kalte Navigation, Referenzen und übersprungene E9-Bytes.

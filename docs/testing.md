@@ -16736,6 +16736,8 @@ The focused NeverDCOFFExceptionModelTests target runs exception model and decode
 
 `X86LegacyAtomic.LockedArithmetic*` checks x86/x64 scalar widths, independent arithmetic flags, preserved source registers and carry, signed immediates, unaligned neighboring bytes, read-only and truncated mappings, FS/GS addresses and unlocked controls. Unsupported locked core operations cannot publish plain stores. `InterpreterLLVMRefinement.RawAtomicsStopBeforeLLVMProof` also checks all four locked arithmetic forms through raw specialization and retains ordered-memory proof refusal.
 
+`X86LegacyAtomic.NeutralLogic*` checks neutral locked logic across widths and FS/GS, preserving memory, defined flags and DF while refusing denied writes, incomplete accesses, other immediates and HLE. `NeverDX86NeutralAtomicSourceTests` executes both C routes for COFF/ELF/MachO at O0/O2 with UBSan, high-bit inputs and eight byte offsets; it requires an x64 host. Pair it with `NeverDHighControlFlowTests` and `NeverDHighCIntegerWidthTests` for declared-type changes.
+
 ### Predicate cleanup and independent call effects
 
 `HighSourceExpressions.PredicateCleanupKeepsDistinctIndirectCallEffects`

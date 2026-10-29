@@ -2224,6 +2224,8 @@ HFA 임포트 슬롯 테스트는 엄격한 C 프로토타입을 컴파일하고
 
 `X86LegacyAtomic.LockedArithmetic*`는 x86/x64 너비, 독립 산술 플래그, 원본 레지스터와 캐리 보존, 부호 있는 즉시 값, 비정렬 인접 바이트, 읽기 전용·잘린 매핑, FS/GS 및 잠금 없는 대조군을 검사합니다. 지원하지 않는 잠금 연산은 일반 저장을 게시할 수 없습니다. `InterpreterLLVMRefinement.RawAtomicsStopBeforeLLVMProof`는 네 가지 잠금 산술의 특화와 순서 메모리 증명 거부를 확인합니다.
 
+`X86LegacyAtomic.NeutralLogic*`는 각 너비와 FS/GS에서 메모리, 정의된 플래그와 DF를 보존하고 쓰기 거부, 불완전한 접근, 다른 즉시 값과 HLE를 검사합니다. `NeverDX86NeutralAtomicSourceTests`는 x64 호스트에서 COFF/ELF/MachO의 두 C 경로를 O0/O2 및 UBSan으로 실행하며 상위 비트와 여덟 바이트 오프셋을 다룹니다. 선언 타입 변경에는 `NeverDHighControlFlowTests`와 `NeverDHighCIntegerWidthTests`도 실행합니다.
+
 ## 스칼라 분기 검증
 
 `NeverDConstantBranchTests`는 x86/x64/ARM64 및 PE, ELF, Mach-O에서 직접 선행 간선, 모든 경로가 일치하는 합류, 불변 읽기를 검사합니다. 충돌, 미정의 입력, 호출에 의한 값 손실, 독립 진입점은 동적 분기로 남습니다. `NeverDConstantBranchSourceTests`는 최적화 활성/비활성, O0/O2 및 UBSan으로 x64/ARM64의 두 C 경로를 컴파일하고 실행합니다. 순수 정수 함수 본문에는 호스트 표준 헤더를 사용하며, 이는 네이티브 ARM64나 Windows 드라이버 검증이 아닙니다. worker의 독립 ELF x64 기계어 대조는 콜드 탐색, 참조, 건너뛴 E9 바이트도 확인합니다.

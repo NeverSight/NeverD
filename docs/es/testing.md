@@ -2335,6 +2335,8 @@ Al modificar esta poscondición de memoria, ejecutar juntos `NeverDSymbolicCallE
 
 `X86LegacyAtomic.LockedArithmetic*` comprueba anchos x86/x64, banderas independientes, registros fuente y acarreo, inmediatos con signo, bytes vecinos desalineados, mapeos truncados o de solo lectura, FS/GS y controles sin bloqueo. Las operaciones bloqueadas no admitidas no pueden producir escrituras ordinarias. `InterpreterLLVMRefinement.RawAtomicsStopBeforeLLVMProof` verifica las cuatro formas y conserva el rechazo de pruebas para memoria ordenada.
 
+`X86LegacyAtomic.NeutralLogic*` comprueba anchos, FS/GS, memoria, banderas definidas y DF, y rechaza escrituras prohibidas, accesos incompletos, otros inmediatos y HLE. `NeverDX86NeutralAtomicSourceTests` ejecuta ambas rutas C de COFF/ELF/MachO a O0/O2 con UBSan, bits altos y ocho desplazamientos; requiere un equipo x64. Para tipos declarados, ejecutar también `NeverDHighControlFlowTests` y `NeverDHighCIntegerWidthTests`.
+
 ## Validación de saltos escalares
 
 `NeverDConstantBranchTests` cubre x86/x64/ARM64 con PE, ELF y Mach-O: predecesores directos, uniones unánimes y lecturas inmutables. Los conflictos, entradas indefinidas, registros alterados por llamadas y entradas independientes siguen siendo dinámicos. `NeverDConstantBranchSourceTests` compila y ejecuta ambas rutas C de x64/ARM64, con y sin optimización del pipeline, en O0/O2 con UBSan. Los cuerpos de enteros usan cabeceras estándar del anfitrión; esto no certifica ARM64 nativo ni controladores Windows. La comparación del worker con código máquina ELF x64 independiente también comprueba navegación en frío, referencias y bytes E9 omitidos.

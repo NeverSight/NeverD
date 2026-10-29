@@ -937,6 +937,10 @@ target_include_directories(NeverDX86LegacyAtomicSemanticTests PRIVATE
   ${LLVM_INCLUDE_DIRS}
 )
 
+add_neverd_unittest(NeverDX86NeutralAtomicSourceTests
+  x86_64/X86_64_NeutralAtomicSourceTests.cpp
+  LINK_COMPONENTS Pipeline BackendC CodeGen)
+
 # Keeps legacy aligned SIMD loads and stores fault-atomic, with architectural
 # address-width wrapping and explicit FS/GS bases in strict emulation.
 add_neverd_unittest(NeverDX86LegacyAlignedMoveTests
