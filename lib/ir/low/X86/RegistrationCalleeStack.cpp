@@ -11,9 +11,9 @@
 #include "RegistrationFrameBranch.h"
 #include "RegistrationFrameEffects.h"
 #include "RegistrationImportLoad.h"
+#include "RegistrationMemoryPermissions.h"
 #include "RegistrationOrdinaryGraph.h"
 #include "RegistrationPrecisionArguments.h"
-#include "RegistrationReadEffects.h"
 #include "RegistrationStackOwner.h"
 
 #include "neverd/Limits.h"
@@ -550,16 +550,6 @@ stackPopForBody(StackBody &Body, va_t Entry, const NestedStackProof &NestedPop,
         return std::nullopt;
       Transfer.beginInstruction(Op.Addr);
       const auto Abstract = Body.stackOperation(Op);
-      if (!Registration && !CxxPaths && State.ImportBindingsIntact &&
-          !Body.ImportSlots.empty() && Op.Opcode == NdOp::LOAD &&
-          !Body.ImportLoads.count({Op.Addr, Op.Seq}) &&
-          !Body.ImportDataLoads.count({Op.Addr, Op.Seq}) &&
-          !registration_abi::hasClosedOrdinaryRegistrationRead(
-              Image, Abstract, Transfer, Body.callerArgumentReadBytes(), Work))
-        // A continuing fault handler can replace an IAT without changing the
-        // physical GPR context. Earlier resident callable identities remain
-        // separate; no subsequent load or direct slot call gets a new binding.
-        State.ImportBindingsIntact = false;
       bool CRTDataStore = false;
       if (!Body.ImportDataLoads.empty() && !Registration && !CxxPaths) {
         const auto DataLoad = Body.ImportDataLoads.find({Op.Addr, Op.Seq});
@@ -569,6 +559,23 @@ stackPopForBody(StackBody &Body, va_t Entry, const NestedStackProof &NestedPop,
                                   : std::optional<va_t>{DataLoad->second},
                               State.ImportBindingsIntact, Work, CRTDataStore))
           return std::nullopt;
+      }
+      if (!Registration && !CxxPaths && State.ImportBindingsIntact &&
+          !Body.ImportSlots.empty() && !CRTDataStore &&
+          (Op.Opcode == NdOp::LOAD || Op.Opcode == NdOp::STORE)) {
+        const bool CurrentImportRead =
+            Op.Opcode == NdOp::LOAD &&
+            (Body.ImportLoads.count({Op.Addr, Op.Seq}) ||
+             Body.ImportDataLoads.count({Op.Addr, Op.Seq}));
+        if (!CurrentImportRead &&
+            !registration_abi::hasClosedOrdinaryRegistrationMemoryAccess(
+                Image, Abstract, Transfer, Body.callerArgumentReadBytes(),
+                Work))
+          // A continuing read/write-fault handler can replace an IAT without
+          // changing the physical GPR context. Spatial disjointness alone
+          // supplies no access permission; earlier resident targets stay
+          // separate from fresh loads and direct slot calls.
+          State.ImportBindingsIntact = false;
       }
       if (!Registration && !CxxPaths && Op.Opcode != NdOp::CALL &&
           Op.Opcode != NdOp::INDIR_CALL &&

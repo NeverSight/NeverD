@@ -6033,6 +6033,12 @@ controls. The ordinary read permission checks current frame and caller-cleanup
 extents without introducing a cell value or saved-SP fact. Existing nested
 wrappers and memory-divisor cases retain their separately checked uniform
 near-return argument extent.
+`DisjointStoresNeedCurrentWritePermission` checks 144 physical variants across
+byte, word and DWORD stores, direct and cached calls, and retained register
+targets. Unmapped storage, read-only owners, section/segment disagreement,
+read-only-after-relocation data and crossing ranges withdraw later bindings.
+Complete writable ranges, including zero-fill and exact-end accesses, retain
+their independent permission and still pass the IAT overlap check.
 `RegistrationControlFPStack` exercises 1,152 authored machine-code variants
 across three bases, two CRT providers, IAT/veneer calls, all three valid
 precision selections and returning/terminating error paths. Exact null-output

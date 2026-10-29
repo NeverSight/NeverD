@@ -956,6 +956,75 @@ TEST(RegistrationImportABI, OpaqueReadsCannotCertifyLaterImportBindings) {
     }
 }
 
+TEST(RegistrationImportABI, DisjointStoresNeedCurrentWritePermission) {
+  for (unsigned Form = 0; Form != 6; ++Form)
+    for (unsigned Memory = 0; Memory != 8; ++Memory)
+      for (unsigned Width : {1u, 2u, 4u}) {
+        SCOPED_TRACE(::testing::Message()
+                     << Form << ':' << Memory << ':' << Width);
+        ImportImage F({"Sleep", 1}, false);
+        auto &Image = F.Image;
+        Segment Data;
+        Data.Name = ".data";
+        Data.VA = 0x404000;
+        Data.Size = Data.FileSz = 4;
+        Data.Data.resize(4);
+        Data.Flags = SegmentFlags::Readable;
+        if (Memory != 1 && Memory != 3)
+          Data.Flags = Data.Flags | SegmentFlags::Writable;
+        Data.ReadOnlyAfterRelocations = Memory == 4;
+        if (Memory == 7)
+          // The loader materializes zero-fill bytes independently of FileSz.
+          Data.FileSz = 0;
+        Section Storage;
+        Storage.Name = Data.Name;
+        Storage.VA = Data.VA;
+        Storage.Size = Data.Size;
+        Storage.FileSz = Data.FileSz;
+        Storage.Flags = Data.Flags;
+        if (Memory == 3)
+          Storage.Flags = Storage.Flags | SegmentFlags::Writable;
+        Image.Segments.push_back(Data);
+        Image.Sections.push_back(Storage);
+        const uint32_t Address = Memory == 0   ? 0x70000000
+                                 : Memory == 5 ? Data.VA + 5 - Width
+                                 : Memory == 6 ? Data.VA + 4 - Width
+                                               : Data.VA;
+        auto &Text = Image.Segments[0];
+        auto &Bytes = Text.Data;
+        Bytes.clear();
+        const auto LoadTarget = [&] {
+          Bytes.insert(Bytes.end(), {0x8b, 0x35, 0, 0x30, 0x40, 0});
+        };
+        if (Form >= 3)
+          LoadTarget();
+        if (Form) {
+          if (Width == 2)
+            Bytes.push_back(0x66);
+          Bytes.insert(Bytes.end(), {uint8_t(Width == 1 ? 0xc6 : 0xc7), 5});
+          const size_t Field = Bytes.size();
+          Bytes.resize(Field + 4);
+          writeLE<uint32_t>(Bytes.data() + Field, Address);
+          Bytes.push_back(7);
+          Bytes.insert(Bytes.end(), Width - 1, 0);
+        }
+        if (Form == 2 || Form == 4)
+          LoadTarget();
+        Bytes.insert(Bytes.end(), {0x6a, 0});
+        if (Form == 2 || Form == 3 || Form == 4)
+          Bytes.insert(Bytes.end(), {0xff, 0xd6});
+        else
+          Bytes.insert(Bytes.end(), {0xff, 0x15, 0, 0x30, 0x40, 0});
+        Bytes.insert(Bytes.end(), {0x31, 0xc0, 0xc3});
+        Text.Size = Text.FileSz = Bytes.size();
+        Image.Sections[0].Size = Image.Sections[0].FileSz = Text.Size;
+        const bool Valid =
+            Form == 0 || Form == 3 || Memory == 2 || Memory == 6 || Memory == 7;
+        EXPECT_EQ(getCheckedX86CalleeStackPop(Image, Text.VA),
+                  Valid ? std::optional<uint32_t>{0} : std::nullopt);
+      }
+}
+
 TEST(RegistrationImportABI, TransitiveImportDependenciesRespectCumulativeWork) {
   ImportImage F({"Sleep", 1}, true);
   size_t Used = 0;
