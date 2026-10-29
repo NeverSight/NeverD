@@ -415,6 +415,25 @@ class HistoryAllowance:
 
 HISTORY_ALLOWED: tuple[HistoryAllowance, ...] = (
     HistoryAllowance(
+        path="docs/evidence/x86-x87-environment-2026-10-28.json",
+        rule="private-path",
+        commits=frozenset({
+            "2880984410f70f32505cd0b147818e14d18c43ac",
+            "272940c3adfe2fd6ad42aa36825b4fb6f9eaa262",
+        }),
+        line="",
+        reason=(
+            "Reviewed removal of the host checkout prefix from the two "
+            "NeverC executable paths. Both fields held the same line; source "
+            "identities, results and artifact hashes are unchanged. Only "
+            "that exact historical line in its publication and cleanup "
+            "commits is covered; current and future paths remain findings."
+        ),
+        line_sha256=frozenset({
+            "8507f9dd32a05243f4878770a6f932d5712d9cd9f705846a506ecd83482cdbdd",
+        }),
+    ),
+    HistoryAllowance(
         path="docs/evidence/arm64e-typed-call-abi-2026-10-28.json",
         rule="private-path",
         commits=frozenset({
