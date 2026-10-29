@@ -210,9 +210,12 @@ TEST(ImmutablePE32Code, IndexedQueriesChargeColdAndRepeatedWork) {
 }
 
 TEST(ImmutablePE32Code, InteriorPointerStorageDoesNotGrantAnOrdinaryEntry) {
-  for (uint32_t Base : {0x400000u, 0x18000000u})
+  for (const auto [Base, Executable] :
+       {std::pair{0x400000u, false}, std::pair{0x400000u, true},
+        std::pair{0x18000000u, false}, std::pair{0x18000000u, true}})
     for (unsigned Mutation = 0; Mutation != 32; ++Mutation) {
-      SCOPED_TRACE(::testing::Message() << Base << " " << Mutation);
+      SCOPED_TRACE(::testing::Message()
+                   << Base << ':' << Executable << ':' << Mutation);
       auto Image = codeImage();
       Image.Base = Base;
       Image.Segments.front().VA = Image.Sections.front().VA = Base + 0x1000;
@@ -221,7 +224,9 @@ TEST(ImmutablePE32Code, InteriorPointerStorageDoesNotGrantAnOrdinaryEntry) {
       const va_t Target = Base + 0x1010;
       Segment Data;
       Data.VA = Base + 0x2000;
-      Data.Flags = SegmentFlags::Readable;
+      Data.Flags = Executable
+                       ? SegmentFlags::Readable | SegmentFlags::Executable
+                       : SegmentFlags::Readable;
       Data.Size = Data.FileSz = 0x100;
       Data.Data.resize(0x100);
       writeLE<uint32_t>(Data.Data.data() + 8, Target);
@@ -343,11 +348,27 @@ TEST(ImmutablePE32Code, InteriorPointerStorageDoesNotGrantAnOrdinaryEntry) {
       EXPECT_EQ(
           readImmutablePE32CodePointerStorage(Image, Slot, BudgetWork, 100000),
           Storage);
-      EXPECT_EQ(Storage.has_value(), Mutation < 2 || Mutation == 27);
+      EXPECT_EQ(Storage.has_value(),
+                !Executable && (Mutation < 2 || Mutation == 27));
       if (Storage)
         EXPECT_EQ(*Storage, Target);
       EXPECT_EQ(readImmutableImageCodePointer(Image, Slot).has_value(),
-                Mutation == 1);
+                !Executable && Mutation == 1);
+      size_t DispatchWork = 0;
+      const auto Dispatch =
+          readImmutablePE32JumpTableTarget(Image, Slot, DispatchWork, 100000);
+      EXPECT_EQ(Dispatch.has_value(), Mutation < 2 || Mutation == 27);
+      if (Dispatch) {
+        EXPECT_EQ(*Dispatch, Target);
+        size_t Exact = 0, Short = 0;
+        EXPECT_EQ(
+            readImmutablePE32JumpTableTarget(Image, Slot, Exact, DispatchWork),
+            Dispatch);
+        EXPECT_EQ(Exact, DispatchWork);
+        EXPECT_FALSE(readImmutablePE32JumpTableTarget(Image, Slot, Short,
+                                                      DispatchWork - 1));
+        EXPECT_EQ(Short, DispatchWork - 1);
+      }
       EXPECT_FALSE(readImmutableImageBytes(Image, Slot, 4));
     }
 }

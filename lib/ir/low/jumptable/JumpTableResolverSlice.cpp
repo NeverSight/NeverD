@@ -5820,12 +5820,63 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
         Record.Ops.front() != Call)
       return std::nullopt;
     size_t Work = 0;
-    const size_t Limit =
+    size_t Limit =
         GraphWorkBudget ? *GraphWorkBudget : std::numeric_limits<size_t>::max();
     if (hasCheckedX86RegistrationDirectCallBytes(
-            *CurrentImg, Call.Addr, Call.Inputs[0].Offset, Work, Limit))
+            *CurrentImg, Call.Addr, Call.Inputs[0].Offset, Work, Limit)) {
       Result = getCheckedX86IndependentCalleeStackPop(
           *CurrentImg, Call.Inputs[0].Offset, Work, Limit);
+      if (!Result && Work < Limit) {
+        if (!consumeEvidence(Work))
+          return std::nullopt;
+        Work = 0;
+        // A scalar input fixed within this one physical caller block can
+        // select an immutable tail-dispatch entry. The callee remains
+        // unbounded in every other invocation; no synthetic CFG root is made.
+        if (!consumeEvidenceSum({orderedSetLookupWork(Graph.InsnToBlock.size()),
+                                 orderedSetLookupWork(Insns.size())}))
+          return std::nullopt;
+        const auto Location = Graph.InsnToBlock.find(Call.Addr);
+        if (Location != Graph.InsnToBlock.end()) {
+          const auto &Block = Graph.Blocks[Location->second];
+          LowBlock Prefix;
+          Prefix.StartAddr = Prefix.EndAddr = Block.Start;
+          auto Source = Insns.find(Block.Start);
+          size_t Count = 0;
+          bool Valid = true;
+          for (; Source != Insns.end() && Source->first <= Call.Addr;
+               ++Source) {
+            const auto &Insn = Source->second;
+            if (Source->first != Prefix.EndAddr || !Insn.Size ||
+                Insn.Size > InvalidVA - Insn.Addr || Count > Block.Ops.size() ||
+                Insn.Ops.size() > Block.Ops.size() - Count ||
+                !consumeEvidenceProduct(Insn.Ops.size() + 1, 3) ||
+                !std::equal(Insn.Ops.begin(), Insn.Ops.end(),
+                            Block.Ops.begin() + Count)) {
+              Valid = false;
+              break;
+            }
+            Prefix.InstructionBoundaries.push_back(
+                makeInstructionBoundary(Insn, Prefix.Ops.size()));
+            Prefix.Ops.insert(Prefix.Ops.end(), Insn.Ops.begin(),
+                              Insn.Ops.end());
+            Prefix.EndAddr = Insn.Addr + Insn.Size;
+            Count += Insn.Ops.size();
+          }
+          if (!consumeEvidence(Graph.RootBlocks.size()))
+            return std::nullopt;
+          for (int Root : Graph.RootBlocks)
+            if (Graph.Blocks[Root].Start > Prefix.StartAddr &&
+                Graph.Blocks[Root].Start < Prefix.EndAddr)
+              Valid = false;
+          Limit = GraphWorkBudget ? *GraphWorkBudget
+                                  : std::numeric_limits<size_t>::max();
+          if (Valid && Prefix.EndAddr == Call.Addr + Record.Size)
+            Result = getCheckedX86IndependentIndexedCallStackPop(
+                *CurrentImg, Prefix, ProofRoots, Work, Limit);
+        }
+      }
+    }
     if (!consumeEvidence(Work))
       return std::nullopt;
     if (!Result && Work == Limit) {

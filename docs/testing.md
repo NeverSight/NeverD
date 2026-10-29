@@ -3271,6 +3271,15 @@ Registration callee tests exercise the same shared proof and cumulative
 budgets through nested wrappers; loader tests compare budgeted and ordinary
 PE32 code reads across every existing fixup mutation and incomplete relocation
 set. These are static decoded-source checks, not native GOF2 execution.
+`IndexedTailStack*` adds source-specific indexed tail dispatch: different
+constant inputs select different near-return cleanup, while unknown/partial
+inputs, saved-stack loads, wrapping indexes, altered CALL/JMP encodings,
+conflicting table fixups and stale source instructions retain refusal. Exact
+and short budgets, current-image edits, raw integer-proof reentry, preserved
+memory barriers and the absence of a dispatcher-wide stack contract are
+checked separately. The immutable-pointer storage matrix runs in read-only
+data and executable sections; only the explicit jump-table reader admits the
+latter, without granting ordinary callable entry identity.
 `ImportedCopyStackReceiptRequiresExactNativeCall` checks the ELF object copy
 ABI receipt in scalar and affine modes, cold/warm budget boundaries and
 refusals for local names, data imports, ambiguous owners, indirect calls,

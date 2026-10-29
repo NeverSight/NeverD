@@ -618,7 +618,8 @@ std::optional<va_t> readResolvedPointer(const BinaryImage &Image, va_t Address,
   return Target;
 }
 std::optional<va_t> readImmutablePEPointerStorage(const BinaryImage &Image,
-                                                  va_t Address, bool Code) {
+                                                  va_t Address, bool Code,
+                                                  bool ExecutableSlot = false) {
   if (supportedPEImage(Image)) {
     const unsigned Width = Image.getPointerSize();
     const auto &Slots =
@@ -635,7 +636,8 @@ std::optional<va_t> readImmutablePEPointerStorage(const BinaryImage &Image,
       }
     if (ExactRelocations != 1)
       return std::nullopt;
-    const auto *Bytes = mappedBytes(Image, Address, Width, true);
+    const auto *Bytes =
+        mappedBytes(Image, Address, Width, true, ExecutableSlot);
     const auto Owner = Image.DataPtrRelocTargetOwners.find(Address);
     if (!Bytes || (!Code && Owner == Image.DataPtrRelocTargetOwners.end()) ||
         hasConflictingFixups(Image, Address, Width, !Code, false, false, Code,
@@ -670,6 +672,28 @@ readImmutablePE32CodePointerStorage(const BinaryImage &Image, va_t Address,
   if (!chargeStorageQuery(Image, 4, true, Work, Limit))
     return std::nullopt;
   return readImmutablePE32CodePointerStorage(Image, Address);
+}
+
+std::optional<va_t> readImmutablePE32JumpTableTarget(const BinaryImage &Image,
+                                                     va_t Address, size_t &Work,
+                                                     size_t Limit) {
+  if (Image.Base > UINT32_MAX || Address > UINT32_MAX - 3 ||
+      !chargeStorageQuery(Image, 4, true, Work, Limit))
+    return std::nullopt;
+  for (unsigned I = 0; I != 2; ++I)
+    for (size_t Count : {Image.Sections.size(), Image.Segments.size()}) {
+      if (Count > Limit - std::min(Work, Limit)) {
+        Work = Limit;
+        return std::nullopt;
+      }
+      Work += Count;
+    }
+  // Select the storage role without relaxing either reader's mapping/fixup
+  // policy; the additional owner lookup is prepaid above.
+  const auto Target = readImmutablePEPointerStorage(
+      Image, Address, true, Image.isCodeAddress(Address));
+  return Target && readImmutableCodeBytes(Image, *Target, 1) ? Target
+                                                             : std::nullopt;
 }
 
 std::optional<va_t> readImmutableImagePointer(const BinaryImage &Image,

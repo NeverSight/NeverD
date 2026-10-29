@@ -16,12 +16,14 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <set>
 #include <utility>
 #include <vector>
 
 namespace neverd {
 struct BinaryImage;
 struct LowFunc;
+struct LowBlock;
 struct LowOp;
 struct RegistrationStateAnalysis;
 class RegistrationCallCalleeIndex;
@@ -75,6 +77,17 @@ getCheckedX86CalleeStackPop(const BinaryImage &Image, va_t Target,
 std::optional<uint32_t>
 getCheckedX86IndependentCalleeStackPop(const BinaryImage &Image, va_t Target,
                                        size_t &Work, size_t Limit);
+
+/// A single physical caller block ending in a direct CALL may fix the index
+/// of an immutable `jmp [reg*4+table]` callee entry. Re-lift the current prefix
+/// and prove its scalar index without incoming values or memory forwarding,
+/// then prove the selected target's independent returning stack. Roots must
+/// include every additional entry into the supplied prefix. This result is
+/// invocation-specific: it neither bounds the dispatcher globally nor grants
+/// frame memory, return-value, import-preservation or native EH authority.
+std::optional<uint32_t> getCheckedX86IndependentIndexedCallStackPop(
+    const BinaryImage &Image, const LowBlock &Prefix,
+    const std::set<va_t> &Roots, size_t &Work, size_t Limit);
 
 /// The answers of getCheckedX86CalleeStackPop for one unchanged image, each
 /// with the work its computation charged, per callee and

@@ -110,6 +110,14 @@ std::optional<va_t> readImmutableImageCodePointer(const BinaryImage &Image,
 std::optional<va_t>
 readImmutablePE32CodePointerStorage(const BinaryImage &Image, va_t Address);
 
+/// One exact PE32 HIGHLOW jump-table slot, including a table in executable
+/// storage. This grants only the selected immutable pointer and target bytes;
+/// the consumer owns the index, instruction boundary and invocation domain.
+/// No table extent or ordinary function entry is inferred.
+std::optional<va_t> readImmutablePE32JumpTableTarget(const BinaryImage &Image,
+                                                     va_t Address, size_t &Work,
+                                                     size_t Limit);
+
 /// Prove one exact strong, zero-addend import slot has unique immutable
 /// file-backed storage and no competing fixups. This authenticates the slot,
 /// not a runtime object layout, provider export, or permission to copy bytes.

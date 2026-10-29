@@ -3462,6 +3462,263 @@ TEST(ResolverFrameModes, IndependentStackProofDoesNotReenterIntegerProofs) {
   }
 }
 
+struct IndexedStackCaller : NativeStackCaller {
+  va_t Dispatch = 0;
+  va_t Selector = 0;
+  va_t Table = 0;
+
+  explicit IndexedStackCaller(std::vector<uint8_t> Input = {0xba, 0, 0, 0, 0},
+                              bool ObserveMemory = false)
+      : NativeStackCaller({0xff, 0x24, 0x95, 0x80, 0x11, 0x40, 0}, false,
+                          ObserveMemory) {
+    auto &Text = Image.Segments[0];
+    Selector = Call;
+    Text.Data.insert(Text.Data.begin() + Call - Text.VA, Input.begin(),
+                     Input.end());
+    Call += Input.size();
+    Use += Input.size();
+    Dispatch = Text.VA + 0x100 + Input.size();
+    Table = Text.VA + 0x180;
+    writeLE<uint32_t>(Text.Data.data() + Call - Text.VA + 1,
+                      uint32_t(Dispatch - (Call + 5)));
+    Text.Data.resize(0x190, 0xcc);
+    Text.Data[0x160] = 0xc3;
+    Text.Data[0x170] = 0xc2;
+    Text.Data[0x171] = 4;
+    Text.Data[0x172] = 0;
+    writeLE<uint32_t>(Text.Data.data() + 0x180, uint32_t(Text.VA + 0x160));
+    writeLE<uint32_t>(Text.Data.data() + 0x184, uint32_t(Text.VA + 0x170));
+    Text.Size = Text.FileSz = Text.Data.size();
+    Image.Sections[0].Size = Image.Sections[0].FileSz = Text.Size;
+    Entries = {Image.Entry, Dispatch};
+    Image.Symbols.clear();
+    for (va_t Entry : Entries)
+      Image.Symbols.push_back(Symbol::makeFunc(Entry));
+    for (va_t Field : {Dispatch + 3, Table, Table + 4})
+      Image.BaseRelocations.push_back(
+          {Field, llvm::COFF::IMAGE_REL_BASED_HIGHLOW});
+    Image.CodePtrRelocSlots = {Table, Table + 4};
+  }
+
+  LowBlock prefix(const LowFunc &Function) const {
+    for (auto Block : Function.Blocks)
+      for (size_t I = 0; I != Block.InstructionBoundaries.size(); ++I) {
+        const auto Boundary = Block.InstructionBoundaries[I];
+        if (Boundary.Address != Call)
+          continue;
+        Block.InstructionBoundaries.resize(I + 1);
+        Block.Ops.resize(Boundary.FirstOp + Boundary.OpCount);
+        Block.EndAddr = Call + Boundary.Size;
+        return Block;
+      }
+    return {};
+  }
+};
+
+TEST(ResolverFrameModes, IndexedTailStackCleanupBelongsToTheSourceCall) {
+  for (unsigned Index : {0u, 1u}) {
+    SCOPED_TRACE(Index);
+    IndexedStackCaller F({0xba, uint8_t(Index), 0, 0, 0});
+    CFGBuilder B;
+    const auto Function = F.build(B);
+    ASSERT_TRUE(Function.hasCompleteLiftCoverage());
+    auto Q = Access::nativeCallStackEpoch(B, F.Call, F.Use);
+    Q.FrameByteAddend = -int64_t(Index * 4);
+    const auto Answer = Access::batch(B, {Q});
+    ASSERT_TRUE(Answer.Complete);
+    EXPECT_EQ(Answer.Values, (std::vector<bool>{true}));
+    EXPECT_EQ(Access::batch(B, {Q}), Answer);
+    Access::clear(B);
+    EXPECT_EQ(Access::batch(B, {Q}), Answer);
+    size_t Work = 0;
+    EXPECT_FALSE(getCheckedX86IndependentCalleeStackPop(
+        F.Image, F.Dispatch, Work, limits::kMaxRegistrationEHStateWork));
+    Work = 0;
+    EXPECT_EQ(getCheckedX86IndependentIndexedCallStackPop(
+                  F.Image, F.prefix(Function), {}, Work,
+                  limits::kMaxRegistrationEHStateWork),
+              Index * 4);
+  }
+}
+
+TEST(ResolverFrameModes, IndexedTailStackRequiresACompleteCurrentScalar) {
+  const std::vector<std::vector<uint8_t>> Inputs = {
+      {0x31, 0xd2},                    // XOR EDX,EDX
+      {0x31, 0xd2, 0x8b, 0xc3},        // GOF-shaped register transport
+      {0xba, 1, 0, 0, 0},              // MOV EDX,1
+      {0x89, 0xc2},                    // Incoming EAX is unknown.
+      {0xb2, 0},                       // Low byte does not define EDX.
+      {0x6a, 0, 0x5a},                 // No saved-stack value authority.
+      {0x31, 0xd2, 0x8b, 0x10},        // Unknown LOAD overwrites EDX.
+      {0xba, 0xff, 0xff, 0xff, 0xff}}; // No wrapping table index.
+  for (unsigned I = 0; I != Inputs.size(); ++I) {
+    SCOPED_TRACE(I);
+    IndexedStackCaller F(Inputs[I]);
+    CFGBuilder B;
+    const auto Function = F.build(B);
+    ASSERT_TRUE(Function.hasCompleteLiftCoverage());
+    auto Q = Access::nativeCallStackEpoch(B, F.Call, F.Use);
+    Q.FrameByteAddend = I == 2 ? -4 : 0;
+    const auto Answer = Access::batch(B, {Q});
+    EXPECT_TRUE(Answer.Complete);
+    EXPECT_EQ(Answer.Values, (std::vector<bool>{I < 3}));
+    size_t Work = 0;
+    EXPECT_EQ(bool(getCheckedX86IndependentIndexedCallStackPop(
+                  F.Image, F.prefix(Function), {}, Work,
+                  limits::kMaxRegistrationEHStateWork)),
+              I < 3);
+  }
+}
+
+TEST(ResolverFrameModes, IndexedTailStackRechecksTheImageAndExactBudget) {
+  IndexedStackCaller F;
+  CFGBuilder B;
+  const auto Function = F.build(B);
+  ASSERT_TRUE(Function.hasCompleteLiftCoverage());
+  const auto Prefix = F.prefix(Function);
+  auto Q = Access::nativeCallStackEpoch(B, F.Call, F.Use);
+  constexpr size_t Budget = 1000000;
+  const auto Answer = Access::batch(B, {Q}, Budget);
+  ASSERT_TRUE(Answer.Complete);
+  ASSERT_EQ(Answer.Values, (std::vector<bool>{true}));
+  const size_t Work = Budget - Answer.Remaining;
+  for (size_t Limit : {size_t{0}, size_t{1}, Work - 1, Work}) {
+    const auto Warm = Access::batch(B, {Q}, Limit);
+    Access::clear(B);
+    EXPECT_EQ(Access::batch(B, {Q}, Limit), Warm);
+    EXPECT_EQ(Warm.Complete, Limit == Work);
+    if (Limit == Work)
+      EXPECT_EQ(Warm.Values, (std::vector<bool>{true}));
+    else
+      EXPECT_TRUE(std::none_of(Warm.Values.begin(), Warm.Values.end(),
+                               [](bool Value) { return Value; }));
+  }
+  size_t DirectWork = 0;
+  ASSERT_EQ(getCheckedX86IndependentIndexedCallStackPop(F.Image, Prefix, {},
+                                                        DirectWork, Budget),
+            0u);
+  for (size_t Limit : {DirectWork - 1, DirectWork}) {
+    size_t Used = 0;
+    EXPECT_EQ(bool(getCheckedX86IndependentIndexedCallStackPop(
+                  F.Image, Prefix, {}, Used, Limit)),
+              Limit == DirectWork);
+    EXPECT_EQ(Used, Limit);
+  }
+  const auto Original = F.Image;
+  for (unsigned Mutation = 0; Mutation != 12; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    auto &Bytes = F.Image.Segments[0].Data;
+    if (Mutation == 0)
+      Bytes[F.Selector - F.Image.Entry + 1] = 1; // Stale source LowIR.
+    if (Mutation == 1)
+      Bytes[F.Dispatch - F.Image.Entry + 1] = 0x14; // CALL, not tail JMP.
+    if (Mutation == 2)
+      Bytes[F.Dispatch - F.Image.Entry + 2] = 0xa5; // SIB has no index.
+    if (Mutation == 3)
+      Bytes[F.Dispatch - F.Image.Entry + 2] = 0xd5; // Wrong scale.
+    if (Mutation == 4)
+      F.Image.BaseRelocations.erase(F.Image.BaseRelocations.begin());
+    if (Mutation == 5)
+      F.Image.BaseRelocations.push_back({F.Selector + 1, 3});
+    if (Mutation == 6)
+      writeLE<uint32_t>(Bytes.data() + 0x180, uint32_t(F.Image.Entry + 0x170));
+    if (Mutation == 7)
+      F.Image.CodePtrRelocSlots.erase(F.Table);
+    if (Mutation == 8)
+      F.Image.BaseRelocations.push_back({F.Table + 1, 3});
+    if (Mutation == 9)
+      Bytes[0x160] = 0xcb; // Far return grants no ordinary cleanup.
+    if (Mutation == 10)
+      F.Image.Segments[0].Flags =
+          F.Image.Segments[0].Flags | SegmentFlags::Writable;
+    if (Mutation == 11)
+      Bytes[F.Call - F.Image.Entry] = 0xe9;
+    const auto Changed = Access::batch(B, {Q}, Budget);
+    EXPECT_EQ(Changed.Values, (std::vector<bool>{false}));
+    Access::clear(B);
+    EXPECT_EQ(Access::batch(B, {Q}, Budget), Changed);
+    F.Image = Original;
+    EXPECT_EQ(Access::batch(B, {Q}, Budget).Values, (std::vector<bool>{true}));
+  }
+  size_t Used = 0;
+  EXPECT_FALSE(getCheckedX86IndependentIndexedCallStackPop(
+      F.Image, Prefix, {F.Selector}, Used, Budget));
+}
+
+TEST(ResolverFrameModes, IndexedTailStackGrantsNoMemoryOrGlobalCalleeFact) {
+  IndexedStackCaller F({0x31, 0xd2}, true);
+  auto &Bytes = F.Image.Segments[0].Data;
+  const std::vector<uint8_t> WritesCaller = {0xc7, 0x44, 0x24, 4,   9,
+                                             0,    0,    0,    0xc3};
+  std::copy(WritesCaller.begin(), WritesCaller.end(), Bytes.begin() + 0x160);
+  CFGBuilder B;
+  ASSERT_TRUE(F.build(B).hasCompleteLiftCoverage());
+  const auto Frame = Access::nativeCallStackEpoch(B, F.Call, F.Use);
+  Access::Query Value;
+  Value.Candidate = NdVar::reg(getTargetRegInfo(Arch::X86).IntReturnReg, 4);
+  Value.UseAddr = F.Use;
+  Value.UseSeq = Frame.UseSeq;
+  Value.Relation = Access::Relation::MustEqual;
+  Value.Alternatives = {{NdVar::scalar(6, 4), 0, 0, false}};
+  for (bool Reverse : {false, true}) {
+    const auto Answer = Access::batch(B, Reverse ? std::vector{Value, Frame}
+                                                 : std::vector{Frame, Value});
+    EXPECT_TRUE(Answer.Complete);
+    EXPECT_EQ(Answer.Values, (Reverse ? std::vector<bool>{false, true}
+                                      : std::vector<bool>{true, false}));
+  }
+  size_t Work = 0;
+  RegistrationCallCalleeIndex Index(F.Image, &Work);
+  EXPECT_FALSE(Index.stackContract(F.Dispatch));
+  for (bool Raw : {true, false, true, false}) {
+    Access::rawIntegerProofMode(B, Raw);
+    EXPECT_EQ(Access::batch(B, {Frame}).Values, (std::vector<bool>{!Raw}));
+  }
+}
+
+TEST(ResolverFrameModes, IndexedTailStackRejectsChangedSourceOccurrences) {
+  for (unsigned Mutation = 0; Mutation != 12; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    IndexedStackCaller F;
+    CFGBuilder B;
+    const auto Function = F.build(B);
+    ASSERT_TRUE(Function.hasCompleteLiftCoverage());
+    const auto Q = Access::nativeCallStackEpoch(B, F.Call, F.Use);
+    Access::changeNativeStackCall(B, F.Call, Mutation);
+    EXPECT_EQ(Access::batch(B, {Q}).Values, (std::vector<bool>{false}));
+    auto Prefix = F.prefix(Function);
+    if (Mutation == 0)
+      Prefix.InstructionBoundaries.front().Size = 0;
+    if (Mutation == 1)
+      ++Prefix.InstructionBoundaries.front().OpCount;
+    if (Mutation == 2)
+      ++Prefix.InstructionBoundaries.back().FirstOp;
+    if (Mutation == 3)
+      Prefix.InstructionBoundaries.back().ControlFlags |=
+          LowInstructionControlFlag::Conditional;
+    if (Mutation == 4)
+      Prefix.Ops.back().ConsumesX87Argument = true;
+    if (Mutation == 5)
+      Prefix.Ops.back().Seq = 1;
+    if (Mutation == 6)
+      ++Prefix.Ops.front().Output.Size;
+    if (Mutation == 7)
+      Prefix.Ops.back().Inputs[0].Offset += 1;
+    if (Mutation == 8)
+      ++Prefix.StartAddr;
+    if (Mutation == 9)
+      ++Prefix.EndAddr;
+    if (Mutation == 10)
+      Prefix.InstructionBoundaries.back().Immediate.reset();
+    if (Mutation == 11)
+      Prefix.InstructionBoundaries.back().TargetMode =
+          LowInstructionTargetMode::ARM;
+    size_t Work = 0;
+    EXPECT_FALSE(getCheckedX86IndependentIndexedCallStackPop(
+        F.Image, Prefix, {}, Work, limits::kMaxRegistrationEHStateWork));
+  }
+}
+
 TEST(ResolverFrameModes, ImportedCopyStackReceiptRequiresExactNativeCall) {
   for (bool Scalar : {false, true})
     for (unsigned Variant = 0; Variant != 19; ++Variant) {

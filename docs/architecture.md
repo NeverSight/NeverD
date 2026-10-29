@@ -2467,6 +2467,20 @@ Only a completed ordinary returning-stack proof publishes it; dispatcher paths
 retain no such summary. This neither restores a lost binding nor grants frame,
 loaded-value, nonthrowing or native-rewrite authority.
 
+A direct PE32 call can separately obtain an invocation-specific stack fact
+through `getCheckedX86IndependentIndexedCallStackPop`. Its current callee entry
+must be exactly an immutable `jmp [reg*4+table]` with a relocated table base.
+The source block prefix is re-decoded and re-lifted against its instruction
+records, with no interior entry, earlier control transfer or source fixup.
+The shared integer transfer starts without incoming register or memory facts
+and must establish the complete scalar index before the CALL. `ReadOnlyBytes`
+authenticates that single HIGHLOW slot, including tables in executable storage,
+and the selected destination must independently prove its returning stack with
+no import prerequisites. Prefix, storage and callee work consume the same
+outer allowance. The resolver keeps the result only in its current query and
+still treats the call as a memory barrier. No dispatcher-wide bound, new CFG
+root, callable ABI, memory effect or native EH result follows from this fact.
+
 Absolute relocation root discovery uses the loader's checked PE32 runtime
 pointer roles across the image. A FuncInfo callback field belongs to its
 runtime protocol even when another function's conservative decode envelope
