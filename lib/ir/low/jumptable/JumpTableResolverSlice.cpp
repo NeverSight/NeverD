@@ -6161,9 +6161,8 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
     return constrainPredicate(std::move(Value), std::move(Condition), Taken, 0);
   };
 
-  // Keep one edge-refinement owner for register transport and a load reused
-  // across the same edge. The latter must preserve both the memory identity
-  // and the condition under which that earlier memory value reaches the use.
+  // Register transport, reaching frame stores and equivalent reloads share
+  // the condition under which each predecessor's value reaches the use.
   auto constrainOnEdge = [&](ResolverResult Value, int Pred, int Successor,
                              unsigned Depth) -> ResolverResult {
     const ResolverFlowBlock &PredBlock = Graph.Blocks[Pred];
@@ -7341,6 +7340,15 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
               return Writer.Addr == Op.Addr && Writer.Seq == Op.Seq;
             });
       }
+      const auto Kind = detail::resolverMemoryCandidate(Op);
+      using MemoryCandidate = detail::ResolverMemoryCandidate;
+      if (Kind == MemoryCandidate::OrderedAccess) {
+        // Synchronization may change escaped frame memory even when this
+        // access names a disjoint cell. Retain the ordinary reload barrier.
+        Found = true;
+        Result = resolverInvalid();
+        break;
+      }
       if (AuthenticatedMemcpy) {
         if (Op.Opcode != NdOp::CALL && Op.Opcode != NdOp::INDIR_CALL) {
           Found = true;
@@ -7371,8 +7379,6 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
             budgetedResolverRoot(Size, Root.view(), consumeEvidence));
         break;
       }
-      const auto Kind = detail::resolverMemoryCandidate(Op.Opcode);
-      using MemoryCandidate = detail::ResolverMemoryCandidate;
       const bool IsCall = Kind == MemoryCandidate::Call;
       const bool IsStore = Kind == MemoryCandidate::Store && Op.NumInputs >= 2;
       const bool IsAtomic =
@@ -7453,7 +7459,8 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
       }
       if (PrivateFrameCall)
         continue;
-      if (IsCall || ClobberingIntrinsic) {
+      if (IsCall || ClobberingIntrinsic ||
+          Op.MemoryAddressSpace != NdMemoryAddressSpace::Default) {
         Found = true;
         Result = resolverInvalid();
         break;
@@ -7621,9 +7628,16 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
           Incoming.clear();
           break;
         }
-        Incoming.push_back(
+        ResolverResult IncomingValue =
             resolveMemory(Pred, static_cast<int>(Graph.Blocks[Pred].Ops.size()),
-                          SlotBase, SlotOffset, Size, Depth + 1));
+                          SlotBase, SlotOffset, Size, Depth + 1);
+        IncomingValue =
+            constrainOnEdge(std::move(IncomingValue), Pred, Block, Depth);
+        if (EvidenceBudgetExhausted) {
+          Incoming.clear();
+          break;
+        }
+        Incoming.push_back(std::move(IncomingValue));
       }
       if (Incoming.empty()) {
         Result = resolverInvalid();
@@ -8274,7 +8288,8 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
         // also reconstructs unrelated loop predicates and can exhaust the
         // candidate's evidence budget before reaching its dominating spill.
         const bool HasFrameSlot =
-            !Full &&
+            !Full && Def.MemoryOrdering == NdMemoryOrdering::None &&
+            Def.MemoryAddressSpace == NdMemoryAddressSpace::Default &&
             canonicalFrameSlotKey(Block, I - 1, Address, SlotBase, SlotOffset);
         // Only literal recovery or an earlier compatible load needs the
         // generic address value. A barrier or the end of the search can rule

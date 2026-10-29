@@ -3309,6 +3309,22 @@ Direct and subtraction-based equality agree with register transport. Stores,
 calls, atomic operations, ordered reads, changed addresses or widths,
 independent entries, bypasses and signed-only guards cannot borrow a finite
 domain. Predicate modes and exact/short evidence budgets agree cold and warm.
+`ResolverGuardPredicates.StoredFrame*` checks the same conditions through
+initialized frame slots across four LowIR architectures and three formats.
+Overwrites, calls, atomic or segmented reads, independent roots,
+bypassed checks and signed-only bounds retain refusal; mode, depth and budget
+changes agree cold and warm. `SegmentedStoresCannotBorrowNumericDisjointness`
+changes a disjoint ordinary write into an FS/GS write without changing its
+numeric address, including after a cached successful proof.
+`StoredFrameSynchronizationBreaksPriorConditions` checks intervening atomic
+loads and stores. `ResolverMemoryDefinitionCache.OrderedReads*` requires the
+scan index to deliver ordered reads with identical cold/warm work charges.
+`JumpTableJoinedGuard.StoredSelectors*` decodes i386/x64 ELF and COFF plus x64
+Mach-O fixtures with equality/range paths, a stack reload and a disjoint push.
+Overlapping writes, unknown aliases and unchecked paths remain unresolved.
+`GeneratedSourceExecutesJoinedEqualityAndRange` runs the register and frame
+variants through HighC and optimized/unoptimized LLVMC, compiling the generated
+x64 ELF C at O0/O2 with undefined-behavior traps and independent expected values.
 `JumpTableFiniteSelector.ExactSingletonReplayPreservesAProvedSibling`
 uses i386 and x64 consumers sharing one relocated table. The exact singleton
 keeps its finite replay without poisoning the independently bounded sibling's

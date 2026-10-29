@@ -3940,6 +3940,15 @@ changing their input bits: a later comparison matches the underlying lane and
 refines the original constrained value. Exact-width `(x - c) == 0` and
 `x == c` share that equality in every predicate mode. None of these identities
 turns a physical table capacity or a signed comparison into a selector bound.
+Canonical frame-memory merges use the same edge refinement on each reaching
+stored value before joining predecessors. This retains conditions checked on a
+stack slot when a later reload follows several guarded paths or a disjoint
+stack write. Unknown writers, calls and independent roots retain their memory
+barriers. Frame-value recovery accepts ordinary default-space loads; atomic
+reads keep their own occurrence. The structural memory scan also retains
+ordered accesses, including loads, so synchronization cannot carry an older
+frame value through a numerically disjoint access. FS/GS writes cannot use
+numeric frame offsets to claim disjointness without their segment base.
 An exact absolute singleton may seed decoding of its owned destination before
 publication is possible. Its finite-domain replay remains active through that
 graph growth; the existing closure and minimum-cardinality checks still decide

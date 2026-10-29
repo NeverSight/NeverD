@@ -20,12 +20,21 @@
 
 namespace neverd::detail {
 
-enum class ResolverMemoryCandidate { None, Store, Atomic, Call, Intrinsic };
+enum class ResolverMemoryCandidate {
+  None,
+  Store,
+  Atomic,
+  Call,
+  Intrinsic,
+  OrderedAccess
+};
 
-/// Classifies possible writers only. Operand shapes, aliasing, intrinsic
-/// effects and call contracts remain the consuming memory proof's decisions.
-inline ResolverMemoryCandidate resolverMemoryCandidate(NdOp Opcode) {
-  switch (Opcode) {
+/// Classifies possible writers and ordered accesses. Operand shapes, aliasing,
+/// intrinsic effects and call contracts remain the consuming proof's decisions.
+inline ResolverMemoryCandidate resolverMemoryCandidate(const LowOp &Op) {
+  if (Op.MemoryOrdering != NdMemoryOrdering::None)
+    return ResolverMemoryCandidate::OrderedAccess;
+  switch (Op.Opcode) {
   case NdOp::STORE:
     return ResolverMemoryCandidate::Store;
   case NdOp::ATOMIC_XCHG:
@@ -82,8 +91,7 @@ public:
     for (int I = Before - 1; I >= 0; --I) {
       if (!ConsumeWork(1))
         return std::nullopt;
-      if (resolverMemoryCandidate(Ops[I].Opcode) !=
-          ResolverMemoryCandidate::None) {
+      if (resolverMemoryCandidate(Ops[I]) != ResolverMemoryCandidate::None) {
         Position = I;
         break;
       }

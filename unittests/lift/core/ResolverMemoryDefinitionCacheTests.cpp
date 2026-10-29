@@ -111,3 +111,26 @@ TEST(ResolverMemoryDefinitionCache,
   auto Moved = std::move(Cache);
   EXPECT_EQ(search(Moved, Blocks[0], 40, 100).Position, 2);
 }
+
+TEST(ResolverMemoryDefinitionCache, OrderedReadsReachTheConsumerColdAndWarm) {
+  for (auto Ordering : {NdMemoryOrdering::Relaxed, NdMemoryOrdering::Acquire,
+                        NdMemoryOrdering::SequentiallyConsistent}) {
+    SCOPED_TRACE(static_cast<unsigned>(Ordering));
+    std::vector<LowOp> Ops(40);
+    Ops[3].Opcode = NdOp::LOAD;
+    Ops[3].MemoryOrdering = Ordering;
+    Ops[3].Output = NdVar::tmp(0, 4);
+    Ops[3].addInput(NdVar::reg(8, 8));
+    ResolverMemoryDefinitionCache Warm;
+    EXPECT_EQ(search(Warm, Ops, 40, 100).Position, 3);
+    for (size_t Budget :
+         {size_t{0}, size_t{1}, size_t{36}, size_t{37}, size_t{40}}) {
+      SCOPED_TRACE(Budget);
+      ResolverMemoryDefinitionCache Cold;
+      const Answer Expected{Budget < 37 ? std::nullopt : std::optional<int>(3),
+                            Budget < 37 ? 0 : Budget - 37};
+      EXPECT_EQ(search(Cold, Ops, 40, Budget), Expected);
+      EXPECT_EQ(search(Warm, Ops, 40, Budget), Expected);
+    }
+  }
+}
