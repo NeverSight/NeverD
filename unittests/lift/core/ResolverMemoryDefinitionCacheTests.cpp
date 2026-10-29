@@ -112,9 +112,10 @@ TEST(ResolverMemoryDefinitionCache,
   EXPECT_EQ(search(Moved, Blocks[0], 40, 100).Position, 2);
 }
 
-TEST(ResolverMemoryDefinitionCache, OrderedReadsReachTheConsumerColdAndWarm) {
-  for (auto Ordering : {NdMemoryOrdering::Relaxed, NdMemoryOrdering::Acquire,
-                        NdMemoryOrdering::SequentiallyConsistent}) {
+TEST(ResolverMemoryDefinitionCache, ReadsReachTheConsumerColdAndWarm) {
+  for (auto Ordering :
+       {NdMemoryOrdering::None, NdMemoryOrdering::Relaxed,
+        NdMemoryOrdering::Acquire, NdMemoryOrdering::SequentiallyConsistent}) {
     SCOPED_TRACE(static_cast<unsigned>(Ordering));
     std::vector<LowOp> Ops(40);
     Ops[3].Opcode = NdOp::LOAD;

@@ -22,6 +22,7 @@ namespace neverd::detail {
 
 enum class ResolverMemoryCandidate {
   None,
+  Read,
   Store,
   Atomic,
   Call,
@@ -29,12 +30,15 @@ enum class ResolverMemoryCandidate {
   OrderedAccess
 };
 
-/// Classifies possible writers and ordered accesses. Operand shapes, aliasing,
-/// intrinsic effects and call contracts remain the consuming proof's decisions.
+/// Classifies reads, possible writers and ordered accesses. Operand shapes,
+/// aliasing, intrinsic effects and call contracts remain the consuming proof's
+/// decisions.
 inline ResolverMemoryCandidate resolverMemoryCandidate(const LowOp &Op) {
   if (Op.MemoryOrdering != NdMemoryOrdering::None)
     return ResolverMemoryCandidate::OrderedAccess;
   switch (Op.Opcode) {
+  case NdOp::LOAD:
+    return ResolverMemoryCandidate::Read;
   case NdOp::STORE:
     return ResolverMemoryCandidate::Store;
   case NdOp::ATOMIC_XCHG:

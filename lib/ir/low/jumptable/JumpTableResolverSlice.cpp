@@ -5806,9 +5806,11 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
 
   using LaneKey = std::tuple<int, int, uint8_t, uint64_t, uint16_t>;
   constexpr size_t LaneKeyWork = 5;
-  using ValueKey = std::tuple<int, int, uint8_t, uint64_t, uint16_t, bool>;
-  constexpr size_t ValueKeyWork = 6;
-  using MemoryKey = std::tuple<int, int, uint64_t, int64_t, uint16_t, bool>;
+  using ValueKey =
+      std::tuple<int, int, uint8_t, uint64_t, uint16_t, bool, bool>;
+  constexpr size_t ValueKeyWork = 7;
+  using MemoryKey =
+      std::tuple<int, int, uint64_t, int64_t, uint16_t, bool, bool>;
 
   using ResolverWalks = detail::ResolverPendingWalks;
   using ResolverPendingRange = ResolverWalks::Pending;
@@ -5849,13 +5851,16 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
   bool ResolvingPredicate = false;
 
   std::function<ResolverResult(int, int, const NdVar &, unsigned)> resolveValue;
-  std::function<ResolverResult(int, int, uint64_t, int64_t, uint16_t, unsigned)>
+  std::function<ResolverResult(int, int, uint64_t, int64_t, uint16_t, bool,
+                               unsigned)>
       resolveMemory;
   const JumpTableValueQuery *ActiveFrameMemoryQuery = nullptr;
   const JumpTableValueQuery *ActiveValueQuery = nullptr;
   std::optional<bool> MemoOccurrenceRootMode;
   std::optional<bool> MemoPrivateFrameCallMode;
   std::optional<bool> MemoScalarConstantFoldMode;
+  std::optional<bool> MemoFrameReadMode;
+  bool AllowFrameReadObservations = false;
   std::optional<ResolverPredicateMode> MemoEdgeConstraintMode;
   auto predicateMode = [](const JumpTableValueQuery *Query) {
     if (Query &&
@@ -7363,14 +7368,20 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
   };
 
   resolveMemory = [&](int Block, int Before, uint64_t SlotBase,
-                      int64_t SlotOffset, uint16_t Size,
+                      int64_t SlotOffset, uint16_t Size, bool ObserveReads,
                       unsigned Depth) -> ResolverResult {
     if (Block < 0 || Block >= static_cast<int>(Graph.Blocks.size()) ||
         Before < 0 || Size == 0)
       return resolverInvalid();
-    constexpr size_t MemoryKeyWork = 6;
-    MemoryKey Key{Block,      Before, SlotBase,
-                  SlotOffset, Size,   ResolvingPredicate};
+    // Store-only reconstruction must also keep its nested value walks free
+    // of read observations. Otherwise a loop-carried STORE can recurse back
+    // through a later LOAD while its original value proof is still active.
+    llvm::SaveAndRestore<bool> ReadMode(
+        AllowFrameReadObservations, AllowFrameReadObservations && ObserveReads);
+    constexpr size_t MemoryKeyWork = 7;
+    MemoryKey Key{Block,       Before, SlotBase,
+                  SlotOffset,  Size,   ResolvingPredicate,
+                  ObserveReads};
     if (!consumeMemoLookup(MemoryKeyWork, MemoryMemo.size()))
       return resolverInvalid();
     auto MemoIt = MemoryMemo.find(Key);
@@ -7481,6 +7492,38 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
         }
         Result = resolverValue(
             budgetedResolverRoot(Size, Root.view(), consumeEvidence));
+        break;
+      }
+      if (Kind == MemoryCandidate::Read) {
+        // A completed ordinary read observes the cell's value even when an
+        // older call prevents proving who initialized it. Only the fallback
+        // value walk uses this fact; writer authentication stays store-only.
+        const auto Memory = lowMemoryOperands(Op);
+        if (!ObserveReads || !Memory.Complete || Memory.AccessSize != Size ||
+            Op.MemoryAddressSpace != NdMemoryAddressSpace::Default ||
+            (!Op.Output.isReg() && !Op.Output.isTemp()))
+          continue;
+        const auto Guarded = instructionIsGuarded(Op.Addr);
+        if (!Guarded) {
+          Found = true;
+          break;
+        }
+        if (*Guarded)
+          continue;
+        uint64_t ReadBase = InvalidVA;
+        int64_t ReadOffset = 0;
+        if (!canonicalFrameSlotKey(Block, I - 1, *Memory.Address, ReadBase,
+                                   ReadOffset) ||
+            ReadBase != SlotBase || ReadOffset != SlotOffset)
+          continue;
+        Found = true;
+        const auto Observed = resolveValue(Block, I + 1, Op.Output, Depth + 1);
+        // A recurrence through a read is not a transparent CFG backedge.
+        // Reuse only the actual resolved output, never a pending cycle.
+        Result = Observed.Kind == ResolverResultKind::Value && Observed.Value &&
+                         Observed.Value->Size == Size
+                     ? Observed
+                     : resolverInvalid();
         break;
       }
       const bool IsCall = Kind == MemoryCandidate::Call;
@@ -7699,8 +7742,8 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
         break;
       }
       if (*Guarded) {
-        ResolverResult Old =
-            resolveMemory(Block, I, SlotBase, SlotOffset, Size, Depth + 1);
+        ResolverResult Old = resolveMemory(Block, I, SlotBase, SlotOffset, Size,
+                                           ObserveReads, Depth + 1);
         if (!consumeEvidence(4)) {
           Result = resolverInvalid();
           break;
@@ -7734,7 +7777,7 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
         }
         ResolverResult IncomingValue =
             resolveMemory(Pred, static_cast<int>(Graph.Blocks[Pred].Ops.size()),
-                          SlotBase, SlotOffset, Size, Depth + 1);
+                          SlotBase, SlotOffset, Size, ObserveReads, Depth + 1);
         IncomingValue =
             constrainOnEdge(std::move(IncomingValue), Pred, Block, Depth);
         if (EvidenceBudgetExhausted) {
@@ -7769,8 +7812,13 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
     if (Block < 0 || Block >= static_cast<int>(Graph.Blocks.size()) ||
         Before < 0 || V.Size == 0 || (!V.isReg() && !V.isTemp()))
       return resolverInvalid();
-    ValueKey Key{Block,    Before, static_cast<uint8_t>(V.Space),
-                 V.Offset, V.Size, ResolvingPredicate};
+    ValueKey Key{Block,
+                 Before,
+                 static_cast<uint8_t>(V.Space),
+                 V.Offset,
+                 V.Size,
+                 ResolvingPredicate,
+                 AllowFrameReadObservations};
     if (!consumeMemoLookup(ValueKeyWork, ValueMemo.size()))
       return resolverInvalid();
     auto MemoIt = ValueMemo.find(Key);
@@ -8418,8 +8466,16 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
                                          Def.Output.Size);
         }
         if (HasFrameSlot) {
-          ResolverResult Loaded = resolveMemory(Block, I, SlotBase, SlotOffset,
-                                                Def.Output.Size, Depth + 1);
+          ResolverResult Loaded =
+              resolveMemory(Block, I, SlotBase, SlotOffset, Def.Output.Size,
+                            false, Depth + 1);
+          // Preserve existing store/loop proofs before trying observations:
+          // a later read must not replace a proved reaching writer with a
+          // recursive dependency on itself.
+          if (Loaded.Kind != ResolverResultKind::Value &&
+              AllowFrameReadObservations)
+            Loaded = resolveMemory(Block, I, SlotBase, SlotOffset,
+                                   Def.Output.Size, true, Depth + 1);
           if (Loaded.Kind == ResolverResultKind::Value)
             Full = Loaded.Value;
         }
@@ -10043,6 +10099,15 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
       ++ResolverMemoGeneration;
     }
     MemoScalarConstantFoldMode = Query.FoldScalarConstantOps;
+    AllowFrameReadObservations =
+        Query.Relation != JumpTableValueRelation::AuthenticatedFrameMemory &&
+        Query.Relation != JumpTableValueRelation::FrameMemoryMatches;
+    if (MemoFrameReadMode && *MemoFrameReadMode != AllowFrameReadObservations) {
+      ValueMemo.clear();
+      MemoryMemo.clear();
+      ++ResolverMemoGeneration;
+    }
+    MemoFrameReadMode = AllowFrameReadObservations;
     const bool JoinedFiniteSet =
         Query.Relation == JumpTableValueRelation::JoinedUnsignedFeasibleSet;
     const bool FiniteSet =
@@ -10158,6 +10223,7 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
               : nullptr;
       CandidateValue = resolveMemory(CandidateBlock, CandidateOp, SlotBase,
                                      *AdjustedOffset, Query.FrameMemorySize,
+                                     /*ObserveReads=*/false,
                                      /*Depth=*/0);
       ActiveFrameMemoryQuery = nullptr;
       MemoryMemo.clear();
@@ -10199,7 +10265,8 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
                      static_cast<uint8_t>(Query.Candidate.Space),
                      Query.Candidate.Offset,
                      Query.Candidate.Size,
-                     ResolvingPredicate};
+                     ResolvingPredicate,
+                     AllowFrameReadObservations};
       }
       if (Query.Relation == JumpTableValueRelation::ExactUnsignedModuloRecipe) {
         // This relation is defined only for an exact output occurrence.  The

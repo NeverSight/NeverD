@@ -3949,6 +3949,18 @@ reads keep their own occurrence. The structural memory scan also retains
 ordered accesses, including loads, so synchronization cannot carry an older
 frame value through a numerically disjoint access. FS/GS writes cannot use
 numeric frame offsets to claim disjointness without their segment base.
+If reaching stores cannot establish a frame value, an ordinary value query
+may reuse an earlier unguarded read of that exact default-space cell and width.
+The memory walk retains proved disjoint writes and applies the same edge
+refinement to every incoming observation. Calls, ordered accesses, unknown or
+overlapping writes and independent roots still block reuse; read recurrences
+cannot become transparent backedges. Store proofs run first so a later read
+cannot replace an already established loop-carried value. The observation
+pass has its own memory and value memo identities; nested value reconstruction
+inside a store-only pass also keeps observations disabled. Switching between ordinary value
+queries and frame-writer queries retires value and memory memos. Neither
+authenticated initialization nor outgoing stack-argument binding can use a
+read as its writer.
 The frame resolver can also project an exact PE32 shared C++ entry call. The
 loader's existing caller/helper instruction parser owns its physical protocol;
 a budgeted reader rechecks current immutable storage and fixups. LowIR relifts

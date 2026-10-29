@@ -3317,11 +3317,21 @@ changes agree cold and warm. `SegmentedStoresCannotBorrowNumericDisjointness`
 changes a disjoint ordinary write into an FS/GS write without changing its
 numeric address, including after a cached successful proof.
 `StoredFrameSynchronizationBreaksPriorConditions` checks intervening atomic
-loads and stores. `ResolverMemoryDefinitionCache.OrderedReads*` requires the
-scan index to deliver ordered reads with identical cold/warm work charges.
+loads and stores. `ResolverMemoryDefinitionCache.Reads*` requires the
+scan index to deliver ordinary and ordered reads with identical cold/warm work charges.
+`ResolverGuardPredicates.Observed*` starts without an initializing STORE,
+including fresh observations after opaque calls. Across four architectures
+and three formats, checked reads retain their conditions through disjoint
+writes; malformed, predicated, segmented, ordered or incompatible reads and
+unsafe writes refuse. Loop tests check both query orders before and after the
+guard, with and without writes on the backedge. Mixed value/initialization/
+stack-argument batches cannot promote a read into a writer, and exact versus
+one-unit-short evidence allowances agree cold and warm.
 `JumpTableJoinedGuard.StoredSelectors*` decodes i386/x64 ELF and COFF plus x64
 Mach-O fixtures with equality/range paths, a stack reload and a disjoint push.
 Overlapping writes, unknown aliases and unchecked paths remain unresolved.
+`ObservedSelectorsJoinOnlyCheckedPaths` repeats the decoded positive and
+refusal cases on incoming frame bytes whose writer is outside the function.
 `GeneratedSourceExecutesJoinedEqualityAndRange` runs the register and frame
 variants through HighC and optimized/unoptimized LLVMC, compiling the generated
 x64 ELF C at O0/O2 with undefined-behavior traps and independent expected values.

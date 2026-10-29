@@ -111,11 +111,12 @@ protected:
   }
 
   fs::path branchFixture(const std::string &Format, unsigned Variant,
-                         bool I386 = false, bool Spilled = false) {
+                         bool I386 = false, bool Spilled = false,
+                         bool IncomingFrame = false) {
     const bool COFF = Format == "coff", MachO = Format == "macho";
-    const std::string Stem = Format + std::to_string(Variant) +
-                             (I386 ? "-i386" : "-x64") +
-                             (Spilled ? "-frame" : "");
+    const std::string Stem =
+        Format + std::to_string(Variant) + (I386 ? "-i386" : "-x64") +
+        (Spilled ? "-frame" : "") + (IncomingFrame ? "-incoming" : "");
     const fs::path Source = tmpFile("branch-" + Stem + ".s");
     const fs::path Object = tmpFile("branch-" + Stem + ".o");
     std::ofstream Out(Source);
@@ -128,7 +129,9 @@ protected:
       Out << ".type jt_branch_join,@function\n";
     Out << "jt_branch_join:\n";
     const char *IndexReg = I386 ? "%eax" : "%r10d";
-    const char *Index = Spilled ? (I386 ? "-16(%ebp)" : "-16(%rbp)") : IndexReg;
+    const char *Index = IncomingFrame ? (I386 ? "16(%ebp)" : "16(%rbp)")
+                        : Spilled     ? (I386 ? "-16(%ebp)" : "-16(%rbp)")
+                                      : IndexReg;
     const char *Side = I386 ? "%edx" : "%r11d";
     if (Spilled)
       Out << (I386 ? "  push %ebp\n  mov %esp,%ebp\n  sub $32,%esp\n"
@@ -142,7 +145,7 @@ protected:
                    : (Variant == 8 ? "%rdi" : "%edi"))
           << (Variant == 8 ? ",%r10\n  mov " : ",%r10d\n  mov ")
           << (COFF ? "%edx" : "%esi") << ",%r11d\n";
-    if (Spilled)
+    if (Spilled && !IncomingFrame)
       Out << "  mov " << IndexReg << ',' << Index << '\n';
     if (Variant == 1)
       Out << "  test " << Side << ',' << Side << "\n  je .Ldispatch\n";
@@ -176,7 +179,9 @@ protected:
       if (Variant == 10)
         Out << "  mov " << Side << ',' << Index << '\n';
       if (Variant == 11)
-        Out << (I386 ? "  mov %dl,-15(%ebp)\n" : "  mov %r11b,-15(%rbp)\n");
+        Out << (I386 ? "  mov %dl," : "  mov %r11b,")
+            << (IncomingFrame ? "17" : "-15")
+            << (I386 ? "(%ebp)\n" : "(%rbp)\n");
       if (Variant == 12)
         Out << "  call guard_memory_helper\n";
       if (Variant == 13)
@@ -440,6 +445,34 @@ TEST_F(JumpTableJoinedGuard, StoredSelectorsRejectStaleOrUnboundedPaths) {
         neverd::CFGBuilder Builder;
         const auto Low = build(*Image, Builder, "jt_branch_join");
         EXPECT_TRUE(Low.JumpTables.empty());
+      }
+}
+
+TEST_F(JumpTableJoinedGuard, ObservedSelectorsJoinOnlyCheckedPaths) {
+  // Incoming stack bytes have no writer in this function. Their checked reads
+  // still bound a later reload after a disjoint PUSH on every incoming arm.
+  for (const std::string Format : {"elf", "coff", "macho"})
+    for (bool I386 : {false, true})
+      for (unsigned Variant :
+           {0u, 1u, 2u, 3u, 4u, 5u, 6u, 10u, 11u, 12u, 13u}) {
+        if (I386 && Format == "macho")
+          continue;
+        SCOPED_TRACE(Format + (I386 ? ":i386:" : ":x64:") +
+                     std::to_string(Variant));
+        auto Image = neverd::loadBinary(
+            branchFixture(Format, Variant, I386, true, true));
+        ASSERT_TRUE(static_cast<bool>(Image))
+            << llvm::toString(Image.takeError());
+        neverd::CFGBuilder Builder;
+        const auto Low = build(*Image, Builder, "jt_branch_join");
+        if (Variant) {
+          EXPECT_TRUE(Low.JumpTables.empty());
+        } else {
+          ASSERT_EQ(Low.JumpTables.size(), 1u);
+          EXPECT_EQ(Low.JumpTables.front().SlotIndices,
+                    (std::vector<uint32_t>{0, 1, 2}));
+          EXPECT_TRUE(Low.UnsafeIndirectBranchAddresses.empty());
+        }
       }
 }
 

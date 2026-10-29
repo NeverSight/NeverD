@@ -311,6 +311,96 @@ struct ResolverGraphCacheTestAccess {
     R.Ops = {Address, Access, Branch};
   }
 
+  static Query seedObservedFrameReload(CFGBuilder &B, const BinaryImage &Image,
+                                       ReloadGuardCase Kind,
+                                       bool CallBeforeObservation = false) {
+    const auto Q = seedGuardedFrameReload(B, Image, Kind);
+    auto &Entry = B.Insns.at(0xf0);
+    Entry.Ops.pop_back(); // No initializing STORE is available to this proof.
+    if (CallBeforeObservation) {
+      const auto &TRI = getTargetRegInfo(Image.Arch);
+      const auto Width = static_cast<uint16_t>(Image.getPointerSize());
+      auto Address = Entry.Ops.front();
+      const auto Frame = NdVar::reg(TRI.FramePointer, Width);
+      LowOp Save;
+      Save.Opcode = NdOp::COPY;
+      Save.Addr = Entry.Addr;
+      Save.Output = Frame;
+      Save.addInput(NdVar::reg(TRI.StackPointer, Width));
+      LowOp Call;
+      Call.Opcode = NdOp::CALL;
+      Call.Addr = Entry.Addr;
+      Call.Seq = 1;
+      Call.addInput(NdVar::address(0x400, Width));
+      Address.Inputs[0] = Frame;
+      Address.Seq = 2;
+      Entry.Ops = {Save, Call, Address};
+    }
+    const auto Original = B.Insns.at(0x110).Ops;
+    addDisjointFrameAccess(B, Image, NdMemoryAddressSpace::Default);
+    auto &Ops = B.Insns.at(0x110).Ops;
+    Ops.pop_back();
+    Ops.insert(Ops.end(), Original.begin(), Original.end());
+    for (size_t I = 0; I < Ops.size(); ++I)
+      Ops[I].Seq = static_cast<int>(I);
+    return Q;
+  }
+
+  static void changeObservation(CFGBuilder &B, unsigned Mutation) {
+    if (Mutation == 0)
+      B.Insns.at(0x100).Ops.front().MemoryAddressSpace =
+          NdMemoryAddressSpace::X86FS;
+    if (Mutation == 1)
+      B.Insns.at(0x120).Ops.front().MemoryAddressSpace =
+          NdMemoryAddressSpace::X86GS;
+    if (Mutation == 2)
+      B.Insns.at(0x100).IsInstructionGuard = true;
+    if (Mutation == 3)
+      B.Insns.at(0x120).IsInstructionGuard = true;
+    if (Mutation == 4)
+      B.Insns.at(0x100).Ops.front().Output = NdVar::scalar(6, 4);
+    if (Mutation == 5) {
+      auto &Store = B.Insns.at(0x110).Ops[1];
+      Store.Inputs[0] = NdVar::reg(8, Store.Inputs[0].Size);
+      Store.Inputs[1].Size = 1;
+    }
+    if (Mutation == 6)
+      B.Insns.at(0x110).Ops[1].MemoryOrdering = NdMemoryOrdering::Release;
+  }
+
+  static Query seedObservedFrameLoop(CFGBuilder &B, const BinaryImage &Image,
+                                     bool WritesOnBackedge) {
+    const auto Q =
+        seedObservedFrameReload(B, Image, ReloadGuardCase::DirectEquality);
+    const auto Width = static_cast<uint16_t>(Image.getPointerSize());
+    auto &Latch = B.Insns.at(0x130);
+    Latch.IsRet = false;
+    Latch.IsBranch = Latch.IsCond = true;
+    Latch.BranchTarget = 0x100;
+    Latch.Ops.clear();
+    if (WritesOnBackedge) {
+      LowOp Store;
+      Store.Addr = Latch.Addr;
+      Store.Opcode = NdOp::STORE;
+      Store.addInput(NdVar::reg(8, Width));
+      Store.addInput(NdVar::reg(24, 4));
+      Latch.Ops.push_back(Store);
+    }
+    LowOp Branch;
+    Branch.Addr = Latch.Addr;
+    Branch.Seq = static_cast<int>(Latch.Ops.size());
+    Branch.Opcode = NdOp::COND_BR;
+    Branch.addInput(NdVar::address(0x100, Width));
+    Branch.addInput(NdVar::reg(16, 1));
+    Latch.Ops.push_back(Branch);
+    auto Exit = B.Insns.at(0x200);
+    Exit.Addr = 0x140;
+    Exit.Ops.front().Addr = Exit.Addr;
+    B.Insns.emplace(Exit.Addr, Exit);
+    B.BlockStarts.insert({0x130, 0x140});
+    return Q;
+  }
+
   static void seed(CFGBuilder &B, const BinaryImage &Image,
                    unsigned Length = 3) {
     B.CurrentImg = &Image;
@@ -2556,6 +2646,168 @@ TEST(ResolverGuardPredicates, StoredFrameValuesKeepEveryCrossedCondition) {
                                     Case == Kind::TwoGuards ? 0x78u : 0x40u}));
       }
     }
+}
+
+TEST(ResolverGuardPredicates, ObservedFrameValuesSurviveDisjointStores) {
+  using Kind = Access::ReloadGuardCase;
+  for (Arch Target : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64})
+    for (BinaryFormat Format :
+         {BinaryFormat::ELF, BinaryFormat::COFF, BinaryFormat::MachO})
+      for (bool EarlierCall : {false, true})
+        for (Kind Case :
+             {Kind::Unchanged, Kind::DirectEquality, Kind::TwoGuards}) {
+          auto Image = image();
+          Image.Arch = Target;
+          Image.Format = Format;
+          Image.Bits = Target == Arch::X64 || Target == Arch::AArch64
+                           ? Bitness::Bits64
+                           : Bitness::Bits32;
+          SCOPED_TRACE(::testing::Message()
+                       << unsigned(Target) << ':' << unsigned(Format) << ':'
+                       << EarlierCall << ':' << unsigned(Case));
+          CFGBuilder B;
+          const auto Q =
+              Access::seedObservedFrameReload(B, Image, Case, EarlierCall);
+          const auto Answer =
+              Access::batch(B, {Q}, 1000000, 0, 0, true, true, true);
+          ASSERT_TRUE(Answer.Complete);
+          EXPECT_EQ(Answer.Values, (std::vector<bool>{true}));
+          EXPECT_EQ(
+              Answer.Masks,
+              (std::vector<uint64_t>{Case == Kind::TwoGuards ? 0x78u : 0x40u}));
+          EXPECT_EQ(Access::batch(B, {Q}, 1000000, 0, 0, true, true, true),
+                    Answer);
+        }
+}
+
+TEST(ResolverGuardPredicates, ObservedFrameValuesRetainEveryMemoryBarrier) {
+  using Kind = Access::ReloadGuardCase;
+  for (Kind Case : {Kind::OtherAddress, Kind::Store, Kind::Call, Kind::Atomic,
+                    Kind::OrderedRead, Kind::OrderedReload, Kind::Width,
+                    Kind::IndependentRoot, Kind::Bypass, Kind::PointerChange,
+                    Kind::Intrinsic, Kind::Opposite, Kind::Signed}) {
+    SCOPED_TRACE(unsigned(Case));
+    auto Image = image();
+    Image.Bits = Bitness::Bits64;
+    CFGBuilder B;
+    const auto Q = Access::seedObservedFrameReload(B, Image, Case);
+    const auto Answer = Access::batch(B, {Q}, 1000000, 0, 0, true, true, true);
+    EXPECT_EQ(Answer.Values, (std::vector<bool>{false}));
+    EXPECT_EQ(Answer.Masks, (std::vector<uint64_t>{0}));
+    EXPECT_EQ(Access::batch(B, {Q}, 1000000, 0, 0, true, true, true), Answer);
+  }
+  for (unsigned Mutation = 0; Mutation != 7; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    auto Image = image();
+    Image.Bits = Bitness::Bits64;
+    CFGBuilder B;
+    const auto Q =
+        Access::seedObservedFrameReload(B, Image, Kind::DirectEquality);
+    Access::changeObservation(B, Mutation);
+    const auto Answer = Access::batch(B, {Q}, 1000000, 0, 0, true, true, true);
+    EXPECT_EQ(Answer.Values, (std::vector<bool>{false}));
+    EXPECT_EQ(Answer.Masks, (std::vector<uint64_t>{0}));
+  }
+}
+
+TEST(ResolverGuardPredicates, ObservedReadsCannotAuthenticateFrameWriters) {
+  auto Image = image();
+  Image.Bits = Bitness::Bits64;
+  CFGBuilder B;
+  auto Value = Access::seedObservedFrameReload(
+      B, Image, Access::ReloadGuardCase::DirectEquality);
+  // This relation shares equality-only predicate mode with writer queries.
+  // A change of writer authority must still retire observation-based memos.
+  Value.Relation = Access::Relation::UnsignedLessThan;
+  Access::Query Auth;
+  Auth.Candidate = NdVar::reg(8, Image.getPointerSize());
+  Auth.UseAddr = 0x130;
+  Auth.UseSeq = 0;
+  Auth.Relation = Access::Relation::AuthenticatedFrameMemory;
+  Auth.FrameMemorySize = 4;
+  Auth.AuthenticatedFrameStoreWriters = {
+      {NdVar::tmp(0x8000, 4), 0x100, 0, true}};
+  auto StackArgument = Auth;
+  StackArgument.Relation = Access::Relation::FrameMemoryMatches;
+  StackArgument.Alternatives = {{NdVar::scalar(6, 4), 0x130, 0, false}};
+  StackArgument.AlternativeFrameValueOffsets = {0};
+  for (const auto &Queries :
+       {std::vector<Access::Query>{Value, Auth, StackArgument, Value},
+        std::vector<Access::Query>{Value, StackArgument, Auth, Value}}) {
+    Access::clear(B);
+    const auto Answer =
+        Access::batch(B, Queries, 1000000, 0, 0, true, true, true);
+    EXPECT_TRUE(Answer.Complete);
+    EXPECT_EQ(Answer.Values, (std::vector<bool>{true, false, false, true}));
+    EXPECT_EQ(Access::batch(B, Queries, 1000000, 0, 0, true, true, true),
+              Answer);
+  }
+}
+
+TEST(ResolverGuardPredicates, ObservedLoopsRecheckBeforePublishingTheDomain) {
+  for (Arch Target : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64})
+    for (bool Writes : {false, true}) {
+      SCOPED_TRACE(::testing::Message() << unsigned(Target) << ':' << Writes);
+      auto Image = image();
+      Image.Arch = Target;
+      Image.Bits = Target == Arch::X64 || Target == Arch::AArch64
+                       ? Bitness::Bits64
+                       : Bitness::Bits32;
+      CFGBuilder B;
+      const auto Guarded = Access::seedObservedFrameLoop(B, Image, Writes);
+      auto BeforeGuard = Guarded;
+      BeforeGuard.Candidate = NdVar::tmp(0x8000, 4);
+      BeforeGuard.UseAddr = 0x100;
+      BeforeGuard.UseSeq = 1;
+      for (const auto &Queries :
+           {std::vector<Access::Query>{Guarded, BeforeGuard, Guarded},
+            std::vector<Access::Query>{BeforeGuard, Guarded, BeforeGuard}}) {
+        Access::clear(B);
+        const auto Answer =
+            Access::batch(B, Queries, 1000000, 0, 0, true, true, true);
+        ASSERT_TRUE(Answer.Complete);
+        const bool GuardFirst = Queries.front().UseAddr == Guarded.UseAddr;
+        EXPECT_EQ(Answer.Values,
+                  (std::vector<bool>{GuardFirst, !GuardFirst, GuardFirst}));
+        EXPECT_EQ(Answer.Masks,
+                  (std::vector<uint64_t>{GuardFirst ? 0x40u : 0u,
+                                         GuardFirst ? 0u : 0x40u,
+                                         GuardFirst ? 0x40u : 0u}));
+        EXPECT_EQ(Access::batch(B, Queries, 1000000, 0, 0, true, true, true),
+                  Answer);
+      }
+    }
+}
+
+TEST(ResolverGuardPredicates, ObservedFrameReadsChargeColdAndWarmWork) {
+  auto Image = image();
+  Image.Bits = Bitness::Bits64;
+  CFGBuilder Warm;
+  const auto Q = Access::seedObservedFrameReload(
+      Warm, Image, Access::ReloadGuardCase::DirectEquality, true);
+  const auto Full = Access::batch(Warm, {Q}, 1000000, 0, 0, true, true, true);
+  ASSERT_TRUE(Full.Complete);
+  EXPECT_EQ(Full.Values, (std::vector<bool>{true}));
+  const size_t Work = 1000000 - Full.Remaining;
+  ASSERT_GT(Work, 0u);
+  for (size_t Limit : {size_t{0}, size_t{1}, Work - 1, Work}) {
+    SCOPED_TRACE(Limit);
+    CFGBuilder Cold;
+    Access::seedObservedFrameReload(
+        Cold, Image, Access::ReloadGuardCase::DirectEquality, true);
+    const auto Answer = Access::batch(Cold, {Q}, Limit, 0, 0, true, true, true);
+    EXPECT_EQ(Access::batch(Warm, {Q}, Limit, 0, 0, true, true, true), Answer);
+    EXPECT_EQ(Answer.Complete, Limit == Work);
+    if (Limit == Work) {
+      EXPECT_EQ(Answer.Values, (std::vector<bool>{true}));
+      EXPECT_EQ(Answer.Masks, (std::vector<uint64_t>{0x40}));
+    } else {
+      EXPECT_TRUE(std::none_of(Answer.Values.begin(), Answer.Values.end(),
+                               [](bool Value) { return Value; }));
+      EXPECT_TRUE(std::all_of(Answer.Masks.begin(), Answer.Masks.end(),
+                              [](uint64_t Mask) { return Mask == 0; }));
+    }
+  }
 }
 
 TEST(ResolverGuardPredicates, StoredFrameConditionsNeedTheSameOrdinaryValue) {
