@@ -16,6 +16,8 @@
 #include "../ResourceLimits.h"
 #include "NeverDSanitizerPublicationCLI.h"
 
+#include "neverd/sdk/Limits.h"
+
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringRef.h"
@@ -385,8 +387,10 @@ bool configureSBF(neverd_session_t Sess) {
 /// with imports and library code that byte signatures name left declared.
 const char *decompileWithCallees(neverd_session_t Sess, uint64_t Root,
                                  std::string &Out) {
-  const std::string Options = "{\"root\":\"0x" + utohexstr(Root) +
-                              "\",\"max_depth\":64,\"max_listed\":100000}";
+  const std::string Options =
+      "{\"root\":\"0x" + utohexstr(Root) +
+      "\",\"max_depth\":" + std::to_string(sdk::kMaxCallPathDepth) +
+      ",\"max_listed\":" + std::to_string(sdk::kMaxCallGraphListed) + "}";
   const char *Tree = neverd_call_tree_json(Sess, Options.c_str());
   if (!Tree)
     return "the callees cannot be listed";
@@ -401,6 +405,8 @@ const char *decompileWithCallees(neverd_session_t Sess, uint64_t Root,
   }
   if (!Reply->getBoolean("complete").value_or(false))
     return "the callees exceed the listing limit";
+  if (Reply->getBoolean("depth_limited").value_or(false))
+    return "the callees exceed the call-depth limit";
   std::vector<neverd_va_t> Entries;
   for (const json::Value &Value : *Order) {
     uint64_t Entry = 0;

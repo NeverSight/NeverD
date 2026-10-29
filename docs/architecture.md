@@ -14534,3 +14534,5 @@ ranges share the ordinary overlapping byte backing, including backwards access
 and copies extending beyond a guessed scalar or string terminator. A range
 crossing its mapped segment refuses source emission. This does not infer the
 extent of a dynamic count, a segmented address or an address-size override.
+
+`--func --callees` loads the complete function inventory before querying the shared call tree and selecting a source unit. Single-function loading must not hide unselected callees from that query. The CLI reuses the SDK graph limits and refuses both a truncated listing and a depth-limited tree before writing output. Imports and signature-identified library code remain declarations; refused selected callees retain their existing diagnostic notes.

@@ -2243,3 +2243,5 @@ MedIR 상수 전파와 복사 전파는 `canPropagateConstantToOperand`를 공�
 `X86RepState.ImageCopiesRetainEveryAccessedByte`는 x64 COFF, ELF, Mach-O에서 양방향 복사와 같은 저장소를 채운 뒤 복사하는 경우를 검증합니다. 두 C 경로를 O0/O2 및 UBSan으로 컴파일하고 실행하며, 독립적으로 계산한 결과로 복사한 모든 바이트를 확인합니다. x64가 아닌 호스트에서는 실행 검사를 명시적으로 건너뜁니다.
 
 `NeverDFiniteScalarBranchTests`는 x86/x64/AArch64와 COFF/ELF/Mach-O의 테이블 없는 산술 분기, 희소 마스크, 모듈러 연산, 부분 쓰기, 값 손실, 임시값 수명, 예산, 외부 진입점과 새 간선을 검사합니다. `NeverDFiniteScalarBranchSourceTests`는 최적화 켜기/끄기, O0/O2, UBSan에서 두 C 경로의 모든 사례를 실행하고 동시에 저장되는 코드 포인터의 정체성과 SSA 생략 시 거부를 확인합니다.
+
+`NeverDCalleeSourceCLI`는 독립적으로 인코딩한 x64 PE/ELF 호출 체인을 실제 CLI로 검사합니다. 주소/이름 선택, 전이적 정의, 무관한 함수 제외, 단일 함수 출력, 깊이 한계와 초과, 순환, 루트/피호출 함수 거부를 다룹니다. 호출 폐쇄 실패 시 기존 출력을 보존합니다. 완전한 세 함수 C 단위를 O0/O2로 컴파일하고 실행해 독립적인 예상 결과를 확인합니다. 재귀 사례는 검사만 합니다.

@@ -16869,3 +16869,5 @@ O0/O2 with UBSan. Its x64 COFF, ELF and Mach-O cases copy complete image words
 in both directions and repeat the check after filling the same image storage.
 The independently calculated result observes every copied byte. The generated
 code executes on x64 hosts; other hosts explicitly skip this execution check.
+
+`NeverDCalleeSourceCLI` checks independently encoded x64 PE and ELF call chains through the production CLI: address/name selection, transitive definitions, exclusion of unrelated functions, ordinary single-function output, exact/exceeded depth limits, cycles, and refused roots/callees. Failed closure preserves existing output. The complete three-function C unit compiles and returns the independent expected result at O0/O2; recursive controls are only inspected.
