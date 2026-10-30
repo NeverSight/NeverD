@@ -15090,6 +15090,19 @@ Profile inheritance is declared once in the continuation source owner so
 controls, flags, fault addresses, returns and event state advance together.
 The exporter selects distinct versioned layouts and drivers from that owner.
 
+The x64 continuation descriptor implementation is shared by the legacy event
+and FRED return owners in `X64ContinuationSegments.h`. It owns GDT/LDT
+validation, hidden-cache decoding and ordered descriptor accessed-bit writes;
+the instruction-specific owners retain their distinct frame and event rules.
+The same flat-cache writer serves SYSRET/SYSENTER/SYSEXIT and standard ERETU.
+`X64ContinuationFredReturns.h` handles V9 FRED return frames and event outputs
+above both C emitters. Its profile enables only canonical ERETS/ERETU to 64-bit
+targets and cannot reuse the earlier FRED-disabled execution domain.
+The version-aware state writer transports monitor invalidation for UIRET,
+ERETU and the inherited legacy returns; each return owner decides whether the
+architectural transition invalidates it. Earlier layouts receive no monitor
+write.
+
 `X64ContinuationUserInterrupts` owns UIRET, CLUI, STUI and TESTUI above both C
 routes. V8 appends UIF and monitor validity without changing earlier layouts.
 The binary adapter retains canonical bytes as a dedicated profile projection;

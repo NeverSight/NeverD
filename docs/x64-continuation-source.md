@@ -250,6 +250,13 @@ Segments, NMI blocking, other GPRs and vector containers are preserved. Status
 11 stops even when the target is listed, before executing it or delivering a
 pending user interrupt.
 
+The inherited IRET, SYSRET and SYSEXIT paths also clear `MonitorActive`, as
+does RETF when it changes CPL. A same-CPL RETF and SYSENTER preserve it.
+The return owners invoke one version-aware state writer, so earlier layouts
+receive no writes beyond their state storage. Invalid entries and frames leave
+the monitor unchanged. This follows the instruction interactions listed under
+UMWAIT in the same SDM.
+
 CLUI, STUI and TESTUI share the live UIF cell. TESTUI copies it to CF and
 clears the other arithmetic flags. Their ordinary RF clearing is retained;
 TF must be zero because debug-trap delivery is outside this profile. These
@@ -376,3 +383,51 @@ LOCK BTS/BTR/BTC retain one sequentially consistent native transaction, includin
 the old bit returned in CF; an unlocked load/store pair is not equivalent.
 The encoding audit rejects inconsistent decoder details and unaudited prefixes.
 These tests do not extend the invocation domain to faulting or concurrent runs.
+
+## Intel FRED return profile V9
+
+`intel-fred-return-v9` enables the canonical ERETS and ERETU encodings at
+CPL0 in 64-bit mode, with FRED enabled and CET/RTM disabled, outside VMX
+non-root execution. It is a separate
+execution domain: other instructions request native execution. It requires
+`mxcsr_mask` and `paging_address_bits`; SYSENTER and UIRET feature bindings
+are not accepted. It inherits the nonfaulting ordinary-RAM, immutable-code and
+disjoint-state requirements. Descriptor caches must describe a valid entry
+context, and no debug exception may be pending at entry.
+
+The V9 state retains the complete V8 layout and appends `FredConfig` at offset
+2544, `STIBlocked` at 2552, `PendingDebug` at 2553 and six reserved bytes.
+Its total size is 2560 bytes. The low two FredConfig bits hold the current
+stack level; other bits are preserved. Event bytes are booleans. A successful
+step returns status **12 (FredReturn)** and always stops before the target or
+pending-event delivery, consuming exactly one driver step.
+
+Both instructions skip the error-code qword without reading it, then read
+exactly five qwords: RIP, augmented CS, RFLAGS, RSP and augmented SS. Neither
+the restored RSP nor the event-information area above the return words is
+accessed. RIP must be canonical at the declared paging width. Invalid frames
+reject before any state or descriptor write; this is invocation refusal, not
+an emulated CPU exception.
+
+ERETS checks that the selectors match the current CS/SS, validates the reserved
+fields, restores the complete allowed flags and RSP, and lowers the stack level
+to the minimum of its old and saved values. CS/SS caches and GS bases stay
+unchanged. ERETU requires stack level zero and target CPL3. Its standard
+64-bit selector pair installs flat CS/SS caches without consulting descriptor
+tables; other 64-bit selector pairs use the shared GDT/LDT descriptor owner,
+including ordered accessed-bit writes. It swaps GS.base with the kernel
+GS-base MSR, invalidates the UMONITOR state, and preserves the DS/ES/FS/GS
+selectors and other caches, even when their DPL is below 3. Compatibility
+returns remain outside this profile; their arbitrary high GPR halves must not
+be silently treated as preserved.
+
+Saved SS controls conditional NMI unblocking and single-step pendency. ERETS
+may establish STI blocking when requested with restored IF set, provided it
+was not already active at entry; prior STI blocking expires. ERETU does not
+establish it. An entry TF or the saved pending-debug condition with restored TF
+produces PendingDebug. No debug/NMI/interrupt handler runs in this step.
+
+These transitions follow Intel SDM 325462-090, ERETS/ERETU and Volume 3A
+sections 8.4.1-8.4.2. CET checks, compatibility returns, faults, virtual-NMI
+controls, physical FRED execution and subsequent event delivery remain
+unqualified. Ordinary lifting refuses both forms without this state owner.

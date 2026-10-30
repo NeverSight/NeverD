@@ -56,6 +56,7 @@ enum class InterpreterProfileProjection : uint8_t {
   X64FarPointerLoadV1,
   /// Canonical UINTR bytes require the explicit V8 UIF/monitor/return owner.
   X64UserInterruptV1,
+  X64FredReturnV1,
 };
 
 } // namespace neverd::analysis

@@ -145,6 +145,17 @@ struct alignas(16) X64ContinuationStateV8 {
   uint8_t Reserved[14] = {};
 };
 
+/// V9 retains earlier storage and owns FRED stack level and event outputs.
+/// Only FredConfig[1:0] (CSL) changes; other configuration bits stay intact.
+/// PendingDebug records a pending single-step trap, not its delivery.
+struct alignas(16) X64ContinuationStateV9 {
+  X64ContinuationStateV8 Core;
+  uint64_t FredConfig = 0;
+  uint8_t STIBlocked = 0;
+  uint8_t PendingDebug = 0;
+  uint8_t Reserved[6] = {};
+};
+
 enum class X64ContinuationExitV1 : uint64_t {
   Continue = 0,
   Call = 1,
@@ -170,6 +181,9 @@ enum class X64ContinuationExitV1 : uint64_t {
   /// UIRET installed its same-privilege target, flags, stack and UIF. Stop
   /// before target execution or pending user-interrupt delivery.
   UserInterruptReturn = 11,
+  /// FRED installed its target state. Stop before executing the target or
+  /// delivering a pending debug exception or newly unblocked interrupt.
+  FredReturn = 12,
 };
 
 enum class X64ContinuationProfile : uint8_t {
@@ -247,6 +261,16 @@ enum class X64ContinuationProfile : uint8_t {
   /// CLUI/STUI/TESTUI clear RF and require TF=0 (no debug-trap delivery).
   /// UiretRestoresUIF must declare CPUID.07H.01H:EDX[17].
   UserInterruptNoFaultV8,
+  /// Intel FRED enabled at CPL0 in 64-bit mode; CET and RTM disabled,
+  /// outside VMX non-root execution.
+  /// Only canonical ERETS/ERETU are admitted. Other instructions request
+  /// native execution; this does not inherit the earlier FRED-disabled domains.
+  /// Return to 64-bit mode, successful ordinary frame/descriptor RAM accesses,
+  /// no asynchronous delivery and no pending debug trap at entry. Event
+  /// outputs are explicit and the step always stops before their delivery.
+  /// PagingAddressBits and MXCSRMask are required. SYSENTER and UIRET feature
+  /// bindings are not accepted. Earlier storage layouts remain unchanged.
+  FredReturnNoFaultV9,
 };
 
 /// Bind the original processor's null FS/GS load behavior. No vendor-wide
@@ -265,7 +289,7 @@ struct X64ContinuationSourceOptions {
   /// Without this declaration those loads reject before any state/RAM write
   /// or descriptor access. This is not a claim that all AMD CPUs preserve it.
   std::optional<X64NullSegmentBasePolicy> NullSegmentBasePolicy;
-  /// V7 requires the original Intel CPU's 48- or 57-bit MSR canonical width,
+  /// V7/V8 require the original Intel CPU's 48- or 57-bit MSR canonical width,
   /// independently of active paging. If segment-base MSRs are also bound,
   /// their declared width must agree. Earlier profiles do not accept this.
   std::optional<unsigned> SysenterMSRAddressBits;

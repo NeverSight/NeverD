@@ -12,6 +12,7 @@
 #include "BinaryContinuationInstructions.h"
 #include "NativeStackControl.h"
 #include "X64FarPointerEncoding.h"
+#include "X64FredReturnEncoding.h"
 #include "X64Recovery.h"
 #include "X64UserInterruptEncoding.h"
 
@@ -317,6 +318,12 @@ public:
             lowUndefinedOperationDigest(Result.Ops);
         Result.UndefinedEffects.Diagnostic =
             "CET-disabled RDSSP requires explicit profile evidence";
+      } else if (ContinuationSnapshot &&
+                 detail::x64FredReturn(Result.NativeBytes)) {
+        Result.ProfileProjection =
+            InterpreterProfileProjection::X64FredReturnV1;
+        Result.UndefinedEffects.Diagnostic =
+            "FRED return requires explicit frame, segment and event ownership";
       } else if (ContinuationSnapshot &&
                  detail::x64UserInterrupt(Result.NativeBytes)) {
         Result.ProfileProjection =

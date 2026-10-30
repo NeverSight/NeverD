@@ -143,6 +143,53 @@ int main(void) {
       false, userInterruptOptions());
 }
 
+TEST_F(X64ContinuationSourceTest, LegacyReturnsInvalidateTheUserMonitor) {
+  const std::vector<std::vector<uint8_t>> Encodings = {
+      {0x48, 0xcf},    {0x48, 0xcb}, {0x48, 0xca, 8, 0},
+      {0x48, 0x0f, 7}, {0x0f, 7},    {0x48, 0x0f, 0x35},
+      {0x0f, 0x35},    {0x0f, 0x34}, {0x90}};
+  for (unsigned Kind = 0; Kind != Encodings.size(); ++Kind) {
+    SCOPED_TRACE(Kind);
+    std::string Harness =
+        std::string(EventHarness) + FastSystemHarness + UserInterruptHarness;
+    Harness += "\n#define KIND " + std::to_string(Kind) + "\n";
+    Harness += R"C(
+int main(void) {
+  unsigned char memory[4096],saved[4096];
+  for(unsigned cpl=0;cpl<4;++cpl)for(unsigned uif=0;uif<2;++uif)
+    for(unsigned monitor=0;monitor<2;++monitor)for(unsigned bad=0;bad<2;++bad) {
+      user_interrupt_state_t s=user_seed((uintptr_t)memory,0),before;
+      event_state_t *v=&s.core.core;
+      s.uif=uif;s.monitor_active=monitor;
+      v->gpr[1]=v->gpr[2]=0x1800;v->gpr[11]=0x246;
+      if(KIND<3) {
+        event_frame(v,cpl,0,0,2);
+        if(KIND) {
+          unsigned discard=KIND==2?8:0;
+          event_word(v->gpr[4]+16+discard,0x123456789abcULL);
+          event_word(v->gpr[4]+24+discard,32|cpl);
+        }
+      }
+      if(bad){v->pc++;v->gpr[4]=1;}
+      before=s;memcpy(saved,memory,sizeof(memory));
+      unsigned status=neverd_step_v8_1000(ARG(&s));
+      if(bad) {
+        CHECK(status==5&&!memcmp(&s,&before,sizeof(s)));
+        CHECK(!memcmp(memory,saved,sizeof(memory)));
+      } else {
+        unsigned clear=KIND<7&&(!(KIND==1||KIND==2)||cpl!=0);
+        CHECK(status==(KIND==8?0:KIND==7?10:6));
+        CHECK(s.monitor_active==(clear?0:monitor)&&s.uif==uif);
+        CHECK(!memcmp(s.reserved,before.reserved,sizeof(s.reserved)));
+      }
+    }
+  return 0;
+}
+)C";
+    run(Encodings[Kind], {0x1000}, Harness, false, userInterruptOptions());
+  }
+}
+
 TEST_F(X64ContinuationSourceTest, UserInterruptReturnReadsExactlyThreeWords) {
 #if !defined(__linux__) && !defined(__APPLE__)
   GTEST_SKIP() << "guard-page fixture requires mmap";

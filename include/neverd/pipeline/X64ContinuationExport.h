@@ -40,7 +40,11 @@ struct X64ContinuationExport {
 /// sysenter_msr_address_bits and returns a distinct V7 state/driver. The
 /// intel-user-interrupt-v8 profile additionally requires uiret_restores_uif,
 /// owns UIF/monitor validity and stops UIRET at its completed return context.
-/// Unsupported native requests and invalid state leave the step unexecuted.
+/// intel-fred-return-v9 owns canonical ERETS/ERETU to 64-bit targets with
+/// explicit FRED configuration and pending-event outputs. Its 2560-byte state
+/// exits with status 12; it does not inherit the FRED-disabled V6/V7/V8
+/// domains. Unsupported native requests and invalid state leave the step
+/// unexecuted.
 llvm::Expected<X64ContinuationExport>
 exportX64Continuation(const BinaryImage &Image, llvm::StringRef RequestJSON,
                       bool UseLLVM, DebugContext *Debug = nullptr);

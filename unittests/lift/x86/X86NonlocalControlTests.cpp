@@ -108,6 +108,31 @@ TEST(X86NonlocalControl, UserInterruptReturnRequiresItsStateOwner) {
     }
 }
 
+TEST(X86NonlocalControl, FredReturnsRequireTheirStateOwner) {
+  for (bool User : {false, true}) {
+    const std::vector<uint8_t> Bytes{uint8_t(User ? 0xf3 : 0xf2), 0x0f, 0x01,
+                                     0xca};
+    for (bool Strict : {false, true})
+      for (bool Fast : {false, true}) {
+        Decoder D;
+        ASSERT_TRUE(D.init(Arch::X64));
+        D.setStrict(Strict);
+        DecodedInsn Insn{};
+        ASSERT_EQ(
+            Fast ? D.decodeOneForLift(Bytes.data(), Bytes.size(), kEntry, Insn)
+                 : D.decodeOne(Bytes.data(), Bytes.size(), kEntry, Insn),
+            Bytes.size());
+        EXPECT_EQ(Insn.Id, unsigned(User ? X86_INS_ERETU : X86_INS_ERETS));
+        EXPECT_TRUE(D.isFunctionTerminator(Insn));
+        std::vector<LowOp> Ops(1);
+        Ops.front().Opcode = NdOp::COPY;
+        EXPECT_THROW(D.liftToLow(Insn, Ops), UnliftedInstruction);
+        ASSERT_EQ(Ops.size(), 1u);
+        EXPECT_EQ(Ops.front().Opcode, NdOp::COPY);
+      }
+  }
+}
+
 TEST(X86NonlocalControl, RawTransitionsCannotBecomeReturnsOrSyscalls) {
   for (Arch Target : {Arch::X86, Arch::X64})
     for (bool Strict : {false, true})

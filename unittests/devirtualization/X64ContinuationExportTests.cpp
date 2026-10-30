@@ -105,7 +105,8 @@ protected:
     } else if (const auto *Object = Parsed->getAsObject()) {
       EXPECT_EQ(Object->getInteger("schema_version"), 2);
       EXPECT_EQ(Object->getInteger("state_version"), Version);
-      EXPECT_EQ(Object->getInteger("state_bytes"), Version == 8   ? 2544
+      EXPECT_EQ(Object->getInteger("state_bytes"), Version == 9   ? 2560
+                                                   : Version == 8 ? 2544
                                                    : Version == 7 ? 2528
                                                                   : 2496);
       EXPECT_EQ(Object->getInteger("state_alignment"), 16);
@@ -384,6 +385,66 @@ int main(void) {
                                                 0, &Report),
               nullptr);
     EXPECT_EQ(Report, nullptr);
+  }
+}
+
+TEST_F(X64ContinuationExportTest, FredV9StopsBeforeTargetAndPendingEvents) {
+  load({0xf2, 0x0f, 0x01, 0xca, 0xf3, 0x0f, 0x01, 0xca, 0x90});
+  const std::string Request =
+      R"({"profile":"intel-fred-return-v9","mxcsr_mask":"0xffbf","paging_address_bits":48,"instructions":[4096,4100,4104]})";
+  for (bool LLVM : {false, true}) {
+    auto [Source, Manifest] = source(Request, LLVM, 9);
+    auto Parsed = llvm::json::parse(Manifest);
+    ASSERT_TRUE(bool(Parsed));
+    const auto *Object = Parsed->getAsObject();
+    EXPECT_EQ(Object->getString("profile"), "intel-fred-return-v9");
+    EXPECT_EQ(Object->getInteger("native_requests"), 1);
+    EXPECT_EQ(Object->getInteger("modeled"), 2);
+    EXPECT_EQ(Object->getArray("units")->size(), 3u);
+    execute(Source, R"C(
+#include <stdlib.h>
+#define CHECK(c) do {if(!(c))abort();}while(0)
+int main(void) {
+  neverd_x64_state_v9 s={0},want;
+  uint64_t frame[]={0xdeadbeef,0x1004,8,0x302,UINT64_MAX,0x30010},before[6],budget=10;
+  s.PC=0x1000;s.RFlags=0x202;s.MXCSR=0x1f80;
+  s.CS=(neverd_x64_segment){0,UINT32_MAX,8,0xa09b};
+  s.SS=(neverd_x64_segment){0,UINT32_MAX,16,0xc093};
+  s.GPR[4]=(uintptr_t)frame;s.UIF=1;s.MonitorActive=1;s.NMIBlocked=1;
+  s.FredConfig=0xffff800012340003ULL;
+  memset(s.ZMM,0xa5,sizeof(s.ZMM));memcpy(before,frame,sizeof(frame));
+  want=s;want.PC=0x1004;want.GPR[4]=UINT64_MAX;want.RFlags=0x302;
+  want.FredConfig&=~3ULL;want.STIBlocked=1;want.PendingDebug=1;
+  CHECK(neverd_x64_continue_v9(&s,&budget)==12&&budget==9);
+  CHECK(!memcmp(&s,&want,sizeof(s))&&!memcmp(frame,before,sizeof(frame)));
+  CHECK(neverd_x64_continue_v9(&s,&budget)==5&&budget==9&&!memcmp(&s,&want,sizeof(s)));
+  s.PendingDebug=0;s.RFlags=0x202;s.GPR[4]=(uintptr_t)frame;s.STAR=3ULL<<48;
+  s.GSBase=0x1234;s.KernelGSBase=0x5678;
+  frame[1]=0x1008;frame[2]=19;frame[3]=2;frame[4]=UINT64_MAX;frame[5]=0x4000b;
+  want=s;want.PC=0x1008;want.GPR[4]=UINT64_MAX;want.RFlags=2;
+  want.STIBlocked=0;want.NMIBlocked=0;want.GSBase=0x5678;want.KernelGSBase=0x1234;
+  want.MonitorActive=0;
+  want.CS=(neverd_x64_segment){0,UINT32_MAX,19,0xa0fb};
+  want.SS=(neverd_x64_segment){0,UINT32_MAX,11,0xc0f3};
+  CHECK(neverd_x64_continue_v9(&s,&budget)==12&&budget==8&&!memcmp(&s,&want,sizeof(s)));
+  return 0;
+}
+)C");
+    const auto Input = tmpFile("fred-request.json"), Output = tmpFile("fred.c"),
+               Report = tmpFile("fred.json");
+    std::ofstream(Input) << Request;
+    std::vector<std::string> Args{"decompile",
+                                  tmpFile("input.elf").string(),
+                                  "--x64-continuation=" + Input.string(),
+                                  "--continuation-report=" + Report.string(),
+                                  "-o",
+                                  Output.string()};
+    if (LLVM)
+      Args.push_back("--llvm");
+    const auto Ran = exec(ndBin(), Args);
+    ASSERT_TRUE(Ran.ok()) << Ran.err;
+    EXPECT_EQ(readOutput(Output), Source);
+    EXPECT_EQ(readOutput(Report), Manifest);
   }
 }
 

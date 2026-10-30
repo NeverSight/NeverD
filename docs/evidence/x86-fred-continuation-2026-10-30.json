@@ -1,0 +1,338 @@
+{
+  "schema_version": 1,
+  "date": "2026-10-30",
+  "scope": "Explicit x64 ERETS/ERETU FRED continuation state",
+  "global_instruction_goal_complete": false,
+  "artifacts_root": "/mnt/data/neverd-fred-20261030",
+  "neverd_base": "4d8d2ef2e4642cbbe63eaeb92f53213bbc664c60",
+  "dev_base": "efaf1d0a4219652a82a4d605326d3917896085fd",
+  "capstone_head": "e9d920fb32b39411186e46230b1f1b10ffbe3283",
+  "llvm_head": "d0aad189fd7d2689cbe51a883a986df9efd8871b",
+  "neverc_head": "3d1f7b851b6f8e5d9194f5f6f53887441cbc73ce",
+  "reference": {
+    "url": "https://cdrdv2-public.intel.com/874240/325462-090-sdm-vol-1-2abcd-3abcd-4.pdf",
+    "document": "Intel SDM 325462-090, ERETS/ERETU and Vol. 3A 8.4.1-8.4.2, including 8.4.2.4 UMONITOR invalidation",
+    "artifact": "/mnt/data/neverd-uiret-20261030/intel-sdm-090.pdf",
+    "sha256": "3686e42931e893b5016c70fb131403795ef173237d073afcfec52755fcd3ea50"
+  },
+  "implementation": {
+    "decoder": "Appended ERETS/ERETU IDs 1664/1665 without renumbering older IDs. The shared decoder and scanner require 64-bit mode, retain prefixes, expose implicit state registers and classify both as privileged interrupt returns. Bare CLAC remains distinct.",
+    "context": "V9 retains all earlier storage and appends FredConfig at 2544, STIBlocked at 2552 and PendingDebug at 2553; size 2560. Only the low two configuration bits change.",
+    "frames": "Skip the error-code qword, read exactly five return qwords at RSP+8..47, validate the canonical RIP and saved reserved fields before any state/RAM write, restore the full new RSP without accessing it.",
+    "supervisor": "ERETS preserves all segment caches and GS bases, lowers CSL to min(old,saved), restores complete allowed RFLAGS, and publishes STI/NMI/debug state.",
+    "user": "ERETU requires CSL=0. Standard 64-bit selector pairs install flat caches without table reads. Other 64-bit pairs share the GDT/LDT and ordered accessed-bit owner. GS.base swaps with the kernel GS-base MSR, UMONITOR state becomes inactive, and low-DPL DS/ES/FS/GS selectors and caches remain valid.",
+    "events": "Old TF or saved pending-DB with restored TF sets PendingDebug. Saved SS conditionally unblocks NMI. Every successful return exits with FredReturn status 12 before target or event execution.",
+    "refactor": "Descriptor validation, hidden-cache construction and accessed-bit ordering have one private shared owner for frame returns, FRED and existing segment operations. Flat cache writes are shared with fast system transfers.",
+    "compiler": "Existing llvm.x86.erets/eretu and NeverC __builtin_ia32_erets/eretu already generate native frame-return instructions. No LLVM or NeverC source change was needed for this slice.",
+    "monitor_ownership": "UIRET/ERETU and inherited V8 IRET/SYSRET/SYSEXIT use the same version-aware monitor writer. RETF invalidates only when CPL changes; same-CPL RETF, SYSENTER and NOP preserve it. Earlier state layouts acquire no monitor store."
+  },
+  "host_features": {
+    "fred": false,
+    "physical_execution_qualified": false
+  },
+  "portable_matrix": {
+    "routes": [
+      "high-c",
+      "llvm-c"
+    ],
+    "optimizations": [
+      "O0",
+      "O2"
+    ],
+    "sanitizers": [
+      "address",
+      "undefined"
+    ],
+    "supervisor_state_and_ram_cases": 524288,
+    "user_standard_state_and_ram_cases": 1048576,
+    "user_descriptor_state_and_ram_cases": 2048,
+    "descriptor_frame_alias_cases": 8,
+    "invalid_context_cases": 248,
+    "guard_page_cases": 16,
+    "physical_fred_cases": 0,
+    "legacy_monitor_cases": 1152
+  },
+  "checks": [
+    {
+      "name": "NeverD focused FRED and nonlocal control",
+      "passed": 12,
+      "failed": 0,
+      "skipped": 0,
+      "log": "neverd-focused-fixed.log",
+      "junit": "neverd-focused-fixed.xml"
+    },
+    {
+      "name": "NeverD broad integration before old expectation correction",
+      "tests": 1552,
+      "passed": 1551,
+      "failed": 1,
+      "skipped": 0,
+      "log": "neverd-integrated.log",
+      "junit": "neverd-integrated.xml",
+      "failure": "Old system-state decoder test expected FRED bytes to be undecodable; changed to assert their distinct ERETS/ERETU identities."
+    },
+    {
+      "name": "Capstone x86 unit suite",
+      "passed": 87,
+      "failed": 0,
+      "skipped": 0,
+      "log": "capstone-tests.log",
+      "junit": "capstone-tests.xml"
+    },
+    {
+      "name": "Capstone x86 MC corpus",
+      "passed": 2745,
+      "failed": 0,
+      "skipped": 0,
+      "log": "capstone-x86-mc.log"
+    },
+    {
+      "name": "Capstone full-build CTest invocation",
+      "tests": 111,
+      "passed": 104,
+      "failed": 7,
+      "skipped": 0,
+      "log": "capstone-full-tests.log",
+      "junit": "capstone-full-tests.xml",
+      "failure": "Four architecture-wide corpus jobs and three integration fixtures require non-x86 decoders disabled in this x86-only build. The separate x86 corpus passed. Generic mcinst and detail_option tests passed."
+    },
+    {
+      "name": "Capability schema and execution checks",
+      "passed": 116,
+      "failed": 0,
+      "skipped": 0,
+      "log": "capabilities-tests.log"
+    },
+    {
+      "name": "Localized documentation",
+      "markdown_files": 309,
+      "locales": 10,
+      "passed": true
+    },
+    {
+      "name": "NeverD affected suites after decoder expectation correction",
+      "passed": 167,
+      "failed": 0,
+      "skipped": 0,
+      "log": "neverd-affected-final.log",
+      "junit": "neverd-affected-final.xml"
+    },
+    {
+      "name": "FRED null SS and shared monitor ownership",
+      "passed": 7,
+      "failed": 0,
+      "skipped": 0,
+      "log": "neverd-state-fixes.log",
+      "junit": "neverd-state-fixes.xml"
+    },
+    {
+      "name": "Final NeverD integrated sources",
+      "tests": 1553,
+      "passed": 1551,
+      "failed": 2,
+      "skipped": 0,
+      "log": "neverd-final-integration.log",
+      "junit": "neverd-final-integration.xml",
+      "failure": "Two death tests lost stderr because GoogleTest's Linux CapturedStream hardcodes /tmp. strace records write(2) returning EDQUOT."
+    },
+    {
+      "name": "Unchanged death tests with process-private temporary mount",
+      "passed": 2,
+      "failed": 0,
+      "skipped": 0,
+      "log": "neverd-capture-fixed.log",
+      "junit": "neverd-capture-fixed.xml"
+    }
+  ],
+  "regressions_fixed": [
+    "ERETU initially preserved MonitorActive. A specification audit of SDM 8.4.2.4 exposed the missing effect; the added SDK regression failed before the production fix (neverd-monitor-red.log/xml) and passed afterward.",
+    "FRED fixtures initially depended on a later .inc declaration; the fixture now constructs its profile independently.",
+    "An old NeverD refining-prefix test expected decode refusal, superseded by the new public IDs; ordinary lifting refusal is separately retained and tested.",
+    "Generic Capstone tests failed GCC 15 warnings-as-errors on a nullable strcmp and a shadowed local; the equivalent explicit null comparison and distinct loop variable repair these fixtures.",
+    "Nonstandard ERETU initially accepted the null SS selector 3 because its caller passed a constant false null predicate. The new rejection case failed before the real selector predicate was passed to the shared stack-descriptor owner. Standard selector-wrap cases remain valid."
+  ],
+  "environment_notes": [
+    "/tmp cannot hold compiler temporary files because its per-user quota is exhausted. Builds and final tests use the task-local /mnt/data TMPDIR; earlier unqualified runs with the default temporary directory are retained as failed diagnostics.",
+    "Capstone's deliberate x87 child faults use the existing task-local no-core helper to avoid the global Apport handler. No global core-handler change or unrelated temporary-file cleanup was performed.",
+    "Physical FRED is unavailable on this host. No CET, hardware transition, page-fault or asynchronous-event execution is claimed.",
+    "GoogleTest CapturedStream hardcodes /tmp on Linux, ignoring TMPDIR. gtest-capture.trace proves EDQUOT on its diagnostic writes. private-tmp-runner.py runs under unshare --user --map-root-user --mount, makes the namespace private, and binds task TMPDIR onto /tmp for the two tests only. The no-core helper is loaded after namespace setup."
+  ],
+  "remaining_limits": [
+    "Compatibility returns and their profile-owned arbitrary legacy GPR high halves",
+    "CET shadow stacks and indirect-branch tracking",
+    "Fault delivery and partial-fault ordering",
+    "Virtual-NMI controls, RTM and enclave domains",
+    "Physical FRED execution and subsequent event delivery",
+    "Other x86 gaps in docs/x86-instruction-support.md"
+  ],
+  "release": {
+    "published": false,
+    "pin_changed": false,
+    "reason": "The user requested release and pin after the remaining instruction contracts are complete."
+  },
+  "integrated_validation": {
+    "tests": 1553,
+    "passed_after_focused_rechecks": 1553,
+    "unresolved_failures": 0,
+    "skipped": 0,
+    "labels": 10,
+    "note": "1551 passed in the final broad run; the same two death-test binaries passed after replacing /tmp only inside an unshared user/mount namespace. Source and host mounts were unchanged."
+  },
+  "artifacts": [
+    {
+      "path": "neverd-build-receipt.json",
+      "sha256": "c051188254e94bf4a56ec58806cbe317061884d17caee28799ab1e98bbce06ca",
+      "bytes": 3852
+    },
+    {
+      "path": "neverd-monitor-ownership-build.log",
+      "sha256": "f6d5613665691c980d097f13fc41a03934a132b6c5760dd2326b486e41e1eeaa",
+      "bytes": 40428
+    },
+    {
+      "path": "neverd-focused-fixed.log",
+      "sha256": "18b422d35d6ce6ca220e5e1952c9da17faf348fee199d790da5a38565101aa1b",
+      "bytes": 2674
+    },
+    {
+      "path": "neverd-focused-fixed.xml",
+      "sha256": "840b74c5f906e2e97a43e05279ec2924c4f4e567dfe1c41c83d47b9b09b6bd41",
+      "bytes": 12702
+    },
+    {
+      "path": "neverd-monitor-red.log",
+      "sha256": "de405d21a7261d78600f099bfa40c1f4f6d3677df497870cef9af7948e7793c6",
+      "bytes": 2100
+    },
+    {
+      "path": "neverd-monitor-red.xml",
+      "sha256": "08a006c29d46ec5f4f926b1401c4c6d66c55f946ea55cd62cc263a81ab05f4ff",
+      "bytes": 2054
+    },
+    {
+      "path": "neverd-null-ss-red.log",
+      "sha256": "d0e966a877554b085cab67138bc1df22359f9635546e8ed260c7018931da8ddf",
+      "bytes": 28536
+    },
+    {
+      "path": "neverd-null-ss-red.xml",
+      "sha256": "8d9e432aed92ba422772be0901b75ce4ee0340ebcac227dc3a0f3faba93164ba",
+      "bytes": 29528
+    },
+    {
+      "path": "neverd-integrated.log",
+      "sha256": "5294832b95f8005b4bd1d3efd58654788e3b37fe91cdc497bc97c72c753af9e2",
+      "bytes": 485434
+    },
+    {
+      "path": "neverd-integrated.xml",
+      "sha256": "1d0953eb3f89251f0677c9e70c8aef9159705a2119f47cb62778f8238b0f455a",
+      "bytes": 1625757
+    },
+    {
+      "path": "neverd-affected-final.log",
+      "sha256": "f988cc5921fc7176b20ce04032dc27681b7f910b1b93c55b8665fbe28ea54238",
+      "bytes": 37425
+    },
+    {
+      "path": "neverd-affected-final.xml",
+      "sha256": "88a0bf9f1891c97adce4c6703569a745be85260cf39a95ca61ef1fdb82c10902",
+      "bytes": 175181
+    },
+    {
+      "path": "neverd-state-fixes.log",
+      "sha256": "7e78cd3668cd67a18b92217582fe030e75e9a2b605b3f6eb52cb779909eac0e0",
+      "bytes": 1647
+    },
+    {
+      "path": "neverd-state-fixes.xml",
+      "sha256": "ef45e9d5c1c0a1d36496540a25329ce45faa5c22772907be1c25d3261738876b",
+      "bytes": 7420
+    },
+    {
+      "path": "neverd-final-integration.log",
+      "sha256": "067eaf38eb67d3ea1db9e717d3d197e4e091d3e9c4917a8f2228e49015d29ca5",
+      "bytes": 505400
+    },
+    {
+      "path": "neverd-final-integration.xml",
+      "sha256": "1ed937e81fdf353f2c7ae365f45fed8061d5cba48a7e2fcd490ce80d346976fe",
+      "bytes": 1646017
+    },
+    {
+      "path": "neverd-capture-fixed.log",
+      "sha256": "9e0749645bacab3711c1352c555636de0ccfe92c9a4eecf2c9e78533cae5d1ad",
+      "bytes": 632
+    },
+    {
+      "path": "neverd-capture-fixed.xml",
+      "sha256": "4ab456ca730cdb8a4eb2c68b87ab5d5443afec55ac38622b740e56a6ba200da8",
+      "bytes": 2280
+    },
+    {
+      "path": "gtest-capture.trace",
+      "sha256": "5de84954a636287acea93d71d64383e392c529057cbe7dd4023270b127d2c4fd",
+      "bytes": 19092
+    },
+    {
+      "path": "private-tmp-runner.py",
+      "sha256": "520fc4af4d068dcafaa4ca227a5dda49cecb105cf9a4bf5869a7821168d74896",
+      "bytes": 399
+    },
+    {
+      "path": "capstone-tests.log",
+      "sha256": "0848884ee0de30253999ee39df643830961ac1ca9e6e15ec47d8ec89d839712c",
+      "bytes": 11191
+    },
+    {
+      "path": "capstone-tests.xml",
+      "sha256": "b7e5a43e4a7aa7d6793d38fc48e4ccca2d21e1f6fa1cad278f88466593aa6c6f",
+      "bytes": 15614
+    },
+    {
+      "path": "capstone-full-build-fixed.log",
+      "sha256": "743a22936a4d3c73fb1bcdf30c0d28433aafe3b10722e92c43b54a9c1bb54cb0",
+      "bytes": 6055
+    },
+    {
+      "path": "capstone-full-tests.log",
+      "sha256": "30f4071890bf2c27e26c2d33ee4440f94596481b39794f4bd7ba65f60ffbcbe4",
+      "bytes": 77932590
+    },
+    {
+      "path": "capstone-full-tests.xml",
+      "sha256": "946174a2ae5c84bc0f50df48125659f932ab97023b07a3014777d22cc2331068",
+      "bytes": 953772
+    },
+    {
+      "path": "capstone-x86-mc.log",
+      "sha256": "8ce67e9fd4224f209c50391dcb9fbb672851c7efe65d36fde6751dd00d418bed",
+      "bytes": 1016119
+    },
+    {
+      "path": "capabilities-tests.log",
+      "sha256": "b2a973a20743f43790b634adbbf36b26c83456bc3d3ca794096a35bb5aec3dfa",
+      "bytes": 217
+    },
+    {
+      "path": "docs-i18n.log",
+      "sha256": "891c1f2a9e40d3952b23e9e79b35ac05e77427ad91de98357bc3829b3ed7ab14",
+      "bytes": 69
+    },
+    {
+      "path": "cpu-features.c",
+      "sha256": "88bec17ef474dabdc36d2972606bdb89a4ba1be014b58324349ddf974e3bd1a1",
+      "bytes": 196
+    },
+    {
+      "path": "cpu-features.json",
+      "sha256": "f484124863af976d6d88825ca726aeaf49f5e3387342d64af734205ba11ba531",
+      "bytes": 11
+    },
+    {
+      "path": "decode-before.log",
+      "sha256": "648a2fdd62fceaf1513a930ca9a2d8c10a0abc57546e59e65810991d351afa35",
+      "bytes": 230
+    }
+  ]
+}

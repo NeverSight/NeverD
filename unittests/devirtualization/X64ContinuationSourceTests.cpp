@@ -134,6 +134,8 @@ protected:
     for (const auto &Unit : *Units) {
       EXPECT_EQ(Unit.RequiresNativeExecution, NativeBoundary)
           << Unit.Address << " " << Unit.Diagnostic;
+      const bool V9 =
+          Options.Profile == X64ContinuationProfile::FredReturnNoFaultV9;
       const bool V8 =
           Options.Profile == X64ContinuationProfile::UserInterruptNoFaultV8;
       const bool V7 =
@@ -152,7 +154,8 @@ protected:
                       X64ContinuationProfile::KernelFaultAddressNoFaultV4;
       const bool V5 =
           Options.Profile == X64ContinuationProfile::KernelReturnNoFaultV5;
-      EXPECT_EQ(Unit.StateVersion, V8   ? 8u
+      EXPECT_EQ(Unit.StateVersion, V9   ? 9u
+                                   : V8 ? 8u
                                    : V7 ? 7u
                                    : V6 ? 6u
                                    : V5 ? 5u
@@ -160,7 +163,8 @@ protected:
                                    : V3 ? 3u
                                    : V2 ? 2u
                                         : 1u);
-      EXPECT_EQ(Unit.StateBytes, V8   ? sizeof(X64ContinuationStateV8)
+      EXPECT_EQ(Unit.StateBytes, V9   ? sizeof(X64ContinuationStateV9)
+                                 : V8 ? sizeof(X64ContinuationStateV8)
                                  : V7 ? sizeof(X64ContinuationStateV7)
                                  : V6 ? sizeof(X64ContinuationStateV6)
                                  : V5 ? sizeof(X64ContinuationStateV5)
@@ -2336,6 +2340,7 @@ TEST(X64ContinuationSource, RequiresExplicitDomainAndBoundedDistinctAddresses) {
 
 #include "X64FarPointerContinuationTests.inc"
 #include "X64FastSystemContinuationTests.inc"
+#include "X64FredContinuationTests.inc"
 #include "X64SysretContinuationTests.inc"
 #include "X64UserInterruptContinuationTests.inc"
 

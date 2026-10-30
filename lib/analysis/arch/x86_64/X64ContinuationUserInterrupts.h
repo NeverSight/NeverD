@@ -103,7 +103,7 @@ public:
     W.store(offsetof(State, RFlags), Flags);
     W.write(NdVar::reg(x86reg::RSP, 8), Words[2]);
     W.store(offsetof(StateV8, UIF), UIF);
-    W.store(offsetof(StateV8, MonitorActive), k(0, 1));
+    W.invalidateMonitor();
     W.leave(Exit::UserInterruptReturn, Words[0]);
   }
 };

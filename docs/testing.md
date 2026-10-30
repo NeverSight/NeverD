@@ -9383,6 +9383,27 @@ qualification record is
 The local processor reports no UINTR support: these portable/compiler checks
 do not qualify physical UINTR delivery, CET, RTM or fault behavior.
 
+The V9 FRED fixtures exercise all four old/requested stack levels, saved event
+bits, incoming TF/STI/NMI state, every saved-flags bit, both canonical widths
+and noncanonical restored stacks. ERETU tests every standard selector pair
+(including wraparound), GDT/LDT and conforming/nonconforming descriptors, exact
+accessed-bit writes and aliasing with the captured augmented SS. Guard pages
+prove the skipped error-code word and adjacent event-information area are not
+read. Complete state/RAM comparisons run through both C routes at O0/O2 under
+ASan/UBSan. SDK/CLI tests stop at the return even when its target is selected
+and retain pending-event ownership. Earlier profiles require native execution;
+V9 does not inherit their FRED-disabled instruction domain. The ERETU monitor
+invalidation regression failed before the owner was corrected. See the
+[FRED qualification record](evidence/x86-fred-continuation-2026-10-30.json).
+These are portable semantic and compiler checks, not physical FRED execution.
+
+`LegacyReturnsInvalidateTheUserMonitor` checks IRET, both SYSRET/SYSEXIT
+widths, RETF with and without cleanup, SYSENTER and an ordinary NOP in V8.
+It varies returned CPL, UIF, monitor validity and rejected entry state; only
+the architecturally specified returns invalidate the monitor. The FRED null-SS
+regression distinguishes nonstandard descriptor returns from standard selector
+wraparound, where a null-looking selector is made usable without a table read.
+
 The native speculation and descriptor fixtures compile both source routes at
 O0/O2 into freestanding guests and execute them at CPL0 using Linux x64 KVM.
 They check real SPEC_CTRL readback, PRED_CMD writes, repeated writes, native

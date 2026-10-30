@@ -899,6 +899,8 @@ void X86Lifter::liftImpl(const cs_insn *Insn, std::vector<LowOp> &Ops,
   switch (Insn->id) {
   case X86_INS_RSM:
   case X86_INS_UIRET:
+  case X86_INS_ERETS:
+  case X86_INS_ERETU:
     throw UnliftedInstruction(Insn->address, Insn->mnemonic, Insn->op_str);
   default:
     break;
@@ -1434,6 +1436,8 @@ bool X86Lifter::isFunctionTerminator(const cs_insn *I) {
   case X86_INS_IRETD:
   case X86_INS_IRETQ:
   case X86_INS_UIRET:
+  case X86_INS_ERETS:
+  case X86_INS_ERETU:
   case X86_INS_SYSRET:
   case X86_INS_SYSRETQ:
   case X86_INS_SYSEXIT:
