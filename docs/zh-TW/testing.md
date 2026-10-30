@@ -2234,3 +2234,5 @@ LLVM C 的合成堆疊槽保留完整的 128 位元整數寫入，再由執行�
 `InterpreterMachineRegionSourceTest.ArchitecturalChoiceSource*` 在 ASan/UBSan 下執行兩條 C 路線的 O0/O2 輸出。壓縮回歸比較分支兩側失敗及迴圈後續訪問後的完整狀態、記憶體與記錄。48 條連續指令檢查早期、中間及末尾記錄的成功、耗盡與不匹配。獨立的 3300 條指令案例超過舊封裝的區塊容量，只檢查兩條 C 匯出，不編譯產生的原始碼。執行 `NeverDInterpreterMachineStateTests`；這些自有測試資料不構成任意原生函式的認證。
 
 `MedMutableSource.SharedRejectionChainsPreserveEveryCommittedPrefix` 檢查包含 2048 級條件分支和兩個共用失敗出口的鏈，同時涵蓋正向與反轉的區塊排列。兩個 C 後端均在 O0/O2 與 UBSan 下執行，比對前段、中段、末段失敗和成功路徑的回傳值及已提交客體記憶體前綴。
+
+`NeverDX86UndefinedEffectsTests` 的 `X86ArithmeticUndefinedAudit` 檢查傳統暫存器 PADDB/W/D/Q、PSUBB/W/D/Q 的精確編碼、各通道獨立回繞、旗標保持和完整 512 位元暫存器組。標準 x64 立即數 IMUL 綁定符號延伸的 imm8/imm32 與四個獨立未定義旗標。記憶體、MMX/VEX 及位元組與解碼詳情不一致的形式仍需各自的准入證明。`ArchitecturalChoiceSourcePackedArithmeticAndImmediateProducts` 在 O0/O2、ASan/UBSan 下執行兩條 C 路徑，檢查記錄耗盡或不符時整條指令尚未提交目標與游標。
