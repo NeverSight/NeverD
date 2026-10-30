@@ -31,6 +31,11 @@ x87 call-graph suites after changing this shared proof path.
 at relocation and malformed-field boundaries. GOF2 performance qualification
 requires a separate whole-image static lift with elapsed time, peak RSS and
 output completeness recorded; focused test success does not establish it.
+`RegistrationCalleeRecursion.FullBudgetRefusalKeepsTheExactAllowance` uses an
+authored integer body to exhaust the real stack-proof budget. It checks exact
+work on repeated ordinary and independent queries, shorter allowances and
+another image with the same entry address. Supplemental signature-reader
+changes also require the pipeline-outcome, call-ABI and x87 call-graph suites.
 
 `NeverDSymSimplifyGuardTests` checks that invalid LLVM, invalid options and
 incomplete exception contracts retain their diagnostics without modifying the

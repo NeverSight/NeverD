@@ -1170,9 +1170,13 @@ freshStackPopAnswer(const BinaryImage &Image, va_t Target, size_t &Work,
   const unsigned Level = x86SEHStateAnalysisLevel();
   if (Memo)
     if (const auto Known = Memo->find(Image, Target, Level)) {
-      if (!registration_abi::chargeCalleeWork(Work, Known->Work))
-        return {};
-      return *Known;
+      // A full-budget refusal is replayed only from the identical starting
+      // allowance. A smaller allowance still runs its own bounded query.
+      if (Known->Work < limits::kMaxRegistrationEHStateWork || Work == 0) {
+        if (!registration_abi::chargeCalleeWork(Work, Known->Work))
+          return {};
+        return *Known;
+      }
     }
   const size_t Before = Work;
   const auto Proof =
@@ -1181,8 +1185,12 @@ freshStackPopAnswer(const BinaryImage &Image, va_t Target, size_t &Work,
       Proof ? std::optional<uint32_t>{Proof->StackPopBytes} : std::nullopt,
       Work - Before, Proof && !Proof->RequiredImports.empty()};
   // A failed charge leaves Work at the limit, so a smaller total proves the
-  // computation never ran out.
-  if (Memo && Work < limits::kMaxRegistrationEHStateWork)
+  // computation never ran out. A full-allowance refusal can also be kept:
+  // replay supplies no stack fact and still consumes that entire allowance.
+  // Never retain a partial-allowance failure for a later full query.
+  if (Memo && (Work < limits::kMaxRegistrationEHStateWork ||
+               (Before == 0 && Work == limits::kMaxRegistrationEHStateWork &&
+                !Answer.Pop)))
     Memo->record(Image, Target, Level, Answer);
   return Answer;
 }

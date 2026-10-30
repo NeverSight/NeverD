@@ -1113,9 +1113,12 @@ remain the same.
 PE32 returning-stack queries also share a run-local memo across ordinary
 callers and independent jump-table queries. Each answer retains its import
 dependencies and replays the full original proof cost; an import-dependent
-answer cannot authorize an independent call. Incomplete budget attempts are
-not recorded. Nested registration callee indexes copy the caller's
-unchanged-image relocation inventory, sharing its runtime-pointer-role
+answer cannot authorize an independent call. A refusal that consumed the full
+allowance can replay only for another query starting with that allowance.
+Exhausted attempts with a smaller starting allowance are not recorded and
+cannot replay that refusal. Replaying a refusal supplies no stack fact and
+charges the entire allowance. Nested registration callee indexes copy the
+caller's unchanged-image relocation inventory, sharing its runtime-pointer-role
 computation while keeping callee contracts and work budgets separate. An
 index from another image is ignored. A change of work account, SEH analysis
 level or C++ proof ancestry still starts a fresh proof; it retains only this
@@ -1134,6 +1137,10 @@ fixup inventory within that scope, under the same record ceiling. Every new
 reader still charges the original construction and sorting work before it can
 borrow this inventory. It retains no proof answer or caller budget, and only
 a completely built inventory is published.
+Supplemental callee-signature recovery scopes the same immutable inventories
+and returning-stack memo to its reader. Its omitted-body and warmup paths
+therefore share the ordinary LowIR worker's reuse rules; these records retire
+when that reader ends, independently of any longer-lived signature memo.
 The physical C++ prologue reader delays index construction until its bounded
 raw shape check finds a candidate. Nonmatching entries pay only for those raw
 reads. A candidate still pays the index cost and must pass every immutable

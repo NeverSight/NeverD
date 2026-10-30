@@ -296,3 +296,85 @@ TEST(RegistrationCalleeRecursion, IndependentStackMemoKeepsImportsAndBudgets) {
       EXPECT_TRUE(Memo.find(Image, Target, 0));
     }
 }
+
+namespace {
+BinaryImage makeScalarStackBudgetImage(size_t Instructions) {
+  BinaryImage Image;
+  Image.Arch = Arch::X86;
+  Image.Bits = Bitness::Bits32;
+  Image.Format = BinaryFormat::COFF;
+  Image.Base = 0x400000;
+  Image.Entry = 0x401000;
+  Segment Text;
+  Text.Name = ".text";
+  Text.VA = Image.Entry;
+  Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  // Repeated ADDs preserve ESP, but their complete integer-frame proof must
+  // still charge every operation. No missing bytes or unsupported opcodes
+  // supply the refusal at the full work ceiling.
+  for (size_t I = 0; I < Instructions; ++I)
+    Text.Data.insert(Text.Data.end(), {0x01, 0xd8}); // add eax, ebx
+  Text.Data.insert(Text.Data.end(), {0xc2, 4, 0});   // ret 4
+  Text.Size = Text.FileSz = Text.Data.size();
+  Section Code;
+  Code.Name = Text.Name;
+  Code.VA = Text.VA;
+  Code.Size = Code.FileSz = Text.Size;
+  Code.Flags = Text.Flags;
+  Image.Symbols.push_back(Symbol::makeFunc(Image.Entry, Text.Size));
+  Image.Sections.push_back(Code);
+  Image.Segments.push_back(std::move(Text));
+  return Image;
+}
+} // namespace
+
+TEST(RegistrationCalleeRecursion, FullBudgetRefusalKeepsTheExactAllowance) {
+  const auto Image = makeScalarStackBudgetImage(32768);
+  const va_t Target = Image.Entry;
+  constexpr size_t Limit = limits::kMaxRegistrationEHStateWork;
+  size_t FreshWork = 0;
+  ASSERT_FALSE(getCheckedX86CalleeStackPop(Image, Target, &FreshWork));
+  ASSERT_EQ(FreshWork, Limit);
+
+  RegistrationStackPopMemo Memo(Image);
+  {
+    RegistrationStackPopMemoScope Scope(Memo);
+    size_t Work = 0;
+    EXPECT_FALSE(getCheckedX86CalleeStackPop(Image, Target, &Work));
+    EXPECT_EQ(Work, FreshWork);
+    const auto Known = Memo.find(Image, Target, 0);
+    ASSERT_TRUE(Known);
+    EXPECT_FALSE(Known->Pop);
+    EXPECT_EQ(Known->Work, Limit);
+    EXPECT_FALSE(Known->HasImportDependencies);
+
+    Work = 0;
+    EXPECT_FALSE(getCheckedX86CalleeStackPop(Image, Target, &Work));
+    EXPECT_EQ(Work, FreshWork);
+    // An independent caller embeds its remaining allowance in the callee's
+    // account. Its own prior work must be retained when the refusal replays.
+    Work = 19;
+    EXPECT_FALSE(getCheckedX86IndependentCalleeStackPop(Image, Target, Work,
+                                                        Limit + 19));
+    EXPECT_EQ(Work, Limit + 19);
+
+    // Identical addresses in another image still get that image's answer.
+    const auto Small = makeScalarStackBudgetImage(1);
+    Work = 0;
+    EXPECT_EQ(getCheckedX86CalleeStackPop(Small, Target, &Work), 4u);
+    EXPECT_LT(Work, Limit);
+    EXPECT_FALSE(Memo.find(Small, Target, 0));
+  }
+
+  // A refusal at the full allowance cannot replace a query that began with
+  // less. Compare both the result and the exact charged work with fresh runs.
+  for (size_t Before : {size_t{1}, Limit - 1}) {
+    SCOPED_TRACE(Before);
+    FreshWork = Before;
+    const auto Fresh = getCheckedX86CalleeStackPop(Image, Target, &FreshWork);
+    RegistrationStackPopMemoScope Scope(Memo);
+    size_t Work = Before;
+    EXPECT_EQ(getCheckedX86CalleeStackPop(Image, Target, &Work), Fresh);
+    EXPECT_EQ(Work, FreshWork);
+  }
+}

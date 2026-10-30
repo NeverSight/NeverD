@@ -20,6 +20,7 @@
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/ir/low/ImportCallee.h"
+#include "neverd/ir/low/RegistrationABI.h"
 #include "neverd/ir/med/IndirectCallSlot.h"
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/ir/med/LowToMedError.h"
@@ -30,6 +31,7 @@
 #include "neverd/libc/LibCNames.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/ExecutableCodeOwnerIndex.h"
+#include "neverd/loader/ReadOnlyBytesScope.h"
 #include "neverd/pipeline/Pipeline.h"
 
 #include <algorithm>
@@ -301,7 +303,8 @@ class CalleeReader {
 public:
   /// \p Result's memo, where it has one, has adopted \p Img.
   CalleeReader(const BinaryImage &Img, const PipelineResult &Result)
-      : Img(Img), Result(Result), Memo(Result.CalleeSignatureMemo.get()) {
+      : Img(Img), Result(Result), Memo(Result.CalleeSignatureMemo.get()),
+        ReadScope(Img), StackPops(Img), StackPopScope(StackPops) {
     if (!Memo)
       OwnEntries = calleeLiftEntries(Img);
     Entries = Memo ? &Memo->functionEntries() : &OwnEntries;
@@ -439,6 +442,12 @@ private:
   const BinaryImage &Img;
   const PipelineResult &Result;
   OmittedCalleeMemo *Memo;
+  // Every supplemental lift reads this unchanged image. Keep the same
+  // immutable fixup inventory and independently charged stack answers across
+  // its callees, as the ordinary LowIR worker does across its functions.
+  ReadOnlyBytesScope ReadScope;
+  RegistrationStackPopMemo StackPops;
+  RegistrationStackPopMemoScope StackPopScope;
   std::set<va_t> OwnEntries;
   const std::set<va_t> *Entries = nullptr;
   Decoder Dec;

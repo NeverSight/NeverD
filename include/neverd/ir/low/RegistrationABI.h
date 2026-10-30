@@ -94,9 +94,10 @@ std::optional<uint32_t> getCheckedX86IndependentIndexedCallStackPop(
 /// dependence and the work its computation charged, per callee and
 /// x86SEHStateAnalysisLevel. A repeated query replays the answer and charges
 /// the same work, so both the answer and the caller's cumulative budget,
-/// including its exhaustion, are those of a fresh computation. Only
-/// computations that stayed within the budget are kept. The image must not
-/// change while a scope uses the memo.
+/// including its exhaustion, are those of a fresh computation. Completed
+/// computations and full-allowance refusals are kept; the latter replay only
+/// for the same starting allowance. The image must not change while a scope
+/// uses the memo.
 class RegistrationStackPopMemo {
 public:
   struct Answer {
