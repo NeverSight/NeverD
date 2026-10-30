@@ -15152,3 +15152,5 @@ separate. LLVM C checks that the retained inline assembly and original image
 still match before printing the bridge; body fragments require a complete
 native function. Unknown ordinary calls and physical interrupt/system entry
 return proofs retain their existing admission rules.
+
+LLVMC indexes LLVM block order once per immutable function projection. Exclusive skip/else-if layout checks reuse that index instead of scanning the function per candidate. Selecting another function rebuilds the index; branch semantics and source limits are unchanged.

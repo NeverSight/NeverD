@@ -2096,3 +2096,5 @@ Le constructeur OR partagé élimine un opérande XOR si la constante accumulée
 ## Stockage image parcouru par un curseur
 
 HighC suit les affectations, copies et additions/soustractions de largeur pointeur depuis les opérandes mémoire ordinaires jusqu’aux constantes d’adresse image. Les retours de boucle conservent l’objet complet délimité par le propriétaire symbole/section existant et son résidu d’alignement. Ce parcours local à la fonction ne substitue pas les valeurs, ne prouve pas la validité des accès et ne traverse ni les pointeurs chargés ni les conversions réductrices. Les accès indexés directs bornés gardent leur preuve d’étendue.
+
+LLVMC indexe une seule fois l’ordre des blocs LLVM pour chaque projection de fonction immuable. Les contrôles de disposition des sauts exclusifs et des else-if réutilisent cet index au lieu de parcourir la fonction pour chaque candidat. Un changement de fonction reconstruit l’index ; la sémantique des branches et les limites du source restent identiques.

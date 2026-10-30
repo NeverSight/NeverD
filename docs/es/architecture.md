@@ -2089,3 +2089,5 @@ El constructor OR compartido elimina un operando XOR cuando la constante acumula
 ## Almacenamiento de imagen recorrido por cursores
 
 HighC sigue asignaciones, copias y sumas/restas del ancho del puntero desde operandos de memoria ordinarios hasta constantes de dirección de imagen. Los retornos del bucle conservan el objeto completo delimitado por el propietario de símbolo/sección existente y su residuo de alineación. Este recorrido local a la función no sustituye valores de punteros, no demuestra la validez de los accesos y no atraviesa punteros cargados ni conversiones que reducen el ancho. Los accesos indexados directos acotados conservan su prueba de extensión.
+
+LLVMC indexa el orden de los bloques LLVM una vez por proyección de función inmutable. Las comprobaciones de disposición de saltos exclusivos y else-if reutilizan el índice sin recorrer toda la función por candidato. El índice se reconstruye al cambiar de función; la semántica de las ramas y los límites del código fuente no cambian.

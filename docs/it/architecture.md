@@ -2086,3 +2086,5 @@ Il costruttore OR condiviso elimina un operando XOR quando la costante accumulat
 ## Memoria dell’immagine raggiunta da cursori avanzanti
 
 HighC segue assegnazioni, copie e somme/sottrazioni della larghezza del puntatore dagli operandi di memoria ordinari fino alle costanti di indirizzo dell’immagine. I ritorni dei cicli conservano l’intero oggetto delimitato dal proprietario simbolo/sezione esistente e il suo residuo di allineamento. Questa analisi locale alla funzione non sostituisce i valori dei puntatori, non prova la validità degli accessi e non attraversa puntatori caricati o conversioni che restringono la larghezza. Gli accessi indicizzati diretti limitati conservano la prova dell’estensione.
+
+LLVMC indicizza una volta l’ordine dei blocchi LLVM per ogni proiezione di funzione immutabile. I controlli di disposizione dei salti esclusivi e degli else-if riutilizzano l’indice senza percorrere la funzione per ogni candidato. Il cambio di funzione ricostruisce l’indice; la semantica dei rami e i limiti del sorgente restano invariati.

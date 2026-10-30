@@ -2563,8 +2563,12 @@ void LLVMCWriter::setupFunction(llvm::Function &Fn) {
   ScopedScalarNames.clear();
   Dominators.recalculate(Fn);
   UnconditionalCycleBlocks.clear();
+  BlockLayout.clear();
+  BlockLayout.reserve(Fn.size());
+  size_t BlockPosition = 0;
   llvm::SmallPtrSet<const llvm::BasicBlock *, 32> Completed;
   for (const auto &Block : Fn) {
+    BlockLayout[&Block] = BlockPosition++;
     llvm::SmallVector<const llvm::BasicBlock *, 8> Path;
     llvm::SmallPtrSet<const llvm::BasicBlock *, 8> Active;
     const llvm::BasicBlock *Current = &Block;
@@ -6878,18 +6882,11 @@ bool LLVMCWriter::exclusiveSkipElseIf(
   if (!FromBr || FromBr->getSuccessor(0) == FromBr->getSuccessor(1))
     return false;
 
-  auto After = [](const llvm::BasicBlock *Earlier,
-                  const llvm::BasicBlock *Later) {
+  auto After = [&](const llvm::BasicBlock *Earlier,
+                   const llvm::BasicBlock *Later) {
     if (!Earlier || !Later || Earlier->getParent() != Later->getParent())
       return false;
-    bool Seen = false;
-    for (const llvm::BasicBlock &BB : *Earlier->getParent()) {
-      if (&BB == Earlier)
-        Seen = true;
-      else if (Seen && &BB == Later)
-        return true;
-    }
-    return false;
+    return BlockLayout.lookup(Earlier) < BlockLayout.lookup(Later);
   };
   auto BadBlock = [&](const llvm::BasicBlock *BB) {
     if (!BB || BB->isLandingPad() || isCatchPadBlock(*BB) || hasCleanupPad(*BB))

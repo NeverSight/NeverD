@@ -2090,3 +2090,5 @@ Der gemeinsame OR-Konstruktor entfernt einen XOR-Operanden, wenn die angesammelt
 ## Bildspeicher über fortschreitende Zeiger
 
 HighC verfolgt Zuweisungen, Kopien sowie Addition/Subtraktion in Zeigerbreite von gewöhnlichen Speicheroperanden bis zu Bildadresskonstanten. Schleifenrückkanten erhalten das vollständige Objekt innerhalb der bestehenden Symbol-/Abschnittsgrenzen und dessen Ausrichtungsrest. Diese funktionslokale Analyse ersetzt keine Zeigerwerte, beweist keine gültige Dereferenzierung und verfolgt weder geladene Zeiger noch verengende Konvertierungen. Direkt indizierte Zugriffe mit bewiesener Grenze behalten ihren bisherigen Umfangsnachweis.
+
+LLVMC indiziert die LLVM-Blockreihenfolge einmal je unveränderlicher Funktionsprojektion. Layoutprüfungen für exklusive Sprünge und else-if verwenden diesen Index statt eines Funktionsdurchlaufs pro Kandidat. Beim Funktionswechsel wird der Index neu aufgebaut; Verzweigungssemantik und Quelltextgrenzen bleiben gleich.

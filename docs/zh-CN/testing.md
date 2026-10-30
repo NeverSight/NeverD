@@ -2251,3 +2251,5 @@ LLVM C 的合成栈槽保留完整的 128 位整数写入，再由运行时选�
 `MedMutableSource.AlignmentChecks*` 在两条 C 路径的 O0/O2 下执行对齐输入与未激活条件，要求激活条件下的未对齐输入触发陷阱，并拒绝错误的宽度、对齐值、输出和地址空间。
 
 `InterpreterMachineRegionSourceTest.ArchitecturalChoiceSource*` 在 ASan/UBSan 下执行两条 C 路线的 O0/O2 输出。压缩回归比较分支两侧失败和循环后续访问后的完整状态、内存及记录。48 条连续指令检查早期、中间和末尾记录处的成功、耗尽及不匹配。独立的 3300 条指令用例超过旧封装的块数容量，只检查两条 C 导出，不编译生成的源码。运行 `NeverDInterpreterMachineStateTests`；这些自有夹具不构成任意原生函数的认证。
+
+`MedMutableSource.SharedRejectionChainsPreserveEveryCommittedPrefix` 检查包含 2048 级条件分支和两个共享失败出口的链，同时覆盖正向与反转的块排列。两个 C 后端均在 O0/O2 与 UBSan 下执行，对照前段、中段、末段失败和成功路径的返回值及已提交客户内存前缀。
