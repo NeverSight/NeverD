@@ -142,6 +142,14 @@
       "skipped": 0,
       "log": "neverd-capture-fixed.log",
       "junit": "neverd-capture-fixed.xml"
+    },
+    {
+      "name": "Merged NeverD continuation and instruction suites",
+      "passed": 168,
+      "failed": 0,
+      "skipped": 0,
+      "log": "neverd-merged-tests.log",
+      "junit": "neverd-merged-tests.xml"
     }
   ],
   "regressions_fixed": [
@@ -333,6 +341,35 @@
       "path": "decode-before.log",
       "sha256": "648a2fdd62fceaf1513a930ca9a2d8c10a0abc57546e59e65810991d351afa35",
       "bytes": 230
+    },
+    {
+      "path": "neverd-merged-build.log",
+      "sha256": "183f8cf35c29ad541c58f44e31616e54409858e9cf52e38f96d86f7daaf51617",
+      "bytes": 46851
+    },
+    {
+      "path": "neverd-merged-build-receipt.json",
+      "sha256": "c4274cc0fc606a47783c53a7babde31e088b89f722849d799ec67e73ca5f392d",
+      "bytes": 3603
+    },
+    {
+      "path": "neverd-merged-tests.log",
+      "sha256": "6a971964294c90e1b7280f24e8144af82e4e6137b99b0c9ac7e63bbb0ac88759",
+      "bytes": 37642
+    },
+    {
+      "path": "neverd-merged-tests.xml",
+      "sha256": "81a15c84f701b59bb5ada76d5387004047effbfbaac71a637549487e97585c3f",
+      "bytes": 176238
     }
-  ]
+  ],
+  "merged_validation": {
+    "neverd_head": "4e0f21b3b42b789892e6b400cec4844106da4425",
+    "dev_base": "67cfb212c2ab071b03f13270e3a583f6cb6d0ab7",
+    "passed": 168,
+    "failed": 0,
+    "skipped": 0,
+    "labels": 4,
+    "scope": "All continuation source/export, nonlocal-control and system-state tests after integrating the current dev binary-diff changes."
+  }
 }
