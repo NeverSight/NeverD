@@ -6,6 +6,17 @@
 
 [← Documentation Index](README.md)
 
+`SourceStackSpills.StackParametersTrackEntryBytesAcrossOverwrites` and
+`StackParameterOverwritesMeetAcrossEveryPath` distinguish incoming stack bytes
+from later slot contents. They retain reads before writes, surviving partial
+bytes, missing branch writes, disconnected cycles and exhausted work.
+`Win64CallContract.OverwrittenStackArgumentDoesNotDemandItsEntryBytes` executes
+both C routes at O0/O2, with selected and omitted callees and pipeline
+optimization on/off. Native x64 code varies the overwritten input while an
+independent seventh stack argument and pointer read remain observable. The
+omitted-callee case also checks that unprototyped wide immediates keep their
+full C carrier rather than relying on default int promotion.
+
 `X64ContinuationIntegerTest` in `NeverDX64ContinuationSourceTests` compares
 whole machine state and memory with original native vector, 64-bit multiply and
 atomic instructions through both C routes at O0/O2 with ASan/UBSan. The matching

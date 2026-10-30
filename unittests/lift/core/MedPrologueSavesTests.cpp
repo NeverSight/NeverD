@@ -1076,6 +1076,262 @@ TEST(SourceStackSpills, StackParameterHolesKeepOriginalReadsAndEscapes) {
   }
 }
 
+TEST(SourceStackSpills, StackParametersTrackEntryBytesAcrossOverwrites) {
+  enum Case {
+    FullThenRead,
+    PartialThenFullRead,
+    PartialThenPartialRead,
+    ReadThenWrite,
+    UnknownReadBefore,
+    UnknownReadAfter,
+    CallBefore,
+    CallAfter,
+    SplitWrites,
+    IncompleteSplit,
+    AliasedWrite,
+    OriginalParameterUse,
+    ExhaustedWork,
+    ExceptionalObserver,
+    OrderedWrite,
+    ForeignAddressSpace,
+    TruncatedAddress,
+    MissingEdge,
+    DisconnectedCycle
+  };
+  for (unsigned Mode = FullThenRead; Mode <= DisconnectedCycle; ++Mode) {
+    SCOPED_TRACE(Mode);
+    MedFunc Func;
+    Func.Entry = 0x1000;
+    Func.CC = CallingConv::Win64;
+    Func.Params.resize(5);
+    auto &Parameter = Func.Params[4];
+    Parameter.Kind = MedVar::Param;
+    Parameter.Id = 4;
+    Parameter.RegOff = kNoParamReg;
+    Parameter.Size = 8;
+    Parameter.TheArch = Arch::X64;
+    MedBlock Source;
+    Source.Id = 0;
+    Source.StartAddr = Func.Entry;
+    Source.Ops = {op(NdOp::RETURN, none(), {MedVar::makeConst(7, 8)})};
+    if (Mode == OriginalParameterUse)
+      Source.Ops[0].Inputs[0] = Parameter;
+    Func.Blocks.push_back(std::move(Source));
+    if (Mode == ExceptionalObserver) {
+      Func.ExceptionMetadata.emplace();
+      Func.ExceptionMetadata->Personality = ExceptionPersonality::Unknown;
+    }
+    const auto SP = NdVar::reg(x86reg::RSP, 8);
+    const auto AX = NdVar::reg(x86reg::RAX, 8);
+    const auto CX = NdVar::reg(x86reg::RCX, 8);
+    const auto Address = NdVar::tmp(0x10000, 8);
+    LowBlock Block;
+    Block.Id = 0;
+    Block.StartAddr = Func.Entry;
+    va_t PC = Func.Entry;
+    const auto Add = [&](NdOp Opcode, NdVar Output,
+                         std::initializer_list<NdVar> Inputs) {
+      LowOp Op;
+      Op.Addr = PC;
+      Op.Seq = Block.Ops.empty() || Block.Ops.back().Addr != PC
+                   ? 0
+                   : Block.Ops.back().Seq + 1;
+      Op.Opcode = Opcode;
+      Op.Output = Output;
+      for (const auto &Input : Inputs)
+        Op.addInput(Input);
+      Block.Ops.push_back(Op);
+    };
+    const auto Slot = [&](int64_t Offset = 40) {
+      Add(NdOp::INT_ADD, Address, {SP, NdVar::cst(Offset, 8)});
+    };
+    const auto UnknownRead = [&] {
+      Add(NdOp::LOAD, AX, {CX});
+      ++PC;
+    };
+    const auto Call = [&] {
+      Add(NdOp::CALL, AX, {NdVar::cst(0x3000, 8)});
+      ++PC;
+    };
+    Slot();
+    if (Mode == ReadThenWrite) {
+      Add(NdOp::LOAD, AX, {Address});
+      ++PC;
+      Slot();
+    }
+    if (Mode == UnknownReadBefore) {
+      UnknownRead();
+      Slot();
+    }
+    if (Mode == CallBefore) {
+      Call();
+      Slot();
+    }
+    const bool Partial = Mode == PartialThenFullRead ||
+                         Mode == PartialThenPartialRead ||
+                         Mode == SplitWrites || Mode == IncompleteSplit;
+    if (Mode == AliasedWrite)
+      Add(NdOp::COPY, CX, {Address});
+    if (Mode == TruncatedAddress)
+      Add(NdOp::COPY, NdVar::tmp(Address.Offset, 4), {NdVar::scalar(0, 4)});
+    Add(NdOp::STORE, {},
+        {Mode == AliasedWrite ? CX : Address,
+         NdVar::scalar(7, Partial ? 4 : 8)});
+    if (Mode == OrderedWrite)
+      Block.Ops.back().MemoryOrdering = NdMemoryOrdering::Release;
+    if (Mode == ForeignAddressSpace)
+      Block.Ops.back().MemoryAddressSpace = NdMemoryAddressSpace::X86GS;
+    ++PC;
+    if (Mode == SplitWrites || Mode == IncompleteSplit) {
+      Slot(44);
+      Add(NdOp::STORE, {},
+          {Address, NdVar::scalar(9, Mode == SplitWrites ? 4 : 2)});
+      ++PC;
+    }
+    if (Mode == UnknownReadAfter || Mode == DisconnectedCycle)
+      UnknownRead();
+    if (Mode == CallAfter)
+      Call();
+    Slot();
+    Add(NdOp::LOAD,
+        NdVar::reg(x86reg::RAX, Mode == PartialThenPartialRead ? 4 : 8),
+        {Address});
+    ++PC;
+    if (Mode == AliasedWrite) {
+      Add(NdOp::COPY, CX, {NdVar::scalar(0, 8)});
+      ++PC;
+    }
+    Add(NdOp::RETURN, {}, {AX});
+    Block.EndAddr = PC + 1;
+    if (Mode == MissingEdge)
+      Block.Succs = {1};
+    std::vector<LowBlock> Original{Block};
+    if (Mode == DisconnectedCycle) {
+      LowBlock Other;
+      Other.Id = 1;
+      Other.StartAddr = 0x1100;
+      Other.EndAddr = 0x1101;
+      Other.Preds = Other.Succs = {1};
+      LowOp Branch;
+      Branch.Addr = Other.StartAddr;
+      Branch.Opcode = NdOp::BRANCH;
+      Branch.addInput(NdVar::cst(Other.StartAddr, 8));
+      Other.Ops.push_back(Branch);
+      Original.push_back(std::move(Other));
+    }
+    size_t Budget = Mode == ExhaustedWork ? 1 : 4096;
+    const bool Unread = Mode == FullThenRead ||
+                        Mode == PartialThenPartialRead ||
+                        Mode == UnknownReadAfter || Mode == CallAfter ||
+                        Mode == SplitWrites || Mode == AliasedWrite;
+    EXPECT_EQ(unobservedSourceStackParameters(Func, Original, {}, Budget),
+              Unread ? std::set<unsigned>{4} : std::set<unsigned>{});
+  }
+}
+
+TEST(SourceStackSpills, StackParameterOverwritesMeetAcrossEveryPath) {
+  for (unsigned Mode = 0; Mode < 9; ++Mode)
+    for (bool Reversed : {false, true}) {
+      SCOPED_TRACE(Mode);
+      SCOPED_TRACE(Reversed);
+      MedFunc Func;
+      Func.Entry = 0x1000;
+      Func.CC = CallingConv::Win64;
+      Func.Params.resize(5);
+      auto &Parameter = Func.Params[4];
+      Parameter.Kind = MedVar::Param;
+      Parameter.Id = 4;
+      Parameter.RegOff = kNoParamReg;
+      Parameter.Size = 8;
+      Parameter.TheArch = Arch::X64;
+      MedBlock Source;
+      Source.Id = 0;
+      Source.StartAddr = Func.Entry;
+      Source.Ops = {op(NdOp::RETURN, none(), {MedVar::makeConst(7, 8)})};
+      Func.Blocks.push_back(std::move(Source));
+      const auto SP = NdVar::reg(x86reg::RSP, 8);
+      const auto AX = NdVar::reg(x86reg::RAX, 8);
+      const auto Address = NdVar::tmp(0x10000, 8);
+      const auto Low = [](va_t PC, NdOp Opcode, NdVar Output,
+                          std::initializer_list<NdVar> Inputs) {
+        LowOp Op;
+        Op.Addr = PC;
+        Op.Opcode = Opcode;
+        Op.Output = Output;
+        for (const auto &Input : Inputs)
+          Op.addInput(Input);
+        return Op;
+      };
+      std::vector<LowBlock> Blocks(4);
+      for (unsigned I = 0; I < Blocks.size(); ++I) {
+        Blocks[I].Id = I;
+        Blocks[I].StartAddr = 0x1000 + I * 16;
+        Blocks[I].EndAddr = Blocks[I].StartAddr + 16;
+      }
+      Blocks[0].Succs = {1, 2};
+      Blocks[0].Ops = {Low(0x1000, NdOp::COND_BR, {},
+                           {NdVar::cst(0x1020, 8), NdVar::reg(x86reg::ZF, 1)})};
+      for (unsigned I : {1u, 2u}) {
+        auto &B = Blocks[I];
+        B.Preds = {0};
+        B.Succs = {3};
+        const bool Half = Mode == 1 ? I == 2 : Mode == 2 || Mode == 3;
+        const unsigned Offset = Mode == 3 && I == 2 ? 44 : 40;
+        B.Ops = {Low(B.StartAddr, NdOp::INT_ADD, Address,
+                     {SP, NdVar::cst(Offset, 8)}),
+                 Low(B.StartAddr, NdOp::STORE, {},
+                     {Address, NdVar::scalar(7, Half ? 4 : 8)})};
+        if (Mode == 4 && I == 2)
+          B.Ops.insert(B.Ops.begin() + 1,
+                       Low(B.StartAddr, NdOp::LOAD, AX, {Address}));
+        if (Mode == 5 || Mode == 6) {
+          if (I == 1)
+            B.Ops.push_back(Low(B.StartAddr + 4, NdOp::LOAD, AX,
+                                {NdVar::reg(x86reg::RCX, 8)}));
+          else if (Mode == 6)
+            B.Ops.erase(B.Ops.begin() + 1);
+        }
+        B.Ops.push_back(
+            Low(B.StartAddr + 8, NdOp::BRANCH, {}, {NdVar::cst(0x1030, 8)}));
+        if (Mode == 7)
+          B.Ops.erase(B.Ops.begin() + 1);
+      }
+      Blocks[3].Preds = {1, 2};
+      Blocks[3].Ops = {
+          Low(0x1030, NdOp::INT_ADD, Address, {SP, NdVar::cst(40, 8)}),
+          Low(0x1030, NdOp::LOAD,
+              NdVar::reg(x86reg::RAX, Mode == 2 || Mode == 3 ? 4 : 8),
+              {Address}),
+          Low(0x1038, NdOp::RETURN, {}, {AX})};
+      if (Mode >= 7) {
+        // A backedge overwrite cannot erase the first iteration's read.
+        Blocks[3].Preds.push_back(3);
+        Blocks[3].Succs = {3, 4};
+        Blocks[3].Ops.pop_back();
+        Blocks[3].Ops.push_back(
+            Low(0x1034, NdOp::INT_ADD, Address, {SP, NdVar::cst(40, 8)}));
+        Blocks[3].Ops.push_back(
+            Low(0x1034, NdOp::STORE, {}, {Address, NdVar::scalar(7, 8)}));
+        Blocks[3].Ops.push_back(
+            Low(0x1038, NdOp::COND_BR, {},
+                {NdVar::cst(0x1030, 8), NdVar::reg(x86reg::ZF, 1)}));
+        auto &Exit = Blocks.emplace_back();
+        Exit.Id = 4;
+        Exit.StartAddr = 0x1040;
+        Exit.EndAddr = 0x1041;
+        Exit.Preds = {3};
+        Exit.Ops = {Low(0x1040, NdOp::RETURN, {}, {AX})};
+      }
+      if (Reversed)
+        std::swap(Blocks[1], Blocks[2]);
+      size_t Budget = 4096;
+      EXPECT_EQ(unobservedSourceStackParameters(Func, Blocks, {}, Budget),
+                Mode == 0 || Mode == 2 || Mode == 5 || Mode == 8
+                    ? std::set<unsigned>{4}
+                    : std::set<unsigned>{});
+    }
+}
+
 TEST(SourceStackSpills, StackParameterHolesRequireEveryOriginalPath) {
   for (unsigned Mode = 0; Mode < 49; ++Mode) {
     SCOPED_TRACE(Mode);
