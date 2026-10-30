@@ -4981,10 +4981,13 @@ TEST_F(SessionCAPITest, MinGWImportVariableCallsReachTheirFunction) {
   ASSERT_GE(Index, 0);
   const neverd_va_t Entry = neverd_func_entry(Session, Index);
   const std::string Source = takeString(neverd_decompile(Session, Entry));
-  EXPECT_NE(Source.find("add_one(1)"), std::string::npos) << Source;
+  // The unprototyped call retains its word-sized integer carrier even for
+  // a small literal; default argument promotions alone would pass an int.
+  EXPECT_NE(Source.find("add_one((uint64_t)1)"), std::string::npos) << Source;
   EXPECT_EQ(Source.find("imp_add_one"), std::string::npos) << Source;
   // Neither `twice(2)` nor `bind_twice(2)`: the variable it calls through.
   EXPECT_EQ(Source.find("twice(2)"), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("twice((uint64_t)2)"), std::string::npos) << Source;
   const std::string Llvm = takeString(neverd_decompile_llvm(Session, Entry));
   EXPECT_NE(Llvm.find("add_one("), std::string::npos) << Llvm;
   EXPECT_EQ(Llvm.find("twice(2)"), std::string::npos) << Llvm;
@@ -7514,7 +7517,8 @@ TEST_F(SessionCAPITest, DarwinCallsPassWhatLibSystemDeclares) {
       // though the variadic tail follows Apple's stack convention.
       {"_OpenAt", "openat(arg0, (char*)(uintptr_t)arg1, 0x201, arg2)",
        "0x201, arg2)"},
-      {"_Shared", "shm_open((char*)(uintptr_t)arg0, 0x202, 0x180)",
+      // Preserve the recovered wide carrier in the untyped variadic tail.
+      {"_Shared", "shm_open((char*)(uintptr_t)arg0, 0x202, (uint64_t)0x180)",
        "0x202, 0x180)"},
       // off_t is libSystem's typedef, which the unit does not name: the
       // address passes through void *, which converts to it.

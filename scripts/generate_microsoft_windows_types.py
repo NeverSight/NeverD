@@ -72,6 +72,10 @@ ISOLATED_PROVIDERS = {
         Provider("Battery", ("ntddk", "batclass")),
         Provider("HIDPort", ("ntddk", "hidport", "hidpddi")),
         Provider("SmartCard", ("ntddk", "smclib")),
+        Provider("SDPort", ("ntddk", "sdport")),
+        Provider("StreamClass", ("ntddk", "minwindef", "ks", "strmini")),
+        Provider("AudioPort", ("ntddk", "portcls")),
+        Provider("GraphicsKernel", ("ntddk", "dispmprt")),
     ),
     "WindowsUser": (
         Provider("WinHTTP", ("winsock2", "winhttp")),
@@ -102,6 +106,25 @@ ISOLATED_PROVIDERS = {
         Provider("PropertyVariants", ("windows", "propvarutil")),
         Provider("PerformanceData", ("windows", "pdh", "pdhmsg")),
         Provider("Biometrics", ("windows", "winbio")),
+        Provider("GraphicsThunk", ("windows", "d3dkmthk")),
+        # clfs.h includes the WDK's legacy stdio.h. Import the CLFS API only:
+        # those transitive CRT declarations must not take priority over UCRT.
+        Provider("CLFS", ("windows", "clfsw32"), (), (
+            "AddLogContainer", "AddLogContainerSet", "AdvanceLogBase",
+            "AlignReservedLog", "AllocReservedLog", "CloseAndResetLogFile",
+            "CreateLogContainerScanContext", "CreateLogFile", "CreateLogMarshallingArea",
+            "DeleteLogByHandle", "DeleteLogFile", "DeleteLogMarshallingArea", "DumpLogRecords",
+            "FlushLogBuffers", "FlushLogToLsn", "FreeReservedLog", "GetLogContainerName",
+            "GetLogFileInformation", "GetLogIoStatistics", "GetLogReservationInfo",
+            "GetNextLogArchiveExtent", "LsnBlockOffset", "LsnContainer", "LsnCreate",
+            "LsnEqual", "LsnGreater", "LsnIncrement", "LsnInvalid", "LsnLess", "LsnNull",
+            "LsnRecordSequence", "PrepareLogArchive", "ReadLogArchiveMetadata", "ReadLogRecord",
+            "ReadLogRestartArea", "ReadNextLogRecord", "ReadPreviousLogRestartArea",
+            "RemoveLogContainer", "RemoveLogContainerSet", "ReserveAndAppendLog",
+            "ReserveAndAppendLogAligned", "ScanLogContainers", "SetEndOfLog",
+            "SetLogArchiveMode", "SetLogArchiveTail", "TerminateLogArchive", "TerminateReadLog",
+            "TruncateLog", "ValidateLog", "WriteLogRestartArea")),
+        Provider("TPM", ("windows", "tbs")),
     ),
 }
 TARGETS = {

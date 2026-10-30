@@ -100,6 +100,14 @@ does not certify native ARM64 execution. The optional
 [`check_windows_provider_calls.py`](../scripts/check_windows_provider_calls.py)
 uses the pinned Microsoft SDK/import libraries to compile both emitted routes
 and compare their API compiler contracts across x86, x64 and ARM64.
+Its D3DKMT, CLFS and TPM cases exercise record pointers, six-argument calls
+and pointer-sized results. With `--kernel`, the WDK fixtures cover SD Port's
+byte-width offset, PortCls's callback and fifth argument, and Stream Class's
+void result. Their synthetic imports retain the original compiler's x86
+decoration. This checks source reconstruction and ABI, not driver execution.
+`TypeRender.KeywordNamespacesKeepTheirDistinctSpellings` checks the shared
+keyword index across all seven output languages, including C++'s C keywords
+and Rust's raw-identifier exceptions.
 `HighCSourceCalls.CallbackBorrowsDeclareNestedRecordTags` additionally checks
 that records used only inside callbacks receive the correct struct/union
 forward declarations, without reconstructing their layouts.

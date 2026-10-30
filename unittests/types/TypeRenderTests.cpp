@@ -1015,6 +1015,45 @@ TEST(TypeRender, NamesStepAroundKeywords) {
       contains(renderType(Library, Words, in(Language::Go)), "\ttype_ uint32"));
 }
 
+TEST(TypeRender, KeywordNamespacesKeepTheirDistinctSpellings) {
+  TypeLibrary Library;
+  for (const char *Name :
+       {"auto", "class", "func", "end", "return", "yield", "self", "Self",
+        "crate", "super", "_", "neverd_keyword"})
+    Library.define(
+        structure(Name, 4, {member("value", makeBuiltin(Builtin::Int), 0)}));
+  using Names = std::map<std::string, std::string>;
+  const Names Cpp = {
+      {"auto", "auto_"}, {"class", "class_"}, {"return", "return_"}};
+  const std::pair<Language, Names> Cases[] = {
+      // Library views of C also escape C++ keywords.
+      {Language::C, Cpp},
+      {Language::Cpp, Cpp},
+      {Language::Rust,
+       {{"_", "__"},
+        {"crate", "crate_"},
+        {"return", "r#return"},
+        {"self", "self_"},
+        {"Self", "Self_"},
+        {"super", "super_"},
+        {"yield", "r#yield"}}},
+      {Language::Go, {{"func", "func_"}, {"return", "return_"}}},
+      {Language::Python,
+       {{"class", "class_"}, {"return", "return_"}, {"yield", "yield_"}}},
+      {Language::JavaScript,
+       {{"class", "class_"},
+        {"return", "return_"},
+        {"super", "super_"},
+        {"yield", "yield_"}}},
+      {Language::Lua, {{"end", "end_"}, {"return", "return_"}}}};
+  for (const auto &[Lang, Expected] : Cases) {
+    SCOPED_TRACE(languageId(Lang).str());
+    const auto Renamed = renamedNames(Library, Lang);
+    const Names Actual(Renamed.begin(), Renamed.end());
+    EXPECT_EQ(Actual, Expected);
+  }
+}
+
 TEST(TypeRender, UnitsSpellReservedTypedefsInExactWidths) {
   // Darwin's headers define __darwin_size_t as unsigned long, which
   // uint64_t, an unsigned long long there, is not: a decompiled unit that

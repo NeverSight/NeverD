@@ -299,6 +299,31 @@ TEST(HeaderLibrary, OptionalUCRTTerminationNeedsItsDeclarationContext) {
   }
 }
 
+TEST(HeaderLibrary, OptionalUCRTStreamsKeepTheirOwnOpaqueRecord) {
+  for (auto Id : {HeaderLibrary::WindowsUserX64, HeaderLibrary::WindowsUserX86,
+                  HeaderLibrary::WindowsUserARM64}) {
+    const auto *User = headerLibrary(Id);
+    ASSERT_NE(User, nullptr);
+    if (!User->findPrototype("_o___acrt_iob_func"))
+      GTEST_SKIP() << "This build has no local Microsoft UCRT provider";
+    SCOPED_TRACE(headerLibraryName(Id).str());
+    const unsigned PointerBytes = Id == HeaderLibrary::WindowsUserX86 ? 4 : 8;
+    // UCRT's FILE owns one opaque pointer. A transitive WDK legacy stdio
+    // declaration must not replace it with the older concrete stream record.
+    for (const char *Name : {"__acrt_iob_func", "_o___acrt_iob_func"}) {
+      const auto *Function = User->findPrototype(Name);
+      ASSERT_NE(Function, nullptr) << Name;
+      ASSERT_EQ(Function->Return->Kind, TypeExprKind::Pointer) << Name;
+      ASSERT_NE(Function->Return->Element, nullptr) << Name;
+      EXPECT_EQ(User->sizeOf(*Function->Return->Element), PointerBytes) << Name;
+      ASSERT_EQ(Function->Params.size(), 1u) << Name;
+      EXPECT_EQ(User->sizeOf(*Function->Params[0].Type), 4u) << Name;
+      if (Id == HeaderLibrary::WindowsUserX86)
+        EXPECT_EQ(Function->Convention, CallingConvention::Cdecl) << Name;
+    }
+  }
+}
+
 TEST(HeaderLibrary, EveryLibraryReadsLaidOutForItsDataModel) {
   // A pointer, and a SIZE_T, take what each data model gives them: a 32-bit
   // library's handles and records are a 32-bit program's.
