@@ -2292,3 +2292,15 @@ QT_QPA_PLATFORM=offscreen NEVERD_PATCH_NATIVE_WORKER="$PWD/build-gui/bin/neverd-
 ## تدقيق قراءات المشرف القياسية
 
 تستخدم اختبارات `InterpreterSpecialization.SupervisorRead*` الرفع الصارم الفعلي وترفض تخفيض التدقيق إلى `Missing`. يتحقق `BinaryLowIRRefinement.SupervisorReadCompletesOnlyRawRecovery` من حدود استعادة البايتات الأصلية واستمرار رفض الإثبات الأصلي وتغليف المصدر.
+
+## تغطية البتات بثابت في تعبيرات OR/XOR
+
+يفحص `SymExprMask.ConstantCover*` جميع الأقنعة والمدخلات ذات أربعة بتات، والكلمات بعرض 8–257 بتًا، والبتات العليا الفعالة، والمصادر العميقة المشتركة، والرفض عند نفاد ميزانية الكلمات أو الحدود. يتحقق `FrameOffsets.ConstantCoveredBitsExposeOffsetsWithoutSolverQueries` من إزاحة ثابتة دون استعلامات للمحلل ومن مثال مضاد يعتمد على المدخل. شغّل `NeverDSymbolicTests` و`NeverDInterpreterSpecializationTests`.
+
+## ذاكرة الصورة التي تصل إليها المؤشرات المتحركة
+
+ينفذ `CImageObjects.AdvancingCursorsKeepTheWholeMutableImageObject` حلقات أمامية وخلفية ونسخاً وسيطة وتحويلات بنفس العرض ومسارات قراءة/كتابة أو كتابة فقط لـ COFF/ELF/Mach-O عند O0/O2 مع ASan/UBSan. يرفض `CursorStorageNeedsAnAddressPreservingMemoryPath` الثوابت العددية والمؤشرات المحمّلة وتقليل العرض والحساب دون استخدام للذاكرة؛ ويحافظ `DirectBoundedTablesKeepTheirExtent` على نطاق الفهرسة المباشرة المحدود. ابنِ `NeverDLiftTests` ثم نفّذ `ctest --test-dir build-release -R '^CImageObjects[.]' --output-on-failure --parallel 4`.
+
+تحتفظ خانات المكدس الاصطناعية في LLVM C بكامل كتابة العدد الصحيح ذي 128 بت قبل اختيار أي من نصفيه ذوي 64 بت أثناء التنفيذ. يتحقق `LLVMCValues.WideFrameStoreRetainsBothRuntimeSelectedWords` من العنونة بالجمع وبعملية OR المعتمدة على المحاذاة عند O0/O2 مع ASan/UBSan وشرط `-fno-strict-aliasing` الموثق. شغّل `NeverDLLVMCValueTests` واختبارات الإطارات والمتجهات وسجلات العرض ذات الصلة.
+
+ينفذ `MedLLVMDirectData.OriginalImageCursorsIgnoreUnrelatedPointerRelocations` حلقات المؤشرات المعدلة للذاكرة لكل من x64/AArch64 وCOFF/ELF/Mach-O عبر LLVM C عند O0/O2 مع ASan/UBSan. في وضع مصدر الصورة الأصلية الصريح، تستخدم العناوين المثبتة صورة التشغيل المشتركة حتى قرب عمليات إعادة تموضع مؤشرات غير مرتبطة. تبقى الأعداد المتطابقة قيمًا عددية وتحتفظ نسخ المؤشرات المستقلة بتحققها السابق. شغّل `NeverDMedLLVMDirectDataTests` واختبارات حدود إعادة تموضع المؤشرات.

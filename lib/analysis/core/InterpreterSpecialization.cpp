@@ -114,6 +114,10 @@ struct Projection {
   /// Complete 64-bit register values equal to a declared entry root plus a
   /// modular displacement. No arbitrary expression escapes a node context.
   std::map<uint64_t, EntryPointer> AffineRegisters;
+  /// Exhaustive modular offsets from the physical entry frame. Independent
+  /// register domains retain no correlations or symbolic identities. Absence
+  /// denotes Top; joins union offsets and widen when the tuple cap is exceeded.
+  std::map<uint64_t, std::vector<uint64_t>> FrameRegisterOffsets;
   std::map<uint64_t, uint8_t> FrameBytes;
   std::map<uint64_t, uint8_t> AbsoluteBytes;
   FrameFacts Frame;
@@ -204,6 +208,10 @@ void seed(SymContext &Ctx, SymState &State, SymRef Root,
   for (const auto &[Key, Value] : Values.Scalars)
     State.write(Key.first, Key.second, Ctx.mkConst(8, Value));
   if (Root) {
+    for (const auto &[Register, Offsets] : Values.FrameRegisterOffsets)
+      if (!Values.AffineRegisters.count(Register))
+        State.write(SymSpace::Register, Register,
+                    Ctx.mkAdd(Root, Ctx.mkFreshVar(64, "frame_offset")));
     for (const auto &[Register, Pointer] : Values.AffineRegisters)
       State.write(SymSpace::Register, Register,
                   entryPointerValue(Ctx, Root, ObjectRoots, Pointer));
@@ -330,6 +338,29 @@ bool intersect(Projection &Into, const Projection &Incoming,
                uint32_t TupleLimit, uint32_t &Widenings) {
   bool Changed = intersectMap(Into.Scalars, Incoming.Scalars);
   Changed |= intersectMap(Into.AffineRegisters, Incoming.AffineRegisters);
+  for (auto It = Into.FrameRegisterOffsets.begin();
+       It != Into.FrameRegisterOffsets.end();) {
+    const auto Found = Incoming.FrameRegisterOffsets.find(It->first);
+    if (Found == Incoming.FrameRegisterOffsets.end()) {
+      It = Into.FrameRegisterOffsets.erase(It);
+      Changed = true;
+      continue;
+    }
+    std::vector<uint64_t> Joined;
+    std::set_union(It->second.begin(), It->second.end(), Found->second.begin(),
+                   Found->second.end(), std::back_inserter(Joined));
+    if (Joined.size() > TupleLimit) {
+      It = Into.FrameRegisterOffsets.erase(It);
+      Changed = true;
+      ++Widenings;
+      continue;
+    }
+    if (Joined != It->second) {
+      It->second = std::move(Joined);
+      Changed = true;
+    }
+    ++It;
+  }
   Changed |= intersectMap(Into.FrameBytes, Incoming.FrameBytes);
   Changed |= intersectMap(Into.AbsoluteBytes, Incoming.AbsoluteBytes);
   Changed |= intersectMap(Into.Frame.AffineValues, Incoming.Frame.AffineValues);
@@ -872,7 +903,8 @@ private:
   enum class FrameOffsetProof { Optional, Demanded, Required };
   std::optional<uint64_t>
   frameOffset(SymContext &Ctx, SymRef Predicate, SymRef Value, SymRef Root,
-              FrameOffsetProof Proof = FrameOffsetProof::Optional);
+              FrameOffsetProof Proof = FrameOffsetProof::Optional,
+              bool *RootDependent = nullptr);
   SymRef memoryExtentsOverlap(SymContext &Ctx, SymRef Left, uint64_t LeftBytes,
                               SymRef Right, uint64_t RightBytes,
                               SymRef NormalizedDistance = {});
@@ -1018,9 +1050,15 @@ bool Specializer::projectObjects(SymState &State, llvm::ArrayRef<SymRef> Roots,
 std::optional<uint64_t> Specializer::frameOffset(SymContext &Ctx,
                                                  SymRef Predicate, SymRef Value,
                                                  SymRef Root,
-                                                 FrameOffsetProof Proof) {
-  if (const auto Offset = affineDisplacement(Ctx, Value, Root))
+                                                 FrameOffsetProof Proof,
+                                                 bool *RootDependent) {
+  if (RootDependent)
+    *RootDependent = false;
+  if (const auto Offset = affineDisplacement(Ctx, Value, Root)) {
+    if (RootDependent)
+      *RootDependent = true;
     return Offset;
+  }
   if (!Root || !Value || Ctx.width(Value) != 64)
     return std::nullopt;
   // Recovery uses a fresh physical root in each node. Only expressions that
@@ -1063,6 +1101,8 @@ std::optional<uint64_t> Specializer::frameOffset(SymContext &Ctx,
       Work.push_back(Operand);
     }
   }
+  if (RootDependent)
+    *RootDependent = ContainsRoot;
   if (!ContainsRoot)
     return std::nullopt;
   // Alignment-shaped expressions are useful optional pointer facts. Other
@@ -1532,16 +1572,54 @@ bool Specializer::projectEdge(SymState &State, SymRef Root,
       DemandedAffineRegisters.insert(Options.ControlRegisters[Field].Offset);
   if (Root)
     for (uint64_t Register : AffineCandidates) {
-      if (Out.AffineRegisters.count(Register))
-        continue;
-      if (const auto Offset = frameOffset(
-              Ctx, Predicate, State.read(SymSpace::Register, Register, 8), Root,
-              DemandedAffineRegisters.count(Register)
-                  ? FrameOffsetProof::Demanded
-                  : FrameOffsetProof::Optional))
-        Out.AffineRegisters.emplace(Register, EntryPointer{0, *Offset});
+      bool RootDependent = false;
+      if (!Out.AffineRegisters.count(Register))
+        if (const auto Offset =
+                frameOffset(Ctx, Predicate,
+                            State.read(SymSpace::Register, Register, 8), Root,
+                            DemandedAffineRegisters.count(Register)
+                                ? FrameOffsetProof::Demanded
+                                : FrameOffsetProof::Optional,
+                            &RootDependent))
+          Out.AffineRegisters.emplace(Register, EntryPointer{0, *Offset});
       if (Failed)
         return false;
+      // Store proofs need the pointer's displacement, not its unbounded
+      // absolute address. Retain a finite domain only after exhaustive proof;
+      // unrelated wide values never nominate these optional queries.
+      if (!Options.ProveStoreReturnSlotSeparation &&
+          !Options.ProveStoreFrameSeparation)
+        continue;
+      if (Result.EvaluatedOperations >= Options.MaxOperations)
+        return fail(SpecializationStatus::BudgetExceeded,
+                    "frame offset projection budget exhausted");
+      ++Result.EvaluatedOperations;
+      const auto Exact = Out.AffineRegisters.find(Register);
+      if (Exact != Out.AffineRegisters.end()) {
+        if (Exact->second.isFrame())
+          Out.FrameRegisterOffsets.emplace(
+              Register, std::vector<uint64_t>{Exact->second.Offset});
+        continue;
+      }
+      if (!RootDependent)
+        continue;
+      const auto Offset =
+          Ctx.mkSub(State.read(SymSpace::Register, Register, 8), Root);
+      if (detail::hasUnconstrainedProjectionInput(Ctx, Predicate, Offset,
+                                                  Options.MaxControlTuples,
+                                                  Options.MaxSymbolicNodes))
+        continue;
+      const auto Domain =
+          enumerate(Ctx, Predicate, {Offset}, Options.MaxControlTuples);
+      if (Failed)
+        return false;
+      if (Domain.Status != FiniteValueStatus::Complete || Domain.Tuples.empty())
+        continue;
+      std::vector<uint64_t> Offsets;
+      Offsets.reserve(Domain.Tuples.size());
+      for (const auto &Tuple : Domain.Tuples)
+        Offsets.push_back(Tuple.front());
+      Out.FrameRegisterOffsets.emplace(Register, std::move(Offsets));
     }
 
   const auto RecordConstant = [&](uint32_t Field, uint64_t Value,
@@ -2386,6 +2464,23 @@ bool Specializer::evaluate(int Id) {
   SymExec Exec(Ctx, State);
   auto IncomingPredicate =
       controlPredicate(State, FrameRoot, Draft.Incoming.Controls);
+  for (const auto &[Register, Offsets] : Draft.Incoming.FrameRegisterOffsets) {
+    if (Draft.Incoming.AffineRegisters.count(Register))
+      continue;
+    if (Offsets.size() > Options.MaxOperations - Result.EvaluatedOperations)
+      return fail(SpecializationStatus::BudgetExceeded,
+                  "frame offset predicate budget exhausted");
+    Result.EvaluatedOperations += Offsets.size();
+    const auto Offset =
+        Ctx.mkSub(State.read(SymSpace::Register, Register, 8), FrameRoot);
+    llvm::SmallVector<SymRef, 8> Cases;
+    for (uint64_t Value : Offsets)
+      Cases.push_back(Ctx.mkEq(Offset, Ctx.mkConst(64, Value)));
+    IncomingPredicate = Ctx.mkAnd(IncomingPredicate, Ctx.mkOr(Cases));
+    if (Ctx.numNodes() > Options.MaxSymbolicNodes)
+      return fail(SpecializationStatus::BudgetExceeded,
+                  "frame offset predicate symbolic-node budget exhausted");
+  }
   if (Options.EntryFrameBounds) {
     const auto &Bounds = *Options.EntryFrameBounds;
     IncomingPredicate = Ctx.mkAnd(
@@ -2865,6 +2960,7 @@ bool Specializer::evaluate(int Id) {
       // arbitrary base. Keep that value unsafe through copies and frame spills.
       bool OutputUnsafe = EnvironmentRead || AtomicWrite;
       bool ExactFrameAddress = false;
+      SymRef FiniteFrameReadValue;
       bool StoreWithinEntryFrame = false;
       bool ProvedFrameSeparation = false;
       std::optional<SymStorePreservation> StorePreservation;
@@ -2880,11 +2976,13 @@ bool Specializer::evaluate(int Id) {
         // the offset itself contains the frame root. Separation checks below
         // use the executed full address; ordinary unknown writes invalidate
         // every unproved frame fact.
+        bool RootDependent = false;
         const auto Displacement =
-            RuntimeMemory ? std::nullopt
-                          : frameOffset(Ctx, Exec.pathPredicate(),
-                                        Exec.operandValue(*Memory.Address),
-                                        FrameRoot, FrameOffsetProof::Required);
+            RuntimeMemory
+                ? std::nullopt
+                : frameOffset(Ctx, Exec.pathPredicate(),
+                              Exec.operandValue(*Memory.Address), FrameRoot,
+                              FrameOffsetProof::Required, &RootDependent);
         if (Failed)
           return false;
         if (Displacement) {
@@ -2916,6 +3014,68 @@ bool Specializer::evaluate(int Id) {
             for (unsigned B = 0; B < Memory.AccessSize; ++B)
               OutputUnsafe |=
                   !Origins.ExternalFrameBytes.count(*Displacement + B);
+          } else if (Original.Opcode == NdOp::LOAD && !RuntimeMemory &&
+                     RootDependent) {
+            const auto Offset =
+                Ctx.mkSub(Exec.operandValue(*Memory.Address), FrameRoot);
+            // A symbolic index is not a distinct memory region. Reuse the
+            // current frame bytes only after proving the entire offset set.
+            // The original runtime LOAD remains in the residual; unknown
+            // bytes and mixed pointer origins stay unknown or unsafe.
+            if (!detail::hasUnconstrainedProjectionInput(
+                    Ctx, Exec.pathPredicate(), Offset, Options.MaxControlTuples,
+                    Options.MaxSymbolicNodes)) {
+              const auto UsefulRead = [&](llvm::ArrayRef<uint64_t> Tuple) {
+                if (Memory.AccessSize >
+                    Options.MaxOperations - Result.EvaluatedOperations)
+                  return fail(SpecializationStatus::BudgetExceeded,
+                              "indexed frame read inspection budget exhausted");
+                Result.EvaluatedOperations += Memory.AccessSize;
+                const auto At = Tuple.front();
+                if (State.hasMaterializedRegionRange(FrameRoot, At,
+                                                     Memory.AccessSize))
+                  return true;
+                // Stop at the first candidate with neither a complete
+                // current value nor complete external provenance. Enumerating
+                // a large uninitialized array cannot improve this load. This
+                // abandons the whole proof; it never filters an address out.
+                for (unsigned B = 0; B < Memory.AccessSize; ++B)
+                  if (!Origins.ExternalFrameBytes.count(At + B))
+                    return false;
+                return true;
+              };
+              const auto Domain =
+                  enumerate(Ctx, Exec.pathPredicate(), {Offset},
+                            Options.MaxControlTuples, UsefulRead);
+              if (Failed)
+                return false;
+              if (Domain.Status == FiniteValueStatus::Complete &&
+                  !Domain.Tuples.empty()) {
+                OutputUnsafe = false;
+                for (const auto &Tuple : Domain.Tuples) {
+                  if (Memory.AccessSize >
+                      Options.MaxOperations - Result.EvaluatedOperations)
+                    return fail(SpecializationStatus::BudgetExceeded,
+                                "indexed frame read byte budget exhausted");
+                  Result.EvaluatedOperations += Memory.AccessSize;
+                  const auto At = Tuple.front();
+                  for (unsigned B = 0; B < Memory.AccessSize; ++B)
+                    OutputUnsafe |= !Origins.ExternalFrameBytes.count(At + B);
+                  const auto Value =
+                      State.load(Ctx.mkAdd(FrameRoot, Ctx.mkConst(64, At)),
+                                 Memory.AccessSize);
+                  FiniteFrameReadValue =
+                      FiniteFrameReadValue
+                          ? Ctx.mkIte(Ctx.mkEq(Offset, Ctx.mkConst(64, At)),
+                                      Value, FiniteFrameReadValue)
+                          : Value;
+                  if (Ctx.numNodes() > Options.MaxSymbolicNodes)
+                    return fail(SpecializationStatus::BudgetExceeded,
+                                "indexed frame read symbolic-node budget "
+                                "exhausted");
+                }
+              }
+            }
           }
         }
         if (Original.Opcode == NdOp::STORE || AtomicWrite) {
@@ -3402,7 +3562,8 @@ bool Specializer::evaluate(int Id) {
       SymRef FiniteReadValue;
       // Admission above limits wide reads to the explicit nonfaulting domain.
       // Every feasible address still needs one complete, untruncated witness.
-      if (Original.Opcode == NdOp::LOAD && !RuntimeMemory && !ExternalExit) {
+      if (Original.Opcode == NdOp::LOAD && !RuntimeMemory && !ExternalExit &&
+          !FiniteFrameReadValue) {
         const auto Memory = lowMemoryOperands(Original);
         const SymRef Address = Exec.operandValue(*Memory.Address);
         // Exact root-relative translation preserves domain cardinality, even
@@ -3550,18 +3711,26 @@ bool Specializer::evaluate(int Id) {
                         "runtime control symbolic-node budget exhausted");
         }
         if (Transition->Rejected) {
-          const auto Bad =
-              enumerate(Ctx, Exec.pathPredicate(),
-                        {Exec.operandValue(*Transition->Rejected)}, 1);
+          const auto Rejected = Exec.operandValue(*Transition->Rejected);
+          const auto Bad = enumerate(Ctx, Exec.pathPredicate(), {Rejected}, 1);
           if (Failed)
             return false;
           if (Bad.Status == FiniteValueStatus::Unknown)
             return fail(SpecializationStatus::BudgetExceeded,
                         "runtime control validity proof exceeded its budget");
           if (Bad.Status != FiniteValueStatus::Complete ||
-              Bad.Tuples != std::vector<std::vector<uint64_t>>{{0}})
+              Bad.Tuples != std::vector<std::vector<uint64_t>>{{0}}) {
+            // A node boundary may have dropped the input bits establishing
+            // validity, e.g. an aligned cursor's low bits in a loop. Request
+            // their producers, then re-prove the complete transition on a
+            // fresh attempt. Never assume the rejection predicate is false.
+            if (!Ctx.asConst(Rejected)) {
+              discover(State, Rejected, FrameRoot, ControlDemand::Target);
+              Refinement.PrecisionFailure = true;
+            }
             return fail(SpecializationStatus::Unsupported,
                         Transition->InvalidValueDiagnostic);
+          }
         }
         if (Transition->OutputState) {
           const auto &[Index, Value] = *Transition->OutputState;
@@ -3651,6 +3820,10 @@ bool Specializer::evaluate(int Id) {
       if (Ctx.numNodes() > Options.MaxSymbolicNodes)
         return fail(SpecializationStatus::BudgetExceeded,
                     "specialization symbolic-node budget exhausted");
+      if (FiniteFrameReadValue)
+        State.write(Original.Output.isReg() ? SymSpace::Register
+                                            : SymSpace::Temporary,
+                    Original.Output.Offset, FiniteFrameReadValue);
       if (FiniteReadValue) {
         State.write(Original.Output.isReg() ? SymSpace::Register
                                             : SymSpace::Temporary,

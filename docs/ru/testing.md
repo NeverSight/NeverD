@@ -2334,3 +2334,15 @@ QT_QPA_PLATFORM=offscreen NEVERD_PATCH_NATIVE_WORKER="$PWD/build-gui/bin/neverd-
 ## Аудит канонических чтений в режиме супервизора
 
 `InterpreterSpecialization.SupervisorRead*` использует фактический строгий лифтинг и отклоняет аудит, пониженный до `Missing`. `BinaryLowIRRefinement.SupervisorReadCompletesOnlyRawRecovery` проверяет границу восстановления исходных байтов и сохранение отказа от нативных доказательств и обёртки исходного кода.
+
+## Покрытие битов константой в выражениях OR/XOR
+
+`SymExprMask.ConstantCover*` проверяет все четырёхбитные маски и входы, слова шириной 8–257 бит, значимые старшие биты, глубокие общие выражения и отказ при исчерпании бюджета слов или членов. `FrameOffsets.ConstantCoveredBitsExposeOffsetsWithoutSolverQueries` проверяет постоянное смещение без запросов решателю и зависящий от входа контрпример. Запускайте `NeverDSymbolicTests` и `NeverDInterpreterSpecializationTests`.
+
+## Память образа при перемещении указателя
+
+`CImageObjects.AdvancingCursorsKeepTheWholeMutableImageObject` выполняет прямые/обратные циклы, промежуточные копии, преобразования той же ширины, чтение/запись и только запись для COFF/ELF/Mach-O при O0/O2 с ASan/UBSan. `CursorStorageNeedsAnAddressPreservingMemoryPath` отклоняет скалярные константы, загруженные указатели, сужения и арифметику без обращения к памяти; `DirectBoundedTablesKeepTheirExtent` сохраняет ограниченную прямую индексацию. Собрать `NeverDLiftTests`, затем выполнить `ctest --test-dir build-release -R '^CImageObjects[.]' --output-on-failure --parallel 4`.
+
+Синтетические стековые слоты LLVM C сохраняют всю 128-битную целочисленную запись до выбора одной из 64-битных половин во время выполнения. `LLVMCValues.WideFrameStoreRetainsBothRuntimeSelectedWords` проверяет адресацию сложением и OR с учётом выравнивания при O0/O2, ASan/UBSan и документированном условии `-fno-strict-aliasing`. Запускайте `NeverDLLVMCValueTests` и связанные тесты кадров, векторов и отображаемых записей.
+
+`MedLLVMDirectData.OriginalImageCursorsIgnoreUnrelatedPointerRelocations` исполняет изменяющие память циклы с курсором для x64/AArch64 и COFF/ELF/Mach-O через LLVM C при O0/O2 с ASan/UBSan. В явном режиме исходного образа подтверждённые адреса используют общий образ времени выполнения даже рядом с посторонними релокациями указателей. Числовые совпадения остаются скалярами; отдельные зеркала указателей сохраняют прежние проверки. Запускайте `NeverDMedLLVMDirectDataTests` и тесты границ релокаций указателей.

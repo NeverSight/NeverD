@@ -2678,7 +2678,7 @@ TEST_F(BinaryDiffSDK, LongNativeCallContextSurvivesReorderingAndRestore) {
   const auto Saved = take(neverd_comparison_export_json(C));
   const auto Document = parsed(neverd_comparison_export_json(C));
   ASSERT_TRUE(Document.getAsObject());
-  EXPECT_EQ(Document.getAsObject()->getInteger("matcher_version"), 10);
+  EXPECT_EQ(Document.getAsObject()->getInteger("matcher_version"), 11);
   const auto *Matches = Document.getAsObject()->getArray("matches");
   ASSERT_TRUE(Matches);
   const std::map<std::string, std::string> Expected = {{"0x3000", "0xa010"},

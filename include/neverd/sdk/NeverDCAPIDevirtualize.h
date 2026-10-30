@@ -171,6 +171,26 @@ typedef struct neverd_devirtualize_options_v8 {
   uint32_t reserved;
 } neverd_devirtualize_options_v8;
 
+typedef enum neverd_devirtualize_flag_v9 {
+  NEVERD_DEVIRTUALIZE_V9_PROVE_STORE_RETURN_SLOT_SEPARATION = 1u << 0,
+  NEVERD_DEVIRTUALIZE_V9_PROVE_STORE_FRAME_SEPARATION = 1u << 1
+} neverd_devirtualize_flag_v9;
+
+/// Version 9 exposes optional per-store separation proofs. These use the
+/// existing global budgets and add no nonalias or memory-access premise.
+/// RETURN_SLOT preserves return cells, saved frame pointers and current scalar
+/// frame cells only after proving their complete extents disjoint from a write.
+/// FRAME additionally proves separation from the declared entry frame and
+/// current absolute cells; it requires machine source and v4 frame bounds.
+/// Zero flags retain existing strategies. Unknown flags and nonzero reserved
+/// fields reject. Zero-initialize and set the v1 prefix's struct_size to the
+/// complete size. v1-v8 ignore this extension; v9 ignores future tails.
+typedef struct neverd_devirtualize_options_v9 {
+  neverd_devirtualize_options_v8 base;
+  uint32_t flags;
+  uint32_t reserved;
+} neverd_devirtualize_options_v9;
+
 /// Return recovered C only when all reachable control targets are resolved.
 /// The contract fixes mapped image bytes and permissions, excludes concurrent
 /// mutation and calls, and does not certify binary patching or unwind behavior.
@@ -291,6 +311,16 @@ neverd_devirtualize_source_v8(neverd_session_t Session, neverd_va_t Entry,
 NEVERD_API const char *neverd_devirtualize_machine_source_v8(
     neverd_session_t Session, neverd_va_t Entry,
     const neverd_devirtualize_options_v8 *Options, const char **Report);
+
+/// Contracts and ownership match v8. Reports include both requested proof
+/// strategies; an incomplete or exhausted proof never certifies separation.
+NEVERD_API const char *
+neverd_devirtualize_source_v9(neverd_session_t Session, neverd_va_t Entry,
+                              const neverd_devirtualize_options_v9 *Options,
+                              const char **Report);
+NEVERD_API const char *neverd_devirtualize_machine_source_v9(
+    neverd_session_t Session, neverd_va_t Entry,
+    const neverd_devirtualize_options_v9 *Options, const char **Report);
 
 #ifdef __cplusplus
 }

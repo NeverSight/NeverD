@@ -266,7 +266,17 @@ reconstruction of the architectural returns remains a
 separate contract this source boundary does not grant.
 Known fixed argument positions now
 survive an interior stack-setup gap, including selected LLVMC recovery; missing
-values remain explicit rather than becoming zero. Unknown incoming stack-pointer
+values remain explicit rather than becoming zero.
+
+Complete original Win64 CFGs now prove unused positional stack slots through
+branches and stable loops, with matching original edges, joined stack offsets
+and conservative flag taint. Both C routes and SDK replay reuse the proof.
+Partial temporary-address reads retain taint, and partial writes cannot preserve
+an old exact pointer. This closes the straight-line-only proof restriction;
+arbitrary pointer aliases, nested opaque effects and stack-pointer escapes still
+prevent a complete unused-slot proof.
+
+Unknown incoming stack-pointer
 escapes still prevent a complete stack-argument bound: do not cap calls
 by a private routine's name or treat a sparse outgoing slot as proof that
 later arguments are absent.

@@ -534,6 +534,8 @@ describeCPUQuery(llvm::ArrayRef<LowOp> Operations) {
   return Query;
 }
 
+llvm::ArrayRef<uint64_t> cpuQueryResultRegisters() { return CPUQueryRegisters; }
+
 // A retained trap keeps its exact lift and undefined-output audit. Neither
 // supplies an exception continuation: this nonfaulting proof may collect an
 // unreachable trap but cannot execute one or change its coverage grade.

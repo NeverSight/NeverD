@@ -2231,3 +2231,15 @@ MedIR 的常量传播和复制传播共用 `canPropagateConstantToOperand`：计
 ## 规范的监督态读取审计
 
 `InterpreterSpecialization.SupervisorRead*` 使用真实严格提升，并拒绝降级为 `Missing` 的审计。`BinaryLowIRRefinement.SupervisorReadCompletesOnlyRawRecovery` 检查原始字节恢复边界，同时继续拒绝原生证明和源码包装。
+
+## OR/XOR 表达式的常量覆盖
+
+`SymExprMask.ConstantCover*` 穷尽四位掩码与输入，检查 8–257 位字、有效高位、深层共享源以及掩码字数和项数预算拒绝。`FrameOffsets.ConstantCoveredBitsExposeOffsetsWithoutSolverQueries` 验证零求解查询下的固定偏移，并拒绝依赖输入的相邻用例。运行 `NeverDSymbolicTests` 和 `NeverDInterpreterSpecializationTests`。
+
+## 递增指针访问的映像存储
+
+`CImageObjects.AdvancingCursorsKeepTheWholeMutableImageObject` 以 O0/O2 和 ASan/UBSan 执行 COFF/ELF/Mach-O 的正反向遍历、中间复制、同宽转换、读写及纯写路径。`CursorStorageNeedsAnAddressPreservingMemoryPath` 拒绝标量常量、加载的指针、窄化及没有内存消费者的算术；`DirectBoundedTablesKeepTheirExtent` 保留有界直接索引路径。构建 `NeverDLiftTests` 后运行 `ctest --test-dir build-release -R '^CImageObjects[.]' --output-on-failure --parallel 4`。
+
+LLVM C 的合成栈槽保留完整的 128 位整数写入，再由运行时选择读取任一 64 位半部。`LLVMCValues.WideFrameStoreRetainsBothRuntimeSelectedWords` 在 O0/O2、ASan/UBSan 和文档规定的 `-fno-strict-aliasing` 契约下覆盖加法及基于对齐的 OR 寻址。运行 `NeverDLLVMCValueTests`；相关帧、向量和显示记录测试覆盖相邻存储路径。
+
+`MedLLVMDirectData.OriginalImageCursorsIgnoreUnrelatedPointerRelocations` 对 x64/AArch64 和 COFF/ELF/Mach-O 的可变游标循环执行 LLVM C 的 O0/O2 + ASan/UBSan 检查。在显式原始映像源码模式下，已确认的地址即使位于无关指针重定位附近，也使用共享的运行时映像。数值相同的普通整数保持标量；独立指针镜像保持原有验证。运行 `NeverDMedLLVMDirectDataTests` 及指针重定位边界测试。

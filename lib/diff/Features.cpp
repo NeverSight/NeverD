@@ -286,7 +286,8 @@ ProgramFeatures computeFeatures(const Program &P,
           Out.TailCallee = Instructions.back().Callee;
       }
 
-      StableHash Bytes, Shape, Mnemonics;
+      StableHash Bytes, Shape, Mnemonics, BodyWithoutPadding, BodyWithPadding;
+      uint32_t BodyInstructions = 0;
       uint64_t Prime = 1;
       Skeletons.clear();
       for (const Block &B : P.blocks(F))
@@ -295,6 +296,15 @@ ProgramFeatures computeFeatures(const Program &P,
             return;
           Bytes.add(P.bytes(I));
           Shape.add(I.Shape);
+          BodyWithPadding.add(I.AddressIndependentShape);
+          const auto &Name = P.Mnemonics[I.Mnemonic];
+          const bool Landing = F.EntryBlock != NoIndex &&
+                               I.Address == P.blocks(F)[F.EntryBlock].Address &&
+                               (Name == "endbr32" || Name == "endbr64");
+          if (I.Flow != InstructionFlow::None || (Name != "nop" && !Landing)) {
+            BodyWithoutPadding.add(I.AddressIndependentShape);
+            ++BodyInstructions;
+          }
           const uint64_t Mnemonic = R.MnemonicKeys[I.Mnemonic];
           Mnemonics.add(Mnemonic);
           Prime *= oddFactor(Mnemonic);
@@ -328,6 +338,9 @@ ProgramFeatures computeFeatures(const Program &P,
       Out.Edges = F.EdgeCount;
       Out.Bytes = Bytes.value();
       Out.Shape = Shape.value();
+      if (BodyInstructions >= limits::diff::kMinShapeInstructions)
+        Out.BodyWithoutPadding = BodyWithoutPadding.value();
+      Out.BodyWithPadding = BodyWithPadding.value();
       Out.Mnemonics = Mnemonics.value();
       Out.Prime = Prime;
 

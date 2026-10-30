@@ -283,9 +283,45 @@ SymRef SymContext::mkOr(llvm::ArrayRef<SymRef> Ops) {
   // The XOR of values contained in X cannot set any bit outside X. This
   // includes X ^ (X & Y), without reasoning about the arithmetic inside X.
   unsigned SubsetWork = ::neverd::limits::symbolic::kSymExprLogicSubsetWork;
+  const auto CoveredByConstant = [&](SymRef Value) {
+    if (!SubsetWork)
+      return false;
+    --SubsetWork;
+    SymRef Mask;
+    bool Complement = false;
+    if (isConst(Value)) {
+      Mask = Value;
+    } else if (op(Value) == SymOp::And && isConst(operand(Value, 0))) {
+      Mask = operand(Value, 0);
+    } else if (op(Value) == SymOp::Not) {
+      const auto Inner = operand(Value, 0);
+      if (op(Inner) == SymOp::Or && isConst(operand(Inner, 0))) {
+        Mask = operand(Inner, 0);
+        Complement = true;
+      }
+    }
+    if (!Mask)
+      return false;
+    // Charge full-width mask inspection as well as each immediate term.
+    // No recursive source walk or expression construction is needed.
+    const unsigned Words = (W - 1) / 64 + 1;
+    if (Words > SubsetWork) {
+      SubsetWork = 0;
+      return false;
+    }
+    SubsetWork -= Words;
+    auto Possible = constValue(Mask);
+    if (Complement)
+      Possible.flipAllBits();
+    return (Possible & ~Acc).isZero();
+  };
   const auto CoveredXor = [&](SymRef Value) {
     if (op(Value) != SymOp::Xor)
       return false;
+    // Constants have already moved out of Rest. Their set bits can cover
+    // every XOR arm too, including ~(K | X), whose possible bits lie in ~K.
+    if (!Acc.isZero() && llvm::all_of(operands(Value), CoveredByConstant))
+      return true;
     for (SymRef Cover : Rest) {
       if (!SubsetWork)
         return false;

@@ -98,13 +98,14 @@ std::set<unsigned> sourceRegisterInputOverwrites(
     const SourceCalleeParameterOverwrites &Callees,
     const std::set<const MedOp *> &Overwritten, size_t &Remaining);
 
-/// Unread positional stack inputs of a complete straight-line Win64 wrapper.
+/// Unread positional stack inputs over the complete original Win64 CFG.
 /// Original loads, including removed ones, observe their entire byte ranges.
 /// Only exact SP-relative addresses and declared, bounded ordinary calls are
 /// admitted; frame escapes, lost offsets and unknown effects reject the proof.
-/// OriginalEntry must be the complete original body, including its return.
+/// All original edges, stack joins and returns must agree. Stable loops keep
+/// the union of reads and frame-derived flag uses on every reachable path.
 std::set<unsigned> unobservedSourceStackParameters(
-    const MedFunc &Func, llvm::ArrayRef<LowOp> OriginalEntry,
+    const MedFunc &Func, llvm::ArrayRef<LowBlock> OriginalBlocks,
     const std::set<va_t> &DeclaredCallees, size_t &Remaining);
 
 /// Extend source spill evidence through current direct calls. Identity copies

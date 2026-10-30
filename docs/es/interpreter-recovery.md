@@ -383,3 +383,41 @@ Un dominio incompleto o un intervalo inmutable no disponible conserva toda la le
 ## Transferencias internas después de cambiar la pila
 
 Las regiones de máquina explícitas sin procesar pueden seguir instrucciones near CALL y RET internas aunque el puntero de pila actual ya no pueda expresarse respecto al de entrada. El adaptador de arquitectura conserva la captura del destino, el apilado, la lectura de la dirección de retorno y el desapilado reales. Cada retorno interno sigue exigiendo demostrar el conjunto finito completo de destinos a partir de la palabra real de la pila. Solo las celdas de retorno demostradas relativas a la entrada pasan a la proyección y al inventario de conservación del marco; perder otra relación de pila en un límite del grafo aún puede causar un rechazo. La recuperación de funciones ordinarias mantiene los requisitos de restauración del marco. El resultado corresponde a una región sin procesar; la composición de toda la función y la equivalencia del código fuente o nativo requieren pruebas separadas.
+
+<!-- i18n-section: store-separation-proofs -->
+
+## Pruebas opcionales de separación de escrituras
+
+`--vm-prove-store-return-separation` demuestra que cada escritura completa evita las celdas de retorno, los punteros de marco guardados y las celdas escalares actuales antes de conservarlos. `--vm-prove-store-frame-separation` también comprueba el marco declarado y las celdas absolutas actuales; requiere `--vm-machine-state` y `--vm-entry-frame`. Ambos requieren `--devirtualize`, están desactivados por defecto, comparten los presupuestos existentes y no añaden premisas de ausencia de alias. Las escrituras no demostradas mantienen la invalidación habitual; una recuperación incompleta no publica código. Los controles de cadena existentes permiten conservar bucles.
+
+Las API v9 `neverd_devirtualize_source_v9`, `neverd_devirtualize_machine_source_v9` aceptan `neverd_devirtualize_options_v9`. Inicializar a cero y fijar `struct_size` del prefijo v1 al tamaño completo. Los indicadores son `NEVERD_DEVIRTUALIZE_V9_PROVE_STORE_RETURN_SLOT_SEPARATION`, `NEVERD_DEVIRTUALIZE_V9_PROVE_STORE_FRAME_SEPARATION`; `reserved` debe ser cero. Las API anteriores ignoran esta extensión. Python expone `NeverDDevirtualizeOptionsV9`, `DevirtualizeFlagsV9`; los informes incluyen `proveStoreReturnSlotSeparation`, `proveStoreFrameSeparation`. La prueba ejecuta un bucle sobre un array local indexado por ambas rutas C en O0/O2 con ASan/UBSan y comprueba todo el almacenamiento de pila suministrado.
+
+Al activar cualquiera de las estrategias, la recuperación también conserva entre nodos los desplazamientos finitos de registros respecto al marco de entrada, tras una prueba exhaustiva. Las uniones reúnen los desplazamientos entrantes; si faltan datos o se supera el límite existente de tuplas de control, el resultado pasa a ser desconocido. No se añaden correlaciones entre registros ni supuestos de alias.
+
+<!-- i18n-section: finite-indexed-frame-reads -->
+
+## Lecturas de marco con índice finito
+
+Un `LOAD` ordinario cuyo conjunto finito de desplazamientos respecto al marco de entrada se demuestra exhaustivamente lee los bytes actuales de cada candidato y conserva un valor simbólico condicional. La lectura en ejecución permanece en el residuo con su anchura completa y orden de bytes. El origen externo exige esa procedencia en cada byte de cada candidato. Los bytes desconocidos y los valores invalidados siguen siendo desconocidos; una enumeración incompleta conserva el comportamiento habitual de la memoria simbólica. Se aplican los presupuestos existentes de tuplas de control, solver, nodos y operaciones. No se crea evidencia de lectura inmutable ni un nuevo contrato de ausencia de alias.
+
+<!-- i18n-section: runtime-validity-refinement -->
+
+## Validez en ejecución entre nodos del grafo
+
+Con el descubrimiento del estado de control activado, un predicado no constante de validez en ejecución puede solicitar los bits del productor perdidos en un límite del grafo. La recuperación reintenta con los presupuestos compartidos existentes y debe demostrar la validez de cada estado entrante alcanzable. Esto conserva la alineación establecida y los valores enmascarados de registros de control entre nodos y bucles, sin suponer imposibles los estados rechazados ni eliminar la operación original.
+
+<!-- i18n-section: ordered-query-source -->
+
+## Consultas de CPU ordenadas al recuperar código C++
+
+`wrapInterpreterMachineQueryStateX64()` es una interfaz C++ opcional. Su estado de 160 bytes conserva el prefijo de máquina de 136 bytes y añade tres campos de 64 bits: dirección del arreglo, cantidad y cursor. Cada registro de 24 bytes contiene seis palabras de 32 bits: leaf, subleaf, EAX, EBX, ECX y EDX. Cada CPUID canónico consume en orden un registro coincidente y extiende con ceros los cuatro resultados. Selectores iguales pueden tener respuestas distintas. Ninguna instrucción de la CPU anfitriona proporciona respuestas.
+
+El agotamiento devuelve estado 3 y la discrepancia de selectores devuelve 4. Ambos detienen la ejecución antes de esa consulta, guardan el estado actual, conservan los efectos previos en memoria invitada y dejan el cursor intacto. El rechazo de alineación inicial sigue devolviendo 2 sin escrituras. El arreglo debe ser accesible, inmutable, sin desbordamiento de dirección y separado del estado y de la memoria invitada; una cantidad cero permite una dirección nula. Se mantienen los contratos existentes de estado y banderas. No se añade soporte de CLI, SDK C, GUI, equivalencia nativa ni serialización de hardware. Los envoltorios existentes siguen rechazando consultas de CPU, otros intrínsecos no admitidos y entornos sin modelar.
+
+<!-- i18n-section: xmm-query-source -->
+
+## Estado XMM explícito para código fuente
+
+`wrapInterpreterMachineQueryStateX64V2()` usa una disposición separada de 416 bytes: el prefijo de consultas de 160 bytes sin cambios, seguido de XMM0–XMM15, cada uno como palabras baja y alta de 64 bits. Basta una alineación de ocho bytes. Todos los bytes XMM se leen al entrar y se guardan en retornos ordinarios y salidas por fallo de consulta. Los estados de consulta y alineación mantienen su significado.
+
+Esta interfaz C++ admite operandos XMM completos de 128 bits y reconstruye lecturas temporales locales a la instrucción a partir de las definiciones actuales de bytes, conservando sobrescrituras parciales. Los bytes ausentes y los alias temporales de función fallan explícitamente. Solo se eliminan comprobaciones de alineación de direcciones constantes demostradas por la capa de arquitectura; las dinámicas o mal formadas se rechazan. No se admiten operandos XMM parciales, bancos más anchos ni entornos de coma flotante. No se añade CLI, SDK C, GUI ni equivalencia nativa; los envoltorios anteriores conservan sus disposiciones y restricciones.

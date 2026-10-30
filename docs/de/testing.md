@@ -2382,3 +2382,15 @@ Der Test umfasst auch unabhängige Funktionszeigerrelokationen im selben Speiche
 ## Audits kanonischer Supervisor-Lesezugriffe
 
 `InterpreterSpecialization.SupervisorRead*` verwendet das tatsächliche strikte Lifting und lehnt ein auf `Missing` herabgestuftes Audit ab. `BinaryLowIRRefinement.SupervisorReadCompletesOnlyRawRecovery` prüft die Wiederherstellungsgrenze anhand der Originalbytes sowie die weiterhin verweigerten nativen Beweise und Quellcode-Wrapper.
+
+## Konstante Bitabdeckung in OR/XOR-Ausdrücken
+
+`SymExprMask.ConstantCover*` prüft alle Vierbitmasken und Eingaben, Wörter mit 8–257 Bits, relevante hohe Bits, tiefe gemeinsame Quellen sowie Wort- und Termbudgetgrenzen. `FrameOffsets.ConstantCoveredBitsExposeOffsetsWithoutSolverQueries` prüft einen konstanten Versatz ohne Solverabfragen und ein eingabeabhängiges Gegenbeispiel. `NeverDSymbolicTests` und `NeverDInterpreterSpecializationTests` ausführen.
+
+## Bildspeicher über fortschreitende Zeiger
+
+`CImageObjects.AdvancingCursorsKeepTheWholeMutableImageObject` führt Vorwärts-/Rückwärtsschleifen, Zwischenkopien, gleich breite Konvertierungen und Lese-/Schreib- oder reine Schreibpfade für COFF/ELF/Mach-O bei O0/O2 mit ASan/UBSan aus. `CursorStorageNeedsAnAddressPreservingMemoryPath` weist skalare Konstanten, geladene Zeiger, Verengungen und Arithmetik ohne Speicherverbraucher zurück; `DirectBoundedTablesKeepTheirExtent` erhält begrenzte direkte Indizes. `NeverDLiftTests` bauen, danach `ctest --test-dir build-release -R '^CImageObjects[.]' --output-on-failure --parallel 4` ausführen.
+
+Synthetische LLVM-C-Stackslots erhalten den vollständigen 128-Bit-Integer-Schreibzugriff, bevor zur Laufzeit eine der beiden 64-Bit-Hälften gelesen wird. `LLVMCValues.WideFrameStoreRetainsBothRuntimeSelectedWords` prüft Addition und ausrichtungsbasierte OR-Adressierung bei O0/O2 mit ASan/UBSan und dem dokumentierten Vertrag `-fno-strict-aliasing`. `NeverDLLVMCValueTests` sowie die verwandten Frame-, Vektor- und Darstellungsrecord-Tests ausführen.
+
+`MedLLVMDirectData.OriginalImageCursorsIgnoreUnrelatedPointerRelocations` führt veränderliche Cursorschleifen für x64/AArch64 und COFF/ELF/Mach-O über LLVM C bei O0/O2 mit ASan/UBSan aus. Im expliziten Quellmodus für das Originalabbild verwenden nachgewiesene Adressen das gemeinsame Laufzeitabbild auch neben unabhängigen Pointer-Relokationen. Numerische Kollisionen bleiben Skalare; eigenständige Pointer-Spiegel behalten ihre Prüfung. `NeverDMedLLVMDirectDataTests` und die Tests der Pointer-Relokationsgrenzen ausführen.

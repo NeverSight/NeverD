@@ -442,6 +442,21 @@ SymState::materializedAbsoluteRanges(uint64_t &WorkBudget) const {
   return materializedBankRanges(AbsoluteMemory, WorkBudget);
 }
 
+bool SymState::hasMaterializedRegionRange(SymRef Base, uint64_t Offset,
+                                          uint16_t Bytes) const {
+  if (!Base || !Bytes)
+    return false;
+  const auto Found = Regions.find(Base.index());
+  if (Found == Regions.end() ||
+      (!hasModularCoordinates(*Ctx, Base) &&
+       Offset > std::numeric_limits<uint64_t>::max() - (Bytes - 1)))
+    return false;
+  for (uint16_t I = 0; I < Bytes; ++I)
+    if (!Found->second.Bytes.count(Offset + I))
+      return false;
+  return true;
+}
+
 std::optional<llvm::SmallVector<SymState::MaterializedRange, 8>>
 SymState::materializedBankRanges(const Bank &B, uint64_t &WorkBudget) const {
   llvm::SmallVector<MaterializedRange, 8> Result;

@@ -14633,7 +14633,9 @@
           "neverd_devirtualize_source_v7",
           "neverd_devirtualize_machine_source_v7",
           "neverd_devirtualize_source_v8",
-          "neverd_devirtualize_machine_source_v8"
+          "neverd_devirtualize_machine_source_v8",
+          "neverd_devirtualize_source_v9",
+          "neverd_devirtualize_machine_source_v9"
         ],
         "python": [],
         "cli": [
@@ -14656,6 +14658,8 @@
           "neverd decompile --vm-entry-frame",
           "neverd decompile --vm-entry-alignment",
           "neverd decompile --vm-external-stores-disjoint-frame",
+          "neverd decompile --vm-prove-store-return-separation",
+          "neverd decompile --vm-prove-store-frame-separation",
           "neverd decompile --vm-max-symbolic-nodes",
           "neverd decompile --vm-no-control-discovery"
         ],

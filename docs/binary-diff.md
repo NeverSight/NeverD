@@ -75,6 +75,18 @@ recognizes this boundary pattern, not arbitrary compiler inlining or outlining.
 Saved comparisons reject this candidate-only step on an accepted match. Failed
 restoration preserves the current comparison and its undo/redo history.
 
+Matcher version 11 also proposes candidates whose complete instruction streams
+agree after excluding NOP padding and an entry ENDBR marker. These layout edits
+can break every shared three-instruction sketch band and whole-function graph
+key in a short function. The added channel requires different original
+instruction streams, so it does not expand unchanged-layout duplicate groups.
+The additional key retains scalar operands and
+abstracts address identities only for candidate retrieval. Reference-aware
+measurement, ambiguity decisions, analyst rejections and the existing
+candidate/bucket limits still govern acceptance. Original bytes, landing
+instructions and padding remain in the reported delta. This is structural
+matching evidence, not a proof of semantic equivalence or unchanged protection.
+
 ## Command line
 
 ```sh

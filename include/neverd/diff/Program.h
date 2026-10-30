@@ -100,8 +100,9 @@ struct Instruction {
   /// The shape without scalar immediates and displacements.
   uint64_t Skeleton = 0;
   /// Shape retaining scalar operands but replacing address identities with a
-  /// category marker. Used only to distinguish a reference gap from an observed
-  /// operand change; it never establishes normalized equality.
+  /// category marker. Distinguishes reference gaps from observed operand
+  /// changes and proposes structural candidates; it never establishes
+  /// normalized equality.
   uint64_t AddressIndependentShape = 0;
   /// Where the instruction's bytes begin in Program::Code.
   uint32_t CodeOffset = 0;

@@ -92,6 +92,9 @@ std::optional<RuntimeRegisterRead> lowerRuntimeRegisterRead(
 std::optional<SpecializationScalarQuery>
 describeCPUQuery(llvm::ArrayRef<LowOp> Operations);
 
+/// Architectural result order shared by query descriptors and source adapters.
+llvm::ArrayRef<uint64_t> cpuQueryResultRegisters();
+
 bool isRetainedNativeTrap(const SpecializationInstruction &Insn);
 bool isCetDisabledProjection(const SpecializationInstruction &Insn);
 

@@ -1302,6 +1302,110 @@ TEST_F(SessionCAPITest,
   CheckOld(neverd_devirtualize_machine_source_v7, &Future.base);
 }
 
+TEST_F(SessionCAPITest, InterpreterRecoveryV9KeepsProofStrategiesOptIn) {
+  const auto Input = write("recovery-store-proofs.elf", makeNativeELF(false));
+  ASSERT_EQ(neverd_session_load(Session, Input.c_str()), 1);
+  const auto Entry = neverd_session_entry_addr(Session);
+  EXPECT_EQ(offsetof(neverd_devirtualize_options_v9, flags),
+            sizeof(neverd_devirtualize_options_v8));
+  EXPECT_EQ(offsetof(neverd_devirtualize_options_v9, reserved),
+            sizeof(neverd_devirtualize_options_v8) + sizeof(uint32_t));
+  for (bool Machine : {false, true}) {
+    auto Recover = Machine ? neverd_devirtualize_machine_source_v9
+                           : neverd_devirtualize_source_v9;
+    size_t SizeOnly = sizeof(size_t);
+    neverd_devirtualize_options_v9 Partial{};
+    Partial.base.base.base.base.base.base.base.base.struct_size =
+        sizeof(Partial) - 1;
+    for (const auto *O :
+         {reinterpret_cast<const neverd_devirtualize_options_v9 *>(&SizeOnly),
+          static_cast<const neverd_devirtualize_options_v9 *>(&Partial)}) {
+      const char *Report = nullptr;
+      EXPECT_EQ(Recover(Session, Entry, O, &Report), nullptr);
+      EXPECT_NE(takeString(Report).find("complete v9 structure"),
+                std::string::npos);
+    }
+    const char *Report = "previous";
+    EXPECT_EQ(Recover(nullptr, Entry, nullptr, &Report), nullptr);
+    EXPECT_EQ(Report, nullptr);
+    ASSERT_FALSE(takeString(Recover(Session, Entry, nullptr, &Report)).empty());
+    auto Defaults = llvm::json::parse(takeString(Report));
+    ASSERT_TRUE(bool(Defaults));
+    EXPECT_EQ(
+        Defaults->getAsObject()->getBoolean("proveStoreReturnSlotSeparation"),
+        false);
+    EXPECT_EQ(Defaults->getAsObject()->getBoolean("proveStoreFrameSeparation"),
+              false);
+    for (bool LLVM : {false, true})
+      for (unsigned Flags : {0u, 1u, 2u, 3u}) {
+        struct Future {
+          neverd_devirtualize_options_v9 Options;
+          uint64_t Opaque;
+        } F{};
+        F.Opaque = UINT64_MAX;
+        auto &O = F.Options;
+        auto &Base = O.base.base.base.base.base.base.base.base;
+        Base.struct_size = sizeof(F);
+        Base.use_llvm = LLVM;
+        O.flags = Flags;
+        const bool Frame =
+            Flags & NEVERD_DEVIRTUALIZE_V9_PROVE_STORE_FRAME_SEPARATION;
+        if (Frame && Machine) {
+          auto &Bounds = O.base.base.base.base.base;
+          Bounds.flags = NEVERD_DEVIRTUALIZE_V4_HAS_ENTRY_FRAME_BOUNDS;
+          Bounds.entry_frame_begin = -64;
+          Bounds.entry_frame_end = 8;
+        }
+        Report = nullptr;
+        const auto Source = takeString(Recover(Session, Entry, &O, &Report));
+        auto Parsed = llvm::json::parse(takeString(Report));
+        ASSERT_TRUE(bool(Parsed));
+        if (Frame && !Machine) {
+          EXPECT_TRUE(Source.empty());
+          EXPECT_NE(Parsed->getAsObject()->getString("error")->find(
+                        "requires entry frame bounds"),
+                    std::string::npos);
+          continue;
+        }
+        ASSERT_FALSE(Source.empty()) << takeString(neverd_last_error(Session));
+        EXPECT_EQ(
+            Parsed->getAsObject()->getBoolean("proveStoreReturnSlotSeparation"),
+            bool(Flags &
+                 NEVERD_DEVIRTUALIZE_V9_PROVE_STORE_RETURN_SLOT_SEPARATION));
+        EXPECT_EQ(
+            Parsed->getAsObject()->getBoolean("proveStoreFrameSeparation"),
+            Frame);
+      }
+    for (unsigned Bad = 0; Bad != 3; ++Bad) {
+      neverd_devirtualize_options_v9 O{};
+      O.base.base.base.base.base.base.base.base.struct_size = sizeof(O);
+      if (Bad == 0)
+        O.flags = 4;
+      else if (Bad == 1)
+        O.reserved = 1;
+      else
+        O.base.reserved = 1;
+      EXPECT_EQ(Recover(Session, Entry, &O, nullptr), nullptr);
+    }
+  }
+  neverd_devirtualize_options_v9 Future{};
+  Future.base.base.base.base.base.base.base.base.struct_size = sizeof(Future);
+  Future.flags = Future.reserved = UINT32_MAX;
+  for (auto Recover :
+       {neverd_devirtualize_source_v8, neverd_devirtualize_machine_source_v8}) {
+    const char *Report = nullptr;
+    ASSERT_FALSE(
+        takeString(Recover(Session, Entry, &Future.base, &Report)).empty());
+    auto Parsed = llvm::json::parse(takeString(Report));
+    ASSERT_TRUE(bool(Parsed));
+    EXPECT_EQ(
+        Parsed->getAsObject()->getBoolean("proveStoreReturnSlotSeparation"),
+        false);
+    EXPECT_EQ(Parsed->getAsObject()->getBoolean("proveStoreFrameSeparation"),
+              false);
+  }
+}
+
 TEST_F(SessionCAPITest,
        InterpreterRecoveryV6ChecksSeparationAndPreservesLayouts) {
   const auto Input = write("recovery-separation.elf", makeNativeELF(false));

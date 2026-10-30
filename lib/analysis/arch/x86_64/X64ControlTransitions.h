@@ -55,6 +55,9 @@ lowerOperation(const LowOp &Op, symbolic::SymState &State,
 
 namespace neverd::analysis::x64::alignment {
 bool supportsOperation(const LowOp &Op, const SpecializationOptions &Options);
+/// Known validity only for a supported check of a constant address.
+std::optional<bool> constantValidity(const LowOp &Op,
+                                     const SpecializationOptions &Options);
 std::optional<RuntimeControlTransition>
 lowerOperation(const LowOp &Op, const SpecializationOptions &Options,
                llvm::function_ref<NdVar(uint16_t)> Temporary);

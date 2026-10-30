@@ -1874,15 +1874,11 @@ std::set<unsigned> sourceRegisterInputOverwrites(
 }
 
 std::set<unsigned> unobservedSourceStackParameters(
-    const MedFunc &Func, llvm::ArrayRef<LowOp> OriginalEntry,
+    const MedFunc &Func, llvm::ArrayRef<LowBlock> OriginalBlocks,
     const std::set<va_t> &DeclaredCallees, size_t &Budget) {
-  if (!hasSourceRegisterInputBody(Func) || Func.Blocks.size() != 1 ||
-      !Func.Blocks.front().Succs.empty() ||
-      !Func.Blocks.front().ExceptionalPreds.empty() ||
-      !Func.Blocks.front().ExceptionalSuccs.empty() ||
-      !Func.Blocks.front().Phis.empty() || OriginalEntry.empty() ||
-      OriginalEntry.front().Addr != Func.Entry ||
-      OriginalEntry.back().Opcode != NdOp::RETURN ||
+  if (!hasSourceRegisterInputBody(Func) || OriginalBlocks.empty() ||
+      OriginalBlocks.front().StartAddr != Func.Entry ||
+      !OriginalBlocks.front().Preds.empty() ||
       !Func.FPParamScalarBytes.empty() || Func.DoesNotReturn ||
       Func.Params.size() > limits::ir::kMaxSourceABIParameters)
     return {};
@@ -1892,15 +1888,86 @@ std::set<unsigned> unobservedSourceStackParameters(
     return {};
   using Occurrence = std::pair<va_t, int>;
   std::map<Occurrence, const MedOp *> Calls;
-  for (const auto &Op : Func.Blocks.front().Ops) {
-    if (!Budget)
+  for (const auto &Block : Func.Blocks) {
+    if (!Block.ExceptionalPreds.empty() || !Block.ExceptionalSuccs.empty() ||
+        (&Block != &Func.Blocks.front() && Block.Preds.empty()))
       return {};
-    --Budget;
-    if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) {
-      if (Op.OriginSeq < 0 ||
-          !Calls.emplace(Occurrence{Op.Addr, Op.OriginSeq}, &Op).second)
+    for (const auto &Phi : Block.Phis) {
+      if (!Budget || Phi.ExceptionalEntry)
+        return {};
+      --Budget;
+    }
+    for (const auto &Op : Block.Ops) {
+      if (!Budget)
+        return {};
+      --Budget;
+      if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) {
+        if (Op.OriginSeq < 0 ||
+            !Calls.emplace(Occurrence{Op.Addr, Op.OriginSeq}, &Op).second)
+          return {};
+      }
+    }
+  }
+  // Bind every original edge to its instruction target or fallthrough. A
+  // missing arm, independent entry or overlapping block cannot prove absence
+  // of a stack read. Block order is not control flow.
+  std::map<int, size_t> ById;
+  std::map<va_t, size_t> ByAddress;
+  std::set<std::pair<int, int>> Incoming, Outgoing;
+  for (size_t I = 0; I < OriginalBlocks.size(); ++I) {
+    const auto &Block = OriginalBlocks[I];
+    const size_t Cost = 1 + Block.Preds.size() + Block.Succs.size();
+    if (Cost > Budget)
+      return {};
+    Budget -= Cost;
+    if (Block.Ops.empty() || Block.Ops.front().Addr != Block.StartAddr ||
+        Block.EndAddr <= Block.StartAddr || !Block.ExceptionalPreds.empty() ||
+        !Block.ExceptionalSuccs.empty() || (I && Block.Preds.empty()) ||
+        !ById.emplace(Block.Id, I).second ||
+        !ByAddress.emplace(Block.StartAddr, I).second)
+      return {};
+    for (int Pred : Block.Preds)
+      if (!Incoming.emplace(Pred, Block.Id).second)
+        return {};
+    for (int Succ : Block.Succs)
+      if (!Outgoing.emplace(Block.Id, Succ).second)
+        return {};
+  }
+  if (Incoming != Outgoing)
+    return {};
+  va_t PreviousEnd = 0;
+  std::vector<std::vector<size_t>> Successors(OriginalBlocks.size());
+  for (const auto &[Address, Index] : ByAddress) {
+    const auto &Block = OriginalBlocks[Index];
+    if (Address < PreviousEnd)
+      return {};
+    PreviousEnd = Block.EndAddr;
+    std::set<size_t> Expected, Actual;
+    const auto Include = [&](va_t Target) {
+      const auto At = ByAddress.find(Target);
+      if (At == ByAddress.end())
+        return false;
+      Expected.insert(At->second);
+      return true;
+    };
+    const auto &Last = Block.Ops.back();
+    if (Last.Opcode == NdOp::BRANCH || Last.Opcode == NdOp::COND_BR) {
+      if (Last.NumInputs != (Last.Opcode == NdOp::COND_BR ? 2 : 1) ||
+          !Last.Inputs[0].isConst() || !Include(Last.Inputs[0].Offset))
         return {};
     }
+    if (Last.Opcode != NdOp::BRANCH && Last.Opcode != NdOp::RETURN &&
+        !Include(Block.EndAddr))
+      return {};
+    for (int Id : Block.Succs) {
+      const auto At = ById.find(Id);
+      if (At == ById.end())
+        return {};
+      Actual.insert(At->second);
+    }
+    if (Actual != Expected)
+      return {};
+    Successors[Index].assign(Actual.begin(), Actual.end());
   }
   // A wrapper may retain instruction-local address temporaries, but no frame
   // address may enter another physical register or stored value. Keep taint
@@ -1910,126 +1977,205 @@ std::set<unsigned> unobservedSourceStackParameters(
     uint16_t Bytes = 0;
     bool Derived = false;
   };
-  std::map<uint64_t, FrameValue> Temps;
-  std::set<uint64_t> FrameFlags;
-  int64_t Stack = 0;
-  va_t Instruction = InvalidVA;
-  std::vector<std::pair<int64_t, int64_t>> Reads;
-  const auto Read = [&](const NdVar &V) -> FrameValue {
-    if (V.isReg() && V.Offset == TRI.StackPointer)
-      return {V.Size == TRI.PointerSize ? std::optional(Stack) : std::nullopt,
-              V.Size, true};
-    if (V.isReg() && FrameFlags.count(V.Offset))
-      return {std::nullopt, V.Size, true};
-    if (V.isTemp())
-      if (const auto At = Temps.find(V.Offset); At != Temps.end()) {
-        auto Value = At->second;
-        if (V.Size != Value.Bytes)
-          Value.Offset.reset();
-        return Value;
-      }
-    return {};
+  struct FrameState {
+    int64_t Stack = 0;
+    std::set<uint64_t> Flags;
   };
-  for (const auto &Op : OriginalEntry) {
-    if (!Budget)
+  std::vector<std::optional<FrameState>> Entries(OriginalBlocks.size());
+  Entries[0] = FrameState{};
+  std::vector<size_t> Work{0};
+  std::vector<std::pair<int64_t, int64_t>> Reads;
+  std::map<Occurrence, const LowOp *> MatchedCalls;
+  bool Bounded = true;
+  while (!Work.empty()) {
+    const size_t Index = Work.back();
+    Work.pop_back();
+    const auto &Block = OriginalBlocks[Index];
+    if (1 + Entries[Index]->Flags.size() > Budget)
       return {};
-    --Budget;
-    if (Op.Addr != Instruction) {
-      Temps.clear();
-      Instruction = Op.Addr;
-    }
-    if (Op.MemoryOrdering != NdMemoryOrdering::None ||
-        Op.MemoryAddressSpace != NdMemoryAddressSpace::Default)
-      return {};
-    if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) {
-      const auto At = Calls.find({Op.Addr, Op.Seq});
-      if (Op.NumInputs != 1 || !Op.Inputs[0].isConst() || At == Calls.end())
+    Budget -= 1 + Entries[Index]->Flags.size();
+    int64_t Stack = Entries[Index]->Stack;
+    auto FrameFlags = Entries[Index]->Flags;
+    std::map<uint64_t, FrameValue> Temps;
+    va_t Instruction = InvalidVA;
+    // Keep nonoverlapping temporary intervals. A subrange read still carries
+    // frame taint; a partial write cannot retain the old exact address.
+    const auto FirstOverlap = [&](const NdVar &V) {
+      auto At = Temps.lower_bound(V.Offset);
+      if (At != Temps.begin()) {
+        auto Before = At;
+        --Before;
+        if (V.Offset - Before->first < Before->second.Bytes)
+          At = Before;
+      }
+      return At;
+    };
+    const auto Read = [&](const NdVar &V) -> FrameValue {
+      if (V.isReg() && V.Offset == TRI.StackPointer)
+        return {V.Size == TRI.PointerSize ? std::optional(Stack) : std::nullopt,
+                V.Size, true};
+      if (V.isReg() && FrameFlags.count(V.Offset))
+        return {std::nullopt, V.Size, true};
+      FrameValue Value;
+      if (V.isTemp())
+        for (auto At = FirstOverlap(V);
+             At != Temps.end() &&
+             (At->first < V.Offset || At->first - V.Offset < V.Size);
+             ++At) {
+          if (!Budget) {
+            Bounded = false;
+            return {};
+          }
+          --Budget;
+          Value.Derived |= At->second.Derived;
+          if (At->first == V.Offset && At->second.Bytes == V.Size)
+            Value.Offset = At->second.Offset;
+        }
+      return Value;
+    };
+    for (const auto &Op : Block.Ops) {
+      if (!Budget || Op.Addr < Block.StartAddr || Op.Addr >= Block.EndAddr)
         return {};
-      const auto &Call = *At->second;
-      if (Call.Opcode != Op.Opcode || !Call.NumInputs ||
-          !Call.Inputs[0].isConst() ||
-          Call.Inputs[0].ConstVal != Op.Inputs[0].Offset ||
-          !DeclaredCallees.count(Op.Inputs[0].Offset) || Call.SourceCallHint ||
-          Call.IsTailCall || Call.DoesNotReturn || Call.CalleeStackArgs < 0 ||
-          Call.CalleeVectorArgs != 0 || Call.CalleeVectorSlots || Stack > 0)
+      --Budget;
+      if (Op.Addr != Instruction) {
+        Temps.clear();
+        Instruction = Op.Addr;
+      }
+      if (Op.MemoryOrdering != NdMemoryOrdering::None ||
+          Op.MemoryAddressSpace != NdMemoryAddressSpace::Default)
         return {};
-      const int64_t Arguments = std::max<int64_t>(
-          int64_t(Call.CalleeStackArgs) - int64_t(Layout.Registers.size()), 0);
-      const auto End = detail::checkedAffineOffset(
-          Stack, Layout.CallStackBase + Arguments * Layout.SlotBytes);
-      if (!End)
-        return {};
-      // Declared callees own their outgoing argument/home area and storage
-      // below call SP. A shallow frame can expose incoming slots to that area.
-      Reads.emplace_back(std::min<int64_t>(Stack, 0), *End);
-      Calls.erase(At);
-      // A call may overwrite flags, but does not prove destruction of an old
-      // frame-derived value. Retain that taint until an original definition.
-      continue;
-    }
-    if (Op.Opcode == NdOp::RETURN) {
-      if (&Op != &OriginalEntry.back() || Stack || Op.NumInputs != 1 ||
-          Op.Inputs[0] != NdVar::reg(TRI.IntReturnReg, TRI.PointerSize))
-        return {};
-      continue;
-    }
-    FrameValue Value;
-    for (unsigned K = 0; K < Op.NumInputs; ++K)
-      Value.Derived |= Read(Op.Inputs[K]).Derived;
-    if (Op.Opcode == NdOp::LOAD || Op.Opcode == NdOp::STORE) {
-      if (Op.NumInputs != (Op.Opcode == NdOp::LOAD ? 1 : 2))
-        return {};
-      const auto Address = Read(Op.Inputs[0]).Offset;
-      const auto Bytes =
-          Op.Opcode == NdOp::LOAD ? Op.Output.Size : Op.Inputs[1].Size;
-      const auto End =
-          Address ? detail::checkedAffineOffset(*Address, Bytes) : std::nullopt;
-      if (!Address || !Bytes || !End ||
-          (Op.Opcode == NdOp::STORE && Read(Op.Inputs[1]).Derived))
-        return {};
-      if (Op.Opcode == NdOp::STORE)
-        continue;
-      Reads.emplace_back(*Address, *End);
-      Value.Derived = false;
-    } else if (!isSpillScalarStep(Op.Opcode)) {
-      return {};
-    } else if (Op.Opcode == NdOp::COPY && Op.NumInputs == 1 &&
-               Op.Output.Size == Op.Inputs[0].Size) {
-      Value.Offset = Read(Op.Inputs[0]).Offset;
-    } else if ((Op.Opcode == NdOp::INT_ADD || Op.Opcode == NdOp::INT_SUB) &&
-               Op.NumInputs == 2 && Op.Output.Size == TRI.PointerSize &&
-               Op.Inputs[1].isConst()) {
-      if (const auto Base = Read(Op.Inputs[0]).Offset)
-        Value.Offset = detail::checkedAffineOffset(
-            *Base, static_cast<int64_t>(Op.Inputs[1].Offset),
-            Op.Opcode == NdOp::INT_SUB);
-    }
-    Value.Bytes = Op.Output.Size;
-    if (Op.Output.isReg()) {
-      if (Op.Output.Offset == TRI.StackPointer) {
-        if (Op.Output.Size != TRI.PointerSize || !Value.Offset)
+      if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) {
+        const auto At = Calls.find({Op.Addr, Op.Seq});
+        if (Op.NumInputs != 1 || !Op.Inputs[0].isConst() || At == Calls.end())
           return {};
-        Stack = *Value.Offset;
-      } else if (TRI.isFlag(Op.Output.Offset, Op.Output.Size)) {
-        if (Value.Derived)
-          FrameFlags.insert(Op.Output.Offset);
-        else
-          FrameFlags.erase(Op.Output.Offset);
+        const auto &Call = *At->second;
+        if (Call.Opcode != Op.Opcode || !Call.NumInputs ||
+            !Call.Inputs[0].isConst() ||
+            Call.Inputs[0].ConstVal != Op.Inputs[0].Offset ||
+            !DeclaredCallees.count(Op.Inputs[0].Offset) ||
+            Call.SourceCallHint || Call.IsTailCall || Call.DoesNotReturn ||
+            Call.CalleeStackArgs < 0 || Call.CalleeVectorArgs != 0 ||
+            Call.CalleeVectorSlots || Stack > 0)
+          return {};
+        const int64_t Arguments = std::max<int64_t>(
+            int64_t(Call.CalleeStackArgs) - int64_t(Layout.Registers.size()),
+            0);
+        const auto End = detail::checkedAffineOffset(
+            Stack, Layout.CallStackBase + Arguments * Layout.SlotBytes);
+        if (!End)
+          return {};
+        // Declared callees own their outgoing argument/home area and storage
+        // below call SP. A shallow frame can expose incoming slots to that
+        // area.
+        Reads.emplace_back(std::min<int64_t>(Stack, 0), *End);
+        const auto [Matched, New] =
+            MatchedCalls.emplace(Occurrence{Op.Addr, Op.Seq}, &Op);
+        if (!New && Matched->second != &Op)
+          return {};
+        // A call may overwrite flags, but does not prove destruction of an old
+        // frame-derived value. Retain that taint until an original definition.
+        continue;
+      }
+      if (Op.Opcode == NdOp::RETURN) {
+        if (&Op != &Block.Ops.back() || Stack || Op.NumInputs != 1 ||
+            Op.Inputs[0] != NdVar::reg(TRI.IntReturnReg, TRI.PointerSize))
+          return {};
+        continue;
+      }
+      FrameValue Value;
+      for (unsigned K = 0; K < Op.NumInputs; ++K)
+        Value.Derived |= Read(Op.Inputs[K]).Derived;
+      if (Op.Opcode == NdOp::BRANCH || Op.Opcode == NdOp::COND_BR) {
+        if (&Op != &Block.Ops.back() || Value.Derived)
+          return {};
+        continue;
+      }
+      if (Op.Opcode == NdOp::LOAD || Op.Opcode == NdOp::STORE) {
+        if (Op.NumInputs != (Op.Opcode == NdOp::LOAD ? 1 : 2))
+          return {};
+        const auto Address = Read(Op.Inputs[0]).Offset;
+        const auto Bytes =
+            Op.Opcode == NdOp::LOAD ? Op.Output.Size : Op.Inputs[1].Size;
+        const auto End = Address ? detail::checkedAffineOffset(*Address, Bytes)
+                                 : std::nullopt;
+        if (!Address || !Bytes || !End ||
+            (Op.Opcode == NdOp::STORE && Read(Op.Inputs[1]).Derived))
+          return {};
+        if (Op.Opcode == NdOp::STORE)
+          continue;
+        Reads.emplace_back(*Address, *End);
+        Value.Derived = false;
+      } else if (!isSpillScalarStep(Op.Opcode)) {
+        return {};
+      } else if (Op.Opcode == NdOp::COPY && Op.NumInputs == 1 &&
+                 Op.Output.Size == Op.Inputs[0].Size) {
+        Value.Offset = Read(Op.Inputs[0]).Offset;
+      } else if ((Op.Opcode == NdOp::INT_ADD || Op.Opcode == NdOp::INT_SUB) &&
+                 Op.NumInputs == 2 && Op.Output.Size == TRI.PointerSize &&
+                 Op.Inputs[1].isConst()) {
+        if (const auto Base = Read(Op.Inputs[0]).Offset)
+          Value.Offset = detail::checkedAffineOffset(
+              *Base, static_cast<int64_t>(Op.Inputs[1].Offset),
+              Op.Opcode == NdOp::INT_SUB);
+      }
+      Value.Bytes = Op.Output.Size;
+      if (Op.Output.isReg()) {
+        if (Op.Output.Offset == TRI.StackPointer) {
+          if (Op.Output.Size != TRI.PointerSize || !Value.Offset)
+            return {};
+          Stack = *Value.Offset;
+        } else if (TRI.isFlag(Op.Output.Offset, Op.Output.Size)) {
+          if (Value.Derived)
+            FrameFlags.insert(Op.Output.Offset);
+          else
+            FrameFlags.erase(Op.Output.Offset);
+        } else if (Value.Derived) {
+          return {};
+        }
+      } else if (Op.Output.isTemp()) {
+        for (auto At = FirstOverlap(Op.Output);
+             At != Temps.end() &&
+             (At->first < Op.Output.Offset ||
+              At->first - Op.Output.Offset < Op.Output.Size);) {
+          if (!Budget)
+            return {};
+          --Budget;
+          if (At->second.Derived &&
+              (At->first < Op.Output.Offset ||
+               At->second.Bytes >
+                   Op.Output.Size - (At->first - Op.Output.Offset)))
+            return {};
+          At = Temps.erase(At);
+        }
+        Temps.emplace(Op.Output.Offset, Value);
       } else if (Value.Derived) {
         return {};
       }
-    } else if (Op.Output.isTemp()) {
-      auto &Previous = Temps[Op.Output.Offset];
-      if (Previous.Derived && Op.Output.Size < Previous.Bytes) {
-        Previous.Offset.reset();
-      } else {
-        Previous = Value;
+    }
+    // Offsets must agree at joins. Flag taint is a may-fact: retain it if
+    // any predecessor carries it, and revisit users when the union grows.
+    // Stable loops terminate without assuming that a backedge is unread.
+    for (size_t Next : Successors[Index]) {
+      if (1 + FrameFlags.size() > Budget)
+        return {};
+      Budget -= 1 + FrameFlags.size();
+      auto &Entry = Entries[Next];
+      if (!Entry) {
+        Entry = FrameState{Stack, FrameFlags};
+        Work.push_back(Next);
+        continue;
       }
-    } else if (Value.Derived) {
-      return {};
+      if (Entry->Stack != Stack)
+        return {};
+      bool Changed = false;
+      for (uint64_t Flag : FrameFlags)
+        Changed |= Entry->Flags.insert(Flag).second;
+      if (Changed)
+        Work.push_back(Next);
     }
   }
-  if (!Calls.empty())
+  if (!Bounded || MatchedCalls.size() != Calls.size() ||
+      llvm::any_of(Entries, [](const auto &Entry) { return !Entry; }))
     return {};
   std::set<unsigned> Observed;
   const auto Observe = [&](const MedVar &Value) {
@@ -2040,10 +2186,16 @@ std::set<unsigned> unobservedSourceStackParameters(
       Observed.insert(unsigned(Value.Id));
     return true;
   };
-  for (const auto &Op : Func.Blocks.front().Ops)
-    for (unsigned K = 0; K < Op.NumInputs; ++K)
-      if (!Observe(Op.Inputs[K]))
-        return {};
+  for (const auto &Block : Func.Blocks) {
+    for (const auto &Phi : Block.Phis)
+      for (const auto &[Pred, Value] : Phi.Args)
+        if (!Observe(Value))
+          return {};
+    for (const auto &Op : Block.Ops)
+      for (unsigned K = 0; K < Op.NumInputs; ++K)
+        if (!Observe(Op.Inputs[K]))
+          return {};
+  }
   for (const auto &Call : Func.CallInfos)
     for (const auto &Arg : Call.Args)
       if (!Observe(Arg))

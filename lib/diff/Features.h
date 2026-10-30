@@ -47,6 +47,13 @@ struct FunctionFeatures {
   uint64_t Import = 0;
   uint64_t Bytes = 0;
   uint64_t Shape = 0;
+  /// Complete address-independent instruction stream without NOP padding or
+  /// an entry ENDBR marker. Only a candidate key: bytes, CFG, scalar operands
+  /// and referenced identities are still measured before acceptance.
+  uint64_t BodyWithoutPadding = 0;
+  /// The same stream including padding, to require an actual layout edit
+  /// before the additional candidate key broadens the existing search.
+  uint64_t BodyWithPadding = 0;
   uint64_t Mnemonics = 0;
   uint64_t Prime = 0;
   uint64_t GraphTopDown = 0;

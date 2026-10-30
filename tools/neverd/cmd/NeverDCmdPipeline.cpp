@@ -829,6 +829,8 @@ int runDecompile(neverd_session_t Sess) {
        VMEntryFrame.getNumOccurrences() ||
        VMEntryAlignment.getNumOccurrences() ||
        VMExternalStoresDisjointFrame.getNumOccurrences() ||
+       VMProveStoreReturnSeparation.getNumOccurrences() ||
+       VMProveStoreFrameSeparation.getNumOccurrences() ||
        VMMaxSymbolicNodes.getNumOccurrences() ||
        VMNoControlDiscovery.getNumOccurrences())) {
     WithColor::error() << "VM recovery options require --devirtualize\n";
@@ -1113,7 +1115,14 @@ int runDecompile(neverd_session_t Sess) {
         }
         FrameSlots.push_back({Offset, static_cast<uint16_t>(Bytes), 0});
       }
-      neverd_devirtualize_options_v8 ChainRecovery{};
+      neverd_devirtualize_options_v9 ProofRecovery{};
+      if (VMProveStoreReturnSeparation)
+        ProofRecovery.flags |=
+            NEVERD_DEVIRTUALIZE_V9_PROVE_STORE_RETURN_SLOT_SEPARATION;
+      if (VMProveStoreFrameSeparation)
+        ProofRecovery.flags |=
+            NEVERD_DEVIRTUALIZE_V9_PROVE_STORE_FRAME_SEPARATION;
+      auto &ChainRecovery = ProofRecovery.base;
       ChainRecovery.max_chained_visits_per_destination = ChainVisits;
       auto &ExtendedRecovery = ChainRecovery.base;
       ExtendedRecovery.max_node_evaluations = MaxEvaluations;
@@ -1128,7 +1137,7 @@ int runDecompile(neverd_session_t Sess) {
       ExtendedRecovery.base.base.entry_frame_residue = EntryResidue;
       auto &Recovery = ExtendedRecovery.base.base.base;
       auto &Base = Recovery.base.base.base;
-      Base.struct_size = sizeof(ChainRecovery);
+      Base.struct_size = sizeof(ProofRecovery);
       Recovery.base.base.max_control_refinements = MaxRefinements;
       Recovery.base.max_control_fields = MaxFields;
       Recovery.base.max_solver_queries = MaxQueries;
@@ -1150,10 +1159,10 @@ int runDecompile(neverd_session_t Sess) {
       Base.use_llvm = LlvmRoute;
       Base.no_opt = NoOpt;
       const char *Report = nullptr;
-      Source = VMMachineState ? neverd_devirtualize_machine_source_v8(
-                                    Sess, Entry, &ChainRecovery, &Report)
-                              : neverd_devirtualize_source_v8(
-                                    Sess, Entry, &ChainRecovery, &Report);
+      Source = VMMachineState ? neverd_devirtualize_machine_source_v9(
+                                    Sess, Entry, &ProofRecovery, &Report)
+                              : neverd_devirtualize_source_v9(
+                                    Sess, Entry, &ProofRecovery, &Report);
       if (!VMRecoveryReport.empty() && Report) {
         std::error_code EC;
         raw_fd_ostream OS(VMRecoveryReport, EC);

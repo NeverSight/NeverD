@@ -12,6 +12,7 @@
 #include "neverd/backend/c/render/CTypeFormat.h"
 #include "neverd/ir/high/HighIR.h"
 #include "neverd/loader/BinaryImage.h"
+#include "neverd/support/Parallel.h"
 
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/raw_ostream.h"
@@ -719,6 +720,200 @@ ExprPtr dataParam(int Id) {
   V.Size = 8;
   V.TheArch = Arch::X64;
   return HighExpr::makeVar(V, NdType::makeInt(8, false));
+}
+
+ExprPtr cursorTemp(int Id) {
+  MedVar V;
+  V.Kind = MedVar::Temp;
+  V.Id = Id;
+  V.Size = 8;
+  V.TheArch = Arch::X64;
+  return HighExpr::makeVar(V, NdType::makeInt(8, false));
+}
+
+HighStmt cursorAssignment(int Id, ExprPtr Value) {
+  HighStmt S;
+  S.Kind = StmtKind::Assign;
+  S.Dst = cursorTemp(Id);
+  S.Val = std::move(Value);
+  S.KeepsName = true;
+  return S;
+}
+
+ExprPtr cursorArithmetic(NdOp Op, ExprPtr Left, ExprPtr Right) {
+  auto E = HighExpr::makeBinop(Op, std::move(Left), std::move(Right));
+  E->Type = NdType::makeInt(8, false);
+  return E;
+}
+
+HighFunc cursorWalk(bool Backward, bool WriteOnly) {
+  const TypeRef U64 = NdType::makeInt(8, false);
+  HighFunc Walk = function("walk", U64, TextVA);
+  Walk.Body = {cursorAssignment(0, HighExpr::makeConst(
+                                       DataVA + (Backward ? 40 : 16), 8,
+                                       ConstantAddressProvenance::DataAddress)),
+               cursorAssignment(1, HighExpr::makeConst(4, 8)),
+               cursorAssignment(2, HighExpr::makeConst(0, 8))};
+  HighStmt Loop;
+  Loop.Kind = StmtKind::While;
+  Loop.Cond = cursorTemp(1);
+  Loop.Body = {cursorAssignment(3, cursorTemp(0))};
+  if (!WriteOnly)
+    Loop.Body.push_back(cursorAssignment(
+        2, cursorArithmetic(NdOp::INT_ADD, cursorTemp(2),
+                            HighExpr::makeLoad(cursorTemp(3), U64))));
+  HighStmt Store;
+  Store.Kind = StmtKind::Store;
+  Store.StoreAddr = cursorTemp(3);
+  Store.StoreVal =
+      WriteOnly ? HighExpr::makeConst(41, 8)
+                : cursorArithmetic(NdOp::INT_ADD,
+                                   HighExpr::makeLoad(cursorTemp(3), U64),
+                                   HighExpr::makeConst(1, 8));
+  Loop.Body.push_back(std::move(Store));
+  auto View = std::make_shared<HighExpr>();
+  View->Kind = ExprKind::Cast;
+  View->Type = U64;
+  View->Operands = {cursorArithmetic(Backward ? NdOp::INT_SUB : NdOp::INT_ADD,
+                                     cursorTemp(3), HighExpr::makeConst(8, 8))};
+  Loop.Body.push_back(cursorAssignment(0, std::move(View)));
+  Loop.Body.push_back(
+      cursorAssignment(1, cursorArithmetic(NdOp::INT_SUB, cursorTemp(1),
+                                           HighExpr::makeConst(1, 8))));
+  Walk.Body.push_back(std::move(Loop));
+  Walk.Body.push_back(returnStatement(cursorTemp(2)));
+  return Walk;
+}
+
+TEST(CImageObjects, AdvancingCursorsKeepTheWholeMutableImageObject) {
+  // No symbol or direct access supplies the table's extent. Both directions
+  // go through a second variable and a same-width cast on the backedge.
+  for (BinaryFormat Format :
+       {BinaryFormat::COFF, BinaryFormat::ELF, BinaryFormat::MachO}) {
+    for (bool Backward : {false, true}) {
+      for (bool WriteOnly : {false, true}) {
+        SCOPED_TRACE(::testing::Message()
+                     << int(Format) << '/' << Backward << '/' << WriteOnly);
+        std::vector<uint8_t> Data(56, 0xa5);
+        const uint64_t Values[] = {9, 21, 35, 57};
+        for (unsigned I = 0; I < 4; ++I)
+          putPointer(Data, 16 + I * 8, Values[I]);
+        BinaryImage Img = dataImage({}, std::move(Data));
+        Img.Format = Format;
+        HighFunc Address =
+            function("image_bytes", NdType::makeInt(8, false), TextVA + 0x10);
+        Address.Body = {returnStatement(HighExpr::makeConst(
+            DataVA, 8, ConstantAddressProvenance::DataAddress))};
+        const std::string Source =
+            emitWithImage({cursorWalk(Backward, WriteOnly), Address}, Img);
+        EXPECT_NE(Source.find("[56] = {"), NotFound) << Source;
+        const std::string Harness =
+            Source + "\n#define WRITE_ONLY " + (WriteOnly ? "1" : "0") + R"(
+int main(void) {
+  unsigned char expected[56];
+  memset(expected, 0xa5, sizeof expected);
+  for (unsigned round = 0; round < 2; ++round) {
+    if (walk() != (WRITE_ONLY ? 0 : 122 + round * 4))
+      return 1;
+    const uint64_t values[] = {9, 21, 35, 57};
+    for (unsigned i = 0; i < 4; ++i) {
+      uint64_t value = WRITE_ONLY ? 41 : values[i] + round + 1;
+      memcpy(expected + 16 + i * 8, &value, 8);
+    }
+    if (memcmp((void *)(uintptr_t)image_bytes(), expected, sizeof expected))
+      return 2;
+  }
+  return 0;
+}
+)";
+        for (llvm::StringRef Level : {"-O0", "-O2"})
+          source_call_execution_test::compileAndRun(
+              Harness, {Level, "-fsanitize=address,undefined",
+                        "-fno-sanitize-recover=all"});
+      }
+    }
+  }
+}
+
+TEST(CImageObjects, CursorStorageIsIndependentOfFunctionAndWorkerOrder) {
+  BinaryImage Img = dataImage({}, std::vector<uint8_t>(56, 0x80));
+  std::vector<HighFunc> Funcs;
+  for (unsigned I = 0; I < 40; ++I) {
+    HighFunc F = cursorWalk(I % 2, I % 3 == 0);
+    F.Name = "walk_" + std::to_string(I);
+    F.Entry = TextVA + I * 0x10;
+    Funcs.push_back(std::move(F));
+  }
+  const unsigned Saved = workerThreadOverride().load();
+  setWorkerThreadCount(1);
+  const std::string Serial = emitWithImage(Funcs, Img);
+  setWorkerThreadCount(4);
+  const std::string Parallel = emitWithImage(Funcs, Img);
+  setWorkerThreadCount(Saved);
+  EXPECT_EQ(Serial, Parallel);
+  EXPECT_NE(Serial.find("[56] = {"), NotFound) << Serial;
+}
+
+TEST(CImageObjects, CursorStorageNeedsAnAddressPreservingMemoryPath) {
+  const TypeRef U64 = NdType::makeInt(8, false);
+  BinaryImage Img = dataImage({}, std::vector<uint8_t>(56, 0x80));
+  for (unsigned Mode = 0; Mode < 4; ++Mode) {
+    SCOPED_TRACE(Mode);
+    HighFunc F = function("inspect", U64, TextVA);
+    auto Base =
+        HighExpr::makeConst(DataVA, 8,
+                            Mode == 0 ? ConstantAddressProvenance::Scalar
+                                      : ConstantAddressProvenance::DataAddress);
+    ExprPtr Value = Base;
+    if (Mode == 1)
+      Value = HighExpr::makeLoad(Base, U64);
+    if (Mode == 2) {
+      auto Narrow = std::make_shared<HighExpr>();
+      Narrow->Kind = ExprKind::Cast;
+      Narrow->Type = NdType::makeInt(4, false);
+      Narrow->Operands = {Base};
+      Value = HighExpr::makeUnary(NdOp::INT_ZEXT, Narrow);
+      Value->Type = U64;
+    }
+    F.Body = {cursorAssignment(0, Value),
+              cursorAssignment(0, cursorArithmetic(NdOp::INT_ADD, cursorTemp(0),
+                                                   HighExpr::makeConst(8, 8))),
+              returnStatement(Mode == 3
+                                  ? cursorTemp(0)
+                                  : HighExpr::makeLoad(cursorTemp(0), U64))};
+    const std::string Source = emitWithImage({F}, Img);
+    EXPECT_EQ(Source.find("[56]"), NotFound) << Source;
+  }
+}
+
+TEST(CImageObjects, DirectBoundedTablesKeepTheirExtent) {
+  const TypeRef U64 = NdType::makeInt(8, false);
+  std::vector<uint8_t> Data(56, 0xa5);
+  for (unsigned I = 0; I < 4; ++I)
+    putPointer(Data, 16 + I * 8, 9 + I * 13);
+  BinaryImage Img = dataImage({}, std::move(Data));
+  HighFunc F = function("lookup", U64, TextVA);
+  F.Params = {{"arg0", U64}};
+  F.Body = {cursorAssignment(0, cursorArithmetic(NdOp::INT_AND, dataParam(0),
+                                                 HighExpr::makeConst(3, 8)))};
+  auto Address = cursorArithmetic(
+      NdOp::INT_ADD,
+      HighExpr::makeConst(DataVA + 16, 8,
+                          ConstantAddressProvenance::DataAddress),
+      cursorArithmetic(NdOp::INT_MULT, cursorTemp(0),
+                       HighExpr::makeConst(8, 8)));
+  F.Body.push_back(returnStatement(HighExpr::makeLoad(Address, U64)));
+  const std::string Source = emitWithImage({F}, Img);
+  EXPECT_NE(Source.find("[32] = {"), NotFound) << Source;
+  EXPECT_EQ(Source.find("[56]"), NotFound) << Source;
+  source_call_execution_test::compileAndRun(Source + R"(
+int main(void) {
+  for (uint64_t i = 0; i < 16; ++i)
+    if (lookup(i) != 9 + (i & 3) * 13)
+      return 1;
+  return 0;
+}
+)");
 }
 
 TEST(CImageObjects, AnAtomicOnBytesTakesItsTypedPointer) {

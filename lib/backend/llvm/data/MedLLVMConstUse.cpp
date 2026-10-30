@@ -101,7 +101,7 @@ bool MedLLVMEmitter::resolveMaterializableDataAddress(const MedVar &V,
        !Img->isPotentiallyRelocatableAddress(Cur.ConstVal)) ||
       (!HasOwnedRoute && !canResolveGlobalDataConstant(Cur.ConstVal)) ||
       (Cur.Provenance != ConstantAddressProvenance::DataAddress &&
-       addrInCodePtrMirrorRun(Cur.ConstVal)))
+       !usesOriginalImageStorage() && addrInCodePtrMirrorRun(Cur.ConstVal)))
     return false;
   Value = Cur.ConstVal;
   if (OwnerVA)

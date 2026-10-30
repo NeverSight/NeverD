@@ -6,14 +6,138 @@
 
 #include "gtest/gtest.h"
 
+#include "neverd/symbolic/Limits.h"
 #include "neverd/symbolic/SymExpr.h"
 #include "neverd/symbolic/SymMBA.h"
+
+#include <array>
+#include <string>
+#include <vector>
 
 using namespace neverd::symbolic;
 
 namespace {
 
 constexpr uint32_t Widths[] = {1, 3, 8, 32, 64, 128, 256};
+
+TEST(SymExprMask, ConstantCoverAbsorbsContainedXorWithoutChangingItsSource) {
+  for (unsigned W : {8U, 32U, 64U, 65U, 128U, 257U}) {
+    SCOPED_TRACE(W);
+    SymContext C;
+    auto X = C.mkVar("x", W), Y = C.mkVar("y", W);
+    llvm::APInt Mask(W, 0);
+    for (unsigned I = 0; I < W; I += 3)
+      Mask.setBit(I);
+    const auto Cover = C.mkConst(Mask);
+    const auto Source = C.mkAdd(C.mkMul(X, Y), X);
+    const auto Direct = C.mkAnd(Source, Cover);
+    const auto Complement = C.mkNot(C.mkOr(C.mkConst(~Mask), Source));
+    for (auto Term : {Direct, Complement}) {
+      const auto Inner = C.mkXor({Cover, Term, C.mkAnd(Y, Cover)});
+      const auto Before = C.numNodes();
+      EXPECT_EQ(C.mkOr(Cover, Inner), Cover);
+      EXPECT_EQ(C.numNodes(), Before);
+      for (const auto &A :
+           {llvm::APInt(W, 0), Mask, ~Mask, llvm::APInt::getAllOnes(W)}) {
+        const std::array<llvm::APInt, 2> Inputs{A, ~A};
+        const auto Raw =
+            Term == Direct ? ((A * ~A + A) & Mask) : ~(~Mask | (A * ~A + A));
+        EXPECT_EQ(C.eval(Inner, Inputs), Mask ^ Raw ^ (~A & Mask));
+      }
+    }
+  }
+}
+
+TEST(SymExprMask, ConstantCoverPreservesEverySmallMaskAndInput) {
+  for (uint64_t Cover = 0; Cover != 16; ++Cover)
+    for (uint64_t Mask = 0; Mask != 16; ++Mask) {
+      SymContext C;
+      const auto X = C.mkVar("x", 4), K = C.mkConst(4, Cover);
+      const auto Direct = C.mkAnd(X, C.mkConst(4, Mask));
+      const auto Complement = C.mkNot(C.mkOr(C.mkConst(4, ~Mask), X));
+      for (auto Term : {Direct, Complement}) {
+        const auto Result = C.mkOr(K, C.mkXor(K, Term));
+        if ((Mask & ~Cover) == 0)
+          EXPECT_EQ(Result, K);
+        for (uint64_t Value = 0; Value != 16; ++Value) {
+          const uint64_t Raw =
+              Term == Direct ? (Value & Mask) : (~Value & Mask);
+          EXPECT_EQ(C.evalU64(Result, {Value}), Cover | (Cover ^ Raw));
+        }
+      }
+    }
+}
+
+TEST(SymExprMask, ConstantCoverKeepsLiveHighBitsAndUnmaskedOperands) {
+  for (unsigned W : {8U, 64U, 65U, 128U, 257U}) {
+    SymContext C;
+    auto X = C.mkVar("x", W), Y = C.mkVar("y", W);
+    auto Mask = llvm::APInt::getLowBitsSet(W, 3);
+    const auto High = llvm::APInt::getOneBitSet(W, W - 1);
+    const auto Cover = C.mkConst(Mask);
+    const auto Direct = C.mkAnd(X, C.mkConst(Mask | High));
+    const auto Complement = C.mkNot(C.mkOr(C.mkConst(~(Mask | High)), X));
+    for (auto Term : {Direct, Complement, Y, C.mkConst(High)}) {
+      const auto Result = C.mkOr(Cover, C.mkXor(Cover, Term));
+      EXPECT_NE(Result, Cover);
+      for (const auto &A : {llvm::APInt(W, 0), Mask, High, ~Mask}) {
+        const std::array<llvm::APInt, 2> Inputs{A, ~A};
+        llvm::APInt Raw = Term == Direct       ? A & (Mask | High)
+                          : Term == Complement ? ~(~(Mask | High) | A)
+                          : Term == Y          ? ~A
+                                               : High;
+        EXPECT_EQ(C.eval(Result, Inputs), Mask | (Mask ^ Raw));
+      }
+    }
+  }
+}
+
+TEST(SymExprMask, ConstantCoverKeepsUninspectedDeepSourcesIntact) {
+  SymContext C;
+  const auto X = C.mkVar("x", 64), Y = C.mkVar("y", 64);
+  auto Source = X;
+  for (unsigned I = 0; I != 4096; ++I)
+    Source = C.mkAdd(C.mkXor(Source, Y), C.mkOne(64));
+  const auto Cover = C.mkConst(64, 0x55);
+  const auto Unknown = C.mkXor(Cover, Source);
+  const auto Before = C.numNodes();
+  const auto Result = C.mkOr(Cover, Unknown);
+  EXPECT_NE(Result, Cover);
+  EXPECT_LE(C.numNodes(), Before + 1);
+  const auto Contained =
+      C.mkXor(Cover, C.mkNot(C.mkOr(C.mkConst(64, ~uint64_t{0x55}), Source)));
+  const auto ContainedBefore = C.numNodes();
+  EXPECT_EQ(C.mkOr(Cover, Contained), Cover);
+  EXPECT_EQ(C.numNodes(), ContainedBefore);
+}
+
+TEST(SymExprMask, ConstantCoverKeepsExpressionsWhenWordOrTermWorkRunsOut) {
+  constexpr unsigned Work = neverd::limits::symbolic::kSymExprLogicSubsetWork;
+  {
+    constexpr unsigned Width = (Work + 1) * 64;
+    SymContext C;
+    const auto X = C.mkVar("x", Width);
+    const auto Cover = C.mkOne(Width);
+    const auto Hidden = C.mkNot(C.mkOr(C.mkConst(~llvm::APInt(Width, 1)), X));
+    const auto Result = C.mkOr(Cover, C.mkXor(Cover, Hidden));
+    EXPECT_NE(Result, Cover);
+    const std::array<llvm::APInt, 1> Inputs{llvm::APInt::getAllOnes(Width)};
+    EXPECT_EQ(C.eval(Result, Inputs), llvm::APInt(Width, 1));
+  }
+  {
+    SymContext C;
+    const auto Cover = C.mkConst(64, 0x55);
+    llvm::SmallVector<SymRef, 8> Terms{Cover};
+    std::vector<uint64_t> Values;
+    for (unsigned I = 0; I != Work + 1; ++I) {
+      Terms.push_back(C.mkAnd(C.mkVar("x" + std::to_string(I), 64), Cover));
+      Values.push_back(I * 37);
+    }
+    const auto Result = C.mkOr(Cover, C.mkXor(Terms));
+    EXPECT_NE(Result, Cover);
+    EXPECT_EQ(C.evalU64(Result, Values), 0x55u);
+  }
+}
 
 TEST(SymExprMask, BitwiseFieldsFitAnOuterMaskWithoutExpansion) {
   for (unsigned W : {8U, 16U, 32U, 64U, 128U}) {

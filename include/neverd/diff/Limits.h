@@ -53,9 +53,10 @@ inline constexpr uint32_t kMinConstantSetSize = 2;
 /// Fewest distinct imports a function calls before that set may propose
 /// it.
 inline constexpr uint32_t kMinImportCallSetSize = 2;
-/// Fewest instructions before a function's normalized body alone may pair
-/// it.  Below this a body such as `ret` or a jump to an import is shared by
-/// many functions and only context tells them apart.
+/// Fewest instructions before a function's normalized body may pair it or its
+/// body without layout padding may propose it. Below this a body such as `ret`
+/// or a jump to an import is shared by many functions and only context tells
+/// them apart.
 inline constexpr uint32_t kMinShapeInstructions = 3;
 /// Largest group of functions sharing one feature that a drill-down splits by
 /// the next features.  Larger groups stay unresolved for context to split.

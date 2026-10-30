@@ -291,6 +291,8 @@ extern llvm::cl::opt<std::string> VMChainTransfers;
 extern llvm::cl::opt<std::string> VMChainVisits;
 extern llvm::cl::opt<bool> VMChainStopAtRepeat;
 extern llvm::cl::opt<std::string> VMEntryFrame;
+extern llvm::cl::opt<bool> VMProveStoreReturnSeparation;
+extern llvm::cl::opt<bool> VMProveStoreFrameSeparation;
 extern llvm::cl::opt<std::string> VMEntryAlignment;
 extern llvm::cl::opt<bool> VMExternalStoresDisjointFrame;
 extern llvm::cl::opt<std::string> VMMaxSymbolicNodes;

@@ -3475,6 +3475,17 @@ alignment, not semantic equivalence or unique instruction correspondence.
 A separate matching fixture places the real changed pair below four misleading
 sketch candidates on both sides. An allowance of four leaves it undecided;
 allowances of six, sixteen and 256 recover it while retaining ambiguous decoys.
+`ShortLayoutEditsRetainCandidatesBeyondRunSketches` places a changed short
+function beside 260 indistinguishable background bodies, exceeding exhaustive
+candidate admission. Removing its landing instruction and moving padding
+break every common three-instruction run; a competing unrelated function shares
+its new CFG. The better body must still enter the candidate pool in both
+directions and after address reordering. Duplicate alternatives remain
+ambiguous, explicit Unmatch decisions remain effective, and disabling
+approximation does not accept the layout-body proposal as an exact identity.
+`PartialInstructionPairsDoNotIdentifyUnrelatedBodies` retains an unrelated
+reordered body as unmatched even though it shares an initial instruction pair,
+much of the instruction inventory and the same one-block CFG.
 
 Saved-decision regressions reject an accepted pair that contradicts the final
 effective Unmatch in all historical completion states. A reverse-history oracle
@@ -16300,13 +16311,19 @@ with and without a stack store or scratch register setup. Required unknowns
 remain unknown; unused register positions stay padding on repeated recovery.
 `AReintroducedRegisterInputStillReachesImplicitCalls` rejects a restore of the
 original SSA value after an independent register overwrite.
-`UnusedIncomingStackSlotsDoNotRequireValues` executes an original Win64 wrapper
-and both C routes at O0/O2 with UBSan: two later stack arguments remain live
-while an earlier unwritten slot is never read. Selected and omitted queries,
-source optimization on/off and SDK replay retain that distinction.
+`UnusedIncomingStackSlotsDoNotRequireValues` executes original straight-line,
+branching and looping Win64 wrappers and both C routes at O0/O2 with UBSan:
+two later stack arguments remain live while an earlier unwritten slot is never
+read. Selected and omitted queries and source optimization on/off retain that
+distinction; SDK replay also checks the branching body.
 `StackParameterHolesKeepOriginalReadsAndEscapes` covers byte overlaps, nested
 call stack ranges, unknown/stale call bindings, frame escapes, partial address
 writes, exceptional entries and exhausted work.
+`StackParameterHolesRequireEveryOriginalPath` adds all-path reads, shuffled block
+order, stable/changing loops, stack joins, late flag taint across calls, incomplete
+or overlapping CFGs, unreachable cycles, PHI/call/clobber observations, partial
+temporary reads/writes and exact/short budgets. Unknown pointer aliases remain
+barriers; these tests grant no general nested-call or native-entry contract.
 `RegisterSuffixesNeedCurrentSourceCalleeProofs` rejects
 observed high bytes, changed call bindings, other physical registers, exceptional
 observers, independent roots and exhausted work. `ConstantPrefixesNeverEvaluateUnavailableNeighbors`
@@ -17316,3 +17333,15 @@ The repeated-image regression also covers unrelated function-pointer relocations
 ## Canonical supervisor-read audits
 
 `InterpreterSpecialization.SupervisorRead*` uses the actual strict lift and rejects a downgraded `Missing` audit. `BinaryLowIRRefinement.SupervisorReadCompletesOnlyRawRecovery` checks the original-byte recovery boundary and continued refusal of native proofs and source wrapping.
+
+## Constant covers in OR/XOR expressions
+
+`SymExprMask.ConstantCover*` checks exhaustive four-bit masks and inputs, 8–257-bit words, live high bits, shared deep sources, and word/term budget refusal. `FrameOffsets.ConstantCoveredBitsExposeOffsetsWithoutSolverQueries` checks a constant displacement with zero solver queries and rejects an input-dependent neighbor. Run `NeverDSymbolicTests` and `NeverDInterpreterSpecializationTests`.
+
+## Image storage reached through advancing cursors
+
+`CImageObjects.AdvancingCursorsKeepTheWholeMutableImageObject` executes forward/backward cursor loops, intermediate copies, same-width casts and read/write or store-only paths for COFF/ELF/Mach-O at O0/O2 with ASan/UBSan. `CursorStorageNeedsAnAddressPreservingMemoryPath` rejects scalar constants, loaded pointers, narrowing conversions and arithmetic without a memory consumer; `DirectBoundedTablesKeepTheirExtent` retains the bounded direct-index path. Build `NeverDLiftTests`, then run `ctest --test-dir build-release -R '^CImageObjects[.]' --output-on-failure --parallel 4`.
+
+Synthetic LLVM C stack slots retain the complete 128-bit integer store before a runtime selection reads either 64-bit half. `LLVMCValues.WideFrameStoreRetainsBothRuntimeSelectedWords` covers addition and alignment-based OR addressing at O0/O2 with ASan/UBSan and the documented `-fno-strict-aliasing` contract. Run `NeverDLLVMCValueTests`; related frame, vector and display-record suites check the surrounding storage paths.
+
+`MedLLVMDirectData.OriginalImageCursorsIgnoreUnrelatedPointerRelocations` executes mutable cursor loops for x64/AArch64 and COFF/ELF/Mach-O through LLVM C at O0/O2 with ASan/UBSan. In the explicit original-image source mode, exact address occurrences use the shared live image span even beside unrelated pointer relocations. Numeric collisions remain scalars; standalone pointer mirrors retain their existing validation. Run `NeverDMedLLVMDirectDataTests` and the pointer relocation boundary suites.

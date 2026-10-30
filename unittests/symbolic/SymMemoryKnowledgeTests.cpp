@@ -380,3 +380,33 @@ TEST(SymMaterializedRanges, HavocDoesNotResurrectHistoricalCells) {
   EXPECT_EQ(R->front().Offset, 16u);
   EXPECT_EQ(R->front().Bytes, 1u);
 }
+
+TEST(SymMaterializedRanges, RangeInspectionIsReadOnlyAndUsesCurrentBytes) {
+  for (auto Order : {llvm::endianness::little, llvm::endianness::big}) {
+    SymContext C;
+    SymState S(C, Order);
+    const auto P = C.mkVar("p", 64);
+    const auto Q = C.mkVar("may_alias", 64);
+    const auto Begin = std::numeric_limits<uint64_t>::max() - 2;
+    S.store(C.mkAdd(P, C.mkConst(64, Begin)), C.mkVar("wide_value", 128));
+    const auto Nodes = C.numNodes();
+    const auto Live = S.numLiveBytes();
+    EXPECT_TRUE(S.hasMaterializedRegionRange(P, Begin, 16));
+    EXPECT_TRUE(S.hasMaterializedRegionRange(P, 0, 8));
+    EXPECT_FALSE(S.hasMaterializedRegionRange(P, Begin - 1, 16));
+    EXPECT_FALSE(S.hasMaterializedRegionRange(P, 12, 2));
+    EXPECT_FALSE(S.hasMaterializedRegionRange(P, 0, 0));
+    EXPECT_FALSE(S.hasMaterializedRegionRange(Q, 0, 1));
+    EXPECT_FALSE(S.hasMaterializedRegionRange({}, 0, 1));
+    EXPECT_EQ(C.numNodes(), Nodes);
+    EXPECT_EQ(S.numLiveBytes(), Live);
+    S.store(C.mkAdd(P, C.mkConst(64, 7)), C.mkConst(8, 37));
+    EXPECT_TRUE(S.hasMaterializedRegionRange(P, Begin, 16));
+    S.store(Q, C.mkConst(8, 0));
+    EXPECT_FALSE(S.hasMaterializedRegionRange(P, Begin, 16));
+    const auto Unknown = S.load(C.mkAdd(P, C.mkConst(64, 64)), 1);
+    EXPECT_TRUE(S.hasMaterializedRegionRange(P, 64, 1));
+    EXPECT_FALSE(S.hasMaterializedRegionRange(P, 64, 2));
+    EXPECT_FALSE(C.asConst(Unknown));
+  }
+}

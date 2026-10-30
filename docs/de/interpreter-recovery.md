@@ -386,3 +386,41 @@ Ein unvollständiger Adressbereich oder fehlender unveränderlicher Abschnitt er
 ## Interne Übergänge nach einem Stackwechsel
 
 Explizite rohe Maschinenregionen können interne near CALL- und RET-Anweisungen verfolgen, wenn sich der aktuelle Stackzeiger nicht mehr relativ zum Eintrittswert ausdrücken lässt. Der Architekturadapter erhält die tatsächliche Zielerfassung, das Push, das Lesen des Rücksprungworts und das Pop. Jeder interne Rücksprung benötigt weiterhin einen vollständigen Beweis der endlichen Zielmenge aus dem tatsächlichen Stackwort. Nur nachweislich eintrittsrelative Rücksprungzellen gelangen in die Frame-Projektion und das Erhaltungsinventar; der Verlust anderer Stackbeziehungen an einer Graphgrenze kann weiterhin zur Ablehnung führen. Für gewöhnliche Funktionen gelten die Anforderungen zur Frame-Wiederherstellung weiter. Das Ergebnis beschreibt eine rohe Region; die Zusammensetzung der gesamten Funktion sowie die Quellcode- oder native Äquivalenz müssen separat bewiesen werden.
+
+<!-- i18n-section: store-separation-proofs -->
+
+## Optionale Beweise zur Schreibtrennung
+
+`--vm-prove-store-return-separation` beweist vor dem Erhalt von Rücksprungzellen, gespeicherten Frame-Zeigern und aktuellen skalaren Frame-Zellen, dass der vollständige Schreibzugriff sie nicht überlappt. `--vm-prove-store-frame-separation` prüft auch den deklarierten Frame und aktuelle absolute Zellen; es benötigt `--vm-machine-state` und `--vm-entry-frame`. Beide benötigen `--devirtualize`, sind standardmäßig aus, teilen vorhandene Beweis- und Arbeitsbudgets und setzen keine Aliasfreiheit voraus. Unbewiesene Schreibzugriffe behalten die normale Invalidierung; unvollständige Wiederherstellung veröffentlicht keinen Quelltext. Bestehende Kettensteuerungen können Schleifen erhalten.
+
+Die v9-APIs `neverd_devirtualize_source_v9`, `neverd_devirtualize_machine_source_v9` akzeptieren `neverd_devirtualize_options_v9`. Nullinitialisieren und `struct_size` im v1-Präfix auf die Gesamtgröße setzen. Die Flags sind `NEVERD_DEVIRTUALIZE_V9_PROVE_STORE_RETURN_SLOT_SEPARATION`, `NEVERD_DEVIRTUALIZE_V9_PROVE_STORE_FRAME_SEPARATION`; `reserved` muss null sein. Ältere APIs ignorieren diesen Anhang. Python stellt `NeverDDevirtualizeOptionsV9`, `DevirtualizeFlagsV9` bereit; Berichte enthalten `proveStoreReturnSlotSeparation`, `proveStoreFrameSeparation`. Der Test führt eine indizierte lokale Array-Schleife über beide C-Pfade mit O0/O2 und ASan/UBSan aus und prüft den gesamten bereitgestellten Stack-Speicher.
+
+Bei aktivierter Beweisstrategie bleiben auch vollständig bewiesene endliche Register-Offsets relativ zum Eintrittsrahmen über Kontrollflussknoten hinweg erhalten. Zusammenführungen bilden die Vereinigung eingehender Offsets; fehlende Fakten oder eine Überschreitung der bestehenden Kontrolltupelgrenze führen zu unbekannt. Korrelationen zwischen Registern und zusätzliche Alias-Annahmen werden nicht eingeführt.
+
+<!-- i18n-section: finite-indexed-frame-reads -->
+
+## Frame-Lesezugriffe mit endlichem Index
+
+Ein gewöhnliches `LOAD` mit vollständig bewiesener endlicher Menge von Offsets zum Eintrittsframe liest die aktuellen Frame-Bytes jedes Kandidaten und behält einen bedingten symbolischen Wert. Der Laufzeit-Lesezugriff bleibt mit voller Breite und Byte-Reihenfolge im Residuum. Externe Herkunft erfordert diese Eigenschaft für jedes Byte jedes Kandidaten. Unbekannte Bytes und invalidierte Werte bleiben unbekannt; unvollständige Aufzählung erhält das gewöhnliche symbolische Speicherverhalten. Es gelten die bestehenden Budgets für Kontrolltupel, Solver, Knoten und Operationen. Es entsteht weder ein Beleg für unveränderliche Lesezugriffe noch ein neuer Nicht-Alias-Vertrag.
+
+<!-- i18n-section: runtime-validity-refinement -->
+
+## Laufzeitgültigkeit über Graphgrenzen
+
+Bei aktivierter Kontrollzustandserkennung kann ein nichtkonstantes Gültigkeitsprädikat die an einer Graphgrenze verlorenen Erzeugerbits anfordern. Die Wiederherstellung versucht es innerhalb der bestehenden gemeinsamen Budgets erneut und muss die Gültigkeit für jeden erreichbaren Eingangszustand beweisen. So bleiben festgestellte Ausrichtung und maskierte Kontrollregisterwerte über Knoten und Schleifen erhalten. Abgelehnte Zustände werden weder als unmöglich angenommen noch wird die ursprüngliche Laufzeitoperation entfernt.
+
+<!-- i18n-section: ordered-query-source -->
+
+## Geordnete CPU-Abfragen bei der C++-Quelltexterzeugung
+
+`wrapInterpreterMachineQueryStateX64()` ist eine optionale C++-Schnittstelle. Der 160-Byte-Zustand behält das bisherige 136-Byte-Maschinenpräfix und ergänzt drei 64-Bit-Felder: Arrayadresse, Anzahl und Cursor. Jeder 24-Byte-Eintrag enthält sechs 32-Bit-Wörter: leaf, subleaf, EAX, EBX, ECX und EDX. Kanonische CPUID-Befehle verbrauchen nacheinander einen passenden Eintrag und erweitern alle vier Ergebnisse mit Nullen. Gleiche Selektoren dürfen unterschiedliche Antworten haben. Kein Host-CPU-Befehl liefert die Antworten.
+
+Erschöpfung liefert Status 3, ein Selektorkonflikt Status 4. Beide stoppen vor dieser Abfrage, speichern den aktuellen Maschinenzustand, erhalten frühere Gastspeichereffekte und lassen den Cursor unverändert. Eine abgelehnte Eingangsausrichtung liefert weiterhin 2 ohne Schreibzugriffe. Das Array muss zugänglich, unveränderlich, ohne Adressüberlauf und von Zustand sowie Gastspeicher getrennt sein; Anzahl null erlaubt eine Nulladresse. Bestehende Maschinenzustands- und Flagverträge gelten weiter. CLI, C-SDK, GUI, native Äquivalenzbeweise und Hardwareserialisierung werden nicht erweitert. Bisherige Wrapper lehnen CPU-Abfragen weiterhin ab; andere nicht unterstützte Intrinsics und rohe Umgebungen bleiben abgelehnt.
+
+<!-- i18n-section: xmm-query-source -->
+
+## Expliziter XMM-Quellzustand
+
+`wrapInterpreterMachineQueryStateX64V2()` verwendet ein eigenes 416-Byte-Layout: das unveränderte 160-Byte-Abfragepräfix, gefolgt von XMM0–XMM15 als jeweils niedrigem und hohem 64-Bit-Wort. Acht-Byte-Ausrichtung genügt. Alle XMM-Bytes werden am Eintritt geladen und bei normalen Rückgaben sowie fehlgeschlagenen Abfragen gespeichert. Abfrage- und Ausrichtungsstatus behalten ihre Bedeutung.
+
+Die C++-Schnittstelle erlaubt vollständige 128-Bit-XMM-Operanden und rekonstruiert befehlslokale temporäre Lesezugriffe aus den aktuellen Bytedefinitionen, einschließlich partieller Überschreibungen. Fehlende Bytes und funktionsweite temporäre Aliase führen ausdrücklich zum Fehler. Nur von der Architekturschicht bewiesene Ausrichtungsprüfungen konstanter Adressen dürfen entfallen; dynamische oder fehlerhafte Prüfungen werden abgelehnt. Partielle XMM-Operanden, breitere Vektorbanken und Gleitkommaumgebungen bleiben ausgeschlossen. CLI, C-SDK, GUI und native Äquivalenzbeweise werden nicht erweitert; bisherige Wrapper behalten Layout und Einschränkungen.

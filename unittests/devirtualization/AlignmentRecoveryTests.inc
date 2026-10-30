@@ -319,3 +319,129 @@ TEST(InterpreterSpecialization, AlignmentBranchProofAndExactBudgets) {
   EXPECT_EQ(Unrelated.Status, SpecializationStatus::Unsupported);
   EXPECT_TRUE(Unrelated.Residual.Blocks.empty());
 }
+
+TEST(InterpreterSpecialization, AlignmentSurvivesOrdinaryNodeCuts) {
+  for (uint64_t Alignment : {16u, 64u, 256u}) {
+    Provider P;
+    P.add(0x100,
+          {op(NdOp::INT_AND, reg(16), {reg(8), constant(~(Alignment - 1))}),
+           jump(0x110)});
+    P.add(0x110, {requireAlignment(reg(16), Alignment),
+                  op(NdOp::COPY, reg(0), {reg(16)}), ret()});
+    auto Options = alignmentOptions();
+    Options.DiscoverControlState = true;
+    const auto Result = specializeInterpreter(P, {0x100}, Options);
+    ASSERT_TRUE(Result.complete()) << Result.Diagnostic;
+    EXPECT_EQ(count(Result.Residual, NdOp::INTRINSIC), 1u);
+    if (Alignment < 256) {
+      EXPECT_GT(Result.ControlRefinements, 0u);
+      auto WithoutDiscovery = Options;
+      WithoutDiscovery.DiscoverControlState = false;
+      EXPECT_FALSE(
+          specializeInterpreter(P, {0x100}, WithoutDiscovery).complete());
+    }
+    for (uint64_t Input : {uint64_t{0}, uint64_t{1}, uint64_t{63},
+                           UINT64_C(0x123456789abcdef0), UINT64_MAX})
+      EXPECT_EQ(execute(Result.Residual, {{8, Input}}),
+                Input - Input % Alignment);
+    Options.MaxSolverQueries = Result.SolverQueries;
+    Options.MaxOperations = Result.EvaluatedOperations;
+    EXPECT_TRUE(specializeInterpreter(P, {0x100}, Options).complete());
+    for (bool Queries : {false, true}) {
+      auto Short = Options;
+      if (Queries)
+        --Short.MaxSolverQueries;
+      else
+        --Short.MaxOperations;
+      const auto Failure = specializeInterpreter(P, {0x100}, Short);
+      EXPECT_EQ(Failure.Status, SpecializationStatus::BudgetExceeded);
+      EXPECT_TRUE(Failure.Residual.Blocks.empty());
+    }
+  }
+}
+
+TEST(InterpreterSpecialization, AlignmentSurvivesLoopWidening) {
+  Provider P;
+  P.add(0x100,
+        {op(NdOp::INT_AND, reg(16), {reg(8), constant(~uint64_t{15})}),
+         op(NdOp::INT_AND, reg(24), {reg(8), constant(3)}),
+         op(NdOp::INT_ADD, reg(24), {reg(24), constant(1)}), jump(0x110)});
+  P.add(0x110,
+        {requireAlignment(reg(16)),
+         op(NdOp::INT_ADD, reg(16), {reg(16), constant(16)}),
+         op(NdOp::INT_SUB, reg(24), {reg(24), constant(1)}),
+         op(NdOp::INT_NOTEQUAL, reg(32, 1), {reg(24), constant(0)}),
+         op(NdOp::COND_BR, {}, {constant(0x110), reg(32, 1)})},
+        0x120);
+  P.add(0x120, {op(NdOp::COPY, reg(0), {reg(16)}), ret()});
+  auto Options = alignmentOptions();
+  Options.DiscoverControlState = true;
+  const auto Result = specializeInterpreter(P, {0x100}, Options);
+  ASSERT_TRUE(Result.complete()) << Result.Diagnostic;
+  for (uint64_t Input : {uint64_t{0}, uint64_t{1}, uint64_t{2}, uint64_t{3},
+                         UINT64_C(0x123456789abcdef0), UINT64_MAX})
+    EXPECT_EQ(execute(Result.Residual, {{8, Input}}),
+              (Input & ~uint64_t{15}) + 16 * ((Input & 3) + 1));
+}
+
+TEST(InterpreterSpecialization, AlignmentDiscoveryKeepsInvalidIncomingArms) {
+  for (unsigned Kind = 0; Kind != 3; ++Kind) {
+    Provider P;
+    P.add(0x100,
+          {op(NdOp::INT_EQUAL, reg(32, 1), {reg(24), constant(0)}),
+           op(NdOp::COND_BR, {}, {constant(0x110), reg(32, 1)})},
+          0x120);
+    P.add(0x110, {op(NdOp::INT_AND, reg(16), {reg(8), constant(~uint64_t{15})}),
+                  jump(0x130)});
+    P.add(0x120,
+          {op(NdOp::INT_AND, reg(16), {reg(8), constant(~uint64_t{15})}),
+           Kind == 2 ? op(NdOp::COPY, reg(16), {reg(40)})
+                     : op(NdOp::INT_ADD, reg(16), {reg(16), constant(Kind)}),
+           jump(0x130)});
+    P.add(0x130, {requireAlignment(reg(16)), op(NdOp::COPY, reg(0), {reg(16)}),
+                  ret()});
+    auto Options = alignmentOptions();
+    Options.DiscoverControlState = true;
+    const auto Result = specializeInterpreter(P, {0x100}, Options);
+    EXPECT_EQ(Result.complete(), Kind == 0)
+        << Kind << ": " << Result.Diagnostic;
+    if (Kind)
+      EXPECT_TRUE(Result.Residual.Blocks.empty());
+    else if (Result.complete())
+      for (uint64_t Branch : {0u, 1u})
+        EXPECT_EQ(execute(Result.Residual, {{8, 53}, {24, Branch}}), 48u);
+  }
+}
+
+TEST(InterpreterSpecialization, RuntimeValidityDiscoveryTracksMaskedMXCSR) {
+  for (bool Mask : {false, true}) {
+    Provider P;
+    P.add(0x100, {op(NdOp::INT_AND, reg(16, 4),
+                     {reg(8, 4), constant(Mask ? 0xffbf : UINT32_MAX, 4)}),
+                  jump(0x110)});
+    P.add(0x110,
+          {op(NdOp::INTRINSIC, {},
+              {constant(uint64_t(Intrinsic::X86WriteMXCSR), 2), reg(16, 4)}),
+           op(NdOp::INTRINSIC, reg(0, 4),
+              {constant(uint64_t(Intrinsic::X86ReadMXCSR), 2)}),
+           op(NdOp::INT_ZEXT, reg(0), {reg(0, 4)}), ret()});
+    auto Options = alignmentOptions();
+    Options.X64MXCSRMask = 0xffbf;
+    Options.DiscoverControlState = true;
+    const auto Result = specializeInterpreter(P, {0x100}, Options);
+    EXPECT_EQ(Result.complete(), Mask) << Result.Diagnostic;
+    if (!Mask) {
+      EXPECT_TRUE(Result.Residual.Blocks.empty());
+      continue;
+    }
+    ASSERT_TRUE(Result.complete());
+    for (uint64_t Input : {uint64_t{0}, uint64_t{64}, uint64_t{0x1f80},
+                           uint64_t{0x8040}, UINT64_MAX}) {
+      uint32_t Final = 0;
+      EXPECT_EQ(execute(Result.Residual, {{8, Input}}, {}, 0, {}, {}, {},
+                        nullptr, 0, 0xffbf, &Final),
+                Input & 0xffbf);
+      EXPECT_EQ(Final, Input & 0xffbf);
+    }
+  }
+}

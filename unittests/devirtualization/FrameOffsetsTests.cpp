@@ -70,6 +70,31 @@ SymRef residue(SymContext &Ctx, SymRef Root, uint64_t Mask, uint64_t Value) {
                   Ctx.mkConst(64, Value));
 }
 
+TEST(FrameOffsets, ConstantCoveredBitsExposeOffsetsWithoutSolverQueries) {
+  SymContext C;
+  const auto Root = C.mkVar("entry", 64);
+  const auto Adjusted = C.mkAdd(Root, C.mkConst(64, uint64_t{0} - 69));
+  const auto Mask = C.mkConst(64, 0xa5);
+  const auto Hidden =
+      C.mkNot(C.mkOr(C.mkConst(64, ~uint64_t{0xa5}), C.mkNot(Adjusted)));
+  const auto Address = C.mkAdd(Adjusted, C.mkOr(Mask, C.mkXor(Mask, Hidden)));
+  SpecializationOptions Options;
+  Options.MaxSolverQueries = 0;
+  uint64_t Queries = 0;
+  const auto Result =
+      proveFrameOffset(C, C.mkTrue(), Address, Root, Options, Queries);
+  ASSERT_EQ(Result.Status, FrameOffsetStatus::Exact);
+  EXPECT_EQ(Result.Offset, uint64_t{0xa5} - 69);
+  EXPECT_EQ(Queries, 0u);
+
+  // An uncovered high bit makes the displacement input-dependent.
+  const auto Wider =
+      C.mkNot(C.mkOr(C.mkConst(64, ~uint64_t{0x1a5}), C.mkNot(Adjusted)));
+  const auto Variable = C.mkAdd(Adjusted, C.mkOr(Mask, C.mkXor(Mask, Wider)));
+  EXPECT_EQ(proveFrameOffset(C, C.mkTrue(), Variable, Root, {}, Queries).Status,
+            FrameOffsetStatus::NonUnique);
+}
+
 TEST(FrameOffsets, EveryAlignmentResidueKeepsArbitraryHighBits) {
   uint64_t Queries = 0;
   for (uint64_t Alignment : {2, 4, 8, 16, 32}) {

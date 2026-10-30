@@ -675,8 +675,7 @@ public:
           Lifted.Blocks.front().Preds.empty()) {
         const auto Layout =
             getTargetRegInfo(Img.Arch).integerArgumentLayout(Img.abiFormat());
-        if ((Lifted.Blocks.size() == 1 &&
-             Converted.Body->Params.size() > Layout.Registers.size()) ||
+        if (Converted.Body->Params.size() > Layout.Registers.size() ||
             llvm::any_of(Converted.Body->Params,
                          [&](const MedVar &Parameter) {
                            return Parameter.Size <

@@ -10,10 +10,13 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "SourceCallExecution.h"
 #include "gtest/gtest.h"
 
+#include "neverd/backend/LLVMOriginalImageStorage.h"
 #include "neverd/backend/c/LLVMC/LLVMCEmitter.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
+#include "neverd/ir/TargetRegInfo.h"
 
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/IR/Constants.h"
@@ -241,6 +244,137 @@ TEST(MedLLVMDirectData, ARequiredPointerStillRejectsAnUnresolvedTarget) {
     llvm::LLVMContext Context;
     EXPECT_EQ(emit(Image, {F}, Context), nullptr);
   }
+}
+
+TEST(MedLLVMDirectData, OriginalImageCursorsIgnoreUnrelatedPointerRelocations) {
+  for (Arch A : {Arch::X64, Arch::AArch64})
+    for (BinaryFormat Format :
+         {BinaryFormat::COFF, BinaryFormat::ELF, BinaryFormat::MachO})
+      for (auto Provenance : {ConstantAddressProvenance::Address,
+                              ConstantAddressProvenance::DataAddress}) {
+        SCOPED_TRACE(static_cast<int>(A));
+        SCOPED_TRACE(static_cast<int>(Format));
+        SCOPED_TRACE(static_cast<int>(Provenance));
+        BinaryImage Image = image(A, Format);
+        MedFunc F = function(Image);
+        F.Name = "advance_cursor";
+        F.ReturnType = NdType::makeInt(8, false);
+        F.Blocks.resize(3);
+        for (int I = 0; I != 3; ++I) {
+          F.Blocks[I].Id = I;
+          F.Blocks[I].StartAddr = CodeVA + I * 0x20;
+          F.Blocks[I].EndAddr = CodeVA + (I + 1) * 0x20;
+        }
+        F.Blocks[0].Succs = {1};
+        F.Blocks[1].Preds = {0, 1};
+        F.Blocks[1].Succs = {1, 2};
+        F.Blocks[2].Preds = {1};
+        auto Value = [&](int Id, unsigned Size = 8) {
+          MedVar V;
+          V.Kind = MedVar::Temp;
+          V.TheArch = A;
+          V.Id = Id;
+          V.SSAVer = 1;
+          V.Size = Size;
+          return V;
+        };
+        auto Scalar = [](uint64_t Bits, unsigned Size = 8) {
+          return MedVar::makeConst(Bits, Size,
+                                   ConstantAddressProvenance::Scalar);
+        };
+        auto Add = [&](unsigned Block, NdOp Opcode, MedVar Output,
+                       std::initializer_list<MedVar> Inputs) {
+          MedOp Op;
+          Op.Opcode = Opcode;
+          Op.Output = Output;
+          Op.Addr = F.Blocks[Block].StartAddr + F.Blocks[Block].Ops.size();
+          for (const auto &Input : Inputs)
+            Op.addInput(Input);
+          F.Blocks[Block].Ops.push_back(Op);
+        };
+        MedVar Count = Value(0);
+        Count.Kind = MedVar::Param;
+        Count.RegOff = getTargetRegInfo(A).integerParamRegs(Format)[0];
+        F.Params.push_back(Count);
+        Add(0, NdOp::COPY, Value(1),
+            {MedVar::makeConst(FlagVA, 8, Provenance)});
+        Add(0, NdOp::BRANCH, {}, {Scalar(F.Blocks[1].StartAddr)});
+        F.Blocks[1].Phis.push_back({Value(2), {{0, Value(1)}, {1, Value(3)}}});
+        F.Blocks[1].Phis.push_back({Value(4), {{0, Scalar(0)}, {1, Value(5)}}});
+        Add(1, NdOp::LOAD, Value(6, 1), {Value(2)});
+        Add(1, NdOp::INT_XOR, Value(7, 1), {Value(6, 1), Scalar(0x5a, 1)});
+        Add(1, NdOp::STORE, {}, {Value(2), Value(7, 1)});
+        Add(1, NdOp::INT_ADD, Value(3), {Value(2), Scalar(1)});
+        Add(1, NdOp::INT_ADD, Value(5), {Value(4), Scalar(1)});
+        Add(1, NdOp::INT_LESS, Value(8, 1), {Value(5), Count});
+        Add(1, NdOp::COND_BR, {}, {Scalar(F.Blocks[1].StartAddr), Value(8, 1)});
+        MedVar Result = Value(9);
+        Result.Kind = MedVar::Reg;
+        Result.RegOff = getTargetRegInfo(A).IntReturnReg;
+        Add(2, NdOp::COPY, Result, {Value(3)});
+        Add(2, NdOp::RETURN, {}, {Result});
+        MedFunc Literal = function(Image, CodeVA + 0x80);
+        Literal.Name = "numeric_collision";
+        Literal.ReturnType = NdType::makeInt(8, false);
+        MedOp Copy;
+        Copy.Opcode = NdOp::COPY;
+        Copy.Output = Result;
+        Copy.addInput(Scalar(FlagVA));
+        Literal.Blocks.front().Ops.push_back(Copy);
+        MedOp Return;
+        Return.Opcode = NdOp::RETURN;
+        Return.addInput(Result);
+        Literal.Blocks.front().Ops.push_back(Return);
+        llvm::LLVMContext Context;
+        MedLLVMEmitter Emitter;
+        Emitter.setOriginalImageStorageForSource(true);
+        auto Module = Emitter.emit({F, Literal}, Context, "original-cursor", A,
+                                   {}, &Image, Format);
+        ASSERT_NE(Module, nullptr);
+        ASSERT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
+        unsigned OriginalSpans = 0;
+        for (const auto &Global : Module->globals())
+          OriginalSpans += llvm_original_image::isMarked(Global);
+        ASSERT_EQ(OriginalSpans, 1u);
+        CEmitterOptions Options;
+        Options.TheArch = A;
+        Options.Format = Format;
+        std::string Source;
+        llvm::raw_string_ostream Out(Source);
+        ASSERT_TRUE(
+            LLVMCEmitter().emit(*Module, Out, Options, nullptr, &Image));
+        Out.flush();
+        const std::string Prefix = "extern uint8_t ";
+        const size_t Start = Source.find(Prefix);
+        ASSERT_NE(Start, std::string::npos) << Source;
+        const size_t NameStart = Start + Prefix.size();
+        const std::string Name =
+            Source.substr(NameStart, Source.find('[', NameStart) - NameStart);
+        const size_t Size = DataVA + Image.Segments.back().Size - CodeVA;
+        Source += "\nuint8_t " + Name + "[" + std::to_string(Size) +
+                  "];\n#define image " + Name + "\n#define offset " +
+                  std::to_string(FlagVA - CodeVA) + "\n";
+        Source += "#define original_address " + std::to_string(FlagVA) + "\n";
+        Source += R"c(
+int main(void) {
+  for (unsigned count = 1; count <= 16; ++count) {
+    for (unsigned i = 0; i < sizeof(image); ++i) image[i] = i * 13 + count;
+    if (advance_cursor(count) != (uintptr_t)(image + offset + count)) return 1;
+    if (numeric_collision() != original_address) return 2;
+    for (unsigned i = 0; i < sizeof(image); ++i) {
+      uint8_t expected = i * 13 + count;
+      if (i >= offset && i < offset + count) expected ^= 0x5a;
+      if (image[i] != expected) return 3;
+    }
+  }
+  return 0;
+}
+)c";
+        for (llvm::StringRef Level : {"-O0", "-O2"})
+          source_call_execution_test::compileAndRun(
+              Source, {Level, "-fsanitize=address,undefined",
+                       "-fno-sanitize-recover=all"});
+      }
 }
 
 TEST(MedLLVMDirectData, TakingAnAddressPromotesEarlierByteAccesses) {

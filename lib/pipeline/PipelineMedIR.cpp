@@ -183,8 +183,7 @@ void prepareRecoveredSourceStackAccesses(const BinaryImage &Image,
   for (const auto &[Entry, Func] : Callees) {
     if (!Referenced.count(Entry))
       continue;
-    bool Candidate = Func->Blocks.size() == 1 &&
-                     Func->Params.size() > Arguments.Registers.size();
+    bool Candidate = Func->Params.size() > Arguments.Registers.size();
     uint64_t Weight = 1;
     for (const auto &Block : Func->Blocks) {
       Weight += Block.Ops.size();
@@ -264,6 +263,7 @@ void prepareRecoveredSourceStackAccesses(const BinaryImage &Image,
     for (const auto &[Target, Signature] :
          *Result.OmittedCalleeVariadicArguments)
       DeclaredCallees.erase(Target);
+  std::vector<std::optional<std::set<unsigned>>> StackReads(Sources.size());
   while (!Work.empty()) {
     std::vector<uint64_t> WaveWeights;
     for (size_t I : Work)
@@ -277,9 +277,12 @@ void prepareRecoveredSourceStackAccesses(const BinaryImage &Image,
                                                 Remaining[I], Overwrites);
         if (const auto At = OriginalBlocks.find(Sources[I]->Entry);
             At != OriginalBlocks.end() && !At->second.empty()) {
-          for (unsigned P : unobservedSourceStackParameters(
-                   *Sources[I], At->second.front().Ops, DeclaredCallees,
-                   Remaining[I]))
+          // This original-CFG fact is independent of the changing source
+          // register summaries. Reuse it across this phase's dependency waves.
+          if (!StackReads[I])
+            StackReads[I] = unobservedSourceStackParameters(
+                *Sources[I], At->second, DeclaredCallees, Remaining[I]);
+          for (unsigned P : *StackReads[I])
             Reads[W].emplace(P, 0);
           Destroyed[W] = sourceRegisterInputOverwrites(
               *Sources[I], At->second, Reads[W], Overwrites,

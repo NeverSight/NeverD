@@ -1954,7 +1954,10 @@ LLVMCWriter::frameSlotAccess(const llvm::Value *Ptr, uint16_t AccessSize,
       return std::nullopt;
     const std::string Syn = syntheticFrameSlotName(Disp);
     if (!Syn.empty() && !isReservedFrameName(Syn)) {
-      const TypeRef SynType = AccessSize && AccessSize <= 8
+      // An integer SIMD spill owns all sixteen bytes even when later reads
+      // select only one word. Leaving its type unknown declares an eight-byte
+      // local and truncates the store before that selection.
+      const TypeRef SynType = AccessSize && AccessSize <= 16
                                   ? NdType::makeInt(AccessSize, false)
                                   : nullptr;
       if (const auto Known = FrameSlots.find(Off);

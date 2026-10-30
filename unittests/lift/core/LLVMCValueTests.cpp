@@ -9,6 +9,7 @@
 #include "../../../lib/backend/c/pass/LLVMC/LLVMCBitTests.h"
 #include "../../../lib/backend/c/pass/LLVMC/LLVMCCommonBranches.h"
 #include "../../../lib/backend/c/render/X86/X86Virtualization.h"
+#include "SourceCallExecution.h"
 #include "WindowsQualifiedFixture.h"
 #include "gtest/gtest.h"
 
@@ -6232,6 +6233,63 @@ int main(void) {
 )c";
   for (llvm::StringRef Optimization : {"-O0", "-O2"})
     compileAndRun(Source, Optimization, {}, true);
+}
+
+TEST(LLVMCValues, WideFrameStoreRetainsBothRuntimeSelectedWords) {
+  llvm::LLVMContext Context;
+  llvm::Module Module("wide-frame-storage", Context);
+  Module.setDataLayout("e-p:64:64-i128:128");
+  llvm::IRBuilder<> B(Context);
+  for (bool UseOr : {false, true}) {
+    auto *Word = B.getInt64Ty();
+    auto *Wide = B.getInt128Ty();
+    auto *Function = llvm::Function::Create(
+        llvm::FunctionType::get(Word, {Word, Word, Word}, false),
+        llvm::GlobalValue::ExternalLinkage,
+        UseOr ? "select_frame_or" : "select_frame_add", Module);
+    B.SetInsertPoint(llvm::BasicBlock::Create(Context, "entry", Function));
+    auto *Frame = B.CreateAlloca(llvm::ArrayType::get(B.getInt8Ty(), 96),
+                                 nullptr, "frame");
+    Frame->setAlignment(llvm::Align(16));
+    auto *End = B.CreateGEP(B.getInt8Ty(), Frame, B.getInt64(72), "frame_end");
+    auto *Base = B.CreatePtrToInt(End, Word, "rsp_init");
+    auto *Address = B.CreateAdd(Base, B.getInt64(-24));
+    auto *Pair =
+        B.CreateOr(B.CreateZExt(Function->getArg(0), Wide),
+                   B.CreateShl(B.CreateZExt(Function->getArg(1), Wide), 64));
+    B.CreateAlignedStore(Pair, B.CreateIntToPtr(Address, B.getPtrTy()),
+                         llvm::Align(16));
+    auto *Offset = B.CreateShl(B.CreateAnd(Function->getArg(2), 1), 3);
+    auto *Selected =
+        UseOr ? B.CreateOr(Address, Offset) : B.CreateAdd(Address, Offset);
+    B.CreateRet(B.CreateAlignedLoad(
+        Word, B.CreateIntToPtr(Selected, B.getPtrTy()), llvm::Align(8)));
+  }
+  ASSERT_FALSE(llvm::verifyModule(Module, &llvm::errs()));
+  std::string Source;
+  llvm::raw_string_ostream Out(Source);
+  ASSERT_TRUE(neverd::LLVMCEmitter().emit(Module, Out, {}));
+  Source += R"c(
+int main(void) {
+  const uint64_t values[] = {0, 1, UINT64_MAX, UINT64_C(0x123456789abcdef0),
+                            UINT64_C(0xfedcba9876543210)};
+  const uint64_t indices[] = {0, 1, 2, 3, 255, 256, UINT64_MAX};
+  for (unsigned a = 0; a < sizeof(values) / sizeof(values[0]); ++a)
+    for (unsigned b = 0; b < sizeof(values) / sizeof(values[0]); ++b)
+      for (unsigned i = 0; i < sizeof(indices) / sizeof(indices[0]); ++i) {
+        uint64_t expected = indices[i] & 1 ? values[b] : values[a];
+        if (select_frame_add(values[a], values[b], indices[i]) != expected)
+          return 1;
+        if (select_frame_or(values[a], values[b], indices[i]) != expected)
+          return 2;
+      }
+  return 0;
+}
+)c";
+  for (llvm::StringRef Optimization : {"-O0", "-O2"})
+    source_call_execution_test::compileAndRun(
+        Source, {Optimization, "-fsanitize=address,undefined",
+                 "-fno-sanitize-recover=all"});
 }
 
 TEST(LLVMCValues, BulkFrameMemoryKeepsContiguousBackingStorage) {

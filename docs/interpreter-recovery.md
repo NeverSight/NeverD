@@ -621,3 +621,41 @@ An incomplete address domain or unavailable immutable span retains the whole run
 ## Internal transfers after changing the stack
 
 Explicit raw machine regions can follow internal near CALL and RET instructions when the current stack pointer is no longer an entry-relative value. The architecture adapter retains the physical target capture, push, return-word read and pop. Every internal return still requires an exhaustive finite target proof from the actual stack word. Only proved entry-relative return cells enter the frame projection and preservation inventory; losing an unrelated stack relation at a graph boundary can still cause recovery to refuse. Ordinary function recovery retains its restored-frame requirements. This capability supplies a raw region result; whole-function composition and source or native equivalence remain separate obligations.
+
+<!-- i18n-section: store-separation-proofs -->
+
+## Optional store separation proofs
+
+`--vm-prove-store-return-separation` proves that each complete write misses retained return cells, saved frame pointers and current scalar frame cells before preserving them. `--vm-prove-store-frame-separation` also checks the declared frame and current absolute cells; it requires `--vm-machine-state` and `--vm-entry-frame`. Both require `--devirtualize`, default to disabled, share existing proof/work budgets and add no nonalias premise. Unproved writes keep ordinary invalidation; incomplete recovery publishes no source. Combine them with existing chain controls when a loop should remain a loop.
+
+The v9 APIs `neverd_devirtualize_source_v9` and `neverd_devirtualize_machine_source_v9` accept `neverd_devirtualize_options_v9`. Zero-initialize it and set the v1 prefix’s `struct_size` to the complete size. The flags are `NEVERD_DEVIRTUALIZE_V9_PROVE_STORE_RETURN_SLOT_SEPARATION` and `NEVERD_DEVIRTUALIZE_V9_PROVE_STORE_FRAME_SEPARATION`; `reserved` must be zero. Older entry points ignore this tail. Python exposes `NeverDDevirtualizeOptionsV9` and `DevirtualizeFlagsV9`. Reports include `proveStoreReturnSlotSeparation` and `proveStoreFrameSeparation`. The source regression runs an indexed local-array loop through both C routes at O0/O2 with ASan/UBSan and checks the entire supplied stack storage.
+
+With either proof strategy enabled, recovery also retains exhaustively proved finite register offsets from the entry frame across control-flow nodes. Joins take the union of incoming offsets; missing facts or a union exceeding the existing control-tuple limit become unknown. This retains no cross-register correlation and adds no aliasing premise.
+
+<!-- i18n-section: finite-indexed-frame-reads -->
+
+## Finite indexed frame reads
+
+An ordinary `LOAD` with an exhaustively proved finite set of entry-frame offsets reads the current frame bytes at every candidate and retains a conditional symbolic value. The runtime read stays in the residual, with its full width and byte order. External origin requires that provenance for every byte at every candidate. Unknown bytes and invalidated values remain unknown; incomplete enumeration keeps ordinary symbolic memory behavior. Existing control-tuple, solver, node and operation budgets apply. This creates no immutable-read witness or new nonalias contract.
+
+<!-- i18n-section: runtime-validity-refinement -->
+
+## Runtime validity across graph boundaries
+
+With control-state discovery enabled, a nonconstant runtime validity predicate can request the producer bits lost at a graph boundary. Recovery then retries under the existing shared budgets and must prove validity for every reachable incoming state. This preserves established alignment and masked control-register values across nodes and loops; it does not assume that rejected states are impossible or remove the original runtime operation.
+
+<!-- i18n-section: ordered-query-source -->
+
+## Ordered CPU queries in C++ source recovery
+
+`wrapInterpreterMachineQueryStateX64()` is an opt-in C++ source interface. Its 160-byte state keeps the original 136-byte machine prefix, then three 64-bit fields: query-array address, count and cursor. Each 24-byte record contains six 32-bit words: leaf, subleaf, EAX, EBX, ECX and EDX. Canonical CPUID instructions consume one matching record in order and zero-extend all four results; repeated selectors may have different answers. No host CPU instruction provides answers.
+
+Exhaustion returns status 3 and selector mismatch returns 4. Both stop before that query, commit the current machine state, retain earlier guest memory effects and leave the cursor unchanged. Entry-alignment rejection still returns 2 without writes. The caller must provide an accessible, immutable, nonwrapping array disjoint from state and guest memory; zero count permits a null address. Existing machine-state and flag-profile contracts still apply. This interface adds no CLI, C SDK, GUI, native-equivalence or hardware-serialization support. Existing wrappers still refuse CPU queries, and other unsupported intrinsics and raw environments remain rejected.
+
+<!-- i18n-section: xmm-query-source -->
+
+## Explicit XMM source state
+
+`wrapInterpreterMachineQueryStateX64V2()` uses a separate 416-byte layout: the unchanged 160-byte query-state prefix followed by XMM0–XMM15, each stored as low and high 64-bit words. Eight-byte state alignment suffices. Every XMM byte is loaded at entry and committed at ordinary returns and query-failure exits. Query and entry-alignment statuses retain their earlier meanings.
+
+This C++ interface admits whole 128-bit XMM operands and reconstructs instruction-local temporary reads from their current byte definitions, preserving partial overwrites. Missing bytes and function-temporary aliases fail explicitly. Only exact constant-address alignment checks proved by the architecture owner can be removed; dynamic or malformed checks remain refused. Partial XMM operands, wider vector banks and floating-point environments remain unsupported. This adds no CLI, C SDK, GUI or native-equivalence support; earlier wrappers retain their layouts and restrictions.

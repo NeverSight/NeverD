@@ -159,6 +159,20 @@ LTO-containing directions without losing a correct labelled pair. Pure PGO
 results are unchanged. The original numeric gates still fail, and the original
 failed cohort remains retained.
 
+Matcher version 11 adds a bounded candidate key for complete instruction bodies
+that differ in NOP padding, an entry ENDBR marker or address layout. It retains
+scalar operands and measures original instructions and references before any
+pair is accepted. Authored scale controls cover missed short bodies, misleading
+partial instruction pairs, duplicate candidates, direction, layout and analyst
+rejections. The six consumed XZ directions recover four additional labelled
+pairs and remove four wrong pairs without losing a correct pair. The nine
+other consumed release cases preserve every previously correct labelled pair
+and add no wrong pair. The added key is used only when the full instruction
+streams differ, so unchanged-layout duplicates do not expand the search. The broader
+unordered-sketch and partial-pair experiments that regressed these inputs were
+rejected, and their results are retained. These are development regressions,
+not fresh qualification: the original XZ and zstd/OpenSSL gates still fail.
+
 The DWARF adapter now follows an LTO concrete body's abstract-origin chain to
 its original definition unit. A specification declaration supplies its own
 file metadata without replacing that definition unit. Multi-unit local names,

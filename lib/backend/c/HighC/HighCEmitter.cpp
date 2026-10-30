@@ -64,6 +64,8 @@
 #include "neverd/support/Parallel.h"
 
 #include "llvm/ADT/APFloat.h"
+#include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
@@ -3056,6 +3058,125 @@ void HighCWriter::collectImageObjects(const std::vector<HighFunc> &Funcs) {
     ImageObject &Obj = ImageObjects[Object->first];
     Obj.IndexedBytes = std::max(Obj.IndexedBytes, Object->second);
   };
+  // A cursor can keep its image base outside the expression that reads it:
+  // `p = &table; while (...) { use(*p); p += stride; }`. Follow storage
+  // dependencies through every assignment, including backedges. This is a
+  // may-reach observation, not a constant-value or dominance proof. Each
+  // expression and variable is visited once per dependency-state combination.
+  struct CursorStorageRoot {
+    va_t Address;
+    bool Written;
+  };
+  auto ReadCursorStorage = [&](const HighFunc &Func) {
+    llvm::SmallVector<CursorStorageRoot, 4> Roots;
+    struct Use {
+      const HighExpr *Expr;
+      bool Moved = false;
+      bool Written = false;
+      bool ThroughVariable = false;
+    };
+    VarKeyMap<llvm::SmallVector<const HighExpr *, 2>> Definitions;
+    llvm::SmallVector<const HighExpr *, 16> Expressions;
+    llvm::SmallVector<Use, 16> Pending;
+    const unsigned PointerBytes = Opts.Image->getPointerSize();
+    walkStmts(Func.Body, [&](const HighStmt &S) {
+      if (S.Kind == StmtKind::Assign && S.Dst && S.Val && S.Dst->Type &&
+          S.Dst->Type->Size == PointerBytes &&
+          (S.Dst->Kind == ExprKind::Var || S.Dst->Kind == ExprKind::Phi))
+        Definitions[varKey(S.Dst->Var)].push_back(S.Val.get());
+      if (S.Kind == StmtKind::Store && S.StoreAddr &&
+          S.MemoryAddressSpace == NdMemoryAddressSpace::Default)
+        Pending.push_back({S.StoreAddr.get(), false, true});
+      forEachExpr(S, [&](const ExprPtr &E) {
+        if (E)
+          Expressions.push_back(E.get());
+      });
+    });
+    if (Definitions.empty())
+      return Roots;
+    HighExprSet Inspected;
+    while (!Expressions.empty()) {
+      const HighExpr *E = Expressions.pop_back_val();
+      if (!Inspected.insert(E).second)
+        continue;
+      if ((E->Kind == ExprKind::Load || E->Kind == ExprKind::Store) &&
+          E->MemoryAddressSpace == NdMemoryAddressSpace::Default &&
+          !E->Operands.empty() && E->Operands[0])
+        Pending.push_back(
+            {E->Operands[0].get(), false, E->Kind == ExprKind::Store});
+      E->forEachChildExpr([&](const ExprPtr &Child) {
+        if (Child)
+          Expressions.push_back(Child.get());
+      });
+    }
+    llvm::DenseMap<const HighExpr *, unsigned> Seen;
+    VarKeyMap<unsigned> SeenVariables;
+    while (!Pending.empty()) {
+      const Use At = Pending.pop_back_val();
+      const HighExpr &E = *At.Expr;
+      if (!E.Type || E.Type->Size != PointerBytes ||
+          (E.Type->Kind != NdTypeKind::Int && E.Type->Kind != NdTypeKind::Ptr))
+        continue;
+      const unsigned Bit = 1u
+                           << (unsigned(At.Moved) + 2 * unsigned(At.Written) +
+                               4 * unsigned(At.ThroughVariable));
+      unsigned &Visited = Seen[&E];
+      if (Visited & Bit)
+        continue;
+      Visited |= Bit;
+      if (E.Kind == ExprKind::Var || E.Kind == ExprKind::Phi) {
+        const VarKey Key = varKey(E.Var);
+        unsigned &Read = SeenVariables[Key];
+        if (Read & Bit)
+          continue;
+        Read |= Bit;
+        if (const auto Found = Definitions.find(Key);
+            Found != Definitions.end())
+          for (const HighExpr *Value : Found->second)
+            Pending.push_back({Value, At.Moved, At.Written, true});
+      } else if (E.Kind == ExprKind::Const && At.Moved && At.ThroughVariable &&
+                 (E.ConstProvenance == ConstantAddressProvenance::Address ||
+                  E.ConstProvenance ==
+                      ConstantAddressProvenance::DataAddress)) {
+        Roots.push_back({E.ConstVal, At.Written});
+      } else if (E.Operands.size() == 1 && E.Operands[0] &&
+                 (E.Kind == ExprKind::Cast || E.Kind == ExprKind::BitCast ||
+                  (E.Kind == ExprKind::UnaryOp &&
+                   (E.Op == NdOp::INT_ZEXT || E.Op == NdOp::INT_SEXT)))) {
+        Pending.push_back(
+            {E.Operands[0].get(), At.Moved, At.Written, At.ThroughVariable});
+      } else if (E.Kind == ExprKind::BinOp && E.Operands.size() == 2 &&
+                 E.Operands[0] && E.Operands[1] &&
+                 (E.Op == NdOp::INT_ADD || E.Op == NdOp::INT_SUB)) {
+        for (unsigned I = 0; I < (E.Op == NdOp::INT_ADD ? 2u : 1u); ++I) {
+          const HighExpr &Offset = *E.Operands[1 - I];
+          const bool Moved = At.Moved || Offset.Kind != ExprKind::Const ||
+                             Offset.ConstVal != 0;
+          Pending.push_back(
+              {E.Operands[I].get(), Moved, At.Written, At.ThroughVariable});
+        }
+      }
+      // A loaded pointer, narrowing conversion or non-address arithmetic
+      // supplies no storage identity for its result.
+    }
+    return Roots;
+  };
+  // Independent function walks use the existing worker scheduler. Only the
+  // ordered merge below consults the shared image/debug object owner and
+  // changes its canonical storage declarations.
+  std::vector<llvm::SmallVector<CursorStorageRoot, 4>> CursorStorage(
+      Funcs.size());
+  std::vector<uint64_t> CursorWeight;
+  CursorWeight.reserve(Funcs.size());
+  for (const HighFunc &Func : Funcs)
+    CursorWeight.push_back(Func.Body.size());
+  parallelForEachWeighted(
+      CursorWeight,
+      [&](auto Claim, size_t Total) {
+        for (size_t I = Claim(); I < Total; I = Claim())
+          CursorStorage[I] = ReadCursorStorage(Funcs[I]);
+      },
+      limits::kMinParallelCFunctionDefinitions);
   // A relative table holds the offsets of its targets from its own start
   // (clang's `.rel` lookup tables), so the code reaches each target through
   // the table's address: the table's object spans the targets.  Code that
@@ -3720,7 +3841,8 @@ void HighCWriter::collectImageObjects(const std::vector<HighFunc> &Funcs) {
         noteImageObject(Load->Addr, Expected, false);
     }
   };
-  for (const HighFunc &Func : Funcs) {
+  for (size_t I = 0; I < Funcs.size(); ++I) {
+    const HighFunc &Func = Funcs[I];
     // A function that returns no value prints its returns bare (a returned
     // call as its statement): what the return register holds there names
     // nothing in C, such as the GOT address a get-PC sequence left in it.
@@ -3729,6 +3851,16 @@ void HighCWriter::collectImageObjects(const std::vector<HighFunc> &Funcs) {
                                  ? DeclaredReturn->Kind == NdTypeKind::Void
                                  : analyzeVoidReturn(Func);
     Reading = &Func;
+    for (const auto &[Address, Written] : CursorStorage[I])
+      if (isImageDataAddress(Address))
+        if (const auto Object = indexedObjectAt(Address)) {
+          NoteWhole(Address, nullptr, Written);
+          // Indirect scalar/vector accesses retain the image's alignment
+          // residue even when no direct access names the base.
+          ImageObject &Obj = ImageObjects[Object->first];
+          Obj.AlignedBytes = std::max<uint16_t>(
+              Obj.AlignedBytes, limits::kMaxEmbeddedDataAlignment);
+        }
     if (Opts.TheArch == Arch::AArch64)
       ImageMemoryBases.emplace(Func);
     walkStmts(Func.Body, [&](const HighStmt &S) {

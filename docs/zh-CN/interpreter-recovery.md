@@ -310,3 +310,41 @@ neverd decompile program --func entry --devirtualize --vm-machine-state \
 ## 换栈后的内部转移
 
 显式原始机器区域可以继续处理当前栈指针不再相对入口栈定位的内部近 CALL 和 RET。架构适配器保留实际的目标捕获、压栈、返回地址读取和出栈。每个内部返回仍须根据真实栈字证明完整的有限目标集合。只有已证明相对入口栈定位的返回槽才能进入栈帧投影和保留清单；图边界丢失其他栈关系时，恢复仍可能拒绝。普通函数恢复继续要求栈帧恢复。此能力提供原始区域结果，完整函数组合以及源码或原生等价性仍需单独证明。
+
+<!-- i18n-section: store-separation-proofs -->
+
+## 可选的写入分离证明
+
+`--vm-prove-store-return-separation` 在保留返回地址单元、已保存的帧指针和当前标量帧单元之前，证明完整写入与它们不相交。`--vm-prove-store-frame-separation` 还检查声明的帧和当前绝对地址单元，需要 `--vm-machine-state` 和 `--vm-entry-frame`。两者都需要 `--devirtualize`，默认关闭，共用现有证明和工作预算，不增加不别名前提。未获证明的写入仍按通常规则使信息失效；恢复不完整时不发布源码。可与现有链控制组合以保留循环。
+
+v9 接口 `neverd_devirtualize_source_v9`, `neverd_devirtualize_machine_source_v9` 接受 `neverd_devirtualize_options_v9`。将结构清零，并将 v1 前缀的 `struct_size` 设为完整大小。标志为 `NEVERD_DEVIRTUALIZE_V9_PROVE_STORE_RETURN_SLOT_SEPARATION`, `NEVERD_DEVIRTUALIZE_V9_PROVE_STORE_FRAME_SEPARATION`；`reserved` 必须为零。旧接口忽略此尾部。Python 提供 `NeverDDevirtualizeOptionsV9`, `DevirtualizeFlagsV9`。报告含 `proveStoreReturnSlotSeparation`, `proveStoreFrameSeparation`。回归通过两条 C 路径，在 O0/O2 和 ASan/UBSan 下执行动态索引局部数组循环，并检查整个提供的栈存储。
+
+启用任一种证明策略后，恢复过程还会在控制流节点间保留经穷尽证明的寄存器相对入口栈帧的有限偏移。合流取所有传入偏移的并集；缺少事实或并集超过现有控制元组上限时，退化为未知。这不会保留跨寄存器相关性，也不增加别名假设。
+
+<!-- i18n-section: finite-indexed-frame-reads -->
+
+## 有限索引的栈帧读取
+
+普通 `LOAD` 的入口栈帧偏移经穷尽证明为有限集合后，会读取每个候选位置的当前帧字节，并保留条件符号值。残留代码保留原始运行时读取、完整宽度和字节序。只有所有候选位置的每个字节都具备外部来源，输出才获得该来源。未知字节和已失效值仍为未知；枚举不完整时继续采用通常的符号内存行为。沿用现有控制元组、求解器、节点和操作预算，不生成不可变读取证据，也不增加不别名契约。
+
+<!-- i18n-section: runtime-validity-refinement -->
+
+## 跨图边界的运行时有效性
+
+启用控制状态发现后，非恒定的运行时有效性谓词可以请求恢复图边界处丢失的产生者位信息。恢复过程沿用现有共享预算重试，并必须证明每个可达传入状态都有效。这可以跨节点和循环保留已建立的对齐关系及经过掩码的控制寄存器值；不会假定被拒绝的状态不可能出现，也不会删除原始运行时操作。
+
+<!-- i18n-section: ordered-query-source -->
+
+## C++ 源码恢复中的有序 CPU 查询
+
+`wrapInterpreterMachineQueryStateX64()` 是可选的 C++ 源码接口。160 字节状态保留原有的 136 字节机器状态前缀，随后依次是三个 64 位字段：查询数组地址、数量和游标。每条 24 字节记录包含六个 32 位字：leaf、subleaf、EAX、EBX、ECX 和 EDX。规范 CPUID 指令按顺序消耗一条匹配记录，并将四个结果零扩展；相同选择器可以得到不同答案。答案不来自主机 CPU 指令。
+
+记录耗尽返回状态 3，选择器不匹配返回 4。两者都在该查询之前停止，提交当前机器状态，保留此前的客户机内存效果，并保持游标不变。入口对齐拒绝仍返回 2，且不执行写入。调用者必须提供可访问、不可变、地址不回绕且与状态和客户机内存分离的数组；数量为零时允许空地址。原有机器状态和标志配置契约仍适用。此接口不增加 CLI、C SDK、GUI、原生等价证明或硬件串行化支持。原有封装仍拒绝 CPU 查询，其他不支持的内建操作和原始环境仍被拒绝。
+
+<!-- i18n-section: xmm-query-source -->
+
+## 显式 XMM 源码状态
+
+`wrapInterpreterMachineQueryStateX64V2()` 使用独立的 416 字节布局：保留 160 字节查询状态前缀，随后存储 XMM0–XMM15，每个寄存器依次为低、高 64 位字。状态只需 8 字节对齐。所有 XMM 字节均在入口读取，在普通返回和查询失败出口提交。查询状态和入口对齐状态的含义保持不变。
+
+此 C++ 接口接受完整的 128 位 XMM 操作数，并根据当前字节定义重建指令内临时值的读取，保留局部覆盖。未定义的字节和函数级临时值别名会明确报错。只有经架构层证明的常量地址对齐检查可以移除；动态或畸形检查仍被拒绝。部分 XMM 操作数、更宽的向量寄存器组和浮点环境仍不支持。此功能不增加 CLI、C SDK、GUI 或原生等价证明支持；原有封装保持其布局和限制。

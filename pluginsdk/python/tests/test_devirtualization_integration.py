@@ -34,6 +34,7 @@ class DevirtualizationIntegrationTests(unittest.TestCase):
             (6, abi.NeverDDevirtualizeOptionsV6()),
             (7, abi.NeverDDevirtualizeOptionsV7()),
             (8, abi.NeverDDevirtualizeOptionsV8()),
+            (9, abi.NeverDDevirtualizeOptionsV9()),
         ):
             if version == 1:
                 options.struct_size = ctypes.sizeof(options)
@@ -63,10 +64,14 @@ class DevirtualizationIntegrationTests(unittest.TestCase):
                 options.base.base.base.base.base.base.struct_size = ctypes.sizeof(options)
                 options.flags = 2
                 expected_error = "invalid devirtualize v7 flags"
-            else:
+            elif version == 8:
                 options.base.base.base.base.base.base.base.struct_size = ctypes.sizeof(options)
                 options.reserved = 1
                 expected_error = "invalid devirtualize v8 reserved field"
+            else:
+                options.base.base.base.base.base.base.base.base.struct_size = ctypes.sizeof(options)
+                options.flags = 4
+                expected_error = "invalid devirtualize v9 flags or reserved field"
             for prefix, source_abi in (
                 ("source", "ordinary-source"),
                 ("machine_source", "x64-machine-state-v1"),

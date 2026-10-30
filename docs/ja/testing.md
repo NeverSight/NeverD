@@ -2266,3 +2266,15 @@ MedIR の定数伝播とコピー伝播は `canPropagateConstantToOperand` を�
 ## 標準のスーパーバイザー読み取り監査
 
 `InterpreterSpecialization.SupervisorRead*` は実際の厳密なリフトを使用し、`Missing` に格下げした監査を拒否します。`BinaryLowIRRefinement.SupervisorReadCompletesOnlyRawRecovery` は元のバイト列の復元境界を検査し、ネイティブ証明とソースラップの拒否も確認します。
+
+## OR/XOR 式の定数による包含
+
+`SymExprMask.ConstantCover*` は全四ビットマスクと入力、8–257 ビット値、有効な上位ビット、深い共有式、ワード数と項数の予算拒否を検証します。`FrameOffsets.ConstantCoveredBitsExposeOffsetsWithoutSolverQueries` は求解問い合わせなしの固定変位と、入力依存の反例を検証します。`NeverDSymbolicTests` と `NeverDInterpreterSpecializationTests` を実行してください。
+
+## 進むカーソルが参照するイメージ領域
+
+`CImageObjects.AdvancingCursorsKeepTheWholeMutableImageObject` は COFF/ELF/Mach-O の前進/後退、途中のコピー、同幅変換、読み書きと書き込みのみの経路を O0/O2 と ASan/UBSan で実行します。`CursorStorageNeedsAnAddressPreservingMemoryPath` はスカラー定数、ロードされたポインタ、幅の縮小、メモリ利用のない算術を拒否し、`DirectBoundedTablesKeepTheirExtent` は有界な直接索引を維持します。`NeverDLiftTests` をビルドして `ctest --test-dir build-release -R '^CImageObjects[.]' --output-on-failure --parallel 4` を実行してください。
+
+LLVM C の合成スタックスロットは、実行時にどちらかの 64 ビット半分を読み出す前に、128 ビット整数の書き込み全体を保持します。`LLVMCValues.WideFrameStoreRetainsBothRuntimeSelectedWords` は、文書化された `-fno-strict-aliasing` 契約と ASan/UBSan を使用し、O0/O2 で加算およびアラインメントに基づく OR アドレス計算を検証します。`NeverDLLVMCValueTests` と関連するフレーム、ベクトル、表示レコードのテストを実行してください。
+
+`MedLLVMDirectData.OriginalImageCursorsIgnoreUnrelatedPointerRelocations` は x64/AArch64 と COFF/ELF/Mach-O の可変カーソルループを LLVM C の O0/O2 と ASan/UBSan で実行します。明示的な元イメージのソースモードでは、無関係なポインタ再配置の隣でも、確定したアドレスは共有の実行時イメージを使用します。同じ数値の整数はスカラーのままで、独立したポインタミラーの検証も維持されます。`NeverDMedLLVMDirectDataTests` とポインタ再配置境界テストを実行してください。

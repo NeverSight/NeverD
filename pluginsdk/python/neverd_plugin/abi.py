@@ -740,6 +740,26 @@ class NeverDDevirtualizeOptionsV8(ctypes.Structure):
     ]
 
 
+class DevirtualizeFlagsV9(IntFlag):
+    PROVE_STORE_RETURN_SLOT_SEPARATION = 1
+    PROVE_STORE_FRAME_SEPARATION = 2
+
+
+class NeverDDevirtualizeOptionsV9(ctypes.Structure):
+    """v8 prefix plus per-store separation proof strategies.
+
+    Set the v1 prefix's struct_size to the full size. Flags default to zero.
+    Proofs share existing budgets and add no nonalias premise. Frame proofs
+    require machine source and explicit v4 bounds. Reserved must be zero.
+    """
+
+    _fields_ = [
+        ("base", NeverDDevirtualizeOptionsV8),
+        ("flags", ctypes.c_uint32),
+        ("reserved", ctypes.c_uint32),
+    ]
+
+
 class NeverDSymbolicExploreOptions(ctypes.Structure):
     """Layout of ``neverd_symbolic_explore_options``."""
 
@@ -1002,6 +1022,9 @@ _C_TYPES: dict[str, object] = {
     ),
     "const neverd_devirtualize_options_v8 *": ctypes.POINTER(
         NeverDDevirtualizeOptionsV8
+    ),
+    "const neverd_devirtualize_options_v9 *": ctypes.POINTER(
+        NeverDDevirtualizeOptionsV9
     ),
     "unsigned char *": ctypes.POINTER(ctypes.c_ubyte),
     "const unsigned char *": ctypes.POINTER(ctypes.c_ubyte),
@@ -2494,6 +2517,13 @@ _declare(
     ownership=Ownership.OWNED_STRING,
 )
 _declare(
+    "neverd_devirtualize_source_v9",
+    "const char *",
+    ["neverd_session_t", "neverd_va_t",
+     "const neverd_devirtualize_options_v9 *", "const char * *"],
+    ownership=Ownership.OWNED_STRING,
+)
+_declare(
     "neverd_devirtualize_machine_source_v5",
     "const char *",
     ["neverd_session_t", "neverd_va_t",
@@ -2519,6 +2549,13 @@ _declare(
     "const char *",
     ["neverd_session_t", "neverd_va_t",
      "const neverd_devirtualize_options_v8 *", "const char * *"],
+    ownership=Ownership.OWNED_STRING,
+)
+_declare(
+    "neverd_devirtualize_machine_source_v9",
+    "const char *",
+    ["neverd_session_t", "neverd_va_t",
+     "const neverd_devirtualize_options_v9 *", "const char * *"],
     ownership=Ownership.OWNED_STRING,
 )
 _declare("neverd_comparison_create", "neverd_comparison_t", [])
@@ -2610,6 +2647,8 @@ __all__ = [
     "NeverDDevirtualizeOptionsV6",
     "NeverDDevirtualizeOptionsV7",
     "NeverDDevirtualizeOptionsV8",
+    "NeverDDevirtualizeOptionsV9",
+    "DevirtualizeFlagsV9",
     "DevirtualizeFlagsV6",
     "DevirtualizeFlagsV7",
     "DevirtualizeFlagsV4",

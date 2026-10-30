@@ -928,6 +928,14 @@ cl::opt<bool> VMNoControlDiscovery(
     "vm-no-control-discovery",
     cl::desc("Disable automatic recovery control-state discovery"),
     cl::init(false), cl::sub(DecompileCmd));
+cl::opt<bool> VMProveStoreReturnSeparation(
+    "vm-prove-store-return-separation",
+    cl::desc("Prove each store avoids return and retained frame cells"),
+    cl::sub(DecompileCmd));
+cl::opt<bool> VMProveStoreFrameSeparation(
+    "vm-prove-store-frame-separation",
+    cl::desc("Prove store separation from declared frame and absolute cells"),
+    cl::sub(DecompileCmd));
 cl::opt<uint64_t>
     VMMaxOperations("vm-max-operations", cl::desc("Recovery operation budget"),
                     cl::init(::neverd::limits::cli::kDefaultVMMaxOperations),

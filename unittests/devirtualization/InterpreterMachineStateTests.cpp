@@ -7,9 +7,11 @@
 #include "../lift/NeverDLiftFixture.h"
 
 #include "neverd/analysis/InterpreterMachineState.h"
+#include "neverd/analysis/arch/x86_64/BinaryInterpreterSpecialization.h"
 #include "neverd/backend/c/HighC/HighCEmitter.h"
 #include "neverd/backend/c/LLVMC/LLVMCEmitter.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
+#include "neverd/decode/Decoder.h"
 #include "neverd/ir/high/MedToHigh.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/ir/med/LowToMed.h"
@@ -78,10 +80,22 @@ protected:
             const BinaryImage *ConversionImage = nullptr,
             std::optional<InterpreterEntryAlignment> Alignment = std::nullopt,
             InterpreterMachineStateLayout Layout =
-                InterpreterMachineStateLayout::InlineReturns) {
-    auto Wrapped = wrapInterpreterMachineStateX64(
-        Function, BinaryFormat::ELF,
-        InterpreterMachineStateProfile::UserX64NoFaultV1, Alignment, Layout);
+                InterpreterMachineStateLayout::InlineReturns,
+            bool CPUQueryTape = false, bool VectorState = false,
+            BinaryFormat SourceFormat = BinaryFormat::ELF) {
+    auto Wrapped =
+        VectorState    ? wrapInterpreterMachineQueryStateX64V2(
+                             Function, SourceFormat,
+                             InterpreterMachineStateProfile::UserX64NoFaultV1,
+                             Alignment, Layout)
+        : CPUQueryTape ? wrapInterpreterMachineQueryStateX64(
+                             Function, SourceFormat,
+                             InterpreterMachineStateProfile::UserX64NoFaultV1,
+                             Alignment, Layout)
+                       : wrapInterpreterMachineStateX64(
+                             Function, SourceFormat,
+                             InterpreterMachineStateProfile::UserX64NoFaultV1,
+                             Alignment, Layout);
     ASSERT_TRUE(static_cast<bool>(Wrapped))
         << llvm::toString(Wrapped.takeError());
     for (bool LLVM : {false, true}) {
@@ -102,7 +116,7 @@ protected:
       llvm::raw_string_ostream OS(Source);
       CEmitterOptions Options;
       Options.TheArch = Arch::X64;
-      Options.Format = BinaryFormat::ELF;
+      Options.Format = SourceFormat;
       if (LLVM) {
         llvm::LLVMContext Context;
         MedLLVMEmitter Emitter;
@@ -123,6 +137,10 @@ protected:
             EXPECT_EQ(Source.find(Symbol.Name), std::string::npos) << Source;
       EXPECT_EQ(Source.find("__readeflags"), std::string::npos);
       EXPECT_EQ(Source.find("__writeeflags"), std::string::npos);
+      if (CPUQueryTape || VectorState) {
+        EXPECT_EQ(Source.find("cpuid"), std::string::npos);
+        EXPECT_EQ(Source.find("__asm"), std::string::npos);
+      }
       const auto SourceFile =
           tmpFile(LLVM ? "machine-llvm.c" : "machine-high.c");
       std::ofstream(SourceFile) << Preamble.str() << Source
@@ -135,8 +153,10 @@ protected:
         const auto Built =
             exec(NEVERD_TEST_CLANG,
                  {"-std=c11", Optimization, "-Werror=return-type",
-                  "-fsanitize=undefined", "-fsanitize-trap=undefined",
-                  SourceFile.string(), "-o", Program.string()});
+                  CPUQueryTape || VectorState ? "-fsanitize=address,undefined"
+                                              : "-fsanitize=undefined",
+                  "-fsanitize-trap=undefined", SourceFile.string(), "-o",
+                  Program.string()});
         ASSERT_TRUE(Built.ok()) << Built.err << '\n' << Source;
         const auto Ran = exec(Program.string(), {});
         EXPECT_TRUE(Ran.ok()) << Ran.err << " exit " << Ran.exitCode << '\n'
@@ -145,6 +165,269 @@ protected:
     }
   }
 };
+
+std::vector<LowOp> cpuQueryInstruction() {
+  Decoder Decoder;
+  if (!Decoder.init(Arch::X64))
+    return {};
+  Decoder.setStrict(true);
+  const uint8_t Bytes[]{0x0f, 0xa2};
+  DecodedInsn Instruction{};
+  if (Decoder.decodeOneForLift(Bytes, sizeof(Bytes), 0x1000, Instruction) !=
+      sizeof(Bytes))
+    return {};
+  std::vector<LowOp> Ops;
+  Decoder.liftToLow(Instruction, Ops);
+  return Ops;
+}
+
+TEST_F(InterpreterMachineSourceTest, CPUQueryTapePreservesOrderedState) {
+  const auto Query = cpuQueryInstruction();
+  ASSERT_EQ(Query.size(), 9u);
+  const auto Register = [](uint64_t Offset) { return NdVar::reg(Offset, 8); };
+  auto F = function(
+      {{operation(NdOp::STORE, {},
+                  {Register(x86reg::RDI), NdVar::scalar(0x5a, 1)})},
+       Query,
+       {operation(NdOp::COPY, Register(x86reg::R8), {Register(x86reg::RAX)})},
+       {operation(NdOp::COPY, Register(x86reg::RAX), {NdVar::scalar(7, 8)})},
+       {operation(NdOp::COPY, Register(x86reg::RCX), {NdVar::scalar(3, 8)})},
+       Query,
+       {operation(NdOp::STORE, {},
+                  {Register(x86reg::RDI), NdVar::scalar(0xb6, 1)})},
+       {operation(NdOp::RETURN, {}, {})}});
+  const char *Harness = R"C(
+#include <stdint.h>
+#include <string.h>
+typedef struct { uint32_t leaf, subleaf, answer[4]; } query_t;
+typedef struct {
+  uint64_t gpr[16], flags, queries, count, cursor;
+} state_t;
+int main(void) {
+  for (unsigned kind=0; kind<7; ++kind) {
+    query_t tape[3] = {{7,3,{0x80000000u,11,12,13}},
+                       {7,3,{21,0xffffffffu,23,24}},
+                       {7,3,{0,0,0,0}}};
+    unsigned char guest=0;
+    state_t state={0}, expected;
+    for (unsigned i=0;i<16;++i) state.gpr[i]=0x1234567800000000ull+i;
+    state.gpr[0]=0x8765432100000007ull;
+    state.gpr[1]=0xabcdef1200000003ull;
+    state.gpr[7]=(uintptr_t)&guest;
+    state.flags=0x246;
+    state.queries=(uintptr_t)tape;
+    state.count=2;
+    if (kind==1) { state.count=0; state.queries=0; }
+    if (kind==2) tape[0].leaf=8;
+    if (kind==3) tape[0].subleaf=4;
+    if (kind==4) state.count=1;
+    if (kind==5) {
+      tape[2]=tape[1]; tape[1]=tape[0]; tape[0].leaf=99;
+      state.cursor=1; state.count=3;
+    }
+    if (kind==6) { state.cursor=UINT64_MAX; state.count=0; state.queries=0; }
+    query_t original[3]; memcpy(original,tape,sizeof tape);
+    expected=state;
+    uint64_t status=0;
+    if (kind==1 || kind==6) status=3;
+    else if (kind==2 || kind==3) status=4;
+    else {
+      expected.gpr[8]=0x80000000u;
+      expected.cursor++;
+      if (kind==4) {
+        status=3;
+        expected.gpr[0]=7; expected.gpr[1]=3;
+        expected.gpr[2]=13; expected.gpr[3]=11;
+      } else {
+        expected.gpr[0]=21; expected.gpr[1]=23;
+        expected.gpr[2]=24; expected.gpr[3]=0xffffffffu;
+        expected.cursor++;
+      }
+    }
+    if (generic_machine_source(MACHINE_ARG(&state))!=status) return 1;
+    if (memcmp(&state,&expected,sizeof state)) return 2;
+    if (memcmp(tape,original,sizeof tape)) return 3;
+    if (guest!=(status ? 0x5a : 0xb6)) return 4;
+  }
+  return 0;
+}
+)C";
+  for (auto Layout : {InterpreterMachineStateLayout::InlineReturns,
+                      InterpreterMachineStateLayout::SharedGPRExit})
+    roundTrip(F, Harness, {}, nullptr, std::nullopt, Layout, true);
+  auto OriginalABI = wrapInterpreterMachineStateX64(F);
+  EXPECT_FALSE(bool(OriginalABI));
+  if (!OriginalABI)
+    llvm::consumeError(OriginalABI.takeError());
+}
+
+TEST(InterpreterMachineState, CPUQueryTapeRejectsIncompleteBundles) {
+  const auto Query = cpuQueryInstruction();
+  ASSERT_EQ(Query.size(), 9u);
+  for (unsigned Kind = 0; Kind != 7; ++Kind) {
+    auto Broken = Query;
+    if (Kind == 0)
+      Broken.pop_back();
+    else if (Kind == 1)
+      Broken[1].Output = NdVar::reg(x86reg::R8, 4);
+    else if (Kind == 2)
+      Broken[0].Inputs[1].Size = 8;
+    else if (Kind == 3)
+      Broken[1].Inputs[0] = NdVar::tmp(uint64_t{1} << 61, 4);
+    else if (Kind == 4)
+      Broken[0].Inputs[0].Offset = static_cast<uint64_t>(Intrinsic::Rdtsc);
+    else if (Kind == 5)
+      Broken[0].Inputs[1] = NdVar::reg(x86reg::XMM0, 4);
+    else
+      Broken[0].Inputs[1] = NdVar::tmp(uint64_t{1} << 61, 4);
+    const auto F = function({Broken, {operation(NdOp::RETURN, {}, {})}});
+    auto Result = wrapInterpreterMachineQueryStateX64(F);
+    EXPECT_FALSE(bool(Result)) << Kind;
+    if (!Result)
+      llvm::consumeError(Result.takeError());
+  }
+}
+
+TEST_F(InterpreterMachineSourceTest, CPUQueryTapeLoopsAndAlignment) {
+  const auto Query = cpuQueryInstruction();
+  ASSERT_EQ(Query.size(), 9u);
+  LowFunc F;
+  F.Name = "generic_machine_source";
+  F.Entry = 0x1000;
+  const auto Add = [&](int Id, va_t Address, std::vector<int> Preds,
+                       std::vector<int> Succs,
+                       std::initializer_list<std::vector<LowOp>> Instructions) {
+    auto Part = function(Instructions);
+    auto Block = std::move(Part.Blocks.front());
+    const auto Delta = Address - Block.StartAddr;
+    Block.Id = Id;
+    Block.StartAddr += Delta;
+    Block.EndAddr += Delta;
+    Block.Preds = std::move(Preds);
+    Block.Succs = std::move(Succs);
+    for (auto &Op : Block.Ops)
+      Op.Addr += Delta;
+    for (auto &Boundary : Block.InstructionBoundaries) {
+      Boundary.Address += Delta;
+      const auto &Last = Block.Ops[Boundary.FirstOp + Boundary.OpCount - 1];
+      if (Last.Opcode == NdOp::COND_BR) {
+        Boundary.Control = LowInstructionControl::Branch;
+        Boundary.ControlFlags = LowInstructionControlFlag::Branch |
+                                LowInstructionControlFlag::Conditional;
+        Boundary.Immediate = Last.Inputs[0].Offset;
+      }
+    }
+    F.Blocks.push_back(std::move(Block));
+  };
+  const auto Reg = [](uint64_t Offset) { return NdVar::reg(Offset, 8); };
+  const auto Constant = [](uint64_t Value) { return NdVar::scalar(Value, 8); };
+  const auto Condition = NdVar::tmp(0, 1);
+  Add(0, 0x1000, {}, {3, 1},
+      {{operation(NdOp::COPY, Reg(x86reg::R11), {Constant(0)})},
+       {operation(NdOp::INT_EQUAL, Condition, {Reg(x86reg::R10), Constant(0)}),
+        operation(NdOp::COND_BR, {}, {NdVar::cst(0x1300, 8), Condition})}});
+  Add(1, 0x1100, {0, 1}, {1, 2},
+      {{operation(NdOp::COPY, Reg(x86reg::RAX), {Constant(7)})},
+       {operation(NdOp::COPY, Reg(x86reg::RCX), {Constant(3)})},
+       Query,
+       {operation(NdOp::INT_ADD, Reg(x86reg::R11),
+                  {Reg(x86reg::R11), Reg(x86reg::RAX)})},
+       {operation(NdOp::INT_SUB, Reg(x86reg::R10),
+                  {Reg(x86reg::R10), Constant(1)})},
+       {operation(NdOp::INT_NOTEQUAL, Condition,
+                  {Reg(x86reg::R10), Constant(0)}),
+        operation(NdOp::COND_BR, {}, {NdVar::cst(0x1100, 8), Condition})}});
+  Add(2, 0x1200, {1}, {}, {{operation(NdOp::RETURN, {}, {})}});
+  Add(3, 0x1300, {0}, {}, {{operation(NdOp::RETURN, {}, {})}});
+  const char *Harness = R"C(
+#include <stdint.h>
+#include <string.h>
+typedef struct { uint32_t leaf, subleaf, answer[4]; } query_t;
+typedef struct { uint64_t gpr[16], flags, queries, count, cursor; } state_t;
+int main(void) {
+  query_t tape[4];
+  for (unsigned i=0;i<4;++i) {
+    tape[i].leaf=7; tape[i].subleaf=3;
+    for (unsigned j=0;j<4;++j) tape[i].answer[j]=0x80000000u+16*i+j;
+  }
+  for (unsigned iterations=0;iterations<6;++iterations) {
+    state_t s={0}, expected;
+    for (unsigned i=0;i<16;++i) s.gpr[i]=0xabcdef0100000000ull+i;
+    s.gpr[4]=0x1008; s.gpr[10]=iterations;
+    s.flags=0x202; s.queries=(uintptr_t)tape; s.count=4;
+    expected=s; expected.gpr[11]=0;
+    for (unsigned i=0;i<iterations && i<4;++i) {
+      expected.gpr[0]=tape[i].answer[0];
+      expected.gpr[3]=tape[i].answer[1];
+      expected.gpr[1]=tape[i].answer[2];
+      expected.gpr[2]=tape[i].answer[3];
+      expected.gpr[11]+=tape[i].answer[0];
+      expected.gpr[10]--; expected.cursor++;
+    }
+    uint64_t status=iterations>4 ? 3 : 0;
+    if (status) { expected.gpr[0]=7; expected.gpr[1]=3; }
+    if (generic_machine_source(MACHINE_ARG(&s))!=status) return 1;
+    if (memcmp(&s,&expected,sizeof s)) return 2;
+  }
+  state_t bad={0}, before;
+  bad.gpr[4]=0x1000; bad.gpr[10]=2; bad.gpr[11]=99; bad.flags=0x202;
+  before=bad;
+  if (generic_machine_source(MACHINE_ARG(&bad))!=2) return 3;
+  if (memcmp(&bad,&before,sizeof bad)) return 4;
+  return 0;
+}
+
+)C";
+  for (auto Layout : {InterpreterMachineStateLayout::InlineReturns,
+                      InterpreterMachineStateLayout::SharedGPRExit})
+    roundTrip(F, Harness, {}, nullptr, InterpreterEntryAlignment{16, 8}, Layout,
+              true);
+}
+
+TEST_F(InterpreterMachineSourceTest, CPUQueryTapeWrapsBinaryRecovery) {
+  BinaryImage Image;
+  Image.Arch = Arch::X64;
+  Image.Bits = Bitness::Bits64;
+  Image.Format = BinaryFormat::ELF;
+  Image.ExceptionMetadata.ParseStatus = ExceptionParseStatus::Complete;
+  Segment Code;
+  Code.VA = 0x1000;
+  Code.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  // MOV EAX,7; MOV ECX,3; STC; CPUID; RET. The original query is never executed
+  // on the host; the source receives independent declared guest answers.
+  Code.Data = {0xb8, 7, 0, 0, 0, 0xb9, 3, 0, 0, 0, 0xf9, 0x0f, 0xa2, 0xc3};
+  Code.Size = Code.FileSz = Code.Data.size();
+  Image.Segments.push_back(std::move(Code));
+  SpecializationOptions Options;
+  Options.ExplicitMachineState = true;
+  Options.NormalNonfaultingExecution = true;
+  Options.X64CetDisabled = true;
+  Options.DiscoverControlState = true;
+  Options.FrameBaseRegister = symbolic::SymRegisterRange{x86reg::RSP, 8};
+  Options.RequireRestoredFrameAtReturn = true;
+  auto Recovered = specializeBinaryInterpreter(Image, 0x1000, Options);
+  ASSERT_TRUE(Recovered.complete()) << Recovered.Diagnostic;
+  Recovered.Residual.Name = "generic_machine_source";
+  roundTrip(Recovered.Residual, R"C(
+#include <stdint.h>
+#include <string.h>
+int main(void) {
+  uint32_t answers[6]={7,3,0xffffffffu,0x80000000u,0x12345678u,0x87654321u};
+  uint64_t state[20], expected[20];
+  for (unsigned i=0;i<16;++i) state[i]=0xabcdef0100000000ull+i;
+  state[16]=0x246; state[17]=(uintptr_t)answers; state[18]=1; state[19]=0;
+  memcpy(expected,state,sizeof state);
+  expected[0]=answers[2]; expected[3]=answers[3];
+  expected[1]=answers[4]; expected[2]=answers[5]; expected[19]=1;
+  expected[16]=0x247;
+  if (generic_machine_source(MACHINE_ARG(state))) return 1;
+  return memcmp(state,expected,sizeof state)!=0;
+}
+)C",
+            {}, nullptr, std::nullopt,
+            InterpreterMachineStateLayout::InlineReturns, true);
+}
+#include "InterpreterMachineVectorSourceTests.inc"
 
 LowFunc multipleReturns(bool Loop = false) {
   LowFunc F;

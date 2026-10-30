@@ -777,7 +777,7 @@ unsigned Matcher::approximate() {
     // mnemonic/CFG groups. Admit those alternatives before choosing a weak
     // feature proposal; shared graph keys never establish a match by
     // themselves.
-    for (unsigned Bucket = 0; Bucket <= SketchBands; ++Bucket) {
+    for (unsigned Bucket = 0; Bucket <= SketchBands + 1; ++Bucket) {
       if (stopNow())
         return 0;
       Entries.clear();
@@ -786,6 +786,12 @@ unsigned Matcher::approximate() {
         if (Bucket < SketchBands) {
           if (F.Sketched)
             Entries.push_back({sketchBand(F, Bucket), Secondary, Function});
+        } else if (Bucket == SketchBands) {
+          // Complete instruction bodies survive landing/padding edits that
+          // break short run sketches. This key only retrieves candidates;
+          // original instructions and references still decide the delta.
+          if (F.BodyWithoutPadding)
+            Entries.push_back({F.BodyWithoutPadding, Secondary, Function});
         } else if (const uint64_t K = featureKey(
                        FunctionStep::MnemonicsAndGraph, Function, Secondary))
           Entries.push_back({K, Secondary, Function});
@@ -807,7 +813,10 @@ unsigned Matcher::approximate() {
         if (J - I <= limits::kMaxSketchBucket)
           for (size_t X = I; X < J; ++X)
             for (size_t Y = I; Y < J; ++Y)
-              if (Entries[X].Side == 0 && Entries[Y].Side == 1)
+              if (Entries[X].Side == 0 && Entries[Y].Side == 1 &&
+                  (Bucket != SketchBands ||
+                   PF.Functions[Entries[X].Function].BodyWithPadding !=
+                       SF.Functions[Entries[Y].Function].BodyWithPadding))
                 Candidates.push_back(
                     pairKey(Entries[X].Function, Entries[Y].Function));
         I = J;

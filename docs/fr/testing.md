@@ -2381,3 +2381,15 @@ La régression couvre aussi les relocations de pointeurs de fonction sans rappor
 ## Audits des lectures superviseur canoniques
 
 `InterpreterSpecialization.SupervisorRead*` utilise le lifting strict réel et refuse un audit dégradé à `Missing`. `BinaryLowIRRefinement.SupervisorReadCompletesOnlyRawRecovery` vérifie la limite de récupération des octets originaux et le refus maintenu des preuves natives et de l’encapsulation source.
+
+## Couverture constante des expressions OR/XOR
+
+`SymExprMask.ConstantCover*` vérifie exhaustivement les masques et entrées sur quatre bits, les mots de 8–257 bits, les bits hauts utiles, les sources profondes partagées et les refus liés aux budgets de mots et de termes. `FrameOffsets.ConstantCoveredBitsExposeOffsetsWithoutSolverQueries` vérifie un déplacement constant sans requête au solveur et un contre-exemple dépendant de l’entrée. Exécuter `NeverDSymbolicTests` et `NeverDInterpreterSpecializationTests`.
+
+## Stockage image parcouru par un curseur
+
+`CImageObjects.AdvancingCursorsKeepTheWholeMutableImageObject` exécute les parcours dans les deux sens, copies intermédiaires, conversions de même largeur et chemins de lecture/écriture ou écriture seule pour COFF/ELF/Mach-O à O0/O2 avec ASan/UBSan. `CursorStorageNeedsAnAddressPreservingMemoryPath` refuse les constantes scalaires, pointeurs chargés, réductions de largeur et calculs sans accès mémoire ; `DirectBoundedTablesKeepTheirExtent` conserve les indices directs bornés. Compiler `NeverDLiftTests`, puis lancer `ctest --test-dir build-release -R '^CImageObjects[.]' --output-on-failure --parallel 4`.
+
+Les emplacements de pile synthétiques LLVM C conservent les 128 bits écrits avant la sélection dynamique de l’une des moitiés de 64 bits. `LLVMCValues.WideFrameStoreRetainsBothRuntimeSelectedWords` vérifie l’adressage par addition et par OR fondé sur l’alignement à O0/O2 avec ASan/UBSan et le contrat documenté `-fno-strict-aliasing`. Exécuter `NeverDLLVMCValueTests` ainsi que les suites connexes sur les cadres, les vecteurs et les enregistrements affichés.
+
+`MedLLVMDirectData.OriginalImageCursorsIgnoreUnrelatedPointerRelocations` exécute les boucles de curseurs modifiables x64/AArch64 et COFF/ELF/Mach-O via LLVM C à O0/O2 avec ASan/UBSan. En mode source explicite de l’image originale, les adresses établies utilisent l’image active partagée même près de relocalisations de pointeurs sans rapport. Les collisions numériques restent scalaires et les miroirs autonomes gardent leur validation. Exécuter `NeverDMedLLVMDirectDataTests` et les suites de limites de relocalisation.

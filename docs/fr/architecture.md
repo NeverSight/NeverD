@@ -2084,3 +2084,11 @@ Pour la projection source, `markSourceStackAccesses` relie une addition atomique
 ## Audits des lectures superviseur canoniques
 
 La récupération du `RDMSR` canonique exige l’audit `Complete` des sorties indéfinies du lifter, avec l’empreinte exacte des opérations, et refuse `Missing`. Un audit complet n’autorise ni exécution superviseur, ni accès MSR, ni gestion des exceptions, ni preuve native ou source. Le profil explicite de noyau sans faute et la vérification du bloc complet d’opérations restent requis.
+
+## Couverture constante des expressions OR/XOR
+
+Le constructeur OR partagé élimine un opérande XOR si la constante accumulée couvre tous les bits que ses termes peuvent activer. Cette preuve bornée examine les constantes, les masques AND explicites et les compléments de OR comportant une constante, sans développer les sources profondes. Les mots du masque et les termes examinés partagent le budget subset existant. Les bits inconnus ou non couverts et un budget épuisé conservent l’expression exacte.
+
+## Stockage image parcouru par un curseur
+
+HighC suit les affectations, copies et additions/soustractions de largeur pointeur depuis les opérandes mémoire ordinaires jusqu’aux constantes d’adresse image. Les retours de boucle conservent l’objet complet délimité par le propriétaire symbole/section existant et son résidu d’alignement. Ce parcours local à la fonction ne substitue pas les valeurs, ne prouve pas la validité des accès et ne traverse ni les pointeurs chargés ni les conversions réductrices. Les accès indexés directs bornés gardent leur preuve d’étendue.

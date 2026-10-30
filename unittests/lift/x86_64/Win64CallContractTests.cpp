@@ -2846,41 +2846,58 @@ int main(void) {
 }
 
 TEST(CallExitRegisters, UnusedIncomingStackSlotsDoNotRequireValues) {
-  constexpr va_t Wrapper = Text + 0x80;
-  std::vector<uint8_t> Code(0xC0, 0xCC);
-  std::vector<uint8_t> Caller = {
-      0x48, 0x83, 0xEC, 0x38,       // sub rsp,38h
-      0x48, 0x89, 0x4C, 0x24, 0x28, // mov [rsp+28h],rcx
-      0x48, 0x89, 0x54, 0x24, 0x30, // mov [rsp+30h],rdx
-      0xE8};
-  const auto ToWrapper = rel32(Text + Caller.size() + 4, Wrapper);
-  Caller.insert(Caller.end(), ToWrapper.begin(), ToWrapper.end());
-  Caller.insert(Caller.end(), {0x48, 0x83, 0xC4, 0x38, 0xC3});
-  put(Code, Text, Caller);
-  std::vector<uint8_t> Body = {
-      0x53,                          // push rbx
-      0x48, 0x83, 0xEC, 0x20,        // sub rsp,20h
-      0x48, 0x8B, 0x5C, 0x24, 0x58,  // mov rbx,[rsp+58h] (argument 5)
-      0x48, 0x03, 0x5C, 0x24, 0x60}; // add rbx,[rsp+60h] (argument 6)
-  const auto Random = throughSlot(Wrapper + Body.size(), Iat);
-  Body.insert(Body.end(), Random.begin(), Random.end());
-  Body.insert(Body.end(), {0x48, 0x01, 0xD8, // add rax,rbx
-                           0x48, 0x83, 0xC4, 0x20, 0x5B, 0xC3});
-  put(Code, Wrapper, Body);
-  const auto Image = makeImage(
-      Code, {{Text, "stack_hole"}, {Wrapper, "stack_wrapper"}}, {"rand"});
-  std::string NativeOracle;
-  llvm::raw_string_ostream Native(NativeOracle);
-  Native << R"(
+  for (unsigned Flow : {0u, 1u, 2u}) {
+    SCOPED_TRACE(Flow);
+    constexpr va_t Wrapper = Text + 0x80;
+    std::vector<uint8_t> Code(0xC0, 0xCC);
+    std::vector<uint8_t> Caller = {
+        0x48, 0x83, 0xEC, 0x38,       // sub rsp,38h
+        0x48, 0x89, 0x4C, 0x24, 0x28, // mov [rsp+28h],rcx
+        0x48, 0x89, 0x54, 0x24, 0x30, // mov [rsp+30h],rdx
+        0xE8};
+    const auto ToWrapper = rel32(Text + Caller.size() + 4, Wrapper);
+    Caller.insert(Caller.end(), ToWrapper.begin(), ToWrapper.end());
+    Caller.insert(Caller.end(), {0x48, 0x83, 0xC4, 0x38, 0xC3});
+    put(Code, Text, Caller);
+    std::vector<uint8_t> Body = {0x53,                   // push rbx
+                                 0x48, 0x83, 0xEC, 0x20, // sub rsp,20h
+                                 0x48, 0x8B, 0x5C, 0x24,
+                                 0x58}; // mov rbx,[rsp+58h] (argument 5)
+    if (Flow == 1) {
+      Body.insert(Body.end(),
+                  {0xF6, 0xC1, 0x01,               // test cl,1
+                   0x74, 0x07,                     // jz subtract
+                   0x48, 0x03, 0x5C, 0x24, 0x60,   // add rbx,[rsp+60h]
+                   0xEB, 0x05,                     // jmp join
+                   0x48, 0x2B, 0x5C, 0x24, 0x60}); // sub rbx,[rsp+60h]
+    } else if (Flow == 2) {
+      Body.insert(Body.end(),
+                  {0x41, 0xBA, 0x03, 0x00, 0x00, 0x00, // mov r10d,3
+                   0x48, 0x03, 0x5C, 0x24, 0x60,       // add rbx,[rsp+60h]
+                   0x41, 0xFF, 0xCA,                   // dec r10d
+                   0x75, 0xF6});                       // jnz add
+    } else {
+      Body.insert(Body.end(), {0x48, 0x03, 0x5C, 0x24, 0x60});
+    }
+    const auto Random = throughSlot(Wrapper + Body.size(), Iat);
+    Body.insert(Body.end(), Random.begin(), Random.end());
+    Body.insert(Body.end(), {0x48, 0x01, 0xD8, // add rax,rbx
+                             0x48, 0x83, 0xC4, 0x20, 0x5B, 0xC3});
+    put(Code, Wrapper, Body);
+    const auto Image = makeImage(
+        Code, {{Text, "stack_hole"}, {Wrapper, "stack_wrapper"}}, {"rand"});
+    std::string NativeOracle;
+    llvm::raw_string_ostream Native(NativeOracle);
+    Native << R"(
 #if defined(__linux__) && defined(__x86_64__)
 #include <sys/mman.h>
 static __attribute__((ms_abi)) int machine_rand(void) { return rand(); }
 static int check_native(uint64_t a, uint64_t b) {
   static const uint8_t original[] = {
 )";
-  for (uint8_t Byte : Code)
-    Native << unsigned(Byte) << ',';
-  Native << "};\n  const size_t size = " << Iat - Text + 8 << R"(;
+    for (uint8_t Byte : Code)
+      Native << unsigned(Byte) << ',';
+    Native << "};\n  const size_t size = " << Iat - Text + 8 << R"(;
   uint8_t *mapping = mmap(0, size + 16, PROT_READ | PROT_WRITE | PROT_EXEC,
                        MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
   if (mapping == MAP_FAILED) return 1;
@@ -2888,12 +2905,13 @@ static int check_native(uint64_t a, uint64_t b) {
   memcpy(code, original, sizeof(original));
   uintptr_t random = (uintptr_t)machine_rand;
 )";
-  Native << "  memcpy(code + " << Iat - Text << ", &random, 8);\n";
-  Native << R"(
+    Native << "  memcpy(code + " << Iat - Text << ", &random, 8);\n";
+    Native << R"(
   calls = 0;
   __builtin___clear_cache((char *)code, (char *)code + size);
   uint64_t actual = ((uint64_t (__attribute__((ms_abi)) *)(uint64_t,uint64_t))code)(a,b);
-  int bad = actual != a + b + 17 || calls != 1;
+  uint64_t combined = FLOW_KIND == 2 ? a + 3 * b : (FLOW_KIND == 0 || (a & 1) ? a + b : a - b);
+  int bad = actual != combined + 17 || calls != 1;
   if (munmap(mapping, size + 16)) return 1;
   return bad;
 }
@@ -2901,58 +2919,61 @@ static int check_native(uint64_t a, uint64_t b) {
 static int check_native(uint64_t a, uint64_t b) { return 0; }
 #endif
 )";
-  for (bool OmitCallee : {false, true})
-    for (bool LLVM : {false, true})
-      for (bool NoOpt : {false, true}) {
-        SCOPED_TRACE(testing::Message()
-                     << OmitCallee << ':' << LLVM << ':' << NoOpt);
-        llvm::LLVMContext Context;
-        PipelineOptions Options;
-        Options.EmitDumpOutput = false;
-        Options.OnlyFunctionEntries = {Text};
-        if (!OmitCallee)
-          Options.OnlyFunctionEntries.insert(Wrapper);
-        Options.LiftMode = LLVM;
-        Options.SourceProjection = true;
-        Options.NoOpt = NoOpt;
-        auto Result = Pipeline().run(Image, Context, Options);
-        ASSERT_TRUE(Result.Success) << Result.Error;
-        std::string Source;
-        llvm::raw_string_ostream Output(Source);
-        CEmitterOptions COptions;
-        COptions.TheArch = Image.Arch;
-        COptions.Format = Image.Format;
-        COptions.Image = &Image;
-        ASSERT_TRUE(
-            LLVM ? LLVMCEmitter().emit(*Result.LlvmModule, Output, COptions,
-                                       nullptr, &Image)
-                 : HighCEmitter().emit(Result.HighFuncs, Output, COptions));
-        EXPECT_EQ(Source.find("__builtin_trap"), std::string::npos) << Source;
-        if (OmitCallee || Source.find("__builtin_trap") != std::string::npos)
-          continue;
-        const std::string Providers = R"(
+    for (bool OmitCallee : {false, true})
+      for (bool LLVM : {false, true})
+        for (bool NoOpt : {false, true}) {
+          SCOPED_TRACE(testing::Message()
+                       << OmitCallee << ':' << LLVM << ':' << NoOpt);
+          llvm::LLVMContext Context;
+          PipelineOptions Options;
+          Options.EmitDumpOutput = false;
+          Options.OnlyFunctionEntries = {Text};
+          if (!OmitCallee)
+            Options.OnlyFunctionEntries.insert(Wrapper);
+          Options.LiftMode = LLVM;
+          Options.SourceProjection = true;
+          Options.NoOpt = NoOpt;
+          auto Result = Pipeline().run(Image, Context, Options);
+          ASSERT_TRUE(Result.Success) << Result.Error;
+          std::string Source;
+          llvm::raw_string_ostream Output(Source);
+          CEmitterOptions COptions;
+          COptions.TheArch = Image.Arch;
+          COptions.Format = Image.Format;
+          COptions.Image = &Image;
+          ASSERT_TRUE(
+              LLVM ? LLVMCEmitter().emit(*Result.LlvmModule, Output, COptions,
+                                         nullptr, &Image)
+                   : HighCEmitter().emit(Result.HighFuncs, Output, COptions));
+          EXPECT_EQ(Source.find("__builtin_trap"), std::string::npos) << Source;
+          if (OmitCallee || Source.find("__builtin_trap") != std::string::npos)
+            continue;
+          const std::string Providers = R"(
 #include <string.h>
 static unsigned calls;
 int rand(void) { ++calls; return 17; }
 )";
-        const std::string Oracle = R"(
+          const std::string Oracle = R"(
 int main(void) {
   uint64_t a = UINT64_C(0xfedcba9876543210);
   for (unsigned i = 0; i < 64; ++i) {
     uint64_t b = a ^ UINT64_C(0x123456789abcdef0);
     if (check_native(a, b)) return 1;
     calls = 0;
-    if ((uint64_t)stack_hole(a, b) != a + b + 17 || calls != 1) return 2;
+    uint64_t combined = FLOW_KIND == 2 ? a + 3 * b : (FLOW_KIND == 0 || (a & 1) ? a + b : a - b);
+    if ((uint64_t)stack_hole(a, b) != combined + 17 || calls != 1) return 2;
     a ^= a << 13; a ^= a >> 7; a ^= a << 17;
   }
   return 0;
 }
 )";
-        for (llvm::StringRef Level : {"-O0", "-O2"})
-          source_call_execution_test::compileAndRun(
-              Source + Providers + NativeOracle + Oracle,
-              {Level, "-fsanitize=undefined", "-fsanitize-trap=all"});
-      }
+          for (llvm::StringRef Level : {"-O0", "-O2"})
+            source_call_execution_test::compileAndRun(
+                Source + Providers + "\n#define FLOW_KIND " +
+                    std::to_string(Flow) + "\n" + NativeOracle + Oracle,
+                {Level, "-fsanitize=undefined", "-fsanitize-trap=all"});
+        }
+  }
 }
 
 TEST(CallExitRegisters, EntrySpillProofKeepsObservedBytesAndEscapes) {

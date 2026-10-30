@@ -1170,6 +1170,131 @@ TEST(BinaryDiff, SharedGraphFeaturesRecoverCandidatesBeyondCommonSketches) {
   }
 }
 
+TEST(BinaryDiff, ShortLayoutEditsRetainCandidatesBeyondRunSketches) {
+  Fn Before;
+  Before.Name = "limit_check";
+  Before.Source = NameSource::Generated;
+  Before.Blocks = {{{"endbr64", ""},
+                    {"cmp", "dword ptr [limit], 1"},
+                    {"mov", "eax, 1"},
+                    {"jbe", "exit", InstructionFlow::Branch}},
+                   {{"ret", "", InstructionFlow::Return}},
+                   {{"nop", "dword ptr [rax]"}},
+                   {{"movzx", "eax, byte ptr [enabled]"},
+                    {"ret", "", InstructionFlow::Return}}};
+  Before.Edges = {{0, 3, EdgeKind::Taken},
+                  {0, 1, EdgeKind::NotTaken},
+                  {2, 3, EdgeKind::Fallthrough}};
+  Fn After = Before;
+  After.Blocks[0].erase(After.Blocks[0].begin());
+  After.Blocks[0].insert(After.Blocks[0].end() - 1, Before.Blocks[2][0]);
+  After.Blocks.erase(After.Blocks.begin() + 2);
+  After.Edges = {{0, 2, EdgeKind::Taken}, {0, 1, EdgeKind::NotTaken}};
+  Fn Decoy;
+  Decoy.Name = "unrelated_check";
+  Decoy.Source = NameSource::Generated;
+  Decoy.Blocks = {{{"cmp", "edi, 3"}, {"jbe", "exit", InstructionFlow::Branch}},
+                  {{"mov", "eax, 1"}, {"ret", "", InstructionFlow::Return}},
+                  {{"xor", "eax, eax"}, {"ret", "", InstructionFlow::Return}}};
+  Decoy.Edges = After.Edges;
+  std::vector<Fn> Left{Before, Decoy}, Right{After};
+  // A repeated background exceeds exhaustive admission and provides no unique
+  // function identity. The edited check must enter through a bounded index.
+  for (unsigned I = 0; I != 260; ++I) {
+    Fn F;
+    F.Name = "background_" + std::to_string(I);
+    F.Source = NameSource::Generated;
+    F.Blocks = {{{"div", "r8, r9"},
+                 {"neg", "r10"},
+                 {"ret", "", InstructionFlow::Return}}};
+    Left.push_back(F);
+    Right.push_back(F);
+  }
+  std::vector<size_t> Layout;
+  for (size_t I = Right.size(); I != 0; --I)
+    Layout.push_back(I - 1);
+  const auto A = build(Left, 0x400000), B = build(Right, 0x800000, Layout);
+  for (bool Reverse : {false, true}) {
+    const auto &P = Reverse ? B : A, &S = Reverse ? A : B;
+    const auto R = compare(P, S, {});
+    EXPECT_EQ(counterpart(R, P, S, "limit_check"), "limit_check");
+    EXPECT_EQ(R.Matches.size(), 1U);
+    const auto *Matched = R.matchOfPrimary(indexOf(P, "limit_check"));
+    ASSERT_NE(Matched, nullptr);
+    EXPECT_TRUE(Matched->Changes & ChangeInstructions);
+    EXPECT_LT(Matched->Similarity, 1.0);
+
+    ComparisonSettings Exact;
+    Exact.Approximate = false;
+    EXPECT_EQ(compare(P, S, Exact).matchOfPrimary(indexOf(P, "limit_check")),
+              nullptr);
+    const Override Reject{OverrideKind::Unmatch,
+                          P.Functions[indexOf(P, "limit_check")].Address,
+                          S.Functions[indexOf(S, "limit_check")].Address};
+    const auto Rejected = compare(P, S, {}, {Reject});
+    const auto *Match = Rejected.matchOfPrimary(indexOf(P, "limit_check"));
+    EXPECT_TRUE(!Match || Match->Secondary != indexOf(S, "limit_check"));
+  }
+
+  Fn Duplicate = After;
+  Duplicate.Name = "duplicate_check";
+  Right.push_back(std::move(Duplicate));
+  const auto Duplicated = build(Right, 0x900000);
+  for (bool Reverse : {false, true}) {
+    const auto &P = Reverse ? Duplicated : A, &S = Reverse ? A : Duplicated;
+    const auto R = compare(P, S, {});
+    EXPECT_EQ(R.matchOfPrimary(indexOf(P, "limit_check")), nullptr);
+    EXPECT_TRUE(R.Matches.empty());
+  }
+}
+
+TEST(BinaryDiff, PartialInstructionPairsDoNotIdentifyUnrelatedBodies) {
+  Fn Before;
+  Before.Name = "original";
+  Before.Source = NameSource::Generated;
+  Before.Blocks = {{{"mov", "eax, ebx"},
+                    {"add", "ecx, edx"},
+                    {"xor", "esi, edi"},
+                    {"or", "eax, ecx"},
+                    {"and", "ebx, edx"},
+                    {"sub", "edi, esi"},
+                    {"rol", "eax, 1"},
+                    {"ror", "ebx, 1"},
+                    {"shl", "ecx, 1"},
+                    {"shr", "edx, 1"},
+                    {"neg", "esi"},
+                    {"not", "edi"},
+                    {"bswap", "eax"},
+                    {"imul", "ebx, ecx"},
+                    {"test", "edx, edx"},
+                    {"cmp", "esi, edi"},
+                    {"ret", "", InstructionFlow::Return}}};
+  Fn After = Before;
+  After.Name = "unrelated";
+  for (unsigned I = 2; I < 16; I += 2)
+    std::swap(After.Blocks[0][I], After.Blocks[0][I + 1]);
+  After.Blocks[0][15] = {"inc", "edx"};
+  // The initial pair and much of the instruction inventory survive, but no
+  // complete run shingle, mnemonic sequence or multiset identifies this body.
+  // Merely adding rare partial seeds would turn a similar CFG into an identity.
+  std::vector<Fn> Left{Before}, Right{After};
+  for (unsigned I = 0; I != 260; ++I) {
+    Fn F;
+    F.Name = "background_" + std::to_string(I);
+    F.Source = NameSource::Generated;
+    F.Blocks = {{{"div", "r8, r9"},
+                 {"neg", "r10"},
+                 {"ret", "", InstructionFlow::Return}}};
+    Left.push_back(F);
+    Right.push_back(F);
+  }
+  const auto A = build(Left, 0x400000), B = build(Right, 0x800000);
+  for (bool Reverse : {false, true}) {
+    const auto &P = Reverse ? B : A, &S = Reverse ? A : B;
+    EXPECT_TRUE(compare(P, S, {}).Matches.empty());
+  }
+}
+
 TEST(BinaryDiff, MovedStringEvidenceDoesNotConsumeTheSimilarBody) {
   Fn Old;
   Old.Name = "original";
