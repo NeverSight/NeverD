@@ -9404,6 +9404,16 @@ the architecturally specified returns invalidate the monitor. The FRED null-SS
 regression distinguishes nonstandard descriptor returns from standard selector
 wraparound, where a null-looking selector is made usable without a table read.
 
+`FredCompatibilityReturnsOwnConditionalChoices` checks standard and GDT/LDT
+compatibility returns with both code-default sizes, granularity, nonzero segment
+bases, exact/overflowed limits, discarded high RIP/RSP bits and independently
+varied arbitrary inputs. Complete state/RAM comparisons run through both C
+routes and sanitizer profiles. The SDK manifest checks seven conditional slots
+and explicit profile timing; generated drivers stop before a listed compatibility
+target and reject reentry in the wrong execution mode.
+The [compatibility qualification record](evidence/x86-fred-compatibility-2026-10-30.json)
+records 9,728 new state/RAM cases and the 1,554-test integration run.
+
 The native speculation and descriptor fixtures compile both source routes at
 O0/O2 into freestanding guests and execute them at CPL0 using Linux x64 KVM.
 They check real SPEC_CTRL readback, PRED_CMD writes, repeated writes, native

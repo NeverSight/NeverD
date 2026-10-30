@@ -220,6 +220,16 @@ llvm::json::Array effects(const X64ContinuationInstructionSource &Unit) {
                            {"bit_count", int64_t(Effect.BitCount)},
                            {"conditional", bool(Effect.When)}});
   }
+  for (const auto &Choice : Unit.CompatibilityChoices)
+    Result.push_back(llvm::json::Object{
+        {"slot", int64_t(Choice.Slot)},
+        {"after_profile_transition", "successful_compatibility_return"},
+        {"output_space", int64_t(Choice.Output.Space)},
+        {"output_offset", hex(Choice.Output.Offset)},
+        {"output_bytes", int64_t(Choice.Output.Size)},
+        {"bit_offset", 32},
+        {"bit_count", 32},
+        {"conditional", true}});
   return Result;
 }
 
@@ -507,7 +517,8 @@ exportX64Continuation(const BinaryImage &Image, llvm::StringRef RequestJSON,
       {"domain",
        (Version == 9
             ? "Intel FRED enabled; canonical ERETS/ERETU at CPL0; "
-              "64-bit entry and return; explicit stack-level and event "
+              "64-bit entry; ERETU permits compatibility return with explicit "
+              "conditional GPR choices; explicit stack-level and event "
               "outputs; "
               "CET and RTM disabled; outside VMX non-root execution; "
               "no pending debug exception at entry; "
