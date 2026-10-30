@@ -1351,6 +1351,10 @@ MedLLVMEmitter::emit(const std::vector<MedFunc> &Funcs, llvm::LLVMContext &LCtx,
     ActiveCxxContinuationPlan = I;
     emitFunc(Func);
     ActiveCxxContinuationPlan.reset();
+    // A pointer refusal invalidates the entire module. Later bodies and EH
+    // finalization cannot repair it and can otherwise retain substantial IR.
+    if (FatalCodePointerResolution || FatalDataPointerResolution)
+      return nullptr;
   }
   ActiveCxxContinuationPlan.reset();
   finalizeCxxContinuationPlans();

@@ -3810,6 +3810,12 @@ cannot retain a previous default-space slot's result.
 `LocalReloadUsesKeepForwardingAndValueIdentity` reverses CFG and block-vector
 order and checks widening, low/high slicing, different SSA versions and value
 kinds, and width views of the same value against the previous predicate.
+`LLVMCodePointerInvariantBoundary.FatalPointerResolutionStopsLaterEmissionAndAllowsReuse`
+checks unresolved code/data pointer mirrors across x64/AArch64 and ELF/Mach-O/COFF.
+Source observations must stop at the failed LOAD, later function bodies must
+remain unprocessed, and deleted LLVM values must leave null source handles.
+Repairing the target and reusing the emitter must produce a valid module with
+all expected observations.
 `LLVMFrameSlotProof.ParallelStackPointerPhisAnchorOnlyInOneBlock` accepts an
 i386 back edge that returns ESP through the RSP PHI of the same header, and
 refuses the same RSP PHI placed in another block.

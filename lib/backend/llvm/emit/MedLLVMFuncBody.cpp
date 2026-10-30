@@ -338,6 +338,8 @@ llvm::Function *MedLLVMEmitter::emitFunc(const MedFunc &Func) {
   if (FatalDataPointerResolution)
     return nullptr;
   collectSuppressedTableAddressOps(Func);
+  if (FatalCodePointerResolution || FatalDataPointerResolution)
+    return nullptr;
 
   auto *LLVMFunc = declareFunc(Func);
   if (Img)
@@ -753,6 +755,10 @@ llvm::Function *MedLLVMEmitter::emitFunc(const MedFunc &Func) {
     };
 
     for (size_t OI = 0; OI < Blk.Ops.size(); ++OI) {
+      // Pointer resolution has already diagnosed this doomed module. Do not
+      // keep allocating IR or running proofs for its remaining operations.
+      if (FatalCodePointerResolution || FatalDataPointerResolution)
+        return nullptr;
       auto &Op = Blk.Ops[OI];
       if (Op.Opcode == NdOp::BRANCH) {
         if (!Blk.Succs.empty()) {
@@ -800,6 +806,8 @@ llvm::Function *MedLLVMEmitter::emitFunc(const MedFunc &Func) {
 
               llvm::IRBuilder<> EffectBuilder(EffectBB);
               for (size_t EI = OI + 1; EI < *EffectEnd; ++EI) {
+                if (FatalCodePointerResolution || FatalDataPointerResolution)
+                  return nullptr;
                 const MedOp &Effect = Blk.Ops[EI];
                 if (Effect.Opcode == NdOp::INDIR_BR) {
                   if (!emitJumpTableSwitch(Blk, Effect, BBMap, EffectBuilder)) {
@@ -821,6 +829,8 @@ llvm::Function *MedLLVMEmitter::emitFunc(const MedFunc &Func) {
                 if (!EffectBB->empty() && EffectBB->back().isTerminator())
                   break;
               }
+              if (FatalCodePointerResolution || FatalDataPointerResolution)
+                return nullptr;
               if (EffectBB->empty() || !EffectBB->back().isTerminator())
                 EffectBuilder.CreateBr(SkipBB);
               break;
@@ -917,6 +927,8 @@ llvm::Function *MedLLVMEmitter::emitFunc(const MedFunc &Func) {
       if (builderHasTerminator())
         break;
     }
+    if (FatalCodePointerResolution || FatalDataPointerResolution)
+      return nullptr;
 
     if (!builderHasTerminator()) {
       auto EmitDefaultRet = [&]() {
@@ -976,6 +988,8 @@ llvm::Function *MedLLVMEmitter::emitFunc(const MedFunc &Func) {
         continue;
       llvm::IRBuilder<> SB(Term);
       llvm::Value *V = getVar(PredIdx.second, SB);
+      if (FatalCodePointerResolution || FatalDataPointerResolution)
+        return nullptr;
       if (!V || !V->getType()->isIntegerTy())
         continue;
       unsigned Have = V->getType()->getIntegerBitWidth();
@@ -1119,6 +1133,8 @@ llvm::Function *MedLLVMEmitter::emitFunc(const MedFunc &Func) {
               VarAllocs[SrcKey] = HiddenAlloca;
           } else
             Val = getPhiIncomingValue(Src, Dst.Size, InsBuilder);
+          if (FatalCodePointerResolution || FatalDataPointerResolution)
+            return nullptr;
           Pending.emplace_back(Dst, Val);
         }
 

@@ -7,6 +7,7 @@
 #include "gtest/gtest.h"
 
 #include "neverd/Limits.h"
+#include "neverd/backend/llvm/LLVMSourceMap.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/TargetRegInfo.h"
@@ -15247,6 +15248,74 @@ TEST(LLVMCodePointerInvariantBoundary,
   EXPECT_NE(Diagnostic.find("refusing stale-address fallback"),
             std::string::npos)
       << Diagnostic;
+}
+
+TEST(LLVMCodePointerInvariantBoundary,
+     FatalPointerResolutionStopsLaterEmissionAndAllowsReuse) {
+  constexpr uint64_t SlotOffset = 8;
+  constexpr uint64_t MissingTarget = 0xfffffffffffffff0ULL;
+  for (Arch TargetArch : {Arch::X64, Arch::AArch64})
+    for (BinaryFormat Format :
+         {BinaryFormat::ELF, BinaryFormat::MachO, BinaryFormat::COFF})
+      for (bool CodeSlot : {false, true}) {
+        SCOPED_TRACE(::testing::Message()
+                     << static_cast<int>(TargetArch) << "/"
+                     << static_cast<int>(Format) << "/" << CodeSlot);
+        BinaryImage Image = makeMixedPointerRecordImage(TargetArch, Format);
+        Image.CodePtrRelocSlots.clear();
+        Image.DataPtrRelocSlots.clear();
+        (CodeSlot ? Image.CodePtrRelocSlots : Image.DataPtrRelocSlots)
+            .insert(DataVA + SlotOffset);
+        writeObject(Image.Segments[1].Data, SlotOffset, MissingTarget);
+        MedFunc Caller =
+            makeExactMixedPointerSlotIndirectCaller(TargetArch, SlotOffset);
+        auto &Ops = Caller.Blocks.front().Ops;
+        Ops.erase(Ops.begin() + 2); // Only read the pointer; never call data.
+        for (MedOp &Op : Ops)
+          Op.OriginSeq = 0;
+        MedFunc Later = makeReturnFunction("later_pointer_owner", CodeVA);
+        Later.Blocks.front().Ops.front().OriginSeq = 0;
+
+        LLVMSourceMap FailedSource;
+        MedLLVMEmitter Emitter;
+        Emitter.setSourceMap(&FailedSource);
+        llvm::LLVMContext Context;
+        testing::internal::CaptureStderr();
+        auto Failed =
+            Emitter.emit({Caller, Later}, Context, "fatal-pointer-stops-work",
+                         TargetArch, {}, &Image, Format);
+        const std::string Diagnostic = testing::internal::GetCapturedStderr();
+        EXPECT_EQ(Failed, nullptr);
+        EXPECT_NE(Diagnostic.find(CodeSlot ? "relocation-proven code pointer"
+                                           : "relocation-proven data pointer"),
+                  std::string::npos)
+            << Diagnostic;
+        EXPECT_NE(Diagnostic.find("refusing stale-address fallback"),
+                  std::string::npos)
+            << Diagnostic;
+        // The LOAD requests this mirror. A doomed module must not lower the
+        // following RETURN or any later function body. Source handles for
+        // the failed operation itself become null when the module is dropped.
+        EXPECT_TRUE(FailedSource.Functions.count(CallerVA));
+        EXPECT_FALSE(FailedSource.Functions.count(CodeVA));
+        ASSERT_EQ(FailedSource.Observations.size(), 1u);
+        EXPECT_EQ(FailedSource.Observations.front().Occurrence.Address,
+                  CallerVA + 4);
+        EXPECT_EQ(FailedSource.Observations.front().Value, nullptr);
+
+        writeObject(Image.Segments[1].Data, SlotOffset,
+                    CodeSlot ? CodeVA : CStringVA);
+        LLVMSourceMap ReusedSource;
+        Emitter.setSourceMap(&ReusedSource);
+        auto Reused =
+            Emitter.emit({Caller, Later}, Context, "reuse-after-fatal-pointer",
+                         TargetArch, {}, &Image, Format);
+        ASSERT_NE(Reused, nullptr);
+        expectValidModule(*Reused);
+        EXPECT_TRUE(ReusedSource.Functions.count(CallerVA));
+        EXPECT_TRUE(ReusedSource.Functions.count(CodeVA));
+        EXPECT_EQ(ReusedSource.Observations.size(), 3u);
+      }
 }
 
 TEST(LLVMCodePointerInvariantBoundary,

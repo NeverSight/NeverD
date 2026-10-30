@@ -3914,6 +3914,13 @@ symbol for that import (`importedSymbolIdentity`), since the veneer itself
 is absent from MedIR. A value the code computes from a veneer's address
 still needs a lifted owner, as the code-identity proof requires.
 
+A fatal code or data pointer resolution ends LLVM emission at the next
+operation boundary, including predicated effects, deferred dispatch stores and
+PHI inputs. The module owner then discards the partial module before emitting
+later bodies or finalizing EH. The original diagnostic remains authoritative;
+an early exit publishes no partial IR. A new emission resets the failure state
+and its generation-owned caches as usual.
+
 The LLVM pointer-table role proof treats a frame slot as a PHI over the
 values stored to it (`collectFrameReloadSources`). As a PHI's recurrent arm
 does, a stored value that is the slot's reload advanced by a stable offset
