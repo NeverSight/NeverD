@@ -251,6 +251,8 @@ public:
   /// the stack protector's canary at FS:0x28 is
   /// (exceptionEncodingIsOutsideWindows).
   static bool hidesRegistrationMemory(const HighFunc &Func);
+  /// Use the same segmented-read spelling for declarations and expressions.
+  bool useMsvcSegmentedRead() const;
   bool isEmbeddedRegistrationCallback(const HighStmt &Stmt, size_t I) const;
   bool isEmbeddedWindowsCallback(const HighStmt &Stmt, size_t I) const;
   void writeEmbeddedNativeCallbacks(const HighStmt &Stmt, int Indent);

@@ -187,7 +187,7 @@ def main(argv: list[str] | None = None) -> int:
         environment = os.environ.copy()
         environment["WINEDLLOVERRIDES"] = "vcruntime140=n"
         if args.wine_prefix:
-            environment.update(WINEARCH="win32", WINEDEBUG="-all",
+            environment.update(WINEDEBUG="-all",
                                WINEPREFIX=str(args.wine_prefix.resolve()))
         original_root = args.input_root.resolve()
         runtime_path, report["catch_search_runtime"] = load_runtime(original_root / "runtime-libs")

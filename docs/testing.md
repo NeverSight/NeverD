@@ -7094,6 +7094,10 @@ ordinary calls, later calls to the same helper and an earlier return.
 `check_windows_registration_realigned_rewrite.py` separately emits aligned
 value/reference, unbound value/reference and catch-all parents. Independent
 assembly fixtures use the canonical direct MSVC EBP frame for the unbound forms.
+`COFFExceptionIR.HighCRealignedSegmentReadsCollectTheirActualHelpers` checks
+that explicit registration-memory reads collect their FS helpers and compile
+without an unused MSVC header. Ordinary Windows reads retain their intrinsic
+declarations, including both orders of functions sharing one expression.
 LLVM fixed-frame parents cover all five forms, unsigned catch-all and a larger
 allocation requiring an imm32 stack adjustment. Their additional proof checks
 exact prologue fields, paired chain registers, displaced runtime roots, callback
@@ -7481,6 +7485,11 @@ python scripts/check_windows_registration_cxx_rewrite.py \
   --patch-binary build/bin/neverd \
   --output build/evidence/source-cxx --wine-prefix /absolute/path/to/wine32
 ```
+
+The C++ rewrite, realigned rewrite and realigned callback runners preserve
+the selected Wine prefix's architecture and any explicit `WINEARCH` setting.
+A compatible 64-bit prefix can run these PE32 fixtures; the runners do not
+force it to become 32-bit.
 
 On Windows, replay with `scripts/replay_windows_registration_cxx.py
 --evidence-root build/evidence/source-cxx --output build/native-cxx-replay.json`.
