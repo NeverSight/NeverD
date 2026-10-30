@@ -2385,3 +2385,5 @@ Los espacios de pila sintéticos de LLVM C conservan la escritura entera de 128 
 <!-- i18n-section: mutable-alignment-guards -->
 
 `MedMutableSource.AlignmentChecks*` ejecuta entradas alineadas y condiciones inactivas por ambas rutas C en O0/O2, exige una trampa para entradas desalineadas activas y rechaza anchos, alineaciones, salidas y espacios de direcciones incorrectos.
+
+`InterpreterMachineRegionSourceTest.ArchitecturalChoiceSource*` ejecuta ambas salidas C en O0/O2 con ASan/UBSan. Las regresiones comparan estado completo, memoria y registros tras fallos en ambas ramas y una visita posterior al bucle. Una secuencia de 48 instrucciones verifica éxito, agotamiento y discrepancia al principio, en medio y al final. Otro caso de 3300 instrucciones supera la antigua capacidad de bloques y verifica ambas exportaciones C sin compilarlas. Ejecutar `NeverDInterpreterMachineStateTests`; estas pruebas propias no certifican una función nativa arbitraria.

@@ -2230,3 +2230,5 @@ LLVM C 的合成堆疊槽保留完整的 128 位元整數寫入，再由執行�
 <!-- i18n-section: mutable-alignment-guards -->
 
 `MedMutableSource.AlignmentChecks*` 在兩條 C 路徑的 O0/O2 下執行對齊輸入與未啟用條件，要求啟用條件下的未對齊輸入觸發陷阱，並拒絕錯誤的寬度、對齊值、輸出和位址空間。
+
+`InterpreterMachineRegionSourceTest.ArchitecturalChoiceSource*` 在 ASan/UBSan 下執行兩條 C 路線的 O0/O2 輸出。壓縮回歸比較分支兩側失敗及迴圈後續訪問後的完整狀態、記憶體與記錄。48 條連續指令檢查早期、中間及末尾記錄的成功、耗盡與不匹配。獨立的 3300 條指令案例超過舊封裝的區塊容量，只檢查兩條 C 匯出，不編譯產生的原始碼。執行 `NeverDInterpreterMachineStateTests`；這些自有測試資料不構成任意原生函式的認證。

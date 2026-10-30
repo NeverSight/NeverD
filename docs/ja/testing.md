@@ -2284,3 +2284,5 @@ LLVM C の合成スタックスロットは、実行時にどちらかの 64 ビ
 <!-- i18n-section: mutable-alignment-guards -->
 
 `MedMutableSource.AlignmentChecks*` は整列済み入力と無効なガードを両 C 経路の O0/O2 で実行し、有効なガードで整列違反があればトラップを要求します。不正な幅、整列値、出力、アドレス空間も拒否します。
+
+`InterpreterMachineRegionSourceTest.ArchitecturalChoiceSource*` は両C経路のO0/O2出力をASan/UBSan付きで実行します。圧縮の回帰テストは両分岐の失敗とループ再訪問後の全状態、メモリ、記録を比較します。48命令の列で序盤・中間・末尾の成功、不足、不一致を確認します。別の3300命令ケースは旧ラッパーのブロック上限を超え、生成コードをコンパイルせず両C出力を検査します。`NeverDInterpreterMachineStateTests` を実行してください。自作フィクスチャは任意のネイティブ関数を認証するものではありません。

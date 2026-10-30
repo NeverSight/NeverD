@@ -708,6 +708,8 @@ Each 32-byte `InterpreterArchitecturalChoiceX64V1` record contains the original 
 
 The caller supplies accessible, stable records disjoint from state and guest memory. No processor-specific choices are inferred. Query statuses, explicit pre-trap exits and instruction alignment guards retain their existing contracts. Both C routes can emit the lowered graph, but ordinary emitters still reject unconsumed productions. This C++ interface supplies neither CLI/C SDK/GUI integration nor ordinary ABI recovery or native-equivalence certification.
 
+Choice-source guards share exhaustion and mismatch writeback blocks, retaining each instruction’s original PC and entry flags. After scalar lowering, the wrapper joins an implicit fallthrough with its sole-predecessor successor unless it is an entry or analysis root. Instruction slices, conditional edges and loops stay explicit. Only generated control labels move; guest constants and record PCs do not. State layouts, whole-instruction checks, cursor commits and all source resource limits remain unchanged.
+
 <!-- i18n-section: machine-region-pending-traps -->
 
 ## Pending trap exits

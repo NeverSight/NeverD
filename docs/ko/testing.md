@@ -2274,3 +2274,5 @@ LLVM C의 합성 스택 슬롯은 실행 중 선택한 64비트 절반을 읽기
 <!-- i18n-section: mutable-alignment-guards -->
 
 `MedMutableSource.AlignmentChecks*`는 정렬된 입력과 비활성 가드를 두 C 경로의 O0/O2에서 실행하고, 활성 가드의 비정렬 입력이 트랩을 발생시키는지 확인합니다. 잘못된 너비, 정렬, 출력과 주소 공간도 거부합니다.
+
+`InterpreterMachineRegionSourceTest.ArchitecturalChoiceSource*`는 두 C 경로의 O0/O2 출력을 ASan/UBSan으로 실행합니다. 압축 회귀 검사는 양쪽 분기의 실패와 루프 재방문 후 전체 상태, 메모리 및 레코드를 비교합니다. 48개 명령 시퀀스는 초기·중간·마지막 레코드의 성공, 부족 및 불일치를 확인합니다. 별도 3300개 명령 사례는 이전 래퍼의 블록 용량을 넘으며 생성 코드를 컴파일하지 않고 두 C 출력을 검사합니다. `NeverDInterpreterMachineStateTests`를 실행하세요. 자체 픽스처는 임의의 네이티브 함수를 인증하지 않습니다.

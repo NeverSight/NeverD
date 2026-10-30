@@ -2310,3 +2310,5 @@ QT_QPA_PLATFORM=offscreen NEVERD_PATCH_NATIVE_WORKER="$PWD/build-gui/bin/neverd-
 <!-- i18n-section: mutable-alignment-guards -->
 
 تنفذ حالات `MedMutableSource.AlignmentChecks*` المدخلات المحاذاة والحراس غير النشطين عبر مساري C عند O0/O2، وتتطلب حدوث فخ للمدخلات غير المحاذاة ذات الحارس النشط، وترفض العروض والمحاذاة والمخرجات وفضاءات العناوين غير السليمة.
+
+ينفذ `InterpreterMachineRegionSourceTest.ArchitecturalChoiceSource*` مخرجات مساري C عند O0/O2 مع ASan/UBSan. تقارن اختبارات الدمج الحالة الكاملة والذاكرة والسجلات بعد فشل في كلا الفرعين وزيارة لاحقة للحلقة. يفحص تسلسل من 48 تعليمة النجاح والنفاد وعدم التطابق في البداية والوسط والنهاية. تتجاوز حالة منفصلة من 3300 تعليمة سعة الكتل السابقة وتفحص تصدير مساري C دون ترجمة المصدر المولد. شغّل `NeverDInterpreterMachineStateTests`؛ لا تصدّق هذه الاختبارات المملوكة على أي دالة أصلية عامة.

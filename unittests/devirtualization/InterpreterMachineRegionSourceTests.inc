@@ -14,11 +14,15 @@ protected:
 
   llvm::Expected<BinaryImage> loadRegion(llvm::ArrayRef<uint8_t> Code) {
     auto Bytes = neverd::web::test::nativePE();
-    neverd::web::test::nativePut(Bytes, 0x98 + 240 + 8, 512, 4);
+    const size_t Size =
+        std::max<size_t>(512, (Code.size() + 511) & ~size_t(511));
+    Bytes.resize(512 + Size);
+    neverd::web::test::nativePut(Bytes, 0x98 + 4, Size, 4);
+    neverd::web::test::nativePut(Bytes, 0x98 + 56,
+                                 (4096 + Size + 4095) & ~size_t(4095), 4);
+    neverd::web::test::nativePut(Bytes, 0x98 + 240 + 8, Size, 4);
+    neverd::web::test::nativePut(Bytes, 0x98 + 240 + 16, Size, 4);
     std::fill(Bytes.begin() + 512, Bytes.end(), char(0xcc));
-    if (Code.size() > 512)
-      return llvm::createStringError(llvm::inconvertibleErrorCode(),
-                                     "region fixture exceeds text section");
     std::copy(Code.begin(), Code.end(), Bytes.begin() + 512);
     const auto Path = tmpFile("machine-region.exe");
     std::ofstream(Path, std::ios::binary).write(Bytes.data(), Bytes.size());
@@ -38,6 +42,26 @@ protected:
     Options.X64FlagsProfile = InterpreterMachineStateProfile::UserX64NoFaultV1;
     Options.X64MachineExits = {{1, Address, Kind}};
     return Options;
+  }
+
+  llvm::Expected<InterpreterMachineRegionSource>
+  choiceSequence(unsigned Count) {
+    std::vector<uint8_t> Code;
+    for (unsigned I = 0; I != Count; ++I)
+      Code.insert(Code.end(), {0x31, 0xc0});
+    Code.push_back(0xc3);
+    auto Image = loadRegion(Code);
+    if (!Image)
+      return Image.takeError();
+    auto Options = regionOptions(Entry + Code.size() - 1, ExitKind::Return);
+    Options.UndefinedModel = SpecializationUndefinedModel::FreshScalarV1;
+    Options.MaxRawEnvironmentResultBytes = 512 * 1024 * 1024;
+    Options.MaxRawEnvironmentResultRecords = 4 * 1024 * 1024;
+    const auto Result = specializeBinaryInterpreter(*Image, Entry, Options);
+    if (!Result.complete())
+      return llvm::createStringError(llvm::inconvertibleErrorCode(), "%s",
+                                     Result.Diagnostic.c_str());
+    return wrapInterpreterMachineRegionChoiceSourceX64V1(Result, Options);
   }
 };
 
