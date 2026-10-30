@@ -33,6 +33,10 @@
 #include <optional>
 #include <vector>
 
+namespace neverd::libc {
+class NoReturnTargetIndex;
+}
+
 namespace neverd::sdk {
 
 struct FuncInfo;
@@ -115,6 +119,10 @@ struct InstructionFlow {
   va_t Target = InvalidVA;
   llvm::SmallVector<InstructionRef, 2> Refs;
   StackMove Stack;
+  /// An unconditional call whose target's image contract ends ordinary flow.
+  /// Collected only with a supplied NoReturnTargetIndex. Unknown targets and
+  /// conditional calls keep their possible fallthrough.
+  bool NoReturn = false;
 };
 
 /// The flow kind of an instruction the lifter cannot model.
@@ -132,6 +140,11 @@ summarizeInstructionFlow(const BinaryImage &Img, Decoder &Dec,
 /// Results own their facts and never borrow this workspace.
 class InstructionFlowScratch {
 public:
+  /// Flow consumers share an image index. Listing/reference-only consumers
+  /// omit it, avoiding target lookups for facts they do not consume.
+  explicit InstructionFlowScratch(
+      const libc::NoReturnTargetIndex *NoReturnTargets = nullptr)
+      : NoReturnTargets(NoReturnTargets) {}
   InstructionFlow summarize(const BinaryImage &Img, Decoder &Dec,
                             const DecodedInsn &DI,
                             const TargetRegInfo *StackRegisters = nullptr);
@@ -142,6 +155,7 @@ public:
   dataAccesses(const BinaryImage &Img, Decoder &Dec, const DecodedInsn &DI);
 
 private:
+  const libc::NoReturnTargetIndex *NoReturnTargets;
   std::vector<LowOp> Ops;
 };
 
@@ -191,13 +205,16 @@ struct FunctionDecodeStatus {
 /// body (ExceptionInfo::outlyingChunks).  One function's visits run on one
 /// thread, so writing only to its own output keeps the result independent of
 /// the thread count.  False when a decoder could not be set up.
+/// Multi-page readers share one immutable image index through NoReturnTargets;
+/// a single-page reader may let this operation own its index.
 bool decodeFunctions(
     const BinaryImage &Img, const FunctionPage &Page,
     llvm::function_ref<void(size_t Index, Decoder &, const DecodedInsn &,
                             InstructionFlowScratch &)>
         Visit,
     const std::function<bool()> &Stop = {},
-    std::vector<FunctionDecodeStatus> *Status = nullptr);
+    std::vector<FunctionDecodeStatus> *Status = nullptr,
+    const libc::NoReturnTargetIndex *NoReturnTargets = nullptr);
 
 /// The width of the reads and writes the instructions of each of \p
 /// Functions state at each address in \p Img: the direct references

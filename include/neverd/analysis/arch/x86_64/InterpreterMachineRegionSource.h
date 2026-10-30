@@ -11,12 +11,14 @@
 #define NEVERD_ANALYSIS_ARCH_X86_64_INTERPRETERMACHINEREGIONSOURCE_H
 
 #include "neverd/analysis/InterpreterSpecialization.h"
+#include "neverd/analysis/Limits.h"
 #include "neverd/analysis/arch/x86_64/InterpreterMachineState.h"
 
 #include "llvm/Support/Error.h"
 
 #include <cstddef>
 #include <cstdint>
+#include <string>
 #include <type_traits>
 
 namespace neverd::analysis {
@@ -35,6 +37,10 @@ struct InterpreterMachineRegionSourceOptions {
   /// the original trap address, not a handler or a post-trap resume address.
   /// The caller owns exception delivery; the source supplies no continuation.
   bool StopBeforeTraps = false;
+  /// Choice-source wrapper only: bound both input and generated LowOps,
+  /// including guards and rejected exits. No partial source is returned.
+  uint64_t MaxChoiceSourceOperations =
+      limits::analysis::kInterpreterMachineRegionChoiceSourceMaxOperations;
 };
 
 /// Separate storage; earlier machine-source layouts are never extended.
@@ -55,12 +61,58 @@ static_assert(offsetof(InterpreterMachineRegionStateX64V1, PC) == 416);
 static_assert(offsetof(InterpreterMachineRegionStateX64V1, ExitKind) == 424);
 static_assert(sizeof(InterpreterMachineRegionStateX64V1) == 432);
 
+/// One production in application order within the original instruction.
+/// Cursor position, not PC alone, distinguishes repeated dynamic visits.
+struct InterpreterArchitecturalChoiceX64V1 {
+  uint64_t PC = 0;
+  uint64_t Ordinal = 0;
+  uint64_t BitCount = 0;
+  uint64_t Value = 0;
+};
+
+enum class InterpreterMachineRegionChoiceStatusX64V1 : uint64_t {
+  Exhausted = 5,
+  Mismatch = 6,
+};
+
+static_assert(std::is_standard_layout_v<InterpreterArchitecturalChoiceX64V1>);
+static_assert(sizeof(InterpreterArchitecturalChoiceX64V1) == 32);
+static_assert(offsetof(InterpreterArchitecturalChoiceX64V1, PC) == 0);
+static_assert(offsetof(InterpreterArchitecturalChoiceX64V1, Ordinal) == 8);
+static_assert(offsetof(InterpreterArchitecturalChoiceX64V1, BitCount) == 16);
+static_assert(offsetof(InterpreterArchitecturalChoiceX64V1, Value) == 24);
+
+/// A separate layout, never an implicit extension of the 432-byte state.
+/// Choices is a host pointer to ChoiceCount accessible, stable records. The
+/// records and state must be disjoint from guest accesses and from each other;
+/// the caller owns their lifetime and excludes concurrent mutation. Values
+/// must fit BitCount. No native processor's choice is inferred by this ABI.
+struct alignas(8) InterpreterMachineRegionChoiceStateX64V1 {
+  InterpreterMachineRegionStateX64V1 Core;
+  uint64_t Choices = 0;
+  uint64_t ChoiceCount = 0;
+  uint64_t ChoiceCursor = 0;
+};
+
+static_assert(
+    std::is_standard_layout_v<InterpreterMachineRegionChoiceStateX64V1>);
+static_assert(offsetof(InterpreterMachineRegionChoiceStateX64V1, Core) == 0);
+static_assert(offsetof(InterpreterMachineRegionChoiceStateX64V1, Choices) ==
+              432);
+static_assert(offsetof(InterpreterMachineRegionChoiceStateX64V1, ChoiceCount) ==
+              440);
+static_assert(offsetof(InterpreterMachineRegionChoiceStateX64V1,
+                       ChoiceCursor) == 448);
+static_assert(sizeof(InterpreterMachineRegionChoiceStateX64V1) == 456);
+
 struct InterpreterMachineRegionSource {
   InterpreterMachineSource Source;
   /// Validated original environment and graph receipt, before source lowering.
   /// Retain its caller-supplied premises with the generated source. It binds
   /// the original recovery result, not subsequent edits to Source.Function.
   SpecializationRawEnvironmentReceipt Environment;
+  std::string StateABI = "x64-machine-region-state-v1";
+  uint64_t StateBytes = sizeof(InterpreterMachineRegionStateX64V1);
 };
 
 /// Validate the complete raw result against independently expected options
@@ -99,6 +151,20 @@ llvm::Expected<InterpreterMachineRegionSource>
 wrapInterpreterMachineRegionSourceX64(
     const SpecializationResult &Result, const SpecializationOptions &Expected,
     const InterpreterMachineRegionSourceOptions &SourceOptions,
+    BinaryFormat SourceFormat = BinaryFormat::ELF);
+
+/// Requires FreshScalarV1 and the separate 456-byte choice state. Other region
+/// premises and statuses are unchanged. Status 5 means choice exhaustion;
+/// status 6 means a PC/ordinal/width/value mismatch. Both stop before the
+/// original instruction with ExitKind=None, preceding effects committed and
+/// its entry ChoiceCursor unchanged. All of an instruction's records are
+/// checked before any of its effects. Advance only after the whole instruction;
+/// false guards still consume records. Copies and spills consume none.
+/// This supplies executable raw-region source, not native-equivalence proof.
+llvm::Expected<InterpreterMachineRegionSource>
+wrapInterpreterMachineRegionChoiceSourceX64V1(
+    const SpecializationResult &Result, const SpecializationOptions &Expected,
+    const InterpreterMachineRegionSourceOptions &SourceOptions = {},
     BinaryFormat SourceFormat = BinaryFormat::ELF);
 
 } // namespace neverd::analysis

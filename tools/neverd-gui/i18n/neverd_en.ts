@@ -6949,10 +6949,6 @@ Select an operation to follow dependencies. Synthetic operations have block prov
         <translation>Enable dependency evidence in comparison settings.</translation>
     </message>
     <message>
-        <source>Include control dependencies</source>
-        <translation>Include control dependencies</translation>
-    </message>
-    <message>
         <source>Inspect original function</source>
         <translation>Inspect original function</translation>
     </message>
@@ -7087,6 +7083,32 @@ Progress does not establish equal loop counts or function results.</translation>
     <message>
         <source>Proof: every counter cycle reaches a shared exit relative to an input-derived expression. Undefined behavior may occur before exit.</source>
         <translation>Proof: every counter cycle reaches a shared exit relative to an input-derived expression. Undefined behavior may occur before exit.</translation>
+    </message>
+    <message>
+        <source>Argument accesses</source>
+        <translation>Argument accesses</translation>
+    </message>
+    <message>
+        <source>Show reads and writes using the same computed address as a recovered call argument.</source>
+        <translation>Show reads and writes using the same computed address as a recovered call argument.</translation>
+    </message>
+    <message>
+        <source>Include control</source>
+        <translation>Include control</translation>
+    </message>
+    <message>
+        <source>Include control dependencies when tracing inputs or uses.</source>
+        <translation>Include control dependencies when tracing inputs or uses.</translation>
+    </message>
+    <message>
+        <source>Call n%1 · %2 address observations · %3
+Reads and writes at a recovered argument's address. Call effects and execution order remain unknown. Activate a row to select its operation.</source>
+        <translation>Call n%1 · %2 address observations · %3
+Reads and writes at a recovered argument's address. Call effects and execution order remain unknown. Activate a row to select its operation.</translation>
+    </message>
+    <message>
+        <source>Inspecting argument addresses…</source>
+        <translation>Inspecting argument addresses…</translation>
     </message>
 </context>
 <context>
@@ -7900,6 +7922,38 @@ Every use of a projected parameter reads the same low bits. Whole-function behav
     <message>
         <source>Uncertain</source>
         <translation>Uncertain</translation>
+    </message>
+    <message>
+        <source>Argument</source>
+        <translation>Argument</translation>
+    </message>
+    <message>
+        <source>Access</source>
+        <translation>Access</translation>
+    </message>
+    <message>
+        <source>RETURN input</source>
+        <translation>RETURN input</translation>
+    </message>
+    <message>
+        <source>Write</source>
+        <translation>Write</translation>
+    </message>
+    <message>
+        <source>Read</source>
+        <translation>Read</translation>
+    </message>
+    <message>
+        <source>COPY / PHI path</source>
+        <translation>COPY / PHI path</translation>
+    </message>
+    <message>
+        <source>Not observed</source>
+        <translation>Not observed</translation>
+    </message>
+    <message>
+        <source>A same-width COPY/PHI path to a RETURN operand. That operand may be a control target; this does not establish an ABI return value or execution order.</source>
+        <translation>A same-width COPY/PHI path to a RETURN operand. That operand may be a control target; this does not establish an ABI return value or execution order.</translation>
     </message>
 </context>
 <context>

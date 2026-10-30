@@ -44,8 +44,10 @@
 #include "neverd/ir/med/MedRawEnvironment.h"
 #include "neverd/ir/med/X86/X86CompactShape.h"
 #include "neverd/ir/med/X86/X86FourSourceShape.h"
+#include "neverd/libc/LibCNames.h"
 #include "neverd/loader/AArch64MemoryImage.h"
 #include "neverd/loader/COFF/COFFRegistrationEH.h"
+#include "neverd/loader/X86/X64DispatchFrame.h"
 
 #define DEBUG_TYPE "neverd-med-llvm-emitter"
 #include "neverd/ArchSupport.h"
@@ -711,13 +713,31 @@ llvm::Function *MedLLVMEmitter::declareFunc(const MedFunc &Func) {
     RetType = llvm::StructType::get(*Ctx, FieldTypes);
   }
 
+  const bool DispatchFrame = Img && PreserveUnknownSourceValues &&
+                             !Func.SourceTypeHint && !Func.AnalystStackFrame &&
+                             x64DispatchFrame(*Img, Func.Entry).has_value();
+  if (DispatchFrame)
+    if (const auto *Prototype =
+            libc::windowsKernelPrototype(Img->getFunctionNameAt(Func.Entry))) {
+      // A service bridge forwards the physical entry bank and argument slots.
+      // Its internal dispatcher's inferred reads cannot shorten the documented
+      // service signature, including stack arguments unused in the bridge IR.
+      ParamTypes.resize(Prototype->ArgCount);
+      for (size_t I = 0; I < ParamTypes.size(); ++I)
+        if (!ParamTypes[I] || !ParamTypes[I]->isPointerTy())
+          ParamTypes[I] = sizeToType(Prototype->ArgWidths[I]);
+    }
+
   auto *FuncTy = llvm::FunctionType::get(RetType, ParamTypes, Func.IsVariadic);
   auto *LLVMFunc = llvm::Function::Create(
       FuncTy, llvm::GlobalValue::ExternalLinkage, EmittedName, Mod);
   if (HaveTypes)
     for (auto &Argument : LLVMFunc->args())
-      writeLLVMSourcePointerParameter(
-          Argument, Func.TypedParams[Argument.getArgNo()].Type);
+      if (Argument.getArgNo() < Func.TypedParams.size())
+        writeLLVMSourcePointerParameter(
+            Argument, Func.TypedParams[Argument.getArgNo()].Type);
+  if (DispatchFrame)
+    LLVMFunc->setCallingConv(llvm::CallingConv::Win64);
   // Recovered parameters are ordered by independent ABI register banks, then
   // incoming stack slots. A resolved indirect call can have surplus registers
   // in either bank; retaining these boundaries prevents positional coercion
@@ -828,7 +848,7 @@ MedLLVMEmitter::emit(const std::vector<MedFunc> &Funcs, llvm::LLVMContext &LCtx,
           Func.Name);
     for (const auto &Block : Func.Blocks)
       for (const auto &Op : Block.Ops) {
-        if (isMedRawEnvironmentRequirement(Op))
+        if (isMedRawEnvironmentRequirement(Op) || isMedArchitecturalValue(Op))
           llvm::report_fatal_error(
               "raw environment requirement has no LLVM runtime contract");
         if (Op.Opcode == NdOp::INTRINSIC && !Op.Inputs.empty() &&

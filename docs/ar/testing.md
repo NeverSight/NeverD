@@ -105,7 +105,7 @@ build-release/bin/NeverDX86NoIndexAddressTests
 
 تختبر الحالات العددية التمرير الكامل والجزئي من كاتب واحد، وundef/poison دون لقطات جديدة، وترتيبي البايتات، و32/64 بت، والإزاحات السالبة المعيارية، والتداخل الجزئي، وتطابق عناوين الجذور وalloca، والاستثناءات والحلقات وحدود الميزانية المتجاورة وإبطال التحليل عند حذف الكتابات فقط. تقارن اختبارات O0/O2 الأصل والتحويل بمرجع مستقل للقيمة المعادة وكل بايت في المخزن ذي العناوين المتطابقة.
 
-ينفذ `NeverDMedMutableSourceTests` و`NeverDLLVMCValueTests` عند O0/O2 حلقات مستقلة وإعادة ترتيب الكتل والحواف العائدة إلى المدخل وحسابات المكدس وقت التشغيل والقراءات السابقة والتقاء الفروع والتداخل الجزئي والقيم المنطقية وعدّ البتات بما يشمل الصفر. ترفض الحالات السلبية المدخلات المشوهة والأهداف المبتورة وحوامل القيم الملتبسة والميزانيات المستنفدة قبل الإخراج. يتطلب مثال CLI يتجاوز حد SSA مصدر LLVMC قابلًا للتنفيذ ورفضًا صريحًا من HighC. تتحقق اختبارات التحديثات المتكررة وسلاسل التعبيرات المخزنة عبر الكتل أيضًا من حجم خرج C وصحة تنفيذه.
+ينفذ `NeverDMedMutableSourceTests` و`NeverDLLVMCValueTests` عند O0/O2 حلقات مستقلة وإعادة ترتيب الكتل والحواف العائدة إلى المدخل وحسابات المكدس وقت التشغيل والقراءات السابقة والتقاء الفروع والتداخل الجزئي والقيم المنطقية وعدّ البتات بما يشمل الصفر. ترفض الحالات السلبية المدخلات المشوهة والأهداف المبتورة وحوامل القيم الملتبسة والميزانيات المستنفدة قبل الإخراج. ينفذ مثال CLI يتجاوز حد SSA كلاً من HighC وLLVMC. تتحقق رسوم كبيرة قليلة المتغيرات من التنفيذ بعد حد الكتل السابق، وتُختبر حدود ميزانية التخزين الدقيقة وتجاوزاتها بصورة مستقلة. تتحقق اختبارات التحديثات المتكررة وسلاسل التعبيرات المخزنة عبر الكتل أيضًا من حجم خرج C وصحة تنفيذه.
 
 تحد اختبارات الانحدار الإضافية من القراءات والكتابات الخاصة قبل الترقية في LLVM ومن حجم إخراج C. وتنفذ سلاسل حسابية مختلطة طويلة، وكتل SSA معاد ترتيبها، وكتابات ذاكرة متداخلة، وإرجاع الصفر عند O0/O2. تمر الحالات الأساسية أيضاً عبر مسار تحسين LLVM الفعلي، ويُختبر إعادة استخدام المولد بعد رفض إنشاء وحدة.
 
@@ -2188,6 +2188,8 @@ ctest --test-dir build-release -L "^(NeverDX86ScalarMoveAuditTests|NeverDX86Lega
 
 `NativeStackControl.TrapExit*` · `InterpreterSpecialization.TrapIntrinsicsCannotFallThroughWithoutAnAuthenticatedExit` · `PEFixedImageTest.MachineTrapExitEndsRegionAtDeclaredTrap` · `PEFixedImageTest.UndeclaredTrapRemainsUnsupported` · `PEFixedImageTest.MachineTrapExitRejectsNonTrapInstruction` · `NativeUndefinedIndependence.UntakenTrapStillRequiresExactEvidence`.
 
+تتحقق اختبارات `NativeStackControl.JumpExit*` من الوجهات المباشرة وعبر السجلات والذاكرة، والخانات الخلفية وغير المحاذاة، والأدلة القديمة وتداخل المؤقتات. ينفذ `InterpreterMachineRegionSourceTest.MemoryJumpExitsReadCurrentGuestSlots` مخرجات HighC وLLVMC بمستويي O0/O2 مع UBSan، لكلا نموذجي القيم غير المعرّفة المختارة والجديدة. يقارن الحالة والذاكرة بالكامل، وتغيّر محتوى الخانة وكتابة سابقة إلى عنوان متداخل. تتطلب تجربة العنوان الثابت Linux x64؛ تقع عناوين PE في فجوة ذاكرة الظل الخاصة بـ ASan. شغّل `NeverDInterpreterSpecializationTests` و`NeverDInterpreterMachineStateTests`.
+
 تتحقق هذه الاختبارات من المناطق المعلنة، ولا تثبت معالجة الاستثناءات أو تكافؤ المصدر والتنفيذ الأصلي.
 
 
@@ -2304,3 +2306,7 @@ QT_QPA_PLATFORM=offscreen NEVERD_PATCH_NATIVE_WORKER="$PWD/build-gui/bin/neverd-
 تحتفظ خانات المكدس الاصطناعية في LLVM C بكامل كتابة العدد الصحيح ذي 128 بت قبل اختيار أي من نصفيه ذوي 64 بت أثناء التنفيذ. يتحقق `LLVMCValues.WideFrameStoreRetainsBothRuntimeSelectedWords` من العنونة بالجمع وبعملية OR المعتمدة على المحاذاة عند O0/O2 مع ASan/UBSan وشرط `-fno-strict-aliasing` الموثق. شغّل `NeverDLLVMCValueTests` واختبارات الإطارات والمتجهات وسجلات العرض ذات الصلة.
 
 ينفذ `MedLLVMDirectData.OriginalImageCursorsIgnoreUnrelatedPointerRelocations` حلقات المؤشرات المعدلة للذاكرة لكل من x64/AArch64 وCOFF/ELF/Mach-O عبر LLVM C عند O0/O2 مع ASan/UBSan. في وضع مصدر الصورة الأصلية الصريح، تستخدم العناوين المثبتة صورة التشغيل المشتركة حتى قرب عمليات إعادة تموضع مؤشرات غير مرتبطة. تبقى الأعداد المتطابقة قيمًا عددية وتحتفظ نسخ المؤشرات المستقلة بتحققها السابق. شغّل `NeverDMedLLVMDirectDataTests` واختبارات حدود إعادة تموضع المؤشرات.
+
+<!-- i18n-section: mutable-alignment-guards -->
+
+تنفذ حالات `MedMutableSource.AlignmentChecks*` المدخلات المحاذاة والحراس غير النشطين عبر مساري C عند O0/O2، وتتطلب حدوث فخ للمدخلات غير المحاذاة ذات الحارس النشط، وترفض العروض والمحاذاة والمخرجات وفضاءات العناوين غير السليمة.

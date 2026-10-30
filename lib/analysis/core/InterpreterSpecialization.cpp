@@ -19,6 +19,7 @@
 #include "RecoveryArchitecture.h"
 
 #include "neverd/ir/intrinsics/Intrinsics.h"
+#include "neverd/ir/low/LowArchitecturalValue.h"
 #include "neverd/ir/low/LowRawEnvironment.h"
 #include "neverd/symbolic/SymExec.h"
 #include "neverd/symbolic/SymMBA.h"
@@ -2796,6 +2797,118 @@ bool Specializer::evaluate(int Id) {
     // instruction (or a previous loop iteration) cannot define this one's
     // temporary inputs, even if the numeric offset happens to match.
     std::set<uint64_t> DefinedTemporaries;
+    const bool FreshChoices =
+        Options.UndefinedModel == SpecializationUndefinedModel::FreshScalarV1;
+    if (FreshChoices) {
+      const auto &Description = Instruction.UndefinedEffects;
+      const uint64_t Visits = uint64_t(Operations.size()) + 1;
+      const uint64_t Remaining =
+          Options.MaxOperations - Result.EvaluatedOperations;
+      if (!Visits || Description.Effects.size() >= Remaining / Visits)
+        return fail(SpecializationStatus::BudgetExceeded,
+                    "architectural-choice audit budget exhausted");
+      // Pay the digest and each bounded scan before examining effect payloads.
+      Result.EvaluatedOperations += Visits * (Description.Effects.size() + 1);
+      // Reuse the architecture owner's exact disabled-CET byte/effect
+      // audit. A profile-preserving RDSSP has no new arbitrary production;
+      // this does not promote its general missing sidecar to complete.
+      const bool PreservingProfile =
+          Options.X64CetDisabled &&
+          Instruction.ProfileProjection ==
+              InterpreterProfileProjection::CetDisabledReadShadowStackV1 &&
+          x64::isCetDisabledProjection(Instruction);
+      if (Instruction.ProfileProjection != InterpreterProfileProjection::None &&
+          !PreservingProfile)
+        return fail(
+            SpecializationStatus::Unsupported,
+            "architectural choices require an audited profile projection");
+      // A retained trap is an authenticated unexecuted boundary. Its
+      // missing post-trap effects cannot describe executed scalar work.
+      if (Description.Coverage != LowUndefinedCoverage::Complete &&
+          !RetainedTerminator && !PreservingProfile)
+        return fail(SpecializationStatus::Unsupported,
+                    "architectural choices require complete undefined effects");
+      if (Description.OpCount != Instruction.Ops.size() ||
+          Description.OperationDigest !=
+              lowUndefinedOperationDigest(Instruction.Ops))
+        return fail(SpecializationStatus::InvalidInput,
+                    "architectural-choice operation evidence is stale");
+      if (!Description.Effects.empty() &&
+          (Instruction.Origin.Control != LowInstructionControl::None ||
+           Instruction.NativeStackControl !=
+               SpecializationNativeStackControl::None ||
+           RuntimeRead || ExternalExit))
+        return fail(SpecializationStatus::Unsupported,
+                    "architectural choices require an ordinary scalar span");
+      for (const auto &Effect : Description.Effects) {
+        if (UsesReservedTemporary(Effect.Output) ||
+            (Effect.When && UsesReservedTemporary(*Effect.When)))
+          return fail(SpecializationStatus::InvalidInput,
+                      "architectural choice overlaps reserved temporaries");
+        if (Effect.AfterOp > Operations.size() ||
+            !makeLowArchitecturalValue(Effect, Cursor.Address))
+          return fail(SpecializationStatus::Unsupported,
+                      "unsupported architectural-choice effect");
+      }
+    }
+    const auto ApplyChoices = [&](uint64_t Completed) {
+      if (!FreshChoices)
+        return true;
+      for (const auto &Effect : Instruction.UndefinedEffects.Effects) {
+        if (Effect.AfterOp != Completed)
+          continue;
+        auto Production = makeLowArchitecturalValue(Effect, Cursor.Address);
+        assert(Production && "effects validated before execution");
+        for (unsigned J : {1U, 2U}) {
+          const auto &Input = Production->Inputs[J];
+          if (Input.isTemp())
+            for (uint16_t Byte = 0; Byte != Input.Size; ++Byte)
+              if (!DefinedTemporaries.count(Input.Offset + Byte))
+                return fail(SpecializationStatus::InvalidInput,
+                            "architectural choice reads an unbound temporary");
+        }
+        const auto Old = Exec.operandValue(Production->Inputs[1]);
+        const auto Guard = Exec.operandValue(Production->Inputs[2]);
+        if (Effect.When && !Effect.When->isConst()) {
+          const auto Domain = enumerate(Ctx, Exec.pathPredicate(), {Guard}, 2);
+          if (Failed)
+            return false;
+          if (Domain.Status != FiniteValueStatus::Complete ||
+              Domain.Tuples.empty() ||
+              std::any_of(Domain.Tuples.begin(), Domain.Tuples.end(),
+                          [](const auto &Tuple) {
+                            return Tuple.size() != 1 || Tuple.front() > 1;
+                          }))
+            return fail(SpecializationStatus::Unsupported,
+                        "architectural-choice guard is not proved Boolean");
+        }
+        const unsigned Width = Effect.Output.Size * 8;
+        const auto Fresh =
+            Ctx.mkFreshVar(Effect.BitCount, "architectural_choice");
+        const auto Bits = Ctx.mkShl(Ctx.mkZExtOrTrunc(Fresh, Width),
+                                    Ctx.mkConst(Width, Effect.BitOffset));
+        const auto Mask = llvm::APInt::getBitsSet(
+            Width, Effect.BitOffset, Effect.BitOffset + Effect.BitCount);
+        const auto Updated = Ctx.mkOr(Ctx.mkAnd(Old, Ctx.mkConst(~Mask)), Bits);
+        State.write(Effect.Output.isReg() ? SymSpace::Register
+                                          : SymSpace::Temporary,
+                    Effect.Output.Offset,
+                    Ctx.mkIte(Ctx.mkNe(Guard, Ctx.mkZero(8)), Updated, Old));
+        setUnsafeOrigin(Effect.Output, true, Origins);
+        for (uint16_t Byte = 0; Byte != Effect.Output.Size; ++Byte)
+          if (Effect.Output.isTemp())
+            DefinedTemporaries.insert(Effect.Output.Offset + Byte);
+          else
+            Origins.UndefinedFlags.erase(Effect.Output.Offset + Byte);
+        Draft.Block.Ops.push_back(*Production);
+        if (Ctx.numNodes() > Options.MaxSymbolicNodes)
+          return fail(SpecializationStatus::BudgetExceeded,
+                      "architectural-choice symbolic-node budget exhausted");
+      }
+      return true;
+    };
+    if (!ApplyChoices(0))
+      return false;
     for (size_t I = 0; I < Operations.size(); ++I) {
       if (++Result.EvaluatedOperations > Options.MaxOperations)
         return fail(SpecializationStatus::BudgetExceeded,
@@ -2822,6 +2935,11 @@ bool Specializer::evaluate(int Id) {
                         "native operation reads an unbound entry flag");
       }
       const auto ReservedTemporary = [&](const NdVar &V) {
+        // Original operands were checked before the architecture owner
+        // introduced this exact scratch carrier for the physical exit.
+        if (ExternalExit && ExternalExit->MachineExit &&
+            V == ExternalExit->ExpansionScratch)
+          return false;
         if (ExpandedReturn && V == NdVar::tmp(NativeReturnTemp, 8))
           return false;
         if (ExpandedIndirectCall && I >= NativeCallPrefixSize &&
@@ -3889,6 +4007,8 @@ bool Specializer::evaluate(int Id) {
           Draft.Block.Ops.insert(Draft.Block.Ops.end(),
                                  std::make_move_iterator(ImmutableOps.begin()),
                                  std::make_move_iterator(ImmutableOps.end()));
+        if (!ApplyChoices(I + 1))
+          return false;
         continue;
       }
       if (I + 1 != Operations.size())

@@ -105,7 +105,7 @@ v4 테스트는 접두 구조의 크기와 패딩, 잘린 구조와 알 수 없�
 
 수치 주소 테스트는 단일 쓰기의 전체·부분 전달, 스냅샷 없는 undef/poison, 양쪽 바이트 순서, 32/64비트 표현, 모듈러 음수 오프셋, 부분 겹침, 다른 루트 및 alloca의 별칭, 예외 호출, 루프, 인접 예산 경계와 쓰기만 삭제할 때의 분석 무효화를 검사합니다. O0/O2에서 원본·변환 IR의 반환값과 별칭 버퍼의 모든 바이트를 독립 기준과 비교합니다.
 
-`NeverDMedMutableSourceTests`와 `NeverDLLVMCValueTests`는 독립적으로 작성한 루프, 블록 재배열, 진입 역방향 간선, 런타임 스택 연산, 앞선 읽기, 분기 합류, 부분 별칭, 불리언 참값 및 0을 포함한 비트 개수를 O0/O2로 실행합니다. 부정 사례는 잘못된 입력, 잘린 대상, 모호한 전달 위치와 예산 소진을 출력 전에 거부합니다. SSA 한도를 넘는 CLI 사례는 실행 가능한 LLVMC 출력과 명시적인 HighC 거부를 요구합니다. 반복 갱신과 여러 블록에 걸친 저장 표현식 체인도 생성된 C의 크기와 실행 결과를 검증합니다.
+`NeverDMedMutableSourceTests`와 `NeverDLLVMCValueTests`는 독립적으로 작성한 루프, 블록 재배열, 진입 역방향 간선, 런타임 스택 연산, 앞선 읽기, 분기 합류, 부분 별칭, 불리언 참값 및 0을 포함한 비트 개수를 O0/O2로 실행합니다. 부정 사례는 잘못된 입력, 잘린 대상, 모호한 전달 위치와 예산 소진을 출력 전에 거부합니다. SSA 한도를 넘는 CLI 사례는 HighC와 LLVMC를 모두 실행합니다. 변수가 적은 대형 그래프로 이전 블록 한도 이상의 실행을 확인하고 저장소 예산의 경계와 초과를 별도로 검증합니다. 반복 갱신과 여러 블록에 걸친 저장 표현식 체인도 생성된 C의 크기와 실행 결과를 검증합니다.
 
 추가 회귀 검사는 LLVM 승격 전의 비공개 읽기·쓰기 수와 C 출력 크기를 제한합니다. 긴 혼합 연산 체인, 재정렬된 SSA 블록, 겹치는 대상 메모리 쓰기와 0 반환값을 O0/O2로 실행하고 핵심 사례는 실제 LLVM 최적화 파이프라인도 거칩니다. 모듈 생성 거부 후 이미터 재사용도 검사합니다.
 
@@ -2152,6 +2152,8 @@ ctest --test-dir build-release -L "^(NeverDX86ScalarMoveAuditTests|NeverDX86Lega
 
 `NativeStackControl.TrapExit*` · `InterpreterSpecialization.TrapIntrinsicsCannotFallThroughWithoutAnAuthenticatedExit` · `PEFixedImageTest.MachineTrapExitEndsRegionAtDeclaredTrap` · `PEFixedImageTest.UndeclaredTrapRemainsUnsupported` · `PEFixedImageTest.MachineTrapExitRejectsNonTrapInstruction` · `NativeUndefinedIndependence.UntakenTrapStillRequiresExactEvidence`.
 
+`NativeStackControl.JumpExit*`는 직접·레지스터·메모리 대상, 역방향 및 비정렬 슬롯, 오래된 증거와 임시 값 중첩을 검사합니다. `InterpreterMachineRegionSourceTest.MemoryJumpExitsReadCurrentGuestSlots`는 선택된 값 및 fresh 미정의 값 모델 모두에서 HighC와 LLVMC를 O0/O2 및 UBSan으로 실행합니다. 전체 상태와 메모리, 슬롯 내용 변경, 앞선 별칭 쓰기를 검사합니다. 고정 주소 테스트에는 Linux x64가 필요하며 해당 PE 주소는 ASan 섀도 메모리 간극에 있습니다. `NeverDInterpreterSpecializationTests`와 `NeverDInterpreterMachineStateTests`를 실행하세요.
+
 이 검사는 선언된 영역을 검증하며 예외 처리나 소스/native 동등성을 증명하지 않습니다.
 
 
@@ -2268,3 +2270,7 @@ MedIR 상수 전파와 복사 전파는 `canPropagateConstantToOperand`를 공�
 LLVM C의 합성 스택 슬롯은 실행 중 선택한 64비트 절반을 읽기 전에 128비트 정수 저장 전체를 유지합니다. `LLVMCValues.WideFrameStoreRetainsBothRuntimeSelectedWords`는 문서화된 `-fno-strict-aliasing` 계약과 ASan/UBSan을 사용하여 O0/O2에서 덧셈 및 정렬 기반 OR 주소 계산을 검증합니다. `NeverDLLVMCValueTests`와 관련 프레임, 벡터, 표시 레코드 테스트를 실행하세요.
 
 `MedLLVMDirectData.OriginalImageCursorsIgnoreUnrelatedPointerRelocations`는 x64/AArch64 및 COFF/ELF/Mach-O의 가변 커서 루프를 LLVM C의 O0/O2와 ASan/UBSan으로 실행합니다. 명시적 원본 이미지 소스 모드에서는 관련 없는 포인터 재배치 옆에서도 확인된 주소가 공유 실행 이미지에 연결됩니다. 숫자가 같은 일반 정수는 스칼라로 유지되며 독립 포인터 미러의 기존 검증도 유지됩니다. `NeverDMedLLVMDirectDataTests`와 포인터 재배치 경계 테스트를 실행하세요.
+
+<!-- i18n-section: mutable-alignment-guards -->
+
+`MedMutableSource.AlignmentChecks*`는 정렬된 입력과 비활성 가드를 두 C 경로의 O0/O2에서 실행하고, 활성 가드의 비정렬 입력이 트랩을 발생시키는지 확인합니다. 잘못된 너비, 정렬, 출력과 주소 공간도 거부합니다.

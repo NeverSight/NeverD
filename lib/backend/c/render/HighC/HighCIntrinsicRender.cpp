@@ -36,7 +36,8 @@ std::string MultiOutputRender::operator()(
     throw std::invalid_argument(kAArch64ExceptionReturnUnsupported);
   if (const char *Reason = x86NonlocalControlTransferReason(IID))
     throw std::invalid_argument(Reason);
-  if (IID == Intrinsic::RawEnvironmentRequirementV1)
+  if (IID == Intrinsic::RawEnvironmentRequirementV1 ||
+      IID == Intrinsic::ArchitecturalValueV1)
     throw std::invalid_argument(
         "raw environment requirement has no C runtime contract");
   if (TheArch == Arch::ARM || TheArch == Arch::AArch64)
@@ -54,7 +55,8 @@ std::string renderIntrinsicCall(Intrinsic Id, Arch TheArch,
     throw std::invalid_argument(kAArch64ExceptionReturnUnsupported);
   if (const char *Reason = x86NonlocalControlTransferReason(Id))
     throw std::invalid_argument(Reason);
-  if (Id == Intrinsic::RawEnvironmentRequirementV1)
+  if (Id == Intrinsic::RawEnvironmentRequirementV1 ||
+      Id == Intrinsic::ArchitecturalValueV1)
     throw std::invalid_argument(
         "raw environment requirement has no C runtime contract");
   if (aarch64_sve::vectorOperation(Id) && TheArch != Arch::AArch64)

@@ -70,6 +70,15 @@ std::string preamble(const std::set<std::string> &Amx, bool Sgx, bool Rep,
             "#define NEVERD_X86_AMX_STACK(native, ...) native\n"
             "#else\n"
             "#define NEVERD_X86_AMX_STACK(native, ...) __VA_ARGS__\n"
+            "#endif\n#endif\n"
+            "#ifndef NEVERD_X86_AMX_STACK_MEMORY\n"
+            "#if defined(__NEVERC_X86_AMX_STACK_MEMORY__) && "
+            "__NEVERC_X86_AMX_STACK_MEMORY__ >= 1\n"
+            "#define NEVERD_X86_AMX_STACK_MEMORY(native) native\n"
+            "#else\n"
+            "#define NEVERD_X86_AMX_STACK_MEMORY(native) "
+            "({ _Static_assert(0, \"AMX stack memory requires a compiler with "
+            "native stack-memory intrinsics\"); })\n"
             "#endif\n#endif\n";
   if (Bounded)
     Text += "#ifndef NEVERD_X86_BOUNDED_LEAF\n"

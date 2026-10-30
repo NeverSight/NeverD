@@ -1,3 +1,14 @@
+//===- MedSourceParameterUses.cpp - Source parameter use proofs -----------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Prove observed entry bytes and whole-value source pointer roles.
+///
+//===----------------------------------------------------------------------===//
+
 #include "neverd/ir/med/MedSourceParameterUses.h"
 
 #include "neverd/ir/Limits.h"
@@ -7,11 +18,13 @@
 #include "neverd/ir/med/MedNoReturn.h"
 
 #include <algorithm>
+#include <cstdint>
 #include <deque>
 #include <map>
 #include <memory>
 #include <set>
 #include <tuple>
+#include <utility>
 
 namespace neverd {
 namespace {
@@ -19,6 +32,17 @@ using ValueKey = std::tuple<MedVar::VarKind, int, int>;
 
 ValueKey key(const MedVar &Value) {
   return {Value.Kind, Value.Id, Value.SSAVer};
+}
+
+// Forward-only parameters can have no SSA id. Their recorded physical slots
+// distinguish them; this adds no value for an unobserved incoming register.
+using PointerValueKey = std::pair<ValueKey, uint64_t>;
+PointerValueKey pointerKey(const MedVar &Value) {
+  return {key(Value),
+          (Value.Kind == MedVar::Param || Value.Kind == MedVar::Reg) &&
+                  Value.Id < 0
+              ? Value.RegOff
+              : 0};
 }
 
 enum Use : unsigned { Pointer = 1, Scalar = 2 };
@@ -29,7 +53,7 @@ struct ValueUses {
   // carry a supported object pointee. The pointer role itself remains valid.
   TypeRef PointerType;
   // Backward identity edges; narrow copies propagate only conflicting uses.
-  std::vector<std::pair<ValueKey, bool>> Inputs;
+  std::vector<std::pair<PointerValueKey, bool>> Inputs;
 };
 } // namespace
 
@@ -334,17 +358,19 @@ TypeRef pointerCandidate(const TypeRef &Type) {
 
 static std::vector<TypeRef> inferPointerParameters(
     const MedFunc &Function, unsigned PointerBytes,
-    const std::map<va_t, std::vector<TypeRef>> *CalleeParameters) {
+    const std::map<va_t, std::vector<TypeRef>> *CalleeParameters,
+    const std::map<va_t, std::vector<TypeRef>> *CalleeRegisterParameters =
+        nullptr) {
   std::vector<TypeRef> Result(Function.Params.size());
-  std::map<ValueKey, ValueUses> Values;
-  std::set<ValueKey> Definitions;
-  std::map<ValueKey, const MedVar *> Parameters;
+  std::map<PointerValueKey, ValueUses> Values;
+  std::set<PointerValueKey> Definitions;
+  std::map<PointerValueKey, const MedVar *> Parameters;
   std::map<uint64_t, const MedVar *> EntryRegisters;
   for (const auto &Parameter : Function.Params) {
-    if (Parameter.Id < 0)
+    if (Parameter.Id < 0 && Parameter.RegOff == kNoParamReg)
       continue;
     if (Parameter.Kind != MedVar::Param ||
-        !Parameters.emplace(key(Parameter), &Parameter).second ||
+        !Parameters.emplace(pointerKey(Parameter), &Parameter).second ||
         (Parameter.RegOff != kNoParamReg &&
          !EntryRegisters.emplace(Parameter.RegOff, &Parameter).second))
       return Result;
@@ -352,35 +378,54 @@ static std::vector<TypeRef> inferPointerParameters(
 
   // SSA version zero can be the first implicit definition after a call.
   // Its physical register alone is not evidence of an incoming parameter.
-  std::set<ValueKey> Clobbered;
+  std::set<PointerValueKey> Clobbered;
   for (const auto &Clobber : Function.CallClobbers)
-    Clobbered.insert(key(Clobber.Value));
+    Clobbered.insert(pointerKey(Clobber.Value));
   std::map<std::pair<int, int>, const MedCallInfo *> Calls;
   for (const auto &Call : Function.CallInfos)
     Calls.emplace(std::pair(Call.BlockId, Call.OpIdx), &Call);
 
   bool Ambiguous = false;
+  std::map<PointerValueKey, std::pair<PointerValueKey, bool>> EntryUses;
   auto Observe = [&](const MedVar &Value) {
     if (Value.Kind == MedVar::Reg && Value.SSAVer == 0 &&
-        !Clobbered.count(key(Value))) {
+        !Clobbered.count(pointerKey(Value))) {
       const auto Found = EntryRegisters.find(Value.RegOff);
       if (Found != EntryRegisters.end()) {
         // Generic ABI inference records Params separately from SSA live-ins.
         // Only the entry version at that exact physical location represents
         // the parameter; later versions of the register are unrelated.
-        Values[key(Value)].Inputs.emplace_back(
-            key(*Found->second),
-            Value.Size == PointerBytes && Found->second->Size == PointerBytes);
+        const auto Parameter = pointerKey(*Found->second);
+        const bool Whole =
+            Value.Size == PointerBytes && Found->second->Size == PointerBytes;
+        const auto [Use, Added] =
+            EntryUses.emplace(pointerKey(Value), std::pair(Parameter, Whole));
+        if (!Added) {
+          Ambiguous |= Use->second.first != Parameter;
+          Use->second.second &= Whole;
+        }
       }
     }
     if (Value.Kind != MedVar::Param)
       return;
-    const auto Found = Parameters.find(key(Value));
+    const auto Found = Parameters.find(pointerKey(Value));
+    if (Found == Parameters.end() && Value.Id >= 0 &&
+        static_cast<size_t>(Value.Id) < Function.Params.size()) {
+      const auto &Parameter = Function.Params[Value.Id];
+      if (Parameter.Id < 0 && Parameter.RegOff != kNoParamReg &&
+          Parameter.RegOff == Value.RegOff &&
+          Parameter.SSAVer == Value.SSAVer) {
+        Values[pointerKey(Value)].Inputs.emplace_back(
+            pointerKey(Parameter),
+            Value.Size == PointerBytes && Parameter.Size == PointerBytes);
+        return;
+      }
+    }
     if (Found == Parameters.end() || Found->second->RegOff != Value.RegOff)
       Ambiguous = true;
   };
   struct UseFact {
-    ValueKey Value;
+    PointerValueKey Value;
     unsigned Role;
     TypeRef Type;
   };
@@ -389,23 +434,21 @@ static std::vector<TypeRef> inferPointerParameters(
     Observe(Value);
     if (!Value.isConst())
       Pending.push_back(
-          {key(Value),
+          {pointerKey(Value),
            Role == Pointer && Value.Size != PointerBytes ? Scalar : Role,
            Role == Pointer ? objectPointerType(Type) : nullptr});
   };
   auto Connect = [&](const MedVar &Output, const MedVar &Input) {
     Observe(Input);
     if (!Input.isConst())
-      Values[key(Output)].Inputs.emplace_back(key(Input),
-                                              Output.Size == PointerBytes &&
-                                                  Input.Size == PointerBytes);
+      Values[pointerKey(Output)].Inputs.emplace_back(
+          pointerKey(Input),
+          Output.Size == PointerBytes && Input.Size == PointerBytes);
   };
   auto Define = [&](const MedVar &Output) {
     if (Output.Size && !Output.isConst() &&
         (Output.Kind == MedVar::Param ||
-         (Output.Kind == MedVar::Reg && Output.SSAVer == 0 &&
-          Output.Size == PointerBytes && EntryRegisters.count(Output.RegOff)) ||
-         !Definitions.insert(key(Output)).second))
+         !Definitions.insert(pointerKey(Output)).second))
       Ambiguous = true;
   };
 
@@ -443,10 +486,12 @@ static std::vector<TypeRef> inferPointerParameters(
         if (Found != Calls.end()) {
           const auto &Call = *Found->second;
           const std::vector<TypeRef> *Types = nullptr;
-          if (CalleeParameters && !Op.SourceCallHint &&
-              !Call.ArgumentsInCalleeRegisterOrder)
-            if (auto Declared = CalleeParameters->find(Call.TargetAddr);
-                Declared != CalleeParameters->end() &&
+          const auto *Declarations = Call.ArgumentsInCalleeRegisterOrder
+                                         ? CalleeRegisterParameters
+                                         : CalleeParameters;
+          if (Declarations && !Op.SourceCallHint)
+            if (auto Declared = Declarations->find(Call.TargetAddr);
+                Declared != Declarations->end() &&
                 Declared->second.size() == Call.Args.size())
               Types = &Declared->second;
           // Explicit operands and a recovered list must describe the same
@@ -494,6 +539,17 @@ static std::vector<TypeRef> inferPointerParameters(
           }
         }
       }
+      if (!BoundCall &&
+          (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) &&
+          !Calls.count({Block.Id, static_cast<int>(OpIndex)}) &&
+          Op.NumInputs == 1 && !Op.ExactArguments &&
+          !(Op.IntegerCallSignature &&
+            Op.IntegerCallSignature->Parameters.empty()) &&
+          !(Op.ScalarCallSignature && Op.ScalarCallSignature->Scalars.empty() &&
+            Op.ScalarCallSignature->ParameterBytes.empty()))
+        // A target-only call can observe hidden inputs. Ignoring it would
+        // turn an incomplete use graph into a complete pointer-use proof.
+        Ambiguous = true;
       for (unsigned Index = 0; Index < Op.NumInputs; ++Index) {
         unsigned Role = Scalar;
         if (BoundCall && Index) {
@@ -510,6 +566,12 @@ static std::vector<TypeRef> inferPointerParameters(
   }
   if (Ambiguous)
     return Result;
+  // A local definition may own version zero, including a call result in the
+  // same register as a forward-only parameter. It is not an entry observation;
+  // independent explicit Param uses still refer to their original slots.
+  for (const auto &[Value, Parameter] : EntryUses)
+    if (!Definitions.count(Value))
+      Values[Value].Inputs.push_back(Parameter);
 
   // Each role visits each value once. A pointee changes at most twice:
   // unobserved -> one declared type -> ambiguous. Loops and shared PHI chains
@@ -537,9 +599,10 @@ static std::vector<TypeRef> inferPointerParameters(
   TypeRef GenericPointer;
   for (size_t Index = 0; Index < Function.Params.size(); ++Index) {
     const auto &Parameter = Function.Params[Index];
-    const auto Found = Values.find(key(Parameter));
-    if (Parameter.Id < 0 || Parameter.Size != PointerBytes ||
-        Found == Values.end() || Found->second.Roles != Pointer)
+    const auto Found = Values.find(pointerKey(Parameter));
+    if ((Parameter.Id < 0 && Parameter.RegOff == kNoParamReg) ||
+        Parameter.Size != PointerBytes || Found == Values.end() ||
+        Found->second.Roles != Pointer)
       continue;
     if (Found->second.PointerType) {
       Result[Index] = pointerCandidate(Found->second.PointerType);
@@ -556,9 +619,11 @@ static std::vector<TypeRef> inferPointerParameters(
 
 std::vector<TypeRef> inferMedSourcePointerParameterTypes(
     const MedFunc &Function, Arch Architecture,
-    const std::map<va_t, std::vector<TypeRef>> &CalleeParameters) {
-  return inferPointerParameters(
-      Function, getTargetRegInfo(Architecture).PointerSize, &CalleeParameters);
+    const std::map<va_t, std::vector<TypeRef>> &CalleeParameters,
+    const std::map<va_t, std::vector<TypeRef>> &CalleeRegisterParameters) {
+  return inferPointerParameters(Function,
+                                getTargetRegInfo(Architecture).PointerSize,
+                                &CalleeParameters, &CalleeRegisterParameters);
 }
 
 std::vector<bool> inferMedSourcePointerParameters(const MedFunc &Function) {

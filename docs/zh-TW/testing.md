@@ -103,7 +103,7 @@ v4 測試固定前綴大小與填充，拒絕截斷配置和未知旗標，保�
 
 數值位址測試涵蓋單一寫入者的完整與子字轉發、不新增快照的 undef/poison、雙端序、32/64 位元表示、模運算負位移、部分重疊、不同根與 alloca 的別名、可擲出例外的呼叫、迴圈、相鄰工作量與用途預算，以及僅刪除寫入時的分析失效。O0/O2 執行將原始與改寫 IR 對照獨立基準，同時檢查傳回值及別名緩衝區的每個位元組。
 
-`NeverDMedMutableSourceTests` 和 `NeverDLLVMCValueTests` 在 O0/O2 下執行獨立撰寫的迴圈、區塊重排、入口回邊、執行期堆疊運算、較早讀取、分支匯合、部分別名、布林真值和包含零輸入的位元計數。反例要求在發射前拒絕畸形輸入、截斷目標、歧義承載和預算耗盡。超過 SSA 限制的 CLI 案例要求 LLVMC 輸出可執行，並要求 HighC 明確拒絕。 連續更新和跨區塊儲存運算式鏈也會檢查產生 C 的大小與執行結果。
+`NeverDMedMutableSourceTests` 和 `NeverDLLVMCValueTests` 在 O0/O2 下執行獨立撰寫的迴圈、區塊重排、入口回邊、執行期堆疊運算、較早讀取、分支匯合、部分別名、布林真值和包含零輸入的位元計數。反例要求在發射前拒絕畸形輸入、截斷目標、歧義承載和預算耗盡。超過 SSA 限制的 CLI 案例執行 HighC 和 LLVMC。大型窄圖驗證超過原區塊數上限後的執行，儲存預算的恰好達限與超限分別測試。 連續更新和跨區塊儲存運算式鏈也會檢查產生 C 的大小與執行結果。
 
 新增迴歸限制 LLVM 提升前的私有讀寫數量和 C 輸出大小，執行長混合運算鏈、重新排序的 SSA 區塊、重疊的客戶記憶體寫入及零回傳值的 O0/O2 檢查；關鍵案例還經過實際 LLVM 最佳化管線，並驗證模組產生遭拒後可以安全重用發射器。
 
@@ -2108,6 +2108,8 @@ ctest --test-dir build-release -L "^(NeverDX86ScalarMoveAuditTests|NeverDX86Lega
 
 `NativeStackControl.TrapExit*` · `InterpreterSpecialization.TrapIntrinsicsCannotFallThroughWithoutAnAuthenticatedExit` · `PEFixedImageTest.MachineTrapExitEndsRegionAtDeclaredTrap` · `PEFixedImageTest.UndeclaredTrapRemainsUnsupported` · `PEFixedImageTest.MachineTrapExitRejectsNonTrapInstruction` · `NativeUndefinedIndependence.UntakenTrapStillRequiresExactEvidence`.
 
+`NativeStackControl.JumpExit*` 檢查直接、暫存器及記憶體目標、反向與未對齊的槽、過期證據和暫存變數重疊。`InterpreterMachineRegionSourceTest.MemoryJumpExitsReadCurrentGuestSlots` 在選定值及新鮮未定義值兩種模型下，以 UBSan 執行 HighC、LLVMC 的 O0/O2 結果，比較完整狀態與記憶體，並涵蓋槽內容變化及前置別名寫入。固定地址案例要求 Linux x64；其 PE 位址位於 ASan 的影子記憶體空隙。執行 `NeverDInterpreterSpecializationTests` 和 `NeverDInterpreterMachineStateTests`。
+
 這些檢查驗證宣告區域，不證明例外處理或原始碼／原生等價。
 
 
@@ -2224,3 +2226,7 @@ MedIR 的常數傳播與複製傳播共用 `canPropagateConstantToOperand`：計
 LLVM C 的合成堆疊槽保留完整的 128 位元整數寫入，再由執行期選擇讀取任一 64 位元半部。`LLVMCValues.WideFrameStoreRetainsBothRuntimeSelectedWords` 在 O0/O2、ASan/UBSan 及文件規定的 `-fno-strict-aliasing` 契約下涵蓋加法與基於對齊的 OR 定址。執行 `NeverDLLVMCValueTests`；相關框架、向量及顯示記錄測試涵蓋周邊儲存路徑。
 
 `MedLLVMDirectData.OriginalImageCursorsIgnoreUnrelatedPointerRelocations` 對 x64/AArch64 與 COFF/ELF/Mach-O 的可變游標迴圈執行 LLVM C 的 O0/O2 + ASan/UBSan 檢查。在明確的原始映像原始碼模式下，已確認的位址即使鄰近無關指標重定位，也使用共用的執行期映像。數值相同的一般整數保持純量；獨立指標映像保留既有驗證。執行 `NeverDMedLLVMDirectDataTests` 及指標重定位邊界測試。
+
+<!-- i18n-section: mutable-alignment-guards -->
+
+`MedMutableSource.AlignmentChecks*` 在兩條 C 路徑的 O0/O2 下執行對齊輸入與未啟用條件，要求啟用條件下的未對齊輸入觸發陷阱，並拒絕錯誤的寬度、對齊值、輸出和位址空間。

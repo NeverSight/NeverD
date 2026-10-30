@@ -12,6 +12,7 @@
 #include "neverd/sdk/NeverDCAPI.h"
 
 #include "llvm/ADT/ScopeExit.h"
+#include "llvm/ADT/StringExtras.h"
 #include "llvm/Object/ELFTypes.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/JSON.h"
@@ -157,6 +158,66 @@ TEST_F(SessionFunctionDiscovery, CallsAtTheEntryAreSweptInStep) {
   ASSERT_EQ(neverd_session_discover_functions(Session), 5);
   for (const uint64_t Offset : {0x0, 0x10, 0x16, 0x1c, 0x22})
     EXPECT_GE(neverd_func_find_by_addr(Session, Entry + Offset), 0) << Offset;
+}
+
+TEST_F(SessionFunctionDiscovery,
+       ComparisonSharesKnownImportTerminationForSizedAndUnsizedBodies) {
+  for (bool Indirect : {false, true}) {
+    for (bool Sized : {false, true}) {
+      for (bool Returning : {false, true}) {
+        SCOPED_TRACE(Indirect);
+        SCOPED_TRACE(Sized);
+        SCOPED_TRACE(Returning);
+        std::string Code(0x40, '\xcc');
+        // A sole call ends this function's declared body. The bytes beyond
+        // it are deliberately not a return, so a missing contract stays
+        // incomplete instead of borrowing a layout-based no-return guess.
+        const std::string Call =
+            Indirect ? std::string("\xff\x15\x1a\x00\x00\x00", 6)
+                     : std::string("\xe8\x1b\x00\x00\x00", 5);
+        Code.replace(0, Call.size(), Call);
+        const auto Path = write("call-termination.elf",
+                                makeNativeELF(false, 0x400000, {}, Code));
+        ASSERT_EQ(neverd_session_load(Session, Path.c_str()), 1);
+        auto &State = *reinterpret_cast<neverd::sdk::Session *>(Session);
+        const auto Entry = neverd_session_entry_addr(Session);
+        neverd::Import Import;
+        Import.Name = Returning ? "ordinary_call" : "__stack_chk_fail";
+        Import.IATAddr = Entry + 0x20;
+        State.Img.Imports = {Import};
+        State.Img.Symbols = {
+            neverd::Symbol::makeFunc(Entry, Sized ? Call.size() : 0)};
+        neverd::sdk::SessionTestAccess::resetFunctions(State);
+        const auto C = neverd_comparison_create();
+        const auto Destroy =
+            llvm::make_scope_exit([&] { neverd_comparison_destroy(C); });
+        ASSERT_EQ(neverd_comparison_run(C, Session, Session,
+                                        R"({"discover":false})", nullptr,
+                                        nullptr),
+                  1)
+            << takeString(neverd_comparison_last_error(C));
+        const auto Text = takeString(neverd_comparison_graph_json(
+            C, ("{\"side\":\"primary\",\"address\":\"0x" +
+                llvm::utohexstr(Entry) + "\"}")
+                   .c_str()));
+        auto Graph = llvm::json::parse(Text);
+        ASSERT_TRUE(bool(Graph)) << Text;
+        EXPECT_EQ(Graph->getAsObject()->getBoolean("analysis_complete"),
+                  !Returning)
+            << Text;
+        if (!Returning) {
+          EXPECT_TRUE(Graph->getAsObject()->getArray("edges")->empty());
+          ASSERT_EQ(Graph->getAsObject()->getArray("nodes")->size(), 1u);
+          EXPECT_EQ(Graph->getAsObject()
+                        ->getArray("nodes")
+                        ->front()
+                        .getAsObject()
+                        ->getInteger("insn_count"),
+                    1);
+        }
+      }
+    }
+  }
 }
 
 TEST_F(SessionFunctionDiscovery, AddressedAssemblyKeepsOneCompleteNativeBody) {

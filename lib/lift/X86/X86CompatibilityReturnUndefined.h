@@ -37,10 +37,17 @@ inline bool matches(llvm::ArrayRef<LowOp> Ops,
                     const LowInstructionUndefinedEffects &Effects) {
   if (Ops.size() != 1 || Ops[0].Opcode != NdOp::INTRINSIC ||
       Ops[0].NumInputs != 3 || Ops[0].Output.Size ||
-      Ops[0].Inputs[0] != NdVar::cst(uint64_t(Intrinsic::Sysretq), 2) ||
-      Ops[0].Inputs[1] != NdVar::reg(x86reg::RCX, 4) ||
-      Ops[0].Inputs[2] != NdVar::reg(x86reg::R11, 4) ||
       Effects.Effects.size() != Registers.size())
+    return false;
+  const bool Sysret =
+      Ops[0].Inputs[0] == NdVar::cst(uint64_t(Intrinsic::Sysretq), 2) &&
+      Ops[0].Inputs[1] == NdVar::reg(x86reg::RCX, 4) &&
+      Ops[0].Inputs[2] == NdVar::reg(x86reg::R11, 4);
+  const bool Sysexit =
+      Ops[0].Inputs[0] == NdVar::cst(uint64_t(Intrinsic::Sysexitq), 2) &&
+      Ops[0].Inputs[1] == NdVar::reg(x86reg::RDX, 4) &&
+      Ops[0].Inputs[2] == NdVar::reg(x86reg::RCX, 4);
+  if (!Sysret && !Sysexit)
     return false;
   for (size_t I = 0; I != Registers.size(); ++I) {
     const auto &E = Effects.Effects[I];

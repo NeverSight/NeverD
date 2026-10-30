@@ -733,6 +733,10 @@ llvm::Constant *MedLLVMEmitter::buildCodePtrSegmentGlobal(
                      ? (!Img->isCodeAddress(TargetVA) ||
                         !Img->readVA(TargetVA, 1))
                      : !resolveImageFunctionAddress(TargetVA)) {
+        // Missing or masked code is not evidence of data. Only the loader's
+        // data-pointer role can authorize data materialization; a code slot
+        // must retain a lifted callable/block identity, including its static
+        // fallback when runtime storage can later replace the pointer.
         if (!FatalCodePointerResolution)
           llvm::WithColor::error()
               << "med_llvm_emitter: relocation-proven code pointer at 0x"

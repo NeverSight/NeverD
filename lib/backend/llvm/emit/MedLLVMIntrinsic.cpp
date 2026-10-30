@@ -104,7 +104,7 @@ MedLLVMEmitter::atomicIntrinsicAddressInput(const MedOp &Op) const {
 
 llvm::Value *MedLLVMEmitter::emitIntrinsic(const MedOp &Op,
                                            llvm::IRBuilder<> &Builder) {
-  if (isMedRawEnvironmentRequirement(Op))
+  if (isMedRawEnvironmentRequirement(Op) || isMedArchitecturalValue(Op))
     llvm::report_fatal_error(
         "raw environment requirement has no LLVM runtime contract");
   if (!hasValidMedIntrinsicId(Op))

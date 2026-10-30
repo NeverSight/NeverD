@@ -182,6 +182,17 @@ revision checks and cooperative cancellation contract as source inspection.
 
 `comparison_dataflow` pages retained SSA collections (`side`, `kind` of
 `functions`, `nodes` or `blocks`, `address` for a graph, `offset`, `limit`).
+`comparison_dataflow` additionally accepts `kind:"accesses"` with a function
+`address` and `call` node ID under `med-ssa-v2`. It returns paged reads/writes
+whose SSA address expression equals a recovered argument, including zero-based
+`argument`, `access_bytes` and a same-width COPY/PHI `return_operand_path`.
+`observation_profile` is `med-ssa-argument-accesses-v1`. `inspection_complete`,
+`state`, `work` and original `gaps` distinguish observation scope from memory or
+callee-effect proof. Execution order is unassessed. Optional `max_records`,
+`max_work`, `timeout_ms` and `refresh` govern the function index, shared across
+call selections and pages. This dataflow operation supports cancellation; stopped
+pages are retained until an explicit refresh. No automatic pairing is changed.
+
 `comparison_slice` accepts `side`, `address`, `seeds` (node IDs), `direction`
 (`backward`/`forward`), `control`, `timeout_ms`, `offset`, `limit`, and optional
 `refresh`. Both require `dataflow:true` or a bounded settings object at start.

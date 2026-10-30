@@ -6949,10 +6949,6 @@ Wählen Sie eine Operation, um Abhängigkeiten zu verfolgen. Synthetische Operat
         <translation>Aktivieren Sie Abhängigkeitsbelege in den Vergleichseinstellungen.</translation>
     </message>
     <message>
-        <source>Include control dependencies</source>
-        <translation>Kontrollabhängigkeiten einbeziehen</translation>
-    </message>
-    <message>
         <source>Inspect original function</source>
         <translation>Originalfunktion untersuchen</translation>
     </message>
@@ -7087,6 +7083,32 @@ Terminierung belegt keine gleichen Schleifenzahlen oder Funktionsergebnisse.</tr
     <message>
         <source>Proof: every counter cycle reaches a shared exit relative to an input-derived expression. Undefined behavior may occur before exit.</source>
         <translation>Beweis: Jeder Zählerzyklus erreicht einen gemeinsamen Ausgang relativ zu einem aus Eingaben abgeleiteten Ausdruck. Vor dem Verlassen kann undefiniertes Verhalten auftreten.</translation>
+    </message>
+    <message>
+        <source>Argument accesses</source>
+        <translation>Argumentzugriffe</translation>
+    </message>
+    <message>
+        <source>Show reads and writes using the same computed address as a recovered call argument.</source>
+        <translation>Lese- und Schreibzugriffe mit derselben berechneten Adresse wie ein rekonstruiertes Aufrufargument anzeigen.</translation>
+    </message>
+    <message>
+        <source>Include control</source>
+        <translation>Kontrolle einbeziehen</translation>
+    </message>
+    <message>
+        <source>Include control dependencies when tracing inputs or uses.</source>
+        <translation>Beim Verfolgen von Eingaben oder Verwendungen Kontrollabhängigkeiten einbeziehen.</translation>
+    </message>
+    <message>
+        <source>Call n%1 · %2 address observations · %3
+Reads and writes at a recovered argument's address. Call effects and execution order remain unknown. Activate a row to select its operation.</source>
+        <translation>Aufruf n%1 · %2 Adressbeobachtungen · %3
+Lese- und Schreibzugriffe an der Adresse eines rekonstruierten Arguments. Aufrufeffekte und Ausführungsreihenfolge bleiben unbekannt. Aktivieren Sie eine Zeile, um ihre Operation auszuwählen.</translation>
+    </message>
+    <message>
+        <source>Inspecting argument addresses…</source>
+        <translation>Argumentadressen werden untersucht…</translation>
     </message>
 </context>
 <context>
@@ -7900,6 +7922,38 @@ Jede Verwendung eines projizierten Parameters liest dieselben unteren Bits. Das 
     <message>
         <source>Uncertain</source>
         <translation>Ungewiss</translation>
+    </message>
+    <message>
+        <source>Argument</source>
+        <translation>Argument</translation>
+    </message>
+    <message>
+        <source>Access</source>
+        <translation>Zugriff</translation>
+    </message>
+    <message>
+        <source>RETURN input</source>
+        <translation>RETURN-Eingabe</translation>
+    </message>
+    <message>
+        <source>Write</source>
+        <translation>Schreiben</translation>
+    </message>
+    <message>
+        <source>Read</source>
+        <translation>Lesen</translation>
+    </message>
+    <message>
+        <source>COPY / PHI path</source>
+        <translation>COPY-/PHI-Pfad</translation>
+    </message>
+    <message>
+        <source>Not observed</source>
+        <translation>Nicht beobachtet</translation>
+    </message>
+    <message>
+        <source>A same-width COPY/PHI path to a RETURN operand. That operand may be a control target; this does not establish an ABI return value or execution order.</source>
+        <translation>Ein COPY-/PHI-Pfad gleicher Breite zu einem RETURN-Operanden. Dieser Operand kann ein Kontrollziel sein; dies belegt weder einen ABI-Rückgabewert noch eine Ausführungsreihenfolge.</translation>
     </message>
 </context>
 <context>

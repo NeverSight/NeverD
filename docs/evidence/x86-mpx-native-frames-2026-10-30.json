@@ -1,0 +1,723 @@
+{
+  "schema_version": 1,
+  "date": "2026-10-30",
+  "scope": "Native MPX compiler frames and BNDMOV stack provenance",
+  "global_instruction_goal_complete": false,
+  "artifacts_root": "/mnt/data/neverd-mpx-frame-20261030",
+  "sources": [
+    {
+      "repository": "LLVM",
+      "url": "https://github.com/NeverSight/llvm-project.git",
+      "base": "7295a59b0723a8b7e1821f984d25bd312dba4c30",
+      "head": "d0aad189fd7d2689cbe51a883a986df9efd8871b",
+      "source_hashes": [
+        {
+          "path": "llvm/docs/X86MPXIntrinsics.rst",
+          "sha256": "da9b4c9a64d8b12ae44c3fb5897df9f08c8d77d2c3d14d92d0950c7ec3f8068c",
+          "bytes": 7123
+        },
+        {
+          "path": "llvm/include/llvm/IR/X86MpxState.h",
+          "sha256": "f33b4b442b45be28a0b411f0c6bba3addda283d8701447e8c0d142b73a09360e",
+          "bytes": 3297
+        },
+        {
+          "path": "llvm/lib/Target/X86/X86ISelLowering.cpp",
+          "sha256": "fe9ca5e590ca6037d17c5f288a5ddddb758d4c404686192712f6970d373cf79c",
+          "bytes": 2761585
+        },
+        {
+          "path": "llvm/lib/Target/X86/X86MCInstLower.cpp",
+          "sha256": "cff60fd0511db5badcf65644eebbd9c0d34f868af98d0fb1e4238bffcd9540ff",
+          "bytes": 140640
+        },
+        {
+          "path": "llvm/test/CodeGen/X86/mpx-stack-memory.ll",
+          "sha256": "532fa740248d709a3b96e8c4180f7ca9c53d8e88b5c5988168abe452175497af",
+          "bytes": 2710
+        },
+        {
+          "path": "llvm/test/CodeGen/X86/mpx-state-intrinsics.ll",
+          "sha256": "d465da44cd74f71ad1801af57dbecade1037355e4586c2ae0206c4738f5f50aa",
+          "bytes": 7488
+        }
+      ]
+    },
+    {
+      "repository": "NeverC",
+      "url": "https://github.com/NeverSight/NeverC.git",
+      "base": "19d1576f9e8b438a6f6120e06066f0a965ff00ab",
+      "head": "3d1f7b851b6f8e5d9194f5f6f53887441cbc73ce",
+      "source_hashes": [
+        {
+          "path": "development.md",
+          "sha256": "c46febdb4e97d7be728133868532dbb0b54c9330c885e53575dfd912203dfaa2",
+          "bytes": 134373
+        },
+        {
+          "path": "llvm/include/llvm/IR/X86MpxState.h",
+          "sha256": "f33b4b442b45be28a0b411f0c6bba3addda283d8701447e8c0d142b73a09360e",
+          "bytes": 3297
+        },
+        {
+          "path": "llvm/lib/Target/X86/X86ISelLowering.cpp",
+          "sha256": "32c171983900aa5e98a6b718285ffd45e48229b5d0050eb8519ef7c7d97b7e9c",
+          "bytes": 2378733
+        },
+        {
+          "path": "llvm/lib/Target/X86/X86MCInstLower.cpp",
+          "sha256": "94b41d4eca4f3ab983578c4540d2725ffdfb8f72dd4ab799324ae64ffe8d30d4",
+          "bytes": 86530
+        },
+        {
+          "path": "neverc/lib/Analyze/Checking/SemaCheckingTargetX86.cpp",
+          "sha256": "f287a19adb99d159f4a5e472bb20786f1174069924c3c8344edfbce21dbefd46",
+          "bytes": 52420
+        },
+        {
+          "path": "neverc/lib/Foundation/Target/X86.cpp",
+          "sha256": "b3ee9462d566a27b2a8063747cbd4f3c37999d70cd4fe3d5de48a09692e9f311",
+          "bytes": 51735
+        },
+        {
+          "path": "tests/neverc/X86/NativeAddressTests.cpp",
+          "sha256": "8af1564993c5eae822ce234dc5877761e4c95ae9c1d580f733d5a9138ea6f3d5",
+          "bytes": 15650
+        },
+        {
+          "path": "tests/verify-mpx-encoding.py",
+          "sha256": "d575b66aecfe41814d977979f111df58df99c5368bddd5c195503f6a3c159d67",
+          "bytes": 15206
+        },
+        {
+          "path": "tests/verify-mpx-state.py",
+          "sha256": "3c388fee5d7fdee1aac2c0f565519225961c656ff12009ffbaa772ca267ce937",
+          "bytes": 11874
+        }
+      ]
+    }
+  ],
+  "neverd_documentation_base": "9b76b90e84b9d3c394614a11f009b77a5837bb78",
+  "implementation": {
+    "cause": "Fixed BX/SI operand copies overwrote reserved frame bases; volatile local accesses then used the native operand address.",
+    "fix": "Reuse allocated legacy-encodable native address carriers for base, MIB index and register checks. Frame/PIC registers remain owned by register allocation and frame lowering.",
+    "stack_memory": "BNDMOV load/store/LOCK-store use unmodified RBP plus a computed index. Both long-mode encoding widths retain the complete 64-bit address because MPX ignores 67H.",
+    "controls": "Shared LLVM MPX address validator admits the three memory forms; rejects stack controls in i386, MIB, BNDMK and address checks, FS/GS combinations and malformed controls.",
+    "capabilities": [
+      "LLVM_X86_MPX_STACK_MEMORY=1",
+      "__NEVERC_X86_MPX_STACK_MEMORY__=1"
+    ],
+    "intrinsic_and_opcode_ids_changed": false
+  },
+  "reproduction": {
+    "ir": {
+      "artifact": "frame.ll",
+      "sha256": "3130f1c0ff0e7d8bf18a5969d008eb8892824ff5486abfabcd4469f0ab0603af",
+      "bytes": 434
+    },
+    "assembly": {
+      "artifact": "frame-before.s",
+      "sha256": "dff09da43173211208512f4c08292a865b89c372c0995641b2140a89f01eb3f8",
+      "bytes": 890
+    },
+    "controlled_failure": {
+      "artifact": "before-frame.log",
+      "sha256": "1fecf88537b1234fd6fea425c2693afd3730920a7bd81a6421481b421f77790b",
+      "bytes": 1396
+    },
+    "original_compiler_commit": "7295a59b0723a8b7e1821f984d25bd312dba4c30"
+  },
+  "compiler_matrices": [
+    {
+      "route": "llvm",
+      "profile": "plain",
+      "mode": 64,
+      "cases_per_object": 520,
+      "formats": [
+        "ELF",
+        "COFF",
+        "Mach-O"
+      ],
+      "optimizations": [
+        "O0",
+        "O2"
+      ],
+      "controlled_completions": 3120,
+      "log": {
+        "artifact": "llvm-plain.log",
+        "sha256": "b18454f2437232c7de10adfe8af96eef1f017ce38fd37742e9d84cd152fa9ae1",
+        "bytes": 730
+      }
+    },
+    {
+      "route": "llvm",
+      "profile": "frame",
+      "mode": 64,
+      "cases_per_object": 520,
+      "formats": [
+        "ELF",
+        "COFF",
+        "Mach-O"
+      ],
+      "optimizations": [
+        "O0",
+        "O2"
+      ],
+      "controlled_completions": 3120,
+      "log": {
+        "artifact": "llvm-frame.log",
+        "sha256": "b18454f2437232c7de10adfe8af96eef1f017ce38fd37742e9d84cd152fa9ae1",
+        "bytes": 730
+      }
+    },
+    {
+      "route": "llvm",
+      "profile": "stack",
+      "mode": 64,
+      "cases_per_object": 120,
+      "formats": [
+        "ELF",
+        "COFF",
+        "Mach-O"
+      ],
+      "optimizations": [
+        "O0",
+        "O2"
+      ],
+      "controlled_completions": 720,
+      "log": {
+        "artifact": "llvm-stack.log",
+        "sha256": "560c59a920aa68e71ff352c156fe24d2da7f5385dabc6271c6382b412700a447",
+        "bytes": 730
+      }
+    },
+    {
+      "route": "llvm",
+      "profile": "stack-frame",
+      "mode": 64,
+      "cases_per_object": 120,
+      "formats": [
+        "ELF",
+        "COFF",
+        "Mach-O"
+      ],
+      "optimizations": [
+        "O0",
+        "O2"
+      ],
+      "controlled_completions": 720,
+      "log": {
+        "artifact": "llvm-stack-frame.log",
+        "sha256": "560c59a920aa68e71ff352c156fe24d2da7f5385dabc6271c6382b412700a447",
+        "bytes": 730
+      }
+    },
+    {
+      "route": "neverc",
+      "profile": "plain",
+      "mode": 64,
+      "cases_per_object": 520,
+      "formats": [
+        "ELF",
+        "COFF",
+        "Mach-O"
+      ],
+      "optimizations": [
+        "O0",
+        "O2"
+      ],
+      "controlled_completions": 3120,
+      "log": {
+        "artifact": "neverc-plain.log",
+        "sha256": "b18454f2437232c7de10adfe8af96eef1f017ce38fd37742e9d84cd152fa9ae1",
+        "bytes": 730
+      }
+    },
+    {
+      "route": "neverc",
+      "profile": "frame",
+      "mode": 64,
+      "cases_per_object": 520,
+      "formats": [
+        "ELF",
+        "COFF",
+        "Mach-O"
+      ],
+      "optimizations": [
+        "O0",
+        "O2"
+      ],
+      "controlled_completions": 3120,
+      "log": {
+        "artifact": "neverc-frame.log",
+        "sha256": "b18454f2437232c7de10adfe8af96eef1f017ce38fd37742e9d84cd152fa9ae1",
+        "bytes": 730
+      }
+    },
+    {
+      "route": "neverc",
+      "profile": "stack",
+      "mode": 64,
+      "cases_per_object": 120,
+      "formats": [
+        "ELF",
+        "COFF",
+        "Mach-O"
+      ],
+      "optimizations": [
+        "O0",
+        "O2"
+      ],
+      "controlled_completions": 720,
+      "log": {
+        "artifact": "neverc-stack.log",
+        "sha256": "560c59a920aa68e71ff352c156fe24d2da7f5385dabc6271c6382b412700a447",
+        "bytes": 730
+      }
+    },
+    {
+      "route": "neverc",
+      "profile": "stack-frame",
+      "mode": 64,
+      "cases_per_object": 120,
+      "formats": [
+        "ELF",
+        "COFF",
+        "Mach-O"
+      ],
+      "optimizations": [
+        "O0",
+        "O2"
+      ],
+      "controlled_completions": 720,
+      "log": {
+        "artifact": "neverc-stack-frame.log",
+        "sha256": "560c59a920aa68e71ff352c156fe24d2da7f5385dabc6271c6382b412700a447",
+        "bytes": 730
+      }
+    },
+    {
+      "route": "bridge",
+      "profile": "plain",
+      "mode": 64,
+      "cases_per_object": 520,
+      "formats": [
+        "ELF",
+        "COFF",
+        "Mach-O"
+      ],
+      "optimizations": [
+        "O0",
+        "O2"
+      ],
+      "controlled_completions": 3120,
+      "log": {
+        "artifact": "bridge-plain.log",
+        "sha256": "b18454f2437232c7de10adfe8af96eef1f017ce38fd37742e9d84cd152fa9ae1",
+        "bytes": 730
+      }
+    },
+    {
+      "route": "bridge",
+      "profile": "frame",
+      "mode": 64,
+      "cases_per_object": 520,
+      "formats": [
+        "ELF",
+        "COFF",
+        "Mach-O"
+      ],
+      "optimizations": [
+        "O0",
+        "O2"
+      ],
+      "controlled_completions": 3120,
+      "log": {
+        "artifact": "bridge-frame.log",
+        "sha256": "b18454f2437232c7de10adfe8af96eef1f017ce38fd37742e9d84cd152fa9ae1",
+        "bytes": 730
+      }
+    },
+    {
+      "route": "bridge",
+      "profile": "stack",
+      "mode": 64,
+      "cases_per_object": 120,
+      "formats": [
+        "ELF",
+        "COFF",
+        "Mach-O"
+      ],
+      "optimizations": [
+        "O0",
+        "O2"
+      ],
+      "controlled_completions": 720,
+      "log": {
+        "artifact": "bridge-stack.log",
+        "sha256": "560c59a920aa68e71ff352c156fe24d2da7f5385dabc6271c6382b412700a447",
+        "bytes": 730
+      }
+    },
+    {
+      "route": "bridge",
+      "profile": "stack-frame",
+      "mode": 64,
+      "cases_per_object": 120,
+      "formats": [
+        "ELF",
+        "COFF",
+        "Mach-O"
+      ],
+      "optimizations": [
+        "O0",
+        "O2"
+      ],
+      "controlled_completions": 720,
+      "log": {
+        "artifact": "bridge-stack-frame.log",
+        "sha256": "560c59a920aa68e71ff352c156fe24d2da7f5385dabc6271c6382b412700a447",
+        "bytes": 730
+      }
+    },
+    {
+      "route": "llvm",
+      "mode": 32,
+      "profile": "plain",
+      "cases_per_object": 268,
+      "formats": [
+        "ELF",
+        "COFF",
+        "Mach-O"
+      ],
+      "optimizations": [
+        "O0",
+        "O2"
+      ],
+      "controlled_completions": 1608,
+      "log": {
+        "artifact": "llvm-i386-plain.log",
+        "sha256": "ec1aa6de95488041d9bd750410476f864601519ed8e622fe498cd87d8081c118",
+        "bytes": 718
+      }
+    },
+    {
+      "route": "llvm",
+      "mode": 32,
+      "profile": "frame",
+      "cases_per_object": 268,
+      "formats": [
+        "ELF",
+        "COFF",
+        "Mach-O"
+      ],
+      "optimizations": [
+        "O0",
+        "O2"
+      ],
+      "controlled_completions": 1608,
+      "log": {
+        "artifact": "llvm-i386-frame.log",
+        "sha256": "ec1aa6de95488041d9bd750410476f864601519ed8e622fe498cd87d8081c118",
+        "bytes": 718
+      }
+    }
+  ],
+  "controlled_completion_count": 26256,
+  "processor_model": {
+    "version": "QEMU emulator version 10.2.2",
+    "runs": [
+      {
+        "route": "llvm",
+        "profile": "state",
+        "optimizations": [
+          "O0",
+          "O2"
+        ],
+        "instruction_passes": 680,
+        "instruction_skips": 360,
+        "branch_passes": 10,
+        "branch_skips": 2,
+        "log": {
+          "artifact": "llvm-state.log",
+          "sha256": "3e66d6c1bbbf2a6b42520f3173d40c95104f73907a9055e7e8bdd69e7789b2ee",
+          "bytes": 274
+        }
+      },
+      {
+        "route": "llvm",
+        "profile": "stack-state",
+        "optimizations": [
+          "O0",
+          "O2"
+        ],
+        "instruction_passes": 80,
+        "instruction_skips": 160,
+        "branch_passes": 10,
+        "branch_skips": 2,
+        "log": {
+          "artifact": "llvm-stack-state.log",
+          "sha256": "39a803ab9bb5076fbfff7fdae6014a10c723dc898afda49476805fbba1b8ae94",
+          "bytes": 270
+        }
+      },
+      {
+        "route": "neverc",
+        "profile": "state",
+        "optimizations": [
+          "O0",
+          "O2"
+        ],
+        "instruction_passes": 680,
+        "instruction_skips": 360,
+        "branch_passes": 10,
+        "branch_skips": 2,
+        "log": {
+          "artifact": "neverc-state.log",
+          "sha256": "3e66d6c1bbbf2a6b42520f3173d40c95104f73907a9055e7e8bdd69e7789b2ee",
+          "bytes": 274
+        }
+      },
+      {
+        "route": "neverc",
+        "profile": "stack-state",
+        "optimizations": [
+          "O0",
+          "O2"
+        ],
+        "instruction_passes": 80,
+        "instruction_skips": 160,
+        "branch_passes": 10,
+        "branch_skips": 2,
+        "log": {
+          "artifact": "neverc-stack-state.log",
+          "sha256": "39a803ab9bb5076fbfff7fdae6014a10c723dc898afda49476805fbba1b8ae94",
+          "bytes": 270
+        }
+      },
+      {
+        "route": "bridge",
+        "profile": "state",
+        "optimizations": [
+          "O0",
+          "O2"
+        ],
+        "instruction_passes": 680,
+        "instruction_skips": 360,
+        "branch_passes": 10,
+        "branch_skips": 2,
+        "log": {
+          "artifact": "bridge-state.log",
+          "sha256": "3e66d6c1bbbf2a6b42520f3173d40c95104f73907a9055e7e8bdd69e7789b2ee",
+          "bytes": 274
+        }
+      },
+      {
+        "route": "bridge",
+        "profile": "stack-state",
+        "optimizations": [
+          "O0",
+          "O2"
+        ],
+        "instruction_passes": 80,
+        "instruction_skips": 160,
+        "branch_passes": 10,
+        "branch_skips": 2,
+        "log": {
+          "artifact": "bridge-stack-state.log",
+          "sha256": "39a803ab9bb5076fbfff7fdae6014a10c723dc898afda49476805fbba1b8ae94",
+          "bytes": 270
+        }
+      }
+    ],
+    "instruction_passes": 2280,
+    "instruction_skips": 1560,
+    "branch_passes": 60,
+    "branch_skips": 12
+  },
+  "regressions": {
+    "neverc_tests": 81,
+    "failures": 0,
+    "skipped": 0,
+    "neverc_report": {
+      "artifact": "neverc-unit.xml",
+      "sha256": "14a88b12b0feb55b164412ebb8784791070bb5c15beb5674e97880d89458c2c2",
+      "bytes": 24724
+    },
+    "neverc_log": {
+      "artifact": "neverc-unit.log",
+      "sha256": "e3356c839597841f535ca893592a08aa946b49f146bbe41dd782a447b92804da",
+      "bytes": 13442
+    },
+    "llvm_tests": 4,
+    "llvm_log": {
+      "artifact": "llvm-lit-final.log",
+      "sha256": "be725476b0042691068d9b02b74dc332985a2033fa950bd4a0059e80f75b5164",
+      "bytes": 16172
+    },
+    "generated_table_tests": 7,
+    "generated_table_log": {
+      "artifact": "table-check.log",
+      "sha256": "971037f2720a3eaf7369145640ff10a24d016f54b4a7e459378ca93e4a4434fa",
+      "bytes": 105
+    }
+  },
+  "binaries": [
+    {
+      "name": "llc",
+      "path": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc",
+      "sha256": "49286a44ff379bfb8eaecda3a65e3f82cc3b9fff1a85f2d3e1d28d44423b2fd9",
+      "bytes": 105912048
+    },
+    {
+      "name": "NeverC",
+      "path": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc",
+      "sha256": "f92d1be1f4297d43b7c319fec543a6193f65875033cb62ece2f27b7125251330",
+      "bytes": 123499256
+    }
+  ],
+  "commands": {
+    "artifact": "commands.json",
+    "sha256": "7fdd255c52b545ed793d92c8b8f32853412eb7a2a38478a75c575058c182983f",
+    "bytes": 14339
+  },
+  "driver": {
+    "artifact": "run-qualification.py",
+    "sha256": "b30375f9c295bfbac88644f9e07214f5bc2f456748bdb3d9795efa57b2eb3a15",
+    "bytes": 3462
+  },
+  "direct_frame_command": [
+    "uv",
+    "run",
+    "--with",
+    "unicorn",
+    "python",
+    "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-neverc/tests/verify-mpx-encoding.py",
+    "--llc",
+    "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc",
+    "--objdump",
+    "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llvm-objdump",
+    "--frame",
+    "--keep",
+    "/mnt/data/neverd-mpx-frame-20261030/llvm-frame"
+  ],
+  "builds": [
+    {
+      "artifact": "llvm-build.log",
+      "sha256": "715732e4b561dd6c191223ce9d129ccccae63df8e175214317d32f2915bcfbb0",
+      "bytes": 863
+    },
+    {
+      "artifact": "neverc-build-final.log",
+      "sha256": "d02b8805bea2e604f177353854873218c637d8f096db03fa74d9e08dd802926f",
+      "bytes": 925120
+    }
+  ],
+  "diagnostic_history": [
+    {
+      "cause": "New lit command initially omitted stdout output selection; fixed -o -.",
+      "log": {
+        "artifact": "llvm-lit.log",
+        "sha256": "ff2e2b38c9e28ef0a28b0424caee807949d691867d421051ac78538490192aad",
+        "bytes": 18255
+      }
+    },
+    {
+      "cause": "NeverC bundled LLVM uses an unsigned MC register API; retained its local type convention.",
+      "log": {
+        "artifact": "neverc-build.log",
+        "sha256": "d794004eac8ce97f4f9add3ef14b70730d156617e536f1bab6ecf76b75ff1284",
+        "bytes": 925078
+      }
+    },
+    {
+      "cause": "Object and assembly emission changed section placement, with identical per-function instruction bytes; compare relative instruction offsets.",
+      "log": {
+        "artifact": "neverc-frame-before.log",
+        "sha256": "aa9d8b7a81f3da128bf0baa814c19570a60258f88a98f8b2999f360ed3e7fa67",
+        "bytes": 608
+      }
+    }
+  ],
+  "qualification_limits": [
+    "The encoding matrix executes surrounding code and checks native operand boundaries without simulating the MPX instructions.",
+    "QEMU limitation mode explicitly skips its addr32 memory/table, LOCK BNDMOV, register-check and initializing E9 defects. Skips are not passes.",
+    "Native stack-default bytes and address transport are qualified; physical MPX faults, stack #SS delivery, RTM interactions and partial-fault behavior are not established by this record.",
+    "Native operand accesses are not probed by ordinary loads, but compiler-owned frames still require separation from guest data for general lifting.",
+    "NeverD strict lifting remains closed for the seven stateful MPX operations until original branch/fault ordering and the shared state bank are integrated.",
+    "Other x86 continuation families and global completion remain open."
+  ],
+  "release_and_pins_changed": false,
+  "documentation_checks": [
+    {
+      "artifact": "docs-i18n.log",
+      "sha256": "891c1f2a9e40d3952b23e9e79b35ac05e77427ad91de98357bc3829b3ed7ab14"
+    },
+    {
+      "artifact": "capabilities.log",
+      "sha256": "6493fc3b0c4ef5fe525cdffaaa35a0f7992a0384e9a759e0269be79943fed414"
+    }
+  ],
+  "neverd_integration": {
+    "head": "196f58b7cb93b3642c6b5e357c29e18751dd55b8",
+    "commands": [
+      {
+        "command": [
+          "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86/bin/NeverDX86AMXAddressTests",
+          "--gtest_output=xml:/mnt/data/neverd-mpx-frame-20261030/NeverDX86AMXAddressTests-integrated.xml"
+        ],
+        "returncode": 0,
+        "tests": 7,
+        "log": "NeverDX86AMXAddressTests-integrated.log",
+        "report": "NeverDX86AMXAddressTests-integrated.xml",
+        "skipped": [],
+        "log_sha256": "a61285545df5c27aa33a0f74f605dac78e70cf2d6969b3650f0a8928f7372a17"
+      },
+      {
+        "command": [
+          "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86/bin/NeverDX86AMXLLVMGuardTests",
+          "--gtest_output=xml:/mnt/data/neverd-mpx-frame-20261030/NeverDX86AMXLLVMGuardTests-integrated.xml"
+        ],
+        "returncode": 0,
+        "tests": 3,
+        "log": "NeverDX86AMXLLVMGuardTests-integrated.log",
+        "report": "NeverDX86AMXLLVMGuardTests-integrated.xml",
+        "skipped": [],
+        "log_sha256": "dcef8ca2a30c2166b4a9ca8ea07f22a43ebd23f89ef176a494f591c4efa2197b"
+      },
+      {
+        "command": [
+          "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86/bin/NeverDX64DispatchFrameSourceTests",
+          "--gtest_output=xml:/mnt/data/neverd-mpx-frame-20261030/NeverDX64DispatchFrameSourceTests-integrated.xml"
+        ],
+        "returncode": 0,
+        "tests": 3,
+        "log": "NeverDX64DispatchFrameSourceTests-integrated.log",
+        "report": "NeverDX64DispatchFrameSourceTests-integrated.xml",
+        "skipped": [],
+        "log_sha256": "7c5aa227fde099b2ffcdf47d834f03fb2d1a1c9eb94b9cc1c063a6e75b655ce7"
+      },
+      {
+        "command": [
+          "python3",
+          "scripts/check_docs_i18n.py"
+        ],
+        "returncode": 0,
+        "log": "check_docs_i18n.py-integrated.log",
+        "log_sha256": "891c1f2a9e40d3952b23e9e79b35ac05e77427ad91de98357bc3829b3ed7ab14"
+      },
+      {
+        "command": [
+          "python3",
+          "scripts/check_capabilities.py"
+        ],
+        "returncode": 0,
+        "log": "check_capabilities.py-integrated.log",
+        "log_sha256": "6493fc3b0c4ef5fe525cdffaaa35a0f7992a0384e9a759e0269be79943fed414"
+      }
+    ],
+    "build_log": "neverd-integrated-build.log",
+    "build_receipt": "neverd-integrated-build-receipt.json",
+    "build_receipt_sha256": "0391e945fc682f48bda5e5fac94163f3858b628688cec980743b57c51e40daf3"
+  }
+}

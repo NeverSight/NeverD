@@ -181,6 +181,10 @@ if(BUILD_TESTING)
     target_link_libraries(neverd-gui-comparison-tests PRIVATE neverd_gui_app Qt6::Test)
     target_compile_definitions(neverd-gui-comparison-tests PRIVATE
       TEST_COMPARISON_WORKER="$<TARGET_FILE:neverd-worker>")
+    if(NEVERD_TRANSLATIONS)
+      qt_add_resources(neverd-gui-comparison-tests "comparison_test_translations" PREFIX /i18n
+        BASE "${CMAKE_CURRENT_BINARY_DIR}" FILES ${NEVERD_QM_FILES})
+    endif()
     add_dependencies(neverd-gui-comparison-tests neverd-worker)
     if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
       set(_neverd_diff_effect_fixture "${CMAKE_CURRENT_BINARY_DIR}/comparison-effects.so")

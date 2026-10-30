@@ -906,6 +906,84 @@ TEST(X86NativeStateAudit, SysretAuditBindsEncodingAndCompleteDefinedFlags) {
   expectUnaudited(Dec, Insn);
 }
 
+TEST(X86NativeStateAudit, FastSystemFormsBindBytesAndCompatibilityHighHalves) {
+  for (unsigned Kind = 0; Kind != 3; ++Kind) {
+    const std::vector<uint8_t> Bytes =
+        Kind == 0   ? std::vector<uint8_t>{0x0f, 0x34}
+        : Kind == 1 ? std::vector<uint8_t>{0x0f, 0x35}
+                    : std::vector<uint8_t>{0x48, 0x0f, 0x35};
+    Decoder Dec;
+    ASSERT_TRUE(Dec.init(Arch::X64));
+    Dec.setStrict(true);
+    const auto Decode = [&] {
+      DecodedInsn I{};
+      EXPECT_EQ(
+          Dec.decodeOneForLift(Bytes.data(), Bytes.size(), CodeAddress, I),
+          int(Bytes.size()));
+      return I;
+    };
+    auto Insn = Decode();
+    ASSERT_TRUE(nativestateaudit::fastSystemForm(Insn.Raw, Arch::X64));
+    EXPECT_FALSE(nativestateaudit::fastSystemForm(Insn.Raw, Arch::X86));
+    std::vector<LowOp> Ops;
+    LowInstructionUndefinedEffects Effects;
+    LowInstructionPreservedState Preserved;
+    Dec.liftToLow(Insn, Ops, {}, {}, &Effects, &Preserved);
+    ASSERT_EQ(Effects.Coverage, LowUndefinedCoverage::Complete)
+        << Effects.Diagnostic;
+    EXPECT_EQ(Effects.OperationDigest, lowUndefinedOperationDigest(Ops));
+    EXPECT_EQ(Effects.Effects.size(), Kind == 1 ? 8u : 0u);
+    EXPECT_EQ(Preserved, LowInstructionPreservedState{});
+    EXPECT_TRUE(Dec.isFunctionTerminator(Insn));
+    if (Kind == 1) {
+      EXPECT_TRUE(compatibilityreturn::matches(Ops, Effects));
+      for (unsigned I = 0; I < 8; ++I) {
+        auto Bad = Effects;
+        Bad.Effects[I].Output = NdVar::reg(x86reg::R8, 8);
+        EXPECT_FALSE(compatibilityreturn::matches(Ops, Bad));
+        Bad = Effects;
+        Bad.Effects[I].BitOffset = 0;
+        EXPECT_FALSE(compatibilityreturn::matches(Ops, Bad));
+      }
+      auto Bad = Ops;
+      Bad[0].Inputs[2] = NdVar::reg(x86reg::R11, 4);
+      EXPECT_FALSE(compatibilityreturn::matches(Bad, Effects));
+    }
+    for (unsigned Mutation = 0; Mutation < 8; ++Mutation) {
+      Insn = Decode();
+      auto &X = Insn.Raw->detail->x86;
+      switch (Mutation) {
+      case 0:
+        Insn.Raw->bytes[Insn.Raw->size - 1] ^= 1;
+        break;
+      case 1:
+        X.rex ^= 0x40;
+        break;
+      case 2:
+        X.eflags = 0;
+        break;
+      case 3:
+        X.op_count = 1;
+        break;
+      case 4:
+        X.addr_size = 4;
+        break;
+      case 5:
+        X.encoding.imm_size = 1;
+        break;
+      case 6:
+        X.prefix[1] = X86_PREFIX_FS;
+        break;
+      case 7:
+        X.opcode[1] ^= 1;
+        break;
+      }
+      EXPECT_FALSE(nativestateaudit::fastSystemForm(Insn.Raw, Arch::X64));
+      expectUnaudited(Dec, Insn);
+    }
+  }
+}
+
 TEST(X86NativeStateAudit, SysretCompatibilityBindsEveryArbitraryHighHalf) {
   Decoder Dec;
   ASSERT_TRUE(Dec.init(Arch::X64));

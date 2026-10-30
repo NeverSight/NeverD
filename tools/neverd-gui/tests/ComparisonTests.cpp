@@ -32,6 +32,7 @@
 #include <QElapsedTimer>
 #include <QFile>
 #include <QFileDialog>
+#include <QHeaderView>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QLabel>
@@ -53,6 +54,7 @@
 #include <QTextDocument>
 #include <QTimer>
 #include <QToolButton>
+#include <QTranslator>
 #include <algorithm>
 
 using namespace neverd::gui;
@@ -3331,6 +3333,129 @@ private slots:
     QVERIFY(!Trace->isEnabled());
     Dialog->close();
     delete Dialog;
+    QCOMPARE(Failure.count(), 0);
+  }
+  void argumentAccessReviewNavigatesNativeReadsAndClearsOldEvidence_data() {
+    QTest::addColumn<bool>("RightToLeft");
+    QTest::addColumn<QString>("Language");
+    for (const auto &Language : {QString(), QString("zh_CN"), QString("zh_TW")})
+      for (bool RightToLeft : {false, true})
+        QTest::newRow(qPrintable((Language.isEmpty() ? "en" : Language) +
+                                 (RightToLeft ? "-rtl" : "-ltr")))
+            << RightToLeft << Language;
+  }
+  void argumentAccessReviewNavigatesNativeReadsAndClearsOldEvidence() {
+    QFETCH(bool, RightToLeft);
+    QFETCH(QString, Language);
+    QTranslator Translator;
+    if (!Language.isEmpty()) {
+      QVERIFY(Translator.load(":/i18n/neverd_" + Language + ".qm"));
+      QApplication::installTranslator(&Translator);
+    }
+    const auto OldDirection = QApplication::layoutDirection();
+    const auto Restore = qScopeGuard([&] {
+      QApplication::removeTranslator(&Translator);
+      QApplication::setLayoutDirection(OldDirection);
+    });
+    QApplication::setLayoutDirection(RightToLeft ? Qt::RightToLeft
+                                                 : Qt::LeftToRight);
+    const auto Path = Directory.filePath("argument-accesses.bin");
+    QVERIFY(write(
+        Path,
+        QByteArray::fromHex(
+            "4883ec1848c744240807000000488d7c2408e80a000000488b4424084883c418c3"
+            "48c70707000000c3")));
+    ComparisonSession Session(TEST_COMPARISON_WORKER);
+    QSignalSpy Failure(&Session, &ComparisonSession::failed);
+    QTRY_VERIFY_WITH_TIMEOUT(Session.ready(), Timeout);
+    const auto Input = [&](const QString &Base) {
+      return QJsonObject{{"path", Path},
+                         {"load_options", QJsonObject{{"loader", "binary"},
+                                                      {"processor", "x86_64"},
+                                                      {"base", Base},
+                                                      {"platform", "sysv"}}}};
+    };
+    Session.start(Input("0x1000"), Input("0x8000"), {{"dataflow", true}});
+    QTRY_VERIFY_WITH_TIMEOUT(!Session.busy(), Timeout);
+    QVERIFY(Failure.empty());
+    ComparisonFlowDialog Dialog(Session, nullptr);
+    Dialog.show();
+    auto *Nodes = Dialog.findChild<QTableView *>("flowNodes");
+    auto *Rows = qobject_cast<ComparisonModel *>(Nodes->model());
+    auto *Button = Dialog.findChild<QPushButton *>("flowArgumentAccesses");
+    if (!Language.isEmpty())
+      QVERIFY(Button->text() != "Argument accesses");
+    auto *AccessTable = Dialog.findChild<QTableView *>("flowSlice");
+    QTRY_VERIFY_WITH_TIMEOUT(Rows->rowCount() > 0 && !Rows->row(0).isEmpty(),
+                             Timeout);
+    int Call = -1;
+    for (int I = 0; I < Rows->rowCount(); ++I)
+      if (Rows->row(I)["opcode"] == QJsonValue("CALL"))
+        Call = I;
+    QVERIFY(Call >= 0);
+    Nodes->setCurrentIndex(Rows->index(Call, 0));
+    QTRY_VERIFY_WITH_TIMEOUT(Button->isEnabled(), Timeout);
+    QTest::mouseClick(Button, Qt::LeftButton);
+    QTRY_COMPARE_WITH_TIMEOUT(AccessTable->model()->rowCount(), 2, Timeout);
+    auto *AccessRows = qobject_cast<ComparisonModel *>(AccessTable->model());
+    QTRY_VERIFY_WITH_TIMEOUT(!AccessRows->row(1).isEmpty(), Timeout);
+    QCOMPARE(AccessRows->row(1)["address"].toString(), QString("0x1017"));
+    QVERIFY(AccessRows->row(1)["return_operand_path"].toBool());
+    QCOMPARE(AccessRows->data(AccessRows->index(1, 0), Qt::DisplayRole).toInt(),
+             1);
+    QTRY_VERIFY_WITH_TIMEOUT(
+        AccessTable->columnWidth(0) >=
+            AccessTable->horizontalHeader()->fontMetrics().horizontalAdvance(
+                AccessRows->headerData(0, Qt::Horizontal, Qt::DisplayRole)
+                    .toString()),
+        Timeout);
+    QCOMPARE(
+        AccessRows->data(AccessRows->index(1, 2), Qt::DisplayRole).toString(),
+        QCoreApplication::translate("neverd::gui::ComparisonModel", "Read"));
+    QVERIFY(!Dialog.findChild<QLabel *>("flowSliceStatus")->text().isEmpty());
+    QTRY_VERIFY_WITH_TIMEOUT(!Session.cancellable(), Timeout);
+    const auto Captures = qEnvironmentVariable("NEVERD_DIFF_SCREENSHOTS");
+    if (!Captures.isEmpty()) {
+      QDir().mkpath(Captures);
+      for (const auto Mode : {Theme::Mode::Dark, Theme::Mode::Light}) {
+        Theme::instance().setMode(Mode);
+        const auto Stem = Mode == Theme::Mode::Dark ? "/dark-argument-access"
+                                                    : "/light-argument-access";
+        const auto Name = Captures + Stem + "-" +
+                          (Language.isEmpty() ? "en" : Language) +
+                          (RightToLeft ? "-rtl" : "-ltr");
+        Dialog.resize(1280, 800);
+        QTest::qWait(100);
+        QVERIFY(Dialog.grab().save(Name + ".png"));
+        Dialog.resize(Dialog.minimumSize());
+        Nodes->scrollTo(Nodes->currentIndex());
+        QTest::qWait(50);
+        QVERIFY(Dialog.grab().save(Name + "-minimum.png"));
+      }
+    }
+    const auto AccessNode = AccessRows->row(1)["id"].toInt();
+    auto *Trace = Dialog.findChild<QPushButton *>("flowBackward");
+    QSignalSpy Traced(Trace, &QPushButton::clicked);
+    AccessTable->setCurrentIndex(AccessRows->index(1, 0));
+    AccessTable->setFocus();
+    QTest::keyClick(AccessTable, Qt::Key_Return);
+    QTRY_COMPARE_WITH_TIMEOUT(Nodes->currentIndex().row(), AccessNode, Timeout);
+    QCOMPARE(Traced.count(), 0);
+    QCOMPARE(AccessRows->rowCount(), 2);
+    QVERIFY(!Button->isEnabled());
+    QTRY_VERIFY_WITH_TIMEOUT(Trace->isEnabled(), Timeout);
+    QTest::mouseClick(Trace, Qt::LeftButton);
+    QTRY_VERIFY_WITH_TIMEOUT(AccessTable->model() != AccessRows &&
+                                 AccessTable->model()->rowCount() > 0,
+                             Timeout);
+    QTRY_VERIFY_WITH_TIMEOUT(!Session.cancellable(), Timeout);
+    Dialog.findChild<QComboBox *>("flowSide")->setCurrentIndex(1);
+    QCOMPARE(AccessRows->rowCount(), 0);
+    QCOMPARE(AccessTable->model()->rowCount(), 0);
+    Session.start(Input("0x1000"), Input("0x8000"), {{"dataflow", false}});
+    QTRY_VERIFY_WITH_TIMEOUT(!Session.busy(), Timeout);
+    QCOMPARE(Rows->rowCount(), 0);
+    QVERIFY(!Button->isEnabled());
     QCOMPARE(Failure.count(), 0);
   }
 };

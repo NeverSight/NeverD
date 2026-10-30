@@ -395,3 +395,35 @@ TEST(COFFIndexedTables, EscapedTableAddressPreservesRuntimeIndex) {
         }
     }
 }
+
+TEST(COFFIndexedTables, RejectedTableCannotAuthorizeNestedDispatch) {
+  for (bool MetadataVeto : {false, true}) {
+    SCOPED_TRACE(MetadataVeto);
+    auto Img = tableImage();
+    access(Img);
+    // A reached RET's immediate overlaps the table's zero header. A sentinel
+    // cannot exempt those bytes from the same instruction-overlap check.
+    auto &Code = Img.Segments[0].Data;
+    if (MetadataVeto) {
+      // An authoritative code extent can veto the header without decoding it.
+      Img.KnownCodeRanges.emplace_back(0x10f0, 0x1104);
+    } else {
+      Code[7] = 0xe8;
+      writeLE<uint32_t>(Code.data() + 8, 0x10ff - 0x100c);
+      Code[12] = 0xc3;
+      Code[0xff] = 0xc2;
+    }
+    writeLE<uint32_t>(Code.data() + 0x100, 0);
+    pointer(Img, 0x1104, 0x1080);
+    access(Img, 0xff, 0x14, false, 0x1080, 0x1180);
+    pointer(Img, 0x1180, 0x1090);
+    Code[0x90] = 0xc3;
+    Img.DataInCode.insert(0x1190); // Preserve evidence predating this walk.
+    coff_loader::recordIndexedTableBasesInCode(Img);
+    EXPECT_EQ(Img.DataInCode, (std::set<va_t>{0x1190}));
+    EXPECT_TRUE(Img.CodePtrRelocSlots.empty());
+    EXPECT_TRUE(Img.CallDispatchRelocSlots.empty());
+    EXPECT_TRUE(Img.CodeAddressRelocOperands.count(0x1104));
+    EXPECT_TRUE(Img.CodeAddressRelocOperands.count(0x1180));
+  }
+}

@@ -2241,6 +2241,133 @@ TEST(Win64CallContract, UnreadRegisterHolesBeforeStackArgumentsStayUnread) {
     }
 }
 
+TEST(Win64CallContract, OverwrittenStackArgumentDoesNotDemandItsEntryBytes) {
+  constexpr va_t Consumer = Text + 0x100;
+  for (bool Partial : {false, true}) {
+    SCOPED_TRACE(Partial);
+    std::vector<uint8_t> Code(0x140, 0xCC);
+    std::vector<uint8_t> Caller = {
+        0x48, 0x83, 0xEC, 0x48, 0x48, 0xC7, 0x44, 0x24, 0x20, 5, 0, 0, 0,
+        // The sixth argument is deliberately unwritten.
+        0x48, 0xC7, 0x44, 0x24, 0x30, 29, 0, 0, 0, 0x48, 0xC7, 0x44, 0x24, 0x38,
+        43, 0, 0, 0, 0x48, 0x8D, 0x4C, 0x24, 0x38, 0xE8};
+    const auto Displacement = rel32(Text + Caller.size() + 4, Consumer);
+    Caller.insert(Caller.end(), Displacement.begin(), Displacement.end());
+    Caller.insert(Caller.end(), {0x48, 0x83, 0xC4, 0x48, 0xC3});
+    put(Code, Text, Caller);
+    std::vector<uint8_t> Body;
+    if (!Partial)
+      Body.push_back(0x48);
+    Body.insert(Body.end(),
+                {0xC7, 0x44, 0x24, 0x30, 7,    0, 0, 0, // replace sixth
+                 0x48, 0x8B, 0x01,             // read unrelated pointer
+                 0x48, 0x03, 0x44, 0x24, 0x30, // read replaced sixth
+                 0x48, 0x03, 0x44, 0x24, 0x38, // read seventh
+                 0xC3});
+    put(Code, Consumer, Body);
+    const auto Image = makeImage(
+        Code,
+        {{Text, "call_overwritten_stack"}, {Consumer, "overwriting_consumer"}},
+        {});
+    std::string NativeOracle;
+    llvm::raw_string_ostream Native(NativeOracle);
+    Native << R"(
+#if defined(__linux__) && defined(__x86_64__)
+#include <sys/mman.h>
+#include <string.h>
+static int check_native(uint64_t seed) {
+  static const uint8_t original[] = {
+)";
+    for (uint8_t Byte : Body)
+      Native << unsigned(Byte) << ',';
+    Native << R"(};
+  void *mapping = mmap(0, 4096, PROT_READ | PROT_WRITE | PROT_EXEC,
+                       MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  if (mapping == MAP_FAILED) return 1;
+  // UBSan inspects the prefix before indirect code targets.
+  uint8_t *code = (uint8_t *)mapping + 16;
+  memcpy(code, original, sizeof(original));
+  __builtin___clear_cache((char *)code, (char *)code + sizeof(original));
+  typedef uint64_t (__attribute__((ms_abi)) *callee_t)(
+      uint64_t *, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
+  uint64_t pointee = 43;
+  uint64_t actual = ((callee_t)code)(&pointee, 11, 13, 17, 5, seed, 29);
+  int bad = actual != 79 || pointee != 43;
+  if (munmap(mapping, 4096)) return 1;
+  return bad;
+}
+#else
+static int check_native(uint64_t seed) { return 0; }
+#endif
+)";
+    for (bool OmitCallee : {false, true})
+      for (bool NoOpt : {false, true})
+        for (bool LLVM : {false, true}) {
+          SCOPED_TRACE(OmitCallee);
+          SCOPED_TRACE(NoOpt);
+          SCOPED_TRACE(LLVM);
+          llvm::LLVMContext Context;
+          PipelineOptions Options;
+          Options.EmitDumpOutput = false;
+          Options.OnlyFunctionEntries = {Text};
+          if (!OmitCallee)
+            Options.OnlyFunctionEntries.insert(Consumer);
+          Options.SourceProjection = true;
+          Options.LiftMode = LLVM;
+          Options.NoOpt = NoOpt;
+          auto Result = Pipeline().run(Image, Context, Options);
+          ASSERT_TRUE(Result.Success) << Result.Error;
+          std::string Source;
+          llvm::raw_string_ostream Output(Source);
+          CEmitterOptions COptions;
+          COptions.TheArch = Image.Arch;
+          COptions.Format = Image.Format;
+          COptions.Image = &Image;
+          if (LLVM) {
+            ASSERT_TRUE(Result.LlvmModule);
+            ASSERT_FALSE(llvm::verifyModule(*Result.LlvmModule, &llvm::errs()));
+            ASSERT_TRUE(
+                LLVMCEmitter().emit(*Result.LlvmModule, Output, COptions));
+          } else
+            ASSERT_TRUE(
+                HighCEmitter().emit(Result.HighFuncs, Output, COptions));
+          const bool Unknown =
+              Source.find("__builtin_trap") != std::string::npos;
+          EXPECT_EQ(Unknown, Partial) << Source;
+          if (Partial || Unknown)
+            continue;
+          std::string Oracle;
+          if (OmitCallee)
+            Oracle = R"(
+#define SYMBOL_PREFIX_(prefix) #prefix
+#define SYMBOL_PREFIX(prefix) SYMBOL_PREFIX_(prefix)
+uint64_t stack_provider(uint64_t, uint64_t, uint64_t, uint64_t,
+                        uint64_t, uint64_t, uint64_t)
+    __asm__(SYMBOL_PREFIX(__USER_LABEL_PREFIX__) "overwriting_consumer");
+uint64_t stack_provider(uint64_t pointer, uint64_t a1, uint64_t a2,
+                        uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6) {
+  return *(uint64_t *)(uintptr_t)pointer + 7 + a6;
+}
+)";
+          Oracle += R"(
+static int check_native(uint64_t seed);
+int main(void) {
+  for (unsigned i = 0; i < 32; ++i) {
+    if (call_overwritten_stack() != 79) return 1;
+    if (check_native(UINT64_C(0xFEDCBA9876543210) ^
+                     (uint64_t)i * UINT64_C(0x100010001))) return 2;
+  }
+  return 0;
+}
+)";
+          for (llvm::StringRef Level : {"-O0", "-O2"})
+            source_call_execution_test::compileAndRun(
+                Source + Oracle + NativeOracle,
+                {Level, "-fsanitize=undefined", "-fsanitize-trap=all"});
+        }
+  }
+}
+
 TEST(Win64CallContract, BranchStackArgumentsKeepTheirEdgeValues) {
   for (bool ByteArgument : {false, true})
     for (bool Nested : {false, true}) {
@@ -2910,9 +3037,11 @@ int main(void) {
 }
 
 TEST(CallExitRegisters, UnusedIncomingStackSlotsDoNotRequireValues) {
-  for (unsigned Flow : {0u, 1u, 2u, 3u, 4u, 5u}) {
+  for (unsigned Flow = 0; Flow != 9; ++Flow) {
     const unsigned Shape = Flow % 3;
     const bool Alias = Flow >= 3;
+    const bool ImageRead = Flow >= 6;
+    constexpr va_t Global = Iat + 0x100;
     SCOPED_TRACE(Flow);
     constexpr va_t Wrapper = Text + 0x80;
     std::vector<uint8_t> Code(0xC0, 0xCC);
@@ -2963,6 +3092,13 @@ TEST(CallExitRegisters, UnusedIncomingStackSlotsDoNotRequireValues) {
     } else {
       Body.insert(Body.end(), {0x48, 0x03, 0x5C, 0x24, 0x60});
     }
+    if (ImageRead) {
+      // A mutable image read must remain live even though it cannot observe
+      // the missing incoming stack slot.
+      const auto Displacement = rel32(Wrapper + Body.size() + 7, Global);
+      Body.insert(Body.end(), {0x48, 0x33, 0x1D}); // xor rbx,[rip+disp32]
+      Body.insert(Body.end(), Displacement.begin(), Displacement.end());
+    }
     // Kill the complete physical alias before the opaque import. The lifted
     // 32-bit definition includes its explicit zero-extension to all 64 bits.
     if (Alias)
@@ -2972,8 +3108,22 @@ TEST(CallExitRegisters, UnusedIncomingStackSlotsDoNotRequireValues) {
     Body.insert(Body.end(), {0x48, 0x01, 0xD8, // add rax,rbx
                              0x48, 0x83, 0xC4, 0x20, 0x5B, 0xC3});
     put(Code, Wrapper, Body);
-    const auto Image = makeImage(
+    auto Image = makeImage(
         Code, {{Text, "stack_hole"}, {Wrapper, "stack_wrapper"}}, {"rand"});
+    if (ImageRead) {
+      Segment Storage;
+      Storage.Name = ".data";
+      Storage.VA = Global;
+      Storage.Size = Storage.FileSz = 8;
+      Storage.Data.resize(8);
+      Storage.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+      Image.Segments.push_back(std::move(Storage));
+      Symbol Object;
+      Object.Addr = Global;
+      Object.Name = "stack_salt";
+      Object.Size = 8;
+      Image.Symbols.push_back(std::move(Object));
+    }
     std::string NativeOracle;
     llvm::raw_string_ostream Native(NativeOracle);
     Native << R"(
@@ -2985,7 +3135,7 @@ static int check_native(uint64_t a, uint64_t b) {
 )";
     for (uint8_t Byte : Code)
       Native << unsigned(Byte) << ',';
-    Native << "};\n  const size_t size = " << Iat - Text + 8 << R"(;
+    Native << "};\n  const size_t size = " << Global - Text + 8 << R"(;
   uint8_t *mapping = mmap(0, size + 16, PROT_READ | PROT_WRITE | PROT_EXEC,
                        MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
   if (mapping == MAP_FAILED) return 1;
@@ -2994,11 +3144,17 @@ static int check_native(uint64_t a, uint64_t b) {
   uintptr_t random = (uintptr_t)machine_rand;
 )";
     Native << "  memcpy(code + " << Iat - Text << ", &random, 8);\n";
+    if (ImageRead)
+      Native << "  uint64_t salt = a ^ (b << 7);\n  memcpy(code + "
+             << Global - Text << ", &salt, 8);\n";
     Native << R"(
   calls = 0;
   __builtin___clear_cache((char *)code, (char *)code + size);
   uint64_t actual = ((uint64_t (__attribute__((ms_abi)) *)(uint64_t,uint64_t))code)(a,b);
   uint64_t combined = FLOW_KIND == 2 ? a + 3 * b : (FLOW_KIND == 0 || (a & 1) ? a + b : a - b);
+#if HAS_IMAGE_READ
+  combined ^= salt;
+#endif
   int bad = actual != combined + 17 || calls != 1;
   if (munmap(mapping, size + 16)) return 1;
   return bad;
@@ -3036,6 +3192,8 @@ static int check_native(uint64_t a, uint64_t b) { return 0; }
           EXPECT_EQ(Source.find("__builtin_trap"), std::string::npos) << Source;
           if (OmitCallee || Source.find("__builtin_trap") != std::string::npos)
             continue;
+          if (ImageRead && !LLVM)
+            Source += "\n__typeof__(stack_salt) stack_salt;\n";
           const std::string Providers = R"(
 #include <string.h>
 static unsigned calls;
@@ -3049,6 +3207,11 @@ int main(void) {
     if (check_native(a, b)) return 1;
     calls = 0;
     uint64_t combined = FLOW_KIND == 2 ? a + 3 * b : (FLOW_KIND == 0 || (a & 1) ? a + b : a - b);
+#if HAS_IMAGE_READ
+    uint64_t salt = a ^ (b << 7);
+    memcpy(&stack_salt, &salt, sizeof(salt));
+    combined ^= salt;
+#endif
     if ((uint64_t)stack_hole(a, b) != combined + 17 || calls != 1) return 2;
     a ^= a << 13; a ^= a >> 7; a ^= a << 17;
   }
@@ -3058,7 +3221,8 @@ int main(void) {
           for (llvm::StringRef Level : {"-O0", "-O2"})
             source_call_execution_test::compileAndRun(
                 Source + Providers + "\n#define FLOW_KIND " +
-                    std::to_string(Shape) + "\n" + NativeOracle + Oracle,
+                    std::to_string(Shape) + "\n#define HAS_IMAGE_READ " +
+                    std::to_string(ImageRead) + "\n" + NativeOracle + Oracle,
                 {Level, "-fsanitize=undefined", "-fsanitize-trap=all"});
         }
   }

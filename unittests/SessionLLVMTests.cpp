@@ -303,7 +303,7 @@ TEST_F(SessionLLVMTest, CallRecoveryKeepsUnobservedStackArgumentHoles) {
   const std::vector<uint8_t> CallBytes = {
       0x48, 0x83, 0xEC, 0x38, 0x48, 0x89, 0x4C, 0x24, 0x28, 0x48, 0x89, 0x54,
       0x24, 0x30, 0xE8, 0x6D, 0,    0,    0,    0x48, 0x83, 0xC4, 0x38, 0xC3};
-  const std::vector<uint8_t> Body = {
+  std::vector<uint8_t> Body = {
       0x53, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B, 0x5C, 0x24,
       0x58, 0xF6, 0xC1, 0x01,          // test cl,1
       0x74, 0x07,                      // jz subtract
@@ -322,6 +322,13 @@ TEST_F(SessionLLVMTest, CallRecoveryKeepsUnobservedStackArgumentHoles) {
   Slots.Flags = SegmentFlags::Readable;
   Slots.Data.assign(8, 0);
   State.Img.Segments.push_back(std::move(Slots));
+  Segment Data;
+  Data.Name = ".data";
+  Data.VA = 0x3100;
+  Data.Size = Data.FileSz = 8;
+  Data.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+  Data.Data.assign(8, 0);
+  State.Img.Segments.push_back(std::move(Data));
   Import Observer;
   Observer.Name = "rand";
   Observer.Module = "msvcrt.dll";
@@ -333,28 +340,39 @@ TEST_F(SessionLLVMTest, CallRecoveryKeepsUnobservedStackArgumentHoles) {
     Symbol.Name = Name;
     State.Img.Symbols.push_back(std::move(Symbol));
   }
-  for (bool Omitted : {false, true}) {
-    SCOPED_TRACE(Omitted);
-    State.NativeMedFuncs.reset();
-    State.FunctionLlvmModules.clear();
-    PipelineOptions Options;
-    Options.EmitDumpOutput = false;
-    Options.OnlyFunctionEntries = {Caller};
-    if (!Omitted)
-      Options.OnlyFunctionEntries.insert(Wrapper);
-    State.PipeResult = Pipeline().run(State.Img, *State.LLVMCtx, Options);
-    ASSERT_TRUE(State.PipeResult.Success) << State.PipeResult.Error;
-    for (bool NoOpt : {false, true}) {
-      SCOPED_TRACE(NoOpt);
-      const auto *Shown = State.ensureFunctionLlvmModule(Caller, NoOpt, true);
-      ASSERT_TRUE(Shown) << State.LastError;
-      ASSERT_TRUE(State.NativeMedFuncs);
-      const auto &Calls = State.NativeMedFuncs->front().CallInfos;
-      ASSERT_EQ(Calls.size(), 1U);
-      ASSERT_EQ(Calls.front().Args.size(), 7U);
-      EXPECT_TRUE(Calls.front().Args[4].isConst());
-      EXPECT_EQ(Calls.front().Args[4].ConstVal, 0U);
-      EXPECT_EQ(State.ensureFunctionLlvmModule(Caller, NoOpt, true), Shown);
+  for (bool ImageRead : {false, true}) {
+    SCOPED_TRACE(ImageRead);
+    if (ImageRead) {
+      // Insert xor rbx,[rip+205Eh] before the import and adjust its
+      // displacement.
+      Body.insert(Body.begin() + 27, {0x48, 0x33, 0x1D, 0x5E, 0x20, 0, 0});
+      Body[36] = 0x58;
+      std::copy(Body.begin(), Body.end(),
+                State.Img.Segments.front().Data.begin() + Wrapper - Caller);
+    }
+    for (bool Omitted : {false, true}) {
+      SCOPED_TRACE(Omitted);
+      State.NativeMedFuncs.reset();
+      State.FunctionLlvmModules.clear();
+      PipelineOptions Options;
+      Options.EmitDumpOutput = false;
+      Options.OnlyFunctionEntries = {Caller};
+      if (!Omitted)
+        Options.OnlyFunctionEntries.insert(Wrapper);
+      State.PipeResult = Pipeline().run(State.Img, *State.LLVMCtx, Options);
+      ASSERT_TRUE(State.PipeResult.Success) << State.PipeResult.Error;
+      for (bool NoOpt : {false, true}) {
+        SCOPED_TRACE(NoOpt);
+        const auto *Shown = State.ensureFunctionLlvmModule(Caller, NoOpt, true);
+        ASSERT_TRUE(Shown) << State.LastError;
+        ASSERT_TRUE(State.NativeMedFuncs);
+        const auto &Calls = State.NativeMedFuncs->front().CallInfos;
+        ASSERT_EQ(Calls.size(), 1U);
+        ASSERT_EQ(Calls.front().Args.size(), 7U);
+        EXPECT_TRUE(Calls.front().Args[4].isConst());
+        EXPECT_EQ(Calls.front().Args[4].ConstVal, 0U);
+        EXPECT_EQ(State.ensureFunctionLlvmModule(Caller, NoOpt, true), Shown);
+      }
     }
   }
 }

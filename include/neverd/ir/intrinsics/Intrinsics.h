@@ -347,6 +347,11 @@ enum class Intrinsic : uint16_t {
   /// Its exact LowIR contract is owned by LowRawEnvironment.h.
   RawEnvironmentRequirementV1 = 2,
 
+  /// A fresh architectural bit production in a checked raw region. Ordinary
+  /// emitters must refuse it; its LowIR shape belongs to
+  /// LowArchitecturalValue.h.
+  ArchitecturalValueV1 = 3,
+
 #include "neverd/ir/intrinsics/AArch64/intrinsics_aarch64.inc"
 #include "neverd/ir/intrinsics/ARM/intrinsics_arm.inc"
 #include "neverd/ir/intrinsics/X86/intrinsics_x86.inc"
@@ -504,6 +509,9 @@ enum class Intrinsic : uint16_t {
   X86LockedBts,
   X86LockedBtr,
   X86LockedBtc,
+
+  // Append-only: SYSENTER leaves through the environment's live entry MSRs.
+  X86Sysenter,
 
   _Count = 16000
 };
@@ -1377,6 +1385,11 @@ constexpr bool intrinsicDefaultRegisterShapeIsValid(Intrinsic Id,
 constexpr bool isRawEnvironmentRequirementId(uint64_t Id) {
   return (Id & UINT16_MAX) ==
          static_cast<uint64_t>(Intrinsic::RawEnvironmentRequirementV1);
+}
+
+constexpr bool isArchitecturalValueId(uint64_t Id) {
+  return (Id & UINT16_MAX) ==
+         static_cast<uint64_t>(Intrinsic::ArchitecturalValueV1);
 }
 
 const char *intrinsicName(Intrinsic Id);

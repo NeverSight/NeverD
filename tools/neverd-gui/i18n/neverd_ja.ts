@@ -6913,10 +6913,6 @@ Select an operation to follow dependencies. Synthetic operations have block prov
         <translation>比較の設定で依存関係の根拠を有効にしてください。</translation>
     </message>
     <message>
-        <source>Include control dependencies</source>
-        <translation>制御依存関係を含める</translation>
-    </message>
-    <message>
         <source>Inspect original function</source>
         <translation>元の関数を調査</translation>
     </message>
@@ -7051,6 +7047,32 @@ Progress does not establish equal loop counts or function results.</source>
     <message>
         <source>Proof: every counter cycle reaches a shared exit relative to an input-derived expression. Undefined behavior may occur before exit.</source>
         <translation>証明：カウンターの各周期は、入力から導出された式に対する共通の出口に到達します。終了前に未定義動作が発生する場合があります。</translation>
+    </message>
+    <message>
+        <source>Argument accesses</source>
+        <translation>引数のアクセス</translation>
+    </message>
+    <message>
+        <source>Show reads and writes using the same computed address as a recovered call argument.</source>
+        <translation>復元された呼び出し引数と同じ計算アドレスを使う読み取りと書き込みを表示します。</translation>
+    </message>
+    <message>
+        <source>Include control</source>
+        <translation>制御依存を含める</translation>
+    </message>
+    <message>
+        <source>Include control dependencies when tracing inputs or uses.</source>
+        <translation>入力や使用箇所の追跡に制御依存を含めます。</translation>
+    </message>
+    <message>
+        <source>Call n%1 · %2 address observations · %3
+Reads and writes at a recovered argument's address. Call effects and execution order remain unknown. Activate a row to select its operation.</source>
+        <translation>呼び出し n%1 · アドレス観測 %2 件 · %3
+復元された引数のアドレスでの読み書きです。呼び出しの影響と実行順序は不明です。行をアクティブにすると操作を選択します。</translation>
+    </message>
+    <message>
+        <source>Inspecting argument addresses…</source>
+        <translation>引数アドレスを調査中…</translation>
     </message>
 </context>
 <context>
@@ -7864,6 +7886,38 @@ Every use of a projected parameter reads the same low bits. Whole-function behav
     <message>
         <source>Uncertain</source>
         <translation>不確定</translation>
+    </message>
+    <message>
+        <source>Argument</source>
+        <translation>引数</translation>
+    </message>
+    <message>
+        <source>Access</source>
+        <translation>アクセス</translation>
+    </message>
+    <message>
+        <source>RETURN input</source>
+        <translation>RETURN 入力</translation>
+    </message>
+    <message>
+        <source>Write</source>
+        <translation>書き込み</translation>
+    </message>
+    <message>
+        <source>Read</source>
+        <translation>読み取り</translation>
+    </message>
+    <message>
+        <source>COPY / PHI path</source>
+        <translation>COPY / PHI 経路</translation>
+    </message>
+    <message>
+        <source>Not observed</source>
+        <translation>未観測</translation>
+    </message>
+    <message>
+        <source>A same-width COPY/PHI path to a RETURN operand. That operand may be a control target; this does not establish an ABI return value or execution order.</source>
+        <translation>RETURN オペランドに至る同じ幅の COPY/PHI 経路です。オペランドは制御先の場合があり、ABI の戻り値や実行順序は確定しません。</translation>
     </message>
 </context>
 <context>

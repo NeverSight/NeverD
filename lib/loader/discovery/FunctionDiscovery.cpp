@@ -636,6 +636,12 @@ void scanDataFuncPointers(BinaryImage &Img, const LoadProgress &Progress) {
       const size_t I = static_cast<size_t>(Cur - Seg->VA);
       uint64_t Val = normalizeCodeAddress(
           readPtr(Seg->Data.data() + I, Img.is64Bit()), Img.Arch, Img.Mode);
+      // Only an authenticated JMP reader supplies case-label evidence.
+      // A CALL through the same slot independently requires a function entry.
+      if (Img.CodePtrRelocSlots.count(Cur) &&
+          Img.JumpDispatchTableSources.count(Cur) &&
+          !Img.CallDispatchRelocSlots.count(Cur))
+        continue;
       if (const auto Guess = Guesses.find(Val);
           Guess != Guesses.end() && Img.CodePtrRelocSlots.count(Cur)) {
         Img.Symbols[Guess->second].IsBoundaryGuess = false;

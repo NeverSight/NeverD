@@ -99,15 +99,22 @@ std::set<unsigned> sourceRegisterInputOverwrites(
     const std::set<const MedOp *> &Overwritten, size_t &Remaining);
 
 /// Unread positional stack inputs over the complete original Win64 CFG.
-/// Original loads, including removed ones, observe their entire byte ranges.
+/// Original loads, including removed ones, observe entry bytes not yet
+/// overwritten on that path. Partial stores destroy only their written bytes.
 /// Exact SP-relative addresses may pass through physical GPR aliases. Bounded
 /// ordinary calls need current native unread evidence for every live alias;
-/// frame escapes, lost access offsets and unknown effects reject the proof.
-/// All original edges, stack joins and returns must agree. Stable loops keep
-/// the union of reads and frame-derived register/flag bytes on every path.
+/// Frame escapes, lost access offsets and unknown effects observe every
+/// remaining input byte and end that path's query. Completed overwrites can
+/// survive an opaque suffix; this grants no fact about the suffix's effects.
+/// All original CFG edges and connectivity are checked before this walk.
+/// Stack joins agree; stable loops union live bytes and frame-derived taint.
+/// A current image admits complete data-object loads whose original exact
+/// address survives instruction-local copies and scalar affine offsets. This
+/// does not fold loaded values or admit stores or loaded pointer aliases.
 std::set<unsigned> unobservedSourceStackParameters(
     const MedFunc &Func, llvm::ArrayRef<LowBlock> OriginalBlocks,
-    const std::set<va_t> &DeclaredCallees, size_t &Remaining);
+    const std::set<va_t> &DeclaredCallees, size_t &Remaining,
+    const BinaryImage *Image = nullptr);
 
 /// Extend source spill evidence through current direct calls. Identity copies
 /// and PHIs retain byte positions; narrow views may read the retained prefix.

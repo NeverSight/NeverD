@@ -23,6 +23,7 @@
 #include <QMessageBox>
 #include <QPlainTextEdit>
 #include <QPushButton>
+#include <QScrollBar>
 #include <QSettings>
 #include <QSpinBox>
 #include <QTableWidget>
@@ -86,6 +87,48 @@ private slots:
     QSettings::setPath(QSettings::IniFormat, QSettings::UserScope,
                        Settings.path());
     configureDocking();
+  }
+  void longSourceSearchSurvivesResizing_data() {
+    QTest::addColumn<QString>("Representation");
+    QTest::newRow("pseudocode") << "source";
+    QTest::newRow("llvm-c") << "llvmc";
+  }
+  void longSourceSearchSurvivesResizing() {
+    QFETCH(QString, Representation);
+    QTemporaryDir Directory;
+    const auto Path =
+        createdFunctionFixture(Directory, QByteArray::fromHex("b82a000000c3"));
+    QVERIFY(!Path.isEmpty());
+    Session Session(QString::fromLocal8Bit(TEST_REAL_WORKER));
+    Session.open(Path);
+    QTRY_VERIFY_WITH_TIMEOUT(Session.loaded(), 30000);
+    const QString Needle = QStringLiteral("visible_tail_marker");
+    const QString Name = QString(160, QLatin1Char('n')) + Needle;
+    bool Renamed = false;
+    Session.rename(0x400078, Name, {}, [&] { Renamed = true; });
+    QTRY_VERIFY_WITH_TIMEOUT(Renamed, 30000);
+    CodeText Code(Session);
+    Code.resize(560, 280);
+    Code.show();
+    Code.load(0x400078, Representation);
+    QTRY_VERIFY_WITH_TIMEOUT(Code.complete(), 30000);
+    const int Match = Code.allText().indexOf(Needle);
+    QVERIFY(Match >= 0);
+    auto *Across = Code.horizontalScrollBar();
+    const int Extent = Across->maximum() + Code.viewport()->width();
+    QVERIFY(Code.selectSearchRange(Match, Needle.size()));
+    QCOMPARE(Code.selectedText(), Needle);
+    QVERIFY(Across->value() > 0);
+    // A resize changes the viewport, not the document's horizontal extent.
+    // Searching a far-right match must not reduce the next range calculation.
+    for (const int Width : {640, 480, 800, 560}) {
+      Code.resize(Width, 280);
+      QTRY_COMPARE(Across->maximum() + Code.viewport()->width(), Extent);
+      QVERIFY(Code.selectSearchRange(Match, Needle.size()));
+      QCOMPARE(Code.selectedText(), Needle);
+      QVERIFY(Code.cursorViewportRect().left() >= 0);
+      QVERIFY(Code.cursorViewportRect().left() <= Code.viewport()->width());
+    }
   }
   void immediateAndRegisterNavigation_data() {
     QTest::addColumn<QString>("Kind");

@@ -163,6 +163,7 @@ A(Intrinsic::Xsaveopt64, "xsaveopt64");
 A(Intrinsic::Cldemote, "cldemote");
 A(Intrinsic::Pconfig, "pconfig");
 A(Intrinsic::Sysexitq, "sysexitq");
+A(Intrinsic::X86Sysenter, "sysenter");
 A(Intrinsic::Sysretq, "sysretq");
 A(Intrinsic::Extrq, "extrq");
 A(Intrinsic::Insertq, "insertq");

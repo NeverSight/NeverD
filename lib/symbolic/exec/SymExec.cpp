@@ -31,6 +31,7 @@
 #include "neverd/ir/X86/X87Stack.h"
 #include "neverd/ir/X86/X87Value.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
+#include "neverd/ir/low/LowArchitecturalValue.h"
 #include "neverd/ir/low/LowRawEnvironment.h"
 #include "neverd/ir/low/X86/X87PartialRemainder.h"
 #include "neverd/lift/X86/X86Regs.h"
@@ -909,7 +910,7 @@ StepResult SymExec::stepImpl(const LowOp &Op, const SymCallEffect *CallEffect,
                              SymConditionalStore *Conditional) {
   // Unmodelled is a continuing value abstraction. A required environment
   // cannot be replaced by an unknown result, especially without an output.
-  if (isLowRawEnvironmentRequirement(Op))
+  if (isLowRawEnvironmentRequirement(Op) || isLowArchitecturalValue(Op))
     throw std::invalid_argument(
         "raw environment requirement needs a receipt-aware symbolic consumer");
   if (Preservation) {

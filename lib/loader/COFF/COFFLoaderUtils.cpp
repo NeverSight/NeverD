@@ -744,6 +744,20 @@ void recordIndexedTableBasesInCode(BinaryImage &Img) {
       Img.DataPtrRelocSlots.empty())
     return;
 
+  std::set<va_t> Anchors = Img.RelCodeTableAnchors;
+  for (const Symbol &Sym : Img.Symbols) {
+    if (!Remaining--)
+      return;
+    if (!Sym.IsSection)
+      Anchors.insert(Sym.Addr);
+  }
+  for (const auto &[Slot, Field] : Img.DataAddressRelocOperands) {
+    if (!Remaining--)
+      return;
+    if (!Field.PCRelativeFromInstructionEnd && Field.TargetVA != InvalidVA)
+      Anchors.insert(Field.TargetVA);
+  }
+
   std::set<va_t> Work;
   if (Img.Entry)
     Work.insert(Img.Entry);
@@ -769,6 +783,44 @@ void recordIndexedTableBasesInCode(BinaryImage &Img) {
   std::map<va_t, std::vector<TableRead>> Reads;
   std::map<va_t, va_t> Instructions;
   std::set<va_t> Seen;
+  std::map<va_t, std::vector<va_t>> TableSlots;
+  std::set<va_t> FollowedTables;
+  // Cache each relocation run once. Its instruction overlap and all discovered
+  // anchors are checked before publishing evidence, including any run used to
+  // reach another dispatcher.
+  auto SlotsAt = [&](va_t Base) -> const std::vector<va_t> * {
+    auto [It, Inserted] = TableSlots.try_emplace(Base);
+    auto &Slots = It->second;
+    if (!Inserted)
+      return &Slots;
+    const Section *Sec = Img.getSectionFor(Base);
+    const auto OwnerEnd = Img.mappedObjectOwnerEnd(Base);
+    if (!OwnerEnd || Sec->Size > InvalidVA - Sec->VA)
+      return &Slots;
+    va_t End = std::min(Sec->VA + Sec->Size, *OwnerEnd);
+    if (const auto Next = Anchors.upper_bound(Base); Next != Anchors.end())
+      End = std::min(End, *Next);
+    for (va_t Slot = Base; Slot < End && Width <= End - Slot; Slot += Width) {
+      if (!Remaining--)
+        return nullptr;
+      const uint8_t *Bytes = Img.readVA(Slot, Width);
+      if (!Bytes || (Sec->isExecutable() &&
+                     !isFileBackedCodeImageRange(Img, Slot, Width)))
+        break;
+      if (!Candidates.count(Slot) && !Img.CodePtrRelocSlots.count(Slot) &&
+          !Img.DataPtrRelocSlots.count(Slot)) {
+        // A constructor-list sentinel grants no callable identity itself.
+        const uint64_t Value = readPtr(Bytes, Img.is64Bit());
+        const uint64_t AllOnes = Width == 4 ? uint64_t(UINT32_MAX) : UINT64_MAX;
+        if (Slot == Base && (Value == 0 || Value == AllOnes) &&
+            !Img.hasPointerStorageProvenanceAt(Slot))
+          continue;
+        break;
+      }
+      Slots.push_back(Slot);
+    }
+    return &Slots;
+  };
   while (!Work.empty()) {
     if (!Remaining--)
       return; // Publish no partial evidence after exhausting the walk.
@@ -814,9 +866,30 @@ void recordIndexedTableBasesInCode(BinaryImage &Img) {
       const va_t Base =
           Width == 4 ? uint32_t(Operand.mem.disp) : uint64_t(Operand.mem.disp);
       const Section *Table = Img.getSectionFor(Base);
-      if (Base % Width == 0 && Table && Table->isReadable())
+      if (Base % Width == 0 && Table && Table->isReadable()) {
+        const bool ControlFlow =
+            Insn.Id == X86_INS_CALL || Insn.Id == X86_INS_JMP;
         Reads[Base].push_back(
             {Cur, Insn.Id == X86_INS_CALL, Insn.Id == X86_INS_JMP});
+        if (!ControlFlow || !FollowedTables.insert(Base).second)
+          continue;
+        const auto *Slots = SlotsAt(Base);
+        if (!Slots)
+          return;
+        for (va_t Slot : *Slots) {
+          va_t Target = InvalidVA;
+          if (Img.CodePtrRelocSlots.count(Slot) &&
+              !Img.DataPtrRelocSlots.count(Slot))
+            Target = readPtr(Img.readVA(Slot, Width), Img.is64Bit());
+          else if (const auto Field = Candidates.find(Slot);
+                   Field != Candidates.end() &&
+                   Img.CodeAddressRelocOperands.count(Slot))
+            Target = Field->second.TargetVA;
+          if (Target != InvalidVA && !Img.DataInCode.count(Target) &&
+              Img.hasExecutableCodeOwnerAt(Target))
+            Work.insert(Target);
+        }
+      }
     }
     bool Branch = false;
     for (uint8_t I = 0; I < Detail.groups_count; ++I)
@@ -841,47 +914,49 @@ void recordIndexedTableBasesInCode(BinaryImage &Img) {
     va_t End;
   };
   std::vector<TableRun> Runs;
+  for (const auto &[Base, Uses] : Reads)
+    Anchors.insert(Base);
   for (const auto &[Base, Uses] : Reads) {
-    const Section *Sec = Img.getSectionFor(Base);
-    if (Sec->Size > InvalidVA - Sec->VA)
-      continue;
-    const va_t End = Sec->VA + Sec->Size;
-    std::vector<va_t> Slots;
-    for (va_t Slot = Base; Slot < End && Width <= End - Slot; Slot += Width) {
-      if (!Remaining--)
-        return;
-      if (OverlapsCode(Slot) || !Img.readVA(Slot, Width) ||
-          (Sec->isExecutable() &&
-           !isFileBackedCodeImageRange(Img, Slot, Width)))
-        break;
-      if (!Candidates.count(Slot) && !Img.CodePtrRelocSlots.count(Slot) &&
-          !Img.DataPtrRelocSlots.count(Slot)) {
-        // Constructor tables may start with a null or all-ones sentinel.
-        // It is never a callable slot and grants no evidence beyond itself.
-        const uint64_t Value = readPtr(Img.readVA(Slot, Width), Img.is64Bit());
-        const uint64_t AllOnes = Width == 4 ? uint64_t(UINT32_MAX) : UINT64_MAX;
-        if (Slot == Base && (Value == 0 || Value == AllOnes) &&
-            !Img.hasPointerStorageProvenanceAt(Slot))
-          continue;
-        break;
-      }
-      Slots.push_back(Slot);
-    }
-    if (Slots.empty())
-      continue;
-    if (Slots.size() > Remaining / Uses.size())
+    const auto *Slots = SlotsAt(Base);
+    if (!Slots)
       return;
-    Remaining -= Slots.size() * Uses.size();
-    Runs.push_back({Base, Slots.front(), Slots.back() + Width});
+    const auto Next = Anchors.upper_bound(Base);
+    const va_t End = Next == Anchors.end() ? InvalidVA : *Next;
+    size_t Count = 0;
+    // A skipped constructor sentinel is still table storage: reached code
+    // overlapping that header invalidates the table and its flow edges too.
+    if (!OverlapsCode(Base))
+      while (Count < Slots->size() && (*Slots)[Count] < End &&
+             Width <= End - (*Slots)[Count] && !OverlapsCode((*Slots)[Count]))
+        ++Count;
+    if (FollowedTables.count(Base) && Count != Slots->size())
+      return; // A disproved flow edge cannot authenticate its descendants.
+    if (Count == 0)
+      continue;
+    if (Count > Remaining / Uses.size())
+      return;
+    Remaining -= Count * Uses.size();
+    Runs.push_back({Base, Slots->front(), (*Slots)[Count - 1] + Width});
   }
 
   // Each complete contiguous run supplies its exact slots. A gap, instruction
   // operand or section end never borrows table identity from nearby storage.
   std::vector<va_t> Starts;
   for (const auto &Run : Runs)
-    if (Img.hasExecutableCodeOwnerAt(Run.Base))
+    if (Img.hasExecutableCodeOwnerAt(Run.Base) &&
+        !Img.DataInCode.count(Run.Base))
       Starts.push_back(Run.Base);
   recordDataInCode(Img, Starts);
+  for (const auto &Run : Runs)
+    if (FollowedTables.count(Run.Base) &&
+        Img.hasExecutableCodeOwnerAt(Run.Base) &&
+        !Img.DataInCode.count(Run.Base)) {
+      // The shared metadata authority vetoed a flow table. Roll back only
+      // this pass's new markers; no descendant may keep that rejected edge.
+      for (va_t Start : Starts)
+        Img.DataInCode.erase(Start);
+      return;
+    }
   std::map<va_t, va_t> AcceptedRuns;
   for (const auto &[Begin, FirstSlot, End] : Runs) {
     const bool InCode = Img.hasExecutableCodeOwnerAt(Begin);

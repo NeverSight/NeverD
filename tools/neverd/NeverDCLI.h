@@ -516,9 +516,10 @@ extern llvm::cl::opt<unsigned long long> DiffTimeout;
 extern llvm::cl::opt<unsigned long long> DiffImpactWork, DiffChangesWork,
     DiffEffectWork, DiffValidationWork, DiffSourceWork, DiffSourceBytes;
 extern llvm::cl::opt<unsigned> DiffOffset, DiffLimit, DiffRegionAnchor,
-    DiffSliceNode, DiffFlowRegionAnchor, DiffImpactDepth, DiffImpactFunctions,
-    DiffImpactSites, DiffImpactWitness, DiffChangesRows, DiffChangesCount,
-    DiffEffectRecords, DiffValidationInstructions, DiffSourceInstructions;
+    DiffSliceNode, DiffArgumentAccessCall, DiffFlowRegionAnchor,
+    DiffImpactDepth, DiffImpactFunctions, DiffImpactSites, DiffImpactWitness,
+    DiffChangesRows, DiffChangesCount, DiffEffectRecords,
+    DiffValidationInstructions, DiffSourceInstructions;
 int runStructuralDiff();
 int runLineage();
 

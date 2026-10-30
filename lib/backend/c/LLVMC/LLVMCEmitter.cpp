@@ -2446,6 +2446,8 @@ void LLVMCWriter::writeForwardDecls(llvm::Module &Mod) {
     // Calls the callee's prototype decides pass as many arguments as it
     // takes (printedCallArgLimit), which the declaration takes too.
     const std::optional<unsigned> Params = prototypedParamCount(Fn);
+    if (Fn.hasFnAttribute("neverd.x64_dispatch_frame"))
+      OS << "__attribute__((ms_abi)) ";
     // An i386 stdcall routine pops the arguments its calls push, which a C
     // compiler leaves to it only by its declaration: where its parameters
     // fill the slots its names spell (c_library::stdcallImportPops).

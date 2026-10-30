@@ -20,7 +20,7 @@ def run(command, success=True):
     return result
 
 
-def bodies(count, cycle=False, stale=None):
+def bodies(count, cycle=False, stale=None, incoming=False):
     code = bytearray(b'\xcc' * (STRIDE * (count + 1)))
     sizes = []
     for i in range(count + 1):
@@ -33,6 +33,14 @@ def bodies(count, cycle=False, stale=None):
             if i == stale:
                 # Observe the previous CALL's physical return slot.
                 body = body[:9] + b'\x48\x8b\x44\x24\xf8' + body[12:]
+                if incoming:
+                    # Keep the declared sub-rsp prologue, but move SP above
+                    # the entry before the CALL. Its write is outside the
+                    # local source frame; restore SP before the epilogue.
+                    body = (b'\x48\x83\xec\x28\x48\x83\xc4\x50\xe8' +
+                            struct.pack('<i', STRIDE * (target - i) - 13) +
+                            b'\x48\x8b\x44\x24\xf8\x48\x83\xec\x50' +
+                            b'\x48\x83\xc4\x28\xc3')
         else:
             body = b'\xb8\x25\x00\x00\x00\xc3'  # mov eax,37; ret
         code[STRIDE * i:STRIDE * i + len(body)] = body
@@ -167,11 +175,18 @@ def check(args, directory, kind, make_image):
     path, entry = fixture(3, cycle=True)
     text, _ = decompile(path, entry)
     assert definitions(text) == {f'sub_{entry + STRIDE * i:X}' for i in range(3)}, text
-    # A refused root cannot overwrite the caller's existing output.
+    # A fixed local CALL slot is explicitly written in the source frame.
     path, entry = fixture(2, stale=0)
+    text, _ = decompile(path, entry)
+    assert definitions(text) == {f'sub_{entry:X}', f'sub_{entry + STRIDE:X}'}, text
+    assert f'0x{entry + 9:X}' in text, text
+    assert 'neverd.not-decompiled' not in text, text
+    # A CALL write outside that frame remains refused and cannot overwrite
+    # the caller's existing output.
+    path, entry = fixture(2, stale=0, incoming=True)
     _, result = decompile(path, entry, success=False)
     assert 'physical CALL return slot' in result.stderr, result
-    path, entry = fixture(3, stale=1)
+    path, entry = fixture(3, stale=1, incoming=True)
     text, _ = decompile(path, entry)
     assert definitions(text) == {f'sub_{entry:X}', f'sub_{entry + 2 * STRIDE:X}'}, text
     assert text.startswith(f'/* neverd.not-decompiled: sub_{entry + STRIDE:X} at '), text

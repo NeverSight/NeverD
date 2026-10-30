@@ -2732,11 +2732,16 @@ std::string HighCWriter::renderCallExpr(const HighExpr &E) {
           // typedef the local types define (nftw's __nftw_func_t), which an
           // argument converts to as well: its type's structure, whose
           // pointers the unit spells void *, would not match.
-          std::string Text =
-              exprStrAsTypedArg(*Op, Expected,
-                                Defined && Expected->Kind != NdTypeKind::Array
-                                    ? declaredTypedef(Expected)
-                                    : std::nullopt);
+          std::optional<std::string> Spelled =
+              Defined && Expected->Kind != NdTypeKind::Array
+                  ? declaredTypedef(Expected)
+                  : std::nullopt;
+          if (!Defined)
+            if (const auto Portable =
+                    c_library::portableScalarParameterType(*Callee, I);
+                !Portable.empty())
+              Spelled = Portable.str();
+          std::string Text = exprStrAsTypedArg(*Op, Expected, Spelled);
           // A selected source declaration can spell an integer pointee as
           // long while the machine carrier and local fields use int32_t.
           // Equal widths do not make those C pointer types compatible. The
@@ -2889,13 +2894,12 @@ std::string HighCWriter::renderCallExpr(const HighExpr &E) {
     // A bare -1 is an int; default argument promotions cannot make it a
     // 64-bit all-ones value. Keep the complete expression, including any
     // narrowing or zero/sign extension, before selecting its wide C carrier.
-    // Only a negative literal changes value this way. A non-negative literal
-    // takes a C type wide enough for its value, and a string or an address
-    // already passes as the pointer it names: both keep their spelling.
+    // Small non-negative literals need the same carrier: an int stack
+    // argument need not initialize the upper bytes a word-sized callee reads.
+    // Strings and addresses already pass as pointers and keep their spelling.
     if (Imm && !PointerArgument && !DefinedParam &&
         (!Prototype || I >= Prototype->ParamCount) && Op->Type &&
-        Op->Type->Kind == NdTypeKind::Int && Op->Type->Size > 4 &&
-        llvm::StringRef(Arg).starts_with("-"))
+        Op->Type->Kind == NdTypeKind::Int && Op->Type->Size > 4)
       Arg = "(" + typeToC(Op->Type) + ")" + castOperand(exprStr(*Op));
     if (!Imm && !PointerArgument && Op->Type && Op->Type->Size >= 4 &&
         (!DefinedParam || (DefinedParam->Kind == NdTypeKind::Int &&

@@ -12,6 +12,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "../CRecordCall.h"
+#include "../HeaderPrototype.h"
 #include "../LibraryPrototype.h"
 #include "../UnalignedMemory.h"
 #include "../render/X86/X86APXAtomic.h"
@@ -488,12 +489,7 @@ bool LLVMCWriter::isTypedRecordCursorValue(const llvm::Value *V) const {
 }
 
 bool LLVMCWriter::allocaHasLoad(const llvm::AllocaInst *Slot) const {
-  if (!Slot)
-    return false;
-  for (const llvm::User *U : Slot->users())
-    if (llvm::isa<llvm::LoadInst>(U))
-      return true;
-  return false;
+  return Slot && !allocaUseFacts(Slot).Loads.empty();
 }
 
 bool LLVMCWriter::cursorSlotIsObserved(const llvm::AllocaInst *Slot) const {
@@ -6229,8 +6225,13 @@ std::string LLVMCWriter::callExpr(const llvm::CallBase &Call, bool Statement) {
           Integer || PointerSpelling || Operand->getType()->isPointerTy()
               ? "(uintptr_t)"
               : "";
-      std::string Projected = "(" + declarationToC(cDisplayType(Type), "") +
-                              ")" + Bridge + "(" + Argument + ")";
+      const llvm::StringRef Spelled =
+          c_library::portableScalarParameterType(*SourceImport, ArgIdx);
+      std::string Projected =
+          "(" +
+          (Spelled.empty() ? declarationToC(cDisplayType(Type), "")
+                           : Spelled.str()) +
+          ")" + Bridge + "(" + Argument + ")";
       Expr += Type->Kind == NdTypeKind::Ptr
                   ? imagePointerArgument(Operand, std::move(Projected))
                   : std::move(Projected);

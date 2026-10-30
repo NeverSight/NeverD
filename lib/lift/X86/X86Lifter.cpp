@@ -892,13 +892,15 @@ void X86Lifter::liftImpl(const cs_insn *Insn, std::vector<LowOp> &Ops,
   // returns are the exception: far and interrupt returns (liftControl) and the
   // syscall returns SYSRET/SYSRETQ and SYSEXIT/SYSEXITQ (liftExt /
   // liftLegacyExt) lift to explicit terminal state-transfer intrinsics that
-  // name every cell the transfer reads, so they are not refused here.  SYSENTER
-  // and RSM enter a handler whose target comes from an MSR or SMRAM, not named
-  // operands; those stay refused.  XBEGIN keeps its original abort continuation
-  // as a second exit of its own instruction (liftTransactions).
+  // name their frame/register inputs. SYSENTER has an opaque terminal effect;
+  // only an explicit MSR environment can reconstruct its continuation. RSM
+  // still requires the complete SMRAM save state. XBEGIN keeps its abort
+  // continuation as a second exit of its own instruction (liftTransactions).
   switch (Insn->id) {
-  case X86_INS_SYSENTER:
   case X86_INS_RSM:
+  case X86_INS_UIRET:
+  case X86_INS_ERETS:
+  case X86_INS_ERETU:
     throw UnliftedInstruction(Insn->address, Insn->mnemonic, Insn->op_str);
   default:
     break;
@@ -1336,7 +1338,10 @@ void X86Lifter::liftImpl(const cs_insn *Insn, std::vector<LowOp> &Ops,
             ? bmilogic::matches(
                   Insn, llvm::ArrayRef<LowOp>(Ops).drop_front(S.OpsStart),
                   EffectsDraft)
-        : Id == X86_INS_SYSRET && nativestateaudit::sysretForm(Insn, TargetArch)
+        : ((Id == X86_INS_SYSRET &&
+            nativestateaudit::sysretForm(Insn, TargetArch)) ||
+           (Id == X86_INS_SYSEXIT &&
+            nativestateaudit::fastSystemForm(Insn, TargetArch)))
             ? compatibilityreturn::matches(
                   llvm::ArrayRef<LowOp>(Ops).drop_front(S.OpsStart),
                   EffectsDraft)
@@ -1430,10 +1435,14 @@ bool X86Lifter::isFunctionTerminator(const cs_insn *I) {
   case X86_INS_IRET:
   case X86_INS_IRETD:
   case X86_INS_IRETQ:
+  case X86_INS_UIRET:
+  case X86_INS_ERETS:
+  case X86_INS_ERETU:
   case X86_INS_SYSRET:
   case X86_INS_SYSRETQ:
   case X86_INS_SYSEXIT:
   case X86_INS_SYSEXITQ:
+  case X86_INS_SYSENTER:
   case X86_INS_SKINIT:
     return true;
   case X86_INS_INT:

@@ -23,9 +23,11 @@
 #include "neverd/ir/med/IntrinsicShapes.h"
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/ir/med/MedCallConvention.h"
+#include "neverd/ir/med/MedCallReturnReads.h"
 #include "neverd/ir/med/MedCallingConvDetail.h"
 #include "neverd/libc/LibCNames.h"
 #include "neverd/lift/X86/X86Regs.h"
+#include "neverd/loader/BinaryImage.h"
 #include "neverd/support/Diagnostic.h"
 
 #include "llvm/ADT/DenseMap.h"
@@ -51,7 +53,6 @@ void detectFPParams(
     Arch TargetArch, BinaryFormat TargetFormat);
 
 // ---- x86-specific helpers (MedCallingConvX86.cpp) ----
-void detectCdeclStackParams(MedFunc &Func, Arch TargetArch);
 void detectSummaryVectorParams(MedFunc &Func, const TargetRegInfo &TRI,
                                const GPRReadWidths &Summary, Arch TargetArch,
                                BinaryFormat Fmt);
@@ -67,6 +68,56 @@ using med_calling_conv_detail::isRenamedEntryLiveInCopy;
 
 namespace med_calling_conv_detail {
 ValueKey valueKey(const MedVar &V) { return {V.Kind, V.Id, V.SSAVer}; }
+
+void preserveCallStackHomes(
+    const MedFunc &Func, Arch Architecture, BinaryFormat Format,
+    const BinaryImage *Image, int64_t Base, unsigned Slot,
+    llvm::function_ref<std::optional<int64_t>(const MedVar &)> Trace,
+    std::set<int64_t> &MutableSlots) {
+  const auto &TRI = getTargetRegInfo(Architecture);
+  if (!TRI.CallPushesReturnAddress ||
+      !llvm::any_of(Func.Blocks, [](const MedBlock &Block) {
+        return llvm::any_of(Block.Ops, [](const MedOp &Op) {
+          return Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL;
+        });
+      }))
+    return;
+  // A converter without original bytes cannot authenticate a synthetic tail
+  // jump. Its calls remain possible writes in the same authoritative proof.
+  BinaryImage Unencoded;
+  if (!Image) {
+    Unencoded.Arch = Architecture;
+    Unencoded.Format = Format;
+    Unencoded.Bits = TRI.PointerSize == 8 ? Bitness::Bits64 : Bitness::Bits32;
+    Image = &Unencoded;
+  }
+  std::vector<MedCallReturnRead> Written;
+  std::string Diagnostic;
+  const bool Complete = validateSourceCallReturnReads(
+      Func, *Image, Diagnostic, limits::ir::kSourceCallReturnReadWork, nullptr,
+      nullptr, &Written);
+  if (Complete && Written.empty())
+    return;
+  std::set<std::pair<va_t, int>> Sites;
+  for (const auto &Read : Written)
+    Sites.emplace(Read.Load, Read.OriginSeq);
+  for (const auto &Block : Func.Blocks)
+    for (const auto &Op : Block.Ops) {
+      if (Complete && !Sites.count({Op.Addr, Op.OriginSeq}))
+        continue;
+      const auto Read = stackMemoryRead(Op);
+      if (!Read)
+        continue;
+      const auto Offset = Trace(Op.Inputs[Read->AddressInput]);
+      if (!Offset)
+        continue;
+      const int64_t First = Base + ((*Offset - Base) / Slot) * Slot;
+      const int64_t Last =
+          Base + ((*Offset - Base + Read->Bytes - 1) / Slot) * Slot;
+      for (int64_t Home = First; Home <= Last; Home += Slot)
+        MutableSlots.insert(Home);
+    }
+}
 
 /// True for an entry-block self-copy of \p RegOff, which declares the
 /// register's incoming value.  The copy takes a new version (`COPY R8.1 =
@@ -763,7 +814,7 @@ void computeFrameBounds(
 
 namespace med_calling_conv_detail {
 void detectStackParams(MedFunc &Func, Arch TargetArch, BinaryFormat Fmt,
-                       int64_t MaxStackOff) {
+                       int64_t MaxStackOff, const BinaryImage *Image) {
   // Stack parameters that follow the used registers (i386) are recovered by
   // detectCdeclStackParams instead.
   const CallArgumentConvention *Convention =
@@ -1111,6 +1162,8 @@ void detectStackParams(MedFunc &Func, Arch TargetArch, BinaryFormat Fmt,
       }
     }
 
+  med_calling_conv_detail::preserveCallStackHomes(
+      Func, TargetArch, Fmt, Image, Base, Slot, rawStackOff, MutableSlots);
   med_calling_conv_detail::preserveFPStackHomes(Func, Base, Slot, rawStackOff,
                                                 MutableSlots);
 
@@ -1461,7 +1514,7 @@ void LowToMedConverter::detectCc(MedFunc &Func, Arch TheArch,
   // pointer walk (PHI-merged, vectorized), invisible to this load scan; those
   // are recovered from the call sites in finalizeVariadicCallees instead.
   if (!Func.IsVariadic)
-    med_calling_conv_detail::detectStackParams(Func, TargetArch, Fmt);
+    med_calling_conv_detail::detectStackParams(Func, TargetArch, Fmt, 0, Image);
   else if (Convention && Convention->VariadicArgumentsOnStack &&
            Func.VariadicOverflowBase > 0) {
     // A variadic function (Darwin AArch64) with more than the register count
@@ -1474,14 +1527,15 @@ void LowToMedConverter::detectCc(MedFunc &Func, Arch TheArch,
     // prefix as register params + these (the overflow count is everything past
     // them).
     const size_t Before = Func.Params.size();
-    med_calling_conv_detail::detectStackParams(Func, TargetArch, Fmt,
-                                               Func.VariadicOverflowBase);
+    med_calling_conv_detail::detectStackParams(
+        Func, TargetArch, Fmt, Func.VariadicOverflowBase, Image);
     Func.VariadicFixedStackArgs = static_cast<int>(Func.Params.size() - Before);
   }
 
   // Stack parameters that follow the registers used (i386 cdecl and regparm).
   if (Convention && Convention->StackArgumentsFollowUsedRegisters)
-    detectCdeclStackParams(Func, TargetArch);
+    med_calling_conv_detail::detectCdeclStackParams(Func, TargetArch, Fmt,
+                                                    Image);
 
   if (Func.ConsumesX87Argument && TheArch == Arch::X86) {
     const auto It = RegVarMap.find({x86reg::ST0, x86reg::FPURegSize});

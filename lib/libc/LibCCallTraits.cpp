@@ -84,6 +84,15 @@ std::string_view isoAliasTarget(std::string_view Name) {
   return Name;
 }
 
+/// Windows' legacy/kernel and ISO wide formatters have different fixed
+/// prefixes under the same name. Only the actual declaration can choose one.
+bool wideFormatNeedsDeclaration(std::string_view Name, LibCVariant Variant) {
+  if (Variant != LibCVariant::Windows)
+    return false;
+  Name = stripLeadingUnderscores(Name);
+  return Name == "swprintf" || Name == "vswprintf";
+}
+
 } // anonymous namespace
 
 unsigned varArgFixedCount(std::string_view Name, LibCVariant Variant) {
@@ -92,6 +101,9 @@ unsigned varArgFixedCount(std::string_view Name, LibCVariant Variant) {
     Name = Routine;
   if (const std::string_view Standard = isoAliasTarget(Name); Standard != Name)
     return varArgFixedCount(Standard, Variant);
+  if (wideFormatNeedsDeclaration(Name, Variant))
+    return 0;
+  Name = stripLeadingUnderscores(Name);
   if (Variant != LibCVariant::GNU)
     if (const auto Kinds =
             variant_rows::variadic(stripLeadingUnderscores(Name), Variant))
@@ -706,6 +718,8 @@ const LibCPrintfFormat *libcPrintfFormat(std::string_view Name) {
 }
 
 bool variadicIn(const LibCVariadicForward &Forward, LibCVariant Variant) {
+  if (wideFormatNeedsDeclaration(Forward.Name, Variant))
+    return false;
   switch (Forward.Format) {
   case BinaryFormat::Unknown:
     return true;
@@ -778,7 +792,10 @@ const LibCVariadicForward *libcVariadicForward(std::string_view Name) {
   return nullptr;
 }
 
-std::optional<unsigned> vaListParameter(std::string_view Name) {
+std::optional<unsigned> vaListParameter(std::string_view Name,
+                                        LibCVariant Variant) {
+  if (wideFormatNeedsDeclaration(Name, Variant))
+    return std::nullopt;
   // A va_list form takes the variadic routine's fixed parameters, then the
   // va_list.
   static const std::unordered_map<std::string_view, unsigned> Positions = [] {

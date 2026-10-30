@@ -388,7 +388,7 @@ LLVMCWriter::codeSectionAddressText(const llvm::ConstantInt &CI) const {
 
 std::optional<va_t>
 LLVMCWriter::uniqueAllocaImageImmediate(const llvm::AllocaInst *Slot) const {
-  if (!Slot)
+  if (!Img || !Slot)
     return std::nullopt;
   std::optional<va_t> Found;
   for (const llvm::User *U : Slot->users()) {
@@ -520,7 +520,9 @@ std::string LLVMCWriter::imageObjectSymbolLine(llvm::StringRef Name) const {
 }
 
 std::optional<va_t> LLVMCWriter::imageDataVA(const llvm::Value *V) const {
-  if (!V)
+  // Numeric addresses need an image; named carriers need a module global.
+  // Without either root, recursive local-storage walks cannot find one.
+  if (!V || (!Img && CurMod && CurMod->global_empty()))
     return std::nullopt;
   V = V->stripPointerCasts();
   // A home may copy a load from another home that eventually copies this
@@ -641,7 +643,7 @@ std::optional<va_t> LLVMCWriter::imageDataVA(const llvm::Value *V) const {
 std::optional<std::pair<const llvm::GlobalVariable *, uint64_t>>
 LLVMCWriter::imageByteArrayBacking(const llvm::Value *V,
                                    uint64_t AccessSize) const {
-  if (!CurMod || AccessSize == 0)
+  if (!CurMod || CurMod->global_empty() || AccessSize == 0)
     return std::nullopt;
   const auto Addr = imageDataVA(V);
   if (!Addr)
@@ -1653,6 +1655,13 @@ bool LLVMCWriter::slotReadAtUses(const llvm::LoadInst &Load) const {
   auto Decide = [&] {
     if (!Load.isSimple())
       return false;
+    unsigned Remaining = limits::backend::kLLVMCStorageUseQueryWork;
+    const auto Charge = [&] {
+      if (!Remaining)
+        return false;
+      --Remaining;
+      return true;
+    };
     // The statements that print the value: its users, through expressions
     // printed inside theirs. A call may later print inside its own user. A
     // copy stored to a scalar home can print again where the home is read.
@@ -1661,8 +1670,12 @@ bool LLVMCWriter::slotReadAtUses(const llvm::LoadInst &Load) const {
     llvm::SmallVector<const llvm::Instruction *, 8> Work{&Load};
     llvm::SmallPtrSet<const llvm::Instruction *, 16> Seen;
     while (!Work.empty()) {
+      if (!Charge())
+        return false;
       const llvm::Instruction *Value = Work.pop_back_val();
       for (const llvm::User *User : Value->users()) {
+        if (!Charge())
+          return false;
         const auto *Use = llvm::dyn_cast<llvm::Instruction>(User);
         if (!Use || Use->getParent() != Block || llvm::isa<llvm::PHINode>(Use))
           return false;
@@ -1671,14 +1684,12 @@ bool LLVMCWriter::slotReadAtUses(const llvm::LoadInst &Load) const {
             Store && Store->getValueOperand() == Value)
           if (const auto *Home = llvm::dyn_cast<llvm::AllocaInst>(
                   Store->getPointerOperand()->stripPointerCasts());
-              Home && Home != SyntheticFrame)
-            for (const llvm::User *HomeUser : Home->users()) {
-              if (llvm::isa<llvm::StoreInst>(HomeUser) &&
-                  llvm::cast<llvm::StoreInst>(HomeUser)->getPointerOperand() ==
-                      Home)
-                continue;
-              const auto *Reload = llvm::dyn_cast<llvm::LoadInst>(HomeUser);
-              if (!Reload || Reload->getParent() != Block)
+              Home && Home != SyntheticFrame) {
+            const auto &Uses = allocaUseFacts(Home);
+            if (!Uses.OnlyDirectMemoryUsers)
+              return false;
+            for (const auto *Reload : Uses.Loads) {
+              if (!Charge() || Reload->getParent() != Block)
                 return false;
               // An earlier reload reads an older value of the home.
               if (!Store->comesBefore(Reload))
@@ -1689,6 +1700,7 @@ bool LLVMCWriter::slotReadAtUses(const llvm::LoadInst &Load) const {
                 Work.push_back(Reload);
               }
             }
+          }
         if (!Seen.insert(Use).second)
           continue;
         const bool Inline = Analysis.Inlinable.count(Use) != 0;

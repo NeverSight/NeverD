@@ -3,6 +3,7 @@
 #include "../../../lib/loader/Swift/SwiftBooleanProjection.h"
 #include "../../../lib/pipeline/NativeSourceOutputFrame.h"
 #include "../../../lib/pipeline/NativeSourcePreservation.h"
+#include "../../../lib/pipeline/PipelineCallAbiDetail.h"
 #include "../../../lib/sdk/capi/ObjCNativeDependencies.h"
 #include "../../../lib/sdk/capi/ObjCSourceBindings.h"
 #include "../../../lib/sdk/capi/ObjCSourceProjection.h"
@@ -10,6 +11,7 @@
 #include "../../../lib/sdk/capi/SwiftMangledSourceABI.h"
 #include "CFunctionParameterCallFixture.h"
 #include "ImmutableNativeCallFixture.h"
+#include "SourceCallExecution.h"
 #include "SwiftConsumedInputFixture.h"
 #include "gtest/gtest.h"
 
@@ -10447,6 +10449,408 @@ TEST(NativeSourceHints, ImportedPointerForwardersShareBothSourceSignatures) {
     }
 }
 
+TEST(NativeSourceHints, LocalPointerForwardersRetainProvenPointees) {
+  class Header : public NullDebugContext {
+  public:
+    bool ExplicitMiddle = false;
+    std::optional<FunctionSym>
+    resolvePrototype(llvm::StringRef Name) const override {
+      if (Name != "consume_object" && Name != "consume_other")
+        return std::nullopt;
+      FunctionSym Function;
+      Function.Name = Name.str();
+      Function.ReturnType = NdType::makeVoid();
+      Function.Params = {
+          {"object",
+           NdType::makePtr(NdType::makeNamedRecord(
+               Name == "consume_object" ? "ForwardedObject" : "OtherObject",
+               32))},
+          {"tag", NdType::makeInt(4, false)}};
+      Function.PrototypeFromHeader = true;
+      Function.PrototypeLibrary = "test-header";
+      return Function;
+    }
+    std::optional<FunctionSym> resolveFunction(va_t Address) const override {
+      if (Address != 0x2000 || !ExplicitMiddle)
+        return std::nullopt;
+      FunctionSym Function;
+      Function.Params = {{"bits", NdType::makeInt(8)}};
+      return Function;
+    }
+  } Debug;
+  for (auto Architecture : {Arch::X64, Arch::AArch64})
+    for (bool Reverse : {false, true})
+      for (bool ExplicitOperands : {false, true})
+        for (unsigned Mutation = 0; Mutation != 17; ++Mutation) {
+          SCOPED_TRACE(unsigned(Architecture));
+          SCOPED_TRACE(Reverse);
+          SCOPED_TRACE(ExplicitOperands);
+          SCOPED_TRACE(Mutation);
+          Debug.ExplicitMiddle = Mutation == 5;
+          BinaryImage Image;
+          Image.Arch = Architecture;
+          Image.Format = BinaryFormat::COFF;
+          Image.Bits = Bitness::Bits64;
+          Segment Slots;
+          Slots.VA = 0x8000;
+          Slots.Size = Slots.FileSz = 32;
+          Slots.Data.resize(Slots.Size);
+          Slots.Flags = SegmentFlags::Readable;
+          Image.Segments.push_back(std::move(Slots));
+          for (const auto &[Address, Name] :
+               {std::pair(0x8000, "consume_object"),
+                std::pair(0x8010, "consume_other")}) {
+            Import Import;
+            Import.Name = Name;
+            Import.Module = "fixture";
+            Import.IATAddr = Address;
+            Image.Imports.push_back(Import);
+            ASSERT_TRUE(Image.recordImportStorageSlot(
+                Address, Name, 0, ImportStorageEvidence::LoaderBind));
+          }
+          MedVar Parameter;
+          Parameter.Kind = MedVar::Param;
+          Parameter.Id = 0;
+          Parameter.Size = 8;
+          Parameter.TheArch = Architecture;
+          Parameter.RegOff = getTargetRegInfo(Architecture).IntParamRegs[0];
+          auto Incoming = Parameter;
+          Incoming.Kind = MedVar::Reg;
+          Incoming.Id = 100;
+          auto Make = [&](va_t Entry) {
+            MedFunc Function;
+            Function.Entry = Entry;
+            Function.Params = {Parameter};
+            Function.TypedParams = {{"arg0", NdType::makeInt(8)}};
+            Function.Blocks.resize(1);
+            Function.Blocks[0].Id = 0;
+            return Function;
+          };
+          auto AddCall = [&](MedFunc &Function, va_t Target, MedVar Argument) {
+            auto &Block = Function.Blocks.front();
+            MedCallInfo Info;
+            Info.BlockId = Block.Id;
+            Info.OpIdx = Block.Ops.size();
+            Info.TargetAddr = Target;
+            Info.Args = {Argument};
+            if (Target == 0x8000 || Target == 0x8010)
+              Info.Args.push_back(MedVar::makeConst(42, 4));
+            MedOp Op;
+            Op.Opcode = NdOp::CALL;
+            Op.addInput(MedVar::makeConst(Target, 8));
+            if (ExplicitOperands)
+              for (const auto &Input : Info.Args)
+                Op.addInput(Input);
+            else
+              Function.CallInfos.push_back(Info);
+            Block.Ops.push_back(Op);
+          };
+          auto Outer = Make(0x1000), Middle = Make(0x2000), Leaf = Make(0x3000);
+          AddCall(Outer, Middle.Entry, Incoming);
+          AddCall(Middle, Leaf.Entry, Incoming);
+          AddCall(Leaf, 0x8000, Incoming);
+          if (Mutation == 1 || Mutation == 8) {
+            MedOp Use;
+            Use.Opcode = Mutation == 1 ? NdOp::INT_ADD : NdOp::COPY;
+            Use.Output.Kind = MedVar::Temp;
+            Use.Output.Id = 200;
+            Use.Output.Size = Mutation == 1 ? 8 : 4;
+            Use.addInput(Incoming);
+            if (Mutation == 1)
+              Use.addInput(MedVar::makeConst(1, 8));
+            Middle.Blocks[0].Ops.push_back(Use);
+          } else if (Mutation == 2 || Mutation == 4 || Mutation == 10) {
+            AddCall(Middle,
+                    Mutation == 2   ? 0x9000
+                    : Mutation == 4 ? 0x8010
+                                    : Outer.Entry,
+                    Incoming);
+          } else if (Mutation == 3) {
+            MedCallClobber Clobber;
+            Clobber.Value = Incoming;
+            Middle.CallClobbers.push_back(Clobber);
+          } else if (Mutation == 6) {
+            // Only recovered source-order arguments may borrow local roles.
+            if (ExplicitOperands) {
+              Middle.Blocks[0].Ops[0].addInput(MedVar::makeConst(7, 8));
+            } else {
+              Middle.CallInfos[0].ArgumentsInCalleeRegisterOrder = true;
+            }
+          } else if (Mutation == 7) {
+            if (ExplicitOperands)
+              Middle.Blocks[0].Ops[0].Inputs[1].Size = 4;
+            else
+              Middle.CallInfos[0].Args[0].Size = 4;
+          } else if (Mutation == 9) {
+            PhiNode Phi;
+            Phi.Output.Kind = MedVar::Temp;
+            Phi.Output.Id = 200;
+            Phi.Output.Size = 8;
+            Phi.Args = {{1, Incoming}, {0, Phi.Output}};
+            Middle.Blocks[0].Phis.push_back(Phi);
+            if (ExplicitOperands)
+              Middle.Blocks[0].Ops[0].Inputs[1] = Phi.Output;
+            else
+              Middle.CallInfos[0].Args[0] = Phi.Output;
+          } else if (Mutation == 11) {
+            Outer.TypedParams[0].Type = NdType::makePtr();
+            Middle.TypedParams[0].Type = NdType::makePtr();
+          } else if (Mutation == 15 || Mutation == 16) {
+            Leaf.IntegerArgumentRegisters = {
+                Mutation == 15
+                    ? Parameter.RegOff
+                    : getTargetRegInfo(Architecture).IntParamRegs[1]};
+            Middle.IntegerArgumentRegisters = {Parameter.RegOff};
+            for (auto *Function : {&Outer, &Middle}) {
+              if (ExplicitOperands) {
+                MedCallInfo Info;
+                Info.BlockId = Info.OpIdx = 0;
+                Info.TargetAddr = Function->Blocks[0].Ops[0].Inputs[0].ConstVal;
+                Info.Args = {Incoming};
+                Function->CallInfos.push_back(Info);
+              }
+              Function->CallInfos[0].ArgumentsInCalleeRegisterOrder = true;
+            }
+          }
+          PipelineResult Result;
+          Result.MedFuncs = {Outer, Middle};
+          if (Mutation != 12)
+            Result.MedFuncs.push_back(Leaf);
+          if (Mutation == 13) {
+            // A long chain must not depend on a fixed iteration cap or on
+            // function order. Every body still needs just one use proof.
+            for (unsigned I = 0; I != 256; ++I) {
+              auto Wrapper = Make(0x10000 + I * 0x10);
+              AddCall(Wrapper, I == 255 ? Leaf.Entry : Wrapper.Entry + 0x10,
+                      Incoming);
+              Result.MedFuncs.push_back(std::move(Wrapper));
+            }
+            auto &Call = Result.MedFuncs[1].Blocks[0].Ops[0];
+            Call.Inputs[0].ConstVal = 0x10000;
+            if (!ExplicitOperands)
+              Result.MedFuncs[1].CallInfos[0].TargetAddr = 0x10000;
+          } else if (Mutation == 14) {
+            auto Sibling = Make(0x4000);
+            AddCall(Sibling, 0x8000, Incoming);
+            AddCall(Result.MedFuncs[1], Sibling.Entry, Incoming);
+            Result.MedFuncs.push_back(std::move(Sibling));
+          }
+          // Pre-SSA import bindings can be the only source of declarations on
+          // independent-register-bank paths without recovered CallInfos.
+          Result.CallEntryIntegerArguments.try_emplace(0x8000);
+          Result.CallEntryIntegerArguments.try_emplace(0x8010);
+          if (Reverse)
+            std::reverse(Result.MedFuncs.begin(), Result.MedFuncs.end());
+          refineSourcePointerParameters(Image, Result, &Debug);
+          for (const auto &Function : Result.MedFuncs) {
+            const bool Pointer = Function.Entry == Leaf.Entry ||
+                                 Mutation == 0 || Mutation == 4 ||
+                                 Mutation == 9 || Mutation == 11 ||
+                                 (Mutation >= 13 && Mutation != 16);
+            const auto Type = Function.TypedParams[0].Type;
+            ASSERT_TRUE(Type);
+            EXPECT_EQ(Type->Kind, Pointer ? NdTypeKind::Ptr : NdTypeKind::Int);
+            EXPECT_EQ(Type->Size, 8u);
+            if (!Pointer || Type->Kind != NdTypeKind::Ptr)
+              continue;
+            ASSERT_TRUE(Type->Pointee);
+            EXPECT_EQ(Type->Pointee->SourceName,
+                      Mutation == 4 && Function.Entry != Leaf.Entry
+                          ? ""
+                          : "ForwardedObject");
+            EXPECT_EQ(Type->Pointee->Size, 0u);
+          }
+        }
+}
+
+TEST(NativeSourceHints, LocalPointerChainsShareBothCProjections) {
+  class Header : public NullDebugContext {
+  public:
+    std::optional<FunctionSym>
+    resolvePrototype(llvm::StringRef Name) const override {
+      if (Name != "consume_pointer")
+        return std::nullopt;
+      FunctionSym Function;
+      Function.Name = Name.str();
+      Function.ReturnType = NdType::makeVoid();
+      Function.Params = {{"object", NdType::makePtr(NdType::makeNamedRecord(
+                                        "ForwardedObject", 0))},
+                         {"tag", NdType::makeInt(4, false)}};
+      Function.PrototypeFromHeader = true;
+      Function.PrototypeLibrary = "test-header";
+      return Function;
+    }
+    std::optional<FunctionSym> resolveFunction(va_t Address) const override {
+      auto Function = Address == 0x8000 ? resolvePrototype("consume_pointer")
+                                        : std::nullopt;
+      if (Function)
+        Function->Addr = Address;
+      return Function;
+    }
+  } Debug;
+  for (auto Architecture : {Arch::X64, Arch::AArch64})
+    for (auto Format :
+         {BinaryFormat::COFF, BinaryFormat::ELF, BinaryFormat::MachO})
+      for (bool LLVM : {false, true}) {
+        SCOPED_TRACE(unsigned(Architecture));
+        SCOPED_TRACE(unsigned(Format));
+        SCOPED_TRACE(LLVM);
+        BinaryImage Image;
+        Image.Arch = Architecture;
+        Image.Format = Format;
+        Image.Bits = Bitness::Bits64;
+        Image.Entry = Image.Base = 0x1000;
+        Segment Text;
+        Text.VA = Image.Entry;
+        Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+        Text.Data.resize(0x60);
+        if (Architecture == Arch::X64) {
+          const std::vector<uint8_t> Leaf{
+              uint8_t(Format == BinaryFormat::COFF ? 0xba : 0xbe),
+              42,
+              0,
+              0,
+              0,
+              0xff,
+              0x25,
+              0xf5,
+              0x6f,
+              0,
+              0};
+          std::copy(Leaf.begin(), Leaf.end(), Text.Data.begin());
+          for (unsigned Offset : {0x20u, 0x40u}) {
+            const auto Frame = uint8_t(Format == BinaryFormat::COFF ? 40 : 8);
+            const std::vector<uint8_t> Wrapper{
+                0x48, 0x83, 0xec,  Frame, 0xe8,
+                0xd7, 0xff, 0xff,  0xff,  0x48,
+                0x83, 0xc4, Frame, 0xb8,  uint8_t(Offset == 0x20 ? 7 : 8),
+                0,    0,    0,     0xc3};
+            std::copy(Wrapper.begin(), Wrapper.end(),
+                      Text.Data.begin() + Offset);
+          }
+        } else {
+          const auto Word = [&](unsigned Offset, uint32_t Value) {
+            llvm::support::endian::write32le(Text.Data.data() + Offset, Value);
+          };
+          Word(0, 0xd2800541);  // mov x1,42
+          Word(4, 0xf0000030);  // adrp x16,0x8000
+          Word(8, 0xf9400210);  // ldr x16,[x16]
+          Word(12, 0xd61f0200); // br x16
+          for (unsigned Offset : {0x20u, 0x40u}) {
+            Word(Offset, 0xa9bf7bfd);      // stp x29,x30,[sp,#-16]!
+            Word(Offset + 4, 0x910003fd);  // mov x29,sp
+            Word(Offset + 8, 0x97fffff6);  // bl preceding wrapper
+            Word(Offset + 12, 0xa8c17bfd); // ldp x29,x30,[sp],#16
+            Word(Offset + 16, Offset == 0x20 ? 0x528000e0 : 0x52800100);
+            Word(Offset + 20, 0xd65f03c0); // ret
+          }
+        }
+        Text.Size = Text.FileSz = Text.Data.size();
+        Image.Segments.push_back(std::move(Text));
+        Segment Slot;
+        Slot.VA = 0x8000;
+        Slot.Size = Slot.FileSz = 8;
+        Slot.Data.resize(8);
+        Slot.Flags = SegmentFlags::Readable;
+        Image.Segments.push_back(std::move(Slot));
+        Import Import;
+        Import.Name = "consume_pointer";
+        Import.Module = "fixture";
+        Import.IATAddr = 0x8000;
+        Image.Imports.push_back(Import);
+        ASSERT_TRUE(Image.recordImportStorageSlot(
+            0x8000, Import.Name, 0, ImportStorageEvidence::LoaderBind));
+        for (const auto &[Entry, Name] : {std::pair(0x1000, "pointer_leaf"),
+                                          std::pair(0x1020, "pointer_middle"),
+                                          std::pair(0x1040, "pointer_outer")}) {
+          auto Symbol = Symbol::makeFunc(Entry);
+          Symbol.Name = Name;
+          Image.Symbols.push_back(std::move(Symbol));
+        }
+        llvm::LLVMContext Context;
+        PipelineOptions Options;
+        Options.EmitDumpOutput = false;
+        Options.OnlyFunctionEntries = {0x1000, 0x1020, 0x1040};
+        Options.LiftMode = Options.SourceProjection = LLVM;
+        auto Result = Pipeline().run(Image, Context, Options, &Debug);
+        ASSERT_TRUE(Result.Success) << Result.Error;
+        ASSERT_EQ(Result.MedFuncs.size(), 3u);
+        ::testing::Message Shape;
+        for (const auto &Function : Result.MedFuncs) {
+          Shape << Function.Name << " blocks=" << Function.Blocks.size()
+                << " calls=" << Function.CallInfos.size() << " registers=";
+          for (auto R : Function.IntegerArgumentRegisters)
+            Shape << R << ",";
+          Shape << " params=";
+          for (const auto &P : Function.Params)
+            Shape << P.Id << ":" << P.RegOff << ":" << P.Size << ",";
+          for (const auto &Call : Function.CallInfos) {
+            Shape << " target=" << Call.TargetAddr
+                  << " ordered=" << Call.ArgumentsInCalleeRegisterOrder
+                  << " arguments=";
+            for (const auto &A : Call.Args)
+              Shape << unsigned(A.Kind) << ":" << A.Id << ":" << A.SSAVer << ":"
+                    << A.RegOff << ":" << A.Size << ",";
+          }
+          for (const auto &B : Function.Blocks)
+            for (const auto &Op : B.Ops)
+              if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL)
+                Shape << " call-inputs=" << unsigned(Op.NumInputs);
+          Shape << "\n";
+        }
+        SCOPED_TRACE(Shape);
+        for (const auto &Function : Result.MedFuncs) {
+          ASSERT_EQ(Function.TypedParams.size(), 1u) << Function.Name;
+          ASSERT_EQ(Function.TypedParams[0].Type->Kind, NdTypeKind::Ptr)
+              << Function.Name;
+          EXPECT_EQ(Function.TypedParams[0].Type->Pointee->SourceName,
+                    "ForwardedObject");
+        }
+        CEmitterOptions COptions;
+        COptions.TheArch = Architecture;
+        COptions.Format = Format;
+        COptions.Image = &Image;
+        COptions.RecordDefinitions = [](const std::vector<TypeRef> &) {
+          CRecordDefinitions Definitions;
+          Definitions.Tags["ForwardedObject"] = false;
+          return Definitions;
+        };
+        std::string Source;
+        llvm::raw_string_ostream Out(Source);
+        if (LLVM) {
+          ASSERT_TRUE(Result.LlvmModule);
+          ASSERT_TRUE(LLVMCEmitter().emit(*Result.LlvmModule, Out, COptions,
+                                          &Debug, &Image));
+        } else {
+          ASSERT_TRUE(
+              HighCEmitter().emit(Result.HighFuncs, Out, COptions, &Debug));
+        }
+        for (const auto *Name :
+             {"pointer_leaf", "pointer_middle", "pointer_outer"})
+          EXPECT_NE(Source.find(std::string(Name) + "(ForwardedObject* arg0)"),
+                    std::string::npos)
+              << Source;
+        EXPECT_EQ(Source.find("unknown value"), std::string::npos) << Source;
+        Source += R"(
+struct ForwardedObject { uint32_t value; };
+void consume_pointer(ForwardedObject *object, uint32_t tag) {
+  object->value += tag;
+}
+int main(void) {
+  ForwardedObject value = {1};
+  if (pointer_outer(&value) != 8 || value.value != 43) return 1;
+  if (pointer_middle(&value) != 7 || value.value != 85) return 2;
+  pointer_leaf(&value);
+  return value.value != 127;
+}
+)";
+        for (const auto *Optimization : {"-O0", "-O2"})
+          source_call_execution_test::compileAndRun(
+              Source, {Optimization, "-fsanitize=undefined",
+                       "-fno-sanitize-recover=all"});
+      }
+}
+
 TEST(NativeSourceHints, BoundCallsRetainTheirPointeeCandidates) {
   for (auto Architecture : {Arch::AArch64, Arch::X64}) {
     NativeFixture Fixture(Architecture);
@@ -10507,7 +10911,10 @@ TEST(NativeSourceHints, AmbiguousValuesAndUnboundCallsDoNotSupplyPointerFacts) {
     } else {
       ASSERT_TRUE(Hint) << Error;
       EXPECT_EQ(Hint->Parameters[0].Type->Kind, NdTypeKind::Int);
-      EXPECT_EQ(Hint->Parameters[1].Type->Kind, NdTypeKind::Int);
+      // A local definition owns the first SSA value without invalidating
+      // the independently observed second entry parameter.
+      EXPECT_EQ(Hint->Parameters[1].Type->Kind,
+                Mutation == 4 ? NdTypeKind::Ptr : NdTypeKind::Int);
     }
   }
 }
@@ -12045,7 +12452,7 @@ TEST(NativeSourceHints,
 
 TEST(NativeSourceHints, RecoveredCallPointerUsesKeepWidthsAndEntryIdentity) {
   for (auto Architecture : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64})
-    for (unsigned Mutation = 0; Mutation != 10; ++Mutation) {
+    for (unsigned Mutation = 0; Mutation != 17; ++Mutation) {
       SCOPED_TRACE(unsigned(Architecture));
       SCOPED_TRACE(Mutation);
       const auto &Registers = getTargetRegInfo(Architecture);
@@ -12147,11 +12554,40 @@ TEST(NativeSourceHints, RecoveredCallPointerUsesKeepWidthsAndEntryIdentity) {
       } else {
         Function.CallInfos.push_back(Info);
       }
+      if (Mutation >= 10) {
+        // A call with no observed argument list may read the entry register.
+        // An independent pointer consumer cannot prove this hidden use safe.
+        auto Unknown = Call;
+        Unknown.Inputs[0].ConstVal = 0x4000;
+        if (Mutation == 11)
+          Unknown.ExactArguments = true;
+        if (Mutation == 12 || Mutation == 13) {
+          auto Signature = std::make_shared<FixedIntegerCallArguments>();
+          if (Mutation == 13)
+            Signature->Parameters.resize(1);
+          Unknown.IntegerCallSignature = Signature;
+        }
+        if (Mutation >= 14) {
+          auto Signature = std::make_shared<FloatingCallArguments>();
+          if (Mutation == 15)
+            Signature->Scalars.resize(1);
+          if (Mutation == 16)
+            Signature->ParameterBytes.push_back(8);
+          Unknown.ScalarCallSignature = Signature;
+        }
+        Block.Ops.push_back(Unknown);
+      }
       const auto Pointers =
           inferMedSourcePointerParameters(Function, Architecture, Parameters);
       ASSERT_EQ(Pointers.size(), 2U);
-      EXPECT_EQ(Pointers[0], Mutation == 0 || Mutation >= 7);
-      EXPECT_EQ(Pointers[1], Mutation != 1 && Mutation != 6);
+      const bool ZeroArguments =
+          Mutation == 11 || Mutation == 12 || Mutation == 14;
+      EXPECT_EQ(Pointers[0], Mutation == 0 ||
+                                 (Mutation >= 7 && Mutation < 10) ||
+                                 ZeroArguments);
+      EXPECT_EQ(Pointers[1],
+                (Mutation < 10 && Mutation != 1 && Mutation != 6) ||
+                    ZeroArguments);
     }
 }
 

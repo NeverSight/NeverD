@@ -1,0 +1,638 @@
+{
+  "schema_version": 1,
+  "date": "2026-10-30",
+  "scope": "AMX addr64 stack-default tile memory across NeverD, native LLVM and NeverC",
+  "global_instruction_goal_complete": false,
+  "artifacts_root": "/mnt/data/neverd-amx-stack-20261030",
+  "sources": [
+    {
+      "repository": "NeverD",
+      "url": "https://github.com/NeverSight/NeverD",
+      "head": "b7c32d5959cc5588e500557b080d9db208ad98db",
+      "modified_source_hashes": [
+        {
+          "path": "docs/architecture.md",
+          "sha256": "f79c3261a4467c9226d03a1d29790dbf56b327de2d1fc94d1ceb3cf72f6a32c4",
+          "bytes": 1371566
+        },
+        {
+          "path": "docs/testing.md",
+          "sha256": "a7787ab8e8caf4400f5adf62f96feda3d53137cd5e19c3110493994015edf982",
+          "bytes": 1446233
+        },
+        {
+          "path": "docs/x86-instruction-support.md",
+          "sha256": "e0b294fde970678dbe166fc406d6322c7e7fee9f71cc2a2fea0115f167da3448",
+          "bytes": 222340
+        },
+        {
+          "path": "include/neverd/backend/llvm/X86/X86AmxAsm.h",
+          "sha256": "197b479fc6f74f87998e06ebea6c0492a490f3784c2d9df919b7c9a248710baf",
+          "bytes": 5615
+        },
+        {
+          "path": "include/neverd/backend/llvm/X86/X86AmxNative.h",
+          "sha256": "4dcd2545545e6286a6ede718b40250fd70a3083ce4020b80e7c8b31c422b77f1",
+          "bytes": 3770
+        },
+        {
+          "path": "include/neverd/backend/llvm/X86/X86AmxStackLeaf.h",
+          "sha256": "da7c4733ce547ba25ee3a07b03f2e3bfe28b530b647d91a0c882abe7fc45346a",
+          "bytes": 1751
+        },
+        {
+          "path": "include/neverd/ir/intrinsics/X86/X86AmxState.h",
+          "sha256": "27c56ba8057225301ca005f7e793ccdab09f042aa7fa2285b7bd7ecdabe8022e",
+          "bytes": 7153
+        },
+        {
+          "path": "lib/backend/c/render/X86/X86AmxState.cpp",
+          "sha256": "548ead61c12d7485adcc59f4d0e68f0ed70aac88b794d4e09ccb8ed369f0eef3",
+          "bytes": 17423
+        },
+        {
+          "path": "lib/backend/c/render/X86/X86NativeFeatures.cpp",
+          "sha256": "9bc972ec997b65518a37f9add37545d886a212a83120401aa37219158b925a02",
+          "bytes": 10345
+        },
+        {
+          "path": "lib/backend/llvm/X86/MedLLVMX86AmxState.cpp",
+          "sha256": "728c960ae61b8a33557ac4b261c21b0fe5c308144facaa2f5de1d4ba813de161",
+          "bytes": 6480
+        },
+        {
+          "path": "lib/lift/X86/X86LiftAMX.cpp",
+          "sha256": "97ff7ef4089445d0e0cd3f6139505b69cc637a7f859d75f3d4aba3dd1226ed60",
+          "bytes": 8985
+        },
+        {
+          "path": "scripts/verify_x86_amx_addresses.py",
+          "sha256": "30585a1a22445232585d4e642edfdb3ba03aba54962448d68d3911ef78ba3d8c",
+          "bytes": 14866
+        },
+        {
+          "path": "unittests/lift/x86_64/X86AMXAddressTests.cpp",
+          "sha256": "1f4fb55d1d91ba63e443f1b136c8b1ebe5e5e8d2e1ffaf9bb2dc1d2f40c17b94",
+          "bytes": 22205
+        }
+      ]
+    },
+    {
+      "repository": "LLVM",
+      "url": "https://github.com/NeverSight/llvm-project",
+      "head": "7295a59b0723a8b7e1821f984d25bd312dba4c30",
+      "modified_source_hashes": [
+        {
+          "path": "llvm/docs/X86AMXNativeControls.rst",
+          "sha256": "e6b3baeca7d49c3f0c1cf05b0d6238183cf37c6aa71521687c126e09efbd000d",
+          "bytes": 5195
+        },
+        {
+          "path": "llvm/include/llvm/IR/X86AMXNative.h",
+          "sha256": "ed5aada3307784ccc3f1da91a32b7e3c1cb8ce135a2ca8f69da21901586acd7f",
+          "bytes": 1106
+        },
+        {
+          "path": "llvm/include/llvm/IR/X86NativeMemoryAddress.h",
+          "sha256": "6d90dfdca69ef897da5b68dbf326d7e1c95feecdd80171393030a587a5094e41",
+          "bytes": 2163
+        },
+        {
+          "path": "llvm/lib/Target/X86/X86AMXStackMemory.h",
+          "sha256": "fa26b86f2783c5d43fe41e262c0de806d12039a0f5d79ed80f4159f1520fc87e",
+          "bytes": 2434
+        },
+        {
+          "path": "llvm/lib/Target/X86/X86ISelDAGToDAG.cpp",
+          "sha256": "57df247ccc3e2c9c1b892770eae798a5ee23c83cc2f89d51bd06ad3c971d1d2c",
+          "bytes": 263085
+        },
+        {
+          "path": "llvm/lib/Target/X86/X86ISelLowering.cpp",
+          "sha256": "b518a9bbd98e1ab444f72fa6bbaf3daa6f33a8c03387a6d286d1f332b7bc66c4",
+          "bytes": 2761372
+        },
+        {
+          "path": "llvm/lib/Target/X86/X86LowerAMXType.cpp",
+          "sha256": "2c8f4a1579ea3077b9d03fcbb2409caaf25f53372b601ad57dd1d20ac5645e9f",
+          "bytes": 51936
+        },
+        {
+          "path": "llvm/test/CodeGen/X86/AMX/amx-stack-memory.ll",
+          "sha256": "007d339e7d6c1893f9722ef4957e837b0da4d157ad87aa30806ac334fa8d38d0",
+          "bytes": 5224
+        },
+        {
+          "path": "llvm/test/CodeGen/X86/native-memory-stack-address.ll",
+          "sha256": "e72ef7c6a5a4d8162c2bc5936f747f45f516362bd26dc306a124e01ae33ddb20",
+          "bytes": 7569
+        }
+      ]
+    },
+    {
+      "repository": "NeverC",
+      "url": "https://github.com/NeverSight/NeverC",
+      "head": "19d1576f9e8b438a6f6120e06066f0a965ff00ab",
+      "modified_source_hashes": [
+        {
+          "path": "development.md",
+          "sha256": "216daa6013d84f4b743248214c73a73094136b61659affbd459e4c83f83b4e7a",
+          "bytes": 132744
+        },
+        {
+          "path": "llvm/include/llvm/IR/X86AMXNative.h",
+          "sha256": "ed5aada3307784ccc3f1da91a32b7e3c1cb8ce135a2ca8f69da21901586acd7f",
+          "bytes": 1106
+        },
+        {
+          "path": "llvm/include/llvm/IR/X86NativeMemoryAddress.h",
+          "sha256": "6d90dfdca69ef897da5b68dbf326d7e1c95feecdd80171393030a587a5094e41",
+          "bytes": 2163
+        },
+        {
+          "path": "llvm/lib/Target/X86/X86AMXStackMemory.h",
+          "sha256": "fa26b86f2783c5d43fe41e262c0de806d12039a0f5d79ed80f4159f1520fc87e",
+          "bytes": 2434
+        },
+        {
+          "path": "llvm/lib/Target/X86/X86ISelDAGToDAG.cpp",
+          "sha256": "f51827e00c082e6c12e81de044816c1c88168a20b5d89802892a77c28634dcf3",
+          "bytes": 246099
+        },
+        {
+          "path": "llvm/lib/Target/X86/X86ISelLowering.cpp",
+          "sha256": "7d3c2087f9f0766831b5d205e18d586ec4877b321d856df8798d903d36f6d343",
+          "bytes": 2378520
+        },
+        {
+          "path": "llvm/lib/Target/X86/X86LowerAMXType.cpp",
+          "sha256": "afb92df87377b2e6c175fd0e80265682fd19bb899f2e5f6763bd8b798d2723a5",
+          "bytes": 49660
+        },
+        {
+          "path": "neverc/lib/Analyze/Checking/SemaCheckingTargetX86.cpp",
+          "sha256": "94770937b22bd074bf50fa670ce0bb8f8c3a703c3c940dc11c579ceecd81f501",
+          "bytes": 50951
+        },
+        {
+          "path": "neverc/lib/Emit/Core/ModuleEmitter.cpp",
+          "sha256": "30ed172e4ede2c40454a0915ecbe8d2f54204236f4aba4153c482fa319d62498",
+          "bytes": 159080
+        },
+        {
+          "path": "neverc/lib/Emit/Core/ModuleEmitter.h",
+          "sha256": "ea2ba84152702ddecea5a75494a3be6451767ba394411635561c4c6d3b3e2a54",
+          "bytes": 22572
+        },
+        {
+          "path": "neverc/lib/Foundation/Target/X86.cpp",
+          "sha256": "5458917a928962f87e805800be882b7eac64313e8dd6aae7dc37d466677ea770",
+          "bytes": 51670
+        },
+        {
+          "path": "tests/neverc/X86/NativeAddressTests.cpp",
+          "sha256": "a7be225a2b4e1101c0f3fa1afe9d96c1f0972277cf4c1a1dfe6274d035ba748d",
+          "bytes": 13275
+        },
+        {
+          "path": "tests/verify-amx-explicit-controls.py",
+          "sha256": "5202ef4a825784f77021f88acd8815a6659badf6168ba0dcd99b6a616f7a65b1",
+          "bytes": 26187
+        },
+        {
+          "path": "tests/verify-amx-stack-unwind.py",
+          "sha256": "258473081a7e3fa45a45435e592070d5342540f881b0666994d478ebf9abec3d",
+          "bytes": 6423
+        }
+      ]
+    }
+  ],
+  "tools": [
+    {
+      "name": "NeverC",
+      "path": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc",
+      "sha256": "69af5c3c83e924442420fa88d6b9e1e0304627dbb5e69a2b1a498ccd725d1ba0",
+      "bytes": 123498656
+    },
+    {
+      "name": "LLVM llc",
+      "path": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc",
+      "sha256": "af9b0a27e3ea384ea30efda6d05d072b390050a85a4b335241155e9329b500f6",
+      "bytes": 105912368
+    },
+    {
+      "name": "Clang",
+      "path": "/home/ad/.local/bin/clang",
+      "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+      "bytes": 136112
+    }
+  ],
+  "implementation": {
+    "instructions": [
+      "TILELOADD",
+      "TILELOADDT1",
+      "TILELOADDRS",
+      "TILELOADDRST1",
+      "TILESTORED"
+    ],
+    "native_capabilities": [
+      "LLVM_X86_AMX_STACK_MEMORY=1",
+      "__NEVERC_X86_AMX_STACK_MEMORY__=1"
+    ],
+    "frame": "Internal preserve_allcc leaf; BP is the complete base, CX is the full stride; RSP-based unwind state; native helper return preserves MPX bounds.",
+    "older_sdk": "Authentic internal assembly leaf with frame/body validation before and after constant-argument IPO specialization.",
+    "c_routes": "HighC and LLVMC require the native stack-memory capability; unsupported C compilers fail explicitly.",
+    "target_attributes": "NeverC refreshes CPU/tuning/features from the defining declaration before emitting a body after an earlier prototype use."
+  },
+  "regressions": [
+    {
+      "target": "neverc-unit-final",
+      "tests": 95,
+      "failures": 0,
+      "skipped": [],
+      "report": {
+        "artifact": "neverc-unit-final.xml",
+        "sha256": "db9eb50c0c933dbe73f4857c614d6364b1851cbae122b8b89d9ed20a565c0a5a",
+        "bytes": 29125
+      },
+      "log": {
+        "artifact": "neverc-unit-final.log",
+        "sha256": "5f644a683988ef9b7ef3fdc2f9df145d5b21e60b4458e2746c5dac3f3f8fb6e1",
+        "bytes": 15875
+      }
+    },
+    {
+      "target": "NeverDX86AMXAddressTests-final",
+      "tests": 7,
+      "failures": 0,
+      "skipped": [],
+      "report": {
+        "artifact": "NeverDX86AMXAddressTests-final.xml",
+        "sha256": "b524079cd69d1f4afc3b88fa51dd56ae7a7ee1d6598c7af3726675bfdd849def",
+        "bytes": 2420
+      },
+      "log": {
+        "artifact": "NeverDX86AMXAddressTests-final.log",
+        "sha256": "beacf5f7a9ee82677c9d537e299d0cafbd786540c0419e30177d349f3ad63a32",
+        "bytes": 1496
+      }
+    },
+    {
+      "target": "NeverDX86AMXStateTests-final",
+      "tests": 17,
+      "failures": 0,
+      "skipped": [],
+      "report": {
+        "artifact": "NeverDX86AMXStateTests-final.xml",
+        "sha256": "eb3c1715b38b5617435f592e773de3f17145d6be9e3ef62cad4ae9a02321b8cb",
+        "bytes": 5415
+      },
+      "log": {
+        "artifact": "NeverDX86AMXStateTests-final.log",
+        "sha256": "1ab605be5bc1173c37739bf7ac57d91a5c32a761799f0553bd12acbd3c01b0f6",
+        "bytes": 3073
+      }
+    },
+    {
+      "target": "NeverDX86AMXLLVMGuardTests-final",
+      "tests": 3,
+      "failures": 0,
+      "skipped": [],
+      "report": {
+        "artifact": "NeverDX86AMXLLVMGuardTests-final.xml",
+        "sha256": "8b61292e6c19f67aad7d7fec4dadaefe84ca434a4c2770d35a9ebdfafe24985c",
+        "bytes": 1243
+      },
+      "log": {
+        "artifact": "NeverDX86AMXLLVMGuardTests-final.log",
+        "sha256": "bb650b6882c98a3ceb0d3d8f61f0535a8c4bf3d71edd6fb3d91db9f9a49f4f49",
+        "bytes": 1904
+      }
+    },
+    {
+      "target": "NeverDX86VirtualizationSourceTests-final",
+      "tests": 157,
+      "failures": 0,
+      "skipped": [
+        {
+          "name": "NativeContractsRejectLostEffectsAndControls",
+          "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:5269\nlinked SDK predates explicit AMX controls\n"
+        },
+        {
+          "name": "NativeTileRowsAndFaultContinuationMatchOriginalBytes",
+          "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:5588\nHost does not provide AMX-TILE; native restart unqualified\n"
+        }
+      ],
+      "report": {
+        "artifact": "NeverDX86VirtualizationSourceTests-final.xml",
+        "sha256": "e5d9f5c63bfd3d4fbedc9989264527abda327bb3ccd42b54044e9564e0eab43e",
+        "bytes": 57217
+      },
+      "log": {
+        "artifact": "NeverDX86VirtualizationSourceTests-final.log",
+        "sha256": "9a081d34d367ea1ef6ae0eb73c403661ddef891754d5216994e06063d15627a5",
+        "bytes": 34468
+      }
+    }
+  ],
+  "llvm_lit": {
+    "tests": 43,
+    "failures": 0,
+    "skipped": 0,
+    "log": {
+      "artifact": "llvm-amx-all.log",
+      "sha256": "7efea4cbb86426d2ff47fbf42a6ce9282aa75c864414a59388591ae499234f77",
+      "bytes": 18632
+    }
+  },
+  "compiler_matrices": [
+    {
+      "route": "neverc",
+      "stack_checks": 3000,
+      "baseline_checks": 11136,
+      "stack_log": {
+        "artifact": "neverc-stack-final.log",
+        "sha256": "1a6e30065d09f46ffbcbf12815e435c6baa8e32fcfeea5385c69ac882578993a",
+        "bytes": 81
+      },
+      "baseline_log": {
+        "artifact": "neverc-baseline-final.log",
+        "sha256": "c34d4617471ea005d0b0f2888c4f5fab0c8ba54a1ed770c57d2c60627ea0d820",
+        "bytes": 86
+      }
+    },
+    {
+      "route": "llvm",
+      "stack_checks": 3000,
+      "baseline_checks": 11136,
+      "stack_log": {
+        "artifact": "llvm-stack-final.log",
+        "sha256": "1a6e30065d09f46ffbcbf12815e435c6baa8e32fcfeea5385c69ac882578993a",
+        "bytes": 81
+      },
+      "baseline_log": {
+        "artifact": "llvm-baseline-final.log",
+        "sha256": "c34d4617471ea005d0b0f2888c4f5fab0c8ba54a1ed770c57d2c60627ea0d820",
+        "bytes": 86
+      }
+    },
+    {
+      "route": "bridge",
+      "stack_checks": 3000,
+      "baseline_checks": 11136,
+      "stack_log": {
+        "artifact": "bridge-stack-final.log",
+        "sha256": "1a6e30065d09f46ffbcbf12815e435c6baa8e32fcfeea5385c69ac882578993a",
+        "bytes": 81
+      },
+      "baseline_log": {
+        "artifact": "bridge-baseline-final.log",
+        "sha256": "c34d4617471ea005d0b0f2888c4f5fab0c8ba54a1ed770c57d2c60627ea0d820",
+        "bytes": 86
+      }
+    }
+  ],
+  "native_instrumented_unwind": {
+    "total_calls": 4500,
+    "total_traps": 4500,
+    "unwind_errors": 0,
+    "method": "Only independently decoded AMX slots replaced with UD2/NOP; actual CPU prologues, signal delivery, DWARF unwind and epilogues execute.",
+    "logs": [
+      {
+        "artifact": "neverc-unwind-final.log",
+        "sha256": "566c4bd0f5130c15e0ab7eb3bdc9316971d21722160b644ffc323399cf95afb9",
+        "bytes": 187
+      },
+      {
+        "artifact": "bridge-unwind-final.log",
+        "sha256": "566c4bd0f5130c15e0ab7eb3bdc9316971d21722160b644ffc323399cf95afb9",
+        "bytes": 187
+      }
+    ]
+  },
+  "source_matrix": {
+    "objects": 3552,
+    "controlled_completions": 42624,
+    "complete_modules": 120,
+    "module_controlled_completions": 120,
+    "formats": [
+      "ELF",
+      "COFF",
+      "Mach-O"
+    ],
+    "optimizations": [
+      "O0",
+      "O2"
+    ],
+    "log": {
+      "artifact": "source-qualification-final.log",
+      "sha256": "cd9f8cdfd50f8a40c4e15eba75771fc3c1a7f5dfad6f330d497db410b73e630b",
+      "bytes": 104
+    },
+    "report": {
+      "artifact": "source-qualification-final/qualification.json",
+      "sha256": "8c36779b16459d0c8f4cad849975794721db10e541c4780faf47e43a479a736b",
+      "bytes": 297363
+    },
+    "module_report": {
+      "artifact": "source-qualification-final/modules.json",
+      "sha256": "71ae160c3a91f024f4e88b2c8c4e353a8a43b2e9f7360c5b3122c0718040556e",
+      "bytes": 9603
+    }
+  },
+  "unsupported_c_compilers": {
+    "rejected_modules": 5,
+    "report": {
+      "artifact": "unsupported-c-compiler.json",
+      "sha256": "150ac9ecc581f63d01baf6252bc0c0b8615fa918be4b7f1d2506818d887b98e0",
+      "bytes": 4826
+    }
+  },
+  "documentation_checks": [
+    {
+      "artifact": "docs-i18n-final.log",
+      "sha256": "891c1f2a9e40d3952b23e9e79b35ac05e77427ad91de98357bc3829b3ed7ab14",
+      "bytes": 69
+    },
+    {
+      "artifact": "capabilities-final.log",
+      "sha256": "6493fc3b0c4ef5fe525cdffaaa35a0f7992a0384e9a759e0269be79943fed414",
+      "bytes": 43
+    }
+  ],
+  "commands": {
+    "artifact": "final-commands.json",
+    "sha256": "1a6a7bc2640f44df53a831cc3379d6f6f8c358c932b0c58473b850b875fa4c80",
+    "bytes": 9819
+  },
+  "driver": {
+    "artifact": "run-final.py",
+    "sha256": "7483718b6fd665d925c7490cacb52b80d736641d267d002e906c1ba4be818dda",
+    "bytes": 3239
+  },
+  "builds": [
+    {
+      "artifact": "llvm-build-final.log",
+      "sha256": "4d9c86fef381b30ed4c0d17e4644ca06c24c94b28fd07fc6e5053f0027ec5394",
+      "bytes": 465
+    },
+    {
+      "artifact": "neverc-target-build.log",
+      "sha256": "d2d5f4e5b72351f879e8d3a1903f559d7601484384f92c534b17b1d413ccbecb",
+      "bytes": 928413
+    },
+    {
+      "artifact": "neverc-nvk-bootstrap.log",
+      "sha256": "efed41d9f6587cf172277b9880d07b15d4f7b697ae3a051e9fd23721c7a1a0a9",
+      "bytes": 923188
+    },
+    {
+      "artifact": "neverc-nvk-relink.log",
+      "sha256": "2c2e5ced226e527032ec4b1a3e891972c5fceb48c852c863a2b09c7349ac816d",
+      "bytes": 925040
+    },
+    {
+      "artifact": "neverd-build-publish.log",
+      "sha256": "40aab4f797eec8d3f58e39dcc090cb6849ca3f5c30c115b50cc314a335194616",
+      "bytes": 3417
+    }
+  ],
+  "neverd_build_receipt": {
+    "artifact": "neverd-build-receipt.json",
+    "sha256": "6048cd7c92ece8783410aec2c6e937fff4f6a0cf999cdcf5e2fb526e144a6c77",
+    "bytes": 3591
+  },
+  "neverd_dependency_inputs": {
+    "artifact": "neverd-dependency-inputs.json",
+    "sha256": "0d185e80e033e56c739f8efa6c9652c56f7005bd399558403138262879bfc48c",
+    "bytes": 524
+  },
+  "discovered_failures": [
+    {
+      "cause": "NeverC accepts LLVM bitcode input, not textual .ll input.",
+      "log": {
+        "artifact": "whole-modules.log",
+        "sha256": "5ce2267035fa5dfbf5f8bd2a014aa635fa5e6561cdc18febc862b06b87df6569",
+        "bytes": 973
+      }
+    },
+    {
+      "cause": "Earlier source use materialized a baseline LLVM function and the definition failed to refresh target features.",
+      "log": {
+        "artifact": "whole-modules-bitcode.log",
+        "sha256": "198d85f97e9e249b1dfb1a42dbfebb2638946ea15bf2d42018fe633b0f008e3f",
+        "bytes": 898
+      },
+      "ir": {
+        "artifact": "whole-module-before.ll",
+        "sha256": "9c9923684751988e4826c98d68cdcaf0f5e5b6dfcd1c2bd4ed418001f41ae2d2",
+        "bytes": 1400
+      }
+    },
+    {
+      "cause": "Broadened Android runtime test needed NVK embedded bitcode absent from stage-1; bootstrap and relink repaired the fixture dependency.",
+      "log": {
+        "artifact": "stage1-neverc-unit-final.log",
+        "sha256": "f7cb14fd3a021faa14ce68895ddfc945faf14679092fc24d5c4edbf2ea9a1867",
+        "bytes": 21962
+      },
+      "placeholder": {
+        "artifact": "nvk-stage1-placeholder.h",
+        "sha256": "5ddcf4e561d346623550dd033b8c68b8d69780d6c728b629d1a1c15b05838e42",
+        "bytes": 291
+      }
+    }
+  ],
+  "qualification_limits": [
+    "Local processor has no AMX; controlled completions and instrumented traps do not qualify physical tile arithmetic, partial tile faults or native restart.",
+    "NeverD linked SDK r6 predates native AMX controls; its native-contract test skips explicitly. Native compiler controls are independently qualified by LLVM and NeverC tests.",
+    "Old SDK fallback leaf and full module transport are qualified; a new SDK release and native-linked NeverD rebuild remain deferred.",
+    "The compiler introduces a host call and saved-register frame; this does not establish arbitrary guest/host stack alias equivalence.",
+    "NeverC stage-1 plus NVK bootstrap and focused cross-target tests are qualified, not every product/stage-2 runtime test.",
+    "MPX state integration, other context/continuation families and global x86 completion remain open."
+  ],
+  "release_and_pins_changed": false,
+  "regression_test_count": 322,
+  "regression_skipped_count": 2,
+  "integration": {
+    "head": "11ac8b19e2d8ee34745fdc4c80fd2e316b7c6ffe",
+    "preserved_semantic_sources": [
+      "include/neverd/backend/llvm/X86/X86AmxAsm.h",
+      "include/neverd/backend/llvm/X86/X86AmxNative.h",
+      "include/neverd/backend/llvm/X86/X86AmxStackLeaf.h",
+      "include/neverd/ir/intrinsics/X86/X86AmxState.h",
+      "lib/backend/c/render/X86/X86AmxState.cpp",
+      "lib/backend/c/render/X86/X86NativeFeatures.cpp",
+      "lib/backend/llvm/X86/MedLLVMX86AmxState.cpp",
+      "lib/lift/X86/X86LiftAMX.cpp",
+      "scripts/verify_x86_amx_addresses.py",
+      "unittests/lift/x86_64/X86AMXAddressTests.cpp"
+    ],
+    "commands": [
+      {
+        "command": [
+          "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86/bin/NeverDX86AMXAddressTests",
+          "--gtest_output=xml:/mnt/data/neverd-amx-stack-20261030/NeverDX86AMXAddressTests-integrated.xml"
+        ],
+        "returncode": 0,
+        "log": "NeverDX86AMXAddressTests-integrated.log",
+        "sha256": "b438e945af7370ba821a172fc0254075b45c1549cfc679de1563accb140eef50"
+      },
+      {
+        "command": [
+          "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86/bin/NeverDX86AMXStateTests",
+          "--gtest_output=xml:/mnt/data/neverd-amx-stack-20261030/NeverDX86AMXStateTests-integrated.xml"
+        ],
+        "returncode": 0,
+        "log": "NeverDX86AMXStateTests-integrated.log",
+        "sha256": "fbb3f934b4a5ee5e60151ff57b97ed95172d52ce3ea4adfa328ae39d29a3bf49"
+      },
+      {
+        "command": [
+          "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86/bin/NeverDX86AMXLLVMGuardTests",
+          "--gtest_output=xml:/mnt/data/neverd-amx-stack-20261030/NeverDX86AMXLLVMGuardTests-integrated.xml"
+        ],
+        "returncode": 0,
+        "log": "NeverDX86AMXLLVMGuardTests-integrated.log",
+        "sha256": "819dea001b884261790e044c9f1fc02b3efdf35285337f5eb8e70bd96e3ffc1b"
+      },
+      {
+        "command": [
+          "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86/bin/NeverDX86VirtualizationSourceTests",
+          "--gtest_output=xml:/mnt/data/neverd-amx-stack-20261030/NeverDX86VirtualizationSourceTests-integrated.xml",
+          "--gtest_filter=X86AmxSource.*:AmxEncodings/*:X86SgxSource.NeverCCompilesNativeCompletionAndCombinedAmxFeatures"
+        ],
+        "returncode": 0,
+        "log": "NeverDX86VirtualizationSourceTests-integrated.log",
+        "sha256": "5329a0831a67cb8a3308d516499a455337fe8895d8b61e3954f1aef4688bbac7"
+      },
+      {
+        "command": [
+          "python3",
+          "scripts/check_docs_i18n.py"
+        ],
+        "returncode": 0,
+        "log": "check_docs_i18n.py-integrated.log",
+        "sha256": "891c1f2a9e40d3952b23e9e79b35ac05e77427ad91de98357bc3829b3ed7ab14"
+      },
+      {
+        "command": [
+          "python3",
+          "scripts/check_capabilities.py"
+        ],
+        "returncode": 0,
+        "log": "check_capabilities.py-integrated.log",
+        "sha256": "6493fc3b0c4ef5fe525cdffaaa35a0f7992a0384e9a759e0269be79943fed414"
+      }
+    ],
+    "build_log": "neverd-build-integrated.log",
+    "build_log_sha256": "464aaf002ddc2162f7ad3995f9a0c3642eb38741c9f92150ace49d3b57e297f6",
+    "build_receipt": "neverd-build-receipt-integrated.json",
+    "build_receipt_sha256": "88738cf94fc2212926c687999032bbbbcf531faad26006f0f8f7b35ba5426545",
+    "capability_manifest_repair": {
+      "head": "9fec1d38a8dfbac748f9168c56bd49ecfb34d4fd",
+      "cause": "Merged dev change added --argument-access-call without the public-surface ledger entry; added it to the existing binary-diff owner.",
+      "initial_log": "check_capabilities.py-integrated-before.log"
+    }
+  }
+}

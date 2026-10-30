@@ -215,6 +215,11 @@ std::string HighCWriter::renderBinOp(const HighExpr &E, int ParentPrec) {
 
 std::string HighCWriter::renderBinOpOperands(const HighExpr &E,
                                              int ParentPrec) {
+  if (E.Op == NdOp::BOOL_XOR)
+    return typedText(E,
+                     "((" + exprStr(*E.Operands[0]) + " != 0) != (" +
+                         exprStr(*E.Operands[1]) + " != 0))",
+                     sizeof(int32_t), true);
   if ((E.Op == NdOp::INT_AND || E.Op == NdOp::INT_OR) && E.Type &&
       E.Type->Kind == NdTypeKind::Int && !E.Type->IsEnum &&
       (E.Type->Size == 1 || E.Type->Size == 2 || E.Type->Size == 4 ||

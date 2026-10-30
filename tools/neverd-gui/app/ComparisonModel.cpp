@@ -122,6 +122,11 @@ int ComparisonModel::columnCount(const QModelIndex &Parent) const {
 }
 QVariant ComparisonModel::headerData(int Section, Qt::Orientation Direction,
                                      int Role) const {
+  if (Direction == Qt::Horizontal && Type == Kind::FlowAccesses &&
+      Section == 4 && Role == Qt::ToolTipRole)
+    return tr("A same-width COPY/PHI path to a RETURN operand. That operand "
+              "may be a control target; this does not establish an ABI return "
+              "value or execution order.");
   if (Role != Qt::DisplayRole || Direction != Qt::Horizontal)
     return {};
   if (Type == Kind::Candidates)
@@ -189,6 +194,10 @@ QVariant ComparisonModel::headerData(int Section, Qt::Orientation Direction,
                        tr("Primary operation"), tr("Secondary node"),
                        tr("Secondary origin"),  tr("Secondary operation")}
         .value(Section);
+  if (Type == Kind::FlowAccesses)
+    return QStringList{tr("Argument"), tr("Original address"), tr("Access"),
+                       tr("Width"),    tr("RETURN input"),     tr("Gaps")}
+        .value(Section);
   if (Type == Kind::FlowNodes || Type == Kind::FlowSlice)
     return QStringList{tr("Node"),  tr("Original address"), tr("Operation"),
                        tr("Width"), tr("Inputs"),           tr("Gaps")}
@@ -253,7 +262,8 @@ QVariant ComparisonModel::data(const QModelIndex &Index, int Role) const {
               QJsonDocument(R).toJson(QJsonDocument::Indented)));
     if (Type == Kind::FlowFunctions)
       return R["reason"].toString();
-    if ((Type == Kind::FlowNodes || Type == Kind::FlowSlice) &&
+    if ((Type == Kind::FlowNodes || Type == Kind::FlowSlice ||
+         Type == Kind::FlowAccesses) &&
         R.contains("origins"))
       return (parameterViewsText(R).isEmpty()
                   ? QString()
@@ -268,7 +278,8 @@ QVariant ComparisonModel::data(const QModelIndex &Index, int Role) const {
                                                    : originAddresses(R))
                  .arg(QString::fromUtf8(
                      QJsonDocument(R).toJson(QJsonDocument::Indented)));
-    if (Type == Kind::FlowNodes || Type == Kind::FlowSlice)
+    if (Type == Kind::FlowNodes || Type == Kind::FlowSlice ||
+        Type == Kind::FlowAccesses)
       return tr("Block %1 · Original operation %2\n%3")
           .arg(R["block"].toInt())
           .arg(R["origin_sequence"].toInt(-1))
@@ -443,18 +454,27 @@ QVariant ComparisonModel::data(const QModelIndex &Index, int Role) const {
       return tr("Observed SSA");
     }
   }
-  if (Type == Kind::FlowNodes || Type == Kind::FlowSlice) {
+  if (Type == Kind::FlowNodes || Type == Kind::FlowSlice ||
+      Type == Kind::FlowAccesses) {
     switch (Index.column()) {
     case 0:
-      return R["id"].toInt();
+      return Type == Kind::FlowAccesses ? R["argument"].toInt() + 1
+                                        : R["id"].toInt();
     case 1:
       return originAddresses(R).isEmpty() ? tr("Synthetic")
                                           : originAddresses(R);
     case 2:
+      if (Type == Kind::FlowAccesses)
+        return R["access"] == QJsonValue("write") ? tr("Write") : tr("Read");
       return R["opcode"].toString();
     case 3:
-      return tr("%1 B").arg(R["result_bytes"].toInt());
+      return tr("%1 B").arg(
+          R[Type == Kind::FlowAccesses ? "access_bytes" : "result_bytes"]
+              .toInt());
     case 4: {
+      if (Type == Kind::FlowAccesses)
+        return R["return_operand_path"].toBool() ? tr("COPY / PHI path")
+                                                 : tr("Not observed");
       QStringList Inputs;
       const auto Values = R["inputs"].toArray();
       const auto ArgumentBegin = R["call_argument_begin"].toInt(-1);
@@ -714,6 +734,7 @@ void ComparisonModel::fetch(int Page) const {
       return;
     auto Request = Self->Query;
     if (Self->Type == Kind::Instructions || Self->Type == Kind::FlowSlice ||
+        Self->Type == Kind::FlowAccesses ||
         Self->Type == Kind::ImpactFunctions ||
         Self->Type == Kind::ImpactSites || Self->Type == Kind::Changes)
       Self->Query.remove("refresh");
@@ -728,7 +749,8 @@ void ComparisonModel::fetch(int Page) const {
                 Self->Type == Kind::FlowRegionAnchors ||
                 Self->Type == Kind::FlowRegionNodes
             ? "comparison_flow_regions"
-        : Self->Type == Kind::FlowFunctions || Self->Type == Kind::FlowNodes
+        : Self->Type == Kind::FlowFunctions || Self->Type == Kind::FlowNodes ||
+                Self->Type == Kind::FlowAccesses
             ? "comparison_dataflow"
         : Self->Type == Kind::FlowSlice ? "comparison_slice"
         : Self->Type == Kind::Functions || Self->Type == Kind::Candidates
@@ -758,6 +780,7 @@ void ComparisonModel::fetch(int Page) const {
                              Self->Type == Kind::FlowFunctions ||
                              Self->Type == Kind::FlowNodes ||
                              Self->Type == Kind::FlowSlice ||
+                             Self->Type == Kind::FlowAccesses ||
                              Self->Type == Kind::FlowRegionNodes ||
                              Self->Type == Kind::ImpactFunctions ||
                              Self->Type == Kind::ImpactSites ||

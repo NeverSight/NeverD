@@ -61,6 +61,7 @@
 #include "neverd/loader/MachO/DarwinRuntimeCalls.h"
 #include "neverd/loader/StringLiteralSymbols.h"
 #include "neverd/loader/SymbolDecoration.h"
+#include "neverd/loader/X86/X64DispatchFrame.h"
 #include "neverd/support/Parallel.h"
 
 #include "llvm/ADT/APFloat.h"
@@ -1766,7 +1767,9 @@ void HighCWriter::writeIncludes(const std::vector<HighFunc> &Funcs) {
   // supplies the headers. Collect dependencies before the header-only exit.
   std::set<std::string> CallTargets;
   for (const auto &Function : Funcs)
-    collectCallTargets(Function.Body, CallTargets);
+    if (!Opts.Image || Function.SourceTypeHint ||
+        !x64DispatchFrame(*Opts.Image, Function.Entry))
+      collectCallTargets(Function.Body, CallTargets);
   // Every spelling of a 16-byte integer, in types and in the intrinsics'
   // casts alike, takes the C23 type a 32-bit target has.
   auto WriteInt128Spelling = [&] {
@@ -1938,6 +1941,11 @@ void HighCWriter::writeIncludes(const std::vector<HighFunc> &Funcs) {
 }
 
 void HighCWriter::writeForwardDecls(const std::vector<HighFunc> &Funcs) {
+  const auto NativeFrameConvention = [&](const HighFunc &Function) {
+    if (Opts.Image && !Function.SourceTypeHint &&
+        x64DispatchFrame(*Opts.Image, Function.Entry))
+      OS << "__attribute__((ms_abi)) ";
+  };
   if (NeedsDarwinStackGuard)
     OS << "extern long __stack_chk_guard[8];\n";
   if (NeedsDarwinStackFailure)
@@ -1956,7 +1964,10 @@ void HighCWriter::writeForwardDecls(const std::vector<HighFunc> &Funcs) {
   // An analysis-only function prints as ordinary C too, so its callees need
   // the same headers and prototypes.
   for (auto &F : Funcs)
-    collectCallTargets(F.Body, CallTargets);
+    // A physical dispatch transfer has no ordinary C call signature.
+    if (!Opts.Image || F.SourceTypeHint ||
+        !x64DispatchFrame(*Opts.Image, F.Entry))
+      collectCallTargets(F.Body, CallTargets);
   // How many bytes of each callee's result the code reads: a call a
   // statement assigns, its destination's; a call inside an expression, its
   // own type's, or all of it.  A function whose address the code only takes
@@ -2111,6 +2122,7 @@ void HighCWriter::writeForwardDecls(const std::vector<HighFunc> &Funcs) {
     if (typeToC(ReturnType) != typeToC(Signature->ReturnType) ||
         Convention != Signature->Convention)
       ConflictingSourceNativeSignatures.insert(Name);
+    NativeFrameConvention(Function);
     OS << sourceConventionAttribute(Convention);
     if (Function.DoesNotReturn)
       OS << "_Noreturn ";
@@ -2155,6 +2167,7 @@ void HighCWriter::writeForwardDecls(const std::vector<HighFunc> &Funcs) {
       Declarator += ", ...";
     if (ParamCount == 0)
       Declarator += "void";
+    NativeFrameConvention(*Function);
     if (Function->SourceTypeHint)
       OS << sourceConventionAttribute(Function->SourceTypeHint->Convention);
     OS << declaredAs(ReturnType, Declarator + ")") << ";\n";
@@ -2176,6 +2189,7 @@ void HighCWriter::writeForwardDecls(const std::vector<HighFunc> &Funcs) {
     Analysis = {};
     runAnalysisPasses(*Function);
     const auto ReturnType = InferredVoid ? NdType::makeVoid() : FuncReturnType;
+    NativeFrameConvention(*Function);
     if (Function->SourceTypeHint)
       OS << sourceConventionAttribute(Function->SourceTypeHint->Convention);
     if (Function->DoesNotReturn)
@@ -5187,7 +5201,8 @@ bool HighCEmitter::emit(const std::vector<HighFunc> &Funcs,
     if (isPortableX87Intrinsic(Expr->IntrinsicId) && !Portable)
       throw std::invalid_argument(
           "portable x87 helpers require a prepared emission entry");
-    if (Expr->IntrinsicId == Intrinsic::RawEnvironmentRequirementV1)
+    if (Expr->IntrinsicId == Intrinsic::RawEnvironmentRequirementV1 ||
+        Expr->IntrinsicId == Intrinsic::ArchitecturalValueV1)
       throw std::invalid_argument(
           "raw environment requirement has no C runtime contract");
     Expr->forEachChildExpr(CheckRequirement);

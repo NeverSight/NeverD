@@ -225,6 +225,14 @@ struct SpecializationEntryObject {
   int64_t End = 0;
 };
 
+enum class SpecializationUndefinedModel : uint8_t {
+  SelectedLowIR,
+  /// Checked raw x64 regions only. Complete scalar sidecars supply independent
+  /// architectural bit productions before control proofs. The residual keeps
+  /// those productions; ordinary source and native-proof APIs refuse them.
+  FreshScalarV1,
+};
+
 struct SpecializationOptions {
   /// Preserve incoming machine flags as symbolic machine-state inputs rather
   /// than claiming they are supplied by an ordinary source-language ABI.
@@ -311,6 +319,8 @@ struct SpecializationOptions {
   /// implies this CPL/IOPL/flags contract. The binary proof requires the same
   /// value in its observation contract; ordinary recovery remains conservative.
   std::optional<InterpreterMachineStateProfile> X64FlagsProfile;
+  SpecializationUndefinedModel UndefinedModel =
+      SpecializationUndefinedModel::SelectedLowIR;
   /// Demand-driven precision refinement for unresolved control. Discovered
   /// register/frame ranges retain exhaustive finite relations. Repeatedly
   /// unresolved memory dependencies may additionally separate proven constant
@@ -470,7 +480,8 @@ struct SpecializationOptions {
 
   bool hasRawEnvironment() const {
     return !X64CodeRegions.empty() || !X64ImportBindings.empty() ||
-           !X64MachineExits.empty() || !EntryFrameExcludedObjects.empty();
+           !X64MachineExits.empty() || !EntryFrameExcludedObjects.empty() ||
+           UndefinedModel != SpecializationUndefinedModel::SelectedLowIR;
   }
 
   uint32_t chainedVisitLimit() const {

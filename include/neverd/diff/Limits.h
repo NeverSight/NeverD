@@ -58,6 +58,9 @@ inline constexpr uint32_t kMinImportCallSetSize = 2;
 /// or a jump to an import is shared by many functions and only context tells
 /// them apart.
 inline constexpr uint32_t kMinShapeInstructions = 3;
+/// A data-reference candidate needs an address operation and another
+/// instruction. Independently paired users supply the reference context.
+inline constexpr uint32_t kMinDataReferenceInstructions = 2;
 /// Largest group of functions sharing one feature that a drill-down splits by
 /// the next features.  Larger groups stay unresolved for context to split.
 inline constexpr size_t kMaxDrillDownGroup = 4096;
@@ -159,6 +162,10 @@ inline constexpr char kLLVMInvariantBoundProgressSSAProfile[] =
     "llvm-progress-ssa-v7";
 inline constexpr uint32_t kDefaultFlowMaxNodes = 65536;
 inline constexpr uint32_t kMaxFlowNodes = 1u << 20;
+// Address observations may join several argument positions to the same access.
+// Bound retained relationships separately from graph nodes.
+inline constexpr uint32_t kDefaultFlowAccessRecords = 65536;
+inline constexpr uint32_t kMaxFlowAccessRecords = 1u << 20;
 inline constexpr uint32_t kDefaultFlowMaxBlocks = 1024;
 inline constexpr uint32_t kMaxFlowBlocks = 4096;
 inline constexpr uint64_t kDefaultFlowMaxWork = 1u << 24;

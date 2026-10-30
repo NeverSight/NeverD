@@ -90,6 +90,14 @@ This component is a tested foundation, not yet a lifting/emission contract:
 strict MPX admission remains closed until original-transfer effects and
 memory completion are connected throughout the pipeline.
 
+The LLVM/NeverC native MPX APIs independently retain the ambient bounds bank.
+Their operands use allocated legacy-encodable carriers, preserving reserved
+realignment and PIC bases. BNDMOV stack addresses use an unmodified frame
+pointer plus a computed index, including 67H encodings whose MPX arithmetic
+remains 64-bit. `llvm/IR/X86MpxState.h` owns these address controls for both
+frontend admission and backend lowering. This compiler contract does not
+authorize a NeverD placeholder MPX intrinsic or infer original branch effects.
+
 `lift/X86/X86MpxEncoding.h` owns the qualified MPX byte-to-operand mapping.
 The full and lightweight decoder adapters share it, including native-width
 addresses despite long-mode 67H, mode-sized BNDMOV memory fields, LOCK stores,
@@ -134,8 +142,15 @@ stack provenance. Native configuration APIs carry control bit `0x100` when the
 SDK advertises it. Older SDKs use an owned `[RBP + (offset - RBP)]` access,
 preserving the compiler's RBP and declaring the arithmetic scratch/flags.
 Data-address fallbacks use AX, and row strides use CX, under the shared scalar
-carrier authority. Tile row-memory with default-stack addr64 remains refused:
-its architectural stride occupies the index needed by the configuration plan.
+carrier authority. Default-stack addr64 tile rows instead use an isolated
+leaf: BP carries the full base, CX the independent stride, and the compiler
+owns an RSP-based frame with normal register saves and unwind metadata.
+Native builtins advertise `__NEVERC_X86_AMX_STACK_MEMORY__`; the LLVM SDK
+advertises `LLVM_X86_AMX_STACK_MEMORY`. Older SDKs emit an internal
+`preserve_allcc` leaf with the exact owned assembly marker. Its C reader
+authenticates the complete leaf body and frame attributes, including after IPO
+specializes constant arguments. Both C routes require the native capability
+for these forms; they never place BP-borrowing assembly in the caller.
 Legacy version-1 FS/GS, address32 and non-memory forms remain readable, including
 their exact old assembly contracts. Unsegmented version-1 addr64 memory must be
 lifted again from the original bytes because it lost default-stack provenance.
@@ -391,7 +406,11 @@ edges must agree; unreachable or exceptional blocks supply no evidence.
 Stack coordinates must agree at joins. Frame-derived flag taint is unioned and
 propagated again when another predecessor adds an observation; stable loops
 reach the same bounded fixed point. Every original load supplies its complete
-interval, including loads removed by source conversion. Exact SP-relative
+interval, including loads removed by source conversion. Entry-byte liveness
+is tracked separately from a slot's address: an exact store kills only its
+written bytes, and a join unions the bytes still live on either predecessor.
+A later read of replacement contents does not observe the incoming parameter.
+Exact SP-relative
 accesses may use physical GPR aliases with constant affine offsets. A join
 retains a coordinate only when every predecessor agrees, and unions byte taint;
 partial register definitions cannot authenticate an old whole pointer. Calls
@@ -400,12 +419,23 @@ receipt for each live alias. A may-clobber mask or CALL result does not prove
 pointer destruction; a clobber loses the coordinate but retains possible taint.
 The callee's home and argument area remains an implicit read range; missing
 source operands alone prove nothing. Every alias must be explicitly destroyed
-before return. Stored frame values, lossy pointer arithmetic and unknown
-observers still reject the proof. Source preparation shares
+before return while incoming bytes remain live. Stored frame values, lossy
+pointer arithmetic and unknown observers conservatively observe every remaining
+input byte and end that path's query. A completed overwrite can therefore be
+proved before an opaque suffix, without granting any semantic or noncapture
+fact about that suffix. All original CFG edges and connectivity are checked
+before these cuts, including disconnected cycles. Source preparation shares
 these facts with both emitters and SDK replay without compacting native slots.
 Original stack facts are computed once per prepared body, independently of the
 register-summary dependency waves. Temporary address intervals retain subrange
 taint; overlapping partial writes cannot authenticate a stale whole address.
+Exact original image addresses also survive instruction-local full-width copies
+and checked scalar offsets. A complete load within one current mapped data
+object cannot observe a source stack slot. This shares the image ownership and
+extent predicate used by stack-spill overwrite proofs. The memory effect and
+loaded value stay live; neither a scalar with equal bits nor the loaded value
+acquires pointer evidence. Truncated mappings, changed owners, stale temporaries,
+external stores, segment-relative and ordered accesses retain their refusals.
 
 After shared call-signature recovery, `MedPrologueSaves` also checks complete
 Win64 scalar bodies and bounded direct call chains for borrowed frame-pointer
@@ -456,6 +486,14 @@ ends, and moves every such interval backward together, one 64-interval word at
 a time, to a fixed point over event prefixes; its work grows with blocks and
 words rather than with each observed byte. A refusal names a load that the
 CALL write reaches. Graph work is charged only when that graph is traversed.
+Incoming-stack parameter recovery consults that same proof before replacing a
+memory read with a parameter. A physical CALL that raises its stack into an
+incoming argument must remain visible to source-frame validation; incomplete
+proofs keep the candidate homes mutable. This applies to both register ABIs and
+i386 stack arguments. The shared instruction-owned memory reader includes
+scalar and packed FP sources, so converting a memory operand cannot erase its
+CALL-slot observation. Ordinary disjoint arguments still recover normally, and
+known local return-PC writes retain their explicit source materialization.
 The reader first lets every CALL without an exact slot write any byte; when
 the loads stay separated even then, it skips the costlier slot bounds
 (registration replay, offset ranges, SEH handler bounds and upper bounds),
@@ -1740,8 +1778,9 @@ after link-order changes; a producer's literal numeric suffix remains intact.
 The SDK adapter separately owns presentation names under the extraction memory
 allowance. Bounded function projections use them for display, search and sort;
 the matcher, snapshot hash and saved evidence consume only the original name.
-The `sdk-native-decode-v4`
-extraction identity distinguishes this evidence contract from older snapshots;
+The `sdk-native-decode-v5`
+extraction identity includes this evidence contract and known no-return call
+termination, distinguishing them from older snapshots;
 saved historical reports remain readable without rewriting their evidence.
 
 Native operand profile v3 retains address-reference occurrences in `Program` by
@@ -1777,9 +1816,10 @@ acceptance retains feature-backed competition and uncertainty, rather than
 accepting a moved string set before measuring a competing original body. Wide
 matched neighborhoods use the existing informative-bucket admission bound before
 materializing pairs; explicit feature proposals remain measured outside the
-quick-score allowance. Consistent call positions distinguish equally measured
-bodies, but cannot override stronger body evidence or another positional
-proposal. Their mapped-context agreement is checked again at admission.
+quick-score allowance. Matcher version 14 lets consistent call positions
+distinguish equally or less similar alternatives, but cannot override stronger
+body evidence or another positional proposal. Their mapped-context agreement is
+checked again at admission.
 Call and address-reference neighbors share the growing propagation worklist,
 so an anchored address chain does not require one global pass per link.
 
@@ -1918,6 +1958,17 @@ Call-argument metadata binds to an exact MedIR block/operation, with duplicate
 or stale owners rejected. Its arguments remain a distinct span of node inputs,
 separate from raw call operands and preserved clobber prefixes. Missing argument
 metadata stays unknown. This v2 observation does not assert ABI formal bindings.
+`FlowArgumentAccess` derives caller-side address observations from that immutable
+MedIR projection. It memoizes width-preserving affine definitions once per graph,
+then joins ordered call arguments to indexed ordinary LOAD/STORE operands.
+Roots are local SSA definitions or parameters, never equality of unknown inputs,
+separate memory reads or a call node's multiple clobbers. Iterative dependency
+walks refuse cyclic affine roots. COPY/PHI paths to RETURN operands preserve widths and do
+not infer ABI results, path feasibility, temporal ordering or callee writes. This observer
+retains the original gaps and does not feed the function matcher or rewrite
+SSA. The C API caches one graph's bounded index across selected calls and pages;
+restore invalidates it. CLI, Python, worker and Qt consume the same observations.
+
 The comparison adapter requests `PipelineOptions::MedAnalysisOnly`: the existing
 machine ABI preparation, including omitted-callee summaries, ends after final
 MedIR verification and before LLVM emission. `usesMachineMedIR()` keeps source
@@ -2234,6 +2285,14 @@ supplies validated, bounded records; comparison does not duplicate admission.
 Data outside the selected function inventory still changes identity, and
 removing every addition restores the historical analysis identity.
 Incomplete decoding and unresolved control flow remain explicit coverage gaps.
+The shared instruction summary consumes `libc::NoReturnTargetIndex` and the
+loaded-target owner for unconditional calls. Sized CFGs and unsized traversal
+therefore agree about known call termination, independent of where a later
+return block is placed. Conditional calls keep their unexecuted arm. Returning
+overrides, patched targets and unknown calls retain the owners' existing rules.
+Each multi-page capture shares one image index; listing-only summaries omit
+unused termination lookups. This is a control-flow fact, not a memory or call
+effect equivalence proof.
 Profile selection and ISA/bitness admission belong to this adapter, with the
 default in `diff/Limits.h`; consumers do not guess an input's architecture.
 The AArch64 reader consumes its own typed operand details and ordinary lifted
@@ -3141,18 +3200,23 @@ module, so whole-module LLVM-C declares each global an earlier initializer
   target is not made data merely because it lacks a function symbol.
 For linked x86/x64 COFF images, indexed pointer-table evidence comes from a
 bounded walk of reachable, file-backed instructions. Only full-pointer reads
-with an image-relative fixed base and pointer-sized scale identify storage;
+with a fixed image address and pointer-sized scale identify storage;
 LEA, segmented accesses, writes and unreachable instruction-shaped bytes do
 not. A table owns its contiguous relocated slots, stopping at gaps, decoded
-instructions and section boundaries. Exhausting the loader's evidence budget
-publishes no partial classification. CALL readers record exact callable-slot
-candidates; JMP readers record their source instruction so function discovery
-can associate case labels with the dispatcher even when the table is in
-`.rdata`. Ordinary out-of-line callbacks still require callable-entry
-verification. Neither table proximity nor sharing its executable segment
-grants another address table identity. LLVM preserves runtime offsets when a
-table address escapes and rejects unresolved code-pointer fields instead of
-retaining original image addresses.
+instructions, the next known object anchor and section boundaries. Exhausting
+the loader's evidence budget publishes no partial classification. Valid
+relocated CALL/JMP targets extend the same walk to nested dispatchers; a
+rejected table cannot authenticate its descendants. CALL readers record exact
+callable-slot candidates; JMP readers record their source instruction so
+function discovery can associate case labels with the dispatcher even when the
+table is in `.rdata`. This evidence is published before heuristic function discovery;
+discovery consumes the loader's exact slots instead of sweeping for another
+interpretation. A CALL through a slot also read by a JMP retains its independent
+callable-entry evidence. Ordinary out-of-line callbacks still require
+callable-entry verification. Neither table proximity nor sharing its
+executable segment grants another address table identity. LLVM preserves
+runtime offsets when a table address escapes and rejects unresolved
+code-pointer fields instead of retaining original image addresses.
 A two-level switch reads a byte index table laid among the code
 (`movzx r, byte [sel + table]`) before the pointer-wide jump table it
 indexes. The byte table's displacement lands in an executable segment, so a
@@ -3191,7 +3255,13 @@ the instruction reading the table as that function's label, which the
 jump-table resolver reads; a target outside it is an entry. The reader, whose
 operand names the run, decides rather than the table's own slots: an entry
 between the cases and the table (a prologue match in dead code before it)
-bounds neither the dispatcher nor its cases. A function it takes the address of with a
+bounds neither the dispatcher nor its cases. For linked i386 PE tables in
+ordinary data, only a decoded fixed-base indexed jump transfers the table's
+relocated targets into that reader's label analysis. The relocated run ends
+at its next loader anchor or owning section boundary. An ordinary data read
+does not supply dispatch ownership, and an independent callback slot retains
+its entry evidence even when a jump table also names the target.
+A function it takes the address of with a
 relocated immediate (`mov [obj+off], offset cb`, a callback stored into an
 object; `push offset filter`, a handler) is likewise a function
 (`scanCodeAddressImmediatesX86`): the base relocation makes the immediate an
@@ -6324,6 +6394,10 @@ becoming the mirror's relocatable fields and its bytes copied from the
 segment; the read GEPs into it at the slot's offset. A segment within the
 limit keeps its whole-segment mirror, and every code pointer in the run must
 still resolve to a lifted owner or the emission fails closed.
+Missing or masked emitted code does not establish that an unresolved target
+is padding or data. Even runtime-replaceable code-pointer storage requires an
+authenticated static fallback; data materialization needs the loader's separate
+data-pointer role.
 An exact import veneer the loader registered (`jmp [IAT]` with a named
 import) stands for its import where code names it directly: a pointer-mirror
 slot and an instruction operand of code-address provenance, such as a
@@ -7044,6 +7118,24 @@ original prototype, record storage, addresses, missing machine state or native
 rewriting contracts. Portable qualifiers and callback signatures remain owned
 by their existing declarations.
 
+Already selected local bodies can carry these proven pointees back through
+acyclic wrapper chains. The pipeline indexes their call dependencies once,
+limits use graphs to callers connected to declared evidence, and runs each
+body's proof once after its relevant callees. Independent bodies remain on the
+weighted workers; completed waves publish immutable facts for the next wave.
+Calls in a callee's custom register order use a separate type map, admitted only
+when every parameter matches that integer-register list and carrier width.
+Unknown bodies, mismatched argument lists and scalar uses supply no pointer
+proof. Recursive components and their dependent callers retain the local use
+proof without exchanging provisional types. This pass does not lift omitted
+callees or infer an original source ABI from a wrapper.
+Parameters introduced by call recovery reuse the parameter type pass before
+refinement; their synchronization does not replace settled return contracts.
+Forward-only parameters without SSA ids retain distinct physical slot keys.
+A locally defined SSA version zero never acquires an entry identity, while
+independent explicit parameter uses remain eligible. Target-only calls without
+a complete zero-argument contract prevent a whole-function pointer-use proof.
+
 Local MedIR address-role inference and direct-caller pointer propagation share
 an entry-value index. A call clobber, local definition or PHI owning SSA version
 zero cannot retype an incoming parameter merely by sharing its register.
@@ -7051,6 +7143,8 @@ Explicit parameter operands require the same slot identity and complete pointer
 width. Entry self-copies and independent narrow definitions preserve the
 original live-in. The index is built once per function and reused across call
 edges; it supplies no missing register value or original-prototype proof.
+Both local and forwarded pointer carriers use the target register model's
+pointer width, including four-byte x86 and ARM32 pointers.
 
 `LLVMSourceTypeHints` carries supported pointee spellings on individual LLVM
 arguments, so opaque pointers and IR serialization do not erase them. The
@@ -9684,9 +9778,9 @@ The v3 recovery C API and CLI map explicit field, refinement and solver-query bu
 
 Recovery also exposes `--vm-chain-transfers=N` (default 0) and `--vm-no-control-discovery`. Chaining retains symbolic correlations across proved singleton transfers; its limit returns to ordinary CFG boundaries. Machine-state recovery can declare unchecked, nonwrapping entry-RSP offsets with `--vm-entry-frame=begin:end`. The exact numeric premise accompanies generated C and the report; it grants no memory access or equivalence proof.
 
-Large recovered functions that exceed the SSA construction limit can use `--llvm` through a bounded scalar mutable-storage contract. Entry inputs, loop-carried values and earlier reads retain their meaning. Unsupported implicit state, vector-register parameters, image relocation, ambiguous storage and malformed control fail explicitly; HighC rejects this fallback. Source output still uses the existing machine-state contract and adds no equivalence certificate.
+Large recovered functions that exceed the SSA construction limit can use `--llvm` through a bounded scalar mutable-storage contract. Entry inputs, loop-carried values and earlier reads retain their meaning. Unsupported implicit state, vector-register parameters, image relocation, ambiguous storage and malformed control fail explicitly; HighC lowers this subset to explicit assignments and CFG edges, capturing arguments once before the entry label. Adjacent plain copies may coalesce only when the later copy cannot read the overwritten value. Source output still uses the existing machine-state contract and adds no equivalence certificate.
 
-`analyzeMedMutableSource` owns normalized CFG validation, storage identities and conservative entry-byte requirements. These requirements are upper bounds on reads, not positive observability evidence. LLVM validates before module scans and reuses the plan to initialize entry values once. Block/value products and propagation work have separate bounds. C forwarding uses exact earlier stores for each load, with matching types and no partial aliases; cross-block joins retain explicit storage.
+`analyzeMedMutableSource` owns normalized CFG validation, storage identities and conservative entry-byte requirements. These requirements are upper bounds on reads, not positive observability evidence. LLVM validates before module scans and reuses the plan to initialize entry values once. Block/value products and propagation work have separate bounds. C forwarding uses exact earlier stores for each load, with matching types and no partial aliases; cross-block joins retain explicit storage. Admission allows up to 16384 blocks while retaining the independent storage-matrix and propagation-work budgets.
 
 For validated mutable bodies, LLVM forwards exact private-slot values within an append-only basic block and keeps its final stores. Entry setup and block, function and module boundaries remain separate. Guest memory accesses stay explicit. C emission bounds scalar expression expansion and immediate-fold work, retaining named intermediates. Foldable constant expressions use LLVM’s target layout; unsupported expressions fail explicitly. Designated mutable return values, including zero, cannot become void returns.
 
@@ -13863,6 +13957,8 @@ Interpreter specialization retains full-width guest addresses. At publication, i
 
 `X64MachineExits` declares exact CALL, unconditional JMP, canonical near RET and resumable INT3/INT1 trap boundaries (including the two-byte INT 3 encoding) for a raw machine region. `NativeStackControl` strictly relifts the original bytes and retains the complete transfer: CALL captures its target before pushing the original fallthrough address; RET loads the actual stack word before advancing RSP by eight plus any unsigned cleanup. The final target remains a value, including for direct transfers. A trap instead retains its authenticated final intrinsic and ends the region without a next-PC or exception-continuation contract. Its exact architecture-owned undefined-output audit is retained: canonical INT3/INT 3 has Complete coverage and INT1 remains Missing. Neither supplies exception delivery or a continuation; invented undefined effects, changed audit grades and preservation claims are rejected. The architecture owner grants this terminal behavior, and ordinary trap intrinsics remain unsupported by the generic executor. This domain requires explicit nonfaulting CET-disabled x64 state and excludes the ordinary restored-return-slot and terminal-import contracts. Unknown stores retain their alias effects; every unlisted transfer still needs exhaustive internal analysis. The existing bounded raw requirement and receipt bind the declarations, graph and physical exit spans. Complete describes the declared region only. Callee effects, reentry, continuation composition, whole-function recovery and source/native certificates remain separate obligations; ordinary consumers reject this domain even when its declarations are unused.
 
+For declared memory JMP exits, `NativeStackControl` converts the authenticated constant-slot form into an eight-byte runtime load followed by the physical transfer. The slot address is not the target PC. Its scratch carrier must be disjoint from original operands, effects and reserved temporaries; the expanded operation count and digest are rebound while the original evidence stays intact. Direct and register jumps retain their value semantics.
+
 `ProveStoreReturnSlotSeparation` also proves preservation of individual live native return cells across ordinary non-frame stores with 64-bit addresses. Each complete eight-byte cell must be disjoint under the current path. Only existing bytes in the accepted range union survive; gaps, unproved cells and other banks keep normal alias invalidation. Proof and preservation share the existing budgets and add no stack-ownership assumption.
 
 Current saved frame-address cells reuse this per-write separation proof. Successful proofs retain their materialized bytes and affine relations across ordinary or conditional writes. Later overlapping writes still invalidate those relations. Each cell is checked independently; no interval between accepted cells becomes protected, and no observation supplies a new alias premise.
@@ -15007,11 +15103,49 @@ from admitted LowFuncs. Unsupported sites remain in that selection and decode
 failures remain explicit; the state exporter independently relifts every byte
 before emission. This metadata grants no ordinary source or native rewrite
 admission. The driver owns only dispatch and instruction accounting: successful calls,
-returns, exceptions and privilege returns each consume one step and stop.
+returns, exceptions and privilege transitions each consume one step and stop.
 Native requests and invalid invocations execute nothing and consume none.
 Both C routes include a state layout checked against the semantic owner and
 an exact byte manifest bound to the emitted source hash. The ordinary source
 interface remains separate. See [the invocation contract](x64-continuation-source.md).
+
+`X64ContinuationSystemTransfers` owns the complete explicit SYSRET and Intel
+SYSENTER/SYSEXIT target contexts, including their shared flat segment-cache
+construction. The V7 profile adds live SYSENTER MSRs after the unchanged V6
+layout; the state transport's MSR owner handles their reads and writes.
+Profile inheritance is declared once in the continuation source owner so
+controls, flags, fault addresses, returns and event state advance together.
+The exporter selects distinct versioned layouts and drivers from that owner.
+
+The x64 continuation descriptor implementation is shared by the legacy event
+and FRED return owners in `X64ContinuationSegments.h`. It owns GDT/LDT
+validation, hidden-cache decoding and ordered descriptor accessed-bit writes;
+the instruction-specific owners retain their distinct frame and event rules.
+The same flat-cache writer serves SYSRET/SYSENTER/SYSEXIT and standard ERETU.
+`X64ContinuationFredReturns.h` handles V9 FRED return frames and event outputs
+above both C emitters. Its profile enables only canonical ERETS/ERETU and
+cannot reuse the earlier FRED-disabled execution domain. ERETU compatibility
+choices belong to this profile transition, where the live return descriptor
+determines CS.L. They are separate from the original instruction's missing
+LowIR arbitrary-output certificate. The same choice records drive state
+lowering and manifest slots; ERETU's explicitly restored RSP has no arbitrary
+high-half slot.
+The version-aware state writer transports monitor invalidation for UIRET,
+ERETU and the inherited legacy returns; each return owner decides whether the
+architectural transition invalidates it. Earlier layouts receive no monitor
+write.
+
+`X64ContinuationUserInterrupts` owns UIRET, CLUI, STUI and TESTUI above both C
+routes. V8 appends UIF and monitor validity without changing earlier layouts.
+The binary adapter retains canonical bytes as a dedicated profile projection;
+it does not manufacture ordinary LowIR or an unconditional undefined-output
+audit. UIRET validates its frame and target before state writes, applies the
+declared UIRET_UIF feature, and stops before target execution or pending
+delivery. The flag instructions share its UIF cell and retain ordinary RF
+clearing. Their TF domain excludes debug-trap delivery. The decoder owns the
+appended UIRET identity and terminating classification; ordinary strict and
+permissive lifting still require a complete return-state owner. Monitor ranges
+and pending interrupts remain environment-owned, with no host state changes.
 
 `X86LiftCoreArith` lowers legacy memory `LOCK ADD/SUB/INC/DEC` to one sequentially consistent `ATOMIC_ADD`. Flags use the returned old value after the transaction; `INC/DEC` preserve CF and FS/GS address spaces remain attached. Neutral immediate `LOCK OR/XOR 0` and `LOCK AND -1` use that same transaction with a zero addend. Their logical flags use the old value, clear CF/OF and leave AF undefined. On i386, other logical values and register sources remain refused; x64 uses the audited native locked intrinsic for those cases. HLE remains refused. HighC retains the type of an explicit atomic-result declaration so signed comparisons use its actual C carrier. This does not establish missing frame inputs, MMIO behavior or concurrent execution equivalence.
 
@@ -15053,3 +15187,23 @@ The shared OR builder can discard an XOR operand when the accumulated constant c
 ## Image storage reached through advancing cursors
 
 HighC follows pointer-width assignments, copies and addition/subtraction from ordinary memory operands to image-address constants. Loop backedges retain the complete object supplied by the existing symbol/section owner and its alignment residue. This function-local storage dependency walk does not substitute pointer values, prove dereference validity or follow loaded pointers and narrowing conversions. Direct bounded indexed accesses keep their existing extent proof.
+
+## Native x64 dispatch frame source
+
+`loader/X86/X64DispatchFrame.h` recognizes the complete fixed instruction
+sequence of a PE physical service bridge, including its two checked relative
+code targets. Relocated, truncated and near-matching sequences provide no
+identity. Both C routes render the same native frame construction and selector
+transfer in a naked Win64 function. A known service's existing Windows ABI
+record owns its parameter widths and arity, including arguments beyond the
+four-register bank. LLVM declarations settle that interface before callers are
+emitted, so an internal dispatcher's inferred arity cannot trim stack operands.
+
+The source explicitly requires CPL0 and original-environment native linkage and
+dispatch symbols. Those symbols are native boundaries, not generated ordinary
+C providers. The projection does not implement services, promise exception
+unwinding or admit a native image rewrite. Explicit source signatures remain
+separate. LLVM C checks that the retained inline assembly and original image
+still match before printing the bridge; body fragments require a complete
+native function. Unknown ordinary calls and physical interrupt/system entry
+return proofs retain their existing admission rules.

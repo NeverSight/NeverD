@@ -225,8 +225,15 @@ static int event_query(int cpu, struct kvm_run *run, uint8_t *memory,
   }
   if (kind == 7)
     memcpy(memory + registers.rip, memory + immediate + 1, length);
+  if (kind >= 9) {
+    const uint8_t code[] = {0x48, 0x0f, kind == 9 ? 0x34 : 0x35};
+    memcpy(memory + registers.rip, code + (kind == 11 ? 0 : 1),
+           kind == 11 ? 3 : 2);
+  }
   memory[stop] = 0x90;
   memory[0x1800] = memory[0x1801] = 0x90;
+  // With a userspace IRQ chip, KVM_RUN reloads CR8 from this field.
+  run->cr8 = before.cr8;
   REQUIRE(ioctl(cpu, KVM_RUN, 0) == 0);
   REQUIRE(run->exit_reason == KVM_EXIT_DEBUG);
   REQUIRE(ioctl(cpu, KVM_GET_REGS, &registers) == 0);
@@ -259,9 +266,110 @@ static int event_query(int cpu, struct kvm_run *run, uint8_t *memory,
   // LSS atomically loads both destinations and does not establish MOV SS's
   // interrupt/debug inhibition. Stop at its immediate fallthrough above and
   // independently check the CPU's shadow state here.
-  if (kind == 7)
+  if (kind == 7 || kind >= 9)
     REQUIRE(events.interrupt.shadow == 0);
   q->nmi_blocked = events.nmi.masked;
+  return 0;
+}
+
+// The source and original instruction share the requested input, but only this
+// independent vCPU executes SYSENTER/SYSEXIT. No expected segment/flag values
+// are synthesized here. All MSRs, RAM and the available XSAVE image are checked
+// independently for preservation across the transfer.
+static int fast_system_query(int vm, int cpu, struct kvm_run *run,
+                             uint8_t *memory, size_t memory_size,
+                             const struct kvm_sregs *initial,
+                             fast_system_state_t *q, unsigned kind) {
+  // Initial x87/SSE in-use bits can change without changing register values.
+  // Seed noninitial payloads and their XSAVE validity bits together; SET_FPU
+  // alone does not establish those bits. Prime PKRU before the first snapshot.
+  static int primed;
+  if (!primed) {
+    const int capacity = ioctl(vm, KVM_CHECK_EXTENSION, KVM_CAP_XSAVE2);
+    REQUIRE(capacity >= 0);
+    const size_t xsave_size =
+        capacity ? (size_t)capacity : sizeof(struct kvm_xsave);
+    // SET_XSAVE reads the capability-reported size, including any large state.
+    struct kvm_xsave *seed = calloc(1, xsave_size);
+    REQUIRE(seed);
+    REQUIRE(ioctl(cpu,
+                  xsave_size > sizeof(*seed) ? KVM_GET_XSAVE2 : KVM_GET_XSAVE,
+                  seed) == 0);
+    uint8_t *bytes = (uint8_t *)seed;
+    bytes[0] = 0x7f;
+    bytes[1] = 2;    // Noninitial x87 precision control: FCW=0x027f.
+    bytes[4] = 0xff; // All eight x87 registers contain normal 1.0 values.
+    for (unsigned i = 0; i < 8; ++i) {
+      bytes[32 + i * 16 + 7] = 0x80;
+      bytes[32 + i * 16 + 8] = 0xff;
+      bytes[32 + i * 16 + 9] = 0x3f;
+    }
+    memset(bytes + 160, 0xa5, 256); // Sixteen noninitial XMM registers.
+    bytes[512] |= 3;                // XSTATE_BV: x87 and SSE are present.
+    REQUIRE(ioctl(cpu, KVM_SET_XSAVE, seed) == 0);
+    free(seed);
+    struct kvm_regs r = {.rip = 0x1010, .rflags = 2};
+    struct kvm_guest_debug d = {.control = KVM_GUESTDBG_ENABLE |
+                                           KVM_GUESTDBG_USE_HW_BP};
+    d.arch.debugreg[0] = 0x1011;
+    d.arch.debugreg[7] = 0x401;
+    const uint8_t old = memory[0x1010];
+    memory[0x1010] = 0x90;
+    REQUIRE(ioctl(cpu, KVM_SET_SREGS, initial) == 0);
+    REQUIRE(ioctl(cpu, KVM_SET_REGS, &r) == 0);
+    REQUIRE(ioctl(cpu, KVM_SET_GUEST_DEBUG, &d) == 0);
+    run->cr8 = initial->cr8;
+    REQUIRE(ioctl(cpu, KVM_RUN, 0) == 0);
+    REQUIRE(run->exit_reason == KVM_EXIT_DEBUG);
+    memory[0x1010] = old;
+    primed = 1;
+  }
+  struct kvm_msrs *msrs =
+      calloc(1, sizeof(*msrs) + 4 * sizeof(struct kvm_msr_entry));
+  REQUIRE(msrs);
+  msrs->nmsrs = 4;
+  const struct kvm_msr_entry values[] = {
+      {.index = 0x174, .data = q->sysenter_cs},
+      {.index = 0x175, .data = q->sysenter_esp},
+      {.index = 0x176, .data = q->sysenter_eip},
+      {.index = 0xc0000102, .data = q->core.kernel_gs}};
+  memcpy(msrs->entries, values, sizeof(values));
+  REQUIRE(ioctl(cpu, KVM_SET_MSRS, msrs) == 4);
+  REQUIRE(ioctl(cpu, KVM_GET_MSRS, msrs) == 4);
+  REQUIRE(msrs->entries[0].data == q->sysenter_cs);
+  REQUIRE(msrs->entries[1].data == q->sysenter_esp);
+  REQUIRE(msrs->entries[2].data == q->sysenter_eip);
+  const struct kvm_sregs setup = *initial;
+  struct kvm_sregs controls = setup;
+  controls.cr2 = q->core.cr2;
+  controls.cr8 = q->core.cr8;
+  controls.efer |= 1;
+  struct kvm_xsave before_xsave = {0}, after_xsave = {0};
+  REQUIRE(ioctl(cpu, KVM_GET_XSAVE, &before_xsave) == 0);
+  const uint8_t *seeded = (const uint8_t *)&before_xsave;
+  REQUIRE(seeded[0] == 0x7f && seeded[1] == 2 && seeded[4] == 0xff &&
+          (seeded[512] & 3) == 3);
+  for (unsigned i = 160; i < 416; ++i)
+    REQUIRE(seeded[i] == 0xa5);
+  uint8_t *saved = malloc(memory_size);
+  REQUIRE(saved);
+  // Install the exact oracle instruction and breakpoint bytes before the
+  // snapshot, so code setup cannot hide any instruction-produced RAM writes.
+  const uint8_t code[] = {0x48, 0x0f, kind == 9 ? 0x34 : 0x35};
+  memcpy(memory + q->core.pc, code + (kind == 11 ? 0 : 1), kind == 11 ? 3 : 2);
+  memory[0x1800] = memory[0x1801] = 0x90;
+  memcpy(saved, memory, memory_size);
+  REQUIRE(event_query(cpu, run, memory, &controls, &q->core, kind, 0) == 0);
+  REQUIRE(memcmp(saved, memory, memory_size) == 0);
+  free(saved);
+  REQUIRE(ioctl(cpu, KVM_GET_XSAVE, &after_xsave) == 0);
+  REQUIRE(memcmp(&before_xsave, &after_xsave, sizeof(before_xsave)) == 0);
+  REQUIRE(ioctl(cpu, KVM_GET_MSRS, msrs) == 4);
+  REQUIRE(msrs->entries[0].data == q->sysenter_cs);
+  REQUIRE(msrs->entries[1].data == q->sysenter_esp);
+  REQUIRE(msrs->entries[2].data == q->sysenter_eip);
+  REQUIRE(msrs->entries[3].data == q->core.kernel_gs);
+  free(msrs);
   return 0;
 }
 
@@ -361,11 +469,28 @@ int main(int argc, char **argv) {
     REQUIRE(run->io.direction == KVM_EXIT_IO_OUT && run->io.port == 0xe9 &&
             run->io.size == 1 && run->io.count == 1);
     const unsigned kind = *((uint8_t *)run + run->io.data_offset);
-    REQUIRE(kind >= 1 && kind <= 8);
+    REQUIRE(kind >= 1 && kind <= 11);
+    if (kind >= 9) {
+      int intel = 0, sep = 0;
+      for (unsigned i = 0; i < cpuid->nent; ++i) {
+        const struct kvm_cpuid_entry2 *e = &cpuid->entries[i];
+        if (e->function == 0)
+          intel = e->ebx == 0x756e6547 && e->edx == 0x49656e69 &&
+                  e->ecx == 0x6c65746e;
+        if (e->function == 1)
+          sep = (e->edx >> 11) & 1;
+      }
+      if (!intel || !sep) {
+        fprintf(stderr, "Intel SEP fast-system oracle unavailable\n");
+        return 77;
+      }
+    }
     REQUIRE(kind != 4 || registers.rsi <= UINT8_MAX);
     REQUIRE(kind != 6 || registers.rsi <= UINT16_MAX);
     REQUIRE(kind != 7 || registers.rsi <= memory_size - 16);
-    REQUIRE(registers.rdi <= memory_size - (kind == 1 || kind == 8
+    REQUIRE(registers.rdi <= memory_size - (kind >= 9
+                                                ? sizeof(fast_system_state_t)
+                                            : kind == 1 || kind == 8
                                                 ? sizeof(struct return_query)
                                                 : sizeof(event_state_t)));
     if (oracle < 0) {
@@ -381,6 +506,12 @@ int main(int argc, char **argv) {
       memcpy(&query, memory + registers.rdi, sizeof(query));
       REQUIRE(sysret_query(oracle, oracle_run, memory, &special, &query,
                            kind == 1) == 0);
+      memcpy(memory + registers.rdi, &query, sizeof(query));
+    } else if (kind >= 9) {
+      fast_system_state_t query;
+      memcpy(&query, memory + registers.rdi, sizeof(query));
+      REQUIRE(fast_system_query(vm, oracle, oracle_run, memory, memory_size,
+                                &special, &query, kind) == 0);
       memcpy(memory + registers.rdi, &query, sizeof(query));
     } else {
       event_state_t query;

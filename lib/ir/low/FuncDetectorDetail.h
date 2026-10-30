@@ -99,7 +99,8 @@ void scanCodePointersX64(const BinaryImage &Img, Decoder &Dec,
 /// immediate, such as `push offset handler` or `mov [esi+10h], offset
 /// callback`: (instruction, target) pairs, in sweep order.  A relocated
 /// displacement names memory the instruction reads or writes, not code to
-/// run, and is left out.
+/// run, and is left out. Indexed dispatch storage is authenticated separately
+/// by the loader; ordinary data references do not grant table ownership.
 void scanCodeAddressImmediatesX86(const BinaryImage &Img, Decoder &Dec,
                                   std::vector<std::pair<va_t, va_t>> &Out,
                                   const Cancellation *Control = nullptr);

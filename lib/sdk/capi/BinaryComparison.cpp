@@ -17,6 +17,7 @@
 
 #include "neverd/decode/InstructionRelocations.h"
 #include "neverd/diff/StableHash.h"
+#include "neverd/libc/LibCNames.h"
 #include "neverd/support/FilePath.h"
 
 #include "llvm/ADT/StringExtras.h"
@@ -44,6 +45,7 @@ struct ReadInstruction {
   uint64_t Skeleton = 0;
   uint64_t AddressIndependentShape = 0;
   bool HasUnresolvedData = false;
+  bool NoReturn = false;
   diff::InstructionFlow Flow = diff::InstructionFlow::None;
   std::optional<uint64_t> Target;
   std::optional<uint64_t> Callee;
@@ -241,6 +243,7 @@ ReadInstruction readInstruction(const BinaryImage &Image,
   R.Mnemonic = I.Raw->mnemonic;
   R.Operands = I.Raw->op_str;
   const auto Flow = Scratch.summarize(Image, D, I);
+  R.NoReturn = Flow.NoReturn;
   if (Flow.Target != InvalidVA)
     R.Target = Flow.Target;
   if (Flow.Kind == "call") {
@@ -450,7 +453,7 @@ void appendFunction(ProgramBuilder &Builder, const FuncInfo &F,
          R.Flow == diff::InstructionFlow::Jump ||
          R.Flow == diff::InstructionFlow::IndirectJump ||
          R.Flow == diff::InstructionFlow::Return ||
-         R.Flow == diff::InstructionFlow::Unknown))
+         R.Flow == diff::InstructionFlow::Unknown || R.NoReturn))
       Starts.insert(Rows[I + 1].Address);
   }
   uint32_t Block = 0;
@@ -480,10 +483,10 @@ void appendFunction(ProgramBuilder &Builder, const FuncInfo &F,
       Builder.addEdge(B, BlockAt.at(*R.Target),
                       R.Flow == diff::InstructionFlow::Branch ? EdgeKind::Taken
                                                               : EdgeKind::Jump);
-    if (R.Flow == diff::InstructionFlow::None ||
-        R.Flow == diff::InstructionFlow::Call ||
-        R.Flow == diff::InstructionFlow::IndirectCall ||
-        R.Flow == diff::InstructionFlow::Branch) {
+    if (!R.NoReturn && (R.Flow == diff::InstructionFlow::None ||
+                        R.Flow == diff::InstructionFlow::Call ||
+                        R.Flow == diff::InstructionFlow::IndirectCall ||
+                        R.Flow == diff::InstructionFlow::Branch)) {
       const auto Next = BlockAt.find(R.Address + R.Bytes.size());
       if (Next != BlockAt.end())
         Builder.addEdge(B, Next->second,
@@ -697,7 +700,7 @@ readComparisonInputImpl(Session &S, const ComparisonInputOptions &Options,
     Identity.ABI += ":macho-subtype:" + llvm::utohexstr(S.Img.MachOCPUSubtype);
   Identity.Normalization =
       (AArch64 ? NativeAArch64Normalization : NativeX86Normalization).str();
-  Identity.Analysis = std::string(VersionString) + ":sdk-native-decode-v4:" +
+  Identity.Analysis = std::string(VersionString) + ":sdk-native-decode-v5:" +
                       (Options.Discover ? "discover" : "known-functions");
   if (S.PackedProject)
     Identity.Analysis += ":nddb-v1:" + S.PackedProject->StateSHA256;
@@ -743,6 +746,7 @@ readComparisonInputImpl(Session &S, const ComparisonInputOptions &Options,
     return Result;
   }
   const AddressKeys Keys(S.Img, S.Functions, AddressInputIdentity.value());
+  const libc::NoReturnTargetIndex NoReturnTargets(S.Img);
   std::map<va_t, const FuncInfo *> Functions;
   for (const auto &F : S.Functions)
     if ((!Options.Begin || F.Entry >= *Options.Begin) &&
@@ -805,7 +809,7 @@ readComparisonInputImpl(Session &S, const ComparisonInputOptions &Options,
               }
               Slots[Index].push_back(std::move(R));
             },
-            Stop, &Status)) {
+            Stop, &Status, &NoReturnTargets)) {
       Error = "failed to initialize the native decoder";
       return {};
     }

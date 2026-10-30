@@ -280,4 +280,107 @@ TEST(PipelineSourceStackAccesses, BoundedCalleeKeepsDynamicFrameRestores) {
       }
 }
 
+TEST(PipelineSourceStackAccesses, IncomingArgumentsRetainPhysicalCallWrites) {
+  for (const Arch Architecture : {Arch::X86, Arch::X64})
+    for (const BinaryFormat Format :
+         {BinaryFormat::COFF, BinaryFormat::ELF, BinaryFormat::MachO})
+      for (const bool LLVMSource : {false, true})
+        for (const bool FPRead : {false, true})
+          for (unsigned Placement = 0; Placement != 3; ++Placement) {
+            // 0: a represented local slot; 1: the CALL overwrites an incoming
+            // argument; 2: the incoming argument is adjacent to the CALL slot.
+            SCOPED_TRACE(::testing::Message()
+                         << int(Architecture) << ':' << int(Format) << ':'
+                         << LLVMSource << ':' << FPRead << ':' << Placement);
+            const bool Wide = Architecture == Arch::X64;
+            const uint8_t Width = Wide ? 8 : 4;
+            const uint8_t Frame = Wide ? 40 : 16;
+            const uint8_t Raise = Wide ? 96 : 32;
+            BinaryImage Image;
+            Image.Arch = Architecture;
+            Image.Bits = Wide ? Bitness::Bits64 : Bitness::Bits32;
+            Image.Format = Format;
+            Image.Entry = 0x1000;
+            std::vector<uint8_t> Caller;
+            const auto Adjust = [&](bool Add, uint8_t Bytes) {
+              if (Wide)
+                Caller.push_back(0x48);
+              Caller.insert(Caller.end(),
+                            {0x83, uint8_t(Add ? 0xc4 : 0xec), Bytes});
+            };
+            Adjust(false, Frame);
+            if (Placement)
+              Adjust(true, Raise);
+            const uint32_t Relative =
+                0x1100 - (Image.Entry + Caller.size() + 5);
+            Caller.push_back(0xe8);
+            for (unsigned I = 0; I != 4; ++I)
+              Caller.push_back(Relative >> (I * 8));
+            if (FPRead)
+              Caller.insert(Caller.end(), {0xf3, 0x0f, 0x2c}); // cvttss2si eax
+            else {
+              if (Wide)
+                Caller.push_back(0x48);
+              Caller.push_back(0x8b); // mov eax/rax
+            }
+            Caller.insert(Caller.end(),
+                          {0x44, 0x24,
+                           uint8_t(Placement == 2 ? 0 : -Width)}); // [sp-slot]
+            if (Placement)
+              Adjust(false, Raise);
+            Adjust(true, Frame);
+            Caller.push_back(0xc3);
+
+            Segment Text;
+            Text.Name = ".text";
+            Text.VA = Image.Entry;
+            Text.Size = Text.FileSz = 0x10a;
+            Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+            Text.Data.assign(Text.Size, 0xcc);
+            std::copy(Caller.begin(), Caller.end(), Text.Data.begin());
+            // A visible store retains the CALL. The callee changes no stack
+            // argument; only the hardware's return-PC push can explain the
+            // difference between placements 1 and 2.
+            const std::vector<uint8_t> Callee = {
+                0xc6,
+                0x05,
+                uint8_t(Wide ? 0xf9 : 0x00),
+                uint8_t(Wide ? 0x00 : 0x12),
+                0x00,
+                0x00,
+                0x01,
+                0x31,
+                0xc0,
+                0xc3}; // mov byte [0x1200],1; xor eax,eax; ret
+            std::copy(Callee.begin(), Callee.end(), Text.Data.begin() + 0x100);
+            Image.Segments.push_back(std::move(Text));
+            Segment Data;
+            Data.Name = ".data";
+            Data.VA = 0x1200;
+            Data.Size = Data.FileSz = 1;
+            Data.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+            Data.Data = {0};
+            Image.Segments.push_back(std::move(Data));
+            Image.Symbols = {Symbol::makeFunc(0x1000, Caller.size()),
+                             Symbol::makeFunc(0x1100, Callee.size())};
+            PipelineOptions Options;
+            Options.LiftMode = Options.SourceProjection = LLVMSource;
+            Options.NoOpt = true;
+            Options.OnlyFunctionEntries = {0x1000, 0x1100};
+            llvm::LLVMContext Context;
+            const auto Result = Pipeline().run(Image, Context, Options);
+            ASSERT_EQ(Result.Success, Placement != 1) << Result.Error;
+            if (Placement == 1) {
+              EXPECT_NE(Result.Error.find("physical CALL return slot"),
+                        std::string::npos)
+                  << Result.Error;
+            } else if (LLVMSource) {
+              ASSERT_NE(Result.LlvmModule, nullptr);
+              EXPECT_FALSE(llvm::verifyModule(*Result.LlvmModule));
+            } else {
+              EXPECT_EQ(Result.HighFuncs.size(), 2u);
+            }
+          }
+}
+
 } // namespace

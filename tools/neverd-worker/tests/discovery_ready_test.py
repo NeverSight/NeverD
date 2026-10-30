@@ -25,6 +25,20 @@ def ready(client, opened):
     return message["background"]
 
 
+def wait_for_file(path):
+    deadline = time.monotonic() + 8
+    while not path.exists():
+        assert time.monotonic() < deadline, f"Fixture gate not reached: {path}"
+        time.sleep(0.005)
+
+
+def indexed(client, opened):
+    message = client.next(lambda m: m.get("type") == "heartbeat"
+                          and m.get("project_id") == opened["project_id"]
+                          and (m.get("background") or {}).get("state") == "ready")
+    assert message["background"]["functions"] == 601, message
+
+
 def run(executable):
     with tempfile.TemporaryDirectory(prefix="neverd-discovery-ready-") as directory, Client(executable) as client:
         assert client.call("analysis_snapshot")["error"]["code"] == "not_loaded"
@@ -42,17 +56,21 @@ def run(executable):
         for sequence in range(2):
             binary = Path(directory) / f"discovery-order-{sequence}.bin"
             binary.write_bytes(b"fixture")
+            Path(str(binary) + ".pause-discovery").touch()
             opened = ok(client, "open", {"path": str(binary), "warm": False, "step_discovery": True})
+            wait_for_file(Path(str(binary) + ".discovery-waiting"))
+            snapshot_id = client.send("analysis_snapshot", revision=opened["revision"])
+            # hello is answered by the input loop. Its reply proves the prior
+            # snapshot was admitted while the executor still waits in the SDK.
+            ok(client, "hello")
+            Path(str(binary) + ".finish-discovery").touch()
             state = ready(client, opened)
             assert state["state"] == "pending", state
             # No listing is built yet, so no count is published: a client
             # would read 0 as every function gone and reload its lists.
             assert "functions" not in state, state
-            # Simulate the frontend event-loop round trip. The fixture's
-            # blocking rebuild must not start before this waiting snapshot.
-            time.sleep(0.02)
-            assert not Path(str(binary) + ".rebuild").exists(), "Listing rebuild preceded the readiness consumer"
-            snapshot = ok(client, "analysis_snapshot", revision=opened["revision"])
+            snapshot = client.response(snapshot_id)
+            assert snapshot["status"] == "ok", snapshot
             assert snapshot["project_id"] == opened["project_id"], snapshot
             assert Path(snapshot["payload"]["open"]["path"]).resolve() == binary.resolve()
             # The reply records the state when the serialized executor served
@@ -62,11 +80,20 @@ def run(executable):
             assert snapshot["background"]["state"] == "pending", snapshot
             assert "functions" not in snapshot["background"], snapshot
             Path(str(binary) + ".continue").touch()
-            indexed = client.next(lambda m: m.get("type") == "heartbeat"
-                                  and m.get("project_id") == opened["project_id"]
-                                  and (m.get("background") or {}).get("state") == "ready")
-            assert indexed["background"]["functions"] == 601, indexed
+            indexed(client, opened)
             assert ok(client, "functions", {"limit": 1})["payload"]["total"] == 601
+
+        # The idle grace is bounded. A consumer arriving after indexing must
+        # receive the completed state, even if it kept an earlier ready edge.
+        binary = Path(directory) / "discovery-order-late.bin"
+        binary.write_bytes(b"fixture")
+        Path(str(binary) + ".continue").touch()
+        opened = ok(client, "open", {"path": str(binary), "warm": False, "step_discovery": True})
+        assert ready(client, opened)["state"] == "pending"
+        indexed(client, opened)
+        snapshot = ok(client, "analysis_snapshot", revision=opened["revision"])
+        assert snapshot["background"]["state"] == "ready", snapshot
+        assert snapshot["background"]["functions"] == 601, snapshot
 
         # A later project without the option must not inherit a previous
         # project's permission to retain a discovery snapshot.
@@ -84,13 +111,15 @@ def run(executable):
         ok(client, "analysis_snapshot", revision=opened["revision"])
         assert ok(client, "functions", {"limit": 1})["payload"]["total"] == 600
 
-        # Shutdown at the admission boundary must not start a rebuild or wait
-        # for the fixture's release file before the process can exit.
+        # Shutdown admitted during discovery must not start a listing rebuild
+        # or wait for that rebuild's release file before the process can exit.
         binary = Path(directory) / "discovery-order-shutdown.bin"
         binary.write_bytes(b"fixture")
-        opened = ok(client, "open", {"path": str(binary), "warm": False, "step_discovery": True})
-        ready(client, opened)
+        Path(str(binary) + ".pause-discovery").touch()
+        ok(client, "open", {"path": str(binary), "warm": False, "step_discovery": True})
+        wait_for_file(Path(str(binary) + ".discovery-waiting"))
         ok(client, "shutdown")
+        Path(str(binary) + ".finish-discovery").touch()
         client.process.stdin.close()
         assert client.process.wait(timeout=8) == 0
         assert not Path(str(binary) + ".rebuild").exists()

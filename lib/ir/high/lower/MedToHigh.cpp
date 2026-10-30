@@ -20,6 +20,7 @@
 
 #include "../../../loader/Swift/SwiftErrorSourceProjection.h"
 #include "HighEntryStackOffsets.h"
+#include "MedMutableToHigh.h"
 
 #include "neverd/Limits.h"
 #include "neverd/ir/Limits.h"
@@ -1514,6 +1515,13 @@ void MedToHighConverter::validateCallContracts(const MedFunc &Med) {
 }
 
 HighFunc MedToHighConverter::convert(const MedFunc &Med, Arch TheArch) {
+  if (Med.SkippedSSA) {
+    if (Image)
+      throw std::runtime_error(
+          "mutable HighIR source does not support image relocation");
+    return detail::lowerMedMutableToHigh(Med, TheArch, ExpressionObserver,
+                                         StatementObserver);
+  }
   if (const char *Error = validateAArch64SVEState(Med, TheArch))
     throw std::runtime_error(Error);
   validateCallContracts(Med);
@@ -1801,14 +1809,8 @@ HighFunc MedToHighConverter::convertOnce(const MedFunc &Med, Arch TheArch) {
     MedOps += Block.Ops.size();
   if (Med.Blocks.size() > limits::kMaxStructurableMedBlocks ||
       MedOps > limits::kMaxStructurableMedOps) {
-    // Too large to structure: still lower every operation, block by block,
-    // with explicit gotos between blocks.  MedIR that skipped SSA cannot be
-    // lowered this way (a register has no unique definition), so it keeps the
-    // skeleton.
-    if (Med.SkippedSSA) {
-      fillUnstructuredGotoSkeleton(Func, Med);
-      return Func;
-    }
+    // Too large to structure: lower SSA operations block by block. Mutable
+    // bodies use the separate explicit-storage lowering before this path.
     buildExpressions(Med);
     structureControlFlow(Func, Med);
     CaptureSwiftError();

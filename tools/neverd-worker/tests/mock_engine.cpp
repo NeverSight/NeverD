@@ -41,6 +41,21 @@ static std::filesystem::path projectFile(const std::string &input,
 }
 
 namespace {
+namespace discovery_fixture {
+constexpr auto kGateTimeout = std::chrono::seconds(5);
+constexpr auto kGatePollInterval = std::chrono::milliseconds(5);
+
+bool waitFor(const std::string &path) {
+  const auto deadline = std::chrono::steady_clock::now() + kGateTimeout;
+  while (!std::filesystem::exists(std::filesystem::u8path(path))) {
+    if (std::chrono::steady_clock::now() >= deadline)
+      return false;
+    std::this_thread::sleep_for(kGatePollInterval);
+  }
+  return true;
+}
+} // namespace discovery_fixture
+
 namespace unwind_query_fixture {
 #define NEVERD_UNWIND_TEST_TEXT(Name, Text) constexpr char Name[] = Text;
 #include "UnwindQueryFixtures.def"
@@ -714,6 +729,15 @@ int neverd_session_discover_functions(neverd_session_t s) {
 #endif
   if (state.path.find("discovery-order") != std::string::npos &&
       !state.discoveryPublished) {
+    if (std::filesystem::exists(
+            std::filesystem::u8path(state.path + ".pause-discovery"))) {
+      std::ofstream(std::filesystem::u8path(state.path + ".discovery-waiting"))
+          << "waiting";
+      if (!discovery_fixture::waitFor(state.path + ".finish-discovery")) {
+        state.error = "Fixture discovery gate timed out";
+        return -1;
+      }
+    }
     state.discoveryPublished = true;
     state.functions.push_back(Base + CodeSize);
   }
@@ -733,8 +757,7 @@ NEVERD_API int neverd_session_discover_functions_step(neverd_session_t s) {
   if (state.path.find("discovery-order") != std::string::npos &&
       !state.discoveryPolls++)
     return 0;
-  neverd_session_discover_functions(s);
-  return 1;
+  return neverd_session_discover_functions(s) < 0 ? -1 : 1;
 }
 #endif
 neverd_va_t neverd_func_entry(neverd_session_t s, int index) {
@@ -743,12 +766,7 @@ neverd_va_t neverd_func_entry(neverd_session_t s, int index) {
     state.discoveryRebuild = true;
     std::ofstream(std::filesystem::u8path(state.path + ".rebuild"))
         << "started";
-    const auto deadline =
-        std::chrono::steady_clock::now() + std::chrono::seconds(5);
-    while (!std::filesystem::exists(
-               std::filesystem::u8path(state.path + ".continue")) &&
-           std::chrono::steady_clock::now() < deadline)
-      std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    discovery_fixture::waitFor(state.path + ".continue");
   }
   const auto &functions = session(s)->functions;
   return index >= 0 && index < static_cast<int>(functions.size())

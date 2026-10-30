@@ -39,6 +39,41 @@ bool overlaps(const NdVar &Left, const NdVar &Right) {
          Right.Offset <= Left.Offset + (Left.Size - 1);
 }
 
+llvm::Error validateScratch(const SpecializationInstruction &Instruction,
+                            NdVar Scratch,
+                            llvm::ArrayRef<NdVar> ReservedTemporaries) {
+  if (!Scratch.isTemp() || Scratch.Size != 8 || !validRange(Scratch))
+    return invalid("native control requires an eight-byte scratch temporary");
+  const auto Check = [&](const NdVar &Value) -> llvm::Error {
+    if (!Value.Size || !Value.isTemp())
+      return llvm::Error::success();
+    if (!validRange(Value) || overlaps(Scratch, Value))
+      return invalid("native stack scratch overlaps an existing temporary");
+    return llvm::Error::success();
+  };
+  for (const auto &Op : Instruction.Ops) {
+    if (auto Error = Check(Op.Output))
+      return Error;
+    for (unsigned I = 0; I < Op.NumInputs; ++I)
+      if (auto Error = Check(Op.Inputs[I]))
+        return Error;
+  }
+  for (const auto &Effect : Instruction.UndefinedEffects.Effects) {
+    if (auto Error = Check(Effect.Output))
+      return Error;
+    if (Effect.When)
+      if (auto Error = Check(*Effect.When))
+        return Error;
+  }
+  for (const auto &Reserved : ReservedTemporaries) {
+    if (!Reserved.isTemp() || !validRange(Reserved))
+      return invalid("native stack control has an invalid reserved temporary");
+    if (auto Error = Check(Reserved))
+      return Error;
+  }
+  return llvm::Error::success();
+}
+
 bool ordinary(const LowOp &Op) {
   return Op.MemoryOrdering == NdMemoryOrdering::None &&
          Op.MemoryAddressSpace == NdMemoryAddressSpace::Default;
@@ -183,42 +218,15 @@ expandNativeStackControl(const SpecializationInstruction &Instruction,
                          NdVar Stack, NdVar Scratch,
                          NativeReturnExpansion ReturnMode,
                          llvm::ArrayRef<NdVar> ReservedTemporaries) {
-  if (!Stack.isReg() || Stack.Size != 8 || !validRange(Stack) ||
-      !Scratch.isTemp() || Scratch.Size != 8 || !validRange(Scratch))
-    return invalid(
-        "native stack control requires an eight-byte stack and scratch");
+  if (!Stack.isReg() || Stack.Size != 8 || !validRange(Stack))
+    return invalid("native stack control requires an eight-byte stack");
   if (ReturnMode != NativeReturnExpansion::InternalTransfer &&
       ReturnMode != NativeReturnExpansion::OuterFunctionBoundary)
     return invalid("native stack control has an unknown return expansion");
   if (auto Error = validateBoundary(Instruction))
     return std::move(Error);
-  const auto CheckScratch = [&](const NdVar &Value) -> llvm::Error {
-    if (!Value.Size || !Value.isTemp())
-      return llvm::Error::success();
-    if (!validRange(Value) || overlaps(Scratch, Value))
-      return invalid("native stack scratch overlaps an existing temporary");
-    return llvm::Error::success();
-  };
-  for (const auto &Op : Instruction.Ops) {
-    if (auto Error = CheckScratch(Op.Output))
-      return std::move(Error);
-    for (unsigned I = 0; I < Op.NumInputs; ++I)
-      if (auto Error = CheckScratch(Op.Inputs[I]))
-        return std::move(Error);
-  }
-  for (const auto &Effect : Instruction.UndefinedEffects.Effects) {
-    if (auto Error = CheckScratch(Effect.Output))
-      return std::move(Error);
-    if (Effect.When)
-      if (auto Error = CheckScratch(*Effect.When))
-        return std::move(Error);
-  }
-  for (const auto &Reserved : ReservedTemporaries) {
-    if (!Reserved.isTemp() || !validRange(Reserved))
-      return invalid("native stack control has an invalid reserved temporary");
-    if (auto Error = CheckScratch(Reserved))
-      return std::move(Error);
-  }
+  if (auto Error = validateScratch(Instruction, Scratch, ReservedTemporaries))
+    return std::move(Error);
 
   const auto &Effects = Instruction.UndefinedEffects;
   if (!Effects.Effects.empty())
@@ -483,6 +491,21 @@ expandX64MachineExit(const SpecializationInstruction &Instruction,
         Instruction.PreservedState != LowInstructionPreservedState{})
       return invalid("machine JMP exit has unsupported preservation evidence");
     Result.Ops = Instruction.Ops;
+    // The exact relift above authenticates the constant-slot JMP form. Its
+    // LowIR input names memory, while a machine exit must report the loaded
+    // target value. Register targets and existing memory loads need no change.
+    if (Result.Ops.back().Opcode == NdOp::INDIR_BR &&
+        Result.Ops.back().Inputs[0].isConst()) {
+      if (auto Error =
+              validateScratch(Instruction, Scratch, ReservedTemporaries))
+        return std::move(Error);
+      LowOp Branch = Result.Ops.back();
+      Result.Ops.back().Opcode = NdOp::LOAD;
+      Result.Ops.back().Output = Scratch;
+      Branch.Inputs[0] = Scratch;
+      ++Branch.Seq;
+      Result.Ops.push_back(Branch);
+    }
     Result.Boundary = B;
     Result.UndefinedEffects = Instruction.UndefinedEffects;
     Result.Receipt.OriginalBoundary = B;
@@ -504,6 +527,8 @@ expandX64MachineExit(const SpecializationInstruction &Instruction,
   Result.Boundary.ControlFlags =
       LowInstructionControlFlag::Branch | LowInstructionControlFlag::Indirect;
   Result.Boundary.Immediate.reset();
+  Result.Boundary.OpCount = Result.Ops.size();
+  Result.UndefinedEffects.OpCount = Result.Ops.size();
   Result.UndefinedEffects.OperationDigest =
       lowUndefinedOperationDigest(Result.Ops);
   Result.Receipt.ExpandedOperationDigest =

@@ -24,6 +24,7 @@ C(Intrinsic::Iret, "neverd_interrupt_return");
 // R11->RFLAGS; SYSEXIT: RDX->RIP, RCX->RSP).
 C(Intrinsic::Sysretq, "neverd_syscall_return");
 C(Intrinsic::Sysexitq, "neverd_sysenter_return");
+C(Intrinsic::X86Sysenter, "__builtin_ia32_sysenter");
 C(Intrinsic::X64WindowsSyscall, "neverd_x64_windows_syscall");
 
 // SSE4.2 CRC32 (the function takes the crc32 target feature,

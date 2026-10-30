@@ -64,6 +64,38 @@ otherwise identical wrappers after layout changes. Their original bytes remain
 inspectable; separate normalized features, names and call context can still
 establish correspondence, while indistinguishable candidates remain ambiguous.
 
+Matcher version 15 adds `data_reference` candidates after the existing matcher
+and entry-alternative review settle. Independently matched complete functions
+with equal instruction layouts and CFGs align unnamed data operands by their
+instruction and operand positions. Known addresses and mapped call/function
+targets must agree; conflicting mappings in either direction remain unknown.
+Only a unique pair with the same complete reference roles is proposed. These
+candidates use the existing similarity threshold and can distinguish equal or
+weaker alternatives only when mapped call/address context does not contradict
+them. A stronger body or another independently supported alternative still
+prevents automatic admission. The witness correspondence is frozen for this
+pass, so proposed functions cannot justify their own data-reference evidence.
+This final pass measures reference proposals and their competing bodies, but
+only admits pairs supported by the new reference evidence. Unrelated pairs
+deferred during entry-alternative review remain available for review.
+
+The same pass proposes `address_site` callback pairs from complete function
+address operands at aligned positions in independently matched functions.
+Already paired targets and known data must agree. Unnamed data operands require
+the frozen data-reference relation above; callbacks cannot bootstrap that
+relation. All eligible witnesses must agree in both directions. Like call-site
+proposals, these candidates use the existing lower context threshold only when
+every mapped caller, callee and address neighbor agrees, and still compete with
+measured body alternatives. Function addresses retain their explicit role;
+they are not inferred from arbitrary numeric operands.
+
+This rule currently uses the complete address operands of
+`native-x86-operands-v3`; AArch64 page fragments are not object-reference
+witnesses. It does not use companion debug information, neighboring function
+addresses or assumed data layouts. Data identity and contents remain unknown:
+the instruction delta retains uncertain references and does not report
+semantic equivalence or unchanged code merely because this context paired it.
+
 Matcher version 10 also defers a similar helper body when its changed entry
 contains the complete straight-line prelude of an unmatched direct tail caller,
 with at least two caller instructions beyond the helper's aligned body. Both
@@ -399,6 +431,39 @@ unknown inputs and missing exits remain visible gaps. These are pipeline
 observations with inferred calling conventions, not qualified machine-state or
 whole-program equivalence. The internal finite-neighborhood fingerprints expose
 open data frontiers; hash equality never marks code unchanged.
+
+Select a recovered call in **Dependency evidence**, then choose **Argument
+accesses** to review caller-side reads and writes using the same SSA address
+expression as an argument. Argument positions are one-based in the table and
+zero-based in JSON. Activate a row to select its SSA operation and trace its
+inputs or uses. The RETURN-input column records a same-width copy/PHI path to a
+RETURN operand, without deciding which path executes. Depending on the native
+projection, that operand can be a return control target; this observation does
+not infer an ABI result binding. This distinguishes local slot
+roles when compiler frame layouts change; it does not attribute writes to a
+callee or change automatic function correspondence.
+
+The C/Python/CLI dataflow query accepts
+`{"kind":"accesses","side":"primary","address":"0x1000","call":12}`.
+`call` is a node ID from the function's node page. The CLI equivalent is
+`--flow-function 0x1000 --argument-access-call 12`, with ordinary side, paging,
+reopen and timeout options. The
+`med-ssa-argument-accesses-v1` observation requires `med-ssa-v2`. It indexes
+same-width copies and scalar constant addition/subtraction over a shared local
+SSA definition or parameter. Separate unknown inputs, pointer loads and call
+clobbers do not acquire a common identity. Segmented/ordered memory operations,
+literal addresses and other expression equivalences are outside this observation.
+The original graph, memory/call gaps and native bytes remain unchanged. Missing
+observations do not rule out aliases, and execution order remains unassessed.
+
+Pages include `inspection_complete`, `state`, `work`, `gaps` and the original
+call. Rows retain the access node/native origin, zero-based `argument`,
+`access` (`read`/`write`), `access_bytes` and `return_operand_path`. Optional
+`max_records`/`max_work` bound the complete function index; `offset`/`limit` page
+one call's retained observations. Calls and pages share one index. Cooperative
+cancellation and `timeout_ms` preserve completed observations; `refresh:true`
+recomputes a stopped request. These derived pages are reconstructed from the
+same authenticated graph after reopening a report.
 
 Saved dependency graphs stream into the shared document. Reopen reconstructs
 the bounded native projection and checks the recipe, coverage, origins and every
@@ -1192,6 +1257,11 @@ propose a consistent one-to-one relationship before the similarity threshold
 can accept a pair. Unresolved calls retain their positions and prevent this
 positional inference across their interval; they are not invented call-graph
 edges. Other matching features can still resolve those functions.
+Matcher version 14 also lets a fully consistent call position distinguish a
+nearby alternative whose measured body is no more similar and has no consistent
+call position of its own. Stronger bodies and competing positional proposals
+still prevent this decision; similarity thresholds and ambiguity margins are
+unchanged.
 
 There is no 1,024-call cutoff. Large call sequences retain exact anchor selection
 with linear score frontiers and bounded dense tables; identical known-call
@@ -1214,8 +1284,12 @@ named `sub_1234` remains eligible, as do names admitted by recognition. Display
 renames do not replace those names or change native snapshot revisions. Numeric
 suffixes added to distinguish equal names in the listing do not manufacture
 unique name evidence; literal suffixes in the original symbols remain intact. The
-`sdk-native-decode-v4` extraction identity records this contract and the v3
-address-evidence profile described in the architecture guide; historical
+`sdk-native-decode-v5` extraction identity records this contract, the v3
+address-evidence profile and known no-return call termination. The native reader
+shares the pipeline's target contracts: an unconditional known no-return call
+has no ordinary fallthrough and does not make a function incomplete merely
+because it is last in the layout. Conditional and unknown calls keep their
+possible fallthrough. Historical
 reports keep their original evidence and require a new comparison for fresh
 binding under the revised extraction profile.
 Use the [offline report workflow](binary-diff-lineage.md#open-a-report-from-an-older-analysis-profile)

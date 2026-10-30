@@ -16,7 +16,9 @@
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/high/MedToHigh.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
+#include "neverd/ir/low/LowArchitecturalValue.h"
 #include "neverd/ir/med/LowToMed.h"
+#include "neverd/ir/med/LowToMedError.h"
 #include "neverd/ir/med/MedTypePass.h"
 #include "neverd/lift/X86/X86Regs.h"
 #include "neverd/loader/BinaryImage.h"
@@ -31,6 +33,7 @@
 #include <algorithm>
 #include <limits>
 #include <map>
+#include <set>
 
 namespace {
 using namespace neverd;
@@ -1566,7 +1569,12 @@ int main(void) {
 )");
 }
 
+// The source fragment declares the shared fixture used by later fragments.
+// clang-format off
 #include "InterpreterMachineRegionSourceTests.inc"
+#include "InterpreterMachineRegionChoiceTests.inc"
+#include "InterpreterMachineRegionChoiceSourceTests.inc"
 #include "InterpreterMachineRegionTrapTests.inc"
+// clang-format on
 
 } // namespace

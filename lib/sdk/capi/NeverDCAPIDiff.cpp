@@ -21,6 +21,7 @@
 #include "neverd/diff/ChangeObservations.h"
 #include "neverd/diff/ComparisonJSON.h"
 #include "neverd/diff/DataFlowJSON.h"
+#include "neverd/diff/FlowArgumentAccess.h"
 #include "neverd/diff/FlowRegionsJSON.h"
 #include "neverd/diff/FunctionDelta.h"
 #include "neverd/diff/RegionsJSON.h"
@@ -89,6 +90,11 @@ struct Comparison {
     FlowSlice Slice;
   };
   std::optional<SliceCache> CachedSlice;
+  struct ArgumentAccessCache {
+    std::string Key;
+    FlowArgumentAccesses Evidence;
+  };
+  std::optional<ArgumentAccessCache> CachedArgumentAccesses;
   struct ImpactCache {
     std::string Key;
     CallImpact Evidence;
@@ -846,6 +852,7 @@ int neverd_comparison_restore_json_with_progress(
       C.Result = std::move(Next);
       invalidateMappingViews(C);
       C.CachedSlice.reset();
+      C.CachedArgumentAccesses.reset();
       C.CachedImpact.reset();
       C.Undo.clear();
       C.Redo.clear();
@@ -2070,7 +2077,8 @@ const char *neverd_comparison_dataflow_json(neverd_comparison_t Handle,
     auto Value = json(Query ? Query : "{}");
     const auto *O = Value.getAsObject();
     require(O, "dataflow query must be an object");
-    keys(*O, {"side", "kind", "address", "offset", "limit"});
+    keys(*O, {"side", "kind", "address", "offset", "limit", "call",
+              "max_records", "max_work", "timeout_ms", "refresh"});
     const auto Side = string(*O, "side", "primary");
     require(Side == "primary" || Side == "secondary", "invalid dataflow side");
     const auto *E = Side == "primary" ? C.Result.PrimaryDataFlow.get()
@@ -2081,8 +2089,14 @@ const char *neverd_comparison_dataflow_json(neverd_comparison_t Handle,
     const auto Limit = count(*O, "limit", diffLimits::kDefaultPageSize,
                              diffLimits::kMaxPageSize);
     const auto Kind = string(*O, "kind", "functions");
-    require(Kind == "functions" || Kind == "nodes" || Kind == "blocks",
+    require(Kind == "functions" || Kind == "nodes" || Kind == "blocks" ||
+                Kind == "accesses",
             "invalid dataflow page kind");
+    require(Limit, "page limit must be positive");
+    require(Kind == "accesses" || (!O->get("call") && !O->get("max_records") &&
+                                   !O->get("max_work") &&
+                                   !O->get("timeout_ms") && !O->get("refresh")),
+            "argument access selectors require kind:accesses");
     llvm::json::Object Out;
     if (Kind == "functions") {
       require(!O->get("address"), "function inventory has no address selector");
@@ -2091,7 +2105,106 @@ const char *neverd_comparison_dataflow_json(neverd_comparison_t Handle,
       const auto Address = address(*O, "address");
       const auto *Row = E->find(Address);
       require(Row, "function was outside the retained dataflow scope");
-      if (Row->Graph)
+      if (Kind == "accesses") {
+        require(Row->Graph.has_value(), Row->Reason);
+        const auto &G = *Row->Graph;
+        require(G.Profile == DataFlowProfile,
+                "argument accesses require med-ssa-v2");
+        require(O->get("call"), "argument accesses require a call node");
+        const auto Call = count(*O, "call", 0, UINT32_MAX);
+        require(Call < G.Nodes.size() && (G.Nodes[Call].Opcode == "CALL" ||
+                                          G.Nodes[Call].Opcode == "INDIR_CALL"),
+                "argument access selector is not a call node");
+        FlowArgumentAccessOptions Options;
+        Options.MaxRecords = count(*O, "max_records", Options.MaxRecords,
+                                   diffLimits::kMaxFlowAccessRecords);
+        Options.MaxWork =
+            count(*O, "max_work", Options.MaxWork, diffLimits::kMaxFlowWork);
+        if (auto Error = Options.validate())
+          throw std::runtime_error(*Error);
+        const auto Timeout =
+            count(*O, "timeout_ms", 0, diffLimits::kMaxTimeoutMilliseconds);
+        const bool Refresh = flag(*O, "refresh", false);
+        const auto Key =
+            jsonToString(llvm::json::Object{{"side", Side},
+                                            {"address", vaHex(Address)},
+                                            {"max_records", Options.MaxRecords},
+                                            {"max_work", Options.MaxWork},
+                                            {"timeout_ms", Timeout}});
+        if (Refresh || !C.CachedArgumentAccesses ||
+            C.CachedArgumentAccesses->Key != Key) {
+          {
+            std::lock_guard Status(C.StatusMutex);
+            C.Cancel = false;
+            C.Running = true;
+            C.Outcome = "running";
+            C.Phase = "dataflow:argument_accesses";
+            C.Done = 0;
+            C.Total = G.Nodes.size();
+            C.Error.clear();
+          }
+          auto Finished = llvm::scope_exit([&] {
+            std::lock_guard Status(C.StatusMutex);
+            C.Running = false;
+            if (C.Outcome == "running")
+              C.Outcome = "failed";
+          });
+          ComparisonControl Control;
+          Control.Cancel = &C.Cancel;
+          if (Timeout)
+            Control.Deadline = std::chrono::steady_clock::now() +
+                               std::chrono::milliseconds(Timeout);
+          auto Evidence = observeFlowArgumentAccesses(
+              G, Options, C.Result.Settings.DataFlow.Graph, Control);
+          C.CachedArgumentAccesses =
+              Comparison::ArgumentAccessCache{Key, std::move(Evidence)};
+          std::lock_guard Status(C.StatusMutex);
+          C.Outcome = stateName(C.CachedArgumentAccesses->Evidence.State).str();
+          if (C.CachedArgumentAccesses->Evidence.Complete)
+            C.Done = C.Total;
+        }
+        const auto &R = C.CachedArgumentAccesses->Evidence;
+        const auto Begin = std::lower_bound(
+            R.Records.begin(), R.Records.end(), Call,
+            [](const auto &Record, auto Node) { return Record.Call < Node; });
+        const auto End = std::upper_bound(
+            Begin, R.Records.end(), Call,
+            [](auto Node, const auto &Record) { return Node < Record.Call; });
+        const uint64_t Total = End - Begin;
+        llvm::json::Array Rows, Gaps;
+        for (auto Gap : flowGapNames(R.Gaps))
+          Gaps.push_back(Gap);
+        for (uint64_t I = std::min(Offset, Total);
+             I < std::min(Offset + Limit, Total); ++I) {
+          const auto &A = Begin[I];
+          auto Access = dataFlowNodeJSON(G, A.Access);
+          Access["call"] = A.Call;
+          Access["argument"] = A.Argument;
+          Access["access"] = A.Write ? "write" : "read";
+          Access["access_bytes"] = A.Bytes;
+          Access["return_operand_path"] = A.ReturnOperandPath;
+          Rows.push_back(std::move(Access));
+        }
+        const auto Returned = Rows.size();
+        Out = llvm::json::Object{
+            {"function", vaHex(Address)},
+            {"observation_profile", FlowArgumentAccessProfile},
+            {"state", stateName(R.State)},
+            {"inspection_complete", R.Complete},
+            {"work", R.Work},
+            {"call", dataFlowNodeJSON(G, Call)},
+            {"scope", "shared_ssa_or_parameter_address"},
+            {"execution_order", "not_assessed"},
+            {"callee_memory_effects", "not_proved"},
+            {"alias_completeness", "not_proved"},
+            {"gaps", std::move(Gaps)},
+            {"offset", Offset},
+            {"total", Total},
+            {"next_offset", Offset + Returned < Total
+                                ? llvm::json::Value(Offset + Returned)
+                                : nullptr},
+            {"rows", std::move(Rows)}};
+      } else if (Row->Graph)
         Out = dataFlowPageJSON(*Row->Graph, Kind == "blocks", Offset, Limit);
       else {
         require(Limit, "page limit must be positive");

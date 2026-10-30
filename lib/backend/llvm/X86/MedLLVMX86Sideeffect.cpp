@@ -127,6 +127,7 @@ bool MedLLVMEmitter::emitX86DebugTrap(const MedOp &Op, Intrinsic IC,
     return true;
   }
   case I::Retf:
+  case I::X86Sysenter:
   case I::Iret:
   case I::Sysretq:
   case I::Sysexitq: {

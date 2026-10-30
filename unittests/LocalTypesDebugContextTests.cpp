@@ -146,10 +146,86 @@ TEST(LocalTypesDebugContext,
   EXPECT_EQ(Signature->PortablePrototypeDeclaration,
             "const uint16_t *ReadText(const uint16_t *const *Input, volatile "
             "uint32_t *Output)");
+  EXPECT_EQ(Signature->PortableParameterTypes,
+            (std::vector<std::string>{"const uint16_t *const *",
+                                      "volatile uint32_t *"}));
   const auto Stop = Context.resolvePrototype("Stop");
   ASSERT_TRUE(Stop);
   EXPECT_TRUE(Stop->NoReturn);
   EXPECT_EQ(Stop->PortablePrototypeDeclaration, "_Noreturn void Stop(void)");
+}
+
+TEST(LocalTypesDebugContext,
+     CallbackBorrowsKeepIdentityWithoutRecursiveLayouts) {
+  using namespace neverd;
+  for (const auto Model : {types::DataModel::ILP32, types::DataModel::LLP64}) {
+    auto Library = std::make_shared<types::TypeLibrary>(Model);
+    ASSERT_TRUE(types::parseCTypes(R"c(
+      struct Entry;
+      typedef void (*Observer)(const struct Entry *, volatile unsigned int *);
+      struct Entry { Observer Notify; struct Entry *Next; };
+      void Watch(Observer Notify, const struct Entry *Input);
+    )c",
+                                   *Library)
+                    .ok());
+    NamesOnlyDebugContext Names;
+    sdk::LocalTypesDebugContext Context(Names, Library);
+    const auto Function = Context.resolvePrototype("Watch");
+    ASSERT_TRUE(Function);
+    ASSERT_EQ(Function->Params.size(), 2u);
+    const auto Callback = Function->Params[0].second->Pointee;
+    ASSERT_EQ(Callback->Kind, NdTypeKind::Func);
+    ASSERT_EQ(Callback->ParamTypes.size(), 2u);
+    const auto Borrow = Callback->ParamTypes[0]->Pointee;
+    EXPECT_EQ(Borrow->SourceName, "Entry");
+    EXPECT_EQ(Borrow->Size, 0);
+    EXPECT_TRUE(Borrow->Fields.empty());
+    EXPECT_TRUE(Borrow->FieldDisplayTypes.empty());
+    ASSERT_EQ(Function->PortableParameterTypes.size(), 2u);
+    EXPECT_EQ(Function->PortableParameterTypes[0],
+              "void (*)(const struct Entry *, volatile uint32_t *)");
+    EXPECT_EQ(Function->PortableParameterTypes[1], "const struct Entry *");
+  }
+}
+
+TEST(LocalTypesDebugContext, RecursiveRecordBorrowsReleaseAndComplete) {
+  using namespace neverd;
+  auto Library = std::make_shared<types::TypeLibrary>(types::DataModel::LLP64);
+  ASSERT_TRUE(types::parseCTypes(R"c(
+    struct Left;
+    struct Right { struct Left *Back; unsigned Tag; };
+    struct Left { struct Right *Next; struct Left *Self; unsigned Value; };
+    struct Left Read(void);
+  )c",
+                                 *Library)
+                  .ok());
+  const auto *Prototype = Library->findPrototype("Read");
+  ASSERT_TRUE(Prototype);
+  std::weak_ptr<NdType> RootLifetime, BorrowLifetime;
+  {
+    const auto Root = sdk::decompilerTypeOf(*Library, *Prototype->Return);
+    ASSERT_TRUE(Root);
+    ASSERT_EQ(Root->FieldDisplayTypes.size(), 3u);
+    const auto Right = Root->FieldDisplayTypes[0]->Pointee;
+    ASSERT_TRUE(Right);
+    ASSERT_EQ(Right->FieldDisplayTypes.size(), 2u);
+    const auto Back = Right->FieldDisplayTypes[0]->Pointee;
+    ASSERT_TRUE(Back);
+    EXPECT_EQ(Back->SourceName, "Left");
+    EXPECT_EQ(Back->Size, 0u);
+    EXPECT_TRUE(Back->FieldDisplayTypes.empty());
+    EXPECT_NE(Back.get(), Root.get());
+    EXPECT_NE(Root->FieldDisplayTypes[1]->Pointee.get(), Root.get());
+    RootLifetime = Root;
+    BorrowLifetime = Back;
+    NamesOnlyDebugContext Names;
+    sdk::LocalTypesDebugContext Context(Names, Library);
+    Context.completeType(Back);
+    EXPECT_EQ(Back->FieldDisplayNames,
+              (std::vector<std::string>{"Next", "Self", "Value"}));
+  }
+  EXPECT_TRUE(RootLifetime.expired());
+  EXPECT_TRUE(BorrowLifetime.expired());
 }
 
 TEST(LocalTypesDebugContext, PortablePrototypesRetainIntegerKeywordIdentity) {
@@ -279,13 +355,16 @@ TEST(LocalTypesDebugContext, TypesTheFunctionsDebugInformationLeavesUntyped) {
   EXPECT_EQ(Record->FieldDisplayNames,
             (std::vector<std::string>{"Low", "High", "Top"}));
   EXPECT_EQ(Record->FieldDisplayOffsets, (std::vector<uint16_t>{0, 4, 4}));
-  // A callback is a pointer to a function of opaque pointers and scalars.
+  // Callback pointer parameters retain their named borrowed records.
   const TypeRef &Done = Pair->Params[2].second;
   ASSERT_EQ(Done->Kind, NdTypeKind::Ptr);
   ASSERT_EQ(Done->Pointee->Kind, NdTypeKind::Func);
   ASSERT_EQ(Done->Pointee->ParamTypes.size(), 2u);
   EXPECT_EQ(Done->Pointee->ParamTypes[0]->Kind, NdTypeKind::Ptr);
-  EXPECT_EQ(Done->Pointee->ParamTypes[0]->Pointee->Kind, NdTypeKind::Void);
+  EXPECT_EQ(Done->Pointee->ParamTypes[0]->Pointee->Kind, NdTypeKind::Struct);
+  EXPECT_EQ(Done->Pointee->ParamTypes[0]->Pointee->SourceName, "_PAIR");
+  EXPECT_EQ(Pair->PortableParameterTypes,
+            Context.resolvePrototype("Pair")->PortableParameterTypes);
 
   // A record returned by a C declaration's pointer is no hidden result.
   std::optional<FunctionSym> Next = Context.resolveFunction(0x2000);

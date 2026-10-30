@@ -40,7 +40,6 @@ void detectFPParams(
     MedFunc &Func, const MedBlock &Entry, const TargetRegInfo &TRI,
     const std::map<std::pair<uint64_t, uint16_t>, int> &RegVarMap,
     Arch TargetArch, BinaryFormat TargetFormat);
-void detectCdeclStackParams(MedFunc &, Arch);
 } // namespace neverd
 
 namespace {
@@ -48,6 +47,7 @@ namespace {
 using namespace neverd;
 using med_calling_conv_detail::computeForwardValueClosure;
 using med_calling_conv_detail::containsValue;
+using med_calling_conv_detail::detectCdeclStackParams;
 using med_calling_conv_detail::findFirstUseSize;
 using med_calling_conv_detail::liveInOnlyFeedsScratch;
 
@@ -732,7 +732,7 @@ TEST(MedCallingConvFPStack, InstructionOwnedReadsRecoverTheIncomingBytes) {
               Id, x86FPStateMedShape(Read, Architecture)));
           B.Ops.push_back(Read);
           if (Architecture == Arch::X86)
-            detectCdeclStackParams(F, Architecture);
+            detectCdeclStackParams(F, Architecture, Format);
           else
             med_calling_conv_detail::detectStackParams(F, Architecture, Format);
           ASSERT_FALSE(F.Params.empty());
@@ -1064,7 +1064,7 @@ TEST(MedCallingConvFPStack, MemoryOwnershipAndMalformedReadsAreConservative) {
         Read.Inputs[0].ConstVal |= UINT64_C(1) << 32;
       B.Ops.push_back(Read);
       if (Architecture == Arch::X86)
-        detectCdeclStackParams(F, Architecture);
+        detectCdeclStackParams(F, Architecture, BinaryFormat::COFF);
       else
         med_calling_conv_detail::detectStackParams(F, Architecture,
                                                    BinaryFormat::COFF);
@@ -1132,7 +1132,7 @@ TEST(MedCallingConvFPStack, ExtendedLoadReadsEverySlotItReaches) {
             unary(NdOp::LOAD, temp(3, 0, 10, Architecture), Address);
         B.Ops.push_back(Load);
         if (I386)
-          detectCdeclStackParams(F, Architecture);
+          detectCdeclStackParams(F, Architecture, Format);
         else
           med_calling_conv_detail::detectStackParams(F, Architecture, Format);
         const int First = I386 ? 0 : int(Layout.Registers.size());

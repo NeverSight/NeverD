@@ -30,6 +30,7 @@
 
 #include <algorithm>
 #include <iterator>
+#include <stdexcept>
 
 using namespace neverd;
 
@@ -869,16 +870,11 @@ static MedFunc makeWideChainMed() {
   return Med;
 }
 
-TEST(X86_32_FunctionDiscovery, LargeSkippedSSAMedIREmitsGotoSkeleton) {
+TEST(X86_32_FunctionDiscovery, LargeIncompleteMutableMedIRFailsExplicitly) {
   MedFunc Med = makeWideChainMed();
   Med.SkippedSSA = true;
   MedToHighConverter Conv;
-  HighFunc HF = Conv.convert(Med, Arch::X86);
-  ASSERT_FALSE(HF.Body.empty());
-  const bool HasGoto =
-      std::any_of(HF.Body.begin(), HF.Body.end(),
-                  [](const HighStmt &S) { return S.Kind == StmtKind::Goto; });
-  EXPECT_TRUE(HasGoto);
+  EXPECT_THROW(Conv.convert(Med, Arch::X86), std::runtime_error);
 }
 
 TEST(X86_32_FunctionDiscovery, LargeSSAMedIRIsLoweredBlockByBlock) {
@@ -1242,6 +1238,50 @@ TEST(X86_32_FunctionDiscovery, SwitchTableAmongCodeBelongsToItsFunction) {
   EXPECT_EQ(std::set<va_t>(Switch.JumpTables.front().Targets.begin(),
                            Switch.JumpTables.front().Targets.end()),
             (std::set<va_t>{0x401012, 0x401019, 0x401020}));
+}
+
+TEST(X86_32_FunctionDiscovery, DataSegmentDispatchKeepsIndependentCallbacks) {
+  for (bool IndependentCase : {false, true}) {
+    SCOPED_TRACE(IndependentCase);
+    BinaryImage Img = makeSwitchTableAmongCode();
+    constexpr va_t Table = 0x404000;
+    std::vector<uint8_t> Bytes(12);
+    for (unsigned I = 0; I != 3; ++I) {
+      const va_t OldSlot = 0x40102E + I * 4;
+      const uint32_t Target = readLE<uint32_t>(Img.readVA(OldSlot, 4));
+      writeLE<uint32_t>(Bytes.data() + I * 4, Target);
+      Img.CodePtrRelocSlots.erase(OldSlot);
+    }
+    std::fill_n(Img.Segments[0].Data.begin() + 0x2E, 12, 0xCC);
+    Img.DataInCode.erase(0x40102E);
+    Img.RelCodeTableAnchors.erase(0x40102E);
+    Img.DataAddressRelocOperands.erase(0x40100E);
+    writeLE<uint32_t>(Img.Segments[0].Data.data() + 0x0E, Table);
+    addPeSection(Img, ".rdata.switch", Table, std::move(Bytes),
+                 SegmentFlags::Readable);
+    recordAbsolutePointerRelocations(Img, {{0x40100E, Table, InvalidVA},
+                                           {Table, 0x401012, InvalidVA},
+                                           {Table + 4, 0x401019, InvalidVA},
+                                           {Table + 8, 0x401020, InvalidVA}});
+    if (IndependentCase) {
+      addPeSection(Img, ".rdata.callback", 0x405000, {0x19, 0x10, 0x40, 0x00},
+                   SegmentFlags::Readable);
+      recordAbsolutePointerRelocations(Img, {{0x405000, 0x401019, InvalidVA}});
+    }
+    coff_loader::recordIndexedTableBasesInCode(Img);
+    Decoder Dec;
+    ASSERT_TRUE(Dec.init(Img));
+    const auto Functions = FuncDetector().detect(Img, Dec);
+    EXPECT_TRUE(hasEntry(Functions, 0x401000));
+    EXPECT_TRUE(hasEntry(Functions, 0x401040))
+        << "an ordinary relocated data read is not a jump dispatch";
+    if (IndependentCase)
+      EXPECT_TRUE(hasEntry(Functions, 0x401019))
+          << "a separate callback slot supplies independent entry evidence";
+    else
+      for (va_t Case : {0x401012u, 0x401019u, 0x401020u})
+        EXPECT_FALSE(hasEntry(Functions, Case)) << std::hex << Case;
+  }
 }
 
 TEST(X86_32_FunctionDiscovery, SwitchCasesStayLabelsPastAnEntryBeforeTheTable) {

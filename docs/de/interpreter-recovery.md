@@ -81,7 +81,7 @@ C-Aufrufer verwenden `neverd_devirtualize_source_v3()` oder `neverd_devirtualize
 
 Die Wiederherstellung bietet auch `--vm-chain-transfers=N` (Standard 0) und `--vm-no-control-discovery`. Verkettung erhält symbolische Korrelationen über Transfers mit bewiesenem Einzelziel; am Limit gelten wieder normale CFG-Grenzen. Maschinenzustandswiederherstellung kann mit `--vm-entry-frame=begin:end` ungeprüfte, nicht umlaufende Offsets zum Eintritts-RSP angeben. Die genaue numerische Vorbedingung bleibt im erzeugten C und Bericht; sie erlaubt keine Speicherzugriffe und beweist keine Äquivalenz.
 
-Große rekonstruierte Funktionen oberhalb der SSA-Aufbaugrenze können mit `--llvm` einen begrenzten Vertrag für veränderlichen skalaren Speicher nutzen. Eingangswerte, schleifengetragene Werte und frühere Lesezugriffe behalten ihre Bedeutung. Nicht unterstützter impliziter Zustand, Vektorregisterparameter, Image-Relokation, mehrdeutiger Speicher und fehlerhafter Kontrollfluss führen zu klaren Fehlern; HighC lehnt diesen Ersatzpfad ab. Die Ausgabe folgt weiterhin dem bestehenden Maschinenzustandsvertrag und liefert kein zusätzliches Äquivalenzzertifikat.
+Große rekonstruierte Funktionen oberhalb der SSA-Aufbaugrenze können mit `--llvm` einen begrenzten Vertrag für veränderlichen skalaren Speicher nutzen. Eingangswerte, schleifengetragene Werte und frühere Lesezugriffe behalten ihre Bedeutung. Nicht unterstützter impliziter Zustand, Vektorregisterparameter, Image-Relokation, mehrdeutiger Speicher und fehlerhafter Kontrollfluss führen zu klaren Fehlern. HighC und LLVM C teilen diesen validierten Ersatzpfad. Explizite x64-Prüfungen `RequireAligned`, einschließlich Ein-Byte-Bedingungen, behalten ihre Fehlerbedingungen; ungültige Formen und nicht unterstützte Intrinsics werden abgelehnt. Die Ausgabe folgt weiterhin dem bestehenden Maschinenzustandsvertrag und liefert kein zusätzliches Äquivalenzzertifikat.
 
 Die veränderliche Teilmenge erlaubt skalaren Speicher mit 8/16/32/64/128 Bit; Eingaben für Bitzählungen sind auf 64 Bit begrenzt. Nicht standardisierte oder größere Breiten benötigen einen eigenen Quellcodevertrag.
 
@@ -452,6 +452,26 @@ Die ausdrücklich gewählte C++-Schnittstelle `wrapInterpreterMachineRegionSourc
 Zugelassen sind nur das fehlerfreie Benutzerprofil und vorhandene Skalar-/Abfrage-/XMM-Operationen. Traps, zusätzliche Architekturzustände, Einstiegsobjekte und zusätzliche Code-/Importdeklarationen werden auch unbenutzt abgelehnt. Gastspeicher muss über Bytekopien oder Alias-Typen mit Ausrichtung 1 ausgegeben werden. Alle Speicher-/Frame-Annahmen bleiben erforderlich; zur Laufzeit wird nur die Ausrichtung geprüft. Keine Aufrufzusammenfassung, Zusammensetzung, gewöhnliche ABI oder Zertifizierung der vollständigen Funktion/nativen Äquivalenz. `InterpreterMachineRegionSourceTest.*` prüft beide C-Backends unter O0/O2 auf vollständigen Zustand, Stack-Byte-Aliase, mehrere Ausgänge, Abfrage-/Ausrichtungsstopps und veränderte oder nicht unterstützte Deklarationen.
 
 Architektonisch undefinierte Ausgaben behalten die von LowIR gewählten Implementierungswerte. Die Übereinstimmung mit Prozessorentscheidungen oder deren Irrelevanz für native Beobachtungen erfordert eine unabhängige Umgebung oder einen Nichtinterferenzbeweis; dieser Quellnachweis liefert beides nicht.
+
+<!-- i18n-section: machine-region-architectural-choices -->
+
+## Architektonische skalare Werte
+
+Die C++-API für rohe Maschinenregionen unterstützt `SpecializationUndefinedModel::FreshScalarV1`. Vollständige architektureigene Beschreibungen undefinierter skalarer Ergebnisse erzeugen vor Verzweigungs- und Zielbeweisen bei jedem dynamischen Besuch einen unabhängigen Wert. Kopien behalten denselben Wert; wiederholte Besuche erhalten neue Werte. Der Restgraph bewahrt bedingte Bitaktualisierungen einschließlich Produktionen mit falscher Bedingung, und der Nachweis bindet das Modell.
+
+Die Option erfordert explizite x64-Regionsausgänge und vollständige skalare Instruktionsnachweise. Nicht unterstützte Effekte und erschöpfte Budgets werden abgelehnt. Der bisherige C-Adapter, gewöhnliche Emitter und native Beweisschnittstellen lehnen dieses Modell ohne explizite Laufzeitumgebung für die Werte ab. Es werden weder prozessorspezifische Werte noch eine gewöhnliche ABI abgeleitet.
+
+Eine exakt geprüfte RDSSP-Projektion bei ausdrücklich deaktiviertem CET bewahrt ihr Ziel ohne neue Werterzeugung; ihr allgemeiner Nachweis undefinierter Effekte bleibt fehlend. Authentifizierte Traps bleiben unausgeführte Grenzen.
+
+<!-- i18n-section: machine-region-choice-source -->
+
+## Ausführbare architektonische Werte
+
+`wrapInterpreterMachineRegionChoiceSourceX64V1` verarbeitet geprüfte `FreshScalarV1`-Ergebnisse über den separaten, 456 Byte großen `InterpreterMachineRegionChoiceStateX64V1`. Die ersten 432 Byte behalten das bisherige Layout; `Choices`, `ChoiceCount` und `ChoiceCursor` liegen bei 432, 440 und 448. `StateABI` meldet `x64-machine-region-choice-state-v1`, `StateBytes` meldet 456. Der bisherige 432-Byte-Wrapper lehnt dieses Modell weiterhin ab.
+
+Jeder 32-Byte-Datensatz `InterpreterArchitecturalChoiceX64V1` enthält vier 64-Bit-Felder: ursprünglicher Befehls-PC, Produktionsnummer innerhalb des Befehls, Bitanzahl und Wert. Werte müssen in die Bitbreite passen. Sämtliche benötigten Datensätze werden vor jeder Wirkung des Befehls geprüft. Status 5 bedeutet Erschöpfung, 6 einen falschen PC, Index, eine falsche Breite oder einen falschen Wert. Beide übernehmen vorherige Wirkungen, melden den noch nicht ausgeführten Original-PC mit `ExitKind=None` und behalten den Cursor vom Befehlsanfang. Erst nach dem vollständigen Befehl wird der Cursor erhöht; auch falsche Guards verbrauchen Datensätze. Wiederholungen benötigen neue Werte, Kopien und Speicherablagen nicht.
+
+Der Aufrufer stellt zugängliche, stabile Datensätze getrennt von Zustand und Gastspeicher bereit. Prozessorwerte werden nicht geraten. Abfragestatus, explizite Stopps vor Traps und Ausrichtungsprüfungen behalten ihre Verträge. Beide C-Wege können den abgesenkten Graphen ausgeben; gewöhnliche Emitter lehnen unverarbeitete Produktionen weiterhin ab. Diese C++-Schnittstelle liefert keine CLI/C SDK/GUI-Integration, gewöhnliche ABI-Rekonstruktion oder native Äquivalenzzertifizierung.
 
 <!-- i18n-section: machine-region-pending-traps -->
 

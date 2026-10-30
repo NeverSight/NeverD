@@ -752,7 +752,9 @@ MedFunc LowToMedConverter::convert(const LowFunc &SourceLow, Arch TheArch,
   const LowFunc &Low = Physical ? *Physical : SourceLow;
   for (const LowBlock &Block : Low.Blocks)
     for (const LowOp &Op : Block.Ops) {
-      if (isLowRawEnvironmentRequirement(Op))
+      if (isLowRawEnvironmentRequirement(Op) ||
+          (Op.Opcode == NdOp::INTRINSIC &&
+           isArchitecturalValueId(Op.Inputs[0].Offset)))
         throw LowToMedConversionError(
             "raw environment requirement has no ordinary source contract");
       // Validate before legacy address-space checks or best-effort SSA can

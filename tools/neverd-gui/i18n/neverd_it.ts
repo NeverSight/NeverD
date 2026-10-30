@@ -6949,10 +6949,6 @@ Seleziona un&apos;operazione per seguirne le dipendenze. Le operazioni sintetich
         <translation>Abilita gli elementi probanti delle dipendenze nelle impostazioni del confronto.</translation>
     </message>
     <message>
-        <source>Include control dependencies</source>
-        <translation>Includi dipendenze di controllo</translation>
-    </message>
-    <message>
         <source>Inspect original function</source>
         <translation>Esamina funzione originale</translation>
     </message>
@@ -7087,6 +7083,32 @@ La terminazione non dimostra che il numero di iterazioni o i risultati delle fun
     <message>
         <source>Proof: every counter cycle reaches a shared exit relative to an input-derived expression. Undefined behavior may occur before exit.</source>
         <translation>Dimostrazione: ogni ciclo del contatore raggiunge un’uscita comune relativa a un’espressione derivata dagli input. Può verificarsi un comportamento indefinito prima dell’uscita.</translation>
+    </message>
+    <message>
+        <source>Argument accesses</source>
+        <translation>Accessi agli argomenti</translation>
+    </message>
+    <message>
+        <source>Show reads and writes using the same computed address as a recovered call argument.</source>
+        <translation>Mostra letture e scritture che usano lo stesso indirizzo calcolato di un argomento di chiamata recuperato.</translation>
+    </message>
+    <message>
+        <source>Include control</source>
+        <translation>Includi controllo</translation>
+    </message>
+    <message>
+        <source>Include control dependencies when tracing inputs or uses.</source>
+        <translation>Includi le dipendenze di controllo durante il tracciamento di ingressi o utilizzi.</translation>
+    </message>
+    <message>
+        <source>Call n%1 · %2 address observations · %3
+Reads and writes at a recovered argument's address. Call effects and execution order remain unknown. Activate a row to select its operation.</source>
+        <translation>Chiamata n%1 · %2 osservazioni di indirizzi · %3
+Letture e scritture all’indirizzo di un argomento recuperato. Gli effetti della chiamata e l’ordine di esecuzione restano sconosciuti. Attiva una riga per selezionare la sua operazione.</translation>
+    </message>
+    <message>
+        <source>Inspecting argument addresses…</source>
+        <translation>Analisi degli indirizzi degli argomenti…</translation>
     </message>
 </context>
 <context>
@@ -7900,6 +7922,38 @@ Ogni uso di un parametro proiettato legge gli stessi bit meno significativi. Il 
     <message>
         <source>Uncertain</source>
         <translation>Incerto</translation>
+    </message>
+    <message>
+        <source>Argument</source>
+        <translation>Argomento</translation>
+    </message>
+    <message>
+        <source>Access</source>
+        <translation>Accesso</translation>
+    </message>
+    <message>
+        <source>RETURN input</source>
+        <translation>Ingresso RETURN</translation>
+    </message>
+    <message>
+        <source>Write</source>
+        <translation>Scrittura</translation>
+    </message>
+    <message>
+        <source>Read</source>
+        <translation>Lettura</translation>
+    </message>
+    <message>
+        <source>COPY / PHI path</source>
+        <translation>Percorso COPY / PHI</translation>
+    </message>
+    <message>
+        <source>Not observed</source>
+        <translation>Non osservato</translation>
+    </message>
+    <message>
+        <source>A same-width COPY/PHI path to a RETURN operand. That operand may be a control target; this does not establish an ABI return value or execution order.</source>
+        <translation>Un percorso COPY/PHI della stessa larghezza verso un operando RETURN. L’operando può essere una destinazione di controllo; ciò non stabilisce un valore di ritorno ABI o l’ordine di esecuzione.</translation>
     </message>
 </context>
 <context>

@@ -182,7 +182,7 @@ C callers use `neverd_devirtualize_source_v3()` or `neverd_devirtualize_machine_
 
 Recovery also exposes `--vm-chain-transfers=N` (default 0) and `--vm-no-control-discovery`. Chaining retains symbolic correlations across proved singleton transfers; its limit returns to ordinary CFG boundaries. Machine-state recovery can declare unchecked, nonwrapping entry-RSP offsets with `--vm-entry-frame=begin:end`. The exact numeric premise accompanies generated C and the report; it grants no memory access or equivalence proof.
 
-Large recovered functions that exceed the SSA construction limit can use `--llvm` through a bounded scalar mutable-storage contract. Entry inputs, loop-carried values and earlier reads retain their meaning. Unsupported implicit state, vector-register parameters, image relocation, ambiguous storage and malformed control fail explicitly; HighC rejects this fallback. Source output still uses the existing machine-state contract and adds no equivalence certificate.
+Large recovered functions that exceed the SSA construction limit can use `--llvm` through a bounded scalar mutable-storage contract. Entry inputs, loop-carried values and earlier reads retain their meaning. Unsupported implicit state, vector-register parameters, image relocation, ambiguous storage and malformed control fail explicitly. HighC and LLVM C share this validated fallback. Explicit x64 `RequireAligned` checks, including one-byte guards, retain their fault predicates; malformed shapes and unsupported intrinsics are rejected. Source output still uses the existing machine-state contract and adds no equivalence certificate.
 
 The mutable subset accepts 8/16/32/64/128-bit scalar storage; bit-count inputs are limited to 64 bits. Nonstandard widths and wider storage require a separate source contract.
 
@@ -687,6 +687,26 @@ The opt-in C++ `wrapInterpreterMachineRegionSourceX64()` in `neverd/analysis/arc
 The adapter admits only the user nonfaulting profile and existing scalar/query/XMM operations. Traps, extra architectural banks, entry objects and supplemental code/import declarations are refused even when unused. Guest memory needs byte-copy or alignment-1 alias emission. Retain all caller memory/frame premises; only alignment is checked at runtime. The interface provides neither callee summaries, continuation composition, ordinary ABI recovery nor whole-function/native-equivalence certification. `InterpreterMachineRegionSourceTest.*` checks both C backends at O0/O2, full state and aliased stack bytes, multiple exits, query/alignment stops, and mutated or unsupported declarations.
 
 Architectural undefined outputs retain LowIR's selected implementation values. Matching a processor's choices, or proving those choices irrelevant to native observations, requires an independent environment or noninterference proof; this source receipt supplies neither.
+
+<!-- i18n-section: machine-region-architectural-choices -->
+
+## Architectural scalar choices
+
+The C++ raw-region API can select `SpecializationUndefinedModel::FreshScalarV1`. Complete architecture-owned scalar undefined-effect records then create a fresh production on every dynamic instruction visit, before branch and target proofs. Copies share one production, while repeated visits remain independent. The residual retains each guarded bit update, including productions with false guards, and the raw receipt binds the selected model.
+
+This opt-in currently requires explicit x64 machine-region exits and complete scalar instruction evidence. It rejects unsupported effects or exhausted budgets. The existing region C adapter, ordinary emitters and native proof interfaces refuse this model until an explicit runtime choice environment is supplied; no processor-specific values or ordinary ABI are inferred.
+
+An exactly audited disabled-CET RDSSP projection preserves its destination without a new production; its general missing sidecar remains missing. Authenticated traps remain unexecuted boundaries.
+
+<!-- i18n-section: machine-region-choice-source -->
+
+## Executable architectural choices
+
+`wrapInterpreterMachineRegionChoiceSourceX64V1` consumes a validated `FreshScalarV1` result through the separate 456-byte `InterpreterMachineRegionChoiceStateX64V1`. Its first 432 bytes retain the earlier region layout; `Choices`, `ChoiceCount` and `ChoiceCursor` are at offsets 432, 440 and 448. `StateABI` reports `x64-machine-region-choice-state-v1` and `StateBytes` reports 456. The old 432-byte wrapper continues to reject this model.
+
+Each 32-byte `InterpreterArchitecturalChoiceX64V1` record contains the original instruction PC, production ordinal within that instruction, bit count and value, as four 64-bit fields. Values must fit the declared bit count. All records for an instruction are checked before any of its effects. Status 5 means exhaustion; status 6 means a PC, ordinal, width or value mismatch. Both commit preceding effects, report the original unexecuted PC with `ExitKind=None`, and leave that instruction's entry cursor unchanged. Advance the cursor only after the whole instruction, including records with false guards. Repeated visits consume fresh records; copies and spills do not.
+
+The caller supplies accessible, stable records disjoint from state and guest memory. No processor-specific choices are inferred. Query statuses, explicit pre-trap exits and instruction alignment guards retain their existing contracts. Both C routes can emit the lowered graph, but ordinary emitters still reject unconsumed productions. This C++ interface supplies neither CLI/C SDK/GUI integration nor ordinary ABI recovery or native-equivalence certification.
 
 <!-- i18n-section: machine-region-pending-traps -->
 

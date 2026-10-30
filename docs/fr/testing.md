@@ -109,7 +109,7 @@ Les régressions des relations d’adresse couvrent PHI/select entiers et pointe
 
 Les tests numériques couvrent le transfert entier ou partiel depuis un écrivain, undef/poison sans nouvel instantané, les deux ordres d’octets, 32/64 bits, les offsets négatifs modulaires, les chevauchements partiels, les alias entre racines et allocas, les exceptions, les boucles, les limites de budget adjacentes et l’invalidation après seule suppression de stores. À O0/O2, original et transformation sont comparés à un oracle indépendant pour le résultat et chaque octet du tampon aliasé.
 
-`NeverDMedMutableSourceTests` et `NeverDLLVMCValueTests` exécutent à O0/O2 des boucles indépendantes, blocs réordonnés, retours vers l’entrée, calculs de pile à l’exécution, lectures antérieures, jonctions, alias partiels, valeurs logiques et comptages de bits incluant zéro. Les cas négatifs refusent avant émission les entrées mal formées, cibles tronquées, supports ambigus et budgets épuisés. Un cas CLI dépassant la limite SSA exige une sortie LLVMC exécutable et un refus explicite de HighC. Les mises à jour répétées et les chaînes d’expressions stockées entre blocs vérifient aussi la taille et l’exécution du C généré.
+`NeverDMedMutableSourceTests` et `NeverDLLVMCValueTests` exécutent à O0/O2 des boucles indépendantes, blocs réordonnés, retours vers l’entrée, calculs de pile à l’exécution, lectures antérieures, jonctions, alias partiels, valeurs logiques et comptages de bits incluant zéro. Les cas négatifs refusent avant émission les entrées mal formées, cibles tronquées, supports ambigus et budgets épuisés. Un cas CLI dépassant la limite SSA exécute HighC et LLVMC. De grands graphes à peu de variables dépassent l’ancien plafond de blocs ; les budgets de stockage exacts et dépassés sont vérifiés séparément. Les mises à jour répétées et les chaînes d’expressions stockées entre blocs vérifient aussi la taille et l’exécution du C généré.
 
 Des régressions supplémentaires bornent les lectures et écritures privées avant promotion LLVM et la taille du C. Elles exécutent à O0/O2 de longues chaînes arithmétiques mixtes, des blocs SSA réordonnés, des écritures mémoire qui se chevauchent et des retours zéro. Les cas clés passent aussi par le véritable pipeline d’optimisation LLVM ; la réutilisation de l’émetteur après un refus de génération est vérifiée.
 
@@ -2277,6 +2277,8 @@ Les régressions couvrent la conservation exacte de CC, F1 et CD 03, le refus de
 
 `NativeStackControl.TrapExit*` · `InterpreterSpecialization.TrapIntrinsicsCannotFallThroughWithoutAnAuthenticatedExit` · `PEFixedImageTest.MachineTrapExitEndsRegionAtDeclaredTrap` · `PEFixedImageTest.UndeclaredTrapRemainsUnsupported` · `PEFixedImageTest.MachineTrapExitRejectsNonTrapInstruction` · `NativeUndefinedIndependence.UntakenTrapStillRequiresExactEvidence`.
 
+`NativeStackControl.JumpExit*` vérifie les cibles directes, par registre et en mémoire, les emplacements en arrière ou non alignés, les preuves périmées et les chevauchements de temporaires. `InterpreterMachineRegionSourceTest.MemoryJumpExitsReadCurrentGuestSlots` exécute HighC et LLVMC à O0/O2 avec UBSan, pour les modèles de valeurs indéfinies sélectionnées et fraîches. Il compare l'état et la mémoire complets, les contenus variables et une écriture aliasée préalable. Ce test à adresse fixe exige Linux x64 ; ses adresses PE occupent l'espace inaccessible entre les zones d'ASan. Exécuter `NeverDInterpreterSpecializationTests` et `NeverDInterpreterMachineStateTests`.
+
 Ces vérifications qualifient les régions déclarées, sans prouver la gestion des exceptions ni l’équivalence source/native.
 
 
@@ -2393,3 +2395,7 @@ La régression couvre aussi les relocations de pointeurs de fonction sans rappor
 Les emplacements de pile synthétiques LLVM C conservent les 128 bits écrits avant la sélection dynamique de l’une des moitiés de 64 bits. `LLVMCValues.WideFrameStoreRetainsBothRuntimeSelectedWords` vérifie l’adressage par addition et par OR fondé sur l’alignement à O0/O2 avec ASan/UBSan et le contrat documenté `-fno-strict-aliasing`. Exécuter `NeverDLLVMCValueTests` ainsi que les suites connexes sur les cadres, les vecteurs et les enregistrements affichés.
 
 `MedLLVMDirectData.OriginalImageCursorsIgnoreUnrelatedPointerRelocations` exécute les boucles de curseurs modifiables x64/AArch64 et COFF/ELF/Mach-O via LLVM C à O0/O2 avec ASan/UBSan. En mode source explicite de l’image originale, les adresses établies utilisent l’image active partagée même près de relocalisations de pointeurs sans rapport. Les collisions numériques restent scalaires et les miroirs autonomes gardent leur validation. Exécuter `NeverDMedLLVMDirectDataTests` et les suites de limites de relocalisation.
+
+<!-- i18n-section: mutable-alignment-guards -->
+
+`MedMutableSource.AlignmentChecks*` exécute les entrées alignées et les conditions inactives dans les deux chemins C à O0/O2, exige un piège pour les entrées non alignées actives et rejette les largeurs, alignements, sorties et espaces d’adressage incorrects.

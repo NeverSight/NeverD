@@ -123,6 +123,33 @@ def cancel_saved_restore(args, root, base, saved):
     assert json.loads(run(base + ["--json", "--reopen", str(saved)], {2, 3}).stdout) == json.loads(saved.read_text())
 
 
+def argument_accesses(args, root):
+    binary = root / "argument-accesses.raw"
+    binary.write_bytes(bytes.fromhex(
+        "4883ec1848c744240807000000488d7c2408e80a000000488b4424084883c418c3"
+        "48c70707000000c3"))
+    project = pathlib.Path(str(binary) + ".neverd")
+    project.mkdir()
+    (project / "load.json").write_text(json.dumps({
+        "loader": "binary", "processor": "x86_64", "platform": "sysv", "base": "0x1000"}))
+    base = [args.neverd, "diff", "--structural", "-a", str(binary), "-b", str(binary)]
+    saved = root / "argument-accesses.nddiff"
+    report = json.loads(run(base + ["--dataflow", "--json", "--save", str(saved)], {0, 3}).stdout)
+    nodes = json.loads(run(base + ["--reopen", str(saved), "--flow-function", "0x1000"], {0, 3}).stdout)
+    call = next(n for n in nodes["rows"] if n["opcode"] == "CALL")
+    query = base + ["--reopen", str(saved), "--flow-function", "0x1000",
+                    "--argument-access-call", str(call["id"])]
+    accesses = json.loads(run(query, {0, 3}).stdout)
+    assert accesses["inspection_complete"] and accesses["total"] == 2, accesses
+    assert [(r["argument"], r["access"], r["address"], r["return_operand_path"])
+            for r in accesses["rows"]] == [(0, "write", "0x1004", False),
+                                          (0, "read", "0x1017", True)]
+    assert json.loads(run(query + ["--offset", "1", "--limit", "1"], {0, 3}).stdout)["rows"] == accesses["rows"][1:]
+    assert json.loads(run(base + ["--reopen", str(saved), "--json"], {0, 3}).stdout) == report
+    run(query + ["--slice-node", "0"], {1})
+    run(base + ["--argument-access-call", "0"], {1})
+
+
 def cancel_mapping_edits(args, root):
     if os.name != "posix":
         print("SKIP: CLI editing interrupt requires POSIX child SIGINT delivery")
@@ -324,6 +351,7 @@ def main():
     lib.neverd_free_string.argtypes = [pointer]
     with tempfile.TemporaryDirectory(prefix="neverd-diff-cli-") as folder:
         root = pathlib.Path(folder)
+        argument_accesses(args, root)
         ambiguity_pages(args, root)
         unresolved_reference_evidence(args, root)
         mapped_call_regions(args, root)

@@ -281,7 +281,7 @@ void prepareRecoveredSourceStackAccesses(const BinaryImage &Image,
           // register summaries. Reuse it across this phase's dependency waves.
           if (!StackReads[I])
             StackReads[I] = unobservedSourceStackParameters(
-                *Sources[I], At->second, DeclaredCallees, Remaining[I]);
+                *Sources[I], At->second, DeclaredCallees, Remaining[I], &Image);
           for (unsigned P : *StackReads[I])
             Reads[W].emplace(P, 0);
           Destroyed[W] = sourceRegisterInputOverwrites(

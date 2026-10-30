@@ -125,6 +125,8 @@ QString progressLabel(const QString &Phase) {
        QT_TRANSLATE_NOOP("ComparisonDialog", "Matching exact features")},
       {"context",
        QT_TRANSLATE_NOOP("ComparisonDialog", "Comparing function context")},
+      {"data-reference-context",
+       QT_TRANSLATE_NOOP("ComparisonDialog", "Comparing function context")},
       {"approximate",
        QT_TRANSLATE_NOOP("ComparisonDialog", "Finding similar functions")},
       {"ambiguities",

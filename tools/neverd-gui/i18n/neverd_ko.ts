@@ -6913,10 +6913,6 @@ Select an operation to follow dependencies. Synthetic operations have block prov
         <translation>비교 설정에서 의존성 근거를 활성화하세요.</translation>
     </message>
     <message>
-        <source>Include control dependencies</source>
-        <translation>제어 의존성 포함</translation>
-    </message>
-    <message>
         <source>Inspect original function</source>
         <translation>원본 함수 살펴보기</translation>
     </message>
@@ -7051,6 +7047,32 @@ Progress does not establish equal loop counts or function results.</source>
     <message>
         <source>Proof: every counter cycle reaches a shared exit relative to an input-derived expression. Undefined behavior may occur before exit.</source>
         <translation>증명: 각 카운터 주기는 입력에서 파생된 표현식을 기준으로 공통 출구에 도달합니다. 종료 전에 정의되지 않은 동작이 발생할 수 있습니다.</translation>
+    </message>
+    <message>
+        <source>Argument accesses</source>
+        <translation>인자 접근</translation>
+    </message>
+    <message>
+        <source>Show reads and writes using the same computed address as a recovered call argument.</source>
+        <translation>복구된 호출 인자와 동일한 계산 주소를 사용하는 읽기와 쓰기를 표시합니다.</translation>
+    </message>
+    <message>
+        <source>Include control</source>
+        <translation>제어 의존성 포함</translation>
+    </message>
+    <message>
+        <source>Include control dependencies when tracing inputs or uses.</source>
+        <translation>입력이나 사용 위치를 추적할 때 제어 의존성을 포함합니다.</translation>
+    </message>
+    <message>
+        <source>Call n%1 · %2 address observations · %3
+Reads and writes at a recovered argument's address. Call effects and execution order remain unknown. Activate a row to select its operation.</source>
+        <translation>호출 n%1 · 주소 관측 %2개 · %3
+복구된 인자 주소에서의 읽기와 쓰기입니다. 호출 영향과 실행 순서는 아직 알 수 없습니다. 행을 활성화하면 해당 연산을 선택합니다.</translation>
+    </message>
+    <message>
+        <source>Inspecting argument addresses…</source>
+        <translation>인자 주소 검사 중…</translation>
     </message>
 </context>
 <context>
@@ -7864,6 +7886,38 @@ Every use of a projected parameter reads the same low bits. Whole-function behav
     <message>
         <source>Uncertain</source>
         <translation>불확실</translation>
+    </message>
+    <message>
+        <source>Argument</source>
+        <translation>인자</translation>
+    </message>
+    <message>
+        <source>Access</source>
+        <translation>접근</translation>
+    </message>
+    <message>
+        <source>RETURN input</source>
+        <translation>RETURN 입력</translation>
+    </message>
+    <message>
+        <source>Write</source>
+        <translation>쓰기</translation>
+    </message>
+    <message>
+        <source>Read</source>
+        <translation>읽기</translation>
+    </message>
+    <message>
+        <source>COPY / PHI path</source>
+        <translation>COPY / PHI 경로</translation>
+    </message>
+    <message>
+        <source>Not observed</source>
+        <translation>관측되지 않음</translation>
+    </message>
+    <message>
+        <source>A same-width COPY/PHI path to a RETURN operand. That operand may be a control target; this does not establish an ABI return value or execution order.</source>
+        <translation>RETURN 피연산자로 이어지는 동일 너비의 COPY/PHI 경로입니다. 피연산자는 제어 대상일 수 있으며, ABI 반환값이나 실행 순서를 확정하지 않습니다.</translation>
     </message>
 </context>
 <context>

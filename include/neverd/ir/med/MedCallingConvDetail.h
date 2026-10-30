@@ -19,6 +19,10 @@
 #include <tuple>
 #include <vector>
 
+namespace neverd {
+struct BinaryImage;
+}
+
 namespace neverd::med_calling_conv_detail {
 
 using ValueKey = std::tuple<MedVar::VarKind, int, int>;
@@ -35,6 +39,14 @@ struct StackMemoryRead {
 std::optional<StackMemoryRead> stackMemoryRead(const MedOp &Op);
 void preserveFPStackHomes(
     const MedFunc &Func, int64_t Base, unsigned Slot,
+    llvm::function_ref<std::optional<int64_t>(const MedVar &)> Trace,
+    std::set<int64_t> &MutableSlots);
+/// Keep incoming reads reached by physical CALL writes as memory operations.
+/// The shared CALL-slot proof owns their byte history; incomplete proofs keep
+/// every candidate home mutable until source-frame validation can decide.
+void preserveCallStackHomes(
+    const MedFunc &Func, Arch Architecture, BinaryFormat Format,
+    const BinaryImage *Image, int64_t Base, unsigned Slot,
     llvm::function_ref<std::optional<int64_t>(const MedVar &)> Trace,
     std::set<int64_t> &MutableSlots);
 void recoverFPStackReads(
@@ -61,7 +73,10 @@ void composeStackSlots(MedOp &Read, MedVar First, unsigned Slot, unsigned Bytes,
 ValueKey valueKey(const MedVar &V);
 /// Internal register-ABI stack recovery, including a bounded variadic prefix.
 void detectStackParams(MedFunc &Func, Arch TargetArch, BinaryFormat Format,
-                       int64_t MaxStackOff = 0);
+                       int64_t MaxStackOff = 0,
+                       const BinaryImage *Image = nullptr);
+void detectCdeclStackParams(MedFunc &Func, Arch TargetArch, BinaryFormat Format,
+                            const BinaryImage *Image = nullptr);
 bool containsValue(const ValueSet &Values, const MedVar &V);
 
 ValueSet computeForwardValueClosure(

@@ -13,6 +13,7 @@
 
 #include "../CDeferredValue.h"
 #include "../VariadicImportStub.h"
+#include "../X86/X64DispatchFrame.h"
 #include "../X86/X86GetPcThunk.h"
 #include "../render/X86/X86NativeFeatures.h"
 #include "HighCWriter.h"
@@ -1117,6 +1118,11 @@ void HighCWriter::writeExceptionAnnotation(const HighFunc &Func) {
 }
 
 void HighCWriter::writeFunction(const HighFunc &Func) {
+  if (Opts.Image && !Func.SourceTypeHint &&
+      x64DispatchFrame(*Opts.Image, Func.Entry) &&
+      (!EmitFunctionWrapper || Opts.TheArch != Arch::X64))
+    throw std::invalid_argument(
+        "physical dispatch bridges require a complete x64 function");
   if (Opts.Image && EmitFunctionWrapper)
     if (auto Reg = x86GetPcThunkRegister(*Opts.Image, Func.Entry)) {
       const std::string Identifier = functionIdentifier(Func);
@@ -6301,6 +6307,9 @@ void HighCWriter::writeFunctionProjection(const HighFunc &Func) {
   }
 
   if (EmitFunctionWrapper) {
+    if (Opts.Image && !Func.SourceTypeHint)
+      if (x64DispatchFrame(*Opts.Image, Func.Entry))
+        c_stub::writeDispatchFramePreamble(OS);
     std::string TargetFeatures =
         Opts.TheArch == Arch::X86 || Opts.TheArch == Arch::X64
             ? x86CIntrinsicTargetFeatures(Func)
@@ -6411,6 +6420,11 @@ void HighCWriter::writeFunctionProjection(const HighFunc &Func) {
     if (Emitted == 0)
       Declarator += "void";
     OS << declaredAs(ReturnType, Declarator + ")") << " {\n";
+    if (Opts.Image && !Func.SourceTypeHint)
+      if (const auto Frame = x64DispatchFrame(*Opts.Image, Func.Entry)) {
+        c_stub::writeDispatchFrameBody(OS, x64DispatchFrameAssembly(*Frame));
+        return;
+      }
   }
   if (Opts.EmitComments)
     for (const auto &Bytes : Func.FrameBytes)

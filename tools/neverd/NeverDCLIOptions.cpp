@@ -1616,6 +1616,10 @@ cl::opt<std::string>
 cl::opt<std::string> DiffFlowKind("flow-kind",
                                   cl::desc("SSA page kind: nodes or blocks"),
                                   cl::init("nodes"), cl::sub(DiffCmd));
+cl::opt<unsigned> DiffArgumentAccessCall(
+    "argument-access-call",
+    cl::desc("Review address uses of a recovered call in --flow-function"),
+    cl::sub(DiffCmd));
 cl::opt<unsigned>
     DiffSliceNode("slice-node",
                   cl::desc("Slice dependencies of a node in --flow-function"),

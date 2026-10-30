@@ -323,7 +323,8 @@ void scanCodeAddressImmediatesX86(const BinaryImage &Img, Decoder &Dec,
       func_detect_detail::checkCancellation(Control);
       while (Field != Fields.end() && Field->first < Cur)
         ++Field;
-      if (Field == Fields.end() || Field->first >= End)
+      const va_t NextField = Field == Fields.end() ? InvalidVA : Field->first;
+      if (NextField >= End)
         break;
       const uint8_t *Bytes = Seg->Data.data() + (Cur - Seg->VA);
       const size_t Remain = static_cast<size_t>(End - Cur);
@@ -336,14 +337,15 @@ void scanCodeAddressImmediatesX86(const BinaryImage &Img, Decoder &Dec,
         continue;
       }
       const va_t Next = Cur + static_cast<va_t>(Size);
-      if (Field->first < Next) {
+      if (NextField < Next) {
         // Only operand detail, which comes with text, says which field of
         // the instruction is its immediate.
         Dec.setText(true);
         Dec.setDetail(true);
         if (Dec.decodeOneLight(Bytes, Remain, Cur, DI) == Size && DI.Raw &&
             DI.Raw->detail) {
-          const cs_x86_encoding &Encoding = DI.Raw->detail->x86.encoding;
+          const cs_x86 &X86 = DI.Raw->detail->x86;
+          const cs_x86_encoding &Encoding = X86.encoding;
           for (auto It = Field; It != Fields.end() && It->first < Next; ++It)
             if (Encoding.imm_size == 4 &&
                 It->first == Cur + Encoding.imm_offset &&

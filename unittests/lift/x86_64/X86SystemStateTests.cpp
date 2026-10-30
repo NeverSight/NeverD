@@ -640,7 +640,7 @@ TEST(X86ImplicitMsr, ForgedEncodingAndDetailsRefuseBeforeEmission) {
   }
 }
 
-TEST(X86SystemState, UnmodeledRefiningPrefixesCannotBecomeLegacyInstructions) {
+TEST(X86SystemState, RefiningPrefixesRetainTheirDistinctInstructions) {
   const std::vector<std::vector<uint8_t>> Encodings = {
       {0xf2, 0x0f, 0x01, 0xca},
       {0xf3, 0x0f, 0x01, 0xca},
@@ -659,6 +659,10 @@ TEST(X86SystemState, UnmodeledRefiningPrefixesCannotBecomeLegacyInstructions) {
                   static_cast<uint64_t>(Bytes.back() == 0xee
                                             ? Intrinsic::X86ClearUserInterrupt
                                             : Intrinsic::X86SetUserInterrupt));
+      } else if (A == Arch::X64) {
+        ASSERT_EQ(Size, Bytes.size());
+        EXPECT_EQ(I.Id, unsigned(Bytes.front() == 0xf2 ? X86_INS_ERETS
+                                                       : X86_INS_ERETU));
       } else
         EXPECT_EQ(Size, 0);
     }
@@ -744,7 +748,7 @@ TEST(X86SystemState, SyscallReturnsLiftToTerminalStateTransfers) {
   // transfer control to a named register (SYSRET: RCX->RIP, R11->RFLAGS;
   // SYSEXIT: RDX->RIP, RCX->RSP) and never resume in the lifted function.  Each
   // lifts to a void, no-return intrinsic naming those two source registers and
-  // never becomes an ordinary RETURN.  SYSENTER and RSM stay refused.
+  // never becomes an ordinary RETURN. SYSENTER has its own MSR boundary.
   struct Case {
     std::vector<uint8_t> Bytes;
     Intrinsic Id;
@@ -782,10 +786,7 @@ TEST(X86SystemState, SyscallReturnsLiftToTerminalStateTransfers) {
   }
 }
 
-TEST(X86SystemState, SysenterAndResumeStayRefused) {
-  // SYSENTER's target and stack come from MSRs and RSM restores state from
-  // SMRAM: neither has a named operand, so both are refused rather than lifted
-  // to a lossy continuation.
+TEST(X86SystemState, SysenterNamesItsEnvironmentAndResumeStaysRefused) {
   for (auto A : {Arch::X86, Arch::X64}) {
     Decoder D;
     ASSERT_TRUE(D.init(A));
@@ -796,8 +797,18 @@ TEST(X86SystemState, SysenterAndResumeStayRefused) {
       ASSERT_EQ(D.decodeOneForLift(Bytes.data(), Bytes.size(), 0x1000, I),
                 static_cast<int>(Bytes.size()));
       std::vector<LowOp> Ops;
-      EXPECT_THROW(D.liftToLow(I, Ops), UnliftedInstruction);
-      EXPECT_TRUE(Ops.empty());
+      if (Bytes.back() == 0xaa) {
+        EXPECT_THROW(D.liftToLow(I, Ops), UnliftedInstruction);
+        EXPECT_TRUE(Ops.empty());
+      } else {
+        ASSERT_NO_THROW(D.liftToLow(I, Ops));
+        ASSERT_EQ(Ops.size(), 1u);
+        EXPECT_EQ(Ops.front().Opcode, NdOp::INTRINSIC);
+        EXPECT_EQ(Ops.front().NumInputs, 1u);
+        EXPECT_EQ(Ops.front().Output.Size, 0u);
+        EXPECT_EQ(Ops.front().Inputs[0],
+                  NdVar::cst(uint64_t(Intrinsic::X86Sysenter), 2));
+      }
     }
   }
 }

@@ -339,12 +339,13 @@ bool X86Lifter::liftExt(LiftState &S, const cs_insn *Insn, const cs_x86 &X86) {
   };
   switch (InsnId) {
 
-  // --- SYSENTER / RSM ---
+  // SYSENTER's target, stack and selectors belong to the explicit environment.
+  // The terminal intrinsic is opaque until that owner supplies the live MSRs.
   case X86_INS_SYSENTER:
+    S.emitVoidIntrinsic(Intrinsic::X86Sysenter, {});
+    break;
   case X86_INS_RSM:
-    // SYSENTER's entry point and stack come from MSRs and RSM restores state
-    // from SMRAM: neither target is a named operand, so there is no faithful
-    // ordinary-C projection.
+    // RSM still requires the complete SMM save-state environment.
     return false;
 
   // --- SYSEXIT / SYSRET (compat-mode syscall returns) ---
@@ -352,6 +353,8 @@ bool X86Lifter::liftExt(LiftState &S, const cs_insn *Insn, const cs_x86 &X86) {
     // SYSEXIT transfers to EDX with stack ECX; terminal, never resumes here.
     S.emitVoidIntrinsic(Intrinsic::Sysexitq,
                         {NdVar::reg(x86reg::RDX, 4), NdVar::reg(x86reg::RCX, 4)});
+    if (TargetArch == Arch::X64)
+      compatibilityreturn::record(S);
     break;
   case X86_INS_SYSRET:
     // SYSRET transfers to ECX with EFLAGS from R11D; terminal.

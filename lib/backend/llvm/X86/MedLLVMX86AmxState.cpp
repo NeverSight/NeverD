@@ -35,7 +35,9 @@ llvm::Value *MedLLVMEmitter::emitX86AmxState(const MedOp &Op,
   const auto ID =
       llvm::Intrinsic::lookupIntrinsicID("llvm.x86." + x86AmxNativeSuffix(D));
   const bool NativeAddress =
-      !(D & X86AmxStackReference) || x86NativeStackMemoryIsAvailable();
+      x86AmxNeedsStackLeaf(D)
+          ? x86AmxNativeStackMemoryIsAvailable()
+          : !(D & X86AmxStackReference) || x86NativeStackMemoryIsAvailable();
   if (NativeAddress &&
       llvm::Intrinsic::lookupIntrinsicID("llvm.x86.ldtilecfg.address") && ID) {
     auto *Function = B.GetInsertBlock()->getParent();
@@ -114,7 +116,35 @@ llvm::Value *MedLLVMEmitter::emitX86AmxState(const MedOp &Op,
   auto *Asm =
       llvm::InlineAsm::get(llvm::FunctionType::get(B.getVoidTy(), Types, false),
                            P->Text, P->Constraints, true);
-  B.CreateCall(Asm, Args);
+  if (P->StackLeaf) {
+    auto *Module = B.GetInsertBlock()->getModule();
+    auto *Leaf = llvm::Function::Create(Asm->getFunctionType(),
+                                        llvm::GlobalValue::InternalLinkage,
+                                        "neverd_amx_stack", Module);
+    Leaf->setCallingConv(llvm::CallingConv::PreserveAll);
+    Leaf->addFnAttr(X86AmxStackLeafAttribute);
+    Leaf->addFnAttr("frame-pointer", "none");
+    Leaf->addFnAttr(llvm::Attribute::NoInline);
+    Leaf->addFnAttr(llvm::Attribute::NoUnwind);
+    Leaf->setUWTableKind(llvm::UWTableKind::Async);
+    std::string Features;
+    llvm::SmallVector<llvm::StringRef, 8> Names;
+    const auto Required = x86AmxNativeFeatures(D);
+    llvm::StringRef(Required).split(Names, ',');
+    for (auto Name : Names) {
+      if (!Features.empty())
+        Features += ',';
+      Features += "+" + Name.str();
+    }
+    Leaf->addFnAttr("target-features", Features);
+    llvm::IRBuilder<> Body(
+        llvm::BasicBlock::Create(B.getContext(), "entry", Leaf));
+    Body.CreateCall(Asm, {Leaf->getArg(0), Leaf->getArg(1)});
+    Body.CreateRetVoid();
+    B.CreateCall(Leaf, Args)->setCallingConv(Leaf->getCallingConv());
+  } else {
+    B.CreateCall(Asm, Args);
+  }
   return Row ? B.CreateLoad(sizeToType(X86AmxRowBytes), Row) : nullptr;
 }
 } // namespace neverd

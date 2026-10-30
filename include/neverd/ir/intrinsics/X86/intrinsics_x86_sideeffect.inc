@@ -25,6 +25,7 @@ SIDEEFFECT(Intrinsic::Retf);
 SIDEEFFECT(Intrinsic::Iret);
 SIDEEFFECT(Intrinsic::Sysretq);
 SIDEEFFECT(Intrinsic::Sysexitq);
+SIDEEFFECT(Intrinsic::X86Sysenter);
 SIDEEFFECT(Intrinsic::Into);
 SIDEEFFECT(Intrinsic::Ud2);
 SIDEEFFECT(Intrinsic::Hlt);

@@ -37,6 +37,7 @@
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/med/AArch64/AArch64AuthenticatedCall.h"
 #include "neverd/ir/med/MedMutableSource.h"
+#include "neverd/loader/X86/X64DispatchFrame.h"
 #include "neverd/loader/X86/X86GetPcThunk.h"
 
 #include "llvm/ADT/DenseMap.h"
@@ -366,6 +367,29 @@ llvm::Function *MedLLVMEmitter::emitFunc(const MedFunc &Func) {
     setLLVMAArch64ReturnProtection(*LLVMFunc, ReturnProtection->Protection);
   if (Func.HasUnresolvedSEHFrame)
     LLVMFunc->addFnAttr(windows_eh_md::UnresolvedSourceFrame);
+  if (Img && PreserveUnknownSourceValues && !Func.SourceTypeHint &&
+      !Func.AnalystStackFrame)
+    if (const auto Frame = x64DispatchFrame(*Img, Func.Entry)) {
+      // Source inspection keeps this physical interface intact. In particular,
+      // an inferred argument count cannot replace the dispatcher's live bank.
+      // Native reconstruction retains its independent admission rules.
+      LLVMFunc->addFnAttr(llvm::Attribute::Naked);
+      LLVMFunc->addFnAttr(llvm::Attribute::NoInline);
+      LLVMFunc->setCallingConv(llvm::CallingConv::Win64);
+      LLVMFunc->addFnAttr("neverd.x64_dispatch_frame",
+                          x64DispatchFrameAssembly(*Frame));
+      auto *Entry = LLVMFunc->empty()
+                        ? llvm::BasicBlock::Create(*Ctx, "entry", LLVMFunc)
+                        : &LLVMFunc->getEntryBlock();
+      llvm::IRBuilder<> Builder(Entry);
+      auto *Type = llvm::FunctionType::get(llvm::Type::getVoidTy(*Ctx), false);
+      Builder.CreateCall(llvm::InlineAsm::get(
+          Type, x64DispatchFrameAssembly(*Frame, true), "~{memory}", true));
+      Builder.CreateUnreachable();
+      if (SourceMap)
+        SourceMap->Functions[Func.Entry] = LLVMFunc;
+      return LLVMFunc;
+    }
   if (Img)
     if (auto Reg = x86GetPcThunkRegister(*Img, Func.Entry)) {
       // These helpers return in a selected machine register, including

@@ -576,8 +576,10 @@ void CodeText::updateRange() {
   verticalScrollBar()->setRange(
       0, std::max(0, int(lines_.size()) - visibleLines() + 1));
   verticalScrollBar()->setPageStep(visibleLines());
+  // The document extent is independent of its current scroll position.
+  const int gutter = textLeft() + horizontalScrollBar()->value();
   horizontalScrollBar()->setRange(0, std::max(0, int(widestLine_ * charWidth_) +
-                                                     textLeft() -
+                                                     gutter -
                                                      viewport()->width()));
   horizontalScrollBar()->setPageStep(viewport()->width());
 }

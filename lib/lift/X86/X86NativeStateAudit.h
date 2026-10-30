@@ -102,6 +102,35 @@ inline bool sysretForm(const cs_insn *Insn, Arch Target) {
                       X86_EFLAGS_MODIFY_RF);
 }
 
+inline bool fastSystemForm(const cs_insn *Insn, Arch Target) {
+  if (!Insn || !Insn->detail || Target != Arch::X64 ||
+      (Insn->id != X86_INS_SYSENTER && Insn->id != X86_INS_SYSEXIT &&
+       Insn->id != X86_INS_SYSEXITQ))
+    return false;
+  const bool Enter = Insn->id == X86_INS_SYSENTER;
+  const bool Wide = Insn->id == X86_INS_SYSEXITQ;
+  const uint8_t Opcode = Enter ? 0x34 : 0x35;
+  if (Insn->size != (Wide ? 3 : 2) || (Wide && Insn->bytes[0] != 0x48) ||
+      Insn->bytes[Wide ? 1 : 0] != 0x0f || Insn->bytes[Wide ? 2 : 1] != Opcode)
+    return false;
+  const auto &X = Insn->detail->x86;
+  return !X.prefix[0] && !X.prefix[1] && !X.prefix[2] && !X.prefix[3] &&
+         X.opcode[0] == 0x0f && X.opcode[1] == Opcode && !X.opcode[2] &&
+         !X.opcode[3] && X.rex == (Wide ? 0x48 : 0) && X.addr_size == 8 &&
+         !X.modrm && !X.sib && !X.disp && !X.encoding.modrm_offset &&
+         !X.encoding.disp_offset && !X.encoding.disp_size &&
+         !X.encoding.imm_offset && !X.encoding.imm_size && !X.op_count &&
+         !X.avx_sae && X.avx_rm == X86_AVX_RM_INVALID &&
+         X.avx_cc == X86_AVX_CC_INVALID &&
+         X.eflags == (Enter ? X86_EFLAGS_MODIFY_IF
+                            : X86_EFLAGS_MODIFY_AF | X86_EFLAGS_MODIFY_CF |
+                                  X86_EFLAGS_MODIFY_SF | X86_EFLAGS_MODIFY_ZF |
+                                  X86_EFLAGS_MODIFY_PF | X86_EFLAGS_MODIFY_OF |
+                                  X86_EFLAGS_MODIFY_TF | X86_EFLAGS_MODIFY_IF |
+                                  X86_EFLAGS_MODIFY_DF | X86_EFLAGS_MODIFY_NT |
+                                  X86_EFLAGS_MODIFY_RF);
+}
+
 inline bool longModeEventForm(const cs_insn *Insn, Arch Target) {
   if (!Insn || !Insn->detail || Target != Arch::X64 ||
       (Insn->id != X86_INS_IRETQ && Insn->id != X86_INS_INT3 &&
@@ -278,7 +307,7 @@ inline bool form(const cs_insn *Insn, Arch Target) {
   // (Intel SDM Vol. 1, 3.4.1.1). Exact encoding alone cannot certify an empty
   // undefined-output set. The explicit V6 continuation owns its separate
   // descriptor guard that restricts these returns to long mode.
-  if (sysretForm(Insn, Target) ||
+  if (sysretForm(Insn, Target) || fastSystemForm(Insn, Target) ||
       (Insn->id != X86_INS_IRETQ && longModeEventForm(Insn, Target)))
     return true;
   if (descriptorqueryaudit::form(Insn, Target))

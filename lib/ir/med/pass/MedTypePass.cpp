@@ -1323,9 +1323,10 @@ static void inferParamTypes(MedFunc &Func, const TargetRegInfo &TRI,
                             ? Func.FPParamScalarBytes.end()
                             : Func.FPParamScalarBytes.find(MP.RegOff);
     if (PtrParameters.count(PI) && !RawAddressParameters.count(PI) &&
-        !TRI.isFrameOrLinkReg(MP.RegOff))
+        !TRI.isFrameOrLinkReg(MP.RegOff)) {
       TP.Type = NdType::makePtr();
-    else if (Scalar != Func.FPParamScalarBytes.end())
+      TP.Type->Size = TRI.PointerSize;
+    } else if (Scalar != Func.FPParamScalarBytes.end())
       TP.Type = NdType::makeFloat(Scalar->second);
     else
       TP.Type = NdType::makeInt(MP.Size);
@@ -1874,6 +1875,13 @@ void inferMedTypes(MedFunc &Func, Arch TheArch,
   }
 }
 
+void refreshInferredMedParameters(MedFunc &Func, Arch TheArch) {
+  if (Func.SourceTypeHint || Func.SourceParametersBound)
+    return;
+  const auto &TRI = getTargetRegInfo(TheArch);
+  inferParamTypes(Func, TRI, EntryParameterValues(Func, TRI.PointerSize));
+}
+
 void propagateForwardedPointerParams(std::vector<MedFunc> &Funcs,
                                      Arch TheArch) {
   const auto &TRI = getTargetRegInfo(TheArch);
@@ -1933,6 +1941,7 @@ void propagateForwardedPointerParams(std::vector<MedFunc> &Funcs,
               Caller.TypedParams[*ParamIndex].Type->Kind == NdTypeKind::Ptr)
             continue;
           Caller.TypedParams[*ParamIndex].Type = NdType::makePtr();
+          Caller.TypedParams[*ParamIndex].Type->Size = TRI.PointerSize;
           Changed = true;
         }
       }

@@ -418,6 +418,10 @@ FuncDetector::detectImpl(const BinaryImage &Img, Decoder &Dec,
   // entries that bound each naming function are known.
   std::vector<std::pair<va_t, va_t>> CodeNamedByCode;
   const uint32_t PointerSize = Img.getPointerSize();
+  std::vector<std::pair<va_t, va_t>> CodeImmediates;
+  if (IsX86LinkedCOFF && Img.Entry != 0 && !RelocationsOnly)
+    func_detect_detail::scanCodeAddressImmediatesX86(Img, Dec, CodeImmediates,
+                                                     Cancellation);
   if (PointerSize != 0)
     for (va_t Slot : Img.CodePtrRelocSlots) {
       func_detect_detail::checkCancellation(Cancellation);
@@ -599,9 +603,8 @@ FuncDetector::detectImpl(const BinaryImage &Img, Decoder &Dec,
   // still decides whether a target is an entry.
   if ((IsX86LinkedCOFF || IsX64LinkedCodeAddresses) && Img.Entry != 0) {
     const size_t TableNames = IsX86LinkedCOFF ? CodeNamedByCode.size() : 0;
-    if (IsX86LinkedCOFF && !RelocationsOnly)
-      func_detect_detail::scanCodeAddressImmediatesX86(
-          Img, Dec, CodeNamedByCode, Cancellation);
+    CodeNamedByCode.insert(CodeNamedByCode.end(), CodeImmediates.begin(),
+                           CodeImmediates.end());
     // A padding/data guess cannot end the namer's body and turn its own
     // address-taken label into independently evidenced callable code.
     std::vector<va_t> Starts;

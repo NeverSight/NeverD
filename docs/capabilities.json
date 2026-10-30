@@ -1616,6 +1616,7 @@
         "reason": "Structural comparison, bounded scalar validation and offline snapshot associations are qualified separately in docs/binary-diff.md, docs/binary-diff-lineage.md and docs/testing.md; these declarations do not extend the focused semantic capability claims in this ledger or establish release ancestry or patch presence.",
         "names": [
           "neverd diff --ambiguous-with",
+          "neverd diff --argument-access-call",
           "neverd diff --changes-context",
           "neverd diff --changes-function",
           "neverd diff --changes-max-observations",
@@ -13431,7 +13432,8 @@
       ],
       "docs": [
         "docs/interpreter-recovery.md",
-        "docs/testing.md"
+        "docs/testing.md",
+        "docs/x64-continuation-source.md"
       ],
       "limitations": [
         "Fixed mapped bytes and permissions; immutable reads require mapping evidence.",
@@ -13443,7 +13445,9 @@
         "PE recovery requires a full image-wide relocation and exception metadata load. Structurally incomplete directories refuse recovery; reached exception handlers require the explicit normal-execution profile. Source recovery does not certify binary replacement.",
         "External-store frame separation is an explicit unchecked caller precondition for machine-state recovery with entry-frame bounds; native proof APIs reject this domain.",
         "Register-case partitioning uses one existing context field per non-entry native cursor and mode, with complete fresh edge proofs and shared budgets. Unknown domains remain conservative; no guest read or caller assumption is added.",
-        "After ordinary producer, guard, register and frame refinements stall on unresolved control, a bounded lazy walk of observed predecessors can nominate one existing demanded register/frame carrier as a context field. Fresh graphs must prove every complete constant or exact frame displacement; partial carriers, later unknown predecessors and missing immutable-read evidence remain unresolved. Successful attempts add no scan; discovery, refinement, node and context budgets remain shared."
+        "After ordinary producer, guard, register and frame refinements stall on unresolved control, a bounded lazy walk of observed predecessors can nominate one existing demanded register/frame carrier as a context field. Fresh graphs must prove every complete constant or exact frame displacement; partial carriers, later unknown predecessors and missing immutable-read evidence remain unresolved. Successful attempts add no scan; discovery, refinement, node and context budgets remain shared.",
+        "The explicit x64 continuation export selects linked x64 ELF/PE instruction regions and emits architectural state C plus a required manifest. It does not establish ordinary source ABI validation, whole-function recovery or environment-owned native behavior. Callers supply the documented state and memory environment; unsupported instructions and exhausted selection budgets refuse publication.",
+        "The v10 devirtualization C interfaces and --vm-source-abi accept an explicit checked machine wrapper declaration. They do not infer missing runtime state or convert the recovery report into a source/native equivalence certificate."
       ],
       "tests": [
         {
@@ -14614,6 +14618,28 @@
             "linux",
             "windows"
           ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDX64ContinuationExportTests",
+          "source": "unittests/devirtualization/X64ContinuationExportTests.cpp",
+          "filter": "X64ContinuationExportTest.StrictRequestsAndBoundariesNeverPublishPartialSource",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDX64ContinuationExportTests",
+          "source": "unittests/devirtualization/X64ContinuationExportTests.cpp",
+          "filter": "X64ContinuationExportTest.CLIExportsTheSameSourceAndRequiresItsManifest",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
         }
       ],
       "public_surfaces": {
@@ -14635,7 +14661,10 @@
           "neverd_devirtualize_source_v8",
           "neverd_devirtualize_machine_source_v8",
           "neverd_devirtualize_source_v9",
-          "neverd_devirtualize_machine_source_v9"
+          "neverd_devirtualize_machine_source_v9",
+          "neverd_devirtualize_source_v10",
+          "neverd_devirtualize_machine_source_v10",
+          "neverd_x64_continuation_source_v1"
         ],
         "python": [],
         "cli": [
@@ -14661,7 +14690,10 @@
           "neverd decompile --vm-prove-store-return-separation",
           "neverd decompile --vm-prove-store-frame-separation",
           "neverd decompile --vm-max-symbolic-nodes",
-          "neverd decompile --vm-no-control-discovery"
+          "neverd decompile --vm-no-control-discovery",
+          "neverd decompile --vm-source-abi",
+          "neverd decompile --x64-continuation",
+          "neverd decompile --continuation-report"
         ],
         "json": []
       }

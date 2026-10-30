@@ -6913,10 +6913,6 @@ Select an operation to follow dependencies. Synthetic operations have block prov
         <translation>在比較設定中啟用依賴證據。</translation>
     </message>
     <message>
-        <source>Include control dependencies</source>
-        <translation>包括控制依賴</translation>
-    </message>
-    <message>
         <source>Inspect original function</source>
         <translation>檢查原始函式</translation>
     </message>
@@ -7051,6 +7047,32 @@ Progress does not establish equal loop counts or function results.</source>
     <message>
         <source>Proof: every counter cycle reaches a shared exit relative to an input-derived expression. Undefined behavior may occur before exit.</source>
         <translation>證明：每個計數器循環都會到達相對於輸入衍生運算式的共同出口。退出前可能發生未定義行為。</translation>
+    </message>
+    <message>
+        <source>Argument accesses</source>
+        <translation>參數存取</translation>
+    </message>
+    <message>
+        <source>Show reads and writes using the same computed address as a recovered call argument.</source>
+        <translation>顯示與已還原的呼叫參數使用相同計算位址的讀寫操作。</translation>
+    </message>
+    <message>
+        <source>Include control</source>
+        <translation>包含控制相依</translation>
+    </message>
+    <message>
+        <source>Include control dependencies when tracing inputs or uses.</source>
+        <translation>追蹤輸入或使用位置時包含控制相依。</translation>
+    </message>
+    <message>
+        <source>Call n%1 · %2 address observations · %3
+Reads and writes at a recovered argument's address. Call effects and execution order remain unknown. Activate a row to select its operation.</source>
+        <translation>呼叫 n%1 · %2 筆位址觀測 · %3
+在已還原的參數位址處觀察到的讀寫。呼叫影響與執行順序仍未知。啟用一列可定位其操作。</translation>
+    </message>
+    <message>
+        <source>Inspecting argument addresses…</source>
+        <translation>正在檢查參數位址…</translation>
     </message>
 </context>
 <context>
@@ -7864,6 +7886,38 @@ Every use of a projected parameter reads the same low bits. Whole-function behav
     <message>
         <source>Uncertain</source>
         <translation>不確定</translation>
+    </message>
+    <message>
+        <source>Argument</source>
+        <translation>參數</translation>
+    </message>
+    <message>
+        <source>Access</source>
+        <translation>存取</translation>
+    </message>
+    <message>
+        <source>RETURN input</source>
+        <translation>RETURN 輸入</translation>
+    </message>
+    <message>
+        <source>Write</source>
+        <translation>寫入</translation>
+    </message>
+    <message>
+        <source>Read</source>
+        <translation>讀取</translation>
+    </message>
+    <message>
+        <source>COPY / PHI path</source>
+        <translation>COPY / PHI 路徑</translation>
+    </message>
+    <message>
+        <source>Not observed</source>
+        <translation>未觀察到</translation>
+    </message>
+    <message>
+        <source>A same-width COPY/PHI path to a RETURN operand. That operand may be a control target; this does not establish an ABI return value or execution order.</source>
+        <translation>通往 RETURN 運算元的同寬 COPY/PHI 路徑。該運算元可能是控制目標；這無法確定 ABI 回傳值或執行順序。</translation>
     </message>
 </context>
 <context>

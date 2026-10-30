@@ -17,6 +17,7 @@
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/ir/med/MedIR.h"
 #include "neverd/ir/med/MedTypePass.h"
+#include "neverd/lift/X86/X86Regs.h"
 #include "neverd/loader/BinaryImage.h"
 
 #include "llvm/ADT/ArrayRef.h"
@@ -134,6 +135,12 @@ protected:
     for (const auto &Unit : *Units) {
       EXPECT_EQ(Unit.RequiresNativeExecution, NativeBoundary)
           << Unit.Address << " " << Unit.Diagnostic;
+      const bool V9 =
+          Options.Profile == X64ContinuationProfile::FredReturnNoFaultV9;
+      const bool V8 =
+          Options.Profile == X64ContinuationProfile::UserInterruptNoFaultV8;
+      const bool V7 =
+          Options.Profile == X64ContinuationProfile::KernelFastSystemNoFaultV7;
       const bool V6 =
           Options.Profile == X64ContinuationProfile::KernelEventsNoFaultV6;
       const bool V2 =
@@ -148,13 +155,19 @@ protected:
                       X64ContinuationProfile::KernelFaultAddressNoFaultV4;
       const bool V5 =
           Options.Profile == X64ContinuationProfile::KernelReturnNoFaultV5;
-      EXPECT_EQ(Unit.StateVersion, V6   ? 6u
+      EXPECT_EQ(Unit.StateVersion, V9   ? 9u
+                                   : V8 ? 8u
+                                   : V7 ? 7u
+                                   : V6 ? 6u
                                    : V5 ? 5u
                                    : V4 ? 4u
                                    : V3 ? 3u
                                    : V2 ? 2u
                                         : 1u);
-      EXPECT_EQ(Unit.StateBytes, V6   ? sizeof(X64ContinuationStateV6)
+      EXPECT_EQ(Unit.StateBytes, V9   ? sizeof(X64ContinuationStateV9)
+                                 : V8 ? sizeof(X64ContinuationStateV8)
+                                 : V7 ? sizeof(X64ContinuationStateV7)
+                                 : V6 ? sizeof(X64ContinuationStateV6)
                                  : V5 ? sizeof(X64ContinuationStateV5)
                                  : V4 ? sizeof(X64ContinuationStateV4)
                                  : V2 ? sizeof(X64ContinuationStateV2)
@@ -2327,6 +2340,25 @@ TEST(X64ContinuationSource, RequiresExplicitDomainAndBoundedDistinctAddresses) {
 }
 
 #include "X64FarPointerContinuationTests.inc"
+#include "X64FastSystemContinuationTests.inc"
+#include "X64FredContinuationTests.inc"
 #include "X64SysretContinuationTests.inc"
+#include "X64UserInterruptContinuationTests.inc"
+
+TEST_F(X64ContinuationSourceTest, FastSystemInstructionsHaveExplicitState) {
+  auto O = eventOptions();
+  O.Profile = X64ContinuationProfile::KernelFastSystemNoFaultV7;
+  O.SysenterMSRAddressBits = 48;
+  for (const auto &Bytes :
+       {std::vector<uint8_t>{0x0f, 0x34}, std::vector<uint8_t>{0x0f, 0x35},
+        std::vector<uint8_t>{0x48, 0x0f, 0x35}}) {
+    auto Units = buildX64ContinuationSource(image(Bytes), {0x1000}, O);
+    ASSERT_TRUE(bool(Units)) << llvm::toString(Units.takeError());
+    ASSERT_EQ(Units->size(), 1u);
+    EXPECT_FALSE(Units->front().RequiresNativeExecution);
+    EXPECT_EQ(Units->front().StateVersion, 7u);
+    EXPECT_EQ(Units->front().StateBytes, sizeof(X64ContinuationStateV7));
+  }
+}
 
 } // namespace

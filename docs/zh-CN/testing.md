@@ -103,7 +103,7 @@ v4 测试固定前缀大小及填充，拒绝截断布局和未知标志，保�
 
 数值地址测试覆盖单写者完整及子字转发、不新增快照的 undef/poison、双端序、32/64 位表示、模运算负偏移、部分重叠、不同根与 alloca 的别名、可抛异常的调用、循环、相邻工作量与用途预算，以及只删除写入时的分析失效。O0/O2 执行将原始与改写 IR 对照独立基准，同时检查返回值和别名缓冲区的每个字节。
 
-`NeverDMedMutableSourceTests` 和 `NeverDLLVMCValueTests` 在 O0/O2 下执行独立编写的循环、块重排、入口回边、运行时栈运算、较早读取、分支汇合、部分别名、布尔真值和包含零输入的位计数。负例要求在发射前拒绝畸形输入、截断目标、歧义承载和预算耗尽。超过 SSA 限制的 CLI 用例要求 LLVMC 输出可执行，并要求 HighC 明确拒绝。 连续更新和跨块存储表达式链还会检查生成 C 的体积与执行结果。
+`NeverDMedMutableSourceTests` 和 `NeverDLLVMCValueTests` 在 O0/O2 下执行独立编写的循环、块重排、入口回边、运行时栈运算、较早读取、分支汇合、部分别名、布尔真值和包含零输入的位计数。负例要求在发射前拒绝畸形输入、截断目标、歧义承载和预算耗尽。超过 SSA 限制的 CLI 用例执行 HighC 和 LLVMC。大型窄图验证超过原块数上限后的执行，存储预算的恰好达限和超限分别测试。 连续更新和跨块存储表达式链还会检查生成 C 的体积与执行结果。
 
 新增回归限制 LLVM 提升前的私有读写数量和 C 输出大小，执行长混合运算链、重排的 SSA 块、重叠的客户内存写入及零返回值的 O0/O2 检查；关键用例还经过实际 LLVM 优化流水线，并验证模块生成被拒绝后可以安全复用发射器。
 
@@ -2127,6 +2127,8 @@ ctest --test-dir build-release -L "^(NeverDX86ScalarMoveAuditTests|NeverDX86Lega
 
 `NativeStackControl.TrapExit*` · `InterpreterSpecialization.TrapIntrinsicsCannotFallThroughWithoutAnAuthenticatedExit` · `PEFixedImageTest.MachineTrapExitEndsRegionAtDeclaredTrap` · `PEFixedImageTest.UndeclaredTrapRemainsUnsupported` · `PEFixedImageTest.MachineTrapExitRejectsNonTrapInstruction` · `NativeUndefinedIndependence.UntakenTrapStillRequiresExactEvidence`.
 
+`NativeStackControl.JumpExit*` 检查直接、寄存器和内存目标、反向与未对齐的槽、过期证据及临时变量重叠。`InterpreterMachineRegionSourceTest.MemoryJumpExitsReadCurrentGuestSlots` 在选定值和新鲜未定义值两种模型下，用 UBSan 执行 HighC、LLVMC 的 O0/O2 结果，比较完整状态和内存，并覆盖槽内容变化及前置别名写入。固定地址用例要求 Linux x64；其 PE 地址处于 ASan 的影子内存空隙。运行 `NeverDInterpreterSpecializationTests` 和 `NeverDInterpreterMachineStateTests`。
+
 这些检查验证声明区域，不证明异常处理或源码／原生等价。
 
 
@@ -2243,3 +2245,7 @@ MedIR 的常量传播和复制传播共用 `canPropagateConstantToOperand`：计
 LLVM C 的合成栈槽保留完整的 128 位整数写入，再由运行时选择读取任一 64 位半部。`LLVMCValues.WideFrameStoreRetainsBothRuntimeSelectedWords` 在 O0/O2、ASan/UBSan 和文档规定的 `-fno-strict-aliasing` 契约下覆盖加法及基于对齐的 OR 寻址。运行 `NeverDLLVMCValueTests`；相关帧、向量和显示记录测试覆盖相邻存储路径。
 
 `MedLLVMDirectData.OriginalImageCursorsIgnoreUnrelatedPointerRelocations` 对 x64/AArch64 和 COFF/ELF/Mach-O 的可变游标循环执行 LLVM C 的 O0/O2 + ASan/UBSan 检查。在显式原始映像源码模式下，已确认的地址即使位于无关指针重定位附近，也使用共享的运行时映像。数值相同的普通整数保持标量；独立指针镜像保持原有验证。运行 `NeverDMedLLVMDirectDataTests` 及指针重定位边界测试。
+
+<!-- i18n-section: mutable-alignment-guards -->
+
+`MedMutableSource.AlignmentChecks*` 在两条 C 路径的 O0/O2 下执行对齐输入与未激活条件，要求激活条件下的未对齐输入触发陷阱，并拒绝错误的宽度、对齐值、输出和地址空间。

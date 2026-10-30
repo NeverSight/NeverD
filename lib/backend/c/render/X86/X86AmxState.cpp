@@ -13,6 +13,7 @@
 
 #include "neverd/backend/llvm/X86/X86AmxAsm.h"
 #include "neverd/backend/llvm/X86/X86AmxNative.h"
+#include "neverd/backend/llvm/X86/X86AmxStackLeaf.h"
 
 #include "llvm/ADT/StringRef.h"
 #include "llvm/IR/Constants.h"
@@ -148,6 +149,8 @@ std::string builtin(uint32_t D, unsigned Prefix,
 }
 std::string dispatch(uint32_t D, const std::string &Native,
                      const std::string &Fallback) {
+  if (x86AmxNeedsStackLeaf(D))
+    return "NEVERD_X86_AMX_STACK_MEMORY(" + Native + ")";
   return std::string(D & X86AmxStackReference ? "NEVERD_X86_AMX_STACK("
                                               : "NEVERD_X86_AMX(") +
          Native + ", ({ " + Fallback + " }))";
@@ -204,6 +207,10 @@ std::string gnuText(const std::string &S) {
 std::string render(const X86AmxAsm &P, std::vector<std::string> Inputs) {
   if (Inputs.size() != P.InputBytes.size())
     throw std::invalid_argument("invalid AMX assembly argument count");
+  // An expression cannot borrow the containing C function's frame pointer.
+  // The native builtin owns its isolated leaf and both unwind formats.
+  if (P.StackLeaf)
+    return {};
   std::string Text;
   for (unsigned I = 0; I < Inputs.size(); ++I)
     if (P.InputConstraints[I] == "{r16}") {
@@ -337,7 +344,10 @@ std::optional<std::string> renderX86AmxCall(
   const bool Legacy =
       llvm::StringRef(Asm->getAsmString()).starts_with(X86AmxLegacyAsmMarker);
   const llvm::StringRef Marker =
-      Legacy ? X86AmxLegacyAsmMarker : X86AmxAsmMarker;
+      llvm::StringRef(Asm->getAsmString()).starts_with(X86AmxStackLeafAsmMarker)
+          ? X86AmxStackLeafAsmMarker
+      : Legacy ? X86AmxLegacyAsmMarker
+               : X86AmxAsmMarker;
   if (!llvm::StringRef(Asm->getAsmString()).starts_with(Marker))
     return {};
   auto Header = llvm::StringRef(Asm->getAsmString())
@@ -353,6 +363,7 @@ std::optional<std::string> renderX86AmxCall(
   const auto P =
       x86AmxAsm(Descriptor, static_cast<NdMemoryAddressSpace>(Space), Legacy);
   if (!P || P->Text != Asm->getAsmString() ||
+      (P->StackLeaf && !x86AmxIsStackLeaf(Call)) ||
       P->Constraints != Asm->getConstraintString() || !Asm->hasSideEffects() ||
       Asm->isAlignStack() || Asm->canThrow() ||
       Asm->getDialect() != llvm::InlineAsm::AD_ATT ||
@@ -424,9 +435,10 @@ std::set<std::string> x86AmxFunctionFeatures(const llvm::Function &Function) {
       if (!Asm)
         continue;
       const llvm::StringRef Text = Asm->getAsmString();
-      const llvm::StringRef Marker = Text.starts_with(X86AmxLegacyAsmMarker)
-                                         ? X86AmxLegacyAsmMarker
-                                         : X86AmxAsmMarker;
+      const llvm::StringRef Marker =
+          Text.starts_with(X86AmxStackLeafAsmMarker) ? X86AmxStackLeafAsmMarker
+          : Text.starts_with(X86AmxLegacyAsmMarker)  ? X86AmxLegacyAsmMarker
+                                                     : X86AmxAsmMarker;
       if (!Text.starts_with(Marker))
         continue;
       uint32_t D;

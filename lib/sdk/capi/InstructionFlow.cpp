@@ -10,6 +10,8 @@
 
 #include "neverd/Limits.h"
 #include "neverd/decode/InstructionRelocations.h"
+#include "neverd/libc/LibCNames.h"
+#include "neverd/libc/NoReturnLoadedTarget.h"
 #include "neverd/sdk/Limits.h"
 #include "neverd/support/BinaryEncoding.h"
 #include "neverd/support/Parallel.h"
@@ -278,14 +280,19 @@ InstructionFlowScratch::summarize(const BinaryImage &Img, Decoder &Dec,
       if (auto Target = ConstantInput(Op)) {
         Flow.Kind = "call";
         Flow.Target = *Target;
+        Flow.NoReturn = NoReturnTargets &&
+                        libc::isNoReturnTarget(Img, *Target, NoReturnTargets);
       } else {
         Flow.Kind = "icall";
       }
       break;
     case NdOp::INDIR_CALL:
       Flow.Kind = "icall";
-      if (auto Slot = ConstantInput(Op))
+      if (auto Slot = ConstantInput(Op)) {
         Flow.Refs.push_back({*Slot, "read"});
+        Flow.NoReturn = NoReturnTargets && libc::isNoReturnLoadedTarget(
+                                               Img, *Slot, NoReturnTargets);
+      }
       break;
     case NdOp::BRANCH:
     case NdOp::COND_BR:
@@ -328,6 +335,12 @@ InstructionFlowScratch::summarize(const BinaryImage &Img, Decoder &Dec,
           Value && Value->Kind == Role::Address)
         Offsets.push_back(Value->Value);
   }
+  // A predicated call's unexecuted arm still reaches the next instruction.
+  // The lift carries that guard even when its last transfer is the call.
+  if (Flow.NoReturn && llvm::any_of(Ops, [](const LowOp &Op) {
+        return Op.Opcode == NdOp::COND_BR;
+      }))
+    Flow.NoReturn = false;
   if (va_t Address = Dec.pcRelCodeRefTarget(DI); Address != InvalidVA)
     Offsets.push_back(Address);
   // The next instruction's address, which a call pushes and a system call
@@ -443,6 +456,7 @@ std::vector<va_t> unsizedBody(const BinaryImage &Img, Decoder &Dec,
             // lift's conditional flow still reaches the next instruction.
             if (Flow.Kind == "cjump")
               Terminated = false;
+            Terminated |= Flow.NoReturn;
           }
           return !Terminated;
         });
@@ -462,7 +476,8 @@ bool decodeExtents(
                             InstructionFlowScratch &)>
         Visit,
     const std::function<bool()> &Stop = {},
-    std::vector<FunctionDecodeStatus> *Status = nullptr) {
+    std::vector<FunctionDecodeStatus> *Status = nullptr,
+    const libc::NoReturnTargetIndex *NoReturnTargets = nullptr) {
   std::vector<FunctionDecodeStatus> Reports(Extents.size());
   // The parts of a function its unwind records keep apart from its body,
   // past other functions' code, are its code too: MSVC moves cold paths
@@ -471,13 +486,20 @@ bool decodeExtents(
   for (const auto &Chunk : Img.ExceptionMetadata.outlyingChunks())
     Chunks[Chunk.Function].push_back(Chunk.Range);
   std::atomic<bool> DecoderFailed{false};
+  std::optional<libc::NoReturnTargetIndex> LocalNoReturnTargets;
+  if (!NoReturnTargets && llvm::any_of(Extents, [](const auto &Extent) {
+        return !Extent.second;
+      })) {
+    LocalNoReturnTargets.emplace(Img);
+    NoReturnTargets = &*LocalNoReturnTargets;
+  }
   parallelForEach(Extents.size(), [&](auto Claim, size_t Total) {
     Decoder Local;
     if (!Local.init(Img)) {
       DecoderFailed = true;
       return;
     }
-    InstructionFlowScratch Scratch;
+    InstructionFlowScratch Scratch(NoReturnTargets);
     for (size_t Index = Claim(); Index < Total && !(Stop && Stop());
          Index = Claim()) {
       const auto [Entry, Size] = Extents[Index];
@@ -539,12 +561,14 @@ bool decodeFunctions(
                             InstructionFlowScratch &)>
         Visit,
     const std::function<bool()> &Stop,
-    std::vector<FunctionDecodeStatus> *Status) {
+    std::vector<FunctionDecodeStatus> *Status,
+    const libc::NoReturnTargetIndex *NoReturnTargets) {
   std::vector<std::pair<va_t, uint64_t>> Extents;
   Extents.reserve(Page.Functions.size());
   for (const FuncInfo *F : Page.Functions)
     Extents.emplace_back(F->Entry, F->Size);
-  return decodeExtents(Img, Extents, Page.Entries, Visit, Stop, Status);
+  return decodeExtents(Img, Extents, Page.Entries, Visit, Stop, Status,
+                       NoReturnTargets);
 }
 
 std::optional<DataAccessWidths>
@@ -552,6 +576,9 @@ collectDataAccessWidths(const BinaryImage &Img,
                         llvm::ArrayRef<FuncInfo> Functions) {
   std::vector<std::pair<va_t, unsigned>> Accesses;
   const auto Ordered = orderedFunctions(Functions);
+  std::optional<libc::NoReturnTargetIndex> NoReturnTargets;
+  if (llvm::any_of(Ordered, [](const FuncInfo *F) { return !F->Size; }))
+    NoReturnTargets.emplace(Img);
   for (std::optional<va_t> Cursor = va_t{0}; Cursor;) {
     const FunctionPage Page =
         pageFunctions(Ordered, *Cursor, FunctionPage::MaxFunctionsPerPage);
@@ -565,7 +592,8 @@ collectDataAccessWidths(const BinaryImage &Img,
           for (const InstructionRef &Ref : Scratch.summarize(Img, Dec, DI).Refs)
             if (isDataAccess(Ref))
               Slots[Index].emplace_back(Ref.To, Ref.Bytes);
-        });
+        },
+        {}, nullptr, NoReturnTargets ? &*NoReturnTargets : nullptr);
     if (!Decoded)
       return std::nullopt;
     for (const auto &Slot : Slots)

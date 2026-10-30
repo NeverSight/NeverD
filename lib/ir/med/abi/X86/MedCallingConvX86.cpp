@@ -34,7 +34,10 @@ namespace neverd {
 // i386 CDECL stack-passed parameter detection
 //===----------------------------------------------------------------------===//
 
-void detectCdeclStackParams(MedFunc &Func, Arch TargetArch) {
+void med_calling_conv_detail::detectCdeclStackParams(MedFunc &Func,
+                                                     Arch TargetArch,
+                                                     BinaryFormat Format,
+                                                     const BinaryImage *Image) {
   // i386 passes stack arguments at [esp_entry + 4 + 4*i] (the return address
   // occupies [esp_entry + 0]).  Recover those incoming-stack loads as function
   // parameters AND rewrite each load to read its parameter, so the lifted
@@ -366,6 +369,9 @@ void detectCdeclStackParams(MedFunc &Func, Arch TargetArch) {
       }
     }
 
+  med_calling_conv_detail::preserveCallStackHomes(
+      Func, TargetArch, Format, Image, 4, 4, rawStackArgOffset,
+      MutableArgOffsets);
   med_calling_conv_detail::preserveFPStackHomes(Func, 4, 4, rawStackArgOffset,
                                                 MutableArgOffsets);
 

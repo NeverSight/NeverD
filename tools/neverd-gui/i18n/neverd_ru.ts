@@ -6985,10 +6985,6 @@ Select an operation to follow dependencies. Synthetic operations have block prov
         <translation>Включите свидетельства зависимостей в настройках сравнения.</translation>
     </message>
     <message>
-        <source>Include control dependencies</source>
-        <translation>Включить зависимости по управлению</translation>
-    </message>
-    <message>
         <source>Inspect original function</source>
         <translation>Изучить исходную функцию</translation>
     </message>
@@ -7123,6 +7119,32 @@ Progress does not establish equal loop counts or function results.</source>
     <message>
         <source>Proof: every counter cycle reaches a shared exit relative to an input-derived expression. Undefined behavior may occur before exit.</source>
         <translation>Доказательство: каждый цикл счётчика достигает общего выхода относительно выражения, полученного из входных данных. До выхода возможно неопределённое поведение.</translation>
+    </message>
+    <message>
+        <source>Argument accesses</source>
+        <translation>Доступы по аргументам</translation>
+    </message>
+    <message>
+        <source>Show reads and writes using the same computed address as a recovered call argument.</source>
+        <translation>Показать чтения и записи по тому же вычисленному адресу, что и восстановленный аргумент вызова.</translation>
+    </message>
+    <message>
+        <source>Include control</source>
+        <translation>Учитывать управление</translation>
+    </message>
+    <message>
+        <source>Include control dependencies when tracing inputs or uses.</source>
+        <translation>Учитывать зависимости управления при трассировке входов или использований.</translation>
+    </message>
+    <message>
+        <source>Call n%1 · %2 address observations · %3
+Reads and writes at a recovered argument's address. Call effects and execution order remain unknown. Activate a row to select its operation.</source>
+        <translation>Вызов n%1 · Наблюдений адресов: %2 · %3
+Чтения и записи по адресу восстановленного аргумента. Эффекты вызова и порядок выполнения остаются неизвестными. Активируйте строку, чтобы выбрать операцию.</translation>
+    </message>
+    <message>
+        <source>Inspecting argument addresses…</source>
+        <translation>Анализ адресов аргументов…</translation>
     </message>
 </context>
 <context>
@@ -7936,6 +7958,38 @@ Every use of a projected parameter reads the same low bits. Whole-function behav
     <message>
         <source>Uncertain</source>
         <translation>Неопределённо</translation>
+    </message>
+    <message>
+        <source>Argument</source>
+        <translation>Аргумент</translation>
+    </message>
+    <message>
+        <source>Access</source>
+        <translation>Доступ</translation>
+    </message>
+    <message>
+        <source>RETURN input</source>
+        <translation>Вход RETURN</translation>
+    </message>
+    <message>
+        <source>Write</source>
+        <translation>Запись</translation>
+    </message>
+    <message>
+        <source>Read</source>
+        <translation>Чтение</translation>
+    </message>
+    <message>
+        <source>COPY / PHI path</source>
+        <translation>Путь COPY / PHI</translation>
+    </message>
+    <message>
+        <source>Not observed</source>
+        <translation>Не наблюдалось</translation>
+    </message>
+    <message>
+        <source>A same-width COPY/PHI path to a RETURN operand. That operand may be a control target; this does not establish an ABI return value or execution order.</source>
+        <translation>Путь COPY/PHI одинаковой ширины к операнду RETURN. Операнд может быть целью передачи управления; это не устанавливает возвращаемое значение ABI или порядок выполнения.</translation>
     </message>
 </context>
 <context>

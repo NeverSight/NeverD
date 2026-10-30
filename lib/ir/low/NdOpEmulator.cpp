@@ -25,6 +25,7 @@
 #include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/ir/intrinsics/X86/X86CompressExpand.h"
 #include "neverd/ir/low/AArch64WritebackMemory.h"
+#include "neverd/ir/low/LowArchitecturalValue.h"
 #include "neverd/ir/low/LowIntrinsicEffects.h"
 #include "neverd/ir/low/LowRawEnvironment.h"
 #include "neverd/lift/X86/X86Regs.h"
@@ -501,7 +502,7 @@ void NdOpEmulator::clobberVolatileRegisters() {
 bool NdOpEmulator::step(const LowOp &Op) { return stepImpl(Op, {}); }
 
 bool NdOpEmulator::stepImpl(const LowOp &Op, llvm::ArrayRef<LowOp> Following) {
-  if (isLowRawEnvironmentRequirement(Op))
+  if (isLowRawEnvironmentRequirement(Op) || isLowArchitecturalValue(Op))
     return false;
   if (X87ContextKnown && Op.Output.isReg() &&
       ((Op.Output.Size == 10 && Op.Output.Offset >= x86reg::ST0 &&

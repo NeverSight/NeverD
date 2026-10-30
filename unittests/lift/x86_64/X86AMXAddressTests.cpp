@@ -10,9 +10,11 @@
 #include "../../../lib/backend/c/render/X86/X86AmxState.h"
 #include "gtest/gtest.h"
 
+#include "neverd/backend/c/LLVMC/LLVMCEmitter.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/backend/llvm/X86/X86AmxAsm.h"
 #include "neverd/backend/llvm/X86/X86AmxNative.h"
+#include "neverd/backend/llvm/X86/X86AmxStackLeaf.h"
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/low/LowIR.h"
 #include "neverd/ir/med/IntrinsicShapes.h"
@@ -25,6 +27,7 @@
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Verifier.h"
+#include "llvm/Passes/PassBuilder.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <array>
@@ -97,7 +100,7 @@ TEST(X86AMXAddress, ConfigPrefixesKeepIndependentDefaultStackProvenance) {
           }
 }
 
-TEST(X86AMXAddress, UnqualifiedStackStridesFailBeforeAppendingEffects) {
+TEST(X86AMXAddress, StackStridesKeepIndependentBaseAndStride) {
   for (const auto Control : {std::array<uint8_t, 2>{0x7b, 0x4b},
                              {0x79, 0x4b},
                              {0x7b, 0x4a},
@@ -123,15 +126,22 @@ TEST(X86AMXAddress, UnqualifiedStackStridesFailBeforeAppendingEffects) {
             D.setStrict(Strict);
             DecodedInsn Insn{};
             ASSERT_EQ(decode(D, Route, Bytes, Insn), Bytes.size());
-            LowOp Sentinel;
-            Sentinel.Opcode = NdOp::COPY;
-            Sentinel.Output = NdVar::tmp(0x1234, 4);
-            Sentinel.addInput(NdVar::scalar(42, 4));
-            std::vector<LowOp> Ops{Sentinel};
-            EXPECT_THROW(D.liftToLow(Insn, Ops), UnliftedInstruction);
-            ASSERT_EQ(Ops.size(), 1u);
-            EXPECT_EQ(Ops[0].Opcode, Sentinel.Opcode);
-            EXPECT_EQ(Ops[0].Output, Sentinel.Output);
+            std::vector<LowOp> Ops;
+            ASSERT_NO_THROW(D.liftToLow(Insn, Ops));
+            unsigned Effects = 0;
+            for (const auto &Op : Ops) {
+              if (Op.Opcode != NdOp::INTRINSIC)
+                continue;
+              ++Effects;
+              ASSERT_EQ(Op.NumInputs, 4u);
+              EXPECT_EQ(Op.Inputs[0].Offset, unsigned(Intrinsic::X86AMXState));
+              const auto Descriptor = uint32_t(Op.Inputs[2].Offset);
+              EXPECT_TRUE(x86AmxNeedsStackLeaf(Descriptor));
+              EXPECT_EQ(bool(Descriptor & X86AmxStackSegment), Prefix == 0x36);
+              EXPECT_EQ(Op.Inputs[3].Size, 8);
+              EXPECT_EQ(Op.MemoryAddressSpace, NdMemoryAddressSpace::Default);
+            }
+            EXPECT_EQ(Effects, 1u);
           }
 }
 
@@ -288,7 +298,7 @@ TEST(X86AMXAddress, OwnedMemorySourcesUseQualifiedCarriers) {
       for (bool Stack : {false, true})
         for (bool ExplicitSS : {false, true})
           for (bool Evex : {false, true}) {
-            if (Stack && (Address32 || x86AmxIsTileMemory(K)))
+            if (Stack && Address32)
               continue;
             const uint32_t D = X86AmxStateVersion | unsigned(K) |
                                (Address32 ? X86AmxAddress32 : 0) |
@@ -297,7 +307,8 @@ TEST(X86AMXAddress, OwnedMemorySourcesUseQualifiedCarriers) {
                                (Evex ? X86AmxEvexMemory : 0);
             const auto Plan = x86AmxAsm(D, NdMemoryAddressSpace::Default);
             ASSERT_TRUE(Plan);
-            EXPECT_EQ(Plan->InputConstraints[0], "{ax}");
+            EXPECT_EQ(Plan->InputConstraints[0],
+                      Plan->StackLeaf ? "{bp}" : "{ax}");
             if (x86AmxIsTileMemory(K))
               EXPECT_EQ(Plan->InputConstraints[1], "{cx}");
             std::vector<ExprPtr> Operands{HighExpr::makeConst(0, 8),
@@ -328,14 +339,32 @@ TEST(X86AMXAddress, OwnedMemorySourcesUseQualifiedCarriers) {
                 llvm::FunctionType::get(B.getVoidTy(), Types, false),
                 Plan->Text, Plan->Constraints, true);
             auto *F = llvm::Function::Create(
-                llvm::FunctionType::get(B.getVoidTy(), false),
-                llvm::GlobalValue::ExternalLinkage, "amx", Module);
+                llvm::FunctionType::get(
+                    B.getVoidTy(),
+                    Plan->StackLeaf ? Types : std::vector<llvm::Type *>{},
+                    false),
+                Plan->StackLeaf ? llvm::GlobalValue::InternalLinkage
+                                : llvm::GlobalValue::ExternalLinkage,
+                "amx", Module);
+            if (Plan->StackLeaf) {
+              F->setCallingConv(llvm::CallingConv::PreserveAll);
+              F->addFnAttr(X86AmxStackLeafAttribute);
+              F->addFnAttr(llvm::Attribute::NoInline);
+              F->addFnAttr("frame-pointer", "none");
+              Values = {F->getArg(0), F->getArg(1)};
+            }
             B.SetInsertPoint(llvm::BasicBlock::Create(Context, "entry", F));
             auto *Call = B.CreateCall(Asm, Values);
             B.CreateRetVoid();
             const auto LLVMSource = renderX86AmxCall(Arch::X64, *Call, AsmArgs);
             ASSERT_TRUE(LLVMSource);
             for (const auto &Source : {HighSource, *LLVMSource}) {
+              if (Plan->StackLeaf) {
+                EXPECT_NE(Source.find("NEVERD_X86_AMX_STACK_MEMORY("),
+                          std::string::npos);
+                EXPECT_EQ(Source.find("__asm__"), std::string::npos);
+                continue;
+              }
               EXPECT_NE(Source.find("\"a\""), std::string::npos);
               if (x86AmxIsTileMemory(K))
                 EXPECT_NE(Source.find("\"c\""), std::string::npos);
@@ -350,9 +379,11 @@ TEST(X86AMXAddress, OwnedMemorySourcesUseQualifiedCarriers) {
 #if defined(NEVERD_AMX_USE_NATIVE)
 #define NEVERD_X86_AMX(native, ...) native
 #define NEVERD_X86_AMX_STACK(native, ...) native
+#define NEVERD_X86_AMX_STACK_MEMORY(native) native
 #else
 #define NEVERD_X86_AMX(native, ...) __VA_ARGS__
 #define NEVERD_X86_AMX_STACK(native, ...) __VA_ARGS__
+#define NEVERD_X86_AMX_STACK_MEMORY(native) ({ _Static_assert(0, "native AMX stack-memory compiler required"); })
 #endif
 )";
               File << "__attribute__((target(\"" << x86AmxNativeFeatures(D)
@@ -371,5 +402,99 @@ TEST(X86AMXAddress, OwnedMemorySourcesUseQualifiedCarriers) {
                        << ExplicitSS << '\t' << Evex << '\n';
             }
           }
+}
+
+TEST(X86AMXAddress, StackRowsOwnAnIsolatedLeafAtTheLLVMAndCBoundaries) {
+  for (auto K : {X86AmxOp::Load, X86AmxOp::LoadT1, X86AmxOp::LoadRS,
+                 X86AmxOp::LoadRST1, X86AmxOp::Store}) {
+    const uint32_t D = X86AmxStateVersion | unsigned(K) | X86AmxStackReference;
+    MedFunc Function;
+    Function.Entry = kEntry;
+    Function.Name = "probe";
+    Function.CC = CallingConv::SysV_AMD64;
+    Function.ReturnsNoValue = true;
+    MedOp Op;
+    Op.Opcode = NdOp::INTRINSIC;
+    Op.addInput(MedVar::makeConst(unsigned(Intrinsic::X86AMXState), 2));
+    Op.addInput(MedVar::makeConst(0xface000000001234ULL, 8));
+    Op.addInput(MedVar::makeConst(D, 4));
+    Op.addInput(MedVar::makeConst(0x8765432100000040ULL, 8));
+    MedOp Return;
+    Return.Opcode = NdOp::RETURN;
+    MedBlock Block;
+    Block.Id = 0;
+    Block.Ops = {Op, Return};
+    Function.Blocks.push_back(Block);
+    ASSERT_TRUE(verifyMedFunc(Function, "AMX stack leaf"));
+    llvm::LLVMContext Context;
+    auto Module =
+        MedLLVMEmitter().emit({Function}, Context, "amx-stack", Arch::X64);
+    ASSERT_TRUE(Module);
+    ASSERT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
+    unsigned Effects = 0;
+    for (auto &F : *Module)
+      for (auto &BB : F)
+        for (auto &I : BB) {
+          auto *Call = llvm::dyn_cast<llvm::CallInst>(&I);
+          if (!Call || (Call->getCalledFunction() &&
+                        !Call->getCalledFunction()->isDeclaration()))
+            continue;
+          ++Effects;
+          const std::vector<std::string> Args(Call->arg_size(), "input");
+          auto Source = renderX86AmxCall(Arch::X64, *Call, Args);
+          ASSERT_TRUE(Source);
+          EXPECT_NE(Source->find("NEVERD_X86_AMX_STACK_MEMORY("),
+                    std::string::npos);
+          EXPECT_EQ(Source->find("__asm__"), std::string::npos);
+          if (!llvm::isa<llvm::InlineAsm>(Call->getCalledOperand()))
+            continue;
+          EXPECT_TRUE(x86AmxIsStackLeaf(*Call));
+          F.addFnAttr("frame-pointer", "all");
+          EXPECT_THROW(renderX86AmxCall(Arch::X64, *Call, Args),
+                       std::invalid_argument);
+          F.addFnAttr("frame-pointer", "none");
+          F.removeFnAttr(llvm::Attribute::NoInline);
+          EXPECT_THROW(renderX86AmxCall(Arch::X64, *Call, Args),
+                       std::invalid_argument);
+          F.addFnAttr(llvm::Attribute::NoInline);
+        }
+    EXPECT_EQ(Effects, 1u);
+    // IPO specializes a private leaf's constant inputs and removes its formal
+    // parameters. Ownership belongs to its frame/body, not an unstable ABI.
+    llvm::LoopAnalysisManager LAM;
+    llvm::FunctionAnalysisManager FAM;
+    llvm::CGSCCAnalysisManager CGAM;
+    llvm::ModuleAnalysisManager MAM;
+    llvm::PassBuilder PB;
+    PB.registerLoopAnalyses(LAM);
+    PB.registerFunctionAnalyses(FAM);
+    PB.registerCGSCCAnalyses(CGAM);
+    PB.registerModuleAnalyses(MAM);
+    PB.crossRegisterProxies(LAM, FAM, CGAM, MAM);
+    auto Pipeline =
+        PB.buildPerModuleDefaultPipeline(llvm::OptimizationLevel::O2);
+    Pipeline.run(*Module, MAM);
+    ASSERT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
+    CEmitterOptions Options;
+    Options.TheArch = Arch::X64;
+    std::string Source;
+    llvm::raw_string_ostream SourceStream(Source);
+    ASSERT_TRUE(LLVMCEmitter().emit(*Module, SourceStream, Options));
+    EXPECT_NE(Source.find("NEVERD_X86_AMX_STACK_MEMORY("), std::string::npos);
+    if (const char *Export = std::getenv("NEVERD_TEST_AMX_ADDRESS_EXPORT")) {
+      std::filesystem::create_directories(Export);
+      std::ofstream File(std::filesystem::path(Export) /
+                         ("stack-leaf-" + std::to_string(unsigned(K)) + ".ll"));
+      std::string IR;
+      llvm::raw_string_ostream Stream(IR);
+      Module->print(Stream, nullptr);
+      File << IR;
+      ASSERT_TRUE(File);
+      std::ofstream CFile(std::filesystem::path(Export) /
+                          ("stack-leaf-" + std::to_string(unsigned(K)) + ".c"));
+      CFile << Source;
+      ASSERT_TRUE(CFile);
+    }
+  }
 }
 } // namespace

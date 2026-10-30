@@ -55,8 +55,13 @@ std::vector<bool> inferMedSourcePointerParameters(
 /// Null entries have no pointer proof. Conflicting or unsupported pointee
 /// identities retain a generic pointer of the target width. These source
 /// candidates add neither storage extents nor native ABI authority.
+/// CalleeRegisterParameters is separate evidence for calls recovered in the
+/// callee's own integer-register order. The caller must prove that the type
+/// list follows every slot in that order; source-order declarations alone
+/// cannot provide these facts.
 std::vector<TypeRef> inferMedSourcePointerParameterTypes(
     const MedFunc &Function, Arch Architecture,
-    const std::map<va_t, std::vector<TypeRef>> &CalleeParameters = {});
+    const std::map<va_t, std::vector<TypeRef>> &CalleeParameters = {},
+    const std::map<va_t, std::vector<TypeRef>> &CalleeRegisterParameters = {});
 } // namespace neverd
 #endif

@@ -81,6 +81,11 @@ validateRawEnvironmentDeclarations(const SpecializationOptions &Options) {
   const auto Invalid = [](const char *Message) {
     return llvm::createStringError(llvm::errc::invalid_argument, "%s", Message);
   };
+  if (Options.UndefinedModel != SpecializationUndefinedModel::SelectedLowIR &&
+      (Options.UndefinedModel != SpecializationUndefinedModel::FreshScalarV1 ||
+       Options.X64MachineExits.empty()))
+    return Invalid(
+        "architectural choices require a supported raw-region model");
   const auto Exhausted = [] {
     return llvm::createStringError(
         std::make_error_code(std::errc::value_too_large),
@@ -598,6 +603,15 @@ bool isCetDisabledProjection(const SpecializationInstruction &Insn) {
       Insn.ProfileProjection ==
       InterpreterProfileProjection::CetDisabledIncrementShadowStackTrapV1;
   if ((!Read && !Trap) || Insn.IsNativeCall ||
+      Insn.Origin.Address == InvalidVA ||
+      Insn.Origin.Size > InvalidVA - Insn.Origin.Address ||
+      Insn.NativeBytes.size() != Insn.Origin.Size || Insn.Origin.FirstOp ||
+      Insn.Origin.OpCount != Insn.Ops.size() ||
+      Insn.UndefinedEffects.OpCount != Insn.Ops.size() ||
+      Insn.Fallthrough.Address != Insn.Origin.Address + Insn.Origin.Size ||
+      Insn.Fallthrough.Mode != Insn.Origin.Mode ||
+      Insn.Origin.Mode != InstructionMode::Default ||
+      Insn.Origin.TargetMode != LowInstructionTargetMode::Preserve ||
       Insn.NativeStackControl != SpecializationNativeStackControl::None ||
       Insn.Origin.Control != (Trap ? LowInstructionControl::Terminator
                                    : LowInstructionControl::None) ||

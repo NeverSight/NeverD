@@ -179,9 +179,10 @@ void recordConstantCodeSlots(BinaryImage &Img);
 /// jump table so, after its function.
 void recordRelocatedPointerRunsInCode(BinaryImage &Img);
 
-/// Authenticate indexed full-pointer reads from reachable instructions.
-/// Reclassify only complete contiguous relocation runs among code, recording
-/// exact CALL slots and JMP source instructions for function discovery.
+/// Authenticate fixed-base indexed pointer reads reached from known code
+/// entries. Reclassify complete relocated runs among code and record exact
+/// CALL slots and JMP readers in any readable section. Run before heuristic
+/// function discovery so case labels cannot acquire false function symbols.
 void recordIndexedTableBasesInCode(BinaryImage &Img);
 
 /// Parse one delay-import descriptor from the already mapped image.  Supports

@@ -325,6 +325,14 @@ ProgramFeatures computeFeatures(const Program &P,
               Out.AddressSites.push_back(
                   {P.functionAt(Address.Key).value_or(NoIndex),
                    Out.Instructions, Address.Operand});
+            else
+              Out.DataSites.push_back({Address.Key, Out.Instructions,
+                                       Address.Operand, Address.Kind});
+          if (I.HasUnresolvedData &&
+              !llvm::any_of(P.addressReferences(I), [](const auto &Address) {
+                return Address.Kind == ReferenceKind::UnresolvedData;
+              }))
+            Out.DataSitesComplete = false;
           if (I.Callee != NoIndex)
             Out.AddressSites.push_back({I.Callee, Out.Instructions, NoIndex});
           Out.UnresolvedCallee |= I.UnresolvedCallee;
@@ -339,9 +347,16 @@ ProgramFeatures computeFeatures(const Program &P,
         Keys.push_back((uint64_t(E.From) << 36) | (uint64_t(E.To) << 4) |
                        uint64_t(E.Kind));
       llvm::sort(Keys);
-      for (uint64_t K : Keys)
+      StableHash ReferenceLayout(BodyWithPadding.value());
+      ReferenceLayout.add(F.BlockCount).add(F.EdgeCount);
+      for (const Block &B : P.blocks(F))
+        ReferenceLayout.add(B.InstructionCount);
+      for (uint64_t K : Keys) {
         Shape.add(K);
+        ReferenceLayout.add(K);
+      }
       Shape.add(F.EntryBlock);
+      Out.ReferenceLayout = ReferenceLayout.add(F.EntryBlock).value();
 
       Out.Blocks = F.BlockCount;
       Out.Edges = F.EdgeCount;
@@ -375,6 +390,11 @@ ProgramFeatures computeFeatures(const Program &P,
 
       StableHash Strings, Constants;
       unsigned StringCount = 0, ConstantCount = 0;
+      Keys.clear();
+      for (const auto &Site : Out.DataSites)
+        if (Site.Kind == ReferenceKind::UnresolvedData)
+          Keys.push_back(Site.Key);
+      llvm::sort(Keys);
       for (const Reference &Ref : P.references(F)) {
         if (Control.stop())
           return;
@@ -388,6 +408,7 @@ ProgramFeatures computeFeatures(const Program &P,
           ++Out.FunctionReferences;
         } else if (Ref.Kind == ReferenceKind::UnresolvedData) {
           Out.UnresolvedData = true;
+          Out.DataSitesComplete &= llvm::binary_search(Keys, Ref.Key);
         }
       }
       if (StringCount)

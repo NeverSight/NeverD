@@ -3,6 +3,15 @@
 Use public fixtures and emitter tests as the durable contract. Private binary
 analysis and comparison output belong outside the repository.
 
+Win64 positional stack-input proofs now track original byte overwrites on every
+path. Reusing a fully replaced slot after an opaque access no longer invents
+an incoming argument dependency. Partial writes, earlier reads and unmatched
+paths retain their dependencies; native argument positions remain unchanged.
+Both C routes execute the public overwritten-slot fixture, including omitted
+callees. HighC also preserves wide small immediates at unprototyped calls, where
+default int promotion cannot initialize a complete stack word. This closes
+that proof gap, not alias-dependent parameter holes or native kernel entry ABIs.
+
 ELF relocation immutability also requires a dynamic-loader contract and full
 protected pages. An interpreterless static entry and a partial final RELRO page
 retain runtime storage; the target's maximum base page governs the proof.
@@ -164,15 +173,32 @@ scalar uses and unsupported pointee graphs retain their generic pointer or
 integer carrier. Both C routes and native source-hint inference consume that
 one result; this is a source candidate, not an original-prototype or storage
 extent proof. Portable declaration qualifiers, function-pointer signatures,
-general local wrapper-chain propagation, missing runtime state and native
-Windows execution remain separate work.
+omitted-callee and recursive wrapper propagation, missing runtime state and
+native Windows execution remain separate work. Already selected local bodies
+now propagate compatible pointees through acyclic call chains using the same
+whole-value proof. Register-ordered calls require an exact parameter-order
+match; conflicting and unsupported uses remain conservative. Each relevant
+body is analyzed once, in weighted parallel waves, without additional lifting.
+Forward-only ARM64 parameters keep their distinct incoming slots even without
+SSA ids; LLVMC refreshes newly recovered parameter carriers through the type
+owner without resetting its settled return contract.
 
 Local MedIR address inference and direct-caller pointer propagation now share
 the actual entry-value check. First definitions and call clobbers can have SSA
 version zero; they must not retype an unrelated incoming register or propagate
 that false pointer to outer callers. Cross-architecture controls retain entry
 self-copies and independent narrow writes. This fixes type contamination,
-without resolving a VM's incoming register bank or general wrapper pointees.
+without resolving a VM's incoming register bank. Local and forwarded pointer
+carriers also retain four-byte x86/ARM32 widths instead of the type factory's
+default eight bytes.
+
+Incoming x86/x64 stack-argument recovery now consults the shared physical CALL
+write proof before replacing loads with parameters. Instruction-owned FP memory
+reads participate in that proof too. Known local return-PC stores remain
+materialized, while a CALL that overwrites an incoming argument retains the
+ordinary-source refusal instead of returning its stale entry value. This closes
+an ABI-recovery ordering bug; it does not authorize arbitrary incoming-frame
+writes or supply missing kernel continuation state.
 
 Captured HFA callees retain their checked source record signature, matching
 argument reassembly and result unpacking. The saved function pointer remains
@@ -290,6 +316,13 @@ lose its coordinate without proving destruction. Stores, arbitrary pointers,
 nested opaque effects and stack-pointer escapes still prevent a complete
 unused-slot proof. The public Win64 fixture executes direct and GPR-addressed
 straight-line, branching and looping bodies against their original machine code.
+Exact image-data reads now cross this proof through instruction-local full-width
+copies and checked scalar offsets. Both spill overwrite and stack-input proofs
+share complete mapped-object ownership checks. Mutable image reads remain live
+in both C routes and match their original instructions; equal scalars, loaded
+pointers, stale/partial addresses, stores and ordered/segment accesses cannot
+supply this evidence. General pointer borrows and opaque nested-call effects
+remain open.
 
 Unknown incoming stack-pointer
 escapes still prevent a complete stack-argument bound: do not cap calls
@@ -299,6 +332,23 @@ later arguments are absent.
 Windows provider declarations now include NDIS, filter manager, NETIO,
 storage, USB and HID APIs, with explicit x86/x64 layout and SDK HighC/LLVMC
 coverage. User libraries include more networking, security and device APIs.
+Independent official providers now also cover NMR/WSK, Kernel Streaming,
+storage class, TDI, VideoPort, ATA, battery, HID port, SmartCard, ETW, PathCch,
+WinRT strings, RPC proxy, credentials, device queries, application model,
+property variants, performance data and biometrics. The compiler ABI probe
+checks representative functions across x86/x64/ARM64; the source-call probe
+checks ETW callbacks, paths and strings through both C routes. Callback
+conversion now shares the declaration's portable spelling and preserves
+borrowed record identities without reconstructing recursive layouts.
+Nested x86 callbacks with explicit `__cdecl`/`__stdcall` retain their source
+qualifiers through the same admitted declaration and call conversion.
+LLVMC definition and call bridges also retain source pointer aliases when
+parameter recovery already produced LLVM pointers. The module's default
+address-space width must match the declaration; a narrower source pointer
+cannot supply that alias.
+Name-only Windows `swprintf`/`vswprintf` forwarding remains unavailable because
+legacy/kernel and ISO declarations differ; selected prototypes retain their
+own signatures.
 An export inventory is only a coverage audit; undocumented and ordinal-only
 exports still require authenticated declarations. The retained Microsoft
 SDK/WDK input supplies x86/x64/ARM64 declarations; the older MinGW DDK input
@@ -978,3 +1028,15 @@ conditional memory, invocation lifetime and both C routes remain open.
   Mach-O execution matrix compares both C routes at O0/O2 and rejects ranges
   beyond mapped storage, including extra file padding. Dynamic counts,
   segmented operands and address-size overrides retain their previous limits.
+
+## Physical dispatch wrappers
+
+Canonical PE x64 dispatch wrappers now have an explicit native source bridge
+in both C routes. The wrapper's original register/stack transfer and selector
+stay in a naked Win64 body; a known service keeps its complete documented
+parameter list. These wrappers no longer need guessed dispatcher arguments.
+The independent CPL0 fixture checks original bytes against recompiled C,
+including whole-unit typed callers and stack arguments. Native linkage and
+service dispatch remain environment bindings; this is not portable ordinary
+C or an implementation of the service. General incoming-slot/borrow proofs
+and physical interrupt/system entry return ownership remain separate work.

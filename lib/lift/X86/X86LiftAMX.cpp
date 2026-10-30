@@ -210,8 +210,8 @@ bool liftAMX(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
     else if (Space == NdMemoryAddressSpace::Default &&
              isStackDefaultBase(Memory.mem.base))
       Descriptor |= X86AmxStackReference;
-    // Reject before emitting stride/EA temporaries: row-memory still needs a
-    // native stack-base contract separate from its architectural stride.
+    // Validate provenance before appending stride/EA effects. Native row-memory
+    // keeps its complete base in a separate compiler-owned stack leaf.
     if (!x86AmxAddressIsValid(Descriptor, Space))
       throw UnliftedInstruction(Insn->address, Insn->mnemonic, Insn->op_str);
     cs_x86_op RowBase = Memory;

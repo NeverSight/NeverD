@@ -24,6 +24,7 @@
 #include "neverd/ir/low/LowIR.h"
 #include "neverd/ir/med/MedCallConvention.h"
 #include "neverd/ir/med/MedCallLeftovers.h"
+#include "neverd/ir/med/MedCallingConvDetail.h"
 #include "neverd/ir/med/MedIR.h"
 #include "neverd/ir/med/MedProvenStackOffsets.h"
 #include "neverd/ir/med/MedStackAlignment.h"
@@ -382,7 +383,7 @@ static bool checkSourceCallReturnReads(
         }
       }
       if (Op.MemoryAddressSpace == NdMemoryAddressSpace::Default &&
-          ((Op.Opcode == NdOp::LOAD && Op.NumInputs >= 1) ||
+          (med_calling_conv_detail::stackMemoryRead(Op) ||
            (Op.Opcode == NdOp::STORE && Op.NumInputs >= 2))) {
         Memory.push_back(&Op);
         Positions.emplace(&Op, std::pair{Block.Id, I});
@@ -400,8 +401,10 @@ static bool checkSourceCallReturnReads(
   const int64_t MinimumOffset = llvm::minIntN(Width * 8);
   const int64_t MaximumOffset = llvm::maxIntN(Width * 8);
   std::vector<MedVar> Values;
-  for (const auto *Op : Memory)
-    Values.push_back(Op->Inputs[0]);
+  for (const auto *Op : Memory) {
+    const auto Read = med_calling_conv_detail::stackMemoryRead(*Op);
+    Values.push_back(Op->Inputs[Read ? Read->AddressInput : 0]);
+  }
   for (const auto *Op : Calls) {
     const auto It = StackPointers.find(Op);
     Values.push_back(It == StackPointers.end()
@@ -414,15 +417,15 @@ static bool checkSourceCallReturnReads(
   std::map<const MedOp *, Access> Stores;
   for (size_t I = 0; I < Memory.size(); ++I) {
     const auto *Op = Memory[I];
-    const auto Size =
-        Op->Opcode == NdOp::LOAD ? Op->Output.Size : Op->Inputs[1].Size;
+    const auto Read = med_calling_conv_detail::stackMemoryRead(*Op);
+    const auto Size = Read ? Read->Bytes : Op->Inputs[1].Size;
     if (!Offsets[I] || !Size)
       continue;
     // The beginning fits the native coordinate by entryStackOffsets. Keep
     // the whole access in that coordinate too: skipping a wrapping load
     // would remove an observer, while a wrapping store proves no overwrite.
     if (*Offsets[I] > MaximumOffset - Size) {
-      if (Op->Opcode == NdOp::LOAD)
+      if (Read)
         return Refuse("load at 0x" + llvm::utohexstr(Op->Addr) +
                       " exceeds the native stack-offset interval; refusing "
                       "an unproved frame projection");
@@ -430,7 +433,7 @@ static bool checkSourceCallReturnReads(
     }
     const auto [Block, Position] = Positions.at(Op);
     Access A{Op, Block, Position, *Offsets[I], *Offsets[I] + Size};
-    if (Op->Opcode == NdOp::LOAD)
+    if (Read)
       Loads.push_back(A);
     else if (Op->MemoryOrdering == NdMemoryOrdering::None &&
              Op->MemoryAddressSpace == NdMemoryAddressSpace::Default)
@@ -875,7 +878,7 @@ static bool checkSourceCallReturnReads(
                   llvm::utohexstr(Item.Op->Addr) +
                   "; the ordinary C frame does not represent that write; "
                   "refusing a stale frame value";
-              if (!Defer || !Load)
+              if (!Defer || !Load || Load->Op->Opcode != NdOp::LOAD)
                 return Refuse(Reason);
               Defer->push_back(
                   {Load->Op->Addr, Load->Op->OriginSeq, Explain(Reason)});

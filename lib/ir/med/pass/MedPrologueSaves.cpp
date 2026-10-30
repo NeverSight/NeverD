@@ -1011,6 +1011,26 @@ bool isSpillScalarStep(NdOp Opcode) {
   }
 }
 
+/// An exact mapped data object is separate from the invocation's source
+/// frame. Read the complete span from one current owner; an equal scalar,
+/// code address, fragment or truncated mapping supplies no separation fact.
+bool isCompleteSourceImageRead(const BinaryImage &Image, va_t Address,
+                               ConstantAddressProvenance Provenance, va_t Owner,
+                               uint16_t Bytes) {
+  if (!Bytes || !isExactAddressProvenance(Provenance) ||
+      isCodeAddressProvenance(Provenance))
+    return false;
+  if (Owner == InvalidVA)
+    Owner = Image.layoutAddressOwner(Address);
+  const auto End = Image.mappedObjectOwnerEnd(Address);
+  return End && Address < *End && Bytes <= *End - Address &&
+         Owner != InvalidVA && Image.layoutAddressOwner(Address) == Owner &&
+         Image.layoutAddressOwner(Address + Bytes - 1) == Owner &&
+         Image.hasObjectDataProvenance(Address) &&
+         Image.hasObjectDataProvenance(Address + Bytes - 1) &&
+         Image.readVA(Address, Bytes);
+}
+
 /// Saving a scalar into scratch storage does not read its value
 /// when every path overwrites the bytes before observing them. Keep the proof
 /// in source preparation so HighC and LLVMC discard the same transport. Calls,
@@ -1066,20 +1086,9 @@ void markUnobservedStackSpills(MedFunc &Func, Arch Architecture,
           continue;
         Pointer = Found->second;
       }
-      if (!isExactAddressProvenance(Pointer->Provenance) ||
-          isCodeAddressProvenance(Pointer->Provenance))
-        continue;
-      const va_t Address = Pointer->ConstVal;
-      const va_t Owner = Pointer->AddressOwnerVA == InvalidVA
-                             ? Image->layoutAddressOwner(Address)
-                             : Pointer->AddressOwnerVA;
-      const auto End = Image->mappedObjectOwnerEnd(Address);
-      if (End && Address < *End && Op.Output.Size <= *End - Address &&
-          Owner != InvalidVA && Image->layoutAddressOwner(Address) == Owner &&
-          Image->layoutAddressOwner(Address + Op.Output.Size - 1) == Owner &&
-          Image->hasObjectDataProvenance(Address) &&
-          Image->hasObjectDataProvenance(Address + Op.Output.Size - 1) &&
-          Image->readVA(Address, Op.Output.Size))
+      if (isCompleteSourceImageRead(*Image, Pointer->ConstVal,
+                                    Pointer->Provenance,
+                                    Pointer->AddressOwnerVA, Op.Output.Size))
         ImageReads.insert(&Op);
     }
   }
@@ -2005,9 +2014,11 @@ std::set<unsigned> sourceRegisterInputOverwrites(
   return Result;
 }
 
-std::set<unsigned> unobservedSourceStackParameters(
-    const MedFunc &Func, llvm::ArrayRef<LowBlock> OriginalBlocks,
-    const std::set<va_t> &DeclaredCallees, size_t &Budget) {
+std::set<unsigned>
+unobservedSourceStackParameters(const MedFunc &Func,
+                                llvm::ArrayRef<LowBlock> OriginalBlocks,
+                                const std::set<va_t> &DeclaredCallees,
+                                size_t &Budget, const BinaryImage *Image) {
   if (!hasSourceRegisterInputBody(Func) || OriginalBlocks.empty() ||
       OriginalBlocks.front().StartAddr != Func.Entry ||
       !OriginalBlocks.front().Preds.empty() ||
@@ -2101,6 +2112,25 @@ std::set<unsigned> unobservedSourceStackParameters(
       return {};
     Successors[Index].assign(Actual.begin(), Actual.end());
   }
+  // An opaque suffix below may end an input query early. Check connectivity
+  // first so that such a cut cannot hide an independent unreachable cycle.
+  std::vector<bool> Reachable(OriginalBlocks.size());
+  std::vector<size_t> PendingBlocks{0};
+  Reachable[0] = true;
+  while (!PendingBlocks.empty()) {
+    const size_t Index = PendingBlocks.back();
+    PendingBlocks.pop_back();
+    if (1 + Successors[Index].size() > Budget)
+      return {};
+    Budget -= 1 + Successors[Index].size();
+    for (size_t Next : Successors[Index])
+      if (!Reachable[Next]) {
+        Reachable[Next] = true;
+        PendingBlocks.push_back(Next);
+      }
+  }
+  if (llvm::is_contained(Reachable, false))
+    return {};
   // Track exact frame coordinates in physical GPRs as well as instruction
   // temporaries. Byte taint survives partial definitions and disagreeing joins;
   // neither a lost coordinate nor an unread source value proves nonescape.
@@ -2108,6 +2138,7 @@ std::set<unsigned> unobservedSourceStackParameters(
     std::optional<int64_t> Offset;
     uint16_t Bytes = 0;
     bool Derived = false;
+    std::optional<NdVar> ImageAddress;
   };
   struct FrameAlias {
     std::optional<int64_t> Offset;
@@ -2117,25 +2148,31 @@ std::set<unsigned> unobservedSourceStackParameters(
     int64_t Stack = 0;
     std::set<uint64_t> Flags;
     std::map<uint64_t, FrameAlias> Registers;
+    std::vector<uint8_t> LiveBytes;
   };
   std::vector<std::optional<FrameState>> Entries(OriginalBlocks.size());
-  Entries[0] = FrameState{};
+  const size_t StackParameters = Func.Params.size() - Layout.Registers.size();
+  const uint8_t AllBytes = (uint16_t{1} << Layout.SlotBytes) - 1;
+  Entries[0] =
+      FrameState{0, {}, {}, std::vector<uint8_t>(StackParameters, AllBytes)};
   std::vector<size_t> Work{0};
-  std::vector<std::pair<int64_t, int64_t>> Reads;
+  std::set<unsigned> MemoryObserved;
+  bool CutAtObserver = false;
   std::map<Occurrence, const LowOp *> MatchedCalls;
   bool Bounded = true;
   while (!Work.empty()) {
     const size_t Index = Work.back();
     Work.pop_back();
     const auto &Block = OriginalBlocks[Index];
-    const size_t StateCost =
-        1 + Entries[Index]->Flags.size() + Entries[Index]->Registers.size();
+    const size_t StateCost = 1 + Entries[Index]->Flags.size() +
+                             Entries[Index]->Registers.size() + StackParameters;
     if (StateCost > Budget)
       return {};
     Budget -= StateCost;
     int64_t Stack = Entries[Index]->Stack;
     auto FrameFlags = Entries[Index]->Flags;
     auto Registers = Entries[Index]->Registers;
+    auto LiveBytes = Entries[Index]->LiveBytes;
     std::map<uint64_t, FrameValue> Temps;
     va_t Instruction = InvalidVA;
     // Keep nonoverlapping temporary intervals. A subrange read still carries
@@ -2151,6 +2188,9 @@ std::set<unsigned> unobservedSourceStackParameters(
       return At;
     };
     const auto Read = [&](const NdVar &V) -> FrameValue {
+      if (V.isConst() && V.Size == TRI.PointerSize &&
+          isExactAddressProvenance(V.Provenance))
+        return {std::nullopt, V.Size, false, V};
       if (V.isReg() && V.Offset == TRI.StackPointer)
         return {V.Size == TRI.PointerSize ? std::optional(Stack) : std::nullopt,
                 V.Size, true};
@@ -2185,188 +2225,271 @@ std::set<unsigned> unobservedSourceStackParameters(
           }
           --Budget;
           Value.Derived |= At->second.Derived;
-          if (At->first == V.Offset && At->second.Bytes == V.Size)
+          if (At->first == V.Offset && At->second.Bytes == V.Size) {
             Value.Offset = At->second.Offset;
+            Value.ImageAddress = At->second.ImageAddress;
+          }
         }
       return Value;
     };
-    for (const auto &Op : Block.Ops) {
-      if (!Budget || Op.Addr < Block.StartAddr || Op.Addr >= Block.EndAddr)
-        return {};
-      --Budget;
-      if (Op.Addr != Instruction) {
-        Temps.clear();
-        Instruction = Op.Addr;
+    // The address of a parameter slot can be read after its original bytes
+    // have been destroyed. Track entry contents, not the lifetime of storage.
+    // Unknown observers end this path for every still-live byte; completed
+    // overwrites remain valid facts even when the suffix is opaque.
+    const auto Access = [&](int64_t Begin, int64_t End, bool Write) {
+      const int64_t Limit =
+          Layout.EntryStackBase + StackParameters * Layout.SlotBytes;
+      if (End <= Layout.EntryStackBase || Begin >= Limit)
+        return true;
+      const size_t First = (std::max(Begin, int64_t(Layout.EntryStackBase)) -
+                            Layout.EntryStackBase) /
+                           Layout.SlotBytes;
+      const size_t Last = (std::min(End, Limit) - Layout.EntryStackBase +
+                           Layout.SlotBytes - 1) /
+                          Layout.SlotBytes;
+      if (Last - First > Budget) {
+        Budget = 0;
+        return false;
       }
-      if (Op.MemoryOrdering != NdMemoryOrdering::None ||
-          Op.MemoryAddressSpace != NdMemoryAddressSpace::Default)
-        return {};
-      if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) {
-        const auto At = Calls.find({Op.Addr, Op.Seq});
-        if (Op.NumInputs != 1 || !Op.Inputs[0].isConst() || At == Calls.end())
-          return {};
-        const auto &Call = *At->second;
-        if (Call.Opcode != Op.Opcode || !Call.NumInputs ||
-            !Call.Inputs[0].isConst() ||
-            Call.Inputs[0].ConstVal != Op.Inputs[0].Offset ||
-            !DeclaredCallees.count(Op.Inputs[0].Offset) ||
-            Call.SourceCallHint || Call.IsTailCall || Call.DoesNotReturn ||
-            Call.CalleeStackArgs < 0 || Call.CalleeVectorArgs != 0 ||
-            Call.CalleeVectorSlots || Stack > 0)
-          return {};
-        const int64_t Arguments = std::max<int64_t>(
-            int64_t(Call.CalleeStackArgs) - int64_t(Layout.Registers.size()),
-            0);
-        const auto End = detail::checkedAffineOffset(
-            Stack, Layout.CallStackBase + Arguments * Layout.SlotBytes);
-        if (!End)
-          return {};
-        // Declared callees own their outgoing argument/home area and storage
-        // below call SP. A shallow frame can expose incoming slots to that
-        // area.
-        Reads.emplace_back(std::min<int64_t>(Stack, 0), *End);
-        const auto [Matched, New] =
-            MatchedCalls.emplace(Occurrence{Op.Addr, Op.Seq}, &Op);
-        if (!New && Matched->second != &Op)
-          return {};
-        // Authenticate every implicit register observer at this exact call.
-        // A may-write summary or the CALL result operand cannot erase an old
-        // pointer on a preserving path. Clobbers lose their coordinate but
-        // retain possible taint until an original full definition.
-        const auto Unread = Func.CallUnreadRegisters.find(Call.CallSiteId);
-        for (auto &[Register, Alias] : Registers) {
-          if (!Budget)
-            return {};
-          --Budget;
-          if (TRI.isReturnReg(Register) || TRI.isReturnControlReg(Register) ||
-              llvm::is_contained(TRI.IntReturnRegs, Register) ||
-              !Call.CallSiteId || Unread == Func.CallUnreadRegisters.end() ||
-              Unread->second.Instruction != Op.Addr ||
-              Unread->second.OriginSeq != Op.Seq ||
-              Unread->second.Target != Op.Inputs[0].Offset ||
-              !callPreservesRegisterBytes(Arch::X64, Unread->second.Families,
-                                          Register, TRI.PointerSize))
-            return {};
-          if (!callPreservesRegisterBytes(Arch::X64, Call.CallPreservedGPRs,
-                                          Register, TRI.PointerSize))
-            Alias.Offset.reset();
+      Budget -= Last - First;
+      for (size_t P = First; P < Last; ++P) {
+        const int64_t Offset = Layout.EntryStackBase + P * Layout.SlotBytes;
+        uint8_t Mask = 0;
+        for (unsigned Byte = 0; Byte < Layout.SlotBytes; ++Byte)
+          if (Begin <= Offset + Byte && Offset + Byte < End)
+            Mask |= uint8_t{1} << Byte;
+        if (Write)
+          LiveBytes[P] &= ~Mask;
+        else if (LiveBytes[P] & Mask)
+          MemoryObserved.insert(Layout.Registers.size() + P);
+      }
+      return true;
+    };
+    const auto Transfer = [&]() -> bool {
+      for (const auto &Op : Block.Ops) {
+        if (!Budget || Op.Addr < Block.StartAddr || Op.Addr >= Block.EndAddr)
+          return false;
+        --Budget;
+        if (Op.Addr != Instruction) {
+          Temps.clear();
+          Instruction = Op.Addr;
         }
-        // Calls do not prove destruction of frame-derived flags either.
-        continue;
-      }
-      if (Op.Opcode == NdOp::RETURN) {
-        if (&Op != &Block.Ops.back() || Stack || !Registers.empty() ||
-            Op.NumInputs != 1 ||
-            Op.Inputs[0] != NdVar::reg(TRI.IntReturnReg, TRI.PointerSize))
-          return {};
-        continue;
-      }
-      FrameValue Value;
-      for (unsigned K = 0; K < Op.NumInputs; ++K)
-        Value.Derived |= Read(Op.Inputs[K]).Derived;
-      if (Op.Opcode == NdOp::BRANCH || Op.Opcode == NdOp::COND_BR) {
-        if (&Op != &Block.Ops.back() || Value.Derived)
-          return {};
-        continue;
-      }
-      if (Op.Opcode == NdOp::LOAD || Op.Opcode == NdOp::STORE) {
-        if (Op.NumInputs != (Op.Opcode == NdOp::LOAD ? 1 : 2))
-          return {};
-        const auto Address = Read(Op.Inputs[0]).Offset;
-        const auto Bytes =
-            Op.Opcode == NdOp::LOAD ? Op.Output.Size : Op.Inputs[1].Size;
-        const auto End = Address ? detail::checkedAffineOffset(*Address, Bytes)
-                                 : std::nullopt;
-        if (!Address || !Bytes || !End ||
-            (Op.Opcode == NdOp::STORE && Read(Op.Inputs[1]).Derived))
-          return {};
-        if (Op.Opcode == NdOp::STORE)
+        if (Op.MemoryOrdering != NdMemoryOrdering::None ||
+            Op.MemoryAddressSpace != NdMemoryAddressSpace::Default)
+          return false;
+        if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) {
+          const auto At = Calls.find({Op.Addr, Op.Seq});
+          if (Op.NumInputs != 1 || !Op.Inputs[0].isConst() || At == Calls.end())
+            return false;
+          const auto &Call = *At->second;
+          if (Call.Opcode != Op.Opcode || !Call.NumInputs ||
+              !Call.Inputs[0].isConst() ||
+              Call.Inputs[0].ConstVal != Op.Inputs[0].Offset ||
+              !DeclaredCallees.count(Op.Inputs[0].Offset) ||
+              Call.SourceCallHint || Call.IsTailCall || Call.DoesNotReturn ||
+              Call.CalleeStackArgs < 0 || Call.CalleeVectorArgs != 0 ||
+              Call.CalleeVectorSlots || Stack > 0)
+            return false;
+          const int64_t Arguments = std::max<int64_t>(
+              int64_t(Call.CalleeStackArgs) - int64_t(Layout.Registers.size()),
+              0);
+          const auto End = detail::checkedAffineOffset(
+              Stack, Layout.CallStackBase + Arguments * Layout.SlotBytes);
+          if (!End)
+            return false;
+          // Declared callees own their outgoing argument/home area and storage
+          // below call SP. A shallow frame can expose incoming slots to that
+          // area.
+          if (!Access(std::min<int64_t>(Stack, 0), *End, false))
+            return false;
+          const auto [Matched, New] =
+              MatchedCalls.emplace(Occurrence{Op.Addr, Op.Seq}, &Op);
+          if (!New && Matched->second != &Op)
+            return false;
+          // Authenticate every implicit register observer at this exact call.
+          // A may-write summary or the CALL result operand cannot erase an old
+          // pointer on a preserving path. Clobbers lose their coordinate but
+          // retain possible taint until an original full definition.
+          const auto Unread = Func.CallUnreadRegisters.find(Call.CallSiteId);
+          for (auto &[Register, Alias] : Registers) {
+            if (!Budget)
+              return false;
+            --Budget;
+            if (TRI.isReturnReg(Register) || TRI.isReturnControlReg(Register) ||
+                llvm::is_contained(TRI.IntReturnRegs, Register) ||
+                !Call.CallSiteId || Unread == Func.CallUnreadRegisters.end() ||
+                Unread->second.Instruction != Op.Addr ||
+                Unread->second.OriginSeq != Op.Seq ||
+                Unread->second.Target != Op.Inputs[0].Offset ||
+                !callPreservesRegisterBytes(Arch::X64, Unread->second.Families,
+                                            Register, TRI.PointerSize))
+              return false;
+            if (!callPreservesRegisterBytes(Arch::X64, Call.CallPreservedGPRs,
+                                            Register, TRI.PointerSize))
+              Alias.Offset.reset();
+          }
+          // Calls do not prove destruction of frame-derived flags either.
           continue;
-        Reads.emplace_back(*Address, *End);
-        Value.Derived = false;
-      } else if (!isSpillScalarStep(Op.Opcode)) {
-        return {};
-      } else if (Op.Opcode == NdOp::COPY && Op.NumInputs == 1 &&
-                 Op.Output.Size == Op.Inputs[0].Size) {
-        Value.Offset = Read(Op.Inputs[0]).Offset;
-      } else if ((Op.Opcode == NdOp::INT_ADD || Op.Opcode == NdOp::INT_SUB) &&
-                 Op.NumInputs == 2 && Op.Output.Size == TRI.PointerSize &&
-                 Op.Inputs[1].isConst()) {
-        if (const auto Base = Read(Op.Inputs[0]).Offset)
-          Value.Offset = detail::checkedAffineOffset(
-              *Base, static_cast<int64_t>(Op.Inputs[1].Offset),
-              Op.Opcode == NdOp::INT_SUB);
-      }
-      Value.Bytes = Op.Output.Size;
-      if (Op.Output.isReg()) {
-        if (Op.Output.Offset == TRI.StackPointer) {
-          if (Op.Output.Size != TRI.PointerSize || !Value.Offset)
-            return {};
-          Stack = *Value.Offset;
-        } else if (TRI.isFlag(Op.Output.Offset, Op.Output.Size)) {
-          if (Value.Derived)
-            FrameFlags.insert(Op.Output.Offset);
-          else
-            FrameFlags.erase(Op.Output.Offset);
-        } else if (const auto Family =
-                       gprFamilyOf(Arch::X64, Op.Output.Offset)) {
-          const uint64_t Base = *Family * TRI.PointerSize;
-          const unsigned Byte = Op.Output.Offset - Base;
-          if (Base == TRI.StackPointer || !Op.Output.Size ||
-              Op.Output.Size > TRI.PointerSize - Byte ||
-              (Value.Derived &&
-               (Op.Output.Size != TRI.PointerSize || !Value.Offset)))
-            return {};
-          const uint16_t Mask = ((uint16_t{1} << Op.Output.Size) - 1) << Byte;
-          auto &Alias = Registers[Base];
-          Alias.TaintedBytes &= ~Mask;
-          if (Value.Derived)
-            Alias.TaintedBytes |= Mask;
-          Alias.Offset =
-              Op.Output.Size == TRI.PointerSize ? Value.Offset : std::nullopt;
-          if (!Alias.TaintedBytes)
-            Registers.erase(Base);
+        }
+        if (Op.Opcode == NdOp::RETURN) {
+          if (&Op != &Block.Ops.back() || Stack || !Registers.empty() ||
+              Op.NumInputs != 1 ||
+              Op.Inputs[0] != NdVar::reg(TRI.IntReturnReg, TRI.PointerSize))
+            return false;
+          continue;
+        }
+        FrameValue Value;
+        for (unsigned K = 0; K < Op.NumInputs; ++K)
+          Value.Derived |= Read(Op.Inputs[K]).Derived;
+        if (Op.Opcode == NdOp::BRANCH || Op.Opcode == NdOp::COND_BR) {
+          if (&Op != &Block.Ops.back() || Value.Derived)
+            return false;
+          continue;
+        }
+        if (Op.Opcode == NdOp::LOAD || Op.Opcode == NdOp::STORE) {
+          if (Op.NumInputs != (Op.Opcode == NdOp::LOAD ? 1 : 2))
+            return false;
+          const auto Pointer = Read(Op.Inputs[0]);
+          const auto Address = Pointer.Offset;
+          const auto Bytes =
+              Op.Opcode == NdOp::LOAD ? Op.Output.Size : Op.Inputs[1].Size;
+          const auto End = Address
+                               ? detail::checkedAffineOffset(*Address, Bytes)
+                               : std::nullopt;
+          const auto &ImageAddress = Pointer.ImageAddress;
+          const bool ImageRead =
+              Op.Opcode == NdOp::LOAD && Image && ImageAddress &&
+              Op.Inputs[0].Size == TRI.PointerSize &&
+              isCompleteSourceImageRead(*Image, ImageAddress->Offset,
+                                        ImageAddress->Provenance,
+                                        ImageAddress->AddressOwnerVA, Bytes);
+          if (!ImageRead &&
+              (!Address || !Bytes || !End ||
+               (Op.Opcode == NdOp::STORE && Read(Op.Inputs[1]).Derived)))
+            return false;
+          if (!ImageRead && !Access(*Address, *End, Op.Opcode == NdOp::STORE))
+            return false;
+          if (Op.Opcode == NdOp::STORE)
+            continue;
+          // A mapped object read remains an actual memory effect. Its loaded
+          // bits do not inherit the address's provenance or a frame coordinate.
+          Value.Derived = false;
+        } else if (!isSpillScalarStep(Op.Opcode)) {
+          return false;
+        } else if (Op.Opcode == NdOp::COPY && Op.NumInputs == 1 &&
+                   Op.Output.Size == Op.Inputs[0].Size) {
+          const auto Input = Read(Op.Inputs[0]);
+          Value.Offset = Input.Offset;
+          Value.ImageAddress = Input.ImageAddress;
+        } else if ((Op.Opcode == NdOp::INT_ADD || Op.Opcode == NdOp::INT_SUB) &&
+                   Op.NumInputs == 2 && Op.Output.Size == TRI.PointerSize &&
+                   Op.Inputs[1].isConst()) {
+          const auto Input = Read(Op.Inputs[0]);
+          if (const auto Base = Input.Offset)
+            Value.Offset = detail::checkedAffineOffset(
+                *Base, static_cast<int64_t>(Op.Inputs[1].Offset),
+                Op.Opcode == NdOp::INT_SUB);
+          const auto &Base = Input.ImageAddress;
+          if (Base && Op.Inputs[0].Size == TRI.PointerSize &&
+              Op.Inputs[1].Size == TRI.PointerSize &&
+              Op.Inputs[1].Provenance == ConstantAddressProvenance::Scalar)
+            if (const auto Address = detail::checkedAffineOffset(
+                    static_cast<int64_t>(Base->Offset),
+                    static_cast<int64_t>(Op.Inputs[1].Offset),
+                    Op.Opcode == NdOp::INT_SUB)) {
+              Value.ImageAddress = *Base;
+              Value.ImageAddress->Offset = static_cast<uint64_t>(*Address);
+            }
+        }
+        Value.Bytes = Op.Output.Size;
+        if (Op.Output.isReg()) {
+          if (Op.Output.Offset == TRI.StackPointer) {
+            if (Op.Output.Size != TRI.PointerSize || !Value.Offset)
+              return false;
+            Stack = *Value.Offset;
+          } else if (TRI.isFlag(Op.Output.Offset, Op.Output.Size)) {
+            if (Value.Derived)
+              FrameFlags.insert(Op.Output.Offset);
+            else
+              FrameFlags.erase(Op.Output.Offset);
+          } else if (const auto Family =
+                         gprFamilyOf(Arch::X64, Op.Output.Offset)) {
+            const uint64_t Base = *Family * TRI.PointerSize;
+            const unsigned Byte = Op.Output.Offset - Base;
+            if (Base == TRI.StackPointer || !Op.Output.Size ||
+                Op.Output.Size > TRI.PointerSize - Byte ||
+                (Value.Derived &&
+                 (Op.Output.Size != TRI.PointerSize || !Value.Offset)))
+              return false;
+            const uint16_t Mask = ((uint16_t{1} << Op.Output.Size) - 1) << Byte;
+            auto &Alias = Registers[Base];
+            Alias.TaintedBytes &= ~Mask;
+            if (Value.Derived)
+              Alias.TaintedBytes |= Mask;
+            Alias.Offset =
+                Op.Output.Size == TRI.PointerSize ? Value.Offset : std::nullopt;
+            if (!Alias.TaintedBytes)
+              Registers.erase(Base);
+          } else if (Value.Derived) {
+            return false;
+          }
+        } else if (Op.Output.isTemp()) {
+          for (auto At = FirstOverlap(Op.Output);
+               At != Temps.end() &&
+               (At->first < Op.Output.Offset ||
+                At->first - Op.Output.Offset < Op.Output.Size);) {
+            if (!Budget)
+              return false;
+            --Budget;
+            if (At->second.Derived &&
+                (At->first < Op.Output.Offset ||
+                 At->second.Bytes >
+                     Op.Output.Size - (At->first - Op.Output.Offset)))
+              return false;
+            At = Temps.erase(At);
+          }
+          Temps.emplace(Op.Output.Offset, Value);
         } else if (Value.Derived) {
-          return {};
+          return false;
         }
-      } else if (Op.Output.isTemp()) {
-        for (auto At = FirstOverlap(Op.Output);
-             At != Temps.end() &&
-             (At->first < Op.Output.Offset ||
-              At->first - Op.Output.Offset < Op.Output.Size);) {
-          if (!Budget)
-            return {};
-          --Budget;
-          if (At->second.Derived &&
-              (At->first < Op.Output.Offset ||
-               At->second.Bytes >
-                   Op.Output.Size - (At->first - Op.Output.Offset)))
-            return {};
-          At = Temps.erase(At);
-        }
-        Temps.emplace(Op.Output.Offset, Value);
-      } else if (Value.Derived) {
-        return {};
       }
+      return true;
+    };
+    if (!Transfer()) {
+      if (StackParameters > Budget)
+        return {};
+      Budget -= StackParameters;
+      CutAtObserver = true;
+      for (size_t P = 0; P < StackParameters; ++P)
+        if (LiveBytes[P])
+          MemoryObserved.insert(Layout.Registers.size() + P);
+      continue;
     }
     // SP coordinates must agree. GPR coordinates survive only identical
     // incoming facts; byte/flag taint is a union. Revisit a join when either
     // its taint grows or its exact coordinate is lost, including loop edges.
     for (size_t Next : Successors[Index]) {
-      const size_t Cost = 1 + FrameFlags.size() + Registers.size() +
-                          (Entries[Next] ? Entries[Next]->Registers.size() : 0);
+      const size_t Cost =
+          1 + FrameFlags.size() + Registers.size() +
+          (Entries[Next] ? Entries[Next]->Registers.size() : 0) +
+          StackParameters;
       if (Cost > Budget)
         return {};
       Budget -= Cost;
       auto &Entry = Entries[Next];
       if (!Entry) {
-        Entry = FrameState{Stack, FrameFlags, Registers};
+        Entry = FrameState{Stack, FrameFlags, Registers, LiveBytes};
         Work.push_back(Next);
         continue;
       }
       if (Entry->Stack != Stack)
         return {};
       bool Changed = false;
+      for (size_t P = 0; P < StackParameters; ++P) {
+        const uint8_t Combined = Entry->LiveBytes[P] | LiveBytes[P];
+        Changed |= Combined != Entry->LiveBytes[P];
+        Entry->LiveBytes[P] = Combined;
+      }
       for (uint64_t Flag : FrameFlags)
         Changed |= Entry->Flags.insert(Flag).second;
       for (auto &[Register, Alias] : Entry->Registers) {
@@ -2387,8 +2510,7 @@ std::set<unsigned> unobservedSourceStackParameters(
         Work.push_back(Next);
     }
   }
-  if (!Bounded || MatchedCalls.size() != Calls.size() ||
-      llvm::any_of(Entries, [](const auto &Entry) { return !Entry; }))
+  if (!Bounded || (!CutAtObserver && MatchedCalls.size() != Calls.size()))
     return {};
   std::set<unsigned> Observed;
   const auto Observe = [&](const MedVar &Value) {
@@ -2419,17 +2541,10 @@ std::set<unsigned> unobservedSourceStackParameters(
   std::set<unsigned> Result;
   for (unsigned P = Layout.Registers.size(); P < Func.Params.size(); ++P) {
     if (Func.Params[P].Kind != MedVar::Param || Func.Params[P].Id != int(P) ||
-        Func.Params[P].RegOff != kNoParamReg || Observed.count(P))
+        Func.Params[P].RegOff != kNoParamReg || Observed.count(P) ||
+        MemoryObserved.count(P))
       continue;
-    const int64_t Begin = Layout.EntryStackBase +
-                          (P - Layout.Registers.size()) * Layout.SlotBytes;
-    if (Reads.size() > Budget)
-      return {};
-    Budget -= Reads.size();
-    if (llvm::none_of(Reads, [&](const auto &Range) {
-          return Range.first < Begin + Layout.SlotBytes && Begin < Range.second;
-        }))
-      Result.insert(P);
+    Result.insert(P);
   }
   return Result;
 }

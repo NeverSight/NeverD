@@ -7093,10 +7093,6 @@ Select an operation to follow dependencies. Synthetic operations have block prov
         <translation>فعّل أدلة التبعيات في إعدادات المقارنة.</translation>
     </message>
     <message>
-        <source>Include control dependencies</source>
-        <translation>تضمين تبعيات التحكم</translation>
-    </message>
-    <message>
         <source>Inspect original function</source>
         <translation>فحص الدالة الأصلية</translation>
     </message>
@@ -7231,6 +7227,32 @@ Progress does not establish equal loop counts or function results.</source>
     <message>
         <source>Proof: every counter cycle reaches a shared exit relative to an input-derived expression. Undefined behavior may occur before exit.</source>
         <translation>البرهان: تصل كل دورة للعدّاد إلى مخرج مشترك نسبةً إلى تعبير مشتق من المدخلات. قد يحدث سلوك غير معرّف قبل الخروج.</translation>
+    </message>
+    <message>
+        <source>Argument accesses</source>
+        <translation>عمليات وصول المعاملات</translation>
+    </message>
+    <message>
+        <source>Show reads and writes using the same computed address as a recovered call argument.</source>
+        <translation>عرض القراءات والكتابات التي تستخدم العنوان المحسوب نفسه لمعامل استدعاء مستعاد.</translation>
+    </message>
+    <message>
+        <source>Include control</source>
+        <translation>تضمين التحكم</translation>
+    </message>
+    <message>
+        <source>Include control dependencies when tracing inputs or uses.</source>
+        <translation>تضمين تبعيات التحكم عند تتبع المدخلات أو الاستخدامات.</translation>
+    </message>
+    <message>
+        <source>Call n%1 · %2 address observations · %3
+Reads and writes at a recovered argument's address. Call effects and execution order remain unknown. Activate a row to select its operation.</source>
+        <translation>استدعاء n%1 · %2 من ملاحظات العناوين · %3
+قراءات وكتابات عند عنوان معامل مستعاد. تظل آثار الاستدعاء وترتيب التنفيذ غير معروفين. فعّل صفًا لتحديد عمليته.</translation>
+    </message>
+    <message>
+        <source>Inspecting argument addresses…</source>
+        <translation>جارٍ فحص عناوين المعاملات…</translation>
     </message>
 </context>
 <context>
@@ -8044,6 +8066,38 @@ Every use of a projected parameter reads the same low bits. Whole-function behav
     <message>
         <source>Uncertain</source>
         <translation>غير مؤكد</translation>
+    </message>
+    <message>
+        <source>Argument</source>
+        <translation>المعامل</translation>
+    </message>
+    <message>
+        <source>Access</source>
+        <translation>الوصول</translation>
+    </message>
+    <message>
+        <source>RETURN input</source>
+        <translation>مدخل RETURN</translation>
+    </message>
+    <message>
+        <source>Write</source>
+        <translation>كتابة</translation>
+    </message>
+    <message>
+        <source>Read</source>
+        <translation>قراءة</translation>
+    </message>
+    <message>
+        <source>COPY / PHI path</source>
+        <translation>مسار COPY / PHI</translation>
+    </message>
+    <message>
+        <source>Not observed</source>
+        <translation>لم يُرصد</translation>
+    </message>
+    <message>
+        <source>A same-width COPY/PHI path to a RETURN operand. That operand may be a control target; this does not establish an ABI return value or execution order.</source>
+        <translation>مسار COPY/PHI بالعرض نفسه إلى مُعامَل RETURN. قد يكون المُعامَل هدف تحكم؛ ولا يثبت ذلك قيمة إرجاع وفق ABI أو ترتيب التنفيذ.</translation>
     </message>
 </context>
 <context>
