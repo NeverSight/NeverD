@@ -6,6 +6,15 @@
 
 [← Documentation Index](README.md)
 
+`InterpreterMachineRegionSourceTest.RepeatedTransfersRetainRuntimeDirectionAndOverlap`
+executes bounded MOVS/STOS in both directions through HighC and LLVMC at O0/O2,
+comparing full state and every byte against an independent ordered copy oracle.
+The user profile covers four element widths and overlapping buffers; the
+kernel choice profile covers its audited REP MOVSQ encoding and retains
+rejection of other forms. Unknown counts remain refused; zero-count and exact
+operation/scratch budgets are covered by `StringTransfer.*` and
+`X86NativeStateAudit.Rep*`.
+
 `SourceStackSpills.StackParametersTrackEntryBytesAcrossOverwrites` and
 `StackParameterOverwritesMeetAcrossEveryPath` distinguish incoming stack bytes
 from later slot contents. They retain reads before writes, surviving partial

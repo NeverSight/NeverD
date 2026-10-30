@@ -489,7 +489,7 @@ public:
   }
 };
 
-TEST(X86NativeStateAudit, RepAdmissionStillRequiresCountAndDirectionProofs) {
+TEST(X86NativeStateAudit, RepAdmissionRequiresCountButRetainsRuntimeDirection) {
   const auto Ops = lift({0xf3, 0x48, 0xa5});
   ASSERT_FALSE(Ops.empty());
   for (unsigned Case = 0; Case != 3; ++Case) {
@@ -510,14 +510,14 @@ TEST(X86NativeStateAudit, RepAdmissionStillRequiresCountAndDirectionProofs) {
     Options.NormalNonfaultingExecution = true;
     const auto Result =
         specializeInterpreter(Provider, {CodeAddress - 1}, Options);
-    if (Case == 2) {
-      // Zero count needs neither a direction proof nor mapped source bytes.
+    if (Case) {
+      // Nonzero count retains runtime DF; zero count avoids direction and
+      // memory reads entirely.
       EXPECT_TRUE(Result.complete()) << Result.Diagnostic;
     } else {
       EXPECT_EQ(Result.Status, SpecializationStatus::Unsupported)
           << Result.Diagnostic;
-      EXPECT_NE(Result.Diagnostic.find("proved count and direction"),
-                std::string::npos);
+      EXPECT_NE(Result.Diagnostic.find("proved count"), std::string::npos);
       EXPECT_TRUE(Result.Residual.Blocks.empty());
     }
   }

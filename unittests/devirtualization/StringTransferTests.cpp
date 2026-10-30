@@ -3,6 +3,7 @@
 // NeverD Decompiler
 //
 //===----------------------------------------------------------------------===//
+/// \file Independent byte oracles for bounded transfer expansion.
 
 #include "../../lib/analysis/arch/x86_64/StringTransfer.h"
 #include "gtest/gtest.h"
@@ -40,107 +41,115 @@ TEST(StringTransfer, ElementOrderMatchesIndependentOverlappingCopyAndFill) {
   constexpr uint64_t FillValue = 0x9371ab05d2e648fc;
   for (unsigned SizeIndex = 0; SizeIndex < 4; ++SizeIndex) {
     const unsigned Width = 1u << SizeIndex;
-    for (bool Complete : {false, true})
-      for (bool Fill : {false, true})
-        for (bool Backward : {false, true})
-          for (unsigned Count : {0, 1, 3, 7})
-            for (int Gap : {-32, -8, -1, 0, 1, 8, 32}) {
-              SCOPED_TRACE(::testing::Message()
-                           << Width << ":" << Fill << ":" << Backward << ":"
-                           << Count << ":" << Gap);
-              std::array<uint8_t, 256> Expected;
-              SymContext Ctx;
-              SymState State(Ctx);
-              for (unsigned I = 0; I < Expected.size(); ++I) {
-                Expected[I] = static_cast<uint8_t>(I * 29 + I / 7);
-                State.store(Ctx.mkConst(64, Base + I),
-                            Ctx.mkConst(8, Expected[I]));
-              }
-              const int Source = Backward ? 160 : 64;
-              const int Destination = Source + Gap;
-              for (unsigned I = 0; I < Count; ++I) {
-                const int Delta = (Backward ? -1 : 1) * int(I * Width);
-                std::array<uint8_t, 8> Element;
-                for (unsigned B = 0; B < Width; ++B)
-                  Element[B] = Fill ? static_cast<uint8_t>(FillValue >> (8 * B))
-                                    : Expected[Source + Delta + B];
-                for (unsigned B = 0; B < Width; ++B)
-                  Expected[Destination + Delta + B] = Element[B];
-              }
-              LowOp Op = transfer(Fill ? Fills[SizeIndex] : Moves[SizeIndex],
-                                  Width, Fill);
-              std::vector<LowOp> Instruction;
-              if (Complete) {
-                const auto Id = Fill ? Intrinsic::X86RepStosState
-                                     : Intrinsic::X86RepMovsState;
-                Op.Inputs[0] = NdVar::scalar(static_cast<uint16_t>(Id), 2);
-                Op.Inputs[3].Size = 8;
-                Op.Inputs[4].Size = X86RepStatusBytes;
-                Op.addInput(NdVar::scalar(
-                    *x86RepDescriptor(Id, Arch::X64, Width, 8, 0, false), 4));
-              }
-              Instruction.push_back(Op);
-              if (Complete)
-                for (unsigned J = 1; J < (Fill ? 2u : 3u); ++J) {
-                  LowOp Bind;
-                  Bind.Opcode = NdOp::COPY;
-                  Bind.Output = NdVar::tmp(2048 + J * 16, 8);
-                  Bind.addInput(NdVar::tmp(2056 + J * 16, 8));
-                  Instruction.push_back(Bind);
+    for (bool RuntimeDirection : {false, true})
+      for (bool Complete : {false, true})
+        for (bool Fill : {false, true})
+          for (bool Backward : {false, true})
+            for (unsigned Count : {0, 1, 3, 7})
+              for (int Gap : {-32, -8, -1, 0, 1, 8, 32}) {
+                SCOPED_TRACE(::testing::Message()
+                             << Width << ":" << Fill << ":" << Backward << ":"
+                             << Count << ":" << Gap << ":" << Complete << ":"
+                             << RuntimeDirection);
+                std::array<uint8_t, 256> Expected;
+                SymContext Ctx;
+                SymState State(Ctx);
+                for (unsigned I = 0; I < Expected.size(); ++I) {
+                  Expected[I] = static_cast<uint8_t>(I * 29 + I / 7);
+                  State.store(Ctx.mkConst(64, Base + I),
+                              Ctx.mkConst(8, Expected[I]));
                 }
-              State.write(
-                  SymSpace::Register, 0,
-                  Ctx.mkConst(64, Base + (Fill ? Destination : Source)));
-              State.write(SymSpace::Register, 8,
-                          Ctx.mkConst(64, Fill ? Count : Base + Destination));
-              State.write(SymSpace::Register, 16,
-                          Ctx.mkConst(Fill && !Complete ? Width * 8 : 64,
-                                      Fill ? FillValue : Count));
-              State.write(SymSpace::Register, 24,
-                          Ctx.mkConst(Complete ? 32 : 8,
-                                      Complete ? (uint32_t(Backward)
-                                                  << X86RepDirectionShift)
-                                               : Backward));
-              auto Lowered = lowerStringTransfer(Op, Count, Backward,
-                                                 Instruction, 4096, 1024);
-              ASSERT_TRUE(static_cast<bool>(Lowered))
-                  << llvm::toString(Lowered.takeError());
-              SymExec Exec(Ctx, State);
-              for (const auto &Scalar : *Lowered)
-                ASSERT_EQ(Exec.step(Scalar), StepResult::Continue);
-              for (unsigned I = 0; I < Expected.size(); ++I) {
-                const auto Actual =
-                    Ctx.asConst(State.load(Ctx.mkConst(64, Base + I), 1));
-                ASSERT_TRUE(Actual.has_value());
-                EXPECT_EQ(Actual->getZExtValue(), Expected[I]);
+                const int Source = Backward ? 160 : 64;
+                const int Destination = Source + Gap;
+                for (unsigned I = 0; I < Count; ++I) {
+                  const int Delta = (Backward ? -1 : 1) * int(I * Width);
+                  std::array<uint8_t, 8> Element;
+                  for (unsigned B = 0; B < Width; ++B)
+                    Element[B] =
+                        Fill ? static_cast<uint8_t>(FillValue >> (8 * B))
+                             : Expected[Source + Delta + B];
+                  for (unsigned B = 0; B < Width; ++B)
+                    Expected[Destination + Delta + B] = Element[B];
+                }
+                LowOp Op = transfer(Fill ? Fills[SizeIndex] : Moves[SizeIndex],
+                                    Width, Fill);
+                std::vector<LowOp> Instruction;
+                if (Complete) {
+                  const auto Id = Fill ? Intrinsic::X86RepStosState
+                                       : Intrinsic::X86RepMovsState;
+                  Op.Inputs[0] = NdVar::scalar(static_cast<uint16_t>(Id), 2);
+                  Op.Inputs[3].Size = 8;
+                  Op.Inputs[4].Size = X86RepStatusBytes;
+                  Op.addInput(NdVar::scalar(
+                      *x86RepDescriptor(Id, Arch::X64, Width, 8, 0, false), 4));
+                }
+                Instruction.push_back(Op);
+                if (Complete)
+                  for (unsigned J = 1; J < (Fill ? 2u : 3u); ++J) {
+                    LowOp Bind;
+                    Bind.Opcode = NdOp::COPY;
+                    Bind.Output = NdVar::tmp(2048 + J * 16, 8);
+                    Bind.addInput(NdVar::tmp(2056 + J * 16, 8));
+                    Instruction.push_back(Bind);
+                  }
+                State.write(
+                    SymSpace::Register, 0,
+                    Ctx.mkConst(64, Base + (Fill ? Destination : Source)));
+                State.write(SymSpace::Register, 8,
+                            Ctx.mkConst(64, Fill ? Count : Base + Destination));
+                State.write(SymSpace::Register, 16,
+                            Ctx.mkConst(Fill && !Complete ? Width * 8 : 64,
+                                        Fill ? FillValue : Count));
+                State.write(SymSpace::Register, 24,
+                            Ctx.mkConst(Complete ? 32 : 8,
+                                        Complete ? ((uint32_t(Backward)
+                                                     << X86RepDirectionShift) |
+                                                    0x8d5)
+                                                 : (Backward ? 0x80 : 0)));
+                auto Lowered = lowerStringTransfer(
+                    Op, Count,
+                    RuntimeDirection ? std::nullopt
+                                     : std::optional<bool>(Backward),
+                    Instruction, 4096, 1024);
+                ASSERT_TRUE(static_cast<bool>(Lowered))
+                    << llvm::toString(Lowered.takeError());
+                SymExec Exec(Ctx, State);
+                for (const auto &Scalar : *Lowered)
+                  ASSERT_EQ(Exec.step(Scalar), StepResult::Continue);
+                for (unsigned I = 0; I < Expected.size(); ++I) {
+                  const auto Actual =
+                      Ctx.asConst(State.load(Ctx.mkConst(64, Base + I), 1));
+                  ASSERT_TRUE(Actual.has_value());
+                  EXPECT_EQ(Actual->getZExtValue(), Expected[I]);
+                }
+                const auto Output = Ctx.asConst(
+                    State.read(SymSpace::Temporary, Op.Output.Offset, 8));
+                ASSERT_TRUE(Output.has_value());
+                if (Complete) {
+                  const uint64_t Distance = Count * Width;
+                  const uint64_t Delta =
+                      Backward ? uint64_t(0) - Distance : Distance;
+                  EXPECT_EQ(Output->getZExtValue(),
+                            Base + (Fill ? Destination : Source) + Delta);
+                  for (unsigned J = 1; J < Instruction.size(); ++J) {
+                    const auto Value = Ctx.asConst(
+                        State.read(SymSpace::Temporary,
+                                   Instruction[J].Inputs[0].Offset, 8));
+                    ASSERT_TRUE(Value);
+                    EXPECT_EQ(Value->getZExtValue(),
+                              J + 1 == Instruction.size()
+                                  ? 0
+                                  : Base + Destination + Delta);
+                  }
+                } else
+                  EXPECT_TRUE(Output->isZero());
+                EXPECT_EQ(Exec.opaqueOperationCount(), 0u);
+                if (!Count)
+                  for (const auto &Scalar : *Lowered) {
+                    EXPECT_NE(Scalar.Opcode, NdOp::LOAD);
+                    EXPECT_NE(Scalar.Opcode, NdOp::STORE);
+                  }
               }
-              const auto Output = Ctx.asConst(
-                  State.read(SymSpace::Temporary, Op.Output.Offset, 8));
-              ASSERT_TRUE(Output.has_value());
-              if (Complete) {
-                const uint64_t Distance = Count * Width;
-                const uint64_t Delta =
-                    Backward ? uint64_t(0) - Distance : Distance;
-                EXPECT_EQ(Output->getZExtValue(),
-                          Base + (Fill ? Destination : Source) + Delta);
-                for (unsigned J = 1; J < Instruction.size(); ++J) {
-                  const auto Value = Ctx.asConst(State.read(
-                      SymSpace::Temporary, Instruction[J].Inputs[0].Offset, 8));
-                  ASSERT_TRUE(Value);
-                  EXPECT_EQ(Value->getZExtValue(),
-                            J + 1 == Instruction.size()
-                                ? 0
-                                : Base + Destination + Delta);
-                }
-              } else
-                EXPECT_TRUE(Output->isZero());
-              EXPECT_EQ(Exec.opaqueOperationCount(), 0u);
-              if (!Count)
-                for (const auto &Scalar : *Lowered) {
-                  EXPECT_NE(Scalar.Opcode, NdOp::LOAD);
-                  EXPECT_NE(Scalar.Opcode, NdOp::STORE);
-                }
-            }
   }
 }
 
@@ -188,6 +197,28 @@ TEST(StringTransfer, ExactBudgetScratchAndMalformedShapes) {
     }
     Refused(Bad, 0, 4096, 1);
   }
+}
+
+TEST(StringTransfer, RuntimeDirectionHasExactBudgetAndDisjointScratch) {
+  const auto Op = transfer(Intrinsic::Movsq, 8, false);
+  auto Good = lowerStringTransfer(Op, 7, std::nullopt, {Op}, 4096, 37);
+  ASSERT_TRUE(bool(Good)) << llvm::toString(Good.takeError());
+  EXPECT_EQ(Good->size(), 37u);
+  for (const auto &[Count, Limit, Budget] :
+       {std::array<uint64_t, 3>{7, 4096, 36},
+        std::array<uint64_t, 3>{1, 1071, 7},
+        std::array<uint64_t, 3>{std::numeric_limits<uint64_t>::max(), 4096,
+                                std::numeric_limits<uint64_t>::max()}}) {
+    auto Bad =
+        lowerStringTransfer(Op, Count, std::nullopt, {Op}, Limit, Budget);
+    EXPECT_FALSE(bool(Bad));
+    if (!Bad)
+      llvm::consumeError(Bad.takeError());
+  }
+  auto Zero = lowerStringTransfer(Op, 0, std::nullopt, {Op}, 1032, 1);
+  ASSERT_TRUE(bool(Zero)) << llvm::toString(Zero.takeError());
+  ASSERT_EQ(Zero->size(), 1u);
+  EXPECT_EQ(Zero->front().Opcode, NdOp::COPY);
 }
 
 TEST(StringTransfer, CompleteStateRequiresOwnedDisjointOutputBindings) {
