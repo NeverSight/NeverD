@@ -8,10 +8,16 @@
 `RegistrationState.CxxDispatchBindingsCannotOutliveAnUnclosedOrigin` cover
 callback-free C++ dispatch binding lifetime, mapped access permissions,
 unrelated IAT writes, prior faults, missing proofs, budget exhaustion and
-block-order independence. Run `NeverDRegistrationCalleeStackTests` and
+block-order independence. `RegistrationCallABI.CleanupDispatchNeedsClosedObjectAndImageEffects`
+also requires closed integer effects for each cleanup leaf; the state tests
+reject absent, partial or overlapping cleanup objects and missing dispatch
+authority. Run `NeverDRegistrationCalleeStackTests` and
 `NeverDRegistrationStateTests`. With an authored scalar secondary-throw PE32,
 `WindowsRegistrationNestedTry.InputPE32DispatchRequiresCurrentSources` also
 rejects stale parent code, LowIR, handler identity, metadata and permissions.
+With a catch-cleanup PE32, `WindowsRegistrationNestedTry.InputPE32CleanupDispatchRequiresCurrentEffects`
+rejects stale relay/leaf code, borrowed extents and image effects, read-only
+writes and changes to unrelated IAT slots.
 The `nested` profile of `check_windows_registration_nested_try.py` compares
 original, regenerated and CLI-installed images at O0/O1 and rebased addresses;
 its result, not a skipped input-dependent test, supplies runtime qualification.

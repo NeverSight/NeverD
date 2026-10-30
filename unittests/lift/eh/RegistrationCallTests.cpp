@@ -249,6 +249,52 @@ TEST(RegistrationCallABI, LeafDispatchNeedsMoreThanBoundedImageWrites) {
         getCheckedX86RegistrationLeafCalleeABI(F.Image, ThrowImage::TextVA);
     ASSERT_TRUE(Leaf);
     EXPECT_EQ(Leaf->PreservesDispatchBindings, Mutation == 0);
+    EXPECT_EQ(Leaf->PreservesBoundDispatchBindings,
+              Mutation == 0 || Mutation == 5);
+  }
+}
+
+TEST(RegistrationCallABI, CleanupDispatchNeedsClosedObjectAndImageEffects) {
+  for (unsigned Mutation = 0; Mutation != 8; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    ThrowImage F;
+    // Read the declared object and store the scalar in writable image data.
+    std::vector<uint8_t> Code{0x8b, 0x01, 0xa3, 0x40, 0x40, 0x40, 0};
+    if (Mutation == 1)
+      Code.insert(Code.end(), {0xa1, 0, 0, 0, 0});
+    if (Mutation == 2)
+      F.Image.Sections[2].Flags = SegmentFlags::Readable;
+    if (Mutation == 3) {
+      Import Other;
+      Other.Module = "application.dll";
+      Other.Name = "callback";
+      Other.IATAddr = ThrowImage::DataVA + 0x40;
+      F.Image.Imports.push_back(Other);
+    }
+    if (Mutation == 4)
+      Code.insert(Code.end(), {0xd9, 0xee});
+    if (Mutation == 5)
+      Code.insert(Code.end(), {0xff, 0xd0}); // No nested callback closure.
+    if (Mutation == 6)
+      Code.insert(Code.begin() + 2, {0x8b, 0x00}); // A pointer loaded from ECX.
+    if (Mutation == 7)
+      Code.insert(Code.end(), {0xc7, 0x41, 4, 9, 0, 0, 0});
+    Code.insert(Code.end(), {0x31, 0xc0, 0xc3});
+    std::copy(Code.begin(), Code.end(), F.Image.Segments[0].Data.begin());
+    const auto Leaf =
+        getCheckedX86RegistrationLeafCalleeABI(F.Image, ThrowImage::TextVA);
+    if (Mutation == 5 || Mutation == 6) {
+      EXPECT_FALSE(Leaf);
+      continue;
+    }
+    ASSERT_TRUE(Leaf);
+    EXPECT_FALSE(Leaf->PreservesDispatchBindings);
+    EXPECT_EQ(Leaf->PreservesBoundDispatchBindings,
+              Mutation == 0 || Mutation == 7);
+    EXPECT_EQ(Leaf->ECXReads, (std::vector<RegistrationObjectExtent>{{0, 4}}));
+    if (Mutation == 7)
+      EXPECT_EQ(Leaf->ECXWrites,
+                (std::vector<RegistrationObjectExtent>{{4, 8}}));
   }
 }
 

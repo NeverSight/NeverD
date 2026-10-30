@@ -247,6 +247,7 @@ struct PrivateFrameOptions {
   registration_state::OriginalImageFrameProof *OriginalImage = nullptr;
   /// Optional stronger effect proof. Unknown faults, FP and calls other than
   /// ThrowProof's exact terminal runtime call withdraw it monotonically.
+  /// Declared ECX accesses remain conditional on the caller's object proof.
   bool *ClosedIntegerEffects = nullptr;
 };
 

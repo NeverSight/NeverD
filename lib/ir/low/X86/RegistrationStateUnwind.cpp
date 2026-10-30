@@ -62,8 +62,10 @@ void RegistrationStateSolver::dispatchBlock(size_t I, const Domain &Before,
   }
   if (CxxCookies && !cxxCookiesReady(Before))
     CompleteCookies = false;
+  bool ClosedCleanups = true;
   if ((Before.Unknown || Facts.Invalid) && !CompleteCleanups &&
       Chain.Scopes.empty()) {
+    ClosedCleanups = false;
     // No per-origin cleanup effects can be published after their monotone
     // proof failure (or when no proof was requested). The remaining operation
     // is an unchanged frame transfer into each possible callback root.
@@ -107,10 +109,13 @@ void RegistrationStateSolver::dispatchBlock(size_t I, const Domain &Before,
         // A failed cleanup proof is monotone and publishes no effects. After
         // that failure (or without a requested proof), a previously visited
         // suffix has already supplied every possible callback root.
-        if (Seen && !CompleteCleanups)
+        if (Seen && !CompleteCleanups) {
+          ClosedCleanups = false;
           break;
+        }
         Dispatched.set(Walk);
         const CxxUnwindAction &Action = Cxx.UnwindMap[Walk];
+        bool ClosedCleanup = !Action.ActionVA;
         if (CheckCleanups && CompleteCleanups && Action.ActionVA) {
           const CleanupKey Identity{Block.Id, Level, uint32_t(Walk)};
           const auto Contract = CleanupIndices.find(uint32_t(Walk));
@@ -154,7 +159,11 @@ void RegistrationStateSolver::dispatchBlock(size_t I, const Domain &Before,
             CompleteCleanups = false;
             CompleteImageReads = false;
           }
+          ClosedCleanup =
+              Valid && CxxCalls &&
+              CxxCalls->ClosedDispatchCleanups.count(uint32_t(Walk));
         }
+        ClosedCleanups &= ClosedCleanup;
         if (!Seen)
           dispatch(Action.ActionVA, {Action.ToState}, Before, true, true);
         Walk = Action.ToState;
@@ -169,7 +178,8 @@ void RegistrationStateSolver::dispatchBlock(size_t I, const Domain &Before,
         return;
       dispatch(Try.Handlers[CatchIndex].HandlerVA, {Try.TryHigh + 1}, Before,
                Facts.Invalid, true, false,
-               std::make_pair(Search.TryIndex, CatchIndex), PreserveBindings);
+               std::make_pair(Search.TryIndex, CatchIndex),
+               PreserveBindings && ClosedCleanups);
     }
   }
 }

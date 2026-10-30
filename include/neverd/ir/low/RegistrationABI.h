@@ -160,6 +160,10 @@ struct RegistrationLeafCalleeABI {
   /// object borrows or nested calls. Retains existing IAT bindings across
   /// possible dispatch origins, not an independently inferred entry ABI.
   bool PreservesDispatchBindings = false;
+  /// The same closed effects conditional on this invocation proving every
+  /// declared ECX extent allocated, initialized as required, and disjoint
+  /// from runtime administration. Never grants an object allocation itself.
+  bool PreservesBoundDispatchBindings = false;
   std::vector<RegistrationObjectExtent> ECXReads;
   std::vector<RegistrationObjectExtent> ECXWrites;
   std::vector<ExceptionAddressRange> ImageReads;

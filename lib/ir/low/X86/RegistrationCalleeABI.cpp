@@ -439,9 +439,11 @@ std::optional<RegistrationLeafCalleeABI> registration_abi::checkedLeafCalleeABI(
   Result.Target = Target;
   Result.StackPopBytes = Pop;
   Result.HasIndependentScalarReturn = IndependentScalarReturn;
-  Result.PreservesDispatchBindings =
-      ClosedIntegerEffects && !Initializer && !Callbacks && !CopyObjectSize &&
-      Effects.ECXReads.empty() && Effects.ECXWrites.empty();
+  Result.PreservesBoundDispatchBindings =
+      ClosedIntegerEffects && !Initializer && !Callbacks && !CopyObjectSize;
+  Result.PreservesDispatchBindings = Result.PreservesBoundDispatchBindings &&
+                                     Effects.ECXReads.empty() &&
+                                     Effects.ECXWrites.empty();
   if (!collectCalleeCodeRanges(Callee, Image, Work, Result.CodeRanges))
     return std::nullopt;
   std::set<std::pair<va_t, va_t>> Code;

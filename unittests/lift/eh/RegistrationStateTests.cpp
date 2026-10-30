@@ -24,7 +24,7 @@ using namespace neverd;
 using namespace neverd::registration_test;
 
 TEST(RegistrationState, CxxDispatchBindingsCannotOutliveAnUnclosedOrigin) {
-  for (unsigned Mutation = 0; Mutation != 9; ++Mutation) {
+  for (unsigned Mutation = 0; Mutation != 17; ++Mutation) {
     SCOPED_TRACE(Mutation);
     auto Function = makeCxxCatchContinuation();
     auto &Stores = Function.ExceptionMetadata->Registration->TryLevelStores;
@@ -61,6 +61,32 @@ TEST(RegistrationState, CxxDispatchBindingsCannotOutliveAnUnclosedOrigin) {
     Proof.ProveDispatchMemory = [](const LowOp &Op, const auto &, size_t &) {
       return Op.MemoryAddressSpace == NdMemoryAddressSpace::X86FS;
     };
+    std::vector<RegistrationCleanupFrameContract> Cleanups;
+    if (Mutation >= 9) {
+      Function.ExceptionMetadata->Cxx->UnwindMap[0] = {
+          -1, 0x2200, CxxUnwindAction::ActionKind::Direct};
+      auto &Cleanup = Cleanups.emplace_back();
+      Cleanup.ActionState = 0;
+      Cleanup.RelayTarget = 0x2200;
+      auto &Borrow = Cleanup.Calls.emplace_back();
+      Borrow.ObjectFrameOffset = Mutation == 13 ? -16 : -24;
+      Borrow.Leaf.Target = 0x2300;
+      Borrow.Leaf.ECXReads = {{0, Mutation == 12 ? 12 : 4}};
+      if (Mutation == 14)
+        Borrow.Leaf.ECXWrites = {{0, 16}};
+      if (Mutation != 10)
+        Proof.ClosedDispatchCleanups.insert(0);
+      if (Mutation != 11) {
+        LowBlock Initialize;
+        emitOp(Initialize, 0x1013, NdOp::INT_ADD, NdVar::tmp(92, 4),
+               {NdVar::reg(x86reg::RBP, 4), NdVar::cst(uint32_t(-24), 4)});
+        emitOp(Initialize, 0x1013, NdOp::STORE, {},
+               {NdVar::tmp(92, 4), NdVar::cst(7, Mutation == 16 ? 1 : 4)});
+        auto &Body = Function.Blocks[1];
+        Body.Ops.insert(Body.Ops.begin() + 3, Initialize.Ops.begin(),
+                        Initialize.Ops.end());
+      }
+    }
     if (Mutation >= 3 && Mutation <= 6) {
       LowBlock Extra;
       if (Mutation == 3 || Mutation == 6)
@@ -84,13 +110,15 @@ TEST(RegistrationState, CxxDispatchBindingsCannotOutliveAnUnclosedOrigin) {
       Handler.Ops.insert(Handler.Ops.begin(), Extra.Ops.front());
       Handler.Ops.back().Seq = 1;
     }
-    if (Mutation == 7)
+    if (Mutation == 7 || Mutation == 15)
       std::reverse(Function.Blocks.begin(), Function.Blocks.end());
     registration_state::RegistrationStateSolver Solver(
-        Function, 0, 0, &Callees, nullptr, nullptr, nullptr, nullptr, nullptr,
-        nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, &Proof);
+        Function, 0, 0, &Callees, Mutation >= 9 ? &Cleanups : nullptr, nullptr,
+        nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
+        nullptr, nullptr, &Proof);
     const auto States = Solver.run();
-    const bool Closed = Mutation == 0 || Mutation == 7;
+    const bool Closed =
+        Mutation == 0 || Mutation == 7 || Mutation == 9 || Mutation == 15;
     if (Closed)
       ASSERT_TRUE(States.Complete)
           << (States.Diagnostics.empty() ? "" : States.Diagnostics.front());

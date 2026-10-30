@@ -88,35 +88,95 @@ bool hasCurrentCxxDispatchOperations(const BinaryImage &Image,
   return true;
 }
 
-void proveTrivialCxxDispatch(
+bool matchesCxxDispatchLeaf(const RegistrationLeafCalleeABI &Leaf,
+                            const RegistrationCalleeFrameContract &Contract,
+                            size_t &Work) {
+  if (!registration_abi::chargeCalleeWork(
+          Work, Contract.ECXReads.size() + Contract.ECXWrites.size() +
+                    Contract.ImageReads.size() + Contract.ImageWrites.size() +
+                    Contract.CallerPCWrites.size() +
+                    Contract.CodeRanges.size() + 1))
+    return false;
+  const auto SameRanges = [](const auto &A, const auto &B) {
+    return A.size() == B.size() && std::equal(A.begin(), A.end(), B.begin(),
+                                              [](const auto &X, const auto &Y) {
+                                                return X.Begin == Y.Begin &&
+                                                       X.End == Y.End;
+                                              });
+  };
+  return Leaf.PreservesBoundDispatchBindings &&
+         Contract.CalleeKind == RegistrationCalleeFrameContract::Kind::Leaf &&
+         Contract.Target == Leaf.Target && !Contract.DoesNotReturn &&
+         !Leaf.StackPopBytes && !Contract.StackPopBytes &&
+         Contract.RequiredImports.empty() && Contract.ECXInitialized.empty() &&
+         Contract.ECXReads == Leaf.ECXReads &&
+         Contract.ECXWrites == Leaf.ECXWrites &&
+         SameRanges(Contract.ImageReads, Leaf.ImageReads) &&
+         SameRanges(Contract.ImageWrites, Leaf.ImageWrites) &&
+         SameRanges(Contract.CallerPCWrites, Leaf.CallerPCWrites) &&
+         SameRanges(Contract.CodeRanges, Leaf.CodeRanges);
+}
+
+void proveScalarCxxDispatch(
     const BinaryImage &Image, const LowFunc &Function,
     const std::vector<RegistrationCalleeFrameContract> *Callees,
+    const std::vector<RegistrationCleanupFrameContract> *Cleanups,
     registration_state::CxxCallerProof &Calls, size_t &Work) {
   if (!Function.ExceptionMetadata || !Function.ExceptionMetadata->Cxx ||
       !Function.ExceptionMetadata->Registration || !Callees)
     return;
-  // Borrowing constructors, member graphs and nested EH parents need their
-  // own dispatch closure. Leave those queries on the existing conservative
-  // callback-entry path instead of lending them a scalar-only authority.
-  for (const auto &Callee : *Callees)
-    if (!registration_abi::chargeCalleeWork(Work, 1) ||
-        Callee.isInitializer() || Callee.isCxxParent() ||
-        !Callee.ECXReads.empty() || !Callee.ECXWrites.empty())
-      return;
   const auto &EH = *Function.ExceptionMetadata;
   const auto &Cxx = *EH.Cxx;
   if (EH.Registration->RealignedFrame || !Cxx.IsSynchronous || Cxx.IsNoExcept ||
       Cxx.hasExceptionSpecification() ||
       !registration_abi::chargeCalleeWork(Work, Cxx.UnwindMap.size() + 1) ||
-      llvm::any_of(Cxx.UnwindMap,
-                   [](const auto &Action) { return Action.ActionVA != 0; }) ||
       !coff_loader::getCheckedX86CxxHandlerABI(Image, EH) ||
       !coff_loader::getCheckedX86CxxMetadataRanges(Image, EH) ||
       !hasCurrentCxxDispatchOperations(Image, Function, Work))
     return;
-  // This closure has no user unwind actions. Each originating throw still
-  // needs a current scalar object and closed preparation; an unrelated fault
-  // or opaque call cannot inherit the known CRT's dispatch contract.
+  std::set<uint32_t> ClosedCleanups;
+  std::set<va_t> CleanupLeaves;
+  for (uint32_t State = 0; State < Cxx.UnwindMap.size(); ++State) {
+    const auto &Action = Cxx.UnwindMap[State];
+    if (!Action.ActionVA)
+      continue;
+    if (!Cleanups ||
+        !registration_abi::chargeCalleeWork(Work, Cleanups->size() + 1) ||
+        Action.Kind != CxxUnwindAction::ActionKind::Direct ||
+        Action.ObjectOffset)
+      return;
+    const auto Contract = llvm::find_if(
+        *Cleanups, [&](const auto &C) { return C.ActionState == State; });
+    const auto Relay =
+        getCheckedX86RegistrationCleanupRelayABI(Image, Action.ActionVA, &Work);
+    if (Contract == Cleanups->end() || !Relay || Relay->RealignedParent ||
+        Contract->RelayTarget != Relay->Target ||
+        Contract->Calls.size() != Relay->Calls.size() ||
+        !Relay->matchesParentFrame(*EH.Registration))
+      return;
+    for (size_t Index = 0; Index < Relay->Calls.size(); ++Index) {
+      const auto &Current = Relay->Calls[Index];
+      const auto &Borrow = Contract->Calls[Index];
+      if (!registration_abi::chargeCalleeWork(Work, 1) ||
+          Borrow.ObjectFrameOffset != Current.ObjectFrameOffset ||
+          !matchesCxxDispatchLeaf(Current.Leaf, Borrow.Leaf, Work))
+        return;
+      CleanupLeaves.insert(Current.Leaf.Target);
+    }
+    ClosedCleanups.insert(State);
+  }
+  // Constructors, general member graphs and nested EH parents retain their
+  // separate closure. The admitted object leaves belong to checked cleanup
+  // relays; any reached ordinary invocation must still bind its own object.
+  for (const auto &Callee : *Callees)
+    if (!registration_abi::chargeCalleeWork(Work, 1) ||
+        Callee.isInitializer() || Callee.isCxxParent() ||
+        ((!Callee.ECXReads.empty() || !Callee.ECXWrites.empty()) &&
+         !CleanupLeaves.count(Callee.Target)))
+      return;
+  Calls.ClosedDispatchCleanups = std::move(ClosedCleanups);
+  // Each throw still needs a current scalar object and closed preparation.
+  // Each unwind origin separately proves its cleanup object's lifetime.
   Calls.ProveDispatchMemory =
       [&Image](const LowOp &Op,
                const registration_state::FrameTransfer &Transfer,
@@ -127,7 +187,8 @@ void proveTrivialCxxDispatch(
   Calls.ProveDispatchCall =
       [&Image, &Function,
        Throws = std::map<va_t, std::optional<RegistrationThrowCalleeABI>>{},
-       Leaves = std::map<va_t, bool>{}](
+       Leaves = std::map<va_t, std::optional<RegistrationLeafCalleeABI>>{},
+       CleanupLeaves = std::move(CleanupLeaves)](
           const LowOp &Op, const RegistrationCalleeFrameContract &Contract,
           const RegistrationCallFrameEffect &Effect, size_t &Used) mutable {
         if (Effect.StackPopBytes ||
@@ -136,17 +197,18 @@ void proveTrivialCxxDispatch(
           return false;
         if (Contract.CalleeKind ==
                 RegistrationCalleeFrameContract::Kind::Leaf &&
-            !Effect.DoesNotReturn && Contract.ECXReads.empty() &&
-            Contract.ECXWrites.empty()) {
+            !Effect.DoesNotReturn) {
           if (!registration_abi::chargeCalleeWork(Used, Leaves.size() + 1))
             return false;
-          const auto [It, New] = Leaves.try_emplace(Effect.Target, false);
-          if (New) {
-            const auto Leaf = getCheckedX86RegistrationLeafCalleeABI(
+          const auto [It, New] = Leaves.try_emplace(Effect.Target);
+          if (New)
+            It->second = getCheckedX86RegistrationLeafCalleeABI(
                 Image, Effect.Target, &Used, RegistrationLeafResult::Discarded);
-            It->second = Leaf && Leaf->PreservesDispatchBindings;
-          }
-          return It->second;
+          const auto &Leaf = It->second;
+          return Leaf && matchesCxxDispatchLeaf(*Leaf, Contract, Used) &&
+                 (Leaf->PreservesDispatchBindings ||
+                  (CleanupLeaves.count(Effect.Target) &&
+                   Effect.ECXFrameOffset));
         }
         if (!Contract.isThrow() || !Effect.DoesNotReturn)
           return false;
@@ -314,7 +376,7 @@ RegistrationStateAnalysis analyzeCheckedX86CxxStates(
     RegistrationCallCalleeIndex *CalleeIndex) {
   size_t Work = 0;
   registration_state::CxxCallerProof Calls;
-  proveTrivialCxxDispatch(Image, Function, Callees, Calls, Work);
+  proveScalarCxxDispatch(Image, Function, Callees, Cleanups, Calls, Work);
   for (const auto &Import : Image.Imports) {
     if (!registration_abi::chargeCalleeWork(Work, 1)) {
       if (CalleeIndex)

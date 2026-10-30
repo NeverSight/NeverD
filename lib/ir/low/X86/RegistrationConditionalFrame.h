@@ -97,16 +97,19 @@ using BoundCxxCalleeProver = std::function<std::optional<BoundCxxCalleeEffect>(
 struct CxxCallerProof {
   BoundCxxCalleeProver ProveCall;
   std::set<va_t> ImportSlots;
-  /// Present only for a fresh synchronous FH3 parent with no unwind callbacks.
-  /// Each exact throw must independently prove callback-free object metadata
-  /// and closed preparation. Ordinary leaves require their separate integer
-  /// effect proof; a normal-return stack or image-write summary does not
-  /// suffice.
+  /// Present only for a fresh synchronous FH3 parent with closed unwind
+  /// actions. Each exact throw must independently prove callback-free object
+  /// metadata and closed preparation. Ordinary leaves require their separate
+  /// integer effect proof; a normal-return stack or image-write summary does
+  /// not suffice.
   std::function<bool(const LowOp &, const RegistrationCalleeFrameContract &,
                      const RegistrationCallFrameEffect &, size_t &)>
       ProveDispatchCall;
   std::function<bool(const LowOp &, const FrameTransfer &, size_t &)>
       ProveDispatchMemory;
+  /// Fresh scalar cleanup relays matching the supplied contracts. Each
+  /// originating state must still project their initialized object borrows.
+  std::set<uint32_t> ClosedDispatchCleanups;
 };
 
 /// Invocation-specific inputs in the callee's established EBP coordinates.
