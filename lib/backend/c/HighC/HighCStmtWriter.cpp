@@ -3217,6 +3217,10 @@ const HighExpr *HighCWriter::asAndWithConst(const HighExpr &Val,
 }
 
 std::string HighCWriter::formatBitAndMask(uint64_t Mask, unsigned Size) const {
+  // The stored mask carries at most 64 bits. A negative spelling would fill
+  // the upper bits when C applies it to a wider destination.
+  if (Size > sizeof(Mask))
+    return "0x" + llvm::utohexstr(Mask);
   unsigned Bits = Size ? static_cast<unsigned>(Size) * 8 : 32;
   if (Bits > 64)
     Bits = 64;

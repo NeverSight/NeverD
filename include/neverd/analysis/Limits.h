@@ -38,6 +38,10 @@ inline constexpr uint64_t kLowIRRefinementMaxMetadata = 65536;
 // include/neverd/analysis/arch/x86_64/InterpreterMachineState.h
 inline constexpr uint64_t kInterpreterMachineStateMaxOperations = 65536;
 
+// include/neverd/analysis/arch/x86_64/InterpreterMachineRegionSource.h
+inline constexpr uint64_t kInterpreterMachineRegionChoiceSourceMaxOperations =
+    16777216;
+
 // include/neverd/analysis/arch/x86_64/X64ContinuationSource.h
 inline constexpr uint64_t kX64ContinuationMaxInstructions = 65536;
 inline constexpr uint64_t kX64ContinuationMaxOperations = 16777216;

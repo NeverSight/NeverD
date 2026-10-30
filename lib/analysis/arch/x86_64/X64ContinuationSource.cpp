@@ -10,6 +10,7 @@
 
 #include "BinaryContinuationInstructions.h"
 #include "NativeStackControl.h"
+#include "X64ArchitecturalValues.h"
 #include "X64ContinuationEvents.h"
 #include "X64ContinuationSystemTransfers.h"
 #include "X64ContinuationUserInterrupts.h"
@@ -696,29 +697,15 @@ struct Writer {
   void undefined(const LowUndefinedEffect &Effect, size_t Index) {
     const NdVar Witness =
         load(offsetof(State, Undefined) + Index * 8, Effect.Output.Size);
-    const uint64_t Bits = UINT64_MAX >> (64 - Effect.BitCount);
-    const uint64_t Mask = Bits << Effect.BitOffset;
-    const auto K = [&](uint64_t Value) {
-      return constant(Value, Effect.Output.Size);
-    };
-    const NdVar Limited = temporary(Effect.Output.Size);
-    const NdVar Shifted = temporary(Effect.Output.Size);
-    const NdVar Kept = temporary(Effect.Output.Size);
-    const NdVar Updated = temporary(Effect.Output.Size);
     // A complete unconditional arbitrary production needs no previous value;
     // an instruction-local carrier may not have existed before this point.
     const bool Whole =
         Effect.BitOffset == 0 && Effect.BitCount == Effect.Output.Size * 8;
-    const NdVar Old = Whole && !Effect.When ? K(0) : read(Effect.Output);
-    emit(NdOp::INT_AND, Limited, {Witness, K(Bits)});
-    emit(NdOp::INT_LEFT, Shifted, {Limited, K(Effect.BitOffset)});
-    emit(NdOp::INT_AND, Kept, {Old, K(~Mask)});
-    emit(NdOp::INT_OR, Updated, {Kept, Shifted});
-    NdVar Result = Updated;
-    if (Effect.When) {
-      Result = temporary(Effect.Output.Size);
-      emit(NdOp::SELECT, Result, {read(*Effect.When), Updated, Old});
-    }
+    const NdVar Old = Whole && !Effect.When ? constant(0, Effect.Output.Size)
+                                            : read(Effect.Output);
+    const NdVar When = Effect.When ? read(*Effect.When) : constant(1, 1);
+    const auto Result = detail::lowerX64ArchitecturalBits(
+        *this, Old, When, Witness, Effect.BitOffset, Effect.BitCount);
     // Architectural arbitrary bits alter this byte view, not an EAX write.
     write(Effect.Output, Result, true);
   }

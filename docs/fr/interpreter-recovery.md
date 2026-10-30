@@ -80,7 +80,7 @@ En C, utiliser `neverd_devirtualize_source_v3()` ou `neverd_devirtualize_machine
 
 La récupération expose aussi `--vm-chain-transfers=N` (0 par défaut) et `--vm-no-control-discovery`. Le chaînage conserve les corrélations symboliques entre transferts dont la cible unique est prouvée ; sa limite revient aux frontières CFG ordinaires. Le mode état machine accepte des offsets d’entrée RSP sans bouclage, non vérifiés à l’exécution, via `--vm-entry-frame=begin:end`. La prémisse numérique exacte accompagne le C et le rapport, sans autoriser d’accès mémoire ni prouver l’équivalence.
 
-Les grandes fonctions récupérées qui dépassent la limite de construction SSA peuvent utiliser `--llvm` avec un contrat borné de stockage scalaire mutable. Les entrées, les valeurs portées par les boucles et les lectures antérieures conservent leur sens. Les états implicites non pris en charge, paramètres en registres vectoriels, relocalisations, stockages ambigus et contrôles mal formés échouent explicitement ; HighC refuse ce repli. La sortie reste soumise au contrat existant de l’état machine, sans certificat d’équivalence supplémentaire.
+Les grandes fonctions récupérées qui dépassent la limite de construction SSA peuvent utiliser `--llvm` avec un contrat borné de stockage scalaire mutable. Les entrées, les valeurs portées par les boucles et les lectures antérieures conservent leur sens. Les états implicites non pris en charge, paramètres en registres vectoriels, relocalisations, stockages ambigus et contrôles mal formés échouent explicitement. HighC et LLVM C partagent ce repli validé. Les vérifications x64 explicites `RequireAligned`, y compris les conditions sur un octet, conservent leurs prédicats de faute ; les formes incorrectes et les intrinsèques non pris en charge sont rejetés. La sortie reste soumise au contrat existant de l’état machine, sans certificat d’équivalence supplémentaire.
 
 Le sous-ensemble mutable accepte un stockage scalaire de 8/16/32/64/128 bits ; les entrées des comptages sont limitées à 64 bits. Les largeurs non standard ou supérieures exigent un contrat source distinct.
 
@@ -460,6 +460,16 @@ L’API C++ des régions machine permet `SpecializationUndefinedModel::FreshScal
 Cette option exige des sorties de région x64 explicites et des preuves complètes pour les instructions scalaires. Les effets non pris en charge et les budgets épuisés sont refusés. L’adaptateur C actuel, les émetteurs ordinaires et les interfaces de preuve native refusent ce modèle sans environnement explicite de valeurs à l’exécution ; aucune valeur propre à un processeur ni ABI ordinaire n’est déduite.
 
 Une projection RDSSP exactement vérifiée, avec CET explicitement désactivé, préserve sa destination sans nouvelle production ; son relevé général des effets indéfinis reste manquant. Les pièges authentifiés restent des frontières non exécutées.
+
+<!-- i18n-section: machine-region-choice-source -->
+
+## Choix architecturaux exécutables
+
+`wrapInterpreterMachineRegionChoiceSourceX64V1` consomme un résultat `FreshScalarV1` validé avec le type distinct `InterpreterMachineRegionChoiceStateX64V1` de 456 octets. Les 432 premiers octets conservent le format précédent ; `Choices`, `ChoiceCount` et `ChoiceCursor` occupent les décalages 432, 440 et 448. `StateABI` indique `x64-machine-region-choice-state-v1` et `StateBytes` vaut 456. L’ancien adaptateur de 432 octets refuse toujours ce modèle.
+
+Chaque enregistrement `InterpreterArchitecturalChoiceX64V1` de 32 octets contient quatre champs de 64 bits : PC original, numéro de production dans l’instruction, largeur et valeur. La valeur doit tenir dans cette largeur. Tous les enregistrements sont vérifiés avant le moindre effet de l’instruction. Le statut 5 signale leur épuisement, 6 une discordance de PC, numéro, largeur ou valeur. Les deux conservent les effets précédents, retournent le PC original non exécuté avec `ExitKind=None` et gardent le curseur d’entrée. Le curseur avance après l’instruction entière, même pour les gardes fausses. Les visites répétées consomment de nouveaux enregistrements ; les copies et sauvegardes mémoire n’en consomment pas.
+
+L’appelant fournit des enregistrements accessibles, stables et séparés de l’état et de la mémoire invitée. Aucun choix propre au processeur n’est déduit. Les statuts de requête, arrêts explicites avant trap et contrôles d’alignement gardent leurs contrats. Les deux voies C peuvent émettre le graphe abaissé, mais les émetteurs ordinaires refusent les productions restantes. Cette interface C++ ne fournit ni intégration CLI/C SDK/GUI, ni ABI ordinaire restaurée, ni certification d’équivalence native.
 
 <!-- i18n-section: machine-region-pending-traps -->
 

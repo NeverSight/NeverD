@@ -64,6 +64,56 @@ TEST(LLVMCFrameMemory, TargetIndexWidthPreservesNegativeTypedOffsets) {
   }
 }
 
+TEST(LLVMCFrameMemory, NoFrameFunctionClearsPreviousFrameFacts) {
+  FrameFixture F;
+  F.B.CreateStore(F.B.getInt32(739), F.address(F.Base, 0));
+  F.B.CreateRet(F.B.getInt32(0));
+  LLVMCAnalysisState State;
+  analyzeDeadFrameStores(State, *F.Fn);
+  ASSERT_NE(State.DeadFrameAllocas.count(F.Frame), 0u);
+  ASSERT_FALSE(State.DeadFrameStores.empty());
+  ASSERT_FALSE(State.FramePointerLocations.empty());
+
+  auto *Plain = llvm::Function::Create(
+      llvm::FunctionType::get(F.B.getInt32Ty(), {F.B.getPtrTy()}, false),
+      llvm::GlobalValue::ExternalLinkage, "plain_memory", F.Module);
+  F.B.SetInsertPoint(llvm::BasicBlock::Create(F.Context, "entry", Plain));
+  auto *Home = F.B.CreateAlloca(F.B.getInt32Ty());
+  F.B.CreateStore(F.B.getInt32(41), Home);
+  F.B.CreateStore(F.B.CreateLoad(F.B.getInt32Ty(), Home), Plain->getArg(0));
+  F.B.CreateRet(F.B.CreateLoad(F.B.getInt32Ty(), Plain->getArg(0)));
+  analyzeDeadFrameStores(State, *Plain);
+  EXPECT_TRUE(State.DeadFrameAllocas.empty());
+  EXPECT_TRUE(State.DeadFrameStores.empty());
+  EXPECT_TRUE(State.FramePointerLocations.empty());
+  EXPECT_TRUE(State.RawFrameLocations.empty());
+  EXPECT_TRUE(State.RawFrameAllocas.empty());
+  EXPECT_TRUE(State.FrameEscapes.empty());
+}
+
+TEST(LLVMCFrameMemory, FrameDiscoveryIncludesLaterBlocks) {
+  llvm::LLVMContext Context;
+  llvm::Module Module("later-frame", Context);
+  Module.setDataLayout("e-p:64:64");
+  llvm::IRBuilder<> B(Context);
+  auto *Fn = llvm::Function::Create(
+      llvm::FunctionType::get(B.getInt32Ty(), {}, false),
+      llvm::GlobalValue::ExternalLinkage, "later_frame", Module);
+  B.SetInsertPoint(llvm::BasicBlock::Create(Context, "entry", Fn));
+  auto *Later = llvm::BasicBlock::Create(Context, "later", Fn);
+  B.CreateBr(Later);
+  B.SetInsertPoint(Later);
+  auto *Frame = B.CreateAlloca(llvm::ArrayType::get(B.getInt8Ty(), 32));
+  auto *Address = B.CreateGEP(B.getInt8Ty(), Frame, B.getInt64(4));
+  auto *Store = B.CreateStore(B.getInt32(739), Address);
+  B.CreateRet(B.CreateLoad(B.getInt32Ty(), Address));
+  LLVMCAnalysisState State;
+  analyzeDeadFrameStores(State, *Fn);
+  EXPECT_EQ(State.FramePointerLocations.at(Address),
+            (std::pair<const llvm::AllocaInst *, int64_t>{Frame, 4}));
+  EXPECT_EQ(State.DeadFrameStores.count(Store), 0u);
+}
+
 TEST(LLVMCFrameMemory, PhiReadsKeepBothBranchStores) {
   FrameFixture F;
   auto *Normal = llvm::BasicBlock::Create(F.Context, "normal", F.Fn);

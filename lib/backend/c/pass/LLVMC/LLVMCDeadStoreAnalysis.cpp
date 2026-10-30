@@ -89,6 +89,16 @@ void analyzeDeadFrameStores(LLVMCAnalysisState &State, llvm::Function &Fn) {
   const llvm::Module *Mod = Fn.getParent();
   if (!Mod)
     return;
+  // Every fact below is rooted at a byte-array alloca in this function.
+  // Without one, scalar carrier graphs cannot contribute a frame location.
+  // Reject that shape before following their stored values for each access.
+  const bool HasFrame = llvm::any_of(Fn, [](const llvm::BasicBlock &Block) {
+    return llvm::any_of(Block, [](const llvm::Instruction &Inst) {
+      return isSyntheticFrameAlloca(llvm::dyn_cast<llvm::AllocaInst>(&Inst));
+    });
+  });
+  if (!HasFrame)
+    return;
   const llvm::DataLayout &DL = Mod->getDataLayout();
 
   StoredValues Stores;

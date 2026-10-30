@@ -79,6 +79,8 @@ expandNativeStackControl(const SpecializationInstruction &Instruction,
 /// exact physical effects and actual next PC as a terminal INDIR_BR. Direct
 /// guest addresses remain values, never residual CFG labels. A declared trap
 /// instead retains its exact terminal operation without a next-PC contract.
+/// Constant-slot JMPs load their current eight-byte target into the same
+/// validated scratch carrier; their ordinary import-thunk lift is unchanged.
 llvm::Expected<NativeStackExpansion>
 expandX64MachineExit(const SpecializationInstruction &Instruction,
                      const SpecializationX64MachineExit &Declaration,

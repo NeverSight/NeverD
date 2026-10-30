@@ -454,6 +454,118 @@ TEST(NativeStackControl, FreshMemoryCallBindsPreservationAndTargetBeforePush) {
   }
 }
 
+SpecializationInstruction jumpInstruction(llvm::ArrayRef<uint8_t> Bytes) {
+  Decoder Decode;
+  Decode.init(Arch::X64);
+  Decode.setStrict(true);
+  SpecializationInstruction Result;
+  Result.NativeBytes.assign(Bytes.begin(), Bytes.end());
+  Result.Origin.Address = 0x100;
+  Result.Origin.Size = Bytes.size();
+  Result.Origin.Control = LowInstructionControl::Branch;
+  Result.Origin.ControlFlags = LowInstructionControlFlag::Branch;
+  Result.Fallthrough.Address = Result.Origin.Address + Bytes.size();
+  DecodedInsn Decoded{};
+  EXPECT_TRUE(Decode.decodeOneForLift(Result.NativeBytes.data(),
+                                      Result.NativeBytes.size(),
+                                      Result.Origin.Address, Decoded));
+  Decode.liftToLow(Decoded, Result.Ops, {}, {}, &Result.UndefinedEffects);
+  Result.Origin.OpCount = Result.Ops.size();
+  if (Result.Ops.back().Opcode == NdOp::INDIR_BR)
+    Result.Origin.ControlFlags |= LowInstructionControlFlag::Indirect;
+  else
+    Result.Origin.Immediate = Result.Ops.back().Inputs[0].Offset;
+  return Result;
+}
+
+TEST(NativeStackControl, JumpExitReadsOnlyMemoryTargets) {
+  const std::vector<std::vector<uint8_t>> Encodings = {
+      {0xe9, 0xfb, 0, 0, 0},                 // JMP 0x200
+      {0xff, 0xe0},                          // JMP RAX
+      {0xff, 0x20},                          // JMP [RAX]
+      {0xff, 0x25, 0xfa, 0, 0, 0},           // JMP [RIP+250], slot 0x200
+      {0xff, 0x25, 0xfb, 0, 0, 0},           // Unaligned slot 0x201
+      {0xff, 0x25, 0xf9, 0xff, 0xff, 0xff}}; // Backward slot 0xff
+  for (unsigned Kind = 0; Kind != Encodings.size(); ++Kind) {
+    SCOPED_TRACE(Kind);
+    const auto Insn = jumpInstruction(Encodings[Kind]);
+    const SpecializationX64MachineExit Exit{
+        1, Insn.Origin.Address, SpecializationX64MachineExitKind::Jump};
+    auto Result = expandX64MachineExit(Insn, Exit, Scratch);
+    ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+    validBoundary(*Result);
+    EXPECT_EQ(Result->Ops.size(), Insn.Ops.size() + (Kind >= 3));
+    EXPECT_EQ(Result->Receipt.OriginalBoundary.Address, Insn.Origin.Address);
+    EXPECT_EQ(Result->Receipt.OriginalBoundary.Size, Insn.Origin.Size);
+    EXPECT_EQ(Result->Receipt.OriginalBoundary.OpCount, Insn.Ops.size());
+    EXPECT_EQ(Result->Receipt.OriginalBoundary.ControlFlags,
+              Insn.Origin.ControlFlags);
+    EXPECT_EQ(Result->Receipt.OriginalOperationDigest,
+              lowUndefinedOperationDigest(Insn.Ops));
+    EXPECT_EQ(Result->Receipt.ExpandedOperationDigest,
+              lowUndefinedOperationDigest(Result->Ops));
+    for (uint64_t Target : {0ULL, 0x345678ULL, 0xffff800012345678ULL}) {
+      SymContext Ctx;
+      SymState State(Ctx);
+      SymExec Exec(Ctx, State);
+      State.write(SymSpace::Register, 0, Ctx.mkConst(64, 0x280));
+      const uint64_t Slot = Kind == 4 ? 0x201 : Kind == 5 ? 0xff : 0x200;
+      State.store(Ctx.mkConst(64, Kind == 2 ? 0x280 : Slot),
+                  Ctx.mkConst(64, Target));
+      for (const auto &Op : Result->Ops)
+        Exec.step(Op);
+      EXPECT_EQ(word(Ctx, Exec.branchTarget()), Kind == 0   ? 0x200
+                                                : Kind == 1 ? 0x280
+                                                            : Target);
+      EXPECT_EQ(
+          word(Ctx, State.load(Ctx.mkConst(64, Kind == 2 ? 0x280 : Slot), 8)),
+          Target);
+    }
+  }
+}
+
+TEST(NativeStackControl, JumpExitRejectsStaleEvidenceAndAliasingScratch) {
+  const auto Insn = jumpInstruction({0xff, 0x25, 0xfa, 0, 0, 0});
+  const SpecializationX64MachineExit Exit{
+      1, Insn.Origin.Address, SpecializationX64MachineExitKind::Jump};
+  for (unsigned Mutation = 0; Mutation != 4; ++Mutation) {
+    auto Bad = Insn;
+    if (Mutation == 0)
+      Bad.NativeBytes[2] ^= 1;
+    if (Mutation == 1)
+      Bad.UndefinedEffects.Coverage = LowUndefinedCoverage::Missing;
+    if (Mutation == 2) {
+      ++Bad.Ops.back().Inputs[0].Offset;
+      Bad.UndefinedEffects.OperationDigest =
+          lowUndefinedOperationDigest(Bad.Ops);
+    }
+    if (Mutation == 3)
+      Bad.UndefinedEffects.Effects.push_back(
+          {0, NdVar::reg(0, 8), 0, 64, std::nullopt});
+    auto Result = expandX64MachineExit(Bad, Exit, Scratch);
+    ASSERT_FALSE(bool(Result));
+    llvm::consumeError(Result.takeError());
+  }
+  for (const auto &Bad :
+       {NdVar::reg(128, 8), NdVar::tmp(128, 4), NdVar::tmp(InvalidVA - 6, 8)}) {
+    auto Result = expandX64MachineExit(Insn, Exit, Bad);
+    ASSERT_FALSE(bool(Result));
+    llvm::consumeError(Result.takeError());
+  }
+  for (const auto &Reserved :
+       {NdVar::tmp(121, 8), NdVar::tmp(128, 8), NdVar::tmp(135, 8),
+        NdVar::reg(128, 8), NdVar::tmp(InvalidVA - 6, 8)}) {
+    auto Result = expandX64MachineExit(Insn, Exit, Scratch, {Reserved});
+    ASSERT_FALSE(bool(Result));
+    llvm::consumeError(Result.takeError());
+  }
+  auto Adjacent = expandX64MachineExit(
+      Insn, Exit, Scratch, {NdVar::tmp(120, 8), NdVar::tmp(136, 8)});
+  ASSERT_TRUE(bool(Adjacent)) << llvm::toString(Adjacent.takeError());
+  auto Last = expandX64MachineExit(Insn, Exit, NdVar::tmp(InvalidVA - 7, 8));
+  ASSERT_TRUE(bool(Last)) << llvm::toString(Last.takeError());
+}
+
 const std::vector<uint8_t> TrapEncodings[] = {{0xcc}, {0xf1}, {0xcd, 0x03}};
 
 SpecializationInstruction trapInstruction(llvm::ArrayRef<uint8_t> Bytes) {

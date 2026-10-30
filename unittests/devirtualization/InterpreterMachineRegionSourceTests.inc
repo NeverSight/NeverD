@@ -133,6 +133,100 @@ int main(void) {
   }
 }
 
+TEST_F(InterpreterMachineRegionSourceTest,
+       MemoryJumpExitsReadCurrentGuestSlots) {
+#if !defined(__linux__) || !defined(__x86_64__)
+  GTEST_SKIP() << "fixed guest mappings require a 64-bit Linux host";
+#else
+  if (!hasCrossTargetClang())
+    GTEST_SKIP() << "region source execution requires clang";
+  for (bool Fresh : {false, true}) {
+    for (unsigned Kind = 0; Kind != 3; ++Kind) {
+      SCOPED_TRACE(Fresh);
+      SCOPED_TRACE(Kind);
+      const unsigned Slot = 256 + (Kind == 1);
+      const unsigned Prefix = Kind == 2 ? 3 : 0;
+      std::vector<uint8_t> Code;
+      if (Prefix)
+        Code = {0x48, 0x89, 0x01}; // MOV [RCX],RAX
+      Code.insert(Code.end(),
+                  {0xff, 0x25, static_cast<uint8_t>(Slot - Prefix - 6), 0, 0,
+                   0}); // JMP [RIP+disp32]
+      auto Image = loadRegion(Code);
+      ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+      auto Options = regionOptions(Entry + Prefix, ExitKind::Jump);
+      if (Fresh)
+        Options.UndefinedModel = SpecializationUndefinedModel::FreshScalarV1;
+      const auto Result = specializeBinaryInterpreter(*Image, Entry, Options);
+      ASSERT_TRUE(Result.complete()) << Result.Diagnostic;
+      auto Wrapped =
+          Fresh ? wrapInterpreterMachineRegionChoiceSourceX64V1(Result, Options)
+                : wrapInterpreterMachineRegionSourceX64(Result, Options);
+      ASSERT_TRUE(bool(Wrapped)) << llvm::toString(Wrapped.takeError());
+      Wrapped->Source.Function.Name = "generic_machine_region";
+      // These fixed PE addresses occupy ASan's shadow gap. Use UBSan here;
+      // the register/memory transfer fixtures also run with ASan.
+      emitAndRun(Wrapped->Source, R"C(
+#include <stdint.h>
+#include <string.h>
+#include <sys/mman.h>
+typedef struct {
+  uint64_t gpr[16],flags,queries,count,cursor,xmm[16][2],pc,kind;
+#if FRESH
+  uint64_t choices,choice_count,choice_cursor;
+#endif
+} state_t;
+_Static_assert(sizeof(state_t)==432+24*FRESH,"region state layout");
+static void put(unsigned char *p,uint64_t v) {
+  for(unsigned i=0;i<8;++i) p[i]=(unsigned char)(v>>(8*i));
+}
+int main(void) {
+  void *wanted=(void *)(uintptr_t)UINT64_C(0x140001000);
+  unsigned char *memory=mmap(wanted,4096,PROT_READ|PROT_WRITE,
+                             MAP_PRIVATE|MAP_ANONYMOUS,-1,0);
+  if(memory!=wanted) return 1;
+  const uint64_t targets[]={0,0x12340,UINT64_C(0xffff800012345678),
+                            UINT64_C(0x140001100)};
+  for(unsigned trial=0;trial<4;++trial) {
+    _Alignas(16) unsigned char stack[512],expected_stack[512];
+    unsigned char expected_memory[4096];
+    struct {uint64_t before[2];state_t s;uint64_t after[2];} box,expected;
+    memset(&box,0,sizeof(box));
+    box.before[0]=0x12345678;box.before[1]=0xabcdef01;
+    box.after[0]=0x11223344;box.after[1]=0x55667788;
+    for(unsigned i=0;i<4096;++i) memory[i]=(unsigned char)(i*19+trial);
+    for(unsigned i=0;i<512;++i) stack[i]=(unsigned char)(i*17+trial);
+    state_t *s=&box.s;
+    for(unsigned i=0;i<16;++i) {
+      s->gpr[i]=UINT64_C(0x9876543200000000)+i;
+      s->xmm[i][0]=UINT64_C(0x9123456789abcdef)+i;
+      s->xmm[i][1]=UINT64_C(0xfedcba9876543210)-trial-i;
+    }
+    s->gpr[0]=targets[trial];s->gpr[1]=(uintptr_t)(memory+SLOT);
+    s->gpr[4]=(uintptr_t)(stack+264);s->flags=0x202;
+    s->pc=0xabcdef;s->kind=0x987654;
+    put(memory+SLOT,JUMP_STORE?0x55667788:targets[trial]);
+    expected=box;memcpy(expected_memory,memory,4096);
+    memcpy(expected_stack,stack,512);
+    expected.s.pc=targets[trial];expected.s.kind=2;
+    if(JUMP_STORE) put(expected_memory+SLOT,targets[trial]);
+    if(generic_machine_region(MACHINE_ARG(s))) return 2;
+    if(memcmp(&box,&expected,sizeof(box))) return 3;
+    if(memcmp(memory,expected_memory,4096)) return 4;
+    if(memcmp(stack,expected_stack,512)) return 5;
+  }
+  return munmap(memory,4096)!=0;
+}
+)C",
+                 "#define _GNU_SOURCE\n#define FRESH " + std::to_string(Fresh) +
+                     "\n#define SLOT " + std::to_string(Slot) +
+                     "\n#define JUMP_STORE " + std::to_string(Kind == 2) +
+                     "\n");
+    }
+  }
+#endif
+}
+
 TEST_F(InterpreterMachineRegionSourceTest, QueryStopsNameOriginalPC) {
   if (!hasCrossTargetClang())
     GTEST_SKIP() << "region source execution requires clang";

@@ -1573,6 +1573,7 @@ int main(void) {
 // clang-format off
 #include "InterpreterMachineRegionSourceTests.inc"
 #include "InterpreterMachineRegionChoiceTests.inc"
+#include "InterpreterMachineRegionChoiceSourceTests.inc"
 #include "InterpreterMachineRegionTrapTests.inc"
 // clang-format on
 

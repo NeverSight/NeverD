@@ -49,6 +49,7 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringMap.h"
+#include "llvm/ADT/StringSet.h"
 #include "llvm/IR/CFG.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/EHPersonalities.h"
@@ -2597,6 +2598,8 @@ void LLVMCWriter::setupFunction(llvm::Function &Fn) {
   CrossBlockLoadValues.clear();
   KilledEntryZeroCache.clear();
   AllocaAddressTakenCache.clear();
+  AllocaUses.clear();
+  FieldStoreCandidates.clear();
   UniqueImmediateUsers.clear();
   AllocaLastValues.clear();
   AllocaHomeValues.clear();
@@ -3198,23 +3201,33 @@ std::string LLVMCWriter::printedCalleeName(const llvm::CallBase &Call) const {
   return resolveImportCalleeName(Call.getCalledOperand());
 }
 
+const LLVMCWriter::AllocaUseFacts &
+LLVMCWriter::allocaUseFacts(const llvm::AllocaInst *Slot) const {
+  assert(Slot);
+  auto [It, Added] = AllocaUses.try_emplace(Slot);
+  if (Added)
+    for (const llvm::User *User : Slot->users()) {
+      if (const auto *Load = llvm::dyn_cast<llvm::LoadInst>(User)) {
+        It->second.Loads.push_back(Load);
+        It->second.OnlyNonvolatileStores = false;
+        continue;
+      }
+      const auto *Store = llvm::dyn_cast<llvm::StoreInst>(User);
+      if (!Store || Store->getPointerOperand() != Slot)
+        It->second.OnlyDirectMemoryUsers = false;
+      if (!isLifetimeOrDbgUser(User) &&
+          (!Store || Store->getPointerOperand() != Slot ||
+           Store->isVolatile() || Store->isAtomic()))
+        It->second.OnlyNonvolatileStores = false;
+    }
+  return It->second;
+}
+
 bool LLVMCWriter::valueFeedsPrintedUse(const llvm::Value *V) {
   if (!V)
     return false;
-  auto WriteOnlyAlloca = [](const llvm::AllocaInst *Slot) {
-    if (!Slot)
-      return false;
-    for (const llvm::User *User : Slot->users()) {
-      if (isLifetimeOrDbgUser(User))
-        continue;
-      const auto *Store = llvm::dyn_cast<llvm::StoreInst>(User);
-      if (!Store || Store->getPointerOperand() != Slot || Store->isVolatile() ||
-          Store->isAtomic())
-        return false;
-    }
-    return true;
-  };
   std::set<const llvm::Value *> Seen;
+  llvm::SmallPtrSet<const llvm::AllocaInst *, 16> WalkedHomes;
   std::function<bool(const llvm::Value *)> Walk =
       [&](const llvm::Value *Cur) -> bool {
     if (!Cur || !Seen.insert(Cur).second)
@@ -3278,18 +3291,16 @@ bool LLVMCWriter::valueFeedsPrintedUse(const llvm::Value *V) {
         const llvm::AllocaInst *Dest = asAllocaPointer(SI->getPointerOperand());
         // A typed cursor may still be a register copy sink.  Type inference
         // does not make a slot observable when every use only writes it.
-        if (WriteOnlyAlloca(Dest))
+        if (Dest && allocaUseFacts(Dest).OnlyNonvolatileStores)
           continue;
         if (!Dest || allocaAddressTaken(Dest) || isJoinCallArgAlloca(Dest) ||
             isThisFieldValueHome(Dest) || isFrameFieldValueHome(Dest) ||
             isTypedRecordCursorSlot(Dest))
           return true;
-        for (const llvm::User *DU : Dest->users()) {
-          if (const auto *LI = llvm::dyn_cast<llvm::LoadInst>(DU)) {
+        if (WalkedHomes.insert(Dest).second)
+          for (const auto *LI : allocaUseFacts(Dest).Loads)
             if (Walk(LI))
               return true;
-          }
-        }
         continue;
       }
       return true;
@@ -4917,6 +4928,38 @@ std::optional<std::string>
 LLVMCWriter::joinFieldDefaultText(const llvm::AllocaInst *Slot) const {
   if (!Slot)
     return std::nullopt;
+  auto [Candidate, Added] = FieldStoreCandidates.try_emplace(Slot);
+  if (Added) {
+    unsigned Work = limits::backend::kLLVMCFieldDefaultShapeWork;
+    for (const llvm::User *User : Slot->users()) {
+      if (!Work)
+        return std::nullopt;
+      --Work;
+      const auto *Store = llvm::dyn_cast<llvm::StoreInst>(User);
+      if (!Store || Store->getPointerOperand() != Slot)
+        continue;
+      const llvm::Value *Value = Store->getValueOperand();
+      llvm::SmallPtrSet<const llvm::Value *, 8> Seen;
+      while (Seen.insert(Value).second) {
+        if (!Work)
+          return std::nullopt;
+        --Work;
+        if (const auto *Freeze = llvm::dyn_cast<llvm::FreezeInst>(Value))
+          Value = Freeze->getOperand(0);
+        else if (const auto *Cast = llvm::dyn_cast<llvm::CastInst>(Value))
+          Value = Cast->getOperand(0);
+        else
+          break;
+      }
+      if (llvm::isa<llvm::LoadInst>(Value))
+        Candidate->second.Stores.push_back(Store);
+    }
+    Candidate->second.Complete = true;
+  }
+  // Numeric recurrences cannot be field/default joins. Reject them before
+  // folding every store again at each of their thousands of cross-block uses.
+  if (!Candidate->second.Complete || Candidate->second.Stores.empty())
+    return std::nullopt;
   // Field recognition loads the cursor home, which asks whether this slot
   // is a join default. A nested question is not itself that default.
   thread_local int Depth = 0;
@@ -4932,10 +4975,22 @@ LLVMCWriter::joinFieldDefaultText(const llvm::AllocaInst *Slot) const {
     return std::nullopt;
   if (llvm::isa<llvm::ArrayType>(Slot->getAllocatedType()))
     return std::nullopt;
+  unsigned Remaining = limits::backend::kLLVMCFieldDefaultQueryWork;
+  bool Exhausted = false;
+  const auto Charge = [&]() {
+    if (!Remaining) {
+      Exhausted = true;
+      return false;
+    }
+    --Remaining;
+    return true;
+  };
   auto FieldStore = [&](const llvm::Value *Stored) {
     const llvm::Value *Src = Stored;
     llvm::SmallPtrSet<const llvm::Value *, 8> Seen;
     while (Src && Seen.insert(Src).second) {
+      if (!Charge())
+        return false;
       if (storedTypedMemberLoad(Src))
         return true;
       if (const auto *Fr = llvm::dyn_cast<llvm::FreezeInst>(Src)) {
@@ -4962,6 +5017,8 @@ LLVMCWriter::joinFieldDefaultText(const llvm::AllocaInst *Slot) const {
       const llvm::Value *Addr = LI->getPointerOperand();
       llvm::SmallPtrSet<const llvm::Value *, 8> AddrSeen;
       while (Addr && AddrSeen.insert(Addr).second) {
+        if (!Charge())
+          return false;
         if (const auto *Fr = llvm::dyn_cast<llvm::FreezeInst>(Addr)) {
           Addr = Fr->getOperand(0);
           continue;
@@ -4979,6 +5036,8 @@ LLVMCWriter::joinFieldDefaultText(const llvm::AllocaInst *Slot) const {
           // looks like zero, so that store never becomes AllocaHomeValues.
           // The store instruction still carries the add.
           for (const llvm::User *AU : AddrSlot->users()) {
+            if (!Charge())
+              return false;
             const auto *ASI = llvm::dyn_cast<llvm::StoreInst>(AU);
             if (!ASI || asAllocaPointer(ASI->getPointerOperand()) != AddrSlot)
               continue;
@@ -5006,13 +5065,25 @@ LLVMCWriter::joinFieldDefaultText(const llvm::AllocaInst *Slot) const {
   std::optional<std::string> ImmText;
   llvm::SmallPtrSet<const llvm::BasicBlock *, 8> ImmBlocks;
   llvm::SmallPtrSet<const llvm::BasicBlock *, 8> FieldBlocks;
+  llvm::SmallPtrSet<const llvm::StoreInst *, 8> FieldStores;
+  for (const auto *Store : Candidate->second.Stores)
+    if (Store->getParent() && FieldStore(Store->getValueOperand())) {
+      FieldStores.insert(Store);
+      FieldBlocks.insert(Store->getParent());
+    }
+  // A parameter copied through an alloca is syntactically a load, but not
+  // a record-field arm. Establish at least one actual field before spending
+  // constant-fold work on the other (possibly thousands of) stores.
+  if (Exhausted || FieldStores.empty())
+    return std::nullopt;
   for (const llvm::User *U : Slot->users()) {
+    if (!Charge())
+      return std::nullopt;
     const auto *SI = llvm::dyn_cast<llvm::StoreInst>(U);
     if (!SI || !SI->getParent())
       continue;
     const llvm::Value *Stored = SI->getValueOperand();
-    if (FieldStore(Stored)) {
-      FieldBlocks.insert(SI->getParent());
+    if (FieldStores.count(SI)) {
       continue;
     }
     auto Imm = foldImmediate(Stored);
@@ -5032,13 +5103,18 @@ LLVMCWriter::joinFieldDefaultText(const llvm::AllocaInst *Slot) const {
     llvm::SmallPtrSet<const llvm::BasicBlock *, 16> Seen;
     llvm::SmallVector<const llvm::BasicBlock *, 8> Work{Start};
     while (!Work.empty()) {
+      if (!Charge())
+        return std::nullopt;
       const llvm::BasicBlock *Cur = Work.pop_back_val();
       if (!Cur || !Seen.insert(Cur).second)
         continue;
       if (Cur != Start && ImmBlocks.count(Cur))
         return std::nullopt;
-      for (const llvm::BasicBlock *Succ : llvm::successors(Cur))
+      for (const llvm::BasicBlock *Succ : llvm::successors(Cur)) {
+        if (!Charge())
+          return std::nullopt;
         Work.push_back(Succ);
+      }
     }
   }
   return ImmText;
@@ -6173,10 +6249,11 @@ bool LLVMCWriter::blockOnlyFeedsBranch(const llvm::BasicBlock *BB) {
   if (!BB || !BB->getTerminator())
     return false;
   const llvm::Instruction *Term = BB->getTerminator();
+  llvm::SmallPtrSet<const llvm::Instruction *, 16> Seen;
+  unsigned Remaining = limits::backend::kLLVMCBranchFeedQueryWork;
   for (const llvm::Instruction &Inst : *BB) {
     if (&Inst == Term || llvm::isa<llvm::AllocaInst>(Inst))
       continue;
-    llvm::SmallPtrSet<const llvm::Instruction *, 16> Seen;
     std::function<bool(const llvm::Instruction *)> Feeds =
         [&](const llvm::Instruction *I) -> bool {
       if (!I || I == Term)
@@ -6185,9 +6262,15 @@ bool LLVMCWriter::blockOnlyFeedsBranch(const llvm::BasicBlock *BB) {
         return false;
       if (!Seen.insert(I).second)
         return true;
+      if (!Remaining)
+        return false;
+      --Remaining;
       if (I->use_empty())
         return !instructionIsPrinted(*I);
       for (const llvm::User *U : I->users()) {
+        if (!Remaining)
+          return false;
+        --Remaining;
         const auto *UI = llvm::dyn_cast<llvm::Instruction>(U);
         if (!UI || !Feeds(UI))
           return false;
@@ -8985,10 +9068,12 @@ void LLVMCWriter::writeGoto(const llvm::BasicBlock *From,
 bool LLVMCWriter::allocaHasPrintedLoad(const llvm::AllocaInst *Slot) {
   if (!Slot)
     return false;
-  for (const llvm::User *U : Slot->users()) {
-    const auto *LI = llvm::dyn_cast<llvm::LoadInst>(U);
-    if (!LI)
-      continue;
+  const auto &Uses = allocaUseFacts(Slot);
+  // An over-budget presence query retains storage rather than proving every
+  // observation redundant. This is not a cached print-state decision.
+  if (Uses.Loads.size() > limits::backend::kLLVMCStorageUseQueryWork)
+    return true;
+  for (const auto *LI : Uses.Loads) {
     if (Analysis.DeadFrameStores.count(LI) || Analysis.Inlinable.count(LI) ||
         isImportCalleeOnlyLoad(LI) || computedAllocaLoadIsForwarded(LI) ||
         typedLoadAccess(*LI) || typedIndexAccess(LI->getPointerOperand()) ||
@@ -9310,8 +9395,8 @@ firstNameUseOutsideDecl(llvm::StringRef Text, llvm::StringRef Name,
 }
 
 std::string
-dropUnusedCallDecls(std::string Text, llvm::ArrayRef<std::string> Names,
-                    const llvm::StringMap<std::string> &ArrayDeclarations) {
+dropUnusedCallDeclsSlow(std::string Text, llvm::ArrayRef<std::string> Names,
+                        const llvm::StringMap<std::string> &ArrayDeclarations) {
   for (const std::string &Name : Names) {
     const auto Array = ArrayDeclarations.find(Name);
     const llvm::StringRef ArrayDeclaration =
@@ -9334,6 +9419,115 @@ dropUnusedCallDecls(std::string Text, llvm::ArrayRef<std::string> Names,
     Text = std::move(Out);
   }
   return Text;
+}
+
+bool isIdentifierName(llvm::StringRef Name) {
+  return !Name.empty() &&
+         llvm::all_of(Name, [](unsigned char C) { return isCIdentChar(C); });
+}
+
+// Index only queried names, once per immutable rendering. Keep exact token
+// and declaration rules, including mentions in comments and string literals.
+class RenderedNameUses {
+  struct Occurrence {
+    size_t At;
+    size_t LineStart;
+    size_t LineEnd;
+  };
+  llvm::StringRef Text;
+  llvm::StringMap<llvm::SmallVector<Occurrence, 2>> Names;
+  std::map<size_t, size_t> DroppedLines;
+
+public:
+  RenderedNameUses(llvm::StringRef Text, llvm::ArrayRef<std::string> Candidates)
+      : Text(Text) {
+    for (const auto &Name : Candidates)
+      if (isIdentifierName(Name))
+        Names.try_emplace(Name);
+    if (Names.empty())
+      return;
+    for (size_t Start = 0; Start < Text.size();) {
+      size_t End = Text.find('\n', Start);
+      if (End == llvm::StringRef::npos)
+        End = Text.size();
+      for (size_t Pos = Start; Pos < End;) {
+        if (!isCIdentChar(static_cast<unsigned char>(Text[Pos]))) {
+          ++Pos;
+          continue;
+        }
+        const size_t At = Pos;
+        while (Pos < End && isCIdentChar(static_cast<unsigned char>(Text[Pos])))
+          ++Pos;
+        if (auto It = Names.find(Text.substr(At, Pos - At)); It != Names.end())
+          It->second.push_back({At, Start, End});
+      }
+      Start = End == Text.size() ? End : End + 1;
+    }
+  }
+
+  std::optional<size_t> firstUse(llvm::StringRef Name,
+                                 llvm::StringRef ArrayDeclaration = {}) const {
+    if (!isIdentifierName(Name))
+      return firstNameUseOutsideDecl(Text, Name, ArrayDeclaration);
+    const auto It = Names.find(Name);
+    if (It == Names.end())
+      return std::nullopt;
+    for (const auto &Use : It->second) {
+      if (DroppedLines.count(Use.LineStart))
+        continue;
+      if (!lineDeclaresName(Text.slice(Use.LineStart, Use.LineEnd), Name,
+                            ArrayDeclaration))
+        return Use.At;
+    }
+    return std::nullopt;
+  }
+
+  void dropDeclarations(llvm::StringRef Name,
+                        llvm::StringRef ArrayDeclaration) {
+    const auto It = Names.find(Name);
+    if (It == Names.end())
+      return;
+    for (const auto &Use : It->second)
+      if (!DroppedLines.count(Use.LineStart) &&
+          lineDeclaresName(Text.slice(Use.LineStart, Use.LineEnd), Name,
+                           ArrayDeclaration))
+        DroppedLines.emplace(Use.LineStart,
+                             Use.LineEnd + (Use.LineEnd < Text.size()));
+  }
+
+  std::string withoutDeclarations(std::string Original) const {
+    if (DroppedLines.empty())
+      return Original;
+    std::string Out;
+    Out.reserve(Original.size());
+    size_t Start = 0;
+    for (const auto &[Begin, End] : DroppedLines) {
+      Out.append(Original, Start, Begin - Start);
+      Start = End;
+    }
+    Out.append(Original, Start, std::string::npos);
+    return Out;
+  }
+};
+
+std::string
+dropUnusedCallDecls(std::string Text, llvm::ArrayRef<std::string> Names,
+                    const llvm::StringMap<std::string> &ArrayDeclarations) {
+  // Source expressions are not necessarily identifiers. Retain the original
+  // substring rules for that uncommon input rather than tokenizing it.
+  if (llvm::any_of(Names, [](const std::string &Name) {
+        return !Name.empty() && !isIdentifierName(Name);
+      }))
+    return dropUnusedCallDeclsSlow(std::move(Text), Names, ArrayDeclarations);
+  RenderedNameUses Uses(Text, Names);
+  for (const std::string &Name : Names) {
+    const auto Array = ArrayDeclarations.find(Name);
+    const llvm::StringRef Declaration =
+        Array == ArrayDeclarations.end() ? llvm::StringRef() : Array->second;
+    if (!Name.empty() && !Uses.firstUse(Name, Declaration))
+      Uses.dropDeclarations(Name, Declaration);
+  }
+  return Uses.withoutDeclarations(std::move(Text));
 }
 
 std::string
@@ -10910,20 +11104,54 @@ void LLVMCWriter::renderFunctionProjection(llvm::Function &Fn) {
   // rendered. The reference scan predicts layout, but cannot decide whether
   // a later region will actually inline. Retain the destination's rendered
   // position and reconcile late references before publishing the function.
+  llvm::StringSet<> PrintedGotos, PrintedLabels;
+  if (!DeferredBlockLabels.empty()) {
+    const llvm::StringRef Text(Buffered);
+    for (size_t Pos = 0; (Pos = Text.find("goto ", Pos)) != Text.npos;) {
+      const size_t Start = Pos + 5;
+      Pos = Start;
+      while (Pos < Text.size() &&
+             isCIdentChar(static_cast<unsigned char>(Text[Pos])))
+        ++Pos;
+      if (Pos < Text.size() && Text[Pos] == ';')
+        PrintedGotos.insert(Text.slice(Start, Pos));
+    }
+    for (size_t Start = 0; Start < Text.size();) {
+      const size_t End = Text.find('\n', Start);
+      if (End == Text.npos)
+        break;
+      if (Start && End > Start && Text[End - 1] == ':')
+        PrintedLabels.insert(Text.slice(Start, End - 1));
+      Start = End + 1;
+    }
+  }
   std::vector<std::pair<size_t, std::string>> MissingLabels;
   for (const auto &[Block, Position] : DeferredBlockLabels) {
     const std::string Name = blockLabel(Block);
     // A later duplicated tail can erase the prediction from ReferencedBlocks
     // even though an earlier edge has already printed its goto.
-    if (Buffered.find("goto " + Name + ";") == std::string::npos)
+    if (!PrintedGotos.contains(Name))
       continue;
     const std::string Label = Name + ":\n";
-    if (Buffered.find("\n" + Label) == std::string::npos)
+    if (!PrintedLabels.contains(Name))
       MissingLabels.emplace_back(Position, Label);
   }
-  std::sort(MissingLabels.rbegin(), MissingLabels.rend());
-  for (const auto &[Position, Label] : MissingLabels)
-    Buffered.insert(Position, Label);
+  if (!MissingLabels.empty()) {
+    std::sort(MissingLabels.begin(), MissingLabels.end());
+    std::string WithLabels;
+    size_t Extra = 0;
+    for (const auto &[_, Label] : MissingLabels)
+      Extra += Label.size();
+    WithLabels.reserve(Buffered.size() + Extra);
+    size_t Start = 0;
+    for (const auto &[Position, Label] : MissingLabels) {
+      WithLabels.append(Buffered, Start, Position - Start);
+      WithLabels += Label;
+      Start = Position;
+    }
+    WithLabels.append(Buffered, Start, std::string::npos);
+    Buffered = std::move(WithLabels);
+  }
   // Declaration prediction runs before the statement walk. EH wraps and
   // cross-block alloca homes can change which values and slots the statement
   // writer actually prints. Reconcile against the rendered body so
@@ -10934,55 +11162,61 @@ void LLVMCWriter::renderFunctionProjection(llvm::Function &Fn) {
   DeclaredNames.insert(ScopedScalarNames.begin(), ScopedScalarNames.end());
   llvm::StringMap<std::string> ArrayDeclarations;
   std::vector<std::pair<size_t, std::string>> MissingDecls;
-  for (llvm::BasicBlock &BB : Fn) {
-    for (llvm::Instruction &Inst : BB) {
-      if (Inst.getType()->isVoidTy() || Inst.getType()->isTokenTy())
-        continue;
-      const auto It = ValNames.find(&Inst);
-      if (It == ValNames.end() || It->second.empty())
-        continue;
-      if (const auto *AI = llvm::dyn_cast<llvm::AllocaInst>(&Inst))
-        if (const auto *Array =
-                llvm::dyn_cast<llvm::ArrayType>(AI->getAllocatedType()))
-          ArrayDeclarations[It->second] =
-              allocaAlignment(*AI) + typeToCLLVM(Array->getElementType()) +
-              " " + It->second + "[" + std::to_string(Array->getNumElements()) +
-              "];";
-      if (DeclaredNames.count(It->second))
-        continue;
-      const std::optional<size_t> FirstUse =
-          firstNameUseOutsideDecl(Buffered, It->second);
-      if (!FirstUse)
-        continue;
-      std::string Declaration;
-      if (auto *AI = llvm::dyn_cast<llvm::AllocaInst>(&Inst)) {
-        llvm::Type *Allocated = AI->getAllocatedType();
-        if (auto *Array = llvm::dyn_cast<llvm::ArrayType>(Allocated)) {
-          Declaration = "    " + allocaAlignment(*AI) +
-                        typeToCLLVM(Array->getElementType()) + " " +
-                        It->second + "[" +
-                        std::to_string(Array->getNumElements()) + "];\n";
-        } else {
-          std::string Type = typeToCLLVM(Allocated);
-          if (auto Found = AllocaTypes.find(AI);
-              Found != AllocaTypes.end() && Found->second &&
-              Found->second->Kind == NdTypeKind::Ptr &&
-              Found->second->Pointee &&
-              Found->second->Pointee->Kind == NdTypeKind::Struct) {
-            if (std::string Pointer =
-                    recordPointerSpelling(*Found->second->Pointee);
-                !Pointer.empty())
-              Type = std::move(Pointer);
+  {
+    std::vector<std::string> CandidateNames;
+    for (const auto &[_, Name] : ValNames)
+      if (!Name.empty() && !DeclaredNames.count(Name))
+        CandidateNames.push_back(Name);
+    const RenderedNameUses Uses(Buffered, CandidateNames);
+    for (llvm::BasicBlock &BB : Fn) {
+      for (llvm::Instruction &Inst : BB) {
+        if (Inst.getType()->isVoidTy() || Inst.getType()->isTokenTy())
+          continue;
+        const auto It = ValNames.find(&Inst);
+        if (It == ValNames.end() || It->second.empty())
+          continue;
+        if (const auto *AI = llvm::dyn_cast<llvm::AllocaInst>(&Inst))
+          if (const auto *Array =
+                  llvm::dyn_cast<llvm::ArrayType>(AI->getAllocatedType()))
+            ArrayDeclarations[It->second] =
+                allocaAlignment(*AI) + typeToCLLVM(Array->getElementType()) +
+                " " + It->second + "[" +
+                std::to_string(Array->getNumElements()) + "];";
+        if (DeclaredNames.count(It->second))
+          continue;
+        const std::optional<size_t> FirstUse = Uses.firstUse(It->second);
+        if (!FirstUse)
+          continue;
+        std::string Declaration;
+        if (auto *AI = llvm::dyn_cast<llvm::AllocaInst>(&Inst)) {
+          llvm::Type *Allocated = AI->getAllocatedType();
+          if (auto *Array = llvm::dyn_cast<llvm::ArrayType>(Allocated)) {
+            Declaration = "    " + allocaAlignment(*AI) +
+                          typeToCLLVM(Array->getElementType()) + " " +
+                          It->second + "[" +
+                          std::to_string(Array->getNumElements()) + "];\n";
+          } else {
+            std::string Type = typeToCLLVM(Allocated);
+            if (auto Found = AllocaTypes.find(AI);
+                Found != AllocaTypes.end() && Found->second &&
+                Found->second->Kind == NdTypeKind::Ptr &&
+                Found->second->Pointee &&
+                Found->second->Pointee->Kind == NdTypeKind::Struct) {
+              if (std::string Pointer =
+                      recordPointerSpelling(*Found->second->Pointee);
+                  !Pointer.empty())
+                Type = std::move(Pointer);
+            }
+            Declaration =
+                "    " + allocaAlignment(*AI) + Type + " " + It->second + ";\n";
           }
+        } else {
           Declaration =
-              "    " + allocaAlignment(*AI) + Type + " " + It->second + ";\n";
+              "    " + sourceVariableDeclaration(Inst, It->second) + "\n";
         }
-      } else {
-        Declaration =
-            "    " + sourceVariableDeclaration(Inst, It->second) + "\n";
+        MissingDecls.emplace_back(*FirstUse, std::move(Declaration));
+        DeclaredNames.insert(It->second);
       }
-      MissingDecls.emplace_back(*FirstUse, std::move(Declaration));
-      DeclaredNames.insert(It->second);
     }
   }
   if (!MissingDecls.empty()) {

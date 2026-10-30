@@ -374,13 +374,15 @@ void Pipeline::rebuildHighIR(const BinaryImage &Img,
     // semantic segments; parallel function workers must not nest another pool.
     Local.setSemanticThreadLimit(
         Total < limits::kMinParallelIRWorkItems ? workerThreadCount() : 1);
-    Local.setBinaryImage(&Img);
     Local.setFuncNames(&AllFuncNames);
     Local.setResolvedCalleeNames(&ResolvedCalleeNames);
     Local.setVariadicVectorCallees(&VariadicVectorCallees);
     Local.setPrototypeArgumentCallees(&Result.CallPrototypeArguments);
     for (size_t FI; (FI = Claim()) < N;) {
       const MedFunc &MF = Result.MedFuncs[FI];
+      // Explicit machine-state recovery retains fixed guest addresses, as
+      // the LLVM and final C emitters do. It supplies no relocation image.
+      Local.setBinaryImage(Result.InterpreterMachineSourceABI ? nullptr : &Img);
       Local.setExpressionObserver({});
       Local.setExpressionCloneObserver({});
       Local.setStatementObserver({});

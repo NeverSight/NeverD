@@ -7,8 +7,11 @@
 #include "gtest/gtest.h"
 
 #include "neverd/Limits.h"
+#include "neverd/backend/c/HighC/HighCEmitter.h"
 #include "neverd/backend/c/LLVMC/LLVMCEmitter.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
+#include "neverd/ir/Limits.h"
+#include "neverd/ir/high/MedToHigh.h"
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/ir/med/MedMutableSource.h"
 #include "neverd/ir/med/MedSourceParameterUses.h"
@@ -22,6 +25,7 @@
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Program.h"
 
+#include <algorithm>
 #include <stdexcept>
 
 namespace {
@@ -119,25 +123,10 @@ MedFunc loop(bool ReverseBlocks = false) {
   return F;
 }
 
-void compileAndRun(const MedFunc &F, const char *Main,
-                   size_t MaxSourceBytes = 0, bool OptimizeLLVM = false) {
-  llvm::LLVMContext Context;
-  auto Module = MedLLVMEmitter().emit({F}, Context, F.Name, Arch::X64);
-  ASSERT_NE(Module, nullptr);
-  ASSERT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
-  if (OptimizeLLVM) {
-    Pipeline::OptimizationOptions Options;
-    const auto Result = Pipeline::optimizeModule(*Module, Options);
-    ASSERT_NE(Result.Stop, OptimizationStopReason::InputInvalid);
-    ASSERT_NE(Result.Stop, OptimizationStopReason::VerificationFailed);
-    ASSERT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
-  }
-  std::string Source;
-  llvm::raw_string_ostream Stream(Source);
-  ASSERT_TRUE(LLVMCEmitter().emit(*Module, Stream, CEmitterOptions{}));
+void compileSourceAndRun(const std::string &Source, size_t MaxSourceBytes,
+                         bool ExpectTrap = false) {
   if (MaxSourceBytes)
     ASSERT_LE(Source.size(), MaxSourceBytes);
-  Stream << Main;
 #ifdef NEVERD_TEST_CLANG
   const std::string Compiler = NEVERD_TEST_CLANG;
 #else
@@ -179,13 +168,153 @@ void compileAndRun(const MedFunc &F, const char *Main,
                          << (Errors ? (*Errors)->getBuffer().str() : "");
     Status = llvm::sys::ExecuteAndWait(BinaryPath, {BinaryPath}, std::nullopt,
                                        Redirects, 10, 0, &Error);
-    ASSERT_EQ(Status, 0) << Error << '\n' << Source;
+    if (ExpectTrap) {
+      ASSERT_EQ(Status, -2) << Error << '\n' << Source;
+      ASSERT_EQ(Error.find("timed out"), std::string::npos) << Error;
+    } else {
+      ASSERT_EQ(Status, 0) << Error << '\n' << Source;
+    }
+  }
+}
+
+void compileAndRun(const MedFunc &F, const char *Main,
+                   size_t MaxSourceBytes = 0, bool OptimizeLLVM = false,
+                   bool ExpectTrap = false) {
+  llvm::LLVMContext Context;
+  auto Module = MedLLVMEmitter().emit({F}, Context, F.Name, Arch::X64);
+  ASSERT_NE(Module, nullptr);
+  ASSERT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
+  if (OptimizeLLVM) {
+    Pipeline::OptimizationOptions Options;
+    const auto Result = Pipeline::optimizeModule(*Module, Options);
+    ASSERT_NE(Result.Stop, OptimizationStopReason::InputInvalid);
+    ASSERT_NE(Result.Stop, OptimizationStopReason::VerificationFailed);
+    ASSERT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
+  }
+  std::string Source;
+  llvm::raw_string_ostream Stream(Source);
+  ASSERT_TRUE(LLVMCEmitter().emit(*Module, Stream, CEmitterOptions{}));
+  Stream.flush();
+  {
+    SCOPED_TRACE("LLVMC");
+    compileSourceAndRun(Source + Main, MaxSourceBytes, ExpectTrap);
+  }
+  if (!F.SkippedSSA || OptimizeLLVM)
+    return;
+  SCOPED_TRACE("HighC");
+  Source.clear();
+  auto High = MedToHighConverter().convert(F, Arch::X64);
+  CEmitterOptions Options;
+  Options.TheArch = Arch::X64;
+  ASSERT_TRUE(HighCEmitter().emit({High}, Stream, Options));
+  Stream.flush();
+  compileSourceAndRun(Source + Main, MaxSourceBytes, ExpectTrap);
+}
+
+MedFunc alignmentCheck(bool Guarded, uint64_t Alignment = 16) {
+  auto F = base();
+  parameter(F, x86reg::RDI);
+  const auto Address = reg(10, x86reg::RDI);
+  const auto Result = reg(11, x86reg::RAX);
+  MedOp Check = op(NdOp::INTRINSIC, {},
+                   {MedVar::makeConst(uint64_t(Intrinsic::RequireAligned), 2),
+                    Address, MedVar::makeConst(Alignment, 8)});
+  if (Guarded) {
+    parameter(F, x86reg::RSI);
+    const auto Active = temp(12, 1);
+    F.Blocks[0].Ops.push_back(op(NdOp::COPY, Active, {reg(13, x86reg::RSI)}));
+    Check.addInput(Active);
+  }
+  F.Blocks[0].Ops.push_back(Check);
+  F.Blocks[0].Ops.push_back(
+      op(NdOp::INT_ADD, Result, {Address, MedVar::makeConst(1, 8)}));
+  F.Blocks[0].Ops.push_back(op(NdOp::RETURN, {}));
+  return F;
+}
+
+TEST(MedMutableSource, AlignmentChecksRetainTheirPredicateAndInputs) {
+  for (bool Guarded : {false, true}) {
+    auto F = alignmentCheck(Guarded);
+    std::string Error;
+    auto Plan = analyzeMedMutableSource(F, Arch::X64, &Error);
+    ASSERT_TRUE(Plan) << Error;
+    EXPECT_EQ(Plan->EntryBytes.at(x86reg::RDI), 255u);
+    compileAndRun(F, Guarded ? R"(
+int main(void) {
+  const uint64_t values[]={0,16,UINT64_C(0x8000000000000000)};
+  for(unsigned i=0;i<sizeof(values)/sizeof(*values);++i)
+    if(mutable_probe(values[i],1)!=values[i]+1 ||
+       mutable_probe(values[i],255)!=values[i]+1) return 1;
+  return mutable_probe(3,0)!=4 || mutable_probe(UINT64_MAX,0)!=0;
+}
+)"
+                             : R"(
+int main(void) {
+  const uint64_t values[]={0,16,UINT64_C(0x8000000000000000)};
+  for(unsigned i=0;i<sizeof(values)/sizeof(*values);++i)
+    if(mutable_probe(values[i])!=values[i]+1) return 1;
+  return 0;
+}
+)");
+    compileAndRun(F,
+                  Guarded ? "int main(void) { mutable_probe(3,1); return 0; }"
+                          : "int main(void) { mutable_probe(3); return 0; }",
+                  0, false, true);
+  }
+}
+
+TEST(MedMutableSource, AlignmentChecksRejectMalformedOrImplicitShapes) {
+  auto Good = alignmentCheck(true);
+  for (unsigned Kind = 0; Kind != 9; ++Kind) {
+    auto F = Good;
+    auto &Check = F.Blocks[0].Ops[1];
+    switch (Kind) {
+    case 0:
+      Check.Inputs[2] = MedVar::makeConst(0, 8);
+      break;
+    case 1:
+      Check.Inputs[2] = MedVar::makeConst(3, 8);
+      break;
+    case 2:
+      Check.Inputs[2] = reg(10, x86reg::RDI);
+      break;
+    case 3:
+      Check.Inputs[1].Size = 4;
+      break;
+    case 4:
+      Check.Inputs[3].Size = 8;
+      break;
+    case 5:
+      Check.Inputs[0].Size = 8;
+      break;
+    case 6:
+      Check.Output = temp(20);
+      break;
+    case 7:
+      Check.MemoryAddressSpace = NdMemoryAddressSpace::X86GS;
+      break;
+    case 8:
+      Check.NumInputs = 2;
+      break;
+    }
+    std::string Error;
+    EXPECT_FALSE(analyzeMedMutableSource(F, Arch::X64, &Error));
+    EXPECT_FALSE(Error.empty());
+    EXPECT_THROW(MedToHighConverter().convert(F, Arch::X64),
+                 std::runtime_error);
+    llvm::LLVMContext Context;
+    EXPECT_THROW(MedLLVMEmitter().emit({F}, Context), std::runtime_error);
   }
 }
 
 TEST(MedMutableSource, LoopRequiresIncomingParameterRegardlessOfBlockOrder) {
   for (bool Reverse : {false, true}) {
     auto F = loop(Reverse);
+    // Original PCs may repeat across specialized blocks. Only the block
+    // identities, not these operation origins, are valid branch labels.
+    for (auto &B : F.Blocks)
+      for (auto &O : B.Ops)
+        O.Addr = F.Entry;
     std::string Error;
     auto Plan = analyzeMedMutableSource(F, Arch::X64, &Error);
     ASSERT_TRUE(Plan) << Error;
@@ -197,8 +326,104 @@ int main(void) {
     if (mutable_probe(n) != n * (n + 1) / 2) return 1;
   return 0;
 }
+
 )");
   }
+}
+
+TEST(MedMutableSource, StraightLineBoundariesFollowExplicitEdgesInAnyOrder) {
+  for (bool Reverse : {false, true}) {
+    auto F = loop(Reverse);
+    F.Blocks[0].Ops.pop_back();
+    F.Blocks[Reverse ? 1 : 2].Ops.pop_back();
+    std::string Error;
+    ASSERT_TRUE(analyzeMedMutableSource(F, Arch::X64, &Error)) << Error;
+    compileAndRun(F, R"(
+int main(void) {
+  for (uint64_t n = 0; n < 100; ++n)
+    if (mutable_probe(n) != n * (n + 1) / 2) return 1;
+  return 0;
+}
+)");
+
+    // Keep symmetric, in-range CFG metadata while removing or making the
+    // continuation ambiguous. Neither case may invent a fallthrough target.
+    for (bool Ambiguous : {false, true}) {
+      auto Bad = F;
+      if (Ambiguous) {
+        Bad.Blocks[0].Succs.push_back(3);
+        Bad.Blocks[3].Preds.push_back(0);
+      } else {
+        const int Next = Bad.Blocks[0].Succs.front();
+        auto &Preds = Bad.Blocks[Next].Preds;
+        Preds.erase(std::remove(Preds.begin(), Preds.end(), 0), Preds.end());
+        Bad.Blocks[0].Succs.clear();
+      }
+      EXPECT_FALSE(analyzeMedMutableSource(Bad, Arch::X64));
+      llvm::LLVMContext Context;
+      EXPECT_THROW(MedLLVMEmitter().emit({Bad}, Context, Bad.Name, Arch::X64),
+                   std::runtime_error);
+      EXPECT_THROW(MedToHighConverter().convert(Bad, Arch::X64),
+                   std::runtime_error);
+    }
+  }
+}
+
+MedFunc longMutableChain(unsigned Blocks) {
+  auto F = base(Blocks);
+  parameter(F, x86reg::RDI);
+  const auto R = reg(11, x86reg::RAX);
+  F.Blocks.front().Ops = {op(NdOp::COPY, R, {reg(10, x86reg::RDI)})};
+  for (unsigned I = 1; I < Blocks; ++I)
+    F.Blocks[I].Ops.push_back(
+        op(NdOp::INT_ADD, R, {R, MedVar::makeConst(1, 8)}));
+  for (unsigned I = 0; I + 1 < Blocks; ++I) {
+    F.Blocks[I].Ops.push_back(branch(F.Blocks[I + 1].StartAddr));
+    connect(F, I, {int(I + 1)});
+  }
+  F.Blocks.back().Ops.push_back(op(NdOp::RETURN, {}));
+  return F;
+}
+
+TEST(MedMutableSource, LargeNarrowGraphsKeepExactRuntimeValues) {
+  const unsigned Blocks = limits::ir::kMedMutableSourceMaxBlocks / 2;
+  auto F = longMutableChain(Blocks);
+  std::string Error;
+  auto Plan = analyzeMedMutableSource(F, Arch::X64, &Error);
+  ASSERT_TRUE(Plan) << Error;
+  EXPECT_EQ(Plan->EntryBytes,
+            (std::map<uint64_t, uint64_t>{{x86reg::RDI, 255}}));
+  const auto Main =
+      "\nint main(void) {\n"
+      "const uint64_t inputs[]={0,7,UINT64_MAX};\n"
+      "for(unsigned i=0;i<3;++i) if(mutable_probe(inputs[i]) != inputs[i]+" +
+      std::to_string(Blocks - 1) + "ULL) return 1; return 0; }\n";
+  compileAndRun(F, Main.c_str());
+}
+
+TEST(MedMutableSource, LargerBlockCeilingRetainsIndependentStorageBudgets) {
+  auto Exact = longMutableChain(limits::ir::kMedMutableSourceMaxBlocks);
+  std::string Error;
+  ASSERT_TRUE(analyzeMedMutableSource(Exact, Arch::X64, &Error)) << Error;
+  auto TooMany = base(limits::ir::kMedMutableSourceMaxBlocks + 1);
+  EXPECT_FALSE(analyzeMedMutableSource(TooMany, Arch::X64, &Error));
+  EXPECT_NE(Error.find("block budget"), std::string::npos);
+
+  auto Matrix = longMutableChain(limits::ir::kMedMutableSourceMaxBlocks / 2);
+  const size_t Values =
+      limits::ir::kMedMutableSourceMaxBlockValues / Matrix.Blocks.size();
+  // RDI and RAX already occupy two identities. Extra definitions need no
+  // liveness propagation, but still count toward matrix allocation.
+  ASSERT_GT(Values, 2U);
+  auto &Ops = Matrix.Blocks.front().Ops;
+  for (size_t I = 0; I != Values - 2; ++I)
+    Ops.insert(std::prev(Ops.end()),
+               op(NdOp::COPY, temp(1000 + I), {MedVar::makeConst(I, 8)}));
+  ASSERT_TRUE(analyzeMedMutableSource(Matrix, Arch::X64, &Error)) << Error;
+  Ops.insert(std::prev(Ops.end()),
+             op(NdOp::COPY, temp(1000 + Values), {MedVar::makeConst(0, 8)}));
+  EXPECT_FALSE(analyzeMedMutableSource(Matrix, Arch::X64, &Error));
+  EXPECT_NE(Error.find("storage matrix budget"), std::string::npos);
 }
 
 TEST(MedMutableSource, EntryBackedgeCannotReinitializeMutableArgument) {
@@ -249,6 +474,48 @@ int main(void) {
 )");
 }
 
+TEST(MedMutableSource, ExplicitSourcePointerIsCapturedBeforeEntryBackedges) {
+  auto F = base(2);
+  parameter(F, x86reg::RDI);
+  F.TypedParams[0].Type = NdType::makePtr(NdType::makeInt(8, false));
+  SourceFunctionTypeHint Hint;
+  Hint.Origin = SourceFunctionTypeHint::OriginKind::ExplicitSource;
+  Hint.Architecture = Arch::X64;
+  Hint.HasExplicitABI = true;
+  Hint.ReturnType = F.ReturnType;
+  Hint.ReturnLocation = {SourceABICarrierKind::IntegerRegister, x86reg::RAX, 0,
+                         8};
+  Hint.Parameters.push_back(
+      {"words",
+       F.TypedParams[0].Type,
+       {SourceABICarrierKind::IntegerRegister, x86reg::RDI, 0, 8}});
+  F.SourceTypeHint = Hint;
+  const auto P = reg(10, x86reg::RDI);
+  const auto Word = temp(12), Condition = temp(13, 1);
+  F.Blocks[0].Ops = {
+      op(NdOp::LOAD, Word, {P}),
+      op(NdOp::INT_ADD, P, {P, MedVar::makeConst(8, 8)}),
+      op(NdOp::INT_NOTEQUAL, Condition, {Word, MedVar::makeConst(0, 8)}),
+      op(NdOp::COND_BR, {}, {MedVar::makeConst(F.Entry, 8), Condition})};
+  F.Blocks[1].Ops = {op(NdOp::COPY, reg(11, x86reg::RAX), {P}),
+                     op(NdOp::RETURN, {})};
+  connect(F, 0, {1, 0});
+  ASSERT_TRUE(analyzeMedMutableSource(F, Arch::X64));
+  compileAndRun(F, R"(
+int main(void) {
+  uint64_t words[] = {1, UINT64_MAX, 9, 0};
+  for (unsigned start = 0; start != 4; ++start)
+    if (mutable_probe(&words[start]) != (uintptr_t)&words[4]) return 1;
+  return words[0] != 1 || words[1] != UINT64_MAX || words[2] != 9 || words[3];
+}
+)");
+  F.SourceTypeHint->Parameters[0].Location.RegisterOffset = x86reg::RSI;
+  EXPECT_THROW(MedToHighConverter().convert(F, Arch::X64), std::runtime_error);
+  F.SourceTypeHint = Hint;
+  F.SourceTypeHint->ReturnLocation.RegisterOffset = x86reg::RDX;
+  EXPECT_THROW(MedToHighConverter().convert(F, Arch::X64), std::runtime_error);
+}
+
 TEST(MedMutableSource, OneSidedDefinitionCannotHideUndefinedEntryTemporary) {
   auto F = loop();
   F.Blocks[2].Ops.insert(F.Blocks[2].Ops.begin(),
@@ -273,7 +540,7 @@ TEST(MedMutableSource, DeadAndPlaceholderOutputsCannotDefineTheReturn) {
 }
 
 TEST(MedMutableSource, RejectsAmbiguousStorageAndUnnormalizedControl) {
-  for (unsigned Case = 0; Case < 22; ++Case) {
+  for (unsigned Case = 0; Case < 24; ++Case) {
     SCOPED_TRACE(Case);
     auto F = loop();
     auto &B = F.Blocks[2];
@@ -351,8 +618,17 @@ TEST(MedMutableSource, RejectsAmbiguousStorageAndUnnormalizedControl) {
       B.Ops[0].Inputs[0] =
           MedVar::makeConst(42, 8, ConstantAddressProvenance::AddressFragment);
       break;
+    case 22:
+      B.Ops[0].ReturnAddressRead = true;
+      break;
+    case 23:
+      B.Ops[0].RegistrationRoot =
+          MedOp::RegistrationRootKind::EstablishedFramePointer;
+      break;
     }
     EXPECT_FALSE(analyzeMedMutableSource(F, Arch::X64));
+    EXPECT_THROW(MedToHighConverter().convert(F, Arch::X64),
+                 std::runtime_error);
   }
 }
 
@@ -549,6 +825,9 @@ TEST(MedMutableSource, RelocationAndCompositeStateBudgetsFailClosed) {
   EXPECT_THROW(
       MedLLVMEmitter().emit({F}, Context, F.Name, Arch::X64, {}, &Image),
       std::runtime_error);
+  MedToHighConverter High;
+  High.setBinaryImage(&Image);
+  EXPECT_THROW(High.convert(F, Arch::X64), std::runtime_error);
   F = base(2049);
   for (auto &B : F.Blocks)
     B.Ops.push_back(op(NdOp::RETURN, {}));
@@ -604,6 +883,8 @@ TEST(MedMutableSource, EmitterRejectsMalformedInputsBeforeModulePrepasses) {
     }
     EXPECT_FALSE(analyzeMedMutableSource(F, Arch::X64));
     EXPECT_THROW(Emitter.emit({F}, Context, F.Name, Arch::X64),
+                 std::runtime_error);
+    EXPECT_THROW(MedToHighConverter().convert(F, Arch::X64),
                  std::runtime_error);
     const std::vector<char> Mask{0};
     EXPECT_THROW(Emitter.emit({F}, Context, F.Name, Arch::X64, {}, nullptr,

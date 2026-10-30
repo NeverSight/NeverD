@@ -30,6 +30,7 @@
 
 #include <algorithm>
 #include <iterator>
+#include <stdexcept>
 
 using namespace neverd;
 
@@ -869,16 +870,11 @@ static MedFunc makeWideChainMed() {
   return Med;
 }
 
-TEST(X86_32_FunctionDiscovery, LargeSkippedSSAMedIREmitsGotoSkeleton) {
+TEST(X86_32_FunctionDiscovery, LargeIncompleteMutableMedIRFailsExplicitly) {
   MedFunc Med = makeWideChainMed();
   Med.SkippedSSA = true;
   MedToHighConverter Conv;
-  HighFunc HF = Conv.convert(Med, Arch::X86);
-  ASSERT_FALSE(HF.Body.empty());
-  const bool HasGoto =
-      std::any_of(HF.Body.begin(), HF.Body.end(),
-                  [](const HighStmt &S) { return S.Kind == StmtKind::Goto; });
-  EXPECT_TRUE(HasGoto);
+  EXPECT_THROW(Conv.convert(Med, Arch::X86), std::runtime_error);
 }
 
 TEST(X86_32_FunctionDiscovery, LargeSSAMedIRIsLoweredBlockByBlock) {

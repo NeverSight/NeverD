@@ -667,9 +667,6 @@ static const char *devirtualizeSource(
     if (Result.MedFuncs.empty())
       return Fail("recovery produced no source input-domain evidence");
     for (const auto &Function : Result.MedFuncs) {
-      if (!PO.LiftMode && Function.SkippedSSA)
-        return Fail("recovered mutable source requires LLVM output; HighC "
-                    "lowering is incomplete");
       const LowFunc *SourceFrame = nullptr;
       if (!MachineState) {
         const auto Count = std::count_if(

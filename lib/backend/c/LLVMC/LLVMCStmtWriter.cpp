@@ -488,12 +488,7 @@ bool LLVMCWriter::isTypedRecordCursorValue(const llvm::Value *V) const {
 }
 
 bool LLVMCWriter::allocaHasLoad(const llvm::AllocaInst *Slot) const {
-  if (!Slot)
-    return false;
-  for (const llvm::User *U : Slot->users())
-    if (llvm::isa<llvm::LoadInst>(U))
-      return true;
-  return false;
+  return Slot && !allocaUseFacts(Slot).Loads.empty();
 }
 
 bool LLVMCWriter::cursorSlotIsObserved(const llvm::AllocaInst *Slot) const {

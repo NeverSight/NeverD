@@ -16,6 +16,7 @@
 #include "neverd/Common.h"
 #include "neverd/Limits.h"
 #include "neverd/backend/LLVMSourceUnknownValue.h"
+#include "neverd/backend/Limits.h"
 #include "neverd/backend/c/LLVMC/LLVMCEmitter.h"
 #include "neverd/backend/c/render/CTypeFormat.h"
 #include "neverd/backend/llvm/X86/LLVMX86DivRemAsm.h"
@@ -5044,6 +5045,325 @@ TEST(LLVMCValues, ConstantHomesStayInitializedAcrossRepeatedDiamonds) {
   ASSERT_TRUE(neverd::LLVMCEmitter().emit(Module, OS, {}));
   Source += "\nint main(void) { return constant_diamonds(0) != 7 || "
             "constant_diamonds(1) != 7; }\n";
+  for (const char *Optimization : {"-O0", "-O2"})
+    compileAndRun(Source, Optimization, {}, true);
+}
+
+TEST(LLVMCValues, LargeMutableFieldHomesKeepEveryObservedAssignment) {
+  llvm::LLVMContext Context;
+  llvm::Module Module("bounded-field-defaults", Context);
+  auto *Word = llvm::Type::getInt64Ty(Context);
+  const unsigned Large =
+      2 * neverd::limits::backend::kLLVMCFieldDefaultShapeWork;
+  for (unsigned Rounds : {3u, Large}) {
+    auto *Function = llvm::Function::Create(
+        llvm::FunctionType::get(
+            Word, {llvm::PointerType::getUnqual(Context), Word}, false),
+        llvm::GlobalValue::ExternalLinkage,
+        Rounds == Large ? "large_field_defaults" : "small_field_defaults",
+        Module);
+    llvm::IRBuilder<> B(llvm::BasicBlock::Create(Context, "entry", Function));
+    auto *Home = B.CreateAlloca(Word);
+    auto *Sum = B.CreateAlloca(Word);
+    llvm::SmallVector<llvm::AllocaInst *, 8> Unread;
+    for (unsigned I = 0; I < 8; ++I)
+      Unread.push_back(B.CreateAlloca(Word));
+    B.CreateStore(B.getInt64(0), Sum);
+    for (unsigned I = 0; I < Rounds; ++I) {
+      auto *Field = llvm::BasicBlock::Create(Context, "field", Function);
+      auto *Join = llvm::BasicBlock::Create(Context, "join", Function);
+      auto *Default = llvm::BasicBlock::Create(Context, "default", Function);
+      auto *Bit = B.CreateAnd(B.CreateLShr(Function->getArg(1), I % 64), 1);
+      B.CreateCondBr(B.CreateICmpNE(Bit, B.getInt64(0)), Field, Default);
+      B.SetInsertPoint(Field);
+      auto *Address = B.CreateGEP(Word, Function->getArg(0), B.getInt64(1));
+      B.CreateStore(B.CreateLoad(Word, Address), Home);
+      B.CreateBr(Join);
+      B.SetInsertPoint(Default);
+      B.CreateStore(B.getInt64(7), Home);
+      B.CreateBr(Join);
+      B.SetInsertPoint(Join);
+      for (auto *Slot : Unread)
+        B.CreateStore(B.getInt64(I + 1), Slot);
+      B.CreateStore(
+          B.CreateAdd(B.CreateLoad(Word, Sum), B.CreateLoad(Word, Home)), Sum);
+    }
+    B.CreateRet(B.CreateLoad(Word, Sum));
+  }
+  ASSERT_FALSE(llvm::verifyModule(Module, &llvm::errs()));
+  neverd::CEmitterOptions Options;
+  Options.PreserveLLVMFunctionTypes = true;
+  std::string Source;
+  llvm::raw_string_ostream OS(Source);
+  ASSERT_TRUE(neverd::LLVMCEmitter().emit(Module, OS, Options));
+  Source += "\n#define LARGE_ROUNDS " + std::to_string(Large) + R"(
+int main(void) {
+  const uint64_t patterns[]={0,1,2,UINT64_MAX,UINT64_C(0x12870fed5432abcd)};
+  const uint64_t values[]={0,9,UINT64_MAX,UINT64_C(0xfedcba9876543210)};
+  for(unsigned p=0;p<sizeof(patterns)/sizeof(*patterns);++p)
+    for(unsigned v=0;v<sizeof(values)/sizeof(*values);++v) {
+      uint64_t record[]={19,values[v],23}, small=0, large=0;
+      for(unsigned i=0;i<LARGE_ROUNDS;++i) {
+        uint64_t term=((patterns[p]>>(i%64))&1)?record[1]:7;
+        large+=term; if(i<3) small+=term;
+      }
+      if(small_field_defaults(record,patterns[p])!=small) return 1;
+      if(large_field_defaults(record,patterns[p])!=large) return 2;
+      if(record[0]!=19 || record[1]!=values[v] || record[2]!=23) return 3;
+    }
+  return 0;
+}
+)";
+  for (const char *Optimization : {"-O0", "-O2"})
+    compileAndRun(Source, Optimization, {}, true);
+}
+
+TEST(LLVMCValues, LargeMutableHomesKeepSnapshotsAcrossAliasedWrites) {
+  llvm::LLVMContext Context;
+  llvm::Module Module("bounded-storage-uses", Context);
+  auto *Word = llvm::Type::getInt64Ty(Context);
+  auto *Pointer = llvm::PointerType::getUnqual(Context);
+  const unsigned Large = 2 * neverd::limits::backend::kLLVMCStorageUseQueryWork;
+  for (unsigned Rounds : {3u, Large}) {
+    auto *Function = llvm::Function::Create(
+        llvm::FunctionType::get(Word, {Pointer, Pointer, Word}, false),
+        llvm::GlobalValue::ExternalLinkage,
+        Rounds == Large ? "large_home_snapshot" : "small_home_snapshot",
+        Module);
+    llvm::IRBuilder<llvm::NoFolder> B(
+        llvm::BasicBlock::Create(Context, "entry", Function));
+    auto *Home = B.CreateAlloca(Word);
+    auto *Sum = B.CreateAlloca(Word);
+    B.CreateStore(B.CreateLoad(Word, Function->getArg(0)), Home);
+    B.CreateStore(B.getInt64(0), Sum);
+    for (unsigned I = 0; I < Rounds; ++I) {
+      auto *Before = B.CreateLoad(Word, Home);
+      if (I == Rounds / 2)
+        B.CreateStore(Function->getArg(2), Function->getArg(1));
+      B.CreateStore(B.CreateAdd(Before, B.getInt64(1)), Home);
+      B.CreateStore(B.CreateAdd(B.CreateLoad(Word, Sum), Before), Sum);
+    }
+    B.CreateRet(B.CreateXor(B.CreateLoad(Word, Sum), B.CreateLoad(Word, Home)));
+  }
+  ASSERT_FALSE(llvm::verifyModule(Module, &llvm::errs()));
+  neverd::CEmitterOptions Options;
+  Options.PreserveLLVMFunctionTypes = true;
+  std::string Source;
+  llvm::raw_string_ostream OS(Source);
+  ASSERT_TRUE(neverd::LLVMCEmitter().emit(Module, OS, Options));
+  Source += "\n#define LARGE_ROUNDS " + std::to_string(Large) + R"(
+static uint64_t expected_snapshot(uint64_t value, unsigned rounds) {
+  uint64_t sum=0;
+  for(unsigned i=0;i<rounds;++i) sum+=value++;
+  return sum^value;
+}
+int main(void) {
+  const uint64_t values[]={0,9,UINT64_MAX,UINT64_C(0xfedcba9876543210)};
+  for(unsigned v=0;v<sizeof(values)/sizeof(*values);++v)
+    for(unsigned alias=0;alias<2;++alias) {
+      uint64_t replacement=values[v]^UINT64_C(0x123456789abcdef0);
+      uint64_t source=values[v], other=23;
+      if(small_home_snapshot(&source,alias?&source:&other,replacement)!=
+         expected_snapshot(values[v],3)) return 1;
+      if(source!=(alias?replacement:values[v]) ||
+         other!=(alias?23:replacement)) return 2;
+      source=values[v]; other=23;
+      if(large_home_snapshot(&source,alias?&source:&other,replacement)!=
+         expected_snapshot(values[v],LARGE_ROUNDS)) return 3;
+      if(source!=(alias?replacement:values[v]) ||
+         other!=(alias?23:replacement)) return 4;
+    }
+  return 0;
+}
+)";
+  for (const char *Optimization : {"-O0", "-O2"})
+    compileAndRun(Source, Optimization, {}, true);
+}
+
+TEST(LLVMCValues, LargeConditionFeedGraphsKeepBothControlOutcomes) {
+  llvm::LLVMContext Context;
+  llvm::Module Module("bounded-branch-feeds", Context);
+  auto *Word = llvm::Type::getInt64Ty(Context);
+  const unsigned Large =
+      neverd::limits::backend::kLLVMCBranchFeedQueryWork / 2 + 8;
+  for (unsigned Rounds : {3u, Large}) {
+    auto *Function = llvm::Function::Create(
+        llvm::FunctionType::get(Word, {Word, Word}, false),
+        llvm::GlobalValue::ExternalLinkage,
+        Rounds == Large ? "large_condition_feed" : "small_condition_feed",
+        Module);
+    auto *Entry = llvm::BasicBlock::Create(Context, "entry", Function);
+    auto *Chain = llvm::BasicBlock::Create(Context, "chain", Function);
+    auto *Taken = llvm::BasicBlock::Create(Context, "taken", Function);
+    auto *Other = llvm::BasicBlock::Create(Context, "other", Function);
+    llvm::IRBuilder<llvm::NoFolder> B(Entry);
+    B.CreateCondBr(B.CreateICmpNE(Function->getArg(1), B.getInt64(0)), Taken,
+                   Chain);
+    B.SetInsertPoint(Chain);
+    llvm::Value *Value = Function->getArg(0);
+    for (unsigned I = 0; I < Rounds; ++I)
+      Value = B.CreateXor(B.CreateAdd(Value, B.getInt64(I + 1)),
+                          B.getInt64((I % 17) + 19));
+    B.CreateCondBr(B.CreateICmpULT(Value, B.getInt64(UINT64_C(1) << 63)), Taken,
+                   Other);
+    B.SetInsertPoint(Taken);
+    B.CreateRet(B.getInt64(17));
+    B.SetInsertPoint(Other);
+    B.CreateRet(B.getInt64(29));
+  }
+  ASSERT_FALSE(llvm::verifyModule(Module, &llvm::errs()));
+  std::string Source;
+  llvm::raw_string_ostream OS(Source);
+  neverd::CEmitterOptions Options;
+  Options.PreserveLLVMFunctionTypes = true;
+  ASSERT_TRUE(neverd::LLVMCEmitter().emit(Module, OS, Options));
+  Source += "\n#define LARGE_ROUNDS " + std::to_string(Large) + R"(
+static uint64_t expected_condition(uint64_t value, unsigned rounds) {
+  for(unsigned i=0;i<rounds;++i) value=(value+i+1)^((i%17)+19);
+  return value<(UINT64_C(1)<<63)?17:29;
+}
+int main(void) {
+  const uint64_t values[]={0,UINT64_MAX,UINT64_C(0x7ffffffffffff000),
+                           UINT64_C(0x8000000000001000)};
+  for(unsigned v=0;v<sizeof(values)/sizeof(*values);++v)
+    for(unsigned force=0;force<2;++force) {
+      if(small_condition_feed(values[v],force)!=
+         (force?17:expected_condition(values[v],3))) return 1;
+      if(large_condition_feed(values[v],force)!=
+         (force?17:expected_condition(values[v],LARGE_ROUNDS))) return 2;
+    }
+  return 0;
+}
+)";
+  for (const char *Optimization : {"-O0", "-O2"})
+    compileAndRun(Source, Optimization, {}, true);
+}
+
+TEST(LLVMCValues, FrameFreeCarrierGraphsKeepEveryExternalMemoryUpdate) {
+  llvm::LLVMContext Context;
+  llvm::Module Module("frame-free-carriers", Context);
+  Module.setDataLayout("e-p:64:64");
+  auto *Word = llvm::Type::getInt64Ty(Context);
+  auto *Function = llvm::Function::Create(
+      llvm::FunctionType::get(
+          Word, {llvm::PointerType::getUnqual(Context), Word}, false),
+      llvm::GlobalValue::ExternalLinkage, "carrier_updates", Module);
+  llvm::IRBuilder<llvm::NoFolder> B(
+      llvm::BasicBlock::Create(Context, "entry", Function));
+  auto *Home = B.CreateAlloca(Word);
+  B.CreateStore(B.CreatePtrToInt(Function->getArg(0), Word), Home);
+  constexpr unsigned Rounds = 256;
+  for (unsigned I = 0; I < Rounds; ++I) {
+    auto *Address = B.CreateIntToPtr(B.CreateLoad(Word, Home), B.getPtrTy());
+    auto *Before = B.CreateLoad(Word, Address);
+    auto *Next = B.CreateXor(B.CreateAdd(Before, B.getInt64(I + 1)),
+                             Function->getArg(1));
+    B.CreateStore(Next, Address);
+    B.CreateStore(B.CreateAdd(B.CreateLoad(Word, Home), B.getInt64(0)), Home);
+  }
+  B.CreateRet(B.CreateLoad(Word, Function->getArg(0)));
+  ASSERT_FALSE(llvm::verifyModule(Module, &llvm::errs()));
+  neverd::CEmitterOptions Options;
+  Options.PreserveLLVMFunctionTypes = true;
+  std::string Source;
+  llvm::raw_string_ostream OS(Source);
+  ASSERT_TRUE(neverd::LLVMCEmitter().emit(Module, OS, Options));
+  Source += "\n#define CARRIER_ROUNDS " + std::to_string(Rounds) + R"(
+int main(void) {
+  const uint64_t values[]={0,9,UINT64_MAX,UINT64_C(0xfedcba9876543210)};
+  const uint64_t masks[]={0,1,UINT64_MAX,UINT64_C(0x8000000000000000)};
+  for(unsigned v=0;v<sizeof(values)/sizeof(*values);++v)
+    for(unsigned m=0;m<sizeof(masks)/sizeof(*masks);++m) {
+      uint64_t words[]={19,values[v],23}, expected=values[v];
+      for(unsigned i=0;i<CARRIER_ROUNDS;++i) expected=(expected+i+1)^masks[m];
+      if(carrier_updates(words+1,masks[m])!=expected) return 1;
+      if(words[0]!=19 || words[1]!=expected || words[2]!=23) return 2;
+    }
+  return 0;
+}
+)";
+  for (const char *Optimization : {"-O0", "-O2"})
+    compileAndRun(Source, Optimization, {}, true);
+}
+
+TEST(LLVMCValues, LargeLoopProjectionPreservesAliasedObservations) {
+  llvm::LLVMContext Context;
+  llvm::Module Module("loop-projection", Context);
+  Module.setDataLayout("e-p:64:64");
+  llvm::IRBuilder<llvm::NoFolder> B(Context);
+  auto *Function = llvm::Function::Create(
+      llvm::FunctionType::get(
+          B.getInt64Ty(), {B.getPtrTy(), B.getPtrTy(), B.getInt64Ty()}, false),
+      llvm::GlobalValue::ExternalLinkage, "projected_loop", Module);
+  auto *Entry = llvm::BasicBlock::Create(Context, "entry", Function);
+  constexpr unsigned Steps = 96;
+  llvm::SmallVector<llvm::BasicBlock *> Headers, Odd, Even;
+  for (unsigned I = 0; I < Steps; ++I) {
+    Headers.push_back(llvm::BasicBlock::Create(Context, "header", Function));
+    Odd.push_back(llvm::BasicBlock::Create(Context, "odd", Function));
+    Even.push_back(llvm::BasicBlock::Create(Context, "even", Function));
+  }
+  auto *Latch = llvm::BasicBlock::Create(Context, "latch", Function);
+  auto *Exit = llvm::BasicBlock::Create(Context, "exit", Function);
+  B.SetInsertPoint(Entry);
+  auto *Home = B.CreateAlloca(B.getInt64Ty());
+  auto *Pass = B.CreateAlloca(B.getInt64Ty());
+  B.CreateStore(Function->getArg(2), Home);
+  B.CreateStore(B.getInt64(0), Pass);
+  B.CreateBr(Headers.front());
+  for (unsigned I = 0; I < Steps; ++I) {
+    auto *Next = I + 1 == Steps ? Latch : Headers[I + 1];
+    B.SetInsertPoint(Headers[I]);
+    auto *Before = B.CreateLoad(B.getInt64Ty(), Function->getArg(0));
+    auto *Value = B.CreateLoad(B.getInt64Ty(), Home);
+    B.CreateStore(B.CreateXor(Before, Value), Function->getArg(1));
+    B.CreateCondBr(
+        B.CreateICmpNE(B.CreateAnd(Value, B.getInt64(1)), B.getInt64(0)),
+        Odd[I], Even[I]);
+    B.SetInsertPoint(Odd[I]);
+    B.CreateStore(B.CreateAdd(Value, B.getInt64(I + 1)), Home);
+    B.CreateStore(B.CreateAdd(Before, B.getInt64(I + 3)), Function->getArg(0));
+    B.CreateBr(Next);
+    B.SetInsertPoint(Even[I]);
+    B.CreateStore(B.CreateXor(Value, B.getInt64(I + 7)), Home);
+    B.CreateStore(B.CreateXor(Before, B.getInt64(I + 5)), Function->getArg(0));
+    B.CreateBr(Next);
+  }
+  B.SetInsertPoint(Latch);
+  auto *Count = B.CreateAdd(B.CreateLoad(B.getInt64Ty(), Pass), B.getInt64(1));
+  B.CreateStore(Count, Pass);
+  B.CreateCondBr(B.CreateICmpULT(Count, B.getInt64(2)), Headers.front(), Exit);
+  B.SetInsertPoint(Exit);
+  B.CreateRet(B.CreateLoad(B.getInt64Ty(), Home));
+  ASSERT_FALSE(llvm::verifyModule(Module, &llvm::errs()));
+  neverd::CEmitterOptions Options;
+  Options.PreserveLLVMFunctionTypes = true;
+  std::string Source;
+  llvm::raw_string_ostream Output(Source);
+  ASSERT_TRUE(neverd::LLVMCEmitter().emit(Module, Output, Options));
+  Source += "\n#define PROJECTION_STEPS " + std::to_string(Steps) + R"(
+static uint64_t reference_loop(uint64_t *p, uint64_t *q, uint64_t value) {
+  for(unsigned pass=0;pass<2;++pass)
+    for(unsigned i=0;i<PROJECTION_STEPS;++i) {
+      uint64_t before=*p;
+      *q=before^value;
+      if(value&1) { value+=i+1; *p=before+i+3; }
+      else { value^=i+7; *p=before^(i+5); }
+    }
+  return value;
+}
+int main(void) {
+  const uint64_t seeds[]={0,1,UINT64_MAX,UINT64_C(0x8000000000000000)};
+  for(unsigned s=0;s<sizeof(seeds)/sizeof(*seeds);++s)
+    for(unsigned alias=0;alias<2;++alias) {
+      uint64_t actual[]={seeds[s]^23,19}, expected[]={actual[0],actual[1]};
+      if(projected_loop(actual,actual+(alias?0:1),seeds[s])!=
+         reference_loop(expected,expected+(alias?0:1),seeds[s])) return 1;
+      if(actual[0]!=expected[0] || actual[1]!=expected[1]) return 2;
+    }
+  return 0;
+}
+)";
   for (const char *Optimization : {"-O0", "-O2"})
     compileAndRun(Source, Optimization, {}, true);
 }

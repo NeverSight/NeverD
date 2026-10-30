@@ -20,7 +20,8 @@ std::string readPublicationFile(const fs::path &Path) {
 
 class RecoverySourcePublicationTest : public NeverDLiftTest {};
 
-TEST_F(RecoverySourcePublicationTest, LargeMutableRecoveryRequiresLLVMOutput) {
+TEST_F(RecoverySourcePublicationTest,
+       LargeMutableRecoveryExecutesBothCOutputs) {
   if (!hasCrossTargetClang())
     GTEST_SKIP() << "source recovery checks require clang";
   const auto Assembly = tmpFile("large-mutable.S");
@@ -58,13 +59,6 @@ TEST_F(RecoverySourcePublicationTest, LargeMutableRecoveryRequiresLLVMOutput) {
     if (LLVM)
       Args.push_back("--llvm");
     const auto Recovered = exec(ndBin(), Args);
-    if (!LLVM) {
-      EXPECT_FALSE(Recovered.ok());
-      EXPECT_NE(Recovered.err.find("requires LLVM output"), std::string::npos)
-          << Recovered.err;
-      EXPECT_FALSE(fs::exists(Source));
-      continue;
-    }
     ASSERT_TRUE(Recovered.ok()) << Recovered.err;
     auto Evidence = llvm::json::parse(readPublicationFile(Report));
     ASSERT_TRUE(bool(Evidence));

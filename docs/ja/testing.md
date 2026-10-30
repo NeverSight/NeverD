@@ -106,7 +106,7 @@ v4 テストはプレフィックスのサイズとパディング、切り詰�
 
 数値アドレスのテストは単一 writer の全体・部分転送、スナップショットを追加しない undef/poison、両バイト順、32/64 ビット、負の剰余オフセット、部分重複、異なる根や alloca とのエイリアス、例外を送出する呼び出し、ループ、隣接する予算境界、store 削除だけの場合の解析無効化を検証します。O0/O2 で元と変換後の IR を独立した基準と比較し、戻り値とエイリアスするバッファーの全バイトを確認します。
 
-`NeverDMedMutableSourceTests` と `NeverDLLVMCValueTests` は、独立作成したループ、ブロック順序変更、入口への後退辺、実行時スタック演算、過去の読み取り、分岐合流、部分エイリアス、論理真値、ゼロを含むビットカウントを O0/O2 で実行します。負のテストでは不正な入力、切り詰められた分岐先、曖昧な値の受け渡し、予算超過を生成前に拒否します。SSA 上限を超える CLI ケースは実行可能な LLVMC 出力と HighC の明示的拒否を確認します。 連続更新とブロックをまたぐ格納式の連鎖についても、生成 C のサイズと実行結果を検証します。
+`NeverDMedMutableSourceTests` と `NeverDLLVMCValueTests` は、独立作成したループ、ブロック順序変更、入口への後退辺、実行時スタック演算、過去の読み取り、分岐合流、部分エイリアス、論理真値、ゼロを含むビットカウントを O0/O2 で実行します。負のテストでは不正な入力、切り詰められた分岐先、曖昧な値の受け渡し、予算超過を生成前に拒否します。SSA 上限を超える CLI ケースは HighC と LLVMC の両方を実行します。変数の少ない大規模グラフで旧ブロック上限を超える実行を確認し、ストレージ予算の境界と超過を別途検証します。 連続更新とブロックをまたぐ格納式の連鎖についても、生成 C のサイズと実行結果を検証します。
 
 追加の回帰テストは LLVM の昇格前の私有読み書き数と C 出力サイズを制限します。長い混合演算列、並べ替えた SSA ブロック、重複する対象メモリへの書き込み、ゼロの戻り値を O0/O2 で実行し、主要例を実際の LLVM 最適化パイプラインにも通します。モジュール生成拒否後のエミッター再利用も検証します。
 
@@ -2162,6 +2162,8 @@ ctest --test-dir build-release -L "^(NeverDX86ScalarMoveAuditTests|NeverDX86Lega
 
 `NativeStackControl.TrapExit*` · `InterpreterSpecialization.TrapIntrinsicsCannotFallThroughWithoutAnAuthenticatedExit` · `PEFixedImageTest.MachineTrapExitEndsRegionAtDeclaredTrap` · `PEFixedImageTest.UndeclaredTrapRemainsUnsupported` · `PEFixedImageTest.MachineTrapExitRejectsNonTrapInstruction` · `NativeUndefinedIndependence.UntakenTrapStillRequiresExactEvidence`.
 
+`NativeStackControl.JumpExit*` は直接・レジスタ・メモリの転送先、後方・非整列スロット、古い証拠、一時値の重複を検査します。`InterpreterMachineRegionSourceTest.MemoryJumpExitsReadCurrentGuestSlots` は選択値と fresh 未定義値の両モデルで、HighC と LLVMC を O0/O2・UBSan 付きで実行します。状態とメモリ全体、スロット内容の変化、先行する別名ストアを検査します。固定アドレスのテストには Linux x64 が必要で、PE アドレスは ASan のシャドウ領域の隙間に位置します。`NeverDInterpreterSpecializationTests` と `NeverDInterpreterMachineStateTests` を実行してください。
+
 これらの検査が検証するのは宣言された領域であり、例外処理やソース/native 等価性は証明しません。
 
 
@@ -2278,3 +2280,7 @@ MedIR の定数伝播とコピー伝播は `canPropagateConstantToOperand` を�
 LLVM C の合成スタックスロットは、実行時にどちらかの 64 ビット半分を読み出す前に、128 ビット整数の書き込み全体を保持します。`LLVMCValues.WideFrameStoreRetainsBothRuntimeSelectedWords` は、文書化された `-fno-strict-aliasing` 契約と ASan/UBSan を使用し、O0/O2 で加算およびアラインメントに基づく OR アドレス計算を検証します。`NeverDLLVMCValueTests` と関連するフレーム、ベクトル、表示レコードのテストを実行してください。
 
 `MedLLVMDirectData.OriginalImageCursorsIgnoreUnrelatedPointerRelocations` は x64/AArch64 と COFF/ELF/Mach-O の可変カーソルループを LLVM C の O0/O2 と ASan/UBSan で実行します。明示的な元イメージのソースモードでは、無関係なポインタ再配置の隣でも、確定したアドレスは共有の実行時イメージを使用します。同じ数値の整数はスカラーのままで、独立したポインタミラーの検証も維持されます。`NeverDMedLLVMDirectDataTests` とポインタ再配置境界テストを実行してください。
+
+<!-- i18n-section: mutable-alignment-guards -->
+
+`MedMutableSource.AlignmentChecks*` は整列済み入力と無効なガードを両 C 経路の O0/O2 で実行し、有効なガードで整列違反があればトラップを要求します。不正な幅、整列値、出力、アドレス空間も拒否します。

@@ -2935,6 +2935,11 @@ bool Specializer::evaluate(int Id) {
                         "native operation reads an unbound entry flag");
       }
       const auto ReservedTemporary = [&](const NdVar &V) {
+        // Original operands were checked before the architecture owner
+        // introduced this exact scratch carrier for the physical exit.
+        if (ExternalExit && ExternalExit->MachineExit &&
+            V == ExternalExit->ExpansionScratch)
+          return false;
         if (ExpandedReturn && V == NdVar::tmp(NativeReturnTemp, 8))
           return false;
         if (ExpandedIndirectCall && I >= NativeCallPrefixSize &&

@@ -17,6 +17,7 @@ add_neverd_component_library(NeverDIRHigh
   lower/MedOpToExpr.cpp
   lower/MedToHighDynamicStack.cpp
   lower/MedToHigh.cpp
+  lower/MedMutableToHigh.cpp
   lower/NdOpCallIndLowering.cpp
   lower/NdOpLowering.cpp
   lower/NdOpReturnLowering.cpp
@@ -60,6 +61,7 @@ add_neverd_component_library(NeverDIRHigh
   structure/HighLoopRecovery.cpp
 
   LINK_COMPONENTS
+  IRMed
   Loader
   Symbolic
 )

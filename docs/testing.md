@@ -9261,7 +9261,7 @@ Address-relation regressions exercise integer and pointer PHIs/selects, both byt
 
 Numeric-memory cases check full and contained single-writer forwarding, undef/poison without added snapshots, both byte orders, 32/64-bit representations, modular negative offsets, partial overlap, aliases between different roots and allocas, throwing calls, loops, adjacent work/use budgets and store-only analysis invalidation. O0/O2 execution compares original and transformed IR against an independent oracle for both the return value and every byte of an aliased buffer.
 
-`NeverDMedMutableSourceTests` and `NeverDLLVMCValueTests` execute independent loops, reordered blocks, entry backedges, runtime stack arithmetic, earlier reads, branch joins, partial aliases, Boolean truth values and zero-inclusive bit counts at O0/O2. Negative cases reject malformed inputs, truncated targets, ambiguous carriers and exhausted budgets before emission. A CLI fixture above the SSA limit requires executable LLVMC output and explicit HighC refusal. Repeated updates and stored-expression chains across blocks also check C output size and execution.
+`NeverDMedMutableSourceTests` and `NeverDLLVMCValueTests` execute independent loops, reordered blocks, entry backedges, runtime stack arithmetic, earlier reads, branch joins, partial aliases, Boolean truth values and zero-inclusive bit counts at O0/O2. Negative cases reject malformed inputs, truncated targets, ambiguous carriers and exhausted budgets before emission. A CLI fixture above the SSA limit executes both HighC and LLVMC. Large narrow graphs check execution beyond the old block ceiling, while exact and exceeded storage budgets remain independently tested. Repeated updates and stored-expression chains across blocks also check C output size and execution.
 
 LLVMC aggregate tests link generated C with independently compiled LLVM
 callers and callees at O0/O2, checking both words of array results and exactly
@@ -15576,6 +15576,8 @@ The earlier 204-observation translation-profile receipt is historical. Current f
 
 `NativeStackControl.TrapExit*` checks exact INT3/INT1 retention, including the two-byte INT 3 encoding, and rejects forged effect, preservation and control metadata without granting exception delivery or a continuation. The exact relift owns the audit grade: canonical INT3/INT 3 is Complete and INT1 remains Missing. Both forged upgrades and downgrades are rejected. `InterpreterSpecialization.TrapIntrinsicsCannotFallThroughWithoutAnAuthenticatedExit` rejects traps presented as ordinary provider operations, with same-instruction and following-instruction returns. `PEFixedImageTest.MachineTrapExitEndsRegionAtDeclaredTrap` checks all three native encodings, raw receipts, absent continuation and exact/short operation budgets; `UndeclaredTrapRemainsUnsupported` and `MachineTrapExitRejectsNonTrapInstruction` retain the rejection boundaries. Build and run `NeverDInterpreterSpecializationTests` and `NeverDPEFixedImageTests` for these checks. They qualify declared regions, not exception delivery or source/native equivalence. `NativeUndefinedIndependence.UntakenTrapStillRequiresExactEvidence` also checks UD2 and rejects wrong exception identities, byte/operation mismatches and forged audits even on untaken paths. `NeverDOriginalBinaryUndefinedIndependenceTests` checks that every supported trap form retains its missing audit when proved unreachable and still prevents certification when feasible; `NeverDLowIRRefinementTests` rejects the same feasible native traps against an ordinary-return candidate.
 
+`NativeStackControl.JumpExit*` checks direct, register and memory targets, backward and unaligned slots, stale evidence and scratch overlap. `InterpreterMachineRegionSourceTest.MemoryJumpExitsReadCurrentGuestSlots` executes HighC and LLVMC at O0/O2 with UBSan for both selected and fresh undefined-value models. It checks complete state and memory, changing slot contents and a preceding aliased store. This fixed-address fixture requires Linux x64; its PE addresses occupy ASan's shadow gap. Run `NeverDInterpreterSpecializationTests` and `NeverDInterpreterMachineStateTests`.
+
 `ConstantAddressesReuseOnlyCompletedPredicateProof` · `ConstantPredicateReuseStillRequiresEachReadCertificate` · `ConstantPredicateReusePreservesInfeasibleControlEdges`.
 
 `NormalizationChargesOnlyTheUncachedReadabilityPrefix` / `ReadabilityPrefixInspectionPreservesLazyAndCopiedCaches` checks that cached history is not charged again, appended wide constants still cost admission, short work and node budgets still refuse, and copied readability caches remain independent.
@@ -17527,6 +17529,10 @@ a previous call result. The ordinary-call case executes both copies against
 the independent input after the source has been overwritten. The adjacent
 narrow-store/wide-copy case checks the positive control where an actual store
 connects that result to the copied memory.
+
+<!-- i18n-section: mutable-alignment-guards -->
+
+The `MedMutableSource.AlignmentChecks*` cases execute aligned and inactive-guard inputs through both C routes at O0/O2, require active misaligned inputs to trap, and reject malformed widths, alignments, outputs and address spaces.
 
 ## Native x64 dispatch frame bridges
 
