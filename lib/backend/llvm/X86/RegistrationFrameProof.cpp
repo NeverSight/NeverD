@@ -268,11 +268,30 @@ llvm::Error validateFramePrivacy(
                        Catch.Reference ? 4 : Catch.ObjectSize));
     }
     if (const auto *Return = llvm::dyn_cast<llvm::CatchReturnInst>(&I)) {
+      if (Cxx) {
+        // The independently replayed continuation restores this exact word
+        // after runtime dispatch. Keep its reaching pointer definition across
+        // catchret without lending that guarantee to any other frame cell or
+        // to exception-object destruction's image effects.
+        const auto *Restore =
+            llvm::dyn_cast_or_null<llvm::StoreInst>(Return->getPrevNode());
+        const auto Found = RuntimeObjects.find(Return->getCatchPad());
+        if (Return->getFunction() != &Parent ||
+            !Cxx->CatchReturns.count(Return) || Found == RuntimeObjects.end() ||
+            Slot.Root != LogicalFrame)
+          return false;
+        // A fresh source ThrowInfo proof may separately exclude every
+        // destruction callback for this type. Ordinary callback stores and
+        // calls are still visited at their actual reaching occurrences.
+        return Found->second->TrivialDestruction ||
+               (Restore && Cxx->SavedStackRestores.count(Restore) &&
+                Slot.Offset == Cxx->SavedStackOffset && Bytes == 4);
+      }
       // The checked x86 SEH personality lowers this return to a branch.
       // Do not extend that property to C++ exception-object destruction or
       // to an unbound pad. Actual dispatch/callback writes are checked at
       // their own occurrences in this same reaching-definition walk.
-      if (Cxx || !SEH || !Scopes || Return->getFunction() != &Parent)
+      if (!SEH || !Scopes || Return->getFunction() != &Parent)
         return false;
       const auto Found = Scopes->CatchReturns.find(Return->getCatchPad());
       return Found != Scopes->CatchReturns.end() && Found->second == Return;

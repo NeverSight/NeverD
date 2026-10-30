@@ -2083,6 +2083,15 @@ LowIR and MedIR. Dedicated x86 HighIR and LLVM continuation lowering restore
 the recovered source cell; the generated runtime frame has its own physical
 SavedESP. A separate COFF continuation proof replays the snapshot and checks
 the actual store immediately before catchret, including its value and address.
+The shared frame-address proof carries that checked SavedESP word across
+the bound catch return. Other frame cells and exception-destruction image
+effects retain their separate preservation requirements.
+For a typed catch, the COFF replay can also establish that every checked throw
+of its exact type has no destruction callback. Only that additional fact lets
+the shared frame proof retain other private parent-frame spills across the
+catch return. Copies, explicit callback writes and image effects remain
+independently checked; a catch-all or an unproved destructor grants no such
+preservation.
 CFG construction closes those targets against function and instruction
 ownership and replays the analysis; it does not turn them into independent
 ordinary entries or insert a fabricated IP-to-state map into FuncInfo.

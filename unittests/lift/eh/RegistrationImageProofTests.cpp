@@ -606,6 +606,51 @@ TEST(RegistrationImageProof, CatchReturnNeedsAnIndependentProjection) {
   EXPECT_TRUE(F.preserves([](const auto &, const auto &) { return true; }));
 }
 
+TEST(RegistrationImageProof, CatchResumeKeepsOnlyItsCheckedSavedStackWord) {
+  for (unsigned Mutation = 0; Mutation != 8; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    CatchImageFixture F;
+    F.B.SetInsertPoint(F.Return);
+    auto *Slot = F.B.CreateGEP(F.B.getInt8Ty(), F.Frame, F.B.getInt32(16));
+    auto *Object = F.B.CreateGEP(F.B.getInt8Ty(), F.Frame, F.B.getInt32(32));
+    F.B.CreateStore(F.B.getInt32(7), Object);
+    auto *Restore =
+        F.B.CreateStore(F.B.CreatePtrToInt(Object, F.B.getInt32Ty()), Slot);
+    Restore->setVolatile(true);
+    if (Mutation == 4)
+      F.B.CreateStore(F.B.getInt32(0), Slot);
+    if (Mutation == 5)
+      F.B.CreateStore(F.B.getInt8(0), Slot);
+    if (Mutation == 6)
+      Restore->setAtomic(llvm::AtomicOrdering::Monotonic);
+    if (Mutation == 7)
+      Restore->setOperand(0, F.B.getInt32(0));
+    auto *Resume = F.Return->getSuccessor();
+    F.B.SetInsertPoint(Resume->getTerminator());
+    auto *Restored = F.B.CreateLoad(F.B.getInt32Ty(), Slot);
+    auto *Read = F.B.CreateLoad(F.B.getInt32Ty(),
+                                F.B.CreateIntToPtr(Restored, F.B.getPtrTy()));
+    Read->setVolatile(true);
+    ASSERT_FALSE(llvm::verifyModule(F.Module, &llvm::errs()));
+    BinaryImage Image;
+    coff_registration::RegistrationCxxFrameContract Contract;
+    Contract.Image = &Image;
+    Contract.SavedStackOffset = Mutation == 3 ? 20 : 16;
+    auto &Catch = Contract.Catches.emplace_back();
+    Catch.Catch = F.Pad;
+    Catch.CallbackBlocks.insert(F.Pad->getParent());
+    Contract.ImageWrites[F.Throw] = {};
+    if (Mutation != 1)
+      Contract.CatchReturns.insert(F.Return);
+    if (Mutation != 2)
+      Contract.SavedStackRestores.insert(Restore);
+    auto Error = coff_registration::validateFramePrivacy(
+        *F.Function, {}, F.Frame, {}, {}, {}, {}, 0, {}, &Contract);
+    const bool Failed = bool(Error);
+    EXPECT_EQ(Failed, Mutation != 0) << llvm::toString(std::move(Error));
+  }
+}
+
 TEST(RegistrationImageProof, COFFBindsCatchReturnWithoutErasingRuntimeWrites) {
   for (unsigned Mutation = 0; Mutation != 5; ++Mutation) {
     SCOPED_TRACE(Mutation);
@@ -616,6 +661,7 @@ TEST(RegistrationImageProof, COFFBindsCatchReturnWithoutErasingRuntimeWrites) {
     Contract.Image = &Image;
     auto &Catch = Contract.Catches.emplace_back();
     Catch.Catch = F.Pad;
+    Catch.TrivialDestruction = true;
     Catch.CallbackBlocks.insert(F.Pad->getParent());
     if (Mutation != 1)
       Contract.CatchReturns.insert(F.Return);
@@ -636,6 +682,42 @@ TEST(RegistrationImageProof, COFFBindsCatchReturnWithoutErasingRuntimeWrites) {
       EXPECT_NE(Message.find("current writes do not preserve"),
                 std::string::npos)
           << Message;
+  }
+}
+
+TEST(RegistrationImageProof, TrivialCatchDestructionPreservesPrivateSpills) {
+  for (unsigned Mutation = 0; Mutation != 5; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    CatchImageFixture F;
+    F.B.SetInsertPoint(F.Return);
+    auto *Slot = F.B.CreateGEP(F.B.getInt8Ty(), F.Frame, F.B.getInt32(16));
+    auto *Object = F.B.CreateGEP(F.B.getInt8Ty(), F.Frame, F.B.getInt32(32));
+    F.B.CreateStore(F.B.getInt32(7), Object);
+    F.B.CreateStore(F.B.CreatePtrToInt(Object, F.B.getInt32Ty()), Slot);
+    if (Mutation == 3)
+      F.B.CreateStore(F.B.getInt32(0), Slot);
+    if (Mutation == 4)
+      F.B.CreateStore(F.B.getInt8(0), Slot);
+    F.B.SetInsertPoint(F.Return->getSuccessor()->getTerminator());
+    auto *Pointer = F.B.CreateLoad(F.B.getInt32Ty(), Slot);
+    F.B.CreateLoad(F.B.getInt32Ty(),
+                   F.B.CreateIntToPtr(Pointer, F.B.getPtrTy()))
+        ->setVolatile(true);
+    ASSERT_FALSE(llvm::verifyModule(F.Module, &llvm::errs()));
+    BinaryImage Image;
+    coff_registration::RegistrationCxxFrameContract Contract;
+    Contract.Image = &Image;
+    auto &Catch = Contract.Catches.emplace_back();
+    Catch.Catch = F.Pad;
+    Catch.CallbackBlocks.insert(F.Pad->getParent());
+    Catch.TrivialDestruction = Mutation != 1;
+    Contract.ImageWrites[F.Throw] = {};
+    if (Mutation != 2)
+      Contract.CatchReturns.insert(F.Return);
+    auto Error = coff_registration::validateFramePrivacy(
+        *F.Function, {}, F.Frame, {}, {}, {}, {}, 0, {}, &Contract);
+    const bool Failed = bool(Error);
+    EXPECT_EQ(Failed, Mutation != 0) << llvm::toString(std::move(Error));
   }
 }
 } // namespace

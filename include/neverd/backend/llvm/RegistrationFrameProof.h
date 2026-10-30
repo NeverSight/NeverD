@@ -78,6 +78,9 @@ struct RegistrationCxxCatchFrameContract {
   /// HomeOffset, Reference and RuntimeAccesses must then also be empty.
   uint32_t ObjectSize = 0;
   bool Reference = false;
+  /// Every checked source throw of this exact type has no destruction
+  /// callback. This does not describe dispatch, copies or image preservation.
+  bool TrivialDestruction = false;
   const llvm::AllocaInst *CallbackStack = nullptr;
   std::set<const llvm::BasicBlock *> CallbackBlocks;
 };

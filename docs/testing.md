@@ -7241,6 +7241,16 @@ writes still reject, while disjoint effects preserve the original image. The
 generic image owner continues to reject an unprojected `catchret`. Authored
 realigned and displaced fixed PE32 inputs also exercise this path through the
 ordinary source reconstruction and independent COFF validator.
+`RegistrationImageProof.CatchResumeKeepsOnlyItsCheckedSavedStackWord` reads
+through the restored pointer after catch return. Missing return or writeback
+bindings, another frame slot, intervening full or partial stores, atomic
+restoration and a non-pointer value remain refused. The derived MSVC SavedESP
+probe also exercises the source-to-native path and observes the restored cell.
+`RegistrationImageProof.TrivialCatchDestructionPreservesPrivateSpills` requires
+both the checked return and the separate destruction fact before preserving an
+ordinary pointer spill. Actual full or partial overwrites still reject, and
+trivial destruction never substitutes for the image-write closure. The derived
+MSVC SavedESP re-lift checks this distinction for an embedded source frame.
 The paired cookie observation case deliberately keeps the XOR candidate equal
 after a global overwrite, but rejects the required image stability proof.
 The cleanup-only O0/O1 integration exercises the new complete C++ image closure

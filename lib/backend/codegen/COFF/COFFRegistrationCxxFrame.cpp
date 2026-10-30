@@ -54,6 +54,13 @@ llvm::Error validateCOFFRegistrationCxxIR(const llvm::Function &Function,
                    Runtime->CodeRanges.end());
   Immutable.push_back({Runtime->IATVA, Runtime->IATVA + 4});
   size_t Work = 0;
+  std::map<va_t, bool> TrivialDestruction;
+  auto RecordDestruction = [&](const auto &Info) {
+    const auto [It, New] =
+        TrivialDestruction.emplace(Info.TypeDescriptorVA, !Info.DestructorVA);
+    if (!New)
+      It->second &= !Info.DestructorVA;
+  };
   for (const auto &Segment : Image.Segments) {
     if (++Work > limits::kMaxRegistrationEHStateWork ||
         Segment.VA > UINT32_MAX ||
@@ -77,6 +84,7 @@ llvm::Error validateCOFFRegistrationCxxIR(const llvm::Function &Function,
         if (!Object)
           return coff_registration::rejectIR(
               "C++ parent throw metadata changed");
+        RecordDestruction(Object->Info);
         Immutable.insert(Immutable.end(), Object->Info.ReadOnlyRanges.begin(),
                          Object->Info.ReadOnlyRanges.end());
         Immutable.push_back(Object->Info.TypeDescriptorRange);
@@ -100,6 +108,14 @@ llvm::Error validateCOFFRegistrationCxxIR(const llvm::Function &Function,
       if (auto Error = coff_registration::bindCxxRuntimeThrow(
               *Proof, *Call, Checked, Image, Contract, Immutable, Work))
         return Error;
+      if (Checked.RuntimeThrow && !Checked.RuntimeThrow->isRethrow()) {
+        const auto Object = getCheckedX86RegistrationThrowObjectABI(
+            Image, Checked.RuntimeThrow->ThrowInfoVA, &Work);
+        if (!Object)
+          return coff_registration::rejectIR(
+              "C++ runtime throw destruction metadata changed");
+        RecordDestruction(Object->Info);
+      }
     } else if (Checked.Contract.isThrow()) {
       auto Throw = getCheckedX86RegistrationThrowCalleeABI(
           Image, Checked.Contract.Target, &Work);
@@ -108,12 +124,24 @@ llvm::Error validateCOFFRegistrationCxxIR(const llvm::Function &Function,
             "C++ private throw lost its original runtime ABI");
       Immutable.push_back({Throw->ImportIATVA, Throw->ImportIATVA + 4});
       if (!Throw->IsRethrow) {
+        RecordDestruction(Throw->ThrowInfo);
         Immutable.insert(Immutable.end(),
                          Throw->ThrowInfo.ReadOnlyRanges.begin(),
                          Throw->ThrowInfo.ReadOnlyRanges.end());
         Immutable.push_back(Throw->ThrowInfo.TypeDescriptorRange);
       }
     }
+  }
+  for (const auto &[Identity, Index] : CatchIndices) {
+    if (++Work > limits::kMaxRegistrationEHStateWork)
+      return coff_registration::rejectIR(
+          "C++ catch destruction closure exceeds budget");
+    const auto &Catch =
+        Source.Cxx->TryBlocks[Identity.first].Handlers[Identity.second];
+    const auto Found = TrivialDestruction.find(Catch.TypeDescriptorVA);
+    Contract.Catches[Index].TrivialDestruction =
+        Catch.TypeDescriptorVA && Found != TrivialDestruction.end() &&
+        Found->second;
   }
   std::map<std::pair<va_t, uint32_t>, const llvm::Instruction *> Operations;
   for (const auto &Block : Function)
