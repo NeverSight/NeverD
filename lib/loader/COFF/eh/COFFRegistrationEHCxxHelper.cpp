@@ -36,8 +36,7 @@ struct PrologueReads {
 
   explicit PrologueReads(const BinaryImage &Image) : Image(Image) {}
   PrologueReads(const BinaryImage &Image, size_t &Work, size_t Limit)
-      : Image(Image), Work(&Work), Limit(Limit),
-        Code(std::in_place, Image, Work, Limit) {}
+      : Image(Image), Work(&Work), Limit(Limit) {}
 
   const uint8_t *read(va_t Address, size_t Size) {
     if (Work)
@@ -53,8 +52,13 @@ struct PrologueReads {
 
   std::optional<std::vector<uint8_t>>
   immutable(va_t Address, uint32_t Size, const std::vector<va_t> &Operands) {
-    return Code ? Code->read(Address, Size, Operands)
-                : readImmutablePE32CodeBytes(Image, Address, Size, Operands);
+    if (!Work)
+      return readImmutablePE32CodeBytes(Image, Address, Size, Operands);
+    // Most queried entries are not shared prologues. Raw shape reads already
+    // pay their bounded cost; only a candidate needs the full fixup index.
+    if (!Code)
+      Code.emplace(Image, *Work, Limit);
+    return Code->read(Address, Size, Operands);
   }
 };
 

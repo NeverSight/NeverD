@@ -1121,6 +1121,24 @@ index from another image is ignored. A change of work account, SEH analysis
 level or C++ proof ancestry still starts a fresh proof; it retains only this
 image inventory from an active owner.
 
+Each LowIR worker also scopes an optional `ReadOnlyBytesScope` to its immutable
+image build. It sorts the three vector fixup inventories once and uses overlap
+lookups for subsequent storage reads. Duplicate, partial and type-zero records
+retain their reader-specific checks; mapping and operand validation still use
+the ordinary readers. Budgeted queries charge the same full logical scans.
+The loader's record ceiling bounds retained storage per worker; larger images
+fall back to ordinary scans. Nested scopes restore the prior thread-local index,
+and no index survives image publication or crosses an image identity.
+Budgeted instruction readers can additionally retain their complete sorted
+fixup inventory within that scope, under the same record ceiling. Every new
+reader still charges the original construction and sorting work before it can
+borrow this inventory. It retains no proof answer or caller budget, and only
+a completely built inventory is published.
+The physical C++ prologue reader delays index construction until its bounded
+raw shape check finds a candidate. Nonmatching entries pay only for those raw
+reads. A candidate still pays the index cost and must pass every immutable
+storage, fixup and helper-protocol check before it supplies a certificate.
+
 Core callers opt in through `PipelineOptions::AnalysisCache` and must reset it
 before input or policy mutation; image pointers alone do not establish validity.
 

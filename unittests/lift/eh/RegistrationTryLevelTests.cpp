@@ -1607,6 +1607,54 @@ TEST(RegistrationTryLevel, CxxEAXHelperCallersHaveCheckedSourceSlots) {
     }
 }
 
+TEST(RegistrationTryLevel, CxxEAXHelperBudgetsOnlyCandidateFixupIndexes) {
+  for (bool Wide : {false, true})
+    for (unsigned Variant : {0, 1, 2}) {
+      SCOPED_TRACE(::testing::Message() << Wide << " " << Variant);
+      auto Image = makeCxxEAXHelperImage(Wide, Variant);
+      const va_t Entry = kText + 0x20;
+      const size_t Limit = limits::kMaxRegistrationEHStateWork;
+      const auto OriginalRelocations = Image.BaseRelocations;
+      size_t Required = 0;
+      ASSERT_TRUE(coff_loader::getCheckedX86CxxPhysicalPrologueCall(
+          Image, Entry, Required, Limit));
+      ASSERT_GT(Required, 0u);
+      for (size_t Budget : {size_t{0}, Required - 1, Required}) {
+        size_t Work = 0;
+        EXPECT_EQ(bool(coff_loader::getCheckedX86CxxPhysicalPrologueCall(
+                      Image, Entry, Work, Budget)),
+                  Budget == Required);
+        EXPECT_EQ(Work, Budget);
+      }
+      // Unrelated records cannot make a non-candidate sort the image. A real
+      // candidate must still pay the full index cost before any certificate.
+      Image.BaseRelocations.resize(262144, {0x70000000, 3});
+      size_t Work = 0;
+      EXPECT_FALSE(coff_loader::getCheckedX86CxxPhysicalPrologueCall(
+          Image, kText, Work, 64));
+      EXPECT_LT(Work, 64u);
+      Work = 0;
+      EXPECT_FALSE(coff_loader::getCheckedX86CxxPhysicalPrologueCall(
+          Image, Entry, Work, 64));
+      EXPECT_EQ(Work, 64u);
+      Image.BaseRelocations = OriginalRelocations;
+      Work = 0;
+      EXPECT_TRUE(coff_loader::getCheckedX86CxxPhysicalPrologueCall(
+          Image, Entry, Work, Required));
+      EXPECT_EQ(Work, Required);
+      Image.BaseRelocations.push_back({Entry, 3});
+      Work = 0;
+      EXPECT_FALSE(coff_loader::getCheckedX86CxxPhysicalPrologueCall(
+          Image, Entry, Work, Limit));
+      Image.BaseRelocations = OriginalRelocations;
+      Image.Segments.front().Flags =
+          Image.Segments.front().Flags | SegmentFlags::Writable;
+      Work = 0;
+      EXPECT_FALSE(coff_loader::getCheckedX86CxxPhysicalPrologueCall(
+          Image, Entry, Work, Limit));
+    }
+}
+
 TEST(RegistrationTryLevel, CxxEAXHelperRequiresExactSourceProtocol) {
   for (bool Wide : {false, true})
     for (unsigned Variant : {0, 1, 2})

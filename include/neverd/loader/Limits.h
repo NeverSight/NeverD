@@ -509,6 +509,9 @@ inline constexpr int kObjCStorageReadIvarsEntrySizeLimit = 4096;
 
 // lib/loader/ReadOnlyBytes.cpp
 inline constexpr int kMaxImageReadBytes = 1024 * 1024;
+// Optional per-worker lookup storage. Larger inventories keep ordinary scans;
+// this ceiling does not change a storage query's admission or work budget.
+inline constexpr size_t kMaxReadOnlyVectorFixups = 1u << 18;
 
 // lib/loader/Swift/SwiftABI.cpp
 inline constexpr int kSwiftABIInspectDepthLimit = 8;

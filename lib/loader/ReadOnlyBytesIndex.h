@@ -13,6 +13,7 @@
 #include "neverd/Common.h"
 
 #include <cstddef>
+#include <memory>
 #include <optional>
 #include <vector>
 
@@ -47,6 +48,10 @@ struct PE32CodeFixup {
   uint8_t BaseType = 0;
   const RelocatedAddressField *Field = nullptr;
 };
+struct PE32CodeFixupIndex {
+  uint8_t MaximumWidth = 8;
+  std::vector<PE32CodeFixup> Entries;
+};
 } // namespace read_only_detail
 
 /// A scoped index over an immutable BinaryImage. The image and its metadata
@@ -64,8 +69,7 @@ private:
   size_t &Work;
   size_t Limit;
   bool Valid = false;
-  uint8_t MaximumWidth = 8;
-  std::vector<read_only_detail::PE32CodeFixup> Fixups;
+  std::shared_ptr<const read_only_detail::PE32CodeFixupIndex> Index;
 };
 } // namespace neverd
 

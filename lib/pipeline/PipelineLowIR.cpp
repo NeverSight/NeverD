@@ -38,6 +38,7 @@
 #include "neverd/loader/ExecutableCodeOwnerIndex.h"
 #include "neverd/loader/FunctionNames.h"
 #include "neverd/loader/PointerRelocation.h"
+#include "neverd/loader/ReadOnlyBytesScope.h"
 #include "neverd/loader/SymbolDecoration.h"
 #include "neverd/pipeline/Limits.h"
 #include "neverd/pipeline/Pipeline.h"
@@ -4078,6 +4079,7 @@ void computeCallRegisterEffects(
       parallelForEachWeighted(
           Weights,
           [&](auto Claim, size_t N) {
+            ReadOnlyBytesScope ReadScope(Img);
             // A worker opens a decoder only for a body it builds: a warmed
             // run knows most callees from their facts or kept bodies.
             std::optional<Decoder> ExtraDec;
@@ -4495,6 +4497,7 @@ void warmCalleeFacts(
   parallelForEachWeighted(
       Weights,
       [&](auto Claim, size_t N) {
+        ReadOnlyBytesScope ReadScope(Img);
         Decoder Dec;
         if (!Dec.init(Img))
           return;
@@ -4720,6 +4723,7 @@ void Pipeline::buildLowIR(
   // recorded answers, replayed with their work, are the fresh ones.
   RegistrationStackPopMemo StackPops(Img);
   parallelForEachWeighted(Weight, [&](auto Claim, size_t N) {
+    ReadOnlyBytesScope ReadScope(Img);
     RegistrationStackPopMemoScope StackPopScope(StackPops);
     Decoder LocalDec;
     if (!LocalDec.init(Img))
@@ -4800,6 +4804,7 @@ void Pipeline::buildLowIR(
   auto rebuildFunctions = [&](const std::vector<bool> &Rebuild) {
     CachedArbitration.reset();
     parallelForEachWeighted(Weight, [&](auto Claim, size_t N) {
+      ReadOnlyBytesScope ReadScope(Img);
       RegistrationStackPopMemoScope StackPopScope(StackPops);
       Decoder LocalDec;
       if (!LocalDec.init(Img))

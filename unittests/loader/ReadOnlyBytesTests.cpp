@@ -11,7 +11,9 @@
 #include "gtest/gtest.h"
 
 #include "neverd/loader/BinaryImage.h"
+#include "neverd/loader/Limits.h"
 #include "neverd/loader/ReadOnlyBytes.h"
+#include "neverd/loader/ReadOnlyBytesScope.h"
 #include "neverd/support/BinaryEncoding.h"
 
 #include <cstdint>
@@ -174,10 +176,115 @@ TEST(ImmutablePE32Code, IndexedAndOrdinaryReadersKeepEveryFixupBoundary) {
                                          RelocatedWork, 10000),
               Ordinary);
     EXPECT_GT(Work, 0u);
+    const auto Raw = readImmutableCodeBytes(Image, ReadVA, 6);
+    {
+      ReadOnlyBytesScope Scope(Image);
+      EXPECT_EQ(readImmutablePE32CodeBytes(Image, ReadVA, 6, {OperandVA}),
+                Ordinary);
+      EXPECT_EQ(readImmutableCodeBytes(Image, ReadVA, 6), Raw);
+      size_t ScopedWork = 0;
+      EXPECT_EQ(readImmutablePE32CodeBytes(Image, ReadVA, 6, {OperandVA},
+                                           ScopedWork, 10000),
+                Ordinary);
+      EXPECT_EQ(ScopedWork, BoundedWork);
+      ScopedWork = 0;
+      EXPECT_EQ(readRelocatedPE32CodeBytes(Image, ReadVA, 6, {OperandVA},
+                                           ScopedWork, 10000),
+                Ordinary);
+      EXPECT_EQ(ScopedWork, RelocatedWork);
+      for (unsigned Attempt = 0; Attempt != 2; ++Attempt) {
+        ScopedWork = 0;
+        IndexedPE32CodeBytes ScopedIndex(Image, ScopedWork, 10000);
+        EXPECT_EQ(ScopedIndex.read(ReadVA, 6, {OperandVA}), Indexed);
+        EXPECT_EQ(ScopedWork, Work);
+      }
+    }
     if (Expected) {
       ASSERT_TRUE(Indexed);
       EXPECT_EQ(*Indexed,
                 (std::vector<uint8_t>{0xb8, 0x20, 0x20, 0x40, 0, 0xc3}));
+    }
+  }
+}
+
+TEST(ImmutablePE32Code, ScopedReadsKeepImageLifetimeAndExactBudgets) {
+  auto Image = codeImage();
+  auto Foreign = codeImage();
+  Foreign.BaseRelocations.push_back(Foreign.BaseRelocations.front());
+  size_t Required = 0;
+  const auto Expected = readImmutablePE32CodeBytes(
+      Image, ReadVA, 6, {OperandVA}, Required, 10000);
+  ASSERT_TRUE(Expected);
+  {
+    ReadOnlyBytesScope Scope(Image);
+    const auto Check = [&] {
+      EXPECT_EQ(readImmutablePE32CodeBytes(Image, ReadVA, 6, {OperandVA}),
+                Expected);
+      EXPECT_FALSE(readImmutablePE32CodeBytes(Foreign, ReadVA, 6, {OperandVA}));
+    };
+    Check();
+    {
+      ReadOnlyBytesScope Nested(Image);
+      Check();
+    }
+    {
+      ReadOnlyBytesScope Other(Foreign);
+      Check();
+    }
+    Check();
+    for (size_t Limit : {size_t{0}, Required - 1, Required}) {
+      size_t Work = 0;
+      EXPECT_EQ(bool(readImmutablePE32CodeBytes(Image, ReadVA, 6, {OperandVA},
+                                                Work, Limit)),
+                Limit == Required);
+      EXPECT_EQ(Work, Limit);
+      EXPECT_FALSE(readImmutablePE32CodeBytes(Image, ReadVA, 6, {OperandVA},
+                                              Work, Limit));
+    }
+  }
+  Image.BaseRelocations.push_back(Image.BaseRelocations.front());
+  EXPECT_FALSE(readImmutablePE32CodeBytes(Image, ReadVA, 6, {OperandVA}));
+  {
+    ReadOnlyBytesScope Fresh(Image);
+    EXPECT_FALSE(readImmutablePE32CodeBytes(Image, ReadVA, 6, {OperandVA}));
+  }
+  // Type-zero base records are padding for the PE operand reader, but raw
+  // immutable byte copies still reject their overlapping storage.
+  Image.BaseRelocations = {{ReadVA, 0}};
+  ReadOnlyBytesScope Padding(Image);
+  EXPECT_TRUE(readImmutablePE32CodeBytes(Image, ReadVA, 6, {}));
+  EXPECT_FALSE(readImmutableCodeBytes(Image, ReadVA, 6));
+}
+
+TEST(ImmutablePE32Code, OversizedScopedIndexesKeepOrdinaryRefusals) {
+  for (size_t Count : {limits::loader::kMaxReadOnlyVectorFixups,
+                       limits::loader::kMaxReadOnlyVectorFixups + 1}) {
+    SCOPED_TRACE(Count);
+    auto Image = codeImage();
+    Image.BaseRelocations.resize(Count, {ReadVA + 0x40, 3});
+    for (bool Conflict : {false, true}) {
+      SCOPED_TRACE(Conflict);
+      if (Conflict)
+        Image.BaseRelocations.back() = Image.BaseRelocations.front();
+      size_t Required = 0;
+      const auto Expected = readImmutablePE32CodeBytes(
+          Image, ReadVA, 6, {OperandVA}, Required, Count + 10000);
+      EXPECT_EQ(bool(Expected), !Conflict);
+      size_t IndexedWork = 0;
+      IndexedPE32CodeBytes OrdinaryIndex(Image, IndexedWork, SIZE_MAX);
+      EXPECT_EQ(OrdinaryIndex.read(ReadVA, 6, {OperandVA}), Expected);
+      ReadOnlyBytesScope Scope(Image);
+      size_t Work = 0;
+      EXPECT_EQ(readImmutablePE32CodeBytes(Image, ReadVA, 6, {OperandVA}, Work,
+                                           Count + 10000),
+                Expected);
+      EXPECT_EQ(Work, Required);
+      for (unsigned Attempt = 0; Attempt != 2; ++Attempt) {
+        Work = 0;
+        IndexedPE32CodeBytes ScopedIndex(Image, Work, SIZE_MAX);
+        EXPECT_EQ(ScopedIndex.read(ReadVA, 6, {OperandVA}), Expected);
+        EXPECT_EQ(Work, IndexedWork);
+      }
     }
   }
 }
@@ -207,6 +314,36 @@ TEST(ImmutablePE32Code, IndexedQueriesChargeColdAndRepeatedWork) {
   EXPECT_FALSE(Index.read(ReadVA, 6, {ReadVA - 1}));
   EXPECT_FALSE(Index.read(ReadVA, 0, {}));
   EXPECT_FALSE(Index.read(UINT64_MAX, 6, {}));
+}
+
+TEST(ImmutablePE32Code, ScopedInstructionIndexesRetainConstructionCharges) {
+  const auto Image = codeImage();
+  size_t Required = 0;
+  {
+    IndexedPE32CodeBytes Index(Image, Required, 10000);
+    ASSERT_TRUE(Index.read(ReadVA, 6, {OperandVA}));
+  }
+  ReadOnlyBytesScope Scope(Image);
+  for (size_t Limit :
+       {size_t{0}, size_t{1}, Required - 1, Required, Required}) {
+    size_t Work = 0;
+    IndexedPE32CodeBytes Index(Image, Work, Limit);
+    EXPECT_EQ(bool(Index.read(ReadVA, 6, {OperandVA})), Limit == Required);
+    EXPECT_EQ(Work, Limit);
+    EXPECT_FALSE(Index.read(ReadVA, 6, {OperandVA}));
+  }
+  auto Foreign = codeImage();
+  Foreign.BaseRelocations.push_back(Foreign.BaseRelocations.front());
+  {
+    ReadOnlyBytesScope Other(Foreign);
+    size_t Work = 0;
+    IndexedPE32CodeBytes Index(Foreign, Work, 10000);
+    EXPECT_FALSE(Index.read(ReadVA, 6, {OperandVA}));
+  }
+  size_t Work = 0;
+  IndexedPE32CodeBytes Restored(Image, Work, Required);
+  EXPECT_TRUE(Restored.read(ReadVA, 6, {OperandVA}));
+  EXPECT_EQ(Work, Required);
 }
 
 TEST(ImmutablePE32Code, InteriorPointerStorageDoesNotGrantAnOrdinaryEntry) {
@@ -350,6 +487,15 @@ TEST(ImmutablePE32Code, InteriorPointerStorageDoesNotGrantAnOrdinaryEntry) {
           Storage);
       EXPECT_EQ(Storage.has_value(),
                 !Executable && (Mutation < 2 || Mutation == 27));
+      {
+        ReadOnlyBytesScope Scope(Image);
+        size_t Work = 0;
+        EXPECT_EQ(
+            readImmutablePE32CodePointerStorage(Image, Slot, Work, 100000),
+            Storage);
+        EXPECT_EQ(Work, BudgetWork);
+        EXPECT_FALSE(readImmutableImageBytes(Image, Slot, 4));
+      }
       if (Storage)
         EXPECT_EQ(*Storage, Target);
       EXPECT_EQ(readImmutableImageCodePointer(Image, Slot).has_value(),

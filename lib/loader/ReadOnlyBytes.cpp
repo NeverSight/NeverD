@@ -13,6 +13,7 @@
 
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/Limits.h"
+#include "neverd/loader/ReadOnlyBytesScope.h"
 
 #include "llvm/BinaryFormat/COFF.h"
 #include "llvm/BinaryFormat/ELF.h"
@@ -23,6 +24,94 @@
 #include <set>
 
 namespace neverd {
+
+namespace read_only_detail {
+struct VectorFixupIndex {
+  const BinaryImage &Image;
+  std::vector<PE32CodeFixup> Fixups;
+  mutable std::shared_ptr<const PE32CodeFixupIndex> CodeFixups;
+};
+} // namespace read_only_detail
+
+namespace {
+thread_local const read_only_detail::VectorFixupIndex *ActiveVectorFixups =
+    nullptr;
+
+template <typename Visitor>
+bool visitStaticVectorFixups(const BinaryImage &Image, Visitor Visit) {
+  using Fixup = read_only_detail::PE32CodeFixup;
+  using Kind = Fixup::Kind;
+  for (const auto &R : Image.BaseRelocations)
+    if (!Visit(Fixup{
+            Kind::Base, R.Address,
+            uint8_t(R.Type == llvm::COFF::IMAGE_REL_BASED_HIGHLOW ? 4 : 8),
+            R.Type}))
+      return false;
+  for (const auto &R : Image.Relocations)
+    if (!Visit(Fixup{Kind::Forbidden, R.Address, 8}))
+      return false;
+  return true;
+}
+
+template <typename Visitor>
+bool visitRuntimeFixups(const BinaryImage &Image, Visitor Visit) {
+  using Fixup = read_only_detail::PE32CodeFixup;
+  for (const auto &Slot : Image.RuntimeCallablePointerSlots)
+    if (!Visit(Fixup{Fixup::Kind::Forbidden, Slot.SlotVA,
+                     uint8_t(Image.getPointerSize())}))
+      return false;
+  return true;
+}
+
+template <typename Visitor>
+bool visitVectorFixups(
+    const BinaryImage &Image, Visitor Visit,
+    const std::optional<ExceptionAddressRange> &Range = std::nullopt) {
+  if (Range && ActiveVectorFixups && &ActiveVectorFixups->Image == &Image) {
+    // Vector records occupy at most eight bytes. Keep partial overlaps and
+    // duplicate records; the reader still decides whether either is allowed.
+    const va_t First = Range->Begin >= 7 ? Range->Begin - 7 : 0;
+    const auto &Fixups = ActiveVectorFixups->Fixups;
+    auto It = std::lower_bound(
+        Fixups.begin(), Fixups.end(), First,
+        [](const auto &F, va_t Address) { return F.Address < Address; });
+    for (; It != Fixups.end() && It->Address < Range->End; ++It)
+      if (!Visit(*It))
+        return false;
+    return true;
+  }
+  return visitStaticVectorFixups(Image, Visit) &&
+         visitRuntimeFixups(Image, Visit);
+}
+} // namespace
+
+ReadOnlyBytesScope::ReadOnlyBytesScope(const BinaryImage &Image)
+    : Previous(ActiveVectorFixups) {
+  if (Previous && &Previous->Image == &Image)
+    return;
+  if (Image.Arch != Arch::X86 || Image.Bits != Bitness::Bits32 ||
+      Image.Format != BinaryFormat::COFF || Image.IsRelocatable)
+    return;
+  size_t Count = 0;
+  for (size_t Size : {Image.BaseRelocations.size(), Image.Relocations.size(),
+                      Image.RuntimeCallablePointerSlots.size()}) {
+    if (Size > limits::loader::kMaxReadOnlyVectorFixups - Count)
+      return;
+    Count += Size;
+  }
+  Index = std::make_unique<read_only_detail::VectorFixupIndex>(
+      read_only_detail::VectorFixupIndex{Image, {}, {}});
+  Index->Fixups.reserve(Count);
+  visitVectorFixups(Image, [&](const auto &Fixup) {
+    Index->Fixups.push_back(Fixup);
+    return true;
+  });
+  std::sort(Index->Fixups.begin(), Index->Fixups.end(),
+            [](const auto &A, const auto &B) { return A.Address < B.Address; });
+  ActiveVectorFixups = Index.get();
+}
+
+ReadOnlyBytesScope::~ReadOnlyBytesScope() { ActiveVectorFixups = Previous; }
 
 bool BinaryImage::readOnlyAfterRelocations(va_t Addr, uint64_t Width) const {
   const Segment *Seg = getSegmentFor(Addr);
@@ -233,23 +322,18 @@ bool hasConflictingFixups(const BinaryImage &Image, va_t Address,
       Touches(Image.DataAddressRelocOperands, Map) ||
       Touches(Image.CodeAddressRelocOperands, Map))
     return true;
-  for (const auto &Relocation : Image.Relocations)
-    if (overlaps(Address, Extent, Relocation.Address, 8))
-      return true;
-  for (const auto &Relocation : Image.BaseRelocations) {
-    const uint64_t Width =
-        Relocation.Type == llvm::COFF::IMAGE_REL_BASED_HIGHLOW ? 4 : 8;
-    if (overlaps(Address, Extent, Relocation.Address, Width) &&
-        !(ExactPEPointer && Relocation.Address == Address &&
-          Width == PointerWidth &&
-          (Relocation.Type == llvm::COFF::IMAGE_REL_BASED_HIGHLOW ||
-           Relocation.Type == llvm::COFF::IMAGE_REL_BASED_DIR64)))
-      return true;
-  }
-  for (const auto &Slot : Image.RuntimeCallablePointerSlots)
-    if (overlaps(Address, Extent, Slot.SlotVA, PointerWidth))
-      return true;
-  return false;
+  return !visitVectorFixups(
+      Image,
+      [&](const read_only_detail::PE32CodeFixup &Fixup) {
+        if (!overlaps(Address, Extent, Fixup.Address, Fixup.Width))
+          return true;
+        return Fixup.Type == read_only_detail::PE32CodeFixup::Kind::Base &&
+               ExactPEPointer && Fixup.Address == Address &&
+               Fixup.Width == PointerWidth &&
+               (Fixup.BaseType == llvm::COFF::IMAGE_REL_BASED_HIGHLOW ||
+                Fixup.BaseType == llvm::COFF::IMAGE_REL_BASED_DIR64);
+      },
+      ExceptionAddressRange{Address, Address + Extent});
 }
 } // namespace
 
@@ -336,16 +420,14 @@ bool visitPE32CodeFixups(
         return false;
     return true;
   };
-  for (const auto &R : Image.BaseRelocations)
-    if (R.Type &&
-        !Visit(PE32CodeFixup{
-            Kind::Base, R.Address,
-            uint8_t(R.Type == llvm::COFF::IMAGE_REL_BASED_HIGHLOW ? 4 : 8),
-            R.Type}))
-      return false;
-  for (const auto &R : Image.Relocations)
-    if (!Visit(PE32CodeFixup{Kind::Forbidden, R.Address, 8}))
-      return false;
+  const auto NonPadding = [&](const PE32CodeFixup &Fixup) {
+    return (Fixup.Type == Kind::Base && !Fixup.BaseType) || Visit(Fixup);
+  };
+  // Full indexes retain their original collection order before sorting, so
+  // equal-address conflicts retain the same per-record query charges.
+  if (Range ? !visitVectorFixups(Image, NonPadding, Range)
+            : !visitStaticVectorFixups(Image, NonPadding))
+    return false;
   for (const auto *Fields :
        {&Image.CodeAddressRelocOperands, &Image.DataAddressRelocOperands})
     if (!Ordered(
@@ -362,10 +444,7 @@ bool visitPE32CodeFixups(
             *Slots, 4, [](va_t Slot) { return Slot; },
             [](va_t Slot) { return PE32CodeFixup{Kind::Forbidden, Slot, 4}; }))
       return false;
-  for (const auto &Slot : Image.RuntimeCallablePointerSlots)
-    if (!Visit(PE32CodeFixup{Kind::Forbidden, Slot.SlotVA, 4}))
-      return false;
-  return true;
+  return Range || visitRuntimeFixups(Image, Visit);
 }
 
 template <typename FixupQuery>
@@ -528,14 +607,26 @@ IndexedPE32CodeBytes::IndexedPE32CodeBytes(const BinaryImage &Image,
   }
   if (!charge(Count * SortWork))
     return;
-  Fixups.reserve(Count);
+  const bool Retain = ActiveVectorFixups &&
+                      &ActiveVectorFixups->Image == &Image &&
+                      Count <= limits::loader::kMaxReadOnlyVectorFixups;
+  if (Retain && ActiveVectorFixups->CodeFixups) {
+    Index = ActiveVectorFixups->CodeFixups;
+    Valid = true;
+    return;
+  }
+  auto Built = std::make_shared<read_only_detail::PE32CodeFixupIndex>();
+  Built->Entries.reserve(Count);
   visitPE32CodeFixups(Image, [&](const PE32CodeFixup &Fixup) {
-    MaximumWidth = std::max(MaximumWidth, Fixup.Width);
-    Fixups.push_back(Fixup);
+    Built->MaximumWidth = std::max(Built->MaximumWidth, Fixup.Width);
+    Built->Entries.push_back(Fixup);
     return true;
   });
-  std::sort(Fixups.begin(), Fixups.end(),
+  std::sort(Built->Entries.begin(), Built->Entries.end(),
             [](const auto &A, const auto &B) { return A.Address < B.Address; });
+  Index = std::move(Built);
+  if (Retain)
+    ActiveVectorFixups->CodeFixups = Index;
   Valid = true;
 }
 
@@ -543,7 +634,7 @@ std::optional<std::vector<uint8_t>>
 IndexedPE32CodeBytes::read(va_t Address, uint32_t Size,
                            const std::vector<va_t> &AbsoluteOperands) {
   size_t LookupWork = 1;
-  for (size_t N = Fixups.size(); N > 1; N = N / 2 + N % 2)
+  for (size_t N = Index ? Index->Entries.size() : 0; N > 1; N = N / 2 + N % 2)
     ++LookupWork;
   if (!Valid ||
       !charge(LookupWork + Size + AbsoluteOperands.size() +
@@ -551,6 +642,8 @@ IndexedPE32CodeBytes::read(va_t Address, uint32_t Size,
     return std::nullopt;
   return readPE32CodeBytes(
       Image, Address, Size, AbsoluteOperands, [&](auto Visit) {
+        const auto &Fixups = Index->Entries;
+        const uint8_t MaximumWidth = Index->MaximumWidth;
         const va_t First =
             Address >= MaximumWidth - 1 ? Address - (MaximumWidth - 1) : 0;
         auto It = std::lower_bound(

@@ -7008,6 +7008,16 @@ immutable storage, absolute operands and exact versus one-unit-short budgets.
 29 fixup/mapping cases, including unordered and duplicate records, wide fields
 starting before the span, exact nonoverlap boundaries and conflicting slots.
 Cold and repeated query tests pin exhaustion at the exact shared work limit.
+The same matrix compares scoped vector-fixup lookup with ordinary reads and
+requires identical work charges. Scope tests cover nested and foreign images,
+fresh reads after image mutation, type-zero padding versus raw byte storage,
+and the exact retention ceiling and its ordinary-scan fallback.
+Cold and warm scoped instruction indexes also replay their full construction
+charges; a short construction cannot poison a later adequately funded reader.
+`CxxEAXHelperBudgetsOnlyCandidateFixupIndexes` checks short/wide caller prefixes
+and all helper variants: unrelated relocation volume cannot consume an index
+budget for a non-candidate, while a real candidate retains its complete index
+cost, exact-budget boundary, conflicting-fixup refusal and immutable-code check.
 Allocation zero retains the overwritten EBX save, and unaligned
 allocation retains partial overlap. Run
 `check_windows_registration_prologue.py --test-binary <NeverDRegistrationEHTests>
