@@ -17,6 +17,7 @@
 #include "CallAlignment.h"
 #include "Features.h"
 #include "Matching.h"
+#include "ReferenceContext.h"
 
 #include "neverd/diff/FunctionDelta.h"
 #include "neverd/diff/StableHash.h"
@@ -245,6 +246,8 @@ private:
     bool FromContext = false;
     bool ContextEligible = false;
     bool CallSite = false;
+    bool DataReference = false;
+    bool AddressSite = false;
   };
   llvm::DenseMap<uint64_t, CandidateEvidence> FeatureCandidates;
   Clock::time_point PhaseStart;
@@ -259,9 +262,11 @@ private:
         FeatureCandidates.try_emplace(pairKey(A, B), CandidateEvidence{Step});
     (void)Inserted;
     It->second.FromContext |= FromContext;
-    It->second.ContextEligible |=
-        Step == FunctionStep::CallSite || Step == FunctionStep::Neighborhood;
+    It->second.ContextEligible |= Step == FunctionStep::CallSite ||
+                                  Step == FunctionStep::Neighborhood ||
+                                  Step == FunctionStep::AddressSite;
     It->second.CallSite |= Step == FunctionStep::CallSite;
+    It->second.AddressSite |= Step == FunctionStep::AddressSite;
   }
   bool stopNow() {
     if (Stopped)
@@ -323,11 +328,12 @@ private:
   void settle(size_t From);
   void context(uint32_t A, uint32_t B, bool Loose);
   void callSites(uint32_t A, uint32_t B);
-  unsigned approximate();
+  unsigned approximate(bool ReferenceOnly = false);
   uint64_t featureKey(FunctionStep Step, uint32_t Function,
                       bool Secondary) const;
   double contextAgreement(uint32_t A, uint32_t B) const;
   double quickScore(uint32_t A, uint32_t B) const;
+  bool consistentContext(uint32_t A, uint32_t B) const;
   FunctionDelta delta(uint32_t A, uint32_t B) const;
   std::vector<uint32_t> inlinedTailCallers(uint32_t A, uint32_t B,
                                            const FunctionDelta &D,
@@ -745,7 +751,16 @@ std::vector<uint32_t> Matcher::inlinedTailCallers(uint32_t A, uint32_t B,
   return Candidates;
 }
 
-unsigned Matcher::approximate() {
+bool Matcher::consistentContext(uint32_t A, uint32_t B) const {
+  const auto It = FeatureCandidates.find(pairKey(A, B));
+  if (It == FeatureCandidates.end())
+    return false;
+  const double Agreement = contextAgreement(A, B);
+  return ((It->second.CallSite || It->second.AddressSite) && Agreement == 1) ||
+         (It->second.DataReference && (Agreement < 0 || Agreement == 1));
+}
+
+unsigned Matcher::approximate(bool ReferenceOnly) {
   if (!Settings.Approximate && FeatureCandidates.empty())
     return 0;
   // Candidates: bounded sketch and mnemonic/CFG groups, and the unmatched
@@ -760,11 +775,18 @@ unsigned Matcher::approximate() {
   if (Ps.empty() || Ss.empty())
     return 0;
   std::vector<uint64_t> Candidates;
+  std::vector<uint8_t> ReferenceA, ReferenceB;
+  if (ReferenceOnly) {
+    ReferenceA.resize(P.Functions.size());
+    ReferenceB.resize(S.Functions.size());
+  }
   for (const auto &[Key, Evidence] : FeatureCandidates) {
-    (void)Evidence;
-    if (PMatch[uint32_t(Key >> 32)] == NoIndex &&
-        SMatch[uint32_t(Key)] == NoIndex)
+    const uint32_t A = uint32_t(Key >> 32), B = uint32_t(Key);
+    if (PMatch[A] == NoIndex && SMatch[B] == NoIndex) {
       Candidates.push_back(Key);
+      if (ReferenceOnly && (Evidence.DataReference || Evidence.AddressSite))
+        ReferenceA[A] = ReferenceB[B] = 1;
+    }
   }
   {
     struct Entry {
@@ -859,7 +881,7 @@ unsigned Matcher::approximate() {
     uint32_t B;
     double Quick;
     double Exact = -1;
-    bool CallSiteHint = false;
+    bool ContextHint = false;
     std::vector<uint32_t> PrimaryTailCallers;
     std::vector<uint32_t> SecondaryTailCallers;
   };
@@ -869,12 +891,13 @@ unsigned Matcher::approximate() {
     if (stopNow())
       return 0;
     const uint32_t A = uint32_t(K >> 32), B = uint32_t(K);
+    // After entry review, measure only reference proposals and their rivals.
+    // An unrelated candidate has no new evidence and must stay deferred.
+    if (ReferenceOnly && !ReferenceA[A] && !ReferenceB[B])
+      continue;
     if (!Rejected.contains(K) && !namesConflict(A, B)) {
-      const auto Feature = FeatureCandidates.find(K);
-      const bool CallSite = Feature != FeatureCandidates.end() &&
-                            Feature->second.CallSite &&
-                            contextAgreement(A, B) == 1;
-      Pairs.push_back({A, B, quickScore(A, B), -1, CallSite, {}, {}});
+      Pairs.push_back(
+          {A, B, quickScore(A, B), -1, consistentContext(A, B), {}, {}});
     }
   }
   const unsigned Keep = Settings.MaxCandidates;
@@ -927,8 +950,8 @@ unsigned Matcher::approximate() {
   std::vector<uint32_t> Ranked = ToMeasure;
   llvm::sort(Ranked, [&](uint32_t L, uint32_t R) {
     const Scored &X = Pairs[L], &Y = Pairs[R];
-    return std::make_tuple(-X.Exact, !X.CallSiteHint, -X.Quick, X.A, X.B) <
-           std::make_tuple(-Y.Exact, !Y.CallSiteHint, -Y.Quick, Y.A, Y.B);
+    return std::make_tuple(-X.Exact, !X.ContextHint, -X.Quick, X.A, X.B) <
+           std::make_tuple(-Y.Exact, !Y.ContextHint, -Y.Quick, Y.A, Y.B);
   });
   llvm::DenseMap<uint32_t, std::vector<uint32_t>> ByA, ByB;
   for (uint32_t I : Ranked) {
@@ -941,6 +964,12 @@ unsigned Matcher::approximate() {
     const Scored &Pair = Pairs[I];
     const auto Feature = FeatureCandidates.find(pairKey(Pair.A, Pair.B));
     if (!Settings.Approximate && Feature == FeatureCandidates.end())
+      continue;
+    // Body alternatives still compete through ByA/ByB, but only a proposal
+    // supported by the new frozen reference evidence can be admitted here.
+    if (ReferenceOnly &&
+        (Feature == FeatureCandidates.end() ||
+         (!Feature->second.DataReference && !Feature->second.AddressSite)))
       continue;
     // A positional or lone-neighbor proposal earns the lower context
     // threshold only when every already mapped neighbor agrees. A local
@@ -981,18 +1010,15 @@ unsigned Matcher::approximate() {
     }
     if (UndecidedA.contains(Pair.A) || UndecidedB.contains(Pair.B))
       continue;
-    // A consistent call position can distinguish equal or weaker bodies.
-    // It cannot overrule a more similar body or another positional proposal.
-    const auto ConsistentPosition = [&](const Scored &Candidate) {
-      const auto It = FeatureCandidates.find(pairKey(Candidate.A, Candidate.B));
-      return It != FeatureCandidates.end() && It->second.CallSite &&
-             contextAgreement(Candidate.A, Candidate.B) == 1;
-    };
+    // Consistent call positions or independent data-reference roles can
+    // distinguish equal or weaker bodies. Neither overrules a stronger body
+    // or a rival with its own consistent context.
     // Earlier admissions in this round may change the mapped neighborhood.
     // The sorting hint must not preserve a now-contradictory call position.
-    const bool Positioned = ConsistentPosition(Pair);
+    const bool Positioned = consistentContext(Pair.A, Pair.B);
     const auto Rival = [&](const Scored &Other) {
-      if (Other.Exact <= Pair.Exact && Positioned && !ConsistentPosition(Other))
+      if (Other.Exact <= Pair.Exact && Positioned &&
+          !consistentContext(Other.A, Other.B))
         return false;
       return Other.Exact >= Pair.Exact ||
              Pair.Exact - Other.Exact < Settings.AmbiguityMargin;
@@ -1455,6 +1481,28 @@ void Matcher::run(llvm::ArrayRef<Override> Overrides) {
   }
   beginPhase("ambiguities");
   retainEntryAlternatives();
+  // Freeze all witnesses before adding data-reference proposals. A candidate
+  // cannot establish the data relation that would justify its own admission.
+  beginPhase("data-reference-context");
+  progress(0, 1);
+  const auto Candidates =
+      referenceCandidates(P, PF, PMatch, S, SF, SMatch, Control);
+  for (const auto &[A, B] : Candidates.Data) {
+    propose(A, B, FunctionStep::DataReference, true);
+    auto &Evidence = FeatureCandidates.find(pairKey(A, B))->second;
+    Evidence.Step = FunctionStep::DataReference;
+    Evidence.DataReference = true;
+  }
+  for (const auto &[A, B] : Candidates.Functions) {
+    propose(A, B, FunctionStep::AddressSite, true);
+    FeatureCandidates.find(pairKey(A, B))->second.Step =
+        FunctionStep::AddressSite;
+  }
+  if ((!Candidates.Data.empty() || !Candidates.Functions.empty()) && !stopNow())
+    approximate(true);
+  if (!stopNow())
+    progress(1, 1);
+  beginPhase("ambiguities");
   collectAmbiguities();
   endPhase();
   finish();
