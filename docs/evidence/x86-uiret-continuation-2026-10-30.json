@@ -1,0 +1,194 @@
+{
+  "schema_version": 1,
+  "date": "2026-10-30",
+  "scope": "Explicit x64 UIRET, CLUI, STUI and TESTUI continuation state",
+  "global_instruction_goal_complete": false,
+  "artifacts_root": "/mnt/data/neverd-uiret-20261030",
+  "neverd_base": "77bf33f5afb80e0e5aba86e661ed8a8337e0fcce",
+  "capstone_head": "d6bcf38f05fca1433509cb7e5c3fa13177018b4e",
+  "llvm_head": "d0aad189fd7d2689cbe51a883a986df9efd8871b",
+  "neverc_head": "3d1f7b851b6f8e5d9194f5f6f53887441cbc73ce",
+  "reference": {
+    "url": "https://cdrdv2-public.intel.com/874240/325462-090-sdm-vol-1-2abcd-3abcd-4.pdf",
+    "document": "Intel SDM 325462-090, UIRET/CLUI/STUI/TESTUI and Vol. 3B 20.3.1.1",
+    "artifact": "intel-sdm-090.pdf",
+    "sha256": "3686e42931e893b5016c70fb131403795ef173237d073afcfec52755fcd3ea50"
+  },
+  "implementation": {
+    "decoder": "Appended UIRET public ID 1663 without renumbering earlier IDs; both syntaxes and fast scanner share the system decoder; 64-bit mode, prefix/length checks, implicit RSP/EFLAGS and IRET classification.",
+    "context": "V8 appends UIF and MonitorActive at offsets 2528 and 2529; total 2544 bytes. All previous layouts remain unchanged.",
+    "cpu_feature": "Required explicit uiret_restores_uif binds CPUID.7.1:EDX[17]. False sets UIF=1; true restores UIF from saved RFLAGS bit 1. Architectural RFLAGS bit 1 remains set.",
+    "return": "Read exactly RIP/RFLAGS/RSP from the 24-byte frame; check RIP at the active paging width; restore the selective flags and full RSP, clear MonitorActive, preserve all other bytes, and stop with UserInterruptReturn status 11.",
+    "ordinary": "CLUI/STUI write the shared UIF cell; TESTUI copies it to CF and clears PF/AF/ZF/SF/OF. All three clear RF at instruction start and reject TF debug delivery.",
+    "scope": "Successful UINTR-enabled 64-bit execution outside enclaves/RTM with CET/FRED disabled, mapped ordinary RAM and no asynchronous delivery. UIRET may run at any CPL; restored RSP is not validated or accessed.",
+    "strict_boundary": "Ordinary lifting refuses UIRET. Earlier continuation profiles request native execution before touching the guest stack.",
+    "compiler": "Existing LLVM llvm.x86.uiret and NeverC __builtin_ia32_uiret(frame) already provide native generation. No compiler source change was required for this slice."
+  },
+  "host_features": {
+    "uintr": false,
+    "uiret_uif": false,
+    "physical_execution_qualified": false
+  },
+  "checks": [
+    {
+      "name": "NeverD focused UINTR and nonlocal control",
+      "passed": 11,
+      "skipped": 0,
+      "log": "neverd-focused-fixed.log",
+      "junit": "neverd-focused-fixed.xml"
+    },
+    {
+      "name": "Capstone x86 unit suite",
+      "passed": 87,
+      "skipped": 0,
+      "log": "capstone-final.log",
+      "junit": "capstone-final.xml"
+    },
+    {
+      "name": "LLVM native frame returns",
+      "passed": 1,
+      "log": "llvm-frame-tests.log"
+    },
+    {
+      "name": "NeverC native frame returns",
+      "passed": 3,
+      "skipped": 0,
+      "log": "neverc-frame-tests.log",
+      "junit": "neverc-frame-tests.xml"
+    }
+  ],
+  "portable_matrix": {
+    "routes": [
+      "high-c",
+      "llvm-c"
+    ],
+    "optimizations": [
+      "O0",
+      "O2"
+    ],
+    "sanitizers": [
+      "address",
+      "undefined"
+    ],
+    "uiret_state_and_ram_cases": 524288,
+    "uiret_entry_and_frame_rejections": 256,
+    "uif_state_and_ram_cases": 49152,
+    "guard_page_cases": 8,
+    "ordinary_debug_refusals": 12,
+    "physical_uintr_cases": 0
+  },
+  "regressions_fixed": [
+    "UIRET decode failed with the original Capstone source; decode-before.log retains the failing control.",
+    "The old nonlocal-control test still expected SYSENTER refusal after its V7 terminal intrinsic was implemented; it now verifies the supported terminal form.",
+    "Initial generated-C links failed with EDQUOT in /tmp, including loss of linker diagnostics. A traced reproduction identified the filesystem cause; rerun uses task-local TMPDIR on /mnt/data."
+  ],
+  "environment_notes": [
+    "The unrelated generic Capstone mcinst target encounters GCC -Werror=nonnull in an existing null strcmp test; all 83 x86 unit build targets and their 87 tests completed.",
+    "The Capstone x87 hardware test intentionally faults children. Apport pipe handlers caused timeouts despite RLIMIT_CORE=0. A task-local LD_PRELOAD constructor sets PR_SET_DUMPABLE=0 for this test process only; the suite then passed, including 608 original x87 memory-boundary observations.",
+    "No global core-handler or temporary-file cleanup was performed."
+  ],
+  "remaining_limits": [
+    "Physical UINTR execution and pending user-interrupt delivery",
+    "CET shadow-stack checking and #CP",
+    "Page/alignment fault delivery and architectural partial-fault ordering",
+    "RTM abort and enclave execution",
+    "Other x86 instruction-family gaps listed in docs/x86-instruction-support.md"
+  ],
+  "release": {
+    "published": false,
+    "pin_changed": false,
+    "reason": "Global instruction completion remains open; user requested release and pin after closing implementation gaps."
+  },
+  "artifacts": [
+    {
+      "path": "neverd-focused-fixed.log",
+      "sha256": "fdcf8c1b8c71feb33f9e32647a1711533a0c1d6026615329b2ab0a9281b67342",
+      "bytes": 2521
+    },
+    {
+      "path": "neverd-focused-fixed.xml",
+      "sha256": "f95521e279e918a8d05fd4542b769da8e56d7a38392028c2a47e78f50e026501",
+      "bytes": 11841
+    },
+    {
+      "path": "capstone-final.log",
+      "sha256": "cc0711fe7dafd127148769182d9503069be6e15f67c4e1ddf7a74d66659b9c88",
+      "bytes": 11191
+    },
+    {
+      "path": "capstone-final.xml",
+      "sha256": "9a475efd66c564e8181da5efccf62d00407c1145a32478759297a8c9bda52ae5",
+      "bytes": 15612
+    },
+    {
+      "path": "llvm-frame-tests.log",
+      "sha256": "8a9553fe3b467d65455d98dea01a66ebb5fd654a44c400f6da356b1377498164",
+      "bytes": 15998
+    },
+    {
+      "path": "neverc-frame-tests.log",
+      "sha256": "92723e66e876aedeaeb1e8ed8ac89d798aa6bc9c999a1096a9eaed22705d7d0d",
+      "bytes": 1006
+    },
+    {
+      "path": "neverc-frame-tests.xml",
+      "sha256": "966bb89176d1651e0261bff292ff658f1d0f01496a8c56b99a4850b40971392e",
+      "bytes": 1252
+    },
+    {
+      "path": "decode-before.log",
+      "sha256": "6008ea1009c408ba7ef85c5149b80c49bba6965152ef7451971b3613edae9621",
+      "bytes": 154
+    },
+    {
+      "path": "cpu-features.c",
+      "sha256": "6336169949533e1e841887c5f48d44498f9113df8c573d3882e7228ecb1187e4",
+      "bytes": 301
+    },
+    {
+      "path": "cpu-features.json",
+      "sha256": "65ebab710ac77215eee19b65ac58cd7212323f84e71e013017a21ff1ac8b4269",
+      "bytes": 26
+    },
+    {
+      "path": "no-core-helper.c",
+      "sha256": "6616b519b0a6d324047a639dc47583211c275109080ad265eb04cf1cf62fd5b1",
+      "bytes": 320
+    },
+    {
+      "path": "link-process.trace",
+      "sha256": "84054a536f20118f780d817ab99e949a7ed7a8ed6c229c985bc3f89397698e22",
+      "bytes": 1179283
+    },
+    {
+      "path": "neverd-integrated-build.log",
+      "sha256": "6041b23eb82d0f259f1e3ba4519ac18b89bbffc85451846f2c8b71f33be4ecb3",
+      "bytes": 248627
+    },
+    {
+      "path": "neverd-integrated-build-receipt.json",
+      "sha256": "2a7799cf792d39b5d3067556ed6a17956eb84eba246bd83fc6cdaee8f4fc1ce7",
+      "bytes": 3852
+    },
+    {
+      "path": "neverd-integrated-tests.log",
+      "sha256": "4ae1cd5486bd919af3652eab175f9c42718e75584fca344e43132e5717974344",
+      "bytes": 481946
+    },
+    {
+      "path": "neverd-integrated-tests.xml",
+      "sha256": "4609b03bc43faf28a99d091b2f49252f803608a8f3ea0a82c77fdb7b5bd8f005",
+      "bytes": 1618162
+    }
+  ],
+  "integrated_validation": {
+    "neverd_head": "0eae10ee4c2d87cf07463924df6980de71945496",
+    "dev_base": "7ffb66cc33ea11434ec688d7e7eb4363b0c4ee53",
+    "tests": 1545,
+    "passed": 1545,
+    "failed": 0,
+    "skipped": 0,
+    "labels": 10,
+    "scope": "UINTR and prior continuation profiles, raw environment, interpreter state/specialization, PE fixed image, undefined independence and LowIR refinement."
+  }
+}

@@ -640,7 +640,7 @@ TEST(X86ImplicitMsr, ForgedEncodingAndDetailsRefuseBeforeEmission) {
   }
 }
 
-TEST(X86SystemState, UnmodeledRefiningPrefixesCannotBecomeLegacyInstructions) {
+TEST(X86SystemState, RefiningPrefixesRetainTheirDistinctInstructions) {
   const std::vector<std::vector<uint8_t>> Encodings = {
       {0xf2, 0x0f, 0x01, 0xca},
       {0xf3, 0x0f, 0x01, 0xca},
@@ -659,6 +659,10 @@ TEST(X86SystemState, UnmodeledRefiningPrefixesCannotBecomeLegacyInstructions) {
                   static_cast<uint64_t>(Bytes.back() == 0xee
                                             ? Intrinsic::X86ClearUserInterrupt
                                             : Intrinsic::X86SetUserInterrupt));
+      } else if (A == Arch::X64) {
+        ASSERT_EQ(Size, Bytes.size());
+        EXPECT_EQ(I.Id, unsigned(Bytes.front() == 0xf2 ? X86_INS_ERETS
+                                                       : X86_INS_ERETU));
       } else
         EXPECT_EQ(Size, 0);
     }
