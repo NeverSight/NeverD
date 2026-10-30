@@ -1573,6 +1573,7 @@ int main(void) {
 // The source fragment declares the shared fixture used by later fragments.
 // clang-format off
 #include "InterpreterMachineRegionSourceTests.inc"
+#include "InterpreterMachineRegionStringSourceTests.inc"
 #include "InterpreterMachineRegionChoiceTests.inc"
 #include "InterpreterMachineRegionChoiceSourceTests.inc"
 #include "InterpreterMachineRegionSegmentedSourceTests.inc"

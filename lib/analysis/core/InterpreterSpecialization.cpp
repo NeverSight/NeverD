@@ -2978,8 +2978,7 @@ bool Specializer::evaluate(int Id) {
             discover(State, Value, FrameRoot, ControlDemand::Memory);
             Refinement.PrecisionFailure = true;
             fail(SpecializationStatus::Unsupported,
-                 "repeated memory transfer requires a proved count and "
-                 "direction");
+                 "repeated memory transfer requires a proved count");
             return std::nullopt;
           }
           return Domain.Tuples.front().front();
@@ -2988,17 +2987,17 @@ bool Specializer::evaluate(int Id) {
             Singleton(Exec.operandValue(Original.Inputs[Shape->CountInput]));
         if (!Count)
           return false;
-        std::optional<uint64_t> Backward = 0;
+        std::optional<bool> Backward = false;
         if (*Count) {
           auto Direction = Exec.operandValue(Original.Inputs[4]);
           if (Shape->CompleteState)
             Direction = Ctx.mkAnd(Direction,
                                   Ctx.mkConst(32, 1u << X86RepDirectionShift));
-          Backward = Singleton(
+          const auto Constant = Ctx.asConst(
               Ctx.mkNe(Direction, Ctx.mkZero(Original.Inputs[4].Size * 8)));
+          Backward = Constant ? std::optional<bool>(!Constant->isZero())
+                              : std::nullopt;
         }
-        if (!Backward)
-          return false;
         // The lowering scans the entire current instruction for disjoint
         // scratch space. Charge that work even for a zero-length transfer.
         if (Operations.size() >
@@ -3010,13 +3009,15 @@ bool Specializer::evaluate(int Id) {
         // replacement uses that charge, and all others pass through this loop.
         uint64_t Remaining =
             Options.MaxOperations - Result.EvaluatedOperations + 1;
-        const uint64_t PerElement = Shape->Fill ? 2 : 4;
-        const uint64_t Completion = Shape->completionOperations(*Count);
+        const bool RuntimeDirection = !Backward && *Count;
+        const uint64_t PerElement = Shape->elementOperations(RuntimeDirection);
+        const uint64_t Completion =
+            Shape->fixedOperations(*Count, RuntimeDirection);
         if (Remaining < Completion ||
             *Count > (Remaining - Completion) / PerElement)
           return fail(SpecializationStatus::BudgetExceeded,
                       "repeated memory transfer exceeds operation budget");
-        if (FrameRoot && !Shape->Fill && *Count &&
+        if (FrameRoot && Backward && !Shape->Fill && *Count &&
             *Count <=
                 std::numeric_limits<uint64_t>::max() / Shape->ElementBytes) {
           const auto Source =
@@ -3047,9 +3048,8 @@ bool Specializer::evaluate(int Id) {
             *Count > (Remaining - Completion) / PerElement)
           return fail(SpecializationStatus::BudgetExceeded,
                       "repeated memory transfer exceeds operation budget");
-        auto Expanded =
-            detail::lowerStringTransfer(Original, *Count, *Backward != 0,
-                                        Operations, DispatchTemp, Remaining);
+        auto Expanded = detail::lowerStringTransfer(
+            Original, *Count, Backward, Operations, DispatchTemp, Remaining);
         if (!Expanded)
           return fail(SpecializationStatus::InvalidInput,
                       llvm::toString(Expanded.takeError()));
