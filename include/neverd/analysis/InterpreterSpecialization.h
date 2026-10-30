@@ -282,6 +282,19 @@ struct SpecializationOptions {
   /// This raw-residual contract supplies no scheduling, native proof or source
   /// ABI. Possible reserved-bit writes are refused rather than truncated.
   bool X64CR8State = false;
+  /// Raw-only CR4 state with writes restricted to changing PGE (bit 7).
+  /// Requires explicit nonfaulting CPL0 state, a kernel flags profile, PGE
+  /// support and a valid entry CR4. Only modeled writes may change CR4; every
+  /// other control bit remains fixed. No VMX transitions or asynchronous
+  /// observers are admitted. Paging structures and virtual mappings are stable,
+  /// cached translations are consistent with them, and retained accesses use
+  /// ordinary RAM without MMIO or paging/cache observations. These caller
+  /// premises make PGE invalidation unobservable to the scalar analysis; the
+  /// original serializing native transfers remain ordered in the residual.
+  /// Reads overapproximate the valid entry domain with all 64 bits unknown.
+  /// Every write must prove all non-PGE bits unchanged. This supplies no source
+  /// ABI, TLB model or native-equivalence certificate, even when unused.
+  bool X64CR4PGEState = false;
   /// Raw-only MXCSR loads and scalar state reads/writes under explicit
   /// nonfaulting machine state. The caller declares the CPU's writable mask:
   /// 0xffbf without DAZ, or 0xffff with DAZ. Entry state is arbitrary within

@@ -2918,10 +2918,10 @@ TEST(BinaryLowIRRefinement, PartitionedCoverageKeepsAllNativeAndCandidateArms) {
 
 TEST(BinaryLowIRRefinement,
      OpaquePreservationCannotUpgradeSelectedUndefinedChoices) {
-  // PXOR has an undefined-output audit but changes the opaque vector bank.
-  // PAND has neither audit. Both still require an unreachable vector arm;
+  // PXOR and PAND have undefined-output audits but change the opaque vector
+  // bank. PANDN has neither audit. All require an unreachable vector arm;
   // learning its undefined outputs cannot prove preservation of that bank.
-  for (const uint8_t Opcode : {uint8_t{0xef}, uint8_t{0xdb}}) {
+  for (const uint8_t Opcode : {uint8_t{0xef}, uint8_t{0xdb}, uint8_t{0xdf}}) {
     SCOPED_TRACE(static_cast<unsigned>(Opcode));
     const uint8_t Registers = Opcode == 0xef ? 0xf6 : 0xf7;
     // CMP establishes AF=0; XOR then leaves AF undefined. LiftedBits keeps the
@@ -2949,7 +2949,7 @@ TEST(BinaryLowIRRefinement,
                 LowIRNativePreservationQuantifier::SelectedWitness);
       ASSERT_EQ(R.Certificate->Relation.NativeAuditBoundaries.size(), 1U);
       EXPECT_EQ(R.Certificate->Relation.NativeAuditBoundaries.front().Kind,
-                Opcode == 0xef
+                Opcode != 0xdf
                     ? LowIRNativeAuditBoundaryKind::MissingPreservedState
                     : LowIRNativeAuditBoundaryKind::
                           MissingUndefinedOutputsAndPreservedState);
@@ -3194,6 +3194,25 @@ TEST(BinaryLowIRRefinement, TaskPriorityBinaryTransitionsRetainKernelEffects) {
   EXPECT_EQ(Invalid.Status, SpecializationStatus::Unsupported);
   EXPECT_NE(Invalid.Diagnostic.find("reserved bits"), std::string::npos);
   EXPECT_TRUE(Invalid.Residual.Blocks.empty());
+}
+
+TEST(BinaryLowIRRefinement, PageGlobalContractCannotCertifyUnusedState) {
+  Program P({0xb8, 7, 0, 0, 0, 0xc3});
+  const auto R = P.recover();
+  ASSERT_TRUE(R.complete());
+  P.Options.X64CR4PGEState = true;
+  P.Options.X64FlagsProfile = P.Contract.X64FlagsProfile =
+      InterpreterMachineStateProfile::KernelX64NoFaultV1;
+  const auto Proof = P.check(R.Residual);
+  refused(Proof, Status::Unsupported);
+  EXPECT_NE(Proof.Proof.Diagnostic.find("CR4 PGE state"), std::string::npos);
+  const auto Independence =
+      checkBinaryUndefinedIndependence(P.Image, Entry, P.Options, P.Contract);
+  EXPECT_EQ(Independence.Proof.Status, LowIRIndependenceStatus::Unsupported);
+  EXPECT_FALSE(Independence.Certificate);
+  refused(checkBinaryLowIRLoopRefinement(P.Image, Entry, P.Options, R.Residual,
+                                         P.Contract, {}),
+          Status::Unsupported);
 }
 
 TEST(BinaryLowIRRefinement, TaskPriorityContractCannotCertifyUnusedState) {

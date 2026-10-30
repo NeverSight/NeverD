@@ -5,6 +5,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "../../lib/analysis/arch/x86_64/X64ControlTransitions.h"
 #include "../../lib/analysis/arch/x86_64/X64Recovery.h"
 #include "../../lib/analysis/arch/x86_64/X64TaskPriority.h"
 #include "gtest/gtest.h"
@@ -5484,6 +5485,7 @@ TEST(InterpreterSpecialization, TimestampTransitionMatchesCompleteStateOracle) {
 #include "AlignmentRecoveryTests.inc"
 #include "CPUQueryRecoveryTests.inc"
 #include "MXCSRRecoveryTests.inc"
+#include "PageGlobalRecoveryTests.inc"
 #include "SavedAddressCellsTests.inc"
 #include "SavedScalarCellsTests.inc"
 #include "SegmentedStoreTests.inc"
