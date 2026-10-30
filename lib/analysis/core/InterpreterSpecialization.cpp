@@ -124,6 +124,10 @@ struct Projection {
   FrameFacts Frame;
   FrameOrigins Origins;
   ControlRelation Controls;
+  // Exhaustive two-column projections survive when an unrelated field makes
+  // the full joint relation too large. Their conjunction is an
+  // overapproximation, never an assumed independence between columns.
+  std::vector<ControlRelation> ControlPairs;
   std::vector<ControlMarginal> Marginals;
 };
 
@@ -335,6 +339,30 @@ bool joinMarginals(std::vector<ControlMarginal> &Into,
   return true;
 }
 
+bool joinControlPairs(std::vector<ControlRelation> &Into,
+                      const std::vector<ControlRelation> &Incoming,
+                      uint32_t Limit, uint32_t &Widenings) {
+  bool Changed = false;
+  for (auto It = Into.begin(); It != Into.end();) {
+    const auto At =
+        std::lower_bound(Incoming.begin(), Incoming.end(), It->Fields,
+                         [](const auto &Pair, const auto &Fields) {
+                           return Pair.Fields < Fields;
+                         });
+    if (At == Incoming.end() || At->Fields != It->Fields) {
+      It = Into.erase(It);
+      Changed = true;
+      continue;
+    }
+    Changed |= joinControls(*It, *At, Limit, Widenings);
+    if (It->Fields.size() != 2)
+      It = Into.erase(It);
+    else
+      ++It;
+  }
+  return Changed;
+}
+
 bool intersect(Projection &Into, const Projection &Incoming,
                uint32_t TupleLimit, uint32_t &Widenings) {
   bool Changed = intersectMap(Into.Scalars, Incoming.Scalars);
@@ -367,6 +395,8 @@ bool intersect(Projection &Into, const Projection &Incoming,
   Changed |= intersectMap(Into.Frame.AffineValues, Incoming.Frame.AffineValues);
   Changed |=
       joinControls(Into.Controls, Incoming.Controls, TupleLimit, Widenings);
+  Changed |= joinControlPairs(Into.ControlPairs, Incoming.ControlPairs,
+                              TupleLimit, Widenings);
   Changed |=
       joinMarginals(Into.Marginals, Incoming.Marginals, TupleLimit, Widenings);
   const auto OldUnsafe = Into.Origins.UnsafeScalars.size();
@@ -1884,22 +1914,29 @@ bool Specializer::projectEdge(SymState &State, SymRef Root,
     Values.push_back(Value);
     ColumnDomains.push_back(std::move(ColumnDomain));
   }
-  // A complete free masked domain contributes no restriction if its source
-  // bits are independent of both the path and every other selected column.
-  // Prove that fact against the original full set before removing any column;
-  // merely seeing a full marginal domain does not establish independence.
+  // Preserve every proved marginal even when its independent varying bits
+  // can be factored out of the joint relation below. A wide carrier can have
+  // constant high bits that are not whole-byte scalar facts.
+  for (size_t I = 0; I < ColumnDomains.size(); ++I)
+    Out.Marginals.push_back({Fields[I], Masks[I], ColumnDomains[I]});
+  // N independent source bits and an exhaustive domain of exactly 2^N
+  // values prove this column contributes its complete marginal on every
+  // reachable combination of the other columns. The carrier's mask need
+  // not have N bits: extensions and constant lanes do not add choices.
+  // Prove independence against the original full set before removing any
+  // column; cardinality alone does not establish a Cartesian factor.
   std::vector<bool> FreeFactors(Fields.size(), false);
   for (size_t I = 0; I < Fields.size(); ++I) {
-    const unsigned Bits = llvm::popcount(Masks[I]);
-    if (!Bits || Bits >= 32 || ColumnDomains[I].size() != (uint64_t{1} << Bits))
+    const auto Cardinality = ColumnDomains[I].size();
+    if (Cardinality <= 1 || !llvm::isPowerOf2_64(Cardinality))
       continue;
     llvm::SmallVector<SymRef, 8> Related;
     for (size_t J = 0; J < Values.size(); ++J)
       if (J != I)
         Related.push_back(Values[J]);
     FreeFactors[I] = detail::hasUnconstrainedProjectionInput(
-        Ctx, Predicate, Values[I], (uint32_t{1} << Bits) - 1,
-        Options.MaxSymbolicNodes, Related);
+        Ctx, Predicate, Values[I], Cardinality - 1, Options.MaxSymbolicNodes,
+        Related);
   }
   for (size_t I = Fields.size(); I > 0; --I)
     if (FreeFactors[I - 1]) {
@@ -1908,11 +1945,6 @@ bool Specializer::projectEdge(SymState &State, SymRef Root,
       Values.erase(Values.begin() + I - 1);
       ColumnDomains.erase(ColumnDomains.begin() + I - 1);
     }
-  // Each single-column proof is exhaustive even if their joint product is
-  // too large. Keep those independent facts before moving a varying domain.
-  // Unknown columns and unconstrained free factors have already been omitted.
-  for (size_t I = 0; I < ColumnDomains.size(); ++I)
-    Out.Marginals.push_back({Fields[I], Masks[I], ColumnDomains[I]});
   for (size_t I = 0; I < ColumnDomains.size(); ++I) {
     FirstTuple.push_back(ColumnDomains[I].front());
     if (ColumnDomains[I].size() > 1) {
@@ -1945,6 +1977,41 @@ bool Specializer::projectEdge(SymState &State, SymRef Root,
     Joint = enumerate(Ctx, Predicate, Values, Options.MaxControlTuples);
   if (Failed)
     return false;
+  // A full tuple may exceed its cap because of independent runtime data.
+  // Retain complete smaller relations under the same tuple/query/work limits.
+  // Project successful joint rows too, so all incoming edges use the same
+  // pair domain at a join. Missing or over-budget pairs introduce no fact.
+  for (size_t I = 0; I < Fields.size(); ++I)
+    for (size_t J = I + 1; J < Fields.size(); ++J) {
+      const uint64_t Work = Joint.Status == FiniteValueStatus::Complete
+                                ? Joint.Tuples.size() + 1
+                                : 1;
+      if (Work > Options.MaxOperations - Result.EvaluatedOperations)
+        return fail(SpecializationStatus::BudgetExceeded,
+                    "control pair projection budget exhausted");
+      Result.EvaluatedOperations += Work;
+      FiniteValues Pair;
+      if (Joint.Status == FiniteValueStatus::Complete) {
+        std::set<std::vector<uint64_t>> Rows;
+        for (const auto &Row : Joint.Tuples)
+          Rows.insert({Row[I], Row[J]});
+        Pair = {FiniteValueStatus::Complete, {Rows.begin(), Rows.end()}};
+      } else if (Fields.size() > 2) {
+        Pair = enumerate(Ctx, Predicate, {Values[I], Values[J]},
+                         Options.MaxControlTuples);
+        if (Failed)
+          return false;
+      }
+      if (Pair.Status == FiniteValueStatus::Complete) {
+        if (Pair.Tuples.empty()) {
+          Reachable = false;
+          return true;
+        }
+        Out.ControlPairs.push_back({{Fields[I], Fields[J]},
+                                    {Masks[I], Masks[J]},
+                                    std::move(Pair.Tuples)});
+      }
+    }
   if (Joint.Status != FiniteValueStatus::Complete) {
     if (!Fields.empty())
       ++Result.RelationalWidenings;
@@ -2465,6 +2532,18 @@ bool Specializer::evaluate(int Id) {
   SymExec Exec(Ctx, State);
   auto IncomingPredicate =
       controlPredicate(State, FrameRoot, Draft.Incoming.Controls);
+  for (const auto &Pair : Draft.Incoming.ControlPairs) {
+    const uint64_t Work = Pair.Tuples.size() + 1;
+    if (Work > Options.MaxOperations - Result.EvaluatedOperations)
+      return fail(SpecializationStatus::BudgetExceeded,
+                  "control pair predicate budget exhausted");
+    Result.EvaluatedOperations += Work;
+    IncomingPredicate =
+        Ctx.mkAnd(IncomingPredicate, controlPredicate(State, FrameRoot, Pair));
+    if (Ctx.numNodes() > Options.MaxSymbolicNodes)
+      return fail(SpecializationStatus::BudgetExceeded,
+                  "control pair predicate symbolic-node budget exhausted");
+  }
   for (const auto &[Register, Offsets] : Draft.Incoming.FrameRegisterOffsets) {
     if (Draft.Incoming.AffineRegisters.count(Register))
       continue;
