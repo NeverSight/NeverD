@@ -406,7 +406,11 @@ edges must agree; unreachable or exceptional blocks supply no evidence.
 Stack coordinates must agree at joins. Frame-derived flag taint is unioned and
 propagated again when another predecessor adds an observation; stable loops
 reach the same bounded fixed point. Every original load supplies its complete
-interval, including loads removed by source conversion. Exact SP-relative
+interval, including loads removed by source conversion. Entry-byte liveness
+is tracked separately from a slot's address: an exact store kills only its
+written bytes, and a join unions the bytes still live on either predecessor.
+A later read of replacement contents does not observe the incoming parameter.
+Exact SP-relative
 accesses may use physical GPR aliases with constant affine offsets. A join
 retains a coordinate only when every predecessor agrees, and unions byte taint;
 partial register definitions cannot authenticate an old whole pointer. Calls
@@ -415,8 +419,12 @@ receipt for each live alias. A may-clobber mask or CALL result does not prove
 pointer destruction; a clobber loses the coordinate but retains possible taint.
 The callee's home and argument area remains an implicit read range; missing
 source operands alone prove nothing. Every alias must be explicitly destroyed
-before return. Stored frame values, lossy pointer arithmetic and unknown
-observers still reject the proof. Source preparation shares
+before return while incoming bytes remain live. Stored frame values, lossy
+pointer arithmetic and unknown observers conservatively observe every remaining
+input byte and end that path's query. A completed overwrite can therefore be
+proved before an opaque suffix, without granting any semantic or noncapture
+fact about that suffix. All original CFG edges and connectivity are checked
+before these cuts, including disconnected cycles. Source preparation shares
 these facts with both emitters and SDK replay without compacting native slots.
 Original stack facts are computed once per prepared body, independently of the
 register-summary dependency waves. Temporary address intervals retain subrange

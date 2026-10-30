@@ -3,6 +3,15 @@
 Use public fixtures and emitter tests as the durable contract. Private binary
 analysis and comparison output belong outside the repository.
 
+Win64 positional stack-input proofs now track original byte overwrites on every
+path. Reusing a fully replaced slot after an opaque access no longer invents
+an incoming argument dependency. Partial writes, earlier reads and unmatched
+paths retain their dependencies; native argument positions remain unchanged.
+Both C routes execute the public overwritten-slot fixture, including omitted
+callees. HighC also preserves wide small immediates at unprototyped calls, where
+default int promotion cannot initialize a complete stack word. This closes
+that proof gap, not alias-dependent parameter holes or native kernel entry ABIs.
+
 ELF relocation immutability also requires a dynamic-loader contract and full
 protected pages. An interpreterless static entry and a partial final RELRO page
 retain runtime storage; the target's maximum base page governs the proof.
