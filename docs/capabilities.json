@@ -13439,6 +13439,7 @@
         "Default ABI refuses calls and exception boundaries. Explicit machine-state ABI supports certified direct near calls, exhaustively finite register- or memory-indirect near calls and internal returns under a normal nonfaulting CPL3/CET-disabled profile. Memory calls require canonical unsegmented r/m64 encodings and proved target loads before stack effects. Unknown or sampled writable slots, exception execution, mutable code, unresolved control and exhausted budgets refuse recovery.",
         "Input-dependent addresses and joint decoder states require exhaustive finite proofs within budgets; unbounded schemes remain unsupported.",
         "Explicit CLI and v3 C API field, refinement and solver-query budgets retain defaults of 16, 16 and 4096. Larger limits permit additional work without changing semantic assumptions; exhaustion publishes no source.",
+        "The v10 C APIs and --vm-source-abi select scalar, ordered-query or query/XMM source storage within the existing recovery domain. Non-scalar layouts require machine-state recovery; query results come from an explicit caller-provided transcript. Layout selection does not certify native execution equivalence or widen the native proof domain.",
         "Ordinary source-frame relocation requires external LOAD/STORE ranges disjoint from native and reconstructed private frame storage. Machine-state source preserves numeric guest addresses and requires their original runtime mappings. Undefined flags influencing control, addresses, or defined outputs need an independent noninterference proof, which the recovery report does not provide.",
         "PE recovery requires a full image-wide relocation and exception metadata load. Structurally incomplete directories refuse recovery; reached exception handlers require the explicit normal-execution profile. Source recovery does not certify binary replacement.",
         "External-store frame separation is an explicit unchecked caller precondition for machine-state recovery with entry-frame bounds; native proof APIs reject this domain.",
@@ -14635,7 +14636,9 @@
           "neverd_devirtualize_source_v8",
           "neverd_devirtualize_machine_source_v8",
           "neverd_devirtualize_source_v9",
-          "neverd_devirtualize_machine_source_v9"
+          "neverd_devirtualize_machine_source_v9",
+          "neverd_devirtualize_source_v10",
+          "neverd_devirtualize_machine_source_v10"
         ],
         "python": [],
         "cli": [
@@ -14644,6 +14647,7 @@
           "neverd decompile --vm-control",
           "neverd decompile --vm-control-stack",
           "neverd decompile --vm-machine-state",
+          "neverd decompile --vm-source-abi",
           "neverd decompile --vm-max-contexts",
           "neverd decompile --vm-max-nodes",
           "neverd decompile --vm-max-operations",
@@ -23342,6 +23346,15 @@
           "target": "NeverDX64ContinuationExportTests",
           "source": "unittests/devirtualization/X64ContinuationExportTests.cpp",
           "filter": "X64ContinuationExportTest.FarReturnStopsBeforeTargetAndKeepsCleanup",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDX64ContinuationExportTests",
+          "source": "unittests/devirtualization/X64ContinuationExportTests.cpp",
+          "filter": "X64ContinuationExportTest.FarPointerCommitsBothDestinationsAndResumesAtFallthrough",
           "platforms": [
             "linux"
           ]
