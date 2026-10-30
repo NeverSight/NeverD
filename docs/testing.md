@@ -3797,6 +3797,21 @@ scalar ranges and frame intervals consume one saturating budget, including
 nested queries. Interval regressions reject independent rootless cycles and
 mutually seeded recurrences that eventually grow into another stack slot;
 reversing PHI-arm order must preserve the result.
+`AcyclicJoinsDoNotRepeatRecurrenceSearches` resolves 32, 128 and 512 shared
+diamonds in both PHI-arm orders on all four architectures without exhausting
+ordinary, shared or explicit query budgets. Conflicting roots, SELECT
+recurrences and co-located guest/host stack-pointer PHIs compare ordinary
+results with the
+explicit-budget walk; shared-budget replay and bound queries retain saturating
+work accounting. Feasible-edge publication clears the structural dependency
+index together with all semantic caches.
+`CompletedPrefixesAvoidRepeatedIndependentWalks` checks 1,024 increasing
+frame-address prefixes with known and unknown roots, with and without bound
+offsets, on all four architectures. Failed prefixes evaluate linear work while
+retaining each cold walk's full node charge. Exhausted prefixes cannot become
+successful after warming a shorter positive prefix; recurrence tests compare
+cold and warmed results in both query orders. Shared budgets still walk and
+charge their own proof independently.
 `EscapedDomainStopsBeforeAuditingUnrelatedStores` checks both opaque-call and
 stored-pointer escape: a rejected scalar domain performs no alias work on later
 stores. `ScalarFrameLoadsNeedNoFragmentSourceProofWithoutASeed` retains all
@@ -3816,6 +3831,25 @@ Source observations must stop at the failed LOAD, later function bodies must
 remain unprocessed, and deleted LLVM values must leave null source handles.
 Repairing the target and reusing the emitter must produce a valid module with
 all expected observations.
+`OversizedIndexConstraintsDoNotRepeatDoomedGraphBuilds` repeats queries on
+functions above the structural proof budget across all four architectures and
+checks bounded work; a smaller guarded runtime load must still be proved.
+`DenseReachingStoresRetainSourcesAndInitialization` checks dense branch merges,
+distinct constant provenance, uninitialized and partial-write paths, recovery
+by a later full-width overwrite, and reversed block storage. Its 32, 128 and
+512-diamond graphs require linear frame-query work, detecting repeated
+propagation of incomplete source sets through a chain of joins.
+`ReloadSourcesIgnoreNonReturningSuffixes` checks that later writes are ignored
+only when neither ordinary nor exceptional control flow can return to the
+reload, including partial writes and reversed block storage.
+`CompletedFrameAddressWalksRetainClosedDependencies` checks shared positive
+and negative prefixes, cyclic roots in both query orders, and retirement of
+all retained answers when the feasible-edge generation changes.
+`LLVMCallClobberIndex` checks that repeated value and call-site queries index
+each record once. Narrow views retain first-record storage, duplicate records
+and call owners retain ambiguity, full-width call IDs remain valid, and
+switching functions cannot reuse another function's records. Run these with
+the call-clobber code-merge, call-ABI and partially preserved register cases.
 `LLVMFrameSlotProof.ParallelStackPointerPhisAnchorOnlyInOneBlock` accepts an
 i386 back edge that returns ESP through the RSP PHI of the same header, and
 refuses the same RSP PHI placed in another block.

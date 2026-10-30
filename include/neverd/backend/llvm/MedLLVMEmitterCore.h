@@ -47,6 +47,7 @@
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/DataSymbolBinding.h"
 
+#include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/Hashing.h"
@@ -151,7 +152,9 @@ private:
     uint64_t StableOffsetNodes = 0;
     uint64_t ClosedScalarNodes = 0;
     uint64_t IndexedBaseProofs = 0;
+    uint64_t IndexConstraintNodes = 0;
     uint64_t FrameSlotNodes = 0;
+    uint64_t FrameSlotEvaluatedNodes = 0;
     uint64_t FrameSlotCacheHits = 0;
     uint64_t FrameSlotReplays = 0;
   };
@@ -2035,12 +2038,20 @@ private:
           llvm::hash_combine_range(Bindings.begin(), Bindings.end()));
     }
   };
-  // Only completed default-budget, unbound top-level frame-slot queries.
-  // Nested path assumptions and externally shared budgets remain query-local.
+  struct ClosedFrameSlotProof {
+    std::optional<med_llvm::SlotKey> Slot;
+    // The recursive walk precedes the top-level affine fallback. Nested
+    // queries may replay only that walk's failure, with its original charge.
+    size_t WalkNodes = 0;
+    uint64_t WalkCacheHits = 0;
+    bool WalkFailed = false;
+    bool Complete = false;
+  };
+  // Default-budget top-level queries. Independent failed prefixes retain
+  // their work charge; recursive path assumptions stay query-local.
   mutable const MedFunc *ClosedFrameSlotCacheFor = nullptr;
   mutable std::unordered_map<std::pair<AddressProvenanceVarKey, bool>,
-                             std::optional<med_llvm::SlotKey>,
-                             FrameSlotQueryHash>
+                             ClosedFrameSlotProof, FrameSlotQueryHash>
       ClosedFrameSlotCache;
   // Unbound shared-budget queries. The budget only decides where a walk
   // stops: a walk that needs Nodes takes the same path under any budget that
@@ -2058,8 +2069,8 @@ private:
                              SharedBudgetFrameSlotProof, FrameSlotQueryHash>
       SharedBudgetFrameSlotCache;
   mutable const MedFunc *BoundFrameSlotCacheFor = nullptr;
-  mutable std::unordered_map<
-      BoundFrameSlotQuery, std::optional<med_llvm::SlotKey>, FrameSlotQueryHash>
+  mutable std::unordered_map<BoundFrameSlotQuery, ClosedFrameSlotProof,
+                             FrameSlotQueryHash>
       BoundFrameSlotCache;
   /// The slot key of each value an affine chain from a frame root reaches on
   /// every feasible path of the function being emitted (affineFrameKey).
@@ -2114,6 +2125,25 @@ private:
   mutable std::map<int, const MedBlock *> UniqueBlockIndex;
   mutable bool UniqueBlockIds = true;
 
+  // Implicit call definitions share the immutable per-function def/phi
+  // transaction. A value lookup retains MedVar's identity and first-record
+  // behavior; provenance queries separately require a unique record/owner.
+  struct IndexedCallClobber {
+    const MedCallClobber *First = nullptr;
+    bool Ambiguous = false;
+  };
+  mutable llvm::DenseMap<std::pair<int64_t, int>, IndexedCallClobber>
+      CallClobberIndex;
+  mutable llvm::DenseMap<uint64_t, std::vector<const MedCallClobber *>>
+      CallSiteClobberIndex;
+  mutable llvm::DenseMap<uint64_t, const MedOp *> CallOperationIndex;
+  mutable uint64_t CallClobberRecordsIndexed = 0;
+  const MedCallClobber *lookupCallClobber(const MedVar &V,
+                                          bool RequireUnique = false) const;
+  llvm::ArrayRef<const MedCallClobber *>
+  clobbersAtCall(uint32_t CallSiteId) const;
+  const MedOp *lookupUniqueCallOperation(uint32_t CallSiteId) const;
+
   // Occurrence-level proof that a value graph contains an emitted function
   // identity. Integer emission asks this for many operands, so solve each
   // uncached dependency subgraph to a fixed point and memoize its stable
@@ -2163,6 +2193,11 @@ private:
   mutable llvm::DenseMap<std::pair<int64_t, int>, bool> FrameDerivedCache;
   mutable const MedFunc *FrameAddressCacheFor = nullptr;
   mutable llvm::DenseMap<std::pair<int64_t, int>, bool> FrameAddressCache;
+  mutable const MedFunc *FrameDependencyIndexFor = nullptr;
+  mutable llvm::DenseMap<std::pair<int64_t, int>, size_t>
+      FrameDependencyComponents;
+  bool mayCloseFrameRecurrence(const MedVar &Dependency,
+                               const MedVar &Anchor) const;
   mutable const MedFunc *FrameReloadCacheFor = nullptr;
   mutable uint64_t FrameReloadCacheGeneration = 0;
   mutable std::map<FrameReloadCacheKey, FrameReloadCacheEntry> FrameReloadCache;

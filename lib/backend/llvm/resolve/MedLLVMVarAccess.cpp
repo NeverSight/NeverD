@@ -81,6 +81,9 @@ void MedLLVMEmitter::ensureDefPhiIndex() const {
   PhiIndex.clear();
   PhiBlocks.clear();
   UniqueBlockIndex.clear();
+  CallClobberIndex.clear();
+  CallSiteClobberIndex.clear();
+  CallOperationIndex.clear();
   UniqueBlockIds = true;
   if (!CurMedFunc)
     return;
@@ -88,15 +91,61 @@ void MedLLVMEmitter::ensureDefPhiIndex() const {
   // linear scans' "return the first match" behavior.
   for (const MedBlock &Blk : CurMedFunc->Blocks) {
     UniqueBlockIds &= UniqueBlockIndex.emplace(Blk.Id, &Blk).second;
-    for (const MedOp &Op : Blk.Ops)
+    for (const MedOp &Op : Blk.Ops) {
       if (!Op.Output.isConst())
         DefIndex.try_emplace(medVarDefKey(Op.Output), &Op);
+      if (Op.CallSiteId) {
+        auto [It, Inserted] =
+            CallOperationIndex.try_emplace(Op.CallSiteId, &Op);
+        if (!Inserted)
+          It->second = nullptr;
+      }
+    }
     for (const PhiNode &P : Blk.Phis) {
       PhiBlocks.try_emplace(&P, &Blk);
       if (!P.Output.isConst())
         PhiIndex.try_emplace(medVarDefKey(P.Output), &P);
     }
   }
+  for (const MedCallClobber &Clobber : CurMedFunc->CallClobbers) {
+    ++CallClobberRecordsIndexed;
+    // Emission visits a call's records in their original order, including
+    // duplicates. They must not become a unique provenance definition.
+    CallSiteClobberIndex[Clobber.CallSiteId].push_back(&Clobber);
+    if (Clobber.Value.isConst())
+      continue;
+    auto [It, Inserted] = CallClobberIndex.try_emplace(
+        medVarDefKey(Clobber.Value), IndexedCallClobber{&Clobber, false});
+    if (!Inserted)
+      It->second.Ambiguous = true;
+  }
+}
+
+const MedCallClobber *
+MedLLVMEmitter::lookupCallClobber(const MedVar &V, bool RequireUnique) const {
+  if (V.isConst())
+    return nullptr;
+  ensureDefPhiIndex();
+  const auto It = CallClobberIndex.find(medVarDefKey(V));
+  return It == CallClobberIndex.end() || (RequireUnique && It->second.Ambiguous)
+             ? nullptr
+             : It->second.First;
+}
+
+llvm::ArrayRef<const MedCallClobber *>
+MedLLVMEmitter::clobbersAtCall(uint32_t CallSiteId) const {
+  ensureDefPhiIndex();
+  const auto It = CallSiteClobberIndex.find(CallSiteId);
+  if (It == CallSiteClobberIndex.end())
+    return {};
+  return It->second;
+}
+
+const MedOp *
+MedLLVMEmitter::lookupUniqueCallOperation(uint32_t CallSiteId) const {
+  ensureDefPhiIndex();
+  const auto It = CallOperationIndex.find(CallSiteId);
+  return It == CallOperationIndex.end() ? nullptr : It->second;
 }
 
 const MedOp *MedLLVMEmitter::lookupDef(const MedVar &V) const {
@@ -1146,18 +1195,11 @@ llvm::Value *MedLLVMEmitter::getVar(const MedVar &V,
 
   auto Key = std::make_pair(V.Id, V.SSAVer);
 
-  auto ClobberIt = CurMedFunc
-                       ? std::find_if(CurMedFunc->CallClobbers.begin(),
-                                      CurMedFunc->CallClobbers.end(),
-                                      [&](const MedCallClobber &Clobber) {
-                                        return Clobber.Value == V;
-                                      })
-                       : std::vector<MedCallClobber>::const_iterator{};
-  if (CurMedFunc && ClobberIt != CurMedFunc->CallClobbers.end()) {
+  if (const MedCallClobber *Clobber = lookupCallClobber(V)) {
     auto Alloc = VarAllocs.find(Key);
     assert(Alloc != VarAllocs.end() &&
            "call-clobber storage must be pre-created");
-    auto *BaseTy = sizeToType(ClobberIt->Value.Size);
+    auto *BaseTy = sizeToType(Clobber->Value.Size);
     llvm::Value *Base = Builder.CreateLoad(BaseTy, Alloc->second,
                                            V.display() + "_call_clobber_v");
     auto *WantTy = sizeToType(V.Size);

@@ -52,6 +52,45 @@ public:
 
 class MedLLVMProvenanceTestPeer {
 public:
+  static const MedCallClobber *callClobber(MedLLVMEmitter &Emitter,
+                                           const MedFunc &Func,
+                                           const MedVar &Value,
+                                           bool Unique = false) {
+    Emitter.CurMedFunc = &Func;
+    return Emitter.lookupCallClobber(Value, Unique);
+  }
+
+  static std::vector<const MedCallClobber *>
+  callClobbers(MedLLVMEmitter &Emitter, const MedFunc &Func, uint32_t Call) {
+    Emitter.CurMedFunc = &Func;
+    const auto Records = Emitter.clobbersAtCall(Call);
+    return {Records.begin(), Records.end()};
+  }
+
+  static const MedOp *callOperation(MedLLVMEmitter &Emitter,
+                                    const MedFunc &Func, uint32_t Call) {
+    Emitter.CurMedFunc = &Func;
+    return Emitter.lookupUniqueCallOperation(Call);
+  }
+
+  static uint64_t callClobberRecordsIndexed(const MedLLVMEmitter &Emitter) {
+    return Emitter.CallClobberRecordsIndexed;
+  }
+
+  static bool guardedScalarOffset(MedLLVMEmitter &Emitter, const MedFunc &Func,
+                                  const BinaryImage &Image,
+                                  const MedVar &Value) {
+    Emitter.CurMedFunc = &Func;
+    Emitter.TargetArch = Image.Arch;
+    Emitter.TargetFormat = Image.Format;
+    Emitter.Img = &Image;
+    return Emitter.valueIsGuardedScalarOffset(Value);
+  }
+
+  static uint64_t indexConstraintNodes(const MedLLVMEmitter &Emitter) {
+    return Emitter.AddressProvenanceWork.IndexConstraintNodes;
+  }
+
   using WorkCounts = std::tuple<uint64_t, uint64_t, uint64_t, uint64_t>;
   using FrameReloadWorkCounts =
       std::tuple<uint64_t, uint64_t, uint64_t, uint64_t>;
@@ -246,6 +285,8 @@ public:
       Emitter.FrameDerivedCache[{1, 1}] = true;
       Emitter.FrameAddressCacheFor = Emitter.CurMedFunc;
       Emitter.FrameAddressCache[{2, 2}] = true;
+      Emitter.FrameDependencyIndexFor = Emitter.CurMedFunc;
+      Emitter.FrameDependencyComponents[{3, 3}] = 0;
       Emitter.FrameReloadCacheFor = Emitter.CurMedFunc;
       Emitter.FrameReloadCache[MedLLVMEmitter::FrameReloadCacheKey{}] = {};
 
@@ -277,6 +318,8 @@ public:
            Emitter.FrameDerivedCache.empty() &&
            Emitter.FrameAddressCacheFor == nullptr &&
            Emitter.FrameAddressCache.empty() &&
+           Emitter.FrameDependencyIndexFor == nullptr &&
+           Emitter.FrameDependencyComponents.empty() &&
            Emitter.FrameReloadCacheFor == nullptr &&
            Emitter.FrameReloadCache.empty();
   }
@@ -365,6 +408,25 @@ public:
   frameSlotWork(const MedLLVMEmitter &Emitter) {
     return {Emitter.AddressProvenanceWork.FrameSlotNodes,
             Emitter.AddressProvenanceWork.FrameSlotCacheHits};
+  }
+
+  static uint64_t frameSlotEvaluatedNodes(const MedLLVMEmitter &Emitter) {
+    return Emitter.AddressProvenanceWork.FrameSlotEvaluatedNodes;
+  }
+
+  static bool frameAddress(MedLLVMEmitter &Emitter, const MedFunc &Func,
+                           Arch TargetArch, const MedVar &Value) {
+    Emitter.TargetArch = TargetArch;
+    Emitter.CurMedFunc = &Func;
+    Emitter.ensureFeasibleEdgeCache();
+    return Emitter.varMayBeFrameAddress(Value);
+  }
+
+  static std::pair<bool, size_t> frameAddressWalk(MedLLVMEmitter &Emitter,
+                                                  const MedVar &Value) {
+    llvm::DenseSet<std::pair<int64_t, int>> Visited;
+    const bool Result = Emitter.frameAddressRec(Value, Visited);
+    return {Result, Visited.size()};
   }
 
   static bool slotReloadUsedLocally(MedLLVMEmitter &Emitter,
@@ -11646,6 +11708,329 @@ TEST(MachOLLVMDataPointerBoundary,
   }
 }
 
+TEST(MachOLLVMDataPointerBoundary,
+     DenseReachingStoresRetainSourcesAndInitialization) {
+  for (Arch A : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64})
+    for (unsigned Count : {32u, 128u, 512u})
+      for (unsigned Poison : {0u, 1u, 2u})
+        for (bool Reset : {false, true})
+          for (bool Reverse : {false, true}) {
+            SCOPED_TRACE(static_cast<unsigned>(A));
+            SCOPED_TRACE(Count);
+            SCOPED_TRACE(Poison);
+            SCOPED_TRACE(Reset);
+            SCOPED_TRACE(Reverse);
+            const auto &TRI = getTargetRegInfo(A);
+            const uint16_t Width = TRI.PointerSize;
+            auto value = [&](MedVar::VarKind Kind, int Id, uint16_t Size) {
+              MedVar V;
+              V.Kind = Kind;
+              V.TheArch = A;
+              V.Id = Id;
+              V.SSAVer = 1;
+              V.Size = Size;
+              return V;
+            };
+            MedVar SP = value(MedVar::Reg, 100, Width);
+            SP.RegOff = TRI.StackPointer;
+            const MedVar Slot = value(MedVar::Temp, 101, Width);
+            MedVar Condition = value(MedVar::Param, 0, 1);
+            Condition.RegOff = kNoParamReg;
+            const MedVar Reload = value(MedVar::Temp, 102, Width);
+            MedFunc Func;
+            Func.Entry = 0x1000;
+            Func.FrameSize = 32;
+            Func.Params = {Condition};
+            Func.Blocks.resize(2 * Count + 1);
+            for (unsigned I = 0; I < Func.Blocks.size(); ++I) {
+              Func.Blocks[I].Id = I;
+              Func.Blocks[I].StartAddr = Func.Entry + I * 16;
+              Func.Blocks[I].EndAddr = Func.Blocks[I].StartAddr + 16;
+            }
+            auto op = [&](unsigned Block, NdOp Opcode, MedVar Output,
+                          std::initializer_list<MedVar> Inputs) {
+              MedOp Op;
+              Op.Opcode = Opcode;
+              Op.Output = Output;
+              for (const auto &Input : Inputs)
+                Op.addInput(Input);
+              Func.Blocks[Block].Ops.push_back(Op);
+            };
+            auto scalar = [&](uint64_t Bits) {
+              return MedVar::makeConst(Bits, Width,
+                                       ConstantAddressProvenance::Scalar);
+            };
+            op(0, NdOp::COPY, SP, {SP});
+            op(0, NdOp::INT_ADD, Slot, {SP, scalar(uint64_t(-16))});
+            std::vector<MedVar> Expected{scalar(0)};
+            if (Poison != 1)
+              op(0, NdOp::STORE, {}, {Slot, Expected.front()});
+            for (unsigned I = 0; I != Count; ++I) {
+              const unsigned Header = 2 * I, Store = Header + 1,
+                             Join = Header + 2;
+              Func.Blocks[Header].Succs = {int(Store), int(Join)};
+              Func.Blocks[Store].Preds = {int(Header)};
+              Func.Blocks[Store].Succs = {int(Join)};
+              Func.Blocks[Join].Preds = {int(Header), int(Store)};
+              op(Header, NdOp::COND_BR, {},
+                 {scalar(Func.Blocks[Store].StartAddr), Condition});
+              const auto Provenance =
+                  I % 2 ? ConstantAddressProvenance::Scalar
+                        : ConstantAddressProvenance::DataAddress;
+              MedVar Source = MedVar::makeConst(I / 2 + 1, Width, Provenance);
+              if (Poison == 2 && I == Count / 2)
+                Source.Size = Width / 2;
+              Expected.push_back(Source);
+              op(Store, NdOp::STORE, {}, {Slot, Source});
+              op(Store, NdOp::BRANCH, {},
+                 {scalar(Func.Blocks[Join].StartAddr)});
+            }
+            if (Reset) {
+              Expected = {scalar(0x777)};
+              op(2 * Count, NdOp::STORE, {}, {Slot, Expected.front()});
+            }
+            op(2 * Count, NdOp::LOAD, Reload, {Slot});
+            op(2 * Count, NdOp::RETURN, {}, {Reload});
+            if (Reverse)
+              std::reverse(Func.Blocks.begin() + 1, Func.Blocks.end());
+            const auto Exit = std::find_if(
+                Func.Blocks.begin(), Func.Blocks.end(),
+                [&](const MedBlock &B) { return B.Id == int(2 * Count); });
+            ASSERT_NE(Exit, Func.Blocks.end());
+            MedLLVMEmitter Emitter;
+            std::vector<MedVar> Sources;
+            EXPECT_EQ(MedLLVMProvenanceTestPeer::collectFrameReloadSources(
+                          Emitter, Func, A, Exit->Ops[Reset ? 1 : 0], Sources),
+                      Poison == 0 || Reset);
+            const auto [Nodes, Hits] =
+                MedLLVMProvenanceTestPeer::frameSlotWork(Emitter);
+            EXPECT_LE(Nodes + Hits, 16u * (Count + 1));
+            if (Poison != 0 && !Reset) {
+              EXPECT_TRUE(Sources.empty());
+              continue;
+            }
+            ASSERT_EQ(Sources.size(), Expected.size());
+            for (const MedVar &Source : Expected)
+              EXPECT_NE(std::find(Sources.begin(), Sources.end(), Source),
+                        Sources.end());
+            std::vector<MedVar> Repeated;
+            ASSERT_TRUE(MedLLVMProvenanceTestPeer::collectFrameReloadSources(
+                Emitter, Func, A, Exit->Ops[Reset ? 1 : 0], Repeated));
+            EXPECT_EQ(Repeated, Sources);
+          }
+}
+
+TEST(MachOLLVMDataPointerBoundary, ReloadSourcesIgnoreNonReturningSuffixes) {
+  for (Arch A : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64})
+    for (unsigned Count : {32u, 128u, 512u})
+      for (unsigned Backedge : {0u, 1u, 2u})
+        for (bool Partial : {false, true})
+          for (bool Reverse : {false, true}) {
+            SCOPED_TRACE(unsigned(A));
+            SCOPED_TRACE(Count);
+            SCOPED_TRACE(Backedge);
+            SCOPED_TRACE(Partial);
+            SCOPED_TRACE(Reverse);
+            const auto &TRI = getTargetRegInfo(A);
+            const uint16_t Width = TRI.PointerSize;
+            auto value = [&](MedVar::VarKind Kind, int Id, uint16_t Size) {
+              MedVar V;
+              V.Kind = Kind;
+              V.TheArch = A;
+              V.Id = Id;
+              V.SSAVer = 1;
+              V.Size = Size;
+              return V;
+            };
+            auto scalar = [&](uint64_t Bits) {
+              return MedVar::makeConst(Bits, Width,
+                                       ConstantAddressProvenance::Scalar);
+            };
+            MedVar SP = value(MedVar::Reg, 100, Width);
+            SP.RegOff = TRI.StackPointer;
+            const MedVar Slot = value(MedVar::Temp, 101, Width);
+            const MedVar Reload = value(MedVar::Temp, 102, Width);
+            MedFunc F;
+            F.Entry = 0x1000;
+            F.FrameSize = 32;
+            F.Blocks.resize(Count + 2);
+            for (unsigned I = 0; I < F.Blocks.size(); ++I) {
+              auto &B = F.Blocks[I];
+              B.Id = I;
+              B.StartAddr = F.Entry + 16 * I;
+              B.EndAddr = B.StartAddr + 16;
+              if (I + 1 < F.Blocks.size())
+                B.Succs = {int(I + 1)};
+              if (I)
+                B.Preds = {int(I - 1)};
+            }
+            auto op = [&](unsigned B, NdOp Code, MedVar Out,
+                          std::initializer_list<MedVar> Ins) {
+              MedOp O;
+              O.Opcode = Code;
+              O.Output = Out;
+              for (auto &I : Ins)
+                O.addInput(I);
+              F.Blocks[B].Ops.push_back(O);
+            };
+            op(0, NdOp::COPY, SP, {SP});
+            op(0, NdOp::INT_ADD, Slot, {SP, scalar(uint64_t(-16))});
+            op(0, NdOp::STORE, {}, {Slot, scalar(0x11)});
+            op(0, NdOp::BRANCH, {}, {scalar(F.Blocks[1].StartAddr)});
+            op(1, NdOp::LOAD, Reload, {Slot});
+            op(1, NdOp::BRANCH, {}, {scalar(F.Blocks[2].StartAddr)});
+            MedVar Stored = scalar(0x22);
+            if (Partial)
+              Stored.Size = Width / 2;
+            for (unsigned I = 2; I < F.Blocks.size(); ++I) {
+              op(I, NdOp::STORE, {}, {Slot, Stored});
+              if (I + 1 < F.Blocks.size())
+                op(I, NdOp::BRANCH, {}, {scalar(F.Blocks[I + 1].StartAddr)});
+            }
+            if (Backedge == 1) {
+              F.Blocks.back().Succs = {1};
+              F.Blocks[1].Preds.push_back(F.Blocks.back().Id);
+              op(Count + 1, NdOp::BRANCH, {}, {scalar(F.Blocks[1].StartAddr)});
+            } else if (Backedge == 2) {
+              F.Blocks.back().ExceptionalSuccs.push_back(
+                  {1, F.Blocks[1].StartAddr});
+              F.Blocks[1].ExceptionalPreds.push_back(
+                  {F.Blocks.back().Id, F.Blocks.back().StartAddr});
+              op(Count + 1, NdOp::RETURN, {}, {});
+            } else
+              op(Count + 1, NdOp::RETURN, {}, {});
+            if (Reverse)
+              std::reverse(F.Blocks.begin(), F.Blocks.end());
+            const auto Site =
+                std::find_if(F.Blocks.begin(), F.Blocks.end(),
+                             [](const MedBlock &B) { return B.Id == 1; });
+            ASSERT_NE(Site, F.Blocks.end());
+            MedLLVMEmitter E;
+            std::vector<MedVar> Sources;
+            const bool Proven =
+                MedLLVMProvenanceTestPeer::collectFrameReloadSources(
+                    E, F, A, Site->Ops[0], Sources);
+            EXPECT_EQ(Proven, !Backedge || !Partial);
+            const auto [N, H] = MedLLVMProvenanceTestPeer::frameSlotWork(E);
+            if (!Backedge)
+              EXPECT_LE(N + H, 32u);
+            if (!Proven) {
+              EXPECT_TRUE(Sources.empty());
+              continue;
+            }
+            ASSERT_EQ(Sources.size(), Backedge ? 2u : 1u);
+            EXPECT_NE(std::find(Sources.begin(), Sources.end(), scalar(0x11)),
+                      Sources.end());
+            if (Backedge)
+              EXPECT_NE(std::find(Sources.begin(), Sources.end(), Stored),
+                        Sources.end());
+          }
+}
+
+TEST(LLVMFrameSlotProof, CompletedFrameAddressWalksRetainClosedDependencies) {
+  for (Arch A : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64})
+    for (unsigned Count : {32u, 128u, 1024u})
+      for (bool Rooted : {false, true}) {
+        SCOPED_TRACE(static_cast<unsigned>(A));
+        SCOPED_TRACE(Count);
+        SCOPED_TRACE(Rooted);
+        const auto &TRI = getTargetRegInfo(A);
+        auto value = [&](int Id) {
+          MedVar V;
+          V.Kind = MedVar::Temp;
+          V.TheArch = A;
+          V.Id = Id;
+          V.SSAVer = 1;
+          V.Size = TRI.PointerSize;
+          return V;
+        };
+        MedFunc F;
+        F.Entry = 0x1000;
+        F.Blocks.resize(1);
+        F.Blocks.front().Id = 0;
+        F.Blocks.front().StartAddr = F.Entry;
+        MedVar Root = value(1);
+        Root.Kind = Rooted ? MedVar::Reg : MedVar::Param;
+        Root.RegOff = Rooted ? TRI.StackPointer : kNoParamReg;
+        MedVar Previous = Root;
+        std::vector<MedVar> Values;
+        for (unsigned I = 0; I < Count; ++I) {
+          MedVar V = value(I + 2);
+          MedOp Copy;
+          Copy.Opcode = NdOp::COPY;
+          Copy.Output = V;
+          Copy.addInput(Previous);
+          F.Blocks.front().Ops.push_back(Copy);
+          Values.push_back(V);
+          Previous = V;
+        }
+        MedLLVMEmitter Emitter;
+        ASSERT_EQ(
+            MedLLVMProvenanceTestPeer::frameAddress(Emitter, F, A, Previous),
+            Rooted);
+        size_t Visits = 0;
+        for (const MedVar &V : Values) {
+          const auto [Result, Nodes] =
+              MedLLVMProvenanceTestPeer::frameAddressWalk(Emitter, V);
+          EXPECT_EQ(Result, Rooted);
+          Visits += Nodes;
+        }
+        EXPECT_LE(Visits, 4u * Count);
+        MedLLVMProvenanceTestPeer::invalidateFeasibleEdgeDependentCaches(
+            Emitter);
+        const auto [Result, Nodes] =
+            MedLLVMProvenanceTestPeer::frameAddressWalk(Emitter, Previous);
+        EXPECT_EQ(Result, Rooted);
+        EXPECT_GE(Nodes, Count);
+      }
+
+  // A nested DFS cutoff is not a closed failure: B -> A can reach the root
+  // through A's second operand after the active A -> B edge has been cut.
+  for (Arch A : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64})
+    for (bool Rooted : {false, true})
+      for (bool Reverse : {false, true}) {
+        SCOPED_TRACE(static_cast<unsigned>(A));
+        SCOPED_TRACE(Rooted);
+        SCOPED_TRACE(Reverse);
+        const auto &TRI = getTargetRegInfo(A);
+        auto value = [&](int Id) {
+          MedVar V;
+          V.Kind = MedVar::Temp;
+          V.TheArch = A;
+          V.Id = Id;
+          V.SSAVer = 1;
+          V.Size = TRI.PointerSize;
+          return V;
+        };
+        MedFunc F;
+        F.Entry = 0x1000;
+        F.Blocks.resize(1);
+        F.Blocks.front().Id = 0;
+        F.Blocks.front().StartAddr = F.Entry;
+        MedVar Root = value(10);
+        Root.Kind = Rooted ? MedVar::Reg : MedVar::Param;
+        Root.RegOff = Rooted ? TRI.StackPointer : kNoParamReg;
+        const MedVar X = value(11), Y = value(12);
+        MedOp Add;
+        Add.Opcode = NdOp::INT_ADD;
+        Add.Output = X;
+        Add.addInput(Y);
+        Add.addInput(Root);
+        MedOp Copy;
+        Copy.Opcode = NdOp::COPY;
+        Copy.Output = Y;
+        Copy.addInput(X);
+        F.Blocks.front().Ops = {Add, Copy};
+        MedLLVMEmitter Emitter;
+        EXPECT_EQ(MedLLVMProvenanceTestPeer::frameAddress(Emitter, F, A,
+                                                          Reverse ? Y : X),
+                  Rooted);
+        EXPECT_EQ(MedLLVMProvenanceTestPeer::frameAddress(Emitter, F, A,
+                                                          Reverse ? X : Y),
+                  Rooted);
+      }
+}
+
 TEST(MachOLLVMDataPointerBoundary, ReusesPositiveAndNegativeFrameReloadProofs) {
   constexpr uint64_t QueryCount = 64;
   auto findReload = [](const MedFunc &Func) -> const MedOp * {
@@ -22840,6 +23225,75 @@ TEST(LLVMCodePointerInvariantBoundary,
 }
 
 TEST(LLVMCodePointerInvariantBoundary,
+     OversizedIndexConstraintsDoNotRepeatDoomedGraphBuilds) {
+  const size_t Limit = static_cast<size_t>(limits::kMaxSSANodes);
+  for (Arch A : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64})
+    for (size_t BlockCount : {Limit / 2, Limit + 1, Limit * 2}) {
+      SCOPED_TRACE(static_cast<unsigned>(A));
+      SCOPED_TRACE(BlockCount);
+      BinaryImage Image;
+      Image.Arch = A;
+      Image.Format = BinaryFormat::ELF;
+      const uint16_t Width = getTargetRegInfo(A).PointerSize;
+      auto value = [&](int Id, uint16_t Size) {
+        MedVar V;
+        V.Kind = MedVar::Temp;
+        V.TheArch = A;
+        V.Id = Id;
+        V.SSAVer = 1;
+        V.Size = Size;
+        return V;
+      };
+      MedVar Address = value(9, Width);
+      Address.Kind = MedVar::Param;
+      Address.RegOff = kNoParamReg;
+      const MedVar Index = value(10, Width);
+      const MedVar Condition = value(11, 1);
+      const MedVar Scaled = value(12, Width);
+      MedFunc Func;
+      Func.Entry = 0x1000;
+      Func.Blocks.resize(BlockCount);
+      for (size_t I = 0; I != BlockCount; ++I) {
+        auto &Block = Func.Blocks[I];
+        Block.Id = static_cast<int>(I);
+        Block.StartAddr = Func.Entry + I * 16;
+        Block.EndAddr = Block.StartAddr + 16;
+      }
+      Func.Blocks[0].Succs = {1, 2};
+      Func.Blocks[1].Preds = {0};
+      Func.Blocks[2].Preds = {0};
+      auto op = [&](unsigned Block, NdOp Opcode, const MedVar &Output,
+                    std::initializer_list<MedVar> Inputs) {
+        MedOp Op;
+        Op.Opcode = Opcode;
+        Op.Output = Output;
+        for (const auto &Input : Inputs)
+          Op.addInput(Input);
+        Func.Blocks[Block].Ops.push_back(Op);
+      };
+      const auto Scalar = ConstantAddressProvenance::Scalar;
+      op(0, NdOp::LOAD, Index, {Address});
+      op(0, NdOp::INT_LESS, Condition,
+         {Index, MedVar::makeConst(8, Width, Scalar)});
+      op(0, NdOp::COND_BR, {},
+         {MedVar::makeConst(Func.Blocks[1].StartAddr, Width), Condition});
+      op(1, NdOp::INT_MULT, Scaled,
+         {Index, MedVar::makeConst(4, Width, Scalar)});
+      MedLLVMEmitter Emitter;
+      for (unsigned Query = 0; Query != 64; ++Query)
+        EXPECT_EQ(MedLLVMProvenanceTestPeer::guardedScalarOffset(Emitter, Func,
+                                                                 Image, Scaled),
+                  BlockCount < Limit);
+      const uint64_t Visits =
+          MedLLVMProvenanceTestPeer::indexConstraintNodes(Emitter);
+      if (BlockCount > Limit)
+        EXPECT_LE(Visits, 2 * BlockCount);
+      else
+        EXPECT_GT(Visits, 0u);
+    }
+}
+
+TEST(LLVMCodePointerInvariantBoundary,
      PostTestedCounterPreservesExactRecordStrideAndRejectsBypasses) {
   enum class Case {
     Valid,
@@ -26020,6 +26474,134 @@ TEST(LLVMFrameSlotProof, LocalReloadUsesKeepForwardingAndValueIdentity) {
     }
 }
 
+TEST(LLVMCallClobberIndex, RepeatedQueriesVisitEachRecordOnce) {
+  MedFunc Func;
+  constexpr unsigned Records = 4096, Calls = 64;
+  for (unsigned I = 0; I != Records; ++I) {
+    MedVar Value;
+    Value.Kind = MedVar::Reg;
+    Value.Id = I;
+    Value.SSAVer = 1;
+    Value.Size = 8;
+    Func.CallClobbers.push_back({Value, I % Calls + 1});
+  }
+  MedLLVMEmitter Emitter;
+  for (unsigned Pass = 0; Pass != 4; ++Pass) {
+    for (unsigned I = 0; I != Records; ++I) {
+      const auto &Record = Func.CallClobbers[I];
+      EXPECT_EQ(MedLLVMProvenanceTestPeer::callClobber(Emitter, Func,
+                                                       Record.Value, true),
+                &Record);
+      MedVar Missing = Record.Value;
+      Missing.SSAVer = 2;
+      EXPECT_FALSE(
+          MedLLVMProvenanceTestPeer::callClobber(Emitter, Func, Missing));
+    }
+    for (unsigned Call = 1; Call <= Calls; ++Call) {
+      const auto Found =
+          MedLLVMProvenanceTestPeer::callClobbers(Emitter, Func, Call);
+      ASSERT_EQ(Found.size(), Records / Calls);
+      for (unsigned I = 0; I != Found.size(); ++I)
+        EXPECT_EQ(Found[I], &Func.CallClobbers[Call - 1 + I * Calls]);
+    }
+    EXPECT_TRUE(
+        MedLLVMProvenanceTestPeer::callClobbers(Emitter, Func, 0).empty());
+    EXPECT_EQ(MedLLVMProvenanceTestPeer::callClobberRecordsIndexed(Emitter),
+              Records);
+  }
+}
+
+TEST(LLVMCallClobberIndex, KeepsViewsDuplicatesAndFullWidthCallIds) {
+  MedVar Wide;
+  Wide.Kind = MedVar::Reg;
+  Wide.Id = 1;
+  Wide.SSAVer = 1;
+  Wide.Size = 16;
+  MedVar Narrow = Wide;
+  Narrow.Size = 8;
+  MedVar OtherKind = Wide;
+  OtherKind.Kind = MedVar::Temp;
+  const uint32_t Last = std::numeric_limits<uint32_t>::max();
+  MedFunc Func;
+  Func.CallClobbers = {{Wide, Last, Narrow, 8},
+                       {OtherKind, Last - 1},
+                       {Narrow, Last},
+                       {MedVar::makeConst(7, 4), 0}};
+  Func.Blocks.resize(1);
+  MedOp Call;
+  Call.Opcode = NdOp::CALL;
+  Call.CallSiteId = Last;
+  Func.Blocks[0].Ops.push_back(Call);
+  Func.Blocks[0].Ops.push_back(Call);
+  Call.CallSiteId = Last - 1;
+  Func.Blocks[0].Ops.push_back(Call);
+  MedLLVMEmitter Emitter;
+  EXPECT_EQ(MedLLVMProvenanceTestPeer::callClobber(Emitter, Func, Narrow),
+            &Func.CallClobbers[0]);
+  EXPECT_FALSE(
+      MedLLVMProvenanceTestPeer::callClobber(Emitter, Func, Wide, true));
+  EXPECT_EQ(
+      MedLLVMProvenanceTestPeer::callClobber(Emitter, Func, OtherKind, true),
+      &Func.CallClobbers[1]);
+  EXPECT_FALSE(MedLLVMProvenanceTestPeer::callClobber(Emitter, Func,
+                                                      MedVar::makeConst(7, 4)));
+  EXPECT_EQ(MedLLVMProvenanceTestPeer::callClobbers(Emitter, Func, Last),
+            (std::vector<const MedCallClobber *>{&Func.CallClobbers[0],
+                                                 &Func.CallClobbers[2]}));
+  EXPECT_FALSE(MedLLVMProvenanceTestPeer::callOperation(Emitter, Func, Last));
+  EXPECT_EQ(MedLLVMProvenanceTestPeer::callOperation(Emitter, Func, Last - 1),
+            &Func.Blocks[0].Ops[2]);
+  EXPECT_FALSE(MedLLVMProvenanceTestPeer::callOperation(Emitter, Func, 1));
+}
+
+TEST(LLVMCallClobberIndex, SwitchingFunctionsRebuildsRecordAndOwnerIndexes) {
+  MedVar Value;
+  Value.Kind = MedVar::Reg;
+  Value.Id = Value.SSAVer = 1;
+  Value.Size = 8;
+  MedFunc First, Second;
+  First.CallClobbers.push_back({Value, 1});
+  Second.CallClobbers.push_back({Value, 2, Value, 4});
+  for (auto *Func : {&First, &Second}) {
+    Func->Blocks.resize(1);
+    MedOp Call;
+    Call.Opcode = NdOp::CALL;
+    Call.CallSiteId = Func->CallClobbers[0].CallSiteId;
+    Func->Blocks[0].Ops.push_back(Call);
+  }
+  MedLLVMEmitter Emitter;
+  unsigned Visits = 0;
+  for (const auto *Func : {&First, &Second, &First}) {
+    const auto &Record = Func->CallClobbers[0];
+    EXPECT_EQ(MedLLVMProvenanceTestPeer::callClobber(Emitter, *Func, Value),
+              &Record);
+    EXPECT_EQ(MedLLVMProvenanceTestPeer::callOperation(Emitter, *Func,
+                                                       Record.CallSiteId),
+              &Func->Blocks[0].Ops[0]);
+    EXPECT_TRUE(MedLLVMProvenanceTestPeer::callClobbers(
+                    Emitter, *Func, Record.CallSiteId == 1 ? 2 : 1)
+                    .empty());
+    EXPECT_EQ(MedLLVMProvenanceTestPeer::callClobberRecordsIndexed(Emitter),
+              ++Visits);
+  }
+  // Re-emitting starts a fresh transaction even if the caller reuses the
+  // same MedFunc storage with changed records and operation identities.
+  First.CallClobbers[0].CallSiteId = 3;
+  First.Blocks[0].Ops[0].CallSiteId = 3;
+  llvm::LLVMContext Context;
+  auto Module = Emitter.emit({}, Context, "clobber-index-reset", Arch::X64);
+  ASSERT_NE(Module, nullptr);
+  expectValidModule(*Module);
+  EXPECT_TRUE(
+      MedLLVMProvenanceTestPeer::callClobbers(Emitter, First, 1).empty());
+  EXPECT_EQ(MedLLVMProvenanceTestPeer::callClobbers(Emitter, First, 3),
+            (std::vector<const MedCallClobber *>{&First.CallClobbers[0]}));
+  EXPECT_FALSE(MedLLVMProvenanceTestPeer::callOperation(Emitter, First, 1));
+  EXPECT_EQ(MedLLVMProvenanceTestPeer::callOperation(Emitter, First, 3),
+            &First.Blocks[0].Ops[0]);
+  EXPECT_EQ(MedLLVMProvenanceTestPeer::callClobberRecordsIndexed(Emitter), 1u);
+}
+
 TEST(LLVMFrameSlotProof, SharedDiamondsRetainExactCoordinatesWithinBudget) {
   for (Arch TargetArch : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64}) {
     SCOPED_TRACE(static_cast<int>(TargetArch));
@@ -26039,8 +26621,54 @@ TEST(LLVMFrameSlotProof, SharedDiamondsRetainExactCoordinatesWithinBudget) {
       EXPECT_LT(Nodes, 4096u);
       if (!Conflict)
         EXPECT_GE(Hits, 20u);
+      MedLLVMEmitter DefaultEmitter;
+      EXPECT_EQ(MedLLVMProvenanceTestPeer::defaultFrameSlot(
+                    DefaultEmitter, Fixture.Func, TargetArch, Fixture.Address),
+                Slot);
     }
   }
+}
+
+TEST(LLVMFrameSlotProof, AcyclicJoinsDoNotRepeatRecurrenceSearches) {
+  for (Arch TargetArch : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64})
+    for (unsigned Count : {32u, 128u, 512u})
+      for (bool Reverse : {false, true}) {
+        SCOPED_TRACE(static_cast<unsigned>(TargetArch));
+        SCOPED_TRACE(Count);
+        SCOPED_TRACE(Reverse);
+        FrameSlotProofFixture Fixture(TargetArch);
+        Fixture.diamonds(Count);
+        if (Reverse)
+          for (auto &Block : Fixture.Func.Blocks)
+            for (auto &Phi : Block.Phis)
+              std::reverse(Phi.Args.begin(), Phi.Args.end());
+        MedLLVMEmitter Emitter;
+        const auto Slot = MedLLVMProvenanceTestPeer::defaultFrameSlot(
+            Emitter, Fixture.Func, TargetArch, Fixture.Address);
+        ASSERT_TRUE(Slot);
+        EXPECT_EQ(Slot->first,
+                  std::make_pair(Fixture.SP.Id, Fixture.SP.SSAVer));
+        EXPECT_EQ(Slot->second, 0);
+        // Every join shares one proved predecessor coordinate. Looking for
+        // a cycle through each entire acyclic prefix is unnecessary work.
+        EXPECT_LE(MedLLVMProvenanceTestPeer::frameSlotWork(Emitter).first,
+                  8u * Count + 1);
+        MedLLVMEmitter SharedEmitter;
+        size_t Remaining = 8192;
+        EXPECT_EQ(MedLLVMProvenanceTestPeer::defaultFrameSlot(
+                      SharedEmitter, Fixture.Func, TargetArch, Fixture.Address,
+                      false, nullptr, &Remaining),
+                  Slot);
+        EXPECT_LE(8192u - Remaining, 8u * Count + 1);
+        MedLLVMEmitter ExplicitEmitter;
+        EXPECT_EQ(
+            MedLLVMProvenanceTestPeer::canonicalFrameSlot(
+                ExplicitEmitter, Fixture.Func, TargetArch, Fixture.Address),
+            Slot);
+        EXPECT_LE(
+            MedLLVMProvenanceTestPeer::frameSlotWork(ExplicitEmitter).first,
+            8u * Count + 1);
+      }
 }
 
 TEST(LLVMFrameSlotProof, RepeatedClosedQueriesDoNotRepeatProofWork) {
@@ -26168,6 +26796,160 @@ TEST(LLVMFrameSlotProof, SharedBudgetProofsReplayTheirNodes) {
   }
 }
 
+TEST(LLVMFrameSlotProof, CompletedPrefixesAvoidRepeatedIndependentWalks) {
+  for (Arch TargetArch : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64})
+    for (bool Rooted : {false, true})
+      for (bool Bound : {false, true}) {
+        SCOPED_TRACE(static_cast<unsigned>(TargetArch));
+        SCOPED_TRACE(Rooted);
+        SCOPED_TRACE(Bound);
+        FrameSlotProofFixture Fixture(TargetArch);
+        MedVar Previous = Rooted ? Fixture.SP : Fixture.temp();
+        const MedVar Index = Fixture.temp();
+        const std::vector<std::pair<MedVar, uint64_t>> Bindings = {{Index, 8}};
+        if (Bound) {
+          const MedVar Adjusted = Fixture.temp();
+          Fixture.op(0, NdOp::INT_ADD, Adjusted, {Previous, Index});
+          Previous = Adjusted;
+        }
+        std::vector<MedVar> Addresses;
+        constexpr unsigned Count = 1024;
+        for (unsigned I = 0; I != Count; ++I) {
+          const MedVar Next = Fixture.temp();
+          Fixture.op(0, NdOp::COPY, Next, {Previous});
+          Addresses.push_back(Next);
+          Previous = Next;
+        }
+        MedLLVMEmitter Emitter;
+        unsigned PrefixLength = 0;
+        for (const MedVar &Address : Addresses) {
+          const auto Before =
+              MedLLVMProvenanceTestPeer::frameSlotWork(Emitter).first;
+          const auto Slot = MedLLVMProvenanceTestPeer::defaultFrameSlot(
+              Emitter, Fixture.Func, TargetArch, Address, false,
+              Bound ? &Bindings : nullptr);
+          ASSERT_EQ(Slot.has_value(), Rooted);
+          if (Slot) {
+            EXPECT_EQ(Slot->first,
+                      std::make_pair(Fixture.SP.Id, Fixture.SP.SSAVer));
+            EXPECT_EQ(Slot->second, Bound ? 8 : 0);
+          }
+          EXPECT_EQ(MedLLVMProvenanceTestPeer::frameSlotWork(Emitter).first -
+                        Before,
+                    ++PrefixLength + 1u + unsigned(Bound));
+        }
+        if (!Rooted)
+          EXPECT_LE(MedLLVMProvenanceTestPeer::frameSlotEvaluatedNodes(Emitter),
+                    3u * Count);
+        // Explicitly shared budgets still perform their own bounded proof.
+        MedLLVMEmitter Cold;
+        size_t Budget = 8192;
+        EXPECT_EQ(MedLLVMProvenanceTestPeer::defaultFrameSlot(
+                      Cold, Fixture.Func, TargetArch, Previous, false,
+                      Bound ? &Bindings : nullptr, &Budget)
+                      .has_value(),
+                  Rooted);
+        EXPECT_GE(8192u - Budget, Count);
+      }
+}
+
+TEST(LLVMFrameSlotProof, ExhaustedPrefixesAreNotIndependentProofs) {
+  FrameSlotProofFixture Fixture(Arch::X86);
+  MedVar Previous = Fixture.SP, Prefix;
+  for (unsigned I = 0; I != 8192; ++I) {
+    const MedVar Next = Fixture.temp();
+    Fixture.op(0, NdOp::COPY, Next, {Previous});
+    Previous = Next;
+    if (I == 299)
+      Prefix = Next;
+  }
+  const MedVar Outer = Fixture.temp();
+  Fixture.op(0, NdOp::COPY, Outer, {Previous});
+  for (bool Bound : {false, true}) {
+    const std::vector<std::pair<MedVar, uint64_t>> Bindings;
+    MedLLVMEmitter Emitter;
+    // A completed positive prefix must not let a longer request bypass the
+    // original budget merely because this emitter has seen that prefix.
+    ASSERT_TRUE(MedLLVMProvenanceTestPeer::defaultFrameSlot(
+        Emitter, Fixture.Func, Arch::X86, Prefix, false,
+        Bound ? &Bindings : nullptr));
+    EXPECT_FALSE(MedLLVMProvenanceTestPeer::defaultFrameSlot(
+        Emitter, Fixture.Func, Arch::X86, Previous, false,
+        Bound ? &Bindings : nullptr));
+    const auto Before = MedLLVMProvenanceTestPeer::frameSlotWork(Emitter).first;
+    EXPECT_FALSE(MedLLVMProvenanceTestPeer::defaultFrameSlot(
+        Emitter, Fixture.Func, Arch::X86, Outer, false,
+        Bound ? &Bindings : nullptr));
+    EXPECT_EQ(MedLLVMProvenanceTestPeer::frameSlotWork(Emitter).first - Before,
+              8192u);
+  }
+}
+
+TEST(LLVMFrameSlotProof, CompletedQueriesKeepRecurrenceContextsSeparate) {
+  for (Arch TargetArch : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64})
+    for (unsigned Variant = 0; Variant != 6; ++Variant)
+      for (bool Reverse : {false, true}) {
+        FrameSlotProofFixture Fixture(TargetArch);
+        Fixture.recurrence(24, Variant);
+        std::vector<MedVar> Values{Fixture.Address};
+        for (const MedBlock &Block : Fixture.Func.Blocks)
+          for (const MedOp &Op : Block.Ops)
+            Values.push_back(Op.Output);
+        if (Reverse)
+          std::reverse(Values.begin(), Values.end());
+        MedLLVMEmitter Warm;
+        for (const MedVar &Value : Values) {
+          MedLLVMEmitter Cold;
+          EXPECT_EQ(MedLLVMProvenanceTestPeer::defaultFrameSlot(
+                        Warm, Fixture.Func, TargetArch, Value),
+                    MedLLVMProvenanceTestPeer::canonicalFrameSlot(
+                        Cold, Fixture.Func, TargetArch, Value));
+        }
+      }
+}
+
+TEST(LLVMFrameSlotProof, BoundAddRetryRetainsTheFirstArmsLocalProofs) {
+  for (Arch TargetArch : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64}) {
+    FrameSlotProofFixture Fixture(TargetArch);
+    MedVar Base = Fixture.SP;
+    for (unsigned I = 0; I != 128; ++I) {
+      const MedVar Next = Fixture.temp();
+      Fixture.op(0, NdOp::COPY, Next, {Base});
+      Base = Next;
+    }
+    const int Left = Fixture.addBlock(), Right = Fixture.addBlock(),
+              Join = Fixture.addBlock();
+    Fixture.edge(0, Left);
+    Fixture.edge(0, Right);
+    Fixture.edge(Left, Join);
+    Fixture.edge(Right, Join);
+    const MedVar Mixed = Fixture.temp(), Unknown = Fixture.temp(),
+                 Address = Fixture.temp();
+    PhiNode Phi;
+    Phi.Output = Mixed;
+    Phi.Args = {{Left, Base}, {Right, Unknown}};
+    Fixture.Func.Blocks[Join].Phis.push_back(Phi);
+    Fixture.op(Join, NdOp::INT_ADD, Address, {Mixed, Base});
+    const std::vector<std::pair<MedVar, uint64_t>> Bindings = {{Mixed, 8},
+                                                               {Base, 16}};
+    MedLLVMEmitter Warm, Cold;
+    for (unsigned I = 0; I != 2; ++I)
+      EXPECT_FALSE(MedLLVMProvenanceTestPeer::defaultFrameSlot(
+          Warm, Fixture.Func, TargetArch, Mixed, false, &Bindings));
+    const uint64_t Before =
+        MedLLVMProvenanceTestPeer::frameSlotWork(Warm).first;
+    const auto Result = MedLLVMProvenanceTestPeer::defaultFrameSlot(
+        Warm, Fixture.Func, TargetArch, Address, false, &Bindings);
+    ASSERT_TRUE(Result);
+    EXPECT_EQ(Result->second, 8);
+    EXPECT_EQ(Result,
+              MedLLVMProvenanceTestPeer::defaultFrameSlot(
+                  Cold, Fixture.Func, TargetArch, Address, false, &Bindings));
+    EXPECT_EQ(MedLLVMProvenanceTestPeer::frameSlotWork(Warm).first - Before,
+              MedLLVMProvenanceTestPeer::frameSlotWork(Cold).first);
+  }
+}
+
 // A bound query's answer is reused only for the same bindings.
 TEST(LLVMFrameSlotProof, BoundQueriesReuseOnlyTheirBindings) {
   for (Arch TargetArch : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64}) {
@@ -26260,6 +27042,10 @@ TEST(LLVMFrameSlotProof, SharedRecurrenceRequiresEveryArmAndAnExactRoot) {
       EXPECT_LT(Nodes, 256u);
       if (Variant == 0 || Variant == 5)
         EXPECT_GE(Hits, 20u);
+      MedLLVMEmitter DefaultEmitter;
+      EXPECT_EQ(MedLLVMProvenanceTestPeer::defaultFrameSlot(
+                    DefaultEmitter, Fixture.Func, TargetArch, Fixture.Address),
+                Slot);
     }
   }
 }
@@ -26306,6 +27092,10 @@ TEST(LLVMFrameSlotProof, ParallelStackPointerPhisAnchorOnlyInOneBlock) {
       EXPECT_EQ(Slot->first, std::make_pair(Fixture.SP.Id, Fixture.SP.SSAVer));
       EXPECT_EQ(Slot->second, 0);
     }
+    MedLLVMEmitter DefaultEmitter;
+    EXPECT_EQ(MedLLVMProvenanceTestPeer::defaultFrameSlot(
+                  DefaultEmitter, Fixture.Func, Arch::X86, Guest),
+              Slot);
   }
 }
 

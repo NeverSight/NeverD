@@ -2911,33 +2911,20 @@ llvm::Value *MedLLVMEmitter::tryResolveCodeAddressValue(
     if (Current.Kind != MedVar::Reg || Current.TheArch != TargetArch ||
         Current.Id < 0 || Current.SSAVer <= 0 || Current.Size != PointerSize)
       return false;
-    const MedCallClobber *Record = nullptr;
-    for (const MedCallClobber &Clobber : CurMedFunc->CallClobbers) {
-      if (Clobber.Value != Current)
-        continue;
-      // getVar reads the declared clobber's storage. A different-width view,
-      // a partial preservation, or competing definitions cannot establish
-      // that every bit of this occurrence is an independent runtime value.
-      if (Record || Clobber.CallSiteId == 0 ||
-          Clobber.PreservedPrefixSize != 0 ||
-          addressProvenanceVarKey(Clobber.Value) !=
-              addressProvenanceVarKey(Current))
-        return false;
-      Record = &Clobber;
-    }
-    if (!Record)
+    const MedCallClobber *Record = lookupCallClobber(Current, true);
+    // getVar reads the declared clobber's storage. A different-width view,
+    // a partial preservation, or competing definitions cannot establish
+    // that every bit of this occurrence is an independent runtime value.
+    if (!Record || Record->CallSiteId == 0 ||
+        Record->PreservedPrefixSize != 0 ||
+        addressProvenanceVarKey(Record->Value) !=
+            addressProvenanceVarKey(Current))
       return false;
-    const MedOp *Owner = nullptr;
-    for (const MedBlock &Block : CurMedFunc->Blocks)
-      for (const MedOp &Op : Block.Ops) {
-        if (Op.CallSiteId != Record->CallSiteId)
-          continue;
-        if (Owner || (Op.Opcode != NdOp::CALL && Op.Opcode != NdOp::INDIR_CALL))
-          return false;
-        Owner = &Op;
-      }
+    const MedOp *Owner = lookupUniqueCallOperation(Record->CallSiteId);
     const TargetRegInfo &TRI = getTargetRegInfo(TargetArch);
-    return Owner && !Owner->DoesNotReturn &&
+    return Owner &&
+           (Owner->Opcode == NdOp::CALL || Owner->Opcode == NdOp::INDIR_CALL) &&
+           !Owner->DoesNotReturn &&
            callClobbersRegister(*Owner, Current.RegOff, Current.Size, TRI,
                                 TargetFormat) &&
            TRI.callPreservedPrefixSize(Current.RegOff, Current.Size,

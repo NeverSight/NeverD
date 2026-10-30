@@ -509,8 +509,9 @@ void MedLLVMEmitter::defineCallClobbers(const MedOp &Op,
   if (!CurMedFunc || Op.CallSiteId == 0 || Op.PreservesCallerSaved)
     return;
 
-  for (const MedCallClobber &Clobber : CurMedFunc->CallClobbers) {
-    if (Clobber.CallSiteId != Op.CallSiteId || Clobber.Value.Size == 0)
+  for (const MedCallClobber *Record : clobbersAtCall(Op.CallSiteId)) {
+    const MedCallClobber &Clobber = *Record;
+    if (Clobber.Value.Size == 0)
       continue;
     auto *ClobberTy =
         llvm::cast<llvm::IntegerType>(sizeToType(Clobber.Value.Size));

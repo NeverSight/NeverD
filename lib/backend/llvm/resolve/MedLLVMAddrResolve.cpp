@@ -241,7 +241,7 @@ template <typename LookupDefFn, typename NumericFn>
 std::optional<LoadIndexConstraint>
 predecessorIndexConstraint(const MedFunc *Func, const MedOp *Load,
                            const BinaryImage *Image, LookupDefFn &&LookupDef,
-                           NumericFn &&IsNumeric) {
+                           NumericFn &&IsNumeric, uint64_t &VisitedNodes) {
   if (!Func || !Load)
     return std::nullopt;
   size_t Remaining = static_cast<size_t>(limits::kMaxSSANodes);
@@ -249,6 +249,7 @@ predecessorIndexConstraint(const MedFunc *Func, const MedOp *Load,
     if (Remaining == 0)
       return false;
     --Remaining;
+    ++VisitedNodes;
     return true;
   };
   std::map<int, const MedBlock *> Blocks;
@@ -402,7 +403,7 @@ template <typename LookupDefFn, typename NumericFn>
 std::optional<LoadIndexConstraint>
 postTestedIndexConstraint(const MedFunc *Func, const MedOp *SiteOp,
                           const BinaryImage *Image, LookupDefFn &&LookupDef,
-                          NumericFn &&IsNumeric) {
+                          NumericFn &&IsNumeric, uint64_t &VisitedNodes) {
   if (!Func || !SiteOp || Func->Blocks.empty())
     return std::nullopt;
   size_t Budget = static_cast<size_t>(limits::kMaxSSANodes);
@@ -410,6 +411,7 @@ postTestedIndexConstraint(const MedFunc *Func, const MedOp *SiteOp,
     if (!Budget)
       return false;
     --Budget;
+    ++VisitedNodes;
     return true;
   };
   auto key = [](const MedVar &V) {
@@ -682,11 +684,16 @@ template <typename LookupDefFn, typename NumericFn>
 std::optional<LoadIndexConstraint>
 operationIndexConstraint(const MedFunc *Func, const MedOp *Op,
                          const BinaryImage *Image, LookupDefFn &&LookupDef,
-                         NumericFn &&IsNumeric) {
-  if (auto Bound =
-          predecessorIndexConstraint(Func, Op, Image, LookupDef, IsNumeric))
+                         NumericFn &&IsNumeric, uint64_t &VisitedNodes) {
+  // Both proofs visit every block before returning a constraint. When the
+  // blocks alone exceed their budget, building per-query maps cannot succeed.
+  if (Func && Func->Blocks.size() > static_cast<size_t>(limits::kMaxSSANodes))
+    return std::nullopt;
+  if (auto Bound = predecessorIndexConstraint(Func, Op, Image, LookupDef,
+                                              IsNumeric, VisitedNodes))
     return Bound;
-  return postTestedIndexConstraint(Func, Op, Image, LookupDef, IsNumeric);
+  return postTestedIndexConstraint(Func, Op, Image, LookupDef, IsNumeric,
+                                   VisitedNodes);
 }
 
 /// Recover the one record lane selected by a conventional `base + index`
@@ -1641,6 +1648,8 @@ void MedLLVMEmitter::invalidateFeasibleEdgeDependentCaches() const {
   FrameDerivedCache.clear();
   FrameAddressCacheFor = nullptr;
   FrameAddressCache.clear();
+  FrameDependencyIndexFor = nullptr;
+  FrameDependencyComponents.clear();
   FrameReloadCacheFor = nullptr;
   FrameReloadCache.clear();
   ++FrameReloadCacheGeneration;
@@ -2166,7 +2175,8 @@ bool MedLLVMEmitter::valueIsGuardedScalarOffset(const MedVar &Value) const {
     return false;
   const auto Constraint = operationIndexConstraint(
       CurMedFunc, Scale, Img, [&](const MedVar &V) { return lookupDef(V); },
-      [&](const MedVar &V) { return constantIsStableAddressOffset(V); });
+      [&](const MedVar &V) { return constantIsStableAddressOffset(V); },
+      AddressProvenanceWork.IndexConstraintNodes);
   if (!Constraint || !Constraint->Maximum ||
       *Constraint->Maximum >= limits::kMaxJumpTableEntries ||
       Constraint->Value.Size == 0 || Constraint->Value.Size > PointerSize)
@@ -4033,7 +4043,8 @@ bool MedLLVMEmitter::valueIsStableAddressOffsetImpl(const MedVar &V,
                 [&](const MedVar &V) { return lookupDef(V); },
                 [&](const MedVar &V) {
                   return constantIsStableAddressOffset(V);
-                }));
+                },
+                AddressProvenanceWork.IndexConstraintNodes));
       };
       IndexedPointerLaneSummary ScalarLane = scalarLanes(Def, nullptr, nullptr);
       std::vector<MedVar> PointerIndexTerms;
@@ -6488,7 +6499,8 @@ MedLLVMEmitter::classifyPointerTableLoadRoles(const MedVar &V,
         operationIndexConstraint(
             CurMedFunc, Result.Load, Img,
             [&](const MedVar &V) { return lookupDef(V); },
-            [&](const MedVar &V) { return isStableNumericOffset(V); }));
+            [&](const MedVar &V) { return isStableNumericOffset(V); },
+            AddressProvenanceWork.IndexConstraintNodes));
   };
   if (!Domain.Complete || Domain.Seeds.empty()) {
     IndexedPointerLaneSummary Lane;

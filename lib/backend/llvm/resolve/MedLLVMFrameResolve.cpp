@@ -37,12 +37,14 @@
 #include <cassert>
 #include <cstdint>
 #include <functional>
+#include <limits>
 #include <map>
 #include <optional>
 #include <set>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
+#include <vector>
 
 namespace neverd {
 
@@ -152,6 +154,21 @@ bool MedLLVMEmitter::frameAddressRec(
   if (V.isConst() || !CurMedFunc)
     return false;
 
+  const auto Key = frameKey(V);
+  const uint64_t Generation = FrameReloadCacheGeneration;
+  if (FrameAddressCacheFor == CurMedFunc &&
+      FeasibleEdgeState != FeasibleEdgeCacheState::Building)
+    if (auto It = FrameAddressCache.find(Key); It != FrameAddressCache.end())
+      return It->second;
+  auto foundRoot = [&] {
+    // A witnessed path to a frame root is independent of the active DFS
+    // ancestors. A failed nested walk may instead have hit an active cycle.
+    if (FrameAddressCacheFor == CurMedFunc &&
+        Generation == FrameReloadCacheGeneration &&
+        FeasibleEdgeState != FeasibleEdgeCacheState::Building)
+      FrameAddressCache[Key] = true;
+    return true;
+  };
   const MedOp *Def = lookupDef(V);
   const PhiNode *Phi = lookupPhi(V);
   if (V.Kind == MedVar::Reg) {
@@ -173,7 +190,7 @@ bool MedLLVMEmitter::frameAddressRec(
     if (IsUnmergedLiveIn &&
         ((TRI.StackPointer != 0 && V.RegOff == TRI.StackPointer) ||
          (TRI.FramePointer != 0 && V.RegOff == TRI.FramePointer)))
-      return true;
+      return foundRoot();
   }
 
   if (!Visited.insert(frameKey(V)).second)
@@ -183,7 +200,7 @@ bool MedLLVMEmitter::frameAddressRec(
     for (const auto &[PredId, Arg] : Phi->Args)
       if (phiIncomingEdgeFeasible(*Phi, PredId) &&
           frameAddressRec(Arg, Visited))
-        return true;
+        return foundRoot();
 
   if (!Def)
     return false;
@@ -199,14 +216,14 @@ bool MedLLVMEmitter::frameAddressRec(
   case NdOp::INT_XOR:
     for (uint8_t I = 0; I < Def->NumInputs; ++I)
       if (frameAddressRec(Def->Inputs[I], Visited))
-        return true;
+        return foundRoot();
     return false;
   case NdOp::SELECT:
     if (!selectPreservesPointerValues(*Def))
       return false;
     for (uint8_t I = 1; I < Def->NumInputs; ++I)
       if (frameAddressRec(Def->Inputs[I], Visited))
-        return true;
+        return foundRoot();
     return false;
   default:
     return false;
@@ -224,9 +241,19 @@ bool MedLLVMEmitter::varMayBeFrameAddress(const MedVar &V) const {
   if (auto It = FrameAddressCache.find(Key); It != FrameAddressCache.end())
     return It->second;
 
+  const uint64_t Generation = FrameReloadCacheGeneration;
   llvm::DenseSet<std::pair<int64_t, int>> Visited;
   const bool Result = frameAddressRec(V, Visited);
-  FrameAddressCache[Key] = Result;
+  if (FrameAddressCacheFor == CurMedFunc &&
+      Generation == FrameReloadCacheGeneration &&
+      FeasibleEdgeState != FeasibleEdgeCacheState::Building) {
+    FrameAddressCache[Key] = Result;
+    // Only the completed top-level failure closes every visited dependency.
+    // Nested cycle cutoffs are not negative facts about those SSA values.
+    if (!Result)
+      for (const auto &VisitedKey : Visited)
+        FrameAddressCache[VisitedKey] = false;
+  }
   return Result;
 }
 
@@ -308,6 +335,116 @@ bool MedLLVMEmitter::isEntryStackRealignmentRoot(const MedVar &V) const {
   return EntryStackRealignmentRoots.count(addressProvenanceVarKey(V)) != 0;
 }
 
+bool MedLLVMEmitter::mayCloseFrameRecurrence(const MedVar &Dependency,
+                                             const MedVar &Anchor) const {
+  if (!CurMedFunc)
+    return true;
+  if (FrameDependencyIndexFor != CurMedFunc) {
+    // A recurrence query starts at an operand of its PHI, so Anchor already
+    // reaches Dependency. A return path requires both to share a strongly
+    // connected component. Include every opcode and PHI arm: this structural
+    // index can rule out a cycle, never prove its affine meaning or
+    // feasibility.
+    llvm::DenseMap<std::pair<int64_t, int>, size_t> Nodes;
+    std::vector<std::vector<size_t>> Edges, ReverseEdges;
+    auto node = [&](const MedVar &Value) -> std::optional<size_t> {
+      if (Value.isConst())
+        return std::nullopt;
+      auto [It, Inserted] = Nodes.try_emplace(frameKey(Value), Nodes.size());
+      if (Inserted) {
+        Edges.emplace_back();
+        ReverseEdges.emplace_back();
+      }
+      return It->second;
+    };
+    auto edge = [&](size_t From, size_t To) {
+      Edges[From].push_back(To);
+      ReverseEdges[To].push_back(From);
+    };
+    for (const MedBlock &Block : CurMedFunc->Blocks) {
+      std::map<uint64_t, size_t> RegisterPhis;
+      for (const PhiNode &Phi : Block.Phis) {
+        const auto Output = node(Phi.Output);
+        if (!Output)
+          continue;
+        for (const auto &[Pred, Arg] : Phi.Args)
+          if (auto Input = node(Arg))
+            edge(*Output, *Input);
+        // The exact proof can equate co-located guest/host frame-register
+        // PHIs. Conservatively join all co-located register views here;
+        // sameExactValue below still owns the actual frame/width checks.
+        if (Phi.Output.Kind == MedVar::Reg) {
+          auto [It, Inserted] =
+              RegisterPhis.try_emplace(Phi.Output.RegOff, *Output);
+          if (!Inserted) {
+            edge(*Output, It->second);
+            edge(It->second, *Output);
+          }
+        }
+      }
+      for (const MedOp &Op : Block.Ops) {
+        const auto Output = node(Op.Output);
+        if (!Output)
+          continue;
+        for (uint8_t I = 0; I < Op.NumInputs; ++I)
+          if (auto Input = node(Op.Inputs[I]))
+            edge(*Output, *Input);
+      }
+    }
+
+    // Iterative Kosaraju avoids adding a host-stack limit for deep SSA chains.
+    std::vector<bool> Seen(Edges.size());
+    std::vector<size_t> Order;
+    std::vector<std::pair<size_t, size_t>> Walk;
+    for (size_t Root = 0; Root < Edges.size(); ++Root) {
+      if (Seen[Root])
+        continue;
+      Seen[Root] = true;
+      Walk.emplace_back(Root, 0);
+      while (!Walk.empty()) {
+        auto &[Current, Next] = Walk.back();
+        if (Next == Edges[Current].size()) {
+          Order.push_back(Current);
+          Walk.pop_back();
+          continue;
+        }
+        const size_t Child = Edges[Current][Next++];
+        if (!Seen[Child]) {
+          Seen[Child] = true;
+          Walk.emplace_back(Child, 0);
+        }
+      }
+    }
+    const size_t Unknown = std::numeric_limits<size_t>::max();
+    std::vector<size_t> Components(Edges.size(), Unknown), Pending;
+    size_t Component = 0;
+    for (auto It = Order.rbegin(); It != Order.rend(); ++It) {
+      if (Components[*It] != Unknown)
+        continue;
+      Components[*It] = Component;
+      Pending.push_back(*It);
+      while (!Pending.empty()) {
+        const size_t Current = Pending.back();
+        Pending.pop_back();
+        for (size_t Parent : ReverseEdges[Current])
+          if (Components[Parent] == Unknown) {
+            Components[Parent] = Component;
+            Pending.push_back(Parent);
+          }
+      }
+      ++Component;
+    }
+    FrameDependencyComponents.clear();
+    for (const auto &[Key, Index] : Nodes)
+      FrameDependencyComponents.try_emplace(Key, Components[Index]);
+    FrameDependencyIndexFor = CurMedFunc;
+  }
+  const auto From = FrameDependencyComponents.find(frameKey(Dependency));
+  const auto To = FrameDependencyComponents.find(frameKey(Anchor));
+  return From == FrameDependencyComponents.end() ||
+         To == FrameDependencyComponents.end() || From->second == To->second;
+}
+
 std::optional<med_llvm::SlotKey> MedLLVMEmitter::canonicalFrameSlotKey(
     const MedVar &V, bool RequireEntryStackPointer,
     const ControlValueBindings *Bindings, size_t *SharedProofBudget) const {
@@ -327,7 +464,7 @@ std::optional<med_llvm::SlotKey> MedLLVMEmitter::canonicalFrameSlotKey(
     if (auto It = ClosedFrameSlotCache.find(QueryKey);
         It != ClosedFrameSlotCache.end()) {
       ++AddressProvenanceWork.FrameSlotCacheHits;
-      return It->second;
+      return It->second.Slot;
     }
   }
   // The walk reads the budget only to stop when it is spent, and once it is
@@ -380,7 +517,7 @@ std::optional<med_llvm::SlotKey> MedLLVMEmitter::canonicalFrameSlotKey(
     if (auto It = BoundFrameSlotCache.find(*BoundKey);
         It != BoundFrameSlotCache.end()) {
       ++AddressProvenanceWork.FrameSlotCacheHits;
-      return It->second;
+      return It->second.Slot;
     }
   }
   // Building/publishing feasible edges invalidates dependent proofs, including
@@ -409,8 +546,19 @@ std::optional<med_llvm::SlotKey> MedLLVMEmitter::canonicalFrameSlotKey(
     --RemainingSlotProofNodes;
     ++ConsumedNodes;
     ++AddressProvenanceWork.FrameSlotNodes;
+    ++AddressProvenanceWork.FrameSlotEvaluatedNodes;
     return true;
   };
+  // A dependency in a different component from every active ancestor cannot
+  // reach a query-local recurrence assumption. Before any arm has published
+  // slots, its failed walk has the same context here. Replay only when that
+  // failure must propagate to the top, retaining the original node charge.
+  // Explicit/shared budgets retain their existing walk/replay accounting.
+  const bool ReuseClosedDependencies = Cacheable || BoundKey.has_value();
+  if (ReuseClosedDependencies)
+    (void)mayCloseFrameRecurrence(V, V);
+  std::unordered_map<size_t, size_t> ActiveComponents;
+  size_t RetryingAdditions = 0;
   std::unordered_map<AddressProvenanceVarKey, med_llvm::SlotKey,
                      FrameProofKeyHash>
       ProvenSlots;
@@ -488,6 +636,8 @@ std::optional<med_llvm::SlotKey> MedLLVMEmitter::canonicalFrameSlotKey(
       return std::nullopt;
     if (sameExactValue(Start, Target))
       return int64_t{0};
+    if (!mayCloseFrameRecurrence(Start, Target))
+      return std::nullopt;
     const AffinePair Pair{addressProvenanceVarKey(Start),
                           addressProvenanceVarKey(Target)};
     // Include depth because a failure at the recursion limit is not evidence
@@ -580,11 +730,63 @@ std::optional<med_llvm::SlotKey> MedLLVMEmitter::canonicalFrameSlotKey(
       ++AddressProvenanceWork.FrameSlotCacheHits;
       return It->second;
     }
+    std::optional<size_t> Component;
+    if (ReuseClosedDependencies && Generation == FrameReloadCacheGeneration &&
+        FrameDependencyIndexFor == CurMedFunc) {
+      if (auto It = FrameDependencyComponents.find(frameKey(Cur));
+          It != FrameDependencyComponents.end())
+        Component = It->second;
+      if (Component && ActiveComponents[*Component] == 0 &&
+          ProvenSlots.empty() && RetryingAdditions == 0) {
+        const ClosedFrameSlotProof *Known = nullptr;
+        if (Cacheable) {
+          auto It = ClosedFrameSlotCache.find({Key, RequireEntryStackPointer});
+          if (It != ClosedFrameSlotCache.end())
+            Known = &It->second;
+        } else {
+          auto NestedKey = *BoundKey;
+          std::get<0>(NestedKey) = Key;
+          auto It = BoundFrameSlotCache.find(NestedKey);
+          if (It != BoundFrameSlotCache.end())
+            Known = &It->second;
+        }
+        if (Known && Known->WalkFailed && Known->WalkNodes != 0 &&
+            (Known->Complete || RemainingSlotProofNodes < Known->WalkNodes)) {
+          // This entry already charged one node. An incomplete walk proves
+          // only exhaustion under its original or a smaller remaining budget.
+          const size_t Rest = Known->WalkNodes - 1;
+          const bool Exhausted =
+              !Known->Complete || Rest > RemainingSlotProofNodes;
+          const size_t Charge = Exhausted ? RemainingSlotProofNodes : Rest;
+          RemainingSlotProofNodes -= Charge;
+          ConsumedNodes += Charge;
+          AddressProvenanceWork.FrameSlotNodes += Charge;
+          RanOut |= Exhausted;
+          if (!Exhausted)
+            AddressProvenanceWork.FrameSlotCacheHits += Known->WalkCacheHits;
+          ++AddressProvenanceWork.FrameSlotCacheHits;
+          return std::nullopt;
+        }
+      }
+    }
     if (!Active.insert(Key).second)
       return std::nullopt;
-    auto Cleanup = llvm::scope_exit([&] { Active.erase(Key); });
+    if (Component)
+      ++ActiveComponents[*Component];
+    const MedOp *Def = lookupDef(Cur);
+    // With bindings, ADD may retry the other base after a failed first one.
+    // That continuation could need slots the cached failed walk had visited.
+    const bool CanRetry = Bindings && Def && Def->Opcode == NdOp::INT_ADD &&
+                          Def->NumInputs >= 2 && !Def->Inputs[0].isConst() &&
+                          !Def->Inputs[1].isConst();
+    RetryingAdditions += CanRetry;
+    auto Cleanup = llvm::scope_exit([&] {
+      Active.erase(Key);
+      if (Component)
+        --ActiveComponents[*Component];
+      RetryingAdditions -= CanRetry;
+    });
     auto Proof = [&]() -> std::optional<med_llvm::SlotKey> {
-      const MedOp *Def = lookupDef(Cur);
       // A runtime definition or entry realignment is not an identity copy of
       // the ordinary entry register. Keep the exact definition as the origin
       // of derived slots, without inventing a displacement from entry SP.
@@ -707,6 +909,9 @@ std::optional<med_llvm::SlotKey> MedLLVMEmitter::canonicalFrameSlotKey(
     return Proof;
   };
   auto Result = rec(V, 0);
+  const bool WalkFailed = !Result;
+  const uint64_t WalkCacheHits =
+      AddressProvenanceWork.FrameSlotCacheHits - CacheHitsBefore;
   // The walk closes a stack-pointer cycle only back to the value it resolves:
   // an inner loop's merge on an outer loop's back edge is a cycle that avoids
   // it.  The function's affine frame keys close every cycle at once, so an
@@ -719,7 +924,9 @@ std::optional<med_llvm::SlotKey> MedLLVMEmitter::canonicalFrameSlotKey(
   const bool Published = Generation == FrameReloadCacheGeneration &&
                          FeasibleEdgeState != FeasibleEdgeCacheState::Building;
   if (Cacheable && ClosedFrameSlotCacheFor == CurMedFunc && Published)
-    ClosedFrameSlotCache.emplace(QueryKey, Result);
+    ClosedFrameSlotCache.emplace(
+        QueryKey, ClosedFrameSlotProof{Result, ConsumedNodes, WalkCacheHits,
+                                       WalkFailed, !RanOut});
   if (SharedBudgetReplayable && SharedBudgetFrameSlotCacheFor == CurMedFunc &&
       Published) {
     SharedBudgetFrameSlotProof &Known = SharedBudgetFrameSlotCache[QueryKey];
@@ -731,7 +938,10 @@ std::optional<med_llvm::SlotKey> MedLLVMEmitter::canonicalFrameSlotKey(
       Known.Nodes = std::max(Known.Nodes, StartingBudget);
   }
   if (BoundKey && BoundFrameSlotCacheFor == CurMedFunc && Published)
-    BoundFrameSlotCache.emplace(std::move(*BoundKey), Result);
+    BoundFrameSlotCache.emplace(std::move(*BoundKey),
+                                ClosedFrameSlotProof{Result, ConsumedNodes,
+                                                     WalkCacheHits, WalkFailed,
+                                                     !RanOut});
   return Result;
 }
 

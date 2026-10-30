@@ -3921,6 +3921,38 @@ later bodies or finalizing EH. The original diagnostic remains authoritative;
 an early exit publishes no partial IR. A new emission resets the failure state
 and its generation-owned caches as usual.
 
+Implicit call-clobber records share the emitter's per-function definition
+index. Variable materialization keeps the first record for the same MedIR
+identity, including narrower views; code-pointer provenance separately rejects
+duplicate records, partial preservation and ambiguous call owners. Per-call
+lists retain source order. Repeated operands and calls therefore inspect their
+own records instead of scanning every clobber in a large function. Function
+changes and new module emissions rebuild these indexes.
+
+Index constraints visit every structural block before producing a bound.
+When the block count alone exceeds their existing node budget, the shared
+query refuses immediately rather than repeatedly allocating doomed indexes.
+This does not change which constraints the bounded proof can establish.
+
+Frame reload dataflow records source-set additions while merging, preserving
+MedIR value equality and insertion order. Uninitialized or invalid states keep
+their flags but need no reaching-source set: a successful reload cannot consume
+them, and the only recovering transfer is a full-width exact STORE that
+replaces all prior sources. This avoids propagating irrelevant source unions
+through poisoned paths while retaining later overwrite recovery.
+A deduplicated worklist visits the structural CFG in reverse postorder, so an
+acyclic join receives its predecessors before propagating downstream. Loops
+still iterate until their edge states stabilize; scheduling drops no edge or
+source and introduces no new proof assumption.
+The query restricts propagation to structural predecessors of the reload.
+Writes after the reload remain relevant when an ordinary or exceptional
+backedge can return to it; non-returning suffixes cannot supply its value.
+
+Frame-address reachability retains witnessed paths to frame roots. Only a
+completed top-level failure can mark all visited dependencies as rootless;
+a nested cycle cutoff is never published as a negative fact. Feasible-edge
+publication and function changes retire these answers with their owner.
+
 The LLVM pointer-table role proof treats a frame slot as a PHI over the
 values stored to it (`collectFrameReloadSources`). As a PHI's recurrent arm
 does, a stored value that is the slot's reload advanced by a stable offset
@@ -3936,6 +3968,22 @@ therefore takes the function's affine frame keys (`affineFrameKey`): one
 optimistic fixed point over copies, extensions, constant additions and PHIs
 from the frame roots, under the walk's edge feasibility, which closes every
 cycle at once. A PHI that settled while an arm stayed unreached has no key.
+Recurrence searches first consult the function's SSA dependency components.
+An operand outside its PHI's strongly connected component cannot return to
+that PHI, so its acyclic prefix needs no recurrence search. The index includes
+all opcode inputs and PHI arms, plus conservative links between co-located
+register PHI views. It grants no affine fact: the ordinary walk still owns
+width, offset, root and feasible-edge checks. Each visit still consumes the
+shared saturating budget. Function, module and feasible-edge-generation changes
+retire the index with the other dependent caches.
+Default-budget queries may replay an earlier failed walk only upon entering a
+dependency component with no active ancestor, before any local slot proof has
+been published, and while no enclosing bound ADD can retry another base. The
+replay preserves the original node charge and precedes the ordinary top-level
+affine fallback. An exhausted walk can only replay exhaustion under the same
+or a smaller remaining budget. Successful nested queries still walk normally;
+cache warming cannot extend the proof budget. Bound keys retain their exact
+ordered bindings, and shared/explicit-budget walks keep their existing path.
 
 A pointer the code chooses between a runtime value and a static object of a
 mirrored segment (`p = i < n ? &buf[i] : &empty`) is no table address, so

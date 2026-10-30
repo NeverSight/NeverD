@@ -995,6 +995,10 @@ MedLLVMEmitter::emit(const std::vector<MedFunc> &Funcs, llvm::LLVMContext &LCtx,
   DefPhiIndexFor = nullptr;
   DefIndex.clear();
   PhiIndex.clear();
+  CallClobberIndex.clear();
+  CallSiteClobberIndex.clear();
+  CallOperationIndex.clear();
+  CallClobberRecordsIndexed = 0;
   CodeIdentityOccurrenceCacheFor = nullptr;
   CodeIdentityOccurrenceCache.clear();
   FeasibleEdgesFor = nullptr;
@@ -1011,6 +1015,8 @@ MedLLVMEmitter::emit(const std::vector<MedFunc> &Funcs, llvm::LLVMContext &LCtx,
   FrameDerivedCache.clear();
   FrameAddressCacheFor = nullptr;
   FrameAddressCache.clear();
+  FrameDependencyIndexFor = nullptr;
+  FrameDependencyComponents.clear();
   invalidateFrameReloadSourceCache();
   AddrPredCacheFor = nullptr;
   SlotAddressEscapesCache.clear();

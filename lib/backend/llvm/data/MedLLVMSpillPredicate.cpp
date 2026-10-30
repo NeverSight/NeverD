@@ -1429,13 +1429,23 @@ bool MedLLVMEmitter::collectFrameReloadSourcesUncached(
     std::vector<MedVar> Values;
   };
   auto addUnique = [](std::vector<MedVar> &Values, const MedVar &Value) {
-    if (std::find(Values.begin(), Values.end(), Value) == Values.end())
-      Values.push_back(Value);
+    if (std::find(Values.begin(), Values.end(), Value) != Values.end())
+      return false;
+    Values.push_back(Value);
+    return true;
   };
   auto sameState = [](const ReachingState &A, const ReachingState &B) {
     if (A.Reachable != B.Reachable || A.Uninitialized != B.Uninitialized ||
-        A.Invalid != B.Invalid || A.Values.size() != B.Values.size())
+        A.Invalid != B.Invalid)
       return false;
+    // These states cannot produce a reload value. Only a full-width exact
+    // STORE can recover them, and that STORE replaces every reaching source.
+    if (!A.Reachable || A.Uninitialized || A.Invalid)
+      return true;
+    if (A.Values.size() != B.Values.size())
+      return false;
+    if (A.Values == B.Values)
+      return true;
     for (const MedVar &Value : A.Values)
       if (std::find(B.Values.begin(), B.Values.end(), Value) == B.Values.end())
         return false;
@@ -1444,13 +1454,21 @@ bool MedLLVMEmitter::collectFrameReloadSourcesUncached(
   auto mergeInto = [&](ReachingState &Dst, const ReachingState &Src) {
     if (!Src.Reachable)
       return false;
-    ReachingState Before = Dst;
+    bool Changed = !Dst.Reachable ||
+                   (!Dst.Uninitialized && Src.Uninitialized) ||
+                   (!Dst.Invalid && Src.Invalid);
     Dst.Reachable = true;
     Dst.Uninitialized |= Src.Uninitialized;
     Dst.Invalid |= Src.Invalid;
+    if (Dst.Uninitialized || Dst.Invalid) {
+      Dst.Values.clear();
+      return Changed;
+    }
+    // The flags and union only grow. Record additions directly instead of
+    // copying the old set and searching the enlarged set for every old value.
     for (const MedVar &Value : Src.Values)
-      addUnique(Dst.Values, Value);
-    return !sameState(Before, Dst);
+      Changed |= addUnique(Dst.Values, Value);
+    return Changed;
   };
   // The reload is fixed for this query. Reaching values and edge bindings
   // change during iteration, but the unbound alias proof for an exact write
@@ -1608,16 +1626,55 @@ bool MedLLVMEmitter::collectFrameReloadSourcesUncached(
       }
     }
   }
+  // Only predecessors of this exact LOAD can contribute a reaching source.
+  // Structural predecessors include backedges and exceptional edges, so
+  // later writes remain visible whenever control can return to the LOAD.
+  std::set<int> Relevant{Site.BlockId};
+  std::vector<int> Pending{Site.BlockId};
+  while (!Pending.empty()) {
+    const int Id = Pending.back();
+    Pending.pop_back();
+    for (int Pred : FrameReloadIndex.Blocks.at(Id).StructuralPreds)
+      if (Relevant.insert(Pred).second)
+        Pending.push_back(Pred);
+  }
+  if (!Relevant.count(FrameReloadIndex.EntryBlockId))
+    return false;
   InStates[FrameReloadIndex.EntryBlockId] = Entry;
-  std::vector<int> Work{FrameReloadIndex.EntryBlockId};
+  // Process forward joins after their acyclic predecessors. A LIFO worklist
+  // reaches a long chain of joins before each delayed STORE arm, repeatedly
+  // propagating every partial source set through the remaining chain.
+  std::vector<std::pair<int, size_t>> DFS{{FrameReloadIndex.EntryBlockId, 0}};
+  std::set<int> Visited{FrameReloadIndex.EntryBlockId};
+  std::vector<int> PostOrder;
+  while (!DFS.empty()) {
+    auto &[Id, Next] = DFS.back();
+    const auto &Successors = FrameReloadIndex.Blocks.at(Id).Successors;
+    if (Next == Successors.size()) {
+      PostOrder.push_back(Id);
+      DFS.pop_back();
+      continue;
+    }
+    const int Successor = Successors[Next++];
+    if (Relevant.count(Successor) && Visited.insert(Successor).second)
+      DFS.emplace_back(Successor, 0);
+  }
+  std::map<int, size_t> Order;
+  for (auto It = PostOrder.rbegin(); It != PostOrder.rend(); ++It)
+    Order.emplace(*It, Order.size());
+  // A pending block reads its latest merged state. Multiple predecessors can
+  // update it before that visit without adding duplicate worklist entries.
+  std::set<std::pair<size_t, int>> Work{{0, FrameReloadIndex.EntryBlockId}};
   while (!Work.empty()) {
-    int BlockId = Work.back();
-    Work.pop_back();
+    const int BlockId = Work.begin()->second;
+    Work.erase(Work.begin());
     auto BlockIt = FrameReloadIndex.Blocks.find(BlockId);
     if (BlockIt == FrameReloadIndex.Blocks.end())
       return false;
     const FrameReloadBlock &Block = BlockIt->second;
     for (int SuccId : Block.Successors) {
+      if (!Relevant.count(SuccId))
+        continue;
       if (!consume())
         return false;
       if (FrameReloadIndex.Blocks.find(SuccId) == FrameReloadIndex.Blocks.end())
@@ -1633,7 +1690,7 @@ bool MedLLVMEmitter::collectFrameReloadSourcesUncached(
         continue;
       Previous = Next;
       if (mergeInto(InStates[SuccId], Next))
-        Work.push_back(SuccId);
+        Work.emplace(Order.at(SuccId), SuccId);
     }
   }
 
