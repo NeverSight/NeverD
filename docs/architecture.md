@@ -1117,7 +1117,9 @@ answer cannot authorize an independent call. Incomplete budget attempts are
 not recorded. Nested registration callee indexes copy the caller's
 unchanged-image relocation inventory, sharing its runtime-pointer-role
 computation while keeping callee contracts and work budgets separate. An
-index from another image is ignored.
+index from another image is ignored. A change of work account, SEH analysis
+level or C++ proof ancestry still starts a fresh proof; it retains only this
+image inventory from an active owner.
 
 Core callers opt in through `PipelineOptions::AnalysisCache` and must reset it
 before input or policy mutation; image pointers alone do not establish validity.

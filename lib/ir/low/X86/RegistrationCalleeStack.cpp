@@ -1201,7 +1201,12 @@ std::optional<uint32_t> getCheckedX86CalleeStackPop(const BinaryImage &Image,
     return Owner->stackPop(Target);
   size_t LocalWork = 0;
   size_t &Work = CumulativeWork ? *CumulativeWork : LocalWork;
-  return freshStackPopAnswer(Image, Target, Work, nullptr).Pop;
+  // A different work account, SEH level or C++ ancestry still requires a
+  // fresh proof. Those boundaries do not change image-only relocation roles.
+  return freshStackPopAnswer(
+             Image, Target, Work,
+             registration_abi::StackProofOwnerScope::relocationRoots(Image))
+      .Pop;
 }
 
 std::optional<uint32_t> RegistrationCallCalleeIndex::stackPop(va_t Target) {
