@@ -2280,3 +2280,5 @@ LLVM C의 합성 스택 슬롯은 실행 중 선택한 64비트 절반을 읽기
 `MedMutableSource.SharedRejectionChainsPreserveEveryCommittedPrefix`는 두 공통 실패 출구를 가진 2048단계 조건 분기 체인을 정방향과 역방향 블록 배치로 검사한다. 두 C 경로를 O0/O2와 UBSan으로 실행하여 초기·중간·마지막 실패 및 성공의 반환값과 이미 반영된 게스트 메모리 접두 부분을 비교한다.
 
 `NeverDX86UndefinedEffectsTests`의 `X86ArithmeticUndefinedAudit`는 기존 레지스터 PADDB/W/D/Q 및 PSUBB/W/D/Q의 정확한 인코딩, 독립적인 레인 순환, 플래그 보존과 전체 512비트 레지스터를 검사합니다. 표준 x64 즉시값 IMUL은 부호 확장한 imm8/imm32와 독립적인 미정의 플래그 네 개를 연결합니다. 메모리, MMX/VEX 및 바이트와 디코더 정보가 불일치하는 형식은 별도 허용 증명이 필요합니다. `ArchitecturalChoiceSourcePackedArithmeticAndImmediateProducts`는 O0/O2와 ASan/UBSan에서 두 C 경로를 실행하여 입력 부족이나 불일치 시 명령 전체의 대상과 커서가 아직 반영되지 않았는지 검사합니다.
+
+`X86PackedSelectionAudit`는 정규 레지스터 형식 PSHUFD, PCMPEQD, PAND, PACKSSDW/PACKSSWB, PUNPCKLQDQ, MOVMSKPD를 검사합니다. 256개 셔플 제어값, 부호 있는 포화 경계, 부분 일치, 레지스터 별칭, 전체 벡터 레지스터와 플래그 보존을 다룹니다. 기존 메모리 PAND는 읽기나 대상 변경 전에 [Intel 정렬 요구 사항](https://cdrdv2-public.intel.com/671436/253665-sdm-vol-1.pdf)을 유지합니다. `X86LegacyAlignedMove.PackedAnd*`는 주소 순환, 명시적 FS/GS 기준 주소, 사용할 수 없는 메모리, 실패 시 상태 보존을 검사합니다. 선택값 소스 예제는 ASan/UBSan과 O0/O2로 두 C 경로를 실행하고 동적 정렬 검사를 유지합니다. 불투명한 프로세서 상태를 인증하지는 않습니다.
