@@ -130,9 +130,20 @@ device queries, application model/features, property variants, performance
 data and biometrics. Inclusion of a header does not establish coverage of
 private exports or other Windows versions.
 
+Further independent units cover SD Port, Stream Class, PortCls/DRM and display
+miniport declarations, plus user-mode D3DKMT, CLFS and TPM base services. Their
+records and callback dependencies pass the same per-target layout checks;
+kernel providers also retain the x86 WDK default calling convention.
+CLFS selects its explicit API set so transitive WDK legacy CRT declarations
+cannot take priority over the separately selected UCRT declarations.
+The pinned RDBSS `rxcontx.h` declares two different anonymous enums with the
+same `RX_CONTEXT_CREATE_FLAGS` typedef in C mode. The independent compiler
+rejects that unit, so it remains outside this catalog; changing a declaration
+to suppress the conflict would require a separately checked bridge.
+
 `scripts/check_microsoft_provider_abis.py --generated /path/to/microsoft-windows
 --output /path/to/abi-results --neverd build-release/bin/neverd` compares
-representative functions from those 19 units against the original compiler
+representative functions from those 26 units against the original compiler
 declarations on all three targets. It retains decoration, calling convention,
 parameter/return attributes and by-value record alignment, excluding only DLL
 visibility. Each published prototype is selected with its complete dependent
@@ -141,7 +152,11 @@ types; unrelated compiler intrinsics are not compiled as replacement builtins.
 `scripts/check_windows_provider_calls.py --generated /path/to/microsoft-windows
 --cache /path/to/package-cache --output /path/to/call-results
 --neverd build-release/bin/neverd` builds import-only ETW, PathCch and WinRT
-fixtures with the retained SDK headers and pinned target import libraries.
+fixtures, including D3DKMT, CLFS and TPM calls, with the retained SDK headers
+and pinned target import libraries. Add `--kernel` for SD Port, PortCls and
+Stream Class callers compiled from the WDK headers. Those driver fixtures use
+synthetic import libraries whose symbols come from the original compiler,
+including x86 stack decoration; they do not execute an API implementation.
 Both C routes must compile, retain each API call without unknown operands,
 and match its original compiler ABI. These checks do not execute the Windows
 API or a driver. The generation must include `--ucrt` to retain the target

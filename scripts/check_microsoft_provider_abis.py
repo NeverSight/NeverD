@@ -28,6 +28,10 @@ CASES = {
     "Battery": ("BatteryClassInitializeDevice", "BatteryClassIoctl"),
     "HIDPort": ("HidRegisterMinidriver", "HidP_GetCollectionDescription"),
     "SmartCard": ("SmartcardDeviceControl", "SmartcardT0Request"),
+    "SDPort": ("SdPortInitialize", "SdPortGetPciConfigSpace"),
+    "StreamClass": ("StreamClassRegisterAdapter", "StreamClassGetPhysicalAddress"),
+    "AudioPort": ("PcAddAdapterDevice", "PcNewPort"),
+    "GraphicsKernel": ("DxgkInitialize", "DlGetDeviceBase"),
     "EventTracing": ("EventRegister", "EventWriteTransfer", "EventUnregister"),
     "Path": ("PathCchCombineEx", "PathCchCanonicalizeEx"),
     "WinRTStrings": ("WindowsCreateString", "WindowsDeleteString", "RoInitialize"),
@@ -38,6 +42,9 @@ CASES = {
     "PropertyVariants": ("InitPropVariantFromBuffer", "PropVariantToStringAlloc"),
     "PerformanceData": ("PdhOpenQueryW", "PdhAddCounterW"),
     "Biometrics": ("WinBioOpenSession", "WinBioCloseSession"),
+    "GraphicsThunk": ("D3DKMTCreateDevice", "D3DKMTDestroyDevice"),
+    "CLFS": ("CreateLogFile", "ReserveAndAppendLog"),
+    "TPM": ("Tbsi_Context_Create", "Tbsip_Submit_Command"),
 }
 
 

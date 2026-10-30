@@ -751,3 +751,97 @@ int main(void) {
 )C",
              {}, nullptr, true, true);
 }
+
+TEST_F(InterpreterMachineRegionSourceTest,
+       ArchitecturalChoiceSourcePackedArithmeticAndImmediateProducts) {
+  if (!hasCrossTargetClang())
+    GTEST_SKIP() << "choice source execution requires clang";
+  // Packed lanes have no arbitrary outputs. Each immediate product consumes
+  // four independently supplied flag bits before committing any of its state.
+  auto Image =
+      loadRegion({0x66, 0x0f, 0xfc, 0xc1, 0x66, 0x0f, 0xfb, 0xd3, 0x48, 0x6b,
+                  0xc1, 0xfd, 0x4d, 0x69, 0xc8, 0x78, 0x56, 0x34, 0x12, 0xc3});
+  ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+  auto Options = regionOptions(Entry + 19, ExitKind::Return);
+  Options.UndefinedModel = SpecializationUndefinedModel::FreshScalarV1;
+  const auto Result = specializeBinaryInterpreter(*Image, Entry, Options);
+  ASSERT_TRUE(Result.complete()) << Result.Diagnostic;
+  auto Wrapped = wrapInterpreterMachineRegionChoiceSourceX64V1(Result, Options);
+  ASSERT_TRUE(bool(Wrapped)) << llvm::toString(Wrapped.takeError());
+  Wrapped->Source.Function.Name = "generic_machine_region";
+  emitAndRun(Wrapped->Source, R"C(
+#include <stdint.h>
+#include <string.h>
+typedef struct {uint64_t pc,ordinal,bits,value;} choice_t;
+typedef struct {
+  uint64_t gpr[16],flags,queries,count,cursor,xmm[16][2],pc,kind;
+  uint64_t choices,choice_count,choice_cursor;
+} state_t;
+static uint64_t product(uint64_t bits,int64_t factor,unsigned *overflow) {
+  int64_t signed_input, signed_low;
+  memcpy(&signed_input,&bits,8);
+  __int128 full=(__int128)signed_input*factor;
+  uint64_t low=(uint64_t)full;
+  memcpy(&signed_low,&low,8);
+  *overflow=full!=(__int128)signed_low;
+  return low;
+}
+static uint64_t product_flags(uint64_t old,unsigned overflow,const choice_t *tape) {
+  return (old&~UINT64_C(0x8d5))|overflow|(overflow<<11)|
+    (tape[0].value<<7)|(tape[1].value<<6)|(tape[2].value<<4)|(tape[3].value<<2);
+}
+int main(void) {
+  const uint64_t values[]={0,1,UINT64_MAX,UINT64_C(0x8000000000000000),
+    UINT64_C(0x7fffffffffffffff),UINT64_C(0x100000005)};
+  const unsigned corrupt[]={0,3,4,7};
+  for(unsigned seed=0;seed<16;++seed) for(unsigned mode=0;mode<13;++mode) {
+    uint64_t stack[8],expected_stack[8];
+    struct {uint64_t before;state_t s;uint64_t after;} box,expected;
+    choice_t tape[8],expected_tape[8];
+    memset(&box,0,sizeof(box));memset(stack,0xa5,sizeof(stack));
+    box.before=UINT64_C(0x123456789abcdef0);box.after=~box.before;
+    for(unsigned i=0;i<16;++i) {
+      box.s.gpr[i]=UINT64_C(0xdeadbeef00000000)+i;
+      box.s.xmm[i][0]=UINT64_C(0xff01fe02fd03fc04)*(1+i+seed);
+      box.s.xmm[i][1]=UINT64_C(0x80ff7f000001ffff)*(1+i+seed);
+    }
+    box.s.gpr[1]=values[seed%6];box.s.gpr[8]=values[(seed+3)%6];
+    box.s.gpr[4]=(uintptr_t)&stack[4];stack[4]=0x12340;
+    box.s.flags=0x202|((seed&1)?0x400:0)|((seed&2)?0x8d5:0);
+    box.s.pc=0xabcdef;box.s.kind=0x987654;
+    for(unsigned i=0;i<8;++i)
+      tape[i]=(choice_t){UINT64_C(0x140001000)+(i<4?8:12),i%4,1,
+                         ((seed^(i<4?0:15))>>(i%4))&1};
+    box.s.choices=(uintptr_t)tape;box.s.choice_count=mode<9?mode:8;
+    if(mode>=9) ++tape[corrupt[mode-9]].ordinal;
+    expected=box;memcpy(expected_stack,stack,sizeof(stack));
+    memcpy(expected_tape,tape,sizeof(tape));
+    unsigned char *dst=(unsigned char *)expected.s.xmm[0];
+    const unsigned char *src=(const unsigned char *)box.s.xmm[1];
+    for(unsigned i=0;i<16;++i) dst[i]=(unsigned char)(dst[i]+src[i]);
+    for(unsigned i=0;i<2;++i) expected.s.xmm[2][i]-=box.s.xmm[3][i];
+    unsigned committed=mode<9?(mode<4?0:mode<8?4:8):(corrupt[mode-9]<4?0:4);
+    unsigned overflow=0;
+    if(committed>=4) {
+      expected.s.gpr[0]=product(box.s.gpr[1],-3,&overflow);
+      expected.s.flags=product_flags(expected.s.flags,overflow,tape);
+    }
+    if(committed==8) {
+      expected.s.gpr[9]=product(box.s.gpr[8],0x12345678,&overflow);
+      expected.s.flags=product_flags(expected.s.flags,overflow,tape+4);
+      expected.s.pc=0x12340;expected.s.kind=3;expected.s.gpr[4]+=8;
+    } else {
+      expected.s.pc=UINT64_C(0x140001000)+(committed?12:8);expected.s.kind=0;
+    }
+    expected.s.choice_cursor=committed;
+    uint64_t status=committed==8?0:mode<9?5:6;
+    if(generic_machine_region(MACHINE_ARG(&box.s))!=status) return 1;
+    if(memcmp(&box,&expected,sizeof(box))) return 2;
+    if(memcmp(stack,expected_stack,sizeof(stack))) return 3;
+    if(memcmp(tape,expected_tape,sizeof(tape))) return 4;
+  }
+  return 0;
+}
+)C",
+             {}, nullptr, true, true);
+}

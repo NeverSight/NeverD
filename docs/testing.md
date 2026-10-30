@@ -100,6 +100,14 @@ does not certify native ARM64 execution. The optional
 [`check_windows_provider_calls.py`](../scripts/check_windows_provider_calls.py)
 uses the pinned Microsoft SDK/import libraries to compile both emitted routes
 and compare their API compiler contracts across x86, x64 and ARM64.
+Its D3DKMT, CLFS and TPM cases exercise record pointers, six-argument calls
+and pointer-sized results. With `--kernel`, the WDK fixtures cover SD Port's
+byte-width offset, PortCls's callback and fifth argument, and Stream Class's
+void result. Their synthetic imports retain the original compiler's x86
+decoration. This checks source reconstruction and ABI, not driver execution.
+`TypeRender.KeywordNamespacesKeepTheirDistinctSpellings` checks the shared
+keyword index across all seven output languages, including C++'s C keywords
+and Rust's raw-identifier exceptions.
 `HighCSourceCalls.CallbackBorrowsDeclareNestedRecordTags` additionally checks
 that records used only inside callbacks receive the correct struct/union
 forward declarations, without reconstructing their layouts.
@@ -17678,3 +17686,5 @@ source but do not qualify privileged execution.
 `InterpreterMachineRegionSourceTest.ArchitecturalChoiceSource*` executes both C routes at O0/O2 with ASan/UBSan. Compaction regressions compare complete state, memory and records after branch-arm failures and a later loop visit. A 48-instruction sequence checks success, exhaustion and mismatch at early, middle and final records. A separate 3300-instruction case exceeds the former wrapper block capacity and checks both C exports without compiling them. Run `NeverDInterpreterMachineStateTests`; these owned fixtures do not certify an arbitrary native function.
 
 `MedMutableSource.SharedRejectionChainsPreserveEveryCommittedPrefix` checks a 2048-stage conditional chain with two shared rejection exits in forward and reversed block layouts. Both C routes run at O0/O2 with UBSan, comparing return values and committed guest-memory prefixes at early, middle and final failures and on success.
+
+`X86ArithmeticUndefinedAudit` in `NeverDX86UndefinedEffectsTests` checks exact legacy register PADDB/W/D/Q and PSUBB/W/D/Q encodings, independent lane wraparound, unchanged flags and complete 512-bit register banks. Canonical x64 immediate IMUL forms bind sign-extended imm8/imm32 values and four independent undefined flags. Memory, MMX/VEX and inconsistent byte/detail forms retain their separate admission requirements. `ArchitecturalChoiceSourcePackedArithmeticAndImmediateProducts` executes both C routes at O0/O2 with ASan/UBSan, checking whole-instruction exhaustion and mismatches before destination or cursor commit.
