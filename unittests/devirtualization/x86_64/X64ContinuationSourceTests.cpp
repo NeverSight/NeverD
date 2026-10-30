@@ -563,7 +563,7 @@ int main(void) {
     if(bad==14)s.cs.attributes|=0x4000;
     if(bad==15)s.cs.selector|=3;
     if(bad==16)s.pc++;
-    if(bad==17)s.flags|=0x10000;
+    if(bad==17)s.flags|=0x100;
     if(bad==18)s.gpr[4]=UINT64_MAX-7;
     if(bad==19)s.gpr[4]=0x0100000000000000ULL;
     if(bad==20)s.gdt.limit=38;
@@ -885,7 +885,7 @@ int main(void) {
       state_v5_t s=seed_v5(0x1000), want;
       s.core.core.core.gpr[1]=pcs[pc];
       s.core.core.core.gpr[11]=bit==64?UINT64_MAX:1ULL<<bit;
-      s.core.core.core.flags|=0x40000;
+      s.core.core.core.flags|=0x40000|((bit&1)<<16)|((bit&6)<<11)|((bit&24)<<16);
       s.star=((uint64_t)selectors[i]<<48)|0xabcde0123456ULL;
       s.core.cr2=0x123456789abcdef0ULL;s.reserved=0x1234;
       want=s;
@@ -948,6 +948,7 @@ int main(void) {
       s.core.core.core.gpr[1]=0x1800;
       s.core.core.core.gpr[11]=bit==64?UINT64_MAX:1ULL<<bit;
       return_query_t q={0};
+      s.core.core.core.flags|=((bit&1)<<16)|((bit&6)<<11)|((bit&24)<<16);
       memcpy(q.gpr,s.core.core.core.gpr,sizeof(q.gpr));
       q.flags=s.core.core.core.flags;q.star=s.star;
       __asm__ volatile("outb %%al,$0xe9"::"a"(1),"D"(&q):"memory");

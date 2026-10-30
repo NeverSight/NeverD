@@ -175,7 +175,7 @@ follow [Intel SDM Volume 4, Table 2-2](https://cdrdv2-public.intel.com/835781/32
 Canonical `SYSENTER` (`0F 34`) accepts a valid CPL0–3 64-bit source context.
 Nonconforming CS requires DPL equal to CPL; conforming CS permits DPL below
 or equal to CPL. CPL still comes from the live CS selector's RPL.
-It installs the live entry PC and SP, CPL0 flat CS/SS caches, clears IF, and
+It installs the live entry PC and SP, CPL0 flat CS/SS caches, clears IF/RF, and
 preserves the other admitted flags and registers. It returns status 10 before
 the handler executes, including when the handler is selected in the manifest.
 The target PC must be canonical for active paging. SYSENTER does not access
@@ -185,14 +185,15 @@ Canonical `SYSEXIT` (`0F 35`) and `SYSEXITQ` (`48 0F 35`) require CPL0 and
 install CPL3 CS/SS caches from the live CS MSR. The former takes EIP/ESP from
 EDX/ECX and supplies the same eight arbitrary legacy GPR high halves as SYSRET;
 the latter takes the full RDX/RCX and checks both against active paging.
-Both preserve the admitted flags and stop with status 6 before user code.
+Both clear RF, preserve the other admitted flags and stop with status 6 before user code.
 Neither instruction reads descriptors or the old/new stack. Selector TI bits
 and 16-bit wraparound remain significant; null entry selectors refuse before
 any write. These transitions follow the SYSENTER/SYSEXIT instruction entries
 in [Intel SDM Volume 2](https://cdrdv2-public.intel.com/835781/325462-sdm-vol-1-2abcd-3abcd-4.pdf).
 
-Other instructions retain V6's CPL0 entry requirements. The existing
-non-interrupt flags domain still excludes TF/RF, IOPL and VIF/VIP. Compatibility
+Other instructions retain V6's CPL0 entry requirements. SYSENTER, SYSEXIT and
+SYSRET accept RF, all IOPL values and VIF/VIP on entry. TF remains excluded
+because debug-trap delivery is unowned. Other instruction domains are unchanged. Compatibility
 source contexts, legacy modes, faults, CET/FRED, asynchronous events and SMM
 restoration are not added by V7. An opaque SYSENTER lift alone is not a proof of
 an ordinary C ABI or a full native register continuation.
@@ -200,8 +201,8 @@ an ordinary C ABI or a full native register continuation.
 RETF reads IP/CS alone for a same-privilege return and retains SS. For a
 return to an outer privilege level, its unsigned imm16 skips parameter bytes
 before saved RSP/SS and also adjusts the restored RSP. The transition preserves
-NMI blocking and flags within the existing non-interrupt entry domain (TF/RF,
-IOPL and VIF/VIP remain excluded). It consumes one driver step and stops even
+NMI blocking and flags except for ordinary RF clearing. RF, all IOPL values
+and VIF/VIP are admitted on entry; TF remains excluded. It consumes one driver step and stops even
 when the return target is selected; a returned CPL1–3 context cannot reenter
 this supervisor profile. Frame fields use the operand width independently of
 the target stack width. A narrow saved IP or SP is zero-extended before the
@@ -210,8 +211,12 @@ stack pointer by two operand-sized fields before target-width cleanup.
 
 All three IRET operand sizes pop five fields when execution begins in 64-bit
 code, including a same-CPL return. Word IRET replaces the low FLAGS bits and
-retains RF/AC/ID/VIF/VIP from the input; dword/qword IRET restore those bits
-from the frame. The earlier entry-flags restrictions still apply.
+retains AC/ID/VIF/VIP from the input and clears RF; dword/qword IRET restore
+those bits from the frame. Both accept input RF, all IOPL values and VIF/VIP;
+input TF remains excluded. RF clears at instruction entry, as described in
+[Intel SDM Volume 3B, section 20.3.1.1](https://cdrdv2-public.intel.com/929360/253669-093-sdm-vol-3b.pdf).
+The earlier statement that word IRET retained RF was overbroad: its qualified
+entry domain required RF=0. The extended-entry regression covers RF=1 directly.
 The [narrow-frame qualification](evidence/x86-narrow-frame-returns-2026-10-30.json)
 compares both widths with original instructions and checks exact frame reads
 against inaccessible guard pages.

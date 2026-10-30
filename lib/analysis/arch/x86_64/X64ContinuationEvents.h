@@ -204,13 +204,13 @@ public:
     const auto Stack = returnStack(CS, CPL, SS, NullSS);
     const auto CompatSP =
         compatibilityStack(SP, NewSP, segmentAttributes(Stack.Value));
-    // A word IRET replaces FLAGS only. RF/AC/ID/VIF/VIP retain their old
-    // values; the wider forms restore them from the frame.
+    // A word IRET retains AC/ID/VIF/VIP. Input RF clears at instruction entry;
+    // only the wider IRET forms restore RF from the frame (SDM 20.3.1.1).
     auto NewFlags = op(NdOp::INT_OR, {masked(Flags, 0x3d7fd7), k(2)});
     if (Bytes == 2)
       NewFlags =
           op(NdOp::INT_OR,
-             {NewFlags, masked(load(offsetof(State, RFlags)), 0x3d0000)});
+             {NewFlags, masked(load(offsetof(State, RFlags)), 0x3c0000)});
     accessed(Code);
     accessed(Stack);
     segment(offsetof(V5, CS), CS, Code.Value);
@@ -281,7 +281,10 @@ public:
     W.store(offsetof(State, GPR) + x86reg::RSP,
             choose(Compatibility, CompatSP,
                    op(NdOp::INT_ADD, {NewSP, k(Discard)})));
-    // RETFQ preserves flags and NMI blocking in the admitted entry domain.
+    // RETF preserves flags except for ordinary RF clearing, and retains NMI
+    // blocking. No instruction at the returned target has executed yet.
+    W.store(offsetof(State, RFlags),
+            masked(load(offsetof(State, RFlags)), ~uint64_t{0x10000}));
     W.invalidateMonitor(Outer);
     const auto Choices = x64CompatibilityChoices(false);
     W.exitIf(Compatibility, [&] {

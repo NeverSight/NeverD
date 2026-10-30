@@ -9454,6 +9454,16 @@ The [narrow-frame qualification record](evidence/x86-narrow-frame-returns-2026-1
 records 12,296 original instructions, 49,184 paired comparisons, 1,536 portable
 guard-page cases and 1,559 integration tests with no failures or skips.
 
+`FrameReturnsMatchNativeExtendedEntryFlags` independently checks every
+RF/IOPL/VIF/VIP combination for 16/32/64-bit IRET, plain RETF and RETF imm7,
+all target CPLs, both compatibility defaults and long mode, and both restored
+RF values. Four independent high-half choices compare the complete represented
+state, descriptor RAM and frame RAM through both C routes at O0/O2. Guard-page
+cases also verify that TF, VM and reserved entry flags refuse before any write.
+The SYSRET and fast-system native matrices include the enlarged input domain;
+TF remains an explicit debug-delivery boundary. Word IRET clears input RF
+while retaining AC/ID/VIF/VIP; wider IRET restores RF from the frame.
+
 The native speculation and descriptor fixtures compile both source routes at
 O0/O2 into freestanding guests and execute them at CPL0 using Linux x64 KVM.
 They check real SPEC_CTRL readback, PRED_CMD writes, repeated writes, native

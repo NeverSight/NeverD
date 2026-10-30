@@ -1247,8 +1247,9 @@ buildInstruction(SpecializationInstruction Instruction,
       (Interrupt || FredReturn ||
        UserInterrupt == detail::X64UserInterrupt::Return)
           ? 0x3d7fd7
-      : UserInterrupt ? 0x3d7ed7 // TF requires debug-trap delivery.
-                      : Flags::entryMask(flagsProfile(Options));
+      : (UserInterrupt || Iret || FarReturn || Sysret || Sysenter || Sysexit)
+          ? 0x3d7ed7 // TF requires debug-trap delivery.
+          : Flags::entryMask(flagsProfile(Options));
   Guard.emit(NdOp::INT_AND, FlagBits, {Packed, constant(~EntryFlags)});
   Guard.emit(NdOp::INT_NOTEQUAL, FlagsBad, {FlagBits, constant(0)});
   Guard.emit(NdOp::INT_AND, Fixed, {Packed, constant(2)});

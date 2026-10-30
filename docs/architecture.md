@@ -9571,7 +9571,7 @@ return-code, return-stack and data-segment owners. At the same privilege level i
 only RIP and CS, preserving the current SS cache. At an outer privilege level
 it skips the unsigned immediate's parameter bytes before reading saved RSP/SS,
 then adds that count to the restored RSP as well. It preserves the admitted
-flags and NMI blocking, and exits with `PrivilegeReturn` before target
+flags except RF, retains NMI blocking, and exits with `PrivilegeReturn` before target
 execution. The original bytes supply the unsigned discard count; the native
 audit separately authenticates Capstone's signed display value. Same-level
 returns never read an absent outer frame. Earlier layouts remain unsupported
@@ -9588,7 +9588,9 @@ at the declared paging width; compatibility mode then uses its low 32 bits and
 effective code limit. Stack restoration and cleanup use SS.B, preserving the
 original ESP[31:16] for a 16-bit stack.
 Narrow saved IP/SP fields zero-extend before the target stack-size rules.
-Word IRET retains the high RF/AC/ID/VIF/VIP flags rather than clearing them.
+Word IRET retains AC/ID/VIF/VIP and clears input RF. IRETD/IRETQ restore RF
+from the frame. RETF, SYSENTER and SYSEXIT clear RF at instruction entry;
+SYSENTER also clears IF. SYSRET keeps its defined R11 mask.
 The lifter records all five fields for IRET begun in 64-bit code at any operand
 width; the continuation admission checks their exact widths and addresses.
 
@@ -9601,7 +9603,9 @@ their selectors and usability; ignored hidden-cache bytes do not assert an
 Intel-specific clearing pattern. The nonfaulting RAM contract still excludes
 CET/FRED, noncanonical raw return RIP, concurrent writers, MMIO and asynchronous
 execution. Input segment caches must describe a valid hardware context.
-Software interrupts admit the full defined long-mode flags set; other steps retain the
+Software interrupts admit the full defined long-mode flags set. IRET/RETF,
+SYSRET and SYSENTER/SYSEXIT admit RF, all IOPL values and VIF/VIP but exclude
+input TF because debug-trap delivery is unowned. Other steps retain their
 previous input flag restrictions. Fault delivery remains outside this profile.
 The Intel instruction references for
 [interrupts](https://cdrdv2-public.intel.com/868140/253666-089-sdm-vol-2a.pdf) and

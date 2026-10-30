@@ -34,7 +34,7 @@ static void fast_expect(fast_system_state_t *s,unsigned kind) {
   v->unusable&=~3;
   v->pc=enter?s->sysenter_eip:wide?v->gpr[2]:(uint32_t)v->gpr[2];
   v->gpr[4]=enter?s->sysenter_esp:wide?v->gpr[1]:(uint32_t)v->gpr[1];
-  if(enter)v->flags&=~0x20200ULL;
+  v->flags&=~(enter?0x30200ULL:0x10000ULL);
   if(!wide)for(unsigned i=0;i<8;++i)
     v->gpr[i]=(uint32_t)v->gpr[i]|(v->arbitrary[i]<<32);
 }
@@ -103,7 +103,7 @@ int main(void) {
     if(bad==3)s.core.pc++;
     if(bad==4)s.core.cs.attributes|=0x4000;
     if(bad==5)s.core.unusable|=1;
-    if(bad==6)s.core.flags|=0x10000;
+    if(bad==6)s.core.flags|=0x100; /* Pending single-step delivery is unowned. */
     if(bad==7)s.core.cr8=16;
     if(bad==8)s.core.nmi_blocked=2;
     fast_system_state_t want=s;
@@ -258,10 +258,10 @@ TEST_F(X64ContinuationSourceTest, FastSystemMatchesNativePrivilegeContexts) {
     Harness += R"C(
 int main(void) {
   const uint32_t selectors[]={4,7,8,0xffd8,0xfff8,0xffff,0xa5a5000b};
-  const uint64_t flags[]={2,0x246,0x646,0x244ed7,0x40002};
+  const uint64_t flags[]={2,0x246,0x646,0x244ed7,0x40002,0x10002,0x3d7ed7};
   const uint64_t stacks[]={0,1,0xffffffffULL,0x123456789abcULL,0xffff800012345678ULL};
   unsigned char *memory=(unsigned char *)0x8000;
-  for(unsigned sel=0;sel<7;++sel)for(unsigned flag=0;flag<5;++flag)
+  for(unsigned sel=0;sel<7;++sel)for(unsigned flag=0;flag<sizeof(flags)/sizeof(flags[0]);++flag)
     for(unsigned stack=0;stack<5;++stack)for(unsigned nmi=0;nmi<2;++nmi)
       for(unsigned context=0;context<(KIND==0?32:1);++context) {
         unsigned cpl=context&3,dpl=(context>>2)&3,conforming=context>>4;

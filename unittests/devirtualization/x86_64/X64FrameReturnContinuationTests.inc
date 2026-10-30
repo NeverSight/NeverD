@@ -9,6 +9,79 @@
 /// every legacy GPR high half after a compatibility transition.
 //===----------------------------------------------------------------------===//
 
+TEST_F(X64ContinuationSourceTest, FrameReturnsMatchNativeExtendedEntryFlags) {
+  for (unsigned Width : {2u, 4u, 8u}) {
+    for (unsigned Kind = 0; Kind != 3; ++Kind) {
+      std::vector<uint8_t> Bytes;
+      if (Width != 4)
+        Bytes.push_back(Width == 2 ? 0x66 : 0x48);
+      Bytes.push_back(Kind == 0 ? 0xcf : Kind == 1 ? 0xcb : 0xca);
+      if (Kind == 2) {
+        Bytes.push_back(7);
+        Bytes.push_back(0);
+      }
+      std::string Harness;
+      llvm::raw_string_ostream OS(Harness);
+      OS << "#define FIELD_BYTES " << Width << "\n#define KIND " << Kind << '\n'
+         << EventHarness << "\nstatic const uint8_t original[]={"
+         << Bytes.size();
+      for (auto Byte : Bytes)
+        OS << ',' << unsigned(Byte);
+      OS << R"C(};
+static void flag_field(uint64_t address,uint64_t value) {
+  memcpy((void *)(uintptr_t)address,&value,FIELD_BYTES);
+}
+int main(void) {
+  unsigned char before[4096],after[4096],frame_before[64],frame_after[64];
+  for(unsigned input=0;input<32;++input)for(unsigned cpl=0;cpl<4;++cpl)
+    for(unsigned mode=0;mode<3;++mode)for(unsigned restored=0;restored<2;++restored) {
+      event_state_t s=event_seed(0x8000);s.gpr[4]=0x210000;
+      s.flags=0x240002|((input&1)<<16)|((input&6)<<11)|((input&24)<<16);
+      event_word(s.gdt.base+24,0x008f9a000000ffffULL|((uint64_t)cpl<<45)|
+                 ((uint64_t)(mode==2)<<53)|((uint64_t)(mode==1)<<54));
+      event_word(s.gdt.base+32,0x00cf92000000ffffULL|((uint64_t)cpl<<45));
+      memset((void *)0x210000,0xa5,sizeof(frame_before));
+      flag_field(s.gpr[4],0x1800);flag_field(s.gpr[4]+FIELD_BYTES,24|cpl);
+      if(KIND==0) {
+        flag_field(s.gpr[4]+2*FIELD_BYTES,restored?0x10002:2);
+        flag_field(s.gpr[4]+3*FIELD_BYTES,0x9000);
+        flag_field(s.gpr[4]+4*FIELD_BYTES,32|cpl);
+      } else if(cpl) {
+        flag_field(s.gpr[4]+2*FIELD_BYTES+(KIND==2?7:0),0x9000);
+        flag_field(s.gpr[4]+3*FIELD_BYTES+(KIND==2?7:0),32|cpl);
+      }
+      event_state_t native=s;
+      memcpy(before,(void *)0x8000,sizeof(before));
+      memcpy(frame_before,(void *)0x210000,sizeof(frame_before));
+      __asm__ volatile("outb %%al,$0xe9"::"a"(12),"D"(&native),"S"(original):"memory");
+      memcpy(after,(void *)0x8000,sizeof(after));
+      memcpy(frame_after,(void *)0x210000,sizeof(frame_after));
+      CHECK(native.flags==(KIND?s.flags&~0x10000ULL:
+            FIELD_BYTES==2?(s.flags&0x3c0000)|2:restored?0x10002:2));
+      for(unsigned choice=0;choice<4;++choice) {
+        event_state_t actual=s,want=native;
+        memcpy((void *)0x8000,before,sizeof(before));
+        memcpy((void *)0x210000,frame_before,sizeof(frame_before));
+        for(unsigned i=0;i<8;++i) {
+          uint64_t value=choice==0?native.gpr[i]>>32:choice==1?0:
+                         choice==2?UINT64_MAX:0xdeadbeef12345678ULL+i;
+          actual.arbitrary[i]=want.arbitrary[i]=value;
+          if(mode!=2)want.gpr[i]=(uint32_t)want.gpr[i]|(value<<32);
+        }
+        CHECK(neverd_step_v6_1000(ARG(&actual))==6);
+        CHECK(!memcmp(&actual,&want,sizeof(actual)));
+        CHECK(!memcmp((void *)0x8000,after,sizeof(after)));
+        CHECK(!memcmp((void *)0x210000,frame_after,sizeof(frame_after)));
+      }
+    }
+  return 0;
+}
+)C";
+      run(Bytes, {0x1000}, Harness, false, eventOptions(), {}, true);
+    }
+  }
+}
+
 TEST_F(X64ContinuationSourceTest,
        NarrowFrameReturnsMatchNativeFramesFlagsAndStackWidths) {
   for (unsigned Width : {2u, 4u}) {
@@ -153,29 +226,38 @@ int main(void) {
   for(unsigned kind=0;kind<3;++kind)for(unsigned mode=0;mode<2;++mode)
     for(unsigned bit=0;bit<32;++bit) {
       event_state_t s=event_seed((uintptr_t)memory);s.pc=pcs[kind];
-      s.flags=0x240002|((1ULL<<bit)&0xed5);
+      s.flags=0x240002|((bit&1)<<16)|((bit&6)<<11)|((bit&24)<<16)|
+              ((1ULL<<bit)&0xed5);
       event_word(s.gdt.base+24,mode?0x00cf9a000000ffffULL:0x00af9a000000ffffULL);
       unsigned bytes=(kind?2:5)*FIELD_BYTES;
       unsigned char *frame=mapping+page-bytes;
       s.gpr[4]=(uintptr_t)frame;
       const uint64_t words[]={0x1800,24,2|(1ULL<<bit),0xdeadbeef1234fff8ULL,32};
       for(unsigned i=0;i<(kind?2:5);++i)memcpy(frame+i*FIELD_BYTES,&words[i],FIELD_BYTES);
-      event_state_t want=s;want.pc=0x1800;
+      event_state_t want=s;want.pc=0x1800;want.flags&=~0x10000ULL;
       want.cs=(event_segment_t){0,UINT32_MAX,24,mode?0xc09b:0xa09b};
       want.gpr[4]=kind?s.gpr[4]+2*FIELD_BYTES+(kind==2?65535:0):
                          words[3]&(FIELD_BYTES==2?0xffff:0xffffffff);
       if(!kind) {
         want.ss=(event_segment_t){0,UINT32_MAX,32,0xc093};want.nmi_blocked=0;
         want.flags=(words[2]&(FIELD_BYTES==2?0x7fd7:0x3d7fd7))|2|
-                    (FIELD_BYTES==2?(s.flags&0x240000):0);
+                    (FIELD_BYTES==2?(s.flags&0x3c0000):0);
       }
       if(mode)for(unsigned i=0;i<8;++i) {
         s.arbitrary[i]=want.arbitrary[i]=0x123456789abcdef0ULL+i;
         want.gpr[i]=(uint32_t)want.gpr[i]|(want.arbitrary[i]<<32);
       }
-      memcpy(before,memory,sizeof(memory));before[24+5]|=1;
-      if(!kind)before[32+5]|=1;
+      memcpy(before,memory,sizeof(memory));
       memcpy(frame_before,frame,bytes);
+      const unsigned bad_bits[]={8,17,22};
+      for(unsigned bad=0;bad<3;++bad) {
+        event_state_t invalid=s;invalid.flags|=1ULL<<bad_bits[bad];
+        event_state_t unchanged=invalid;
+        CHECK(step(kind,ARG(&invalid))==5);
+        CHECK(!memcmp(&invalid,&unchanged,sizeof(invalid)));
+        CHECK(!memcmp(memory,before,sizeof(memory)) && !memcmp(frame,frame_before,bytes));
+      }
+      before[24+5]|=1;if(!kind)before[32+5]|=1;
       CHECK(step(kind,ARG(&s))==6);
       CHECK(!memcmp(&s,&want,sizeof(s)) && !memcmp(memory,before,sizeof(memory)));
       CHECK(!memcmp(frame,frame_before,bytes));
