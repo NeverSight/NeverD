@@ -35,6 +35,10 @@ std::string optionsDigest(const SpecializationOptions &O) {
     H.number(O.X64SegmentedWrites);
   }
   H.number(O.X64CR8State);
+  if (O.X64CR4PGEState) {
+    H.text("x64-cr4-pge-state-v1");
+    H.number(O.X64CR4PGEState);
+  }
   if (O.X64LegacyGSState) {
     H.text("x64-legacy-gs-state-v1");
     H.number(O.X64LegacyGSState);

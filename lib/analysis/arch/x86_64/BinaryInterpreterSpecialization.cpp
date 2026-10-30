@@ -695,6 +695,10 @@ binaryExecutionDigest(const BinaryImage &Image,
     Number(Options.X64SegmentedWrites);
   }
   Number(Options.X64CR8State);
+  if (Options.X64CR4PGEState) {
+    Hash.update("x64-cr4-pge-state-v1");
+    Number(Options.X64CR4PGEState);
+  }
   if (Options.X64LegacyGSState) {
     Hash.update("x64-legacy-gs-state-v1");
     Number(Options.X64LegacyGSState);
@@ -836,6 +840,9 @@ prepareBinaryRelation(const BinaryImage &Image,
   if (Options.X64CR8State)
     return Fail(Status::Unsupported,
                 "native proof requires authenticated task-priority state");
+  if (Options.X64CR4PGEState)
+    return Fail(Status::Unsupported,
+                "native proof requires authenticated CR4 PGE state");
   if (Options.X64LegacyGSState)
     return Fail(Status::Unsupported,
                 "native proof requires authenticated legacy GS state");

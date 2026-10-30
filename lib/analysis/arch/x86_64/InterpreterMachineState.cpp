@@ -1642,8 +1642,8 @@ static llvm::Expected<InterpreterMachineRegionSource> wrapMachineRegionSource(
       (!SegmentedMemory &&
        (Expected.X64SegmentedReads || Expected.X64SegmentedWrites)) ||
       Expected.X64LegacyGSState || Expected.X64CR8State ||
-      Expected.X64MXCSRMask || !Expected.X64CodeRegions.empty() ||
-      !Expected.X64ImportBindings.empty() ||
+      Expected.X64CR4PGEState || Expected.X64MXCSRMask ||
+      !Expected.X64CodeRegions.empty() || !Expected.X64ImportBindings.empty() ||
       !Expected.X64TerminalImports.empty() ||
       !Expected.EntryFrameExcludedObjects.empty())
     return invalid("unsupported machine-region source environment");

@@ -2261,3 +2261,5 @@ LLVM C 的合成栈槽保留完整的 128 位整数写入，再由运行时选�
 `InterpreterMachineRegionSourceTest.SegmentedChoiceSource*` 在 O0/O2 下通过两种 C 路线执行显式 FS/GS 基址测试，并启用 ASan/UBSan。独立字节预期比较完整状态、重叠内存与返回地址单元、回绕地址、查询及选择记录预留和不变的记录带。拒绝测试覆盖认证、V1、操作预算与不支持的架构状态。运行 `NeverDInterpreterMachineStateTests` 及原始环境、固定映像和延续源码测试；这些自有程序不证明原生内核执行等价。
 
 `X86NativeStateAudit.CR4*` 检查 48 种已准入的 CR4 传送编码及 34 组字节与解码详情不匹配的输入。测试要求记录六个任意算术标志位，保留原有原生内在操作，且不授予不透明状态保持证书。`CR4FlagCoverageDoesNotAuthorizeMachineRegionExecution` 验证缺少控制状态契约时仍拒绝源码恢复。这些测试只解码并提升自有指令字节，不执行特权指令。
+
+解释器、原始区域和证明套件中的 `PageGlobal*` 检查覆盖未知高位、两个分支结果、读写关系、全部 63 个禁止修改的控制位、其他状态保持、错误操作数、预算和环境身份。运行 `NeverDInterpreterSpecializationTests`、`NeverDInterpreterMachineStateTests`、`NeverDLowIRRefinementTests` 与 `NeverDInterpreterLLVMRefinementTests`；这些是值模型验证，不执行硬件特权指令。

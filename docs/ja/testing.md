@@ -2296,3 +2296,5 @@ LLVM C の合成スタックスロットは、実行時にどちらかの 64 ビ
 `InterpreterMachineRegionSourceTest.SegmentedChoiceSource*` は明示的な FS/GS 基底を両 C 経路、O0/O2、ASan/UBSan で実行します。独立したバイト期待値で全状態、重複メモリと戻り先、アドレスの折り返し、照会と選択記録の予約、不変の記録列を比較します。認証、V1、操作予算、未対応状態の拒否も確認します。`NeverDInterpreterMachineStateTests` を生環境、固定イメージ、継続ソースのテストと実行します。これらの自作プログラムはネイティブカーネル実行を保証しません。
 
 `X86NativeStateAudit.CR4*` は、受理する CR4 転送の 48 エンコーディングと、バイト列とデコード情報が一致しない 34 組を検証します。6 個の算術フラグの未定義値、既存のネイティブ組み込み操作の維持、隠れた状態の保存証明を付与しないことを確認します。`CR4FlagCoverageDoesNotAuthorizeMachineRegionExecution` は制御状態契約なしのソース復元を拒否します。所有する命令バイト列をデコードして IR に変換するだけで、特権命令は実行しません。
+
+`PageGlobal*` は未知の上位ビット、両分岐、読み書き関係、禁止する 63 ビットの変更、他の状態の保持、不正オペランド、予算と環境識別を検証します。`NeverDInterpreterSpecializationTests`、`NeverDInterpreterMachineStateTests`、`NeverDLowIRRefinementTests`、`NeverDInterpreterLLVMRefinementTests` を実行してください。値モデルの検証であり、特権命令は実行しません。

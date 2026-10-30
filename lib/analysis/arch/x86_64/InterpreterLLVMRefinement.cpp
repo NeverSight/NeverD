@@ -84,6 +84,13 @@ InterpreterLLVMRefinementResult checkBinaryLLVMRefinement(
     Result.Native.Proof.Diagnostic = Result.Diagnostic;
     return Result;
   }
+  if (Options.X64CR4PGEState) {
+    Result.Stage = InterpreterLLVMRefinementStage::Native;
+    Result.Native.Proof.Status = LowIRRefinementStatus::Unsupported;
+    Result.Diagnostic = "native proof requires authenticated CR4 PGE state";
+    Result.Native.Proof.Diagnostic = Result.Diagnostic;
+    return Result;
+  }
   if (Options.X64CR8State) {
     Result.Stage = InterpreterLLVMRefinementStage::Native;
     Result.Native.Proof.Status = LowIRRefinementStatus::Unsupported;

@@ -365,10 +365,35 @@ TEST_F(InterpreterMachineRegionSourceTest,
 }
 
 TEST_F(InterpreterMachineRegionSourceTest,
+       PageGlobalRawStateBindsItsDomainWithoutSupplyingSource) {
+  auto Image = loadRegion(
+      {0x0f, 0x20, 0xe0, 0x48, 0x35, 0x80, 0, 0, 0, 0x0f, 0x22, 0xe0, 0xc3});
+  ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+  auto Options = regionOptions(Entry + 12, ExitKind::Return);
+  Options.UndefinedModel = SpecializationUndefinedModel::FreshScalarV1;
+  Options.X64FlagsProfile = InterpreterMachineStateProfile::KernelX64NoFaultV1;
+  Options.X64CR4PGEState = true;
+  const auto Result = specializeBinaryInterpreter(*Image, Entry, Options);
+  ASSERT_TRUE(Result.complete()) << Result.Diagnostic;
+  ASSERT_TRUE(Result.RawEnvironment);
+  auto Valid = validateSpecializationRawEnvironment(Result, Options);
+  EXPECT_FALSE(bool(Valid)) << llvm::toString(std::move(Valid));
+  auto Changed = Options;
+  Changed.X64CR4PGEState = false;
+  auto Mismatch = validateSpecializationRawEnvironment(Result, Changed);
+  EXPECT_TRUE(bool(Mismatch));
+  llvm::consumeError(std::move(Mismatch));
+  auto Source = wrapInterpreterMachineRegionChoiceSourceX64V2(Result, Options);
+  EXPECT_FALSE(bool(Source));
+  if (!Source)
+    llvm::consumeError(Source.takeError());
+}
+
+TEST_F(InterpreterMachineRegionSourceTest,
        SegmentedChoiceSourceStillRefusesOtherArchitecturalBanks) {
   auto Image = loadRegion({0xff, 0xd0});
   ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
-  for (unsigned Kind = 0; Kind != 3; ++Kind) {
+  for (unsigned Kind = 0; Kind != 4; ++Kind) {
     SCOPED_TRACE(Kind);
     auto Options = regionOptions(Entry, ExitKind::Call);
     Options.UndefinedModel = SpecializationUndefinedModel::FreshScalarV1;
@@ -380,8 +405,10 @@ TEST_F(InterpreterMachineRegionSourceTest,
           InterpreterMachineStateProfile::KernelX64NoFaultV1;
       if (Kind == 1)
         Options.X64LegacyGSState = true;
-      else
+      else if (Kind == 2)
         Options.X64CR8State = true;
+      else
+        Options.X64CR4PGEState = true;
     }
     const auto Result = specializeBinaryInterpreter(*Image, Entry, Options);
     ASSERT_TRUE(Result.complete()) << Result.Diagnostic;

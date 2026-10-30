@@ -37,6 +37,10 @@ llvm::Error
 validateRuntimeControlOptions(const SpecializationOptions &Options) {
   if (Options.Architecture == Arch::X64)
     return x64::validateRuntimeControlOptions(Options);
+  if (Options.X64CR4PGEState)
+    return llvm::createStringError(
+        llvm::errc::invalid_argument,
+        "CR4 PGE state requires the x64 architecture");
   if (Options.X64MXCSRMask)
     return llvm::createStringError(llvm::errc::invalid_argument,
                                    "MXCSR state requires the x64 architecture");
