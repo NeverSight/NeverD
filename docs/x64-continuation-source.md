@@ -89,8 +89,9 @@ A native request or invalid-state refusal executes nothing and consumes none.
 The invocation domain is CPL0, 64-bit entry with valid descriptor caches,
 CET/FRED disabled, successful sequential ordinary RAM accesses and immutable
 original instruction bytes. It excludes MMIO, concurrent writers, asynchronous
-events and faulting execution. IRETQ and canonical RETFQ (`48 CB`,
-`48 CA imm16`) can produce CPL0–3 long-mode or compatibility contexts;
+events and faulting execution. Canonical IRET (`CF`) and RETF (`CB`, `CA imm16`)
+with no prefix, `66` or `48` select 32-, 16- or 64-bit frame fields and can
+produce CPL0–3 long-mode or compatibility contexts;
 INT3 and canonical `INT imm8` (`CD 00` through `CD FF`) install a CPL0
 interrupt/trap-gate context with optional IST. Each vector reads its own live
 IDT entry, including vectors ordinarily used for OS services. Software INT
@@ -180,16 +181,26 @@ source contexts, legacy modes, faults, CET/FRED, asynchronous events and SMM
 restoration are not added by V7. An opaque SYSENTER lift alone is not a proof of
 an ordinary C ABI or a full native register continuation.
 
-RETFQ reads RIP/CS alone for a same-privilege return and retains SS. For a
+RETF reads IP/CS alone for a same-privilege return and retains SS. For a
 return to an outer privilege level, its unsigned imm16 skips parameter bytes
 before saved RSP/SS and also adjusts the restored RSP. The transition preserves
 NMI blocking and flags within the existing non-interrupt entry domain (TF/RF,
 IOPL and VIF/VIP remain excluded). It consumes one driver step and stops even
 when the return target is selected; a returned CPL1–3 context cannot reenter
-this supervisor profile. The 16-/32-bit operand forms still require native
-execution.
+this supervisor profile. Frame fields use the operand width independently of
+the target stack width. A narrow saved IP or SP is zero-extended before the
+target's stack-size rules apply. Same-level RETF advances the original full
+stack pointer by two operand-sized fields before target-width cleanup.
 
-IRETQ/RETFQ have no unconditional empty undefined-output certificate: a live
+All three IRET operand sizes pop five fields when execution begins in 64-bit
+code, including a same-CPL return. Word IRET replaces the low FLAGS bits and
+retains RF/AC/ID/VIF/VIP from the input; dword/qword IRET restore those bits
+from the frame. The earlier entry-flags restrictions still apply.
+The [narrow-frame qualification](evidence/x86-narrow-frame-returns-2026-10-30.json)
+compares both widths with original instructions and checks exact frame reads
+against inaccessible guard pages.
+
+IRET/RETF have no unconditional empty undefined-output certificate: a live
 return descriptor can select compatibility mode, where the legacy GPR high
 halves are arbitrary. V6 now owns either a long-mode or compatibility target.
 Long-mode code requires CS.L=1/CS.D=0. Compatibility code permits either CS.D
@@ -200,12 +211,12 @@ patterns remain outside its qualification. The environment interprets the
 returned offset with the returned CS base and does not execute the target in
 this step.
 
-IRETQ and outer RETFQ require non-null SS for compatibility targets. A 32-bit
+IRET and outer RETF require non-null SS for compatibility targets. A 32-bit
 stack restores ESP. A 16-bit stack replaces SP and retains the original
-ESP[31:16], including when frame pops cross a 64 KiB boundary. RETFQ performs
+ESP[31:16], including when frame pops cross a 64 KiB boundary. RETF performs
 parameter cleanup at the target stack width without carrying into preserved
-bits. Same-privilege RETFQ retains its original SS/cache and applies that cache's
-stack width. IRETQ unblocks NMIs; RETFQ preserves their blocking state.
+bits. Same-privilege RETF retains its original SS/cache and applies that cache's
+stack width. IRET unblocks NMIs; RETF preserves their blocking state.
 
 Successful compatibility returns consume all eight arbitrary-value slots for
 the legacy GPR high halves, including RSP; all low halves and R8-R15 follow the

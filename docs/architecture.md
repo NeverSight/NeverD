@@ -9552,8 +9552,9 @@ separate from the processor's MSR canonical width.
 
 `KernelEventsNoFaultV6` has its own 2,496-byte layout. It adds live GDTR/IDTR,
 LDTR/TR caches, DS/ES and FS/GS metadata, segment usability and NMI blocking.
-FS/GS bases retain their existing single owner. IRETQ validates a long-mode or
-compatibility return context at CPL0..3, restores all five frame words, applies outer-return
+FS/GS bases retain their existing single owner. Canonical 16/32/64-bit IRET
+validates a long-mode or compatibility return context at CPL0..3, restores all
+five operand-sized frame fields, applies outer-return
 segment invalidation and unblocks NMIs. Its restored RSP is not prematurely
 required to be canonical. INT3 and canonical INT imm8 read the selected live
 IDT gate, select and align the current or IST stack, write the five-word frame
@@ -9562,11 +9563,11 @@ the complete selected 16-byte gate. The explicit state profile owns the real
 transfer for every vector, including the ordinary source projections of
 Windows debug, assertion and fast-fail services. No service return in RAX is
 invented; software interrupts push no error code and preserve NMI blocking.
-`Exception` exits before handler execution; IRETQ uses
+`Exception` exits before handler execution; IRET uses
 `PrivilegeReturn` even for a same-privilege return.
 
-Canonical RETFQ (`48 CB` and `48 CA imm16`) uses the same return-code,
-return-stack and data-segment owners. At the same privilege level it consumes
+Canonical RETF (`CB` and `CA imm16`, with no prefix, `66` or `48`) uses the same
+return-code, return-stack and data-segment owners. At the same privilege level it consumes
 only RIP and CS, preserving the current SS cache. At an outer privilege level
 it skips the unsigned immediate's parameter bytes before reading saved RSP/SS,
 then adds that count to the restored RSP as well. It preserves the admitted
@@ -9576,7 +9577,7 @@ audit separately authenticates Capstone's signed display value. Same-level
 returns never read an absent outer frame. Earlier layouts remain unsupported
 for these event transitions.
 
-Neither IRETQ nor RETFQ has an unconditional empty undefined-output audit:
+Neither IRET nor RETF has an unconditional empty undefined-output audit:
 their live return descriptors may select compatibility mode and make legacy
 GPR high halves arbitrary. The earlier generic audit incorrectly erased this
 condition. V6's descriptor owner validates the live target mode and binds
@@ -9586,6 +9587,10 @@ receives no native-preservation certificate. The raw frame RIP must be canonical
 at the declared paging width; compatibility mode then uses its low 32 bits and
 effective code limit. Stack restoration and cleanup use SS.B, preserving the
 original ESP[31:16] for a 16-bit stack.
+Narrow saved IP/SP fields zero-extend before the target stack-size rules.
+Word IRET retains the high RF/AC/ID/VIF/VIP flags rather than clearing them.
+The lifter records all five fields for IRET begun in 64-bit code at any operand
+width; the continuation admission checks their exact widths and addresses.
 
 `X64ContinuationEvents` owns these transitions in LowIR above both C routes.
 Validation precedes all state and memory writes. Deferred descriptor accessed
@@ -15116,8 +15121,8 @@ LowIR arbitrary-output certificate. The same choice records drive state
 lowering and manifest slots; ERETU's explicitly restored RSP has no arbitrary
 high-half slot.
 The legacy event owner uses the same encoding-order choice inventory for
-IRETQ/RETFQ compatibility returns, including RSP's high half. Its stack owner
-keeps the target SS.B width and original ESP[31:16] distinct from frame operand
+IRET/RETF compatibility returns at all three operand widths, including RSP's
+high half. Its stack owner keeps the target SS.B width and original ESP[31:16] distinct from frame operand
 size and parameter cleanup. Target mode, limit and null-stack checks finish
 before descriptor or state publication. Neither emitter reconstructs these
 decisions from an opaque intrinsic or assumes a preserved high register bank.

@@ -21,6 +21,7 @@
 #include "neverd/loader/BinaryImage.h"
 
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/IR/LLVMContext.h"
@@ -724,9 +725,12 @@ TEST_F(X64ContinuationSourceTest, EventsLeaveEarlierStateLayoutsUnsupported) {
   V5.PagingAddressBits = 48;
   for (auto O : {options(), controlsOptions(), smapOptions(), V4, V5}) {
     auto Units = buildX64ContinuationSource(
-        image({0x48, 0xcf, 0xcc, 0xcd, 0, 0xcd, 3, 0xcd, 0x2d, 0xcd, 0xff, 0x48,
-               0xcb, 0x48, 0xca, 0xff, 0xff}),
-        {0x1000, 0x1002, 0x1003, 0x1005, 0x1007, 0x1009, 0x100b, 0x100d}, O);
+        image({0x48, 0xcf, 0xcc, 0xcd, 0,    0xcd, 3,    0xcd,
+               0x2d, 0xcd, 0xff, 0x48, 0xcb, 0x48, 0xca, 0xff,
+               0xff, 0xcf, 0x66, 0xcf, 0xcb, 0x66, 0xcb}),
+        {0x1000, 0x1002, 0x1003, 0x1005, 0x1007, 0x1009, 0x100b, 0x100d, 0x1011,
+         0x1012, 0x1014, 0x1015},
+        O);
     ASSERT_TRUE(bool(Units)) << llvm::toString(Units.takeError());
     for (const auto &U : *Units)
       EXPECT_TRUE(U.RequiresNativeExecution);
@@ -735,12 +739,12 @@ TEST_F(X64ContinuationSourceTest, EventsLeaveEarlierStateLayoutsUnsupported) {
 
 TEST_F(X64ContinuationSourceTest, UnqualifiedFarReturnEncodingsRemainNative) {
   for (const auto &Bytes :
-       std::vector<std::vector<uint8_t>>{{0xcb},
-                                         {0xca, 0, 0},
-                                         {0x66, 0xcb},
-                                         {0x66, 0x48, 0xcb},
+       std::vector<std::vector<uint8_t>>{{0x66, 0x48, 0xcb},
                                          {0x49, 0xcb},
-                                         {0x67, 0x48, 0xca, 0xff, 0xff}}) {
+                                         {0x67, 0x48, 0xca, 0xff, 0xff},
+                                         {0x66, 0x48, 0xcf},
+                                         {0x49, 0xcf},
+                                         {0x67, 0xcf}}) {
     auto Units =
         buildX64ContinuationSource(image(Bytes), {0x1000}, eventOptions());
     ASSERT_TRUE(bool(Units)) << llvm::toString(Units.takeError());

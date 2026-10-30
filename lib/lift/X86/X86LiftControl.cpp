@@ -1596,15 +1596,15 @@ bool X86Lifter::liftControl(LiftState &S, const cs_insn *Insn,
       break;
     }
     NdVar NewFlags = PopField(2);
-    if (InsnId == X86_INS_IRETQ) {
-      // 64-bit IRET pops SS:RSP unconditionally (Intel SDM): name all five
-      // transferred cells.
+    if (TargetArch == Arch::X64) {
+      // IRET begun in 64-bit mode always pops SS:SP, independently of its
+      // operand size or the target CPL (Intel SDM, IA-32e-MODE).
       NdVar NewSp = PopField(3);
       NdVar NewSs = PopField(4);
       S.emitVoidIntrinsic(Intrinsic::Iret,
                           {NewIp, NewCs, NewFlags, NewSp, NewSs});
     } else {
-      // 16-/32-bit IRET to the same privilege level pops IP/CS/FLAGS.
+      // Legacy IRET's stack switch depends on the target privilege level.
       S.emitVoidIntrinsic(Intrinsic::Iret, {NewIp, NewCs, NewFlags});
     }
     break;

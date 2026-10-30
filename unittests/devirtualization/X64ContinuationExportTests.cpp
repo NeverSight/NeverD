@@ -763,47 +763,54 @@ int main(void) {
 
 TEST_F(X64ContinuationExportTest,
        CompatibilityFrameExitPublishesConditionalChoicesAndStops) {
-  load({0x48, 0xcf, 0x48, 0xcb, 0x90});
-  for (bool LLVM : {false, true}) {
-    auto [Source, Manifest] =
-        source(request(R"("instructions":[4096,4098,4100])"), LLVM);
-    auto Parsed = llvm::json::parse(Manifest);
-    ASSERT_TRUE(bool(Parsed));
-    const auto *Units = Parsed->getAsObject()->getArray("units");
-    ASSERT_NE(Units, nullptr);
-    ASSERT_EQ(Units->size(), 3u);
-    for (unsigned Kind = 0; Kind != 2; ++Kind) {
-      const auto *Choices =
-          (*Units)[Kind].getAsObject()->getArray("arbitrary_effects");
-      ASSERT_NE(Choices, nullptr);
-      ASSERT_EQ(Choices->size(), 8u);
-      for (size_t I = 0; I != Choices->size(); ++I) {
-        const auto *Choice = (*Choices)[I].getAsObject();
-        EXPECT_EQ(Choice->getInteger("slot"), I);
-        EXPECT_EQ(Choice->getInteger("bit_offset"), 32);
-        EXPECT_EQ(Choice->getInteger("bit_count"), 32);
-        EXPECT_EQ(Choice->getString("after_profile_transition"),
-                  "successful_compatibility_return");
-        EXPECT_EQ(Choice->getBoolean("conditional"), true);
-        EXPECT_FALSE(Choice->get("after_operation"));
+  for (unsigned Width : {2u, 4u, 8u}) {
+    const uint8_t Prefix = Width == 2 ? 0x66 : 0x48;
+    load(Width == 4 ? std::vector<uint8_t>{0xcf, 0x90, 0xcb, 0x90, 0x90}
+                    : std::vector<uint8_t>{Prefix, 0xcf, Prefix, 0xcb, 0x90});
+    for (bool LLVM : {false, true}) {
+      auto [Source, Manifest] =
+          source(request(R"("instructions":[4096,4098,4100])"), LLVM);
+      auto Parsed = llvm::json::parse(Manifest);
+      ASSERT_TRUE(bool(Parsed));
+      const auto *Units = Parsed->getAsObject()->getArray("units");
+      ASSERT_NE(Units, nullptr);
+      ASSERT_EQ(Units->size(), 3u);
+      for (unsigned Kind = 0; Kind != 2; ++Kind) {
+        const auto *Choices =
+            (*Units)[Kind].getAsObject()->getArray("arbitrary_effects");
+        ASSERT_NE(Choices, nullptr);
+        ASSERT_EQ(Choices->size(), 8u);
+        for (size_t I = 0; I != Choices->size(); ++I) {
+          const auto *Choice = (*Choices)[I].getAsObject();
+          EXPECT_EQ(Choice->getInteger("slot"), I);
+          EXPECT_EQ(Choice->getInteger("bit_offset"), 32);
+          EXPECT_EQ(Choice->getInteger("bit_count"), 32);
+          EXPECT_EQ(Choice->getString("after_profile_transition"),
+                    "successful_compatibility_return");
+          EXPECT_EQ(Choice->getBoolean("conditional"), true);
+          EXPECT_FALSE(Choice->get("after_operation"));
+        }
       }
-    }
-    EXPECT_TRUE(
-        (*Units)[2].getAsObject()->getArray("arbitrary_effects")->empty());
-    execute(Source, std::string(Seed) + R"C(
+      EXPECT_TRUE(
+          (*Units)[2].getAsObject()->getArray("arbitrary_effects")->empty());
+      execute(Source, "#define FIELD_BYTES " + std::to_string(Width) + "\n" +
+                          Seed + R"C(
 int main(void) {
   for(unsigned kind=0;kind<2;++kind) {
     uint64_t table[8]={0,0x00af9b000000ffffULL,0x00cf93000000ffffULL,
                         0x00cf9b000000ffffULL,0x00cf93000000ffffULL};
-    uint64_t frame[]={0xffff800000001004ULL,24,0x246,0x12345678abcdfff8ULL,32};
-    uint64_t before[5],budget=7;
+    const uint64_t words[]={0xffff800000001004ULL,24,0x246,0x12345678abcdfff8ULL,32};
+    unsigned char frame[40],before[40];uint64_t budget=7;
+    memset(frame,0xa5,sizeof(frame));
+    for(unsigned i=0;i<5;++i)memcpy(frame+i*FIELD_BYTES,&words[i],FIELD_BYTES);
     neverd_x64_state_v6 s=seed();s.PC=kind?0x1002:0x1000;
     s.GDTR=(neverd_x64_descriptor_table){(uintptr_t)table,63,0,0};
     s.GPR[4]=(uintptr_t)frame;
     for(unsigned i=0;i<8;++i)s.Undefined[i]=0xdeadbeef01234567ULL+i;
     neverd_x64_state_v6 want=s;
     want.PC=0x1004;want.CS=(neverd_x64_segment){0,UINT32_MAX,24,0xc09b};
-    want.GPR[4]=kind?(uint32_t)(s.GPR[4]+16):(uint32_t)frame[3];
+    want.GPR[4]=kind?(uint32_t)(s.GPR[4]+2*FIELD_BYTES):
+                    words[3]&(FIELD_BYTES==2?0xffff:0xffffffff);
     if(!kind) {
       want.SS=(neverd_x64_segment){0,UINT32_MAX,32,0xc093};want.NMIBlocked=0;
     }
@@ -819,6 +826,7 @@ int main(void) {
   return 0;
 }
 )C");
+    }
   }
 }
 

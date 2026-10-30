@@ -102,13 +102,13 @@ struct X64ContinuationSegmentMetadata {
   uint16_t Attributes = 0;
 };
 
-/// V6 owns descriptor and interruptibility state for RETFQ, IRETQ and software
-/// interrupts.
-/// Unusable bits correspond to CS, SS, DS, ES, FS, GS, LDTR, TR in that order.
-/// For an unusable segment, its selector and unusable bit are meaningful; its
-/// cached limit/attributes and non-FS/GS base are not architectural outputs.
-/// Invalidating a segment retains those ignored bytes. This does not assert
-/// a processor-specific hidden-cache pattern for a null selector.
+/// V6 owns descriptor and interruptibility state for far/interrupt returns and
+/// software interrupts. Unusable bits correspond to CS, SS, DS, ES, FS, GS,
+/// LDTR, TR in that order. For an unusable segment, its selector and unusable
+/// bit are meaningful; its cached limit/attributes and non-FS/GS base are not
+/// architectural outputs. Invalidating a segment retains those ignored bytes.
+/// This does not assert a processor-specific hidden-cache pattern for a null
+/// selector.
 struct alignas(16) X64ContinuationStateV6 {
   X64ContinuationStateV5 Core;
   X64ContinuationDescriptorTable GDTR;
@@ -226,19 +226,20 @@ enum class X64ContinuationProfile : uint8_t {
   /// Initial CS must describe CPL0 64-bit code. CET/FRED and asynchronous
   /// events remain disabled. Earlier state layouts are never extended.
   KernelReturnNoFaultV5,
-  /// V5 plus live GDT/LDT/IDT/TSS RAM and explicit segment caches. IRETQ and
-  /// canonical RETFQ (with or without imm16) may return to 64-bit or
+  /// V5 plus live GDT/LDT/IDT/TSS RAM and explicit segment caches. Canonical
+  /// 16/32/64-bit IRET and RETF (with or without imm16) may return to 64-bit or
   /// compatibility code at CPL0..3. The raw saved RIP must be canonical;
   /// compatibility targets use its low 32 bits within the CS limit. Their
   /// eight conditional slots choose legacy GPR high halves, including RSP.
   /// Target SS.B controls stack restoration/cleanup; 16-bit stacks retain
-  /// original ESP[31:16]. RETFQ preserves NMI blocking and applies unsigned
-  /// cleanup; IRETQ unblocks NMIs. INT3 and canonical INT imm8 enter a CPL0
-  /// 64-bit interrupt or trap gate, with any IST. They exit before target
-  /// execution. NMI blocking is explicit; no NMI is delivered. CET/FRED,
-  /// faulting execution, MMIO, concurrent writers and asynchronous events
-  /// remain outside the domain. Descriptor accessed-bit writes may alias the
-  /// frame or TSS and retain their instruction-local ordering. No host
+  /// original ESP[31:16]. RETF preserves NMI blocking and applies unsigned
+  /// cleanup; IRET unblocks NMIs and pops all five fields even at the same CPL.
+  /// Word IRET retains the old RF/AC/ID/VIF/VIP bits. INT3 and canonical INT
+  /// imm8 enter a CPL0 64-bit interrupt or trap gate, with any IST. They exit
+  /// before target execution. NMI blocking is explicit; no NMI is delivered.
+  /// CET/FRED, faulting execution, MMIO, concurrent writers and asynchronous
+  /// events remain outside the domain. Descriptor accessed-bit writes may alias
+  /// the frame or TSS and retain their instruction-local ordering. No host
   /// privilege transfer is made. Segment caches must describe an
   /// architecturally valid entry context. Software interrupts accept TF/RF, all
   /// IOPL values and VIF/VIP in the input flags. Other steps retain the earlier

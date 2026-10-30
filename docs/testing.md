@@ -9440,6 +9440,20 @@ records 9,312 original instructions, 37,248 paired state/RAM comparisons,
 integration run with no failures or skips. The legacy KVM oracle does not
 independently sample arbitrary full XSAVE/vector banks.
 
+The same fixture owns narrow IRET/RETF forms. Native cases cover all target
+CPLs, long and both compatibility modes, GDT/LDT, both SS.B values, frame-pop
+and cleanup carries, all restored flag bits and descriptor writes overlapping
+narrow saved-SP fields. Each C route runs at O0/O2 with four independent
+high-half choices. Portable guard-page cases place the last required frame byte
+immediately before inaccessible memory and compare complete state and RAM;
+they detect wide overreads and absent same-CPL RETF stack fields. SDK tests
+check conditional choices, one-step budget consumption and compatibility
+reentry refusal for all three operand widths. Earlier state layouts and
+unqualified prefix combinations retain native requests.
+The [narrow-frame qualification record](evidence/x86-narrow-frame-returns-2026-10-30.json)
+records 12,296 original instructions, 49,184 paired comparisons, 1,536 portable
+guard-page cases and 1,559 integration tests with no failures or skips.
+
 The native speculation and descriptor fixtures compile both source routes at
 O0/O2 into freestanding guests and execute them at CPL0 using Linux x64 KVM.
 They check real SPEC_CTRL readback, PRED_CMD writes, repeated writes, native

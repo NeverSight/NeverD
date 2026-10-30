@@ -1,0 +1,214 @@
+{
+  "schema_version": 1,
+  "date": "2026-10-30",
+  "scope": "Explicit 16/32-bit IRET and RETF from 64-bit entry",
+  "global_instruction_goal_complete": false,
+  "artifacts_root": "/mnt/data/neverd-narrow-returns-20261030",
+  "neverd_base": "edd943cc557f49bc66f20121da9d8eb22bb1adfe",
+  "llvm_head": "d0aad189fd7d2689cbe51a883a986df9efd8871b",
+  "neverc_head": "3d1f7b851b6f8e5d9194f5f6f53887441cbc73ce",
+  "reference": {
+    "url": "https://cdrdv2-public.intel.com/874240/325462-090-sdm-vol-1-2abcd-3abcd-4.pdf",
+    "document": "Intel SDM 325462-090, IRET/IRETD/IRETQ and RET; Volume 3A section 7.14.3",
+    "artifact": "/mnt/data/neverd-uiret-20261030/intel-sdm-090.pdf",
+    "sha256": "3686e42931e893b5016c70fb131403795ef173237d073afcfec52755fcd3ea50"
+  },
+  "implementation": {
+    "domain": "V6 and inheriting V7/V8 retain their 64-bit CPL0 entry, disabled CET/FRED, successful ordinary sequential RAM and no asynchronous event domain. Canonical CF/CB/CA imm16 with no prefix, 66 or 48 select dword, word or qword frame fields.",
+    "lifter": "All IRET operand widths begun in 64-bit mode pop five frame fields, even at the same target CPL. The earlier narrow lift incorrectly named only three. Legacy i386 admission is unchanged.",
+    "admission": "One frame-return reader binds exact bytes, field sizes, addresses and terminal intrinsic shape. It derives unsigned immediate cleanup once. Noncanonical prefix combinations remain native requests.",
+    "state": "Narrow IP/SP fields zero-extend before target-mode stack rules. Word IRET preserves RF/AC/ID/VIF/VIP; wider IRET restores those bits from the frame. Existing target cache, segment invalidation, NMI, monitor and conditional high-half behavior is shared.",
+    "memory": "The shared descriptor owner reads exactly the requested field width and forwards a pending accessed bit only when it lies within that field. Same-CPL RETF does not require absent saved SP/SS fields.",
+    "public_export": "All three operand widths publish the same eight conditional compatibility choices, consume one driver step, stop before a selected target and refuse compatibility reentry without another budget charge.",
+    "compiler": "Existing LLVM/NeverC native frame APIs need no source changes. NeverC still supports x86_64/aarch64 frontend targets; its deliberate i386 target refusal is separate from LLVM's i386 intrinsic backend."
+  },
+  "qualification": {
+    "routes": [
+      "high-c",
+      "llvm-c"
+    ],
+    "optimizations": [
+      "O0",
+      "O2"
+    ],
+    "portable_sanitizers": [
+      "address",
+      "undefined"
+    ],
+    "exploratory_original_cases": 48,
+    "native_original_instructions": 12296,
+    "native_paired_state_and_ram_comparisons": 49184,
+    "portable_guard_page_state_and_ram_cases": 1536,
+    "public_export_success_and_reentry_pairs_all_widths": 24,
+    "native_and_new_portable_paging_width": 48,
+    "native_observations": "Independent KVM original instructions provide GPR, flags, IP, segment/cache, descriptor-table and event-state observations, plus all affected descriptor/frame RAM. Four independent high-half choices preserve every defined bit. This legacy oracle does not independently sample arbitrary full XSAVE/vector banks.",
+    "matrix": "Both narrow widths; IRET and RETF plain/imm7/imm65535; target CPL0..3, 64-bit and both compatibility defaults, GDT/LDT, SS.B0/1, original-SP carries, saved-SP truncation, all 32 frame flag bits and narrow descriptor/frame aliases.",
+    "guard_pages": "The last required frame byte borders PROT_NONE. The tests compare the full represented state and RAM and cover word flag preservation, same-CPL short frames and cleanup."
+  },
+  "checks": [
+    {
+      "name": "Focused native, guarded-memory, SDK and lifting checks",
+      "tests": 8,
+      "failed": 0,
+      "skipped": 0,
+      "junit": "neverd-focused.xml"
+    },
+    {
+      "name": "Integrated continuation, original state, refinement and system-state checks",
+      "tests": 1559,
+      "failed": 0,
+      "skipped": 0,
+      "labels": 10,
+      "junit": "neverd-integrated.xml"
+    },
+    {
+      "name": "Release compilation through scripts/build.py",
+      "passed": true,
+      "receipt": "neverd-build-receipt.json"
+    },
+    {
+      "name": "Changed-range clang-format 22.1.2",
+      "files": 11,
+      "passed": true
+    },
+    {
+      "name": "Localized documentation",
+      "markdown_files": 309,
+      "locales": 10,
+      "passed": true
+    }
+  ],
+  "environment": {
+    "temporary_files": "Task TMPDIR and private user/mount namespace for GoogleTest CapturedStream, without modifying host mounts or assertions.",
+    "intentional_child_faults": "Task-local no-core helper loaded after namespace creation suppresses Apport for intentional test child faults."
+  },
+  "remaining_limits": [
+    "Legacy and compatibility source contexts, ordinary full-machine native continuation",
+    "CET/FRED, fault delivery, partial-fault ordering, MMIO, RTM/HLE and asynchronous events",
+    "Noncanonical raw qword RIP still requires an original-processor behavior binding",
+    "Independent arbitrary full XSAVE/vector-bank and additional processor qualification",
+    "Other instruction contracts in docs/x86-instruction-support.md"
+  ],
+  "release": {
+    "published": false,
+    "pin_changed": false
+  },
+  "artifacts": [
+    {
+      "path": "docs-i18n.log",
+      "sha256": "891c1f2a9e40d3952b23e9e79b35ac05e77427ad91de98357bc3829b3ed7ab14",
+      "bytes": 69
+    },
+    {
+      "path": "format-and-results.log",
+      "sha256": "4622a492c71546f10faf5f7e615a2c9c4a931309c5c50b5e9b001f7bddbfa5c5",
+      "bytes": 81
+    },
+    {
+      "path": "format.log",
+      "sha256": "1010eb6bd95477acb4681b34c41a585488b41b13c68fcb5f499dfd47374783b4",
+      "bytes": 38
+    },
+    {
+      "path": "neverd-build-receipt.json",
+      "sha256": "28793d0c833c6f0ce6c747f2dc2fc8ca9cd7b7d9c3272afc930f5558a695d71e",
+      "bytes": 3852
+    },
+    {
+      "path": "neverd-build.log",
+      "sha256": "7f841a4ba4954cba89f6492fbae680f14f8dda2c0e8d5d74adcbe8f3adf1ac93",
+      "bytes": 40974
+    },
+    {
+      "path": "neverd-focused.log",
+      "sha256": "887e3991f5202fb8a0f4c305eae0ab90d05a804eec814596328d75f764528988",
+      "bytes": 2118
+    },
+    {
+      "path": "neverd-focused.xml",
+      "sha256": "4b8eb0708e2bd0b1ef0d309a0c46eb09e07c702e28a0170994ffbab25a8c6598",
+      "bytes": 8823
+    },
+    {
+      "path": "neverd-integrated.log",
+      "sha256": "d39f8cc98aab8a178ae4abf2fe22422e806377d3890531dc86fc16088ba033a4",
+      "bytes": 486324
+    },
+    {
+      "path": "neverd-integrated.xml",
+      "sha256": "9f3eaee9a924aeb8fb5a1af15b75c139aa5b3f94c7f78587bc56e34344ae135c",
+      "bytes": 1633002
+    },
+    {
+      "path": "private-tmp-runner.py",
+      "sha256": "df204187f6e51a40da132d56f340a397d404cbaa91e1e706bb3d18ef37be78ae",
+      "bytes": 322
+    },
+    {
+      "path": "probe-summary.log",
+      "sha256": "31640809c1dd862991a77fee3d9206fff3a66cc44b6cd0e879000aea5588acb3",
+      "bytes": 2416
+    },
+    {
+      "path": "probe.py",
+      "sha256": "8b7cffe96b50994de9483474ff99b2dcdfaf2f2c9b06c91899b31d08cab83515",
+      "bytes": 3086
+    },
+    {
+      "path": "probes.log",
+      "sha256": "7e23556b47b8c850f1592f2f5203cfbecc4a4a1ce964ef2495131203d6b65b0c",
+      "bytes": 8059
+    },
+    {
+      "path": "run_x64_continuation_kvm.py",
+      "sha256": "78aca0ac469fa37c281fda84d55fbc6363d3a910ce3890d35d9d7f3e5d78aed3",
+      "bytes": 2725
+    }
+  ],
+  "sources": [
+    {
+      "path": "include/neverd/analysis/arch/x86_64/X64ContinuationSource.h",
+      "sha256": "206791e0fdf485aa1b22fe12929956480d2e38a30e482a29240b8407be6348fd"
+    },
+    {
+      "path": "lib/analysis/arch/x86_64/X64ContinuationEvents.h",
+      "sha256": "3468231bc5ca84bf9ef06c9b06da5552ab7204e844903374396bb07fc1d468a4"
+    },
+    {
+      "path": "lib/analysis/arch/x86_64/X64ContinuationSegments.h",
+      "sha256": "41e943b4e65f155eceebfc12c812467648c2b648ca651d8ace01706dc93ff414"
+    },
+    {
+      "path": "lib/analysis/arch/x86_64/X64ContinuationSource.cpp",
+      "sha256": "a2762c4b644c6130b43487a1dadd4de6c20cf510799184b7f0f5f7dd32d350ff"
+    },
+    {
+      "path": "lib/lift/X86/X86LiftControl.cpp",
+      "sha256": "0426a5f524b74a64e672f13aaaab5daa77e5dc2c369cfce0914116e7903f0c22"
+    },
+    {
+      "path": "lib/pipeline/X64ContinuationExport.cpp",
+      "sha256": "baeccf68f8fcad4f1bd13803d6dbb491dbcce4e4e4fa52c0d3e96533ef2fc405"
+    },
+    {
+      "path": "unittests/devirtualization/X64ContinuationExportTests.cpp",
+      "sha256": "081d103ca687faa10a17a73b2e18be1c1648c94f6e89fe5fc06f5bf44c1590fb"
+    },
+    {
+      "path": "unittests/devirtualization/X64ContinuationSourceTests.cpp",
+      "sha256": "601f9105a86a25b658441004aa3312d44ce3a8e68a4726e41bea4b8cf653c02a"
+    },
+    {
+      "path": "unittests/devirtualization/X64FrameReturnContinuationTests.inc",
+      "sha256": "5214da1fa42de6148309e941f783dbe18d904a7055f1f12c2cd379b8d5ca4de9"
+    },
+    {
+      "path": "unittests/devirtualization/fixtures/x64_continuation_kvm.c",
+      "sha256": "635e046209c5525a34d65f47238db56ad150238ebb2b611bf783fb361c9c6a1b"
+    },
+    {
+      "path": "unittests/lift/x86_64/X86SystemStateTests.cpp",
+      "sha256": "3303dccf3327994067ef0b9652db40256cab7b95a0a6b5635fe85021f1fc2c4b"
+    }
+  ]
+}
