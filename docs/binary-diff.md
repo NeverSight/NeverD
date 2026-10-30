@@ -64,6 +64,38 @@ otherwise identical wrappers after layout changes. Their original bytes remain
 inspectable; separate normalized features, names and call context can still
 establish correspondence, while indistinguishable candidates remain ambiguous.
 
+Matcher version 15 adds `data_reference` candidates after the existing matcher
+and entry-alternative review settle. Independently matched complete functions
+with equal instruction layouts and CFGs align unnamed data operands by their
+instruction and operand positions. Known addresses and mapped call/function
+targets must agree; conflicting mappings in either direction remain unknown.
+Only a unique pair with the same complete reference roles is proposed. These
+candidates use the existing similarity threshold and can distinguish equal or
+weaker alternatives only when mapped call/address context does not contradict
+them. A stronger body or another independently supported alternative still
+prevents automatic admission. The witness correspondence is frozen for this
+pass, so proposed functions cannot justify their own data-reference evidence.
+This final pass measures reference proposals and their competing bodies, but
+only admits pairs supported by the new reference evidence. Unrelated pairs
+deferred during entry-alternative review remain available for review.
+
+The same pass proposes `address_site` callback pairs from complete function
+address operands at aligned positions in independently matched functions.
+Already paired targets and known data must agree. Unnamed data operands require
+the frozen data-reference relation above; callbacks cannot bootstrap that
+relation. All eligible witnesses must agree in both directions. Like call-site
+proposals, these candidates use the existing lower context threshold only when
+every mapped caller, callee and address neighbor agrees, and still compete with
+measured body alternatives. Function addresses retain their explicit role;
+they are not inferred from arbitrary numeric operands.
+
+This rule currently uses the complete address operands of
+`native-x86-operands-v3`; AArch64 page fragments are not object-reference
+witnesses. It does not use companion debug information, neighboring function
+addresses or assumed data layouts. Data identity and contents remain unknown:
+the instruction delta retains uncertain references and does not report
+semantic equivalence or unchanged code merely because this context paired it.
+
 Matcher version 10 also defers a similar helper body when its changed entry
 contains the complete straight-line prelude of an unmatched direct tail caller,
 with at least two caller instructions beyond the helper's aligned body. Both

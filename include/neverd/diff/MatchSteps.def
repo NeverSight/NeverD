@@ -63,6 +63,12 @@ NEVERD_DIFF_FUNCTION_STEP(Neighborhood, "neighborhood", 0.75,
                           "functions on both sides")
 NEVERD_DIFF_FUNCTION_STEP(Similarity, "similarity", 0.60,
                           "The most similar remaining body by a clear margin")
+NEVERD_DIFF_FUNCTION_STEP(DataReference, "data_reference", 0.80,
+                          "The same data-reference roles in independently "
+                          "matched functions")
+NEVERD_DIFF_FUNCTION_STEP(AddressSite, "address_site", 0.80,
+                          "The same address-taking operand of independently "
+                          "matched functions")
 NEVERD_DIFF_FUNCTION_STEP(
     InlinedTailCall, "inlined_tail_call", 0.60,
     "A similar body also contains an unmatched tail "

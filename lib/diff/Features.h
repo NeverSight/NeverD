@@ -54,6 +54,9 @@ struct FunctionFeatures {
   /// The same stream including padding, to require an actual layout edit
   /// before the additional candidate key broadens the existing search.
   uint64_t BodyWithPadding = 0;
+  /// Address-independent instructions, block boundaries and exact CFG. Used
+  /// to align reference occurrences, never to assert normalized equality.
+  uint64_t ReferenceLayout = 0;
   /// Complete call-free conditional entry without padding/landing markers.
   /// Proposes candidates across CFG edits; it never establishes identity.
   uint64_t EntryBody = 0;
@@ -82,6 +85,16 @@ struct FunctionFeatures {
   /// Instruction/operand-bound address-taking uses and modeled transfers.
   /// NoIndex as operand denotes a transfer, separate from explicit operands.
   std::vector<AddressSite> AddressSites;
+  struct DataSite {
+    uint64_t Key;
+    uint32_t Instruction;
+    uint32_t Operand;
+    ReferenceKind Kind;
+  };
+  /// Non-function address operands, retaining their kind and occurrence.
+  std::vector<DataSite> DataSites;
+  /// Every unresolved data reference has an instruction/operand occurrence.
+  bool DataSitesComplete = true;
   uint32_t FunctionReferences = 0;
   /// Raw address encodings vary with layout and cannot identify duplicate
   /// normalized bodies, even when their referenced objects correspond.
