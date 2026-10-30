@@ -100,6 +100,9 @@ struct Domain {
   /// The parent must reconnect its own node or remove the chain before calls.
   bool AbandonedSEHGuard = false;
   bool CanDispatch = false;
+  /// All possible exception origins so far have closed integer effects and
+  /// callback-free C++ throws. Distinct from ordinary-return IAT liveness.
+  bool CxxDispatchBindingsIntact = true;
   std::optional<int32_t> OrdinaryCallStack;
   struct ParentStackRestore {
     va_t Address = InvalidVA;
@@ -287,6 +290,7 @@ private:
     /// Complete image may-writes have already invalidated affected bindings.
     /// This does not authorize retaining cached callable register identities.
     bool PreservesImportBindings = false;
+    bool PreservesDispatchBindings = false;
   };
   std::optional<CallTransfer> transferCall(size_t I, Domain &After,
                                            const LowOp &Op,
@@ -433,7 +437,11 @@ private:
   bool conditionalReturn(const Domain &State, const LowOp &Op);
   bool conditionalCall(const Domain &State, const LowOp &Op,
                        std::optional<FrameValue> &ReturnValue);
-  void dispatchBlock(size_t I, const Domain &Before, const BlockFacts &Facts);
+  bool preservesCxxDispatchBindings(const Domain &State, const LowOp &Op,
+                                    const FrameTransfer &Transfer,
+                                    bool RuntimeMemory);
+  void dispatchBlock(size_t I, const Domain &Before, const BlockFacts &Facts,
+                     bool PreserveBindings = false);
   bool dispatchUnknownCxxCleanups(const Domain &Before);
   void queueSEHScopes(const Domain &Before, bool Invalid);
   void flushSEHScopes();
@@ -468,10 +476,12 @@ private:
   void recordChainAccess(const LowOp &Op, const LowBlock &Block,
                          RegistrationChainAccess::Kind Kind);
   void merge(size_t Target, const Domain &Source);
-  void dispatch(
-      va_t Address, std::set<int32_t> Levels, const Domain &Source,
-      bool Unknown = false, bool Callback = false, bool SearchFilter = false,
-      std::optional<std::pair<uint32_t, uint32_t>> CxxCatch = std::nullopt);
+  void
+  dispatch(va_t Address, std::set<int32_t> Levels, const Domain &Source,
+           bool Unknown = false, bool Callback = false,
+           bool SearchFilter = false,
+           std::optional<std::pair<uint32_t, uint32_t>> CxxCatch = std::nullopt,
+           bool PreserveBindings = false);
 
   const LowFunc &Function;
   const ExceptionFunction &EH;

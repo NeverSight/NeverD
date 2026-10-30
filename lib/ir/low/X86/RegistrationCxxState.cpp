@@ -13,11 +13,13 @@
 #include "RegistrationConditionalFrame.h"
 #include "RegistrationFrame.h"
 #include "RegistrationFrameEffects.h"
+#include "RegistrationMemoryPermissions.h"
 #include "RegistrationOrdinaryGraph.h"
 #include "RegistrationSourceCall.h"
 #include "RegistrationStateSolver.h"
 
 #include "neverd/Limits.h"
+#include "neverd/decode/InstructionRelocations.h"
 #include "neverd/ir/Limits.h"
 #include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/ir/low/RegistrationSharedCall.h"
@@ -30,6 +32,7 @@
 
 #include "llvm/ADT/ScopeExit.h"
 
+#include <algorithm>
 #include <map>
 #include <set>
 #include <utility>
@@ -39,6 +42,141 @@ namespace neverd {
 namespace {
 using CxxCalleeQuery = std::pair<const BinaryImage *, va_t>;
 thread_local std::set<CxxCalleeQuery> ActiveCxxCallees;
+
+bool hasCurrentCxxDispatchOperations(const BinaryImage &Image,
+                                     const LowFunc &Function, size_t &Work) {
+  Decoder Dec;
+  if (!Dec.init(Image))
+    return false;
+  Dec.setStrict(true);
+  for (const auto &Block : Function.Blocks) {
+    size_t First = 0;
+    va_t Address = Block.StartAddr;
+    for (const auto &Boundary : Block.InstructionBoundaries) {
+      if (!registration_abi::chargeCalleeWork(Work, Boundary.OpCount + 1) ||
+          Boundary.FirstOp != First || Boundary.Address != Address ||
+          !Boundary.Size || Address > Block.EndAddr ||
+          Boundary.Size > Block.EndAddr - Address || First > Block.Ops.size() ||
+          Boundary.OpCount > Block.Ops.size() - First ||
+          !registration_abi::hasImmutableCalleeInstruction(Image, Boundary,
+                                                           Dec))
+        return false;
+      const auto *Bytes = Image.readVA(Address, Boundary.Size);
+      DecodedInsn Insn;
+      if (!Bytes || !Dec.decodeOne(Bytes, Boundary.Size, Address, Insn) ||
+          Insn.Size != Boundary.Size)
+        return false;
+      const auto Relocations = instructionRelocations(Image, Insn);
+      std::vector<LowOp> Expected;
+      try {
+        Dec.liftToLow(Insn, Expected, Relocations.Addresses,
+                      Relocations.Scalars);
+      } catch (const UnliftedInstruction &) {
+        return false;
+      }
+      if (!registration_abi::chargeCalleeWork(Work, Expected.size() + 1) ||
+          Expected.size() != Boundary.OpCount ||
+          !std::equal(Expected.begin(), Expected.end(),
+                      Block.Ops.begin() + First))
+        return false;
+      First += Expected.size();
+      Address += Boundary.Size;
+    }
+    if (First != Block.Ops.size() || Address != Block.EndAddr)
+      return false;
+  }
+  return true;
+}
+
+void proveTrivialCxxDispatch(
+    const BinaryImage &Image, const LowFunc &Function,
+    const std::vector<RegistrationCalleeFrameContract> *Callees,
+    registration_state::CxxCallerProof &Calls, size_t &Work) {
+  if (!Function.ExceptionMetadata || !Function.ExceptionMetadata->Cxx ||
+      !Function.ExceptionMetadata->Registration || !Callees)
+    return;
+  // Borrowing constructors, member graphs and nested EH parents need their
+  // own dispatch closure. Leave those queries on the existing conservative
+  // callback-entry path instead of lending them a scalar-only authority.
+  for (const auto &Callee : *Callees)
+    if (!registration_abi::chargeCalleeWork(Work, 1) ||
+        Callee.isInitializer() || Callee.isCxxParent() ||
+        !Callee.ECXReads.empty() || !Callee.ECXWrites.empty())
+      return;
+  const auto &EH = *Function.ExceptionMetadata;
+  const auto &Cxx = *EH.Cxx;
+  if (EH.Registration->RealignedFrame || !Cxx.IsSynchronous || Cxx.IsNoExcept ||
+      Cxx.hasExceptionSpecification() ||
+      !registration_abi::chargeCalleeWork(Work, Cxx.UnwindMap.size() + 1) ||
+      llvm::any_of(Cxx.UnwindMap,
+                   [](const auto &Action) { return Action.ActionVA != 0; }) ||
+      !coff_loader::getCheckedX86CxxHandlerABI(Image, EH) ||
+      !coff_loader::getCheckedX86CxxMetadataRanges(Image, EH) ||
+      !hasCurrentCxxDispatchOperations(Image, Function, Work))
+    return;
+  // This closure has no user unwind actions. Each originating throw still
+  // needs a current scalar object and closed preparation; an unrelated fault
+  // or opaque call cannot inherit the known CRT's dispatch contract.
+  Calls.ProveDispatchMemory =
+      [&Image](const LowOp &Op,
+               const registration_state::FrameTransfer &Transfer,
+               size_t &Used) {
+        return registration_abi::hasClosedOrdinaryRegistrationMemoryAccess(
+            Image, Op, Transfer, sizeof(uint32_t), Used);
+      };
+  Calls.ProveDispatchCall =
+      [&Image, &Function,
+       Throws = std::map<va_t, std::optional<RegistrationThrowCalleeABI>>{},
+       Leaves = std::map<va_t, bool>{}](
+          const LowOp &Op, const RegistrationCalleeFrameContract &Contract,
+          const RegistrationCallFrameEffect &Effect, size_t &Used) mutable {
+        if (Effect.StackPopBytes ||
+            !registration_state::checkedRegistrationDirectCall(Image, Function,
+                                                               Op, Used))
+          return false;
+        if (Contract.CalleeKind ==
+                RegistrationCalleeFrameContract::Kind::Leaf &&
+            !Effect.DoesNotReturn && Contract.ECXReads.empty() &&
+            Contract.ECXWrites.empty()) {
+          if (!registration_abi::chargeCalleeWork(Used, Leaves.size() + 1))
+            return false;
+          const auto [It, New] = Leaves.try_emplace(Effect.Target, false);
+          if (New) {
+            const auto Leaf = getCheckedX86RegistrationLeafCalleeABI(
+                Image, Effect.Target, &Used, RegistrationLeafResult::Discarded);
+            It->second = Leaf && Leaf->PreservesDispatchBindings;
+          }
+          return It->second;
+        }
+        if (!Contract.isThrow() || !Effect.DoesNotReturn)
+          return false;
+        if (Contract.isRuntimeThrow()) {
+          if (!Effect.RuntimeThrow || !getCheckedX86RegistrationThrowImportABI(
+                                          Image, Effect.Target, &Used))
+            return false;
+          const auto &Throw = *Effect.RuntimeThrow;
+          if (Throw.isRethrow())
+            return true; // The state solver separately binds the live catch.
+          if (!registration_abi::chargeCalleeWork(Used, 1))
+            return false;
+          const auto Info = coff_loader::getCheckedX86SimpleCxxThrowInfo(
+              Image, Throw.ThrowInfoVA);
+          return Info && Info->ObjectSize == Throw.ObjectSize;
+        }
+        if (!registration_abi::chargeCalleeWork(Used, Throws.size() + 1))
+          return false;
+        const auto [It, New] = Throws.try_emplace(Effect.Target);
+        if (New)
+          It->second = getCheckedX86RegistrationThrowCalleeABI(
+              Image, Effect.Target, &Used);
+        const auto &Throw = It->second;
+        return Throw && Throw->PreservesDispatchBindings &&
+               Throw->IsRethrow == Contract.isRethrow() &&
+               (Throw->IsRethrow ||
+                (Throw->ThrowInfo.TypeDescriptorVA == Contract.ThrownTypeVA &&
+                 Throw->ThrowInfo.ObjectSize == Contract.ThrownObjectSize));
+      };
+}
 
 RegistrationStateAnalysis solveCheckedCxxStates(
     const BinaryImage &Image, const LowFunc &Function,
@@ -176,6 +314,7 @@ RegistrationStateAnalysis analyzeCheckedX86CxxStates(
     RegistrationCallCalleeIndex *CalleeIndex) {
   size_t Work = 0;
   registration_state::CxxCallerProof Calls;
+  proveTrivialCxxDispatch(Image, Function, Callees, Calls, Work);
   for (const auto &Import : Image.Imports) {
     if (!registration_abi::chargeCalleeWork(Work, 1)) {
       if (CalleeIndex)

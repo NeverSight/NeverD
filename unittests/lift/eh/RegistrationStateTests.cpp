@@ -5,6 +5,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "../../../lib/ir/low/X86/RegistrationFrame.h"
+#include "../../../lib/ir/low/X86/RegistrationStateSolver.h"
 #include "RegistrationStateTestUtils.h"
 #include "gtest/gtest.h"
 
@@ -14,12 +15,91 @@
 #include "neverd/ir/low/LowIR.h"
 #include "neverd/lift/X86Regs.h"
 
+#include <algorithm>
 #include <tuple>
 
 namespace {
 
 using namespace neverd;
 using namespace neverd::registration_test;
+
+TEST(RegistrationState, CxxDispatchBindingsCannotOutliveAnUnclosedOrigin) {
+  for (unsigned Mutation = 0; Mutation != 9; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    auto Function = makeCxxCatchContinuation();
+    auto &Stores = Function.ExceptionMetadata->Registration->TryLevelStores;
+    std::erase_if(Stores,
+                  [](const auto &Store) { return Store.StoreVA == 0x1020; });
+    for (unsigned Index : {2u, 5u}) {
+      auto &Block = Function.Blocks[Index];
+      Block.Ops.clear();
+      Block.Succs.clear();
+      Block.EndAddr = Block.StartAddr + 5;
+      Block.InstructionBoundaries = {{Block.StartAddr, 5}};
+      auto &Call = Block.InstructionBoundaries.front();
+      Call.Control = LowInstructionControl::Call;
+      Call.ControlFlags =
+          LowInstructionControlFlag::Call | LowInstructionControlFlag::NoReturn;
+      emitOp(Block, Block.StartAddr, NdOp::CALL, NdVar::reg(x86reg::RAX, 4),
+             {NdVar::cst(0x2100, 4)});
+    }
+    std::vector<RegistrationCalleeFrameContract> Callees(1);
+    auto &Throw = Callees.front();
+    Throw.Target = 0x2100;
+    Throw.CalleeKind = RegistrationCalleeFrameContract::Kind::PrivateThrow;
+    Throw.DoesNotReturn = true;
+    Throw.ThrownTypeVA = 0x4000;
+    Throw.ThrownObjectSize = 4;
+    Throw.RequiredImports = {0x3000};
+    registration_state::CxxCallerProof Proof;
+    Proof.ImportSlots.insert(0x3000);
+    if (Mutation != 1)
+      Proof.ProveDispatchCall = [&](const LowOp &,
+                                    const RegistrationCalleeFrameContract &,
+                                    const RegistrationCallFrameEffect &,
+                                    size_t &) { return Mutation != 2; };
+    Proof.ProveDispatchMemory = [](const LowOp &Op, const auto &, size_t &) {
+      return Op.MemoryAddressSpace == NdMemoryAddressSpace::X86FS;
+    };
+    if (Mutation >= 3 && Mutation <= 6) {
+      LowBlock Extra;
+      if (Mutation == 3 || Mutation == 6)
+        emitOp(Extra, 0x1013, NdOp::LOAD, NdVar::tmp(91, 4),
+               {NdVar::cst(Mutation == 3 ? 0 : 0x4000, 4)});
+      if (Mutation == 4)
+        emitOp(Extra, 0x1013, NdOp::STORE, {},
+               {NdVar::cst(0x3001, 4), NdVar::cst(0, 1)});
+      if (Mutation == 5)
+        emitOp(Extra, 0x1013, NdOp::INT_DIV, NdVar::tmp(91, 4),
+               {NdVar::reg(x86reg::RAX, 4), NdVar::reg(x86reg::RCX, 4)});
+      // Faults before the later state store must remain visible to the
+      // following throw block; a closed later block cannot repair the proof.
+      auto &Body = Function.Blocks[1];
+      Body.Ops.insert(Body.Ops.begin() + 3, Extra.Ops.begin(), Extra.Ops.end());
+    }
+    if (Mutation == 8) {
+      LowBlock Extra;
+      emitOp(Extra, 0x1800, NdOp::LOAD, NdVar::tmp(91, 4), {NdVar::cst(0, 4)});
+      auto &Handler = Function.Blocks[5];
+      Handler.Ops.insert(Handler.Ops.begin(), Extra.Ops.front());
+      Handler.Ops.back().Seq = 1;
+    }
+    if (Mutation == 7)
+      std::reverse(Function.Blocks.begin(), Function.Blocks.end());
+    registration_state::RegistrationStateSolver Solver(
+        Function, 0, 0, &Callees, nullptr, nullptr, nullptr, nullptr, nullptr,
+        nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, &Proof);
+    const auto States = Solver.run();
+    const bool Closed = Mutation == 0 || Mutation == 7;
+    if (Closed)
+      ASSERT_TRUE(States.Complete)
+          << (States.Diagnostics.empty() ? "" : States.Diagnostics.front());
+    EXPECT_EQ(
+        llvm::any_of(States.CallFrameEffects,
+                     [](const auto &Call) { return Call.Address == 0x1800; }),
+        Closed);
+  }
+}
 
 TEST(RegistrationState, DeadFrameValuesDoNotAccumulateAcrossJoins) {
   using registration_state::FrameState;

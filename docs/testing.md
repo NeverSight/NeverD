@@ -4,6 +4,18 @@
 
 # Testing NeverD
 
+`RegistrationCallABI.ThrowDispatchRequiresClosedAccessesAndNoCallbacks` and
+`RegistrationState.CxxDispatchBindingsCannotOutliveAnUnclosedOrigin` cover
+callback-free C++ dispatch binding lifetime, mapped access permissions,
+unrelated IAT writes, prior faults, missing proofs, budget exhaustion and
+block-order independence. Run `NeverDRegistrationCalleeStackTests` and
+`NeverDRegistrationStateTests`. With an authored scalar secondary-throw PE32,
+`WindowsRegistrationNestedTry.InputPE32DispatchRequiresCurrentSources` also
+rejects stale parent code, LowIR, handler identity, metadata and permissions.
+The `nested` profile of `check_windows_registration_nested_try.py` compares
+original, regenerated and CLI-installed images at O0/O1 and rebased addresses;
+its result, not a skipped input-dependent test, supplies runtime qualification.
+
 `NeverDSymSimplifyGuardTests` checks that invalid LLVM, invalid options and
 incomplete exception contracts retain their diagnostics without modifying the
 input module. `NeverDSemanticCAPI.LLVMContractFailureRetainsFunctionAndReason`

@@ -104,11 +104,17 @@ getCheckedX86RegistrationThrowCalleeABI(const BinaryImage &Image, va_t Target,
   ImageFrameEffects Effects;
   if (!hasPrivateCallerFrame(
           Callee, Image, Work, Effects,
-          {.ThrowProof = &Result, .Initializers = &Initializers}) ||
+          {.ThrowProof = &Result,
+           .Initializers = &Initializers,
+           .ClosedIntegerEffects = &Result.PreservesDispatchBindings}) ||
       (Result.IsRethrow ? Result.ThrowInfo.Address != InvalidVA
                         : Result.ThrowInfo.Address == InvalidVA) ||
       !callerPCIsNotReadBack(Effects))
     return std::nullopt;
+  Result.PreservesDispatchBindings &=
+      Initializers.empty() &&
+      (Result.IsRethrow ||
+       (!Result.ThrowInfo.DestructorVA && !Result.ThrowInfo.CopyConstructorVA));
   if (!chargeCalleeWork(Work, Effects.Writes.size() + 1))
     return std::nullopt;
   const ExceptionAddressRange Binding{Result.ImportIATVA,

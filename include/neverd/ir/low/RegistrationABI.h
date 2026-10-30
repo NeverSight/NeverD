@@ -156,6 +156,10 @@ struct RegistrationLeafCalleeABI {
   /// incoming registers, borrowed pointers and the physical caller PC. A frame
   /// privacy proof alone may still permit an unobserved entry-EAX return.
   bool HasIndependentScalarReturn = false;
+  /// Separate closed integer effects, currently limited to leaves without
+  /// object borrows or nested calls. Retains existing IAT bindings across
+  /// possible dispatch origins, not an independently inferred entry ABI.
+  bool PreservesDispatchBindings = false;
   std::vector<RegistrationObjectExtent> ECXReads;
   std::vector<RegistrationObjectExtent> ECXWrites;
   std::vector<ExceptionAddressRange> ImageReads;
@@ -302,6 +306,10 @@ struct RegistrationThrowCalleeABI {
   /// Exactly two null arguments reuse the active CRT exception. No new object
   /// or ThrowInfo is supplied, and the caller must prove an active catch.
   bool IsRethrow = false;
+  /// Separate exceptional-path evidence: only closed integer accesses and the
+  /// checked throw call, with no initializer, copy or destructor callback.
+  /// A rethrow still requires a live, independently proved scalar exception.
+  bool PreservesDispatchBindings = false;
   coff_loader::X86IdentityCxxThrowInfo ThrowInfo;
   std::vector<ExceptionAddressRange> ImageReads;
   std::vector<ExceptionAddressRange> ImageWrites;

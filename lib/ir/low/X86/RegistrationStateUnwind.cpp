@@ -48,7 +48,8 @@ bool RegistrationStateSolver::dispatchUnknownCxxCleanups(const Domain &Before) {
 }
 
 void RegistrationStateSolver::dispatchBlock(size_t I, const Domain &Before,
-                                            const BlockFacts &Facts) {
+                                            const BlockFacts &Facts,
+                                            bool PreserveBindings) {
   const LowBlock &Block = Function.Blocks[I];
   // A filter is a searching callback, while a finally is an unwind callback
   // at its enclosing state. Lexical callback exclusion must not erase an
@@ -168,7 +169,7 @@ void RegistrationStateSolver::dispatchBlock(size_t I, const Domain &Before,
         return;
       dispatch(Try.Handlers[CatchIndex].HandlerVA, {Try.TryHigh + 1}, Before,
                Facts.Invalid, true, false,
-               std::make_pair(Search.TryIndex, CatchIndex));
+               std::make_pair(Search.TryIndex, CatchIndex), PreserveBindings);
     }
   }
 }

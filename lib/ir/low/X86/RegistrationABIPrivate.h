@@ -245,6 +245,9 @@ struct PrivateFrameOptions {
   /// It requires the closed plain-callee domain and cannot publish native
   /// admission or an unscoped layout-independent scalar return.
   registration_state::OriginalImageFrameProof *OriginalImage = nullptr;
+  /// Optional stronger effect proof. Unknown faults, FP and calls other than
+  /// ThrowProof's exact terminal runtime call withdraw it monotonically.
+  bool *ClosedIntegerEffects = nullptr;
 };
 
 bool hasPrivateCallerFrame(const LowFunc &Function, const BinaryImage &Image,

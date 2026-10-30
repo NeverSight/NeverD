@@ -4,6 +4,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "RegistrationMemoryPermissions.h"
 #include "RegistrationStateSolver.h"
 
 #include "neverd/Limits.h"
@@ -69,6 +70,10 @@ void RegistrationStateSolver::merge(size_t Target, const Domain &Source) {
     Changed |= Before != Dest.Levels.size();
     Changed |= Dest.Frame.merge(Source.Frame);
     Changed |= Dest.RuntimeObject.merge(Source.RuntimeObject);
+    if (Dest.CxxDispatchBindingsIntact && !Source.CxxDispatchBindingsIntact) {
+      Dest.CxxDispatchBindingsIntact = false;
+      Changed = true;
+    }
     if (Dest.SEHCallers.size() != Source.SEHCallers.size()) {
       Changed |= !Dest.Unknown;
       Dest.Unknown = true;
@@ -146,6 +151,7 @@ Domain dispatchSource(const Domain &Source) {
   Domain Root;
   // Runtime dispatch supplies no proof that eager IAT bindings stayed intact.
   Root.Frame.ImportBindingsIntact = false;
+  Root.CxxDispatchBindingsIntact = false;
   Root.Frame.Cells = Source.Frame.Cells;
   Root.Frame.EntryCells = Source.Frame.EntryCells;
   Root.JumpCaptures = Source.JumpCaptures;
@@ -157,10 +163,46 @@ Domain dispatchSource(const Domain &Source) {
   return Root;
 }
 
+bool RegistrationStateSolver::preservesCxxDispatchBindings(
+    const Domain &State, const LowOp &Op, const FrameTransfer &Transfer,
+    bool RuntimeMemory) {
+  if (!CxxCalls || !CxxCalls->ProveDispatchMemory || State.Unknown ||
+      !charge(1) || Op.MemoryOrdering != NdMemoryOrdering::None)
+    return false;
+  if (Op.Opcode != NdOp::LOAD && Op.Opcode != NdOp::STORE)
+    return registration_abi::hasClosedRegistrationIntegerEffect(Op);
+  const auto Memory = lowMemoryOperands(Op);
+  if (!Memory.Complete || !Memory.Address ||
+      Memory.AccessSize > sizeof(uint32_t))
+    return false;
+  if (RuntimeMemory)
+    return true; // The exact live exception allocation owns this access.
+  if (Op.MemoryAddressSpace == NdMemoryAddressSpace::Default) {
+    const auto Address = Transfer.read(*Memory.Address);
+    if (Address.CallbackAddress &&
+        Address == FrameValue::callbackFrame(Address.CallbackAddress->Entry,
+                                             Address.CallbackAddress->Offset))
+      return State.Frame.callbackMemoryIsPrivate(*Address.CallbackAddress,
+                                                 Memory.AccessSize,
+                                                 Op.Opcode != NdOp::STORE);
+    if (Address.Offset && Address == FrameValue::frame(*Address.Offset)) {
+      const auto SP = parentStackOffset(State);
+      // Source EBP = 0; [4, 8) is the caller PC. Callback code can also
+      // access the still-allocated parent frame, never arbitrary arguments.
+      return SP && *Address.Offset >= *SP &&
+             int64_t(*Address.Offset) + Memory.AccessSize <=
+                 (Op.Opcode == NdOp::STORE ? int64_t(sizeof(uint32_t))
+                                           : 2 * int64_t(sizeof(uint32_t)));
+    }
+  }
+  return CxxCalls->ProveDispatchMemory(Op, Transfer, WorkUsed);
+}
+
 void RegistrationStateSolver::dispatch(
     va_t Address, std::set<int32_t> Levels, const Domain &Source, bool Unknown,
     bool Callback, bool SearchFilter,
-    std::optional<std::pair<uint32_t, uint32_t>> CxxCatch) {
+    std::optional<std::pair<uint32_t, uint32_t>> CxxCatch,
+    bool PreserveBindings) {
   auto It = Entries.find(Address);
   if (It == Entries.end()) {
     if (CxxCatch)
@@ -171,6 +213,11 @@ void RegistrationStateSolver::dispatch(
   if (!charge(Levels.size() + 1))
     return;
   Domain Root = dispatchSource(Source);
+  if (KnownCxx && CxxCatch && PreserveBindings && !Unknown && !Source.Unknown &&
+      CxxCalls && CxxCalls->ProveDispatchCall) {
+    Root.Frame.ImportBindingsIntact = Source.Frame.ImportBindingsIntact;
+    Root.CxxDispatchBindingsIntact = Source.CxxDispatchBindingsIntact;
+  }
   Root.Levels = std::move(Levels);
   if (!KnownCxx && Callback)
     Root.Activation = {Address, SearchFilter};

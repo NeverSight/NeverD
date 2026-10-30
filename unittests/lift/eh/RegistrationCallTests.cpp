@@ -172,6 +172,86 @@ TEST(RegistrationCallABI, ThrowImportMustSurvivePrivateHelperEffects) {
     }
 }
 
+TEST(RegistrationCallABI, ThrowDispatchRequiresClosedAccessesAndNoCallbacks) {
+  for (unsigned Mutation = 0; Mutation != 10; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    std::vector<uint8_t> Extra;
+    if (Mutation == 1)
+      Extra = {0xa1, 0, 0, 0, 0}; // A null read may invoke unrelated handlers.
+    if (Mutation == 2)
+      Extra = {0xd9, 0xee}; // fldz is outside the closed integer policy.
+    if (Mutation == 3)
+      Extra = {0x31, 0xd2, 0xf7, 0xf1}; // div ecx can trap.
+    if (Mutation == 4 || Mutation == 5) {
+      Extra = {0xc7, 0x05, 0, 0, 0, 0, 1, 0, 0, 0};
+      writeLE<uint32_t>(Extra.data() + 2, ThrowImage::DataVA + 0x40);
+    }
+    ThrowImage F({0xc7, 0x45, 0xfc, 7, 0, 0, 0}, Extra);
+    if (Mutation == 5) {
+      // The helper's own throw binding survives, but another eager IAT slot
+      // can no longer be lent to its caller's catch.
+      Import Other;
+      Other.Module = "application.dll";
+      Other.Name = "callback";
+      Other.IATAddr = ThrowImage::DataVA + 0x40;
+      F.Image.Imports.push_back(Other);
+    }
+    if (Mutation == 6)
+      F.Image.Segments[2].Flags = SegmentFlags::Readable;
+    if (Mutation == 7)
+      F.Image.Sections[2].Flags = SegmentFlags::Readable;
+    if (Mutation == 8)
+      F.Image.Segments[2].ReadOnlyAfterRelocations = true;
+    if (Mutation == 9) {
+      // Even a checked empty destructor needs a separate runtime closure.
+      F.tableWord(4, ThrowImage::TextVA + 0x60);
+      F.Image.Segments[0].Data[0x60] = 0xc3;
+    }
+    const auto Proof =
+        getCheckedX86RegistrationThrowCalleeABI(F.Image, ThrowImage::TextVA);
+    if (Mutation == 3) {
+      // The existing private-frame proof already refuses this unbound divisor.
+      EXPECT_FALSE(Proof);
+      continue;
+    }
+    ASSERT_TRUE(Proof);
+    EXPECT_EQ(Proof->PreservesDispatchBindings, Mutation == 0 || Mutation == 4);
+  }
+  ThrowImage F;
+  size_t Work = limits::kMaxRegistrationEHStateWork;
+  EXPECT_FALSE(getCheckedX86RegistrationThrowCalleeABI(
+      F.Image, ThrowImage::TextVA, &Work));
+}
+
+TEST(RegistrationCallABI, LeafDispatchNeedsMoreThanBoundedImageWrites) {
+  for (unsigned Mutation = 0; Mutation != 6; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    ThrowImage F;
+    std::vector<uint8_t> Code{0x8b, 0x04, 0x24, 0xa3, 0x20, 0x40, 0x40, 0x00};
+    if (Mutation == 1)
+      Code.insert(Code.end(), {0xa1, 0, 0, 0, 0});
+    if (Mutation == 2)
+      F.Image.Segments[2].Flags = SegmentFlags::Readable;
+    if (Mutation == 3) {
+      Import Other;
+      Other.Module = "application.dll";
+      Other.Name = "callback";
+      Other.IATAddr = ThrowImage::CallerPCVA;
+      F.Image.Imports.push_back(Other);
+    }
+    if (Mutation == 4)
+      Code.insert(Code.end(), {0xd9, 0xee});
+    if (Mutation == 5)
+      Code = {0xc7, 0x01, 7, 0, 0, 0}; // A separate caller object borrow.
+    Code.insert(Code.end(), {0x31, 0xc0, 0xc3});
+    std::copy(Code.begin(), Code.end(), F.Image.Segments[0].Data.begin());
+    const auto Leaf =
+        getCheckedX86RegistrationLeafCalleeABI(F.Image, ThrowImage::TextVA);
+    ASSERT_TRUE(Leaf);
+    EXPECT_EQ(Leaf->PreservesDispatchBindings, Mutation == 0);
+  }
+}
+
 TEST(RegistrationCallABI, StackCleanupRequiresEveryRestoredNearReturn) {
   auto MapText = [](BinaryImage &Image) {
     auto &Text = Image.Segments[0];

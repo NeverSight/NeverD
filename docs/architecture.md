@@ -2980,6 +2980,22 @@ action must bind a checked relay and initialized, pointer-free read extent;
 conflicting predecessors or unproved actions discard cleanup and image-read
 authority. Cleanup receipts retain the source block, active state, action
 and projected extents.
+For synchronous FH3 parents without unwind actions, `RegistrationCxxState`
+can separately prove that existing import bindings survive a callback-free
+throw and catch entry. It relifts the current immutable parent instructions,
+rechecks handler and table identity, and independently proves each exact
+private or direct runtime throw. Ordinary leaves additionally require closed
+integer effects with no object borrows or nested calls. Initializers, copy
+constructors, destructors,
+exception specifications and realigned frames do not acquire this proof.
+`RegistrationMemoryPermissions` owns the shared closed integer policy;
+mapped image accesses require permissions and exclude writes to any IAT slot.
+The state solver tracks this exceptional-path fact separately from ordinary
+call effects. Unknown accesses, division, FP, opaque calls and unproved
+exception origins withdraw it across later blocks and joins. Exact live
+exception-object accesses retain their distinct allocation authority. Catch
+entry preserves only already-live bindings; it never reloads initial image
+values or restores a binding lost on another predecessor.
 C++ catch homes are seeded only from a matching checked thrown type and
 object width. Reference catches carry a separate runtime-object address domain;
 private frame spills preserve that identity without treating it as an image or

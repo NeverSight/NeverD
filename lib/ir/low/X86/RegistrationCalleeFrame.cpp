@@ -11,6 +11,7 @@
 #include "RegistrationABIPrivate.h"
 #include "RegistrationFrameBranch.h"
 #include "RegistrationFrameEffects.h"
+#include "RegistrationMemoryPermissions.h"
 #include "RegistrationOriginalImage.h"
 #include "RegistrationPrivateFrame.h"
 
@@ -90,8 +91,10 @@ bool hasPrivateCallerFrame(const LowFunc &Function, const BinaryImage &Image,
   const auto [BorrowECX, ThrowProof, IndependentScalarReturn,
               DiscardReturnValue, CopyObjectSize, Initializer, Initializers,
               ObjectCallbacks, CallbackStackPopBytes, ScalarArguments,
-              ScalarRegisters, ReturnValue, ExcludeCalls, OriginalImage] =
-      Options;
+              ScalarRegisters, ReturnValue, ExcludeCalls, OriginalImage,
+              ClosedIntegerEffects] = Options;
+  if (ClosedIntegerEffects)
+    *ClosedIntegerEffects = true;
   if (ReturnValue)
     ReturnValue->reset();
   if ((ReturnValue || ScalarRegisters || ExcludeCalls) && !ScalarArguments)
@@ -226,6 +229,20 @@ bool hasPrivateCallerFrame(const LowFunc &Function, const BinaryImage &Image,
       Transfer.beginInstruction(Op.Addr);
       BorrowTransfer.beginInstruction(Op.Addr);
       CopySourceTransfer.beginInstruction(Op.Addr);
+      if (ClosedIntegerEffects && *ClosedIntegerEffects) {
+        const bool ThrowCall = ThrowProof && Op.Opcode == NdOp::CALL &&
+                               Op.Addr == ThrowProof->ThrowCallVA &&
+                               Op.Seq == ThrowProof->ThrowOpSeq;
+        // This frame uses entry SP = 4, with the caller PC at [4, 8).
+        // The private-frame proof below separately excludes incoming storage
+        // and writes to that PC. Image permissions exclude every IAT write.
+        *ClosedIntegerEffects =
+            ThrowCall || hasClosedRegistrationIntegerEffect(Op) ||
+            ((Op.Opcode == NdOp::LOAD || Op.Opcode == NdOp::STORE) &&
+             lowMemoryOperands(Op).AccessSize <= sizeof(uint32_t) &&
+             hasClosedOrdinaryRegistrationMemoryAccess(Image, Op, Transfer,
+                                                       sizeof(uint32_t), Work));
+      }
       auto BorrowValue = BorrowTransfer.evaluate(Op, false);
       auto CopySourceValue = CopySourceTransfer.evaluate(Op, false);
       std::optional<FrameValue> ImageValue;

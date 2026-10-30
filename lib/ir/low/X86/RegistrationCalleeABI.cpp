@@ -420,6 +420,7 @@ std::optional<RegistrationLeafCalleeABI> registration_abi::checkedLeafCalleeABI(
   }
   ImageFrameEffects Effects;
   bool IndependentScalarReturn = false;
+  bool ClosedIntegerEffects = false;
   const PrivateFrameOptions Frame{
       .BorrowECX = true,
       .IndependentScalarReturn = &IndependentScalarReturn,
@@ -428,7 +429,8 @@ std::optional<RegistrationLeafCalleeABI> registration_abi::checkedLeafCalleeABI(
       .Initializer = Initializer,
       .Initializers = Initializer ? &Initializers : nullptr,
       .ObjectCallbacks = Callbacks ? &ObjectCallbacks : nullptr,
-      .CallbackStackPopBytes = CallbackStackPopBytes};
+      .CallbackStackPopBytes = CallbackStackPopBytes,
+      .ClosedIntegerEffects = &ClosedIntegerEffects};
   if (!hasPrivateCallerFrame(Callee, Image, Work, Effects, Frame))
     return std::nullopt;
   if (!callerPCIsNotReadBack(Effects))
@@ -437,6 +439,9 @@ std::optional<RegistrationLeafCalleeABI> registration_abi::checkedLeafCalleeABI(
   Result.Target = Target;
   Result.StackPopBytes = Pop;
   Result.HasIndependentScalarReturn = IndependentScalarReturn;
+  Result.PreservesDispatchBindings =
+      ClosedIntegerEffects && !Initializer && !Callbacks && !CopyObjectSize &&
+      Effects.ECXReads.empty() && Effects.ECXWrites.empty();
   if (!collectCalleeCodeRanges(Callee, Image, Work, Result.CodeRanges))
     return std::nullopt;
   std::set<std::pair<va_t, va_t>> Code;

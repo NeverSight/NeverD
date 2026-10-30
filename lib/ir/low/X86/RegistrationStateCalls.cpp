@@ -144,9 +144,13 @@ RegistrationStateSolver::transferCall(size_t I, Domain &After, const LowOp &Op,
     invalidateJumpRuntimeBindings(After, FrameValue::constant(Write.Begin),
                                   Write.End - Write.Begin);
   }
+  const bool ClosedDispatch =
+      CxxCalls && CxxCalls->ProveDispatchCall &&
+      CxxCalls->ProveDispatchCall(
+          Op, Result.CalleeContracts[Effect.CalleeIndex], Effect, WorkUsed);
   return CallTransfer{
       StackPointer, Effect.DoesNotReturn, Effect.EndAddress, CallResult, {},
-      true};
+      true,         ClosedDispatch};
 }
 
 } // namespace neverd::registration_state

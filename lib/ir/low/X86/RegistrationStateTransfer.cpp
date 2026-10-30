@@ -148,11 +148,6 @@ bool RegistrationStateSolver::transferBlock(size_t I, const Domain &Before,
       }
       continue;
     }
-    if (!StackImportSlots.empty()) {
-      if (!charge(StackImportSlots.size() + 1))
-        break;
-      Transfer.invalidateImportBindings(Op, StackImportSlots);
-    }
     const auto ImportLoad = StackImportLoads.find({Op.Addr, Op.Seq});
     FrameValue Value =
         Transfer.evaluate(Op, After.Installed,
@@ -240,6 +235,28 @@ bool RegistrationStateSolver::transferBlock(size_t I, const Domain &Before,
     RuntimeMemory |= recordSEHThreadMemory(I, After, Op, Transfer, Facts);
     if (Exhausted)
       break;
+    const bool ProveCxxDispatch =
+        KnownCxx && CxxCalls && bool(CxxCalls->ProveDispatchCall);
+    if (!StackImportSlots.empty()) {
+      if (!charge(StackImportSlots.size() + 1))
+        break;
+      // A checked live exception allocation is disjoint from every IAT slot.
+      // This preserves only existing bindings; unknown object accesses keep
+      // the ordinary conservative invalidation below.
+      if (!(ProveCxxDispatch && RuntimeMemory))
+        Transfer.invalidateImportBindings(Op, StackImportSlots);
+    }
+    if (ProveCxxDispatch && Op.Opcode != NdOp::CALL &&
+        Op.Opcode != NdOp::INDIR_CALL) {
+      const bool Closed =
+          preservesCxxDispatchBindings(After, Op, Transfer, RuntimeMemory);
+      After.CxxDispatchBindingsIntact &= Closed;
+      // A continuing fault can also change the next ordinary slot call.
+      // Losing only the exceptional-edge fact would let a catch keep using
+      // a runtime binding after its own unproved access.
+      if (!Closed)
+        After.Frame.ImportBindingsIntact = false;
+    }
 
     if ((EH4 || CxxCookies) && Op.Opcode == NdOp::INTRINSIC &&
         !isFramePreservingIntrinsic(Op))
@@ -576,11 +593,13 @@ bool RegistrationStateSolver::transferBlock(size_t I, const Domain &Before,
       CallSP = *LocalSP;
     if (CheckedCxxCookieCall)
       CallSP = After.Frame.Registers[x86reg::RSP / x86reg::GeneralRegStride];
+    bool ClosedCallDispatch = false;
     if (!CheckedCxxCookieCall && !JumpCapture && !JumpResume && !LocalSP &&
         !transferOrdinaryFinally(I, After, Op, Facts, CallSP))
       if (auto Call = transferCall(I, After, Op, Facts)) {
         CheckedCall = true;
         CallPreservesImportBindings = Call->PreservesImportBindings;
+        ClosedCallDispatch = Call->PreservesDispatchBindings;
         CallSP = Call->StackPointer;
         CallResult = Call->Result;
         if (!Call->MayWrites.empty()) {
@@ -742,6 +761,12 @@ bool RegistrationStateSolver::transferBlock(size_t I, const Domain &Before,
     if (UnprovedCallEffects && !(ImportedCall && PreserveImportBindings))
       After.JumpBindingsIntact = false;
     recordSEHStackRestore(Op, After, Transfer, Value);
+    if (ProveCxxDispatch &&
+        (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL)) {
+      After.CxxDispatchBindingsIntact &= ClosedCallDispatch;
+      if (!ClosedCallDispatch)
+        After.Frame.ImportBindingsIntact = false;
+    }
     Transfer.write(Op, Value, CookieCheckVA, ImportedCall,
                    PreserveImportBindings || CallPreservesImportBindings);
     if (JumpCapture)
@@ -867,7 +892,9 @@ bool RegistrationStateSolver::transferBlock(size_t I, const Domain &Before,
     CallException->JumpBindingsIntact = false;
     CallException->JumpCaptures.clear();
   }
-  dispatchBlock(I, CallException ? *CallException : Before, Facts);
+  dispatchBlock(I, CallException ? *CallException : Before, Facts,
+                After.CxxDispatchBindingsIntact &&
+                    After.Frame.ImportBindingsIntact);
   return true;
 }
 

@@ -91,8 +91,8 @@ size_t Domain::snapshotHash() const {
                       RuntimeObject, hash_combine_range(InitializedFrameBytes),
                       Reached, Unknown, Parent, Callback, OtherCallback,
                       Catches, Uninstalled, Installed, AbandonedSEHGuard,
-                      CanDispatch, OrdinaryCallStack, StackRestore,
-                      hash_combine_range(JumpCaptures),
+                      CanDispatch, CxxDispatchBindingsIntact, OrdinaryCallStack,
+                      StackRestore, hash_combine_range(JumpCaptures),
                       hash_combine_range(SEHCallers), JumpBindingsIntact);
 }
 
