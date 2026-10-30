@@ -17,6 +17,16 @@ budgets use the specialization suite. The core retains only exhaustive pair
 projections and widens missing predecessor facts; these checks do not certify
 ordinary source ABIs or native fault behavior.
 
+`InterpreterSpecialization.UnsignedRanges*` checks bounded subtraction across
+recovery cuts, register/frame carriers and masked values with unrelated high
+payload bits. Unsigned bounds require exhaustive Boolean proofs; joins widen
+moving endpoints and drop missing predecessor facts. Reachable modular
+underflow and out-of-range branches must remain refused. Exact/short operation
+and query limits cover the added proof work; recovered results are compared
+with independent arithmetic expectations.
+Frame-derived addresses keep their relative-frame proofs; the existing frame
+fallback regression must finish without increasing its query allowance.
+
 `InterpreterMachineRegionSourceTest.RepeatedTransfersRetainRuntimeDirectionAndOverlap`
 executes bounded MOVS/STOS in both directions through HighC and LLVMC at O0/O2,
 comparing full state and every byte against an independent ordered copy oracle.

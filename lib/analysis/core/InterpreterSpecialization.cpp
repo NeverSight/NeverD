@@ -22,6 +22,7 @@
 #include "neverd/ir/low/LowArchitecturalValue.h"
 #include "neverd/ir/low/LowRawEnvironment.h"
 #include "neverd/symbolic/SymExec.h"
+#include "neverd/symbolic/SymKnownBits.h"
 #include "neverd/symbolic/SymMBA.h"
 
 #include "llvm/ADT/APInt.h"
@@ -30,6 +31,7 @@
 #include "llvm/Support/SaveAndRestore.h"
 
 #include <algorithm>
+#include <bit>
 #include <deque>
 #include <iterator>
 #include <limits>
@@ -109,6 +111,14 @@ struct ControlMarginal {
   bool operator==(const ControlMarginal &) const = default;
 };
 
+struct ControlRange {
+  uint32_t Field;
+  uint64_t Mask;
+  uint64_t Minimum;
+  uint64_t Maximum;
+  bool operator==(const ControlRange &) const = default;
+};
+
 struct Projection {
   uint32_t FrameResidue = 0;
   Constants Scalars;
@@ -129,6 +139,7 @@ struct Projection {
   // overapproximation, never an assumed independence between columns.
   std::vector<ControlRelation> ControlPairs;
   std::vector<ControlMarginal> Marginals;
+  std::vector<ControlRange> Ranges;
 };
 
 struct ContextKey {
@@ -363,6 +374,36 @@ bool joinControlPairs(std::vector<ControlRelation> &Into,
   return Changed;
 }
 
+bool joinControlRanges(std::vector<ControlRange> &Into,
+                       const std::vector<ControlRange> &Incoming) {
+  bool Changed = false;
+  for (auto It = Into.begin(); It != Into.end();) {
+    const auto At = std::lower_bound(
+        Incoming.begin(), Incoming.end(), It->Field,
+        [](const auto &Range, uint32_t Field) { return Range.Field < Field; });
+    if (At == Incoming.end() || At->Field != It->Field ||
+        At->Mask != It->Mask) {
+      It = Into.erase(It);
+      Changed = true;
+      continue;
+    }
+    // Widen moving endpoints to binary boundaries. Each endpoint can move
+    // at most the carrier width times; a runtime loop cannot require one
+    // analysis visit per possible counter value.
+    if (At->Minimum < It->Minimum) {
+      It->Minimum = std::bit_floor(At->Minimum);
+      Changed = true;
+    }
+    if (At->Maximum > It->Maximum) {
+      It->Maximum = llvm::APInt::getLowBitsSet(64, std::bit_width(At->Maximum))
+                        .getZExtValue();
+      Changed = true;
+    }
+    ++It;
+  }
+  return Changed;
+}
+
 bool intersect(Projection &Into, const Projection &Incoming,
                uint32_t TupleLimit, uint32_t &Widenings) {
   bool Changed = intersectMap(Into.Scalars, Incoming.Scalars);
@@ -399,6 +440,7 @@ bool intersect(Projection &Into, const Projection &Incoming,
                               TupleLimit, Widenings);
   Changed |=
       joinMarginals(Into.Marginals, Incoming.Marginals, TupleLimit, Widenings);
+  Changed |= joinControlRanges(Into.Ranges, Incoming.Ranges);
   const auto OldUnsafe = Into.Origins.UnsafeScalars.size();
   Into.Origins.UnsafeScalars.insert(Incoming.Origins.UnsafeScalars.begin(),
                                     Incoming.Origins.UnsafeScalars.end());
@@ -923,6 +965,9 @@ private:
                    const FrameOrigins &Origins, const FrameFacts &Frame,
                    SymRef Predicate, SpecializationCursor Successor,
                    Projection &Out, bool &Reachable);
+  bool projectRange(SymContext &Ctx, SymRef Predicate, SymRef Value,
+                    SymRef Root, uint32_t Field, uint64_t Mask, Projection &Out,
+                    bool &Reachable);
   int addDispatchNode(const LowInstructionBoundary &Origin, const NdVar &Target,
                       uint64_t Value, int Taken, int Other,
                       bool Synthetic = false);
@@ -1559,6 +1604,87 @@ FiniteValues Specializer::enumerate(SymContext &Ctx, SymRef Predicate,
   return Domain;
 }
 
+bool Specializer::projectRange(SymContext &Ctx, SymRef Predicate, SymRef Value,
+                               SymRef Root, uint32_t Field, uint64_t Mask,
+                               Projection &Out, bool &Reachable) {
+  const unsigned Width = Ctx.width(Value);
+  const uint64_t Full = llvm::APInt::getLowBitsSet(64, Width).getZExtValue();
+  if (Root) {
+    // Absolute ranges of frame-derived addresses compete with the relative
+    // frame proofs that actually resolve their loads and stores. Omit this
+    // optional projection unless the demanded bits are independent of Root.
+    const auto Dependence = detail::gatherVariableBitDemand(
+        Ctx, Value, Root,
+        std::min<uint64_t>(Options.MaxSymbolicNodes,
+                           Options.MaxOperations - Result.EvaluatedOperations));
+    Result.EvaluatedOperations += Dependence.Visited;
+    if (!Dependence.Bits || *Dependence.Bits)
+      return true;
+  }
+  // Completely independent wide inputs do not need optional numeric bounds.
+  // This omission is a precision choice, never a range assertion.
+  if (detail::hasUnconstrainedProjectionInput(Ctx, Predicate, Value,
+                                              static_cast<uint32_t>(Full),
+                                              Options.MaxSymbolicNodes))
+    return true;
+  const auto Domain = enumerate(Ctx, Predicate, {}, 1);
+  if (Failed)
+    return false;
+  if (Domain.Status != FiniteValueStatus::Complete)
+    return true;
+  if (Domain.Tuples.empty()) {
+    Reachable = false;
+    return true;
+  }
+  uint64_t Minimum = 0, Maximum = Full;
+  unsigned Work = static_cast<unsigned>(
+      std::min<uint64_t>(SymKnownBits::MaxQueryWork,
+                         Options.MaxOperations - Result.EvaluatedOperations));
+  const auto Available = Work;
+  SymKnownBits Known(Ctx);
+  if (const auto Bits = Known.query(Value, Work)) {
+    Minimum = Bits->getMinValue().getZExtValue();
+    Maximum = Bits->getMaxValue().getZExtValue();
+  }
+  Result.EvaluatedOperations += Available - Work;
+  for (bool FindMaximum : {false, true}) {
+    uint64_t Low = Minimum, High = Maximum;
+    while (Low < High) {
+      if (Result.EvaluatedOperations >= Options.MaxOperations)
+        return fail(SpecializationStatus::BudgetExceeded,
+                    "control range projection budget exhausted");
+      ++Result.EvaluatedOperations;
+      const uint64_t Middle = Low + (High - Low) / 2;
+      const auto Bound = Ctx.mkUle(Value, Ctx.mkConst(Width, Middle));
+      const auto Proof = enumerate(Ctx, Predicate, {Bound}, 1);
+      if (Failed)
+        return false;
+      if (Proof.Status == FiniteValueStatus::Complete &&
+          Proof.Tuples == std::vector<std::vector<uint64_t>>{{0}}) {
+        Minimum = std::max(Minimum, Middle + 1);
+        Low = Middle + 1;
+      } else if (Proof.Status == FiniteValueStatus::Complete &&
+                 Proof.Tuples == std::vector<std::vector<uint64_t>>{{1}}) {
+        Maximum = std::min(Maximum, Middle);
+        High = Middle;
+      } else if (Proof.Status == FiniteValueStatus::TooManyValues) {
+        // Both Boolean values have witnesses. Only the search bracket moves;
+        // no universal bound is learned from either individual witness.
+        if (FindMaximum)
+          Low = Middle + 1;
+        else
+          High = Middle;
+      } else {
+        // An incomplete optional query retains only already proved bounds.
+        break;
+      }
+    }
+  }
+  if (Minimum || Maximum != Full)
+    Out.Ranges.push_back({Field, Mask, Minimum, Maximum});
+  return true;
+}
+
 bool Specializer::projectEdge(SymState &State, SymRef Root,
                               llvm::ArrayRef<SymRef> ObjectRoots,
                               const FrameOrigins &Origins,
@@ -1779,6 +1905,15 @@ bool Specializer::projectEdge(SymState &State, SymRef Root,
       bool PartialProof = false;
       if (Failed)
         return false;
+      if (Producer && !affineDisplacement(Ctx, Value, Root) &&
+          (Single.Status == FiniteValueStatus::Unknown ||
+           Single.Status == FiniteValueStatus::TooManyValues)) {
+        if (!projectRange(Ctx, Predicate, ProjectedValue, Root, Field, Mask,
+                          Out, Reachable))
+          return false;
+        if (!Reachable)
+          return true;
+      }
       // Manual and context fields still try their full relation globally.
       // If that proof is inconclusive, a narrower demand can retain useful
       // finite bits without supplying an unproved context-key byte. Solver
@@ -2532,6 +2667,21 @@ bool Specializer::evaluate(int Id) {
   SymExec Exec(Ctx, State);
   auto IncomingPredicate =
       controlPredicate(State, FrameRoot, Draft.Incoming.Controls);
+  for (const auto &Range : Draft.Incoming.Ranges) {
+    if (Result.EvaluatedOperations >= Options.MaxOperations)
+      return fail(SpecializationStatus::BudgetExceeded,
+                  "control range predicate budget exhausted");
+    ++Result.EvaluatedOperations;
+    auto Value = controlValue(State, FrameRoot, Range.Field);
+    const auto Width = Ctx.width(Value);
+    Value = Ctx.mkAnd(Value, Ctx.mkConst(Width, Range.Mask));
+    IncomingPredicate = Ctx.mkAnd(
+        {IncomingPredicate, Ctx.mkUle(Ctx.mkConst(Width, Range.Minimum), Value),
+         Ctx.mkUle(Value, Ctx.mkConst(Width, Range.Maximum))});
+    if (Ctx.numNodes() > Options.MaxSymbolicNodes)
+      return fail(SpecializationStatus::BudgetExceeded,
+                  "control range predicate symbolic-node budget exhausted");
+  }
   for (const auto &Pair : Draft.Incoming.ControlPairs) {
     const uint64_t Work = Pair.Tuples.size() + 1;
     if (Work > Options.MaxOperations - Result.EvaluatedOperations)

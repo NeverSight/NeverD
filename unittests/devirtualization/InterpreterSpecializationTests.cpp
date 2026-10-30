@@ -5484,6 +5484,7 @@ TEST(InterpreterSpecialization, TimestampTransitionMatchesCompleteStateOracle) {
 #include "AbsoluteMemoryFactsTests.inc"
 #include "AlignmentRecoveryTests.inc"
 #include "CPUQueryRecoveryTests.inc"
+#include "ControlRangeTests.inc"
 #include "MXCSRRecoveryTests.inc"
 #include "PageGlobalRecoveryTests.inc"
 #include "SavedAddressCellsTests.inc"
