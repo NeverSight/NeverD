@@ -58,6 +58,9 @@ inline constexpr uint32_t kMinImportCallSetSize = 2;
 /// or a jump to an import is shared by many functions and only context tells
 /// them apart.
 inline constexpr uint32_t kMinShapeInstructions = 3;
+/// A data-reference candidate needs an address operation and another
+/// instruction. Independently paired users supply the reference context.
+inline constexpr uint32_t kMinDataReferenceInstructions = 2;
 /// Largest group of functions sharing one feature that a drill-down splits by
 /// the next features.  Larger groups stay unresolved for context to split.
 inline constexpr size_t kMaxDrillDownGroup = 4096;

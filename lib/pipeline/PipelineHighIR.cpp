@@ -245,7 +245,7 @@ void Pipeline::prepareSourceMedIR(const BinaryImage &Img,
           NamedCallee Callee;
           if (const auto Arity = libc::libcArityForSymbol(Name, Variant))
             Callee.IntegerParams = static_cast<unsigned>(Arity->IntArgs);
-          Callee.VaList = libc::vaListParameter(Name);
+          Callee.VaList = libc::vaListParameter(Name, Variant);
           return Callee;
         });
   }

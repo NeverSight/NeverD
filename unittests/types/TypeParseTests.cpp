@@ -6,6 +6,7 @@
 
 #include "TypeShape.h"
 
+#include "neverd/types/Limits.h"
 #include "neverd/types/PDBTypeImport.h"
 #include "neverd/types/TypeParse.h"
 #include "neverd/types/TypeRender.h"
@@ -203,6 +204,39 @@ struct RECORD { char Lead; WORD MEMBER; };
     EXPECT_EQ(Function->Params[0].Name, "Argument");
     EXPECT_EQ(Function->Convention, CallingConvention::Stdcall);
   }
+}
+
+TEST(TypeParse, MacroExpansionKeepsItsDepthBoundaryAndInvocationPosition) {
+  const unsigned Limit = neverd::limits::types::kCTypeParserExpandDepthLimit;
+  const auto Chain = [](unsigned Last) {
+    std::string Source;
+    for (unsigned Index = 0; Index <= Last; ++Index)
+      Source +=
+          "#define M" + std::to_string(Index) + " " +
+          (Index == Last ? "unsigned int" : "M" + std::to_string(Index + 1)) +
+          "\n";
+    return Source + "typedef M0 Expanded;\n";
+  };
+  TypeLibrary Library;
+  const auto Allowed = parseCTypes(Chain(Limit), Library);
+  ASSERT_TRUE(Allowed.ok());
+  ASSERT_NE(Library.find("Expanded"), nullptr);
+
+  TypeLibrary TooDeep;
+  const auto Refused = parseCTypes(Chain(Limit + 1), TooDeep);
+  ASSERT_EQ(Refused.Problems.size(), 1u);
+  EXPECT_EQ(Refused.Problems[0].Line, Limit + 3);
+  EXPECT_EQ(Refused.Problems[0].Column, 9u);
+  EXPECT_EQ(TooDeep.find("Expanded"), nullptr);
+
+  const auto Cycle = parseCTypes("#define FIRST SECOND\n#define SECOND FIRST\n"
+                                 "typedef FIRST Cyclic;\n",
+                                 Library);
+  ASSERT_EQ(Cycle.Problems.size(), 1u);
+  EXPECT_EQ(Cycle.Problems[0].Line, 3u);
+  EXPECT_EQ(Cycle.Problems[0].Column, 9u);
+  EXPECT_EQ(Library.find("Cyclic"), nullptr);
+  EXPECT_NE(Library.find("Expanded"), nullptr);
 }
 
 TEST(TypeParse, ExpandedDiagnosticsOwnTheirTextAndInvocationPosition) {
@@ -462,6 +496,62 @@ TEST(TypeParse, KeepsADeclaredAlignmentUnderPack) {
   // A natural alignment the pack lowers.
   EXPECT_EQ(shapeOf(recordOf(Library, "P4n")), "struct{c@0 z@4}");
   EXPECT_EQ(recordOf(Library, "P4n").Size, 12u);
+}
+
+TEST(TypeParse, MicrosoftLegacyDeclspecKeepsAlignmentAndFunctionContracts) {
+  for (auto Lang : {Language::C, Language::Cpp}) {
+    ParseOptions Options;
+    Options.Lang = Lang;
+    for (auto Model : {DataModel::ILP32, DataModel::LLP64}) {
+      const TypeLibrary Library = parsed(R"(
+        typedef struct _declspec(align(16)) Block {
+          unsigned long long words[2];
+        } Block;
+        #pragma pack(push, 1)
+        struct Frame { char tag; Block block; char tail; };
+        #pragma pack(pop)
+        long _declspec(dllimport) __stdcall Read(Block *block, unsigned count);
+        _declspec(noreturn) void __cdecl Stop(unsigned code);
+        void _declspec(dllimport) Finish(void);
+        unsigned _inline Count(const Block *block) {
+          return (unsigned)block->words[0];
+        }
+      )",
+                                         Options, Model, RecordABI::Microsoft);
+      EXPECT_EQ(shapeOf(recordOf(Library, "Frame")),
+                "struct{tag@0 block@16 tail@32}");
+      EXPECT_EQ(recordOf(Library, "Frame").Size, 48u);
+      EXPECT_EQ(recordOf(Library, "Block").Alignment, 16u);
+      const auto *Read = Library.findPrototype("Read");
+      ASSERT_NE(Read, nullptr);
+      EXPECT_EQ(Read->Params.size(), 2u);
+      EXPECT_EQ(Read->Convention, Model == DataModel::ILP32
+                                      ? CallingConvention::Stdcall
+                                      : CallingConvention::Unspecified);
+      const auto *Stop = Library.findPrototype("Stop");
+      ASSERT_NE(Stop, nullptr);
+      EXPECT_TRUE(Stop->NoReturn);
+      ASSERT_NE(Library.findPrototype("Finish"), nullptr);
+      EXPECT_TRUE(Library.findPrototype("Finish")->Params.empty());
+      EXPECT_EQ(Library.findPrototype("_declspec"), nullptr);
+      ASSERT_NE(Library.findPrototype("Count"), nullptr);
+      EXPECT_EQ(Library.findPrototype("Count")->Params.size(), 1u);
+      EXPECT_EQ(Library.findPrototype("_inline"), nullptr);
+    }
+  }
+}
+
+TEST(TypeParse, MicrosoftLegacyDeclspecRejectsMalformedAttributes) {
+  for (llvm::StringRef Source :
+       {"struct _declspec(align()) Bad { int x; };",
+        "_declspec(noreturn void Bad(void);",
+        "typedef int Bad _declspec(vector_size(16));"}) {
+    TypeLibrary Library(DataModel::LLP64);
+    const auto Result = parseTypes(Source, Library, {});
+    EXPECT_FALSE(Result.Problems.empty()) << Source.str();
+    EXPECT_EQ(Library.find("Bad"), nullptr);
+    EXPECT_EQ(Library.findPrototype("Bad"), nullptr);
+  }
 }
 
 TEST(TypeParse, RequiredAlignmentSurvivesContainingRecordsAndRoundTrips) {

@@ -3030,9 +3030,14 @@ LLVMCWriter::definitionPointerTypes(const llvm::Function &Fn) const {
   if (Bindings)
     Bound.emplace(Bindings->Params);
   const auto SameWidth = [&](const TypeRef &Type, llvm::Type *Held) {
-    return Opts.RecordDefinitions && Type && Type->Kind == NdTypeKind::Ptr &&
-           Type->Pointee && Type->Size && Held->isIntegerTy() &&
-           Held->getIntegerBitWidth() == Type->Size * 8u;
+    if (!Opts.RecordDefinitions || !Type || Type->Kind != NdTypeKind::Ptr ||
+        !Type->Pointee || !Type->Size)
+      return false;
+    // Source pointers can already be LLVM pointers after parameter recovery.
+    // Their default address space must still have the declared source width.
+    return Held->isIntegerTy(Type->Size * 8u) ||
+           (Held->isPointerTy() && Held->getPointerAddressSpace() == 0 &&
+            Fn.getDataLayout().getPointerSize() == Type->Size);
   };
   const auto Project = [&](TypeRef Type, llvm::Type *Held) {
     SourcePointerType Result;

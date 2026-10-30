@@ -80,22 +80,31 @@ void HighCWriter::prepareRecordDefinitions(const std::vector<HighFunc> &Funcs) {
   };
   // Import pointers need the library's tag kind, but do not require its
   // layout. In particular, a union must not acquire a struct forward tag.
-  const auto VisitImportType = [&](TypeRef Type, bool NeedsDeclaration) {
-    VisitEnumeration(Type);
-    // A callee's included header already owns its opaque parameter types.
-    // Requesting a fresh tag here can redeclare an anonymous header typedef
-    // (pthread_mutex_t) as a different struct. Body-used types still go
-    // through Visit and the shared record-definition owner above.
-    if (!NeedsDeclaration)
-      return;
-    while (Type && Type->Kind == NdTypeKind::Ptr) {
-      if (Type->Pointee && Type->Pointee->Kind == NdTypeKind::Struct &&
-          !Type->Pointee->IsEnum &&
-          PointerRecords.insert(Type->Pointee->SourceName).second)
-        Records.push_back(Type);
-      Type = Type->Pointee;
-    }
-  };
+  std::set<const NdType *> SeenImportTypes;
+  std::function<void(TypeRef, bool)> VisitImportType =
+      [&](TypeRef Type, bool NeedsDeclaration) {
+        VisitEnumeration(Type);
+        // A callee's included header already owns its opaque parameter types.
+        // Requesting a fresh tag here can redeclare an anonymous header typedef
+        // (pthread_mutex_t) as a different struct. Body-used types still go
+        // through Visit and the shared record-definition owner above.
+        if (!NeedsDeclaration || !Type ||
+            !SeenImportTypes.insert(Type.get()).second)
+          return;
+        if (Type->Kind == NdTypeKind::Ptr) {
+          if (Type->Pointee && Type->Pointee->Kind == NdTypeKind::Struct &&
+              !Type->Pointee->IsEnum &&
+              PointerRecords.insert(Type->Pointee->SourceName).second)
+            Records.push_back(Type);
+          VisitImportType(Type->Pointee, true);
+        } else if (Type->Kind == NdTypeKind::Func) {
+          VisitImportType(Type->RetType, true);
+          for (const TypeRef &Parameter : Type->ParamTypes)
+            VisitImportType(Parameter, true);
+        } else if (Type->Kind == NdTypeKind::Array) {
+          VisitImportType(Type->ElemType, true);
+        }
+      };
   std::function<void(const HighExpr &)> VisitExpr = [&](const HighExpr &E) {
     Visit(E.Type);
     if (E.SourceCallHint) {
@@ -236,6 +245,12 @@ void HighCWriter::writeSourceRecordDeclarations(
         }
       }
       Visit(Record);
+    } else if (Type->Kind == NdTypeKind::Func) {
+      Visit(Type->RetType);
+      for (const TypeRef &Parameter : Type->ParamTypes)
+        Visit(Parameter);
+    } else if (Type->Kind == NdTypeKind::Array) {
+      Visit(Type->ElemType);
     }
   };
   auto Signature = [&](const FunctionSym &Function) {

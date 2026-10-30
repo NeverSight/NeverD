@@ -16,7 +16,9 @@
 #include "neverd/types/TypeParse.h"
 #include "neverd/types/TypeRender.h"
 
+#include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/StringExtras.h"
+#include "llvm/ADT/StringSet.h"
 
 #include <limits>
 #include <set>
@@ -68,9 +70,9 @@ class Converter {
 public:
   explicit Converter(const types::TypeLibrary &Library,
                      const types::TypeSpeller *PrototypeSpeller = nullptr,
-                     bool CompleteValues = false)
+                     bool CompleteValues = false, bool BorrowRecords = false)
       : Library(Library), PrototypeSpeller(PrototypeSpeller),
-        CompleteValues(CompleteValues) {}
+        CompleteValues(CompleteValues), BorrowRecords(BorrowRecords) {}
 
   TypeRef convert(const types::TypeExpr &Type, unsigned Depth) {
     if (Depth > kMaxLocalTypeConversionDepth)
@@ -174,6 +176,8 @@ private:
       return Type->Function ? function(*Type->Function, Depth) : nullptr;
     case types::TypeKind::Struct:
     case types::TypeKind::Union:
+      if (BorrowRecords || ActiveRecords.contains(Name))
+        return NdType::makeNamedRecord(Name.str(), 0);
       if (CompleteValues && Type->Kind == types::TypeKind::Union)
         return nullptr;
       if (!Type->Record)
@@ -204,22 +208,21 @@ private:
     return Named;
   }
 
-  /// A function type, as a pointer to it is spelled: scalars, and pointers
-  /// opaque, as the C a callback's signature takes; void where a part of it
+  /// A function type, as a pointer to it is spelled: scalars and pointers
+  /// retain their declared pointees; void where a part of it
   /// is neither, or for a variadic one, whose calls pass more.
   TypeRef function(const types::FunctionDef &Function, unsigned Depth) {
     if (Function.Variadic)
       return NdType::makeVoid();
+    // A callback needs borrowed record identities, not member reconstruction
+    // or recursive ownership through a record's own callback fields.
+    Converter Borrowed(Library, PrototypeSpeller, false, true);
     const auto scalar = [&](const types::TypeExpr *Type) -> TypeRef {
-      TypeRef Converted = Type ? convert(*Type, Depth + 1) : nullptr;
+      TypeRef Converted = Type ? Borrowed.convert(*Type, Depth + 1) : nullptr;
       if (!Converted)
         return nullptr;
-      if (Converted->Kind == NdTypeKind::Ptr) {
-        TypeRef Opaque = NdType::makePtr(NdType::makeVoid());
-        Opaque->Size = Converted->Size;
-        return Opaque;
-      }
-      return Converted->Kind == NdTypeKind::Int ||
+      return Converted->Kind == NdTypeKind::Ptr ||
+                     Converted->Kind == NdTypeKind::Int ||
                      Converted->Kind == NdTypeKind::Float
                  ? Converted
                  : nullptr;
@@ -262,6 +265,15 @@ private:
     }
     if (!Name.empty())
       Records[Name] = Named;
+    // A recursive member refers to this identity, not ownership of the
+    // record currently being built. A later member access may complete that
+    // borrow from the library without a shared_ptr cycle.
+    if (!Name.empty())
+      ActiveRecords.insert(Name);
+    const llvm::scope_exit Leave([&] {
+      if (!Name.empty())
+        ActiveRecords.erase(Name);
+    });
     if (Record.Defined) {
       members(*Named, Record, 0, Depth);
       unsigned Budget = 256;
@@ -378,7 +390,9 @@ private:
   const types::TypeLibrary &Library;
   const types::TypeSpeller *PrototypeSpeller;
   bool CompleteValues;
+  bool BorrowRecords;
   llvm::StringMap<TypeRef> Records;
+  llvm::StringSet<> ActiveRecords;
 };
 
 /// Whether every member \p Record names for display is one \p Def has
@@ -848,6 +862,9 @@ LocalTypesDebugContext::resolvePrototype(llvm::StringRef Name) const {
   Signature->PortablePrototypeDeclaration =
       (PortableFunction->NoReturn ? "_Noreturn " : "") +
       Portable->spell(*types::makeFunction(PortableFunction), Name.str());
+  for (const auto &Parameter : PortableFunction->Params)
+    Signature->PortableParameterTypes.push_back(
+        Portable->spell(*Parameter.Type));
   return Signature;
 }
 
@@ -1023,6 +1040,7 @@ LocalTypesDebugContext::resolveFunction(va_t Addr) const {
   Typed.PrototypeDeclaration = std::move(Known->PrototypeDeclaration);
   Typed.PortablePrototypeDeclaration =
       std::move(Known->PortablePrototypeDeclaration);
+  Typed.PortableParameterTypes = std::move(Known->PortableParameterTypes);
   Typed.PrototypeFromHeader = Known->PrototypeFromHeader;
   Typed.PrototypeFromCLibrary = Known->PrototypeFromCLibrary;
   Typed.NoReturn = Known->NoReturn;

@@ -27,6 +27,7 @@ add_neverd_component_library(NeverDDiff
   MedDataFlow.cpp
   LLVMDataFlow.cpp
   Program.cpp
+  ReferenceContext.cpp
   Regions.cpp
   RegionsJSON.cpp
   ReviewJournal.cpp

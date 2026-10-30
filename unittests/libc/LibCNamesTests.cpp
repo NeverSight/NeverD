@@ -66,6 +66,42 @@ TEST(VarArgFixedCount, UCRTCommonConsumersKeepTheirVaListArgument) {
   EXPECT_EQ(varArgFixedCount("printf", LibCVariant::Windows), 1u);
 }
 
+TEST(VarArgFixedCount, MicrosoftPrefixesKeepCapacityAndCountOnlyContracts) {
+  for (const auto Name : {"_snprintf", "_snwprintf", "_snscanf", "_snwscanf"}) {
+    EXPECT_EQ(varArgFixedCount(Name, LibCVariant::Windows), 3u) << Name;
+    EXPECT_EQ(varArgFixedParamKind(Name, 0, LibCVariant::Windows),
+              VarArgFixedParamKind::Pointer);
+    EXPECT_EQ(varArgFixedParamKind(Name, 1, LibCVariant::Windows),
+              VarArgFixedParamKind::Integer);
+    EXPECT_EQ(varArgFixedParamKind(Name, 2, LibCVariant::Windows),
+              VarArgFixedParamKind::Pointer);
+    EXPECT_EQ(varArgFixedParamKind(Name, 3, LibCVariant::Windows),
+              VarArgFixedParamKind::Unknown);
+  }
+  for (const auto Name : {"_scprintf", "_scwprintf"}) {
+    EXPECT_EQ(varArgFixedCount(Name, LibCVariant::Windows), 1u) << Name;
+    EXPECT_EQ(varArgFixedParamKind(Name, 0, LibCVariant::Windows),
+              VarArgFixedParamKind::Pointer);
+    EXPECT_EQ(varArgFixedParamKind(Name, 1, LibCVariant::Windows),
+              VarArgFixedParamKind::Unknown);
+  }
+}
+
+TEST(VarArgFixedCount, WindowsWideFormattersNeedTheirDeclarationContext) {
+  // The WDK has (buffer, format, ...), the ISO CRT (buffer, count, format,
+  // ...). PE alone cannot select either or forward to a guessed vswprintf.
+  EXPECT_EQ(varArgFixedCount("swprintf", LibCVariant::Windows), 0u);
+  EXPECT_EQ(varArgFixedParamKind("swprintf", 1, LibCVariant::Windows),
+            VarArgFixedParamKind::Unknown);
+  EXPECT_FALSE(vaListParameter("vswprintf", LibCVariant::Windows));
+  const LibCVariadicForward *Forward = libcVariadicForward("swprintf");
+  ASSERT_NE(Forward, nullptr);
+  EXPECT_FALSE(variadicIn(*Forward, LibCVariant::Windows));
+  EXPECT_TRUE(variadicIn(*Forward, LibCVariant::GNU));
+  EXPECT_EQ(varArgFixedCount("swprintf", LibCVariant::GNU), 3u);
+  EXPECT_EQ(vaListParameter("vswprintf", LibCVariant::GNU), 3u);
+}
+
 TEST(LibCArity, WindowsComplexRecordsNeedTheirFullABIType) {
   for (const auto &Entry : kComplexArity) {
     EXPECT_FALSE(libcArity(Entry.Name, LibCVariant::Windows)) << Entry.Name;
@@ -222,15 +258,15 @@ TEST(VarArgFixedCount, AllVaListVariantsReturnZero) {
 }
 
 TEST(VaListParameter, FollowsTheVariadicRoutinesFixedParameters) {
-  EXPECT_EQ(vaListParameter("vfprintf"), 2u);
-  EXPECT_EQ(vaListParameter("vwarn"), 1u);
-  EXPECT_EQ(vaListParameter("__vsnprintf_chk"), 5u);
-  EXPECT_EQ(vaListParameter("__isoc23_vfscanf"), 2u);
+  EXPECT_EQ(vaListParameter("vfprintf", LibCVariant::GNU), 2u);
+  EXPECT_EQ(vaListParameter("vwarn", LibCVariant::GNU), 1u);
+  EXPECT_EQ(vaListParameter("__vsnprintf_chk", LibCVariant::GNU), 5u);
+  EXPECT_EQ(vaListParameter("__isoc23_vfscanf", LibCVariant::GNU), 2u);
   // strerror_r's buffer, and a variadic routine's own parameters, are no
   // va_list.
-  EXPECT_FALSE(vaListParameter("strerror_r").has_value());
-  EXPECT_FALSE(vaListParameter("fprintf").has_value());
-  EXPECT_FALSE(vaListParameter("").has_value());
+  EXPECT_FALSE(vaListParameter("strerror_r", LibCVariant::GNU).has_value());
+  EXPECT_FALSE(vaListParameter("fprintf", LibCVariant::GNU).has_value());
+  EXPECT_FALSE(vaListParameter("", LibCVariant::GNU).has_value());
 }
 
 TEST(VarArgFixedCount, EmptyAndGarbage) {

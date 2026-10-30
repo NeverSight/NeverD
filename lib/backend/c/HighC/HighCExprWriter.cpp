@@ -2732,11 +2732,16 @@ std::string HighCWriter::renderCallExpr(const HighExpr &E) {
           // typedef the local types define (nftw's __nftw_func_t), which an
           // argument converts to as well: its type's structure, whose
           // pointers the unit spells void *, would not match.
-          std::string Text =
-              exprStrAsTypedArg(*Op, Expected,
-                                Defined && Expected->Kind != NdTypeKind::Array
-                                    ? declaredTypedef(Expected)
-                                    : std::nullopt);
+          std::optional<std::string> Spelled =
+              Defined && Expected->Kind != NdTypeKind::Array
+                  ? declaredTypedef(Expected)
+                  : std::nullopt;
+          if (!Defined)
+            if (const auto Portable =
+                    c_library::portableScalarParameterType(*Callee, I);
+                !Portable.empty())
+              Spelled = Portable.str();
+          std::string Text = exprStrAsTypedArg(*Op, Expected, Spelled);
           // A selected source declaration can spell an integer pointee as
           // long while the machine carrier and local fields use int32_t.
           // Equal widths do not make those C pointer types compatible. The

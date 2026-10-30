@@ -6835,9 +6835,10 @@ TEST_F(SessionCAPITest, X86ImportsTakeTheirStdcallPrototypes) {
                       "const uint16_t *lpFileName,"),
             std::string::npos)
       << Open;
-  EXPECT_NE(Open.find("CreateFileW((uint16_t*)(uintptr_t)arg0, 0x80000000, "
-                      "1, 0, 3, 0, 0)"),
-            std::string::npos)
+  EXPECT_NE(
+      Open.find("CreateFileW((const uint16_t *)(uintptr_t)arg0, 0x80000000, "
+                "1, 0, 3, 0, 0)"),
+      std::string::npos)
       << Open;
   const std::string Probe = decompile("Probe");
   EXPECT_NE(Probe.find(std::string("extern __attribute__((stdcall)) ") +
@@ -6950,8 +6951,9 @@ TEST_F(SessionCAPITest, ARM64ImportsPassWhatTheirPrototypesCount) {
   }
   // CreateWindowExW takes twelve: the last four are on the stack.
   const std::string Window = decompile("Window");
-  EXPECT_NE(Window.find("0x10000000, 1, 2, 3, 4, (HWND__*)(uintptr_t)arg0, 0, "
-                        "(HINSTANCE__*)(uintptr_t)arg1, 0);"),
+  EXPECT_NE(Window.find(
+                "0x10000000, 1, 2, 3, 4, (struct HWND__ *)(uintptr_t)arg0, 0, "
+                "(struct HINSTANCE__ *)(uintptr_t)arg1, 0);"),
             std::string::npos)
       << Window;
 }
@@ -7016,14 +7018,16 @@ TEST_F(SessionCAPITest, LinuxProgramsJoinTheirGlibcLibrary) {
     ASSERT_GE(Index, 0);
     const neverd_va_t Entry = neverd_func_entry(Linux, Index);
     // stat's path is glibc's const char *; the record it fills is reached
-    // through void *, which converts to <sys/stat.h>'s struct stat *.  No
+    // through the same struct stat * as <sys/stat.h>'s declaration. No
     // typedef names the record stat, the function's name.
     const std::string HighC = takeString(neverd_decompile(Linux, Entry));
     const bool TypedPath = std::string_view(P.Model) == "LP64";
     if (TypedPath)
       EXPECT_NE(HighC.find("Size(char* arg0) {"), std::string::npos) << HighC;
-    EXPECT_NE(HighC.find(TypedPath ? "stat(arg0, (void*)&"
-                                   : "stat((char*)(uintptr_t)arg0, (void*)&"),
+    EXPECT_NE(HighC.find(
+                  TypedPath
+                      ? "stat(arg0, (struct stat *)&"
+                      : "stat((const char *)(uintptr_t)arg0, (struct stat *)&"),
               std::string::npos)
         << HighC;
     EXPECT_EQ(HighC.find("typedef struct stat stat;"), std::string::npos)
@@ -7114,7 +7118,7 @@ TEST_F(SessionCAPITest, MuslProgramsJoinTheirMuslLibrary) {
   // its architecture, not glibc's: a 32-bit program's time_t is 64 bits, so
   // its struct stat is musl's, and the stat it imports is __stat_time64,
   // which takes stat's prototype.  <sys/stat.h> declares stat, whose record
-  // the call reaches through void *, and no typedef names the record as the
+  // the call reaches through its pointer type, and no typedef names it as the
   // function; the output declares __stat_time64 itself, with the record's
   // type.  No typedef names the record there either, which is spelled by
   // its tag: the C library has a function of its name, which a header the
@@ -7127,9 +7131,9 @@ TEST_F(SessionCAPITest, MuslProgramsJoinTheirMuslLibrary) {
   };
   const Program Programs[] = {
       {"musl_libc_calls_x64", "musl-x64", "LP64", "itanium", 144,
-       "stat(arg0, (void*)&", false},
+       "stat(arg0, (struct stat *)&", false},
       {"musl_libc_calls_x86", "musl-x86", "ILP32", "i386-sysv", 144,
-       "__stat_time64((char*)(uintptr_t)arg0, (struct stat*)&", false},
+       "__stat_time64((const char *)(uintptr_t)arg0, (struct stat *)&", false},
   };
   const auto Fixtures =
       std::filesystem::path(__FILE__).parent_path() / "types" / "fixtures";

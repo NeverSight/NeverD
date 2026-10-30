@@ -102,6 +102,10 @@ check. Explicit conventions take precedence, variadic functions use `cdecl`,
 and rendered callbacks and prototypes carry their conventions explicitly.
 An empty pragma resets the source default; it never leaks into another parse.
 User libraries and 64-bit targets retain their own defaults.
+Independent kernel provider units receive the same default before parsing or
+prototype selection, including their callback typedefs. Microsoft's legacy
+`_declspec` and `_inline` spellings are also accepted; malformed attributes
+still reject the declaration.
 
 WinHTTP and HTTP Server are separate official declaration units. WinHTTP and
 WinINet can use the same `URL_COMPONENTS` name for different string pointees;
@@ -118,6 +122,30 @@ OpenGL/GLU. Each unit declares its own preprocessor settings. TAPI uses
 `WIN32=1`, as Microsoft's metadata partition does, because its headers test
 that macro's value. Both preprocessing and the independent compiler check use
 the same settings, which are recorded in the manifest.
+
+Kernel units additionally cover NMR/WSK, Kernel Streaming, storage class, TDI,
+VideoPort, ATA, battery, HID port and SmartCard declarations. User units add
+ETW providers, PathCch, WinRT strings, RPC proxy/marshalling, credentials,
+device queries, application model/features, property variants, performance
+data and biometrics. Inclusion of a header does not establish coverage of
+private exports or other Windows versions.
+
+`scripts/check_microsoft_provider_abis.py --generated /path/to/microsoft-windows
+--output /path/to/abi-results --neverd build-release/bin/neverd` compares
+representative functions from those 19 units against the original compiler
+declarations on all three targets. It retains decoration, calling convention,
+parameter/return attributes and by-value record alignment, excluding only DLL
+visibility. Each published prototype is selected with its complete dependent
+types; unrelated compiler intrinsics are not compiled as replacement builtins.
+
+`scripts/check_windows_provider_calls.py --generated /path/to/microsoft-windows
+--cache /path/to/package-cache --output /path/to/call-results
+--neverd build-release/bin/neverd` builds import-only ETW, PathCch and WinRT
+fixtures with the retained SDK headers and pinned target import libraries.
+Both C routes must compile, retain each API call without unknown operands,
+and match its original compiler ABI. These checks do not execute the Windows
+API or a driver. The generation must include `--ucrt` to retain the target
+SDK package identities used by this check.
 
 DNS also has a Unicode profile. Its official `PDNS_RECORD` alias changes with
 `UNICODE`, including in declarations with an explicit `_W` name. An exact
@@ -151,6 +179,21 @@ callback return values. Both C emitters share the declarator formatter; a
 stdcall callback returned by a cdecl function must not turn the outer function
 into stdcall. PDB callback types use the same source convention identity.
 An unsupported callback convention is not substituted with the ordinary C ABI.
+Callback pointees retain borrowed record identities without recursively
+reconstructing their members. For admitted portable prototypes, source
+declarations and call conversions share parameter spellings from the same
+type graph, preserving nested qualifiers even though the machine carrier
+does not encode them. The admitted x86 `__cdecl` and `__stdcall` keywords
+retain nested callback qualifiers without requiring an SDK typedef.
+Recursive record back references also remain separate borrowed identities,
+so releasing an analysis does not retain a shared ownership cycle. Member
+access can still complete those identities from the selected type library.
+
+Legacy Windows/kernel and ISO `swprintf` declarations have different fixed
+prefixes. A PE image alone cannot select between them: name-only variadic and
+`va_list` forwarding rules decline that ambiguity, leaving the selected
+declaration authoritative. Underscored bounded formatters retain their capacity
+argument, while count-only `_scprintf`/`_scwprintf` take only the format prefix.
 
 Generation rejects parser errors, missing declarations on round trip and named
 record layout differences against Clang reading the original Microsoft headers.
