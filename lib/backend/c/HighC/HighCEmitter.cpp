@@ -46,6 +46,7 @@
 #include "neverd/ir/intrinsics/X86/X86FourSource.h"
 #include "neverd/ir/intrinsics/X86/X86RepState.h"
 #include "neverd/ir/intrinsics/X86/X86Unsupported.h"
+#include "neverd/ir/med/MedDynamicStack.h"
 #include "neverd/loader/AArch64MemoryImage.h"
 
 #define DEBUG_TYPE "neverd-highc-emitter"
@@ -619,6 +620,7 @@ HighCWriter::floatToIntegerConversion(const HighExpr &E) const {
 
 void HighCWriter::collectMemoryTypes(const std::vector<HighFunc> &Funcs) {
   std::set<std::string> Names;
+  StackAllocationSizeHelper.clear();
   FloatToIntegerHelpers.clear();
   LeadingZeroHelpers.clear();
   SaturatingLaneHelpers.clear();
@@ -662,6 +664,12 @@ void HighCWriter::collectMemoryTypes(const std::vector<HighFunc> &Funcs) {
   std::function<void(const HighExpr &)> Visit = [&](const HighExpr &E) {
     if (!Seen.insert(&E).second)
       return;
+    if (StackAllocationSizeHelper.empty() && E.Kind == ExprKind::Call &&
+        !E.IsIndirectCall && E.CallTarget == "__builtin_alloca" &&
+        E.Operands.size() == 1 &&
+        dynamicStackCallArea(Opts.TheArch, Opts.Format))
+      StackAllocationSizeHelper =
+          MemoryIdentifiers.allocate("neverd_stack_allocation_size");
     if (HideEHRuntimeMemory &&
         E.MemoryAddressSpace == NdMemoryAddressSpace::X86FS &&
         !(E.Kind == ExprKind::Call &&
@@ -853,6 +861,13 @@ void HighCWriter::collectMemoryTypes(const std::vector<HighFunc> &Funcs) {
 }
 
 void HighCWriter::writeMemoryHelpers() {
+  if (!StackAllocationSizeHelper.empty()) {
+    const uint64_t Area = dynamicStackCallArea(Opts.TheArch, Opts.Format);
+    OS << "static inline uint64_t " << StackAllocationSizeHelper
+       << "(uint64_t size) {\n"
+       << "    if (size > UINT64_MAX - " << Area << ") __builtin_trap();\n"
+       << "    return size + " << Area << ";\n}\n\n";
+  }
   for (const auto &[Key, Name] : FloatToIntegerHelpers) {
     auto [Bits, FloatBits, Signed] = Key;
     c_float::writeConversion(

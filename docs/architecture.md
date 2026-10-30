@@ -490,6 +490,26 @@ summary. Incoming-stack and register-pair
 reconversions rebuild the same phase-local facts. The checks still precede
 source save suppression and register-call expansion. No result is cached across
 image or body mutations, and no source return type supplies a machine proof.
+
+Fresh x64 COFF source conversion can also bound an allocation after a checked
+page probe. `COFFStackProbe` authenticates the complete immutable helper and
+the direct CALL bytes, including unsigned loop tests, both page touches and
+register restoration. Under the ordinary uninterrupted 48/57-bit linear-address
+contract, a descending probe cannot return normally after traversing the
+noncanonical address gap. The shared CALL-slot owner binds that fact to the
+subsequent `sub rsp, rax` in the same original block, invalidates it on RAX
+writes, other calls and exceptional entries, and composes only query-local
+stack ranges. A helper name alone, a changed body, or a path bypassing the
+probe supplies no bound. This does not model exception resumption or alternate
+address-translation contracts. See the [Intel address rules](https://edc.intel.com/content/www/us/en/design/platforms/core-processor-series-3-datasheet-volume-1-of-2/001/linear-address-masking-lam/).
+
+Dynamic stack storage includes the ABI's outgoing register home area: Win64
+places its usable dynamic object above that area at the new SP. Both C routes
+and LLVM reserve the area using `TargetRegInfo::integerArgumentLayout`, with
+checked addition, while retaining the original size operand and pointer
+arithmetic. The allocation size is not an exact physical SP delta in source
+storage; adding the home area does not authorize aliases with independently
+represented fixed-frame objects.
 The omitted-callee reader also visits scalar direct calls carrying a proven
 private-frame address. Existing operation and extra-lift budgets still bound
 those bodies; an arity-only summary cannot stand in for their pointer effects.

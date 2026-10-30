@@ -30,6 +30,7 @@
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Instructions.h"
+#include "llvm/IR/Intrinsics.h"
 #include "llvm/Support/MathExtras.h"
 
 #include <algorithm>
@@ -265,6 +266,22 @@ MedLLVMEmitter::tryEmitDynamicStackAlloc(const MedOp &Op,
   llvm::Value *SizeVal = getVar(Size, Builder);
   if (!SizeVal || !SizeVal->getType()->isIntegerTy())
     return nullptr;
+  if (const uint64_t Area = dynamicStackCallArea(TargetArch, TargetFormat)) {
+    auto *Type =
+        Builder.getIntNTy(getTargetRegInfo(TargetArch).PointerSize * 8);
+    SizeVal = Builder.CreateZExtOrTrunc(SizeVal, Type);
+    auto *Overflow = Builder.CreateICmpUGT(
+        SizeVal, llvm::ConstantInt::get(Type, UINT64_MAX - Area));
+    auto *Fault = llvm::BasicBlock::Create(*Ctx, "vla.overflow", CurFunc);
+    auto *Allocate = llvm::BasicBlock::Create(*Ctx, "vla.allocate", CurFunc);
+    Builder.CreateCondBr(Overflow, Fault, Allocate);
+    llvm::IRBuilder<> Trap(Fault);
+    Trap.CreateIntrinsic(llvm::Type::getVoidTy(*Ctx), llvm::Intrinsic::trap,
+                         {});
+    Trap.CreateUnreachable();
+    Builder.SetInsertPoint(Allocate);
+    SizeVal = Builder.CreateAdd(SizeVal, llvm::ConstantInt::get(Type, Area));
+  }
   auto *Dyn = Builder.CreateAlloca(llvm::Type::getInt8Ty(*Ctx), SizeVal, "vla");
   Dyn->setAlignment(llvm::Align(16));
   unsigned Bits = Op.Output.Size > 0 ? Op.Output.Size * 8u : 64u;

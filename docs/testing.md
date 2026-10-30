@@ -16534,9 +16534,20 @@ allocation; a 32-bit result whose sign extension can raise SP remains refused.
 The successful modules pass LLVM verification.
 `NativePointerRelocationBoundary.MinGWProgramWholeModuleLLVMCCompiles` retains
 the larger PE whole-module compilation fixture. Its runtime relocator uses the
-same 16-bit section-count proof. This does not establish bounds for the other
-dynamic allocations in its printf helpers: an omitted stack probe supplies no
-scalar range fact. Native Windows execution is separate from cross-compilation.
+same 16-bit section-count proof. Its `__pformat_xint` allocations now use the
+separate byte-authenticated probe normal-return proof. Native Windows execution
+is separate from cross-compilation.
+
+`SourceCallReturnWrites.OnlyTheCompleteProbeBodySuppliesAReturnBound` checks
+every helper byte, signed comparison and missing-touch mutations, writable
+code, guessed names, replaced sizes and omitted probes. Both source routes
+retain the refusal for those incomplete proofs.
+`ProbedDynamicAllocationsKeepFixedFrameValues` checks fixed-frame values and
+the last dynamic-object byte above the Win64 home area through HighC and
+LLVM C, with source optimization on/off and O0/O2 ASan/UBSan. Linux x64 also
+executes the original probe and caller bytes for 1,025 sizes from zero through
+16 KiB. This is ordinary nonfaulting execution, not exception-resumption or
+native Windows host coverage.
 
 `MedSEHEstablisherFrame.CallBeforeStackRestoreKeepsHandlerFrameLive` checks
 direct and indirect CALLs whose only SP use precedes an explicit restore at an
