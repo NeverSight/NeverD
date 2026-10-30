@@ -64,6 +64,8 @@ lowerOperation(const LowOp &Op, const SpecializationOptions &Options,
 } // namespace neverd::analysis::x64::alignment
 
 namespace neverd::analysis::x64::pageglobal {
+enum class Operation { Read, Write };
+std::optional<Operation> describeOperation(const LowOp &Op);
 llvm::Error validateOptions(const SpecializationOptions &Options);
 bool supportsOperation(const LowOp &Op, const SpecializationOptions &Options);
 /// PGE-only scalar value transition. The caller must supply the complete

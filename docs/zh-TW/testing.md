@@ -2244,3 +2244,5 @@ LLVM C 的合成堆疊槽保留完整的 128 位元整數寫入，再由執行�
 `X86NativeStateAudit.CR4*` 檢查 48 種已准入的 CR4 傳送編碼與 34 組位元組和解碼詳情不符的輸入。測試要求記錄六個任意算術旗標、保留原有原生內在操作，且不授予不透明狀態保持證書。`CR4FlagCoverageDoesNotAuthorizeMachineRegionExecution` 驗證缺少控制狀態契約時仍拒絕原始碼恢復。這些測試只解碼並提升自有指令位元組，不執行特權指令。
 
 `PageGlobal*` 檢查涵蓋未知高位、兩個分支、讀寫關係、63 個禁止變更的控制位、其他狀態保持、錯誤運算元、預算與環境身分。執行 `NeverDInterpreterSpecializationTests`、`NeverDInterpreterMachineStateTests`、`NeverDLowIRRefinementTests` 和 `NeverDInterpreterLLVMRefinementTests`；這些值模型測試不執行硬體特權指令。
+
+`NeverDInterpreterMachineStateTests` 的 `KernelPageGlobalSource*` 以 HighC、LLVMC、O0/O2 及 ASan/UBSan 檢查完整狀態、返回堆疊、CR4 關係、所有不足或不符的指令記錄，以及核心 POPFQ/CLI/STI 旗標。另檢查執行域、舊配置和預算拒絕；僅執行產生的純量 C。

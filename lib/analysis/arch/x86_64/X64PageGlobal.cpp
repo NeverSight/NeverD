@@ -14,8 +14,6 @@
 
 namespace neverd::analysis::x64::pageglobal {
 namespace {
-enum class Operation { Read, Write };
-
 bool validDomain(const SpecializationOptions &Options) {
   return Options.Architecture == Arch::X64 && Options.ExplicitMachineState &&
          Options.NormalNonfaultingExecution &&
@@ -23,8 +21,9 @@ bool validDomain(const SpecializationOptions &Options) {
          Options.X64FlagsProfile &&
          isKernelX64MachineStateProfile(*Options.X64FlagsProfile);
 }
+} // namespace
 
-std::optional<Operation> operation(const LowOp &Op) {
+std::optional<Operation> describeOperation(const LowOp &Op) {
   if (Op.Opcode != NdOp::INTRINSIC || !Op.NumInputs ||
       !Op.Inputs[0].isConst() || Op.Inputs[0].Size != 2 ||
       Op.MemoryAddressSpace != NdMemoryAddressSpace::Default ||
@@ -43,7 +42,6 @@ std::optional<Operation> operation(const LowOp &Op) {
     return Operation::Write;
   return std::nullopt;
 }
-} // namespace
 
 llvm::Error validateOptions(const SpecializationOptions &Options) {
   if (Options.X64CR4PGEState && !validDomain(Options))
@@ -56,13 +54,13 @@ llvm::Error validateOptions(const SpecializationOptions &Options) {
 
 bool supportsOperation(const LowOp &Op, const SpecializationOptions &Options) {
   return Options.X64CR4PGEState && validDomain(Options) &&
-         operation(Op).has_value();
+         describeOperation(Op).has_value();
 }
 
 std::optional<RuntimeControlTransition>
 lowerScalarOperation(const LowOp &Op, NdVar Slot,
                      llvm::function_ref<NdVar(uint16_t)> Temporary) {
-  const auto Kind = operation(Op);
+  const auto Kind = describeOperation(Op);
   if (!Kind || !Slot.isTemp() || Slot.Size != 8 || Slot.Offset > InvalidVA - 7)
     return std::nullopt;
   RuntimeControlTransition Result;

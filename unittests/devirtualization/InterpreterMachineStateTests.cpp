@@ -1576,6 +1576,7 @@ int main(void) {
 #include "InterpreterMachineRegionChoiceTests.inc"
 #include "InterpreterMachineRegionChoiceSourceTests.inc"
 #include "InterpreterMachineRegionSegmentedSourceTests.inc"
+#include "InterpreterMachineRegionKernelSourceTests.inc"
 #include "InterpreterMachineRegionTrapTests.inc"
 // clang-format on
 

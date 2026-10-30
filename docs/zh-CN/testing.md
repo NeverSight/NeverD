@@ -2263,3 +2263,5 @@ LLVM C 的合成栈槽保留完整的 128 位整数写入，再由运行时选�
 `X86NativeStateAudit.CR4*` 检查 48 种已准入的 CR4 传送编码及 34 组字节与解码详情不匹配的输入。测试要求记录六个任意算术标志位，保留原有原生内在操作，且不授予不透明状态保持证书。`CR4FlagCoverageDoesNotAuthorizeMachineRegionExecution` 验证缺少控制状态契约时仍拒绝源码恢复。这些测试只解码并提升自有指令字节，不执行特权指令。
 
 解释器、原始区域和证明套件中的 `PageGlobal*` 检查覆盖未知高位、两个分支结果、读写关系、全部 63 个禁止修改的控制位、其他状态保持、错误操作数、预算和环境身份。运行 `NeverDInterpreterSpecializationTests`、`NeverDInterpreterMachineStateTests`、`NeverDLowIRRefinementTests` 与 `NeverDInterpreterLLVMRefinementTests`；这些是值模型验证，不执行硬件特权指令。
+
+`NeverDInterpreterMachineStateTests` 中的 `KernelPageGlobalSource*` 在 HighC、LLVMC 的 O0/O2 和 ASan/UBSan 下检查完整状态、返回栈、CR4 读写关系、每个不足或错误的指令预留，以及内核 POPFQ/CLI/STI 标志规则。域、旧布局和预算拒绝仍须显式验证；测试只执行生成的标量 C。

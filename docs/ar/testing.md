@@ -2324,3 +2324,5 @@ QT_QPA_PLATFORM=offscreen NEVERD_PATCH_NATIVE_WORKER="$PWD/build-gui/bin/neverd-
 تتحقق اختبارات `X86NativeStateAudit.CR4*` من 48 ترميز نقل CR4 مقبولًا و34 زوجًا غير متطابق من البايتات وتفاصيل فك الترميز. وتشترط تسجيل ستة أعلام حسابية غير محددة، والإبقاء على العمليات الأصلية دون تغيير، وعدم منح شهادة لحفظ الحالة المعتمة. يؤكد `CR4FlagCoverageDoesNotAuthorizeMachineRegionExecution` رفض استعادة المصدر دون عقد لحالة التحكم. تفك الاختبارات ترميز بايتات مملوكة للمشروع وتحولها إلى IR فقط، ولا تنفذ تعليمات ذات امتيازات.
 
 تختبر `PageGlobal*` البتات العليا المجهولة والفرعين وعلاقات القراءة والكتابة والتغييرات الـ63 المحظورة وحفظ الحالات الأخرى والمعاملات الخاطئة والميزانيات والهوية. شغّل `NeverDInterpreterSpecializationTests` و`NeverDInterpreterMachineStateTests` و`NeverDLowIRRefinementTests` و`NeverDInterpreterLLVMRefinementTests`. هذه اختبارات قيم لا تنفذ تعليمات ذات امتيازات.
+
+تتحقق `KernelPageGlobalSource*` ضمن `NeverDInterpreterMachineStateTests` من الحالة الكاملة ومكدس العودة وCR4 وجميع السجلات الناقصة أو الخاطئة وقواعد POPFQ/CLI/STI للنواة عبر HighC/LLVMC وO0/O2 وASan/UBSan. تشمل رفض المجال والتخطيطات القديمة والميزانية، وتنفذ فقط كود C القياسي المولد.
