@@ -137,6 +137,26 @@
       "bytes": 1627272
     },
     {
+      "path": "neverd-merged-build-receipt.json",
+      "sha256": "31ba0230549bc80b7134a1461ad80b6e1dcbfb389c3cf23fbf5225a1eb739bc4",
+      "bytes": 3603
+    },
+    {
+      "path": "neverd-merged-build.log",
+      "sha256": "bf62dc71fb789087a3ff90d70b39c79752c0eb2e349cab88c9394c4235055c61",
+      "bytes": 45960
+    },
+    {
+      "path": "neverd-merged-tests.log",
+      "sha256": "2666836af7a06db4ce027ed06f9a5a8819ec577b0361044e200343b8f08e352a",
+      "bytes": 37867
+    },
+    {
+      "path": "neverd-merged-tests.xml",
+      "sha256": "1031085445908a7ca0733e35a7f44be541177a11d7b83b2831115204b02574e4",
+      "bytes": 177375
+    },
+    {
       "path": "private-tmp-runner.py",
       "sha256": "efdf71e359e533c15e185769de3ccc5f04631beefa5fc1e33fc6fbf05186acef",
       "bytes": 325
@@ -175,5 +195,13 @@
       "path": "unittests/devirtualization/X64FredContinuationTests.inc",
       "sha256": "5d6baaf412debf765b7d224a00e063cdc931c0bfaa3f19a39d161369c2f710d3"
     }
-  ]
+  ],
+  "merged_validation": {
+    "neverd_head": "6df0cd000256f302e20bf1aa3588cf046631be9a",
+    "dev_base": "ebaf7bc9b5e23b68de03bd8637e6e4facef7a447",
+    "tests": 169,
+    "failed": 0,
+    "skipped": 0,
+    "labels": 4
+  }
 }
