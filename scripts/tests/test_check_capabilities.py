@@ -3219,6 +3219,7 @@ class RepositoryCapabilityTests(unittest.TestCase):
                 "analysis.materialized-image-sections": "experimental",
                 "analysis.external-bytecode-recovery": "experimental",
                 "analysis.interpreter-source-recovery": "experimental",
+                "analysis.x64-continuation-source": "experimental",
                 "debug.hardware": "unsupported",
                 "debug.local": "unsupported",
                 "debug.remote": "unsupported",
@@ -3398,6 +3399,15 @@ class RepositoryCapabilityTests(unittest.TestCase):
                     "neverd decompile --vm-prove-store-frame-separation",
                     "neverd decompile --vm-max-symbolic-nodes",
                     "neverd decompile --vm-no-control-discovery",
+                ],
+                "json": [],
+            },
+            "analysis.x64-continuation-source": {
+                "c": ["neverd_x64_continuation_source_v1"],
+                "python": [],
+                "cli": [
+                    "neverd decompile --x64-continuation",
+                    "neverd decompile --continuation-report",
                 ],
                 "json": [],
             },

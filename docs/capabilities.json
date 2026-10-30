@@ -23250,6 +23250,116 @@
       }
     },
     {
+      "id": "analysis.x64-continuation-source",
+      "kind": "analysis",
+      "status": "experimental",
+      "owner": "pipeline",
+      "targets": [
+        "x86_64 ELF",
+        "x86_64 PE"
+      ],
+      "docs": [
+        "docs/x64-continuation-source.md"
+      ],
+      "limitations": [
+        "Exports selected original instructions through HighC or LLVM C with an explicit architectural state and independently owned manifest. LowIR selection does not establish ordinary source ABI validation, whole-function coverage or executable image replacement.",
+        "The kernel-events-v6 invocation domain requires a valid CPL0 long-mode context, CET/FRED disabled, immutable original bytes and successful sequential ordinary RAM accesses. Guest addresses retain their actual mappings; state and budget storage must be disjoint from guest accesses. Fault delivery, MMIO, concurrency and asynchronous events remain outside this domain.",
+        "Physical CALL/RET, privilege exits and native requests retain their explicit driver stops. Unsupported system effects require the execution environment; native bindings are opt-in declarations rather than emulation. Malformed requests, unavailable linked-image bytes and exhausted generation budgets publish no partial source.",
+        "SDK request and CLI parity checks are portable. Generated-C execution with ASan/UBSan is recorded on Linux; native Windows/macOS generated execution and a complete kernel environment remain unqualified. Native privileged-instruction comparisons use the separate Linux x64 KVM fixtures documented by the source owner."
+      ],
+      "tests": [
+        {
+          "runner": "gtest",
+          "target": "NeverDX64ContinuationExportTests",
+          "source": "unittests/devirtualization/X64ContinuationExportTests.cpp",
+          "filter": "X64ContinuationExportTest.CLIExportsTheSameSourceAndRequiresItsManifest",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDX64ContinuationExportTests",
+          "source": "unittests/devirtualization/X64ContinuationExportTests.cpp",
+          "filter": "X64ContinuationExportTest.StrictRequestsAndBoundariesNeverPublishPartialSource",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDX64ContinuationExportTests",
+          "source": "unittests/devirtualization/X64ContinuationExportTests.cpp",
+          "filter": "X64ContinuationExportTest.RawImagesRetainTheirExistingNativeBoundary",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDX64ContinuationExportTests",
+          "source": "unittests/devirtualization/X64ContinuationExportTests.cpp",
+          "filter": "X64ContinuationExportTest.DriverRetainsPhysicalCallsPivotsAndReentry",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDX64ContinuationExportTests",
+          "source": "unittests/devirtualization/X64ContinuationExportTests.cpp",
+          "filter": "X64ContinuationExportTest.SelectedCFGDoesNotRequireAnOrdinaryReturnFrame",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDX64ContinuationExportTests",
+          "source": "unittests/devirtualization/X64ContinuationExportTests.cpp",
+          "filter": "X64ContinuationExportTest.PrivilegeExitConsumesExactlyOneInstruction",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDX64ContinuationExportTests",
+          "source": "unittests/devirtualization/X64ContinuationExportTests.cpp",
+          "filter": "X64ContinuationExportTest.SoftwareInterruptStopsBeforeSelectedHandler",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDX64ContinuationExportTests",
+          "source": "unittests/devirtualization/X64ContinuationExportTests.cpp",
+          "filter": "X64ContinuationExportTest.FarReturnStopsBeforeTargetAndKeepsCleanup",
+          "platforms": [
+            "linux"
+          ]
+        }
+      ],
+      "public_surfaces": {
+        "c": [
+          "neverd_x64_continuation_source_v1"
+        ],
+        "python": [],
+        "cli": [
+          "neverd decompile --x64-continuation",
+          "neverd decompile --continuation-report"
+        ],
+        "json": []
+      }
+    },
+    {
       "id": "analysis.materialized-image-sections",
       "kind": "analysis",
       "status": "experimental",
