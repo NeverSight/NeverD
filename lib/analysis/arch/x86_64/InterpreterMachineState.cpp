@@ -19,6 +19,7 @@
 #include "neverd/ir/low/LowRawEnvironment.h"
 #include "neverd/lift/X86/X86Regs.h"
 
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/Support/Errc.h"
 
 #include <algorithm>
@@ -44,6 +45,8 @@ constexpr uint64_t QueryLeaf = GuestBase + 296;
 constexpr uint64_t QuerySubleaf = GuestBase + 304;
 constexpr uint64_t ChoiceIndex = GuestBase + 312;
 constexpr uint64_t ChoiceAddress = GuestBase + 320;
+constexpr uint64_t ChoiceFailurePC = GuestBase + 328;
+constexpr uint64_t ChoiceFailureFlags = GuestBase + 336;
 constexpr uint64_t GuestVectorBase = GuestBase + 512;
 constexpr uint64_t ScratchBase = uint64_t{1} << 61;
 constexpr uint64_t ScratchEnd = uint64_t{1} << 62;
@@ -513,6 +516,121 @@ llvm::Error rebuildSourcePredecessors(LowFunc &Function) {
   return llvm::Error::success();
 }
 
+/// Compact generated fallthrough scaffolding after native-PC consumers have
+/// finished. Instruction slices retain separate temporary lifetimes. Only
+/// source control labels move; guest addresses and tape PCs remain literals.
+llvm::Error compactChoiceSource(LowFunc &Function) {
+  const size_t Count = Function.Blocks.size();
+  llvm::DenseMap<int, size_t> Indices;
+  Indices.reserve(Count);
+  va_t Address = Function.Entry;
+  for (size_t I = 0; I != Count; ++I) {
+    Indices.try_emplace(Function.Blocks[I].Id, I);
+    Address = std::min(Address, Function.Blocks[I].StartAddr);
+  }
+  std::vector<size_t> Next(Count, Count), GroupOf(Count, Count);
+  std::vector<bool> HasPrevious(Count, false);
+  for (size_t I = 0; I != Count; ++I) {
+    const auto &Block = Function.Blocks[I];
+    if (Block.Succs.size() != 1 || Block.InstructionBoundaries.back().Control !=
+                                       LowInstructionControl::None)
+      continue;
+    const size_t J = Indices.at(Block.Succs.front());
+    const auto &Successor = Function.Blocks[J];
+    if (Successor.Preds.size() != 1 || Successor.StartAddr == Function.Entry ||
+        Function.ModuleAnalysisRoots.contains(Successor.StartAddr) ||
+        Function.OrdinaryModuleAnalysisRoots.contains(Successor.StartAddr))
+      continue;
+    Next[I] = J;
+    HasPrevious[J] = true;
+  }
+  std::vector<std::vector<size_t>> Groups;
+  Groups.reserve(Count);
+  const auto Collect = [&](size_t Head) {
+    if (GroupOf[Head] != Count)
+      return;
+    const size_t Group = Groups.size();
+    Groups.emplace_back();
+    for (size_t I = Head; I != Count && GroupOf[I] == Count; I = Next[I]) {
+      GroupOf[I] = Group;
+      Groups.back().push_back(I);
+    }
+  };
+  for (size_t I = 0; I != Count; ++I)
+    if (!HasPrevious[I])
+      Collect(I);
+  // A predecessor-free entry is first. Any remaining fallthrough cycle keeps
+  // its final edge back to its own head, rather than disappearing in the walk.
+  for (size_t I = 0; I != Count; ++I)
+    Collect(I);
+  if (Groups.size() == Count)
+    return llvm::Error::success();
+
+  llvm::DenseMap<va_t, va_t> Labels;
+  Labels.reserve(Groups.size());
+  std::vector<LowBlock> Blocks;
+  Blocks.reserve(Groups.size());
+  for (const auto &Group : Groups) {
+    auto &Head = Function.Blocks[Group.front()];
+    LowBlock Block;
+    Block.Id = Head.Id;
+    Block.StartAddr = Address;
+    Labels.try_emplace(Head.StartAddr, Address);
+    size_t Operations = 0, Instructions = 0;
+    for (size_t I : Group) {
+      Operations += Function.Blocks[I].Ops.size();
+      Instructions += Function.Blocks[I].InstructionBoundaries.size();
+    }
+    if (Instructions > InvalidVA - Address)
+      return invalid("machine choice source labels exhausted");
+    Block.Ops.reserve(Operations);
+    Block.InstructionBoundaries.reserve(Instructions);
+    for (size_t I : Group) {
+      auto &Part = Function.Blocks[I];
+      for (auto Boundary : Part.InstructionBoundaries) {
+        const size_t End = Boundary.FirstOp + Boundary.OpCount;
+        const size_t Begin = Block.Ops.size();
+        for (size_t OpIndex = Boundary.FirstOp; OpIndex != End; ++OpIndex) {
+          auto Op = Part.Ops[OpIndex];
+          Op.Addr = Address;
+          Block.Ops.push_back(std::move(Op));
+        }
+        Boundary.Address = Address++;
+        Boundary.Size = 1;
+        Boundary.FirstOp = Begin;
+        Block.InstructionBoundaries.push_back(Boundary);
+      }
+    }
+    Block.EndAddr = Address;
+    for (int Successor : Function.Blocks[Group.back()].Succs) {
+      const auto &Target = Groups[GroupOf[Indices.at(Successor)]];
+      Block.Succs.push_back(Function.Blocks[Target.front()].Id);
+    }
+    Blocks.push_back(std::move(Block));
+  }
+  for (auto &Block : Blocks) {
+    for (auto &Boundary : Block.InstructionBoundaries)
+      if (Boundary.Control == LowInstructionControl::Branch &&
+          Boundary.Immediate)
+        Boundary.Immediate = Labels.at(*Boundary.Immediate);
+    for (auto &Op : Block.Ops)
+      if (Op.Opcode == NdOp::BRANCH || Op.Opcode == NdOp::COND_BR)
+        Op.Inputs[0].Offset = Labels.at(Op.Inputs[0].Offset);
+  }
+  Function.Entry = Labels.at(Function.Entry);
+  for (auto *Roots :
+       {&Function.ModuleAnalysisRoots, &Function.OrdinaryModuleAnalysisRoots}) {
+    std::set<va_t> Updated;
+    for (va_t Root : *Roots) {
+      const auto Found = Labels.find(Root);
+      Updated.insert(Found == Labels.end() ? Root : Found->second);
+    }
+    *Roots = std::move(Updated);
+  }
+  Function.Blocks = std::move(Blocks);
+  return rebuildSourcePredecessors(Function);
+}
+
 struct ArchitecturalChoiceSourceInstruction {
   va_t NativeAddress;
   std::vector<LowArchitecturalValue> Productions;
@@ -522,6 +640,8 @@ struct RuntimeSourcePlan {
   std::map<int, SpecializationScalarQuery> Queries;
   std::map<int, int> ChoiceGuards;
   std::map<int, ArchitecturalChoiceSourceInstruction> ChoiceBodies;
+  std::optional<LowBlock> ChoiceExhausted;
+  std::optional<LowBlock> ChoiceMismatch;
   int NextID = 0;
   va_t NextAddress = 0;
 
@@ -702,20 +822,54 @@ llvm::Error emitArchitecturalChoiceSource(
   auto Match = Plan.block();
   if (!Match)
     return Match.takeError();
-  auto Exhausted = Plan.block();
-  if (!Exhausted)
-    return Exhausted.takeError();
-  auto Mismatch = Plan.block();
-  if (!Mismatch)
-    return Mismatch.takeError();
-  Match->Succs = {Mismatch->Id, Guard.Succs.front()};
-  Guard.Succs = {Exhausted->Id, Match->Id};
+  if (!Plan.ChoiceExhausted) {
+    const auto Reject = [&](InterpreterMachineRegionChoiceStatusX64V1 Status)
+        -> llvm::Expected<LowBlock> {
+      auto Block = Plan.block();
+      if (!Block)
+        return Block.takeError();
+      InstructionWriter Writer{Block->Ops, Block->StartAddr, false, true};
+      Writer.store(offsetof(InterpreterMachineRegionStateX64V1, PC),
+                   NdVar::reg(ChoiceFailurePC, 8));
+      Writer.store(offsetof(InterpreterMachineStateX64V1, RFlags),
+                   NdVar::reg(ChoiceFailureFlags, 8));
+      Writer.store(offsetof(InterpreterMachineRegionStateX64V1, ExitKind),
+                   scalar(uint64_t(InterpreterMachineRegionExitX64V1::None)));
+      Writer.emit(NdOp::COPY, NdVar::reg(ProfileStatus, 8),
+                  {scalar(uint64_t(Status))});
+      Writer.leave(false);
+      finishRuntimeSourceBlock(*Block, LowInstructionControl::Return);
+      if (auto Error =
+              consumeSourceOperations(RemainingOperations, Block->Ops.size()))
+        return std::move(Error);
+      return Block;
+    };
+    auto Exhausted =
+        Reject(InterpreterMachineRegionChoiceStatusX64V1::Exhausted);
+    if (!Exhausted)
+      return Exhausted.takeError();
+    auto Mismatch = Reject(InterpreterMachineRegionChoiceStatusX64V1::Mismatch);
+    if (!Mismatch)
+      return Mismatch.takeError();
+    Plan.ChoiceExhausted = std::move(*Exhausted);
+    Plan.ChoiceMismatch = std::move(*Mismatch);
+  }
+  const auto &Exhausted = *Plan.ChoiceExhausted;
+  const auto &Mismatch = *Plan.ChoiceMismatch;
+  Match->Succs = {Mismatch.Id, Guard.Succs.front()};
+  Guard.Succs = {Exhausted.Id, Match->Id};
   Guard.Ops.clear();
   InstructionWriter Check{Guard.Ops, Guard.StartAddr, false, true};
   if (!Seeded) {
     Check.entry(Parameter);
     Seeded = true;
   }
+  // Both rejection paths observe this instruction's entry state. Pack flags
+  // before the shared join, as for the ordinary shared GPR exit.
+  Check.emit(NdOp::COPY, NdVar::reg(ChoiceFailurePC, 8),
+             {scalar(Instruction.NativeAddress)});
+  Check.emit(NdOp::COPY, NdVar::reg(ChoiceFailureFlags, 8),
+             {Check.packedFlags()});
   using State = InterpreterMachineRegionChoiceStateX64V1;
   using Record = InterpreterArchitecturalChoiceX64V1;
   Check.load(NdVar::reg(ChoiceIndex, 8), offsetof(State, ChoiceCursor));
@@ -731,9 +885,9 @@ llvm::Error emitArchitecturalChoiceSource(
              {Remaining, scalar(Instruction.Productions.size())});
   Check.emit(NdOp::BOOL_OR, Unavailable, {BadCursor, TooFew});
   Check.emit(NdOp::COND_BR, {},
-             {NdVar::cst(Exhausted->StartAddr, 8), Unavailable});
+             {NdVar::cst(Exhausted.StartAddr, 8), Unavailable});
   finishRuntimeSourceBlock(Guard, LowInstructionControl::Branch, true,
-                           Exhausted->StartAddr);
+                           Exhausted.StartAddr);
   if (auto Error =
           consumeSourceOperations(RemainingOperations, Guard.Ops.size()))
     return Error;
@@ -774,35 +928,12 @@ llvm::Error emitArchitecturalChoiceSource(
                                              Match->Ops.size() - First))
       return Error;
   }
-  Select.emit(NdOp::COND_BR, {},
-              {NdVar::cst(Mismatch->StartAddr, 8), Rejected});
+  Select.emit(NdOp::COND_BR, {}, {NdVar::cst(Mismatch.StartAddr, 8), Rejected});
   if (auto Error = consumeSourceOperations(RemainingOperations, 1))
     return Error;
   finishRuntimeSourceBlock(*Match, LowInstructionControl::Branch, true,
-                           Mismatch->StartAddr);
-  const auto Reject = [&](LowBlock &Block,
-                          InterpreterMachineRegionChoiceStatusX64V1 Status) {
-    InstructionWriter Writer{Block.Ops, Block.StartAddr, false, true};
-    Writer.store(offsetof(InterpreterMachineRegionStateX64V1, PC),
-                 scalar(Instruction.NativeAddress));
-    Writer.store(offsetof(InterpreterMachineRegionStateX64V1, ExitKind),
-                 scalar(uint64_t(InterpreterMachineRegionExitX64V1::None)));
-    Writer.emit(NdOp::COPY, NdVar::reg(ProfileStatus, 8),
-                {scalar(uint64_t(Status))});
-    Writer.leave();
-    finishRuntimeSourceBlock(Block, LowInstructionControl::Return);
-  };
-  Reject(*Exhausted, InterpreterMachineRegionChoiceStatusX64V1::Exhausted);
-  Reject(*Mismatch, InterpreterMachineRegionChoiceStatusX64V1::Mismatch);
-  if (auto Error =
-          consumeSourceOperations(RemainingOperations, Exhausted->Ops.size()))
-    return Error;
-  if (auto Error =
-          consumeSourceOperations(RemainingOperations, Mismatch->Ops.size()))
-    return Error;
+                           Mismatch.StartAddr);
   Additional.push_back(std::move(*Match));
-  Additional.push_back(std::move(*Exhausted));
-  Additional.push_back(std::move(*Mismatch));
   return llvm::Error::success();
 }
 
@@ -1403,9 +1534,16 @@ buildMachineSource(const LowFunc &Residual, BinaryFormat SourceFormat,
   if (CPUQueryTape) {
     for (auto &Block : QueryBlocks)
       Result.Function.Blocks.push_back(std::move(Block));
+    if (Queries.ChoiceExhausted) {
+      Result.Function.Blocks.push_back(std::move(*Queries.ChoiceExhausted));
+      Result.Function.Blocks.push_back(std::move(*Queries.ChoiceMismatch));
+    }
     if (auto Error = rebuildSourcePredecessors(Result.Function))
       return std::move(Error);
   }
+  if (Region && Region->ArchitecturalChoices)
+    if (auto Error = compactChoiceSource(Result.Function))
+      return std::move(Error);
   if (EntryAlignment)
     if (auto Error = addEntryAlignmentGuard(Result.Function, ParameterRegister,
                                             StateRegisters, *EntryAlignment))

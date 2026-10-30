@@ -473,6 +473,8 @@ Jeder 32-Byte-Datensatz `InterpreterArchitecturalChoiceX64V1` enthält vier 64-B
 
 Der Aufrufer stellt zugängliche, stabile Datensätze getrennt von Zustand und Gastspeicher bereit. Prozessorwerte werden nicht geraten. Abfragestatus, explizite Stopps vor Traps und Ausrichtungsprüfungen behalten ihre Verträge. Beide C-Wege können den abgesenkten Graphen ausgeben; gewöhnliche Emitter lehnen unverarbeitete Produktionen weiterhin ab. Diese C++-Schnittstelle liefert keine CLI/C SDK/GUI-Integration, gewöhnliche ABI-Rekonstruktion oder native Äquivalenzzertifizierung.
 
+Die Auswahlprüfungen teilen sich Rückschreibeblöcke für Erschöpfung und Abweichung und behalten den ursprünglichen PC sowie die Eingangsflags jedes Befehls. Nach der skalaren Absenkung verbindet der Wrapper einen impliziten Folgeblock nur bei genau einem Vorgänger und sofern er weder Einstieg noch Analysewurzel ist. Befehlsabschnitte, bedingte Kanten und Schleifen bleiben explizit. Nur erzeugte Kontrolllabels werden verschoben; Gastkonstanten und Datensatz-PCs bleiben erhalten. Zustandsformate, vollständige Befehlsprüfungen, Cursorübernahmen und alle Ressourcenlimits bleiben unverändert.
+
 <!-- i18n-section: machine-region-pending-traps -->
 
 ## Ausgänge vor einem Trap

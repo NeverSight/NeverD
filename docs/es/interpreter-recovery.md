@@ -470,6 +470,8 @@ Cada registro `InterpreterArchitecturalChoiceX64V1` de 32 bytes contiene cuatro 
 
 El llamador aporta registros accesibles, estables y separados del estado y de la memoria invitada. No se infieren valores específicos del procesador. Las consultas, las paradas explícitas antes de trampas y las comprobaciones de alineación mantienen sus contratos. Ambas rutas C pueden emitir el grafo transformado, pero los emisores normales rechazan producciones sin consumir. Esta interfaz C++ no aporta integración CLI/C SDK/GUI, recuperación de ABI ordinaria ni certificación de equivalencia nativa.
 
+Las comprobaciones de elecciones comparten bloques de escritura para agotamiento y discrepancia, conservando el PC original y los indicadores de entrada de cada instrucción. Tras la transformación escalar, el adaptador fusiona una continuación implícita solo si su sucesor tiene un único predecesor y no es entrada ni raíz de análisis. Se conservan las divisiones de instrucciones, las ramas condicionales y los bucles. Solo cambian las etiquetas de control generadas; las constantes invitadas y los PC de registros permanecen intactos. No cambian los formatos de estado, las comprobaciones de instrucciones completas, la confirmación del cursor ni los límites de recursos.
+
 <!-- i18n-section: machine-region-pending-traps -->
 
 ## Salidas antes de una trampa

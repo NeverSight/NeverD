@@ -930,6 +930,9 @@ public:
   std::map<const llvm::BasicBlock *, std::string> BlockLabels;
   std::map<const llvm::BasicBlock *, size_t> DeferredBlockLabels;
   std::set<const llvm::BasicBlock *> ReferencedBlocks;
+  /// LLVM block order is immutable during one function projection. Rebuild
+  /// once in setupFunction so regional layout queries need no function scan.
+  llvm::DenseMap<const llvm::BasicBlock *, size_t> BlockLayout;
   bool HasCIntrinsics = false;
   /// A simple load or store has a type with an aligned(1), may_alias alias,
   /// so the aliases are declared when UseUnalignedPointers is set.

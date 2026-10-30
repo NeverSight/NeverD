@@ -6,6 +6,174 @@
 /// \file Independent byte/state oracles for runtime architectural choices.
 
 TEST_F(InterpreterMachineRegionSourceTest,
+       ArchitecturalChoiceSourceCompactsLargeExports) {
+  // Separate rejection blocks used to exceed the 16384-block source bound.
+  // This checks export capacity; the separate execution tests check semantics.
+  auto Wrapped = choiceSequence(3300);
+  ASSERT_TRUE(bool(Wrapped)) << llvm::toString(Wrapped.takeError());
+  EXPECT_LT(Wrapped->Source.Function.Blocks.size(), 7000U);
+  Wrapped->Source.Function.Name = "generic_machine_region";
+  LowToMedConverter Converter;
+  std::map<va_t, SourceFunctionTypeHint> Hints{
+      {Wrapped->Source.Function.Entry, Wrapped->Source.SourceABI}};
+  Converter.setSourceCallHintsEnabled(true);
+  Converter.setSourceEntryTypeHints(&Hints);
+  auto Med = Converter.convert(Wrapped->Source.Function, Arch::X64);
+  Med.SourceTypeHint = Wrapped->Source.SourceABI;
+  inferMedTypes(Med, Arch::X64);
+  ASSERT_TRUE(verifyMedFunc(Med, "large-choice-source-test"));
+  for (bool LLVM : {false, true}) {
+    SCOPED_TRACE(LLVM ? "LLVMC" : "HighC");
+    std::string Source;
+    llvm::raw_string_ostream OS(Source);
+    CEmitterOptions Options;
+    Options.TheArch = Arch::X64;
+    Options.Format = BinaryFormat::ELF;
+    Options.UseUnalignedPointers = false;
+    if (LLVM) {
+      llvm::LLVMContext Context;
+      auto Module = MedLLVMEmitter().emit({Med}, Context);
+      ASSERT_NE(Module, nullptr);
+      ASSERT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
+      ASSERT_TRUE(LLVMCEmitter().emit(*Module, OS, Options));
+    } else {
+      auto High = MedToHighConverter().convert(Med, Arch::X64);
+      ASSERT_TRUE(HighCEmitter().emit({High}, OS, Options));
+    }
+    OS.flush();
+    EXPECT_NE(Source.find("generic_machine_region"), std::string::npos);
+  }
+}
+
+TEST_F(InterpreterMachineRegionSourceTest,
+       ArchitecturalChoiceSourceCompactsInstructionSequences) {
+  if (!hasCrossTargetClang())
+    GTEST_SKIP() << "choice source execution requires clang";
+  // Every XOR consumes its original-PC record, even when overwritten later.
+  auto Wrapped = choiceSequence(48);
+  ASSERT_TRUE(bool(Wrapped)) << llvm::toString(Wrapped.takeError());
+  Wrapped->Source.Function.Name = "generic_machine_region";
+  emitAndRun(Wrapped->Source, R"C(
+#include <stdint.h>
+#include <string.h>
+typedef struct {uint64_t pc,ordinal,bits,value;} choice_t;
+typedef struct {
+  uint64_t gpr[16],flags,queries,count,cursor,xmm[16][2],pc,kind;
+  uint64_t choices,choice_count,choice_cursor;
+} state_t;
+int main(void) {
+  const unsigned positions[]={0,1,23,47};
+  for(unsigned trial=0;trial<4;++trial) for(unsigned mode=0;mode<3;++mode) {
+    uint64_t stack[8],expected_stack[8];
+    struct {uint64_t before;state_t s;uint64_t after;} box,expected;
+    choice_t tape[48],expected_tape[48];
+    for(unsigned i=0;i<48;++i)
+      tape[i]=(choice_t){UINT64_C(0x140001000)+2*i,0,1,(i+trial)&1};
+    memset(&box,0,sizeof(box));memset(stack,0xa5,sizeof(stack));
+    box.before=0x12345678;box.after=0xabcdef01;
+    state_t *s=&box.s;
+    for(unsigned i=0;i<16;++i) {
+      s->gpr[i]=UINT64_C(0x9876543200000000)+i;
+      s->xmm[i][0]=UINT64_C(0x9123456789abcdef)+i;
+      s->xmm[i][1]=UINT64_C(0xfedcba9876543210)-i;
+    }
+    s->gpr[4]=(uintptr_t)&stack[4];s->flags=0x202;stack[4]=0x12340;
+    s->pc=0xabcdef;s->kind=0x987654;
+    unsigned stop=mode?positions[trial]:48;
+    s->choices=(uintptr_t)tape;s->choice_count=mode==1?stop:48;
+    if(mode==2) ++tape[stop].pc;
+    expected=box;memcpy(expected_stack,stack,sizeof(stack));
+    memcpy(expected_tape,tape,sizeof(tape));
+    expected.s.choice_cursor=stop;
+    expected.s.pc=UINT64_C(0x140001000)+2*stop;expected.s.kind=0;
+    if(stop) {
+      expected.s.gpr[0]=0;
+      expected.s.flags=0x246|(((stop-1+trial)&1)<<4);
+    }
+    if(!mode) {
+      expected.s.pc=0x12340;expected.s.kind=3;expected.s.gpr[4]+=8;
+    }
+    if(generic_machine_region(MACHINE_ARG(s))!=(mode==1?5:mode==2?6:0)) return 1;
+    if(memcmp(&box,&expected,sizeof(box))) return 2;
+    if(memcmp(stack,expected_stack,sizeof(stack))) return 3;
+    if(memcmp(tape,expected_tape,sizeof(tape))) return 4;
+  }
+  return 0;
+}
+)C",
+             {}, nullptr, true, true);
+}
+
+TEST_F(InterpreterMachineRegionSourceTest,
+       ArchitecturalChoiceSourceSharesFailuresAcrossBranchArms) {
+  if (!hasCrossTargetClang())
+    GTEST_SKIP() << "choice source execution requires clang";
+  auto Image =
+      loadRegion({0x85, 0xff, 0x74, 12,   0xb8, 0x34, 0x12, 0,    0,
+                  0x48, 0x89, 0x06, 0x31, 0xc9, 0xeb, 10,   0xb8, 0x78,
+                  0x56, 0,    0,    0x48, 0x89, 0x06, 0x31, 0xd2, 0xc3});
+  ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+  auto Options = regionOptions(Entry + 26, ExitKind::Return);
+  Options.UndefinedModel = SpecializationUndefinedModel::FreshScalarV1;
+  Options.ExternalStoresDisjointEntryFrame = true;
+  Options.EntryFrameBounds = SpecializationEntryFrameBounds{-32, 32, {}};
+  const auto Result = specializeBinaryInterpreter(*Image, Entry, Options);
+  ASSERT_TRUE(Result.complete()) << Result.Diagnostic;
+  auto Wrapped = wrapInterpreterMachineRegionChoiceSourceX64V1(Result, Options);
+  ASSERT_TRUE(bool(Wrapped)) << llvm::toString(Wrapped.takeError());
+  Wrapped->Source.Function.Name = "generic_machine_region";
+  emitAndRun(Wrapped->Source, R"C(
+#include <stdint.h>
+#include <string.h>
+typedef struct {uint64_t pc,ordinal,bits,value;} choice_t;
+typedef struct {
+  uint64_t gpr[16],flags,queries,count,cursor,xmm[16][2],pc,kind;
+  uint64_t choices,choice_count,choice_cursor;
+} state_t;
+int main(void) {
+  for(unsigned arm=0;arm<2;++arm) for(unsigned a=0;a<2;++a)
+  for(unsigned b=0;b<2;++b) for(unsigned mode=0;mode<3;++mode) {
+    uint64_t stack[8],expected_stack[8],data[3]={11,22,33},expected_data[3];
+    struct {uint64_t before;state_t s;uint64_t after;} box,expected;
+    choice_t tape[2]={{UINT64_C(0x140001000),0,1,a},
+      {UINT64_C(0x140001000)+(arm?12:24),0,1,b}},expected_tape[2];
+    memset(&box,0,sizeof(box));memset(stack,0xa5,sizeof(stack));
+    box.before=0x12345678;box.after=0xabcdef01;
+    state_t *s=&box.s;
+    for(unsigned i=0;i<16;++i) {
+      s->gpr[i]=UINT64_C(0x9876543200000000)+i;
+      s->xmm[i][0]=UINT64_C(0x9123456789abcdef)+i;
+      s->xmm[i][1]=UINT64_C(0xfedcba9876543210)-i;
+    }
+    s->gpr[4]=(uintptr_t)&stack[4];s->flags=0x202;stack[4]=0x12340;
+    s->gpr[7]=arm;s->gpr[6]=(uintptr_t)&data[1];
+    s->pc=0xabcdef;s->kind=0x987654;
+    s->choices=(uintptr_t)tape;s->choice_count=mode==1?1:2;
+    if(mode==2) tape[1].bits=8;
+    expected=box;memcpy(expected_stack,stack,sizeof(stack));
+    memcpy(expected_tape,tape,sizeof(tape));memcpy(expected_data,data,sizeof(data));
+    expected.s.gpr[0]=expected_data[1]=arm?0x1234:0x5678;
+    expected.s.flags=(arm?0x202:0x246)|(a<<4);
+    expected.s.pc=UINT64_C(0x140001000)+(arm?12:24);expected.s.kind=0;
+    expected.s.choice_cursor=1;
+    if(!mode) {
+      expected.s.gpr[arm?1:2]=0;expected.s.flags=0x246|(b<<4);
+      expected.s.pc=0x12340;expected.s.kind=3;expected.s.gpr[4]+=8;
+      expected.s.choice_cursor=2;
+    }
+    if(generic_machine_region(MACHINE_ARG(s))!=(mode==1?5:mode==2?6:0)) return 1;
+    if(memcmp(&box,&expected,sizeof(box))) return 2;
+    if(memcmp(stack,expected_stack,sizeof(stack))) return 3;
+    if(memcmp(tape,expected_tape,sizeof(tape))) return 4;
+    if(memcmp(data,expected_data,sizeof(data))) return 5;
+  }
+  return 0;
+}
+)C",
+             {}, nullptr, true, true);
+}
+
+TEST_F(InterpreterMachineRegionSourceTest,
        ArchitecturalChoiceSourceChecksAndCommitsWholeInstructions) {
   if (!hasCrossTargetClang())
     GTEST_SKIP() << "choice source execution requires clang";
@@ -245,7 +413,8 @@ typedef struct {
   uint64_t choices,choice_count,choice_cursor;
 } state_t;
 int main(void) {
-  for(unsigned a=0;a<2;++a) for(unsigned b=0;b<2;++b) {
+  for(unsigned a=0;a<2;++a) for(unsigned b=0;b<2;++b)
+  for(unsigned mode=0;mode<3;++mode) {
     uint64_t stack[8],expected_stack[8],data[4]={11,22,33,44},expected_data[4];
     struct {uint64_t before;state_t s;uint64_t after;} box,expected;
     choice_t tape[2]={{UINT64_C(0x140001005),0,1,a},
@@ -261,7 +430,8 @@ int main(void) {
     }
     s->gpr[4]=(uintptr_t)&stack[4];s->gpr[7]=(uintptr_t)&data[1];s->flags=0x202;
     stack[4]=0x12340;s->pc=0xabcdef;s->kind=0x987654;
-    s->choices=(uintptr_t)tape;s->choice_count=2;
+    s->choices=(uintptr_t)tape;s->choice_count=mode==1?1:2;
+    if(mode==2) ++tape[1].pc;
     expected=box;memcpy(expected_stack,stack,sizeof(stack));
     memcpy(expected_data,data,sizeof(data));memcpy(expected_tape,tape,sizeof(tape));
     expected.s.gpr[0]=0;expected.s.gpr[1]=0;
@@ -271,7 +441,14 @@ int main(void) {
     expected.s.gpr[7]+=16;expected.s.gpr[4]+=8;
     expected.s.flags=0x246;expected.s.pc=0x12340;expected.s.kind=3;
     expected.s.choice_cursor=2;
-    if(generic_machine_region(MACHINE_ARG(s))) return 1;
+    if(mode) {
+      expected.s.gpr[1]=1;expected.s.gpr[4]-=8;expected.s.gpr[7]-=8;
+      expected.s.gpr[2]=expected.s.gpr[3]=0x246|(a<<4);
+      expected_stack[3]=expected.s.gpr[2];expected_data[2]=data[2];
+      expected.s.flags=0x202;expected.s.pc=UINT64_C(0x140001005);
+      expected.s.kind=0;expected.s.choice_cursor=1;
+    }
+    if(generic_machine_region(MACHINE_ARG(s))!=(mode==1?5:mode==2?6:0)) return 1;
     if(memcmp(&box,&expected,sizeof(box))) return 2;
     if(memcmp(stack,expected_stack,sizeof(stack))) return 3;
     if(memcmp(tape,expected_tape,sizeof(tape))) return 4;

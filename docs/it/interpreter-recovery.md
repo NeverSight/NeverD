@@ -467,6 +467,8 @@ Ogni record `InterpreterArchitecturalChoiceX64V1` da 32 byte contiene quattro ca
 
 Il chiamante fornisce record accessibili, stabili e separati dallo stato e dalla memoria ospite. Non vengono dedotti valori specifici del processore. Query, arresti espliciti prima delle trap e controlli di allineamento mantengono i contratti esistenti. Entrambe le vie C possono emettere il grafo abbassato; gli emettitori ordinari rifiutano produzioni non consumate. Questa interfaccia C++ non fornisce integrazione CLI/C SDK/GUI, recupero dell’ABI ordinaria o certificazione di equivalenza nativa.
 
+I controlli delle scelte condividono i blocchi di scrittura per esaurimento e discordanza, conservando PC originale e flag iniziali di ogni istruzione. Dopo l’abbassamento scalare, il wrapper unisce una prosecuzione implicita solo se il successore ha un unico predecessore e non è un ingresso o una radice di analisi. Segmenti di istruzioni, rami condizionali e cicli restano espliciti. Cambiano solo le etichette di controllo generate; costanti ospiti e PC dei record restano intatti. Formati di stato, controlli dell’intera istruzione, aggiornamenti del cursore e limiti di risorse non cambiano.
+
 <!-- i18n-section: machine-region-pending-traps -->
 
 ## Uscite prima di un trap

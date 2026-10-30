@@ -9767,6 +9767,8 @@ Large recovered functions that exceed the SSA construction limit can use `--llvm
 
 `analyzeMedMutableSource` owns normalized CFG validation, storage identities and conservative entry-byte requirements. These requirements are upper bounds on reads, not positive observability evidence. LLVM validates before module scans and reuses the plan to initialize entry values once. Block/value products and propagation work have separate bounds. C forwarding uses exact earlier stores for each load, with matching types and no partial aliases; cross-block joins retain explicit storage. Admission allows up to 16384 blocks while retaining the independent storage-matrix and propagation-work budgets.
 
+SSA graphs exceeding the existing HighC structuring bounds retain blockwise control flow through final goto cleanup. The fallback does not splice large continuation regions again; required exception processing and entry anchors remain. Mutable-storage lowering keeps its separate validated path.
+
 For validated mutable bodies, LLVM forwards exact private-slot values within an append-only basic block and keeps its final stores. Entry setup and block, function and module boundaries remain separate. Guest memory accesses stay explicit. C emission bounds scalar expression expansion and immediate-fold work, retaining named intermediates. Foldable constant expressions use LLVM’s target layout; unsupported expressions fail explicitly. Designated mutable return values, including zero, cannot become void returns.
 
 The mutable subset accepts 8/16/32/64/128-bit scalar storage; bit-count inputs are limited to 64 bits. Nonstandard widths and wider storage require a separate source contract.
@@ -15202,3 +15204,5 @@ separate. LLVM C checks that the retained inline assembly and original image
 still match before printing the bridge; body fragments require a complete
 native function. Unknown ordinary calls and physical interrupt/system entry
 return proofs retain their existing admission rules.
+
+LLVMC indexes LLVM block order once per immutable function projection. Exclusive skip/else-if layout checks reuse that index instead of scanning the function per candidate. Selecting another function rebuilds the index; branch semantics and source limits are unchanged.
