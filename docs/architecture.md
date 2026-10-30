@@ -15108,8 +15108,13 @@ validation, hidden-cache decoding and ordered descriptor accessed-bit writes;
 the instruction-specific owners retain their distinct frame and event rules.
 The same flat-cache writer serves SYSRET/SYSENTER/SYSEXIT and standard ERETU.
 `X64ContinuationFredReturns.h` handles V9 FRED return frames and event outputs
-above both C emitters. Its profile enables only canonical ERETS/ERETU to 64-bit
-targets and cannot reuse the earlier FRED-disabled execution domain.
+above both C emitters. Its profile enables only canonical ERETS/ERETU and
+cannot reuse the earlier FRED-disabled execution domain. ERETU compatibility
+choices belong to this profile transition, where the live return descriptor
+determines CS.L. They are separate from the original instruction's missing
+LowIR arbitrary-output certificate. The same choice records drive state
+lowering and manifest slots; ERETU's explicitly restored RSP has no arbitrary
+high-half slot.
 The version-aware state writer transports monitor invalidation for UIRET,
 ERETU and the inherited legacy returns; each return owner decides whether the
 architectural transition invalidates it. Earlier layouts receive no monitor

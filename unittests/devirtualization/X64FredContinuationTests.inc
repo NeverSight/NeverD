@@ -165,6 +165,94 @@ int main(void) {
   }
 }
 
+TEST_F(X64ContinuationSourceTest,
+       FredCompatibilityReturnsOwnConditionalChoices) {
+  auto Units = buildX64ContinuationSource(image({0xf3, 0x0f, 0x01, 0xca}),
+                                          {0x1000}, fredOptions());
+  ASSERT_TRUE(bool(Units)) << llvm::toString(Units.takeError());
+  const auto &Choices = Units->front().CompatibilityChoices;
+  ASSERT_EQ(Choices.size(), 7u);
+  EXPECT_TRUE(Units->front().UndefinedEffects.empty());
+  for (size_t I = 0; I != Choices.size(); ++I) {
+    const unsigned Slot = I < 4 ? I : I + 1;
+    EXPECT_EQ(Choices[I].Slot, Slot);
+    EXPECT_EQ(Choices[I].Output, NdVar::reg(x86reg::generalReg(Slot), 8));
+  }
+  for (unsigned Bits : {48u, 57u}) {
+    auto O = fredOptions();
+    O.PagingAddressBits = Bits;
+    run({0xf3, 0x0f, 0x01, 0xca}, {0x1000},
+        std::string(EventHarness) + FredHarness + R"C(
+static void compatibility(fred_state_t *s,const uint64_t *w) {
+  uint64_t narrowed[5];memcpy(narrowed,w,sizeof(narrowed));
+  narrowed[0]=(uint32_t)w[0];narrowed[3]=(uint32_t)w[3];
+  fred_finish(s,narrowed,1);
+  for(unsigned i=0;i<8;++i)if(i!=4)
+    s->core.core.core.gpr[i]=(uint32_t)s->core.core.core.gpr[i]|
+      ((uint64_t)(uint32_t)s->core.core.core.arbitrary[i]<<32);
+}
+static void choices(fred_state_t *s,unsigned pattern) {
+  for(unsigned i=0;i<8;++i)
+    s->core.core.core.arbitrary[i]=(0xfedcba9876543210ULL^(0x5555555555555555ULL*pattern))+(i*17);
+}
+int main(void) {
+  unsigned char memory[4096],saved[4096];
+  const unsigned stars[]={3,7,0x23,0xffeb,0xfff3,0xfffb,0xffff};
+  const uint64_t pcs[]={0,0xffffffff,0xdeadbeef00001800ULL,UINT64_MAX};
+  const uint64_t stacks[]={0,0xffffffff,0x800000000000ULL,0xfedcba9876543210ULL};
+  for(unsigned star=0;star<7;++star)for(unsigned pc=0;pc<4;++pc)
+    for(unsigned sp=0;sp<4;++sp)for(unsigned pattern=0;pattern<4;++pattern) {
+      fred_state_t s=fred_seed((uintptr_t)memory),want;
+      event_state_t *v=&s.core.core.core;choices(&s,pattern);
+      v->star=(uint64_t)stars[star]<<48;v->gdt.base=v->ldt.base=UINT64_MAX;
+      uint64_t w[]={pcs[pc],stars[star],0x244ed7,stacks[sp],
+        (uint16_t)(stars[star]+8)|((uint64_t)pattern<<17)};
+      fred_frame(&s,w);want=s;memcpy(saved,memory,sizeof(memory));
+      want.core.core.core.cs=(event_segment_t){0,UINT32_MAX,(uint16_t)w[1],0xc0fb};
+      want.core.core.core.ss=(event_segment_t){0,UINT32_MAX,(uint16_t)w[4],0xc0f3};
+      compatibility(&want,w);
+      CHECK(neverd_step_v9_1000(ARG(&s))==12);
+      CHECK(!memcmp(&s,&want,sizeof(s))&&!memcmp(memory,saved,sizeof(memory)));
+    }
+  for(unsigned local=0;local<2;++local)for(unsigned default32=0;default32<2;++default32)
+    for(unsigned gran=0;gran<2;++gran)for(unsigned limit=0;limit<2;++limit)
+      for(unsigned base=0;base<2;++base)for(unsigned edge=0;edge<6;++edge)
+        for(unsigned pattern=0;pattern<4;++pattern) {
+          fred_state_t s=fred_seed((uintptr_t)memory),want;
+          event_state_t *v=&s.core.core.core;choices(&s,pattern);v->star=0;
+          unsigned cs=local?7:27,ss=local?15:35;
+          uint64_t table=local?v->ldt.base:v->gdt.base;
+          uint64_t raw_limit=limit?0xfffff:0x2345;
+          uint64_t effective=gran?(raw_limit<<12)|0xfff:raw_limit;
+          uint64_t segment_base=base?0xfedcba98:0;
+          uint64_t cd=(raw_limit&0xffff)|((raw_limit&0xf0000)<<32)|
+            ((segment_base&0xffffff)<<16)|((segment_base&0xff000000)<<32)|
+            (0xfaULL<<40)|((uint64_t)default32<<54)|((uint64_t)gran<<55);
+          event_word(table+(cs&~7),cd);
+          event_word(table+(ss&~7),0x00cff2000000ffffULL);
+          const uint64_t offsets[]={0,0xffff,0x10000,0xffffffff,effective,effective+1};
+          uint64_t w[]={0xdeadbeef00000000ULL|(uint32_t)offsets[edge],cs,2,
+            0xfedcba9876543210ULL,ss};
+          fred_frame(&s,w);want=s;memcpy(saved,memory,sizeof(memory));
+          unsigned good=(uint32_t)w[0]<=effective;
+          if(good) {
+            want.core.core.core.cs=(event_segment_t){segment_base,effective,cs,
+              (uint16_t)(0xfb|(default32<<14)|(gran<<15))};
+            want.core.core.core.ss=(event_segment_t){0,UINT32_MAX,ss,0xc0f3};
+            saved[table-(uintptr_t)memory+(cs&~7)+5]|=1;
+            saved[table-(uintptr_t)memory+(ss&~7)+5]|=1;
+            compatibility(&want,w);
+          }
+          CHECK(neverd_step_v9_1000(ARG(&s))==(good?12:5));
+          CHECK(!memcmp(&s,&want,sizeof(s))&&!memcmp(memory,saved,sizeof(memory)));
+        }
+  return 0;
+}
+)C",
+        false, O);
+  }
+}
+
 TEST_F(X64ContinuationSourceTest, FredRejectsInvalidContextsWithoutEffects) {
   for (bool User : {false, true}) {
     std::string Harness = std::string(EventHarness) + FredHarness;
@@ -221,8 +309,9 @@ int main(void) {
     uint64_t w[]={0x1800,19,2,UINT64_MAX,11};
     if(bad==0)s.fred_config|=1;
     if(bad==1)w[2]|=0x1000;
-    if(bad==2)w[1]=3; /* standard compatibility return */
-    if(bad==3){w[1]=27;w[4]=35;event_word(v->gdt.base+24,0x00cffa000000ffffULL);}
+    if(bad==2){w[1]=3;w[4]=35;} /* nonstandard null CS */
+    if(bad==3){w[1]=27;w[4]=35;event_word(v->gdt.base+24,0x0040fa0000001233ULL);
+      event_word(v->gdt.base+32,0x00cff2000000ffffULL);} /* EIP beyond limit */
     if(bad==4){w[1]=27;w[4]=3;event_word(v->gdt.base+24,0x00affa000000ffffULL);}
     fred_frame(&s,w);want=s;memcpy(saved,memory,sizeof(memory));
     CHECK(neverd_step_v9_1000(ARG(&s))==5);

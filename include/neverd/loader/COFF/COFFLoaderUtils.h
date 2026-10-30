@@ -185,6 +185,13 @@ void recordRelocatedPointerRunsInCode(BinaryImage &Img);
 /// operands.
 void recordIndexedTableBasesInCode(BinaryImage &Img);
 
+/// Record the [begin, end) runs of tables an indirect JUMP reads through a
+/// runtime-indexed fixed-base memory operand, before the data-pointer
+/// discovery scan runs: a jump table in .rdata would otherwise synthesize a
+/// function symbol for every switch case.  Reads relocation state only;
+/// pairs with the reclassifying recordIndexedTableBasesInCode below.
+void recordIndexedJumpTableRuns(BinaryImage &Img);
+
 /// Parse one delay-import descriptor from the already mapped image.  Supports
 /// current RVA descriptors and legacy VA descriptors, returning the number of
 /// imports appended.  Exposed separately for bounded synthetic-image tests.

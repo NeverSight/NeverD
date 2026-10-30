@@ -17,6 +17,7 @@
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/ir/med/MedIR.h"
 #include "neverd/ir/med/MedTypePass.h"
+#include "neverd/lift/X86/X86Regs.h"
 #include "neverd/loader/BinaryImage.h"
 
 #include "llvm/ADT/ArrayRef.h"

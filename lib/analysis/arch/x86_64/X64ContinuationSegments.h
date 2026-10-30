@@ -202,12 +202,14 @@ protected:
     return op(NdOp::INT_OR, {Unusable, choose(Invalidate, k(Bit), k(0))});
   }
 
-  Descriptor returnCode(NdVar CS, NdVar CPL) {
+  Descriptor returnCode(NdVar CS, NdVar CPL, bool AllowCompatibility = false) {
     W.rejectIf(eq(masked(CS, 0xfffc), k(0)));
     const auto Code = descriptor(CS);
     const auto Access = shifted(Code.Value, 40);
     const auto DPL = masked(shifted(Access, 5), 3);
-    W.rejectIf(ne(masked(Access, 0x6098), k(0x2098)));
+    W.rejectIf(ne(masked(Access, 0x98), k(0x98)));
+    const auto Mode = masked(Access, 0x6000);
+    W.rejectIf(AllowCompatibility ? eq(Mode, k(0x6000)) : ne(Mode, k(0x2000)));
     W.rejectIf(
         choose(ne(masked(Access, 4), k(0)), less(CPL, DPL), ne(CPL, DPL)));
     AccessedAddress = op(NdOp::INT_ADD, {Code.Address, k(5)});

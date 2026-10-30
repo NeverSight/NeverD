@@ -719,6 +719,16 @@ struct Writer {
     store(offsetof(StateV8, MonitorActive), Value);
   }
 
+  void compatibilityChoices(
+      llvm::ArrayRef<X64ContinuationCompatibilityChoice> Choices) {
+    for (const auto &Choice : Choices) {
+      const auto Witness = load(offsetof(State, Undefined) + Choice.Slot * 8);
+      const auto Value = detail::lowerX64ArchitecturalBits(
+          *this, read(Choice.Output), constant(1, 1), Witness, 32, 32);
+      write(Choice.Output, Value, true);
+    }
+  }
+
   void undefined(const LowUndefinedEffect &Effect, size_t Index) {
     const NdVar Witness =
         load(offsetof(State, Undefined) + Index * 8, Effect.Output.Size);
@@ -1340,8 +1350,9 @@ buildInstruction(SpecializationInstruction Instruction,
   if (Result.RequiresNativeExecution) {
     W.leave(Exit::NativeInstruction);
   } else if (FredReturn) {
-    detail::X64ContinuationFredReturns<Writer>(W, *Options.PagingAddressBits)
-        .execute(*FredReturn);
+    Result.CompatibilityChoices = detail::X64ContinuationFredReturns<Writer>(
+                                      W, *Options.PagingAddressBits)
+                                      .execute(*FredReturn);
   } else if (UserInterrupt) {
     detail::X64ContinuationUserInterrupts<Writer>(W, Options)
         .execute(*UserInterrupt, Instruction.Fallthrough.Address);
