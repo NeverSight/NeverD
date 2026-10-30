@@ -719,6 +719,66 @@ void recordConstantCodeSlots(BinaryImage &Img) {
       Img.ConstantCodeSlots.emplace(Slot, Target);
 }
 
+void recordIndexedJumpTableRuns(BinaryImage &Img) {
+  if (Img.IsRelocatable || Img.Format != BinaryFormat::COFF ||
+      (Img.Arch != Arch::X86 && Img.Arch != Arch::X64))
+    return;
+  const uint32_t Width = Img.getPointerSize();
+  if (Width == 0)
+    return;
+  Decoder Dec;
+  if (!Dec.init(Img))
+    return;
+  std::set<va_t> JumpReadBases;
+  const uint64_t AddressMask =
+      Img.Arch == Arch::X86 ? uint64_t{0xFFFFFFFF} : ~uint64_t{0};
+  for (const Section &Sec : Img.Sections) {
+    if (!Sec.isExecutable() || Sec.Size > InvalidVA - Sec.VA)
+      continue;
+    const va_t End = Sec.VA + Sec.Size;
+    va_t Cur = Sec.VA;
+    while (Cur < End) {
+      size_t Available = static_cast<size_t>(std::min<va_t>(16, End - Cur));
+      const uint8_t *Bytes = nullptr;
+      while (Available && !(Bytes = Img.readVA(Cur, Available)))
+        --Available;
+      DecodedInsn Insn{};
+      const int Len = Bytes && Dec.selectMode(Img, Cur)
+                          ? Dec.decodeOne(Bytes, Available, Cur, Insn)
+                          : 0;
+      if (Len <= 0 || !Insn.Raw || !Insn.Raw->detail) {
+        ++Cur;
+        continue;
+      }
+      if (Insn.Id == X86_INS_JMP) {
+        const cs_x86 &X86 = Insn.Raw->detail->x86;
+        for (uint8_t I = 0; I < X86.op_count; ++I) {
+          const cs_x86_op &Operand = X86.operands[I];
+          if (Operand.type != X86_OP_MEM ||
+              Operand.mem.index == X86_REG_INVALID)
+            continue;
+          std::optional<va_t> Base;
+          if (Operand.mem.base == X86_REG_RIP)
+            Base = Insn.Addr + Insn.Size +
+                   static_cast<uint64_t>(Operand.mem.disp);
+          else if (Operand.mem.base == X86_REG_INVALID)
+            Base = static_cast<uint64_t>(Operand.mem.disp) & AddressMask;
+          if (!Base || (*Base & (Width - 1)) != 0)
+            continue;
+          const va_t BaseVA = static_cast<va_t>(*Base & AddressMask);
+          va_t RunEnd = BaseVA;
+          while (Img.CodePtrRelocSlots.count(RunEnd) ||
+                 Img.DataPtrRelocSlots.count(RunEnd))
+            RunEnd += Width;
+          if (RunEnd > BaseVA)
+            Img.IndexedTableRuns.emplace_back(BaseVA, RunEnd);
+        }
+      }
+      Cur += static_cast<va_t>(Len);
+    }
+  }
+}
+
 void recordIndexedTableBasesInCode(BinaryImage &Img) {
   if (Img.IsRelocatable || (Img.Arch != Arch::X86 && Img.Arch != Arch::X64))
     return;
@@ -768,6 +828,7 @@ void recordIndexedTableBasesInCode(BinaryImage &Img) {
   // among the code (MinGW's CRT keeps its constructor list in .text): the
   // relocation-covered words of that table are pointer slots, not operands.
   std::set<va_t> TableBases;
+  std::set<va_t> JumpReadBases;
   const uint64_t AddressMask =
       Img.Arch == Arch::X86 ? uint64_t{0xFFFFFFFF} : ~uint64_t{0};
   for (const Section &Sec : Img.Sections) {
@@ -803,13 +864,17 @@ void recordIndexedTableBasesInCode(BinaryImage &Img) {
         if (!Base || (*Base & (Width - 1)) != 0)
           continue;
         const Segment *Seg = Img.getSegmentFor(*Base);
-        if (Seg && Seg->isExecutable()) {
+        if (Seg && Seg->isReadable()) {
           const va_t BaseVA = static_cast<va_t>(*Base & AddressMask);
           TableBases.insert(BaseVA);
           // A table a CALL reads through holds callable entries, not another
           // function's case labels: its slots promote as callbacks.
           if (Insn.Id == X86_INS_CALL)
             Img.CallDispatchTableBases.insert(BaseVA);
+          // A table an indirect JUMP reads holds that function's case
+          // labels: the discovery scan must not turn them into functions.
+          if (Insn.Id == X86_INS_JMP)
+            JumpReadBases.insert(BaseVA);
         }
       }
       va_t After = Cur + static_cast<va_t>(Len);
@@ -849,9 +914,18 @@ void recordIndexedTableBasesInCode(BinaryImage &Img) {
       Img.DataAddressRelocOperands.erase(Slot.SlotVA);
       applyAbsolutePointerRelocation(Img, Slot);
     }
-  // Name the tables as data among the code so later passes treat them as
-  // objects, not instruction bytes.
-  DataStarts.assign(TableBases.begin(), TableBases.end());
+  // Name the tables as data objects so later passes treat them as objects,
+  // not instruction bytes.  A table in a non-executable section (lld-link's
+  // .rdata jump tables) is dropped by the code-address filter inside
+  // recordDataInCode, so record it directly: the reader discovery in the
+  // function detector needs the run start.
+  for (const va_t Base : TableBases) {
+    if (Img.isCodeAddress(Base))
+      DataStarts.push_back(Base);
+    else
+      Img.DataInCode.insert(Base);
+    // Jump-read runs were recorded before discovery; nothing more here.
+  }
   recordDataInCode(Img, DataStarts);
 }
 
@@ -935,6 +1009,12 @@ void recordRelocatedPointerRunsInCode(BinaryImage &Img) {
   for (const auto &[Begin, End] : Runs)
     Starts.push_back(Begin);
   recordDataInCode(Img, Starts);
+  // A run in a non-executable section (lld-link's .rdata jump tables) is as
+  // much a data object as one among the code; the code-address filter above
+  // drops it, so record it directly for the reader discovery that follows.
+  for (const auto &[Begin, End] : Runs)
+    if (!Img.isCodeAddress(Begin))
+      Img.DataInCode.insert(Begin);
 }
 
 void parseTLSDirectory(const COFFObjectFile &Obj, BinaryImage &Img,

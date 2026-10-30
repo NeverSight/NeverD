@@ -525,6 +525,14 @@ struct BinaryImage {
   /// case labels, so its relocation slots promote their targets directly as
   /// callback candidates instead of joining the jump-table label analysis.
   std::set<uint64_t> CallDispatchTableBases;
+  /// [begin, end) runs of tables the code reads through a runtime-indexed
+  /// fixed-base memory operand, in any readable section (coff_loader::
+  /// recordIndexedTableBasesInCode).  A discovery scan must not synthesize
+  /// function symbols for the run's targets: an indexed table's entries are
+  /// its reader's case labels or callbacks, not independent prologue-backed
+  /// functions, and a jump table in .rdata (lld-link's layout) would otherwise
+  /// promote every switch case.
+  std::vector<std::pair<uint64_t, uint64_t>> IndexedTableRuns;
   /// Virtual addresses of relocation slots that hold an absolute pointer into
   /// mapped non-code data (R_386_32 / R_ARM_ABS32 / R_X86_64_64 /
   /// R_AARCH64_ABS64, or their Mach-O dyld rebase equivalents).  These are the
