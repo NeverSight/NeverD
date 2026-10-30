@@ -291,7 +291,9 @@ const LibCVariadicForward *libcVariadicForward(std::string_view Name);
 /// The position of the va_list parameter of the routine C name \p Name links
 /// to, where it is the va_list form of a variadic one: 2 for
 /// `vfprintf(FILE *, const char *, va_list)`.  Empty for any other routine.
-std::optional<unsigned> vaListParameter(std::string_view Name);
+/// Same-named Windows legacy/ISO forms require the actual declaration.
+std::optional<unsigned> vaListParameter(std::string_view Name,
+                                        LibCVariant Variant);
 
 /// Whether a program of C library \p Variant declares \p Forward's routine
 /// variadic: every C library does where the row names no format, and where

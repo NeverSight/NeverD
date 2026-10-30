@@ -17,6 +17,38 @@ SPEC.loader.exec_module(windows)
 
 
 class MicrosoftWindowsTypes(unittest.TestCase):
+    def test_isolated_kernel_provider_keeps_default_before_selection(self):
+        # Preprocessing removes /Gz. The parser must see that policy before
+        # reading both the exported function and its unannotated callback.
+        declaration = "typedef int (*Callback)(int);\nlong Read(Callback cb);\n"
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "input.c"
+            source.write_text(declaration)
+            seen = []
+
+            def run(command, log, output=None):
+                if output:
+                    output.write_text(declaration)
+                return "fixture record layouts"
+
+            def parsed(neverd, path, log, model):
+                seen.append(path.read_text())
+                return {"prototypes": ["Read"], "problems": []}
+
+            for convention in ("__stdcall", ""):
+                with patch.object(windows, "run", side_effect=run), \
+                        patch.object(windows, "checked_types", side_effect=parsed):
+                    result = windows.prepare_provider(
+                        "Provider", source, ["clang"], root, "neverd", "ILP32",
+                        convention=convention)
+                expected = (("#pragma neverd_default_calling_convention(__stdcall)\n"
+                             if convention else "") + declaration)
+                self.assertEqual(seen[-1], expected)
+                self.assertEqual(result["source"].read_text(), expected)
+                self.assertEqual(result["default_calling_convention"], convention)
+                self.assertEqual(result["input_sha256"], windows.wdk.digest(result["source"]))
+
     def test_x86_driver_compiler_default_requires_official_build_settings(self):
         with tempfile.TemporaryDirectory() as directory:
             kit = Path(directory)

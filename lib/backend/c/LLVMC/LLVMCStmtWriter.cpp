@@ -12,6 +12,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "../CRecordCall.h"
+#include "../HeaderPrototype.h"
 #include "../LibraryPrototype.h"
 #include "../UnalignedMemory.h"
 #include "../render/X86/X86APXAtomic.h"
@@ -6224,8 +6225,13 @@ std::string LLVMCWriter::callExpr(const llvm::CallBase &Call, bool Statement) {
           Integer || PointerSpelling || Operand->getType()->isPointerTy()
               ? "(uintptr_t)"
               : "";
-      std::string Projected = "(" + declarationToC(cDisplayType(Type), "") +
-                              ")" + Bridge + "(" + Argument + ")";
+      const llvm::StringRef Spelled =
+          c_library::portableScalarParameterType(*SourceImport, ArgIdx);
+      std::string Projected =
+          "(" +
+          (Spelled.empty() ? declarationToC(cDisplayType(Type), "")
+                           : Spelled.str()) +
+          ")" + Bridge + "(" + Argument + ")";
       Expr += Type->Kind == NdTypeKind::Ptr
                   ? imagePointerArgument(Operand, std::move(Projected))
                   : std::move(Projected);

@@ -46,7 +46,7 @@ LIBRARIES = {
                            ["-D_KERNEL_MODE=1", "-DNDIS680"]),
     # WDK's CRT supplies the Microsoft C runtime declarations required by the
     # SDK. It is the same pinned Microsoft package, never a host CRT or MinGW.
-    "WindowsUser": (USER_HEADERS, ["um", "shared", "km/crt"],
+    "WindowsUser": (USER_HEADERS, ["um", "shared", "winrt", "km/crt"],
                          ["-DSECURITY_WIN32=1"]),
 }
 
@@ -62,6 +62,17 @@ class Provider(NamedTuple):
 # WinHTTP's UTF-16 URL_COMPONENTS versus WinINet's ANSI default). Parse each
 # provider on its own and import only the missing prototypes and their types.
 ISOLATED_PROVIDERS = {
+    "WindowsKernel": (
+        Provider("NetworkInterfaces", ("ntddk", "netioddk", "wsk")),
+        Provider("KernelStreaming", ("ntddk", "minwindef", "ks", "swenum", "ksi")),
+        Provider("StorageClass", ("ntddk", "scsi", "classpnp")),
+        Provider("TDI", ("ntddk", "tdikrnl")),
+        Provider("VideoPort", ("miniport", "ntddvdeo", "video")),
+        Provider("ATA", ("ntddk", "ata", "irb")),
+        Provider("Battery", ("ntddk", "batclass")),
+        Provider("HIDPort", ("ntddk", "hidport", "hidpddi")),
+        Provider("SmartCard", ("ntddk", "smclib")),
+    ),
     "WindowsUser": (
         Provider("WinHTTP", ("winsock2", "winhttp")),
         Provider("HTTPServer", ("winsock2", "windows", "http")),
@@ -81,6 +92,16 @@ ISOLATED_PROVIDERS = {
         # define WIN32 without a value, while tapi.h uses it in #if expressions.
         Provider("TAPI", ("winsock2", "windows", "tapi", "tspi"), ("WIN32=1",)),
         Provider("OpenGL", ("winsock2", "windows", "gl/gl", "gl/glu")),
+        Provider("EventTracing", ("windows", "evntprov")),
+        Provider("Path", ("windows", "pathcch")),
+        Provider("WinRTStrings", ("windows", "winstring", "roapi", "roerrorapi", "robuffer")),
+        Provider("RPCProxy", ("windows", "rpcproxy", "midles")),
+        Provider("Credentials", ("windows", "wincred")),
+        Provider("DeviceQuery", ("windows", "devquery")),
+        Provider("ApplicationModel", ("windows", "appmodel", "featurestagingapi")),
+        Provider("PropertyVariants", ("windows", "propvarutil")),
+        Provider("PerformanceData", ("windows", "pdh", "pdhmsg")),
+        Provider("Biometrics", ("windows", "winbio")),
     ),
 }
 TARGETS = {
@@ -113,6 +134,13 @@ def checked_types(neverd: str, source: Path, log: Path,
                        encoding="utf-8")
         raise ValueError(f"official declarations were refused; see {log}")
     return result
+
+
+def parser_convention(source: Path, convention: str) -> None:
+    """Preprocessing loses the compiler's default on unannotated declarations."""
+    if convention:
+        source.write_text(f"#pragma neverd_default_calling_convention({convention})\n" +
+                          source.read_text(encoding="utf-8"), encoding="utf-8")
 
 
 def record_layouts(text: str) -> dict:
@@ -160,12 +188,13 @@ def verify_layouts(original: str, generated: str,
 
 def prepare_provider(name: str, source: Path, arguments: list[str], directory: Path,
                      neverd: str, model: str, headers=(), defines=(), prototypes=(),
-                     metadata: dict | None = None) -> dict:
+                     metadata: dict | None = None, convention: str = "") -> dict:
     """Validate and select a whole provider before it can enter the merge."""
     dump = ["-fsyntax-only", "-Xclang", "-fdump-record-layouts-complete"]
     preprocessed = directory / (name + ".h")
     command = arguments + ["-E", str(source)]
     run(command, directory / (name + ".pre.log"), preprocessed)
+    parser_convention(preprocessed, convention)
     parsed = checked_types(neverd, preprocessed, directory / (name + ".parse.log"), model)
     input_hash = wdk.digest(preprocessed)
     commands = [command]
@@ -191,6 +220,7 @@ def prepare_provider(name: str, source: Path, arguments: list[str], directory: P
                   directory / (name + ".official-layouts.log"))
     return {"name": name, "source": preprocessed, "headers": headers,
             "defines": defines, "selected_prototypes": prototypes,
+            "default_calling_convention": convention,
             "input_sha256": input_hash, "layouts": layouts,
             "parsed": parsed, "commands": commands, "metadata": metadata or {}}
 
@@ -199,7 +229,8 @@ def merge_providers(base: str, primary: Path, output: Path,
                     arguments: list[str], common: list[str], neverd: str,
                     model: str, primary_layouts: str,
                     runtime: dict | None = None,
-                    compatibility: dict | None = None) -> list[dict]:
+                    compatibility: dict | None = None,
+                    convention: str = "") -> list[dict]:
     providers = ISOLATED_PROVIDERS.get(base, ())
     if not providers and runtime is None:
         return []
@@ -212,7 +243,8 @@ def merge_providers(base: str, primary: Path, output: Path,
         source = directory / (name + ".c")
         source.write_text(include_headers(headers), encoding="utf-8")
         units.append(prepare_provider(name, source, provider_arguments, directory,
-                                      neverd, model, headers, defines, prototypes))
+                                      neverd, model, headers, defines, prototypes,
+                                      convention=convention))
     if runtime is not None:
         units.append(prepare_provider("UCRT", runtime["source"], runtime["arguments"],
                                       directory, neverd, model,
@@ -258,6 +290,7 @@ def merge_providers(base: str, primary: Path, output: Path,
                                    renamed, report["dependencies"])
             records.append({"name": unit["name"], "headers": unit["headers"],
                             "defines": unit["defines"],
+                            "default_calling_convention": unit["default_calling_convention"],
                             "selected_prototypes": unit["selected_prototypes"],
                             "input_sha256": unit["input_sha256"],
                             "declaration_sha256": wdk.digest(unit["source"]),
@@ -390,7 +423,7 @@ def generate(output: Path, cache: Path, neverd: str, clang: str,
     packages = [wdk.download(cache, *record) for record in inventory["DOWNLOAD"]]
     kit = output / "microsoft-kit"
     selected = [f"c/Include/{VERSION}/{part}/"
-                for part in ("km", "shared", "um")]
+                for part in ("km", "shared", "um", "winrt")]
     selected += ["LICENSE.txt", "Microsoft.Windows.WDK.x64.nuspec",
                  "Microsoft.Windows.SDK.CPP.nuspec",
                  f"c/build/{VERSION}/WindowsDriver.Common.props"]
@@ -428,10 +461,7 @@ def generate(output: Path, cache: Path, neverd: str, clang: str,
         preprocessed = output / (name + ".pre.c")
         command = arguments + ["-E", str(source)]
         run(command, output / (name + ".pre.log"), preprocessed)
-        if convention:
-            preprocessed.write_text(
-                f"#pragma neverd_default_calling_convention({convention})\n" +
-                preprocessed.read_text(encoding="utf-8"), encoding="utf-8")
+        parser_convention(preprocessed, convention)
         read = checked_types(neverd, preprocessed, output / (name + ".parse.log"), model)
         generated = output / (name + ".h")
         with tempfile.TemporaryDirectory(dir=output, prefix="render-") as scratch:
@@ -480,7 +510,8 @@ def generate(output: Path, cache: Path, neverd: str, clang: str,
             if ucrt_compatibility:
                 compatibility = ucrt.prepare_compatibility(runtime, output, cache)
         providers = merge_providers(base, generated, output, arguments, common,
-                                     neverd, model, original_layouts, runtime, compatibility)
+                                     neverd, model, original_layouts, runtime, compatibility,
+                                     convention)
         final = checked_types(neverd, generated, output / (name + ".final.log"), model)
         built.append({"name": name, "sha256": wdk.digest(generated),
                       "types": len(final["types"]),

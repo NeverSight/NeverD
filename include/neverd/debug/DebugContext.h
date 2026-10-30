@@ -78,6 +78,10 @@ struct FunctionSym {
   /// qualifiers for C output that does not include the target platform SDK.
   /// Its outer cdecl/stdcall is carried by CallConv, not the spelling.
   std::string PortablePrototypeDeclaration;
+  /// Parallel source cast types from that same declaration graph. These
+  /// preserve nested callback pointees/qualifiers that machine types omit;
+  /// they carry no additional argument-placement or register-state evidence.
+  std::vector<std::string> PortableParameterTypes;
   /// The prototype comes from a selected platform header library, including
   /// Windows SDK/WDK headers that are rendered without a host header include.
   bool PrototypeFromHeader = false;

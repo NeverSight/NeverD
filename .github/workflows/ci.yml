@@ -260,6 +260,9 @@ jobs:
             scripts.tests.test_audit_evm_opcode_metadata \
             scripts.tests.test_eh_signature_generation \
             scripts.tests.test_msvc_signature_generation \
+            scripts.tests.test_generate_microsoft_windows_types \
+            scripts.tests.test_microsoft_ucrt_types \
+            scripts.tests.test_check_microsoft_provider_abis \
             scripts.tests.test_signature_supplement \
             scripts.tests.test_signature_metadata \
             scripts.tests.test_vtable_context \
