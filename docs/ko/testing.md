@@ -2278,3 +2278,5 @@ LLVM C의 합성 스택 슬롯은 실행 중 선택한 64비트 절반을 읽기
 `InterpreterMachineRegionSourceTest.ArchitecturalChoiceSource*`는 두 C 경로의 O0/O2 출력을 ASan/UBSan으로 실행합니다. 압축 회귀 검사는 양쪽 분기의 실패와 루프 재방문 후 전체 상태, 메모리 및 레코드를 비교합니다. 48개 명령 시퀀스는 초기·중간·마지막 레코드의 성공, 부족 및 불일치를 확인합니다. 별도 3300개 명령 사례는 이전 래퍼의 블록 용량을 넘으며 생성 코드를 컴파일하지 않고 두 C 출력을 검사합니다. `NeverDInterpreterMachineStateTests`를 실행하세요. 자체 픽스처는 임의의 네이티브 함수를 인증하지 않습니다.
 
 `MedMutableSource.SharedRejectionChainsPreserveEveryCommittedPrefix`는 두 공통 실패 출구를 가진 2048단계 조건 분기 체인을 정방향과 역방향 블록 배치로 검사한다. 두 C 경로를 O0/O2와 UBSan으로 실행하여 초기·중간·마지막 실패 및 성공의 반환값과 이미 반영된 게스트 메모리 접두 부분을 비교한다.
+
+`NeverDX86UndefinedEffectsTests`의 `X86ArithmeticUndefinedAudit`는 기존 레지스터 PADDB/W/D/Q 및 PSUBB/W/D/Q의 정확한 인코딩, 독립적인 레인 순환, 플래그 보존과 전체 512비트 레지스터를 검사합니다. 표준 x64 즉시값 IMUL은 부호 확장한 imm8/imm32와 독립적인 미정의 플래그 네 개를 연결합니다. 메모리, MMX/VEX 및 바이트와 디코더 정보가 불일치하는 형식은 별도 허용 증명이 필요합니다. `ArchitecturalChoiceSourcePackedArithmeticAndImmediateProducts`는 O0/O2와 ASan/UBSan에서 두 C 경로를 실행하여 입력 부족이나 불일치 시 명령 전체의 대상과 커서가 아직 반영되지 않았는지 검사합니다.

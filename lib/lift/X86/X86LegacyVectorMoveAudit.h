@@ -109,6 +109,49 @@ inline bool form(const cs_insn *Insn, Arch Target) {
   uint8_t RequiredPrefix = 0, LoadOpcode = 0, StoreOpcode = 0;
   unsigned MemoryBytes = 16;
   switch (Insn->id) {
+  case X86_INS_PADDB:
+  case X86_INS_PADDW:
+  case X86_INS_PADDD:
+  case X86_INS_PADDQ:
+  case X86_INS_PSUBB:
+  case X86_INS_PSUBW:
+  case X86_INS_PSUBD:
+  case X86_INS_PSUBQ:
+    // Intel SDM: each lane wraps independently; flags and upper vector bits
+    // are preserved. Admit register forms only, with no MXCSR side effects.
+    if (X.operands[1].type != X86_OP_REG || X.eflags)
+      return false;
+    RequiredPrefix = 0x66;
+    switch (Insn->id) {
+    case X86_INS_PADDB:
+      LoadOpcode = 0xfc;
+      break;
+    case X86_INS_PADDW:
+      LoadOpcode = 0xfd;
+      break;
+    case X86_INS_PADDD:
+      LoadOpcode = 0xfe;
+      break;
+    case X86_INS_PADDQ:
+      LoadOpcode = 0xd4;
+      break;
+    case X86_INS_PSUBB:
+      LoadOpcode = 0xf8;
+      break;
+    case X86_INS_PSUBW:
+      LoadOpcode = 0xf9;
+      break;
+    case X86_INS_PSUBD:
+      LoadOpcode = 0xfa;
+      break;
+    case X86_INS_PSUBQ:
+      LoadOpcode = 0xfb;
+      break;
+    default:
+      llvm_unreachable("audited packed integer operation");
+    }
+    StoreOpcode = LoadOpcode;
+    break;
   case X86_INS_XORPS:
   case X86_INS_XORPD:
   case X86_INS_PXOR:
