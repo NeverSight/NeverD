@@ -2298,3 +2298,5 @@ LLVM C の合成スタックスロットは、実行時にどちらかの 64 ビ
 `X86NativeStateAudit.CR4*` は、受理する CR4 転送の 48 エンコーディングと、バイト列とデコード情報が一致しない 34 組を検証します。6 個の算術フラグの未定義値、既存のネイティブ組み込み操作の維持、隠れた状態の保存証明を付与しないことを確認します。`CR4FlagCoverageDoesNotAuthorizeMachineRegionExecution` は制御状態契約なしのソース復元を拒否します。所有する命令バイト列をデコードして IR に変換するだけで、特権命令は実行しません。
 
 `PageGlobal*` は未知の上位ビット、両分岐、読み書き関係、禁止する 63 ビットの変更、他の状態の保持、不正オペランド、予算と環境識別を検証します。`NeverDInterpreterSpecializationTests`、`NeverDInterpreterMachineStateTests`、`NeverDLowIRRefinementTests`、`NeverDInterpreterLLVMRefinementTests` を実行してください。値モデルの検証であり、特権命令は実行しません。
+
+`NeverDInterpreterMachineStateTests` の `KernelPageGlobalSource*` は HighC/LLVMC、O0/O2、ASan/UBSan で全状態、戻りスタック、CR4、全記録不足・不一致、カーネル POPFQ/CLI/STI を検証します。ドメイン、旧配置、予算の拒否も確認し、生成されたスカラー C のみを実行します。
