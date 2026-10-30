@@ -159,6 +159,36 @@
       "path": "link-process.trace",
       "sha256": "84054a536f20118f780d817ab99e949a7ed7a8ed6c229c985bc3f89397698e22",
       "bytes": 1179283
+    },
+    {
+      "path": "neverd-integrated-build.log",
+      "sha256": "6041b23eb82d0f259f1e3ba4519ac18b89bbffc85451846f2c8b71f33be4ecb3",
+      "bytes": 248627
+    },
+    {
+      "path": "neverd-integrated-build-receipt.json",
+      "sha256": "2a7799cf792d39b5d3067556ed6a17956eb84eba246bd83fc6cdaee8f4fc1ce7",
+      "bytes": 3852
+    },
+    {
+      "path": "neverd-integrated-tests.log",
+      "sha256": "4ae1cd5486bd919af3652eab175f9c42718e75584fca344e43132e5717974344",
+      "bytes": 481946
+    },
+    {
+      "path": "neverd-integrated-tests.xml",
+      "sha256": "4609b03bc43faf28a99d091b2f49252f803608a8f3ea0a82c77fdb7b5bd8f005",
+      "bytes": 1618162
     }
-  ]
+  ],
+  "integrated_validation": {
+    "neverd_head": "0eae10ee4c2d87cf07463924df6980de71945496",
+    "dev_base": "7ffb66cc33ea11434ec688d7e7eb4363b0c4ee53",
+    "tests": 1545,
+    "passed": 1545,
+    "failed": 0,
+    "skipped": 0,
+    "labels": 10,
+    "scope": "UINTR and prior continuation profiles, raw environment, interpreter state/specialization, PE fixed image, undefined independence and LowIR refinement."
+  }
 }
