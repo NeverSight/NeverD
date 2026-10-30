@@ -172,7 +172,7 @@ TEST(RegistrationCallABI, ThrowImportMustSurvivePrivateHelperEffects) {
     }
 }
 
-TEST(RegistrationCallABI, ThrowDispatchRequiresClosedAccessesAndNoCallbacks) {
+TEST(RegistrationCallABI, ThrowDispatchRequiresClosedAccessesAndCallbacks) {
   for (unsigned Mutation = 0; Mutation != 10; ++Mutation) {
     SCOPED_TRACE(Mutation);
     std::vector<uint8_t> Extra;
@@ -203,7 +203,7 @@ TEST(RegistrationCallABI, ThrowDispatchRequiresClosedAccessesAndNoCallbacks) {
     if (Mutation == 8)
       F.Image.Segments[2].ReadOnlyAfterRelocations = true;
     if (Mutation == 9) {
-      // Even a checked empty destructor needs a separate runtime closure.
+      // An empty destructor also supplies the separate runtime closure.
       F.tableWord(4, ThrowImage::TextVA + 0x60);
       F.Image.Segments[0].Data[0x60] = 0xc3;
     }
@@ -215,12 +215,67 @@ TEST(RegistrationCallABI, ThrowDispatchRequiresClosedAccessesAndNoCallbacks) {
       continue;
     }
     ASSERT_TRUE(Proof);
-    EXPECT_EQ(Proof->PreservesDispatchBindings, Mutation == 0 || Mutation == 4);
+    EXPECT_EQ(Proof->PreservesDispatchBindings,
+              Mutation == 0 || Mutation == 4 || Mutation == 9);
   }
   ThrowImage F;
   size_t Work = limits::kMaxRegistrationEHStateWork;
   EXPECT_FALSE(getCheckedX86RegistrationThrowCalleeABI(
       F.Image, ThrowImage::TextVA, &Work));
+}
+
+TEST(RegistrationCallABI, ThrowDispatchClosesScalarDestructorEffects) {
+  for (unsigned Mutation = 0; Mutation != 10; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    ThrowImage F;
+    // The CRT owns all four initialized object bytes. The callback may read
+    // and replace them and update writable image data without losing an IAT.
+    std::vector<uint8_t> Code{0x8b, 0x01, 0x89, 0x01, 0xa3,
+                              0x40, 0x40, 0x40, 0};
+    if (Mutation == 0)
+      Code.clear();
+    if (Mutation == 2)
+      Code.insert(Code.end(), {0xa1, 0, 0, 0, 0});
+    if (Mutation == 3)
+      Code.insert(Code.end(), {0xd9, 0xee});
+    if (Mutation == 4) {
+      Import Other;
+      Other.Module = "application.dll";
+      Other.Name = "callback";
+      Other.IATAddr = ThrowImage::DataVA + 0x40;
+      F.Image.Imports.push_back(Other);
+    }
+    if (Mutation == 5)
+      F.Image.Sections[2].Flags = SegmentFlags::Readable;
+    if (Mutation == 6)
+      Code.insert(Code.begin() + 2, {0x8b, 0x00});
+    if (Mutation == 7)
+      Code.insert(Code.end(), {0x8b, 0x41, 4});
+    if (Mutation == 8)
+      Code.insert(Code.end(), {0x31, 0xd2, 0xf7, 0xf1});
+    if (Mutation == 9)
+      // A separately proved object graph is not a scalar callback closure.
+      Code.insert(Code.end(), {0xe8, 0x32, 0, 0, 0});
+    Code.push_back(0xc3);
+    F.tableWord(4, ThrowImage::TextVA + 0x60);
+    if (Mutation == 9) {
+      auto &Text = F.Image.Segments[0];
+      Text.Data.resize(0xa1, 0xcc);
+      Text.Data[0xa0] = 0xc3;
+      Text.Size = Text.FileSz = Text.Data.size();
+      F.Image.Sections[0].Size = F.Image.Sections[0].FileSz = Text.Size;
+    }
+    std::copy(Code.begin(), Code.end(),
+              F.Image.Segments[0].Data.begin() + 0x60);
+    const auto Proof =
+        getCheckedX86RegistrationThrowCalleeABI(F.Image, ThrowImage::TextVA);
+    if (Mutation == 6 || Mutation == 7 || Mutation == 8) {
+      EXPECT_FALSE(Proof);
+      continue;
+    }
+    ASSERT_TRUE(Proof);
+    EXPECT_EQ(Proof->PreservesDispatchBindings, Mutation <= 1);
+  }
 }
 
 TEST(RegistrationCallABI, LeafDispatchNeedsMoreThanBoundedImageWrites) {

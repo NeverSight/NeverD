@@ -98,8 +98,8 @@ struct CxxCallerProof {
   BoundCxxCalleeProver ProveCall;
   std::set<va_t> ImportSlots;
   /// Present only for a fresh synchronous FH3 parent with closed unwind
-  /// actions. Each exact throw must independently prove callback-free object
-  /// metadata and closed preparation. Ordinary leaves require their separate
+  /// actions. Each exact throw must independently prove bounded runtime
+  /// callbacks and closed preparation. Ordinary leaves require their separate
   /// integer effect proof; a normal-return stack or image-write summary does
   /// not suffice.
   std::function<bool(const LowOp &, const RegistrationCalleeFrameContract &,

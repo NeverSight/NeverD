@@ -101,7 +101,7 @@ struct Domain {
   bool AbandonedSEHGuard = false;
   bool CanDispatch = false;
   /// All possible exception origins so far have closed integer effects and
-  /// callback-free C++ throws. Distinct from ordinary-return IAT liveness.
+  /// closed C++ callbacks. Distinct from ordinary-return IAT liveness.
   bool CxxDispatchBindingsIntact = true;
   std::optional<int32_t> OrdinaryCallStack;
   struct ParentStackRestore {

@@ -164,6 +164,7 @@ TEST(RegistrationCopy, MetadataRequiresTheIndependentCopyProof) {
   ASSERT_TRUE(Object);
   ASSERT_TRUE(Object->CopyConstructor);
   EXPECT_FALSE(Object->Destructor);
+  EXPECT_FALSE(Object->PreservesDispatchBindings);
   Image.Segments[0].Flags = Image.Segments[0].Flags | SegmentFlags::Writable;
   EXPECT_TRUE(coff_loader::getCheckedX86IdentityCxxThrowInfo(Image, 0x2000));
   EXPECT_FALSE(getCheckedX86RegistrationThrowObjectABI(Image, 0x2000));

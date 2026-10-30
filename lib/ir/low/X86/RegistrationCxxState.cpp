@@ -135,7 +135,6 @@ void proveScalarCxxDispatch(
       !hasCurrentCxxDispatchOperations(Image, Function, Work))
     return;
   std::set<uint32_t> ClosedCleanups;
-  std::set<va_t> CleanupLeaves;
   for (uint32_t State = 0; State < Cxx.UnwindMap.size(); ++State) {
     const auto &Action = Cxx.UnwindMap[State];
     if (!Action.ActionVA)
@@ -161,18 +160,15 @@ void proveScalarCxxDispatch(
           Borrow.ObjectFrameOffset != Current.ObjectFrameOffset ||
           !matchesCxxDispatchLeaf(Current.Leaf, Borrow.Leaf, Work))
         return;
-      CleanupLeaves.insert(Current.Leaf.Target);
     }
     ClosedCleanups.insert(State);
   }
-  // Constructors, general member graphs and nested EH parents retain their
-  // separate closure. The admitted object leaves belong to checked cleanup
-  // relays; any reached ordinary invocation must still bind its own object.
+  // Constructors and nested EH parents retain their separate closure. A
+  // reached ordinary object leaf must prove both its current closed effects
+  // and its own frame borrow, even when it is not an unwind-map action.
   for (const auto &Callee : *Callees)
     if (!registration_abi::chargeCalleeWork(Work, 1) ||
-        Callee.isInitializer() || Callee.isCxxParent() ||
-        ((!Callee.ECXReads.empty() || !Callee.ECXWrites.empty()) &&
-         !CleanupLeaves.count(Callee.Target)))
+        Callee.isInitializer() || Callee.isCxxParent())
       return;
   Calls.ClosedDispatchCleanups = std::move(ClosedCleanups);
   // Each throw still needs a current scalar object and closed preparation.
@@ -187,8 +183,8 @@ void proveScalarCxxDispatch(
   Calls.ProveDispatchCall =
       [&Image, &Function,
        Throws = std::map<va_t, std::optional<RegistrationThrowCalleeABI>>{},
-       Leaves = std::map<va_t, std::optional<RegistrationLeafCalleeABI>>{},
-       CleanupLeaves = std::move(CleanupLeaves)](
+       Objects = std::map<va_t, std::optional<RegistrationThrowObjectABI>>{},
+       Leaves = std::map<va_t, std::optional<RegistrationLeafCalleeABI>>{}](
           const LowOp &Op, const RegistrationCalleeFrameContract &Contract,
           const RegistrationCallFrameEffect &Effect, size_t &Used) mutable {
         if (Effect.StackPopBytes ||
@@ -206,9 +202,7 @@ void proveScalarCxxDispatch(
                 Image, Effect.Target, &Used, RegistrationLeafResult::Discarded);
           const auto &Leaf = It->second;
           return Leaf && matchesCxxDispatchLeaf(*Leaf, Contract, Used) &&
-                 (Leaf->PreservesDispatchBindings ||
-                  (CleanupLeaves.count(Effect.Target) &&
-                   Effect.ECXFrameOffset));
+                 (Leaf->PreservesDispatchBindings || Effect.ECXFrameOffset);
         }
         if (!Contract.isThrow() || !Effect.DoesNotReturn)
           return false;
@@ -219,11 +213,15 @@ void proveScalarCxxDispatch(
           const auto &Throw = *Effect.RuntimeThrow;
           if (Throw.isRethrow())
             return true; // The state solver separately binds the live catch.
-          if (!registration_abi::chargeCalleeWork(Used, 1))
+          if (!registration_abi::chargeCalleeWork(Used, Objects.size() + 1))
             return false;
-          const auto Info = coff_loader::getCheckedX86SimpleCxxThrowInfo(
-              Image, Throw.ThrowInfoVA);
-          return Info && Info->ObjectSize == Throw.ObjectSize;
+          const auto [It, New] = Objects.try_emplace(Throw.ThrowInfoVA);
+          if (New)
+            It->second = getCheckedX86RegistrationThrowObjectABI(
+                Image, Throw.ThrowInfoVA, &Used);
+          const auto &Object = It->second;
+          return Object && Object->PreservesDispatchBindings &&
+                 Object->Info.ObjectSize == Throw.ObjectSize;
         }
         if (!registration_abi::chargeCalleeWork(Used, Throws.size() + 1))
           return false;

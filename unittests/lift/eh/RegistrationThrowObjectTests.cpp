@@ -11,12 +11,14 @@
 #include "neverd/Limits.h"
 #include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/ir/low/RegistrationABI.h"
+#include "neverd/ir/low/RegistrationCxxState.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/COFF/COFFLoader.h"
 #include "neverd/support/BinaryEncoding.h"
 
 #include <algorithm>
 #include <cstdlib>
+#include <optional>
 #include <set>
 
 namespace {
@@ -32,11 +34,6 @@ BinaryImage objectImage(std::vector<uint8_t> Code) {
   Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
   Text.Data = std::move(Code);
   Text.Size = Text.FileSz = Text.Data.size();
-  Section CodeSection;
-  CodeSection.VA = Text.VA;
-  CodeSection.Size = CodeSection.FileSz = Text.Size;
-  CodeSection.Flags = Text.Flags;
-  Image.Sections.push_back(CodeSection);
   Image.Segments.push_back(std::move(Text));
   Segment Table;
   Table.VA = 0x2000;
@@ -60,6 +57,15 @@ BinaryImage objectImage(std::vector<uint8_t> Code) {
   Data.Data.resize(16);
   Data.Size = Data.Data.size();
   Image.Segments.push_back(std::move(Data));
+  for (auto &Segment : Image.Segments) {
+    Segment.FileSz = Segment.Data.size();
+    Section Section;
+    Section.VA = Segment.VA;
+    Section.Size = Segment.Size;
+    Section.FileSz = Segment.FileSz;
+    Section.Flags = Segment.Flags;
+    Image.Sections.push_back(Section);
+  }
   return Image;
 }
 
@@ -76,6 +82,7 @@ TEST(RegistrationThrowObject, PreservesBoundedDestructorEffects) {
   const auto Proof = getCheckedX86RegistrationThrowObjectABI(Image, 0x2000);
   ASSERT_TRUE(Proof);
   ASSERT_TRUE(Proof->Destructor);
+  EXPECT_TRUE(Proof->PreservesDispatchBindings);
   EXPECT_EQ(Proof->Info.ObjectSize, 8u);
   EXPECT_EQ(Proof->Destructor->ECXReads,
             (std::vector<RegistrationObjectExtent>{{0, 4}}));
@@ -118,11 +125,13 @@ TEST(RegistrationThrowObject, VoidDestructorAndAbsentDestructorStayDistinct) {
   auto Proof = getCheckedX86RegistrationThrowObjectABI(Image, 0x2000);
   ASSERT_TRUE(Proof);
   ASSERT_TRUE(Proof->Destructor);
+  EXPECT_TRUE(Proof->PreservesDispatchBindings);
   EXPECT_FALSE(Proof->Destructor->HasIndependentScalarReturn);
   writeLE<uint32_t>(Image.Segments[1].Data.data() + 4, 0);
   Proof = getCheckedX86RegistrationThrowObjectABI(Image, 0x2000);
   ASSERT_TRUE(Proof);
   EXPECT_FALSE(Proof->Destructor);
+  EXPECT_TRUE(Proof->PreservesDispatchBindings);
   EXPECT_TRUE(coff_loader::getCheckedX86SimpleCxxThrowInfo(Image, 0x2000));
   size_t Work = limits::kMaxRegistrationEHStateWork;
   EXPECT_FALSE(getCheckedX86RegistrationThrowObjectABI(Image, 0x2000, &Work));
@@ -183,6 +192,7 @@ TEST(RegistrationThrowObject, PrivateThrowRetainsCodeInBothAddressOrders) {
     Image.Imports.push_back(Runtime);
     const auto Proof = getCheckedX86RegistrationThrowCalleeABI(Image, Entry);
     ASSERT_TRUE(Proof);
+    EXPECT_TRUE(Proof->PreservesDispatchBindings);
     EXPECT_EQ(Proof->ThrowInfo.DestructorVA, Destructor);
     for (va_t Address : {Entry, Destructor, va_t(0x1080)})
       EXPECT_TRUE(llvm::any_of(Proof->CodeRanges, [&](const auto &Range) {
@@ -191,6 +201,121 @@ TEST(RegistrationThrowObject, PrivateThrowRetainsCodeInBothAddressOrders) {
     ASSERT_EQ(Proof->ImageWrites.size(), 1u);
     EXPECT_EQ(Proof->ImageWrites[0].Begin, 0x3000u);
     EXPECT_EQ(Proof->ImageWrites[0].End, 0x3004u);
+  }
+}
+
+TEST(RegistrationThrowObject, InputPE32DispatchRechecksRuntimeCallbacks) {
+  const auto *Path = std::getenv("NEVERD_REGISTRATION_REALIGNED_NATIVE_PE32");
+  if (!Path)
+    GTEST_SKIP() << "set NEVERD_REGISTRATION_REALIGNED_NATIVE_PE32";
+  auto Loaded = COFFLoader().load(Path);
+  ASSERT_TRUE(bool(Loaded));
+  const auto Entry = llvm::find_if(Loaded->Exports, [](const auto &Export) {
+    return Export.Name == "callback_parent";
+  });
+  ASSERT_NE(Entry, Loaded->Exports.end());
+  Decoder Dec;
+  ASSERT_TRUE(Dec.init(*Loaded));
+  const auto Source = CFGBuilder().build(*Loaded, Dec, Entry->Addr);
+  ASSERT_TRUE(Source.RegistrationStates);
+  const auto &States = *Source.RegistrationStates;
+  ASSERT_TRUE(States.SourceCallFrameEffectsComplete);
+  ASSERT_TRUE(States.RuntimeObjectAccessesComplete);
+  if (llvm::none_of(States.CallFrameEffects, [&](const auto &Call) {
+        return States.CalleeContracts[Call.CalleeIndex].isRethrow() ||
+               (Call.RuntimeThrow && Call.RuntimeThrow->isRethrow());
+      }))
+    GTEST_SKIP() << "requires a rethrow after runtime destruction";
+  std::optional<RegistrationThrowObjectABI> Object;
+  for (const auto &Callee : States.CalleeContracts) {
+    std::vector<va_t> Tables;
+    if (Callee.CalleeKind ==
+        RegistrationCalleeFrameContract::Kind::PrivateThrow) {
+      const auto Throw =
+          getCheckedX86RegistrationThrowCalleeABI(*Loaded, Callee.Target);
+      ASSERT_TRUE(Throw);
+      Tables.push_back(Throw->ThrowInfo.Address);
+    }
+    for (const auto &Info : Callee.RuntimeThrowInfos)
+      Tables.push_back(Info.Address);
+    for (va_t Table : Tables) {
+      auto Candidate = getCheckedX86RegistrationThrowObjectABI(*Loaded, Table);
+      if (!Candidate || !Candidate->Destructor)
+        continue;
+      if (llvm::none_of(States.CxxCatchObjects, [&](const auto &Catch) {
+            return Catch.Reference &&
+                   Catch.TypeDescriptorVA == Candidate->Info.TypeDescriptorVA;
+          }))
+        continue;
+      // Isolate CRT destruction from the separate parent cleanup proof.
+      if (llvm::any_of(States.CleanupContracts, [&](const auto &Cleanup) {
+            return llvm::any_of(Cleanup.Calls, [&](const auto &Call) {
+              return Call.Leaf.Target == Candidate->Info.DestructorVA;
+            });
+          }))
+        continue;
+      Object = std::move(Candidate);
+      break;
+    }
+    if (Object)
+      break;
+  }
+  if (!Object)
+    GTEST_SKIP() << "requires a runtime-only destructor and a later throw";
+  ASSERT_TRUE(Object->PreservesDispatchBindings);
+  ASSERT_FALSE(Object->Destructor->ImageWrites.empty());
+  for (unsigned Mutation = 0; Mutation != 9; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    auto Image = *Loaded;
+    auto Changed = Source;
+    Changed.RegistrationStates.reset();
+    auto Replace = [&](va_t Address, const std::vector<uint8_t> &Bytes) {
+      auto Owner = llvm::find_if(Image.Segments, [&](const auto &Segment) {
+        return Address >= Segment.VA &&
+               Address - Segment.VA <= Segment.Data.size() &&
+               Bytes.size() <= Segment.Data.size() - (Address - Segment.VA);
+      });
+      ASSERT_NE(Owner, Image.Segments.end());
+      std::copy(Bytes.begin(), Bytes.end(),
+                Owner->Data.begin() + Address - Owner->VA);
+    };
+    if (Mutation == 1)
+      Replace(Object->Info.DestructorVA, {0xa1, 0, 0, 0, 0, 0xc3});
+    if (Mutation == 2)
+      Replace(Object->Info.DestructorVA, {0xd9, 0xee, 0xc3});
+    if (Mutation == 3) {
+      Import Other;
+      Other.Module = "application.dll";
+      Other.Name = "callback";
+      Other.IATAddr = Object->Destructor->ImageWrites.front().Begin;
+      Image.Imports.push_back(Other);
+    }
+    if (Mutation == 4)
+      for (auto &Section : Image.Sections)
+        if (Section.VA <= Object->Destructor->ImageWrites.front().Begin &&
+            Object->Destructor->ImageWrites.front().Begin - Section.VA <
+                Section.Size)
+          Section.Flags = SegmentFlags::Readable;
+    if (Mutation == 5)
+      Replace(Object->Info.Address + 4, {1, 0, 0, 0});
+    if (Mutation == 6) {
+      const auto *Array = Loaded->readVA(Object->Info.Address + 12, 4);
+      ASSERT_TRUE(Array);
+      const auto *Type = Loaded->readVA(readLE<uint32_t>(Array) + 4, 4);
+      ASSERT_TRUE(Type);
+      Replace(readLE<uint32_t>(Type) + 20, {1, 0, 0, 0});
+    }
+    if (Mutation == 7)
+      for (auto &Segment : Image.Segments)
+        if (Segment.VA <= Object->Info.DestructorVA &&
+            Object->Info.DestructorVA - Segment.VA < Segment.Size)
+          Segment.Flags = Segment.Flags | SegmentFlags::Writable;
+    if (Mutation == 8)
+      std::reverse(Changed.Blocks.begin(), Changed.Blocks.end());
+    const auto Current = analyzeCheckedX86CxxStates(
+        Image, Changed, &States.CalleeContracts, &States.CleanupContracts);
+    EXPECT_EQ(Current.SourceCallFrameEffectsComplete,
+              Mutation == 0 || Mutation == 8);
   }
 }
 

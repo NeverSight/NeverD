@@ -2989,9 +2989,15 @@ integer effects with no nested calls. Fixed-frame cleanup relays may call
 scalar leaves with declared ECX extents only after fresh code and effects
 match their contracts. Every unwind origin must independently prove these
 objects allocated, initialized where read, and disjoint from administration.
-An ordinary invocation of a cleanup leaf must bind its own frame object.
-Initializers, general object graphs, thrown-object copy/destructor callbacks,
-exception specifications and realigned frames do not acquire this proof.
+An ordinary scalar object leaf, including a direct catch-copy destructor,
+must independently match fresh effects and bind its own frame object. Its
+presence outside the unwind map neither grants nor withdraws that authority.
+`RegistrationThrowObjectABI` separately intersects each runtime callback's
+closed effects with the exact ThrowInfo object bounds. Private helpers and
+direct CRT throws consume that same proof only after establishing initialized,
+pointer-free exception storage. Scalar destructor leaves may retain bindings;
+initializers, copy constructors, general object graphs, exception specifications
+and realigned frames do not acquire this proof.
 `RegistrationMemoryPermissions` owns the shared closed integer policy;
 mapped image accesses require permissions and exclude writes to any IAT slot.
 The state solver tracks this exceptional-path fact separately from ordinary

@@ -504,6 +504,8 @@ bool hasPrivateCallerFrame(const LowFunc &Function, const BinaryImage &Image,
             if (Value.MayBeFrame && int64_t(Cell) < End &&
                 int64_t(*Object.Offset) < int64_t(Cell) + 4)
               return false;
+          if (ClosedIntegerEffects)
+            *ClosedIntegerEffects &= ObjectABI->PreservesDispatchBindings;
           for (const auto &Range : Info.ReadOnlyRanges)
             Effects.Reads.emplace(Range.Begin, Range.End);
           Effects.Reads.emplace(Info.TypeDescriptorRange.Begin,

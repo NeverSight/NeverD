@@ -246,6 +246,10 @@ struct RegistrationThrowObjectABI {
   coff_loader::X86IdentityCxxThrowInfo Info;
   std::optional<RegistrationLeafCalleeABI> Destructor;
   std::optional<RegistrationCopyCalleeABI> CopyConstructor;
+  /// Every runtime callback has closed scalar effects within this object's
+  /// declared bounds. The caller still proves the live initialized object;
+  /// decoding ThrowInfo alone never grants this exceptional-path authority.
+  bool PreservesDispatchBindings = false;
 
   std::array<const RegistrationLeafCalleeABI *, 2> callbacks() const {
     return {Destructor ? &*Destructor : nullptr,
@@ -310,9 +314,9 @@ struct RegistrationThrowCalleeABI {
   /// Exactly two null arguments reuse the active CRT exception. No new object
   /// or ThrowInfo is supplied, and the caller must prove an active catch.
   bool IsRethrow = false;
-  /// Separate exceptional-path evidence: only closed integer accesses and the
-  /// checked throw call, with no initializer, copy or destructor callback.
-  /// A rethrow still requires a live, independently proved scalar exception.
+  /// Separate exceptional-path evidence: closed integer accesses, the checked
+  /// throw call and bounded scalar runtime callbacks, with no initializer.
+  /// A rethrow still requires a live, independently proved exception object.
   bool PreservesDispatchBindings = false;
   coff_loader::X86IdentityCxxThrowInfo ThrowInfo;
   std::vector<ExceptionAddressRange> ImageReads;
