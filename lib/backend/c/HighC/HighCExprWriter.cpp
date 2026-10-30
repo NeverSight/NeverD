@@ -2528,8 +2528,9 @@ std::string HighCWriter::renderCallExpr(const HighExpr &E) {
   size_t PrintedArgs =
       Defined && !Defined->SourceTypeHint ? ArgCount : debugCallArgLimit(E);
   // So does a known external function's declaration.
-  if (const auto Declared = plainDeclarationArity(E))
-    PrintedArgs = std::max(PrintedArgs, *Declared);
+  const auto DeclaredArity = plainDeclarationArity(E);
+  if (DeclaredArity)
+    PrintedArgs = std::max(PrintedArgs, *DeclaredArity);
   const bool SourceRecord =
       !Defined && Callee &&
       ((Name == Callee->Name && includesHeaderOf(Name)) ||
@@ -2898,9 +2899,19 @@ std::string HighCWriter::renderCallExpr(const HighExpr &E) {
     // argument need not initialize the upper bytes a word-sized callee reads.
     // Strings and addresses already pass as pointers and keep their spelling.
     if (Imm && !PointerArgument && !DefinedParam &&
+        (!DeclaredArity || I >= *DeclaredArity) &&
         (!Prototype || I >= Prototype->ParamCount) && Op->Type &&
-        Op->Type->Kind == NdTypeKind::Int && Op->Type->Size > 4)
-      Arg = "(" + typeToC(Op->Type) + ")" + castOperand(exprStr(*Op));
+        Op->Type->Kind == NdTypeKind::Int && Op->Type->Size > 4) {
+      // An image constant may already print as a pointer or uintptr_t,
+      // whose width is the machine word's. Preserve that representation.
+      const bool PointerCarrier =
+          Op->Type->Size == pointerBytes(Opts.TheArch) &&
+          (printsAsPointer(Arg) ||
+           llvm::StringRef(Arg).starts_with("(uintptr_t)") ||
+           printsPointer(*Imm, Arg));
+      if (!PointerCarrier)
+        Arg = "(" + typeToC(Op->Type) + ")" + castOperand(exprStr(*Op));
+    }
     if (!Imm && !PointerArgument && Op->Type && Op->Type->Size >= 4 &&
         (!DefinedParam || (DefinedParam->Kind == NdTypeKind::Int &&
                            DefinedParam->Size <= Op->Type->Size)))
