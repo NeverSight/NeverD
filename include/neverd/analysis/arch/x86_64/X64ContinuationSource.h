@@ -256,8 +256,11 @@ enum class X64ContinuationProfile : uint8_t {
   /// profile.
   KernelEventsNoFaultV6,
   /// V6 plus Intel SYSENTER/SYSEXIT with SEP support and live SYSENTER MSRs.
-  /// SYSENTER accepts a valid CPL0..3 64-bit entry and installs CPL0; other
-  /// instructions retain the CPL0 entry domain. SYSEXIT returns to CPL3 in
+  /// SYSENTER accepts a valid CPL0..3 entry and installs CPL0; other
+  /// instructions retain the CPL0 entry domain. Canonical SYSENTER/SYSEXIT
+  /// also accept flat 16/32-bit compatibility entry with the full instruction
+  /// within CS.limit. SYSEXITQ and other steps still require 64-bit entry.
+  /// SYSEXIT returns to CPL3 in
   /// compatibility or 64-bit mode. Both exit before executing their target.
   /// Both accept RF/IOPL/VIF/VIP, require TF=0 and clear RF on execution.
   /// SYSENTER additionally clears IF (VM is not a valid long-mode input).

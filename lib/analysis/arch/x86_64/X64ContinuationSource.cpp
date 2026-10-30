@@ -1123,6 +1123,12 @@ buildInstruction(SpecializationInstruction Instruction,
       Instruction.Ops.front().Inputs[2] ==
           NdVar::reg(x86reg::RCX, Instruction.Ops.front().Inputs[1].Size) &&
       Instruction.Origin.Control == LowInstructionControl::Terminator;
+  // These unprefixed encodings have the same meaning in compatibility mode.
+  // REX-prefixed forms cannot share that entry domain: there REX is an opcode.
+  const bool CompatibilityFastEntry =
+      (Sysenter || Sysexit) && Instruction.NativeBytes.size() == 2 &&
+      Instruction.NativeBytes[0] == 0x0f &&
+      Instruction.NativeBytes[1] == (Sysenter ? 0x34 : 0x35);
   const auto Return =
       Events ? frameReturnInstruction(Instruction) : std::nullopt;
   const bool Iret = Return && Return->Interrupt;
@@ -1302,7 +1308,36 @@ buildInstruction(SpecializationInstruction Instruction,
     Guard.emit(NdOp::INT_AND, SegmentBits,
                {Attributes,
                 constant((Sysenter || UserInterrupt) ? 0x6098 : 0x60f8, 2)});
-    Guard.emit(NdOp::INT_NOTEQUAL, ModeBad, {SegmentBits, constant(0x2098, 2)});
+    const NdVar LongModeBad =
+        CompatibilityFastEntry ? Guard.temporary(1) : ModeBad;
+    Guard.emit(NdOp::INT_NOTEQUAL, LongModeBad,
+               {SegmentBits, constant(0x2098, 2)});
+    if (CompatibilityFastEntry) {
+      // The exported instruction address is also its CS-relative offset only
+      // with a flat code segment. Both compatibility defaults are permitted;
+      // the complete two-byte instruction must lie within the code limit.
+      const auto LegacyBits = Guard.temporary(2),
+                 LegacyModeBad = Guard.temporary(1);
+      const auto BaseBad = Guard.temporary(1), Limit = Guard.temporary();
+      const auto LimitBad = Guard.temporary(1), AddressBad = Guard.temporary(1);
+      const auto CompatibilityBad = Guard.temporary(1);
+      Guard.emit(NdOp::INT_AND, LegacyBits,
+                 {Attributes, constant(Sysenter ? 0x2098 : 0x20f8, 2)});
+      Guard.emit(NdOp::INT_NOTEQUAL, LegacyModeBad,
+                 {LegacyBits, constant(0x98, 2)});
+      Guard.emit(NdOp::INT_NOTEQUAL, BaseBad,
+                 {Guard.load(offsetof(StateV5, CS) + offsetof(Segment, Base)),
+                  constant(0)});
+      Guard.emit(
+          NdOp::INT_ZEXT, Limit,
+          {Guard.load(offsetof(StateV5, CS) + offsetof(Segment, Limit), 4)});
+      Guard.emit(NdOp::INT_LESS, LimitBad,
+                 {Limit, constant(Result.Address +
+                                  Instruction.NativeBytes.size() - 1)});
+      Guard.emit(NdOp::BOOL_OR, AddressBad, {BaseBad, LimitBad});
+      Guard.emit(NdOp::BOOL_OR, CompatibilityBad, {LegacyModeBad, AddressBad});
+      Guard.emit(NdOp::BOOL_AND, ModeBad, {LongModeBad, CompatibilityBad});
+    }
     Guard.emit(NdOp::BOOL_OR, SegmentBad, {CPLBad, ModeBad});
     Guard.emit(NdOp::BOOL_OR, AllBad, {Bad, SegmentBad});
     Bad = AllBad;

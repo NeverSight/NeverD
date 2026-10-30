@@ -273,7 +273,7 @@ test resumes through a coupled SS/RSP switch and uses the new stack.
 | ERETS, ERETU beyond explicit V9 | Native compiler interfaces and exact object encodings are available. Decoding now owns both IDs, and the explicit V9 continuation owns successful canonical returns, including ERETU compatibility targets, descriptor/caches, GS-base exchange, stack level and event outputs through both C routes. Conditional compatibility choices are profile-owned; ordinary source, CET, fault/event delivery and physical CPU transitions remain unqualified. |
 | UIRET faulting/native execution | Decoding and the explicit V8 continuation now own the successful canonical return, UIF feature selection, monitor invalidation and complete represented state through both C routes. Ordinary source, CET, fault delivery, RTM aborts and physical UINTR execution remain unqualified. |
 | RETF/RETFQ, IRET/IRETD/IRETQ | Ordinary source still lacks complete frame, privilege, segment and flag restoration. The separate [explicit x64 continuation](x64-continuation-source.md) V6 profile owns canonical 16/32/64-bit IRET and RETF (with or without imm16) from 64-bit entry to long-mode or compatibility CPL0..3, including hidden caches, descriptor accesses and outer-return segment invalidation. Compatibility returns own eight conditional GPR high-half choices and SS.B-dependent stack restoration/cleanup. All IRET widths pop five fields; word IRET retains AC/ID/VIF/VIP and clears RF. These returns accept RF, all IOPL values and VIF/VIP on entry while excluding TF. Raw frame RIP must be canonical before truncation. These instructions have no unconditional empty undefined-output audit. RETFQ preserves NMI blocking; IRETQ unblocks NMIs. Faulting execution, other raw high-RIP patterns, CET/FRED and legacy/compatibility source contexts remain unqualified. |
-| SYSENTER, SYSEXIT/SYSEXITQ, SYSRET/SYSRETQ, RSM | Ordinary source still lacks complete register, privilege, segment and SMM continuation state. The separate explicit x64 continuation V5/V6 profiles own canonical SYSRET/SYSRETQ with live STAR and CS/SS caches, flags and compatibility/64-bit target state. SYSRET explicitly consumes eight arbitrary values for the legacy GPR high halves; all defined bits are preserved or assigned as specified. The Intel V7 profile additionally owns canonical SYSENTER from CPL0–3 64-bit entry and SYSEXIT/SYSEXITQ from CPL0, with live CS/ESP/EIP MSRs, complete target caches, state and explicit stops. RF, all IOPL values and VIF/VIP are admitted on entry; TF still requires debug-trap delivery. Compatibility source contexts, legacy modes and faulting transitions remain unqualified; RSM still requires a full SMM state owner. |
+| SYSENTER, SYSEXIT/SYSEXITQ, SYSRET/SYSRETQ, RSM | Ordinary source still lacks complete register, privilege, segment and SMM continuation state. The separate explicit x64 continuation V5/V6 profiles own canonical SYSRET/SYSRETQ with live STAR and CS/SS caches, flags and compatibility/64-bit target state. SYSRET explicitly consumes eight arbitrary values for the legacy GPR high halves; all defined bits are preserved or assigned as specified. The Intel V7 profile additionally owns canonical SYSENTER from CPL0–3 and SYSEXIT/SYSEXITQ from CPL0, with live CS/ESP/EIP MSRs, complete target caches, state and explicit stops. Unprefixed SYSENTER/SYSEXIT also accept flat compatibility entry with either CS.D and a complete in-limit instruction. RF, all IOPL values and VIF/VIP are admitted on entry; TF still requires debug-trap delivery. Nonflat compatibility entry, legacy modes and faulting transitions remain unqualified; SYSRET is architecturally invalid in compatibility mode, and RSM still requires a full SMM state owner. |
 | BNDMK, BNDMOV, BNDCL, BNDCU, BNDCN, BNDLDX, BNDSTX | MPX bounds-register bank, bounds-table translation, enable state and #BR/partial-fault behavior. The old COPY/NOP approximations are removed. |
 | XACQUIRE/XRELEASE | HLE prefix ownership belongs to the associated memory operation. Prefixed LOCK operations, implicit-lock XCHG and XRELEASE MOV stores are explicitly refused before ordinary memory lowering; native transactional completion remains missing. |
 | XBEGIN and full RTM regions | The two-exit lift retains rel16 and rel32 fallbacks at the full code width, with conditional EAX updates. The pinned decoder's i386 displacement-sign errors are normalized before CFG discovery. Full register/memory checkpoint, nesting, fallback faults and hardware rollback remain unqualified; a status result alone does not establish these contracts. |
@@ -3187,3 +3187,28 @@ source ABI or a complete native rewritten-register context. Earlier profiles,
 compatibility entry, legacy modes, faults, CET/FRED, asynchronous events and
 SMM restoration retain their existing boundaries. The LLVM release and pins
 remain deferred until the other instruction contracts are complete.
+
+### Extended return flags and compatibility fast-system entry
+
+The [entry-flags qualification](evidence/x86-return-entry-flags-2026-10-30.json)
+admits RF, every IOPL value and VIF/VIP for the owned return/fast-system forms.
+Input TF remains excluded because debug-trap delivery is unowned. Word IRET
+retains AC/ID/VIF/VIP and clears input RF; wider IRET restores RF from the
+frame. RETF and SYSEXIT clear RF, and SYSENTER clears RF/IF. This corrects the
+earlier overbroad description of word IRET retaining RF: its previously
+qualified input domain required RF=0. The native frame matrix covers 27,648
+original instructions and 110,592 full-state/RAM comparisons; the integrated
+qualification passed 1,567 tests with no failures or skips.
+
+The [compatibility-entry qualification](evidence/x86-fast-system-compatibility-2026-10-30.json)
+adds canonical unprefixed SYSENTER/SYSEXIT from flat compatibility code with
+either CS.D. It checks CS.base and the complete instruction against CS.limit
+before effects; SYSEXITQ and other instructions retain their 64-bit entry
+requirements. SYSRET is architecturally invalid in compatibility mode.
+Independent KVM execution covers 5,760 original instructions and 23,040
+full-state/RAM comparisons. The SDK round trip stops at every selected
+SYSENTER/SYSEXIT boundary and consumes exactly one step per transfer.
+Eight NeverC and NeverC-to-LLVM C-output profiles at O0/O2 also pass.
+The final integrated run passed 1,569 tests with no failures or skips.
+Nonflat compatibility entry, legacy modes and the other remaining contracts
+above are unchanged; no LLVM release or pin update is claimed.

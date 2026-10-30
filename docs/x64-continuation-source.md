@@ -172,7 +172,8 @@ writes require processor-width canonical addresses. These are guest state
 updates and never write the executing host's system-call MSRs. The rules
 follow [Intel SDM Volume 4, Table 2-2](https://cdrdv2-public.intel.com/835781/325462-sdm-vol-1-2abcd-3abcd-4.pdf).
 
-Canonical `SYSENTER` (`0F 34`) accepts a valid CPL0–3 64-bit source context.
+Canonical `SYSENTER` (`0F 34`) accepts a valid CPL0–3 64-bit or flat
+compatibility source context, with either compatibility CS.D value.
 Nonconforming CS requires DPL equal to CPL; conforming CS permits DPL below
 or equal to CPL. CPL still comes from the live CS selector's RPL.
 It installs the live entry PC and SP, CPL0 flat CS/SS caches, clears IF/RF, and
@@ -186,6 +187,13 @@ install CPL3 CS/SS caches from the live CS MSR. The former takes EIP/ESP from
 EDX/ECX and supplies the same eight arbitrary legacy GPR high halves as SYSRET;
 the latter takes the full RDX/RCX and checks both against active paging.
 Both clear RF, preserve the other admitted flags and stop with status 6 before user code.
+Unprefixed `SYSEXIT` also accepts flat compatibility entry at CPL0; its operand
+semantics remain 32-bit with either CS.D value. `SYSEXITQ` requires 64-bit entry.
+Compatibility entry requires CS.base=0 and the whole two-byte instruction
+within CS.limit, so the exported address is also the architectural code offset.
+Other steps retain their earlier mode guards. A driver can therefore return
+through SYSEXIT to a selected SYSENTER stub and explicitly resume it; each
+transition still exits before executing its destination.
 Neither instruction reads descriptors or the old/new stack. Selector TI bits
 and 16-bit wraparound remain significant; null entry selectors refuse before
 any write. These transitions follow the SYSENTER/SYSEXIT instruction entries
@@ -193,8 +201,8 @@ in [Intel SDM Volume 2](https://cdrdv2-public.intel.com/835781/325462-sdm-vol-1-
 
 Other instructions retain V6's CPL0 entry requirements. SYSENTER, SYSEXIT and
 SYSRET accept RF, all IOPL values and VIF/VIP on entry. TF remains excluded
-because debug-trap delivery is unowned. Other instruction domains are unchanged. Compatibility
-source contexts, legacy modes, faults, CET/FRED, asynchronous events and SMM
+because debug-trap delivery is unowned. Other instruction domains are unchanged. Nonflat
+compatibility code, legacy modes, faults, CET/FRED, asynchronous events and SMM
 restoration are not added by V7. An opaque SYSENTER lift alone is not a proof of
 an ordinary C ABI or a full native register continuation.
 

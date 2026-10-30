@@ -213,6 +213,49 @@ int main(void) {
 }
 
 TEST_F(X64ContinuationExportTest,
+       CompatibilityFastSystemRoundTripStopsAtEveryTransition) {
+  load({0x0f, 0x34, 0x0f, 0x35, 0x90});
+  const std::string Request =
+      R"({"profile":"intel-fast-system-v7","mxcsr_mask":"0xffbf","paging_address_bits":48,"sysenter_msr_address_bits":48,"follow_internal_calls":true,"instructions":[4096,4098,4100]})";
+  for (bool LLVM : {false, true}) {
+    auto [Source, Manifest] = source(Request, LLVM, 7);
+    execute(Source, R"C(
+#include <stdlib.h>
+#define CHECK(c) do {if(!(c))abort();}while(0)
+int main(void) {
+  for(unsigned mode=0;mode<2;++mode) {
+    neverd_x64_state_v7 s={0},want;
+    s.PC=0x1000;s.RFlags=0x3d7ed7;s.MXCSR=0x1f80;
+    s.CS=(neverd_x64_segment){0,UINT32_MAX,27,0x80fb|(mode<<14)};
+    s.SS=(neverd_x64_segment){0,UINT32_MAX,35,0xc0f3};
+    s.SysenterCS=8;s.SysenterEIP=0x1002;s.SysenterESP=0x123456789abcULL;
+    for(unsigned i=0;i<16;++i)s.GPR[i]=0x123456789abcdef0ULL+i;
+    for(unsigned i=0;i<8;++i)s.Undefined[i]=0xdeadbeef00000000ULL+i;
+    s.GPR[1]=0x7654321000009000ULL;s.GPR[2]=0x1234567800001000ULL;
+    memset(s.ZMM,0xa5,sizeof(s.ZMM));
+    uint64_t budget=3;
+    want=s;want.PC=0x1002;want.GPR[4]=s.SysenterESP;want.RFlags&=~0x30200ULL;
+    want.CS=(neverd_x64_segment){0,UINT32_MAX,8,0xa09b};
+    want.SS=(neverd_x64_segment){0,UINT32_MAX,16,0xc093};
+    CHECK(neverd_x64_continue_v7(&s,&budget)==10&&budget==2&&!memcmp(&s,&want,sizeof(s)));
+    want=s;want.PC=0x1000;want.GPR[4]=0x9000;
+    for(unsigned i=0;i<8;++i)want.GPR[i]=(uint32_t)want.GPR[i]|(s.Undefined[i]<<32);
+    want.CS=(neverd_x64_segment){0,UINT32_MAX,27,0xc0fb};
+    want.SS=(neverd_x64_segment){0,UINT32_MAX,35,0xc0f3};
+    CHECK(neverd_x64_continue_v7(&s,&budget)==6&&budget==1&&!memcmp(&s,&want,sizeof(s)));
+    want=s;want.PC=0x1002;want.GPR[4]=s.SysenterESP;
+    want.CS=(neverd_x64_segment){0,UINT32_MAX,8,0xa09b};
+    want.SS=(neverd_x64_segment){0,UINT32_MAX,16,0xc093};
+    CHECK(neverd_x64_continue_v7(&s,&budget)==10&&budget==0&&!memcmp(&s,&want,sizeof(s)));
+    CHECK(neverd_x64_continue_v7(&s,&budget)==9&&!memcmp(&s,&want,sizeof(s)));
+  }
+  return 0;
+}
+)C");
+  }
+}
+
+TEST_F(X64ContinuationExportTest,
        FastSystemV7RetainsLiveMsrsAndStopsAtBothBoundaries) {
   load(
       {0x0f, 0x30, 0x0f, 0x32, 0x0f, 0x34, 0x0f, 0x35, 0x48, 0x0f, 0x35, 0x90});

@@ -84,13 +84,29 @@ int main(void) {
         CHECK(!memcmp(&s,&want,sizeof(s))&&!memcmp(memory,saved,sizeof(memory)));
       }
   for(unsigned cpl=0;cpl<4;++cpl)for(unsigned dpl=0;dpl<4;++dpl)
-    for(unsigned conforming=0;conforming<2;++conforming) {
+    for(unsigned conforming=0;conforming<2;++conforming)for(unsigned mode=0;mode<3;++mode) {
       fast_system_state_t s=fast_seed((uintptr_t)memory),want;
-      s.core.cs.selector=8|cpl;s.core.cs.attributes=0xa09b|(dpl<<5)|(conforming<<2);
+      s.core.cs.selector=8|cpl;s.core.cs.attributes=0x809b|(dpl<<5)|(conforming<<2)|
+                                                     ((mode==2)<<13)|((mode==1)<<14);
       s.core.ss.selector=16|cpl;s.core.ss.attributes=0xc093|(cpl<<5);
       s.core.gpr[1]=0x10000;s.core.gpr[2]=0x1800;
       want=s;memcpy(saved,memory,sizeof(memory));
       unsigned good=KIND==0?(conforming?dpl<=cpl:dpl==cpl):(cpl==0&&dpl==0);
+      good&=KIND!=2||mode==2;
+      if(good)fast_expect(&want,KIND);
+      CHECK(neverd_step_v7_1000(ARG(&s))==(good?(KIND==0?10:6):5));
+      CHECK(!memcmp(&s,&want,sizeof(s))&&!memcmp(memory,saved,sizeof(memory)));
+    }
+  const uint64_t bases[]={0,1,0xffffffffULL,0x100000000ULL,UINT64_MAX};
+  const uint32_t limits[]={0,0x1000,0x1001,UINT32_MAX};
+  for(unsigned mode=0;mode<3;++mode)for(unsigned base=0;base<5;++base)
+    for(unsigned limit=0;limit<4;++limit) {
+      fast_system_state_t s=fast_seed((uintptr_t)memory),want;
+      s.core.cs.attributes=0x809b|((mode==2)<<13)|((mode==1)<<14);
+      s.core.cs.base=bases[base];s.core.cs.limit=limits[limit];
+      s.core.gpr[1]=0x9000;s.core.gpr[2]=0x1800;
+      want=s;memcpy(saved,memory,sizeof(memory));
+      unsigned good=mode==2||(KIND!=2&&base==0&&limit>=2);
       if(good)fast_expect(&want,KIND);
       CHECK(neverd_step_v7_1000(ARG(&s))==(good?(KIND==0?10:6):5));
       CHECK(!memcmp(&s,&want,sizeof(s))&&!memcmp(memory,saved,sizeof(memory)));
@@ -248,6 +264,60 @@ int main(void) {
 )C";
   run({0x0f, 0x30, 0x0f, 0x32}, {0x1000, 0x1002}, Harness, false,
       fastSystemOptions(), {}, true);
+}
+
+TEST_F(X64ContinuationSourceTest,
+       CompatibilityFastSystemMatchesNativeModesAndCompleteState) {
+  for (unsigned Kind = 0; Kind != 2; ++Kind) {
+    std::string Harness = std::string(EventHarness) + FastSystemHarness;
+    Harness += "\n#define KIND " + std::to_string(Kind) + "\n";
+    Harness += R"C(
+int main(void) {
+  const uint32_t selectors[]={4,7,0xffff,0xa5a5000b};
+  const uint64_t flags[]={2,0x10002,0x3d7ed7,0x240ed7};
+  const uint64_t stacks[]={1,0xffffffffULL,0xffff800012345678ULL};
+  unsigned char before[4096];
+  for(unsigned mode=0;mode<2;++mode)for(unsigned context=0;context<(KIND?1:32);++context)
+    for(unsigned sel=0;sel<4;++sel)for(unsigned flag=0;flag<4;++flag)
+      for(unsigned stack=0;stack<3;++stack) {
+        unsigned cpl=context&3,dpl=(context>>2)&3,conforming=context>>4;
+        if(conforming?dpl>cpl:dpl!=cpl)continue;
+        fast_system_state_t s=fast_seed(0x8000),q,want;
+        s.sysenter_cs=selectors[sel];s.sysenter_esp=stacks[stack];
+        s.core.flags=flags[flag];s.core.nmi_blocked=flag&1;
+        s.core.cs.selector=8|cpl;
+        s.core.cs.attributes=0x809b|(mode<<14)|(dpl<<5)|(conforming<<2);
+        s.core.ss.selector=16|cpl;s.core.ss.attributes=0xc093|(cpl<<5);
+        s.core.ds=s.core.es=s.core.ss;
+        s.core.fs=(event_metadata_t){UINT32_MAX,(uint16_t)(16|cpl),(uint16_t)(0xc093|(cpl<<5))};
+        s.core.gs=s.core.fs;
+        s.core.gpr[1]=stacks[stack];s.core.gpr[2]=0x1234567800001800ULL;
+        q=s;memcpy(before,(void *)0x8000,sizeof(before));
+        __asm__ volatile("outb %%al,$0xe9"::"a"(9+KIND),"D"(&q):"memory");
+        want=s;
+        if(KIND)for(unsigned i=0;i<8;++i)
+          want.core.arbitrary[i]=q.core.arbitrary[i]=q.core.gpr[i]>>32;
+        fast_expect(&want,KIND);
+        CHECK(!memcmp(&q,&want,sizeof(q)));
+        for(unsigned choice=0;choice<4;++choice) {
+          fast_system_state_t actual=s;want=q;
+          for(unsigned i=0;i<8;++i) {
+            uint64_t value=choice==0?q.core.gpr[i]>>32:choice==1?0:
+                           choice==2?UINT64_MAX:0xdeadbeef12345678ULL+i;
+            actual.core.arbitrary[i]=want.core.arbitrary[i]=value;
+            if(KIND)want.core.gpr[i]=(uint32_t)want.core.gpr[i]|(value<<32);
+          }
+          CHECK(neverd_step_v7_1000(ARG(&actual))==(KIND?6:10));
+          CHECK(!memcmp(&actual,&want,sizeof(actual)));
+          CHECK(!memcmp(before,(void *)0x8000,sizeof(before)));
+        }
+      }
+  return 0;
+}
+)C";
+    run({0x0f, uint8_t(Kind ? 0x35 : 0x34)}, {0x1000}, Harness, false,
+        fastSystemOptions(), {}, true);
+  }
 }
 
 TEST_F(X64ContinuationSourceTest, FastSystemMatchesNativePrivilegeContexts) {

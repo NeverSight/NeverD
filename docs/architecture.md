@@ -15113,6 +15113,12 @@ interface remains separate. See [the invocation contract](x64-continuation-sourc
 SYSENTER/SYSEXIT target contexts, including their shared flat segment-cache
 construction. The V7 profile adds live SYSENTER MSRs after the unchanged V6
 layout; the state transport's MSR owner handles their reads and writes.
+Canonical unprefixed SYSENTER/SYSEXIT also admit flat compatibility entry
+with either CS.D, after validating the complete instruction against CS.limit.
+Only these mode-independent bytes gain that entry domain; a REX byte is a
+different instruction in compatibility mode. Other instructions retain their
+64-bit entry guards. SYSENTER still installs the full IA-32e RIP/RSP and a
+64-bit CPL0 code cache; SYSEXIT retains its existing compatibility choices.
 Profile inheritance is declared once in the continuation source owner so
 controls, flags, fault addresses, returns and event state advance together.
 The exporter selects distinct versioned layouts and drivers from that owner.

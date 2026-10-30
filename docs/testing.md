@@ -9464,6 +9464,16 @@ The SYSRET and fast-system native matrices include the enlarged input domain;
 TF remains an explicit debug-delivery boundary. Word IRET clears input RF
 while retaining AC/ID/VIF/VIP; wider IRET restores RF from the frame.
 
+`CompatibilityFastSystemMatchesNativeModesAndCompleteState` compares original
+SYSENTER/SYSEXIT from both compatibility defaults, all valid entry privilege
+combinations, selector wrapping, input flags and stack values. The native
+fixture also verifies all mapped RAM, live MSRs and its initialized XSAVE image.
+Portable tests reject nonflat compatibility CS, short code limits, invalid
+privilege/mode combinations and SYSEXITQ compatibility entry before writes.
+The public export regression runs a SYSENTER/SYSEXIT/SYSENTER round trip through
+both C routes, checking the entire state and an exact stop and budget decrement
+at each transition even when its destination is selected.
+
 The native speculation and descriptor fixtures compile both source routes at
 O0/O2 into freestanding guests and execute them at CPL0 using Linux x64 KVM.
 They check real SPEC_CTRL readback, PRED_CMD writes, repeated writes, native
