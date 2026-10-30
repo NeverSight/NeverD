@@ -14992,6 +14992,17 @@ code.
 `NeverDRelocatedFunctionEntryTests` checks LLVM's shared entry evidence across
 x86, x64, Thumb and AArch64 with PE, ELF and Mach-O images. It covers bounded
 relocation proofs, complete CFG tables, malformed metadata and cache reuse.
+Its `COFFIndexedTables` cases cover short and long in-code pointer tables,
+constructor sentinels, exact relocation gaps, conflicting instruction bytes,
+unreachable or non-reading operands, existing pointer-run classifications,
+out-of-line callbacks and jump-table ownership. A synthetic linked PE exercises
+the loader through function discovery. LLVM cases require runtime indices in
+escaped table addresses, including code segments beyond the embedding limit,
+and reject unrelated code identities and unresolved pointers across formats.
+The focused target also runs `PointerRelocationBatch` to check the existing
+relocation classification contract. The pointer-boundary target's
+`WidenedIndexDoesNotAuthorizeMixedCallableAndScalarSlots` keeps a zero-extended
+index from bypassing callable-slot validation in mixed records.
 `CFGMetadataAuthenticatesEntriesWithoutRelocations` checks that metadata alone
 identifies a code address, while its absence still refuses that address.
 `RelocationsDoNotAuthenticateContinuationStarts` and

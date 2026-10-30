@@ -3139,6 +3139,20 @@ module, so whole-module LLVM-C declares each global an earlier initializer
   precedence. The same `DataInCode` and data-pointer provenance is published for
   full and restricted loads across PE, ELF and Mach-O; an unknown executable
   target is not made data merely because it lacks a function symbol.
+For linked x86/x64 COFF images, indexed pointer-table evidence comes from a
+bounded walk of reachable, file-backed instructions. Only full-pointer reads
+with an image-relative fixed base and pointer-sized scale identify storage;
+LEA, segmented accesses, writes and unreachable instruction-shaped bytes do
+not. A table owns its contiguous relocated slots, stopping at gaps, decoded
+instructions and section boundaries. Exhausting the loader's evidence budget
+publishes no partial classification. CALL readers record exact callable-slot
+candidates; JMP readers record their source instruction so function discovery
+can associate case labels with the dispatcher even when the table is in
+`.rdata`. Ordinary out-of-line callbacks still require callable-entry
+verification. Neither table proximity nor sharing its executable segment
+grants another address table identity. LLVM preserves runtime offsets when a
+table address escapes and rejects unresolved code-pointer fields instead of
+retaining original image addresses.
 A two-level switch reads a byte index table laid among the code
 (`movzx r, byte [sel + table]`) before the pointer-wide jump table it
 indexes. The byte table's displacement lands in an executable segment, so a

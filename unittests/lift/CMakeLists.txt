@@ -2470,6 +2470,8 @@ add_neverd_unittest(NeverDRelocatedLiteralTests
 
 add_neverd_unittest(NeverDRelocatedFunctionEntryTests
   format/RelocatedFunctionEntryTests.cpp
+  format/COFFIndexedTableTests.cpp
+  format/PointerRelocationBatchTests.cpp
   LINK_COMPONENTS IRLow BackendLLVM LibC Lift
 )
 

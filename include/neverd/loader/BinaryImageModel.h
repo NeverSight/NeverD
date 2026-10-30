@@ -517,14 +517,13 @@ struct BinaryImage {
   /// array) is recovered, since it has no comparison guard to bound it and
   /// 4-byte entries are otherwise ambiguous with PIC self-relative offsets.
   std::set<uint64_t> CodePtrRelocSlots;
-  /// Bases of tables the code reads through a runtime-indexed fixed-base
-  /// memory operand of a CALL instruction — `call [base+idx*s]` — where the
-  /// base lies in an executable section (coff_loader::
-  /// recordIndexedTableBasesInCode). Such a table holds callable entries
-  /// (MinGW's CRT constructor list among the code), never another function's
-  /// case labels, so its relocation slots promote their targets directly as
-  /// callback candidates instead of joining the jump-table label analysis.
-  std::set<uint64_t> CallDispatchTableBases;
+  /// Exact relocated slots of a contiguous table read by an authenticated
+  /// indexed CALL. The loader records storage; callable-entry verification
+  /// still owns admission of each target.
+  std::set<uint64_t> CallDispatchRelocSlots;
+  /// Exact jump-table slots and the instructions that dispatch through them.
+  /// A table's storage section does not identify its owning function.
+  std::map<uint64_t, std::set<uint64_t>> JumpDispatchTableSources;
   /// Virtual addresses of relocation slots that hold an absolute pointer into
   /// mapped non-code data (R_386_32 / R_ARM_ABS32 / R_X86_64_64 /
   /// R_AARCH64_ABS64, or their Mach-O dyld rebase equivalents).  These are the

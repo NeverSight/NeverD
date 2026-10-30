@@ -179,10 +179,9 @@ void recordConstantCodeSlots(BinaryImage &Img);
 /// jump table so, after its function.
 void recordRelocatedPointerRunsInCode(BinaryImage &Img);
 
-/// Reclassify the relocation-covered words of tables the code reads through a
-/// runtime-indexed fixed-base memory operand in an executable section: those
-/// words are data the linker placed among the code, never instruction
-/// operands.
+/// Authenticate indexed full-pointer reads from reachable instructions.
+/// Reclassify only complete contiguous relocation runs among code, recording
+/// exact CALL slots and JMP source instructions for function discovery.
 void recordIndexedTableBasesInCode(BinaryImage &Img);
 
 /// Parse one delay-import descriptor from the already mapped image.  Supports
