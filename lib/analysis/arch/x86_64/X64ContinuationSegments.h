@@ -17,9 +17,25 @@
 #include <cstddef>
 #include <cstdint>
 #include <initializer_list>
+#include <iterator>
 #include <optional>
+#include <vector>
 
 namespace neverd::analysis::detail {
+
+/// Encoding-order choices shared by profile-owned compatibility returns.
+/// FRED explicitly restores every RSP bit; legacy returns do not define its
+/// upper half after the mode switch.
+inline std::vector<X64ContinuationCompatibilityChoice>
+x64CompatibilityChoices(bool RestoresFullSP) {
+  std::vector<X64ContinuationCompatibilityChoice> Choices;
+  for (uint8_t I = 0; I != std::size(X64ContinuationStateV1{}.Undefined); ++I) {
+    const auto Register = x86reg::generalReg(I);
+    if (!RestoresFullSP || Register != x86reg::RSP)
+      Choices.push_back({I, NdVar::reg(Register, 8)});
+  }
+  return Choices;
+}
 
 /// Standard hidden caches shared by SYSRET/SYSENTER/SYSEXIT and FRED.
 template <class Writer>
@@ -202,14 +218,13 @@ protected:
     return op(NdOp::INT_OR, {Unusable, choose(Invalidate, k(Bit), k(0))});
   }
 
-  Descriptor returnCode(NdVar CS, NdVar CPL, bool AllowCompatibility = false) {
+  Descriptor returnCode(NdVar CS, NdVar CPL) {
     W.rejectIf(eq(masked(CS, 0xfffc), k(0)));
     const auto Code = descriptor(CS);
     const auto Access = shifted(Code.Value, 40);
     const auto DPL = masked(shifted(Access, 5), 3);
     W.rejectIf(ne(masked(Access, 0x98), k(0x98)));
-    const auto Mode = masked(Access, 0x6000);
-    W.rejectIf(AllowCompatibility ? eq(Mode, k(0x6000)) : ne(Mode, k(0x2000)));
+    W.rejectIf(eq(masked(Access, 0x6000), k(0x6000)));
     W.rejectIf(
         choose(ne(masked(Access, 4), k(0)), less(CPL, DPL), ne(CPL, DPL)));
     AccessedAddress = op(NdOp::INT_ADD, {Code.Address, k(5)});

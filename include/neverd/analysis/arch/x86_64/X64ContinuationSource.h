@@ -227,23 +227,28 @@ enum class X64ContinuationProfile : uint8_t {
   /// events remain disabled. Earlier state layouts are never extended.
   KernelReturnNoFaultV5,
   /// V5 plus live GDT/LDT/IDT/TSS RAM and explicit segment caches. IRETQ and
-  /// canonical RETFQ (with or without imm16) may return to 64-bit code at
-  /// CPL0..3. RETFQ preserves NMI blocking and applies unsigned stack cleanup;
-  /// IRETQ unblocks NMIs. INT3 and canonical INT imm8 enter a CPL0 64-bit
-  /// interrupt or trap gate, with any IST. They exit before target execution.
-  /// NMI blocking is explicit; no NMI is delivered. CET/FRED, faulting
-  /// execution, MMIO, concurrent writers and asynchronous events remain outside
-  /// the domain. Descriptor accessed-bit writes may alias the frame or TSS and
-  /// retain their instruction-local ordering. No host privilege transfer is
-  /// made. Segment caches must describe an architecturally valid entry context.
-  /// Software interrupts accept TF/RF, all IOPL values and VIF/VIP in the input
-  /// flags. Other steps retain the earlier entry-flags domain. IRETQ may
-  /// produce these flags but exits before their target-instruction effects.
-  /// LSS/LFS/LGS use Intel 16/32/64-bit operand rules and own selector loads,
-  /// descriptor caches and coupled GPR writes. LSS accepts null SS at CPL0;
-  /// unlike MOV/POP SS, it does not inhibit subsequent interrupts or debug
-  /// events. Null FS/GS loads require an explicit base policy below.
-  /// Compatibility-mode loads remain outside this profile.
+  /// canonical RETFQ (with or without imm16) may return to 64-bit or
+  /// compatibility code at CPL0..3. The raw saved RIP must be canonical;
+  /// compatibility targets use its low 32 bits within the CS limit. Their
+  /// eight conditional slots choose legacy GPR high halves, including RSP.
+  /// Target SS.B controls stack restoration/cleanup; 16-bit stacks retain
+  /// original ESP[31:16]. RETFQ preserves NMI blocking and applies unsigned
+  /// cleanup; IRETQ unblocks NMIs. INT3 and canonical INT imm8 enter a CPL0
+  /// 64-bit interrupt or trap gate, with any IST. They exit before target
+  /// execution. NMI blocking is explicit; no NMI is delivered. CET/FRED,
+  /// faulting execution, MMIO, concurrent writers and asynchronous events
+  /// remain outside the domain. Descriptor accessed-bit writes may alias the
+  /// frame or TSS and retain their instruction-local ordering. No host
+  /// privilege transfer is made. Segment caches must describe an
+  /// architecturally valid entry context. Software interrupts accept TF/RF, all
+  /// IOPL values and VIF/VIP in the input flags. Other steps retain the earlier
+  /// entry-flags domain. IRETQ may produce these flags but exits before their
+  /// target-instruction effects. LSS/LFS/LGS use Intel 16/32/64-bit operand
+  /// rules and own selector loads, descriptor caches and coupled GPR writes.
+  /// LSS accepts null SS at CPL0; unlike MOV/POP SS, it does not inhibit
+  /// subsequent interrupts or debug events. Null FS/GS loads require an
+  /// explicit base policy below. Compatibility-mode loads remain outside this
+  /// profile.
   KernelEventsNoFaultV6,
   /// V6 plus Intel SYSENTER/SYSEXIT with SEP support and live SYSENTER MSRs.
   /// SYSENTER accepts a valid CPL0..3 64-bit entry and installs CPL0; other

@@ -1132,9 +1132,9 @@ buildInstruction(SpecializationInstruction Instruction,
   if (FredReturnState && !FredReturn)
     RequireNative("the FRED return profile only owns canonical ERETS/ERETU");
   // These exact frame shapes have no unconditional empty undefined-output
-  // audit: their live CS descriptor may select compatibility mode. V6's shared
-  // descriptor owner checks CS.L=1 and CS.D=0 before any write, so only this
-  // bounded continuation can discharge the target-mode condition.
+  // audit: their live CS descriptor may select compatibility mode. Only the
+  // bounded profile can validate that descriptor and own the conditional
+  // GPR-high-half choices; no native LowIR certificate is inferred here.
   const bool OwnedFrameReturn =
       (Iret || FarReturn) &&
       Instruction.UndefinedEffects.Coverage == LowUndefinedCoverage::Missing &&
@@ -1359,9 +1359,9 @@ buildInstruction(SpecializationInstruction Instruction,
   } else if (Iret || FarReturn || Interrupt || FarPointer) {
     detail::X64ContinuationEvents<Writer> Event(W, *Options.PagingAddressBits);
     if (Iret)
-      Event.iret();
+      Result.CompatibilityChoices = Event.iret();
     else if (FarReturn)
-      Event.farReturn(*FarReturn);
+      Result.CompatibilityChoices = Event.farReturn(*FarReturn);
     else if (FarPointer)
       Event.farPointerLoad(*FarPointer, Instruction.Fallthrough.Address,
                            Options.NullSegmentBasePolicy);

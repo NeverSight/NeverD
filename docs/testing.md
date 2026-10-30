@@ -9425,6 +9425,21 @@ target and reject reentry in the wrong execution mode.
 The [compatibility qualification record](evidence/x86-fred-compatibility-2026-10-30.json)
 records 9,728 new state/RAM cases and the 1,554-test integration run.
 
+`X64FrameReturnContinuationTests.inc` owns the IRETQ/RETFQ compatibility
+fixtures. Independent original instructions on KVM provide complete defined
+state and RAM results across CPL0..3, GDT/LDT, both CS.D and SS.B values,
+canonical frame RIP high halves, stack-boundary carries and unsigned cleanup.
+Independent high-half choices include RSP and retain every defined low bit.
+Descriptor/frame overlap checks the CS accessed write before later stack reads.
+Portable sanitizer cases check code bases, effective limits, invalid mode bits,
+null stacks and unchanged state/RAM on profile refusal. Raw noncanonical RIP
+patterns remain explicitly outside the legacy profile's qualified domain.
+The [legacy compatibility qualification record](evidence/x86-legacy-compatibility-returns-2026-10-30.json)
+records 9,312 original instructions, 37,248 paired state/RAM comparisons,
+12,288 portable limit cases, 92 additional refusals and the 1,557-test
+integration run with no failures or skips. The legacy KVM oracle does not
+independently sample arbitrary full XSAVE/vector banks.
+
 The native speculation and descriptor fixtures compile both source routes at
 O0/O2 into freestanding guests and execute them at CPL0 using Linux x64 KVM.
 They check real SPEC_CTRL readback, PRED_CMD writes, repeated writes, native
@@ -17455,6 +17470,12 @@ and CLI through both C routes. Generated C runs at O0/O2 with ASan/UBSan,
 including physical CALL bytes, callback-selected replacement stacks, reentry,
 internal and external jumps, loop-budget exhaustion and unchanged native and
 invalid-state boundaries. IRETQ consumes exactly one successful driver step.
+`InternalCallsAndReturnsFollowChangedPhysicalFrames` composes selected CALL/RET
+targets across replacement stacks, changed return PCs and indirect recursion.
+It checks exact exhausted budgets, external transfers on the final step,
+omitted-callee reentry and unchanged native/refusal state. The V6–V9 context
+transition checks retain their stopping boundaries with internal-call following
+enabled; neither a selected target nor remaining budget may execute it.
 The suite also checks selected CFG export without an ordinary return proof,
 strict request rejection, source/manifest hash binding and SDK/CLI parity.
 Run `NeverDX64ContinuationSourceTests` for the independent privileged-instruction
@@ -17613,3 +17634,7 @@ Changed LLVM bodies and image metadata must refuse the native projection.
 Pair this target with the Windows call-contract, source-entry, C pointer,
 internal-call and pipeline-outcome suites. Other hosts compile the native
 source but do not qualify privileged execution.
+
+`InterpreterMachineRegionSourceTest.ArchitecturalChoiceSource*` executes both C routes at O0/O2 with ASan/UBSan. Compaction regressions compare complete state, memory and records after branch-arm failures and a later loop visit. A 48-instruction sequence checks success, exhaustion and mismatch at early, middle and final records. A separate 3300-instruction case exceeds the former wrapper block capacity and checks both C exports without compiling them. Run `NeverDInterpreterMachineStateTests`; these owned fixtures do not certify an arbitrary native function.
+
+`MedMutableSource.SharedRejectionChainsPreserveEveryCommittedPrefix` checks a 2048-stage conditional chain with two shared rejection exits in forward and reversed block layouts. Both C routes run at O0/O2 with UBSan, comparing return values and committed guest-memory prefixes at early, middle and final failures and on success.

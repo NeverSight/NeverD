@@ -9552,8 +9552,8 @@ separate from the processor's MSR canonical width.
 
 `KernelEventsNoFaultV6` has its own 2,496-byte layout. It adds live GDTR/IDTR,
 LDTR/TR caches, DS/ES and FS/GS metadata, segment usability and NMI blocking.
-FS/GS bases retain their existing single owner. IRETQ validates a 64-bit
-return context at CPL0..3, restores all five frame words, applies outer-return
+FS/GS bases retain their existing single owner. IRETQ validates a long-mode or
+compatibility return context at CPL0..3, restores all five frame words, applies outer-return
 segment invalidation and unblocks NMIs. Its restored RSP is not prematurely
 required to be canonical. INT3 and canonical INT imm8 read the selected live
 IDT gate, select and align the current or IST stack, write the five-word frame
@@ -9579,9 +9579,13 @@ for these event transitions.
 Neither IRETQ nor RETFQ has an unconditional empty undefined-output audit:
 their live return descriptors may select compatibility mode and make legacy
 GPR high halves arbitrary. The earlier generic audit incorrectly erased this
-condition. V6's descriptor owner requires CS.L=1 and CS.D=0 before any write;
-that bounded profile owns its empty arbitrary-effect list. Ordinary LowIR
-keeps incomplete coverage and receives no native-preservation certificate.
+condition. V6's descriptor owner validates the live target mode and binds
+eight conditional high-half choices for compatibility returns. Long-mode
+returns preserve those bits. Ordinary LowIR keeps incomplete coverage and
+receives no native-preservation certificate. The raw frame RIP must be canonical
+at the declared paging width; compatibility mode then uses its low 32 bits and
+effective code limit. Stack restoration and cleanup use SS.B, preserving the
+original ESP[31:16] for a 16-bit stack.
 
 `X64ContinuationEvents` owns these transitions in LowIR above both C routes.
 Validation precedes all state and memory writes. Deferred descriptor accessed
@@ -9590,7 +9594,7 @@ partial commit on rejection. An already-accessed descriptor does not acquire
 a store, so read-only tables remain usable. Null or invalidated segments expose
 their selectors and usability; ignored hidden-cache bytes do not assert an
 Intel-specific clearing pattern. The nonfaulting RAM contract still excludes
-CET/FRED, compatibility returns, concurrent writers, MMIO and asynchronous
+CET/FRED, noncanonical raw return RIP, concurrent writers, MMIO and asynchronous
 execution. Input segment caches must describe a valid hardware context.
 Software interrupts admit the full defined long-mode flags set; other steps retain the
 previous input flag restrictions. Fault delivery remains outside this profile.
@@ -9762,6 +9766,8 @@ Recovery also exposes `--vm-chain-transfers=N` (default 0) and `--vm-no-control-
 Large recovered functions that exceed the SSA construction limit can use `--llvm` through a bounded scalar mutable-storage contract. Entry inputs, loop-carried values and earlier reads retain their meaning. Unsupported implicit state, vector-register parameters, image relocation, ambiguous storage and malformed control fail explicitly; HighC lowers this subset to explicit assignments and CFG edges, capturing arguments once before the entry label. Adjacent plain copies may coalesce only when the later copy cannot read the overwritten value. Source output still uses the existing machine-state contract and adds no equivalence certificate.
 
 `analyzeMedMutableSource` owns normalized CFG validation, storage identities and conservative entry-byte requirements. These requirements are upper bounds on reads, not positive observability evidence. LLVM validates before module scans and reuses the plan to initialize entry values once. Block/value products and propagation work have separate bounds. C forwarding uses exact earlier stores for each load, with matching types and no partial aliases; cross-block joins retain explicit storage. Admission allows up to 16384 blocks while retaining the independent storage-matrix and propagation-work budgets.
+
+SSA graphs exceeding the existing HighC structuring bounds retain blockwise control flow through final goto cleanup. The fallback does not splice large continuation regions again; required exception processing and entry anchors remain. Mutable-storage lowering keeps its separate validated path.
 
 For validated mutable bodies, LLVM forwards exact private-slot values within an append-only basic block and keeps its final stores. Entry setup and block, function and module boundaries remain separate. Guest memory accesses stay explicit. C emission bounds scalar expression expansion and immediate-fold work, retaining named intermediates. Foldable constant expressions use LLVM’s target layout; unsupported expressions fail explicitly. Designated mutable return values, including zero, cannot become void returns.
 
@@ -15083,8 +15089,12 @@ LowIR audits preserve instruction selection for rejected functions separately
 from admitted LowFuncs. Unsupported sites remain in that selection and decode
 failures remain explicit; the state exporter independently relifts every byte
 before emission. This metadata grants no ordinary source or native rewrite
-admission. The driver owns only dispatch and instruction accounting: successful calls,
-returns, exceptions and privilege transitions each consume one step and stop.
+admission. The driver owns only dispatch and instruction accounting. Calls and
+returns stop by default. With `follow_internal_calls`, the driver follows their
+actual post-transfer PC only if selected, retaining the physical stack and all
+guest mutations without a host call stack or lexical-return assumption. External
+calls/returns and all context transitions still stop, including when the last
+budget unit completes the transfer. Each successful instruction consumes one step.
 Native requests and invalid invocations execute nothing and consume none.
 Both C routes include a state layout checked against the semantic owner and
 an exact byte manifest bound to the emitted source hash. The ordinary source
@@ -15111,6 +15121,12 @@ determines CS.L. They are separate from the original instruction's missing
 LowIR arbitrary-output certificate. The same choice records drive state
 lowering and manifest slots; ERETU's explicitly restored RSP has no arbitrary
 high-half slot.
+The legacy event owner uses the same encoding-order choice inventory for
+IRETQ/RETFQ compatibility returns, including RSP's high half. Its stack owner
+keeps the target SS.B width and original ESP[31:16] distinct from frame operand
+size and parameter cleanup. Target mode, limit and null-stack checks finish
+before descriptor or state publication. Neither emitter reconstructs these
+decisions from an opaque intrinsic or assumes a preserved high register bank.
 The version-aware state writer transports monitor invalidation for UIRET,
 ERETU and the inherited legacy returns; each return owner decides whether the
 architectural transition invalidates it. Earlier layouts receive no monitor
@@ -15188,3 +15204,5 @@ separate. LLVM C checks that the retained inline assembly and original image
 still match before printing the bridge; body fragments require a complete
 native function. Unknown ordinary calls and physical interrupt/system entry
 return proofs retain their existing admission rules.
+
+LLVMC indexes LLVM block order once per immutable function projection. Exclusive skip/else-if layout checks reuse that index instead of scanning the function per candidate. Selecting another function rebuilds the index; branch semantics and source limits are unchanged.

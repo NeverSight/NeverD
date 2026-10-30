@@ -426,6 +426,66 @@ TEST(MedMutableSource, LargerBlockCeilingRetainsIndependentStorageBudgets) {
   EXPECT_NE(Error.find("storage matrix budget"), std::string::npos);
 }
 
+TEST(MedMutableSource, SharedRejectionChainsPreserveEveryCommittedPrefix) {
+  constexpr unsigned Stages = 2048;
+  for (bool ReverseBlocks : {false, true}) {
+    auto F = base(Stages + 3);
+    parameter(F, x86reg::RDI);
+    parameter(F, x86reg::RSI);
+    const auto Input = reg(10, x86reg::RDI);
+    const auto Memory = reg(11, x86reg::RSI);
+    const auto Result = reg(12, x86reg::RAX);
+    const auto Reject = temp(13, 1);
+    F.Blocks[0].Ops.push_back(
+        op(NdOp::COPY, Result, {MedVar::makeConst(0, 8)}));
+    for (unsigned I = 0; I < Stages; ++I) {
+      auto &Block = F.Blocks[I];
+      Block.Ops.push_back(
+          op(NdOp::INT_ADD, Result, {Result, MedVar::makeConst(I + 1, 8)}));
+      Block.Ops.push_back(op(NdOp::STORE, {}, {Memory, Result}));
+      Block.Ops.push_back(
+          op(NdOp::INT_EQUAL, Reject, {Input, MedVar::makeConst(I, 8)}));
+      const unsigned Failure = Stages + 1 + (I % 2);
+      Block.Ops.push_back(
+          op(NdOp::COND_BR, {},
+             {MedVar::makeConst(F.Blocks[Failure].StartAddr, 8), Reject}));
+      connect(F, I, {int(I + 1), int(Failure)});
+    }
+    F.Blocks[Stages].Ops = {op(NdOp::RETURN, {})};
+    for (unsigned I = 0; I < 2; ++I)
+      F.Blocks[Stages + 1 + I].Ops = {
+          op(NdOp::INT_ADD, Result,
+             {Result, MedVar::makeConst((I + 1) * 0x10000, 8)}),
+          op(NdOp::RETURN, {})};
+    if (ReverseBlocks) {
+      std::reverse(F.Blocks.begin() + 1, F.Blocks.end());
+      const auto Remap = [&](int ID) {
+        return ID ? int(F.Blocks.size()) - ID : 0;
+      };
+      for (auto &Block : F.Blocks) {
+        Block.Id = Remap(Block.Id);
+        for (int &ID : Block.Preds)
+          ID = Remap(ID);
+        for (int &ID : Block.Succs)
+          ID = Remap(ID);
+      }
+    }
+    const auto Main =
+        "\nint main(void) {\n"
+        "const uint64_t stages=" +
+        std::to_string(Stages) +
+        ";\n"
+        "const uint64_t inputs[]={0,1,stages/2,stages-1,stages,UINT64_MAX};\n"
+        "for(unsigned i=0;i<6;++i) { uint64_t memory=UINT64_MAX;\n"
+        "const uint64_t count=inputs[i]<stages ? inputs[i]+1 : stages;\n"
+        "const uint64_t prefix=count*(count+1)/2;\n"
+        "const uint64_t extra=inputs[i]<stages ? (1+inputs[i]%2)*0x10000 : 0;\n"
+        "if(mutable_probe(inputs[i],(uintptr_t)&memory)!=prefix+extra || "
+        "memory!=prefix) return 1; } return 0; }\n";
+    compileAndRun(F, Main.c_str());
+  }
+}
+
 TEST(MedMutableSource, EntryBackedgeCannotReinitializeMutableArgument) {
   auto F = base(2);
   parameter(F, x86reg::RDI);

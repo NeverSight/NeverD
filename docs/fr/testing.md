@@ -2399,3 +2399,7 @@ Les emplacements de pile synthétiques LLVM C conservent les 128 bits écrits av
 <!-- i18n-section: mutable-alignment-guards -->
 
 `MedMutableSource.AlignmentChecks*` exécute les entrées alignées et les conditions inactives dans les deux chemins C à O0/O2, exige un piège pour les entrées non alignées actives et rejette les largeurs, alignements, sorties et espaces d’adressage incorrects.
+
+`InterpreterMachineRegionSourceTest.ArchitecturalChoiceSource*` exécute les deux sorties C à O0/O2 avec ASan/UBSan. Les régressions comparent l’état complet, la mémoire et les enregistrements après des échecs dans les deux branches et une nouvelle visite de boucle. Une séquence de 48 instructions vérifie succès, épuisement et discordance au début, au milieu et à la fin. Un cas distinct de 3300 instructions dépasse l’ancienne capacité en blocs et vérifie les deux exports C sans les compiler. Exécuter `NeverDInterpreterMachineStateTests` ; ces fixtures internes ne certifient pas une fonction native arbitraire.
+
+`MedMutableSource.SharedRejectionChainsPreserveEveryCommittedPrefix` vérifie une chaîne de 2048 conditions avec deux sorties d’échec partagées, dans l’ordre normal et inversé des blocs. Les deux voies C sont exécutées à O0/O2 avec UBSan ; les valeurs de retour et les préfixes de mémoire invitée déjà écrits sont comparés lors des échecs initiaux, intermédiaires, finaux et du succès.

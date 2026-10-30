@@ -71,6 +71,22 @@ The driver continues ordinary instructions and jumps to listed addresses. Each
 successful instruction consumes one budget unit, including a stopping transfer.
 A native request or invalid-state refusal executes nothing and consumes none.
 
+Set `"follow_internal_calls": true` to compose CALL and RET inside the selected
+region. The default is `false`, which stops at every CALL and RET. The composed
+driver follows the actual post-instruction PC, including indirect calls and
+returns through callback-modified stack memory. It uses no host call stack and
+assumes no relation between a return and the most recent call. Retained frames,
+stack replacements and recursive transfers therefore keep their machine
+semantics and share the same instruction budget.
+
+An external CALL or RET still reports status 1 or 3, even when it consumes the
+last budget unit. An internal transfer with no budget left reports status 9
+before executing its target. Native requests, invalid state, exceptions and
+all context transitions remain stopping boundaries even when their target is
+selected. The manifest records `call_return_policy` as `stop` or
+`follow-selected-targets`. Selecting this dispatch policy adds no instructions,
+callee bodies, memory mappings or runtime bindings to the request.
+
 | Status | Meaning |
 | --- | --- |
 | 1 | CALL completed; environment owns the target |
@@ -84,12 +100,13 @@ A native request or invalid-state refusal executes nothing and consumes none.
 | 9 | Instruction budget exhausted |
 | 10 | V7 fast-system-call context installed; handler has not executed |
 | 11 | V8 user-interrupt return completed; target and pending delivery have not executed |
+| 12 | V9 FRED return completed; target and pending delivery have not executed |
 
 The invocation domain is CPL0, 64-bit entry with valid descriptor caches,
 CET/FRED disabled, successful sequential ordinary RAM accesses and immutable
 original instruction bytes. It excludes MMIO, concurrent writers, asynchronous
 events and faulting execution. IRETQ and canonical RETFQ (`48 CB`,
-`48 CA imm16`) can produce CPL0–3 long-mode contexts;
+`48 CA imm16`) can produce CPL0–3 long-mode or compatibility contexts;
 INT3 and canonical `INT imm8` (`CD 00` through `CD FF`) install a CPL0
 interrupt/trap-gate context with optional IST. Each vector reads its own live
 IDT entry, including vectors ordinarily used for OS services. Software INT
@@ -185,16 +202,40 @@ before saved RSP/SS and also adjusts the restored RSP. The transition preserves
 NMI blocking and flags within the existing non-interrupt entry domain (TF/RF,
 IOPL and VIF/VIP remain excluded). It consumes one driver step and stops even
 when the return target is selected; a returned CPL1–3 context cannot reenter
-this supervisor profile. Compatibility-mode and 16-/32-bit far returns still
-require native execution.
+this supervisor profile. The 16-/32-bit operand forms still require native
+execution.
 
 IRETQ/RETFQ have no unconditional empty undefined-output certificate: a live
 return descriptor can select compatibility mode, where the legacy GPR high
-halves are arbitrary. V6's shared descriptor check requires CS.L=1 and CS.D=0
-before publishing state or descriptor writes. That checked long-mode domain
-owns the empty arbitrary-effect list for these continuations. It does not
-grant an ordinary LowIR or native-preservation certificate. Earlier generic
-audits incorrectly treated this profile condition as an instruction-wide fact.
+halves are arbitrary. V6 now owns either a long-mode or compatibility target.
+Long-mode code requires CS.L=1/CS.D=0. Compatibility code permits either CS.D
+value, returns the low 32 RIP bits as the target offset, and checks that offset
+against the effective CS limit. This profile requires the raw frame RIP to be
+canonical at the declared paging width before truncation; other raw high-bit
+patterns remain outside its qualification. The environment interprets the
+returned offset with the returned CS base and does not execute the target in
+this step.
+
+IRETQ and outer RETFQ require non-null SS for compatibility targets. A 32-bit
+stack restores ESP. A 16-bit stack replaces SP and retains the original
+ESP[31:16], including when frame pops cross a 64 KiB boundary. RETFQ performs
+parameter cleanup at the target stack width without carrying into preserved
+bits. Same-privilege RETFQ retains its original SS/cache and applies that cache's
+stack width. IRETQ unblocks NMIs; RETFQ preserves their blocking state.
+
+Successful compatibility returns consume all eight arbitrary-value slots for
+the legacy GPR high halves, including RSP; all low halves and R8-R15 follow the
+instruction's defined state. Long-mode returns and rejected invocations do not
+apply these choices. Their manifest records the conditional profile transition
+instead of inventing an original LowIR operation index. This supplies no
+ordinary LowIR or native-preservation certificate. Earlier generic audits
+incorrectly treated a checked profile condition as an instruction-wide fact.
+The stack rules follow Intel SDM Volume 3A section 7.14.3 and the IRET/RET
+entries; the retained middle ESP bits also match Linux's
+[documented espfix requirement](https://github.com/torvalds/linux/blob/master/arch/x86/kernel/espfix_64.c).
+The [qualification record](evidence/x86-legacy-compatibility-returns-2026-10-30.json)
+includes native and portable state/RAM matrices and the processor-dependent
+raw-RIP experiment behind the canonical-input restriction.
 
 LSS/LFS/LGS also continue through V6. The shared descriptor owner loads the
 16/32/64-bit offset, validates the GDT or LDT descriptor, updates its accessed
@@ -369,10 +410,11 @@ All 1,009 continuation, export, audit and proof regressions passed without skips
 The [return-mode audit correction](evidence/x86-return-mode-audit-2026-10-29.json)
 records the two failing pre-fix audit tests and 1,011 passing regressions after
 the fix and integration with `dev`. Another 384 paired native/source cases
-confirm valid hardware compatibility returns while V6 retains its unchanged
+confirmed valid hardware compatibility returns while V6 retained its then-current
 state/RAM refusal. The matrix spans both compatibility code widths, all four
 privilege levels, GDT/LDT, accessed-bit variants and the three qualified frame
-return encodings. It does not claim compatibility-return source support.
+return encodings. That historical record predates the compatibility-return
+source implementation described above.
 
 `X64ContinuationIntegerTest` compares complete state and memory with original
 native instructions for audited legacy vector transfers, XOR and byte shifts,
