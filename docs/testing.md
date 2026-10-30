@@ -6,6 +6,17 @@
 
 [← Documentation Index](README.md)
 
+`InterpreterSpecialization.AlignmentFactorsIndependentFinitePayload`,
+`AlignmentFactorDoesNotInventIndependence` and
+`AlignmentPairsRetainFrameSlotCorrelation` check alignment relations across
+joins and loops when another finite field exceeds the full tuple cap. They
+compare an independent arithmetic oracle for arbitrary pointer high bits,
+modular wraparound and every payload value; invalid incoming arms remain
+refused. Register/frame carriers, chaining and exact/short operation and query
+budgets use the specialization suite. The core retains only exhaustive pair
+projections and widens missing predecessor facts; these checks do not certify
+ordinary source ABIs or native fault behavior.
+
 `InterpreterMachineRegionSourceTest.RepeatedTransfersRetainRuntimeDirectionAndOverlap`
 executes bounded MOVS/STOS in both directions through HighC and LLVMC at O0/O2,
 comparing full state and every byte against an independent ordered copy oracle.

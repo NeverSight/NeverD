@@ -384,6 +384,140 @@ TEST(InterpreterSpecialization, AlignmentSurvivesLoopWidening) {
               (Input & ~uint64_t{15}) + 16 * ((Input & 3) + 1));
 }
 
+Provider alignmentWithFinitePayload(bool Loop, bool Related, bool Invalid) {
+  Provider P;
+  P.add(0x100,
+        {op(NdOp::COPY, reg(16), {reg(8)}),
+         op(NdOp::INT_SUB, reg(24, 4), {constant(0, 4), reg(8, 4)}),
+         op(NdOp::INT_ZEXT, reg(24), {reg(24, 4)}),
+         op(NdOp::INT_AND, reg(24), {reg(24), constant(15)}),
+         op(NdOp::INT_AND, reg(32), {reg(Related ? 8 : 40), constant(31)}),
+         op(NdOp::INT_EQUAL, reg(48, 1), {reg(24), constant(0)}),
+         op(NdOp::COND_BR, {}, {constant(0x120), reg(48, 1)})},
+        0x110);
+  P.add(0x110,
+        {op(NdOp::INT_ADD, reg(24), {reg(24), constant(Invalid ? 1 : 0)}),
+         jump(0x120)});
+  P.add(0x120, {op(NdOp::INT_ADD, reg(16), {reg(16), reg(24)}), jump(0x130)});
+  if (Loop) {
+    P.add(0x130,
+          {requireAlignment(reg(16)),
+           op(NdOp::INT_EQUAL, reg(48, 1), {reg(32), constant(0)}),
+           op(NdOp::COND_BR, {}, {constant(0x150), reg(48, 1)})},
+          0x140);
+    P.add(0x140,
+          {op(NdOp::INT_ADD, reg(16), {reg(16), constant(32)}),
+           op(NdOp::INT_SUB, reg(32), {reg(32), constant(1)}), jump(0x130)});
+  } else {
+    P.add(0x130, {requireAlignment(reg(16)), jump(0x150)});
+  }
+  // The payload remains observable, including its zero high bits after a cut.
+  P.add(0x150, {op(NdOp::INT_XOR, reg(0), {reg(16), reg(32)}), ret()});
+  return P;
+}
+
+TEST(InterpreterSpecialization, AlignmentFactorsIndependentFinitePayload) {
+  for (bool Loop : {false, true})
+    for (uint32_t Chained : {0u, 512u}) {
+      SCOPED_TRACE(Loop);
+      SCOPED_TRACE(Chained);
+      auto P = alignmentWithFinitePayload(Loop, false, false);
+      auto Options = alignmentOptions();
+      Options.DiscoverControlState = true;
+      Options.ControlRegisters = {{32, 8}};
+      Options.MaxChainedTransfers = Chained;
+      const auto Result = specializeInterpreter(P, {0x100}, Options);
+      ASSERT_TRUE(Result.complete()) << Result.Diagnostic;
+      // Full arbitrary pointers, including modular wraparound, independently
+      // determine the next aligned address. The payload takes all 32 values.
+      for (uint64_t High : {UINT64_C(0), UINT64_C(0x123456789abcde00),
+                            UINT64_C(0xfffffffffffffff0)})
+        for (unsigned Low = 0; Low < 32; ++Low)
+          for (unsigned Payload = 0; Payload < 32; ++Payload) {
+            const uint64_t Input = High + Low;
+            const uint64_t Aligned = (Input + 15) & ~UINT64_C(15);
+            const uint64_t Expected =
+                Loop ? Aligned + 32 * Payload : Aligned ^ Payload;
+            EXPECT_EQ(execute(Result.Residual,
+                              {{8, Input}, {40, UINT64_MAX - 31 + Payload}}),
+                      Expected);
+          }
+      if (!Loop && !Chained) {
+        Options.MaxOperations = Result.EvaluatedOperations;
+        Options.MaxSolverQueries = Result.SolverQueries;
+        ASSERT_TRUE(specializeInterpreter(P, {0x100}, Options).complete());
+        for (bool Queries : {false, true}) {
+          auto Short = Options;
+          if (Queries)
+            --Short.MaxSolverQueries;
+          else
+            --Short.MaxOperations;
+          const auto Failure = specializeInterpreter(P, {0x100}, Short);
+          EXPECT_EQ(Failure.Status, SpecializationStatus::BudgetExceeded);
+          EXPECT_TRUE(Failure.Residual.Blocks.empty());
+        }
+      }
+    }
+}
+
+TEST(InterpreterSpecialization, AlignmentFactorDoesNotInventIndependence) {
+  for (bool Related : {false, true})
+    for (bool Invalid : {false, true}) {
+      SCOPED_TRACE(Related);
+      SCOPED_TRACE(Invalid);
+      auto P = alignmentWithFinitePayload(false, Related, Invalid);
+      auto Options = alignmentOptions();
+      Options.DiscoverControlState = true;
+      Options.ControlRegisters = {{32, 8}};
+      const auto Result = specializeInterpreter(P, {0x100}, Options);
+      ASSERT_EQ(Result.complete(), !Invalid) << Result.Diagnostic;
+      if (Invalid) {
+        EXPECT_TRUE(Result.Residual.Blocks.empty());
+        EXPECT_NE(Result.Diagnostic.find("alignment"), std::string::npos);
+        continue;
+      }
+      for (unsigned Input = 0; Input < 64; ++Input)
+        EXPECT_EQ(execute(Result.Residual, {{8, Input}, {40, 23}}),
+                  ((Input + 15) & ~uint64_t{15}) ^ (Related ? Input & 31 : 23));
+    }
+}
+
+TEST(InterpreterSpecialization, AlignmentPairsRetainFrameSlotCorrelation) {
+  for (bool Invalid : {false, true}) {
+    auto P = alignmentWithFinitePayload(false, false, Invalid);
+    auto &Entry = P.Code.at(0x100).Ops;
+    Entry.insert(Entry.end() - 2,
+                 {op(NdOp::INT_ADD, reg(72), {reg(64), constant(8)}),
+                  op(NdOp::STORE, {}, {reg(64), reg(16)}),
+                  op(NdOp::STORE, {}, {reg(72), reg(24)})});
+    // Rebuild origin spans after adding the independent frame writes.
+    P.add(0x100, Entry, 0x110);
+    P.add(0x110,
+          {op(NdOp::LOAD, reg(24), {reg(72)}),
+           op(NdOp::INT_ADD, reg(24), {reg(24), constant(Invalid ? 1 : 0)}),
+           op(NdOp::STORE, {}, {reg(72), reg(24)}), jump(0x120)});
+    P.add(0x120, {op(NdOp::LOAD, reg(16), {reg(64)}),
+                  op(NdOp::LOAD, reg(24), {reg(72)}),
+                  op(NdOp::INT_ADD, reg(16), {reg(16), reg(24)}), jump(0x130)});
+    auto Options = alignmentOptions();
+    Options.DiscoverControlState = true;
+    Options.FrameBaseRegister = SymRegisterRange{64, 8};
+    Options.ControlRegisters = {{32, 8}};
+    Options.ControlFrameSlots = {{0, 8}, {8, 8}};
+    const auto Result = specializeInterpreter(P, {0x100}, Options);
+    ASSERT_EQ(Result.complete(), !Invalid) << Result.Diagnostic;
+    if (Invalid) {
+      EXPECT_TRUE(Result.Residual.Blocks.empty());
+      continue;
+    }
+    for (unsigned Input = 0; Input < 32; ++Input)
+      for (unsigned Payload = 0; Payload < 32; ++Payload)
+        EXPECT_EQ(
+            execute(Result.Residual, {{8, Input}, {40, Payload}, {64, 0x800}}),
+            ((Input + 15) & ~uint64_t{15}) ^ Payload);
+  }
+}
+
 TEST(InterpreterSpecialization, AlignmentDiscoveryKeepsInvalidIncomingArms) {
   for (unsigned Kind = 0; Kind != 3; ++Kind) {
     Provider P;
