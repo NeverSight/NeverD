@@ -1,5 +1,14 @@
 # Remaining x64 C-quality work
 
+Address-only imported runtime symbols now retain their import origin separately
+from relocated data. LLVM C uses the existing format-specific runtime prototype
+for their aliases, including headers and weak linkage. This closes the MinGW
+whole-module Clang object-generation crash when a global initializer names
+`__C_specific_handler` before an SEH function. Data objects with the same name
+and unknown imports retain opaque aliases. O0/O2 object checks cover the reduced
+case and the existing MinGW whole-module fixture; these checks do not establish
+native regenerated exception execution or remove dynamic-stack proof failures.
+
 Use public fixtures and emitter tests as the durable contract. Private binary
 analysis and comparison output belong outside the repository.
 
@@ -336,6 +345,14 @@ refused. Physical stack switches still require the explicit continuation ABI.
 The shared stack-address owner also recognizes canonical zero-extended
 32-bit memory-address containers. This closes the i386 observation gap without
 treating truncated 64-bit pointers or wider incoming registers as frame roots.
+Fresh x64 COFF conversion now consumes the uninterrupted normal-return bound
+of a completely byte-authenticated descending page probe. The fact belongs to
+the subsequent same-block RAX allocation and is invalidated by register writes
+and competing control flow. The MinGW `__pformat_xint.isra.0` omission is covered
+by this proof; names alone and altered probe bodies still provide no bound.
+Its dynamic source storage also retains the Win64 outgoing home area, with
+checked size addition shared through the ABI layout. Native exception recovery
+and aliases with independently represented fixed objects need separate proof.
 Both spill proofs share a checked private-frame extent predicate: extreme
 positive offsets cannot wrap into frame storage or Windows home slots.
 Post-recovery Win64 scalar borrows now have a shared complete-use proof over

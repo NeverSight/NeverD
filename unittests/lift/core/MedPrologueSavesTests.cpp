@@ -2245,6 +2245,104 @@ TEST(SourceCallReturnReads, BoundedAllocationsSeparateTheFixedFrame) {
     }
 }
 
+TEST(SourceCallReturnReads,
+     AlignedUnboundedAllocationsKeepOnlyPossibleAliases) {
+  for (Arch Architecture : {Arch::X86, Arch::X64}) {
+    const unsigned Width = getTargetRegInfo(Architecture).PointerSize;
+    const int Alignment = 2 * Width;
+    for (BinaryFormat Format :
+         {BinaryFormat::ELF, BinaryFormat::COFF, BinaryFormat::MachO})
+      for (unsigned ReadWidth : {1u, Width, Width + 1})
+        for (int Displacement = -Alignment; Displacement <= Alignment;
+             ++Displacement) {
+          SCOPED_TRACE(::testing::Message()
+                       << int(Architecture) << ':' << int(Format) << ':'
+                       << ReadWidth << ':' << Displacement);
+          // An independent byte oracle includes negative allocations: the
+          // mask establishes alignment, never a nonnegative size. A complete
+          // period on each side covers every possible relative placement.
+          bool Overlaps = false;
+          for (int Count = -4 * Alignment; Count <= 4 * Alignment;
+               Count += Alignment)
+            for (unsigned I = 0; I < Width; ++I)
+              for (unsigned J = 0; J < ReadWidth; ++J)
+                Overlaps |=
+                    -Count - int(Width) + int(I) == Displacement + int(J);
+          auto Image = callSlotImage();
+          Image.Arch = Architecture;
+          Image.Format = Format;
+          auto Func = observedCallSlot();
+          auto &Ops = Func.Blocks.front().Ops;
+          Ops[2].Opcode = NdOp::INT_ADD;
+          Ops[2].Inputs[1] = MedVar::makeConst(
+              uint64_t(Displacement) & (Width == 4 ? UINT32_MAX : UINT64_MAX),
+              Width);
+          Ops.insert(
+              Ops.begin() + 4,
+              {op(NdOp::INT_AND, temp(30),
+                  {MedVar::makeUnspecified(Width, Architecture),
+                   MedVar::makeConst(uint64_t(-Alignment) &
+                                         (Width == 4 ? UINT32_MAX : UINT64_MAX),
+                                     Width)}),
+               op(NdOp::INT_SUB, sp(2), {sp(1), temp(30)})});
+          for (auto &Op : Ops) {
+            Op.Output.TheArch = Architecture;
+            Op.Output.Size = Width;
+            for (unsigned I = 0; I < Op.NumInputs; ++I) {
+              Op.Inputs[I].TheArch = Architecture;
+              Op.Inputs[I].Size = Width;
+            }
+          }
+          Ops[3].Inputs[1].Size = ReadWidth;
+          Ops[7].Output.Size = ReadWidth;
+          Ops[8].Inputs[0].Size = ReadWidth;
+          std::string Error;
+          EXPECT_EQ(validateSourceCallReturnReads(Func, Image, Error),
+                    !Overlaps)
+              << Error;
+          if (Overlaps)
+            EXPECT_NE(Error.find("physical CALL return slot"),
+                      std::string::npos);
+        }
+  }
+}
+
+TEST(SourceCallReturnReads, ResidueSeparationIncludesEveryCall) {
+  auto Image = callSlotImage();
+  Image.Segments.front().Data[16] = 0xe8;
+  for (unsigned Mode = 0; Mode != 4; ++Mode) {
+    SCOPED_TRACE(Mode);
+    auto Func = observedCallSlot();
+    auto &Ops = Func.Blocks.front().Ops;
+    Ops[2] = op(NdOp::COPY, temp(20), {sp(1)});
+    Ops[5].Addr = 0x1015;
+    Ops.insert(Ops.begin() + 4, {op(NdOp::INT_AND, temp(30),
+                                    {MedVar::makeUnspecified(8, Arch::X64),
+                                     MedVar::makeConst(~uint64_t{15}, 8)}),
+                                 op(NdOp::INT_SUB, sp(2), {sp(1), temp(30)})});
+    auto Second = op(NdOp::CALL, temp(31), {MedVar::makeConst(0x2000, 8)});
+    Second.Addr = 0x1010;
+    Ops.insert(
+        Ops.begin() + 7,
+        {op(NdOp::INT_ADD, sp(3),
+            {sp(2), Mode == 2 ? MedVar::makeUnspecified(8, Arch::X64)
+                              : MedVar::makeConst(Mode == 1 ? 8 : 0, 8)}),
+         Second});
+    std::string Error;
+    auto Encoding = Image;
+    if (Mode == 3)
+      Encoding.Segments.front().Data[16] = 0x66;
+    EXPECT_EQ(validateSourceCallReturnReads(Func, Encoding, Error), Mode == 0)
+        << Error;
+    std::vector<MedCallReturnRead> Deferred;
+    EXPECT_TRUE(validateSourceCallReturnReads(
+        Func, Encoding, Error, limits::ir::kSourceCallReturnReadWork, nullptr,
+        nullptr, &Deferred))
+        << Error;
+    EXPECT_EQ(Deferred.size(), Mode == 0 ? 0u : 1u);
+  }
+}
+
 TEST(SourceCallReturnReads, BoundedCallResultsKeepPhysicalSlotChecks) {
   auto Image = callSlotImage();
   Image.Segments.front().Data[16] = 0xe8;

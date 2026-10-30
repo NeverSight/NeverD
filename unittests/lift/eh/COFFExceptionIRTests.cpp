@@ -9,6 +9,7 @@
 #include "gtest/gtest.h"
 
 #include "neverd/Limits.h"
+#include "neverd/backend/DataSymbolMetadata.h"
 #include "neverd/backend/ExceptionRewriteContract.h"
 #include "neverd/backend/RewriteSourceIdentity.h"
 #include "neverd/backend/c/CSourceMap.h"
@@ -1660,6 +1661,136 @@ TEST(COFFExceptionIR, LLVMCCatchSwitchRendersExceptSyntax) {
   ASSERT_TRUE(LLVMCEmitter().emit(Module, Stream, Options));
   if (hasHostFixtureCompiler())
     checkStandaloneSEHSource(Standalone);
+}
+
+TEST(COFFExceptionIR, LLVMCAddressedImportKeepsItsRuntimeFunctionDeclaration) {
+  for (const auto Format : {BinaryFormat::COFF, BinaryFormat::ELF})
+    for (bool Import : {false, true}) {
+      SCOPED_TRACE(static_cast<int>(Format));
+      SCOPED_TRACE(Import);
+      llvm::LLVMContext Context;
+      llvm::Module Module("addressed-runtime-symbol", Context);
+      auto *Symbol = new llvm::GlobalVariable(
+          Module, llvm::Type::getInt8Ty(Context), false,
+          llvm::GlobalValue::ExternalLinkage, nullptr, "__C_specific_handler");
+      if (Import)
+        data_symbol::markImport(*Symbol);
+      else
+        data_symbol::mark(*Symbol);
+      new llvm::GlobalVariable(Module, Symbol->getType(), false,
+                               llvm::GlobalValue::ExternalLinkage, Symbol,
+                               "personality_address");
+      ASSERT_FALSE(llvm::verifyModule(Module, &llvm::errs()));
+      CEmitterOptions Options;
+      Options.TheArch = Arch::X64;
+      Options.Format = Format;
+      std::string Source;
+      llvm::raw_string_ostream OS(Source);
+      ASSERT_TRUE(LLVMCEmitter().emit(Module, OS, Options));
+      const bool Function = Import && Format == BinaryFormat::COFF;
+      const std::string Declaration =
+          Function ? "extern int32_t neverd_data___C_specific_handler("
+                   : "extern unsigned char neverd_data___C_specific_handler[]";
+      EXPECT_NE(Source.find(Declaration), std::string::npos) << Source;
+      EXPECT_NE(Source.find("__asm__(\"__C_specific_handler\")"),
+                std::string::npos)
+          << Source;
+      if (Function && hasHostFixtureCompiler()) {
+        // The initializer materializes the imported symbol before Clang
+        // encounters its implicit SEH personality. A data alias passes syntax
+        // checking but makes the backend treat the personality as an object.
+        Source += "#include <excpt.h>\n"
+                  "extern void may_raise(void);\n"
+                  "void protected_call(void) {\n"
+                  "  __try { may_raise(); }\n"
+                  "  __except(EXCEPTION_EXECUTE_HANDLER) {}\n"
+                  "}\n";
+        checkStandaloneSEHSource(Source, /*CompileObject=*/true);
+      }
+    }
+}
+
+TEST(COFFExceptionIR, HighCAddressedRuntimeFunctionPrecedesSEH) {
+  BinaryImage Image;
+  Image.Arch = Arch::X64;
+  Image.Bits = Bitness::Bits64;
+  Image.Format = BinaryFormat::COFF;
+  Segment Text;
+  Text.VA = 0x1000;
+  Text.Size = Text.FileSz = 1;
+  Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Text.Data = {0xc3};
+  Image.Segments.push_back(Text);
+  Symbol Personality;
+  Personality.Addr = Text.VA;
+  Personality.Name = "__C_specific_handler";
+  Personality.IsFunc = true;
+  Image.Symbols.push_back(Personality);
+  HighFunc Function;
+  Function.Name = "personality_address";
+  Function.Entry = 0x2000;
+  Function.ReturnType = NdType::makePtr(NdType::makeVoid());
+  HighStmt Return;
+  Return.Kind = StmtKind::Return;
+  Return.RetVal =
+      HighExpr::makeConst(Text.VA, 8, ConstantAddressProvenance::Address);
+  Function.Body.push_back(std::move(Return));
+  CEmitterOptions Options;
+  Options.TheArch = Image.Arch;
+  Options.Format = Image.Format;
+  Options.Image = &Image;
+  std::string Source;
+  llvm::raw_string_ostream OS(Source);
+  ASSERT_TRUE(HighCEmitter().emit({Function}, OS, Options));
+  EXPECT_NE(Source.find("extern int32_t __C_specific_handler("),
+            std::string::npos)
+      << Source;
+  EXPECT_EQ(Source.find("extern unsigned char neverd_code_"), std::string::npos)
+      << Source;
+  REQUIRE_HOST_FIXTURE_COMPILER();
+  Source += "#include <excpt.h>\n"
+            "extern void may_raise(void);\n"
+            "void protected_call(void) {\n"
+            "  __try { may_raise(); }\n"
+            "  __except(EXCEPTION_EXECUTE_HANDLER) {}\n"
+            "}\n";
+  checkStandaloneSEHSource(Source, /*CompileObject=*/true);
+}
+
+TEST(COFFExceptionIR, LLVMCAddressedImportUsesPrototypeHeadersAndWeakLinkage) {
+  llvm::LLVMContext Context;
+  llvm::Module Module("addressed-runtime-headers", Context);
+  for (llvm::StringRef Name : {"__iob_func", "unknown_runtime_symbol"}) {
+    auto *Symbol = new llvm::GlobalVariable(
+        Module, llvm::Type::getInt8Ty(Context), false,
+        llvm::GlobalValue::ExternalWeakLinkage, nullptr, Name);
+    data_symbol::markImport(*Symbol);
+    new llvm::GlobalVariable(Module, Symbol->getType(), false,
+                             llvm::GlobalValue::ExternalLinkage, Symbol,
+                             Name + "_address");
+  }
+  CEmitterOptions Options;
+  Options.TheArch = Arch::X64;
+  Options.Format = BinaryFormat::COFF;
+  std::string Source;
+  llvm::raw_string_ostream OS(Source);
+  ASSERT_TRUE(LLVMCEmitter().emit(Module, OS, Options));
+  const auto Header = Source.find("#include <stdio.h>");
+  const auto Declaration =
+      Source.find("extern FILE *neverd_data___iob_func(void)");
+  EXPECT_NE(Header, std::string::npos) << Source;
+  EXPECT_NE(Declaration, std::string::npos) << Source;
+  EXPECT_LT(Header, Declaration);
+  EXPECT_NE(Source.find("__asm__(\"__iob_func\") __attribute__((weak))"),
+            std::string::npos)
+      << Source;
+  EXPECT_NE(
+      Source.find("extern unsigned char neverd_data_unknown_runtime_symbol[]"),
+      std::string::npos)
+      << Source;
+  REQUIRE_HOST_FIXTURE_COMPILER();
+  const auto Syntax = runCCompiler(Source, {"-std=c11", "-fsyntax-only"});
+  EXPECT_EQ(Syntax.ExitCode, 0) << Syntax.Error << '\n' << Source;
 }
 
 TEST(COFFExceptionIR, LLVMCWrapUsesRecoveredSEHFilter) {

@@ -198,6 +198,13 @@ has run.
 
 ## SDK and verification
 
+The [capability ledger](capabilities.json) records this interface as experimental
+under `analysis.x64-continuation-source`, with its C entry point, both CLI options
+and the public exporter regressions. SDK request/CLI parity checks cover the
+portable interface; the sanitizer-backed generated-C execution entries are
+scoped to Linux. Native Windows/macOS generated execution remains separate
+qualification. The ledger keeps ordinary source ABI recovery outside this claim.
+
 `neverd_x64_continuation_source_v1` takes a size-delimited request, route 0 or 1,
 and returns owned source plus an independently owned manifest. Release both
 with `neverd_free_string`. Failure returns NULL, clears the manifest output and

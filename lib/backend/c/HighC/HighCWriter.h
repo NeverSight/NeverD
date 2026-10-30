@@ -1205,6 +1205,8 @@ public:
       X87ContextHelperNames;
   std::map<std::pair<Intrinsic, unsigned>, std::string> X86FPStateHelpers;
   bool UsesX87Extended = false;
+  /// Checked addition of the dynamic frame's outgoing call storage.
+  std::string StackAllocationSizeHelper;
   /// The bytes a plain access of the C memory type \p Type copies inline: 0
   /// for its whole object, the value's bytes for a bit-precise integer
   /// narrower than its storage on a little-endian target, none when only

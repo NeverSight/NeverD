@@ -28,7 +28,10 @@
 #include "neverd/ir/med/MedProvenStackOffsets.h"
 #include "neverd/ir/med/MedStackAlignment.h"
 #include "neverd/ir/med/X86/X86RegistrationCallback.h"
+#include "neverd/libc/LibCNames.h"
+#include "neverd/lift/X86/X86Regs.h"
 #include "neverd/loader/BinaryImage.h"
+#include "neverd/loader/COFF/COFFStackProbe.h"
 #include "neverd/loader/ExceptionEdge.h"
 
 #include "llvm/ADT/DenseMap.h"
@@ -36,6 +39,7 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringExtras.h"
+#include "llvm/Support/Error.h"
 #include "llvm/Support/MathExtras.h"
 
 #include <algorithm>
@@ -334,6 +338,102 @@ RegistrationCalls registrationCalls(
   }
   return Result;
 }
+
+// A probe removed by fresh source conversion still constrains the allocation
+// after its normal return. Keep the fact at that exact subtraction, never at
+// the incoming size: another path or an earlier use may not have probed it.
+std::vector<ProvenStackOffsetRange>
+probedStackAllocations(const MedFunc &Func, const LowFunc &Source,
+                       const BinaryImage &Image, size_t &Remaining) {
+  if (Image.Arch != Arch::X64 || Image.Format != BinaryFormat::COFF ||
+      Func.Entry != Source.Entry || Func.SkippedSSA || Func.AnalystStackFrame)
+    return {};
+  using Site = std::pair<va_t, int>;
+  std::set<Site> Allocations;
+  const NdVar SP = NdVar::reg(x86reg::RSP, 8);
+  const NdVar AX = NdVar::reg(x86reg::RAX, 8);
+  for (const LowBlock &Block : Source.Blocks) {
+    if (!charge(Remaining,
+                1 + Block.Ops.size() + Block.InstructionBoundaries.size()))
+      return {};
+    if (!Block.ExceptionalPreds.empty() || !Block.ExceptionalSuccs.empty())
+      continue;
+    if (auto Error = validateLowInstructionBoundaries(
+            Block, LowInstructionBoundaryRequirement::Required)) {
+      llvm::consumeError(std::move(Error));
+      continue;
+    }
+    bool Probed = false;
+    for (const auto &Boundary : Block.InstructionBoundaries) {
+      if (hasLowInstructionControlFlag(
+              Boundary.ControlFlags,
+              LowInstructionControlFlag::InstructionGuard)) {
+        Probed = false;
+        continue;
+      }
+      if (Source.ModuleAnalysisRoots.count(Boundary.Address) ||
+          Boundary.Control != LowInstructionControl::None)
+        Probed = false;
+      for (size_t I = Boundary.FirstOp; I < Boundary.FirstOp + Boundary.OpCount;
+           ++I) {
+        const LowOp &Op = Block.Ops[I];
+        if (Op.Opcode == NdOp::CALL) {
+          const auto Probe =
+              Boundary.Control == LowInstructionControl::Call && Op.NumInputs &&
+                      Op.Inputs[0].isConst()
+                  ? coff_loader::getCheckedX64StackProbeCall(Image, Op.Addr)
+                  : std::nullopt;
+          Probed = Probe && Probe->Helper.Begin == Op.Inputs[0].Offset &&
+                   libc::stackProbeEffect(Image, Op.Inputs[0].Offset) ==
+                       libc::StackProbeEffect::Probe;
+          continue;
+        }
+        if (Probed && Op.Opcode == NdOp::INT_SUB && Op.NumInputs == 2 &&
+            Op.Output == SP && Op.Inputs[0] == SP && Op.Inputs[1] == AX)
+          Allocations.emplace(Op.Addr, Op.Seq);
+        // A partial write invalidates the complete probed size too. Calls
+        // other than the authenticated probe, and opaque effects, supply no
+        // register-preservation evidence here.
+        if (Op.Opcode == NdOp::INDIR_CALL || Op.Opcode == NdOp::INTRINSIC ||
+            (Op.Output.isReg() && Op.Output.Size &&
+             Op.Output.Offset < x86reg::RAX + 8 &&
+             Op.Output.Offset + Op.Output.Size > x86reg::RAX))
+          Probed = false;
+      }
+    }
+  }
+  if (Allocations.empty())
+    return {};
+  std::vector<const MedOp *> Definitions;
+  std::vector<MedVar> Bases;
+  const auto IsRegister = [](const MedVar &V, uint64_t Offset) {
+    return V.Kind == MedVar::Reg && V.RegOff == Offset && V.Size == 8;
+  };
+  for (const MedBlock &Block : Func.Blocks) {
+    if (!charge(Remaining, 1 + Block.Ops.size()))
+      return {};
+    // Fresh SSA conversion may name the probed RAX value with a temporary.
+    // Its native identity is proved above; match the exact subtraction and
+    // its width, not the temporary's register spelling.
+    for (const MedOp &Op : Block.Ops)
+      if (!Op.Dead && Allocations.count({Op.Addr, Op.OriginSeq}) &&
+          Op.Opcode == NdOp::INT_SUB && Op.NumInputs == 2 &&
+          IsRegister(Op.Output, x86reg::RSP) &&
+          IsRegister(Op.Inputs[0], x86reg::RSP) && Op.Inputs[1].Size == 8) {
+        Definitions.push_back(&Op);
+        Bases.push_back(Op.Inputs[0]);
+      }
+  }
+  const auto Offsets = entryStackOffsets(Func, Bases, Image.Arch,
+                                         Image.abiFormat(), Func.EntryKind);
+  std::vector<ProvenStackOffsetRange> Result;
+  constexpr int64_t Maximum = coff_loader::X64StackProbeCall::MaximumAllocation;
+  for (size_t I = 0; I < Offsets.size(); ++I)
+    if (Offsets[I] && *Offsets[I] >= INT64_MIN + Maximum)
+      Result.push_back(
+          {Definitions[I], nullptr, {*Offsets[I] - Maximum, *Offsets[I]}});
+  return Result;
+}
 } // namespace
 
 static bool checkSourceCallReturnReads(
@@ -488,6 +588,19 @@ static bool checkSourceCallReturnReads(
       return std::nullopt;
     return End.Min - Width;
   };
+  // One period contains a return slot and a gap of the same width. Aggregate
+  // unknown CALL footprints once, so each load need not scan all calls. This
+  // query is deferred until the ordinary exact/range proofs need it.
+  const unsigned ResiduePeriod = 2 * Width;
+  const uint64_t AllResidues = (uint64_t{1} << ResiduePeriod) - 1;
+  const auto ResidueMask = [&](uint64_t Begin, uint64_t Size) {
+    if (Size >= ResiduePeriod)
+      return AllResidues;
+    const uint64_t Bits = ((uint64_t{1} << Size) - 1)
+                          << (Begin & (ResiduePeriod - 1));
+    return (Bits | (Bits >> ResiduePeriod)) & AllResidues;
+  };
+  std::map<const MedOp *, uint64_t> CallResidues;
   // Whether every load's history reaches no CALL write in Ends, which are
   // bounded from above by Bounds where they have no range. With Defer, a load
   // such a write reaches is recorded there and leaves the proof instead.
@@ -498,7 +611,7 @@ static bool checkSourceCallReturnReads(
                            size_t &Budget,
                            std::vector<MedCallReturnRead> *Defer) {
     std::vector<std::pair<int64_t, int64_t>> Ranges;
-    bool UnknownLocation = false;
+    uint64_t UnknownResidues = 0;
     for (const auto &[Call, End] : Ends) {
       if (!End)
         if (const auto Below = Bounds.find(Call); Below != Bounds.end()) {
@@ -508,7 +621,10 @@ static bool checkSourceCallReturnReads(
         }
       const auto Begin = End ? CallSlotBegin(*End) : std::nullopt;
       if (!Begin) {
-        UnknownLocation = true;
+        const auto Residue = CallResidues.find(Call);
+        UnknownResidues |= !End && Residue != CallResidues.end()
+                               ? ResidueMask(Residue->second - Width, Width)
+                               : AllResidues;
         continue;
       }
       Ranges.emplace_back(*Begin, End->Max);
@@ -522,7 +638,7 @@ static bool checkSourceCallReturnReads(
         Merged.back().second = std::max(Merged.back().second, Range.second);
     }
     auto OverlapsCall = [&](const Access &Load) {
-      if (UnknownLocation)
+      if (UnknownResidues & ResidueMask(Load.Begin, Load.End - Load.Begin))
         return true;
       const auto It = std::lower_bound(Merged.begin(), Merged.end(), Load.Begin,
                                        [](const auto &Range, int64_t Begin) {
@@ -995,6 +1111,51 @@ static bool checkSourceCallReturnReads(
         *NeedsCalleeFacts = true;
     }
   }
+  int64_t FirstRead = INT64_MAX, LastRead = INT64_MIN;
+  for (const Access &Load : Loads) {
+    FirstRead = std::min(FirstRead, Load.Begin);
+    LastRead = std::max(LastRead, Load.End);
+  }
+  const auto MayReachRead = [&](const auto &End) {
+    const auto Begin = End ? CallSlotBegin(*End) : std::nullopt;
+    return !Begin || (*Begin < LastRead && End->Max > FirstRead);
+  };
+  if (FreshSource && Image.Arch == Arch::X64 &&
+      Image.Format == BinaryFormat::COFF &&
+      llvm::any_of(CallEnds, [&](const auto &Entry) {
+        return MayReachRead(Entry.second);
+      })) {
+    const auto Allocations =
+        probedStackAllocations(Func, *FreshSource, Image, Remaining);
+    if (!Remaining)
+      return Exhausted();
+    if (!Allocations.empty()) {
+      std::vector<const MedOp *> Pending;
+      std::vector<MedVar> PendingStacks;
+      for (const auto &[Call, End] : CallEnds)
+        if (const auto Stack = StackPointers.find(Call);
+            Stack != StackPointers.end() && MayReachRead(End)) {
+          Pending.push_back(Call);
+          PendingStacks.push_back(Stack->second);
+        }
+      const auto Bounds = entryStackOffsetRangesFromProvenDefinitions(
+          Func, PendingStacks, Allocations, Image.Arch, Image.abiFormat(),
+          Func.EntryKind);
+      for (size_t I = 0; I < Bounds.size(); ++I)
+        if (Bounds[I]) {
+          auto &End = CallEnds.at(Pending[I]);
+          if (!End)
+            End = Bounds[I];
+          else {
+            const EntryStackOffsetRange Narrowed{
+                std::max(End->Min, Bounds[I]->Min),
+                std::min(End->Max, Bounds[I]->Max)};
+            if (Narrowed.Min <= Narrowed.Max)
+              End = Narrowed;
+          }
+        }
+    }
+  }
   if (FreshSource &&
       llvm::any_of(CallEnds, [](const auto &Entry) { return !Entry.second; })) {
     const auto HandlerBounds = x86_seh::sourceHandlerCallStackRanges(
@@ -1032,6 +1193,28 @@ static bool checkSourceCallReturnReads(
       for (size_t I = 0; I < Pending.size(); ++I)
         if (Bounds[I])
           CallBelow.emplace(Pending[I], *Bounds[I]);
+    }
+  }
+  if (!Loads.empty()) {
+    std::vector<const MedOp *> Pending;
+    std::vector<MedVar> PendingStacks;
+    for (const auto &[Call, End] : CallEnds)
+      if (!End && !CallBelow.count(Call) &&
+          sourceCallReturnAddressBias(&Image, Image.Arch, Call->Addr) == Width)
+        if (const auto Found = StackPointers.find(Call);
+            Found != StackPointers.end()) {
+          Pending.push_back(Call);
+          PendingStacks.push_back(Found->second);
+        }
+    if (!Pending.empty()) {
+      if (!charge(Remaining, Pending.size()))
+        return Exhausted();
+      const auto Residues = entryStackOffsetResidues(
+          Func, PendingStacks, Image.Arch, Image.abiFormat(), ResiduePeriod,
+          Func.EntryKind);
+      for (size_t I = 0; I < Pending.size(); ++I)
+        if (Residues[I])
+          CallResidues.emplace(Pending[I], *Residues[I]);
     }
   }
   return Observe(CallEnds, CallBelow, Remaining, Deferred);
