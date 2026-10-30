@@ -144,8 +144,9 @@ bool AddressProof::preservesMemory(const llvm::Instruction &I, const Cell &Slot,
     case llvm::Intrinsic::stackrestore:
     case llvm::Intrinsic::write_register:
     case llvm::Intrinsic::eh_sjlj_setjmp:
-    case llvm::Intrinsic::eh_sjlj_longjmp:
       return false;
+    case llvm::Intrinsic::eh_sjlj_longjmp:
+      return PreservesMemory && PreservesMemory(I, Slot, Bytes);
     default:
       break;
     }

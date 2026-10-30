@@ -10242,6 +10242,12 @@ selectors, source destinations and retained callback ABI. Callback-to-parent
 PHI copies require the exact authenticated edge, including recovered scalar
 slots shared by multiple destinations. The complete source replay profile
 includes all 243 reconstruction cases and requires 4,860 runtime observations.
+`RegistrationSEHRuntimeFrame.ParentResumeUsesTheBoundCallbackSpill` checks a
+parent pointer spill written by its callback and read after a bound parent
+resumption. Missing jump or edge bindings, full and partial pointer overwrites,
+callback-local storage and a substituted entry capture must refuse. The EH3
+and EH4 `finally-parent-reenter-unwind` cases cover the same address proof in
+generated native code, with the abandoned-unwind-guard control still rejected.
 `RegistrationSEHRegisterIRMutations` checks 30 edits to register slots, aliases,
 source order, runtime-entry selection and constant outputs.
 `RegistrationCookieABI` checks ECX-only recovery despite incidental EDX/XMM/stack

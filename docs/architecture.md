@@ -1799,6 +1799,11 @@ every context alias, capture and transfer; its source companion binds the
 resumption switch to exact source scope entries. Frame reaching-definition
 replay follows the authenticated callback transfers across this resumption,
 preserving current logical state instead of treating entry capture as a reset.
+Address replay preserves a parent-owned static allocation across the exact
+bound `eh.sjlj.longjmp`, so a callback's checked register spill reaches its
+parent continuation. The jump grants no preservation to callback allocations,
+unknown transfers or entry capture. Reaching stores and lifetime checks still
+apply; this private-frame fact grants no image or import-binding permission.
 `RegistrationSEHRegisters` inserts explicit data-register exchanges before SSA
 for checked ordinary finally calls. These intrinsics keep inputs and outputs in
 the ordinary def-use and partial-register passes. `MedLLVMRegistrationSEHRegisters`

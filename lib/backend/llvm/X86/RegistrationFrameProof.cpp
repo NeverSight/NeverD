@@ -297,6 +297,14 @@ llvm::Error validateFramePrivacy(
       return Found != Scopes->CatchReturns.end() && Found->second == Return;
     }
     const auto *Call = llvm::dyn_cast<llvm::CallBase>(&I);
+    if (const auto *Jump = llvm::dyn_cast<llvm::IntrinsicInst>(&I);
+        Jump && Jump->getIntrinsicID() == llvm::Intrinsic::eh_sjlj_longjmp) {
+      const auto *Root = llvm::dyn_cast<llvm::AllocaInst>(Slot.Root);
+      // A bound parent exit reads its private context and resumes the same
+      // parent activation. Callback allocations do not survive that jump.
+      return ParentExits && ParentExits->Calls.count(Jump) && Root &&
+             Root->isStaticAlloca() && Root->getFunction() == &Parent;
+    }
     if (!Call || Call->isInlineAsm() || llvm::isa<llvm::CallBrInst>(Call) ||
         llvm::isa<llvm::IntrinsicInst>(Call))
       return false;
