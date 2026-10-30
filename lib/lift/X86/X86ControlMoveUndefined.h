@@ -4,7 +4,7 @@
 //
 //===----------------------------------------------------------------------===//
 /// \file
-/// Bind CR2/CR3/CR8 register moves to their architectural arbitrary flags.
+/// Bind CR2/CR3/CR4/CR8 register moves to their architectural arbitrary flags.
 //===----------------------------------------------------------------------===//
 
 #ifndef NEVERD_LIB_LIFT_X86_X86CONTROLMOVEUNDEFINED_H
@@ -23,6 +23,10 @@ namespace neverd::controlmoveundefined {
 inline constexpr std::array<unsigned, 6> Flags = {
     x86reg::OF, x86reg::SF, x86reg::ZF, x86reg::AF, x86reg::PF, x86reg::CF};
 
+inline bool supportsControlIndex(unsigned Index) {
+  return Index == 2 || Index == 3 || Index == 4 || Index == 8;
+}
+
 inline void record(X86Lifter::LiftState &S) {
   for (const auto Flag : Flags)
     S.recordUndefinedBits(NdVar::reg(Flag, 1), 0, 1);
@@ -40,8 +44,7 @@ inline bool form(const cs_insn *Insn, Arch Target) {
   const unsigned ControlIndex = ((ModRM >> 3) & 7) + ((Rex & 4) ? 8 : 0);
   if ((Prefix && (Rex < 0x40 || Rex > 0x45 || (Rex & 2))) ||
       Insn->bytes[Prefix] != 0x0f || (Opcode != 0x20 && Opcode != 0x22) ||
-      (ModRM >> 6) != 3 ||
-      (ControlIndex != 2 && ControlIndex != 3 && ControlIndex != 8) ||
+      (ModRM >> 6) != 3 || !supportsControlIndex(ControlIndex) ||
       X.op_count != 2 || X.modrm != ModRM ||
       X.encoding.modrm_offset != Prefix + 2 || X.opcode[0] != 0x0f ||
       X.opcode[1] != Opcode || X.opcode[2] || X.opcode[3] || X.rex != Rex ||
