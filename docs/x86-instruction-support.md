@@ -3209,6 +3209,8 @@ Independent KVM execution covers 5,760 original instructions and 23,040
 full-state/RAM comparisons. The SDK round trip stops at every selected
 SYSENTER/SYSEXIT boundary and consumes exactly one step per transfer.
 Eight NeverC and NeverC-to-LLVM C-output profiles at O0/O2 also pass.
-The final integrated run passed 1,569 tests with no failures or skips.
+The initial integrated run passed 1,569 tests with no failures or skips.
+After merging the concurrent packed-arithmetic audit and C-call rendering
+changes, 1,626 tests across twelve labels passed with no failures or skips.
 Nonflat compatibility entry, legacy modes and the other remaining contracts
 above are unchanged; no LLVM release or pin update is claimed.

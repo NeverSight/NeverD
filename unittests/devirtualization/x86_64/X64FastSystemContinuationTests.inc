@@ -102,7 +102,7 @@ int main(void) {
   for(unsigned mode=0;mode<3;++mode)for(unsigned base=0;base<5;++base)
     for(unsigned limit=0;limit<4;++limit) {
       fast_system_state_t s=fast_seed((uintptr_t)memory),want;
-      s.core.cs.attributes=0x809b|((mode==2)<<13)|((mode==1)<<14);
+      s.core.cs.attributes=0x9b|((limit==3)<<15)|((mode==2)<<13)|((mode==1)<<14);
       s.core.cs.base=bases[base];s.core.cs.limit=limits[limit];
       s.core.gpr[1]=0x9000;s.core.gpr[2]=0x1800;
       want=s;memcpy(saved,memory,sizeof(memory));
