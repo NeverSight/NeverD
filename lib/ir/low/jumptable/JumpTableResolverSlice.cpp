@@ -5825,7 +5825,8 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
     if (hasCheckedX86RegistrationDirectCallBytes(
             *CurrentImg, Call.Addr, Call.Inputs[0].Offset, Work, Limit)) {
       Result = getCheckedX86IndependentCalleeStackPop(
-          *CurrentImg, Call.Inputs[0].Offset, Work, Limit);
+          *CurrentImg, Call.Inputs[0].Offset, Work, Limit,
+          AbsoluteRelocationRoots);
       if (!Result && Work < Limit) {
         if (!consumeEvidence(Work))
           return std::nullopt;

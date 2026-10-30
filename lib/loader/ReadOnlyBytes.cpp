@@ -428,8 +428,13 @@ readImmutablePE32CodeBytes(const BinaryImage &Image, va_t Address,
                            uint32_t Size,
                            const std::vector<va_t> &AbsoluteOperands) {
   return readPE32CodeBytes(
-      Image, Address, Size, AbsoluteOperands,
-      [&](auto Visit) { return visitPE32CodeFixups(Image, Visit); });
+      Image, Address, Size, AbsoluteOperands, [&](auto Visit) {
+        // The validator has checked this extent. Ordered inventories only
+        // need the overlapping window, including a wide malformed field
+        // beginning before it, just as in the budgeted reader below.
+        return visitPE32CodeFixups(
+            Image, Visit, ExceptionAddressRange{Address, Address + Size});
+      });
 }
 
 namespace {

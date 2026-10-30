@@ -86,8 +86,8 @@ void CFGBuilder::linkExceptionalSuccessors(LowFunc &Func) {
         CalleeIndex = BorrowedRegistrationCallees;
       else {
         if (!RegistrationCallees)
-          RegistrationCallees =
-              std::make_shared<RegistrationCallCalleeIndex>(*CurrentImg);
+          RegistrationCallees = std::make_shared<RegistrationCallCalleeIndex>(
+              *CurrentImg, nullptr, &absoluteRelocationRootIndex(*CurrentImg));
         CalleeIndex = RegistrationCallees.get();
       }
       Stacks = CalleeIndex->stackContracts(Func);

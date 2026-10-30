@@ -4,9 +4,9 @@
 
 # Testing NeverD
 
-`RegistrationCallABI.ThrowDispatchRequiresClosedAccessesAndNoCallbacks` and
+`RegistrationCallABI.ThrowDispatchRequiresClosedAccessesAndCallbacks` and
 `RegistrationState.CxxDispatchBindingsCannotOutliveAnUnclosedOrigin` cover
-callback-free C++ dispatch binding lifetime, mapped access permissions,
+C++ dispatch binding lifetime, mapped access permissions,
 unrelated IAT writes, prior faults, missing proofs, budget exhaustion and
 block-order independence. `RegistrationCallABI.CleanupDispatchNeedsClosedObjectAndImageEffects`
 also requires closed integer effects for each cleanup leaf; the state tests
@@ -21,6 +21,16 @@ writes and changes to unrelated IAT slots.
 The `nested` profile of `check_windows_registration_nested_try.py` compares
 original, regenerated and CLI-installed images at O0/O1 and rebased addresses;
 its result, not a skipped input-dependent test, supplies runtime qualification.
+
+`RegistrationCalleeRecursion.IndependentStackMemoKeepsImportsAndBudgets`
+checks both memo population orders, import-dependent refusals, exact and
+insufficient budgets, and recovery after a short attempt. Run the complete
+`NeverDRegistrationCalleeStackTests`, registration EH/state, jump-table and
+x87 call-graph suites after changing this shared proof path.
+`NeverDReadOnlyBytesTests` compares ordinary, budgeted and indexed PE32 reads
+at relocation and malformed-field boundaries. GOF2 performance qualification
+requires a separate whole-image static lift with elapsed time, peak RSS and
+output completeness recorded; focused test success does not establish it.
 
 `NeverDSymSimplifyGuardTests` checks that invalid LLVM, invalid options and
 incomplete exception contracts retain their diagnostics without modifying the

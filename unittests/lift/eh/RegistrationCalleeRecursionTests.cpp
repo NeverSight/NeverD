@@ -232,3 +232,67 @@ TEST(RegistrationCalleeRecursion, StackImportsBelongToTheQueriedEntry) {
                 Reached ? std::nullopt : std::optional<uint32_t>{0});
     }
 }
+
+TEST(RegistrationCalleeRecursion, IndependentStackMemoKeepsImportsAndBudgets) {
+  for (bool Reached : {false, true})
+    for (bool Cached : {false, true}) {
+      SCOPED_TRACE(::testing::Message() << Reached << "/" << Cached);
+      const auto Image = makeSeparateStackEntryImage(Reached, Cached);
+      constexpr va_t Target = 0x401040;
+      size_t FreshWork = 0;
+      ASSERT_EQ(getCheckedX86CalleeStackPop(Image, Target, &FreshWork), 4u);
+      ASSERT_GT(FreshWork, 1u);
+      ASSERT_LT(FreshWork, limits::kMaxRegistrationEHStateWork);
+      const auto Independent =
+          Reached ? std::nullopt : std::optional<uint32_t>{4};
+      for (bool IndependentFirst : {false, true}) {
+        SCOPED_TRACE(IndependentFirst);
+        RegistrationStackPopMemo Memo(Image);
+        RegistrationStackPopMemoScope Scope(Memo);
+        size_t Work = 0;
+        if (IndependentFirst)
+          EXPECT_EQ(
+              getCheckedX86IndependentCalleeStackPop(
+                  Image, Target, Work, limits::kMaxRegistrationEHStateWork),
+              Independent);
+        else
+          EXPECT_EQ(getCheckedX86CalleeStackPop(Image, Target, &Work), 4u);
+        EXPECT_EQ(Work, FreshWork);
+        const auto Known = Memo.find(Image, Target, 0);
+        ASSERT_TRUE(Known);
+        EXPECT_EQ(Known->Pop, 4u);
+        EXPECT_EQ(Known->Work, FreshWork);
+
+        // Import-dependent returning ESP remains useful to the ordinary
+        // caller, but cannot become an independent jump-table fact. Both
+        // entry points retain the exact cost of the same fresh proof.
+        Work = 0;
+        EXPECT_EQ(getCheckedX86CalleeStackPop(Image, Target, &Work), 4u);
+        EXPECT_EQ(Work, FreshWork);
+        for (size_t Before : {size_t{0}, size_t{17}})
+          for (size_t Remaining : {size_t{0}, size_t{1}, FreshWork - 1,
+                                   FreshWork, FreshWork + 1}) {
+            Work = Before;
+            const auto Actual = getCheckedX86IndependentCalleeStackPop(
+                Image, Target, Work, Before + Remaining);
+            EXPECT_EQ(Actual,
+                      Remaining >= FreshWork ? Independent : std::nullopt);
+            EXPECT_EQ(Work, Before + std::min(Remaining, FreshWork));
+          }
+      }
+      // A short attempt must not poison a later, adequately funded query.
+      RegistrationStackPopMemo Memo(Image);
+      RegistrationStackPopMemoScope Scope(Memo);
+      size_t Work = 0;
+      EXPECT_FALSE(
+          getCheckedX86IndependentCalleeStackPop(Image, Target, Work, 1));
+      EXPECT_EQ(Work, 1u);
+      EXPECT_FALSE(Memo.find(Image, Target, 0));
+      Work = 0;
+      EXPECT_EQ(getCheckedX86IndependentCalleeStackPop(Image, Target, Work,
+                                                       FreshWork + 1),
+                Independent);
+      EXPECT_EQ(Work, FreshWork);
+      EXPECT_TRUE(Memo.find(Image, Target, 0));
+    }
+}

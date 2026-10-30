@@ -74,9 +74,10 @@ getCheckedX86CalleeStackPop(const BinaryImage &Image, va_t Target,
 /// from inside another callee or registration-state analysis. Neither success
 /// nor failure survives an image change. The consumer must independently bind
 /// its actual direct CALL; memory effects and native ABI remain separate.
-std::optional<uint32_t>
-getCheckedX86IndependentCalleeStackPop(const BinaryImage &Image, va_t Target,
-                                       size_t &Work, size_t Limit);
+/// Optional Roots shares only the unchanged image's relocation inventory.
+std::optional<uint32_t> getCheckedX86IndependentCalleeStackPop(
+    const BinaryImage &Image, va_t Target, size_t &Work, size_t Limit,
+    const detail::AbsoluteRelocationRootIndex *Roots = nullptr);
 
 /// A single physical caller block ending in a direct CALL may fix the index
 /// of an immutable `jmp [reg*4+table]` callee entry. Re-lift the current prefix
@@ -89,8 +90,8 @@ std::optional<uint32_t> getCheckedX86IndependentIndexedCallStackPop(
     const BinaryImage &Image, const LowBlock &Prefix,
     const std::set<va_t> &Roots, size_t &Work, size_t Limit);
 
-/// The answers of getCheckedX86CalleeStackPop for one unchanged image, each
-/// with the work its computation charged, per callee and
+/// The returning-stack answers for one unchanged image, each with its import
+/// dependence and the work its computation charged, per callee and
 /// x86SEHStateAnalysisLevel. A repeated query replays the answer and charges
 /// the same work, so both the answer and the caller's cumulative budget,
 /// including its exhaustion, are those of a fresh computation. Only
@@ -101,6 +102,7 @@ public:
   struct Answer {
     std::optional<uint32_t> Pop;
     size_t Work = 0;
+    bool HasImportDependencies = false;
   };
 
   explicit RegistrationStackPopMemo(const BinaryImage &Image) : Image(Image) {}
@@ -346,9 +348,9 @@ getCheckedX86RegistrationCxxCalleeABI(const BinaryImage &Image, va_t Target,
 /// a fresh index so edits to an image cannot reuse stale callee evidence.
 class RegistrationCallCalleeIndex {
 public:
-  explicit RegistrationCallCalleeIndex(const BinaryImage &Image,
-                                       size_t *CumulativeWork = nullptr)
-      : Image(Image), Work(CumulativeWork ? *CumulativeWork : LocalWork) {}
+  explicit RegistrationCallCalleeIndex(
+      const BinaryImage &Image, size_t *CumulativeWork = nullptr,
+      const detail::AbsoluteRelocationRootIndex *Roots = nullptr);
   RegistrationCallCalleeIndex(const RegistrationCallCalleeIndex &) = delete;
   RegistrationCallCalleeIndex &
   operator=(const RegistrationCallCalleeIndex &) = delete;

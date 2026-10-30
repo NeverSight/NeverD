@@ -1155,6 +1155,39 @@ void RegistrationStackPopMemo::record(const BinaryImage &Other, va_t Target,
   Answers.emplace(std::make_pair(Target, Level), Value);
 }
 
+namespace {
+RegistrationStackPopMemo::Answer
+freshStackPopAnswer(const BinaryImage &Image, va_t Target, size_t &Work,
+                    const detail::AbsoluteRelocationRootIndex *Roots) {
+  // A fresh index answers from the unchanged image and the SEH analysis
+  // level alone, charging the same work every time; only the caller's
+  // remaining budget decides whether that work fits. Every charge counts
+  // toward that total, so it fits exactly when the recorded work does.
+  RegistrationStackPopMemo *Memo =
+      !ActiveStackProofs.empty() || registration_abi::hasActiveCxxCalleeProof()
+          ? nullptr
+          : CurrentStackPopMemo;
+  const unsigned Level = x86SEHStateAnalysisLevel();
+  if (Memo)
+    if (const auto Known = Memo->find(Image, Target, Level)) {
+      if (!registration_abi::chargeCalleeWork(Work, Known->Work))
+        return {};
+      return *Known;
+    }
+  const size_t Before = Work;
+  const auto Proof =
+      RegistrationCallCalleeIndex(Image, &Work, Roots).stackContract(Target);
+  const RegistrationStackPopMemo::Answer Answer{
+      Proof ? std::optional<uint32_t>{Proof->StackPopBytes} : std::nullopt,
+      Work - Before, Proof && !Proof->RequiredImports.empty()};
+  // A failed charge leaves Work at the limit, so a smaller total proves the
+  // computation never ran out.
+  if (Memo && Work < limits::kMaxRegistrationEHStateWork)
+    Memo->record(Image, Target, Level, Answer);
+  return Answer;
+}
+} // namespace
+
 std::optional<uint32_t> getCheckedX86CalleeStackPop(const BinaryImage &Image,
                                                     va_t Target,
                                                     size_t *CumulativeWork) {
@@ -1168,28 +1201,7 @@ std::optional<uint32_t> getCheckedX86CalleeStackPop(const BinaryImage &Image,
     return Owner->stackPop(Target);
   size_t LocalWork = 0;
   size_t &Work = CumulativeWork ? *CumulativeWork : LocalWork;
-  // A fresh index answers from the unchanged image and the SEH analysis
-  // level alone, charging the same work every time; only the caller's
-  // remaining budget decides whether that work fits. Every charge counts
-  // toward that total, so it fits exactly when the recorded work does.
-  RegistrationStackPopMemo *Memo =
-      !ActiveStackProofs.empty() || registration_abi::hasActiveCxxCalleeProof()
-          ? nullptr
-          : CurrentStackPopMemo;
-  const unsigned Level = x86SEHStateAnalysisLevel();
-  if (Memo)
-    if (const auto Known = Memo->find(Image, Target, Level)) {
-      if (!registration_abi::chargeCalleeWork(Work, Known->Work))
-        return std::nullopt;
-      return Known->Pop;
-    }
-  const size_t Before = Work;
-  const auto Pop = RegistrationCallCalleeIndex(Image, &Work).stackPop(Target);
-  // A failed charge leaves Work at the limit, so a smaller total proves the
-  // computation never ran out.
-  if (Memo && Work < limits::kMaxRegistrationEHStateWork)
-    Memo->record(Image, Target, Level, {Pop, Work - Before});
-  return Pop;
+  return freshStackPopAnswer(Image, Target, Work, nullptr).Pop;
 }
 
 std::optional<uint32_t> RegistrationCallCalleeIndex::stackPop(va_t Target) {
@@ -1205,9 +1217,9 @@ RegistrationCallCalleeIndex::stackContract(va_t Target) {
       .prove(Target);
 }
 
-std::optional<uint32_t>
-getCheckedX86IndependentCalleeStackPop(const BinaryImage &Image, va_t Target,
-                                       size_t &Work, size_t Limit) {
+std::optional<uint32_t> getCheckedX86IndependentCalleeStackPop(
+    const BinaryImage &Image, va_t Target, size_t &Work, size_t Limit,
+    const detail::AbsoluteRelocationRootIndex *Roots) {
   if (!isPE32(Image) || Work >= Limit || !ActiveStackProofs.empty() ||
       registration_abi::StackProofOwnerScope::active() ||
       registration_abi::hasActiveCxxCalleeProof() || x86SEHStateAnalysisLevel())
@@ -1220,12 +1232,11 @@ getCheckedX86IndependentCalleeStackPop(const BinaryImage &Image, va_t Target,
       std::min(Limit - Work, limits::kMaxRegistrationEHStateWork);
   const size_t Before = limits::kMaxRegistrationEHStateWork - Allowance;
   size_t CalleeWork = Before;
-  RegistrationCallCalleeIndex Index(Image, &CalleeWork);
-  const auto Proof = Index.stackContract(Target);
+  const auto Answer = freshStackPopAnswer(Image, Target, CalleeWork, Roots);
   Work += CalleeWork - Before;
-  if (!Proof || !Proof->RequiredImports.empty())
+  if (Answer.HasImportDependencies)
     return std::nullopt;
-  return Proof->StackPopBytes;
+  return Answer.Pop;
 }
 
 std::optional<std::vector<RegistrationCalleeStackContract>>

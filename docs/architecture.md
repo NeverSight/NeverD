@@ -1109,6 +1109,16 @@ function bodies remain unchanged. Any body rebuild retires that result before
 parallel builders run. Continuation discovery still runs normally, and image
 publication follows both fixed points; budget refusals and proof requirements
 remain the same.
+
+PE32 returning-stack queries also share a run-local memo across ordinary
+callers and independent jump-table queries. Each answer retains its import
+dependencies and replays the full original proof cost; an import-dependent
+answer cannot authorize an independent call. Incomplete budget attempts are
+not recorded. Nested registration callee indexes copy the caller's
+unchanged-image relocation inventory, sharing its runtime-pointer-role
+computation while keeping callee contracts and work budgets separate. An
+index from another image is ignored.
+
 Core callers opt in through `PipelineOptions::AnalysisCache` and must reset it
 before input or policy mutation; image pointers alone do not establish validity.
 

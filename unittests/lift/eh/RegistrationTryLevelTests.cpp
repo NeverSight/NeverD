@@ -5460,6 +5460,8 @@ TEST(RegistrationTryLevel, ForeignCxxTablesDoNotSeedOrdinaryRoots) {
     size_t Work = 0, OtherWork = 0;
     RegistrationCallCalleeIndex Owner(Img, &Work);
     RegistrationCallCalleeIndex OtherOwner(Other, &OtherWork);
+    RegistrationCallCalleeIndex IndexedOwner(Img, nullptr, &Index);
+    RegistrationCallCalleeIndex ForeignIndexedOwner(Img, nullptr, &OtherIndex);
     // Runtime classification never erases raw relocation provenance.
     std::map<va_t, std::set<va_t>> RawSources;
     ASSERT_TRUE(Index.collectSources(Img, Entry, kPersonality, RawSources));
@@ -5479,7 +5481,7 @@ TEST(RegistrationTryLevel, ForeignCxxTablesDoNotSeedOrdinaryRoots) {
     EXPECT_EQ(OrdinarySources, ExpectedSources);
     Decoder Dec;
     ASSERT_TRUE(Dec.init(Img));
-    for (unsigned Indexed = 0; Indexed != 6; ++Indexed) {
+    for (unsigned Indexed = 0; Indexed != 8; ++Indexed) {
       SCOPED_TRACE(Indexed);
       CFGBuilder Builder;
       Builder.setKnownFuncEntries(&Entries);
@@ -5488,8 +5490,11 @@ TEST(RegistrationTryLevel, ForeignCxxTablesDoNotSeedOrdinaryRoots) {
                                                             : &OtherIndex);
       if (Indexed == 3)
         Builder.setRegistrationCalleeIndex(&Owner);
+      if (Indexed == 6 || Indexed == 7)
+        Builder.setRegistrationCalleeIndex(Indexed == 6 ? &IndexedOwner
+                                                        : &ForeignIndexedOwner);
       std::optional<registration_abi::StackProofOwnerScope> Scope;
-      if (Indexed >= 4)
+      if (Indexed == 4 || Indexed == 5)
         Scope.emplace(Indexed == 4 ? Owner : OtherOwner,
                       Indexed == 4 ? Work : OtherWork);
       for (bool IntegerOnly : {false, true}) {

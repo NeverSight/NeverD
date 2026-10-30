@@ -17,6 +17,17 @@ namespace {
 using registration_abi::chargeCalleeWork;
 } // namespace
 
+RegistrationCallCalleeIndex::RegistrationCallCalleeIndex(
+    const BinaryImage &Image, size_t *CumulativeWork,
+    const detail::AbsoluteRelocationRootIndex *Roots)
+    : Image(Image), Work(CumulativeWork ? *CumulativeWork : LocalWork) {
+  // Own the snapshot so a subsidiary proof cannot outlive its caller's CFG.
+  // Copies share the image-only runtime-role computation, never callee facts.
+  if (Roots && Roots->ownsImage(Image))
+    RelocationRoots =
+        std::make_shared<const detail::AbsoluteRelocationRootIndex>(*Roots);
+}
+
 const detail::AbsoluteRelocationRootIndex &
 RegistrationCallCalleeIndex::absoluteRelocationRoots() {
   if (!RelocationRoots)
