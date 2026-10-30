@@ -47,6 +47,14 @@ body reads beyond a user prototype remain observable.
 
 Explicit state C and its exact byte/state manifest are now available through `neverd decompile --x64-continuation` and `neverd_x64_continuation_source_v1`. The bounded driver stops for environment-owned calls and exits; this does not establish an ordinary kernel function ABI. See [the invocation contract](../../../../docs/x64-continuation-source.md).
 
+The explicit `follow_internal_calls` option composes selected CALL/RET targets
+through the actual physical PC and stack bytes. Changed returns, replacement
+stacks and indirect recursion retain their effects without a host call stack.
+External transfers and all context transitions remain stopping boundaries.
+This closes the dispatch-composition gap; proving alias-dependent ordinary
+parameters and running complete kernel entries in their live environment remain
+separate obligations.
+
 Manifest schema 2 names entry-region selection facts `lowir_*` and records
 `ordinary_source_validation: "not-run"`. Selection defers MedIR; an accepted
 LowIR region may still fail ordinary call/return or ABI validation. Do not use

@@ -35,8 +35,9 @@ struct X64ContinuationExport {
 /// paging width. Native bindings are individually opt-in. Neither selection
 /// claims complete kernel coverage nor authorizes an ordinary C ABI, source
 /// patch or native execution. Both backends consume the same checked
-/// instruction-state LowIR. The emitted driver stops at calls, returns,
-/// privilege transitions and exception entry. V7 requires
+/// instruction-state LowIR. Calls and returns stop by default; the explicit
+/// follow_internal_calls option continues them only at selected actual targets.
+/// Context transitions always stop, including selected targets. V7 requires
 /// sysenter_msr_address_bits and returns a distinct V7 state/driver. The
 /// intel-user-interrupt-v8 profile additionally requires uiret_restores_uif,
 /// owns UIF/monitor validity and stops UIRET at its completed return context.

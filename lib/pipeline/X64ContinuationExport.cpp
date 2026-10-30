@@ -61,6 +61,7 @@ struct Request {
   X64ContinuationSourceOptions Options;
   std::vector<va_t> Addresses;
   bool Entries = false;
+  bool FollowInternalCalls = false;
 };
 
 llvm::Expected<Request> readRequest(llvm::StringRef Text) {
@@ -88,6 +89,7 @@ llvm::Expected<Request> readRequest(llvm::StringRef Text) {
                                        "native_speculation_control_msrs",
                                        "native_descriptor_queries",
                                        "native_page_table_access",
+                                       "follow_internal_calls",
                                        "max_instructions",
                                        "max_operations"};
   for (const auto &[Key, Value] : *Object)
@@ -159,7 +161,8 @@ llvm::Expected<Request> readRequest(llvm::StringRef Text) {
       {"native_speculation_control_msrs",
        &Options.NativeSpeculationControlMsrs},
       {"native_descriptor_queries", &Options.NativeDescriptorQueries},
-      {"native_page_table_access", &Options.NativePageTableAccess}};
+      {"native_page_table_access", &Options.NativePageTableAccess},
+      {"follow_internal_calls", &Result.FollowInternalCalls}};
   if (const auto *Value = Object->get("uiret_restores_uif")) {
     const auto Flag = Value->getAsBoolean();
     if (!Flag)
@@ -335,16 +338,23 @@ typedef struct {
 }
 
 void driver(llvm::raw_ostream &OS,
-            llvm::ArrayRef<X64ContinuationInstructionSource> Units) {
+            llvm::ArrayRef<X64ContinuationInstructionSource> Units,
+            bool FollowInternalCalls) {
   OS << R"C(
 /* State and budget are accessible and disjoint from each other and guest RAM.
  * Every successful instruction consumes one step, including exiting transfers.
- * Native requests and invalid-state rejection consume none. CALL/RET always
- * stop, even for listed targets; the environment may change all state before
- * resuming. Arbitrary-value slots are caller-selected per dynamic instruction;
+ * Native requests and invalid-state rejection consume none. The environment
+ * may change all state at a stopping boundary before resuming.
+ * Arbitrary-value slots are caller-selected per dynamic instruction;
  * leaving them unchanged selects a subset of permitted executions.
  * 0..7,10..12: instruction exits; 8: outside selection; 9: budget exhausted. */
 )C";
+  OS << (FollowInternalCalls
+             ? "/* CALL/RET continue only when their actual target is "
+               "selected.\n"
+               " * The physical stack owns return PCs; no host call stack is "
+               "used. */\n"
+             : "/* CALL/RET stop even when their target is selected. */\n");
   const auto Version = Units.front().StateVersion;
   OS << "uint64_t neverd_x64_continue_v" << Version << "(neverd_x64_state_v"
      << Version << " *state, uint64_t *budget) {\n";
@@ -364,8 +374,21 @@ void driver(llvm::raw_ostream &OS,
      << "        }\n        if (status == "
      << uint64_t(X64ContinuationExitV1::NativeInstruction)
      << " || status == " << uint64_t(X64ContinuationExitV1::InvalidState)
-     << ") return status;\n        --*budget;\n        if (status != "
-     << uint64_t(X64ContinuationExitV1::Continue)
+     << ") return status;\n        --*budget;\n";
+  if (FollowInternalCalls) {
+    // Test the actual post-transfer PC, including a RET through changed guest
+    // memory. An external transfer still reports its boundary when it consumes
+    // the last budget unit; an internal transfer leaves execution budget-bound.
+    OS << "        if (status == " << uint64_t(X64ContinuationExitV1::Call)
+       << " || status == " << uint64_t(X64ContinuationExitV1::Return)
+       << ") {\n            switch (state->PC) {\n";
+    for (const auto &Unit : Units)
+      OS << "            case " << hex(Unit.Address) << "ULL:\n";
+    OS << "                break;\n            default: return status;\n"
+          "            }\n            last = status;\n            continue;\n"
+          "        }\n";
+  }
+  OS << "        if (status != " << uint64_t(X64ContinuationExitV1::Continue)
      << " && status != " << uint64_t(X64ContinuationExitV1::Jump)
      << ") return status;\n        last = status;\n    }\n    return 9;\n}\n";
 }
@@ -487,7 +510,7 @@ exportX64Continuation(const BinaryImage &Image, llvm::StringRef RequestJSON,
   // declarations need not precede byte-pointer steps; inserting their headers
   // first would freeze libc feature selection before the emitter's macros.
   auto Fields = stateDeclaration(OS, Version, Units->front().StateBytes);
-  driver(OS, *Units);
+  driver(OS, *Units, Request->FollowInternalCalls);
   if (Result.Source.size() > limits::pipeline::kX64ContinuationSourceBytes)
     return invalid("x64 continuation source exceeds the output size limit");
   auto Binding = llvm::json::parse(RequestJSON);
@@ -497,8 +520,11 @@ exportX64Continuation(const BinaryImage &Image, llvm::StringRef RequestJSON,
       {"schema_version", 2},
       {"profile", Profile},
       {"interface", "explicit-machine-state"},
+      {"call_return_policy",
+       Request->FollowInternalCalls ? "follow-selected-targets" : "stop"},
       {"coverage",
-       "selected instruction regions; calls and exits require the environment"},
+       "selected instruction regions; external transfers and native or context "
+       "boundaries require the environment"},
       {"source_route", UseLLVM ? "llvm" : "high"},
       {"source_sha256",
        llvm::toHex(
