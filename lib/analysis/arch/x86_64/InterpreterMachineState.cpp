@@ -58,8 +58,11 @@ struct MachineRegionSourcePlan {
   std::map<va_t, va_t> NativeAddresses;
   std::map<va_t, va_t> PendingTraps;
   bool ArchitecturalChoices = false;
+  const SpecializationOptions *SegmentedMemory = nullptr;
   uint64_t MaxChoiceSourceOperations = 0;
 };
+
+enum class MachineRegionSourceVersion { Base, ChoiceV1, ChoiceV2 };
 
 llvm::Error invalid(const llvm::Twine &Message) {
   return llvm::createStringError(llvm::errc::invalid_argument, "%s",
@@ -1275,10 +1278,24 @@ buildMachineSource(const LowFunc &Residual, BinaryFormat SourceFormat,
             continue;
           }
         }
+        const bool Segmented =
+            Op.MemoryAddressSpace != NdMemoryAddressSpace::Default;
         if (Op.MemoryOrdering != NdMemoryOrdering::None ||
-            Op.MemoryAddressSpace != NdMemoryAddressSpace::Default)
+            (Segmented && (!Region || !Region->SegmentedMemory ||
+                           !x64::supportsRuntimeMemoryOperation(
+                               Op, *Region->SegmentedMemory))))
           return invalid(
               "machine source cannot wrap ordered or special memory");
+        if (Segmented) {
+          const auto Memory = lowMemoryOperands(Op);
+          // The raw owner admits the environment. This source version only
+          // represents ordinary scalar accesses with full-width offsets.
+          if (Memory.Address->Size != 8 ||
+              (Memory.AccessSize != 1 && Memory.AccessSize != 2 &&
+               Memory.AccessSize != 4 && Memory.AccessSize != 8))
+            return invalid("machine source requires scalar segmented memory "
+                           "with a 64-bit offset");
+        }
         const NdVar NativeOutput = Op.Output;
         bool CaptureTemporary = false;
         const bool PartialGPROutput =
@@ -1368,6 +1385,26 @@ buildMachineSource(const LowFunc &Residual, BinaryFormat SourceFormat,
                 scalar(Op.Inputs[Input].Offset, Op.Inputs[Input].Size);
           if (auto Error = Remap(Op.Inputs[Input], true))
             return std::move(Error);
+        }
+        if (Segmented) {
+          const auto Memory = lowMemoryOperands(Op);
+          const auto Base = Writer.temporary();
+          Writer.load(
+              Base,
+              Op.MemoryAddressSpace == NdMemoryAddressSpace::X86FS
+                  ? offsetof(InterpreterMachineRegionChoiceStateX64V2, FSBase)
+                  : offsetof(InterpreterMachineRegionChoiceStateX64V2, GSBase));
+          const auto Linear = Writer.temporary();
+          Writer.emit(NdOp::INT_ADD, Linear, {Base, *Memory.Address});
+          // Normalize the optional legacy address-space operand as well.
+          const auto Stored =
+              Memory.StoredValue ? *Memory.StoredValue : NdVar{};
+          std::fill(std::begin(Op.Inputs), std::end(Op.Inputs), NdVar{});
+          Op.NumInputs = 0;
+          Op.addInput(Linear);
+          if (Op.Opcode == NdOp::STORE)
+            Op.addInput(Stored);
+          Op.MemoryAddressSpace = NdMemoryAddressSpace::Default;
         }
         switch (Op.Opcode) {
         case NdOp::CALL:
@@ -1593,14 +1630,17 @@ wrapInterpreterMachineRegionSourceX64(const SpecializationResult &Result,
 static llvm::Expected<InterpreterMachineRegionSource> wrapMachineRegionSource(
     const SpecializationResult &Result, const SpecializationOptions &Expected,
     const InterpreterMachineRegionSourceOptions &SourceOptions,
-    BinaryFormat SourceFormat, bool ArchitecturalChoices) {
+    BinaryFormat SourceFormat, MachineRegionSourceVersion Version) {
+  const bool ArchitecturalChoices = Version != MachineRegionSourceVersion::Base;
+  const bool SegmentedMemory = Version == MachineRegionSourceVersion::ChoiceV2;
   const auto Model = ArchitecturalChoices
                          ? SpecializationUndefinedModel::FreshScalarV1
                          : SpecializationUndefinedModel::SelectedLowIR;
   if (Expected.X64MachineExits.empty() || Expected.UndefinedModel != Model ||
       Expected.X64FlagsProfile !=
           InterpreterMachineStateProfile::UserX64NoFaultV1 ||
-      Expected.X64SegmentedReads || Expected.X64SegmentedWrites ||
+      (!SegmentedMemory &&
+       (Expected.X64SegmentedReads || Expected.X64SegmentedWrites)) ||
       Expected.X64LegacyGSState || Expected.X64CR8State ||
       Expected.X64MXCSRMask || !Expected.X64CodeRegions.empty() ||
       !Expected.X64ImportBindings.empty() ||
@@ -1617,6 +1657,8 @@ static llvm::Expected<InterpreterMachineRegionSource> wrapMachineRegionSource(
     return invalid("machine-region source requires authenticated exits");
   MachineRegionSourcePlan Plan;
   Plan.ArchitecturalChoices = ArchitecturalChoices;
+  if (SegmentedMemory)
+    Plan.SegmentedMemory = &Expected;
   Plan.MaxChoiceSourceOperations = SourceOptions.MaxChoiceSourceOperations;
   for (const auto &Origin : Result.Origins) {
     const auto [At, Inserted] = Plan.NativeAddresses.emplace(
@@ -1657,7 +1699,10 @@ static llvm::Expected<InterpreterMachineRegionSource> wrapMachineRegionSource(
     return Source.takeError();
   InterpreterMachineRegionSource Wrapped{std::move(*Source),
                                          *Result.RawEnvironment};
-  if (ArchitecturalChoices) {
+  if (SegmentedMemory) {
+    Wrapped.StateABI = "x64-machine-region-choice-state-v2";
+    Wrapped.StateBytes = sizeof(InterpreterMachineRegionChoiceStateX64V2);
+  } else if (ArchitecturalChoices) {
     Wrapped.StateABI = "x64-machine-region-choice-state-v1";
     Wrapped.StateBytes = sizeof(InterpreterMachineRegionChoiceStateX64V1);
   }
@@ -1670,7 +1715,7 @@ wrapInterpreterMachineRegionSourceX64(
     const InterpreterMachineRegionSourceOptions &SourceOptions,
     BinaryFormat SourceFormat) {
   return wrapMachineRegionSource(Result, Expected, SourceOptions, SourceFormat,
-                                 false);
+                                 MachineRegionSourceVersion::Base);
 }
 
 llvm::Expected<InterpreterMachineRegionSource>
@@ -1679,7 +1724,16 @@ wrapInterpreterMachineRegionChoiceSourceX64V1(
     const InterpreterMachineRegionSourceOptions &SourceOptions,
     BinaryFormat SourceFormat) {
   return wrapMachineRegionSource(Result, Expected, SourceOptions, SourceFormat,
-                                 true);
+                                 MachineRegionSourceVersion::ChoiceV1);
+}
+
+llvm::Expected<InterpreterMachineRegionSource>
+wrapInterpreterMachineRegionChoiceSourceX64V2(
+    const SpecializationResult &Result, const SpecializationOptions &Expected,
+    const InterpreterMachineRegionSourceOptions &SourceOptions,
+    BinaryFormat SourceFormat) {
+  return wrapMachineRegionSource(Result, Expected, SourceOptions, SourceFormat,
+                                 MachineRegionSourceVersion::ChoiceV2);
 }
 
 llvm::Expected<InterpreterMachineSource>

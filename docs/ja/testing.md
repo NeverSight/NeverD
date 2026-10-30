@@ -2292,3 +2292,5 @@ LLVM C の合成スタックスロットは、実行時にどちらかの 64 ビ
 `NeverDX86UndefinedEffectsTests` の `X86ArithmeticUndefinedAudit` は、従来のレジスタ形式 PADDB/W/D/Q と PSUBB/W/D/Q の正確な符号化、各レーンの独立したラップアラウンド、フラグ保持、512 ビットの全レジスタを検証します。標準的な x64 即値 IMUL は符号拡張した imm8/imm32 と独立した四つの未定義フラグに結び付けます。メモリ、MMX/VEX、バイト列とデコード情報の不一致には個別の受理証明が必要です。`ArchitecturalChoiceSourcePackedArithmeticAndImmediateProducts` は両 C 経路を O0/O2 と ASan/UBSan で実行し、入力枯渇や不一致時に命令の出力とカーソルが未確定であることを確認します。
 
 `X86PackedSelectionAudit` は正規のレジスタ形式 PSHUFD、PCMPEQD、PAND、PACKSSDW/PACKSSWB、PUNPCKLQDQ、MOVMSKPD を検証します。256 通りのシャッフル制御、符号付き飽和境界、部分一致、レジスタの別名、全ベクトルレジスタとフラグの保持を対象とします。従来のメモリ PAND は読み出しや宛先更新の前に [Intel のアラインメント要件](https://cdrdv2-public.intel.com/671436/253665-sdm-vol-1.pdf)を保持します。`X86LegacyAlignedMove.PackedAnd*` はアドレスの折り返し、明示的な FS/GS ベース、利用不能なメモリ、失敗時の状態保持を検証します。選択値ソースの例は ASan/UBSan 下の O0/O2 で両 C 経路を実行し、動的な整列チェックを保持します。不透明なプロセッサ状態の認証ではありません。
+
+`InterpreterMachineRegionSourceTest.SegmentedChoiceSource*` は明示的な FS/GS 基底を両 C 経路、O0/O2、ASan/UBSan で実行します。独立したバイト期待値で全状態、重複メモリと戻り先、アドレスの折り返し、照会と選択記録の予約、不変の記録列を比較します。認証、V1、操作予算、未対応状態の拒否も確認します。`NeverDInterpreterMachineStateTests` を生環境、固定イメージ、継続ソースのテストと実行します。これらの自作プログラムはネイティブカーネル実行を保証しません。
