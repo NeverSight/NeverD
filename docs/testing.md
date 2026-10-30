@@ -17654,3 +17654,7 @@ Changed LLVM bodies and image metadata must refuse the native projection.
 Pair this target with the Windows call-contract, source-entry, C pointer,
 internal-call and pipeline-outcome suites. Other hosts compile the native
 source but do not qualify privileged execution.
+
+`InterpreterMachineRegionSourceTest.ArchitecturalChoiceSource*` executes both C routes at O0/O2 with ASan/UBSan. Compaction regressions compare complete state, memory and records after branch-arm failures and a later loop visit. A 48-instruction sequence checks success, exhaustion and mismatch at early, middle and final records. A separate 3300-instruction case exceeds the former wrapper block capacity and checks both C exports without compiling them. Run `NeverDInterpreterMachineStateTests`; these owned fixtures do not certify an arbitrary native function.
+
+`MedMutableSource.SharedRejectionChainsPreserveEveryCommittedPrefix` checks a 2048-stage conditional chain with two shared rejection exits in forward and reversed block layouts. Both C routes run at O0/O2 with UBSan, comparing return values and committed guest-memory prefixes at early, middle and final failures and on success.

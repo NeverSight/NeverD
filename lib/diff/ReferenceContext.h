@@ -40,6 +40,17 @@ referenceCandidates(const Program &P, const ProgramFeatures &PF,
                     const ProgramFeatures &SF, llvm::ArrayRef<uint32_t> SMatch,
                     const ComparisonControl &Control);
 
+/// Complete callers can contradict a provisional body match. Returns review
+/// alternatives with exactly one unmatched endpoint; WeakP/WeakS mark the
+/// reviewable matches (NoIndex means protected or unmatched). No identity is
+/// established and all observations use the same frozen correspondence.
+std::vector<std::pair<uint32_t, uint32_t>> conflictingCallCandidates(
+    const Program &P, const ProgramFeatures &PF,
+    llvm::ArrayRef<uint32_t> PMatch, llvm::ArrayRef<uint32_t> WeakP,
+    const Program &S, const ProgramFeatures &SF,
+    llvm::ArrayRef<uint32_t> SMatch, llvm::ArrayRef<uint32_t> WeakS,
+    const ComparisonControl &Control);
+
 } // namespace neverd::diff
 
 #endif // NEVERD_LIB_DIFF_REFERENCECONTEXT_H

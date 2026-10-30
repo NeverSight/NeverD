@@ -471,6 +471,8 @@ Chaque enregistrement `InterpreterArchitecturalChoiceX64V1` de 32 octets contien
 
 L’appelant fournit des enregistrements accessibles, stables et séparés de l’état et de la mémoire invitée. Aucun choix propre au processeur n’est déduit. Les statuts de requête, arrêts explicites avant trap et contrôles d’alignement gardent leurs contrats. Les deux voies C peuvent émettre le graphe abaissé, mais les émetteurs ordinaires refusent les productions restantes. Cette interface C++ ne fournit ni intégration CLI/C SDK/GUI, ni ABI ordinaire restaurée, ni certification d’équivalence native.
 
+Les contrôles de choix partagent les blocs de restitution pour épuisement et discordance, tout en conservant le PC original et les drapeaux d’entrée de chaque instruction. Après abaissement scalaire, le wrapper fusionne une succession implicite seulement si le successeur a un unique prédécesseur et n’est ni une entrée ni une racine d’analyse. Les tranches d’instructions, branches conditionnelles et boucles restent explicites. Seules les étiquettes de contrôle générées changent ; constantes invitées et PC des enregistrements restent intacts. Formats d’état, contrôles d’instruction entière, mises à jour du curseur et limites de ressources sont inchangés.
+
 <!-- i18n-section: machine-region-pending-traps -->
 
 ## Sorties avant un trap

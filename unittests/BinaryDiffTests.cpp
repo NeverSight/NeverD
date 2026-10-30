@@ -1378,6 +1378,157 @@ TEST(BinaryDiff, AddressRoleWitnessesRetainBodyAndKnownCallConstraints) {
   }
 }
 
+TEST(BinaryDiff, ConflictingCallRolesRetainWeakMatchesForReview) {
+  for (bool NamedCaller : {false, true})
+    for (bool Tail : {false, true}) {
+      SCOPED_TRACE(NamedCaller);
+      SCOPED_TRACE(Tail);
+      Fn Before = diamond("old_body", 11);
+      Before.Source = NameSource::Generated;
+      Fn Helper = Before;
+      Helper.Name = "new_helper";
+      Helper.Blocks[0][0].Operands = "r0, 123";
+      Fn Public = leaf("new_public", 197, 30);
+      Public.Source = NameSource::Generated;
+      Fn Anchor = leaf("caller", 53);
+      Anchor.Source = NamedCaller ? NameSource::Symbol : NameSource::Generated;
+      if (Tail)
+        Anchor.Blocks[0].back() = {"jmp", "", InstructionFlow::Jump,
+                                   Before.Name};
+      else
+        Anchor.Blocks[0].insert(
+            Anchor.Blocks[0].begin() + 1,
+            {"call", "", InstructionFlow::Call, Before.Name});
+      const auto P = build({Anchor, Before}, 0x1000);
+      Anchor.Blocks[0][Tail ? Anchor.Blocks[0].size() - 1 : 1].Callee =
+          Public.Name;
+      const auto S = build({Anchor, Public, Helper}, 0x9000);
+      for (bool Reverse : {false, true}) {
+        const auto &A = Reverse ? S : P, &B = Reverse ? P : S;
+        const auto R = compare(A, B, {});
+        EXPECT_EQ(R.Matches.size(), 1u);
+        const auto HasCandidate = [&](const ComparisonResult &Result,
+                                      const char *Alternative) {
+          const auto AI = indexOf(A, Reverse ? Alternative : "old_body");
+          const auto BI = indexOf(B, Reverse ? "old_body" : Alternative);
+          return llvm::any_of(Result.Ambiguities, [&](const Ambiguity &Group) {
+            return llvm::is_contained(Group.Primary, AI) &&
+                   llvm::is_contained(Group.Secondary, BI);
+          });
+        };
+        for (const auto *Alternative : {"new_public", "new_helper"})
+          EXPECT_TRUE(HasCandidate(R, Alternative));
+        std::string Error;
+        const auto Read = readComparison(saved(R, A, B), Error);
+        ASSERT_TRUE(Read) << Error;
+        ComparisonResult Edited;
+        ASSERT_FALSE(bindComparison(*Read, A, B, Edited));
+        const auto Original = savedWithoutTimings(R, A, B);
+        EXPECT_EQ(savedWithoutTimings(Edited, A, B), Original);
+        const auto PI = indexOf(A, Reverse ? "new_public" : "old_body");
+        const auto SI = indexOf(B, Reverse ? "old_body" : "new_public");
+        const Override Choice{OverrideKind::Match, A.Functions[PI].Address,
+                              B.Functions[SI].Address};
+        OverrideEffect Effect;
+        ASSERT_FALSE(applyOverride(Edited, A, B, Choice, &Effect));
+        EXPECT_EQ(Edited.secondaryOf(PI), SI);
+        revertOverride(Edited, A, B, Effect);
+        EXPECT_EQ(savedWithoutTimings(Edited, A, B), Original);
+        EXPECT_EQ(compare(A, B, {}, {Choice}).secondaryOf(PI), SI);
+
+        const auto HI = indexOf(A, Reverse ? "new_helper" : "old_body");
+        const auto HJ = indexOf(B, Reverse ? "old_body" : "new_helper");
+        for (auto Kind : {OverrideKind::Match, OverrideKind::Confirm}) {
+          const Override Keep{Kind, A.Functions[HI].Address,
+                              B.Functions[HJ].Address};
+          EXPECT_EQ(compare(A, B, {}, {Keep}).secondaryOf(HI), HJ);
+        }
+        Override Reject = Choice;
+        Reject.Kind = OverrideKind::Unmatch;
+        const auto Rejected = compare(A, B, {}, {Reject});
+        EXPECT_EQ(Rejected.secondaryOf(HI), HJ);
+        EXPECT_FALSE(HasCandidate(Rejected, "new_public"));
+      }
+    }
+}
+
+TEST(BinaryDiff, CallRoleConflictReviewRequiresConsistentCompleteWitnesses) {
+  enum class Case {
+    Incomplete,
+    DisagreeingCallers,
+    KnownRetarget,
+    UnrecordedData,
+    UnknownData,
+    ExactBody,
+    NamedBody,
+    ChangedScalar
+  };
+  for (const auto Kind :
+       {Case::Incomplete, Case::DisagreeingCallers, Case::KnownRetarget,
+        Case::UnrecordedData, Case::UnknownData, Case::ExactBody,
+        Case::NamedBody, Case::ChangedScalar}) {
+    SCOPED_TRACE(unsigned(Kind));
+    Fn Before = diamond("old_body", 11);
+    Before.Source = NameSource::Generated;
+    Fn Helper = Before;
+    Helper.Name = "new_helper";
+    if (Kind != Case::ExactBody)
+      Helper.Blocks[0][0].Operands = "r0, 123";
+    if (Kind == Case::NamedBody) {
+      Before.Source = Helper.Source = NameSource::Symbol;
+      Helper.Name = Before.Name;
+    }
+    Fn Public = leaf("new_public", 197, 30);
+    Public.Source = NameSource::Generated;
+    Fn Anchor = leaf("caller", 53);
+    Anchor.Blocks[0].insert(Anchor.Blocks[0].begin() + 1,
+                            {"call", "", InstructionFlow::Call, Before.Name});
+    if (Kind == Case::Incomplete)
+      Anchor.Traits |= TraitIncomplete;
+    std::vector<Fn> Left{Anchor, Before};
+    Anchor.Blocks[0][1].Callee = Public.Name;
+    std::vector<Fn> Right{Anchor, Public, Helper};
+    if (Kind == Case::DisagreeingCallers) {
+      auto Other = caller("other_caller", 71, {Before.Name});
+      Left.push_back(Other);
+      Other.Blocks[1][2].Callee = Helper.Name;
+      Right.push_back(Other);
+    }
+    if (Kind == Case::KnownRetarget) {
+      for (const auto *Name : {"stable_a", "stable_b"}) {
+        Left.push_back(import(Name));
+        Right.push_back(import(Name));
+      }
+      Left[0].Blocks[0].insert(Left[0].Blocks[0].begin() + 2,
+                               {"call", "", InstructionFlow::Call, "stable_a"});
+      Right[0].Blocks[0].insert(
+          Right[0].Blocks[0].begin() + 2,
+          {"call", "", InstructionFlow::Call, "stable_b"});
+    }
+    if (Kind == Case::ChangedScalar)
+      Right[0].Blocks[0][0].Operands = "r0, 789";
+    auto P = build(Left, 0x1000), S = build(Right, 0x9000);
+    for (auto *Input : {&P, &S})
+      if (Kind == Case::UnrecordedData || Kind == Case::UnknownData) {
+        auto &I = Input->Instructions[0];
+        I.HasUnresolvedData = true;
+        if (Kind == Case::UnknownData) {
+          I.FirstAddressReference = Input->AddressReferences.size();
+          I.AddressReferenceCount = 1;
+          Input->AddressReferences.push_back(
+              {0x8000, 0, ReferenceKind::UnresolvedData});
+        }
+      }
+    for (bool Reverse : {false, true}) {
+      const auto &A = Reverse ? S : P, &B = Reverse ? P : S;
+      const auto R = compare(A, B, {});
+      const auto AI = indexOf(A, Reverse ? Helper.Name : Before.Name);
+      const auto BI = indexOf(B, Reverse ? Before.Name : Helper.Name);
+      EXPECT_EQ(R.secondaryOf(AI), BI);
+    }
+  }
+}
+
 TEST(BinaryDiff, UnknownAddressOperandDoesNotHideAKnownRetargeting) {
   const auto Input = [](bool Retarget) {
     ProgramBuilder B({});

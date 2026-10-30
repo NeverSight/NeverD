@@ -35,7 +35,18 @@ struct Relation {
 };
 using Relations = llvm::DenseMap<uint64_t, Relation>;
 
-enum class ContextMode { DataWitness, DataCandidate, FunctionWitness };
+enum class ContextMode {
+  DataWitness,
+  DataCandidate,
+  FunctionWitness,
+  CallWitness
+};
+
+void recordRelation(Relations &Map, uint64_t A, uint64_t B) {
+  auto [It, Inserted] = Map.try_emplace(A, Relation{B});
+  if (!Inserted && It->second.Other != B)
+    It->second.Conflict = true;
+}
 
 /// A complete occurrence signature. Before relations exist, unknown data keys
 /// are omitted only to align anchors that already correspond independently.
@@ -43,7 +54,8 @@ std::optional<uint64_t>
 referenceKey(const Program &P, const ProgramFeatures &PF, uint32_t FI,
              llvm::ArrayRef<uint32_t> Match, bool Secondary, ContextMode Mode,
              const Relations *Forward, const Relations *Reverse,
-             const ComparisonControl &Control) {
+             const ComparisonControl &Control,
+             llvm::ArrayRef<uint32_t> Weak = {}) {
   const auto &F = PF.Functions[FI];
   if (F.Instructions < limits::diff::kMinDataReferenceInstructions ||
       P.Functions[FI].has(TraitIncomplete) || !F.DataSitesComplete ||
@@ -51,11 +63,18 @@ referenceKey(const Program &P, const ProgramFeatures &PF, uint32_t FI,
     return {};
   StableHash H(F.ReferenceLayout);
   H.add(F.AddressSites.size()).add(F.DataSites.size());
-  bool FunctionOperand = false;
+  bool FunctionOperand = false, ProvisionalCall = false;
   for (const auto &Site : F.AddressSites) {
     if (Control.stop() || Site.Target == NoIndex)
       return {};
     H.add(Site.Instruction).add(Site.Operand);
+    if (Mode == ContextMode::CallWitness && Site.Operand == NoIndex &&
+        Site.Target != FI &&
+        (Match[Site.Target] == NoIndex || Weak[Site.Target] != NoIndex)) {
+      ProvisionalCall = true;
+      H.add("provisional_call");
+      continue;
+    }
     if (Mode == ContextMode::FunctionWitness && Site.Operand != NoIndex) {
       FunctionOperand = true;
       if (Match[Site.Target] == NoIndex) {
@@ -83,6 +102,9 @@ referenceKey(const Program &P, const ProgramFeatures &PF, uint32_t FI,
     Unknown = true;
     if (Mode == ContextMode::DataWitness)
       continue;
+    // A call-role disagreement must not erase unknown data differences.
+    if (Mode == ContextMode::CallWitness)
+      return {};
     const auto It = Forward->find(Site.Key);
     if (It == Forward->end() || It->second.Conflict)
       return {};
@@ -92,8 +114,9 @@ referenceKey(const Program &P, const ProgramFeatures &PF, uint32_t FI,
       return {};
     H.add(Secondary ? Site.Key : It->second.Other);
   }
-  const bool Eligible =
-      Mode == ContextMode::FunctionWitness ? FunctionOperand : Unknown;
+  const bool Eligible = Mode == ContextMode::CallWitness       ? ProvisionalCall
+                        : Mode == ContextMode::FunctionWitness ? FunctionOperand
+                                                               : Unknown;
   return Eligible ? std::optional<uint64_t>(H.value()) : std::nullopt;
 }
 
@@ -136,11 +159,6 @@ referenceCandidates(const Program &P, const ProgramFeatures &PF,
   if (Control.stop())
     return {};
   Relations Forward, Reverse;
-  const auto Record = [](Relations &Map, uint64_t A, uint64_t B) {
-    auto [It, Inserted] = Map.try_emplace(A, Relation{B});
-    if (!Inserted && It->second.Other != B)
-      It->second.Conflict = true;
-  };
   // Merge occurrence observations once, outside per-function work. No
   // Cartesian product of functions sharing a popular global is materialized.
   for (uint32_t A = 0; A < PrimaryCount; ++A) {
@@ -158,8 +176,8 @@ referenceCandidates(const Program &P, const ProgramFeatures &PF,
         return {};
       if (ASites[I].Kind != ReferenceKind::UnresolvedData)
         continue;
-      Record(Forward, ASites[I].Key, BSites[I].Key);
-      Record(Reverse, BSites[I].Key, ASites[I].Key);
+      recordRelation(Forward, ASites[I].Key, BSites[I].Key);
+      recordRelation(Reverse, BSites[I].Key, ASites[I].Key);
     }
   }
   ReferenceCandidates Candidates;
@@ -186,8 +204,8 @@ referenceCandidates(const Program &P, const ProgramFeatures &PF,
         return {};
       if (ASites[I].Operand == NoIndex)
         continue;
-      Record(FunctionForward, ASites[I].Target, BSites[I].Target);
-      Record(FunctionReverse, BSites[I].Target, ASites[I].Target);
+      recordRelation(FunctionForward, ASites[I].Target, BSites[I].Target);
+      recordRelation(FunctionReverse, BSites[I].Target, ASites[I].Target);
     }
   }
   for (uint32_t A = 0; A < PrimaryCount; ++A) {
@@ -233,6 +251,72 @@ referenceCandidates(const Program &P, const ProgramFeatures &PF,
     I = J;
   }
   llvm::sort(Candidates.Data);
+  return Candidates;
+}
+
+std::vector<std::pair<uint32_t, uint32_t>> conflictingCallCandidates(
+    const Program &P, const ProgramFeatures &PF,
+    llvm::ArrayRef<uint32_t> PMatch, llvm::ArrayRef<uint32_t> WeakP,
+    const Program &S, const ProgramFeatures &SF,
+    llvm::ArrayRef<uint32_t> SMatch, llvm::ArrayRef<uint32_t> WeakS,
+    const ComparisonControl &Control) {
+  const size_t PrimaryCount = P.Functions.size();
+  const size_t Total = PrimaryCount + S.Functions.size();
+  std::vector<std::optional<uint64_t>> Keys(Total);
+  parallelForEach(Total, [&](auto Claim, size_t Count) {
+    for (size_t I = Claim(); I < Count; I = Claim()) {
+      if (Control.stop())
+        return;
+      const bool Secondary = I >= PrimaryCount;
+      const auto Map = Secondary ? SMatch : PMatch;
+      const uint32_t F = Secondary ? I - PrimaryCount : I;
+      if (Map[F] != NoIndex)
+        Keys[I] = referenceKey(Secondary ? S : P, Secondary ? SF : PF, F, Map,
+                               Secondary, ContextMode::CallWitness, nullptr,
+                               nullptr, Control, Secondary ? WeakS : WeakP);
+    }
+  });
+  // Merge aligned occurrences once. Even a caller agreeing with the current
+  // body match contributes: contradictory observations cannot choose a winner.
+  Relations Forward, Reverse;
+  for (uint32_t A = 0; A < PrimaryCount; ++A) {
+    if (Control.stop())
+      return {};
+    const uint32_t B = PMatch[A];
+    if (B == NoIndex || !Keys[A] || Keys[A] != Keys[PrimaryCount + B])
+      continue;
+    const auto &ASites = PF.Functions[A].AddressSites;
+    const auto &BSites = SF.Functions[B].AddressSites;
+    if (ASites.size() != BSites.size())
+      continue;
+    for (size_t I = 0; I < ASites.size(); ++I) {
+      if (Control.stop())
+        return {};
+      if (ASites[I].Operand != NoIndex || ASites[I].Target == A)
+        continue;
+      recordRelation(Forward, ASites[I].Target, BSites[I].Target);
+      recordRelation(Reverse, BSites[I].Target, ASites[I].Target);
+    }
+  }
+  std::vector<std::pair<uint32_t, uint32_t>> Candidates;
+  for (uint32_t A = 0; A < PrimaryCount; ++A) {
+    if (Control.stop())
+      return {};
+    const auto It = Forward.find(A);
+    if (It == Forward.end() || It->second.Conflict)
+      continue;
+    const uint32_t B = It->second.Other;
+    const auto Back = Reverse.find(B);
+    if (Back == Reverse.end() || Back->second.Conflict ||
+        Back->second.Other != A)
+      continue;
+    // Only reopen a weak match against one still-unmatched endpoint. Stable
+    // identities and two already paired endpoints cannot be displaced here.
+    if (((PMatch[A] == NoIndex && WeakS[B] != NoIndex) ||
+         (SMatch[B] == NoIndex && WeakP[A] != NoIndex)) &&
+        P.Functions[A].hasBody() && S.Functions[B].hasBody())
+      Candidates.emplace_back(A, B);
+  }
   return Candidates;
 }
 

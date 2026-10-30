@@ -2400,3 +2400,7 @@ Synthetische LLVM-C-Stackslots erhalten den vollständigen 128-Bit-Integer-Schre
 <!-- i18n-section: mutable-alignment-guards -->
 
 `MedMutableSource.AlignmentChecks*` führt ausgerichtete Eingaben und inaktive Bedingungen über beide C-Pfade bei O0/O2 aus, verlangt Traps für aktive nicht ausgerichtete Eingaben und lehnt ungültige Breiten, Ausrichtungen, Ausgaben und Adressräume ab.
+
+`InterpreterMachineRegionSourceTest.ArchitecturalChoiceSource*` führt beide C-Ausgaben bei O0/O2 mit ASan/UBSan aus. Die Regressionen vergleichen vollständigen Zustand, Speicher und Datensätze nach Fehlern in beiden Zweigen sowie bei späteren Schleifendurchläufen. Eine Folge von 48 Befehlen prüft Erfolg, Erschöpfung und Abweichung am Anfang, in der Mitte und am Ende. Ein separater Fall mit 3300 Befehlen überschreitet die bisherige Blockkapazität und prüft beide C-Exporte ohne Kompilierung. `NeverDInterpreterMachineStateTests` ausführen; eigene Fixtures zertifizieren keine beliebige native Funktion.
+
+`MedMutableSource.SharedRejectionChainsPreserveEveryCommittedPrefix` prüft eine Bedingungskette mit 2048 Stufen und zwei gemeinsamen Fehlerausgängen bei normaler und umgekehrter Blockanordnung. Beide C-Pfade laufen mit O0/O2 und UBSan; verglichen werden Rückgabewerte und bereits geschriebene Gastspeicherpräfixe bei frühen, mittleren und letzten Fehlern sowie bei Erfolg.
