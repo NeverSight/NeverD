@@ -18,7 +18,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <iterator>
 #include <vector>
 
 namespace neverd::analysis::detail {
@@ -128,14 +127,7 @@ public:
     const auto Star = shifted(load(offsetof(V5, STAR)), 48);
     const auto StandardSS = masked(op(NdOp::INT_ADD, {Star, k(8)}), 0xffff);
     const auto StandardCS = masked(op(NdOp::INT_ADD, {Star, k(16)}), 0xffff);
-    std::vector<X64ContinuationCompatibilityChoice> Choices;
-    for (uint8_t I = 0; I != std::size(State{}.Undefined); ++I) {
-      const auto Register = x86reg::generalReg(I);
-      // ERETU explicitly clears newRSP[63:32] and loads all 64 bits. The
-      // other legacy GPR high halves follow SDM Vol. 1, 3.4.1.1.
-      if (Register != x86reg::RSP)
-        Choices.push_back({I, NdVar::reg(Register, 8)});
-    }
+    const auto Choices = x64CompatibilityChoices(true);
     W.exitIf(both(eq(SelectorCS, StandardCS), eq(SelectorSS, StandardSS)), [&] {
       canonical(PC);
       writeX64FlatContinuationSegment(W, true, narrow(SelectorCS, 2), true, 3);
@@ -149,7 +141,7 @@ public:
       W.compatibilityChoices(Choices);
       userFinish(masked(PC, UINT32_MAX), Flags, masked(SP, UINT32_MAX), SS);
     });
-    const auto Code = returnCode(SelectorCS, k(3), true);
+    const auto Code = returnCode(SelectorCS, k(3));
     const auto Stack = returnStack(SelectorCS, k(3), SelectorSS,
                                    eq(masked(SelectorSS, 0xfffc), k(0)));
     const auto Compatibility = eq(masked(Code.Value, uint64_t{1} << 53), k(0));

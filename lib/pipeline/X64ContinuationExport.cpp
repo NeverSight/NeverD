@@ -534,6 +534,11 @@ exportX64Continuation(const BinaryImage &Image, llvm::StringRef RequestJSON,
               "steps CPL0; "
               "64-bit entry; live SYSENTER MSRs with declared processor width; "
             : "CPL0 64-bit entry; CET/FRED disabled; ") +
+           std::string(Version == 9
+                           ? ""
+                           : "IRETQ/RETFQ require canonical raw frame RIP; "
+                             "compatibility targets own eight conditional "
+                             "GPR high-half choices; ") +
            std::string(
                "valid caches; declared active paging and MXCSR "
                "mask; successful sequential RAM; no MMIO, "

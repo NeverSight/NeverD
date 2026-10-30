@@ -9425,6 +9425,21 @@ target and reject reentry in the wrong execution mode.
 The [compatibility qualification record](evidence/x86-fred-compatibility-2026-10-30.json)
 records 9,728 new state/RAM cases and the 1,554-test integration run.
 
+`X64FrameReturnContinuationTests.inc` owns the IRETQ/RETFQ compatibility
+fixtures. Independent original instructions on KVM provide complete defined
+state and RAM results across CPL0..3, GDT/LDT, both CS.D and SS.B values,
+canonical frame RIP high halves, stack-boundary carries and unsigned cleanup.
+Independent high-half choices include RSP and retain every defined low bit.
+Descriptor/frame overlap checks the CS accessed write before later stack reads.
+Portable sanitizer cases check code bases, effective limits, invalid mode bits,
+null stacks and unchanged state/RAM on profile refusal. Raw noncanonical RIP
+patterns remain explicitly outside the legacy profile's qualified domain.
+The [legacy compatibility qualification record](evidence/x86-legacy-compatibility-returns-2026-10-30.json)
+records 9,312 original instructions, 37,248 paired state/RAM comparisons,
+12,288 portable limit cases, 92 additional refusals and the 1,557-test
+integration run with no failures or skips. The legacy KVM oracle does not
+independently sample arbitrary full XSAVE/vector banks.
+
 The native speculation and descriptor fixtures compile both source routes at
 O0/O2 into freestanding guests and execute them at CPL0 using Linux x64 KVM.
 They check real SPEC_CTRL readback, PRED_CMD writes, repeated writes, native

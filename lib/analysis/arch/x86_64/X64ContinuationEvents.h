@@ -20,6 +20,7 @@
 #include <cstdint>
 #include <initializer_list>
 #include <optional>
+#include <vector>
 
 namespace neverd::analysis::detail {
 
@@ -67,6 +68,18 @@ class X64ContinuationEvents : private X64ContinuationSegments<Writer> {
   using typename Base::Table;
   using typename Base::V5;
   using typename Base::V6;
+
+  NdVar compatibilityStack(NdVar OldSP, NdVar NewSP, NdVar Attributes,
+                           uint16_t Discard = 0) {
+    // A 16-bit target stack replaces only SP, retaining the old ESP[31:16].
+    // Neither frame pops nor RETF parameter cleanup may carry into those bits.
+    const auto WideStack = ne(masked(Attributes, 0x4000), k(0));
+    const auto Mask = choose(WideStack, k(UINT32_MAX), k(UINT16_MAX));
+    const auto Updated =
+        op(NdOp::INT_AND, {op(NdOp::INT_ADD, {NewSP, k(Discard)}), Mask});
+    return op(NdOp::INT_OR,
+              {Updated, choose(WideStack, k(0), masked(OldSP, 0xffff0000))});
+  }
 
 public:
   X64ContinuationEvents(Writer &Output, unsigned Bits) : Base(Output, Bits) {}
@@ -169,7 +182,7 @@ public:
     W.leave(Exit::Continue, k(NextPC));
   }
 
-  void iret() {
+  std::vector<X64ContinuationCompatibilityChoice> iret() {
     W.rejectIf(ne(masked(load(offsetof(State, RFlags)), 0x4000), k(0)));
     const auto SP = load(offsetof(State, GPR) + x86reg::RSP);
     range(SP, 39);
@@ -179,10 +192,16 @@ public:
     canonical(PC);
     const auto CPL = masked(CS, 3);
     const auto Code = returnCode(CS, CPL);
+    const auto Compatibility = eq(masked(Code.Value, uint64_t{1} << 53), k(0));
+    const auto TargetPC = choose(Compatibility, masked(PC, UINT32_MAX), PC);
+    W.rejectIf(both(Compatibility, less(segmentLimit(Code.Value), TargetPC)));
     const auto NewSP = readMemory(op(NdOp::INT_ADD, {SP, k(24)}));
     const auto SS = masked(readMemory(op(NdOp::INT_ADD, {SP, k(32)})), 0xffff);
     const auto NullSS = eq(masked(SS, 0xfffc), k(0));
+    W.rejectIf(both(Compatibility, NullSS));
     const auto Stack = returnStack(CS, CPL, SS, NullSS);
+    const auto CompatSP =
+        compatibilityStack(SP, NewSP, segmentAttributes(Stack.Value));
     accessed(Code);
     accessed(Stack);
     segment(offsetof(V5, CS), CS, Code.Value);
@@ -192,14 +211,21 @@ public:
                           choose(NullSS, k(2), k(0))});
     returnData(CPL, Unusable);
     W.store(offsetof(V6, NMIBlocked), NdVar::scalar(0, 1));
-    W.store(offsetof(State, GPR) + x86reg::RSP, NewSP);
+    W.store(offsetof(State, GPR) + x86reg::RSP,
+            choose(Compatibility, CompatSP, NewSP));
     W.store(offsetof(State, RFlags),
             op(NdOp::INT_OR, {masked(Flags, 0x3d7fd7), k(2)}));
     W.invalidateMonitor();
+    const auto Choices = x64CompatibilityChoices(false);
+    W.exitIf(Compatibility, [&] {
+      W.compatibilityChoices(Choices);
+      W.leave(Exit::PrivilegeReturn, TargetPC);
+    });
     W.leave(Exit::PrivilegeReturn, PC);
+    return Choices;
   }
 
-  void farReturn(uint16_t Discard) {
+  std::vector<X64ContinuationCompatibilityChoice> farReturn(uint16_t Discard) {
     const auto SP = load(offsetof(State, GPR) + x86reg::RSP);
     range(SP, 15);
     const auto PC = readMemory(SP);
@@ -208,6 +234,9 @@ public:
     const auto CPL = masked(CS, 3);
     const auto Outer = ne(CPL, k(0));
     const auto Code = returnCode(CS, CPL);
+    const auto Compatibility = eq(masked(Code.Value, uint64_t{1} << 53), k(0));
+    const auto TargetPC = choose(Compatibility, masked(PC, UINT32_MAX), PC);
+    W.rejectIf(both(Compatibility, less(segmentLimit(Code.Value), TargetPC)));
     range(SP, choose(Outer, k(31 + Discard), k(15)));
     // Same-privilege RETFQ has only two frame words. Use already validated
     // RAM for the unused SELECT arm; never touch an absent saved SS:RSP.
@@ -219,7 +248,13 @@ public:
         Outer, masked(readMemory(op(NdOp::INT_ADD, {Frame, k(8)})), 0xffff),
         k(0));
     const auto NullSS = eq(masked(SS, 0xfffc), k(0));
+    W.rejectIf(both(Compatibility, both(Outer, NullSS)));
     const auto Stack = returnStack(CS, CPL, SS, NullSS);
+    const auto StackAttributes =
+        choose(Outer, segmentAttributes(Stack.Value),
+               load(offsetof(V5, SS) + offsetof(Segment, Attributes), 2));
+    const auto CompatSP =
+        compatibilityStack(SP, NewSP, StackAttributes, Discard);
     accessed(Code);
     accessed(Stack);
     segment(offsetof(V5, CS), CS, Code.Value);
@@ -233,10 +268,17 @@ public:
                                              choose(NullSS, k(2), k(0))}),
                            Unusable));
     W.store(offsetof(State, GPR) + x86reg::RSP,
-            op(NdOp::INT_ADD, {NewSP, k(Discard)}));
+            choose(Compatibility, CompatSP,
+                   op(NdOp::INT_ADD, {NewSP, k(Discard)})));
     // RETFQ preserves flags and NMI blocking in the admitted entry domain.
     W.invalidateMonitor(Outer);
+    const auto Choices = x64CompatibilityChoices(false);
+    W.exitIf(Compatibility, [&] {
+      W.compatibilityChoices(Choices);
+      W.leave(Exit::PrivilegeReturn, TargetPC);
+    });
     W.leave(Exit::PrivilegeReturn, PC);
+    return Choices;
   }
 
   void softwareInterrupt(uint8_t Vector, uint64_t NextPC) {

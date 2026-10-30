@@ -549,7 +549,7 @@ int main(void) {
     if(bad==1)event_word(s.gpr[4]+8,0);
     if(bad==2)s.gdt.limit=30;
     if(bad==3)event_word(s.gdt.base+24,0x00af7a000000ffffULL);
-    if(bad==4)event_word(s.gdt.base+24,0x00cffa000000ffffULL);
+    if(bad==4)event_word(s.gdt.base+24,0x00effa000000ffffULL);
     if(bad==5)event_word(s.gdt.base+24,0x00af9a000000ffffULL);
     if(bad==6)event_word(s.gpr[4]+31,3);
     if(bad==7)event_word(s.gpr[4]+31,32);
@@ -714,69 +714,6 @@ int main(void) {
 }
 )C",
       false, eventOptions(), {}, true);
-}
-
-TEST_F(X64ContinuationSourceTest,
-       NativeCompatibilityFrameReturnsRetainTheProfileBoundary) {
-  for (unsigned Kind = 0; Kind != 3; ++Kind) {
-    std::vector<uint8_t> Bytes{0x48, uint8_t(Kind == 0   ? 0xcf
-                                             : Kind == 1 ? 0xcb
-                                                         : 0xca)};
-    if (Kind == 2) {
-      Bytes.push_back(7);
-      Bytes.push_back(0);
-    }
-    std::string Harness = EventHarness;
-    Harness += R"C(
-static uint64_t candidate(unsigned kind, event_state_t *s) {
-  return neverd_step_v6_1000(ARG(s));
-}
-)C";
-    Harness += R"C(int main(void) {
-  unsigned char memory[4096],before[4096];
-  for(unsigned kind=KIND;kind==KIND;++kind)for(unsigned cpl=0;cpl<4;++cpl)
-    for(unsigned db=0;db<2;++db)for(unsigned local=0;local<2;++local)
-      for(unsigned accessed=0;accessed<2;++accessed) {
-        event_state_t s=event_seed((uintptr_t)memory);
-        uint64_t table=local?s.ldt.base:s.gdt.base;
-        unsigned cs=local?4:24,ss=local?12:32;
-        uint64_t code=0x008f9a000000ffffULL|((uint64_t)cpl<<45)|
-          ((uint64_t)db<<54)|((uint64_t)accessed<<40);
-        uint64_t data=0x00cf92000000ffffULL|((uint64_t)cpl<<45);
-        event_word(table+(cs&~7),code);event_word(table+(ss&~7),data);
-        uint64_t target_sp=0x12345678000e0000ULL;
-        event_word(s.gpr[4],0x1800);event_word(s.gpr[4]+8,cs|cpl);
-        if(kind==0) {
-          event_word(s.gpr[4]+16,0x246);event_word(s.gpr[4]+24,target_sp);
-          event_word(s.gpr[4]+32,ss|cpl);
-        } else {
-          unsigned discard=kind==2?7:0;
-          event_word(s.gpr[4]+16+discard,target_sp);
-          event_word(s.gpr[4]+24+discard,ss|cpl);
-          target_sp=(cpl?target_sp:s.gpr[4]+16)+discard;
-        }
-        for(unsigned i=0;i<8;++i)s.arbitrary[i]=0xfedcba9876543210ULL+i;
-        event_state_t q=s;memcpy(before,memory,sizeof(memory));
-        __asm__ volatile("outb %%al,$0xe9"::"a"(kind?kind+4:2),
-                         "D"(&q),"S"(kind==2?7:0):"memory");
-        CHECK(q.pc==0x1800 && q.cs.selector==(cs|cpl));
-        CHECK(!(q.cs.attributes&0x2000) && !!(q.cs.attributes&0x4000)==db);
-        CHECK((uint32_t)q.gpr[4]==(uint32_t)target_sp);
-        for(unsigned i=0;i<16;++i)if(i!=4)
-          CHECK(i<8?(uint32_t)q.gpr[i]==(uint32_t)s.gpr[i]:q.gpr[i]==s.gpr[i]);
-        CHECK(q.flags==s.flags && q.nmi_blocked==(kind?s.nmi_blocked:0));
-        memcpy(memory,before,sizeof(memory));
-        event_state_t want=s;
-        CHECK(candidate(kind,&s)==5 && !memcmp(&s,&want,sizeof(s)));
-        CHECK(!memcmp(memory,before,sizeof(memory)));
-      }
-  return 0;
-}
-
-)C";
-    Harness = "#define KIND " + std::to_string(Kind) + "\n" + Harness;
-    run(Bytes, {0x1000}, Harness, false, eventOptions(), {}, true);
-  }
 }
 
 TEST_F(X64ContinuationSourceTest, EventsLeaveEarlierStateLayoutsUnsupported) {
@@ -2341,6 +2278,7 @@ TEST(X64ContinuationSource, RequiresExplicitDomainAndBoundedDistinctAddresses) {
 
 #include "X64FarPointerContinuationTests.inc"
 #include "X64FastSystemContinuationTests.inc"
+#include "X64FrameReturnContinuationTests.inc"
 #include "X64FredContinuationTests.inc"
 #include "X64SysretContinuationTests.inc"
 #include "X64UserInterruptContinuationTests.inc"

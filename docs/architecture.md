@@ -9552,8 +9552,8 @@ separate from the processor's MSR canonical width.
 
 `KernelEventsNoFaultV6` has its own 2,496-byte layout. It adds live GDTR/IDTR,
 LDTR/TR caches, DS/ES and FS/GS metadata, segment usability and NMI blocking.
-FS/GS bases retain their existing single owner. IRETQ validates a 64-bit
-return context at CPL0..3, restores all five frame words, applies outer-return
+FS/GS bases retain their existing single owner. IRETQ validates a long-mode or
+compatibility return context at CPL0..3, restores all five frame words, applies outer-return
 segment invalidation and unblocks NMIs. Its restored RSP is not prematurely
 required to be canonical. INT3 and canonical INT imm8 read the selected live
 IDT gate, select and align the current or IST stack, write the five-word frame
@@ -9579,9 +9579,13 @@ for these event transitions.
 Neither IRETQ nor RETFQ has an unconditional empty undefined-output audit:
 their live return descriptors may select compatibility mode and make legacy
 GPR high halves arbitrary. The earlier generic audit incorrectly erased this
-condition. V6's descriptor owner requires CS.L=1 and CS.D=0 before any write;
-that bounded profile owns its empty arbitrary-effect list. Ordinary LowIR
-keeps incomplete coverage and receives no native-preservation certificate.
+condition. V6's descriptor owner validates the live target mode and binds
+eight conditional high-half choices for compatibility returns. Long-mode
+returns preserve those bits. Ordinary LowIR keeps incomplete coverage and
+receives no native-preservation certificate. The raw frame RIP must be canonical
+at the declared paging width; compatibility mode then uses its low 32 bits and
+effective code limit. Stack restoration and cleanup use SS.B, preserving the
+original ESP[31:16] for a 16-bit stack.
 
 `X64ContinuationEvents` owns these transitions in LowIR above both C routes.
 Validation precedes all state and memory writes. Deferred descriptor accessed
@@ -9590,7 +9594,7 @@ partial commit on rejection. An already-accessed descriptor does not acquire
 a store, so read-only tables remain usable. Null or invalidated segments expose
 their selectors and usability; ignored hidden-cache bytes do not assert an
 Intel-specific clearing pattern. The nonfaulting RAM contract still excludes
-CET/FRED, compatibility returns, concurrent writers, MMIO and asynchronous
+CET/FRED, noncanonical raw return RIP, concurrent writers, MMIO and asynchronous
 execution. Input segment caches must describe a valid hardware context.
 Software interrupts admit the full defined long-mode flags set; other steps retain the
 previous input flag restrictions. Fault delivery remains outside this profile.
@@ -15111,6 +15115,12 @@ determines CS.L. They are separate from the original instruction's missing
 LowIR arbitrary-output certificate. The same choice records drive state
 lowering and manifest slots; ERETU's explicitly restored RSP has no arbitrary
 high-half slot.
+The legacy event owner uses the same encoding-order choice inventory for
+IRETQ/RETFQ compatibility returns, including RSP's high half. Its stack owner
+keeps the target SS.B width and original ESP[31:16] distinct from frame operand
+size and parameter cleanup. Target mode, limit and null-stack checks finish
+before descriptor or state publication. Neither emitter reconstructs these
+decisions from an opaque intrinsic or assumes a preserved high register bank.
 The version-aware state writer transports monitor invalidation for UIRET,
 ERETU and the inherited legacy returns; each return owner decides whether the
 architectural transition invalidates it. Earlier layouts receive no monitor
