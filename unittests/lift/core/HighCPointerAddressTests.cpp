@@ -4924,7 +4924,8 @@ TEST(HighCPointerAddresses, ExternalPrototypeMatchesLeadingUnderscoreCall) {
   const std::string Source = emitFunctions({Func});
   EXPECT_NE(Source.find("extern int __report_gsfailure("), std::string::npos)
       << Source;
-  EXPECT_NE(Source.find("__report_gsfailure(7);"), std::string::npos) << Source;
+  EXPECT_NE(Source.find("__report_gsfailure((uint64_t)7);"), std::string::npos)
+      << Source;
   EXPECT_EQ(Source.find("extern int _report_gsfailure("), std::string::npos)
       << Source;
 }
@@ -35921,8 +35922,9 @@ TEST(HighCPointerAddresses, TerminateProcessReturnsItsResult) {
   Ret.RetVal = HighExpr::makeVar(Dst);
   Func.Body.push_back(std::move(Ret));
   const std::string Source = emitFunctions({Func});
-  EXPECT_NE(Source.find("return (int64_t)TerminateProcess(0, 0xC0000409);"),
-            std::string::npos)
+  EXPECT_NE(
+      Source.find("return (int64_t)TerminateProcess((uint64_t)0, 0xC0000409);"),
+      std::string::npos)
       << Source;
 }
 

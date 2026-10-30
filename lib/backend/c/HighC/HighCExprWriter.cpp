@@ -2528,9 +2528,8 @@ std::string HighCWriter::renderCallExpr(const HighExpr &E) {
   size_t PrintedArgs =
       Defined && !Defined->SourceTypeHint ? ArgCount : debugCallArgLimit(E);
   // So does a known external function's declaration.
-  const auto DeclaredArity = plainDeclarationArity(E);
-  if (DeclaredArity)
-    PrintedArgs = std::max(PrintedArgs, *DeclaredArity);
+  if (const auto Declared = plainDeclarationArity(E))
+    PrintedArgs = std::max(PrintedArgs, *Declared);
   const bool SourceRecord =
       !Defined && Callee &&
       ((Name == Callee->Name && includesHeaderOf(Name)) ||
@@ -2899,7 +2898,6 @@ std::string HighCWriter::renderCallExpr(const HighExpr &E) {
     // argument need not initialize the upper bytes a word-sized callee reads.
     // Strings and addresses already pass as pointers and keep their spelling.
     if (Imm && !PointerArgument && !DefinedParam &&
-        (!DeclaredArity || I >= *DeclaredArity) &&
         (!Prototype || I >= Prototype->ParamCount) && Op->Type &&
         Op->Type->Kind == NdTypeKind::Int && Op->Type->Size > 4) {
       // An image constant may already print as a pointer or uintptr_t,

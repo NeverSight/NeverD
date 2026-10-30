@@ -331,8 +331,7 @@ later arguments are absent.
 
 Untyped wide integer call arguments retain their complete carrier, including
 small nonnegative constants. HighC keeps image strings and pointer-width
-address expressions in their pointer representation, and a fixed external
-declaration supplies its own parameter conversion. Call-argument regressions
+address expressions in their pointer representation. Call-argument regressions
 must parse nested casts rather than stopping at the first closing parenthesis.
 
 Windows provider declarations now include NDIS, filter manager, NETIO,
