@@ -22,6 +22,8 @@
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/ir/TargetRegInfo.h"
 
+#include "llvm/ADT/DenseSet.h"
+
 #include <algorithm>
 #include <cstdint>
 #include <optional>
@@ -54,7 +56,9 @@ bool MedLLVMEmitter::resolveMaterializableDataAddress(const MedVar &V,
     return false;
 
   MedVar Cur = V;
-  std::set<std::tuple<int, int, int, uint16_t>> Seen;
+  // Only membership is observed; the value kind keeps sentinel keys outside
+  // the valid key domain without reserving any SSA ID or version.
+  llvm::SmallDenseSet<std::tuple<int, int, int, uint16_t>, 16> Seen;
   for (;;) {
     // The target's pointer transport rules also cover widened address
     // temporaries and their low pointer-width slices. Every intermediate must

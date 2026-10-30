@@ -4226,9 +4226,12 @@ completed batches under an independent 1 MiB allowance. The load address and
 ordered branch inventory bind each batch; hits pay its original traversal work
 and a smaller allowance follows the normal incomplete path. Cold traversals
 reuse dense block visitation storage while preserving walk order and logical
-work charges. Value and memory reconstruction split their ordered memo indexes
-by block ID, retaining full keys, stable recursive references and the original
-global entry counts used by evidence accounting.
+work charges. Value and memory reconstruction use block-sharded hash indexes
+of separately owned memo entries. Recursive references remain stable through
+index growth; equality compares every key field, and only internal node
+pointers reserve empty/tombstone markers. Erasure, clear and destruction
+retire the owned entries. The original global entry counts and logical lookup
+charges remain unchanged.
 Affine frame equations are independent of value-query matching modes. A mode
 change retires value and memory results while retaining completed frame facts
 within the same frozen batch. Incomplete reconstruction still clears frame

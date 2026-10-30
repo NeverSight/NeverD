@@ -26,6 +26,7 @@
 #include "neverd/support/BinaryEncoding.h"
 #include "neverd/support/Diagnostic.h"
 
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
@@ -980,7 +981,7 @@ MedLLVMEmitter::ptrTableUniqueSegment(const MedVar &V,
   enum class ConstLeafModel { Raw, Symbolized, Incomplete };
   auto emittedConstLeafRelocates = [&](const MedVar &Root) {
     std::vector<MedVar> Pending{Root};
-    std::set<std::tuple<int, int, int, uint16_t>> LeafSeen;
+    llvm::SmallDenseSet<std::tuple<int, int, int, uint16_t>, 16> LeafSeen;
     int LeafBudget =
         ::neverd::limits::backend::kMedLLVMCodePtrResolveLeafBudget;
     while (!Pending.empty() && LeafBudget-- > 0) {
@@ -1021,7 +1022,9 @@ MedLLVMEmitter::ptrTableUniqueSegment(const MedVar &V,
     uint64_t SegVA = 0;
     bool Found = false;
     std::vector<std::pair<MedVar, bool>> Work{{V, false}};
-    std::set<std::tuple<int, int, int, bool>> Seen;
+    // Only membership is observed; the value kind keeps sentinel keys outside
+    // the valid key domain without reserving any SSA ID or version.
+    llvm::SmallDenseSet<std::tuple<int, int, int, int>, 16> Seen;
     // The Seen set bounds the walk to the function's distinct
     // address-arithmetic values; the counter is only a safety cap against a
     // pathological DAG (and is large enough that an index subtree — e.g. a deep

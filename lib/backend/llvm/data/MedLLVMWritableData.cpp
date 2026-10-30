@@ -24,6 +24,7 @@
 #include "neverd/Limits.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
 
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
@@ -120,7 +121,9 @@ MedLLVMEmitter::writableDataSegOf(const MedVar &AddrVar,
     uint64_t SegVA = 0;
     bool Found = false;
     std::vector<MedVar> Work{AddrVar};
-    std::set<std::tuple<int, int, int>> Seen;
+    // Only membership is observed; the value kind keeps sentinel keys outside
+    // the valid key domain without reserving any SSA ID or version.
+    llvm::SmallDenseSet<std::tuple<int, int, int>, 16> Seen;
     int Budget = ::neverd::limits::backend::kMedLLVMWritableDataComputeBudget;
     while (!Work.empty() && Budget-- > 0) {
       MedVar Cur = Work.back();

@@ -3576,6 +3576,12 @@ and freshness after definition/provenance/root changes. `COFFTableBaseCLI.*`
 writes a minimal linked PE, verifies its decoded targets and invokes HighC and
 LLVM-to-C through the CLI, without depending on a platform linker.
 
+`ResolverBlockMemo.*` retains references through 20,000 recursive insertions,
+checks duplicate construction and exact destruction counts, and reuses cleared
+storage. Full signed IDs, 64-bit offsets, maximum widths and independent flags
+remain distinct. Forced hash collisions must not alias or erase other queries.
+The resolver graph/value suites retain their exact budget and warm/cold checks.
+
 `ResolverConstantAddress.*` checks address discovery across four architectures
 and three formats, equal and conflicting predecessor values, scalar/fragment
 collisions, uninitialized arms, loop backedges, cache output identity, every
