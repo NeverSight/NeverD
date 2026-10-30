@@ -636,6 +636,20 @@ void scanDataFuncPointers(BinaryImage &Img, const LoadProgress &Progress) {
       const size_t I = static_cast<size_t>(Cur - Seg->VA);
       uint64_t Val = normalizeCodeAddress(
           readPtr(Seg->Data.data() + I, Img.is64Bit()), Img.Arch, Img.Mode);
+      // An indexed table's entries are its reader's case labels or
+      // callbacks, not independent functions, whatever their first bytes
+      // look like: a jump table in .rdata would otherwise promote every
+      // switch case.
+      if (Img.CodePtrRelocSlots.count(Cur)) {
+        bool InIndexedRun = false;
+        for (const auto &[Begin, End] : Img.IndexedTableRuns)
+          if (Cur >= Begin && Cur < End) {
+            InIndexedRun = true;
+            break;
+          }
+        if (InIndexedRun)
+          continue;
+      }
       if (const auto Guess = Guesses.find(Val);
           Guess != Guesses.end() && Img.CodePtrRelocSlots.count(Cur)) {
         Img.Symbols[Guess->second].IsBoundaryGuess = false;

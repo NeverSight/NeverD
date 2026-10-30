@@ -268,6 +268,7 @@ add_neverd_unittest(NeverDLiftTemporaryTests
 )
 
 add_neverd_unittest(NeverDLiftTests
+  format/COFFMinGWStyleTablesTests.cpp
   x86_64/X64MemoryCallTargetTests.cpp
   aarch64/AArch64_ArithTests.cpp
   aarch64/AArch64_AtomicTests.cpp
@@ -3839,6 +3840,33 @@ endforeach()
 
 # --- Compile COFF/PE test binary ---
 find_program(LLD_LINK_EXEC lld-link)
+
+# A linked i686 PE with MinGW's linker layouts: a callable dispatch table
+# and a dense switch whose jump table lands in .rdata.  Linked with lld-link
+# when available; the test skips when the linker is missing.
+set(_mingw_style_dir "${CMAKE_CURRENT_BINARY_DIR}/mingw-style")
+set(_mingw_style_src
+    "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/test_coff_mingw_style_tables.c")
+set(_mingw_style_obj "${_mingw_style_dir}/test_coff_mingw_style_tables.obj")
+set(_mingw_style_exe "${_mingw_style_dir}/test_coff_mingw_style_tables.exe")
+if(LLD_LINK_EXEC AND CLANG_EXEC)
+  add_custom_command(
+    OUTPUT "${_mingw_style_obj}"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${_mingw_style_dir}"
+    COMMAND ${CLANG_EXEC} -target i686-pc-windows-msvc -O2 -c
+            ${_mingw_style_src} -o "${_mingw_style_obj}"
+    DEPENDS "${_mingw_style_src}" VERBATIM)
+  add_custom_command(
+    OUTPUT "${_mingw_style_exe}"
+    COMMAND "${LLD_LINK_EXEC}" /machine:x86 /subsystem:console /entry:main
+            /nodefaultlib "${_mingw_style_obj}" "/out:${_mingw_style_exe}"
+    DEPENDS "${_mingw_style_obj}" VERBATIM)
+  add_custom_target(neverd-mingw-style-tables-fixture
+    DEPENDS "${_mingw_style_exe}")
+  add_dependencies(NeverDLiftTests neverd-mingw-style-tables-fixture)
+  target_compile_definitions(NeverDLiftTests PRIVATE
+    NEVERD_MINGW_STYLE_TABLES_FIXTURE="${_mingw_style_exe}")
+endif()
 if(LLD_LINK_EXEC)
   set(call_arg_phi_a64_pe_src
       "${CMAKE_CURRENT_SOURCE_DIR}/aarch64/test_call_arg_phi_a64_pe.s")

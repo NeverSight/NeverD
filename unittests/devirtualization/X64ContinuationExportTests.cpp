@@ -401,6 +401,18 @@ TEST_F(X64ContinuationExportTest, FredV9StopsBeforeTargetAndPendingEvents) {
     EXPECT_EQ(Object->getInteger("native_requests"), 1);
     EXPECT_EQ(Object->getInteger("modeled"), 2);
     EXPECT_EQ(Object->getArray("units")->size(), 3u);
+    const auto *Choices =
+        (*Object->getArray("units"))[1].getAsObject()->getArray(
+            "arbitrary_effects");
+    ASSERT_EQ(Choices->size(), 7u);
+    for (size_t I = 0; I != Choices->size(); ++I) {
+      const auto *Choice = (*Choices)[I].getAsObject();
+      EXPECT_EQ(Choice->getInteger("slot"), I < 4 ? I : I + 1);
+      EXPECT_EQ(Choice->getString("after_profile_transition"),
+                "successful_compatibility_return");
+      EXPECT_EQ(Choice->getBoolean("conditional"), true);
+      EXPECT_FALSE(Choice->get("after_operation"));
+    }
     execute(Source, R"C(
 #include <stdlib.h>
 #define CHECK(c) do {if(!(c))abort();}while(0)
@@ -427,6 +439,21 @@ int main(void) {
   want.CS=(neverd_x64_segment){0,UINT32_MAX,19,0xa0fb};
   want.SS=(neverd_x64_segment){0,UINT32_MAX,11,0xc0f3};
   CHECK(neverd_x64_continue_v9(&s,&budget)==12&&budget==8&&!memcmp(&s,&want,sizeof(s)));
+  s.PC=0x1004;s.GPR[4]=(uintptr_t)frame;s.MonitorActive=1;
+  s.CS=(neverd_x64_segment){0,UINT32_MAX,8,0xa09b};
+  s.SS=(neverd_x64_segment){0,UINT32_MAX,16,0xc093};
+  for(unsigned i=0;i<8;++i)s.Undefined[i]=0xabcdef0054321000ULL+i;
+  frame[1]=0xdeadbeef00001008ULL;frame[2]=3;frame[4]=0xabcdef0087654321ULL;
+  frame[5]=11;memcpy(before,frame,sizeof(frame));
+  want=s;want.PC=0x1008;want.GPR[4]=0x87654321;want.MonitorActive=0;
+  want.GSBase=0x1234;want.KernelGSBase=0x5678;
+  want.CS=(neverd_x64_segment){0,UINT32_MAX,3,0xc0fb};
+  want.SS=(neverd_x64_segment){0,UINT32_MAX,11,0xc0f3};
+  for(unsigned i=0;i<8;++i)if(i!=4)
+    want.GPR[i]=(uint32_t)want.GPR[i]|((uint64_t)(uint32_t)want.Undefined[i]<<32);
+  CHECK(neverd_x64_continue_v9(&s,&budget)==12&&budget==7&&!memcmp(&s,&want,sizeof(s)));
+  CHECK(!memcmp(frame,before,sizeof(frame)));
+  CHECK(neverd_x64_continue_v9(&s,&budget)==5&&budget==7&&!memcmp(&s,&want,sizeof(s)));
   return 0;
 }
 )C");

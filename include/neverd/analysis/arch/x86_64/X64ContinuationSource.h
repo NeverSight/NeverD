@@ -265,7 +265,10 @@ enum class X64ContinuationProfile : uint8_t {
   /// outside VMX non-root execution.
   /// Only canonical ERETS/ERETU are admitted. Other instructions request
   /// native execution; this does not inherit the earlier FRED-disabled domains.
-  /// Return to 64-bit mode, successful ordinary frame/descriptor RAM accesses,
+  /// ERETS returns to 64-bit mode; ERETU may return to compatibility mode.
+  /// Compatibility choices are profile-owned, conditional on the live target
+  /// mode; ERETU's explicitly restored RIP/RSP high halves stay zero.
+  /// Successful ordinary frame/descriptor RAM accesses,
   /// no asynchronous delivery and no pending debug trap at entry. Event
   /// outputs are explicit and the step always stops before their delivery.
   /// PagingAddressBits and MXCSRMask are required. SYSENTER and UIRET feature
@@ -332,6 +335,14 @@ struct X64ContinuationSourceOptions {
   uint64_t MaxOperations = limits::analysis::kX64ContinuationMaxOperations;
 };
 
+/// A profile-owned choice of a legacy GPR's upper 32 bits on a successful
+/// return to compatibility mode. This is not a native LowIR sidecar: the live
+/// return descriptor chooses the mode inside the continuation implementation.
+struct X64ContinuationCompatibilityChoice {
+  uint8_t Slot = 0;
+  NdVar Output;
+};
+
 struct X64ContinuationInstructionSource {
   va_t Address = 0;
   std::vector<uint8_t> Bytes;
@@ -345,6 +356,10 @@ struct X64ContinuationInstructionSource {
   /// The arbitrary-value slot order and original instruction-local timing.
   /// Empty for a native request, where no source instruction has executed.
   std::vector<LowUndefinedEffect> UndefinedEffects;
+  /// Apply only after a successful profile transition with new CS.L=0.
+  /// Slots retain x86 GPR encoding order; explicitly restored registers may
+  /// have no choice. No original instruction-local operation index is implied.
+  std::vector<X64ContinuationCompatibilityChoice> CompatibilityChoices;
   bool RequiresNativeExecution = false;
   std::string Diagnostic;
 };
