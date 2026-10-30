@@ -2354,17 +2354,21 @@ TEST_F(SessionCAPITest, DecompileFunctionsWritesOneUnitOfTheSelection) {
             std::string::npos);
 }
 
-// main calls stale and keep; stale returns the return address its own call
-// of keep left below the stack pointer: main at the entry, stale at +0xb and
-// keep at +0x1e.
+// main calls stale and keep. stale adjusts RSP by an unconstrained input, so
+// its CALL slot may overlap the fixed read below its saved frame. An exact CALL
+// slot is already representable as its original return PC, not a refusal case.
+// main is at the entry, stale at +0xb and keep at +0x20.
 constexpr char StaleSlotBytes[] =
     "\xe8\x06\x00\x00\x00"      // main+0x00: call stale
-    "\xe8\x14\x00\x00\x00"      // main+0x05: call keep
+    "\xe8\x16\x00\x00\x00"      // main+0x05: call keep
     "\xc3"                      // main+0x0a: ret
-    "\x48\x83\xec\x08"          // stale: sub rsp, 8
-    "\xe8\x0a\x00\x00\x00"      //        call keep
-    "\x48\x8b\x44\x24\xf8"      //        mov rax, [rsp-8]
-    "\x48\x83\xc4\x08"          //        add rsp, 8
+    "\x53"                      // stale: push rbx
+    "\x48\x89\xe3"              //        mov rbx, rsp
+    "\x48\x29\xfc"              //        sub rsp, rdi
+    "\xe8\x09\x00\x00\x00"      //        call keep
+    "\x48\x8b\x43\xf8"          //        mov rax, [rbx-8]
+    "\x48\x89\xdc"              //        mov rsp, rbx
+    "\x5b"                      //        pop rbx
     "\xc3"                      //        ret
     "\xb8\x07\x00\x00\x00\xc3"; // keep: mov eax, 7; ret
 constexpr std::string_view StaleSlotCode(StaleSlotBytes,
@@ -2376,7 +2380,7 @@ TEST_F(SessionCAPITest, DecompileFunctionsNamesARefusedSelectedFunction) {
   ASSERT_EQ(neverd_session_load(Session, Input.c_str()), 1)
       << takeString(neverd_last_error(Session));
   const uint64_t Main = neverd_session_entry_addr(Session);
-  const uint64_t Stale = Main + 0xb, Keep = Main + 0x1e;
+  const uint64_t Stale = Main + 0xb, Keep = Main + 0x20;
   for (const uint64_t Entry : {Main, Stale, Keep})
     if (neverd_func_find_by_addr(Session, Entry) < 0)
       ASSERT_EQ(neverd_func_create(Session, Entry), 0)
@@ -6582,7 +6586,7 @@ TEST_F(SessionCAPITest, KernelImportsPassWhatTheirPrototypesTake) {
   // Owner only jumps to IoThreadToProcess, which takes one parameter, and
   // so passes the one it was given on.
   const std::string Owner = takeString(neverd_decompile(Session, 0x180001000));
-  EXPECT_NE(Owner.find("Owner(int64_t arg0) {"), std::string::npos) << Owner;
+  EXPECT_NE(Owner.find("Owner(void* arg0) {"), std::string::npos) << Owner;
   // ntifs.h's official public aliases name _KTHREAD/_KPROCESS; the bundled
   // compatibility headers name _ETHREAD/_EPROCESS. Both are opaque pointers.
   const std::string ThreadType =
@@ -6591,9 +6595,7 @@ TEST_F(SessionCAPITest, KernelImportsPassWhatTheirPrototypesTake) {
                                  ? "_KTHREAD"
                                  : "_ETHREAD";
   const std::string Process = Thread == "_KTHREAD" ? "_KPROCESS" : "_EPROCESS";
-  EXPECT_NE(Owner.find("IoThreadToProcess((" + Thread + "*)(uintptr_t)arg0)"),
-            std::string::npos)
-      << Owner;
+  EXPECT_NE(Owner.find("IoThreadToProcess(arg0)"), std::string::npos) << Owner;
   // The calls take what the prototypes declare and return what they
   // return; the registers the allocation clobbered pass nothing on.
   const int Index = neverd_func_find_by_name(Session, "Probe");
@@ -6608,9 +6610,9 @@ TEST_F(SessionCAPITest, KernelImportsPassWhatTheirPrototypesTake) {
                        WindowsUnsignedLongC + " Tag);"),
             std::string::npos)
       << Probe;
-  EXPECT_NE(
-      Probe.find(" = IoThreadToProcess((" + Thread + "*)(uintptr_t)arg0);"),
-      std::string::npos)
+  EXPECT_NE(Probe.find("Probe(void* arg0, int64_t arg1) {"), std::string::npos)
+      << Probe;
+  EXPECT_NE(Probe.find(" = IoThreadToProcess(arg0);"), std::string::npos)
       << Probe;
   EXPECT_EQ(Probe.find("unknown"), std::string::npos) << Probe;
 }
@@ -6686,9 +6688,8 @@ TEST_F(SessionCAPITest, UserImportsPassWhatTheirPrototypesTake) {
   // Open passes the name it was given on as the first of CreateFileW's
   // seven parameters.
   const std::string Open = decompile("Open");
-  EXPECT_NE(Open.find("Open(int64_t arg0) {"), std::string::npos) << Open;
-  EXPECT_NE(Open.find("CreateFileW((uint16_t*)(uintptr_t)arg0, 0x80000000, "
-                      "1, 0, 3, 0, 0)"),
+  EXPECT_NE(Open.find("Open(void* arg0) {"), std::string::npos) << Open;
+  EXPECT_NE(Open.find("CreateFileW(arg0, 0x80000000, 1, 0, 3, 0, 0)"),
             std::string::npos)
       << Open;
   // GetLastError takes nothing; CloseHandle and ZwClose, which phnt's
@@ -6699,8 +6700,9 @@ TEST_F(SessionCAPITest, UserImportsPassWhatTheirPrototypesTake) {
                        " ZwClose(void *Handle);"),
             std::string::npos)
       << Probe;
-  EXPECT_NE(Probe.find("ZwClose((void*)(uintptr_t)arg0)"), std::string::npos)
-      << Probe;
+  EXPECT_NE(Probe.find("Probe(void* arg0) {"), std::string::npos) << Probe;
+  EXPECT_NE(Probe.find("CloseHandle(arg0)"), std::string::npos) << Probe;
+  EXPECT_NE(Probe.find("ZwClose(arg0)"), std::string::npos) << Probe;
   // LLVM-C declares the imports it calls that no header it includes
   // declares, and passes them what their prototypes take.
   const std::string Lowered = takeString(neverd_decompile_llvm_ex(
@@ -6831,9 +6833,8 @@ TEST_F(SessionCAPITest, ARM64ImportsPassWhatTheirPrototypesCount) {
   // Open jumps to CreateFileW through its slot and passes its own argument
   // on in x0, which it never writes.
   const std::string Open = decompile("Open");
-  EXPECT_NE(Open.find("Open(int64_t arg0)"), std::string::npos) << Open;
-  EXPECT_NE(Open.find("CreateFileW((uint16_t*)(uintptr_t)arg0, 0x80000000, "
-                      "1, 0, 3, 0, 0)"),
+  EXPECT_NE(Open.find("Open(void* arg0)"), std::string::npos) << Open;
+  EXPECT_NE(Open.find("CreateFileW(arg0, 0x80000000, 1, 0, 3, 0, 0)"),
             std::string::npos)
       << Open;
   // GetLastError takes nothing: the x0 Probe was called with is none.
@@ -6906,14 +6907,17 @@ TEST_F(SessionCAPITest, LinuxProgramsJoinTheirGlibcLibrary) {
     // The size of its long double, which glibc's long_double_t names: the
     // x87's, a quad, or on 32-bit ARM a double.
     int64_t LongDouble;
+    const char *PathArgument;
   };
   const Program Programs[] = {
-      {"linux_libc_calls_x64", "linux-x64", "LP64", "itanium", 144, true, 16},
-      {"linux_libc_calls_x86", "linux-x86", "ILP32", "i386-sysv", 88, false,
-       12},
+      {"linux_libc_calls_x64", "linux-x64", "LP64", "itanium", 144, true, 16,
+       "arg0"},
+      {"linux_libc_calls_x86", "linux-x86", "ILP32", "i386-sysv", 88, false, 12,
+       "(char*)(uintptr_t)arg0"},
       {"linux_libc_calls_arm64", "linux-arm64", "LP64", "itanium", 128, true,
-       16},
-      {"linux_libc_calls_arm", "linux-arm", "ILP32", "aapcs32", 88, true, 8},
+       16, "(char*)(uintptr_t)arg0"},
+      {"linux_libc_calls_arm", "linux-arm", "ILP32", "aapcs32", 88, true, 8,
+       "(char*)(uintptr_t)arg0"},
   };
   const auto Fixtures =
       std::filesystem::path(__FILE__).parent_path() / "types" / "fixtures";
@@ -6955,7 +6959,7 @@ TEST_F(SessionCAPITest, LinuxProgramsJoinTheirGlibcLibrary) {
     // through void *, which converts to <sys/stat.h>'s struct stat *.  No
     // typedef names the record stat, the function's name.
     const std::string HighC = takeString(neverd_decompile(Linux, Entry));
-    EXPECT_NE(HighC.find("stat((char*)(uintptr_t)arg0, (void*)&"),
+    EXPECT_NE(HighC.find(std::string("stat(") + P.PathArgument + ", (void*)&"),
               std::string::npos)
         << HighC;
     EXPECT_EQ(HighC.find("typedef struct stat stat;"), std::string::npos)
@@ -7059,7 +7063,7 @@ TEST_F(SessionCAPITest, MuslProgramsJoinTheirMuslLibrary) {
   };
   const Program Programs[] = {
       {"musl_libc_calls_x64", "musl-x64", "LP64", "itanium", 144,
-       "stat((char*)(uintptr_t)arg0, (void*)&", false},
+       "stat(arg0, (void*)&", false},
       {"musl_libc_calls_x86", "musl-x86", "ILP32", "i386-sysv", 144,
        "__stat_time64((char*)(uintptr_t)arg0, (struct stat*)&", false},
   };
@@ -7115,7 +7119,7 @@ TEST_F(SessionCAPITest, DarwinProgramsJoinTheirPlatformsLibrary) {
   };
   const Program Programs[] = {
       {"darwin_libc_calls_x64", "macos-x64", "itanium",
-       "stat_INODE64((char*)(uintptr_t)arg0, (struct stat*)&",
+       "stat_INODE64(arg0, (struct stat*)&",
        "extern int32_t stat_INODE64(char* arg0, struct stat* arg1) "
        "__asm__(\"_stat$INODE64\");"},
       {"darwin_libc_calls_arm64", "macos-arm64", "apple-arm64",
