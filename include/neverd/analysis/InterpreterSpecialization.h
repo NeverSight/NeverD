@@ -255,15 +255,15 @@ struct SpecializationOptions {
   /// Requires ExplicitMachineState and
   /// NormalNonfaultingExecution. Bases may alias each other, the frame or any
   /// other address; this grants no operating-system layout or nonalias facts.
-  /// Only the raw residual API supports this environment contract. V1 source
-  /// wrapping and native proof APIs do not have authenticated base inputs.
+  /// Raw recovery and choice-region source V2 support this contract. Source
+  /// and native proof interfaces without authenticated base inputs refuse it.
   bool X64SegmentedReads = false;
   /// Retain ordinary scalar FS/GS stores with a 64-bit offset and arbitrary
   /// long-mode bases, fixed unless X64LegacyGSState is declared. Requires
   /// explicit nonfaulting machine state.
   /// Full linear addresses may alias any memory, including live return cells;
-  /// offset provenance grants no frame or separation fact. This raw-residual
-  /// contract is independent of X64SegmentedReads. Source and native proof
+  /// offset provenance grants no frame or separation fact. This contract is
+  /// independent of X64SegmentedReads. Source and native proof
   /// interfaces without authenticated base inputs refuse it.
   bool X64SegmentedWrites = false;
   /// Raw-only SWAPGS state under an explicit kernel flags profile, nonfaulting

@@ -2257,3 +2257,5 @@ LLVM C 的合成栈槽保留完整的 128 位整数写入，再由运行时选�
 `NeverDX86UndefinedEffectsTests` 的 `X86ArithmeticUndefinedAudit` 检查传统寄存器 PADDB/W/D/Q、PSUBB/W/D/Q 的精确编码、各通道独立回绕、标志保持和完整 512 位寄存器组。规范 x64 立即数 IMUL 绑定符号扩展的 imm8/imm32 及四个独立未定义标志。内存、MMX/VEX 和字节与解码详情不一致的形式仍需各自的准入证明。`ArchitecturalChoiceSourcePackedArithmeticAndImmediateProducts` 在 O0/O2、ASan/UBSan 下执行两条 C 路线，检查记录耗尽或不匹配时整条指令尚未提交目标和游标。
 
 `X86PackedSelectionAudit` 检查规范寄存器形式的 PSHUFD、PCMPEQD、PAND、PACKSSDW/PACKSSWB、PUNPCKLQDQ 和 MOVMSKPD，覆盖全部 256 种重排控制字、有符号饱和边界、部分相等、寄存器别名、完整向量寄存器组和标志保持。传统内存 PAND 在读内存或修改目的寄存器前保留 [Intel 规定的对齐要求](https://cdrdv2-public.intel.com/671436/253665-sdm-vol-1.pdf)；`X86LegacyAlignedMove.PackedAnd*` 检查地址回绕、显式 FS/GS 基址、不可用内存及失败时状态不变。取值源样例在 ASan/UBSan 下以 O0/O2 执行两条 C 路线，保留动态对齐检查。这些检查不认证不透明处理器状态。
+
+`InterpreterMachineRegionSourceTest.SegmentedChoiceSource*` 在 O0/O2 下通过两种 C 路线执行显式 FS/GS 基址测试，并启用 ASan/UBSan。独立字节预期比较完整状态、重叠内存与返回地址单元、回绕地址、查询及选择记录预留和不变的记录带。拒绝测试覆盖认证、V1、操作预算与不支持的架构状态。运行 `NeverDInterpreterMachineStateTests` 及原始环境、固定映像和延续源码测试；这些自有程序不证明原生内核执行等价。

@@ -15221,3 +15221,5 @@ native function. Unknown ordinary calls and physical interrupt/system entry
 return proofs retain their existing admission rules.
 
 LLVMC indexes LLVM block order once per immutable function projection. Exclusive skip/else-if layout checks reuse that index instead of scanning the function per candidate. Selecting another function rebuilds the index; branch semantics and source limits are unchanged.
+
+`wrapInterpreterMachineRegionChoiceSourceX64V2` owns the separate 472-byte state with explicit, stable FSBase/GSBase inputs. It reuses raw segmented-memory admission and lowers scalar 1/2/4/8-byte accesses at 64-bit offsets to base-plus-offset in the shared source adapter before either C backend. Linear addresses may alias each other and ordinary guest memory, including return cells; state and tapes remain disjoint. V1 layouts and refusals stay unchanged. Other architectural banks and base mutation remain unsupported.
