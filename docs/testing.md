@@ -17484,6 +17484,12 @@ and CLI through both C routes. Generated C runs at O0/O2 with ASan/UBSan,
 including physical CALL bytes, callback-selected replacement stacks, reentry,
 internal and external jumps, loop-budget exhaustion and unchanged native and
 invalid-state boundaries. IRETQ consumes exactly one successful driver step.
+`InternalCallsAndReturnsFollowChangedPhysicalFrames` composes selected CALL/RET
+targets across replacement stacks, changed return PCs and indirect recursion.
+It checks exact exhausted budgets, external transfers on the final step,
+omitted-callee reentry and unchanged native/refusal state. The V6–V9 context
+transition checks retain their stopping boundaries with internal-call following
+enabled; neither a selected target nor remaining budget may execute it.
 The suite also checks selected CFG export without an ordinary return proof,
 strict request rejection, source/manifest hash binding and SDK/CLI parity.
 Run `NeverDX64ContinuationSourceTests` for the independent privileged-instruction

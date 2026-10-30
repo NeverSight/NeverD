@@ -35,6 +35,9 @@ extern "C" {
 /// The returned C includes its state layout and a bounded resume driver. It
 /// does not use an ordinary function ABI or execute the loaded image. CALL,
 /// RET, privilege return and exception entry stop at environment boundaries.
+/// The optional boolean follow_internal_calls continues CALL/RET only when
+/// their actual post-transfer PC is selected. It uses physical guest stack
+/// bytes, including callback mutations; context transitions still stop.
 /// An unimplemented native request leaves the instruction unexecuted.
 ///
 /// On success, ManifestJSON receives an independently owned JSON manifest of

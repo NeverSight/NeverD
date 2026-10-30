@@ -169,7 +169,8 @@ static neverd_x64_state_v6 seed(void) {
 
 TEST_F(X64ContinuationExportTest, SoftwareInterruptStopsBeforeSelectedHandler) {
   load({0xcd, 0xff, 0xcd, 0x2d, 0xb8, 7, 0, 0, 0});
-  const auto Request = request(R"("instructions":[4096,4098,4100])");
+  const auto Request = request(
+      R"("follow_internal_calls":true,"instructions":[4096,4098,4100])");
   for (bool LLVM : {false, true}) {
     SCOPED_TRACE(LLVM);
     auto [Source, Manifest] = source(Request, LLVM);
@@ -216,7 +217,7 @@ TEST_F(X64ContinuationExportTest,
   load(
       {0x0f, 0x30, 0x0f, 0x32, 0x0f, 0x34, 0x0f, 0x35, 0x48, 0x0f, 0x35, 0x90});
   const std::string Request =
-      R"({"profile":"intel-fast-system-v7","mxcsr_mask":"0xffbf","paging_address_bits":48,"sysenter_msr_address_bits":48,"instructions":[4096,4098,4100,4102,4104,4107]})";
+      R"({"profile":"intel-fast-system-v7","mxcsr_mask":"0xffbf","paging_address_bits":48,"sysenter_msr_address_bits":48,"follow_internal_calls":true,"instructions":[4096,4098,4100,4102,4104,4107]})";
   for (bool LLVM : {false, true}) {
     auto [Source, Manifest] = source(Request, LLVM, 7);
     auto Parsed = llvm::json::parse(Manifest);
@@ -314,7 +315,7 @@ TEST_F(X64ContinuationExportTest, UserInterruptV8StopsBeforeTheReturnedTarget) {
   load({0xf3, 0x0f, 0x01, 0xee, 0xf3, 0x0f, 0x01, 0xef, 0xf3, 0x0f, 0x01, 0xed,
         0xf3, 0x0f, 0x01, 0xec, 0x90});
   const std::string Request =
-      R"({"profile":"intel-user-interrupt-v8","mxcsr_mask":"0xffbf","paging_address_bits":48,"sysenter_msr_address_bits":48,"uiret_restores_uif":true,"instructions":[4096,4100,4104,4108,4112]})";
+      R"({"profile":"intel-user-interrupt-v8","mxcsr_mask":"0xffbf","paging_address_bits":48,"sysenter_msr_address_bits":48,"uiret_restores_uif":true,"follow_internal_calls":true,"instructions":[4096,4100,4104,4108,4112]})";
   for (bool LLVM : {false, true}) {
     auto [Source, Manifest] = source(Request, LLVM, 8);
     auto Parsed = llvm::json::parse(Manifest);
@@ -391,7 +392,7 @@ int main(void) {
 TEST_F(X64ContinuationExportTest, FredV9StopsBeforeTargetAndPendingEvents) {
   load({0xf2, 0x0f, 0x01, 0xca, 0xf3, 0x0f, 0x01, 0xca, 0x90});
   const std::string Request =
-      R"({"profile":"intel-fred-return-v9","mxcsr_mask":"0xffbf","paging_address_bits":48,"instructions":[4096,4100,4104]})";
+      R"({"profile":"intel-fred-return-v9","mxcsr_mask":"0xffbf","paging_address_bits":48,"follow_internal_calls":true,"instructions":[4096,4100,4104]})";
   for (bool LLVM : {false, true}) {
     auto [Source, Manifest] = source(Request, LLVM, 9);
     auto Parsed = llvm::json::parse(Manifest);
@@ -477,7 +478,8 @@ int main(void) {
 
 TEST_F(X64ContinuationExportTest, FarReturnStopsBeforeTargetAndKeepsCleanup) {
   load({0x48, 0xca, 7, 0, 0xb8, 7, 0, 0, 0});
-  const auto Request = request(R"("instructions":[4096,4100])");
+  const auto Request =
+      request(R"("follow_internal_calls":true,"instructions":[4096,4100])");
   for (bool LLVM : {false, true}) {
     SCOPED_TRACE(LLVM);
     auto [Source, Manifest] = source(Request, LLVM);
@@ -672,6 +674,7 @@ TEST_F(X64ContinuationExportTest, DriverRetainsPhysicalCallsPivotsAndReentry) {
     auto [Source, Manifest] = source(Request, LLVM);
     auto Parsed = llvm::json::parse(Manifest);
     ASSERT_TRUE(bool(Parsed));
+    EXPECT_EQ(Parsed->getAsObject()->getString("call_return_policy"), "stop");
     EXPECT_EQ(Parsed->getAsObject()->getInteger("native_requests"), 1);
     EXPECT_EQ(Parsed->getAsObject()->getArray("units")->size(), 9u);
     EXPECT_EQ(Source.find("unknown register"), std::string::npos);
@@ -700,6 +703,94 @@ int main(void) {
     s=seed();s.RFlags|=1u<<17;s.GPR[4]=(uintptr_t)&a[4];saved=s;
     CHECK(neverd_x64_continue_v6(&s,&budget)==5 && budget==5 && !memcmp(&s,&saved,sizeof(s)));
     return 0;
+}
+)C");
+  }
+}
+
+TEST_F(X64ContinuationExportTest,
+       InternalCallsAndReturnsFollowChangedPhysicalFrames) {
+  load({0x48, 0x89, 0x4c, 0x24, 0x08,       // mov [rsp+8],rcx
+        0xe8, 0x06, 0x00, 0x00, 0x00,       // call 1010
+        0x48, 0x8b, 0x44, 0x24, 0x08,       // mov rax,[rsp+8]
+        0xc3, 0x48, 0x8b, 0x22, 0xc3,       // ret; mov rsp,[rdx]; ret
+        0xff, 0xe0, 0x0f, 0x33, 0xeb, 0xfe, // jmp rax; rdpmc; jmp self
+        0xff, 0xd0, 0xc3});                 // call rax; ret
+  for (bool LLVM : {false, true}) {
+    SCOPED_TRACE(LLVM);
+    const auto Request = request(
+        R"("follow_internal_calls":true,"instructions":[4096,4101,4106,4111,4112,4115,4116,4118,4120,4122,4124])");
+    auto [Source, Manifest] = source(Request, LLVM);
+    auto Parsed = llvm::json::parse(Manifest);
+    ASSERT_TRUE(bool(Parsed));
+    EXPECT_EQ(Parsed->getAsObject()->getString("call_return_policy"),
+              "follow-selected-targets");
+    execute(Source, std::string(Seed) + R"C(
+int main(void) {
+  for(unsigned i=0;i<64;++i) {
+    uint64_t a[64]={0},b[16]={0},new_sp=(uintptr_t)&b[4];
+    neverd_x64_state_v6 s=seed();s.GPR[4]=(uintptr_t)&a[40];s.GPR[2]=(uintptr_t)&new_sp;
+    s.GPR[1]^=(uint64_t)i<<37;
+    uint64_t input=s.GPR[1],result=0xfedcba9876543210ULL+i*71;
+    b[4]=0x100a;b[5]=0x7777;b[6]=result;
+    // Six original instructions cross CALL, stack replacement and both RETs.
+    uint64_t budget=6;
+    CHECK(neverd_x64_continue_v6(&s,&budget)==3 && budget==0);
+    CHECK(s.PC==0x7777 && s.GPR[0]==result && s.GPR[4]==(uintptr_t)&b[6]);
+    CHECK(a[39]==0x100a && a[41]==input);
+
+    // The last available step may enter a selected callee, but cannot run it.
+    s=seed();s.GPR[4]=(uintptr_t)&a[40];s.GPR[2]=(uintptr_t)&new_sp;budget=2;
+    CHECK(neverd_x64_continue_v6(&s,&budget)==9 && !budget && s.PC==0x1010);
+    CHECK(s.GPR[4]==(uintptr_t)&a[39] && a[39]==0x100a);
+    neverd_x64_state_v6 saved=s;
+    CHECK(neverd_x64_continue_v6(&s,&budget)==9 && !memcmp(&s,&saved,sizeof(s)));
+    // The environment replaces the return PC while stopped. Do not synthesize
+    // the call's lexical continuation or restore its previous stack.
+    b[4]=0x1014;s.GPR[0]=0x9999;budget=4;
+    CHECK(neverd_x64_continue_v6(&s,&budget)==2 && budget==1 && s.PC==0x9999);
+    CHECK(s.GPR[4]==(uintptr_t)&b[5] && s.GPR[0]==0x9999);
+
+    // Indirect recursion consumes only the guest stack and instruction budget.
+    s=seed();s.PC=0x101a;s.GPR[0]=0x101a;s.GPR[4]=(uintptr_t)&a[40];a[40]=0x7777;
+    budget=32;
+    CHECK(neverd_x64_continue_v6(&s,&budget)==9 && !budget && s.PC==0x101a);
+    CHECK(s.GPR[4]==(uintptr_t)&a[8]);
+    for(unsigned j=8;j<40;++j)CHECK(a[j]==0x101c);
+    s.PC=0x101c;budget=33;
+    CHECK(neverd_x64_continue_v6(&s,&budget)==3 && !budget && s.PC==0x7777);
+    CHECK(s.GPR[4]==(uintptr_t)&a[41]);
+
+    // An external indirect call reports CALL even on the last budget unit.
+    s=seed();s.PC=0x101a;s.GPR[0]=0x8888;s.GPR[4]=(uintptr_t)&a[40];budget=1;
+    CHECK(neverd_x64_continue_v6(&s,&budget)==1 && !budget && s.PC==0x8888);
+    CHECK(s.GPR[4]==(uintptr_t)&a[39] && a[39]==0x101c);
+    s=seed();s.PC=0x1016;budget=5;saved=s;
+    CHECK(neverd_x64_continue_v6(&s,&budget)==4 && budget==5 && !memcmp(&s,&saved,sizeof(s)));
+    s=seed();s.RFlags|=1u<<17;s.GPR[4]=(uintptr_t)&a[40];saved=s;
+    CHECK(neverd_x64_continue_v6(&s,&budget)==5 && budget==5 && !memcmp(&s,&saved,sizeof(s)));
+  }
+  return 0;
+}
+)C");
+
+    // Omitting the callee retains the environment boundary. It may change the
+    // return PC, replacement stack and every other register before reentry.
+    auto [Partial, PartialManifest] = source(
+        request(
+            R"("follow_internal_calls":true,"instructions":[4096,4101,4106,4111])"),
+        LLVM);
+    execute(Partial, std::string(Seed) + R"C(
+int main(void) {
+  uint64_t a[16]={0},b[16]={0},budget=2;
+  neverd_x64_state_v6 s=seed();s.GPR[4]=(uintptr_t)&a[4];
+  CHECK(neverd_x64_continue_v6(&s,&budget)==1 && !budget && s.PC==0x1010);
+  CHECK(a[3]==0x100a && s.GPR[4]==(uintptr_t)&a[3]);
+  b[4]=0x7777;b[5]=0x8877665544332211ULL;s.GPR[4]=(uintptr_t)&b[4];s.PC=a[3];
+  s.GPR[9]=0xfedcba9876543210ULL;budget=2;
+  CHECK(neverd_x64_continue_v6(&s,&budget)==3 && !budget && s.PC==0x7777);
+  CHECK(s.GPR[4]==(uintptr_t)&b[5] && s.GPR[0]==b[5] && s.GPR[9]==0xfedcba9876543210ULL);
+  return 0;
 }
 )C");
   }
@@ -878,6 +969,8 @@ TEST_F(X64ContinuationExportTest,
            request(R"("instructions":[4096.25])"),
            request(R"("instructions":[4096],"entries":[4096])"),
            request(R"("instructions":[4096],"native_timestamp_reads":1)"),
+           request(R"("instructions":[4096],"follow_internal_calls":1)"),
+           request(R"("instructions":[4096],"follow_internal_calls":null)"),
            request(R"("instructions":[4096],"null_segment_base_policy":true)"),
            request(R"("instructions":[4096],"null_segment_base_policy":null)"),
            request(

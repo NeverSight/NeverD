@@ -15092,8 +15092,12 @@ LowIR audits preserve instruction selection for rejected functions separately
 from admitted LowFuncs. Unsupported sites remain in that selection and decode
 failures remain explicit; the state exporter independently relifts every byte
 before emission. This metadata grants no ordinary source or native rewrite
-admission. The driver owns only dispatch and instruction accounting: successful calls,
-returns, exceptions and privilege transitions each consume one step and stop.
+admission. The driver owns only dispatch and instruction accounting. Calls and
+returns stop by default. With `follow_internal_calls`, the driver follows their
+actual post-transfer PC only if selected, retaining the physical stack and all
+guest mutations without a host call stack or lexical-return assumption. External
+calls/returns and all context transitions still stop, including when the last
+budget unit completes the transfer. Each successful instruction consumes one step.
 Native requests and invalid invocations execute nothing and consume none.
 Both C routes include a state layout checked against the semantic owner and
 an exact byte manifest bound to the emitted source hash. The ordinary source

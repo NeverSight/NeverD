@@ -71,6 +71,22 @@ The driver continues ordinary instructions and jumps to listed addresses. Each
 successful instruction consumes one budget unit, including a stopping transfer.
 A native request or invalid-state refusal executes nothing and consumes none.
 
+Set `"follow_internal_calls": true` to compose CALL and RET inside the selected
+region. The default is `false`, which stops at every CALL and RET. The composed
+driver follows the actual post-instruction PC, including indirect calls and
+returns through callback-modified stack memory. It uses no host call stack and
+assumes no relation between a return and the most recent call. Retained frames,
+stack replacements and recursive transfers therefore keep their machine
+semantics and share the same instruction budget.
+
+An external CALL or RET still reports status 1 or 3, even when it consumes the
+last budget unit. An internal transfer with no budget left reports status 9
+before executing its target. Native requests, invalid state, exceptions and
+all context transitions remain stopping boundaries even when their target is
+selected. The manifest records `call_return_policy` as `stop` or
+`follow-selected-targets`. Selecting this dispatch policy adds no instructions,
+callee bodies, memory mappings or runtime bindings to the request.
+
 | Status | Meaning |
 | --- | --- |
 | 1 | CALL completed; environment owns the target |
