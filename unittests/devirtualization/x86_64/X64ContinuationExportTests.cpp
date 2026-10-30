@@ -7,7 +7,7 @@
 /// Execute exported C and verify the real SDK and CLI retain exact boundaries.
 //===----------------------------------------------------------------------===//
 
-#include "../lift/NeverDLiftFixture.h"
+#include "../../lift/NeverDLiftFixture.h"
 
 #include "neverd/sdk/NeverDCAPI.h"
 

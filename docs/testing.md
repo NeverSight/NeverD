@@ -10923,6 +10923,12 @@ Legacy cancellation tests retain the API continuation across cancellation, neste
 
 ## Test layout
 
+`unittests/devirtualization/x86_64/` owns the explicit x64 continuation suites,
+their shared frame fixtures and the native KVM runner. Its local CMake file
+registers the existing source/export targets and labels. Architecture-neutral
+devirtualization tests remain in the parent directory. The dispatch-frame
+suite reuses the runner through its new architecture-qualified path.
+
 `NeverDSymbolicPredicateTests` checks Boolean, extension and conditional-tag
 equality together with sign-network recovery, known bits and subword views.
 Run it alongside `NeverDSymbolicIntegerIntrinsicTests` when changing predicate

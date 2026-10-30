@@ -7,7 +7,7 @@
 /// Execute continuation source against independent state and memory oracles.
 //===----------------------------------------------------------------------===//
 
-#include "../lift/NeverDLiftFixture.h"
+#include "../../lift/NeverDLiftFixture.h"
 
 #include "neverd/analysis/arch/x86_64/X64ContinuationSource.h"
 #include "neverd/backend/c/HighC/HighCEmitter.h"

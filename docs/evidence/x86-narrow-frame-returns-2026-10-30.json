@@ -163,6 +163,36 @@
       "path": "run_x64_continuation_kvm.py",
       "sha256": "78aca0ac469fa37c281fda84d55fbc6363d3a910ce3890d35d9d7f3e5d78aed3",
       "bytes": 2725
+    },
+    {
+      "path": "capabilities-refactor.log",
+      "sha256": "6493fc3b0c4ef5fe525cdffaaa35a0f7992a0384e9a759e0269be79943fed414",
+      "bytes": 43
+    },
+    {
+      "path": "docs-refactor.log",
+      "sha256": "891c1f2a9e40d3952b23e9e79b35ac05e77427ad91de98357bc3829b3ed7ab14",
+      "bytes": 69
+    },
+    {
+      "path": "neverd-refactor-build.log",
+      "sha256": "060e7db791b3f42cc0a9032f0c242fc74bd0c751d4b9a2a2ffec1ecbe5976110",
+      "bytes": 91381
+    },
+    {
+      "path": "neverd-refactor-build-receipt.json",
+      "sha256": "795742b13b38262318635d1941c518667d5f6f56eb953980748ebf7586f27b2f",
+      "bytes": 3644
+    },
+    {
+      "path": "neverd-refactor-tests.xml",
+      "sha256": "89471e583f39a8bfbd0d32cb6ff9f087ee90c37bf47381cdb118e06991b6e22b",
+      "bytes": 187093
+    },
+    {
+      "path": "neverd-refactor-tests.log",
+      "sha256": "016f1319cbb7ed2d22f271ca7a94501da91dcd36af41a709c74de5f4b14c2146",
+      "bytes": 39996
     }
   ],
   "sources": [
@@ -210,5 +240,88 @@
       "path": "unittests/lift/x86_64/X86SystemStateTests.cpp",
       "sha256": "3303dccf3327994067ef0b9652db40256cab7b95a0a6b5635fe85021f1fc2c4b"
     }
-  ]
+  ],
+  "merged_and_refactored_validation": {
+    "neverd_merge": "24c307529cf2c696db000bc173538fee0ccf0e97",
+    "dev_base": "2e37dbbffb4d5489c806e353994e726a61d44359",
+    "tests": 178,
+    "failed": 0,
+    "skipped": 0,
+    "labels": 5,
+    "junit": "neverd-refactor-tests.xml",
+    "organization": "Twelve x64 continuation source, fixture and runner files moved under unittests/devirtualization/x86_64/ with local CMake ownership; test targets/labels and public behavior retained. The dispatch-frame suite and capability manifest use the new paths.",
+    "capability_manifest_entries": 26,
+    "documentation_markdown_files": 309,
+    "documentation_locales": 10,
+    "sources": [
+      {
+        "path": "docs/capabilities.json",
+        "sha256": "bd2359793449d25e9217fcffea4d4f511c752efca5c94a35ea365792a4ad3042"
+      },
+      {
+        "path": "lib/pipeline/X64ContinuationExport.cpp",
+        "sha256": "7b8a52cc27af0234ffa3d6d8c72433a132949f46fb68c783749ebfd7850a45ce"
+      },
+      {
+        "path": "unittests/devirtualization/CMakeLists.txt",
+        "sha256": "19b882c8f37599e929c1968fcde6755a7e5dc85e8eefb7aa74bf0ba7eb43f1d1"
+      },
+      {
+        "path": "unittests/devirtualization/x86_64/CMakeLists.txt",
+        "sha256": "921e69c24d5f498fdeeaa481e0f23e82776c0d5a0aec98c85bc54090864cf99f"
+      },
+      {
+        "path": "unittests/devirtualization/x86_64/X64ContinuationExportTests.cpp",
+        "sha256": "8a52e3e1060635d54aa749d54d78818959ddbc0087e4fa79d7b6cb800d7d5ef7"
+      },
+      {
+        "path": "unittests/devirtualization/x86_64/X64ContinuationIntegerTests.cpp",
+        "sha256": "c476a9da44be91a0a4bad27b77e8452e0f24e70cfa509f010d39e1f9d54bfaed"
+      },
+      {
+        "path": "unittests/devirtualization/x86_64/X64ContinuationSourceTests.cpp",
+        "sha256": "c0031181cc87751bfa140d537925d3716a7ce3714ce35c55fed271d199c38a14"
+      },
+      {
+        "path": "unittests/devirtualization/x86_64/X64FarPointerContinuationTests.inc",
+        "sha256": "bdb2127ee5a4faafdff55030471a79e3be4a1a5de4309ac1fc9a7f41f8a69750"
+      },
+      {
+        "path": "unittests/devirtualization/x86_64/X64FastSystemContinuationTests.inc",
+        "sha256": "ac843b473fe15eb38c3389c996489df490578cc32a42824040e33ba2d90a4324"
+      },
+      {
+        "path": "unittests/devirtualization/x86_64/X64FrameReturnContinuationTests.inc",
+        "sha256": "5214da1fa42de6148309e941f783dbe18d904a7055f1f12c2cd379b8d5ca4de9"
+      },
+      {
+        "path": "unittests/devirtualization/x86_64/X64FredContinuationTests.inc",
+        "sha256": "5d6baaf412debf765b7d224a00e063cdc931c0bfaa3f19a39d161369c2f710d3"
+      },
+      {
+        "path": "unittests/devirtualization/x86_64/X64SysretContinuationTests.inc",
+        "sha256": "83b291dbe876f3876d2b42f0f255b58411018ae908d348da37ffef1a550d2d39"
+      },
+      {
+        "path": "unittests/devirtualization/x86_64/X64UserInterruptContinuationTests.inc",
+        "sha256": "72af363b9d0e0f6cc25ac91c659423331cd9e72a887e94a33715110860b4d5a2"
+      },
+      {
+        "path": "unittests/devirtualization/x86_64/fixtures/x64_continuation_event_state.h",
+        "sha256": "01110313686c6228c9047c2522b513ab867117112621992949711aee50db87ac"
+      },
+      {
+        "path": "unittests/devirtualization/x86_64/fixtures/x64_continuation_kvm.c",
+        "sha256": "635e046209c5525a34d65f47238db56ad150238ebb2b611bf783fb361c9c6a1b"
+      },
+      {
+        "path": "unittests/devirtualization/x86_64/run_x64_continuation_kvm.py",
+        "sha256": "78aca0ac469fa37c281fda84d55fbc6363d3a910ce3890d35d9d7f3e5d78aed3"
+      },
+      {
+        "path": "unittests/lift/x86_64/X64DispatchFrameSourceTests.cpp",
+        "sha256": "85cd0af47aa0646c558d6add674d4268d9778ee360ab9d588fd6b27c056927c3"
+      }
+    ]
+  }
 }

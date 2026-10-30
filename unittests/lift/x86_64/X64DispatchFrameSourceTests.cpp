@@ -263,12 +263,12 @@ TEST_F(X64DispatchFrameSource, BothRoutesRetainThePhysicalMachineInterface) {
         for (const char *Optimization : {"O0", "O2"}) {
           SCOPED_TRACE(Optimization);
 #if defined(__linux__) && defined(__x86_64__)
-          const auto Ran =
-              exec("python3",
-                   {std::string(TEST_SOURCE_DIR) +
-                        "/../devirtualization/run_x64_continuation_kvm.py",
-                    "--clang", NEVERD_TEST_CLANG, "--source", Source.string(),
-                    "--optimization", Optimization});
+          const auto Ran = exec(
+              "python3",
+              {std::string(TEST_SOURCE_DIR) +
+                   "/../devirtualization/x86_64/run_x64_continuation_kvm.py",
+               "--clang", NEVERD_TEST_CLANG, "--source", Source.string(),
+               "--optimization", Optimization});
           if (Ran.exitCode == 77)
             GTEST_SKIP() << Ran.err;
           ASSERT_TRUE(Ran.ok()) << Ran.err << " exit " << Ran.exitCode << Text;

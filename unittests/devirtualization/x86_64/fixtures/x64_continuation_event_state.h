@@ -7,8 +7,8 @@
 /// C fixture layout checked against the public continuation V6 offsets.
 //===----------------------------------------------------------------------===//
 
-#ifndef NEVERD_UNITTESTS_DEVIRTUALIZATION_FIXTURES_X64_CONTINUATION_EVENT_STATE_H
-#define NEVERD_UNITTESTS_DEVIRTUALIZATION_FIXTURES_X64_CONTINUATION_EVENT_STATE_H
+#ifndef NEVERD_UNITTESTS_DEVIRTUALIZATION_X86_64_FIXTURES_X64_CONTINUATION_EVENT_STATE_H
+#define NEVERD_UNITTESTS_DEVIRTUALIZATION_X86_64_FIXTURES_X64_CONTINUATION_EVENT_STATE_H
 
 #include <stddef.h>
 #include <stdint.h>
@@ -84,4 +84,4 @@ _Static_assert(offsetof(fred_state_t, sti_blocked) == 2552, "V9 STI blocking");
 _Static_assert(offsetof(fred_state_t, pending_debug) == 2553,
                "V9 pending debug");
 
-#endif // NEVERD_UNITTESTS_DEVIRTUALIZATION_FIXTURES_X64_CONTINUATION_EVENT_STATE_H
+#endif // NEVERD_UNITTESTS_DEVIRTUALIZATION_X86_64_FIXTURES_X64_CONTINUATION_EVENT_STATE_H
