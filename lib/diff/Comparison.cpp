@@ -343,6 +343,7 @@ private:
                                            uint32_t Side) const;
   void collectAmbiguities();
   void retainEntryAlternatives();
+  void retainCallAlternatives();
   void finish();
 };
 
@@ -1218,6 +1219,78 @@ void Matcher::retainEntryAlternatives() {
                  [&](const Formed &F) { return PMatch[F.Primary] == NoIndex; });
 }
 
+void Matcher::retainCallAlternatives() {
+  if (stopNow())
+    return;
+  std::vector<uint32_t> WeakA(P.Functions.size(), NoIndex),
+      WeakB(S.Functions.size(), NoIndex);
+  bool HasWeak = false;
+  for (uint32_t I = 0; I < Order.size(); ++I) {
+    const auto &F = Order[I];
+    if (F.Step == FunctionStep::Manual || F.Step == FunctionStep::ImportName ||
+        F.Step == FunctionStep::SymbolName ||
+        F.Step == FunctionStep::ExactBytes ||
+        F.Step == FunctionStep::NormalizedBody || F.FromContext ||
+        Confirmed.contains(pairKey(F.Primary, F.Secondary)))
+      continue;
+    WeakA[F.Primary] = WeakB[F.Secondary] = I;
+    HasWeak = true;
+  }
+  if (!HasWeak)
+    return;
+  const auto Candidates = conflictingCallCandidates(P, PF, PMatch, WeakA, S, SF,
+                                                    SMatch, WeakB, Control);
+  if (stopNow())
+    return;
+  std::vector<uint8_t> Deferred(Order.size(), 0);
+  for (const auto &[A, B] : Candidates) {
+    if (Rejected.contains(pairKey(A, B)) || namesConflict(A, B))
+      continue;
+    const uint32_t Prior = PMatch[A] == NoIndex ? WeakB[B] : WeakA[A];
+    Deferred[Prior] = 1;
+  }
+  // A caller can deliberately switch to a newly extracted helper while the
+  // original body survives with insertions. Preserve that complete body/CFG
+  // evidence; a call role alone cannot displace it.
+  parallelForEach(Order.size(), [&](auto Claim, size_t Count) {
+    for (size_t I = Claim(); I < Count; I = Claim()) {
+      if (Control.stop())
+        return;
+      if (!Deferred[I])
+        continue;
+      const auto &F = Order[I];
+      const auto D = delta(F.Primary, F.Secondary);
+      const uint32_t AEntry = P.Functions[F.Primary].EntryBlock;
+      const uint32_t BEntry = S.Functions[F.Secondary].EntryBlock;
+      if (D.ComputationComplete && D.AnalysisComplete &&
+          D.ReferenceComparisonComplete &&
+          D.EqualInstructions ==
+              std::min(PF.Functions[F.Primary].Instructions,
+                       SF.Functions[F.Secondary].Instructions) &&
+          !(D.Changes & (ChangeBlocks | ChangeEdges)) && AEntry != NoIndex &&
+          BEntry != NoIndex && D.PrimaryBlockPair[AEntry] != NoIndex &&
+          D.Blocks[D.PrimaryBlockPair[AEntry]].Secondary == BEntry)
+        Deferred[I] = 0;
+    }
+  });
+  if (stopNow())
+    return;
+  for (const auto &[A, B] : Candidates) {
+    const uint32_t Prior = PMatch[A] == NoIndex ? WeakB[B] : WeakA[A];
+    if (Deferred[Prior] && !Rejected.contains(pairKey(A, B)) &&
+        !namesConflict(A, B))
+      NearTies.push_back({FunctionStep::CallSite, {A}, {B}});
+  }
+  for (uint32_t I = 0; I < Order.size(); ++I)
+    if (Deferred[I]) {
+      const auto &F = Order[I];
+      PMatch[F.Primary] = SMatch[F.Secondary] = NoIndex;
+      NearTies.push_back({F.Step, {F.Primary}, {F.Secondary}});
+    }
+  llvm::erase_if(Order,
+                 [&](const Formed &F) { return PMatch[F.Primary] == NoIndex; });
+}
+
 void Matcher::collectAmbiguities() {
   std::vector<uint32_t> InPrimary(P.Functions.size(), NoIndex),
       InSecondary(S.Functions.size(), NoIndex);
@@ -1503,6 +1576,7 @@ void Matcher::run(llvm::ArrayRef<Override> Overrides) {
   if (!stopNow())
     progress(1, 1);
   beginPhase("ambiguities");
+  retainCallAlternatives();
   collectAmbiguities();
   endPhase();
   finish();

@@ -96,6 +96,22 @@ addresses or assumed data layouts. Data identity and contents remain unknown:
 the instruction delta retains uncertain references and does not report
 semantic equivalence or unchanged code merely because this context paired it.
 
+Matcher version 16 reviews provisional body matches against complete callers
+after all candidate admission finishes. Equal instruction layouts, scalar
+operands and CFGs align call and tail-transfer positions even when one target
+was already consumed by a weaker body match. Every eligible caller must agree
+in both directions; unresolved data, incomplete callers and known target
+retargeting cannot support this review. When this evidence conflicts with a
+weak match and points to an unmatched function, both alternatives remain
+available for review with their original body or call-site evidence. The
+matcher does not automatically promote the new target or lower its similarity
+threshold. Manual, confirmed, named, exact-byte, normalized-body and
+context-supported matches remain protected.
+The review also preserves a complete instruction body embedded in its unchanged
+CFG when only insertions or deletions distinguish the pair: callers can
+deliberately switch to a new helper without changing the original body's
+identity.
+
 Matcher version 10 also defers a similar helper body when its changed entry
 contains the complete straight-line prelude of an unmatched direct tail caller,
 with at least two caller instructions beyond the helper's aligned body. Both
