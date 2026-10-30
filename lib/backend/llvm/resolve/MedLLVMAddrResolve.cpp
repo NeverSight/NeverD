@@ -2565,16 +2565,18 @@ bool MedLLVMEmitter::valueIsStableAddressOffsetImpl(const MedVar &V,
   };
   int RemainingFrameRootNodes =
       ::neverd::limits::backend::kMedLLVMAddrResolveRemainingFrameRootNodes;
-  std::function<FrameRootProof(const MedVar &, int, std::set<Key>)>
+  std::function<FrameRootProof(const MedVar &, int, std::set<Key> &)>
       frameRootProof = [&](const MedVar &Start, int Depth,
-                           std::set<Key> Seen) -> FrameRootProof {
+                           std::set<Key> &Seen) -> FrameRootProof {
     if (Start.isConst() || RemainingFrameRootNodes-- <= 0)
       return {};
     if (auto Exact = canonicalFrameSlotKey(Start))
       return {true, false, Exact->first};
     const MedOp *Def = lookupDef(Start);
-    if (!Seen.insert(keyOf(Start)).second)
+    const auto [Position, Inserted] = Seen.insert(keyOf(Start));
+    if (!Inserted)
       return {true, true, std::nullopt, {keyOf(Start)}};
+    auto RestorePath = llvm::scope_exit([&] { Seen.erase(Position); });
 
     auto mergeProofs = [](const FrameRootProof &A,
                           const FrameRootProof &B) -> FrameRootProof {
@@ -2704,7 +2706,7 @@ bool MedLLVMEmitter::valueIsStableAddressOffsetImpl(const MedVar &V,
     if (IndependentQuery)
       if (auto It = FrameRootMemo.find(CacheKey); It != FrameRootMemo.end())
         return It->second;
-    FrameRootProof Proof = frameRootProof(Start, Depth, std::move(Seen));
+    FrameRootProof Proof = frameRootProof(Start, Depth, Seen);
     // Reuse only complete acyclic root proofs. Recurrence and rejected paths
     // can depend on the calling DFS or an exhausted budget.
     if (IndependentQuery && Proof.Valid && !Proof.SawCycle && Proof.Root)
@@ -3835,13 +3837,16 @@ bool MedLLVMEmitter::valueIsStableAddressOffsetImpl(const MedVar &V,
                                 ExactFrameSlot->second, Def->Output.Size);
         };
 
-        bool DomainInvalid = false;
+        // One escaping address or untracked writer invalidates the whole
+        // domain. Later stores cannot repair that all-domain certificate.
+        // Stop at that refusal instead of auditing every remaining write.
         for (const auto &Call : CurMedFunc->CallInfos)
           for (size_t ArgIndex = 0; ArgIndex < Call.Args.size(); ++ArgIndex) {
             const MedVar &Arg = Call.Args[ArgIndex];
             if (sameOrUnknownFrameRoot(Arg)) {
               if (!boundedCallFrameArgIsSafe(Call, ArgIndex))
-                DomainInvalid = true;
+                return stableOffsetFailure("incomplete-frame-reload", Start,
+                                           Depth);
             }
           }
 
@@ -3856,7 +3861,8 @@ bool MedLLVMEmitter::valueIsStableAddressOffsetImpl(const MedVar &V,
               if (sameOrUnknownFrameRoot(Write.Inputs[1])) {
                 auto DestinationRoot = frameRoot(Write.Inputs[0], 0, {});
                 if (!DestinationRoot || *DestinationRoot != Root)
-                  DomainInvalid = true;
+                  return stableOffsetFailure("incomplete-frame-reload", Start,
+                                             Depth);
               }
               if (!sameOrUnknownFrameRoot(Write.Inputs[0]))
                 continue;
@@ -3865,7 +3871,8 @@ bool MedLLVMEmitter::valueIsStableAddressOffsetImpl(const MedVar &V,
                                               Def->Inputs[0], Def->Output.Size))
                 continue;
               if (Write.Inputs[1].Size == 0)
-                DomainInvalid = true;
+                return stableOffsetFailure("incomplete-frame-reload", Start,
+                                           Depth);
               else
                 DomainSources.push_back(Write.Inputs[1]);
               continue;
@@ -3882,7 +3889,8 @@ bool MedLLVMEmitter::valueIsStableAddressOffsetImpl(const MedVar &V,
                                               Write.Output.Size, Def->Inputs[0],
                                               Def->Output.Size))
                 continue;
-              DomainInvalid = true;
+              return stableOffsetFailure("incomplete-frame-reload", Start,
+                                         Depth);
             }
             // An x86 floating-state memory operand is a source the operation
             // reads as a LOAD would (`addss -0x54(%ebp), %xmm0`); only the
@@ -3903,11 +3911,12 @@ bool MedLLVMEmitter::valueIsStableAddressOffsetImpl(const MedVar &V,
               for (uint8_t I = 1; I < Write.NumInputs; ++I)
                 if (!(I == 1 && ReadsAddressOperand) &&
                     sameOrUnknownFrameRoot(Write.Inputs[I]))
-                  DomainInvalid = true;
+                  return stableOffsetFailure("incomplete-frame-reload", Start,
+                                             Depth);
           }
         }
 
-        if (!DomainInvalid && !DomainSources.empty()) {
+        if (!DomainSources.empty()) {
           ActiveFrameDomains.insert(Root);
           bool DomainStable = true;
           bool SawInitializer = false;

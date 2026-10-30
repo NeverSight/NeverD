@@ -366,6 +366,11 @@ public:
             Emitter.AddressProvenanceWork.FrameSlotCacheHits};
   }
 
+  static bool slotReloadUsedLocally(MedLLVMEmitter &Emitter,
+                                    const MedVar &Address) {
+    return Emitter.frameSlotReloadUsedLocally(Address);
+  }
+
   static uint64_t frameSlotReplays(const MedLLVMEmitter &Emitter) {
     return Emitter.AddressProvenanceWork.FrameSlotReplays;
   }
@@ -12108,9 +12113,9 @@ TEST(MachOLLVMDataPointerBoundary,
   expectValidModule(*Module);
 
   const auto Work = MedLLVMProvenanceTestPeer::frameReloadSourceWork(Emitter);
-  EXPECT_EQ(std::get<1>(Work), 3u)
-      << "preflight must build the base reload once; body must rebuild it and "
-         "also cache the target LOAD's negative frame answer";
+  EXPECT_EQ(std::get<1>(Work), 2u)
+      << "preflight and body must each build the base reload proof; a LOAD "
+         "without a fragment seed needs no extra fragment-source query";
   EXPECT_EQ(std::get<3>(Work), 2u)
       << "the body phase must rebuild the stable occurrence index";
 }
@@ -25101,6 +25106,96 @@ TEST(LLVMDataPointerInvariantBoundary,
 }
 
 TEST(LLVMDataPointerInvariantBoundary,
+     ScalarFrameLoadsNeedNoFragmentSourceProofWithoutASeed) {
+  for (BinaryFormat Format :
+       {BinaryFormat::MachO, BinaryFormat::ELF, BinaryFormat::COFF})
+    for (Arch TargetArch : {Arch::AArch64, Arch::X64, Arch::X86})
+      for (unsigned LoadCount : {1u, 64u}) {
+        SCOPED_TRACE(formatTraceName(Format));
+        SCOPED_TRACE(unsigned(TargetArch));
+        SCOPED_TRACE(LoadCount);
+        const auto &TRI = getTargetRegInfo(TargetArch);
+        const uint16_t Width = TRI.PointerSize;
+        BinaryImage Image = makeSpilledConstTableImage(TargetArch, Format);
+        Image.Bits = Width == 4 ? Bitness::Bits32 : Bitness::Bits64;
+        auto Var = [&](MedVar::VarKind Kind, int Id) {
+          MedVar V;
+          V.Kind = Kind;
+          V.TheArch = TargetArch;
+          V.Id = Id;
+          V.SSAVer = 1;
+          V.Size = Width;
+          return V;
+        };
+        MedFunc Func;
+        Func.Entry = CallerVA;
+        Func.Name = "scalar_frame_loads";
+        Func.ReturnType = NdType::makeInt(Width);
+        Func.FrameSize = 16;
+        auto &Block = Func.Blocks.emplace_back();
+        Block.Id = 0;
+        Block.StartAddr = CallerVA;
+        Block.EndAddr = CallerVA + 4;
+        MedVar SP = Var(MedVar::Reg, 5000);
+        SP.SSAVer = 0;
+        SP.RegOff = TRI.StackPointer;
+        const MedVar Slot = Var(MedVar::Temp, 5001);
+        MedVar ReturnReg = Var(MedVar::Reg, 5003);
+        ReturnReg.RegOff = TRI.IntReturnReg;
+        MedOp Address;
+        Address.Opcode = NdOp::INT_ADD;
+        Address.Output = Slot;
+        Address.addInput(SP);
+        Address.addInput(MedVar::makeConst(uint64_t(-8), Width,
+                                           ConstantAddressProvenance::Scalar));
+        Block.Ops.push_back(Address);
+        {
+          MedOp Store;
+          Store.Opcode = NdOp::STORE;
+          Store.addInput(Slot);
+          Store.addInput(
+              MedVar::makeConst(100, Width, ConstantAddressProvenance::Scalar));
+          Block.Ops.push_back(Store);
+        }
+        for (unsigned I = 0; I < LoadCount; ++I) {
+          MedOp Load;
+          Load.Opcode = NdOp::LOAD;
+          Load.Output = Var(MedVar::Temp, 6000 + I);
+          Load.addInput(Slot);
+          Block.Ops.push_back(Load);
+        }
+        MedOp Result;
+        Result.Opcode = NdOp::COPY;
+        Result.Output = ReturnReg;
+        Result.addInput(
+            MedVar::makeConst(7, Width, ConstantAddressProvenance::Scalar));
+        Block.Ops.push_back(Result);
+        MedOp Return;
+        Return.Opcode = NdOp::RETURN;
+        Block.Ops.push_back(Return);
+        MedLLVMEmitter Emitter;
+        llvm::LLVMContext Context;
+        auto Module = Emitter.emit({Func}, Context, "scalar-frame-loads",
+                                   TargetArch, {}, &Image, Format);
+        ASSERT_NE(Module, nullptr);
+        expectValidModule(*Module);
+        const auto [Queries, Builds, Hits, IndexBuilds] =
+            MedLLVMProvenanceTestPeer::frameReloadSourceWork(Emitter);
+        // These reads remain observable even though their values do not
+        // escape. With no incomplete address seed, the fragment audit must
+        // not start a reaching-store proof for each of them.
+        EXPECT_EQ(Queries, 0u);
+        EXPECT_EQ(Builds, 0u);
+        size_t Loads = 0;
+        for (const auto &Function : *Module)
+          for (const auto &IRBlock : Function)
+            for (const auto &Instruction : IRBlock)
+              Loads += llvm::isa<llvm::LoadInst>(Instruction);
+        EXPECT_GE(Loads, LoadCount);
+      }
+}
+
+TEST(LLVMDataPointerInvariantBoundary,
      AddressFragmentMaySpillLocallyButReloadStillCarriesTaint) {
   for (BinaryFormat Format :
        {BinaryFormat::MachO, BinaryFormat::ELF, BinaryFormat::COFF})
@@ -25649,6 +25744,212 @@ struct FrameSlotProofFixture {
     Func.Blocks[Header].Phis.push_back(std::move(Phi));
   }
 };
+
+TEST(LLVMFrameSlotProof, EscapedDomainStopsBeforeAuditingUnrelatedStores) {
+  for (Arch TargetArch : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64})
+    for (bool ThroughCall : {false, true})
+      for (unsigned Stores : {1u, 128u}) {
+        SCOPED_TRACE(static_cast<unsigned>(TargetArch));
+        SCOPED_TRACE(ThroughCall);
+        SCOPED_TRACE(Stores);
+        FrameSlotProofFixture F(TargetArch);
+        F.SP.SSAVer = 0;
+        MedVar Index = F.temp(), External = F.temp();
+        Index.Kind = External.Kind = MedVar::Param;
+        Index.SSAVer = External.SSAVer = 0;
+        F.Func.Params = {Index, External};
+        const MedVar Address = F.temp();
+        MedVar Loaded = F.temp();
+        Loaded.Size = 1;
+        auto Scalar = [&](uint64_t Value) {
+          return MedVar::makeConst(Value, F.Width,
+                                   ConstantAddressProvenance::Scalar);
+        };
+        F.op(0, NdOp::COPY, F.SP, {F.SP});
+        F.op(0, NdOp::INT_ADD, Address, {F.SP, Index});
+        F.op(0, NdOp::LOAD, Loaded, {Address});
+        if (ThroughCall) {
+          MedCallInfo Call;
+          Call.BlockId = 0;
+          Call.OpIdx = F.Func.Blocks[0].Ops.size();
+          Call.TargetAddr = 0x4000;
+          Call.TargetName = "opaque_frame_consumer";
+          Call.Args = {F.SP};
+          F.op(0, NdOp::CALL, {},
+               {MedVar::makeConst(Call.TargetAddr, F.Width)});
+          F.Func.CallInfos.push_back(std::move(Call));
+        } else {
+          // Publishing the frame pointer to an external owner is just as
+          // decisive as passing it to an opaque callee.
+          F.op(0, NdOp::STORE, {}, {External, F.SP});
+        }
+        for (unsigned I = 0; I < Stores; ++I) {
+          const MedVar Slot = F.temp();
+          F.op(0, NdOp::INT_ADD, Slot, {F.SP, Scalar(16 + I * F.Width)});
+          F.op(0, NdOp::STORE, {}, {Slot, Scalar(I)});
+        }
+        F.op(0, NdOp::RETURN, {}, {Loaded});
+        BinaryImage Image;
+        Image.Arch = TargetArch;
+        Image.Format = BinaryFormat::COFF;
+        Image.Bits = F.Width == 4 ? Bitness::Bits32 : Bitness::Bits64;
+        MedLLVMEmitter Emitter;
+        MedLLVMProvenanceTestPeer::prepareFreshAnalysis(
+            Emitter, F.Func, Image, TargetArch, Image.Format);
+        EXPECT_FALSE(
+            MedLLVMProvenanceTestPeer::stableOffset(Emitter, Loaded, nullptr));
+        // Later stores cannot repair the escaped domain. A proof that already
+        // refused must not spend an alias-proof budget on each of them.
+        EXPECT_EQ(MedLLVMProvenanceTestPeer::recurrenceNodeWork(Emitter).second,
+                  0u);
+      }
+}
+
+TEST(LLVMFrameSlotProof, LocalReloadQueriesShareTheLoadAddressIndex) {
+  for (Arch TargetArch : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64})
+    for (BinaryFormat Format :
+         {BinaryFormat::ELF, BinaryFormat::MachO, BinaryFormat::COFF}) {
+      SCOPED_TRACE(static_cast<unsigned>(TargetArch));
+      SCOPED_TRACE(static_cast<unsigned>(Format));
+      FrameSlotProofFixture F(TargetArch);
+      constexpr unsigned SlotCount = 128;
+      std::vector<MedVar> Addresses;
+      for (unsigned I = 0; I < SlotCount * 2; ++I) {
+        const MedVar Address = F.temp();
+        F.op(0, NdOp::INT_ADD, Address,
+             {F.SP, MedVar::makeConst(I * F.Width, F.Width)});
+        Addresses.push_back(Address);
+        if (I >= SlotCount)
+          continue;
+        const MedVar Loaded = F.temp(), Forwarded = F.temp();
+        F.op(0, NdOp::LOAD, Loaded, {Address});
+        F.op(0, NdOp::COPY, Forwarded, {Loaded});
+        if (I % 2 == 0)
+          F.op(0, NdOp::INT_ADD, F.temp(),
+               {Forwarded, MedVar::makeConst(1, F.Width)});
+        else
+          F.op(0, NdOp::RETURN, {}, {Forwarded});
+      }
+      BinaryImage Image;
+      Image.Arch = TargetArch;
+      Image.Format = Format;
+      Image.Bits = F.Width == 4 ? Bitness::Bits32 : Bitness::Bits64;
+      MedLLVMEmitter Emitter;
+      MedLLVMProvenanceTestPeer::prepareFreshAnalysis(Emitter, F.Func, Image,
+                                                      TargetArch, Format);
+      for (unsigned I = 0; I < Addresses.size(); ++I)
+        EXPECT_EQ(MedLLVMProvenanceTestPeer::slotReloadUsedLocally(
+                      Emitter, Addresses[I]),
+                  I < SlotCount && I % 2 == 0);
+      const auto [Nodes, Hits] =
+          MedLLVMProvenanceTestPeer::frameSlotWork(Emitter);
+      // Each load address is classified once. Distinct stores, including
+      // slots without a load, must not rescan the whole function's loads.
+      EXPECT_LT(Nodes + Hits, SlotCount * 16u);
+
+      // The index belongs to the same proof phase as its canonical keys.
+      // Segment-relative memory cannot reuse an earlier default-space load.
+      for (auto &Op : F.Func.Blocks[0].Ops)
+        if (Op.Opcode == NdOp::LOAD) {
+          Op.MemoryAddressSpace = NdMemoryAddressSpace::X86FS;
+          break;
+        }
+      MedLLVMProvenanceTestPeer::invalidateFeasibleEdgeDependentCaches(Emitter);
+      EXPECT_FALSE(MedLLVMProvenanceTestPeer::slotReloadUsedLocally(
+          Emitter, Addresses.front()));
+
+      // Reusing an emitter for a different function must discard the index,
+      // even when the new function uses the same SSA identities and slots.
+      MedFunc Other = F.Func;
+      for (auto &Op : Other.Blocks[0].Ops)
+        if (Op.Opcode == NdOp::LOAD)
+          Op.Opcode = NdOp::COPY;
+      MedLLVMProvenanceTestPeer::prepareFreshAnalysis(Emitter, Other, Image,
+                                                      TargetArch, Format);
+      EXPECT_FALSE(MedLLVMProvenanceTestPeer::slotReloadUsedLocally(
+          Emitter, Addresses.front()));
+    }
+}
+
+TEST(LLVMFrameSlotProof, LocalReloadUsesKeepForwardingAndValueIdentity) {
+  for (Arch TargetArch : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64})
+    for (BinaryFormat Format :
+         {BinaryFormat::ELF, BinaryFormat::MachO, BinaryFormat::COFF}) {
+      SCOPED_TRACE(static_cast<unsigned>(TargetArch));
+      SCOPED_TRACE(static_cast<unsigned>(Format));
+      FrameSlotProofFixture F(TargetArch);
+      // The CFG runs opposite to vector order, so forwarding cannot depend
+      // on a single lexical sweep through the blocks.
+      constexpr unsigned Stages = 16;
+      for (unsigned I = 0; I < Stages; ++I)
+        F.addBlock();
+      const int Consumer = F.addBlock();
+      F.edge(0, Stages);
+      for (unsigned I = Stages; I > 1; --I)
+        F.edge(I, I - 1);
+      F.edge(1, Consumer);
+      std::vector<MedVar> Addresses;
+      const bool Expected[] = {false, true, true, false, true,
+                               false, false, false, true};
+      for (unsigned Kind = 0; Kind < std::size(Expected); ++Kind) {
+        const MedVar Address = F.temp();
+        F.op(0, NdOp::INT_ADD, Address,
+             {F.SP, MedVar::makeConst(Kind * F.Width, F.Width)});
+        Addresses.push_back(Address);
+        MedVar Value = F.temp();
+        F.op(0, NdOp::LOAD, Value, {Address});
+        for (unsigned I = Stages; I > 0; --I) {
+          const MedVar Forwarded = F.temp();
+          F.op(I, NdOp::COPY, Forwarded, {Value});
+          Value = Forwarded;
+        }
+        if (Kind == 2 || Kind == 3) {
+          MedVar Extended = F.temp();
+          Extended.Size = F.Width * 2;
+          F.op(Consumer, Kind == 2 ? NdOp::INT_ZEXT : NdOp::INT_SEXT,
+               Extended, {Value});
+          Value = Extended;
+        } else if (Kind == 4 || Kind == 5) {
+          MedVar Slice = F.temp();
+          Slice.Size = F.Width / 2;
+          F.op(Consumer, NdOp::SUBBYTES, Slice,
+               {Value, MedVar::makeConst(Kind == 4 ? 0 : 1, 1)});
+          Value = Slice;
+        } else if (Kind == 6) {
+          ++Value.SSAVer;
+          F.op(Consumer, NdOp::COPY, Value,
+               {MedVar::makeConst(0, Value.Size)});
+        } else if (Kind == 7) {
+          Value.Kind = MedVar::Reg;
+          F.op(Consumer, NdOp::COPY, Value,
+               {MedVar::makeConst(0, Value.Size)});
+        } else if (Kind == 8) {
+          Value.Size = F.Width / 2;
+        }
+        if (Kind == 0 || Kind == 3)
+          F.op(Consumer, NdOp::RETURN, {}, {Value});
+        else {
+          MedVar Used = F.temp();
+          Used.Size = Value.Size;
+          F.op(Consumer, NdOp::INT_ADD, Used,
+               {Value, MedVar::makeConst(1, Value.Size)});
+        }
+      }
+      BinaryImage Image;
+      Image.Arch = TargetArch;
+      Image.Format = Format;
+      Image.Bits = F.Width == 4 ? Bitness::Bits32 : Bitness::Bits64;
+      MedLLVMEmitter Emitter;
+      MedLLVMProvenanceTestPeer::prepareFreshAnalysis(
+          Emitter, F.Func, Image, TargetArch, Format);
+      for (unsigned I = 0; I < Addresses.size(); ++I) {
+        SCOPED_TRACE(I);
+        EXPECT_EQ(MedLLVMProvenanceTestPeer::slotReloadUsedLocally(
+                      Emitter, Addresses[I]),
+                  Expected[I]);
+      }
+    }
+}
 
 TEST(LLVMFrameSlotProof, SharedDiamondsRetainExactCoordinatesWithinBudget) {
   for (Arch TargetArch : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64}) {

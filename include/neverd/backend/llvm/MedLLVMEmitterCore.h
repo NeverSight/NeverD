@@ -2182,10 +2182,11 @@ private:
   mutable std::map<med_llvm::SlotKey, bool> SlotAddressEscapesCache;
   mutable std::map<med_llvm::SlotKey, bool> SlotMatchingKeyLoadCache;
   // The slot keys of every call argument and stored value of
-  // AddrPredCacheFor, and of every default-space load address, each found
-  // once rather than rescanned for every slot asked about.
+  // AddrPredCacheFor, and the values of every default-space load indexed
+  // by its slot key. Matching-key and local-use queries share this scan.
   mutable std::optional<std::set<med_llvm::SlotKey>> EscapingSlotKeys;
-  mutable std::optional<std::set<med_llvm::SlotKey>> LoadedSlotKeys;
+  mutable std::optional<std::map<med_llvm::SlotKey, std::vector<MedVar>>>
+      LoadedSlotValues;
   mutable std::map<med_llvm::SlotKey, bool> SlotReloadUsedLocallyCache;
   // writableDataSegOf result per (Kind,Id,SSAVer,RequireRelocBase).  The
   // writable-base search descends the whole address DAG (and chases stack

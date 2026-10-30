@@ -169,6 +169,20 @@ llvm::Function *MedLLVMEmitter::emitFunc(const MedFunc &Func) {
   auto IsDirectFragment = [&](const MedVar &V) {
     return V.isConst() && occurrenceHasAddressFragmentTaint(V);
   };
+  // Fragment taint needs an incomplete relocatable constant as its source.
+  // Without one anywhere in the function, no reaching-store edge can seed it.
+  const bool HasFragmentSeed =
+      llvm::any_of(Func.Blocks, [&](const MedBlock &Block) {
+        for (const MedOp &Op : Block.Ops)
+          for (uint8_t I = 0; I < Op.NumInputs; ++I)
+            if (IsDirectFragment(Op.Inputs[I]))
+              return true;
+        for (const PhiNode &Phi : Block.Phis)
+          for (const auto &[Pred, Arg] : Phi.Args)
+            if (IsDirectFragment(Arg))
+              return true;
+        return false;
+      });
   std::map<FragmentKey, std::vector<FragmentKey>> FragmentUses;
   AddressFragmentTaintFor = &Func;
   AddressFragmentTaint.clear();
@@ -203,6 +217,8 @@ llvm::Function *MedLLVMEmitter::emitFunc(const MedFunc &Func) {
       // exact-address COPY.
       switch (Op.Opcode) {
       case NdOp::LOAD: {
+        if (!HasFragmentSeed)
+          break;
         std::vector<MedVar> Sources;
         if (collectFrameReloadSources(Op, Sources))
           for (const MedVar &Source : Sources)

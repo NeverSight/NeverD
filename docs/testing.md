@@ -3797,6 +3797,19 @@ scalar ranges and frame intervals consume one saturating budget, including
 nested queries. Interval regressions reject independent rootless cycles and
 mutually seeded recurrences that eventually grow into another stack slot;
 reversing PHI-arm order must preserve the result.
+`EscapedDomainStopsBeforeAuditingUnrelatedStores` checks both opaque-call and
+stored-pointer escape: a rejected scalar domain performs no alias work on later
+stores. `ScalarFrameLoadsNeedNoFragmentSourceProofWithoutASeed` retains all
+emitted LOADs while checking that ordinary scalar stores and loads request no
+fragment reaching-source proofs across ELF, Mach-O and COFF. Fragment-bearing
+fixtures retain their original local-transport and escape checks.
+`LocalReloadQueriesShareTheLoadAddressIndex` bounds work across distinct loaded
+and unread slots, checks local arithmetic versus forwarded returns, and rejects
+stale results after a proof-phase or function change. A segment-relative LOAD
+cannot retain a previous default-space slot's result.
+`LocalReloadUsesKeepForwardingAndValueIdentity` reverses CFG and block-vector
+order and checks widening, low/high slicing, different SSA versions and value
+kinds, and width views of the same value against the previous predicate.
 `LLVMFrameSlotProof.ParallelStackPointerPhisAnchorOnlyInOneBlock` accepts an
 i386 back edge that returns ESP through the RSP PHI of the same header, and
 refuses the same RSP PHI placed in another block.

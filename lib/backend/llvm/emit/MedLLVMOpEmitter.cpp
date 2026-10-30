@@ -1088,8 +1088,16 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
     // a pointer-width value and only the conservative writable-data resolver
     // are considered (an ordinary integer store is never an address; a code
     // pointer is already symbolized at source).
-    const bool IsLocalValueTransport =
+    // The local-spill exemption matters only for a fragment or a value the
+    // code-identity resolver might relocate. Ordinary scalar stores must not
+    // audit every frame reload merely to skip an inapplicable code resolver.
+    const bool NeedsLocalValueTransport =
         Op.NumInputs >= 2 &&
+        (occurrenceHasAddressFragmentTaint(Op.Inputs[1]) ||
+         codeIdentityOccurrenceMayRelocate(Op.Inputs[1],
+                                           /*IncludeLayoutCodeOwners=*/true));
+    const bool IsLocalValueTransport =
+        NeedsLocalValueTransport &&
         addressFragmentCanStayInLocalFrameSlot(Op.Inputs[0], Op.Inputs[1].Size);
     if (Op.NumInputs >= 2 && !IsLocalValueTransport)
       if (llvm::Value *Code = tryResolveCodeAddressValue(

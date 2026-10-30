@@ -58,7 +58,7 @@ void MedLLVMEmitter::ensureAddrPredCache() const {
   SlotAddressEscapesCache.clear();
   SlotMatchingKeyLoadCache.clear();
   EscapingSlotKeys.reset();
-  LoadedSlotKeys.reset();
+  LoadedSlotValues.reset();
   SlotReloadUsedLocallyCache.clear();
   WritableDataSegCache.clear();
   PtrTableUniqueSegCache.clear();
@@ -119,16 +119,16 @@ bool MedLLVMEmitter::frameSlotHasMatchingKeyLoad(
   if (auto It = SlotMatchingKeyLoadCache.find(*SK);
       It != SlotMatchingKeyLoadCache.end())
     return It->second;
-  if (!LoadedSlotKeys) {
-    LoadedSlotKeys.emplace();
+  if (!LoadedSlotValues) {
+    LoadedSlotValues.emplace();
     for (const auto &Blk : CurMedFunc->Blocks)
       for (const auto &Op : Blk.Ops)
         if (Op.Opcode == NdOp::LOAD && Op.NumInputs >= 1 &&
             Op.MemoryAddressSpace == NdMemoryAddressSpace::Default)
           if (auto LK = keyOf(Op.Inputs[0]))
-            LoadedSlotKeys->insert(*LK);
+            (*LoadedSlotValues)[*LK].push_back(Op.Output);
   }
-  const bool Result = LoadedSlotKeys->count(*SK) != 0;
+  const bool Result = LoadedSlotValues->count(*SK) != 0;
   SlotMatchingKeyLoadCache[*SK] = Result;
   return Result;
 }
@@ -1743,67 +1743,63 @@ bool MedLLVMEmitter::frameSlotReloadUsedLocally(const MedVar &StoreAddr) const {
       It != SlotReloadUsedLocallyCache.end())
     return It->second;
 
+  if (!frameSlotHasMatchingKeyLoad(StoreAddr)) {
+    SlotReloadUsedLocallyCache.emplace(*SK, false);
+    return false;
+  }
+
   auto isFwd = [](NdOp Op) {
     return Op == NdOp::COPY || Op == NdOp::INT_ZEXT || Op == NdOp::INT_SEXT ||
            Op == NdOp::SUBBYTES;
   };
-  auto sameVar = [](const MedVar &A, const MedVar &B) {
-    return !A.isConst() && !B.isConst() && A.Kind == B.Kind && A.Id == B.Id &&
-           A.SSAVer == B.SSAVer;
+  // Preserve the predicate's value identity: width changes still carry the
+  // same reloaded value, while a different kind or SSA version does not.
+  using UseKey = std::tuple<int, int, int>;
+  auto useKey = [](const MedVar &V) {
+    return UseKey{static_cast<int>(V.Kind), V.Id, V.SSAVer};
   };
-  auto compute = [&]() -> bool {
-    // The reload values (LOAD outputs of slot SK) plus everything they flow
-    // into through pure-forwarding ops (COPY/widen/low-slice) — the values that
-    // still carry the reloaded pointer.
-    std::vector<MedVar> ReloadVals;
-    for (const auto &Blk : CurMedFunc->Blocks)
-      for (const auto &Op : Blk.Ops)
-        if (Op.Opcode == NdOp::LOAD && Op.NumInputs >= 1 &&
-            Op.MemoryAddressSpace == NdMemoryAddressSpace::Default)
-          if (auto LK = keyOf(Op.Inputs[0]); LK && *LK == *SK)
-            ReloadVals.push_back(Op.Output);
-    if (ReloadVals.empty())
-      return false;
-    auto inReloadSet = [&](const MedVar &V) {
-      for (const auto &R : ReloadVals)
-        if (sameVar(V, R))
-          return true;
-      return false;
-    };
-    for (bool Changed = true; Changed;) {
-      Changed = false;
-      for (const auto &Blk : CurMedFunc->Blocks)
-        for (const auto &Op : Blk.Ops)
-          if (isFwd(Op.Opcode) && Op.NumInputs >= 1 &&
-              inReloadSet(Op.Inputs[0]) && !inReloadSet(Op.Output)) {
-            if (Op.Opcode == NdOp::SUBBYTES &&
-                !(Op.NumInputs >= 2 && Op.Inputs[1].isConst() &&
-                  Op.Inputs[1].ConstVal == 0))
-              continue; // a high-slice extract drops the pointer, not
-                        // forwarding
-            ReloadVals.push_back(Op.Output);
-            Changed = true;
-          }
-    }
-    // Any NON-forwarding op consuming a reloaded value uses the pointer locally
-    // (dereference address, `p++`, `p - base`, comparison) — so it must keep
-    // the original VA.  Pure forwarding to the return register, and a RETURN
-    // that takes the reload directly as its value operand (x86-64 lowers
-    // `return p` to `RETURN <reload>`), are escapes, not local uses.
-    for (const auto &Blk : CurMedFunc->Blocks)
-      for (const auto &Op : Blk.Ops) {
-        if (isFwd(Op.Opcode) || Op.Opcode == NdOp::RETURN)
+  std::map<UseKey, std::vector<UseKey>> ForwardedFrom;
+  std::set<UseKey> UsedLocally;
+  std::vector<UseKey> Work;
+  auto markLocal = [&](const UseKey &Key) {
+    if (UsedLocally.insert(Key).second)
+      Work.push_back(Key);
+  };
+  // A reload is local exactly when a forwarding path reaches a non-forwarding
+  // consumer other than RETURN. Solve that reachability once backwards from
+  // all local consumers, instead of scanning every operation for each slot.
+  for (const auto &Block : CurMedFunc->Blocks)
+    for (const auto &Op : Block.Ops) {
+      if (isFwd(Op.Opcode)) {
+        if (Op.NumInputs < 1 || Op.Inputs[0].isConst() || Op.Output.isConst())
           continue;
-        for (int I = 0; I < Op.NumInputs; ++I)
-          if (inReloadSet(Op.Inputs[I]))
-            return true;
+        if (Op.Opcode == NdOp::SUBBYTES &&
+            !(Op.NumInputs >= 2 && Op.Inputs[1].isConst() &&
+              Op.Inputs[1].ConstVal == 0))
+          continue;
+        ForwardedFrom[useKey(Op.Output)].push_back(useKey(Op.Inputs[0]));
+        continue;
       }
-    return false;
-  };
-
-  bool Result = compute();
-  SlotReloadUsedLocallyCache[*SK] = Result;
-  return Result;
+      if (Op.Opcode == NdOp::RETURN)
+        continue;
+      for (uint8_t I = 0; I < Op.NumInputs; ++I)
+        if (!Op.Inputs[I].isConst())
+          markLocal(useKey(Op.Inputs[I]));
+    }
+  while (!Work.empty()) {
+    const UseKey Key = Work.back();
+    Work.pop_back();
+    if (auto It = ForwardedFrom.find(Key); It != ForwardedFrom.end())
+      for (const UseKey &Input : It->second)
+        markLocal(Input);
+  }
+  for (const auto &[Slot, Values] : *LoadedSlotValues) {
+    const bool Local = llvm::any_of(Values, [&](const MedVar &Value) {
+      return !Value.isConst() && UsedLocally.count(useKey(Value)) != 0;
+    });
+    SlotReloadUsedLocallyCache.emplace(Slot, Local);
+  }
+  return SlotReloadUsedLocallyCache.at(*SK);
 }
 
 } // namespace neverd

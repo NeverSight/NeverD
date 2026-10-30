@@ -3861,6 +3861,23 @@ copies while keeping sibling operands independent. A depth- or node-limited
 walk may still retry its independent closed-value-graph proof, which checks every
 initializer, address provenance, forbidden value and memory source with its own
 512-level and 8192-node limits. Exhaustion never certifies a result.
+The frame-root walk also restores its visited path at scope exit, preserving
+recurrence and sibling-arm isolation without copying the ancestor set on every
+edge. Once an escaping address or an untracked writer invalidates a whole-frame
+scalar domain, later stores cannot repair that certificate; the proof refuses
+immediately instead of spending alias budgets on the remaining writes.
+Fragment propagation asks for a LOAD's reaching values only when the function
+contains a fragment seed. A STORE asks for the local-frame exemption only when
+its value has fragment taint or the code-identity resolver could relocate it.
+These admission checks skip inapplicable proofs; actual memory operations and
+the existing fragment, code-identity and escaping-value decisions are unchanged.
+Matching-key and local-use predicates share one index of default-space LOAD
+outputs by canonical slot (or the existing fallback identity). It is discarded
+with the function and feasible-edge proof phase. The local-use predicate still
+follows the same forwarding operations and distinguishes local consumers from
+returns. A backwards closure from all local consumers classifies every loaded
+slot in one pass, preserving kind/SSA identity and the original low-slice and
+width rules. Neither index grants reaching-store or alias evidence.
 The LLVM backend accepts a sparse table's logical address origin separately
 from its owned runtime slots. Eliding its target load still requires the exact
 operation witness, complete mapped slot and relocation ownership, and exclusive
