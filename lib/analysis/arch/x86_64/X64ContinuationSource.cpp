@@ -12,8 +12,11 @@
 #include "NativeStackControl.h"
 #include "X64ArchitecturalValues.h"
 #include "X64ContinuationEvents.h"
+#include "X64ContinuationFredReturns.h"
 #include "X64ContinuationSystemTransfers.h"
+#include "X64ContinuationUserInterrupts.h"
 #include "X64ControlTransitions.h"
+#include "X64FredReturnEncoding.h"
 #include "X64MachineFlags.h"
 #include "X64Recovery.h"
 #include "X64TaskPriority.h"
@@ -50,19 +53,30 @@ using StateV4 = X64ContinuationStateV4;
 using StateV5 = X64ContinuationStateV5;
 using StateV6 = X64ContinuationStateV6;
 using StateV7 = X64ContinuationStateV7;
+using StateV8 = X64ContinuationStateV8;
+using StateV9 = X64ContinuationStateV9;
 using Segment = X64ContinuationSegment;
 using Exit = X64ContinuationExitV1;
 using Flags = detail::X64MachineFlags;
 constexpr uint64_t StatePointer = uint64_t{1} << 32;
 constexpr uint64_t ScratchBase = uint64_t{1} << 61;
 
+bool hasFredReturnState(const X64ContinuationSourceOptions &Options) {
+  return Options.Profile == X64ContinuationProfile::FredReturnNoFaultV9;
+}
+
+bool hasUserInterruptState(const X64ContinuationSourceOptions &Options) {
+  return Options.Profile == X64ContinuationProfile::UserInterruptNoFaultV8;
+}
+
 bool hasFastSystemState(const X64ContinuationSourceOptions &Options) {
-  return Options.Profile == X64ContinuationProfile::KernelFastSystemNoFaultV7;
+  return Options.Profile == X64ContinuationProfile::KernelFastSystemNoFaultV7 ||
+         hasUserInterruptState(Options);
 }
 
 bool hasEventState(const X64ContinuationSourceOptions &Options) {
   return Options.Profile == X64ContinuationProfile::KernelEventsNoFaultV6 ||
-         hasFastSystemState(Options);
+         hasFastSystemState(Options) || hasFredReturnState(Options);
 }
 
 bool hasReturnState(const X64ContinuationSourceOptions &Options) {
@@ -137,6 +151,17 @@ static_assert(offsetof(StateV7, SysenterCS) == 2496);
 static_assert(offsetof(StateV7, SysenterESP) == 2504);
 static_assert(offsetof(StateV7, SysenterEIP) == 2512);
 static_assert(sizeof(StateV7) == 2528);
+static_assert(std::is_standard_layout_v<StateV8>);
+static_assert(offsetof(StateV8, Core) == 0);
+static_assert(offsetof(StateV8, UIF) == 2528);
+static_assert(offsetof(StateV8, MonitorActive) == 2529);
+static_assert(sizeof(StateV8) == 2544);
+static_assert(std::is_standard_layout_v<StateV9>);
+static_assert(offsetof(StateV9, Core) == 0);
+static_assert(offsetof(StateV9, FredConfig) == 2544);
+static_assert(offsetof(StateV9, STIBlocked) == 2552);
+static_assert(offsetof(StateV9, PendingDebug) == 2553);
+static_assert(sizeof(StateV9) == 2560);
 
 llvm::Error invalid(const llvm::Twine &Text) {
   return llvm::createStringError(llvm::errc::invalid_argument, "%s",
@@ -204,7 +229,7 @@ controlOptions(const X64ContinuationSourceOptions &Options) {
   Controls.X64FlagsProfile = flagsProfile(Options);
   if (hasControlState(Options)) {
     Controls.X64MXCSRMask = Options.MXCSRMask;
-    Controls.X64LegacyGSState = true;
+    Controls.X64LegacyGSState = !hasFredReturnState(Options);
   }
   return Controls;
 }
@@ -682,6 +707,28 @@ struct Writer {
     emit(NdOp::RETURN, {}, {NdVar::reg(x86reg::RAX, 8)});
   }
 
+  void invalidateMonitor(std::optional<NdVar> When = std::nullopt) {
+    if (!hasUserInterruptState(Options) && !hasFredReturnState(Options))
+      return;
+    NdVar Value = constant(0, 1);
+    if (When) {
+      Value = temporary(1);
+      emit(NdOp::SELECT, Value,
+           {*When, constant(0, 1), load(offsetof(StateV8, MonitorActive), 1)});
+    }
+    store(offsetof(StateV8, MonitorActive), Value);
+  }
+
+  void compatibilityChoices(
+      llvm::ArrayRef<X64ContinuationCompatibilityChoice> Choices) {
+    for (const auto &Choice : Choices) {
+      const auto Witness = load(offsetof(State, Undefined) + Choice.Slot * 8);
+      const auto Value = detail::lowerX64ArchitecturalBits(
+          *this, read(Choice.Output), constant(1, 1), Witness, 32, 32);
+      write(Choice.Output, Value, true);
+    }
+  }
+
   void undefined(const LowUndefinedEffect &Effect, size_t Index) {
     const NdVar Witness =
         load(offsetof(State, Undefined) + Index * 8, Effect.Output.Size);
@@ -991,26 +1038,34 @@ buildInstruction(SpecializationInstruction Instruction,
   const bool PrivilegeReturn = hasReturnState(Options);
   const bool Events = hasEventState(Options);
   const bool FastSystem = hasFastSystemState(Options);
-  Result.StateVersion = FastSystem        ? 7
-                        : Events          ? 6
-                        : PrivilegeReturn ? 5
-                        : FaultAddress    ? 4
-                        : Smap            ? 3
-                        : Controls        ? 2
-                                          : 1;
-  Result.StateBytes = FastSystem        ? sizeof(StateV7)
-                      : Events          ? sizeof(StateV6)
-                      : PrivilegeReturn ? sizeof(StateV5)
-                      : FaultAddress    ? sizeof(StateV4)
-                      : Controls        ? sizeof(StateV2)
-                                        : sizeof(State);
-  Function.Name = (FastSystem        ? "neverd_step_v7_"
-                   : Events          ? "neverd_step_v6_"
-                   : PrivilegeReturn ? "neverd_step_v5_"
-                   : FaultAddress    ? "neverd_step_v4_"
-                   : Smap            ? "neverd_step_v3_"
-                   : Controls        ? "neverd_step_v2_"
-                                     : "neverd_step_") +
+  const bool UserInterruptState = hasUserInterruptState(Options);
+  const bool FredReturnState = hasFredReturnState(Options);
+  Result.StateVersion = FredReturnState      ? 9
+                        : UserInterruptState ? 8
+                        : FastSystem         ? 7
+                        : Events             ? 6
+                        : PrivilegeReturn    ? 5
+                        : FaultAddress       ? 4
+                        : Smap               ? 3
+                        : Controls           ? 2
+                                             : 1;
+  Result.StateBytes = FredReturnState      ? sizeof(StateV9)
+                      : UserInterruptState ? sizeof(StateV8)
+                      : FastSystem         ? sizeof(StateV7)
+                      : Events             ? sizeof(StateV6)
+                      : PrivilegeReturn    ? sizeof(StateV5)
+                      : FaultAddress       ? sizeof(StateV4)
+                      : Controls           ? sizeof(StateV2)
+                                           : sizeof(State);
+  Function.Name = (FredReturnState      ? "neverd_step_v9_"
+                   : UserInterruptState ? "neverd_step_v8_"
+                   : FastSystem         ? "neverd_step_v7_"
+                   : Events             ? "neverd_step_v6_"
+                   : PrivilegeReturn    ? "neverd_step_v5_"
+                   : FaultAddress       ? "neverd_step_v4_"
+                   : Smap               ? "neverd_step_v3_"
+                   : Controls           ? "neverd_step_v2_"
+                                        : "neverd_step_") +
                   llvm::utohexstr(Result.Address);
   Exit Kind = Exit::Continue;
   if (Instruction.NativeStackControl !=
@@ -1064,6 +1119,18 @@ buildInstruction(SpecializationInstruction Instruction,
                     InterpreterProfileProjection::X64FarPointerLoadV1
           ? detail::x64FarPointerLoad(Instruction.NativeBytes)
           : std::nullopt;
+  const auto UserInterrupt =
+      UserInterruptState && Instruction.ProfileProjection ==
+                                InterpreterProfileProjection::X64UserInterruptV1
+          ? detail::x64UserInterrupt(Instruction.NativeBytes)
+          : std::nullopt;
+  const auto FredReturn =
+      FredReturnState && Instruction.ProfileProjection ==
+                             InterpreterProfileProjection::X64FredReturnV1
+          ? detail::x64FredReturn(Instruction.NativeBytes)
+          : std::nullopt;
+  if (FredReturnState && !FredReturn)
+    RequireNative("the FRED return profile only owns canonical ERETS/ERETU");
   // These exact frame shapes have no unconditional empty undefined-output
   // audit: their live CS descriptor may select compatibility mode. V6's shared
   // descriptor owner checks CS.L=1 and CS.D=0 before any write, so only this
@@ -1072,12 +1139,13 @@ buildInstruction(SpecializationInstruction Instruction,
       (Iret || FarReturn) &&
       Instruction.UndefinedEffects.Coverage == LowUndefinedCoverage::Missing &&
       Instruction.UndefinedEffects.Effects.empty();
-  if ((!FarPointer &&
+  if ((!FarPointer && !UserInterrupt && !FredReturn &&
        (Instruction.ProfileProjection != InterpreterProfileProjection::None ||
         (!OwnedFrameReturn && Instruction.UndefinedEffects.Coverage !=
                                   LowUndefinedCoverage::Complete))) ||
       (Instruction.Origin.Control == LowInstructionControl::Terminator &&
-       !Sysret && !Sysenter && !Sysexit && !Iret && !FarReturn && !Interrupt))
+       !Sysret && !Sysenter && !Sysexit && !Iret && !FarReturn && !Interrupt &&
+       !UserInterrupt && !FredReturn))
     RequireNative("instruction requires an explicit native environment");
   if (Instruction.UndefinedEffects.Effects.size() >
       std::size(State{}.Undefined))
@@ -1132,7 +1200,9 @@ buildInstruction(SpecializationInstruction Instruction,
           Options.NativeSpeculationControlMsrs)
         ExtraMSRBlocks += 3;
     }
-  const size_t MaxBlocks = Instruction.Ops.size() + 3 + ExtraMSRBlocks;
+  const size_t MaxBlocks =
+      Instruction.Ops.size() + 3 + ExtraMSRBlocks +
+      (UserInterrupt == detail::X64UserInterrupt::Return ? 2 : 0);
   if (MaxBlocks > Options.MaxOperations ||
       Result.Address >= InvalidVA - MaxBlocks)
     return invalid("continuation source block budget or address exhausted");
@@ -1159,7 +1229,11 @@ buildInstruction(SpecializationInstruction Instruction,
              {Guard.load(offsetof(State, PC)), constant(Result.Address)});
   const NdVar Packed = Guard.load(offsetof(State, RFlags));
   const uint64_t EntryFlags =
-      Interrupt ? 0x3d7fd7 : Flags::entryMask(flagsProfile(Options));
+      (Interrupt || FredReturn ||
+       UserInterrupt == detail::X64UserInterrupt::Return)
+          ? 0x3d7fd7
+      : UserInterrupt ? 0x3d7ed7 // TF requires debug-trap delivery.
+                      : Flags::entryMask(flagsProfile(Options));
   Guard.emit(NdOp::INT_AND, FlagBits, {Packed, constant(~EntryFlags)});
   Guard.emit(NdOp::INT_NOTEQUAL, FlagsBad, {FlagBits, constant(0)});
   Guard.emit(NdOp::INT_AND, Fixed, {Packed, constant(2)});
@@ -1190,7 +1264,7 @@ buildInstruction(SpecializationInstruction Instruction,
         NdOp::INT_AND, RPL,
         {Guard.load(offsetof(StateV5, CS) + offsetof(Segment, Selector), 2),
          constant(3, 2)});
-    if (Sysenter) {
+    if (Sysenter || UserInterrupt) {
       // Conforming code retains the caller's CPL even when CS.DPL is lower.
       const NdVar Shifted = Guard.temporary(2), DPL = Guard.temporary(2);
       const NdVar ConformingBits = Guard.temporary(2);
@@ -1210,7 +1284,8 @@ buildInstruction(SpecializationInstruction Instruction,
       Guard.emit(NdOp::INT_NOTEQUAL, CPLBad, {RPL, constant(0, 2)});
     }
     Guard.emit(NdOp::INT_AND, SegmentBits,
-               {Attributes, constant(Sysenter ? 0x6098 : 0x60f8, 2)});
+               {Attributes,
+                constant((Sysenter || UserInterrupt) ? 0x6098 : 0x60f8, 2)});
     Guard.emit(NdOp::INT_NOTEQUAL, ModeBad, {SegmentBits, constant(0x2098, 2)});
     Guard.emit(NdOp::BOOL_OR, SegmentBad, {CPLBad, ModeBad});
     Guard.emit(NdOp::BOOL_OR, AllBad, {Bad, SegmentBad});
@@ -1246,12 +1321,41 @@ buildInstruction(SpecializationInstruction Instruction,
       Bad = AllBad;
     }
   }
+  if (UserInterruptState || FredReturnState) {
+    for (auto Offset :
+         {offsetof(StateV8, UIF), offsetof(StateV8, MonitorActive)}) {
+      const auto Invalid = Guard.temporary(1), AllBad = Guard.temporary(1);
+      Guard.emit(NdOp::INT_LESS, Invalid,
+                 {constant(1, 1), Guard.load(Offset, 1)});
+      Guard.emit(NdOp::BOOL_OR, AllBad, {Bad, Invalid});
+      Bad = AllBad;
+    }
+  }
+  if (FredReturnState) {
+    const auto BadSTI = Guard.temporary(1), Pending = Guard.temporary(1);
+    const auto EventsBad = Guard.temporary(1), AllBad = Guard.temporary(1);
+    Guard.emit(NdOp::INT_LESS, BadSTI,
+               {constant(1, 1), Guard.load(offsetof(StateV9, STIBlocked), 1)});
+    Guard.emit(
+        NdOp::INT_NOTEQUAL, Pending,
+        {Guard.load(offsetof(StateV9, PendingDebug), 1), constant(0, 1)});
+    Guard.emit(NdOp::BOOL_OR, EventsBad, {BadSTI, Pending});
+    Guard.emit(NdOp::BOOL_OR, AllBad, {Bad, EventsBad});
+    Bad = AllBad;
+  }
   Guard.emit(NdOp::COND_BR, {}, {NdVar::cst(Rejected.StartAddr, 8), Bad});
   Writer Reject{Function, &Rejected, Options};
   Reject.leave(Exit::InvalidState);
   Writer W{Function, &Body, Options};
   if (Result.RequiresNativeExecution) {
     W.leave(Exit::NativeInstruction);
+  } else if (FredReturn) {
+    Result.CompatibilityChoices = detail::X64ContinuationFredReturns<Writer>(
+                                      W, *Options.PagingAddressBits)
+                                      .execute(*FredReturn);
+  } else if (UserInterrupt) {
+    detail::X64ContinuationUserInterrupts<Writer>(W, Options)
+        .execute(*UserInterrupt, Instruction.Fallthrough.Address);
   } else if (Iret || FarReturn || Interrupt || FarPointer) {
     detail::X64ContinuationEvents<Writer> Event(W, *Options.PagingAddressBits);
     if (Iret)
@@ -1328,12 +1432,15 @@ buildX64ContinuationSource(const BinaryImage &Image,
     return invalid("continuation source requires its explicit kernel domain");
   const bool Returns = hasReturnState(Options);
   const bool FastSystem = hasFastSystemState(Options);
+  if (hasUserInterruptState(Options) != Options.UiretRestoresUIF.has_value())
+    return invalid("V8 requires an explicit UIRET_UIF CPU feature binding; "
+                   "earlier profiles do not accept it");
   if (FastSystem != Options.SysenterMSRAddressBits.has_value() ||
       (Options.SysenterMSRAddressBits &&
        *Options.SysenterMSRAddressBits != 48 &&
        *Options.SysenterMSRAddressBits != 57))
-    return invalid(
-        "V7 requires the Intel CPU's 48- or 57-bit SYSENTER MSR address width");
+    return invalid("V7/V8 require the Intel CPU's 48- or 57-bit "
+                   "SYSENTER MSR address width");
   if (Options.SysenterMSRAddressBits && Options.SegmentBaseMSRAddressBits &&
       Options.SysenterMSRAddressBits != Options.SegmentBaseMSRAddressBits)
     return invalid(

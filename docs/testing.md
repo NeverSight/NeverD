@@ -6,6 +6,17 @@
 
 [← Documentation Index](README.md)
 
+`SourceStackSpills.StackParametersTrackEntryBytesAcrossOverwrites` and
+`StackParameterOverwritesMeetAcrossEveryPath` distinguish incoming stack bytes
+from later slot contents. They retain reads before writes, surviving partial
+bytes, missing branch writes, disconnected cycles and exhausted work.
+`Win64CallContract.OverwrittenStackArgumentDoesNotDemandItsEntryBytes` executes
+both C routes at O0/O2, with selected and omitted callees and pipeline
+optimization on/off. Native x64 code varies the overwritten input while an
+independent seventh stack argument and pointer read remain observable. The
+omitted-callee case also checks that unprototyped wide immediates keep their
+full C carrier rather than relying on default int promotion.
+
 `X64ContinuationIntegerTest` in `NeverDX64ContinuationSourceTests` compares
 whole machine state and memory with original native vector, 64-bit multiply and
 atomic instructions through both C routes at O0/O2 with ASan/UBSan. The matching
@@ -9364,6 +9375,55 @@ V7 export test checks unchanged V6
 layout, live MSR composition, conforming CPL3 entry, both exit modes, exact
 budget consumption and refusal/reentry through SDK and CLI. Intel SEP and KVM
 absence remain explicit skips, not passing native execution.
+
+The V8 user-interrupt cases compare 524,288 complete state/RAM results for
+UIRET across both paging widths and both CPUID UIRET_UIF values, plus 256
+entry/frame rejections. CLUI/STUI/TESTUI contribute 49,152 state comparisons
+over CPL, CS privilege/conformance, UIF and arithmetic flags. Both C routes
+execute at O0/O2 under ASan/UBSan. Guard pages check the exact three-qword
+frame and prove that the restored RSP is not accessed; separate cases reject
+TF for ordinary UIF operations. UIRET restores RF from its frame, while the
+ordinary UIF operations clear RF at instruction start. SDK/CLI export checks
+both routes, required explicit CPU-feature binding, unchanged earlier layouts,
+budget consumption and stopping at UIRET before the next target instruction.
+The Capstone x86 suite checks the appended instruction ID, both syntaxes,
+implicit registers/flags, mode/prefix refusal and fast scanning. Ordinary
+lifting still refuses UIRET without its owning continuation context. The
+qualification record is
+[`evidence/x86-uiret-continuation-2026-10-30.json`](evidence/x86-uiret-continuation-2026-10-30.json).
+The local processor reports no UINTR support: these portable/compiler checks
+do not qualify physical UINTR delivery, CET, RTM or fault behavior.
+
+The V9 FRED fixtures exercise all four old/requested stack levels, saved event
+bits, incoming TF/STI/NMI state, every saved-flags bit, both canonical widths
+and noncanonical restored stacks. ERETU tests every standard selector pair
+(including wraparound), GDT/LDT and conforming/nonconforming descriptors, exact
+accessed-bit writes and aliasing with the captured augmented SS. Guard pages
+prove the skipped error-code word and adjacent event-information area are not
+read. Complete state/RAM comparisons run through both C routes at O0/O2 under
+ASan/UBSan. SDK/CLI tests stop at the return even when its target is selected
+and retain pending-event ownership. Earlier profiles require native execution;
+V9 does not inherit their FRED-disabled instruction domain. The ERETU monitor
+invalidation regression failed before the owner was corrected. See the
+[FRED qualification record](evidence/x86-fred-continuation-2026-10-30.json).
+These are portable semantic and compiler checks, not physical FRED execution.
+
+`LegacyReturnsInvalidateTheUserMonitor` checks IRET, both SYSRET/SYSEXIT
+widths, RETF with and without cleanup, SYSENTER and an ordinary NOP in V8.
+It varies returned CPL, UIF, monitor validity and rejected entry state; only
+the architecturally specified returns invalidate the monitor. The FRED null-SS
+regression distinguishes nonstandard descriptor returns from standard selector
+wraparound, where a null-looking selector is made usable without a table read.
+
+`FredCompatibilityReturnsOwnConditionalChoices` checks standard and GDT/LDT
+compatibility returns with both code-default sizes, granularity, nonzero segment
+bases, exact/overflowed limits, discarded high RIP/RSP bits and independently
+varied arbitrary inputs. Complete state/RAM comparisons run through both C
+routes and sanitizer profiles. The SDK manifest checks seven conditional slots
+and explicit profile timing; generated drivers stop before a listed compatibility
+target and reject reentry in the wrong execution mode.
+The [compatibility qualification record](evidence/x86-fred-compatibility-2026-10-30.json)
+records 9,728 new state/RAM cases and the 1,554-test integration run.
 
 The native speculation and descriptor fixtures compile both source routes at
 O0/O2 into freestanding guests and execute them at CPL0 using Linux x64 KVM.

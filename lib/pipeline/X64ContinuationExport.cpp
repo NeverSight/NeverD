@@ -82,6 +82,7 @@ llvm::Expected<Request> readRequest(llvm::StringRef Text) {
                                        "null_segment_base_policy",
                                        "segment_base_msr_address_bits",
                                        "sysenter_msr_address_bits",
+                                       "uiret_restores_uif",
                                        "native_timestamp_reads",
                                        "native_write_prefetch",
                                        "native_speculation_control_msrs",
@@ -94,12 +95,18 @@ llvm::Expected<Request> readRequest(llvm::StringRef Text) {
       return invalid("unknown x64 continuation option: " +
                      llvm::StringRef(Key));
   const auto Profile = Object->getString("profile");
-  if (Profile != "kernel-events-v6" && Profile != "intel-fast-system-v7")
-    return invalid("an explicit kernel-events-v6 or intel-fast-system-v7 "
-                   "profile is required");
+  if (Profile != "kernel-events-v6" && Profile != "intel-fast-system-v7" &&
+      Profile != "intel-user-interrupt-v8" && Profile != "intel-fred-return-v9")
+    return invalid(
+        "an explicit kernel-events-v6, intel-fast-system-v7 or "
+        "intel-user-interrupt-v8 or intel-fred-return-v9 profile is required");
   Request Result;
   auto &Options = Result.Options;
-  Options.Profile = Profile == "intel-fast-system-v7"
+  Options.Profile = Profile == "intel-fred-return-v9"
+                        ? X64ContinuationProfile::FredReturnNoFaultV9
+                    : Profile == "intel-user-interrupt-v8"
+                        ? X64ContinuationProfile::UserInterruptNoFaultV8
+                    : Profile == "intel-fast-system-v7"
                         ? X64ContinuationProfile::KernelFastSystemNoFaultV7
                         : X64ContinuationProfile::KernelEventsNoFaultV6;
   const auto RequiredInteger =
@@ -153,6 +160,12 @@ llvm::Expected<Request> readRequest(llvm::StringRef Text) {
        &Options.NativeSpeculationControlMsrs},
       {"native_descriptor_queries", &Options.NativeDescriptorQueries},
       {"native_page_table_access", &Options.NativePageTableAccess}};
+  if (const auto *Value = Object->get("uiret_restores_uif")) {
+    const auto Flag = Value->getAsBoolean();
+    if (!Flag)
+      return invalid("uiret_restores_uif must be a boolean");
+    Options.UiretRestoresUIF = *Flag;
+  }
   for (const auto &[Key, Destination] : Bindings)
     if (const auto *Value = Object->get(Key)) {
       auto Flag = Value->getAsBoolean();
@@ -207,6 +220,16 @@ llvm::json::Array effects(const X64ContinuationInstructionSource &Unit) {
                            {"bit_count", int64_t(Effect.BitCount)},
                            {"conditional", bool(Effect.When)}});
   }
+  for (const auto &Choice : Unit.CompatibilityChoices)
+    Result.push_back(llvm::json::Object{
+        {"slot", int64_t(Choice.Slot)},
+        {"after_profile_transition", "successful_compatibility_return"},
+        {"output_space", int64_t(Choice.Output.Space)},
+        {"output_offset", hex(Choice.Output.Offset)},
+        {"output_bytes", int64_t(Choice.Output.Size)},
+        {"bit_offset", 32},
+        {"bit_count", 32},
+        {"conditional", true}});
   return Result;
 }
 
@@ -236,8 +259,13 @@ typedef struct {
     neverd_x64_segment_metadata FS, GS;
     uint8_t Unusable, NMIBlocked, ReservedV6[14];
 )C";
-  if (Version == 7)
+  if (Version >= 7)
     OS << "    uint64_t SysenterCS, SysenterESP, SysenterEIP, ReservedV7;\n";
+  if (Version >= 8)
+    OS << "    uint8_t UIF, MonitorActive, ReservedV8[14];\n";
+  if (Version == 9)
+    OS << "    uint64_t FredConfig; uint8_t STIBlocked, PendingDebug, "
+          "ReservedV9[6];\n";
   OS << "} " << Type << ";\n";
   llvm::json::Array Fields;
   const auto Field = [&](llvm::StringRef Name, size_t Offset, size_t Bytes) {
@@ -280,11 +308,22 @@ typedef struct {
   FIELD(X64ContinuationStateV6, Unusable, Unusable);
   FIELD(X64ContinuationStateV6, NMIBlocked, NMIBlocked);
   FIELD(X64ContinuationStateV6, ReservedV6, Reserved);
-  if (Version == 7) {
+  if (Version >= 7) {
     FIELD(X64ContinuationStateV7, SysenterCS, SysenterCS);
     FIELD(X64ContinuationStateV7, SysenterESP, SysenterESP);
     FIELD(X64ContinuationStateV7, SysenterEIP, SysenterEIP);
     FIELD(X64ContinuationStateV7, ReservedV7, Reserved);
+  }
+  if (Version >= 8) {
+    FIELD(X64ContinuationStateV8, UIF, UIF);
+    FIELD(X64ContinuationStateV8, MonitorActive, MonitorActive);
+    FIELD(X64ContinuationStateV8, ReservedV8, Reserved);
+  }
+  if (Version == 9) {
+    FIELD(X64ContinuationStateV9, FredConfig, FredConfig);
+    FIELD(X64ContinuationStateV9, STIBlocked, STIBlocked);
+    FIELD(X64ContinuationStateV9, PendingDebug, PendingDebug);
+    FIELD(X64ContinuationStateV9, ReservedV9, Reserved);
   }
 #undef FIELD
   OS << "_Static_assert(sizeof(" << Type << ") == " << Bytes
@@ -304,7 +343,7 @@ void driver(llvm::raw_ostream &OS,
  * stop, even for listed targets; the environment may change all state before
  * resuming. Arbitrary-value slots are caller-selected per dynamic instruction;
  * leaving them unchanged selects a subset of permitted executions.
- * 0..7,10: instruction exits; 8: outside selection; 9: budget exhausted. */
+ * 0..7,10..12: instruction exits; 8: outside selection; 9: budget exhausted. */
 )C";
   const auto Version = Units.front().StateVersion;
   OS << "uint64_t neverd_x64_continue_v" << Version << "(neverd_x64_state_v"
@@ -416,8 +455,10 @@ exportX64Continuation(const BinaryImage &Image, llvm::StringRef RequestJSON,
   X64ContinuationExport Result;
   llvm::raw_string_ostream OS(Result.Source);
   const auto Version = Units->front().StateVersion;
-  const auto Profile =
-      Version == 7 ? "intel-fast-system-v7" : "kernel-events-v6";
+  const auto Profile = Version == 9   ? "intel-fred-return-v9"
+                       : Version == 8 ? "intel-user-interrupt-v8"
+                       : Version == 7 ? "intel-fast-system-v7"
+                                      : "kernel-events-v6";
   OS << "/* Explicit x64 " << Profile
      << " state source. See the paired "
         "manifest\n"
@@ -474,13 +515,28 @@ exportX64Continuation(const BinaryImage &Image, llvm::StringRef RequestJSON,
       {"regions", std::move(Regions)},
       {"units", std::move(Manifest)},
       {"domain",
-       (Version == 7
-            ? "Intel SEP; SYSENTER accepts CPL0..3, other steps CPL0; "
+       (Version == 9
+            ? "Intel FRED enabled; canonical ERETS/ERETU at CPL0; "
+              "64-bit entry; ERETU permits compatibility return with explicit "
+              "conditional GPR choices; explicit stack-level and event "
+              "outputs; "
+              "CET and RTM disabled; outside VMX non-root execution; "
+              "no pending debug exception at entry; "
+        : Version == 8
+            ? "Intel UINTR enabled; CET/FRED disabled; outside enclaves/RTM; "
+              "UIRET/CLUI/STUI/TESTUI "
+              "accept CPL0..3 with declared UIRET_UIF; live UIF and monitor "
+              "validity; "
+              "SYSENTER accepts CPL0..3, other steps CPL0; live SYSENTER MSRs; "
+              "64-bit entry; pending delivery belongs to the environment; "
+        : Version == 7
+            ? "Intel SEP; CET/FRED disabled; SYSENTER accepts CPL0..3, other "
+              "steps CPL0; "
               "64-bit entry; live SYSENTER MSRs with declared processor width; "
-            : "CPL0 64-bit entry; ") +
+            : "CPL0 64-bit entry; CET/FRED disabled; ") +
            std::string(
                "valid caches; declared active paging and MXCSR "
-               "mask; CET/FRED disabled; successful sequential RAM; no MMIO, "
+               "mask; successful sequential RAM; no MMIO, "
                "concurrent writes, faults or asynchronous events; exact "
                "immutable "
                "instruction bytes; accessible disjoint state and budget; "

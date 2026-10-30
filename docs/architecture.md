@@ -406,7 +406,11 @@ edges must agree; unreachable or exceptional blocks supply no evidence.
 Stack coordinates must agree at joins. Frame-derived flag taint is unioned and
 propagated again when another predecessor adds an observation; stable loops
 reach the same bounded fixed point. Every original load supplies its complete
-interval, including loads removed by source conversion. Exact SP-relative
+interval, including loads removed by source conversion. Entry-byte liveness
+is tracked separately from a slot's address: an exact store kills only its
+written bytes, and a join unions the bytes still live on either predecessor.
+A later read of replacement contents does not observe the incoming parameter.
+Exact SP-relative
 accesses may use physical GPR aliases with constant affine offsets. A join
 retains a coordinate only when every predecessor agrees, and unions byte taint;
 partial register definitions cannot authenticate an old whole pointer. Calls
@@ -415,8 +419,12 @@ receipt for each live alias. A may-clobber mask or CALL result does not prove
 pointer destruction; a clobber loses the coordinate but retains possible taint.
 The callee's home and argument area remains an implicit read range; missing
 source operands alone prove nothing. Every alias must be explicitly destroyed
-before return. Stored frame values, lossy pointer arithmetic and unknown
-observers still reject the proof. Source preparation shares
+before return while incoming bytes remain live. Stored frame values, lossy
+pointer arithmetic and unknown observers conservatively observe every remaining
+input byte and end that path's query. A completed overwrite can therefore be
+proved before an opaque suffix, without granting any semantic or noncapture
+fact about that suffix. All original CFG edges and connectivity are checked
+before these cuts, including disconnected cycles. Source preparation shares
 these facts with both emitters and SDK replay without compacting native slots.
 Original stack facts are computed once per prepared body, independently of the
 register-summary dependency waves. Temporary address intervals retain subrange
@@ -15088,7 +15096,37 @@ construction. The V7 profile adds live SYSENTER MSRs after the unchanged V6
 layout; the state transport's MSR owner handles their reads and writes.
 Profile inheritance is declared once in the continuation source owner so
 controls, flags, fault addresses, returns and event state advance together.
-The exporter selects distinct V6/V7 layouts and drivers from that owner.
+The exporter selects distinct versioned layouts and drivers from that owner.
+
+The x64 continuation descriptor implementation is shared by the legacy event
+and FRED return owners in `X64ContinuationSegments.h`. It owns GDT/LDT
+validation, hidden-cache decoding and ordered descriptor accessed-bit writes;
+the instruction-specific owners retain their distinct frame and event rules.
+The same flat-cache writer serves SYSRET/SYSENTER/SYSEXIT and standard ERETU.
+`X64ContinuationFredReturns.h` handles V9 FRED return frames and event outputs
+above both C emitters. Its profile enables only canonical ERETS/ERETU and
+cannot reuse the earlier FRED-disabled execution domain. ERETU compatibility
+choices belong to this profile transition, where the live return descriptor
+determines CS.L. They are separate from the original instruction's missing
+LowIR arbitrary-output certificate. The same choice records drive state
+lowering and manifest slots; ERETU's explicitly restored RSP has no arbitrary
+high-half slot.
+The version-aware state writer transports monitor invalidation for UIRET,
+ERETU and the inherited legacy returns; each return owner decides whether the
+architectural transition invalidates it. Earlier layouts receive no monitor
+write.
+
+`X64ContinuationUserInterrupts` owns UIRET, CLUI, STUI and TESTUI above both C
+routes. V8 appends UIF and monitor validity without changing earlier layouts.
+The binary adapter retains canonical bytes as a dedicated profile projection;
+it does not manufacture ordinary LowIR or an unconditional undefined-output
+audit. UIRET validates its frame and target before state writes, applies the
+declared UIRET_UIF feature, and stops before target execution or pending
+delivery. The flag instructions share its UIF cell and retain ordinary RF
+clearing. Their TF domain excludes debug-trap delivery. The decoder owns the
+appended UIRET identity and terminating classification; ordinary strict and
+permissive lifting still require a complete return-state owner. Monitor ranges
+and pending interrupts remain environment-owned, with no host state changes.
 
 `X86LiftCoreArith` lowers legacy memory `LOCK ADD/SUB/INC/DEC` to one sequentially consistent `ATOMIC_ADD`. Flags use the returned old value after the transaction; `INC/DEC` preserve CF and FS/GS address spaces remain attached. Neutral immediate `LOCK OR/XOR 0` and `LOCK AND -1` use that same transaction with a zero addend. Their logical flags use the old value, clear CF/OF and leave AF undefined. On i386, other logical values and register sources remain refused; x64 uses the audited native locked intrinsic for those cases. HLE remains refused. HighC retains the type of an explicit atomic-result declaration so signed comparisons use its actual C carrier. This does not establish missing frame inputs, MMIO behavior or concurrent execution equivalence.
 

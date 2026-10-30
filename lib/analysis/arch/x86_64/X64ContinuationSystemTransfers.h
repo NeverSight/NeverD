@@ -10,6 +10,8 @@
 #ifndef NEVERD_LIB_ANALYSIS_ARCH_X86_64_X64CONTINUATIONSYSTEMTRANSFERS_H
 #define NEVERD_LIB_ANALYSIS_ARCH_X86_64_X64CONTINUATIONSYSTEMTRANSFERS_H
 
+#include "X64ContinuationSegments.h"
+
 #include "neverd/analysis/arch/x86_64/X64ContinuationSource.h"
 #include "neverd/lift/X86/X86Regs.h"
 
@@ -38,12 +40,7 @@ template <class Writer> class X64ContinuationSystemTransfers {
   }
 
   void flatSegment(bool Code, NdVar Selector, bool Wide, unsigned CPL) {
-    const auto Offset = Code ? offsetof(StateV5, CS) : offsetof(StateV5, SS);
-    W.store(Offset + offsetof(Segment, Base), k(0));
-    W.store(Offset + offsetof(Segment, Limit), k(UINT32_MAX, 4));
-    W.store(Offset + offsetof(Segment, Selector), Selector);
-    W.store(Offset + offsetof(Segment, Attributes),
-            k((Code ? (Wide ? 0xa09b : 0xc09b) : 0xc093) | (CPL << 5), 2));
+    writeX64FlatContinuationSegment(W, Code, Selector, Wide, CPL);
   }
 
 public:
@@ -82,13 +79,15 @@ public:
       flatSegment(Code, Selector, Wide, 3);
     }
     if (Options.Profile == X64ContinuationProfile::KernelEventsNoFaultV6 ||
-        Options.Profile == X64ContinuationProfile::KernelFastSystemNoFaultV7) {
+        Options.Profile == X64ContinuationProfile::KernelFastSystemNoFaultV7 ||
+        Options.Profile == X64ContinuationProfile::UserInterruptNoFaultV8) {
       const auto Usable = W.temporary(1);
       W.emit(NdOp::INT_AND, Usable,
              {W.load(offsetof(StateV6, Unusable), 1), k(0xfc, 1)});
       W.store(offsetof(StateV6, Unusable), Usable);
     }
     W.store(offsetof(State, RFlags), Packed);
+    W.invalidateMonitor();
     for (size_t I = 0; I != Effects.size(); ++I)
       W.undefined(Effects[I], I);
     W.leave(Exit::PrivilegeReturn, PC);
@@ -150,6 +149,8 @@ public:
       W.store(offsetof(State, RFlags), Flags);
     }
     W.write(NdVar::reg(x86reg::RSP, 8), SP);
+    if (!Enter)
+      W.invalidateMonitor();
     for (size_t I = 0; I != Effects.size(); ++I)
       W.undefined(Effects[I], I);
     W.leave(Enter ? Exit::PrivilegeEnter : Exit::PrivilegeReturn, PC);

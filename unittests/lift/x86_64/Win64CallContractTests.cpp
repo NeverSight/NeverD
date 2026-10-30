@@ -2241,6 +2241,133 @@ TEST(Win64CallContract, UnreadRegisterHolesBeforeStackArgumentsStayUnread) {
     }
 }
 
+TEST(Win64CallContract, OverwrittenStackArgumentDoesNotDemandItsEntryBytes) {
+  constexpr va_t Consumer = Text + 0x100;
+  for (bool Partial : {false, true}) {
+    SCOPED_TRACE(Partial);
+    std::vector<uint8_t> Code(0x140, 0xCC);
+    std::vector<uint8_t> Caller = {
+        0x48, 0x83, 0xEC, 0x48, 0x48, 0xC7, 0x44, 0x24, 0x20, 5, 0, 0, 0,
+        // The sixth argument is deliberately unwritten.
+        0x48, 0xC7, 0x44, 0x24, 0x30, 29, 0, 0, 0, 0x48, 0xC7, 0x44, 0x24, 0x38,
+        43, 0, 0, 0, 0x48, 0x8D, 0x4C, 0x24, 0x38, 0xE8};
+    const auto Displacement = rel32(Text + Caller.size() + 4, Consumer);
+    Caller.insert(Caller.end(), Displacement.begin(), Displacement.end());
+    Caller.insert(Caller.end(), {0x48, 0x83, 0xC4, 0x48, 0xC3});
+    put(Code, Text, Caller);
+    std::vector<uint8_t> Body;
+    if (!Partial)
+      Body.push_back(0x48);
+    Body.insert(Body.end(),
+                {0xC7, 0x44, 0x24, 0x30, 7,    0, 0, 0, // replace sixth
+                 0x48, 0x8B, 0x01,             // read unrelated pointer
+                 0x48, 0x03, 0x44, 0x24, 0x30, // read replaced sixth
+                 0x48, 0x03, 0x44, 0x24, 0x38, // read seventh
+                 0xC3});
+    put(Code, Consumer, Body);
+    const auto Image = makeImage(
+        Code,
+        {{Text, "call_overwritten_stack"}, {Consumer, "overwriting_consumer"}},
+        {});
+    std::string NativeOracle;
+    llvm::raw_string_ostream Native(NativeOracle);
+    Native << R"(
+#if defined(__linux__) && defined(__x86_64__)
+#include <sys/mman.h>
+#include <string.h>
+static int check_native(uint64_t seed) {
+  static const uint8_t original[] = {
+)";
+    for (uint8_t Byte : Body)
+      Native << unsigned(Byte) << ',';
+    Native << R"(};
+  void *mapping = mmap(0, 4096, PROT_READ | PROT_WRITE | PROT_EXEC,
+                       MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  if (mapping == MAP_FAILED) return 1;
+  // UBSan inspects the prefix before indirect code targets.
+  uint8_t *code = (uint8_t *)mapping + 16;
+  memcpy(code, original, sizeof(original));
+  __builtin___clear_cache((char *)code, (char *)code + sizeof(original));
+  typedef uint64_t (__attribute__((ms_abi)) *callee_t)(
+      uint64_t *, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
+  uint64_t pointee = 43;
+  uint64_t actual = ((callee_t)code)(&pointee, 11, 13, 17, 5, seed, 29);
+  int bad = actual != 79 || pointee != 43;
+  if (munmap(mapping, 4096)) return 1;
+  return bad;
+}
+#else
+static int check_native(uint64_t seed) { return 0; }
+#endif
+)";
+    for (bool OmitCallee : {false, true})
+      for (bool NoOpt : {false, true})
+        for (bool LLVM : {false, true}) {
+          SCOPED_TRACE(OmitCallee);
+          SCOPED_TRACE(NoOpt);
+          SCOPED_TRACE(LLVM);
+          llvm::LLVMContext Context;
+          PipelineOptions Options;
+          Options.EmitDumpOutput = false;
+          Options.OnlyFunctionEntries = {Text};
+          if (!OmitCallee)
+            Options.OnlyFunctionEntries.insert(Consumer);
+          Options.SourceProjection = true;
+          Options.LiftMode = LLVM;
+          Options.NoOpt = NoOpt;
+          auto Result = Pipeline().run(Image, Context, Options);
+          ASSERT_TRUE(Result.Success) << Result.Error;
+          std::string Source;
+          llvm::raw_string_ostream Output(Source);
+          CEmitterOptions COptions;
+          COptions.TheArch = Image.Arch;
+          COptions.Format = Image.Format;
+          COptions.Image = &Image;
+          if (LLVM) {
+            ASSERT_TRUE(Result.LlvmModule);
+            ASSERT_FALSE(llvm::verifyModule(*Result.LlvmModule, &llvm::errs()));
+            ASSERT_TRUE(
+                LLVMCEmitter().emit(*Result.LlvmModule, Output, COptions));
+          } else
+            ASSERT_TRUE(
+                HighCEmitter().emit(Result.HighFuncs, Output, COptions));
+          const bool Unknown =
+              Source.find("__builtin_trap") != std::string::npos;
+          EXPECT_EQ(Unknown, Partial) << Source;
+          if (Partial || Unknown)
+            continue;
+          std::string Oracle;
+          if (OmitCallee)
+            Oracle = R"(
+#define SYMBOL_PREFIX_(prefix) #prefix
+#define SYMBOL_PREFIX(prefix) SYMBOL_PREFIX_(prefix)
+uint64_t stack_provider(uint64_t, uint64_t, uint64_t, uint64_t,
+                        uint64_t, uint64_t, uint64_t)
+    __asm__(SYMBOL_PREFIX(__USER_LABEL_PREFIX__) "overwriting_consumer");
+uint64_t stack_provider(uint64_t pointer, uint64_t a1, uint64_t a2,
+                        uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6) {
+  return *(uint64_t *)(uintptr_t)pointer + 7 + a6;
+}
+)";
+          Oracle += R"(
+static int check_native(uint64_t seed);
+int main(void) {
+  for (unsigned i = 0; i < 32; ++i) {
+    if (call_overwritten_stack() != 79) return 1;
+    if (check_native(UINT64_C(0xFEDCBA9876543210) ^
+                     (uint64_t)i * UINT64_C(0x100010001))) return 2;
+  }
+  return 0;
+}
+)";
+          for (llvm::StringRef Level : {"-O0", "-O2"})
+            source_call_execution_test::compileAndRun(
+                Source + Oracle + NativeOracle,
+                {Level, "-fsanitize=undefined", "-fsanitize-trap=all"});
+        }
+  }
+}
+
 TEST(Win64CallContract, BranchStackArgumentsKeepTheirEdgeValues) {
   for (bool ByteArgument : {false, true})
     for (bool Nested : {false, true}) {

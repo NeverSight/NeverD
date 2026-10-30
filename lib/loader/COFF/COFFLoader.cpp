@@ -1080,6 +1080,12 @@ COFFLoader::loadBuffer(llvm::MemoryBufferRef Buffer) {
   // or data-pointer heuristic can turn an interior instruction into a symbol.
   // Personality resolution still follows import-veneer discovery below.
   dwarf_eh::recordFrameExtents(Img);
+  // Jump-read indexed table runs must be known before the data-pointer
+  // discovery scan: a jump table in .rdata would otherwise synthesize a
+  // function symbol for every switch case whose first bytes pass the
+  // prologue check.  This step only reads relocation state; the
+  // reclassifying pass still runs after pointer-run discovery below.
+  coff_loader::recordIndexedJumpTableRuns(Img);
   runPostLoadDiscovery(
       Img,
       "coff: loaded " +
