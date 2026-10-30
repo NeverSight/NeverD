@@ -15086,7 +15086,19 @@ construction. The V7 profile adds live SYSENTER MSRs after the unchanged V6
 layout; the state transport's MSR owner handles their reads and writes.
 Profile inheritance is declared once in the continuation source owner so
 controls, flags, fault addresses, returns and event state advance together.
-The exporter selects distinct V6/V7 layouts and drivers from that owner.
+The exporter selects distinct versioned layouts and drivers from that owner.
+
+`X64ContinuationUserInterrupts` owns UIRET, CLUI, STUI and TESTUI above both C
+routes. V8 appends UIF and monitor validity without changing earlier layouts.
+The binary adapter retains canonical bytes as a dedicated profile projection;
+it does not manufacture ordinary LowIR or an unconditional undefined-output
+audit. UIRET validates its frame and target before state writes, applies the
+declared UIRET_UIF feature, and stops before target execution or pending
+delivery. The flag instructions share its UIF cell and retain ordinary RF
+clearing. Their TF domain excludes debug-trap delivery. The decoder owns the
+appended UIRET identity and terminating classification; ordinary strict and
+permissive lifting still require a complete return-state owner. Monitor ranges
+and pending interrupts remain environment-owned, with no host state changes.
 
 `X86LiftCoreArith` lowers legacy memory `LOCK ADD/SUB/INC/DEC` to one sequentially consistent `ATOMIC_ADD`. Flags use the returned old value after the transaction; `INC/DEC` preserve CF and FS/GS address spaces remain attached. Neutral immediate `LOCK OR/XOR 0` and `LOCK AND -1` use that same transaction with a zero addend. Their logical flags use the old value, clear CF/OF and leave AF undefined. On i386, other logical values and register sources remain refused; x64 uses the audited native locked intrinsic for those cases. HLE remains refused. HighC retains the type of an explicit atomic-result declaration so signed comparisons use its actual C carrier. This does not establish missing frame inputs, MMIO behavior or concurrent execution equivalence.
 

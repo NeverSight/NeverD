@@ -63,4 +63,14 @@ _Static_assert(offsetof(fast_system_state_t, sysenter_cs) == 2496,
 _Static_assert(offsetof(fast_system_state_t, sysenter_eip) == 2512,
                "V7 SYSENTER EIP");
 
+typedef struct __attribute__((aligned(16))) {
+  fast_system_state_t core;
+  uint8_t uif, monitor_active, reserved[14];
+} user_interrupt_state_t;
+_Static_assert(sizeof(user_interrupt_state_t) == 2544,
+               "continuation V8 fixture size");
+_Static_assert(offsetof(user_interrupt_state_t, uif) == 2528, "V8 UIF");
+_Static_assert(offsetof(user_interrupt_state_t, monitor_active) == 2529,
+               "V8 monitor validity");
+
 #endif // NEVERD_UNITTESTS_DEVIRTUALIZATION_FIXTURES_X64_CONTINUATION_EVENT_STATE_H

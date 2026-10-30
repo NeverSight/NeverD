@@ -19,13 +19,15 @@ extern "C" {
 #endif
 
 /// Export selected x64 instruction regions under an explicit kernel-events-v6
-/// or intel-fast-system-v7
+/// or intel-fast-system-v7 / intel-user-interrupt-v8
 /// execution domain. RequestJSON is a size-delimited UTF-8 object; it selects
 /// either instructions or entries, mxcsr_mask and paging_address_bits. Native
 /// timestamp, prefetch, speculation MSR, descriptor and page-table bindings are
 /// individually opt-in. UseLLVM is exactly 0 (HighC) or 1 (LLVM C).
 /// V7 additionally requires sysenter_msr_address_bits and exports its separate
 /// 2528-byte state. The V6 layout and driver statuses remain unchanged.
+/// V8 also requires the boolean uiret_restores_uif feature binding and exports
+/// its 2544-byte state. UIRET exits with status 11 before target execution.
 ///
 /// The returned C includes its state layout and a bounded resume driver. It
 /// does not use an ordinary function ABI or execute the loaded image. CALL,

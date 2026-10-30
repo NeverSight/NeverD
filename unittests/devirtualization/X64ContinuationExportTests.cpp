@@ -105,7 +105,9 @@ protected:
     } else if (const auto *Object = Parsed->getAsObject()) {
       EXPECT_EQ(Object->getInteger("schema_version"), 2);
       EXPECT_EQ(Object->getInteger("state_version"), Version);
-      EXPECT_EQ(Object->getInteger("state_bytes"), Version == 7 ? 2528 : 2496);
+      EXPECT_EQ(Object->getInteger("state_bytes"), Version == 8   ? 2544
+                                                   : Version == 7 ? 2528
+                                                                  : 2496);
       EXPECT_EQ(Object->getInteger("state_alignment"), 16);
       EXPECT_EQ(Object->getBoolean("ordinary_source_abi"), false);
       EXPECT_EQ(Object->getString("ordinary_source_validation"), "not-run");
@@ -299,6 +301,84 @@ int main(void) {
       {R"({"profile":"intel-fast-system-v7","mxcsr_mask":65471,"paging_address_bits":48,"instructions":[4100]})",
        R"({"profile":"kernel-events-v6","mxcsr_mask":65471,"paging_address_bits":48,"sysenter_msr_address_bits":48,"instructions":[4100]})",
        R"({"profile":"intel-fast-system-v7","mxcsr_mask":65471,"paging_address_bits":48,"sysenter_msr_address_bits":48,"segment_base_msr_address_bits":57,"instructions":[4100]})"}) {
+    const char *Report = "stale";
+    EXPECT_EQ(neverd_x64_continuation_source_v1(Session, Bad.data(), Bad.size(),
+                                                0, &Report),
+              nullptr);
+    EXPECT_EQ(Report, nullptr);
+  }
+}
+
+TEST_F(X64ContinuationExportTest, UserInterruptV8StopsBeforeTheReturnedTarget) {
+  load({0xf3, 0x0f, 0x01, 0xee, 0xf3, 0x0f, 0x01, 0xef, 0xf3, 0x0f, 0x01, 0xed,
+        0xf3, 0x0f, 0x01, 0xec, 0x90});
+  const std::string Request =
+      R"({"profile":"intel-user-interrupt-v8","mxcsr_mask":"0xffbf","paging_address_bits":48,"sysenter_msr_address_bits":48,"uiret_restores_uif":true,"instructions":[4096,4100,4104,4108,4112]})";
+  for (bool LLVM : {false, true}) {
+    auto [Source, Manifest] = source(Request, LLVM, 8);
+    auto Parsed = llvm::json::parse(Manifest);
+    ASSERT_TRUE(bool(Parsed));
+    const auto *Object = Parsed->getAsObject();
+    EXPECT_EQ(Object->getString("profile"), "intel-user-interrupt-v8");
+    EXPECT_EQ(Object->getInteger("native_requests"), 0);
+    EXPECT_EQ(Object->getArray("units")->size(), 5u);
+    for (const auto &[Name, Offset] :
+         std::vector<std::pair<std::string, unsigned>>{
+             {"UIF", 2528}, {"MonitorActive", 2529}}) {
+      const auto *Fields = Object->getArray("state_fields");
+      const auto It =
+          std::find_if(Fields->begin(), Fields->end(), [&](const auto &F) {
+            return F.getAsObject()->getString("name") == Name;
+          });
+      ASSERT_NE(It, Fields->end());
+      EXPECT_EQ(It->getAsObject()->getInteger("offset"), Offset);
+      EXPECT_EQ(It->getAsObject()->getInteger("bytes"), 1);
+    }
+    execute(Source, R"C(
+#include <stdlib.h>
+#define CHECK(c) do {if(!(c))abort();}while(0)
+int main(void) {
+  neverd_x64_state_v8 s={0},want;
+  uint64_t frame[]={0x1010,0x200,UINT64_MAX},before[3],budget=10;
+  s.PC=0x1000;s.RFlags=0x202;s.MXCSR=0x1f80;
+  s.CS=(neverd_x64_segment){0,UINT32_MAX,11,0xa0fb};
+  s.SS=(neverd_x64_segment){0,UINT32_MAX,19,0xc0f3};
+  s.GPR[4]=(uintptr_t)frame;s.UIF=1;s.MonitorActive=1;s.NMIBlocked=1;
+  memset(s.ZMM,0xa5,sizeof(s.ZMM));memcpy(before,frame,sizeof(frame));
+  want=s;want.PC=0x1010;want.GPR[4]=UINT64_MAX;
+  want.UIF=0;want.MonitorActive=0;
+  CHECK(neverd_x64_continue_v8(&s,&budget)==11&&budget==6);
+  CHECK(!memcmp(&s,&want,sizeof(s))&&!memcmp(frame,before,sizeof(frame)));
+  /* A listed target is still not executed at the UIRET boundary. */
+  CHECK(neverd_x64_continue_v8(&s,&budget)==5&&budget==6);
+  CHECK(!memcmp(&s,&want,sizeof(s)));
+  s.PC=0x100c;s.GPR[4]=(uintptr_t)frame;s.UIF=2;want=s;
+  CHECK(neverd_x64_continue_v8(&s,&budget)==5&&budget==6&&!memcmp(&s,&want,sizeof(s)));
+  return 0;
+}
+)C");
+    const auto Input = tmpFile("user-request.json"), Output = tmpFile("user.c"),
+               Report = tmpFile("user.json");
+    std::ofstream(Input) << Request;
+    std::vector<std::string> Args{"decompile",
+                                  tmpFile("input.elf").string(),
+                                  "--x64-continuation=" + Input.string(),
+                                  "--continuation-report=" + Report.string(),
+                                  "-o",
+                                  Output.string()};
+    if (LLVM)
+      Args.push_back("--llvm");
+    const auto Ran = exec(ndBin(), Args);
+    ASSERT_TRUE(Ran.ok()) << Ran.err;
+    EXPECT_EQ(readOutput(Output), Source);
+    EXPECT_EQ(readOutput(Report), Manifest);
+  }
+  for (const auto &Binding :
+       {std::string(), std::string(",\"uiret_restores_uif\":0")}) {
+    const auto Bad =
+        std::string(
+            R"({"profile":"intel-user-interrupt-v8","mxcsr_mask":65471,"paging_address_bits":48,"sysenter_msr_address_bits":48,"instructions":[4108])") +
+        Binding + "}";
     const char *Report = "stale";
     EXPECT_EQ(neverd_x64_continuation_source_v1(Session, Bad.data(), Bad.size(),
                                                 0, &Report),

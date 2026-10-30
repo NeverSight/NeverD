@@ -9347,6 +9347,24 @@ layout, live MSR composition, conforming CPL3 entry, both exit modes, exact
 budget consumption and refusal/reentry through SDK and CLI. Intel SEP and KVM
 absence remain explicit skips, not passing native execution.
 
+The V8 user-interrupt cases compare 524,288 complete state/RAM results for
+UIRET across both paging widths and both CPUID UIRET_UIF values, plus 256
+entry/frame rejections. CLUI/STUI/TESTUI contribute 49,152 state comparisons
+over CPL, CS privilege/conformance, UIF and arithmetic flags. Both C routes
+execute at O0/O2 under ASan/UBSan. Guard pages check the exact three-qword
+frame and prove that the restored RSP is not accessed; separate cases reject
+TF for ordinary UIF operations. UIRET restores RF from its frame, while the
+ordinary UIF operations clear RF at instruction start. SDK/CLI export checks
+both routes, required explicit CPU-feature binding, unchanged earlier layouts,
+budget consumption and stopping at UIRET before the next target instruction.
+The Capstone x86 suite checks the appended instruction ID, both syntaxes,
+implicit registers/flags, mode/prefix refusal and fast scanning. Ordinary
+lifting still refuses UIRET without its owning continuation context. The
+qualification record is
+[`evidence/x86-uiret-continuation-2026-10-30.json`](evidence/x86-uiret-continuation-2026-10-30.json).
+The local processor reports no UINTR support: these portable/compiler checks
+do not qualify physical UINTR delivery, CET, RTM or fault behavior.
+
 The native speculation and descriptor fixtures compile both source routes at
 O0/O2 into freestanding guests and execute them at CPL0 using Linux x64 KVM.
 They check real SPEC_CTRL readback, PRED_CMD writes, repeated writes, native

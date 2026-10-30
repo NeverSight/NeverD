@@ -82,7 +82,8 @@ public:
       flatSegment(Code, Selector, Wide, 3);
     }
     if (Options.Profile == X64ContinuationProfile::KernelEventsNoFaultV6 ||
-        Options.Profile == X64ContinuationProfile::KernelFastSystemNoFaultV7) {
+        Options.Profile == X64ContinuationProfile::KernelFastSystemNoFaultV7 ||
+        Options.Profile == X64ContinuationProfile::UserInterruptNoFaultV8) {
       const auto Usable = W.temporary(1);
       W.emit(NdOp::INT_AND, Usable,
              {W.load(offsetof(StateV6, Unusable), 1), k(0xfc, 1)});

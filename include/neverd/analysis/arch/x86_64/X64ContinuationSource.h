@@ -134,6 +134,17 @@ struct alignas(16) X64ContinuationStateV7 {
   uint64_t Reserved = 0;
 };
 
+/// V8 retains V7's banks and owns UIF and the validity of cache-line
+/// monitoring. The monitor's address/range and pending user-interrupt state
+/// remain owned by the environment. Once MonitorActive is zero its old range is
+/// inactive.
+struct alignas(16) X64ContinuationStateV8 {
+  X64ContinuationStateV7 Core;
+  uint8_t UIF = 0;
+  uint8_t MonitorActive = 0;
+  uint8_t Reserved[14] = {};
+};
+
 enum class X64ContinuationExitV1 : uint64_t {
   Continue = 0,
   Call = 1,
@@ -156,6 +167,9 @@ enum class X64ContinuationExitV1 : uint64_t {
   /// A fast system call installed its supervisor context. Stop before the
   /// handler executes. Values 8/9 belong to the public bounded driver.
   PrivilegeEnter = 10,
+  /// UIRET installed its same-privilege target, flags, stack and UIF. Stop
+  /// before target execution or pending user-interrupt delivery.
+  UserInterruptReturn = 11,
 };
 
 enum class X64ContinuationProfile : uint8_t {
@@ -225,6 +239,14 @@ enum class X64ContinuationProfile : uint8_t {
   /// SYSRET. CET/FRED, faults, asynchronous events and AMD long-mode execution
   /// remain outside this domain. Earlier state layouts are unchanged.
   KernelFastSystemNoFaultV7,
+  /// V7 plus enabled UINTR outside an enclave/transaction, with CET/FRED and
+  /// asynchronous delivery disabled. UIRET/CLUI/STUI/TESTUI accept CPL0..3
+  /// 64-bit entry; other steps retain their earlier CPL domain. Stack reads
+  /// must succeed under the actual alignment/page permissions. UIRET exits
+  /// before its target executes, preserving every segment and NMI blocking.
+  /// CLUI/STUI/TESTUI clear RF and require TF=0 (no debug-trap delivery).
+  /// UiretRestoresUIF must declare CPUID.07H.01H:EDX[17].
+  UserInterruptNoFaultV8,
 };
 
 /// Bind the original processor's null FS/GS load behavior. No vendor-wide
@@ -247,6 +269,9 @@ struct X64ContinuationSourceOptions {
   /// independently of active paging. If segment-base MSRs are also bound,
   /// their declared width must agree. Earlier profiles do not accept this.
   std::optional<unsigned> SysenterMSRAddressBits;
+  /// Required only by V8. False means UIRET sets UIF; true means it restores
+  /// UIF from bit 1 of the saved flags without changing actual RFLAGS bit 1.
+  std::optional<bool> UiretRestoresUIF;
   /// Opt in to the executing x64 host's TSC and IA32_TSC_AUX, including its
   /// actual timestamp access/ordering behavior. The caller must bind this
   /// native environment to the source run and ensure RDTSC/RDTSCP support and

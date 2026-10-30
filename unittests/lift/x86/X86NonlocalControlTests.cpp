@@ -86,6 +86,28 @@ MedFunc medFunction(Intrinsic Id, bool Result) {
 
 } // namespace
 
+TEST(X86NonlocalControl, UserInterruptReturnRequiresItsStateOwner) {
+  const std::vector<uint8_t> Bytes{0xf3, 0x0f, 0x01, 0xec};
+  for (bool Strict : {false, true})
+    for (bool Fast : {false, true}) {
+      Decoder D;
+      ASSERT_TRUE(D.init(Arch::X64));
+      D.setStrict(Strict);
+      DecodedInsn Insn{};
+      ASSERT_EQ(
+          Fast ? D.decodeOneForLift(Bytes.data(), Bytes.size(), kEntry, Insn)
+               : D.decodeOne(Bytes.data(), Bytes.size(), kEntry, Insn),
+          Bytes.size());
+      EXPECT_EQ(Insn.Id, unsigned(X86_INS_UIRET));
+      EXPECT_TRUE(D.isFunctionTerminator(Insn));
+      std::vector<LowOp> Ops(1);
+      Ops.front().Opcode = NdOp::COPY;
+      EXPECT_THROW(D.liftToLow(Insn, Ops), UnliftedInstruction);
+      ASSERT_EQ(Ops.size(), 1u);
+      EXPECT_EQ(Ops.front().Opcode, NdOp::COPY);
+    }
+}
+
 TEST(X86NonlocalControl, RawTransitionsCannotBecomeReturnsOrSyscalls) {
   for (Arch Target : {Arch::X86, Arch::X64})
     for (bool Strict : {false, true})
@@ -100,10 +122,9 @@ TEST(X86NonlocalControl, RawTransitionsCannotBecomeReturnsOrSyscalls) {
                       : D.decodeOne(Bytes.data(), Bytes.size(), kEntry,
                                     Instruction);
         };
-        // SYSENTER and RSM take their target from an MSR or SMRAM:
-        // nothing names the continuation, so nothing is published.
+        // RSM still needs a complete SMRAM environment before publication.
         for (const auto &Bytes :
-             std::vector<std::vector<uint8_t>>{{0x0f, 0x34}, {0x0f, 0xaa}}) {
+             std::vector<std::vector<uint8_t>>{{0x0f, 0xaa}}) {
           SCOPED_TRACE(testing::Message() << unsigned(Target) << Strict << Fast
                                           << unsigned(Bytes[1]));
           DecodedInsn Instruction{};
@@ -116,6 +137,7 @@ TEST(X86NonlocalControl, RawTransitionsCannotBecomeReturnsOrSyscalls) {
         // and XBEGIN branches to its fallback; none is an ordinary return or
         // syscall.
         std::vector<std::vector<uint8_t>> Lifted{
+            {0x0f, 0x34},
             {0x0f, 0x35},
             {0x0f, 0x07},
             {0xcf},

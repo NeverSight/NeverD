@@ -54,6 +54,8 @@ enum class InterpreterProfileProjection : uint8_t {
   /// Exact raw LFS/LGS bytes retained for the V6 descriptor-state owner.
   /// No ordinary LowIR or undefined-output proof is supplied by this receipt.
   X64FarPointerLoadV1,
+  /// Canonical UINTR bytes require the explicit V8 UIF/monitor/return owner.
+  X64UserInterruptV1,
 };
 
 } // namespace neverd::analysis

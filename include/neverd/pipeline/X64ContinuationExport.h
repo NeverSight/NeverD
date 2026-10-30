@@ -37,7 +37,9 @@ struct X64ContinuationExport {
 /// patch or native execution. Both backends consume the same checked
 /// instruction-state LowIR. The emitted driver stops at calls, returns,
 /// privilege transitions and exception entry. V7 requires
-/// sysenter_msr_address_bits and returns a distinct V7 state/driver.
+/// sysenter_msr_address_bits and returns a distinct V7 state/driver. The
+/// intel-user-interrupt-v8 profile additionally requires uiret_restores_uif,
+/// owns UIF/monitor validity and stops UIRET at its completed return context.
 /// Unsupported native requests and invalid state leave the step unexecuted.
 llvm::Expected<X64ContinuationExport>
 exportX64Continuation(const BinaryImage &Image, llvm::StringRef RequestJSON,

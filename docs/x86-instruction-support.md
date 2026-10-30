@@ -268,7 +268,8 @@ test resumes through a coupled SS/RSP switch and uses the new stack.
 | VMRUN | Complete guest/host transition, including guest-modified unsaved GPRs and floating/vector state, plus the VM-exit continuation. |
 | GETSEC transferring or unproved leaves | Measured-environment entry/exit and a complete-machine-state continuation. Leaves 0 and 6..8 now use the bounded contract below when natural-width AX is proven constant. |
 | ENCLU entry/exit/resume or unproved leaves | Enclave entry/exit/resume and asynchronous exit state. Leaves 0, 1 and 5..11 now use the bounded contract below when natural-width AX is proven constant. |
-| ERETS, ERETU, UIRET | Native compiler interfaces and exact object encodings are available. NeverD return-frame and nonlocal control-transfer ownership remains missing: FRED returns explicitly fail decoding instead of aliasing CLAC, and UIRET is not decoded. Successful CPU transitions remain unqualified. |
+| ERETS, ERETU | Native compiler interfaces and exact object encodings are available. NeverD still needs FRED return-frame and nonlocal control-transfer ownership; decoding explicitly refuses these forms instead of aliasing CLAC. Successful CPU transitions remain unqualified. |
+| UIRET faulting/native execution | Decoding and the explicit V8 continuation now own the successful canonical return, UIF feature selection, monitor invalidation and complete represented state through both C routes. Ordinary source, CET, fault delivery, RTM aborts and physical UINTR execution remain unqualified. |
 | RETF/RETFQ, IRET/IRETD/IRETQ | Ordinary source still lacks complete frame, privilege, segment and flag restoration. The separate [explicit x64 continuation](x64-continuation-source.md) V6 profile owns successful IRETQ and canonical RETFQ (with or without imm16) to long-mode CPL0..3, including hidden caches, descriptor accesses and outer-return segment invalidation. Its live CS.L/CS.D guard owns the absence of arbitrary GPR high halves; these instructions have no unconditional empty undefined-output audit. RETFQ preserves NMI blocking and applies unsigned parameter cleanup to both stacks; IRETQ unblocks NMIs. Faulting execution, compatibility returns, CET/FRED and the other forms remain unqualified. |
 | SYSENTER, SYSEXIT/SYSEXITQ, SYSRET/SYSRETQ, RSM | Ordinary source still lacks complete register, privilege, segment and SMM continuation state. The separate explicit x64 continuation V5/V6 profiles own canonical SYSRET/SYSRETQ with live STAR and CS/SS caches, flags and compatibility/64-bit target state. SYSRET explicitly consumes eight arbitrary values for the legacy GPR high halves; all defined bits are preserved or assigned as specified. The Intel V7 profile additionally owns canonical SYSENTER from CPL0–3 64-bit entry and SYSEXIT/SYSEXITQ from CPL0, with live CS/ESP/EIP MSRs, complete target caches, state and explicit stops. Compatibility source contexts, legacy modes, additional flags domains and faulting transitions remain unqualified; RSM still requires a full SMM state owner. |
 | BNDMK, BNDMOV, BNDCL, BNDCU, BNDCN, BNDLDX, BNDSTX | MPX bounds-register bank, bounds-table translation, enable state and #BR/partial-fault behavior. The old COPY/NOP approximations are removed. |
@@ -1615,8 +1616,8 @@ and [UINTR](https://github.com/intelxed/xed/blob/0bcb6237345c5066726dcc08b3d8792
 encodings exposed four incorrect aliases: ERETS/ERETU became CLAC and CLUI/STUI
 became RDPKRU/WRPKRU. At that snapshot all four forms were rejected while the bare legacy forms
 remained supported. The bounded-system follow-up below implements CLUI/STUI,
-TESTUI/SENDUIPI, LKGS, HRESET and INVLPGB/TLBSYNC. FRED returns and UIRET still
-require complete return-frame contracts.
+TESTUI/SENDUIPI, LKGS, HRESET and INVLPGB/TLBSYNC. The later V8 continuation
+adds successful UIRET frame ownership; FRED returns still require it.
 
 
 ## Bounded user interrupts, descriptor loading and TLB control
@@ -1632,7 +1633,9 @@ CLUI and STUI modify UIF without changing EFLAGS. TESTUI returns the actual CF
 and clears PF/AF/ZF/SF/OF; DF is unchanged. SENDUIPI retains its full 64-bit UITT
 index, including high bits that can cause a bounds fault, and all implicit
 supervisor UITT/UPID accesses remain inside the instruction. These four forms
-are restricted to long mode. UIRET is not covered by these bounded contracts.
+are restricted to long mode. The separate V8 continuation adds successful
+UIRET and shared explicit UIF state, including the ordinary RF clearing of
+CLUI/STUI/TESTUI. It does not widen these earlier ambient native contracts.
 
 LKGS takes a 16-bit selector in a register or memory. It updates the GS selector
 and IA32_KERNEL_GS_BASE while leaving the active GS base unchanged. Explicit

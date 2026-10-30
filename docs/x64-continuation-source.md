@@ -83,6 +83,7 @@ A native request or invalid-state refusal executes nothing and consumes none.
 | 8 | Current PC is outside the selection |
 | 9 | Instruction budget exhausted |
 | 10 | V7 fast-system-call context installed; handler has not executed |
+| 11 | V8 user-interrupt return completed; target and pending delivery have not executed |
 
 The invocation domain is CPL0, 64-bit entry with valid descriptor caches,
 CET/FRED disabled, successful sequential ordinary RAM accesses and immutable
@@ -224,6 +225,39 @@ LDS/LES and compatibility-mode loads remain outside this long-mode profile.
 Ordinary strict/permissive lifting continues to refuse these far loads. The
 continuation receipt retains exact bytes with an incomplete ordinary sidecar;
 it supplies no NOP approximation or ordinary source/native proof.
+
+### Intel user interrupts (V8)
+
+Select `"profile": "intel-user-interrupt-v8"` with V7's required fields and
+the boolean `"uiret_restores_uif"`. This binds the original CPU's
+`CPUID.07H.01H:EDX.UIRET_UIF[17]`; omitting it is an error, including for the
+older behavior (`false`). UINTR must be enabled, with execution outside an
+enclave or RTM transaction. The other nonfaulting, no-asynchronous-delivery
+requirements still apply.
+
+The separate `neverd_x64_state_v8` is 2544 bytes. It contains the unchanged V7
+prefix, followed by one-byte `UIF` and `MonitorActive` at 2528 and 2529, and
+14 reserved bytes. Initialize both flags to 0 or 1. The environment retains
+the monitor's range and pending user-interrupt state; an inactive monitor
+cannot observe its old range. No host UIF, monitor or segment is changed.
+
+Canonical UIRET (`F3 0F 01 EC`) reads exactly three 64-bit stack words: RIP,
+RFLAGS and RSP. It checks RIP against active paging, restores the twelve
+specified flag bits, updates UIF under the declared CPU rule and clears
+monitor validity. With the enhancement, saved bit 1 selects UIF while actual
+RFLAGS bit 1 remains set. Restored RSP need not be canonical until accessed.
+Segments, NMI blocking, other GPRs and vector containers are preserved. Status
+11 stops even when the target is listed, before executing it or delivering a
+pending user interrupt.
+
+CLUI, STUI and TESTUI share the live UIF cell. TESTUI copies it to CF and
+clears the other arithmetic flags. Their ordinary RF clearing is retained;
+TF must be zero because debug-trap delivery is outside this profile. These
+three steps and UIRET accept valid CPL0–3 64-bit code, including conforming
+segments. Other instructions keep V7's entry domain. Faulting stack accesses,
+shadow-stack checks, interrupt delivery and RTM aborts remain unsupported.
+These rules follow [Intel SDM revision 090, UIRET and user interrupts section
+9.7](https://cdrdv2-public.intel.com/874240/325462-090-sdm-vol-1-2abcd-3abcd-4.pdf).
 
 ## Native environment bindings
 
