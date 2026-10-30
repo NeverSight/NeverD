@@ -277,7 +277,17 @@ class ABIInventoryTests(unittest.TestCase):
         self.assertEqual(options_v8.reserved, 0)
         options_v8.max_chained_visits_per_destination = (1 << 32) - 1
         self.assertEqual(options_v8.max_chained_visits_per_destination, (1 << 32) - 1)
-        for version in (1, 2, 3, 4, 5, 6, 7, 8, 9):
+        self.assertEqual(abi.NeverDDevirtualizeOptionsV10.base.offset, 0)
+        self.assertEqual(abi.NeverDDevirtualizeOptionsV10.machine_source_abi.offset,
+                         ctypes.sizeof(abi.NeverDDevirtualizeOptionsV9))
+        self.assertEqual(abi.NeverDDevirtualizeOptionsV10.reserved.offset,
+                         ctypes.sizeof(abi.NeverDDevirtualizeOptionsV9) + 4)
+        if ctypes.sizeof(ctypes.c_void_p) == 8:
+            self.assertEqual(ctypes.sizeof(abi.NeverDDevirtualizeOptionsV10), 184)
+        self.assertEqual(abi.NeverDDevirtualizeOptionsV10().machine_source_abi, 0)
+        self.assertEqual(int(abi.DevirtualizeMachineSourceABI.QUERIES_V1), 1)
+        self.assertEqual(int(abi.DevirtualizeMachineSourceABI.QUERIES_XMM_V2), 2)
+        for version in (1, 2, 3, 4, 5, 6, 7, 8, 9, 10):
             for prefix in ("source", "machine_source"):
                 spec = abi.FUNCTION_SPECS[f"neverd_devirtualize_{prefix}_v{version}"]
                 self.assertEqual(

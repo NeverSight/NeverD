@@ -191,6 +191,32 @@ typedef struct neverd_devirtualize_options_v9 {
   uint32_t reserved;
 } neverd_devirtualize_options_v9;
 
+typedef enum neverd_devirtualize_machine_source_abi {
+  NEVERD_DEVIRTUALIZE_MACHINE_SCALAR_V1 = 0,
+  NEVERD_DEVIRTUALIZE_MACHINE_QUERIES_V1 = 1,
+  NEVERD_DEVIRTUALIZE_MACHINE_QUERIES_XMM_V2 = 2
+} neverd_devirtualize_machine_source_abi;
+
+/// Version 10 selects explicit source storage, not a new recovery/proof domain.
+/// SCALAR_V1 retains 17 uint64_t words. QUERIES_V1 appends record-array
+/// address, count and cursor (20 words). QUERIES_XMM_V2 also appends XMM0..15,
+/// each low then high uint64_t (52 words). State needs eight-byte alignment and
+/// must be disjoint from guest memory. Query records contain six uint32_t
+/// words: leaf, subleaf, EAX, EBX, ECX, EDX. Their complete immutable
+/// accessible extent must not wrap or alias state/guest memory; count zero
+/// permits a null array. Exhaustion/mismatch return statuses 3/4 before that
+/// query, committing state and retaining earlier effects, without advancing the
+/// cursor. No host query, hardware serialization or native-equivalence
+/// certificate is supplied. Non-scalar selectors require machine source.
+/// Unknown selectors and nonzero reserved fields reject. Zero-initialize and
+/// set the v1 prefix's struct_size to the complete size. v1-v9 ignore this
+/// tail; v10 ignores future tails.
+typedef struct neverd_devirtualize_options_v10 {
+  neverd_devirtualize_options_v9 base;
+  uint32_t machine_source_abi;
+  uint32_t reserved;
+} neverd_devirtualize_options_v10;
+
 /// Return recovered C only when all reachable control targets are resolved.
 /// The contract fixes mapped image bytes and permissions, excludes concurrent
 /// mutation and calls, and does not certify binary patching or unwind behavior.
@@ -321,6 +347,16 @@ neverd_devirtualize_source_v9(neverd_session_t Session, neverd_va_t Entry,
 NEVERD_API const char *neverd_devirtualize_machine_source_v9(
     neverd_session_t Session, neverd_va_t Entry,
     const neverd_devirtualize_options_v9 *Options, const char **Report);
+
+/// Ownership and recovery contracts match v9. Reports and generated source
+/// identify the selected storage layout. Null options retain scalar v1.
+NEVERD_API const char *
+neverd_devirtualize_source_v10(neverd_session_t Session, neverd_va_t Entry,
+                               const neverd_devirtualize_options_v10 *Options,
+                               const char **Report);
+NEVERD_API const char *neverd_devirtualize_machine_source_v10(
+    neverd_session_t Session, neverd_va_t Entry,
+    const neverd_devirtualize_options_v10 *Options, const char **Report);
 
 #ifdef __cplusplus
 }

@@ -51,6 +51,9 @@ enum class InterpreterProfileProjection : uint8_t {
   None,
   CetDisabledReadShadowStackV1,
   CetDisabledIncrementShadowStackTrapV1,
+  /// Exact raw LFS/LGS bytes retained for the V6 descriptor-state owner.
+  /// No ordinary LowIR or undefined-output proof is supplied by this receipt.
+  X64FarPointerLoadV1,
 };
 
 } // namespace neverd::analysis

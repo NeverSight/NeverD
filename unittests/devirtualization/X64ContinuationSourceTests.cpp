@@ -28,6 +28,7 @@
 #include "llvm/Support/Error.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <fstream>
 #include <map>
@@ -2087,5 +2088,7 @@ TEST(X64ContinuationSource, RequiresExplicitDomainAndBoundedDistinctAddresses) {
   O.MaxInstructions = 1;
   CheckError({0x1000, 0x1001}, O);
 }
+
+#include "X64FarPointerContinuationTests.inc"
 
 } // namespace

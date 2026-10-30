@@ -461,6 +461,7 @@ def check_devirtualization_abi(errors: list[str]) -> None:
         "neverd_devirtualize_options_v6": abi.NeverDDevirtualizeOptionsV6,
         "neverd_devirtualize_options_v7": abi.NeverDDevirtualizeOptionsV7,
         "neverd_devirtualize_options_v8": abi.NeverDDevirtualizeOptionsV8,
+        "neverd_devirtualize_options_v9": abi.NeverDDevirtualizeOptionsV9,
         "size_t": ctypes.c_size_t,
         "int": ctypes.c_int,
         "int64_t": ctypes.c_int64,
@@ -483,6 +484,7 @@ def check_devirtualization_abi(errors: list[str]) -> None:
         ("neverd_devirtualize_options_v7", abi.NeverDDevirtualizeOptionsV7),
         ("neverd_devirtualize_options_v8", abi.NeverDDevirtualizeOptionsV8),
         ("neverd_devirtualize_options_v9", abi.NeverDDevirtualizeOptionsV9),
+        ("neverd_devirtualize_options_v10", abi.NeverDDevirtualizeOptionsV10),
     ):
         native = parse_c_struct_layout(source, name)
         expected = tuple((field, native_ctypes.get(kind)) for field, kind in native)
@@ -513,6 +515,12 @@ def check_devirtualization_abi(errors: list[str]) -> None:
     }
     if flags_v9 != {flag.name: flag.value for flag in abi.DevirtualizeFlagsV9}:
         errors.append("devirtualize v9 Python flags differ from the C ABI")
+    source_abis = {
+        name.removeprefix("NEVERD_DEVIRTUALIZE_MACHINE_"): value
+        for name, value in parse_c_enum(source, "neverd_devirtualize_machine_source_abi").items()
+    }
+    if source_abis != {kind.name: kind.value for kind in abi.DevirtualizeMachineSourceABI}:
+        errors.append("devirtualize Python source layouts differ from the C ABI")
 
 
 

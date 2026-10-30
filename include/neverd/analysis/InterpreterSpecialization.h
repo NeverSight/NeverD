@@ -110,6 +110,9 @@ struct SpecializationTerminalImportEvidence {
 /// A complete, strictly lifted guest instruction. The provider owns decoding,
 /// mapping, relocation, and instruction-level exception checks. A missing or
 /// unsupported instruction must return an Error, never an empty approximation.
+/// A named ProfileProjection can instead retain exact native bytes for its
+/// explicit environment owner. Empty Ops in that case is an unexecuted native
+/// instruction, never a NOP or a complete architectural sidecar.
 struct SpecializationInstruction {
   std::vector<LowOp> Ops;
   LowInstructionBoundary Origin;

@@ -1263,6 +1263,35 @@ TEST(OriginalBinaryUndefinedIndependence,
 }
 
 TEST(OriginalBinaryUndefinedIndependence,
+     FarPointerContinuationCannotAcquireAnOrdinaryStateCertificate) {
+  for (const auto Bytes : {std::initializer_list<uint8_t>{0x66, 0x0f, 0xb4, 3},
+                           {0x0f, 0xb4, 3},
+                           {0x48, 0x0f, 0xb4, 3},
+                           {0x66, 0x0f, 0xb5, 3},
+                           {0x0f, 0xb5, 3},
+                           {0x48, 0x0f, 0xb5, 3}})
+    for (bool Sibling : {false, true}) {
+      Program P({});
+      if (Sibling)
+        P.append({0x72, 1, 0xc3});
+      P.append(Bytes);
+      // Killing the loaded GPR cannot remove the segment/descriptor effects.
+      P.append({0xb8, 7, 0, 0, 0, 0xc3});
+      for (bool Flags : {false, true}) {
+        if (Flags)
+          P.flagsProfile(InterpreterMachineStateProfile::KernelX64NoFaultV1);
+        const auto Checked = P.check();
+        EXPECT_FALSE(Checked.proved()) << Checked.Proof.Diagnostic;
+        EXPECT_FALSE(Checked.Certificate.has_value());
+        const auto Ordinary =
+            specializeBinaryInterpreter(P.Image, Entry, P.Options);
+        EXPECT_FALSE(Ordinary.complete()) << Ordinary.Diagnostic;
+        EXPECT_TRUE(Ordinary.Residual.Blocks.empty());
+      }
+    }
+}
+
+TEST(OriginalBinaryUndefinedIndependence,
      FeasibleTrapCannotPublishAnyCompletedSibling) {
   // jc trap; ret; int3. An ordinary input can select either path. A completed
   // return cannot authorize the sibling exception path under this contract.

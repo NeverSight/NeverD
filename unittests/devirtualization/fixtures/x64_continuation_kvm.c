@@ -195,7 +195,12 @@ static int event_query(int cpu, struct kvm_run *run, uint8_t *memory,
   REQUIRE(ioctl(cpu, KVM_SET_REGS, &registers) == 0);
   struct kvm_guest_debug debug = {.control = KVM_GUESTDBG_ENABLE |
                                              KVM_GUESTDBG_USE_HW_BP};
-  debug.arch.debugreg[0] = 0x1800;
+  // Kind 7 executes the supplied bounded instruction and stops at its exact
+  // fallthrough, without a helper jump or interrupt changing machine state.
+  const unsigned length = kind == 7 ? memory[immediate] : 0;
+  REQUIRE(kind != 7 || (length && length <= 15));
+  const uint64_t stop = kind == 7 ? registers.rip + length : 0x1800;
+  debug.arch.debugreg[0] = stop;
   debug.arch.debugreg[1] = 0x1801;
   debug.arch.debugreg[7] = 0x405;
   REQUIRE(ioctl(cpu, KVM_SET_GUEST_DEBUG, &debug) == 0);
@@ -208,7 +213,7 @@ static int event_query(int cpu, struct kvm_run *run, uint8_t *memory,
     REQUIRE(immediate <= UINT8_MAX);
     memory[registers.rip + 1] = immediate;
   }
-  if (kind >= 5) {
+  if (kind == 5 || kind == 6) {
     memory[registers.rip + 1] = kind == 5 ? 0xcb : 0xca;
     if (kind == 6) {
       REQUIRE(immediate <= UINT16_MAX);
@@ -216,6 +221,9 @@ static int event_query(int cpu, struct kvm_run *run, uint8_t *memory,
       memory[registers.rip + 3] = immediate >> 8;
     }
   }
+  if (kind == 7)
+    memcpy(memory + registers.rip, memory + immediate + 1, length);
+  memory[stop] = 0x90;
   memory[0x1800] = memory[0x1801] = 0x90;
   REQUIRE(ioctl(cpu, KVM_RUN, 0) == 0);
   REQUIRE(run->exit_reason == KVM_EXIT_DEBUG);
@@ -226,7 +234,7 @@ static int event_query(int cpu, struct kvm_run *run, uint8_t *memory,
     registers.rip = 0x1800;
     registers.rflags |= 0x10000;
   }
-  REQUIRE(registers.rip == 0x1800);
+  REQUIRE(registers.rip == stop);
   struct kvm_sregs after;
   REQUIRE(ioctl(cpu, KVM_GET_SREGS, &after) == 0);
   const struct kvm_segment values[] = {after.cs, after.ss, after.ds,  after.es,
@@ -288,6 +296,11 @@ int main(int argc, char **argv) {
   *(uint64_t *)(memory + 0x3000) = 0x4007;
   *(uint64_t *)(memory + 0x4000) = 0x87;
   *(uint64_t *)(memory + 0x4008) = 0x200087;
+  // A high virtual alias of the second 2 MiB RAM extent lets addr32 far loads
+  // cross the effective-address wrap while both independent fields stay mapped.
+  // Their offset can live above 4 GiB, with the selector back in low RAM.
+  *(uint64_t *)(memory + 0x3020) = 0x6007;
+  *(uint64_t *)(memory + 0x6000) = 0x200087;
   const uint64_t descriptors[] = {0,
                                   0x00af9b000000ffffULL,
                                   0x00cf93000000ffffULL,
@@ -341,9 +354,10 @@ int main(int argc, char **argv) {
     REQUIRE(run->io.direction == KVM_EXIT_IO_OUT && run->io.port == 0xe9 &&
             run->io.size == 1 && run->io.count == 1);
     const unsigned kind = *((uint8_t *)run + run->io.data_offset);
-    REQUIRE(kind >= 1 && kind <= 6);
+    REQUIRE(kind >= 1 && kind <= 7);
     REQUIRE(kind != 4 || registers.rsi <= UINT8_MAX);
     REQUIRE(kind != 6 || registers.rsi <= UINT16_MAX);
+    REQUIRE(kind != 7 || registers.rsi <= memory_size - 16);
     REQUIRE(registers.rdi <= memory_size - (kind == 1
                                                 ? sizeof(struct return_query)
                                                 : sizeof(event_state_t)));

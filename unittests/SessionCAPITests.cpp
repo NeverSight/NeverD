@@ -1406,6 +1406,8 @@ TEST_F(SessionCAPITest, InterpreterRecoveryV9KeepsProofStrategiesOptIn) {
   }
 }
 
+#include "SessionRecoverySourceABITests.inc"
+
 TEST_F(SessionCAPITest,
        InterpreterRecoveryV6ChecksSeparationAndPreservesLayouts) {
   const auto Input = write("recovery-separation.elf", makeNativeELF(false));

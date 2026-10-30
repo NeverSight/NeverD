@@ -192,6 +192,9 @@ enum class X64ContinuationProfile : uint8_t {
   /// Software interrupts accept TF/RF, all IOPL values and VIF/VIP in the input
   /// flags. Other steps retain the earlier entry-flags domain. IRETQ may
   /// produce these flags but exits before their target-instruction effects.
+  /// LFS/LGS use Intel 16/32/64-bit operand rules and own non-null selector
+  /// loads, descriptor caches and coupled GPR writes. Null-selector base
+  /// policy, LSS interrupt shadow and compatibility-mode loads are not owned.
   KernelEventsNoFaultV6,
 };
 

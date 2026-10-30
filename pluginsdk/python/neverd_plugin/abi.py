@@ -760,6 +760,26 @@ class NeverDDevirtualizeOptionsV9(ctypes.Structure):
     ]
 
 
+class DevirtualizeMachineSourceABI(IntEnum):
+    SCALAR_V1 = 0
+    QUERIES_V1 = 1
+    QUERIES_XMM_V2 = 2
+
+
+class NeverDDevirtualizeOptionsV10(ctypes.Structure):
+    """v9 prefix plus an explicit machine-source storage layout.
+
+    Set the v1 prefix's struct_size to the full size. Non-scalar layouts require
+    machine source. Reserved must be zero. Earlier APIs ignore this tail.
+    """
+
+    _fields_ = [
+        ("base", NeverDDevirtualizeOptionsV9),
+        ("machine_source_abi", ctypes.c_uint32),
+        ("reserved", ctypes.c_uint32),
+    ]
+
+
 class NeverDSymbolicExploreOptions(ctypes.Structure):
     """Layout of ``neverd_symbolic_explore_options``."""
 
@@ -1025,6 +1045,9 @@ _C_TYPES: dict[str, object] = {
     ),
     "const neverd_devirtualize_options_v9 *": ctypes.POINTER(
         NeverDDevirtualizeOptionsV9
+    ),
+    "const neverd_devirtualize_options_v10 *": ctypes.POINTER(
+        NeverDDevirtualizeOptionsV10
     ),
     "unsigned char *": ctypes.POINTER(ctypes.c_ubyte),
     "const unsigned char *": ctypes.POINTER(ctypes.c_ubyte),
@@ -2558,6 +2581,20 @@ _declare(
      "const neverd_devirtualize_options_v9 *", "const char * *"],
     ownership=Ownership.OWNED_STRING,
 )
+_declare(
+    "neverd_devirtualize_source_v10",
+    "const char *",
+    ["neverd_session_t", "neverd_va_t",
+     "const neverd_devirtualize_options_v10 *", "const char * *"],
+    ownership=Ownership.OWNED_STRING,
+)
+_declare(
+    "neverd_devirtualize_machine_source_v10",
+    "const char *",
+    ["neverd_session_t", "neverd_va_t",
+     "const neverd_devirtualize_options_v10 *", "const char * *"],
+    ownership=Ownership.OWNED_STRING,
+)
 _declare("neverd_comparison_create", "neverd_comparison_t", [])
 _declare("neverd_comparison_destroy", "void", ["neverd_comparison_t"])
 _declare("neverd_comparison_cancel", "void", ["neverd_comparison_t"])
@@ -2649,6 +2686,8 @@ __all__ = [
     "NeverDDevirtualizeOptionsV8",
     "NeverDDevirtualizeOptionsV9",
     "DevirtualizeFlagsV9",
+    "NeverDDevirtualizeOptionsV10",
+    "DevirtualizeMachineSourceABI",
     "DevirtualizeFlagsV6",
     "DevirtualizeFlagsV7",
     "DevirtualizeFlagsV4",

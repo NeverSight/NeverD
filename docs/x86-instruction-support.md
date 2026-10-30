@@ -187,9 +187,9 @@ The selected segment remains ambient CPU state. Callers must maintain compiler
 ABI invariants, including TLS and the stack. The interface does not carry an
 original instruction's source segment, address-size/default-stack provenance,
 or an owned continuation. LSS's interrupt/debug inhibition applies to the next
-compiler-selected instruction. Consequently, NeverD still refuses far-pointer
-lifting in both policies until its GPR, selector, hidden descriptor and
-continuation have one complete state owner.
+compiler-selected instruction. NeverD's ordinary lifting policies still refuse
+far-pointer loads. The separate explicit V6 continuation below supplies a
+bounded descriptor-state owner for non-null LFS/LGS loads.
 
 Compiler checks cover both code modes, ELF/COFF/Mach-O, O0/O2, exact memory
 extents, segment effects, malformed signatures and invalid mode diagnostics.
@@ -206,11 +206,44 @@ and the LSS interrupt/debug shadow remain unqualified. See the exact tools,
 sources, host diagnosis and results in
 [the qualification record](evidence/x86-far-pointer-native-2026-10-29.json).
 
+## Explicit LFS/LGS continuation
+
+The [V6 continuation interface](x64-continuation-source.md) owns non-null
+LFS/LGS under Intel's 16/32/64-bit operand rules. One x64 descriptor owner
+validates GDT/LDT bounds, type, presence and privilege; captures both source
+fields before the descriptor accessed-bit write; installs the selector,
+expanded limit, attributes and 32-bit descriptor base; and writes the GPR with
+the proper partial-register behavior. Descriptor decoding is shared with the
+existing return/event paths. Flags and NMI blocking are preserved, and execution
+continues at the exact native fallthrough.
+
+An exact byte parser retains ModRM/SIB, signed displacement, RIP/EIP-relative
+addressing, operand/address-size and original FS/GS base provenance. Offset and
+selector effective addresses wrap independently before segment addition,
+including addr32 pointer images crossing the 4 GiB boundary. It is used
+only by the explicit state provider. The provider does not invent ordinary
+LowIR or promote the missing undefined-output certificate. Both C routes
+consume the same state transition; ordinary source recovery and native proofs
+retain their refusal.
+
+Null-selector base changes differ across processors and remain outside V6.
+The load rejects them before descriptor access or state/RAM writes. LSS's
+interrupt/debug inhibition, i386/compatibility forms, AMD REX.W qualification
+and fault delivery remain open. The LLVM/NeverC native interfaces above are
+unchanged; this completion does not publish an SDK release or change pins.
+
+The [qualification record](evidence/x86-lfs-lgs-continuation-2026-10-29.json)
+binds the source snapshot and Release toolchain to 132,544 native state/RAM
+comparisons, 408 invalid-state refusals, 24 exact-width/read-only page checks,
+SDK driver execution and 387 passing regressions without skips. The independent
+CPU oracle exposed the addr32 selector-field wrap; a dedicated mapped 4 GiB
+boundary regression now checks it in all three operand widths and both segments.
+
 ## Known remaining gaps
 
 | Instructions or family | Missing contract |
 | --- | --- |
-| LDS, LES, LSS, LFS, LGS | LLVM now provides 13 native far-pointer load interfaces and NeverC exposes the nine valid long-mode builtins. NeverD still needs coupled GPR/selector completion, hidden descriptor state and original-instruction continuation. Native compiler support alone does not authorize strict or permissive lifting; both continue to refuse the former ordinary load/COPY approximation. |
+| LDS, LES, LSS, LFS, LGS | LLVM provides 13 native interfaces and NeverC the nine valid long-mode builtins. Explicit V6 now owns non-null LFS/LGS GPR, selector, descriptor/cache and fallthrough state under Intel operand rules. Null-selector processor policy, LSS interrupt/debug shadow, i386/compatibility forms and fault delivery remain open. Ordinary strict/permissive lifting still refuses the scalar load/COPY approximation. |
 | Unowned and i386 3DNow! operations | All 24 operations now retain their original instruction inside the owned x64 MMX/x87 context, qualified below. Typed/unowned and i386 paths still require a state contract. Strict and portable concrete execution refuse processor-dependent values. Physical execution and pending-#MF/stack-#SS behavior remain unqualified. LLVM and NeverC provide the native packed-value interfaces. |
 | Unowned FNOP/EMMS/FEMMS | Waiting behavior and tag/payload transitions require an owned x87 context. Owned x64 native and explicit portable paths retain all three instructions, including FEMMS payload invalidation; typed/unowned and i386 paths still refuse rather than emit NOP. Portable MMX data operations remain outside the admitted profile. |
 | VMRUN | Complete guest/host transition, including guest-modified unsaved GPRs and floating/vector state, plus the VM-exit continuation. |

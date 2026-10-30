@@ -15,6 +15,7 @@
 #define NEVERD_PIPELINE_PIPELINE_H
 
 #include "neverd/analysis/InterpreterSpecialization.h"
+#include "neverd/analysis/arch/x86_64/InterpreterMachineSourceABI.h"
 #include "neverd/debug/DebugContext.h"
 #include "neverd/evm/EVMIR.h"
 #include "neverd/ir/FloatingCallArguments.h"
@@ -127,6 +128,9 @@ struct PipelineOptions {
   /// Experimental source recovery of one interpreter entry. Requires exactly
   /// one OnlyFunctionEntries element; never authorizes binary patching.
   std::optional<analysis::SpecializationOptions> InterpreterSpecialization;
+  /// Source storage only. Extended layouts require explicit machine recovery.
+  analysis::InterpreterMachineSourceABIKind InterpreterMachineABI =
+      analysis::InterpreterMachineSourceABIKind::ScalarV1;
   bool DumpLow = false;
   bool DumpMed = false;
   bool DumpHigh = false;

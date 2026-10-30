@@ -12,6 +12,7 @@
 #include "neverd/analysis/InterpreterModel.h"
 #include "neverd/analysis/Limits.h"
 #include "neverd/analysis/LowIRUndefinedIndependence.h"
+#include "neverd/analysis/arch/x86_64/InterpreterMachineSourceABI.h"
 #include "neverd/ir/SourceTypeHint.h"
 #include "neverd/ir/low/LowIR.h"
 
@@ -156,6 +157,16 @@ llvm::Expected<InterpreterMachineSource> wrapInterpreterMachineQueryStateX64(
 /// proof; dynamic checks still fail. The old wrappers never read this layout.
 llvm::Expected<InterpreterMachineSource> wrapInterpreterMachineQueryStateX64V2(
     const LowFunc &Residual, BinaryFormat SourceFormat = BinaryFormat::ELF,
+    InterpreterMachineStateProfile Profile =
+        InterpreterMachineStateProfile::UserX64NoFaultV1,
+    std::optional<InterpreterEntryAlignment> EntryAlignment = std::nullopt,
+    InterpreterMachineStateLayout Layout =
+        InterpreterMachineStateLayout::InlineReturns);
+
+/// Select a versioned source layout without changing recovery or proof policy.
+llvm::Expected<InterpreterMachineSource> wrapInterpreterMachineSourceX64(
+    const LowFunc &Residual, InterpreterMachineSourceABIKind Kind,
+    BinaryFormat SourceFormat = BinaryFormat::ELF,
     InterpreterMachineStateProfile Profile =
         InterpreterMachineStateProfile::UserX64NoFaultV1,
     std::optional<InterpreterEntryAlignment> EntryAlignment = std::nullopt,

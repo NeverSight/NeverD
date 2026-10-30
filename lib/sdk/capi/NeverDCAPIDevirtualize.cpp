@@ -8,6 +8,7 @@
 
 #include "SessionImpl.h"
 
+#include "neverd/analysis/arch/x86_64/InterpreterMachineSourceABI.h"
 #include "neverd/backend/LLVMSourceUnknownValue.h"
 #include "neverd/backend/c/HighC/HighCEmitter.h"
 #include "neverd/backend/c/LLVMC/LLVMCEmitter.h"
@@ -32,6 +33,14 @@ using namespace neverd;
 using namespace neverd::sdk;
 
 namespace {
+using MachineSourceABI = analysis::InterpreterMachineSourceABIKind;
+static_assert(uint32_t(MachineSourceABI::ScalarV1) ==
+              NEVERD_DEVIRTUALIZE_MACHINE_SCALAR_V1);
+static_assert(uint32_t(MachineSourceABI::QueriesV1) ==
+              NEVERD_DEVIRTUALIZE_MACHINE_QUERIES_V1);
+static_assert(uint32_t(MachineSourceABI::QueriesXMMV2) ==
+              NEVERD_DEVIRTUALIZE_MACHINE_QUERIES_XMM_V2);
+
 const char *statusName(analysis::SpecializationStatus Status) {
   switch (Status) {
   case analysis::SpecializationStatus::Complete:
@@ -286,7 +295,8 @@ static const char *devirtualizeSource(
     const neverd_devirtualize_options_v6 *SeparationOptions = nullptr,
     const neverd_devirtualize_options_v7 *WorkOptions = nullptr,
     const neverd_devirtualize_options_v8 *ChainOptions = nullptr,
-    const neverd_devirtualize_options_v9 *ProofOptions = nullptr) {
+    const neverd_devirtualize_options_v9 *ProofOptions = nullptr,
+    const neverd_devirtualize_options_v10 *SourceOptions = nullptr) {
   if (Report)
     *Report = nullptr;
   auto *S = toSession(Session);
@@ -336,7 +346,8 @@ static const char *devirtualizeSource(
           "disjoint from "
           "guest memory; fixed original mappings; little-endian 64-bit host";
     if (Options) {
-      const size_t RequiredSize = ProofOptions   ? sizeof(*ProofOptions)
+      const size_t RequiredSize = SourceOptions  ? sizeof(*SourceOptions)
+                                  : ProofOptions ? sizeof(*ProofOptions)
                                   : ChainOptions ? sizeof(*ChainOptions)
                                   : WorkOptions  ? sizeof(*WorkOptions)
                                   : SeparationOptions
@@ -348,7 +359,9 @@ static const char *devirtualizeSource(
                                                      : sizeof(*Options);
       if (Options->struct_size < RequiredSize)
         return Fail(
-            ProofOptions
+            SourceOptions
+                ? "devirtualize options do not cover the complete v10 structure"
+            : ProofOptions
                 ? "devirtualize options do not cover the complete v9 structure"
             : ChainOptions
                 ? "devirtualize options do not cover the complete v8 structure"
@@ -368,6 +381,20 @@ static const char *devirtualizeSource(
                   "structure");
       // Older entry points may receive arbitrary future tails. Inspect each
       // extension only through its matching API, after checking its full size.
+      if (SourceOptions) {
+        const auto Kind =
+            static_cast<MachineSourceABI>(SourceOptions->machine_source_abi);
+        const auto Info = analysis::interpreterMachineSourceABIInfo(Kind);
+        if (SourceOptions->reserved || !Info)
+          return Fail("invalid devirtualize v10 source ABI or reserved field");
+        if (!MachineState && Kind != MachineSourceABI::ScalarV1)
+          return Fail("extended source ABI requires machine-state recovery");
+        PO.InterpreterMachineABI = Kind;
+        if (MachineState) {
+          Evidence["sourceABI"] = Info->Name;
+          Evidence["sourceStateBytes"] = static_cast<int64_t>(Info->Bytes);
+        }
+      }
       if (ProofOptions) {
         constexpr uint32_t KnownFlags =
             NEVERD_DEVIRTUALIZE_V9_PROVE_STORE_RETURN_SLOT_SEPARATION |
@@ -660,7 +687,7 @@ static const char *devirtualizeSource(
     }
     std::string Source;
     llvm::raw_string_ostream OS(Source);
-    if (MachineState)
+    if (MachineState && PO.InterpreterMachineABI == MachineSourceABI::ScalarV1)
       OS << "/* Explicit x64 machine-state source ABI v1.\n"
             " * Pass 17 aligned uint64_t words: RAX, RCX, RDX, RBX, RSP, RBP,\n"
             " * RSI, RDI, R8..R15, RFLAGS. Guest memory uses original "
@@ -674,7 +701,37 @@ static const char *devirtualizeSource(
             "return slot.\n"
             " * State is captured before the final native return-address pop.\n"
             " */\n";
-    else
+    else if (MachineState) {
+      const auto Info =
+          analysis::interpreterMachineSourceABIInfo(PO.InterpreterMachineABI);
+      OS << "/* Explicit source ABI: " << Info->Name << ".\n"
+         << " * Pass " << Info->Bytes / sizeof(uint64_t)
+         << " aligned uint64_t words (eight-byte alignment).\n"
+            " * Words 0..15: RAX, RCX, RDX, RBX, RSP, RBP, RSI, RDI, R8..R15.\n"
+            " * Word 16: RFLAGS. Words 17..19: query-array address, count, "
+            "cursor.\n";
+      if (PO.InterpreterMachineABI == MachineSourceABI::QueriesXMMV2)
+        OS << " * Words 20..51: XMM0..XMM15, each low then high 64 bits.\n";
+      OS << " * Each query record is six uint32_t words: leaf, subleaf, EAX, "
+            "EBX, ECX, EDX.\n"
+            " * Query storage must be accessible, immutable, nonwrapping and "
+            "disjoint\n"
+            " * from state and guest memory; zero count permits a null array.\n"
+            " * Normal nonfaulting CPL3/IOPL0 execution, canonical user flags, "
+            "CET off.\n"
+            " * Guest memory uses original addresses; state must not alias "
+            "it.\n"
+            " * Every guest write must avoid the entry return slot.\n"
+            " * Status 0 succeeds; nonzero invalidates the result without "
+            "rollback.\n"
+            " * Status 2 rejects entry alignment before writes. Status 3/4 "
+            "stops before\n"
+            " * an exhausted/mismatched query, commits state, and keeps its "
+            "cursor.\n"
+            " * No host CPU query or hardware serialization is supplied.\n"
+            " * State is captured before the final native return-address pop.\n"
+            " */\n";
+    } else
       OS << "/* Ordinary recovery source frame contract: every "
             "external-origin\n"
             " * LOAD/STORE range, including computed external addresses, must\n"
@@ -934,6 +991,53 @@ extern "C" const char *neverd_devirtualize_machine_source_v9(
       Session, Entry,
       Options ? &Options->base.base.base.base.base.base.base.base : nullptr,
       Report, true,
+      Options ? &Options->base.base.base.base.base.base.base : nullptr,
+      Options ? &Options->base.base.base.base.base.base : nullptr,
+      Options ? &Options->base.base.base.base.base : nullptr,
+      Options ? &Options->base.base.base.base : nullptr,
+      Options ? &Options->base.base.base : nullptr,
+      Options ? &Options->base.base : nullptr,
+      Options ? &Options->base : nullptr, Options);
+}
+
+extern "C" const char *
+neverd_devirtualize_source_v10(neverd_session_t Session, neverd_va_t Entry,
+                               const neverd_devirtualize_options_v10 *Options,
+                               const char **Report) {
+  neverd_devirtualize_options_v10 Defaults{};
+  Defaults.base.base.base.base.base.base.base.base.base.struct_size =
+      sizeof(Defaults);
+  if (!Options)
+    Options = &Defaults;
+  return devirtualizeSource(
+      Session, Entry,
+      Options ? &Options->base.base.base.base.base.base.base.base.base
+              : nullptr,
+      Report, false,
+      Options ? &Options->base.base.base.base.base.base.base.base : nullptr,
+      Options ? &Options->base.base.base.base.base.base.base : nullptr,
+      Options ? &Options->base.base.base.base.base.base : nullptr,
+      Options ? &Options->base.base.base.base.base : nullptr,
+      Options ? &Options->base.base.base.base : nullptr,
+      Options ? &Options->base.base.base : nullptr,
+      Options ? &Options->base.base : nullptr,
+      Options ? &Options->base : nullptr, Options);
+}
+
+extern "C" const char *neverd_devirtualize_machine_source_v10(
+    neverd_session_t Session, neverd_va_t Entry,
+    const neverd_devirtualize_options_v10 *Options, const char **Report) {
+  neverd_devirtualize_options_v10 Defaults{};
+  Defaults.base.base.base.base.base.base.base.base.base.struct_size =
+      sizeof(Defaults);
+  if (!Options)
+    Options = &Defaults;
+  return devirtualizeSource(
+      Session, Entry,
+      Options ? &Options->base.base.base.base.base.base.base.base.base
+              : nullptr,
+      Report, true,
+      Options ? &Options->base.base.base.base.base.base.base.base : nullptr,
       Options ? &Options->base.base.base.base.base.base.base : nullptr,
       Options ? &Options->base.base.base.base.base.base : nullptr,
       Options ? &Options->base.base.base.base.base : nullptr,

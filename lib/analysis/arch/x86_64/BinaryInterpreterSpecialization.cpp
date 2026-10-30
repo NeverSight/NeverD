@@ -11,6 +11,7 @@
 #include "../../core/RawEnvironment.h"
 #include "BinaryContinuationInstructions.h"
 #include "NativeStackControl.h"
+#include "X64FarPointerEncoding.h"
 #include "X64Recovery.h"
 
 #include "neverd/decode/Decoder.h"
@@ -315,6 +316,12 @@ public:
             lowUndefinedOperationDigest(Result.Ops);
         Result.UndefinedEffects.Diagnostic =
             "CET-disabled RDSSP requires explicit profile evidence";
+      } else if (ContinuationSnapshot &&
+                 detail::x64FarPointerLoad(Result.NativeBytes)) {
+        Result.ProfileProjection =
+            InterpreterProfileProjection::X64FarPointerLoadV1;
+        Result.UndefinedEffects.Diagnostic =
+            "far-pointer load requires explicit descriptor-state ownership";
       } else {
         if (Options.ExplicitMachineState && Options.X64CetDisabled)
           LoadedMemoryCall = Decode.liftX64MemoryCallToLow(

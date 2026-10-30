@@ -4,11 +4,13 @@
 //
 //===----------------------------------------------------------------------===//
 /// \file
-/// Far returns, IRETQ and software interrupts through the continuation writer.
+/// Segment loads, far returns and interrupts through the continuation writer.
 //===----------------------------------------------------------------------===//
 
 #ifndef NEVERD_LIB_ANALYSIS_ARCH_X86_64_X64CONTINUATIONEVENTS_H
 #define NEVERD_LIB_ANALYSIS_ARCH_X86_64_X64CONTINUATIONEVENTS_H
+
+#include "X64FarPointerEncoding.h"
 
 #include "neverd/analysis/arch/x86_64/X64ContinuationSource.h"
 #include "neverd/lift/X86/X86Regs.h"
@@ -20,8 +22,8 @@
 
 namespace neverd::analysis::detail {
 
-/// Writer supplies temporary/emit/load/store/storeIf/rejectIf/leave. Keeping
-/// this lowering above both C backends gives one owner for descriptor
+/// Writer supplies temporary/emit/load/store/storeIf/write/rejectIf/leave.
+/// Keeping this lowering above both C backends gives one owner for descriptor
 /// validation, frame accesses and final state. All checks precede writes. A
 /// pending CS accessed-bit update is forwarded into later reads: eager frame
 /// loads or committing descriptors only after frame stores would change aliased
@@ -136,18 +138,30 @@ template <class Writer> class X64ContinuationEvents {
     W.storeIf(eq(masked(D.Value, uint64_t{1} << 40), k(0)), Address, Byte);
   }
 
-  void segment(uint64_t Offset, NdVar Selector, NdVar Descriptor,
-               std::optional<NdVar> KeepCache = std::nullopt) {
-    auto Base = op(NdOp::INT_OR, {masked(shifted(Descriptor, 16), 0xffffff),
-                                  masked(shifted(Descriptor, 32), 0xff000000)});
+  NdVar segmentBase(NdVar Descriptor) {
+    return op(NdOp::INT_OR, {masked(shifted(Descriptor, 16), 0xffffff),
+                             masked(shifted(Descriptor, 32), 0xff000000)});
+  }
+
+  NdVar segmentLimit(NdVar Descriptor) {
     auto Limit = op(NdOp::INT_OR, {masked(Descriptor, 0xffff),
                                    masked(shifted(Descriptor, 32), 0xf0000)});
     Limit =
         choose(ne(masked(Descriptor, uint64_t{1} << 55), k(0)),
                op(NdOp::INT_OR, {op(NdOp::INT_LEFT, {Limit, k(12)}), k(0xfff)}),
                Limit);
-    auto Attributes =
-        op(NdOp::INT_OR, {masked(shifted(Descriptor, 40), 0xf0ff), k(1)});
+    return Limit;
+  }
+
+  NdVar segmentAttributes(NdVar Descriptor) {
+    return op(NdOp::INT_OR, {masked(shifted(Descriptor, 40), 0xf0ff), k(1)});
+  }
+
+  void segment(uint64_t Offset, NdVar Selector, NdVar Descriptor,
+               std::optional<NdVar> KeepCache = std::nullopt) {
+    auto Base = segmentBase(Descriptor);
+    auto Limit = segmentLimit(Descriptor);
+    auto Attributes = segmentAttributes(Descriptor);
     if (KeepCache) {
       Base = choose(*KeepCache, load(Offset + offsetof(Segment, Base)), Base);
       Limit =
@@ -216,6 +230,68 @@ template <class Writer> class X64ContinuationEvents {
 public:
   X64ContinuationEvents(Writer &Output, unsigned Bits)
       : W(Output), AddressBits(Bits) {}
+
+  void farPointerLoad(const X64FarPointerLoad &F, uint64_t NextPC) {
+    auto Address = k(uint64_t(F.Displacement));
+    if (F.Relative)
+      Address = op(NdOp::INT_ADD, {Address, k(NextPC)});
+    if (F.Base)
+      Address = op(NdOp::INT_ADD,
+                   {Address, load(offsetof(State, GPR) + *F.Base * 8)});
+    if (F.Index)
+      Address =
+          op(NdOp::INT_ADD,
+             {Address,
+              op(NdOp::INT_MULT,
+                 {load(offsetof(State, GPR) + *F.Index * 8), k(F.Scale)})});
+    if (F.AddressBytes == 4)
+      Address = masked(Address, UINT32_MAX);
+    auto SelectorAddress = op(NdOp::INT_ADD, {Address, k(F.Bytes)});
+    if (F.AddressBytes == 4)
+      SelectorAddress = masked(SelectorAddress, UINT32_MAX);
+    // Capture the old segment base and source registers before publishing
+    // either destination. Each field's effective address wraps independently
+    // before segment addition; an addr32 selector can be 4 GiB away from the
+    // end of the offset field in linear memory.
+    if (F.Segment) {
+      const auto Base = load(F.Segment == 1 ? offsetof(State, FSBase)
+                                            : offsetof(State, GSBase));
+      Address = op(NdOp::INT_ADD, {Address, Base});
+      SelectorAddress = op(NdOp::INT_ADD, {SelectorAddress, Base});
+    }
+    range(Address, F.Bytes - 1);
+    range(SelectorAddress, 1);
+    const auto Value = op(NdOp::LOAD, {Address}, F.Bytes);
+    const auto Selector =
+        op(NdOp::INT_ZEXT, {op(NdOp::LOAD, {SelectorAddress}, 2)});
+    // Null-selector base updates differ between processor families. V6 has
+    // no CPU-specific null-load policy, so reject before descriptor access or
+    // any write, rather than guessing whether a live 64-bit base survives.
+    W.rejectIf(eq(masked(Selector, 0xfffc), k(0)));
+    const auto D = descriptor(Selector);
+    const auto Access = shifted(D.Value, 40);
+    W.rejectIf(ne(masked(Access, 0x90), k(0x90)));
+    W.rejectIf(eq(masked(Access, 0x0a), k(8))); // Execute-only code.
+    const auto DPL = masked(shifted(Access, 5), 3);
+    W.rejectIf(
+        both(ne(masked(Access, 12), k(12)), less(DPL, masked(Selector, 3))));
+    // Both pointer fields are captured before the descriptor's A-bit write.
+    // In particular the loaded offset can alias that very descriptor byte.
+    accessed(D);
+    const uint64_t Offset = F.GS ? offsetof(V6, GS) : offsetof(V6, FS);
+    W.store(F.GS ? offsetof(State, GSBase) : offsetof(State, FSBase),
+            segmentBase(D.Value));
+    W.store(Offset + offsetof(Metadata, Limit),
+            narrow(segmentLimit(D.Value), 4));
+    W.store(Offset + offsetof(Metadata, Selector), narrow(Selector, 2));
+    W.store(Offset + offsetof(Metadata, Attributes),
+            narrow(segmentAttributes(D.Value), 2));
+    W.store(
+        offsetof(V6, Unusable),
+        narrow(masked(load(offsetof(V6, Unusable), 1), F.GS ? 0xdf : 0xef), 1));
+    W.write(NdVar::reg(F.Destination * 8, F.Bytes), Value);
+    W.leave(Exit::Continue, k(NextPC));
+  }
 
   void iret() {
     W.rejectIf(ne(masked(load(offsetof(State, RFlags)), 0x4000), k(0)));

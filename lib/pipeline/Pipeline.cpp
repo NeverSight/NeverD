@@ -208,6 +208,17 @@ PipelineResult Pipeline::run(const BinaryImage &Img, llvm::LLVMContext &Ctx,
     Result.CalleeSignatureMemo = Memo;
   }
 
+  if (!analysis::interpreterMachineSourceABIInfo(Opts.InterpreterMachineABI)) {
+    Result.Error = "unknown interpreter machine source ABI";
+    return Result;
+  }
+  if (Opts.InterpreterMachineABI !=
+          analysis::InterpreterMachineSourceABIKind::ScalarV1 &&
+      (!Opts.InterpreterSpecialization ||
+       !Opts.InterpreterSpecialization->ExplicitMachineState)) {
+    Result.Error = "extended source ABI requires explicit machine recovery";
+    return Result;
+  }
   if (Opts.InterpreterSpecialization &&
       (Opts.PatchMode || Opts.OnlyFunctionEntries.size() != 1 ||
        Img.Arch != Arch::X64)) {
@@ -365,8 +376,8 @@ PipelineResult Pipeline::run(const BinaryImage &Img, llvm::LLVMContext &Ctx,
       return Result;
     }
     if (Opts.InterpreterSpecialization->ExplicitMachineState) {
-      auto Wrapped = analysis::wrapInterpreterMachineStateX64(
-          Recovery.Residual, Img.Format,
+      auto Wrapped = analysis::wrapInterpreterMachineSourceX64(
+          Recovery.Residual, Opts.InterpreterMachineABI, Img.Format,
           analysis::InterpreterMachineStateProfile::UserX64NoFaultV1,
           Opts.InterpreterSpecialization->EntryFrameAlignment,
           !Opts.PatchMode && !Opts.LiftMode && !Opts.DumpLlvm

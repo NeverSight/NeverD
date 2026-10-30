@@ -104,6 +104,27 @@ when the return target is selected; a returned CPL1–3 context cannot reenter
 this supervisor profile. Compatibility-mode and 16-/32-bit far returns still
 require native execution.
 
+LFS/LGS also continue through V6 for non-null selectors. The shared descriptor
+owner loads the 16/32/64-bit offset, validates a GDT or LDT data/readable-code
+descriptor, updates its accessed bit and installs the selected FS/GS cache and
+base together with the destination GPR. A 16-bit destination retains its upper
+bits; a 32-bit destination zero-extends. Both pointer fields are read before
+the descriptor write, even when they alias it. The next PC is the original
+fallthrough, and flags, NMI blocking and other state remain unchanged.
+
+These forms use Intel operand-size rules. The byte grammar admits single
+operand/address-size and FS/GS prefixes in any order, an optional final REX,
+and complete ModRM/SIB/displacement addressing. Each field's address wraps
+independently at the address size before adding the original FS/GS base. Thus
+an addr32 selector may be 4 GiB away from the offset's end in linear memory.
+Null selectors are rejected with status
+5 before any descriptor access or write because V6 has no processor-specific
+null-load base policy. LSS still needs ownership of interrupt/debug inhibition;
+LDS/LES and compatibility-mode loads remain outside this long-mode profile.
+Ordinary strict/permissive lifting continues to refuse these far loads. The
+continuation receipt retains exact bytes with an incomplete ordinary sidecar;
+it supplies no NOP approximation or ordinary source/native proof.
+
 ## Native environment bindings
 
 All bindings below are disabled by default. They must match the executing
@@ -184,6 +205,15 @@ records 6,628 complete state/RAM comparisons, all 65,536 imm16 encoding audits,
 guard-page and read-only descriptor checks, and 378 passing continuation,
 export and proof regressions on the recorded source and toolchain. It qualifies
 the V6 transition domain above, not an ordinary C return ABI.
+
+The [LFS/LGS qualification record](evidence/x86-lfs-lgs-continuation-2026-10-29.json)
+records 132,544 native state/RAM comparisons across HighC/LLVMC at O0/O2,
+including independent addr32 field wrapping, old segment bases, every GPR,
+descriptor-bit variants and accessed-bit aliasing into either pointer field.
+It also records 408 unchanged-state/RAM refusals, 24 exact-width/read-only
+page checks and 387 passing continuation, export and proof regressions.
+The native CPU was Intel; null-selector policy, LSS shadow state and faulting
+execution are not qualified by these counts.
 
 `X64ContinuationIntegerTest` compares complete state and memory with original
 native instructions for audited legacy vector transfers, XOR and byte shifts,

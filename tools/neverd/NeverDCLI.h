@@ -300,6 +300,7 @@ extern llvm::cl::opt<bool> VMNoControlDiscovery;
 extern llvm::cl::opt<uint64_t> VMMaxOperations;
 extern llvm::cl::opt<std::string> VMRecoveryReport;
 extern llvm::cl::opt<bool> VMMachineState;
+extern llvm::cl::opt<std::string> VMMachineSourceABI;
 
 int runMobile(const char *Argv0);
 extern llvm::cl::opt<std::string> MobilePlatform;

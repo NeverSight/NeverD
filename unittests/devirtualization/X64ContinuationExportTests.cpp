@@ -256,6 +256,44 @@ int main(void) {
   }
 }
 
+TEST_F(X64ContinuationExportTest,
+       FarPointerCommitsBothDestinationsAndResumesAtFallthrough) {
+  load({0x0f, 0xb4, 3, 0x48, 0x0f, 0xb5, 0x0e}); // lfs eax,[rbx]; lgs rcx,[rsi]
+  const auto Request = request(R"("instructions":[4096,4099])");
+  for (bool LLVM : {false, true}) {
+    auto [Source, Manifest] = source(Request, LLVM);
+    auto Parsed = llvm::json::parse(Manifest);
+    ASSERT_TRUE(bool(Parsed));
+    EXPECT_EQ(Parsed->getAsObject()->getInteger("native_requests"), 0);
+    execute(Source, std::string(Seed) + R"C(
+int main(void) {
+    uint64_t gdt[5]={0,0,0,0,0x89c192efabcd2345ULL};
+    unsigned char a[6],b[10];uint32_t offset=0x89abcdef;
+    uint64_t wide=0xfedcba9876543210ULL;uint16_t selector=32;
+    memcpy(a,&offset,4);memcpy(a+4,&selector,2);
+    memcpy(b,&wide,8);memcpy(b+8,&selector,2);
+    neverd_x64_state_v6 s=seed();s.GPR[3]=(uintptr_t)a;s.GPR[6]=(uintptr_t)b;
+    s.GDTR.Base=(uintptr_t)gdt;s.GDTR.Limit=sizeof(gdt)-1;
+    s.Unusable=48;uint64_t budget=0;neverd_x64_state_v6 saved=s;
+    CHECK(neverd_x64_continue_v6(&s,&budget)==9 && !memcmp(&s,&saved,sizeof(s)));
+    budget=1;CHECK(neverd_x64_continue_v6(&s,&budget)==9 && budget==0);
+    CHECK(s.PC==0x1003 && s.GPR[0]==offset && s.GPR[1]==saved.GPR[1]);
+    CHECK(s.FSBase==0x89efabcd && s.FS.Selector==32 && s.FS.Attributes==0xc093);
+    CHECK(s.FS.Limit==0x12345fff && s.Unusable==32 && (gdt[4]&(1ULL<<40)));
+    selector=0;memcpy(b+8,&selector,2);saved=s;budget=2;
+    CHECK(neverd_x64_continue_v6(&s,&budget)==5 && budget==2);
+    CHECK(!memcmp(&s,&saved,sizeof(s)));
+    selector=32;memcpy(b+8,&selector,2);
+    CHECK(neverd_x64_continue_v6(&s,&budget)==8 && budget==1);
+    CHECK(s.PC==0x1007 && s.GPR[1]==wide && s.GSBase==s.FSBase);
+    CHECK(!memcmp(&s.GS,&s.FS,sizeof(s.FS)) && s.Unusable==0);
+    CHECK(s.RFlags==0x246 && s.NMIBlocked==1);
+    return 0;
+}
+)C");
+  }
+}
+
 TEST_F(X64ContinuationExportTest, DriverRetainsPhysicalCallsPivotsAndReentry) {
   load({0x48, 0x89, 0x4c, 0x24, 0x08,         // mov [rsp+8],rcx
         0xe8, 0x06, 0x00, 0x00, 0x00,         // call 1010

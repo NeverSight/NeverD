@@ -339,7 +339,7 @@ v9 接口 `neverd_devirtualize_source_v9`, `neverd_devirtualize_machine_source_v
 
 `wrapInterpreterMachineQueryStateX64()` 是可选的 C++ 源码接口。160 字节状态保留原有的 136 字节机器状态前缀，随后依次是三个 64 位字段：查询数组地址、数量和游标。每条 24 字节记录包含六个 32 位字：leaf、subleaf、EAX、EBX、ECX 和 EDX。规范 CPUID 指令按顺序消耗一条匹配记录，并将四个结果零扩展；相同选择器可以得到不同答案。答案不来自主机 CPU 指令。
 
-记录耗尽返回状态 3，选择器不匹配返回 4。两者都在该查询之前停止，提交当前机器状态，保留此前的客户机内存效果，并保持游标不变。入口对齐拒绝仍返回 2，且不执行写入。调用者必须提供可访问、不可变、地址不回绕且与状态和客户机内存分离的数组；数量为零时允许空地址。原有机器状态和标志配置契约仍适用。此接口不增加 CLI、C SDK、GUI、原生等价证明或硬件串行化支持。原有封装仍拒绝 CPU 查询，其他不支持的内建操作和原始环境仍被拒绝。
+记录耗尽返回状态 3，选择器不匹配返回 4。两者都在该查询之前停止，提交当前机器状态，保留此前的客户机内存效果，并保持游标不变。入口对齐拒绝仍返回 2，且不执行写入。调用者必须提供可访问、不可变、地址不回绕且与状态和客户机内存分离的数组；数量为零时允许空地址。原有机器状态和标志配置契约仍适用。此接口不增加 GUI、原生等价证明或硬件串行化支持。原有封装仍拒绝 CPU 查询，其他不支持的内建操作和原始环境仍被拒绝。
 
 <!-- i18n-section: xmm-query-source -->
 
@@ -347,4 +347,12 @@ v9 接口 `neverd_devirtualize_source_v9`, `neverd_devirtualize_machine_source_v
 
 `wrapInterpreterMachineQueryStateX64V2()` 使用独立的 416 字节布局：保留 160 字节查询状态前缀，随后存储 XMM0–XMM15，每个寄存器依次为低、高 64 位字。状态只需 8 字节对齐。所有 XMM 字节均在入口读取，在普通返回和查询失败出口提交。查询状态和入口对齐状态的含义保持不变。
 
-此 C++ 接口接受完整的 128 位 XMM 操作数，并根据当前字节定义重建指令内临时值的读取，保留局部覆盖。未定义的字节和函数级临时值别名会明确报错。只有经架构层证明的常量地址对齐检查可以移除；动态或畸形检查仍被拒绝。部分 XMM 操作数、更宽的向量寄存器组和浮点环境仍不支持。此功能不增加 CLI、C SDK、GUI 或原生等价证明支持；原有封装保持其布局和限制。
+此 C++ 接口接受完整的 128 位 XMM 操作数，并根据当前字节定义重建指令内临时值的读取，保留局部覆盖。未定义的字节和函数级临时值别名会明确报错。只有经架构层证明的常量地址对齐检查可以移除；动态或畸形检查仍被拒绝。部分 XMM 操作数、更宽的向量寄存器组和浮点环境仍不支持。此功能不增加 GUI 或原生等价证明支持；原有封装保持其布局和限制。
+
+<!-- i18n-section: source-abi-v10 -->
+
+## 通过 CLI 和 SDK 选择源码布局
+
+将 `--vm-source-abi=scalar|queries|xmm` 与 `--devirtualize --vm-machine-state` 一起使用。默认 `scalar` 保留 136 字节布局；`queries` 选择上述 160 字节有序查询状态；`xmm` 选择 416 字节查询及 XMM 状态。报告通过 `sourceABI` 和 `sourceStateBytes` 标明布局，生成的 C 会说明相应存储契约。
+
+v10 C API `neverd_devirtualize_source_v10()` 和 `neverd_devirtualize_machine_source_v10()` 接受 `neverd_devirtualize_options_v10`。将其清零，把 v1 前缀的 `struct_size` 设为完整大小，并用 `NEVERD_DEVIRTUALIZE_MACHINE_SCALAR_V1`、`NEVERD_DEVIRTUALIZE_MACHINE_QUERIES_V1` 或 `NEVERD_DEVIRTUALIZE_MACHINE_QUERIES_XMM_V2` 设置 `machine_source_abi`。未知选择值、非零保留字段及普通源码配合扩展布局都会被拒绝。旧 API 忽略新增尾部，v10 忽略未来尾部；空选项保留标量默认值。Python 提供 `NeverDDevirtualizeOptionsV10` 和 `DevirtualizeMachineSourceABI`。GUI 恢复和原生认证能力保持不变。

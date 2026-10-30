@@ -994,8 +994,15 @@ buildInstruction(SpecializationInstruction Instruction,
   const auto FarReturn = Events ? farReturnDiscard(Instruction) : std::nullopt;
   const auto Interrupt =
       Events ? softwareInterruptVector(Instruction) : std::nullopt;
-  if (Instruction.ProfileProjection != InterpreterProfileProjection::None ||
-      Instruction.UndefinedEffects.Coverage != LowUndefinedCoverage::Complete ||
+  const auto FarPointer =
+      Events && Instruction.ProfileProjection ==
+                    InterpreterProfileProjection::X64FarPointerLoadV1
+          ? detail::x64FarPointerLoad(Instruction.NativeBytes)
+          : std::nullopt;
+  if ((!FarPointer &&
+       (Instruction.ProfileProjection != InterpreterProfileProjection::None ||
+        Instruction.UndefinedEffects.Coverage !=
+            LowUndefinedCoverage::Complete)) ||
       (Instruction.Origin.Control == LowInstructionControl::Terminator &&
        !Sysret && !Iret && !FarReturn && !Interrupt))
     RequireNative("instruction requires an explicit native environment");
@@ -1126,12 +1133,14 @@ buildInstruction(SpecializationInstruction Instruction,
   Writer W{Function, &Body, Options};
   if (Result.RequiresNativeExecution) {
     W.leave(Exit::NativeInstruction);
-  } else if (Iret || FarReturn || Interrupt) {
+  } else if (Iret || FarReturn || Interrupt || FarPointer) {
     detail::X64ContinuationEvents<Writer> Event(W, *Options.PagingAddressBits);
     if (Iret)
       Event.iret();
     else if (FarReturn)
       Event.farReturn(*FarReturn);
+    else if (FarPointer)
+      Event.farPointerLoad(*FarPointer, Instruction.Fallthrough.Address);
     else
       Event.softwareInterrupt(*Interrupt, Instruction.Fallthrough.Address);
   } else if (Sysret) {

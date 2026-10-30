@@ -733,6 +733,24 @@ emitCPUQuerySource(LowBlock &Guard, const SpecializationScalarQuery &Query,
 
 } // namespace
 
+std::optional<InterpreterMachineSourceABIInfo>
+interpreterMachineSourceABIInfo(InterpreterMachineSourceABIKind Kind) {
+  switch (Kind) {
+  case InterpreterMachineSourceABIKind::ScalarV1:
+    return InterpreterMachineSourceABIInfo{
+        "x64-machine-state-v1", sizeof(InterpreterMachineStateX64V1)};
+  case InterpreterMachineSourceABIKind::QueriesV1:
+    return InterpreterMachineSourceABIInfo{
+        "x64-machine-query-state-v1",
+        sizeof(InterpreterMachineQueryStateX64V1)};
+  case InterpreterMachineSourceABIKind::QueriesXMMV2:
+    return InterpreterMachineSourceABIInfo{
+        "x64-machine-query-state-v2",
+        sizeof(InterpreterMachineQueryStateX64V2)};
+  }
+  return std::nullopt;
+}
+
 llvm::Error validateInterpreterMachineStateX64V1(
     const InterpreterMachineStateX64V1 &State) {
   if (!FlagProfile::validEntry(State.RFlags))
@@ -1123,6 +1141,25 @@ llvm::Expected<InterpreterMachineSource> wrapInterpreterMachineQueryStateX64V2(
     InterpreterMachineStateLayout Layout) {
   return buildMachineSource(Residual, SourceFormat, Profile, false,
                             EntryAlignment, Layout, true, true);
+}
+
+llvm::Expected<InterpreterMachineSource> wrapInterpreterMachineSourceX64(
+    const LowFunc &Residual, InterpreterMachineSourceABIKind Kind,
+    BinaryFormat SourceFormat, InterpreterMachineStateProfile Profile,
+    std::optional<InterpreterEntryAlignment> EntryAlignment,
+    InterpreterMachineStateLayout Layout) {
+  switch (Kind) {
+  case InterpreterMachineSourceABIKind::ScalarV1:
+    return wrapInterpreterMachineStateX64(Residual, SourceFormat, Profile,
+                                          EntryAlignment, Layout);
+  case InterpreterMachineSourceABIKind::QueriesV1:
+    return wrapInterpreterMachineQueryStateX64(Residual, SourceFormat, Profile,
+                                               EntryAlignment, Layout);
+  case InterpreterMachineSourceABIKind::QueriesXMMV2:
+    return wrapInterpreterMachineQueryStateX64V2(
+        Residual, SourceFormat, Profile, EntryAlignment, Layout);
+  }
+  return invalid("unknown interpreter machine source ABI");
 }
 
 llvm::Expected<InterpreterMachineStateModel> modelInterpreterMachineStateX64(

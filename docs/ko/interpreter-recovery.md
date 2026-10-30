@@ -339,7 +339,7 @@ v9 API `neverd_devirtualize_source_v9`, `neverd_devirtualize_machine_source_v9`�
 
 `wrapInterpreterMachineQueryStateX64()`는 선택적 C++ 소스 인터페이스입니다. 160바이트 상태는 기존 136바이트 기계 상태를 접두부로 유지하고, 배열 주소·개수·커서의 64비트 필드 세 개를 덧붙입니다. 각 24바이트 레코드는 leaf, subleaf, EAX, EBX, ECX, EDX의 32비트 값 여섯 개입니다. 정규 CPUID 명령은 일치하는 레코드를 순서대로 하나 소비하고 네 결과를 0으로 확장합니다. 같은 선택자도 답이 다를 수 있으며 호스트 CPU 명령으로 답을 얻지 않습니다.
 
-레코드 소진은 상태 3, 선택자 불일치는 4를 반환합니다. 둘 다 해당 질의 직전에 멈추고 현재 기계 상태를 저장하며 이전 게스트 메모리 효과와 커서를 유지합니다. 진입 정렬 거부는 쓰기 없이 2를 반환합니다. 호출자는 접근 가능하고 불변이며 주소가 순환하지 않고 상태 및 게스트 메모리와 겹치지 않는 배열을 제공해야 합니다. 개수 0이면 널 주소가 가능합니다. 기존 기계 상태 및 플래그 프로필 계약은 유지됩니다. CLI, C SDK, GUI, 네이티브 동등성 증명이나 하드웨어 직렬화 지원은 추가되지 않습니다. 기존 래퍼는 CPU 질의를 계속 거부하며 다른 미지원 내장 연산과 원시 환경도 거부합니다.
+레코드 소진은 상태 3, 선택자 불일치는 4를 반환합니다. 둘 다 해당 질의 직전에 멈추고 현재 기계 상태를 저장하며 이전 게스트 메모리 효과와 커서를 유지합니다. 진입 정렬 거부는 쓰기 없이 2를 반환합니다. 호출자는 접근 가능하고 불변이며 주소가 순환하지 않고 상태 및 게스트 메모리와 겹치지 않는 배열을 제공해야 합니다. 개수 0이면 널 주소가 가능합니다. 기존 기계 상태 및 플래그 프로필 계약은 유지됩니다. GUI, 네이티브 동등성 증명이나 하드웨어 직렬화 지원은 추가되지 않습니다. 기존 래퍼는 CPU 질의를 계속 거부하며 다른 미지원 내장 연산과 원시 환경도 거부합니다.
 
 <!-- i18n-section: xmm-query-source -->
 
@@ -347,4 +347,12 @@ v9 API `neverd_devirtualize_source_v9`, `neverd_devirtualize_machine_source_v9`�
 
 `wrapInterpreterMachineQueryStateX64V2()`는 별도의 416바이트 배치를 사용합니다. 기존 160바이트 질의 상태 뒤에 XMM0–XMM15를 각각 하위·상위 64비트 값으로 저장합니다. 상태는 8바이트 정렬이면 충분합니다. 모든 XMM 바이트를 진입 시 읽고 일반 반환 및 질의 실패 출구에서 저장합니다. 질의 및 진입 정렬 상태의 의미는 유지됩니다.
 
-이 C++ 인터페이스는 전체 128비트 XMM 피연산자를 허용하며 현재 바이트 정의로 명령 내부 임시값을 재구성하여 부분 덮어쓰기를 보존합니다. 미정의 바이트와 함수 범위 임시값 별칭은 명시적으로 거부합니다. 아키텍처 계층이 증명한 상수 주소 정렬 검사만 제거하며 동적 또는 잘못된 검사는 거부합니다. 부분 XMM 피연산자, 더 넓은 벡터 뱅크 및 부동소수점 환경은 지원하지 않습니다. CLI, C SDK, GUI 또는 네이티브 동등성 증명 지원은 추가되지 않으며 기존 래퍼의 배치와 제한은 유지됩니다.
+이 C++ 인터페이스는 전체 128비트 XMM 피연산자를 허용하며 현재 바이트 정의로 명령 내부 임시값을 재구성하여 부분 덮어쓰기를 보존합니다. 미정의 바이트와 함수 범위 임시값 별칭은 명시적으로 거부합니다. 아키텍처 계층이 증명한 상수 주소 정렬 검사만 제거하며 동적 또는 잘못된 검사는 거부합니다. 부분 XMM 피연산자, 더 넓은 벡터 뱅크 및 부동소수점 환경은 지원하지 않습니다. GUI 또는 네이티브 동등성 증명 지원은 추가되지 않으며 기존 래퍼의 배치와 제한은 유지됩니다.
+
+<!-- i18n-section: source-abi-v10 -->
+
+## CLI와 SDK에서 소스 배치 선택
+
+`--vm-source-abi=scalar|queries|xmm`를 `--devirtualize --vm-machine-state`와 함께 사용합니다. 기본 `scalar`는 136바이트, `queries`는 위의 160바이트 순서 있는 질의 상태, `xmm`은 416바이트 질의 및 XMM 상태입니다. 보고서의 `sourceABI`와 `sourceStateBytes`가 배치를 명시하고 생성 C는 해당 저장 계약을 설명합니다.
+
+v10 C API `neverd_devirtualize_source_v10()`과 `neverd_devirtualize_machine_source_v10()`은 `neverd_devirtualize_options_v10`을 받습니다. 0으로 초기화하고 v1 접두부의 `struct_size`를 전체 크기로 설정합니다. `machine_source_abi`는 `NEVERD_DEVIRTUALIZE_MACHINE_SCALAR_V1`, `NEVERD_DEVIRTUALIZE_MACHINE_QUERIES_V1`, `NEVERD_DEVIRTUALIZE_MACHINE_QUERIES_XMM_V2`로 선택합니다. 알 수 없는 값, 0이 아닌 예약 필드 및 일반 소스의 확장 배치는 거부합니다. 이전 API는 새 꼬리를, v10은 미래 꼬리를 무시합니다. 널 옵션은 스칼라 기본값을 유지합니다. Python은 `NeverDDevirtualizeOptionsV10`과 `DevirtualizeMachineSourceABI`를 제공합니다. GUI 복원과 네이티브 인증은 변경되지 않습니다.

@@ -815,9 +815,10 @@ int runDecompile(neverd_session_t Sess) {
     return 1;
   }
   if (!Devirtualize &&
-      (VMMachineState || !VMControlRegisters.empty() ||
-       !VMControlFrameSlots.empty() || !VMRecoveryReport.empty() ||
-       VMMaxNodes.getNumOccurrences() || VMMaxContexts.getNumOccurrences() ||
+      (VMMachineState || VMMachineSourceABI.getNumOccurrences() ||
+       !VMControlRegisters.empty() || !VMControlFrameSlots.empty() ||
+       !VMRecoveryReport.empty() || VMMaxNodes.getNumOccurrences() ||
+       VMMaxContexts.getNumOccurrences() ||
        VMMaxOperations.getNumOccurrences() ||
        VMMaxRefinements.getNumOccurrences() ||
        VMMaxFields.getNumOccurrences() || VMMaxQueries.getNumOccurrences() ||
@@ -839,6 +840,21 @@ int runDecompile(neverd_session_t Sess) {
   if (Devirtualize && (!VMMaxNodes || !VMMaxContexts || !VMMaxOperations)) {
     WithColor::error() << "VM recovery budgets must be positive\n";
     return 1;
+  }
+  uint32_t MachineSourceABI = NEVERD_DEVIRTUALIZE_MACHINE_SCALAR_V1;
+  if (VMMachineSourceABI.getNumOccurrences()) {
+    if (!VMMachineState) {
+      WithColor::error() << "--vm-source-abi requires --vm-machine-state\n";
+      return 1;
+    }
+    if (VMMachineSourceABI == "queries")
+      MachineSourceABI = NEVERD_DEVIRTUALIZE_MACHINE_QUERIES_V1;
+    else if (VMMachineSourceABI == "xmm")
+      MachineSourceABI = NEVERD_DEVIRTUALIZE_MACHINE_QUERIES_XMM_V2;
+    else if (VMMachineSourceABI != "scalar") {
+      WithColor::error() << "--vm-source-abi expects scalar, queries or xmm\n";
+      return 1;
+    }
   }
   uint32_t MaxRefinements = 0, MaxFields = 0, MaxQueries = 0,
            ChainTransfers = 0, MaxSymbolicNodes = 0, MaxEvaluations = 0,
@@ -1115,7 +1131,9 @@ int runDecompile(neverd_session_t Sess) {
         }
         FrameSlots.push_back({Offset, static_cast<uint16_t>(Bytes), 0});
       }
-      neverd_devirtualize_options_v9 ProofRecovery{};
+      neverd_devirtualize_options_v10 SourceRecovery{};
+      SourceRecovery.machine_source_abi = MachineSourceABI;
+      auto &ProofRecovery = SourceRecovery.base;
       if (VMProveStoreReturnSeparation)
         ProofRecovery.flags |=
             NEVERD_DEVIRTUALIZE_V9_PROVE_STORE_RETURN_SLOT_SEPARATION;
@@ -1137,7 +1155,7 @@ int runDecompile(neverd_session_t Sess) {
       ExtendedRecovery.base.base.entry_frame_residue = EntryResidue;
       auto &Recovery = ExtendedRecovery.base.base.base;
       auto &Base = Recovery.base.base.base;
-      Base.struct_size = sizeof(ProofRecovery);
+      Base.struct_size = sizeof(SourceRecovery);
       Recovery.base.base.max_control_refinements = MaxRefinements;
       Recovery.base.max_control_fields = MaxFields;
       Recovery.base.max_solver_queries = MaxQueries;
@@ -1159,10 +1177,10 @@ int runDecompile(neverd_session_t Sess) {
       Base.use_llvm = LlvmRoute;
       Base.no_opt = NoOpt;
       const char *Report = nullptr;
-      Source = VMMachineState ? neverd_devirtualize_machine_source_v9(
-                                    Sess, Entry, &ProofRecovery, &Report)
-                              : neverd_devirtualize_source_v9(
-                                    Sess, Entry, &ProofRecovery, &Report);
+      Source = VMMachineState ? neverd_devirtualize_machine_source_v10(
+                                    Sess, Entry, &SourceRecovery, &Report)
+                              : neverd_devirtualize_source_v10(
+                                    Sess, Entry, &SourceRecovery, &Report);
       if (!VMRecoveryReport.empty() && Report) {
         std::error_code EC;
         raw_fd_ostream OS(VMRecoveryReport, EC);

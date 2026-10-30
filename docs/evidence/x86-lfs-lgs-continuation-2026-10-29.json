@@ -1,0 +1,132 @@
+{
+  "scope": "Non-null LFS/LGS under explicit KernelEventsNoFaultV6, Intel 16/32/64-bit operand rules",
+  "goal_complete": false,
+  "validation_complete": true,
+  "artifact_set": "neverd-lfs-lgs-20261029",
+  "neverd_base": "b621fca5f46a28af24378c43f9e850499a19b5d4",
+  "qualified_source": {
+    "path": "qualified-source.json",
+    "sha256": "7732f5fc8cc2207a217d19edf4520458cdf2f9fd37c5786ab32ad7e69d8768fe",
+    "bytes": 2046
+  },
+  "qualification_driver": {
+    "path": "make-evidence.py",
+    "sha256": "df79fda12b63ac69b6eae2108168259c03ace20664b6da6cbdaedd510845418e",
+    "bytes": 7962
+  },
+  "references": [
+    {
+      "manual": "Intel SDM 325462-085US, October 2024, LDS/LES/LFS/LGS/LSS",
+      "url": "https://cdrdv2-public.intel.com/835757/325383-sdm-vol-2abcd.pdf"
+    },
+    {
+      "manual": "AMD APM volume 2, 24593 revision 3.44, section 4.5.3, processor-dependent null-selector policy",
+      "url": "https://docs.amd.com/api/khub/documents/sD1_QL~h4Afq2_tvzxqqSQ/content"
+    }
+  ],
+  "native_oracle": {
+    "host": "Intel Core i9-13900H, Linux x64 KVM",
+    "kernel": "Linux 7.0.0-38-generic",
+    "compiler": "Ubuntu clang version 23.1.2 (++20260910044155+069ef0e7cb36-1~exp1~20260910044205.69)",
+    "profiles": [
+      "HighC O0",
+      "HighC O2",
+      "LLVMC O0",
+      "LLVMC O2"
+    ],
+    "paging_address_bits": 48,
+    "state_and_ram_comparisons": 132544,
+    "register_width_segment_encodings": 96,
+    "descriptor_matrix_per_encoding_per_profile": 264,
+    "descriptor_bit_variants_per_encoding_per_profile": 62,
+    "accessed_bit_aliases_per_encoding_per_profile": 2,
+    "flag_variants_per_encoding_per_profile": 12,
+    "addressing_cases_per_profile": 400,
+    "address32_wrap_cases_per_profile": 96,
+    "compared": [
+      "all represented V6 state",
+      "4096 bytes of descriptor/source RAM",
+      "64 bytes of selector/descriptor alias RAM",
+      "32 additional bytes spanning the high virtual source alias in wrap cases"
+    ],
+    "coverage": [
+      "all 16 GPR destinations with 16-bit preservation and 32-bit zero extension",
+      "GDT and LDT including LDT entry zero",
+      "data and readable code descriptors",
+      "conforming code and all admitted DPL/RPL combinations",
+      "base, expanded limit, attributes and unusable-bit installation",
+      "accessed-bit aliasing into the offset or selector field",
+      "all base/index registers, scales, RIP/EIP and no-base SIB addressing",
+      "unaligned images and negative displacement",
+      "old FS/GS bases, including when loading the same segment",
+      "independent addr32 field wrapping before 64-bit segment addition",
+      "exact original fallthrough, flags and NMI blocking"
+    ]
+  },
+  "checks": {
+    "qualification": {
+      "tests": 127,
+      "passed": 127,
+      "skipped": 0,
+      "artifact": "final-qualification.xml",
+      "sha256": "dfa9f14f116adf0592eacb33510be4a391b0e70beada81bbcdb73d6f1da358c2",
+      "bytes": 134347
+    },
+    "proof_regressions": {
+      "tests": 260,
+      "passed": 260,
+      "skipped": 0,
+      "artifact": "final-proof-tests.xml",
+      "sha256": "d929b16c3f60e7b75c4fdbd22042dce9379bd7363f98e0e662430099e812612d",
+      "bytes": 279825
+    },
+    "invalid_state_and_ram_comparisons": 408,
+    "page_boundary_and_read_only_descriptor_comparisons": 24,
+    "positive_prefix_permutations": 6,
+    "rejected_raw_forms": 12,
+    "ordinary_contract_refusal_cases": 24,
+    "ordinary_contracts": "original undefined-independence certificate and ordinary source both refused; no residual publication",
+    "sdk_driver": "HighC/LLVMC O0/O2 with ASan/UBSan: coupled destinations, cache fields, budgets, exact fallthrough and atomic null-selector rejection",
+    "format_and_docs": "pinned clang-format and localized Markdown/link checks"
+  },
+  "build": {
+    "configuration": "Release",
+    "receipt": {
+      "path": "neverd-build-receipt.json",
+      "sha256": "d20f64a1ef9eddaa534f2b8a01ee01a0303289996bb1b28fa940082b8a3e807d",
+      "bytes": 3700
+    },
+    "dependency_inputs": {
+      "path": "neverd-dependency-inputs.json",
+      "sha256": "0d185e80e033e56c739f8efa6c9652c56f7005bd399558403138262879bfc48c",
+      "bytes": 524
+    }
+  },
+  "discovered_and_fixed": {
+    "issue": "addr32 computes the selector field effective address modulo 2^32 before segment addition; a contiguous linear image approximation is incorrect at wrap",
+    "initial_native_failure": {
+      "artifact": "focused.log",
+      "sha256": "0c50ac34561ac789ef5fc247e9326c4ca997b05853ed845da3770e8748957748",
+      "bytes": 3519
+    },
+    "observation": "67 65 49 0F B5 04 25 F9 FF FF FF at PC 0x1250, GS.base=0xffffffff00008807, offset linear address 0x8800, selector fault at 0xffffffff00008808",
+    "qualification": "A high virtual alias at 4 GiB keeps both fields mapped and checks all three widths and both segments against independent original instructions; the final tests all pass."
+  },
+  "sources": {
+    "llvm": "a7738f3f28e71edc72651e475ea930a9e8946d27",
+    "neverc": "111055529fb4b18e18858983c80c8731bf5bbcb1",
+    "production_sdk": "neverd-llvm-v23.0.0-r6",
+    "production_sdk_commit": "06788fb19109851e6a6b9f109a2b8027a606f0c6",
+    "production_llvm_gitlink": "03270359c2ed8f6806533d3832a947bf883a6f69",
+    "release_and_pins_changed": false
+  },
+  "limitations": [
+    "CPL0 long-mode entry, Intel operand-size rules and successful sequential ordinary RAM",
+    "null selectors need an explicit processor-specific base policy and are rejected before descriptor access or any write",
+    "LSS interrupt/debug inhibition and i386/compatibility LDS/LES/LFS/LGS/LSS remain open",
+    "AMD REX.W execution is unqualified",
+    "fault delivery, MMIO, concurrent writers, CET/FRED and asynchronous events remain outside the profile",
+    "ordinary strict/permissive lifting and native proofs retain their refusal",
+    "global x86 gaps and NeverC full-CI qualification remain open; no LLVM release or pin change"
+  ]
+}

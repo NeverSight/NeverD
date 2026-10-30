@@ -120,6 +120,8 @@ class DevirtualizationRoundTripTest
     : public DevirtualizationSourceTest,
       public ::testing::WithParamInterface<SourceCase> {};
 
+#include "SourceStateExportTests.inc"
+
 TEST_F(DevirtualizationSourceTest,
        MultipleReturnsUseBackendSpecificWritebackLayouts) {
   if (!hasCrossTargetClang())

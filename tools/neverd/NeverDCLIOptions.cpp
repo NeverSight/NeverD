@@ -856,6 +856,11 @@ cl::opt<bool> VMMachineState(
     cl::desc(
         "Explicit x64 state ABI; normal nonfaulting CPL3 execution, CET off"),
     cl::sub(DecompileCmd));
+cl::opt<std::string> VMMachineSourceABI(
+    "vm-source-abi",
+    cl::desc("Machine source storage: scalar, queries or xmm (requires "
+             "--vm-machine-state)"),
+    cl::init("scalar"), cl::sub(DecompileCmd));
 cl::list<std::string> VMControlRegisters(
     "vm-control",
     cl::desc("Full GPR used to separate interpreter contexts (repeatable)"),
