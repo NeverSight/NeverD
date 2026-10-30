@@ -2284,3 +2284,5 @@ LLVM C의 합성 스택 슬롯은 실행 중 선택한 64비트 절반을 읽기
 `X86PackedSelectionAudit`는 정규 레지스터 형식 PSHUFD, PCMPEQD, PAND, PACKSSDW/PACKSSWB, PUNPCKLQDQ, MOVMSKPD를 검사합니다. 256개 셔플 제어값, 부호 있는 포화 경계, 부분 일치, 레지스터 별칭, 전체 벡터 레지스터와 플래그 보존을 다룹니다. 기존 메모리 PAND는 읽기나 대상 변경 전에 [Intel 정렬 요구 사항](https://cdrdv2-public.intel.com/671436/253665-sdm-vol-1.pdf)을 유지합니다. `X86LegacyAlignedMove.PackedAnd*`는 주소 순환, 명시적 FS/GS 기준 주소, 사용할 수 없는 메모리, 실패 시 상태 보존을 검사합니다. 선택값 소스 예제는 ASan/UBSan과 O0/O2로 두 C 경로를 실행하고 동적 정렬 검사를 유지합니다. 불투명한 프로세서 상태를 인증하지는 않습니다.
 
 `InterpreterMachineRegionSourceTest.SegmentedChoiceSource*`는 명시적 FS/GS 기준 주소를 두 C 경로의 O0/O2에서 ASan/UBSan과 함께 실행합니다. 독립 바이트 예상값으로 전체 상태, 겹치는 메모리와 반환 주소, 주소 순환, 질의 및 선택 기록 예약, 변경되지 않은 기록을 비교합니다. 인증, V1, 연산 예산, 미지원 상태 거부도 확인합니다. `NeverDInterpreterMachineStateTests`를 원시 환경, 고정 이미지, 연속 실행 소스 테스트와 함께 실행합니다. 자체 프로그램 검증은 네이티브 커널 실행을 보장하지 않습니다.
+
+`X86NativeStateAudit.CR4*`는 허용된 CR4 전송 인코딩 48개와 바이트 및 디코드 정보가 불일치하는 입력 34개를 검사합니다. 임의의 산술 플래그 6개를 기록하고 기존 네이티브 내장 연산을 유지하며 불투명 상태 보존 인증을 부여하지 않아야 합니다. `CR4FlagCoverageDoesNotAuthorizeMachineRegionExecution`는 제어 상태 계약이 없으면 소스 복원을 계속 거부합니다. 테스트는 자체 명령 바이트를 디코드하고 IR로 변환할 뿐 특권 명령을 실행하지 않습니다.

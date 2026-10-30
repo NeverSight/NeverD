@@ -10,6 +10,7 @@
 #include "../../lib/analysis/arch/x86_64/StringTransfer.h"
 #include "../../lib/analysis/core/RecoveryArchitecture.h"
 #include "../../lib/lift/X86/X86CompatibilityReturnUndefined.h"
+#include "../../lib/lift/X86/X86ControlMoveUndefined.h"
 #include "../../lib/lift/X86/X86LegacyVectorMoveAudit.h"
 #include "../../lib/lift/X86/X86MultiplyUndefined.h"
 #include "../../lib/lift/X86/X86NativeStateAudit.h"
@@ -1295,6 +1296,117 @@ TEST(X86NativeStateAudit, CR3EncodingKeepsArbitraryFlagsAndRejectsForgedBank) {
       }
       EXPECT_EQ(Preserved, LowInstructionPreservedState{});
       Insn.Raw->detail->x86.operands[Opcode == 0x20 ? 1 : 0].reg = X86_REG_CR4;
+      expectUnaudited(Dec, Insn);
+    }
+}
+
+TEST(X86NativeStateAudit, CR4TransfersKeepNativeEffectsAndSixArbitraryFlags) {
+  Decoder Dec;
+  ASSERT_TRUE(Dec.init(Arch::X64));
+  Dec.setStrict(true);
+  for (uint8_t Register = 0; Register != 16; ++Register)
+    for (uint8_t Opcode : {0x20, 0x22})
+      for (bool Prefix : {false, true}) {
+        if (!Prefix && Register >= 8)
+          continue;
+        std::vector<uint8_t> Bytes{0x0f, Opcode,
+                                   uint8_t(0xe0 | (Register & 7))};
+        if (Prefix)
+          Bytes.insert(Bytes.begin(), Register < 8 ? 0x40 : 0x41);
+        DecodedInsn Insn{};
+        ASSERT_EQ(
+            Dec.decodeOneForLift(Bytes.data(), Bytes.size(), CodeAddress, Insn),
+            int(Bytes.size()));
+        ASSERT_TRUE(controlmoveundefined::form(Insn.Raw, Arch::X64));
+        EXPECT_FALSE(controlmoveundefined::form(Insn.Raw, Arch::X86));
+        std::vector<LowOp> Ops, Plain;
+        LowInstructionUndefinedEffects Effects;
+        LowInstructionPreservedState Preserved;
+        Preserved.Audit = LowPreservedStateAudit::LegacyIntegerV1;
+        Dec.liftToLow(Insn, Ops, {}, {}, &Effects, &Preserved);
+        Dec.liftToLow(Insn, Plain);
+        ASSERT_EQ(Effects.Coverage, LowUndefinedCoverage::Complete)
+            << Effects.Diagnostic;
+        EXPECT_EQ(Effects.OpCount, Ops.size());
+        EXPECT_EQ(Effects.OperationDigest, lowUndefinedOperationDigest(Ops));
+        EXPECT_EQ(Effects.OperationDigest, lowUndefinedOperationDigest(Plain));
+        ASSERT_EQ(Effects.Effects.size(), 6u);
+        const unsigned Undefined[] = {x86reg::OF, x86reg::SF, x86reg::ZF,
+                                      x86reg::AF, x86reg::PF, x86reg::CF};
+        for (unsigned I = 0; I != 6; ++I) {
+          EXPECT_EQ(Effects.Effects[I].Output, NdVar::reg(Undefined[I], 1));
+          EXPECT_EQ(Effects.Effects[I].BitOffset, 0u);
+          EXPECT_EQ(Effects.Effects[I].BitCount, 1u);
+          EXPECT_EQ(Effects.Effects[I].AfterOp, Ops.size());
+          EXPECT_FALSE(Effects.Effects[I].When.has_value());
+        }
+        EXPECT_EQ(Preserved, LowInstructionPreservedState{});
+        const auto At =
+            std::find_if(Ops.begin(), Ops.end(), [](const LowOp &Op) {
+              return Op.Opcode == NdOp::INTRINSIC;
+            });
+        ASSERT_NE(At, Ops.end());
+        EXPECT_EQ(std::count_if(Ops.begin(), Ops.end(),
+                                [](const LowOp &Op) {
+                                  return Op.Opcode == NdOp::INTRINSIC;
+                                }),
+                  1);
+        const bool Read = Opcode == 0x20;
+        EXPECT_EQ(At->NumInputs, Read ? 1u : 2u);
+        EXPECT_EQ(At->Inputs[0],
+                  NdVar::cst(static_cast<uint64_t>(Read ? Intrinsic::ReadCr4
+                                                        : Intrinsic::WriteCr4),
+                             2));
+        const auto General = NdVar::reg(Register * 8, 8);
+        EXPECT_EQ(Read ? At->Output : At->Inputs[1], General);
+        if (!Read)
+          EXPECT_EQ(At->Output.Size, 0u);
+      }
+}
+
+TEST(X86NativeStateAudit, CR4AuditRejectsMismatchedBytesAndDecoderDetails) {
+  using Mutation = void (*)(cs_insn &, unsigned, unsigned);
+  const Mutation Mutations[] = {
+      [](cs_insn &I, unsigned, unsigned) { I.bytes[2] ^= 2; },
+      [](cs_insn &I, unsigned, unsigned) { I.bytes[3] ^= 8; },
+      [](cs_insn &I, unsigned, unsigned) { I.bytes[3] ^= 1; },
+      [](cs_insn &I, unsigned, unsigned) { I.detail->x86.rex = 0; },
+      [](cs_insn &I, unsigned, unsigned) { I.detail->x86.modrm ^= 1; },
+      [](cs_insn &I, unsigned, unsigned) {
+        I.detail->x86.encoding.modrm_offset = 2;
+      },
+      [](cs_insn &I, unsigned, unsigned) { I.detail->x86.opcode[1] ^= 2; },
+      [](cs_insn &I, unsigned, unsigned) { I.detail->x86.op_count = 1; },
+      [](cs_insn &I, unsigned, unsigned Control) {
+        I.detail->x86.operands[Control].reg = X86_REG_CR3;
+      },
+      [](cs_insn &I, unsigned General, unsigned) {
+        I.detail->x86.operands[General].reg = X86_REG_RAX;
+      },
+      [](cs_insn &I, unsigned General, unsigned) {
+        I.detail->x86.operands[General].size = 4;
+      },
+      [](cs_insn &I, unsigned, unsigned Control) {
+        I.detail->x86.operands[Control].size = 4;
+      },
+      [](cs_insn &I, unsigned, unsigned) { I.detail->x86.addr_size = 4; },
+      [](cs_insn &I, unsigned, unsigned) { I.detail->x86.prefix[0] = 0xf0; },
+      [](cs_insn &I, unsigned, unsigned) { I.detail->x86.sib = 1; },
+      [](cs_insn &I, unsigned, unsigned) { I.detail->x86.disp = 1; },
+      [](cs_insn &I, unsigned, unsigned) {
+        I.bytes[0] = I.detail->x86.rex = 0x49;
+      }};
+  Decoder Dec;
+  ASSERT_TRUE(Dec.init(Arch::X64));
+  Dec.setStrict(true);
+  for (uint8_t Opcode : {0x20, 0x22})
+    for (const auto Mutate : Mutations) {
+      const uint8_t Bytes[] = {0x41, 0x0f, Opcode, 0xe1};
+      DecodedInsn Insn{};
+      ASSERT_EQ(Dec.decodeOneForLift(Bytes, sizeof(Bytes), CodeAddress, Insn),
+                4);
+      Mutate(*Insn.Raw, Opcode == 0x20 ? 0 : 1, Opcode == 0x20 ? 1 : 0);
+      EXPECT_FALSE(controlmoveundefined::form(Insn.Raw, Arch::X64));
       expectUnaudited(Dec, Insn);
     }
 }

@@ -344,6 +344,27 @@ TEST_F(InterpreterMachineRegionSourceTest,
 }
 
 TEST_F(InterpreterMachineRegionSourceTest,
+       CR4FlagCoverageDoesNotAuthorizeMachineRegionExecution) {
+  for (uint8_t Opcode : {0x20, 0x22})
+    for (auto Profile : {InterpreterMachineStateProfile::UserX64NoFaultV1,
+                         InterpreterMachineStateProfile::KernelX64NoFaultV1}) {
+      auto Image = loadRegion({0x0f, Opcode, 0xe0, 0xc3});
+      ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+      auto Options = regionOptions(Entry + 3, ExitKind::Return);
+      Options.UndefinedModel = SpecializationUndefinedModel::FreshScalarV1;
+      Options.X64FlagsProfile = Profile;
+      const auto Result = specializeBinaryInterpreter(*Image, Entry, Options);
+      EXPECT_FALSE(Result.complete());
+      EXPECT_FALSE(Result.Diagnostic.empty());
+      auto Source =
+          wrapInterpreterMachineRegionChoiceSourceX64V2(Result, Options);
+      EXPECT_FALSE(bool(Source));
+      if (!Source)
+        llvm::consumeError(Source.takeError());
+    }
+}
+
+TEST_F(InterpreterMachineRegionSourceTest,
        SegmentedChoiceSourceStillRefusesOtherArchitecturalBanks) {
   auto Image = loadRegion({0xff, 0xd0});
   ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());

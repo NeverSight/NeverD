@@ -1846,6 +1846,28 @@ int main(void) {
       true);
 }
 
+TEST_F(X64ContinuationSourceTest, CR4AuditStillRequiresNativeExecution) {
+  run({0x0f, 0x20, 0xe0, 0x0f, 0x22, 0xe0}, {0x1000, 0x1003}, R"C(
+int main(void) {
+  const unsigned bits[]={11,7,6,4,2,0};
+  for(unsigned pattern=0;pattern<64;++pattern) {
+    state_v2_t s=seed_v2(0x1000);
+    s.core.flags=0x202;
+    for(unsigned i=0;i<6;++i) s.core.flags|=((pattern>>i)&1)<<bits[i];
+    for(unsigned i=0;i<8;++i) s.core.arbitrary[i]=UINT64_MAX-i-pattern;
+    s.core.gpr[0]=UINT64_C(0xfeed987600000000)+pattern;
+    state_v2_t before=s;
+    CHECK(neverd_step_v2_1000(ARG(&s))==4);
+    CHECK(memcmp(&s,&before,sizeof(s))==0);
+    s.core.pc=0x1003; before=s;
+    CHECK(neverd_step_v2_1003(ARG(&s))==4);
+    CHECK(memcmp(&s,&before,sizeof(s))==0);
+  }
+  return 0;
+})C",
+      true, controlsOptions());
+}
+
 TEST_F(X64ContinuationSourceTest, TaskPriorityRetainsInvalidWrites) {
   run({0x44, 0x0f, 0x20, 0xc0, 0x44, 0x0f, 0x22, 0xc1}, {0x1000, 0x1004}, R"C(
 int main(void) {

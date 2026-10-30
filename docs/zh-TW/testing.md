@@ -2240,3 +2240,5 @@ LLVM C 的合成堆疊槽保留完整的 128 位元整數寫入，再由執行�
 `X86PackedSelectionAudit` 檢查規範暫存器形式的 PSHUFD、PCMPEQD、PAND、PACKSSDW/PACKSSWB、PUNPCKLQDQ 和 MOVMSKPD，涵蓋全部 256 種重排控制字、有號飽和邊界、部分相等、暫存器別名、完整向量暫存器組與旗標保持。傳統記憶體 PAND 在讀取或修改目的暫存器前保留 [Intel 規定的對齊要求](https://cdrdv2-public.intel.com/671436/253665-sdm-vol-1.pdf)；`X86LegacyAlignedMove.PackedAnd*` 檢查位址回繞、明確 FS/GS 基址、不可用記憶體及失敗時狀態不變。取值來源樣例以 ASan/UBSan、O0/O2 執行兩條 C 路線並保留動態對齊檢查。這些檢查不認證不透明處理器狀態。
 
 `InterpreterMachineRegionSourceTest.SegmentedChoiceSource*` 在 O0/O2 下經兩種 C 路線執行明確 FS/GS 基址測試，並啟用 ASan/UBSan。獨立位元組預期比較完整狀態、重疊記憶體與返回位址單元、回繞位址、查詢及選擇記錄預留與不變的記錄帶。拒絕測試涵蓋認證、V1、操作預算及不支援的架構狀態。執行 `NeverDInterpreterMachineStateTests` 與原始環境、固定映像及延續原始碼測試；這些自有程式不證明原生核心執行等價。
+
+`X86NativeStateAudit.CR4*` 檢查 48 種已准入的 CR4 傳送編碼與 34 組位元組和解碼詳情不符的輸入。測試要求記錄六個任意算術旗標、保留原有原生內在操作，且不授予不透明狀態保持證書。`CR4FlagCoverageDoesNotAuthorizeMachineRegionExecution` 驗證缺少控制狀態契約時仍拒絕原始碼恢復。這些測試只解碼並提升自有指令位元組，不執行特權指令。
