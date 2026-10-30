@@ -78,6 +78,21 @@ X8 without shifting ordinary parameters, while small HFAs and unknown record
 layouts keep their own rules. Return-field fixtures cover shared epilogues,
 loops, call clobbers, partial writes and transitively unspecified inputs.
 
+`NeverDLocalTypesDebugContextTests` also checks recursive callback borrows and
+portable parameter qualifiers. Its recursive-record case checks that both
+self references and mutual references release their ownership, including
+after lazy member completion. Run it with address/undefined sanitizers and
+leak detection enabled. `LLVMCSourcePointers.HeaderCallbackCastsKeepNestedPointeesAndQualifiers`
+compiles and executes a qualified callback through the imported source
+prototype at O0/O2 with UBSan for x64 and ARM64 projections. Host execution
+does not certify native ARM64 execution. The optional
+[`check_windows_provider_calls.py`](../scripts/check_windows_provider_calls.py)
+uses the pinned Microsoft SDK/import libraries to compile both emitted routes
+and compare their API compiler contracts across x86, x64 and ARM64.
+`HighCSourceCalls.CallbackBorrowsDeclareNestedRecordTags` additionally checks
+that records used only inside callbacks receive the correct struct/union
+forward declarations, without reconstructing their layouts.
+
 `NeverDAAPCS64CallContractTests` executes second-word-only integer-pair calls,
 register arguments across indexed stores and multiple predecessor blocks,
 immutable printf formats mixing integer and FP arguments, explicit X8 result
@@ -5553,6 +5568,9 @@ check published names after overwriting the caller's input, plus exact error
 text and macro invocation positions. `NeverDTypeParseTests` runs the same
 parser cases without loader/call-model dependencies, for focused ASan/UBSan
 checks of this storage boundary; these are not additional distinct cases.
+Macro chains at and beyond the expansion budget, plus cycles, retain their
+invocation diagnostics when ordinary identifiers bypass recursive expansion.
+Punctuation matching keeps its original longest-first order and literal lengths.
 
 `DWARFTypeImportGo.ReadsGosStructuresAndFuncValues` builds a real Go program
 with the selected `NEVERD_TEST_GO` compiler (or `go` on PATH). It checks both
@@ -17412,7 +17430,8 @@ executes forwarded arguments across the edge through HighC and LLVMC, with
 selected/whole projections, both pipeline optimization modes, x64/ARM64 and
 all three native containers. `NeverDLLVMCSourcePointerTests` executes object
 pointer and callback argument/result bridges at O0/O2 with UBSan, including
-caller-before-callee order, typedefs, selected externals and preserved LLVM
+caller-before-callee order, typedefs on integer and LLVM pointer carriers,
+mismatched source pointer widths, selected externals and preserved LLVM
 prototypes. The native pointer suite compiles a complete public MinGW toy and
 checks both matching CRT layouts and rejection of mismatched MSVCRT/UCRT
 headers or same-offset fields of a different type. These source checks do not certify native kernel or ARM64 execution.
