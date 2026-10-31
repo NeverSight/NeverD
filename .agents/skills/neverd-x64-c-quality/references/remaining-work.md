@@ -55,6 +55,16 @@ This closes the dispatch-composition gap; proving alias-dependent ordinary
 parameters and running complete kernel entries in their live environment remain
 separate obligations.
 
+Special state regions now optionally discover direct callees with bounded
+`callee_depth`, deduplicating bodies and original instructions. `dispatch:
+"direct"` links adjacent selected steps only after checking the actual PC;
+callbacks, changed stacks, arbitrary argument bytes and native/context exits
+retain their effects. The implementation is isolated in `X64SpecialRegions`.
+Public tests compare both drivers and execute original native caller/callee
+bytes with an untouched argument slot and an observing mutation. This extends
+the usable explicit-state path; conditional ordinary-call effects and automatic
+mixing of ordinary C with state regions remain open.
+
 Manifest schema 2 names entry-region selection facts `lowir_*` and records
 `ordinary_source_validation: "not-run"`. Selection defers MedIR; an accepted
 LowIR region may still fail ordinary call/return or ABI validation. Do not use
