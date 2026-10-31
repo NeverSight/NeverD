@@ -1147,6 +1147,20 @@ buildInstruction(SpecializationInstruction Instruction,
     Kind = Call ? Exit::Call : Exit::Return;
   } else if (Instruction.Origin.Control == LowInstructionControl::Branch) {
     Kind = Exit::Jump;
+    if (!Instruction.Ops.empty() &&
+        Instruction.Ops.back().Opcode == NdOp::INDIR_BR &&
+        Instruction.Ops.back().Inputs[0].isConst()) {
+      // Ordinary LowIR names a constant memory slot. Reuse the authenticated
+      // machine-exit projection to obtain its live target, as raw regions do.
+      auto Expanded = expandX64MachineExit(
+          Instruction,
+          {1, Result.Address, SpecializationX64MachineExitKind::Jump},
+          NdVar::tmp(ScratchBase - 16, 8));
+      if (!Expanded)
+        return Expanded.takeError();
+      Instruction.Ops = std::move(Expanded->Ops);
+      Instruction.UndefinedEffects = std::move(Expanded->UndefinedEffects);
+    }
   }
   auto RequireNative = [&](llvm::StringRef Reason) {
     Result.RequiresNativeExecution = true;
