@@ -12,6 +12,7 @@
 #include "neverd/ir/med/MedStackAlignment.h"
 
 #include "../../../safety/StackSlotFlow.h"
+#include "MedScalarSelectRange.h"
 #include "MedStackRecurrence.h"
 
 #include "neverd/ArchSupport.h"
@@ -424,6 +425,74 @@ private:
   }
   std::map<Key, std::optional<CountedStackRecurrence>> Recurrences;
 
+  std::vector<detail::ScalarConstraint> ScalarConstraints;
+
+  bool stableScalarConstant(const MedVar &Value) const {
+    return Value.isConst() && !isAddressProvenance(Value.Provenance) &&
+           !(RangeImage &&
+             Value.Provenance == ConstantAddressProvenance::Unknown &&
+             RangeImage->isPotentiallyRelocatableAddress(Value.ConstVal));
+  }
+
+  std::optional<const MedOp *> scalarDefinition(const MedVar &Value) const {
+    if (Value.isConst() || !Value.Size)
+      return std::nullopt;
+    const auto At = Definitions.find(key(Value));
+    if (At == Definitions.end())
+      return nullptr;
+    const auto &Def = At->second;
+    if (Def.Ambiguous)
+      return std::nullopt;
+    if (Def.Join)
+      return sameOccurrence(Def.Join->Output, Value) &&
+                     !Def.Join->ExceptionalEntry
+                 ? std::optional<const MedOp *>(nullptr)
+                 : std::nullopt;
+    const MedOp *Op = Def.Op;
+    if (!Op || !sameOccurrence(Op->Output, Value) || Op->Dead ||
+        Op->MemoryOrdering != NdMemoryOrdering::None ||
+        Op->MemoryAddressSpace != NdMemoryAddressSpace::Default ||
+        !Op->IntrinsicOutputs.empty())
+      return std::nullopt;
+    return Op;
+  }
+
+  llvm::ConstantRange scalarSlice(const MedVar &Value, unsigned Offset,
+                                  unsigned Bytes, unsigned Depth) {
+    const unsigned Bits = Bytes * 8;
+    if (++Steps > kMaxProofSteps ||
+        Depth > limits::ir::kMedStackAlignmentResolveDepthLimit)
+      return llvm::ConstantRange(Bits, true);
+    // A low-byte query must not lose its known bytes by first joining the
+    // complete value with an unrelated, unconstrained upper register slice.
+    const auto Def = scalarDefinition(Value);
+    if (Def && *Def) {
+      const auto &Op = **Def;
+      if (Op.Opcode == NdOp::COPY && Op.NumInputs == 1 &&
+          Op.Inputs[0].Size == Value.Size)
+        return scalarSlice(Op.Inputs[0], Offset, Bytes, Depth + 1);
+      if (Op.Opcode == NdOp::SUBBYTES && Op.NumInputs == 2 &&
+          stableScalarConstant(Op.Inputs[1]) &&
+          Op.Inputs[0].Size >= Value.Size &&
+          Op.Inputs[1].ConstVal <= Op.Inputs[0].Size - Value.Size)
+        return scalarSlice(Op.Inputs[0], Offset + Op.Inputs[1].ConstVal, Bytes,
+                           Depth + 1);
+      if (Op.Opcode == NdOp::CONCAT && Op.NumInputs == 2 && Op.Inputs[0].Size &&
+          Op.Inputs[1].Size &&
+          Op.Inputs[0].Size + Op.Inputs[1].Size == Value.Size) {
+        const unsigned Low = Op.Inputs[1].Size;
+        if (Offset >= Low)
+          return scalarSlice(Op.Inputs[0], Offset - Low, Bytes, Depth + 1);
+        if (Offset + Bytes <= Low)
+          return scalarSlice(Op.Inputs[1], Offset, Bytes, Depth + 1);
+      }
+    }
+    const auto Input = scalarRange(Value, Depth + 1);
+    return Input
+        .lshr(llvm::ConstantRange(llvm::APInt(Input.getBitWidth(), Offset * 8)))
+        .zextOrTrunc(Bits);
+  }
+
   /// Scalar bounds retain machine-width wrapping. Unknown scalar values have
   /// their full bit range; only a narrower extension or mask can bound them.
   llvm::ConstantRange scalarRange(const MedVar &Value, unsigned Depth) {
@@ -440,6 +509,10 @@ private:
         return Full;
       return llvm::ConstantRange(llvm::APInt(Bits, Value.ConstVal));
     }
+    for (auto At = ScalarConstraints.rbegin(); At != ScalarConstraints.rend();
+         ++At)
+      if (sameOccurrence(At->Root, Value))
+        return At->Values;
     const auto Found = Definitions.find(key(Value));
     if (Found == Definitions.end() || Found->second.Ambiguous ||
         !RangeActive.insert(key(Value)).second)
@@ -485,10 +558,35 @@ private:
         Op->Inputs[1].isConst() &&
         !isAddressProvenance(Op->Inputs[1].Provenance) &&
         Op->Inputs[1].ConstVal <= Op->Inputs[0].Size - Value.Size) {
-      const auto Input = scalarRange(Op->Inputs[0], Depth + 1);
-      const llvm::ConstantRange Shift(
-          llvm::APInt(Input.getBitWidth(), Op->Inputs[1].ConstVal * 8));
-      return Input.lshr(Shift).zextOrTrunc(Bits);
+      return scalarSlice(Op->Inputs[0], Op->Inputs[1].ConstVal, Value.Size,
+                         Depth + 1);
+    }
+    if (Op->Opcode == NdOp::INT_OR || Op->Opcode == NdOp::SELECT) {
+      detail::ScalarSelectRange Proof(
+          [&](const MedVar &V) { return scalarDefinition(V); }, sameOccurrence,
+          [&](const MedVar &V) { return stableScalarConstant(V); }, Steps);
+      if (const auto Select = Proof.selection(*Op, Depth + 1)) {
+        const auto True = Proof.condition(Select->Condition, true, Depth + 1);
+        const auto False = Proof.condition(Select->Condition, false, Depth + 1);
+        if (True && False) {
+          const auto Arm = [&](const MedVar &V,
+                               const detail::ScalarConstraint &Constraint) {
+            auto Refined = Constraint;
+            for (const auto &Parent : ScalarConstraints)
+              if (sameOccurrence(Parent.Root, Refined.Root))
+                Refined.Values = Refined.Values.intersectWith(Parent.Values);
+            if (Refined.Values.isEmptySet())
+              return llvm::ConstantRange(Bits, false);
+            ScalarConstraints.push_back(std::move(Refined));
+            const auto Clear =
+                llvm::scope_exit([&] { ScalarConstraints.pop_back(); });
+            return scalarRange(V, Depth + 1);
+          };
+          const auto Left = Arm(Select->TrueValue, *True);
+          const auto Right = Arm(Select->FalseValue, *False);
+          return Left.unionWith(Right);
+        }
+      }
     }
     if (Op->NumInputs == 1 && Op->Inputs[0].Size &&
         Op->Inputs[0].Size <= Value.Size) {

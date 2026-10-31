@@ -490,8 +490,18 @@ These facts do not alter native argument summaries or physical stores.
 `MedStackAlignment` also owns signed entry-relative offset bounds for dynamic
 allocations. Machine-width scalar ranges, complete PHI components and checked
 offset arithmetic can separate their CALL return slots from fixed frame loads
-without inventing an exact stack address. Identity copies join the same PHI
-component. Every component needs an outside origin; an unrelated unseeded cycle
+without inventing an exact stack address. `MedScalarSelectRange` retains the
+relationship between a scalar selection and its selecting comparison. It
+normalizes low-bit affine comparisons with modular arithmetic, constrains only
+the selected arm, and unions both results. Byte slices can follow their own
+CONCAT component without evaluating unrelated upper bytes. Constraints use
+exact SSA occurrences and never survive their arm or query; ambiguous,
+ordered, segmented, stale and non-Boolean mask evidence supplies no bound.
+The proof shares the existing depth/work limits and immutable definition index.
+`MedScalarSelection` owns the exact-width complementary-mask shape shared with
+LLVM pointer projection. These ranges do not prove pointer noncapture, remove
+exceptional observers or supply missing source arguments.
+Identity copies join the same PHI component. Every component needs an outside origin; an unrelated unseeded cycle
 remains unknown. The return-slot reader
 splits the observed bytes wherever a store, a CALL slot or a load begins or
 ends, and moves every such interval backward together, one 64-interval word at

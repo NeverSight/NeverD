@@ -2919,6 +2919,8 @@ TEST(Win64Forwarder, ArgumentSlotTheCalleeNeverReadsIsZero) {
   Options.Image = &Img;
   ASSERT_TRUE(HighCEmitter().emit({*Caller}, Stream, Options));
   Stream.flush();
-  EXPECT_NE(Source.find("sub_140001030(0, 1)"), std::string::npos) << Source;
+  // An unprototyped call still passes the complete unused register carrier.
+  EXPECT_NE(Source.find("sub_140001030((uint64_t)0, 1)"), std::string::npos)
+      << Source;
   EXPECT_EQ(Source.find("unknown"), std::string::npos) << Source;
 }

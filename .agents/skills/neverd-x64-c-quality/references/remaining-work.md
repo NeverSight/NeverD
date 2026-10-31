@@ -39,6 +39,17 @@ configurations remain separate coverage.
 
 ## Open
 
+Guarded scalar index ranges now preserve the comparison/selected-value
+relationship through machine-width wrapping, low-byte transport and
+complementary masks. The stack proof and LLVM pointer projection share the
+mask shape owner. Public regressions cover all native architectures/formats
+and conservative refusals. A private Windows snapshot comparison executes one
+complete calculation function and its original security-cookie callee through
+both C routes at O0/O2 over nine input cases. This establishes that bounded
+function comparison, not complete execution of the five remaining roots.
+Their 56 ordinary argument occurrences and automatic ordinary/state composition
+remain open; range facts alone do not exclude GS/callee or alias observers.
+
 Explicit machine-region C now accepts authenticated entry-object exclusions through a shared entry guard. Both C routes check whole-range nonwrapping and frame separation before guest/state/tape effects; object aliases and equal roots with disjoint ranges remain valid. Owned execution tests cover all four state layouts, optional alignment, full-width endpoints and exact wrapper budgets. This closes the source-contract gap; ordinary ABI inference, accessibility and other caller memory premises remain separate.
 
 LLVMC's late conditional fold now requires its body to follow the current
