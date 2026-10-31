@@ -1,5 +1,11 @@
 # Explicit x64 continuation C
 
+The `amd-svm-v10` profile extends V4 with native VMRUN exchange state and a
+VMEXIT stop (status 13). Its distinct 2464-byte layout requires unchanged
+XCR0=7 and the declared native SVM environment. Canonical addr64/addr32 original
+bytes share both C routes; this profile does not inherit the Intel V5–V9 return
+domains. See [the SVM invocation contract](x86-vmrun-context.md#original-byte-source-continuation).
+
 `neverd decompile --x64-continuation=request.json` exports selected machine
 instructions from linked x64 ELF or PE images as C with an explicit architectural
 state. Raw images and relocatable objects retain their existing native-provider

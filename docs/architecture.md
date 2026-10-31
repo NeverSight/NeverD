@@ -15094,6 +15094,27 @@ same work allowance before returning.
 
 ### Explicit x64 continuation export
 
+`X64ContinuationSvm` owns V10's raw VMRUN state exchange. It maps the fourteen
+software-managed registers through `ir/X86/X86SvmContext.h`, imports/exports
+the represented XMM/YMM and MXCSR cells through standard XSAVE images, captures
+actual completed CR2, and preserves restored host RAX/RSP/flags. The shared
+VMX/SVM shape validator admits its pointer and constant width; both C routes
+and native LLVM use that same context operation. The profile explicitly binds
+the native VMM environment and unchanged XCR0=7. VMEXIT status 13 stops dispatch
+before the following original instruction, including invalid-VMCB exits.
+Context/image overlap, malformed headers and unavailable SDK code generation
+remain explicit refusals. This state interface supplies no ordinary C ABI.
+For SVM entry selection, `X64SpecialRegions` follows the checked original
+VMEXIT fallthrough when ordinary lifting stops at VMRUN. That edge retains
+call depth; only direct CALL discovery increases it. A depth-ordered frontier
+deduplicates entries and promotes an already queued deeper entry before
+recovery. The shared `lift/X86/X86SvmEncoding.h` reader authorizes only the two
+canonical encodings. Selection still grants no ordinary LowIR admission and
+does not remove the execution-time VMEXIT stop. CALL discovery decodes audited
+instruction starts through the shared decoder; rejected bodies have no
+LowFunc but retain their original call sites. No propagated register target
+or ordinary call ABI is inferred.
+
 `exportX64Continuation` owns bounded JSON selection, checked instruction-state
 projection and paired C/manifest generation. SDK and CLI adapters call this
 pipeline owner. It reuses `buildX64ContinuationSource` and the shared source ABI

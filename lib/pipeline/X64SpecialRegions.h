@@ -27,7 +27,8 @@ struct BinaryImage;
 class DebugContext;
 namespace analysis {
 struct X64ContinuationInstructionSource;
-}
+struct X64ContinuationSourceOptions;
+} // namespace analysis
 
 struct X64SpecialRegionSelection {
   std::vector<va_t> Addresses;
@@ -35,14 +36,19 @@ struct X64SpecialRegionSelection {
 };
 
 /// Recover each entry once, in breadth-first batches. Only original direct
-/// CALL targets in mapped image code extend the next wave; imports, indirect
-/// calls and the depth frontier stay environment boundaries. Instruction
-/// budgets apply to the union, including overlaps and recursive call graphs.
-/// No argument, pointer noncapture or ordinary-source fact follows from this.
-llvm::Expected<X64SpecialRegionSelection>
-selectX64SpecialRegions(const BinaryImage &Image, llvm::ArrayRef<va_t> Entries,
-                        uint64_t MaxInstructions, unsigned CalleeDepth,
-                        DebugContext *Debug);
+/// CALL targets in mapped image code extend the next call depth; imports,
+/// indirect calls and the depth frontier stay environment boundaries.
+/// Decode those targets at the audit's instruction starts even if ordinary
+/// lifting rejects the containing body. No LowFunc is required for selection.
+/// Instruction budgets apply to the union, including overlaps and recursive
+/// call graphs. No argument, pointer noncapture or ordinary-source fact follows
+/// from this. The SVM profile additionally selects canonical VMRUN's original
+/// VMEXIT fallthrough at the same call depth. Execution still stops at that
+/// boundary.
+llvm::Expected<X64SpecialRegionSelection> selectX64SpecialRegions(
+    const BinaryImage &Image, llvm::ArrayRef<va_t> Entries,
+    const analysis::X64ContinuationSourceOptions &SourceOptions,
+    unsigned CalleeDepth, DebugContext *Debug);
 
 /// Connect adjacent selected instructions after checking their actual next PC.
 /// All other transfers use the common indexed dispatch. Keep instruction exits,

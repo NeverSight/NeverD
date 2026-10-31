@@ -57,6 +57,8 @@ enum class InterpreterProfileProjection : uint8_t {
   /// Canonical UINTR bytes require the explicit V8 UIF/monitor/return owner.
   X64UserInterruptV1,
   X64FredReturnV1,
+  /// VMRUN requires the explicit native SVM state/environment contract.
+  X64SvmRunV1,
 };
 
 } // namespace neverd::analysis

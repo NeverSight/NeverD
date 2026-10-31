@@ -404,6 +404,8 @@ inline X86VirtualizationShape x86VirtualizationLowShape(const LowOp &Op,
     const auto &Input = Op.Inputs[I + 1];
     Shape.InputSizes[I] = Input.Size;
     Shape.ScalarInputs[I] = Input.isConst() || Input.isReg() || Input.isTemp();
+    if (I == 1 && Input.isConst())
+      Shape.AddressWidth = Input.Offset;
   }
   return Shape;
 }

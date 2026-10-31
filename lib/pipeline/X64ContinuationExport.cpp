@@ -103,13 +103,17 @@ llvm::Expected<Request> readRequest(llvm::StringRef Text) {
                      llvm::StringRef(Key));
   const auto Profile = Object->getString("profile");
   if (Profile != "kernel-events-v6" && Profile != "intel-fast-system-v7" &&
-      Profile != "intel-user-interrupt-v8" && Profile != "intel-fred-return-v9")
+      Profile != "intel-user-interrupt-v8" &&
+      Profile != "intel-fred-return-v9" && Profile != "amd-svm-v10")
     return invalid(
         "an explicit kernel-events-v6, intel-fast-system-v7 or "
-        "intel-user-interrupt-v8 or intel-fred-return-v9 profile is required");
+        "intel-user-interrupt-v8, intel-fred-return-v9 or amd-svm-v10 profile "
+        "is required");
   Request Result;
   auto &Options = Result.Options;
-  Options.Profile = Profile == "intel-fred-return-v9"
+  Options.Profile = Profile == "amd-svm-v10"
+                        ? X64ContinuationProfile::NativeSvmNoFaultV10
+                    : Profile == "intel-fred-return-v9"
                         ? X64ContinuationProfile::FredReturnNoFaultV9
                     : Profile == "intel-user-interrupt-v8"
                         ? X64ContinuationProfile::UserInterruptNoFaultV8
@@ -129,12 +133,14 @@ llvm::Expected<Request> readRequest(llvm::StringRef Text) {
   if (*Mask > std::numeric_limits<uint32_t>::max())
     return invalid("mxcsr_mask must fit in 32 bits");
   Options.MXCSRMask = uint32_t(*Mask);
-  auto Paging = RequiredInteger("paging_address_bits");
-  if (!Paging)
-    return Paging.takeError();
-  if (*Paging != 48 && *Paging != 57)
-    return invalid("paging_address_bits must be 48 or 57");
-  Options.PagingAddressBits = unsigned(*Paging);
+  if (Profile != "amd-svm-v10" || Object->get("paging_address_bits")) {
+    auto Paging = RequiredInteger("paging_address_bits");
+    if (!Paging)
+      return Paging.takeError();
+    if (*Paging != 48 && *Paging != 57)
+      return invalid("paging_address_bits must be 48 or 57");
+    Options.PagingAddressBits = unsigned(*Paging);
+  }
   if (const auto *Value = Object->get("null_segment_base_policy")) {
     const auto Policy = Value->getAsString();
     if (Policy == "clear")
@@ -275,7 +281,15 @@ typedef struct {
     uint8_t ZMM[32][64];
     uint64_t Undefined[8], CR8, KernelGSBase;
     uint32_t MXCSR, ReservedV2;
-    uint64_t ReservedTailV2, CR2, ReservedV4, STAR;
+    uint64_t ReservedTailV2, CR2, ReservedV4;
+)C";
+  if (Version == 10)
+    OS << R"C(
+    struct { uint64_t VMCB, GuestXState, HostXState, XStateMask, GPR[14]; } SVM;
+)C";
+  else
+    OS << R"C(
+    uint64_t STAR;
     neverd_x64_segment CS, SS;
     uint64_t ReservedV5;
     neverd_x64_descriptor_table GDTR, IDTR;
@@ -283,9 +297,9 @@ typedef struct {
     neverd_x64_segment_metadata FS, GS;
     uint8_t Unusable, NMIBlocked, ReservedV6[14];
 )C";
-  if (Version >= 7)
+  if (Version >= 7 && Version <= 9)
     OS << "    uint64_t SysenterCS, SysenterESP, SysenterEIP, ReservedV7;\n";
-  if (Version >= 8)
+  if (Version >= 8 && Version <= 9)
     OS << "    uint8_t UIF, MonitorActive, ReservedV8[14];\n";
   if (Version == 9)
     OS << "    uint64_t FredConfig; uint8_t STIBlocked, PendingDebug, "
@@ -317,28 +331,32 @@ typedef struct {
   FIELD(X64ContinuationStateV2, ReservedTailV2, ReservedTail);
   FIELD(X64ContinuationStateV4, CR2, CR2);
   FIELD(X64ContinuationStateV4, ReservedV4, Reserved);
-  FIELD(X64ContinuationStateV5, STAR, STAR);
-  FIELD(X64ContinuationStateV5, CS, CS);
-  FIELD(X64ContinuationStateV5, SS, SS);
-  FIELD(X64ContinuationStateV5, ReservedV5, Reserved);
-  FIELD(X64ContinuationStateV6, GDTR, GDTR);
-  FIELD(X64ContinuationStateV6, IDTR, IDTR);
-  FIELD(X64ContinuationStateV6, LDTR, LDTR);
-  FIELD(X64ContinuationStateV6, TR, TR);
-  FIELD(X64ContinuationStateV6, DS, DS);
-  FIELD(X64ContinuationStateV6, ES, ES);
-  FIELD(X64ContinuationStateV6, FS, FS);
-  FIELD(X64ContinuationStateV6, GS, GS);
-  FIELD(X64ContinuationStateV6, Unusable, Unusable);
-  FIELD(X64ContinuationStateV6, NMIBlocked, NMIBlocked);
-  FIELD(X64ContinuationStateV6, ReservedV6, Reserved);
-  if (Version >= 7) {
+  if (Version == 10) {
+    FIELD(X64ContinuationStateV10, SVM, SVM);
+  } else {
+    FIELD(X64ContinuationStateV5, STAR, STAR);
+    FIELD(X64ContinuationStateV5, CS, CS);
+    FIELD(X64ContinuationStateV5, SS, SS);
+    FIELD(X64ContinuationStateV5, ReservedV5, Reserved);
+    FIELD(X64ContinuationStateV6, GDTR, GDTR);
+    FIELD(X64ContinuationStateV6, IDTR, IDTR);
+    FIELD(X64ContinuationStateV6, LDTR, LDTR);
+    FIELD(X64ContinuationStateV6, TR, TR);
+    FIELD(X64ContinuationStateV6, DS, DS);
+    FIELD(X64ContinuationStateV6, ES, ES);
+    FIELD(X64ContinuationStateV6, FS, FS);
+    FIELD(X64ContinuationStateV6, GS, GS);
+    FIELD(X64ContinuationStateV6, Unusable, Unusable);
+    FIELD(X64ContinuationStateV6, NMIBlocked, NMIBlocked);
+    FIELD(X64ContinuationStateV6, ReservedV6, Reserved);
+  }
+  if (Version >= 7 && Version <= 9) {
     FIELD(X64ContinuationStateV7, SysenterCS, SysenterCS);
     FIELD(X64ContinuationStateV7, SysenterESP, SysenterESP);
     FIELD(X64ContinuationStateV7, SysenterEIP, SysenterEIP);
     FIELD(X64ContinuationStateV7, ReservedV7, Reserved);
   }
-  if (Version >= 8) {
+  if (Version >= 8 && Version <= 9) {
     FIELD(X64ContinuationStateV8, UIF, UIF);
     FIELD(X64ContinuationStateV8, MonitorActive, MonitorActive);
     FIELD(X64ContinuationStateV8, ReservedV8, Reserved);
@@ -368,7 +386,7 @@ void driver(llvm::raw_ostream &OS,
  * may change all state at a stopping boundary before resuming.
  * Arbitrary-value slots are caller-selected per dynamic instruction;
  * leaving them unchanged selects a subset of permitted executions.
- * 0..7,10..12: instruction exits; 8: outside selection; 9: budget exhausted. */
+ * 0..7,10..13: instruction exits; 8: outside selection; 9: budget exhausted. */
 )C";
   OS << (FollowInternalCalls
              ? "/* CALL/RET continue only when their actual target is "
@@ -426,8 +444,7 @@ exportX64Continuation(const BinaryImage &Image, llvm::StringRef RequestJSON,
   llvm::json::Array Regions;
   std::vector<va_t> Addresses = Request->Addresses;
   if (Request->Entries) {
-    auto Selection = selectX64SpecialRegions(Image, Addresses,
-                                             Request->Options.MaxInstructions,
+    auto Selection = selectX64SpecialRegions(Image, Addresses, Request->Options,
                                              Request->CalleeDepth, Debug);
     if (!Selection)
       return Selection.takeError();
@@ -464,7 +481,8 @@ exportX64Continuation(const BinaryImage &Image, llvm::StringRef RequestJSON,
   X64ContinuationExport Result;
   llvm::raw_string_ostream OS(Result.Source);
   const auto Version = Units->front().StateVersion;
-  const auto Profile = Version == 9   ? "intel-fred-return-v9"
+  const auto Profile = Version == 10  ? "amd-svm-v10"
+                       : Version == 9 ? "intel-fred-return-v9"
                        : Version == 8 ? "intel-user-interrupt-v8"
                        : Version == 7 ? "intel-fast-system-v7"
                                       : "kernel-events-v6";
@@ -530,7 +548,18 @@ exportX64Continuation(const BinaryImage &Image, llvm::StringRef RequestJSON,
       {"regions", std::move(Regions)},
       {"units", std::move(Manifest)},
       {"domain",
-       (Version == 9
+       (Version == 10
+            ? "native CPL0 AMD SVM; unchanged XCR0=7; explicit GPR, x87, "
+              "XMM/YMM, MXCSR and CR2; native VMM owns VMCB, VM_HSAVE_PA, GIF, "
+              "intercepts, debug/supervisor banks and mappings; FS/GS, "
+              "KernelGSBase and CR8 agree with state and are guest-preserved; "
+              "guest system changes preserve the compiler ABI; distinct "
+              "64-byte-aligned standard 832-byte XSAVE images; code, state, "
+              "buffers and compiler stack stay mapped and disjoint from "
+              "guest writes and hardware-written VMCB/VM_HSAVE_PA pages; "
+              "no nested SVM, SEV-ES, SMM or CET; VMEXIT stops "
+              "with status 13, including invalid VMCBs; "
+        : Version == 9
             ? "Intel FRED enabled; canonical ERETS/ERETU at CPL0; "
               "64-bit entry; ERETU permits compatibility return with explicit "
               "conditional GPR choices; explicit stack-level and event "
@@ -550,14 +579,17 @@ exportX64Continuation(const BinaryImage &Image, llvm::StringRef RequestJSON,
               "64-bit entry; live SYSENTER MSRs with declared processor width; "
             : "CPL0 64-bit entry; CET/FRED disabled; ") +
            std::string(
-               Version == 9
+               Version == 9 || Version == 10
                    ? ""
                    : "16/32/64-bit IRET/RETF require canonical raw frame RIP; "
                      "compatibility targets own eight conditional "
                      "GPR high-half choices; ") +
+           std::string(Version == 10
+                           ? "declared MXCSR mask; "
+                           : "valid caches; declared active paging and "
+                             "MXCSR mask; ") +
            std::string(
-               "valid caches; declared active paging and MXCSR "
-               "mask; successful sequential RAM; no MMIO, "
+               "successful sequential RAM; no MMIO, "
                "concurrent writes, faults or asynchronous events; exact "
                "immutable "
                "instruction bytes; accessible disjoint state and budget; "

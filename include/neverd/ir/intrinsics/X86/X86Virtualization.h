@@ -17,6 +17,7 @@
 
 #include <array>
 #include <cstdint>
+#include <optional>
 
 namespace neverd {
 
@@ -34,6 +35,7 @@ struct X86VirtualizationShape {
   uint8_t Arguments = 0;
   std::array<uint16_t, 2> InputSizes{};
   std::array<bool, 2> ScalarInputs{};
+  std::optional<uint64_t> AddressWidth;
 };
 
 constexpr bool
@@ -49,6 +51,12 @@ x86VirtualizationShapeIsValid(Intrinsic Id,
        Shape.MemoryAddressSpace != NdMemoryAddressSpace::Default) ||
       Shape.Arguments != C.Arguments)
     return false;
+  if (Id == Intrinsic::X86SvmRunContext)
+    return Shape.TargetArch != Arch::X86 && !Shape.OutputSize &&
+           Shape.MemoryAddressSpace == NdMemoryAddressSpace::Default &&
+           Shape.ScalarInputs[0] && Shape.ScalarInputs[1] &&
+           Shape.InputSizes[0] == 8 && Shape.InputSizes[1] == 4 &&
+           (Shape.AddressWidth == 32 || Shape.AddressWidth == 64);
   uint16_t Word = Shape.TargetArch == Arch::X86 ? 4 : 8;
   if (Shape.TargetArch == Arch::Unknown && C.Arguments &&
       C.MemoryArgument != 0 && !C.PhysicalAddress &&

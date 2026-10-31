@@ -52,6 +52,15 @@
 
 namespace neverd {
 
+static bool supportsSvmContext(const llvm::Module &Mod) {
+  const auto *Function = Mod.getFunction("llvm.x86.vmrun.context");
+  if (!Function || Function->use_empty() || Function->getIntrinsicID())
+    return true;
+  llvm::WithColor::error() << "native VMRUN context requires an LLVM SDK with "
+                              "llvm.x86.vmrun.context support\n";
+  return false;
+}
+
 /// Reapply the frame requirement after optimization, including inlining into
 /// a function that originally had no stack-writing architectural operations.
 static void reserveX86StackTemporaries(llvm::Module &Mod, Arch TargetArch) {
@@ -334,6 +343,8 @@ CodegenResult Codegen::compile(llvm::Module &Mod, Arch TargetArch,
                                llvm::StringRef TargetTriple) {
   CodegenResult Result;
   ensureTargets();
+  if (!supportsSvmContext(Mod))
+    return Result;
   if (Mod.getModuleFlag(macho_loader::cache_load::kAnalysisFlag)) {
     llvm::WithColor::error() << macho_loader::cache_load::kRebuildUnsupported;
     return Result;
@@ -565,6 +576,10 @@ llvm::mc_rewrite::RewriteResult Codegen::compileForRewrite(
     llvm::StringRef TargetTriple, RewriteInputKind InputKind) {
   llvm::mc_rewrite::RewriteResult Result;
   ensureTargets();
+  if (!supportsSvmContext(Mod)) {
+    Result.ImageValid = false;
+    return Result;
+  }
   if (Mod.getModuleFlag(macho_loader::cache_load::kAnalysisFlag)) {
     llvm::WithColor::error() << macho_loader::cache_load::kRebuildUnsupported;
     Result.ImageValid = false;

@@ -50,7 +50,8 @@ The caller provides CPUID-sized, 64-byte-aligned standard XSAVE buffers,
 initialized reserved header bytes and a mask covering all enabled XCR0 user
 components. XCR0 stays unchanged. Context, buffers and compiler stack must
 remain accessible and disjoint from guest-writable RAM, including after guest
-xstate is loaded. SVM setup, GIF, intercepts, supervisor state and any required
+xstate is loaded. They must also be disjoint from the hardware-written VMCB
+and VM_HSAVE_PA pages. SVM setup, GIF, intercepts, supervisor state and any required
 VMLOAD/VMSAVE remain VMM responsibilities. Guest system-state changes must
 preserve the host's software ABI. Processor faults are not caught.
 
@@ -77,10 +78,84 @@ therefore contains 490 generated-context round trips and ten independent
 original-byte counterexamples.
 
 This completes a native explicit GPR/user-xstate interface and its IR-to-C
-projection. **Ordinary strict lifting of raw VMRUN remains refused.** It still
-needs a pipeline-owned complete machine-state continuation, including the
-software-managed supervisor state and the guest/host memory environment.
-The successful native test cannot supply that missing ownership by inference.
+projection. The original 2026-10-30 qualification did not yet connect raw
+instruction selection to that interface. The following separate source profile
+now provides that connection without inferring an ordinary function ABI.
 Physical AMD execution, other XCR0 components, faults, nested SVM, SEV-ES and
 arbitrary guest system/mode changes are unqualified. The SDK release, pin and
 LLVM submodule update are not advanced on the strength of this bounded API.
+
+## Original-byte source continuation
+
+`amd-svm-v10` accepts canonical long-mode `0F 01 D8` and `67 0F 01 D8`
+through the binary instruction reader. Both HighC and LLVM C consume one
+checked state transition. The intrinsic has an explicit context pointer and
+immediate address width, no scalar result, and unknown memory effects. Old
+SDKs can transport this interface into LLVM C; native object/rewrite emission
+refuses until the SDK actually supports it.
+
+Pass this request to `--x64-continuation` (using the addresses of the selected
+original instructions), or to the existing size-delimited C SDK:
+
+```json
+{
+  "profile": "amd-svm-v10",
+  "mxcsr_mask": "0xffff",
+  "instructions": [4096, 4099, 4104, 4107, 4110]
+}
+```
+
+The generated `neverd_x64_state_v10` is 2464 bytes with 16-byte alignment.
+Its first 2320 bytes retain V4; it then appends the native `SVM` context. This
+does not extend the Intel event/return profiles. Callers provide
+`SVM.GuestXState` and `SVM.HostXState`: distinct, accessible, 64-byte-aligned
+832-byte **standard** XSAVE images. The guest image owns x87; the explicit
+state owns MXCSR and the low 32 bytes of ZMM0..15. Before entry the transition
+imports these SIMD cells into the image and marks them present. After exit
+it publishes all fourteen GPRs and SIMD/MXCSR outputs, including initial-state
+components whose XSAVE bit is clear. Unrepresented upper-vector storage is
+preserved. Other SVM context fields are exchange outputs/scratch, not another
+set of instruction inputs.
+
+Host RAX and RSP remain unchanged. Addr32 truncates only the VMCB physical
+address, not restored host RAX. Host RFLAGS retain their values except RF;
+guest RAX/RSP/RIP/RFLAGS and exit information remain in the VMCB. CR2 is read
+from the actual CPU after VMEXIT because an invalid VMCB may exit before its
+guest save area has been installed. Reading a VMCB field instead would invent
+completion on that path.
+
+Every VMEXIT, including VMEXIT_INVALID, returns status **13**, advances PC to
+the original fallthrough, and consumes one instruction budget unit. Both
+dispatcher forms stop even if the fallthrough is selected. The environment
+can handle the exit and resume the following original instructions. Invalid
+serialized controls return status 5 before any state or exchange-image write;
+earlier profiles keep VMRUN as an unexecuted native boundary.
+
+Function `entries` selection follows each canonical VMRUN's VMEXIT fallthrough
+at the same call depth. The manifest records these `vmexit_successors`; the
+ordinary strict lifter still refuses the instruction. Selection discovers the
+resume code, while execution still stops at each VMEXIT so the VMM can handle
+it before resuming. Direct CALL targets come from decoding the audited
+instruction starts, including in a rejected containing body; they do not
+depend on a surviving LowFunc or on propagated register values. Calls before
+and after VMEXIT retain the requested `callee_depth` boundary.
+
+The profile binds a CPL0 native SVM environment with unchanged XCR0=7. The
+VMM owns VMCB/VM_HSAVE_PA, GIF, intercepts, debug/supervisor banks and mappings.
+FS/GS/KernelGSBase and CR8 must agree with the explicit cells and remain
+guest-preserved; other system changes must preserve the compiler's host ABI.
+Generated code, state, buffers and compiler stack stay mapped and disjoint
+from guest writes and hardware-written VMCB/VM_HSAVE_PA pages. Successful
+ordinary RAM, immutable original code, no
+concurrent writers, asynchronous events, faults, nested SVM, SEV-ES, SMM or
+CET are part of the invocation domain. **Ordinary function-ABI lifting of
+arbitrary VMRUN remains refused**: environmental facts are never inferred.
+
+The original-byte qualification runs both actual exported C forms through
+NeverC and through NeverC bitcode followed by the full LLVM fork, each at
+O0/O2. Its eight profiles complete 400 generated-context calls, eight
+independent executions of the original IDA counterexample and eight original
+addr32/RAX checks. Each profile includes the complete selected original
+function, including its VMEXIT stop and subsequent MOV/RET. See
+[the source-continuation evidence](evidence/x86-vmrun-source-2026-10-31.json)
+for commands, source/tool hashes and the bounded invocation domain.

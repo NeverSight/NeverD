@@ -34,6 +34,25 @@ llvm::Value *MedLLVMEmitter::emitX86Virtualization(const MedOp &Op,
         " output=" + llvm::Twine(Op.Output.Size) +
         " inputs=" + llvm::Twine(static_cast<unsigned>(Op.NumInputs)));
   const auto C = x86VirtualizationContract(Id);
+  if (Id == Intrinsic::X86SvmRunContext) {
+    auto *Pointer = resolveAtomicMemoryPtr(Op.Inputs[1], C.MemoryBytes,
+                                           Builder.getInt8Ty(), Builder);
+    auto *Type = llvm::FunctionType::get(
+        Builder.getVoidTy(), {Builder.getPtrTy(), Builder.getInt32Ty()}, false);
+    auto Callee = Mod->getOrInsertFunction("llvm.x86.vmrun.context", Type);
+    auto *Function = llvm::cast<llvm::Function>(Callee.getCallee());
+    Function->setMemoryEffects(llvm::MemoryEffects::unknown());
+    Function->addFnAttr(llvm::Attribute::Convergent);
+    Function->addFnAttr(llvm::Attribute::NoDuplicate);
+    Function->addFnAttr(llvm::Attribute::NoUnwind);
+    if (Function->getIntrinsicID())
+      Function->addParamAttr(1, llvm::Attribute::ImmArg);
+    // The old SDK may transport this extension into LLVM C. Native object
+    // emission explicitly refuses it until its backend recognizes the API.
+    Builder.CreateCall(Callee,
+                       {Pointer, Builder.getInt32(Op.Inputs[2].ConstVal)});
+    return nullptr;
+  }
   const uint16_t Word = TargetArch == Arch::X64 ? 8 : 4;
   const auto P =
       x86VirtualizationAsm(Id, TargetArch, Op.MemoryAddressSpace,

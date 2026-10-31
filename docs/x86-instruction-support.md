@@ -267,7 +267,7 @@ test resumes through a coupled SS/RSP switch and uses the new stack.
 | LDS, LES, LSS, LFS, LGS | LLVM provides 13 native interfaces and NeverC the nine valid long-mode builtins. Explicit V6 owns LSS/LFS/LGS GPR, selector, descriptor/cache and fallthrough state under Intel operand rules, including null SS at CPL0 and declared clear/preserve FS/GS base policies. i386/compatibility forms, other processor qualification and fault delivery remain open. Ordinary strict/permissive lifting still refuses the scalar load/COPY approximation. |
 | Unowned and i386 3DNow! operations | All 24 operations now retain their original instruction inside the owned x64 MMX/x87 context, qualified below. Typed/unowned and i386 paths still require a state contract. Strict and portable concrete execution refuse processor-dependent values. Physical execution and pending-#MF/stack-#SS behavior remain unqualified. LLVM and NeverC provide the native packed-value interfaces. |
 | Unowned FNOP/EMMS/FEMMS | Waiting behavior and tag/payload transitions require an owned x87 context. Owned x64 native and explicit portable paths retain all three instructions, including FEMMS payload invalidation; typed/unowned and i386 paths still refuse rather than emit NOP. Portable MMX data operations remain outside the admitted profile. |
-| VMRUN | LLVM/NeverC now provide an explicit native fourteen-GPR/user-xstate context and returning VMEXIT interface, with LLVMC projection and QEMU SVM execution. Raw strict lifting still needs a complete machine-state owner, including supervisor state and the guest/host memory environment. See [the contract and IDA counterexample](x86-vmrun-context.md). |
+| VMRUN outside explicit native SVM | LLVM/NeverC provide the returning fourteen-GPR/user-xstate context. The `amd-svm-v10` source profile connects canonical raw addr64/addr32 VMRUN to that API through both C routes, with explicit GPR/SIMD/MXCSR/CR2 publication and a VMEXIT stop. Ordinary function-ABI lifting and arbitrary guest supervisor/memory environments remain outside that declared domain. See [the contract and IDA counterexample](x86-vmrun-context.md). |
 | GETSEC transferring or unproved leaves | Measured-environment entry/exit and a complete-machine-state continuation. Leaves 0 and 6..8 now use the bounded contract below when natural-width AX is proven constant. |
 | ENCLU entry/exit/resume or unproved leaves | Enclave entry/exit/resume and asynchronous exit state. Leaves 0, 1 and 5..11 now use the bounded contract below when natural-width AX is proven constant. |
 | ERETS, ERETU beyond explicit V9 | Native compiler interfaces and exact object encodings are available. Decoding now owns both IDs, and the explicit V9 continuation owns successful canonical returns, including ERETU compatibility targets, descriptor/caches, GS-base exchange, stack level and event outputs through both C routes. Conditional compatibility choices are profile-owned; ordinary source, CET, fault/event delivery and physical CPU transitions remain unqualified. |
@@ -305,8 +305,9 @@ retain WC protocol, concurrent write completion and device transactions, but
 these tests do not independently measure those properties. The concrete
 emulator models only the single-threaded ordinary-memory projection.
 
-VMRUN still fails strict lifting explicitly; its new [native context API](x86-vmrun-context.md)
-does not infer a complete machine-state contract for arbitrary original bytes.
+VMRUN outside the explicit `amd-svm-v10` continuation still fails ordinary
+strict lifting; its [native context API and original-byte source profile](x86-vmrun-context.md)
+do not infer a complete environment or ordinary ABI for arbitrary original bytes.
 SKINIT uses the native
 nonreturning launch contract above. ENCLU and GETSEC decode
 to pending state, which cannot enter MedIR or either emitter until the CFG

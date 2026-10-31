@@ -18,6 +18,7 @@
 
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/TargetRegInfo.h"
+#include "neverd/lift/X86/X86SvmEncoding.h"
 #include "neverd/loader/COFF/PEFixedImage.h"
 
 #include "llvm/ADT/StringExtras.h"
@@ -318,6 +319,11 @@ public:
             lowUndefinedOperationDigest(Result.Ops);
         Result.UndefinedEffects.Diagnostic =
             "CET-disabled RDSSP requires explicit profile evidence";
+      } else if (ContinuationSnapshot &&
+                 x64VmrunAddressWidth(Result.NativeBytes)) {
+        Result.ProfileProjection = InterpreterProfileProjection::X64SvmRunV1;
+        Result.UndefinedEffects.Diagnostic =
+            "VMRUN requires explicit GPR, xstate and native SVM ownership";
       } else if (ContinuationSnapshot &&
                  detail::x64FredReturn(Result.NativeBytes)) {
         Result.ProfileProjection =
