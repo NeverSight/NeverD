@@ -1609,7 +1609,8 @@ TEST(BinaryDiff, StackRoleAlternativesRetainConflictingBodyMatchesForReview) {
 TEST(BinaryDiff, IndependentInitializerRolesSeparateIdenticalCallbacks) {
   const auto Input = [](bool Secondary, bool Changed = false,
                         unsigned CallbackInstructions = 5,
-                        unsigned Background = 0) {
+                        unsigned Background = 0,
+                        uint64_t SlotStride = sizeof(uint64_t)) {
     std::vector<Fn> Functions = {leaf("anchor_a", 1, 11),
                                  leaf("anchor_b", 2, 22),
                                  leaf(Secondary ? "callback_b" : "callback_a",
@@ -1626,7 +1627,7 @@ TEST(BinaryDiff, IndependentInitializerRolesSeparateIdenticalCallbacks) {
     for (const auto *Name :
          {"anchor_a", "callback_a", "anchor_b", "callback_b"})
       P.CodeInitializers.push_back(
-          {Slot + P.CodeInitializers.size() * sizeof(uint64_t),
+          {Slot + P.CodeInitializers.size() * SlotStride,
            named(P, Name).Address});
     return P;
   };
@@ -1721,6 +1722,58 @@ TEST(BinaryDiff, IndependentInitializerRolesSeparateIdenticalCallbacks) {
     EXPECT_EQ(counterpart(compare(A, B, Settings, {Keep}), A, B, "callback_a"),
               "callback_b");
   }
+  for (uint64_t Stride : {16, 56}) {
+    const auto StridedP = Input(false, false, 5, 0, Stride),
+               StridedS = Input(true, false, 5, 0, Stride);
+    for (bool Reverse : {false, true}) {
+      const auto &A = Reverse ? StridedS : StridedP,
+                 &B = Reverse ? StridedP : StridedS;
+      const auto R = compare(A, B, Settings);
+      EXPECT_EQ(R.Matches.size(), 4u);
+      for (const auto *Name : {"callback_a", "callback_b"})
+        EXPECT_EQ(counterpart(R, A, B, Name), Name);
+      auto Missing = A;
+      Missing.CodeInitializers[1].Target = 0x12345678;
+      EXPECT_EQ(compare(Missing, B, Settings).Matches.size(), 2u);
+      Missing.CodeInitializers[1].Target.reset();
+      EXPECT_EQ(compare(Missing, B, Settings).Matches.size(), 2u);
+    }
+  }
+  const auto AddRecords = [&](Program &A, bool Swap) {
+    uint64_t Slot = 0x10000;
+    for (const auto *Name :
+         {"anchor_b", "callback_a", "anchor_a", "callback_b"}) {
+      const auto Target =
+          Swap && llvm::StringRef(Name) == "callback_a"   ? "callback_b"
+          : Swap && llvm::StringRef(Name) == "callback_b" ? "callback_a"
+                                                          : Name;
+      A.CodeInitializers.push_back({Slot, named(A, Target).Address});
+      Slot += 56;
+    }
+  };
+  auto ConflictingP = Input(false, false, 5, 0, 16),
+       ConflictingS = Input(true, false, 5, 0, 16);
+  AddRecords(ConflictingP, false);
+  AddRecords(ConflictingS, true);
+  EXPECT_EQ(compare(ConflictingP, ConflictingS, Settings).Matches.size(), 2u);
+  auto PackedP = P, PackedS = S;
+  AddRecords(PackedP, false);
+  AddRecords(PackedS, true);
+  const auto Packed = compare(PackedP, PackedS, Settings);
+  for (const auto *Name : {"callback_a", "callback_b"})
+    EXPECT_EQ(counterpart(Packed, PackedP, PackedS, Name), Name);
+  std::atomic<bool> Cancel{false};
+  ComparisonControl Control;
+  Control.Cancel = &Cancel;
+  Control.Progress = [&](llvm::StringRef Phase, uint64_t Done, uint64_t) {
+    if (Phase == "initializer-context" && Done == 0)
+      Cancel = true;
+  };
+  const auto Stopped = compare(P, S, Settings, {}, Control);
+  EXPECT_EQ(Stopped.State, ComparisonState::Cancelled);
+  EXPECT_EQ(Stopped.StoppedPhase, "initializer-context");
+  EXPECT_EQ(Stopped.Matches.size(), 2u);
+  EXPECT_EQ(compare(P, S, Settings).Matches.size(), 4u);
   const auto Changed = Input(true, true);
   EXPECT_EQ(compare(P, Changed, Settings).Matches.size(), 4u);
   auto Strict = Settings;
@@ -1735,6 +1788,114 @@ TEST(BinaryDiff, IndependentInitializerRolesSeparateIdenticalCallbacks) {
   Invalid = P;
   Invalid.CodeInitializers.back().Slot = UINT64_MAX;
   EXPECT_TRUE(Invalid.validate());
+}
+
+TEST(BinaryDiff, InitializedPointersUseBoundedPairedDataAddressObservations) {
+  const auto Input = [](bool Secondary, bool Coordinates) {
+    ProgramIdentity Identity;
+    Identity.Bits = 64;
+    Identity.Normalization = NativeX86Normalization.str();
+    Identity.SHA256 = std::string(64, Secondary ? 'b' : 'a');
+    const uint64_t Base = Secondary ? 0x8000 : 0x1000;
+    const uint64_t Data = Secondary ? 0x9000 : 0x3000;
+    ProgramBuilder B(Identity);
+    for (unsigned I = 0; I < 4; ++I) {
+      const auto Name = I == 0                  ? "data_begin"
+                        : I == 1                ? "data_end"
+                        : (I == 2) == Secondary ? "callback_b"
+                                                : "callback_a";
+      const uint64_t Address = Base + I * 0x100;
+      B.beginFunction(Address, 3, Name,
+                      I < 2 ? NameSource::Symbol : NameSource::Generated, 0);
+      B.addBlock(Address);
+      if (I < 2) {
+        const uint64_t Key = (Secondary ? 2000 : 1000) + I;
+        const AddressReference References[]{
+            {Key, 0, ReferenceKind::UnresolvedData,
+             Coordinates ? std::optional<uint64_t>(Data + I * 0x80)
+                         : std::nullopt}};
+        B.addInstruction(Address, {0x48, 0x8d}, "lea", Key, 10,
+                         InstructionFlow::None, {}, {}, {}, References, 100 + I,
+                         true);
+      } else {
+        B.addInstruction(Address, {0x31, 0xc0}, "xor", 77, 77,
+                         InstructionFlow::None);
+      }
+      B.addInstruction(Address + 2, {0xc3}, "ret", 88, 88,
+                       InstructionFlow::Return);
+    }
+    auto P = B.finish();
+    P.CodeInitializers = {{Data + 0x18, named(P, "callback_a").Address},
+                          {Data + 0x20, named(P, "callback_b").Address}};
+    return P;
+  };
+  const auto P = Input(false, true), S = Input(true, true);
+  for (bool Reverse : {false, true}) {
+    const auto &A = Reverse ? S : P, &B = Reverse ? P : S;
+    EXPECT_EQ(compare(Input(Reverse, false), B, {}).Matches.size(), 2u);
+    const auto R = compare(A, B, {});
+    EXPECT_EQ(R.Matches.size(), 4u);
+    for (const auto *Name : {"callback_a", "callback_b"}) {
+      EXPECT_EQ(counterpart(R, A, B, Name), Name);
+      if (const auto *M = R.matchOfPrimary(indexOf(A, Name))) {
+        EXPECT_EQ(stepName(M->Step), "data_initializer");
+        EXPECT_TRUE(M->FromContext);
+      }
+    }
+    std::string Error;
+    const auto Saved = readComparison(saved(R, A, B), Error);
+    ASSERT_TRUE(bool(Saved)) << Error;
+    ComparisonResult Restored;
+    ASSERT_FALSE(bindComparison(*Saved, A, B, Restored));
+    EXPECT_EQ(savedWithoutTimings(R, A, B),
+              savedWithoutTimings(Restored, A, B));
+    auto Missing = A;
+    Missing.AddressReferences[0].Coordinate.reset();
+    EXPECT_EQ(compare(Missing, B, {}).Matches.size(), 2u);
+    auto Incomplete = A;
+    Incomplete.Functions[0].Traits |= TraitIncomplete;
+    EXPECT_EQ(compare(Incomplete, B, {}).Matches.size(), 2u);
+    auto Span = B;
+    *Span.AddressReferences[1].Coordinate += 8;
+    EXPECT_EQ(compare(A, Span, {}).Matches.size(), 2u);
+    auto Position = B;
+    Position.CodeInitializers[1].Slot += 8;
+    EXPECT_EQ(compare(A, Position, {}).Matches.size(), 2u);
+    auto Unknown = A;
+    Unknown.CodeInitializers[0].Target.reset();
+    EXPECT_EQ(compare(Unknown, B, {}).Matches.size(), 2u);
+    Unknown.CodeInitializers[0].Target = named(A, "callback_a").Address + 1;
+    EXPECT_EQ(compare(Unknown, B, {}).Matches.size(), 2u);
+    auto Conflict = A;
+    Conflict.AddressReferences[1].Coordinate =
+        Conflict.AddressReferences[0].Coordinate;
+    EXPECT_EQ(compare(Conflict, B, {}).Matches.size(), 2u);
+    auto Overlap = A;
+    Overlap.CodeInitializers[1].Slot = Overlap.CodeInitializers[0].Slot + 1;
+    EXPECT_EQ(compare(Overlap, B, {}).Matches.size(), 2u);
+    auto Retarget = A;
+    Retarget.CodeInitializers[0].Target = named(A, "data_begin").Address;
+    EXPECT_EQ(compare(Retarget, B, {}).Matches.size(), 2u);
+    auto Scalar = A;
+    auto &First = Scalar.Instructions[Scalar.Blocks[0].FirstInstruction];
+    ++First.AddressIndependentShape;
+    EXPECT_EQ(compare(Scalar, B, {}).Matches.size(), 2u);
+    const Override Reject{OverrideKind::Unmatch, named(A, "callback_a").Address,
+                          named(B, "callback_a").Address};
+    const auto Rejected = compare(A, B, {}, {Reject});
+    EXPECT_EQ(Rejected.secondaryOf(indexOf(A, "callback_a")), NoIndex);
+  }
+  std::atomic<bool> Cancel{false};
+  ComparisonControl Control;
+  Control.Cancel = &Cancel;
+  Control.Progress = [&](llvm::StringRef Phase, uint64_t Done, uint64_t) {
+    if (Phase == "initializer-context" && Done == 0)
+      Cancel = true;
+  };
+  const auto Stopped = compare(P, S, {}, {}, Control);
+  EXPECT_EQ(Stopped.State, ComparisonState::Cancelled);
+  EXPECT_EQ(Stopped.StoppedPhase, "initializer-context");
+  EXPECT_EQ(Stopped.Matches.size(), 2u);
 }
 
 TEST(BinaryDiff, UnknownAddressOperandDoesNotHideAKnownRetargeting) {
@@ -3261,7 +3422,7 @@ TEST(BinaryDiff, SavedMeasurementsAreRecomputedBeforePublication) {
 }
 
 TEST(BinaryDiff, VocabularyRoundTrips) {
-  for (unsigned I = 0; I <= unsigned(FunctionStep::Initializer); ++I) {
+  for (unsigned I = 0; I <= unsigned(FunctionStep::DataInitializer); ++I) {
     const auto Step = static_cast<FunctionStep>(I);
     EXPECT_EQ(functionStepNamed(stepName(Step)), Step);
     EXPECT_FALSE(stepDescription(Step).empty());

@@ -12,16 +12,19 @@
 
 #include "ComparisonInitializers.h"
 
+#include "neverd/Common.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/CodePointerSources.h"
 #include "neverd/support/Parallel.h"
 
+#include <utility>
+
 namespace neverd::sdk {
 
-std::optional<diff::ComparisonState> readComparisonInitializers(
-    const BinaryImage &Image, const std::set<va_t> &Functions,
-    uint64_t AvailableBytes, const diff::ComparisonControl &Control,
-    std::vector<diff::CodePointerInitializer> &Result) {
+std::optional<diff::ComparisonState>
+readComparisonInitializers(const BinaryImage &Image, uint64_t AvailableBytes,
+                           const diff::ComparisonControl &Control,
+                           std::vector<diff::CodePointerInitializer> &Result) {
   using Initializer = diff::CodePointerInitializer;
   if (Image.CodePtrRelocSlots.empty())
     return {};
@@ -29,35 +32,25 @@ std::optional<diff::ComparisonState> readComparisonInitializers(
     Control.Progress("initializers", 0, Image.CodePtrRelocSlots.size());
   if (const auto State = Control.stop())
     return State;
-  // Preflight retained facts and both temporary indexed arrays. The caller's
+  // Preflight retained facts and the temporary source index. The caller's
   // code capture is complete; no later input allocation spends this budget.
-  constexpr uint64_t Charge =
-      sizeof(Initializer) + sizeof(std::optional<Initializer>) + sizeof(va_t);
+  constexpr uint64_t Charge = sizeof(Initializer) + sizeof(va_t);
   if (Image.CodePtrRelocSlots.size() > AvailableBytes / Charge)
     return diff::ComparisonState::ResourceLimited;
   const std::vector<va_t> Sources(Image.CodePtrRelocSlots.begin(),
                                   Image.CodePtrRelocSlots.end());
-  std::vector<std::optional<Initializer>> Facts(Sources.size());
+  std::vector<Initializer> Facts(Sources.size());
   parallelForEach(Sources.size(), [&](auto Claim, size_t Count) {
     for (size_t I = Claim(); I < Count; I = Claim()) {
       if (Control.stop())
         return;
-      if (const auto Target = normalizedRelocatedCodeTarget(Image, Sources[I]);
-          Target && Functions.contains(*Target))
-        Facts[I] = Initializer{Sources[I], *Target};
+      Facts[I] = Initializer{Sources[I],
+                             normalizedRelocatedCodeTarget(Image, Sources[I])};
     }
   });
   if (const auto State = Control.stop())
     return State;
-  Result.reserve(Facts.size());
-  for (const auto &Fact : Facts) {
-    if (const auto State = Control.stop()) {
-      Result.clear();
-      return State;
-    }
-    if (Fact)
-      Result.push_back(*Fact);
-  }
+  Result = std::move(Facts);
   if (Control.Progress)
     Control.Progress("initializers", Sources.size(), Sources.size());
   if (const auto State = Control.stop()) {

@@ -1837,6 +1837,35 @@ directions. Only unmatched complete functions become candidates. The existing
 body competition and context checks own admission; this pass grants no data
 object, runtime pointer, ABI or semantic-equivalence authority.
 
+Matcher version 19 also groups repeated wider slot spacing, keyed by pointer
+width, stride and ordered frozen anchors. `ReferenceContext` resolves each
+observed code coordinate to an existing function once in parallel; missing or
+unreadable targets split neighborhoods. Native capture retains those barriers
+and publishes its ordered fact buffer only after the parallel read completes.
+Contiguous and strided proposals are computed together from the same original
+correspondence. Admission evaluates contiguous context first, then wider spacing
+for still-unmatched functions; the latter does not bootstrap new anchors or
+interpret intervening data as an ABI record. Both sources use the existing
+measured competition and preserve unpaired duplicate-body remainders for review.
+The shared relocation-coordinate reader accepts only its supported 32- and
+64-bit storage widths. Other widths supply no coordinate rather than passing
+through a narrower read; CFG roots and comparison capture share that decision.
+
+Matcher version 20 additionally retains full mapped data coordinates on address
+operands, outside normalized instruction identity. Native capture uses the
+loader's object-data provenance; AArch64 page fragments have no full coordinate.
+Complete protected function pairs with identical instruction, scalar, CFG and
+mapped-reference layouts align these occurrences. Consistent bidirectional
+address observations bound adjacent intervals of equal length and identical
+relocation-marked pointer-slot offsets. Conflicting observations remain barriers;
+unknown targets, overlapping slots or incompatible mapped targets reject an
+interval. The matcher computes `data_initializer` proposals from the same frozen
+correspondence, after contiguous and strided admission. Per-function witness
+hashing is parallel; the ordered interval merge avoids function cross-products.
+These observed intervals establish no object boundaries, record layout, runtime
+pointer values or semantic equivalence. Ordinary body competition still owns
+acceptance, and accepted endpoints preserve the remaining review alternatives.
+
 Matcher version 9 also admits bounded shared mnemonic/CFG groups into the same
 measured competition. A common instruction sketch cannot hide a smaller graph
 group's alternatives. These shared keys propose candidates only; existing

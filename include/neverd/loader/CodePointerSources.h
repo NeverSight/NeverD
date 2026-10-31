@@ -21,8 +21,9 @@
 namespace neverd {
 struct BinaryImage;
 
-/// The current target of a loader-marked absolute code-pointer slot. ARM/Thumb
-/// mode bits are normalized as for CFG relocation roots: this is a code
+/// The current target of a loader-marked 32- or 64-bit absolute code-pointer
+/// slot. Other widths supply no coordinate. ARM/Thumb mode bits are normalized
+/// as for CFG relocation roots: this is a code
 /// coordinate, never permission to emit a pointer literal or freeze a load.
 std::optional<va_t> normalizedRelocatedCodeTarget(const BinaryImage &Image,
                                                   va_t Slot);

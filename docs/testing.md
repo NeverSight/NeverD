@@ -3587,6 +3587,25 @@ without those relocations must retain ambiguity. The fixtures are decoded data;
 their machine code is never executed. Cancellation at the start and end of
 initializer capture preserves completed discovery and code, reports its own
 phase and permits a fresh retry.
+The same core and ELF controls cover 16- and 56-byte initializer spacing,
+unknown/unreadable target barriers, contradictory wider neighborhoods and
+contiguous-context priority. Intervening numeric values without relocation
+marks cannot supply witnesses; interior code coordinates cannot become invented
+function entries or silently disappear from a wider initializer sequence.
+`MarkedCodeCoordinatesRequireSupportedPointerWidths` checks marked/unmarked
+32- and 64-bit reads, full-width values and truncated storage. Unsupported
+256-bit or unknown pointer widths supply no coordinate; the shared reader
+must not silently truncate them through its 32-bit path.
+
+`InitializedPointersUseBoundedPairedDataAddressObservations` resolves duplicate
+callbacks using complete paired data-address roles in both directions, without
+previously matched initializer targets. Missing coordinates, incomplete witnesses,
+changed scalars, unequal interval spans or slot offsets, unknown targets and
+incompatible mapped targets must retain ambiguity. Explicit analyst rejection
+continues to own the pair. Native SDK controls decode the full data addresses;
+ELF symbols supply independent anchors, and disabling those names keeps the
+weaker body matches from supporting initializer identity. Unmarked numeric
+pointer lookalikes supply no such authority.
 
 Reference-uncertainty controls distinguish unchanged raw code from known operand
 changes, retain a known retargeting beside an unknown address operand, and keep

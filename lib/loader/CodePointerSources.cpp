@@ -19,14 +19,14 @@ namespace neverd {
 
 std::optional<va_t> normalizedRelocatedCodeTarget(const BinaryImage &Image,
                                                   va_t Slot) {
-  const uint32_t Width = Image.getPointerSize();
-  if (!Width || !Image.CodePtrRelocSlots.count(Slot))
+  const bool Is64 = Image.is64Bit();
+  const uint32_t Width = getPointerSize(Is64);
+  if (Width != Image.getPointerSize() || !Image.CodePtrRelocSlots.count(Slot))
     return {};
   const auto *Bytes = Image.readVA(Slot, Width);
   if (!Bytes)
     return {};
-  return normalizeCodeAddress(readPtr(Bytes, Image.is64Bit()), Image.Arch,
-                              Image.Mode);
+  return normalizeCodeAddress(readPtr(Bytes, Is64), Image.Arch, Image.Mode);
 }
 
 } // namespace neverd
