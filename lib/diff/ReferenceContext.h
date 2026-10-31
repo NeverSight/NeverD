@@ -26,6 +26,16 @@ namespace neverd::diff {
 struct Program;
 struct ProgramFeatures;
 
+/// Complete blocks unique within independently paired complete callers align
+/// call positions even when other blocks were added or reordered. All frozen
+/// occurrences must agree; local call roles do not establish body identity.
+std::vector<std::pair<uint32_t, uint32_t>>
+blockCallCandidates(const Program &P, llvm::ArrayRef<uint32_t> PMatch,
+                    llvm::ArrayRef<uint8_t> PTrusted, const Program &S,
+                    llvm::ArrayRef<uint32_t> SMatch,
+                    llvm::ArrayRef<uint8_t> STrusted,
+                    const ComparisonControl &Control);
+
 struct ReferenceCandidates {
   std::vector<std::pair<uint32_t, uint32_t>> Data;
   std::vector<std::pair<uint32_t, uint32_t>> Functions;

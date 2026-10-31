@@ -175,6 +175,16 @@ not. The pass uses the original frozen correspondence after the earlier
 initializer channels and retains ordinary similarity and rival checks. Observed
 intervals do not identify data-object boundaries or prove runtime equivalence.
 
+Matcher version 21 adds `block_call_site`: the same call position in a unique
+complete block of independently matched complete callers. The surrounding block
+must retain every scalar and known reference role. Repeated indistinguishable
+blocks, contradictory occurrences, unresolved operands or indirect transfers
+cannot resolve a pair. This can propose a remaining helper after calls elsewhere
+were added or reordered. Candidates still compete with measured bodies; only
+complete agreement with already mapped neighbors earns the existing lower
+context threshold. These local observations neither prove whole-function
+identity nor relax instruction-level change reporting.
+
 Matcher version 10 also defers a similar helper body when its changed entry
 contains the complete straight-line prelude of an unmatched direct tail caller,
 with at least two caller instructions beyond the helper's aligned body. Both

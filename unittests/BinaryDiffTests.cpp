@@ -1034,6 +1034,89 @@ TEST(BinaryDiff,
   }
 }
 
+TEST(BinaryDiff, CompleteLocalCallBlocksSurviveOtherCallLayoutChanges) {
+  const auto Input = [](bool Secondary) {
+    Fn Caller;
+    Caller.Name = "caller";
+    Caller.Blocks = {
+        {{"test", "edi, edi"}, {"je", "", InstructionFlow::Branch}},
+        {{"mov", "edi, 11"},
+         {"call", "", InstructionFlow::Call, "callback_a"},
+         {"ret", "", InstructionFlow::Return}},
+        {{"mov", "edi, 22"},
+         {"call", "", InstructionFlow::Call, "callback_b"},
+         {"ret", "", InstructionFlow::Return}}};
+    Caller.Edges = {{0, 1, EdgeKind::NotTaken}, {0, 2, EdgeKind::Taken}};
+    Fn A = leaf("callback_a", 77, 5), B = A, Extra = leaf("extra", 1234, 4);
+    A.Source = B.Source = Extra.Source = NameSource::Generated;
+    B.Name = "callback_b";
+    if (Secondary) {
+      std::swap(Caller.Blocks[1], Caller.Blocks[2]);
+      Caller.Blocks.push_back({{"call", "", InstructionFlow::Call, "extra"},
+                               {"ret", "", InstructionFlow::Return}});
+    }
+    return build({Caller, A, B, Extra}, Secondary ? 0x8000 : 0x1000,
+                 Secondary ? std::vector<size_t>{0, 2, 1, 3}
+                           : std::vector<size_t>{0, 1, 2, 3});
+  };
+  const auto P = Input(false), S = Input(true);
+  for (bool Reverse : {false, true}) {
+    const auto &A = Reverse ? S : P, &B = Reverse ? P : S;
+    const auto R = compare(A, B, {});
+    for (const auto *Name : {"callback_a", "callback_b"}) {
+      EXPECT_EQ(counterpart(R, A, B, Name), Name);
+      if (const auto *M = R.matchOfPrimary(indexOf(A, Name)))
+        EXPECT_EQ(stepName(M->Step), "block_call_site");
+    }
+    auto Incomplete = A;
+    Incomplete.Functions[0].Traits |= TraitIncomplete;
+    const auto Unknown = compare(Incomplete, B, {});
+    EXPECT_EQ(Unknown.secondaryOf(indexOf(A, "callback_a")), NoIndex);
+    EXPECT_EQ(Unknown.secondaryOf(indexOf(A, "callback_b")), NoIndex);
+    auto Duplicate = A;
+    const auto &F = Duplicate.Functions[0];
+    const auto &First = Duplicate.Blocks[F.FirstBlock + 1];
+    const auto &Second = Duplicate.Blocks[F.FirstBlock + 2];
+    Duplicate.Instructions[Second.FirstInstruction].Shape =
+        Duplicate.Instructions[First.FirstInstruction].Shape;
+    Duplicate.Instructions[Second.FirstInstruction].AddressIndependentShape =
+        Duplicate.Instructions[First.FirstInstruction].AddressIndependentShape;
+    const auto Ambiguous = compare(Duplicate, B, {});
+    EXPECT_EQ(Ambiguous.secondaryOf(indexOf(A, "callback_a")), NoIndex);
+    EXPECT_EQ(Ambiguous.secondaryOf(indexOf(A, "callback_b")), NoIndex);
+    auto Conflict = A;
+    Conflict.Instructions[First.FirstInstruction + 1].Callee =
+        indexOf(A, "callback_b");
+    Conflict.Instructions[Second.FirstInstruction + 1].Callee =
+        indexOf(A, "callback_b");
+    const auto Contradictory = compare(Conflict, B, {});
+    EXPECT_EQ(Contradictory.secondaryOf(indexOf(A, "callback_a")), NoIndex);
+    EXPECT_EQ(Contradictory.secondaryOf(indexOf(A, "callback_b")), NoIndex);
+    auto Missing = A;
+    const auto CA = indexOf(A, "callback_a");
+    const auto FirstTarget = A.Instructions[First.FirstInstruction + 1].Callee;
+    const auto TargetBlock = FirstTarget == CA ? First : Second;
+    Missing.Instructions[TargetBlock.FirstInstruction].HasUnresolvedData = true;
+    EXPECT_EQ(compare(Missing, B, {}).secondaryOf(CA), NoIndex);
+    const Override Reject{OverrideKind::Unmatch, named(A, "callback_a").Address,
+                          named(B, "callback_a").Address};
+    EXPECT_EQ(compare(A, B, {}, {Reject}).secondaryOf(indexOf(A, "callback_a")),
+              NoIndex);
+  }
+  std::atomic<bool> Cancel{false};
+  ComparisonControl Control;
+  Control.Cancel = &Cancel;
+  Control.Progress = [&](llvm::StringRef Phase, uint64_t Done, uint64_t) {
+    if (Phase == "block-call-context" && Done == 0)
+      Cancel = true;
+  };
+  const auto Stopped = compare(P, S, {}, {}, Control);
+  EXPECT_EQ(Stopped.State, ComparisonState::Cancelled);
+  EXPECT_EQ(Stopped.StoppedPhase, "block-call-context");
+  EXPECT_EQ(Stopped.secondaryOf(indexOf(P, "callback_a")), NoIndex);
+  EXPECT_EQ(Stopped.secondaryOf(indexOf(P, "callback_b")), NoIndex);
+}
+
 TEST(BinaryDiff, SingleCallEntrySurvivesAnInsertedGuard) {
   Fn Before;
   Before.Name = "fail";
@@ -3422,7 +3505,7 @@ TEST(BinaryDiff, SavedMeasurementsAreRecomputedBeforePublication) {
 }
 
 TEST(BinaryDiff, VocabularyRoundTrips) {
-  for (unsigned I = 0; I <= unsigned(FunctionStep::DataInitializer); ++I) {
+  for (unsigned I = 0; I <= unsigned(FunctionStep::BlockCallSite); ++I) {
     const auto Step = static_cast<FunctionStep>(I);
     EXPECT_EQ(functionStepNamed(stepName(Step)), Step);
     EXPECT_FALSE(stepDescription(Step).empty());

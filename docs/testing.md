@@ -3570,6 +3570,12 @@ wrappers around a known callee in both directions. Encoded call displacements
 must not select a source identity. The native SDK counterpart decodes real x64
 calls, retains both ambiguous wrappers and preserves them through save/reopen.
 
+`CompleteLocalCallBlocksSurviveOtherCallLayoutChanges` independently reorders
+duplicate callbacks and adds calls outside the retained complete blocks. Both
+directions must use the corresponding scalar-bound local call roles. Incomplete
+callers, duplicate block layouts and analyst rejection retain ambiguity. The
+native SDK counterpart decodes real branches and calls and reopens saved results.
+
 `IndependentInitializerRolesSeparateIdenticalCallbacks` separates equal callback
 bodies around two distinct protected targets in both directions. It exercises
 repeated anchors, duplicate neighborhoods, conflicting occurrences, gaps,

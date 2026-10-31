@@ -249,6 +249,7 @@ private:
     bool DataReference = false;
     bool AddressSite = false;
     bool Initializer = false;
+    bool BlockCallSite = false;
   };
   llvm::DenseMap<uint64_t, CandidateEvidence> FeatureCandidates;
   Clock::time_point PhaseStart;
@@ -271,10 +272,12 @@ private:
         FeatureCandidates.try_emplace(pairKey(A, B), CandidateEvidence{Step});
     (void)Inserted;
     It->second.FromContext |= FromContext;
-    It->second.ContextEligible |= Step == FunctionStep::CallSite ||
-                                  Step == FunctionStep::Neighborhood ||
-                                  Step == FunctionStep::AddressSite;
+    It->second.ContextEligible |=
+        Step == FunctionStep::CallSite || Step == FunctionStep::BlockCallSite ||
+        Step == FunctionStep::Neighborhood || Step == FunctionStep::AddressSite;
     It->second.CallSite |= Step == FunctionStep::CallSite;
+    It->second.CallSite |= Step == FunctionStep::BlockCallSite;
+    It->second.BlockCallSite |= Step == FunctionStep::BlockCallSite;
     It->second.AddressSite |= Step == FunctionStep::AddressSite;
   }
   bool stopNow() {
@@ -797,7 +800,7 @@ unsigned Matcher::approximate(bool ReferenceOnly) {
     if (PMatch[A] == NoIndex && SMatch[B] == NoIndex) {
       Candidates.push_back(Key);
       if (ReferenceOnly && (Evidence.DataReference || Evidence.AddressSite ||
-                            Evidence.Initializer))
+                            Evidence.Initializer || Evidence.BlockCallSite))
         ReferenceA[A] = ReferenceB[B] = 1;
     }
   }
@@ -983,7 +986,7 @@ unsigned Matcher::approximate(bool ReferenceOnly) {
     if (ReferenceOnly &&
         (Feature == FeatureCandidates.end() ||
          (!Feature->second.DataReference && !Feature->second.AddressSite &&
-          !Feature->second.Initializer)))
+          !Feature->second.Initializer && !Feature->second.BlockCallSite)))
       continue;
     // A positional or lone-neighbor proposal earns the lower context
     // threshold only when every already mapped neighbor agrees. A local
@@ -1400,7 +1403,8 @@ void Matcher::collectAmbiguities() {
   llvm::DenseSet<uint32_t> InitializerPrimary, InitializerSecondary;
   for (const auto &F : Order)
     if (F.Step == FunctionStep::Initializer ||
-        F.Step == FunctionStep::DataInitializer) {
+        F.Step == FunctionStep::DataInitializer ||
+        F.Step == FunctionStep::BlockCallSite) {
       InitializerPrimary.insert(F.Primary);
       InitializerSecondary.insert(F.Secondary);
     }
@@ -1731,6 +1735,29 @@ void Matcher::run(llvm::ArrayRef<Override> Overrides) {
       if (!stopNow())
         progress(++Done, std::size(Sources));
     }
+  }
+  if (!stopNow()) {
+    beginPhase("block-call-context");
+    progress(0, 1);
+    std::vector<uint8_t> TrustedP(P.Functions.size(), 0),
+        TrustedS(S.Functions.size(), 0);
+    for (const auto &F : Order)
+      if (protectedMatch(F) && !P.Functions[F.Primary].has(TraitIncomplete) &&
+          !S.Functions[F.Secondary].has(TraitIncomplete))
+        TrustedP[F.Primary] = TrustedS[F.Secondary] = 1;
+    const auto Calls =
+        blockCallCandidates(P, PMatch, TrustedP, S, SMatch, TrustedS, Control);
+    for (const auto &[A, B] : Calls) {
+      if (stopNow())
+        break;
+      propose(A, B, FunctionStep::BlockCallSite, true);
+      FeatureCandidates.find(pairKey(A, B))->second.Step =
+          FunctionStep::BlockCallSite;
+    }
+    if (!Calls.empty() && !stopNow())
+      approximate(true);
+    if (!stopNow())
+      progress(1, 1);
   }
   beginPhase("ambiguities");
   retainCallAlternatives();

@@ -1866,6 +1866,18 @@ These observed intervals establish no object boundaries, record layout, runtime
 pointer values or semantic equivalence. Ordinary body competition still owns
 acceptance, and accepted endpoints preserve the remaining review alternatives.
 
+Matcher version 21 aligns call roles in unique complete blocks of independently
+paired complete callers. The full block instruction/operand layout retains
+scalars, known address identities and mapped calls; unresolved data, indirect
+transfers and unknown callees cannot supply a witness. Identical local roles
+can survive additions or reordering elsewhere in the caller without treating
+global call order as identity. Per-caller work runs in parallel; the ordered
+merge checks every occurrence bidirectionally against the same frozen map.
+Only complete unmatched targets become `block_call_site` candidates. Existing
+body/rival checks and mapped-neighborhood agreement own acceptance and the
+ordinary context threshold. New candidates do not support their own witnesses.
+This is local structural evidence, not a control-flow or semantic proof.
+
 Matcher version 9 also admits bounded shared mnemonic/CFG groups into the same
 measured competition. A common instruction sketch cannot hide a smaller graph
 group's alternatives. These shared keys propose candidates only; existing

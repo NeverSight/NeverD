@@ -890,6 +890,94 @@ TEST_F(BinaryDiffSDK, RelocatedInitializerPositionsDisambiguateEqualCallbacks) {
       }
 }
 
+TEST_F(BinaryDiffSDK, CompleteLocalCallRolesSurviveCallerLayoutEdits) {
+  const auto Image = [&](bool Secondary) {
+    std::vector<uint8_t> Bytes(0x160, 0xcc);
+    const auto Call = [&](unsigned At, unsigned Target) {
+      Bytes[At] = 0xe8;
+      const uint32_t Displacement = Target - (At + 5);
+      for (unsigned Shift = 0; Shift < 32; Shift += 8)
+        Bytes[At + 1 + Shift / 8] = uint8_t(Displacement >> Shift);
+    };
+    const auto Block = [&](unsigned At, uint8_t Scalar, unsigned Target) {
+      Bytes[At] = 0xbf;
+      Bytes[At + 1] = Scalar;
+      std::fill_n(Bytes.begin() + At + 2, 3, 0);
+      Call(At + 5, Target);
+      Bytes[At + 10] = 0xc3;
+    };
+    Bytes[0] = 0x85;
+    Bytes[1] = 0xff;
+    Bytes[2] = 0x74;
+    Bytes[3] = Secondary ? 0x5c : 0x2c;
+    if (Secondary) {
+      Bytes[4] = 0x85;
+      Bytes[5] = 0xf6;
+      Bytes[6] = 0x74;
+      Bytes[7] = 0x28;
+      Block(8, 22, 0x100);
+      Block(0x30, 11, 0x120);
+      Block(0x60, 99, 0x140);
+    } else {
+      Block(4, 11, 0x100);
+      Block(0x30, 22, 0x120);
+    }
+    for (unsigned Offset : {0x100, 0x120, 0x140}) {
+      const auto Code = body(Offset == 0x140 ? 99 : 7);
+      std::copy(Code.begin(), Code.end(), Bytes.begin() + Offset);
+    }
+    return Bytes;
+  };
+  const auto A = input(Image(false)), B = input(Image(true), 0x8000);
+  for (const auto &[Session, Base] :
+       {std::pair{A, 0x1000u}, std::pair{B, 0x8000u}})
+    for (uint64_t Offset : {0x100, 0x120, 0x140}) {
+      if (const char *Attributes =
+              neverd_func_attributes_json(Session, Base + Offset))
+        neverd_free_string(Attributes);
+      else
+        ASSERT_EQ(neverd_func_create(Session, Base + Offset), 0);
+    }
+  for (bool Reverse : {false, true}) {
+    const auto Options = render(llvm::json::Object{
+        {"discover", false},
+        {"use_names", false},
+        {"overrides", llvm::json::Array{llvm::json::Object{
+                          {"kind", "match"},
+                          {"primary", Reverse ? "0x8000" : "0x1000"},
+                          {"secondary", Reverse ? "0x1000" : "0x8000"}}}}});
+    const auto C = compare(Reverse ? B : A, Reverse ? A : B, Options.c_str());
+    const auto Saved = take(neverd_comparison_export_json(C));
+    auto Document = llvm::json::parse(Saved);
+    ASSERT_TRUE(bool(Document));
+    const auto *Matches = Document->getAsObject()->getArray("matches");
+    ASSERT_TRUE(Matches);
+    for (const auto &[P, S] :
+         {std::pair{"0x1100", "0x8120"}, std::pair{"0x1120", "0x8100"}}) {
+      const auto Match = llvm::find_if(*Matches, [&](const auto &M) {
+        return M.getAsObject()->getString("primary") == (Reverse ? S : P) &&
+               M.getAsObject()->getString("secondary") == (Reverse ? P : S);
+      });
+      ASSERT_NE(Match, Matches->end()) << Saved;
+      EXPECT_EQ(Match->getAsObject()->getString("step"), "block_call_site");
+      EXPECT_EQ(Match->getAsObject()->getBoolean("analysis_complete"), true);
+    }
+    ASSERT_EQ(neverd_comparison_restore_json(C, Saved.c_str()), 1)
+        << take(neverd_comparison_last_error(C));
+    EXPECT_EQ(take(neverd_comparison_export_json(C)), Saved);
+    const auto Reject = render(
+        llvm::json::Object{{"kind", "unmatch"},
+                           {"primary", Reverse ? "0x8120" : "0x1100"},
+                           {"secondary", Reverse ? "0x1100" : "0x8120"}});
+    ASSERT_EQ(neverd_comparison_override_json(C, Reject.c_str()), 1);
+    ASSERT_EQ(neverd_comparison_undo(C), 1);
+    EXPECT_EQ(take(neverd_comparison_export_json(C)), Saved);
+    ASSERT_EQ(neverd_comparison_redo(C), 1);
+    ASSERT_EQ(neverd_comparison_restore_json(C, Saved.c_str()), 1);
+    EXPECT_EQ(take(neverd_comparison_export_json(C)), Saved);
+  }
+}
+
 TEST_F(BinaryDiffSDK, DirectCallTargetsArePartOfStrongFunctionIdentity) {
   const auto Image = [&](bool Reordered) {
     std::vector<uint8_t> Bytes(128, 0xcc);
@@ -3149,7 +3237,7 @@ TEST_F(BinaryDiffSDK, LongNativeCallContextSurvivesReorderingAndRestore) {
   const auto Saved = take(neverd_comparison_export_json(C));
   const auto Document = parsed(neverd_comparison_export_json(C));
   ASSERT_TRUE(Document.getAsObject());
-  EXPECT_EQ(Document.getAsObject()->getInteger("matcher_version"), 20);
+  EXPECT_EQ(Document.getAsObject()->getInteger("matcher_version"), 21);
   const auto *Matches = Document.getAsObject()->getArray("matches");
   ASSERT_TRUE(Matches);
   const std::map<std::string, std::string> Expected = {{"0x3000", "0xa010"},

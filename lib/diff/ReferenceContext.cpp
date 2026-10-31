@@ -271,6 +271,143 @@ std::vector<std::pair<uint32_t, uint32_t>> dataInitializerCandidates(
 
 } // namespace
 
+std::vector<std::pair<uint32_t, uint32_t>>
+blockCallCandidates(const Program &P, llvm::ArrayRef<uint32_t> PMatch,
+                    llvm::ArrayRef<uint8_t> PTrusted, const Program &S,
+                    llvm::ArrayRef<uint32_t> SMatch,
+                    llvm::ArrayRef<uint8_t> STrusted,
+                    const ComparisonControl &Control) {
+  struct BlockRole {
+    uint64_t Key;
+    bool Secondary;
+    std::vector<uint32_t> Calls;
+  };
+  // Each worker owns one caller's observations. The ordered merge below
+  // checks conflicts across callers before any proposal can be admitted.
+  std::vector<std::vector<std::pair<uint32_t, uint32_t>>> Observations(
+      P.Functions.size());
+  parallelForEach(Observations.size(), [&](auto Claim, size_t Count) {
+    for (size_t A = Claim(); A < Count; A = Claim()) {
+      if (Control.stop())
+        return;
+      const uint32_t B = PMatch[A];
+      if (!PTrusted[A] || B == NoIndex || !STrusted[B] ||
+          P.Functions[A].has(TraitIncomplete) ||
+          S.Functions[B].has(TraitIncomplete))
+        continue;
+      std::vector<BlockRole> Roles;
+      for (bool Secondary : {false, true}) {
+        const auto &Image = Secondary ? S : P;
+        const auto Map = Secondary ? SMatch : PMatch;
+        const uint32_t FI = Secondary ? B : A;
+        const auto &F = Image.Functions[FI];
+        for (uint32_t BI = 0; BI < F.BlockCount; ++BI) {
+          if (Control.stop())
+            return;
+          const auto Instructions = Image.instructions(Image.blocks(F)[BI]);
+          if (Instructions.size() < limits::diff::kMinBlockHashInstructions)
+            continue;
+          StableHash H;
+          H.add(Instructions.size()).add(BI == F.EntryBlock);
+          std::vector<uint32_t> Calls;
+          bool Complete = true, Provisional = false;
+          for (const auto &I : Instructions) {
+            if (Control.stop())
+              return;
+            if (I.HasUnresolvedData || I.UnresolvedCallee ||
+                I.Flow == InstructionFlow::Unknown ||
+                I.Flow == InstructionFlow::IndirectCall ||
+                I.Flow == InstructionFlow::IndirectJump) {
+              Complete = false;
+              break;
+            }
+            H.add(I.AddressIndependentShape).add(unsigned(I.Flow));
+            for (const auto &Address : Image.addressReferences(I)) {
+              H.add(Address.Operand).add(unsigned(Address.Kind));
+              if (Address.Kind == ReferenceKind::UnresolvedData) {
+                Complete = false;
+                break;
+              }
+              if (Address.Kind != ReferenceKind::Function) {
+                H.add(Address.Key);
+                continue;
+              }
+              const auto Target = Image.functionAt(Address.Key);
+              if (!Target || (*Target != FI && Map[*Target] == NoIndex)) {
+                Complete = false;
+                break;
+              }
+              if (*Target == FI)
+                H.add("self");
+              else
+                H.add("mapped").add(Secondary ? *Target : Map[*Target]);
+            }
+            if (!Complete)
+              break;
+            if (I.Callee == NoIndex)
+              continue;
+            if (I.Flow == InstructionFlow::Call)
+              Calls.push_back(I.Callee);
+            if (I.Callee == FI) {
+              H.add("self");
+            } else if (Map[I.Callee] != NoIndex) {
+              H.add("mapped").add(Secondary ? I.Callee : Map[I.Callee]);
+            } else if (I.Flow == InstructionFlow::Call) {
+              H.add("provisional_call");
+              Provisional = true;
+            } else {
+              Complete = false;
+              break;
+            }
+          }
+          if (Complete && Provisional)
+            Roles.push_back({H.value(), Secondary, std::move(Calls)});
+        }
+      }
+      llvm::stable_sort(Roles, [](const auto &L, const auto &R) {
+        return std::tie(L.Key, L.Secondary) < std::tie(R.Key, R.Secondary);
+      });
+      for (size_t I = 0; I < Roles.size();) {
+        if (Control.stop())
+          return;
+        size_t J = I + 1;
+        while (J < Roles.size() && Roles[J].Key == Roles[I].Key)
+          ++J;
+        if (J - I == 2 && !Roles[I].Secondary && Roles[I + 1].Secondary) {
+          const auto &X = Roles[I].Calls, &Y = Roles[I + 1].Calls;
+          if (X.size() == Y.size())
+            for (size_t N = 0; N < X.size(); ++N)
+              if (PMatch[X[N]] == NoIndex && SMatch[Y[N]] == NoIndex)
+                Observations[A].emplace_back(X[N], Y[N]);
+        }
+        I = J;
+      }
+    }
+  });
+  Relations Forward, Reverse;
+  for (const auto &Caller : Observations)
+    for (const auto &[A, B] : Caller) {
+      if (Control.stop())
+        return {};
+      recordRelation(Forward, A, B);
+      recordRelation(Reverse, B, A);
+    }
+  std::vector<std::pair<uint32_t, uint32_t>> Result;
+  for (const auto &[A, Relation] : Forward) {
+    if (Control.stop())
+      return {};
+    const uint32_t B = Relation.Other;
+    const auto Back = Reverse.find(B);
+    if (!Relation.Conflict && Back != Reverse.end() && !Back->second.Conflict &&
+        Back->second.Other == A && P.Functions[A].hasBody() &&
+        S.Functions[B].hasBody() && !P.Functions[A].has(TraitIncomplete) &&
+        !S.Functions[B].has(TraitIncomplete))
+      Result.emplace_back(A, B);
+  }
+  llvm::sort(Result);
+  return Result;
+}
+
 ReferenceCandidates
 referenceCandidates(const Program &P, const ProgramFeatures &PF,
                     llvm::ArrayRef<uint32_t> PMatch, const Program &S,

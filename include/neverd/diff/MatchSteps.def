@@ -83,6 +83,9 @@ NEVERD_DIFF_FUNCTION_STEP(Initializer, "initializer_context", 0.80,
 NEVERD_DIFF_FUNCTION_STEP(DataInitializer, "data_initializer", 0.80,
                           "The same initialized function-pointer position "
                           "between independently paired data-address uses")
+NEVERD_DIFF_FUNCTION_STEP(BlockCallSite, "block_call_site", 0.80,
+                          "The same call position in unique complete blocks "
+                          "of independently matched callers")
 
 NEVERD_DIFF_BLOCK_STEP(BlockEntry, "entry", 0.90, "Both function entries")
 NEVERD_DIFF_BLOCK_STEP(BlockBytes, "bytes", 1.00, "Byte-identical blocks")
