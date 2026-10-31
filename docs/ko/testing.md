@@ -2295,3 +2295,5 @@ LLVM C의 합성 스택 슬롯은 실행 중 선택한 64비트 절반을 읽기
 `PageGlobal*`는 알 수 없는 상위 비트, 양쪽 분기, 읽기 및 쓰기 관계, 금지된 63개 비트 변경, 다른 상태 보존, 잘못된 피연산자, 예산과 환경 식별을 검사합니다. `NeverDInterpreterSpecializationTests`, `NeverDInterpreterMachineStateTests`, `NeverDLowIRRefinementTests`, `NeverDInterpreterLLVMRefinementTests`를 실행하세요. 값 모델 검사이며 특권 명령은 실행하지 않습니다.
 
 `NeverDInterpreterMachineStateTests`의 `KernelPageGlobalSource*`는 HighC/LLVMC, O0/O2, ASan/UBSan에서 전체 상태, 반환 스택, CR4, 모든 기록 부족/불일치와 커널 POPFQ/CLI/STI를 검사합니다. 도메인, 이전 레이아웃, 예산 거부도 검사하며 생성된 스칼라 C만 실행합니다.
+
+`AtomicSourceRequiresAnUnmodifiedSupportedReceipt`는 누락되거나 변경된 원자 증거와 미지원 CMPXCHG를 거부합니다. `ScalarAtomicsRetainTransactionsAndPhysicalState`는 독립적인 전체 상태·플래그·바이트 기대값으로 1/2/4/8바이트 XCHG, LOCK XADD, 비정렬 메모리와 반환 주소 별칭을 검사합니다. 사용자 및 커널 상태에서 두 C 경로를 O0/O2와 ASan/UBSan으로 실행합니다. `NeverDInterpreterMachineStateTests` 및 원시 환경, 특수화, 연속 소스, 소스 백엔드 테스트를 실행하세요. 경합이나 오류 동작을 인증하지는 않습니다.
