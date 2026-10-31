@@ -395,7 +395,12 @@ complete explicit scratch overwrite proof; trapping operations still do.
 Physical CALL return-slot writes are materialized only when their exact
 entry-relative slots lie in the bounded reconstructed frame. The original
 instruction supplies its complete return word; partial later writes retain
-its other bytes. Planning is transactional, and validation rechecks the current
+its other bytes. Existing private scalar spills may also request that write
+when their released slots overlap it, even without a later load of the new PC.
+This removes a false unavailable scratch read in both source routes; an earlier
+read, escaping VM state or an unproved callee observation still retains its
+input. Indirect call operands keep their existing storage/value identities.
+Planning is transactional, and validation rechecks the current
 bytes, stack coordinate and immediately preceding store. This supplies no
 relocated code identity or callee-preservation proof. Unrepresented writes
 retain the shared deferred observation check after call and return recovery;
