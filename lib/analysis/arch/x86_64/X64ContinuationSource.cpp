@@ -10,6 +10,7 @@
 
 #include "BinaryContinuationInstructions.h"
 #include "NativeStackControl.h"
+#include "StringTransfer.h"
 #include "X64ArchitecturalValues.h"
 #include "X64ContinuationEvents.h"
 #include "X64ContinuationFredReturns.h"
@@ -580,13 +581,18 @@ bool supportedOperation(const LowOp &Op,
     return Op.NumInputs == 2 && Op.Output.Size && Op.Output.Size <= 16 &&
            Op.Inputs[0].Size == Op.Output.Size &&
            Op.Inputs[1].Size == Op.Output.Size;
-  case NdOp::INTRINSIC:
-    return flagIntrinsic(Op) || alignmentIntrinsic(Op) ||
-           controlIntrinsic(Op, Options) ||
+  case NdOp::INTRINSIC: {
+    // The complete-state intrinsic owns runtime count, direction and pointer
+    // completion. Reuse flat native-width admission without specializing its
+    // count or weakening the caller's successful ordinary-RAM contract.
+    const auto Transfer = detail::stringTransferShape(Op);
+    return (Transfer && Transfer->CompleteState) || flagIntrinsic(Op) ||
+           alignmentIntrinsic(Op) || controlIntrinsic(Op, Options) ||
            faultAddressIntrinsic(Op, Options) || fenceIntrinsic(Op, Options) ||
            writePrefetchIntrinsic(Op, Options) || msrIntrinsic(Op, Options) ||
            descriptorQueryIntrinsic(Op, Options) ||
            pageTableIntrinsic(Op, Options);
+  }
   default:
     // Admission and arithmetic widths use the scalar owner. The operation
     // itself is still emitted through LowToMed and the existing backends.
@@ -961,6 +967,15 @@ struct Writer {
       emit(NdOp::INT_LESSEQUAL, Bad, {Op.Inputs[2], High});
       rejectIf(Bad);
       Block->Ops.push_back(Op);
+    } else if (alignmentIntrinsic(Op)) {
+      // RequireAligned is a precondition, not an instruction to trap the
+      // source caller. Check the final linear address after FS/GS and
+      // address-width projection, before any architectural or RAM effect.
+      const auto Transition = x64::alignment::lowerOperation(
+          Op, controlOptions(Options),
+          [&](uint16_t Bytes) { return temporary(Bytes); });
+      append(Transition->Ops);
+      rejectIf(*Transition->Rejected);
     } else if (flagIntrinsic(Op)) {
       const NdVar System = temporary();
       emit(NdOp::INT_AND, System,
@@ -1241,7 +1256,21 @@ buildInstruction(SpecializationInstruction Instruction,
           ? x64::runtimeTimestampRegisters(Instruction,
                                            NdVar::tmp(ScratchBase - 16, 16))
           : std::nullopt;
-  for (const LowOp &Op : Instruction.Ops) {
+  bool EarlierEffect = false;
+  for (size_t I = 0; I < Instruction.Ops.size(); ++I) {
+    const LowOp &Op = Instruction.Ops[I];
+    const bool Alignment = alignmentIntrinsic(Op);
+    if (Alignment && (EarlierEffect ||
+                      std::any_of(Instruction.UndefinedEffects.Effects.begin(),
+                                  Instruction.UndefinedEffects.Effects.end(),
+                                  [&](const LowUndefinedEffect &E) {
+                                    return E.AfterOp <= I;
+                                  })))
+      RequireNative("alignment precondition follows an observable effect");
+    EarlierEffect |= Op.Output.isReg() || Op.Opcode == NdOp::LOAD ||
+                     Op.Opcode == NdOp::STORE ||
+                     (Op.Opcode == NdOp::INTRINSIC && !Alignment) ||
+                     Op.MemoryOrdering != NdMemoryOrdering::None;
     if (!Timestamp && !Sysret && !Sysenter && !Sysexit && !Iret && !FarReturn &&
         !Interrupt && !supportedOperation(Op, Options, WideDivision)) {
       std::string Detail = "unsupported continuation operation: ";

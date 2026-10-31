@@ -5,6 +5,38 @@
 //===----------------------------------------------------------------------===//
 // Included by X64ContinuationExportTests.cpp inside its fixture namespace.
 
+TEST_F(X64ContinuationExportTest, KvmHypercallsComposeWithDirectJumpDiscovery) {
+  load(
+      {0x0f, 0x01, 0xc1, 0xeb, 0x03, 0x0f, 0x0b, 0x90, 0x0f, 0x01, 0xd9, 0xc3});
+  const auto Request = request(R"("entries":[4096],
+    "native_kvm_hypercalls":true,"follow_direct_jumps":true,
+    "follow_internal_calls":true)");
+  const char Provider[] = R"C(
+static unsigned long long kvm_return(unsigned long long n,unsigned long long a,
+    unsigned long long b,unsigned long long c,unsigned long long d) {return n+1;}
+#define __builtin_ia32_vmcall_kvm kvm_return
+#define __builtin_ia32_vmmcall_kvm kvm_return
+)C";
+  for (bool LLVM : {false, true}) {
+    auto [Code, Report] = source(Request, LLVM);
+    auto Parsed = llvm::json::parse(Report);
+    ASSERT_TRUE(bool(Parsed));
+    EXPECT_EQ(Parsed->getAsObject()->getInteger("native_requests"), 0);
+    execute(std::string(Provider) + Code, R"C(
+#include <stdlib.h>
+int main(void) {
+  neverd_x64_state_v6 s={0};s.RFlags=2;s.PC=0x1000;s.MXCSR=0x1f80;
+  s.CS=(neverd_x64_segment){0,UINT32_MAX,8,0xa09b};
+  s.SS=(neverd_x64_segment){0,UINT32_MAX,16,0xc093};
+  uint64_t stack[]={0x7000};s.GPR[4]=(uint64_t)stack;s.GPR[0]=41;
+  uint64_t budget=4;
+  if(neverd_x64_continue_v6(&s,&budget)!=3 || budget ||
+     s.GPR[0]!=43 || s.PC!=0x7000 || s.GPR[4]!=(uint64_t)(stack+1))abort();
+  return 0;
+})C");
+  }
+}
+
 TEST_F(X64ContinuationExportTest, KvmHypercallsRequireAnExplicitAbi) {
   load({0x0f, 0x01, 0xc1, 0x0f, 0x01, 0xd9, 0xc3});
   const std::string Request = R"JSON({"profile":"kernel-events-v6",

@@ -103,6 +103,22 @@ execution at O0/O2. Zero native requests in this selection does not prove that
 external calls, incomplete CFGs or complete Windows entries execute correctly.
 The five ordinary callers still contain 56 unproved argument occurrences.
 
+Opt-in direct-JMP discovery now extends that bounded selection to 10,317
+instructions in 88 regions, retaining all previous instruction bytes and zero
+native requests in both routes. Its 20 alignment preconditions now refuse
+before state, RAM or budget effects instead of trapping the source caller.
+Those 20 original sites match 5,120 native CPL0 executions through both routes
+at O0/O2, plus 10,240 unchanged-state refusals for unaligned and inaccessible
+addresses. Both complete translations compile at O0/O2 within the existing
+five-minute per-translation bound.
+Public regressions cover physical jump/call depth, cycles, sparse conditional
+stack observers and segmented alignment. Two additional private selected-call
+experiments compare 31,840 original instruction executions over 115 distinct
+PCs and 640 paths with both C routes at O0/O2. External services use explicit
+controlled native test callbacks; these results do not implement the Windows
+services or prove complete live kernel execution. The ordinary 56 occurrences
+remain unproved, and automatic ordinary/state interface composition stays open.
+
 Explicit x64 kernel continuation source carries GPRs, flags, vector bytes,
 segment bases, the physical stack and native-boundary requests. Its V4 layout
 adds CR2 with all other banks preserved. Explicit opt-ins bind segment-base

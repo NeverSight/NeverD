@@ -231,6 +231,8 @@ enum class X64ContinuationProfile : uint8_t {
   /// bases are arbitrary and may alias each other or the physical guest stack.
   /// The host is little-endian with 64-bit pointers. Faulting executions and
   /// NativeInstruction requests are outside this source execution contract.
+  /// Flat addr64 REP MOVS/STOS retain their runtime count, direction and full
+  /// register completion through the owned native intrinsic on an x64 host.
   KernelNoFaultV1,
   /// V1's domain plus an x64 host, legacy GS (CR4.FRED=0), explicit CR8/MXCSR
   /// state and no APIC/TPR memory aliases or external changes to these banks.

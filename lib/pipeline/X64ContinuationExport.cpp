@@ -63,6 +63,7 @@ struct Request {
   std::vector<va_t> Addresses;
   bool Entries = false;
   bool FollowInternalCalls = false;
+  bool FollowDirectJumps = false;
   unsigned CalleeDepth = 0;
   bool DirectDispatch = false;
 };
@@ -94,6 +95,7 @@ llvm::Expected<Request> readRequest(llvm::StringRef Text) {
                                        "native_page_table_access",
                                        "native_kvm_hypercalls",
                                        "follow_internal_calls",
+                                       "follow_direct_jumps",
                                        "callee_depth",
                                        "dispatch",
                                        "max_instructions",
@@ -179,7 +181,8 @@ llvm::Expected<Request> readRequest(llvm::StringRef Text) {
       {"native_descriptor_queries", &Options.NativeDescriptorQueries},
       {"native_page_table_access", &Options.NativePageTableAccess},
       {"native_kvm_hypercalls", &Options.NativeKvmHypercalls},
-      {"follow_internal_calls", &Result.FollowInternalCalls}};
+      {"follow_internal_calls", &Result.FollowInternalCalls},
+      {"follow_direct_jumps", &Result.FollowDirectJumps}};
   if (const auto *Value = Object->get("uiret_restores_uif")) {
     const auto Flag = Value->getAsBoolean();
     if (!Flag)
@@ -225,6 +228,8 @@ llvm::Expected<Request> readRequest(llvm::StringRef Text) {
   if (bool(Object->get("entries")) == bool(Object->get("instructions")))
     return invalid("select exactly one of entries or instructions");
   Result.Entries = Object->get("entries") != nullptr;
+  if (Object->get("follow_direct_jumps") && !Result.Entries)
+    return invalid("follow_direct_jumps requires entries");
   const auto *Addresses =
       Object->getArray(Result.Entries ? "entries" : "instructions");
   if (!Addresses || Addresses->empty() ||
@@ -466,7 +471,8 @@ exportX64Continuation(const BinaryImage &Image, llvm::StringRef RequestJSON,
   std::vector<va_t> Addresses = Request->Addresses;
   if (Request->Entries) {
     auto Selection = selectX64SpecialRegions(Image, Addresses, Request->Options,
-                                             Request->CalleeDepth, Debug);
+                                             Request->CalleeDepth,
+                                             Request->FollowDirectJumps, Debug);
     if (!Selection)
       return Selection.takeError();
     Addresses = std::move(Selection->Addresses);
