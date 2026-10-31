@@ -1095,10 +1095,17 @@ void markUnobservedStackSpills(MedFunc &Func, Arch Architecture,
   size_t Budget = limits::ir::kSourceEntrySpillWork;
   auto UnusedRestore = [&](const MedOp &Load) {
     const MedOp *Definition = &Load;
-    if (!Reads.unread(Load.Output)) {
-      Definition = Reads.singleReader(Load.Output);
+    while (!Reads.unread(Definition->Output)) {
+      // Only temporaries have no implicit physical observers. A dead COPY
+      // must not hide an earlier register definition, even when its final
+      // temporary has no SSA users. Pure temporary chains share this proof's
+      // budget; their final register still needs the ordinary observer walk.
+      if (Definition->Output.Kind != MedVar::Temp || !Budget)
+        return false;
+      --Budget;
+      Definition = Reads.singleReader(Definition->Output);
       if (!Definition || Definition->Opcode != NdOp::COPY ||
-          Definition->NumInputs != 1 || !Reads.unread(Definition->Output))
+          Definition->NumInputs != 1)
         return false;
     }
     const MedVar &Value = Definition->Output;
