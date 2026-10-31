@@ -2375,7 +2375,8 @@ void LLVMCWriter::writeForwardDecls(llvm::Module &Mod) {
             SourceImportPrototypes.count(functionIdentifier(Fn))))
         continue;
     }
-    if (Fn.isIntrinsic() || llvm_source_unknown::isFunction(Fn))
+    if (Fn.isIntrinsic() || llvm_source_unknown::isFunction(Fn) ||
+        Fn.getName() == "llvm.x86.vmrun.context")
       continue;
     if (llvmc::isCStackAllocationFunction(Fn))
       continue;

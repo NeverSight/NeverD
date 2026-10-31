@@ -16,6 +16,7 @@
 #include "llvm/IR/Function.h"
 #include "llvm/IR/InlineAsm.h"
 #include "llvm/IR/Instructions.h"
+#include "llvm/Support/ModRef.h"
 
 #include <stdexcept>
 
@@ -327,6 +328,8 @@ renderX86VirtualizationCall(Arch TargetArch, const llvm::CallInst &Call,
 }
 
 bool isX86VirtualizationNativeName(llvm::StringRef Name) {
+  if (Name == "llvm.x86.vmrun.context")
+    return true;
   if (!Name.consume_front("llvm.x86."))
     return false;
   Name = Name.split('.').first;
@@ -352,6 +355,32 @@ renderX86VirtualizationNativeCall(Arch TargetArch, const llvm::CallBase &Call,
       (TargetArch != Arch::X86 && TargetArch != Arch::X64))
     return {};
   const auto Name = Callee->getName();
+  if (Name == "llvm.x86.vmrun.context") {
+    // This extension can be carried by a module read with an older SDK. Its
+    // explicit context and conservative call effects are the contract; do not
+    // substitute the scalar __svm_vmrun spelling, which loses guest outputs.
+    bool Valid =
+        TargetArch == Arch::X64 && Callee->isDeclaration() &&
+        !Callee->isVarArg() && Call.getCallingConv() == llvm::CallingConv::C &&
+        !Call.getNumOperandBundles() && Call.getType()->isVoidTy() &&
+        !ResultLive && Call.arg_size() == 2 && Arguments.size() == 2 &&
+        Call.getMemoryEffects() == llvm::MemoryEffects::unknown() &&
+        !Call.doesNotReturn() && Call.hasFnAttr(llvm::Attribute::Convergent) &&
+        Call.hasFnAttr(llvm::Attribute::NoDuplicate);
+    const llvm::ConstantInt *Width = nullptr;
+    if (Call.arg_size() == 2) {
+      const auto *Pointer = Call.getArgOperand(0)->getType();
+      Width = llvm::dyn_cast<llvm::ConstantInt>(Call.getArgOperand(1));
+      Valid &= Pointer->isPointerTy() &&
+               Pointer->getPointerAddressSpace() == 0 && Width &&
+               Width->getType()->isIntegerTy(32) &&
+               (Width->equalsInt(32) || Width->equalsInt(64));
+    }
+    if (!Valid)
+      throw std::invalid_argument("invalid x64 VMRUN context intrinsic");
+    return "__builtin_ia32_vmrun_context((void *)(" + Arguments[0] + "), " +
+           std::to_string(Width->getZExtValue()) + ");\n";
+  }
   const uint16_t Word = TargetArch == Arch::X64 ? 8 : 4;
   const Intrinsic Inventory[] = {
 #define NEVERD_X86_VIRTUALIZATION(Id, ...) Intrinsic::Id,
