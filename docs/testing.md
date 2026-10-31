@@ -61,6 +61,9 @@ with independent arithmetic expectations.
 Frame-derived addresses keep their relative-frame proofs; the existing frame
 fallback regression must finish without increasing its query allowance.
 
+`PEFixedImageTest.MachineExitDiscoversBoundedCopyDestination` checks automatic pointer/count refinement across an internal call and a bounded word-copy loop. Independent register and byte-memory oracles cover zero counts, early terminators, overlapping buffers and high frame roots. Possible complete or partial return-cell corruption remains refused; exact and one-short operation/query budgets cover the discovery work.
+`InterpreterMachineRegionSourceTest.BoundedCopyDiscoversPointerAndCountContexts` executes both C routes at O0/O2 with ASan/UBSan and checks complete state and memory. These owned fixtures do not certify ordinary ABI recovery.
+
 `InterpreterMachineRegionSourceTest.RepeatedTransfersRetainRuntimeDirectionAndOverlap`
 executes bounded MOVS/STOS in both directions through HighC and LLVMC at O0/O2,
 comparing full state and every byte against an independent ordered copy oracle.

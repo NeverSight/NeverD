@@ -1,5 +1,8 @@
 **语言**: [English](../testing.md) | [简体中文](testing.md) | [繁體中文](../zh-TW/testing.md) | [日本語](../ja/testing.md) | [한국어](../ko/testing.md) | [Français](../fr/testing.md) | [Deutsch](../de/testing.md) | [Español](../es/testing.md) | [Italiano](../it/testing.md) | [Русский](../ru/testing.md) | [العربية](../ar/testing.md)
 
+`PEFixedImageTest.MachineExitDiscoversBoundedCopyDestination` 检查内部调用和有界字复制循环的指针、计数自动细化。独立寄存器和内存预期覆盖零计数、提前终止、缓冲区重叠及高位栈帧地址；仍拒绝完整或部分返回栈槽损坏，并检查精确及少一单位的操作、查询预算。
+`InterpreterMachineRegionSourceTest.BoundedCopyDiscoversPointerAndCountContexts` 在 O0/O2 下通过两种 C 输出和 ASan/UBSan 核对完整状态与内存。这些自建样例不构成普通 ABI 恢复认证。
+
 有界 `REP MOVS/STOS` 的机器状态源码测试覆盖用户与内核选择模型、四种元素宽度、正反方向、重叠内存及零计数的无效指针。`X86NativeStateAudit.RepTransfers*` 验证两种字前缀顺序、精确编码与操作数、完整状态和逐字节结果。额外前缀、地址覆盖、分段、REPNE 和未证明的计数仍被拒绝；该审计不授予内存、无故障、其他状态保留或普通 ABI 假设。
 
 `HighSwiftEmitter.StackScalarBindingsDoNotInventPhysicalStackWrites` 通过源码流水线检查 x64/ARM64 Mach-O 的整数、浮点及混合栈参数。`IncomingHomeSource.StackInitializationRequiresAbsenceOfAllObservers` 确保内存读取、调用、栈地址逃逸以及不透明或内存 intrinsic 仍保留入口存储初始化。纯值路径直接使用声明的参数，不额外生成物理 SP 写入，并保留寄存器浮点状态效应。macOS 移动端矩阵独立编译并执行恢复的 Swift；生成成功本身不代表执行验证。
