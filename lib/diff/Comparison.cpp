@@ -347,7 +347,9 @@ private:
   double contextAgreement(uint32_t A, uint32_t B) const;
   double quickScore(uint32_t A, uint32_t B) const;
   bool consistentContext(uint32_t A, uint32_t B) const;
-  FunctionDelta delta(uint32_t A, uint32_t B) const;
+  FunctionDelta delta(uint32_t A, uint32_t B,
+                      InstructionAlignmentProfile Alignment =
+                          CandidateInstructionAlignmentProfile) const;
   std::vector<uint32_t> inlinedTailCallers(uint32_t A, uint32_t B,
                                            const FunctionDelta &D,
                                            bool Secondary) const;
@@ -573,9 +575,10 @@ double Matcher::quickScore(uint32_t A, uint32_t B) const {
   return 0.5 * Sketch + 0.2 * Size + 0.3 * Context;
 }
 
-FunctionDelta Matcher::delta(uint32_t A, uint32_t B) const {
+FunctionDelta Matcher::delta(uint32_t A, uint32_t B,
+                             InstructionAlignmentProfile Alignment) const {
   return compareFunctionsWithKeys(P, A, S, B, {PMatch, SMatch}, PF.MnemonicKeys,
-                                  SF.MnemonicKeys, Control);
+                                  SF.MnemonicKeys, Control, Alignment);
 }
 
 void Matcher::callSites(uint32_t A, uint32_t B) {
@@ -1571,7 +1574,8 @@ void Matcher::finish() {
       if (Control.stop())
         return;
       FunctionMatch &M = R.Matches[I];
-      measure(M, delta(M.Primary, M.Secondary));
+      measure(
+          M, delta(M.Primary, M.Secondary, CurrentInstructionAlignmentProfile));
       if (M.Measured)
         Done.fetch_add(1, std::memory_order_relaxed);
     }

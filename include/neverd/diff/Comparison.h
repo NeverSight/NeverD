@@ -158,6 +158,11 @@ enum class InstructionAlignmentProfile : uint8_t {
 inline constexpr InstructionAlignmentProfile
     CurrentInstructionAlignmentProfile =
         InstructionAlignmentProfile::OrderedBlockSpans;
+/// Cross-block listing refinements do not establish function identity. Keep
+/// the candidate/rival gates on the structural recipe that corroborates them.
+inline constexpr InstructionAlignmentProfile
+    CandidateInstructionAlignmentProfile =
+        InstructionAlignmentProfile::SingleBlockSpans;
 llvm::StringRef alignmentProfileName(InstructionAlignmentProfile Profile);
 std::optional<InstructionAlignmentProfile>
 alignmentProfileNamed(llvm::StringRef Name);

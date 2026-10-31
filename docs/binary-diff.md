@@ -199,6 +199,9 @@ several blocks, under the same forward-graph and instruction-evidence rules.
 Moving an instruction across an internal branch target remains a block-boundary
 change even when the total block and edge counts agree. More matching rows do
 not establish control-flow or semantic equivalence.
+Automatic pairing and rival checks retain the structural matcher-22 recipe;
+ordered multi-block rows refine the resulting comparison and analyst-selected
+pairs without promoting a shared instruction sequence into identity evidence.
 
 Saved matches record `alignment_profile`. New matches use
 `ordered-block-spans-v1`; matcher-22 reports retain `single-block-spans-v1`, and

@@ -1900,6 +1900,10 @@ same eligibility and improvement requirements. A refined span always records a
 block-boundary change: shifting an instruction across an internal branch target
 must not become normalized unchanged merely because graph counts still agree.
 This remains instruction-listing alignment, not control-flow equivalence.
+`CandidateInstructionAlignmentProfile` keeps candidate admission and rival
+competition on the structural matcher-22 recipe. Ordered multi-block rows refine
+the final measurement under an independently established correspondence. They
+do not supply identity evidence or raise candidate scores during pairing.
 
 Each `FunctionMatch` and `FunctionDelta` retains an `InstructionAlignmentProfile`.
 `CurrentInstructionAlignmentProfile` owns the default for new pairs, currently
