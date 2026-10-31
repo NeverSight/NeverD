@@ -4,7 +4,7 @@
 //
 //===----------------------------------------------------------------------===//
 /// \file
-/// Bind legacy 64-bit register products to their four arbitrary flag bits.
+/// Bind legacy 16/32/64-bit register products to four arbitrary flag bits.
 //===----------------------------------------------------------------------===//
 
 #ifndef NEVERD_LIB_LIFT_X86_X86MULTIPLYUNDEFINED_H
@@ -48,85 +48,76 @@ inline bool matches(llvm::ArrayRef<LowOp> Ops,
   return true;
 }
 
-inline bool immediateForm(const cs_insn *Insn, Arch Target) {
-  if (!Insn || !Insn->detail || Target != Arch::X64 ||
-      Insn->id != X86_INS_IMUL || (Insn->size != 4 && Insn->size != 7))
-    return false;
-  const auto &X = Insn->detail->x86;
-  const uint8_t Rex = Insn->bytes[0], Opcode = Insn->bytes[1];
-  const uint8_t ModRM = Insn->bytes[2];
-  const unsigned ImmediateBytes = Opcode == 0x6b ? 1 : 4;
-  if (Rex < 0x48 || Rex > 0x4f || (Rex & 2) ||
-      (Opcode != 0x69 && Opcode != 0x6b) || Insn->size != 3 + ImmediateBytes ||
-      (ModRM >> 6) != 3 || X.op_count != 3 || X.modrm != ModRM ||
-      X.rex != Rex || X.prefix[0] || X.prefix[1] || X.prefix[2] ||
-      X.prefix[3] || X.addr_size != 8 || X.opcode[0] != Opcode || X.opcode[1] ||
-      X.opcode[2] || X.opcode[3] || X.encoding.modrm_offset != 2 ||
-      X.encoding.disp_size || X.encoding.disp_offset || X.disp || X.sib ||
-      X.encoding.imm_size != ImmediateBytes || X.encoding.imm_offset != 3 ||
-      X.avx_sae || X.avx_rm != X86_AVX_RM_INVALID ||
-      X.avx_cc != X86_AVX_CC_INVALID)
-    return false;
-  for (unsigned I = 0; I != 2; ++I) {
-    const auto &Operand = X.operands[I];
-    const unsigned Number = I == 0 ? ((ModRM >> 3) & 7) + ((Rex & 4) ? 8 : 0)
-                                   : (ModRM & 7) + ((Rex & 1) ? 8 : 0);
-    const auto Register = mapCapstoneReg(static_cast<x86_reg>(Operand.reg));
-    if (Operand.type != X86_OP_REG || Operand.size != 8 ||
-        Register.Offset != Number * 8 || Register.Size != 8 ||
-        Operand.avx_bcast != X86_AVX_BCAST_INVALID || Operand.avx_zero_opmask)
-      return false;
-  }
-  uint64_t Immediate = 0;
-  for (unsigned I = 0; I != ImmediateBytes; ++I)
-    Immediate |= uint64_t(Insn->bytes[3 + I]) << (I * 8);
-  if (Immediate & (UINT64_C(1) << (ImmediateBytes * 8 - 1)))
-    Immediate |= UINT64_MAX << (ImmediateBytes * 8);
-  const auto &Operand = X.operands[2];
-  return Operand.type == X86_OP_IMM && Operand.size == 8 &&
-         static_cast<uint64_t>(Operand.imm) == Immediate &&
-         Operand.avx_bcast == X86_AVX_BCAST_INVALID && !Operand.avx_zero_opmask;
-}
-
 inline bool form(const cs_insn *Insn, Arch Target) {
-  if (immediateForm(Insn, Target))
-    return true;
   if (!Insn || !Insn->detail || Target != Arch::X64 ||
-      (Insn->id != X86_INS_MUL && Insn->id != X86_INS_IMUL) || Insn->size < 3 ||
-      Insn->size > 4)
+      (Insn->id != X86_INS_MUL && Insn->id != X86_INS_IMUL) || Insn->size < 2 ||
+      Insn->size > 15)
     return false;
   const auto &X = Insn->detail->x86;
-  const uint8_t Rex = Insn->bytes[0];
-  const bool Pair = Insn->size == 4;
-  if (Rex < 0x48 || Rex > 0x4f || (Rex & 2) ||
-      (Pair ? Insn->id != X86_INS_IMUL || Insn->bytes[1] != 0x0f ||
-                  Insn->bytes[2] != 0xaf
-            : Insn->bytes[1] != 0xf7 || (Rex & 4)))
+  unsigned Pos = 0;
+  const uint8_t Prefix = Insn->bytes[Pos] == 0x66 ? Insn->bytes[Pos++] : 0;
+  uint8_t Rex = 0;
+  if (Pos < Insn->size && Insn->bytes[Pos] >= 0x40 && Insn->bytes[Pos] <= 0x4f)
+    Rex = Insn->bytes[Pos++];
+  // Register-only canonical forms. REX.X and redundant operand prefixes do
+  // not widen admission to other addressing or encoding families.
+  if (Pos + 2 > Insn->size || (Rex & 2) || (Prefix && (Rex & 8)))
     return false;
-  const uint8_t ModRM = Insn->bytes[Insn->size - 1];
+  const unsigned Width = (Rex & 8) ? 8 : Prefix ? 2 : 4;
+  const uint8_t Opcode = Insn->bytes[Pos];
+  const bool Pair = Opcode == 0x0f;
+  const bool Immediate = Opcode == 0x69 || Opcode == 0x6b;
+  const unsigned ModRMOffset = Pos + (Pair ? 2 : 1);
+  const unsigned ImmediateBytes = Immediate ? (Opcode == 0x6b ? 1
+                                               : Width == 2   ? 2
+                                                              : 4)
+                                            : 0;
+  if ((Pair || Immediate) ? Insn->id != X86_INS_IMUL
+                          : Opcode != 0xf7 || (Rex & 4))
+    return false;
+  if (Insn->size != ModRMOffset + 1 + ImmediateBytes ||
+      (Pair && Insn->bytes[Pos + 1] != 0xaf))
+    return false;
+  const uint8_t ModRM = Insn->bytes[ModRMOffset];
+  const unsigned RegisterOperands = Pair || Immediate ? 2 : 1;
   if ((ModRM >> 6) != 3 ||
-      (!Pair && ((ModRM >> 3) & 7) != (Insn->id == X86_INS_MUL ? 4 : 5)) ||
-      X.op_count != (Pair ? 2 : 1) || X.modrm != ModRM || X.rex != Rex ||
-      X.prefix[0] || X.prefix[1] || X.prefix[2] || X.prefix[3] ||
-      X.addr_size != 8 || X.opcode[0] != (Pair ? 0x0f : 0xf7) ||
+      (RegisterOperands == 1 &&
+       ((ModRM >> 3) & 7) != (Insn->id == X86_INS_MUL ? 4 : 5)) ||
+      X.op_count != RegisterOperands + Immediate || X.modrm != ModRM ||
+      X.rex != Rex || X.prefix[0] || X.prefix[1] || X.prefix[2] != Prefix ||
+      X.prefix[3] || X.addr_size != 8 || X.opcode[0] != Opcode ||
       X.opcode[1] != (Pair ? 0xaf : 0) || X.opcode[2] || X.opcode[3] ||
-      X.encoding.modrm_offset != Insn->size - 1 || X.encoding.disp_size ||
-      X.encoding.disp_offset || X.disp || X.sib || X.encoding.imm_size ||
-      X.encoding.imm_offset || X.avx_sae || X.avx_rm != X86_AVX_RM_INVALID ||
-      X.avx_cc != X86_AVX_CC_INVALID)
+      X.encoding.modrm_offset != ModRMOffset || X.encoding.disp_size ||
+      X.encoding.disp_offset || X.disp || X.sib ||
+      X.encoding.imm_size != ImmediateBytes ||
+      X.encoding.imm_offset != (Immediate ? ModRMOffset + 1 : 0) || X.avx_sae ||
+      X.avx_rm != X86_AVX_RM_INVALID || X.avx_cc != X86_AVX_CC_INVALID)
     return false;
-  for (unsigned I = 0; I != X.op_count; ++I) {
+  for (unsigned I = 0; I != RegisterOperands; ++I) {
     const auto &Operand = X.operands[I];
-    const unsigned Number = Pair && I == 0
+    const unsigned Number = RegisterOperands == 2 && I == 0
                                 ? ((ModRM >> 3) & 7) + ((Rex & 4) ? 8 : 0)
                                 : (ModRM & 7) + ((Rex & 1) ? 8 : 0);
     const auto Register = mapCapstoneReg(static_cast<x86_reg>(Operand.reg));
-    if (Operand.type != X86_OP_REG || Operand.size != 8 ||
-        Register.Offset != Number * 8 || Register.Size != 8 ||
+    if (Operand.type != X86_OP_REG || Operand.size != Width ||
+        Register.Offset != Number * 8 || Register.Size != Width ||
         Operand.avx_bcast != X86_AVX_BCAST_INVALID || Operand.avx_zero_opmask)
       return false;
   }
-  return true;
+  if (!Immediate)
+    return true;
+  uint64_t Value = 0;
+  for (unsigned I = 0; I != ImmediateBytes; ++I)
+    Value |= uint64_t(Insn->bytes[ModRMOffset + 1 + I]) << (I * 8);
+  // Capstone keeps a full-width immediate as unsigned bits. Only an encoded
+  // immediate narrower than its operand is normalized to a signed value.
+  if (ImmediateBytes < Width &&
+      (Value & (UINT64_C(1) << (ImmediateBytes * 8 - 1))))
+    Value |= UINT64_MAX << (ImmediateBytes * 8);
+  const auto &Operand = X.operands[2];
+  return Operand.type == X86_OP_IMM && Operand.size == Width &&
+         static_cast<uint64_t>(Operand.imm) == Value &&
+         Operand.avx_bcast == X86_AVX_BCAST_INVALID && !Operand.avx_zero_opmask;
 }
 
 } // namespace neverd::multiplyundefined

@@ -81,13 +81,20 @@ LowIR region may still fail ordinary call/return or ABI validation. Do not use
 its disposition to claim that ordinary source recovery succeeded.
 
 The explicit state route now admits audited legacy XMM XOR, register MOVD/MOVQ,
-byte-lane shifts, 64-bit products, scalar exchanges and locked updates. Complete
+byte-lane shifts, 16/32/64-bit register products, MOVHLPS/MOVLHPS, scalar
+exchanges and locked updates. Complete
 state/memory execution checks cover both C routes, arbitrary arithmetic flags,
 preserved upper vector lanes and negative bit-string indices. LOCK BTS/BTR/BTC
 retain one ordered transaction and its old-bit result instead of an unlocked
 load/store pair. Unknown encodings and environments retain explicit boundaries.
 LLVM C absolute guest stores use an integer address carrier so host object-size
 inference does not invent a zero-sized object at a high-half machine address.
+The seven remaining arithmetic/vector sites in the bounded five-root callee
+selection now have complete audits. Both routes model all 9,900 selected
+instructions across 86 regions; the seven original sites also match CPL0 KVM
+execution at O0/O2. Zero native requests in this selection does not prove that
+external calls, incomplete CFGs or complete Windows entries execute correctly.
+The five ordinary callers still contain 56 unproved argument occurrences.
 
 Explicit x64 kernel continuation source carries GPRs, flags, vector bytes,
 segment bases, the physical stack and native-boundary requests. Its V4 layout
