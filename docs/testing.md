@@ -10,6 +10,11 @@ reordered blocks, zero iterations, materialized header values and header
 calls/stores retain their execution sites. The matrix covers preserved LLVM
 function types and the default projection, including loops whose header can
 still be represented by a condition expression.
+`LLVMCPointerAddresses.CursorLoopKeepsReadsAndDeclarations` also executes an
+independent lookup and call-trace oracle for empty, matching, colliding and
+missing cursor chains at O0/O2 with UBSan. Its declaration checks admit the
+goto fallback needed to retain a materialized header read. SysV variadic and
+unprototyped-call assertions retain explicit machine-word constant carriers.
 
 `LLVMCValues.ReorderedConditionalBlocksRetainEveryExit` executes nested tests
 with both forward and backward block layouts, reversed arms, separate and
@@ -16767,7 +16772,13 @@ execution or a full guest exception-state contract.
 `SourceCallReturnReads.*` in `NeverDMedPrologueSavesTests` covers old constant
 contents, complete and partial later stores, separated slots, earlier loads,
 physical calls versus synthetic tail calls, joins, loop-carried observations,
-missing SPs, malformed graphs and exhausted budgets. It also covers the
+missing SPs, malformed graphs and exhausted budgets. Unavailable private scalar
+spills whose released slots the next CALL overwrites are checked at x86/x64
+widths across COFF/ELF/Mach-O, including when the body never loads the new word.
+Earlier reads retain the old value; missing frame bounds, analyst frames,
+skipped SSA, process entries and incomplete calls or graphs grant no new write.
+Indirect literal storage, register values and already loaded stack targets keep
+their original operand roles and ordering. The suite also covers the
 deferral of return-slot loads to the settled observation proof, each deferred
 load leaving the backward proof once while the rest stay proved. The proof
 cases are GCC's pop cleanup, explicit and returned uses, unread copies and
@@ -16794,7 +16805,11 @@ retains the same physical word in mutation 7; unproved callee-side return-slot
 reads and other unsupported effects still keep the original call. These checks
 run at O0/O2 with UBSan, including its indirect-function probe. Variant 8 supplies
 a complete later store and executes both generated C routes with an independent
-provider. Native CALL
+provider. Variant 9 releases an unavailable scratch word before a physical CALL
+and returns the provider's scalar result without reading the new return word.
+The original machine bytes and both C routes agree across all three formats,
+source optimization on/off and O0/O2 with UBSan; the old scratch value must not
+produce a source trap. Native CALL
 continuation materialization remains a separate source-ABI requirement.
 `SessionCAPITest.DecompileFunctionsDistinguishesLocalAndIncomingCallSlots`
 checks explicit continuation materialization for a local CALL slot and refusal

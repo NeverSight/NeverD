@@ -73,7 +73,9 @@ bool validateObservedCallReturnReads(
     const MedFunc &Func, const BinaryImage &Image, std::string &Diagnostic,
     size_t WorkLimit = limits::ir::kSourceCallReturnReadWork,
     const std::map<va_t, unsigned> *CalleeIntegerArity = nullptr);
-/// Retain observed near-CALL return-address writes in the reconstructed frame.
+/// Retain near-CALL writes observed or replacing a private scalar spill in the
+/// reconstructed frame. Existing target loads and call operands keep their
+/// ordering and value-versus-storage roles.
 /// Only exact entry-relative slots below entry SP are admitted. Planning is
 /// transactional: ambiguous stacks, incomplete graphs and unavailable original
 /// encodings leave Func unchanged. This does not prove callee memory effects or
