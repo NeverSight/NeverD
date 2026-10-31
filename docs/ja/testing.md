@@ -1,5 +1,7 @@
 **Languages**: [English](../testing.md) | [简体中文](../zh-CN/testing.md) | [繁體中文](../zh-TW/testing.md) | [日本語](testing.md) | [한국어](../ko/testing.md) | [Français](../fr/testing.md) | [Deutsch](../de/testing.md) | [Español](../es/testing.md) | [Italiano](../it/testing.md) | [Русский](../ru/testing.md) | [العربية](../ar/testing.md)
 
+有界の `REP MOVS/STOS` の機械状態ソーステストは、ユーザーとカーネルの選択モデル、4 種の要素幅、両方向、重複メモリ、ゼロ回での無効ポインタを検証します。`X86NativeStateAudit.RepTransfers*` はワード接頭辞の両順序、正確な符号化とオペランド、全状態と各バイトを確認します。余分な接頭辞、アドレス上書き、セグメント、REPNE、未証明の回数は拒否し、メモリアクセス、無故障、他の状態保存、通常 ABI の仮定を追加しません。
+
 `HighSwiftEmitter.StackScalarBindingsDoNotInventPhysicalStackWrites` は x64/ARM64 Mach-O の整数、浮動小数点、混合スタック引数をソースパイプラインで検証します。`IncomingHomeSource.StackInitializationRequiresAbsenceOfAllObservers` はメモリ読み取り、呼び出し、スタックアドレスの流出、不透明な intrinsic やメモリ intrinsic に必要な入口ストレージを維持します。値だけを使う経路では宣言済み引数を使い、物理 SP への書き込みを生成せず、レジスタの浮動小数点状態効果を保持します。macOS モバイル行列は復元した Swift を独立にコンパイル・実行します。生成成功だけでは実行の証拠になりません。
 
 `NeverDLLVMCValueTests` は独立した Windows x64 ABI 関数への可変引数呼び出しを O0/O2 と両型保持設定でコンパイルして実行します。ネイティブ x64 で va_arg による値を検証し、他のアーキテクチャでは明示的にスキップします。
