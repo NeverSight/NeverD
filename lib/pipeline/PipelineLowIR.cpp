@@ -26,6 +26,7 @@
 #include "neverd/ir/low/InternalNoReturn.h"
 #include "neverd/ir/low/LowIntrinsicEffects.h"
 #include "neverd/ir/low/RegistrationABI.h"
+#include "neverd/ir/low/RegistrationLeafPrefixMemo.h"
 #include "neverd/ir/low/SEHFrameProof.h"
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/ir/med/MedCallConvention.h"
@@ -4722,9 +4723,11 @@ void Pipeline::buildLowIR(
   // many callers. The image does not change during these builds, so their
   // recorded answers, replayed with their work, are the fresh ones.
   RegistrationStackPopMemo StackPops(Img);
+  RegistrationLeafPrefixMemo LeafPrefixes(Img);
   parallelForEachWeighted(Weight, [&](auto Claim, size_t N) {
     ReadOnlyBytesScope ReadScope(Img);
     RegistrationStackPopMemoScope StackPopScope(StackPops);
+    RegistrationLeafPrefixMemoScope LeafPrefixScope(LeafPrefixes);
     Decoder LocalDec;
     if (!LocalDec.init(Img))
       return;
@@ -4806,6 +4809,7 @@ void Pipeline::buildLowIR(
     parallelForEachWeighted(Weight, [&](auto Claim, size_t N) {
       ReadOnlyBytesScope ReadScope(Img);
       RegistrationStackPopMemoScope StackPopScope(StackPops);
+      RegistrationLeafPrefixMemoScope LeafPrefixScope(LeafPrefixes);
       Decoder LocalDec;
       if (!LocalDec.init(Img))
         return;

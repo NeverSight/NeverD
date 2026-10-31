@@ -10,7 +10,9 @@
 #include "RegistrationImportLoad.h"
 
 #include "neverd/Limits.h"
+#include "neverd/ir/Limits.h"
 #include "neverd/ir/low/CFGBuilder.h"
+#include "neverd/ir/low/RegistrationLeafPrefixMemo.h"
 #include "neverd/lift/X86Regs.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/COFF/COFFRegistrationEH.h"
@@ -352,6 +354,43 @@ bool retainLeafEntryBlocks(LowFunc &Function, size_t &Work,
 
 } // namespace
 
+namespace {
+thread_local RegistrationLeafPrefixMemo *CurrentLeafPrefixRefusals = nullptr;
+} // namespace
+
+RegistrationLeafPrefixMemoScope::RegistrationLeafPrefixMemoScope(
+    RegistrationLeafPrefixMemo &Memo)
+    : Previous(CurrentLeafPrefixRefusals) {
+  CurrentLeafPrefixRefusals = &Memo;
+}
+
+RegistrationLeafPrefixMemoScope::~RegistrationLeafPrefixMemoScope() {
+  CurrentLeafPrefixRefusals = Previous;
+}
+
+std::optional<size_t> RegistrationLeafPrefixMemo::find(const BinaryImage &Other,
+                                                       va_t Target,
+                                                       uint32_t Pop,
+                                                       bool ClosedCalls,
+                                                       unsigned Level) {
+  if (&Other != &Image)
+    return std::nullopt;
+  std::lock_guard<std::mutex> Lock(Mutex);
+  const auto It = Refusals.find({Target, Pop, ClosedCalls, Level});
+  return It == Refusals.end() ? std::nullopt
+                              : std::optional<size_t>{It->second};
+}
+
+void RegistrationLeafPrefixMemo::record(const BinaryImage &Other, va_t Target,
+                                        uint32_t Pop, bool ClosedCalls,
+                                        unsigned Level, size_t Work) {
+  if (&Other != &Image || Work >= limits::kMaxRegistrationEHStateWork)
+    return;
+  std::lock_guard<std::mutex> Lock(Mutex);
+  if (Refusals.size() < limits::ir::kMaxRegistrationLeafPrefixRefusals)
+    Refusals.emplace(std::make_tuple(Target, Pop, ClosedCalls, Level), Work);
+}
+
 std::optional<RegistrationLeafCalleeABI> registration_abi::checkedLeafCalleeABI(
     const BinaryImage &Image, va_t Target, size_t &Work,
     RegistrationLeafResult ResultKind, uint32_t CopyObjectSize,
@@ -364,6 +403,21 @@ std::optional<RegistrationLeafCalleeABI> registration_abi::checkedLeafCalleeABI(
     return std::nullopt;
   if (!registration_abi::isPlainRegistrationCalleeEntry(Image, Target))
     return std::nullopt;
+  const uint32_t Pop = Initializer      ? Initializer->StackPopBytes
+                       : CopyObjectSize ? 4
+                       : Callbacks      ? CallbackStackPopBytes
+                                        : 0;
+  const bool ClosedCalls = Context || Callbacks;
+  const unsigned Level = x86SEHStateAnalysisLevel();
+  RegistrationLeafPrefixMemo *Memo = Work <= limits::kMaxRegistrationEHStateWork
+                                         ? CurrentLeafPrefixRefusals
+                                         : nullptr;
+  if (Memo)
+    if (const auto Known = Memo->find(Image, Target, Pop, ClosedCalls, Level)) {
+      chargeCalleeWork(Work, *Known);
+      return std::nullopt;
+    }
+  const size_t Before = Work;
   if (!chargeCalleeWork(Work, 1))
     return std::nullopt;
   Decoder Decoder;
@@ -372,20 +426,26 @@ std::optional<RegistrationLeafCalleeABI> registration_abi::checkedLeafCalleeABI(
   CFGBuilder Builder;
   LowFunc Callee =
       Builder.buildIntegerFrameProof(Image, Decoder, Target, "abi-leaf");
-  const uint32_t Pop = Initializer      ? Initializer->StackPopBytes
-                       : CopyObjectSize ? 4
-                       : Callbacks      ? CallbackStackPopBytes
-                                        : 0;
+  bool ReadChildContext = false;
+  auto RefusePrefix = [&]() -> std::optional<RegistrationLeafCalleeABI> {
+    // The fresh raw integer graph reads no enclosing callee proof. Only its
+    // image-only checks before the first child query can be shared. Every
+    // caller still pays the same work, including a shorter-budget refusal.
+    if (Memo && !ReadChildContext && !Callee.ExceptionMetadata &&
+        Work < limits::kMaxRegistrationEHStateWork)
+      Memo->record(Image, Target, Pop, ClosedCalls, Level, Work - Before);
+    return std::nullopt;
+  };
   if (!chargeDecodedCallee(Work, Callee) || !Callee.hasCompleteLiftCoverage() ||
       Callee.Blocks.empty() || Callee.ExceptionMetadata ||
       !retainLeafEntryBlocks(Callee, Work, Pop))
-    return std::nullopt;
+    return RefusePrefix();
   InitializerCalls Initializers;
   ObjectCallbackCalls ObjectCallbacks;
   for (const auto &Block : Callee.Blocks) {
     if (Block.Succs.empty() &&
         (Block.Ops.empty() || Block.Ops.back().Opcode != NdOp::RETURN))
-      return std::nullopt;
+      return RefusePrefix();
     for (const auto &Op : Block.Ops) {
       if (Op.Opcode != NdOp::CALL && Op.Opcode != NdOp::INDIR_CALL)
         continue;
@@ -398,7 +458,8 @@ std::optional<RegistrationLeafCalleeABI> registration_abi::checkedLeafCalleeABI(
           !Op.Inputs[0].isConst() || Op.Inputs[0].Size != 4 || Op.Seq < 0 ||
           Initializers.size() + ObjectCallbacks.size() >=
               kMaxObjectCallbackNodes)
-        return std::nullopt;
+        return RefusePrefix();
+      ReadChildContext = true;
       if (Context) {
         auto Nested = checkedInitializerCalleeABI(Image, Op.Inputs[0].Offset,
                                                   Work, *Context);

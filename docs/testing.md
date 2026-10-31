@@ -6046,6 +6046,15 @@ must refuse. `IdenticalImageAddressesHaveExactRelations` checks zero difference
 and signed/unsigned self-comparisons, full spills, partial aliases, mismatched
 widths and mixed frame, cookie, import or thread provenance. The earlier frame
 coordinate and numeric-address cancellation negatives remain required.
+`PrefixRefusalsKeepColdBudgetsAndChildContexts` compares replayed leaf-prefix
+refusals with fully uncached queries at exact, insufficient and already-exhausted
+budgets. It checks ordinary, initializer and callback queries, prewarmed child
+contexts, active stack owners and return-cleanup differences. A first child
+query prevents later failures from being retained.
+`PrefixRefusalsKeepImageAndInvocationDomains` keeps closed-call graph refusals
+apart from ordinary leaf proofs of dead calls, and checks equal addresses in
+different images plus source changes between separately scoped operations.
+
 `RegistrationLeafBranch` checks taken and fallthrough choices around direct
 and indirect calls and image writes. Mutable zero-filled data remains unknown;
 reachable calls refuse, and reachable writes retain their exact effect extent.

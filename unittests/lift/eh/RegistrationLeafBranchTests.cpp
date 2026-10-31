@@ -7,14 +7,19 @@
 /// Keep leaf effects conditional on current all-path branch evidence.
 //===----------------------------------------------------------------------===//
 
+#include "../../../lib/ir/low/X86/RegistrationABIPrivate.h"
+#include "../../../lib/ir/low/X86/RegistrationStackOwner.h"
 #include "gtest/gtest.h"
 
 #include "neverd/Limits.h"
 #include "neverd/ir/low/RegistrationABI.h"
+#include "neverd/ir/low/RegistrationLeafPrefixMemo.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/support/BinaryEncoding.h"
 
+#include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <vector>
 
 using namespace neverd;
@@ -136,4 +141,154 @@ TEST(RegistrationLeafBranch, BackedgesReopenAFormerlyConstantChoice) {
       EXPECT_FALSE(getCheckedX86RegistrationLeafCalleeABI(Image, Image.Entry,
                                                           nullptr, Result));
   }
+}
+
+TEST(RegistrationLeafBranch, PrefixRefusalsKeepColdBudgetsAndChildContexts) {
+  struct Case {
+    std::vector<uint8_t> Code;
+    unsigned Mode;
+    uint32_t Pop;
+    bool Retained;
+  };
+  const std::vector<uint8_t> Indirect{0xff, 0xd2, 0xc3};
+  const std::vector<uint8_t> Empty{0xc3};
+  const std::vector<uint8_t> Pop{0xb8, 42, 0, 0, 0, 0xc2, 4, 0};
+  const std::vector<uint8_t> Dead{0x31, 0xc0, 0x74, 2, 0xff, 0xd2,
+                                  0xb8, 42,   0,    0, 0,    0xc3};
+  const std::vector<uint8_t> Nested{0xe8, 0x7b, 0, 0, 0, 0xff, 0xd2, 0xc3};
+  for (const Case &C : std::vector<Case>{{Indirect, 0, 0, false},
+                                         {Indirect, 1, 0, true},
+                                         {Indirect, 2, 0, true},
+                                         {Empty, 0, 0, false},
+                                         {Empty, 1, 0, false},
+                                         {Empty, 2, 0, false},
+                                         {Pop, 0, 0, true},
+                                         {Pop, 1, 0, true},
+                                         {Pop, 1, 4, false},
+                                         {Pop, 2, 4, false},
+                                         {Dead, 0, 0, false},
+                                         {Dead, 1, 0, true},
+                                         {Dead, 2, 0, true},
+                                         {Nested, 1, 0, false},
+                                         {Nested, 2, 0, false}}) {
+    SCOPED_TRACE(::testing::Message()
+                 << C.Code.size() << ':' << C.Mode << ':' << C.Pop);
+    const auto Image = branchImage(C.Code);
+    struct Answer {
+      bool Success;
+      size_t Children;
+      bool Initialized;
+      bool operator==(const Answer &) const = default;
+    };
+    auto Query = [&](size_t &Work, bool WarmChild = false) {
+      registration_abi::InitializerContext Initializers;
+      registration_abi::ObjectCallbackContext Callbacks;
+      registration_abi::InitializerFrame Frame{C.Pop, std::nullopt};
+      if (WarmChild) {
+        size_t ChildWork = 0;
+        if (C.Mode == 2)
+          registration_abi::checkedInitializerCalleeABI(
+              Image, Image.Entry + 0x80, ChildWork, Initializers);
+        else
+          registration_abi::checkedObjectCallbackCalleeABI(
+              Image, Image.Entry + 0x80, ChildWork, Callbacks);
+      }
+      const auto Result = registration_abi::checkedLeafCalleeABI(
+          Image, Image.Entry, Work,
+          C.Mode == 1 ? RegistrationLeafResult::Discarded
+                      : RegistrationLeafResult::Observed,
+          0, nullptr, C.Mode == 2 ? &Frame : nullptr,
+          C.Mode == 2 ? &Initializers : nullptr,
+          C.Mode == 1 ? &Callbacks : nullptr, C.Mode == 1 ? C.Pop : 0);
+      return Answer{bool(Result),
+                    C.Mode == 2 ? Initializers.Callees.size()
+                                : Callbacks.Callees.size(),
+                    Frame.Initialized.has_value()};
+    };
+    const uint32_t KeyPop = C.Mode ? C.Pop : 0;
+    const bool ClosedCalls = C.Mode != 0;
+    constexpr size_t Limit = limits::kMaxRegistrationEHStateWork;
+    size_t FreshWork = 0;
+    const auto Fresh = Query(FreshWork);
+    ASSERT_GT(FreshWork, 1u);
+    ASSERT_LT(FreshWork, Limit);
+    RegistrationLeafPrefixMemo Memo(Image);
+    RegistrationLeafPrefixMemoScope Scope(Memo);
+    size_t Work = 0;
+    EXPECT_EQ(Query(Work), Fresh);
+    EXPECT_EQ(Work, FreshWork);
+    const auto Known = Memo.find(Image, Image.Entry, KeyPop, ClosedCalls, 0);
+    ASSERT_EQ(Known.has_value(), C.Retained);
+    if (Known)
+      EXPECT_EQ(*Known, FreshWork);
+    EXPECT_FALSE(Memo.find(Image, Image.Entry, KeyPop, ClosedCalls, 1));
+    for (bool WarmChild : {false, true})
+      for (size_t Before :
+           {size_t{0}, size_t{17}, Limit - FreshWork - 1, Limit - FreshWork,
+            Limit - FreshWork + 1, Limit - 1, Limit, Limit + 1}) {
+        SCOPED_TRACE(::testing::Message() << WarmChild << ':' << Before);
+        size_t Cached = Before, Cold = Before;
+        const auto Actual = Query(Cached, WarmChild);
+        // A scope for another image disables reuse for this whole query,
+        // including its children, without changing any proof policy.
+        BinaryImage Unrelated;
+        RegistrationLeafPrefixMemo Disabled(Unrelated);
+        RegistrationLeafPrefixMemoScope Inner(Disabled);
+        EXPECT_EQ(Actual, Query(Cold, WarmChild));
+        EXPECT_EQ(Cached, Cold);
+      }
+    {
+      RegistrationLeafPrefixMemo EmptyMemo(Image);
+      RegistrationLeafPrefixMemoScope Inner(EmptyMemo);
+      Work = Limit - 1;
+      EXPECT_FALSE(Query(Work).Success);
+      EXPECT_FALSE(EmptyMemo.find(Image, Image.Entry, KeyPop, ClosedCalls, 0));
+    }
+    for (bool SharedWork : {false, true}) {
+      Work = 0;
+      size_t OwnerWork = 29;
+      RegistrationCallCalleeIndex Owner(Image, SharedWork ? &Work : &OwnerWork);
+      registration_abi::StackProofOwnerScope Active(
+          Owner, SharedWork ? Work : OwnerWork);
+      EXPECT_EQ(Query(Work), Fresh);
+      EXPECT_EQ(Work, FreshWork);
+      EXPECT_EQ(OwnerWork, 29u);
+    }
+  }
+}
+
+TEST(RegistrationLeafBranch, PrefixRefusalsKeepImageAndInvocationDomains) {
+  auto Image =
+      branchImage({0x31, 0xc0, 0x74, 2, 0xff, 0xd2, 0xb8, 42, 0, 0, 0, 0xc3});
+  const auto Other = branchImage({0x31, 0xc0, 0xc3});
+  {
+    RegistrationLeafPrefixMemo Memo(Image);
+    RegistrationLeafPrefixMemoScope Scope(Memo);
+    registration_abi::ObjectCallbackContext Callbacks;
+    size_t Work = 0;
+    EXPECT_FALSE(registration_abi::checkedLeafCalleeABI(
+        Image, Image.Entry, Work, RegistrationLeafResult::Discarded, 0, nullptr,
+        nullptr, nullptr, &Callbacks, 0));
+    ASSERT_TRUE(Memo.find(Image, Image.Entry, 0, true, 0));
+    // The ordinary leaf interpreter proves the indirect call unreachable.
+    // An object graph's stronger structural requirement cannot reject it.
+    Work = 0;
+    EXPECT_TRUE(
+        getCheckedX86RegistrationLeafCalleeABI(Image, Image.Entry, &Work));
+    Work = 0;
+    EXPECT_TRUE(
+        getCheckedX86RegistrationLeafCalleeABI(Other, Other.Entry, &Work));
+    EXPECT_FALSE(Memo.find(Other, Other.Entry, 0, true, 0));
+  }
+  // A new image operation receives a new memo; source changes between them
+  // must not retain a refusal from the prior instruction stream.
+  Image = Other;
+  RegistrationLeafPrefixMemo NewMemo(Image);
+  RegistrationLeafPrefixMemoScope NewScope(NewMemo);
+  registration_abi::ObjectCallbackContext Callbacks;
+  size_t Work = 0;
+  EXPECT_TRUE(registration_abi::checkedLeafCalleeABI(
+      Image, Image.Entry, Work, RegistrationLeafResult::Discarded, 0, nullptr,
+      nullptr, nullptr, &Callbacks, 0));
+  EXPECT_FALSE(NewMemo.find(Image, Image.Entry, 0, true, 0));
 }

@@ -589,6 +589,9 @@ inline constexpr int
     kSourceFrameAnalysisSourceFrameCompleteOutputBytesFunctionBlocksSizeLimit =
         128;
 
+// lib/ir/low/X86/RegistrationCalleeABI.cpp
+inline constexpr size_t kMaxRegistrationLeafPrefixRefusals = 4096;
+
 // lib/ir/low/X86/RegistrationCalleeIndex.cpp
 inline constexpr int
     kRegistrationCalleeIndexRegistrationCallCalleeIndexContractsTargetsSizeLimit =

@@ -1124,6 +1124,17 @@ index from another image is ignored. A change of work account, SEH analysis
 level or C++ proof ancestry still starts a fresh proof; it retains only this
 image inventory from an active owner.
 
+Leaf-prefix refusals have a separate bounded memo for the same unchanged-image
+operation. A key includes the entry, required return cleanup, closed-call-graph
+requirement and SEH analysis level. Only an integer CFG without EH can supply
+it, and only before the first nested initializer or object-callback query.
+Those prefix checks read no child proof context and modify no initializer
+output. Ordinary leaf and closed object graph requirements remain distinct,
+including calls on infeasible edges. Every hit charges the original cumulative
+work; exhausted attempts, successful prefixes and any refusal after a child
+query are not retained. Active stack owners retain their own work counters
+and contracts. No cached refusal supplies a callee ABI or call effect.
+
 Each LowIR worker also scopes an optional `ReadOnlyBytesScope` to its immutable
 image build. It sorts the three vector fixup inventories once and uses overlap
 lookups for subsequent storage reads. Duplicate, partial and type-zero records
