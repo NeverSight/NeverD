@@ -207,6 +207,10 @@ struct Function {
   /// The entry block, relative to FirstBlock; NoIndex for a function
   /// without blocks.
   uint32_t EntryBlock = NoIndex;
+  /// Byte-derived candidate hint for fixed-frame address-use roles. It does
+  /// not change normalized instruction identity or prove stack-object aliasing.
+  /// Zero means unavailable; matcher revisions own this auxiliary feature.
+  uint64_t StackRoleCandidate = 0;
 
   bool has(FunctionTrait Trait) const { return (Traits & Trait) != 0; }
   /// Whether the function has code of this program to compare.
@@ -352,6 +356,7 @@ public:
   void addReference(ReferenceKind Kind, uint64_t Key, uint32_t Block);
   void setEntryBlock(uint32_t Block);
   void addTraits(uint16_t Traits);
+  void setStackRoleCandidate(uint64_t Key);
   void warn(std::string Warning);
 
   /// Ends the program: every direct call whose target begins one of its

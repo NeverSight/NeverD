@@ -257,6 +257,14 @@ private:
   static uint64_t pairKey(uint32_t A, uint32_t B) {
     return (uint64_t(A) << 32) | B;
   }
+  bool protectedMatch(const Formed &F) const {
+    return F.Step == FunctionStep::Manual ||
+           F.Step == FunctionStep::ImportName ||
+           F.Step == FunctionStep::SymbolName ||
+           F.Step == FunctionStep::ExactBytes ||
+           F.Step == FunctionStep::NormalizedBody || F.FromContext ||
+           Confirmed.contains(pairKey(F.Primary, F.Secondary));
+  }
   void propose(uint32_t A, uint32_t B, FunctionStep Step, bool FromContext) {
     auto [It, Inserted] =
         FeatureCandidates.try_emplace(pairKey(A, B), CandidateEvidence{Step});
@@ -344,6 +352,7 @@ private:
   void collectAmbiguities();
   void retainEntryAlternatives();
   void retainCallAlternatives();
+  void retainStackAlternatives();
   void finish();
 };
 
@@ -1094,12 +1103,7 @@ void Matcher::retainEntryAlternatives() {
       WeakB(S.Functions.size(), NoIndex);
   for (uint32_t I = 0; I < Order.size(); ++I) {
     const auto &F = Order[I];
-    if (F.Step == FunctionStep::Manual || F.Step == FunctionStep::ImportName ||
-        F.Step == FunctionStep::SymbolName ||
-        F.Step == FunctionStep::ExactBytes ||
-        F.Step == FunctionStep::NormalizedBody || F.FromContext ||
-        Confirmed.contains(pairKey(F.Primary, F.Secondary)) ||
-        contextAgreement(F.Primary, F.Secondary) > 0)
+    if (protectedMatch(F) || contextAgreement(F.Primary, F.Secondary) > 0)
       continue;
     WeakA[F.Primary] = WeakB[F.Secondary] = I;
   }
@@ -1227,11 +1231,7 @@ void Matcher::retainCallAlternatives() {
   bool HasWeak = false;
   for (uint32_t I = 0; I < Order.size(); ++I) {
     const auto &F = Order[I];
-    if (F.Step == FunctionStep::Manual || F.Step == FunctionStep::ImportName ||
-        F.Step == FunctionStep::SymbolName ||
-        F.Step == FunctionStep::ExactBytes ||
-        F.Step == FunctionStep::NormalizedBody || F.FromContext ||
-        Confirmed.contains(pairKey(F.Primary, F.Secondary)))
+    if (protectedMatch(F))
       continue;
     WeakA[F.Primary] = WeakB[F.Secondary] = I;
     HasWeak = true;
@@ -1291,6 +1291,102 @@ void Matcher::retainCallAlternatives() {
                  [&](const Formed &F) { return PMatch[F.Primary] == NoIndex; });
 }
 
+void Matcher::retainStackAlternatives() {
+  if (!Settings.Approximate || stopNow())
+    return;
+  std::vector<uint32_t> WeakA(P.Functions.size(), NoIndex),
+      WeakB(S.Functions.size(), NoIndex);
+  for (uint32_t I = 0; I < Order.size(); ++I) {
+    const auto &F = Order[I];
+    if (protectedMatch(F))
+      continue;
+    WeakA[F.Primary] = WeakB[F.Secondary] = I;
+  }
+  struct Entry {
+    uint64_t Key;
+    bool Secondary;
+    uint32_t Function;
+  };
+  std::vector<Entry> Entries;
+  Entries.reserve(P.Functions.size() + S.Functions.size());
+  for (bool Secondary : {false, true}) {
+    const auto &Program = Secondary ? S : P;
+    const auto &Match = Secondary ? SMatch : PMatch;
+    const auto &Weak = Secondary ? WeakB : WeakA;
+    for (uint32_t I = 0; I < Program.Functions.size(); ++I) {
+      const auto &F = Program.Functions[I];
+      if (F.StackRoleCandidate && !F.has(TraitIncomplete) &&
+          (Match[I] == NoIndex || Weak[I] != NoIndex))
+        Entries.push_back({F.StackRoleCandidate, Secondary, I});
+    }
+  }
+  llvm::sort(Entries, [](const Entry &A, const Entry &B) {
+    return std::tie(A.Key, A.Secondary, A.Function) <
+           std::tie(B.Key, B.Secondary, B.Function);
+  });
+  struct Candidate {
+    uint32_t A, B, Prior;
+    bool Retain = false;
+  };
+  std::vector<Candidate> Candidates;
+  for (size_t I = 0; I < Entries.size();) {
+    if (stopNow())
+      return;
+    size_t J = I + 1;
+    while (J < Entries.size() && Entries[J].Key == Entries[I].Key)
+      ++J;
+    if (J - I == 2 && !Entries[I].Secondary && Entries[I + 1].Secondary) {
+      const uint32_t A = Entries[I].Function, B = Entries[I + 1].Function;
+      if ((PMatch[A] == NoIndex || SMatch[B] == NoIndex) &&
+          !Rejected.contains(pairKey(A, B)) && !namesConflict(A, B)) {
+        const uint32_t Prior = PMatch[A] == NoIndex && SMatch[B] == NoIndex
+                                   ? NoIndex
+                               : PMatch[A] == NoIndex ? WeakB[B]
+                                                      : WeakA[A];
+        uint64_t Other = 0;
+        if (Prior != NoIndex) {
+          const auto &F = Order[Prior];
+          if (!P.Functions[F.Primary].has(TraitIncomplete) &&
+              !S.Functions[F.Secondary].has(TraitIncomplete))
+            Other = PMatch[A] == NoIndex
+                        ? P.Functions[F.Primary].StackRoleCandidate
+                        : S.Functions[F.Secondary].StackRoleCandidate;
+        }
+        if (Prior == NoIndex || (Other && Other != Entries[I].Key))
+          Candidates.push_back({A, B, Prior});
+      }
+    }
+    I = J;
+  }
+  parallelForEach(Candidates.size(), [&](auto Claim, size_t Count) {
+    for (size_t I = Claim(); I < Count; I = Claim()) {
+      if (Control.stop())
+        return;
+      auto &C = Candidates[I];
+      const auto D = delta(C.A, C.B);
+      C.Retain = D.ComputationComplete && D.AnalysisComplete &&
+                 D.Similarity >= Settings.MinimumSimilarity;
+    }
+  });
+  if (stopNow())
+    return;
+  std::vector<uint8_t> Deferred(Order.size(), 0);
+  for (const auto &C : Candidates)
+    if (C.Retain) {
+      if (C.Prior != NoIndex)
+        Deferred[C.Prior] = 1;
+      NearTies.push_back({FunctionStep::StackRoles, {C.A}, {C.B}});
+    }
+  for (uint32_t I = 0; I < Order.size(); ++I)
+    if (Deferred[I]) {
+      const auto &F = Order[I];
+      PMatch[F.Primary] = SMatch[F.Secondary] = NoIndex;
+      NearTies.push_back({F.Step, {F.Primary}, {F.Secondary}});
+    }
+  llvm::erase_if(Order,
+                 [&](const Formed &F) { return PMatch[F.Primary] == NoIndex; });
+}
+
 void Matcher::collectAmbiguities() {
   std::vector<uint32_t> InPrimary(P.Functions.size(), NoIndex),
       InSecondary(S.Functions.size(), NoIndex);
@@ -1301,7 +1397,8 @@ void Matcher::collectAmbiguities() {
     llvm::erase_if(T.Secondary, [&](uint32_t B) {
       return SMatch[B] != NoIndex || (Exact && InSecondary[B] != NoIndex);
     });
-    if (!Exact && T.Step != FunctionStep::InlinedTailCall) {
+    if (!Exact && T.Step != FunctionStep::InlinedTailCall &&
+        T.Step != FunctionStep::StackRoles) {
       // Exact groups already retain their full cross-product compactly.
       // Remove only those covered edges from a similarity star; sharing an
       // endpoint alone must not discard another measured alternative.
@@ -1577,6 +1674,7 @@ void Matcher::run(llvm::ArrayRef<Override> Overrides) {
     progress(1, 1);
   beginPhase("ambiguities");
   retainCallAlternatives();
+  retainStackAlternatives();
   collectAmbiguities();
   endPhase();
   finish();

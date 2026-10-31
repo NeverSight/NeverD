@@ -112,6 +112,23 @@ CFG when only insertions or deletions distinguish the pair: callers can
 deliberately switch to a new helper without changing the original body's
 identity.
 
+Matcher version 17 adds review evidence for x64 fixed-frame address-use roles.
+The native reader retains the instruction, operand, width and order of uses
+of each observed local address. The candidate key allows local offsets to
+permute while preserving these roles, including which address is later read.
+It requires two distinct address-taken slots, an observed memory use of one,
+and a fixed RSP allocation before the first control transfer. Dynamic stack
+changes, direct SP copies, frame-pointer aliases, out-of-frame addresses and
+overlapping observed slots supply no key.
+
+Unique role pairs remain review candidates. When an unmatched alternative
+passes the existing body threshold and contradicts the role key of a weak
+body match, both alternatives are retained for review. Named, confirmed,
+manual, byte-exact, normalized and context-supported identities are protected.
+Original scalar offsets and normalized shapes still determine the instruction
+delta. This byte-derived hint is versioned by the matcher and establishes no
+stack-object identity, alias proof or semantic equivalence.
+
 Matcher version 10 also defers a similar helper body when its changed entry
 contains the complete straight-line prelude of an unmatched direct tail caller,
 with at least two caller instructions beyond the helper's aligned body. Both
