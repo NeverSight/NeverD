@@ -1529,6 +1529,83 @@ TEST(BinaryDiff, CallRoleConflictReviewRequiresConsistentCompleteWitnesses) {
   }
 }
 
+TEST(BinaryDiff, StackRoleAlternativesRetainConflictingBodyMatchesForReview) {
+  Fn Current = diamond("current", 11);
+  Current.Source = NameSource::Generated;
+  Fn Misleading = Current;
+  Misleading.Name = "misleading";
+  Misleading.Blocks[0][0].Operands = "r0, 123";
+  Fn Original = Current;
+  Original.Name = "original";
+  Original.Blocks[0].insert(Original.Blocks[0].begin() + 1, {"sub", "r2, 789"});
+  Original.Blocks[2].insert(Original.Blocks[2].begin(), {"xor", "r4, 567"});
+  for (unsigned I = 0; I < 8; ++I)
+    Original.Blocks[0].insert(Original.Blocks[0].begin() + 1,
+                              {"div", "r2, " + std::to_string(1000 + I)});
+  auto P = build({Original, Misleading}, 0x1000);
+  auto S = build({Current}, 0x9000);
+  P.Functions[0].StackRoleCandidate = S.Functions[0].StackRoleCandidate = 101;
+  P.Functions[1].StackRoleCandidate = 102;
+  EXPECT_GT(compareFunctions(P, 1, S, 0, {}).Similarity,
+            compareFunctions(P, 0, S, 0, {}).Similarity +
+                ComparisonSettings{}.AmbiguityMargin);
+  for (bool Reverse : {false, true}) {
+    const auto &A = Reverse ? S : P, &B = Reverse ? P : S;
+    const auto AI = indexOf(A, Reverse ? "current" : "original");
+    const auto BI = indexOf(B, Reverse ? "original" : "current");
+    const auto R = compare(A, B, {});
+    EXPECT_TRUE(R.Matches.empty());
+    for (const auto *Name : {"original", "misleading"}) {
+      const auto X = indexOf(A, Reverse ? "current" : Name);
+      const auto Y = indexOf(B, Reverse ? Name : "current");
+      EXPECT_TRUE(llvm::any_of(R.Ambiguities, [&](const Ambiguity &Group) {
+        return llvm::is_contained(Group.Primary, X) &&
+               llvm::is_contained(Group.Secondary, Y);
+      }));
+    }
+    const Override Choice{OverrideKind::Match, A.Functions[AI].Address,
+                          B.Functions[BI].Address};
+    EXPECT_EQ(compare(A, B, {}, {Choice}).secondaryOf(AI), BI);
+    std::string Error;
+    const auto Read = readComparison(saved(R, A, B), Error);
+    ASSERT_TRUE(Read) << Error;
+    ComparisonResult Reopened;
+    ASSERT_FALSE(bindComparison(*Read, A, B, Reopened));
+    EXPECT_EQ(savedWithoutTimings(R, A, B),
+              savedWithoutTimings(Reopened, A, B));
+    const auto HI = indexOf(A, Reverse ? "current" : "misleading");
+    const auto HJ = indexOf(B, Reverse ? "misleading" : "current");
+    for (auto Kind : {OverrideKind::Match, OverrideKind::Confirm}) {
+      const Override Keep{Kind, A.Functions[HI].Address,
+                          B.Functions[HJ].Address};
+      EXPECT_EQ(compare(A, B, {}, {Keep}).secondaryOf(HI), HJ);
+    }
+    Override Reject = Choice;
+    Reject.Kind = OverrideKind::Unmatch;
+    const auto Rejected = compare(A, B, {}, {Reject});
+    EXPECT_EQ(Rejected.secondaryOf(HI), HJ);
+    EXPECT_FALSE(llvm::any_of(Rejected.Ambiguities, [&](const auto &Group) {
+      return Group.Step == FunctionStep::StackRoles;
+    }));
+    ComparisonSettings Restricted;
+    Restricted.MinimumSimilarity =
+        (compareFunctions(P, 0, S, 0, {}).Similarity +
+         compareFunctions(P, 1, S, 0, {}).Similarity) /
+        2;
+    EXPECT_EQ(compare(A, B, Restricted).secondaryOf(HI), HJ);
+    auto Missing = P;
+    Missing.Functions[0].StackRoleCandidate = 0;
+    EXPECT_EQ(compare(Reverse ? S : Missing, Reverse ? Missing : S, {})
+                  .secondaryOf(HI),
+              HJ);
+    auto Incomplete = P;
+    Incomplete.Functions[0].Traits |= TraitIncomplete;
+    EXPECT_EQ(compare(Reverse ? S : Incomplete, Reverse ? Incomplete : S, {})
+                  .secondaryOf(HI),
+              HJ);
+  }
+}
+
 TEST(BinaryDiff, UnknownAddressOperandDoesNotHideAKnownRetargeting) {
   const auto Input = [](bool Retarget) {
     ProgramBuilder B({});
@@ -2624,27 +2701,28 @@ TEST(BinaryDiff, CandidateOnlyStepsCannotPublishAcceptedMatches) {
   std::string Error;
   const auto Parsed = readComparison(Before, Error);
   ASSERT_TRUE(Parsed) << Error;
-  for (bool Confirmed : {false, true}) {
-    SCOPED_TRACE(Confirmed);
-    auto Invalid = Original;
-    Invalid.Matches.front().Step = FunctionStep::InlinedTailCall;
-    Invalid.Matches.front().Confirmed = Confirmed;
-    EXPECT_FALSE(readComparison(saved(Invalid, P, S), Error));
-    EXPECT_NE(Error.find("can only describe ambiguous candidates"),
-              std::string::npos)
-        << Error;
+  for (auto Step : {FunctionStep::InlinedTailCall, FunctionStep::StackRoles})
+    for (bool Confirmed : {false, true}) {
+      SCOPED_TRACE(Confirmed);
+      auto Invalid = Original;
+      Invalid.Matches.front().Step = Step;
+      Invalid.Matches.front().Confirmed = Confirmed;
+      EXPECT_FALSE(readComparison(saved(Invalid, P, S), Error));
+      EXPECT_NE(Error.find("can only describe ambiguous candidates"),
+                std::string::npos)
+          << Error;
 
-    // Typed saved state uses the same validator and cannot replace a result
-    // already published to its caller when the evidence is invalid.
-    auto Mutated = *Parsed;
-    Mutated.Matches.front().Match.Step = FunctionStep::InlinedTailCall;
-    Mutated.Matches.front().Match.Confirmed = Confirmed;
-    auto Bound = Original;
-    BindFailure Why;
-    EXPECT_TRUE(bindComparison(Mutated, P, S, Bound, &Why));
-    EXPECT_EQ(Why, BindFailure::InvalidEvidence);
-    EXPECT_EQ(saved(Bound, P, S), Before);
-  }
+      // Typed saved state uses the same validator and cannot replace a result
+      // already published to its caller when the evidence is invalid.
+      auto Mutated = *Parsed;
+      Mutated.Matches.front().Match.Step = Step;
+      Mutated.Matches.front().Match.Confirmed = Confirmed;
+      auto Bound = Original;
+      BindFailure Why;
+      EXPECT_TRUE(bindComparison(Mutated, P, S, Bound, &Why));
+      EXPECT_EQ(Why, BindFailure::InvalidEvidence);
+      EXPECT_EQ(saved(Bound, P, S), Before);
+    }
 }
 
 TEST(BinaryDiff, OverridesKeepPairsOneToOneAndRevert) {

@@ -537,6 +537,100 @@ TEST_F(BinaryDiffSDK,
             false);
 }
 
+TEST_F(BinaryDiffSDK,
+       FixedStackRolesRetainReviewCandidatesAcrossLocalRelayout) {
+  enum class Variant { Fixed, Alias, Dynamic, InputSlot, Overlap, BodyGap };
+  const auto Code = [](bool Guard, bool Swap, uint8_t Result, Variant Kind) {
+    std::vector<uint8_t> Bytes{0x48, 0x83, 0xec, 0x28}; // sub rsp,40
+    const auto Add = [&](std::initializer_list<uint8_t> Part) {
+      Bytes.insert(Bytes.end(), Part);
+    };
+    if (Kind == Variant::Alias)
+      Add({0x48, 0x89, 0xe0}); // mov rax,rsp: an untracked alias
+    if (Kind == Variant::Dynamic)
+      Add({0x48, 0x83, 0xe4, 0xf0}); // and rsp,-16
+    std::vector<size_t> Branches;
+    if (Guard) {
+      Add({0x85, 0xff, 0x74, 0}); // test edi,edi; je failure
+      Branches.push_back(Bytes.size() - 1);
+    }
+    const uint8_t First = Kind == Variant::InputSlot ? 48 : 8;
+    const uint8_t Second = Kind == Variant::InputSlot ? 56
+                           : Kind == Variant::Overlap ? 12
+                                                      : 16;
+    if (Kind == Variant::Overlap)
+      Add({0x48, 0x89, 0x44, 0x24, First}); // observed overlapping access
+    Add({0x48, 0x8d, 0x54, 0x24, Swap ? First : Second}); // lea rdx,slot
+    Add({0x48, 0x8d, 0x74, 0x24, Swap ? Second : First}); // lea rsi,slot
+    Add({0x41, 0xff, 0xd0, 0x85, 0xc0, 0x75, 0});         // call r8; test; jne
+    Branches.push_back(Bytes.size() - 1);
+    Add({0x48, 0x8b, 0x44, 0x24, Result ? Second : First});
+    Add({0x48, 0x83, 0xc4, 0x28, 0xc3}); // restore; ret
+    const size_t Failure = Bytes.size();
+    Add({0x31, 0xc0, 0x48, 0x83, 0xc4, 0x28, 0xc3});
+    for (size_t At : Branches)
+      Bytes[At] = Failure - At - 1;
+    return Bytes;
+  };
+  const auto Canonical = [](std::string Text) {
+    auto Value = llvm::json::parse(Text);
+    if (!Value)
+      return std::string{};
+    Value->getAsObject()->erase("timings");
+    return render(*Value);
+  };
+  for (auto Kind : {Variant::Fixed, Variant::Alias, Variant::Dynamic,
+                    Variant::InputSlot, Variant::Overlap, Variant::BodyGap}) {
+    SCOPED_TRACE(unsigned(Kind));
+    std::vector<uint8_t> Image(256, 0xcc);
+    const auto Original = Code(true, false, 0, Kind);
+    const auto Misleading = Code(true, true, 0, Kind);
+    std::copy(Original.begin(), Original.end(), Image.begin());
+    std::copy(Misleading.begin(), Misleading.end(), Image.begin() + 128);
+    const auto A = input(Image);
+    const auto B = input(Code(Kind != Variant::BodyGap, true, 1, Kind), 0x2000);
+    if (const char *Attributes = neverd_func_attributes_json(A, 0x1080))
+      neverd_free_string(Attributes);
+    else
+      ASSERT_EQ(neverd_func_create(A, 0x1080), 0);
+    for (bool Reverse : {false, true}) {
+      const auto C = compare(Reverse ? B : A, Reverse ? A : B,
+                             R"({"discover":false,"use_names":false})");
+      const auto Saved = take(neverd_comparison_export_json(C));
+      auto Report = llvm::json::parse(Saved);
+      ASSERT_TRUE(bool(Report));
+      const auto *Groups = Report->getAsObject()->getArray("ambiguities");
+      ASSERT_TRUE(Groups);
+      const bool Retained =
+          std::any_of(Groups->begin(), Groups->end(), [&](const auto &Group) {
+            const auto *G = Group.getAsObject();
+            if (G->getString("step") != "stack_roles")
+              return false;
+            const auto &P = *G->getArray("primary"),
+                       &S = *G->getArray("secondary");
+            return P.size() == 1 && S.size() == 1 &&
+                   P[0].getAsString() == (Reverse ? "0x2000" : "0x1000") &&
+                   S[0].getAsString() == (Reverse ? "0x1000" : "0x2000");
+          });
+      EXPECT_EQ(Retained, Kind == Variant::Fixed) << Saved;
+      if (Kind != Variant::Fixed)
+        continue;
+      ASSERT_EQ(neverd_comparison_restore_json(C, Saved.c_str()), 1);
+      EXPECT_EQ(Canonical(take(neverd_comparison_export_json(C))),
+                Canonical(Saved));
+      const auto Choice = render(
+          llvm::json::Object{{"kind", "match"},
+                             {"primary", Reverse ? "0x2000" : "0x1000"},
+                             {"secondary", Reverse ? "0x1000" : "0x2000"}});
+      ASSERT_EQ(neverd_comparison_override_json(C, Choice.c_str()), 1);
+      ASSERT_EQ(neverd_comparison_undo(C), 1);
+      EXPECT_EQ(Canonical(take(neverd_comparison_export_json(C))),
+                Canonical(Saved));
+      ASSERT_EQ(neverd_comparison_redo(C), 1);
+    }
+  }
+}
+
 TEST_F(BinaryDiffSDK, DirectCallTargetsArePartOfStrongFunctionIdentity) {
   const auto Image = [&](bool Reordered) {
     std::vector<uint8_t> Bytes(128, 0xcc);
@@ -2717,7 +2811,7 @@ TEST_F(BinaryDiffSDK, LongNativeCallContextSurvivesReorderingAndRestore) {
   const auto Saved = take(neverd_comparison_export_json(C));
   const auto Document = parsed(neverd_comparison_export_json(C));
   ASSERT_TRUE(Document.getAsObject());
-  EXPECT_EQ(Document.getAsObject()->getInteger("matcher_version"), 16);
+  EXPECT_EQ(Document.getAsObject()->getInteger("matcher_version"), 17);
   const auto *Matches = Document.getAsObject()->getArray("matches");
   ASSERT_TRUE(Matches);
   const std::map<std::string, std::string> Expected = {{"0x3000", "0xa010"},

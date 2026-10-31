@@ -28,6 +28,7 @@ set(NEVERD_SDK_SOURCES
     capi/NeverDCAPIDisasm.cpp
     capi/InstructionFlow.cpp
     capi/BinaryComparison.cpp
+    capi/X86/ComparisonStackRoles.cpp
     capi/ComparisonDataFlow.cpp
     capi/ComparisonScalarValidation.cpp
     capi/ComparisonSource.cpp

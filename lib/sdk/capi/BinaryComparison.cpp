@@ -14,11 +14,13 @@
 
 #include "InstructionFlow.h"
 #include "SessionImpl.h"
+#include "X86/ComparisonStackRoles.h"
 
 #include "neverd/decode/InstructionRelocations.h"
 #include "neverd/diff/StableHash.h"
 #include "neverd/libc/LibCNames.h"
 #include "neverd/support/FilePath.h"
+#include "neverd/support/Parallel.h"
 
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/SHA256.h"
@@ -51,6 +53,7 @@ struct ReadInstruction {
   std::optional<uint64_t> Callee;
   std::vector<std::pair<ReferenceKind, uint64_t>> References;
   std::vector<AddressReference> AddressReferences;
+  x86::StackRoleUse StackUse;
 };
 
 struct AddressKeys {
@@ -274,7 +277,13 @@ ReadInstruction readInstruction(const BinaryImage &Image,
     if (Key.first != ReferenceKind::Function)
       R.References.push_back(Key);
   }
-  StableHash Shape, Skeleton, AddressIndependentShape;
+  if (Image.Arch == Arch::X64 && Image.Bits == Bitness::Bits64)
+    R.StackUse = x86::readStackRoleUse(D.getHandle(), *I.Raw, R.Flow);
+  const bool FrameOperand = R.StackUse.Offset.has_value();
+  StableHash Shape, Skeleton, AddressIndependentShape, FrameShape;
+  if (FrameOperand)
+    FrameShape.add(R.Mnemonic);
+  bool FrameDisplacement = false;
   Shape.add(R.Mnemonic);
   Skeleton.add(R.Mnemonic);
   AddressIndependentShape.add(R.Mnemonic);
@@ -282,9 +291,13 @@ ReadInstruction readInstruction(const BinaryImage &Image,
     Shape.add(Value);
     Skeleton.add(Value);
     AddressIndependentShape.add(Value);
+    if (FrameOperand)
+      FrameShape.add(Value);
   };
   const auto Address = [&](uint64_t Value, bool Transfer, unsigned Operand) {
     AddressIndependentShape.add(hashText("address_operand")).add(Transfer);
+    if (FrameOperand)
+      FrameShape.add(hashText("address_operand")).add(Transfer);
     uint64_t Key = 0;
     if (Transfer && R.Callee && Keys.Functions.contains(Value))
       Key = hashText("callee");
@@ -319,6 +332,9 @@ ReadInstruction readInstruction(const BinaryImage &Image,
     Shape.add(Value);
     Skeleton.add(0);
     AddressIndependentShape.add(Value);
+    if (FrameOperand)
+      FrameShape.add(FrameDisplacement ? hashText("local_stack_offset")
+                                       : Value);
     R.References.emplace_back(ReferenceKind::Constant, Value);
   };
   const auto Relocs = instructionRelocations(Image, I);
@@ -387,8 +403,11 @@ ReadInstruction readInstruction(const BinaryImage &Image,
         } else if (auto A =
                        Relocated(X.encoding.disp_offset, X.encoding.disp_size))
           Address(*A, false, N);
-        else
+        else {
+          FrameDisplacement = FrameOperand && R.StackUse.Operand == N;
           Scalar(static_cast<uint64_t>(O.mem.disp));
+          FrameDisplacement = false;
+        }
         break;
       default:
         // Unsupported operand classes retain all encoding evidence and are
@@ -409,6 +428,8 @@ ReadInstruction readInstruction(const BinaryImage &Image,
   R.Shape = Shape.value();
   R.Skeleton = Skeleton.value();
   R.AddressIndependentShape = AddressIndependentShape.value();
+  if (FrameOperand)
+    R.StackUse.Shape = FrameShape.value();
   return R;
 }
 
@@ -421,13 +442,6 @@ void appendFunction(ProgramBuilder &Builder, const FuncInfo &F,
       : F.ResolvedOrigin == NameOrigin::Analysis  ? NameSource::Signature
                                                   : NameSource::Symbol;
   Builder.beginFunction(F.Entry, F.Size, Name.str(), Source, Traits);
-  llvm::sort(
-      Rows, [](const auto &L, const auto &R) { return L.Address < R.Address; });
-  Rows.erase(std::unique(Rows.begin(), Rows.end(),
-                         [](const auto &L, const auto &R) {
-                           return L.Address == R.Address;
-                         }),
-             Rows.end());
   bool Incomplete = Status.Incomplete || Status.Stopped || Rows.empty();
   std::map<va_t, uint32_t> RowAt, BlockAt;
   for (uint32_t I = 0; I < Rows.size(); ++I)
@@ -568,6 +582,9 @@ std::string analysisSectionIdentity(const Session &S) {
 }
 
 std::string revision(const Program &P) {
+  // Byte-derived candidate hints belong to the matcher revision. The native
+  // evidence fingerprint keeps its normalized facts so historical reports
+  // remain bindable when candidate retrieval gains another heuristic.
   llvm::SHA256 Hash;
   const auto Word = [&](uint64_t V) { hashWord(Hash, V); };
   const auto Text = [&](llvm::StringRef T) {
@@ -796,8 +813,11 @@ readComparisonInputImpl(Session &S, const ComparisonInputOptions &Options,
               // the caller.
               const uint64_t Charge =
                   sizeof(ReadInstruction) + sizeof(Instruction) +
-                  R.Bytes.size() * 2 + R.Mnemonic.size() +
-                  R.Operands.size() * 2 +
+                  // Frame facts, sorted indices, role traces and the two
+                  // native/model hint values are bounded by the row count.
+                  sizeof(x86::StackRoleUse) + sizeof(size_t) +
+                  3 * sizeof(uint64_t) + R.Bytes.size() * 2 +
+                  R.Mnemonic.size() + R.Operands.size() * 2 +
                   R.AddressReferences.size() *
                       (sizeof(AddressReference) * 2 + sizeof(Reference)) +
                   R.References.size() *
@@ -813,6 +833,48 @@ readComparisonInputImpl(Session &S, const ComparisonInputOptions &Options,
       Error = "failed to initialize the native decoder";
       return {};
     }
+    std::vector<uint64_t> StackRoles(Slots.size(), 0);
+    parallelForEach(Slots.size(), [&](auto Claim, size_t Count) {
+      std::vector<x86::StackRoleUse> Uses;
+      for (size_t I = Claim(); I < Count; I = Claim()) {
+        auto &Rows = Slots[I];
+        // Stopped pages still need the same canonical row order before
+        // publishing the deterministic retained prefix.
+        llvm::sort(Rows, [](const auto &A, const auto &B) {
+          return A.Address < B.Address;
+        });
+        Rows.erase(std::unique(Rows.begin(), Rows.end(),
+                               [](const auto &A, const auto &B) {
+                                 return A.Address == B.Address;
+                               }),
+                   Rows.end());
+        if (Control.stop() || Status[I].Incomplete || Status[I].Stopped ||
+            Rows.empty() || Rows.front().Address != Page.Functions[I]->Entry ||
+            llvm::count_if(Rows, [](const auto &R) {
+              return R.StackUse.AddressTaken;
+            }) < limits::kMinStackRoleAddressedSlots)
+          continue;
+        Uses.clear();
+        Uses.reserve(Rows.size());
+        size_t EntryEnd = Rows.size();
+        std::optional<va_t> Allocation;
+        for (size_t N = 0; N < Rows.size(); ++N) {
+          Uses.push_back(Rows[N].StackUse);
+          if (Rows[N].Flow != diff::InstructionFlow::None)
+            EntryEnd = std::min(EntryEnd, N);
+          if (Rows[N].StackUse.Effect == x86::StackRoleEffect::Allocate)
+            Allocation = Rows[N].Address;
+        }
+        if (!Allocation || llvm::any_of(Rows, [&](const auto &R) {
+              return (R.Flow == diff::InstructionFlow::Branch ||
+                      R.Flow == diff::InstructionFlow::Jump) &&
+                     R.Target && *R.Target >= Rows.front().Address &&
+                     *R.Target <= *Allocation;
+            }))
+          continue;
+        StackRoles[I] = x86::stackRoleCandidate(Uses, EntryEnd, Control);
+      }
+    });
     for (size_t I = 0; I < Page.Functions.size(); ++I) {
       const auto &F = *Page.Functions[I];
       while (!Imports.empty() && Imports.begin()->first < F.Entry) {
@@ -842,6 +904,7 @@ readComparisonInputImpl(Session &S, const ComparisonInputOptions &Options,
         Result.DisplayNames.emplace(F.Entry, F.Name);
       }
       appendFunction(Builder, F, Name, Slots[I], Status[I], Keys, Traits);
+      Builder.setStackRoleCandidate(StackRoles[I]);
     }
     Done += Page.Functions.size();
     if (Control.Progress)

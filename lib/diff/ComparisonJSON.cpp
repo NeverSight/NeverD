@@ -272,9 +272,11 @@ std::optional<std::string> decisionConflict(const SavedComparison &Saved,
   const auto Rejected = rejectedPairs(Saved.Overrides, Control);
   for (const auto &M : Saved.Matches) {
     Control.check();
-    if (M.Match.Step == FunctionStep::InlinedTailCall)
-      return "inlined_tail_call can only describe ambiguous candidates: " +
-             hex(M.Primary) + " <-> " + hex(M.Secondary);
+    if (M.Match.Step == FunctionStep::InlinedTailCall ||
+        M.Match.Step == FunctionStep::StackRoles)
+      return stepName(M.Match.Step).str() +
+             " can only describe ambiguous candidates: " + hex(M.Primary) +
+             " <-> " + hex(M.Secondary);
     if (std::binary_search(Rejected.begin(), Rejected.end(),
                            std::pair{M.Primary, M.Secondary}))
       return "a saved match contradicts an effective unmatch decision: " +
