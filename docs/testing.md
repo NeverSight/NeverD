@@ -17709,6 +17709,23 @@ strict request rejection, source/manifest hash binding and SDK/CLI parity.
 Run `NeverDX64ContinuationSourceTests` for the independent privileged-instruction
 KVM comparisons; source export alone does not extend that native qualification.
 
+`DirectJumpDiscovery*` uses sized ELF symbols to retain real function extents.
+It checks jump chains at the same call depth, deeper CALL frontiers, physical
+stack arguments, cycle deduplication, indirect exits and budget rejection
+through both C routes and drivers. `SparseArgumentPointerAliases*` exercises
+all five exits of a conditional observer, null/disjoint/stack-slot pointers and
+partial argument writes. On Linux x64 it compares original machine bytes with
+both C routes at O0/O2 on the same stack and pointee addresses.
+
+`AlignedMemoryRefusesBeforeAccessAndPreservesTheWholeState` checks every
+alignment residue, loads/stores, FS/GS, address32 and wrapped linear addresses.
+Both routes at O0/O2 with ASan/UBSan preserve the entire state, neighboring
+memory and budget on refusal, including inaccessible unaligned addresses.
+Pair it with `NeverDX86LegacyAlignedMoveTests` and
+`X86LegacyVectorMoveAudit.*` in `NeverDX86UndefinedEffectsTests` for the
+independent byte oracle and raw/detail mismatch boundaries. These refusal
+checks do not establish guest fault delivery.
+
 `OwnInteriorCall.RejectedReturnsRetainOnlyTheirNativeInstructionSelection` checks
 a rejected physical return remains rejected in ordinary source while explicit
 state selection retains its original instructions. The unsupported-body matrix

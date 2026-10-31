@@ -300,8 +300,11 @@ inline bool form(const cs_insn *Insn, Arch Target) {
     return false;
   }
   const bool Long = Target == Arch::X64;
+  const bool SegmentedAlignment =
+      Long && (Insn->id == X86_INS_MOVAPS || Insn->id == X86_INS_MOVAPD ||
+               Insn->id == X86_INS_MOVDQA);
   size_t Pos = 0;
-  uint8_t MandatoryPrefix = 0, AddressPrefix = 0, Rex = 0;
+  uint8_t MandatoryPrefix = 0, AddressPrefix = 0, SegmentPrefix = 0, Rex = 0;
   for (; Pos < Insn->size; ++Pos) {
     const uint8_t B = Insn->bytes[Pos];
     if (RequiredPrefix && B == RequiredPrefix) {
@@ -312,6 +315,10 @@ inline bool form(const cs_insn *Insn, Arch Target) {
       if (AddressPrefix || Rex)
         return false;
       AddressPrefix = B;
+    } else if (SegmentedAlignment && (B == 0x64 || B == 0x65)) {
+      if (SegmentPrefix || Rex)
+        return false;
+      SegmentPrefix = B;
     } else if (Long && B >= 0x40 && B <= 0x4f) {
       if (Rex)
         return false;
@@ -332,7 +339,7 @@ inline bool form(const cs_insn *Insn, Arch Target) {
   if ((Opcode != LoadOpcode && Opcode != StoreOpcode) || X.modrm != ModRM ||
       X.encoding.modrm_offset != Pos + 2 || X.opcode[0] != 0x0f ||
       X.opcode[1] != Opcode || X.opcode[2] || X.opcode[3] || X.rex != Rex ||
-      X.prefix[0] || X.prefix[1] ||
+      X.prefix[0] || X.prefix[1] != SegmentPrefix ||
       X.prefix[2] != (RequiredPrefix == 0x66 ? 0x66 : 0) ||
       X.prefix[3] != AddressPrefix || X.addr_size != AddressSize ||
       X.encoding.imm_size || X.encoding.imm_offset || X.avx_sae ||
@@ -355,11 +362,15 @@ inline bool form(const cs_insn *Insn, Arch Target) {
   if (!Register(Reg, ((ModRM >> 3) & 7) + ((Rex & 4) ? 8 : 0)))
     return false;
   if ((ModRM >> 6) == 3)
-    return !AddressPrefix && !(Rex & 2) && Pos + 3 == Insn->size &&
-           !X.encoding.disp_size && !X.encoding.disp_offset && !X.disp &&
-           !X.sib && Register(RMOperand, (ModRM & 7) + ((Rex & 1) ? 8 : 0));
+    return !AddressPrefix && !SegmentPrefix && !(Rex & 2) &&
+           Pos + 3 == Insn->size && !X.encoding.disp_size &&
+           !X.encoding.disp_offset && !X.disp && !X.sib &&
+           Register(RMOperand, (ModRM & 7) + ((Rex & 1) ? 8 : 0));
+  const auto Segment = SegmentPrefix == 0x64   ? X86_REG_FS
+                       : SegmentPrefix == 0x65 ? X86_REG_GS
+                                               : X86_REG_INVALID;
   return legacyaudit::memoryOperand(Insn, RMOperand, MemoryBytes, AddressSize,
-                                    Long, Rex, Pos + 3);
+                                    Long, Rex, Pos + 3, 0, Segment);
 }
 
 } // namespace neverd::vectormoveaudit

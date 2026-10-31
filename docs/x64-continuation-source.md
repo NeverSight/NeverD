@@ -82,6 +82,16 @@ the discovery depth and the same original bytes, native requests and incomplete
 CFG diagnostics as explicit entry selection. A failed discovery or exceeded
 budget publishes no partial translation.
 
+Set `"follow_direct_jumps": true` on an `entries` request to include original
+direct JMP targets outside each recovered body. This is useful when native
+function extents split a physical continuation into separate regions. Jumps
+keep the caller's discovery depth; only CALL consumes a depth level. Cycles and
+targets also reached by calls are deduplicated, and the existing budgets bound
+the complete selection. The architecture lifter owns target arithmetic.
+Imports and indirect targets are not added by this option. Each region records
+its added edges in `direct_jump_successors`. The default is `false`; selection
+does not convert a jump into a source call or alter its physical stack.
+
 `"dispatch": "direct"` connects adjacent selected instructions with C labels.
 Connections are partitioned into at most 64 steps per helper, with inlining
 disabled between helpers so large selections keep bounded compiler graphs.
@@ -120,6 +130,14 @@ for each dynamic instruction; reusing them selects a subset of allowed runs.
 The driver continues ordinary instructions and jumps to listed addresses. Each
 successful instruction consumes one budget unit, including a stopping transfer.
 A native request or invalid-state refusal executes nothing and consumes none.
+
+Aligned memory instructions use the shared alignment predicate and return
+status 5 before a guest access or architectural write when it fails. The
+predicate checks the linear address after address-width wrapping and addition
+of the live FS/GS base. Canonical x64 legacy MOVAPS, MOVAPD and MOVDQA memory
+forms retain their original segment in the byte audit. A precondition after an
+observable instruction effect cannot use this unchanged-state contract and
+remains a native request. Refusal does not deliver a guest exception.
 
 Set `"follow_internal_calls": true` to compose CALL and RET inside the selected
 region. The default is `false`, which stops at every CALL and RET. The composed

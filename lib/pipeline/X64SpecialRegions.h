@@ -40,6 +40,9 @@ struct X64SpecialRegionSelection {
 /// indirect calls and the depth frontier stay environment boundaries.
 /// Decode those targets at the audit's instruction starts even if ordinary
 /// lifting rejects the containing body. No LowFunc is required for selection.
+/// FollowDirectJumps selects original direct JMP targets outside each audited
+/// body at the same depth. Their displacement and PC arithmetic come from the
+/// architecture lifter, never an ordinary tail-call or propagated target.
 /// Instruction budgets apply to the union, including overlaps and recursive
 /// call graphs. No argument, pointer noncapture or ordinary-source fact follows
 /// from this. The SVM profile additionally selects canonical VMRUN's original
@@ -48,7 +51,7 @@ struct X64SpecialRegionSelection {
 llvm::Expected<X64SpecialRegionSelection> selectX64SpecialRegions(
     const BinaryImage &Image, llvm::ArrayRef<va_t> Entries,
     const analysis::X64ContinuationSourceOptions &SourceOptions,
-    unsigned CalleeDepth, DebugContext *Debug);
+    unsigned CalleeDepth, bool FollowDirectJumps, DebugContext *Debug);
 
 /// Connect adjacent selected instructions after checking their actual next PC.
 /// All other transfers use the common indexed dispatch. Keep instruction exits,

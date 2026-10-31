@@ -45,7 +45,10 @@ struct X64ContinuationExport {
 /// follow_internal_calls option continues them only at selected actual targets.
 /// Context transitions always stop, including selected targets.
 /// An optional callee_depth selects bounded original direct CALL descendants
-/// of entries, once per body. It requires follow_internal_calls. dispatch may
+/// of entries, once per body. It requires follow_internal_calls. The optional
+/// follow_direct_jumps discovers original direct JMP targets outside each
+/// entry region at the same call depth, retaining physical transfer semantics.
+/// It requires entries and defaults to false. dispatch may
 /// select direct PC-checked links instead of the default per-step switch;
 /// neither option changes the explicit-state interface or native boundaries.
 /// V7 requires sysenter_msr_address_bits and returns a distinct V7

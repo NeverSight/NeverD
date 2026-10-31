@@ -946,6 +946,15 @@ struct Writer {
       emit(NdOp::INT_LESSEQUAL, Bad, {Op.Inputs[2], High});
       rejectIf(Bad);
       Block->Ops.push_back(Op);
+    } else if (alignmentIntrinsic(Op)) {
+      // RequireAligned is a precondition, not an instruction to trap the
+      // source caller. Check the final linear address after FS/GS and
+      // address-width projection, before any architectural or RAM effect.
+      const auto Transition = x64::alignment::lowerOperation(
+          Op, controlOptions(Options),
+          [&](uint16_t Bytes) { return temporary(Bytes); });
+      append(Transition->Ops);
+      rejectIf(*Transition->Rejected);
     } else if (flagIntrinsic(Op)) {
       const NdVar System = temporary();
       emit(NdOp::INT_AND, System,
@@ -1203,7 +1212,21 @@ buildInstruction(SpecializationInstruction Instruction,
           ? x64::runtimeTimestampRegisters(Instruction,
                                            NdVar::tmp(ScratchBase - 16, 16))
           : std::nullopt;
-  for (const LowOp &Op : Instruction.Ops) {
+  bool EarlierEffect = false;
+  for (size_t I = 0; I < Instruction.Ops.size(); ++I) {
+    const LowOp &Op = Instruction.Ops[I];
+    const bool Alignment = alignmentIntrinsic(Op);
+    if (Alignment && (EarlierEffect ||
+                      std::any_of(Instruction.UndefinedEffects.Effects.begin(),
+                                  Instruction.UndefinedEffects.Effects.end(),
+                                  [&](const LowUndefinedEffect &E) {
+                                    return E.AfterOp <= I;
+                                  })))
+      RequireNative("alignment precondition follows an observable effect");
+    EarlierEffect |= Op.Output.isReg() || Op.Opcode == NdOp::LOAD ||
+                     Op.Opcode == NdOp::STORE ||
+                     (Op.Opcode == NdOp::INTRINSIC && !Alignment) ||
+                     Op.MemoryOrdering != NdMemoryOrdering::None;
     if (!Timestamp && !Sysret && !Sysenter && !Sysexit && !Iret && !FarReturn &&
         !Interrupt && !supportedOperation(Op, Options, WideDivision)) {
       std::string Detail = "unsupported continuation operation: ";
