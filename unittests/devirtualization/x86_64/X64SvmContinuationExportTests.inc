@@ -194,9 +194,14 @@ static void svm_complete(void *opaque, unsigned width) {
       const auto *Regions = Parsed->getAsObject()->getArray("regions");
       ASSERT_NE(Regions, nullptr);
       EXPECT_EQ(Regions->size(), Depth ? 5u : 3u);
-      for (size_t I = 0; I != Regions->size(); ++I)
-        EXPECT_EQ((*Regions)[I].getAsObject()->getInteger("callee_depth"),
-                  I < 3 ? 0 : 1);
+      for (size_t I = 0; I != Regions->size(); ++I) {
+        const auto RecordedDepth =
+            (*Regions)[I].getAsObject()->getInteger("callee_depth");
+        if (Depth)
+          EXPECT_EQ(RecordedDepth, I < 3 ? 0 : 1);
+        else
+          EXPECT_FALSE(RecordedDepth);
+      }
       execute(std::string(Provider) + Source,
               "#define DEPTH " + std::to_string(Depth) + R"C(
 static uint8_t guest[832] __attribute__((aligned(64)));
