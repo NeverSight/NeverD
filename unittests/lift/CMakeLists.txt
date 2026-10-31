@@ -436,6 +436,7 @@ add_neverd_unittest(NeverDLiftTests
   core/JumpTableTargetOwnerTests.cpp
   core/SourceAggregateTests.cpp
   core/SourceCallReturnTests.cpp
+  core/SourceCallIntegerViewTests.cpp
   core/HighSSADefinitionTests.cpp
   core/HighEntryStackOffsetsTests.cpp
   core/HighSourceRangeTests.cpp
@@ -1865,6 +1866,15 @@ add_neverd_unittest(NeverDReturnContractTests
   core/ReturnContractTests.cpp
   LINK_COMPONENTS Pipeline
 )
+
+add_neverd_unittest(NeverDSourceCallIntegerViewTests
+  core/SourceCallIntegerViewTests.cpp
+  LINK_COMPONENTS BackendC BackendLLVM Loader Pipeline
+)
+target_include_directories(NeverDSourceCallIntegerViewTests PRIVATE
+  ${CMAKE_SOURCE_DIR}/include ${LLVM_INCLUDE_DIRS})
+target_compile_definitions(NeverDSourceCallIntegerViewTests PRIVATE
+  NEVERD_TEST_CLANG="${NEVERD_TEST_CLANG_EXECUTABLE}")
 
 add_neverd_unittest(NeverDNoReturnTests
   core/MedNoReturnTests.cpp

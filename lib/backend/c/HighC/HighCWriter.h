@@ -714,6 +714,10 @@ public:
   /// record an MSVC call returns through a hidden pointer; null where C
   /// cannot spell it.
   TypeRef callResultType(const HighExpr &Call) const;
+  /// A lifted integer carrier of a different width from its C declaration.
+  /// Both expression conversion and local storage must keep these bits.
+  static TypeRef integerCallResultCarrier(const HighExpr &Call,
+                                          const TypeRef &Declared);
   bool debugCallReturnIsDeclared(const HighExpr &Call,
                                  const FunctionSym &Function) const;
   TypeRef callResultPointerTypeNamed(const std::string &Name) const;
