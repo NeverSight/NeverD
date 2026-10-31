@@ -415,6 +415,112 @@ class HistoryAllowance:
 
 HISTORY_ALLOWED: tuple[HistoryAllowance, ...] = (
     HistoryAllowance(
+        path="docs/evidence/x86-amx-stack-memory-2026-10-30.json",
+        rule="private-path",
+        commits=frozenset({
+            "3155bc4b3aa9b01d967e5cf84dfd8b6e565105ae",
+            "6a41c17f2406e5d4d36f98fdfd931b4aa715eb95",
+            "9b76b90e84b9d3c394614a11f009b77a5837bb78",
+        }),
+        line="",
+        reason=(
+            "Reviewed normalization of developer checkout and toolchain path "
+            "prefixes in this published native qualification record. Test "
+            "results, identities, limits, versions and artifact/tool digests "
+            "are unchanged. Only these exact historical line digests in the "
+            "listed full commits are covered; current and future paths, "
+            "adjacent lines and external policy findings remain errors."
+        ),
+        line_sha256=frozenset({
+            "0ea62b71d20a48aa7c01db59b431ee865d6cc9a54b9ebaaf894a17a484de36f9",
+            "23170ca6b62d4390b959e0431b6dfa302a3ac3aa08ebffde5a224c9d93d89421",
+            "23e7f13343122463601d6e357f4878177b9190d22dcfeeb3d3281e813321e7e5",
+            "28734656d5f15df9c1dd53cec465b6903fd5fb8a745a0a47d30b671f580e3d32",
+            "336d0c5cff693604166c5093067c19a4bd169482d8146c89169e9c2aa9d7d197",
+            "3c4dc75cdc091c92e8ea3780f43ad0f8c8beb6d70a19043d326ac0ab415f7e69",
+            "6c98d0e5da4f1ac1a9917e145f31219d0ad800858dc141e62943fd961f27d23e",
+            "bfa7df2f4449cd692cc039d09d826700d8b62baa4cc416de8ec4e3dcc66cbff7",
+            "fe6a9ca47324e8c9c4699f2451f7126084698f47c60500a9d4a3af91a3ef1778",
+        }),
+    ),
+    HistoryAllowance(
+        path="docs/evidence/x86-mpx-native-frames-2026-10-30.json",
+        rule="private-path",
+        commits=frozenset({
+            "3155bc4b3aa9b01d967e5cf84dfd8b6e565105ae",
+            "77bf33f5afb80e0e5aba86e661ed8a8337e0fcce",
+            "8d07f9a4f7e5aa974863654607789f79fd39b4b6",
+        }),
+        line="",
+        reason=(
+            "Reviewed normalization of developer checkout and toolchain path "
+            "prefixes in this published native qualification record. Test "
+            "results, identities, limits, versions and artifact/tool digests "
+            "are unchanged. Only these exact historical line digests in the "
+            "listed full commits are covered; current and future paths, "
+            "adjacent lines and external policy findings remain errors."
+        ),
+        line_sha256=frozenset({
+            "23e7f13343122463601d6e357f4878177b9190d22dcfeeb3d3281e813321e7e5",
+            "3c4dc75cdc091c92e8ea3780f43ad0f8c8beb6d70a19043d326ac0ab415f7e69",
+            "4e1abb563a5577ee35a07d95c420e83208a77b1a10105d694dac527d345c3baf",
+            "842b77aaae2a41ae4ad2fe2aabe4d40ddb091eab05db7ff62d6ad0282818ffea",
+            "8b452a917e9acc76377f1f238d80b3bfc6c7fe9cbf45f6d93304901864937def",
+            "bfa7df2f4449cd692cc039d09d826700d8b62baa4cc416de8ec4e3dcc66cbff7",
+            "e06f85a7cc73a6fd8faedcfa1a9a04001bdf3c9190d414d0346d27de23e98518",
+            "fe6a9ca47324e8c9c4699f2451f7126084698f47c60500a9d4a3af91a3ef1778",
+        }),
+    ),
+    HistoryAllowance(
+        path="docs/evidence/x86-vmrun-context-2026-10-30.json",
+        rule="private-path",
+        commits=frozenset({
+            "185bcabd0e9a6239ba9708d42320a2f84d445076",
+            "3155bc4b3aa9b01d967e5cf84dfd8b6e565105ae",
+            "31c1e124172811f74816398d609596af64dad2a9",
+        }),
+        line="",
+        reason=(
+            "Reviewed normalization of developer checkout and toolchain path "
+            "prefixes in this published native qualification record. Test "
+            "results, identities, limits, versions and artifact/tool digests "
+            "are unchanged. Only these exact historical line digests in the "
+            "listed full commits are covered; current and future paths, "
+            "adjacent lines and external policy findings remain errors."
+        ),
+        line_sha256=frozenset({
+            "b76f53de9ee2b795afd98699509cd58f3b1e1c16ff6f3607da74c908565236f8",
+            "d4fce1536ae292cf7f33061cd270852f26aaa04b1d9a9557aa980dc8dc4ce2e1",
+            "ed9a038683f08567222d5d0bca8df6b4142b11ab3c5e675f20a0d96d75ec2de0",
+        }),
+    ),
+    HistoryAllowance(
+        path="docs/evidence/x86-vmrun-source-2026-10-31.json",
+        rule="private-path",
+        commits=frozenset({
+            "3155bc4b3aa9b01d967e5cf84dfd8b6e565105ae",
+            "8e977533a4f6913ab1f9e9aa7a4518654500bbcf",
+        }),
+        line="",
+        reason=(
+            "Reviewed normalization of developer checkout and toolchain path "
+            "prefixes in this published native qualification record. Test "
+            "results, identities, limits, versions and artifact/tool digests "
+            "are unchanged. Only these exact historical line digests in the "
+            "listed full commits are covered; current and future paths, "
+            "adjacent lines and external policy findings remain errors."
+        ),
+        line_sha256=frozenset({
+            "046ce6593a8ac20556f4692ba9f1d1abfb16dccd1c62698a5ef895ad680b48c2",
+            "4c257a87e813b6fee570215e1361fa0570807041028df0d351d369281633346b",
+            "b76f53de9ee2b795afd98699509cd58f3b1e1c16ff6f3607da74c908565236f8",
+            "cba940d0e6734b7f3bb1b6b7c631ba9a1519ab872ed1cbd032eb831b27ff0b5b",
+            "d4fce1536ae292cf7f33061cd270852f26aaa04b1d9a9557aa980dc8dc4ce2e1",
+            "f747cdd7279b903b77037c432db19eeff39bb9ae9f1cf17a761a172446bec630",
+            "ff8e0454a6bfce3cb4a32c6f0cb0688f93d11d655fa4484fa3688d30fdff4869",
+        }),
+    ),
+    HistoryAllowance(
         path="docs/evidence/arm64e-typed-call-abi-2026-10-28.json",
         rule="private-path",
         commits=frozenset({
