@@ -2313,3 +2313,6 @@ LLVM C の合成スタックスロットは、実行時にどちらかの 64 ビ
 ReadPrefetch 回帰は正確なバイトとオペランド情報、独立した未定義出力・不透明状態の証跡、不正なスカラー契約と改変した証跡を検査します。両 C 経路は四種類と反復ヒントを保持し、O0/O2 とサニタイザーで独立した全状態・メモリ期待値と比較します。未マップアドレス、32 ビットアドレスの折返し、物理的リターンを含み、キャッシュ配置や時間は比較対象外です。
 
 StreamingStore 回帰は命令バイト、オペランド情報、整列、書込み範囲全体、不正な契約、改変した証跡を検査します。物理的な戻りアドレスを上書きするストアを含め、全状態とメモリを独立した期待値と比較します。両 C 経路をユーザー・カーネル状態プロファイルで O0/O2 とサニタイザー付きで実行します。ネイティブカーネル、並行実行、故障時の実行は認証しません。
+
+`InterpreterSpecialization.RepeatedCounts*`; `InterpreterMachineRegionSourceTest.FiniteRepeatedCountsPreserveFullState`; `InterpreterMachineRegionSourceTest.FiniteCopyAndPaddingPreserveLoopState`.
+これらは完全な分岐、異なる先行値域、命令内書き込み、探索無効、不完全な値域、必要量ちょうどと一不足の予算を検査します。両 C 経路を O0/O2 と ASan/UBSan で実行し、独立した全状態・バイト比較で上限付き計数、両方向、重複、ゼロ回の無効ポインタ、早期終端、ループのゼロ埋めを検証します。通常 ABI の復元証明ではありません。
