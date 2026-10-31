@@ -13,6 +13,9 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "../lib/diff/Features.h"
+#include "../lib/diff/ReferenceContext.h"
+
 #include "neverd/diff/ChangeObservations.h"
 #include "neverd/diff/Comparison.h"
 #include "neverd/diff/ComparisonJSON.h"
@@ -2738,6 +2741,223 @@ TEST(BinaryDiff, CallGraphDegreeCannotOverrideContradictingImportTargets) {
   const auto R = compare(P, S, Settings);
   EXPECT_EQ(R.Matches.size(), 2U);
   EXPECT_EQ(R.matchOfPrimary(indexOf(P, "wrapper_a")), nullptr);
+}
+
+TEST(BinaryDiff, InlineCallerCandidatesRequireIndependentEntryCalls) {
+  // A two-loop helper is partly inlined after the caller's independently
+  // mapped initialization. A weak pairing to the old helper cannot explain
+  // the merged entry's calls or the caller's greater instruction coverage.
+  const std::vector<Op> Loop = {{"mov", "rdi, [r14+8]"},
+                                {"call", "", InstructionFlow::Call, "release"},
+                                {"mov", "rdi, r14"},
+                                {"call", "", InstructionFlow::Call, "discard"},
+                                {"mov", "rax, [rbx+32]"},
+                                {"mov", "rdi, [rax+16]"},
+                                {"call", "", InstructionFlow::Call, "next"},
+                                {"mov", "r14, rax"},
+                                {"test", "rax, rax"},
+                                {"jne", "", InstructionFlow::Branch}};
+  Fn Helper;
+  Helper.Name = "helper";
+  Helper.Source = NameSource::Generated;
+  Helper.Blocks = {{{"push", "r14"},
+                    {"push", "rbx"},
+                    {"push", "rax"},
+                    {"mov", "rbx, rdi"},
+                    {"mov", "rax, [rdi+32]"},
+                    {"mov", "rdi, [rax+16]"},
+                    {"call", "", InstructionFlow::Call, "next"},
+                    {"test", "rax, rax"},
+                    {"je", "", InstructionFlow::Branch}},
+                   {{"mov", "r14, rax"}, {"nop", ""}},
+                   Loop,
+                   {{"mov", "rax, [rbx+32]"},
+                    {"mov", "rdi, [rax+24]"},
+                    {"call", "", InstructionFlow::Call, "next"},
+                    {"test", "rax, rax"},
+                    {"je", "", InstructionFlow::Branch}},
+                   {{"mov", "r14, rax"}, {"nop", ""}},
+                   Loop,
+                   {{"add", "rsp, 8"},
+                    {"pop", "rbx"},
+                    {"pop", "r14"},
+                    {"ret", "", InstructionFlow::Return}}};
+  Helper.Blocks[5][5].Operands = "rdi, [rax+24]";
+  Helper.Edges = {{0, 3, EdgeKind::Taken},       {0, 1, EdgeKind::NotTaken},
+                  {1, 2, EdgeKind::Fallthrough}, {2, 2, EdgeKind::Taken},
+                  {2, 3, EdgeKind::NotTaken},    {3, 6, EdgeKind::Taken},
+                  {3, 4, EdgeKind::NotTaken},    {4, 5, EdgeKind::Fallthrough},
+                  {5, 5, EdgeKind::Taken},       {5, 6, EdgeKind::NotTaken}};
+  Fn Caller;
+  Caller.Name = "caller";
+  Caller.Source = NameSource::Generated;
+  Caller.Blocks = {{{"push", "rbx"},
+                    {"mov", "rbx, rdi"},
+                    {"add", "rdi, 64"},
+                    {"call", "", InstructionFlow::Call, "initialize"},
+                    {"mov", "rdi, rbx"},
+                    {"call", "", InstructionFlow::Call, "reset"},
+                    {"cmp", "[rbx+32], 0"},
+                    {"je", "", InstructionFlow::Branch}},
+                   {{"mov", "rdi, rbx"},
+                    {"call", "", InstructionFlow::Call, "helper"},
+                    {"mov", "rax, [rbx+32]"},
+                    {"mov", "rdi, [rax+16]"},
+                    {"call", "", InstructionFlow::Call, "queue_free"},
+                    {"mov", "rax, [rbx+32]"},
+                    {"mov", "rdi, [rax+24]"},
+                    {"call", "", InstructionFlow::Call, "queue_free"},
+                    {"mov", "rdi, [rbx+32]"},
+                    {"jmp", "", InstructionFlow::Jump}},
+                   {{"xor", "edi, edi"}},
+                   {{"mov", "esi, 71"},
+                    {"call", "", InstructionFlow::Call, "cleanup"},
+                    {"mov", "[rbx+32], 0"},
+                    {"pop", "rbx"},
+                    {"ret", "", InstructionFlow::Return}}};
+  Caller.Edges = {{0, 2, EdgeKind::Taken},
+                  {0, 1, EdgeKind::NotTaken},
+                  {1, 3, EdgeKind::Jump},
+                  {2, 3, EdgeKind::Fallthrough}};
+  Fn Merged = Caller;
+  Merged.Name = "merged";
+  Merged.Blocks = {Caller.Blocks[0],
+                   {{"mov", "rdi, [rax+16]"},
+                    {"call", "", InstructionFlow::Call, "next"},
+                    {"test", "rax, rax"},
+                    {"je", "", InstructionFlow::Branch}},
+                   Helper.Blocks[1],
+                   Loop,
+                   Caller.Blocks[1],
+                   Caller.Blocks[2],
+                   Caller.Blocks[3]};
+  Merged.Blocks[0].insert(Merged.Blocks[0].begin(), {"push", "r14"});
+  Merged.Blocks[0][7] = {"mov", "rax, [rbx+32]"};
+  Merged.Blocks[0].insert(Merged.Blocks[0].end() - 1, {"test", "rax, rax"});
+  Merged.Blocks[4][1].Callee = "remaining_loop";
+  Merged.Blocks[6][0].Operands = "esi, 83";
+  Merged.Blocks[6].insert(Merged.Blocks[6].end() - 1, {"pop", "r14"});
+  Merged.Edges = {{0, 5, EdgeKind::Taken},       {0, 1, EdgeKind::NotTaken},
+                  {1, 4, EdgeKind::Taken},       {1, 2, EdgeKind::NotTaken},
+                  {2, 3, EdgeKind::Fallthrough}, {3, 3, EdgeKind::Taken},
+                  {3, 4, EdgeKind::NotTaken},    {4, 6, EdgeKind::Jump},
+                  {5, 6, EdgeKind::Fallthrough}};
+  Helper.Strings = Merged.Strings = {"retained helper data"};
+  std::vector<Fn> Before{Caller, Helper}, After{Merged};
+  unsigned Seed = 701;
+  for (const auto *Name : {"initialize", "reset", "next", "release", "discard",
+                           "queue_free", "cleanup", "remaining_loop"}) {
+    Before.push_back(leaf(Name, Seed));
+    After.push_back(leaf(Name, Seed));
+    Seed += 10;
+  }
+  const auto HasCandidate = [](const ComparisonResult &R, uint32_t P,
+                               uint32_t S) {
+    return llvm::any_of(R.Ambiguities, [&](const Ambiguity &Group) {
+      return llvm::is_contained(Group.Primary, P) &&
+             llvm::is_contained(Group.Secondary, S);
+    });
+  };
+  for (unsigned Variant = 0; Variant != 12; ++Variant) {
+    auto Left = Before, Right = After;
+    if (Variant == 1)
+      Left[0].Traits |= TraitIncomplete;
+    else if (Variant == 2)
+      Right[0].Traits |= TraitIncomplete;
+    else if (Variant == 3)
+      Left[1].Traits |= TraitIncomplete;
+    else if (Variant == 4)
+      Left[2].Traits |=
+          TraitIncomplete; // An entry callee has no complete body.
+    else if (Variant == 5) {
+      for (auto *F : {&Left[0], &Right[0]})
+        for (auto &Op : F->Blocks[0])
+          if (Op.Callee == "initialize")
+            Op.Callee = "reset"; // Repetition cannot provide distinct anchors.
+    } else if (Variant == 6)
+      std::swap(Right[0].Blocks[0][4].Callee,
+                Right[0].Blocks[0][6].Callee); // Different ordered entry calls.
+    else if (Variant == 7)
+      Left[0].Blocks[0][0].Flow = InstructionFlow::Unknown;
+    else if (Variant == 8)
+      Left[0].Blocks[0][3].Flow = InstructionFlow::IndirectCall;
+    else if (Variant == 9)
+      Left[0].Blocks[0][3].Callee.clear();
+    else if (Variant == 10)
+      Left[1].Blocks[0].insert(
+          Left[1].Blocks[0].begin(),
+          {"call", "", InstructionFlow::Call, "initialize"});
+    for (bool Reverse : {false, true})
+      for (bool Reorder : {false, true}) {
+        SCOPED_TRACE(::testing::Message() << Variant << Reverse << Reorder);
+        std::vector<size_t> Layout;
+        if (Reorder)
+          for (size_t I = Left.size(); I != 0; --I)
+            Layout.push_back(I - 1);
+        const auto A = build(Left, 0x400000, Layout),
+                   B = build(Right, 0x800000);
+        const auto &P = Reverse ? B : A, &S = Reverse ? A : B;
+        const auto PI = indexOf(P, Reverse ? "merged" : "caller"),
+                   SI = indexOf(S, Reverse ? "caller" : "merged"),
+                   HP = indexOf(P, Reverse ? "merged" : "helper"),
+                   HS = indexOf(S, Reverse ? "helper" : "merged");
+        std::vector<uint32_t> PMapping(P.Functions.size(), NoIndex),
+            SMapping(S.Functions.size(), NoIndex),
+            Weak(P.Functions.size(), NoIndex);
+        for (const auto *Name :
+             {"initialize", "reset", "next", "release", "discard", "queue_free",
+              "cleanup", "remaining_loop"}) {
+          const auto X = indexOf(P, Name), Y = indexOf(S, Name);
+          PMapping[X] = Y;
+          SMapping[Y] = X;
+        }
+        PMapping[HP] = HS;
+        SMapping[HS] = HP;
+        Weak[HP] = 0;
+        if (Variant == 11)
+          Weak[HP] = NoIndex; // Stated identity or an analyst confirmation.
+        const auto PF = computeFeatures(P), SF = computeFeatures(S);
+        const auto Proposals =
+            inlineCallerCandidates(P, PF, PMapping, Weak, S, SF, SMapping, {});
+        if (Variant != 0) {
+          EXPECT_TRUE(Proposals.empty());
+          continue;
+        }
+        EXPECT_EQ(Proposals,
+                  (std::vector<std::pair<uint32_t, uint32_t>>{{PI, SI}}));
+        const auto D = compareFunctions(P, PI, S, SI, {PMapping, SMapping}, {},
+                                        CandidateInstructionAlignmentProfile);
+        const auto Prior =
+            compareFunctions(P, HP, S, HS, {PMapping, SMapping}, {},
+                             CandidateInstructionAlignmentProfile);
+        EXPECT_TRUE(D.AnalysisComplete);
+        EXPECT_GE(D.Similarity, ComparisonSettings{}.MinimumSimilarity);
+        EXPECT_GT(D.EqualInstructions, Prior.EqualInstructions);
+        EXPECT_TRUE(Prior.Changes & (ChangeBlocks | ChangeEdges));
+        for (bool Approximate : {false, true}) {
+          ComparisonSettings Settings;
+          Settings.Approximate = Approximate;
+          const auto R = compare(P, S, Settings);
+          // Ordinary competition already finds the caller in this fixture.
+          // The additional review must preserve that accepted correspondence.
+          ASSERT_EQ(R.secondaryOf(PI), SI);
+          EXPECT_FALSE(HasCandidate(R, HP, HS));
+          std::string Error;
+          auto Read = readComparison(saved(R, P, S), Error);
+          ASSERT_TRUE(Read) << Error;
+          ComparisonResult Edited;
+          ASSERT_FALSE(bindComparison(*Read, P, S, Edited));
+          EXPECT_EQ(savedWithoutTimings(Edited, P, S),
+                    savedWithoutTimings(R, P, S));
+        }
+        const std::atomic<bool> Cancelled{true};
+        ComparisonControl Stop;
+        Stop.Cancel = &Cancelled;
+        EXPECT_TRUE(
+            inlineCallerCandidates(P, PF, PMapping, Weak, S, SF, SMapping, Stop)
+                .empty());
+      }
+  }
 }
 
 TEST(BinaryDiff, InlinedTailPreludeKeepsWholeFunctionIdentityAmbiguous) {

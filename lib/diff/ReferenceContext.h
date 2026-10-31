@@ -6,7 +6,8 @@
 ///
 /// \file
 /// Candidate function pairs supported by address-reference occurrences in a
-/// previously settled correspondence. This does not establish data identity.
+/// previously settled correspondence, including mapped entry-call roles.
+/// This does not establish data identity or whole-function correspondence.
 ///
 //===----------------------------------------------------------------------===//
 
@@ -67,6 +68,16 @@ InitializerCandidates initializerCandidates(
     const Program &S, const ProgramFeatures &SF,
     llvm::ArrayRef<uint32_t> SMatch, llvm::ArrayRef<uint8_t> STrusted,
     const ComparisonControl &Control);
+
+/// Unmatched modeled callers can expose a possible inline boundary in a weak
+/// helper match. Complete ordered entry calls must bind distinct already mapped
+/// targets outside the proposed pair. These are review proposals only; the
+/// comparison owner must also compare instruction coverage and CFG evidence.
+std::vector<std::pair<uint32_t, uint32_t>> inlineCallerCandidates(
+    const Program &P, const ProgramFeatures &PF,
+    llvm::ArrayRef<uint32_t> PMatch, llvm::ArrayRef<uint32_t> WeakP,
+    const Program &S, const ProgramFeatures &SF,
+    llvm::ArrayRef<uint32_t> SMatch, const ComparisonControl &Control);
 
 /// Complete callers can contradict a provisional body match. Returns review
 /// alternatives with exactly one unmatched endpoint; WeakP/WeakS mark the

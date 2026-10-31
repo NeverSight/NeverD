@@ -4143,6 +4143,12 @@ restoration. The session discovery owner checks sized and unsized direct/import
 slot calls; `InstructionFlow.ConditionalCallsKeepTheUnexecutedArm` checks ARM
 predication and patched-target refusal. Run these with `NeverDNoReturnTests`
 when changing the shared target contract.
+`BinaryDiff.InlineCallerCandidatesRequireIndependentEntryCalls` covers a frozen
+weak helper correspondence after partial loop inlining, missing or repeated
+anchors, call order, incomplete bodies, unresolved/indirect calls, protected
+identity, both directions, reordering, cancellation and saved-report binding.
+The caller boundary is a review alternative, not an
+automatic identity or a semantic-equivalence claim.
 Dataflow checks cover SSA renaming, PHI edge changes, control/data slices,
 parameter/clobber identity, unobserved effects and bounded neighborhoods.
 Call-argument projection checks backward/forward dependencies missing from raw

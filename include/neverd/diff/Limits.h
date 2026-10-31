@@ -95,6 +95,10 @@ inline constexpr double kDefaultAmbiguityMargin = 0.02;
 /// changed helper body before a possible inlining defers whole-function
 /// identity.
 inline constexpr unsigned kMinTailPreludeContribution = 2;
+/// A possible inline caller needs distinct mapped entry calls, not repetitions
+/// of one common initializer, before its stronger instruction coverage can
+/// defer a structurally changed helper pairing.
+inline constexpr unsigned kMinInlineCallerAnchors = 2;
 /// Rounds of global refinement; call and address chains use a growing worklist.
 inline constexpr unsigned kMaxPropagationRounds = 64;
 /// Dense storage threshold for call-sequence anchor alignment. Larger ranges

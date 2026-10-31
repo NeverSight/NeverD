@@ -1905,6 +1905,21 @@ competition on the structural matcher-22 recipe. Ordered multi-block rows refine
 the final measurement under an independently established correspondence. They
 do not supply identity evidence or raise candidate scores during pairing.
 
+Matcher version 24 reviews possible caller inlining after automatic admission.
+Entry-call signatures are computed once in parallel under the frozen mapping.
+They require complete functions, resolved direct calls and at least two distinct
+mapped targets; order and repetitions remain part of each signature. Only a
+weak helper's actual unmatched direct callers can compete with its opposite
+endpoint. A caller must have the opposite endpoint's entry signature and its
+targets must be absent from the helper's callees. It must pass the existing
+candidate body threshold and explain more
+known equal instructions. Complete body/CFG preservation remains authoritative.
+Eligible conflicts retire the weak match and retain separate call-site and
+prior alternatives; no new identity is admitted. Candidate and prior deltas use
+the structural candidate alignment recipe in parallel batches. Cancellation
+publishes no partially reviewed deferrals. The pass visits each caller adjacency
+once instead of comparing all functions that share initialization calls.
+
 Each `FunctionMatch` and `FunctionDelta` retains an `InstructionAlignmentProfile`.
 `CurrentInstructionAlignmentProfile` owns the default for new pairs, currently
 `ordered-block-spans-v1`. Matcher-22 `single-block-spans-v1` measurements retain
