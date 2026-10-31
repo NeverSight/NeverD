@@ -232,6 +232,11 @@ query returns the deduplicated union of its direct candidates. Sharing another
 function's candidate does not make two functions candidates for each other.
 Search and sort apply to the returned candidate functions. `ambiguity.steps`
 lists the supporting matching steps; inventory rows expose `candidate_steps`.
+Each returned row also has `pair_evidence.steps` and
+`pair_evidence.explanation` for that specific source and candidate. These
+exclude reasons that support the candidate only with another source in an
+overlapping group; the ordinary inventory fields retain their function-wide
+meaning.
 The usual inventory's short `candidates` array remains a preview; it does not
 limit this query's total. These are the engine's retained hypotheses, not all
 possible correspondences or accepted matches.
@@ -239,9 +244,11 @@ possible correspondences or accepted matches.
 In the desktop, select a function and choose **Pair with…**. The resizable
 picker pages all retained ambiguity candidates and can switch to **All
 functions** for manual pairing. Search accepts names and hexadecimal addresses,
-including zero. Rows show current pairings; a selection explains which pairs
-will be replaced. **Pair functions** records the edit and **Undo** restores the
-previous pairs. Searching, browsing and cancelling do not edit the mapping.
+including zero. Rows show current pairings; a selection explains its specific
+candidate evidence and which pairs will be replaced. Tooltips and accessible
+descriptions include that pair's evidence. **Pair functions** records the edit
+and **Undo** restores the previous pairs. Searching, browsing and cancelling do
+not edit the mapping.
 Changed comparison revisions invalidate the picker until it is reopened.
 
 `--options FILE` accepts an object containing:

@@ -2195,6 +2195,85 @@ TEST_F(BinaryDiffSDK, OverlappingCandidatesRemainExactThroughPagingAndEdits) {
   }
 }
 
+TEST_F(BinaryDiffSDK, CandidatePairEvidenceDoesNotBorrowOtherSourcesReasons) {
+  std::vector<uint8_t> Bytes(3 * 16, 0xcc);
+  const auto Code = body(7);
+  for (unsigned I = 0; I < 3; ++I)
+    std::copy(Code.begin(), Code.end(), Bytes.begin() + I * 16);
+  const auto A = input(Bytes), B = input(Bytes, 0x8000);
+  for (auto S : {A, B})
+    ASSERT_GE(neverd_session_discover_functions(S), 3u);
+  const auto C = compare(A, B, R"({"discover":false,"use_names":false})");
+  auto Document = parsed(neverd_comparison_export_json(C));
+  auto *O = Document.getAsObject();
+  ASSERT_TRUE(O->getArray("matches")->empty());
+  const auto Addresses = [](bool Secondary) {
+    return Secondary ? llvm::json::Array{"0x8000", "0x8010", "0x8020"}
+                     : llvm::json::Array{"0x1000", "0x1010", "0x1020"};
+  };
+  // All functions share a broad group; each specific witness concerns one
+  // pair. A candidate's reasons with another source cannot explain this pair.
+  (*O)["ambiguities"] = llvm::json::Array{
+      llvm::json::Object{{"step", "similarity"},
+                         {"primary", Addresses(false)},
+                         {"secondary", Addresses(true)}},
+      llvm::json::Object{{"step", "stack_roles"},
+                         {"primary", llvm::json::Array{"0x1000"}},
+                         {"secondary", llvm::json::Array{"0x8000"}}},
+      llvm::json::Object{{"step", "call_site"},
+                         {"primary", llvm::json::Array{"0x1010"}},
+                         {"secondary", llvm::json::Array{"0x8010"}}}};
+  const auto Saved = render(std::move(Document));
+  ASSERT_EQ(neverd_comparison_restore_json(C, Saved.c_str()), 1);
+  const auto Before = take(neverd_comparison_export_json(C));
+  const auto Check = [&] {
+    for (bool Secondary : {false, true})
+      for (unsigned Source = 0; Source < 2; ++Source)
+        for (unsigned Target = 0; Target < 3; ++Target) {
+          const auto Sources = Addresses(!Secondary);
+          const auto Query = render(llvm::json::Object{
+              {"side", Secondary ? "secondary" : "primary"},
+              {"ambiguous_with", Sources[Source].getAsString()->str()},
+              {"offset", Target},
+              {"limit", 1}});
+          const auto Page =
+              parsed(neverd_comparison_functions_json(C, Query.c_str()));
+          const auto *Items = Page.getAsObject()->getArray("items");
+          ASSERT_TRUE(Items);
+          ASSERT_EQ(Items->size(), 1u);
+          const auto *Evidence =
+              Items->front().getAsObject()->getObject("pair_evidence");
+          ASSERT_TRUE(Evidence) << render(Page);
+          const auto *Steps = Evidence->getArray("steps");
+          ASSERT_TRUE(Steps);
+          std::set<std::string> Actual;
+          for (const auto &Step : *Steps)
+            Actual.insert(Step.getAsString()->str());
+          std::set<std::string> Expected{"similarity"};
+          if (Source == Target)
+            Expected.insert(Source == 0 ? "stack_roles" : "call_site");
+          EXPECT_EQ(Actual, Expected);
+          const auto Explanation = Evidence->getString("explanation");
+          ASSERT_TRUE(Explanation);
+          EXPECT_EQ(Explanation->contains("fixed-frame"),
+                    Source == 0 && Target == 0);
+          EXPECT_EQ(Explanation->contains("call site"),
+                    Source == 1 && Target == 1);
+        }
+    EXPECT_EQ(take(neverd_comparison_export_json(C)), Before);
+  };
+  Check();
+  ASSERT_EQ(
+      neverd_comparison_override_json(
+          C, R"({"kind":"match","primary":"0x1000","secondary":"0x8000"})"),
+      1);
+  ASSERT_EQ(neverd_comparison_undo(C), 1);
+  Check();
+  ASSERT_EQ(neverd_comparison_redo(C), 1);
+  ASSERT_EQ(neverd_comparison_restore_json(C, Saved.c_str()), 1);
+  Check();
+}
+
 TEST_F(BinaryDiffSDK, RedoRebuildsCallerDetailsObservationsAndInventory) {
   std::vector<uint8_t> Bytes{0xe8, 0x0b, 0, 0, 0, 0xc3};
   Bytes.resize(16, 0xcc);

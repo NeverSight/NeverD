@@ -1333,6 +1333,20 @@ private slots:
     QVERIFY(Picker->findChild<QLabel *>("counterpartSelection")
                 ->text()
                 .contains(LastAddress));
+    const auto PairReason =
+        Model->row(Last)["pair_evidence"].toObject()["explanation"].toString();
+    QVERIFY(!PairReason.isEmpty());
+    QVERIFY(Picker->findChild<QLabel *>("counterpartSelection")
+                ->text()
+                .contains(PairReason));
+    QTextDocument Tooltip;
+    Tooltip.setHtml(
+        Model->data(Model->index(Last, 1), Qt::ToolTipRole).toString());
+    QVERIFY2(Tooltip.toPlainText().contains(PairReason),
+             qPrintable(Tooltip.toPlainText()));
+    QVERIFY(Model->data(Model->index(Last, 1), Qt::AccessibleDescriptionRole)
+                .toString()
+                .contains(PairReason));
     QVERIFY(Model->cachedPages() >= 2);
     Sort->setCurrentIndex(1);
     QVERIFY(!Pair->isEnabled());
