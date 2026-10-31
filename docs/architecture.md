@@ -8556,9 +8556,14 @@ state transport.
 operand roles. LowIR, MedIR verification, LLVM and both C routes consume its
 checked shape. The supported set is VMREAD/VMWRITE (register and memory),
 VMXON/OFF, VMCLEAR, VMPTRLD/ST, INVEPT, INVVPID, VMLAUNCH/RESUME, VMFUNC,
-VMLOAD/SAVE, STGI/CLGI and INVLPGA. Existing VMCALL/VMMCALL retain their separate
-hypercall contract. This inventory does not imply coverage of every newer
-SEV/SNP instruction.
+VMLOAD/SAVE, STGI/CLGI and INVLPGA. Canonical VMCALL/VMMCALL bytes do not select
+a hypervisor ABI. Ordinary lifting refuses them; the optional
+`NativeKvmHypercalls` continuation binding authenticates the raw receipt and
+owns the KVM RAX/RBX/RCX/RDX/RSI input and RAX output contract. Its distinct
+intrinsic IDs share five-value shape validation across HighC, LLVM C and native
+codegen. Legacy typed hypercall spellings do not establish full machine-state
+support. See [the KVM domain](x86-kvm-hypercalls.md). This inventory does not
+imply coverage of every newer SEV/SNP instruction.
 
 VMX completion carries CF/ZF and clears OF/SF/AF/PF. Failed register VMREAD
 preserves its destination; memory VMREAD/VMWRITE retain their address inside

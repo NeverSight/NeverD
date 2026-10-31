@@ -28,6 +28,7 @@
 #include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/ir/intrinsics/X86/X86SystemState.h"
 #include "neverd/ir/low/LowScalarConstant.h"
+#include "neverd/lift/X86/X86HypercallEncoding.h"
 #include "neverd/lift/X86/X86Regs.h"
 #include "neverd/lift/X86/X86SvmEncoding.h"
 
@@ -1182,6 +1183,12 @@ buildInstruction(SpecializationInstruction Instruction,
                              InterpreterProfileProjection::X64FredReturnV1
           ? detail::x64FredReturn(Instruction.NativeBytes)
           : std::nullopt;
+  const auto Hypercall =
+      Options.NativeKvmHypercalls &&
+              Instruction.ProfileProjection ==
+                  InterpreterProfileProjection::X64HypercallV1
+          ? x86HypercallEncoding(Instruction.NativeBytes)
+          : std::nullopt;
   const auto Vmrun = SvmState && Instruction.ProfileProjection ==
                                      InterpreterProfileProjection::X64SvmRunV1
                          ? x64VmrunAddressWidth(Instruction.NativeBytes)
@@ -1209,12 +1216,13 @@ buildInstruction(SpecializationInstruction Instruction,
       Instruction.UndefinedEffects.Coverage == LowUndefinedCoverage::Missing &&
       Instruction.UndefinedEffects.Effects.empty();
   if ((!FarPointer && !UserInterrupt && !FredReturn && !Vmrun && !Mpx &&
+       !Hypercall &&
        (Instruction.ProfileProjection != InterpreterProfileProjection::None ||
         (!OwnedFrameReturn && Instruction.UndefinedEffects.Coverage !=
                                   LowUndefinedCoverage::Complete))) ||
       (Instruction.Origin.Control == LowInstructionControl::Terminator &&
        !Sysret && !Sysenter && !Sysexit && !Iret && !FarReturn && !Interrupt &&
-       !UserInterrupt && !FredReturn && !Vmrun))
+       !UserInterrupt && !FredReturn && !Vmrun && !Hypercall))
     RequireNative("instruction requires an explicit native environment");
   if (Instruction.UndefinedEffects.Effects.size() >
       std::size(State{}.Undefined))
@@ -1451,6 +1459,19 @@ buildInstruction(SpecializationInstruction Instruction,
     detail::X64ContinuationMpx<Writer>(W).validate();
   if (Result.RequiresNativeExecution) {
     W.leave(Exit::NativeInstruction);
+  } else if (Hypercall) {
+    const auto Status = W.temporary();
+    W.emit(
+        NdOp::INTRINSIC, Status,
+        {constant(uint64_t(*Hypercall == X86HypercallKind::Vmcall
+                               ? Intrinsic::X86KvmVmcall
+                               : Intrinsic::X86KvmVmmcall),
+                  2),
+         W.read(NdVar::reg(x86reg::RAX, 8)), W.read(NdVar::reg(x86reg::RBX, 8)),
+         W.read(NdVar::reg(x86reg::RCX, 8)), W.read(NdVar::reg(x86reg::RDX, 8)),
+         W.read(NdVar::reg(x86reg::RSI, 8))});
+    W.store(offsetof(State, GPR), Status);
+    W.leave(Exit::Continue, constant(Instruction.Fallthrough.Address, 8));
   } else if (Mpx) {
     detail::X64ContinuationMpx<Writer>(W).execute(
         *Mpx, Instruction.Fallthrough.Address);

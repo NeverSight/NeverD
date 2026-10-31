@@ -1331,6 +1331,7 @@ TEST_F(X64ContinuationExportTest,
     EXPECT_EQ(readOutput(Output), Source);
   }
 }
+#include "X64KvmContinuationExportTests.inc"
 #include "X64MpxContinuationExportTests.inc"
 #include "X64SvmContinuationExportTests.inc"
 

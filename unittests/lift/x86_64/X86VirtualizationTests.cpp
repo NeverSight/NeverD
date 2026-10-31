@@ -183,6 +183,37 @@ TEST(X86Virtualization, AddressSizeAndSegmentsStayWithTheInstruction) {
       Intrinsic::VmxReadMemory, x86VirtualizationLowShape(*Op, Arch::X64)));
 }
 
+TEST(X86Virtualization, KvmAbiRequiresFiveNaturalWidthValues) {
+  for (const auto Id : {Intrinsic::X86KvmVmcall, Intrinsic::X86KvmVmmcall})
+    for (const auto A : {Arch::X86, Arch::X64}) {
+      const uint16_t Word = A == Arch::X64 ? 8 : 4;
+      LowOp Op{.Opcode = NdOp::INTRINSIC, .Output = NdVar::tmp(0, Word)};
+      Op.addInput(NdVar::cst(uint64_t(Id), 2));
+      for (unsigned I = 0; I != 5; ++I)
+        Op.addInput(NdVar::reg(I * 8, Word));
+      const auto Valid = [&](const LowOp &Candidate) {
+        return x86VirtualizationShapeIsValid(
+            Id, x86VirtualizationLowShape(Candidate, A));
+      };
+      EXPECT_TRUE(Valid(Op));
+      EXPECT_TRUE(isSideeffectIntrinsic(Id));
+      for (unsigned I = 1; I != 6; ++I) {
+        auto Wrong = Op;
+        Wrong.Inputs[I].Size = 2;
+        EXPECT_FALSE(Valid(Wrong));
+      }
+      auto Missing = Op;
+      --Missing.NumInputs;
+      EXPECT_FALSE(Valid(Missing));
+      auto WrongResult = Op;
+      WrongResult.Output.Size = 2;
+      EXPECT_FALSE(Valid(WrongResult));
+      auto Segmented = Op;
+      Segmented.MemoryAddressSpace = NdMemoryAddressSpace::X86FS;
+      EXPECT_FALSE(Valid(Segmented));
+    }
+}
+
 TEST(X86Virtualization, VmrunContextRequiresAnExplicitPointerAndConstantWidth) {
   LowOp Op{.Opcode = NdOp::INTRINSIC};
   Op.addInput(NdVar::cst(uint64_t(Intrinsic::X86SvmRunContext), 2));

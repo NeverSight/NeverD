@@ -403,6 +403,13 @@ struct X64ContinuationSourceOptions {
   /// addresses use the actual mappings; writes and later accesses must be
   /// nonfaulting. This binds the native paging environment, not a CR3 cell.
   bool NativePageTableAccess = false;
+  /// Bind a returning KVM ABI: RAX number/result, RBX/RCX/RDX/RSI arguments.
+  /// Calls preserve every other represented register and flags, retain the
+  /// compiler execution environment, and access the same mapped guest RAM.
+  /// Services depend only on those five inputs and guest RAM; extra caller
+  /// context dependencies or state changes are excluded. This does not infer
+  /// KVM from an opcode or CPUID.
+  bool NativeKvmHypercalls = false;
   uint64_t MaxInstructions = limits::analysis::kX64ContinuationMaxInstructions;
   uint64_t MaxOperations = limits::analysis::kX64ContinuationMaxOperations;
 };

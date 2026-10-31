@@ -92,6 +92,7 @@ llvm::Expected<Request> readRequest(llvm::StringRef Text) {
                                        "native_speculation_control_msrs",
                                        "native_descriptor_queries",
                                        "native_page_table_access",
+                                       "native_kvm_hypercalls",
                                        "follow_internal_calls",
                                        "callee_depth",
                                        "dispatch",
@@ -177,6 +178,7 @@ llvm::Expected<Request> readRequest(llvm::StringRef Text) {
        &Options.NativeSpeculationControlMsrs},
       {"native_descriptor_queries", &Options.NativeDescriptorQueries},
       {"native_page_table_access", &Options.NativePageTableAccess},
+      {"native_kvm_hypercalls", &Options.NativeKvmHypercalls},
       {"follow_internal_calls", &Result.FollowInternalCalls}};
   if (const auto *Value = Object->get("uiret_restores_uif")) {
     const auto Flag = Value->getAsBoolean();
@@ -615,6 +617,14 @@ exportX64Continuation(const BinaryImage &Image, llvm::StringRef RequestJSON,
                            ? "declared MXCSR mask; "
                            : "valid caches; declared active paging and "
                              "MXCSR mask; ") +
+           std::string(Request->Options.NativeKvmHypercalls
+                           ? "returning KVM ABI with RAX number/result and "
+                             "RBX/RCX/RDX/RSI arguments; service depends only "
+                             "on those inputs and mapped guest RAM; other "
+                             "represented state and compiler environment "
+                             "preserved; service writes exclude state, "
+                             "budget, generated code and compiler stack; "
+                           : "") +
            std::string(
                "successful sequential RAM; no MMIO, "
                "concurrent writes, memory faults or asynchronous events; exact "

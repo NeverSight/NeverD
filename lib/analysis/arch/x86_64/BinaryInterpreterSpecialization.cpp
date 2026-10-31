@@ -18,6 +18,7 @@
 
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/TargetRegInfo.h"
+#include "neverd/lift/X86/X86HypercallEncoding.h"
 #include "neverd/lift/X86/X86MpxEncoding.h"
 #include "neverd/lift/X86/X86SvmEncoding.h"
 #include "neverd/loader/COFF/PEFixedImage.h"
@@ -329,6 +330,11 @@ public:
         Result.ProfileProjection = InterpreterProfileProjection::X64MpxV1;
         Result.UndefinedEffects.Diagnostic =
             "MPX requires explicit bounds, enable and branch-state ownership";
+      } else if (ContinuationSnapshot &&
+                 x86HypercallEncoding(Result.NativeBytes)) {
+        Result.ProfileProjection = InterpreterProfileProjection::X64HypercallV1;
+        Result.UndefinedEffects.Diagnostic =
+            "hypercall requires an explicit hypervisor register/state ABI";
       } else if (ContinuationSnapshot &&
                  x64VmrunAddressWidth(Result.NativeBytes)) {
         Result.ProfileProjection = InterpreterProfileProjection::X64SvmRunV1;
