@@ -5251,8 +5251,9 @@ the `amd-svm-v10` original-byte path through both C routes, the C SDK and CLI,
 explicit instruction and function-entry selection, and both dispatchers.
 ASan/UBSan host executions supply a controlled SVM completion and check the
 fourteen GPR outputs, all represented SIMD/MXCSR state, x87-image ownership,
-CR2, flags, exact fallthrough, VMEXIT stop/budget and resumed MOV/RET. Eleven
-malformed controls reject before state/image writes. Earlier profiles retain
+CR2 input/write/VMEXIT/read order, flags, exact fallthrough, VMEXIT stop/budget
+and resumed MOV/RET. Eleven malformed controls reject before state/image or
+native CR2 writes. Earlier profiles retain
 the native boundary. The native object test refuses an old SDK instead of
 emitting an unresolved `llvm.x86.vmrun.context` runtime call.
 `VmexitSelectionRetainsCallsAtTheirOriginalDepth` executes two VMRUNs with
@@ -5261,11 +5262,13 @@ depth-one CALL/RET execution across both VMEXIT stops.
 Set `NEVERD_ISA_REGRESSION_ARTIFACT_DIR` to retain the actual exported
 `svm-continuation-{high,llvm}.c` and manifests. Pass each file to NeverC's
 `tests/neverc/X86/verify_vmrun_context.py --neverd-continuation FILE --keep DIR`,
-with `--backend-llc /path/to/fork/llc` for the full-backend route. O0/O2 are
-both run by default. These QEMU TCG guests execute native VMRUN, transport all
+with `--backend-llc /path/to/fork/llc` for the full-backend route and additionally
+`--new-pm` for its new codegen pass manager. O0/O2 are both run by default.
+These QEMU TCG guests execute native VMRUN, transport all
 fourteen GPRs and x87/XMM/YMM state, cover VMMCALL/HLT/invalid-VMCB exits and
-compare the complete original IDA sample plus an independent addr32/RAX
-sample. They do not execute SVM on the host or qualify physical AMD hardware.
+compare the complete original IDA sample plus independent addr32/RAX and
+early-invalid-exit CR2 samples. They do not execute SVM on the host or qualify
+physical AMD hardware.
 
 `X86SystemStateSource.QualifiedSdkUsesNativeSystemCalls` checks 312 modules for
 CLAC/STAC, XEND, CLZERO, CLTS, WRMSRNS, MSRLIST, LKGS, LAR/LSL, INVLPGB and TLBSYNC.

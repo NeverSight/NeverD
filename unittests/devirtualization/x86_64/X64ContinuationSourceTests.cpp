@@ -379,11 +379,9 @@ TEST_F(X64ContinuationSourceTest, VmrunNativeObjectRequiresMatchingSdk) {
   const auto Object = Codegen().compile(*Module, Arch::X64, BinaryFormat::ELF);
   EXPECT_EQ(Object.Success, Native);
   EXPECT_EQ(Object.ObjectData.empty(), !Native);
-  if (!Native) {
-    const auto Rewritten =
-        Codegen().compileForRewrite(*Module, Arch::X64, {}, BinaryFormat::ELF);
-    EXPECT_FALSE(Rewritten.ImageValid);
-  }
+  const auto Rewritten =
+      Codegen().compileForRewrite(*Module, Arch::X64, {}, BinaryFormat::ELF);
+  EXPECT_EQ(Rewritten.ImageValid, Native);
 }
 
 } // namespace

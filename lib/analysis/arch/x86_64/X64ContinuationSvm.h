@@ -119,6 +119,11 @@ public:
       store(Guest, 576 + I * 16,
             W.load(offsetof(State, ZMM) + I * 64 + 16, 16));
     }
+    // Invalid VMCBs can exit before installing guest CR2. Transport the
+    // original input first, so that path cannot leak the compiler host's CR2.
+    W.emit(
+        NdOp::INTRINSIC, {},
+        {k(uint64_t(Intrinsic::WriteCr2), 2), W.load(offsetof(StateV4, CR2))});
     W.emit(NdOp::INTRINSIC, {},
            {k(uint64_t(Intrinsic::X86SvmRunContext), 2), W.address(Context),
             k(Width, 4)});

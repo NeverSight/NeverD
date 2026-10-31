@@ -630,8 +630,8 @@ incomplete intermediate batch.
    proof or inventing successful hardware execution. The native state
    integration below is implemented; selectors with unknown natural-register
    high bits and transferring leaves still require additional contracts.
-3. Introduce a versioned complete-machine-state boundary and explicit
-   continuations for VMRUN and the transferring GETSEC/ENCLU leaves.
+3. Extend the versioned machine-state boundaries to transferring GETSEC/ENCLU
+   leaves and VMRUN environments outside the native `amd-svm-v10` profile.
    It must carry the affected integer, flag, segment, x87/SIMD and control
    state, distinguish native return, VM exit and nonlocal transfer, and reject
    states the selected runtime cannot transport. A compiler calling convention

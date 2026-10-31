@@ -22,9 +22,20 @@ TEST_F(X64ContinuationExportTest,
 #include <stdlib.h>
 #define CHECK(c) do { if (!(c)) abort(); } while (0)
 static unsigned calls, width_seen, initialize_simd;
+static unsigned cr2_reads, cr2_writes;
+static uint64_t native_cr2;
+static void write_cr2(unsigned reg, uint64_t value) {
+    CHECK(reg==2 && calls==0); ++cr2_writes; native_cr2=value;
+}
+static uint64_t read_cr2(unsigned reg) {
+    CHECK(reg==2 && calls==1 && cr2_writes==1); ++cr2_reads;
+    return native_cr2;
+}
 static void svm_complete(void *opaque, unsigned width) {
     uint64_t *c=opaque; uint8_t *x=(void *)(uintptr_t)c[1];
+    CHECK(cr2_writes==1 && native_cr2==0x1234abcd);
     ++calls; width_seen=width;
+    native_cr2=0xfeed1234;
     CHECK(c[3]==7);
     for(unsigned i=0;i<14;++i)c[4+i]+=i+1;
     c[5]=0x5678;
@@ -38,7 +49,9 @@ static void svm_complete(void *opaque, unsigned width) {
 }
 
 #define __builtin_ia32_vmrun_context svm_complete
-#define NEVERD_X86_SYSTEM_REGISTER_NATIVE(native, ...) ((uint64_t)0xfeed1234)
+#define __builtin_ia32_readcr read_cr2
+#define __builtin_ia32_writecr write_cr2
+#define NEVERD_X86_SYSTEM_REGISTER_NATIVE(native, ...) native
 )C";
   const char Harness[] = R"C(
 static uint8_t guest[832] __attribute__((aligned(64)));
@@ -49,6 +62,7 @@ static neverd_x64_state_v10 make_state(uint64_t pc, uint64_t *stack) {
     for(unsigned i=0;i<sizeof(s.ZMM);++i)((uint8_t *)s.ZMM)[i]=(uint8_t)(i*13+1);
     s.GPR[0]=0xfedcba9800010000ULL; s.GPR[4]=(uint64_t)stack;
     s.GPR[7]=s.GPR[0]; s.RFlags=0x246; s.PC=pc; s.CR8=3; s.MXCSR=0x1f80;
+    s.CR2=0x1234abcd;
     s.SVM.GuestXState=(uint64_t)guest; s.SVM.HostXState=(uint64_t)host;
     memset(guest,0,sizeof(guest));memset(host,0,sizeof(host));
     *(uint64_t *)(guest+512)=1;
@@ -60,13 +74,14 @@ int main(void) {
         uint64_t stack[2]={0x7000,0xfeed};
         uint64_t pc=form==0?0x1000:form==1?0x1010:0x1020, budget=20;
         neverd_x64_state_v10 s=make_state(pc,stack), before=s;
-        initialize_simd=mode; calls=0;
+        initialize_simd=mode; calls=cr2_reads=cr2_writes=0; native_cr2=0;
         CHECK(neverd_x64_continue_v10(&s,&budget)==13);
         CHECK(calls==1 && width_seen==(form==1?32:64));
         CHECK(budget==(form==0?17:19));
         CHECK(s.PC==(form==0?0x100b:form==1?0x1014:0x1023));
         CHECK(s.GPR[0]==before.GPR[0] && s.GPR[4]==before.GPR[4]);
         CHECK(s.RFlags==before.RFlags && s.CR2==0xfeed1234);
+        CHECK(cr2_reads==1 && cr2_writes==1);
         CHECK(s.SVM.VMCB==before.GPR[0]);
         for(unsigned i=0;i<14;++i)
             CHECK(s.GPR[map[i]]==(i==1?0x5678:before.GPR[map[i]]+i+1));
@@ -97,9 +112,11 @@ int main(void) {
         if(failure==9)s.SVM.GuestXState=UINT64_MAX-63;
         if(failure==10)s.SVM.GuestXState=((uintptr_t)&s+63)&~(uintptr_t)63;
         neverd_x64_state_v10 before=s;
-        uint8_t prior[832];memcpy(prior,guest,832);calls=0;
+        uint8_t prior[832];memcpy(prior,guest,832);
+        calls=cr2_reads=cr2_writes=0; native_cr2=0;
         CHECK(neverd_x64_continue_v10(&s,&budget)==5);
         CHECK(calls==0 && budget==1 && memcmp(&s,&before,sizeof(s))==0);
+        CHECK(cr2_reads==0 && cr2_writes==0 && native_cr2==0);
         CHECK(memcmp(prior,guest,832)==0);
     }
     return 0;

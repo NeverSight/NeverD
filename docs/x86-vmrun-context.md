@@ -119,10 +119,12 @@ set of instruction inputs.
 
 Host RAX and RSP remain unchanged. Addr32 truncates only the VMCB physical
 address, not restored host RAX. Host RFLAGS retain their values except RF;
-guest RAX/RSP/RIP/RFLAGS and exit information remain in the VMCB. CR2 is read
-from the actual CPU after VMEXIT because an invalid VMCB may exit before its
-guest save area has been installed. Reading a VMCB field instead would invent
-completion on that path.
+guest RAX/RSP/RIP/RFLAGS and exit information remain in the VMCB. After all
+control validation, the transition installs the explicit CR2 input before
+native entry and reads the actual CPU CR2 after VMEXIT. An invalid VMCB may
+exit before installing guest CR2, so this path must preserve the original
+input instead of exposing the compiler host's ambient CR2. Reading a VMCB
+field instead would invent completion on that path.
 
 Every VMEXIT, including VMEXIT_INVALID, returns status **13**, advances PC to
 the original fallthrough, and consumes one instruction budget unit. Both
@@ -152,10 +154,20 @@ CET are part of the invocation domain. **Ordinary function-ABI lifting of
 arbitrary VMRUN remains refused**: environmental facts are never inferred.
 
 The original-byte qualification runs both actual exported C forms through
-NeverC and through NeverC bitcode followed by the full LLVM fork, each at
-O0/O2. Its eight profiles complete 400 generated-context calls, eight
-independent executions of the original IDA counterexample and eight original
-addr32/RAX checks. Each profile includes the complete selected original
-function, including its VMEXIT stop and subsequent MOV/RET. See
+NeverC and through NeverC bitcode followed by either pass manager in the full
+LLVM fork, each at O0/O2. Its twelve profiles complete 600 generated-context
+calls, twelve independent executions of the original IDA counterexample and
+twelve original addr32/RAX checks. Each profile also compares sixteen invalid
+VMRUN exits with independent original instructions initialized with the same
+CR2 input, for 192 original-byte CR2 comparisons. Each profile includes the
+complete selected original function, including its VMEXIT stop and subsequent
+MOV/RET. See
 [the source-continuation evidence](evidence/x86-vmrun-source-2026-10-31.json)
 for commands, source/tool hashes and the bounded invocation domain.
+
+The complete driver exposed two independent LLVM defects: LSR edge splitting
+lost unrelated loop-exit LCSSA values, and the new codegen pass manager skipped
+mandatory tied-operand rewriting on `optnone` functions. Both were reduced to
+SVM-free regressions and fixed before this matrix passed. NeverC also carries
+the LSR repair. The earlier new-pass-manager qualification gap is therefore
+closed for these full source drivers.
