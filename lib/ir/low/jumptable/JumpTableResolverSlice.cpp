@@ -1341,8 +1341,10 @@ resolverExtend(const ResolverValue &Input, uint16_t Size, bool Signed,
     Memo.emplace(Source.get(), Result);
     return Result;
   };
-  std::function<ResolverValue(const ResolverValue &, unsigned)> Extend =
-      [&](const ResolverValue &Node, unsigned Depth) -> ResolverValue {
+  // This recursive walk never escapes. Keep its closure on the stack instead
+  // of allocating a type-erased self-reference for every width query.
+  auto Extend = [&](auto &&Self, const ResolverValue &Node,
+                    unsigned Depth) -> ResolverValue {
     if (Depth > limits::kMaxJumpTableGuardExpressionDepth)
       return incomplete();
     if (!consume())
@@ -1372,7 +1374,7 @@ resolverExtend(const ResolverValue &Input, uint16_t Size, bool Signed,
                                                Node->ScalarModelOrigin));
     }
     if (Node->K == ResolverValueExpr::Kind::Constraint && Node->Input) {
-      ResolverValue Extended = Extend(Node->Input, Depth + 1);
+      ResolverValue Extended = Self(Self, Node->Input, Depth + 1);
       if (!Extended)
         return {};
       // Equality and inequality survive either injective extension. Unsigned
@@ -1400,7 +1402,7 @@ resolverExtend(const ResolverValue &Input, uint16_t Size, bool Signed,
       std::vector<ResolverValue> Inputs;
       Inputs.reserve(Node->Inputs.size());
       for (const ResolverValue &Arm : Node->Inputs) {
-        ResolverValue Extended = Extend(Arm, Depth + 1);
+        ResolverValue Extended = Self(Self, Arm, Depth + 1);
         if (!Extended || !consume())
           return {};
         Inputs.push_back(std::move(Extended));
@@ -1417,7 +1419,7 @@ resolverExtend(const ResolverValue &Input, uint16_t Size, bool Signed,
     if (Node->Input &&
         ((!Signed && Node->K == ResolverValueExpr::Kind::ZeroExtend) ||
          (Signed && Node->K == ResolverValueExpr::Kind::SignExtend))) {
-      ResolverValue Result = Extend(Node->Input, Depth + 1);
+      ResolverValue Result = Self(Self, Node->Input, Depth + 1);
       return Result ? remember(Node, std::move(Result)) : ResolverValue{};
     }
     if (!consume(4))
@@ -1430,7 +1432,7 @@ resolverExtend(const ResolverValue &Input, uint16_t Size, bool Signed,
     E->Input = Node;
     return remember(Node, std::move(E));
   };
-  return Extend(Input, 0);
+  return Extend(Extend, Input, 0);
 }
 
 static bool isRoleNeutralNumericOccurrence(const ResolverValue &Value) {
