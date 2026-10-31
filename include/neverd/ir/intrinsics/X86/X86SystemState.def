@@ -64,4 +64,5 @@ NEVERD_X86_APPENDED_SYSTEM_STATE(X86LockedXor, "lock xor", LockedLogic, 0)
 NEVERD_X86_APPENDED_SYSTEM_STATE(X86LockedBts, "lock bts", LockedBit, 0)
 NEVERD_X86_APPENDED_SYSTEM_STATE(X86LockedBtr, "lock btr", LockedBit, 0)
 NEVERD_X86_APPENDED_SYSTEM_STATE(X86LockedBtc, "lock btc", LockedBit, 0)
+NEVERD_X86_APPENDED_SYSTEM_STATE(X86StreamStore128, "movntdq", StreamStore128, 0)
 #endif

@@ -14,6 +14,7 @@ add_neverd_component_library(NeverDInterpreterSpecialization
   ../arch/x86_64/X64Alignment.cpp
   ../arch/x86_64/X64RuntimeControl.cpp
   ../arch/x86_64/X64ReadPrefetch.cpp
+  ../arch/x86_64/X64StreamStore.cpp
   ../arch/x86_64/InterpreterMachineState.cpp
   FiniteValues.cpp
   CompleteModel.cpp

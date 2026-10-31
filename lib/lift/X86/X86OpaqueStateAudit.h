@@ -101,6 +101,10 @@ inline bool hasLegacyIntegerBankAudit(unsigned Id) {
   case X86_INS_PREFETCHT0:
   case X86_INS_PREFETCHT1:
   case X86_INS_PREFETCHT2:
+  // Streaming stores and fences preserve these banks too, after separate
+  // byte/form authentication. Their native memory effects remain explicit.
+  case X86_INS_MOVNTDQ:
+  case X86_INS_SFENCE:
   case X86_INS_PUSH:
   case X86_INS_PUSHF:
   case X86_INS_PUSHFD:

@@ -808,6 +808,25 @@ bool NdOpEmulator::executeIntrinsic(const LowOp &Op) {
     return Address && ((*Address & (Alignment - 1)) == 0);
   }
 
+  if (Id == Intrinsic::X86StreamStore128) {
+    if (!x86SystemStateShapeIsValid(Id, x86SystemStateLowShape(Op, Img.Arch)) ||
+        !knownOperandBytes(Op.Inputs[1], 0, 8) ||
+        !knownOperandBytes(Op.Inputs[2], 0, 16))
+      return false;
+    const auto Address = resolveMemoryAddress(Op, readOperand(Op.Inputs[1]));
+    if (!Address || (*Address & 15) != 0)
+      return false;
+    for (unsigned I = 0; I != 16; ++I) {
+      const auto *Mapped = Img.getSegmentFor(*Address + I);
+      if (!Mapped || !Mapped->isWritable() || *Address + I < Mapped->VA ||
+          *Address + I - Mapped->VA >= Mapped->Size)
+        return false;
+    }
+    // Finite ordinary-memory projection only. Native output retains the
+    // original WC store and its ordering relative to actual fences.
+    return storeMemoryBytes(*Address, readOperandBytes(Op.Inputs[2]));
+  }
+
   if (Id == Intrinsic::X86DirectStore || Id == Intrinsic::X86DirectStore64B) {
     const auto Shape = x86SystemStateLowShape(Op, Img.Arch);
     const auto IsKnownScalar = [&](const NdVar &Value) {

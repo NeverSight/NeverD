@@ -1281,7 +1281,11 @@ void X86Lifter::liftImpl(const cs_insn *Insn, std::vector<LowOp> &Ops,
       (hasAuditedLegacyIntegerForm(Insn, TargetArch) ||
        nativestateaudit::swapgsForm(Insn, TargetArch) ||
        nativestateaudit::cpuQueryForm(Insn, TargetArch) ||
-       readprefetchaudit::form(Insn, TargetArch)) &&
+       readprefetchaudit::form(Insn, TargetArch) ||
+       (Insn->id == X86_INS_MOVNTDQ &&
+        vectormoveaudit::form(Insn, TargetArch)) ||
+       (Insn->id == X86_INS_SFENCE &&
+        nativestateaudit::memoryFenceForm(Insn, TargetArch))) &&
       opaqueaudit::hasLegacyIntegerBankAudit(Insn->id)) {
     PreservedDraft.Audit = LowPreservedStateAudit::LegacyIntegerV1;
     PreservedDraft.StateSet = LowPreservedStateSet::LegacyIntegerOpaqueV1;

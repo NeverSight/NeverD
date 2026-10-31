@@ -266,6 +266,15 @@ inline bool form(const cs_insn *Insn, Arch Target) {
     LoadOpcode = 0x6f;
     StoreOpcode = 0x7f;
     break;
+  case X86_INS_MOVNTDQ:
+    if ((Target != Arch::X86 && Target != Arch::X64) || X.eflags ||
+        X.operands[0].type != X86_OP_MEM ||
+        X.operands[0].access != CS_AC_WRITE ||
+        X.operands[1].type != X86_OP_REG || X.operands[1].access != CS_AC_READ)
+      return false;
+    RequiredPrefix = 0x66;
+    StoreOpcode = 0xe7;
+    break;
   case X86_INS_MOVUPS:
     LoadOpcode = 0x10;
     StoreOpcode = 0x11;

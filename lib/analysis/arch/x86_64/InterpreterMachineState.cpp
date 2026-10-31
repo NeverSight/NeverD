@@ -11,6 +11,7 @@
 #include "X64ControlTransitions.h"
 #include "X64MachineFlags.h"
 #include "X64Recovery.h"
+#include "X64StreamStore.h"
 
 #include "neverd/analysis/arch/x86_64/InterpreterMachineRegionSource.h"
 #include "neverd/ir/SourceABI.h"
@@ -1582,6 +1583,11 @@ buildMachineSource(const LowFunc &Residual, BinaryFormat SourceFormat,
           HasReturn = true;
           break;
         case NdOp::INTRINSIC: {
+          if (Region && (x64::streamstore::isOperation(Op) ||
+                         x64::streamstore::isFence(Op))) {
+            Block.Ops.push_back(Op);
+            break;
+          }
           if (Region && x64::readprefetch::isOperation(Op)) {
             // Only authenticated raw-region source retains these native
             // cache hints. Preserve their exact kind and remapped address.

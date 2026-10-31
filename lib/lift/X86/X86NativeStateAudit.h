@@ -20,15 +20,18 @@
 
 namespace neverd::nativestateaudit {
 
-inline bool loadFenceForm(const cs_insn *Insn, Arch Target) {
+inline bool memoryFenceForm(const cs_insn *Insn, Arch Target) {
   if (!Insn || !Insn->detail || Target != Arch::X64 ||
-      Insn->id != X86_INS_LFENCE || Insn->size != 3 || Insn->bytes[0] != 0x0f ||
-      Insn->bytes[1] != 0xae || Insn->bytes[2] != 0xe8)
+      (Insn->id != X86_INS_LFENCE && Insn->id != X86_INS_SFENCE) ||
+      Insn->size != 3 || Insn->bytes[0] != 0x0f || Insn->bytes[1] != 0xae)
+    return false;
+  const uint8_t ModRM = Insn->id == X86_INS_LFENCE ? 0xe8 : 0xf8;
+  if (Insn->bytes[2] != ModRM)
     return false;
   const auto &X = Insn->detail->x86;
   return !X.prefix[0] && !X.prefix[1] && !X.prefix[2] && !X.prefix[3] &&
          X.opcode[0] == 0x0f && X.opcode[1] == 0xae && !X.opcode[2] &&
-         !X.opcode[3] && !X.rex && X.addr_size == 8 && X.modrm == 0xe8 &&
+         !X.opcode[3] && !X.rex && X.addr_size == 8 && X.modrm == ModRM &&
          !X.sib && !X.disp && X.encoding.modrm_offset == 2 &&
          !X.encoding.disp_offset && !X.encoding.disp_size &&
          !X.encoding.imm_offset && !X.encoding.imm_size && !X.op_count &&
@@ -388,8 +391,8 @@ inline bool form(const cs_insn *Insn, Arch Target) {
     return true;
   if (Insn->id == X86_INS_INC || Insn->id == X86_INS_DEC)
     return lockedunary::form(Insn, Target);
-  if (Insn->id == X86_INS_LFENCE)
-    return loadFenceForm(Insn, Target);
+  if (Insn->id == X86_INS_LFENCE || Insn->id == X86_INS_SFENCE)
+    return memoryFenceForm(Insn, Target);
   if (Insn->id == X86_INS_CPUID || Insn->id == X86_INS_RDTSC ||
       Insn->id == X86_INS_RDTSCP)
     return cpuQueryForm(Insn, Target);
