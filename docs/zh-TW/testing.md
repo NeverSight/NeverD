@@ -2255,3 +2255,5 @@ LLVM C 的合成堆疊槽保留完整的 128 位元整數寫入，再由執行�
 `AtomicSourceRequiresAnUnmodifiedSupportedReceipt` 拒絕缺少或修改的原子憑據及不支援的 CMPXCHG。`ScalarAtomicsRetainTransactionsAndPhysicalState` 以獨立的完整狀態、旗標及位元組預期驗證 1/2/4/8 位元組 XCHG、LOCK XADD、未對齊記憶體與返回字別名。兩條 C 路徑在使用者及核心狀態設定下執行 O0/O2、ASan/UBSan。執行 `NeverDInterpreterMachineStateTests` 及原始環境、特化、續接原始碼與原始碼後端測試；這些完成測試不認證並行競爭或故障行為。
 
 `InterpreterSpecialization.AlignmentProducersPrecedeWideGuardContexts` / `RuntimeValidityStillRefinesAnEnclosingGuard`: 對齊回歸使用獨立算術預期，涵蓋兩條對齊路徑、所有低位餘數、寬計數、閾值兩側及無號回繞；同時檢查拒絕未對齊迴圈、產生者細化停滯後仍可細化外層分支，以及操作與查詢預算恰好足夠或少一次的情況。這些檢查不證明一般原始碼 ABI 還原或原生故障行為。
+
+ReadPrefetch 回歸檢查原始位元組與運算元中繼資料、獨立的未定義輸出和不透明狀態憑據、畸形純量契約及被修改的原始憑據。兩條 C 路徑保留四種提示及重複出現，並在 O0/O2 和消毒器下比較獨立的完整狀態與記憶體預期，涵蓋未映射位址、32 位元位址回繞和實體返回。不比較快取位置或時序。

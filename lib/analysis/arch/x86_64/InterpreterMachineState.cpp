@@ -1582,6 +1582,12 @@ buildMachineSource(const LowFunc &Residual, BinaryFormat SourceFormat,
           HasReturn = true;
           break;
         case NdOp::INTRINSIC: {
+          if (Region && x64::readprefetch::isOperation(Op)) {
+            // Only authenticated raw-region source retains these native
+            // cache hints. Preserve their exact kind and remapped address.
+            Block.Ops.push_back(Op);
+            break;
+          }
           if (Choice) {
             if (ChoiceOrdinal >= Choices->second.Productions.size())
               return invalid("architectural choice reservation is incomplete");

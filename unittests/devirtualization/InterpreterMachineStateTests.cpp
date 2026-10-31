@@ -25,6 +25,7 @@
 #include "neverd/loader/Loader.h"
 #include "neverd/pipeline/Pipeline.h"
 
+#include "llvm/ADT/STLFunctionalExtras.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Verifier.h"
@@ -108,12 +109,13 @@ protected:
                VectorState, SourceFormat);
   }
 
-  void emitAndRun(const InterpreterMachineSource &Source,
-                  llvm::StringRef Harness, llvm::StringRef Preamble = {},
-                  const BinaryImage *ConversionImage = nullptr,
-                  bool CPUQueryTape = false, bool VectorState = false,
-                  BinaryFormat SourceFormat = BinaryFormat::ELF,
-                  llvm::StringRef ExpectedAtomic = {}) {
+  void emitAndRun(
+      const InterpreterMachineSource &Source, llvm::StringRef Harness,
+      llvm::StringRef Preamble = {},
+      const BinaryImage *ConversionImage = nullptr, bool CPUQueryTape = false,
+      bool VectorState = false, BinaryFormat SourceFormat = BinaryFormat::ELF,
+      llvm::StringRef ExpectedAtomic = {},
+      llvm::function_ref<void(llvm::StringRef, bool)> InspectSource = {}) {
     const auto *Wrapped = &Source;
     const auto &Function = Source.Function;
     for (bool LLVM : {false, true}) {
@@ -152,6 +154,8 @@ protected:
         ASSERT_TRUE(HighCEmitter().emit({High}, OS, Options));
       }
       OS.flush();
+      if (InspectSource)
+        InspectSource(Source, LLVM);
       if (ConversionImage)
         for (const Symbol &Symbol : ConversionImage->Symbols)
           if (!Symbol.IsFunc)
@@ -160,9 +164,9 @@ protected:
       EXPECT_EQ(Source.find("__writeeflags"), std::string::npos);
       if (CPUQueryTape || VectorState) {
         EXPECT_EQ(Source.find("cpuid"), std::string::npos);
-        if (ExpectedAtomic.empty())
+        if (ExpectedAtomic.empty() && !InspectSource)
           EXPECT_EQ(Source.find("__asm"), std::string::npos);
-        else {
+        else if (!ExpectedAtomic.empty()) {
           EXPECT_NE(Source.find("__asm__ __volatile__"), std::string::npos);
           EXPECT_NE(Source.find(ExpectedAtomic.str()), std::string::npos);
         }
@@ -1582,6 +1586,7 @@ int main(void) {
 #include "InterpreterMachineRegionStringSourceTests.inc"
 
 #include "InterpreterMachineRegionAtomicSourceTests.inc"
+#include "InterpreterMachineRegionPrefetchSourceTests.inc"
 #include "InterpreterMachineRegionChoiceTests.inc"
 #include "InterpreterMachineRegionChoiceSourceTests.inc"
 #include "InterpreterMachineRegionSegmentedSourceTests.inc"
