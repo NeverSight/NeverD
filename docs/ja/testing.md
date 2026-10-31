@@ -2307,3 +2307,5 @@ LLVM C の合成スタックスロットは、実行時にどちらかの 64 ビ
 `NeverDInterpreterMachineStateTests` の `KernelPageGlobalSource*` は HighC/LLVMC、O0/O2、ASan/UBSan で全状態、戻りスタック、CR4、全記録不足・不一致、カーネル POPFQ/CLI/STI を検証します。ドメイン、旧配置、予算の拒否も確認し、生成されたスカラー C のみを実行します。
 
 `AtomicSourceRequiresAnUnmodifiedSupportedReceipt` は欠落・改変された証跡と未対応の CMPXCHG を拒否します。`ScalarAtomicsRetainTransactionsAndPhysicalState` は独立した状態・フラグ・バイトの期待値で 1/2/4/8 バイトの XCHG、LOCK XADD、非整列メモリ、戻りアドレスとの別名を検証します。両 C 経路をユーザー／カーネル状態で O0/O2、ASan/UBSan 実行します。`NeverDInterpreterMachineStateTests` と生環境、特殊化、継続ソース、ソースバックエンドのテストを実行してください。競合や障害動作の認証ではありません。
+
+`InterpreterSpecialization.AlignmentProducersPrecedeWideGuardContexts` / `RuntimeValidityStillRefinesAnEnclosingGuard`: 整列の回帰テストは独立した算術オラクルと比較し、両方の整列経路、下位ビットの全剰余、幅広カウント、閾値の両側、符号なしの折り返しを検査します。不整列ループの拒否、生成元の精密化が停滞した後の外側条件の精密化、および操作・クエリ予算のちょうど十分な値と一つ不足する値も確認します。通常のソース ABI 復元やネイティブ障害動作の証明ではありません。
