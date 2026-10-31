@@ -13,6 +13,7 @@
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/loader/COFF/COFFLoader.h"
+#include "neverd/loader/CodePointerSources.h"
 #include "neverd/loader/PointerRelocation.h"
 #include "neverd/object/ELFLayout.h"
 #include "neverd/object/SectionNames.h"
@@ -78,6 +79,39 @@ protected:
     }
   }
 };
+
+TEST_F(NativePointerRelocationBoundary,
+       MarkedCodeCoordinatesRequireSupportedPointerWidths) {
+  for (const auto Bits :
+       {Bitness::Bits32, Bitness::Bits64, Bitness::Bits256, Bitness::Unknown}) {
+    SCOPED_TRACE(unsigned(Bits));
+    BinaryImage Image;
+    Image.Arch = Bits == Bitness::Bits64 ? Arch::X64 : Arch::X86;
+    Image.Bits = Bits;
+    Segment Table;
+    Table.Name = ".code_coordinates";
+    Table.VA = 0x2000;
+    Table.Size = Table.FileSz = 32;
+    Table.Data.resize(32);
+    Table.Flags = SegmentFlags::Readable;
+    const uint64_t Target = 0x1234567876543210;
+    for (unsigned I = 0; I < sizeof(Target); ++I)
+      Table.Data[I] = uint8_t(Target >> (I * 8));
+    Image.Segments.push_back(std::move(Table));
+    EXPECT_FALSE(normalizedRelocatedCodeTarget(Image, 0x2000));
+    Image.CodePtrRelocSlots.insert(0x2000);
+    const auto Coordinate = normalizedRelocatedCodeTarget(Image, 0x2000);
+    if (Bits == Bitness::Bits32)
+      EXPECT_EQ(Coordinate, uint32_t(Target));
+    else if (Bits == Bitness::Bits64)
+      EXPECT_EQ(Coordinate, Target);
+    else
+      EXPECT_FALSE(Coordinate);
+    Image.Segments[0].Size = Image.Segments[0].FileSz = 3;
+    Image.Segments[0].Data.resize(3);
+    EXPECT_FALSE(normalizedRelocatedCodeTarget(Image, 0x2000));
+  }
+}
 
 TEST_F(NativePointerRelocationBoundary,
        PEHeaderAddressesReachTheLinkerImageBase) {

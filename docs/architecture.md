@@ -1847,6 +1847,9 @@ correspondence. Admission evaluates contiguous context first, then wider spacing
 for still-unmatched functions; the latter does not bootstrap new anchors or
 interpret intervening data as an ABI record. Both sources use the existing
 measured competition and preserve unpaired duplicate-body remainders for review.
+The shared relocation-coordinate reader accepts only its supported 32- and
+64-bit storage widths. Other widths supply no coordinate rather than passing
+through a narrower read; CFG roots and comparison capture share that decision.
 
 Matcher version 9 also admits bounded shared mnemonic/CFG groups into the same
 measured competition. A common instruction sketch cannot hide a smaller graph

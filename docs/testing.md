@@ -3589,6 +3589,10 @@ unknown/unreadable target barriers, contradictory wider neighborhoods and
 contiguous-context priority. Intervening numeric values without relocation
 marks cannot supply witnesses; interior code coordinates cannot become invented
 function entries or silently disappear from a wider initializer sequence.
+`MarkedCodeCoordinatesRequireSupportedPointerWidths` checks marked/unmarked
+32- and 64-bit reads, full-width values and truncated storage. Unsupported
+256-bit or unknown pointer widths supply no coordinate; the shared reader
+must not silently truncate them through its 32-bit path.
 
 Reference-uncertainty controls distinguish unchanged raw code from known operand
 changes, retain a known retargeting beside an unknown address operand, and keep
