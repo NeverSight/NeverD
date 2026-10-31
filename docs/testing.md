@@ -11,6 +11,13 @@ calls/stores retain their execution sites. The matrix covers preserved LLVM
 function types and the default projection, including loops whose header can
 still be represented by a condition expression.
 
+`LLVMCValues.ReorderedConditionalBlocksRetainEveryExit` executes nested tests
+with both forward and backward block layouts, reversed arms, separate and
+shared returns, and both LLVM type projection modes. O0/O2 builds with UBSan
+check every branch, output memory and an early return with a null pointer.
+Late conditional folding cannot consume a block that the statement walk has
+already printed with its own inlined exits.
+
 [← Documentation Index](README.md)
 
 `InterpreterSpecialization.AlignmentFactorsIndependentFinitePayload`,

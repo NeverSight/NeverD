@@ -5286,6 +5286,86 @@ int main(void) {
     compileAndRun(Source, Optimization, {}, true);
 }
 
+TEST(LLVMCValues, ReorderedConditionalBlocksRetainEveryExit) {
+  for (bool SharedReturn : {false, true})
+    for (bool ReverseArms : {false, true})
+      for (bool EarlyDispatch : {false, true})
+        for (bool PreserveTypes : {false, true}) {
+          SCOPED_TRACE(SharedReturn);
+          SCOPED_TRACE(ReverseArms);
+          SCOPED_TRACE(EarlyDispatch);
+          SCOPED_TRACE(PreserveTypes);
+          std::string IR = R"(
+            target datalayout = "e-p:64:64"
+            define i64 @guarded_read(i1 %skip, i1 %read, ptr %out) {
+            entry:
+              br label %guard
+            dispatch:
+              br i1 %read, label %loaded, label %stored
+            guard:
+              br i1 %skip, label %done, label %dispatch
+            stored:
+              store i64 41, ptr %out
+              STORE_EXIT
+            loaded:
+              %value = load i64, ptr %out
+              ret i64 %value
+            done:
+              ret i64 23
+            }
+          )";
+          IR.replace(IR.find("STORE_EXIT"),
+                     llvm::StringRef("STORE_EXIT").size(),
+                     SharedReturn ? "br label %loaded" : "ret i64 17");
+          llvm::LLVMContext Context;
+          llvm::SMDiagnostic Diagnostic;
+          auto Module = llvm::parseAssemblyString(IR, Diagnostic, Context);
+          ASSERT_TRUE(Module);
+          auto *Function = Module->getFunction("guarded_read");
+          llvm::BasicBlock *Dispatch = nullptr;
+          llvm::BasicBlock *Guard = nullptr;
+          for (auto &Block : *Function) {
+            if (Block.getName() == "dispatch")
+              Dispatch = &Block;
+            if (Block.getName() == "guard")
+              Guard = &Block;
+          }
+          ASSERT_TRUE(Dispatch && Guard);
+          if (!EarlyDispatch)
+            Dispatch->moveAfter(Guard);
+          if (ReverseArms)
+            llvm::cast<llvm::CondBrInst>(Dispatch->getTerminator())
+                ->swapSuccessors();
+          ASSERT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
+          neverd::CEmitterOptions Options;
+          Options.PreserveLLVMFunctionTypes = PreserveTypes;
+          std::string Source;
+          llvm::raw_string_ostream Output(Source);
+          ASSERT_TRUE(neverd::LLVMCEmitter().emit(*Module, Output, Options));
+          Source += "\n#define SHARED_RETURN " + std::to_string(SharedReturn) +
+                    "\n#define REVERSE_ARMS " + std::to_string(ReverseArms) +
+                    R"(
+int main(void) {
+  const uint64_t values[] = {0, 1, UINT64_MAX, UINT64_C(0xfedcba9876543210)};
+  for (unsigned skip = 0; skip != 2; ++skip)
+    for (unsigned read = 0; read != 2; ++read)
+      for (unsigned i = 0; i != sizeof(values) / sizeof(*values); ++i) {
+        uint64_t words[] = {19, values[i], 29};
+        int loads = REVERSE_ARMS ? !read : read;
+        uint64_t expected = skip ? 23 : loads ? values[i] : SHARED_RETURN ? 41 : 17;
+        if (guarded_read(skip, read, words + 1) != expected) return 1;
+        if (words[1] != (skip || loads ? values[i] : 41)) return 2;
+        if (words[0] != 19 || words[2] != 29) return 3;
+      }
+  if (guarded_read(1, 0, 0) != 23 || guarded_read(1, 1, 0) != 23) return 4;
+  return 0;
+}
+)";
+          for (const char *Level : {"-O0", "-O2"})
+            compileAndRun(Source, Level, {}, true);
+        }
+}
+
 TEST(LLVMCValues, CursorLoopsKeepHeaderEffectsAndEntryLabels) {
   for (bool HeaderEffects : {false, true})
     for (bool ReloadCurrent : {false, true})
