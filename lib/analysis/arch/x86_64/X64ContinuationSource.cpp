@@ -10,6 +10,7 @@
 
 #include "BinaryContinuationInstructions.h"
 #include "NativeStackControl.h"
+#include "StringTransfer.h"
 #include "X64ArchitecturalValues.h"
 #include "X64ContinuationEvents.h"
 #include "X64ContinuationFredReturns.h"
@@ -579,13 +580,18 @@ bool supportedOperation(const LowOp &Op,
     return Op.NumInputs == 2 && Op.Output.Size && Op.Output.Size <= 16 &&
            Op.Inputs[0].Size == Op.Output.Size &&
            Op.Inputs[1].Size == Op.Output.Size;
-  case NdOp::INTRINSIC:
-    return flagIntrinsic(Op) || alignmentIntrinsic(Op) ||
-           controlIntrinsic(Op, Options) ||
+  case NdOp::INTRINSIC: {
+    // The complete-state intrinsic owns runtime count, direction and pointer
+    // completion. Reuse flat native-width admission without specializing its
+    // count or weakening the caller's successful ordinary-RAM contract.
+    const auto Transfer = detail::stringTransferShape(Op);
+    return (Transfer && Transfer->CompleteState) || flagIntrinsic(Op) ||
+           alignmentIntrinsic(Op) || controlIntrinsic(Op, Options) ||
            faultAddressIntrinsic(Op, Options) || fenceIntrinsic(Op, Options) ||
            writePrefetchIntrinsic(Op, Options) || msrIntrinsic(Op, Options) ||
            descriptorQueryIntrinsic(Op, Options) ||
            pageTableIntrinsic(Op, Options);
+  }
   default:
     // Admission and arithmetic widths use the scalar owner. The operation
     // itself is still emitted through LowToMed and the existing backends.

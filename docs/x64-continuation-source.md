@@ -100,6 +100,17 @@ qualification.
 
 ## Invocation
 
+Flat 64-bit-address REP MOVS/STOS use the existing complete-state intrinsic
+for 1-, 2-, 4- and 8-byte elements. Their count and direction remain runtime
+inputs; overlapping copies retain ordered element semantics and zero count
+accesses no memory. This requires an x64 host and the existing successful
+ordinary-RAM domain. Reduced address widths, segmented sources and other REP
+families remain explicit native requests. This admission does not prove a
+bounded count or relax the ordinary recovery route's memory and frame proofs.
+`X64ContinuationSourceTest.RepeatedTransfersPreserveRuntimeState` checks both
+C routes at O0/O2 with ASan/UBSan against independent ordered-element oracles,
+including full state preservation in V1 and V2.
+
 The generated translation unit defines `neverd_x64_state_v6`, its checked field
 layout, instruction steps, and:
 
