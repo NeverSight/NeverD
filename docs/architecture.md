@@ -15109,6 +15109,21 @@ Both C routes include a state layout checked against the semantic owner and
 an exact byte manifest bound to the emitted source hash. The ordinary source
 interface remains separate. See [the invocation contract](x64-continuation-source.md).
 
+`X64SpecialRegions` isolates bounded callee-region discovery and direct state
+dispatch from ordinary source proofs. An explicit `callee_depth` traverses
+original direct CALL targets in breadth-first batches, deduplicating entries
+before each pipeline invocation and instruction addresses before state lifting.
+Each wave uses the pipeline's existing parallel function scheduler; dependent
+waves stay ordered, and all retained discovery state expires with the export.
+Imports, indirect targets and the depth frontier do not acquire inferred bodies
+or call contracts. An optional direct driver indexes the selected PCs once and
+connects adjacent instruction labels only after their actual next PC agrees.
+Each helper contains at most 64 steps and cannot be inlined into its dispatcher,
+preventing large selections from reconstructing one expensive compiler graph.
+Every step still checks its domain and budget; external CALL/RET retain priority
+over exhaustion, while context transitions always stop. Both C routes share
+this owner, and default requests retain their existing switch driver.
+
 `X64ContinuationSystemTransfers` owns the complete explicit SYSRET and Intel
 SYSENTER/SYSEXIT target contexts, including their shared flat segment-cache
 construction. The V7 profile adds live SYSENTER MSRs after the unchanged V6

@@ -7,6 +7,7 @@ add_neverd_component_library(NeverDPipeline
   evidence/ConstantStores.cpp
   Pipeline.cpp
   X64ContinuationExport.cpp
+  X64SpecialRegions.cpp
   NativeSourceHints.cpp
   NativeSourcePreservation.cpp
   PipelineCallAbi.cpp

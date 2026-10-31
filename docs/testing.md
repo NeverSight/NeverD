@@ -20,6 +20,19 @@ already printed with its own inlined exits.
 
 [← Documentation Index](README.md)
 
+`X64ContinuationExportTest.SpecialCallRegionsKeepUninitializedArgumentSlotsAndTheirAliases`
+executes a caller with a missing sixth source argument and a callee mutation
+that observes its physical bytes. Both C routes at O0/O2 with ASan/UBSan retain
+the untouched slot, complete stack effects and original CALL/RET behavior.
+Linux x64 additionally executes the independently authored native bytes on a
+test stack; other hosts retain only the compiled-state checks. Recursive
+discovery deduplicates bodies, and union-budget exhaustion publishes no source.
+`DirectSpecialDispatchMatchesEveryPhysicalStopAndBudget` compares full state,
+memory and exit/budget results of switch and direct dispatch across every
+selected entry, outside PCs, invalid state, stack pivots and 0..34 steps.
+These checks establish neither ordinary ABI simplification nor complete kernel
+execution.
+
 `InterpreterSpecialization.AlignmentFactorsIndependentFinitePayload`,
 `AlignmentFactorDoesNotInventIndependence` and
 `AlignmentPairsRetainFrameSlotCorrelation` check alignment relations across

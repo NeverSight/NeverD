@@ -44,6 +44,37 @@ Ordinary `--func`, frame edits, devirtualization and source optimization options
 cannot be combined with this mode. The ordinary decompiler never silently
 changes its interface to state C.
 
+## Special handling for unresolved function interfaces
+
+Keep the state translation in a separate C file and pass the original machine
+context explicitly when ordinary parameter or frame recovery cannot be proved.
+The special-region implementation lives in `lib/pipeline/X64SpecialRegions.cpp`;
+it does not replace missing source arguments with constants.
+
+An entry request can include `"callee_depth": 1` together with
+`"follow_internal_calls": true`. Each discovery wave selects original direct
+CALL targets in mapped image code. Repeated targets and recursive edges share
+one recovered region; the union of instruction addresses is lifted once. The
+depth is bounded at eight and the existing instruction/operation/output budgets
+still apply. Imports, indirect targets and calls beyond the depth frontier
+remain environment boundaries unless their actual target is already selected.
+Ordinary ABI recovery is not required for these regions. Their manifest records
+the discovery depth and the same original bytes, native requests and incomplete
+CFG diagnostics as explicit entry selection. A failed discovery or exceeded
+budget publishes no partial translation.
+
+`"dispatch": "direct"` connects adjacent selected instructions with C labels.
+Connections are partitioned into at most 64 steps per helper, with inlining
+disabled between helpers so large selections keep bounded compiler graphs.
+Every connection checks the actual post-instruction PC; branches and other
+transfers retain indexed dispatch. This reduces repeated dispatch work without
+removing instruction preconditions, per-instruction budgets or stopping
+boundaries. `"dispatch": "switch"` retains the default driver for comparison.
+Neither option invents a callee preservation rule or restores a lexical return
+address after a callback. Both work with HighC and LLVM C. Environment bindings
+remain explicit, and successful compilation is not whole-function execution
+qualification.
+
 ## Invocation
 
 The generated translation unit defines `neverd_x64_state_v6`, its checked field
