@@ -7,7 +7,7 @@
 /// Execute continuation source against independent state and memory oracles.
 //===----------------------------------------------------------------------===//
 
-#include "../lift/NeverDLiftFixture.h"
+#include "../../lift/NeverDLiftFixture.h"
 
 #include "neverd/analysis/arch/x86_64/X64ContinuationSource.h"
 #include "neverd/backend/c/HighC/HighCEmitter.h"
@@ -21,6 +21,7 @@
 #include "neverd/loader/BinaryImage.h"
 
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/IR/LLVMContext.h"
@@ -562,7 +563,7 @@ int main(void) {
     if(bad==14)s.cs.attributes|=0x4000;
     if(bad==15)s.cs.selector|=3;
     if(bad==16)s.pc++;
-    if(bad==17)s.flags|=0x10000;
+    if(bad==17)s.flags|=0x100;
     if(bad==18)s.gpr[4]=UINT64_MAX-7;
     if(bad==19)s.gpr[4]=0x0100000000000000ULL;
     if(bad==20)s.gdt.limit=38;
@@ -724,9 +725,12 @@ TEST_F(X64ContinuationSourceTest, EventsLeaveEarlierStateLayoutsUnsupported) {
   V5.PagingAddressBits = 48;
   for (auto O : {options(), controlsOptions(), smapOptions(), V4, V5}) {
     auto Units = buildX64ContinuationSource(
-        image({0x48, 0xcf, 0xcc, 0xcd, 0, 0xcd, 3, 0xcd, 0x2d, 0xcd, 0xff, 0x48,
-               0xcb, 0x48, 0xca, 0xff, 0xff}),
-        {0x1000, 0x1002, 0x1003, 0x1005, 0x1007, 0x1009, 0x100b, 0x100d}, O);
+        image({0x48, 0xcf, 0xcc, 0xcd, 0,    0xcd, 3,    0xcd,
+               0x2d, 0xcd, 0xff, 0x48, 0xcb, 0x48, 0xca, 0xff,
+               0xff, 0xcf, 0x66, 0xcf, 0xcb, 0x66, 0xcb}),
+        {0x1000, 0x1002, 0x1003, 0x1005, 0x1007, 0x1009, 0x100b, 0x100d, 0x1011,
+         0x1012, 0x1014, 0x1015},
+        O);
     ASSERT_TRUE(bool(Units)) << llvm::toString(Units.takeError());
     for (const auto &U : *Units)
       EXPECT_TRUE(U.RequiresNativeExecution);
@@ -735,12 +739,12 @@ TEST_F(X64ContinuationSourceTest, EventsLeaveEarlierStateLayoutsUnsupported) {
 
 TEST_F(X64ContinuationSourceTest, UnqualifiedFarReturnEncodingsRemainNative) {
   for (const auto &Bytes :
-       std::vector<std::vector<uint8_t>>{{0xcb},
-                                         {0xca, 0, 0},
-                                         {0x66, 0xcb},
-                                         {0x66, 0x48, 0xcb},
+       std::vector<std::vector<uint8_t>>{{0x66, 0x48, 0xcb},
                                          {0x49, 0xcb},
-                                         {0x67, 0x48, 0xca, 0xff, 0xff}}) {
+                                         {0x67, 0x48, 0xca, 0xff, 0xff},
+                                         {0x66, 0x48, 0xcf},
+                                         {0x49, 0xcf},
+                                         {0x67, 0xcf}}) {
     auto Units =
         buildX64ContinuationSource(image(Bytes), {0x1000}, eventOptions());
     ASSERT_TRUE(bool(Units)) << llvm::toString(Units.takeError());
@@ -881,7 +885,7 @@ int main(void) {
       state_v5_t s=seed_v5(0x1000), want;
       s.core.core.core.gpr[1]=pcs[pc];
       s.core.core.core.gpr[11]=bit==64?UINT64_MAX:1ULL<<bit;
-      s.core.core.core.flags|=0x40000;
+      s.core.core.core.flags|=0x40000|((bit&1)<<16)|((bit&6)<<11)|((bit&24)<<16);
       s.star=((uint64_t)selectors[i]<<48)|0xabcde0123456ULL;
       s.core.cr2=0x123456789abcdef0ULL;s.reserved=0x1234;
       want=s;
@@ -944,6 +948,7 @@ int main(void) {
       s.core.core.core.gpr[1]=0x1800;
       s.core.core.core.gpr[11]=bit==64?UINT64_MAX:1ULL<<bit;
       return_query_t q={0};
+      s.core.core.core.flags|=((bit&1)<<16)|((bit&6)<<11)|((bit&24)<<16);
       memcpy(q.gpr,s.core.core.core.gpr,sizeof(q.gpr));
       q.flags=s.core.core.core.flags;q.star=s.star;
       __asm__ volatile("outb %%al,$0xe9"::"a"(1),"D"(&q):"memory");
@@ -1839,6 +1844,28 @@ int main(void) {
   return 0;
 })C",
       true);
+}
+
+TEST_F(X64ContinuationSourceTest, CR4AuditStillRequiresNativeExecution) {
+  run({0x0f, 0x20, 0xe0, 0x0f, 0x22, 0xe0}, {0x1000, 0x1003}, R"C(
+int main(void) {
+  const unsigned bits[]={11,7,6,4,2,0};
+  for(unsigned pattern=0;pattern<64;++pattern) {
+    state_v2_t s=seed_v2(0x1000);
+    s.core.flags=0x202;
+    for(unsigned i=0;i<6;++i) s.core.flags|=((pattern>>i)&1)<<bits[i];
+    for(unsigned i=0;i<8;++i) s.core.arbitrary[i]=UINT64_MAX-i-pattern;
+    s.core.gpr[0]=UINT64_C(0xfeed987600000000)+pattern;
+    state_v2_t before=s;
+    CHECK(neverd_step_v2_1000(ARG(&s))==4);
+    CHECK(memcmp(&s,&before,sizeof(s))==0);
+    s.core.pc=0x1003; before=s;
+    CHECK(neverd_step_v2_1003(ARG(&s))==4);
+    CHECK(memcmp(&s,&before,sizeof(s))==0);
+  }
+  return 0;
+})C",
+      true, controlsOptions());
 }
 
 TEST_F(X64ContinuationSourceTest, TaskPriorityRetainsInvalidWrites) {

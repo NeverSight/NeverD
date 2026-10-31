@@ -51,7 +51,8 @@ int main(void) {
       initial.gdt.base=UINT64_MAX;
       return_state_t s;memcpy(&s,&initial,sizeof(s));
       GPR(s)[1]=pcs[pc];GPR(s)[11]=bit==64?UINT64_MAX:1ULL<<bit;
-      FLAGS(s)|=0x40000;GPR(s)[4]=0x876543210abcdef0ULL;
+      FLAGS(s)|=0x40000|((bit&1)<<16)|((bit&6)<<11)|((bit&24)<<16);
+      GPR(s)[4]=0x876543210abcdef0ULL;
       for(unsigned reg=0;reg<8;++reg)
         ARBITRARY(s)[reg]=witnesses[choice]^(reg*0x102030405060708ULL);
       s.star=((uint64_t)selectors[i]<<48)|0xabcde0123456ULL;
@@ -93,6 +94,7 @@ int main(void) {
       s.core.core.core.gpr[1]=high[upper]|0x1800;
       s.core.core.core.gpr[4]=0x876543210abcdef0ULL;
       s.core.core.core.gpr[11]=bit==64?UINT64_MAX:1ULL<<bit;
+      s.core.core.core.flags|=((bit&1)<<16)|((bit&6)<<11)|((bit&24)<<16);
       return_query_t q={0};memcpy(q.gpr,s.core.core.core.gpr,sizeof(q.gpr));
       q.flags=s.core.core.core.flags;q.star=s.star;
       __asm__ volatile("outb %%al,$0xe9"::"a"(8),"D"(&q):"memory");

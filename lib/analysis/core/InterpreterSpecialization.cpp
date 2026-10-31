@@ -22,6 +22,7 @@
 #include "neverd/ir/low/LowArchitecturalValue.h"
 #include "neverd/ir/low/LowRawEnvironment.h"
 #include "neverd/symbolic/SymExec.h"
+#include "neverd/symbolic/SymKnownBits.h"
 #include "neverd/symbolic/SymMBA.h"
 
 #include "llvm/ADT/APInt.h"
@@ -30,6 +31,7 @@
 #include "llvm/Support/SaveAndRestore.h"
 
 #include <algorithm>
+#include <bit>
 #include <deque>
 #include <iterator>
 #include <limits>
@@ -109,6 +111,14 @@ struct ControlMarginal {
   bool operator==(const ControlMarginal &) const = default;
 };
 
+struct ControlRange {
+  uint32_t Field;
+  uint64_t Mask;
+  uint64_t Minimum;
+  uint64_t Maximum;
+  bool operator==(const ControlRange &) const = default;
+};
+
 struct Projection {
   uint32_t FrameResidue = 0;
   Constants Scalars;
@@ -124,7 +134,12 @@ struct Projection {
   FrameFacts Frame;
   FrameOrigins Origins;
   ControlRelation Controls;
+  // Exhaustive two-column projections survive when an unrelated field makes
+  // the full joint relation too large. Their conjunction is an
+  // overapproximation, never an assumed independence between columns.
+  std::vector<ControlRelation> ControlPairs;
   std::vector<ControlMarginal> Marginals;
+  std::vector<ControlRange> Ranges;
 };
 
 struct ContextKey {
@@ -335,6 +350,60 @@ bool joinMarginals(std::vector<ControlMarginal> &Into,
   return true;
 }
 
+bool joinControlPairs(std::vector<ControlRelation> &Into,
+                      const std::vector<ControlRelation> &Incoming,
+                      uint32_t Limit, uint32_t &Widenings) {
+  bool Changed = false;
+  for (auto It = Into.begin(); It != Into.end();) {
+    const auto At =
+        std::lower_bound(Incoming.begin(), Incoming.end(), It->Fields,
+                         [](const auto &Pair, const auto &Fields) {
+                           return Pair.Fields < Fields;
+                         });
+    if (At == Incoming.end() || At->Fields != It->Fields) {
+      It = Into.erase(It);
+      Changed = true;
+      continue;
+    }
+    Changed |= joinControls(*It, *At, Limit, Widenings);
+    if (It->Fields.size() != 2)
+      It = Into.erase(It);
+    else
+      ++It;
+  }
+  return Changed;
+}
+
+bool joinControlRanges(std::vector<ControlRange> &Into,
+                       const std::vector<ControlRange> &Incoming) {
+  bool Changed = false;
+  for (auto It = Into.begin(); It != Into.end();) {
+    const auto At = std::lower_bound(
+        Incoming.begin(), Incoming.end(), It->Field,
+        [](const auto &Range, uint32_t Field) { return Range.Field < Field; });
+    if (At == Incoming.end() || At->Field != It->Field ||
+        At->Mask != It->Mask) {
+      It = Into.erase(It);
+      Changed = true;
+      continue;
+    }
+    // Widen moving endpoints to binary boundaries. Each endpoint can move
+    // at most the carrier width times; a runtime loop cannot require one
+    // analysis visit per possible counter value.
+    if (At->Minimum < It->Minimum) {
+      It->Minimum = std::bit_floor(At->Minimum);
+      Changed = true;
+    }
+    if (At->Maximum > It->Maximum) {
+      It->Maximum = llvm::APInt::getLowBitsSet(64, std::bit_width(At->Maximum))
+                        .getZExtValue();
+      Changed = true;
+    }
+    ++It;
+  }
+  return Changed;
+}
+
 bool intersect(Projection &Into, const Projection &Incoming,
                uint32_t TupleLimit, uint32_t &Widenings) {
   bool Changed = intersectMap(Into.Scalars, Incoming.Scalars);
@@ -367,8 +436,11 @@ bool intersect(Projection &Into, const Projection &Incoming,
   Changed |= intersectMap(Into.Frame.AffineValues, Incoming.Frame.AffineValues);
   Changed |=
       joinControls(Into.Controls, Incoming.Controls, TupleLimit, Widenings);
+  Changed |= joinControlPairs(Into.ControlPairs, Incoming.ControlPairs,
+                              TupleLimit, Widenings);
   Changed |=
       joinMarginals(Into.Marginals, Incoming.Marginals, TupleLimit, Widenings);
+  Changed |= joinControlRanges(Into.Ranges, Incoming.Ranges);
   const auto OldUnsafe = Into.Origins.UnsafeScalars.size();
   Into.Origins.UnsafeScalars.insert(Incoming.Origins.UnsafeScalars.begin(),
                                     Incoming.Origins.UnsafeScalars.end());
@@ -893,6 +965,9 @@ private:
                    const FrameOrigins &Origins, const FrameFacts &Frame,
                    SymRef Predicate, SpecializationCursor Successor,
                    Projection &Out, bool &Reachable);
+  bool projectRange(SymContext &Ctx, SymRef Predicate, SymRef Value,
+                    SymRef Root, uint32_t Field, uint64_t Mask, Projection &Out,
+                    bool &Reachable);
   int addDispatchNode(const LowInstructionBoundary &Origin, const NdVar &Target,
                       uint64_t Value, int Taken, int Other,
                       bool Synthetic = false);
@@ -1529,6 +1604,87 @@ FiniteValues Specializer::enumerate(SymContext &Ctx, SymRef Predicate,
   return Domain;
 }
 
+bool Specializer::projectRange(SymContext &Ctx, SymRef Predicate, SymRef Value,
+                               SymRef Root, uint32_t Field, uint64_t Mask,
+                               Projection &Out, bool &Reachable) {
+  const unsigned Width = Ctx.width(Value);
+  const uint64_t Full = llvm::APInt::getLowBitsSet(64, Width).getZExtValue();
+  if (Root) {
+    // Absolute ranges of frame-derived addresses compete with the relative
+    // frame proofs that actually resolve their loads and stores. Omit this
+    // optional projection unless the demanded bits are independent of Root.
+    const auto Dependence = detail::gatherVariableBitDemand(
+        Ctx, Value, Root,
+        std::min<uint64_t>(Options.MaxSymbolicNodes,
+                           Options.MaxOperations - Result.EvaluatedOperations));
+    Result.EvaluatedOperations += Dependence.Visited;
+    if (!Dependence.Bits || *Dependence.Bits)
+      return true;
+  }
+  // Completely independent wide inputs do not need optional numeric bounds.
+  // This omission is a precision choice, never a range assertion.
+  if (detail::hasUnconstrainedProjectionInput(Ctx, Predicate, Value,
+                                              static_cast<uint32_t>(Full),
+                                              Options.MaxSymbolicNodes))
+    return true;
+  const auto Domain = enumerate(Ctx, Predicate, {}, 1);
+  if (Failed)
+    return false;
+  if (Domain.Status != FiniteValueStatus::Complete)
+    return true;
+  if (Domain.Tuples.empty()) {
+    Reachable = false;
+    return true;
+  }
+  uint64_t Minimum = 0, Maximum = Full;
+  unsigned Work = static_cast<unsigned>(
+      std::min<uint64_t>(SymKnownBits::MaxQueryWork,
+                         Options.MaxOperations - Result.EvaluatedOperations));
+  const auto Available = Work;
+  SymKnownBits Known(Ctx);
+  if (const auto Bits = Known.query(Value, Work)) {
+    Minimum = Bits->getMinValue().getZExtValue();
+    Maximum = Bits->getMaxValue().getZExtValue();
+  }
+  Result.EvaluatedOperations += Available - Work;
+  for (bool FindMaximum : {false, true}) {
+    uint64_t Low = Minimum, High = Maximum;
+    while (Low < High) {
+      if (Result.EvaluatedOperations >= Options.MaxOperations)
+        return fail(SpecializationStatus::BudgetExceeded,
+                    "control range projection budget exhausted");
+      ++Result.EvaluatedOperations;
+      const uint64_t Middle = Low + (High - Low) / 2;
+      const auto Bound = Ctx.mkUle(Value, Ctx.mkConst(Width, Middle));
+      const auto Proof = enumerate(Ctx, Predicate, {Bound}, 1);
+      if (Failed)
+        return false;
+      if (Proof.Status == FiniteValueStatus::Complete &&
+          Proof.Tuples == std::vector<std::vector<uint64_t>>{{0}}) {
+        Minimum = std::max(Minimum, Middle + 1);
+        Low = Middle + 1;
+      } else if (Proof.Status == FiniteValueStatus::Complete &&
+                 Proof.Tuples == std::vector<std::vector<uint64_t>>{{1}}) {
+        Maximum = std::min(Maximum, Middle);
+        High = Middle;
+      } else if (Proof.Status == FiniteValueStatus::TooManyValues) {
+        // Both Boolean values have witnesses. Only the search bracket moves;
+        // no universal bound is learned from either individual witness.
+        if (FindMaximum)
+          Low = Middle + 1;
+        else
+          High = Middle;
+      } else {
+        // An incomplete optional query retains only already proved bounds.
+        break;
+      }
+    }
+  }
+  if (Minimum || Maximum != Full)
+    Out.Ranges.push_back({Field, Mask, Minimum, Maximum});
+  return true;
+}
+
 bool Specializer::projectEdge(SymState &State, SymRef Root,
                               llvm::ArrayRef<SymRef> ObjectRoots,
                               const FrameOrigins &Origins,
@@ -1749,6 +1905,15 @@ bool Specializer::projectEdge(SymState &State, SymRef Root,
       bool PartialProof = false;
       if (Failed)
         return false;
+      if (Producer && !affineDisplacement(Ctx, Value, Root) &&
+          (Single.Status == FiniteValueStatus::Unknown ||
+           Single.Status == FiniteValueStatus::TooManyValues)) {
+        if (!projectRange(Ctx, Predicate, ProjectedValue, Root, Field, Mask,
+                          Out, Reachable))
+          return false;
+        if (!Reachable)
+          return true;
+      }
       // Manual and context fields still try their full relation globally.
       // If that proof is inconclusive, a narrower demand can retain useful
       // finite bits without supplying an unproved context-key byte. Solver
@@ -1884,22 +2049,29 @@ bool Specializer::projectEdge(SymState &State, SymRef Root,
     Values.push_back(Value);
     ColumnDomains.push_back(std::move(ColumnDomain));
   }
-  // A complete free masked domain contributes no restriction if its source
-  // bits are independent of both the path and every other selected column.
-  // Prove that fact against the original full set before removing any column;
-  // merely seeing a full marginal domain does not establish independence.
+  // Preserve every proved marginal even when its independent varying bits
+  // can be factored out of the joint relation below. A wide carrier can have
+  // constant high bits that are not whole-byte scalar facts.
+  for (size_t I = 0; I < ColumnDomains.size(); ++I)
+    Out.Marginals.push_back({Fields[I], Masks[I], ColumnDomains[I]});
+  // N independent source bits and an exhaustive domain of exactly 2^N
+  // values prove this column contributes its complete marginal on every
+  // reachable combination of the other columns. The carrier's mask need
+  // not have N bits: extensions and constant lanes do not add choices.
+  // Prove independence against the original full set before removing any
+  // column; cardinality alone does not establish a Cartesian factor.
   std::vector<bool> FreeFactors(Fields.size(), false);
   for (size_t I = 0; I < Fields.size(); ++I) {
-    const unsigned Bits = llvm::popcount(Masks[I]);
-    if (!Bits || Bits >= 32 || ColumnDomains[I].size() != (uint64_t{1} << Bits))
+    const auto Cardinality = ColumnDomains[I].size();
+    if (Cardinality <= 1 || !llvm::isPowerOf2_64(Cardinality))
       continue;
     llvm::SmallVector<SymRef, 8> Related;
     for (size_t J = 0; J < Values.size(); ++J)
       if (J != I)
         Related.push_back(Values[J]);
     FreeFactors[I] = detail::hasUnconstrainedProjectionInput(
-        Ctx, Predicate, Values[I], (uint32_t{1} << Bits) - 1,
-        Options.MaxSymbolicNodes, Related);
+        Ctx, Predicate, Values[I], Cardinality - 1, Options.MaxSymbolicNodes,
+        Related);
   }
   for (size_t I = Fields.size(); I > 0; --I)
     if (FreeFactors[I - 1]) {
@@ -1908,11 +2080,6 @@ bool Specializer::projectEdge(SymState &State, SymRef Root,
       Values.erase(Values.begin() + I - 1);
       ColumnDomains.erase(ColumnDomains.begin() + I - 1);
     }
-  // Each single-column proof is exhaustive even if their joint product is
-  // too large. Keep those independent facts before moving a varying domain.
-  // Unknown columns and unconstrained free factors have already been omitted.
-  for (size_t I = 0; I < ColumnDomains.size(); ++I)
-    Out.Marginals.push_back({Fields[I], Masks[I], ColumnDomains[I]});
   for (size_t I = 0; I < ColumnDomains.size(); ++I) {
     FirstTuple.push_back(ColumnDomains[I].front());
     if (ColumnDomains[I].size() > 1) {
@@ -1945,6 +2112,41 @@ bool Specializer::projectEdge(SymState &State, SymRef Root,
     Joint = enumerate(Ctx, Predicate, Values, Options.MaxControlTuples);
   if (Failed)
     return false;
+  // A full tuple may exceed its cap because of independent runtime data.
+  // Retain complete smaller relations under the same tuple/query/work limits.
+  // Project successful joint rows too, so all incoming edges use the same
+  // pair domain at a join. Missing or over-budget pairs introduce no fact.
+  for (size_t I = 0; I < Fields.size(); ++I)
+    for (size_t J = I + 1; J < Fields.size(); ++J) {
+      const uint64_t Work = Joint.Status == FiniteValueStatus::Complete
+                                ? Joint.Tuples.size() + 1
+                                : 1;
+      if (Work > Options.MaxOperations - Result.EvaluatedOperations)
+        return fail(SpecializationStatus::BudgetExceeded,
+                    "control pair projection budget exhausted");
+      Result.EvaluatedOperations += Work;
+      FiniteValues Pair;
+      if (Joint.Status == FiniteValueStatus::Complete) {
+        std::set<std::vector<uint64_t>> Rows;
+        for (const auto &Row : Joint.Tuples)
+          Rows.insert({Row[I], Row[J]});
+        Pair = {FiniteValueStatus::Complete, {Rows.begin(), Rows.end()}};
+      } else if (Fields.size() > 2) {
+        Pair = enumerate(Ctx, Predicate, {Values[I], Values[J]},
+                         Options.MaxControlTuples);
+        if (Failed)
+          return false;
+      }
+      if (Pair.Status == FiniteValueStatus::Complete) {
+        if (Pair.Tuples.empty()) {
+          Reachable = false;
+          return true;
+        }
+        Out.ControlPairs.push_back({{Fields[I], Fields[J]},
+                                    {Masks[I], Masks[J]},
+                                    std::move(Pair.Tuples)});
+      }
+    }
   if (Joint.Status != FiniteValueStatus::Complete) {
     if (!Fields.empty())
       ++Result.RelationalWidenings;
@@ -2465,6 +2667,33 @@ bool Specializer::evaluate(int Id) {
   SymExec Exec(Ctx, State);
   auto IncomingPredicate =
       controlPredicate(State, FrameRoot, Draft.Incoming.Controls);
+  for (const auto &Range : Draft.Incoming.Ranges) {
+    if (Result.EvaluatedOperations >= Options.MaxOperations)
+      return fail(SpecializationStatus::BudgetExceeded,
+                  "control range predicate budget exhausted");
+    ++Result.EvaluatedOperations;
+    auto Value = controlValue(State, FrameRoot, Range.Field);
+    const auto Width = Ctx.width(Value);
+    Value = Ctx.mkAnd(Value, Ctx.mkConst(Width, Range.Mask));
+    IncomingPredicate = Ctx.mkAnd(
+        {IncomingPredicate, Ctx.mkUle(Ctx.mkConst(Width, Range.Minimum), Value),
+         Ctx.mkUle(Value, Ctx.mkConst(Width, Range.Maximum))});
+    if (Ctx.numNodes() > Options.MaxSymbolicNodes)
+      return fail(SpecializationStatus::BudgetExceeded,
+                  "control range predicate symbolic-node budget exhausted");
+  }
+  for (const auto &Pair : Draft.Incoming.ControlPairs) {
+    const uint64_t Work = Pair.Tuples.size() + 1;
+    if (Work > Options.MaxOperations - Result.EvaluatedOperations)
+      return fail(SpecializationStatus::BudgetExceeded,
+                  "control pair predicate budget exhausted");
+    Result.EvaluatedOperations += Work;
+    IncomingPredicate =
+        Ctx.mkAnd(IncomingPredicate, controlPredicate(State, FrameRoot, Pair));
+    if (Ctx.numNodes() > Options.MaxSymbolicNodes)
+      return fail(SpecializationStatus::BudgetExceeded,
+                  "control pair predicate symbolic-node budget exhausted");
+  }
   for (const auto &[Register, Offsets] : Draft.Incoming.FrameRegisterOffsets) {
     if (Draft.Incoming.AffineRegisters.count(Register))
       continue;
@@ -2978,8 +3207,7 @@ bool Specializer::evaluate(int Id) {
             discover(State, Value, FrameRoot, ControlDemand::Memory);
             Refinement.PrecisionFailure = true;
             fail(SpecializationStatus::Unsupported,
-                 "repeated memory transfer requires a proved count and "
-                 "direction");
+                 "repeated memory transfer requires a proved count");
             return std::nullopt;
           }
           return Domain.Tuples.front().front();
@@ -2988,17 +3216,17 @@ bool Specializer::evaluate(int Id) {
             Singleton(Exec.operandValue(Original.Inputs[Shape->CountInput]));
         if (!Count)
           return false;
-        std::optional<uint64_t> Backward = 0;
+        std::optional<bool> Backward = false;
         if (*Count) {
           auto Direction = Exec.operandValue(Original.Inputs[4]);
           if (Shape->CompleteState)
             Direction = Ctx.mkAnd(Direction,
                                   Ctx.mkConst(32, 1u << X86RepDirectionShift));
-          Backward = Singleton(
+          const auto Constant = Ctx.asConst(
               Ctx.mkNe(Direction, Ctx.mkZero(Original.Inputs[4].Size * 8)));
+          Backward = Constant ? std::optional<bool>(!Constant->isZero())
+                              : std::nullopt;
         }
-        if (!Backward)
-          return false;
         // The lowering scans the entire current instruction for disjoint
         // scratch space. Charge that work even for a zero-length transfer.
         if (Operations.size() >
@@ -3010,13 +3238,15 @@ bool Specializer::evaluate(int Id) {
         // replacement uses that charge, and all others pass through this loop.
         uint64_t Remaining =
             Options.MaxOperations - Result.EvaluatedOperations + 1;
-        const uint64_t PerElement = Shape->Fill ? 2 : 4;
-        const uint64_t Completion = Shape->completionOperations(*Count);
+        const bool RuntimeDirection = !Backward && *Count;
+        const uint64_t PerElement = Shape->elementOperations(RuntimeDirection);
+        const uint64_t Completion =
+            Shape->fixedOperations(*Count, RuntimeDirection);
         if (Remaining < Completion ||
             *Count > (Remaining - Completion) / PerElement)
           return fail(SpecializationStatus::BudgetExceeded,
                       "repeated memory transfer exceeds operation budget");
-        if (FrameRoot && !Shape->Fill && *Count &&
+        if (FrameRoot && Backward && !Shape->Fill && *Count &&
             *Count <=
                 std::numeric_limits<uint64_t>::max() / Shape->ElementBytes) {
           const auto Source =
@@ -3047,9 +3277,8 @@ bool Specializer::evaluate(int Id) {
             *Count > (Remaining - Completion) / PerElement)
           return fail(SpecializationStatus::BudgetExceeded,
                       "repeated memory transfer exceeds operation budget");
-        auto Expanded =
-            detail::lowerStringTransfer(Original, *Count, *Backward != 0,
-                                        Operations, DispatchTemp, Remaining);
+        auto Expanded = detail::lowerStringTransfer(
+            Original, *Count, Backward, Operations, DispatchTemp, Remaining);
         if (!Expanded)
           return fail(SpecializationStatus::InvalidInput,
                       llvm::toString(Expanded.takeError()));

@@ -142,12 +142,13 @@ public:
     W.emit(NdOp::INT_AND, Usable,
            {W.load(offsetof(StateV6, Unusable), 1), k(0xfc, 1)});
     W.store(offsetof(StateV6, Unusable), Usable);
-    if (Enter) {
-      const NdVar Flags = W.temporary();
-      W.emit(NdOp::INT_AND, Flags,
-             {W.load(offsetof(State, RFlags)), k(~uint64_t{0x20200})});
-      W.store(offsetof(State, RFlags), Flags);
-    }
+    // RF clears on instruction entry in both forms. SYSENTER additionally
+    // clears VM/IF; SYSEXIT preserves every other admitted input flag.
+    const NdVar Flags = W.temporary();
+    W.emit(NdOp::INT_AND, Flags,
+           {W.load(offsetof(State, RFlags)),
+            k(~uint64_t{Enter ? 0x30200u : 0x10000u})});
+    W.store(offsetof(State, RFlags), Flags);
     W.write(NdVar::reg(x86reg::RSP, 8), SP);
     if (!Enter)
       W.invalidateMonitor();

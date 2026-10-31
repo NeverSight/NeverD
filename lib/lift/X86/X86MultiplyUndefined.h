@@ -13,6 +13,7 @@
 #include "X86LiftDetail.h"
 
 #include <array>
+#include <cstdint>
 
 namespace neverd::multiplyundefined {
 
@@ -47,7 +48,49 @@ inline bool matches(llvm::ArrayRef<LowOp> Ops,
   return true;
 }
 
+inline bool immediateForm(const cs_insn *Insn, Arch Target) {
+  if (!Insn || !Insn->detail || Target != Arch::X64 ||
+      Insn->id != X86_INS_IMUL || (Insn->size != 4 && Insn->size != 7))
+    return false;
+  const auto &X = Insn->detail->x86;
+  const uint8_t Rex = Insn->bytes[0], Opcode = Insn->bytes[1];
+  const uint8_t ModRM = Insn->bytes[2];
+  const unsigned ImmediateBytes = Opcode == 0x6b ? 1 : 4;
+  if (Rex < 0x48 || Rex > 0x4f || (Rex & 2) ||
+      (Opcode != 0x69 && Opcode != 0x6b) || Insn->size != 3 + ImmediateBytes ||
+      (ModRM >> 6) != 3 || X.op_count != 3 || X.modrm != ModRM ||
+      X.rex != Rex || X.prefix[0] || X.prefix[1] || X.prefix[2] ||
+      X.prefix[3] || X.addr_size != 8 || X.opcode[0] != Opcode || X.opcode[1] ||
+      X.opcode[2] || X.opcode[3] || X.encoding.modrm_offset != 2 ||
+      X.encoding.disp_size || X.encoding.disp_offset || X.disp || X.sib ||
+      X.encoding.imm_size != ImmediateBytes || X.encoding.imm_offset != 3 ||
+      X.avx_sae || X.avx_rm != X86_AVX_RM_INVALID ||
+      X.avx_cc != X86_AVX_CC_INVALID)
+    return false;
+  for (unsigned I = 0; I != 2; ++I) {
+    const auto &Operand = X.operands[I];
+    const unsigned Number = I == 0 ? ((ModRM >> 3) & 7) + ((Rex & 4) ? 8 : 0)
+                                   : (ModRM & 7) + ((Rex & 1) ? 8 : 0);
+    const auto Register = mapCapstoneReg(static_cast<x86_reg>(Operand.reg));
+    if (Operand.type != X86_OP_REG || Operand.size != 8 ||
+        Register.Offset != Number * 8 || Register.Size != 8 ||
+        Operand.avx_bcast != X86_AVX_BCAST_INVALID || Operand.avx_zero_opmask)
+      return false;
+  }
+  uint64_t Immediate = 0;
+  for (unsigned I = 0; I != ImmediateBytes; ++I)
+    Immediate |= uint64_t(Insn->bytes[3 + I]) << (I * 8);
+  if (Immediate & (UINT64_C(1) << (ImmediateBytes * 8 - 1)))
+    Immediate |= UINT64_MAX << (ImmediateBytes * 8);
+  const auto &Operand = X.operands[2];
+  return Operand.type == X86_OP_IMM && Operand.size == 8 &&
+         static_cast<uint64_t>(Operand.imm) == Immediate &&
+         Operand.avx_bcast == X86_AVX_BCAST_INVALID && !Operand.avx_zero_opmask;
+}
+
 inline bool form(const cs_insn *Insn, Arch Target) {
+  if (immediateForm(Insn, Target))
+    return true;
   if (!Insn || !Insn->detail || Target != Arch::X64 ||
       (Insn->id != X86_INS_MUL && Insn->id != X86_INS_IMUL) || Insn->size < 3 ||
       Insn->size > 4)

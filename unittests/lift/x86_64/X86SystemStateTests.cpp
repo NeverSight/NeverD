@@ -696,28 +696,30 @@ TEST(X86SystemState, FarAndInterruptReturnsLiftToTerminalStateTransfers) {
   // Far and interrupt returns leave the ordinary call/return domain: they are
   // terminal architectural control transfers, never ABI returns.  Each lifts
   // to a void, no-return Retf/Iret intrinsic whose operands name every stack
-  // cell the transfer reads (CS:IP, plus FLAGS and, for 64-bit IRET, SS:RSP).
+  // cell the transfer reads (CS:IP, plus FLAGS and, for IRET begun in 64-bit
+  // mode, SS:SP independently of the operand size).
   // The lift never emits an ordinary RETURN and never silently drops the
   // transferred state; it grants no privilege/segment reconstruction.
   struct Case {
     std::vector<uint8_t> Bytes;
     Intrinsic Id;
     unsigned Cells;
+    unsigned FieldBytes;
   };
   for (auto A : {Arch::X86, Arch::X64}) {
     Decoder D;
     ASSERT_TRUE(D.init(A));
     D.setStrict(true);
     std::vector<Case> Cases = {
-        {{0xcb}, Intrinsic::Retf, 2},         // retf
-        {{0xca, 0x08, 0x00}, Intrinsic::Retf, 2}, // retf imm16
-        {{0x66, 0xcb}, Intrinsic::Retf, 2},   // retfw
-        {{0xcf}, Intrinsic::Iret, 3},         // iretd (ip/cs/flags)
-        {{0x66, 0xcf}, Intrinsic::Iret, 3},   // iretw
+        {{0xcb}, Intrinsic::Retf, 2, 4},             // retf
+        {{0xca, 0x08, 0x00}, Intrinsic::Retf, 2, 4}, // retf imm16
+        {{0x66, 0xcb}, Intrinsic::Retf, 2, 2},       // retfw
+        {{0xcf}, Intrinsic::Iret, A == Arch::X64 ? 5u : 3u, 4},
+        {{0x66, 0xcf}, Intrinsic::Iret, A == Arch::X64 ? 5u : 3u, 2},
     };
     if (A == Arch::X64) {
-      Cases.push_back({{0x48, 0xcf}, Intrinsic::Iret, 5}); // iretq: +ss:rsp
-      Cases.push_back({{0x48, 0xcb}, Intrinsic::Retf, 2}); // retfq
+      Cases.push_back({{0x48, 0xcf}, Intrinsic::Iret, 5, 8});
+      Cases.push_back({{0x48, 0xcb}, Intrinsic::Retf, 2, 8});
     }
     for (const auto &C : Cases) {
       SCOPED_TRACE(static_cast<unsigned>(A));
@@ -739,6 +741,8 @@ TEST(X86SystemState, FarAndInterruptReturnsLiftToTerminalStateTransfers) {
       ASSERT_GE(Term.NumInputs, 1u);
       EXPECT_EQ(Term.Inputs[0].Offset, static_cast<uint64_t>(C.Id));
       EXPECT_EQ(Term.NumInputs, C.Cells + 1u);
+      for (unsigned Cell = 1; Cell < Term.NumInputs; ++Cell)
+        EXPECT_EQ(Term.Inputs[Cell].Size, C.FieldBytes);
     }
   }
 }

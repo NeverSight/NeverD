@@ -102,13 +102,13 @@ struct X64ContinuationSegmentMetadata {
   uint16_t Attributes = 0;
 };
 
-/// V6 owns descriptor and interruptibility state for RETFQ, IRETQ and software
-/// interrupts.
-/// Unusable bits correspond to CS, SS, DS, ES, FS, GS, LDTR, TR in that order.
-/// For an unusable segment, its selector and unusable bit are meaningful; its
-/// cached limit/attributes and non-FS/GS base are not architectural outputs.
-/// Invalidating a segment retains those ignored bytes. This does not assert
-/// a processor-specific hidden-cache pattern for a null selector.
+/// V6 owns descriptor and interruptibility state for far/interrupt returns and
+/// software interrupts. Unusable bits correspond to CS, SS, DS, ES, FS, GS,
+/// LDTR, TR in that order. For an unusable segment, its selector and unusable
+/// bit are meaningful; its cached limit/attributes and non-FS/GS base are not
+/// architectural outputs. Invalidating a segment retains those ignored bytes.
+/// This does not assert a processor-specific hidden-cache pattern for a null
+/// selector.
 struct alignas(16) X64ContinuationStateV6 {
   X64ContinuationStateV5 Core;
   X64ContinuationDescriptorTable GDTR;
@@ -220,29 +220,34 @@ enum class X64ContinuationProfile : uint8_t {
   /// privilege level. SYSRET zero-extends ECX into RIP and preserves ESP. Its
   /// eight arbitrary slots choose the legacy GPR high halves in encoding order;
   /// R8-R15 remain preserved. SYSRETQ preserves every complete GPR.
+  /// SYSRET accepts RF/IOPL/VIF/VIP on entry; TF remains excluded because
+  /// debug-trap delivery is unowned. R11 supplies the defined output flags.
   /// RDMSR/WRMSR of IA32_STAR use this same live STAR cell. Writes require
   /// a zero low 32-bit reserved field; other values refuse without effects.
   /// Selector fields need not be canonical addresses. No host MSR is changed.
   /// Initial CS must describe CPL0 64-bit code. CET/FRED and asynchronous
   /// events remain disabled. Earlier state layouts are never extended.
   KernelReturnNoFaultV5,
-  /// V5 plus live GDT/LDT/IDT/TSS RAM and explicit segment caches. IRETQ and
-  /// canonical RETFQ (with or without imm16) may return to 64-bit or
+  /// V5 plus live GDT/LDT/IDT/TSS RAM and explicit segment caches. Canonical
+  /// 16/32/64-bit IRET and RETF (with or without imm16) may return to 64-bit or
   /// compatibility code at CPL0..3. The raw saved RIP must be canonical;
   /// compatibility targets use its low 32 bits within the CS limit. Their
   /// eight conditional slots choose legacy GPR high halves, including RSP.
   /// Target SS.B controls stack restoration/cleanup; 16-bit stacks retain
-  /// original ESP[31:16]. RETFQ preserves NMI blocking and applies unsigned
-  /// cleanup; IRETQ unblocks NMIs. INT3 and canonical INT imm8 enter a CPL0
-  /// 64-bit interrupt or trap gate, with any IST. They exit before target
-  /// execution. NMI blocking is explicit; no NMI is delivered. CET/FRED,
-  /// faulting execution, MMIO, concurrent writers and asynchronous events
-  /// remain outside the domain. Descriptor accessed-bit writes may alias the
-  /// frame or TSS and retain their instruction-local ordering. No host
+  /// original ESP[31:16]. RETF preserves NMI blocking and applies unsigned
+  /// cleanup; IRET unblocks NMIs and pops all five fields even at the same CPL.
+  /// Word IRET retains AC/ID/VIF/VIP and clears RF. Wider IRET restores RF
+  /// from the frame; RETF clears it. INT3 and canonical INT
+  /// imm8 enter a CPL0 64-bit interrupt or trap gate, with any IST. They exit
+  /// before target execution. NMI blocking is explicit; no NMI is delivered.
+  /// CET/FRED, faulting execution, MMIO, concurrent writers and asynchronous
+  /// events remain outside the domain. Descriptor accessed-bit writes may alias
+  /// the frame or TSS and retain their instruction-local ordering. No host
   /// privilege transfer is made. Segment caches must describe an
   /// architecturally valid entry context. Software interrupts accept TF/RF, all
-  /// IOPL values and VIF/VIP in the input flags. Other steps retain the earlier
-  /// entry-flags domain. IRETQ may produce these flags but exits before their
+  /// IOPL values and VIF/VIP in the input flags. IRET/RETF accept these flags
+  /// except TF; other steps retain the earlier entry-flags domain.
+  /// IRET may produce TF but exits before the
   /// target-instruction effects. LSS/LFS/LGS use Intel 16/32/64-bit operand
   /// rules and own selector loads, descriptor caches and coupled GPR writes.
   /// LSS accepts null SS at CPL0; unlike MOV/POP SS, it does not inhibit
@@ -251,9 +256,14 @@ enum class X64ContinuationProfile : uint8_t {
   /// profile.
   KernelEventsNoFaultV6,
   /// V6 plus Intel SYSENTER/SYSEXIT with SEP support and live SYSENTER MSRs.
-  /// SYSENTER accepts a valid CPL0..3 64-bit entry and installs CPL0; other
-  /// instructions retain the CPL0 entry domain. SYSEXIT returns to CPL3 in
+  /// SYSENTER accepts a valid CPL0..3 entry and installs CPL0; other
+  /// instructions retain the CPL0 entry domain. Canonical SYSENTER/SYSEXIT
+  /// also accept flat 16/32-bit compatibility entry with the full instruction
+  /// within CS.limit. SYSEXITQ and other steps still require 64-bit entry.
+  /// SYSEXIT returns to CPL3 in
   /// compatibility or 64-bit mode. Both exit before executing their target.
+  /// Both accept RF/IOPL/VIF/VIP, require TF=0 and clear RF on execution.
+  /// SYSENTER additionally clears IF (VM is not a valid long-mode input).
   /// Compatibility returns use the same eight arbitrary GPR high halves as
   /// SYSRET. CET/FRED, faults, asynchronous events and AMD long-mode execution
   /// remain outside this domain. Earlier state layouts are unchanged.

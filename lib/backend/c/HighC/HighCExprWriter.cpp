@@ -2899,8 +2899,17 @@ std::string HighCWriter::renderCallExpr(const HighExpr &E) {
     // Strings and addresses already pass as pointers and keep their spelling.
     if (Imm && !PointerArgument && !DefinedParam &&
         (!Prototype || I >= Prototype->ParamCount) && Op->Type &&
-        Op->Type->Kind == NdTypeKind::Int && Op->Type->Size > 4)
-      Arg = "(" + typeToC(Op->Type) + ")" + castOperand(exprStr(*Op));
+        Op->Type->Kind == NdTypeKind::Int && Op->Type->Size > 4) {
+      // An image constant may already print as a pointer or uintptr_t,
+      // whose width is the machine word's. Preserve that representation.
+      const bool PointerCarrier =
+          Op->Type->Size == pointerBytes(Opts.TheArch) &&
+          (printsAsPointer(Arg) ||
+           llvm::StringRef(Arg).starts_with("(uintptr_t)") ||
+           printsPointer(*Imm, Arg));
+      if (!PointerCarrier)
+        Arg = "(" + typeToC(Op->Type) + ")" + castOperand(exprStr(*Op));
+    }
     if (!Imm && !PointerArgument && Op->Type && Op->Type->Size >= 4 &&
         (!DefinedParam || (DefinedParam->Kind == NdTypeKind::Int &&
                            DefinedParam->Size <= Op->Type->Size)))

@@ -7,7 +7,7 @@
 /// Compare state C with original vector, multiply and atomic instructions.
 //===----------------------------------------------------------------------===//
 
-#include "../lift/NeverDLiftFixture.h"
+#include "../../lift/NeverDLiftFixture.h"
 
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/pipeline/X64ContinuationExport.h"

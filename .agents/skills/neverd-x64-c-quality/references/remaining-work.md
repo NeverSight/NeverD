@@ -21,6 +21,14 @@ configurations remain separate coverage.
 
 ## Open
 
+LLVMC's late conditional fold now requires its body to follow the current
+block in LLVM layout. An earlier body may already have inlined an exit;
+duplicating only its branch could emit a goto without that exit's label.
+Owned execution regressions cover both layouts, reversed arms, shared and
+separate returns, both type projection modes and O0/O2 with UBSan. This closes
+that control-flow ownership gap; it does not establish an ordinary ABI for
+arbitrary recovered machine-state regions.
+
 HighC's Win64 saved-parameter aliases now stop at every new SSA definition,
 including register COPYs, PHIs and conditional call clobbers. A version-zero
 local or PHI definition is not an entry argument. Native/source execution tests
@@ -54,6 +62,16 @@ External transfers and all context transitions remain stopping boundaries.
 This closes the dispatch-composition gap; proving alias-dependent ordinary
 parameters and running complete kernel entries in their live environment remain
 separate obligations.
+
+Special state regions now optionally discover direct callees with bounded
+`callee_depth`, deduplicating bodies and original instructions. `dispatch:
+"direct"` links adjacent selected steps only after checking the actual PC;
+callbacks, changed stacks, arbitrary argument bytes and native/context exits
+retain their effects. The implementation is isolated in `X64SpecialRegions`.
+Public tests compare both drivers and execute original native caller/callee
+bytes with an untouched argument slot and an observing mutation. This extends
+the usable explicit-state path; conditional ordinary-call effects and automatic
+mixing of ordinary C with state regions remain open.
 
 Manifest schema 2 names entry-region selection facts `lowir_*` and records
 `ordinary_source_validation: "not-run"`. Selection defers MedIR; an accepted
@@ -336,6 +354,11 @@ Unknown incoming stack-pointer
 escapes still prevent a complete stack-argument bound: do not cap calls
 by a private routine's name or treat a sparse outgoing slot as proof that
 later arguments are absent.
+
+Untyped wide integer call arguments retain their complete carrier, including
+small nonnegative constants. HighC keeps image strings and pointer-width
+address expressions in their pointer representation. Call-argument regressions
+must parse nested casts rather than stopping at the first closing parenthesis.
 
 Windows provider declarations now include NDIS, filter manager, NETIO,
 storage, USB and HID APIs, with explicit x86/x64 layout and SDK HighC/LLVMC
@@ -650,6 +673,7 @@ The public constant-branch and worker chunk regressions cover these boundaries.
 | Release performance varies by function and debug input | Time paired fresh `--func` calls and separate load from decompile cost. Profile before changing shared analysis. Preserve byte-identical C and EH semantics. |
 | UCRT declarations do not yet imply complete source-call coverage | Use `scripts/check_windows_ucrt_calls.py` with retained official inputs. Pointer qualifiers, variadic prefixes, pointer-only record/union tags, mixed scalar banks and x86 float/double stack arguments now have public contracts. Declared x87 scalar results retain TOP and exact source precision; real extended arithmetic still requires an 80-bit C type. Dense ARM64 HFAs retain their complete source groups in registers and ordinary COFF/ELF stack slots, and all one-to-four float/double result fields. The HFA adapter still requires an FP/HFA result; integer/void-result variants, padded or over-aligned records, Apple stack packing and nonordinary conventions remain outside it. Checked HFA results now retain their register-record shape in HighIR, avoiding artificial 192/256-bit C integers. Both C routes have Windows ARM64 target compilation, host sanitizer execution and freestanding Linux AArch64 execution matrices for import thunks/slots and single/chained calls; native Windows runtime execution remains separate. A wrapper without a source return type or observing caller still cannot infer a source aggregate result merely from residual FP registers. The strict SDK check independently compares anonymous enum values/layout and compiles the unmodified standalone output too; compiler success alone does not certify execution. |
 | Toolset coverage varies by hosted runner | Verify each compiler's actual version and path before publishing corpus artifacts. Treat unavailable versions as explicit skips. |
+| Official Windows API coverage is provider-scoped | SD Port, Stream Class, PortCls/DRM, display miniport, D3DKMT, CLFS and TPM declarations now use the same target-specific layout and compiler-ABI checks. The WDK C header's conflicting RDBSS enum typedef still needs an independently checked bridge. Private exports and other SDK versions remain unauthenticated; export names alone cannot establish parameters. Driver call fixtures are import-only, not native driver execution. |
 | Interior code-address bits have no portable C or general LLVM blockaddress contract | Preserve precise CLI refusal and existing-file protection at full/selected optimized/unoptimized emission. Other atomic functions must still emit. LLVM verification does not prove bit observation; close opaque transport versus inspected bits at the shared LLVM owner. |
 | Explicitly lifting an interior fragment still lacks its caller's machine state | Navigate through authenticated recovered ownership when available. A forced standalone fragment must not invent missing register or stack inputs; executable-section data addresses alone do not establish a relocatable function identity. |
 | MinGW x86 call arguments can remain unknown after function boundaries are repaired | Inspect the recovered callee ABI and each caller's actual register/stack evidence. Do not treat residual unknown arguments as evidence that an internal label is still a function. |
@@ -959,6 +983,13 @@ conditional memory, invocation lifetime and both C routes remain open.
   expressions. Independent LLVM comparisons at O0/O2 run with undefined-behavior
   traps. Debug/image/composed projections and broader source naming still need
   their own evidence and cleanup.
+
+- The legacy LLVMC cursor-loop printer now keeps the full block when a
+  header contains printed effects or materialized producers. Accepted loops
+  register their header labels and preserve the actual exit edge, including
+  reordered block layouts. An owned execution matrix covers both projection
+  modes at O0/O2 with undefined-behavior checks. More complex cursor-region
+  recognition still relies on the existing control-flow fallback.
 
 - LLVMC plans complete bounded integer CFGs before printing nested header
   loops and conditionals. Edge PHIs retain simultaneous semantics; liveness

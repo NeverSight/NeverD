@@ -1013,14 +1013,15 @@ TEST(InterpreterMachineStateTest, PipelineRefusesUnmappedSegmentEnvironment) {
   llvm::LLVMContext Context;
   const char *Diagnostics[] = {
       "task-priority source interface", "FS/GS base source interface",
-      "FS/GS base source interface", "MXCSR source interface",
-      "legacy GS source interface"};
-  for (unsigned Kind = 0; Kind != 5; ++Kind) {
+      "FS/GS base source interface",    "MXCSR source interface",
+      "legacy GS source interface",     "CR4 PGE source interface"};
+  for (unsigned Kind = 0; Kind != 6; ++Kind) {
     SCOPED_TRACE(Kind);
     Options.InterpreterSpecialization->X64SegmentedReads = Kind == 1;
     Options.InterpreterSpecialization->X64SegmentedWrites = Kind == 2;
     Options.InterpreterSpecialization->X64CR8State = Kind == 0;
     Options.InterpreterSpecialization->X64LegacyGSState = Kind == 4;
+    Options.InterpreterSpecialization->X64CR4PGEState = Kind == 5;
     Options.InterpreterSpecialization->X64MXCSRMask =
         Kind == 3 ? std::optional<uint32_t>(0xffbf) : std::nullopt;
     Options.InterpreterSpecialization->X64FlagsProfile =
@@ -1572,8 +1573,11 @@ int main(void) {
 // The source fragment declares the shared fixture used by later fragments.
 // clang-format off
 #include "InterpreterMachineRegionSourceTests.inc"
+#include "InterpreterMachineRegionStringSourceTests.inc"
 #include "InterpreterMachineRegionChoiceTests.inc"
 #include "InterpreterMachineRegionChoiceSourceTests.inc"
+#include "InterpreterMachineRegionSegmentedSourceTests.inc"
+#include "InterpreterMachineRegionKernelSourceTests.inc"
 #include "InterpreterMachineRegionTrapTests.inc"
 // clang-format on
 

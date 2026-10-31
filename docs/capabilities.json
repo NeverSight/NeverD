@@ -14622,7 +14622,7 @@
         {
           "runner": "gtest",
           "target": "NeverDX64ContinuationExportTests",
-          "source": "unittests/devirtualization/X64ContinuationExportTests.cpp",
+          "source": "unittests/devirtualization/x86_64/X64ContinuationExportTests.cpp",
           "filter": "X64ContinuationExportTest.StrictRequestsAndBoundariesNeverPublishPartialSource",
           "platforms": [
             "darwin",
@@ -14633,7 +14633,7 @@
         {
           "runner": "gtest",
           "target": "NeverDX64ContinuationExportTests",
-          "source": "unittests/devirtualization/X64ContinuationExportTests.cpp",
+          "source": "unittests/devirtualization/x86_64/X64ContinuationExportTests.cpp",
           "filter": "X64ContinuationExportTest.CLIExportsTheSameSourceAndRequiresItsManifest",
           "platforms": [
             "darwin",

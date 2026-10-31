@@ -197,10 +197,12 @@ static int event_query(int cpu, struct kvm_run *run, uint8_t *memory,
   REQUIRE(ioctl(cpu, KVM_SET_REGS, &registers) == 0);
   struct kvm_guest_debug debug = {.control = KVM_GUESTDBG_ENABLE |
                                              KVM_GUESTDBG_USE_HW_BP};
-  // Kind 7 executes the supplied bounded instruction and stops at its exact
-  // fallthrough, without a helper jump or interrupt changing machine state.
-  const unsigned length = kind == 7 ? memory[immediate] : 0;
-  REQUIRE(kind != 7 || (length && length <= 15));
+  // Kind 7 stops a supplied instruction at fallthrough. Kind 12 supplies an
+  // IRET/RETF of any operand width and stops at the independent return target.
+  const int supplied = kind == 7 || kind == 12;
+  const int fast_system = kind >= 9 && kind <= 11;
+  const unsigned length = supplied ? memory[immediate] : 0;
+  REQUIRE(!supplied || (length && length <= 15));
   const uint64_t stop = kind == 7 ? registers.rip + length : 0x1800;
   debug.arch.debugreg[0] = stop;
   debug.arch.debugreg[1] = 0x1801;
@@ -223,9 +225,9 @@ static int event_query(int cpu, struct kvm_run *run, uint8_t *memory,
       memory[registers.rip + 3] = immediate >> 8;
     }
   }
-  if (kind == 7)
+  if (supplied)
     memcpy(memory + registers.rip, memory + immediate + 1, length);
-  if (kind >= 9) {
+  if (fast_system) {
     const uint8_t code[] = {0x48, 0x0f, kind == 9 ? 0x34 : 0x35};
     memcpy(memory + registers.rip, code + (kind == 11 ? 0 : 1),
            kind == 11 ? 3 : 2);
@@ -239,7 +241,7 @@ static int event_query(int cpu, struct kvm_run *run, uint8_t *memory,
   REQUIRE(ioctl(cpu, KVM_GET_REGS, &registers) == 0);
   // An IRET frame with RF=1 suppresses the first execution breakpoint. The
   // intervening NOP only advances RIP and clears RF; restore that observation.
-  if (kind == 2 && registers.rip == 0x1801) {
+  if ((kind == 2 || kind == 12) && registers.rip == 0x1801) {
     registers.rip = 0x1800;
     registers.rflags |= 0x10000;
   }
@@ -266,7 +268,7 @@ static int event_query(int cpu, struct kvm_run *run, uint8_t *memory,
   // LSS atomically loads both destinations and does not establish MOV SS's
   // interrupt/debug inhibition. Stop at its immediate fallthrough above and
   // independently check the CPU's shadow state here.
-  if (kind == 7 || kind >= 9)
+  if (supplied || fast_system)
     REQUIRE(events.interrupt.shadow == 0);
   q->nmi_blocked = events.nmi.masked;
   return 0;
@@ -469,8 +471,9 @@ int main(int argc, char **argv) {
     REQUIRE(run->io.direction == KVM_EXIT_IO_OUT && run->io.port == 0xe9 &&
             run->io.size == 1 && run->io.count == 1);
     const unsigned kind = *((uint8_t *)run + run->io.data_offset);
-    REQUIRE(kind >= 1 && kind <= 11);
-    if (kind >= 9) {
+    REQUIRE(kind >= 1 && kind <= 12);
+    const int fast_system = kind >= 9 && kind <= 11;
+    if (fast_system) {
       int intel = 0, sep = 0;
       for (unsigned i = 0; i < cpuid->nent; ++i) {
         const struct kvm_cpuid_entry2 *e = &cpuid->entries[i];
@@ -487,8 +490,8 @@ int main(int argc, char **argv) {
     }
     REQUIRE(kind != 4 || registers.rsi <= UINT8_MAX);
     REQUIRE(kind != 6 || registers.rsi <= UINT16_MAX);
-    REQUIRE(kind != 7 || registers.rsi <= memory_size - 16);
-    REQUIRE(registers.rdi <= memory_size - (kind >= 9
+    REQUIRE((kind != 7 && kind != 12) || registers.rsi <= memory_size - 16);
+    REQUIRE(registers.rdi <= memory_size - (fast_system
                                                 ? sizeof(fast_system_state_t)
                                             : kind == 1 || kind == 8
                                                 ? sizeof(struct return_query)
@@ -507,7 +510,7 @@ int main(int argc, char **argv) {
       REQUIRE(sysret_query(oracle, oracle_run, memory, &special, &query,
                            kind == 1) == 0);
       memcpy(memory + registers.rdi, &query, sizeof(query));
-    } else if (kind >= 9) {
+    } else if (fast_system) {
       fast_system_state_t query;
       memcpy(&query, memory + registers.rdi, sizeof(query));
       REQUIRE(fast_system_query(vm, oracle, oracle_run, memory, memory_size,

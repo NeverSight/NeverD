@@ -2288,3 +2288,15 @@ LLVM C の合成スタックスロットは、実行時にどちらかの 64 ビ
 `InterpreterMachineRegionSourceTest.ArchitecturalChoiceSource*` は両C経路のO0/O2出力をASan/UBSan付きで実行します。圧縮の回帰テストは両分岐の失敗とループ再訪問後の全状態、メモリ、記録を比較します。48命令の列で序盤・中間・末尾の成功、不足、不一致を確認します。別の3300命令ケースは旧ラッパーのブロック上限を超え、生成コードをコンパイルせず両C出力を検査します。`NeverDInterpreterMachineStateTests` を実行してください。自作フィクスチャは任意のネイティブ関数を認証するものではありません。
 
 `MedMutableSource.SharedRejectionChainsPreserveEveryCommittedPrefix` は、二つの共通失敗出口を持つ 2048 段の条件分岐列を、通常と逆順のブロック配置で検証する。両 C 経路を O0/O2 と UBSan で実行し、序盤・中盤・終盤の失敗と成功について戻り値と確定済みゲストメモリの接頭部分を比較する。
+
+`NeverDX86UndefinedEffectsTests` の `X86ArithmeticUndefinedAudit` は、従来のレジスタ形式 PADDB/W/D/Q と PSUBB/W/D/Q の正確な符号化、各レーンの独立したラップアラウンド、フラグ保持、512 ビットの全レジスタを検証します。標準的な x64 即値 IMUL は符号拡張した imm8/imm32 と独立した四つの未定義フラグに結び付けます。メモリ、MMX/VEX、バイト列とデコード情報の不一致には個別の受理証明が必要です。`ArchitecturalChoiceSourcePackedArithmeticAndImmediateProducts` は両 C 経路を O0/O2 と ASan/UBSan で実行し、入力枯渇や不一致時に命令の出力とカーソルが未確定であることを確認します。
+
+`X86PackedSelectionAudit` は正規のレジスタ形式 PSHUFD、PCMPEQD、PAND、PACKSSDW/PACKSSWB、PUNPCKLQDQ、MOVMSKPD を検証します。256 通りのシャッフル制御、符号付き飽和境界、部分一致、レジスタの別名、全ベクトルレジスタとフラグの保持を対象とします。従来のメモリ PAND は読み出しや宛先更新の前に [Intel のアラインメント要件](https://cdrdv2-public.intel.com/671436/253665-sdm-vol-1.pdf)を保持します。`X86LegacyAlignedMove.PackedAnd*` はアドレスの折り返し、明示的な FS/GS ベース、利用不能なメモリ、失敗時の状態保持を検証します。選択値ソースの例は ASan/UBSan 下の O0/O2 で両 C 経路を実行し、動的な整列チェックを保持します。不透明なプロセッサ状態の認証ではありません。
+
+`InterpreterMachineRegionSourceTest.SegmentedChoiceSource*` は明示的な FS/GS 基底を両 C 経路、O0/O2、ASan/UBSan で実行します。独立したバイト期待値で全状態、重複メモリと戻り先、アドレスの折り返し、照会と選択記録の予約、不変の記録列を比較します。認証、V1、操作予算、未対応状態の拒否も確認します。`NeverDInterpreterMachineStateTests` を生環境、固定イメージ、継続ソースのテストと実行します。これらの自作プログラムはネイティブカーネル実行を保証しません。
+
+`X86NativeStateAudit.CR4*` は、受理する CR4 転送の 48 エンコーディングと、バイト列とデコード情報が一致しない 34 組を検証します。6 個の算術フラグの未定義値、既存のネイティブ組み込み操作の維持、隠れた状態の保存証明を付与しないことを確認します。`CR4FlagCoverageDoesNotAuthorizeMachineRegionExecution` は制御状態契約なしのソース復元を拒否します。所有する命令バイト列をデコードして IR に変換するだけで、特権命令は実行しません。
+
+`PageGlobal*` は未知の上位ビット、両分岐、読み書き関係、禁止する 63 ビットの変更、他の状態の保持、不正オペランド、予算と環境識別を検証します。`NeverDInterpreterSpecializationTests`、`NeverDInterpreterMachineStateTests`、`NeverDLowIRRefinementTests`、`NeverDInterpreterLLVMRefinementTests` を実行してください。値モデルの検証であり、特権命令は実行しません。
+
+`NeverDInterpreterMachineStateTests` の `KernelPageGlobalSource*` は HighC/LLVMC、O0/O2、ASan/UBSan で全状態、戻りスタック、CR4、全記録不足・不一致、カーネル POPFQ/CLI/STI を検証します。ドメイン、旧配置、予算の拒否も確認し、生成されたスカラー C のみを実行します。

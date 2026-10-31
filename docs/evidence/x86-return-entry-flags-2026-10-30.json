@@ -1,0 +1,179 @@
+{
+  "schema_version": 1,
+  "date": "2026-10-30",
+  "scope": "RF, IOPL and virtual-interrupt flags on explicit x64 return/fast-system entry",
+  "global_instruction_goal_complete": false,
+  "neverd_base": "b5f558c6640afe1a7358e95e6641f1b940874ddb",
+  "llvm_head": "d0aad189fd7d2689cbe51a883a986df9efd8871b",
+  "neverc_head": "3d1f7b851b6f8e5d9194f5f6f53887441cbc73ce",
+  "reference": {
+    "url": "https://cdrdv2.intel.com/v1/dl/getContent/671427",
+    "document": "Intel SDM 253669-093US, Volume 3B, section 20.3.1.1, September 2026",
+    "accessed": "2026-10-30",
+    "rule": "Input RF clears at instruction entry. IRETD/IRETQ restore RF from the stack; word IRET does not."
+  },
+  "implementation": {
+    "domain": "V5 SYSRET and inheriting profiles, V6 IRET/RETF and V7 SYSENTER/SYSEXIT accept RF, every IOPL and VIF/VIP. Input TF remains unowned. Invalid VM/reserved flags and earlier-profile requirements remain rejected.",
+    "word_iret": "Retain AC/ID/VIF/VIP, clear input RF and replace low FLAGS from the word frame.",
+    "other_returns": "Wider IRET restores RF from the frame; RETF and SYSEXIT clear RF; SYSENTER clears RF/IF/VM. SYSRET retains its existing defined R11 mask.",
+    "prior_record_correction": "The narrow-frame record described word IRET as retaining RF. That general statement was incorrect; the previously qualified domain required input RF=0. This record explicitly supersedes that RF detail and qualifies RF=1 without rewriting historical evidence."
+  },
+  "qualification": {
+    "frame_native_original_instructions": 27648,
+    "frame_paired_full_state_ram_comparisons": 110592,
+    "frame_matrix": "Three frame widths, IRET/plain RETF/RETF imm7, all 32 RF/IOPL/VIF/VIP combinations, CPL0..3, both compatibility defaults and long mode, two restored RF values, HighC/LLVMC O0/O2 and four independent GPR high-half choices.",
+    "guard_page_successes": 1536,
+    "guard_page_no_effect_refusals": 4608,
+    "fast_system_native_contexts": 31360,
+    "sysret_native_contexts": 16380,
+    "oracle_limits": "Legacy event/SYSRET oracles compare every represented state field and observed RAM but do not independently sample arbitrary full XSAVE banks. The fast-system oracle also checks live MSRs, mapped RAM and its seeded 4096-byte XSAVE image."
+  },
+  "checks": [
+    {
+      "name": "focused",
+      "tests": 9,
+      "failed": 0,
+      "skipped": 0,
+      "junit": "neverd-focused.xml"
+    },
+    {
+      "name": "integrated",
+      "tests": 1567,
+      "failed": 0,
+      "skipped": 0,
+      "junit": "neverd-integrated.xml"
+    },
+    {
+      "name": "Release scripts/build.py",
+      "passed": true
+    },
+    {
+      "name": "Changed-range clang-format 22.1.2",
+      "files": 8,
+      "passed": true
+    },
+    {
+      "name": "Localized documentation",
+      "files": 309,
+      "locales": 10,
+      "passed": true
+    }
+  ],
+  "environment": "Task TMPDIR plus a private user/mount namespace for GoogleTest temporary files; task-local no-core helper for deliberate child faults. No host mount or assertion changes.",
+  "remaining_limits": [
+    "Input TF and debug-trap delivery",
+    "Legacy/compatibility source contexts and other rows in docs/x86-instruction-support.md",
+    "CET/FRED, faults, asynchronous events and complete ordinary native machine continuation"
+  ],
+  "release": {
+    "published": false,
+    "pin_changed": false
+  },
+  "artifacts_root": "/mnt/data/neverd-return-flags-20261030",
+  "sources": [
+    {
+      "path": "include/neverd/analysis/arch/x86_64/X64ContinuationSource.h",
+      "sha256": "e45f0790990844bf306e11f5b70eebff7f0f42cc4b2b86c5d8ff2af7858216a9"
+    },
+    {
+      "path": "lib/analysis/arch/x86_64/X64ContinuationEvents.h",
+      "sha256": "c26fa76dfe908ef01444efdcdc990846a5ec28fae242391f8fa20e1fbe5a1a06"
+    },
+    {
+      "path": "lib/analysis/arch/x86_64/X64ContinuationSource.cpp",
+      "sha256": "241f22a39a96651632b6c5c21fec9fe89c6fc30e7ff2fe766bffee8e27d92453"
+    },
+    {
+      "path": "lib/analysis/arch/x86_64/X64ContinuationSystemTransfers.h",
+      "sha256": "7bf6cbcc95599a429db94665162d07159eef5eff111544a04fe5cab7bac75c8b"
+    },
+    {
+      "path": "unittests/devirtualization/x86_64/X64ContinuationSourceTests.cpp",
+      "sha256": "1b507476d0524b0c8eec8af2bdbdb995c90512c6da169e965a953de5e68b1306"
+    },
+    {
+      "path": "unittests/devirtualization/x86_64/X64FastSystemContinuationTests.inc",
+      "sha256": "1a14d59f931162614a8143eadee6726a6f7be79adc662df8298127b94d15e401"
+    },
+    {
+      "path": "unittests/devirtualization/x86_64/X64FrameReturnContinuationTests.inc",
+      "sha256": "19b18df56f0989a94ebfa4371d0987682a5e7f90ee539ba64507a43fcecf275e"
+    },
+    {
+      "path": "unittests/devirtualization/x86_64/X64SysretContinuationTests.inc",
+      "sha256": "2dc0dd3302d429b34633994bdcd94d2caf84ca5e59315bfed8f4f1fb1de5e47b"
+    }
+  ],
+  "artifacts": [
+    {
+      "path": "docs-i18n.log",
+      "bytes": 69,
+      "sha256": "891c1f2a9e40d3952b23e9e79b35ac05e77427ad91de98357bc3829b3ed7ab14"
+    },
+    {
+      "path": "format-and-results.log",
+      "bytes": 296,
+      "sha256": "b2120567248d22c5679bc3634db86c3d9554e1ac9e8f0758b5d2da30042509b1"
+    },
+    {
+      "path": "format-changes.py",
+      "bytes": 923,
+      "sha256": "b6da34e0405a6f06dc250a7aed260b0c75c205d2d2e11da18a76f42ff3851750"
+    },
+    {
+      "path": "neverd-build-receipt.json",
+      "bytes": 3893,
+      "sha256": "e06ed47e99e13c4da2252a2d595d53a76fa9a4f8234c11309402d8111f11af6e"
+    },
+    {
+      "path": "neverd-build.log",
+      "bytes": 49530,
+      "sha256": "e7cac8b2bc841c87fbca6b04938f5940cb178bc4306fb1fb6f85a79e75a94720"
+    },
+    {
+      "path": "neverd-focused.log",
+      "bytes": 2151,
+      "sha256": "b784ab1775e59fd5276c549026a3f19744cc67c3e4ea2b4c067626d2c91a444f"
+    },
+    {
+      "path": "neverd-focused.xml",
+      "bytes": 9662,
+      "sha256": "f1579d91475335fadcb7b0b1c2bf948500df7b228b990314cc544c5553f32b96"
+    },
+    {
+      "path": "neverd-integrated.log",
+      "bytes": 488932,
+      "sha256": "6e948f7a6dd78e06633550325e8e56f6cdfccc7f0de5433e6a2da0a160ff2bca"
+    },
+    {
+      "path": "neverd-integrated.xml",
+      "bytes": 1641627,
+      "sha256": "4200cd895ee02ae87ff4b0eeac8e6ab50c27c95ce375dee9c22d616311c3ea22"
+    },
+    {
+      "path": "private-tmp-runner.py",
+      "bytes": 320,
+      "sha256": "8015ebee24d91e6a5ddc995aa35379912ff80b4c99a880a2b42ca5ab15b0ab25"
+    },
+    {
+      "path": "probe.py",
+      "bytes": 3093,
+      "sha256": "1b412c208bc457c04c16e77af3d8d58465e76eff67485d86e203a78946ffa85a"
+    },
+    {
+      "path": "probes.log",
+      "bytes": 8168,
+      "sha256": "6d512b1597c194b3a7c074d43d9e99bfe1b8fd0439b4b2d69b2239ca1fa962aa"
+    },
+    {
+      "path": "record.py",
+      "bytes": 5310,
+      "sha256": "bcb003b11fd64e7512fc95af47cfd72cc41dedd07af126fa19fd947a860e4868"
+    },
+    {
+      "path": "run_x64_continuation_kvm.py",
+      "bytes": 2725,
+      "sha256": "78aca0ac469fa37c281fda84d55fbc6363d3a910ce3890d35d9d7f3e5d78aed3"
+    }
+  ]
+}

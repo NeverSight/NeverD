@@ -319,12 +319,35 @@ softwareInterruptVector(const SpecializationInstruction &Instruction) {
   return Vector;
 }
 
-bool returnFrameInstruction(const SpecializationInstruction &Instruction,
-                            Intrinsic Id, unsigned Fields) {
+struct FrameReturn {
+  uint16_t Bytes;
+  uint16_t Discard;
+  bool Interrupt;
+};
+
+std::optional<FrameReturn>
+frameReturnInstruction(const SpecializationInstruction &Instruction) {
+  const auto &Bytes = Instruction.NativeBytes;
+  if (Bytes.empty())
+    return std::nullopt;
+  const unsigned Prefix = Bytes.front() == 0x66 || Bytes.front() == 0x48;
+  if (Bytes.size() <= Prefix)
+    return std::nullopt;
+  const bool Interrupt = Bytes[Prefix] == 0xcf;
+  const bool Immediate = Bytes[Prefix] == 0xca;
+  if ((!Interrupt && !Immediate && Bytes[Prefix] != 0xcb) ||
+      Bytes.size() != Prefix + (Immediate ? 3 : 1))
+    return std::nullopt;
+  const uint16_t FieldBytes = Bytes.front() == 0x66   ? 2
+                              : Bytes.front() == 0x48 ? 8
+                                                      : 4;
+  const auto Id = Interrupt ? Intrinsic::Iret : Intrinsic::Retf;
+  // Every IRET begun in 64-bit mode pops SS:SP, even with a word operand.
+  const unsigned Fields = Interrupt ? 5 : 2;
   if (Instruction.Origin.Control != LowInstructionControl::Terminator ||
       Instruction.Ops.size() != Fields * 2 ||
       !eventIntrinsic(Instruction.Ops.back(), Id, Fields + 1))
-    return false;
+    return std::nullopt;
   const auto &Transfer = Instruction.Ops.back();
   for (unsigned I = 0; I != Fields; ++I) {
     const auto &Read = Instruction.Ops[I ? I * 2 : 0];
@@ -333,32 +356,24 @@ bool returnFrameInstruction(const SpecializationInstruction &Instruction,
       const auto &Add = Instruction.Ops[I * 2 - 1];
       if (Add.Opcode != NdOp::INT_ADD || !Add.Output.isTemp() ||
           Add.Output.Size != 8 || Add.NumInputs != 2 ||
-          Add.Inputs[0] != Address || Add.Inputs[1] != constant(I * 8) ||
+          Add.Inputs[0] != Address ||
+          Add.Inputs[1] != constant(I * FieldBytes) ||
           Add.MemoryAddressSpace != NdMemoryAddressSpace::Default ||
           Add.MemoryOrdering != NdMemoryOrdering::None)
-        return false;
+        return std::nullopt;
       Address = Add.Output;
     }
     if (Read.Opcode != NdOp::LOAD || !Read.Output.isTemp() ||
-        Read.Output.Size != 8 || Read.NumInputs != 1 ||
+        Read.Output.Size != FieldBytes || Read.NumInputs != 1 ||
         Read.Inputs[0] != Address || Transfer.Inputs[I + 1] != Read.Output ||
         Read.MemoryAddressSpace != NdMemoryAddressSpace::Default ||
         Read.MemoryOrdering != NdMemoryOrdering::None)
-      return false;
+      return std::nullopt;
   }
-  return true;
-}
-
-std::optional<uint16_t>
-farReturnDiscard(const SpecializationInstruction &Instruction) {
-  const auto &Bytes = Instruction.NativeBytes;
-  if (!returnFrameInstruction(Instruction, Intrinsic::Retf, 2))
-    return std::nullopt;
-  if (Bytes == std::vector<uint8_t>{0x48, 0xcb})
-    return 0;
-  if (Bytes.size() == 4 && Bytes[0] == 0x48 && Bytes[1] == 0xca)
-    return uint16_t(Bytes[2] | uint16_t(Bytes[3]) << 8);
-  return std::nullopt;
+  const uint16_t Discard =
+      Immediate ? uint16_t(Bytes[Prefix + 1] | uint16_t(Bytes[Prefix + 2]) << 8)
+                : 0;
+  return FrameReturn{FieldBytes, Discard, Interrupt};
 }
 
 bool pageTableIntrinsic(const LowOp &Op,
@@ -1108,10 +1123,16 @@ buildInstruction(SpecializationInstruction Instruction,
       Instruction.Ops.front().Inputs[2] ==
           NdVar::reg(x86reg::RCX, Instruction.Ops.front().Inputs[1].Size) &&
       Instruction.Origin.Control == LowInstructionControl::Terminator;
-  const bool Iret =
-      Events && Instruction.NativeBytes == std::vector<uint8_t>{0x48, 0xcf} &&
-      returnFrameInstruction(Instruction, Intrinsic::Iret, 5);
-  const auto FarReturn = Events ? farReturnDiscard(Instruction) : std::nullopt;
+  // These unprefixed encodings have the same meaning in compatibility mode.
+  // REX-prefixed forms cannot share that entry domain: there REX is an opcode.
+  const bool CompatibilityFastEntry =
+      (Sysenter || Sysexit) && Instruction.NativeBytes.size() == 2 &&
+      Instruction.NativeBytes[0] == 0x0f &&
+      Instruction.NativeBytes[1] == (Sysenter ? 0x34 : 0x35);
+  const auto Return =
+      Events ? frameReturnInstruction(Instruction) : std::nullopt;
+  const bool Iret = Return && Return->Interrupt;
+  const bool FarReturn = Return && !Return->Interrupt;
   const auto Interrupt =
       Events ? softwareInterruptVector(Instruction) : std::nullopt;
   const auto FarPointer =
@@ -1232,8 +1253,9 @@ buildInstruction(SpecializationInstruction Instruction,
       (Interrupt || FredReturn ||
        UserInterrupt == detail::X64UserInterrupt::Return)
           ? 0x3d7fd7
-      : UserInterrupt ? 0x3d7ed7 // TF requires debug-trap delivery.
-                      : Flags::entryMask(flagsProfile(Options));
+      : (UserInterrupt || Iret || FarReturn || Sysret || Sysenter || Sysexit)
+          ? 0x3d7ed7 // TF requires debug-trap delivery.
+          : Flags::entryMask(flagsProfile(Options));
   Guard.emit(NdOp::INT_AND, FlagBits, {Packed, constant(~EntryFlags)});
   Guard.emit(NdOp::INT_NOTEQUAL, FlagsBad, {FlagBits, constant(0)});
   Guard.emit(NdOp::INT_AND, Fixed, {Packed, constant(2)});
@@ -1286,7 +1308,36 @@ buildInstruction(SpecializationInstruction Instruction,
     Guard.emit(NdOp::INT_AND, SegmentBits,
                {Attributes,
                 constant((Sysenter || UserInterrupt) ? 0x6098 : 0x60f8, 2)});
-    Guard.emit(NdOp::INT_NOTEQUAL, ModeBad, {SegmentBits, constant(0x2098, 2)});
+    const NdVar LongModeBad =
+        CompatibilityFastEntry ? Guard.temporary(1) : ModeBad;
+    Guard.emit(NdOp::INT_NOTEQUAL, LongModeBad,
+               {SegmentBits, constant(0x2098, 2)});
+    if (CompatibilityFastEntry) {
+      // The exported instruction address is also its CS-relative offset only
+      // with a flat code segment. Both compatibility defaults are permitted;
+      // the complete two-byte instruction must lie within the code limit.
+      const auto LegacyBits = Guard.temporary(2),
+                 LegacyModeBad = Guard.temporary(1);
+      const auto BaseBad = Guard.temporary(1), Limit = Guard.temporary();
+      const auto LimitBad = Guard.temporary(1), AddressBad = Guard.temporary(1);
+      const auto CompatibilityBad = Guard.temporary(1);
+      Guard.emit(NdOp::INT_AND, LegacyBits,
+                 {Attributes, constant(Sysenter ? 0x2098 : 0x20f8, 2)});
+      Guard.emit(NdOp::INT_NOTEQUAL, LegacyModeBad,
+                 {LegacyBits, constant(0x98, 2)});
+      Guard.emit(NdOp::INT_NOTEQUAL, BaseBad,
+                 {Guard.load(offsetof(StateV5, CS) + offsetof(Segment, Base)),
+                  constant(0)});
+      Guard.emit(
+          NdOp::INT_ZEXT, Limit,
+          {Guard.load(offsetof(StateV5, CS) + offsetof(Segment, Limit), 4)});
+      Guard.emit(NdOp::INT_LESS, LimitBad,
+                 {Limit, constant(Result.Address +
+                                  Instruction.NativeBytes.size() - 1)});
+      Guard.emit(NdOp::BOOL_OR, AddressBad, {BaseBad, LimitBad});
+      Guard.emit(NdOp::BOOL_OR, CompatibilityBad, {LegacyModeBad, AddressBad});
+      Guard.emit(NdOp::BOOL_AND, ModeBad, {LongModeBad, CompatibilityBad});
+    }
     Guard.emit(NdOp::BOOL_OR, SegmentBad, {CPLBad, ModeBad});
     Guard.emit(NdOp::BOOL_OR, AllBad, {Bad, SegmentBad});
     Bad = AllBad;
@@ -1359,9 +1410,10 @@ buildInstruction(SpecializationInstruction Instruction,
   } else if (Iret || FarReturn || Interrupt || FarPointer) {
     detail::X64ContinuationEvents<Writer> Event(W, *Options.PagingAddressBits);
     if (Iret)
-      Result.CompatibilityChoices = Event.iret();
+      Result.CompatibilityChoices = Event.iret(Return->Bytes);
     else if (FarReturn)
-      Result.CompatibilityChoices = Event.farReturn(*FarReturn);
+      Result.CompatibilityChoices =
+          Event.farReturn(Return->Bytes, Return->Discard);
     else if (FarPointer)
       Event.farPointerLoad(*FarPointer, Instruction.Fallthrough.Address,
                            Options.NullSegmentBasePolicy);

@@ -352,6 +352,12 @@ PipelineResult Pipeline::run(const BinaryImage &Img, llvm::LLVMContext &Ctx,
       Trace.finish(false);
       return Result;
     }
+    if (Opts.InterpreterSpecialization->X64CR4PGEState) {
+      Result.Error = "machine-state recovery requires a versioned CR4 PGE "
+                     "source interface";
+      Trace.finish(false);
+      return Result;
+    }
     if (Opts.InterpreterSpecialization->X64CR8State) {
       Result.Error =
           "machine-state recovery requires a versioned task-priority "

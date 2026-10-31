@@ -114,15 +114,17 @@ protected:
 
   void range(NdVar Address, uint64_t LastByte) { range(Address, k(LastByte)); }
 
-  NdVar readMemory(NdVar Address) {
-    auto Value = op(NdOp::LOAD, {Address});
+  NdVar readMemory(NdVar Address, uint16_t Bytes = 8) {
+    auto Value = op(NdOp::LOAD, {Address}, Bytes);
+    if (Bytes != 8)
+      Value = op(NdOp::INT_ZEXT, {Value});
     if (AccessedAddress) {
       const auto Delta = op(NdOp::INT_SUB, {*AccessedAddress, Address});
       // Mask before shifting: a rejected SELECT arm must never introduce a
       // C/LLVM shift outside the value width, even for disjoint addresses.
       const auto Shift = op(NdOp::INT_LEFT, {masked(Delta, 7), k(3)});
-      const auto Bit =
-          choose(less(Delta, k(8)), op(NdOp::INT_LEFT, {k(1), Shift}), k(0));
+      const auto Bit = choose(less(Delta, k(Bytes)),
+                              op(NdOp::INT_LEFT, {k(1), Shift}), k(0));
       Value = op(NdOp::INT_OR, {Value, Bit});
     }
     return Value;

@@ -414,4 +414,66 @@ TEST(X86LegacyAlignedMove, MalformedOperandsCannotSilentlyLift) {
     }
 }
 
+TEST(X86LegacyAlignedMove, PackedAndChecksAlignmentBeforeReadOrCommit) {
+  constexpr MoveEncoding And{0x66, 0xdb, 0xdb};
+  for (Arch Target : {Arch::X86, Arch::X64})
+    for (unsigned Size : {8u, 64u}) {
+      const auto Ops = lift(Target, encoding(And, false));
+      checkAccessShape(Ops, false, NdMemoryAddressSpace::Default);
+      ASSERT_LT(alignmentIndex(Ops), memoryIndex(Ops, false));
+      for (unsigned Offset = 0; Offset != 16; ++Offset) {
+        BinaryImage Image = image(Target, MemoryBase, Size);
+        NdOpEmulator Emulator(Image);
+        Emulator.setStrictMode(true);
+        StateOracle Expected(Emulator);
+        Expected.setGPR(Emulator, 0, MemoryBase + Offset);
+        const bool Success = !Offset && Size >= 16;
+        if (Success)
+          for (unsigned I = 0; I != 16; ++I)
+            Expected.Vectors[1][I] &= Image.Segments[0].Data[I];
+        EXPECT_EQ(Emulator.run(Ops), Success  ? Ops.size()
+                                     : Offset ? alignmentIndex(Ops)
+                                              : memoryIndex(Ops, false));
+        Expected.expect(Emulator);
+        expectMemory(Emulator, MemoryBase, Image.Segments[0].Data);
+      }
+    }
+}
+
+TEST(X86LegacyAlignedMove, PackedAndWrapsThenChecksResolvedSegmentAddress) {
+  constexpr MoveEncoding And{0x66, 0xdb, 0xdb};
+  for (unsigned Mode = 0; Mode != 3; ++Mode)
+    for (uint8_t Segment : {uint8_t(0), uint8_t(0x64), uint8_t(0x65)})
+      for (unsigned Scenario = 0; Scenario != (Segment ? 3u : 1u); ++Scenario) {
+        const Arch Target = Mode == 0 ? Arch::X64 : Arch::X86;
+        const auto Ops = lift(
+            Target, encoding(And, false, {0x48, 0x40}, Segment, Mode != 1));
+        const auto Space = Segment == 0x64   ? NdMemoryAddressSpace::X86FS
+                           : Segment == 0x65 ? NdMemoryAddressSpace::X86GS
+                                             : NdMemoryAddressSpace::Default;
+        checkAccessShape(Ops, false, Space);
+        BinaryImage Image = image(Target, 0x20);
+        NdOpEmulator Emulator(Image);
+        Emulator.setStrictMode(true);
+        StateOracle Expected(Emulator);
+        // The offset wraps at 32 or 16 bits before adding a segment base.
+        if (Mode == 2) {
+          Expected.setGPR(Emulator, x86reg::RBX / 8,
+                          UINT64_C(0xcafe5678fffffff0));
+          Expected.setGPR(Emulator, x86reg::RSI / 8, 0);
+        } else {
+          Expected.setGPR(Emulator, 0, UINT64_C(0xcafe5678fffffff0));
+        }
+        if (Segment && Scenario != 2)
+          ASSERT_TRUE(Emulator.setMemoryAddressSpaceBase(Space, Scenario));
+        if (!Scenario)
+          for (unsigned I = 0; I != 16; ++I)
+            Expected.Vectors[1][I] &= Image.Segments[0].Data[16 + I];
+        EXPECT_EQ(Emulator.run(Ops),
+                  Scenario ? alignmentIndex(Ops) : Ops.size());
+        Expected.expect(Emulator);
+        expectMemory(Emulator, 0x20, Image.Segments[0].Data);
+      }
+}
+
 } // namespace

@@ -9552,8 +9552,9 @@ separate from the processor's MSR canonical width.
 
 `KernelEventsNoFaultV6` has its own 2,496-byte layout. It adds live GDTR/IDTR,
 LDTR/TR caches, DS/ES and FS/GS metadata, segment usability and NMI blocking.
-FS/GS bases retain their existing single owner. IRETQ validates a long-mode or
-compatibility return context at CPL0..3, restores all five frame words, applies outer-return
+FS/GS bases retain their existing single owner. Canonical 16/32/64-bit IRET
+validates a long-mode or compatibility return context at CPL0..3, restores all
+five operand-sized frame fields, applies outer-return
 segment invalidation and unblocks NMIs. Its restored RSP is not prematurely
 required to be canonical. INT3 and canonical INT imm8 read the selected live
 IDT gate, select and align the current or IST stack, write the five-word frame
@@ -9562,21 +9563,21 @@ the complete selected 16-byte gate. The explicit state profile owns the real
 transfer for every vector, including the ordinary source projections of
 Windows debug, assertion and fast-fail services. No service return in RAX is
 invented; software interrupts push no error code and preserve NMI blocking.
-`Exception` exits before handler execution; IRETQ uses
+`Exception` exits before handler execution; IRET uses
 `PrivilegeReturn` even for a same-privilege return.
 
-Canonical RETFQ (`48 CB` and `48 CA imm16`) uses the same return-code,
-return-stack and data-segment owners. At the same privilege level it consumes
+Canonical RETF (`CB` and `CA imm16`, with no prefix, `66` or `48`) uses the same
+return-code, return-stack and data-segment owners. At the same privilege level it consumes
 only RIP and CS, preserving the current SS cache. At an outer privilege level
 it skips the unsigned immediate's parameter bytes before reading saved RSP/SS,
 then adds that count to the restored RSP as well. It preserves the admitted
-flags and NMI blocking, and exits with `PrivilegeReturn` before target
+flags except RF, retains NMI blocking, and exits with `PrivilegeReturn` before target
 execution. The original bytes supply the unsigned discard count; the native
 audit separately authenticates Capstone's signed display value. Same-level
 returns never read an absent outer frame. Earlier layouts remain unsupported
 for these event transitions.
 
-Neither IRETQ nor RETFQ has an unconditional empty undefined-output audit:
+Neither IRET nor RETF has an unconditional empty undefined-output audit:
 their live return descriptors may select compatibility mode and make legacy
 GPR high halves arbitrary. The earlier generic audit incorrectly erased this
 condition. V6's descriptor owner validates the live target mode and binds
@@ -9586,6 +9587,12 @@ receives no native-preservation certificate. The raw frame RIP must be canonical
 at the declared paging width; compatibility mode then uses its low 32 bits and
 effective code limit. Stack restoration and cleanup use SS.B, preserving the
 original ESP[31:16] for a 16-bit stack.
+Narrow saved IP/SP fields zero-extend before the target stack-size rules.
+Word IRET retains AC/ID/VIF/VIP and clears input RF. IRETD/IRETQ restore RF
+from the frame. RETF, SYSENTER and SYSEXIT clear RF at instruction entry;
+SYSENTER also clears IF. SYSRET keeps its defined R11 mask.
+The lifter records all five fields for IRET begun in 64-bit code at any operand
+width; the continuation admission checks their exact widths and addresses.
 
 `X64ContinuationEvents` owns these transitions in LowIR above both C routes.
 Validation precedes all state and memory writes. Deferred descriptor accessed
@@ -9596,7 +9603,9 @@ their selectors and usability; ignored hidden-cache bytes do not assert an
 Intel-specific clearing pattern. The nonfaulting RAM contract still excludes
 CET/FRED, noncanonical raw return RIP, concurrent writers, MMIO and asynchronous
 execution. Input segment caches must describe a valid hardware context.
-Software interrupts admit the full defined long-mode flags set; other steps retain the
+Software interrupts admit the full defined long-mode flags set. IRET/RETF,
+SYSRET and SYSENTER/SYSEXIT admit RF, all IOPL values and VIF/VIP but exclude
+input TF because debug-trap delivery is unowned. Other steps retain their
 previous input flag restrictions. Fault delivery remains outside this profile.
 The Intel instruction references for
 [interrupts](https://cdrdv2-public.intel.com/868140/253666-089-sdm-vol-2a.pdf) and
@@ -15100,10 +15109,31 @@ Both C routes include a state layout checked against the semantic owner and
 an exact byte manifest bound to the emitted source hash. The ordinary source
 interface remains separate. See [the invocation contract](x64-continuation-source.md).
 
+`X64SpecialRegions` isolates bounded callee-region discovery and direct state
+dispatch from ordinary source proofs. An explicit `callee_depth` traverses
+original direct CALL targets in breadth-first batches, deduplicating entries
+before each pipeline invocation and instruction addresses before state lifting.
+Each wave uses the pipeline's existing parallel function scheduler; dependent
+waves stay ordered, and all retained discovery state expires with the export.
+Imports, indirect targets and the depth frontier do not acquire inferred bodies
+or call contracts. An optional direct driver indexes the selected PCs once and
+connects adjacent instruction labels only after their actual next PC agrees.
+Each helper contains at most 64 steps and cannot be inlined into its dispatcher,
+preventing large selections from reconstructing one expensive compiler graph.
+Every step still checks its domain and budget; external CALL/RET retain priority
+over exhaustion, while context transitions always stop. Both C routes share
+this owner, and default requests retain their existing switch driver.
+
 `X64ContinuationSystemTransfers` owns the complete explicit SYSRET and Intel
 SYSENTER/SYSEXIT target contexts, including their shared flat segment-cache
 construction. The V7 profile adds live SYSENTER MSRs after the unchanged V6
 layout; the state transport's MSR owner handles their reads and writes.
+Canonical unprefixed SYSENTER/SYSEXIT also admit flat compatibility entry
+with either CS.D, after validating the complete instruction against CS.limit.
+Only these mode-independent bytes gain that entry domain; a REX byte is a
+different instruction in compatibility mode. Other instructions retain their
+64-bit entry guards. SYSENTER still installs the full IA-32e RIP/RSP and a
+64-bit CPL0 code cache; SYSEXIT retains its existing compatibility choices.
 Profile inheritance is declared once in the continuation source owner so
 controls, flags, fault addresses, returns and event state advance together.
 The exporter selects distinct versioned layouts and drivers from that owner.
@@ -15122,8 +15152,8 @@ LowIR arbitrary-output certificate. The same choice records drive state
 lowering and manifest slots; ERETU's explicitly restored RSP has no arbitrary
 high-half slot.
 The legacy event owner uses the same encoding-order choice inventory for
-IRETQ/RETFQ compatibility returns, including RSP's high half. Its stack owner
-keeps the target SS.B width and original ESP[31:16] distinct from frame operand
+IRET/RETF compatibility returns at all three operand widths, including RSP's
+high half. Its stack owner keeps the target SS.B width and original ESP[31:16] distinct from frame operand
 size and parameter cleanup. Target mode, limit and null-stack checks finish
 before descriptor or state publication. Neither emitter reconstructs these
 decisions from an opaque intrinsic or assumes a preserved high register bank.
@@ -15206,3 +15236,9 @@ native function. Unknown ordinary calls and physical interrupt/system entry
 return proofs retain their existing admission rules.
 
 LLVMC indexes LLVM block order once per immutable function projection. Exclusive skip/else-if layout checks reuse that index instead of scanning the function per candidate. Selecting another function rebuilds the index; branch semantics and source limits are unchanged.
+
+`wrapInterpreterMachineRegionChoiceSourceX64V2` owns the separate 472-byte state with explicit, stable FSBase/GSBase inputs. It reuses raw segmented-memory admission and lowers scalar 1/2/4/8-byte accesses at 64-bit offsets to base-plus-offset in the shared source adapter before either C backend. Linear addresses may alias each other and ordinary guest memory, including return cells; state and tapes remain disjoint. V1 layouts and refusals stay unchanged. Other architectural banks and base mutation remain unsupported.
+
+`X64CR4PGEState` is a raw-analysis contract for CR4 reads and writes that can change only PGE. Its caller supplies valid nonfaulting kernel state, PGE support and stable ordinary-memory translations with no paging/cache observers. `X64PageGlobal.cpp` owns the complete 64-bit value relation and rejection predicate; the shared control-state dispatcher owns storage and commit. Original serializing intrinsics remain in the residual. Native proof and source interfaces before V3 reject this domain, including unused state. It supplies no TLB model or kernel-equivalence claim.
+
+`wrapInterpreterMachineRegionChoiceSourceX64V3` requires KernelX64NoFaultV1 and the complete CR4/PGE domain. Its separate 480-byte state appends CR4 to the V2 prefix. Source and raw analysis share the control transition and profile-specific flag rules. Each write checks its instruction reservation and then its control predicate before effects; status 7 reports the original unexecuted PC with prior effects committed and CR4/cursor unchanged. The scalar source does not execute host control transfers or model TLB effects. V1/V2 keep their user-domain rejection boundaries.

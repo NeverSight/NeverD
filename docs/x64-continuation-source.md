@@ -44,6 +44,37 @@ Ordinary `--func`, frame edits, devirtualization and source optimization options
 cannot be combined with this mode. The ordinary decompiler never silently
 changes its interface to state C.
 
+## Special handling for unresolved function interfaces
+
+Keep the state translation in a separate C file and pass the original machine
+context explicitly when ordinary parameter or frame recovery cannot be proved.
+The special-region implementation lives in `lib/pipeline/X64SpecialRegions.cpp`;
+it does not replace missing source arguments with constants.
+
+An entry request can include `"callee_depth": 1` together with
+`"follow_internal_calls": true`. Each discovery wave selects original direct
+CALL targets in mapped image code. Repeated targets and recursive edges share
+one recovered region; the union of instruction addresses is lifted once. The
+depth is bounded at eight and the existing instruction/operation/output budgets
+still apply. Imports, indirect targets and calls beyond the depth frontier
+remain environment boundaries unless their actual target is already selected.
+Ordinary ABI recovery is not required for these regions. Their manifest records
+the discovery depth and the same original bytes, native requests and incomplete
+CFG diagnostics as explicit entry selection. A failed discovery or exceeded
+budget publishes no partial translation.
+
+`"dispatch": "direct"` connects adjacent selected instructions with C labels.
+Connections are partitioned into at most 64 steps per helper, with inlining
+disabled between helpers so large selections keep bounded compiler graphs.
+Every connection checks the actual post-instruction PC; branches and other
+transfers retain indexed dispatch. This reduces repeated dispatch work without
+removing instruction preconditions, per-instruction budgets or stopping
+boundaries. `"dispatch": "switch"` retains the default driver for comparison.
+Neither option invents a callee preservation rule or restores a lexical return
+address after a callback. Both work with HighC and LLVM C. Environment bindings
+remain explicit, and successful compilation is not whole-function execution
+qualification.
+
 ## Invocation
 
 The generated translation unit defines `neverd_x64_state_v6`, its checked field
@@ -105,8 +136,9 @@ callee bodies, memory mappings or runtime bindings to the request.
 The invocation domain is CPL0, 64-bit entry with valid descriptor caches,
 CET/FRED disabled, successful sequential ordinary RAM accesses and immutable
 original instruction bytes. It excludes MMIO, concurrent writers, asynchronous
-events and faulting execution. IRETQ and canonical RETFQ (`48 CB`,
-`48 CA imm16`) can produce CPL0–3 long-mode or compatibility contexts;
+events and faulting execution. Canonical IRET (`CF`) and RETF (`CB`, `CA imm16`)
+with no prefix, `66` or `48` select 32-, 16- or 64-bit frame fields and can
+produce CPL0–3 long-mode or compatibility contexts;
 INT3 and canonical `INT imm8` (`CD 00` through `CD FF`) install a CPL0
 interrupt/trap-gate context with optional IST. Each vector reads its own live
 IDT entry, including vectors ordinarily used for OS services. Software INT
@@ -171,10 +203,11 @@ writes require processor-width canonical addresses. These are guest state
 updates and never write the executing host's system-call MSRs. The rules
 follow [Intel SDM Volume 4, Table 2-2](https://cdrdv2-public.intel.com/835781/325462-sdm-vol-1-2abcd-3abcd-4.pdf).
 
-Canonical `SYSENTER` (`0F 34`) accepts a valid CPL0–3 64-bit source context.
+Canonical `SYSENTER` (`0F 34`) accepts a valid CPL0–3 64-bit or flat
+compatibility source context, with either compatibility CS.D value.
 Nonconforming CS requires DPL equal to CPL; conforming CS permits DPL below
 or equal to CPL. CPL still comes from the live CS selector's RPL.
-It installs the live entry PC and SP, CPL0 flat CS/SS caches, clears IF, and
+It installs the live entry PC and SP, CPL0 flat CS/SS caches, clears IF/RF, and
 preserves the other admitted flags and registers. It returns status 10 before
 the handler executes, including when the handler is selected in the manifest.
 The target PC must be canonical for active paging. SYSENTER does not access
@@ -184,28 +217,50 @@ Canonical `SYSEXIT` (`0F 35`) and `SYSEXITQ` (`48 0F 35`) require CPL0 and
 install CPL3 CS/SS caches from the live CS MSR. The former takes EIP/ESP from
 EDX/ECX and supplies the same eight arbitrary legacy GPR high halves as SYSRET;
 the latter takes the full RDX/RCX and checks both against active paging.
-Both preserve the admitted flags and stop with status 6 before user code.
+Both clear RF, preserve the other admitted flags and stop with status 6 before user code.
+Unprefixed `SYSEXIT` also accepts flat compatibility entry at CPL0; its operand
+semantics remain 32-bit with either CS.D value. `SYSEXITQ` requires 64-bit entry.
+Compatibility entry requires CS.base=0 and the whole two-byte instruction
+within CS.limit, so the exported address is also the architectural code offset.
+Other steps retain their earlier mode guards. A driver can therefore return
+through SYSEXIT to a selected SYSENTER stub and explicitly resume it; each
+transition still exits before executing its destination.
 Neither instruction reads descriptors or the old/new stack. Selector TI bits
 and 16-bit wraparound remain significant; null entry selectors refuse before
 any write. These transitions follow the SYSENTER/SYSEXIT instruction entries
 in [Intel SDM Volume 2](https://cdrdv2-public.intel.com/835781/325462-sdm-vol-1-2abcd-3abcd-4.pdf).
 
-Other instructions retain V6's CPL0 entry requirements. The existing
-non-interrupt flags domain still excludes TF/RF, IOPL and VIF/VIP. Compatibility
-source contexts, legacy modes, faults, CET/FRED, asynchronous events and SMM
+Other instructions retain V6's CPL0 entry requirements. SYSENTER, SYSEXIT and
+SYSRET accept RF, all IOPL values and VIF/VIP on entry. TF remains excluded
+because debug-trap delivery is unowned. Other instruction domains are unchanged. Nonflat
+compatibility code, legacy modes, faults, CET/FRED, asynchronous events and SMM
 restoration are not added by V7. An opaque SYSENTER lift alone is not a proof of
 an ordinary C ABI or a full native register continuation.
 
-RETFQ reads RIP/CS alone for a same-privilege return and retains SS. For a
+RETF reads IP/CS alone for a same-privilege return and retains SS. For a
 return to an outer privilege level, its unsigned imm16 skips parameter bytes
 before saved RSP/SS and also adjusts the restored RSP. The transition preserves
-NMI blocking and flags within the existing non-interrupt entry domain (TF/RF,
-IOPL and VIF/VIP remain excluded). It consumes one driver step and stops even
+NMI blocking and flags except for ordinary RF clearing. RF, all IOPL values
+and VIF/VIP are admitted on entry; TF remains excluded. It consumes one driver step and stops even
 when the return target is selected; a returned CPL1–3 context cannot reenter
-this supervisor profile. The 16-/32-bit operand forms still require native
-execution.
+this supervisor profile. Frame fields use the operand width independently of
+the target stack width. A narrow saved IP or SP is zero-extended before the
+target's stack-size rules apply. Same-level RETF advances the original full
+stack pointer by two operand-sized fields before target-width cleanup.
 
-IRETQ/RETFQ have no unconditional empty undefined-output certificate: a live
+All three IRET operand sizes pop five fields when execution begins in 64-bit
+code, including a same-CPL return. Word IRET replaces the low FLAGS bits and
+retains AC/ID/VIF/VIP from the input and clears RF; dword/qword IRET restore
+those bits from the frame. Both accept input RF, all IOPL values and VIF/VIP;
+input TF remains excluded. RF clears at instruction entry, as described in
+[Intel SDM Volume 3B, section 20.3.1.1](https://cdrdv2-public.intel.com/929360/253669-093-sdm-vol-3b.pdf).
+The earlier statement that word IRET retained RF was overbroad: its qualified
+entry domain required RF=0. The extended-entry regression covers RF=1 directly.
+The [narrow-frame qualification](evidence/x86-narrow-frame-returns-2026-10-30.json)
+compares both widths with original instructions and checks exact frame reads
+against inaccessible guard pages.
+
+IRET/RETF have no unconditional empty undefined-output certificate: a live
 return descriptor can select compatibility mode, where the legacy GPR high
 halves are arbitrary. V6 now owns either a long-mode or compatibility target.
 Long-mode code requires CS.L=1/CS.D=0. Compatibility code permits either CS.D
@@ -216,12 +271,12 @@ patterns remain outside its qualification. The environment interprets the
 returned offset with the returned CS base and does not execute the target in
 this step.
 
-IRETQ and outer RETFQ require non-null SS for compatibility targets. A 32-bit
+IRET and outer RETF require non-null SS for compatibility targets. A 32-bit
 stack restores ESP. A 16-bit stack replaces SP and retains the original
-ESP[31:16], including when frame pops cross a 64 KiB boundary. RETFQ performs
+ESP[31:16], including when frame pops cross a 64 KiB boundary. RETF performs
 parameter cleanup at the target stack width without carrying into preserved
-bits. Same-privilege RETFQ retains its original SS/cache and applies that cache's
-stack width. IRETQ unblocks NMIs; RETFQ preserves their blocking state.
+bits. Same-privilege RETF retains its original SS/cache and applies that cache's
+stack width. IRET unblocks NMIs; RETF preserves their blocking state.
 
 Successful compatibility returns consume all eight arbitrary-value slots for
 the legacy GPR high halves, including RSP; all low halves and R8-R15 follow the

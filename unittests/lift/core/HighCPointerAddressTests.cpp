@@ -4924,7 +4924,8 @@ TEST(HighCPointerAddresses, ExternalPrototypeMatchesLeadingUnderscoreCall) {
   const std::string Source = emitFunctions({Func});
   EXPECT_NE(Source.find("extern int __report_gsfailure("), std::string::npos)
       << Source;
-  EXPECT_NE(Source.find("__report_gsfailure(7);"), std::string::npos) << Source;
+  EXPECT_NE(Source.find("__report_gsfailure((uint64_t)7);"), std::string::npos)
+      << Source;
   EXPECT_EQ(Source.find("extern int _report_gsfailure("), std::string::npos)
       << Source;
 }
@@ -4946,8 +4947,10 @@ TEST(HighCPointerAddresses, ExternalCallsKeepDistinctUnderscoreSpellings) {
       << Source;
   EXPECT_NE(Source.find("extern int __nd_external("), std::string::npos)
       << Source;
-  EXPECT_NE(Source.find("    _nd_external(1);"), std::string::npos) << Source;
-  EXPECT_NE(Source.find("    __nd_external(2);"), std::string::npos) << Source;
+  EXPECT_NE(Source.find("    _nd_external((uint64_t)1);"), std::string::npos)
+      << Source;
+  EXPECT_NE(Source.find("    __nd_external((uint64_t)2);"), std::string::npos)
+      << Source;
 }
 
 TEST(HighCPointerAddresses, SecurityCheckCookieParamIsStackCookie) {
@@ -5152,7 +5155,7 @@ TEST(HighCPointerAddresses, WidenedParamCopyPrintsAsParamInCompare) {
   EXPECT_EQ(Source.find("t29 ="), std::string::npos) << Source;
 }
 
-TEST(HighCPointerAddresses, UntypedCallPeelsWidenedImmediate) {
+TEST(HighCPointerAddresses, UntypedCallKeepsWidenedImmediateCarrier) {
   HighFunc Func;
   Func.Name = "ctor_imm";
   Func.ReturnType = NdType::makeVoid();
@@ -5175,7 +5178,7 @@ TEST(HighCPointerAddresses, UntypedCallPeelsWidenedImmediate) {
   Func.Body.push_back(std::move(Ret));
   const std::string Source = emitFunctions({Func});
   EXPECT_NE(Source.find("sub_140001000("), std::string::npos) << Source;
-  EXPECT_NE(Source.find(", 1)"), std::string::npos) << Source;
+  EXPECT_NE(Source.find(", (uint64_t)1)"), std::string::npos) << Source;
   EXPECT_EQ(Source.find("(uint32_t)1"), std::string::npos) << Source;
 }
 
@@ -7855,8 +7858,8 @@ TEST(HighCPointerAddresses, SingleUseCallsKeepSequencedCaptures) {
   Func.Body.push_back(std::move(Html));
   const std::string Source = emitFunctions({Func});
   const auto RankAt = Source.find("Rank = CRecord_GetRank(record);");
-  const auto ColorAt =
-      Source.find("t1 = CRecordDataTable_LookupColor(0x140070000, Rank);");
+  const auto ColorAt = Source.find(
+      "t1 = CRecordDataTable_LookupColor((uint64_t)0x140070000, Rank);");
   const auto HtmlAt = Source.find("TextToHtml_GetHtmlText(result, t1);");
   ASSERT_NE(RankAt, std::string::npos) << Source;
   ASSERT_NE(ColorAt, std::string::npos) << Source;
@@ -27399,14 +27402,9 @@ TEST(HighCPointerAddresses, Win64InBlockConstantOverridesJoinPhi) {
   const std::string Source = emitFunctions({High}, Arch::X64, &Img);
   const auto CallAt = Source.rfind("Catalog_Lookup(");
   ASSERT_NE(CallAt, std::string::npos) << Source;
-  const auto Open = Source.find('(', CallAt);
-  const auto Close = Source.find(')', Open);
-  ASSERT_NE(Open, std::string::npos) << Source;
-  ASSERT_NE(Close, std::string::npos) << Source;
-  const std::string Args = Source.substr(Open + 1, Close - Open - 1);
-  EXPECT_EQ(std::count(Args.begin(), Args.end(), ','), 3)
-      << Source << "\nHighIR:\n"
-      << HighDump;
+  const auto Args = lastCallArguments(Source, "Catalog_Lookup");
+  ASSERT_TRUE(Args) << Source;
+  EXPECT_EQ(Args->size(), 4u) << Source << "\nHighIR:\n" << HighDump;
   EXPECT_NE(Source.find(", 0);", CallAt), std::string::npos)
       << Source << "\nHighIR:\n"
       << HighDump;
@@ -35924,8 +35922,9 @@ TEST(HighCPointerAddresses, TerminateProcessReturnsItsResult) {
   Ret.RetVal = HighExpr::makeVar(Dst);
   Func.Body.push_back(std::move(Ret));
   const std::string Source = emitFunctions({Func});
-  EXPECT_NE(Source.find("return (int64_t)TerminateProcess(0, 0xC0000409);"),
-            std::string::npos)
+  EXPECT_NE(
+      Source.find("return (int64_t)TerminateProcess((uint64_t)0, 0xC0000409);"),
+      std::string::npos)
       << Source;
 }
 
@@ -44854,9 +44853,13 @@ TEST(HighCPointerAddresses, Win64TwelveArgumentCallKeepsEveryStackArgument) {
   GSym.Name = "twelve";
   Img.Symbols.push_back(GSym);
   const std::string HighC = highcOnlyFunction(Img, Entry);
-  EXPECT_NE(HighC.find("twelve(0, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8)"),
-            std::string::npos)
-      << HighC;
+  const auto Args = lastCallArguments(HighC, "twelve");
+  ASSERT_TRUE(Args) << HighC;
+  ASSERT_EQ(Args->size(), 12u) << HighC;
+  for (size_t I = 0; I < Args->size(); ++I)
+    EXPECT_EQ(llvm::StringRef((*Args)[I]).trim(),
+              "(uint64_t)" + std::to_string(I < 4 ? 0 : I - 3))
+        << HighC;
   llvm::LLVMContext Context;
   PipelineOptions Options;
   Options.EmitDumpOutput = false;
@@ -45122,7 +45125,7 @@ TEST(HighCPointerAddresses, Win64StackArgumentsFollowTheHomeArea) {
   ASSERT_TRUE(Args) << HighC;
   ASSERT_EQ(Args->size(), 6u) << HighC;
   EXPECT_EQ(llvm::StringRef((*Args)[0]).trim(), "arg0") << HighC;
-  EXPECT_EQ(llvm::StringRef(Args->back()).trim(), "0") << HighC;
+  EXPECT_EQ(llvm::StringRef(Args->back()).trim(), "(uint64_t)0") << HighC;
 }
 
 TEST(HighCPointerAddresses, SummarizedCalleeTakesOnlyTheArgumentsItReads) {
@@ -45168,7 +45171,7 @@ TEST(HighCPointerAddresses, Win64StackArgumentsThroughEntryStackCopy) {
   const auto Args = lastCallArguments(HighC, "sub_140001040");
   ASSERT_TRUE(Args) << HighC;
   ASSERT_EQ(Args->size(), 7u) << HighC;
-  EXPECT_EQ(llvm::StringRef((*Args)[4]).trim(), "5") << HighC;
+  EXPECT_EQ(llvm::StringRef((*Args)[4]).trim(), "(uint64_t)5") << HighC;
 }
 
 TEST(HighCPointerAddresses, GotoToSmallReturnTailBecomesItsCopy) {

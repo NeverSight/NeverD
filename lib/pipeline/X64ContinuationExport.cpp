@@ -9,6 +9,8 @@
 
 #include "neverd/pipeline/X64ContinuationExport.h"
 
+#include "X64SpecialRegions.h"
+
 #include "neverd/analysis/arch/x86_64/X64ContinuationSource.h"
 #include "neverd/backend/c/HighC/HighCEmitter.h"
 #include "neverd/backend/c/LLVMC/LLVMCEmitter.h"
@@ -17,7 +19,6 @@
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/ir/med/MedTypePass.h"
 #include "neverd/loader/BinaryImage.h"
-#include "neverd/pipeline/Pipeline.h"
 
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/IR/LLVMContext.h"
@@ -62,6 +63,8 @@ struct Request {
   std::vector<va_t> Addresses;
   bool Entries = false;
   bool FollowInternalCalls = false;
+  unsigned CalleeDepth = 0;
+  bool DirectDispatch = false;
 };
 
 llvm::Expected<Request> readRequest(llvm::StringRef Text) {
@@ -90,6 +93,8 @@ llvm::Expected<Request> readRequest(llvm::StringRef Text) {
                                        "native_descriptor_queries",
                                        "native_page_table_access",
                                        "follow_internal_calls",
+                                       "callee_depth",
+                                       "dispatch",
                                        "max_instructions",
                                        "max_operations"};
   for (const auto &[Key, Value] : *Object)
@@ -176,6 +181,22 @@ llvm::Expected<Request> readRequest(llvm::StringRef Text) {
         return invalid(Key + " must be a boolean");
       *Destination = *Flag;
     }
+  if (const auto *Value = Object->get("dispatch")) {
+    const auto Dispatch = Value->getAsString();
+    if (Dispatch != "switch" && Dispatch != "direct")
+      return invalid("dispatch must be switch or direct");
+    Result.DirectDispatch = Dispatch == "direct";
+  }
+  if (const auto *Value = Object->get("callee_depth")) {
+    auto Depth = integer(*Value);
+    if (!Depth)
+      return Depth.takeError();
+    if (*Depth > limits::pipeline::kX64ContinuationCalleeDepth)
+      return invalid("callee_depth exceeds the bounded discovery limit");
+    if (!Object->get("entries") || !Result.FollowInternalCalls)
+      return invalid("callee_depth requires entries and follow_internal_calls");
+    Result.CalleeDepth = unsigned(*Depth);
+  }
   const std::pair<llvm::StringRef, uint64_t *> Budgets[] = {
       {"max_instructions", &Options.MaxInstructions},
       {"max_operations", &Options.MaxOperations}};
@@ -405,48 +426,13 @@ exportX64Continuation(const BinaryImage &Image, llvm::StringRef RequestJSON,
   llvm::json::Array Regions;
   std::vector<va_t> Addresses = Request->Addresses;
   if (Request->Entries) {
-    PipelineOptions Options;
-    Options.OnlyFunctionEntries.insert(Addresses.begin(), Addresses.end());
-    Options.DeferMedIR = true;
-    Options.EmitDumpOutput = false;
-    llvm::LLVMContext Context;
-    auto Result = Pipeline().run(Image, Context, Options, Debug);
-    if (!Result.Success)
-      return invalid("selected CFG recovery failed: " + Result.Error);
-    std::set<va_t> Unique;
-    std::set<va_t> Found;
-    for (const auto &Audit : Result.FunctionAudits) {
-      if (!Options.OnlyFunctionEntries.count(Audit.Entry))
-        continue;
-      if (!Audit.DecodeFailures.empty())
-        return invalid("selected entry " + hex(Audit.Entry) +
-                       " contains an undecodable instruction at " +
-                       hex(Audit.DecodeFailures.front()));
-      if (Audit.NativeInstructionAddresses.empty())
-        return invalid("selected entry " + hex(Audit.Entry) +
-                       " has no decoded region: " +
-                       pipelineFunctionDispositionName(Audit.Disposition));
-      Found.insert(Audit.Entry);
-      llvm::json::Array PCs;
-      for (va_t Address : Audit.NativeInstructionAddresses) {
-        Unique.insert(Address);
-        PCs.push_back(hex(Address));
-        if (Unique.size() > Request->Options.MaxInstructions)
-          return invalid("selected CFG instruction budget exceeded");
-      }
-      Regions.push_back(llvm::json::Object{
-          {"entry", hex(Audit.Entry)},
-          {"instructions", std::move(PCs)},
-          {"lowir_disposition",
-           pipelineFunctionDispositionName(Audit.Disposition)},
-          {"lowir_unproved_returns", uint64_t(Audit.UnprovenReturns.size())},
-          {"lowir_unsupported_instructions",
-           uint64_t(Audit.UnsupportedInstructions.size())},
-          {"truncated_paths", uint64_t(Audit.TruncatedPaths.size())}});
-    }
-    if (Found != Options.OnlyFunctionEntries || Unique.empty())
-      return invalid("selected entries did not produce instruction regions");
-    Addresses.assign(Unique.begin(), Unique.end());
+    auto Selection = selectX64SpecialRegions(Image, Addresses,
+                                             Request->Options.MaxInstructions,
+                                             Request->CalleeDepth, Debug);
+    if (!Selection)
+      return Selection.takeError();
+    Addresses = std::move(Selection->Addresses);
+    Regions = std::move(Selection->Regions);
   }
   auto Units = buildX64ContinuationSource(Image, Addresses, Request->Options);
   if (!Units)
@@ -510,7 +496,10 @@ exportX64Continuation(const BinaryImage &Image, llvm::StringRef RequestJSON,
   // declarations need not precede byte-pointer steps; inserting their headers
   // first would freeze libc feature selection before the emitter's macros.
   auto Fields = stateDeclaration(OS, Version, Units->front().StateBytes);
-  driver(OS, *Units, Request->FollowInternalCalls);
+  if (Request->DirectDispatch)
+    emitX64SpecialRegionDriver(OS, *Units, Request->FollowInternalCalls);
+  else
+    driver(OS, *Units, Request->FollowInternalCalls);
   if (Result.Source.size() > limits::pipeline::kX64ContinuationSourceBytes)
     return invalid("x64 continuation source exceeds the output size limit");
   auto Binding = llvm::json::parse(RequestJSON);
@@ -560,11 +549,12 @@ exportX64Continuation(const BinaryImage &Image, llvm::StringRef RequestJSON,
               "steps CPL0; "
               "64-bit entry; live SYSENTER MSRs with declared processor width; "
             : "CPL0 64-bit entry; CET/FRED disabled; ") +
-           std::string(Version == 9
-                           ? ""
-                           : "IRETQ/RETFQ require canonical raw frame RIP; "
-                             "compatibility targets own eight conditional "
-                             "GPR high-half choices; ") +
+           std::string(
+               Version == 9
+                   ? ""
+                   : "16/32/64-bit IRET/RETF require canonical raw frame RIP; "
+                     "compatibility targets own eight conditional "
+                     "GPR high-half choices; ") +
            std::string(
                "valid caches; declared active paging and MXCSR "
                "mask; successful sequential RAM; no MMIO, "

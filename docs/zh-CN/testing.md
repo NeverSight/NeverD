@@ -2253,3 +2253,15 @@ LLVM C 的合成栈槽保留完整的 128 位整数写入，再由运行时选�
 `InterpreterMachineRegionSourceTest.ArchitecturalChoiceSource*` 在 ASan/UBSan 下执行两条 C 路线的 O0/O2 输出。压缩回归比较分支两侧失败和循环后续访问后的完整状态、内存及记录。48 条连续指令检查早期、中间和末尾记录处的成功、耗尽及不匹配。独立的 3300 条指令用例超过旧封装的块数容量，只检查两条 C 导出，不编译生成的源码。运行 `NeverDInterpreterMachineStateTests`；这些自有夹具不构成任意原生函数的认证。
 
 `MedMutableSource.SharedRejectionChainsPreserveEveryCommittedPrefix` 检查包含 2048 级条件分支和两个共享失败出口的链，同时覆盖正向与反转的块排列。两个 C 后端均在 O0/O2 与 UBSan 下执行，对照前段、中段、末段失败和成功路径的返回值及已提交客户内存前缀。
+
+`NeverDX86UndefinedEffectsTests` 的 `X86ArithmeticUndefinedAudit` 检查传统寄存器 PADDB/W/D/Q、PSUBB/W/D/Q 的精确编码、各通道独立回绕、标志保持和完整 512 位寄存器组。规范 x64 立即数 IMUL 绑定符号扩展的 imm8/imm32 及四个独立未定义标志。内存、MMX/VEX 和字节与解码详情不一致的形式仍需各自的准入证明。`ArchitecturalChoiceSourcePackedArithmeticAndImmediateProducts` 在 O0/O2、ASan/UBSan 下执行两条 C 路线，检查记录耗尽或不匹配时整条指令尚未提交目标和游标。
+
+`X86PackedSelectionAudit` 检查规范寄存器形式的 PSHUFD、PCMPEQD、PAND、PACKSSDW/PACKSSWB、PUNPCKLQDQ 和 MOVMSKPD，覆盖全部 256 种重排控制字、有符号饱和边界、部分相等、寄存器别名、完整向量寄存器组和标志保持。传统内存 PAND 在读内存或修改目的寄存器前保留 [Intel 规定的对齐要求](https://cdrdv2-public.intel.com/671436/253665-sdm-vol-1.pdf)；`X86LegacyAlignedMove.PackedAnd*` 检查地址回绕、显式 FS/GS 基址、不可用内存及失败时状态不变。取值源样例在 ASan/UBSan 下以 O0/O2 执行两条 C 路线，保留动态对齐检查。这些检查不认证不透明处理器状态。
+
+`InterpreterMachineRegionSourceTest.SegmentedChoiceSource*` 在 O0/O2 下通过两种 C 路线执行显式 FS/GS 基址测试，并启用 ASan/UBSan。独立字节预期比较完整状态、重叠内存与返回地址单元、回绕地址、查询及选择记录预留和不变的记录带。拒绝测试覆盖认证、V1、操作预算与不支持的架构状态。运行 `NeverDInterpreterMachineStateTests` 及原始环境、固定映像和延续源码测试；这些自有程序不证明原生内核执行等价。
+
+`X86NativeStateAudit.CR4*` 检查 48 种已准入的 CR4 传送编码及 34 组字节与解码详情不匹配的输入。测试要求记录六个任意算术标志位，保留原有原生内在操作，且不授予不透明状态保持证书。`CR4FlagCoverageDoesNotAuthorizeMachineRegionExecution` 验证缺少控制状态契约时仍拒绝源码恢复。这些测试只解码并提升自有指令字节，不执行特权指令。
+
+解释器、原始区域和证明套件中的 `PageGlobal*` 检查覆盖未知高位、两个分支结果、读写关系、全部 63 个禁止修改的控制位、其他状态保持、错误操作数、预算和环境身份。运行 `NeverDInterpreterSpecializationTests`、`NeverDInterpreterMachineStateTests`、`NeverDLowIRRefinementTests` 与 `NeverDInterpreterLLVMRefinementTests`；这些是值模型验证，不执行硬件特权指令。
+
+`NeverDInterpreterMachineStateTests` 中的 `KernelPageGlobalSource*` 在 HighC、LLVMC 的 O0/O2 和 ASan/UBSan 下检查完整状态、返回栈、CR4 读写关系、每个不足或错误的指令预留，以及内核 POPFQ/CLI/STI 标志规则。域、旧布局和预算拒绝仍须显式验证；测试只执行生成的标量 C。

@@ -1,0 +1,362 @@
+{
+  "schema_version": 1,
+  "date": "2026-10-30",
+  "scope": "Explicit Intel SYSENTER/SYSEXIT from flat compatibility entry",
+  "global_instruction_goal_complete": false,
+  "neverd_base": "d6c7a01acae0665fe63b3eb3a4be9b8bf6e9f53c",
+  "llvm_head": "d0aad189fd7d2689cbe51a883a986df9efd8871b",
+  "neverc_head": "3d1f7b851b6f8e5d9194f5f6f53887441cbc73ce",
+  "reference": {
+    "url": "https://cdrdv2.intel.com/v1/dl/getContent/671241",
+    "document": "Intel SDM 253667-093US, SYSENTER, SYSEXIT and SYSRET, September 2026",
+    "accessed": "2026-10-30"
+  },
+  "implementation": {
+    "entry": "Canonical 0F34/0F35 share semantics in 64-bit and compatibility mode. V7 and inherited V8 accept both compatibility CS.D values with CS.base=0 and the complete instruction within CS.limit. Invalid privilege/cache/mode combinations refuse before effects. Other bytes retain their prior mode guard.",
+    "transition": "The existing owner installs the full IA-32e SYSENTER RIP/RSP and CPL0 long-mode caches. SYSEXIT retains ECX/EDX low-word semantics and eight explicit arbitrary GPR high halves. No new ABI layout or intrinsic identity is introduced.",
+    "driver": "Public source can resume a SYSEXIT return at an exported SYSENTER stub. Each transfer returns its existing status and consumes one step before target execution; normal compatibility instructions remain unavailable."
+  },
+  "qualification": {
+    "native_original_instructions": 5760,
+    "native_full_state_ram_comparisons": 23040,
+    "native_matrix": "Both compatibility defaults; all valid CPL/DPL/conforming inputs, four selectors, four input flag patterns, three stack values, both C routes O0/O2, and four independent high-half choices.",
+    "native_preservation": "All represented state, mapped RAM and live SYSENTER/kernel-GS MSRs are compared. The existing oracle also compares a seeded 4096-byte XSAVE image. Larger XSAVE2/AMX and arbitrary full-vector state are not independently sampled.",
+    "portable_entry_context_cases": 2304,
+    "portable_code_base_limit_cases": 1440,
+    "public_sdk": "Both C routes at O0/O2 compare complete state through SYSENTER/SYSEXIT/SYSENTER and exact stop/budget behavior.",
+    "compiler_bridge": {
+      "profiles": [
+        "high-neverc-O0",
+        "high-neverc-O2",
+        "high-neverc-llvm-O0",
+        "high-neverc-llvm-O2",
+        "llvm-neverc-O0",
+        "llvm-neverc-O2",
+        "llvm-neverc-llvm-O0",
+        "llvm-neverc-llvm-O2"
+      ],
+      "complete_state_transitions": 48,
+      "record": "compiler-bridge.json"
+    },
+    "retained_diagnostics": "The first exploratory SYSEXIT comparison had not bound the eight permitted high-half witnesses and failed. Binding those native witnesses passed. The first external llc-to-host bridge link used a static object against the host PIE default; selecting PIC in llc repaired that harness mismatch. Both original failures are retained."
+  },
+  "checks": [
+    {
+      "name": "focused",
+      "tests": 5,
+      "failed": 0,
+      "skipped": 0,
+      "junit": "neverd-focused.xml"
+    },
+    {
+      "name": "integrated",
+      "tests": 1569,
+      "failed": 0,
+      "skipped": 0,
+      "junit": "neverd-integrated.xml"
+    },
+    {
+      "name": "Release scripts/build.py",
+      "passed": true
+    },
+    {
+      "name": "Changed-range clang-format 22.1.2",
+      "files": 4,
+      "passed": true
+    },
+    {
+      "name": "Localized documentation",
+      "files": 309,
+      "locales": 10,
+      "passed": true
+    }
+  ],
+  "environment": "Task TMPDIR and private user/mount namespace; task-local helper suppresses core delivery for deliberate child faults. Host mounts and assertions are unchanged.",
+  "remaining_limits": [
+    "Nonflat compatibility code and legacy non-IA-32e contexts",
+    "TF/debug traps, fault delivery, CET/FRED and asynchronous events",
+    "Other machine-state/transaction/native qualification gaps in docs/x86-instruction-support.md"
+  ],
+  "release": {
+    "published": false,
+    "pin_changed": false
+  },
+  "artifacts_root": "/mnt/data/neverd-sysenter-compatibility-20261030",
+  "sources": [
+    {
+      "path": "include/neverd/analysis/arch/x86_64/X64ContinuationSource.h",
+      "sha256": "4462a0513851435d4b3c52006cc4eae8b234d460e63a47cc507a17d9dd455758"
+    },
+    {
+      "path": "lib/analysis/arch/x86_64/X64ContinuationSource.cpp",
+      "sha256": "4060c54b214a26847ca3c3109d7fb5b1922b6145a217566492d424526fe53714"
+    },
+    {
+      "path": "unittests/devirtualization/x86_64/X64ContinuationExportTests.cpp",
+      "sha256": "8d05ede34f376b496c059d968325cb6d805d66397a89ab14e62bce365f12722f"
+    },
+    {
+      "path": "unittests/devirtualization/x86_64/X64FastSystemContinuationTests.inc",
+      "sha256": "06dae592a0c934622753dd809adccd11db48065c96fb8b9eaabf0db0a21dae24"
+    }
+  ],
+  "artifacts": [
+    {
+      "path": "compiler-bridge-first-commands.json",
+      "bytes": 6095,
+      "sha256": "ac6e60846c4ca6554d87ed97cb580a4a67e16331c4ec94b66b62a4a8dce0f580"
+    },
+    {
+      "path": "compiler-bridge-first.log",
+      "bytes": 836,
+      "sha256": "980fbce6300242cc3f9a2b55f9b88db174ffe943055be1e8f2421594dab229de"
+    },
+    {
+      "path": "compiler-bridge.json",
+      "bytes": 3536,
+      "sha256": "efae4f075f406d92d2ae64a1b9f4b281dec0da375b3c009fe49ec8a0d7f1a23c"
+    },
+    {
+      "path": "compiler-bridge.log",
+      "bytes": 229,
+      "sha256": "e83cd388a6f952b64d54ecddd35ded260c928a8e72d6e5ab3ac7a0da600b1991"
+    },
+    {
+      "path": "docs-i18n.log",
+      "bytes": 69,
+      "sha256": "891c1f2a9e40d3952b23e9e79b35ac05e77427ad91de98357bc3829b3ed7ab14"
+    },
+    {
+      "path": "format-and-results.log",
+      "bytes": 335,
+      "sha256": "53a158d5e928ed40aa9a6ac4caad5d7bdbebc4eba1063e28c29027882b79cac0"
+    },
+    {
+      "path": "neverd-build-receipt.json",
+      "bytes": 3893,
+      "sha256": "f33221f1b4db157864c32b2f1901e20d87170401f1313f6285e29ef285dfc507"
+    },
+    {
+      "path": "neverd-build.log",
+      "bytes": 40651,
+      "sha256": "a1cd070a8755030accf6c9b0300d85b432bc824cb87f5c8acac95bb1c36b7e7a"
+    },
+    {
+      "path": "neverd-focused.log",
+      "bytes": 1389,
+      "sha256": "64a597607d5bd8a3ecd074c7b1ce799ae9a6f6744a26f822b01dccfa8bb4efff"
+    },
+    {
+      "path": "neverd-focused.xml",
+      "bytes": 5603,
+      "sha256": "b8deba2808299a46f7edbfa8f74cb6bdaa1eb6ed4a231f8fe56b53e041bcc01c"
+    },
+    {
+      "path": "neverd-integrated.log",
+      "bytes": 489581,
+      "sha256": "047c5530eafa2af79ae54effb4b3f1001c27b258c5f81e4eafebea343342e4c4"
+    },
+    {
+      "path": "neverd-integrated.xml",
+      "bytes": 1643845,
+      "sha256": "93b3a109177d2336a863095224eef7cb1a2646fc74250d39f0c173b19858c9a3"
+    },
+    {
+      "path": "private-tmp-runner.py",
+      "bytes": 330,
+      "sha256": "1a4db4aaa9d57a941cf065edd4db5d487bff7f952ad67e6d3c1d60086adab2ac"
+    },
+    {
+      "path": "probe-first.log",
+      "bytes": 140,
+      "sha256": "20f7b077cdbfe017f63677ac7f7627926824bf9d4f2000dede4073c3a6f269df"
+    },
+    {
+      "path": "probe-summary.log",
+      "bytes": 391,
+      "sha256": "b4c557e3f63b7d999b281322d73a4fa6111d09852338a303dc04ae7dcd441249"
+    },
+    {
+      "path": "probe.py",
+      "bytes": 2568,
+      "sha256": "f410140a7846f0a3b20000a1ed48bc7ceafa0d2b920b3e1b803aab18b6a9df24"
+    },
+    {
+      "path": "probes.log",
+      "bytes": 2330,
+      "sha256": "f434455206912c400891794ddd05d481b57a48382088eea6411aa53cadf82dee"
+    },
+    {
+      "path": "record.py",
+      "bytes": 5820,
+      "sha256": "2fe26ca398c5fd727ad30b2f9fdfce5fc22fe209c72dce0db14e5f364d9e8a10"
+    },
+    {
+      "path": "run_x64_continuation_kvm.py",
+      "bytes": 2725,
+      "sha256": "78aca0ac469fa37c281fda84d55fbc6363d3a910ce3890d35d9d7f3e5d78aed3"
+    },
+    {
+      "path": "sysexit-witness-16.log",
+      "bytes": 133,
+      "sha256": "910d085038dcf8581ad0a5e746085c90d371bfc3ea4e22eddf33313421b6fbdb"
+    },
+    {
+      "path": "sysexit-witness-32.log",
+      "bytes": 133,
+      "sha256": "395d266587be481ad33fe8d92c198db5956e7a18898feb86acd75c7ff46ec90a"
+    },
+    {
+      "path": "verify-compiler-bridge.py",
+      "bytes": 3694,
+      "sha256": "7604fffa7c99ad18371bf3328467718f36808280330e064bf36c325efa142e51"
+    },
+    {
+      "path": "compiler-bridge-merged.json",
+      "bytes": 3536,
+      "sha256": "705b7f6c562d49ba0b10682f949c46202ab81bd736fddae69d0de5b1cf991360"
+    },
+    {
+      "path": "compiler-bridge-merged.log",
+      "bytes": 229,
+      "sha256": "e83cd388a6f952b64d54ecddd35ded260c928a8e72d6e5ab3ac7a0da600b1991"
+    },
+    {
+      "path": "docs-merged.log",
+      "bytes": 69,
+      "sha256": "891c1f2a9e40d3952b23e9e79b35ac05e77427ad91de98357bc3829b3ed7ab14"
+    },
+    {
+      "path": "finalize-merged.py",
+      "bytes": 2787,
+      "sha256": "c83b44e40e3c44b63381bcb878abd553fd23014570379840291e5df2b9cd1e75"
+    },
+    {
+      "path": "neverd-guard-fixture-build-receipt.json",
+      "bytes": 3493,
+      "sha256": "df3f082835dd81cae08e37e1b6e27cd3ca66362da888e1c3709806ecc5dad31e"
+    },
+    {
+      "path": "neverd-guard-fixture-build.log",
+      "bytes": 3602,
+      "sha256": "7b89a0f5a44fe58ece271600e33b540f6cddfb33d83756fb86010ccc98006d85"
+    },
+    {
+      "path": "neverd-guard-fixture.log",
+      "bytes": 429,
+      "sha256": "56885ee96659d5c35381cd7eb63beb60ac9be957c743752fe6fdfd786f6e837f"
+    },
+    {
+      "path": "neverd-guard-fixture.xml",
+      "bytes": 1213,
+      "sha256": "cacefd54b2181bed09242eb0e5ab5519aec0b3db9e6df25f8fe48b1a65f1f537"
+    },
+    {
+      "path": "neverd-merged-build.log",
+      "bytes": 46887,
+      "sha256": "8a9a7bcf63e6bc0241835bc720f961ac4114b81d2f5e266d85c97e848d098ae0"
+    },
+    {
+      "path": "neverd-merged-tests.log",
+      "bytes": 507290,
+      "sha256": "57881622c97bcdff0f83f804a9e9787b9243ecdc9761b8931927eb08b7726f51"
+    },
+    {
+      "path": "neverd-merged-tests.xml",
+      "bytes": 1702491,
+      "sha256": "249e0f8945bd18e5d327bb42f86bef52e3fa138e93fe39509379bfdcf5f71556"
+    },
+    {
+      "path": "offset-above-16.log",
+      "bytes": 144,
+      "sha256": "2b1cd4f708db2868df6c750453d0fc6f989a87c0c63a45b5ff17ab23834e0841"
+    },
+    {
+      "path": "probe-code-offset.py",
+      "bytes": 623,
+      "sha256": "f3448b2b2a5f7d1113fd80179d272ad73f41edfdfb8c81a3e2659ffbd14f66a6"
+    },
+    {
+      "path": "verify-merged-compiler-bridge.py",
+      "bytes": 295,
+      "sha256": "e002fbabb79a343775892af4846a85df400e8b4d0c18fa76285084be3b7169fe"
+    }
+  ],
+  "merged_validation": {
+    "merge": "d06eb5a3e30f418fac9ff81357860a5df474c638",
+    "dev_base": "a3fdd54372fd8b96e8a748709199060130a17cd1",
+    "checks": [
+      {
+        "name": "merged-tests",
+        "tests": 1626,
+        "failed": 0,
+        "skipped": 0,
+        "junit": "neverd-merged-tests.xml"
+      },
+      {
+        "name": "guard-fixture",
+        "tests": 1,
+        "failed": 0,
+        "skipped": 0,
+        "junit": "neverd-guard-fixture.xml"
+      }
+    ],
+    "labels": 12,
+    "build_log": "neverd-merged-build.log",
+    "fixture_followup": "Short byte-granularity code limits now use CS.G=0 so the guard matrix supplies architecturally consistent caches. The affected test was rebuilt and rerun after the broad integration run; production code is unchanged by that fixture correction.",
+    "additional_original_probe": "SYSENTER from CS.D=0 compatibility code at offset 0x30000 with CS.G=0 and exact last-byte limit 0x30001 passes the independent hardware probe; 16-bit default operands do not imply a 16-bit current EIP.",
+    "compiler_bridge": {
+      "record": "compiler-bridge-merged.json",
+      "profiles": [
+        "high-neverc-O0",
+        "high-neverc-O2",
+        "high-neverc-llvm-O0",
+        "high-neverc-llvm-O2",
+        "llvm-neverc-O0",
+        "llvm-neverc-O2",
+        "llvm-neverc-llvm-O0",
+        "llvm-neverc-llvm-O2"
+      ],
+      "complete_state_transitions": 48
+    },
+    "documentation": {
+      "files": 309,
+      "locales": 10,
+      "passed": true
+    },
+    "sources": [
+      {
+        "path": "include/neverd/analysis/arch/x86_64/X64ContinuationSource.h",
+        "sha256": "4462a0513851435d4b3c52006cc4eae8b234d460e63a47cc507a17d9dd455758"
+      },
+      {
+        "path": "lib/analysis/arch/x86_64/X64ContinuationSource.cpp",
+        "sha256": "4060c54b214a26847ca3c3109d7fb5b1922b6145a217566492d424526fe53714"
+      },
+      {
+        "path": "unittests/devirtualization/x86_64/X64ContinuationExportTests.cpp",
+        "sha256": "8d05ede34f376b496c059d968325cb6d805d66397a89ab14e62bce365f12722f"
+      },
+      {
+        "path": "unittests/devirtualization/x86_64/X64FastSystemContinuationTests.inc",
+        "sha256": "fa55ffb15d94abfef9b2c724ee3bbefd7cc058e6f36a541f20872947f79e2e40"
+      },
+      {
+        "path": "lib/backend/c/HighC/HighCExprWriter.cpp",
+        "sha256": "7571475b2c7e89fe7ee14703b637372099e21f5848e018a957c0bda7b372483c"
+      },
+      {
+        "path": "lib/lift/X86/X86LegacyVectorMoveAudit.h",
+        "sha256": "b4d64ae5cd0ae943444e8a492446f48bdb8c66bff6181133831ad634088bec8c"
+      },
+      {
+        "path": "lib/lift/X86/X86MultiplyUndefined.h",
+        "sha256": "0c96cf313302cf720daa2290db50e4cde86fca0c710e57375d31e29e45732f31"
+      },
+      {
+        "path": "lib/types/TypeRender.cpp",
+        "sha256": "4345412edc27d097bdfa96e86f96acea9a34451ea31f273bd2268559418fc606"
+      }
+    ]
+  }
+}

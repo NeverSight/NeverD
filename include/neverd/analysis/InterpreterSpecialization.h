@@ -255,15 +255,15 @@ struct SpecializationOptions {
   /// Requires ExplicitMachineState and
   /// NormalNonfaultingExecution. Bases may alias each other, the frame or any
   /// other address; this grants no operating-system layout or nonalias facts.
-  /// Only the raw residual API supports this environment contract. V1 source
-  /// wrapping and native proof APIs do not have authenticated base inputs.
+  /// Raw recovery and choice-region source V2 support this contract. Source
+  /// and native proof interfaces without authenticated base inputs refuse it.
   bool X64SegmentedReads = false;
   /// Retain ordinary scalar FS/GS stores with a 64-bit offset and arbitrary
   /// long-mode bases, fixed unless X64LegacyGSState is declared. Requires
   /// explicit nonfaulting machine state.
   /// Full linear addresses may alias any memory, including live return cells;
-  /// offset provenance grants no frame or separation fact. This raw-residual
-  /// contract is independent of X64SegmentedReads. Source and native proof
+  /// offset provenance grants no frame or separation fact. This contract is
+  /// independent of X64SegmentedReads. Source and native proof
   /// interfaces without authenticated base inputs refuse it.
   bool X64SegmentedWrites = false;
   /// Raw-only SWAPGS state under an explicit kernel flags profile, nonfaulting
@@ -282,6 +282,21 @@ struct SpecializationOptions {
   /// This raw-residual contract supplies no scheduling, native proof or source
   /// ABI. Possible reserved-bit writes are refused rather than truncated.
   bool X64CR8State = false;
+  /// CR4 state with writes restricted to changing PGE (bit 7).
+  /// Requires explicit nonfaulting CPL0 state, a kernel flags profile, PGE
+  /// support and a valid entry CR4. Only modeled writes may change CR4; every
+  /// other control bit remains fixed. No VMX transitions or asynchronous
+  /// observers are admitted. Paging structures and virtual mappings are stable,
+  /// cached translations are consistent with them, and retained accesses use
+  /// ordinary RAM without MMIO or paging/cache observations. These caller
+  /// premises make PGE invalidation unobservable to the scalar analysis; the
+  /// original serializing native transfers remain ordered in the residual.
+  /// Reads overapproximate the valid entry domain with all 64 bits unknown.
+  /// Every write must prove all non-PGE bits unchanged. Source projection
+  /// requires the separate machine-region V3 interface; earlier interfaces
+  /// refuse this domain. It supplies no TLB model or native-equivalence
+  /// certificate, even when unused.
+  bool X64CR4PGEState = false;
   /// Raw-only MXCSR loads and scalar state reads/writes under explicit
   /// nonfaulting machine state. The caller declares the CPU's writable mask:
   /// 0xffbf without DAZ, or 0xffff with DAZ. Entry state is arbitrary within
