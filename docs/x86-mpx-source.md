@@ -86,3 +86,21 @@ Ordinary function-ABI lifting, i386/compatibility source entry, exception delive
 memory faults, transactional rollback and physical MPX remain outside V11.
 The concrete memory provider separately records partial/fault outcomes. Successful
 V11 tests do not qualify those domains.
+
+## Qualification
+
+The [qualification record](evidence/x86-mpx-source-2026-10-31.json) binds the
+integrated sources, generated C/manifests, build inputs and compiler hashes.
+All 156 selected encodings passed 479,232 complete state/RAM comparisons through
+both C routes, both dispatchers and O0/O2 under ASan/UBSan. Original branch
+initialization passed another 1,152 state/stack comparisons. Invalid inputs and
+entry-selection repair/resume have separate regressions. All 269 related tests
+passed without skips after integration.
+
+NeverC and both full LLVM code-generation pass managers additionally passed
+16,128 original-byte/generated-source comparisons in QEMU TCG across 12 profiles.
+Each profile executes 56 encodings and explicitly excludes 100: 96 affected by
+QEMU's register-check, LOCK BNDMOV and addr32-memory defects, plus four absent-base
+table forms outside that native fixture. Those exclusions are covered by the
+portable matrix and are not counted as native passes. The native fixture keeps
+host BNDPRESERVE set and checks actual pending #BR and BNDSTATUS publication.

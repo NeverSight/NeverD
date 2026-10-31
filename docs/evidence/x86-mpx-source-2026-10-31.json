@@ -1,0 +1,299 @@
+{
+  "date": "2026-10-31",
+  "contract": "All seven qualified long-mode MPX families in explicit intel-mpx-v11 C",
+  "source_revisions": {
+    "neverd": "9e5eba4dd2ebba61554b10d7ea78d36813490651",
+    "neverd_implementation": "2075797b71",
+    "neverc_tested_compiler": "427db9812dfe4a1380642844c137f06f38a2556c",
+    "neverc_test_implementation": "d607ba358",
+    "llvm_tested_compiler": "f9e01c2c49e56593e546f2d3b2df93da733034f1"
+  },
+  "binary_provenance": "Compiler/tool hashes are captured by each qualification; later commits or builds do not rewrite those identities.",
+  "source_exports": {
+    "high": {
+      "c": {
+        "path": "/mnt/data/neverd-mpx-source-20261031/source-integrated/mpx-high.c",
+        "sha256": "dfe101509f8eb4ce14cd8ecdb145ac78d01a805f396a23112ce129a851afa2c2"
+      },
+      "manifest": {
+        "path": "/mnt/data/neverd-mpx-source-20261031/source-integrated/mpx-high.json",
+        "sha256": "8535486fab22986789b71336c4b9cfd21d7cbdceefd31695ae7085899c96ffdf"
+      }
+    },
+    "llvm": {
+      "c": {
+        "path": "/mnt/data/neverd-mpx-source-20261031/source-integrated/mpx-llvm.c",
+        "sha256": "f5f52d6d095c4a6346a0b56a487ad6910ee0bbff5a48c4a86df8f8899b2a063a"
+      },
+      "manifest": {
+        "path": "/mnt/data/neverd-mpx-source-20261031/source-integrated/mpx-llvm.json",
+        "sha256": "302ed9a11926fe5b4b9dbb116c902ed53d9755bb226e710c80299db378d334a1"
+      }
+    }
+  },
+  "totals": {
+    "original_encodings": 156,
+    "portable_full_state_ram_comparisons": 479232,
+    "original_branch_state_stack_comparisons": 1152,
+    "qemu_profiles": 12,
+    "qemu_original_source_pairs": 16128,
+    "related_regressions_passed": 269,
+    "skipped_regressions": 0
+  },
+  "portable_matrix": "4 bounds banks, 13 forms, 3 prefix forms, 24 seeds, 16 enable combinations, 2 C routes, 2 dispatchers, O0/O2 with ASan/UBSan",
+  "branch_matrix": "18 original transfer forms, 8 enable/preserve/condition combinations, 2 C routes, 2 dispatchers, O0/O2 with ASan/UBSan",
+  "qemu_matrix": "56 executable encodings per profile, 12 seeds, enabled and disabled original operations. 100 excluded forms are not passes.",
+  "routes": {
+    "high-neverc": {
+      "record": {
+        "path": "/mnt/data/neverd-mpx-source-20261031/integrated-high-neverc/qualification.json",
+        "sha256": "47c2c020117d35a5532e8b8d57e86b8ba4a1b9d324d3786b019b5eeb9a64401f"
+      },
+      "passed": true,
+      "profiles": [
+        {
+          "optimization": "O0",
+          "original_comparisons": 1344
+        },
+        {
+          "optimization": "O2",
+          "original_comparisons": 1344
+        }
+      ],
+      "tools": {
+        "/home/ad/.local/bin/clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+        "/usr/bin/as": "4e5fcaa3cdc160173cb5cfe7aa35dc39d7aa1f06ba8d75b8d923bbae5473991b",
+        "/usr/bin/ld": "97f48d93b8b076a92d2809ec29dcb17f0f37c8827358f832255e2ed22fef6075",
+        "/usr/bin/objcopy": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770",
+        "/usr/local/bin/qemu-system-x86_64": "7dcf38a7fa3478a269fe6890854f9a4ce4f14d7600f023d03fa1a28cf23e04c0",
+        "/mnt/data/neverd-native-system-returns-20261029/build-neverc/bin/neverc": "93ff450f93be5a87f62f0ca6f7cf6f970337e165a8947dba4440b8d9fc4eefc6"
+      },
+      "excluded": {
+        "LOCK BNDMOV rejected by QEMU": 12,
+        "register checks read the wrong QEMU decode operand": 36,
+        "absent-base translation is covered by the portable oracle, outside this native fixture": 4,
+        "QEMU truncates addr32 MPX memory addresses": 48
+      }
+    },
+    "high-llvm": {
+      "record": {
+        "path": "/mnt/data/neverd-mpx-source-20261031/integrated-high-llvm/qualification.json",
+        "sha256": "82d34615b1a7d6569028f5f455770ca2bf72c9169072c8fcdd19fec85666979c"
+      },
+      "passed": true,
+      "profiles": [
+        {
+          "optimization": "O0",
+          "original_comparisons": 1344
+        },
+        {
+          "optimization": "O2",
+          "original_comparisons": 1344
+        }
+      ],
+      "tools": {
+        "/home/ad/.local/bin/clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+        "/usr/bin/as": "4e5fcaa3cdc160173cb5cfe7aa35dc39d7aa1f06ba8d75b8d923bbae5473991b",
+        "/usr/bin/ld": "97f48d93b8b076a92d2809ec29dcb17f0f37c8827358f832255e2ed22fef6075",
+        "/usr/bin/objcopy": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770",
+        "/usr/local/bin/qemu-system-x86_64": "7dcf38a7fa3478a269fe6890854f9a4ce4f14d7600f023d03fa1a28cf23e04c0",
+        "/mnt/data/neverd-native-system-returns-20261029/build-neverc/bin/neverc": "93ff450f93be5a87f62f0ca6f7cf6f970337e165a8947dba4440b8d9fc4eefc6",
+        "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc": "a97c26786bb5f79a331dfa210432b1d98f70452da00ba964ada8986ec61ef192"
+      },
+      "excluded": {
+        "LOCK BNDMOV rejected by QEMU": 12,
+        "register checks read the wrong QEMU decode operand": 36,
+        "absent-base translation is covered by the portable oracle, outside this native fixture": 4,
+        "QEMU truncates addr32 MPX memory addresses": 48
+      }
+    },
+    "high-llvm-new-pm": {
+      "record": {
+        "path": "/mnt/data/neverd-mpx-source-20261031/integrated-high-llvm-new-pm/qualification.json",
+        "sha256": "5c85006914d4ebd9d9a1e6a50fc557108f8302cef5397b50c63e90453afc757e"
+      },
+      "passed": true,
+      "profiles": [
+        {
+          "optimization": "O0",
+          "original_comparisons": 1344
+        },
+        {
+          "optimization": "O2",
+          "original_comparisons": 1344
+        }
+      ],
+      "tools": {
+        "/home/ad/.local/bin/clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+        "/usr/bin/as": "4e5fcaa3cdc160173cb5cfe7aa35dc39d7aa1f06ba8d75b8d923bbae5473991b",
+        "/usr/bin/ld": "97f48d93b8b076a92d2809ec29dcb17f0f37c8827358f832255e2ed22fef6075",
+        "/usr/bin/objcopy": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770",
+        "/usr/local/bin/qemu-system-x86_64": "7dcf38a7fa3478a269fe6890854f9a4ce4f14d7600f023d03fa1a28cf23e04c0",
+        "/mnt/data/neverd-native-system-returns-20261029/build-neverc/bin/neverc": "93ff450f93be5a87f62f0ca6f7cf6f970337e165a8947dba4440b8d9fc4eefc6",
+        "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc": "a97c26786bb5f79a331dfa210432b1d98f70452da00ba964ada8986ec61ef192"
+      },
+      "excluded": {
+        "LOCK BNDMOV rejected by QEMU": 12,
+        "register checks read the wrong QEMU decode operand": 36,
+        "absent-base translation is covered by the portable oracle, outside this native fixture": 4,
+        "QEMU truncates addr32 MPX memory addresses": 48
+      }
+    },
+    "llvm-neverc": {
+      "record": {
+        "path": "/mnt/data/neverd-mpx-source-20261031/integrated-llvm-neverc/qualification.json",
+        "sha256": "f456bf5b944a5e0a9c2f6e6a06ab9cc1492d125834819f5f2d1e6e02f49a198e"
+      },
+      "passed": true,
+      "profiles": [
+        {
+          "optimization": "O0",
+          "original_comparisons": 1344
+        },
+        {
+          "optimization": "O2",
+          "original_comparisons": 1344
+        }
+      ],
+      "tools": {
+        "/home/ad/.local/bin/clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+        "/usr/bin/as": "4e5fcaa3cdc160173cb5cfe7aa35dc39d7aa1f06ba8d75b8d923bbae5473991b",
+        "/usr/bin/ld": "97f48d93b8b076a92d2809ec29dcb17f0f37c8827358f832255e2ed22fef6075",
+        "/usr/bin/objcopy": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770",
+        "/usr/local/bin/qemu-system-x86_64": "7dcf38a7fa3478a269fe6890854f9a4ce4f14d7600f023d03fa1a28cf23e04c0",
+        "/mnt/data/neverd-native-system-returns-20261029/build-neverc/bin/neverc": "93ff450f93be5a87f62f0ca6f7cf6f970337e165a8947dba4440b8d9fc4eefc6"
+      },
+      "excluded": {
+        "LOCK BNDMOV rejected by QEMU": 12,
+        "register checks read the wrong QEMU decode operand": 36,
+        "absent-base translation is covered by the portable oracle, outside this native fixture": 4,
+        "QEMU truncates addr32 MPX memory addresses": 48
+      }
+    },
+    "llvm-llvm": {
+      "record": {
+        "path": "/mnt/data/neverd-mpx-source-20261031/integrated-llvm-llvm/qualification.json",
+        "sha256": "21afdaa87699ec53a5c9ad74806733961210ff4d786e440069729b9b3d9979db"
+      },
+      "passed": true,
+      "profiles": [
+        {
+          "optimization": "O0",
+          "original_comparisons": 1344
+        },
+        {
+          "optimization": "O2",
+          "original_comparisons": 1344
+        }
+      ],
+      "tools": {
+        "/home/ad/.local/bin/clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+        "/usr/bin/as": "4e5fcaa3cdc160173cb5cfe7aa35dc39d7aa1f06ba8d75b8d923bbae5473991b",
+        "/usr/bin/ld": "97f48d93b8b076a92d2809ec29dcb17f0f37c8827358f832255e2ed22fef6075",
+        "/usr/bin/objcopy": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770",
+        "/usr/local/bin/qemu-system-x86_64": "7dcf38a7fa3478a269fe6890854f9a4ce4f14d7600f023d03fa1a28cf23e04c0",
+        "/mnt/data/neverd-native-system-returns-20261029/build-neverc/bin/neverc": "93ff450f93be5a87f62f0ca6f7cf6f970337e165a8947dba4440b8d9fc4eefc6",
+        "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc": "a97c26786bb5f79a331dfa210432b1d98f70452da00ba964ada8986ec61ef192"
+      },
+      "excluded": {
+        "LOCK BNDMOV rejected by QEMU": 12,
+        "register checks read the wrong QEMU decode operand": 36,
+        "absent-base translation is covered by the portable oracle, outside this native fixture": 4,
+        "QEMU truncates addr32 MPX memory addresses": 48
+      }
+    },
+    "llvm-llvm-new-pm": {
+      "record": {
+        "path": "/mnt/data/neverd-mpx-source-20261031/integrated-llvm-llvm-new-pm/qualification.json",
+        "sha256": "2d2e3eb7965c5b82c12f6ebf2f014f74cf5553c82d7625e6758355ccfda99b58"
+      },
+      "passed": true,
+      "profiles": [
+        {
+          "optimization": "O0",
+          "original_comparisons": 1344
+        },
+        {
+          "optimization": "O2",
+          "original_comparisons": 1344
+        }
+      ],
+      "tools": {
+        "/home/ad/.local/bin/clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+        "/usr/bin/as": "4e5fcaa3cdc160173cb5cfe7aa35dc39d7aa1f06ba8d75b8d923bbae5473991b",
+        "/usr/bin/ld": "97f48d93b8b076a92d2809ec29dcb17f0f37c8827358f832255e2ed22fef6075",
+        "/usr/bin/objcopy": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770",
+        "/usr/local/bin/qemu-system-x86_64": "7dcf38a7fa3478a269fe6890854f9a4ce4f14d7600f023d03fa1a28cf23e04c0",
+        "/mnt/data/neverd-native-system-returns-20261029/build-neverc/bin/neverc": "93ff450f93be5a87f62f0ca6f7cf6f970337e165a8947dba4440b8d9fc4eefc6",
+        "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc": "a97c26786bb5f79a331dfa210432b1d98f70452da00ba964ada8986ec61ef192"
+      },
+      "excluded": {
+        "LOCK BNDMOV rejected by QEMU": 12,
+        "register checks read the wrong QEMU decode operand": 36,
+        "absent-base translation is covered by the portable oracle, outside this native fixture": 4,
+        "QEMU truncates addr32 MPX memory addresses": 48
+      }
+    }
+  },
+  "checks": {
+    "integrated-regression.xml": {
+      "path": "/mnt/data/neverd-mpx-source-20261031/integrated-regression.xml",
+      "sha256": "81478c504406701319119ec3452a69b10865b873346d7a13cca4d438da6819ea"
+    },
+    "integrated-regression.log": {
+      "path": "/mnt/data/neverd-mpx-source-20261031/integrated-regression.log",
+      "sha256": "537304a79f652257eb6a520419530227bd6ecd9c31bb966cc4085a26465b038e"
+    },
+    "contract.xml": {
+      "path": "/mnt/data/neverd-mpx-source-20261031/contract.xml",
+      "sha256": "a4c8845cf970c885df01cca4a6bd06b7c867642c027668fc41aa9288afd80ca9"
+    },
+    "build-integrated.log": {
+      "path": "/mnt/data/neverd-mpx-source-20261031/build-integrated.log",
+      "sha256": "0324219683eda6c13f0194ea5b81e8d998d7943bc7ada9306a90b8e92f75c46c"
+    },
+    "docs-final.log": {
+      "path": "/mnt/data/neverd-mpx-source-20261031/docs-final.log",
+      "sha256": "891c1f2a9e40d3952b23e9e79b35ac05e77427ad91de98357bc3829b3ed7ab14"
+    }
+  },
+  "build": {
+    "binary": {
+      "path": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86/bin/neverd",
+      "sha256": "7893d10fff38cf34815da65b93a607038871399f0e9bbb688c04a54ea80dcc58"
+    },
+    "receipt": {
+      "path": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86/neverd-build-receipt.json",
+      "sha256": "35337dfee1afd418aa2c5d2c551ee35ee1bfc14ebf7add3f538a9c4ecfacd882"
+    },
+    "inputs": {
+      "path": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86/neverd-dependency-inputs.json",
+      "sha256": "0d185e80e033e56c739f8efa6c9652c56f7005bd399558403138262879bfc48c"
+    }
+  },
+  "commands": {
+    "export": "NEVERD_ISA_REGRESSION_ARTIFACT_DIR=DIR ctest --test-dir build-x86 -R ^X64ContinuationExportTest.Mpx",
+    "original_runtime": "python3 tests/neverc/X86/verify_mpx_continuation.py --source FILE.c --manifest FILE.json --compiler NEVERC --keep DIR",
+    "full_llvm": "Add --backend-llc LLC; add --new-pm for the new code-generation pass manager",
+    "regression_labels": "^NeverD(X64ContinuationSource|X64ContinuationExport|X86MpxContext|X86MpxEncoding|X86UndefinedEffects)Tests$"
+  },
+  "represented_effects": [
+    "All four complete bounds pairs, live enable state, BNDCFGS and BNDSTATUS",
+    "BNDMK, register and memory BNDMOV, LOCK BNDMOV, all three checks and MIB BNDLDX/BNDSTX",
+    "Ignored long-mode 67, full-width effective values, FS/GS memory translation and absent MIB components",
+    "Disabled operations preserve state and access no operand memory",
+    "Invalid directory or bounds checks publish BNDSTATUS and stop at original PC before handler delivery",
+    "Original branch bytes own conditional initialization; BND transfers preserve bounds",
+    "Entry discovery resumes at original MPX fallthrough; repair/resume retains exact PC and budget",
+    "Invalid profile context refuses before any state, memory or budget change"
+  ],
+  "remaining_boundaries": [
+    "CPL0 64-bit mode with successful sequential ordinary RAM, no transactions or asynchronous events",
+    "Host MPX disabled or BNDPRESERVE set so compiler-generated branches cannot initialize the host bank",
+    "No original operand-memory faults, partial-write/contended LOCK qualification or exception handler delivery",
+    "No ordinary function ABI, i386/compatibility source entry, RTM/HLE rollback or physical MPX qualification",
+    "QEMU register-check, LOCK BNDMOV and addr32-memory defects exclude 96 forms; four absent-base table forms are outside the native fixture",
+    "All 156 forms, including nonzero directory bases and absent MIB inputs, pass the portable sanitizer oracle",
+    "Production SDK release and LLVM pin remain pending remaining ISA/environment contracts"
+  ]
+}
