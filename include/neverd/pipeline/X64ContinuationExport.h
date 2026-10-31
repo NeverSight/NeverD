@@ -63,6 +63,11 @@ struct X64ContinuationExport {
 /// requires MXCSR mask, unchanged XCR0=7 and the documented native VMM domain;
 /// it does not accept paging/Intel-return bindings. Completed VMRUN stops at
 /// status 13 with all represented guest outputs and the original fallthrough.
+/// intel-mpx-v11 separately extends V4 with explicit bounds, supervisor MPX
+/// configuration and enable state. Host MPX is disabled or BNDPRESERVE is set.
+/// It requires MXCSR mask and no paging/Intel-return bindings. A bounds fault
+/// stops with status 14 at its original PC before exception delivery; original
+/// near transfers own conditional bounds initialization.
 llvm::Expected<X64ContinuationExport>
 exportX64Continuation(const BinaryImage &Image, llvm::StringRef RequestJSON,
                       bool UseLLVM, DebugContext *Debug = nullptr);

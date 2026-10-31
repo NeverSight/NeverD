@@ -13,6 +13,15 @@
 
 namespace neverd::analysis {
 
+/// Near 64-bit RET, optionally with the MPX-preserving BND prefix. Other
+/// prefixes need their own operand/stack-width qualification.
+inline bool isX64PhysicalNearReturn(llvm::ArrayRef<uint8_t> Bytes) {
+  if (!Bytes.empty() && Bytes.front() == 0xf2)
+    Bytes = Bytes.drop_front();
+  return (Bytes.size() == 1 && Bytes.front() == 0xc3) ||
+         (Bytes.size() == 3 && Bytes.front() == 0xc2);
+}
+
 /// Single owner for the raw terminal-import environment domain and its bounds.
 llvm::Error
 validateX64TerminalImportDomain(const SpecializationOptions &Options);

@@ -146,11 +146,12 @@ protected:
     } else if (const auto *Object = Parsed->getAsObject()) {
       EXPECT_EQ(Object->getInteger("schema_version"), 2);
       EXPECT_EQ(Object->getInteger("state_version"), Version);
-      EXPECT_EQ(Object->getInteger("state_bytes"), Version == 10  ? 2464
-                                                   : Version == 9 ? 2560
-                                                   : Version == 8 ? 2544
-                                                   : Version == 7 ? 2528
-                                                                  : 2496);
+      EXPECT_EQ(Object->getInteger("state_bytes"), Version == 11   ? 2416
+                                                   : Version == 10 ? 2464
+                                                   : Version == 9  ? 2560
+                                                   : Version == 8  ? 2544
+                                                   : Version == 7  ? 2528
+                                                                   : 2496);
       EXPECT_EQ(Object->getInteger("state_alignment"), 16);
       EXPECT_EQ(Object->getBoolean("ordinary_source_abi"), false);
       EXPECT_EQ(Object->getString("ordinary_source_validation"), "not-run");
@@ -1377,6 +1378,7 @@ TEST_F(X64ContinuationExportTest,
 #include "X64AlignmentContinuationTests.inc"
 #include "X64JumpRegionContinuationTests.inc"
 #include "X64SparseFrameContinuationTests.inc"
+#include "X64MpxContinuationExportTests.inc"
 #include "X64SvmContinuationExportTests.inc"
 
 } // namespace

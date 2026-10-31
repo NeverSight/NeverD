@@ -47,7 +47,8 @@ struct X64SpecialRegionSelection {
 /// call graphs. No argument, pointer noncapture or ordinary-source fact follows
 /// from this. The SVM profile additionally selects canonical VMRUN's original
 /// VMEXIT fallthrough at the same call depth. Execution still stops at that
-/// boundary.
+/// boundary. The MPX profile likewise follows qualified MPX fallthroughs at
+/// the same depth; bounds faults stop before exception delivery.
 llvm::Expected<X64SpecialRegionSelection> selectX64SpecialRegions(
     const BinaryImage &Image, llvm::ArrayRef<va_t> Entries,
     const analysis::X64ContinuationSourceOptions &SourceOptions,

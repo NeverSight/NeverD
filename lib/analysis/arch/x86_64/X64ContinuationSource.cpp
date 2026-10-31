@@ -13,6 +13,7 @@
 #include "X64ArchitecturalValues.h"
 #include "X64ContinuationEvents.h"
 #include "X64ContinuationFredReturns.h"
+#include "X64ContinuationMpx.h"
 #include "X64ContinuationSvm.h"
 #include "X64ContinuationSystemTransfers.h"
 #include "X64ContinuationUserInterrupts.h"
@@ -58,6 +59,7 @@ using StateV7 = X64ContinuationStateV7;
 using StateV8 = X64ContinuationStateV8;
 using StateV9 = X64ContinuationStateV9;
 using StateV10 = X64ContinuationStateV10;
+using StateV11 = X64ContinuationStateV11;
 using Segment = X64ContinuationSegment;
 using Exit = X64ContinuationExitV1;
 using Flags = detail::X64MachineFlags;
@@ -66,6 +68,10 @@ constexpr uint64_t ScratchBase = uint64_t{1} << 61;
 
 bool hasSvmState(const X64ContinuationSourceOptions &Options) {
   return Options.Profile == X64ContinuationProfile::NativeSvmNoFaultV10;
+}
+
+bool hasMpxState(const X64ContinuationSourceOptions &Options) {
+  return Options.Profile == X64ContinuationProfile::MpxNoFaultV11;
 }
 
 bool hasFredReturnState(const X64ContinuationSourceOptions &Options) {
@@ -94,7 +100,8 @@ bool hasReturnState(const X64ContinuationSourceOptions &Options) {
 bool hasFaultAddressState(const X64ContinuationSourceOptions &Options) {
   return Options.Profile ==
              X64ContinuationProfile::KernelFaultAddressNoFaultV4 ||
-         hasReturnState(Options) || hasSvmState(Options);
+         hasReturnState(Options) || hasSvmState(Options) ||
+         hasMpxState(Options);
 }
 
 bool hasSmapState(const X64ContinuationSourceOptions &Options) {
@@ -172,6 +179,13 @@ static_assert(sizeof(StateV9) == 2560);
 static_assert(std::is_standard_layout_v<StateV10>);
 static_assert(offsetof(StateV10, SVM) == 2320);
 static_assert(sizeof(StateV10) == 2464);
+static_assert(std::is_standard_layout_v<StateV11>);
+static_assert(offsetof(StateV11, Bounds) == 2320);
+static_assert(offsetof(StateV11, BNDCFGS) == 2384);
+static_assert(offsetof(StateV11, BNDSTATUS) == 2392);
+static_assert(offsetof(StateV11, XCR0) == 2400);
+static_assert(offsetof(StateV11, MPXSupported) == 2408);
+static_assert(sizeof(StateV11) == 2416);
 
 llvm::Error invalid(const llvm::Twine &Text) {
   return llvm::createStringError(llvm::errc::invalid_argument, "%s",
@@ -1075,7 +1089,9 @@ buildInstruction(SpecializationInstruction Instruction,
   const bool UserInterruptState = hasUserInterruptState(Options);
   const bool FredReturnState = hasFredReturnState(Options);
   const bool SvmState = hasSvmState(Options);
-  Result.StateVersion = SvmState             ? 10
+  const bool MpxState = hasMpxState(Options);
+  Result.StateVersion = MpxState             ? 11
+                        : SvmState           ? 10
                         : FredReturnState    ? 9
                         : UserInterruptState ? 8
                         : FastSystem         ? 7
@@ -1085,7 +1101,8 @@ buildInstruction(SpecializationInstruction Instruction,
                         : Smap               ? 3
                         : Controls           ? 2
                                              : 1;
-  Result.StateBytes = SvmState             ? sizeof(StateV10)
+  Result.StateBytes = MpxState             ? sizeof(StateV11)
+                      : SvmState           ? sizeof(StateV10)
                       : FredReturnState    ? sizeof(StateV9)
                       : UserInterruptState ? sizeof(StateV8)
                       : FastSystem         ? sizeof(StateV7)
@@ -1094,7 +1111,8 @@ buildInstruction(SpecializationInstruction Instruction,
                       : FaultAddress       ? sizeof(StateV4)
                       : Controls           ? sizeof(StateV2)
                                            : sizeof(State);
-  Function.Name = (SvmState             ? "neverd_step_v10_"
+  Function.Name = (MpxState             ? "neverd_step_v11_"
+                   : SvmState           ? "neverd_step_v10_"
                    : FredReturnState    ? "neverd_step_v9_"
                    : UserInterruptState ? "neverd_step_v8_"
                    : FastSystem         ? "neverd_step_v7_"
@@ -1177,6 +1195,18 @@ buildInstruction(SpecializationInstruction Instruction,
                                      InterpreterProfileProjection::X64SvmRunV1
                          ? x64VmrunAddressWidth(Instruction.NativeBytes)
                          : std::nullopt;
+  const auto Mpx =
+      MpxState && Instruction.ProfileProjection ==
+                      InterpreterProfileProjection::X64MpxV1
+          ? decodeX86MpxEncoding(Instruction.NativeBytes, Arch::X64)
+          : std::nullopt;
+  const auto MpxBranch =
+      MpxState &&
+              (Kind == Exit::Call || Kind == Exit::Return || Kind == Exit::Jump)
+          ? x86MpxBranchEffect(Instruction.NativeBytes, Arch::X64)
+          : std::nullopt;
+  if (MpxState && Kind != Exit::Continue && !MpxBranch)
+    RequireNative("MPX control transfer requires its original bank effect");
   if (FredReturnState && !FredReturn)
     RequireNative("the FRED return profile only owns canonical ERETS/ERETU");
   // These exact frame shapes have no unconditional empty undefined-output
@@ -1187,7 +1217,7 @@ buildInstruction(SpecializationInstruction Instruction,
       (Iret || FarReturn) &&
       Instruction.UndefinedEffects.Coverage == LowUndefinedCoverage::Missing &&
       Instruction.UndefinedEffects.Effects.empty();
-  if ((!FarPointer && !UserInterrupt && !FredReturn && !Vmrun &&
+  if ((!FarPointer && !UserInterrupt && !FredReturn && !Vmrun && !Mpx &&
        (Instruction.ProfileProjection != InterpreterProfileProjection::None ||
         (!OwnedFrameReturn && Instruction.UndefinedEffects.Coverage !=
                                   LowUndefinedCoverage::Complete))) ||
@@ -1440,8 +1470,13 @@ buildInstruction(SpecializationInstruction Instruction,
   Writer Reject{Function, &Rejected, Options};
   Reject.leave(Exit::InvalidState);
   Writer W{Function, &Body, Options};
+  if (MpxState)
+    detail::X64ContinuationMpx<Writer>(W).validate();
   if (Result.RequiresNativeExecution) {
     W.leave(Exit::NativeInstruction);
+  } else if (Mpx) {
+    detail::X64ContinuationMpx<Writer>(W).execute(
+        *Mpx, Instruction.Fallthrough.Address);
   } else if (Vmrun) {
     detail::X64ContinuationSvm<Writer>(W).execute(
         *Vmrun, Instruction.Fallthrough.Address);
@@ -1506,6 +1541,8 @@ buildInstruction(SpecializationInstruction Instruction,
       }
       Effects(I + 1);
     }
+    if (MpxBranch)
+      detail::X64ContinuationMpx<Writer>(W).completeBranch(*MpxBranch);
     W.leave(Kind, NextPC);
   }
   if (Function.Blocks.size() > Options.MaxOperations ||

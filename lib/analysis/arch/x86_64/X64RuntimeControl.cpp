@@ -9,6 +9,7 @@
 
 #include "X64ControlTransitions.h"
 #include "X64Recovery.h"
+#include "X64StreamStore.h"
 
 #include "neverd/symbolic/SymState.h"
 
@@ -56,6 +57,8 @@ bool supportsRuntimeControlOperation(const LowOp &Op,
                                      const SpecializationOptions &Options) {
   return mxcsr::supportsOperation(Op, Options) ||
          alignment::supportsOperation(Op, Options) ||
+         readprefetch::supportsOperation(Op, Options) ||
+         streamstore::supportsFence(Op, Options) ||
          legacygs::supportsOperation(Op, Options) ||
          pageglobal::supportsOperation(Op, Options);
 }
@@ -120,6 +123,12 @@ lowerRuntimeControlOperation(const LowOp &Op, symbolic::SymState &State,
                              const RuntimeControlState &Controls,
                              const SpecializationOptions &Options,
                              llvm::function_ref<NdVar(uint16_t)> Temporary) {
+  // PREFETCHh is a retained cache hint, not a guest RAM read or a scalar
+  // state write. The original intrinsic still executes in residual/source.
+  if (readprefetch::supportsOperation(Op, Options))
+    return RuntimeControlTransition{};
+  if (streamstore::supportsFence(Op, Options))
+    return RuntimeControlTransition{};
   if (alignment::supportsOperation(Op, Options))
     return alignment::lowerOperation(Op, Options, Temporary);
   if (legacygs::supportsOperation(Op, Options))

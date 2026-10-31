@@ -62,6 +62,13 @@ before rendering it; neither a mnemonic nor an intrinsic declaration alone
 authorizes an architectural register access. Both forms retain unknown memory
 effects, undefined arithmetic flags and native faults, including dead reads.
 
+`X86MpxSemantics.h` shares comparison and directory/table value recipes between
+the concrete owner and `X64ContinuationMpx.h` source lowering. The independent
+V11 layout carries bounds/configuration through both C routes; the raw MPX
+reader also owns original branch initialization classification. Neither source
+CFG optimization nor host MPX availability determines that original effect.
+Pending #BR publishes status and stops at the original PC before delivery.
+
 `ir/X86/X86MpxContext.h` owns concrete MPX enable evidence, the four bounds
 registers, BNDSTATUS and BDE/BTE address calculations. Unknown prerequisites
 remain unknown; a proven disabled prerequisite suppresses MPX effects without
@@ -86,9 +93,9 @@ Enabled operations require a known nontransactional context; an RTM/HLE
 checkpoint and abort continuation are not supplied by this state component.
 Original branch completion takes an explicit preserve/initialize effect;
 it does not infer an architectural branch from a transformed CFG edge.
-This component is a tested foundation, not yet a lifting/emission contract:
-strict MPX admission remains closed until original-transfer effects and
-memory completion are connected throughout the pipeline.
+The V11 continuation supplies a separate source contract for successful
+long-mode RAM and pending #BR, including original-transfer effects. Ordinary
+function-ABI lifting and transactional/faulting memory completion remain closed.
 
 The LLVM/NeverC native MPX APIs independently retain the ambient bounds bank.
 Their operands use allocated legacy-encodable carriers, preserving reserved
@@ -1904,6 +1911,21 @@ This remains instruction-listing alignment, not control-flow equivalence.
 competition on the structural matcher-22 recipe. Ordered multi-block rows refine
 the final measurement under an independently established correspondence. They
 do not supply identity evidence or raise candidate scores during pairing.
+
+Matcher version 24 reviews possible caller inlining after automatic admission.
+Entry-call signatures are computed once in parallel under the frozen mapping.
+They require complete functions, resolved direct calls and at least two distinct
+mapped targets; order and repetitions remain part of each signature. Only a
+weak helper's actual unmatched direct callers can compete with its opposite
+endpoint. A caller must have the opposite endpoint's entry signature and its
+targets must be absent from the helper's callees. It must pass the existing
+candidate body threshold and explain more
+known equal instructions. Complete body/CFG preservation remains authoritative.
+Eligible conflicts retire the weak match and retain separate call-site and
+prior alternatives; no new identity is admitted. Candidate and prior deltas use
+the structural candidate alignment recipe in parallel batches. Cancellation
+publishes no partially reviewed deferrals. The pass visits each caller adjacency
+once instead of comparing all functions that share initialization calls.
 
 Each `FunctionMatch` and `FunctionDelta` retains an `InstructionAlignmentProfile`.
 `CurrentInstructionAlignmentProfile` owns the default for new pairs, currently
@@ -15384,3 +15406,9 @@ LLVMC indexes LLVM block order once per immutable function projection. Exclusive
 Authenticated x64 machine-region source retains scalar XCHG and LOCK XADD in default memory. The adapter reuses `supportsAtomicWritePreservation` for shape admission after raw receipt authentication; `X86AtomicRmw.h` and the shared renderer retain the native transaction. Bare machine-state source, CMPXCHG and segmented atomics remain outside this source contract.
 
 For runtime validity failures, core first refines the rejected value’s immediate and deferred producer bits. Enclosing guards are considered only after those candidates stop improving precision. An unrelated wide counter therefore need not enter alignment contexts. Every retry still proves the complete transition under the same cumulative budgets; neither dependency discovery nor guard selection supplies a validity or reachability fact.
+
+Raw x64 regions admit strictly authenticated default-space PREFETCHNTA/T0/T1/T2 forms. X86ReadPrefetchAudit and the independent opaque-bank list own native effects; readprefetch owns the exact scalar shape without a guest RAM read or register update. Residual and source retain every hint and effective address through the existing C emitters. Segment overrides, write/code hints, other cache operations and unauthenticated machine-source inputs remain refused.
+
+Authenticated raw x64 regions retain legacy MOVNTDQ as a native 128-bit streaming store with its 16-byte alignment guard. X86SystemState owns operand and assembly contracts. In the explicit nonfaulting domain, analysis uses an ordinary STORE view through the existing alias, frame and return-cell checks; emitted code retains MOVNTDQ and exact SFENCE operations. This finite memory projection does not model cache placement or concurrent observers.
+
+Automatic control discovery can split a finite live MOVS/STOS count into guarded cases. The instruction prefix must preserve the register; each predecessor independently proves an exhaustive domain within `MaxControlTuples`. Fallthrough cuts and guards have synthetic provenance. Each case still proves its count and memory effects under cumulative budgets. Incomplete domains, unbounded counts and missing entry constraints remain refused.

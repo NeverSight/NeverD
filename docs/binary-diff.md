@@ -222,6 +222,18 @@ recognizes this boundary pattern, not arbitrary compiler inlining or outlining.
 Saved comparisons reject this candidate-only step on an accepted match. Failed
 restoration preserves the current comparison and its undo/redo history.
 
+Matcher version 24 also reviews a weak helper match against its unmatched
+direct callers. A complete caller and the opposite function must have the same
+ordered entry calls to at least two distinct already matched targets outside
+the proposed inline pair. None of these targets may be a callee of the helper.
+The caller must pass the existing body threshold and explain strictly more
+known equal instructions than the structurally changed helper match. Both
+whole-function alternatives then remain available for review as ordinary
+call-site candidates. This review never accepts a caller identity; shared
+initialization, repeated calls, incomplete analysis or a preserved helper CFG
+cannot by themselves overturn a match. Stated identities, confirmations and
+analyst rejections retain their authority.
+
 Matcher version 11 also proposes candidates whose complete instruction streams
 agree after excluding NOP padding and an entry ENDBR marker. These layout edits
 can break every shared three-instruction sketch band and whole-function graph

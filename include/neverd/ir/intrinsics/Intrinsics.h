@@ -516,6 +516,9 @@ enum class Intrinsic : uint16_t {
   // Append-only: returning VMEXIT with explicit software-managed state.
   X86SvmRunContext,
 
+  // Append-only: one legacy MOVNTDQ owns its aligned non-temporal write.
+  X86StreamStore128,
+
   _Count = 16000
 };
 
@@ -556,7 +559,8 @@ enum class X86SystemStateKind : uint8_t {
   TransactionAbort,
   SecureLaunch,
   LockedLogic,
-  LockedBit
+  LockedBit,
+  StreamStore128
 };
 
 struct X86SystemStateContract {

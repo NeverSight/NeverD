@@ -1460,6 +1460,26 @@ bytes through both assembly dialects. The processor-model test accepts the
 same flags; skipped QEMU behaviors remain separate from successful execution.
 These compiler tests do not open NeverD's strict MPX admission boundary.
 
+`X64ContinuationExportTest.Mpx*` in `NeverDX64ContinuationExportTests` exercises
+the [V11 source contract](x86-mpx-source.md) through HighC and LLVMC at O0/O2
+with address/undefined sanitizers. The forms matrix includes all bounds banks,
+ignored 67H, FS effects, unaligned BNDMOV, LOCK stores, enable combinations,
+unsigned checks, table-pointer mismatches, invalid BDE status and absent MIB
+base/index. Full state and RAM are compared with independent oracles. Separate
+tests cover original near CALL/RET/JMP/Jcc with BND/BNDPRESERVE, both Jcc
+outcomes, switch/direct dispatch, invalid-state refusal, entry selection and
+repair/resumption after pending #BR. These are explicit-state tests, not an
+ordinary function-ABI certificate.
+
+The forms test exports `mpx-{high,llvm}.c/.json` when
+`NEVERD_ISA_REGRESSION_ARTIFACT_DIR` is set. NeverC's
+`tests/neverc/X86/verify_mpx_continuation.py` accepts those files and runs actual
+exported source against independently assembled original bytes in QEMU TCG.
+It compares every bounds register, BNDSTATUS and RAM at successful and #BR
+boundaries, including disabled execution. Its qualification JSON lists QEMU
+limitations explicitly. `--backend-llc` and `--new-pm` exercise both full LLVM
+codegen pass managers in addition to NeverC's embedded backend.
+
 `NeverDX86MpxContextTests` checks the shared state foundation independently of
 host MPX availability: 324 enable-evidence combinations, 864 unsigned bounds
 comparisons, all 4,352 single-bit MAWA/CPL address cases, nonzero directory
@@ -1499,8 +1519,8 @@ load. A byte-RAM sequence checks BNDMK, spill/reload, table store/load, pointer
 mismatch initialization and boundary faults together. These provider tests
 qualify the portable single-instruction contract; they do not certify native
 fault delivery, original CALL/RET completion, IR state preservation or physical
-MPX hardware. Strict lifting remains closed until those integration boundaries
-are supplied.
+MPX hardware. V11 source integration has its own tests above; ordinary
+function-ABI lifting remains closed.
 
 `NeverDX86TBMTests` exercises all nine trailing-bit operations through full,
 lightweight and lift decoding, with 32/64-bit values, register aliases,
@@ -4152,6 +4172,12 @@ restoration. The session discovery owner checks sized and unsized direct/import
 slot calls; `InstructionFlow.ConditionalCallsKeepTheUnexecutedArm` checks ARM
 predication and patched-target refusal. Run these with `NeverDNoReturnTests`
 when changing the shared target contract.
+`BinaryDiff.InlineCallerCandidatesRequireIndependentEntryCalls` covers a frozen
+weak helper correspondence after partial loop inlining, missing or repeated
+anchors, call order, incomplete bodies, unresolved/indirect calls, protected
+identity, both directions, reordering, cancellation and saved-report binding.
+The caller boundary is a review alternative, not an
+automatic identity or a semantic-equivalence claim.
 Dataflow checks cover SSA renaming, PHI edge changes, control/data slices,
 parameter/clobber identity, unobserved effects and bounded neighborhoods.
 Call-argument projection checks backward/forward dependencies missing from raw
@@ -17899,3 +17925,10 @@ source but do not qualify privileged execution.
 `AtomicSourceRequiresAnUnmodifiedSupportedReceipt` rejects missing or modified atomic receipts and unsupported CMPXCHG. `ScalarAtomicsRetainTransactionsAndPhysicalState` checks 1/2/4/8-byte XCHG and LOCK XADD with independent full-state, flag and byte oracles, unaligned memory and return-word aliases. Both C routes run at O0/O2 with ASan/UBSan under user and kernel state profiles. Run `NeverDInterpreterMachineStateTests` plus the raw-environment, specialization, continuation-source and source-backend suites. These completion tests do not certify contention or fault behavior.
 
 `InterpreterSpecialization.AlignmentProducersPrecedeWideGuardContexts` / `RuntimeValidityStillRefinesAnEnclosingGuard`: The alignment regressions compare an independent arithmetic oracle across both alignment paths, every low-bit residue, wide counts, threshold outcomes and unsigned wraparound. They also require refusal of a misaligned loop, continued enclosing-guard refinement when producers stall, and exact/one-short operation and query budgets. These checks establish neither ordinary source ABI recovery nor native fault behavior.
+
+ReadPrefetch regressions check exact bytes and operand metadata, separate undefined-output and opaque-bank receipts, malformed scalar contracts and modified raw receipts. Both C routes retain all four hints and repeated occurrences, then run at O0/O2 with sanitizers against independent full-state and memory expectations, including unmapped addresses, 32-bit address wrapping and physical returns. Cache placement and timing are outside these comparisons.
+
+StreamingStore regressions check instruction bytes, operand metadata, alignment, complete writable extents, malformed contracts and modified receipts. Independent expectations compare complete state and memory, including a store that overwrites the physical return word. Both C routes execute at O0/O2 with sanitizers under user and kernel state profiles. These checks do not certify native kernel, concurrent or faulting execution.
+
+`InterpreterSpecialization.RepeatedCounts*`; `InterpreterMachineRegionSourceTest.FiniteRepeatedCountsPreserveFullState`; `InterpreterMachineRegionSourceTest.FiniteCopyAndPaddingPreserveLoopState`.
+These tests check exhaustive partitions, differing predecessor domains, prefix writes, discovery opt-out, incomplete domains and exact/short budgets. Both C routes execute at O0/O2 with ASan/UBSan. Independent full-state and byte oracles cover clipped counts, both directions, overlap, zero-count invalid pointers, early terminators and loop padding. They do not establish ordinary ABI recovery.

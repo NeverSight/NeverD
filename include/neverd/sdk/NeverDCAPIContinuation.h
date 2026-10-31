@@ -31,6 +31,13 @@ extern "C" {
 /// V9 enables FRED with CET disabled and exports 2560-byte state. It only owns
 /// canonical ERETS/ERETU to 64-bit targets and exits with status 12 before
 /// target or pending-event execution. SYSENTER/UIRET bindings are not accepted.
+/// amd-svm-v10 extends V4 to 2464 bytes with native SVM state and stops VMRUN
+/// with status 13. It requires the documented native VMM domain and XCR0=7.
+/// intel-mpx-v11 separately extends V4 to 2416 bytes with bounds, supervisor
+/// MPX configuration and enable state. It requires host MPX disabled or
+/// BNDPRESERVE set. Bounds faults stop with status 14 at the original PC before
+/// exception delivery. V10/V11 require mxcsr_mask but no paging/Intel-return
+/// bindings; neither inherits the V6/V7/V8/V9 state or return capabilities.
 ///
 /// The returned C includes its state layout and a bounded resume driver. It
 /// does not use an ordinary function ABI or execute the loaded image. CALL,

@@ -1,5 +1,9 @@
 # Explicit x64 continuation C
 
+The [`intel-mpx-v11` profile](x86-mpx-source.md) extends V4 with the complete
+long-mode bounds bank, enable state, bounds tables, original branch effects and
+a pending-`#BR` stop (status 14), through both C routes.
+
 The `amd-svm-v10` profile extends V4 with native VMRUN exchange state and a
 VMEXIT stop (status 13). Its distinct 2464-byte layout requires unchanged
 XCR0=7 and the declared native SVM environment. Canonical addr64/addr32 original

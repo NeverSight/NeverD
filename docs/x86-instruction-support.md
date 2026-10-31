@@ -274,7 +274,7 @@ test resumes through a coupled SS/RSP switch and uses the new stack.
 | UIRET faulting/native execution | Decoding and the explicit V8 continuation now own the successful canonical return, UIF feature selection, monitor invalidation and complete represented state through both C routes. Ordinary source, CET, fault delivery, RTM aborts and physical UINTR execution remain unqualified. |
 | RETF/RETFQ, IRET/IRETD/IRETQ | Ordinary source still lacks complete frame, privilege, segment and flag restoration. The separate [explicit x64 continuation](x64-continuation-source.md) V6 profile owns canonical 16/32/64-bit IRET and RETF (with or without imm16) from 64-bit entry to long-mode or compatibility CPL0..3, including hidden caches, descriptor accesses and outer-return segment invalidation. Compatibility returns own eight conditional GPR high-half choices and SS.B-dependent stack restoration/cleanup. All IRET widths pop five fields; word IRET retains AC/ID/VIF/VIP and clears RF. These returns accept RF, all IOPL values and VIF/VIP on entry while excluding TF. Raw frame RIP must be canonical before truncation. These instructions have no unconditional empty undefined-output audit. RETFQ preserves NMI blocking; IRETQ unblocks NMIs. Faulting execution, other raw high-RIP patterns, CET/FRED and legacy/compatibility source contexts remain unqualified. |
 | SYSENTER, SYSEXIT/SYSEXITQ, SYSRET/SYSRETQ, RSM | Ordinary source still lacks complete register, privilege, segment and SMM continuation state. The separate explicit x64 continuation V5/V6 profiles own canonical SYSRET/SYSRETQ with live STAR and CS/SS caches, flags and compatibility/64-bit target state. SYSRET explicitly consumes eight arbitrary values for the legacy GPR high halves; all defined bits are preserved or assigned as specified. The Intel V7 profile additionally owns canonical SYSENTER from CPL0–3 and SYSEXIT/SYSEXITQ from CPL0, with live CS/ESP/EIP MSRs, complete target caches, state and explicit stops. Unprefixed SYSENTER/SYSEXIT also accept flat compatibility entry with either CS.D and a complete in-limit instruction. RF, all IOPL values and VIF/VIP are admitted on entry; TF still requires debug-trap delivery. Nonflat compatibility entry, legacy modes and faulting transitions remain unqualified; SYSRET is architecturally invalid in compatibility mode, and RSM still requires a full SMM state owner. |
-| BNDMK, BNDMOV, BNDCL, BNDCU, BNDCN, BNDLDX, BNDSTX | MPX bounds-register bank, bounds-table translation, enable state and #BR/partial-fault behavior. The old COPY/NOP approximations are removed. |
+| MPX outside explicit V11 | The [V11 source profile](x86-mpx-source.md) owns all seven qualified long-mode families, bounds, enable state, tables, BNDSTATUS, original branch initialization and a pending-#BR stop through both C routes. Ordinary function ABI, i386/compatibility source entry, memory faults, handler delivery, transactions and physical MPX remain unqualified. |
 | XACQUIRE/XRELEASE | HLE prefix ownership belongs to the associated memory operation. Prefixed LOCK operations, implicit-lock XCHG and XRELEASE MOV stores are explicitly refused before ordinary memory lowering; native transactional completion remains missing. |
 | XBEGIN and full RTM regions | The two-exit lift retains rel16 and rel32 fallbacks at the full code width, with conditional EAX updates. The pinned decoder's i386 displacement-sign errors are normalized before CFG discovery. Full register/memory checkpoint, nesting, fallback faults and hardware rollback remain unqualified; a status result alone does not establish these contracts. |
 | Remaining compact-memory descriptor/fault execution | Native LLVM and both C routes retain long-mode stack references and i386 CS/ES/SS offsets, including implicit SS for SP/BP bases, alongside DS/FS/GS. Concrete i386 CS/ES/SS accesses still require a descriptor environment; zero-mask suppression remains available. Physical AVX-512 and descriptor-fault execution remain unqualified. |
@@ -516,8 +516,9 @@ builtins for the same architectural bounds bank. `llvm.x86.bnd.branch` retains
 an original near transfer's conditional BNDINIT effect independently of CFG
 folding; compiler-created transfers preserve the bank. Its initializing form
 uses unprefixed E9 with forced disp32, including assembly roundtrips. These
-compiler surfaces do not yet supply NeverD's shared MPX state and original
-branch/fault-order contract, so the strict lifting boundary above remains.
+compiler surfaces operate on the native bank. The separate
+[V11 source profile](x86-mpx-source.md) carries NeverD's explicit bank and
+original branch effects; ordinary strict function-ABI lifting remains closed.
 The compiler qualification is recorded in LLVM's `X86MPXIntrinsics.rst` and
 NeverC's `development.md`. QEMU 10.2.2's explicit limitation mode skips 180/520
 instruction cases and one of six branch-state cases; skipped behavior and
@@ -549,9 +550,9 @@ A BNDLDX table-read fault forgets the affected bound because partial update
 order is implementation-dependent. An invalid BDE instead preserves the bank
 and reports its address in BNDSTATUS. Active or unknown transaction contexts
 are refused before state publication; RTM/HLE checkpoint/abort integration is
-still required. This is not yet connected to strict lifting or native output:
-instruction-state transport and original-branch effects surviving every IR
-route remain open.
+still required. V11 connects the long-mode, nonfaulting RAM projection to
+both C routes, sharing bounds comparisons and table arithmetic with this owner.
+Ordinary function-ABI lifting retains its explicit unsupported boundary.
 
 The context now sequences whole-access memory providers for BNDMOV and the
 BDE/BTE transactions. BNDMOV loads publish after both fields complete. Memory
@@ -583,9 +584,9 @@ discards displacement, while an absent index supplies zero and scale is
 ignored. Tests execute both modes, all banks, aliasing moves, address-only
 checks, refused contexts and provider faults. A byte-memory instruction
 sequence also verifies spill/reload and table roundtrips. This is portable
-single-instruction execution, not MPX hardware or end-to-end lifting
-qualification. Original-transfer completion, state transport throughout the
-IR pipeline and transactional state integration remain open.
+single-instruction execution. Separate V11 tests exercise whole source regions,
+original transfers and explicit state transport; neither suite qualifies
+physical MPX or transactional rollback.
 
 BNDMOV requests retain the original SP/BP default-stack property independently
 of the selected segment. R12/R13 are data-default bases. In long mode,

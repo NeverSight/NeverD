@@ -2274,3 +2274,10 @@ LLVM C 的合成栈槽保留完整的 128 位整数写入，再由运行时选�
 `AtomicSourceRequiresAnUnmodifiedSupportedReceipt` 拒绝缺失或修改的原子凭据及不支持的 CMPXCHG。`ScalarAtomicsRetainTransactionsAndPhysicalState` 用独立的完整状态、标志和字节预期验证 1/2/4/8 字节 XCHG、LOCK XADD、非对齐内存和返回字别名。两条 C 路径在用户及内核状态配置下运行 O0/O2、ASan/UBSan。运行 `NeverDInterpreterMachineStateTests` 以及原始环境、特化、续接源码和源码后端测试；这些完成测试不认证并发竞争或故障行为。
 
 `InterpreterSpecialization.AlignmentProducersPrecedeWideGuardContexts` / `RuntimeValidityStillRefinesAnEnclosingGuard`: 对齐回归使用独立算术预期，覆盖两条对齐路径、所有低位余数、宽计数、阈值两侧和无符号回绕；同时检查拒绝未对齐循环、生产者细化停滞后仍可细化外层分支，以及操作和查询预算恰好足够或少一次的情况。这些检查不证明普通源码 ABI 恢复或原生故障行为。
+
+ReadPrefetch 回归检查原始字节与操作数元数据、独立的未定义输出和不透明状态凭据、畸形标量契约及被修改的原始凭据。两条 C 路径保留四种提示及重复出现，并在 O0/O2 和消毒器下比较独立的完整状态与内存预期，覆盖未映射地址、32 位地址回绕和物理返回。不比较缓存位置或时序。
+
+StreamingStore 回归检查指令字节、操作数元数据、对齐、完整可写范围、畸形契约和被修改的凭据。独立预期比较完整状态与内存，包括覆盖物理返回地址的存储。两条 C 路径均在用户与内核状态配置下，以 O0/O2 和消毒器执行。这些检查不认证原生内核、并发或故障执行。
+
+`InterpreterSpecialization.RepeatedCounts*`; `InterpreterMachineRegionSourceTest.FiniteRepeatedCountsPreserveFullState`; `InterpreterMachineRegionSourceTest.FiniteCopyAndPaddingPreserveLoopState`.
+这些测试检查完整分派、不同前驱值域、前缀写入、关闭自动发现、不完整值域及精确/少一预算。两种 C 输出在 O0/O2 下通过 ASan/UBSan 执行。独立完整状态及逐字节预期覆盖截断计数、双向访问、重叠、零计数无效指针、提前终止和循环补零；不构成普通 ABI 恢复证明。
