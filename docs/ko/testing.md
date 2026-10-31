@@ -2303,3 +2303,6 @@ LLVM C의 합성 스택 슬롯은 실행 중 선택한 64비트 절반을 읽기
 ReadPrefetch 회귀는 정확한 바이트와 피연산자 정보, 독립적인 미정의 출력·불투명 상태 증거, 잘못된 스칼라 계약과 변조된 원시 증거를 검사합니다. 두 C 경로는 네 종류와 반복 힌트를 보존하며 O0/O2 및 검사기로 독립적인 전체 상태·메모리 예상값과 비교합니다. 매핑되지 않은 주소, 32비트 주소 래핑과 실제 반환을 포함하며 캐시 배치와 시간은 비교하지 않습니다.
 
 StreamingStore 회귀는 명령 바이트, 피연산자 정보, 정렬, 전체 쓰기 가능 범위, 잘못된 계약과 변조된 증거를 검사합니다. 실제 반환 주소를 덮어쓰는 저장을 포함해 전체 상태와 메모리를 독립적인 예상값과 비교합니다. 두 C 경로는 사용자 및 커널 상태 프로필에서 O0/O2와 검사기를 사용해 실행됩니다. 이 검사는 원시 커널, 동시 실행 또는 결함 발생 시 실행을 인증하지 않습니다.
+
+`InterpreterSpecialization.RepeatedCounts*`; `InterpreterMachineRegionSourceTest.FiniteRepeatedCountsPreserveFullState`; `InterpreterMachineRegionSourceTest.FiniteCopyAndPaddingPreserveLoopState`.
+완전한 분기, 서로 다른 선행 집합, 명령 내부 쓰기, 탐색 비활성화, 불완전한 집합과 정확하거나 한 단위 부족한 예산을 검사합니다. 두 C 경로를 O0/O2 및 ASan/UBSan으로 실행합니다. 독립적인 전체 상태와 바이트 비교는 제한된 횟수, 양방향, 중첩, 횟수 0의 무효 포인터, 조기 종료와 루프의 0 채우기를 다룹니다. 일반 ABI 복원을 입증하지는 않습니다.

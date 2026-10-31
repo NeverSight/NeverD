@@ -4172,6 +4172,12 @@ restoration. The session discovery owner checks sized and unsized direct/import
 slot calls; `InstructionFlow.ConditionalCallsKeepTheUnexecutedArm` checks ARM
 predication and patched-target refusal. Run these with `NeverDNoReturnTests`
 when changing the shared target contract.
+`BinaryDiff.InlineCallerCandidatesRequireIndependentEntryCalls` covers a frozen
+weak helper correspondence after partial loop inlining, missing or repeated
+anchors, call order, incomplete bodies, unresolved/indirect calls, protected
+identity, both directions, reordering, cancellation and saved-report binding.
+The caller boundary is a review alternative, not an
+automatic identity or a semantic-equivalence claim.
 Dataflow checks cover SSA renaming, PHI edge changes, control/data slices,
 parameter/clobber identity, unobserved effects and bounded neighborhoods.
 Call-argument projection checks backward/forward dependencies missing from raw
@@ -17906,3 +17912,6 @@ source but do not qualify privileged execution.
 ReadPrefetch regressions check exact bytes and operand metadata, separate undefined-output and opaque-bank receipts, malformed scalar contracts and modified raw receipts. Both C routes retain all four hints and repeated occurrences, then run at O0/O2 with sanitizers against independent full-state and memory expectations, including unmapped addresses, 32-bit address wrapping and physical returns. Cache placement and timing are outside these comparisons.
 
 StreamingStore regressions check instruction bytes, operand metadata, alignment, complete writable extents, malformed contracts and modified receipts. Independent expectations compare complete state and memory, including a store that overwrites the physical return word. Both C routes execute at O0/O2 with sanitizers under user and kernel state profiles. These checks do not certify native kernel, concurrent or faulting execution.
+
+`InterpreterSpecialization.RepeatedCounts*`; `InterpreterMachineRegionSourceTest.FiniteRepeatedCountsPreserveFullState`; `InterpreterMachineRegionSourceTest.FiniteCopyAndPaddingPreserveLoopState`.
+These tests check exhaustive partitions, differing predecessor domains, prefix writes, discovery opt-out, incomplete domains and exact/short budgets. Both C routes execute at O0/O2 with ASan/UBSan. Independent full-state and byte oracles cover clipped counts, both directions, overlap, zero-count invalid pointers, early terminators and loop padding. They do not establish ordinary ABI recovery.

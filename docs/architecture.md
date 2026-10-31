@@ -1912,6 +1912,21 @@ competition on the structural matcher-22 recipe. Ordered multi-block rows refine
 the final measurement under an independently established correspondence. They
 do not supply identity evidence or raise candidate scores during pairing.
 
+Matcher version 24 reviews possible caller inlining after automatic admission.
+Entry-call signatures are computed once in parallel under the frozen mapping.
+They require complete functions, resolved direct calls and at least two distinct
+mapped targets; order and repetitions remain part of each signature. Only a
+weak helper's actual unmatched direct callers can compete with its opposite
+endpoint. A caller must have the opposite endpoint's entry signature and its
+targets must be absent from the helper's callees. It must pass the existing
+candidate body threshold and explain more
+known equal instructions. Complete body/CFG preservation remains authoritative.
+Eligible conflicts retire the weak match and retain separate call-site and
+prior alternatives; no new identity is admitted. Candidate and prior deltas use
+the structural candidate alignment recipe in parallel batches. Cancellation
+publishes no partially reviewed deferrals. The pass visits each caller adjacency
+once instead of comparing all functions that share initialization calls.
+
 Each `FunctionMatch` and `FunctionDelta` retains an `InstructionAlignmentProfile`.
 `CurrentInstructionAlignmentProfile` owns the default for new pairs, currently
 `ordered-block-spans-v1`. Matcher-22 `single-block-spans-v1` measurements retain
@@ -15381,3 +15396,5 @@ For runtime validity failures, core first refines the rejected value’s immedia
 Raw x64 regions admit strictly authenticated default-space PREFETCHNTA/T0/T1/T2 forms. X86ReadPrefetchAudit and the independent opaque-bank list own native effects; readprefetch owns the exact scalar shape without a guest RAM read or register update. Residual and source retain every hint and effective address through the existing C emitters. Segment overrides, write/code hints, other cache operations and unauthenticated machine-source inputs remain refused.
 
 Authenticated raw x64 regions retain legacy MOVNTDQ as a native 128-bit streaming store with its 16-byte alignment guard. X86SystemState owns operand and assembly contracts. In the explicit nonfaulting domain, analysis uses an ordinary STORE view through the existing alias, frame and return-cell checks; emitted code retains MOVNTDQ and exact SFENCE operations. This finite memory projection does not model cache placement or concurrent observers.
+
+Automatic control discovery can split a finite live MOVS/STOS count into guarded cases. The instruction prefix must preserve the register; each predecessor independently proves an exhaustive domain within `MaxControlTuples`. Fallthrough cuts and guards have synthetic provenance. Each case still proves its count and memory effects under cumulative budgets. Incomplete domains, unbounded counts and missing entry constraints remain refused.

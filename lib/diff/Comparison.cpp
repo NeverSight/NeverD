@@ -360,6 +360,7 @@ private:
   void retainEntryAlternatives();
   void retainCallAlternatives();
   void retainStackAlternatives();
+  void retainInlineCallerAlternatives();
   void finish();
 };
 
@@ -1398,6 +1399,92 @@ void Matcher::retainStackAlternatives() {
                  [&](const Formed &F) { return PMatch[F.Primary] == NoIndex; });
 }
 
+void Matcher::retainInlineCallerAlternatives() {
+  if (stopNow())
+    return;
+  std::vector<uint32_t> Weak;
+  for (uint32_t I = 0; I < Order.size(); ++I)
+    if (!protectedMatch(Order[I]))
+      Weak.push_back(I);
+  if (Weak.empty())
+    return;
+
+  std::vector<uint32_t> WeakA(P.Functions.size(), NoIndex),
+      WeakB(S.Functions.size(), NoIndex);
+  for (uint32_t I : Weak) {
+    WeakA[Order[I].Primary] = I;
+    WeakB[Order[I].Secondary] = I;
+  }
+  const auto Proposals =
+      inlineCallerCandidates(P, PF, PMatch, WeakA, S, SF, SMatch, Control);
+  if (stopNow())
+    return;
+  struct Candidate {
+    uint32_t A, B, Prior;
+    bool Retain = false;
+  };
+  std::vector<Candidate> Candidates;
+  Candidates.reserve(Proposals.size());
+  for (const auto &[A, B] : Proposals)
+    if (!Rejected.contains(pairKey(A, B)) && !namesConflict(A, B))
+      Candidates.push_back({A, B, PMatch[A] == NoIndex ? WeakB[B] : WeakA[A]});
+  if (Candidates.empty())
+    return;
+  std::vector<uint8_t> Measure(Order.size(), 0);
+  for (const auto &C : Candidates)
+    Measure[C.Prior] = 1;
+  std::vector<uint32_t> Priors;
+  for (uint32_t I = 0; I < Measure.size(); ++I)
+    if (Measure[I])
+      Priors.push_back(I);
+  std::vector<uint32_t> PriorEqual(Order.size(), NoIndex);
+  parallelForEach(Priors.size(), [&](auto Claim, size_t Count) {
+    for (size_t I = Claim(); I < Count; I = Claim()) {
+      if (Control.stop())
+        return;
+      const uint32_t At = Priors[I];
+      const auto &F = Order[At];
+      const auto D = delta(F.Primary, F.Secondary);
+      // Complete body/CFG preservation is still stronger evidence. Only a
+      // structural edit can expose an unresolved whole-function boundary.
+      if (D.ComputationComplete && D.AnalysisComplete &&
+          (D.Changes & (ChangeBlocks | ChangeEdges)))
+        PriorEqual[At] = D.EqualInstructions;
+    }
+  });
+  if (stopNow())
+    return;
+  parallelForEach(Candidates.size(), [&](auto Claim, size_t Count) {
+    for (size_t I = Claim(); I < Count; I = Claim()) {
+      if (Control.stop())
+        return;
+      auto &C = Candidates[I];
+      if (PriorEqual[C.Prior] == NoIndex)
+        continue;
+      const auto D = delta(C.A, C.B);
+      C.Retain = D.ComputationComplete && D.AnalysisComplete &&
+                 D.Similarity >= Settings.MinimumSimilarity &&
+                 D.EqualInstructions > PriorEqual[C.Prior];
+    }
+  });
+  if (stopNow())
+    return;
+  std::vector<uint8_t> Deferred(Order.size(), 0);
+  for (const auto &C : Candidates)
+    if (C.Retain) {
+      Deferred[C.Prior] = 1;
+      NearTies.push_back({FunctionStep::CallSite, {C.A}, {C.B}});
+    }
+  for (uint32_t I = 0; I < Order.size(); ++I)
+    if (Deferred[I]) {
+      const auto &F = Order[I];
+      PMatch[F.Primary] = SMatch[F.Secondary] = NoIndex;
+      NearTies.push_back({F.Step, {F.Primary}, {F.Secondary}});
+    }
+  llvm::erase_if(Order,
+                 [&](const Formed &F) { return PMatch[F.Primary] == NoIndex; });
+}
+
 void Matcher::collectAmbiguities() {
   std::vector<uint32_t> InPrimary(P.Functions.size(), NoIndex),
       InSecondary(S.Functions.size(), NoIndex);
@@ -1767,6 +1854,7 @@ void Matcher::run(llvm::ArrayRef<Override> Overrides) {
   beginPhase("ambiguities");
   retainCallAlternatives();
   retainStackAlternatives();
+  retainInlineCallerAlternatives();
   collectAmbiguities();
   endPhase();
   finish();

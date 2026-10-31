@@ -1585,6 +1585,7 @@ int main(void) {
 // clang-format off
 #include "InterpreterMachineRegionSourceTests.inc"
 #include "InterpreterMachineRegionStringSourceTests.inc"
+#include "InterpreterMachineRegionCountSourceTests.inc"
 
 #include "InterpreterMachineRegionAtomicSourceTests.inc"
 #include "InterpreterMachineRegionPrefetchSourceTests.inc"

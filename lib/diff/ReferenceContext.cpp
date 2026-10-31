@@ -8,6 +8,8 @@
 /// Equal instruction layouts in independently matched functions align address
 /// operands. Consistent bidirectional reference relations can distinguish
 /// otherwise equal candidate bodies without equating unknown data objects.
+/// Distinct mapped entry calls also expose possible caller-inline boundaries;
+/// the comparison owner measures those proposals before deferring identity.
 ///
 //===----------------------------------------------------------------------===//
 
@@ -709,6 +711,108 @@ InitializerCandidates initializerCandidates(
     }
     llvm::sort(Candidates);
   }
+  return Result;
+}
+
+std::vector<std::pair<uint32_t, uint32_t>> inlineCallerCandidates(
+    const Program &P, const ProgramFeatures &PF,
+    llvm::ArrayRef<uint32_t> PMatch, llvm::ArrayRef<uint32_t> WeakP,
+    const Program &S, const ProgramFeatures &SF,
+    llvm::ArrayRef<uint32_t> SMatch, const ComparisonControl &Control) {
+  // Entry calls use the frozen correspondence outside the possible inline
+  // pair. This is ambiguity evidence, not a new function-identity key.
+  const size_t PrimaryCount = P.Functions.size();
+  struct EntryCalls {
+    uint64_t Key = 0;
+    llvm::SmallVector<uint32_t, limits::diff::kMinInlineCallerAnchors> Targets;
+  };
+  std::vector<EntryCalls> Entries(PrimaryCount + S.Functions.size());
+  parallelForEach(Entries.size(), [&](auto Claim, size_t Count) {
+    for (size_t I = Claim(); I < Count; I = Claim()) {
+      if (Control.stop())
+        return;
+      const bool Secondary = I >= PrimaryCount;
+      const auto &Image = Secondary ? S : P, &Other = Secondary ? P : S;
+      const auto &Map = Secondary ? SMatch : PMatch;
+      const uint32_t FI = Secondary ? I - PrimaryCount : I;
+      const auto &F = Image.Functions[FI];
+      if (!F.hasBody() || F.has(TraitIncomplete) || F.EntryBlock == NoIndex)
+        continue;
+      llvm::SmallVector<uint32_t, limits::diff::kMinInlineCallerAnchors> Calls;
+      bool Complete = true;
+      for (const auto &Op : Image.instructions(Image.blocks(F)[F.EntryBlock])) {
+        if (Control.stop())
+          return;
+        if (Op.Flow == InstructionFlow::Unknown ||
+            Op.Flow == InstructionFlow::IndirectCall ||
+            Op.Flow == InstructionFlow::IndirectJump ||
+            (Op.Callee != NoIndex && Op.Flow != InstructionFlow::Call)) {
+          Complete = false;
+          break;
+        }
+        if (Op.Flow != InstructionFlow::Call)
+          continue;
+        if (Op.UnresolvedCallee || Op.Callee == NoIndex || Op.Callee == FI ||
+            Map[Op.Callee] == NoIndex ||
+            Image.Functions[Op.Callee].has(TraitIncomplete) ||
+            Other.Functions[Map[Op.Callee]].has(TraitIncomplete)) {
+          Complete = false;
+          break;
+        }
+        Calls.push_back(Secondary ? Op.Callee : Map[Op.Callee]);
+      }
+      if (!Complete || Calls.size() < limits::diff::kMinInlineCallerAnchors)
+        continue;
+      auto Distinct = Calls;
+      llvm::sort(Distinct);
+      Distinct.erase(std::unique(Distinct.begin(), Distinct.end()),
+                     Distinct.end());
+      if (Distinct.size() < limits::diff::kMinInlineCallerAnchors)
+        continue;
+      StableHash H;
+      H.add(Calls.size());
+      for (uint32_t Target : Calls)
+        H.add(Target);
+      Entries[I] = {H.value(), std::move(Distinct)};
+    }
+  });
+  if (Control.stop())
+    return {};
+
+  std::vector<std::pair<uint32_t, uint32_t>> Result;
+  for (uint32_t A = 0; A < WeakP.size(); ++A) {
+    if (Control.stop())
+      return {};
+    if (WeakP[A] == NoIndex)
+      continue;
+    const uint32_t B = PMatch[A];
+    for (bool Secondary : {false, true}) {
+      const auto &Features = Secondary ? SF : PF;
+      const auto &Image = Secondary ? S : P, &Other = Secondary ? P : S;
+      const auto Map = Secondary ? SMatch : PMatch;
+      const uint32_t Helper = Secondary ? B : A, Merged = Secondary ? A : B;
+      const auto &Entry = Entries[Secondary ? Merged : PrimaryCount + Merged];
+      if (!Entry.Key || Image.Functions[Helper].has(TraitIncomplete) ||
+          Other.Functions[Merged].has(TraitIncomplete))
+        continue;
+      const auto Callees = Features.Callees.of(Helper);
+      if (llvm::any_of(Entry.Targets, [&](uint32_t Target) {
+            return std::binary_search(Callees.begin(), Callees.end(),
+                                      Secondary ? Target : SMatch[Target]);
+          }))
+        continue; // The helper already explains one of these entry anchors.
+      // Each helper's caller adjacency is visited once. Shared initialization
+      // never creates a cross-product of otherwise unrelated functions.
+      for (uint32_t Caller : Features.Callers.of(Helper))
+        if (Map[Caller] == NoIndex &&
+            Entries[Secondary ? PrimaryCount + Caller : Caller].Key ==
+                Entry.Key)
+          Result.emplace_back(Secondary ? Merged : Caller,
+                              Secondary ? Caller : Merged);
+    }
+  }
+  llvm::sort(Result);
+  Result.erase(std::unique(Result.begin(), Result.end()), Result.end());
   return Result;
 }
 
