@@ -53,6 +53,7 @@
 #include <functional>
 #include <initializer_list>
 #include <map>
+#include <optional>
 #include <set>
 #include <string>
 #include <tuple>
@@ -973,8 +974,10 @@ constexpr va_t Iat = 0x140003000;
 /// Execute the original fixture at a fresh mapping. Its observed return word
 /// must have the same instruction-relative offset as the fixed-image source.
 /// The two imported providers, when present, also check the caller's string.
+/// A scalar-result fixture leaves the return word itself unobserved.
 std::string nativeReturnPCOracle(llvm::ArrayRef<uint8_t> Code, va_t ReturnPC,
-                                 bool Windows, bool Imports) {
+                                 bool Windows, bool Imports,
+                                 std::optional<uint64_t> ScalarResult = {}) {
   std::string Source;
   llvm::raw_string_ostream Out(Source);
   Out << "\n#if defined(__linux__) && defined(__x86_64__)\n"
@@ -1015,8 +1018,12 @@ std::string nativeReturnPCOracle(llvm::ArrayRef<uint8_t> Code, va_t ReturnPC,
          "  uint64_t actual = ((uint64_t ("
       << (Windows ? "__attribute__((ms_abi)) " : "")
       << "*)(void))code)();\n"
-         "  int bad = actual != (uintptr_t)code + "
-      << ReturnPC - Text << (Imports ? " || calls != 2" : "") << ";\n";
+         "  int bad = actual != ";
+  if (ScalarResult)
+    Out << *ScalarResult;
+  else
+    Out << "(uintptr_t)code + " << ReturnPC - Text;
+  Out << (Imports ? " || calls != 2" : "") << ";\n";
   if (Imports)
     Out << "  calls = 0;\n";
   Out << "  if (munmap(mapping, size + 16)) return 1;\n  return bad;\n}\n"
@@ -3313,7 +3320,8 @@ TEST(CallExitRegisters, EntrySpillProofKeepsObservedBytesAndEscapes) {
 class OverwrittenCallClobberSpills : public testing::TestWithParam<unsigned> {};
 
 INSTANTIATE_TEST_SUITE_P(SourceStackSpills, OverwrittenCallClobberSpills,
-                         testing::Values(0u, 1u, 2u, 3u, 4u, 5u, 6u, 7u, 8u));
+                         testing::Values(0u, 1u, 2u, 3u, 4u, 5u, 6u, 7u, 8u,
+                                         9u));
 
 TEST_P(OverwrittenCallClobberSpills, AreNotValueReads) {
   const unsigned Variant = GetParam();
@@ -3335,7 +3343,7 @@ TEST_P(OverwrittenCallClobberSpills, AreNotValueReads) {
       // PUSHF explicitly overwrites the released push slot after ADD.
       // Passing another frame member to strlen keeps the frame observable.
       Code.insert(Code.end(), {0x66, 0xc7, 0x44, 0x24, 0x10, 97, 0});
-      if (Variant >= 7)
+      if (Variant == 7 || Variant == 8)
         Code.insert(Code.end(), {0x6a, 19}); // push 19
       else
         Code.insert(Code.end(), {0x41, 0x53}); // push r11
@@ -3355,7 +3363,7 @@ TEST_P(OverwrittenCallClobberSpills, AreNotValueReads) {
       if (Variant == 8)
         // A complete explicit write after CALL supplies real source bytes.
         Code.insert(Code.end(), {0x48, 0xc7, 0x44, 0x24, 0xf8, 19, 0, 0, 0});
-      if (Variant == 4 || Variant >= 7)
+      if (Variant == 4 || Variant == 7 || Variant == 8)
         // The old slot can hold an unavailable register OR a known constant.
         // Neither represents the CALL's new return address. Source preparation
         // must materialize that exact word; variant 8 overwrites it again.
@@ -3464,8 +3472,9 @@ static size_t spill_strlen_provider(const char *p) {
 #define strlen spill_strlen_provider
 )";
         std::string Oracle =
-            Variant == 3   ? "int main(void) { return reused_scratch() != 1 || "
-                             "calls != 2; }"
+            Variant == 3 || Variant == 9
+                ? "int main(void) { return reused_scratch() != 1 || "
+                  "calls != 2; }"
             : Variant == 8 ? "int main(void) { return reused_scratch() != 19 "
                              "|| calls != 2; }"
                            : "int main(void) { return reused_scratch() != 19 "
@@ -3476,6 +3485,13 @@ static size_t spill_strlen_provider(const char *p) {
                    "int main(void) { if (check_native_return_pc()) return 2; "
                    "return (uint64_t)reused_scratch() != UINT64_C(" +
                    std::to_string(ObservedReturnPC) + ") || calls != 2; }";
+        if (Variant == 9)
+          // The original CALL replaces the unavailable scratch word even
+          // though the body never loads its new return-PC value.
+          Oracle = nativeReturnPCOracle(Code, ObservedReturnPC,
+                                        Format == BinaryFormat::COFF, true, 1) +
+                   "int main(void) { return check_native_return_pc() || "
+                   "reused_scratch() != 1 || calls != 2; }";
         for (llvm::StringRef Level : {"-O0", "-O2"})
           source_call_execution_test::compileAndRun(
               Provider + Native + Oracle,
