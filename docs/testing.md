@@ -3848,6 +3848,10 @@ propagation of incomplete source sets through a chain of joins.
 `ReloadSourcesIgnoreNonReturningSuffixes` checks that later writes are ignored
 only when neither ordinary nor exceptional control flow can return to the
 reload, including partial writes and reversed block storage.
+`LocalOverwriteCutsOffReachingStoreHistory` checks that an exact local store
+avoids revisiting preceding stores across all four architectures, reversed
+block storage and loops. Partial, unknown-address and atomic writes retain
+their refusal; a disconnected block cannot supply a local source proof.
 `CompletedFrameAddressWalksRetainClosedDependencies` checks shared positive
 and negative prefixes, cyclic roots in both query orders, and retirement of
 all retained answers when the feasible-edge generation changes.

@@ -1949,6 +1949,7 @@ private:
     bool IsStore = false;
   };
   struct FrameReloadBlock {
+    bool EntryReachable = false;
     std::vector<int> Successors;
     std::set<int> StructuralPreds;
     std::vector<FrameReloadWrite> Writes;

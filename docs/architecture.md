@@ -3947,6 +3947,11 @@ source and introduces no new proof assumption.
 The query restricts propagation to structural predecessors of the reload.
 Writes after the reload remain relevant when an ordinary or exceptional
 backedge can return to it; non-returning suffixes cannot supply its value.
+An exact reload first applies the same transfer to its local prefix with an
+uninitialized incoming state. A full-width overwrite can then establish its
+source without propagating older values. The immutable CFG index separately
+requires structural reachability from the function entry. Unclosed prefixes
+and runtime-source queries retain the complete predecessor analysis.
 
 Frame-address reachability retains witnessed paths to frame roots. Only a
 completed top-level failure can mark all visited dependencies as rootless;

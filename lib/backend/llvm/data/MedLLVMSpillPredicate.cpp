@@ -1137,6 +1137,17 @@ void MedLLVMEmitter::ensureFrameReloadAnalysis() const {
     if (It == DeclaredPreds.end() || It->second != Block.StructuralPreds)
       return;
   }
+  std::vector<int> Pending{FrameReloadIndex.EntryBlockId};
+  while (!Pending.empty()) {
+    const int Id = Pending.back();
+    Pending.pop_back();
+    auto &Block = FrameReloadIndex.Blocks.at(Id);
+    if (Block.EntryReachable)
+      continue;
+    Block.EntryReachable = true;
+    Pending.insert(Pending.end(), Block.Successors.begin(),
+                   Block.Successors.end());
+  }
   FrameReloadIndex.Valid = true;
 }
 
@@ -1571,6 +1582,23 @@ bool MedLLVMEmitter::collectFrameReloadSourcesUncached(
     }
     return State;
   };
+
+  // A full-width local STORE replaces every possible incoming state. Reuse
+  // the same transfer with an uninitialized input: success then needs no
+  // predecessor values. Keep structural entry reachability, including
+  // exceptional edges, rather than admitting a disconnected local store.
+  // Runtime queries retain their complete bounded traversal and work charge.
+  const auto &LoadBlock = FrameReloadIndex.Blocks.at(Site.BlockId);
+  if (Mode == FrameReloadSourceMode::Exact && LoadBlock.EntryReachable) {
+    ReachingState Unknown;
+    Unknown.Reachable = true;
+    Unknown.Uninitialized = true;
+    const auto Local = transfer(LoadBlock, Site.Index, std::move(Unknown));
+    if (!Local.Uninitialized && !Local.Invalid && !Local.Values.empty()) {
+      Sources = Local.Values;
+      return true;
+    }
+  }
 
   // Forward may-reach dataflow over the exact slot. The immutable snapshot
   // keeps CFG and write construction out of this per-occurrence proof.

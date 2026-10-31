@@ -11927,6 +11927,137 @@ TEST(MachOLLVMDataPointerBoundary, ReloadSourcesIgnoreNonReturningSuffixes) {
           }
 }
 
+TEST(MachOLLVMDataPointerBoundary, LocalOverwriteCutsOffReachingStoreHistory) {
+  enum class Scenario {
+    Full,
+    Partial,
+    UnknownAfter,
+    UnknownBefore,
+    DisjointAfter,
+    AtomicAfter,
+    Unreachable,
+    Loop
+  };
+  for (Arch A : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64})
+    for (unsigned Count : {32u, 512u})
+      for (bool Reverse : {false, true})
+        for (Scenario Case :
+             {Scenario::Full, Scenario::Partial, Scenario::UnknownAfter,
+              Scenario::UnknownBefore, Scenario::DisjointAfter,
+              Scenario::AtomicAfter, Scenario::Unreachable, Scenario::Loop}) {
+          SCOPED_TRACE(unsigned(A));
+          SCOPED_TRACE(Count);
+          SCOPED_TRACE(Reverse);
+          SCOPED_TRACE(unsigned(Case));
+          const auto &TRI = getTargetRegInfo(A);
+          const uint16_t Width = TRI.PointerSize;
+          auto value = [&](MedVar::VarKind Kind, int Id) {
+            MedVar V;
+            V.Kind = Kind;
+            V.TheArch = A;
+            V.Id = Id;
+            V.SSAVer = 1;
+            V.Size = Width;
+            V.RegOff = kNoParamReg;
+            return V;
+          };
+          auto scalar = [&](uint64_t Bits) {
+            return MedVar::makeConst(Bits, Width,
+                                     ConstantAddressProvenance::Scalar);
+          };
+          MedVar SP = value(MedVar::Reg, 100);
+          SP.RegOff = TRI.StackPointer;
+          const MedVar Slot = value(MedVar::Temp, 101);
+          const MedVar Other = value(MedVar::Temp, 102);
+          const MedVar Dynamic = value(MedVar::Temp, 103);
+          const MedVar Reload = value(MedVar::Temp, 104);
+          MedFunc F;
+          F.Entry = 0x1000;
+          F.FrameSize = 64;
+          F.Params = {value(MedVar::Param, 0)};
+          F.Blocks.resize(Count + 1);
+          for (unsigned I = 0; I < F.Blocks.size(); ++I) {
+            auto &B = F.Blocks[I];
+            B.Id = I;
+            B.StartAddr = F.Entry + 64 * I;
+            B.EndAddr = B.StartAddr + 64;
+            if (I)
+              B.Preds = {int(I - 1)};
+            if (I < Count)
+              B.Succs = {int(I + 1)};
+          }
+          auto append = [&](unsigned B, NdOp Code, MedVar Out,
+                            std::initializer_list<MedVar> Ins) {
+            MedOp Op;
+            Op.Opcode = Code;
+            Op.Output = Out;
+            Op.Addr = F.Blocks[B].StartAddr + F.Blocks[B].Ops.size();
+            for (const auto &I : Ins)
+              Op.addInput(I);
+            F.Blocks[B].Ops.push_back(Op);
+          };
+          append(0, NdOp::COPY, SP, {SP});
+          append(0, NdOp::INT_ADD, Slot, {SP, scalar(uint64_t(-16))});
+          append(0, NdOp::INT_ADD, Other, {SP, scalar(uint64_t(-32))});
+          append(0, NdOp::INT_ADD, Dynamic, {SP, F.Params[0]});
+          for (unsigned I = 0; I < Count; ++I) {
+            append(I, NdOp::STORE, {}, {Slot, scalar(I)});
+            append(I, NdOp::BRANCH, {}, {scalar(F.Blocks[I + 1].StartAddr)});
+          }
+          if (Case == Scenario::UnknownBefore)
+            append(Count, NdOp::STORE, {}, {Dynamic, scalar(0x44)});
+          MedVar Stored = scalar(0x33);
+          if (Case == Scenario::Partial)
+            Stored.Size = Width / 2;
+          append(Count, NdOp::STORE, {}, {Slot, Stored});
+          if (Case == Scenario::UnknownAfter)
+            append(Count, NdOp::STORE, {}, {Dynamic, scalar(0x44)});
+          if (Case == Scenario::DisjointAfter)
+            append(Count, NdOp::STORE, {}, {Other, scalar(0x55)});
+          if (Case == Scenario::AtomicAfter)
+            append(Count, NdOp::ATOMIC_XCHG, value(MedVar::Temp, 105),
+                   {Slot, scalar(0x66)});
+          const size_t LoadIndex = F.Blocks[Count].Ops.size();
+          append(Count, NdOp::LOAD, Reload, {Slot});
+          if (Case == Scenario::Loop) {
+            F.Blocks[Count].Succs = {1};
+            F.Blocks[1].Preds.push_back(Count);
+            append(Count, NdOp::BRANCH, {}, {scalar(F.Blocks[1].StartAddr)});
+          } else {
+            append(Count, NdOp::RETURN, {}, {Reload});
+          }
+          if (Case == Scenario::Unreachable) {
+            F.Blocks[Count - 1].Succs.clear();
+            F.Blocks[Count - 1].Ops.pop_back();
+            append(Count - 1, NdOp::RETURN, {}, {});
+            F.Blocks[Count].Preds.clear();
+          }
+          if (Reverse)
+            std::reverse(F.Blocks.begin(), F.Blocks.end());
+          const auto Site = std::find_if(
+              F.Blocks.begin(), F.Blocks.end(),
+              [&](const MedBlock &B) { return B.Id == int(Count); });
+          ASSERT_NE(Site, F.Blocks.end());
+          MedLLVMEmitter E;
+          std::vector<MedVar> Sources;
+          const bool Expected =
+              Case == Scenario::Full || Case == Scenario::UnknownBefore ||
+              Case == Scenario::DisjointAfter || Case == Scenario::Loop;
+          const bool Proven =
+              MedLLVMProvenanceTestPeer::collectFrameReloadSources(
+                  E, F, A, Site->Ops[LoadIndex], Sources);
+          EXPECT_EQ(Proven, Expected);
+          EXPECT_EQ(Sources, Expected ? std::vector<MedVar>{Stored}
+                                      : std::vector<MedVar>{});
+          if (Case == Scenario::Full || Case == Scenario::DisjointAfter ||
+              Case == Scenario::Loop) {
+            const auto [Nodes, Hits] =
+                MedLLVMProvenanceTestPeer::frameSlotWork(E);
+            EXPECT_LE(Nodes + Hits, 48u);
+          }
+        }
+}
+
 TEST(LLVMFrameSlotProof, CompletedFrameAddressWalksRetainClosedDependencies) {
   for (Arch A : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64})
     for (unsigned Count : {32u, 128u, 1024u})
