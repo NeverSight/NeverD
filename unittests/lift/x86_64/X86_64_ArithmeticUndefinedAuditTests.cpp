@@ -136,12 +136,19 @@ TEST(X86ArithmeticUndefinedAudit, PackedLanesPreserveFlagsAndCompleteVectors) {
 }
 
 std::vector<uint8_t> immediateEncoding(unsigned Destination, unsigned Source,
-                                       int64_t Immediate, bool Byte) {
-  std::vector<uint8_t> Bytes{
-      uint8_t(0x48 | (Destination >= 8 ? 4 : 0) | (Source >= 8 ? 1 : 0)),
-      uint8_t(Byte ? 0x6b : 0x69),
-      uint8_t(0xc0 | ((Destination & 7) << 3) | (Source & 7))};
-  for (unsigned I = 0; I != (Byte ? 1u : 4u); ++I)
+                                       int64_t Immediate, bool Byte,
+                                       unsigned Width = 8) {
+  std::vector<uint8_t> Bytes;
+  if (Width == 2)
+    Bytes.push_back(0x66);
+  const unsigned Rex =
+      (Width == 8 ? 8 : 0) | (Destination >= 8 ? 4 : 0) | (Source >= 8 ? 1 : 0);
+  if (Rex)
+    Bytes.push_back(0x40 | Rex);
+  Bytes.insert(Bytes.end(),
+               {uint8_t(Byte ? 0x6b : 0x69),
+                uint8_t(0xc0 | ((Destination & 7) << 3) | (Source & 7))});
+  for (unsigned I = 0; I != (Byte ? 1u : Width == 2 ? 2u : 4u); ++I)
     Bytes.push_back(uint64_t(Immediate) >> (I * 8));
   return Bytes;
 }
@@ -151,74 +158,86 @@ TEST(X86ArithmeticUndefinedAudit, ImmediateMultiplyBindsFourIndependentFlags) {
   ASSERT_TRUE(Dec.init(Arch::X64));
   const std::array<unsigned, 4> Arbitrary = {x86reg::SF, x86reg::ZF, x86reg::AF,
                                              x86reg::PF};
-  for (bool Byte : {false, true})
-    for (int64_t Immediate : std::array<int64_t, 8>{
-             -2147483648LL, -2147483647, -129, -128, -1, 0, 127, 2147483647}) {
-      if (Byte && (Immediate < -128 || Immediate > 127))
-        continue;
-      for (unsigned Destination : {0u, 9u})
-        for (unsigned Source : {0u, 9u}) {
-          const auto Bytes =
-              immediateEncoding(Destination, Source, Immediate, Byte);
-          DecodedInsn Insn{};
-          ASSERT_EQ(
-              Dec.decodeOneForLift(Bytes.data(), Bytes.size(), 0x1000, Insn),
-              int(Bytes.size()));
-          std::vector<LowOp> Ops;
-          LowInstructionUndefinedEffects Effects;
-          Dec.liftToLow(Insn, Ops, {}, {}, &Effects);
-          ASSERT_EQ(Effects.Coverage, LowUndefinedCoverage::Complete)
-              << Effects.Diagnostic;
-          ASSERT_EQ(Effects.Effects.size(), Arbitrary.size());
-          EXPECT_EQ(Effects.OperationDigest, lowUndefinedOperationDigest(Ops));
-          for (unsigned I = 0; I != Arbitrary.size(); ++I) {
-            const auto &Effect = Effects.Effects[I];
-            EXPECT_EQ(Effect.Output, NdVar::reg(Arbitrary[I], 1));
-            EXPECT_EQ(Effect.BitOffset, 0U);
-            EXPECT_EQ(Effect.BitCount, 1U);
-            EXPECT_FALSE(Effect.When);
-            EXPECT_GT(Effect.AfterOp, 0U);
-            EXPECT_LE(Effect.AfterOp, Ops.size());
+  for (unsigned Width : {2u, 4u, 8u})
+    for (bool Byte : {false, true})
+      for (int64_t Immediate :
+           std::array<int64_t, 10>{-2147483648LL, -2147483647, -32768, -129,
+                                   -128, -1, 0, 127, 32767, 2147483647}) {
+        if ((Byte && (Immediate < -128 || Immediate > 127)) ||
+            (Width == 2 && (Immediate < -32768 || Immediate > 32767)))
+          continue;
+        for (unsigned Destination : {0u, 9u})
+          for (unsigned Source : {0u, 9u}) {
+            SCOPED_TRACE(::testing::Message()
+                         << Width << '/' << Byte << '/' << Immediate << '/'
+                         << Destination << '/' << Source);
+            const auto Bytes =
+                immediateEncoding(Destination, Source, Immediate, Byte, Width);
+            DecodedInsn Insn{};
+            ASSERT_EQ(
+                Dec.decodeOneForLift(Bytes.data(), Bytes.size(), 0x1000, Insn),
+                int(Bytes.size()));
+            std::vector<LowOp> Ops;
+            LowInstructionUndefinedEffects Effects;
+            Dec.liftToLow(Insn, Ops, {}, {}, &Effects);
+            ASSERT_EQ(Effects.Coverage, LowUndefinedCoverage::Complete)
+                << Effects.Diagnostic;
+            ASSERT_EQ(Effects.Effects.size(), Arbitrary.size());
+            EXPECT_EQ(Effects.OperationDigest,
+                      lowUndefinedOperationDigest(Ops));
+            for (unsigned I = 0; I != Arbitrary.size(); ++I) {
+              const auto &Effect = Effects.Effects[I];
+              EXPECT_EQ(Effect.Output, NdVar::reg(Arbitrary[I], 1));
+              EXPECT_EQ(Effect.BitOffset, 0U);
+              EXPECT_EQ(Effect.BitCount, 1U);
+              EXPECT_FALSE(Effect.When);
+              EXPECT_GT(Effect.AfterOp, 0U);
+              EXPECT_LE(Effect.AfterOp, Ops.size());
+            }
+            for (uint64_t Value :
+                 {UINT64_C(0), UINT64_C(1), UINT64_MAX, UINT64_C(0x8000),
+                  UINT64_C(0x80000000), UINT64_C(0x7fffffffffffffff),
+                  UINT64_C(0x8000000000000000), UINT64_C(0x100000005)}) {
+              SymContext Ctx;
+              SymState State(Ctx);
+              SymExec Exec(Ctx, State);
+              std::array<uint64_t, 16> Registers;
+              for (unsigned I = 0; I != Registers.size(); ++I) {
+                Registers[I] = UINT64_C(0x4321876500000000) + I;
+                if (I == Source)
+                  Registers[I] = Value;
+                State.write(SymSpace::Register, I * 8,
+                            Ctx.mkConst(64, Registers[I]));
+              }
+              for (unsigned I = 0; I != Flags.size(); ++I)
+                State.write(SymSpace::Register, Flags[I], Ctx.mkConst(8, 1));
+              const auto Product =
+                  llvm::APInt(Width * 8, Value).sext(128) *
+                  llvm::APInt(64, uint64_t(Immediate)).sext(128);
+              Registers[Destination] =
+                  (Width == 2 ? Registers[Destination] & ~UINT64_C(0xffff)
+                              : 0) |
+                  Product.trunc(Width * 8).getZExtValue();
+              ASSERT_EQ(Exec.run(Ops), Ops.size());
+              ASSERT_EQ(Exec.unmodelledCount(), 0U);
+              for (unsigned I = 0; I != Registers.size(); ++I) {
+                auto Actual =
+                    Ctx.asConst(State.read(SymSpace::Register, I * 8, 8));
+                ASSERT_TRUE(Actual);
+                EXPECT_EQ(Actual->getZExtValue(), Registers[I]);
+              }
+              const bool Overflow =
+                  Product.trunc(Width * 8).sext(128) != Product;
+              for (unsigned Flag : {x86reg::CF, x86reg::OF, x86reg::DF}) {
+                auto Actual =
+                    Ctx.asConst(State.read(SymSpace::Register, Flag, 1));
+                ASSERT_TRUE(Actual);
+                EXPECT_EQ(Actual->getZExtValue(),
+                          Flag == x86reg::DF ? 1 : Overflow);
+              }
+            }
           }
-          for (uint64_t Value :
-               {UINT64_C(0), UINT64_C(1), UINT64_MAX,
-                UINT64_C(0x7fffffffffffffff), UINT64_C(0x8000000000000000),
-                UINT64_C(0x100000005)}) {
-            SymContext Ctx;
-            SymState State(Ctx);
-            SymExec Exec(Ctx, State);
-            std::array<uint64_t, 16> Registers;
-            for (unsigned I = 0; I != Registers.size(); ++I) {
-              Registers[I] = UINT64_C(0x4321876500000000) + I;
-              if (I == Source)
-                Registers[I] = Value;
-              State.write(SymSpace::Register, I * 8,
-                          Ctx.mkConst(64, Registers[I]));
-            }
-            for (unsigned I = 0; I != Flags.size(); ++I)
-              State.write(SymSpace::Register, Flags[I], Ctx.mkConst(8, 1));
-            const auto Product = llvm::APInt(64, Value).sext(128) *
-                                 llvm::APInt(64, uint64_t(Immediate)).sext(128);
-            Registers[Destination] = Product.trunc(64).getZExtValue();
-            ASSERT_EQ(Exec.run(Ops), Ops.size());
-            ASSERT_EQ(Exec.unmodelledCount(), 0U);
-            for (unsigned I = 0; I != Registers.size(); ++I) {
-              auto Actual =
-                  Ctx.asConst(State.read(SymSpace::Register, I * 8, 8));
-              ASSERT_TRUE(Actual);
-              EXPECT_EQ(Actual->getZExtValue(), Registers[I]);
-            }
-            const bool Overflow = Product.trunc(64).sext(128) != Product;
-            for (unsigned Flag : {x86reg::CF, x86reg::OF, x86reg::DF}) {
-              auto Actual =
-                  Ctx.asConst(State.read(SymSpace::Register, Flag, 1));
-              ASSERT_TRUE(Actual);
-              EXPECT_EQ(Actual->getZExtValue(),
-                        Flag == x86reg::DF ? 1 : Overflow);
-            }
-          }
-        }
-    }
+      }
 }
 
 void expectIncomplete(Decoder &Dec, DecodedInsn &Insn) {
@@ -246,8 +265,12 @@ TEST(X86ArithmeticUndefinedAudit,
       {0x66, 0x0f, 0xfc, 0x00},
       {0x66, 0x66, 0x0f, 0xfc, 0xc1},
       {0x48, 0x69, 0x00, 1, 0, 0, 0},
-      {0x69, 0xc1, 1, 0, 0, 0},
-      {0x66, 0x69, 0xc1, 1, 0},
+      {0x69, 0x01, 1, 0, 0, 0},
+      {0x66, 0x69, 0x01, 1, 0},
+      {0xf6, 0xe9},
+      {0x66, 0x48, 0xf7, 0xe1},
+      {0x66, 0x66, 0xf7, 0xe1},
+      {0x42, 0x0f, 0xaf, 0xc1},
       {0x67, 0x48, 0x6b, 0xc1, 1},
   };
   for (const auto &Bytes : OtherForms) {
@@ -260,13 +283,18 @@ TEST(X86ArithmeticUndefinedAudit,
   const Mutation Mutations[] = {
       [](cs_insn &I) { I.bytes[I.detail->x86.encoding.modrm_offset] ^= 8; },
       [](cs_insn &I) { I.detail->x86.operands[0].reg = X86_REG_XMM3; },
-      [](cs_insn &I) { I.detail->x86.operands[1].size = 4; },
+      [](cs_insn &I) {
+        auto &Size = I.detail->x86.operands[1].size;
+        Size = Size == 4 ? 8 : 4;
+      },
       [](cs_insn &I) { I.detail->x86.rex ^= 4; },
       [](cs_insn &I) { I.detail->x86.encoding.imm_offset += 1; },
       [](cs_insn &I) { I.bytes[I.size++] = 0x90; },
   };
   for (const auto &Bytes : {std::vector<uint8_t>{0x66, 0x0f, 0xfc, 0xc1},
-                            immediateEncoding(0, 1, -17, false)})
+                            immediateEncoding(0, 1, -17, false),
+                            immediateEncoding(9, 1, -17, false, 4),
+                            immediateEncoding(0, 9, -17, false, 2)})
     for (Mutation Change : Mutations) {
       DecodedInsn Insn{};
       ASSERT_EQ(Dec.decodeOneForLift(Bytes.data(), Bytes.size(), 0x1000, Insn),
@@ -274,14 +302,64 @@ TEST(X86ArithmeticUndefinedAudit,
       Change(*Insn.Raw);
       expectIncomplete(Dec, Insn);
     }
-  for (bool Byte : {false, true}) {
-    const auto Bytes = immediateEncoding(9, 0, -17, Byte);
-    DecodedInsn Insn{};
-    ASSERT_EQ(Dec.decodeOneForLift(Bytes.data(), Bytes.size(), 0x1000, Insn),
+  for (unsigned Width : {2u, 4u, 8u})
+    for (bool Byte : {false, true}) {
+      const auto Bytes = immediateEncoding(9, 0, -17, Byte, Width);
+      DecodedInsn Insn{};
+      ASSERT_EQ(Dec.decodeOneForLift(Bytes.data(), Bytes.size(), 0x1000, Insn),
+                int(Bytes.size()));
+      Insn.Raw->detail->x86.operands[2].imm += 1;
+      expectIncomplete(Dec, Insn);
+    }
+}
+
+TEST(X86ArithmeticUndefinedAudit, RegisterMultiplyBindsEncodingWidths) {
+  Decoder Dec;
+  ASSERT_TRUE(Dec.init(Arch::X64));
+  using Mutation = void (*)(cs_insn &);
+  const Mutation Mutations[] = {
+      [](cs_insn &I) { I.bytes[I.detail->x86.encoding.modrm_offset] ^= 8; },
+      [](cs_insn &I) { I.detail->x86.operands[0].reg = X86_REG_R15; },
+      [](cs_insn &I) {
+        auto &Size = I.detail->x86.operands[0].size;
+        Size = Size == 4 ? 8 : 4;
+      },
+      [](cs_insn &I) { I.detail->x86.rex ^= 8; },
+      [](cs_insn &I) { I.detail->x86.prefix[2] ^= 0x66; },
+      [](cs_insn &I) { I.detail->x86.encoding.imm_size = 1; },
+      [](cs_insn &I) { I.detail->x86.encoding.modrm_offset += 1; },
+      [](cs_insn &I) { I.bytes[I.size++] = 0x90; },
+  };
+  for (unsigned Width : {2u, 4u, 8u})
+    for (const std::vector<uint8_t> Body :
+         {std::vector<uint8_t>{0xf7, 0xe1}, {0xf7, 0xe9}, {0x0f, 0xaf, 0xc1}})
+      for (bool Extended : {false, true}) {
+        std::vector<uint8_t> Bytes;
+        if (Width == 2)
+          Bytes.push_back(0x66);
+        const unsigned Rex = (Width == 8 ? 8 : 0) | (Extended ? 1 : 0);
+        if (Rex)
+          Bytes.push_back(0x40 | Rex);
+        Bytes.insert(Bytes.end(), Body.begin(), Body.end());
+        DecodedInsn Insn{};
+        ASSERT_EQ(
+            Dec.decodeOneForLift(Bytes.data(), Bytes.size(), 0x1000, Insn),
+            int(Bytes.size()));
+        std::vector<LowOp> Ops;
+        LowInstructionUndefinedEffects Effects;
+        Dec.liftToLow(Insn, Ops, {}, {}, &Effects);
+        ASSERT_EQ(Effects.Coverage, LowUndefinedCoverage::Complete);
+        ASSERT_EQ(Effects.Effects.size(), 4u);
+        EXPECT_EQ(Effects.OperationDigest, lowUndefinedOperationDigest(Ops));
+        for (Mutation Change : Mutations) {
+          DecodedInsn Changed{};
+          ASSERT_EQ(
+              Dec.decodeOneForLift(Bytes.data(), Bytes.size(), 0x1000, Changed),
               int(Bytes.size()));
-    Insn.Raw->detail->x86.operands[2].imm += 1;
-    expectIncomplete(Dec, Insn);
-  }
+          Change(*Changed.Raw);
+          expectIncomplete(Dec, Changed);
+        }
+      }
 }
 
 } // namespace

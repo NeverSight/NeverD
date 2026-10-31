@@ -163,6 +163,14 @@ inline bool form(const cs_insn *Insn, Arch Target) {
   uint8_t RequiredPrefix = 0, LoadOpcode = 0, StoreOpcode = 0;
   unsigned MemoryBytes = 16;
   switch (Insn->id) {
+  case X86_INS_MOVLHPS:
+  case X86_INS_MOVHLPS:
+    // Legacy half moves copy one 64-bit lane, preserving the other lane,
+    // higher vector bits and flags. These opcodes require register operands.
+    if (X.operands[1].type != X86_OP_REG || X.eflags)
+      return false;
+    LoadOpcode = StoreOpcode = Insn->id == X86_INS_MOVLHPS ? 0x16 : 0x12;
+    break;
   case X86_INS_PCMPEQD:
   case X86_INS_PACKSSDW:
   case X86_INS_PACKSSWB:
