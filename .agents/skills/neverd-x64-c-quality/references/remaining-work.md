@@ -413,6 +413,10 @@ callee input observations, or a normal exit;
 ABI-preserved/result registers, PHIs and implicit clobber readers keep their
 values. This bounded shared proof removes avoidable HighC/LLVMC traps but does
 not recover escaping VM state or authorize a dynamic code-address fallback.
+Single-reader temporary COPY chains now share that same budget and proof.
+Their terminal register still needs the existing implicit-observation checks;
+a temporary copy cannot hide an earlier physical register definition. Both C
+routes execute the complete later frame write after discarding this transport.
 The separate call-input proof does not mistake an inferred argument list or a
 nested may-write for absence of an observation. It fixes a HighC scratch-save
 trap that LLVMC's later cleanup already removed; both routes execute the public

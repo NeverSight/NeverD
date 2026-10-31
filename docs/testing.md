@@ -16835,6 +16835,16 @@ saved value, a narrow or atomic write of the word, a mismatched handler or
 seeded level, a saved non-stack value or a missing source refuses; a runtime
 filter's CALL at or below its stack root is separated from the parent frame,
 unlike one above the root or one without a checked root.
+`SourceStackSpills.TemporaryRestoreChainsKeepEveryRegisterObserver` checks
+multi-step temporary COPYs and terminal scratch restores, while preserving
+earlier return/preserved/SP register definitions, value returns, PHIs and
+call-clobber observations. `TemporaryRestoreChainsRespectTheTargetWidth`
+checks x86/x64/ARM32/AArch64 frame widths across COFF/ELF/Mach-O.
+`TemporaryRestoreChainsExecuteBothSourceRoutes` in
+`NeverDWin64CallContractTests` compiles and executes the same scratch-frame
+projection through HighC and LLVMC, temporary and register endpoints, and all
+three formats at O0/O2 with UBSan. The independent final-word oracle must
+observe the complete later write without evaluating the old unavailable spill.
 `RegistrationCallStackPop.ProvenCalleeCleanupOutlivesAnIncompleteProof` in
 `NeverDWindowsRegistrationRealignedTests` checks that a direct callee's proven
 cleanup adjusts only the block's own calls, not caller-cleanup, unknown or
