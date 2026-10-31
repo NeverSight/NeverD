@@ -3317,6 +3317,106 @@ TEST(CallExitRegisters, EntrySpillProofKeepsObservedBytesAndEscapes) {
     }
 }
 
+TEST(SourceStackSpills, TemporaryRestoreChainsExecuteBothSourceRoutes) {
+  for (BinaryFormat Format :
+       {BinaryFormat::COFF, BinaryFormat::ELF, BinaryFormat::MachO})
+    for (bool RestoreRegister : {false, true}) {
+      SCOPED_TRACE(static_cast<unsigned>(Format));
+      SCOPED_TRACE(RestoreRegister);
+      const auto Register = [](uint64_t Offset, int Version) {
+        MedVar Value;
+        Value.Kind = MedVar::Reg;
+        Value.TheArch = Arch::X64;
+        Value.Id = Offset / 8 + 1;
+        Value.RegOff = Offset;
+        Value.SSAVer = Version;
+        Value.Size = 8;
+        return Value;
+      };
+      const auto Temp = [](int Id) {
+        MedVar Value;
+        Value.Kind = MedVar::Temp;
+        Value.TheArch = Arch::X64;
+        Value.Id = Id;
+        Value.SSAVer = 1;
+        Value.Size = 8;
+        return Value;
+      };
+      const auto Op = [](NdOp Opcode, MedVar Output,
+                         std::initializer_list<MedVar> Inputs) {
+        MedOp Result;
+        Result.Opcode = Opcode;
+        Result.Output = Output;
+        for (const auto &Input : Inputs)
+          Result.addInput(Input);
+        return Result;
+      };
+      const auto SP = [&](int Version) {
+        return Register(x86reg::RSP, Version);
+      };
+      MedFunc Function;
+      Function.Entry = 0x1000;
+      Function.Name = "restored_scratch";
+      Function.CC = CallingConv::Win64;
+      Function.FrameSize = 16;
+      Function.ReturnType = NdType::makeInt(8, false);
+      MedBlock Block;
+      Block.Id = 0;
+      Block.StartAddr = Function.Entry;
+      Block.Ops = {
+          Op(NdOp::COPY, SP(0), {SP(0)}),
+          Op(NdOp::INT_SUB, SP(1), {SP(0), MedVar::makeConst(16, 8)}),
+          Op(NdOp::STORE, {}, {SP(1), MedVar::makeUnspecified(8, Arch::X64)}),
+          Op(NdOp::LOAD, Temp(100), {SP(1)}),
+          Op(NdOp::COPY, Temp(101), {Temp(100)}),
+          Op(NdOp::COPY, RestoreRegister ? Register(x86reg::R10, 1) : Temp(102),
+             {Temp(101)}),
+          Op(NdOp::STORE, {}, {SP(1), MedVar::makeConst(19, 8)}),
+          Op(NdOp::LOAD, Temp(103), {SP(1)}),
+          Op(NdOp::INT_ADD, SP(2), {SP(1), MedVar::makeConst(16, 8)}),
+          Op(NdOp::RETURN, {}, {Temp(103)})};
+      Function.Blocks.push_back(std::move(Block));
+      markSourceStackAccesses(Function, Arch::X64, Format);
+      ASSERT_TRUE(Function.Blocks.front().Ops[2].PrologueSave);
+      for (bool LLVM : {false, true}) {
+        SCOPED_TRACE(LLVM);
+        BinaryImage Image;
+        Image.Arch = Arch::X64;
+        Image.Format = Format;
+        Image.Bits = Bitness::Bits64;
+        CEmitterOptions Options;
+        Options.TheArch = Image.Arch;
+        Options.Format = Format;
+        Options.Image = &Image;
+        std::string Source;
+        llvm::raw_string_ostream Output(Source);
+        if (LLVM) {
+          llvm::LLVMContext Context;
+          MedLLVMEmitter Emitter;
+          Emitter.setPreserveUnknownSourceValues(true);
+          auto Module = Emitter.emit({Function}, Context, "scratch_copies",
+                                     Arch::X64, {}, &Image, Format);
+          ASSERT_TRUE(Module);
+          ASSERT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
+          Pipeline::optimizeOrPromoteModule(*Module);
+          ASSERT_TRUE(LLVMCEmitter().emit(*Module, Output, Options));
+        } else {
+          MedToHighConverter Converter;
+          Converter.setBinaryImage(&Image);
+          const auto High = Converter.convert(Function, Arch::X64);
+          ASSERT_TRUE(HighCEmitter().emit({High}, Output, Options));
+        }
+        EXPECT_EQ(Source.find("__builtin_trap"), std::string::npos) << Source;
+        const std::string Oracle =
+            "int main(void) { return restored_scratch() != 19; }";
+        for (llvm::StringRef Level : {"-O0", "-O2"})
+          source_call_execution_test::compileAndRun(
+              Source + Oracle,
+              {Level, "-fsanitize=undefined", "-fsanitize-trap=all"});
+      }
+    }
+}
+
 class OverwrittenCallClobberSpills : public testing::TestWithParam<unsigned> {};
 
 INSTANTIATE_TEST_SUITE_P(SourceStackSpills, OverwrittenCallClobberSpills,

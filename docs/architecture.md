@@ -357,6 +357,11 @@ Low-to-Med binds this evidence to the original direct-call occurrence and target
 omitted-callee memoization includes it. Source scratch-restore liveness can cross
 only a still-matching call. Private-byte overwrite and escape checks stay in
 `MedPrologueSaves`; physical CALL return-slot writes are not C frame stores.
+Scratch reloads may pass through a single-reader chain of temporary COPYs,
+charging every step to the same spill-proof budget. A physical register in
+the middle retains its implicit observations; a terminal register still needs
+the existing return, preserved-register and later-call checks. PHIs, clobber
+records and ordinary value readers do not become dead temporary transport.
 
 Source register-prefix observation uses the same spill owner after call
 recovery. A complete ordinary Win64 body may prove that only the low bytes of

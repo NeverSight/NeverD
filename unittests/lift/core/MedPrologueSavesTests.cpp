@@ -2187,6 +2187,87 @@ TEST(SourceStackSpills, OnlyUnreadScratchRestoresCanBeIgnored) {
   }
 }
 
+TEST(SourceStackSpills, TemporaryRestoreChainsKeepEveryRegisterObserver) {
+  for (BinaryFormat Format :
+       {BinaryFormat::COFF, BinaryFormat::ELF, BinaryFormat::MachO})
+    for (unsigned Mode = 0; Mode != 8; ++Mode) {
+      SCOPED_TRACE(static_cast<unsigned>(Format));
+      SCOPED_TRACE(Mode);
+      MedFunc Func = pushedRbx(CallingConv::Win64);
+      auto &Ops = Func.Blocks[0].Ops;
+      Ops[4].Inputs[1] = MedVar::makeUnspecified(8, Arch::X64);
+      Ops[7] = op(NdOp::COPY, temp(20), {temp(10)});
+      Ops[8] = op(NdOp::STORE, none(), {sp(1), MedVar::makeConst(19, 8)});
+      Ops[9] = op(NdOp::RETURN, none(), {MedVar::makeConst(19, 8)});
+      if (Mode <= 1) {
+        Ops.insert(Ops.begin() + 8,
+                   op(NdOp::COPY, Mode ? reg(30, x86reg::R10, 1) : temp(21),
+                      {temp(20)}));
+      } else if (Mode <= 4) {
+        // A dead temporary copy cannot hide the LOAD's physical observer.
+        auto Register = Mode == 2   ? rbx(2)
+                        : Mode == 3 ? reg(30, x86reg::RAX, 1)
+                                    : sp(2);
+        Ops[6].Output = Register;
+        Ops[7].Inputs[0] = Register;
+      } else if (Mode == 5) {
+        Ops.back().Inputs[0] = temp(20);
+      } else if (Mode == 6) {
+        PhiNode Phi;
+        Phi.Output = temp(21);
+        Phi.Args = {{0, temp(20)}};
+        Func.Blocks[0].Phis.push_back(std::move(Phi));
+      } else {
+        MedCallClobber Clobber;
+        Clobber.Value = temp(21);
+        Clobber.PreservedInput = temp(20);
+        Clobber.PreservedPrefixSize = 4;
+        Func.CallClobbers.push_back(Clobber);
+      }
+      markSourceStackAccesses(Func, Arch::X64, Format);
+      EXPECT_EQ(save(Func).PrologueSave, Mode <= 1);
+    }
+}
+
+TEST(SourceStackSpills, TemporaryRestoreChainsRespectTheTargetWidth) {
+  for (Arch Architecture : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64})
+    for (BinaryFormat Format :
+         {BinaryFormat::COFF, BinaryFormat::ELF, BinaryFormat::MachO}) {
+      SCOPED_TRACE(static_cast<unsigned>(Architecture));
+      SCOPED_TRACE(static_cast<unsigned>(Format));
+      const auto &TRI = getTargetRegInfo(Architecture);
+      const auto Width = TRI.PointerSize;
+      auto Func = pushedRbx();
+      Func.FrameSize = Width;
+      auto &Ops = Func.Blocks[0].Ops;
+      Ops[4].Inputs[1] = MedVar::makeUnspecified(Width, Architecture);
+      Ops[7] = op(NdOp::COPY, temp(20), {temp(10)});
+      Ops[8] = op(NdOp::STORE, none(), {sp(1), MedVar::makeConst(19, Width)});
+      Ops[9] = op(NdOp::RETURN, none(), {MedVar::makeConst(19, Width)});
+      Ops.insert(Ops.begin() + 8, op(NdOp::COPY, temp(21), {temp(20)}));
+      Ops[3].Inputs[1].ConstVal = Width;
+      const auto Adapt = [&](MedVar &Value) {
+        Value.TheArch = Architecture;
+        Value.Size = Width;
+        if (Value.Kind == MedVar::Reg) {
+          if (Value.Id == kSP)
+            Value.RegOff = TRI.StackPointer;
+          else if (Value.Id == kRBX)
+            Value.RegOff = TRI.CalleeSaveRegs.front();
+          else if (Value.Id == kRCX)
+            Value.RegOff = TRI.IntParamRegs.front();
+        }
+      };
+      for (auto &Operation : Ops) {
+        Adapt(Operation.Output);
+        for (unsigned I = 0; I < Operation.NumInputs; ++I)
+          Adapt(Operation.Inputs[I]);
+      }
+      markSourceStackAccesses(Func, Architecture, Format);
+      EXPECT_TRUE(save(Func).PrologueSave);
+    }
+}
+
 TEST(SourceStackSpills, UnreadCalleeInputsRequireTheOriginalCallProof) {
   for (unsigned Mode = 0; Mode != 12; ++Mode) {
     SCOPED_TRACE(Mode);
