@@ -415,6 +415,61 @@ class HistoryAllowance:
 
 HISTORY_ALLOWED: tuple[HistoryAllowance, ...] = (
     HistoryAllowance(
+        path="docs/evidence/x86-amx-stack-memory-2026-10-30.json",
+        rule="private-path",
+        commits=frozenset({
+            "6a41c17f2406e5d4d36f98fdfd931b4aa715eb95",
+            "9b76b90e84b9d3c394614a11f009b77a5837bb78",
+            "3815d52c26e03c128e3df0e40906aa7ea1c13e6c",
+        }),
+        line="",
+        reason=(
+            "Reviewed removal of machine-local prefixes from AMX/MPX evidence. "
+            "Pinned checkout identities, source locations, outcomes, limits, "
+            "timings and artifact hashes are unchanged. Only these exact "
+            "historical line digests in the publication and cleanup commits "
+            "are covered; current and future private paths remain findings."
+        ),
+        line_sha256=frozenset({
+            "0ea62b71d20a48aa7c01db59b431ee865d6cc9a54b9ebaaf894a17a484de36f9",
+            "23170ca6b62d4390b959e0431b6dfa302a3ac3aa08ebffde5a224c9d93d89421",
+            "23e7f13343122463601d6e357f4878177b9190d22dcfeeb3d3281e813321e7e5",
+            "28734656d5f15df9c1dd53cec465b6903fd5fb8a745a0a47d30b671f580e3d32",
+            "336d0c5cff693604166c5093067c19a4bd169482d8146c89169e9c2aa9d7d197",
+            "3c4dc75cdc091c92e8ea3780f43ad0f8c8beb6d70a19043d326ac0ab415f7e69",
+            "6c98d0e5da4f1ac1a9917e145f31219d0ad800858dc141e62943fd961f27d23e",
+            "bfa7df2f4449cd692cc039d09d826700d8b62baa4cc416de8ec4e3dcc66cbff7",
+            "fe6a9ca47324e8c9c4699f2451f7126084698f47c60500a9d4a3af91a3ef1778",
+        }),
+    ),
+    HistoryAllowance(
+        path="docs/evidence/x86-mpx-native-frames-2026-10-30.json",
+        rule="private-path",
+        commits=frozenset({
+            "8d07f9a4f7e5aa974863654607789f79fd39b4b6",
+            "77bf33f5afb80e0e5aba86e661ed8a8337e0fcce",
+            "3815d52c26e03c128e3df0e40906aa7ea1c13e6c",
+        }),
+        line="",
+        reason=(
+            "Reviewed removal of machine-local prefixes from AMX/MPX evidence. "
+            "Pinned checkout identities, source locations, outcomes, limits, "
+            "timings and artifact hashes are unchanged. Only these exact "
+            "historical line digests in the publication and cleanup commits "
+            "are covered; current and future private paths remain findings."
+        ),
+        line_sha256=frozenset({
+            "23e7f13343122463601d6e357f4878177b9190d22dcfeeb3d3281e813321e7e5",
+            "3c4dc75cdc091c92e8ea3780f43ad0f8c8beb6d70a19043d326ac0ab415f7e69",
+            "4e1abb563a5577ee35a07d95c420e83208a77b1a10105d694dac527d345c3baf",
+            "842b77aaae2a41ae4ad2fe2aabe4d40ddb091eab05db7ff62d6ad0282818ffea",
+            "8b452a917e9acc76377f1f238d80b3bfc6c7fe9cbf45f6d93304901864937def",
+            "bfa7df2f4449cd692cc039d09d826700d8b62baa4cc416de8ec4e3dcc66cbff7",
+            "e06f85a7cc73a6fd8faedcfa1a9a04001bdf3c9190d414d0346d27de23e98518",
+            "fe6a9ca47324e8c9c4699f2451f7126084698f47c60500a9d4a3af91a3ef1778",
+        }),
+    ),
+    HistoryAllowance(
         path="docs/evidence/arm64e-typed-call-abi-2026-10-28.json",
         rule="private-path",
         commits=frozenset({
