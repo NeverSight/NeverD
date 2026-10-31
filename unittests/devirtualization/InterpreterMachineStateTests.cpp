@@ -1578,6 +1578,7 @@ int main(void) {
 #include "InterpreterMachineRegionChoiceSourceTests.inc"
 #include "InterpreterMachineRegionSegmentedSourceTests.inc"
 #include "InterpreterMachineRegionKernelSourceTests.inc"
+#include "InterpreterMachineRegionEntryObjectTests.inc"
 #include "InterpreterMachineRegionTrapTests.inc"
 // clang-format on
 

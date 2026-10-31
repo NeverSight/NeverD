@@ -1,5 +1,7 @@
 **Languages**: [English](testing.md) | [简体中文](zh-CN/testing.md) | [繁體中文](zh-TW/testing.md) | [日本語](ja/testing.md) | [한국어](ko/testing.md) | [Français](fr/testing.md) | [Deutsch](de/testing.md) | [Español](es/testing.md) | [Italiano](it/testing.md) | [Русский](ru/testing.md) | [العربية](ar/testing.md)
 
+`InterpreterMachineRegionSourceTest.EntryObjects*` executes all four region state interfaces through HighC and LLVMC at O0/O2 with ASan/UBSan. Complete state, guest writes and query tapes cover optional alignment, object aliases, equal roots with disjoint relative ranges, one-byte overlaps and rejected inputs before any effects. An independent 128-bit arithmetic oracle covers signed displacement extremes, address wraparound and UINT64_MAX endpoints. Exact/short source budgets and changed authenticated declarations remain checked; ordinary source consumers still refuse the raw domain.
+
 `HighSwiftEmitter.StackScalarBindingsDoNotInventPhysicalStackWrites` runs x64/ARM64 Mach-O integer, floating and mixed stack carriers through the source pipeline. `IncomingHomeSource.StackInitializationRequiresAbsenceOfAllObservers` keeps entry storage for memory reads, calls, escaping stack addresses and opaque or memory intrinsics. Pure value paths use declared parameters without inventing physical SP writes; register FP state effects remain. The macOS mobile matrix independently compiles and executes recovered Swift; successful emission alone is not execution evidence.
 
 `NeverDLLVMCValueTests` compiles and executes a recast variadic call against a separate Windows x64 ABI callee at O0/O2, with preserved LLVM types enabled and disabled. Native x64 hosts verify the floating value through the callee’s variadic argument reader; other architectures explicitly skip that execution.
@@ -62,11 +64,15 @@ fallback regression must finish without increasing its query allowance.
 `InterpreterMachineRegionSourceTest.RepeatedTransfersRetainRuntimeDirectionAndOverlap`
 executes bounded MOVS/STOS in both directions through HighC and LLVMC at O0/O2,
 comparing full state and every byte against an independent ordered copy oracle.
-The user profile covers four element widths and overlapping buffers; the
-kernel choice profile covers its audited REP MOVSQ encoding and retains
-rejection of other forms. Unknown counts remain refused; zero-count and exact
+Both user and kernel choice profiles cover byte, word, dword and qword
+transfers, overlapping buffers, and zero counts with inaccessible pointers.
+`X86NativeStateAudit.RepTransfers*` checks both word-prefix orders, exact
+encoding/operand/effect receipts and independent whole-state memory oracles.
+Address overrides, segment prefixes, redundant prefixes, REPNE and unaudited
+families remain refused. Unknown counts still require proof; exact
 operation/scratch budgets are covered by `StringTransfer.*` and
-`X86NativeStateAudit.Rep*`.
+`X86NativeStateAudit.Rep*`. Empty undefined-effect coverage grants no fault,
+memory-access, opaque-state or ordinary-ABI assumptions.
 
 `SourceStackSpills.StackParametersTrackEntryBytesAcrossOverwrites` and
 `StackParameterOverwritesMeetAcrossEveryPath` distinguish incoming stack bytes

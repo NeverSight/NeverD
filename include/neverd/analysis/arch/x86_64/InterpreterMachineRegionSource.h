@@ -159,15 +159,22 @@ struct InterpreterMachineRegionSource {
 /// Validate the complete raw result against independently expected options
 /// before consuming its environment marker or physical exit spans. Admit only
 /// Call/Jump/Return regions, the user nonfaulting flag profile and the existing
-/// scalar/query/XMM source operations. Traps, supplemental code/imports, entry
-/// objects and extra architectural banks are refused even when unused.
+/// scalar/query/XMM source operations. Supplemental code/imports and extra
+/// architectural banks are refused even when unused. Traps require the
+/// explicit pre-instruction stop option.
+/// EntryFrameExcludedObjects adds an entry guard for nonwrapping frame/object
+/// ranges and each object's separation from the frame. Objects may overlap
+/// each other or share the frame root when their complete ranges are disjoint.
+/// This grants no accessibility or initialization and does not check other
+/// caller-owned memory premises, including absolute frame exclusions.
 ///
 /// Return statuses retain machine-source meanings: 0 is a completed region,
-/// 1 an invalid flag-profile execution, 2 an unchanged alignment rejection,
+/// 1 an invalid flag-profile execution, 2 an unchanged entry-domain rejection,
 /// 3 query exhaustion and 4 query mismatch. For 3/4, PC names the original
 /// unexecuted query and ExitKind is None; preceding effects remain committed.
 /// Status 1 supplies no valid continuation. Caller-owned memory premises are
-/// not inferred here. Entry alignment is checked before effects. This is not
+/// not inferred here. Alignment and entry objects are checked before any
+/// guest access, state write or tape reservation. This is not
 /// ordinary ABI recovery,
 /// call composition, whole-function coverage or native-equivalence proof.
 /// Architectural undefined outputs retain LowIR's selected implementation
