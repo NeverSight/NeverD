@@ -93,8 +93,8 @@
       ],
       "tools": {
         "/mnt/data/neverd-native-system-returns-20261029/build-neverc/bin/neverc": "aaa614068f7c17e11cad54ad64da840c1787df9c81b25328593ba75853353597",
-        "/home/ad/.local/bin/clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
-        "/home/ad/.local/bin/ld.lld": "fc1073aaaacfed055c0612dc5190cd19419c711cb8341c37d97fec2916891447",
+        "toolchain/bin/clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+        "toolchain/bin/ld.lld": "fc1073aaaacfed055c0612dc5190cd19419c711cb8341c37d97fec2916891447",
         "/usr/bin/objcopy": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770",
         "/usr/local/bin/qemu-system-x86_64": "7dcf38a7fa3478a269fe6890854f9a4ce4f14d7600f023d03fa1a28cf23e04c0"
       },
@@ -155,9 +155,9 @@
       ],
       "tools": {
         "/mnt/data/neverd-native-system-returns-20261029/build-neverc/bin/neverc": "aaa614068f7c17e11cad54ad64da840c1787df9c81b25328593ba75853353597",
-        "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc": "a97c26786bb5f79a331dfa210432b1d98f70452da00ba964ada8986ec61ef192",
-        "/home/ad/.local/bin/clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
-        "/home/ad/.local/bin/ld.lld": "fc1073aaaacfed055c0612dc5190cd19419c711cb8341c37d97fec2916891447",
+        "worktrees/neverd-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc": "a97c26786bb5f79a331dfa210432b1d98f70452da00ba964ada8986ec61ef192",
+        "toolchain/bin/clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+        "toolchain/bin/ld.lld": "fc1073aaaacfed055c0612dc5190cd19419c711cb8341c37d97fec2916891447",
         "/usr/bin/objcopy": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770",
         "/usr/local/bin/qemu-system-x86_64": "7dcf38a7fa3478a269fe6890854f9a4ce4f14d7600f023d03fa1a28cf23e04c0"
       },
@@ -220,9 +220,9 @@
       ],
       "tools": {
         "/mnt/data/neverd-native-system-returns-20261029/build-neverc/bin/neverc": "aaa614068f7c17e11cad54ad64da840c1787df9c81b25328593ba75853353597",
-        "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc": "a97c26786bb5f79a331dfa210432b1d98f70452da00ba964ada8986ec61ef192",
-        "/home/ad/.local/bin/clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
-        "/home/ad/.local/bin/ld.lld": "fc1073aaaacfed055c0612dc5190cd19419c711cb8341c37d97fec2916891447",
+        "worktrees/neverd-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc": "a97c26786bb5f79a331dfa210432b1d98f70452da00ba964ada8986ec61ef192",
+        "toolchain/bin/clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+        "toolchain/bin/ld.lld": "fc1073aaaacfed055c0612dc5190cd19419c711cb8341c37d97fec2916891447",
         "/usr/bin/objcopy": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770",
         "/usr/local/bin/qemu-system-x86_64": "7dcf38a7fa3478a269fe6890854f9a4ce4f14d7600f023d03fa1a28cf23e04c0"
       },
@@ -285,8 +285,8 @@
       ],
       "tools": {
         "/mnt/data/neverd-native-system-returns-20261029/build-neverc/bin/neverc": "aaa614068f7c17e11cad54ad64da840c1787df9c81b25328593ba75853353597",
-        "/home/ad/.local/bin/clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
-        "/home/ad/.local/bin/ld.lld": "fc1073aaaacfed055c0612dc5190cd19419c711cb8341c37d97fec2916891447",
+        "toolchain/bin/clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+        "toolchain/bin/ld.lld": "fc1073aaaacfed055c0612dc5190cd19419c711cb8341c37d97fec2916891447",
         "/usr/bin/objcopy": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770",
         "/usr/local/bin/qemu-system-x86_64": "7dcf38a7fa3478a269fe6890854f9a4ce4f14d7600f023d03fa1a28cf23e04c0"
       },
@@ -347,9 +347,9 @@
       ],
       "tools": {
         "/mnt/data/neverd-native-system-returns-20261029/build-neverc/bin/neverc": "aaa614068f7c17e11cad54ad64da840c1787df9c81b25328593ba75853353597",
-        "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc": "a97c26786bb5f79a331dfa210432b1d98f70452da00ba964ada8986ec61ef192",
-        "/home/ad/.local/bin/clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
-        "/home/ad/.local/bin/ld.lld": "fc1073aaaacfed055c0612dc5190cd19419c711cb8341c37d97fec2916891447",
+        "worktrees/neverd-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc": "a97c26786bb5f79a331dfa210432b1d98f70452da00ba964ada8986ec61ef192",
+        "toolchain/bin/clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+        "toolchain/bin/ld.lld": "fc1073aaaacfed055c0612dc5190cd19419c711cb8341c37d97fec2916891447",
         "/usr/bin/objcopy": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770",
         "/usr/local/bin/qemu-system-x86_64": "7dcf38a7fa3478a269fe6890854f9a4ce4f14d7600f023d03fa1a28cf23e04c0"
       },
@@ -412,9 +412,9 @@
       ],
       "tools": {
         "/mnt/data/neverd-native-system-returns-20261029/build-neverc/bin/neverc": "aaa614068f7c17e11cad54ad64da840c1787df9c81b25328593ba75853353597",
-        "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc": "a97c26786bb5f79a331dfa210432b1d98f70452da00ba964ada8986ec61ef192",
-        "/home/ad/.local/bin/clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
-        "/home/ad/.local/bin/ld.lld": "fc1073aaaacfed055c0612dc5190cd19419c711cb8341c37d97fec2916891447",
+        "worktrees/neverd-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc": "a97c26786bb5f79a331dfa210432b1d98f70452da00ba964ada8986ec61ef192",
+        "toolchain/bin/clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+        "toolchain/bin/ld.lld": "fc1073aaaacfed055c0612dc5190cd19419c711cb8341c37d97fec2916891447",
         "/usr/bin/objcopy": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770",
         "/usr/local/bin/qemu-system-x86_64": "7dcf38a7fa3478a269fe6890854f9a4ce4f14d7600f023d03fa1a28cf23e04c0"
       },
@@ -575,21 +575,21 @@
   "sdk_builds": {
     "pinned": {
       "executable": {
-        "path": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86/bin/neverd",
+        "path": "worktrees/neverd-worktrees/x86-instruction-completion/build-x86/bin/neverd",
         "sha256": "7893d10fff38cf34815da65b93a607038871399f0e9bbb688c04a54ea80dcc58"
       },
       "receipt": {
-        "path": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86/neverd-build-receipt.json",
+        "path": "worktrees/neverd-worktrees/x86-instruction-completion/build-x86/neverd-build-receipt.json",
         "sha256": "6f0bdd111ca96534a52581bb4c6e3563a5ccf08b705c50667359e8549d000c76"
       }
     },
     "native": {
       "executable": {
-        "path": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86-native/bin/neverd",
+        "path": "worktrees/neverd-worktrees/x86-instruction-completion/build-x86-native/bin/neverd",
         "sha256": "20c39ec5abbdf6646ca978d0f43c901654ecf2ccefa1e25e16ffcfcdd54aa5f0"
       },
       "receipt": {
-        "path": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86-native/neverd-build-receipt.json",
+        "path": "worktrees/neverd-worktrees/x86-instruction-completion/build-x86-native/neverd-build-receipt.json",
         "sha256": "6c8af2bc44623c70aa404dbb6dd61f5f015a40be07a81dcfb1ebc5909bde4e99"
       }
     }

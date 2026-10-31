@@ -210,19 +210,19 @@
   "tools": [
     {
       "name": "NeverC",
-      "path": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc",
+      "path": "worktrees/neverd-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc",
       "sha256": "69af5c3c83e924442420fa88d6b9e1e0304627dbb5e69a2b1a498ccd725d1ba0",
       "bytes": 123498656
     },
     {
       "name": "LLVM llc",
-      "path": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc",
+      "path": "worktrees/neverd-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc",
       "sha256": "af9b0a27e3ea384ea30efda6d05d072b390050a85a4b335241155e9329b500f6",
       "bytes": 105912368
     },
     {
       "name": "Clang",
-      "path": "/home/ad/.local/bin/clang",
+      "path": "toolchain/bin/clang",
       "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
       "bytes": 136112
     }
@@ -316,11 +316,11 @@
       "skipped": [
         {
           "name": "NativeContractsRejectLostEffectsAndControls",
-          "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:5269\nlinked SDK predates explicit AMX controls\n"
+          "reason": "worktrees/neverd-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:5269\nlinked SDK predates explicit AMX controls\n"
         },
         {
           "name": "NativeTileRowsAndFaultContinuationMatchOriginalBytes",
-          "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:5588\nHost does not provide AMX-TILE; native restart unqualified\n"
+          "reason": "worktrees/neverd-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:5588\nHost does not provide AMX-TILE; native restart unqualified\n"
         }
       ],
       "report": {
@@ -571,7 +571,7 @@
     "commands": [
       {
         "command": [
-          "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86/bin/NeverDX86AMXAddressTests",
+          "worktrees/neverd-worktrees/x86-instruction-completion/build-x86/bin/NeverDX86AMXAddressTests",
           "--gtest_output=xml:/mnt/data/neverd-amx-stack-20261030/NeverDX86AMXAddressTests-integrated.xml"
         ],
         "returncode": 0,
@@ -580,7 +580,7 @@
       },
       {
         "command": [
-          "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86/bin/NeverDX86AMXStateTests",
+          "worktrees/neverd-worktrees/x86-instruction-completion/build-x86/bin/NeverDX86AMXStateTests",
           "--gtest_output=xml:/mnt/data/neverd-amx-stack-20261030/NeverDX86AMXStateTests-integrated.xml"
         ],
         "returncode": 0,
@@ -589,7 +589,7 @@
       },
       {
         "command": [
-          "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86/bin/NeverDX86AMXLLVMGuardTests",
+          "worktrees/neverd-worktrees/x86-instruction-completion/build-x86/bin/NeverDX86AMXLLVMGuardTests",
           "--gtest_output=xml:/mnt/data/neverd-amx-stack-20261030/NeverDX86AMXLLVMGuardTests-integrated.xml"
         ],
         "returncode": 0,
@@ -598,7 +598,7 @@
       },
       {
         "command": [
-          "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86/bin/NeverDX86VirtualizationSourceTests",
+          "worktrees/neverd-worktrees/x86-instruction-completion/build-x86/bin/NeverDX86VirtualizationSourceTests",
           "--gtest_output=xml:/mnt/data/neverd-amx-stack-20261030/NeverDX86VirtualizationSourceTests-integrated.xml",
           "--gtest_filter=X86AmxSource.*:AmxEncodings/*:X86SgxSource.NeverCCompilesNativeCompletionAndCombinedAmxFeatures"
         ],

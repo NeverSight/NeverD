@@ -565,13 +565,13 @@
   "binaries": [
     {
       "name": "llc",
-      "path": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc",
+      "path": "worktrees/neverd-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc",
       "sha256": "49286a44ff379bfb8eaecda3a65e3f82cc3b9fff1a85f2d3e1d28d44423b2fd9",
       "bytes": 105912048
     },
     {
       "name": "NeverC",
-      "path": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc",
+      "path": "worktrees/neverd-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc",
       "sha256": "f92d1be1f4297d43b7c319fec543a6193f65875033cb62ece2f27b7125251330",
       "bytes": 123499256
     }
@@ -592,11 +592,11 @@
     "--with",
     "unicorn",
     "python",
-    "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-neverc/tests/verify-mpx-encoding.py",
+    "worktrees/neverd-worktrees/x86-native-intrinsics-neverc/tests/verify-mpx-encoding.py",
     "--llc",
-    "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc",
+    "worktrees/neverd-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc",
     "--objdump",
-    "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llvm-objdump",
+    "worktrees/neverd-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llvm-objdump",
     "--frame",
     "--keep",
     "/mnt/data/neverd-mpx-frame-20261030/llvm-frame"
@@ -663,7 +663,7 @@
     "commands": [
       {
         "command": [
-          "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86/bin/NeverDX86AMXAddressTests",
+          "worktrees/neverd-worktrees/x86-instruction-completion/build-x86/bin/NeverDX86AMXAddressTests",
           "--gtest_output=xml:/mnt/data/neverd-mpx-frame-20261030/NeverDX86AMXAddressTests-integrated.xml"
         ],
         "returncode": 0,
@@ -675,7 +675,7 @@
       },
       {
         "command": [
-          "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86/bin/NeverDX86AMXLLVMGuardTests",
+          "worktrees/neverd-worktrees/x86-instruction-completion/build-x86/bin/NeverDX86AMXLLVMGuardTests",
           "--gtest_output=xml:/mnt/data/neverd-mpx-frame-20261030/NeverDX86AMXLLVMGuardTests-integrated.xml"
         ],
         "returncode": 0,
@@ -687,7 +687,7 @@
       },
       {
         "command": [
-          "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86/bin/NeverDX64DispatchFrameSourceTests",
+          "worktrees/neverd-worktrees/x86-instruction-completion/build-x86/bin/NeverDX64DispatchFrameSourceTests",
           "--gtest_output=xml:/mnt/data/neverd-mpx-frame-20261030/NeverDX64DispatchFrameSourceTests-integrated.xml"
         ],
         "returncode": 0,
