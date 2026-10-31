@@ -438,6 +438,13 @@ checking every byte-sized count against an independent multiplication oracle
 and refusing unconstrained machine-width products. Copy edges in stack PHI
 cycles preserve exact or bounded outside origins on all four architectures;
 unseeded cycles and changing backedges remain unknown.
+The guarded scalar-index cases cover SELECT and complementary masks across
+all four architectures and three native formats, commuted operands, unsigned
+wrap, byte truncation, signed and inverted predicates, and independent query
+state. Independent enumeration checks accepted and adjacent rejected inputs;
+stale SSA, malformed masks, unrelated conditions and unknown byte slices must
+retain their wider bounds. The LLVM mask consumer is also covered by
+`NeverDLowInstructionBoundaryTests` and `NeverDMedLLVMDirectDataTests`.
 `MedSEHEstablisherFrame.SourceHandlerCallRetainsEveryProtectedStackPosition`
 checks protected allocations and shared ordinary/exceptional handler entries.
 A handler CALL may precede an RBP-based SP restoration only when all possible

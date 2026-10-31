@@ -3801,8 +3801,9 @@ TEST(LowInstructionBoundary, WindowsStringAndTableOpsUseIntrinH) {
 }
 
 TEST(LowInstructionBoundary, FlatPrefetchAndMxcsrUseIntrinsics) {
-  // Without a segment override these instructions have compiler intrinsics,
-  // which keep the same effects and read better than inline assembly.
+  // Flat read prefetch and MXCSR transfers use compiler intrinsics. A write
+  // prefetch keeps its exact instruction on GNU targets, where a generic
+  // builtin can lower to PREFETCHT0 without a target feature flag.
   LowFunc Low = buildFunction(Arch::X64, InstructionMode::Default,
                               {0x0f, 0x18, 0x00,       // prefetchnta [rax]
                                0x0f, 0x0d, 0x48, 0x40, // prefetchw [rax+40h]
@@ -3822,12 +3823,12 @@ TEST(LowInstructionBoundary, FlatPrefetchAndMxcsrUseIntrinsics) {
   EXPECT_NE(HighC.find("_mm_prefetch((const char *)"), std::string::npos)
       << HighC;
   EXPECT_NE(HighC.find("_MM_HINT_NTA"), std::string::npos) << HighC;
-  EXPECT_NE(HighC.find("_m_prefetchw((void *)"), std::string::npos) << HighC;
-  // Older Clang declares _m_prefetchw only through <x86intrin.h>.
+  EXPECT_NE(HighC.find("prefetchw (%[address])"), std::string::npos) << HighC;
+  EXPECT_EQ(HighC.find("_m_prefetchw("), std::string::npos) << HighC;
   EXPECT_NE(HighC.find("#include <x86intrin.h>"), std::string::npos) << HighC;
   EXPECT_NE(HighC.find("_mm_setcsr(neverd_csr)"), std::string::npos) << HighC;
   EXPECT_NE(HighC.find("_mm_getcsr()"), std::string::npos) << HighC;
-  EXPECT_EQ(HighC.find("__asm__"), std::string::npos) << HighC;
+  EXPECT_NE(HighC.find("__asm__ volatile"), std::string::npos) << HighC;
   EXPECT_TRUE(validHighC(HighC));
 }
 
