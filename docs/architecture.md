@@ -15253,7 +15253,11 @@ or ordinary call ABI is inferred.
 projection and paired C/manifest generation. SDK and CLI adapters call this
 pipeline owner. It reuses `buildX64ContinuationSource` and the shared source ABI
 for each step; ordinary function arity, source frame promotion and callee-save
-assumptions do not enter this route. Selected CFG entries reuse deferred LowIR
+assumptions do not enter this route. Constant-slot indirect jumps reuse
+`expandX64MachineExit` to authenticate the instruction and load the live target;
+ordinary LowIR's slot address is never used as the completed PC. Computed-memory
+and register targets retain their existing value semantics.
+Selected CFG entries reuse deferred LowIR
 recovery and retain original instruction boundaries, including overlaps. Deferred
 LowIR audits preserve instruction selection for rejected functions separately
 from admitted LowFuncs. Unsupported sites remain in that selection and decode
