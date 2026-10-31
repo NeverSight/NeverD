@@ -61,6 +61,8 @@ inline constexpr uint32_t kMinShapeInstructions = 3;
 /// Reference context needs an address operation and another instruction.
 /// Independently paired users supply the reference context.
 inline constexpr uint32_t kMinDataReferenceInstructions = 2;
+/// A lone popular caller or callee cannot reopen a provisional body match.
+inline constexpr unsigned kMinNeighborhoodReviewAnchors = 2;
 /// One address alone is too common to expose a local-layout permutation.
 /// Require distinct address-taken slots and an observed memory use of one.
 inline constexpr unsigned kMinStackRoleAddressedSlots = 2;

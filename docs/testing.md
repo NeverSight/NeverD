@@ -4158,6 +4158,16 @@ anchors, call order, incomplete bodies, unresolved/indirect calls, protected
 identity, both directions, reordering, cancellation and saved-report binding.
 The caller boundary is a review alternative, not an
 automatic identity or a semantic-equivalence claim.
+`SplitAndLocalCallRolesRetainIndependentReviewEvidence` checks split callers,
+local roles surviving edits elsewhere, partial callers, changed scalars,
+unresolved data, unknown/indirect flow, reordering, both directions and cancellation.
+`OrderedCallReviewRequiresDistinctIndependentTargets` and
+`CallerReviewCountsIndependentObservedWitnesses` check distinct mapped anchors,
+call order, missing witnesses, partial caller observations, conflicting prior
+roles and complete source-caller coverage. `ContradictoryCFGMatchesRequireKnownInstructionEvidence`
+separates sufficient composite graph similarity from insufficient known
+instruction coverage, preserves positive call context and analyst authority,
+and checks reverse direction, configured thresholds and saved binding.
 Dataflow checks cover SSA renaming, PHI edge changes, control/data slices,
 parameter/clobber identity, unobserved effects and bounded neighborhoods.
 Call-argument projection checks backward/forward dependencies missing from raw

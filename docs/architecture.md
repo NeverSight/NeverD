@@ -1920,6 +1920,29 @@ the structural candidate alignment recipe in parallel batches. Cancellation
 publishes no partially reviewed deferrals. The pass visits each caller adjacency
 once instead of comparing all functions that share initialization calls.
 
+Matcher version 25 separates unanimous whole-caller roles from split roles and
+local block observations. Only unanimous roles retain the earlier review rule.
+Split/local roles need a preserved complete prior CFG or a competing body above
+the existing threshold with greater known instruction coverage. Local review
+may inspect complete observed blocks of partial callers; unknown instructions,
+data and transfers still reject a block. This never supplies automatic identity
+or completes an incomplete function.
+
+The same frozen review indexes independent observed caller/callee neighborhoods
+once in parallel. Ordered calls require distinct mapped complete callee anchors
+and no overlap with the prior body's mapped callees. Caller alternatives need
+two additional witnesses and must cover every observed mapped source caller;
+two shared callee anchors or greater known instruction coverage must also
+support them. Candidate retrieval intersects the rarest caller's adjacency and
+uses the existing informative-bucket bound. Sorted publication preserves
+direction/layout/thread determinism, and cancellation publishes no deferrals.
+CFG-only weak identities with changed calls and zero mapped-context agreement
+also require the configured minimum instruction-only coverage. Otherwise their
+original structural evidence remains a candidate. Names, exact/normalized
+bodies, context-supported pairs and explicit analyst decisions remain protected.
+None of these reviews changes normalized native evidence or the saved per-pair
+alignment recipe.
+
 Each `FunctionMatch` and `FunctionDelta` retains an `InstructionAlignmentProfile`.
 `CurrentInstructionAlignmentProfile` owns the default for new pairs, currently
 `ordered-block-spans-v1`. Matcher-22 `single-block-spans-v1` measurements retain

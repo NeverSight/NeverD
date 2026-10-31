@@ -1701,7 +1701,7 @@ TEST(BinaryDiff, ConflictingCallRolesRetainWeakMatchesForReview) {
     }
 }
 
-TEST(BinaryDiff, CallRoleConflictReviewRequiresConsistentCompleteWitnesses) {
+TEST(BinaryDiff, CallRoleReviewPreservesKnownAndUnknownConstraints) {
   enum class Case {
     Incomplete,
     DisagreeingCallers,
@@ -1773,9 +1773,324 @@ TEST(BinaryDiff, CallRoleConflictReviewRequiresConsistentCompleteWitnesses) {
       const auto R = compare(A, B, {});
       const auto AI = indexOf(A, Reverse ? Helper.Name : Before.Name);
       const auto BI = indexOf(B, Reverse ? Before.Name : Helper.Name);
-      EXPECT_EQ(R.secondaryOf(AI), BI);
+      if (Kind == Case::Incomplete)
+        EXPECT_EQ(R.secondaryOf(AI), NoIndex);
+      else
+        EXPECT_EQ(R.secondaryOf(AI), BI);
     }
   }
+}
+
+TEST(BinaryDiff, SplitAndLocalCallRolesRetainIndependentReviewEvidence) {
+  enum class Case {
+    Split,
+    OtherBlockEdit,
+    ScalarEdit,
+    Incomplete,
+    UnknownData,
+    UnknownInstruction,
+    IndirectCall
+  };
+  for (auto Kind :
+       {Case::Split, Case::OtherBlockEdit, Case::ScalarEdit, Case::Incomplete,
+        Case::UnknownData, Case::UnknownInstruction, Case::IndirectCall})
+    for (bool Reorder : {false, true}) {
+      SCOPED_TRACE(unsigned(Kind));
+      Fn Old = diamond("old", 11);
+      Old.Source = NameSource::Generated;
+      Fn Helper = Old;
+      Helper.Name = "helper";
+      Helper.Blocks[0][0].Operands = "r0, 123";
+      Fn Public = leaf("public", 197, 30);
+      Public.Source = NameSource::Generated;
+      Fn Caller = diamond("caller", 53);
+      Caller.Blocks[1].insert(Caller.Blocks[1].begin() + 1,
+                              {"call", "", InstructionFlow::Call, Old.Name});
+      Fn Other = leaf("other", 71);
+      Other.Blocks[0].insert(Other.Blocks[0].begin() + 1,
+                             {"call", "", InstructionFlow::Call, Old.Name});
+      auto P = build({Caller, Other, Old}, 0x1000);
+      Caller.Blocks[1][1].Callee = Public.Name;
+      Other.Blocks[0][1].Callee = Helper.Name;
+      if (Kind == Case::OtherBlockEdit)
+        Caller.Blocks[0][0].Operands = "r4, 12345";
+      if (Kind == Case::ScalarEdit)
+        Caller.Blocks[1][0].Operands = "r4, 12345";
+      if (Kind == Case::Incomplete)
+        Caller.Traits |= TraitIncomplete;
+      if (Kind == Case::UnknownInstruction || Kind == Case::IndirectCall) {
+        Caller.Traits |= TraitIncomplete;
+        Caller.Blocks[1][0].Flow = Kind == Case::UnknownInstruction
+                                       ? InstructionFlow::Unknown
+                                       : InstructionFlow::IndirectCall;
+      }
+      auto S = build({Caller, Other, Helper, Public}, 0x9000,
+                     Reorder ? std::vector<size_t>{3, 1, 2, 0}
+                             : std::vector<size_t>{});
+      if (Kind == Case::UnknownData) {
+        const auto &F = named(S, Caller.Name);
+        S.Instructions[S.blocks(F)[1].FirstInstruction].HasUnresolvedData =
+            true;
+      }
+      for (bool Reverse : {false, true}) {
+        const auto &A = Reverse ? S : P, &B = Reverse ? P : S;
+        const auto AF = computeFeatures(A, {}), BF = computeFeatures(B, {});
+        std::vector<uint32_t> AM(A.Functions.size(), NoIndex),
+            BM(B.Functions.size(), NoIndex), AW(A.Functions.size(), NoIndex),
+            BW(B.Functions.size(), NoIndex);
+        std::vector<uint8_t> AT(A.Functions.size(), 0),
+            BT(B.Functions.size(), 0);
+        for (const auto *Name : {"caller", "other"}) {
+          const uint32_t X = indexOf(A, Name), Y = indexOf(B, Name);
+          AM[X] = Y;
+          BM[Y] = X;
+          AT[X] = BT[Y] = 1;
+        }
+        const uint32_t X = indexOf(A, Reverse ? "helper" : "old");
+        const uint32_t Y = indexOf(B, Reverse ? "old" : "helper");
+        AM[X] = Y;
+        BM[Y] = X;
+        AW[X] = BW[Y] = 0;
+        const std::pair<uint32_t, uint32_t> Expected{
+            indexOf(A, Reverse ? "public" : "old"),
+            indexOf(B, Reverse ? "old" : "public")};
+        std::vector<std::pair<uint32_t, uint32_t>> Split;
+        EXPECT_TRUE(
+            conflictingCallCandidates(A, AF, AM, AW, B, BF, BM, BW, {}, &Split)
+                .empty());
+        EXPECT_EQ(llvm::is_contained(Split, Expected), Kind == Case::Split);
+        const auto Blocks =
+            blockCallCandidates(A, AM, AT, B, BM, BT, {}, AW, BW);
+        EXPECT_EQ(llvm::is_contained(Blocks, Expected),
+                  Kind == Case::Split || Kind == Case::OtherBlockEdit ||
+                      Kind == Case::Incomplete);
+        ComparisonControl Cancel;
+        std::atomic<bool> Stop{true};
+        Cancel.Cancel = &Stop;
+        EXPECT_TRUE(
+            blockCallCandidates(A, AM, AT, B, BM, BT, Cancel, AW, BW).empty());
+      }
+    }
+}
+
+TEST(BinaryDiff, OrderedCallReviewRequiresDistinctIndependentTargets) {
+  enum class Case { Normal, Repeated, MissingAnchor, UnknownCall, SamePrior };
+  for (auto Kind : {Case::Normal, Case::Repeated, Case::MissingAnchor,
+                    Case::UnknownCall, Case::SamePrior})
+    for (bool Reverse : {false, true}) {
+      SCOPED_TRACE(unsigned(Kind));
+      auto Old = leaf("old", 41);
+      Old.Source = NameSource::Generated;
+      Old.Blocks[0].insert(Old.Blocks[0].begin() + 1,
+                           {"call", "", InstructionFlow::Call, "first"});
+      Old.Blocks[0].insert(Old.Blocks[0].begin() + 3,
+                           {"call", "", InstructionFlow::Call,
+                            Kind == Case::Repeated ? "first" : "second"});
+      auto Other = Old;
+      Other.Name = "other";
+      if (Kind != Case::SamePrior)
+        for (auto &I : Other.Blocks[0])
+          if (I.Flow == InstructionFlow::Call)
+            I.Callee = "third";
+      auto Public = Old;
+      Public.Name = "public";
+      auto P = build({Old, import("first"), import("second"), import("third")},
+                     0x1000);
+      auto S = build(
+          {Other, Public, import("first"), import("second"), import("third")},
+          0x9000, {4, 1, 3, 0, 2});
+      if (Kind == Case::UnknownCall) {
+        auto &I =
+            S.Instructions[S.blocks(named(S, "public"))[0].FirstInstruction +
+                           1];
+        I.Callee = NoIndex;
+        I.UnresolvedCallee = true;
+      }
+      const auto &A = Reverse ? S : P, &B = Reverse ? P : S;
+      const auto AF = computeFeatures(A, {}), BF = computeFeatures(B, {});
+      std::vector<uint32_t> AM(A.Functions.size(), NoIndex),
+          BM(B.Functions.size(), NoIndex), AW(A.Functions.size(), NoIndex),
+          BW(B.Functions.size(), NoIndex);
+      std::vector<uint8_t> AT(A.Functions.size(), 0), BT(B.Functions.size(), 0);
+      for (const auto *Name : {"first", "second", "third"}) {
+        const uint32_t X = indexOf(A, Name), Y = indexOf(B, Name);
+        AM[X] = Y;
+        BM[Y] = X;
+        AT[X] = BT[Y] =
+            Kind != Case::MissingAnchor || Name != std::string("second");
+      }
+      const uint32_t X = indexOf(A, Reverse ? "other" : "old");
+      const uint32_t Y = indexOf(B, Reverse ? "old" : "other");
+      AM[X] = Y;
+      BM[Y] = X;
+      AW[X] = BW[Y] = 0;
+      const auto Candidates = neighborhoodReviewCandidates(A, AF, AM, AW, AT, B,
+                                                           BF, BM, BW, BT, {});
+      ASSERT_EQ(Candidates.size(), Kind == Case::Normal ? 1u : 0u);
+      if (!Candidates.empty()) {
+        EXPECT_EQ(Candidates[0].Primary,
+                  indexOf(A, Reverse ? "public" : "old"));
+        EXPECT_EQ(Candidates[0].Secondary,
+                  indexOf(B, Reverse ? "old" : "public"));
+        EXPECT_TRUE(Candidates[0].OrderedCallees);
+      }
+      ComparisonControl Cancel;
+      std::atomic<bool> Stop{true};
+      Cancel.Cancel = &Stop;
+      EXPECT_TRUE(neighborhoodReviewCandidates(A, AF, AM, AW, AT, B, BF, BM, BW,
+                                               BT, Cancel)
+                      .empty());
+    }
+}
+
+TEST(BinaryDiff, CallerReviewCountsIndependentObservedWitnesses) {
+  enum class Case {
+    Normal,
+    SingleWitness,
+    MissingOccurrence,
+    PartialCallers,
+    SingleCallee
+  };
+  for (auto Kind : {Case::Normal, Case::SingleWitness, Case::MissingOccurrence,
+                    Case::PartialCallers, Case::SingleCallee})
+    for (bool Reverse : {false, true}) {
+      SCOPED_TRACE(unsigned(Kind));
+      auto Old = leaf("old", 11);
+      Old.Source = NameSource::Generated;
+      Old.Blocks[0].insert(Old.Blocks[0].begin() + 1,
+                           {"call", "", InstructionFlow::Call, "first"});
+      Old.Blocks[0].insert(Old.Blocks[0].begin() + 3,
+                           {"call", "", InstructionFlow::Call, "second"});
+      auto Other = Old;
+      Other.Name = "other";
+      Other.Blocks[0][1].Callee = Other.Blocks[0][3].Callee = "third";
+      auto Public = Old;
+      Public.Name = "public";
+      Public.Blocks[0][1].Callee = "second";
+      Public.Blocks[0][3].Callee = "first";
+      const auto Caller = [&](const char *Name, unsigned Seed,
+                              const char *Target) {
+        auto F = leaf(Name, Seed);
+        if (Kind == Case::PartialCallers)
+          F.Traits |= TraitIncomplete;
+        F.Blocks[0].insert(F.Blocks[0].begin() + 1,
+                           {"call", "", InstructionFlow::Call, Target});
+        return F;
+      };
+      const auto P =
+          build({Old, Caller("caller_a", 53, "old"),
+                 Caller("caller_b", 71, "old"), Caller("caller_c", 101, "old"),
+                 import("first"), import("second"), import("third")},
+                0x1000);
+      auto Last = Caller("caller_c", 101, "other");
+      if (Kind != Case::MissingOccurrence)
+        Last.Blocks[0].insert(Last.Blocks[0].begin() + 2,
+                              {"call", "", InstructionFlow::Call, "public"});
+      const auto S =
+          build({Other, Public, Caller("caller_a", 53, "public"),
+                 Caller("caller_b", 71,
+                        Kind == Case::SingleWitness ? "other" : "public"),
+                 Last, import("first"), import("second"), import("third")},
+                0x9000, {7, 3, 1, 5, 0, 4, 2, 6});
+      const auto &A = Reverse ? S : P, &B = Reverse ? P : S;
+      const auto AF = computeFeatures(A, {}), BF = computeFeatures(B, {});
+      std::vector<uint32_t> AM(A.Functions.size(), NoIndex),
+          BM(B.Functions.size(), NoIndex), AW(A.Functions.size(), NoIndex),
+          BW(B.Functions.size(), NoIndex);
+      std::vector<uint8_t> AT(A.Functions.size(), 0), BT(B.Functions.size(), 0);
+      for (const auto *Name :
+           {"first", "second", "third", "caller_a", "caller_b", "caller_c"}) {
+        const uint32_t X = indexOf(A, Name), Y = indexOf(B, Name);
+        AM[X] = Y;
+        BM[Y] = X;
+        AT[X] = BT[Y] =
+            Kind != Case::SingleCallee || llvm::StringRef(Name) != "second";
+      }
+      const uint32_t X = indexOf(A, Reverse ? "other" : "old");
+      const uint32_t Y = indexOf(B, Reverse ? "old" : "other");
+      AM[X] = Y;
+      BM[Y] = X;
+      AW[X] = BW[Y] = 0;
+      const auto Candidates = neighborhoodReviewCandidates(A, AF, AM, AW, AT, B,
+                                                           BF, BM, BW, BT, {});
+      const bool Expected =
+          Kind != Case::SingleWitness && Kind != Case::MissingOccurrence;
+      ASSERT_EQ(Candidates.size(), Expected ? 1u : 0u);
+      if (Expected) {
+        EXPECT_EQ(Candidates[0].Primary,
+                  indexOf(A, Reverse ? "public" : "old"));
+        EXPECT_EQ(Candidates[0].Secondary,
+                  indexOf(B, Reverse ? "old" : "public"));
+        EXPECT_FALSE(Candidates[0].OrderedCallees);
+        EXPECT_EQ(Candidates[0].BothDirections, Kind != Case::SingleCallee);
+      }
+    }
+}
+
+TEST(BinaryDiff, ContradictoryCFGMatchesRequireKnownInstructionEvidence) {
+  for (bool SharedCallee : {false, true})
+    for (bool Reverse : {false, true}) {
+      auto Before = diamond("before", 11);
+      Before.Source = NameSource::Generated;
+      auto After = diamond("after", 197);
+      After.Source = NameSource::Generated;
+      Before.Blocks[0].insert(Before.Blocks[0].begin() + 1,
+                              {"call", "", InstructionFlow::Call, "first"});
+      After.Blocks[0].insert(After.Blocks[0].begin() + 1,
+                             {"call", "", InstructionFlow::Call, "second"});
+      After.Blocks[1][0].Mnemonic = "xor";
+      if (SharedCallee)
+        for (auto *F : {&Before, &After})
+          F->Blocks[0].insert(F->Blocks[0].begin() + 2,
+                              {"call", "", InstructionFlow::Call, "third"});
+      const auto P = build(
+          {Before, import("first"), import("second"), import("third")}, 0x1000);
+      const auto S =
+          build({After, import("first"), import("second"), import("third")},
+                0x9000, {3, 0, 2, 1});
+      const auto &A = Reverse ? S : P, &B = Reverse ? P : S;
+      const uint32_t X = indexOf(A, Reverse ? "after" : "before");
+      const uint32_t Y = indexOf(B, Reverse ? "before" : "after");
+      ComparisonSettings Settings;
+      const auto R = compare(A, B, Settings);
+      std::vector<uint32_t> AM(A.Functions.size(), NoIndex),
+          BM(B.Functions.size(), NoIndex);
+      for (const auto &M : R.Matches) {
+        AM[M.Primary] = M.Secondary;
+        BM[M.Secondary] = M.Primary;
+      }
+      const auto D = compareFunctions(A, X, B, Y, {AM, BM}, {},
+                                      CandidateInstructionAlignmentProfile);
+      ASSERT_TRUE(D.ComputationComplete);
+      ASSERT_GE(D.Similarity, Settings.MinimumSimilarity);
+      EXPECT_LT(2.0 * D.EqualInstructions /
+                    double(A.instructionCount(A.Functions[X]) +
+                           B.instructionCount(B.Functions[Y])),
+                Settings.MinimumSimilarity);
+      if (SharedCallee) {
+        EXPECT_EQ(R.secondaryOf(X), Y);
+      } else {
+        EXPECT_EQ(R.secondaryOf(X), NoIndex);
+        EXPECT_TRUE(llvm::any_of(R.Ambiguities, [&](const Ambiguity &G) {
+          return llvm::is_contained(G.Primary, X) &&
+                 llvm::is_contained(G.Secondary, Y);
+        }));
+        Settings.MinimumSimilarity = 0;
+        EXPECT_EQ(compare(A, B, Settings).secondaryOf(X), Y);
+      }
+      for (auto Kind : {OverrideKind::Match, OverrideKind::Confirm}) {
+        const Override Keep{Kind, A.Functions[X].Address,
+                            B.Functions[Y].Address};
+        EXPECT_EQ(compare(A, B, {}, {Keep}).secondaryOf(X), Y);
+      }
+      std::string Error;
+      const auto Read = readComparison(saved(R, A, B), Error);
+      ASSERT_TRUE(Read) << Error;
+      ComparisonResult Restored;
+      ASSERT_FALSE(bindComparison(*Read, A, B, Restored));
+      EXPECT_EQ(savedWithoutTimings(R, A, B),
+                savedWithoutTimings(Restored, A, B));
+    }
 }
 
 TEST(BinaryDiff, StackRoleAlternativesRetainConflictingBodyMatchesForReview) {
