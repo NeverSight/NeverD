@@ -773,8 +773,8 @@ void recordIndexedJumpTableRuns(BinaryImage &Img) {
             continue;
           std::optional<va_t> Base;
           if (Operand.mem.base == X86_REG_RIP)
-            Base = Insn.Addr + Insn.Size +
-                   static_cast<uint64_t>(Operand.mem.disp);
+            Base =
+                Insn.Addr + Insn.Size + static_cast<uint64_t>(Operand.mem.disp);
           else if (Operand.mem.base == X86_REG_INVALID)
             Base = static_cast<uint64_t>(Operand.mem.disp) & AddressMask;
           if (!Base || (*Base & (Width - 1)) != 0)
@@ -866,13 +866,12 @@ void recordIndexedTableBasesInCode(BinaryImage &Img) {
       const cs_x86 &X86 = Insn.Raw->detail->x86;
       for (uint8_t I = 0; I < X86.op_count; ++I) {
         const cs_x86_op &Operand = X86.operands[I];
-        if (Operand.type != X86_OP_MEM ||
-            Operand.mem.index == X86_REG_INVALID)
+        if (Operand.type != X86_OP_MEM || Operand.mem.index == X86_REG_INVALID)
           continue;
         std::optional<va_t> Base;
         if (Operand.mem.base == X86_REG_RIP)
-          Base = Insn.Addr + Insn.Size +
-                 static_cast<uint64_t>(Operand.mem.disp);
+          Base =
+              Insn.Addr + Insn.Size + static_cast<uint64_t>(Operand.mem.disp);
         else if (Operand.mem.base == X86_REG_INVALID)
           Base = static_cast<uint64_t>(Operand.mem.disp) & AddressMask;
         if (!Base || (*Base & (Width - 1)) != 0)
