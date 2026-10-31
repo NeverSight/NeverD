@@ -16228,7 +16228,7 @@ TEST(LLVMCPointerAddresses, FoldsAssignSelectIntoElseIf) {
   EXPECT_EQ(Source.find("use_picked(", UseAt + 1), std::string::npos) << Source;
 }
 
-TEST(LLVMCPointerAddresses, FoldsCursorLoopIntoFor) {
+TEST(LLVMCPointerAddresses, CursorLoopKeepsReadsAndDeclarations) {
   llvm::LLVMContext Context;
   llvm::Module Module("llvm-c-cursor-loop", Context);
   llvm::Type *I32 = llvm::Type::getInt32Ty(Context);
@@ -16302,34 +16302,35 @@ TEST(LLVMCPointerAddresses, FoldsCursorLoopIntoFor) {
   const auto BodyAt = Source.find("cursor_loop(");
   ASSERT_NE(BodyAt, std::string::npos) << Source;
   const auto ForAt = Source.find("for (", BodyAt);
+  // A materialized header read keeps its own execution site. The complete
+  // condition may use a for-loop; a goto loop retains the same semantics.
+  const auto LoopAt =
+      ForAt != std::string::npos ? ForAt : Source.find("L_header:", BodyAt);
   const auto HashAt = Source.find("hash_step(", BodyAt);
   const auto KeyAt = Source.find("key_step(", BodyAt);
   const auto ValueAt = Source.find("value_step(", BodyAt);
   const auto NextAt = Source.find("next_step(", BodyAt);
   const auto InitAt = Source.find("init_step(", BodyAt);
   const auto RetAt = Source.find("return 7;", BodyAt);
-  ASSERT_NE(ForAt, std::string::npos) << Source;
+  ASSERT_NE(LoopAt, std::string::npos) << Source;
   ASSERT_NE(HashAt, std::string::npos) << Source;
   ASSERT_NE(KeyAt, std::string::npos) << Source;
   ASSERT_NE(ValueAt, std::string::npos) << Source;
   ASSERT_NE(NextAt, std::string::npos) << Source;
   ASSERT_NE(InitAt, std::string::npos) << Source;
   ASSERT_NE(RetAt, std::string::npos) << Source;
-  EXPECT_LT(InitAt, ForAt) << Source;
-  EXPECT_LT(ForAt, HashAt) << Source;
+  EXPECT_LT(InitAt, LoopAt) << Source;
+  EXPECT_LT(LoopAt, HashAt) << Source;
   EXPECT_LT(HashAt, KeyAt) << Source;
   EXPECT_LT(KeyAt, ValueAt) << Source;
-  EXPECT_LT(ValueAt, RetAt) << Source;
-  EXPECT_LT(ForAt, NextAt) << Source;
-  EXPECT_LT(NextAt, RetAt) << Source;
-  EXPECT_EQ(Source.find("goto ", BodyAt), std::string::npos) << Source;
+  EXPECT_LT(LoopAt, NextAt) << Source;
   EXPECT_EQ(Source.find("hash_step(", HashAt + 1), std::string::npos) << Source;
   EXPECT_EQ(Source.find("key_step(", KeyAt + 1), std::string::npos) << Source;
   EXPECT_EQ(Source.find("next_step(", NextAt + 1), std::string::npos) << Source;
   EXPECT_EQ(Source.find("value_step(", ValueAt + 1), std::string::npos)
       << Source;
   EXPECT_EQ(Source.find("init_step(", InitAt + 1), std::string::npos) << Source;
-  // A for-header load and the copies printed from it must be declared.
+  // A loop-header load and the copies printed from it must be declared.
   // The pre-fix body used cur3 / v4 without a declaration line.
   std::set<std::string> DeclaredNames;
   for (size_t LineStart = BodyAt; LineStart < Source.size();) {
@@ -16368,6 +16369,59 @@ TEST(LLVMCPointerAddresses, FoldsCursorLoopIntoFor) {
       EXPECT_TRUE(DeclaredNames.count(Ident)) << Ident << "\n" << Source;
     At = End;
   }
+  compileAndRunCallOrdering("#include <stdint.h>\n" + Source + R"c(
+static uint64_t first, trace;
+static const struct { uint32_t hash, key, value; uint64_t next; } nodes[] = {
+  {0, 0, 0, 0}, {22, 11, 101, 2}, {22, 22, 102, 3}, {33, 33, 103, 0}
+};
+static uint64_t event(uint64_t prior, uint64_t cursor, unsigned operation) {
+  return prior * UINT64_C(131) + cursor * 8 + operation;
+}
+uint64_t init_step(void) {
+  trace = event(trace, first, 1);
+  return first;
+}
+uint64_t next_step(uint64_t cursor) {
+  trace = event(trace, cursor, 2);
+  return nodes[cursor].next;
+}
+uint32_t hash_step(uint64_t cursor) {
+  trace = event(trace, cursor, 3);
+  return nodes[cursor].hash;
+}
+uint32_t key_step(uint64_t cursor) {
+  trace = event(trace, cursor, 4);
+  return nodes[cursor].key;
+}
+uint32_t value_step(uint64_t cursor) {
+  trace = event(trace, cursor, 5);
+  return nodes[cursor].value;
+}
+int main(void) {
+  static const uint32_t keys[] = {11, 22, 33, 99};
+  for (first = 0; first != 4; ++first)
+    for (unsigned i = 0; i != 4; ++i) {
+      uint32_t expected = 7, key = keys[i];
+      uint64_t wanted = event(0, first, 1);
+      for (uint64_t cursor = first; cursor; cursor = nodes[cursor].next) {
+        wanted = event(wanted, cursor, 3);
+        if (nodes[cursor].hash == key) {
+          wanted = event(wanted, cursor, 4);
+          if (nodes[cursor].key == key) {
+            wanted = event(wanted, cursor, 5);
+            expected = nodes[cursor].value;
+            break;
+          }
+        }
+        wanted = event(wanted, cursor, 2);
+      }
+      trace = 0;
+      if (cursor_loop(key) != expected || trace != wanted) return 1;
+    }
+  return 0;
+}
+)c",
+                            /*TrapUndefined=*/true);
 }
 
 TEST(LLVMCPointerAddresses, CursorFieldIncrementStaysInForHeader) {

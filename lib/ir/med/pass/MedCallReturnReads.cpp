@@ -26,6 +26,7 @@
 #include "neverd/ir/med/MedCallLeftovers.h"
 #include "neverd/ir/med/MedCallingConvDetail.h"
 #include "neverd/ir/med/MedIR.h"
+#include "neverd/ir/med/MedPrologueSaves.h"
 #include "neverd/ir/med/MedProvenStackOffsets.h"
 #include "neverd/ir/med/MedStackAlignment.h"
 #include "neverd/ir/med/X86/X86RegistrationCallback.h"
@@ -342,8 +343,11 @@ static bool checkSourceCallReturnReads(
     size_t &Remaining, const LowFunc *FreshSource,
     std::set<const MedOp *> *ObservedCalls,
     const MedCallReturnRanges *CallReturns,
-    std::vector<MedCallReturnRead> *Deferred, bool *NeedsCalleeFacts) {
+    std::vector<MedCallReturnRead> *Deferred, bool *NeedsCalleeFacts,
+    std::set<const MedOp *> *OverwrittenSpills = nullptr) {
   Diagnostic.clear();
+  if (OverwrittenSpills)
+    OverwrittenSpills->clear();
   if (NeedsCalleeFacts)
     *NeedsCalleeFacts = false;
   // Link-register targets have no implicit stack write. The current source
@@ -491,6 +495,62 @@ static bool checkSourceCallReturnReads(
       return std::nullopt;
     return End.Min - Width;
   };
+  // A released scalar spill can be overwritten by CALL even when the body
+  // never reads the new PC. Represent that write before source spill cleanup;
+  // merely treating the CALL as an overwrite would leave source-frame bytes
+  // uninitialized for a later observer. Keep ordinary calls cheap: only
+  // already allocated private scalar slots request this extra projection.
+  if (OverwrittenSpills && !Func.SkippedSSA && !Func.AnalystStackFrame &&
+      Func.FrameSize > 0 && Func.EntryKind == StackEntryKind::Call &&
+      llvm::none_of(Func.Blocks, [](const MedBlock &Block) {
+        return !Block.ExceptionalPreds.empty() ||
+               !Block.ExceptionalSuccs.empty();
+      })) {
+    if (!charge(Remaining, Stores.size()))
+      return Exhausted();
+    std::vector<std::pair<int64_t, int64_t>> Spills;
+    for (const auto &[Op, Store] : Stores)
+      if (!Op->Inputs[1].isConst() && Op->Inputs[1].Size &&
+          Op->Inputs[1].Size <= Width && Store.Begin < 0 && Store.End <= 0 &&
+          isSourcePrivateFrameAccess(Func, Image.Arch, Image.abiFormat(),
+                                     Store.Begin, Op->Inputs[1].Size))
+        Spills.emplace_back(Store.Begin, Store.End);
+    llvm::sort(Spills);
+    std::vector<std::pair<int64_t, int64_t>> Merged;
+    for (const auto &Spill : Spills) {
+      if (Merged.empty() || Merged.back().second < Spill.first)
+        Merged.push_back(Spill);
+      else
+        Merged.back().second = std::max(Merged.back().second, Spill.second);
+    }
+    if (!Merged.empty()) {
+      if (!charge(Remaining, CallEnds.size()))
+        return Exhausted();
+      for (const MedBlock &Block : Func.Blocks)
+        if (!charge(Remaining, Block.Preds.size()) ||
+            !charge(Remaining, Block.Succs.size()))
+          return Exhausted();
+      const safety::detail::ExactPhiGraph Graph(Func);
+      const bool Complete =
+          llvm::all_of(Func.Blocks, [&](const MedBlock &Block) {
+            return Graph.hasCompleteNormalPredecessors(Block);
+          });
+      for (const auto &[Call, End] : CallEnds) {
+        if (!Complete || !End || End->Min != End->Max || End->Max > 0)
+          continue;
+        const auto Begin = CallSlotBegin(*End);
+        if (!Begin || !isSourcePrivateFrameAccess(
+                          Func, Image.Arch, Image.abiFormat(), *Begin, Width))
+          continue;
+        const auto At = std::lower_bound(Merged.begin(), Merged.end(), *Begin,
+                                         [](const auto &Range, int64_t Byte) {
+                                           return Range.second <= Byte;
+                                         });
+        if (At != Merged.end() && At->first < End->Max)
+          OverwrittenSpills->insert(Call);
+      }
+    }
+  }
   // Whether every load's history reaches no CALL write in Ends, which are
   // bounded from above by Bounds where they have no range. With Defer, a load
   // such a write reaches is recorded there and leaves the proof instead.
@@ -1407,12 +1467,13 @@ bool preserveSourceCallReturnWrites(MedFunc &Func, const BinaryImage &Image,
                                     const MedCallReturnRanges *CallReturns,
                                     std::vector<MedCallReturnRead> *Deferred,
                                     bool *NeedsCalleeFacts) {
-  std::set<const MedOp *> Observed;
+  std::set<const MedOp *> Observed, OverwrittenSpills;
   size_t Remaining = WorkLimit;
   if (!checkSourceCallReturnReads(Func, Image, Diagnostic, Remaining,
                                   FreshSource, &Observed, CallReturns, nullptr,
-                                  NeedsCalleeFacts))
+                                  NeedsCalleeFacts, &OverwrittenSpills))
     return false;
+  Observed.insert(OverwrittenSpills.begin(), OverwrittenSpills.end());
   if (Observed.empty())
     return true;
   const auto Refuse = [&] {
