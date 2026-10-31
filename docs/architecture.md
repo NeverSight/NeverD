@@ -15259,6 +15259,12 @@ interface remains separate. See [the invocation contract](x64-continuation-sourc
 dispatch from ordinary source proofs. An explicit `callee_depth` traverses
 original direct CALL targets in breadth-first batches, deduplicating entries
 before each pipeline invocation and instruction addresses before state lifting.
+An explicit `follow_direct_jumps` adds original direct JMP targets outside each
+audited body at the same depth. The architecture lifter owns target arithmetic;
+one sorted instruction-address index per body excludes its internal edges.
+Depth-ordered worklists promote targets also discovered through a shallower
+jump chain before processing deeper calls. No ordinary tail-call classification
+or indirect-target propagation supplies these edges.
 Each wave uses the pipeline's existing parallel function scheduler; dependent
 waves stay ordered, and all retained discovery state expires with the export.
 Imports, indirect targets and the depth frontier do not acquire inferred bodies
@@ -15269,6 +15275,14 @@ preventing large selections from reconstructing one expensive compiler graph.
 Every step still checks its domain and budget; external CALL/RET retain priority
 over exhaustion, while context transitions always stop. Both C routes share
 this owner, and default requests retain their existing switch driver.
+
+Continuation source lowers `RequireAligned` through the shared
+`X64Alignment` predicate after projecting a live FS/GS base. A failed predicate
+returns unchanged-state refusal before guest memory, architectural writes or
+budget consumption, rather than trapping the source caller. Admission refuses
+guards following an observable instruction effect. The original-byte vector
+move audit binds canonical x64 MOVAPS/MOVAPD/MOVDQA segment prefixes to both
+the guard and access; this adds no opaque-state preservation certificate.
 
 `X64ContinuationSystemTransfers` owns the complete explicit SYSRET and Intel
 SYSENTER/SYSEXIT target contexts, including their shared flat segment-cache
