@@ -45,7 +45,7 @@ CASES = {
     "GraphicsThunk": ("D3DKMTCreateDevice", "D3DKMTDestroyDevice"),
     "Direct3D11": ("D3D11CreateDevice", "D3D11CreateDeviceAndSwapChain"),
     "Direct3D12": ("D3D12CreateDevice", "D3D12SerializeVersionedRootSignature", "D3D12GetInterface"),
-    "DXGI": ("CreateDXGIFactory2", "DXGIGetDebugInterface1"),
+    "DXGI": ("CreateDXGIFactory2", "DXGIGetDebugInterface1", "DXGIDeclareAdapterRemovalSupport"),
     "ShaderCompiler": ("D3DCompile", "D3DCompile2", "D3DCreateBlob", "D3DDisassemble10Effect"),
     "CLFS": ("CreateLogFile", "ReserveAndAppendLog"),
     "TPM": ("Tbsi_Context_Create", "Tbsip_Submit_Command"),

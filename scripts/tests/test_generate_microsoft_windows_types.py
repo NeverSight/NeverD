@@ -17,6 +17,37 @@ SPEC.loader.exec_module(windows)
 
 
 class MicrosoftWindowsTypes(unittest.TestCase):
+    def test_dxgi_c_parameter_bridge_requires_the_original_cpp_contract(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "DXGI.c"
+            original = '#include <windows.h>\n#include <dxgi1_6.h>\n'
+            source.write_text(original)
+            with patch.object(windows, "run", side_effect=ValueError("changed SDK type")):
+                with self.assertRaisesRegex(ValueError, "changed SDK type"):
+                    windows.prepare_provider("DXGI", source, ["clang"], root,
+                                             "neverd", "LLP64")
+            self.assertEqual(source.read_text(), original)
+            calls = []
+
+            def run(command, log, output=None):
+                calls.append(command)
+                if output:
+                    output.write_text("long DXGIDeclareAdapterRemovalSupport(void);\n")
+                return "record layouts"
+
+            with patch.object(windows, "run", side_effect=run), \
+                    patch.object(windows, "checked_types", return_value={"prototypes": []}):
+                result = windows.prepare_provider("DXGI", source, ["clang"], root,
+                                                  "neverd", "LLP64")
+            self.assertIn("c++", calls[0])
+            self.assertIn("-fsyntax-only", calls[0])
+            self.assertIn("DXGIDeclareAdapterRemovalSupport(void);", source.read_text())
+            proof = result["metadata"]["cpp_parameter_bridge"]
+            self.assertEqual(proof["sha256"], windows.wdk.digest(Path(proof["source"])))
+            self.assertIn("decltype(&DXGIDeclareAdapterRemovalSupport)",
+                          Path(proof["source"]).read_text())
+
     def test_isolated_kernel_provider_keeps_default_before_selection(self):
         # Preprocessing removes /Gz. The parser must see that policy before
         # reading both the exported function and its unannotated callback.

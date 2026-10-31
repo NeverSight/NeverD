@@ -179,6 +179,12 @@ With `--kernel`, the WDK fixtures cover SD Port's
 byte-width offset, PortCls's callback and fifth argument, and Stream Class's
 void result. Their synthetic imports retain the original compiler's x86
 decoration. This checks source reconstruction and ABI, not driver execution.
+`NeverDCOFFOrdinalImportTests` checks delayed ordinal imports across the three
+authenticated SDK targets and an unqualified ARM32 control, with case variants,
+other modules, adjacent ordinals and malformed reserved bits. The SDK-linked device-creation callers
+check ordinary imports through both C routes. The DXGI provider also requires
+a successful original C++ function-type check before its C no-argument bridge;
+the generator unit test requires a failed check to leave the input unchanged.
 `TypeRender.KeywordNamespacesKeepTheirDistinctSpellings` checks the shared
 keyword index across all seven output languages, including C++'s C keywords
 and Rust's raw-identifier exceptions.

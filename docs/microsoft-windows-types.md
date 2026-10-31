@@ -168,6 +168,16 @@ SDK package identities used by this check.
 The graphics callers include twelve-argument swap-chain creation and the
 fourteen-argument `D3DCompile2`, retaining target-sized lengths, enum parameters,
 interface outputs and stack arguments on all three targets.
+The DXGI no-argument declaration additionally checks its complete type against
+the original SDK in C++ before adding a compatible C `(void)` redeclaration.
+The SDK's `()` spelling alone does not establish a C parameter list. The proof
+and source hash are retained in the manifest; see Microsoft's
+[declaration](https://learn.microsoft.com/windows/win32/api/dxgi1_6/nf-dxgi1_6-dxgideclareadapterremovalsupport).
+Ordinary and delayed PE imports share the SDK's `d3d12.dll` ordinal-101 name
+contract on x86, x64 and ARM64. The original module, ordinal and exact IAT slot
+remain intact; other modules, ordinals and targets retain their ordinal names.
+The device-creation fixture links the original target SDK import library,
+whose ordinal import must recover the same complete source prototype.
 
 DNS also has a Unicode profile. Its official `PDNS_RECORD` alias changes with
 `UNICODE`, including in declarations with an explicit `_W` name. An exact

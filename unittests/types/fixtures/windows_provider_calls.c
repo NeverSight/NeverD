@@ -13,6 +13,10 @@
 #include <tbs.h>
 #include <winstring.h>
 
+// The provider authenticates the SDK's exact C++ type before this compatible
+// C redeclaration: the SDK's own () spelling supplies no C parameter list.
+HRESULT WINAPI DXGIDeclareAdapterRemovalSupport(void);
+
 __declspec(dllexport) ULONG UseEventRegistration(const GUID *Id,
                                                  PENABLECALLBACK Callback,
                                                  void *Context,
@@ -106,4 +110,8 @@ UseShaderCompile2(const void *Data, SIZE_T Size, const char *Name,
 
 __declspec(dllexport) HRESULT UseShaderBlob(SIZE_T Size, ID3DBlob **Blob) {
   return D3DCreateBlob(Size, Blob);
+}
+
+__declspec(dllexport) HRESULT UseAdapterRemovalSupport(void) {
+  return DXGIDeclareAdapterRemovalSupport();
 }

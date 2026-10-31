@@ -29,6 +29,7 @@ FUNCTIONS = {"UseEventRegistration": "EventRegister", "UsePath": "PathCchCombine
              "UseD3D12Device": "D3D12CreateDevice",
              "UseD3D12RootSignature": "D3D12SerializeVersionedRootSignature",
              "UseDXGIFactory": "CreateDXGIFactory2",
+             "UseAdapterRemovalSupport": "DXGIDeclareAdapterRemovalSupport",
              "UseShaderCompile": "D3DCompile", "UseShaderCompile2": "D3DCompile2",
              "UseShaderBlob": "D3DCreateBlob"}
 LIBRARIES = ("advapi32.lib", "pathcch.lib", "runtimeobject.lib", "gdi32.lib", "clfsw32.lib", "tbs.lib",

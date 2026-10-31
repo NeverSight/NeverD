@@ -232,6 +232,25 @@ def prepare_provider(name: str, source: Path, arguments: list[str], directory: P
                      neverd: str, model: str, headers=(), defines=(), prototypes=(),
                      metadata: dict | None = None, convention: str = "") -> dict:
     """Validate and select a whole provider before it can enter the merge."""
+    bridge_commands = []
+    if name == "DXGI":
+        # The SDK writes () for this documented no-argument C++ API. In C
+        # that spelling has no prototype. Authenticate the complete C++ type
+        # before supplying its compatible C (void) redeclaration.
+        original = source.read_text(encoding="utf-8")
+        proof = directory / "DXGI-noargs.cpp"
+        proof.write_text(original + '\nstatic_assert(__is_same(\n'
+                         '    decltype(&DXGIDeclareAdapterRemovalSupport),\n'
+                         '    HRESULT (WINAPI *)(void)));\n', encoding="utf-8")
+        invocation = arguments + ["-x", "c++", "-std=c++17", "-fsyntax-only", str(proof)]
+        run(invocation, directory / "DXGI-noargs.log")
+        source.write_text(original + '\nHRESULT WINAPI DXGIDeclareAdapterRemovalSupport(void);\n',
+                          encoding="utf-8")
+        bridge_commands.append(invocation)
+        metadata = dict(metadata or {}, cpp_parameter_bridge={
+            "function": "DXGIDeclareAdapterRemovalSupport",
+            "source": str(proof), "sha256": wdk.digest(proof),
+            "documentation": "https://learn.microsoft.com/windows/win32/api/dxgi1_6/nf-dxgi1_6-dxgideclareadapterremovalsupport"})
     dump = ["-fsyntax-only", "-Xclang", "-fdump-record-layouts-complete"]
     preprocessed = directory / (name + ".h")
     command = arguments + ["-E", str(source)]
@@ -239,7 +258,7 @@ def prepare_provider(name: str, source: Path, arguments: list[str], directory: P
     parser_convention(preprocessed, convention)
     parsed = checked_types(neverd, preprocessed, directory / (name + ".parse.log"), model)
     input_hash = wdk.digest(preprocessed)
-    commands = [command]
+    commands = [command, *bridge_commands]
     if prototypes:
         original = directory / (name + ".pre.h")
         preprocessed.replace(original)
