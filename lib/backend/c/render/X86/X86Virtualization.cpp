@@ -381,17 +381,16 @@ renderX86VirtualizationNativeCall(Arch TargetArch, const llvm::CallBase &Call,
   const auto Name = Callee->getName();
   if (isX86KvmHypercallNativeName(Name)) {
     const unsigned Bits = Name.ends_with("32") ? 32 : 64;
-    bool Valid = (TargetArch == Arch::X64 ? 64u : 32u) == Bits &&
-                 Callee->isDeclaration() && !Callee->isVarArg() &&
-                 Call.getCallingConv() == llvm::CallingConv::C &&
-                 !Call.getNumOperandBundles() &&
-                 Call.getType()->isIntegerTy(Bits) && Call.arg_size() == 5 &&
-                 Arguments.size() == 5 &&
-                 Call.getMemoryEffects() == llvm::MemoryEffects::unknown() &&
-                 !Call.doesNotReturn() &&
-                 Call.hasFnAttr(llvm::Attribute::NoUnwind) &&
-                 Call.hasFnAttr(llvm::Attribute::Convergent) &&
-                 Call.hasFnAttr(llvm::Attribute::NoDuplicate);
+    bool Valid =
+        (TargetArch == Arch::X64 ? 64u : 32u) == Bits &&
+        Callee->isDeclaration() && !Callee->isVarArg() &&
+        Call.getCallingConv() == llvm::CallingConv::C &&
+        !Call.getNumOperandBundles() && Call.getType()->isIntegerTy(Bits) &&
+        Call.arg_size() == 5 && Arguments.size() == 5 &&
+        Call.getMemoryEffects() == llvm::MemoryEffects::unknown() &&
+        !Call.doesNotReturn() && Call.hasFnAttr(llvm::Attribute::NoUnwind) &&
+        Call.hasFnAttr(llvm::Attribute::Convergent) &&
+        Call.hasFnAttr(llvm::Attribute::NoDuplicate);
     for (const auto &Argument : Call.args())
       Valid &= Argument->getType()->isIntegerTy(Bits);
     if (!Valid)
