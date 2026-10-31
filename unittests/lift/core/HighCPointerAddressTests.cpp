@@ -12570,7 +12570,7 @@ TEST(HighCPointerAddresses, CallCondAndDoesNotFillUndefStore) {
   EXPECT_EQ(Func.Body[0].Body[0].StoreVal->Kind, ExprKind::Undef);
 }
 
-TEST(HighCPointerAddresses, IfNarrowCastOfAssignedCallPrintsBare) {
+TEST(HighCPointerAddresses, IfNarrowCastOfAssignedCallKeepsItsWidth) {
   HighFunc Func;
   Func.Name = "adjustment_narrow";
   Func.Entry = 0x140001000;
@@ -12603,10 +12603,11 @@ TEST(HighCPointerAddresses, IfNarrowCastOfAssignedCallPrintsBare) {
   const std::string Source = emitFunctions({Func});
   EXPECT_NE(Source.find("GetAdjustmentLevel"), std::string::npos) << Source;
   EXPECT_NE(Source.find("if ("), std::string::npos) << Source;
-  EXPECT_EQ(Source.find("(int16_t)"), std::string::npos) << Source;
+  // A result such as 0x10000 is zero only after the 16-bit conversion.
+  EXPECT_NE(Source.find("(int16_t)"), std::string::npos) << Source;
 }
 
-TEST(HighCPointerAddresses, IfSubbytesZeroOfAssignedCallPrintsBare) {
+TEST(HighCPointerAddresses, IfSubbytesZeroOfAssignedCallKeepsItsWidth) {
   HighFunc Func;
   Func.Name = "adjustment_subbytes";
   Func.Entry = 0x140001000;
@@ -12636,7 +12637,7 @@ TEST(HighCPointerAddresses, IfSubbytesZeroOfAssignedCallPrintsBare) {
   Func.Body = {Get, Guard};
   const std::string Source = emitFunctions({Func});
   EXPECT_NE(Source.find("GetAdjustmentLevel"), std::string::npos) << Source;
-  EXPECT_EQ(Source.find("(int16_t)"), std::string::npos) << Source;
+  EXPECT_NE(Source.find("(int16_t)"), std::string::npos) << Source;
 }
 
 TEST(HighCPointerAddresses, IfNarrowCastOfAddKeepsWrap) {

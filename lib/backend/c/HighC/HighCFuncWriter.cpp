@@ -4761,7 +4761,9 @@ void HighCWriter::collectCallResultNames(const HighFunc &Func) {
     if (Name.empty() || ValueForward.count(Name) || FieldForward.count(Name) ||
         CopyForward.count(Name) || CallResultNames.count(Name))
       return;
-    const TypeRef ReturnType = callResultType(*S.Val);
+    TypeRef ReturnType = callResultType(*S.Val);
+    if (auto Carrier = integerCallResultCarrier(*S.Val, ReturnType))
+      ReturnType = std::move(Carrier);
     if (ReturnType)
       CallResultTypes[Name] = ReturnType;
     std::string Stem = callResultStem(callIdentifier(*S.Val));
@@ -4838,6 +4840,15 @@ bool HighCWriter::debugCallReturnIsDeclared(const HighExpr &Call,
   // extern path cannot. Its call adapter and result use that declaration.
   return calledDefinition(Call) || positionalDebugSignature(Function) ||
          (Name == Function.Name && includesHeaderOf(Name));
+}
+
+TypeRef HighCWriter::integerCallResultCarrier(const HighExpr &Call,
+                                              const TypeRef &Declared) {
+  if (Call.Type && Call.Type->Kind == NdTypeKind::Int && !Call.Type->IsEnum &&
+      Declared && Declared->Kind == NdTypeKind::Int && !Declared->IsEnum &&
+      Call.Type->Size != Declared->Size)
+    return Call.Type;
+  return {};
 }
 
 TypeRef HighCWriter::callResultType(const HighExpr &Call) const {

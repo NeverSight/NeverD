@@ -6762,7 +6762,7 @@ TEST_F(SessionCAPITest, UserImportsPassWhatTheirPrototypesTake) {
   // GetLastError takes nothing; CloseHandle and ZwClose, which phnt's
   // native API declares, take the handle.
   const std::string Probe = decompile("Probe");
-  EXPECT_NE(Probe.find(" = GetLastError();"), std::string::npos) << Probe;
+  EXPECT_NE(Probe.find("GetLastError()"), std::string::npos) << Probe;
   EXPECT_NE(Probe.find(std::string("extern ") + WindowsLongC +
                        " ZwClose(void *Handle);"),
             std::string::npos)

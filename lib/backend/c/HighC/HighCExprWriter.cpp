@@ -1208,7 +1208,7 @@ const HighExpr &HighCWriter::lowBytesSource(const HighExpr &E,
     // A conversion to at least Width bytes keeps the low Width bytes of its
     // source; an extension supplies the bytes above its source itself.
     if (!isPlainInteger(To) || !isPlainInteger(Source.Type) ||
-        To->Size < Width || (Extension && Source.Type->Size < Width) ||
+        To->Size < Width || Source.Type->Size < Width ||
         Source.Kind == ExprKind::Call)
       break;
     Cur = &Source;
@@ -3850,27 +3850,58 @@ bool HighCWriter::isIntegerViewOfScalar(const HighExpr &E) const {
 }
 
 const HighExpr *HighCWriter::typedCallResult(const HighExpr *E) const {
-  const HighExpr *Inner = peelIntegerViewOps(E);
-  unsigned Peel = 0;
-  while (Inner && Peel++ < limits::kMaxIntegerViewUnwrapDepth) {
+  const HighExpr *Inner = E;
+  TypeRef View;
+  for (unsigned Depth = 0; Inner && Depth < limits::kMaxIntegerViewUnwrapDepth;
+       ++Depth) {
+    if (Inner->Kind == ExprKind::Call) {
+      TypeRef Return = knownCallReturnType(*Inner);
+      if (!Return)
+        Return = Inner->Type;
+      const TypeRef Carrier = Inner->Type ? Inner->Type : Return;
+      // Only identical integer views can disappear around a call. Its
+      // identity alone proves neither a truncation nor a sign change safe.
+      // A wider lifted carrier also differs from the declared C result.
+      if (!Return || Return->Kind != NdTypeKind::Int || !Carrier ||
+          Carrier->Kind != NdTypeKind::Int || Return->Size != Carrier->Size ||
+          Return->IsSigned != Carrier->IsSigned ||
+          (View &&
+           (View->Size != Return->Size || View->IsSigned != Return->IsSigned)))
+        return nullptr;
+      return Inner;
+    }
+    const TypeRef Type = Inner->Kind == ExprKind::Cast && Inner->CastTo
+                             ? Inner->CastTo
+                             : Inner->Type;
+    if (!Type || Type->Kind != NdTypeKind::Int ||
+        (View &&
+         (View->Size != Type->Size || View->IsSigned != Type->IsSigned)))
+      return nullptr;
+    View = Type;
     if (Inner->Kind == ExprKind::Var || Inner->Kind == ExprKind::Phi) {
       const std::string Name = copyForwardName(varName(Inner->Var));
       if (auto Fwd = ValueForward.find(Name);
           Fwd != ValueForward.end() && Fwd->second && Fwd->second != Inner) {
-        Inner = peelIntegerViewOps(Fwd->second);
+        Inner = Fwd->second;
         continue;
       }
+      return nullptr;
     }
-    break;
+    const bool ScalarView =
+        (Inner->Kind == ExprKind::Cast || Inner->Kind == ExprKind::BitCast ||
+         (Inner->Kind == ExprKind::UnaryOp &&
+          (Inner->Op == NdOp::INT_ZEXT || Inner->Op == NdOp::INT_SEXT))) &&
+        Inner->Operands.size() == 1;
+    const bool LowPart = Inner->Kind == ExprKind::BinOp &&
+                         Inner->Op == NdOp::SUBBYTES &&
+                         Inner->Operands.size() == 2 && Inner->Operands[1] &&
+                         Inner->Operands[1]->Kind == ExprKind::Const &&
+                         Inner->Operands[1]->ConstVal == 0;
+    if ((!ScalarView && !LowPart) || !Inner->Operands[0])
+      return nullptr;
+    Inner = Inner->Operands[0].get();
   }
-  if (!Inner || Inner->Kind != ExprKind::Call)
-    return nullptr;
-  TypeRef Ret = knownCallReturnType(*Inner);
-  if (!Ret)
-    Ret = Inner->Type;
-  if (!Ret || Ret->Kind != NdTypeKind::Int)
-    return nullptr;
-  return Inner;
+  return nullptr;
 }
 
 bool HighCWriter::isCtorSourceExpr(const HighExpr *Op) const {
@@ -7301,8 +7332,22 @@ std::string HighCWriter::exprStrImpl(const HighExpr &E, int ParentPrec,
       const std::string Prefix = callIdentifier(E) + "(";
       if (llvm::StringRef(Text).starts_with(Prefix) && Text.back() == ')' &&
           c_memory::castOperand(Text.substr(Prefix.size() - 1)) ==
-              Text.substr(Prefix.size() - 1))
+              Text.substr(Prefix.size() - 1)) {
+        // Match MedLLVM's integer carrier assignment: retain the declared
+        // result's bits, then zero-extend or truncate them to the lifted
+        // width. C's implicit widening of a signed status would sign-extend.
+        if (const auto Carrier = integerCallResultCarrier(E, Return);
+            &E != StatementCall && Carrier) {
+          if (Carrier->Size > Return->Size)
+            Text = "(" + typeToC(NdType::makeInt(Return->Size, false)) + ")" +
+                   Text;
+          Text =
+              "(" + typeToC(Carrier) + ")" + castOperandText(std::move(Text));
+          return typedText(E, std::move(Text), Carrier->Size,
+                           Carrier->IsSigned);
+        }
         return typedText(E, std::move(Text), Return->Size, Return->IsSigned);
+      }
     }
     return Text;
   }
@@ -7589,37 +7634,7 @@ std::string HighCWriter::formatReturnExpr(const HighExpr &Expr) {
   // i32 add. A real widen (i16→i64) stays so narrowing the C return does
   // not turn zero extension into sign extension.
   auto PeelReturnViews = [&](const HighExpr *Cur) {
-    for (unsigned Peel = 0; Peel < limits::kMaxIntegerViewUnwrapDepth && Cur;
-         ++Peel) {
-      // A view of an integer only: the bits of a floating value are no
-      // view of it, and C would convert the value they were peeled from.
-      if ((Cur->Kind == ExprKind::Cast || Cur->Kind == ExprKind::BitCast) &&
-          !Cur->Operands.empty() && Cur->Operands[0] &&
-          (!Cur->Operands[0]->Type ||
-           Cur->Operands[0]->Type->Kind == NdTypeKind::Int ||
-           Cur->Operands[0]->Type->Kind == NdTypeKind::Ptr)) {
-        Cur = Cur->Operands[0].get();
-        continue;
-      }
-      if (Cur->Kind == ExprKind::UnaryOp &&
-          (Cur->Op == NdOp::INT_ZEXT || Cur->Op == NdOp::INT_SEXT) &&
-          !Cur->Operands.empty() && Cur->Operands[0] &&
-          Cur->Operands[0]->Type &&
-          Cur->Operands[0]->Type->Kind == NdTypeKind::Int &&
-          Cur->Operands[0]->Type->Size == FuncReturnType->Size) {
-        Cur = Cur->Operands[0].get();
-        continue;
-      }
-      if (Cur->Kind == ExprKind::BinOp && Cur->Op == NdOp::SUBBYTES &&
-          Cur->Operands.size() == 2 && Cur->Operands[0] && Cur->Operands[1] &&
-          Cur->Operands[1]->Kind == ExprKind::Const &&
-          Cur->Operands[1]->ConstVal == 0) {
-        Cur = Cur->Operands[0].get();
-        continue;
-      }
-      break;
-    }
-    return Cur;
+    return Cur ? &lowBytesSource(*Cur, FuncReturnType->Size) : nullptr;
   };
   const HighExpr *Inner = PeelReturnViews(&Expr);
   if (Inner && (Inner->Kind == ExprKind::Var || Inner->Kind == ExprKind::Phi)) {

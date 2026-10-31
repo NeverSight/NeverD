@@ -3,6 +3,17 @@
 Use public fixtures and emitter tests as the durable contract. Private binary
 analysis and comparison output belong outside the repository.
 
+HighC integer call results now keep their lifted carrier in both expressions
+and local declarations. Direct and indirect MedIR calls use the same result
+type authority, including provisional expressions. A signed 32-bit API result
+cannot acquire sign-filled upper bytes merely because C widens it; explicit
+truncations and extensions
+also survive conditions and returns. `NeverDSourceCallIntegerViewTests` compares
+both C routes with independent bit oracles and original Linux x64 callers.
+ARM64 machine fixtures and all four native architecture source models retain
+separate coverage from native Windows ARM64 driver execution. This repairs
+result transport, not unresolved VM inputs or ordinary entry interfaces.
+
 The official SDK catalog now selects Direct3D 11/12, DXGI and D3DCompiler C
 exports with their checked type closures on x86, x64 and ARM64. Both source
 routes compile import-only callers, including twelve- and fourteen-argument

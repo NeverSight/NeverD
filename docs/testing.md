@@ -10147,6 +10147,18 @@ remain nonnegative and the floating oracle stays finite.
 
 ## Structured C control and call checks
 
+`NeverDSourceCallIntegerViewTests` executes narrow integer call-result views
+through conditions, returns and full-width arithmetic. Header declarations,
+direct/indirect call lowering, expression carriers and local storage must agree
+without losing truncation or inventing sign extension. x64/AArch64 machine
+fixtures cover COFF/ELF/Mach-O,
+both C routes, source optimization on/off and O0/O2 with UBSan; source-only
+rendering cases also cover x86 and ARM32. Original callers run independently on
+matching Linux x64 hosts, including Win64 argument placement and home storage.
+Generated C execution on another host does not qualify native Windows ARM64
+driver execution. Run the integer-width, pointer-projection and call-contract
+owners with this suite after changing call-result projection.
+
 `NeverDX86NonlocalControlTests` checks privileged return and SMM transition
 admission through both decoder modes, LowIR, MedIR, native LLVM and C rendering.
 Handwritten legacy intrinsics, masked LLVM functions and hidden HighIR branches
