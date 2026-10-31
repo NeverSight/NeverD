@@ -9,7 +9,9 @@
 #include "neverd/decode/Decoder.h"
 #include "neverd/decode/InstructionRelocations.h"
 #include "neverd/loader/FunctionDiscovery.h"
+#include "neverd/loader/Limits.h"
 #include "neverd/loader/PointerRelocation.h"
+#include "neverd/loader/ReadOnlyBytes.h"
 #include "neverd/support/BinaryEncoding.h"
 #include "neverd/support/ISAEncoding.h"
 
@@ -719,214 +721,292 @@ void recordConstantCodeSlots(BinaryImage &Img) {
       Img.ConstantCodeSlots.emplace(Slot, Target);
 }
 
-void recordIndexedJumpTableRuns(BinaryImage &Img) {
-  if (Img.IsRelocatable || Img.Format != BinaryFormat::COFF ||
+void recordIndexedTableBasesInCode(BinaryImage &Img) {
+  if (!Img.isCOFF() || Img.IsRelocatable ||
       (Img.Arch != Arch::X86 && Img.Arch != Arch::X64))
     return;
   const uint32_t Width = Img.getPointerSize();
-  if (Width == 0)
+  if (Width != 4 && Width != 8)
     return;
-  Decoder Dec;
-  if (!Dec.init(Img))
-    return;
-  std::set<va_t> JumpReadBases;
-  const uint64_t AddressMask =
-      Img.Arch == Arch::X86 ? uint64_t{0xFFFFFFFF} : ~uint64_t{0};
-  for (const Section &Sec : Img.Sections) {
-    if (!Sec.isExecutable() || Sec.Size > InvalidVA - Sec.VA)
-      continue;
-    const va_t End = Sec.VA + Sec.Size;
-    va_t Cur = Sec.VA;
-    while (Cur < End) {
-      size_t Available = static_cast<size_t>(std::min<va_t>(16, End - Cur));
-      const uint8_t *Bytes = nullptr;
-      while (Available && !(Bytes = Img.readVA(Cur, Available)))
-        --Available;
-      DecodedInsn Insn{};
-      const int Len = Bytes && Dec.selectMode(Img, Cur)
-                          ? Dec.decodeOne(Bytes, Available, Cur, Insn)
-                          : 0;
-      if (Len <= 0 || !Insn.Raw || !Insn.Raw->detail) {
-        ++Cur;
-        continue;
-      }
-      if (Insn.Id == X86_INS_JMP) {
-        const cs_x86 &X86 = Insn.Raw->detail->x86;
-        for (uint8_t I = 0; I < X86.op_count; ++I) {
-          const cs_x86_op &Operand = X86.operands[I];
-          if (Operand.type != X86_OP_MEM ||
-              Operand.mem.index == X86_REG_INVALID)
-            continue;
-          std::optional<va_t> Base;
-          if (Operand.mem.base == X86_REG_RIP)
-            Base = Insn.Addr + Insn.Size +
-                   static_cast<uint64_t>(Operand.mem.disp);
-          else if (Operand.mem.base == X86_REG_INVALID)
-            Base = static_cast<uint64_t>(Operand.mem.disp) & AddressMask;
-          if (!Base || (*Base & (Width - 1)) != 0)
-            continue;
-          const va_t BaseVA = static_cast<va_t>(*Base & AddressMask);
-          va_t RunEnd = BaseVA;
-          while (Img.CodePtrRelocSlots.count(RunEnd) ||
-                 Img.DataPtrRelocSlots.count(RunEnd))
-            RunEnd += Width;
-          if (RunEnd > BaseVA)
-            Img.IndexedTableRuns.emplace_back(BaseVA, RunEnd);
-        }
-      }
-      Cur += static_cast<va_t>(Len);
-    }
-  }
-}
 
-void recordIndexedTableBasesInCode(BinaryImage &Img) {
-  if (Img.IsRelocatable || (Img.Arch != Arch::X86 && Img.Arch != Arch::X64))
-    return;
-  const uint32_t Width = Img.getPointerSize();
-  if (Width == 0)
-    return;
-  // Full-width relocated fields the current classification treats as
-  // instruction operands because they lie in an executable section.
+  size_t Remaining = limits::loader::kCOFFIndexedTableEvidenceWork;
   std::map<va_t, RelocatedAddressField> Candidates;
-  auto Collect = [&](const std::map<va_t, RelocatedAddressField> &Operands) {
-    for (const auto &[SlotVA, Field] : Operands) {
-      const Segment *Seg = Img.getSegmentFor(SlotVA);
-      if (!Seg || !Seg->isExecutable())
-        continue;
+  for (const auto *Operands :
+       {&Img.CodeAddressRelocOperands, &Img.DataAddressRelocOperands})
+    for (const auto &[Slot, Field] : *Operands) {
+      if (!Remaining--)
+        return;
       if (Field.Width == Width && !Field.PCRelativeFromInstructionEnd &&
           Field.Kind == RelocatedAddressFieldKind::Generic)
-        Candidates.emplace(SlotVA, Field);
+        Candidates.emplace(Slot, Field);
     }
-  };
-  Collect(Img.CodeAddressRelocOperands);
-  Collect(Img.DataAddressRelocOperands);
-  if (Candidates.empty())
+  if (Candidates.empty() && Img.CodePtrRelocSlots.empty() &&
+      Img.DataPtrRelocSlots.empty())
     return;
 
-  std::set<va_t> Starts;
-  auto AddStart = [&](va_t Addr) {
-    Starts.insert(normalizeCodeAddress(Addr, Img.Arch, Img.Mode));
-  };
+  std::set<va_t> Anchors = Img.RelCodeTableAnchors;
+  for (const Symbol &Sym : Img.Symbols) {
+    if (!Remaining--)
+      return;
+    if (!Sym.IsSection)
+      Anchors.insert(Sym.Addr);
+  }
+  for (const auto &[Slot, Field] : Img.DataAddressRelocOperands) {
+    if (!Remaining--)
+      return;
+    if (!Field.PCRelativeFromInstructionEnd && Field.TargetVA != InvalidVA)
+      Anchors.insert(Field.TargetVA);
+  }
+
+  std::set<va_t> Work;
   if (Img.Entry)
-    AddStart(Img.Entry);
+    Work.insert(Img.Entry);
   for (const Symbol &Sym : Img.Symbols)
     if (Sym.IsFunc && !Sym.IsSection)
-      AddStart(Sym.Addr);
-  for (const va_t Addr : Img.RuntimeFunctionAddrs)
-    AddStart(Addr);
+      Work.insert(Sym.Addr);
+  Work.insert(Img.RuntimeFunctionAddrs.begin(), Img.RuntimeFunctionAddrs.end());
   for (const auto &[Begin, End] : Img.KnownCodeRanges)
-    AddStart(Begin);
+    Work.insert(Begin);
   for (const Export &Exp : Img.Exports)
-    AddStart(Exp.Addr);
+    Work.insert(Exp.Addr);
 
+  // Only reached, complete instructions supply table-read evidence. A linear
+  // sweep could decode a table or a dead byte string as another indexed CALL.
   Decoder Dec;
   if (!Dec.init(Img))
     return;
-  // A memory operand at a fixed base with a runtime index — `[base+idx*s]` —
-  // is a table access. No immediate inside an instruction is ever read that
-  // way, so a base in an executable section names data the linker placed
-  // among the code (MinGW's CRT keeps its constructor list in .text): the
-  // relocation-covered words of that table are pointer slots, not operands.
-  std::set<va_t> TableBases;
-  std::set<va_t> JumpReadBases;
-  const uint64_t AddressMask =
-      Img.Arch == Arch::X86 ? uint64_t{0xFFFFFFFF} : ~uint64_t{0};
-  for (const Section &Sec : Img.Sections) {
-    if (!Sec.isExecutable() || Sec.Size > InvalidVA - Sec.VA)
-      continue;
-    const va_t End = Sec.VA + Sec.Size;
-    va_t Cur = Sec.VA;
-    while (Cur < End) {
-      size_t Available = static_cast<size_t>(std::min<va_t>(16, End - Cur));
-      const uint8_t *Bytes = nullptr;
-      while (Available && !(Bytes = Img.readVA(Cur, Available)))
-        --Available;
-      DecodedInsn Insn{};
-      const int Len = Bytes && Dec.selectMode(Img, Cur)
-                          ? Dec.decodeOne(Bytes, Available, Cur, Insn)
-                          : 0;
-      if (Len <= 0 || !Insn.Raw || !Insn.Raw->detail) {
-        ++Cur;
-        continue;
+  struct TableRead {
+    va_t Instruction;
+    bool Call;
+    bool Jump;
+  };
+  std::map<va_t, std::vector<TableRead>> Reads;
+  std::map<va_t, va_t> Instructions;
+  std::set<va_t> Seen;
+  std::map<va_t, std::vector<va_t>> TableSlots;
+  std::set<va_t> FollowedTables;
+  // Cache each relocation run once. Its instruction overlap and all discovered
+  // anchors are checked before publishing evidence, including any run used to
+  // reach another dispatcher.
+  auto SlotsAt = [&](va_t Base) -> const std::vector<va_t> * {
+    auto [It, Inserted] = TableSlots.try_emplace(Base);
+    auto &Slots = It->second;
+    if (!Inserted)
+      return &Slots;
+    const Section *Sec = Img.getSectionFor(Base);
+    const auto OwnerEnd = Img.mappedObjectOwnerEnd(Base);
+    if (!OwnerEnd || Sec->Size > InvalidVA - Sec->VA)
+      return &Slots;
+    va_t End = std::min(Sec->VA + Sec->Size, *OwnerEnd);
+    if (const auto Next = Anchors.upper_bound(Base); Next != Anchors.end())
+      End = std::min(End, *Next);
+    for (va_t Slot = Base; Slot < End && Width <= End - Slot; Slot += Width) {
+      if (!Remaining--)
+        return nullptr;
+      const uint8_t *Bytes = Img.readVA(Slot, Width);
+      if (!Bytes || (Sec->isExecutable() &&
+                     !isFileBackedCodeImageRange(Img, Slot, Width)))
+        break;
+      if (!Candidates.count(Slot) && !Img.CodePtrRelocSlots.count(Slot) &&
+          !Img.DataPtrRelocSlots.count(Slot)) {
+        // A constructor-list sentinel grants no callable identity itself.
+        const uint64_t Value = readPtr(Bytes, Img.is64Bit());
+        const uint64_t AllOnes = Width == 4 ? uint64_t(UINT32_MAX) : UINT64_MAX;
+        if (Slot == Base && (Value == 0 || Value == AllOnes) &&
+            !Img.hasPointerStorageProvenanceAt(Slot))
+          continue;
+        break;
       }
-      const cs_x86 &X86 = Insn.Raw->detail->x86;
-      for (uint8_t I = 0; I < X86.op_count; ++I) {
-        const cs_x86_op &Operand = X86.operands[I];
-        if (Operand.type != X86_OP_MEM ||
-            Operand.mem.index == X86_REG_INVALID)
+      Slots.push_back(Slot);
+    }
+    return &Slots;
+  };
+  while (!Work.empty()) {
+    if (!Remaining--)
+      return; // Publish no partial evidence after exhausting the walk.
+    const va_t Cur = *Work.begin();
+    Work.erase(Work.begin());
+    if (!Seen.insert(Cur).second || Img.DataInCode.count(Cur))
+      continue;
+    const Section *Sec = Img.getSectionFor(Cur);
+    if (!Sec || !Sec->isExecutable() || Sec->isWritable() ||
+        Sec->Size > InvalidVA - Sec->VA)
+      continue;
+    size_t Available =
+        std::min<va_t>(x86::kMaxInstructionLen, Sec->VA + Sec->Size - Cur);
+    const uint8_t *Bytes = nullptr;
+    while (Available && !(Bytes = Img.readVA(Cur, Available)))
+      --Available;
+    DecodedInsn Insn{};
+    const int Len = Bytes && Dec.selectMode(Img, Cur)
+                        ? Dec.decodeOne(Bytes, Available, Cur, Insn)
+                        : 0;
+    if (Len <= 0 || !Insn.Raw || !Insn.Raw->detail ||
+        !isFileBackedCodeImageRange(Img, Cur, Len))
+      continue;
+    const va_t End = Cur + Len;
+    const auto Next = Instructions.lower_bound(Cur);
+    if ((Next != Instructions.end() && Next->first < End) ||
+        (Next != Instructions.begin() && std::prev(Next)->second > Cur))
+      return; // Conflicting instruction boundaries cannot authenticate data.
+    Instructions.emplace(Cur, End);
+
+    const cs_detail &Detail = *Insn.Raw->detail;
+    const cs_x86 &X86 = Detail.x86;
+    for (uint8_t I = 0; I < X86.op_count; ++I) {
+      const cs_x86_op &Operand = X86.operands[I];
+      if (Insn.Id == X86_INS_LEA || Operand.type != X86_OP_MEM ||
+          Operand.size != Width || !(Operand.access & CS_AC_READ) ||
+          (Operand.access & CS_AC_WRITE) || X86.addr_size != Width ||
+          Operand.mem.segment != X86_REG_INVALID ||
+          Operand.mem.base != X86_REG_INVALID ||
+          Operand.mem.index == X86_REG_INVALID ||
+          Operand.mem.scale != static_cast<int>(Width))
+        continue;
+      const va_t Base =
+          Width == 4 ? uint32_t(Operand.mem.disp) : uint64_t(Operand.mem.disp);
+      const Section *Table = Img.getSectionFor(Base);
+      if (Base % Width == 0 && Table && Table->isReadable()) {
+        const bool ControlFlow =
+            Insn.Id == X86_INS_CALL || Insn.Id == X86_INS_JMP;
+        Reads[Base].push_back(
+            {Cur, Insn.Id == X86_INS_CALL, Insn.Id == X86_INS_JMP});
+        if (!ControlFlow || !FollowedTables.insert(Base).second)
           continue;
-        std::optional<va_t> Base;
-        if (Operand.mem.base == X86_REG_RIP)
-          Base = Insn.Addr + Insn.Size +
-                 static_cast<uint64_t>(Operand.mem.disp);
-        else if (Operand.mem.base == X86_REG_INVALID)
-          Base = static_cast<uint64_t>(Operand.mem.disp) & AddressMask;
-        if (!Base || (*Base & (Width - 1)) != 0)
-          continue;
-        const Segment *Seg = Img.getSegmentFor(*Base);
-        if (Seg && Seg->isReadable()) {
-          const va_t BaseVA = static_cast<va_t>(*Base & AddressMask);
-          TableBases.insert(BaseVA);
-          // A table a CALL reads through holds callable entries, not another
-          // function's case labels: its slots promote as callbacks.
-          if (Insn.Id == X86_INS_CALL)
-            Img.CallDispatchTableBases.insert(BaseVA);
-          // A table an indirect JUMP reads holds that function's case
-          // labels: the discovery scan must not turn them into functions.
-          if (Insn.Id == X86_INS_JMP)
-            JumpReadBases.insert(BaseVA);
+        const auto *Slots = SlotsAt(Base);
+        if (!Slots)
+          return;
+        for (va_t Slot : *Slots) {
+          va_t Target = InvalidVA;
+          if (Img.CodePtrRelocSlots.count(Slot) &&
+              !Img.DataPtrRelocSlots.count(Slot))
+            Target = readPtr(Img.readVA(Slot, Width), Img.is64Bit());
+          else if (const auto Field = Candidates.find(Slot);
+                   Field != Candidates.end() &&
+                   Img.CodeAddressRelocOperands.count(Slot))
+            Target = Field->second.TargetVA;
+          if (Target != InvalidVA && !Img.DataInCode.count(Target) &&
+              Img.hasExecutableCodeOwnerAt(Target))
+            Work.insert(Target);
         }
       }
-      va_t After = Cur + static_cast<va_t>(Len);
-      if (auto Inside = Starts.upper_bound(Cur);
-          Inside != Starts.end() && *Inside < After)
-        After = *Inside;
-      Cur = After;
+    }
+    bool Branch = false;
+    for (uint8_t I = 0; I < Detail.groups_count; ++I)
+      Branch |= Detail.groups[I] == CS_GRP_JUMP;
+    if (Branch && X86.op_count == 1 && X86.operands[0].type == X86_OP_IMM)
+      Work.insert(static_cast<va_t>(X86.operands[0].imm));
+    if (const va_t Callee = Dec.directCallTarget(Insn); Callee != InvalidVA)
+      Work.insert(Callee);
+    if (!Dec.isFunctionTerminator(Insn))
+      Work.insert(End);
+  }
+
+  auto OverlapsCode = [&](va_t Slot) {
+    const auto Next = Instructions.lower_bound(Slot);
+    return (Next != Instructions.end() && Next->first - Slot < Width) ||
+           (Next != Instructions.begin() && std::prev(Next)->second > Slot);
+  };
+  std::vector<AbsolutePointerRelocationEffect> Effects;
+  struct TableRun {
+    va_t Base;
+    va_t FirstSlot;
+    va_t End;
+  };
+  std::vector<TableRun> Runs;
+  for (const auto &[Base, Uses] : Reads)
+    Anchors.insert(Base);
+  for (const auto &[Base, Uses] : Reads) {
+    const auto *Slots = SlotsAt(Base);
+    if (!Slots)
+      return;
+    const auto Next = Anchors.upper_bound(Base);
+    const va_t End = Next == Anchors.end() ? InvalidVA : *Next;
+    size_t Count = 0;
+    // A skipped constructor sentinel is still table storage: reached code
+    // overlapping that header invalidates the table and its flow edges too.
+    if (!OverlapsCode(Base))
+      while (Count < Slots->size() && (*Slots)[Count] < End &&
+             Width <= End - (*Slots)[Count] && !OverlapsCode((*Slots)[Count]))
+        ++Count;
+    if (FollowedTables.count(Base) && Count != Slots->size())
+      return; // A disproved flow edge cannot authenticate its descendants.
+    if (Count == 0)
+      continue;
+    if (Count > Remaining / Uses.size())
+      return;
+    Remaining -= Count * Uses.size();
+    Runs.push_back({Base, Slots->front(), (*Slots)[Count - 1] + Width});
+  }
+
+  // Each complete contiguous run supplies its exact slots. A gap, instruction
+  // operand or section end never borrows table identity from nearby storage.
+  std::vector<va_t> Starts;
+  for (const auto &Run : Runs)
+    if (Img.hasExecutableCodeOwnerAt(Run.Base) &&
+        !Img.DataInCode.count(Run.Base))
+      Starts.push_back(Run.Base);
+  recordDataInCode(Img, Starts);
+  for (const auto &Run : Runs)
+    if (FollowedTables.count(Run.Base) &&
+        Img.hasExecutableCodeOwnerAt(Run.Base) &&
+        !Img.DataInCode.count(Run.Base)) {
+      // The shared metadata authority vetoed a flow table. Roll back only
+      // this pass's new markers; no descendant may keep that rejected edge.
+      for (va_t Start : Starts)
+        Img.DataInCode.erase(Start);
+      return;
+    }
+  std::map<va_t, va_t> AcceptedRuns;
+  for (const auto &[Begin, FirstSlot, End] : Runs) {
+    const bool InCode = Img.hasExecutableCodeOwnerAt(Begin);
+    if (InCode && !Img.DataInCode.count(Begin))
+      continue;
+    AcceptedRuns.emplace(Begin, End);
+    for (va_t Slot = FirstSlot; Slot < End; Slot += Width) {
+      if (auto It = Candidates.find(Slot); It != Candidates.end()) {
+        const auto &Field = It->second;
+        Effects.push_back(decideAbsolutePointerRelocation(
+            Img, Slot, Field.TargetVA, Field.TargetOwnerVA, [&](va_t Addr) {
+              auto Class = classifyPointerRelocationAddress(Img, Addr);
+              if (Addr == Slot)
+                Class.Executable = false;
+              return Class;
+            }));
+      }
+      for (const TableRead &Use : Reads.at(Begin)) {
+        if (Use.Call)
+          Img.CallDispatchRelocSlots.insert(Slot);
+        if (Use.Jump)
+          Img.JumpDispatchTableSources[Slot].insert(Use.Instruction);
+      }
     }
   }
-  if (TableBases.empty())
-    return;
-
-  // A relocated field within a bounded window after a table base belongs to
-  // the table. Re-decide it as the slot it would have been had the section
-  // kept data only.
-  std::vector<AbsolutePointerRelocationEffect> Slots;
-  std::vector<va_t> DataStarts;
-  for (const auto &[SlotVA, Field] : Candidates) {
-    auto It = TableBases.upper_bound(SlotVA);
-    if (It == TableBases.begin())
+  // A relocated operand naming an exact accepted object is a data address.
+  for (const auto &[Slot, Field] : Img.CodeAddressRelocOperands) {
+    const auto Run = AcceptedRuns.upper_bound(Field.TargetVA);
+    if (Run == AcceptedRuns.begin() ||
+        Field.TargetVA >= std::prev(Run)->second || Field.Width != Width ||
+        Field.PCRelativeFromInstructionEnd ||
+        Field.Kind != RelocatedAddressFieldKind::Generic)
       continue;
-    const va_t Base = *std::prev(It);
-    if (SlotVA - Base > 8 * Width)
+    const auto Storage = AcceptedRuns.upper_bound(Slot);
+    if (Storage != AcceptedRuns.begin() && Slot < std::prev(Storage)->second)
       continue;
-    Slots.push_back(decideAbsolutePointerRelocation(
-        Img, SlotVA, Field.TargetVA, Field.TargetOwnerVA, [&](va_t Addr) {
-          PointerRelocationAddressClass Class =
-              classifyPointerRelocationAddress(Img, Addr);
-          if (Addr == SlotVA)
+    Effects.push_back(decideAbsolutePointerRelocation(
+        Img, Slot, Field.TargetVA, InvalidVA, [&](va_t Addr) {
+          auto Class = classifyPointerRelocationAddress(Img, Addr);
+          if (Addr == Field.TargetVA)
             Class.Executable = false;
           return Class;
         }));
   }
-  for (const AbsolutePointerRelocationEffect &Slot : Slots)
-    if (Slot.What != AbsolutePointerRelocationEffect::Kind::None) {
-      Img.CodeAddressRelocOperands.erase(Slot.SlotVA);
-      Img.DataAddressRelocOperands.erase(Slot.SlotVA);
-      applyAbsolutePointerRelocation(Img, Slot);
+  for (const auto &Effect : Effects)
+    if (Effect.What != AbsolutePointerRelocationEffect::Kind::None) {
+      Img.CodeAddressRelocOperands.erase(Effect.SlotVA);
+      Img.DataAddressRelocOperands.erase(Effect.SlotVA);
+      applyAbsolutePointerRelocation(Img, Effect);
     }
-  // Name the tables as data objects so later passes treat them as objects,
-  // not instruction bytes.  A table in a non-executable section (lld-link's
-  // .rdata jump tables) is dropped by the code-address filter inside
-  // recordDataInCode, so record it directly: the reader discovery in the
-  // function detector needs the run start.
-  for (const va_t Base : TableBases) {
-    if (Img.isCodeAddress(Base))
-      DataStarts.push_back(Base);
-    else
-      Img.DataInCode.insert(Base);
-    // Jump-read runs were recorded before discovery; nothing more here.
-  }
-  recordDataInCode(Img, DataStarts);
 }
 
 void recordRelocatedPointerRunsInCode(BinaryImage &Img) {
@@ -1009,12 +1089,6 @@ void recordRelocatedPointerRunsInCode(BinaryImage &Img) {
   for (const auto &[Begin, End] : Runs)
     Starts.push_back(Begin);
   recordDataInCode(Img, Starts);
-  // A run in a non-executable section (lld-link's .rdata jump tables) is as
-  // much a data object as one among the code; the code-address filter above
-  // drops it, so record it directly for the reader discovery that follows.
-  for (const auto &[Begin, End] : Runs)
-    if (!Img.isCodeAddress(Begin))
-      Img.DataInCode.insert(Begin);
 }
 
 void parseTLSDirectory(const COFFObjectFile &Obj, BinaryImage &Img,

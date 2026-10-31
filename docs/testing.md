@@ -15297,6 +15297,31 @@ code.
 `NeverDRelocatedFunctionEntryTests` checks LLVM's shared entry evidence across
 x86, x64, Thumb and AArch64 with PE, ELF and Mach-O images. It covers bounded
 relocation proofs, complete CFG tables, malformed metadata and cache reuse.
+Its `COFFIndexedTables` cases cover short and long in-code pointer tables,
+constructor sentinels, exact relocation gaps, conflicting instruction bytes,
+unreachable or non-reading operands, existing pointer-run classifications,
+out-of-line callbacks and jump-table ownership. They discard nested evidence
+when code overlaps or metadata vetoes a table. A synthetic linked PE exercises
+the loader through function discovery. LLVM cases require runtime indices in
+escaped table addresses, including code segments beyond the embedding limit,
+and reject unrelated code identities and unresolved pointers across formats.
+The focused target also runs `PointerRelocationBatch` to check the existing
+relocation classification contract. The pointer-boundary target's
+`WidenedIndexDoesNotAuthorizeMixedCallableAndScalarSlots` keeps a zero-extended
+index from bypassing callable-slot validation in mixed records.
+`COFFJumpTableEvidence` runs authored PE images through the actual loader:
+dead, segmented, narrow and wrong-stride jumps cannot hide callbacks; CALL/JMP
+sharing and adjacent named objects retain their independent entries. Nested
+dispatchers reached through CALL/JMP tables keep their cases in the correct
+function. Its i386 mask case rejects scalar call targets in linked and
+relocatable COFF, with an all-callable control. `COFFMinGWStyleTables` uses fixed
+assembly so optimization cannot remove its executable CALL table or `.rdata`
+JMP table. It checks exact
+slots, readers, all five functions and LLVM verification. On Linux x86 hosts,
+the original instructions and lifted LLVM execute as freestanding i386 ELF,
+with independent dispatch/switch results at O0/O2 and high-bit/wrapping inputs.
+Other hosts explicitly skip that execution check; the PE pipeline check still
+runs when cross-target Clang and lld-link are available.
 `CFGMetadataAuthenticatesEntriesWithoutRelocations` checks that metadata alone
 identifies a code address, while its absence still refuses that address.
 `RelocationsDoNotAuthenticateContinuationStarts` and

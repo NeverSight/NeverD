@@ -99,14 +99,11 @@ void scanCodePointersX64(const BinaryImage &Img, Decoder &Dec,
 /// immediate, such as `push offset handler` or `mov [esi+10h], offset
 /// callback`: (instruction, target) pairs, in sweep order.  A relocated
 /// displacement names memory the instruction reads or writes, not code to
-/// run, and is left out. A relocated fixed-base indexed JMP supplies a
-/// separate table-base -> reader map; ordinary data references do not grant
-/// ownership of a table's code-pointer targets.
-void scanCodeAddressImmediatesX86(
-    const BinaryImage &Img, Decoder &Dec,
-    std::vector<std::pair<va_t, va_t>> &Out,
-    std::map<va_t, std::vector<va_t>> &JumpReaders,
-    const Cancellation *Control = nullptr);
+/// run, and is left out. Indexed dispatch storage is authenticated separately
+/// by the loader; ordinary data references do not grant table ownership.
+void scanCodeAddressImmediatesX86(const BinaryImage &Img, Decoder &Dec,
+                                  std::vector<std::pair<va_t, va_t>> &Out,
+                                  const Cancellation *Control = nullptr);
 
 /// Whether the x86 instruction at \p Insn lets the code address its
 /// immediate names escape: `push imm32` passes it as an argument and

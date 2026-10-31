@@ -1080,22 +1080,19 @@ COFFLoader::loadBuffer(llvm::MemoryBufferRef Buffer) {
   // or data-pointer heuristic can turn an interior instruction into a symbol.
   // Personality resolution still follows import-veneer discovery below.
   dwarf_eh::recordFrameExtents(Img);
-  // Jump-read indexed table runs must be known before the data-pointer
-  // discovery scan: a jump table in .rdata would otherwise synthesize a
-  // function symbol for every switch case whose first bytes pass the
-  // prologue check.  This step only reads relocation state; the
-  // reclassifying pass still runs after pointer-run discovery below.
-  coff_loader::recordIndexedJumpTableRuns(Img);
+  // Authenticate dispatch storage before a heuristic can name its case
+  // labels as functions. One loader pass owns CALL/JMP slot evidence in both
+  // executable and ordinary data sections.
+  coff_loader::recordSymbolTableDataInCode(Img);
+  coff_loader::recordRelocatedPointerRunsInCode(Img);
+  coff_loader::recordIndexedTableBasesInCode(Img);
   runPostLoadDiscovery(
       Img,
       "coff: loaded " +
           pathToUTF8(std::filesystem::u8path(Buffer.getBufferIdentifier().str())
                          .filename()),
       Progress);
-  coff_loader::recordSymbolTableDataInCode(Img);
   Progress.report("parse", 0, 1, "PE/COFF code literals");
-  coff_loader::recordRelocatedPointerRunsInCode(Img);
-  coff_loader::recordIndexedTableBasesInCode(Img);
   coff_loader::recordConstantCodeSlots(Img);
   Progress.report("parse", 0, 1, "language runtime");
   // Classified before any table is read.  A PE is the format where schema and

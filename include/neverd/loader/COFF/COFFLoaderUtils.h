@@ -179,18 +179,11 @@ void recordConstantCodeSlots(BinaryImage &Img);
 /// jump table so, after its function.
 void recordRelocatedPointerRunsInCode(BinaryImage &Img);
 
-/// Reclassify the relocation-covered words of tables the code reads through a
-/// runtime-indexed fixed-base memory operand in an executable section: those
-/// words are data the linker placed among the code, never instruction
-/// operands.
+/// Authenticate fixed-base indexed pointer reads reached from known code
+/// entries. Reclassify complete relocated runs among code and record exact
+/// CALL slots and JMP readers in any readable section. Run before heuristic
+/// function discovery so case labels cannot acquire false function symbols.
 void recordIndexedTableBasesInCode(BinaryImage &Img);
-
-/// Record the [begin, end) runs of tables an indirect JUMP reads through a
-/// runtime-indexed fixed-base memory operand, before the data-pointer
-/// discovery scan runs: a jump table in .rdata would otherwise synthesize a
-/// function symbol for every switch case.  Reads relocation state only;
-/// pairs with the reclassifying recordIndexedTableBasesInCode below.
-void recordIndexedJumpTableRuns(BinaryImage &Img);
 
 /// Parse one delay-import descriptor from the already mapped image.  Supports
 /// current RVA descriptors and legacy VA descriptors, returning the number of

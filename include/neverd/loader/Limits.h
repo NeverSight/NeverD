@@ -43,6 +43,11 @@ inline constexpr uint32_t kLanguageEHGoMaxBitmaps = 1u << 12;
 inline constexpr uint32_t kLanguageEHGoMaxBits = 1u << 16;
 inline constexpr uint32_t kLanguageEHGoMaxTotalBytes = 1u << 20;
 
+// lib/loader/COFF/COFFLoaderUtils.cpp
+/// Whole-image instruction/slot visits for indexed pointer-table evidence.
+/// Exhaustion publishes none of the partial scan's table classifications.
+inline constexpr size_t kCOFFIndexedTableEvidenceWork = 1u << 20;
+
 // lib/loader/COFF/eh/COFFDelphiEH.cpp
 /// Bound on one `except on` arm table.  Delphi allows any number of arms, but
 /// a count beyond this is a mis-identified descriptor rather than a program.
