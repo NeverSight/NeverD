@@ -47,6 +47,7 @@
 #include "llvm/TargetParser/Triple.h"
 
 #include <cstdlib>
+#include <iterator>
 #include <optional>
 #include <stdexcept>
 #include <tuple>
@@ -723,6 +724,82 @@ TEST(LLVMCValues, VectorTrailingZeroElementsPreserveLaneOrderAndZeroPolicy) {
   EXPECT_EQ(Source.find("experimental_cttz"), std::string::npos);
   for (llvm::StringRef Level : {"-O0", "-O2"})
     compileAndRun(Source + Main, Level, {}, true);
+}
+
+TEST(LLVMCValues, VmrunContextKeepsGuestRegisterOutputs) {
+  llvm::LLVMContext Context;
+  llvm::SMDiagnostic Error;
+  auto Module = llvm::parseAssemblyString(R"ir(
+declare void @llvm.x86.vmrun.context(ptr, i32) convergent noduplicate
+define i64 @vmrun_rcx_result(ptr %context) {
+  %rcx = getelementptr i8, ptr %context, i64 40
+  store i64 4660, ptr %rcx, align 8
+  call void @llvm.x86.vmrun.context(ptr %context, i32 64)
+  %result = load i64, ptr %rcx, align 8
+  ret i64 %result
+}
+)ir",
+                                          Error, Context);
+  ASSERT_TRUE(Module) << Error.getMessage().str();
+  Module->setTargetTriple(llvm::Triple("x86_64-linux-gnu"));
+  Module->setDataLayout("e-p:64:64-i64:64-i128:128");
+  ASSERT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
+  neverd::CEmitterOptions Options;
+  Options.TheArch = neverd::Arch::X64;
+  Options.PreserveLLVMFunctionTypes = true;
+  std::string Source;
+  llvm::raw_string_ostream OS(Source);
+  neverd::LLVMCEmitter Emitter;
+  ASSERT_TRUE(Emitter.emit(*Module, OS, Options));
+  if (const char *Directory =
+          std::getenv("NEVERD_ISA_REGRESSION_ARTIFACT_DIR")) {
+    std::error_code EC;
+    llvm::raw_fd_ostream Artifact(std::string(Directory) + "/vmrun-context.c",
+                                  EC);
+    ASSERT_FALSE(EC);
+    Artifact << Source;
+  }
+  EXPECT_NE(Source.find("__builtin_ia32_vmrun_context"), std::string::npos);
+  EXPECT_EQ(Source.find("__asm__"), std::string::npos);
+  // A controlled completion checks the C projection's data dependency. The
+  // separate SVM guest fixture executes the native compiler-owned transition.
+  const std::string Harness = R"c(
+#include <stdint.h>
+#include <stdlib.h>
+static void complete_vmrun(void *context, unsigned width) {
+  uint64_t *state=(uint64_t *)context;
+  if (width!=64 || state[5]!=0x1234) abort();
+  state[5]=0x5678;
+}
+#define __builtin_ia32_vmrun_context complete_vmrun
+)c" + Source + R"c(
+int main(void) {
+  uint64_t context[18]={0};
+  return vmrun_rcx_result(context)!=0x5678;
+}
+)c";
+  for (const char *Opt : {"-O0", "-O2"})
+    compileAndRun(Harness, Opt);
+  auto &Block = Module->getFunction("vmrun_rcx_result")->getEntryBlock();
+  auto *Call = llvm::cast<llvm::CallInst>(&*std::next(Block.begin(), 2));
+  EXPECT_THROW((void)neverd::renderX86VirtualizationNativeCall(
+                   neverd::Arch::X86, *Call, "", false, {"context", "64"}),
+               std::invalid_argument);
+  Call->setArgOperand(
+      1, llvm::ConstantInt::get(llvm::Type::getInt32Ty(Context), 16));
+  EXPECT_THROW((void)neverd::renderX86VirtualizationNativeCall(
+                   neverd::Arch::X64, *Call, "", false, {"context", "16"}),
+               std::invalid_argument);
+  Call->setArgOperand(
+      1, llvm::ConstantInt::get(llvm::Type::getInt32Ty(Context), 64));
+  Call->setMemoryEffects(llvm::MemoryEffects::readOnly());
+  EXPECT_THROW((void)neverd::renderX86VirtualizationNativeCall(
+                   neverd::Arch::X64, *Call, "", false, {"context", "64"}),
+               std::invalid_argument);
+  Call->setMemoryEffects(llvm::MemoryEffects::argMemOnly());
+  EXPECT_THROW((void)neverd::renderX86VirtualizationNativeCall(
+                   neverd::Arch::X64, *Call, "", false, {"context", "64"}),
+               std::invalid_argument);
 }
 
 TEST(LLVMCValues, NativeVirtualizationKeepsStatusAndFailedReadPrior) {

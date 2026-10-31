@@ -1388,7 +1388,9 @@ TEST(SysVCallContract, AVariadicImportTakesTheParameterPassedThroughToIt) {
   EXPECT_EQ(Read.find("open()"), std::string::npos) << Read;
   EXPECT_TRUE(llvm::Regex("open\\([^,]*arg0[^,]*, [^,]*arg1").match(Read))
       << Read;
-  EXPECT_TRUE(llvm::Regex("open\\([^,]*arg0[^,]*, [^,]*arg1[^,]*, 0x1A4\\)")
+  // Variadic constants retain the complete machine-word carrier.
+  EXPECT_TRUE(llvm::Regex("open\\([^,]*arg0[^,]*, [^,]*arg1[^,]*, "
+                          "\\(uint64_t\\)0x1A4\\)")
                   .match(Write))
       << Write;
   EXPECT_EQ(Source.find("unknown value"), std::string::npos) << Source;
@@ -1435,10 +1437,12 @@ TEST(SysVCallContract, AVariadicImportReadsTheParametersPassedOnToIt) {
       llvm::Regex("opener\\([^)]*arg0, [^)]*arg1, [^)]*arg2\\)").match(Open))
       << Open;
   EXPECT_TRUE(llvm::Regex("openat\\([^,]*arg0[^,]*, [^,]*arg1[^,]*, "
-                          "[^,]*arg2[^,]*, 0\\)")
+                          "[^,]*arg2[^,]*, \\(uint64_t\\)0\\)")
                   .match(Open))
       << Open;
-  EXPECT_TRUE(llvm::Regex("printf\\([^,]*arg0[^,]*, 7\\)").match(Log)) << Log;
+  EXPECT_TRUE(
+      llvm::Regex("printf\\([^,]*arg0[^,]*, \\(uint64_t\\)7\\)").match(Log))
+      << Log;
   EXPECT_EQ(Source.find("unknown value"), std::string::npos) << Source;
 }
 
@@ -2372,7 +2376,7 @@ TEST(SysVCallContract, ErrorCheckingWrapperEndsAtItsExitHelper) {
       Body.find("fputs((void *)(uintptr_t)arg0, (void *)(uintptr_t)arg1)"),
       std::string::npos)
       << Body;
-  EXPECT_NE(Body.find("die(3)"), std::string::npos) << Body;
+  EXPECT_NE(Body.find("die((uint64_t)3)"), std::string::npos) << Body;
   EXPECT_EQ(Body.find("next("), std::string::npos) << Body;
   EXPECT_EQ(Body.find("unknown value"), std::string::npos) << Body;
 }

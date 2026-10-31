@@ -2672,6 +2672,155 @@ MedFunc observedCallSlot() {
   return Func;
 }
 
+TEST(SourceCallReturnReads, PhysicalPushOverwritesAnUnavailablePrivateSpill) {
+  for (Arch Architecture : {Arch::X86, Arch::X64})
+    for (BinaryFormat Format :
+         {BinaryFormat::COFF, BinaryFormat::ELF, BinaryFormat::MachO}) {
+      SCOPED_TRACE(static_cast<unsigned>(Architecture));
+      SCOPED_TRACE(static_cast<unsigned>(Format));
+      auto Func = observedCallSlot();
+      auto Image = callSlotImage();
+      Image.Arch = Architecture;
+      Image.Format = Format;
+      Image.Bits =
+          Architecture == Arch::X86 ? Bitness::Bits32 : Bitness::Bits64;
+      const auto Width = getTargetRegInfo(Architecture).PointerSize;
+      auto &Ops = Func.Blocks[0].Ops;
+      Ops.erase(Ops.begin() + 5);
+      Ops.back().Inputs[0] = MedVar::makeConst(7, Width);
+      Ops[3].Inputs[1] = MedVar::makeUnspecified(Width, Architecture);
+      Ops[2].Inputs[1].ConstVal = Width;
+      for (auto &Op : Ops) {
+        Op.Output.TheArch = Architecture;
+        Op.Output.Size = Width;
+        for (unsigned I = 0; I < Op.NumInputs; ++I) {
+          Op.Inputs[I].TheArch = Architecture;
+          Op.Inputs[I].Size = Width;
+        }
+      }
+      std::string Error;
+      ASSERT_TRUE(preserveSourceCallReturnWrites(Func, Image, Error)) << Error;
+      ASSERT_EQ(Ops.size(), 8u);
+      EXPECT_EQ(Ops[5].Opcode, NdOp::STORE);
+      EXPECT_EQ(Ops[5].Inputs[1].ConstVal, 0x100du);
+      markSourceStackAccesses(Func, Architecture, Format, StackEntryKind::Call,
+                              &Image);
+      EXPECT_TRUE(Ops[3].PrologueSave);
+      EXPECT_FALSE(Ops[5].PrologueSave);
+      EXPECT_TRUE(validateSourceCallReturnReads(Func, Image, Error)) << Error;
+    }
+}
+
+TEST(SourceCallReturnReads, AReadBeforeThePhysicalPushStillObservesTheSpill) {
+  auto Func = observedCallSlot();
+  auto Image = callSlotImage();
+  Image.Bits = Bitness::Bits64;
+  auto &Ops = Func.Blocks[0].Ops;
+  Ops[3].Inputs[1] = MedVar::makeUnspecified(8, Arch::X64);
+  std::swap(Ops[4], Ops[5]);
+  std::string Error;
+  ASSERT_TRUE(preserveSourceCallReturnWrites(Func, Image, Error)) << Error;
+  EXPECT_EQ(Ops.size(), 9u);
+  markSourceStackAccesses(Func, Arch::X64, BinaryFormat::ELF,
+                          StackEntryKind::Call, &Image);
+  EXPECT_FALSE(Ops[3].PrologueSave);
+  EXPECT_EQ(Ops[4].Opcode, NdOp::LOAD);
+}
+
+TEST(SourceCallReturnReads, ScratchProjectionNeedsAnExactCallAndPrivateFrame) {
+  for (unsigned Mode = 0; Mode < 8; ++Mode) {
+    SCOPED_TRACE(Mode);
+    auto Func = observedCallSlot();
+    auto Image = callSlotImage();
+    Image.Bits = Bitness::Bits64;
+    auto &Ops = Func.Blocks[0].Ops;
+    Ops.erase(Ops.begin() + 5);
+    Ops[3].Inputs[1] = MedVar::makeUnspecified(8, Arch::X64);
+    Ops.back().Inputs[0] = MedVar::makeConst(7, 8);
+    switch (Mode) {
+    case 0:
+      Image.Segments[0].Data[8] = 0xe9; // Synthetic tail, no physical push.
+      break;
+    case 1:
+      Image.Segments[0].Data.resize(10); // Truncated near CALL.
+      Image.Segments[0].Size = 10;
+      break;
+    case 2:
+      Func.FrameSize = 32;
+      break;
+    case 3:
+      Func.AnalystStackFrame = true;
+      break;
+    case 4:
+      Func.SkippedSSA = true;
+      break;
+    case 5:
+      Ops.insert(Ops.begin() + 4, op(NdOp::COPY, sp(2),
+                                     {MedVar::makeUnspecified(8, Arch::X64)}));
+      break;
+    case 6:
+      Func.Blocks[0].Preds = {4};
+      break;
+    case 7:
+      Func.EntryKind = StackEntryKind::ProcessEntry;
+      break;
+    }
+    const auto Count = Ops.size();
+    std::string Error;
+    EXPECT_TRUE(preserveSourceCallReturnWrites(Func, Image, Error)) << Error;
+    EXPECT_EQ(Ops.size(), Count);
+    EXPECT_FALSE(Ops[3].PrologueSave);
+    EXPECT_EQ(Ops[3].Inputs[1].Kind, MedVar::Unspecified);
+  }
+}
+
+TEST(SourceCallReturnReads, IndirectTargetRolesSurviveThePhysicalPush) {
+  for (unsigned Mode = 0; Mode < 3; ++Mode) {
+    SCOPED_TRACE(Mode);
+    auto Func = observedCallSlot();
+    auto Image = callSlotImage();
+    Image.Bits = Bitness::Bits64;
+    auto &Bytes = Image.Segments[0].Data;
+    auto &Ops = Func.Blocks[0].Ops;
+    Bytes[8] = 0xff;
+    MedVar Target = rcx(0);
+    va_t PC = 0x100a;
+    if (Mode == 0) {
+      // A literal INDIR_CALL operand is pointer storage, such as an IAT slot.
+      Bytes[9] = 0x15;
+      Target = MedVar::makeConst(0x3000, 8);
+      PC = 0x100e;
+    } else if (Mode == 1) {
+      Bytes[9] = 0xd1; // call rcx: a variable is the callable value.
+    } else {
+      // call [rsp - 8] already loads its target before the implicit push.
+      Bytes[9] = 0x54;
+      Bytes[10] = 0x24;
+      Bytes[11] = 0xf8;
+      Target = temp(23);
+      PC = 0x100c;
+    }
+    Ops[4].Opcode = NdOp::INDIR_CALL;
+    Ops[4].Inputs[0] = Target;
+    if (Mode == 2)
+      Ops.insert(Ops.begin() + 4, op(NdOp::LOAD, Target, {Ops[2].Output}));
+    const size_t Store = Mode == 2 ? 6 : 5;
+    std::string Error;
+    ASSERT_TRUE(preserveSourceCallReturnWrites(Func, Image, Error)) << Error;
+    ASSERT_EQ(Ops.size(), Mode == 2 ? 10u : 9u);
+    if (Mode == 2) {
+      EXPECT_EQ(Ops[4].Opcode, NdOp::LOAD);
+      EXPECT_EQ(Ops[4].Inputs[0], Ops[2].Output);
+      EXPECT_EQ(Ops[4].Output, Target);
+    }
+    EXPECT_EQ(Ops[Store].Opcode, NdOp::STORE);
+    EXPECT_EQ(Ops[Store].Inputs[1].ConstVal, PC);
+    EXPECT_EQ(Ops[Store + 1].Opcode, NdOp::INDIR_CALL);
+    EXPECT_EQ(Ops[Store + 1].Inputs[0], Target);
+    EXPECT_TRUE(validateSourceCallReturnReads(Func, Image, Error)) << Error;
+  }
+}
+
 TEST(SourceCallReturnReads, ConstantOldContentsCannotHideTheImplicitWrite) {
   for (Arch Architecture : {Arch::X64, Arch::X86}) {
     SCOPED_TRACE(static_cast<unsigned>(Architecture));
