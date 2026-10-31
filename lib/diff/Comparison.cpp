@@ -1399,7 +1399,8 @@ void Matcher::collectAmbiguities() {
   // so resolving part of a group cannot hide an unpaired singleton remainder.
   llvm::DenseSet<uint32_t> InitializerPrimary, InitializerSecondary;
   for (const auto &F : Order)
-    if (F.Step == FunctionStep::Initializer) {
+    if (F.Step == FunctionStep::Initializer ||
+        F.Step == FunctionStep::DataInitializer) {
       InitializerPrimary.insert(F.Primary);
       InitializerSecondary.insert(F.Secondary);
     }
@@ -1690,22 +1691,27 @@ void Matcher::run(llvm::ArrayRef<Override> Overrides) {
     approximate(true);
   if (!stopNow())
     progress(1, 1);
-  if (P.CodeInitializers.size() > limits::kMinInitializerAnchors &&
-      S.CodeInitializers.size() > limits::kMinInitializerAnchors &&
+  if (!P.CodeInitializers.empty() && !S.CodeInitializers.empty() &&
       !stopNow()) {
     beginPhase("initializer-context");
-    progress(0, 2);
     std::vector<uint8_t> TrustedP(P.Functions.size(), 0),
         TrustedS(S.Functions.size(), 0);
     for (const auto &F : Order)
       if (protectedMatch(F) && !P.Functions[F.Primary].has(TraitIncomplete) &&
           !S.Functions[F.Secondary].has(TraitIncomplete))
         TrustedP[F.Primary] = TrustedS[F.Secondary] = 1;
-    const auto Initializers = initializerCandidates(P, PMatch, TrustedP, S,
-                                                    SMatch, TrustedS, Control);
+    InitializerCandidates Initializers;
+    const std::pair<const std::vector<std::pair<uint32_t, uint32_t>> *,
+                    FunctionStep>
+        Sources[]{{&Initializers.Contiguous, FunctionStep::Initializer},
+                  {&Initializers.Strided, FunctionStep::Initializer},
+                  {&Initializers.DataAddresses, FunctionStep::DataInitializer}};
+    progress(0, std::size(Sources));
+    if (!stopNow())
+      Initializers = initializerCandidates(P, PF, PMatch, TrustedP, S, SF,
+                                           SMatch, TrustedS, Control);
     unsigned Done = 0;
-    for (const auto *Proposals :
-         {&Initializers.Contiguous, &Initializers.Strided}) {
+    for (const auto &[Proposals, Step] : Sources) {
       if (stopNow())
         break;
       bool Proposed = false;
@@ -1714,16 +1720,16 @@ void Matcher::run(llvm::ArrayRef<Override> Overrides) {
           break;
         if (PMatch[A] != NoIndex || SMatch[B] != NoIndex)
           continue;
-        propose(A, B, FunctionStep::Initializer, true);
+        propose(A, B, Step, true);
         auto &Evidence = FeatureCandidates.find(pairKey(A, B))->second;
-        Evidence.Step = FunctionStep::Initializer;
+        Evidence.Step = Step;
         Evidence.Initializer = true;
         Proposed = true;
       }
       if (Proposed && !stopNow())
         approximate(true);
       if (!stopNow())
-        progress(++Done, 2);
+        progress(++Done, std::size(Sources));
     }
   }
   beginPhase("ambiguities");

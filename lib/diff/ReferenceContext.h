@@ -43,18 +43,20 @@ referenceCandidates(const Program &P, const ProgramFeatures &PF,
 struct InitializerCandidates {
   std::vector<std::pair<uint32_t, uint32_t>> Contiguous;
   std::vector<std::pair<uint32_t, uint32_t>> Strided;
+  std::vector<std::pair<uint32_t, uint32_t>> DataAddresses;
 };
 
 /// Complete initializer neighborhoods need distinct independent anchors and a
 /// unique counterpart. Every aligned occurrence must agree before proposing an
-/// unmatched function. This establishes neither object nor runtime identity.
-InitializerCandidates initializerCandidates(const Program &P,
-                                            llvm::ArrayRef<uint32_t> PMatch,
-                                            llvm::ArrayRef<uint8_t> PTrusted,
-                                            const Program &S,
-                                            llvm::ArrayRef<uint32_t> SMatch,
-                                            llvm::ArrayRef<uint8_t> STrusted,
-                                            const ComparisonControl &Control);
+/// unmatched function. Complete paired address uses can also bound intervals
+/// with identical slot positions. This establishes neither object nor runtime
+/// identity; proposals never bootstrap their own witnesses.
+InitializerCandidates initializerCandidates(
+    const Program &P, const ProgramFeatures &PF,
+    llvm::ArrayRef<uint32_t> PMatch, llvm::ArrayRef<uint8_t> PTrusted,
+    const Program &S, const ProgramFeatures &SF,
+    llvm::ArrayRef<uint32_t> SMatch, llvm::ArrayRef<uint8_t> STrusted,
+    const ComparisonControl &Control);
 
 /// Complete callers can contradict a provisional body match. Returns review
 /// alternatives with exactly one unmatched endpoint; WeakP/WeakS mark the

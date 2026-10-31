@@ -310,7 +310,12 @@ ReadInstruction readInstruction(const BinaryImage &Image,
       Key = hashText("callee"); // Compared through function correspondence.
     else {
       const auto Ref = Keys.reference(Value);
-      R.AddressReferences.push_back({Ref.second, Operand, Ref.first});
+      const auto Coordinate = Ref.first != ReferenceKind::Function &&
+                                      Image.hasObjectDataProvenance(Value)
+                                  ? std::optional<uint64_t>(Value)
+                                  : std::nullopt;
+      R.AddressReferences.push_back(
+          {Ref.second, Operand, Ref.first, Coordinate});
       Shape.add(static_cast<uint64_t>(Ref.first));
       Skeleton.add(static_cast<uint64_t>(Ref.first));
       if (Ref.first == ReferenceKind::Function) {

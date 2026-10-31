@@ -163,6 +163,18 @@ disappearing from the slot sequence. Capturing a coordinate never admits a new
 function entry. Body competition, thresholds, original instruction identity and
 the limits of the equivalence claims above remain unchanged.
 
+Matcher version 20 adds `data_initializer` candidates between paired data-address
+observations. Complete independently matched functions must use those addresses
+at the same instruction and operand roles, with equal scalar, CFG and mapped
+reference layouts. Adjacent observations must agree uniquely in both directions;
+both bounded intervals need the same length and every marked pointer slot at
+the same offset. Unknown targets, conflicting observations, overlapping slots
+and incompatible already paired targets block the evidence. Full mapped data
+coordinates supply this hint; numeric lookalikes and AArch64 page fragments do
+not. The pass uses the original frozen correspondence after the earlier
+initializer channels and retains ordinary similarity and rival checks. Observed
+intervals do not identify data-object boundaries or prove runtime equivalence.
+
 Matcher version 10 also defers a similar helper body when its changed entry
 contains the complete straight-line prelude of an unmatched direct tail caller,
 with at least two caller instructions beyond the helper's aligned body. Both

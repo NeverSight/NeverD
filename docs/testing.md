@@ -3594,6 +3594,16 @@ function entries or silently disappear from a wider initializer sequence.
 256-bit or unknown pointer widths supply no coordinate; the shared reader
 must not silently truncate them through its 32-bit path.
 
+`InitializedPointersUseBoundedPairedDataAddressObservations` resolves duplicate
+callbacks using complete paired data-address roles in both directions, without
+previously matched initializer targets. Missing coordinates, incomplete witnesses,
+changed scalars, unequal interval spans or slot offsets, unknown targets and
+incompatible mapped targets must retain ambiguity. Explicit analyst rejection
+continues to own the pair. Native SDK controls decode the full data addresses;
+ELF symbols supply independent anchors, and disabling those names keeps the
+weaker body matches from supporting initializer identity. Unmarked numeric
+pointer lookalikes supply no such authority.
+
 Reference-uncertainty controls distinguish unchanged raw code from known operand
 changes, retain a known retargeting beside an unknown address operand, and keep
 unknown targets out of native change observations. Native SDK controls exercise

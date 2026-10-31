@@ -85,6 +85,9 @@ struct AddressReference {
   uint64_t Key = 0;
   uint32_t Operand = 0;
   ReferenceKind Kind = ReferenceKind::Function;
+  /// Optional full byte coordinate in this input's mapped data. Candidate
+  /// context only: neither object identity nor normalized instruction identity.
+  std::optional<uint64_t> Coordinate;
 };
 
 /// One decoded instruction.

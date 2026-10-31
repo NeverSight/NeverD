@@ -24,6 +24,7 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 
+#include <algorithm>
 #include <climits>
 #include <optional>
 #include <tuple>
@@ -39,6 +40,7 @@ using Relations = llvm::DenseMap<uint64_t, Relation>;
 
 enum class ContextMode {
   DataWitness,
+  DataCoordinateWitness,
   DataCandidate,
   FunctionWitness,
   CallWitness
@@ -96,13 +98,16 @@ referenceKey(const Program &P, const ProgramFeatures &PF, uint32_t FI,
   for (const auto &Site : F.DataSites) {
     if (Control.stop())
       return {};
+    if (Mode == ContextMode::DataCoordinateWitness && !Site.Coordinate)
+      return {};
     H.add(Site.Instruction).add(Site.Operand).add(unsigned(Site.Kind));
     if (Site.Kind != ReferenceKind::UnresolvedData) {
       H.add(Site.Key);
       continue;
     }
     Unknown = true;
-    if (Mode == ContextMode::DataWitness)
+    if (Mode == ContextMode::DataWitness ||
+        Mode == ContextMode::DataCoordinateWitness)
       continue;
     // A call-role disagreement must not erase unknown data differences.
     if (Mode == ContextMode::CallWitness)
@@ -116,10 +121,152 @@ referenceKey(const Program &P, const ProgramFeatures &PF, uint32_t FI,
       return {};
     H.add(Secondary ? Site.Key : It->second.Other);
   }
-  const bool Eligible = Mode == ContextMode::CallWitness       ? ProvisionalCall
+  const bool Eligible = Mode == ContextMode::DataCoordinateWitness
+                            ? !F.DataSites.empty()
+                        : Mode == ContextMode::CallWitness     ? ProvisionalCall
                         : Mode == ContextMode::FunctionWitness ? FunctionOperand
                                                                : Unknown;
   return Eligible ? std::optional<uint64_t>(H.value()) : std::nullopt;
+}
+
+/// Hash complete witness layouts in parallel. The ordered merge and disjoint
+/// address intervals visit each observed slot once; no function-pair scan is
+/// needed. Conflicting coordinates remain in the ordering as barriers.
+std::vector<std::pair<uint32_t, uint32_t>> dataInitializerCandidates(
+    const Program &P, const ProgramFeatures &PF,
+    llvm::ArrayRef<uint32_t> PMatch, llvm::ArrayRef<uint8_t> PTrusted,
+    const Program &S, const ProgramFeatures &SF,
+    llvm::ArrayRef<uint32_t> SMatch, llvm::ArrayRef<uint8_t> STrusted,
+    llvm::ArrayRef<uint32_t> PTargets, llvm::ArrayRef<uint32_t> STargets,
+    const ComparisonControl &Control) {
+  if (P.Identity.Bits != S.Identity.Bits || PTargets.empty() ||
+      STargets.empty())
+    return {};
+  std::vector<uint8_t> Witnesses(P.Functions.size(), 0);
+  parallelForEach(Witnesses.size(), [&](auto Claim, size_t Count) {
+    for (size_t A = Claim(); A < Count; A = Claim()) {
+      if (Control.stop())
+        return;
+      const uint32_t B = PMatch[A];
+      if (!PTrusted[A] || B == NoIndex || !STrusted[B])
+        continue;
+      const auto X = referenceKey(P, PF, A, PMatch, false,
+                                  ContextMode::DataCoordinateWitness, nullptr,
+                                  nullptr, Control);
+      if (X)
+        Witnesses[A] = X == referenceKey(S, SF, B, SMatch, true,
+                                         ContextMode::DataCoordinateWitness,
+                                         nullptr, nullptr, Control);
+    }
+  });
+  Relations Forward, Reverse;
+  for (uint32_t A = 0; A < Witnesses.size(); ++A) {
+    if (Control.stop())
+      return {};
+    if (!Witnesses[A])
+      continue;
+    const auto &X = PF.Functions[A].DataSites;
+    const auto &Y = SF.Functions[PMatch[A]].DataSites;
+    if (X.size() != Y.size())
+      continue;
+    if (!llvm::all_of(llvm::zip(X, Y), [](const auto &Sites) {
+          const auto &[L, R] = Sites;
+          return L.Instruction == R.Instruction && L.Operand == R.Operand &&
+                 L.Kind == R.Kind;
+        }))
+      continue;
+    for (size_t I = 0; I < X.size(); ++I) {
+      recordRelation(Forward, *X[I].Coordinate, *Y[I].Coordinate);
+      recordRelation(Reverse, *Y[I].Coordinate, *X[I].Coordinate);
+    }
+  }
+  std::vector<uint64_t> Primary, Secondary;
+  Primary.reserve(Forward.size());
+  Secondary.reserve(Reverse.size());
+  for (const auto &[A, Relation] : Forward)
+    Primary.push_back(A);
+  for (const auto &[B, Relation] : Reverse)
+    Secondary.push_back(B);
+  llvm::sort(Primary);
+  llvm::sort(Secondary);
+  const auto Unique = [&](uint64_t A) -> std::optional<uint64_t> {
+    const auto &R = Forward.find(A)->second;
+    const auto Back = Reverse.find(R.Other);
+    if (R.Conflict || Back == Reverse.end() || Back->second.Conflict ||
+        Back->second.Other != A)
+      return {};
+    return R.Other;
+  };
+  const auto Range = [](const Program &Image, uint64_t Begin, uint64_t End) {
+    const auto &Slots = Image.CodeInitializers;
+    const auto Find = [&](uint64_t Address) {
+      return std::lower_bound(Slots.begin(), Slots.end(), Address,
+                              [](const auto &Slot, uint64_t Value) {
+                                return Slot.Slot < Value;
+                              }) -
+             Slots.begin();
+    };
+    return std::pair<size_t, size_t>(Find(Begin), Find(End));
+  };
+  Relations Proposed, ProposedBack;
+  const uint64_t Width = P.Identity.Bits / CHAR_BIT;
+  for (size_t I = 1; I < Primary.size(); ++I) {
+    if (Control.stop())
+      return {};
+    const uint64_t Begin = Primary[I - 1], End = Primary[I];
+    const auto Other = Unique(Begin), OtherEnd = Unique(End);
+    if (!Other || !OtherEnd || *OtherEnd <= *Other ||
+        *OtherEnd - *Other != End - Begin)
+      continue;
+    const auto Position = llvm::lower_bound(Secondary, *Other);
+    if (Position + 1 == Secondary.end() || Position[1] != *OtherEnd)
+      continue;
+    const auto [A, AE] = Range(P, Begin, End);
+    const auto [B, BE] = Range(S, *Other, *OtherEnd);
+    if (A == AE || AE - A != BE - B)
+      continue;
+    bool Compatible = true;
+    for (size_t N = 0; Compatible && N < AE - A; ++N) {
+      if (Control.stop())
+        return {};
+      const uint32_t X = PTargets[A + N], Y = STargets[B + N];
+      const auto &L = P.CodeInitializers[A + N];
+      const auto &R = S.CodeInitializers[B + N];
+      Compatible =
+          X != NoIndex && Y != NoIndex && L.Slot - Begin == R.Slot - *Other &&
+          Width <= End - L.Slot && Width <= *OtherEnd - R.Slot &&
+          !(A + N && L.Slot - P.CodeInitializers[A + N - 1].Slot < Width) &&
+          !(B + N && R.Slot - S.CodeInitializers[B + N - 1].Slot < Width);
+      if (Compatible && (PMatch[X] != NoIndex || SMatch[Y] != NoIndex))
+        Compatible = PMatch[X] == Y && SMatch[Y] == X;
+    }
+    if (!Compatible)
+      continue;
+    for (size_t N = 0; N < AE - A; ++N) {
+      if (Control.stop())
+        return {};
+      const uint32_t X = PTargets[A + N], Y = STargets[B + N];
+      if (PMatch[X] == NoIndex && SMatch[Y] == NoIndex) {
+        recordRelation(Proposed, X, Y);
+        recordRelation(ProposedBack, Y, X);
+      }
+    }
+  }
+  std::vector<std::pair<uint32_t, uint32_t>> Result;
+  for (const auto &[A, Relation] : Proposed) {
+    if (Control.stop())
+      return {};
+    const uint32_t B = Relation.Other;
+    const auto Back = ProposedBack.find(B);
+    if (!Relation.Conflict && Back != ProposedBack.end() &&
+        !Back->second.Conflict && Back->second.Other == A &&
+        P.Functions[A].hasBody() && S.Functions[B].hasBody() &&
+        !P.Functions[A].has(TraitIncomplete) &&
+        !S.Functions[B].has(TraitIncomplete))
+      Result.emplace_back(A, B);
+  }
+  llvm::sort(Result);
+  return Result;
 }
 
 } // namespace
@@ -256,13 +403,12 @@ referenceCandidates(const Program &P, const ProgramFeatures &PF,
   return Candidates;
 }
 
-InitializerCandidates initializerCandidates(const Program &P,
-                                            llvm::ArrayRef<uint32_t> PMatch,
-                                            llvm::ArrayRef<uint8_t> PTrusted,
-                                            const Program &S,
-                                            llvm::ArrayRef<uint32_t> SMatch,
-                                            llvm::ArrayRef<uint8_t> STrusted,
-                                            const ComparisonControl &Control) {
+InitializerCandidates initializerCandidates(
+    const Program &P, const ProgramFeatures &PF,
+    llvm::ArrayRef<uint32_t> PMatch, llvm::ArrayRef<uint8_t> PTrusted,
+    const Program &S, const ProgramFeatures &SF,
+    llvm::ArrayRef<uint32_t> SMatch, llvm::ArrayRef<uint8_t> STrusted,
+    const ComparisonControl &Control) {
   struct Run {
     size_t Begin, End;
     bool Secondary;
@@ -405,6 +551,9 @@ InitializerCandidates initializerCandidates(const Program &P,
     I = J;
   }
   InitializerCandidates Result;
+  Result.DataAddresses =
+      dataInitializerCandidates(P, PF, PMatch, PTrusted, S, SF, SMatch,
+                                STrusted, Targets[0], Targets[1], Control);
   for (bool Strided : {false, true}) {
     auto &Candidates = Strided ? Result.Strided : Result.Contiguous;
     for (const auto &[A, Relation] : Forward[Strided]) {
