@@ -6,6 +6,7 @@
 
 #include "neverd/analysis/arch/x86_64/InterpreterMachineState.h"
 
+#include "../../core/FrameEntryConstraints.h"
 #include "X64ArchitecturalValues.h"
 #include "X64ControlTransitions.h"
 #include "X64MachineFlags.h"
@@ -60,6 +61,7 @@ struct MachineRegionSourcePlan {
   bool ArchitecturalChoices = false;
   const SpecializationOptions *SegmentedMemory = nullptr;
   const SpecializationOptions *PageGlobal = nullptr;
+  const SpecializationOptions *EntryObjects = nullptr;
   uint64_t MaxChoiceSourceOperations = 0;
 };
 
@@ -394,7 +396,7 @@ std::optional<LowBlock> sharedReturnBlock(const LowFunc &Function,
   if (HasAlignmentGuard) {
     const auto &Entry = Function.Blocks.front();
     const uint64_t Span = Entry.EndAddr - Entry.StartAddr;
-    // addEntryAlignmentGuard relocates the entry beyond the new maximum end
+    // addEntryDomainGuard relocates the entry beyond the new maximum end
     // and reserves its reject block. Do not consume space that it needs.
     if (!Span || Span > InvalidVA - (End + 2) ||
         InvalidVA - (End + 2) - Span < 3 ||
@@ -415,9 +417,10 @@ std::optional<LowBlock> sharedReturnBlock(const LowFunc &Function,
   return Exit;
 }
 
-llvm::Error addEntryAlignmentGuard(LowFunc &Function, uint64_t Parameter,
-                                   bool StateRegisters,
-                                   InterpreterEntryAlignment Alignment) {
+llvm::Error
+addEntryDomainGuard(LowFunc &Function, uint64_t Parameter, bool StateRegisters,
+                    std::optional<InterpreterEntryAlignment> Alignment,
+                    const SpecializationOptions *EntryObjects) {
   // Move the predecessor-free original anchor out of the entry address. Its
   // operations still execute only on the accepted edge. Do not insert a
   // sticky check in the body: an invalid root must never reach guest memory.
@@ -430,7 +433,7 @@ llvm::Error addEntryAlignmentGuard(LowFunc &Function, uint64_t Parameter,
       InvalidVA - Fresh - Span < 3 ||
       Function.Blocks.size() >
           static_cast<size_t>(std::numeric_limits<int>::max() - 2))
-    return invalid("machine source alignment guard address space exhausted");
+    return invalid("machine source entry guard address space exhausted");
   ++Fresh;
   const uint64_t Delta = Fresh - Body.StartAddr;
   Body.StartAddr += Delta;
@@ -479,10 +482,43 @@ llvm::Error addEntryAlignmentGuard(LowFunc &Function, uint64_t Parameter,
                {NdVar::reg(Parameter, 8)});
   const auto Root = Check.temporary();
   Check.load(Root, x86reg::RSP);
-  const auto Low = Check.temporary();
-  Check.emit(NdOp::INT_AND, Low, {Root, scalar(Alignment.Alignment - 1)});
-  const auto Rejected = Check.temporary(1);
-  Check.emit(NdOp::INT_NOTEQUAL, Rejected, {Low, scalar(Alignment.Residue)});
+  NdVar Rejected = scalar(0, 1);
+  const auto RejectIf = [&](NdOp Comparison, NdVar Left, NdVar Right) {
+    const auto Bad = Check.temporary(1), Combined = Check.temporary(1);
+    Check.emit(Comparison, Bad, {Left, Right});
+    Check.emit(NdOp::BOOL_OR, Combined, {Rejected, Bad});
+    Rejected = Combined;
+  };
+  if (Alignment) {
+    const auto Low = Check.temporary();
+    Check.emit(NdOp::INT_AND, Low, {Root, scalar(Alignment->Alignment - 1)});
+    RejectIf(NdOp::INT_NOTEQUAL, Low, scalar(Alignment->Residue));
+  }
+  if (EntryObjects) {
+    const auto Range = [&](NdVar Base, int64_t Begin, int64_t End) {
+      const auto [Minimum, Maximum] =
+          detail::nonwrappingFrameRootBounds(Begin, End);
+      RejectIf(NdOp::INT_LESS, Base, scalar(Minimum));
+      RejectIf(NdOp::INT_LESS, scalar(Maximum), Base);
+      const auto First = Check.temporary(), Last = Check.temporary();
+      Check.emit(NdOp::INT_ADD, First, {Base, scalar(uint64_t(Begin))});
+      Check.emit(NdOp::INT_ADD, Last, {Base, scalar(uint64_t(End) - 1)});
+      return std::pair{First, Last};
+    };
+    const auto &Frame = *EntryObjects->EntryFrameBounds;
+    const auto [First, Last] = Range(Root, Frame.Begin, Frame.End);
+    for (const auto &Object : EntryObjects->EntryFrameExcludedObjects) {
+      const auto ObjectRoot = Check.temporary();
+      Check.load(ObjectRoot, Object.Register.Offset);
+      const auto [ObjectFirst, ObjectLast] =
+          Range(ObjectRoot, Object.Begin, Object.End);
+      const auto ReachesFrame = Check.temporary(1);
+      const auto ReachesObject = Check.temporary(1);
+      Check.emit(NdOp::INT_LESSEQUAL, ReachesFrame, {First, ObjectLast});
+      Check.emit(NdOp::INT_LESSEQUAL, ReachesObject, {ObjectFirst, Last});
+      RejectIf(NdOp::BOOL_AND, ReachesFrame, ReachesObject);
+    }
+  }
   Check.emit(NdOp::COND_BR, {}, {NdVar::cst(RejectAddress, 8), Rejected});
   Finish(Guard, LowInstructionControl::Branch,
          LowInstructionControlFlag::Branch |
@@ -1684,11 +1720,12 @@ buildMachineSource(const LowFunc &Residual, BinaryFormat SourceFormat,
   if (Region && Region->ArchitecturalChoices)
     if (auto Error = compactChoiceSource(Result.Function))
       return std::move(Error);
-  if (EntryAlignment)
-    if (auto Error = addEntryAlignmentGuard(Result.Function, ParameterRegister,
-                                            StateRegisters, *EntryAlignment))
+  if (EntryAlignment || (Region && Region->EntryObjects))
+    if (auto Error = addEntryDomainGuard(
+            Result.Function, ParameterRegister, StateRegisters, EntryAlignment,
+            Region ? Region->EntryObjects : nullptr))
       return std::move(Error);
-  // Include the bounded entry alignment wrapper and shared return epilogue.
+  // Include the entry domain wrapper and shared return epilogue.
   RemainingOperations = OperationLimit;
   for (const auto &Block : Result.Function.Blocks)
     if (auto Error =
@@ -1750,8 +1787,7 @@ static llvm::Expected<InterpreterMachineRegionSource> wrapMachineRegionSource(
       Expected.X64LegacyGSState || Expected.X64CR8State ||
       Expected.X64CR4PGEState != PageGlobal || Expected.X64MXCSRMask ||
       !Expected.X64CodeRegions.empty() || !Expected.X64ImportBindings.empty() ||
-      !Expected.X64TerminalImports.empty() ||
-      !Expected.EntryFrameExcludedObjects.empty())
+      !Expected.X64TerminalImports.empty())
     return invalid("unsupported machine-region source environment");
   for (const auto &Exit : Expected.X64MachineExits)
     if (Exit.Kind == SpecializationX64MachineExitKind::Trap &&
@@ -1763,6 +1799,8 @@ static llvm::Expected<InterpreterMachineRegionSource> wrapMachineRegionSource(
     return invalid("machine-region source requires authenticated exits");
   MachineRegionSourcePlan Plan;
   Plan.ArchitecturalChoices = ArchitecturalChoices;
+  if (!Expected.EntryFrameExcludedObjects.empty())
+    Plan.EntryObjects = &Expected;
   if (SegmentedMemory)
     Plan.SegmentedMemory = &Expected;
   if (PageGlobal)
