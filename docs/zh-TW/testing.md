@@ -2251,3 +2251,5 @@ LLVM C 的合成堆疊槽保留完整的 128 位元整數寫入，再由執行�
 `PageGlobal*` 檢查涵蓋未知高位、兩個分支、讀寫關係、63 個禁止變更的控制位、其他狀態保持、錯誤運算元、預算與環境身分。執行 `NeverDInterpreterSpecializationTests`、`NeverDInterpreterMachineStateTests`、`NeverDLowIRRefinementTests` 和 `NeverDInterpreterLLVMRefinementTests`；這些值模型測試不執行硬體特權指令。
 
 `NeverDInterpreterMachineStateTests` 的 `KernelPageGlobalSource*` 以 HighC、LLVMC、O0/O2 及 ASan/UBSan 檢查完整狀態、返回堆疊、CR4 關係、所有不足或不符的指令記錄，以及核心 POPFQ/CLI/STI 旗標。另檢查執行域、舊配置和預算拒絕；僅執行產生的純量 C。
+
+`AtomicSourceRequiresAnUnmodifiedSupportedReceipt` 拒絕缺少或修改的原子憑據及不支援的 CMPXCHG。`ScalarAtomicsRetainTransactionsAndPhysicalState` 以獨立的完整狀態、旗標及位元組預期驗證 1/2/4/8 位元組 XCHG、LOCK XADD、未對齊記憶體與返回字別名。兩條 C 路徑在使用者及核心狀態設定下執行 O0/O2、ASan/UBSan。執行 `NeverDInterpreterMachineStateTests` 及原始環境、特化、續接原始碼與原始碼後端測試；這些完成測試不認證並行競爭或故障行為。

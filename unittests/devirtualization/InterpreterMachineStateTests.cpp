@@ -112,7 +112,8 @@ protected:
                   llvm::StringRef Harness, llvm::StringRef Preamble = {},
                   const BinaryImage *ConversionImage = nullptr,
                   bool CPUQueryTape = false, bool VectorState = false,
-                  BinaryFormat SourceFormat = BinaryFormat::ELF) {
+                  BinaryFormat SourceFormat = BinaryFormat::ELF,
+                  llvm::StringRef ExpectedAtomic = {}) {
     const auto *Wrapped = &Source;
     const auto &Function = Source.Function;
     for (bool LLVM : {false, true}) {
@@ -159,7 +160,12 @@ protected:
       EXPECT_EQ(Source.find("__writeeflags"), std::string::npos);
       if (CPUQueryTape || VectorState) {
         EXPECT_EQ(Source.find("cpuid"), std::string::npos);
-        EXPECT_EQ(Source.find("__asm"), std::string::npos);
+        if (ExpectedAtomic.empty())
+          EXPECT_EQ(Source.find("__asm"), std::string::npos);
+        else {
+          EXPECT_NE(Source.find("__asm__ __volatile__"), std::string::npos);
+          EXPECT_NE(Source.find(ExpectedAtomic.str()), std::string::npos);
+        }
       }
       const auto SourceFile =
           tmpFile(LLVM ? "machine-llvm.c" : "machine-high.c");
@@ -1574,6 +1580,8 @@ int main(void) {
 // clang-format off
 #include "InterpreterMachineRegionSourceTests.inc"
 #include "InterpreterMachineRegionStringSourceTests.inc"
+
+#include "InterpreterMachineRegionAtomicSourceTests.inc"
 #include "InterpreterMachineRegionChoiceTests.inc"
 #include "InterpreterMachineRegionChoiceSourceTests.inc"
 #include "InterpreterMachineRegionSegmentedSourceTests.inc"

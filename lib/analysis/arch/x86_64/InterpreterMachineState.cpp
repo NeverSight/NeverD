@@ -19,6 +19,7 @@
 #include "neverd/ir/low/LowArchitecturalValue.h"
 #include "neverd/ir/low/LowRawEnvironment.h"
 #include "neverd/lift/X86/X86Regs.h"
+#include "neverd/symbolic/SymExec.h"
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/Support/Errc.h"
@@ -1395,7 +1396,13 @@ buildMachineSource(const LowFunc &Residual, BinaryFormat SourceFormat,
         }
         const bool Segmented =
             Op.MemoryAddressSpace != NdMemoryAddressSpace::Default;
-        if (Op.MemoryOrdering != NdMemoryOrdering::None ||
+        // Only an authenticated region can retain these transactions. Reuse
+        // the raw owner's scalar shape; native emission owns their ordering.
+        const bool Atomic =
+            Region &&
+            (Op.Opcode == NdOp::ATOMIC_ADD || Op.Opcode == NdOp::ATOMIC_XCHG) &&
+            symbolic::supportsAtomicWritePreservation(Op);
+        if ((Op.MemoryOrdering != NdMemoryOrdering::None && !Atomic) ||
             (Segmented && (!Region || !Region->SegmentedMemory ||
                            !x64::supportsRuntimeMemoryOperation(
                                Op, *Region->SegmentedMemory))))
