@@ -107,6 +107,10 @@ Opt-in direct-JMP discovery now extends that bounded selection to 10,317
 instructions in 88 regions, retaining all previous instruction bytes and zero
 native requests in both routes. Its 20 alignment preconditions now refuse
 before state, RAM or budget effects instead of trapping the source caller.
+Those 20 original sites match 5,120 native CPL0 executions through both routes
+at O0/O2, plus 10,240 unchanged-state refusals for unaligned and inaccessible
+addresses. Both complete translations compile at O0/O2 within the existing
+five-minute per-translation bound.
 Public regressions cover physical jump/call depth, cycles, sparse conditional
 stack observers and segmented alignment. Two additional private selected-call
 experiments compare 31,840 original instruction executions over 115 distinct
