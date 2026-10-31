@@ -135,9 +135,15 @@ struct CandidateSet {
   const std::vector<uint32_t> *GroupFunctions = nullptr;
   std::vector<uint32_t> MergedFunctions;
   std::vector<FunctionStep> Steps;
+  /// Borrowed sorted memberships of the operation-owned ambiguity index.
+  llvm::ArrayRef<uint32_t> Groups;
 
   llvm::ArrayRef<uint32_t> functions() const {
     return GroupFunctions ? *GroupFunctions : MergedFunctions;
+  }
+  void normalizeSteps() {
+    llvm::sort(Steps);
+    Steps.erase(std::unique(Steps.begin(), Steps.end()), Steps.end());
   }
 
   std::string explanation() const {
@@ -181,6 +187,7 @@ CandidateSet candidates(Comparison &C, bool Secondary, uint32_t Function) {
   CandidateSet Out;
   const auto &Groups =
       Secondary ? Index.Secondary[Function] : Index.Primary[Function];
+  Out.Groups = Groups;
   for (uint32_t I : Groups) {
     const auto &Group = Index.Groups[I];
     const auto &Others = Secondary ? Group.Primary : Group.Secondary;
@@ -195,9 +202,7 @@ CandidateSet candidates(Comparison &C, bool Secondary, uint32_t Function) {
   Out.MergedFunctions.erase(
       std::unique(Out.MergedFunctions.begin(), Out.MergedFunctions.end()),
       Out.MergedFunctions.end());
-  llvm::sort(Out.Steps);
-  Out.Steps.erase(std::unique(Out.Steps.begin(), Out.Steps.end()),
-                  Out.Steps.end());
+  Out.normalizeSteps();
   return Out;
 }
 
@@ -1007,6 +1012,26 @@ const char *neverd_comparison_functions_json(neverd_comparison_t Handle,
         Row["candidates"] = std::move(Candidates);
         Row["explanation"] = Alternatives.explanation();
         Row["candidate_steps"] = Alternatives.stepsJSON();
+      }
+      if (Source) {
+        CandidateSet Evidence;
+        // A source's overlapping groups need not support every candidate.
+        // Intersect memberships through the smaller side; never expand a
+        // cross-product or repeatedly scan a popular source's whole index.
+        const auto &Index = *C.CachedAmbiguities;
+        llvm::ArrayRef<uint32_t> Probe =
+            Secondary ? Index.Secondary[I] : Index.Primary[I];
+        auto Search = SourceCandidates.Groups;
+        if (Probe.size() > Search.size())
+          std::swap(Probe, Search);
+        for (uint32_t Group : Probe) {
+          if (std::binary_search(Search.begin(), Search.end(), Group))
+            Evidence.Steps.push_back(Index.Groups[Group].Step);
+        }
+        Evidence.normalizeSteps();
+        Row["pair_evidence"] =
+            llvm::json::Object{{"steps", Evidence.stepsJSON()},
+                               {"explanation", Evidence.explanation()}};
       }
       Rows.push_back(std::move(Row));
     }

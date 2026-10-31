@@ -149,6 +149,13 @@ void checkMove(Arch Target, const std::vector<uint8_t> &Bytes,
       if (Memory) {
         for (unsigned I = 0; I != 16; ++I)
           Value.insertBits(llvm::APInt(8, MemoryBytes[I + 1]), I * 8);
+      } else if (Insn.Raw->id == X86_INS_MOVLHPS ||
+                 Insn.Raw->id == X86_INS_MOVHLPS) {
+        const bool HighDestination = Insn.Raw->id == X86_INS_MOVLHPS;
+        Value = Vectors[Destination].trunc(128);
+        Value.insertBits(
+            Vectors[Source].extractBits(64, HighDestination ? 0 : 64),
+            HighDestination ? 64 : 0);
       } else {
         Value = Vectors[Source].trunc(128);
       }
@@ -201,6 +208,26 @@ TEST(X86LegacyVectorMoveAudit, FullValuesAliasesFlagsAndHighVectorBits) {
             if (testing::Test::HasFatalFailure())
               return;
           }
+}
+
+TEST(X86LegacyVectorMoveAudit, HalfMovesPreserveOtherLaneAndHighVectorBits) {
+  for (Arch Target : {Arch::X86, Arch::X64})
+    for (uint8_t Opcode : {0x12, 0x16})
+      for (unsigned Destination : {0u, 7u, 8u, 15u})
+        for (unsigned Source : {0u, 7u, 8u, 15u}) {
+          if (Target == Arch::X86 && (Destination >= 8 || Source >= 8))
+            continue;
+          const uint8_t Rex =
+              (Destination >= 8 ? 4 : 0) | (Source >= 8 ? 1 : 0);
+          const MoveEncoding Move{0, 0, Opcode, Opcode, false};
+          const auto Bytes = encoding(
+              Move, false,
+              {uint8_t(0xc0 | ((Destination & 7) << 3) | (Source & 7))}, false,
+              Rex);
+          checkMove(Target, Bytes, Destination, Source, nullptr, false);
+          if (testing::Test::HasFatalFailure())
+            return;
+        }
 }
 
 TEST(X86LegacyVectorMoveAudit,
@@ -257,6 +284,52 @@ void expectUnaudited(Decoder &Dec, DecodedInsn &Insn) {
   EXPECT_TRUE(Effects.Effects.empty());
   EXPECT_NE(Effects.OperationDigest, "stale");
   EXPECT_EQ(Preserved, LowInstructionPreservedState{});
+}
+
+TEST(X86LegacyVectorMoveAudit, HalfMovesBindRegisterEncodingAndDetail) {
+  Decoder Dec;
+  ASSERT_TRUE(Dec.init(Arch::X64));
+  using Mutation = void (*)(cs_insn &);
+  const Mutation Mutations[] = {
+      [](cs_insn &I) { I.bytes[I.detail->x86.encoding.modrm_offset] ^= 8; },
+      [](cs_insn &I) { I.bytes[I.detail->x86.encoding.modrm_offset - 1] ^= 4; },
+      [](cs_insn &I) { I.bytes[I.size++] = 0x90; },
+      [](cs_insn &I) { I.detail->x86.op_count = 1; },
+      [](cs_insn &I) { I.detail->x86.operands[0].size = 8; },
+      [](cs_insn &I) { I.detail->x86.operands[1].reg = X86_REG_XMM2; },
+      [](cs_insn &I) { I.detail->x86.rex ^= 4; },
+      [](cs_insn &I) { I.detail->x86.prefix[0] = 0xf3; },
+      [](cs_insn &I) { I.detail->x86.prefix[2] = 0x66; },
+      [](cs_insn &I) { I.detail->x86.eflags = X86_EFLAGS_MODIFY_ZF; },
+      [](cs_insn &I) { I.detail->x86.addr_size = 4; },
+      [](cs_insn &I) { I.detail->x86.encoding.modrm_offset += 1; },
+      [](cs_insn &I) { I.detail->x86.operands[0].avx_zero_opmask = true; },
+  };
+  for (uint8_t Opcode : {0x12, 0x16})
+    for (uint8_t Rex : {0, 5}) {
+      const MoveEncoding Move{0, 0, Opcode, Opcode, false};
+      const auto Bytes = encoding(Move, false, {0xc1}, false, Rex);
+      for (Mutation Change : Mutations) {
+        DecodedInsn Insn{};
+        ASSERT_EQ(
+            Dec.decodeOneForLift(Bytes.data(), Bytes.size(), 0x1000, Insn),
+            int(Bytes.size()));
+        Change(*Insn.Raw);
+        expectUnaudited(Dec, Insn);
+      }
+      for (uint8_t Prefix : {0x66, 0x67, 0xf2, 0xf3}) {
+        auto Prefixed = Bytes;
+        Prefixed.insert(Prefixed.begin(), Prefix);
+        DecodedInsn Insn{};
+        if (Dec.decodeOneForLift(Prefixed.data(), Prefixed.size(), 0x1000,
+                                 Insn) <= 0)
+          continue;
+        // Another valid instruction may share this opcode, but cannot claim
+        // the unprefixed half-move contract.
+        Insn.Raw->id = Opcode == 0x12 ? X86_INS_MOVHLPS : X86_INS_MOVLHPS;
+        expectUnaudited(Dec, Insn);
+      }
+    }
 }
 
 TEST(X86LegacyVectorMoveAudit,

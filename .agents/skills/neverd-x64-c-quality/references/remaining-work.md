@@ -21,6 +21,8 @@ configurations remain separate coverage.
 
 ## Open
 
+Explicit machine-region C now accepts authenticated entry-object exclusions through a shared entry guard. Both C routes check whole-range nonwrapping and frame separation before guest/state/tape effects; object aliases and equal roots with disjoint ranges remain valid. Owned execution tests cover all four state layouts, optional alignment, full-width endpoints and exact wrapper budgets. This closes the source-contract gap; ordinary ABI inference, accessibility and other caller memory premises remain separate.
+
 LLVMC's late conditional fold now requires its body to follow the current
 block in LLVM layout. An earlier body may already have inlined an exit;
 duplicating only its branch could emit a goto without that exit's label.
@@ -79,13 +81,20 @@ LowIR region may still fail ordinary call/return or ABI validation. Do not use
 its disposition to claim that ordinary source recovery succeeded.
 
 The explicit state route now admits audited legacy XMM XOR, register MOVD/MOVQ,
-byte-lane shifts, 64-bit products, scalar exchanges and locked updates. Complete
+byte-lane shifts, 16/32/64-bit register products, MOVHLPS/MOVLHPS, scalar
+exchanges and locked updates. Complete
 state/memory execution checks cover both C routes, arbitrary arithmetic flags,
 preserved upper vector lanes and negative bit-string indices. LOCK BTS/BTR/BTC
 retain one ordered transaction and its old-bit result instead of an unlocked
 load/store pair. Unknown encodings and environments retain explicit boundaries.
 LLVM C absolute guest stores use an integer address carrier so host object-size
 inference does not invent a zero-sized object at a high-half machine address.
+The seven remaining arithmetic/vector sites in the bounded five-root callee
+selection now have complete audits. Both routes model all 9,900 selected
+instructions across 86 regions; the seven original sites also match CPL0 KVM
+execution at O0/O2. Zero native requests in this selection does not prove that
+external calls, incomplete CFGs or complete Windows entries execute correctly.
+The five ordinary callers still contain 56 unproved argument occurrences.
 
 Explicit x64 kernel continuation source carries GPRs, flags, vector bytes,
 segment bases, the physical stack and native-boundary requests. Its V4 layout
@@ -404,6 +413,10 @@ callee input observations, or a normal exit;
 ABI-preserved/result registers, PHIs and implicit clobber readers keep their
 values. This bounded shared proof removes avoidable HighC/LLVMC traps but does
 not recover escaping VM state or authorize a dynamic code-address fallback.
+Single-reader temporary COPY chains now share that same budget and proof.
+Their terminal register still needs the existing implicit-observation checks;
+a temporary copy cannot hide an earlier physical register definition. Both C
+routes execute the complete later frame write after discarding this transport.
 The separate call-input proof does not mistake an inferred argument list or a
 nested may-write for absence of an observation. It fixes a HighC scratch-save
 trap that LLVMC's later cleanup already removed; both routes execute the public

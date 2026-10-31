@@ -1,5 +1,10 @@
 **語言**: [English](../testing.md) | [简体中文](../zh-CN/testing.md) | [繁體中文](testing.md) | [日本語](../ja/testing.md) | [한국어](../ko/testing.md) | [Français](../fr/testing.md) | [Deutsch](../de/testing.md) | [Español](../es/testing.md) | [Italiano](../it/testing.md) | [Русский](../ru/testing.md) | [العربية](../ar/testing.md)
 
+`PEFixedImageTest.MachineExitDiscoversBoundedCopyDestination` 檢查內部呼叫和有界字複製迴圈的指標、計數自動細化。獨立暫存器和記憶體預期涵蓋零計數、提前終止、緩衝區重疊及高位框架位址；仍拒絕完整或部分返回儲存格損壞，並檢查精確及少一單位的操作、查詢預算。
+`InterpreterMachineRegionSourceTest.BoundedCopyDiscoversPointerAndCountContexts` 在 O0/O2 下透過兩種 C 輸出和 ASan/UBSan 核對完整狀態與記憶體。這些自建樣例不構成一般 ABI 恢復認證。
+
+有界 `REP MOVS/STOS` 的機器狀態原始碼測試涵蓋使用者與核心選擇模型、四種元素寬度、正反方向、重疊記憶體及零計數的無效指標。`X86NativeStateAudit.RepTransfers*` 驗證兩種字前綴順序、精確編碼與運算元、完整狀態和逐位元組結果。額外前綴、位址覆寫、分段、REPNE 和未證明的計數仍被拒絕；此審核不授予記憶體、無故障、其他狀態保留或普通 ABI 假設。
+
 `HighSwiftEmitter.StackScalarBindingsDoNotInventPhysicalStackWrites` 透過原始碼管線檢查 x64/ARM64 Mach-O 的整數、浮點及混合堆疊參數。`IncomingHomeSource.StackInitializationRequiresAbsenceOfAllObservers` 確保記憶體讀取、呼叫、堆疊位址逸出，以及不透明或記憶體 intrinsic 仍保留入口儲存初始化。純值路徑直接使用宣告參數，不額外產生實體 SP 寫入，並保留暫存器浮點狀態效應。macOS 行動端矩陣獨立編譯並執行還原的 Swift；產生成功本身不代表執行驗證。
 
 `NeverDLLVMCValueTests` 在 O0/O2 及兩種 LLVM 型別保留設定下，與獨立的 Windows x64 ABI 函式編譯執行可變參數呼叫。原生 x64 以 va_arg 驗證浮點值；其他架構明確略過。

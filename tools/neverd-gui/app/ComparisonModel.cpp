@@ -229,7 +229,8 @@ QVariant ComparisonModel::data(const QModelIndex &Index, int Role) const {
                : QVariant();
   const auto E = R["evidence"].toObject();
   const auto K = R["kind"].toString();
-  if (Role == Qt::ToolTipRole) {
+  if (Role == Qt::ToolTipRole ||
+      (Role == Qt::AccessibleDescriptionRole && Type == Kind::Candidates)) {
     if (Type == Kind::FlowRegionNodes && Query["coordinates"] == "frontier")
       return tr("External input binding; the producers have not been "
                 "compared.\n%1")
@@ -302,11 +303,17 @@ QVariant ComparisonModel::data(const QModelIndex &Index, int Role) const {
       if (!Counterpart.isEmpty())
         Names +=
             '\n' + tr("Counterpart: %1").arg(functionNamesText(Counterpart));
-      return Qt::convertFromPlainText(
-          Names + "\n\n" + E["explanation"].toString() + '\n' +
+      QString Reason = R["pair_evidence"].toObject()["explanation"].toString();
+      if (!Reason.isEmpty())
+        Reason += '\n';
+      const auto Text =
+          Names + "\n\n" + Reason + E["explanation"].toString() + '\n' +
           tr("Heuristic confidence; structural similarity does not prove "
              "semantic equivalence.") +
-          '\n' + R["identity"].toString());
+          '\n' + R["identity"].toString();
+      return Role == Qt::AccessibleDescriptionRole
+                 ? Text
+                 : Qt::convertFromPlainText(Text);
     }
     return code(R["primary"].toObject()) + '\n' +
            code(R["secondary"].toObject());

@@ -94,13 +94,16 @@ NEVERD_API int neverd_comparison_restore_json_with_progress(
 /// rather than only its inventory preview. A valid source with no ambiguity has
 /// no rows. Overlapping groups contribute their deduplicated direct candidates.
 /// The returned ambiguity object identifies the source, supporting steps and
-/// total before search/paging; inventory rows expose candidate_steps. These
-/// candidates are hypotheses, not accepted matches. Search/sort/paging apply to
-/// the target side as usual. Addresses are hexadecimal strings. Function
-/// projections use name for the captured display name and evidence_name for the
-/// extracted matching name. Search accepts both; name sorting uses the display
-/// name. Display annotations do not change snapshot or report identity. Unknown
-/// options, missing source entries and out-of-range pages fail.
+/// total before search/paging; inventory rows expose candidate_steps. With
+/// ambiguous_with, each row also has pair_evidence (steps and explanation) for
+/// that source/target pair alone. A candidate's reasons with another source do
+/// not support this pair. These candidates are hypotheses, not accepted
+/// matches. Search/sort/paging apply to the target side as usual. Addresses are
+/// hexadecimal strings. Function projections use name for the captured display
+/// name and evidence_name for the extracted matching name. Search accepts both;
+/// name sorting uses the display name. Display annotations do not change
+/// snapshot or report identity. Unknown options, missing source entries and
+/// out-of-range pages fail.
 NEVERD_API const char *
 neverd_comparison_functions_json(neverd_comparison_t Comparison,
                                  const char *Query);

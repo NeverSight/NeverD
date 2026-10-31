@@ -12,6 +12,7 @@
 
 #include "BinaryComparison.h"
 
+#include "ComparisonInitializers.h"
 #include "InstructionFlow.h"
 #include "SessionImpl.h"
 #include "X86/ComparisonStackRoles.h"
@@ -309,7 +310,12 @@ ReadInstruction readInstruction(const BinaryImage &Image,
       Key = hashText("callee"); // Compared through function correspondence.
     else {
       const auto Ref = Keys.reference(Value);
-      R.AddressReferences.push_back({Ref.second, Operand, Ref.first});
+      const auto Coordinate = Ref.first != ReferenceKind::Function &&
+                                      Image.hasObjectDataProvenance(Value)
+                                  ? std::optional<uint64_t>(Value)
+                                  : std::nullopt;
+      R.AddressReferences.push_back(
+          {Ref.second, Operand, Ref.first, Coordinate});
       Shape.add(static_cast<uint64_t>(Ref.first));
       Skeleton.add(static_cast<uint64_t>(Ref.first));
       if (Ref.first == ReferenceKind::Function) {
@@ -914,16 +920,31 @@ readComparisonInputImpl(Session &S, const ComparisonInputOptions &Options,
     Builder.beginFunction(Address, 0, Import->Name, NameSource::Import,
                           TraitImport, Import->Module);
   Result.Program = Builder.finish();
+  if (!Exhausted && !Control.stop() &&
+      Result.Program.Functions.size() > limits::kMinInitializerAnchors) {
+    const uint64_t Available = Options.MaxMemoryBytes -
+                               std::min(Memory.load(), Options.MaxMemoryBytes);
+    Result.Stopped = readComparisonInitializers(
+        S.Img, Available, Control, Result.Program.CodeInitializers);
+    if (Result.Stopped)
+      Result.StoppedPhase = "initializers";
+  }
   if (auto State = Control.stop())
     Result.Stopped = State;
   else if (Exhausted)
     Result.Stopped = ComparisonState::ResourceLimited;
   if (Result.Stopped) {
-    Result.StoppedPhase = "decode";
-    Result.Program.Identity.DiscoveryComplete = false;
-    Result.Program.Warnings.push_back(
-        "Snapshot extraction stopped; retained instructions and functions are "
-        "partial.");
+    if (Result.StoppedPhase == "initializers")
+      Result.Program.Warnings.push_back(
+          "Initializer context extraction stopped; no partial initializer "
+          "neighborhoods were retained.");
+    else {
+      Result.StoppedPhase = "decode";
+      Result.Program.Identity.DiscoveryComplete = false;
+      Result.Program.Warnings.push_back("Snapshot extraction stopped; retained "
+                                        "instructions and functions are "
+                                        "partial.");
+    }
   }
   if (const auto Problem = Result.Program.validate()) {
     Error = *Problem;

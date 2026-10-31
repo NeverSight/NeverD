@@ -357,6 +357,11 @@ Low-to-Med binds this evidence to the original direct-call occurrence and target
 omitted-callee memoization includes it. Source scratch-restore liveness can cross
 only a still-matching call. Private-byte overwrite and escape checks stay in
 `MedPrologueSaves`; physical CALL return-slot writes are not C frame stores.
+Scratch reloads may pass through a single-reader chain of temporary COPYs,
+charging every step to the same spill-proof budget. A physical register in
+the middle retains its implicit observations; a terminal register still needs
+the existing return, preserved-register and later-call checks. PHIs, clobber
+records and ordinary value readers do not become dead temporary transport.
 
 Source register-prefix observation uses the same spill owner after call
 recovery. A complete ordinary Win64 body may prove that only the low bytes of
@@ -1822,6 +1827,61 @@ body evidence or another positional proposal. Their mapped-context agreement is
 checked again at admission.
 Call and address-reference neighbors share the growing propagation worklist,
 so an anchored address chain does not require one global pass per link.
+
+Matcher version 18 owns a separate frozen pass over relocation-marked function
+initializers. The loader's `normalizedRelocatedCodeTarget` supplies the same
+initial code coordinate to CFG relocation roots and comparison capture; each
+consumer separately decides function admission and ownership. Native capture
+reads marked slots in parallel under the remaining extraction memory allowance,
+merges by slot order and discards interrupted neighborhoods. The immutable
+`Program` retains these optional facts separately from instruction identity;
+native input bytes, effective mapping and overlays already bind their source.
+`ReferenceContext` aligns unique contiguous neighborhoods around at least two
+distinct protected complete matches and checks all aligned occurrences in both
+directions. Only unmatched complete functions become candidates. The existing
+body competition and context checks own admission; this pass grants no data
+object, runtime pointer, ABI or semantic-equivalence authority.
+
+Matcher version 19 also groups repeated wider slot spacing, keyed by pointer
+width, stride and ordered frozen anchors. `ReferenceContext` resolves each
+observed code coordinate to an existing function once in parallel; missing or
+unreadable targets split neighborhoods. Native capture retains those barriers
+and publishes its ordered fact buffer only after the parallel read completes.
+Contiguous and strided proposals are computed together from the same original
+correspondence. Admission evaluates contiguous context first, then wider spacing
+for still-unmatched functions; the latter does not bootstrap new anchors or
+interpret intervening data as an ABI record. Both sources use the existing
+measured competition and preserve unpaired duplicate-body remainders for review.
+The shared relocation-coordinate reader accepts only its supported 32- and
+64-bit storage widths. Other widths supply no coordinate rather than passing
+through a narrower read; CFG roots and comparison capture share that decision.
+
+Matcher version 20 additionally retains full mapped data coordinates on address
+operands, outside normalized instruction identity. Native capture uses the
+loader's object-data provenance; AArch64 page fragments have no full coordinate.
+Complete protected function pairs with identical instruction, scalar, CFG and
+mapped-reference layouts align these occurrences. Consistent bidirectional
+address observations bound adjacent intervals of equal length and identical
+relocation-marked pointer-slot offsets. Conflicting observations remain barriers;
+unknown targets, overlapping slots or incompatible mapped targets reject an
+interval. The matcher computes `data_initializer` proposals from the same frozen
+correspondence, after contiguous and strided admission. Per-function witness
+hashing is parallel; the ordered interval merge avoids function cross-products.
+These observed intervals establish no object boundaries, record layout, runtime
+pointer values or semantic equivalence. Ordinary body competition still owns
+acceptance, and accepted endpoints preserve the remaining review alternatives.
+
+Matcher version 21 aligns call roles in unique complete blocks of independently
+paired complete callers. The full block instruction/operand layout retains
+scalars, known address identities and mapped calls; unresolved data, indirect
+transfers and unknown callees cannot supply a witness. Identical local roles
+can survive additions or reordering elsewhere in the caller without treating
+global call order as identity. Per-caller work runs in parallel; the ordered
+merge checks every occurrence bidirectionally against the same frozen map.
+Only complete unmatched targets become `block_call_site` candidates. Existing
+body/rival checks and mapped-neighborhood agreement own acceptance and the
+ordinary context threshold. New candidates do not support their own witnesses.
+This is local structural evidence, not a control-flow or semantic proof.
 
 Matcher version 9 also admits bounded shared mnemonic/CFG groups into the same
 measured competition. A common instruction sketch cannot hide a smaller graph
@@ -14826,7 +14886,7 @@ The x64 adapter admits only the complete canonical `CPUID` bundle; the lifter in
 
 `EntryFrameExcludedObjects` declares complete x64 entry GPR values as symbolic object roots with signed, nonempty `[Begin, End)` bounds. The x64 raw owner validates distinct bindings, excludes RSP and overlapping entry constants, and requires explicit nonfaulting, CET-disabled state with entry-frame bounds. Each complete object and the frame must be nonwrapping and disjoint. Objects may alias each other; equal object/frame root values are allowed when their relative ranges are disjoint. The declaration supplies no accessibility, initial bytes or loaded-pointer facts.
 
-Core retains exact root/offset relations through complete registers and frame spills, intersects them at joins and forgets overwritten or possibly corrupted relations. Fresh node roots restore only retained relations; lost entry bindings are never recreated. Physical frame addresses and native stack offsets remain frame-only. `ProveStoreFrameSeparation` separately proves that each complete executed write misses the frame, including wide, conditional atomic and full segmented addresses. Declarations grant no unchecked store exemption. Preparation, operations and symbolic nodes use existing budgets. Raw integrity binds every declaration field and order; an empty vector preserves the prior digest encoding. Ordinary source and native proof consumers still refuse this raw domain.
+Core retains exact root/offset relations through complete registers and frame spills, intersects them at joins and forgets overwritten or possibly corrupted relations. Fresh node roots restore only retained relations; lost entry bindings are never recreated. Physical frame addresses and native stack offsets remain frame-only. `ProveStoreFrameSeparation` separately proves that each complete executed write misses the frame, including wide, conditional atomic and full segmented addresses. Declarations grant no unchecked store exemption. Preparation, operations and symbolic nodes use existing budgets. Raw integrity binds every declaration field and order; an empty vector preserves the prior digest encoding. Ordinary source and native proof consumers still refuse this raw domain. Explicit machine-region source now checks each complete entry object against the nonwrapping entry frame before guest accesses, state writes or tape reservations. Symbolic recovery and the source guard share the inclusive root-bound calculation. First/last-byte comparisons retain adjacency and a last byte at UINT64_MAX; no accessibility, object-to-object separation or absolute-exclusion check is inferred.
 
 Before original calls, `SourceFrameAnalysis` can observe proven private bytes on x64/ARM64 in a bounded, call-free, acyclic prefix. `observeSourceFrameBytes` authenticates immutable image loads without relocations; HighC and LLVM C show terminated text as comments without changing operations. Exact alignment guards remain active. These observations grant no ABI or native-rewrite authority.
 

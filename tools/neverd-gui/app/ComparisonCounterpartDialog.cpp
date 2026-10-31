@@ -246,6 +246,9 @@ void ComparisonCounterpartDialog::updateSelection() {
   }
   QString Text = tr("Pair %1 with %2 · %3.")
                      .arg(SourceAddress, Row["name"].toString(), Address);
+  const auto Reason = Row["pair_evidence"].toObject()["explanation"].toString();
+  if (!Reason.isEmpty())
+    Text += '\n' + Reason;
   if (!CurrentCounterpart.isEmpty())
     Text += tr("\nRemoves the existing pair %1 ↔ %2.")
                 .arg(SourceAddress, CurrentCounterpart);

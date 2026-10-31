@@ -921,6 +921,9 @@ public:
                                                bool &Changed);
   void refineFailureGuards();
   bool sawFiniteDispatch() const { return SawFiniteDispatch; }
+  bool needsNativeReturnStoreRefinement() const {
+    return NativeReturnStoreFailure;
+  }
   SpecializationResult refineTargetContexts(SpecializationResult Previous,
                                             bool &Changed);
 
@@ -935,7 +938,8 @@ private:
     return false;
   }
   void discover(SymState &State, SymRef Value, SymRef Root,
-                ControlDemand Demand = ControlDemand::Target);
+                ControlDemand Demand = ControlDemand::Target,
+                bool SeparateContexts = false);
   llvm::SmallVector<ProducerBitView, 4>
   producerViews(SpecializationCursor Successor, uint32_t Field) const;
   bool admitDestination(SpecializationCursor Cursor);
@@ -1016,6 +1020,8 @@ private:
   bool Failed = false;
   int FailureNode = -1;
   bool SawUndecidedGuard = false;
+  bool SawUnprovedNativeReturnStore = false;
+  bool NativeReturnStoreFailure = false;
   bool SawFiniteDispatch = false;
   va_t FailureCursor = InvalidVA;
   SpecializationCursor DemandCursor;
@@ -1221,7 +1227,7 @@ std::optional<uint64_t> Specializer::frameOffset(SymContext &Ctx,
 }
 
 void Specializer::discover(SymState &State, SymRef Value, SymRef Root,
-                           ControlDemand Demand) {
+                           ControlDemand Demand, bool SeparateContexts) {
   if (!Options.DiscoverControlState || Refinement.BudgetExceeded)
     return;
   if (ReplayingDemands && Demand != ControlDemand::Closure)
@@ -1328,6 +1334,8 @@ void Specializer::discover(SymState &State, SymRef Value, SymRef Root,
           std::none_of(PendingContexts.begin(), PendingContexts.end(), Matches))
         PendingContexts.push_back(Location);
     };
+    if (SeparateContexts)
+      PromoteContext(Field);
     if (Demand == ControlDemand::Memory) {
       // A guard can make a complete relative pointer numerically narrow. Its
       // remaining byte demand still needs the original pointer's affine
@@ -2995,6 +3003,9 @@ bool Specializer::evaluate(int Id) {
                       "native return-target proof exceeded its solver budget");
         if (Targets.Status != FiniteValueStatus::Complete ||
             Targets.Tuples.empty()) {
+          NativeReturnStoreFailure =
+              SawUnprovedNativeReturnStore && Displacement &&
+              Frame.NativeReturnSlots.count(*Displacement);
           discover(State, ReturnValue, FrameRoot);
           return fail(
               SpecializationStatus::UnresolvedControl,
@@ -3655,6 +3666,26 @@ bool Specializer::evaluate(int Id) {
               }
               if (StorePreservation)
                 StorePreservation->AdditionalRanges = ProvedStoreRanges;
+            }
+          }
+          // A potentially aliasing write can erase the value of a live native
+          // return word before a later RET demands it. Retain the address's
+          // dependency locations while they are still available; the fresh
+          // refinement attempt must prove every separation again. No value or
+          // nonalias fact is imported from this failed preservation attempt.
+          if (!Displacement && !ReplayingDemands &&
+              Options.DiscoverControlState &&
+              Options.ProveStoreReturnSlotSeparation) {
+            for (uint64_t Slot : Frame.NativeReturnSlots) {
+              if (!PreservationMetadataWork())
+                return fail(SpecializationStatus::BudgetExceeded,
+                            "native return-cell dependency budget exhausted");
+              if (!InPreservedFrame(Slot, 8)) {
+                SawUnprovedNativeReturnStore = true;
+                discover(State, Exec.memoryAddressValue(Original), FrameRoot,
+                         ControlDemand::Memory, /*SeparateContexts=*/true);
+                break;
+              }
             }
           }
           if (Displacement) {
@@ -4860,8 +4891,10 @@ bool Specializer::publish() {
 void Specializer::refineFailureGuards() {
   if (FailureNode < 0 || Refinement.DeferredGuardDemands.empty())
     return;
-  // Refine the nearest undecided guards that can reach this failure,
-  // rather than collecting unrelated business conditions elsewhere.
+  // Refine the nearest undecided guards that can reach this failure. When a
+  // write has lost a native return cell, include the ancestor guards too:
+  // separating only its advancing pointer can unroll a bounded loop before
+  // the controlling count has entered the projection.
   // Edges already belong to the bounded attempted graph. This reverse
   // walk is only candidate selection and proves no path infeasible.
   const auto ChargeVisit = [&]() {
@@ -4894,7 +4927,7 @@ void Specializer::refineFailureGuards() {
   std::vector<bool> Seen(Nodes.size(), false);
   std::vector<int> Frontier{FailureNode};
   Seen[FailureNode] = true;
-  while (!Frontier.empty() && Guards.empty()) {
+  while (!Frontier.empty() && (Guards.empty() || NativeReturnStoreFailure)) {
     std::vector<int> NextFrontier;
     for (int Current : Frontier)
       for (int Parent : Predecessors[Current]) {
@@ -4905,11 +4938,13 @@ void Specializer::refineFailureGuards() {
         Seen[Parent] = true;
         const auto &Cursor = Nodes[Parent].Key.Cursor;
         SawReachableGuard |= Nodes[Parent].ConditionalGuard;
-        if (Nodes[Parent].ConditionalGuard &&
-            RefinableGuards.count({Cursor.Address, Cursor.Mode}))
+        const bool Selected =
+            Nodes[Parent].ConditionalGuard &&
+            RefinableGuards.count({Cursor.Address, Cursor.Mode});
+        if (Selected)
           Guards.emplace(Nodes[Parent].Key.Cursor.Address,
                          Nodes[Parent].Key.Cursor.Mode);
-        else
+        if (!Selected || NativeReturnStoreFailure)
           NextFrontier.push_back(Parent);
       }
     Frontier = std::move(NextFrontier);
@@ -5198,7 +5233,9 @@ SpecializationResult Specializer::run() {
     if (Result.Status == SpecializationStatus::Unsupported &&
         SawUndecidedGuard && Refinement.BudgetExceeded)
       Refinement.PrecisionFailure = true;
-    if (Result.Status == SpecializationStatus::Unsupported &&
+    if ((Result.Status == SpecializationStatus::Unsupported ||
+         (Result.Status == SpecializationStatus::UnresolvedControl &&
+          NativeReturnStoreFailure)) &&
         !Refinement.DeferredGuardDemands.empty() && FailureNode >= 0) {
       refineFailureGuards();
     }
@@ -5369,6 +5406,15 @@ specializeInterpreter(SpecializationProvider &Provider,
             Destination.push_back(Field);
             HasCandidates = true;
           }
+          // Recover a lost return cell with both the advancing address and
+          // its predecessor guards in the same fresh attempt. Delaying the
+          // guard's context until a second failure can exhaust contexts on
+          // an otherwise bounded pointer loop.
+          if (Attempt.needsNativeReturnStoreRefinement() &&
+              Request.FieldAction == GuardFieldAction::Add &&
+              std::none_of(PendingContexts.begin(), PendingContexts.end(),
+                           Same))
+            PendingContexts.push_back(Field);
         };
         if (std::get<2>(Demand))
           Add(Refinement.Registers, Refinement.PendingContextRegisters,
@@ -5395,7 +5441,9 @@ specializeInterpreter(SpecializationProvider &Provider,
               Options.ControlFrameSlots.size()) > Options.MaxControlFields)
         Refinement.BudgetExceeded = true;
     };
-    if (Result.Status == SpecializationStatus::Unsupported &&
+    if ((Result.Status == SpecializationStatus::Unsupported ||
+         (Result.Status == SpecializationStatus::UnresolvedControl &&
+          Attempt.needsNativeReturnStoreRefinement())) &&
         !Refinement.BudgetExceeded)
       ActivateGuardDemands();
     // An exhaustive finite transfer already supplies a useful abstraction.

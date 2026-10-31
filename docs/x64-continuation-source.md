@@ -479,13 +479,25 @@ source implementation described above.
 
 `X64ContinuationIntegerTest` compares complete state and memory with original
 native instructions for audited legacy vector transfers, XOR and byte shifts,
-64-bit products, scalar exchanges and locked memory updates. It exercises
-arbitrary arithmetic flags, preserved upper vector lanes, negative bit-string
-indices and unaligned RAM through both C routes at O0/O2 with ASan/UBSan.
+16/32/64-bit register products, scalar exchanges and locked memory updates. It
+exercises arbitrary arithmetic flags, preserved upper vector lanes, negative
+bit-string indices and unaligned RAM through both C routes at O0/O2 with ASan/UBSan.
 LOCK BTS/BTR/BTC retain one sequentially consistent native transaction, including
 the old bit returned in CF; an unlocked load/store pair is not equivalent.
 The encoding audit rejects inconsistent decoder details and unaudited prefixes.
 These tests do not extend the invocation domain to faulting or concurrent runs.
+
+`RegisterProductsRetainWidthsAndAliases` adds 63 MUL/IMUL encodings with
+overlapping sources and destinations, negative immediate bits, 16-bit partial
+writes and 32-bit zero extension. Its 580,608 native comparisons vary all four
+undefined flag choices independently. `LegacyHalfMovesRetainSourceAndUpperLanes`
+adds 1,024 native MOVHLPS/MOVLHPS comparisons, including self-copies and extended
+XMM registers, while checking the complete vector containers and other state.
+`X86MultiplyUndefined` and `X86LegacyVectorMoveAudit` own exact byte/detail
+admission for these forms; memory products, 8-bit products and other encoding
+families retain their separate audit requirements. The Intel instruction
+contracts define [product flags](https://cdrdv2-public.intel.com/868140/253666-089-sdm-vol-2a.pdf)
+and [legacy half-move preservation](https://www.intel.com/content/dam/www/public/us/en/documents/manuals/64-ia-32-architectures-software-developer-vol-2b-manual.pdf).
 
 ## Intel FRED return profile V9
 

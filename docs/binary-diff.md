@@ -129,6 +129,62 @@ Original scalar offsets and normalized shapes still determine the instruction
 delta. This byte-derived hint is versioned by the matcher and establishes no
 stack-object identity, alias proof or semantic equivalence.
 
+Matcher version 18 adds `initializer_context` candidates for callbacks in
+relocation-marked function-pointer initializers. It compares complete contiguous
+pointer-width neighborhoods, requiring at least two distinct independently
+matched complete targets and a unique neighborhood on each side. Every aligned
+occurrence must agree in both directions before an unmatched target is proposed.
+Repeated anchors, competing neighborhoods, missing targets and overlapping
+slots cannot resolve an identity. The witness correspondence is frozen for this
+pass; newly admitted callbacks cannot support their own initializer evidence.
+Resolving part of a duplicate-body group retains its unpaired remainder for
+review, including a lone remaining pair. Explicitly rejected pairs stay hidden.
+
+These proposals still compete with measured body alternatives under the existing
+similarity, ambiguity and mapped-context checks. Initializer evidence alone does
+not earn the lower call-context threshold. Native capture reads only slots
+explicitly marked by the loader, through the same code-coordinate reader as CFG
+relocation roots. Numeric lookalikes supply no evidence. These byte-derived hints
+do not establish data-object boundaries, stable runtime pointer values, ABI
+compatibility or semantic equivalence. Input bytes, effective mapping and
+overlays bind their native source; normalized instruction identity stays intact.
+Interrupted initializer extraction discards the optional neighborhoods while
+retaining the completed code inventory and an explicit stopped state.
+
+Matcher version 19 extends this context to repeated pointer-slot spacing.
+Both pointer width and stride must agree, alongside the ordered independently
+matched targets. It does not interpret the bytes between slots or infer a
+record type. Contiguous proposals are evaluated first; wider spacing proposes
+only remaining unmatched endpoints. Both channels use the same frozen anchors,
+so a newly paired initializer cannot justify another initializer proposal.
+All eligible wider-spacing observations must agree in both directions.
+Unknown or unreadable marked coordinates remain explicit barriers instead of
+disappearing from the slot sequence. Capturing a coordinate never admits a new
+function entry. Body competition, thresholds, original instruction identity and
+the limits of the equivalence claims above remain unchanged.
+
+Matcher version 20 adds `data_initializer` candidates between paired data-address
+observations. Complete independently matched functions must use those addresses
+at the same instruction and operand roles, with equal scalar, CFG and mapped
+reference layouts. Adjacent observations must agree uniquely in both directions;
+both bounded intervals need the same length and every marked pointer slot at
+the same offset. Unknown targets, conflicting observations, overlapping slots
+and incompatible already paired targets block the evidence. Full mapped data
+coordinates supply this hint; numeric lookalikes and AArch64 page fragments do
+not. The pass uses the original frozen correspondence after the earlier
+initializer channels and retains ordinary similarity and rival checks. Observed
+intervals do not identify data-object boundaries or prove runtime equivalence.
+
+Matcher version 21 adds `block_call_site`: the same call position in a unique
+complete block of independently matched complete callers. The surrounding block
+must retain every scalar and known reference role. Repeated indistinguishable
+blocks, contradictory occurrences, unresolved operands or indirect transfers
+cannot resolve a pair. This can propose a remaining helper after calls elsewhere
+were added or reordered. Candidates still compete with measured bodies; only
+complete agreement with already mapped neighbors earns the existing lower
+context threshold. These local observations neither prove whole-function
+identity nor relax instruction-level change reporting.
+
 Matcher version 10 also defers a similar helper body when its changed entry
 contains the complete straight-line prelude of an unmatched direct tail caller,
 with at least two caller instructions beyond the helper's aligned body. Both
@@ -232,6 +288,11 @@ query returns the deduplicated union of its direct candidates. Sharing another
 function's candidate does not make two functions candidates for each other.
 Search and sort apply to the returned candidate functions. `ambiguity.steps`
 lists the supporting matching steps; inventory rows expose `candidate_steps`.
+Each returned row also has `pair_evidence.steps` and
+`pair_evidence.explanation` for that specific source and candidate. These
+exclude reasons that support the candidate only with another source in an
+overlapping group; the ordinary inventory fields retain their function-wide
+meaning.
 The usual inventory's short `candidates` array remains a preview; it does not
 limit this query's total. These are the engine's retained hypotheses, not all
 possible correspondences or accepted matches.
@@ -239,9 +300,11 @@ possible correspondences or accepted matches.
 In the desktop, select a function and choose **Pair with…**. The resizable
 picker pages all retained ambiguity candidates and can switch to **All
 functions** for manual pairing. Search accepts names and hexadecimal addresses,
-including zero. Rows show current pairings; a selection explains which pairs
-will be replaced. **Pair functions** records the edit and **Undo** restores the
-previous pairs. Searching, browsing and cancelling do not edit the mapping.
+including zero. Rows show current pairings; a selection explains its specific
+candidate evidence and which pairs will be replaced. Tooltips and accessible
+descriptions include that pair's evidence. **Pair functions** records the edit
+and **Undo** restores the previous pairs. Searching, browsing and cancelling do
+not edit the mapping.
 Changed comparison revisions invalidate the picker until it is reopened.
 
 `--options FILE` accepts an object containing:

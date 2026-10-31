@@ -30,6 +30,7 @@
 
 #include <array>
 #include <cstdint>
+#include <optional>
 #include <vector>
 
 namespace neverd::diff {
@@ -90,6 +91,7 @@ struct FunctionFeatures {
     uint32_t Instruction;
     uint32_t Operand;
     ReferenceKind Kind;
+    std::optional<uint64_t> Coordinate;
   };
   /// Non-function address operands, retaining their kind and occurrence.
   std::vector<DataSite> DataSites;

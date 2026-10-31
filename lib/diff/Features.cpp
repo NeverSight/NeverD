@@ -327,7 +327,8 @@ ProgramFeatures computeFeatures(const Program &P,
                    Out.Instructions, Address.Operand});
             else
               Out.DataSites.push_back({Address.Key, Out.Instructions,
-                                       Address.Operand, Address.Kind});
+                                       Address.Operand, Address.Kind,
+                                       Address.Coordinate});
           if (I.HasUnresolvedData &&
               !llvm::any_of(P.addressReferences(I), [](const auto &Address) {
                 return Address.Kind == ReferenceKind::UnresolvedData;

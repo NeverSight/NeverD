@@ -248,6 +248,8 @@ private:
     bool CallSite = false;
     bool DataReference = false;
     bool AddressSite = false;
+    bool Initializer = false;
+    bool BlockCallSite = false;
   };
   llvm::DenseMap<uint64_t, CandidateEvidence> FeatureCandidates;
   Clock::time_point PhaseStart;
@@ -270,10 +272,12 @@ private:
         FeatureCandidates.try_emplace(pairKey(A, B), CandidateEvidence{Step});
     (void)Inserted;
     It->second.FromContext |= FromContext;
-    It->second.ContextEligible |= Step == FunctionStep::CallSite ||
-                                  Step == FunctionStep::Neighborhood ||
-                                  Step == FunctionStep::AddressSite;
+    It->second.ContextEligible |=
+        Step == FunctionStep::CallSite || Step == FunctionStep::BlockCallSite ||
+        Step == FunctionStep::Neighborhood || Step == FunctionStep::AddressSite;
     It->second.CallSite |= Step == FunctionStep::CallSite;
+    It->second.CallSite |= Step == FunctionStep::BlockCallSite;
+    It->second.BlockCallSite |= Step == FunctionStep::BlockCallSite;
     It->second.AddressSite |= Step == FunctionStep::AddressSite;
   }
   bool stopNow() {
@@ -767,7 +771,8 @@ bool Matcher::consistentContext(uint32_t A, uint32_t B) const {
     return false;
   const double Agreement = contextAgreement(A, B);
   return ((It->second.CallSite || It->second.AddressSite) && Agreement == 1) ||
-         (It->second.DataReference && (Agreement < 0 || Agreement == 1));
+         ((It->second.DataReference || It->second.Initializer) &&
+          (Agreement < 0 || Agreement == 1));
 }
 
 unsigned Matcher::approximate(bool ReferenceOnly) {
@@ -794,7 +799,8 @@ unsigned Matcher::approximate(bool ReferenceOnly) {
     const uint32_t A = uint32_t(Key >> 32), B = uint32_t(Key);
     if (PMatch[A] == NoIndex && SMatch[B] == NoIndex) {
       Candidates.push_back(Key);
-      if (ReferenceOnly && (Evidence.DataReference || Evidence.AddressSite))
+      if (ReferenceOnly && (Evidence.DataReference || Evidence.AddressSite ||
+                            Evidence.Initializer || Evidence.BlockCallSite))
         ReferenceA[A] = ReferenceB[B] = 1;
     }
   }
@@ -979,7 +985,8 @@ unsigned Matcher::approximate(bool ReferenceOnly) {
     // supported by the new frozen reference evidence can be admitted here.
     if (ReferenceOnly &&
         (Feature == FeatureCandidates.end() ||
-         (!Feature->second.DataReference && !Feature->second.AddressSite)))
+         (!Feature->second.DataReference && !Feature->second.AddressSite &&
+          !Feature->second.Initializer && !Feature->second.BlockCallSite)))
       continue;
     // A positional or lone-neighbor proposal earns the lower context
     // threshold only when every already mapped neighbor agrees. A local
@@ -1390,6 +1397,17 @@ void Matcher::retainStackAlternatives() {
 void Matcher::collectAmbiguities() {
   std::vector<uint32_t> InPrimary(P.Functions.size(), NoIndex),
       InSecondary(S.Functions.size(), NoIndex);
+  // Initializer admission follows the last propagation pass. Keep those
+  // endpoints in the group population until Record removes accepted pairs,
+  // so resolving part of a group cannot hide an unpaired singleton remainder.
+  llvm::DenseSet<uint32_t> InitializerPrimary, InitializerSecondary;
+  for (const auto &F : Order)
+    if (F.Step == FunctionStep::Initializer ||
+        F.Step == FunctionStep::DataInitializer ||
+        F.Step == FunctionStep::BlockCallSite) {
+      InitializerPrimary.insert(F.Primary);
+      InitializerSecondary.insert(F.Secondary);
+    }
   const auto Record = [&](Tie T, bool Exact) {
     llvm::erase_if(T.Primary, [&](uint32_t A) {
       return PMatch[A] != NoIndex || (Exact && InPrimary[A] != NoIndex);
@@ -1420,6 +1438,9 @@ void Matcher::collectAmbiguities() {
                       T.Secondary.end());
     if (T.Primary.empty() || T.Secondary.empty())
       return;
+    if (T.Primary.size() == 1 && T.Secondary.size() == 1 &&
+        Rejected.contains(pairKey(T.Primary[0], T.Secondary[0])))
+      return;
     if (Exact) {
       for (uint32_t A : T.Primary)
         InPrimary[A] = R.Ambiguities.size();
@@ -1438,11 +1459,13 @@ void Matcher::collectAmbiguities() {
   for (FunctionStep Step : GlobalSteps) {
     std::vector<Entry> Entries;
     for (uint32_t A = 0; A < P.Functions.size(); ++A)
-      if (PMatch[A] == NoIndex && InPrimary[A] == NoIndex)
+      if (InitializerPrimary.contains(A) ||
+          (PMatch[A] == NoIndex && InPrimary[A] == NoIndex))
         if (const uint64_t K = featureKey(Step, A, false))
           Entries.push_back({K, 0, A});
     for (uint32_t B = 0; B < S.Functions.size(); ++B)
-      if (SMatch[B] == NoIndex && InSecondary[B] == NoIndex)
+      if (InitializerSecondary.contains(B) ||
+          (SMatch[B] == NoIndex && InSecondary[B] == NoIndex))
         if (const uint64_t K = featureKey(Step, B, true))
           Entries.push_back({K, 1, B});
     llvm::sort(Entries, [](const Entry &L, const Entry &R) {
@@ -1672,6 +1695,70 @@ void Matcher::run(llvm::ArrayRef<Override> Overrides) {
     approximate(true);
   if (!stopNow())
     progress(1, 1);
+  if (!P.CodeInitializers.empty() && !S.CodeInitializers.empty() &&
+      !stopNow()) {
+    beginPhase("initializer-context");
+    std::vector<uint8_t> TrustedP(P.Functions.size(), 0),
+        TrustedS(S.Functions.size(), 0);
+    for (const auto &F : Order)
+      if (protectedMatch(F) && !P.Functions[F.Primary].has(TraitIncomplete) &&
+          !S.Functions[F.Secondary].has(TraitIncomplete))
+        TrustedP[F.Primary] = TrustedS[F.Secondary] = 1;
+    InitializerCandidates Initializers;
+    const std::pair<const std::vector<std::pair<uint32_t, uint32_t>> *,
+                    FunctionStep>
+        Sources[]{{&Initializers.Contiguous, FunctionStep::Initializer},
+                  {&Initializers.Strided, FunctionStep::Initializer},
+                  {&Initializers.DataAddresses, FunctionStep::DataInitializer}};
+    progress(0, std::size(Sources));
+    if (!stopNow())
+      Initializers = initializerCandidates(P, PF, PMatch, TrustedP, S, SF,
+                                           SMatch, TrustedS, Control);
+    unsigned Done = 0;
+    for (const auto &[Proposals, Step] : Sources) {
+      if (stopNow())
+        break;
+      bool Proposed = false;
+      for (const auto &[A, B] : *Proposals) {
+        if (stopNow())
+          break;
+        if (PMatch[A] != NoIndex || SMatch[B] != NoIndex)
+          continue;
+        propose(A, B, Step, true);
+        auto &Evidence = FeatureCandidates.find(pairKey(A, B))->second;
+        Evidence.Step = Step;
+        Evidence.Initializer = true;
+        Proposed = true;
+      }
+      if (Proposed && !stopNow())
+        approximate(true);
+      if (!stopNow())
+        progress(++Done, std::size(Sources));
+    }
+  }
+  if (!stopNow()) {
+    beginPhase("block-call-context");
+    progress(0, 1);
+    std::vector<uint8_t> TrustedP(P.Functions.size(), 0),
+        TrustedS(S.Functions.size(), 0);
+    for (const auto &F : Order)
+      if (protectedMatch(F) && !P.Functions[F.Primary].has(TraitIncomplete) &&
+          !S.Functions[F.Secondary].has(TraitIncomplete))
+        TrustedP[F.Primary] = TrustedS[F.Secondary] = 1;
+    const auto Calls =
+        blockCallCandidates(P, PMatch, TrustedP, S, SMatch, TrustedS, Control);
+    for (const auto &[A, B] : Calls) {
+      if (stopNow())
+        break;
+      propose(A, B, FunctionStep::BlockCallSite, true);
+      FeatureCandidates.find(pairKey(A, B))->second.Step =
+          FunctionStep::BlockCallSite;
+    }
+    if (!Calls.empty() && !stopNow())
+      approximate(true);
+    if (!stopNow())
+      progress(1, 1);
+  }
   beginPhase("ambiguities");
   retainCallAlternatives();
   retainStackAlternatives();

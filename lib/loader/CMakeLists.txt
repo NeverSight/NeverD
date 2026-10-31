@@ -72,6 +72,7 @@ add_neverd_component_library(NeverDLoader
   DWARF/EHFrameEncoding.cpp
   DWARF/ItaniumEH.cpp
   DWARF/LSDA.cpp
+  CodePointerSources.cpp
   DataSymbolBinding.cpp
   DirectBranch.cpp
   ELF/ARMEHABI.cpp

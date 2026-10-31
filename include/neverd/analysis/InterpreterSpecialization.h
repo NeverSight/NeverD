@@ -362,7 +362,8 @@ struct SpecializationOptions {
   /// ranges are disjoint. No store exemption is implied: enable
   /// ProveStoreFrameSeparation to prove each complete access independently.
   /// Requires distinct complete x64 GPRs, excluding the frame register and
-  /// overlapping EntryConstants. Ordinary source/native consumers refuse.
+  /// overlapping EntryConstants. Machine-region source checks these complete
+  /// ranges before guest effects; ordinary source/native consumers refuse.
   std::vector<SpecializationEntryObject> EntryFrameExcludedObjects;
   /// Optional congruence domain for the entry frame root. Requires explicit
   /// machine state and an RSP FrameBaseRegister. Raw residual consumers enforce

@@ -85,6 +85,9 @@ struct AddressReference {
   uint64_t Key = 0;
   uint32_t Operand = 0;
   ReferenceKind Kind = ReferenceKind::Function;
+  /// Optional full byte coordinate in this input's mapped data. Candidate
+  /// context only: neither object identity nor normalized instruction identity.
+  std::optional<uint64_t> Coordinate;
 };
 
 /// One decoded instruction.
@@ -267,6 +270,13 @@ bool isNativeX86Normalization(llvm::StringRef Profile);
 /// not a digest or authentication of the input or its analysis.
 std::string programAnalysisIdentity(const ProgramIdentity &Identity);
 
+/// An initialized, relocation-marked code coordinate, not a runtime binding.
+struct CodePointerInitializer {
+  uint64_t Slot = 0;
+  /// An unreadable marked slot remains a barrier, never a guessed target.
+  std::optional<uint64_t> Target;
+};
+
 /// One side of a comparison.
 struct Program {
   ProgramIdentity Identity;
@@ -279,6 +289,11 @@ struct Program {
   std::vector<Instruction> Instructions;
   std::vector<Reference> References;
   std::vector<AddressReference> AddressReferences;
+  /// Byte-derived initialized code references, ordered by slot. These optional
+  /// candidate hints establish neither object boundaries nor stable runtime
+  /// values. Their bytes and mapping are bound by the native input identity;
+  /// matcher revisions own their use, independently of instruction identity.
+  std::vector<CodePointerInitializer> CodeInitializers;
   /// The bytes of every instruction, at Instruction::CodeOffset.
   std::vector<uint8_t> Code;
   /// Distinct mnemonics, by Instruction::Mnemonic.

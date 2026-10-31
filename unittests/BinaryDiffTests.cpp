@@ -1034,6 +1034,89 @@ TEST(BinaryDiff,
   }
 }
 
+TEST(BinaryDiff, CompleteLocalCallBlocksSurviveOtherCallLayoutChanges) {
+  const auto Input = [](bool Secondary) {
+    Fn Caller;
+    Caller.Name = "caller";
+    Caller.Blocks = {
+        {{"test", "edi, edi"}, {"je", "", InstructionFlow::Branch}},
+        {{"mov", "edi, 11"},
+         {"call", "", InstructionFlow::Call, "callback_a"},
+         {"ret", "", InstructionFlow::Return}},
+        {{"mov", "edi, 22"},
+         {"call", "", InstructionFlow::Call, "callback_b"},
+         {"ret", "", InstructionFlow::Return}}};
+    Caller.Edges = {{0, 1, EdgeKind::NotTaken}, {0, 2, EdgeKind::Taken}};
+    Fn A = leaf("callback_a", 77, 5), B = A, Extra = leaf("extra", 1234, 4);
+    A.Source = B.Source = Extra.Source = NameSource::Generated;
+    B.Name = "callback_b";
+    if (Secondary) {
+      std::swap(Caller.Blocks[1], Caller.Blocks[2]);
+      Caller.Blocks.push_back({{"call", "", InstructionFlow::Call, "extra"},
+                               {"ret", "", InstructionFlow::Return}});
+    }
+    return build({Caller, A, B, Extra}, Secondary ? 0x8000 : 0x1000,
+                 Secondary ? std::vector<size_t>{0, 2, 1, 3}
+                           : std::vector<size_t>{0, 1, 2, 3});
+  };
+  const auto P = Input(false), S = Input(true);
+  for (bool Reverse : {false, true}) {
+    const auto &A = Reverse ? S : P, &B = Reverse ? P : S;
+    const auto R = compare(A, B, {});
+    for (const auto *Name : {"callback_a", "callback_b"}) {
+      EXPECT_EQ(counterpart(R, A, B, Name), Name);
+      if (const auto *M = R.matchOfPrimary(indexOf(A, Name)))
+        EXPECT_EQ(stepName(M->Step), "block_call_site");
+    }
+    auto Incomplete = A;
+    Incomplete.Functions[0].Traits |= TraitIncomplete;
+    const auto Unknown = compare(Incomplete, B, {});
+    EXPECT_EQ(Unknown.secondaryOf(indexOf(A, "callback_a")), NoIndex);
+    EXPECT_EQ(Unknown.secondaryOf(indexOf(A, "callback_b")), NoIndex);
+    auto Duplicate = A;
+    const auto &F = Duplicate.Functions[0];
+    const auto &First = Duplicate.Blocks[F.FirstBlock + 1];
+    const auto &Second = Duplicate.Blocks[F.FirstBlock + 2];
+    Duplicate.Instructions[Second.FirstInstruction].Shape =
+        Duplicate.Instructions[First.FirstInstruction].Shape;
+    Duplicate.Instructions[Second.FirstInstruction].AddressIndependentShape =
+        Duplicate.Instructions[First.FirstInstruction].AddressIndependentShape;
+    const auto Ambiguous = compare(Duplicate, B, {});
+    EXPECT_EQ(Ambiguous.secondaryOf(indexOf(A, "callback_a")), NoIndex);
+    EXPECT_EQ(Ambiguous.secondaryOf(indexOf(A, "callback_b")), NoIndex);
+    auto Conflict = A;
+    Conflict.Instructions[First.FirstInstruction + 1].Callee =
+        indexOf(A, "callback_b");
+    Conflict.Instructions[Second.FirstInstruction + 1].Callee =
+        indexOf(A, "callback_b");
+    const auto Contradictory = compare(Conflict, B, {});
+    EXPECT_EQ(Contradictory.secondaryOf(indexOf(A, "callback_a")), NoIndex);
+    EXPECT_EQ(Contradictory.secondaryOf(indexOf(A, "callback_b")), NoIndex);
+    auto Missing = A;
+    const auto CA = indexOf(A, "callback_a");
+    const auto FirstTarget = A.Instructions[First.FirstInstruction + 1].Callee;
+    const auto TargetBlock = FirstTarget == CA ? First : Second;
+    Missing.Instructions[TargetBlock.FirstInstruction].HasUnresolvedData = true;
+    EXPECT_EQ(compare(Missing, B, {}).secondaryOf(CA), NoIndex);
+    const Override Reject{OverrideKind::Unmatch, named(A, "callback_a").Address,
+                          named(B, "callback_a").Address};
+    EXPECT_EQ(compare(A, B, {}, {Reject}).secondaryOf(indexOf(A, "callback_a")),
+              NoIndex);
+  }
+  std::atomic<bool> Cancel{false};
+  ComparisonControl Control;
+  Control.Cancel = &Cancel;
+  Control.Progress = [&](llvm::StringRef Phase, uint64_t Done, uint64_t) {
+    if (Phase == "block-call-context" && Done == 0)
+      Cancel = true;
+  };
+  const auto Stopped = compare(P, S, {}, {}, Control);
+  EXPECT_EQ(Stopped.State, ComparisonState::Cancelled);
+  EXPECT_EQ(Stopped.StoppedPhase, "block-call-context");
+  EXPECT_EQ(Stopped.secondaryOf(indexOf(P, "callback_a")), NoIndex);
+  EXPECT_EQ(Stopped.secondaryOf(indexOf(P, "callback_b")), NoIndex);
+}
+
 TEST(BinaryDiff, SingleCallEntrySurvivesAnInsertedGuard) {
   Fn Before;
   Before.Name = "fail";
@@ -1604,6 +1687,298 @@ TEST(BinaryDiff, StackRoleAlternativesRetainConflictingBodyMatchesForReview) {
                   .secondaryOf(HI),
               HJ);
   }
+}
+
+TEST(BinaryDiff, IndependentInitializerRolesSeparateIdenticalCallbacks) {
+  const auto Input = [](bool Secondary, bool Changed = false,
+                        unsigned CallbackInstructions = 5,
+                        unsigned Background = 0,
+                        uint64_t SlotStride = sizeof(uint64_t)) {
+    std::vector<Fn> Functions = {leaf("anchor_a", 1, 11),
+                                 leaf("anchor_b", 2, 22),
+                                 leaf(Secondary ? "callback_b" : "callback_a",
+                                      Changed ? 8 : 7, CallbackInstructions),
+                                 leaf(Secondary ? "callback_a" : "callback_b",
+                                      Changed ? 8 : 7, CallbackInstructions)};
+    for (unsigned I = 0; I < Background; ++I)
+      Functions.push_back(leaf("background_" + std::to_string(I), 3, 1));
+    for (auto &F : Functions)
+      F.Source = NameSource::Generated;
+    auto P = build(Functions, Secondary ? 0x8000 : 0x1000);
+    P.Identity.Bits = 64;
+    const uint64_t Slot = Secondary ? 0x9000 : 0x3000;
+    for (const auto *Name :
+         {"anchor_a", "callback_a", "anchor_b", "callback_b"})
+      P.CodeInitializers.push_back(
+          {Slot + P.CodeInitializers.size() * SlotStride,
+           named(P, Name).Address});
+    return P;
+  };
+  const auto P = Input(false), S = Input(true);
+  ComparisonSettings Settings;
+  Settings.UseNames = false;
+  for (bool Reverse : {false, true}) {
+    const auto &A = Reverse ? S : P, &B = Reverse ? P : S;
+    auto Plain = A;
+    Plain.CodeInitializers.clear();
+    EXPECT_EQ(compare(Plain, B, Settings).Matches.size(), 2u);
+    const auto R = compare(A, B, Settings);
+    EXPECT_EQ(R.Matches.size(), 4u);
+    for (const auto *Name : {"callback_a", "callback_b"}) {
+      EXPECT_EQ(counterpart(R, A, B, Name), Name);
+      EXPECT_EQ(matchOf(R, A, Name).Step, FunctionStep::Initializer);
+      EXPECT_TRUE(matchOf(R, A, Name).FromContext);
+    }
+    auto ExactOnly = Settings;
+    ExactOnly.Approximate = false;
+    EXPECT_EQ(compare(A, B, ExactOnly).Matches.size(), 4u);
+    // Resolving one member of a duplicate group must not hide its remaining
+    // pair. The final context pass does not automatically promote that pair.
+    // Repeated short backgrounds exceed exhaustive candidate admission; the
+    // remaining pair has no measured similarity-star fallback.
+    auto PartialA = Input(Reverse, false, 1, 260),
+         PartialB = Input(!Reverse, false, 1, 260);
+    PartialA.CodeInitializers.resize(3);
+    PartialB.CodeInitializers.resize(3);
+    const uint32_t LeftA = indexOf(A, "callback_b"),
+                   LeftB = indexOf(B, "callback_b");
+    const auto RetainsRemainder = [&](const ComparisonResult &R) {
+      return llvm::any_of(R.Ambiguities, [&](const auto &Group) {
+        return llvm::is_contained(Group.Primary, LeftA) &&
+               llvm::is_contained(Group.Secondary, LeftB);
+      });
+    };
+    const auto Partial = compare(PartialA, PartialB, Settings);
+    EXPECT_EQ(Partial.Matches.size(), 3u);
+    EXPECT_EQ(Partial.secondaryOf(LeftA), NoIndex);
+    EXPECT_TRUE(RetainsRemainder(Partial));
+    const Override RejectRemainder{OverrideKind::Unmatch,
+                                   named(PartialA, "callback_b").Address,
+                                   named(PartialB, "callback_b").Address};
+    EXPECT_FALSE(RetainsRemainder(
+        compare(PartialA, PartialB, Settings, {RejectRemainder})));
+    auto Gap = B;
+    Gap.CodeInitializers.erase(Gap.CodeInitializers.begin() + 1);
+    EXPECT_EQ(compare(A, Gap, Settings).Matches.size(), 2u);
+    auto Overlap = A;
+    Overlap.CodeInitializers[1].Slot = Overlap.CodeInitializers[0].Slot + 1;
+    EXPECT_EQ(compare(Overlap, B, Settings).Matches.size(), 2u);
+    auto Missing = A;
+    Missing.CodeInitializers[1].Target = 0x12345678;
+    EXPECT_EQ(compare(Missing, B, Settings).Matches.size(), 2u);
+    auto Incomplete = A;
+    Incomplete.Functions[indexOf(A, "callback_a")].Traits |= TraitIncomplete;
+    EXPECT_EQ(
+        compare(Incomplete, B, Settings).secondaryOf(indexOf(A, "callback_a")),
+        NoIndex);
+    std::string Error;
+    const auto Read = readComparison(saved(R, A, B), Error);
+    ASSERT_TRUE(Read) << Error;
+    ComparisonResult Restored;
+    ASSERT_FALSE(bindComparison(*Read, A, B, Restored));
+    EXPECT_EQ(savedWithoutTimings(R, A, B),
+              savedWithoutTimings(Restored, A, B));
+    // One repeated anchor is not independent context, and two copies of a
+    // neighborhood cannot select one arbitrary source location.
+    auto Repeated = A;
+    Repeated.CodeInitializers[2].Target = named(A, "anchor_a").Address;
+    EXPECT_EQ(compare(Repeated, B, Settings).Matches.size(), 2u);
+    auto Duplicate = A;
+    for (const auto &I : A.CodeInitializers)
+      Duplicate.CodeInitializers.push_back({I.Slot + 0x1000, I.Target});
+    EXPECT_EQ(compare(Duplicate, B, Settings).Matches.size(), 2u);
+    // Conflicting occurrences are checked together before accepting either.
+    auto ConflictA = A, ConflictB = B;
+    for (const auto *Name :
+         {"anchor_b", "callback_a", "anchor_a", "callback_b"}) {
+      const uint64_t Slot =
+          0x10000 + ConflictA.CodeInitializers.size() * sizeof(uint64_t);
+      ConflictA.CodeInitializers.push_back({Slot, named(A, Name).Address});
+      const auto Other = llvm::StringRef(Name) == "callback_a"   ? "callback_b"
+                         : llvm::StringRef(Name) == "callback_b" ? "callback_a"
+                                                                 : Name;
+      ConflictB.CodeInitializers.push_back({Slot, named(B, Other).Address});
+    }
+    EXPECT_EQ(compare(ConflictA, ConflictB, Settings).Matches.size(), 2u);
+    const Override Keep{OverrideKind::Match, named(A, "callback_a").Address,
+                        named(B, "callback_b").Address};
+    EXPECT_EQ(counterpart(compare(A, B, Settings, {Keep}), A, B, "callback_a"),
+              "callback_b");
+  }
+  for (uint64_t Stride : {16, 56}) {
+    const auto StridedP = Input(false, false, 5, 0, Stride),
+               StridedS = Input(true, false, 5, 0, Stride);
+    for (bool Reverse : {false, true}) {
+      const auto &A = Reverse ? StridedS : StridedP,
+                 &B = Reverse ? StridedP : StridedS;
+      const auto R = compare(A, B, Settings);
+      EXPECT_EQ(R.Matches.size(), 4u);
+      for (const auto *Name : {"callback_a", "callback_b"})
+        EXPECT_EQ(counterpart(R, A, B, Name), Name);
+      auto Missing = A;
+      Missing.CodeInitializers[1].Target = 0x12345678;
+      EXPECT_EQ(compare(Missing, B, Settings).Matches.size(), 2u);
+      Missing.CodeInitializers[1].Target.reset();
+      EXPECT_EQ(compare(Missing, B, Settings).Matches.size(), 2u);
+    }
+  }
+  const auto AddRecords = [&](Program &A, bool Swap) {
+    uint64_t Slot = 0x10000;
+    for (const auto *Name :
+         {"anchor_b", "callback_a", "anchor_a", "callback_b"}) {
+      const auto Target =
+          Swap && llvm::StringRef(Name) == "callback_a"   ? "callback_b"
+          : Swap && llvm::StringRef(Name) == "callback_b" ? "callback_a"
+                                                          : Name;
+      A.CodeInitializers.push_back({Slot, named(A, Target).Address});
+      Slot += 56;
+    }
+  };
+  auto ConflictingP = Input(false, false, 5, 0, 16),
+       ConflictingS = Input(true, false, 5, 0, 16);
+  AddRecords(ConflictingP, false);
+  AddRecords(ConflictingS, true);
+  EXPECT_EQ(compare(ConflictingP, ConflictingS, Settings).Matches.size(), 2u);
+  auto PackedP = P, PackedS = S;
+  AddRecords(PackedP, false);
+  AddRecords(PackedS, true);
+  const auto Packed = compare(PackedP, PackedS, Settings);
+  for (const auto *Name : {"callback_a", "callback_b"})
+    EXPECT_EQ(counterpart(Packed, PackedP, PackedS, Name), Name);
+  std::atomic<bool> Cancel{false};
+  ComparisonControl Control;
+  Control.Cancel = &Cancel;
+  Control.Progress = [&](llvm::StringRef Phase, uint64_t Done, uint64_t) {
+    if (Phase == "initializer-context" && Done == 0)
+      Cancel = true;
+  };
+  const auto Stopped = compare(P, S, Settings, {}, Control);
+  EXPECT_EQ(Stopped.State, ComparisonState::Cancelled);
+  EXPECT_EQ(Stopped.StoppedPhase, "initializer-context");
+  EXPECT_EQ(Stopped.Matches.size(), 2u);
+  EXPECT_EQ(compare(P, S, Settings).Matches.size(), 4u);
+  const auto Changed = Input(true, true);
+  EXPECT_EQ(compare(P, Changed, Settings).Matches.size(), 4u);
+  auto Strict = Settings;
+  Strict.MinimumSimilarity = 0.99;
+  EXPECT_EQ(compare(P, Changed, Strict).Matches.size(), 2u);
+  auto Invalid = P;
+  Invalid.CodeInitializers[1].Slot = Invalid.CodeInitializers[0].Slot;
+  EXPECT_TRUE(Invalid.validate());
+  Invalid = P;
+  Invalid.Identity.Bits = 0;
+  EXPECT_TRUE(Invalid.validate());
+  Invalid = P;
+  Invalid.CodeInitializers.back().Slot = UINT64_MAX;
+  EXPECT_TRUE(Invalid.validate());
+}
+
+TEST(BinaryDiff, InitializedPointersUseBoundedPairedDataAddressObservations) {
+  const auto Input = [](bool Secondary, bool Coordinates) {
+    ProgramIdentity Identity;
+    Identity.Bits = 64;
+    Identity.Normalization = NativeX86Normalization.str();
+    Identity.SHA256 = std::string(64, Secondary ? 'b' : 'a');
+    const uint64_t Base = Secondary ? 0x8000 : 0x1000;
+    const uint64_t Data = Secondary ? 0x9000 : 0x3000;
+    ProgramBuilder B(Identity);
+    for (unsigned I = 0; I < 4; ++I) {
+      const auto Name = I == 0                  ? "data_begin"
+                        : I == 1                ? "data_end"
+                        : (I == 2) == Secondary ? "callback_b"
+                                                : "callback_a";
+      const uint64_t Address = Base + I * 0x100;
+      B.beginFunction(Address, 3, Name,
+                      I < 2 ? NameSource::Symbol : NameSource::Generated, 0);
+      B.addBlock(Address);
+      if (I < 2) {
+        const uint64_t Key = (Secondary ? 2000 : 1000) + I;
+        const AddressReference References[]{
+            {Key, 0, ReferenceKind::UnresolvedData,
+             Coordinates ? std::optional<uint64_t>(Data + I * 0x80)
+                         : std::nullopt}};
+        B.addInstruction(Address, {0x48, 0x8d}, "lea", Key, 10,
+                         InstructionFlow::None, {}, {}, {}, References, 100 + I,
+                         true);
+      } else {
+        B.addInstruction(Address, {0x31, 0xc0}, "xor", 77, 77,
+                         InstructionFlow::None);
+      }
+      B.addInstruction(Address + 2, {0xc3}, "ret", 88, 88,
+                       InstructionFlow::Return);
+    }
+    auto P = B.finish();
+    P.CodeInitializers = {{Data + 0x18, named(P, "callback_a").Address},
+                          {Data + 0x20, named(P, "callback_b").Address}};
+    return P;
+  };
+  const auto P = Input(false, true), S = Input(true, true);
+  for (bool Reverse : {false, true}) {
+    const auto &A = Reverse ? S : P, &B = Reverse ? P : S;
+    EXPECT_EQ(compare(Input(Reverse, false), B, {}).Matches.size(), 2u);
+    const auto R = compare(A, B, {});
+    EXPECT_EQ(R.Matches.size(), 4u);
+    for (const auto *Name : {"callback_a", "callback_b"}) {
+      EXPECT_EQ(counterpart(R, A, B, Name), Name);
+      if (const auto *M = R.matchOfPrimary(indexOf(A, Name))) {
+        EXPECT_EQ(stepName(M->Step), "data_initializer");
+        EXPECT_TRUE(M->FromContext);
+      }
+    }
+    std::string Error;
+    const auto Saved = readComparison(saved(R, A, B), Error);
+    ASSERT_TRUE(bool(Saved)) << Error;
+    ComparisonResult Restored;
+    ASSERT_FALSE(bindComparison(*Saved, A, B, Restored));
+    EXPECT_EQ(savedWithoutTimings(R, A, B),
+              savedWithoutTimings(Restored, A, B));
+    auto Missing = A;
+    Missing.AddressReferences[0].Coordinate.reset();
+    EXPECT_EQ(compare(Missing, B, {}).Matches.size(), 2u);
+    auto Incomplete = A;
+    Incomplete.Functions[0].Traits |= TraitIncomplete;
+    EXPECT_EQ(compare(Incomplete, B, {}).Matches.size(), 2u);
+    auto Span = B;
+    *Span.AddressReferences[1].Coordinate += 8;
+    EXPECT_EQ(compare(A, Span, {}).Matches.size(), 2u);
+    auto Position = B;
+    Position.CodeInitializers[1].Slot += 8;
+    EXPECT_EQ(compare(A, Position, {}).Matches.size(), 2u);
+    auto Unknown = A;
+    Unknown.CodeInitializers[0].Target.reset();
+    EXPECT_EQ(compare(Unknown, B, {}).Matches.size(), 2u);
+    Unknown.CodeInitializers[0].Target = named(A, "callback_a").Address + 1;
+    EXPECT_EQ(compare(Unknown, B, {}).Matches.size(), 2u);
+    auto Conflict = A;
+    Conflict.AddressReferences[1].Coordinate =
+        Conflict.AddressReferences[0].Coordinate;
+    EXPECT_EQ(compare(Conflict, B, {}).Matches.size(), 2u);
+    auto Overlap = A;
+    Overlap.CodeInitializers[1].Slot = Overlap.CodeInitializers[0].Slot + 1;
+    EXPECT_EQ(compare(Overlap, B, {}).Matches.size(), 2u);
+    auto Retarget = A;
+    Retarget.CodeInitializers[0].Target = named(A, "data_begin").Address;
+    EXPECT_EQ(compare(Retarget, B, {}).Matches.size(), 2u);
+    auto Scalar = A;
+    auto &First = Scalar.Instructions[Scalar.Blocks[0].FirstInstruction];
+    ++First.AddressIndependentShape;
+    EXPECT_EQ(compare(Scalar, B, {}).Matches.size(), 2u);
+    const Override Reject{OverrideKind::Unmatch, named(A, "callback_a").Address,
+                          named(B, "callback_a").Address};
+    const auto Rejected = compare(A, B, {}, {Reject});
+    EXPECT_EQ(Rejected.secondaryOf(indexOf(A, "callback_a")), NoIndex);
+  }
+  std::atomic<bool> Cancel{false};
+  ComparisonControl Control;
+  Control.Cancel = &Cancel;
+  Control.Progress = [&](llvm::StringRef Phase, uint64_t Done, uint64_t) {
+    if (Phase == "initializer-context" && Done == 0)
+      Cancel = true;
+  };
+  const auto Stopped = compare(P, S, {}, {}, Control);
+  EXPECT_EQ(Stopped.State, ComparisonState::Cancelled);
+  EXPECT_EQ(Stopped.StoppedPhase, "initializer-context");
+  EXPECT_EQ(Stopped.Matches.size(), 2u);
 }
 
 TEST(BinaryDiff, UnknownAddressOperandDoesNotHideAKnownRetargeting) {
@@ -3130,7 +3505,7 @@ TEST(BinaryDiff, SavedMeasurementsAreRecomputedBeforePublication) {
 }
 
 TEST(BinaryDiff, VocabularyRoundTrips) {
-  for (unsigned I = 0; I <= unsigned(FunctionStep::InlinedTailCall); ++I) {
+  for (unsigned I = 0; I <= unsigned(FunctionStep::BlockCallSite); ++I) {
     const auto Step = static_cast<FunctionStep>(I);
     EXPECT_EQ(functionStepNamed(stepName(Step)), Step);
     EXPECT_FALSE(stepDescription(Step).empty());

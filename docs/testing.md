@@ -1,5 +1,7 @@
 **Languages**: [English](testing.md) | [简体中文](zh-CN/testing.md) | [繁體中文](zh-TW/testing.md) | [日本語](ja/testing.md) | [한국어](ko/testing.md) | [Français](fr/testing.md) | [Deutsch](de/testing.md) | [Español](es/testing.md) | [Italiano](it/testing.md) | [Русский](ru/testing.md) | [العربية](ar/testing.md)
 
+`InterpreterMachineRegionSourceTest.EntryObjects*` executes all four region state interfaces through HighC and LLVMC at O0/O2 with ASan/UBSan. Complete state, guest writes and query tapes cover optional alignment, object aliases, equal roots with disjoint relative ranges, one-byte overlaps and rejected inputs before any effects. An independent 128-bit arithmetic oracle covers signed displacement extremes, address wraparound and UINT64_MAX endpoints. Exact/short source budgets and changed authenticated declarations remain checked; ordinary source consumers still refuse the raw domain.
+
 `HighSwiftEmitter.StackScalarBindingsDoNotInventPhysicalStackWrites` runs x64/ARM64 Mach-O integer, floating and mixed stack carriers through the source pipeline. `IncomingHomeSource.StackInitializationRequiresAbsenceOfAllObservers` keeps entry storage for memory reads, calls, escaping stack addresses and opaque or memory intrinsics. Pure value paths use declared parameters without inventing physical SP writes; register FP state effects remain. The macOS mobile matrix independently compiles and executes recovered Swift; successful emission alone is not execution evidence.
 
 `NeverDLLVMCValueTests` compiles and executes a recast variadic call against a separate Windows x64 ABI callee at O0/O2, with preserved LLVM types enabled and disabled. Native x64 hosts verify the floating value through the callee’s variadic argument reader; other architectures explicitly skip that execution.
@@ -59,14 +61,21 @@ with independent arithmetic expectations.
 Frame-derived addresses keep their relative-frame proofs; the existing frame
 fallback regression must finish without increasing its query allowance.
 
+`PEFixedImageTest.MachineExitDiscoversBoundedCopyDestination` checks automatic pointer/count refinement across an internal call and a bounded word-copy loop. Independent register and byte-memory oracles cover zero counts, early terminators, overlapping buffers and high frame roots. Possible complete or partial return-cell corruption remains refused; exact and one-short operation/query budgets cover the discovery work.
+`InterpreterMachineRegionSourceTest.BoundedCopyDiscoversPointerAndCountContexts` executes both C routes at O0/O2 with ASan/UBSan and checks complete state and memory. These owned fixtures do not certify ordinary ABI recovery.
+
 `InterpreterMachineRegionSourceTest.RepeatedTransfersRetainRuntimeDirectionAndOverlap`
 executes bounded MOVS/STOS in both directions through HighC and LLVMC at O0/O2,
 comparing full state and every byte against an independent ordered copy oracle.
-The user profile covers four element widths and overlapping buffers; the
-kernel choice profile covers its audited REP MOVSQ encoding and retains
-rejection of other forms. Unknown counts remain refused; zero-count and exact
+Both user and kernel choice profiles cover byte, word, dword and qword
+transfers, overlapping buffers, and zero counts with inaccessible pointers.
+`X86NativeStateAudit.RepTransfers*` checks both word-prefix orders, exact
+encoding/operand/effect receipts and independent whole-state memory oracles.
+Address overrides, segment prefixes, redundant prefixes, REPNE and unaudited
+families remain refused. Unknown counts still require proof; exact
 operation/scratch budgets are covered by `StringTransfer.*` and
-`X86NativeStateAudit.Rep*`.
+`X86NativeStateAudit.Rep*`. Empty undefined-effect coverage grants no fault,
+memory-access, opaque-state or ordinary-ABI assumptions.
 
 `SourceStackSpills.StackParametersTrackEntryBytesAcrossOverwrites` and
 `StackParameterOverwritesMeetAcrossEveryPath` distinguish incoming stack bytes
@@ -3563,6 +3572,46 @@ position move to a new helper.
 wrappers around a known callee in both directions. Encoded call displacements
 must not select a source identity. The native SDK counterpart decodes real x64
 calls, retains both ambiguous wrappers and preserves them through save/reopen.
+
+`CompleteLocalCallBlocksSurviveOtherCallLayoutChanges` independently reorders
+duplicate callbacks and adds calls outside the retained complete blocks. Both
+directions must use the corresponding scalar-bound local call roles. Incomplete
+callers, duplicate block layouts and analyst rejection retain ambiguity. The
+native SDK counterpart decodes real branches and calls and reopens saved results.
+
+`IndependentInitializerRolesSeparateIdenticalCallbacks` separates equal callback
+bodies around two distinct protected targets in both directions. It exercises
+repeated anchors, duplicate neighborhoods, conflicting occurrences, gaps,
+overlapping slots, missing targets, incomplete bodies, explicit analyst choice,
+approximation disabled, the ordinary similarity threshold and saved reopening.
+Repeated short backgrounds exceed exhaustive candidate admission; resolving
+one duplicate callback must preserve its remaining counterpart for review
+without reviving an explicitly rejected pair.
+`RelocatedInitializerPositionsDisambiguateEqualCallbacks` loads an owned stripped
+ELF fixture with real relative relocations through the SDK. Equal numeric values
+without those relocations must retain ambiguity. The fixtures are decoded data;
+their machine code is never executed. Cancellation at the start and end of
+initializer capture preserves completed discovery and code, reports its own
+phase and permits a fresh retry.
+The same core and ELF controls cover 16- and 56-byte initializer spacing,
+unknown/unreadable target barriers, contradictory wider neighborhoods and
+contiguous-context priority. Intervening numeric values without relocation
+marks cannot supply witnesses; interior code coordinates cannot become invented
+function entries or silently disappear from a wider initializer sequence.
+`MarkedCodeCoordinatesRequireSupportedPointerWidths` checks marked/unmarked
+32- and 64-bit reads, full-width values and truncated storage. Unsupported
+256-bit or unknown pointer widths supply no coordinate; the shared reader
+must not silently truncate them through its 32-bit path.
+
+`InitializedPointersUseBoundedPairedDataAddressObservations` resolves duplicate
+callbacks using complete paired data-address roles in both directions, without
+previously matched initializer targets. Missing coordinates, incomplete witnesses,
+changed scalars, unequal interval spans or slot offsets, unknown targets and
+incompatible mapped targets must retain ambiguity. Explicit analyst rejection
+continues to own the pair. Native SDK controls decode the full data addresses;
+ELF symbols supply independent anchors, and disabling those names keeps the
+weaker body matches from supporting initializer identity. Unmarked numeric
+pointer lookalikes supply no such authority.
 
 Reference-uncertainty controls distinguish unchanged raw code from known operand
 changes, retain a known retargeting beside an unknown address operand, and keep
@@ -16814,6 +16863,16 @@ saved value, a narrow or atomic write of the word, a mismatched handler or
 seeded level, a saved non-stack value or a missing source refuses; a runtime
 filter's CALL at or below its stack root is separated from the parent frame,
 unlike one above the root or one without a checked root.
+`SourceStackSpills.TemporaryRestoreChainsKeepEveryRegisterObserver` checks
+multi-step temporary COPYs and terminal scratch restores, while preserving
+earlier return/preserved/SP register definitions, value returns, PHIs and
+call-clobber observations. `TemporaryRestoreChainsRespectTheTargetWidth`
+checks x86/x64/ARM32/AArch64 frame widths across COFF/ELF/Mach-O.
+`TemporaryRestoreChainsExecuteBothSourceRoutes` in
+`NeverDWin64CallContractTests` compiles and executes the same scratch-frame
+projection through HighC and LLVMC, temporary and register endpoints, and all
+three formats at O0/O2 with UBSan. The independent final-word oracle must
+observe the complete later write without evaluating the old unavailable spill.
 `RegistrationCallStackPop.ProvenCalleeCleanupOutlivesAnIncompleteProof` in
 `NeverDWindowsRegistrationRealignedTests` checks that a direct callee's proven
 cleanup adjusts only the block's own calls, not caller-cleanup, unknown or
