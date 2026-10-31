@@ -924,6 +924,7 @@ public:
   bool needsNativeReturnStoreRefinement() const {
     return NativeReturnStoreFailure;
   }
+  bool needsRuntimeValidityRefinement() const { return RuntimeValidityFailure; }
   SpecializationResult refineTargetContexts(SpecializationResult Previous,
                                             bool &Changed);
 
@@ -1022,6 +1023,7 @@ private:
   bool SawUndecidedGuard = false;
   bool SawUnprovedNativeReturnStore = false;
   bool NativeReturnStoreFailure = false;
+  bool RuntimeValidityFailure = false;
   bool SawFiniteDispatch = false;
   va_t FailureCursor = InvalidVA;
   SpecializationCursor DemandCursor;
@@ -4105,6 +4107,10 @@ bool Specializer::evaluate(int Id) {
             if (!Ctx.asConst(Rejected)) {
               discover(State, Rejected, FrameRoot, ControlDemand::Target);
               Refinement.PrecisionFailure = true;
+              // First recover the rejected value's actual bit dependencies.
+              // An unrelated predecessor guard can demand a wide counter
+              // before the address's alignment bits have crossed a cut.
+              RuntimeValidityFailure = true;
             }
             return fail(SpecializationStatus::Unsupported,
                         Transition->InvalidValueDiagnostic);
@@ -5233,7 +5239,8 @@ SpecializationResult Specializer::run() {
     if (Result.Status == SpecializationStatus::Unsupported &&
         SawUndecidedGuard && Refinement.BudgetExceeded)
       Refinement.PrecisionFailure = true;
-    if ((Result.Status == SpecializationStatus::Unsupported ||
+    if (((Result.Status == SpecializationStatus::Unsupported &&
+          !RuntimeValidityFailure) ||
          (Result.Status == SpecializationStatus::UnresolvedControl &&
           NativeReturnStoreFailure)) &&
         !Refinement.DeferredGuardDemands.empty() && FailureNode >= 0) {
@@ -5441,7 +5448,8 @@ specializeInterpreter(SpecializationProvider &Provider,
               Options.ControlFrameSlots.size()) > Options.MaxControlFields)
         Refinement.BudgetExceeded = true;
     };
-    if ((Result.Status == SpecializationStatus::Unsupported ||
+    if (((Result.Status == SpecializationStatus::Unsupported &&
+          !Attempt.needsRuntimeValidityRefinement()) ||
          (Result.Status == SpecializationStatus::UnresolvedControl &&
           Attempt.needsNativeReturnStoreRefinement())) &&
         !Refinement.BudgetExceeded)
@@ -5488,12 +5496,13 @@ specializeInterpreter(SpecializationProvider &Provider,
         Refinement.BudgetExceeded = true;
       HasCandidates |= !Refinement.PendingProducerDemands.empty();
     }
-    // A widened guard can also lead to an unknown indirect target. First
-    // exhaust the target's immediate and deferred producer refinements; even
-    // selecting guard candidates consumes the shared discovery budget. Only
-    // a fresh attempt may prove that an apparent failure arm is unreachable.
+    // A widened guard can also cause an unknown indirect target or a runtime
+    // validity failure. First exhaust the value's immediate and deferred
+    // producers; even selecting guards consumes the shared discovery budget.
+    // A fresh attempt must still prove the transition valid or its arm dead.
     if (!HasCandidates && !Refinement.BudgetExceeded &&
-        Result.Status == SpecializationStatus::UnresolvedControl) {
+        (Result.Status == SpecializationStatus::UnresolvedControl ||
+         Attempt.needsRuntimeValidityRefinement())) {
       Attempt.refineFailureGuards();
       Result.DiscoveryVisits = Refinement.Visits;
       if (!Refinement.BudgetExceeded)

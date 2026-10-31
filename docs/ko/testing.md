@@ -2297,3 +2297,5 @@ LLVM C의 합성 스택 슬롯은 실행 중 선택한 64비트 절반을 읽기
 `NeverDInterpreterMachineStateTests`의 `KernelPageGlobalSource*`는 HighC/LLVMC, O0/O2, ASan/UBSan에서 전체 상태, 반환 스택, CR4, 모든 기록 부족/불일치와 커널 POPFQ/CLI/STI를 검사합니다. 도메인, 이전 레이아웃, 예산 거부도 검사하며 생성된 스칼라 C만 실행합니다.
 
 `AtomicSourceRequiresAnUnmodifiedSupportedReceipt`는 누락되거나 변경된 원자 증거와 미지원 CMPXCHG를 거부합니다. `ScalarAtomicsRetainTransactionsAndPhysicalState`는 독립적인 전체 상태·플래그·바이트 기대값으로 1/2/4/8바이트 XCHG, LOCK XADD, 비정렬 메모리와 반환 주소 별칭을 검사합니다. 사용자 및 커널 상태에서 두 C 경로를 O0/O2와 ASan/UBSan으로 실행합니다. `NeverDInterpreterMachineStateTests` 및 원시 환경, 특수화, 연속 소스, 소스 백엔드 테스트를 실행하세요. 경합이나 오류 동작을 인증하지는 않습니다.
+
+`InterpreterSpecialization.AlignmentProducersPrecedeWideGuardContexts` / `RuntimeValidityStillRefinesAnEnclosingGuard`: 정렬 회귀 검사는 독립 산술 오라클과 비교하여 두 정렬 경로, 모든 하위 비트 나머지, 넓은 카운트, 임계값 양쪽 및 부호 없는 래핑을 확인합니다. 잘못 정렬된 루프의 거부, 생성자 정밀화가 멈춘 뒤의 바깥 조건 정밀화, 정확한 한도와 하나 부족한 연산·쿼리 예산도 검사합니다. 일반 소스 ABI 복구나 네이티브 오류 동작을 증명하지는 않습니다.
