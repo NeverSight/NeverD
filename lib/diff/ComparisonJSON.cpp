@@ -389,6 +389,7 @@ void writeComparison(llvm::raw_ostream &OS, const ComparisonResult &R,
             J.attribute("context", M.FromContext);
             J.attribute("confirmed", M.Confirmed);
             J.attribute("measured", M.Measured);
+            J.attribute("alignment_profile", alignmentProfileName(M.Alignment));
             J.attribute("identity_only", M.IdentityOnly);
             J.attribute("analysis_complete", M.AnalysisComplete);
             J.attribute("reference_comparison_complete",
@@ -617,6 +618,18 @@ readComparison(llvm::StringRef Text, std::string &Error,
       M.Match.FromContext = In.boolean(*O, "context");
       M.Match.Confirmed = In.boolean(*O, "confirmed");
       M.Match.Measured = In.boolean(*O, "measured");
+      if (O->get("alignment_profile")) {
+        const auto Profile =
+            alignmentProfileNamed(In.string(*O, "alignment_profile"));
+        if (Profile)
+          M.Match.Alignment = *Profile;
+        else if (!In.failed())
+          In.fail("unknown instruction alignment profile");
+      } else if (C.MatcherVersion < AlignmentProfileMatcherVersion) {
+        M.Match.Alignment = InstructionAlignmentProfile::PairedBlocks;
+      } else {
+        In.fail("missing instruction alignment profile");
+      }
       M.Match.IdentityOnly = In.boolean(*O, "identity_only");
       M.Match.AnalysisComplete = In.boolean(*O, "analysis_complete");
       // Older schemas did not distinguish unknown references from changes.
@@ -1001,9 +1014,9 @@ bindComparison(const SavedComparison &Saved, const Program &Primary,
       WorkerControl.check();
       FunctionMatch Actual;
       if (M.Measured) {
-        const auto Delta =
-            compareFunctionsWithKeys(Primary, M.Primary, Secondary, M.Secondary,
-                                     {PMap, SMap}, PK, SK, WorkerControl);
+        const auto Delta = compareFunctionsWithKeys(
+            Primary, M.Primary, Secondary, M.Secondary, {PMap, SMap}, PK, SK,
+            WorkerControl, M.Alignment);
         if (Delta.State == ComparisonState::Cancelled ||
             Delta.State == ComparisonState::TimedOut)
           throw ComparisonInterrupted(Delta.State);

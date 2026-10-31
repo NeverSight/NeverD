@@ -337,6 +337,7 @@ llvm::json::Array changes(uint32_t Mask) {
 llvm::json::Object match(const FunctionMatch &M) {
   return llvm::json::Object{
       {"step", stepName(M.Step)},
+      {"alignment_profile", alignmentProfileName(M.Alignment)},
       {"explanation", stepDescription(M.Step)},
       {"similarity", M.Similarity},
       {"confidence", M.Confidence},
@@ -453,6 +454,7 @@ const FunctionDelta &cachedDelta(Comparison &C, const FunctionMatch &M,
                                  const ComparisonControl *External = nullptr) {
   if (Refresh || !C.CachedDetail || C.CachedDetail->Primary != M.Primary ||
       C.CachedDetail->Secondary != M.Secondary ||
+      C.CachedDetail->Delta.Alignment != M.Alignment ||
       C.CachedDetail->Timeout != Timeout) {
     require(C.Primary.instructionCount(C.Primary.Functions[M.Primary]) +
                     C.Secondary.instructionCount(
@@ -497,7 +499,7 @@ const FunctionDelta &cachedDelta(Comparison &C, const FunctionMatch &M,
     C.CachedDetail = Comparison::Detail{
         M.Primary, M.Secondary, Timeout,
         compareFunctions(C.Primary, M.Primary, C.Secondary, M.Secondary,
-                         {Forward, Backward}, Control)};
+                         {Forward, Backward}, Control, M.Alignment)};
     if (!External) {
       std::lock_guard Status(C.StatusMutex);
       C.Outcome = stateName(C.CachedDetail->Delta.State).str();

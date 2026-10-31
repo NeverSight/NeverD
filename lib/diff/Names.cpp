@@ -57,6 +57,9 @@ constexpr llvm::StringLiteral RowKinds[] = {
     "replaced",  "inserted", "deleted",  "uncertain",
 };
 
+constexpr llvm::StringLiteral AlignmentProfiles[] = {"paired-blocks-v1",
+                                                     "single-block-spans-v1"};
+
 } // namespace
 
 llvm::StringRef stepName(FunctionStep Step) {
@@ -147,6 +150,16 @@ llvm::StringRef stateName(ComparisonState State) {
 }
 
 llvm::StringRef rowKindName(RowKind Kind) { return RowKinds[size_t(Kind)]; }
+llvm::StringRef alignmentProfileName(InstructionAlignmentProfile Profile) {
+  return AlignmentProfiles[size_t(Profile)];
+}
+std::optional<InstructionAlignmentProfile>
+alignmentProfileNamed(llvm::StringRef Name) {
+  for (size_t I = 0; I < std::size(AlignmentProfiles); ++I)
+    if (AlignmentProfiles[I] == Name)
+      return static_cast<InstructionAlignmentProfile>(I);
+  return std::nullopt;
+}
 std::optional<ComparisonState> stateNamed(llvm::StringRef Name) {
   for (auto State :
        {ComparisonState::Complete, ComparisonState::Cancelled,

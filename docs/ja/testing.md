@@ -2305,3 +2305,5 @@ LLVM C の合成スタックスロットは、実行時にどちらかの 64 ビ
 `PageGlobal*` は未知の上位ビット、両分岐、読み書き関係、禁止する 63 ビットの変更、他の状態の保持、不正オペランド、予算と環境識別を検証します。`NeverDInterpreterSpecializationTests`、`NeverDInterpreterMachineStateTests`、`NeverDLowIRRefinementTests`、`NeverDInterpreterLLVMRefinementTests` を実行してください。値モデルの検証であり、特権命令は実行しません。
 
 `NeverDInterpreterMachineStateTests` の `KernelPageGlobalSource*` は HighC/LLVMC、O0/O2、ASan/UBSan で全状態、戻りスタック、CR4、全記録不足・不一致、カーネル POPFQ/CLI/STI を検証します。ドメイン、旧配置、予算の拒否も確認し、生成されたスカラー C のみを実行します。
+
+`AtomicSourceRequiresAnUnmodifiedSupportedReceipt` は欠落・改変された証跡と未対応の CMPXCHG を拒否します。`ScalarAtomicsRetainTransactionsAndPhysicalState` は独立した状態・フラグ・バイトの期待値で 1/2/4/8 バイトの XCHG、LOCK XADD、非整列メモリ、戻りアドレスとの別名を検証します。両 C 経路をユーザー／カーネル状態で O0/O2、ASan/UBSan 実行します。`NeverDInterpreterMachineStateTests` と生環境、特殊化、継続ソース、ソースバックエンドのテストを実行してください。競合や障害動作の認証ではありません。

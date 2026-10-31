@@ -185,6 +185,22 @@ complete agreement with already mapped neighbors earns the existing lower
 context threshold. These local observations neither prove whole-function
 identity nor relax instruction-level change reporting.
 
+Matcher version 22 preserves unchanged instructions when a new guard splits a
+complete single-block body across several blocks. The instruction rows can
+cross block boundaries; block, edge and entry changes remain visible. This
+path requires an ordered contiguous instruction span and forward ordinary CFG
+edges, and it must recover more known equal instructions without weakening the
+weighted alignment. Loops, exceptions, indirect transfers and incomplete bodies
+retain ordinary block alignment. The comparison still reports changed scalar
+values, retargeted calls and unknown reference identities separately.
+
+Saved matches record `alignment_profile`. New matches use
+`single-block-spans-v1`; older reports reopen with their original
+`paired-blocks-v1` measurements and rows. Reopening checks the chosen method
+against the retained inputs; an unknown method, a missing method in a current
+document, or scores that disagree with its method are refused. Analyst edits
+and undo/redo retain the method with each pair.
+
 Matcher version 10 also defers a similar helper body when its changed entry
 contains the complete straight-line prelude of an unmatched direct tail caller,
 with at least two caller instructions beyond the helper's aligned body. Both

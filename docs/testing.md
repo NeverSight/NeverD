@@ -3579,6 +3579,16 @@ directions must use the corresponding scalar-bound local call roles. Incomplete
 callers, duplicate block layouts and analyst rejection retain ambiguity. The
 native SDK counterpart decodes real branches and calls and reopens saved results.
 
+`SingleBlockSpansKeepInstructionAndGraphEvidenceSeparate` recovers instructions
+across a split guard in both directions while checking each instruction occurs
+exactly once with its actual owning block. Whole-block/edge/entry changes remain
+visible; incomplete bodies, loops and exceptional edges keep legacy alignment.
+`SplitBlockSpansRetainCallIdentityAndReferenceGaps` checks mapped retargeting and
+unmapped calls without dropping original address-signature ownership.
+`SplitBlockProfilesReopenLegacyMeasurementsExactly` decodes a native split guard,
+preserves the old zero-equal-instruction score and rows, refuses forged/missing
+recipes or incompatible scores, and checks edits and undo/redo across recipes.
+
 `IndependentInitializerRolesSeparateIdenticalCallbacks` separates equal callback
 bodies around two distinct protected targets in both directions. It exercises
 repeated anchors, duplicate neighborhoods, conflicting occurrences, gaps,
@@ -17854,3 +17864,5 @@ source but do not qualify privileged execution.
 `PageGlobal*` checks in the interpreter, raw-region and proof suites cover unknown high bits, both branch outcomes, read/write relations, all 63 forbidden control-bit changes, other-bank preservation, malformed operands, budgets and environment identity. Run `NeverDInterpreterSpecializationTests`, `NeverDInterpreterMachineStateTests`, `NeverDLowIRRefinementTests` and `NeverDInterpreterLLVMRefinementTests`; these are value-model checks, not privileged hardware execution.
 
 `KernelPageGlobalSource*` in `NeverDInterpreterMachineStateTests` checks complete state, return stacks, CR4 read/write relations, every short or mismatched instruction reservation, and supervisor POPFQ/CLI/STI flag rules in HighC and LLVMC at O0/O2 with ASan/UBSan. Domain, earlier-layout and budget refusals remain explicit. Tests execute generated scalar C, not privileged instructions.
+
+`AtomicSourceRequiresAnUnmodifiedSupportedReceipt` rejects missing or modified atomic receipts and unsupported CMPXCHG. `ScalarAtomicsRetainTransactionsAndPhysicalState` checks 1/2/4/8-byte XCHG and LOCK XADD with independent full-state, flag and byte oracles, unaligned memory and return-word aliases. Both C routes run at O0/O2 with ASan/UBSan under user and kernel state profiles. Run `NeverDInterpreterMachineStateTests` plus the raw-environment, specialization, continuation-source and source-backend suites. These completion tests do not certify contention or fault behavior.

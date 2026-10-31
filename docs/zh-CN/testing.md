@@ -2270,3 +2270,5 @@ LLVM C 的合成栈槽保留完整的 128 位整数写入，再由运行时选�
 解释器、原始区域和证明套件中的 `PageGlobal*` 检查覆盖未知高位、两个分支结果、读写关系、全部 63 个禁止修改的控制位、其他状态保持、错误操作数、预算和环境身份。运行 `NeverDInterpreterSpecializationTests`、`NeverDInterpreterMachineStateTests`、`NeverDLowIRRefinementTests` 与 `NeverDInterpreterLLVMRefinementTests`；这些是值模型验证，不执行硬件特权指令。
 
 `NeverDInterpreterMachineStateTests` 中的 `KernelPageGlobalSource*` 在 HighC、LLVMC 的 O0/O2 和 ASan/UBSan 下检查完整状态、返回栈、CR4 读写关系、每个不足或错误的指令预留，以及内核 POPFQ/CLI/STI 标志规则。域、旧布局和预算拒绝仍须显式验证；测试只执行生成的标量 C。
+
+`AtomicSourceRequiresAnUnmodifiedSupportedReceipt` 拒绝缺失或修改的原子凭据及不支持的 CMPXCHG。`ScalarAtomicsRetainTransactionsAndPhysicalState` 用独立的完整状态、标志和字节预期验证 1/2/4/8 字节 XCHG、LOCK XADD、非对齐内存和返回字别名。两条 C 路径在用户及内核状态配置下运行 O0/O2、ASan/UBSan。运行 `NeverDInterpreterMachineStateTests` 以及原始环境、特化、续接源码和源码后端测试；这些完成测试不认证并发竞争或故障行为。

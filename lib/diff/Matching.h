@@ -30,12 +30,13 @@ std::vector<uint64_t> mnemonicKeys(const Program &P,
 
 /// compareFunctions with each program's mnemonic keys (hashText of each
 /// mnemonic) already computed.
-FunctionDelta compareFunctionsWithKeys(const Program &Primary, uint32_t PF,
-                                       const Program &Secondary, uint32_t SF,
-                                       const Correspondence &Map,
-                                       llvm::ArrayRef<uint64_t> PrimaryKeys,
-                                       llvm::ArrayRef<uint64_t> SecondaryKeys,
-                                       const ComparisonControl &Control = {});
+FunctionDelta compareFunctionsWithKeys(
+    const Program &Primary, uint32_t PF, const Program &Secondary, uint32_t SF,
+    const Correspondence &Map, llvm::ArrayRef<uint64_t> PrimaryKeys,
+    llvm::ArrayRef<uint64_t> SecondaryKeys,
+    const ComparisonControl &Control = {},
+    InstructionAlignmentProfile Alignment =
+        InstructionAlignmentProfile::SingleBlockSpans);
 
 /// Copies a delta's scores and tallies into its match.
 void measure(FunctionMatch &M, const FunctionDelta &D);
