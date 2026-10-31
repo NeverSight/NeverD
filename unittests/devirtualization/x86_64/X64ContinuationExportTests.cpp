@@ -146,6 +146,8 @@ protected:
     } else if (const auto *Object = Parsed->getAsObject()) {
       EXPECT_EQ(Object->getInteger("schema_version"), 2);
       EXPECT_EQ(Object->getInteger("state_version"), Version);
+      EXPECT_EQ(Object->getString("environment_driver"),
+                "neverd_x64_run_v" + std::to_string(Version));
       EXPECT_EQ(Object->getInteger("state_bytes"), Version == 11   ? 2416
                                                    : Version == 10 ? 2464
                                                    : Version == 9  ? 2560
@@ -1252,9 +1254,13 @@ TEST_F(X64ContinuationExportTest,
       const auto Begin = Direct.find(
           "static __attribute__((noinline)) uint64_t neverd_x64_region_");
       ASSERT_NE(Begin, std::string::npos);
+      const auto End = Direct.find("typedef int (*neverd_x64_environment_v6)");
+      ASSERT_NE(End, std::string::npos);
+      ASSERT_LT(Begin, End);
       // Both routes share the same exact steps; link both independently
       // generated drivers to those steps for complete state/memory comparison.
-      Direct = Direct.substr(Begin);
+      // The separate environment companion is tested with each driver above.
+      Direct = Direct.substr(Begin, End - Begin);
       Direct.replace(Direct.find(Driver), Driver.size(),
                      "uint64_t direct_driver(");
       execute(Switch + Direct, std::string(Seed) + R"C(
@@ -1376,10 +1382,11 @@ TEST_F(X64ContinuationExportTest,
   }
 }
 #include "X64AlignmentContinuationTests.inc"
+#include "X64ContinuationEnvironmentTests.inc"
 #include "X64JumpRegionContinuationTests.inc"
 #include "X64KvmContinuationExportTests.inc"
-#include "X64SparseFrameContinuationTests.inc"
 #include "X64MpxContinuationExportTests.inc"
+#include "X64SparseFrameContinuationTests.inc"
 #include "X64SvmContinuationExportTests.inc"
 
 } // namespace

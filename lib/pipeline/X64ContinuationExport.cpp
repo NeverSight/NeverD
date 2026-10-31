@@ -9,6 +9,7 @@
 
 #include "neverd/pipeline/X64ContinuationExport.h"
 
+#include "X64ContinuationEnvironment.h"
 #include "X64SpecialRegions.h"
 
 #include "neverd/analysis/arch/x86_64/X64ContinuationSource.h"
@@ -546,6 +547,7 @@ exportX64Continuation(const BinaryImage &Image, llvm::StringRef RequestJSON,
     emitX64SpecialRegionDriver(OS, *Units, Request->FollowInternalCalls);
   else
     driver(OS, *Units, Request->FollowInternalCalls);
+  emitX64ContinuationEnvironment(OS, Version);
   if (Result.Source.size() > limits::pipeline::kX64ContinuationSourceBytes)
     return invalid("x64 continuation source exceeds the output size limit");
   auto Binding = llvm::json::parse(RequestJSON);
@@ -555,6 +557,9 @@ exportX64Continuation(const BinaryImage &Image, llvm::StringRef RequestJSON,
       {"schema_version", 2},
       {"profile", Profile},
       {"interface", "explicit-machine-state"},
+      {"environment_driver", "neverd_x64_run_v" + std::to_string(Version)},
+      {"environment_binding",
+       "explicit full-state callback; separately bounded"},
       {"call_return_policy",
        Request->FollowInternalCalls ? "follow-selected-targets" : "stop"},
       {"coverage",

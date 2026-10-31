@@ -51,6 +51,10 @@ struct X64ContinuationExport {
 /// It requires entries and defaults to false. dispatch may
 /// select direct PC-checked links instead of the default per-step switch;
 /// neither option changes the explicit-state interface or native boundaries.
+/// Each export also defines neverd_x64_run_vN with an explicit full-state
+/// environment callback and a separate provider-invocation budget. The
+/// original continue driver remains available without environment dispatch.
+/// Providers own their effects; no ordinary ABI or native service is inferred.
 /// V7 requires sysenter_msr_address_bits and returns a distinct V7
 /// state/driver. The intel-user-interrupt-v8 profile additionally requires
 /// uiret_restores_uif, owns UIF/monitor validity and stops UIRET at its

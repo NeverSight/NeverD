@@ -132,6 +132,48 @@ layout, instruction steps, and:
 uint64_t neverd_x64_continue_v6(neverd_x64_state_v6 *state, uint64_t *budget);
 ```
 
+The translation also defines a companion environment driver:
+
+```c
+typedef int (*neverd_x64_environment_v6)(neverd_x64_state_v6 *state,
+                                        uint64_t boundary, void *context);
+uint64_t neverd_x64_run_v6(neverd_x64_state_v6 *state, uint64_t *budget,
+                          uint64_t *environment_budget,
+                          neverd_x64_environment_v6 environment, void *context);
+```
+
+The other profiles use their own version suffix and state layout. Calling this
+companion with a provider explicitly enables environment handoff. It runs the
+same selected-instruction driver, then passes its completed boundary and full
+state to the provider. The provider can execute a native service, handle a
+context transition, or supply another explicitly bound environment operation.
+It returns nonzero to resume at the updated `state->PC`, or zero to stop with
+the last translated boundary status. All provider changes remain visible on
+either return; the driver never restores a lexical return address, an earlier
+stack or presumed callee-preserved registers. The provider is responsible for
+the actual native semantics and for returning a state in the selected
+profile's invocation domain. An ordinary C callback's ABI alone does not
+establish that contract or implement a Windows service.
+
+`environment_budget` counts provider invocations, including declined requests
+and requests that leave PC unchanged. It is decremented before the invocation.
+This bounds handoff loops independently of the translated-instruction budget;
+it does not bound the work or time inside one provider invocation. Provider
+execution does not consume translated-instruction units. A null provider,
+zero environment budget or zero remaining instruction budget returns the
+original boundary without invoking the provider. Invalid state (5) and
+exhausted instruction budget (9) always return directly. A final translated
+CALL therefore still returns CALL (1) with its completed physical stack write
+when it consumes the last instruction unit. The caller may replenish the
+budgets explicitly before another invocation. Both counters must be disjoint
+from each other, state storage and guest accesses, and the provider must not
+change them. The companion adds no work to `neverd_x64_continue_vN`.
+
+The manifest names `environment_driver` and describes its explicit binding.
+This interface composes checked state regions with caller-provided execution;
+it does not infer missing ordinary parameters, automatically convert an
+ordinary function to state C, or certify complete Windows execution.
+
 Initialize all architectural inputs from the intended machine context, including
 GPRs in x86 encoding order, RFLAGS, PC, vector containers, FS/GS bases, controls,
 segment caches and descriptor tables. Zero-initialization alone is not a valid
