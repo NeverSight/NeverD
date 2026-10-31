@@ -2521,6 +2521,17 @@ bool Specializer::emitTargets(
     return edge({Target->Address, Target->Mode}, Guard, Address);
   };
 
+  if (Flow == StepResult::Continue) {
+    const int Next =
+        edge(Instruction.Fallthrough, Ctx.mkConst(1, 1), std::nullopt);
+    if (Next < 0)
+      return Next == -1 ? false
+                        : fail(SpecializationStatus::InvalidInput,
+                               "fallthrough partition has no reachable case");
+    Draft.Block.Ops.push_back(branchTo(Next));
+    Draft.Block.Succs = {Next};
+    return true;
+  }
   if (Flow == StepResult::CondBranch) {
     const auto Address = Ctx.asConst(Exec.branchTarget());
     if (!Address || Address->getBitWidth() > 64)
@@ -3207,6 +3218,52 @@ bool Specializer::evaluate(int Id) {
                         "native operation reads an unbound temporary");
       }
       if (const auto Shape = detail::stringTransferShape(Original)) {
+        const auto NominateCountPartition = [&](SymRef Value) {
+          const auto &Count = Original.Inputs[Shape->CountInput];
+          const auto Point = std::make_pair(Cursor.Address, Cursor.Mode);
+          if (!Options.DiscoverControlState || ReplayingDemands ||
+              !Count.isReg() || Cursor == Entry ||
+              Refinement.RegisterPartitions.count(Point))
+            return false;
+          // The dispatch reads the physical register before this instruction.
+          // Reject a prefix or choice that has already changed that value.
+          const auto Overlaps = [&](const NdVar &Output) {
+            return Output.isReg() && Output.Size &&
+                   (Output.Offset <= Count.Offset
+                        ? Count.Offset - Output.Offset < Output.Size
+                        : Output.Offset - Count.Offset < Count.Size);
+          };
+          const uint64_t Work = I + Instruction.UndefinedEffects.Effects.size();
+          if (Work > Options.MaxOperations - Result.EvaluatedOperations) {
+            fail(SpecializationStatus::BudgetExceeded,
+                 "repeated count nomination budget exhausted");
+            return false;
+          }
+          Result.EvaluatedOperations += Work;
+          for (size_t J = 0; J < I; ++J)
+            if (Overlaps(Operations[J].Output))
+              return false;
+          for (const auto &Effect : Instruction.UndefinedEffects.Effects)
+            if (FreshChoices && Effect.AfterOp <= I && Overlaps(Effect.Output))
+              return false;
+          if (detail::hasUnconstrainedProjectionInput(
+                  Ctx, Exec.pathPredicate(), Value, Options.MaxControlTuples,
+                  Options.MaxSymbolicNodes))
+            return false;
+          const auto Domain = enumerate(Ctx, Exec.pathPredicate(), {Value},
+                                        Options.MaxControlTuples);
+          if (Failed || Domain.Status != FiniteValueStatus::Complete ||
+              Domain.Tuples.size() < 2)
+            return false;
+          // This is a location nomination, not an entry value. Every fresh
+          // predecessor must prove its complete domain and emit live guards.
+          Refinement.RegisterPartitions.emplace(
+              Point, SymRegisterRange{Count.Offset, Count.Size});
+          Refinement.Registers.push_back({Count.Offset, Count.Size});
+          Refinement.PendingContextRegisters.push_back(
+              {Count.Offset, Count.Size});
+          return true;
+        };
         const auto Singleton = [&](SymRef Value) -> std::optional<uint64_t> {
           if (const auto Constant = Ctx.asConst(Value))
             return Constant->getZExtValue();
@@ -3220,8 +3277,13 @@ bool Specializer::evaluate(int Id) {
           }
           if (Domain.Status != FiniteValueStatus::Complete ||
               Domain.Tuples.size() != 1) {
-            discover(State, Value, FrameRoot, ControlDemand::Memory);
+            const bool Partitioned = NominateCountPartition(Value);
+            if (Failed)
+              return std::nullopt;
+            if (!Partitioned)
+              discover(State, Value, FrameRoot, ControlDemand::Memory);
             Refinement.PrecisionFailure = true;
+            RuntimeValidityFailure = true;
             fail(SpecializationStatus::Unsupported,
                  "repeated memory transfer requires a proved count");
             return std::nullopt;
@@ -4356,6 +4418,20 @@ bool Specializer::evaluate(int Id) {
     if (ChainedSuccessor) {
       Cursor = *ChainedSuccessor;
       continue;
+    }
+    if (!Finished &&
+        Refinement.RegisterPartitions.count(
+            {Instruction.Fallthrough.Address, Instruction.Fallthrough.Mode})) {
+      if (Result.EvaluatedOperations >= Options.MaxOperations)
+        return fail(SpecializationStatus::BudgetExceeded,
+                    "fallthrough partition operation budget exhausted");
+      ++Result.EvaluatedOperations;
+      const size_t First = Draft.Block.Ops.size();
+      if (!emitTargets(Draft, Instruction, {}, {}, Exec, Ctx, State, FrameRoot,
+                       ObjectRoots, Origins, Frame, StepResult::Continue))
+        return false;
+      Draft.Slices.push_back({{}, First, Draft.Block.Ops.size() - First, true});
+      Finished = true;
     }
     if (!Finished) {
       if (Instruction.Fallthrough == Cursor)
