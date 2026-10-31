@@ -1894,8 +1894,17 @@ and unknown instruction flows keep the paired-block path. Row origins retain
 their actual blocks; cross-block rows cannot make a whole block unchanged or
 equate CFG edges. Similarity weights and candidate/rival thresholds stay intact.
 
+Matcher version 23 extends that recipe to complete ordered spans on both sides,
+including multiple blocks with the same block and edge counts. It retains the
+same eligibility and improvement requirements. A refined span always records a
+block-boundary change: shifting an instruction across an internal branch target
+must not become normalized unchanged merely because graph counts still agree.
+This remains instruction-listing alignment, not control-flow equivalence.
+
 Each `FunctionMatch` and `FunctionDelta` retains an `InstructionAlignmentProfile`.
-New matches use `single-block-spans-v1`; historical documents without an explicit
+`CurrentInstructionAlignmentProfile` owns the default for new pairs, currently
+`ordered-block-spans-v1`. Matcher-22 `single-block-spans-v1` measurements retain
+their original one-block eligibility; historical documents without an explicit
 profile use `paired-blocks-v1`. Matcher-22 documents require `alignment_profile`
 on every match. The saved-evidence reader validates it and recomputes the stated
 recipe from the exact native inputs. Edits, undo/redo and native detail pages

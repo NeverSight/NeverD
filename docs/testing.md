@@ -3588,6 +3588,11 @@ unmapped calls without dropping original address-signature ownership.
 `SplitBlockProfilesReopenLegacyMeasurementsExactly` decodes a native split guard,
 preserves the old zero-equal-instruction score and rows, refuses forged/missing
 recipes or incompatible scores, and checks edits and undo/redo across recipes.
+`OrderedBlockSpansKeepChangedBoundariesVisible` moves an instruction across an
+internal branch destination without changing graph counts: all five instructions
+align, while the block-boundary change prevents normalized-unchanged status.
+`OrderedBlockBoundariesDoNotBecomeUnchanged` checks this with native x64 bytes
+and reopens the original matcher-22 recipe with its four-instruction score/rows.
 
 `IndependentInitializerRolesSeparateIdenticalCallbacks` separates equal callback
 bodies around two distinct protected targets in both directions. It exercises

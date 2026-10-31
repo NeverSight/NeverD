@@ -57,8 +57,8 @@ constexpr llvm::StringLiteral RowKinds[] = {
     "replaced",  "inserted", "deleted",  "uncertain",
 };
 
-constexpr llvm::StringLiteral AlignmentProfiles[] = {"paired-blocks-v1",
-                                                     "single-block-spans-v1"};
+constexpr llvm::StringLiteral AlignmentProfiles[] = {
+    "paired-blocks-v1", "single-block-spans-v1", "ordered-block-spans-v1"};
 
 } // namespace
 

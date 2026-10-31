@@ -120,8 +120,7 @@ struct FunctionDelta {
   uint32_t EqualInstructions = 0;
   uint32_t PrimaryLoops = 0;
   uint32_t SecondaryLoops = 0;
-  InstructionAlignmentProfile Alignment =
-      InstructionAlignmentProfile::SingleBlockSpans;
+  InstructionAlignmentProfile Alignment = CurrentInstructionAlignmentProfile;
 };
 
 /// Which secondary function corresponds to each primary function, for
@@ -132,12 +131,10 @@ struct Correspondence {
 };
 
 /// The delta of primary function \p PF and secondary function \p SF.
-FunctionDelta
-compareFunctions(const Program &Primary, uint32_t PF, const Program &Secondary,
-                 uint32_t SF, const Correspondence &Map,
-                 const ComparisonControl &Control = {},
-                 InstructionAlignmentProfile Alignment =
-                     InstructionAlignmentProfile::SingleBlockSpans);
+FunctionDelta compareFunctions(
+    const Program &Primary, uint32_t PF, const Program &Secondary, uint32_t SF,
+    const Correspondence &Map, const ComparisonControl &Control = {},
+    InstructionAlignmentProfile Alignment = CurrentInstructionAlignmentProfile);
 
 /// Number of loops (back edges of a depth-first walk from the entry) in
 /// \p F.

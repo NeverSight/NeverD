@@ -1136,7 +1136,7 @@ TEST(BinaryDiff, SingleBlockSpansKeepInstructionAndGraphEvidenceSeparate) {
     const std::vector<uint32_t> Map{0};
     const auto D = compareFunctions(A, 0, B, 0, {Map, Map});
     EXPECT_EQ(D.EqualInstructions, 3u);
-    EXPECT_EQ(D.Alignment, InstructionAlignmentProfile::SingleBlockSpans);
+    EXPECT_EQ(D.Alignment, CurrentInstructionAlignmentProfile);
     const auto Legacy = compareFunctions(
         A, 0, B, 0, {Map, Map}, {}, InstructionAlignmentProfile::PairedBlocks);
     EXPECT_EQ(Legacy.EqualInstructions, 0u);
@@ -1203,6 +1203,37 @@ TEST(BinaryDiff, SingleBlockSpansKeepInstructionAndGraphEvidenceSeparate) {
         P, 0, C, 0, {Map, Map}, {}, InstructionAlignmentProfile::PairedBlocks);
     EXPECT_EQ(D.EqualInstructions, Legacy.EqualInstructions);
     EXPECT_EQ(D.Similarity, Legacy.Similarity);
+  }
+}
+
+TEST(BinaryDiff, OrderedBlockSpansKeepChangedBoundariesVisible) {
+  Fn Before;
+  Before.Name = "guard_boundary";
+  Before.Blocks = {{{"test", "edi, edi"}, {"je", "", InstructionFlow::Branch}},
+                   {{"mov", "eax, 17"}, {"add", "eax, 7"}},
+                   {{"ret", "", InstructionFlow::Return}}};
+  Before.Edges = {{0, 2, EdgeKind::Taken},
+                  {0, 1, EdgeKind::NotTaken},
+                  {1, 2, EdgeKind::Fallthrough}};
+  auto After = Before;
+  After.Blocks[1].pop_back();
+  After.Blocks[2].insert(After.Blocks[2].begin(), {"add", "eax, 7"});
+  const auto P = build({Before}, 0x1000), S = build({After}, 0x8000);
+  const std::vector<uint32_t> Map{0};
+  for (bool Reverse : {false, true}) {
+    const auto &A = Reverse ? S : P, &B = Reverse ? P : S;
+    const auto D = compareFunctions(A, 0, B, 0, {Map, Map});
+    EXPECT_EQ(D.EqualInstructions, 5u);
+    EXPECT_TRUE(D.Changes & ChangeBlocks);
+    EXPECT_LT(D.Similarity, 1);
+    const auto Legacy =
+        compareFunctions(A, 0, B, 0, {Map, Map}, {},
+                         InstructionAlignmentProfile::SingleBlockSpans);
+    EXPECT_EQ(Legacy.EqualInstructions, 4u);
+    EXPECT_GT(D.Similarity, Legacy.Similarity);
+    EXPECT_FALSE(llvm::all_of(D.Blocks, [](const auto &Pair) {
+      return Pair.Unchanged || Pair.Uncertain;
+    }));
   }
 }
 

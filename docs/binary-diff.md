@@ -194,9 +194,16 @@ weighted alignment. Loops, exceptions, indirect transfers and incomplete bodies
 retain ordinary block alignment. The comparison still reports changed scalar
 values, retargeted calls and unknown reference identities separately.
 
+Matcher version 23 also aligns complete ordered spans when both functions have
+several blocks, under the same forward-graph and instruction-evidence rules.
+Moving an instruction across an internal branch target remains a block-boundary
+change even when the total block and edge counts agree. More matching rows do
+not establish control-flow or semantic equivalence.
+
 Saved matches record `alignment_profile`. New matches use
-`single-block-spans-v1`; older reports reopen with their original
-`paired-blocks-v1` measurements and rows. Reopening checks the chosen method
+`ordered-block-spans-v1`; matcher-22 reports retain `single-block-spans-v1`, and
+older reports reopen with `paired-blocks-v1` measurements and rows.
+Reopening checks the chosen method
 against the retained inputs; an unknown method, a missing method in a current
 document, or scores that disagree with its method are refused. Analyst edits
 and undo/redo retain the method with each pair.

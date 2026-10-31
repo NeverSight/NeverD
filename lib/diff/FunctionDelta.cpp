@@ -729,7 +729,7 @@ public:
       : A(A), B(B), Map(Map) {}
 
   void align(uint32_t XBlock, uint32_t YBlock, std::vector<DeltaRow> &Rows);
-  bool refineSingleBlockSpans(std::vector<DeltaRow> &Rows);
+  bool refineOrderedSpans(std::vector<DeltaRow> &Rows, bool SingleBlockOnly);
 
 private:
   const Side &A;
@@ -1031,9 +1031,11 @@ void Aligner::appendRows(llvm::ArrayRef<Instruction> Xs,
   Gap(N, M);
 }
 
-bool Aligner::refineSingleBlockSpans(std::vector<DeltaRow> &Rows) {
-  if ((A.F.BlockCount != 1 && B.F.BlockCount != 1) ||
-      A.F.BlockCount == B.F.BlockCount)
+bool Aligner::refineOrderedSpans(std::vector<DeltaRow> &Rows,
+                                 bool SingleBlockOnly) {
+  if ((A.F.BlockCount <= 1 && B.F.BlockCount <= 1) ||
+      (SingleBlockOnly && ((A.F.BlockCount != 1 && B.F.BlockCount != 1) ||
+                           A.F.BlockCount == B.F.BlockCount)))
     return false;
   uint64_t OldWeight = 0;
   uint32_t OldEqual = 0;
@@ -1231,8 +1233,14 @@ FunctionDelta compareFunctionsWithKeys(const Program &Primary, uint32_t PF,
     }
 
     if (D.AnalysisComplete &&
-        Alignment == InstructionAlignmentProfile::SingleBlockSpans &&
-        Align.refineSingleBlockSpans(D.Rows)) {
+        Alignment != InstructionAlignmentProfile::PairedBlocks &&
+        Align.refineOrderedSpans(
+            D.Rows,
+            Alignment == InstructionAlignmentProfile::SingleBlockSpans)) {
+      // Equal block/edge counts do not preserve boundaries: an instruction
+      // can move across an internal branch destination without changing
+      // either count. Such a refined listing must never become unchanged.
+      D.Changes |= ChangeBlocks;
       for (auto &Pair : D.Blocks)
         Pair.Unchanged = Pair.Uncertain = true;
       // Instruction rows can cross a whole-block correspondence. Such rows
