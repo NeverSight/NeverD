@@ -43,6 +43,7 @@ inline constexpr const char X86VirtualizationCompilerDispatch[] =
     "#endif\n\n";
 
 bool isX86VirtualizationNativeName(llvm::StringRef Name);
+bool isX86KvmHypercallNativeName(llvm::StringRef Name);
 
 std::string
 renderX86VirtualizationExpression(Arch TargetArch, const HighExpr &Expression,

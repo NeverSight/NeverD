@@ -1,5 +1,9 @@
 # Explicit x64 continuation C
 
+The [`native_kvm_hypercalls` binding](x86-kvm-hypercalls.md) explicitly owns
+returning VMCALL/VMMCALL with the KVM five-register input ABI. Unbound raw
+hypercalls remain native boundaries; an opcode never selects a hypervisor ABI.
+
 The [`intel-mpx-v11` profile](x86-mpx-source.md) extends V4 with the complete
 long-mode bounds bank, enable state, bounds tables, original branch effects and
 a pending-`#BR` stop (status 14), through both C routes.

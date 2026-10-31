@@ -1377,6 +1377,7 @@ TEST_F(X64ContinuationExportTest,
 }
 #include "X64AlignmentContinuationTests.inc"
 #include "X64JumpRegionContinuationTests.inc"
+#include "X64KvmContinuationExportTests.inc"
 #include "X64SparseFrameContinuationTests.inc"
 #include "X64MpxContinuationExportTests.inc"
 #include "X64SvmContinuationExportTests.inc"

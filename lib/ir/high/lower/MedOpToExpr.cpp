@@ -388,6 +388,8 @@ ExprPtr MedToHighConverter::medOpToExprImpl(const MedOp &Op) {
     auto Call =
         HighExpr::makeCall(calleeDisplayName(CallTarget), CallTarget, {});
     Call->CallSiteAddr = Op.Addr;
+    if (Op.Output.Size)
+      Call->Type = sourceCallResultType(Op);
     return Call;
   }
 

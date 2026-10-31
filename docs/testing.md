@@ -1,5 +1,22 @@
 **Languages**: [English](testing.md) | [简体中文](zh-CN/testing.md) | [繁體中文](zh-TW/testing.md) | [日本語](ja/testing.md) | [한국어](ko/testing.md) | [Français](fr/testing.md) | [Deutsch](de/testing.md) | [Español](es/testing.md) | [Italiano](it/testing.md) | [Русский](ru/testing.md) | [العربية](ar/testing.md)
 
+The KVM hypercall targets are `NeverDX64ContinuationExportTests`,
+`NeverDX86KvmSourceTests`, `NeverDX86VirtualizationTests` and
+`NeverDX86SystemSideeffectTests`; build them with `scripts/build.py`.
+Use the focused CTest expression
+`^(X86KvmSource\.|X64ContinuationExportTest\.Kvm|X86Virtualization\.|X86SystemSideeffect\.)`.
+It checks explicit binding versus refusal, all five inputs, result/memory
+effects, full state, both C routes and dispatch styles, malformed native IR,
+canonical bytes and the old-SDK object-emission boundary. Source executions
+use O0/O2 with ASan/UBSan and do not execute a host hypercall. The
+[native qualification](x86-kvm-hypercalls.md#reproducing-qualification) uses
+independent original bytes in an isolated KVM guest. Preserve actual exported
+C and manifests with `NEVERD_ISA_REGRESSION_ARTIFACT_DIR`, then pass them to
+NeverC's `verify_kvm_hypercalls.py`. Unavailable KVM fails explicitly. The full
+LLVM fork qualifies code32/code64; NeverC and the continuation remain x64.
+Shared continuation/shape changes also run complete x64 continuation, VMX/SVM
+source and MPX context/encoding targets.
+
 `InterpreterMachineRegionSourceTest.EntryObjects*` executes all four region state interfaces through HighC and LLVMC at O0/O2 with ASan/UBSan. Complete state, guest writes and query tapes cover optional alignment, object aliases, equal roots with disjoint relative ranges, one-byte overlaps and rejected inputs before any effects. An independent 128-bit arithmetic oracle covers signed displacement extremes, address wraparound and UINT64_MAX endpoints. Exact/short source budgets and changed authenticated declarations remain checked; ordinary source consumers still refuse the raw domain.
 
 `HighSwiftEmitter.StackScalarBindingsDoNotInventPhysicalStackWrites` runs x64/ARM64 Mach-O integer, floating and mixed stack carriers through the source pipeline. `IncomingHomeSource.StackInitializationRequiresAbsenceOfAllObservers` keeps entry storage for memory reads, calls, escaping stack addresses and opaque or memory intrinsics. Pure value paths use declared parameters without inventing physical SP writes; register FP state effects remain. The macOS mobile matrix independently compiles and executes recovered Swift; successful emission alone is not execution evidence.
@@ -10178,6 +10195,18 @@ Small negative values must preserve all upper integer limbs; unsigned inputs
 remain nonnegative and the floating oracle stays finite.
 
 ## Structured C control and call checks
+
+`NeverDSourceCallIntegerViewTests` executes narrow integer call-result views
+through conditions, returns and full-width arithmetic. Header declarations,
+direct/indirect call lowering, expression carriers and local storage must agree
+without losing truncation or inventing sign extension. x64/AArch64 machine
+fixtures cover COFF/ELF/Mach-O,
+both C routes, source optimization on/off and O0/O2 with UBSan; source-only
+rendering cases also cover x86 and ARM32. Original callers run independently on
+matching Linux x64 hosts, including Win64 argument placement and home storage.
+Generated C execution on another host does not qualify native Windows ARM64
+driver execution. Run the integer-width, pointer-projection and call-contract
+owners with this suite after changing call-result projection.
 
 `NeverDX86NonlocalControlTests` checks privileged return and SMM transition
 admission through both decoder modes, LowIR, MedIR, native LLVM and C rendering.

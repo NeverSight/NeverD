@@ -34,6 +34,24 @@ llvm::Value *MedLLVMEmitter::emitX86Virtualization(const MedOp &Op,
         " output=" + llvm::Twine(Op.Output.Size) +
         " inputs=" + llvm::Twine(static_cast<unsigned>(Op.NumInputs)));
   const auto C = x86VirtualizationContract(Id);
+  if (C.Result == X86VirtualizationResult::Value) {
+    const auto Word = Op.Output.Size;
+    auto *Type = sizeToType(Word);
+    std::vector<llvm::Value *> Arguments;
+    for (unsigned I = 1; I != Op.NumInputs; ++I)
+      Arguments.push_back(getVar(Op.Inputs[I], Builder));
+    const std::string Name =
+        std::string("llvm.x86.") + C.Mnemonic + (Word == 4 ? "32" : "");
+    auto Callee = Mod->getOrInsertFunction(
+        Name, llvm::FunctionType::get(Type, std::vector<llvm::Type *>(5, Type),
+                                      false));
+    auto *Function = llvm::cast<llvm::Function>(Callee.getCallee());
+    Function->setMemoryEffects(llvm::MemoryEffects::unknown());
+    Function->addFnAttr(llvm::Attribute::Convergent);
+    Function->addFnAttr(llvm::Attribute::NoDuplicate);
+    Function->addFnAttr(llvm::Attribute::NoUnwind);
+    return Builder.CreateCall(Callee, Arguments, "kvm.status");
+  }
   if (Id == Intrinsic::X86SvmRunContext) {
     auto *Pointer = resolveAtomicMemoryPtr(Op.Inputs[1], C.MemoryBytes,
                                            Builder.getInt8Ty(), Builder);

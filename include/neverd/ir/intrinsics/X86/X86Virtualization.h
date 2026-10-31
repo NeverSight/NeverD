@@ -33,8 +33,8 @@ struct X86VirtualizationShape {
   bool WritableOutput = false;
   uint16_t OutputSize = 0;
   uint8_t Arguments = 0;
-  std::array<uint16_t, 2> InputSizes{};
-  std::array<bool, 2> ScalarInputs{};
+  std::array<uint16_t, 5> InputSizes{};
+  std::array<bool, 5> ScalarInputs{};
   std::optional<uint64_t> AddressWidth;
 };
 
@@ -67,6 +67,7 @@ x86VirtualizationShapeIsValid(Intrinsic Id,
   const uint16_t ExpectedOutput =
       C.Result == X86VirtualizationResult::Read    ? 2 * Word
       : C.Result == X86VirtualizationResult::Flags ? 2
+      : C.Result == X86VirtualizationResult::Value ? Word
                                                    : 0;
   if (Shape.OutputSize != ExpectedOutput ||
       (ExpectedOutput && !Shape.WritableOutput))

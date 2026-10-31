@@ -61,6 +61,8 @@ enum class InterpreterProfileProjection : uint8_t {
   X64SvmRunV1,
   /// Raw BND bytes require the explicit V11 bounds/configuration owner.
   X64MpxV1,
+  /// Raw VMCALL/VMMCALL require an explicitly selected hypervisor ABI.
+  X64HypercallV1,
 };
 
 } // namespace neverd::analysis
