@@ -4446,6 +4446,127 @@ TEST(SourceFrameBorrows, ReadExtentsAndEscapesBoundPrivateStoreRemoval) {
   }
 }
 
+TEST(SourceFrameBorrows, ScalarStackArgumentsKeepTheirPhysicalReadExtent) {
+  for (unsigned Case = 0; Case != 12; ++Case) {
+    SCOPED_TRACE(Case);
+    MedFunc Caller;
+    Caller.Entry = 0x1000;
+    Caller.CC = CallingConv::Win64;
+    Caller.FrameSize = 0x38;
+    MedBlock Entry;
+    Entry.Id = 0;
+    Entry.StartAddr = Caller.Entry;
+    auto Byte = temp(20);
+    Byte.Size = 1;
+    Entry.Ops = {
+        op(NdOp::COPY, sp(0), {sp(0)}),
+        op(NdOp::INT_SUB, sp(1), {sp(0), MedVar::makeConst(0x38, 8)}),
+        op(NdOp::INT_ADD, temp(10), {sp(1), MedVar::makeConst(0x28, 8)}),
+        op(NdOp::STORE, none(),
+           {temp(10), MedVar::makeUnspecified(8, Arch::X64)}),
+        op(NdOp::STORE, none(), {temp(10), MedVar::makeConst(37, 1)}),
+        op(NdOp::CALL, Byte, {MedVar::makeConst(0x2000, 8), temp(10)}),
+        op(NdOp::INT_ADD, sp(2), {sp(1), MedVar::makeConst(0x38, 8)}),
+        op(NdOp::RETURN, none(), {Byte})};
+    Entry.Ops[5].CalleeRegisterArgs = 1;
+    Entry.Ops[5].CalleeStackArgs = 0;
+    Entry.Ops[5].CalleeVectorArgs = 0;
+    Caller.Blocks = {Entry};
+    MedCallInfo Invoke;
+    Invoke.BlockId = 0;
+    Invoke.OpIdx = 5;
+    Invoke.TargetAddr = 0x2000;
+    Invoke.Args = {temp(10)};
+    Caller.CallInfos = {Invoke};
+
+    MedFunc Reader;
+    Reader.Entry = 0x2000;
+    Reader.CC = CallingConv::Win64;
+    Reader.FrameSize = 0x38;
+    Reader.Params = {rcx(0)};
+    MedBlock Body;
+    Body.Id = 0;
+    Body.StartAddr = Reader.Entry;
+    Body.Ops = {op(NdOp::COPY, sp(0), {sp(0)}),
+                op(NdOp::COPY, rcx(0), {rcx(0)}),
+                op(NdOp::INT_SUB, sp(1), {sp(0), MedVar::makeConst(0x38, 8)}),
+                op(NdOp::LOAD, Byte, {rcx(0)}),
+                op(NdOp::CALL, temp(21), {MedVar::makeConst(0x3000, 8)}),
+                op(NdOp::INT_ADD, sp(2), {sp(1), MedVar::makeConst(0x38, 8)}),
+                op(NdOp::RETURN, none(), {Byte})};
+    Body.Ops[4].CalleeRegisterArgs = 4;
+    Body.Ops[4].CalleeStackArgs = 5;
+    Body.Ops[4].CalleeVectorArgs = 0;
+    if (Case == 1)
+      Body.Ops[3].Output.Size = 8;
+    if (Case == 3)
+      Body.Ops[4].CalleeStackArgs = 0;
+    Reader.Blocks = {Body};
+    MedCallInfo Nested;
+    Nested.BlockId = 0;
+    Nested.OpIdx = 4;
+    Nested.TargetAddr = 0x3000;
+    Nested.Args.assign(5, MedVar::makeConst(0, 8));
+    if (Case == 2)
+      Nested.Args[4] =
+          rcx(0); // A stack-passed borrow still needs its own proof.
+    if (Case == 6)
+      Nested.Args.pop_back();
+    Reader.CallInfos = {Nested};
+    if (Case >= 8) {
+      Reader.CallInfos.clear();
+      auto &Ops = Reader.Blocks[0].Ops;
+      Ops[4].NumInputs = 5;
+      Ops[4].Inputs.resize(5);
+      for (unsigned I = 1; I < 5; ++I)
+        Ops[4].Inputs[I] = MedVar::makeConst(0, 8);
+      Ops.insert(Ops.begin() + 4,
+                 op(NdOp::INT_ADD, temp(40),
+                    {sp(1), MedVar::makeConst(Case == 11 ? 0x28 : 0x20, 8)}));
+      if (Case != 10)
+        Ops.insert(
+            Ops.begin() + 5,
+            op(NdOp::STORE, none(),
+               {temp(40), Case == 9 ? rcx(0) : MedVar::makeConst(0, 8)}));
+    }
+
+    MedFunc Scalar;
+    Scalar.Entry = 0x3000;
+    Scalar.CC = CallingConv::Win64;
+    auto Argument = temp(4);
+    Argument.Kind = MedVar::Param;
+    Argument.SSAVer = 0;
+    Argument.RegOff = kNoParamReg;
+    Scalar.Params.resize(5);
+    Scalar.Params[4] = Argument;
+    MedBlock Leaf;
+    Leaf.Id = 0;
+    Leaf.StartAddr = Scalar.Entry;
+    Leaf.Ops = {op(NdOp::RETURN, none(), {Argument})};
+    if (Case == 4 || Case == 5) {
+      // Physical reads and source-bound parameter reads must agree on the
+      // incoming stack extent. A sixth slot is outside this call's contract.
+      const uint64_t Offset = Case == 4 ? 0x30 : 0x28;
+      Leaf.Ops = {
+          op(NdOp::COPY, sp(0), {sp(0)}),
+          op(NdOp::INT_ADD, temp(30), {sp(0), MedVar::makeConst(Offset, 8)}),
+          op(NdOp::LOAD, temp(31), {temp(30)}),
+          op(NdOp::RETURN, none(), {temp(31)})};
+    }
+    if (Case == 7) {
+      Argument.Id = 5;
+      Scalar.Params.push_back(Argument);
+      Leaf.Ops.back().Inputs[0] = Argument;
+    }
+    Scalar.Blocks = {Leaf};
+    markUnobservedBorrowedFrameStores(
+        Caller, Arch::X64, BinaryFormat::COFF,
+        {{Reader.Entry, &Reader}, {Scalar.Entry, &Scalar}});
+    EXPECT_EQ(Caller.Blocks[0].Ops[3].PrologueSave,
+              Case == 0 || Case == 5 || Case == 8);
+  }
+}
+
 TEST(SourceFrameBorrows, PartialOverwritesMustPrecedeEveryBorrowRead) {
   for (bool Home : {false, true})
     for (unsigned Case = 0; Case != 8; ++Case) {

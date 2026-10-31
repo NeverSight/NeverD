@@ -156,9 +156,12 @@ struct CallSetupStackJoins {
 /// When requested, Joins keeps complete same-width definitions through nested
 /// joins. Nodes refer only to earlier nodes, and Slots names the final roots.
 /// The caller materializes only the nodes a required argument reaches.
+/// SharedWork, when supplied by an enclosing proof, also charges every visited
+/// operation and edge to that proof. The per-call limit still applies.
 std::map<int64_t, MedVar>
 callSetupStackStores(const AbiCallContext &C,
-                     CallSetupStackJoins *Joins = nullptr);
+                     CallSetupStackJoins *Joins = nullptr,
+                     size_t *SharedWork = nullptr);
 
 /// Every reaching path leaves this incoming argument register untouched.
 bool incomingArgumentReachesCall(const AbiCallContext &C, int ArgIndex);

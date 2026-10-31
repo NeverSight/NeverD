@@ -453,6 +453,18 @@ intervals, including in omitted memo bodies with bound native operands. Every
 level checks its own call home area and implicit GPR inputs; recursive and stale
 bindings refuse the proof. Physical machine-state captures still need separate
 evidence; the public bounded-chain tests do not close those original gaps.
+The proof now lives in `lib/ir/med/pass/MedFrameBorrowReads.h`. Calls with
+additional scalar stack arguments retain their complete outgoing read extent.
+Omitted bodies recover those operands with the existing ABI reaching-store
+owner under the shared borrow budget; recovered `Param` values still count as
+reads of their original incoming slots. Missing stores, wider physical reads,
+stack-passed pointers and hidden-register readers remain refusal boundaries.
+`SourceFrameBorrows.ScalarStackArgumentsKeepTheirPhysicalReadExtent` and
+`Win64CallContract.ScalarStackCallKeepsBorrowedReadExtent` cover this extension,
+including both C routes, selected/omitted bodies and original x64 execution.
+The five private ordinary roots still have 56 unknown argument occurrences per
+route; these generic regressions do not qualify their remaining GS, pointer
+capture and incoming-slot proofs.
 Only unread private bytes can lose their stores; negative offsets, implicit
 register inputs and source call home areas retain observations. SSA version
 zero alone is not an incoming register. Recursive or indirect callees, incoming

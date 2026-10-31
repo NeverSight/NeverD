@@ -57,6 +57,19 @@ context explicitly when ordinary parameter or frame recovery cannot be proved.
 The special-region implementation lives in `lib/pipeline/X64SpecialRegions.cpp`;
 it does not replace missing source arguments with constants.
 
+The ordinary Win64 borrow proof is isolated in
+[`MedFrameBorrowReads.h`](../lib/ir/med/pass/MedFrameBorrowReads.h). A nested
+call with scalar stack arguments can participate when its entire incoming
+read extent is bounded by the caller's outgoing storage. Recovered source
+parameters keep their original stack-slot reads in this proof. Omitted bodies
+use the shared ABI reaching-store analysis with the same total work budget,
+one address index per body, and no additional image discovery. Unknown stack
+operands, stack-passed pointer borrows, recursive calls, GS/EH observers and
+opaque effects still require separate evidence or the explicit state route.
+The `SourceFrameBorrows.ScalarStackArgumentsKeepTheirPhysicalReadExtent` and
+`Win64CallContract.ScalarStackCallKeepsBorrowedReadExtent` tests exercise this
+boundary, including original machine code and both C routes at O0/O2.
+
 An entry request can include `"callee_depth": 1` together with
 `"follow_internal_calls": true`. Each discovery wave selects original direct
 CALL targets in mapped image code. Repeated targets and recursive edges share

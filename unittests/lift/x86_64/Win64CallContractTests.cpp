@@ -1869,9 +1869,12 @@ int main(void) {
   }
 }
 
-TEST(Win64CallContract, PartialOverwriteBeforeBorrowDropsOnlyUnreadBytes) {
+void checkPartialOverwriteBorrow(bool ScalarStackCall) {
   constexpr va_t Consumer = Text + 0x80;
-  for (unsigned Depth : {1u, 2u, 3u})
+  const std::vector<unsigned> Depths = ScalarStackCall
+                                           ? std::vector<unsigned>{2}
+                                           : std::vector<unsigned>{1, 2, 3};
+  for (unsigned Depth : Depths)
     for (bool Home : {false, true})
       for (bool ReadsNeighbor : {false, true}) {
         SCOPED_TRACE(Depth);
@@ -1893,17 +1896,46 @@ TEST(Win64CallContract, PartialOverwriteBeforeBorrowDropsOnlyUnreadBytes) {
         Caller.insert(Caller.end(), {0x48, 0x83, 0xC4, 0x38, 0xC3});
         put(Code, Text, Caller);
         const va_t Leaf = Consumer + 0x40 * (Depth - 1);
-        for (unsigned Level = 0; Level + 1 < Depth; ++Level) {
-          const va_t Relay = Consumer + 0x40 * Level;
-          std::vector<uint8_t> Forward = {0x48, 0x83, 0xEC, 0x28, 0xE8};
-          const auto Jump = rel32(Relay + Forward.size() + 4, Relay + 0x40);
-          Forward.insert(Forward.end(), Jump.begin(), Jump.end());
-          Forward.insert(Forward.end(), {0x48, 0x83, 0xC4, 0x28, 0xC3});
-          put(Code, Relay, Forward);
+        if (ScalarStackCall) {
+          // Read just the initialized byte, then pass it as the fifth scalar
+          // argument. Native and selected bodies must share the same stack
+          // footprint, including the scalar slot the helper actually reads.
+          std::vector<uint8_t> Reader = {0x48, 0x83, 0xEC, 0x38};
+          const std::vector<uint8_t> Load =
+              ReadsNeighbor ? std::vector<uint8_t>{0x0F, 0xB6, 0x41, 1}
+                            : std::vector<uint8_t>{0x0F, 0xB6, 0x01};
+          Reader.insert(Reader.end(), Load.begin(), Load.end());
+          Reader.insert(Reader.end(),
+                        {0x89, 0x44, 0x24, 0x20,       // mov [rsp+20h],eax
+                         0xB9, 1,    0,    0,    0,    // mov ecx,1
+                         0xBA, 2,    0,    0,    0,    // mov edx,2
+                         0x41, 0xB8, 3,    0,    0, 0, // mov r8d,3
+                         0x41, 0xB9, 4,    0,    0, 0,
+                         0xE8}); // mov r9d,4; call
+          const auto Jump = rel32(Consumer + Reader.size() + 4, Leaf);
+          Reader.insert(Reader.end(), Jump.begin(), Jump.end());
+          Reader.insert(Reader.end(), {0x48, 0x83, 0xC4, 0x38, 0xC3});
+          put(Code, Consumer, Reader);
+          put(Code, Leaf,
+              {0x8B, 0x44, 0x24, 0x28, // mov eax,[rsp+28h]
+               0x01, 0xC8,             // add eax,ecx
+               0x01, 0xD0,             // add eax,edx
+               0x44, 0x01, 0xC0,       // add eax,r8d
+               0x44, 0x01, 0xC8,       // add eax,r9d
+               0xC3});
+        } else {
+          for (unsigned Level = 0; Level + 1 < Depth; ++Level) {
+            const va_t Relay = Consumer + 0x40 * Level;
+            std::vector<uint8_t> Forward = {0x48, 0x83, 0xEC, 0x28, 0xE8};
+            const auto Jump = rel32(Relay + Forward.size() + 4, Relay + 0x40);
+            Forward.insert(Forward.end(), Jump.begin(), Jump.end());
+            Forward.insert(Forward.end(), {0x48, 0x83, 0xC4, 0x28, 0xC3});
+            put(Code, Relay, Forward);
+          }
+          put(Code, Leaf,
+              ReadsNeighbor ? std::vector<uint8_t>{0x0F, 0xB6, 0x41, 1, 0xC3}
+                            : std::vector<uint8_t>{0x0F, 0xB6, 0x01, 0xC3});
         }
-        put(Code, Leaf,
-            ReadsNeighbor ? std::vector<uint8_t>{0x0F, 0xB6, 0x41, 1, 0xC3}
-                          : std::vector<uint8_t>{0x0F, 0xB6, 0x01, 0xC3});
         std::vector<std::pair<va_t, const char *>> Names{
             {Text, "partial_borrow"}, {Consumer, "byte_reader"}};
         const char *RelayNames[] = {"byte_reader", "byte_relay_one",
@@ -1942,7 +1974,7 @@ static int check_native(uint64_t seed) {
   observed = 0;
   __builtin___clear_cache((char *)code, (char *)code + size);
   uint64_t actual = ((uint64_t (__attribute__((ms_abi)) *)(void))code)();
-  int bad = actual != 37 || observed != 1;
+  int bad = actual != BORROW_EXPECTED || observed != 1;
   if (munmap(mapping, size + 16)) return 1;
   return bad;
 }
@@ -1991,7 +2023,7 @@ static int check_native(uint64_t seed) { return 0; }
 uint64_t byte_provider(uint64_t address)
     __asm__(SYMBOL_PREFIX(__USER_LABEL_PREFIX__) "byte_reader");
 uint64_t byte_provider(uint64_t address) {
-  return *(uint8_t *)(uintptr_t)address;
+  return *(uint8_t *)(uintptr_t)address + BORROW_EXPECTED - 37;
 }
 )";
               Oracle += R"(
@@ -2001,7 +2033,7 @@ static int check_native(uint64_t seed);
 int main(void) {
   for (unsigned i = 0; i < 32; ++i) {
     observed = 0;
-    if (partial_borrow() != 37 || observed != 1) return 1;
+    if (partial_borrow() != BORROW_EXPECTED || observed != 1) return 1;
     if (check_native(UINT64_C(0xFEDCBA9876543210) ^
                      (uint64_t)i * UINT64_C(0x100010001))) return 2;
   }
@@ -2010,10 +2042,20 @@ int main(void) {
 )";
               for (llvm::StringRef Level : {"-O0", "-O2"})
                 source_call_execution_test::compileAndRun(
-                    Source + Oracle + NativeOracle,
+                    Source + "\n#define BORROW_EXPECTED " +
+                        std::to_string(ScalarStackCall ? 47 : 37) + "\n" +
+                        Oracle + NativeOracle,
                     {Level, "-fsanitize=undefined", "-fsanitize-trap=all"});
             }
       }
+}
+
+TEST(Win64CallContract, PartialOverwriteBeforeBorrowDropsOnlyUnreadBytes) {
+  checkPartialOverwriteBorrow(false);
+}
+
+TEST(Win64CallContract, ScalarStackCallKeepsBorrowedReadExtent) {
+  checkPartialOverwriteBorrow(true);
 }
 
 TEST(Win64CallContract, BoundIntegerOperandsAgreeAcrossSourceRoutes) {
