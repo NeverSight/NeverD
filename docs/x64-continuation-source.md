@@ -149,6 +149,11 @@ byte before resuming. No source parameter count or callee preservation is
 assumed. Arbitrary-value slots represent caller-selected choices
 for each dynamic instruction; reusing them selects a subset of allowed runs.
 
+Memory-indirect jumps read their target from the live guest memory, including
+RIP-relative slots. Changing a slot between invocations changes the completed
+PC; register jumps use the register value directly. These transfers preserve
+the guest stack and do not invoke the target as a host function.
+
 The driver continues ordinary instructions and jumps to listed addresses. Each
 successful instruction consumes one budget unit, including a stopping transfer.
 A native request or invalid-state refusal executes nothing and consumes none.

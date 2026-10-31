@@ -446,6 +446,13 @@ checking every byte-sized count against an independent multiplication oracle
 and refusing unconstrained machine-width products. Copy edges in stack PHI
 cycles preserve exact or bounded outside origins on all four architectures;
 unseeded cycles and changing backedges remain unknown.
+The guarded scalar-index cases cover SELECT and complementary masks across
+all four architectures and three native formats, commuted operands, unsigned
+wrap, byte truncation, signed and inverted predicates, and independent query
+state. Independent enumeration checks accepted and adjacent rejected inputs;
+stale SSA, malformed masks, unrelated conditions and unknown byte slices must
+retain their wider bounds. The LLVM mask consumer is also covered by
+`NeverDLowInstructionBoundaryTests` and `NeverDMedLLVMDirectDataTests`.
 `MedSEHEstablisherFrame.SourceHandlerCallRetainsEveryProtectedStackPosition`
 checks protected allocations and shared ordinary/exceptional handler entries.
 A handler CALL may precede an RBP-based SP restoration only when all possible
@@ -9557,6 +9564,12 @@ cleanup, changed saved-SP cells, FS/GS-to-stack aliases, partial registers,
 upper vector preservation, packed flags and fresh arbitrary values. The
 conditional wide-read fixture retains physical bytes from an earlier CALL
 under partial callback writes; it does not assume full output initialization.
+`MemoryJumpsReadLiveTargetsExactlyOnce` checks mutable RIP-relative slots,
+computed memory and register targets, FS/GS addressing and address32 jumps in
+V1/V2. Both C routes preserve the whole state and memory while returning each
+loaded target, including values that cannot themselves be dereferenced. The
+constant-slot fixture requires Linux mmap; direct and conditional jumps remain
+independent controls.
 Profiles without an MSR or event binding must request native execution for
 RDMSR or IRETQ before changing state or touching the guest stack.
 Invalid profile/PC/flags, missing/duplicate addresses and
