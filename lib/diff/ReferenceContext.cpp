@@ -22,7 +22,9 @@
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallVector.h"
 
+#include <climits>
 #include <optional>
 #include <tuple>
 
@@ -252,6 +254,130 @@ referenceCandidates(const Program &P, const ProgramFeatures &PF,
   }
   llvm::sort(Candidates.Data);
   return Candidates;
+}
+
+std::vector<std::pair<uint32_t, uint32_t>>
+initializerCandidates(const Program &P, llvm::ArrayRef<uint32_t> PMatch,
+                      llvm::ArrayRef<uint8_t> PTrusted, const Program &S,
+                      llvm::ArrayRef<uint32_t> SMatch,
+                      llvm::ArrayRef<uint8_t> STrusted,
+                      const ComparisonControl &Control) {
+  struct Run {
+    size_t Begin, End;
+    bool Secondary;
+    uint64_t Key = 0;
+  };
+  std::vector<Run> Runs;
+  std::vector<uint32_t> Targets[2];
+  for (bool Secondary : {false, true}) {
+    const auto &Program = Secondary ? S : P;
+    if (Program.Identity.Bits != 32 && Program.Identity.Bits != 64)
+      continue;
+    const uint64_t Width = Program.Identity.Bits / CHAR_BIT;
+    const auto &Slots = Program.CodeInitializers;
+    Targets[Secondary].assign(Slots.size(), NoIndex);
+    for (size_t I = 0; I < Slots.size();) {
+      if (Control.stop())
+        return {};
+      size_t J = I + 1;
+      while (J < Slots.size() && Slots[J].Slot - Slots[J - 1].Slot == Width)
+        ++J;
+      if (J - I > limits::diff::kMinInitializerAnchors &&
+          !(I && Slots[I].Slot - Slots[I - 1].Slot < Width) &&
+          !(J < Slots.size() && Slots[J].Slot - Slots[J - 1].Slot < Width))
+        Runs.push_back({I, J, Secondary});
+      I = J;
+    }
+  }
+  parallelForEach(Runs.size(), [&](auto Claim, size_t Count) {
+    for (size_t R = Claim(); R < Count; R = Claim()) {
+      auto &Run = Runs[R];
+      const auto &Program = Run.Secondary ? S : P;
+      const auto Map = Run.Secondary ? SMatch : PMatch;
+      const auto Trusted = Run.Secondary ? STrusted : PTrusted;
+      StableHash H;
+      H.add(Run.End - Run.Begin);
+      llvm::SmallVector<uint32_t, limits::diff::kMinInitializerAnchors> Known;
+      bool Missing = false, Unknown = false;
+      for (size_t I = Run.Begin; I < Run.End; ++I) {
+        if (Control.stop())
+          return;
+        const auto F = Program.functionAt(Program.CodeInitializers[I].Target);
+        if (!F) {
+          Missing = true;
+          break;
+        }
+        Targets[Run.Secondary][I] = *F;
+        if (Trusted[*F] && Map[*F] != NoIndex) {
+          const uint32_t Id = Run.Secondary ? *F : Map[*F];
+          H.add("known").add(Id);
+          if (Known.size() < limits::diff::kMinInitializerAnchors &&
+              !llvm::is_contained(Known, Id))
+            Known.push_back(Id);
+        } else {
+          H.add("unmapped");
+          Unknown |= Map[*F] == NoIndex;
+        }
+      }
+      if (!Missing && Unknown &&
+          Known.size() >= limits::diff::kMinInitializerAnchors)
+        Run.Key = H.value();
+    }
+  });
+  if (Control.stop())
+    return {};
+  llvm::erase_if(Runs, [](const auto &R) { return !R.Key; });
+  llvm::sort(Runs, [](const Run &A, const Run &B) {
+    return std::tie(A.Key, A.Secondary, A.Begin) <
+           std::tie(B.Key, B.Secondary, B.Begin);
+  });
+  Relations Forward, Reverse;
+  for (size_t I = 0; I < Runs.size();) {
+    if (Control.stop())
+      return {};
+    size_t J = I + 1;
+    while (J < Runs.size() && Runs[J].Key == Runs[I].Key)
+      ++J;
+    if (J - I == 2 && !Runs[I].Secondary && Runs[I + 1].Secondary) {
+      const auto &A = Runs[I], &B = Runs[I + 1];
+      bool Compatible = A.End - A.Begin == B.End - B.Begin;
+      for (size_t N = 0; Compatible && N < A.End - A.Begin; ++N) {
+        if (Control.stop())
+          return {};
+        const uint32_t X = Targets[0][A.Begin + N], Y = Targets[1][B.Begin + N];
+        if (PTrusted[X] || STrusted[Y])
+          Compatible = PTrusted[X] && STrusted[Y] && PMatch[X] == Y;
+      }
+      if (Compatible)
+        for (size_t N = 0; N < A.End - A.Begin; ++N) {
+          if (Control.stop())
+            return {};
+          const uint32_t X = Targets[0][A.Begin + N],
+                         Y = Targets[1][B.Begin + N];
+          if (!PTrusted[X] && !STrusted[Y]) {
+            recordRelation(Forward, X, Y);
+            recordRelation(Reverse, Y, X);
+          }
+        }
+    }
+    I = J;
+  }
+  std::vector<std::pair<uint32_t, uint32_t>> Result;
+  for (const auto &[A, Relation] : Forward) {
+    if (Control.stop())
+      return {};
+    const uint32_t B = Relation.Other;
+    const auto Back = Reverse.find(B);
+    if (Relation.Conflict || Back == Reverse.end() || Back->second.Conflict ||
+        Back->second.Other != A || PMatch[A] != NoIndex ||
+        SMatch[B] != NoIndex || !P.Functions[A].hasBody() ||
+        !S.Functions[B].hasBody() || P.Functions[A].has(TraitIncomplete) ||
+        S.Functions[B].has(TraitIncomplete))
+      continue;
+    Result.emplace_back(A, B);
+  }
+  llvm::sort(Result);
+  return Result;
 }
 
 std::vector<std::pair<uint32_t, uint32_t>> conflictingCallCandidates(

@@ -40,6 +40,16 @@ referenceCandidates(const Program &P, const ProgramFeatures &PF,
                     const ProgramFeatures &SF, llvm::ArrayRef<uint32_t> SMatch,
                     const ComparisonControl &Control);
 
+/// Complete initializer neighborhoods need distinct independent anchors and a
+/// unique counterpart. Every aligned occurrence must agree before proposing an
+/// unmatched function. This establishes neither object nor runtime identity.
+std::vector<std::pair<uint32_t, uint32_t>>
+initializerCandidates(const Program &P, llvm::ArrayRef<uint32_t> PMatch,
+                      llvm::ArrayRef<uint8_t> PTrusted, const Program &S,
+                      llvm::ArrayRef<uint32_t> SMatch,
+                      llvm::ArrayRef<uint8_t> STrusted,
+                      const ComparisonControl &Control);
+
 /// Complete callers can contradict a provisional body match. Returns review
 /// alternatives with exactly one unmatched endpoint; WeakP/WeakS mark the
 /// reviewable matches (NoIndex means protected or unmatched). No identity is

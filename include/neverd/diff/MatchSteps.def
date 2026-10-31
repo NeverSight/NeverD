@@ -77,6 +77,9 @@ NEVERD_DIFF_FUNCTION_STEP(
 NEVERD_DIFF_FUNCTION_STEP(StackRoles, "stack_roles", 0.80,
                           "The same fixed-frame address-use roles; conflicting "
                           "body alternatives require review")
+NEVERD_DIFF_FUNCTION_STEP(Initializer, "initializer_context", 0.80,
+                          "The same initialized function-pointer position "
+                          "among independently matched targets")
 
 NEVERD_DIFF_BLOCK_STEP(BlockEntry, "entry", 0.90, "Both function entries")
 NEVERD_DIFF_BLOCK_STEP(BlockBytes, "bytes", 1.00, "Byte-identical blocks")

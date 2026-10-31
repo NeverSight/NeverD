@@ -631,6 +631,188 @@ TEST_F(BinaryDiffSDK,
   }
 }
 
+TEST_F(BinaryDiffSDK, RelocatedInitializerPositionsDisambiguateEqualCallbacks) {
+  const auto Image = [&](bool Reordered, bool Relocated) {
+    using ELF = llvm::object::ELF64LE;
+    using namespace llvm::ELF;
+    constexpr size_t TextOffset = 0x1000, DataOffset = 0x2000,
+                     RelocOffset = 0x2040, NamesOffset = 0x2100,
+                     SectionsOffset = 0x2200;
+    constexpr uint64_t DataVA = 0x3000;
+    constexpr char Names[] = "\0.text\0.data\0.rela.dyn\0.shstrtab\0";
+    std::vector<uint8_t> File(SectionsOffset + 5 * sizeof(ELF::Shdr), 0);
+    ELF::Ehdr H{};
+    std::memcpy(H.e_ident, ElfMagic, sizeof(ElfMagic) - 1);
+    H.e_ident[EI_CLASS] = ELFCLASS64;
+    H.e_ident[EI_DATA] = ELFDATA2LSB;
+    H.e_ident[EI_VERSION] = EV_CURRENT;
+    H.e_type = ET_DYN;
+    H.e_machine = EM_X86_64;
+    H.e_version = EV_CURRENT;
+    H.e_entry = TextOffset;
+    H.e_phoff = sizeof(H);
+    H.e_ehsize = sizeof(H);
+    H.e_phentsize = sizeof(ELF::Phdr);
+    H.e_phnum = 2;
+    H.e_shoff = SectionsOffset;
+    H.e_shentsize = sizeof(ELF::Shdr);
+    H.e_shnum = 5;
+    H.e_shstrndx = 4;
+    std::array<ELF::Phdr, 2> Segments{};
+    Segments[0].p_type = PT_LOAD;
+    Segments[0].p_flags = PF_R | PF_X;
+    Segments[0].p_filesz = TextOffset + 64;
+    Segments[0].p_memsz = TextOffset + 64;
+    Segments[0].p_align = 0x1000;
+    Segments[1].p_type = PT_LOAD;
+    Segments[1].p_flags = PF_R | PF_W;
+    Segments[1].p_offset = DataOffset;
+    Segments[1].p_vaddr = DataVA;
+    Segments[1].p_paddr = DataVA;
+    Segments[1].p_filesz = 0x100;
+    Segments[1].p_memsz = 0x100;
+    Segments[1].p_align = 0x1000;
+    std::array<ELF::Shdr, 5> Sections{};
+    Sections[1].sh_name = 1;
+    Sections[1].sh_type = SHT_PROGBITS;
+    Sections[1].sh_flags = SHF_ALLOC | SHF_EXECINSTR;
+    Sections[1].sh_addr = TextOffset;
+    Sections[1].sh_offset = TextOffset;
+    Sections[1].sh_size = 64;
+    Sections[1].sh_addralign = 16;
+    Sections[2].sh_name = 7;
+    Sections[2].sh_type = SHT_PROGBITS;
+    Sections[2].sh_flags = SHF_ALLOC | SHF_WRITE;
+    Sections[2].sh_addr = DataVA;
+    Sections[2].sh_offset = DataOffset;
+    Sections[2].sh_size = 4 * sizeof(ELF::Addr);
+    Sections[2].sh_addralign = sizeof(ELF::Addr);
+    Sections[3].sh_name = 13;
+    Sections[3].sh_type = SHT_RELA;
+    Sections[3].sh_flags = SHF_ALLOC;
+    Sections[3].sh_addr = DataVA + RelocOffset - DataOffset;
+    Sections[3].sh_offset = RelocOffset;
+    Sections[3].sh_size = Relocated ? 4 * sizeof(ELF::Rela) : 0;
+    Sections[3].sh_addralign = sizeof(ELF::Addr);
+    Sections[3].sh_entsize = sizeof(ELF::Rela);
+    Sections[4].sh_name = 23;
+    Sections[4].sh_type = SHT_STRTAB;
+    Sections[4].sh_offset = NamesOffset;
+    Sections[4].sh_size = sizeof(Names);
+    Sections[4].sh_addralign = 1;
+    std::memcpy(File.data(), &H, sizeof(H));
+    std::memcpy(File.data() + H.e_phoff, Segments.data(), sizeof(Segments));
+    std::memcpy(File.data() + SectionsOffset, Sections.data(),
+                sizeof(Sections));
+    std::memcpy(File.data() + NamesOffset, Names, sizeof(Names));
+    std::fill(File.begin() + TextOffset, File.begin() + TextOffset + 64, 0xcc);
+    for (unsigned I = 0; I < 4; ++I) {
+      const auto Code = body(I < 2 ? I + 1 : 7);
+      std::copy(Code.begin(), Code.end(), File.begin() + TextOffset + I * 16);
+    }
+    const unsigned Order[] = {0, Reordered ? 3u : 2u, 1, Reordered ? 2u : 3u};
+    for (unsigned I = 0; I < 4; ++I) {
+      ELF::Addr Target{};
+      Target = TextOffset + Order[I] * 16;
+      std::memcpy(File.data() + DataOffset + I * sizeof(Target), &Target,
+                  sizeof(Target));
+      ELF::Rela R{};
+      R.r_offset = DataVA + I * sizeof(Target);
+      R.r_info = R_X86_64_RELATIVE;
+      R.r_addend = Target;
+      std::memcpy(File.data() + RelocOffset + I * sizeof(R), &R, sizeof(R));
+    }
+    return File;
+  };
+  for (bool Relocated : {false, true}) {
+    const auto Load = [&](bool Reordered) {
+      const auto Bytes = Image(Reordered, Relocated);
+      const auto Path = Directory / (std::to_string(Sessions.size()) + ".elf");
+      std::ofstream File(Path, std::ios::binary);
+      File.write(reinterpret_cast<const char *>(Bytes.data()), Bytes.size());
+      File.close();
+      auto S = neverd_session_create();
+      Sessions.push_back(S);
+      EXPECT_EQ(neverd_session_load(S, Path.string().c_str()), 1)
+          << take(neverd_last_error(S));
+      for (uint64_t Entry : {0x1000, 0x1010, 0x1020, 0x1030}) {
+        if (const char *Attributes = neverd_func_attributes_json(S, Entry))
+          neverd_free_string(Attributes);
+        else
+          EXPECT_EQ(neverd_func_create(S, Entry), 0);
+      }
+      return S;
+    };
+    const auto A = Load(false), B = Load(true);
+    for (bool Reverse : {false, true}) {
+      const auto C = compare(Reverse ? B : A, Reverse ? A : B,
+                             R"({"discover":false,"use_names":false})");
+      const auto Before = take(neverd_comparison_export_json(C));
+      auto Report = llvm::json::parse(Before);
+      ASSERT_TRUE(bool(Report));
+      const auto *Matches = Report->getAsObject()->getArray("matches");
+      for (const auto &[P, S] :
+           {std::pair{"0x1020", "0x1030"}, std::pair{"0x1030", "0x1020"}}) {
+        const auto Match =
+            std::find_if(Matches->begin(), Matches->end(), [&](const auto &M) {
+              return M.getAsObject()->getString("primary") == P &&
+                     M.getAsObject()->getString("secondary") == S;
+            });
+        EXPECT_EQ(Match != Matches->end(), Relocated) << Before;
+        if (Match != Matches->end())
+          EXPECT_EQ(Match->getAsObject()->getString("step"),
+                    "initializer_context");
+      }
+      ASSERT_EQ(neverd_comparison_restore_json(C, Before.c_str()), 1);
+      EXPECT_EQ(take(neverd_comparison_export_json(C)), Before);
+    }
+    if (Relocated) {
+      for (uint64_t Minimum : {0, 4}) {
+        const auto C = neverd_comparison_create();
+        Comparisons.push_back(C);
+        struct StopContext {
+          neverd_comparison_t Handle;
+          uint64_t Minimum;
+          bool Seen = false;
+          std::thread::id Caller = std::this_thread::get_id();
+        } Stop{C, Minimum};
+        const auto Cancel = [](void *Opaque, const char *Phase,
+                               neverd_va_t Done, neverd_va_t) {
+          auto &S = *static_cast<StopContext *>(Opaque);
+          EXPECT_EQ(std::this_thread::get_id(), S.Caller);
+          if (std::string_view(Phase) == "primary:initializers" &&
+              Done >= S.Minimum) {
+            S.Seen = true;
+            neverd_comparison_cancel(S.Handle);
+          }
+        };
+        ASSERT_EQ(neverd_comparison_run(C, A, B, "{}", Cancel, &Stop), 1)
+            << take(neverd_comparison_last_error(C));
+        EXPECT_TRUE(Stop.Seen);
+        const auto Summary = parsed(neverd_comparison_summary_json(C));
+        EXPECT_EQ(Summary.getAsObject()->getString("state"), "cancelled");
+        EXPECT_EQ(Summary.getAsObject()->getString("stopped_phase"),
+                  "initializers");
+        const auto Saved = parsed(neverd_comparison_export_json(C));
+        EXPECT_EQ(Saved.getAsObject()->getObject("primary")->getBoolean(
+                      "discovery_complete"),
+                  true);
+        EXPECT_EQ(Saved.getAsObject()
+                      ->getObject("functions")
+                      ->getArray("primary")
+                      ->size(),
+                  4u);
+        const auto Retry = compare(A, B, "{}");
+        EXPECT_EQ(parsed(neverd_comparison_export_json(Retry))
+                      .getAsObject()
+                      ->getArray("matches")
+                      ->size(),
+                  4u);
+      }
+    }
+  }
+}
+
 TEST_F(BinaryDiffSDK, DirectCallTargetsArePartOfStrongFunctionIdentity) {
   const auto Image = [&](bool Reordered) {
     std::vector<uint8_t> Bytes(128, 0xcc);
@@ -2890,7 +3072,7 @@ TEST_F(BinaryDiffSDK, LongNativeCallContextSurvivesReorderingAndRestore) {
   const auto Saved = take(neverd_comparison_export_json(C));
   const auto Document = parsed(neverd_comparison_export_json(C));
   ASSERT_TRUE(Document.getAsObject());
-  EXPECT_EQ(Document.getAsObject()->getInteger("matcher_version"), 17);
+  EXPECT_EQ(Document.getAsObject()->getInteger("matcher_version"), 18);
   const auto *Matches = Document.getAsObject()->getArray("matches");
   ASSERT_TRUE(Matches);
   const std::map<std::string, std::string> Expected = {{"0x3000", "0xa010"},

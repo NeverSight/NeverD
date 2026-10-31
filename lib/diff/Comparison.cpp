@@ -248,6 +248,7 @@ private:
     bool CallSite = false;
     bool DataReference = false;
     bool AddressSite = false;
+    bool Initializer = false;
   };
   llvm::DenseMap<uint64_t, CandidateEvidence> FeatureCandidates;
   Clock::time_point PhaseStart;
@@ -767,7 +768,8 @@ bool Matcher::consistentContext(uint32_t A, uint32_t B) const {
     return false;
   const double Agreement = contextAgreement(A, B);
   return ((It->second.CallSite || It->second.AddressSite) && Agreement == 1) ||
-         (It->second.DataReference && (Agreement < 0 || Agreement == 1));
+         ((It->second.DataReference || It->second.Initializer) &&
+          (Agreement < 0 || Agreement == 1));
 }
 
 unsigned Matcher::approximate(bool ReferenceOnly) {
@@ -794,7 +796,8 @@ unsigned Matcher::approximate(bool ReferenceOnly) {
     const uint32_t A = uint32_t(Key >> 32), B = uint32_t(Key);
     if (PMatch[A] == NoIndex && SMatch[B] == NoIndex) {
       Candidates.push_back(Key);
-      if (ReferenceOnly && (Evidence.DataReference || Evidence.AddressSite))
+      if (ReferenceOnly && (Evidence.DataReference || Evidence.AddressSite ||
+                            Evidence.Initializer))
         ReferenceA[A] = ReferenceB[B] = 1;
     }
   }
@@ -979,7 +982,8 @@ unsigned Matcher::approximate(bool ReferenceOnly) {
     // supported by the new frozen reference evidence can be admitted here.
     if (ReferenceOnly &&
         (Feature == FeatureCandidates.end() ||
-         (!Feature->second.DataReference && !Feature->second.AddressSite)))
+         (!Feature->second.DataReference && !Feature->second.AddressSite &&
+          !Feature->second.Initializer)))
       continue;
     // A positional or lone-neighbor proposal earns the lower context
     // threshold only when every already mapped neighbor agrees. A local
@@ -1672,6 +1676,29 @@ void Matcher::run(llvm::ArrayRef<Override> Overrides) {
     approximate(true);
   if (!stopNow())
     progress(1, 1);
+  if (P.CodeInitializers.size() > limits::kMinInitializerAnchors &&
+      S.CodeInitializers.size() > limits::kMinInitializerAnchors &&
+      !stopNow()) {
+    beginPhase("initializer-context");
+    std::vector<uint8_t> TrustedP(P.Functions.size(), 0),
+        TrustedS(S.Functions.size(), 0);
+    for (const auto &F : Order)
+      if (protectedMatch(F) && !P.Functions[F.Primary].has(TraitIncomplete) &&
+          !S.Functions[F.Secondary].has(TraitIncomplete))
+        TrustedP[F.Primary] = TrustedS[F.Secondary] = 1;
+    const auto Initializers = initializerCandidates(P, PMatch, TrustedP, S,
+                                                    SMatch, TrustedS, Control);
+    for (const auto &[A, B] : Initializers) {
+      if (stopNow())
+        break;
+      propose(A, B, FunctionStep::Initializer, true);
+      auto &Evidence = FeatureCandidates.find(pairKey(A, B))->second;
+      Evidence.Step = FunctionStep::Initializer;
+      Evidence.Initializer = true;
+    }
+    if (!Initializers.empty() && !stopNow())
+      approximate(true);
+  }
   beginPhase("ambiguities");
   retainCallAlternatives();
   retainStackAlternatives();

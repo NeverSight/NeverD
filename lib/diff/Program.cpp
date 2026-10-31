@@ -17,6 +17,7 @@
 #include "llvm/Support/raw_ostream.h"
 
 #include <algorithm>
+#include <climits>
 
 namespace neverd::diff {
 
@@ -94,6 +95,15 @@ Program::validate(const ComparisonControl &Control) const {
     OS << What << " (" << Index << ")";
     return Error;
   };
+  if (!CodeInitializers.empty() && Identity.Bits != 32 && Identity.Bits != 64)
+    return Fail("code initializers require a known native pointer width", 0);
+  for (size_t I = 0; I < CodeInitializers.size(); ++I) {
+    Control.check();
+    if (CodeInitializers[I].Slot > UINT64_MAX - Identity.Bits / CHAR_BIT)
+      return Fail("a code initializer slot exceeds the address space", I);
+    if (I && CodeInitializers[I - 1].Slot >= CodeInitializers[I].Slot)
+      return Fail("code initializers are not in ascending slot order", I);
+  }
   for (size_t I = 0; I < Functions.size(); ++I) {
     Control.check();
     const Function &F = Functions[I];

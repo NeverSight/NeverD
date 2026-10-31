@@ -3564,6 +3564,18 @@ wrappers around a known callee in both directions. Encoded call displacements
 must not select a source identity. The native SDK counterpart decodes real x64
 calls, retains both ambiguous wrappers and preserves them through save/reopen.
 
+`IndependentInitializerRolesSeparateIdenticalCallbacks` separates equal callback
+bodies around two distinct protected targets in both directions. It exercises
+repeated anchors, duplicate neighborhoods, conflicting occurrences, gaps,
+overlapping slots, missing targets, incomplete bodies, explicit analyst choice,
+approximation disabled, the ordinary similarity threshold and saved reopening.
+`RelocatedInitializerPositionsDisambiguateEqualCallbacks` loads an owned stripped
+ELF fixture with real relative relocations through the SDK. Equal numeric values
+without those relocations must retain ambiguity. The fixtures are decoded data;
+their machine code is never executed. Cancellation at the start and end of
+initializer capture preserves completed discovery and code, reports its own
+phase and permits a fresh retry.
+
 Reference-uncertainty controls distinguish unchanged raw code from known operand
 changes, retain a known retargeting beside an unknown address operand, and keep
 unknown targets out of native change observations. Native SDK controls exercise

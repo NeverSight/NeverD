@@ -12,6 +12,7 @@
 
 #include "BinaryComparison.h"
 
+#include "ComparisonInitializers.h"
 #include "InstructionFlow.h"
 #include "SessionImpl.h"
 #include "X86/ComparisonStackRoles.h"
@@ -914,16 +915,32 @@ readComparisonInputImpl(Session &S, const ComparisonInputOptions &Options,
     Builder.beginFunction(Address, 0, Import->Name, NameSource::Import,
                           TraitImport, Import->Module);
   Result.Program = Builder.finish();
+  if (!Exhausted && !Control.stop() &&
+      Result.Program.Functions.size() > limits::kMinInitializerAnchors) {
+    const uint64_t Available = Options.MaxMemoryBytes -
+                               std::min(Memory.load(), Options.MaxMemoryBytes);
+    Result.Stopped =
+        readComparisonInitializers(S.Img, Keys.Functions, Available, Control,
+                                   Result.Program.CodeInitializers);
+    if (Result.Stopped)
+      Result.StoppedPhase = "initializers";
+  }
   if (auto State = Control.stop())
     Result.Stopped = State;
   else if (Exhausted)
     Result.Stopped = ComparisonState::ResourceLimited;
   if (Result.Stopped) {
-    Result.StoppedPhase = "decode";
-    Result.Program.Identity.DiscoveryComplete = false;
-    Result.Program.Warnings.push_back(
-        "Snapshot extraction stopped; retained instructions and functions are "
-        "partial.");
+    if (Result.StoppedPhase == "initializers")
+      Result.Program.Warnings.push_back(
+          "Initializer context extraction stopped; no partial initializer "
+          "neighborhoods were retained.");
+    else {
+      Result.StoppedPhase = "decode";
+      Result.Program.Identity.DiscoveryComplete = false;
+      Result.Program.Warnings.push_back("Snapshot extraction stopped; retained "
+                                        "instructions and functions are "
+                                        "partial.");
+    }
   }
   if (const auto Problem = Result.Program.validate()) {
     Error = *Problem;

@@ -1823,6 +1823,20 @@ checked again at admission.
 Call and address-reference neighbors share the growing propagation worklist,
 so an anchored address chain does not require one global pass per link.
 
+Matcher version 18 owns a separate frozen pass over relocation-marked function
+initializers. The loader's `normalizedRelocatedCodeTarget` supplies the same
+initial code coordinate to CFG relocation roots and comparison capture; each
+consumer separately decides function admission and ownership. Native capture
+reads marked slots in parallel under the remaining extraction memory allowance,
+merges by slot order and discards interrupted neighborhoods. The immutable
+`Program` retains these optional facts separately from instruction identity;
+native input bytes, effective mapping and overlays already bind their source.
+`ReferenceContext` aligns unique contiguous neighborhoods around at least two
+distinct protected complete matches and checks all aligned occurrences in both
+directions. Only unmatched complete functions become candidates. The existing
+body competition and context checks own admission; this pass grants no data
+object, runtime pointer, ABI or semantic-equivalence authority.
+
 Matcher version 9 also admits bounded shared mnemonic/CFG groups into the same
 measured competition. A common instruction sketch cannot hide a smaller graph
 group's alternatives. These shared keys propose candidates only; existing

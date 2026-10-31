@@ -17,6 +17,7 @@
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/loader/COFF/COFFRegistrationEH.h"
+#include "neverd/loader/CodePointerSources.h"
 #include "neverd/support/BinaryEncoding.h"
 
 #include <algorithm>
@@ -32,13 +33,9 @@ namespace {
 
 template <typename Visitor>
 void visitAbsoluteRelocationSources(const BinaryImage &Img, Visitor Visit) {
-  const uint32_t PtrSz = Img.getPointerSize();
-  if (PtrSz != 0)
-    for (va_t Slot : Img.CodePtrRelocSlots)
-      if (const uint8_t *P = Img.readVA(Slot, PtrSz))
-        Visit(normalizeCodeAddress(static_cast<va_t>(readPtr(P, Img.is64Bit())),
-                                   Img.Arch, Img.Mode),
-              Slot);
+  for (va_t Slot : Img.CodePtrRelocSlots)
+    if (const auto Target = normalizedRelocatedCodeTarget(Img, Slot))
+      Visit(*Target, Slot);
 }
 
 } // namespace

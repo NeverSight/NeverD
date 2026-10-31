@@ -129,6 +129,26 @@ Original scalar offsets and normalized shapes still determine the instruction
 delta. This byte-derived hint is versioned by the matcher and establishes no
 stack-object identity, alias proof or semantic equivalence.
 
+Matcher version 18 adds `initializer_context` candidates for callbacks in
+relocation-marked function-pointer initializers. It compares complete contiguous
+pointer-width neighborhoods, requiring at least two distinct independently
+matched complete targets and a unique neighborhood on each side. Every aligned
+occurrence must agree in both directions before an unmatched target is proposed.
+Repeated anchors, competing neighborhoods, missing targets and overlapping
+slots cannot resolve an identity. The witness correspondence is frozen for this
+pass; newly admitted callbacks cannot support their own initializer evidence.
+
+These proposals still compete with measured body alternatives under the existing
+similarity, ambiguity and mapped-context checks. Initializer evidence alone does
+not earn the lower call-context threshold. Native capture reads only slots
+explicitly marked by the loader, through the same code-coordinate reader as CFG
+relocation roots. Numeric lookalikes supply no evidence. These byte-derived hints
+do not establish data-object boundaries, stable runtime pointer values, ABI
+compatibility or semantic equivalence. Input bytes, effective mapping and
+overlays bind their native source; normalized instruction identity stays intact.
+Interrupted initializer extraction discards the optional neighborhoods while
+retaining the completed code inventory and an explicit stopped state.
+
 Matcher version 10 also defers a similar helper body when its changed entry
 contains the complete straight-line prelude of an unmatched direct tail caller,
 with at least two caller instructions beyond the helper's aligned body. Both

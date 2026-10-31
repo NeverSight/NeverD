@@ -1606,6 +1606,106 @@ TEST(BinaryDiff, StackRoleAlternativesRetainConflictingBodyMatchesForReview) {
   }
 }
 
+TEST(BinaryDiff, IndependentInitializerRolesSeparateIdenticalCallbacks) {
+  const auto Input = [](bool Secondary, bool Changed = false) {
+    std::vector<Fn> Functions = {
+        leaf("anchor_a", 1, 11), leaf("anchor_b", 2, 22),
+        leaf(Secondary ? "callback_b" : "callback_a", Changed ? 8 : 7, 5),
+        leaf(Secondary ? "callback_a" : "callback_b", Changed ? 8 : 7, 5)};
+    for (auto &F : Functions)
+      F.Source = NameSource::Generated;
+    auto P = build(Functions, Secondary ? 0x8000 : 0x1000);
+    P.Identity.Bits = 64;
+    const uint64_t Slot = Secondary ? 0x9000 : 0x3000;
+    for (const auto *Name :
+         {"anchor_a", "callback_a", "anchor_b", "callback_b"})
+      P.CodeInitializers.push_back(
+          {Slot + P.CodeInitializers.size() * sizeof(uint64_t),
+           named(P, Name).Address});
+    return P;
+  };
+  const auto P = Input(false), S = Input(true);
+  ComparisonSettings Settings;
+  Settings.UseNames = false;
+  for (bool Reverse : {false, true}) {
+    const auto &A = Reverse ? S : P, &B = Reverse ? P : S;
+    auto Plain = A;
+    Plain.CodeInitializers.clear();
+    EXPECT_EQ(compare(Plain, B, Settings).Matches.size(), 2u);
+    const auto R = compare(A, B, Settings);
+    EXPECT_EQ(R.Matches.size(), 4u);
+    for (const auto *Name : {"callback_a", "callback_b"}) {
+      EXPECT_EQ(counterpart(R, A, B, Name), Name);
+      EXPECT_EQ(matchOf(R, A, Name).Step, FunctionStep::Initializer);
+      EXPECT_TRUE(matchOf(R, A, Name).FromContext);
+    }
+    auto ExactOnly = Settings;
+    ExactOnly.Approximate = false;
+    EXPECT_EQ(compare(A, B, ExactOnly).Matches.size(), 4u);
+    auto Gap = B;
+    Gap.CodeInitializers.erase(Gap.CodeInitializers.begin() + 1);
+    EXPECT_EQ(compare(A, Gap, Settings).Matches.size(), 2u);
+    auto Overlap = A;
+    Overlap.CodeInitializers[1].Slot = Overlap.CodeInitializers[0].Slot + 1;
+    EXPECT_EQ(compare(Overlap, B, Settings).Matches.size(), 2u);
+    auto Missing = A;
+    Missing.CodeInitializers[1].Target = 0x12345678;
+    EXPECT_EQ(compare(Missing, B, Settings).Matches.size(), 2u);
+    auto Incomplete = A;
+    Incomplete.Functions[indexOf(A, "callback_a")].Traits |= TraitIncomplete;
+    EXPECT_EQ(
+        compare(Incomplete, B, Settings).secondaryOf(indexOf(A, "callback_a")),
+        NoIndex);
+    std::string Error;
+    const auto Read = readComparison(saved(R, A, B), Error);
+    ASSERT_TRUE(Read) << Error;
+    ComparisonResult Restored;
+    ASSERT_FALSE(bindComparison(*Read, A, B, Restored));
+    EXPECT_EQ(savedWithoutTimings(R, A, B),
+              savedWithoutTimings(Restored, A, B));
+    // One repeated anchor is not independent context, and two copies of a
+    // neighborhood cannot select one arbitrary source location.
+    auto Repeated = A;
+    Repeated.CodeInitializers[2].Target = named(A, "anchor_a").Address;
+    EXPECT_EQ(compare(Repeated, B, Settings).Matches.size(), 2u);
+    auto Duplicate = A;
+    for (const auto &I : A.CodeInitializers)
+      Duplicate.CodeInitializers.push_back({I.Slot + 0x1000, I.Target});
+    EXPECT_EQ(compare(Duplicate, B, Settings).Matches.size(), 2u);
+    // Conflicting occurrences are checked together before accepting either.
+    auto ConflictA = A, ConflictB = B;
+    for (const auto *Name :
+         {"anchor_b", "callback_a", "anchor_a", "callback_b"}) {
+      const uint64_t Slot =
+          0x10000 + ConflictA.CodeInitializers.size() * sizeof(uint64_t);
+      ConflictA.CodeInitializers.push_back({Slot, named(A, Name).Address});
+      const auto Other = llvm::StringRef(Name) == "callback_a"   ? "callback_b"
+                         : llvm::StringRef(Name) == "callback_b" ? "callback_a"
+                                                                 : Name;
+      ConflictB.CodeInitializers.push_back({Slot, named(B, Other).Address});
+    }
+    EXPECT_EQ(compare(ConflictA, ConflictB, Settings).Matches.size(), 2u);
+    const Override Keep{OverrideKind::Match, named(A, "callback_a").Address,
+                        named(B, "callback_b").Address};
+    EXPECT_EQ(counterpart(compare(A, B, Settings, {Keep}), A, B, "callback_a"),
+              "callback_b");
+  }
+  const auto Changed = Input(true, true);
+  EXPECT_EQ(compare(P, Changed, Settings).Matches.size(), 4u);
+  auto Strict = Settings;
+  Strict.MinimumSimilarity = 0.99;
+  EXPECT_EQ(compare(P, Changed, Strict).Matches.size(), 2u);
+  auto Invalid = P;
+  Invalid.CodeInitializers[1].Slot = Invalid.CodeInitializers[0].Slot;
+  EXPECT_TRUE(Invalid.validate());
+  Invalid = P;
+  Invalid.Identity.Bits = 0;
+  EXPECT_TRUE(Invalid.validate());
+  Invalid = P;
+  Invalid.CodeInitializers.back().Slot = UINT64_MAX;
+  EXPECT_TRUE(Invalid.validate());
+}
+
 TEST(BinaryDiff, UnknownAddressOperandDoesNotHideAKnownRetargeting) {
   const auto Input = [](bool Retarget) {
     ProgramBuilder B({});
@@ -3130,7 +3230,7 @@ TEST(BinaryDiff, SavedMeasurementsAreRecomputedBeforePublication) {
 }
 
 TEST(BinaryDiff, VocabularyRoundTrips) {
-  for (unsigned I = 0; I <= unsigned(FunctionStep::InlinedTailCall); ++I) {
+  for (unsigned I = 0; I <= unsigned(FunctionStep::Initializer); ++I) {
     const auto Step = static_cast<FunctionStep>(I);
     EXPECT_EQ(functionStepNamed(stepName(Step)), Step);
     EXPECT_FALSE(stepDescription(Step).empty());

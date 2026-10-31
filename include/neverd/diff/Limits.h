@@ -64,6 +64,9 @@ inline constexpr uint32_t kMinDataReferenceInstructions = 2;
 /// One address alone is too common to expose a local-layout permutation.
 /// Require distinct address-taken slots and an observed memory use of one.
 inline constexpr unsigned kMinStackRoleAddressedSlots = 2;
+/// A common callback alone cannot distinguish initializer neighborhoods.
+/// Require distinct independently paired targets before proposing other slots.
+inline constexpr unsigned kMinInitializerAnchors = 2;
 /// Largest group of functions sharing one feature that a drill-down splits by
 /// the next features.  Larger groups stay unresolved for context to split.
 inline constexpr size_t kMaxDrillDownGroup = 4096;
