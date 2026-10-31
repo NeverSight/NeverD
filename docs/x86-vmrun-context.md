@@ -70,6 +70,11 @@ of the compiler wrapper and runs in every guest. `--neverd-source` compiles
 the actual C exported by `LLVMCValues.VmrunContextKeepsGuestRegisterOutputs`;
 the test exports that artifact when `NEVERD_ISA_REGRESSION_ARTIFACT_DIR` is set.
 The evidence records the executed routes and binary hashes.
+Each profile additionally executes the same RCX-writing guest through the
+generated context, checking 0x5678 in the register bank and, for the NeverD
+routes, the exported function's actual return. The final five-route matrix
+therefore contains 490 generated-context round trips and ten independent
+original-byte counterexamples.
 
 This completes a native explicit GPR/user-xstate interface and its IR-to-C
 projection. **Ordinary strict lifting of raw VMRUN remains refused.** It still
