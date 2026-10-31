@@ -18,6 +18,13 @@ bool validState(symbolic::SymState &State, const RuntimeControlState &Controls,
                 const SpecializationOptions &Options);
 } // namespace neverd::analysis::x64::control
 
+namespace neverd::analysis::x64::readprefetch {
+/// Exact default-space read-hint shape. The residual and source retain the
+/// native hint; scalar evaluation neither reads nor writes guest memory.
+bool isOperation(const LowOp &Op);
+bool supportsOperation(const LowOp &Op, const SpecializationOptions &Options);
+} // namespace neverd::analysis::x64::readprefetch
+
 namespace neverd::analysis::x64::legacygs {
 llvm::Error validateOptions(const SpecializationOptions &Options);
 bool supportsOperation(const LowOp &Op, const SpecializationOptions &Options);

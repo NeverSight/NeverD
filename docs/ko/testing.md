@@ -2299,3 +2299,5 @@ LLVM C의 합성 스택 슬롯은 실행 중 선택한 64비트 절반을 읽기
 `AtomicSourceRequiresAnUnmodifiedSupportedReceipt`는 누락되거나 변경된 원자 증거와 미지원 CMPXCHG를 거부합니다. `ScalarAtomicsRetainTransactionsAndPhysicalState`는 독립적인 전체 상태·플래그·바이트 기대값으로 1/2/4/8바이트 XCHG, LOCK XADD, 비정렬 메모리와 반환 주소 별칭을 검사합니다. 사용자 및 커널 상태에서 두 C 경로를 O0/O2와 ASan/UBSan으로 실행합니다. `NeverDInterpreterMachineStateTests` 및 원시 환경, 특수화, 연속 소스, 소스 백엔드 테스트를 실행하세요. 경합이나 오류 동작을 인증하지는 않습니다.
 
 `InterpreterSpecialization.AlignmentProducersPrecedeWideGuardContexts` / `RuntimeValidityStillRefinesAnEnclosingGuard`: 정렬 회귀 검사는 독립 산술 오라클과 비교하여 두 정렬 경로, 모든 하위 비트 나머지, 넓은 카운트, 임계값 양쪽 및 부호 없는 래핑을 확인합니다. 잘못 정렬된 루프의 거부, 생성자 정밀화가 멈춘 뒤의 바깥 조건 정밀화, 정확한 한도와 하나 부족한 연산·쿼리 예산도 검사합니다. 일반 소스 ABI 복구나 네이티브 오류 동작을 증명하지는 않습니다.
+
+ReadPrefetch 회귀는 정확한 바이트와 피연산자 정보, 독립적인 미정의 출력·불투명 상태 증거, 잘못된 스칼라 계약과 변조된 원시 증거를 검사합니다. 두 C 경로는 네 종류와 반복 힌트를 보존하며 O0/O2 및 검사기로 독립적인 전체 상태·메모리 예상값과 비교합니다. 매핑되지 않은 주소, 32비트 주소 래핑과 실제 반환을 포함하며 캐시 배치와 시간은 비교하지 않습니다.

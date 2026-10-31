@@ -15,6 +15,7 @@
 #include "X86LegacyMemoryAudit.h"
 #include "X86LockedLogicAudit.h"
 #include "X86LockedUnary.h"
+#include "X86ReadPrefetchAudit.h"
 #include "X86XaddAudit.h"
 
 namespace neverd::nativestateaudit {
@@ -398,6 +399,8 @@ inline bool form(const cs_insn *Insn, Arch Target) {
     return swapgsForm(Insn, Target);
   if (Insn->id == X86_INS_PREFETCHW)
     return writePrefetchForm(Insn, Target);
+  if (readprefetchaudit::form(Insn, Target))
+    return true;
   if (Insn->id == X86_INS_CLAC || Insn->id == X86_INS_STAC)
     return accessCheckForm(Insn, Target);
   if (repTransferForm(Insn, Target))

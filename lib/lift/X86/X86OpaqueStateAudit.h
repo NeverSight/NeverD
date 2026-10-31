@@ -14,10 +14,11 @@ namespace neverd::opaqueaudit {
 // families affect scalar destinations, memory, flags or control, not the
 // closed LegacyIntegerOpaqueV1 banks. This separate frozen instruction-ID
 // audit is consumed ONLY after the shared strict legacy form check or the
-// separate exact SWAPGS/CPUID encoding checks. GS bases and MSRs, including
-// CPUID's IA32_BIOS_SIGN_ID update, are not in these closed opaque banks. It is
-// not undefined-output coverage. New forms require both audits separately;
-// adding an undefined-output instruction cannot silently extend this list.
+// separate exact SWAPGS/CPUID/read-prefetch encoding checks. GS bases and MSRs,
+// including CPUID's IA32_BIOS_SIGN_ID update, are not in these closed opaque
+// banks. It is not undefined-output coverage. New forms require both audits
+// separately; adding an undefined-output instruction cannot silently extend
+// this list.
 inline bool hasLegacyIntegerBankAudit(unsigned Id) {
   switch (Id) {
   case X86_INS_ADC:
@@ -94,6 +95,12 @@ inline bool hasLegacyIntegerBankAudit(unsigned Id) {
   case X86_INS_POPF:
   case X86_INS_POPFD:
   case X86_INS_POPFQ:
+  // Separately audited PREFETCHh read hints affect caches, not the closed
+  // x87/vector/control banks. The caller must authenticate their exact form.
+  case X86_INS_PREFETCHNTA:
+  case X86_INS_PREFETCHT0:
+  case X86_INS_PREFETCHT1:
+  case X86_INS_PREFETCHT2:
   case X86_INS_PUSH:
   case X86_INS_PUSHF:
   case X86_INS_PUSHFD:
