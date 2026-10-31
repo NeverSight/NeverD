@@ -781,6 +781,8 @@ x86VirtualizationMedShape(const MedOp &Op, Arch TargetArch = Arch::Unknown) {
     Shape.ScalarInputs[I] =
         isMedIntrinsicScalarInput(Input) || Input.Kind == MedVar::Param ||
         Input.Kind == MedVar::Stack || Input.Kind == MedVar::RetVal;
+    if (I == 1 && Input.isConst())
+      Shape.AddressWidth = Input.ConstVal;
     // TheArch names physical registers. EA/arithmetic temporaries are neutral
     // scalars, including the canonical 64-bit address carrier used on i386.
     if (Input.Kind == MedVar::Reg && Shape.TargetArch == Arch::Unknown)

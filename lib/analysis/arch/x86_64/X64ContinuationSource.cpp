@@ -13,6 +13,7 @@
 #include "X64ArchitecturalValues.h"
 #include "X64ContinuationEvents.h"
 #include "X64ContinuationFredReturns.h"
+#include "X64ContinuationSvm.h"
 #include "X64ContinuationSystemTransfers.h"
 #include "X64ContinuationUserInterrupts.h"
 #include "X64ControlTransitions.h"
@@ -27,6 +28,7 @@
 #include "neverd/ir/intrinsics/X86/X86SystemState.h"
 #include "neverd/ir/low/LowScalarConstant.h"
 #include "neverd/lift/X86/X86Regs.h"
+#include "neverd/lift/X86/X86SvmEncoding.h"
 
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringRef.h"
@@ -55,11 +57,16 @@ using StateV6 = X64ContinuationStateV6;
 using StateV7 = X64ContinuationStateV7;
 using StateV8 = X64ContinuationStateV8;
 using StateV9 = X64ContinuationStateV9;
+using StateV10 = X64ContinuationStateV10;
 using Segment = X64ContinuationSegment;
 using Exit = X64ContinuationExitV1;
 using Flags = detail::X64MachineFlags;
 constexpr uint64_t StatePointer = uint64_t{1} << 32;
 constexpr uint64_t ScratchBase = uint64_t{1} << 61;
+
+bool hasSvmState(const X64ContinuationSourceOptions &Options) {
+  return Options.Profile == X64ContinuationProfile::NativeSvmNoFaultV10;
+}
 
 bool hasFredReturnState(const X64ContinuationSourceOptions &Options) {
   return Options.Profile == X64ContinuationProfile::FredReturnNoFaultV9;
@@ -87,7 +94,7 @@ bool hasReturnState(const X64ContinuationSourceOptions &Options) {
 bool hasFaultAddressState(const X64ContinuationSourceOptions &Options) {
   return Options.Profile ==
              X64ContinuationProfile::KernelFaultAddressNoFaultV4 ||
-         hasReturnState(Options);
+         hasReturnState(Options) || hasSvmState(Options);
 }
 
 bool hasSmapState(const X64ContinuationSourceOptions &Options) {
@@ -162,6 +169,9 @@ static_assert(offsetof(StateV9, FredConfig) == 2544);
 static_assert(offsetof(StateV9, STIBlocked) == 2552);
 static_assert(offsetof(StateV9, PendingDebug) == 2553);
 static_assert(sizeof(StateV9) == 2560);
+static_assert(std::is_standard_layout_v<StateV10>);
+static_assert(offsetof(StateV10, SVM) == 2320);
+static_assert(sizeof(StateV10) == 2464);
 
 llvm::Error invalid(const llvm::Twine &Text) {
   return llvm::createStringError(llvm::errc::invalid_argument, "%s",
@@ -1055,7 +1065,9 @@ buildInstruction(SpecializationInstruction Instruction,
   const bool FastSystem = hasFastSystemState(Options);
   const bool UserInterruptState = hasUserInterruptState(Options);
   const bool FredReturnState = hasFredReturnState(Options);
-  Result.StateVersion = FredReturnState      ? 9
+  const bool SvmState = hasSvmState(Options);
+  Result.StateVersion = SvmState             ? 10
+                        : FredReturnState    ? 9
                         : UserInterruptState ? 8
                         : FastSystem         ? 7
                         : Events             ? 6
@@ -1064,7 +1076,8 @@ buildInstruction(SpecializationInstruction Instruction,
                         : Smap               ? 3
                         : Controls           ? 2
                                              : 1;
-  Result.StateBytes = FredReturnState      ? sizeof(StateV9)
+  Result.StateBytes = SvmState             ? sizeof(StateV10)
+                      : FredReturnState    ? sizeof(StateV9)
                       : UserInterruptState ? sizeof(StateV8)
                       : FastSystem         ? sizeof(StateV7)
                       : Events             ? sizeof(StateV6)
@@ -1072,7 +1085,8 @@ buildInstruction(SpecializationInstruction Instruction,
                       : FaultAddress       ? sizeof(StateV4)
                       : Controls           ? sizeof(StateV2)
                                            : sizeof(State);
-  Function.Name = (FredReturnState      ? "neverd_step_v9_"
+  Function.Name = (SvmState             ? "neverd_step_v10_"
+                   : FredReturnState    ? "neverd_step_v9_"
                    : UserInterruptState ? "neverd_step_v8_"
                    : FastSystem         ? "neverd_step_v7_"
                    : Events             ? "neverd_step_v6_"
@@ -1150,6 +1164,10 @@ buildInstruction(SpecializationInstruction Instruction,
                              InterpreterProfileProjection::X64FredReturnV1
           ? detail::x64FredReturn(Instruction.NativeBytes)
           : std::nullopt;
+  const auto Vmrun = SvmState && Instruction.ProfileProjection ==
+                                     InterpreterProfileProjection::X64SvmRunV1
+                         ? x64VmrunAddressWidth(Instruction.NativeBytes)
+                         : std::nullopt;
   if (FredReturnState && !FredReturn)
     RequireNative("the FRED return profile only owns canonical ERETS/ERETU");
   // These exact frame shapes have no unconditional empty undefined-output
@@ -1160,13 +1178,13 @@ buildInstruction(SpecializationInstruction Instruction,
       (Iret || FarReturn) &&
       Instruction.UndefinedEffects.Coverage == LowUndefinedCoverage::Missing &&
       Instruction.UndefinedEffects.Effects.empty();
-  if ((!FarPointer && !UserInterrupt && !FredReturn &&
+  if ((!FarPointer && !UserInterrupt && !FredReturn && !Vmrun &&
        (Instruction.ProfileProjection != InterpreterProfileProjection::None ||
         (!OwnedFrameReturn && Instruction.UndefinedEffects.Coverage !=
                                   LowUndefinedCoverage::Complete))) ||
       (Instruction.Origin.Control == LowInstructionControl::Terminator &&
        !Sysret && !Sysenter && !Sysexit && !Iret && !FarReturn && !Interrupt &&
-       !UserInterrupt && !FredReturn))
+       !UserInterrupt && !FredReturn && !Vmrun))
     RequireNative("instruction requires an explicit native environment");
   if (Instruction.UndefinedEffects.Effects.size() >
       std::size(State{}.Undefined))
@@ -1253,7 +1271,8 @@ buildInstruction(SpecializationInstruction Instruction,
       (Interrupt || FredReturn ||
        UserInterrupt == detail::X64UserInterrupt::Return)
           ? 0x3d7fd7
-      : (UserInterrupt || Iret || FarReturn || Sysret || Sysenter || Sysexit)
+      : (UserInterrupt || Iret || FarReturn || Sysret || Sysenter || Sysexit ||
+         Vmrun)
           ? 0x3d7ed7 // TF requires debug-trap delivery.
           : Flags::entryMask(flagsProfile(Options));
   Guard.emit(NdOp::INT_AND, FlagBits, {Packed, constant(~EntryFlags)});
@@ -1400,6 +1419,9 @@ buildInstruction(SpecializationInstruction Instruction,
   Writer W{Function, &Body, Options};
   if (Result.RequiresNativeExecution) {
     W.leave(Exit::NativeInstruction);
+  } else if (Vmrun) {
+    detail::X64ContinuationSvm<Writer>(W).execute(
+        *Vmrun, Instruction.Fallthrough.Address);
   } else if (FredReturn) {
     Result.CompatibilityChoices = detail::X64ContinuationFredReturns<Writer>(
                                       W, *Options.PagingAddressBits)

@@ -513,6 +513,9 @@ enum class Intrinsic : uint16_t {
   // Append-only: SYSENTER leaves through the environment's live entry MSRs.
   X86Sysenter,
 
+  // Append-only: returning VMEXIT with explicit software-managed state.
+  X86SvmRunContext,
+
   _Count = 16000
 };
 
@@ -614,6 +617,8 @@ struct X86VirtualizationContract {
 constexpr X86VirtualizationContract x86VirtualizationContract(Intrinsic Id) {
   using R = X86VirtualizationResult;
   switch (Id) {
+  case Intrinsic::X86SvmRunContext:
+    return {"vmrun.context", R::None, 2, 0, 144, false};
 #define NEVERD_X86_VIRTUALIZATION(Id, Mnemonic, Result, Arguments,             \
                                   MemoryArgument, MemoryBytes,                 \
                                   PhysicalAddress)                             \

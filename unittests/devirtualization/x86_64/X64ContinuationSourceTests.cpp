@@ -12,6 +12,7 @@
 #include "neverd/analysis/arch/x86_64/X64ContinuationSource.h"
 #include "neverd/backend/c/HighC/HighCEmitter.h"
 #include "neverd/backend/c/LLVMC/LLVMCEmitter.h"
+#include "neverd/backend/codegen/CodeGen.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/ir/high/MedToHigh.h"
 #include "neverd/ir/med/LowToMed.h"
@@ -24,6 +25,7 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Verifier.h"
@@ -326,6 +328,62 @@ void stepDispatcher(llvm::raw_ostream &OS, llvm::ArrayRef<va_t> Entries) {
        << llvm::utohexstr(Entries[I]) << "(state);\n";
   OS << "default: abort();\n}}\n";
 }
+TEST_F(X64ContinuationSourceTest, VmrunRequiresExplicitNativeSvmOwnership) {
+  run({0x0f, 0x01, 0xd8}, {0x1000}, R"C(
+int main(void) {
+  state_t s=seed(0x1000), prior=s;
+  CHECK(neverd_step_1000(ARG(&s))==4);
+  CHECK(memcmp(&s,&prior,sizeof(s))==0);
+  return 0;
+}
+)C",
+      true);
+  auto O = options();
+  O.Profile = X64ContinuationProfile::NativeSvmNoFaultV10;
+  auto Missing =
+      buildX64ContinuationSource(image({0x0f, 0x01, 0xd8}), {0x1000}, O);
+  EXPECT_FALSE(bool(Missing));
+  llvm::consumeError(Missing.takeError());
+  O.MXCSRMask = 0xffff;
+  for (const auto &Bytes : {std::vector<uint8_t>{0x66, 0x0f, 0x01, 0xd8},
+                            std::vector<uint8_t>{0xf3, 0x0f, 0x01, 0xd8},
+                            std::vector<uint8_t>{0xf0, 0x0f, 0x01, 0xd8}}) {
+    auto Unsupported = buildX64ContinuationSource(image(Bytes), {0x1000}, O);
+    EXPECT_FALSE(bool(Unsupported));
+    llvm::consumeError(Unsupported.takeError());
+  }
+}
+
+TEST_F(X64ContinuationSourceTest, VmrunNativeObjectRequiresMatchingSdk) {
+  auto O = options();
+  O.Profile = X64ContinuationProfile::NativeSvmNoFaultV10;
+  O.MXCSRMask = 0xffff;
+  auto Units =
+      buildX64ContinuationSource(image({0x0f, 0x01, 0xd8}), {0x1000}, O);
+  ASSERT_TRUE(bool(Units)) << llvm::toString(Units.takeError());
+  LowToMedConverter Convert;
+  const auto &Unit = Units->front();
+  const std::map<va_t, SourceFunctionTypeHint> Hints{
+      {Unit.Address, Unit.SourceABI}};
+  Convert.setSourceCallHintsEnabled(true);
+  Convert.setSourceEntryTypeHints(&Hints);
+  auto Med = Convert.convert(Unit.Function, Arch::X64);
+  Med.SourceTypeHint = Unit.SourceABI;
+  inferMedTypes(Med, Arch::X64);
+  llvm::LLVMContext Context;
+  auto Module = MedLLVMEmitter().emit({Med}, Context);
+  ASSERT_NE(Module, nullptr);
+  ASSERT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
+  const bool Native =
+      llvm::Intrinsic::lookupIntrinsicID("llvm.x86.vmrun.context");
+  const auto Object = Codegen().compile(*Module, Arch::X64, BinaryFormat::ELF);
+  EXPECT_EQ(Object.Success, Native);
+  EXPECT_EQ(Object.ObjectData.empty(), !Native);
+  const auto Rewritten =
+      Codegen().compileForRewrite(*Module, Arch::X64, {}, BinaryFormat::ELF);
+  EXPECT_EQ(Rewritten.ImageValid, Native);
+}
+
 } // namespace
 
 TEST_F(X64ContinuationSourceTest, IretMatchesNativeFramesFlagsAndSegments) {

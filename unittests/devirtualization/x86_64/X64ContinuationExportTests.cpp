@@ -19,6 +19,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cstdlib>
 #include <fstream>
 #include <iterator>
 #include <limits>
@@ -105,7 +106,8 @@ protected:
     } else if (const auto *Object = Parsed->getAsObject()) {
       EXPECT_EQ(Object->getInteger("schema_version"), 2);
       EXPECT_EQ(Object->getInteger("state_version"), Version);
-      EXPECT_EQ(Object->getInteger("state_bytes"), Version == 9   ? 2560
+      EXPECT_EQ(Object->getInteger("state_bytes"), Version == 10  ? 2464
+                                                   : Version == 9 ? 2560
                                                    : Version == 8 ? 2544
                                                    : Version == 7 ? 2528
                                                                   : 2496);
@@ -1328,4 +1330,6 @@ TEST_F(X64ContinuationExportTest,
     EXPECT_EQ(readOutput(Output), Source);
   }
 }
+#include "X64SvmContinuationExportTests.inc"
+
 } // namespace

@@ -207,6 +207,8 @@ renderX86VirtualizationExpression(Arch TargetArch, const HighExpr &Expression,
         E && E->Type &&
         (E->Type->Kind == NdTypeKind::Int || E->Type->Kind == NdTypeKind::Ptr);
     Shape.InputSizes[I] = E && E->Type ? E->Type->Size : 0;
+    if (I == 1 && E && E->Kind == ExprKind::Const)
+      Shape.AddressWidth = E->ConstVal;
     if (I == C.MemoryArgument && E && E->Type &&
         E->Type->Kind == NdTypeKind::Ptr)
       Shape.InputSizes[I] = 8;
@@ -215,6 +217,9 @@ renderX86VirtualizationExpression(Arch TargetArch, const HighExpr &Expression,
       Arguments.size() != C.Arguments)
     throw std::invalid_argument(
         "x86 virtualization expression has an invalid operand/output contract");
+  if (Id == Intrinsic::X86SvmRunContext)
+    return "__builtin_ia32_vmrun_context((void *)(" + Arguments[0] + "), " +
+           std::to_string(*Shape.AddressWidth) + ")";
   const auto Plan =
       x86VirtualizationAsm(Id, TargetArch, Shape.MemoryAddressSpace,
                            C.PhysicalAddress ? Shape.InputSizes[0] : 0);
