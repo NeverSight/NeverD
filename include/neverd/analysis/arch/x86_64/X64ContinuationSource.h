@@ -166,6 +166,21 @@ struct alignas(16) X64ContinuationStateV10 {
   X86SvmContext SVM;
 };
 
+/// V11 extends V4 with the complete long-mode bounds bank and supervisor MPX
+/// configuration. Upper bounds retain their stored (complemented) form.
+/// MPXSupported/OSXSAVE are Boolean snapshots; transactions are not admitted.
+struct alignas(16) X64ContinuationStateV11 {
+  X64ContinuationStateV4 Core;
+  uint64_t Bounds[4][2] = {};
+  uint64_t BNDCFGS = 0;
+  uint64_t BNDSTATUS = 0;
+  uint64_t XCR0 = 0;
+  uint8_t MPXSupported = 0;
+  uint8_t OSXSAVE = 0;
+  uint8_t InTransaction = 0;
+  uint8_t Reserved[5] = {};
+};
+
 enum class X64ContinuationExitV1 : uint64_t {
   Continue = 0,
   Call = 1,
@@ -197,6 +212,10 @@ enum class X64ContinuationExitV1 : uint64_t {
   /// Native VMRUN completed through VMEXIT. State.PC is its fallthrough. Stop
   /// before further host instructions; the VMM owns exit handling and GIF.
   SvmExit = 13,
+  /// MPX raised #BR before instruction completion. BNDSTATUS is published,
+  /// PC remains on the faulting instruction and no handler has executed.
+  /// The bounded driver counts this attempted step once and stops.
+  BoundsFault = 14,
 };
 
 enum class X64ContinuationProfile : uint8_t {
@@ -318,6 +337,15 @@ enum class X64ContinuationProfile : uint8_t {
   /// including VMEXIT_INVALID, stops the driver at status 13. This profile
   /// does not inherit Intel return domains or authorize an ordinary C ABI.
   NativeSvmNoFaultV10,
+  /// V4 plus explicit CPL0 MPX state. All seven qualified long-mode BND
+  /// instructions and original near-branch initialization are modeled with
+  /// successful sequential ordinary RAM accesses. Disabled MPX performs no
+  /// bounds or memory effects. #BR stops before exception delivery; page,
+  /// segment, alignment faults, transactions and asynchronous events are
+  /// outside this domain. Host MPX is disabled or has BNDPRESERVE set so
+  /// compiler-created branches cannot initialize the host bounds bank.
+  /// The explicit projection does not execute host MPX instructions.
+  MpxNoFaultV11,
 };
 
 /// Bind the original processor's null FS/GS load behavior. No vendor-wide
@@ -330,7 +358,7 @@ struct X64ContinuationSourceOptions {
   X64ContinuationProfile Profile = X64ContinuationProfile::Unspecified;
   std::optional<uint32_t> MXCSRMask;
   /// V5..V9 require 48 or 57 according to active paging, independently of
-  /// the processor's MSR canonical width. V1..V4 and V10 do not accept it.
+  /// the processor's MSR canonical width. V1..V4 and V10/V11 do not accept it.
   std::optional<unsigned> PagingAddressBits;
   /// V6 and later. Bind the actual original CPU's null LFS/LGS base transition.
   /// Without this declaration those loads reject before any state/RAM write

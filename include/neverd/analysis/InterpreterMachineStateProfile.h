@@ -59,6 +59,8 @@ enum class InterpreterProfileProjection : uint8_t {
   X64FredReturnV1,
   /// VMRUN requires the explicit native SVM state/environment contract.
   X64SvmRunV1,
+  /// Raw BND bytes require the explicit V11 bounds/configuration owner.
+  X64MpxV1,
 };
 
 } // namespace neverd::analysis

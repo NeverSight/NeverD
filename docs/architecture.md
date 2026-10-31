@@ -62,6 +62,13 @@ before rendering it; neither a mnemonic nor an intrinsic declaration alone
 authorizes an architectural register access. Both forms retain unknown memory
 effects, undefined arithmetic flags and native faults, including dead reads.
 
+`X86MpxSemantics.h` shares comparison and directory/table value recipes between
+the concrete owner and `X64ContinuationMpx.h` source lowering. The independent
+V11 layout carries bounds/configuration through both C routes; the raw MPX
+reader also owns original branch initialization classification. Neither source
+CFG optimization nor host MPX availability determines that original effect.
+Pending #BR publishes status and stops at the original PC before delivery.
+
 `ir/X86/X86MpxContext.h` owns concrete MPX enable evidence, the four bounds
 registers, BNDSTATUS and BDE/BTE address calculations. Unknown prerequisites
 remain unknown; a proven disabled prerequisite suppresses MPX effects without
@@ -86,9 +93,9 @@ Enabled operations require a known nontransactional context; an RTM/HLE
 checkpoint and abort continuation are not supplied by this state component.
 Original branch completion takes an explicit preserve/initialize effect;
 it does not infer an architectural branch from a transformed CFG edge.
-This component is a tested foundation, not yet a lifting/emission contract:
-strict MPX admission remains closed until original-transfer effects and
-memory completion are connected throughout the pipeline.
+The V11 continuation supplies a separate source contract for successful
+long-mode RAM and pending #BR, including original-transfer effects. Ordinary
+function-ABI lifting and transactional/faulting memory completion remain closed.
 
 The LLVM/NeverC native MPX APIs independently retain the ambient bounds bank.
 Their operands use allocated legacy-encodable carriers, preserving reserved

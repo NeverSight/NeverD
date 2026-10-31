@@ -16,6 +16,49 @@
 #include <cstddef>
 
 namespace neverd {
+
+std::optional<X86MpxBranch> x86MpxBranchEffect(llvm::ArrayRef<uint8_t> Bytes,
+                                               Arch Target) {
+  if (Target != Arch::X86 && Target != Arch::X64)
+    return std::nullopt;
+  uint8_t Repeat = 0;
+  size_t Offset = 0;
+  for (; Offset < Bytes.size(); ++Offset) {
+    const auto B = Bytes[Offset];
+    if (B == 0xf0)
+      return std::nullopt;
+    if (B == 0xf2 || B == 0xf3) {
+      if (Repeat)
+        return std::nullopt;
+      Repeat = B;
+    } else if (B != 0x66 && B != 0x67 && B != 0x26 && B != 0x2e && B != 0x36 &&
+               B != 0x3e && B != 0x64 && B != 0x65 &&
+               !(Target == Arch::X64 && B >= 0x40 && B <= 0x4f)) {
+      break;
+    }
+  }
+  if (Offset == Bytes.size())
+    return std::nullopt;
+  const auto Opcode = Bytes[Offset++];
+  if (Opcode == 0xeb || (Opcode >= 0xe0 && Opcode <= 0xe3) || Opcode == 0xca ||
+      Opcode == 0xcb || Opcode == 0xcf ||
+      (Target == Arch::X86 && (Opcode == 0x9a || Opcode == 0xea)))
+    return X86MpxBranch::Preserve;
+  bool Initialize = Opcode == 0xe8 || Opcode == 0xe9 || Opcode == 0xc2 ||
+                    Opcode == 0xc3 || (Opcode >= 0x70 && Opcode <= 0x7f);
+  if (Opcode == 0x0f && Offset < Bytes.size())
+    Initialize = Bytes[Offset] >= 0x80 && Bytes[Offset] <= 0x8f;
+  if (Opcode == 0xff && Offset < Bytes.size()) {
+    const auto Extension = (Bytes[Offset] >> 3) & 7;
+    if (Extension == 3 || Extension == 5)
+      return X86MpxBranch::Preserve;
+    Initialize = Extension == 2 || Extension == 4;
+  }
+  if (!Initialize)
+    return std::nullopt;
+  return Repeat == 0xf2 ? X86MpxBranch::Preserve : X86MpxBranch::Initialize;
+}
+
 namespace {
 
 x86_reg segmentRegister(uint8_t Prefix) {

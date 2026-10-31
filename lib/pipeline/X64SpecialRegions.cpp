@@ -12,6 +12,7 @@
 
 #include "neverd/analysis/arch/x86_64/X64ContinuationSource.h"
 #include "neverd/decode/Decoder.h"
+#include "neverd/lift/X86/X86MpxEncoding.h"
 #include "neverd/lift/X86/X86SvmEncoding.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/pipeline/Pipeline.h"
@@ -159,6 +160,24 @@ llvm::Expected<X64SpecialRegionSelection> selectX64SpecialRegions(
         }
         if (!Resumes.empty())
           Region["vmexit_successors"] = std::move(Resumes);
+      }
+      if (SourceOptions.Profile ==
+          analysis::X64ContinuationProfile::MpxNoFaultV11) {
+        llvm::json::Array Resumes;
+        for (va_t Address : Audit.UnsupportedInstructions) {
+          const auto Mpx =
+              decodeX86MpxEncoding(bytesAt(Image, Address), Arch::X64);
+          if (!Mpx || Mpx->Id == X86_INS_NOP)
+            continue;
+          const va_t Resume = Address + Mpx->Size;
+          if (Image.isCodeAddress(Resume)) {
+            if (auto Error = Enqueue(Resume, Depth))
+              return std::move(Error);
+            Resumes.push_back(hex(Resume));
+          }
+        }
+        if (!Resumes.empty())
+          Region["mpx_successors"] = std::move(Resumes);
       }
       Selection.Regions.push_back(std::move(Region));
     }

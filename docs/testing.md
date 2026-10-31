@@ -1460,6 +1460,26 @@ bytes through both assembly dialects. The processor-model test accepts the
 same flags; skipped QEMU behaviors remain separate from successful execution.
 These compiler tests do not open NeverD's strict MPX admission boundary.
 
+`X64ContinuationExportTest.Mpx*` in `NeverDX64ContinuationExportTests` exercises
+the [V11 source contract](x86-mpx-source.md) through HighC and LLVMC at O0/O2
+with address/undefined sanitizers. The forms matrix includes all bounds banks,
+ignored 67H, FS effects, unaligned BNDMOV, LOCK stores, enable combinations,
+unsigned checks, table-pointer mismatches, invalid BDE status and absent MIB
+base/index. Full state and RAM are compared with independent oracles. Separate
+tests cover original near CALL/RET/JMP/Jcc with BND/BNDPRESERVE, both Jcc
+outcomes, switch/direct dispatch, invalid-state refusal, entry selection and
+repair/resumption after pending #BR. These are explicit-state tests, not an
+ordinary function-ABI certificate.
+
+The forms test exports `mpx-{high,llvm}.c/.json` when
+`NEVERD_ISA_REGRESSION_ARTIFACT_DIR` is set. NeverC's
+`tests/neverc/X86/verify_mpx_continuation.py` accepts those files and runs actual
+exported source against independently assembled original bytes in QEMU TCG.
+It compares every bounds register, BNDSTATUS and RAM at successful and #BR
+boundaries, including disabled execution. Its qualification JSON lists QEMU
+limitations explicitly. `--backend-llc` and `--new-pm` exercise both full LLVM
+codegen pass managers in addition to NeverC's embedded backend.
+
 `NeverDX86MpxContextTests` checks the shared state foundation independently of
 host MPX availability: 324 enable-evidence combinations, 864 unsigned bounds
 comparisons, all 4,352 single-bit MAWA/CPL address cases, nonzero directory
@@ -1499,8 +1519,8 @@ load. A byte-RAM sequence checks BNDMK, spill/reload, table store/load, pointer
 mismatch initialization and boundary faults together. These provider tests
 qualify the portable single-instruction contract; they do not certify native
 fault delivery, original CALL/RET completion, IR state preservation or physical
-MPX hardware. Strict lifting remains closed until those integration boundaries
-are supplied.
+MPX hardware. V11 source integration has its own tests above; ordinary
+function-ABI lifting remains closed.
 
 `NeverDX86TBMTests` exercises all nine trailing-bit operations through full,
 lightweight and lift decoding, with 32/64-bit values, register aliases,
