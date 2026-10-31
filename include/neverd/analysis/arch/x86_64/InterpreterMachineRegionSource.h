@@ -105,6 +105,47 @@ static_assert(offsetof(InterpreterMachineRegionChoiceStateX64V1,
                        ChoiceCursor) == 448);
 static_assert(sizeof(InterpreterMachineRegionChoiceStateX64V1) == 456);
 
+/// Explicit segmented-memory inputs, separate from the V1 allocation.
+/// FSBase and GSBase are arbitrary long-mode bases, stable for this region.
+/// Their linear addresses may alias each other, the frame and any other guest
+/// memory. The entire state and both tapes retain V1's separation contract.
+/// No host segment state, operating-system layout or base mutation is implied.
+struct alignas(8) InterpreterMachineRegionChoiceStateX64V2 {
+  InterpreterMachineRegionChoiceStateX64V1 Core;
+  uint64_t FSBase = 0;
+  uint64_t GSBase = 0;
+};
+
+static_assert(
+    std::is_standard_layout_v<InterpreterMachineRegionChoiceStateX64V2>);
+static_assert(offsetof(InterpreterMachineRegionChoiceStateX64V2, Core) == 0);
+static_assert(offsetof(InterpreterMachineRegionChoiceStateX64V2, FSBase) ==
+              456);
+static_assert(offsetof(InterpreterMachineRegionChoiceStateX64V2, GSBase) ==
+              464);
+static_assert(sizeof(InterpreterMachineRegionChoiceStateX64V2) == 472);
+
+/// Separate kernel/PGE allocation with the complete V2 prefix. CR4 is a
+/// caller-supplied valid value under X64CR4PGEState's complete execution
+/// domain; it is never read from or written to the host processor.
+/// State/tape/guest separation and stability requirements apply to the entire
+/// allocation.
+struct alignas(8) InterpreterMachineRegionChoiceStateX64V3 {
+  InterpreterMachineRegionChoiceStateX64V2 Core;
+  uint64_t CR4 = 0;
+};
+
+enum class InterpreterMachineRegionControlStatusX64V3 : uint64_t {
+  /// A non-PGE CR4 change was refused before that instruction's effects.
+  Rejected = 7,
+};
+
+static_assert(
+    std::is_standard_layout_v<InterpreterMachineRegionChoiceStateX64V3>);
+static_assert(offsetof(InterpreterMachineRegionChoiceStateX64V3, Core) == 0);
+static_assert(offsetof(InterpreterMachineRegionChoiceStateX64V3, CR4) == 472);
+static_assert(sizeof(InterpreterMachineRegionChoiceStateX64V3) == 480);
+
 struct InterpreterMachineRegionSource {
   InterpreterMachineSource Source;
   /// Validated original environment and graph receipt, before source lowering.
@@ -163,6 +204,37 @@ wrapInterpreterMachineRegionSourceX64(
 /// This supplies executable raw-region source, not native-equivalence proof.
 llvm::Expected<InterpreterMachineRegionSource>
 wrapInterpreterMachineRegionChoiceSourceX64V1(
+    const SpecializationResult &Result, const SpecializationOptions &Expected,
+    const InterpreterMachineRegionSourceOptions &SourceOptions = {},
+    BinaryFormat SourceFormat = BinaryFormat::ELF);
+
+/// Requires the separate 472-byte state. In addition to V1 operations, admits
+/// authenticated X64SegmentedReads/Writes of 1/2/4/8 bytes at 64-bit offsets.
+/// Base plus offset wraps at 64 bits before the ordinary byte-aliasing access.
+/// Caller-owned nonfaulting memory premises still apply. FSBase/GSBase remain
+/// unchanged on every supplied exit; statuses and instruction reservations
+/// retain V1 semantics. Other architectural banks and base-changing operations
+/// are refused. This API does not obtain bases from the host or infer them.
+llvm::Expected<InterpreterMachineRegionSource>
+wrapInterpreterMachineRegionChoiceSourceX64V2(
+    const SpecializationResult &Result, const SpecializationOptions &Expected,
+    const InterpreterMachineRegionSourceOptions &SourceOptions = {},
+    BinaryFormat SourceFormat = BinaryFormat::ELF);
+
+/// Explicit KernelX64NoFaultV1 and X64CR4PGEState source, using the separate
+/// 480-byte V3 state. All V2 scalar/segmented operations retain their ordinary
+/// memory premises. Kernel flag transitions use the shared CPL0 rules;
+/// other architectural banks and the SMAP flag profile remain unsupported.
+/// Full CR4 reads and PGE-only writes use the raw owner's value transition.
+/// Instruction choice reservations precede effects. Status 7 names the original
+/// unexecuted CR4 write in PC, with ExitKind None, unchanged CR4 and choice
+/// cursor, and all preceding instructions committed. Reservation exhaustion
+/// or mismatch has priority over this control check. A successful region
+/// commits full CR4; other status meanings remain those of V1/V2.
+/// This is a scalar source abstraction in the declared stable-translation
+/// domain, without host control transfers, TLB effects or native proof.
+llvm::Expected<InterpreterMachineRegionSource>
+wrapInterpreterMachineRegionChoiceSourceX64V3(
     const SpecializationResult &Result, const SpecializationOptions &Expected,
     const InterpreterMachineRegionSourceOptions &SourceOptions = {},
     BinaryFormat SourceFormat = BinaryFormat::ELF);

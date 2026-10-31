@@ -5702,6 +5702,11 @@ bool LLVMCWriter::cursorForLoop(const llvm::BasicBlock *Header,
   const auto *Br = llvm::dyn_cast<llvm::CondBrInst>(Header->getTerminator());
   if (!Br || Br->getSuccessor(0) == Br->getSuccessor(1))
     return false;
+  // This printer replaces the header with its condition expression. Keep the
+  // complete block when it contains effects or materialized value producers.
+  for (const llvm::Instruction &Inst : *Header)
+    if (!Inst.isTerminator() && instructionIsPrinted(Inst))
+      return false;
   auto ReachesBlock = [&](const llvm::BasicBlock *Start,
                           const llvm::BasicBlock *Target) {
     if (!Start || !Target)
@@ -5831,6 +5836,7 @@ void LLVMCWriter::writeCursorFor(const llvm::BasicBlock *Header,
                                  const llvm::BasicBlock *Exit,
                                  const llvm::BasicBlock *Body,
                                  const llvm::AllocaInst *Slot, int Indent) {
+  writeBlockLabel(*Header);
   const auto *Br = llvm::cast<llvm::CondBrInst>(Header->getTerminator());
   const auto SavedLast = AllocaLastValues;
   const auto SavedImm = AllocaImmediates;
@@ -5917,7 +5923,7 @@ void LLVMCWriter::writeCursorFor(const llvm::BasicBlock *Header,
   InlinedFallthroughBlocks.insert(Latch);
   emitIndent(Indent);
   OS << "}\n";
-  (void)Exit;
+  writeGoto(Header, Exit, Indent, !joinPrintsNext(Header, Exit));
 }
 
 namespace {

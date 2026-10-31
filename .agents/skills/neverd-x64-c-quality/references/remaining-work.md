@@ -21,6 +21,14 @@ configurations remain separate coverage.
 
 ## Open
 
+LLVMC's late conditional fold now requires its body to follow the current
+block in LLVM layout. An earlier body may already have inlined an exit;
+duplicating only its branch could emit a goto without that exit's label.
+Owned execution regressions cover both layouts, reversed arms, shared and
+separate returns, both type projection modes and O0/O2 with UBSan. This closes
+that control-flow ownership gap; it does not establish an ordinary ABI for
+arbitrary recovered machine-state regions.
+
 HighC's Win64 saved-parameter aliases now stop at every new SSA definition,
 including register COPYs, PHIs and conditional call clobbers. A version-zero
 local or PHI definition is not an entry argument. Native/source execution tests
@@ -54,6 +62,16 @@ External transfers and all context transitions remain stopping boundaries.
 This closes the dispatch-composition gap; proving alias-dependent ordinary
 parameters and running complete kernel entries in their live environment remain
 separate obligations.
+
+Special state regions now optionally discover direct callees with bounded
+`callee_depth`, deduplicating bodies and original instructions. `dispatch:
+"direct"` links adjacent selected steps only after checking the actual PC;
+callbacks, changed stacks, arbitrary argument bytes and native/context exits
+retain their effects. The implementation is isolated in `X64SpecialRegions`.
+Public tests compare both drivers and execute original native caller/callee
+bytes with an untouched argument slot and an observing mutation. This extends
+the usable explicit-state path; conditional ordinary-call effects and automatic
+mixing of ordinary C with state regions remain open.
 
 Manifest schema 2 names entry-region selection facts `lowir_*` and records
 `ordinary_source_validation: "not-run"`. Selection defers MedIR; an accepted
@@ -965,6 +983,13 @@ conditional memory, invocation lifetime and both C routes remain open.
   expressions. Independent LLVM comparisons at O0/O2 run with undefined-behavior
   traps. Debug/image/composed projections and broader source naming still need
   their own evidence and cleanup.
+
+- The legacy LLVMC cursor-loop printer now keeps the full block when a
+  header contains printed effects or materialized producers. Accepted loops
+  register their header labels and preserve the actual exit edge, including
+  reordered block layouts. An owned execution matrix covers both projection
+  modes at O0/O2 with undefined-behavior checks. More complex cursor-region
+  recognition still relies on the existing control-flow fallback.
 
 - LLVMC plans complete bounded integer CFGs before printing nested header
   loops and conditionals. Edge PHIs retain simultaneous semantics; liveness

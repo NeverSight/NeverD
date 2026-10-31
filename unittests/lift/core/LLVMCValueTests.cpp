@@ -5363,6 +5363,191 @@ int main(void) {
     compileAndRun(Source, Optimization, {}, true);
 }
 
+TEST(LLVMCValues, ReorderedConditionalBlocksRetainEveryExit) {
+  for (bool SharedReturn : {false, true})
+    for (bool ReverseArms : {false, true})
+      for (bool EarlyDispatch : {false, true})
+        for (bool PreserveTypes : {false, true}) {
+          SCOPED_TRACE(SharedReturn);
+          SCOPED_TRACE(ReverseArms);
+          SCOPED_TRACE(EarlyDispatch);
+          SCOPED_TRACE(PreserveTypes);
+          std::string IR = R"(
+            target datalayout = "e-p:64:64"
+            define i64 @guarded_read(i1 %skip, i1 %read, ptr %out) {
+            entry:
+              br label %guard
+            dispatch:
+              br i1 %read, label %loaded, label %stored
+            guard:
+              br i1 %skip, label %done, label %dispatch
+            stored:
+              store i64 41, ptr %out
+              STORE_EXIT
+            loaded:
+              %value = load i64, ptr %out
+              ret i64 %value
+            done:
+              ret i64 23
+            }
+          )";
+          IR.replace(IR.find("STORE_EXIT"),
+                     llvm::StringRef("STORE_EXIT").size(),
+                     SharedReturn ? "br label %loaded" : "ret i64 17");
+          llvm::LLVMContext Context;
+          llvm::SMDiagnostic Diagnostic;
+          auto Module = llvm::parseAssemblyString(IR, Diagnostic, Context);
+          ASSERT_TRUE(Module);
+          auto *Function = Module->getFunction("guarded_read");
+          llvm::BasicBlock *Dispatch = nullptr;
+          llvm::BasicBlock *Guard = nullptr;
+          for (auto &Block : *Function) {
+            if (Block.getName() == "dispatch")
+              Dispatch = &Block;
+            if (Block.getName() == "guard")
+              Guard = &Block;
+          }
+          ASSERT_TRUE(Dispatch && Guard);
+          if (!EarlyDispatch)
+            Dispatch->moveAfter(Guard);
+          if (ReverseArms)
+            llvm::cast<llvm::CondBrInst>(Dispatch->getTerminator())
+                ->swapSuccessors();
+          ASSERT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
+          neverd::CEmitterOptions Options;
+          Options.PreserveLLVMFunctionTypes = PreserveTypes;
+          std::string Source;
+          llvm::raw_string_ostream Output(Source);
+          ASSERT_TRUE(neverd::LLVMCEmitter().emit(*Module, Output, Options));
+          Source += "\n#define SHARED_RETURN " + std::to_string(SharedReturn) +
+                    "\n#define REVERSE_ARMS " + std::to_string(ReverseArms) +
+                    R"(
+int main(void) {
+  const uint64_t values[] = {0, 1, UINT64_MAX, UINT64_C(0xfedcba9876543210)};
+  for (unsigned skip = 0; skip != 2; ++skip)
+    for (unsigned read = 0; read != 2; ++read)
+      for (unsigned i = 0; i != sizeof(values) / sizeof(*values); ++i) {
+        uint64_t words[] = {19, values[i], 29};
+        int loads = REVERSE_ARMS ? !read : read;
+        uint64_t expected = skip ? 23 : loads ? values[i] : SHARED_RETURN ? 41 : 17;
+        if (guarded_read(skip, read, words + 1) != expected) return 1;
+        if (words[1] != (skip || loads ? values[i] : 41)) return 2;
+        if (words[0] != 19 || words[2] != 29) return 3;
+      }
+  if (guarded_read(1, 0, 0) != 23 || guarded_read(1, 1, 0) != 23) return 4;
+  return 0;
+}
+)";
+          for (const char *Level : {"-O0", "-O2"})
+            compileAndRun(Source, Level, {}, true);
+        }
+}
+
+TEST(LLVMCValues, CursorLoopsKeepHeaderEffectsAndEntryLabels) {
+  for (bool HeaderEffects : {false, true})
+    for (bool ReloadCurrent : {false, true})
+      for (bool ReorderBlocks : {false, true})
+        for (bool PreserveTypes : {false, true}) {
+          SCOPED_TRACE(HeaderEffects);
+          SCOPED_TRACE(ReloadCurrent);
+          SCOPED_TRACE(ReorderBlocks);
+          SCOPED_TRACE(PreserveTypes);
+          std::string IR = R"(
+          target datalayout = "e-p:64:64"
+          declare void @record_cursor(i64)
+          define i64 @cursor_loop(i64 %limit, i1 %run, ptr %out, ptr %seen) {
+          entry:
+            %cursor = alloca i64
+            store i64 0, ptr %cursor
+            br i1 %run, label %header, label %early
+          header:
+            %current = load i64, ptr %cursor
+            HEADER_EFFECTS
+            %more = icmp ult i64 %current, %limit
+            br i1 %more, label %body, label %exit
+          body:
+            store i64 %current, ptr %out
+            br label %latch
+          latch:
+            %next = add i64 %current, 1
+            store i64 %next, ptr %cursor
+            br label %header
+          exit:
+            ret i64 %current
+          early:
+            ret i64 19
+          }
+        )";
+          IR.replace(IR.find("HEADER_EFFECTS"),
+                     llvm::StringRef("HEADER_EFFECTS").size(),
+                     HeaderEffects ? "call void @record_cursor(i64 %current)\n"
+                                     "store i64 %current, ptr %seen"
+                                   : "");
+          if (ReloadCurrent) {
+            auto Replace = [&](llvm::StringRef Before, llvm::StringRef After) {
+              auto At = IR.find(Before.str());
+              ASSERT_NE(At, std::string::npos);
+              IR.replace(At, Before.size(), After.str());
+            };
+            Replace("store i64 %current, ptr %out",
+                    "%body_current = load i64, ptr %cursor\n"
+                    "store i64 %body_current, ptr %out");
+            Replace("%next = add i64 %current, 1",
+                    "%latch_current = load i64, ptr %cursor\n"
+                    "%next = add i64 %latch_current, 1");
+            Replace("ret i64 %current",
+                    "%exit_current = load i64, ptr %cursor\n"
+                    "ret i64 %exit_current");
+          }
+          llvm::LLVMContext Context;
+          llvm::SMDiagnostic Diagnostic;
+          auto Module = llvm::parseAssemblyString(IR, Diagnostic, Context);
+          ASSERT_TRUE(Module);
+          auto *Function = Module->getFunction("cursor_loop");
+          if (ReorderBlocks) {
+            Function->back().moveAfter(&Function->getEntryBlock());
+            for (auto &Block : *Function)
+              if (Block.getName() == "exit") {
+                Block.moveAfter(&Function->getEntryBlock());
+                break;
+              }
+          }
+          ASSERT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
+          neverd::CEmitterOptions Options;
+          Options.PreserveLLVMFunctionTypes = PreserveTypes;
+          std::string Source;
+          llvm::raw_string_ostream Output(Source);
+          ASSERT_TRUE(neverd::LLVMCEmitter().emit(*Module, Output, Options));
+          Source +=
+              "\n#define HEADER_EFFECTS " + std::to_string(HeaderEffects) + R"(
+static uint64_t visits, trace;
+void record_cursor(uint64_t value) {
+  ++visits;
+  trace = trace * UINT64_C(31) + value;
+}
+int main(void) {
+  for (uint64_t limit = 0; limit < 8; ++limit)
+    for (unsigned run = 0; run != 2; ++run) {
+      uint64_t out = 71, seen = 73, expected_trace = 0;
+      visits = trace = 0;
+      uint64_t result = cursor_loop(limit, run, &out, &seen);
+      if (result != (run ? limit : 19)) return 1;
+      if (out != (run && limit ? limit - 1 : 71)) return 2;
+      if (seen != (HEADER_EFFECTS && run ? limit : 73)) return 3;
+      if (visits != (HEADER_EFFECTS && run ? limit + 1 : 0)) return 4;
+      if (HEADER_EFFECTS && run)
+        for (uint64_t i = 0; i <= limit; ++i)
+          expected_trace = expected_trace * UINT64_C(31) + i;
+      if (trace != expected_trace) return 5;
+    }
+  return 0;
+}
+)";
+          for (const char *Level : {"-O0", "-O2"})
+            compileAndRun(Source, Level, {}, true);
+        }
+}
+
 TEST(LLVMCValues, LargeLoopProjectionPreservesAliasedObservations) {
   llvm::LLVMContext Context;
   llvm::Module Module("loop-projection", Context);

@@ -4,7 +4,64 @@
 
 `NeverDLLVMCValueTests` compiles and executes a recast variadic call against a separate Windows x64 ABI callee at O0/O2, with preserved LLVM types enabled and disabled. Native x64 hosts verify the floating value through the callee’s variadic argument reader; other architectures explicitly skip that execution.
 
+`LLVMCValues.CursorLoopsKeepHeaderEffectsAndEntryLabels` compiles and executes
+cursor loops at O0/O2 with undefined-behavior checks. Conditional entry,
+reordered blocks, zero iterations, materialized header values and header
+calls/stores retain their execution sites. The matrix covers preserved LLVM
+function types and the default projection, including loops whose header can
+still be represented by a condition expression.
+
+`LLVMCValues.ReorderedConditionalBlocksRetainEveryExit` executes nested tests
+with both forward and backward block layouts, reversed arms, separate and
+shared returns, and both LLVM type projection modes. O0/O2 builds with UBSan
+check every branch, output memory and an early return with a null pointer.
+Late conditional folding cannot consume a block that the statement walk has
+already printed with its own inlined exits.
+
 [← Documentation Index](README.md)
+
+`X64ContinuationExportTest.SpecialCallRegionsKeepUninitializedArgumentSlotsAndTheirAliases`
+executes a caller with a missing sixth source argument and a callee mutation
+that observes its physical bytes. Both C routes at O0/O2 with ASan/UBSan retain
+the untouched slot, complete stack effects and original CALL/RET behavior.
+Linux x64 additionally executes the independently authored native bytes on a
+test stack; other hosts retain only the compiled-state checks. Recursive
+discovery deduplicates bodies, and union-budget exhaustion publishes no source.
+`DirectSpecialDispatchMatchesEveryPhysicalStopAndBudget` compares full state,
+memory and exit/budget results of switch and direct dispatch across every
+selected entry, outside PCs, invalid state, stack pivots and 0..34 steps.
+These checks establish neither ordinary ABI simplification nor complete kernel
+execution.
+
+`InterpreterSpecialization.AlignmentFactorsIndependentFinitePayload`,
+`AlignmentFactorDoesNotInventIndependence` and
+`AlignmentPairsRetainFrameSlotCorrelation` check alignment relations across
+joins and loops when another finite field exceeds the full tuple cap. They
+compare an independent arithmetic oracle for arbitrary pointer high bits,
+modular wraparound and every payload value; invalid incoming arms remain
+refused. Register/frame carriers, chaining and exact/short operation and query
+budgets use the specialization suite. The core retains only exhaustive pair
+projections and widens missing predecessor facts; these checks do not certify
+ordinary source ABIs or native fault behavior.
+
+`InterpreterSpecialization.UnsignedRanges*` checks bounded subtraction across
+recovery cuts, register/frame carriers and masked values with unrelated high
+payload bits. Unsigned bounds require exhaustive Boolean proofs; joins widen
+moving endpoints and drop missing predecessor facts. Reachable modular
+underflow and out-of-range branches must remain refused. Exact/short operation
+and query limits cover the added proof work; recovered results are compared
+with independent arithmetic expectations.
+Frame-derived addresses keep their relative-frame proofs; the existing frame
+fallback regression must finish without increasing its query allowance.
+
+`InterpreterMachineRegionSourceTest.RepeatedTransfersRetainRuntimeDirectionAndOverlap`
+executes bounded MOVS/STOS in both directions through HighC and LLVMC at O0/O2,
+comparing full state and every byte against an independent ordered copy oracle.
+The user profile covers four element widths and overlapping buffers; the
+kernel choice profile covers its audited REP MOVSQ encoding and retains
+rejection of other forms. Unknown counts remain refused; zero-count and exact
+operation/scratch budgets are covered by `StringTransfer.*` and
+`X86NativeStateAudit.Rep*`.
 
 `SourceStackSpills.StackParametersTrackEntryBytesAcrossOverwrites` and
 `StackParameterOverwritesMeetAcrossEveryPath` distinguish incoming stack bytes
@@ -17688,3 +17745,13 @@ source but do not qualify privileged execution.
 `MedMutableSource.SharedRejectionChainsPreserveEveryCommittedPrefix` checks a 2048-stage conditional chain with two shared rejection exits in forward and reversed block layouts. Both C routes run at O0/O2 with UBSan, comparing return values and committed guest-memory prefixes at early, middle and final failures and on success.
 
 `X86ArithmeticUndefinedAudit` in `NeverDX86UndefinedEffectsTests` checks exact legacy register PADDB/W/D/Q and PSUBB/W/D/Q encodings, independent lane wraparound, unchanged flags and complete 512-bit register banks. Canonical x64 immediate IMUL forms bind sign-extended imm8/imm32 values and four independent undefined flags. Memory, MMX/VEX and inconsistent byte/detail forms retain their separate admission requirements. `ArchitecturalChoiceSourcePackedArithmeticAndImmediateProducts` executes both C routes at O0/O2 with ASan/UBSan, checking whole-instruction exhaustion and mismatches before destination or cursor commit.
+
+`X86PackedSelectionAudit` checks canonical register PSHUFD, PCMPEQD, PAND, PACKSSDW/PACKSSWB, PUNPCKLQDQ and MOVMSKPD: all 256 shuffle controls, signed saturation boundaries, partial equality, register aliases, complete vector banks and preserved flags. Legacy memory PAND keeps the [Intel-defined alignment requirement](https://cdrdv2-public.intel.com/671436/253665-sdm-vol-1.pdf) before reading memory or changing the destination; `X86LegacyAlignedMove.PackedAnd*` checks address wrapping, explicit FS/GS bases, missing memory and unchanged state on failure. The choice-source fixture executes both C routes at O0/O2 with ASan/UBSan and retains the dynamic alignment guard. These checks do not certify opaque processor state.
+
+`InterpreterMachineRegionSourceTest.SegmentedChoiceSource*` executes explicit FS/GS bases through both C routes at O0/O2 with ASan/UBSan. Independent byte oracles compare complete state, overlapping memory and return cells, wrapped addresses, query/choice reservations and unchanged tapes. Authentication, V1 refusal, operation budgets and unsupported architectural banks retain negative coverage. Run `NeverDInterpreterMachineStateTests` with raw-environment, fixed-image and continuation-source suites; these owned programs do not certify native kernel execution.
+
+`X86NativeStateAudit.CR4*` checks 48 admitted CR4 transfer encodings and 34 mismatched byte/detail pairs. The tests require six arbitrary arithmetic flags, unchanged native intrinsics and no opaque-state preservation certificate. `CR4FlagCoverageDoesNotAuthorizeMachineRegionExecution` keeps source recovery closed without a control-state contract. These tests decode and lift owned bytes; they execute no privileged instructions.
+
+`PageGlobal*` checks in the interpreter, raw-region and proof suites cover unknown high bits, both branch outcomes, read/write relations, all 63 forbidden control-bit changes, other-bank preservation, malformed operands, budgets and environment identity. Run `NeverDInterpreterSpecializationTests`, `NeverDInterpreterMachineStateTests`, `NeverDLowIRRefinementTests` and `NeverDInterpreterLLVMRefinementTests`; these are value-model checks, not privileged hardware execution.
+
+`KernelPageGlobalSource*` in `NeverDInterpreterMachineStateTests` checks complete state, return stacks, CR4 read/write relations, every short or mismatched instruction reservation, and supervisor POPFQ/CLI/STI flag rules in HighC and LLVMC at O0/O2 with ASan/UBSan. Domain, earlier-layout and budget refusals remain explicit. Tests execute generated scalar C, not privileged instructions.

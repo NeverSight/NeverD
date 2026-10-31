@@ -92,7 +92,25 @@ bool liftLegacySSEInt(X86Lifter &L, X86Lifter::LiftState &S,
     if (X86.op_count < 2)
       break;
     NdVar Dst = L.operandWrite(X86.operands[0]);
-    NdVar Src = L.operandRead(S, X86.operands[1]);
+    NdVar Src;
+    if (InsnId == X86_INS_PAND && Dst.Size == 16 &&
+        X86.operands[1].type == X86_OP_MEM) {
+      // Legacy 128-bit integer memory operands require 16-byte alignment.
+      // Check the resolved address before reading memory or changing Dst.
+      if (X86.op_count != 2 || X86.operands[0].type != X86_OP_REG ||
+          X86.operands[1].size != Dst.Size)
+        return false;
+      const auto &Memory = X86.operands[1];
+      const NdVar Address = S.computeEA(Memory);
+      const auto Space = X86Lifter::LiftState::memoryAddressSpace(Memory);
+      S.emitIntrinsic(Intrinsic::RequireAligned, {},
+                      {Address, NdVar::scalar(Dst.Size, 8)},
+                      NdMemoryOrdering::None, Space);
+      Src = S.makeTemp(Dst.Size);
+      S.emit(NdOp::LOAD, Src, {Address}, NdMemoryOrdering::None, Space);
+    } else {
+      Src = L.operandRead(S, X86.operands[1]);
+    }
     NdOp Opc = NdOp::COPY;
     switch (InsnId) {
     case X86_INS_XORPS:

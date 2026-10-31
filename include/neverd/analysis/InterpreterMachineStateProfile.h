@@ -27,7 +27,7 @@ enum class InterpreterMachineStateProfile : uint8_t {
   /// every POPFQ image must keep TF, AC and IOPL zero. IF is writable and is
   /// included in the mandatory final system-state observation. Rejection of
   /// a nonzero TF/AC/IOPL image restricts this profile, not hardware semantics.
-  /// This native-proof profile supplies no kernel API, IRQL, resource,
+  /// This profile alone supplies no kernel API, IRQL, resource,
   /// exception-dispatch or source-ABI evidence. User machine-source projection
   /// continues to reject it rather than applying CPL=3 semantics.
   KernelX64NoFaultV1,

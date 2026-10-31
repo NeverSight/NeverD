@@ -95,13 +95,67 @@ inline bool byteShiftForm(const cs_insn *Insn, Arch Target) {
          !X.operands[1].avx_zero_opmask;
 }
 
+// Canonical register PSHUFD and MOVMSKPD have different destination widths
+// and immediate layouts. Bind both to bytes before admitting their effects.
+inline bool selectionForm(const cs_insn *Insn, Arch Target) {
+  const bool Shuffle = Insn->id == X86_INS_PSHUFD;
+  if ((Target != Arch::X86 && Target != Arch::X64) ||
+      (!Shuffle && Insn->id != X86_INS_MOVMSKPD) || Insn->size < 4 ||
+      Insn->size > 6 || Insn->bytes[0] != 0x66)
+    return false;
+  const auto &X = Insn->detail->x86;
+  size_t Pos = 1;
+  uint8_t Rex = 0;
+  if (Target == Arch::X64 && Insn->bytes[Pos] >= 0x40 &&
+      Insn->bytes[Pos] <= 0x4f)
+    Rex = Insn->bytes[Pos++];
+  const uint8_t Opcode = Shuffle ? 0x70 : 0x50;
+  if ((Rex & 0x0a) || Pos + 3 + unsigned(Shuffle) != Insn->size ||
+      Insn->bytes[Pos] != 0x0f || Insn->bytes[Pos + 1] != Opcode)
+    return false;
+  const auto ModRM = Insn->bytes[Pos + 2];
+  if ((ModRM >> 6) != 3 || X.op_count != (Shuffle ? 3 : 2) ||
+      X.opcode[0] != 0x0f || X.opcode[1] != Opcode || X.opcode[2] ||
+      X.opcode[3] || X.modrm != ModRM || X.rex != Rex ||
+      X.addr_size != (Target == Arch::X64 ? 8 : 4) || X.prefix[0] ||
+      X.prefix[1] || X.prefix[2] != 0x66 || X.prefix[3] ||
+      X.encoding.modrm_offset != Pos + 2 || X.encoding.disp_offset ||
+      X.encoding.disp_size || X.disp || X.sib ||
+      X.encoding.imm_offset != (Shuffle ? Pos + 3 : 0) ||
+      X.encoding.imm_size != unsigned(Shuffle) || X.avx_sae ||
+      X.avx_rm != X86_AVX_RM_INVALID || X.avx_cc != X86_AVX_CC_INVALID ||
+      X.eflags)
+    return false;
+  for (unsigned I = 0; I != 2; ++I) {
+    const auto &Operand = X.operands[I];
+    const bool Vector = I || Shuffle;
+    const unsigned Number = I ? (ModRM & 7) + ((Rex & 1) ? 8 : 0)
+                              : ((ModRM >> 3) & 7) + ((Rex & 4) ? 8 : 0);
+    const auto Register = mapCapstoneReg(static_cast<x86_reg>(Operand.reg));
+    const unsigned Bytes = Vector ? 16 : 4;
+    if (Operand.type != X86_OP_REG || Operand.size != Bytes ||
+        Register.Size != Bytes ||
+        Register.Offset != (Vector ? x86reg::vectorReg(Number) : Number * 8) ||
+        Operand.avx_bcast != X86_AVX_BCAST_INVALID || Operand.avx_zero_opmask)
+      return false;
+  }
+  if (!Shuffle)
+    return true;
+  const auto &Immediate = X.operands[2];
+  return Immediate.type == X86_OP_IMM && Immediate.size == 1 &&
+         Immediate.imm == Insn->bytes[Pos + 3] &&
+         Immediate.avx_bcast == X86_AVX_BCAST_INVALID &&
+         !Immediate.avx_zero_opmask;
+}
+
 // Intel SDM Vol. 2B: packed moves copy all 128 bits. MOVSS/MOVSD copy the low
 // scalar, merging register destinations or clearing the remaining XMM bits
 // for memory loads. Legacy writes preserve higher vector bits and flags.
 // This is only undefined-output coverage, not a preserved-opaque-bank audit.
 // Aligned forms retain the lifter-owned guard in the bound operation span.
 inline bool form(const cs_insn *Insn, Arch Target) {
-  if (scalarRegisterMoveForm(Insn, Target) || byteShiftForm(Insn, Target))
+  if (scalarRegisterMoveForm(Insn, Target) || byteShiftForm(Insn, Target) ||
+      selectionForm(Insn, Target))
     return true;
   const auto &X = Insn->detail->x86;
   if (X.op_count != 2 || Insn->size > 15)
@@ -109,6 +163,38 @@ inline bool form(const cs_insn *Insn, Arch Target) {
   uint8_t RequiredPrefix = 0, LoadOpcode = 0, StoreOpcode = 0;
   unsigned MemoryBytes = 16;
   switch (Insn->id) {
+  case X86_INS_PCMPEQD:
+  case X86_INS_PACKSSDW:
+  case X86_INS_PACKSSWB:
+  case X86_INS_PUNPCKLQDQ:
+  case X86_INS_PAND:
+    // These integer selections preserve flags and the upper vector bits.
+    // Only PAND memory forms have a bound alignment guard in this audit.
+    if ((Insn->id != X86_INS_PAND && X.operands[1].type != X86_OP_REG) ||
+        X.eflags)
+      return false;
+    RequiredPrefix = 0x66;
+    switch (Insn->id) {
+    case X86_INS_PCMPEQD:
+      LoadOpcode = 0x76;
+      break;
+    case X86_INS_PACKSSDW:
+      LoadOpcode = 0x6b;
+      break;
+    case X86_INS_PACKSSWB:
+      LoadOpcode = 0x63;
+      break;
+    case X86_INS_PUNPCKLQDQ:
+      LoadOpcode = 0x6c;
+      break;
+    case X86_INS_PAND:
+      LoadOpcode = 0xdb;
+      break;
+    default:
+      llvm_unreachable("audited packed selection operation");
+    }
+    StoreOpcode = LoadOpcode;
+    break;
   case X86_INS_PADDB:
   case X86_INS_PADDW:
   case X86_INS_PADDD:

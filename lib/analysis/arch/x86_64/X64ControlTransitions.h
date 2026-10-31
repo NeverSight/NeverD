@@ -63,4 +63,23 @@ lowerOperation(const LowOp &Op, const SpecializationOptions &Options,
                llvm::function_ref<NdVar(uint16_t)> Temporary);
 } // namespace neverd::analysis::x64::alignment
 
+namespace neverd::analysis::x64::pageglobal {
+enum class Operation { Read, Write };
+std::optional<Operation> describeOperation(const LowOp &Op);
+llvm::Error validateOptions(const SpecializationOptions &Options);
+bool supportsOperation(const LowOp &Op, const SpecializationOptions &Options);
+/// PGE-only scalar value transition. The caller must supply the complete
+/// execution domain and prove Rejected is zero before committing effects.
+/// Slot and allocated temporaries must be fresh and disjoint from each other
+/// and the instruction's temporaries, as in the owning recovery allocator.
+std::optional<RuntimeControlTransition>
+lowerScalarOperation(const LowOp &Op, NdVar Slot,
+                     llvm::function_ref<NdVar(uint16_t)> Temporary);
+std::optional<RuntimeControlTransition>
+lowerOperation(const LowOp &Op, symbolic::SymState &State,
+               const RuntimeControlState &Controls,
+               const SpecializationOptions &Options,
+               llvm::function_ref<NdVar(uint16_t)> Temporary);
+} // namespace neverd::analysis::x64::pageglobal
+
 #endif

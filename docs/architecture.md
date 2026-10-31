@@ -15109,6 +15109,21 @@ Both C routes include a state layout checked against the semantic owner and
 an exact byte manifest bound to the emitted source hash. The ordinary source
 interface remains separate. See [the invocation contract](x64-continuation-source.md).
 
+`X64SpecialRegions` isolates bounded callee-region discovery and direct state
+dispatch from ordinary source proofs. An explicit `callee_depth` traverses
+original direct CALL targets in breadth-first batches, deduplicating entries
+before each pipeline invocation and instruction addresses before state lifting.
+Each wave uses the pipeline's existing parallel function scheduler; dependent
+waves stay ordered, and all retained discovery state expires with the export.
+Imports, indirect targets and the depth frontier do not acquire inferred bodies
+or call contracts. An optional direct driver indexes the selected PCs once and
+connects adjacent instruction labels only after their actual next PC agrees.
+Each helper contains at most 64 steps and cannot be inlined into its dispatcher,
+preventing large selections from reconstructing one expensive compiler graph.
+Every step still checks its domain and budget; external CALL/RET retain priority
+over exhaustion, while context transitions always stop. Both C routes share
+this owner, and default requests retain their existing switch driver.
+
 `X64ContinuationSystemTransfers` owns the complete explicit SYSRET and Intel
 SYSENTER/SYSEXIT target contexts, including their shared flat segment-cache
 construction. The V7 profile adds live SYSENTER MSRs after the unchanged V6
@@ -15221,3 +15236,9 @@ native function. Unknown ordinary calls and physical interrupt/system entry
 return proofs retain their existing admission rules.
 
 LLVMC indexes LLVM block order once per immutable function projection. Exclusive skip/else-if layout checks reuse that index instead of scanning the function per candidate. Selecting another function rebuilds the index; branch semantics and source limits are unchanged.
+
+`wrapInterpreterMachineRegionChoiceSourceX64V2` owns the separate 472-byte state with explicit, stable FSBase/GSBase inputs. It reuses raw segmented-memory admission and lowers scalar 1/2/4/8-byte accesses at 64-bit offsets to base-plus-offset in the shared source adapter before either C backend. Linear addresses may alias each other and ordinary guest memory, including return cells; state and tapes remain disjoint. V1 layouts and refusals stay unchanged. Other architectural banks and base mutation remain unsupported.
+
+`X64CR4PGEState` is a raw-analysis contract for CR4 reads and writes that can change only PGE. Its caller supplies valid nonfaulting kernel state, PGE support and stable ordinary-memory translations with no paging/cache observers. `X64PageGlobal.cpp` owns the complete 64-bit value relation and rejection predicate; the shared control-state dispatcher owns storage and commit. Original serializing intrinsics remain in the residual. Native proof and source interfaces before V3 reject this domain, including unused state. It supplies no TLB model or kernel-equivalence claim.
+
+`wrapInterpreterMachineRegionChoiceSourceX64V3` requires KernelX64NoFaultV1 and the complete CR4/PGE domain. Its separate 480-byte state appends CR4 to the V2 prefix. Source and raw analysis share the control transition and profile-specific flag rules. Each write checks its instruction reservation and then its control predicate before effects; status 7 reports the original unexecuted PC with prior effects committed and CR4/cursor unchanged. The scalar source does not execute host control transfers or model TLB effects. V1/V2 keep their user-domain rejection boundaries.

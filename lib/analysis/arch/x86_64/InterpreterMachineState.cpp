@@ -58,8 +58,12 @@ struct MachineRegionSourcePlan {
   std::map<va_t, va_t> NativeAddresses;
   std::map<va_t, va_t> PendingTraps;
   bool ArchitecturalChoices = false;
+  const SpecializationOptions *SegmentedMemory = nullptr;
+  const SpecializationOptions *PageGlobal = nullptr;
   uint64_t MaxChoiceSourceOperations = 0;
 };
+
+enum class MachineRegionSourceVersion { Base, ChoiceV1, ChoiceV2, ChoiceV3 };
 
 llvm::Error invalid(const llvm::Twine &Message) {
   return llvm::createStringError(llvm::errc::invalid_argument, "%s",
@@ -165,7 +169,9 @@ struct InstructionWriter {
     return Packed;
   }
 
-  void entry(uint64_t ParameterRegister) {
+  void entry(uint64_t ParameterRegister,
+             InterpreterMachineStateProfile Profile =
+                 InterpreterMachineStateProfile::UserX64NoFaultV1) {
     if (!StateRegisters)
       emit(NdOp::COPY, NdVar::reg(StatePointer, 8),
            {NdVar::reg(ParameterRegister, 8)});
@@ -185,7 +191,7 @@ struct InstructionWriter {
     load(Packed, offsetof(InterpreterMachineStateX64V1, RFlags));
     const NdVar UnsupportedBits = temporary();
     emit(NdOp::INT_AND, UnsupportedBits,
-         {Packed, scalar(~FlagProfile::EntryMask)});
+         {Packed, scalar(~FlagProfile::entryMask(Profile))});
     const NdVar Unsupported = temporary(1);
     emit(NdOp::INT_NOTEQUAL, Unsupported, {UnsupportedBits, scalar(0)});
     const NdVar FixedBit = temporary();
@@ -634,6 +640,7 @@ llvm::Error compactChoiceSource(LowFunc &Function) {
 struct ArchitecturalChoiceSourceInstruction {
   va_t NativeAddress;
   std::vector<LowArchitecturalValue> Productions;
+  std::optional<LowOp> PageGlobalWrite;
 };
 
 struct RuntimeSourcePlan {
@@ -642,6 +649,7 @@ struct RuntimeSourcePlan {
   std::map<int, ArchitecturalChoiceSourceInstruction> ChoiceBodies;
   std::optional<LowBlock> ChoiceExhausted;
   std::optional<LowBlock> ChoiceMismatch;
+  std::optional<LowBlock> ControlRejected;
   int NextID = 0;
   va_t NextAddress = 0;
 
@@ -682,11 +690,29 @@ prepareRuntimeSource(LowFunc &Function, const MachineRegionSourcePlan *Region) {
   for (auto &Original : Function.Blocks) {
     std::vector<std::optional<SpecializationScalarQuery>> Queries;
     std::vector<std::vector<LowArchitecturalValue>> Choices;
+    std::vector<std::optional<LowOp>> PageGlobalWrites;
     for (const auto &Boundary : Original.InstructionBoundaries) {
       const auto Ops = llvm::ArrayRef(Original.Ops)
                            .slice(Boundary.FirstOp, Boundary.OpCount);
       Queries.push_back(x64::describeCPUQuery(Ops));
       Choices.emplace_back();
+      PageGlobalWrites.emplace_back();
+      if (Region && Region->PageGlobal) {
+        for (const auto &Op : Ops) {
+          if (x64::pageglobal::describeOperation(Op) !=
+              x64::pageglobal::Operation::Write)
+            continue;
+          if (&Op != &Ops.front() ||
+              (!Op.Inputs[1].isConst() && !nativeRegister(Op.Inputs[1])) ||
+              !x64::pageglobal::supportsOperation(Op, *Region->PageGlobal))
+            return invalid("CR4 source requires an entry-state write operand");
+          for (const auto &After : Ops.drop_front())
+            if (!isLowArchitecturalValue(After))
+              return invalid(
+                  "CR4 source requires an isolated write instruction");
+          PageGlobalWrites.back() = Op;
+        }
+      }
       for (const auto &Op : Ops)
         if (isLowArchitecturalValue(Op)) {
           const auto Choice = decodeLowArchitecturalValue(Op);
@@ -694,6 +720,8 @@ prepareRuntimeSource(LowFunc &Function, const MachineRegionSourcePlan *Region) {
             return invalid("machine source has an invalid architectural value");
           Choices.back().push_back(*Choice);
         }
+      if (PageGlobalWrites.back() && Choices.back().empty())
+        return invalid("CR4 source requires instruction choice reservations");
       if (!Choices.back().empty()) {
         if (Queries.back() || Boundary.Control != LowInstructionControl::None ||
             Boundary.ControlFlags != LowInstructionControlFlag::None ||
@@ -763,9 +791,10 @@ prepareRuntimeSource(LowFunc &Function, const MachineRegionSourcePlan *Region) {
         Body->Succs = std::move(Part.Succs);
         Part.Succs = {Body->Id};
         Plan.ChoiceGuards.emplace(Part.Id, Body->Id);
-        Plan.ChoiceBodies.emplace(
-            Body->Id, ArchitecturalChoiceSourceInstruction{
-                          Native->second, std::move(Choices[First])});
+        Plan.ChoiceBodies.emplace(Body->Id,
+                                  ArchitecturalChoiceSourceInstruction{
+                                      Native->second, std::move(Choices[First]),
+                                      PageGlobalWrites[First]});
         Blocks.push_back(std::move(Part));
         Blocks.push_back(std::move(*Body));
       } else
@@ -815,40 +844,45 @@ NdVar readArchitecturalChoice(InstructionWriter &Writer, uint64_t Index,
   return Value;
 }
 
+llvm::Expected<LowBlock>
+makeInstructionRejectedSource(RuntimeSourcePlan &Plan, uint64_t Status,
+                              uint64_t &RemainingOperations) {
+  auto Block = Plan.block();
+  if (!Block)
+    return Block.takeError();
+  InstructionWriter Writer{Block->Ops, Block->StartAddr, false, true};
+  Writer.store(offsetof(InterpreterMachineRegionStateX64V1, PC),
+               NdVar::reg(ChoiceFailurePC, 8));
+  Writer.store(offsetof(InterpreterMachineStateX64V1, RFlags),
+               NdVar::reg(ChoiceFailureFlags, 8));
+  Writer.store(offsetof(InterpreterMachineRegionStateX64V1, ExitKind),
+               scalar(uint64_t(InterpreterMachineRegionExitX64V1::None)));
+  Writer.emit(NdOp::COPY, NdVar::reg(ProfileStatus, 8), {scalar(Status)});
+  Writer.leave(false);
+  finishRuntimeSourceBlock(*Block, LowInstructionControl::Return);
+  if (auto Error =
+          consumeSourceOperations(RemainingOperations, Block->Ops.size()))
+    return std::move(Error);
+  return Block;
+}
+
 llvm::Error emitArchitecturalChoiceSource(
     LowBlock &Guard, const ArchitecturalChoiceSourceInstruction &Instruction,
     RuntimeSourcePlan &Plan, std::vector<LowBlock> &Additional,
-    uint64_t Parameter, bool &Seeded, uint64_t &RemainingOperations) {
+    uint64_t Parameter, bool &Seeded, uint64_t &RemainingOperations,
+    InterpreterMachineStateProfile Profile) {
   auto Match = Plan.block();
   if (!Match)
     return Match.takeError();
   if (!Plan.ChoiceExhausted) {
-    const auto Reject = [&](InterpreterMachineRegionChoiceStatusX64V1 Status)
-        -> llvm::Expected<LowBlock> {
-      auto Block = Plan.block();
-      if (!Block)
-        return Block.takeError();
-      InstructionWriter Writer{Block->Ops, Block->StartAddr, false, true};
-      Writer.store(offsetof(InterpreterMachineRegionStateX64V1, PC),
-                   NdVar::reg(ChoiceFailurePC, 8));
-      Writer.store(offsetof(InterpreterMachineStateX64V1, RFlags),
-                   NdVar::reg(ChoiceFailureFlags, 8));
-      Writer.store(offsetof(InterpreterMachineRegionStateX64V1, ExitKind),
-                   scalar(uint64_t(InterpreterMachineRegionExitX64V1::None)));
-      Writer.emit(NdOp::COPY, NdVar::reg(ProfileStatus, 8),
-                  {scalar(uint64_t(Status))});
-      Writer.leave(false);
-      finishRuntimeSourceBlock(*Block, LowInstructionControl::Return);
-      if (auto Error =
-              consumeSourceOperations(RemainingOperations, Block->Ops.size()))
-        return std::move(Error);
-      return Block;
-    };
-    auto Exhausted =
-        Reject(InterpreterMachineRegionChoiceStatusX64V1::Exhausted);
+    auto Exhausted = makeInstructionRejectedSource(
+        Plan, uint64_t(InterpreterMachineRegionChoiceStatusX64V1::Exhausted),
+        RemainingOperations);
     if (!Exhausted)
       return Exhausted.takeError();
-    auto Mismatch = Reject(InterpreterMachineRegionChoiceStatusX64V1::Mismatch);
+    auto Mismatch = makeInstructionRejectedSource(
+        Plan, uint64_t(InterpreterMachineRegionChoiceStatusX64V1::Mismatch),
+        RemainingOperations);
     if (!Mismatch)
       return Mismatch.takeError();
     Plan.ChoiceExhausted = std::move(*Exhausted);
@@ -856,12 +890,55 @@ llvm::Error emitArchitecturalChoiceSource(
   }
   const auto &Exhausted = *Plan.ChoiceExhausted;
   const auto &Mismatch = *Plan.ChoiceMismatch;
-  Match->Succs = {Mismatch.Id, Guard.Succs.front()};
+  int Next = Guard.Succs.front();
+  if (Instruction.PageGlobalWrite) {
+    if (!Plan.ControlRejected) {
+      auto Rejected = makeInstructionRejectedSource(
+          Plan, uint64_t(InterpreterMachineRegionControlStatusX64V3::Rejected),
+          RemainingOperations);
+      if (!Rejected)
+        return Rejected.takeError();
+      Plan.ControlRejected = std::move(*Rejected);
+    }
+    auto Control = Plan.block();
+    if (!Control)
+      return Control.takeError();
+    Control->Succs = {Plan.ControlRejected->Id, Next};
+    InstructionWriter Check{Control->Ops, Control->StartAddr};
+    auto Op = *Instruction.PageGlobalWrite;
+    if (Op.Inputs[1].isReg()) {
+      auto Input = Check.readRegister(Op.Inputs[1]);
+      if (!Input)
+        return Input.takeError();
+      Op.Inputs[1] = *Input;
+    }
+    const auto Slot = Check.temporary();
+    Check.load(Slot, offsetof(InterpreterMachineRegionChoiceStateX64V3, CR4));
+    const auto Transition = x64::pageglobal::lowerScalarOperation(
+        Op, Slot, [&](uint16_t Bytes) { return Check.temporary(Bytes); });
+    if (!Transition || !Transition->Rejected)
+      return invalid("CR4 source requires a checked write transition");
+    // Evaluate only fresh scalar scratch here. The body commits the bank and
+    // consumes the reservation after both guards have accepted the instruction.
+    Control->Ops.insert(Control->Ops.end(), Transition->Ops.begin(),
+                        Transition->Ops.end());
+    Check.emit(NdOp::COND_BR, {},
+               {NdVar::cst(Plan.ControlRejected->StartAddr, 8),
+                *Transition->Rejected});
+    finishRuntimeSourceBlock(*Control, LowInstructionControl::Branch, true,
+                             Plan.ControlRejected->StartAddr);
+    if (auto Error =
+            consumeSourceOperations(RemainingOperations, Control->Ops.size()))
+      return Error;
+    Next = Control->Id;
+    Additional.push_back(std::move(*Control));
+  }
+  Match->Succs = {Mismatch.Id, Next};
   Guard.Succs = {Exhausted.Id, Match->Id};
   Guard.Ops.clear();
   InstructionWriter Check{Guard.Ops, Guard.StartAddr, false, true};
   if (!Seeded) {
-    Check.entry(Parameter);
+    Check.entry(Parameter, Profile);
     Seeded = true;
   }
   // Both rejection paths observe this instruction's entry state. Pack flags
@@ -941,7 +1018,9 @@ llvm::Error
 emitCPUQuerySource(LowBlock &Guard, const SpecializationScalarQuery &Query,
                    RuntimeSourcePlan &Plan, std::vector<LowBlock> &Additional,
                    uint64_t Parameter, bool &Seeded, bool VectorState,
-                   std::optional<va_t> RegionQueryAddress = std::nullopt) {
+                   std::optional<va_t> RegionQueryAddress = std::nullopt,
+                   InterpreterMachineStateProfile Profile =
+                       InterpreterMachineStateProfile::UserX64NoFaultV1) {
   auto Match = Plan.block();
   if (!Match)
     return Match.takeError();
@@ -960,7 +1039,7 @@ emitCPUQuerySource(LowBlock &Guard, const SpecializationScalarQuery &Query,
   Guard.Ops.clear();
   InstructionWriter Check{Guard.Ops, Guard.StartAddr, false, VectorState};
   if (!Seeded) {
-    Check.entry(Parameter);
+    Check.entry(Parameter, Profile);
     Seeded = true;
   }
   for (unsigned I = 0; I != Query.Selectors.size(); ++I) {
@@ -1125,7 +1204,9 @@ buildMachineSource(const LowFunc &Residual, BinaryFormat SourceFormat,
     return invalid("unsupported interpreter machine-state layout");
   if (EntryAlignment && !EntryAlignment->valid())
     return invalid("invalid machine source entry alignment");
-  if (Profile != InterpreterMachineStateProfile::UserX64NoFaultV1)
+  if (Profile != InterpreterMachineStateProfile::UserX64NoFaultV1 &&
+      !(Profile == InterpreterMachineStateProfile::KernelX64NoFaultV1 &&
+        Region && Region->PageGlobal))
     return invalid("unsupported interpreter machine-state profile");
   if (SourceFormat != BinaryFormat::ELF && SourceFormat != BinaryFormat::COFF &&
       SourceFormat != BinaryFormat::MachO)
@@ -1197,7 +1278,8 @@ buildMachineSource(const LowFunc &Residual, BinaryFormat SourceFormat,
         Guard != Queries.ChoiceGuards.end()) {
       if (auto Error = emitArchitecturalChoiceSource(
               Block, Queries.ChoiceBodies.at(Guard->second), Queries,
-              QueryBlocks, ParameterRegister, Seeded, RemainingOperations))
+              QueryBlocks, ParameterRegister, Seeded, RemainingOperations,
+              Profile))
         return std::move(Error);
       continue;
     }
@@ -1211,9 +1293,9 @@ buildMachineSource(const LowFunc &Residual, BinaryFormat SourceFormat,
           return invalid("region query lacks original instruction provenance");
         QueryAddress = Native->second;
       }
-      if (auto Error = emitCPUQuerySource(Block, Query->second, Queries,
-                                          QueryBlocks, ParameterRegister,
-                                          Seeded, VectorState, QueryAddress))
+      if (auto Error = emitCPUQuerySource(
+              Block, Query->second, Queries, QueryBlocks, ParameterRegister,
+              Seeded, VectorState, QueryAddress, Profile))
         return std::move(Error);
       if (auto Error =
               consumeSourceOperations(RemainingOperations, Block.Ops.size()))
@@ -1234,7 +1316,7 @@ buildMachineSource(const LowFunc &Residual, BinaryFormat SourceFormat,
                                VectorState};
       InstructionTemporaryBytes TemporaryBytes;
       if (!Seeded) {
-        Writer.entry(ParameterRegister);
+        Writer.entry(ParameterRegister, Profile);
         Seeded = true;
       }
       for (uint64_t Index = Boundary.FirstOp;
@@ -1275,10 +1357,24 @@ buildMachineSource(const LowFunc &Residual, BinaryFormat SourceFormat,
             continue;
           }
         }
+        const bool Segmented =
+            Op.MemoryAddressSpace != NdMemoryAddressSpace::Default;
         if (Op.MemoryOrdering != NdMemoryOrdering::None ||
-            Op.MemoryAddressSpace != NdMemoryAddressSpace::Default)
+            (Segmented && (!Region || !Region->SegmentedMemory ||
+                           !x64::supportsRuntimeMemoryOperation(
+                               Op, *Region->SegmentedMemory))))
           return invalid(
               "machine source cannot wrap ordered or special memory");
+        if (Segmented) {
+          const auto Memory = lowMemoryOperands(Op);
+          // The raw owner admits the environment. This source version only
+          // represents ordinary scalar accesses with full-width offsets.
+          if (Memory.Address->Size != 8 ||
+              (Memory.AccessSize != 1 && Memory.AccessSize != 2 &&
+               Memory.AccessSize != 4 && Memory.AccessSize != 8))
+            return invalid("machine source requires scalar segmented memory "
+                           "with a 64-bit offset");
+        }
         const NdVar NativeOutput = Op.Output;
         bool CaptureTemporary = false;
         const bool PartialGPROutput =
@@ -1369,6 +1465,26 @@ buildMachineSource(const LowFunc &Residual, BinaryFormat SourceFormat,
           if (auto Error = Remap(Op.Inputs[Input], true))
             return std::move(Error);
         }
+        if (Segmented) {
+          const auto Memory = lowMemoryOperands(Op);
+          const auto Base = Writer.temporary();
+          Writer.load(
+              Base,
+              Op.MemoryAddressSpace == NdMemoryAddressSpace::X86FS
+                  ? offsetof(InterpreterMachineRegionChoiceStateX64V2, FSBase)
+                  : offsetof(InterpreterMachineRegionChoiceStateX64V2, GSBase));
+          const auto Linear = Writer.temporary();
+          Writer.emit(NdOp::INT_ADD, Linear, {Base, *Memory.Address});
+          // Normalize the optional legacy address-space operand as well.
+          const auto Stored =
+              Memory.StoredValue ? *Memory.StoredValue : NdVar{};
+          std::fill(std::begin(Op.Inputs), std::end(Op.Inputs), NdVar{});
+          Op.NumInputs = 0;
+          Op.addInput(Linear);
+          if (Op.Opcode == NdOp::STORE)
+            Op.addInput(Stored);
+          Op.MemoryAddressSpace = NdMemoryAddressSpace::Default;
+        }
         switch (Op.Opcode) {
         case NdOp::CALL:
         case NdOp::INDIR_CALL:
@@ -1455,15 +1571,37 @@ buildMachineSource(const LowFunc &Residual, BinaryFormat SourceFormat,
               break;
             }
           }
+          if (Region && Region->PageGlobal &&
+              x64::pageglobal::supportsOperation(Op, *Region->PageGlobal)) {
+            const auto Slot = Writer.temporary();
+            Writer.load(
+                Slot, offsetof(InterpreterMachineRegionChoiceStateX64V3, CR4));
+            auto Control = x64::pageglobal::lowerScalarOperation(
+                Op, Slot,
+                [&](uint16_t Size) { return Writer.temporary(Size); });
+            if (!Control)
+              return invalid("invalid CR4 source transition");
+            if (Control->Rejected && (Choices == Queries.ChoiceBodies.end() ||
+                                      !Choices->second.PageGlobalWrite))
+              return invalid("CR4 source write has no instruction guard");
+            Block.Ops.insert(Block.Ops.end(), Control->Ops.begin(),
+                             Control->Ops.end());
+            if (Control->OutputState)
+              Writer.store(
+                  offsetof(InterpreterMachineRegionChoiceStateX64V3, CR4),
+                  Control->OutputState->second);
+            break;
+          }
           auto Transition = detail::lowerX64MachineFlags(
               Op, NdVar::reg(SystemFlags, 8),
-              [&](uint16_t Size) { return Writer.temporary(Size); });
+              [&](uint16_t Size) { return Writer.temporary(Size); }, Profile);
           if (!Transition)
             return invalid(
                 "machine source supports only canonical x64 flag intrinsics");
           if (Transition->Rejected) {
             if (Op.Inputs[1].isConst() &&
-                (Op.Inputs[1].Offset & FlagProfile::UserRejectedWriteMask) != 0)
+                (Op.Inputs[1].Offset &
+                 FlagProfile::rejectedWriteMask(Profile)) != 0)
               return invalid(
                   "POPFQ image violates the nonfaulting source profile");
           }
@@ -1538,6 +1676,8 @@ buildMachineSource(const LowFunc &Residual, BinaryFormat SourceFormat,
       Result.Function.Blocks.push_back(std::move(*Queries.ChoiceExhausted));
       Result.Function.Blocks.push_back(std::move(*Queries.ChoiceMismatch));
     }
+    if (Queries.ControlRejected)
+      Result.Function.Blocks.push_back(std::move(*Queries.ControlRejected));
     if (auto Error = rebuildSourcePredecessors(Result.Function))
       return std::move(Error);
   }
@@ -1593,17 +1733,23 @@ wrapInterpreterMachineRegionSourceX64(const SpecializationResult &Result,
 static llvm::Expected<InterpreterMachineRegionSource> wrapMachineRegionSource(
     const SpecializationResult &Result, const SpecializationOptions &Expected,
     const InterpreterMachineRegionSourceOptions &SourceOptions,
-    BinaryFormat SourceFormat, bool ArchitecturalChoices) {
+    BinaryFormat SourceFormat, MachineRegionSourceVersion Version) {
+  const bool ArchitecturalChoices = Version != MachineRegionSourceVersion::Base;
+  const bool PageGlobal = Version == MachineRegionSourceVersion::ChoiceV3;
+  const bool SegmentedMemory =
+      Version == MachineRegionSourceVersion::ChoiceV2 || PageGlobal;
   const auto Model = ArchitecturalChoices
                          ? SpecializationUndefinedModel::FreshScalarV1
                          : SpecializationUndefinedModel::SelectedLowIR;
   if (Expected.X64MachineExits.empty() || Expected.UndefinedModel != Model ||
       Expected.X64FlagsProfile !=
-          InterpreterMachineStateProfile::UserX64NoFaultV1 ||
-      Expected.X64SegmentedReads || Expected.X64SegmentedWrites ||
+          (PageGlobal ? InterpreterMachineStateProfile::KernelX64NoFaultV1
+                      : InterpreterMachineStateProfile::UserX64NoFaultV1) ||
+      (!SegmentedMemory &&
+       (Expected.X64SegmentedReads || Expected.X64SegmentedWrites)) ||
       Expected.X64LegacyGSState || Expected.X64CR8State ||
-      Expected.X64MXCSRMask || !Expected.X64CodeRegions.empty() ||
-      !Expected.X64ImportBindings.empty() ||
+      Expected.X64CR4PGEState != PageGlobal || Expected.X64MXCSRMask ||
+      !Expected.X64CodeRegions.empty() || !Expected.X64ImportBindings.empty() ||
       !Expected.X64TerminalImports.empty() ||
       !Expected.EntryFrameExcludedObjects.empty())
     return invalid("unsupported machine-region source environment");
@@ -1617,6 +1763,10 @@ static llvm::Expected<InterpreterMachineRegionSource> wrapMachineRegionSource(
     return invalid("machine-region source requires authenticated exits");
   MachineRegionSourcePlan Plan;
   Plan.ArchitecturalChoices = ArchitecturalChoices;
+  if (SegmentedMemory)
+    Plan.SegmentedMemory = &Expected;
+  if (PageGlobal)
+    Plan.PageGlobal = &Expected;
   Plan.MaxChoiceSourceOperations = SourceOptions.MaxChoiceSourceOperations;
   for (const auto &Origin : Result.Origins) {
     const auto [At, Inserted] = Plan.NativeAddresses.emplace(
@@ -1657,7 +1807,13 @@ static llvm::Expected<InterpreterMachineRegionSource> wrapMachineRegionSource(
     return Source.takeError();
   InterpreterMachineRegionSource Wrapped{std::move(*Source),
                                          *Result.RawEnvironment};
-  if (ArchitecturalChoices) {
+  if (PageGlobal) {
+    Wrapped.StateABI = "x64-machine-region-choice-state-v3";
+    Wrapped.StateBytes = sizeof(InterpreterMachineRegionChoiceStateX64V3);
+  } else if (SegmentedMemory) {
+    Wrapped.StateABI = "x64-machine-region-choice-state-v2";
+    Wrapped.StateBytes = sizeof(InterpreterMachineRegionChoiceStateX64V2);
+  } else if (ArchitecturalChoices) {
     Wrapped.StateABI = "x64-machine-region-choice-state-v1";
     Wrapped.StateBytes = sizeof(InterpreterMachineRegionChoiceStateX64V1);
   }
@@ -1670,7 +1826,7 @@ wrapInterpreterMachineRegionSourceX64(
     const InterpreterMachineRegionSourceOptions &SourceOptions,
     BinaryFormat SourceFormat) {
   return wrapMachineRegionSource(Result, Expected, SourceOptions, SourceFormat,
-                                 false);
+                                 MachineRegionSourceVersion::Base);
 }
 
 llvm::Expected<InterpreterMachineRegionSource>
@@ -1679,7 +1835,25 @@ wrapInterpreterMachineRegionChoiceSourceX64V1(
     const InterpreterMachineRegionSourceOptions &SourceOptions,
     BinaryFormat SourceFormat) {
   return wrapMachineRegionSource(Result, Expected, SourceOptions, SourceFormat,
-                                 true);
+                                 MachineRegionSourceVersion::ChoiceV1);
+}
+
+llvm::Expected<InterpreterMachineRegionSource>
+wrapInterpreterMachineRegionChoiceSourceX64V2(
+    const SpecializationResult &Result, const SpecializationOptions &Expected,
+    const InterpreterMachineRegionSourceOptions &SourceOptions,
+    BinaryFormat SourceFormat) {
+  return wrapMachineRegionSource(Result, Expected, SourceOptions, SourceFormat,
+                                 MachineRegionSourceVersion::ChoiceV2);
+}
+
+llvm::Expected<InterpreterMachineRegionSource>
+wrapInterpreterMachineRegionChoiceSourceX64V3(
+    const SpecializationResult &Result, const SpecializationOptions &Expected,
+    const InterpreterMachineRegionSourceOptions &SourceOptions,
+    BinaryFormat SourceFormat) {
+  return wrapMachineRegionSource(Result, Expected, SourceOptions, SourceFormat,
+                                 MachineRegionSourceVersion::ChoiceV3);
 }
 
 llvm::Expected<InterpreterMachineSource>

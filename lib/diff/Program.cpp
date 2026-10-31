@@ -282,6 +282,10 @@ void ProgramBuilder::warn(std::string Warning) {
   P.Warnings.push_back(std::move(Warning));
 }
 
+void ProgramBuilder::setStackRoleCandidate(uint64_t Key) {
+  P.Functions.back().StackRoleCandidate = Key;
+}
+
 Program ProgramBuilder::finish() {
   endFunction();
   for (const auto &[Index, Target] : CallTargets)

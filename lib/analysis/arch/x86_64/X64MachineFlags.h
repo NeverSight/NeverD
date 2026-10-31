@@ -62,6 +62,23 @@ struct X64MachineFlags {
                 ? AlignmentCheckMask
                 : 0);
   }
+
+  static constexpr uint64_t writeMask(InterpreterMachineStateProfile Profile) {
+    return (isKernelX64MachineStateProfile(Profile) ? KernelSystemWriteMask
+                                                    : UserSystemWriteMask) |
+           (Profile == InterpreterMachineStateProfile::KernelX64SmapNoFaultV2
+                ? AlignmentCheckMask
+                : 0);
+  }
+
+  static constexpr uint64_t
+  rejectedWriteMask(InterpreterMachineStateProfile Profile) {
+    return (isKernelX64MachineStateProfile(Profile) ? KernelRejectedWriteMask
+                                                    : UserRejectedWriteMask) &
+           ~(Profile == InterpreterMachineStateProfile::KernelX64SmapNoFaultV2
+                 ? AlignmentCheckMask
+                 : uint64_t{0});
+  }
 };
 
 /// Intel SDM 325383-084US, CLI/STI: CPL=0 clears/sets IF and preserves
@@ -161,17 +178,8 @@ lowerX64MachineFlags(const LowOp &IntrinsicOp, NdVar System,
          {System, Constant(~X64MachineFlags::SnapshotClearMask)});
   } else {
     const NdVar Image = IntrinsicOp.Inputs[1];
-    const bool Kernel = isKernelX64MachineStateProfile(Profile);
-    const bool Smap =
-        Profile == InterpreterMachineStateProfile::KernelX64SmapNoFaultV2;
-    const uint64_t AC = Smap ? X64MachineFlags::AlignmentCheckMask : 0;
-    const uint64_t WriteMask = (Kernel ? X64MachineFlags::KernelSystemWriteMask
-                                       : X64MachineFlags::UserSystemWriteMask) |
-                               AC;
-    const uint64_t RejectMask =
-        (Kernel ? X64MachineFlags::KernelRejectedWriteMask
-                : X64MachineFlags::UserRejectedWriteMask) &
-        ~AC;
+    const uint64_t WriteMask = X64MachineFlags::writeMask(Profile);
+    const uint64_t RejectMask = X64MachineFlags::rejectedWriteMask(Profile);
     const NdVar BadBits = Temporary(8), Bad = Temporary(1);
     Emit(NdOp::INT_AND, BadBits, {Image, Constant(RejectMask)});
     Emit(NdOp::INT_NOTEQUAL, Bad, {BadBits, Constant(0)});

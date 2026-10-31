@@ -15,7 +15,8 @@
 namespace neverd::analysis::x64 {
 namespace control {
 size_t stateSize(const SpecializationOptions &Options) {
-  return size_t(Options.X64MXCSRMask.has_value()) + Options.X64LegacyGSState;
+  return size_t(Options.X64MXCSRMask.has_value()) + Options.X64LegacyGSState +
+         Options.X64CR4PGEState;
 }
 
 bool validState(symbolic::SymState &State, const RuntimeControlState &Controls,
@@ -36,6 +37,8 @@ bool validState(symbolic::SymState &State, const RuntimeControlState &Controls,
         Ctx.mkExtract(Pair, 0, 64) != Active)
       return false;
   }
+  if (Options.X64CR4PGEState && !HasWidth(Controls.Values.back(), 64))
+    return false;
   return true;
 }
 } // namespace control
@@ -44,6 +47,8 @@ llvm::Error
 validateRuntimeControlOptions(const SpecializationOptions &Options) {
   if (auto Error = legacygs::validateOptions(Options))
     return Error;
+  if (auto Error = pageglobal::validateOptions(Options))
+    return Error;
   return mxcsr::validateOptions(Options);
 }
 
@@ -51,7 +56,8 @@ bool supportsRuntimeControlOperation(const LowOp &Op,
                                      const SpecializationOptions &Options) {
   return mxcsr::supportsOperation(Op, Options) ||
          alignment::supportsOperation(Op, Options) ||
-         legacygs::supportsOperation(Op, Options);
+         legacygs::supportsOperation(Op, Options) ||
+         pageglobal::supportsOperation(Op, Options);
 }
 
 RuntimeControlState
@@ -59,13 +65,19 @@ seedRuntimeControlState(symbolic::SymContext &Ctx,
                         const SpecializationOptions &Options) {
   // A context alone cannot supply the active memory base. Keep old MXCSR-only
   // callers working, but never invent an unrelated GS input for them.
-  return Options.X64LegacyGSState ? RuntimeControlState{}
-                                  : mxcsr::seedState(Ctx, Options);
+  if (Options.X64LegacyGSState)
+    return {};
+  auto Result = mxcsr::seedState(Ctx, Options);
+  if (Options.X64CR4PGEState)
+    Result.Values.push_back(Ctx.mkFreshVar(64, "cr4"));
+  return Result;
 }
 
 RuntimeControlState
 seedRuntimeControlState(symbolic::SymContext &Ctx, symbolic::SymState &State,
                         const SpecializationOptions &Options) {
+  if (Options.X64CR4PGEState && &Ctx != &State.context())
+    return {};
   auto Result = mxcsr::seedState(Ctx, Options);
   if (Options.X64LegacyGSState) {
     const auto Active =
@@ -75,6 +87,8 @@ seedRuntimeControlState(symbolic::SymContext &Ctx, symbolic::SymState &State,
     Result.Values.push_back(
         Ctx.mkConcat(Ctx.mkFreshVar(64, "kernel_gs_base"), Active));
   }
+  if (Options.X64CR4PGEState)
+    Result.Values.push_back(Ctx.mkFreshVar(64, "cr4"));
   return Result;
 }
 
@@ -110,6 +124,8 @@ lowerRuntimeControlOperation(const LowOp &Op, symbolic::SymState &State,
     return alignment::lowerOperation(Op, Options, Temporary);
   if (legacygs::supportsOperation(Op, Options))
     return legacygs::lowerOperation(Op, State, Controls, Options, Temporary);
+  if (pageglobal::supportsOperation(Op, Options))
+    return pageglobal::lowerOperation(Op, State, Controls, Options, Temporary);
   return mxcsr::lowerOperation(Op, State, Controls, Options, Temporary);
 }
 } // namespace neverd::analysis::x64
