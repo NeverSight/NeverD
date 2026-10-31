@@ -1894,8 +1894,21 @@ and unknown instruction flows keep the paired-block path. Row origins retain
 their actual blocks; cross-block rows cannot make a whole block unchanged or
 equate CFG edges. Similarity weights and candidate/rival thresholds stay intact.
 
+Matcher version 23 extends that recipe to complete ordered spans on both sides,
+including multiple blocks with the same block and edge counts. It retains the
+same eligibility and improvement requirements. A refined span always records a
+block-boundary change: shifting an instruction across an internal branch target
+must not become normalized unchanged merely because graph counts still agree.
+This remains instruction-listing alignment, not control-flow equivalence.
+`CandidateInstructionAlignmentProfile` keeps candidate admission and rival
+competition on the structural matcher-22 recipe. Ordered multi-block rows refine
+the final measurement under an independently established correspondence. They
+do not supply identity evidence or raise candidate scores during pairing.
+
 Each `FunctionMatch` and `FunctionDelta` retains an `InstructionAlignmentProfile`.
-New matches use `single-block-spans-v1`; historical documents without an explicit
+`CurrentInstructionAlignmentProfile` owns the default for new pairs, currently
+`ordered-block-spans-v1`. Matcher-22 `single-block-spans-v1` measurements retain
+their original one-block eligibility; historical documents without an explicit
 profile use `paired-blocks-v1`. Matcher-22 documents require `alignment_profile`
 on every match. The saved-evidence reader validates it and recomputes the stated
 recipe from the exact native inputs. Edits, undo/redo and native detail pages
@@ -15172,6 +15185,27 @@ same work allowance before returning.
 `X86LiftCoreArith` lowers legacy memory `LOCK ADD/SUB/INC/DEC` to one sequentially consistent `ATOMIC_ADD`. Flags use the returned old value after the memory operation; `INC/DEC` preserve CF. FS/GS address spaces remain attached. On x64, `LOCK AND/OR/XOR` use the shared system-state intrinsic owner and emit one native locked transaction. Its result packs PF/ZF/SF from that transaction; CF/OF are cleared and AF remains an explicit arbitrary effect. Widths and FS/GS address spaces remain part of the intrinsic contract. The i386 non-neutral logical forms and other unowned locked core arithmetic still refuse. This is a LowIR lifting contract; emitted native alignment and fault behavior need their own qualification.
 
 ### Explicit x64 continuation export
+
+`X64ContinuationSvm` owns V10's raw VMRUN state exchange. It maps the fourteen
+software-managed registers through `ir/X86/X86SvmContext.h`, imports/exports
+the represented XMM/YMM and MXCSR cells through standard XSAVE images, captures
+actual completed CR2, and preserves restored host RAX/RSP/flags. The shared
+VMX/SVM shape validator admits its pointer and constant width; both C routes
+and native LLVM use that same context operation. The profile explicitly binds
+the native VMM environment and unchanged XCR0=7. VMEXIT status 13 stops dispatch
+before the following original instruction, including invalid-VMCB exits.
+Context/image overlap, malformed headers and unavailable SDK code generation
+remain explicit refusals. This state interface supplies no ordinary C ABI.
+For SVM entry selection, `X64SpecialRegions` follows the checked original
+VMEXIT fallthrough when ordinary lifting stops at VMRUN. That edge retains
+call depth; only direct CALL discovery increases it. A depth-ordered frontier
+deduplicates entries and promotes an already queued deeper entry before
+recovery. The shared `lift/X86/X86SvmEncoding.h` reader authorizes only the two
+canonical encodings. Selection still grants no ordinary LowIR admission and
+does not remove the execution-time VMEXIT stop. CALL discovery decodes audited
+instruction starts through the shared decoder; rejected bodies have no
+LowFunc but retain their original call sites. No propagated register target
+or ordinary call ABI is inferred.
 
 `exportX64Continuation` owns bounded JSON selection, checked instruction-state
 projection and paired C/manifest generation. SDK and CLI adapters call this

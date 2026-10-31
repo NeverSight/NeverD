@@ -990,7 +990,7 @@ TEST_F(BinaryDiffSDK, SplitBlockProfilesReopenLegacyMeasurementsExactly) {
   ASSERT_TRUE(bool(Document));
   auto *M = (*Document->getAsObject()->getArray("matches"))[0].getAsObject();
   ASSERT_TRUE(M);
-  EXPECT_EQ(M->getString("alignment_profile"), "single-block-spans-v1");
+  EXPECT_EQ(M->getString("alignment_profile"), "ordered-block-spans-v1");
   EXPECT_EQ(M->getInteger("equal_instructions"), 3);
   EXPECT_EQ(M->getNumber("similarity"), 0.5);
   const auto Page = parsed(neverd_comparison_function_page_json(
@@ -1055,7 +1055,7 @@ TEST_F(BinaryDiffSDK, SplitBlockProfilesReopenLegacyMeasurementsExactly) {
   EXPECT_EQ(
       (*Edited.getAsObject()->getArray("matches"))[0].getAsObject()->getString(
           "alignment_profile"),
-      "single-block-spans-v1");
+      "ordered-block-spans-v1");
   EXPECT_EQ(
       (*Edited.getAsObject()->getArray("matches"))[0].getAsObject()->getInteger(
           "equal_instructions"),
@@ -1081,6 +1081,52 @@ TEST_F(BinaryDiffSDK, SplitBlockProfilesReopenLegacyMeasurementsExactly) {
       llvm::any_of(*ChangedMatch->getArray("changes"), [](const auto &V) {
         return V.getAsString() == "constants";
       }));
+}
+
+TEST_F(BinaryDiffSDK, OrderedBlockBoundariesDoNotBecomeUnchanged) {
+  const auto A =
+      input({0x85, 0xff, 0x74, 8, 0xb8, 17, 0, 0, 0, 0x83, 0xc0, 7, 0xc3});
+  const auto B = input(
+      {0x85, 0xff, 0x74, 5, 0xb8, 17, 0, 0, 0, 0x83, 0xc0, 7, 0xc3}, 0x8000);
+  const auto C = compare(
+      A, B,
+      R"({"discover":false,"overrides":[{"kind":"match","primary":"0x1000","secondary":"0x8000"}]})");
+  const auto Saved = take(neverd_comparison_export_json(C));
+  auto Doc = llvm::json::parse(Saved);
+  ASSERT_TRUE(bool(Doc));
+  auto *M = (*Doc->getAsObject()->getArray("matches"))[0].getAsObject();
+  ASSERT_TRUE(M);
+  EXPECT_EQ(M->getString("alignment_profile"), "ordered-block-spans-v1");
+  EXPECT_EQ(M->getInteger("equal_instructions"), 5);
+  EXPECT_LT(M->getNumber("similarity").value_or(1), 1);
+  const auto Page = parsed(neverd_comparison_function_page_json(
+      C, R"({"address":"0x1000","limit":64})"));
+  EXPECT_EQ(
+      Page.getAsObject()->getObject("evidence")->getString("change_state"),
+      "changed");
+  EXPECT_EQ(Page.getAsObject()
+                ->getObject("evidence")
+                ->getBoolean("normalized_unchanged"),
+            false);
+  ASSERT_EQ(neverd_comparison_restore_json(C, Saved.c_str()), 1);
+  (*Doc->getAsObject())["matcher_version"] = 22;
+  (*Doc->getAsObject())["similarity"] = 0.9;
+  (*M)["alignment_profile"] = "single-block-spans-v1";
+  (*M)["equal_instructions"] = 4;
+  (*M)["similarity"] = 0.9;
+  (*M)["changes"] = llvm::json::Array{"bytes", "relocation", "instructions"};
+  ASSERT_EQ(neverd_comparison_restore_json(C, render(*Doc).c_str()), 1);
+  const auto Legacy = take(neverd_comparison_export_json(C));
+  const auto OldPage = parsed(neverd_comparison_function_page_json(
+      C, R"({"address":"0x1000","limit":64})"));
+  unsigned Equal = 0;
+  for (const auto &Row : *OldPage.getAsObject()->getArray("rows")) {
+    const auto Kind = Row.getAsObject()->getString("kind");
+    Equal += Kind == "identical" || Kind == "moved";
+  }
+  EXPECT_EQ(Equal, 4u);
+  ASSERT_EQ(neverd_comparison_restore_json(C, Legacy.c_str()), 1);
+  EXPECT_EQ(take(neverd_comparison_export_json(C)), Legacy);
 }
 
 TEST_F(BinaryDiffSDK, DirectCallTargetsArePartOfStrongFunctionIdentity) {
@@ -3342,7 +3388,7 @@ TEST_F(BinaryDiffSDK, LongNativeCallContextSurvivesReorderingAndRestore) {
   const auto Saved = take(neverd_comparison_export_json(C));
   const auto Document = parsed(neverd_comparison_export_json(C));
   ASSERT_TRUE(Document.getAsObject());
-  EXPECT_EQ(Document.getAsObject()->getInteger("matcher_version"), 22);
+  EXPECT_EQ(Document.getAsObject()->getInteger("matcher_version"), 23);
   const auto *Matches = Document.getAsObject()->getArray("matches");
   ASSERT_TRUE(Matches);
   const std::map<std::string, std::string> Expected = {{"0x3000", "0xa010"},

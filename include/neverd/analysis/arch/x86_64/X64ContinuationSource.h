@@ -12,6 +12,7 @@
 
 #include "neverd/analysis/Limits.h"
 #include "neverd/ir/SourceTypeHint.h"
+#include "neverd/ir/X86/X86SvmContext.h"
 #include "neverd/ir/low/LowIR.h"
 #include "neverd/ir/low/LowUndefinedEffects.h"
 
@@ -156,6 +157,15 @@ struct alignas(16) X64ContinuationStateV9 {
   uint8_t Reserved[6] = {};
 };
 
+/// V10 extends V4, not the Intel event/return profiles. The explicit vector
+/// cells and MXCSR are authoritative; SVM.GuestXState owns x87 and is also the
+/// native exchange image. SVM.HostXState is compiler scratch. Other SVM cells
+/// are overwritten from the instruction state and are not additional inputs.
+struct alignas(16) X64ContinuationStateV10 {
+  X64ContinuationStateV4 Core;
+  X86SvmContext SVM;
+};
+
 enum class X64ContinuationExitV1 : uint64_t {
   Continue = 0,
   Call = 1,
@@ -184,6 +194,9 @@ enum class X64ContinuationExitV1 : uint64_t {
   /// FRED installed its target state. Stop before executing the target or
   /// delivering a pending debug exception or newly unblocked interrupt.
   FredReturn = 12,
+  /// Native VMRUN completed through VMEXIT. State.PC is its fallthrough. Stop
+  /// before further host instructions; the VMM owns exit handling and GIF.
+  SvmExit = 13,
 };
 
 enum class X64ContinuationProfile : uint8_t {
@@ -289,6 +302,22 @@ enum class X64ContinuationProfile : uint8_t {
   /// PagingAddressBits and MXCSRMask are required. SYSENTER and UIRET feature
   /// bindings are not accepted. Earlier storage layouts remain unchanged.
   FredReturnNoFaultV9,
+  /// V4 plus native CPL0 AMD SVM with unchanged XCR0=7. Canonical VMRUN and
+  /// addr32 VMRUN transport all fourteen software-managed GPRs, x87, sixteen
+  /// XMM/YMM registers, MXCSR and the completed CR2. RAX/RSP/RFLAGS are the
+  /// restored host values (RF clears); guest counterparts remain in the VMCB.
+  /// SVM buffers are distinct 64-byte-aligned, 832-byte standard XSAVE images,
+  /// outside guest-writable RAM. Their reserved headers must be initialized.
+  /// The native VMM owns VMCB/VM_HSAVE_PA, GIF, intercepts, debug registers,
+  /// supervisor state and mappings. FS/GS/KernelGSBase and CR8 must match the
+  /// explicit cells and remain unchanged by the guest; all other guest system
+  /// changes must preserve the compiler's host ABI. Generated code, stack,
+  /// state and buffers remain mapped and disjoint from guest writes and the
+  /// hardware-written VMCB/VM_HSAVE_PA pages.
+  /// No nested SVM, SEV-ES, SMM, CET, asynchronous events or faults. A VMEXIT,
+  /// including VMEXIT_INVALID, stops the driver at status 13. This profile
+  /// does not inherit Intel return domains or authorize an ordinary C ABI.
+  NativeSvmNoFaultV10,
 };
 
 /// Bind the original processor's null FS/GS load behavior. No vendor-wide
@@ -300,8 +329,8 @@ enum class X64NullSegmentBasePolicy : uint8_t { Clear, Preserve };
 struct X64ContinuationSourceOptions {
   X64ContinuationProfile Profile = X64ContinuationProfile::Unspecified;
   std::optional<uint32_t> MXCSRMask;
-  /// V5 and later require 48 or 57 according to active paging, independently of
-  /// the processor's MSR canonical width. Earlier profiles do not accept it.
+  /// V5..V9 require 48 or 57 according to active paging, independently of
+  /// the processor's MSR canonical width. V1..V4 and V10 do not accept it.
   std::optional<unsigned> PagingAddressBits;
   /// V6 and later. Bind the actual original CPU's null LFS/LGS base transition.
   /// Without this declaration those loads reject before any state/RAM write

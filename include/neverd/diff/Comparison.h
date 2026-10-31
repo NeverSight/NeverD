@@ -152,7 +152,17 @@ rejectedPairs(llvm::ArrayRef<Override> Overrides,
 enum class InstructionAlignmentProfile : uint8_t {
   PairedBlocks,
   SingleBlockSpans,
+  OrderedBlockSpans,
 };
+/// Recipe for newly measured pairs; saved pairs retain their own profile.
+inline constexpr InstructionAlignmentProfile
+    CurrentInstructionAlignmentProfile =
+        InstructionAlignmentProfile::OrderedBlockSpans;
+/// Cross-block listing refinements do not establish function identity. Keep
+/// the candidate/rival gates on the structural recipe that corroborates them.
+inline constexpr InstructionAlignmentProfile
+    CandidateInstructionAlignmentProfile =
+        InstructionAlignmentProfile::SingleBlockSpans;
 llvm::StringRef alignmentProfileName(InstructionAlignmentProfile Profile);
 std::optional<InstructionAlignmentProfile>
 alignmentProfileNamed(llvm::StringRef Name);
@@ -188,8 +198,7 @@ struct FunctionMatch {
   uint32_t EqualInstructions = 0;
   /// Retained through save/reopen and edits so old measurements remain
   /// reproducible instead of silently acquiring a newer row alignment.
-  InstructionAlignmentProfile Alignment =
-      InstructionAlignmentProfile::SingleBlockSpans;
+  InstructionAlignmentProfile Alignment = CurrentInstructionAlignmentProfile;
 
   bool identical() const {
     return Measured && !IdentityOnly && AnalysisComplete &&

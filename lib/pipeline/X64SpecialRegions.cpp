@@ -11,6 +11,8 @@
 #include "X64SpecialRegions.h"
 
 #include "neverd/analysis/arch/x86_64/X64ContinuationSource.h"
+#include "neverd/decode/Decoder.h"
+#include "neverd/lift/X86/X86SvmEncoding.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/pipeline/Pipeline.h"
 #include "neverd/pipeline/X64ContinuationExport.h"
@@ -33,19 +35,51 @@ std::string hex(uint64_t Value) { return "0x" + llvm::utohexstr(Value); }
 llvm::Error invalid(const llvm::Twine &Message) {
   return llvm::createStringError(llvm::errc::invalid_argument, Message);
 }
+llvm::ArrayRef<uint8_t> bytesAt(const BinaryImage &Image, va_t Address) {
+  const auto *Segment = Image.getSegmentFor(Address);
+  if (!Segment || Address < Segment->VA ||
+      Address - Segment->VA >= Segment->Data.size())
+    return {};
+  return llvm::ArrayRef(Segment->Data).drop_front(Address - Segment->VA);
+}
 } // namespace
 
-llvm::Expected<X64SpecialRegionSelection>
-selectX64SpecialRegions(const BinaryImage &Image, llvm::ArrayRef<va_t> Entries,
-                        uint64_t MaxInstructions, unsigned CalleeDepth,
-                        DebugContext *Debug) {
+llvm::Expected<X64SpecialRegionSelection> selectX64SpecialRegions(
+    const BinaryImage &Image, llvm::ArrayRef<va_t> Entries,
+    const analysis::X64ContinuationSourceOptions &SourceOptions,
+    unsigned CalleeDepth, DebugContext *Debug) {
   X64SpecialRegionSelection Selection;
-  std::set<va_t> Pending(Entries.begin(), Entries.end());
-  std::set<va_t> Requested = Pending;
+  Decoder Decode;
+  if (CalleeDepth && !Decode.init(Image))
+    return invalid("selected CFG call decoder initialization failed");
+  const uint64_t MaxInstructions = SourceOptions.MaxInstructions;
+  std::map<unsigned, std::set<va_t>> Frontier;
+  std::map<va_t, unsigned> Requested;
+  const auto Enqueue = [&](va_t Address, unsigned Depth) -> llvm::Error {
+    auto [It, New] = Requested.try_emplace(Address, Depth);
+    if (!New) {
+      if (It->second <= Depth)
+        return llvm::Error::success();
+      Frontier[It->second].erase(Address);
+      It->second = Depth;
+    }
+    if (Requested.size() > MaxInstructions)
+      return invalid("selected CFG entry budget exceeded");
+    Frontier[Depth].insert(Address);
+    return llvm::Error::success();
+  };
+  for (va_t Entry : Entries)
+    if (auto Error = Enqueue(Entry, 0))
+      return std::move(Error);
   std::set<va_t> Unique;
   // Pipeline already schedules independent functions in weighted batches.
   // Waves are dependent: do not discover or relift the same callee per caller.
-  for (unsigned Depth = 0; !Pending.empty(); ++Depth) {
+  while (!Frontier.empty()) {
+    const unsigned Depth = Frontier.begin()->first;
+    auto Pending = std::move(Frontier.begin()->second);
+    Frontier.erase(Frontier.begin());
+    if (Pending.empty())
+      continue;
     PipelineOptions Options;
     Options.OnlyFunctionEntries = Pending;
     Options.DeferMedIR = true;
@@ -73,6 +107,23 @@ selectX64SpecialRegions(const BinaryImage &Image, llvm::ArrayRef<va_t> Entries,
         PCs.push_back(hex(Address));
         if (Unique.size() > MaxInstructions)
           return invalid("selected CFG instruction budget exceeded");
+        if (Depth < CalleeDepth) {
+          // Rejected bodies retain audited instruction starts but no LowFunc.
+          // Use the decoder's original direct-call classification, never an
+          // optimized CALL or a register constant propagated across VMEXIT.
+          const auto Bytes = bytesAt(Image, Address);
+          DecodedInsn Instruction;
+          if (!Decode.selectMode(Image, Address) ||
+              !Decode.decodeOneForLift(Bytes.data(), Bytes.size(), Address,
+                                      Instruction))
+            return invalid("selected call-site decoding failed at " +
+                           hex(Address));
+          const va_t Target = Decode.directCallTarget(Instruction);
+          if (Target != InvalidVA && !Image.findImportAt(Target) &&
+              Image.isCodeAddress(Target))
+            if (auto Error = Enqueue(Target, Depth + 1))
+              return std::move(Error);
+        }
       }
       llvm::json::Object Region{
           {"entry", hex(Audit.Entry)},
@@ -85,33 +136,34 @@ selectX64SpecialRegions(const BinaryImage &Image, llvm::ArrayRef<va_t> Entries,
           {"truncated_paths", uint64_t(Audit.TruncatedPaths.size())}};
       if (CalleeDepth)
         Region["callee_depth"] = Depth;
+      if (SourceOptions.Profile ==
+          analysis::X64ContinuationProfile::NativeSvmNoFaultV10) {
+        llvm::json::Array Resumes;
+        for (va_t Address : Audit.UnsupportedInstructions) {
+          const auto Bytes = bytesAt(Image, Address);
+          for (unsigned Size : {3u, 4u}) {
+            if (Bytes.size() < Size ||
+                !x64VmrunAddressWidth(Bytes.take_front(Size)))
+              continue;
+            // The raw reader revalidates this same encoding before emission.
+            // This extends selection only; no LowIR or ordinary ABI is
+            // admitted.
+            const va_t Resume = Address + Size;
+            if (Image.isCodeAddress(Resume)) {
+              if (auto Error = Enqueue(Resume, Depth))
+                return std::move(Error);
+              Resumes.push_back(hex(Resume));
+            }
+            break;
+          }
+        }
+        if (!Resumes.empty())
+          Region["vmexit_successors"] = std::move(Resumes);
+      }
       Selection.Regions.push_back(std::move(Region));
     }
     if (Found != Pending || Unique.empty())
       return invalid("selected entries did not produce instruction regions");
-    if (Depth == CalleeDepth)
-      break;
-    std::set<va_t> Next;
-    for (const auto &Function : Result.LowFuncs) {
-      if (!Pending.count(Function.Entry))
-        continue;
-      for (const auto &Block : Function.Blocks)
-        for (const auto &Op : Block.Ops) {
-          if (Op.Opcode != NdOp::CALL || Op.NumInputs != 1 ||
-              !Op.Inputs[0].isConst())
-            continue;
-          const va_t Target = Op.Inputs[0].Offset;
-          if (Image.findImportAt(Target) || !Image.isCodeAddress(Target) ||
-              !Requested.insert(Target).second)
-            continue;
-          // Every admitted region must contain at least one instruction.
-          // Bound the discovery frontier before running its next pipeline.
-          if (Requested.size() > MaxInstructions)
-            return invalid("selected CFG entry budget exceeded");
-          Next.insert(Target);
-        }
-    }
-    Pending = std::move(Next);
   }
   Selection.Addresses.assign(Unique.begin(), Unique.end());
   return Selection;

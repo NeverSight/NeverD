@@ -3588,6 +3588,11 @@ unmapped calls without dropping original address-signature ownership.
 `SplitBlockProfilesReopenLegacyMeasurementsExactly` decodes a native split guard,
 preserves the old zero-equal-instruction score and rows, refuses forged/missing
 recipes or incompatible scores, and checks edits and undo/redo across recipes.
+`OrderedBlockSpansKeepChangedBoundariesVisible` moves an instruction across an
+internal branch destination without changing graph counts: all five instructions
+align, while the block-boundary change prevents normalized-unchanged status.
+`OrderedBlockBoundariesDoNotBecomeUnchanged` checks this with native x64 bytes
+and reopens the original matcher-22 recipe with its four-instruction score/rows.
 
 `IndependentInitializerRolesSeparateIdenticalCallbacks` separates equal callback
 bodies around two distinct protected targets in both directions. It exercises
@@ -5255,6 +5260,31 @@ compiled by the linked SDK rather than sent to an incompatible system Clang.
 `LLVMCValues.NativeVirtualizationKeepsStatusAndFailedReadPrior` supplies controlled
 VMX completion values to check C status conversion, exact operand evaluation
 and failed-read preservation without executing privileged instructions.
+
+`X64ContinuationExportTest.VmrunTransportsOriginalStateAndStopsAtVmexit` checks
+the `amd-svm-v10` original-byte path through both C routes, the C SDK and CLI,
+explicit instruction and function-entry selection, and both dispatchers.
+ASan/UBSan host executions supply a controlled SVM completion and check the
+fourteen GPR outputs, all represented SIMD/MXCSR state, x87-image ownership,
+CR2 input/write/VMEXIT/read order, flags, exact fallthrough, VMEXIT stop/budget
+and resumed MOV/RET. Eleven malformed controls reject before state/image or
+native CR2 writes. Earlier profiles retain
+the native boundary. The native object test refuses an old SDK instead of
+emitting an unresolved `llvm.x86.vmrun.context` runtime call.
+`VmexitSelectionRetainsCallsAtTheirOriginalDepth` executes two VMRUNs with
+direct calls on both sides, checking depth-zero external-call stops and
+depth-one CALL/RET execution across both VMEXIT stops.
+Set `NEVERD_ISA_REGRESSION_ARTIFACT_DIR` to retain the actual exported
+`svm-continuation-{high,llvm}.c` and manifests. Pass each file to NeverC's
+`tests/neverc/X86/verify_vmrun_context.py --neverd-continuation FILE --keep DIR`,
+with `--backend-llc /path/to/fork/llc` for the full-backend route and additionally
+`--new-pm` for its new codegen pass manager. O0/O2 are both run by default.
+These QEMU TCG guests execute native VMRUN, transport all
+fourteen GPRs and x87/XMM/YMM state, cover VMMCALL/HLT/invalid-VMCB exits and
+compare the complete original IDA sample plus independent addr32/RAX and
+early-invalid-exit CR2 samples. They do not execute SVM on the host or qualify
+physical AMD hardware.
+
 `X86SystemStateSource.QualifiedSdkUsesNativeSystemCalls` checks 312 modules for
 CLAC/STAC, XEND, CLZERO, CLTS, WRMSRNS, MSRLIST, LKGS, LAR/LSL, INVLPGB and TLBSYNC.
 The corresponding NeverC test requires 792 C-to-native-IR compilations with no inline assembly;

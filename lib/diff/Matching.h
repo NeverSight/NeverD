@@ -35,8 +35,7 @@ FunctionDelta compareFunctionsWithKeys(
     const Correspondence &Map, llvm::ArrayRef<uint64_t> PrimaryKeys,
     llvm::ArrayRef<uint64_t> SecondaryKeys,
     const ComparisonControl &Control = {},
-    InstructionAlignmentProfile Alignment =
-        InstructionAlignmentProfile::SingleBlockSpans);
+    InstructionAlignmentProfile Alignment = CurrentInstructionAlignmentProfile);
 
 /// Copies a delta's scores and tallies into its match.
 void measure(FunctionMatch &M, const FunctionDelta &D);

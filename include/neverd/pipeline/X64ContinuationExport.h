@@ -56,6 +56,10 @@ struct X64ContinuationExport {
 /// Its 2560-byte state exits with status 12; it does not inherit the
 /// FRED-disabled V6/V7/V8 domains. Unsupported native requests and invalid
 /// state leave the step unexecuted.
+/// amd-svm-v10 instead extends V4 with the explicit native SVM context. It
+/// requires MXCSR mask, unchanged XCR0=7 and the documented native VMM domain;
+/// it does not accept paging/Intel-return bindings. Completed VMRUN stops at
+/// status 13 with all represented guest outputs and the original fallthrough.
 llvm::Expected<X64ContinuationExport>
 exportX64Continuation(const BinaryImage &Image, llvm::StringRef RequestJSON,
                       bool UseLLVM, DebugContext *Debug = nullptr);
