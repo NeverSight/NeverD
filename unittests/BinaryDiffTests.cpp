@@ -1117,6 +1117,138 @@ TEST(BinaryDiff, CompleteLocalCallBlocksSurviveOtherCallLayoutChanges) {
   EXPECT_EQ(Stopped.secondaryOf(indexOf(P, "callback_b")), NoIndex);
 }
 
+TEST(BinaryDiff, SingleBlockSpansKeepInstructionAndGraphEvidenceSeparate) {
+  Fn Before;
+  Before.Name = "guarded";
+  Before.Blocks = {{{"mov", "eax, 17"},
+                    {"add", "eax, 7"},
+                    {"ret", "", InstructionFlow::Return}}};
+  Fn After = Before;
+  After.Blocks = {{{"test", "edi, edi"}, {"je", "", InstructionFlow::Branch}},
+                  {{"mov", "eax, 17"}, {"add", "eax, 7"}},
+                  {{"ret", "", InstructionFlow::Return}}};
+  After.Edges = {{0, 2, EdgeKind::Taken},
+                 {0, 1, EdgeKind::NotTaken},
+                 {1, 2, EdgeKind::Fallthrough}};
+  const auto P = build({Before}, 0x1000), S = build({After}, 0x8000);
+  for (bool Reverse : {false, true}) {
+    const auto &A = Reverse ? S : P, &B = Reverse ? P : S;
+    const std::vector<uint32_t> Map{0};
+    const auto D = compareFunctions(A, 0, B, 0, {Map, Map});
+    EXPECT_EQ(D.EqualInstructions, 3u);
+    EXPECT_EQ(D.Alignment, InstructionAlignmentProfile::SingleBlockSpans);
+    const auto Legacy = compareFunctions(
+        A, 0, B, 0, {Map, Map}, {}, InstructionAlignmentProfile::PairedBlocks);
+    EXPECT_EQ(Legacy.EqualInstructions, 0u);
+    EXPECT_GT(D.Similarity, Legacy.Similarity);
+    EXPECT_TRUE(D.Changes & ChangeBlocks);
+    EXPECT_TRUE(D.Changes & ChangeEdges);
+    EXPECT_TRUE(D.Changes & ChangeEntry);
+    EXPECT_TRUE(D.Changes & ChangeInstructions);
+    EXPECT_LT(D.Similarity, 1);
+    ASSERT_EQ(D.Blocks.size(), 1u);
+    EXPECT_FALSE(D.Blocks[0].Unchanged);
+    EXPECT_FALSE(D.Blocks[0].Uncertain);
+    std::vector<unsigned> SeenA(A.Instructions.size()),
+        SeenB(B.Instructions.size());
+    for (const auto &Row : D.Rows) {
+      if (Row.Primary != NoIndex) {
+        ASSERT_LT(Row.Primary, A.Instructions.size());
+        ++SeenA[Row.Primary];
+        const auto &Block = A.Blocks[Row.PrimaryBlock];
+        EXPECT_GE(Row.Primary, Block.FirstInstruction);
+        EXPECT_LT(Row.Primary, Block.FirstInstruction + Block.InstructionCount);
+      }
+      if (Row.Secondary != NoIndex) {
+        ASSERT_LT(Row.Secondary, B.Instructions.size());
+        ++SeenB[Row.Secondary];
+        const auto &Block = B.Blocks[Row.SecondaryBlock];
+        EXPECT_GE(Row.Secondary, Block.FirstInstruction);
+        EXPECT_LT(Row.Secondary,
+                  Block.FirstInstruction + Block.InstructionCount);
+      }
+    }
+    EXPECT_TRUE(llvm::all_of(SeenA, [](unsigned N) { return N == 1; }));
+    EXPECT_TRUE(llvm::all_of(SeenB, [](unsigned N) { return N == 1; }));
+  }
+  auto Incomplete = P;
+  Incomplete.Functions[0].Traits |= TraitIncomplete;
+  const std::vector<uint32_t> Map{0};
+  auto Changed = After;
+  Changed.Blocks[1][1].Operands = "eax, 9";
+  const auto C = build({Changed}, 0x8000);
+  for (bool Reverse : {false, true}) {
+    const auto D =
+        compareFunctions(Reverse ? C : P, 0, Reverse ? P : C, 0, {Map, Map});
+    EXPECT_EQ(D.EqualInstructions, 2u);
+    EXPECT_TRUE(D.Changes & ChangeConstants);
+    EXPECT_TRUE(D.Changes & ChangeBlocks);
+    EXPECT_TRUE(llvm::any_of(
+        D.Rows, [](const auto &Row) { return Row.Kind == RowKind::Constant; }));
+  }
+  const auto Partial = compareFunctions(Incomplete, 0, S, 0, {Map, Map});
+  EXPECT_FALSE(Partial.AnalysisComplete);
+  EXPECT_EQ(Partial.EqualInstructions, 0u);
+  for (bool Exceptional : {false, true}) {
+    auto Modified = After;
+    if (Exceptional)
+      Modified.Edges.push_back({0, 2, EdgeKind::Exception});
+    else {
+      Modified.Blocks.back() = {{"jmp", "entry", InstructionFlow::Jump}};
+      Modified.Edges.push_back({2, 0, EdgeKind::Jump});
+    }
+    const auto C = build({Modified}, 0x8000);
+    const auto D = compareFunctions(P, 0, C, 0, {Map, Map});
+    const auto Legacy = compareFunctions(
+        P, 0, C, 0, {Map, Map}, {}, InstructionAlignmentProfile::PairedBlocks);
+    EXPECT_EQ(D.EqualInstructions, Legacy.EqualInstructions);
+    EXPECT_EQ(D.Similarity, Legacy.Similarity);
+  }
+}
+
+TEST(BinaryDiff, SplitBlockSpansRetainCallIdentityAndReferenceGaps) {
+  Fn Before;
+  Before.Name = "call_guard";
+  Before.Blocks = {{{"mov", "edi, 17"},
+                    {"call", "", InstructionFlow::Call, "first"},
+                    {"ret", "", InstructionFlow::Return}}};
+  Fn After = Before;
+  After.Blocks = {
+      {{"test", "edi, edi"}, {"je", "", InstructionFlow::Branch}},
+      {{"mov", "edi, 17"}, {"call", "", InstructionFlow::Call, "first"}},
+      {{"ret", "", InstructionFlow::Return}}};
+  After.Edges = {{0, 2, EdgeKind::Taken},
+                 {0, 1, EdgeKind::NotTaken},
+                 {1, 2, EdgeKind::Fallthrough}};
+  auto Changed = After;
+  Changed.Blocks[1][1].Callee = "second";
+  const auto P = build({Before, import("first"), import("second")}, 0x1000);
+  for (bool Retarget : {false, true}) {
+    const auto S =
+        build({Retarget ? Changed : After, import("first"), import("second")},
+              0x8000);
+    for (bool Reverse : {false, true}) {
+      const auto &A = Reverse ? S : P, &B = Reverse ? P : S;
+      const std::vector<uint32_t> Map{0, 1, 2};
+      const auto D = compareFunctions(A, 0, B, 0, {Map, Map});
+      EXPECT_EQ(D.EqualInstructions, Retarget ? 2u : 3u);
+      EXPECT_EQ(bool(D.Changes & ChangeCalls), Retarget);
+      EXPECT_TRUE(D.ReferenceComparisonComplete);
+      if (!Retarget) {
+        const std::vector<uint32_t> UnknownMap{0, NoIndex, 2};
+        const auto Unknown =
+            compareFunctions(A, 0, B, 0, {UnknownMap, UnknownMap});
+        EXPECT_EQ(Unknown.EqualInstructions, 2u);
+        EXPECT_FALSE(Unknown.ReferenceComparisonComplete);
+        EXPECT_FALSE(Unknown.Changes & ChangeCalls);
+        EXPECT_TRUE(llvm::any_of(Unknown.Rows, [](const auto &Row) {
+          return Row.Kind == RowKind::Uncertain;
+        }));
+      }
+    }
+  }
+}
+
 TEST(BinaryDiff, SingleCallEntrySurvivesAnInsertedGuard) {
   Fn Before;
   Before.Name = "fail";

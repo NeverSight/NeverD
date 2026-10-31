@@ -1883,6 +1883,25 @@ body/rival checks and mapped-neighborhood agreement own acceptance and the
 ordinary context threshold. New candidates do not support their own witnesses.
 This is local structural evidence, not a control-flow or semantic proof.
 
+Matcher version 22 separates the instruction-alignment recipe from whole-block
+correspondence. Complete one-block bodies can align across a split on the other
+side when its block ranges form an ordered contiguous span and its graph has
+only forward ordinary edges. The existing exact weighted aligner must recover
+more known equal instructions without reducing alignment weight. It borrows
+the original instruction objects so pointer-keyed address signatures remain
+valid. Loops, exceptional/switch edges, indirect transfers, incomplete functions
+and unknown instruction flows keep the paired-block path. Row origins retain
+their actual blocks; cross-block rows cannot make a whole block unchanged or
+equate CFG edges. Similarity weights and candidate/rival thresholds stay intact.
+
+Each `FunctionMatch` and `FunctionDelta` retains an `InstructionAlignmentProfile`.
+New matches use `single-block-spans-v1`; historical documents without an explicit
+profile use `paired-blocks-v1`. Matcher-22 documents require `alignment_profile`
+on every match. The saved-evidence reader validates it and recomputes the stated
+recipe from the exact native inputs. Edits, undo/redo and native detail pages
+retain the same recipe, so an older score never accompanies newer alignment
+rows. Re-export makes the legacy recipe explicit without rewriting its facts.
+
 Matcher version 9 also admits bounded shared mnemonic/CFG groups into the same
 measured competition. A common instruction sketch cannot hide a smaller graph
 group's alternatives. These shared keys propose candidates only; existing

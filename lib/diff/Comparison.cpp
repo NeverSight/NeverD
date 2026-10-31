@@ -103,6 +103,7 @@ void measure(FunctionMatch &M, const FunctionDelta &D) {
   if (!D.ComputationComplete)
     return;
   M.Measured = true;
+  M.Alignment = D.Alignment;
   M.IdentityOnly = D.IdentityOnly;
   M.AnalysisComplete = D.AnalysisComplete;
   M.ReferenceComparisonComplete = D.ReferenceComparisonComplete;
@@ -2126,7 +2127,7 @@ applyOverrideInPlace(ComparisonResult &R, const Program &Primary,
         E.Remeasured.push_back(M);
       measure(M, compareFunctionsWithKeys(Primary, M.Primary, Secondary,
                                           M.Secondary, {PMap, SMap}, PK, SK,
-                                          Control));
+                                          Control, M.Alignment));
       Control.check();
       if (IsNew)
         E.Added = M;
