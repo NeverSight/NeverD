@@ -4,6 +4,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "../../lib/analysis/arch/x86_64/X64StreamStore.h"
 #include "../lift/NeverDLiftFixture.h"
 #include "../web/NativeFixture.h"
 
@@ -1587,6 +1588,7 @@ int main(void) {
 
 #include "InterpreterMachineRegionAtomicSourceTests.inc"
 #include "InterpreterMachineRegionPrefetchSourceTests.inc"
+#include "InterpreterMachineRegionStreamStoreTests.inc"
 #include "InterpreterMachineRegionChoiceTests.inc"
 #include "InterpreterMachineRegionChoiceSourceTests.inc"
 #include "InterpreterMachineRegionSegmentedSourceTests.inc"

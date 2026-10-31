@@ -145,6 +145,10 @@ x86SystemStateLayout(Intrinsic Id, Arch TargetArch, uint16_t Width,
     if ((Width != 4 && Width != 8) || (TargetArch == Arch::X86 && Width != 4))
       return std::nullopt;
     return X86SystemStateLayout{0, 2, {8, Width}};
+  case K::StreamStore128:
+    if (Width != 16)
+      return std::nullopt;
+    return X86SystemStateLayout{0, 2, {8, 16}};
   case K::Enqueue:
     // Non-long-mode ES bases and limits need an explicit segment contract.
     if (TargetArch == Arch::X86)
@@ -174,6 +178,7 @@ inline uint16_t x86SystemStateWidth(Intrinsic Id,
   case X86SystemStateKind::LockedLogic:
   case X86SystemStateKind::ShadowWrite:
   case X86SystemStateKind::DirectStore:
+  case X86SystemStateKind::StreamStore128:
     return Shape.InputSizes[1];
   case X86SystemStateKind::WriteBase:
   case X86SystemStateKind::InvalidateBroadcast:
@@ -197,6 +202,7 @@ inline uint16_t x86SystemStateMemoryBytes(Intrinsic Id, uint16_t Width) {
   case X86SystemStateKind::LockedLogic:
   case X86SystemStateKind::ShadowWrite:
   case X86SystemStateKind::DirectStore:
+  case X86SystemStateKind::StreamStore128:
     return Width;
   case X86SystemStateKind::Enqueue:
   case X86SystemStateKind::DirectStore64B:

@@ -617,6 +617,9 @@ bool supportedWideOperation(const LowOp &Op,
 /// division model does not certify architectural division faults, and naming an
 /// opaque result is not permission to publish a replacement of its instruction.
 bool supported(const LowOp &Op, const SpecializationOptions &Options) {
+  if (Op.Opcode == NdOp::INTRINSIC)
+    if (const auto Store = retainedStoreEvaluation(Op, Options))
+      return supportedWideOperation(*Store, Options);
   if (Op.Opcode == NdOp::ATOMIC_CMPXCHG || Op.Opcode == NdOp::ATOMIC_ADD ||
       Op.Opcode == NdOp::ATOMIC_XCHG)
     return Options.ExplicitMachineState && Options.NormalNonfaultingExecution &&
@@ -3302,6 +3305,9 @@ bool Specializer::evaluate(int Id) {
         Original = Operations[I];
       }
       LowOp Residual = Original;
+      if (Original.Opcode == NdOp::INTRINSIC)
+        if (const auto Store = retainedStoreEvaluation(Original, Options))
+          Original = *Store;
       LowOp Evaluated = Original;
       const bool RuntimeMemory =
           Original.MemoryAddressSpace != NdMemoryAddressSpace::Default;

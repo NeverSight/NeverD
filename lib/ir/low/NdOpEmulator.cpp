@@ -761,6 +761,7 @@ bool NdOpEmulator::stepImpl(const LowOp &Op, llvm::ArrayRef<LowOp> Following) {
       case X86SystemStateKind::Enqueue:
       case X86SystemStateKind::DirectStore:
       case X86SystemStateKind::DirectStore64B:
+      case X86SystemStateKind::StreamStore128:
         // These bounded memory executors validate the shared operand contract,
         // including FS/GS, before touching the ordinary BinaryImage projection.
         return executeIntrinsic(Op);

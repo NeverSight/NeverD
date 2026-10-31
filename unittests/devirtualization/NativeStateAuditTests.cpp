@@ -9,6 +9,7 @@
 
 #include "../../lib/analysis/arch/x86_64/StringTransfer.h"
 #include "../../lib/analysis/arch/x86_64/X64ControlTransitions.h"
+#include "../../lib/analysis/arch/x86_64/X64StreamStore.h"
 #include "../../lib/analysis/core/RecoveryArchitecture.h"
 #include "../../lib/lift/X86/X86CompatibilityReturnUndefined.h"
 #include "../../lib/lift/X86/X86ControlMoveUndefined.h"
@@ -1928,5 +1929,7 @@ TEST(X86NativeStateAudit, DivisionRejectsUnauditedFormsAndForgedDetails) {
     expectUnaudited(Dec, Insn);
   }
 }
+
+#include "NativeStreamStoreAuditTests.inc"
 
 } // namespace

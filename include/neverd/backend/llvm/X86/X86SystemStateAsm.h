@@ -181,6 +181,10 @@ x86SystemStateAsm(Intrinsic Id, Arch TargetArch, uint16_t Width,
   case K::DirectStore:
     P.Text += " " + Input(1) + ", " + Memory(0);
     break;
+  case K::StreamStore128:
+    P.Text += " " + Input(1) + ", " + Memory(0);
+    P.InputConstraints[1] = "x";
+    break;
   case K::DirectStore64B:
     P.Text += " " + Memory(0) + ", " + Input(1);
     break;
