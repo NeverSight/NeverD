@@ -3569,6 +3569,9 @@ bodies around two distinct protected targets in both directions. It exercises
 repeated anchors, duplicate neighborhoods, conflicting occurrences, gaps,
 overlapping slots, missing targets, incomplete bodies, explicit analyst choice,
 approximation disabled, the ordinary similarity threshold and saved reopening.
+Repeated short backgrounds exceed exhaustive candidate admission; resolving
+one duplicate callback must preserve its remaining counterpart for review
+without reviving an explicitly rejected pair.
 `RelocatedInitializerPositionsDisambiguateEqualCallbacks` loads an owned stripped
 ELF fixture with real relative relocations through the SDK. Equal numeric values
 without those relocations must retain ambiguity. The fixtures are decoded data;

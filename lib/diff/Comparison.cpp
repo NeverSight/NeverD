@@ -1394,6 +1394,15 @@ void Matcher::retainStackAlternatives() {
 void Matcher::collectAmbiguities() {
   std::vector<uint32_t> InPrimary(P.Functions.size(), NoIndex),
       InSecondary(S.Functions.size(), NoIndex);
+  // Initializer admission follows the last propagation pass. Keep those
+  // endpoints in the group population until Record removes accepted pairs,
+  // so resolving part of a group cannot hide an unpaired singleton remainder.
+  llvm::DenseSet<uint32_t> InitializerPrimary, InitializerSecondary;
+  for (const auto &F : Order)
+    if (F.Step == FunctionStep::Initializer) {
+      InitializerPrimary.insert(F.Primary);
+      InitializerSecondary.insert(F.Secondary);
+    }
   const auto Record = [&](Tie T, bool Exact) {
     llvm::erase_if(T.Primary, [&](uint32_t A) {
       return PMatch[A] != NoIndex || (Exact && InPrimary[A] != NoIndex);
@@ -1424,6 +1433,9 @@ void Matcher::collectAmbiguities() {
                       T.Secondary.end());
     if (T.Primary.empty() || T.Secondary.empty())
       return;
+    if (T.Primary.size() == 1 && T.Secondary.size() == 1 &&
+        Rejected.contains(pairKey(T.Primary[0], T.Secondary[0])))
+      return;
     if (Exact) {
       for (uint32_t A : T.Primary)
         InPrimary[A] = R.Ambiguities.size();
@@ -1442,11 +1454,13 @@ void Matcher::collectAmbiguities() {
   for (FunctionStep Step : GlobalSteps) {
     std::vector<Entry> Entries;
     for (uint32_t A = 0; A < P.Functions.size(); ++A)
-      if (PMatch[A] == NoIndex && InPrimary[A] == NoIndex)
+      if (InitializerPrimary.contains(A) ||
+          (PMatch[A] == NoIndex && InPrimary[A] == NoIndex))
         if (const uint64_t K = featureKey(Step, A, false))
           Entries.push_back({K, 0, A});
     for (uint32_t B = 0; B < S.Functions.size(); ++B)
-      if (SMatch[B] == NoIndex && InSecondary[B] == NoIndex)
+      if (InitializerSecondary.contains(B) ||
+          (SMatch[B] == NoIndex && InSecondary[B] == NoIndex))
         if (const uint64_t K = featureKey(Step, B, true))
           Entries.push_back({K, 1, B});
     llvm::sort(Entries, [](const Entry &L, const Entry &R) {

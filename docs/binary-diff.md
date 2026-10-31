@@ -137,6 +137,8 @@ occurrence must agree in both directions before an unmatched target is proposed.
 Repeated anchors, competing neighborhoods, missing targets and overlapping
 slots cannot resolve an identity. The witness correspondence is frozen for this
 pass; newly admitted callbacks cannot support their own initializer evidence.
+Resolving part of a duplicate-body group retains its unpaired remainder for
+review, including a lone remaining pair. Explicitly rejected pairs stay hidden.
 
 These proposals still compete with measured body alternatives under the existing
 similarity, ambiguity and mapped-context checks. Initializer evidence alone does

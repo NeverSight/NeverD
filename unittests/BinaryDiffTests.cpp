@@ -1607,11 +1607,17 @@ TEST(BinaryDiff, StackRoleAlternativesRetainConflictingBodyMatchesForReview) {
 }
 
 TEST(BinaryDiff, IndependentInitializerRolesSeparateIdenticalCallbacks) {
-  const auto Input = [](bool Secondary, bool Changed = false) {
-    std::vector<Fn> Functions = {
-        leaf("anchor_a", 1, 11), leaf("anchor_b", 2, 22),
-        leaf(Secondary ? "callback_b" : "callback_a", Changed ? 8 : 7, 5),
-        leaf(Secondary ? "callback_a" : "callback_b", Changed ? 8 : 7, 5)};
+  const auto Input = [](bool Secondary, bool Changed = false,
+                        unsigned CallbackInstructions = 5,
+                        unsigned Background = 0) {
+    std::vector<Fn> Functions = {leaf("anchor_a", 1, 11),
+                                 leaf("anchor_b", 2, 22),
+                                 leaf(Secondary ? "callback_b" : "callback_a",
+                                      Changed ? 8 : 7, CallbackInstructions),
+                                 leaf(Secondary ? "callback_a" : "callback_b",
+                                      Changed ? 8 : 7, CallbackInstructions)};
+    for (unsigned I = 0; I < Background; ++I)
+      Functions.push_back(leaf("background_" + std::to_string(I), 3, 1));
     for (auto &F : Functions)
       F.Source = NameSource::Generated;
     auto P = build(Functions, Secondary ? 0x8000 : 0x1000);
@@ -1642,6 +1648,31 @@ TEST(BinaryDiff, IndependentInitializerRolesSeparateIdenticalCallbacks) {
     auto ExactOnly = Settings;
     ExactOnly.Approximate = false;
     EXPECT_EQ(compare(A, B, ExactOnly).Matches.size(), 4u);
+    // Resolving one member of a duplicate group must not hide its remaining
+    // pair. The final context pass does not automatically promote that pair.
+    // Repeated short backgrounds exceed exhaustive candidate admission; the
+    // remaining pair has no measured similarity-star fallback.
+    auto PartialA = Input(Reverse, false, 1, 260),
+         PartialB = Input(!Reverse, false, 1, 260);
+    PartialA.CodeInitializers.resize(3);
+    PartialB.CodeInitializers.resize(3);
+    const uint32_t LeftA = indexOf(A, "callback_b"),
+                   LeftB = indexOf(B, "callback_b");
+    const auto RetainsRemainder = [&](const ComparisonResult &R) {
+      return llvm::any_of(R.Ambiguities, [&](const auto &Group) {
+        return llvm::is_contained(Group.Primary, LeftA) &&
+               llvm::is_contained(Group.Secondary, LeftB);
+      });
+    };
+    const auto Partial = compare(PartialA, PartialB, Settings);
+    EXPECT_EQ(Partial.Matches.size(), 3u);
+    EXPECT_EQ(Partial.secondaryOf(LeftA), NoIndex);
+    EXPECT_TRUE(RetainsRemainder(Partial));
+    const Override RejectRemainder{OverrideKind::Unmatch,
+                                   named(PartialA, "callback_b").Address,
+                                   named(PartialB, "callback_b").Address};
+    EXPECT_FALSE(RetainsRemainder(
+        compare(PartialA, PartialB, Settings, {RejectRemainder})));
     auto Gap = B;
     Gap.CodeInitializers.erase(Gap.CodeInitializers.begin() + 1);
     EXPECT_EQ(compare(A, Gap, Settings).Matches.size(), 2u);
