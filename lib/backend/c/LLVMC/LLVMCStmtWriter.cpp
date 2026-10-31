@@ -3560,7 +3560,14 @@ void LLVMCWriter::writeInstructionImpl(llvm::Instruction &Inst, int Indent) {
         !edgePrintsPhiCopy(From, Else)) {
       const auto *LateBr =
           llvm::dyn_cast<llvm::CondBrInst>(Else->getTerminator());
-      if (LateBr && !edgePrintsPhiCopy(Else, LateBr->getSuccessor(0)) &&
+      // An earlier block has already printed its own branch and may have
+      // consumed an arm. Reprinting only its conditional here can jump to
+      // that consumed arm without a label. This fold owns later blocks only.
+      const llvm::BasicBlock *Later = From->getNextNode();
+      while (Later && Later != Else)
+        Later = Later->getNextNode();
+      if (Later && LateBr &&
+          !edgePrintsPhiCopy(Else, LateBr->getSuccessor(0)) &&
           !edgePrintsPhiCopy(Else, LateBr->getSuccessor(1))) {
         const llvm::BasicBlock *TrueT =
             printBranchTarget(LateBr->getSuccessor(0));
