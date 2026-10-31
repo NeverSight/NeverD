@@ -21,6 +21,8 @@ configurations remain separate coverage.
 
 ## Open
 
+Explicit machine-region C now accepts authenticated entry-object exclusions through a shared entry guard. Both C routes check whole-range nonwrapping and frame separation before guest/state/tape effects; object aliases and equal roots with disjoint ranges remain valid. Owned execution tests cover all four state layouts, optional alignment, full-width endpoints and exact wrapper budgets. This closes the source-contract gap; ordinary ABI inference, accessibility and other caller memory premises remain separate.
+
 LLVMC's late conditional fold now requires its body to follow the current
 block in LLVM layout. An earlier body may already have inlined an exit;
 duplicating only its branch could emit a goto without that exit's label.
