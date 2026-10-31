@@ -9549,6 +9549,12 @@ cleanup, changed saved-SP cells, FS/GS-to-stack aliases, partial registers,
 upper vector preservation, packed flags and fresh arbitrary values. The
 conditional wide-read fixture retains physical bytes from an earlier CALL
 under partial callback writes; it does not assume full output initialization.
+`MemoryJumpsReadLiveTargetsExactlyOnce` checks mutable RIP-relative slots,
+computed memory and register targets, FS/GS addressing and address32 jumps in
+V1/V2. Both C routes preserve the whole state and memory while returning each
+loaded target, including values that cannot themselves be dereferenced. The
+constant-slot fixture requires Linux mmap; direct and conditional jumps remain
+independent controls.
 Profiles without an MSR or event binding must request native execution for
 RDMSR or IRETQ before changing state or touching the guest stack.
 Invalid profile/PC/flags, missing/duplicate addresses and
