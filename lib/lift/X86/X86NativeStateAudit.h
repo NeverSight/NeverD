@@ -287,11 +287,84 @@ inline bool accessCheckForm(const cs_insn *Insn, Arch Target) {
          X.eflags == (Clear ? X86_EFLAGS_RESET_AC : 0);
 }
 
-// Intel SDM Vol. 2, MOVS/REP, LDMXCSR, SWAPGS and CPUID: these forms introduce
-// no undefined output bits. This does not certify nonfaulting execution, the
-// MXCSR writable mask, a repeated transfer's count/direction, or opaque-state
-// preservation. Their existing semantic owners retain those separate
-// obligations.
+inline bool repTransferForm(const cs_insn *Insn, Arch Target) {
+  if (!Insn || !Insn->detail || Target != Arch::X64)
+    return false;
+  unsigned Width;
+  switch (Insn->id) {
+  case X86_INS_MOVSB:
+  case X86_INS_STOSB:
+    Width = 1;
+    break;
+  case X86_INS_MOVSW:
+  case X86_INS_STOSW:
+    Width = 2;
+    break;
+  case X86_INS_MOVSD:
+  case X86_INS_STOSD:
+    Width = 4;
+    break;
+  case X86_INS_MOVSQ:
+  case X86_INS_STOSQ:
+    Width = 8;
+    break;
+  default:
+    return false;
+  }
+  const bool Fill = Insn->id == X86_INS_STOSB || Insn->id == X86_INS_STOSW ||
+                    Insn->id == X86_INS_STOSD || Insn->id == X86_INS_STOSQ;
+  const uint8_t Opcode = (Fill ? 0xaa : 0xa4) + (Width != 1);
+  const uint8_t Rex = Width == 8 ? 0x48 : 0;
+  // Admit one REP and only the required width prefix. The independent
+  // legacy prefix groups may occur in either order for word transfers.
+  if (Insn->size != (Width == 2 || Width == 8 ? 3 : 2) ||
+      Insn->bytes[Insn->size - 1] != Opcode)
+    return false;
+  if (Width == 2) {
+    if (!((Insn->bytes[0] == 0xf3 && Insn->bytes[1] == 0x66) ||
+          (Insn->bytes[0] == 0x66 && Insn->bytes[1] == 0xf3)))
+      return false;
+  } else if (Insn->bytes[0] != 0xf3 || (Width == 8 && Insn->bytes[1] != Rex)) {
+    return false;
+  }
+  const auto &X = Insn->detail->x86;
+  if (X.prefix[0] != 0xf3 || X.prefix[1] ||
+      X.prefix[2] != (Width == 2 ? 0x66 : 0) || X.prefix[3] ||
+      X.opcode[0] != Opcode || X.opcode[1] || X.opcode[2] || X.opcode[3] ||
+      X.rex != Rex || X.addr_size != 8 || X.modrm || X.sib || X.disp ||
+      X.encoding.modrm_offset || X.encoding.disp_size ||
+      X.encoding.disp_offset || X.encoding.imm_size || X.encoding.imm_offset ||
+      X.op_count != 2 || X.avx_sae || X.avx_rm != X86_AVX_RM_INVALID ||
+      X.avx_cc != X86_AVX_CC_INVALID || X.eflags != X86_EFLAGS_TEST_DF)
+    return false;
+  for (unsigned I = 0; I != 2; ++I) {
+    const auto &Operand = X.operands[I];
+    if (Operand.size != Width || Operand.avx_bcast != X86_AVX_BCAST_INVALID ||
+        Operand.avx_zero_opmask)
+      return false;
+    if (Fill && I == 1) {
+      const auto Accumulator = Width == 1   ? X86_REG_AL
+                               : Width == 2 ? X86_REG_AX
+                               : Width == 4 ? X86_REG_EAX
+                                            : X86_REG_RAX;
+      if (Operand.type != X86_OP_REG || Operand.reg != Accumulator)
+        return false;
+    } else if (Operand.type != X86_OP_MEM ||
+               Operand.mem.segment != X86_REG_INVALID ||
+               Operand.mem.base != (I ? X86_REG_RSI : X86_REG_RDI) ||
+               Operand.mem.index != X86_REG_INVALID || Operand.mem.scale != 1 ||
+               Operand.mem.disp) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// Intel SDM Vol. 2, MOVS/STOS/REP, LDMXCSR, SWAPGS and CPUID: these forms
+// introduce no undefined output bits. This does not certify nonfaulting
+// execution, the MXCSR writable mask, a repeated transfer's count/direction, or
+// opaque-state preservation. Their existing semantic owners retain those
+// separate obligations.
 inline bool form(const cs_insn *Insn, Arch Target) {
   if (Insn->detail->x86.prefix[0] == X86_PREFIX_LOCK) {
     if (Insn->id == X86_INS_XADD)
@@ -327,33 +400,13 @@ inline bool form(const cs_insn *Insn, Arch Target) {
     return writePrefetchForm(Insn, Target);
   if (Insn->id == X86_INS_CLAC || Insn->id == X86_INS_STAC)
     return accessCheckForm(Insn, Target);
+  if (repTransferForm(Insn, Target))
+    return true;
   const auto &X = Insn->detail->x86;
   if (Target != Arch::X64 || !Insn->size || Insn->size > 15 || X.avx_sae ||
       X.avx_rm != X86_AVX_RM_INVALID || X.avx_cc != X86_AVX_CC_INVALID ||
       X.encoding.imm_size || X.encoding.imm_offset)
     return false;
-  if (Insn->id == X86_INS_MOVSQ) {
-    // Keep the first admission exactly F3 48 A5: 64-bit count and pointers,
-    // no source segment, address-size override or redundant prefix.
-    if (Insn->size != 3 || Insn->bytes[0] != 0xf3 || Insn->bytes[1] != 0x48 ||
-        Insn->bytes[2] != 0xa5 || X.prefix[0] != 0xf3 || X.prefix[1] ||
-        X.prefix[2] || X.prefix[3] || X.opcode[0] != 0xa5 || X.opcode[1] ||
-        X.opcode[2] || X.opcode[3] || X.rex != 0x48 || X.addr_size != 8 ||
-        X.modrm || X.sib || X.disp || X.encoding.modrm_offset ||
-        X.encoding.disp_size || X.encoding.disp_offset || X.op_count != 2)
-      return false;
-    for (unsigned I = 0; I != 2; ++I) {
-      const auto &Operand = X.operands[I];
-      if (Operand.type != X86_OP_MEM || Operand.size != 8 ||
-          Operand.mem.segment != X86_REG_INVALID ||
-          Operand.mem.base != (I ? X86_REG_RSI : X86_REG_RDI) ||
-          Operand.mem.index != X86_REG_INVALID || Operand.mem.scale != 1 ||
-          Operand.mem.disp || Operand.avx_bcast != X86_AVX_BCAST_INVALID ||
-          Operand.avx_zero_opmask)
-        return false;
-    }
-    return true;
-  }
   if ((Insn->id != X86_INS_LDMXCSR && Insn->id != X86_INS_STMXCSR) ||
       X.op_count != 1)
     return false;

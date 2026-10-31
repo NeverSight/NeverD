@@ -64,11 +64,15 @@ fallback regression must finish without increasing its query allowance.
 `InterpreterMachineRegionSourceTest.RepeatedTransfersRetainRuntimeDirectionAndOverlap`
 executes bounded MOVS/STOS in both directions through HighC and LLVMC at O0/O2,
 comparing full state and every byte against an independent ordered copy oracle.
-The user profile covers four element widths and overlapping buffers; the
-kernel choice profile covers its audited REP MOVSQ encoding and retains
-rejection of other forms. Unknown counts remain refused; zero-count and exact
+Both user and kernel choice profiles cover byte, word, dword and qword
+transfers, overlapping buffers, and zero counts with inaccessible pointers.
+`X86NativeStateAudit.RepTransfers*` checks both word-prefix orders, exact
+encoding/operand/effect receipts and independent whole-state memory oracles.
+Address overrides, segment prefixes, redundant prefixes, REPNE and unaudited
+families remain refused. Unknown counts still require proof; exact
 operation/scratch budgets are covered by `StringTransfer.*` and
-`X86NativeStateAudit.Rep*`.
+`X86NativeStateAudit.Rep*`. Empty undefined-effect coverage grants no fault,
+memory-access, opaque-state or ordinary-ABI assumptions.
 
 `SourceStackSpills.StackParametersTrackEntryBytesAcrossOverwrites` and
 `StackParameterOverwritesMeetAcrossEveryPath` distinguish incoming stack bytes

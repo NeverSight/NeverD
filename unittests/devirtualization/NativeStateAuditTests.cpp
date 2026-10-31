@@ -287,57 +287,203 @@ void expectMemory(NdOpEmulator &Emulator, uint64_t Base,
   }
 }
 
-TEST(X86NativeStateAudit, RepMovsqRetainsOrderedCopyAndCompleteState) {
-  const auto Ops = lift({0xf3, 0x48, 0xa5});
-  ASSERT_FALSE(Ops.empty());
-  const auto It = std::find_if(Ops.begin(), Ops.end(), [](const LowOp &Op) {
-    return detail::stringTransferShape(Op).has_value();
-  });
-  ASSERT_NE(It, Ops.end());
-  EXPECT_EQ(It->Inputs[1], NdVar::reg(x86reg::RSI, 8));
-  EXPECT_EQ(It->Inputs[2], NdVar::reg(x86reg::RDI, 8));
-  EXPECT_EQ(It->Inputs[3], NdVar::reg(x86reg::RCX, 8));
-  EXPECT_EQ(It->Inputs[4].Size, X86RepStatusBytes);
-  EXPECT_EQ(detail::stringTransferShape(*It)->CompleteState, true);
-  for (bool Backward : {false, true})
-    for (unsigned Count : {0, 1, 3, 7})
-      for (int Gap : {-32, -8, -1, 0, 1, 8, 32})
-        for (unsigned Seed : {0, 1}) {
-          SCOPED_TRACE(::testing::Message() << Backward << '/' << Count << '/'
-                                            << Gap << '/' << Seed);
-          BinaryImage Image = image();
-          NdOpEmulator Emulator(Image);
-          Emulator.setStrictMode(true);
-          StateOracle Expected(Emulator, Seed);
-          const int Source = Backward ? 160 : 64;
-          const int Destination = Source + Gap;
-          Expected.setRegister(Emulator, x86reg::RSI, MemoryBase + Source);
-          Expected.setRegister(Emulator, x86reg::RDI, MemoryBase + Destination);
-          Expected.setRegister(Emulator, x86reg::RCX, Count);
-          Expected.setDirection(Emulator, Backward);
-          auto Memory = Image.Segments[0].Data;
-          // Per-element snapshot deliberately differs from memcpy/memmove:
-          // overlap can feed a completed element into the next source read.
-          for (unsigned I = 0; I != Count; ++I) {
-            const int Delta = (Backward ? -1 : 1) * int(I * 8);
-            std::array<uint8_t, 8> Element;
-            std::copy_n(Memory.begin() + Source + Delta, 8, Element.begin());
-            std::copy(Element.begin(), Element.end(),
-                      Memory.begin() + Destination + Delta);
+std::vector<uint8_t> repeatedTransferBytes(bool Fill, unsigned Width,
+                                           bool OperandFirst = false) {
+  std::vector<uint8_t> Bytes{0xf3};
+  if (Width == 2)
+    Bytes.insert(OperandFirst ? Bytes.begin() : Bytes.end(), 0x66);
+  if (Width == 8)
+    Bytes.push_back(0x48);
+  Bytes.push_back((Fill ? 0xaa : 0xa4) + (Width != 1));
+  return Bytes;
+}
+
+TEST(X86NativeStateAudit, RepTransfersRequireExactEncodingAndOperands) {
+  for (bool Fill : {false, true})
+    for (unsigned Width : {1, 2, 4, 8})
+      for (bool OperandFirst : {false, true}) {
+        SCOPED_TRACE(::testing::Message()
+                     << Fill << ':' << Width << ':' << OperandFirst);
+        const auto Bytes = repeatedTransferBytes(Fill, Width, OperandFirst);
+        EXPECT_FALSE(lift(Bytes).empty());
+        Decoder Dec;
+        ASSERT_TRUE(Dec.init(Arch::X64));
+        DecodedInsn Insn{};
+        ASSERT_EQ(
+            Dec.decodeOneForLift(Bytes.data(), Bytes.size(), CodeAddress, Insn),
+            int(Bytes.size()));
+        ASSERT_NE(Insn.Raw, nullptr);
+        ASSERT_TRUE(nativestateaudit::form(Insn.Raw, Arch::X64));
+        EXPECT_FALSE(nativestateaudit::form(Insn.Raw, Arch::X86));
+        for (unsigned Mutation = 0; Mutation != 23; ++Mutation) {
+          cs_insn Copy = *Insn.Raw;
+          cs_detail Detail = *Copy.detail;
+          Copy.detail = &Detail;
+          auto &X = Detail.x86;
+          switch (Mutation) {
+          case 0:
+            Copy.bytes[Copy.size - 1] ^= 1;
+            break;
+          case 1:
+            ++Copy.size;
+            break;
+          case 2:
+            Copy.id = X86_INS_LODSB;
+            break;
+          case 3:
+            X.prefix[0] = 0xf2;
+            break;
+          case 4:
+            X.prefix[1] = 0x64;
+            break;
+          case 5:
+            X.prefix[2] ^= 0x66;
+            break;
+          case 6:
+            X.prefix[3] = 0x67;
+            break;
+          case 7:
+            X.rex ^= 1;
+            break;
+          case 8:
+            X.addr_size = 4;
+            break;
+          case 9:
+            X.op_count = 1;
+            break;
+          case 10:
+            X.opcode[1] = 1;
+            break;
+          case 11:
+            X.encoding.modrm_offset = 1;
+            break;
+          case 12:
+            X.encoding.disp_size = 1;
+            break;
+          case 13:
+            X.encoding.imm_size = 1;
+            break;
+          case 14:
+            X.eflags ^= X86_EFLAGS_UNDEFINED_CF;
+            break;
+          case 15:
+            X.operands[0].size ^= 1;
+            break;
+          case 16:
+            X.operands[0].mem.base = X86_REG_RSI;
+            break;
+          case 17:
+            X.operands[0].mem.segment = X86_REG_FS;
+            break;
+          case 18:
+            X.operands[1].size ^= 1;
+            break;
+          case 19:
+            if (Fill)
+              X.operands[1].reg = X86_REG_RBX;
+            else
+              X.operands[1].mem.base = X86_REG_RDI;
+            break;
+          case 20:
+            X.operands[1].avx_zero_opmask = true;
+            break;
+          case 21:
+            X.operands[0].mem.disp = 1;
+            break;
+          case 22:
+            X.avx_sae = true;
+            break;
           }
-          auto Expanded = detail::lowerStringTransfer(
-              *It, Count, Backward, Ops, 0x70000000, Count * 4 + 3);
-          ASSERT_TRUE(bool(Expanded)) << llvm::toString(Expanded.takeError());
-          Expanded->insert(Expanded->begin(), Ops.begin(), It);
-          Expanded->insert(Expanded->end(), It + 1, Ops.end());
-          const uint64_t Delta = Backward ? uint64_t(0) - Count * 8 : Count * 8;
-          Expected.Registers[x86reg::RSI / 8] += Delta;
-          Expected.Registers[x86reg::RDI / 8] += Delta;
-          Expected.Registers[x86reg::RCX / 8] = 0;
-          EXPECT_EQ(Emulator.run(*Expanded), Expanded->size());
-          Expected.expect(Emulator);
-          expectMemory(Emulator, MemoryBase, Memory);
+          EXPECT_FALSE(nativestateaudit::form(&Copy, Arch::X64)) << Mutation;
         }
+      }
+}
+
+TEST(X86NativeStateAudit, RepTransfersRejectUnauditedNativeForms) {
+  for (bool Fill : {false, true})
+    for (unsigned Width : {1, 2, 4, 8}) {
+      const auto Canonical = repeatedTransferBytes(Fill, Width);
+      for (uint8_t Prefix : {0x67, 0x64, 0x65, 0x2e, 0xf3}) {
+        auto Bytes = Canonical;
+        Bytes.insert(Bytes.begin(), Prefix);
+        Decoder Dec;
+        ASSERT_TRUE(Dec.init(Arch::X64));
+        DecodedInsn Insn{};
+        ASSERT_EQ(
+            Dec.decodeOneForLift(Bytes.data(), Bytes.size(), CodeAddress, Insn),
+            int(Bytes.size()));
+        EXPECT_FALSE(nativestateaudit::form(Insn.Raw, Arch::X64));
+        std::vector<LowOp> Ops;
+        LowInstructionUndefinedEffects Effects;
+        Dec.liftToLow(Insn, Ops, {}, {}, &Effects);
+        EXPECT_NE(Effects.Coverage, LowUndefinedCoverage::Complete);
+      }
+    }
+}
+
+TEST(X86NativeStateAudit, RepTransfersRetainOrderedMemoryAndCompleteState) {
+  for (bool Fill : {false, true})
+    for (unsigned Width : {1, 2, 4, 8}) {
+      const auto Ops = lift(repeatedTransferBytes(Fill, Width));
+      ASSERT_FALSE(Ops.empty());
+      const auto It = std::find_if(Ops.begin(), Ops.end(), [](const LowOp &Op) {
+        return detail::stringTransferShape(Op).has_value();
+      });
+      ASSERT_NE(It, Ops.end());
+      EXPECT_EQ(It->Inputs[1], NdVar::reg(Fill ? x86reg::RDI : x86reg::RSI, 8));
+      EXPECT_EQ(It->Inputs[2], NdVar::reg(Fill ? x86reg::RCX : x86reg::RDI, 8));
+      EXPECT_EQ(It->Inputs[3], NdVar::reg(Fill ? x86reg::RAX : x86reg::RCX, 8));
+      EXPECT_EQ(It->Inputs[4].Size, X86RepStatusBytes);
+      EXPECT_EQ(detail::stringTransferShape(*It)->CompleteState, true);
+      for (bool Backward : {false, true})
+        for (unsigned Count : {0, 1, 3, 7})
+          for (int Gap : {-32, -8, -1, 0, 1, 8, 32})
+            for (unsigned Seed : {0, 1}) {
+              SCOPED_TRACE(::testing::Message() << Backward << '/' << Count
+                                                << '/' << Gap << '/' << Seed);
+              BinaryImage Image = image();
+              NdOpEmulator Emulator(Image);
+              Emulator.setStrictMode(true);
+              StateOracle Expected(Emulator, Seed);
+              const int Source = Backward ? 160 : 64;
+              const int Destination = Source + Gap;
+              Expected.setRegister(Emulator, x86reg::RSI, MemoryBase + Source);
+              Expected.setRegister(Emulator, x86reg::RDI,
+                                   MemoryBase + Destination);
+              Expected.setRegister(Emulator, x86reg::RCX, Count);
+              Expected.setDirection(Emulator, Backward);
+              auto Memory = Image.Segments[0].Data;
+              // Per-element snapshot deliberately differs from memcpy/memmove:
+              // overlap can feed a completed element into the next source read.
+              for (unsigned I = 0; I != Count; ++I) {
+                const int Delta = (Backward ? -1 : 1) * int(I * Width);
+                std::array<uint8_t, 8> Element;
+                for (unsigned B = 0; B != Width; ++B)
+                  Element[B] = Fill ? uint8_t(Expected.Registers[0] >> (8 * B))
+                                    : Memory[Source + Delta + B];
+                std::copy_n(Element.begin(), Width,
+                            Memory.begin() + Destination + Delta);
+              }
+              const unsigned Budget =
+                  Count * (Fill ? 2 : 4) +
+                  (Fill ? 2 + (Width != 8 && Count != 0) : 3);
+              auto Expanded = detail::lowerStringTransfer(
+                  *It, Count, Backward, Ops, 0x70000000, Budget);
+              ASSERT_TRUE(bool(Expanded))
+                  << llvm::toString(Expanded.takeError());
+              Expanded->insert(Expanded->begin(), Ops.begin(), It);
+              Expanded->insert(Expanded->end(), It + 1, Ops.end());
+              const uint64_t Delta =
+                  Backward ? uint64_t(0) - Count * Width : Count * Width;
+              if (!Fill)
+                Expected.Registers[x86reg::RSI / 8] += Delta;
+              Expected.Registers[x86reg::RDI / 8] += Delta;
+              Expected.Registers[x86reg::RCX / 8] = 0;
+              EXPECT_EQ(Emulator.run(*Expanded), Expanded->size());
+              Expected.expect(Emulator);
+              expectMemory(Emulator, MemoryBase, Memory);
+            }
+    }
 }
 
 TEST(X86NativeStateAudit, AccessCheckHasNoArbitraryOrOpaqueStateCertificate) {
@@ -710,9 +856,9 @@ TEST(X86NativeStateAudit, DescriptorAuditRejectsChangedMemoryAndRegisters) {
 TEST(X86NativeStateAudit, OtherPrefixesModesAndInstructionFamiliesStayClosed) {
   const std::vector<std::vector<uint8_t>> Cases = {
       {0x48, 0xa5},
-      {0xf3, 0xa5},
-      {0xf3, 0xa4},
-      {0xf3, 0x48, 0xab},
+      {0xf3, 0x66, 0x66, 0xa5},
+      {0xf3, 0x40, 0xaa},
+      {0xf2, 0x66, 0xab},
       {0xf2, 0x48, 0xa5},
       {0xf3, 0xf3, 0x48, 0xa5},
       {0x67, 0xf3, 0x48, 0xa5},
