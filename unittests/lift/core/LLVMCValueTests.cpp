@@ -5286,6 +5286,111 @@ int main(void) {
     compileAndRun(Source, Optimization, {}, true);
 }
 
+TEST(LLVMCValues, CursorLoopsKeepHeaderEffectsAndEntryLabels) {
+  for (bool HeaderEffects : {false, true})
+    for (bool ReloadCurrent : {false, true})
+      for (bool ReorderBlocks : {false, true})
+        for (bool PreserveTypes : {false, true}) {
+          SCOPED_TRACE(HeaderEffects);
+          SCOPED_TRACE(ReloadCurrent);
+          SCOPED_TRACE(ReorderBlocks);
+          SCOPED_TRACE(PreserveTypes);
+          std::string IR = R"(
+          target datalayout = "e-p:64:64"
+          declare void @record_cursor(i64)
+          define i64 @cursor_loop(i64 %limit, i1 %run, ptr %out, ptr %seen) {
+          entry:
+            %cursor = alloca i64
+            store i64 0, ptr %cursor
+            br i1 %run, label %header, label %early
+          header:
+            %current = load i64, ptr %cursor
+            HEADER_EFFECTS
+            %more = icmp ult i64 %current, %limit
+            br i1 %more, label %body, label %exit
+          body:
+            store i64 %current, ptr %out
+            br label %latch
+          latch:
+            %next = add i64 %current, 1
+            store i64 %next, ptr %cursor
+            br label %header
+          exit:
+            ret i64 %current
+          early:
+            ret i64 19
+          }
+        )";
+          IR.replace(IR.find("HEADER_EFFECTS"),
+                     llvm::StringRef("HEADER_EFFECTS").size(),
+                     HeaderEffects ? "call void @record_cursor(i64 %current)\n"
+                                     "store i64 %current, ptr %seen"
+                                   : "");
+          if (ReloadCurrent) {
+            auto Replace = [&](llvm::StringRef Before, llvm::StringRef After) {
+              auto At = IR.find(Before.str());
+              ASSERT_NE(At, std::string::npos);
+              IR.replace(At, Before.size(), After.str());
+            };
+            Replace("store i64 %current, ptr %out",
+                    "%body_current = load i64, ptr %cursor\n"
+                    "store i64 %body_current, ptr %out");
+            Replace("%next = add i64 %current, 1",
+                    "%latch_current = load i64, ptr %cursor\n"
+                    "%next = add i64 %latch_current, 1");
+            Replace("ret i64 %current",
+                    "%exit_current = load i64, ptr %cursor\n"
+                    "ret i64 %exit_current");
+          }
+          llvm::LLVMContext Context;
+          llvm::SMDiagnostic Diagnostic;
+          auto Module = llvm::parseAssemblyString(IR, Diagnostic, Context);
+          ASSERT_TRUE(Module);
+          auto *Function = Module->getFunction("cursor_loop");
+          if (ReorderBlocks) {
+            Function->back().moveAfter(&Function->getEntryBlock());
+            for (auto &Block : *Function)
+              if (Block.getName() == "exit") {
+                Block.moveAfter(&Function->getEntryBlock());
+                break;
+              }
+          }
+          ASSERT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
+          neverd::CEmitterOptions Options;
+          Options.PreserveLLVMFunctionTypes = PreserveTypes;
+          std::string Source;
+          llvm::raw_string_ostream Output(Source);
+          ASSERT_TRUE(neverd::LLVMCEmitter().emit(*Module, Output, Options));
+          Source +=
+              "\n#define HEADER_EFFECTS " + std::to_string(HeaderEffects) + R"(
+static uint64_t visits, trace;
+void record_cursor(uint64_t value) {
+  ++visits;
+  trace = trace * UINT64_C(31) + value;
+}
+int main(void) {
+  for (uint64_t limit = 0; limit < 8; ++limit)
+    for (unsigned run = 0; run != 2; ++run) {
+      uint64_t out = 71, seen = 73, expected_trace = 0;
+      visits = trace = 0;
+      uint64_t result = cursor_loop(limit, run, &out, &seen);
+      if (result != (run ? limit : 19)) return 1;
+      if (out != (run && limit ? limit - 1 : 71)) return 2;
+      if (seen != (HEADER_EFFECTS && run ? limit : 73)) return 3;
+      if (visits != (HEADER_EFFECTS && run ? limit + 1 : 0)) return 4;
+      if (HEADER_EFFECTS && run)
+        for (uint64_t i = 0; i <= limit; ++i)
+          expected_trace = expected_trace * UINT64_C(31) + i;
+      if (trace != expected_trace) return 5;
+    }
+  return 0;
+}
+)";
+          for (const char *Level : {"-O0", "-O2"})
+            compileAndRun(Source, Level, {}, true);
+        }
+}
+
 TEST(LLVMCValues, LargeLoopProjectionPreservesAliasedObservations) {
   llvm::LLVMContext Context;
   llvm::Module Module("loop-projection", Context);
