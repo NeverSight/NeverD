@@ -1893,3 +1893,5 @@ LLVMC 在每次不可變函式投影開始時建立一次 LLVM 區塊順序索�
 `X64CR4PGEState` 是僅允許修改 PGE 的 CR4 原始分析契約。呼叫者提供有效且非故障的核心狀態、PGE 支援，以及沒有分頁或快取觀察者的穩定一般記憶體映射。`X64PageGlobal.cpp` 擁有完整 64 位元值關係與拒絕條件，共用控制狀態分派層負責儲存和提交。原始序列化內在操作仍保留。原生證明與V3 之前的原始碼介面皆拒絕此契約，包括未使用狀態；不提供 TLB 模型或核心等價證明。
 
 `wrapInterpreterMachineRegionChoiceSourceX64V3` 要求 KernelX64NoFaultV1 與完整 CR4/PGE 域。獨立 480 位元組狀態在 V2 前綴後加入 CR4；原始分析與原始碼共用控制轉換及旗標規則。寫入先檢查整條指令的記錄預留，再檢查控制條件；狀態 7 回報尚未執行的原始 PC，保留先前效果和 CR4/游標。不執行主機控制轉移或模擬 TLB；V1/V2 保留使用者模式拒絕邊界。
+
+經過認證的 x64 機器區域原始碼保留預設記憶體中的純量 XCHG 與 LOCK XADD。介面在原始憑據認證後重用 `supportsAtomicWritePreservation` 檢查形態；`X86AtomicRmw.h` 與共用呈現器保留原生交易。裸機器狀態原始碼、CMPXCHG 與分段原子操作仍不屬於此原始碼契約。
