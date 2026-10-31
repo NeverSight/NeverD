@@ -1,0 +1,324 @@
+{
+  "date": "2026-10-30",
+  "contract": "Native long-mode VMRUN with explicit fourteen-GPR/user-xstate context",
+  "scope": "Native LLVM and NeverC codegen plus explicit LLVM-to-C projection; not raw VMRUN lifting",
+  "source_revisions": {
+    "neverd": "7b94418ae4c8e5842b8598284703127052ce025f",
+    "neverc": "50563412230e044f2de9465cef5373b3594ea734",
+    "llvm": "10151323866976f7d7b6e0b5c1336e005a8a1663"
+  },
+  "ida": {
+    "method": "Local IDA/Hex-Rays through idalib on an isolated original-byte fixture",
+    "version": "Not queried; observation applies to the local installed instance",
+    "function": {
+      "addr": "0x401007",
+      "error": null,
+      "name": "vmrun_rcx_result",
+      "prototype": null,
+      "size": 15,
+      "decompiled": "__int64 __fastcall vmrun_rcx_result(unsigned int a1)\n{\n  __svm_vmrun(a1); /*0x40100f*/\n  return 4660; /*0x401015*/\n}",
+      "assembly": "vmrun_rcx_result (.text @ 0x401007):\n401007  mov rax, rdi\n40100a  mov ecx, 1234h\n40100f  vmrun\n401012  mov rax, rcx\n401015  retn",
+      "strings": [],
+      "constants": [],
+      "callees": [],
+      "callers": [],
+      "xrefs": {
+        "to": [],
+        "from": [
+          {
+            "addr": "0x40100a",
+            "type": "code"
+          }
+        ]
+      },
+      "comments": {},
+      "basic_blocks": {
+        "count": 1,
+        "cyclomatic_complexity": 1
+      }
+    },
+    "assembly_source": ".text\n.globl vmrun_simple\n.type vmrun_simple,@function\nvmrun_simple:\n    mov %rdi, %rax\n    vmrun %rax\n    ret\n.size vmrun_simple, .-vmrun_simple\n\n.globl vmrun_rcx_result\n.type vmrun_rcx_result,@function\nvmrun_rcx_result:\n    mov %rdi, %rax\n    mov $0x1234, %ecx\n    vmrun %rax\n    mov %rcx, %rax\n    ret\n.size vmrun_rcx_result, .-vmrun_rcx_result\n\n.globl vmrun_preserve_host\n.type vmrun_preserve_host,@function\nvmrun_preserve_host:\n    push %rbx\n    mov %rdi, %rax\n    mov %rsi, %rbx\n    vmrun %rax\n    mov %rbx, %rax\n    pop %rbx\n    ret\n.size vmrun_preserve_host, .-vmrun_preserve_host\n\n.globl vmrun_addr32\n.type vmrun_addr32,@function\nvmrun_addr32:\n    mov %rdi, %rax\n    vmrun %eax\n    ret\n.size vmrun_addr32, .-vmrun_addr32\n.section .note.GNU-stack,\"\",@progbits\n",
+    "binary_sha256": "d671e29c82d4f77b34b521ef23523a809f4b2759624d830078c3eca0ecce0445",
+    "raw_analysis_sha256": "cb6bbc5c1097e98594b08375b18515ef4d3dbab9faf00634b436fd03f5aaca9b",
+    "guest_action": "mov ecx, 0x5678; vmmcall",
+    "observed_original_return": "0x5678",
+    "ida_projected_return": "0x1234",
+    "limits": "One concrete counterexample; no universal IDA or overall quality claim"
+  },
+  "totals": {
+    "native_context_round_trips": 480,
+    "independent_original_ida_cases": 10,
+    "profiles": 10
+  },
+  "routes": {
+    "llvm": {
+      "passed": true,
+      "profiles": [
+        {
+          "optimization": "O0",
+          "contexts": 48,
+          "original_ida_counterexample": true
+        },
+        {
+          "optimization": "O2",
+          "contexts": 48,
+          "original_ida_counterexample": true
+        }
+      ],
+      "tools": {
+        "/mnt/data/neverd-native-system-returns-20261029/build-neverc/bin/neverc": "2d513489c2f69db2b85f38b0dd1579219b3f8354d3a14501f003ca62721042f5",
+        "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc": "e89614455ba6483f58484818576c64b3f0a69b4e10e7c8e0dc07378e778a984f",
+        "/home/ad/.local/bin/clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+        "/home/ad/.local/bin/ld.lld": "fc1073aaaacfed055c0612dc5190cd19419c711cb8341c37d97fec2916891447",
+        "/usr/bin/objcopy": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770",
+        "/usr/local/bin/qemu-system-x86_64": "7dcf38a7fa3478a269fe6890854f9a4ce4f14d7600f023d03fa1a28cf23e04c0"
+      },
+      "fixture_sha256": "5841a909b3a39744d18f2f73e9020c15adac49edba8a7197f69ac3d2e95fc15d",
+      "verifier_sha256": "fe955dcfb450ca85cc8ea051842ecb705fc5930774b2952ee8b595dfd9b4c92f",
+      "neverd_source_sha256": null,
+      "files": {
+        "commands.json": "99593897851868348d3fcf68fb93525c4850acd2cd0fd818a2750adc06b82754",
+        "guest-64-O0.boot.o": "d607434e2d2f4e6688f30e748909598946c4e400d21ccfd7d843195ba8725fe7",
+        "guest-64-O0.c": "af7688125db9fec58c7a133c1f1510e62c7d8f2ddf82487ddf7e52c30664dd62",
+        "guest-64-O0.elf": "913b41ed6a0c59cabb51696f83397d654781df26908051dbae4c546554cf2b5e",
+        "guest-64-O0.ld": "02aeba374de0500b31d988dc530909394f6da0a764f5e3e69027e12707e2ad0f",
+        "guest-64-O0.ll": "119aebec7ab28258a7aa519d41326029f27ed886ba422a5e2681aef9b63c6670",
+        "guest-64-O0.multiboot": "ec5d3679a4f319974247503c5c4b748b953d2999d6f2e16efd932eb1927639ce",
+        "guest-64-O0.o": "949c2ce38ac8e628dfaf700a25ed8ec4b62e50e4ecea1d3a12f36ee70e0a1e03",
+        "guest-64-O0.run.log": "6d734f08a96ebeba901e302ce50ddf3387f6eaaa553a9fd5b4a255b5d19cb331",
+        "guest-64-O0.s": "7645b5afcb08d52ba56afc4aac968d66ee3f1500e5c03f7e880f307c1e91f7fe",
+        "guest-64-O2.boot.o": "d607434e2d2f4e6688f30e748909598946c4e400d21ccfd7d843195ba8725fe7",
+        "guest-64-O2.c": "af7688125db9fec58c7a133c1f1510e62c7d8f2ddf82487ddf7e52c30664dd62",
+        "guest-64-O2.elf": "b37c3905a584bac6f4ffbb265856767916c45146e90299eb225c3bffbda8cf63",
+        "guest-64-O2.ld": "02aeba374de0500b31d988dc530909394f6da0a764f5e3e69027e12707e2ad0f",
+        "guest-64-O2.ll": "ffe0bf61618aca4752f6d5cdc939a3c13778859e989bece6426a82e7ac2f7e2b",
+        "guest-64-O2.multiboot": "3973835166f729ba38535f37c8b526bfbd3d34b846446832134b45fa56a0314e",
+        "guest-64-O2.o": "ca29edcb66917bc6c7718faf2283674e5588e74041b24ca1e1247ec9110d3f61",
+        "guest-64-O2.run.log": "6d734f08a96ebeba901e302ce50ddf3387f6eaaa553a9fd5b4a255b5d19cb331",
+        "guest-64-O2.s": "7645b5afcb08d52ba56afc4aac968d66ee3f1500e5c03f7e880f307c1e91f7fe"
+      },
+      "scope": "QEMU TCG long-mode SVM, XCR0=7; no physical AMD qualification",
+      "record_sha256": "faa715e8659865bc1ecbdb4601bc9f8d15f30424eaf74d7682db67c5a35f478a",
+      "record_path": "/mnt/data/neverd-vmrun-20261030/qualified-llvm/qualification.json"
+    },
+    "neverc": {
+      "passed": true,
+      "profiles": [
+        {
+          "optimization": "O0",
+          "contexts": 48,
+          "original_ida_counterexample": true
+        },
+        {
+          "optimization": "O2",
+          "contexts": 48,
+          "original_ida_counterexample": true
+        }
+      ],
+      "tools": {
+        "/mnt/data/neverd-native-system-returns-20261029/build-neverc/bin/neverc": "7eb6be6d2e77febe0feb693ecadd46657af66c6725dd61ee832fde3ee78852a4",
+        "/home/ad/.local/bin/clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+        "/home/ad/.local/bin/ld.lld": "fc1073aaaacfed055c0612dc5190cd19419c711cb8341c37d97fec2916891447",
+        "/usr/bin/objcopy": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770",
+        "/usr/local/bin/qemu-system-x86_64": "7dcf38a7fa3478a269fe6890854f9a4ce4f14d7600f023d03fa1a28cf23e04c0"
+      },
+      "fixture_sha256": "5841a909b3a39744d18f2f73e9020c15adac49edba8a7197f69ac3d2e95fc15d",
+      "verifier_sha256": "fe955dcfb450ca85cc8ea051842ecb705fc5930774b2952ee8b595dfd9b4c92f",
+      "neverd_source_sha256": null,
+      "files": {
+        "commands.json": "f79222f7686c81e1a9cefe4eb83b10e74d7e4fac217852c30d0961e2cda8a07d",
+        "guest-64-O0.boot.o": "d607434e2d2f4e6688f30e748909598946c4e400d21ccfd7d843195ba8725fe7",
+        "guest-64-O0.c": "5841a909b3a39744d18f2f73e9020c15adac49edba8a7197f69ac3d2e95fc15d",
+        "guest-64-O0.elf": "2ab273e997e175e5dc423c3966e65c836eb4aa2cb67c556e6db9b027b781cac5",
+        "guest-64-O0.ld": "02aeba374de0500b31d988dc530909394f6da0a764f5e3e69027e12707e2ad0f",
+        "guest-64-O0.ll": "e78c25ac2a273cd9e5a3d4be0d4bb2bc3679f390d4d04f7935b3af9a7655664a",
+        "guest-64-O0.multiboot": "4e8cdc0e25015a3e2be3c65cfd382107d5a83948cea879b426ecd979194d6270",
+        "guest-64-O0.o": "9259dce362c52e564c942c67c16a9cb138ee7acaa74855f0ae8b3add899f4711",
+        "guest-64-O0.run.log": "6d734f08a96ebeba901e302ce50ddf3387f6eaaa553a9fd5b4a255b5d19cb331",
+        "guest-64-O0.s": "7645b5afcb08d52ba56afc4aac968d66ee3f1500e5c03f7e880f307c1e91f7fe",
+        "guest-64-O2.boot.o": "d607434e2d2f4e6688f30e748909598946c4e400d21ccfd7d843195ba8725fe7",
+        "guest-64-O2.c": "5841a909b3a39744d18f2f73e9020c15adac49edba8a7197f69ac3d2e95fc15d",
+        "guest-64-O2.elf": "4352ff0d0e5cf14df2033d6cc5383c2cec8320dae0b5f7a964389a21e4ac79ff",
+        "guest-64-O2.ld": "02aeba374de0500b31d988dc530909394f6da0a764f5e3e69027e12707e2ad0f",
+        "guest-64-O2.ll": "288286d741c9f185691134f8bccc794699de48d39f1c69d6929c189347709c4d",
+        "guest-64-O2.multiboot": "e651fa820fa5ba81526282db4f706a24a976af5a581080fdca9d09ec0d0f45da",
+        "guest-64-O2.o": "672c257cebc23e8bd0d5caee7c3aed81f4c25fb45cc63141c60febed5b37e7c8",
+        "guest-64-O2.run.log": "6d734f08a96ebeba901e302ce50ddf3387f6eaaa553a9fd5b4a255b5d19cb331",
+        "guest-64-O2.s": "7645b5afcb08d52ba56afc4aac968d66ee3f1500e5c03f7e880f307c1e91f7fe"
+      },
+      "scope": "QEMU TCG long-mode SVM, XCR0=7; no physical AMD qualification",
+      "record_sha256": "0c368fd649daf1370985dfbc801d5664ebba0fd48dfdf1773408af241d79e0e2",
+      "record_path": "/mnt/data/neverd-vmrun-20261030/qualified-neverc/qualification.json"
+    },
+    "neverc-fork": {
+      "passed": true,
+      "profiles": [
+        {
+          "optimization": "O0",
+          "contexts": 48,
+          "original_ida_counterexample": true
+        },
+        {
+          "optimization": "O2",
+          "contexts": 48,
+          "original_ida_counterexample": true
+        }
+      ],
+      "tools": {
+        "/mnt/data/neverd-native-system-returns-20261029/build-neverc/bin/neverc": "2d513489c2f69db2b85f38b0dd1579219b3f8354d3a14501f003ca62721042f5",
+        "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc": "e89614455ba6483f58484818576c64b3f0a69b4e10e7c8e0dc07378e778a984f",
+        "/home/ad/.local/bin/clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+        "/home/ad/.local/bin/ld.lld": "fc1073aaaacfed055c0612dc5190cd19419c711cb8341c37d97fec2916891447",
+        "/usr/bin/objcopy": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770",
+        "/usr/local/bin/qemu-system-x86_64": "7dcf38a7fa3478a269fe6890854f9a4ce4f14d7600f023d03fa1a28cf23e04c0"
+      },
+      "fixture_sha256": "5841a909b3a39744d18f2f73e9020c15adac49edba8a7197f69ac3d2e95fc15d",
+      "verifier_sha256": "fe955dcfb450ca85cc8ea051842ecb705fc5930774b2952ee8b595dfd9b4c92f",
+      "neverd_source_sha256": null,
+      "files": {
+        "commands.json": "8f1174de78bc7d26d232789f64de05f7fa2b9445e81169b88d89862c5eab86cf",
+        "guest-64-O0.bc": "bd1852b410cedb90214c588328db59cde9cd19122eba517e26065d2141c782b2",
+        "guest-64-O0.boot.o": "d607434e2d2f4e6688f30e748909598946c4e400d21ccfd7d843195ba8725fe7",
+        "guest-64-O0.c": "5841a909b3a39744d18f2f73e9020c15adac49edba8a7197f69ac3d2e95fc15d",
+        "guest-64-O0.elf": "5675cea4366d1ccc69688a98199ebf86f48c036785e4476e7d20f91c977bf50e",
+        "guest-64-O0.ld": "02aeba374de0500b31d988dc530909394f6da0a764f5e3e69027e12707e2ad0f",
+        "guest-64-O0.ll": "88683481a7a94a32905ce1da8bd9d29d61a88209a4a86c280b9a5a17fbf7a4f5",
+        "guest-64-O0.multiboot": "5ae14dbfd64080d6e5e4297fdfaf808fdef11b1fce4d745b5d8d3ac72793804f",
+        "guest-64-O0.o": "c58a61e24af210a4d8567fae7310945beefbee47ed0048212809eb66de7c9a52",
+        "guest-64-O0.run.log": "6d734f08a96ebeba901e302ce50ddf3387f6eaaa553a9fd5b4a255b5d19cb331",
+        "guest-64-O0.s": "7645b5afcb08d52ba56afc4aac968d66ee3f1500e5c03f7e880f307c1e91f7fe",
+        "guest-64-O2.bc": "47dba420789264895f988a0804e830d91113e6e3eb035cfe35df877ff902e484",
+        "guest-64-O2.boot.o": "d607434e2d2f4e6688f30e748909598946c4e400d21ccfd7d843195ba8725fe7",
+        "guest-64-O2.c": "5841a909b3a39744d18f2f73e9020c15adac49edba8a7197f69ac3d2e95fc15d",
+        "guest-64-O2.elf": "0d4e06d8028ac0b6746fd475f8fd958c3d93f831f78479fa965dbaa5747337d1",
+        "guest-64-O2.ld": "02aeba374de0500b31d988dc530909394f6da0a764f5e3e69027e12707e2ad0f",
+        "guest-64-O2.ll": "c8e1416e3986699d3c25e3f21759402d817fdebba4dac852939a9d367243855a",
+        "guest-64-O2.multiboot": "5b5e9ba862e90893abecf485e8dae9c83151516d5a8f751ea57327d6c4e54a85",
+        "guest-64-O2.o": "6bdbe2f1f732bd49a951f6b972f1e33575ee0f7e9a49ae49f97e1c1a1f707072",
+        "guest-64-O2.run.log": "6d734f08a96ebeba901e302ce50ddf3387f6eaaa553a9fd5b4a255b5d19cb331",
+        "guest-64-O2.s": "7645b5afcb08d52ba56afc4aac968d66ee3f1500e5c03f7e880f307c1e91f7fe"
+      },
+      "scope": "QEMU TCG long-mode SVM, XCR0=7; no physical AMD qualification",
+      "record_sha256": "d9b192b33d7274a315f8c90e0f56ec7281bd21f2a1539a5ca546c91f1b226122",
+      "record_path": "/mnt/data/neverd-vmrun-20261030/qualified-neverc-fork/qualification.json"
+    },
+    "neverd-neverc": {
+      "passed": true,
+      "profiles": [
+        {
+          "optimization": "O0",
+          "contexts": 48,
+          "original_ida_counterexample": true
+        },
+        {
+          "optimization": "O2",
+          "contexts": 48,
+          "original_ida_counterexample": true
+        }
+      ],
+      "tools": {
+        "/mnt/data/neverd-native-system-returns-20261029/build-neverc/bin/neverc": "2d513489c2f69db2b85f38b0dd1579219b3f8354d3a14501f003ca62721042f5",
+        "/home/ad/.local/bin/clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+        "/home/ad/.local/bin/ld.lld": "fc1073aaaacfed055c0612dc5190cd19419c711cb8341c37d97fec2916891447",
+        "/usr/bin/objcopy": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770",
+        "/usr/local/bin/qemu-system-x86_64": "7dcf38a7fa3478a269fe6890854f9a4ce4f14d7600f023d03fa1a28cf23e04c0"
+      },
+      "fixture_sha256": "5841a909b3a39744d18f2f73e9020c15adac49edba8a7197f69ac3d2e95fc15d",
+      "verifier_sha256": "fe955dcfb450ca85cc8ea051842ecb705fc5930774b2952ee8b595dfd9b4c92f",
+      "neverd_source_sha256": "30f1639f75aac020d411bfb8df3a5e266d8087683f007a648ad75c293d8d85cc",
+      "files": {
+        "commands.json": "8650a1a2d04334d3962144c97648025028e84e19f4e6f0fb6407707345344d95",
+        "guest-64-O0.boot.o": "d607434e2d2f4e6688f30e748909598946c4e400d21ccfd7d843195ba8725fe7",
+        "guest-64-O0.c": "fe2dee5cb1e1068369af5f0a15e626bd3bd819a0b916a100d65ed090b354c0af",
+        "guest-64-O0.elf": "15719a52d76157ae3bb378484e0cedd95dffb8c143c0e1ba1089f336b8df602f",
+        "guest-64-O0.ld": "02aeba374de0500b31d988dc530909394f6da0a764f5e3e69027e12707e2ad0f",
+        "guest-64-O0.ll": "dcf97df71249e76f8c2859c477006ef5073aca75ced94eab9d270dd3005a4889",
+        "guest-64-O0.multiboot": "587727f102346e882ac77b07d09e11292a891f96c9e7b6d18d54714aed270469",
+        "guest-64-O0.o": "0d2bb74e0f9b90074587318754a117349b15191dfa054cbe3dcfdab57a273bd6",
+        "guest-64-O0.run.log": "6d734f08a96ebeba901e302ce50ddf3387f6eaaa553a9fd5b4a255b5d19cb331",
+        "guest-64-O0.s": "7645b5afcb08d52ba56afc4aac968d66ee3f1500e5c03f7e880f307c1e91f7fe",
+        "guest-64-O2.boot.o": "d607434e2d2f4e6688f30e748909598946c4e400d21ccfd7d843195ba8725fe7",
+        "guest-64-O2.c": "fe2dee5cb1e1068369af5f0a15e626bd3bd819a0b916a100d65ed090b354c0af",
+        "guest-64-O2.elf": "5621b4ceefaf1e43d8ba68e0f563fa01c76336f70163827f1729a7dc0495d267",
+        "guest-64-O2.ld": "02aeba374de0500b31d988dc530909394f6da0a764f5e3e69027e12707e2ad0f",
+        "guest-64-O2.ll": "d3e95a52a92d1e76d1f9951a0b13e3888bfe2d9cf7b405ca8238cece0b9e0b07",
+        "guest-64-O2.multiboot": "1c30c3ad4585d9cf2a06208f6890dfcb478c247776cae20fed284b7dd90df6b7",
+        "guest-64-O2.o": "c450834da09a8495a5a4a72b4a99549994142e821de3c402db8cd5395a8da5dd",
+        "guest-64-O2.run.log": "6d734f08a96ebeba901e302ce50ddf3387f6eaaa553a9fd5b4a255b5d19cb331",
+        "guest-64-O2.s": "7645b5afcb08d52ba56afc4aac968d66ee3f1500e5c03f7e880f307c1e91f7fe"
+      },
+      "scope": "QEMU TCG long-mode SVM, XCR0=7; no physical AMD qualification",
+      "record_sha256": "687dbcca39e29f0008333712ef053e017e6d639d90afe13742d58c8adf828292",
+      "record_path": "/mnt/data/neverd-vmrun-20261030/qualified-neverd-neverc/qualification.json"
+    },
+    "neverd-fork": {
+      "passed": true,
+      "profiles": [
+        {
+          "optimization": "O0",
+          "contexts": 48,
+          "original_ida_counterexample": true
+        },
+        {
+          "optimization": "O2",
+          "contexts": 48,
+          "original_ida_counterexample": true
+        }
+      ],
+      "tools": {
+        "/mnt/data/neverd-native-system-returns-20261029/build-neverc/bin/neverc": "2d513489c2f69db2b85f38b0dd1579219b3f8354d3a14501f003ca62721042f5",
+        "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc": "e89614455ba6483f58484818576c64b3f0a69b4e10e7c8e0dc07378e778a984f",
+        "/home/ad/.local/bin/clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+        "/home/ad/.local/bin/ld.lld": "fc1073aaaacfed055c0612dc5190cd19419c711cb8341c37d97fec2916891447",
+        "/usr/bin/objcopy": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770",
+        "/usr/local/bin/qemu-system-x86_64": "7dcf38a7fa3478a269fe6890854f9a4ce4f14d7600f023d03fa1a28cf23e04c0"
+      },
+      "fixture_sha256": "5841a909b3a39744d18f2f73e9020c15adac49edba8a7197f69ac3d2e95fc15d",
+      "verifier_sha256": "fe955dcfb450ca85cc8ea051842ecb705fc5930774b2952ee8b595dfd9b4c92f",
+      "neverd_source_sha256": "30f1639f75aac020d411bfb8df3a5e266d8087683f007a648ad75c293d8d85cc",
+      "files": {
+        "commands.json": "dfb63c279f62f367ada5cd6fe7575f451fab48ad71d37704da3b8afca64a2b4b",
+        "guest-64-O0.bc": "92ea9562f44a209db74307fbdfee96dc516dd1196a24fe1f18bb31b37e9fa3c0",
+        "guest-64-O0.boot.o": "d607434e2d2f4e6688f30e748909598946c4e400d21ccfd7d843195ba8725fe7",
+        "guest-64-O0.c": "fe2dee5cb1e1068369af5f0a15e626bd3bd819a0b916a100d65ed090b354c0af",
+        "guest-64-O0.elf": "771e14659550795dc1ecbedf68a8a0e853f1a870487bcc1fe0488e6ddbadc861",
+        "guest-64-O0.ld": "02aeba374de0500b31d988dc530909394f6da0a764f5e3e69027e12707e2ad0f",
+        "guest-64-O0.ll": "4faa79a55e99d33cec9b353c114d9d95553c3006b8f9ee20a16646767de69b7f",
+        "guest-64-O0.multiboot": "2904d81072162e2dcbaedf0d38c833e5c97e4c2c46a9a1cae47ad0fbc9237609",
+        "guest-64-O0.o": "2348f2d7882c8fc736af8ee63d8ea51fe3a15d55b2e9a2f94a902710d70a1731",
+        "guest-64-O0.run.log": "6d734f08a96ebeba901e302ce50ddf3387f6eaaa553a9fd5b4a255b5d19cb331",
+        "guest-64-O0.s": "7645b5afcb08d52ba56afc4aac968d66ee3f1500e5c03f7e880f307c1e91f7fe",
+        "guest-64-O2.bc": "60e3e3b3a0aa60e33773bd22b1101bc7f0273edfe338f2ff44f6131e15e18828",
+        "guest-64-O2.boot.o": "d607434e2d2f4e6688f30e748909598946c4e400d21ccfd7d843195ba8725fe7",
+        "guest-64-O2.c": "fe2dee5cb1e1068369af5f0a15e626bd3bd819a0b916a100d65ed090b354c0af",
+        "guest-64-O2.elf": "58c173c851dc16042514779172b6212cfe4251c98654534d0fd834a4d3e05aff",
+        "guest-64-O2.ld": "02aeba374de0500b31d988dc530909394f6da0a764f5e3e69027e12707e2ad0f",
+        "guest-64-O2.ll": "a623940b28ca039ce5cec5141a16bfa06603b27bef1232ec64340c5ace9ec329",
+        "guest-64-O2.multiboot": "e8bbfead6ad6a39a1b17605eea9a571638bbbf15d23f0ce5f3954acd520bf985",
+        "guest-64-O2.o": "894068285cc7d26e6cce564453b4fbaa4af0ad3a093ce8a88008b9faa4684399",
+        "guest-64-O2.run.log": "6d734f08a96ebeba901e302ce50ddf3387f6eaaa553a9fd5b4a255b5d19cb331",
+        "guest-64-O2.s": "7645b5afcb08d52ba56afc4aac968d66ee3f1500e5c03f7e880f307c1e91f7fe"
+      },
+      "scope": "QEMU TCG long-mode SVM, XCR0=7; no physical AMD qualification",
+      "record_sha256": "e9aac92a8673f051d0ce8a66fde1a29d69909b302edf95cb60276a824723115e",
+      "record_path": "/mnt/data/neverd-vmrun-20261030/qualified-neverd-fork/qualification.json"
+    }
+  },
+  "new_pass_manager": {
+    "simple_context_object_test": "passed",
+    "full_guest_runtime": "not qualified: LoopPassManager LCSSA assertion also occurs with the context intrinsic replaced by an ordinary external call",
+    "control_log_sha256": "e61a5241a0dfb1e42525a86da1baffb3a9960c742f074f3f26108d9283579469"
+  },
+  "reference": {
+    "title": "AMD APM Volume 2 revision 3.39, sections 15.5.1 and 15.5.2",
+    "url": "https://www.cs.wm.edu/~smherwig/readings/manuals/amd/sdm/amd64_arch_programmers_manual-vol2-system_programming.pdf",
+    "pdf_sha256": "11d705cdcaaeaf6a0c9effcabbdfdd92b27206232ec15039fe380f2d994b16db"
+  },
+  "remaining_boundaries": [
+    "Ordinary strict raw-machine-code VMRUN lifting remains refused",
+    "Supervisor state, VMLOAD/VMSAVE, GIF/intercepts and VMM environment remain caller-owned",
+    "Runtime coverage is QEMU TCG with XCR0=7, not physical AMD hardware or other xstate components",
+    "No fault recovery, nested SVM, SEV-ES, arbitrary system-state or mode-transition qualification",
+    "LLVM SDK release, pin and NeverD LLVM gitlink are unchanged"
+  ]
+}
