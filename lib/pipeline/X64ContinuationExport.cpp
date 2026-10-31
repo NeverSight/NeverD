@@ -94,6 +94,7 @@ llvm::Expected<Request> readRequest(llvm::StringRef Text) {
                                        "native_descriptor_queries",
                                        "native_page_table_access",
                                        "native_kvm_hypercalls",
+                                       "native_hyperv_hypercall_entry",
                                        "follow_internal_calls",
                                        "follow_direct_jumps",
                                        "callee_depth",
@@ -196,6 +197,14 @@ llvm::Expected<Request> readRequest(llvm::StringRef Text) {
         return invalid(Key + " must be a boolean");
       *Destination = *Flag;
     }
+  if (const auto *Value = Object->get("native_hyperv_hypercall_entry")) {
+    auto Entry = integer(*Value);
+    if (!Entry)
+      return Entry.takeError();
+    if (!*Entry)
+      return invalid("native_hyperv_hypercall_entry must be nonzero");
+    Options.NativeHyperVHypercallEntry = *Entry;
+  }
   if (const auto *Value = Object->get("dispatch")) {
     const auto Dispatch = Value->getAsString();
     if (Dispatch != "switch" && Dispatch != "direct")
@@ -623,6 +632,14 @@ exportX64Continuation(const BinaryImage &Image, llvm::StringRef RequestJSON,
                            ? "declared MXCSR mask; "
                            : "valid caches; declared active paging and "
                              "MXCSR mask; ") +
+           std::string(Request->Options.NativeHyperVHypercallEntry
+                           ? "returning x64 Hyper-V TLFS page ABI; inputs "
+                             "RCX/RDX/R8/XMM0..5 and guest RAM; outputs "
+                             "RAX/RCX/RDX/R8/XMM0..5; other represented state "
+                             "and compiler environment preserved; "
+                             "SetVpRegisters refused; service writes exclude "
+                             "state, budget, code and compiler stack; "
+                           : "") +
            std::string(Request->Options.NativeKvmHypercalls
                            ? "returning KVM ABI with RAX number/result and "
                              "RBX/RCX/RDX/RSI arguments; service depends only "

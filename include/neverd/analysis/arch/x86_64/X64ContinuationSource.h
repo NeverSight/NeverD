@@ -412,6 +412,14 @@ struct X64ContinuationSourceOptions {
   /// context dependencies or state changes are excluded. This does not infer
   /// KVM from an opcode or CPUID.
   bool NativeKvmHypercalls = false;
+  /// Bind the returning x64 Hyper-V TLFS ABI to this executable hypercall
+  /// page. Services consume RCX/RDX/R8/XMM0..5 and guest RAM, and may return
+  /// RAX/RCX/RDX/R8/XMM0..5. Other represented state and the compiler
+  /// environment must be preserved. Self register replacement is excluded.
+  /// This page must remain mapped and services must not access source state,
+  /// budget, code or compiler stack. The original instruction must have the
+  /// same service/continuation behavior in the declared native environment.
+  std::optional<uint64_t> NativeHyperVHypercallEntry;
   uint64_t MaxInstructions = limits::analysis::kX64ContinuationMaxInstructions;
   uint64_t MaxOperations = limits::analysis::kX64ContinuationMaxOperations;
 };

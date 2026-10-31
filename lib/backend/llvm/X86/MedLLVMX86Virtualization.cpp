@@ -34,6 +34,32 @@ llvm::Value *MedLLVMEmitter::emitX86Virtualization(const MedOp &Op,
         " output=" + llvm::Twine(Op.Output.Size) +
         " inputs=" + llvm::Twine(static_cast<unsigned>(Op.NumInputs)));
   const auto C = x86VirtualizationContract(Id);
+  if (Id == Intrinsic::X86HyperVCall) {
+    auto *Type =
+        llvm::FunctionType::get(Builder.getVoidTy(),
+                                {Builder.getPtrTy(), Builder.getPtrTy(),
+                                 Builder.getPtrTy(), Builder.getInt32Ty()},
+                                false);
+    auto Callee = Mod->getOrInsertFunction("llvm.x86.hyperv.call", Type);
+    auto *Function = llvm::cast<llvm::Function>(Callee.getCallee());
+    Function->setMemoryEffects(llvm::MemoryEffects::unknown());
+    Function->addFnAttr(llvm::Attribute::Convergent);
+    Function->addFnAttr(llvm::Attribute::NoDuplicate);
+    Function->addFnAttr(llvm::Attribute::NoUnwind);
+    if (Function->getIntrinsicID())
+      Function->addParamAttr(3, llvm::Attribute::ImmArg);
+    std::vector<llvm::Value *> Arguments;
+    for (unsigned I = 1; I != 4; ++I) {
+      auto *Value = getVar(Op.Inputs[I], Builder);
+      Arguments.push_back(
+          Value->getType()->isPointerTy()
+              ? Value
+              : Builder.CreateIntToPtr(Value, Builder.getPtrTy()));
+    }
+    Arguments.push_back(Builder.getInt32(Op.Inputs[4].ConstVal));
+    Builder.CreateCall(Callee, Arguments);
+    return nullptr;
+  }
   if (C.Result == X86VirtualizationResult::Value) {
     const auto Word = Op.Output.Size;
     auto *Type = sizeToType(Word);

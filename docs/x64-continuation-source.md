@@ -1,5 +1,8 @@
 # Explicit x64 continuation C
 
+The alternative [Hyper-V page binding](x86-hyperv-hypercalls.md) publishes
+ordinary, fast and rep result registers through a native page call.
+
 The [`native_kvm_hypercalls` binding](x86-kvm-hypercalls.md) explicitly owns
 returning VMCALL/VMMCALL with the KVM five-register input ABI. Unbound raw
 hypercalls remain native boundaries; an opcode never selects a hypervisor ABI.

@@ -523,6 +523,9 @@ enum class Intrinsic : uint16_t {
   X86KvmVmcall,
   X86KvmVmmcall,
 
+  // Append-only: explicit returning Hyper-V page and complete output bank.
+  X86HyperVCall,
+
   _Count = 16000
 };
 
@@ -625,6 +628,8 @@ struct X86VirtualizationContract {
 constexpr X86VirtualizationContract x86VirtualizationContract(Intrinsic Id) {
   using R = X86VirtualizationResult;
   switch (Id) {
+  case Intrinsic::X86HyperVCall:
+    return {"hyperv.call", R::None, 4, -1, 0, false};
   case Intrinsic::X86SvmRunContext:
     return {"vmrun.context", R::None, 2, 0, 144, false};
   case Intrinsic::X86KvmVmcall:
