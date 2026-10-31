@@ -1609,7 +1609,8 @@ TEST(BinaryDiff, StackRoleAlternativesRetainConflictingBodyMatchesForReview) {
 TEST(BinaryDiff, IndependentInitializerRolesSeparateIdenticalCallbacks) {
   const auto Input = [](bool Secondary, bool Changed = false,
                         unsigned CallbackInstructions = 5,
-                        unsigned Background = 0) {
+                        unsigned Background = 0,
+                        uint64_t SlotStride = sizeof(uint64_t)) {
     std::vector<Fn> Functions = {leaf("anchor_a", 1, 11),
                                  leaf("anchor_b", 2, 22),
                                  leaf(Secondary ? "callback_b" : "callback_a",
@@ -1626,7 +1627,7 @@ TEST(BinaryDiff, IndependentInitializerRolesSeparateIdenticalCallbacks) {
     for (const auto *Name :
          {"anchor_a", "callback_a", "anchor_b", "callback_b"})
       P.CodeInitializers.push_back(
-          {Slot + P.CodeInitializers.size() * sizeof(uint64_t),
+          {Slot + P.CodeInitializers.size() * SlotStride,
            named(P, Name).Address});
     return P;
   };
@@ -1721,6 +1722,58 @@ TEST(BinaryDiff, IndependentInitializerRolesSeparateIdenticalCallbacks) {
     EXPECT_EQ(counterpart(compare(A, B, Settings, {Keep}), A, B, "callback_a"),
               "callback_b");
   }
+  for (uint64_t Stride : {16, 56}) {
+    const auto StridedP = Input(false, false, 5, 0, Stride),
+               StridedS = Input(true, false, 5, 0, Stride);
+    for (bool Reverse : {false, true}) {
+      const auto &A = Reverse ? StridedS : StridedP,
+                 &B = Reverse ? StridedP : StridedS;
+      const auto R = compare(A, B, Settings);
+      EXPECT_EQ(R.Matches.size(), 4u);
+      for (const auto *Name : {"callback_a", "callback_b"})
+        EXPECT_EQ(counterpart(R, A, B, Name), Name);
+      auto Missing = A;
+      Missing.CodeInitializers[1].Target = 0x12345678;
+      EXPECT_EQ(compare(Missing, B, Settings).Matches.size(), 2u);
+      Missing.CodeInitializers[1].Target.reset();
+      EXPECT_EQ(compare(Missing, B, Settings).Matches.size(), 2u);
+    }
+  }
+  const auto AddRecords = [&](Program &A, bool Swap) {
+    uint64_t Slot = 0x10000;
+    for (const auto *Name :
+         {"anchor_b", "callback_a", "anchor_a", "callback_b"}) {
+      const auto Target =
+          Swap && llvm::StringRef(Name) == "callback_a"   ? "callback_b"
+          : Swap && llvm::StringRef(Name) == "callback_b" ? "callback_a"
+                                                          : Name;
+      A.CodeInitializers.push_back({Slot, named(A, Target).Address});
+      Slot += 56;
+    }
+  };
+  auto ConflictingP = Input(false, false, 5, 0, 16),
+       ConflictingS = Input(true, false, 5, 0, 16);
+  AddRecords(ConflictingP, false);
+  AddRecords(ConflictingS, true);
+  EXPECT_EQ(compare(ConflictingP, ConflictingS, Settings).Matches.size(), 2u);
+  auto PackedP = P, PackedS = S;
+  AddRecords(PackedP, false);
+  AddRecords(PackedS, true);
+  const auto Packed = compare(PackedP, PackedS, Settings);
+  for (const auto *Name : {"callback_a", "callback_b"})
+    EXPECT_EQ(counterpart(Packed, PackedP, PackedS, Name), Name);
+  std::atomic<bool> Cancel{false};
+  ComparisonControl Control;
+  Control.Cancel = &Cancel;
+  Control.Progress = [&](llvm::StringRef Phase, uint64_t Done, uint64_t) {
+    if (Phase == "initializer-context" && Done == 0)
+      Cancel = true;
+  };
+  const auto Stopped = compare(P, S, Settings, {}, Control);
+  EXPECT_EQ(Stopped.State, ComparisonState::Cancelled);
+  EXPECT_EQ(Stopped.StoppedPhase, "initializer-context");
+  EXPECT_EQ(Stopped.Matches.size(), 2u);
+  EXPECT_EQ(compare(P, S, Settings).Matches.size(), 4u);
   const auto Changed = Input(true, true);
   EXPECT_EQ(compare(P, Changed, Settings).Matches.size(), 4u);
   auto Strict = Settings;

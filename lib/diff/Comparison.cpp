@@ -1694,6 +1694,7 @@ void Matcher::run(llvm::ArrayRef<Override> Overrides) {
       S.CodeInitializers.size() > limits::kMinInitializerAnchors &&
       !stopNow()) {
     beginPhase("initializer-context");
+    progress(0, 2);
     std::vector<uint8_t> TrustedP(P.Functions.size(), 0),
         TrustedS(S.Functions.size(), 0);
     for (const auto &F : Order)
@@ -1702,16 +1703,28 @@ void Matcher::run(llvm::ArrayRef<Override> Overrides) {
         TrustedP[F.Primary] = TrustedS[F.Secondary] = 1;
     const auto Initializers = initializerCandidates(P, PMatch, TrustedP, S,
                                                     SMatch, TrustedS, Control);
-    for (const auto &[A, B] : Initializers) {
+    unsigned Done = 0;
+    for (const auto *Proposals :
+         {&Initializers.Contiguous, &Initializers.Strided}) {
       if (stopNow())
         break;
-      propose(A, B, FunctionStep::Initializer, true);
-      auto &Evidence = FeatureCandidates.find(pairKey(A, B))->second;
-      Evidence.Step = FunctionStep::Initializer;
-      Evidence.Initializer = true;
+      bool Proposed = false;
+      for (const auto &[A, B] : *Proposals) {
+        if (stopNow())
+          break;
+        if (PMatch[A] != NoIndex || SMatch[B] != NoIndex)
+          continue;
+        propose(A, B, FunctionStep::Initializer, true);
+        auto &Evidence = FeatureCandidates.find(pairKey(A, B))->second;
+        Evidence.Step = FunctionStep::Initializer;
+        Evidence.Initializer = true;
+        Proposed = true;
+      }
+      if (Proposed && !stopNow())
+        approximate(true);
+      if (!stopNow())
+        progress(++Done, 2);
     }
-    if (!Initializers.empty() && !stopNow())
-      approximate(true);
   }
   beginPhase("ambiguities");
   retainCallAlternatives();

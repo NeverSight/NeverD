@@ -270,7 +270,8 @@ std::string programAnalysisIdentity(const ProgramIdentity &Identity);
 /// An initialized, relocation-marked code coordinate, not a runtime binding.
 struct CodePointerInitializer {
   uint64_t Slot = 0;
-  uint64_t Target = 0;
+  /// An unreadable marked slot remains a barrier, never a guessed target.
+  std::optional<uint64_t> Target;
 };
 
 /// One side of a comparison.

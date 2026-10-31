@@ -3584,6 +3584,11 @@ without those relocations must retain ambiguity. The fixtures are decoded data;
 their machine code is never executed. Cancellation at the start and end of
 initializer capture preserves completed discovery and code, reports its own
 phase and permits a fresh retry.
+The same core and ELF controls cover 16- and 56-byte initializer spacing,
+unknown/unreadable target barriers, contradictory wider neighborhoods and
+contiguous-context priority. Intervening numeric values without relocation
+marks cannot supply witnesses; interior code coordinates cannot become invented
+function entries or silently disappear from a wider initializer sequence.
 
 Reference-uncertainty controls distinguish unchanged raw code from known operand
 changes, retain a known retargeting beside an unknown address operand, and keep

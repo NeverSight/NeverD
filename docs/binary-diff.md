@@ -151,6 +151,18 @@ overlays bind their native source; normalized instruction identity stays intact.
 Interrupted initializer extraction discards the optional neighborhoods while
 retaining the completed code inventory and an explicit stopped state.
 
+Matcher version 19 extends this context to repeated pointer-slot spacing.
+Both pointer width and stride must agree, alongside the ordered independently
+matched targets. It does not interpret the bytes between slots or infer a
+record type. Contiguous proposals are evaluated first; wider spacing proposes
+only remaining unmatched endpoints. Both channels use the same frozen anchors,
+so a newly paired initializer cannot justify another initializer proposal.
+All eligible wider-spacing observations must agree in both directions.
+Unknown or unreadable marked coordinates remain explicit barriers instead of
+disappearing from the slot sequence. Capturing a coordinate never admits a new
+function entry. Body competition, thresholds, original instruction identity and
+the limits of the equivalence claims above remain unchanged.
+
 Matcher version 10 also defers a similar helper body when its changed entry
 contains the complete straight-line prelude of an unmatched direct tail caller,
 with at least two caller instructions beyond the helper's aligned body. Both

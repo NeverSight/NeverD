@@ -919,9 +919,8 @@ readComparisonInputImpl(Session &S, const ComparisonInputOptions &Options,
       Result.Program.Functions.size() > limits::kMinInitializerAnchors) {
     const uint64_t Available = Options.MaxMemoryBytes -
                                std::min(Memory.load(), Options.MaxMemoryBytes);
-    Result.Stopped =
-        readComparisonInitializers(S.Img, Keys.Functions, Available, Control,
-                                   Result.Program.CodeInitializers);
+    Result.Stopped = readComparisonInitializers(
+        S.Img, Available, Control, Result.Program.CodeInitializers);
     if (Result.Stopped)
       Result.StoppedPhase = "initializers";
   }

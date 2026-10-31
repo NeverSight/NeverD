@@ -1837,6 +1837,17 @@ directions. Only unmatched complete functions become candidates. The existing
 body competition and context checks own admission; this pass grants no data
 object, runtime pointer, ABI or semantic-equivalence authority.
 
+Matcher version 19 also groups repeated wider slot spacing, keyed by pointer
+width, stride and ordered frozen anchors. `ReferenceContext` resolves each
+observed code coordinate to an existing function once in parallel; missing or
+unreadable targets split neighborhoods. Native capture retains those barriers
+and publishes its ordered fact buffer only after the parallel read completes.
+Contiguous and strided proposals are computed together from the same original
+correspondence. Admission evaluates contiguous context first, then wider spacing
+for still-unmatched functions; the latter does not bootstrap new anchors or
+interpret intervening data as an ABI record. Both sources use the existing
+measured competition and preserve unpaired duplicate-body remainders for review.
+
 Matcher version 9 also admits bounded shared mnemonic/CFG groups into the same
 measured competition. A common instruction sketch cannot hide a smaller graph
 group's alternatives. These shared keys propose candidates only; existing

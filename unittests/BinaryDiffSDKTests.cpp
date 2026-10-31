@@ -632,12 +632,13 @@ TEST_F(BinaryDiffSDK,
 }
 
 TEST_F(BinaryDiffSDK, RelocatedInitializerPositionsDisambiguateEqualCallbacks) {
-  const auto Image = [&](bool Reordered, bool Relocated) {
+  const auto Image = [&](bool Reordered, bool Relocated, uint64_t Stride,
+                         bool Barriers) {
     using ELF = llvm::object::ELF64LE;
     using namespace llvm::ELF;
     constexpr size_t TextOffset = 0x1000, DataOffset = 0x2000,
-                     RelocOffset = 0x2040, NamesOffset = 0x2100,
-                     SectionsOffset = 0x2200;
+                     RelocOffset = 0x2100, NamesOffset = 0x2200,
+                     SectionsOffset = 0x2300;
     constexpr uint64_t DataVA = 0x3000;
     constexpr char Names[] = "\0.text\0.data\0.rela.dyn\0.shstrtab\0";
     std::vector<uint8_t> File(SectionsOffset + 5 * sizeof(ELF::Shdr), 0);
@@ -669,8 +670,8 @@ TEST_F(BinaryDiffSDK, RelocatedInitializerPositionsDisambiguateEqualCallbacks) {
     Segments[1].p_offset = DataOffset;
     Segments[1].p_vaddr = DataVA;
     Segments[1].p_paddr = DataVA;
-    Segments[1].p_filesz = 0x100;
-    Segments[1].p_memsz = 0x100;
+    Segments[1].p_filesz = 0x200;
+    Segments[1].p_memsz = 0x200;
     Segments[1].p_align = 0x1000;
     std::array<ELF::Shdr, 5> Sections{};
     Sections[1].sh_name = 1;
@@ -685,14 +686,15 @@ TEST_F(BinaryDiffSDK, RelocatedInitializerPositionsDisambiguateEqualCallbacks) {
     Sections[2].sh_flags = SHF_ALLOC | SHF_WRITE;
     Sections[2].sh_addr = DataVA;
     Sections[2].sh_offset = DataOffset;
-    Sections[2].sh_size = 4 * sizeof(ELF::Addr);
+    Sections[2].sh_size = 3 * Stride + sizeof(ELF::Addr);
     Sections[2].sh_addralign = sizeof(ELF::Addr);
     Sections[3].sh_name = 13;
     Sections[3].sh_type = SHT_RELA;
     Sections[3].sh_flags = SHF_ALLOC;
     Sections[3].sh_addr = DataVA + RelocOffset - DataOffset;
     Sections[3].sh_offset = RelocOffset;
-    Sections[3].sh_size = Relocated ? 4 * sizeof(ELF::Rela) : 0;
+    Sections[3].sh_size =
+        Relocated ? (Barriers ? 7 : 4) * sizeof(ELF::Rela) : 0;
     Sections[3].sh_addralign = sizeof(ELF::Addr);
     Sections[3].sh_entsize = sizeof(ELF::Rela);
     Sections[4].sh_name = 23;
@@ -711,106 +713,116 @@ TEST_F(BinaryDiffSDK, RelocatedInitializerPositionsDisambiguateEqualCallbacks) {
       std::copy(Code.begin(), Code.end(), File.begin() + TextOffset + I * 16);
     }
     const unsigned Order[] = {0, Reordered ? 3u : 2u, 1, Reordered ? 2u : 3u};
-    for (unsigned I = 0; I < 4; ++I) {
+    unsigned RelocationIndex = 0;
+    const auto Add = [&](uint64_t Offset, uint64_t Address) {
       ELF::Addr Target{};
-      Target = TextOffset + Order[I] * 16;
-      std::memcpy(File.data() + DataOffset + I * sizeof(Target), &Target,
-                  sizeof(Target));
+      Target = Address;
+      std::memcpy(File.data() + DataOffset + Offset, &Target, sizeof(Target));
       ELF::Rela R{};
-      R.r_offset = DataVA + I * sizeof(Target);
+      R.r_offset = DataVA + Offset;
       R.r_info = R_X86_64_RELATIVE;
       R.r_addend = Target;
-      std::memcpy(File.data() + RelocOffset + I * sizeof(R), &R, sizeof(R));
+      std::memcpy(File.data() + RelocOffset + RelocationIndex++ * sizeof(R), &R,
+                  sizeof(R));
+    };
+    for (unsigned I = 0; I < 4; ++I) {
+      Add(I * Stride, TextOffset + Order[I] * 16);
+      if (Barriers && I + 1 < 4)
+        Add(I * Stride + sizeof(ELF::Addr), TextOffset + 1);
     }
     return File;
   };
-  for (bool Relocated : {false, true}) {
-    const auto Load = [&](bool Reordered) {
-      const auto Bytes = Image(Reordered, Relocated);
-      const auto Path = Directory / (std::to_string(Sessions.size()) + ".elf");
-      std::ofstream File(Path, std::ios::binary);
-      File.write(reinterpret_cast<const char *>(Bytes.data()), Bytes.size());
-      File.close();
-      auto S = neverd_session_create();
-      Sessions.push_back(S);
-      EXPECT_EQ(neverd_session_load(S, Path.string().c_str()), 1)
-          << take(neverd_last_error(S));
-      for (uint64_t Entry : {0x1000, 0x1010, 0x1020, 0x1030}) {
-        if (const char *Attributes = neverd_func_attributes_json(S, Entry))
-          neverd_free_string(Attributes);
-        else
-          EXPECT_EQ(neverd_func_create(S, Entry), 0);
+  for (const auto &[Stride, Barriers] :
+       {std::pair{8u, false}, std::pair{16u, false}, std::pair{56u, false},
+        std::pair{16u, true}})
+    for (bool Relocated : {false, true}) {
+      const auto Load = [&](bool Reordered) {
+        const auto Bytes = Image(Reordered, Relocated, Stride, Barriers);
+        const auto Path =
+            Directory / (std::to_string(Sessions.size()) + ".elf");
+        std::ofstream File(Path, std::ios::binary);
+        File.write(reinterpret_cast<const char *>(Bytes.data()), Bytes.size());
+        File.close();
+        auto S = neverd_session_create();
+        Sessions.push_back(S);
+        EXPECT_EQ(neverd_session_load(S, Path.string().c_str()), 1)
+            << take(neverd_last_error(S));
+        for (uint64_t Entry : {0x1000, 0x1010, 0x1020, 0x1030}) {
+          if (const char *Attributes = neverd_func_attributes_json(S, Entry))
+            neverd_free_string(Attributes);
+          else
+            EXPECT_EQ(neverd_func_create(S, Entry), 0);
+        }
+        return S;
+      };
+      const auto A = Load(false), B = Load(true);
+      for (bool Reverse : {false, true}) {
+        const auto C = compare(Reverse ? B : A, Reverse ? A : B,
+                               R"({"discover":false,"use_names":false})");
+        const auto Before = take(neverd_comparison_export_json(C));
+        auto Report = llvm::json::parse(Before);
+        ASSERT_TRUE(bool(Report));
+        const auto *Matches = Report->getAsObject()->getArray("matches");
+        for (const auto &[P, S] :
+             {std::pair{"0x1020", "0x1030"}, std::pair{"0x1030", "0x1020"}}) {
+          const auto Match = std::find_if(
+              Matches->begin(), Matches->end(), [&](const auto &M) {
+                return M.getAsObject()->getString("primary") == P &&
+                       M.getAsObject()->getString("secondary") == S;
+              });
+          EXPECT_EQ(Match != Matches->end(), Relocated && !Barriers) << Before;
+          if (Match != Matches->end())
+            EXPECT_EQ(Match->getAsObject()->getString("step"),
+                      "initializer_context");
+        }
+        ASSERT_EQ(neverd_comparison_restore_json(C, Before.c_str()), 1);
+        EXPECT_EQ(take(neverd_comparison_export_json(C)), Before);
       }
-      return S;
-    };
-    const auto A = Load(false), B = Load(true);
-    for (bool Reverse : {false, true}) {
-      const auto C = compare(Reverse ? B : A, Reverse ? A : B,
-                             R"({"discover":false,"use_names":false})");
-      const auto Before = take(neverd_comparison_export_json(C));
-      auto Report = llvm::json::parse(Before);
-      ASSERT_TRUE(bool(Report));
-      const auto *Matches = Report->getAsObject()->getArray("matches");
-      for (const auto &[P, S] :
-           {std::pair{"0x1020", "0x1030"}, std::pair{"0x1030", "0x1020"}}) {
-        const auto Match =
-            std::find_if(Matches->begin(), Matches->end(), [&](const auto &M) {
-              return M.getAsObject()->getString("primary") == P &&
-                     M.getAsObject()->getString("secondary") == S;
-            });
-        EXPECT_EQ(Match != Matches->end(), Relocated) << Before;
-        if (Match != Matches->end())
-          EXPECT_EQ(Match->getAsObject()->getString("step"),
-                    "initializer_context");
+      if (Relocated && !Barriers) {
+        for (uint64_t Minimum : {0, 4}) {
+          const auto C = neverd_comparison_create();
+          Comparisons.push_back(C);
+          struct StopContext {
+            neverd_comparison_t Handle;
+            uint64_t Minimum;
+            bool Seen = false;
+            std::thread::id Caller = std::this_thread::get_id();
+          } Stop{C, Minimum};
+          const auto Cancel = [](void *Opaque, const char *Phase,
+                                 neverd_va_t Done, neverd_va_t) {
+            auto &S = *static_cast<StopContext *>(Opaque);
+            EXPECT_EQ(std::this_thread::get_id(), S.Caller);
+            if (std::string_view(Phase) == "primary:initializers" &&
+                Done >= S.Minimum) {
+              S.Seen = true;
+              neverd_comparison_cancel(S.Handle);
+            }
+          };
+          ASSERT_EQ(neverd_comparison_run(C, A, B, "{}", Cancel, &Stop), 1)
+              << take(neverd_comparison_last_error(C));
+          EXPECT_TRUE(Stop.Seen);
+          const auto Summary = parsed(neverd_comparison_summary_json(C));
+          EXPECT_EQ(Summary.getAsObject()->getString("state"), "cancelled");
+          EXPECT_EQ(Summary.getAsObject()->getString("stopped_phase"),
+                    "initializers");
+          const auto Saved = parsed(neverd_comparison_export_json(C));
+          EXPECT_EQ(Saved.getAsObject()->getObject("primary")->getBoolean(
+                        "discovery_complete"),
+                    true);
+          EXPECT_EQ(Saved.getAsObject()
+                        ->getObject("functions")
+                        ->getArray("primary")
+                        ->size(),
+                    4u);
+          const auto Retry = compare(A, B, "{}");
+          EXPECT_EQ(parsed(neverd_comparison_export_json(Retry))
+                        .getAsObject()
+                        ->getArray("matches")
+                        ->size(),
+                    4u);
+        }
       }
-      ASSERT_EQ(neverd_comparison_restore_json(C, Before.c_str()), 1);
-      EXPECT_EQ(take(neverd_comparison_export_json(C)), Before);
     }
-    if (Relocated) {
-      for (uint64_t Minimum : {0, 4}) {
-        const auto C = neverd_comparison_create();
-        Comparisons.push_back(C);
-        struct StopContext {
-          neverd_comparison_t Handle;
-          uint64_t Minimum;
-          bool Seen = false;
-          std::thread::id Caller = std::this_thread::get_id();
-        } Stop{C, Minimum};
-        const auto Cancel = [](void *Opaque, const char *Phase,
-                               neverd_va_t Done, neverd_va_t) {
-          auto &S = *static_cast<StopContext *>(Opaque);
-          EXPECT_EQ(std::this_thread::get_id(), S.Caller);
-          if (std::string_view(Phase) == "primary:initializers" &&
-              Done >= S.Minimum) {
-            S.Seen = true;
-            neverd_comparison_cancel(S.Handle);
-          }
-        };
-        ASSERT_EQ(neverd_comparison_run(C, A, B, "{}", Cancel, &Stop), 1)
-            << take(neverd_comparison_last_error(C));
-        EXPECT_TRUE(Stop.Seen);
-        const auto Summary = parsed(neverd_comparison_summary_json(C));
-        EXPECT_EQ(Summary.getAsObject()->getString("state"), "cancelled");
-        EXPECT_EQ(Summary.getAsObject()->getString("stopped_phase"),
-                  "initializers");
-        const auto Saved = parsed(neverd_comparison_export_json(C));
-        EXPECT_EQ(Saved.getAsObject()->getObject("primary")->getBoolean(
-                      "discovery_complete"),
-                  true);
-        EXPECT_EQ(Saved.getAsObject()
-                      ->getObject("functions")
-                      ->getArray("primary")
-                      ->size(),
-                  4u);
-        const auto Retry = compare(A, B, "{}");
-        EXPECT_EQ(parsed(neverd_comparison_export_json(Retry))
-                      .getAsObject()
-                      ->getArray("matches")
-                      ->size(),
-                  4u);
-      }
-    }
-  }
 }
 
 TEST_F(BinaryDiffSDK, DirectCallTargetsArePartOfStrongFunctionIdentity) {
@@ -3072,7 +3084,7 @@ TEST_F(BinaryDiffSDK, LongNativeCallContextSurvivesReorderingAndRestore) {
   const auto Saved = take(neverd_comparison_export_json(C));
   const auto Document = parsed(neverd_comparison_export_json(C));
   ASSERT_TRUE(Document.getAsObject());
-  EXPECT_EQ(Document.getAsObject()->getInteger("matcher_version"), 18);
+  EXPECT_EQ(Document.getAsObject()->getInteger("matcher_version"), 19);
   const auto *Matches = Document.getAsObject()->getArray("matches");
   ASSERT_TRUE(Matches);
   const std::map<std::string, std::string> Expected = {{"0x3000", "0xa010"},
