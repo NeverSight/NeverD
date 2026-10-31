@@ -172,7 +172,10 @@ does not certify native ARM64 execution. The optional
 uses the pinned Microsoft SDK/import libraries to compile both emitted routes
 and compare their API compiler contracts across x86, x64 and ARM64.
 Its D3DKMT, CLFS and TPM cases exercise record pointers, six-argument calls
-and pointer-sized results. With `--kernel`, the WDK fixtures cover SD Port's
+and pointer-sized results. Direct3D 11/12, DXGI and D3DCompiler callers also
+cover interface outputs, enum parameters and target-sized lengths, including
+twelve- and fourteen-argument calls across the register/stack boundary.
+With `--kernel`, the WDK fixtures cover SD Port's
 byte-width offset, PortCls's callback and fifth argument, and Stream Class's
 void result. Their synthetic imports retain the original compiler's x86
 decoration. This checks source reconstruction and ABI, not driver execution.

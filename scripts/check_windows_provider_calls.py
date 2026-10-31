@@ -23,8 +23,16 @@ FIXTURE = Path(__file__).resolve().parents[1] / "unittests/types/fixtures/window
 DRIVER_FIXTURE = FIXTURE.with_name("windows_driver_provider_calls.c")
 FUNCTIONS = {"UseEventRegistration": "EventRegister", "UsePath": "PathCchCombineEx",
              "UseRuntimeString": "WindowsCreateString", "UseGraphicsDevice": "D3DKMTCreateDevice",
-             "UseLogFile": "CreateLogFile", "UseTpmContext": "Tbsi_Context_Create"}
-LIBRARIES = ("advapi32.lib", "pathcch.lib", "runtimeobject.lib", "gdi32.lib", "clfsw32.lib", "tbs.lib")
+             "UseLogFile": "CreateLogFile", "UseTpmContext": "Tbsi_Context_Create",
+             "UseD3D11Device": "D3D11CreateDevice",
+             "UseD3D11SwapChain": "D3D11CreateDeviceAndSwapChain",
+             "UseD3D12Device": "D3D12CreateDevice",
+             "UseD3D12RootSignature": "D3D12SerializeVersionedRootSignature",
+             "UseDXGIFactory": "CreateDXGIFactory2",
+             "UseShaderCompile": "D3DCompile", "UseShaderCompile2": "D3DCompile2",
+             "UseShaderBlob": "D3DCreateBlob"}
+LIBRARIES = ("advapi32.lib", "pathcch.lib", "runtimeobject.lib", "gdi32.lib", "clfsw32.lib", "tbs.lib",
+             "d3d11.lib", "d3d12.lib", "dxgi.lib", "d3dcompiler.lib")
 DRIVER_FUNCTIONS = {"UseSDConfig": "SdPortGetPciConfigSpace",
                     "UseAudioAdapter": "PcAddAdapterDevice",
                     "UseStreamClock": "StreamClassQueryMasterClockSync"}

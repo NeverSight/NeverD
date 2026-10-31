@@ -136,6 +136,10 @@ records and callback dependencies pass the same per-target layout checks;
 kernel providers also retain the x86 WDK default calling convention.
 CLFS selects its explicit API set so transitive WDK legacy CRT declarations
 cannot take priority over the separately selected UCRT declarations.
+Direct3D 11/12, DXGI and D3DCompiler likewise select their exported C functions
+with the complete record and callback dependencies. These units cover device
+and swap-chain creation, root-signature serialization, factory creation and
+shader compilation; they do not infer a COM method call from a vtable slot.
 The pinned RDBSS `rxcontx.h` declares two different anonymous enums with the
 same `RX_CONTEXT_CREATE_FLAGS` typedef in C mode. The independent compiler
 rejects that unit, so it remains outside this catalog; changing a declaration
@@ -143,7 +147,7 @@ to suppress the conflict would require a separately checked bridge.
 
 `scripts/check_microsoft_provider_abis.py --generated /path/to/microsoft-windows
 --output /path/to/abi-results --neverd build-release/bin/neverd` compares
-representative functions from those 26 units against the original compiler
+representative functions from the selected units against the original compiler
 declarations on all three targets. It retains decoration, calling convention,
 parameter/return attributes and by-value record alignment, excluding only DLL
 visibility. Each published prototype is selected with its complete dependent
@@ -152,7 +156,7 @@ types; unrelated compiler intrinsics are not compiled as replacement builtins.
 `scripts/check_windows_provider_calls.py --generated /path/to/microsoft-windows
 --cache /path/to/package-cache --output /path/to/call-results
 --neverd build-release/bin/neverd` builds import-only ETW, PathCch and WinRT
-fixtures, including D3DKMT, CLFS and TPM calls, with the retained SDK headers
+fixtures, including D3DKMT, CLFS, TPM, Direct3D, DXGI and D3DCompiler calls, with the retained SDK headers
 and pinned target import libraries. Add `--kernel` for SD Port, PortCls and
 Stream Class callers compiled from the WDK headers. Those driver fixtures use
 synthetic import libraries whose symbols come from the original compiler,
@@ -161,6 +165,9 @@ Both C routes must compile, retain each API call without unknown operands,
 and match its original compiler ABI. These checks do not execute the Windows
 API or a driver. The generation must include `--ucrt` to retain the target
 SDK package identities used by this check.
+The graphics callers include twelve-argument swap-chain creation and the
+fourteen-argument `D3DCompile2`, retaining target-sized lengths, enum parameters,
+interface outputs and stack arguments on all three targets.
 
 DNS also has a Unicode profile. Its official `PDNS_RECORD` alias changes with
 `UNICODE`, including in declarations with an explicit `_W` name. An exact

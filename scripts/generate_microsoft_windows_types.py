@@ -107,6 +107,25 @@ ISOLATED_PROVIDERS = {
         Provider("PerformanceData", ("windows", "pdh", "pdhmsg")),
         Provider("Biometrics", ("windows", "winbio")),
         Provider("GraphicsThunk", ("windows", "d3dkmthk")),
+        Provider("Direct3D11", ("windows", "d3d11"), (), (
+            "D3D11CreateDevice", "D3D11CreateDeviceAndSwapChain")),
+        Provider("Direct3D12", ("windows", "d3d12"), (), (
+            "D3D12CreateDevice", "D3D12GetDebugInterface", "D3D12GetInterface",
+            "D3D12SerializeRootSignature", "D3D12CreateRootSignatureDeserializer",
+            "D3D12SerializeVersionedRootSignature", "D3D12CreateVersionedRootSignatureDeserializer",
+            "D3D12EnableExperimentalFeatures")),
+        Provider("DXGI", ("windows", "dxgi1_6"), (), (
+            "CreateDXGIFactory", "CreateDXGIFactory1", "CreateDXGIFactory2",
+            "DXGIDeclareAdapterRemovalSupport", "DXGIGetDebugInterface1")),
+        Provider("ShaderCompiler", ("windows", "d3dcompiler"), (), (
+            "D3DReadFileToBlob", "D3DWriteBlobToFile", "D3DCompile", "D3DCompile2",
+            "D3DCompileFromFile", "D3DPreprocess", "D3DGetDebugInfo", "D3DReflect",
+            "D3DReflectLibrary", "D3DDisassemble", "D3DDisassembleRegion", "D3DCreateLinker",
+            "D3DLoadModule", "D3DCreateFunctionLinkingGraph", "D3DGetTraceInstructionOffsets",
+            "D3DGetInputSignatureBlob", "D3DGetOutputSignatureBlob",
+            "D3DGetInputAndOutputSignatureBlob", "D3DStripShader", "D3DGetBlobPart",
+            "D3DSetBlobPart", "D3DCreateBlob", "D3DCompressShaders", "D3DDecompressShaders",
+            "D3DDisassemble10Effect")),
         # clfs.h includes the WDK's legacy stdio.h. Import the CLFS API only:
         # those transitive CRT declarations must not take priority over UCRT.
         Provider("CLFS", ("windows", "clfsw32"), (), (

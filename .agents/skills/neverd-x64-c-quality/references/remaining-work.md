@@ -3,6 +3,13 @@
 Use public fixtures and emitter tests as the durable contract. Private binary
 analysis and comparison output belong outside the repository.
 
+The official SDK catalog now selects Direct3D 11/12, DXGI and D3DCompiler C
+exports with their checked type closures on x86, x64 and ARM64. Both source
+routes compile import-only callers, including twelve- and fourteen-argument
+graphics calls, against the original SDK contracts. This extends API coverage;
+COM vtable dispatch, Windows API execution and general VM entry-state recovery
+remain separate obligations.
+
 Win64 positional stack-input proofs now track original byte overwrites on every
 path. Reusing a fully replaced slot after an opaque access no longer invents
 an incoming argument dependency. Partial writes, earlier reads and unmatched
