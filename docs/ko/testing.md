@@ -1,5 +1,8 @@
 **언어**: [English](../testing.md) | [简体中文](../zh-CN/testing.md) | [繁體中文](../zh-TW/testing.md) | [日本語](../ja/testing.md) | [한국어](testing.md) | [Français](../fr/testing.md) | [Deutsch](../de/testing.md) | [Español](../es/testing.md) | [Italiano](../it/testing.md) | [Русский](../ru/testing.md) | [العربية](../ar/testing.md)
 
+`PEFixedImageTest.MachineExitDiscoversBoundedCopyDestination` 는 내부 호출과 유한 복사의 포인터 및 카운트 정밀화를 검사합니다. 독립 예상값은 0회, 조기 종료, 버퍼 중첩, 높은 프레임 주소를 포함합니다. 반환 셀의 전체 또는 일부 손상을 거부하고 정확한 한도와 한 단위 부족한 연산 및 질의 한도를 검사합니다.
+`InterpreterMachineRegionSourceTest.BoundedCopyDiscoversPointerAndCountContexts` 는 두 C 출력을 O0/O2와 ASan/UBSan으로 실행해 전체 상태와 메모리를 검사합니다. 일반 ABI 복원 인증은 제공하지 않습니다.
+
 유한한 `REP MOVS/STOS` 기계 상태 소스 테스트는 사용자 및 커널 선택 모델, 네 가지 요소 너비, 양방향, 겹치는 메모리, 횟수 0에서의 잘못된 포인터를 검사합니다. `X86NativeStateAudit.RepTransfers*`는 워드 접두사의 두 순서, 정확한 인코딩과 피연산자, 전체 상태와 각 바이트를 확인합니다. 추가 접두사, 주소 재정의, 세그먼트, REPNE, 증명되지 않은 횟수는 거부하며 메모리 접근, 무결함 실행, 다른 상태 보존 또는 일반 ABI를 가정하지 않습니다.
 
 `HighSwiftEmitter.StackScalarBindingsDoNotInventPhysicalStackWrites`는 소스 파이프라인에서 x64/ARM64 Mach-O의 정수, 부동소수점 및 혼합 스택 인자를 검사합니다. `IncomingHomeSource.StackInitializationRequiresAbsenceOfAllObservers`는 메모리 읽기, 호출, 스택 주소 유출, 불투명하거나 메모리를 사용하는 intrinsic에 필요한 진입 저장소를 유지합니다. 값만 사용하는 경로는 선언된 인자를 사용하여 물리 SP 쓰기를 추가하지 않으며 레지스터 부동소수점 상태 효과를 유지합니다. macOS 모바일 행렬은 복원된 Swift를 독립적으로 컴파일하고 실행합니다. 생성 성공만으로 실행 검증을 의미하지는 않습니다.
