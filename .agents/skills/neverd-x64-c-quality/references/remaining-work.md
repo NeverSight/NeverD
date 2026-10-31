@@ -966,6 +966,13 @@ conditional memory, invocation lifetime and both C routes remain open.
   traps. Debug/image/composed projections and broader source naming still need
   their own evidence and cleanup.
 
+- The legacy LLVMC cursor-loop printer now keeps the full block when a
+  header contains printed effects or materialized producers. Accepted loops
+  register their header labels and preserve the actual exit edge, including
+  reordered block layouts. An owned execution matrix covers both projection
+  modes at O0/O2 with undefined-behavior checks. More complex cursor-region
+  recognition still relies on the existing control-flow fallback.
+
 - LLVMC plans complete bounded integer CFGs before printing nested header
   loops and conditionals. Edge PHIs retain simultaneous semantics; liveness
   coalesces only noninterfering carriers, and safe constant-seeded counters

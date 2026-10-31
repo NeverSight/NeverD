@@ -4,6 +4,13 @@
 
 `NeverDLLVMCValueTests` compiles and executes a recast variadic call against a separate Windows x64 ABI callee at O0/O2, with preserved LLVM types enabled and disabled. Native x64 hosts verify the floating value through the callee’s variadic argument reader; other architectures explicitly skip that execution.
 
+`LLVMCValues.CursorLoopsKeepHeaderEffectsAndEntryLabels` compiles and executes
+cursor loops at O0/O2 with undefined-behavior checks. Conditional entry,
+reordered blocks, zero iterations, materialized header values and header
+calls/stores retain their execution sites. The matrix covers preserved LLVM
+function types and the default projection, including loops whose header can
+still be represented by a condition expression.
+
 [← Documentation Index](README.md)
 
 `InterpreterSpecialization.AlignmentFactorsIndependentFinitePayload`,
