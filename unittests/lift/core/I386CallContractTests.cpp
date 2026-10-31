@@ -410,104 +410,129 @@ TEST(I386CallContract, APoppedPushIsNoArgument) {
 }
 
 TEST(I386CallContract, SelectingTheCallerPreservesTheCalleeArgumentContract) {
+  enum class Inputs { Stack, Regparm, PreservedRegisters };
   for (BinaryFormat Format :
        {BinaryFormat::COFF, BinaryFormat::ELF, BinaryFormat::MachO})
-    for (bool Regparm : {false, true})
-      for (bool Forwarder : {false, true})
-        for (bool Selected : {false, true})
-          for (bool NoOpt : {false, true})
-            for (bool LLVM : {false, true}) {
-              SCOPED_TRACE(std::to_string(static_cast<int>(Format)) + "/" +
-                           std::to_string(Regparm) + "/" +
-                           std::to_string(Forwarder) + "/" +
-                           std::to_string(Selected) + "/" +
-                           std::to_string(NoOpt) + "/" + std::to_string(LLVM));
-              // Both register and stack setup are present. The callee's
-              // actual reads decide which two values the call passes. ECX
-              // is scratch, despite being first in the default register order.
-              std::vector<uint8_t> Code = {
-                  0xb8, 7,    0,    0,   0, // mov eax,7
-                  0xba, 11,   0,    0,   0, // mov edx,11
-                  0xb9, 99,   0,    0,   0, // mov ecx,99
-                  0x6a, 47,   0x6a, 31,     // push 47; push 31
-                  0xeb, 0,                  // jmp call_block
-                  0xe8, 0x26, 0,    0,   0, // call helper at +0x40
-                  0x83, 0xc4, 8,    0xc3};  // add esp,8; ret
-              Code.resize(0x40, 0xcc);
-              if (Forwarder) {
-                Code.insert(Code.end(), {0xe9, 0x1b, 0, 0, 0});
-                Code.resize(0x60, 0xcc);
-              }
-              const std::vector<uint8_t> Leaf =
-                  Regparm ? std::vector<uint8_t>{0x8d, 0x04, 0x10, 0xc3}
-                          : std::vector<uint8_t>{0x8b, 0x44, 0x24, 4,   0x03,
-                                                 0x44, 0x24, 8,    0xc3};
-              Code.insert(Code.end(), Leaf.begin(), Leaf.end());
-              BinaryImage Img = makeImage(std::move(Code), {});
-              Img.Format = Format;
-              for (va_t Entry : {Text + 0x40, Text + 0x60}) {
-                if (Entry == Text + 0x60 && !Forwarder)
-                  continue;
-                Symbol S = Symbol::makeFunc(Entry);
-                S.Name = Entry == Text + 0x40 ? "helper" : "leaf";
-                Img.Symbols.push_back(std::move(S));
-              }
-              llvm::LLVMContext Ctx;
-              PipelineOptions Opts;
-              Opts.EmitDumpOutput = false;
-              Opts.NoOpt = NoOpt;
-              Opts.LiftMode = LLVM;
-              Opts.SourceProjection = true;
-              Opts.OnlyFunctionEntries = {Text};
-              if (!Selected) {
-                Opts.OnlyFunctionEntries.insert(Text + 0x40);
-                if (Forwarder)
-                  Opts.OnlyFunctionEntries.insert(Text + 0x60);
-              }
-              const PipelineResult R = Pipeline().run(Img, Ctx, Opts);
-              ASSERT_TRUE(R.Success) << R.Error;
-              ASSERT_EQ(R.MedFuncs.size(), Selected ? 1u : Forwarder ? 3u : 2u);
-              const MedFunc *Caller = nullptr;
-              for (const MedFunc &F : R.MedFuncs)
-                if (F.Entry == Text)
-                  Caller = &F;
-              ASSERT_NE(Caller, nullptr);
-              const MedCallInfo *Call = nullptr;
-              for (const MedCallInfo &CI : Caller->CallInfos)
-                if (CI.TargetAddr == Text + 0x40)
-                  Call = &CI;
-              ASSERT_NE(Call, nullptr);
-              if (Selected || !LLVM)
-                ASSERT_EQ(Call->Args.size(), 2u);
-              else
-                ASSERT_GE(Call->Args.size(), 2u);
-              // Follow only representation copies of the two literal inputs;
-              // this oracle does not recover register or stack arguments.
-              auto literal = [&](MedVar V) -> std::optional<uint64_t> {
-                for (unsigned Depth = 0; Depth != 16; ++Depth) {
-                  if (V.isConst())
-                    return V.ConstVal;
-                  const MedOp *Def = nullptr;
-                  for (const MedBlock &B : Caller->Blocks)
-                    for (const MedOp &O : B.Ops)
-                      if (O.Output.Kind == V.Kind && O.Output.Id == V.Id &&
-                          O.Output.SSAVer == V.SSAVer && O.Output.Size &&
-                          (O.Opcode == NdOp::COPY ||
-                           O.Opcode == NdOp::INT_ZEXT))
-                        Def = &O;
-                  if (!Def || Def->NumInputs != 1)
-                    return std::nullopt;
-                  V = Def->Inputs[0];
+    for (bool Guessed : {false, true})
+      for (Inputs Input :
+           {Inputs::Stack, Inputs::Regparm, Inputs::PreservedRegisters})
+        for (bool Forwarder : {false, true})
+          for (bool Selected : {false, true})
+            for (bool NoOpt : {false, true})
+              for (bool LLVM : {false, true}) {
+                SCOPED_TRACE(
+                    std::to_string(static_cast<int>(Format)) + "/" +
+                    std::to_string(Guessed) + "/" +
+                    std::to_string(static_cast<int>(Input)) + "/" +
+                    std::to_string(Forwarder) + "/" + std::to_string(Selected) +
+                    "/" + std::to_string(NoOpt) + "/" + std::to_string(LLVM));
+                const bool Regparm = Input != Inputs::Stack;
+                // Both register and stack setup are present. The callee's
+                // actual reads decide which two values the call passes. ECX
+                // is scratch, despite being first in the default register
+                // order.
+                std::vector<uint8_t> Code = {
+                    0xb8, 7,    0,    0,   0, // mov eax,7
+                    0xba, 11,   0,    0,   0, // mov edx,11
+                    0xb9, 99,   0,    0,   0, // mov ecx,99
+                    0x6a, 47,   0x6a, 31,     // push 47; push 31
+                    0xeb, 0,                  // jmp call_block
+                    0xe8, 0x26, 0,    0,   0, // call helper at +0x40
+                    0x83, 0xc4, 8,    0xc3};  // add esp,8; ret
+                if (Input == Inputs::PreservedRegisters) {
+                  Code[0] = 0xbe; // mov esi,7
+                  Code[5] = 0xbf; // mov edi,11
                 }
-                return std::nullopt;
-              };
-              EXPECT_EQ(literal(Call->Args[0]), Regparm ? 7u : 31u);
-              EXPECT_EQ(literal(Call->Args[1]), Regparm ? 11u : 47u);
-              if (LLVM) {
-                ASSERT_NE(R.LlvmModule, nullptr);
-                EXPECT_FALSE(llvm::verifyModule(*R.LlvmModule, &llvm::errs()));
+                Code.resize(0x40, 0xcc);
+                if (Forwarder) {
+                  Code.insert(Code.end(), {0xe9, 0x1b, 0, 0, 0});
+                  Code.resize(0x60, 0xcc);
+                }
+                std::vector<uint8_t> Leaf =
+                    Regparm ? std::vector<uint8_t>{0x8d, 0x04, 0x10, 0xc3}
+                            : std::vector<uint8_t>{0x8b, 0x44, 0x24, 4,   0x03,
+                                                   0x44, 0x24, 8,    0xc3};
+                if (Input == Inputs::PreservedRegisters)
+                  Leaf = {0x8d, 0x04, 0x3e, 0xc3}; // lea eax,[esi+edi]; ret
+                Code.insert(Code.end(), Leaf.begin(), Leaf.end());
+                // A guessed entry never called is no support body.
+                Code.resize(0x80, 0xcc);
+                Code.insert(Code.end(), {0x31, 0xc0, 0xc3});
+                BinaryImage Img = makeImage(std::move(Code), {});
+                Img.Format = Format;
+                for (va_t Entry : {Text + 0x40, Text + 0x60}) {
+                  if (Entry == Text + 0x60 && !Forwarder)
+                    continue;
+                  Symbol S = Symbol::makeFunc(Entry);
+                  S.Name = Entry == Text + 0x40 ? "helper" : "leaf";
+                  S.IsBoundaryGuess = Guessed;
+                  Img.Symbols.push_back(std::move(S));
+                }
+                Symbol Uncalled = Symbol::makeFunc(Text + 0x80);
+                Uncalled.IsBoundaryGuess = true;
+                Img.Symbols.push_back(std::move(Uncalled));
+                llvm::LLVMContext Ctx;
+                PipelineOptions Opts;
+                Opts.EmitDumpOutput = false;
+                Opts.NoOpt = NoOpt;
+                Opts.LiftMode = LLVM;
+                Opts.SourceProjection = true;
+                Opts.OnlyFunctionEntries = {Text};
+                if (!Selected) {
+                  Opts.OnlyFunctionEntries.insert(Text + 0x40);
+                  if (Forwarder)
+                    Opts.OnlyFunctionEntries.insert(Text + 0x60);
+                }
+                const PipelineResult R = Pipeline().run(Img, Ctx, Opts);
+                ASSERT_TRUE(R.Success) << R.Error;
+                if (R.OmittedCallees)
+                  for (const auto &Body : R.OmittedCallees->Bodies)
+                    EXPECT_NE(Body->Entry, Text + 0x80);
+                ASSERT_EQ(R.MedFuncs.size(), Selected    ? 1u
+                                             : Forwarder ? 3u
+                                                         : 2u);
+                const MedFunc *Caller = nullptr;
+                for (const MedFunc &F : R.MedFuncs)
+                  if (F.Entry == Text)
+                    Caller = &F;
+                ASSERT_NE(Caller, nullptr);
+                const MedCallInfo *Call = nullptr;
+                for (const MedCallInfo &CI : Caller->CallInfos)
+                  if (CI.TargetAddr == Text + 0x40)
+                    Call = &CI;
+                ASSERT_NE(Call, nullptr);
+                if (Selected || !LLVM)
+                  ASSERT_EQ(Call->Args.size(), 2u);
+                else
+                  ASSERT_GE(Call->Args.size(), 2u);
+                // Follow only representation copies of the two literal inputs;
+                // this oracle does not recover register or stack arguments.
+                auto literal = [&](MedVar V) -> std::optional<uint64_t> {
+                  for (unsigned Depth = 0; Depth != 16; ++Depth) {
+                    if (V.isConst())
+                      return V.ConstVal;
+                    const MedOp *Def = nullptr;
+                    for (const MedBlock &B : Caller->Blocks)
+                      for (const MedOp &O : B.Ops)
+                        if (O.Output.Kind == V.Kind && O.Output.Id == V.Id &&
+                            O.Output.SSAVer == V.SSAVer && O.Output.Size &&
+                            (O.Opcode == NdOp::COPY ||
+                             O.Opcode == NdOp::INT_ZEXT))
+                          Def = &O;
+                    if (!Def || Def->NumInputs != 1)
+                      return std::nullopt;
+                    V = Def->Inputs[0];
+                  }
+                  return std::nullopt;
+                };
+                EXPECT_EQ(literal(Call->Args[0]), Regparm ? 7u : 31u);
+                EXPECT_EQ(literal(Call->Args[1]), Regparm ? 11u : 47u);
+                if (LLVM) {
+                  ASSERT_NE(R.LlvmModule, nullptr);
+                  EXPECT_FALSE(
+                      llvm::verifyModule(*R.LlvmModule, &llvm::errs()));
+                }
               }
-            }
 }
 
 TEST(I386CallContract, StoresThroughACopyOfESPAreArgumentsByOffset) {

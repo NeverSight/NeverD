@@ -319,9 +319,15 @@ public:
   bool init() { return Dec.init(Img); }
   /// Whether \p Target is a callee the read takes: a function of this image.
   bool reads(va_t Target) const {
+    // Only actual calls enqueue these targets. Like CFGBuilder's explicit
+    // transfers, they may enter a symbol initially found after padding.
+    // Such guesses still never delimit ordinary fallthrough or become roots
+    // merely because they occur in the symbol inventory.
     return Img.isFunctionEntryCandidateAt(Target) &&
            !Img.findImportAt(Target) && !Img.isImportStubAt(Target) &&
-           (Entries->count(Target) || Img.hasKnownFunctionEntryAt(Target)) &&
+           (Entries->count(Target) || Img.hasKnownFunctionEntryAt(Target) ||
+            Img.hasFunctionSymbolAt(Target,
+                                    Memo ? &Memo->codeOwners() : nullptr)) &&
            Img.hasExecutableCodeOwnerAt(Target);
   }
   /// Where \p Target's reading is kept: the memo's, or \p Local where the

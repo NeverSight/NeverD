@@ -7814,6 +7814,60 @@ bool hasParameterIn(const MedFunc &Med, uint64_t RegOff) {
 
 } // namespace
 
+TEST(LowToMedX86CallingConv,
+     NonstandardIntegerInputsKeepTheirOwnRegisterOrder) {
+  for (BinaryFormat Format :
+       {BinaryFormat::COFF, BinaryFormat::ELF, BinaryFormat::MachO}) {
+    SCOPED_TRACE(int(Format));
+    const NdVar ESI = NdVar::reg(x86reg::RSI, 4);
+    const NdVar EDI = NdVar::reg(x86reg::RDI, 4);
+    const NdVar EAX = NdVar::reg(x86reg::RAX, 4);
+    LowFunc Low = makeOneBlockLow(0x1000, "custom_inputs", [&](auto Push) {
+      Push(NdOp::LOAD, NdVar::tmp(1, 4), {ESI});
+      Push(NdOp::LOAD, NdVar::tmp(2, 4), {EDI});
+      Push(NdOp::INT_ADD, EAX, {NdVar::tmp(1, 4), NdVar::tmp(2, 4)});
+    });
+    Low.Blocks.front().Ops.back().addInput(EAX);
+    const MedFunc Med = LowToMedConverter().convert(Low, Arch::X86, Format);
+    ASSERT_EQ(Med.Params.size(), 2u);
+    EXPECT_EQ(Med.IntegerArgumentRegisters,
+              (std::vector<uint64_t>{x86reg::RSI, x86reg::RDI}));
+    EXPECT_EQ(Med.Params[0].RegOff, x86reg::RSI);
+    EXPECT_EQ(Med.Params[1].RegOff, x86reg::RDI);
+    for (const auto &P : Med.Params)
+      EXPECT_EQ(P.Size, 4u);
+  }
+}
+
+TEST(LowToMedX86CallingConv, NonstandardInputsExcludePreservationAndDeadLanes) {
+  for (uint64_t Register : {x86reg::RBX, x86reg::RSI, x86reg::RDI})
+    for (bool Consume : {false, true}) {
+      SCOPED_TRACE(testing::Message() << Register << ':' << Consume);
+      const NdVar Input = NdVar::reg(Register, 4);
+      const NdVar ESP = NdVar::reg(x86reg::RSP, 4);
+      const NdVar EAX = NdVar::reg(x86reg::RAX, 4);
+      LowFunc Low = makeOneBlockLow(0x1000, "saved_or_input", [&](auto Push) {
+        Push(NdOp::INT_SUB, ESP, {ESP, NdVar::cst(8, 4)});
+        Push(NdOp::INT_ADD, NdVar::tmp(1, 4), {ESP, NdVar::cst(4, 4)});
+        Push(NdOp::STORE, NdVar(), {NdVar::tmp(1, 4), Input});
+        Push(NdOp::INT_AND, NdVar::tmp(2, 4),
+             {Input, NdVar::cst(0xffffff00u, 4)});
+        Push(NdOp::INT_OR, Input, {NdVar::tmp(2, 4), NdVar::cst(7, 4)});
+        if (Consume)
+          Push(NdOp::COPY, EAX, {Input});
+        else
+          Push(NdOp::INT_AND, EAX, {Input, NdVar::cst(0xff, 4)});
+        Push(NdOp::LOAD, Input, {NdVar::tmp(1, 4)});
+        Push(NdOp::INT_ADD, ESP, {ESP, NdVar::cst(8, 4)});
+      });
+      Low.Blocks.front().Ops.back().addInput(EAX);
+      const MedFunc Med =
+          LowToMedConverter().convert(Low, Arch::X86, BinaryFormat::COFF);
+      EXPECT_EQ(hasParameterIn(Med, Register), Consume);
+      EXPECT_EQ(Med.Params.size(), Consume ? 1u : 0u);
+    }
+}
+
 TEST(LowToMedX86CallingConv, ScalarSSEMergeIsNotAParameterUntilALaneIsRead) {
   // `cvtsi2ss xmm2, eax; movss [esp+4], xmm2` keeps xmm2's upper lanes, so
   // its incoming value flows on there unread.  A phantom XMM parameter would

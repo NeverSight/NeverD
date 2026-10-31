@@ -5932,6 +5932,11 @@ partial overwrites, opaque calls, aliases, provenance and independent/EH roots.
 `I386CallContract.SelectingTheCallerPreservesTheCalleeArgumentContract` compares
 selected and whole-function output, cdecl and register arguments, direct and
 forwarding callees, HighIR and LLVM, and default/NoOpt in all three formats.
+Its register cases include ordinary regparm and private ESI/EDI inputs, with
+stated and guessed callee symbols. An uncalled boundary guess remains omitted.
+`LowToMedX86CallingConv.Nonstandard*` checks those inputs and distinguishes
+EBX/ESI/EDI value uses from frame saves, restoration and discarded upper lanes.
+Run `NeverDI386CallContractTests` and `NeverDFPParameterMaskTests` together.
 Runtime stack-probe audits require the exact platform and stated name evidence.
 
 `X86_64_DebugRecords.RecordsCCannotSpellKeepMachineTypes` compiles and executes

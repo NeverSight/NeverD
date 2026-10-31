@@ -15,6 +15,7 @@
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/ir/med/MedCallConvention.h"
+#include "neverd/ir/med/MedCallingConvDetail.h"
 #include "neverd/ir/med/X86RegistrationSEHParentExit.h"
 #include "neverd/loader/BinaryImage.h"
 
@@ -220,6 +221,10 @@ void LowToMedConverter::runDce(MedFunc &Func) {
   const llvm::ArrayRef<uint64_t> AlternateArgumentRegisters =
       Convention ? Convention->AlternateRegisterOrder
                  : llvm::ArrayRef<uint64_t>();
+  const llvm::ArrayRef<uint64_t> NonstandardArgumentRegisters =
+      TargetArch == Arch::X86
+          ? med_calling_conv_detail::i386NonstandardArgumentRegisters()
+          : llvm::ArrayRef<uint64_t>();
   auto seedParamWrites = [&](const std::vector<MedOp> &Ops, int Before,
                              bool DirectCall) {
     for (int J = Before; J >= 0; --J) {
@@ -230,8 +235,10 @@ void LowToMedConverter::runDce(MedFunc &Func) {
       if (Prev.Output.Kind == MedVar::Reg && Prev.Output.Size > 0 &&
           (TRI.isParamReg(Prev.Output.RegOff) ||
            TRI.isVectorReg(Prev.Output.RegOff) ||
-           (DirectCall && llvm::is_contained(AlternateArgumentRegisters,
-                                             Prev.Output.RegOff))))
+           (DirectCall && (llvm::is_contained(AlternateArgumentRegisters,
+                                              Prev.Output.RegOff) ||
+                           llvm::is_contained(NonstandardArgumentRegisters,
+                                              Prev.Output.RegOff)))))
         MarkLive(Prev.Output);
     }
   };
@@ -285,6 +292,7 @@ void LowToMedConverter::runDce(MedFunc &Func) {
   auto seedReachingStackPointer = [&](const MedBlock &Start, int Before) {
     seedReachingDef(Start, Before, TRI.StackPointer);
   };
+  bool KeepUnresolvedRegisterSetup = false;
   for (auto &Blk : Func.Blocks) {
     for (size_t I = 0; I < Blk.Ops.size(); ++I) {
       bool IsCall = (Blk.Ops[I].Opcode == NdOp::CALL ||
@@ -299,6 +307,21 @@ void LowToMedConverter::runDce(MedFunc &Func) {
           Call.Opcode == NdOp::CALL && Call.NumInputs >= 1 &&
           Call.Inputs[0].isConst() &&
           !(Image && Image->findImportAt(Call.Inputs[0].ConstVal));
+      if (DirectCall && !NonstandardArgumentRegisters.empty()) {
+        const auto Reads =
+            CallEntryReadGPRs ? CallEntryReadGPRs->find(Call.Inputs[0].ConstVal)
+                              : std::map<va_t, GPRReadWidths>::const_iterator{};
+        if (CallEntryReadGPRs && Reads != CallEntryReadGPRs->end()) {
+          // A summarized read may reach across several empty blocks or a
+          // join. Keep its actual reaching definitions before ABI recovery
+          // has named the call's arguments.
+          for (uint64_t Register : NonstandardArgumentRegisters)
+            if (Reads->second[Register / 8])
+              seedReachingDef(Blk, static_cast<int>(I) - 1, Register);
+        } else {
+          KeepUnresolvedRegisterSetup = true;
+        }
+      }
       seedParamWrites(Blk.Ops, static_cast<int>(I) - 1, DirectCall);
       // IP-map / EH splits often isolate the CALL. `lea r8; mov edx; lea rcx`
       // then sit in the predecessor and must stay live as call setup.  A
@@ -319,6 +342,17 @@ void LowToMedConverter::runDce(MedFunc &Func) {
                           DirectCall);
     }
   }
+
+  // An incomplete callee summary is no proof that a private argument
+  // register is unread. Retain its definitions in one bounded pass rather
+  // than walking the entire predecessor graph afresh for each unknown call.
+  // Keeping setup does not publish a parameter or a calling convention.
+  if (KeepUnresolvedRegisterSetup)
+    for (const MedBlock &Block : Func.Blocks)
+      for (const MedOp &Op : Block.Ops)
+        if (Op.Output.Kind == MedVar::Reg && Op.Output.Size &&
+            llvm::is_contained(NonstandardArgumentRegisters, Op.Output.RegOff))
+          MarkLive(Op.Output);
 
   // A return reads state that its operands do not name.  It pops its target
   // through the stack pointer and hands the restored stack pointer back to the

@@ -5128,6 +5128,18 @@ classification for intermediate values is separate from parameter membership.
 This follows Microsoft's [x64 calling convention](https://learn.microsoft.com/en-us/cpp/build/x64-calling-convention)
 and does not infer a custom calling convention from nonvolatile-register saves.
 
+i386 parameter recovery also recognizes incoming EBX, ESI and EDI values that
+reach a value use. Storage and restoration alone do not establish a parameter,
+and discarded scratch lanes remain excluded. `MedFunc::IntegerArgumentRegisters`
+retains the recovered order for both definitions and direct-call recovery,
+including omitted callees and forwarders. This is an inferred internal
+signature, not authority for a platform ABI or an original-image entry bridge.
+DCE keeps the reaching setup of those carriers until call recovery can consume
+it, including predecessor blocks. An incomplete callee-read summary cannot
+prove that setup dead. Omitted-callee analysis also accepts an explicit call
+to a boundary-guess symbol, following the CFG's explicit-transfer rule; an
+uncalled guess supplies no support body or new fallthrough boundary.
+
 Additional callee CFGs are admitted in deterministic breadth-first order.
 Parallel batches retain at most 32 bodies and use at most four independent
 decoders when symbol extents predict enough work; serial runs retain eight
