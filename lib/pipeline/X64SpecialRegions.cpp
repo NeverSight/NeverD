@@ -194,7 +194,8 @@ llvm::Expected<X64SpecialRegionSelection> selectX64SpecialRegions(
         if (!Resumes.empty())
           Region["vmexit_successors"] = std::move(Resumes);
       }
-      if (SourceOptions.NativeKvmHypercalls) {
+      if (SourceOptions.NativeKvmHypercalls ||
+          SourceOptions.NativeHyperVHypercallEntry) {
         llvm::json::Array Resumes;
         for (va_t Address : Audit.UnsupportedInstructions) {
           const auto Bytes = bytesAt(Image, Address);

@@ -1213,7 +1213,7 @@ buildInstruction(SpecializationInstruction Instruction,
           ? detail::x64FredReturn(Instruction.NativeBytes)
           : std::nullopt;
   const auto Hypercall =
-      Options.NativeKvmHypercalls &&
+      (Options.NativeKvmHypercalls || Options.NativeHyperVHypercallEntry) &&
               Instruction.ProfileProjection ==
                   InterpreterProfileProjection::X64HypercallV1
           ? x86HypercallEncoding(Instruction.NativeBytes)
@@ -1502,6 +1502,20 @@ buildInstruction(SpecializationInstruction Instruction,
     detail::X64ContinuationMpx<Writer>(W).validate();
   if (Result.RequiresNativeExecution) {
     W.leave(Exit::NativeInstruction);
+  } else if (Hypercall && Options.NativeHyperVHypercallEntry) {
+    // SetVpRegisters can replace the caller's execution state. It is outside
+    // this returning transport even when it would target a different VP.
+    const auto Number = W.temporary(), ReplacesState = W.temporary(1);
+    W.emit(NdOp::INT_AND, Number,
+           {W.read(NdVar::reg(x86reg::RCX, 8)), constant(0xffff)});
+    W.emit(NdOp::INT_EQUAL, ReplacesState, {Number, constant(0x51)});
+    W.rejectIf(ReplacesState);
+    W.emit(NdOp::INTRINSIC, {},
+           {constant(uint64_t(Intrinsic::X86HyperVCall), 2),
+            constant(*Options.NativeHyperVHypercallEntry),
+            W.address(offsetof(State, GPR)), W.address(offsetof(State, ZMM)),
+            constant(sizeof(State{}.ZMM[0]), 4)});
+    W.leave(Exit::Continue, constant(Instruction.Fallthrough.Address, 8));
   } else if (Hypercall) {
     const auto Status = W.temporary();
     W.emit(
@@ -1634,6 +1648,11 @@ buildX64ContinuationSource(const BinaryImage &Image,
         *Options.NullSegmentBasePolicy != X64NullSegmentBasePolicy::Preserve)))
     return invalid(
         "null segment base policy requires V6 or later and a valid policy");
+  if (Options.NativeHyperVHypercallEntry &&
+      (!*Options.NativeHyperVHypercallEntry || Options.NativeKvmHypercalls ||
+       !Controls))
+    return invalid("Hyper-V requires a nonzero native page, an x64 control "
+                   "profile and no competing KVM ABI");
   if (Options.NativeTimestampReads && !Controls)
     return invalid("native timestamp source requires an x64 host profile");
   if (Options.NativeWritePrefetch && !Controls)

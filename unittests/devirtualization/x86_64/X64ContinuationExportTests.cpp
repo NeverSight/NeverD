@@ -1383,6 +1383,7 @@ TEST_F(X64ContinuationExportTest,
 }
 #include "X64AlignmentContinuationTests.inc"
 #include "X64ContinuationEnvironmentTests.inc"
+#include "X64HyperVContinuationExportTests.inc"
 #include "X64JumpRegionContinuationTests.inc"
 #include "X64KvmContinuationExportTests.inc"
 #include "X64MpxContinuationExportTests.inc"

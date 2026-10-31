@@ -1,5 +1,13 @@
 **Languages**: [English](testing.md) | [简体中文](zh-CN/testing.md) | [繁體中文](zh-TW/testing.md) | [日本語](ja/testing.md) | [한국어](ko/testing.md) | [Français](fr/testing.md) | [Deutsch](de/testing.md) | [Español](es/testing.md) | [Italiano](it/testing.md) | [Русский](ru/testing.md) | [العربية](ar/testing.md)
 
+Hyper-V page transport uses the same two source targets below. Filter
+`^(X64ContinuationExportTest\.HyperV|X86KvmSource\.HyperV)` for explicit binding,
+full state, rep/fast outputs, upper-lane preservation and invalid contracts.
+Preserve C/manifests with `NEVERD_ISA_REGRESSION_ARTIFACT_DIR`. NeverC's
+`verify_hyperv_context.py` separately executes the native page ABI at O0/O2,
+including SysV/Win64 callers, three strides, unaligned banks and live frames.
+See [the Hyper-V domain](x86-hyperv-hypercalls.md).
+
 The KVM hypercall targets are `NeverDX64ContinuationExportTests`,
 `NeverDX86KvmSourceTests`, `NeverDX86VirtualizationTests` and
 `NeverDX86SystemSideeffectTests`; build them with `scripts/build.py`.

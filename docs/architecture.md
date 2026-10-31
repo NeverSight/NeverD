@@ -8571,7 +8571,10 @@ a hypervisor ABI. Ordinary lifting refuses them; the optional
 `NativeKvmHypercalls` continuation binding authenticates the raw receipt and
 owns the KVM RAX/RBX/RCX/RDX/RSI input and RAX output contract. Its distinct
 intrinsic IDs share five-value shape validation across HighC, LLVM C and native
-codegen. Legacy typed hypercall spellings do not establish full machine-state
+codegen. The alternative Hyper-V page binding transports RCX/RDX/R8 and XMM0..5,
+publishes all TLFS result registers, and rejects caller-state replacement. Its
+native intrinsic owns a real call to the registered page.
+Legacy typed hypercall spellings do not establish full machine-state
 support. See [the KVM domain](x86-kvm-hypercalls.md). This inventory does not
 imply coverage of every newer SEV/SNP instruction.
 
@@ -8582,8 +8585,8 @@ loads/stores. SVM operands retain address width and INVLPGA's ASID. These are
 opaque processor-state effects, never assumed-success values. Generated code
 emits the actual instruction with its compiler memory/flag constraints; host
 execution still requires its architectural privilege and machine state.
-VMLAUNCH/VMRESUME model the ordinary fallthrough on failed entry. VMRUN
-remains explicitly rejected because it requires unsaved guest GPR/FPU state
+VMLAUNCH/VMRESUME model the ordinary fallthrough on failed entry. Ordinary
+VMRUN lifting remains explicitly rejected because it requires guest GPR/FPU state
 ownership and a VM-exit continuation. SKINIT instead uses an explicit
 nonreturning secure-loader launch: its original EAX bits are a physical i32
 address, and no old register/flag/stack ABI continuation is invented. The strict
