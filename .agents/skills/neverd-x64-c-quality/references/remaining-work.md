@@ -21,6 +21,14 @@ configurations remain separate coverage.
 
 ## Open
 
+LLVMC's late conditional fold now requires its body to follow the current
+block in LLVM layout. An earlier body may already have inlined an exit;
+duplicating only its branch could emit a goto without that exit's label.
+Owned execution regressions cover both layouts, reversed arms, shared and
+separate returns, both type projection modes and O0/O2 with UBSan. This closes
+that control-flow ownership gap; it does not establish an ordinary ABI for
+arbitrary recovered machine-state regions.
+
 HighC's Win64 saved-parameter aliases now stop at every new SSA definition,
 including register COPYs, PHIs and conditional call clobbers. A version-zero
 local or PHI definition is not an entry argument. Native/source execution tests
