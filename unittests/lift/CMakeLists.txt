@@ -521,6 +521,7 @@ add_neverd_unittest(NeverDLiftTests
   format/COFFFunctionListingTests.cpp
   format/MachOLLVMNameBoundaryTests.cpp
   format/COFFImportStorageBoundaryTests.cpp
+  format/COFFOrdinalImportTests.cpp
   format/LLVMImportVeneerBoundaryTests.cpp
   format/MachOPointerRelocationBoundaryTests.cpp
   format/ImmutableChainedValueTests.cpp
@@ -5132,3 +5133,15 @@ target_compile_definitions(NeverDHighPointerTypeInferenceTests PRIVATE
   NEVERD_TEST_CLANG="${NEVERD_TEST_CLANG_EXECUTABLE}")
 add_neverd_unittest(NeverDCDisplayFrameRecordTests
   core/CDisplayFrameRecordTests.cpp LINK_COMPONENTS BackendC)
+
+add_neverd_unittest(NeverDCOFFOrdinalImportTests
+  format/COFFOrdinalImportTests.cpp
+
+  LINK_COMPONENTS
+  Loader
+)
+
+target_include_directories(NeverDCOFFOrdinalImportTests PRIVATE
+  ${CMAKE_SOURCE_DIR}/include
+  ${LLVM_INCLUDE_DIRS}
+)

@@ -2307,3 +2307,9 @@ LLVM C の合成スタックスロットは、実行時にどちらかの 64 ビ
 `NeverDInterpreterMachineStateTests` の `KernelPageGlobalSource*` は HighC/LLVMC、O0/O2、ASan/UBSan で全状態、戻りスタック、CR4、全記録不足・不一致、カーネル POPFQ/CLI/STI を検証します。ドメイン、旧配置、予算の拒否も確認し、生成されたスカラー C のみを実行します。
 
 `AtomicSourceRequiresAnUnmodifiedSupportedReceipt` は欠落・改変された証跡と未対応の CMPXCHG を拒否します。`ScalarAtomicsRetainTransactionsAndPhysicalState` は独立した状態・フラグ・バイトの期待値で 1/2/4/8 バイトの XCHG、LOCK XADD、非整列メモリ、戻りアドレスとの別名を検証します。両 C 経路をユーザー／カーネル状態で O0/O2、ASan/UBSan 実行します。`NeverDInterpreterMachineStateTests` と生環境、特殊化、継続ソース、ソースバックエンドのテストを実行してください。競合や障害動作の認証ではありません。
+
+`InterpreterSpecialization.AlignmentProducersPrecedeWideGuardContexts` / `RuntimeValidityStillRefinesAnEnclosingGuard`: 整列の回帰テストは独立した算術オラクルと比較し、両方の整列経路、下位ビットの全剰余、幅広カウント、閾値の両側、符号なしの折り返しを検査します。不整列ループの拒否、生成元の精密化が停滞した後の外側条件の精密化、および操作・クエリ予算のちょうど十分な値と一つ不足する値も確認します。通常のソース ABI 復元やネイティブ障害動作の証明ではありません。
+
+ReadPrefetch 回帰は正確なバイトとオペランド情報、独立した未定義出力・不透明状態の証跡、不正なスカラー契約と改変した証跡を検査します。両 C 経路は四種類と反復ヒントを保持し、O0/O2 とサニタイザーで独立した全状態・メモリ期待値と比較します。未マップアドレス、32 ビットアドレスの折返し、物理的リターンを含み、キャッシュ配置や時間は比較対象外です。
+
+StreamingStore 回帰は命令バイト、オペランド情報、整列、書込み範囲全体、不正な契約、改変した証跡を検査します。物理的な戻りアドレスを上書きするストアを含め、全状態とメモリを独立した期待値と比較します。両 C 経路をユーザー・カーネル状態プロファイルで O0/O2 とサニタイザー付きで実行します。ネイティブカーネル、並行実行、故障時の実行は認証しません。

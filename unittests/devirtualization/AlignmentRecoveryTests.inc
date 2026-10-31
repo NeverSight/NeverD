@@ -579,3 +579,127 @@ TEST(InterpreterSpecialization, RuntimeValidityDiscoveryTracksMaskedMXCSR) {
     }
   }
 }
+
+Provider alignmentWithWideThreshold(bool Invalid) {
+  Provider P;
+  P.add(0x100,
+        {op(NdOp::COPY, reg(16), {reg(8)}),
+         op(NdOp::INT_LESS, reg(56, 1), {reg(32), constant(80)}),
+         op(NdOp::COND_BR, {}, {constant(0x200), reg(56, 1)})},
+        0x110);
+  P.add(0x110,
+        {op(NdOp::INT_LESS, reg(56, 1), {reg(40), constant(16)}),
+         op(NdOp::COND_BR, {}, {constant(0x160), reg(56, 1)})},
+        0x120);
+  P.add(0x120,
+        {op(NdOp::INT_SUB, reg(24, 4), {constant(0, 4), reg(8, 4)}),
+         op(NdOp::INT_ZEXT, reg(24), {reg(24, 4)}),
+         op(NdOp::INT_AND, reg(24), {reg(24), constant(15)}),
+         op(NdOp::INT_EQUAL, reg(56, 1), {reg(24), constant(0)}),
+         op(NdOp::COND_BR, {}, {constant(0x140), reg(56, 1)})},
+        0x130);
+  P.add(0x130, {op(NdOp::INT_SUB, reg(32), {reg(32), reg(24)}), jump(0x140)});
+  P.add(0x140, {op(NdOp::INT_ADD, reg(16), {reg(16), reg(24)}), jump(0x180)});
+  P.add(0x160,
+        {op(NdOp::INT_AND, reg(24), {reg(16), constant(15)}),
+         op(NdOp::INT_EQUAL, reg(56, 1), {reg(24), constant(0)}),
+         op(NdOp::COND_BR, {}, {constant(0x180), reg(56, 1)})},
+        0x170);
+  P.add(0x170,
+        {op(NdOp::INT_ADD, reg(16), {reg(16), constant(1)}),
+         op(NdOp::INT_SUB, reg(32), {reg(32), constant(1)}), jump(0x160)});
+  P.add(0x180,
+        {op(NdOp::INT_RIGHT, reg(48), {reg(32), constant(5)}),
+         op(NdOp::INT_LESS, reg(56, 1), {constant(4096), reg(48)}),
+         op(NdOp::COND_BR, {}, {constant(0x200), reg(56, 1)})},
+        0x190);
+  P.add(0x190,
+        {requireAlignment(reg(16)),
+         op(NdOp::INT_ADD, reg(16), {reg(16), constant(Invalid ? 33 : 32)}),
+         op(NdOp::INT_SUB, reg(48), {reg(48), constant(1)}),
+         op(NdOp::INT_NOTEQUAL, reg(56, 1), {reg(48), constant(0)}),
+         op(NdOp::COND_BR, {}, {constant(0x190), reg(56, 1)})},
+        0x200);
+  P.add(0x200, {op(NdOp::INT_XOR, reg(0), {reg(16), reg(32)}), ret()});
+  return P;
+}
+
+TEST(InterpreterSpecialization, AlignmentProducersPrecedeWideGuardContexts) {
+  auto P = alignmentWithWideThreshold(false);
+  auto Options = alignmentOptions();
+  Options.DiscoverControlState = true;
+  Options.MaxChainedTransfers = 512;
+  Options.StopChainingAtRepeatedDestination = true;
+  Options.MaxSolverQueries = 2048;
+  const auto Result = specializeInterpreter(P, {0x100}, Options);
+  ASSERT_TRUE(Result.complete()) << Result.Diagnostic;
+  EXPECT_GT(count(Result.Residual, NdOp::INTRINSIC), 0u);
+  // Independent modulo arithmetic covers both alignment paths, every residue,
+  // wide runtime counts, unsigned wraparound and both threshold outcomes.
+  for (uint64_t High :
+       {UINT64_C(0), UINT64_C(0xabcdef9876500000), UINT64_MAX - 15})
+    for (uint64_t Low = 0; Low != 16; ++Low)
+      for (uint64_t Length :
+           {UINT64_C(0), UINT64_C(79), UINT64_C(80), UINT64_C(127),
+            UINT64_C(256), UINT64_C(131103), UINT64_C(131104), UINT64_MAX})
+        for (uint64_t Mode : {UINT64_C(0), UINT64_C(16), UINT64_MAX}) {
+          if ((Length == 131103 || Length == 131104) && (High || Mode))
+            continue;
+          const uint64_t Input = High | Low;
+          uint64_t Pointer = Input, Remaining = Length;
+          if (Length >= 80) {
+            const uint64_t Adjustment = (16 - Input % 16) % 16;
+            Pointer += Adjustment;
+            Remaining -= Adjustment;
+            if (Remaining / 32 <= 4096)
+              Pointer += 32 * (Remaining / 32);
+          }
+          EXPECT_EQ(
+              execute(Result.Residual, {{8, Input}, {32, Length}, {40, Mode}}),
+              Pointer ^ Remaining);
+        }
+  for (bool Queries : {false, true}) {
+    auto Exact = Options;
+    auto &Limit = Queries ? Exact.MaxSolverQueries : Exact.MaxOperations;
+    Limit = Queries ? Result.SolverQueries : Result.EvaluatedOperations;
+    ASSERT_GT(Limit, 0u);
+    ASSERT_TRUE(specializeInterpreter(P, {0x100}, Exact).complete());
+    --Limit;
+    const auto Short = specializeInterpreter(P, {0x100}, Exact);
+    EXPECT_EQ(Short.Status, SpecializationStatus::BudgetExceeded);
+    EXPECT_TRUE(Short.Residual.Blocks.empty());
+  }
+  auto Bad = alignmentWithWideThreshold(true);
+  const auto Refused = specializeInterpreter(Bad, {0x100}, Options);
+  EXPECT_FALSE(Refused.complete());
+  EXPECT_TRUE(Refused.Residual.Blocks.empty());
+}
+
+TEST(InterpreterSpecialization, RuntimeValidityStillRefinesAnEnclosingGuard) {
+  for (bool Reachable : {false, true}) {
+    Provider P;
+    P.add(0x100,
+          {op(NdOp::INT_AND, reg(32), {reg(8), constant(3)}),
+           op(Reachable ? NdOp::INT_EQUAL : NdOp::INT_NOTEQUAL, reg(48, 1),
+              {reg(32), constant(0)}),
+           op(NdOp::COND_BR, {}, {constant(0x150), reg(48, 1)})},
+          0x110);
+    P.add(0x110, {jump(0x120)});
+    P.add(0x120,
+          {op(NdOp::INT_NOTEQUAL, reg(48, 1), {reg(32), constant(0)}),
+           op(NdOp::COND_BR, {}, {constant(0x140), reg(48, 1)})},
+          0x150);
+    P.add(0x140, {requireAlignment(reg(16)), jump(0x150)});
+    P.add(0x150, {op(NdOp::COPY, reg(0), {reg(8)}), ret()});
+    auto Options = alignmentOptions();
+    Options.DiscoverControlState = true;
+    const auto Result = specializeInterpreter(P, {0x100}, Options);
+    EXPECT_EQ(Result.complete(), !Reachable) << Result.Diagnostic;
+    if (Reachable)
+      EXPECT_TRUE(Result.Residual.Blocks.empty());
+    else if (Result.complete())
+      for (uint64_t Input :
+           {UINT64_C(0), UINT64_C(1), UINT64_C(2), UINT64_C(3), UINT64_MAX})
+        EXPECT_EQ(execute(Result.Residual, {{8, Input}, {16, 123}}), Input);
+  }
+}

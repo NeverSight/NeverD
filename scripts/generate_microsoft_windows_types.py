@@ -107,6 +107,25 @@ ISOLATED_PROVIDERS = {
         Provider("PerformanceData", ("windows", "pdh", "pdhmsg")),
         Provider("Biometrics", ("windows", "winbio")),
         Provider("GraphicsThunk", ("windows", "d3dkmthk")),
+        Provider("Direct3D11", ("windows", "d3d11"), (), (
+            "D3D11CreateDevice", "D3D11CreateDeviceAndSwapChain")),
+        Provider("Direct3D12", ("windows", "d3d12"), (), (
+            "D3D12CreateDevice", "D3D12GetDebugInterface", "D3D12GetInterface",
+            "D3D12SerializeRootSignature", "D3D12CreateRootSignatureDeserializer",
+            "D3D12SerializeVersionedRootSignature", "D3D12CreateVersionedRootSignatureDeserializer",
+            "D3D12EnableExperimentalFeatures")),
+        Provider("DXGI", ("windows", "dxgi1_6"), (), (
+            "CreateDXGIFactory", "CreateDXGIFactory1", "CreateDXGIFactory2",
+            "DXGIDeclareAdapterRemovalSupport", "DXGIGetDebugInterface1")),
+        Provider("ShaderCompiler", ("windows", "d3dcompiler"), (), (
+            "D3DReadFileToBlob", "D3DWriteBlobToFile", "D3DCompile", "D3DCompile2",
+            "D3DCompileFromFile", "D3DPreprocess", "D3DGetDebugInfo", "D3DReflect",
+            "D3DReflectLibrary", "D3DDisassemble", "D3DDisassembleRegion", "D3DCreateLinker",
+            "D3DLoadModule", "D3DCreateFunctionLinkingGraph", "D3DGetTraceInstructionOffsets",
+            "D3DGetInputSignatureBlob", "D3DGetOutputSignatureBlob",
+            "D3DGetInputAndOutputSignatureBlob", "D3DStripShader", "D3DGetBlobPart",
+            "D3DSetBlobPart", "D3DCreateBlob", "D3DCompressShaders", "D3DDecompressShaders",
+            "D3DDisassemble10Effect")),
         # clfs.h includes the WDK's legacy stdio.h. Import the CLFS API only:
         # those transitive CRT declarations must not take priority over UCRT.
         Provider("CLFS", ("windows", "clfsw32"), (), (
@@ -213,6 +232,25 @@ def prepare_provider(name: str, source: Path, arguments: list[str], directory: P
                      neverd: str, model: str, headers=(), defines=(), prototypes=(),
                      metadata: dict | None = None, convention: str = "") -> dict:
     """Validate and select a whole provider before it can enter the merge."""
+    bridge_commands = []
+    if name == "DXGI":
+        # The SDK writes () for this documented no-argument C++ API. In C
+        # that spelling has no prototype. Authenticate the complete C++ type
+        # before supplying its compatible C (void) redeclaration.
+        original = source.read_text(encoding="utf-8")
+        proof = directory / "DXGI-noargs.cpp"
+        proof.write_text(original + '\nstatic_assert(__is_same(\n'
+                         '    decltype(&DXGIDeclareAdapterRemovalSupport),\n'
+                         '    HRESULT (WINAPI *)(void)));\n', encoding="utf-8")
+        invocation = arguments + ["-x", "c++", "-std=c++17", "-fsyntax-only", str(proof)]
+        run(invocation, directory / "DXGI-noargs.log")
+        source.write_text(original + '\nHRESULT WINAPI DXGIDeclareAdapterRemovalSupport(void);\n',
+                          encoding="utf-8")
+        bridge_commands.append(invocation)
+        metadata = dict(metadata or {}, cpp_parameter_bridge={
+            "function": "DXGIDeclareAdapterRemovalSupport",
+            "source": str(proof), "sha256": wdk.digest(proof),
+            "documentation": "https://learn.microsoft.com/windows/win32/api/dxgi1_6/nf-dxgi1_6-dxgideclareadapterremovalsupport"})
     dump = ["-fsyntax-only", "-Xclang", "-fdump-record-layouts-complete"]
     preprocessed = directory / (name + ".h")
     command = arguments + ["-E", str(source)]
@@ -220,7 +258,7 @@ def prepare_provider(name: str, source: Path, arguments: list[str], directory: P
     parser_convention(preprocessed, convention)
     parsed = checked_types(neverd, preprocessed, directory / (name + ".parse.log"), model)
     input_hash = wdk.digest(preprocessed)
-    commands = [command]
+    commands = [command, *bridge_commands]
     if prototypes:
         original = directory / (name + ".pre.h")
         preprocessed.replace(original)

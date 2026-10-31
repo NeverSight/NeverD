@@ -172,10 +172,19 @@ does not certify native ARM64 execution. The optional
 uses the pinned Microsoft SDK/import libraries to compile both emitted routes
 and compare their API compiler contracts across x86, x64 and ARM64.
 Its D3DKMT, CLFS and TPM cases exercise record pointers, six-argument calls
-and pointer-sized results. With `--kernel`, the WDK fixtures cover SD Port's
+and pointer-sized results. Direct3D 11/12, DXGI and D3DCompiler callers also
+cover interface outputs, enum parameters and target-sized lengths, including
+twelve- and fourteen-argument calls across the register/stack boundary.
+With `--kernel`, the WDK fixtures cover SD Port's
 byte-width offset, PortCls's callback and fifth argument, and Stream Class's
 void result. Their synthetic imports retain the original compiler's x86
 decoration. This checks source reconstruction and ABI, not driver execution.
+`NeverDCOFFOrdinalImportTests` checks delayed ordinal imports across the three
+authenticated SDK targets and an unqualified ARM32 control, with case variants,
+other modules, adjacent ordinals and malformed reserved bits. The SDK-linked device-creation callers
+check ordinary imports through both C routes. The DXGI provider also requires
+a successful original C++ function-type check before its C no-argument bridge;
+the generator unit test requires a failed check to leave the input unchanged.
 `TypeRender.KeywordNamespacesKeepTheirDistinctSpellings` checks the shared
 keyword index across all seven output languages, including C++'s C keywords
 and Rust's raw-identifier exceptions.
@@ -17877,3 +17886,9 @@ source but do not qualify privileged execution.
 `KernelPageGlobalSource*` in `NeverDInterpreterMachineStateTests` checks complete state, return stacks, CR4 read/write relations, every short or mismatched instruction reservation, and supervisor POPFQ/CLI/STI flag rules in HighC and LLVMC at O0/O2 with ASan/UBSan. Domain, earlier-layout and budget refusals remain explicit. Tests execute generated scalar C, not privileged instructions.
 
 `AtomicSourceRequiresAnUnmodifiedSupportedReceipt` rejects missing or modified atomic receipts and unsupported CMPXCHG. `ScalarAtomicsRetainTransactionsAndPhysicalState` checks 1/2/4/8-byte XCHG and LOCK XADD with independent full-state, flag and byte oracles, unaligned memory and return-word aliases. Both C routes run at O0/O2 with ASan/UBSan under user and kernel state profiles. Run `NeverDInterpreterMachineStateTests` plus the raw-environment, specialization, continuation-source and source-backend suites. These completion tests do not certify contention or fault behavior.
+
+`InterpreterSpecialization.AlignmentProducersPrecedeWideGuardContexts` / `RuntimeValidityStillRefinesAnEnclosingGuard`: The alignment regressions compare an independent arithmetic oracle across both alignment paths, every low-bit residue, wide counts, threshold outcomes and unsigned wraparound. They also require refusal of a misaligned loop, continued enclosing-guard refinement when producers stall, and exact/one-short operation and query budgets. These checks establish neither ordinary source ABI recovery nor native fault behavior.
+
+ReadPrefetch regressions check exact bytes and operand metadata, separate undefined-output and opaque-bank receipts, malformed scalar contracts and modified raw receipts. Both C routes retain all four hints and repeated occurrences, then run at O0/O2 with sanitizers against independent full-state and memory expectations, including unmapped addresses, 32-bit address wrapping and physical returns. Cache placement and timing are outside these comparisons.
+
+StreamingStore regressions check instruction bytes, operand metadata, alignment, complete writable extents, malformed contracts and modified receipts. Independent expectations compare complete state and memory, including a store that overwrites the physical return word. Both C routes execute at O0/O2 with sanitizers under user and kernel state profiles. These checks do not certify native kernel, concurrent or faulting execution.

@@ -35,6 +35,18 @@
 namespace neverd {
 namespace coff_loader {
 
+std::string ordinalImportName(Arch Architecture, llvm::StringRef Module,
+                              uint16_t Ordinal) {
+  // Microsoft's 10.0.26100 import libraries bind this public API to ordinal
+  // 101 on x86, x64 and ARM64. The SDK caller/compiler checks use the actual
+  // target libraries; neither another DLL nor another ordinal supplies it.
+  if ((Architecture == Arch::X86 || Architecture == Arch::X64 ||
+       Architecture == Arch::AArch64) &&
+      Module.equals_insensitive("d3d12.dll") && Ordinal == 101)
+    return "D3D12CreateDevice";
+  return (kOrdinalPrefix + llvm::Twine(Ordinal)).str();
+}
+
 using namespace llvm::COFF;
 using namespace llvm::object;
 
@@ -410,8 +422,10 @@ parseDelayImportDescriptor(const delay_import_directory_table_entry &Desc,
     const uint64_t OrdinalMask =
         Img.is64Bit() ? (uint64_t(1) << 63) : (uint64_t(1) << 31);
     if ((Raw & OrdinalMask) != 0) {
+      if (Raw & ~(OrdinalMask | uint64_t{0xffff}))
+        continue;
       Imp.Ordinal = static_cast<uint16_t>(Raw & 0xffffu);
-      Imp.Name = (kOrdinalPrefix + llvm::Twine(Imp.Ordinal)).str();
+      Imp.Name = ordinalImportName(Img.Arch, Resolved->Module, Imp.Ordinal);
     } else {
       if (Raw > std::numeric_limits<uint32_t>::max())
         continue;
@@ -759,8 +773,8 @@ void recordIndexedJumpTableRuns(BinaryImage &Img) {
             continue;
           std::optional<va_t> Base;
           if (Operand.mem.base == X86_REG_RIP)
-            Base = Insn.Addr + Insn.Size +
-                   static_cast<uint64_t>(Operand.mem.disp);
+            Base =
+                Insn.Addr + Insn.Size + static_cast<uint64_t>(Operand.mem.disp);
           else if (Operand.mem.base == X86_REG_INVALID)
             Base = static_cast<uint64_t>(Operand.mem.disp) & AddressMask;
           if (!Base || (*Base & (Width - 1)) != 0)
@@ -852,13 +866,12 @@ void recordIndexedTableBasesInCode(BinaryImage &Img) {
       const cs_x86 &X86 = Insn.Raw->detail->x86;
       for (uint8_t I = 0; I < X86.op_count; ++I) {
         const cs_x86_op &Operand = X86.operands[I];
-        if (Operand.type != X86_OP_MEM ||
-            Operand.mem.index == X86_REG_INVALID)
+        if (Operand.type != X86_OP_MEM || Operand.mem.index == X86_REG_INVALID)
           continue;
         std::optional<va_t> Base;
         if (Operand.mem.base == X86_REG_RIP)
-          Base = Insn.Addr + Insn.Size +
-                 static_cast<uint64_t>(Operand.mem.disp);
+          Base =
+              Insn.Addr + Insn.Size + static_cast<uint64_t>(Operand.mem.disp);
         else if (Operand.mem.base == X86_REG_INVALID)
           Base = static_cast<uint64_t>(Operand.mem.disp) & AddressMask;
         if (!Base || (*Base & (Width - 1)) != 0)

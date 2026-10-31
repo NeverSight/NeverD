@@ -8,6 +8,8 @@
 //===----------------------------------------------------------------------===//
 
 #include "../../lib/analysis/arch/x86_64/StringTransfer.h"
+#include "../../lib/analysis/arch/x86_64/X64ControlTransitions.h"
+#include "../../lib/analysis/arch/x86_64/X64StreamStore.h"
 #include "../../lib/analysis/core/RecoveryArchitecture.h"
 #include "../../lib/lift/X86/X86CompatibilityReturnUndefined.h"
 #include "../../lib/lift/X86/X86ControlMoveUndefined.h"
@@ -1604,6 +1606,165 @@ TEST(X86NativeStateAudit, TimestampCoverageRequiresExactEncodingAndDetails) {
   }
 }
 
+TEST(X86NativeStateAudit, ReadPrefetchBindsEncodingAndIndependentOpaqueBanks) {
+  Decoder Dec;
+  ASSERT_TRUE(Dec.init(Arch::X64));
+  Dec.setStrict(true);
+  const Intrinsic Hints[] = {Intrinsic::PrefetchNta, Intrinsic::PrefetchT0,
+                             Intrinsic::PrefetchT1, Intrinsic::PrefetchT2};
+  for (unsigned Hint = 0; Hint != 4; ++Hint)
+    for (const auto &Bytes : std::vector<std::vector<uint8_t>>{
+             {0x0f, 0x18, uint8_t((Hint << 3) | 1)},
+             {0x43, 0x0f, 0x18, uint8_t((Hint << 3) | 0x44), 0x8a, 0x80},
+             {0x67, 0x0f, 0x18, uint8_t((Hint << 3) | 0x84), 0x8a, 0x81, 0x56,
+              0x34, 0x12},
+             {0x0f, 0x18, uint8_t((Hint << 3) | 5), 0xf0, 0xff, 0xff, 0xff},
+             {0x67, 0x0f, 0x18, uint8_t((Hint << 3) | 5), 0x90, 0, 0, 0},
+             {0x0f, 0x18, uint8_t((Hint << 3) | 4), 0x25, 0, 0, 0x80, 0xff}}) {
+      SCOPED_TRACE(Hint);
+      DecodedInsn I{};
+      ASSERT_EQ(
+          Dec.decodeOneForLift(Bytes.data(), Bytes.size(), CodeAddress, I),
+          int(Bytes.size()));
+      ASSERT_TRUE(readprefetchaudit::form(I.Raw, Arch::X64));
+      std::vector<LowOp> Ops, Plain;
+      LowInstructionUndefinedEffects Effects;
+      LowInstructionPreservedState Preserved;
+      Dec.liftToLow(I, Ops, {}, {}, &Effects, &Preserved);
+      Dec.liftToLow(I, Plain);
+      ASSERT_EQ(Effects.Coverage, LowUndefinedCoverage::Complete)
+          << Effects.Diagnostic;
+      EXPECT_TRUE(Effects.Effects.empty());
+      EXPECT_EQ(Effects.OperationDigest, lowUndefinedOperationDigest(Ops));
+      EXPECT_EQ(Effects.OperationDigest, lowUndefinedOperationDigest(Plain));
+      EXPECT_EQ(Preserved.Audit, LowPreservedStateAudit::LegacyIntegerV1);
+      EXPECT_EQ(Preserved.StateSet,
+                LowPreservedStateSet::LegacyIntegerOpaqueV1);
+      EXPECT_EQ(Preserved.OperationDigest, Effects.OperationDigest);
+      EXPECT_EQ(Preserved.OpCount, Ops.size());
+      unsigned Count = 0;
+      for (const auto &Op : Ops) {
+        EXPECT_NE(Op.Opcode, NdOp::LOAD);
+        EXPECT_NE(Op.Opcode, NdOp::STORE);
+        if (Op.Opcode == NdOp::INTRINSIC) {
+          ++Count;
+          EXPECT_EQ(Op.Inputs[0], NdVar::cst(uint64_t(Hints[Hint]), 2));
+          EXPECT_TRUE(x64::readprefetch::isOperation(Op));
+        }
+      }
+      EXPECT_EQ(Count, 1u);
+      for (unsigned Mutation = 0; Mutation != 11; ++Mutation) {
+        cs_insn Raw = *I.Raw;
+        cs_detail Detail = *Raw.detail;
+        Raw.detail = &Detail;
+        auto &X = Detail.x86;
+        switch (Mutation) {
+        case 0:
+          Raw.size--;
+          break;
+        case 1:
+          Raw.bytes[X.encoding.modrm_offset] ^= 8;
+          break;
+        case 2:
+          X.operands[0].mem.disp++;
+          break;
+        case 3:
+          X.operands[0].size = 2;
+          break;
+        case 4:
+          X.operands[0].access = CS_AC_WRITE;
+          break;
+        case 5:
+          X.op_count = 2;
+          break;
+        case 6:
+          X.eflags = X86_EFLAGS_MODIFY_CF;
+          break;
+        case 7:
+          X.rex ^= 1;
+          break;
+        case 8:
+          X.prefix[0] = X86_PREFIX_LOCK;
+          break;
+        case 9:
+          X.addr_size ^= 12;
+          break;
+        case 10:
+          X.encoding.imm_size = 1;
+          break;
+        }
+        EXPECT_FALSE(readprefetchaudit::form(&Raw, Arch::X64)) << Mutation;
+      }
+      EXPECT_FALSE(readprefetchaudit::form(I.Raw, Arch::X86));
+    }
+  for (uint8_t Prefix : {0x64, 0x65, 0x66, 0x48, 0xf2, 0xf3}) {
+    const uint8_t Bytes[]{Prefix, 0x0f, 0x18, 0x01};
+    DecodedInsn I{};
+    if (Dec.decodeOneForLift(Bytes, sizeof(Bytes), CodeAddress, I) ==
+        sizeof(Bytes))
+      EXPECT_FALSE(readprefetchaudit::form(I.Raw, Arch::X64));
+  }
+}
+
+TEST(X86NativeStateAudit, ReadPrefetchRequiresExactScalarContract) {
+  SpecializationOptions Options;
+  Options.ExplicitMachineState = Options.NormalNonfaultingExecution = true;
+  LowOp Op;
+  Op.Opcode = NdOp::INTRINSIC;
+  Op.addInput(NdVar::cst(uint64_t(Intrinsic::PrefetchNta), 2));
+  Op.addInput(NdVar::reg(x86reg::RCX, 8));
+  ASSERT_TRUE(x64::readprefetch::supportsOperation(Op, Options));
+  for (unsigned Mutation = 0; Mutation != 10; ++Mutation) {
+    auto Changed = Op;
+    switch (Mutation) {
+    case 0:
+      Changed.Output = NdVar::reg(x86reg::RAX, 8);
+      break;
+    case 1:
+      Changed.NumInputs = 1;
+      break;
+    case 2:
+      Changed.MemoryOrdering = NdMemoryOrdering::SequentiallyConsistent;
+      break;
+    case 3:
+      Changed.MemoryAddressSpace = NdMemoryAddressSpace::X86FS;
+      break;
+    case 4:
+      Changed.Inputs[0].Size = 8;
+      break;
+    case 5:
+      Changed.Inputs[0].Offset |= UINT64_C(1) << 16;
+      break;
+    case 6:
+      Changed.Inputs[0].Offset = uint64_t(Intrinsic::PrefetchW);
+      break;
+    case 7:
+      Changed.Inputs[0].Offset = uint64_t(Intrinsic::Prefetch);
+      break;
+    case 8:
+      Changed.Inputs[1].Size = 4;
+      break;
+    case 9:
+      Changed.Inputs[1].Offset = InvalidVA;
+      break;
+    }
+    EXPECT_FALSE(x64::readprefetch::supportsOperation(Changed, Options))
+        << Mutation;
+  }
+  for (unsigned Mutation = 0; Mutation != 4; ++Mutation) {
+    auto Changed = Options;
+    if (Mutation == 0)
+      Changed.ExplicitMachineState = false;
+    if (Mutation == 1)
+      Changed.NormalNonfaultingExecution = false;
+    if (Mutation == 2)
+      Changed.Architecture = Arch::X86;
+    if (Mutation == 3)
+      Changed.ByteOrder = llvm::endianness::big;
+    EXPECT_FALSE(x64::readprefetch::supportsOperation(Op, Changed));
+  }
+}
+
 TEST(X86NativeStateAudit, WritePrefetchBindsItsActualAddressAndHint) {
   Decoder Dec;
   ASSERT_TRUE(Dec.init(Arch::X64));
@@ -1768,5 +1929,7 @@ TEST(X86NativeStateAudit, DivisionRejectsUnauditedFormsAndForgedDetails) {
     expectUnaudited(Dec, Insn);
   }
 }
+
+#include "NativeStreamStoreAuditTests.inc"
 
 } // namespace

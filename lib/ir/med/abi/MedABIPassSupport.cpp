@@ -28,6 +28,7 @@
 
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/StringRef.h"
 
 #include <algorithm>
@@ -99,7 +100,8 @@ bool incomingArgumentReachesCall(const AbiCallContext &C, int ArgIndex) {
 }
 
 std::map<int64_t, MedVar> callSetupStackStores(const AbiCallContext &C,
-                                               CallSetupStackJoins *Joins) {
+                                               CallSetupStackJoins *Joins,
+                                               size_t *SharedWork) {
   using Stores = std::map<int64_t, CallSetupStackValue>;
   if (Joins)
     *Joins = {};
@@ -111,6 +113,13 @@ std::map<int64_t, MedVar> callSetupStackStores(const AbiCallContext &C,
   // A per-call bound also limits path duplication in diamonds. Exhaustion
   // publishes no partial predecessor proof.
   size_t Remaining = limits::kMaxCallSetupStackProofWork;
+  if (SharedWork)
+    Remaining = std::min(Remaining, *SharedWork);
+  const size_t InitialWork = Remaining;
+  llvm::scope_exit Charge([&] {
+    if (SharedWork)
+      *SharedWork -= InitialWork - Remaining;
+  });
   std::optional<MedBlockIdIndex> OwnBlocks;
   const MedBlockIdIndex &Blocks =
       C.Blocks ? *C.Blocks : OwnBlocks.emplace(C.Func);

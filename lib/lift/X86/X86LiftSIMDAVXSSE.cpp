@@ -14,6 +14,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "X86FPRoundState.h"
+#include "X86LegacyVectorMoveAudit.h"
 #include "X86LiftDetail.h"
 
 #include "neverd/ir/intrinsics/Intrinsics.h"
@@ -49,9 +50,22 @@ bool liftSIMDAVXSSE(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
     break;
   }
 
-  // Non-temporal stores/loads — semantically identical to normal moves for
-  // our purposes (the non-temporal hint only affects cache behavior).
-  case X86_INS_MOVNTDQ:
+  case X86_INS_MOVNTDQ: {
+    if (!vectormoveaudit::form(Insn, L.targetArch()))
+      return false;
+    const NdVar Address = S.computeEA(X86.operands[0]);
+    const auto Space =
+        X86Lifter::LiftState::memoryAddressSpace(X86.operands[0]);
+    S.emitIntrinsic(Intrinsic::RequireAligned, {},
+                    {Address, NdVar::scalar(16, 8)}, NdMemoryOrdering::None,
+                    Space);
+    S.emitIntrinsic(Intrinsic::X86StreamStore128, {},
+                    {Address, L.operandRead(S, X86.operands[1])},
+                    NdMemoryOrdering::None, Space);
+    break;
+  }
+
+  // Other non-temporal families remain outside the audited raw-state domain.
   case X86_INS_MOVNTDQA:
   case X86_INS_MOVNTI:
   case X86_INS_MOVNTPD:

@@ -426,7 +426,7 @@ renderX86SystemStateCall(Arch TargetArch, const llvm::CallInst &Call,
            Mnemonic == std::string(C.Mnemonic) + "q")))
       continue;
     Known = true;
-    std::vector<uint16_t> Widths = {0, 1, 2, 4, 8};
+    std::vector<uint16_t> Widths = {0, 1, 2, 4, 8, 16};
     if (Segmented) {
       Widths.clear();
       for (uint16_t S = 0; S < X86SegmentedBlockSelectorLimit; ++S)

@@ -3,6 +3,13 @@
 Use public fixtures and emitter tests as the durable contract. Private binary
 analysis and comparison output belong outside the repository.
 
+The official SDK catalog now selects Direct3D 11/12, DXGI and D3DCompiler C
+exports with their checked type closures on x86, x64 and ARM64. Both source
+routes compile import-only callers, including twelve- and fourteen-argument
+graphics calls, against the original SDK contracts. This extends API coverage;
+COM vtable dispatch, Windows API execution and general VM entry-state recovery
+remain separate obligations.
+
 Win64 positional stack-input proofs now track original byte overwrites on every
 path. Reusing a fully replaced slot after an opaque access no longer invents
 an incoming argument dependency. Partial writes, earlier reads and unmatched
@@ -453,6 +460,18 @@ intervals, including in omitted memo bodies with bound native operands. Every
 level checks its own call home area and implicit GPR inputs; recursive and stale
 bindings refuse the proof. Physical machine-state captures still need separate
 evidence; the public bounded-chain tests do not close those original gaps.
+The proof now lives in `lib/ir/med/pass/MedFrameBorrowReads.h`. Calls with
+additional scalar stack arguments retain their complete outgoing read extent.
+Omitted bodies recover those operands with the existing ABI reaching-store
+owner under the shared borrow budget; recovered `Param` values still count as
+reads of their original incoming slots. Missing stores, wider physical reads,
+stack-passed pointers and hidden-register readers remain refusal boundaries.
+`SourceFrameBorrows.ScalarStackArgumentsKeepTheirPhysicalReadExtent` and
+`Win64CallContract.ScalarStackCallKeepsBorrowedReadExtent` cover this extension,
+including both C routes, selected/omitted bodies and original x64 execution.
+The five private ordinary roots still have 56 unknown argument occurrences per
+route; these generic regressions do not qualify their remaining GS, pointer
+capture and incoming-slot proofs.
 Only unread private bytes can lose their stores; negative offsets, implicit
 register inputs and source call home areas retain observations. SSA version
 zero alone is not an incoming register. Recursive or indirect callees, incoming

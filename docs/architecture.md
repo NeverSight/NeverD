@@ -12775,6 +12775,11 @@ Keep edits narrow. Files that define a representation may change with their
 transforms, but unrelated loaders, lifters, and backends should not be modified
 solely to make a broad refactor appear uniform.
 
+COFF ordinary and delayed imports share `coff_loader::ordinalImportName` for
+authenticated public SDK ordinal names. Its D3D12 contract is scoped to the
+exact module, ordinal and SDK-supported targets; `Import` retains the original
+ordinal, module and storage slot. Unknown cases keep their ordinal spelling.
+
 Runtime call catalogs may declare `ReturnedArgument` only for exact imported routines whose result is the original argument pointer. Receiver analysis reads the declared physical argument before applying normal ABI clobbers, then restores only its proven receiver type on the result. The SDK revalidates this effect; it never removes the call, its ownership effects or memory accesses.
 
 The compiler-derived framework and receiver catalogs share one provider list: Foundation, CoreData, CoreLocation, CoreSpotlight, QuartzCore, UniformTypeIdentifiers and UserNotifications. QuartzCore uses its public `CoreAnimation.h` umbrella; compatibility imports for other frameworks do not contribute owned declarations. Both generators retain the same four preprocessing profiles, exact framework identities and negative declaration evidence.
@@ -15378,3 +15383,9 @@ LLVMC indexes LLVM block order once per immutable function projection. Exclusive
 `wrapInterpreterMachineRegionChoiceSourceX64V3` requires KernelX64NoFaultV1 and the complete CR4/PGE domain. Its separate 480-byte state appends CR4 to the V2 prefix. Source and raw analysis share the control transition and profile-specific flag rules. Each write checks its instruction reservation and then its control predicate before effects; status 7 reports the original unexecuted PC with prior effects committed and CR4/cursor unchanged. The scalar source does not execute host control transfers or model TLB effects. V1/V2 keep their user-domain rejection boundaries.
 
 Authenticated x64 machine-region source retains scalar XCHG and LOCK XADD in default memory. The adapter reuses `supportsAtomicWritePreservation` for shape admission after raw receipt authentication; `X86AtomicRmw.h` and the shared renderer retain the native transaction. Bare machine-state source, CMPXCHG and segmented atomics remain outside this source contract.
+
+For runtime validity failures, core first refines the rejected value’s immediate and deferred producer bits. Enclosing guards are considered only after those candidates stop improving precision. An unrelated wide counter therefore need not enter alignment contexts. Every retry still proves the complete transition under the same cumulative budgets; neither dependency discovery nor guard selection supplies a validity or reachability fact.
+
+Raw x64 regions admit strictly authenticated default-space PREFETCHNTA/T0/T1/T2 forms. X86ReadPrefetchAudit and the independent opaque-bank list own native effects; readprefetch owns the exact scalar shape without a guest RAM read or register update. Residual and source retain every hint and effective address through the existing C emitters. Segment overrides, write/code hints, other cache operations and unauthenticated machine-source inputs remain refused.
+
+Authenticated raw x64 regions retain legacy MOVNTDQ as a native 128-bit streaming store with its 16-byte alignment guard. X86SystemState owns operand and assembly contracts. In the explicit nonfaulting domain, analysis uses an ordinary STORE view through the existing alias, frame and return-cell checks; emitted code retains MOVNTDQ and exact SFENCE operations. This finite memory projection does not model cache placement or concurrent observers.

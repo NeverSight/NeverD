@@ -16,6 +16,7 @@
 #include "neverd/loader/BinaryImage.h"
 
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/StringRef.h"
 #include "llvm/Object/COFF.h"
 #include "llvm/Support/Error.h"
 
@@ -26,6 +27,11 @@
 
 namespace neverd {
 namespace coff_loader {
+
+/// Resolve the SDK's exact public ordinal contracts; otherwise keep ord_N.
+/// The Import still retains its original module, ordinal and IAT identity.
+std::string ordinalImportName(Arch Architecture, llvm::StringRef Module,
+                              uint16_t Ordinal);
 
 /// Loader-owned offsets of pointer-storage fields in the PE load configuration.
 struct LoadConfigCallableField {
