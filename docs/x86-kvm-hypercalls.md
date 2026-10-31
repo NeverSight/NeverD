@@ -90,3 +90,21 @@ route uses NeverC directly; `--backend-llc` uses NeverC IR with the full fork.
 NeverD output and verifies its source hash before compiling. Every invocation
 requires a separate `--keep DIRECTORY` and retains tool/file hashes, commands
 and runtime logs.
+
+The [qualification record](evidence/x86-kvm-hypercalls-2026-10-31.json) binds
+the implementation and integration revisions, exact compiler binaries and
+source/manifest hashes. Its 26 native configurations contain 6,656
+original/candidate pairs, including 3,072 pairs from actual NeverD source.
+The independent provider checks 2,048 single-step full-state cases under
+ASan/UBSan. Final merged regressions pass 238 tests; one existing native-SDK
+test is explicitly skipped by the old production pin. Eleven LLVM codegen
+tests, 74 NeverC table tests and five frontend tests pass.
+
+The same tools also requalify both freshly generated VMRUN C routes: 600
+returning contexts across twelve configurations, 192 independent invalid-VMCB
+CR2 checks, and twelve each of the original IDA and addr32-RAX examples.
+The generated KVM and VMRUN source remains byte-for-byte identical after
+integration with the direct-jump/alignment and repeated-transfer changes.
+The KVM/direct-jump/return composition has its own executable regression.
+This record does not claim that all x86 domains are complete or advance the
+production LLVM release/pin.
