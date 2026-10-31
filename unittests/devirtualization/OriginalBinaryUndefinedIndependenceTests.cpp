@@ -579,8 +579,9 @@ TEST(OriginalBinaryUndefinedIndependence,
 
 TEST(OriginalBinaryUndefinedIndependence,
      UnreachableUnauditedBoundariesRequireOptInAndRetainExactReceipts) {
+  // The default-address REP form is audited; the address-size override is not.
   for (const auto &Bytes :
-       std::vector<std::vector<uint8_t>>{{0xd1, 0xd0}, {0xf3, 0xa4}}) {
+       std::vector<std::vector<uint8_t>>{{0xd1, 0xd0}, {0x67, 0xf3, 0xa4}}) {
     SCOPED_TRACE(::testing::PrintToString(Bytes));
     // CMP EAX,EAX; JNE boundary; MOV EAX,7; RET; boundary: body; RET.
     Program P({0x39, 0xc0, 0x75, 6, 0xb8, 7, 0, 0, 0, 0xc3});
@@ -627,6 +628,40 @@ TEST(OriginalBinaryUndefinedIndependence,
     // Making the branch feasible cannot turn the boundary into an empty body.
     P.Image.Segments.front().Data[2] = 0x74;
     expectRefusal(P, Status::Unsupported);
+  }
+}
+
+TEST(OriginalBinaryUndefinedIndependence,
+     UnreachableAuditedRepAndReadPrefetchRetainCompleteCoverage) {
+  for (const auto &Bytes :
+       std::vector<std::vector<uint8_t>>{{0xf3, 0xa4},
+                                         {0x0f, 0x18, 0x00},
+                                         {0x0f, 0x18, 0x08},
+                                         {0x0f, 0x18, 0x10},
+                                         {0x0f, 0x18, 0x18}}) {
+    SCOPED_TRACE(::testing::PrintToString(Bytes));
+    for (bool RetainUnaudited : {false, true}) {
+      SCOPED_TRACE(RetainUnaudited);
+      // CMP EAX,EAX; JNE body; MOV EAX,7; RET; body: instruction; RET.
+      Program P({0x39, 0xc0, 0x75, 6, 0xb8, 7, 0, 0, 0, 0xc3});
+      auto &Code = P.Image.Segments.front();
+      Code.Data.insert(Code.Data.end(), Bytes.begin(), Bytes.end());
+      P.append({0xc3});
+      P.Contract.RetainUnauditedNativeBoundaries = RetainUnaudited;
+      const auto Good = P.check();
+      ASSERT_TRUE(Good.proved()) << Good.Proof.Diagnostic;
+      EXPECT_TRUE(Good.Certificate->LowIR.NativeAuditBoundaries.empty());
+      const auto &Instructions = Good.Certificate->Instructions;
+      const auto Audited = std::find_if(
+          Instructions.begin(), Instructions.end(),
+          [](const auto &I) { return I.Origin.Address == Entry + 10; });
+      ASSERT_NE(Audited, Instructions.end());
+      EXPECT_EQ(Audited->NativeBytes, Bytes);
+      EXPECT_EQ(Audited->UndefinedEffects.Coverage,
+                LowUndefinedCoverage::Complete);
+      EXPECT_EQ(Audited->UndefinedEffects.OperationDigest,
+                lowUndefinedOperationDigest(Audited->Ops));
+    }
   }
 }
 
