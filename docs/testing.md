@@ -10,6 +10,11 @@ reordered blocks, zero iterations, materialized header values and header
 calls/stores retain their execution sites. The matrix covers preserved LLVM
 function types and the default projection, including loops whose header can
 still be represented by a condition expression.
+`LLVMCPointerAddresses.CursorLoopKeepsReadsAndDeclarations` also executes an
+independent lookup and call-trace oracle for empty, matching, colliding and
+missing cursor chains at O0/O2 with UBSan. Its declaration checks admit the
+goto fallback needed to retain a materialized header read. SysV variadic and
+unprototyped-call assertions retain explicit machine-word constant carriers.
 
 [← Documentation Index](README.md)
 
