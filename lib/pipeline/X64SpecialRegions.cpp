@@ -10,6 +10,8 @@
 
 #include "X64SpecialRegions.h"
 
+#include "X64RtmAbortRegions.h"
+
 #include "neverd/analysis/arch/x86_64/X64ContinuationSource.h"
 #include "neverd/decode/Decoder.h"
 #include "neverd/lift/X86/X86HypercallEncoding.h"
@@ -50,7 +52,8 @@ llvm::ArrayRef<uint8_t> bytesAt(const BinaryImage &Image, va_t Address) {
 llvm::Expected<X64SpecialRegionSelection> selectX64SpecialRegions(
     const BinaryImage &Image, llvm::ArrayRef<va_t> Entries,
     const analysis::X64ContinuationSourceOptions &SourceOptions,
-    unsigned CalleeDepth, bool FollowDirectJumps, DebugContext *Debug) {
+    unsigned CalleeDepth, bool FollowDirectJumps, bool NativeRtmAbortRegions,
+    DebugContext *Debug) {
   X64SpecialRegionSelection Selection;
   Decoder Decode;
   if ((CalleeDepth || FollowDirectJumps) && !Decode.init(Image))
@@ -170,6 +173,19 @@ llvm::Expected<X64SpecialRegionSelection> selectX64SpecialRegions(
         Region["callee_depth"] = Depth;
       if (!DirectJumps.empty())
         Region["direct_jump_successors"] = std::move(DirectJumps);
+      if (NativeRtmAbortRegions) {
+        llvm::json::Array Resumes;
+        for (va_t Address : Audit.NativeInstructionAddresses)
+          if (auto Abort = readX64RtmAbortRegion(
+                  Image, Address, *SourceOptions.PagingAddressBits);
+              Abort && Image.isCodeAddress(Abort->Fallback)) {
+            if (auto Error = Enqueue(Abort->Fallback, Depth))
+              return std::move(Error);
+            Resumes.push_back(hex(Abort->Fallback));
+          }
+        if (!Resumes.empty())
+          Region["rtm_abort_successors"] = std::move(Resumes);
+      }
       if (SourceOptions.Profile ==
           analysis::X64ContinuationProfile::NativeSvmNoFaultV10) {
         llvm::json::Array Resumes;
