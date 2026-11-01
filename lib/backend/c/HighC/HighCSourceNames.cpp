@@ -348,7 +348,9 @@ void HighCWriter::recordSourceNames(const std::vector<HighFunc> &Funcs) {
   for (const HighFunc &Func : Funcs)
     if (auto It = FunctionIdentifiers.find(&Func);
         It != FunctionIdentifiers.end())
-      Add(CSourceName::Kind::Function, It->second, Func.Name, Func.Entry);
+      Add(CSourceName::Kind::Function, It->second, Func.Name,
+          sourceBodyOrigin(Func) ? std::nullopt
+                                 : std::optional<va_t>(Func.Entry));
   for (const auto &[Source, Identifier] : ExternalSourceIdentifiers)
     Add(CSourceName::Kind::Function, Identifier, Source, std::nullopt);
   for (const auto &[Source, Identifier] : ExternalFunctionIdentifiers)
@@ -365,6 +367,8 @@ void HighCWriter::recordSourceNames(const std::vector<HighFunc> &Funcs) {
     Add(CSourceName::Kind::Object, Object.Name, Object.Symbol, Address);
     if (Opts.SourceMap && Object.Type)
       for (const auto &Function : Funcs) {
+        if (sourceBodyOrigin(Function))
+          continue;
         SourceVariable Variable;
         Variable.Function = Function.Entry;
         Variable.Address = Address;

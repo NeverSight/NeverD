@@ -415,6 +415,56 @@ class HistoryAllowance:
 
 HISTORY_ALLOWED: tuple[HistoryAllowance, ...] = (
     HistoryAllowance(
+        path="docs/evidence/x86-kvm-hypercalls-2026-10-31.json",
+        rule="private-path",
+        commits=frozenset({
+            "4abbf80edbfaf5f8c0f1f7896d224226ba2411c2",
+            "fc4a38d3a78a9c60a67a95aea3427a587fa5bd65",
+        }),
+        line="",
+        reason=(
+            "Reviewed normalization of local checkout and toolchain roots "
+            "in this published x86 qualification record. Revisions, test "
+            "results and artifact/tool digests are unchanged. Only these "
+            "exact historical line digests in the publication and cleanup "
+            "commits are covered; current and future paths, adjacent lines "
+            "and external policy findings remain errors."
+        ),
+        line_sha256=frozenset({
+            "2573ba3bb2890099e8cb8f3a5b91f6459eebb3b2a1d9a237266b4c36a0d084ae",
+            "2d72bac9414776668cec1066f196cabaff0090fe212b01486e226dbb69f849c7",
+            "4e602737ff420485effb9c0e30a451948b0faebbd5fe95e3a172403f76876f14",
+            "6b764c06e3b58953bbb9d05217825c002436f52d90b3a3200f595b76a98a893d",
+            "6fa080b11f174cdd9678ff4879eef9d9ddcc42001993b5a320cf30b74be77ace",
+            "d5a5b40003dc069a70820a4e514ea47e3fe33ffcf6770f2441fb57cc34c321b8",
+            "dbcbe62c2646375c55b24c1beb9c31eec3d61b14bd9f1d6e223d67e9fb6c0157",
+        }),
+    ),
+    HistoryAllowance(
+        path="docs/evidence/x86-mpx-source-2026-10-31.json",
+        rule="private-path",
+        commits=frozenset({
+            "c144bc42eaa233b2a70bb42bc15ce6b243979b16",
+            "fc4a38d3a78a9c60a67a95aea3427a587fa5bd65",
+        }),
+        line="",
+        reason=(
+            "Reviewed normalization of local checkout and toolchain roots "
+            "in this published x86 qualification record. Revisions, test "
+            "results and artifact/tool digests are unchanged. Only these "
+            "exact historical line digests in the publication and cleanup "
+            "commits are covered; current and future paths, adjacent lines "
+            "and external policy findings remain errors."
+        ),
+        line_sha256=frozenset({
+            "05bb87e59655375e56f686cfd13dc59d20803819c97c9ca22a37065d9a420866",
+            "5bf34f2402001678e27bad3bf7a168a8c79e33f4f2f86c1faa3cc097bd4920e3",
+            "6fa080b11f174cdd9678ff4879eef9d9ddcc42001993b5a320cf30b74be77ace",
+            "919b8fbfc43de170154e17f27963e5d15172a3da3f9efce28e0456434e9c812a",
+            "d4fce1536ae292cf7f33061cd270852f26aaa04b1d9a9557aa980dc8dc4ce2e1",
+        }),
+    ),
+    HistoryAllowance(
         path="docs/evidence/x86-amx-stack-memory-2026-10-30.json",
         rule="private-path",
         commits=frozenset({

@@ -3932,6 +3932,30 @@ TEST_F(SessionCAPITest,
   }
 }
 
+TEST_F(SessionCAPITest,
+       InstructionFlowStreamingStoresRetainOriginalNativeRows) {
+  const std::string Code("\x66\x0f\xe7\x04\x42\x66\x0f\xe7\x4c\x42\x10\xc3",
+                         12);
+  const auto Input = write("streaming-stores.elf", makeDataELF("data", Code));
+  ASSERT_EQ(neverd_session_load(Session, Input.c_str()), 1);
+  for (unsigned Repeat = 0; Repeat < 3; ++Repeat) {
+    const auto Text = takeString(
+        neverd_disasm_json_ex(Session, DataELFEntry, 3, NEVERD_DISASM_FLOW));
+    auto Parsed = llvm::json::parse(Text);
+    ASSERT_TRUE(static_cast<bool>(Parsed)) << Text;
+    const auto *Rows = Parsed->getAsArray();
+    ASSERT_TRUE(Rows && Rows->size() == 3) << Text;
+    for (unsigned I = 0; I < 2; ++I) {
+      const auto *Row = (*Rows)[I].getAsObject();
+      ASSERT_TRUE(Row) << Text;
+      EXPECT_EQ(Row->getString("mnemonic").value_or(""), "movntdq") << Text;
+      EXPECT_FALSE(Row->get("flow")) << Text;
+    }
+    EXPECT_EQ((*Rows)[2].getAsObject()->getString("flow").value_or(""), "ret")
+        << Text;
+  }
+}
+
 TEST(InstructionFlow, ConditionalCallsKeepTheUnexecutedArm) {
   neverd::BinaryImage Image;
   Image.Arch = neverd::Arch::ARM;

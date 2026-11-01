@@ -10,6 +10,8 @@ TEST(NativeStateAudit, StreamingStoreRetainsAlignmentAndNativeMemoryEffect) {
     for (const auto &Bytes :
          std::vector<std::vector<uint8_t>>{{0x66, 0x0f, 0xe7, 0x00},
                                            {0x66, 0x0f, 0xe7, 0x54, 0x24, 0x10},
+                                           {0x66, 0x0f, 0xe7, 0x04, 0x42},
+                                           {0x66, 0x0f, 0xe7, 0x4c, 0x42, 0x10},
                                            {0x67, 0x66, 0x0f, 0xe7, 0x00}}) {
       SCOPED_TRACE(::testing::PrintToString(Bytes));
       Decoder D;
@@ -18,7 +20,11 @@ TEST(NativeStateAudit, StreamingStoreRetainsAlignmentAndNativeMemoryEffect) {
       DecodedInsn I{};
       ASSERT_EQ(D.decodeOneForLift(Bytes.data(), Bytes.size(), CodeAddress, I),
                 int(Bytes.size()));
-      ASSERT_TRUE(vectormoveaudit::form(I.Raw, A));
+      ASSERT_TRUE(vectormoveaudit::form(I.Raw, A))
+          << "destination access: "
+          << unsigned(I.Raw->detail->x86.operands[0].access)
+          << ", source access: "
+          << unsigned(I.Raw->detail->x86.operands[1].access);
       std::vector<LowOp> Ops;
       LowInstructionUndefinedEffects Effects;
       LowInstructionPreservedState Preserved;
@@ -50,7 +56,7 @@ TEST(NativeStateAudit, StreamingStoreRetainsAlignmentAndNativeMemoryEffect) {
         cs_detail Detail = *Raw.detail;
         Raw.detail = &Detail;
         if (!Mutation)
-          Detail.x86.operands[0].access = CS_AC_WRITE;
+          Detail.x86.operands[0].access = CS_AC_READ;
         else if (Mutation == 1)
           Detail.x86.operands[1].access = CS_AC_WRITE;
         else if (Mutation == 2)

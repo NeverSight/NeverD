@@ -16839,6 +16839,17 @@ loads and relocation-dependent values.
 source proof after SDK call recovery and checks selected/omitted bodies,
 three-function low-prefix forwarding, post-consumer opaque calls and
 optimized/unoptimized cache hits.
+`NeverDSourceInlineCallsTests` compares original Win64 instructions with both
+C routes at O0/O2 under UBSan: pointer reads, writes and pointers into outgoing
+argument slots retain the same results and memory. Source helpers avoid image
+name collisions and do not publish synthetic native-variable identities.
+Observed missing slots and nested unavailable call inputs retain their refusals.
+A direct LLVM dependency test distinguishes dead unknown PHIs from value returns
+and memory readers. `SessionLLVMTest.SourceBodyExpansionKeepsNativeAndUnoptimizedQueries`
+checks the optimized original-image view, repeat queries, native LLVM and the
+unoptimized view against the same session without changing the native callee's
+seven parameter positions. These are source and ABI tests, not full execution
+of Windows services.
 `OverwrittenCallClobberSpills.*` checks post-call scratch stores,
 with and without flags transfers and unused restores. Both source routes keep
 the call and flags effects while discarding overwritten values. COFF, ELF and
@@ -18019,6 +18030,13 @@ source but do not qualify privileged execution.
 ReadPrefetch regressions check exact bytes and operand metadata, separate undefined-output and opaque-bank receipts, malformed scalar contracts and modified raw receipts. Both C routes retain all four hints and repeated occurrences, then run at O0/O2 with sanitizers against independent full-state and memory expectations, including unmapped addresses, 32-bit address wrapping and physical returns. Cache placement and timing are outside these comparisons.
 
 StreamingStore regressions check instruction bytes, operand metadata, alignment, complete writable extents, malformed contracts and modified receipts. Independent expectations compare complete state and memory, including a store that overwrites the physical return word. Both C routes execute at O0/O2 with sanitizers under user and kernel state profiles. These checks do not certify native kernel, concurrent or faulting execution.
+
+The shared MOVNTDQ form audit requires decoded write access on its memory
+destination and read access on its vector source. Both x86 modes cover indexed
+store forms from a retained FFmpeg function alongside malformed metadata
+controls. `InstructionFlowStreamingStoresRetainOriginalNativeRows` repeats
+public SDK disassembly reads of those stores and their return, retaining
+ordinary fallthrough instead of introducing an unlifted boundary.
 
 `InterpreterSpecialization.RepeatedCounts*`; `InterpreterMachineRegionSourceTest.FiniteRepeatedCountsPreserveFullState`; `InterpreterMachineRegionSourceTest.FiniteCopyAndPaddingPreserveLoopState`.
 These tests check exhaustive partitions, differing predecessor domains, prefix writes, discovery opt-out, incomplete domains and exact/short budgets. Both C routes execute at O0/O2 with ASan/UBSan. Independent full-state and byte oracles cover clipped counts, both directions, overlap, zero-count invalid pointers, early terminators and loop padding. They do not establish ordinary ABI recovery.

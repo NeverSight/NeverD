@@ -449,6 +449,27 @@ loaded value stay live; neither a scalar with equal bits nor the loaded value
 acquires pointer evidence. Truncated mappings, changed owners, stale temporaries,
 external stores, segment-relative and ordered accesses retain their refusals.
 
+`PipelineSourceInline` handles a distinct source-only case: a missing scalar
+argument whose actual callee body never uses that formal, although pointer
+aliasing prevents a native stack-slot omission proof. On demand, a bounded
+selection of complete Win64 bodies goes through normal source admission with
+the caller. LLVM verifies the joint module and checks the callee's real formal
+uses. Unknown values reaching memory, calls, returns or control reject expansion;
+dead register PHIs alone do not. The original native signatures and positional
+stack storage remain unchanged. LLVM C inlines the admitted body. HighC uses
+the same admission to emit a separately named C helper with only the unused
+formal operands removed, preserving its memory effects and the caller's
+structured control flow. Helper names have body provenance but no invented
+native addresses or editable native-variable identities. Their parameters do
+not describe a callable native ABI.
+This path is lazy, budgeted and included in the session's source-view cache.
+It retains analysis options and reuses the existing image analysis cache.
+Explicit call, frame and variable edits, unresolved helper inputs, exceptions
+inside a helper, changed entry carriers and exhausted bounds keep the original
+view. Native LLVM, patch/lift and unoptimized LLVM queries keep their existing
+contracts. It does not authorize removing an unknown spill observed through a
+pointer, supplying a missing register value or implementing an external service.
+
 After shared call-signature recovery, `MedPrologueSaves` also checks complete
 Win64 scalar bodies and bounded direct call chains for borrowed frame-pointer
 uses. Both source routes use the resulting byte-read intervals to suppress
@@ -15483,6 +15504,11 @@ For runtime validity failures, core first refines the rejected value’s immedia
 Raw x64 regions admit strictly authenticated default-space PREFETCHNTA/T0/T1/T2 forms. X86ReadPrefetchAudit and the independent opaque-bank list own native effects; readprefetch owns the exact scalar shape without a guest RAM read or register update. Residual and source retain every hint and effective address through the existing C emitters. Segment overrides, write/code hints, other cache operations and unauthenticated machine-source inputs remain refused.
 
 Authenticated raw x64 regions retain legacy MOVNTDQ as a native 128-bit streaming store with its 16-byte alignment guard. X86SystemState owns operand and assembly contracts. In the explicit nonfaulting domain, analysis uses an ordinary STORE view through the existing alias, frame and return-cell checks; emitted code retains MOVNTDQ and exact SFENCE operations. This finite memory projection does not model cache placement or concurrent observers.
+
+The shared legacy vector form audit requires the decoded destination's write
+role to agree with the MOVNTDQ store encoding. Native instruction-flow queries
+and comparison capture consume that same admission decision, so a valid
+streaming store remains ordinary fallthrough in each surface.
 
 Automatic control discovery can split a finite live MOVS/STOS count into guarded cases. The instruction prefix must preserve the register; each predecessor independently proves an exhaustive domain within `MaxControlTuples`. Fallthrough cuts and guards have synthetic provenance. Each case still proves its count and memory effects under cumulative budgets. Incomplete domains, unbounded counts and missing entry constraints remain refused.
 

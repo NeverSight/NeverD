@@ -1112,6 +1112,14 @@ public:
   std::unordered_map<const HighExpr *, std::pair<std::string, int>>
       UnsignedCarrierTexts;
   CEmitterOptions Opts;
+  std::optional<va_t> sourceBodyOrigin(const HighFunc &Function) const {
+    if (!Opts.SourceBodyOrigins || Function.Entry)
+      return std::nullopt;
+    const auto At = Opts.SourceBodyOrigins->find(Function.Name);
+    return At == Opts.SourceBodyOrigins->end()
+               ? std::nullopt
+               : std::optional<va_t>(At->second);
+  }
   DebugContext *Dbg;
   bool GuardAnalysisOnlyFunctions;
   /// When false, emit recovered locals and statements without a C wrapper.

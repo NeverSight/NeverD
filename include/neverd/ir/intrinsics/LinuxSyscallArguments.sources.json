@@ -211,5 +211,48 @@
       "ARM 149",
       "ARM 249"
     ]
-  }
+  },
+  "incremental_updates": [
+    {
+      "date": "2026-11-01",
+      "repository": "https://github.com/torvalds/linux",
+      "commit": "cbbddb6b08cc9900a87cccaa9b22bbe06aa4f50a",
+      "syscall": "fchroot",
+      "number": 472,
+      "architectures": [
+        "X64",
+        "AArch64",
+        "ARM"
+      ],
+      "register_arguments": 2,
+      "prototype": "asmlinkage long sys_fchroot(int fd, unsigned int flags);",
+      "source_sha256": {
+        "include/linux/syscalls.h": "9af89c0b28f98b80696e66c6197e5c1d79498cd585d21d8494546ac995ea80e7",
+        "fs/open.c": "a5c3fa107b419afeaa66d80dd3b5b24bc1cef4e54c40614fdc7f0977b6809e51",
+        "arch/x86/entry/syscalls/syscall_64.tbl": "37794e7f9eb8dde12f95257c9414b0255fb008a8767be010b77717379aaa37c2",
+        "arch/arm/tools/syscall.tbl": "dc648378df0307a247fddf248bc2882ebc9bf66b929733bfae0e66b12efbd29d",
+        "scripts/syscall.tbl": "f09f4c97a0c72c7cc73cc17f21844dee062693ddce3d08f9213d80d6803f3b81"
+      },
+      "aarch64_table": "arch/arm64/tools/syscall_64.tbl is a source symlink to ../../../scripts/syscall.tbl; resolved bytes were used.",
+      "validation": {
+        "offline_python_tests": 7,
+        "repeat_generation_sha256": "38f70e0f5f55bc78f89577f9b8544c874461ae35a7bae69747f38037c6cf1e3d",
+        "generated_rows": {
+          "X64": 369,
+          "AArch64": 326,
+          "ARM": 420
+        },
+        "all_preexisting_common_rows_match": true,
+        "historical_rows_retained": true,
+        "x86_probe_rows_not_imported": [
+          335,
+          336
+        ]
+      },
+      "limitations": [
+        "Focused standalone metadata and header-consumer checks only; full NeverD lift suite, CLI and GUI were not run.",
+        "The prior baseline provenance and historical ABI limitations above remain applicable."
+      ]
+    }
+  ]
 }
