@@ -845,9 +845,14 @@ void recoverCallAbi(MedFunc &Func, Arch TheArch,
           TargetSection->Name == section_names::macho::ObjCStubs;
       // The integer arguments the call's summary counts, where it counts
       // them: a prototype's (importPrototypeArguments, LowToMed).
-      const bool IntegerSummary = Op.CalleeRegisterArgs >= 0 &&
-                                  Op.CalleeVectorSlots == 0 &&
-                                  Op.CalleeVectorArgs <= 0;
+      // A stack-only import prototype on i386 publishes its stack count
+      // without a register count. That is still its complete integer ABI;
+      // an unknown import has neither summary.
+      const bool IntegerSummary =
+          (Op.CalleeRegisterArgs >= 0 ||
+           (Convention && Convention->RegparmOnlyForInternalCalls &&
+            Op.CalleeStackArgs >= 0)) &&
+          Op.CalleeVectorSlots == 0 && Op.CalleeVectorArgs <= 0;
       // An import whose prototype the user declares takes what that prototype
       // declares, as its summary counts it, not what the tables give a
       // routine of its name: through its stub, its slot, or a variable that
@@ -939,6 +944,12 @@ void recoverCallAbi(MedFunc &Func, Arch TheArch,
       const bool UseExternalArity =
           !SEHStackCall && ExternalArity.has_value() &&
           (IsDirectImport || IsRelocExtern || CalleeRegArgs < 0);
+      // A variadic import's summary describes the fixed register prefix,
+      // not a complete list. An explicit local declaration overrides the
+      // library tables, as it did when choosing ExternalArity above.
+      CI.ArgumentsFromPrototype =
+          UseExternalArity &&
+          (PrototypeArguments || !libc::varArgFixedCount(CI.TargetName, LibC));
       if (UseExternalArity) {
         // Where only internal functions take regparm register arguments, an
         // external call passes everything on the stack.  Do not promote
@@ -1701,12 +1712,13 @@ void recoverCallAbi(MedFunc &Func, Arch TheArch,
         // `push {r11, lr}`), is no argument, and neither is the undefined
         // incoming value of a scratch register (an alignment `push rax`).
         if (CI.IsIndirect &&
-            (isIncomingRegisterSave(TRI, Prev.Inputs[1]) ||
+            (isIncomingRegisterSave(TRI, Prev.Inputs[1], &Func) ||
              isUndefinedIncomingScratch(TRI, TheArch, Convention,
                                         DefaultIntegerLayout.Registers,
                                         Prev.Inputs[1])))
           continue;
-        if (!CI.IsIndirect && isIncomingRegisterSave(TRI, Prev.Inputs[1])) {
+        if (!CI.IsIndirect &&
+            isIncomingRegisterSave(TRI, Prev.Inputs[1], &Func)) {
           // A prologue register save spills the callee-save register's
           // *incoming* (live-in, SSA version 0) value, as `push {r11, lr}`
           // spills the return address.  A non-zero version is a computed or
@@ -1762,13 +1774,14 @@ void recoverCallAbi(MedFunc &Func, Arch TheArch,
                           ? (SV.Size + SlotSize - 1) / SlotSize
                           : 1;
           // A single wide store covering several outgoing 4-byte slots is split
-          // into one argument per slot — but only for a direct callee that
-          // actually takes a scalar argument at every covered slot, so a
-          // genuine wide (vector) argument is still passed whole.  The slot
+          // into one argument per slot — but only for a callee whose known
+          // ABI takes an argument at every covered slot, through an import
+          // slot too. An unknown wide argument is still passed whole. The slot
           // an x87 `fstp tbyte` ends in takes its last two bytes, and padding
           // passed as zero.
-          bool SplitWide = Lanes > 1 && !CI.IsIndirect && CalleeArgs >= 0 &&
-                           SlotIdx + Lanes <= CalleeArgs;
+          bool SplitWide = Lanes > 1 &&
+                           (!CI.IsIndirect || CI.ArgumentsFromPrototype) &&
+                           CalleeArgs >= 0 && SlotIdx + Lanes <= CalleeArgs;
           if (SplitWide)
             for (int L = 0; L < Lanes; ++L)
               if (SlotIdx + L >= MaxArgs || FoundMask[SlotIdx + L]) {
@@ -1828,7 +1841,7 @@ void recoverCallAbi(MedFunc &Func, Arch TheArch,
         // As in the block's own scan: a saved or undefined incoming register
         // is no argument of an indirect call.
         if (CI.IsIndirect &&
-            (isIncomingRegisterSave(TRI, Value) ||
+            (isIncomingRegisterSave(TRI, Value, &Func) ||
              isUndefinedIncomingScratch(TRI, TheArch, Convention,
                                         DefaultIntegerLayout.Registers, Value)))
           continue;

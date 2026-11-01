@@ -5139,6 +5139,21 @@ it, including predecessor blocks. An incomplete callee-read summary cannot
 prove that setup dead. Omitted-callee analysis also accepts an explicit call
 to a boundary-guess symbol, following the CFG's explicit-transfer rule; an
 uncalled guess supplies no support body or new fallthrough boundary.
+The shared `isIncomingRegisterParameter` query keeps a recovered incoming
+parameter when it is forwarded through an outgoing stack slot; SSA version
+zero in a normally preserved register alone does not make that argument a
+prologue save. MedIR's local and predecessor scans and HighIR's stack scan
+consume this same parameter coverage. Windows runtime declarations also bind
+the exact MSVC x86 scalar/array `new` and unsized `delete` import overloads to
+their one cdecl argument, without declaring other overloads or memory effects.
+`MedCallInfo::ArgumentsFromPrototype` records when a fixed external declaration
+bounded the recovered argument list. HighIR retains those arguments through
+import slots as well as direct thunks, including zero-argument calls and
+unresolved operands. It cannot replace them with scratch register writes.
+Unknown and variadic imports keep their existing setup recovery.
+The i386 stack summary also counts fixed imports without a published register
+count. When that known ABI consumes every slot of a wide outgoing store,
+MedIR splits the store into those lanes for both source routes.
 
 Additional callee CFGs are admitted in deterministic breadth-first order.
 Parallel batches retain at most 32 bodies and use at most four independent

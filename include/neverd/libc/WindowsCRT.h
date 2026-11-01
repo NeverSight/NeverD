@@ -1,3 +1,14 @@
+//===- WindowsCRT.h - Windows runtime declarations -------------*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Exact declarations of Windows runtime imports for call and type recovery.
+///
+//===----------------------------------------------------------------------===//
+
 #ifndef NEVERD_LIBC_WINDOWSCRT_H
 #define NEVERD_LIBC_WINDOWSCRT_H
 
@@ -53,6 +64,13 @@ windowsAPIPrototype(std::string_view Name, std::string_view Return,
 /// is derived from them: `_lock` or `terminate` is a different routine of
 /// another runtime.
 inline constexpr auto kWindowsCRTPrototypes = std::to_array<LibCPrototype>({
+    // MSVC's scalar/array allocation and unsized release on 32-bit x86.
+    // Exact decorated names distinguish these one-argument cdecl overloads
+    // from sized, aligned, placement and nothrow variants.
+    windowsCRTPrototype("??2@YAPAXI@Z", "void *", {"uint32_t"}),
+    windowsCRTPrototype("??_U@YAPAXI@Z", "void *", {"uint32_t"}),
+    windowsCRTPrototype("??3@YAXPAX@Z", "void", {"void *"}),
+    windowsCRTPrototype("??_V@YAXPAX@Z", "void", {"void *"}),
     // msvcrt.dll start-up and exit.
     windowsCRTPrototype("__getmainargs", "int",
                         {"int *", "char ***", "char ***", "int", "void *"}),

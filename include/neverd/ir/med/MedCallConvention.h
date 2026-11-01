@@ -168,12 +168,28 @@ std::optional<CallingConv> callingConventionOf(Arch A, BinaryFormat F);
 /// every format of the architecture.
 const CallArgumentConvention *callArgumentConvention(Arch A, BinaryFormat F);
 
+/// Whether a recovered parameter covers every incoming byte of \p V.
+/// An internal convention can pass an argument in a normally saved register;
+/// forwarding that value on the stack is not merely saving it for restoration.
+inline bool isIncomingRegisterParameter(const MedFunc *Func, const MedVar &V) {
+  if (!Func || V.Kind != MedVar::Reg || V.SSAVer != 0 || !V.Size)
+    return false;
+  for (const MedVar &P : Func->Params)
+    if (P.RegOff != kNoParamReg && P.RegOff <= V.RegOff && P.Size >= V.Size &&
+        V.RegOff - P.RegOff <= static_cast<uint64_t>(P.Size - V.Size))
+      return true;
+  return false;
+}
+
 /// Whether \p V, stored to the stack, is a prologue's save of a register's
 /// incoming value: a callee-saved register's, or the return address the link
-/// register holds (`push {r11, lr}`, `stp x29, x30`).  It passes no argument.
-inline bool isIncomingRegisterSave(const TargetRegInfo &TRI, const MedVar &V) {
+/// register holds (`push {r11, lr}`, `stp x29, x30`). A recovered parameter
+/// passed on in such a register remains an argument.
+inline bool isIncomingRegisterSave(const TargetRegInfo &TRI, const MedVar &V,
+                                   const MedFunc *Func = nullptr) {
   return V.Kind == MedVar::Reg && V.SSAVer == 0 &&
-         (TRI.isCalleeSaveReg(V.RegOff) || TRI.isLinkRegister(V.RegOff));
+         (TRI.isCalleeSaveReg(V.RegOff) || TRI.isLinkRegister(V.RegOff)) &&
+         !isIncomingRegisterParameter(Func, V);
 }
 
 } // namespace neverd

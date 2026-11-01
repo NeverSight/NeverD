@@ -309,6 +309,166 @@ TEST(I386CallContract, AStdcallImportIsDeclaredToPopItsArguments) {
       << LLVMC;
 }
 
+TEST(I386CallContract,
+     MicrosoftAllocationImportsUseTheirDeclaredStackArgument) {
+  for (const char *Name :
+       {"??2@YAPAXI@Z", "??_U@YAPAXI@Z", "??3@YAXPAX@Z", "??_V@YAXPAX@Z"})
+    for (bool LLVM : {false, true}) {
+      SCOPED_TRACE(Name);
+      SCOPED_TRACE(LLVM);
+      // ECX and EDX are scratch. The exact runtime declaration, rather than
+      // nearby register writes, decides the import's one cdecl argument.
+      std::vector<uint8_t> Code{0xb9, 99, 0, 0, 0, 0xba, 17, 0, 0, 0, 0x6a, 7};
+      const auto Call = callThroughSlot(slot(0));
+      Code.insert(Code.end(), Call.begin(), Call.end());
+      Code.insert(Code.end(), {0x83, 0xc4, 4, 0xb8, 13, 0, 0, 0, 0xc3});
+      const BinaryImage Img = makeImage(std::move(Code), {Name});
+      llvm::LLVMContext Context;
+      PipelineOptions Options;
+      Options.EmitDumpOutput = false;
+      Options.LiftMode = LLVM;
+      Options.SourceProjection = true;
+      Options.OnlyFunctionEntries = {Text};
+      const PipelineResult Result = Pipeline().run(Img, Context, Options);
+      ASSERT_TRUE(Result.Success) << Result.Error;
+      ASSERT_EQ(Result.MedFuncs.size(), 1u);
+      ASSERT_EQ(Result.MedFuncs.front().CallInfos.size(), 1u);
+      const auto &Info = Result.MedFuncs.front().CallInfos.front();
+      EXPECT_TRUE(Info.ArgumentsFromPrototype);
+      const auto &Args = Info.Args;
+      ASSERT_EQ(Args.size(), 1u);
+      EXPECT_TRUE(Args.front().isConst());
+      EXPECT_EQ(Args.front().ConstVal, 7u);
+      if (LLVM) {
+        ASSERT_TRUE(Result.LlvmModule);
+        EXPECT_FALSE(llvm::verifyModule(*Result.LlvmModule, &llvm::errs()));
+      } else {
+        unsigned Calls = 0;
+        auto Visit = [&](auto &&Self, const ExprPtr &E) -> void {
+          if (!E)
+            return;
+          if (E->Kind == ExprKind::Call && E->CallAddr == slot(0)) {
+            ++Calls;
+            EXPECT_EQ(E->Operands.size(), 1u) << E->str();
+            if (E->Operands.size() == 1) {
+              EXPECT_EQ(E->Operands.front()->Kind, ExprKind::Const);
+              EXPECT_EQ(E->Operands.front()->ConstVal, 7u);
+            }
+          }
+          E->forEachChildExpr([&](const ExprPtr &Child) { Self(Self, Child); });
+        };
+        for (const HighFunc &F : Result.HighFuncs)
+          for (const HighStmt &S : F.Body)
+            forEachExpr(S, [&](const ExprPtr &E) { Visit(Visit, E); });
+        EXPECT_EQ(Calls, 1u);
+      }
+    }
+}
+
+TEST(I386CallContract, FixedZeroArgumentImportsDoNotAcquireScratchRegisters) {
+  for (bool Declared : {false, true}) {
+    SCOPED_TRACE(Declared);
+    std::vector<uint8_t> Code{0xb9, 99, 0, 0, 0, 0xba, 17, 0, 0, 0};
+    const auto Call = callThroughSlot(slot(0));
+    Code.insert(Code.end(), Call.begin(), Call.end());
+    Code.insert(Code.end(), {0xb8, 13, 0, 0, 0, 0xc3});
+    const BinaryImage Img =
+        makeImage(std::move(Code), {Declared ? "_errno" : "opaque_call"});
+    llvm::LLVMContext Context;
+    PipelineOptions Options;
+    Options.EmitDumpOutput = false;
+    Options.SourceProjection = true;
+    Options.OnlyFunctionEntries = {Text};
+    const PipelineResult Result = Pipeline().run(Img, Context, Options);
+    ASSERT_TRUE(Result.Success) << Result.Error;
+    ASSERT_EQ(Result.MedFuncs.size(), 1u);
+    ASSERT_EQ(Result.MedFuncs.front().CallInfos.size(), 1u);
+    EXPECT_EQ(Result.MedFuncs.front().CallInfos.front().ArgumentsFromPrototype,
+              Declared);
+    // The unknown Windows routine may be fastcall. A fixed zero-argument
+    // declaration instead rules out both incidental register writes.
+    unsigned Calls = 0;
+    auto Visit = [&](auto &&Self, const ExprPtr &E) -> void {
+      if (!E)
+        return;
+      if (E->Kind == ExprKind::Call && E->CallAddr == slot(0)) {
+        ++Calls;
+        EXPECT_EQ(E->Operands.size(), Declared ? 0u : 2u) << E->str();
+      }
+      E->forEachChildExpr([&](const ExprPtr &Child) { Self(Self, Child); });
+    };
+    for (const HighFunc &F : Result.HighFuncs)
+      for (const HighStmt &S : F.Body)
+        forEachExpr(S, [&](const ExprPtr &E) { Visit(Visit, E); });
+    EXPECT_EQ(Calls, 1u);
+  }
+}
+
+TEST(I386CallContract, PrivateRegisterArgumentsOnTheStackAreNotPrologueSaves) {
+  for (BinaryFormat Format :
+       {BinaryFormat::COFF, BinaryFormat::ELF, BinaryFormat::MachO})
+    for (bool Direct : {false, true})
+      for (bool NoOpt : {false, true})
+        for (bool LLVM : {false, true}) {
+          SCOPED_TRACE(static_cast<int>(Format));
+          SCOPED_TRACE(Direct);
+          SCOPED_TRACE(NoOpt);
+          SCOPED_TRACE(LLVM);
+          // EBX is only saved/restored. ESI and EDI are real incoming values:
+          // the returned loads read them, and memcpy takes them on the stack.
+          std::vector<uint8_t> Code{0x53, 0x6a, 7, 0x57, 0x56};
+          if (Direct)
+            Code.insert(Code.end(), {0xe8, 0x36, 0, 0, 0});
+          else {
+            const auto Call = callThroughSlot(slot(0));
+            Code.insert(Code.end(), Call.begin(), Call.end());
+          }
+          Code.insert(Code.end(),
+                      {0x83, 0xc4, 12, 0x8b, 0x07, 0x33, 0x06, 0x5b, 0xc3});
+          Code.resize(0x40, 0xcc);
+          Code.insert(Code.end(), {0xff, 0x25, 0, 0x30, 0x40, 0});
+          BinaryImage Img = makeImage(std::move(Code), {"memcpy"});
+          Img.Format = Format;
+          Img.Symbols.push_back(Symbol::makeFunc(Text + 0x40));
+          scanImportThunks(Img);
+          llvm::LLVMContext Context;
+          PipelineOptions Options;
+          Options.EmitDumpOutput = false;
+          Options.NoOpt = NoOpt;
+          Options.LiftMode = LLVM;
+          Options.SourceProjection = true;
+          Options.OnlyFunctionEntries = {Text};
+          const PipelineResult Result = Pipeline().run(Img, Context, Options);
+          ASSERT_TRUE(Result.Success) << Result.Error;
+          ASSERT_EQ(Result.MedFuncs.size(), 1u);
+          const MedFunc &F = Result.MedFuncs.front();
+          ASSERT_EQ(F.Params.size(), 2u);
+          EXPECT_EQ(F.Params[0].RegOff, x86reg::RSI);
+          EXPECT_EQ(F.Params[1].RegOff, x86reg::RDI);
+          ASSERT_EQ(F.CallInfos.size(), 1u);
+          EXPECT_TRUE(F.CallInfos.front().ArgumentsFromPrototype);
+          const auto &Args = F.CallInfos.front().Args;
+          ASSERT_EQ(Args.size(), 3u);
+          EXPECT_EQ(Args[0].RegOff, x86reg::RSI);
+          EXPECT_EQ(Args[1].RegOff, x86reg::RDI);
+          EXPECT_TRUE(Args[2].isConst());
+          EXPECT_EQ(Args[2].ConstVal, 7u);
+          if (LLVM) {
+            ASSERT_TRUE(Result.LlvmModule);
+            EXPECT_FALSE(llvm::verifyModule(*Result.LlvmModule, &llvm::errs()));
+          } else {
+            std::string Source;
+            llvm::raw_string_ostream Stream(Source);
+            CEmitterOptions Emit;
+            Emit.TheArch = Img.Arch;
+            Emit.Format = Img.Format;
+            Emit.Image = &Img;
+            ASSERT_TRUE(HighCEmitter().emit(Result.HighFuncs, Stream, Emit));
+            EXPECT_EQ(Source.find("unknown"), std::string::npos) << Source;
+          }
+        }
+}
+
 TEST(I386CallContract, ArgumentsStoredBelowOneAdjustmentAreAllPassed) {
   // MinGW's __getmainargs wrapper: GCC stores its fifth parameter for the
   // call first, then zeroes a local, and computes the other four arguments
@@ -577,9 +737,39 @@ TEST(I386CallContract, AStoreWiderThanASlotFillsEachSlotItCovers) {
                     0x5D,             // pop ebp
                     0xC3})            // ret
     Code.push_back(B);
-  const std::string Call = callIn(makeImage(Code, {"calloc"}), "calloc");
+  const BinaryImage Img = makeImage(Code, {"calloc"});
+  const std::string Call = callIn(Img, "calloc");
   EXPECT_EQ(Call.find("unknown"), std::string::npos) << Call;
   EXPECT_NE(Call.find(">> 32"), std::string::npos) << Call;
+  // Both source routes receive the same two four-byte lanes from MedIR.
+  // HighIR must not be the only layer that splits the outgoing store.
+  for (bool LLVM : {false, true})
+    for (bool NoOpt : {false, true}) {
+      SCOPED_TRACE(LLVM);
+      SCOPED_TRACE(NoOpt);
+      llvm::LLVMContext Context;
+      PipelineOptions Options;
+      Options.EmitDumpOutput = false;
+      Options.LiftMode = LLVM;
+      Options.NoOpt = NoOpt;
+      Options.OnlyFunctionEntries = {Text};
+      const auto Result = Pipeline().run(Img, Context, Options);
+      ASSERT_TRUE(Result.Success) << Result.Error;
+      ASSERT_EQ(Result.MedFuncs.size(), 1u);
+      ASSERT_EQ(Result.MedFuncs.front().CallInfos.size(), 1u);
+      const auto &Info = Result.MedFuncs.front().CallInfos.front();
+      EXPECT_TRUE(Info.ArgumentsFromPrototype);
+      ASSERT_EQ(Info.Args.size(), 2u);
+      for (const MedVar &Arg : Info.Args) {
+        EXPECT_NE(Arg.Kind, MedVar::Unspecified);
+        EXPECT_EQ(Arg.Size, 4u);
+      }
+      EXPECT_FALSE(Info.Args[0] == Info.Args[1]);
+      if (LLVM) {
+        ASSERT_TRUE(Result.LlvmModule);
+        EXPECT_FALSE(llvm::verifyModule(*Result.LlvmModule, &llvm::errs()));
+      }
+    }
 }
 
 /// The HighC signature of the function at Text of \p Img, decompiled alone.

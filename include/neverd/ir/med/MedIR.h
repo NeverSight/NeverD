@@ -416,6 +416,11 @@ struct MedCallInfo {
   /// Args passes the register arguments in the callee's own register order
   /// (MedFunc::IntegerArgumentRegisters), not the convention's.
   bool ArgumentsInCalleeRegisterOrder = false;
+  /// A fixed external declaration bounded Args during ABI recovery. Source
+  /// lowering must retain that list, including an empty one, rather than
+  /// append scratch registers or rescan it as an unknown indirect call.
+  /// This describes argument recovery, not the callee's memory effects.
+  bool ArgumentsFromPrototype = false;
   /// The bytes the callee reads of each argument, by position, where it reads
   /// only the scalar in the low lane of a floating-point argument register
   /// (MedFunc::FPParamScalarBytes); 0, or no entry, for a whole argument.

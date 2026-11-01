@@ -5936,7 +5936,17 @@ Its register cases include ordinary regparm and private ESI/EDI inputs, with
 stated and guessed callee symbols. An uncalled boundary guess remains omitted.
 `LowToMedX86CallingConv.Nonstandard*` checks those inputs and distinguishes
 EBX/ESI/EDI value uses from frame saves, restoration and discarded upper lanes.
-Run `NeverDI386CallContractTests` and `NeverDFPParameterMaskTests` together.
+`PrivateRegisterArgumentsOnTheStackAreNotPrologueSaves` checks direct and
+indirect forwarding in PE, ELF and Mach-O while retaining the distinction
+from an unrelated EBX save.
+`MicrosoftAllocationImportsUseTheirDeclaredStackArgument` checks both MedIR
+and HighIR so lowering cannot append scratch ECX/EDX values to the
+one-argument MSVC import. `FixedZeroArgumentImportsDoNotAcquireScratchRegisters`
+also keeps unknown Windows imports eligible for register arguments.
+`AStoreWiderThanASlotFillsEachSlotItCovers` checks the same four-byte MedIR
+lanes and LLVM verification with optimization enabled and disabled.
+Run `NeverDI386CallContractTests`,
+`NeverDFPParameterMaskTests` and `NeverDLibCTests` together.
 Runtime stack-probe audits require the exact platform and stated name evidence.
 
 `X86_64_DebugRecords.RecordsCCannotSpellKeepMachineTypes` compiles and executes

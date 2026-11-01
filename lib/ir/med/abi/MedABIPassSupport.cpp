@@ -166,7 +166,7 @@ std::map<int64_t, MedVar> callSetupStackStores(const AbiCallContext &C) {
         // from another store or reinterpret an interior byte as a new slot.
         if (*Offset == Slot && Op.Inputs[1].Size <= Word &&
             (Op.Inputs[1].Size & (Op.Inputs[1].Size - 1)) == 0 &&
-            !isIncomingRegisterSave(C.TRI, Op.Inputs[1]))
+            !isIncomingRegisterSave(C.TRI, Op.Inputs[1], &C.Func))
           Local.emplace(Slot, Op.Inputs[1]);
       }
     }
