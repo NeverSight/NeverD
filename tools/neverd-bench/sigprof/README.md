@@ -62,3 +62,17 @@ python3 tools/neverd-bench/sigprof/ab.py --runs 7 \
 `ab.py` alternates the order of each pair and reports median CPU (user+sys)
 and wall time with the per-pair range. Every run's output hash must agree;
 otherwise the timing comparison is meaningless.
+
+The comparison exits nonzero and suppresses timing ratios if any command fails,
+any output is missing, or any full SHA-256 differs (including between repeated
+runs of the same side). A positive `--runs` count is required. CPU ratios are
+unavailable when a baseline CPU measurement is zero. Output identity is a
+necessary comparison gate, not proof of semantic correctness or full coverage.
+This helper does not retain raw command logs or measure peak RSS; record those
+separately when qualifying an optimization.
+
+Run the helper's offline regression checks with:
+
+```sh
+python3 -m unittest discover -s tools/neverd-bench/tests -p test_sigprof_ab.py -v
+```
