@@ -3225,3 +3225,38 @@ After merging the concurrent packed-arithmetic audit and C-call rendering
 changes, 1,626 tests across twelve labels passed with no failures or skips.
 Nonflat compatibility entry, legacy modes and the other remaining contracts
 above are unchanged; no LLVM release or pin update is claimed.
+
+
+## Native immediate-abort RTM qualification
+
+`llvm.x86.rtm.abort.pair(i32 immarg)` now owns one uninterrupted XBEGIN / XABORT
+sequence and returns its actual EAX status. The LLVM fork supports 32/64-bit
+code generation; NeverC exposes the x64 builtin and `__rtm_abort_pair` header
+interface. It also provides a generic native CPUID query. CPUID arguments are
+evaluated once, including the existing Microsoft spellings.
+
+The explicit `kernel-events-v6` provider admits canonical rel16 and rel32
+XBEGIN immediately followed by XABORT. One shared decoder owns signed fallback
+arithmetic; the receipt retains all eight or nine original bytes. The provider
+uses native compiler operations when available and keeps the existing single
+assembly block for older C compilers. Independent XABORT entry still requires
+its own native environment. No general transaction ownership is inferred.
+
+The [November 1 qualification record](evidence/x86-rtm-abort-pair-2026-11-01.json)
+binds source, compiler, executable and command hashes. All 256 abort codes pass
+against independent raw bytes through NeverC and both LLVM backend pass
+managers at O0/O2: 245,760 pairs, including 196,608 forced early aborts. The
+actual HighC/LLVMC exports, both dispatch styles and both displacement widths
+pass 15,360 represented-state comparisons: 3,072 explicit-abort publications
+and 12,288 CPUID refusals. The 24 exported sources, manifests and harnesses are
+identical between the local native LLVM SDK and production r6. The full
+continuation/HLE/SNP regression passes 57 tests per SDK; NeverC passes all 150
+X86 tests, LLVM passes 11 focused tests, and 37 generated-table checks pass.
+
+SDE 10.13.1's `-tsx` overrides forced-abort mode. Omitting it allows exact
+statuses 0, 2, 6 and 8 but also clears CPUID.RTM. The direct intrinsic fixture
+explicitly enters that emulator-only mode; production source still refuses it.
+Consequently these results do not qualify early-abort publication through the
+provider's CPUID guard or physical RTM behavior. General transaction bodies,
+nesting, memory rollback and fault/event continuations remain open. The LLVM
+release, production SDK pin and submodule revision remain unchanged.

@@ -18085,6 +18085,17 @@ success alone, when qualifying forced aborts. Record emulator results
 separately from native hardware evidence. Use the full exporter suite to cover
 unchanged selection, physical transfers and other environment providers.
 
+For reproducible native qualification, NeverC's
+`tests/neverc/X86/verify_rtm_abort_pair.py` compares every abort code with raw
+instruction bytes, live integer/FP values and memory canaries. Generate actual
+source fixtures by setting `NEVERD_ISA_REGRESSION_ARTIFACT_DIR` for the test
+above. Then run `scripts/isa/x86/verify_rtm_exports.py` with `--compiler`,
+`--sde`, `--sources` and `--keep`. Add `--backend-llc` and optionally `--new-pm`
+to test the LLVM fork's two code-generation pipelines. The script preserves
+the generated source and extends only its harness with exact EAX and CPUID
+expectations. Its report separates successful abort publication from refusal;
+see the [dated evidence](evidence/x86-rtm-abort-pair-2026-11-01.json).
+
 ## SNP and SEV-ES native completion
 
 `NeverDX86SnpSourceTests` checks exact native call effects, modes, pointer

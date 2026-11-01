@@ -1,0 +1,2776 @@
+{
+  "schema_version": 1,
+  "scope": "Indivisible native XBEGIN/XABORT pair, x64 rel16/rel32 source provider and CPUID admission",
+  "physical_rtm_qualified": false,
+  "general_transaction_body_or_nesting_qualified": false,
+  "early_abort_provider_publication_qualified": false,
+  "revisions": {
+    "llvm": "fdf9a1d8df5c22f284db89abc33d8d4f404a71f5",
+    "neverc_implementation": "d7945a8b1",
+    "neverc_tested_integration": "ca10ec06a942e77263df53e9e4c3a0792e4daeb4",
+    "neverc_published_integration": "a04777b3bde89e1cee9a8ce740cc0e99ca954d2a",
+    "neverd_tested_integration": "f0387fca61d9f239104473a90255539484c8c04b",
+    "capstone": "5730b43d4e25af8e2999ea14dcd9813098b0f8c7"
+  },
+  "integration_note": "The final NeverC merge changes C++ placeholder translation and its documentation only. Git diff confirms no changes to LLVM, builtins, analysis/emission, headers, X86 tests, RTM fixtures or generated tables relative to the tested integration. Exact binary digests below identify the tested compiler.",
+  "published_sdk_unchanged": "neverd-llvm-v23.0.0-r6",
+  "neverd_llvm_gitlink": "03270359c2ed8f6806533d3832a947bf883a6f69",
+  "qualification_counts": {
+    "native_profiles": 30,
+    "native_pairs": 245760,
+    "native_explicit_abort_pairs": 49152,
+    "native_forced_early_abort_pairs": 196608,
+    "source_profiles": 240,
+    "source_state_checks": 15360,
+    "source_explicit_abort_publications": 3072,
+    "source_cpuid_refusals": 12288
+  },
+  "emulator_correction": {
+    "engine": "Intel SDE 10.13.1",
+    "issue": "-tsx overrides abort mode irrespective of option order. Abort mode without -tsx clears CPUID.RTM even when using the supplied CPUID definition.",
+    "native_oracle": "Require exact actual statuses for every imm8: (code << 24) | 1 in full mode, and 0, 2, 6 or 8 in forced mode. The explicit SDE-only fixture entry bypasses CPUID only for forced emulation.",
+    "provider_oracle": "Require CPUID.RTM in full mode and absence in forced mode. The unmodified production source must preserve every state byte when it declines.",
+    "probes": [
+      {
+        "file": "/mnt/data/neverd-rtm-pair-20261101/sde-mode-probe.json",
+        "sha256": "84a4ed641697be9cae80f5e322db13fac0f7c574110f7905fbfcb0035ba04a55"
+      },
+      {
+        "file": "/mnt/data/neverd-rtm-pair-20261101/sde-cpuid-probe.json",
+        "sha256": "1de666b794c75244774123c8b261ddc34d49113244a6548a5e562016641dc398"
+      },
+      {
+        "file": "/mnt/data/neverd-rtm-pair-20261101/sde-early-probe.json",
+        "sha256": "2792c0284ff84ecdb37b7764cb75b4c29179f6db3b5621a5697a051a72aac00c"
+      }
+    ]
+  },
+  "initial_red": {
+    "file": "/mnt/data/neverd-rtm-pair-20261101/red.json",
+    "sha256": "8688b63733c3e9f98208af31e6f514fe3809c90c18f88194a4732792023ff6f3"
+  },
+  "llvm_lit": {
+    "file": "/mnt/data/neverd-rtm-pair-20261101/llvm-final-lit.log",
+    "sha256": "63fbf283658f37b6de328b4f83da08318a968dbc11afbcbd3fd265f121811af1",
+    "tests": 11,
+    "passed": 11
+  },
+  "ctest": {
+    "nd-native-final": {
+      "file": "/mnt/data/neverd-rtm-pair-20261101/nd-native-final.xml",
+      "sha256": "f23fcf67fe7fc3593b125c572f7bf272924c5e001bdedb6f135f4142177c6671",
+      "tests": 57,
+      "passed": 57,
+      "skipped": [],
+      "failed": []
+    },
+    "nd-r6-final": {
+      "file": "/mnt/data/neverd-rtm-pair-20261101/nd-r6-final.xml",
+      "sha256": "ae34600fed1887fe668ee7adaf5279bdfedc19c9f6c7e61ba6e2202ee1700998",
+      "tests": 57,
+      "passed": 57,
+      "skipped": [],
+      "failed": []
+    },
+    "neverc-final": {
+      "file": "/mnt/data/neverd-rtm-pair-20261101/neverc-final.xml",
+      "sha256": "c52b980a2404a8a1d72825a5bc5c8323d6d0d644c6619c74736b49ab0868db3f",
+      "tests": 150,
+      "passed": 150,
+      "skipped": [],
+      "failed": []
+    }
+  },
+  "generated_tables": {
+    "file": "/mnt/data/neverd-rtm-pair-20261101/neverc-final-workflow-checks.json",
+    "sha256": "93787f1f996f654c8aeea71217f2df77c71d8b2d69cc75d1c734e6d2888c5416",
+    "checks": 37,
+    "passed": 37
+  },
+  "native_matrices": {
+    "neverc": {
+      "file": "/mnt/data/neverd-rtm-pair-20261101/neverc-merged-sde/qualification.json",
+      "sha256": "844bd129878f8a24e111c5202547bd0fde1c4bdaaacfaf7e1b9b3ca154917cb6",
+      "report": {
+        "passed": true,
+        "physical_rtm_qualified": false,
+        "scope": "native immediate-abort pair under independent Intel SDE emulation",
+        "tools": {
+          "compiler": {
+            "path": "/mnt/data/neverd-native-system-returns-20261029/build-neverc/bin/neverc",
+            "sha256": "715dd4269412821a1c531ab2481cb0fe448ddebbb6663b57ab6f3f2e0d819db4"
+          },
+          "sde": {
+            "path": "/mnt/data/neverd-bitscan-validation/claude-ntos0/tools/sde-external-10.13.1-2026-07-28-lin/sde64",
+            "sha256": "257872adf7e5cb0855c6774539590587238302bdcd90ddfccca074e9c4c4a3f5"
+          },
+          "host": {
+            "path": "/home/ad/.local/bin/clang",
+            "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
+          }
+        },
+        "new_pass_manager": false,
+        "profiles": [
+          {
+            "optimization": "O0",
+            "engine": "Intel SDE",
+            "mode": "full",
+            "rtm_advertised": true,
+            "pairs": 8192
+          },
+          {
+            "optimization": "O0",
+            "engine": "Intel SDE",
+            "mode": "0",
+            "rtm_advertised": false,
+            "pairs": 8192
+          },
+          {
+            "optimization": "O0",
+            "engine": "Intel SDE",
+            "mode": "2",
+            "rtm_advertised": false,
+            "pairs": 8192
+          },
+          {
+            "optimization": "O0",
+            "engine": "Intel SDE",
+            "mode": "6",
+            "rtm_advertised": false,
+            "pairs": 8192
+          },
+          {
+            "optimization": "O0",
+            "engine": "Intel SDE",
+            "mode": "8",
+            "rtm_advertised": false,
+            "pairs": 8192
+          },
+          {
+            "optimization": "O2",
+            "engine": "Intel SDE",
+            "mode": "full",
+            "rtm_advertised": true,
+            "pairs": 8192
+          },
+          {
+            "optimization": "O2",
+            "engine": "Intel SDE",
+            "mode": "0",
+            "rtm_advertised": false,
+            "pairs": 8192
+          },
+          {
+            "optimization": "O2",
+            "engine": "Intel SDE",
+            "mode": "2",
+            "rtm_advertised": false,
+            "pairs": 8192
+          },
+          {
+            "optimization": "O2",
+            "engine": "Intel SDE",
+            "mode": "6",
+            "rtm_advertised": false,
+            "pairs": 8192
+          },
+          {
+            "optimization": "O2",
+            "engine": "Intel SDE",
+            "mode": "8",
+            "rtm_advertised": false,
+            "pairs": 8192
+          }
+        ],
+        "fixture_sha256": {
+          "generate.py": "c39922bf9d79223ab8d9130b9858e0d84d928f2093e2a97233a7d4da97d2f49c",
+          "runner.c": "89c67a6f80c4a35c15e7ad5a987afbb983d4aaf42f55231603ff52041f0fe0aa"
+        },
+        "files": {
+          "original.o": "faca3dea3a3ce0a04049d9570f47ec7b84fdd58da44fd25e83b93159aee00301",
+          "O2": "be3527b6382b76310ec110e1d1adb7c13285c4f136544079e382ef4b0bf0c637",
+          "fixture.h": "a85dc9be19d1faffa843b6c3f7df29620b053921485e826aed635e8eae58c935",
+          "O2.o": "03353b1a0c86deb3251654c19814e5de762144436b9d8dc1d9f38c8479d0f6a3",
+          "reference.o": "3c574a373a57b4f234a147006846537c9f11f5da60c0125fa47aa8f15cb416b6",
+          "O0": "c929477a90762a8965f983038cda5ca54f215954b48e1f2680d4e06d141557be",
+          "commands.json": "86d8f6361312cf51510eb36807b6438c820bdec914a0b0e49eadd182f89a46d8",
+          "candidate.c": "a58984bc93f4d307ca2adfcc33d58bb5a5e62824d9546957cb770c513dd16e62",
+          "original.S": "f35ce7afeadfda687396ba6a73296b7d053cabcab5ff0ff003f07f08e4b42097",
+          "O0.o": "20a86acfdb69ee3b72ec72591ea5f37b618c90fd5572cd97913101ac77164c60",
+          "reference.c": "bc591c63614b37e909e89a784ac0d48741ec7723f82874572fbef0bf7c6180b3"
+        }
+      }
+    },
+    "legacy": {
+      "file": "/mnt/data/neverd-rtm-pair-20261101/legacy-merged-sde/qualification.json",
+      "sha256": "f90061c0cf1d0aa5f5350e19a9e7f479453e125607e6f9c271c1bef4c4e648ec",
+      "report": {
+        "passed": true,
+        "physical_rtm_qualified": false,
+        "scope": "native immediate-abort pair under independent Intel SDE emulation",
+        "tools": {
+          "compiler": {
+            "path": "/mnt/data/neverd-native-system-returns-20261029/build-neverc/bin/neverc",
+            "sha256": "715dd4269412821a1c531ab2481cb0fe448ddebbb6663b57ab6f3f2e0d819db4"
+          },
+          "sde": {
+            "path": "/mnt/data/neverd-bitscan-validation/claude-ntos0/tools/sde-external-10.13.1-2026-07-28-lin/sde64",
+            "sha256": "257872adf7e5cb0855c6774539590587238302bdcd90ddfccca074e9c4c4a3f5"
+          },
+          "host": {
+            "path": "/home/ad/.local/bin/clang",
+            "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
+          },
+          "llc": {
+            "path": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc",
+            "sha256": "42bba0d2cc437a152a5035dfbde446fb6913ba02b0ed87642169937b3eee5484"
+          }
+        },
+        "new_pass_manager": false,
+        "profiles": [
+          {
+            "optimization": "O0",
+            "engine": "Intel SDE",
+            "mode": "full",
+            "rtm_advertised": true,
+            "pairs": 8192
+          },
+          {
+            "optimization": "O0",
+            "engine": "Intel SDE",
+            "mode": "0",
+            "rtm_advertised": false,
+            "pairs": 8192
+          },
+          {
+            "optimization": "O0",
+            "engine": "Intel SDE",
+            "mode": "2",
+            "rtm_advertised": false,
+            "pairs": 8192
+          },
+          {
+            "optimization": "O0",
+            "engine": "Intel SDE",
+            "mode": "6",
+            "rtm_advertised": false,
+            "pairs": 8192
+          },
+          {
+            "optimization": "O0",
+            "engine": "Intel SDE",
+            "mode": "8",
+            "rtm_advertised": false,
+            "pairs": 8192
+          },
+          {
+            "optimization": "O2",
+            "engine": "Intel SDE",
+            "mode": "full",
+            "rtm_advertised": true,
+            "pairs": 8192
+          },
+          {
+            "optimization": "O2",
+            "engine": "Intel SDE",
+            "mode": "0",
+            "rtm_advertised": false,
+            "pairs": 8192
+          },
+          {
+            "optimization": "O2",
+            "engine": "Intel SDE",
+            "mode": "2",
+            "rtm_advertised": false,
+            "pairs": 8192
+          },
+          {
+            "optimization": "O2",
+            "engine": "Intel SDE",
+            "mode": "6",
+            "rtm_advertised": false,
+            "pairs": 8192
+          },
+          {
+            "optimization": "O2",
+            "engine": "Intel SDE",
+            "mode": "8",
+            "rtm_advertised": false,
+            "pairs": 8192
+          }
+        ],
+        "fixture_sha256": {
+          "generate.py": "c39922bf9d79223ab8d9130b9858e0d84d928f2093e2a97233a7d4da97d2f49c",
+          "runner.c": "89c67a6f80c4a35c15e7ad5a987afbb983d4aaf42f55231603ff52041f0fe0aa"
+        },
+        "files": {
+          "original.o": "faca3dea3a3ce0a04049d9570f47ec7b84fdd58da44fd25e83b93159aee00301",
+          "O2.ll": "4389ccb95c21ea98448e8b5abb0c2822aecf07168d3fd3a94b2127bdae5afbfe",
+          "O2": "bb02c1f492a7e958b3209b021a61f4f5f8888a45f6eb2c766a3f1adcba3d239c",
+          "fixture.h": "a85dc9be19d1faffa843b6c3f7df29620b053921485e826aed635e8eae58c935",
+          "O2.o": "947c2c3e668d6b997d3bc7e146708f7bd6c661e158f77628de46992201e809bb",
+          "reference.o": "3c574a373a57b4f234a147006846537c9f11f5da60c0125fa47aa8f15cb416b6",
+          "O0.ll": "9d8633d8a70edac3b9c00f7a969376a7e64bc157463a4873a26bad4c862aa7ff",
+          "O0": "ce11884f1d1e9714481ffc39459bcbc5f05c0750ce59b2926f21c06d10f87454",
+          "commands.json": "1b66e8bb2267dd85cd69b1c1d4fd7c4dda00e5492c0cfea56628c0f1ea86a628",
+          "candidate.c": "a58984bc93f4d307ca2adfcc33d58bb5a5e62824d9546957cb770c513dd16e62",
+          "original.S": "f35ce7afeadfda687396ba6a73296b7d053cabcab5ff0ff003f07f08e4b42097",
+          "O0.o": "031ac49c622d735d625a73d3afa1e3ba40a972a1c7f6cb780ee0efb312fdc84f",
+          "reference.c": "bc591c63614b37e909e89a784ac0d48741ec7723f82874572fbef0bf7c6180b3"
+        }
+      }
+    },
+    "new": {
+      "file": "/mnt/data/neverd-rtm-pair-20261101/new-merged-sde/qualification.json",
+      "sha256": "d554a1a143402078da6d96ae330d17143a840af860b43cc3edf1c49a6f0504e5",
+      "report": {
+        "passed": true,
+        "physical_rtm_qualified": false,
+        "scope": "native immediate-abort pair under independent Intel SDE emulation",
+        "tools": {
+          "compiler": {
+            "path": "/mnt/data/neverd-native-system-returns-20261029/build-neverc/bin/neverc",
+            "sha256": "715dd4269412821a1c531ab2481cb0fe448ddebbb6663b57ab6f3f2e0d819db4"
+          },
+          "sde": {
+            "path": "/mnt/data/neverd-bitscan-validation/claude-ntos0/tools/sde-external-10.13.1-2026-07-28-lin/sde64",
+            "sha256": "257872adf7e5cb0855c6774539590587238302bdcd90ddfccca074e9c4c4a3f5"
+          },
+          "host": {
+            "path": "/home/ad/.local/bin/clang",
+            "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
+          },
+          "llc": {
+            "path": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc",
+            "sha256": "42bba0d2cc437a152a5035dfbde446fb6913ba02b0ed87642169937b3eee5484"
+          }
+        },
+        "new_pass_manager": true,
+        "profiles": [
+          {
+            "optimization": "O0",
+            "engine": "Intel SDE",
+            "mode": "full",
+            "rtm_advertised": true,
+            "pairs": 8192
+          },
+          {
+            "optimization": "O0",
+            "engine": "Intel SDE",
+            "mode": "0",
+            "rtm_advertised": false,
+            "pairs": 8192
+          },
+          {
+            "optimization": "O0",
+            "engine": "Intel SDE",
+            "mode": "2",
+            "rtm_advertised": false,
+            "pairs": 8192
+          },
+          {
+            "optimization": "O0",
+            "engine": "Intel SDE",
+            "mode": "6",
+            "rtm_advertised": false,
+            "pairs": 8192
+          },
+          {
+            "optimization": "O0",
+            "engine": "Intel SDE",
+            "mode": "8",
+            "rtm_advertised": false,
+            "pairs": 8192
+          },
+          {
+            "optimization": "O2",
+            "engine": "Intel SDE",
+            "mode": "full",
+            "rtm_advertised": true,
+            "pairs": 8192
+          },
+          {
+            "optimization": "O2",
+            "engine": "Intel SDE",
+            "mode": "0",
+            "rtm_advertised": false,
+            "pairs": 8192
+          },
+          {
+            "optimization": "O2",
+            "engine": "Intel SDE",
+            "mode": "2",
+            "rtm_advertised": false,
+            "pairs": 8192
+          },
+          {
+            "optimization": "O2",
+            "engine": "Intel SDE",
+            "mode": "6",
+            "rtm_advertised": false,
+            "pairs": 8192
+          },
+          {
+            "optimization": "O2",
+            "engine": "Intel SDE",
+            "mode": "8",
+            "rtm_advertised": false,
+            "pairs": 8192
+          }
+        ],
+        "fixture_sha256": {
+          "generate.py": "c39922bf9d79223ab8d9130b9858e0d84d928f2093e2a97233a7d4da97d2f49c",
+          "runner.c": "89c67a6f80c4a35c15e7ad5a987afbb983d4aaf42f55231603ff52041f0fe0aa"
+        },
+        "files": {
+          "original.o": "faca3dea3a3ce0a04049d9570f47ec7b84fdd58da44fd25e83b93159aee00301",
+          "O2.ll": "4389ccb95c21ea98448e8b5abb0c2822aecf07168d3fd3a94b2127bdae5afbfe",
+          "O2": "2a72051572fe1119d9217120240018c7417a34cc1bd23d465a09ec1c94345c24",
+          "fixture.h": "a85dc9be19d1faffa843b6c3f7df29620b053921485e826aed635e8eae58c935",
+          "O2.o": "5de07c3136dfd0a7740dd27c0ef259e0360a051d93e877b8ec444d2aa940f24e",
+          "reference.o": "3c574a373a57b4f234a147006846537c9f11f5da60c0125fa47aa8f15cb416b6",
+          "O0.ll": "9d8633d8a70edac3b9c00f7a969376a7e64bc157463a4873a26bad4c862aa7ff",
+          "O0": "ce11884f1d1e9714481ffc39459bcbc5f05c0750ce59b2926f21c06d10f87454",
+          "commands.json": "ba899b42ebd8ec9b164171dcf267498ce5b7f9189f437d58c57f1cdd0b2e7725",
+          "candidate.c": "a58984bc93f4d307ca2adfcc33d58bb5a5e62824d9546957cb770c513dd16e62",
+          "original.S": "f35ce7afeadfda687396ba6a73296b7d053cabcab5ff0ff003f07f08e4b42097",
+          "O0.o": "031ac49c622d735d625a73d3afa1e3ba40a972a1c7f6cb780ee0efb312fdc84f",
+          "reference.c": "bc591c63614b37e909e89a784ac0d48741ec7723f82874572fbef0bf7c6180b3"
+        }
+      }
+    }
+  },
+  "source_matrices": {
+    "neverc": {
+      "file": "/mnt/data/neverd-rtm-pair-20261101/neverc-script-sde/qualification.json",
+      "sha256": "68dd008bcc1432bb2724e4687efd451e447f313bd1d337560e73a6dbf54706ed",
+      "report": {
+        "passed": true,
+        "physical_rtm_qualified": false,
+        "early_abort_provider_publication_qualified": false,
+        "tools": {
+          "compiler": {
+            "path": "/mnt/data/neverd-native-system-returns-20261029/build-neverc/bin/neverc",
+            "sha256": "715dd4269412821a1c531ab2481cb0fe448ddebbb6663b57ab6f3f2e0d819db4"
+          },
+          "sde": {
+            "path": "/mnt/data/neverd-bitscan-validation/claude-ntos0/tools/sde-external-10.13.1-2026-07-28-lin/sde64",
+            "sha256": "257872adf7e5cb0855c6774539590587238302bdcd90ddfccca074e9c4c4a3f5"
+          },
+          "host": {
+            "path": "/usr/lib/llvm-23/bin/clang",
+            "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
+          }
+        },
+        "new_pass_manager": false,
+        "sources": {
+          "rtm16-high-direct": {
+            "source_sha256": "b7eaa345b529e2e10ec23c7cf82372de2f7fe49659b2916414f32bac8614bfaf",
+            "manifest_sha256": "6347457026ea6b66c1eade4a39b4aac25c92991f3d03419dbacb76dd43d889f8",
+            "exported_test_sha256": "eae7072348b5bce901cacc2e8f08c460615dcc66cb1ac6bc2d7e741ea4282264",
+            "compiler_input_sha256": "dce777c5c21333e2b95c16aaae6c3897358b2806f6e4ca8420f8854edbe76b97",
+            "source_preserved_verbatim": true,
+            "harness_extension": "Require CPUID admission and exact status from arguments"
+          },
+          "rtm16-high-switch": {
+            "source_sha256": "9378d86e03f5457f8038b396bc08742c0f6ced7b7f6e0ef9e1466d1295699acd",
+            "manifest_sha256": "afa26ea3828580a6d652c337e1687b4e8641f9352029bb0b1034012da22d1a88",
+            "exported_test_sha256": "f22c42c59da215b2aa49d09a5097ad63585b8e5519cbadf8251d09464889dd0a",
+            "compiler_input_sha256": "d6baea2782057d4081caf518ea34d468d8faf58d45c6893c8d5e4a99d6c442eb",
+            "source_preserved_verbatim": true,
+            "harness_extension": "Require CPUID admission and exact status from arguments"
+          },
+          "rtm16-llvm-direct": {
+            "source_sha256": "6a6acda68c9909b3bed55b76ab035052878c5e113c17a4fbce7167382b5b7f9e",
+            "manifest_sha256": "1e931e82d6973989b532d06958d45720ce89574402b460a435c8dd47ddf57ef9",
+            "exported_test_sha256": "f7582f90bfcb2614598c0893164523392793b7c7829a9c0e1351092b48fc2bc8",
+            "compiler_input_sha256": "99626671373454895af2f92e3cef285860fe8eb408ed973be805fdc7ba74709e",
+            "source_preserved_verbatim": true,
+            "harness_extension": "Require CPUID admission and exact status from arguments"
+          },
+          "rtm16-llvm-switch": {
+            "source_sha256": "2eaadb9b76c596da1f5d7de194401b65bc87d176dd96b4254a536978311aafe3",
+            "manifest_sha256": "a6543de7d920eafe72b5d79ec0cc296c0b4957d352a377504b5513cf8992a59b",
+            "exported_test_sha256": "eb6655100128e78e76c3ca33d191d3498b3bc4062978bc22ce83123bb18c6f6c",
+            "compiler_input_sha256": "4275496d7ef825f8d88e2a2cd0cc326c71680eed73093157f4522a52a3633470",
+            "source_preserved_verbatim": true,
+            "harness_extension": "Require CPUID admission and exact status from arguments"
+          },
+          "rtm32-high-direct": {
+            "source_sha256": "97965a6f5d971318a82bd9e17f88e4e9271c647e1e2dae5f90af1773c05991bd",
+            "manifest_sha256": "023ebca5cdb627f87931b4c8720e654035bb5411fec4a3ad234fe7068224b937",
+            "exported_test_sha256": "f34b7ad46f86c566f1f53e1cef0357b9a85ae3714526e770826c97b79c083a70",
+            "compiler_input_sha256": "c7a45d51816074e9ea7be2926d17d854416d1f1f38666c451c84153bee6f77c9",
+            "source_preserved_verbatim": true,
+            "harness_extension": "Require CPUID admission and exact status from arguments"
+          },
+          "rtm32-high-switch": {
+            "source_sha256": "533d4fc804f76dc2a1f43a939bfbd922655f1f2699d51b4a662a3f225755fd7c",
+            "manifest_sha256": "fa620a1b732dac08bc4d758450da76ce49cefe7840a8f0498efe3155bff09e00",
+            "exported_test_sha256": "b2f8870e4e92d02f595598da8616493020ca232f881bc09fc717ecdd861633e2",
+            "compiler_input_sha256": "145957d477aa228e63de6d2f06ae1d837d29fb63bef31760d7f5d96d86b32b6a",
+            "source_preserved_verbatim": true,
+            "harness_extension": "Require CPUID admission and exact status from arguments"
+          },
+          "rtm32-llvm-direct": {
+            "source_sha256": "115c33d9cd142f01feabd3bf6844cc6eccaba9115507555b7a264cc59538e66b",
+            "manifest_sha256": "37636ed438a457e49e689066834b1da0c1d267f84bdf52524ed5ecb2297d396a",
+            "exported_test_sha256": "2e0b708400fc2ea8d76cea3a94ef8817db014f63b543ca1c16e91ee5384f8e20",
+            "compiler_input_sha256": "3ee87b4d53aec85c5aa264517a4c728f52b8018bb930b03b28c84b1f19ade5c0",
+            "source_preserved_verbatim": true,
+            "harness_extension": "Require CPUID admission and exact status from arguments"
+          },
+          "rtm32-llvm-switch": {
+            "source_sha256": "d095de09bdcda0fb26381ed2c7881775cad46701e0236f13aff4f478bb0ff48b",
+            "manifest_sha256": "c4554ff02c415701d50f15a10a7bf79613b093edfdbb1331769c8710c4bfe753",
+            "exported_test_sha256": "a7f49c1f40ea800c404dfae208329f08f7576b7750c5701d608e0382529918b6",
+            "compiler_input_sha256": "4610bd6c573b51bb6e5fa17b84140013ba3b24d6ea6cfa4ceaac1625a19b0869",
+            "source_preserved_verbatim": true,
+            "harness_extension": "Require CPUID admission and exact status from arguments"
+          }
+        },
+        "profiles": [
+          {
+            "source": "rtm16-high-direct",
+            "optimization": "O0",
+            "mode": "full",
+            "checks": 64,
+            "executable_sha256": "547c720a0bc8eb8e7784e831e17d94899cb50a8b1d76f6c28976491fbf72c730",
+            "qualified": "explicit-abort state publication"
+          },
+          {
+            "source": "rtm16-high-direct",
+            "optimization": "O0",
+            "mode": "0",
+            "checks": 64,
+            "executable_sha256": "547c720a0bc8eb8e7784e831e17d94899cb50a8b1d76f6c28976491fbf72c730",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm16-high-direct",
+            "optimization": "O0",
+            "mode": "2",
+            "checks": 64,
+            "executable_sha256": "547c720a0bc8eb8e7784e831e17d94899cb50a8b1d76f6c28976491fbf72c730",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm16-high-direct",
+            "optimization": "O0",
+            "mode": "6",
+            "checks": 64,
+            "executable_sha256": "547c720a0bc8eb8e7784e831e17d94899cb50a8b1d76f6c28976491fbf72c730",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm16-high-direct",
+            "optimization": "O0",
+            "mode": "8",
+            "checks": 64,
+            "executable_sha256": "547c720a0bc8eb8e7784e831e17d94899cb50a8b1d76f6c28976491fbf72c730",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm16-high-direct",
+            "optimization": "O2",
+            "mode": "full",
+            "checks": 64,
+            "executable_sha256": "61e4083c20123e13cc3a60e972bad6bf3c2c28009c2f6ebbc27152774b43a775",
+            "qualified": "explicit-abort state publication"
+          },
+          {
+            "source": "rtm16-high-direct",
+            "optimization": "O2",
+            "mode": "0",
+            "checks": 64,
+            "executable_sha256": "61e4083c20123e13cc3a60e972bad6bf3c2c28009c2f6ebbc27152774b43a775",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm16-high-direct",
+            "optimization": "O2",
+            "mode": "2",
+            "checks": 64,
+            "executable_sha256": "61e4083c20123e13cc3a60e972bad6bf3c2c28009c2f6ebbc27152774b43a775",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm16-high-direct",
+            "optimization": "O2",
+            "mode": "6",
+            "checks": 64,
+            "executable_sha256": "61e4083c20123e13cc3a60e972bad6bf3c2c28009c2f6ebbc27152774b43a775",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm16-high-direct",
+            "optimization": "O2",
+            "mode": "8",
+            "checks": 64,
+            "executable_sha256": "61e4083c20123e13cc3a60e972bad6bf3c2c28009c2f6ebbc27152774b43a775",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm16-high-switch",
+            "optimization": "O0",
+            "mode": "full",
+            "checks": 64,
+            "executable_sha256": "49a810a05345a870a0e0a224a5a063453d6f347ac4687af8e1e1d01c90514ce7",
+            "qualified": "explicit-abort state publication"
+          },
+          {
+            "source": "rtm16-high-switch",
+            "optimization": "O0",
+            "mode": "0",
+            "checks": 64,
+            "executable_sha256": "49a810a05345a870a0e0a224a5a063453d6f347ac4687af8e1e1d01c90514ce7",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm16-high-switch",
+            "optimization": "O0",
+            "mode": "2",
+            "checks": 64,
+            "executable_sha256": "49a810a05345a870a0e0a224a5a063453d6f347ac4687af8e1e1d01c90514ce7",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm16-high-switch",
+            "optimization": "O0",
+            "mode": "6",
+            "checks": 64,
+            "executable_sha256": "49a810a05345a870a0e0a224a5a063453d6f347ac4687af8e1e1d01c90514ce7",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm16-high-switch",
+            "optimization": "O0",
+            "mode": "8",
+            "checks": 64,
+            "executable_sha256": "49a810a05345a870a0e0a224a5a063453d6f347ac4687af8e1e1d01c90514ce7",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm16-high-switch",
+            "optimization": "O2",
+            "mode": "full",
+            "checks": 64,
+            "executable_sha256": "53da89b2b515fe2bda09ecabfa04acaf8bb2853d0548a87a8230fcee30e68b5a",
+            "qualified": "explicit-abort state publication"
+          },
+          {
+            "source": "rtm16-high-switch",
+            "optimization": "O2",
+            "mode": "0",
+            "checks": 64,
+            "executable_sha256": "53da89b2b515fe2bda09ecabfa04acaf8bb2853d0548a87a8230fcee30e68b5a",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm16-high-switch",
+            "optimization": "O2",
+            "mode": "2",
+            "checks": 64,
+            "executable_sha256": "53da89b2b515fe2bda09ecabfa04acaf8bb2853d0548a87a8230fcee30e68b5a",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm16-high-switch",
+            "optimization": "O2",
+            "mode": "6",
+            "checks": 64,
+            "executable_sha256": "53da89b2b515fe2bda09ecabfa04acaf8bb2853d0548a87a8230fcee30e68b5a",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm16-high-switch",
+            "optimization": "O2",
+            "mode": "8",
+            "checks": 64,
+            "executable_sha256": "53da89b2b515fe2bda09ecabfa04acaf8bb2853d0548a87a8230fcee30e68b5a",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm16-llvm-direct",
+            "optimization": "O0",
+            "mode": "full",
+            "checks": 64,
+            "executable_sha256": "23be3dfb06ab05227b4015f8c6444a9d837f4475b68feee3d78b35e84a58ee5e",
+            "qualified": "explicit-abort state publication"
+          },
+          {
+            "source": "rtm16-llvm-direct",
+            "optimization": "O0",
+            "mode": "0",
+            "checks": 64,
+            "executable_sha256": "23be3dfb06ab05227b4015f8c6444a9d837f4475b68feee3d78b35e84a58ee5e",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm16-llvm-direct",
+            "optimization": "O0",
+            "mode": "2",
+            "checks": 64,
+            "executable_sha256": "23be3dfb06ab05227b4015f8c6444a9d837f4475b68feee3d78b35e84a58ee5e",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm16-llvm-direct",
+            "optimization": "O0",
+            "mode": "6",
+            "checks": 64,
+            "executable_sha256": "23be3dfb06ab05227b4015f8c6444a9d837f4475b68feee3d78b35e84a58ee5e",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm16-llvm-direct",
+            "optimization": "O0",
+            "mode": "8",
+            "checks": 64,
+            "executable_sha256": "23be3dfb06ab05227b4015f8c6444a9d837f4475b68feee3d78b35e84a58ee5e",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm16-llvm-direct",
+            "optimization": "O2",
+            "mode": "full",
+            "checks": 64,
+            "executable_sha256": "f8737e5ebf086fcbbd4f480a2c9ff58ac0e34d2a43e5b5ee584edd99d10e8799",
+            "qualified": "explicit-abort state publication"
+          },
+          {
+            "source": "rtm16-llvm-direct",
+            "optimization": "O2",
+            "mode": "0",
+            "checks": 64,
+            "executable_sha256": "f8737e5ebf086fcbbd4f480a2c9ff58ac0e34d2a43e5b5ee584edd99d10e8799",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm16-llvm-direct",
+            "optimization": "O2",
+            "mode": "2",
+            "checks": 64,
+            "executable_sha256": "f8737e5ebf086fcbbd4f480a2c9ff58ac0e34d2a43e5b5ee584edd99d10e8799",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm16-llvm-direct",
+            "optimization": "O2",
+            "mode": "6",
+            "checks": 64,
+            "executable_sha256": "f8737e5ebf086fcbbd4f480a2c9ff58ac0e34d2a43e5b5ee584edd99d10e8799",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm16-llvm-direct",
+            "optimization": "O2",
+            "mode": "8",
+            "checks": 64,
+            "executable_sha256": "f8737e5ebf086fcbbd4f480a2c9ff58ac0e34d2a43e5b5ee584edd99d10e8799",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm16-llvm-switch",
+            "optimization": "O0",
+            "mode": "full",
+            "checks": 64,
+            "executable_sha256": "00cdd2dcbaa02a011ee58534640df59a60034cbe832d10f5f1c08d13557b063b",
+            "qualified": "explicit-abort state publication"
+          },
+          {
+            "source": "rtm16-llvm-switch",
+            "optimization": "O0",
+            "mode": "0",
+            "checks": 64,
+            "executable_sha256": "00cdd2dcbaa02a011ee58534640df59a60034cbe832d10f5f1c08d13557b063b",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm16-llvm-switch",
+            "optimization": "O0",
+            "mode": "2",
+            "checks": 64,
+            "executable_sha256": "00cdd2dcbaa02a011ee58534640df59a60034cbe832d10f5f1c08d13557b063b",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm16-llvm-switch",
+            "optimization": "O0",
+            "mode": "6",
+            "checks": 64,
+            "executable_sha256": "00cdd2dcbaa02a011ee58534640df59a60034cbe832d10f5f1c08d13557b063b",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm16-llvm-switch",
+            "optimization": "O0",
+            "mode": "8",
+            "checks": 64,
+            "executable_sha256": "00cdd2dcbaa02a011ee58534640df59a60034cbe832d10f5f1c08d13557b063b",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm16-llvm-switch",
+            "optimization": "O2",
+            "mode": "full",
+            "checks": 64,
+            "executable_sha256": "5837fab97c742f75021b4cea373684d84517fe72c15f44c3f4b1face4394215f",
+            "qualified": "explicit-abort state publication"
+          },
+          {
+            "source": "rtm16-llvm-switch",
+            "optimization": "O2",
+            "mode": "0",
+            "checks": 64,
+            "executable_sha256": "5837fab97c742f75021b4cea373684d84517fe72c15f44c3f4b1face4394215f",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm16-llvm-switch",
+            "optimization": "O2",
+            "mode": "2",
+            "checks": 64,
+            "executable_sha256": "5837fab97c742f75021b4cea373684d84517fe72c15f44c3f4b1face4394215f",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm16-llvm-switch",
+            "optimization": "O2",
+            "mode": "6",
+            "checks": 64,
+            "executable_sha256": "5837fab97c742f75021b4cea373684d84517fe72c15f44c3f4b1face4394215f",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm16-llvm-switch",
+            "optimization": "O2",
+            "mode": "8",
+            "checks": 64,
+            "executable_sha256": "5837fab97c742f75021b4cea373684d84517fe72c15f44c3f4b1face4394215f",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm32-high-direct",
+            "optimization": "O0",
+            "mode": "full",
+            "checks": 64,
+            "executable_sha256": "b931bdd422ffd2d71066bbb4a9be6dfdfb25483d0d281f0df3b002d760e400a3",
+            "qualified": "explicit-abort state publication"
+          },
+          {
+            "source": "rtm32-high-direct",
+            "optimization": "O0",
+            "mode": "0",
+            "checks": 64,
+            "executable_sha256": "b931bdd422ffd2d71066bbb4a9be6dfdfb25483d0d281f0df3b002d760e400a3",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm32-high-direct",
+            "optimization": "O0",
+            "mode": "2",
+            "checks": 64,
+            "executable_sha256": "b931bdd422ffd2d71066bbb4a9be6dfdfb25483d0d281f0df3b002d760e400a3",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm32-high-direct",
+            "optimization": "O0",
+            "mode": "6",
+            "checks": 64,
+            "executable_sha256": "b931bdd422ffd2d71066bbb4a9be6dfdfb25483d0d281f0df3b002d760e400a3",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm32-high-direct",
+            "optimization": "O0",
+            "mode": "8",
+            "checks": 64,
+            "executable_sha256": "b931bdd422ffd2d71066bbb4a9be6dfdfb25483d0d281f0df3b002d760e400a3",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm32-high-direct",
+            "optimization": "O2",
+            "mode": "full",
+            "checks": 64,
+            "executable_sha256": "f5eaa97f58186f3ae341a32d02981f7a0abd67b1d98c02712dbce3c3ac2f8608",
+            "qualified": "explicit-abort state publication"
+          },
+          {
+            "source": "rtm32-high-direct",
+            "optimization": "O2",
+            "mode": "0",
+            "checks": 64,
+            "executable_sha256": "f5eaa97f58186f3ae341a32d02981f7a0abd67b1d98c02712dbce3c3ac2f8608",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm32-high-direct",
+            "optimization": "O2",
+            "mode": "2",
+            "checks": 64,
+            "executable_sha256": "f5eaa97f58186f3ae341a32d02981f7a0abd67b1d98c02712dbce3c3ac2f8608",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm32-high-direct",
+            "optimization": "O2",
+            "mode": "6",
+            "checks": 64,
+            "executable_sha256": "f5eaa97f58186f3ae341a32d02981f7a0abd67b1d98c02712dbce3c3ac2f8608",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm32-high-direct",
+            "optimization": "O2",
+            "mode": "8",
+            "checks": 64,
+            "executable_sha256": "f5eaa97f58186f3ae341a32d02981f7a0abd67b1d98c02712dbce3c3ac2f8608",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm32-high-switch",
+            "optimization": "O0",
+            "mode": "full",
+            "checks": 64,
+            "executable_sha256": "1f60c69ff4ef79053017c0c7df5c137b0ab5e86551f56a5ba6fb17b49d55a7fc",
+            "qualified": "explicit-abort state publication"
+          },
+          {
+            "source": "rtm32-high-switch",
+            "optimization": "O0",
+            "mode": "0",
+            "checks": 64,
+            "executable_sha256": "1f60c69ff4ef79053017c0c7df5c137b0ab5e86551f56a5ba6fb17b49d55a7fc",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm32-high-switch",
+            "optimization": "O0",
+            "mode": "2",
+            "checks": 64,
+            "executable_sha256": "1f60c69ff4ef79053017c0c7df5c137b0ab5e86551f56a5ba6fb17b49d55a7fc",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm32-high-switch",
+            "optimization": "O0",
+            "mode": "6",
+            "checks": 64,
+            "executable_sha256": "1f60c69ff4ef79053017c0c7df5c137b0ab5e86551f56a5ba6fb17b49d55a7fc",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm32-high-switch",
+            "optimization": "O0",
+            "mode": "8",
+            "checks": 64,
+            "executable_sha256": "1f60c69ff4ef79053017c0c7df5c137b0ab5e86551f56a5ba6fb17b49d55a7fc",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm32-high-switch",
+            "optimization": "O2",
+            "mode": "full",
+            "checks": 64,
+            "executable_sha256": "0de27471c2b1bb39110415f8c00d068b804c955384c4998f7779da5e1640aea7",
+            "qualified": "explicit-abort state publication"
+          },
+          {
+            "source": "rtm32-high-switch",
+            "optimization": "O2",
+            "mode": "0",
+            "checks": 64,
+            "executable_sha256": "0de27471c2b1bb39110415f8c00d068b804c955384c4998f7779da5e1640aea7",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm32-high-switch",
+            "optimization": "O2",
+            "mode": "2",
+            "checks": 64,
+            "executable_sha256": "0de27471c2b1bb39110415f8c00d068b804c955384c4998f7779da5e1640aea7",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm32-high-switch",
+            "optimization": "O2",
+            "mode": "6",
+            "checks": 64,
+            "executable_sha256": "0de27471c2b1bb39110415f8c00d068b804c955384c4998f7779da5e1640aea7",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm32-high-switch",
+            "optimization": "O2",
+            "mode": "8",
+            "checks": 64,
+            "executable_sha256": "0de27471c2b1bb39110415f8c00d068b804c955384c4998f7779da5e1640aea7",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm32-llvm-direct",
+            "optimization": "O0",
+            "mode": "full",
+            "checks": 64,
+            "executable_sha256": "96dde9a9d48ad4bb4f0860e8a384a6a4fb9e1d85e0aa453617d071c628293da9",
+            "qualified": "explicit-abort state publication"
+          },
+          {
+            "source": "rtm32-llvm-direct",
+            "optimization": "O0",
+            "mode": "0",
+            "checks": 64,
+            "executable_sha256": "96dde9a9d48ad4bb4f0860e8a384a6a4fb9e1d85e0aa453617d071c628293da9",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm32-llvm-direct",
+            "optimization": "O0",
+            "mode": "2",
+            "checks": 64,
+            "executable_sha256": "96dde9a9d48ad4bb4f0860e8a384a6a4fb9e1d85e0aa453617d071c628293da9",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm32-llvm-direct",
+            "optimization": "O0",
+            "mode": "6",
+            "checks": 64,
+            "executable_sha256": "96dde9a9d48ad4bb4f0860e8a384a6a4fb9e1d85e0aa453617d071c628293da9",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm32-llvm-direct",
+            "optimization": "O0",
+            "mode": "8",
+            "checks": 64,
+            "executable_sha256": "96dde9a9d48ad4bb4f0860e8a384a6a4fb9e1d85e0aa453617d071c628293da9",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm32-llvm-direct",
+            "optimization": "O2",
+            "mode": "full",
+            "checks": 64,
+            "executable_sha256": "a475d2d68debb444c10dfb46082da2de960b2152ed40f839151209ca05da556a",
+            "qualified": "explicit-abort state publication"
+          },
+          {
+            "source": "rtm32-llvm-direct",
+            "optimization": "O2",
+            "mode": "0",
+            "checks": 64,
+            "executable_sha256": "a475d2d68debb444c10dfb46082da2de960b2152ed40f839151209ca05da556a",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm32-llvm-direct",
+            "optimization": "O2",
+            "mode": "2",
+            "checks": 64,
+            "executable_sha256": "a475d2d68debb444c10dfb46082da2de960b2152ed40f839151209ca05da556a",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm32-llvm-direct",
+            "optimization": "O2",
+            "mode": "6",
+            "checks": 64,
+            "executable_sha256": "a475d2d68debb444c10dfb46082da2de960b2152ed40f839151209ca05da556a",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm32-llvm-direct",
+            "optimization": "O2",
+            "mode": "8",
+            "checks": 64,
+            "executable_sha256": "a475d2d68debb444c10dfb46082da2de960b2152ed40f839151209ca05da556a",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm32-llvm-switch",
+            "optimization": "O0",
+            "mode": "full",
+            "checks": 64,
+            "executable_sha256": "80fbdf02c298e9dc1b72f3e32b95e4eebc5e22527466280ef4ca4dd148094af8",
+            "qualified": "explicit-abort state publication"
+          },
+          {
+            "source": "rtm32-llvm-switch",
+            "optimization": "O0",
+            "mode": "0",
+            "checks": 64,
+            "executable_sha256": "80fbdf02c298e9dc1b72f3e32b95e4eebc5e22527466280ef4ca4dd148094af8",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm32-llvm-switch",
+            "optimization": "O0",
+            "mode": "2",
+            "checks": 64,
+            "executable_sha256": "80fbdf02c298e9dc1b72f3e32b95e4eebc5e22527466280ef4ca4dd148094af8",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm32-llvm-switch",
+            "optimization": "O0",
+            "mode": "6",
+            "checks": 64,
+            "executable_sha256": "80fbdf02c298e9dc1b72f3e32b95e4eebc5e22527466280ef4ca4dd148094af8",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm32-llvm-switch",
+            "optimization": "O0",
+            "mode": "8",
+            "checks": 64,
+            "executable_sha256": "80fbdf02c298e9dc1b72f3e32b95e4eebc5e22527466280ef4ca4dd148094af8",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm32-llvm-switch",
+            "optimization": "O2",
+            "mode": "full",
+            "checks": 64,
+            "executable_sha256": "3bdd2a71dc5ecadfd324bb157d81c96ee6f5dabf97f1958d659f339e173b512b",
+            "qualified": "explicit-abort state publication"
+          },
+          {
+            "source": "rtm32-llvm-switch",
+            "optimization": "O2",
+            "mode": "0",
+            "checks": 64,
+            "executable_sha256": "3bdd2a71dc5ecadfd324bb157d81c96ee6f5dabf97f1958d659f339e173b512b",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm32-llvm-switch",
+            "optimization": "O2",
+            "mode": "2",
+            "checks": 64,
+            "executable_sha256": "3bdd2a71dc5ecadfd324bb157d81c96ee6f5dabf97f1958d659f339e173b512b",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm32-llvm-switch",
+            "optimization": "O2",
+            "mode": "6",
+            "checks": 64,
+            "executable_sha256": "3bdd2a71dc5ecadfd324bb157d81c96ee6f5dabf97f1958d659f339e173b512b",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm32-llvm-switch",
+            "optimization": "O2",
+            "mode": "8",
+            "checks": 64,
+            "executable_sha256": "3bdd2a71dc5ecadfd324bb157d81c96ee6f5dabf97f1958d659f339e173b512b",
+            "qualified": "CPUID refusal without state publication"
+          }
+        ],
+        "commands_sha256": "738b12c429b924349a8c6b195d0735d618406bbb34d3c8339a91a677ef45eba6",
+        "script_sha256": "672948d8f5cf6e6804c5034853245f3007c8e3f4e3dccdf0c500ae42cc656663"
+      }
+    },
+    "legacy": {
+      "file": "/mnt/data/neverd-rtm-pair-20261101/legacy-script-sde/qualification.json",
+      "sha256": "4691a99a62acd3d06bc0493fc24638a0e581bd330af18c872c09055df672ddc0",
+      "report": {
+        "passed": true,
+        "physical_rtm_qualified": false,
+        "early_abort_provider_publication_qualified": false,
+        "tools": {
+          "compiler": {
+            "path": "/mnt/data/neverd-native-system-returns-20261029/build-neverc/bin/neverc",
+            "sha256": "715dd4269412821a1c531ab2481cb0fe448ddebbb6663b57ab6f3f2e0d819db4"
+          },
+          "sde": {
+            "path": "/mnt/data/neverd-bitscan-validation/claude-ntos0/tools/sde-external-10.13.1-2026-07-28-lin/sde64",
+            "sha256": "257872adf7e5cb0855c6774539590587238302bdcd90ddfccca074e9c4c4a3f5"
+          },
+          "host": {
+            "path": "/usr/lib/llvm-23/bin/clang",
+            "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
+          },
+          "llc": {
+            "path": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc",
+            "sha256": "42bba0d2cc437a152a5035dfbde446fb6913ba02b0ed87642169937b3eee5484"
+          }
+        },
+        "new_pass_manager": false,
+        "sources": {
+          "rtm16-high-direct": {
+            "source_sha256": "b7eaa345b529e2e10ec23c7cf82372de2f7fe49659b2916414f32bac8614bfaf",
+            "manifest_sha256": "6347457026ea6b66c1eade4a39b4aac25c92991f3d03419dbacb76dd43d889f8",
+            "exported_test_sha256": "eae7072348b5bce901cacc2e8f08c460615dcc66cb1ac6bc2d7e741ea4282264",
+            "compiler_input_sha256": "dce777c5c21333e2b95c16aaae6c3897358b2806f6e4ca8420f8854edbe76b97",
+            "source_preserved_verbatim": true,
+            "harness_extension": "Require CPUID admission and exact status from arguments"
+          },
+          "rtm16-high-switch": {
+            "source_sha256": "9378d86e03f5457f8038b396bc08742c0f6ced7b7f6e0ef9e1466d1295699acd",
+            "manifest_sha256": "afa26ea3828580a6d652c337e1687b4e8641f9352029bb0b1034012da22d1a88",
+            "exported_test_sha256": "f22c42c59da215b2aa49d09a5097ad63585b8e5519cbadf8251d09464889dd0a",
+            "compiler_input_sha256": "d6baea2782057d4081caf518ea34d468d8faf58d45c6893c8d5e4a99d6c442eb",
+            "source_preserved_verbatim": true,
+            "harness_extension": "Require CPUID admission and exact status from arguments"
+          },
+          "rtm16-llvm-direct": {
+            "source_sha256": "6a6acda68c9909b3bed55b76ab035052878c5e113c17a4fbce7167382b5b7f9e",
+            "manifest_sha256": "1e931e82d6973989b532d06958d45720ce89574402b460a435c8dd47ddf57ef9",
+            "exported_test_sha256": "f7582f90bfcb2614598c0893164523392793b7c7829a9c0e1351092b48fc2bc8",
+            "compiler_input_sha256": "99626671373454895af2f92e3cef285860fe8eb408ed973be805fdc7ba74709e",
+            "source_preserved_verbatim": true,
+            "harness_extension": "Require CPUID admission and exact status from arguments"
+          },
+          "rtm16-llvm-switch": {
+            "source_sha256": "2eaadb9b76c596da1f5d7de194401b65bc87d176dd96b4254a536978311aafe3",
+            "manifest_sha256": "a6543de7d920eafe72b5d79ec0cc296c0b4957d352a377504b5513cf8992a59b",
+            "exported_test_sha256": "eb6655100128e78e76c3ca33d191d3498b3bc4062978bc22ce83123bb18c6f6c",
+            "compiler_input_sha256": "4275496d7ef825f8d88e2a2cd0cc326c71680eed73093157f4522a52a3633470",
+            "source_preserved_verbatim": true,
+            "harness_extension": "Require CPUID admission and exact status from arguments"
+          },
+          "rtm32-high-direct": {
+            "source_sha256": "97965a6f5d971318a82bd9e17f88e4e9271c647e1e2dae5f90af1773c05991bd",
+            "manifest_sha256": "023ebca5cdb627f87931b4c8720e654035bb5411fec4a3ad234fe7068224b937",
+            "exported_test_sha256": "f34b7ad46f86c566f1f53e1cef0357b9a85ae3714526e770826c97b79c083a70",
+            "compiler_input_sha256": "c7a45d51816074e9ea7be2926d17d854416d1f1f38666c451c84153bee6f77c9",
+            "source_preserved_verbatim": true,
+            "harness_extension": "Require CPUID admission and exact status from arguments"
+          },
+          "rtm32-high-switch": {
+            "source_sha256": "533d4fc804f76dc2a1f43a939bfbd922655f1f2699d51b4a662a3f225755fd7c",
+            "manifest_sha256": "fa620a1b732dac08bc4d758450da76ce49cefe7840a8f0498efe3155bff09e00",
+            "exported_test_sha256": "b2f8870e4e92d02f595598da8616493020ca232f881bc09fc717ecdd861633e2",
+            "compiler_input_sha256": "145957d477aa228e63de6d2f06ae1d837d29fb63bef31760d7f5d96d86b32b6a",
+            "source_preserved_verbatim": true,
+            "harness_extension": "Require CPUID admission and exact status from arguments"
+          },
+          "rtm32-llvm-direct": {
+            "source_sha256": "115c33d9cd142f01feabd3bf6844cc6eccaba9115507555b7a264cc59538e66b",
+            "manifest_sha256": "37636ed438a457e49e689066834b1da0c1d267f84bdf52524ed5ecb2297d396a",
+            "exported_test_sha256": "2e0b708400fc2ea8d76cea3a94ef8817db014f63b543ca1c16e91ee5384f8e20",
+            "compiler_input_sha256": "3ee87b4d53aec85c5aa264517a4c728f52b8018bb930b03b28c84b1f19ade5c0",
+            "source_preserved_verbatim": true,
+            "harness_extension": "Require CPUID admission and exact status from arguments"
+          },
+          "rtm32-llvm-switch": {
+            "source_sha256": "d095de09bdcda0fb26381ed2c7881775cad46701e0236f13aff4f478bb0ff48b",
+            "manifest_sha256": "c4554ff02c415701d50f15a10a7bf79613b093edfdbb1331769c8710c4bfe753",
+            "exported_test_sha256": "a7f49c1f40ea800c404dfae208329f08f7576b7750c5701d608e0382529918b6",
+            "compiler_input_sha256": "4610bd6c573b51bb6e5fa17b84140013ba3b24d6ea6cfa4ceaac1625a19b0869",
+            "source_preserved_verbatim": true,
+            "harness_extension": "Require CPUID admission and exact status from arguments"
+          }
+        },
+        "profiles": [
+          {
+            "source": "rtm16-high-direct",
+            "optimization": "O0",
+            "mode": "full",
+            "checks": 64,
+            "executable_sha256": "c03cda7978d815b02a2afa61ffe03be93fb251a087af2a15d77c955464c686ff",
+            "qualified": "explicit-abort state publication"
+          },
+          {
+            "source": "rtm16-high-direct",
+            "optimization": "O0",
+            "mode": "0",
+            "checks": 64,
+            "executable_sha256": "c03cda7978d815b02a2afa61ffe03be93fb251a087af2a15d77c955464c686ff",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm16-high-direct",
+            "optimization": "O0",
+            "mode": "2",
+            "checks": 64,
+            "executable_sha256": "c03cda7978d815b02a2afa61ffe03be93fb251a087af2a15d77c955464c686ff",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm16-high-direct",
+            "optimization": "O0",
+            "mode": "6",
+            "checks": 64,
+            "executable_sha256": "c03cda7978d815b02a2afa61ffe03be93fb251a087af2a15d77c955464c686ff",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm16-high-direct",
+            "optimization": "O0",
+            "mode": "8",
+            "checks": 64,
+            "executable_sha256": "c03cda7978d815b02a2afa61ffe03be93fb251a087af2a15d77c955464c686ff",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm16-high-direct",
+            "optimization": "O2",
+            "mode": "full",
+            "checks": 64,
+            "executable_sha256": "57e0de3a256c2b1d6ce3c775238a0f4bf0e441c08d936ee489d1b1be37c8e64c",
+            "qualified": "explicit-abort state publication"
+          },
+          {
+            "source": "rtm16-high-direct",
+            "optimization": "O2",
+            "mode": "0",
+            "checks": 64,
+            "executable_sha256": "57e0de3a256c2b1d6ce3c775238a0f4bf0e441c08d936ee489d1b1be37c8e64c",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm16-high-direct",
+            "optimization": "O2",
+            "mode": "2",
+            "checks": 64,
+            "executable_sha256": "57e0de3a256c2b1d6ce3c775238a0f4bf0e441c08d936ee489d1b1be37c8e64c",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm16-high-direct",
+            "optimization": "O2",
+            "mode": "6",
+            "checks": 64,
+            "executable_sha256": "57e0de3a256c2b1d6ce3c775238a0f4bf0e441c08d936ee489d1b1be37c8e64c",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm16-high-direct",
+            "optimization": "O2",
+            "mode": "8",
+            "checks": 64,
+            "executable_sha256": "57e0de3a256c2b1d6ce3c775238a0f4bf0e441c08d936ee489d1b1be37c8e64c",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm16-high-switch",
+            "optimization": "O0",
+            "mode": "full",
+            "checks": 64,
+            "executable_sha256": "84969b87fb20cd71290ad177285447a51e82d84e5387b6d963c87051b2dbe9a5",
+            "qualified": "explicit-abort state publication"
+          },
+          {
+            "source": "rtm16-high-switch",
+            "optimization": "O0",
+            "mode": "0",
+            "checks": 64,
+            "executable_sha256": "84969b87fb20cd71290ad177285447a51e82d84e5387b6d963c87051b2dbe9a5",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm16-high-switch",
+            "optimization": "O0",
+            "mode": "2",
+            "checks": 64,
+            "executable_sha256": "84969b87fb20cd71290ad177285447a51e82d84e5387b6d963c87051b2dbe9a5",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm16-high-switch",
+            "optimization": "O0",
+            "mode": "6",
+            "checks": 64,
+            "executable_sha256": "84969b87fb20cd71290ad177285447a51e82d84e5387b6d963c87051b2dbe9a5",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm16-high-switch",
+            "optimization": "O0",
+            "mode": "8",
+            "checks": 64,
+            "executable_sha256": "84969b87fb20cd71290ad177285447a51e82d84e5387b6d963c87051b2dbe9a5",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm16-high-switch",
+            "optimization": "O2",
+            "mode": "full",
+            "checks": 64,
+            "executable_sha256": "af9bf9e2f67b9d2f8b3dc4cb9aa6e80786b5b5b52371b7c7c43df558486eac77",
+            "qualified": "explicit-abort state publication"
+          },
+          {
+            "source": "rtm16-high-switch",
+            "optimization": "O2",
+            "mode": "0",
+            "checks": 64,
+            "executable_sha256": "af9bf9e2f67b9d2f8b3dc4cb9aa6e80786b5b5b52371b7c7c43df558486eac77",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm16-high-switch",
+            "optimization": "O2",
+            "mode": "2",
+            "checks": 64,
+            "executable_sha256": "af9bf9e2f67b9d2f8b3dc4cb9aa6e80786b5b5b52371b7c7c43df558486eac77",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm16-high-switch",
+            "optimization": "O2",
+            "mode": "6",
+            "checks": 64,
+            "executable_sha256": "af9bf9e2f67b9d2f8b3dc4cb9aa6e80786b5b5b52371b7c7c43df558486eac77",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm16-high-switch",
+            "optimization": "O2",
+            "mode": "8",
+            "checks": 64,
+            "executable_sha256": "af9bf9e2f67b9d2f8b3dc4cb9aa6e80786b5b5b52371b7c7c43df558486eac77",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm16-llvm-direct",
+            "optimization": "O0",
+            "mode": "full",
+            "checks": 64,
+            "executable_sha256": "c6330616850366a3797d58abbc496c9bfb3f217c93a0732c9a1bf0a156f9ba6f",
+            "qualified": "explicit-abort state publication"
+          },
+          {
+            "source": "rtm16-llvm-direct",
+            "optimization": "O0",
+            "mode": "0",
+            "checks": 64,
+            "executable_sha256": "c6330616850366a3797d58abbc496c9bfb3f217c93a0732c9a1bf0a156f9ba6f",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm16-llvm-direct",
+            "optimization": "O0",
+            "mode": "2",
+            "checks": 64,
+            "executable_sha256": "c6330616850366a3797d58abbc496c9bfb3f217c93a0732c9a1bf0a156f9ba6f",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm16-llvm-direct",
+            "optimization": "O0",
+            "mode": "6",
+            "checks": 64,
+            "executable_sha256": "c6330616850366a3797d58abbc496c9bfb3f217c93a0732c9a1bf0a156f9ba6f",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm16-llvm-direct",
+            "optimization": "O0",
+            "mode": "8",
+            "checks": 64,
+            "executable_sha256": "c6330616850366a3797d58abbc496c9bfb3f217c93a0732c9a1bf0a156f9ba6f",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm16-llvm-direct",
+            "optimization": "O2",
+            "mode": "full",
+            "checks": 64,
+            "executable_sha256": "7745d765ec1cc04b11a6f103952cdcce20813f32fc0e60eded0ce5a05ce60d4d",
+            "qualified": "explicit-abort state publication"
+          },
+          {
+            "source": "rtm16-llvm-direct",
+            "optimization": "O2",
+            "mode": "0",
+            "checks": 64,
+            "executable_sha256": "7745d765ec1cc04b11a6f103952cdcce20813f32fc0e60eded0ce5a05ce60d4d",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm16-llvm-direct",
+            "optimization": "O2",
+            "mode": "2",
+            "checks": 64,
+            "executable_sha256": "7745d765ec1cc04b11a6f103952cdcce20813f32fc0e60eded0ce5a05ce60d4d",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm16-llvm-direct",
+            "optimization": "O2",
+            "mode": "6",
+            "checks": 64,
+            "executable_sha256": "7745d765ec1cc04b11a6f103952cdcce20813f32fc0e60eded0ce5a05ce60d4d",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm16-llvm-direct",
+            "optimization": "O2",
+            "mode": "8",
+            "checks": 64,
+            "executable_sha256": "7745d765ec1cc04b11a6f103952cdcce20813f32fc0e60eded0ce5a05ce60d4d",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm16-llvm-switch",
+            "optimization": "O0",
+            "mode": "full",
+            "checks": 64,
+            "executable_sha256": "ada4b9bc41597ca47acb273c2ac35cf77aadf8b14e57cae9f1bccebb18e67aad",
+            "qualified": "explicit-abort state publication"
+          },
+          {
+            "source": "rtm16-llvm-switch",
+            "optimization": "O0",
+            "mode": "0",
+            "checks": 64,
+            "executable_sha256": "ada4b9bc41597ca47acb273c2ac35cf77aadf8b14e57cae9f1bccebb18e67aad",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm16-llvm-switch",
+            "optimization": "O0",
+            "mode": "2",
+            "checks": 64,
+            "executable_sha256": "ada4b9bc41597ca47acb273c2ac35cf77aadf8b14e57cae9f1bccebb18e67aad",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm16-llvm-switch",
+            "optimization": "O0",
+            "mode": "6",
+            "checks": 64,
+            "executable_sha256": "ada4b9bc41597ca47acb273c2ac35cf77aadf8b14e57cae9f1bccebb18e67aad",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm16-llvm-switch",
+            "optimization": "O0",
+            "mode": "8",
+            "checks": 64,
+            "executable_sha256": "ada4b9bc41597ca47acb273c2ac35cf77aadf8b14e57cae9f1bccebb18e67aad",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm16-llvm-switch",
+            "optimization": "O2",
+            "mode": "full",
+            "checks": 64,
+            "executable_sha256": "944e560d465fa3c8cfb685b8080685220df0d88bb16be397dcf29f5a85e562a7",
+            "qualified": "explicit-abort state publication"
+          },
+          {
+            "source": "rtm16-llvm-switch",
+            "optimization": "O2",
+            "mode": "0",
+            "checks": 64,
+            "executable_sha256": "944e560d465fa3c8cfb685b8080685220df0d88bb16be397dcf29f5a85e562a7",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm16-llvm-switch",
+            "optimization": "O2",
+            "mode": "2",
+            "checks": 64,
+            "executable_sha256": "944e560d465fa3c8cfb685b8080685220df0d88bb16be397dcf29f5a85e562a7",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm16-llvm-switch",
+            "optimization": "O2",
+            "mode": "6",
+            "checks": 64,
+            "executable_sha256": "944e560d465fa3c8cfb685b8080685220df0d88bb16be397dcf29f5a85e562a7",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm16-llvm-switch",
+            "optimization": "O2",
+            "mode": "8",
+            "checks": 64,
+            "executable_sha256": "944e560d465fa3c8cfb685b8080685220df0d88bb16be397dcf29f5a85e562a7",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm32-high-direct",
+            "optimization": "O0",
+            "mode": "full",
+            "checks": 64,
+            "executable_sha256": "e0528a4e0870c07ed7ebb58e956c9f503be48b3b42b48a3dc3c7ed0a2cb46970",
+            "qualified": "explicit-abort state publication"
+          },
+          {
+            "source": "rtm32-high-direct",
+            "optimization": "O0",
+            "mode": "0",
+            "checks": 64,
+            "executable_sha256": "e0528a4e0870c07ed7ebb58e956c9f503be48b3b42b48a3dc3c7ed0a2cb46970",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm32-high-direct",
+            "optimization": "O0",
+            "mode": "2",
+            "checks": 64,
+            "executable_sha256": "e0528a4e0870c07ed7ebb58e956c9f503be48b3b42b48a3dc3c7ed0a2cb46970",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm32-high-direct",
+            "optimization": "O0",
+            "mode": "6",
+            "checks": 64,
+            "executable_sha256": "e0528a4e0870c07ed7ebb58e956c9f503be48b3b42b48a3dc3c7ed0a2cb46970",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm32-high-direct",
+            "optimization": "O0",
+            "mode": "8",
+            "checks": 64,
+            "executable_sha256": "e0528a4e0870c07ed7ebb58e956c9f503be48b3b42b48a3dc3c7ed0a2cb46970",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm32-high-direct",
+            "optimization": "O2",
+            "mode": "full",
+            "checks": 64,
+            "executable_sha256": "86d95a9275b552bb9b0105280a64d1f037c9ba088d23582224af727ba572a191",
+            "qualified": "explicit-abort state publication"
+          },
+          {
+            "source": "rtm32-high-direct",
+            "optimization": "O2",
+            "mode": "0",
+            "checks": 64,
+            "executable_sha256": "86d95a9275b552bb9b0105280a64d1f037c9ba088d23582224af727ba572a191",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm32-high-direct",
+            "optimization": "O2",
+            "mode": "2",
+            "checks": 64,
+            "executable_sha256": "86d95a9275b552bb9b0105280a64d1f037c9ba088d23582224af727ba572a191",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm32-high-direct",
+            "optimization": "O2",
+            "mode": "6",
+            "checks": 64,
+            "executable_sha256": "86d95a9275b552bb9b0105280a64d1f037c9ba088d23582224af727ba572a191",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm32-high-direct",
+            "optimization": "O2",
+            "mode": "8",
+            "checks": 64,
+            "executable_sha256": "86d95a9275b552bb9b0105280a64d1f037c9ba088d23582224af727ba572a191",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm32-high-switch",
+            "optimization": "O0",
+            "mode": "full",
+            "checks": 64,
+            "executable_sha256": "a4225ed14d3fc045798cf7bcfe50c9211b6fac5c47b3a72a0b3dbd20f7f960cc",
+            "qualified": "explicit-abort state publication"
+          },
+          {
+            "source": "rtm32-high-switch",
+            "optimization": "O0",
+            "mode": "0",
+            "checks": 64,
+            "executable_sha256": "a4225ed14d3fc045798cf7bcfe50c9211b6fac5c47b3a72a0b3dbd20f7f960cc",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm32-high-switch",
+            "optimization": "O0",
+            "mode": "2",
+            "checks": 64,
+            "executable_sha256": "a4225ed14d3fc045798cf7bcfe50c9211b6fac5c47b3a72a0b3dbd20f7f960cc",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm32-high-switch",
+            "optimization": "O0",
+            "mode": "6",
+            "checks": 64,
+            "executable_sha256": "a4225ed14d3fc045798cf7bcfe50c9211b6fac5c47b3a72a0b3dbd20f7f960cc",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm32-high-switch",
+            "optimization": "O0",
+            "mode": "8",
+            "checks": 64,
+            "executable_sha256": "a4225ed14d3fc045798cf7bcfe50c9211b6fac5c47b3a72a0b3dbd20f7f960cc",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm32-high-switch",
+            "optimization": "O2",
+            "mode": "full",
+            "checks": 64,
+            "executable_sha256": "1d438d4b58b82b383ccbdfcd1791ad191dd238ad125df82ed607ca066ef5cf72",
+            "qualified": "explicit-abort state publication"
+          },
+          {
+            "source": "rtm32-high-switch",
+            "optimization": "O2",
+            "mode": "0",
+            "checks": 64,
+            "executable_sha256": "1d438d4b58b82b383ccbdfcd1791ad191dd238ad125df82ed607ca066ef5cf72",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm32-high-switch",
+            "optimization": "O2",
+            "mode": "2",
+            "checks": 64,
+            "executable_sha256": "1d438d4b58b82b383ccbdfcd1791ad191dd238ad125df82ed607ca066ef5cf72",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm32-high-switch",
+            "optimization": "O2",
+            "mode": "6",
+            "checks": 64,
+            "executable_sha256": "1d438d4b58b82b383ccbdfcd1791ad191dd238ad125df82ed607ca066ef5cf72",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm32-high-switch",
+            "optimization": "O2",
+            "mode": "8",
+            "checks": 64,
+            "executable_sha256": "1d438d4b58b82b383ccbdfcd1791ad191dd238ad125df82ed607ca066ef5cf72",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm32-llvm-direct",
+            "optimization": "O0",
+            "mode": "full",
+            "checks": 64,
+            "executable_sha256": "a7ea2ccc588b0418829054a6a5a204f6a748ca5ecc3566332d155154f691e535",
+            "qualified": "explicit-abort state publication"
+          },
+          {
+            "source": "rtm32-llvm-direct",
+            "optimization": "O0",
+            "mode": "0",
+            "checks": 64,
+            "executable_sha256": "a7ea2ccc588b0418829054a6a5a204f6a748ca5ecc3566332d155154f691e535",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm32-llvm-direct",
+            "optimization": "O0",
+            "mode": "2",
+            "checks": 64,
+            "executable_sha256": "a7ea2ccc588b0418829054a6a5a204f6a748ca5ecc3566332d155154f691e535",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm32-llvm-direct",
+            "optimization": "O0",
+            "mode": "6",
+            "checks": 64,
+            "executable_sha256": "a7ea2ccc588b0418829054a6a5a204f6a748ca5ecc3566332d155154f691e535",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm32-llvm-direct",
+            "optimization": "O0",
+            "mode": "8",
+            "checks": 64,
+            "executable_sha256": "a7ea2ccc588b0418829054a6a5a204f6a748ca5ecc3566332d155154f691e535",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm32-llvm-direct",
+            "optimization": "O2",
+            "mode": "full",
+            "checks": 64,
+            "executable_sha256": "98690799a6ed2a90e00518cf60693abb2542e7a730093857665977e80e4555bd",
+            "qualified": "explicit-abort state publication"
+          },
+          {
+            "source": "rtm32-llvm-direct",
+            "optimization": "O2",
+            "mode": "0",
+            "checks": 64,
+            "executable_sha256": "98690799a6ed2a90e00518cf60693abb2542e7a730093857665977e80e4555bd",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm32-llvm-direct",
+            "optimization": "O2",
+            "mode": "2",
+            "checks": 64,
+            "executable_sha256": "98690799a6ed2a90e00518cf60693abb2542e7a730093857665977e80e4555bd",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm32-llvm-direct",
+            "optimization": "O2",
+            "mode": "6",
+            "checks": 64,
+            "executable_sha256": "98690799a6ed2a90e00518cf60693abb2542e7a730093857665977e80e4555bd",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm32-llvm-direct",
+            "optimization": "O2",
+            "mode": "8",
+            "checks": 64,
+            "executable_sha256": "98690799a6ed2a90e00518cf60693abb2542e7a730093857665977e80e4555bd",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm32-llvm-switch",
+            "optimization": "O0",
+            "mode": "full",
+            "checks": 64,
+            "executable_sha256": "fd66dc8a28ce829405968b1885af5e17e35f813aa2399f0804f0b7ab27cbec34",
+            "qualified": "explicit-abort state publication"
+          },
+          {
+            "source": "rtm32-llvm-switch",
+            "optimization": "O0",
+            "mode": "0",
+            "checks": 64,
+            "executable_sha256": "fd66dc8a28ce829405968b1885af5e17e35f813aa2399f0804f0b7ab27cbec34",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm32-llvm-switch",
+            "optimization": "O0",
+            "mode": "2",
+            "checks": 64,
+            "executable_sha256": "fd66dc8a28ce829405968b1885af5e17e35f813aa2399f0804f0b7ab27cbec34",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm32-llvm-switch",
+            "optimization": "O0",
+            "mode": "6",
+            "checks": 64,
+            "executable_sha256": "fd66dc8a28ce829405968b1885af5e17e35f813aa2399f0804f0b7ab27cbec34",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm32-llvm-switch",
+            "optimization": "O0",
+            "mode": "8",
+            "checks": 64,
+            "executable_sha256": "fd66dc8a28ce829405968b1885af5e17e35f813aa2399f0804f0b7ab27cbec34",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm32-llvm-switch",
+            "optimization": "O2",
+            "mode": "full",
+            "checks": 64,
+            "executable_sha256": "bafc87e198cc7cd387c807298bed56eb6cae5734c8d69fdb656c782829f6ca20",
+            "qualified": "explicit-abort state publication"
+          },
+          {
+            "source": "rtm32-llvm-switch",
+            "optimization": "O2",
+            "mode": "0",
+            "checks": 64,
+            "executable_sha256": "bafc87e198cc7cd387c807298bed56eb6cae5734c8d69fdb656c782829f6ca20",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm32-llvm-switch",
+            "optimization": "O2",
+            "mode": "2",
+            "checks": 64,
+            "executable_sha256": "bafc87e198cc7cd387c807298bed56eb6cae5734c8d69fdb656c782829f6ca20",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm32-llvm-switch",
+            "optimization": "O2",
+            "mode": "6",
+            "checks": 64,
+            "executable_sha256": "bafc87e198cc7cd387c807298bed56eb6cae5734c8d69fdb656c782829f6ca20",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm32-llvm-switch",
+            "optimization": "O2",
+            "mode": "8",
+            "checks": 64,
+            "executable_sha256": "bafc87e198cc7cd387c807298bed56eb6cae5734c8d69fdb656c782829f6ca20",
+            "qualified": "CPUID refusal without state publication"
+          }
+        ],
+        "commands_sha256": "ac32f6394164ff3004f1c480871e1b464cb91e12f6e8682f7aea701bc38f3498",
+        "script_sha256": "672948d8f5cf6e6804c5034853245f3007c8e3f4e3dccdf0c500ae42cc656663"
+      }
+    },
+    "new": {
+      "file": "/mnt/data/neverd-rtm-pair-20261101/new-script-sde/qualification.json",
+      "sha256": "d8844a99e92f646bba2e2c7bc6756aaf054509ea9aec6d20fab0287f2f79dd86",
+      "report": {
+        "passed": true,
+        "physical_rtm_qualified": false,
+        "early_abort_provider_publication_qualified": false,
+        "tools": {
+          "compiler": {
+            "path": "/mnt/data/neverd-native-system-returns-20261029/build-neverc/bin/neverc",
+            "sha256": "715dd4269412821a1c531ab2481cb0fe448ddebbb6663b57ab6f3f2e0d819db4"
+          },
+          "sde": {
+            "path": "/mnt/data/neverd-bitscan-validation/claude-ntos0/tools/sde-external-10.13.1-2026-07-28-lin/sde64",
+            "sha256": "257872adf7e5cb0855c6774539590587238302bdcd90ddfccca074e9c4c4a3f5"
+          },
+          "host": {
+            "path": "/usr/lib/llvm-23/bin/clang",
+            "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
+          },
+          "llc": {
+            "path": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc",
+            "sha256": "42bba0d2cc437a152a5035dfbde446fb6913ba02b0ed87642169937b3eee5484"
+          }
+        },
+        "new_pass_manager": true,
+        "sources": {
+          "rtm16-high-direct": {
+            "source_sha256": "b7eaa345b529e2e10ec23c7cf82372de2f7fe49659b2916414f32bac8614bfaf",
+            "manifest_sha256": "6347457026ea6b66c1eade4a39b4aac25c92991f3d03419dbacb76dd43d889f8",
+            "exported_test_sha256": "eae7072348b5bce901cacc2e8f08c460615dcc66cb1ac6bc2d7e741ea4282264",
+            "compiler_input_sha256": "dce777c5c21333e2b95c16aaae6c3897358b2806f6e4ca8420f8854edbe76b97",
+            "source_preserved_verbatim": true,
+            "harness_extension": "Require CPUID admission and exact status from arguments"
+          },
+          "rtm16-high-switch": {
+            "source_sha256": "9378d86e03f5457f8038b396bc08742c0f6ced7b7f6e0ef9e1466d1295699acd",
+            "manifest_sha256": "afa26ea3828580a6d652c337e1687b4e8641f9352029bb0b1034012da22d1a88",
+            "exported_test_sha256": "f22c42c59da215b2aa49d09a5097ad63585b8e5519cbadf8251d09464889dd0a",
+            "compiler_input_sha256": "d6baea2782057d4081caf518ea34d468d8faf58d45c6893c8d5e4a99d6c442eb",
+            "source_preserved_verbatim": true,
+            "harness_extension": "Require CPUID admission and exact status from arguments"
+          },
+          "rtm16-llvm-direct": {
+            "source_sha256": "6a6acda68c9909b3bed55b76ab035052878c5e113c17a4fbce7167382b5b7f9e",
+            "manifest_sha256": "1e931e82d6973989b532d06958d45720ce89574402b460a435c8dd47ddf57ef9",
+            "exported_test_sha256": "f7582f90bfcb2614598c0893164523392793b7c7829a9c0e1351092b48fc2bc8",
+            "compiler_input_sha256": "99626671373454895af2f92e3cef285860fe8eb408ed973be805fdc7ba74709e",
+            "source_preserved_verbatim": true,
+            "harness_extension": "Require CPUID admission and exact status from arguments"
+          },
+          "rtm16-llvm-switch": {
+            "source_sha256": "2eaadb9b76c596da1f5d7de194401b65bc87d176dd96b4254a536978311aafe3",
+            "manifest_sha256": "a6543de7d920eafe72b5d79ec0cc296c0b4957d352a377504b5513cf8992a59b",
+            "exported_test_sha256": "eb6655100128e78e76c3ca33d191d3498b3bc4062978bc22ce83123bb18c6f6c",
+            "compiler_input_sha256": "4275496d7ef825f8d88e2a2cd0cc326c71680eed73093157f4522a52a3633470",
+            "source_preserved_verbatim": true,
+            "harness_extension": "Require CPUID admission and exact status from arguments"
+          },
+          "rtm32-high-direct": {
+            "source_sha256": "97965a6f5d971318a82bd9e17f88e4e9271c647e1e2dae5f90af1773c05991bd",
+            "manifest_sha256": "023ebca5cdb627f87931b4c8720e654035bb5411fec4a3ad234fe7068224b937",
+            "exported_test_sha256": "f34b7ad46f86c566f1f53e1cef0357b9a85ae3714526e770826c97b79c083a70",
+            "compiler_input_sha256": "c7a45d51816074e9ea7be2926d17d854416d1f1f38666c451c84153bee6f77c9",
+            "source_preserved_verbatim": true,
+            "harness_extension": "Require CPUID admission and exact status from arguments"
+          },
+          "rtm32-high-switch": {
+            "source_sha256": "533d4fc804f76dc2a1f43a939bfbd922655f1f2699d51b4a662a3f225755fd7c",
+            "manifest_sha256": "fa620a1b732dac08bc4d758450da76ce49cefe7840a8f0498efe3155bff09e00",
+            "exported_test_sha256": "b2f8870e4e92d02f595598da8616493020ca232f881bc09fc717ecdd861633e2",
+            "compiler_input_sha256": "145957d477aa228e63de6d2f06ae1d837d29fb63bef31760d7f5d96d86b32b6a",
+            "source_preserved_verbatim": true,
+            "harness_extension": "Require CPUID admission and exact status from arguments"
+          },
+          "rtm32-llvm-direct": {
+            "source_sha256": "115c33d9cd142f01feabd3bf6844cc6eccaba9115507555b7a264cc59538e66b",
+            "manifest_sha256": "37636ed438a457e49e689066834b1da0c1d267f84bdf52524ed5ecb2297d396a",
+            "exported_test_sha256": "2e0b708400fc2ea8d76cea3a94ef8817db014f63b543ca1c16e91ee5384f8e20",
+            "compiler_input_sha256": "3ee87b4d53aec85c5aa264517a4c728f52b8018bb930b03b28c84b1f19ade5c0",
+            "source_preserved_verbatim": true,
+            "harness_extension": "Require CPUID admission and exact status from arguments"
+          },
+          "rtm32-llvm-switch": {
+            "source_sha256": "d095de09bdcda0fb26381ed2c7881775cad46701e0236f13aff4f478bb0ff48b",
+            "manifest_sha256": "c4554ff02c415701d50f15a10a7bf79613b093edfdbb1331769c8710c4bfe753",
+            "exported_test_sha256": "a7f49c1f40ea800c404dfae208329f08f7576b7750c5701d608e0382529918b6",
+            "compiler_input_sha256": "4610bd6c573b51bb6e5fa17b84140013ba3b24d6ea6cfa4ceaac1625a19b0869",
+            "source_preserved_verbatim": true,
+            "harness_extension": "Require CPUID admission and exact status from arguments"
+          }
+        },
+        "profiles": [
+          {
+            "source": "rtm16-high-direct",
+            "optimization": "O0",
+            "mode": "full",
+            "checks": 64,
+            "executable_sha256": "c03cda7978d815b02a2afa61ffe03be93fb251a087af2a15d77c955464c686ff",
+            "qualified": "explicit-abort state publication"
+          },
+          {
+            "source": "rtm16-high-direct",
+            "optimization": "O0",
+            "mode": "0",
+            "checks": 64,
+            "executable_sha256": "c03cda7978d815b02a2afa61ffe03be93fb251a087af2a15d77c955464c686ff",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm16-high-direct",
+            "optimization": "O0",
+            "mode": "2",
+            "checks": 64,
+            "executable_sha256": "c03cda7978d815b02a2afa61ffe03be93fb251a087af2a15d77c955464c686ff",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm16-high-direct",
+            "optimization": "O0",
+            "mode": "6",
+            "checks": 64,
+            "executable_sha256": "c03cda7978d815b02a2afa61ffe03be93fb251a087af2a15d77c955464c686ff",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm16-high-direct",
+            "optimization": "O0",
+            "mode": "8",
+            "checks": 64,
+            "executable_sha256": "c03cda7978d815b02a2afa61ffe03be93fb251a087af2a15d77c955464c686ff",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm16-high-direct",
+            "optimization": "O2",
+            "mode": "full",
+            "checks": 64,
+            "executable_sha256": "30fb3fffae3e8118f7ec6e3d9aaf3448075d1ab5284e5b16f359d83a997a6204",
+            "qualified": "explicit-abort state publication"
+          },
+          {
+            "source": "rtm16-high-direct",
+            "optimization": "O2",
+            "mode": "0",
+            "checks": 64,
+            "executable_sha256": "30fb3fffae3e8118f7ec6e3d9aaf3448075d1ab5284e5b16f359d83a997a6204",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm16-high-direct",
+            "optimization": "O2",
+            "mode": "2",
+            "checks": 64,
+            "executable_sha256": "30fb3fffae3e8118f7ec6e3d9aaf3448075d1ab5284e5b16f359d83a997a6204",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm16-high-direct",
+            "optimization": "O2",
+            "mode": "6",
+            "checks": 64,
+            "executable_sha256": "30fb3fffae3e8118f7ec6e3d9aaf3448075d1ab5284e5b16f359d83a997a6204",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm16-high-direct",
+            "optimization": "O2",
+            "mode": "8",
+            "checks": 64,
+            "executable_sha256": "30fb3fffae3e8118f7ec6e3d9aaf3448075d1ab5284e5b16f359d83a997a6204",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm16-high-switch",
+            "optimization": "O0",
+            "mode": "full",
+            "checks": 64,
+            "executable_sha256": "84969b87fb20cd71290ad177285447a51e82d84e5387b6d963c87051b2dbe9a5",
+            "qualified": "explicit-abort state publication"
+          },
+          {
+            "source": "rtm16-high-switch",
+            "optimization": "O0",
+            "mode": "0",
+            "checks": 64,
+            "executable_sha256": "84969b87fb20cd71290ad177285447a51e82d84e5387b6d963c87051b2dbe9a5",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm16-high-switch",
+            "optimization": "O0",
+            "mode": "2",
+            "checks": 64,
+            "executable_sha256": "84969b87fb20cd71290ad177285447a51e82d84e5387b6d963c87051b2dbe9a5",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm16-high-switch",
+            "optimization": "O0",
+            "mode": "6",
+            "checks": 64,
+            "executable_sha256": "84969b87fb20cd71290ad177285447a51e82d84e5387b6d963c87051b2dbe9a5",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm16-high-switch",
+            "optimization": "O0",
+            "mode": "8",
+            "checks": 64,
+            "executable_sha256": "84969b87fb20cd71290ad177285447a51e82d84e5387b6d963c87051b2dbe9a5",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm16-high-switch",
+            "optimization": "O2",
+            "mode": "full",
+            "checks": 64,
+            "executable_sha256": "ca3273623e106985bc6066d8fc4991f86c4ba362dc63ec43b82101c243169225",
+            "qualified": "explicit-abort state publication"
+          },
+          {
+            "source": "rtm16-high-switch",
+            "optimization": "O2",
+            "mode": "0",
+            "checks": 64,
+            "executable_sha256": "ca3273623e106985bc6066d8fc4991f86c4ba362dc63ec43b82101c243169225",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm16-high-switch",
+            "optimization": "O2",
+            "mode": "2",
+            "checks": 64,
+            "executable_sha256": "ca3273623e106985bc6066d8fc4991f86c4ba362dc63ec43b82101c243169225",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm16-high-switch",
+            "optimization": "O2",
+            "mode": "6",
+            "checks": 64,
+            "executable_sha256": "ca3273623e106985bc6066d8fc4991f86c4ba362dc63ec43b82101c243169225",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm16-high-switch",
+            "optimization": "O2",
+            "mode": "8",
+            "checks": 64,
+            "executable_sha256": "ca3273623e106985bc6066d8fc4991f86c4ba362dc63ec43b82101c243169225",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm16-llvm-direct",
+            "optimization": "O0",
+            "mode": "full",
+            "checks": 64,
+            "executable_sha256": "c6330616850366a3797d58abbc496c9bfb3f217c93a0732c9a1bf0a156f9ba6f",
+            "qualified": "explicit-abort state publication"
+          },
+          {
+            "source": "rtm16-llvm-direct",
+            "optimization": "O0",
+            "mode": "0",
+            "checks": 64,
+            "executable_sha256": "c6330616850366a3797d58abbc496c9bfb3f217c93a0732c9a1bf0a156f9ba6f",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm16-llvm-direct",
+            "optimization": "O0",
+            "mode": "2",
+            "checks": 64,
+            "executable_sha256": "c6330616850366a3797d58abbc496c9bfb3f217c93a0732c9a1bf0a156f9ba6f",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm16-llvm-direct",
+            "optimization": "O0",
+            "mode": "6",
+            "checks": 64,
+            "executable_sha256": "c6330616850366a3797d58abbc496c9bfb3f217c93a0732c9a1bf0a156f9ba6f",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm16-llvm-direct",
+            "optimization": "O0",
+            "mode": "8",
+            "checks": 64,
+            "executable_sha256": "c6330616850366a3797d58abbc496c9bfb3f217c93a0732c9a1bf0a156f9ba6f",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm16-llvm-direct",
+            "optimization": "O2",
+            "mode": "full",
+            "checks": 64,
+            "executable_sha256": "d2e5d6bef9cf4ddfc05d812f63ab68c5bd4c69563eb068b3c117ea1c4df60c44",
+            "qualified": "explicit-abort state publication"
+          },
+          {
+            "source": "rtm16-llvm-direct",
+            "optimization": "O2",
+            "mode": "0",
+            "checks": 64,
+            "executable_sha256": "d2e5d6bef9cf4ddfc05d812f63ab68c5bd4c69563eb068b3c117ea1c4df60c44",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm16-llvm-direct",
+            "optimization": "O2",
+            "mode": "2",
+            "checks": 64,
+            "executable_sha256": "d2e5d6bef9cf4ddfc05d812f63ab68c5bd4c69563eb068b3c117ea1c4df60c44",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm16-llvm-direct",
+            "optimization": "O2",
+            "mode": "6",
+            "checks": 64,
+            "executable_sha256": "d2e5d6bef9cf4ddfc05d812f63ab68c5bd4c69563eb068b3c117ea1c4df60c44",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm16-llvm-direct",
+            "optimization": "O2",
+            "mode": "8",
+            "checks": 64,
+            "executable_sha256": "d2e5d6bef9cf4ddfc05d812f63ab68c5bd4c69563eb068b3c117ea1c4df60c44",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm16-llvm-switch",
+            "optimization": "O0",
+            "mode": "full",
+            "checks": 64,
+            "executable_sha256": "ada4b9bc41597ca47acb273c2ac35cf77aadf8b14e57cae9f1bccebb18e67aad",
+            "qualified": "explicit-abort state publication"
+          },
+          {
+            "source": "rtm16-llvm-switch",
+            "optimization": "O0",
+            "mode": "0",
+            "checks": 64,
+            "executable_sha256": "ada4b9bc41597ca47acb273c2ac35cf77aadf8b14e57cae9f1bccebb18e67aad",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm16-llvm-switch",
+            "optimization": "O0",
+            "mode": "2",
+            "checks": 64,
+            "executable_sha256": "ada4b9bc41597ca47acb273c2ac35cf77aadf8b14e57cae9f1bccebb18e67aad",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm16-llvm-switch",
+            "optimization": "O0",
+            "mode": "6",
+            "checks": 64,
+            "executable_sha256": "ada4b9bc41597ca47acb273c2ac35cf77aadf8b14e57cae9f1bccebb18e67aad",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm16-llvm-switch",
+            "optimization": "O0",
+            "mode": "8",
+            "checks": 64,
+            "executable_sha256": "ada4b9bc41597ca47acb273c2ac35cf77aadf8b14e57cae9f1bccebb18e67aad",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm16-llvm-switch",
+            "optimization": "O2",
+            "mode": "full",
+            "checks": 64,
+            "executable_sha256": "920c38e91e61c78f0a6ffadd883ab5c7636f8dd12f18c587bdf12a6e4ca83133",
+            "qualified": "explicit-abort state publication"
+          },
+          {
+            "source": "rtm16-llvm-switch",
+            "optimization": "O2",
+            "mode": "0",
+            "checks": 64,
+            "executable_sha256": "920c38e91e61c78f0a6ffadd883ab5c7636f8dd12f18c587bdf12a6e4ca83133",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm16-llvm-switch",
+            "optimization": "O2",
+            "mode": "2",
+            "checks": 64,
+            "executable_sha256": "920c38e91e61c78f0a6ffadd883ab5c7636f8dd12f18c587bdf12a6e4ca83133",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm16-llvm-switch",
+            "optimization": "O2",
+            "mode": "6",
+            "checks": 64,
+            "executable_sha256": "920c38e91e61c78f0a6ffadd883ab5c7636f8dd12f18c587bdf12a6e4ca83133",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm16-llvm-switch",
+            "optimization": "O2",
+            "mode": "8",
+            "checks": 64,
+            "executable_sha256": "920c38e91e61c78f0a6ffadd883ab5c7636f8dd12f18c587bdf12a6e4ca83133",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm32-high-direct",
+            "optimization": "O0",
+            "mode": "full",
+            "checks": 64,
+            "executable_sha256": "e0528a4e0870c07ed7ebb58e956c9f503be48b3b42b48a3dc3c7ed0a2cb46970",
+            "qualified": "explicit-abort state publication"
+          },
+          {
+            "source": "rtm32-high-direct",
+            "optimization": "O0",
+            "mode": "0",
+            "checks": 64,
+            "executable_sha256": "e0528a4e0870c07ed7ebb58e956c9f503be48b3b42b48a3dc3c7ed0a2cb46970",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm32-high-direct",
+            "optimization": "O0",
+            "mode": "2",
+            "checks": 64,
+            "executable_sha256": "e0528a4e0870c07ed7ebb58e956c9f503be48b3b42b48a3dc3c7ed0a2cb46970",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm32-high-direct",
+            "optimization": "O0",
+            "mode": "6",
+            "checks": 64,
+            "executable_sha256": "e0528a4e0870c07ed7ebb58e956c9f503be48b3b42b48a3dc3c7ed0a2cb46970",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm32-high-direct",
+            "optimization": "O0",
+            "mode": "8",
+            "checks": 64,
+            "executable_sha256": "e0528a4e0870c07ed7ebb58e956c9f503be48b3b42b48a3dc3c7ed0a2cb46970",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm32-high-direct",
+            "optimization": "O2",
+            "mode": "full",
+            "checks": 64,
+            "executable_sha256": "46c61fa1d296d626e4575cfaf324e4eb51a06b0ef6e5daaf207dbe1e45c895c8",
+            "qualified": "explicit-abort state publication"
+          },
+          {
+            "source": "rtm32-high-direct",
+            "optimization": "O2",
+            "mode": "0",
+            "checks": 64,
+            "executable_sha256": "46c61fa1d296d626e4575cfaf324e4eb51a06b0ef6e5daaf207dbe1e45c895c8",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm32-high-direct",
+            "optimization": "O2",
+            "mode": "2",
+            "checks": 64,
+            "executable_sha256": "46c61fa1d296d626e4575cfaf324e4eb51a06b0ef6e5daaf207dbe1e45c895c8",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm32-high-direct",
+            "optimization": "O2",
+            "mode": "6",
+            "checks": 64,
+            "executable_sha256": "46c61fa1d296d626e4575cfaf324e4eb51a06b0ef6e5daaf207dbe1e45c895c8",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm32-high-direct",
+            "optimization": "O2",
+            "mode": "8",
+            "checks": 64,
+            "executable_sha256": "46c61fa1d296d626e4575cfaf324e4eb51a06b0ef6e5daaf207dbe1e45c895c8",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm32-high-switch",
+            "optimization": "O0",
+            "mode": "full",
+            "checks": 64,
+            "executable_sha256": "a4225ed14d3fc045798cf7bcfe50c9211b6fac5c47b3a72a0b3dbd20f7f960cc",
+            "qualified": "explicit-abort state publication"
+          },
+          {
+            "source": "rtm32-high-switch",
+            "optimization": "O0",
+            "mode": "0",
+            "checks": 64,
+            "executable_sha256": "a4225ed14d3fc045798cf7bcfe50c9211b6fac5c47b3a72a0b3dbd20f7f960cc",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm32-high-switch",
+            "optimization": "O0",
+            "mode": "2",
+            "checks": 64,
+            "executable_sha256": "a4225ed14d3fc045798cf7bcfe50c9211b6fac5c47b3a72a0b3dbd20f7f960cc",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm32-high-switch",
+            "optimization": "O0",
+            "mode": "6",
+            "checks": 64,
+            "executable_sha256": "a4225ed14d3fc045798cf7bcfe50c9211b6fac5c47b3a72a0b3dbd20f7f960cc",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm32-high-switch",
+            "optimization": "O0",
+            "mode": "8",
+            "checks": 64,
+            "executable_sha256": "a4225ed14d3fc045798cf7bcfe50c9211b6fac5c47b3a72a0b3dbd20f7f960cc",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm32-high-switch",
+            "optimization": "O2",
+            "mode": "full",
+            "checks": 64,
+            "executable_sha256": "90fb3b83a8c8c8a009b41cd62abcdc107a6abb4cbf1a8561b11f0e3823255436",
+            "qualified": "explicit-abort state publication"
+          },
+          {
+            "source": "rtm32-high-switch",
+            "optimization": "O2",
+            "mode": "0",
+            "checks": 64,
+            "executable_sha256": "90fb3b83a8c8c8a009b41cd62abcdc107a6abb4cbf1a8561b11f0e3823255436",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm32-high-switch",
+            "optimization": "O2",
+            "mode": "2",
+            "checks": 64,
+            "executable_sha256": "90fb3b83a8c8c8a009b41cd62abcdc107a6abb4cbf1a8561b11f0e3823255436",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm32-high-switch",
+            "optimization": "O2",
+            "mode": "6",
+            "checks": 64,
+            "executable_sha256": "90fb3b83a8c8c8a009b41cd62abcdc107a6abb4cbf1a8561b11f0e3823255436",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm32-high-switch",
+            "optimization": "O2",
+            "mode": "8",
+            "checks": 64,
+            "executable_sha256": "90fb3b83a8c8c8a009b41cd62abcdc107a6abb4cbf1a8561b11f0e3823255436",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm32-llvm-direct",
+            "optimization": "O0",
+            "mode": "full",
+            "checks": 64,
+            "executable_sha256": "a7ea2ccc588b0418829054a6a5a204f6a748ca5ecc3566332d155154f691e535",
+            "qualified": "explicit-abort state publication"
+          },
+          {
+            "source": "rtm32-llvm-direct",
+            "optimization": "O0",
+            "mode": "0",
+            "checks": 64,
+            "executable_sha256": "a7ea2ccc588b0418829054a6a5a204f6a748ca5ecc3566332d155154f691e535",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm32-llvm-direct",
+            "optimization": "O0",
+            "mode": "2",
+            "checks": 64,
+            "executable_sha256": "a7ea2ccc588b0418829054a6a5a204f6a748ca5ecc3566332d155154f691e535",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm32-llvm-direct",
+            "optimization": "O0",
+            "mode": "6",
+            "checks": 64,
+            "executable_sha256": "a7ea2ccc588b0418829054a6a5a204f6a748ca5ecc3566332d155154f691e535",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm32-llvm-direct",
+            "optimization": "O0",
+            "mode": "8",
+            "checks": 64,
+            "executable_sha256": "a7ea2ccc588b0418829054a6a5a204f6a748ca5ecc3566332d155154f691e535",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm32-llvm-direct",
+            "optimization": "O2",
+            "mode": "full",
+            "checks": 64,
+            "executable_sha256": "a0675978b526d7e5d05b77507a14c4efa7ab9b8324b33cc3dc4607a1a513e4ac",
+            "qualified": "explicit-abort state publication"
+          },
+          {
+            "source": "rtm32-llvm-direct",
+            "optimization": "O2",
+            "mode": "0",
+            "checks": 64,
+            "executable_sha256": "a0675978b526d7e5d05b77507a14c4efa7ab9b8324b33cc3dc4607a1a513e4ac",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm32-llvm-direct",
+            "optimization": "O2",
+            "mode": "2",
+            "checks": 64,
+            "executable_sha256": "a0675978b526d7e5d05b77507a14c4efa7ab9b8324b33cc3dc4607a1a513e4ac",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm32-llvm-direct",
+            "optimization": "O2",
+            "mode": "6",
+            "checks": 64,
+            "executable_sha256": "a0675978b526d7e5d05b77507a14c4efa7ab9b8324b33cc3dc4607a1a513e4ac",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm32-llvm-direct",
+            "optimization": "O2",
+            "mode": "8",
+            "checks": 64,
+            "executable_sha256": "a0675978b526d7e5d05b77507a14c4efa7ab9b8324b33cc3dc4607a1a513e4ac",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm32-llvm-switch",
+            "optimization": "O0",
+            "mode": "full",
+            "checks": 64,
+            "executable_sha256": "fd66dc8a28ce829405968b1885af5e17e35f813aa2399f0804f0b7ab27cbec34",
+            "qualified": "explicit-abort state publication"
+          },
+          {
+            "source": "rtm32-llvm-switch",
+            "optimization": "O0",
+            "mode": "0",
+            "checks": 64,
+            "executable_sha256": "fd66dc8a28ce829405968b1885af5e17e35f813aa2399f0804f0b7ab27cbec34",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm32-llvm-switch",
+            "optimization": "O0",
+            "mode": "2",
+            "checks": 64,
+            "executable_sha256": "fd66dc8a28ce829405968b1885af5e17e35f813aa2399f0804f0b7ab27cbec34",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm32-llvm-switch",
+            "optimization": "O0",
+            "mode": "6",
+            "checks": 64,
+            "executable_sha256": "fd66dc8a28ce829405968b1885af5e17e35f813aa2399f0804f0b7ab27cbec34",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm32-llvm-switch",
+            "optimization": "O0",
+            "mode": "8",
+            "checks": 64,
+            "executable_sha256": "fd66dc8a28ce829405968b1885af5e17e35f813aa2399f0804f0b7ab27cbec34",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm32-llvm-switch",
+            "optimization": "O2",
+            "mode": "full",
+            "checks": 64,
+            "executable_sha256": "76c06bfd74179986db4a05b33e28f42056493e1c5a31096646b02c4afee9de1a",
+            "qualified": "explicit-abort state publication"
+          },
+          {
+            "source": "rtm32-llvm-switch",
+            "optimization": "O2",
+            "mode": "0",
+            "checks": 64,
+            "executable_sha256": "76c06bfd74179986db4a05b33e28f42056493e1c5a31096646b02c4afee9de1a",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm32-llvm-switch",
+            "optimization": "O2",
+            "mode": "2",
+            "checks": 64,
+            "executable_sha256": "76c06bfd74179986db4a05b33e28f42056493e1c5a31096646b02c4afee9de1a",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm32-llvm-switch",
+            "optimization": "O2",
+            "mode": "6",
+            "checks": 64,
+            "executable_sha256": "76c06bfd74179986db4a05b33e28f42056493e1c5a31096646b02c4afee9de1a",
+            "qualified": "CPUID refusal without state publication"
+          },
+          {
+            "source": "rtm32-llvm-switch",
+            "optimization": "O2",
+            "mode": "8",
+            "checks": 64,
+            "executable_sha256": "76c06bfd74179986db4a05b33e28f42056493e1c5a31096646b02c4afee9de1a",
+            "qualified": "CPUID refusal without state publication"
+          }
+        ],
+        "commands_sha256": "17059177a996d4f3a7bef5477f17d7e1a1876f9add83940a73d80e2f23c7f2f1",
+        "script_sha256": "672948d8f5cf6e6804c5034853245f3007c8e3f4e3dccdf0c500ae42cc656663"
+      }
+    }
+  },
+  "sdk_source_equivalence": {
+    "passed": true,
+    "files": [
+      {
+        "file": "rtm16-high-direct.c",
+        "sha256": "b7eaa345b529e2e10ec23c7cf82372de2f7fe49659b2916414f32bac8614bfaf"
+      },
+      {
+        "file": "rtm16-high-direct.json",
+        "sha256": "6347457026ea6b66c1eade4a39b4aac25c92991f3d03419dbacb76dd43d889f8"
+      },
+      {
+        "file": "rtm16-high-direct.test.c",
+        "sha256": "eae7072348b5bce901cacc2e8f08c460615dcc66cb1ac6bc2d7e741ea4282264"
+      },
+      {
+        "file": "rtm16-high-switch.c",
+        "sha256": "9378d86e03f5457f8038b396bc08742c0f6ced7b7f6e0ef9e1466d1295699acd"
+      },
+      {
+        "file": "rtm16-high-switch.json",
+        "sha256": "afa26ea3828580a6d652c337e1687b4e8641f9352029bb0b1034012da22d1a88"
+      },
+      {
+        "file": "rtm16-high-switch.test.c",
+        "sha256": "f22c42c59da215b2aa49d09a5097ad63585b8e5519cbadf8251d09464889dd0a"
+      },
+      {
+        "file": "rtm16-llvm-direct.c",
+        "sha256": "6a6acda68c9909b3bed55b76ab035052878c5e113c17a4fbce7167382b5b7f9e"
+      },
+      {
+        "file": "rtm16-llvm-direct.json",
+        "sha256": "1e931e82d6973989b532d06958d45720ce89574402b460a435c8dd47ddf57ef9"
+      },
+      {
+        "file": "rtm16-llvm-direct.test.c",
+        "sha256": "f7582f90bfcb2614598c0893164523392793b7c7829a9c0e1351092b48fc2bc8"
+      },
+      {
+        "file": "rtm16-llvm-switch.c",
+        "sha256": "2eaadb9b76c596da1f5d7de194401b65bc87d176dd96b4254a536978311aafe3"
+      },
+      {
+        "file": "rtm16-llvm-switch.json",
+        "sha256": "a6543de7d920eafe72b5d79ec0cc296c0b4957d352a377504b5513cf8992a59b"
+      },
+      {
+        "file": "rtm16-llvm-switch.test.c",
+        "sha256": "eb6655100128e78e76c3ca33d191d3498b3bc4062978bc22ce83123bb18c6f6c"
+      },
+      {
+        "file": "rtm32-high-direct.c",
+        "sha256": "97965a6f5d971318a82bd9e17f88e4e9271c647e1e2dae5f90af1773c05991bd"
+      },
+      {
+        "file": "rtm32-high-direct.json",
+        "sha256": "023ebca5cdb627f87931b4c8720e654035bb5411fec4a3ad234fe7068224b937"
+      },
+      {
+        "file": "rtm32-high-direct.test.c",
+        "sha256": "f34b7ad46f86c566f1f53e1cef0357b9a85ae3714526e770826c97b79c083a70"
+      },
+      {
+        "file": "rtm32-high-switch.c",
+        "sha256": "533d4fc804f76dc2a1f43a939bfbd922655f1f2699d51b4a662a3f225755fd7c"
+      },
+      {
+        "file": "rtm32-high-switch.json",
+        "sha256": "fa620a1b732dac08bc4d758450da76ce49cefe7840a8f0498efe3155bff09e00"
+      },
+      {
+        "file": "rtm32-high-switch.test.c",
+        "sha256": "b2f8870e4e92d02f595598da8616493020ca232f881bc09fc717ecdd861633e2"
+      },
+      {
+        "file": "rtm32-llvm-direct.c",
+        "sha256": "115c33d9cd142f01feabd3bf6844cc6eccaba9115507555b7a264cc59538e66b"
+      },
+      {
+        "file": "rtm32-llvm-direct.json",
+        "sha256": "37636ed438a457e49e689066834b1da0c1d267f84bdf52524ed5ecb2297d396a"
+      },
+      {
+        "file": "rtm32-llvm-direct.test.c",
+        "sha256": "2e0b708400fc2ea8d76cea3a94ef8817db014f63b543ca1c16e91ee5384f8e20"
+      },
+      {
+        "file": "rtm32-llvm-switch.c",
+        "sha256": "d095de09bdcda0fb26381ed2c7881775cad46701e0236f13aff4f478bb0ff48b"
+      },
+      {
+        "file": "rtm32-llvm-switch.json",
+        "sha256": "c4554ff02c415701d50f15a10a7bf79613b093edfdbb1331769c8710c4bfe753"
+      },
+      {
+        "file": "rtm32-llvm-switch.test.c",
+        "sha256": "a7f49c1f40ea800c404dfae208329f08f7576b7750c5701d608e0382529918b6"
+      }
+    ]
+  },
+  "neverd_source_sha256": {
+    "lib/pipeline/X64RtmAbortRegions.cpp": "2141d43c2223295c82d9fe47b67221f8720bd677ef12de6a304f2a247f8cef5d",
+    "lib/pipeline/X64RtmAbortRegions.h": "9221ff936db0576755e85d6af6e63e557795edf7d5cd6857a459fd99fcdfa799",
+    "lib/pipeline/X64ContinuationExport.cpp": "31e6653a4cc50c171a58acfc1f8c4a155405efff72ea07a431d0f0089314ec2e",
+    "unittests/devirtualization/x86_64/X64RtmAbortExportTests.inc": "9b7240213e946148223fc794fff6d431b73e1152a076063036dca81beb6c0cf4",
+    "scripts/isa/x86/verify_rtm_exports.py": "672948d8f5cf6e6804c5034853245f3007c8e3f4e3dccdf0c500ae42cc656663"
+  },
+  "docs_check": {
+    "file": "/mnt/data/neverd-rtm-pair-20261101/docs-check-final.log",
+    "sha256": "891c1f2a9e40d3952b23e9e79b35ac05e77427ad91de98357bc3829b3ed7ab14"
+  },
+  "format_check": {
+    "file": "/mnt/data/neverd-rtm-pair-20261101/nd-format-final.log",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "limitations": [
+    "No physical RTM host execution was qualified.",
+    "The source provider early-abort publication branch cannot execute in this SDE forced mode because CPUID.RTM is cleared; direct intrinsic status transport is independently qualified.",
+    "General RTM checkpoints, nested transactions, memory rollback, faults and asynchronous event continuation remain outside this immediate-abort contract."
+  ]
+}
