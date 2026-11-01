@@ -535,6 +535,9 @@ enum class Intrinsic : uint16_t {
   // Append-only: an HLE memory step publishes its original GPR destinations.
   X86HleState,
 
+  // Append-only: software-managed SMM banks before terminal native RSM.
+  X86SmmReturnContext,
+
   _Count = 16000
 };
 
@@ -655,6 +658,8 @@ constexpr X86VirtualizationContract x86VirtualizationContract(Intrinsic Id) {
     return {"hyperv.call", R::None, 4, -1, 0, false};
   case Intrinsic::X86SvmRunContext:
     return {"vmrun.context", R::None, 2, 0, 144, false};
+  case Intrinsic::X86SmmReturnContext:
+    return {"rsm.context", R::None, 1, 0, 40, false};
   case Intrinsic::X86KvmVmcall:
     return {"vmcall.kvm", R::Value, 5, -1, 0, false};
   case Intrinsic::X86KvmVmmcall:

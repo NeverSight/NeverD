@@ -244,6 +244,8 @@ renderX86VirtualizationExpression(Arch TargetArch, const HighExpr &Expression,
     return "__builtin_ia32_hyperv_call((void *)(" + Arguments[0] +
            "), (void *)(" + Arguments[1] + "), (void *)(" + Arguments[2] +
            "), " + std::to_string(*Shape.VectorStride) + ")";
+  if (Id == Intrinsic::X86SmmReturnContext)
+    return "__builtin_ia32_rsm_context((const void *)(" + Arguments[0] + "))";
   if (Id == Intrinsic::X86SvmRunContext)
     return "__builtin_ia32_vmrun_context((void *)(" + Arguments[0] + "), " +
            std::to_string(*Shape.AddressWidth) + ")";
@@ -367,7 +369,8 @@ bool isX86KvmHypercallNativeName(llvm::StringRef Name) {
 bool isX86VirtualizationNativeName(llvm::StringRef Name) {
   if (isX86KvmHypercallNativeName(Name) || isX86SnpNativeName(Name))
     return true;
-  if (Name == "llvm.x86.vmrun.context" || Name == "llvm.x86.hyperv.call")
+  if (Name == "llvm.x86.rsm.context" || Name == "llvm.x86.vmrun.context" ||
+      Name == "llvm.x86.hyperv.call")
     return true;
   if (!Name.consume_front("llvm.x86."))
     return false;
@@ -449,6 +452,26 @@ renderX86VirtualizationNativeCall(Arch TargetArch, const llvm::CallBase &Call,
       Text += Arguments[I];
     }
     return Text + ");\n";
+  }
+  if (Name == "llvm.x86.rsm.context") {
+    bool Valid = TargetArch == Arch::X64 && Callee->isDeclaration() &&
+                 !Callee->isVarArg() && !Call.getNumOperandBundles() &&
+                 Call.getCallingConv() == llvm::CallingConv::C &&
+                 Call.getType()->isVoidTy() && !ResultLive &&
+                 Call.arg_size() == 1 && Arguments.size() == 1 &&
+                 Call.getMemoryEffects() == llvm::MemoryEffects::unknown() &&
+                 Call.doesNotReturn() &&
+                 Call.hasFnAttr(llvm::Attribute::NoUnwind) &&
+                 Call.hasFnAttr(llvm::Attribute::Convergent) &&
+                 Call.hasFnAttr(llvm::Attribute::NoDuplicate);
+    if (Valid) {
+      const auto *Type = Call.getArgOperand(0)->getType();
+      Valid = Type->isPointerTy() && Type->getPointerAddressSpace() == 0;
+    }
+    if (!Valid)
+      throw std::invalid_argument("invalid x64 RSM context intrinsic");
+    return "__builtin_ia32_rsm_context((const void *)(" + Arguments[0] +
+           "));\n";
   }
   if (Name == "llvm.x86.vmrun.context") {
     // This extension can be carried by a module read with an older SDK. Its

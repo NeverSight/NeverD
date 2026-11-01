@@ -108,6 +108,21 @@ llvm::Value *MedLLVMEmitter::emitX86Virtualization(const MedOp &Op,
     Function->addFnAttr(llvm::Attribute::NoUnwind);
     return Builder.CreateCall(Callee, Arguments, "kvm.status");
   }
+  if (Id == Intrinsic::X86SmmReturnContext) {
+    auto *Pointer = resolveAtomicMemoryPtr(Op.Inputs[1], C.MemoryBytes,
+                                           Builder.getInt8Ty(), Builder);
+    auto *Type = llvm::FunctionType::get(Builder.getVoidTy(),
+                                         {Builder.getPtrTy()}, false);
+    auto Callee = Mod->getOrInsertFunction("llvm.x86.rsm.context", Type);
+    auto *Function = llvm::cast<llvm::Function>(Callee.getCallee());
+    Function->setMemoryEffects(llvm::MemoryEffects::unknown());
+    Function->addFnAttr(llvm::Attribute::Convergent);
+    Function->addFnAttr(llvm::Attribute::NoDuplicate);
+    Function->addFnAttr(llvm::Attribute::NoUnwind);
+    Function->addFnAttr(llvm::Attribute::NoReturn);
+    Builder.CreateCall(Callee, {Pointer});
+    return nullptr;
+  }
   if (Id == Intrinsic::X86SvmRunContext) {
     auto *Pointer = resolveAtomicMemoryPtr(Op.Inputs[1], C.MemoryBytes,
                                            Builder.getInt8Ty(), Builder);

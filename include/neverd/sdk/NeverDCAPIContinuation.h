@@ -38,6 +38,13 @@ extern "C" {
 /// BNDPRESERVE set. Bounds faults stop with status 14 at the original PC before
 /// exception delivery. V10/V11 require mxcsr_mask but no paging/Intel-return
 /// bindings; neither inherits the V6/V7/V8/V9 state or return capabilities.
+/// native-smm-v12 extends V4 to 2368 bytes and admits canonical RSM in active
+/// native SMM, code64, XCR0=7. It requires mxcsr_mask and
+/// segment_base_msr_address_bits. The SMM.XState image owns x87; explicit
+/// vectors/MXCSR and CR2/CR8/KernelGSBase are transported before native RSM.
+/// Successful transfer abandons the compiler frame and the bounded driver;
+/// hardware consumes the ambient SMI save image. Invalid state returns 5.
+/// This does not emulate SMI entry or supply SMRAM, other MSRs or devices.
 ///
 /// V6 event_delivery exports neverd_x64_deliver_event_v6 for an explicit
 /// selected fault/trap/IRQ/NMI, including compatibility entry and CPL0..3.

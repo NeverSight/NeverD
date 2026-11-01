@@ -54,6 +54,7 @@ namespace neverd {
 
 static bool supportsX86NativeExtensions(const llvm::Module &Mod) {
   for (const auto *Name : {
+           "llvm.x86.rsm.context",
            "llvm.x86.vmrun.context",
            "llvm.x86.vmcall.kvm",
            "llvm.x86.vmmcall.kvm",

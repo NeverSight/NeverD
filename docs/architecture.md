@@ -15589,3 +15589,9 @@ responsibilities. Canonical UD2 and admitted unsigned 64-bit DIV may deliver
 #UD/#DE directly under the V6 event binding. See
 [the event interface](x86-event-delivery.md); legacy non-IA-32e dispatch and
 SMM/SGX transitions do not acquire semantics from this interface.
+
+The native SMM continuation projection owns canonical RSM admission in
+`X64ContinuationSmm.h`. SVM and SMM share standard XSAVE image checks and
+SIMD import in `X64ContinuationAvxImage.h`. The LLVM terminal context intrinsic
+owns the final control/MSR writes and inseparable XRSTOR/RSM sequence; neither
+source emitter models a vendor's private SMRAM layout.

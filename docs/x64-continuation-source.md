@@ -759,3 +759,11 @@ admitted unsigned 64-bit DIV fault conditions through that owner. See the
 [event contract and native qualification](x86-event-delivery.md) for the input
 layout, error-code/RF/CR2 rules, interruptibility and remaining memory/event
 boundaries. Older requests keep their original admission and state layout.
+
+## Native SMM return state
+
+`native-smm-v12` exports a 2368-byte state and canonical RSM through
+`llvm.x86.rsm.context` / `__builtin_ia32_rsm_context`. See the
+[native SMM return contract](x86-smm-return.md) for state ownership, native
+execution requirements and verification. A successful RSM abandons the
+compiler frame; it does not return a dispatcher status.

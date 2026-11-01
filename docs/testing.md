@@ -18201,3 +18201,23 @@ it skips explicitly when KVM is unavailable. See [the coverage matrix and
 remaining boundaries](x86-event-delivery.md). The all-vector INT/INT3 and
 accessed-bit/TSS/frame alias tests remain required because the same descriptor
 and frame owner is shared.
+
+### Native SMM software-state restoration
+
+`X64ContinuationExportTest.SmmReturn*` in
+`NeverDX64ContinuationExportTests` checks both C routes, input admission before
+state/RAM mutation, explicit SIMD import and the terminal native transfer.
+Set `NEVERD_ISA_REGRESSION_ARTIFACT_DIR` to capture the sources and manifests.
+The SVM continuation tests remain required because SMM and SVM share standard
+XSAVE image validation and explicit SSE/AVX import.
+
+`scripts/isa/x86/verify_smm_return.py --sources CAPTURE --compiler NEVERC
+--compiler-source NEVERC_SOURCE --llvm-bin LLVM_BIN --keep OUTPUT` compiles
+both exports with NeverC and the full LLVM legacy/new backends at O0/O2,
+then compares them with independent original XRSTOR/RSM bytes inside native
+KVM-mediated SMM. Each profile covers 3,072 state pairs, four compiler frame
+shapes, initial/populated x87/SSE/AVX, system registers, event state and both
+memory spaces. Omitting XRSTOR must fail the state oracle. This verifier
+requires Linux x64, KVM SMM with two address spaces, XSAVE and AVX; it fails
+explicitly when the required runtime is unavailable. See
+[the state ownership and hardware boundary](x86-smm-return.md).

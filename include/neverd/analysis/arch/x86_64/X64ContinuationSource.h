@@ -181,6 +181,17 @@ struct alignas(16) X64ContinuationStateV11 {
   uint8_t Reserved[5] = {};
 };
 
+/// V12 extends V4. SMM.XState owns x87; explicit vector/MXCSR cells are
+/// copied into its 832-byte standard XSAVE image. Other SMM slots are transport
+/// outputs populated from the core immediately before native RSM. The actual
+/// processor's ambient SMI save image owns all RSM-restored banks.
+struct alignas(16) X64ContinuationStateV12 {
+  X64ContinuationStateV4 Core;
+  struct {
+    uint64_t XState = 0, XStateMask = 0, CR2 = 0, CR8 = 0, KernelGSBase = 0;
+  } SMM;
+};
+
 enum class X64ContinuationExitV1 : uint64_t {
   Continue = 0,
   Call = 1,
@@ -350,6 +361,15 @@ enum class X64ContinuationProfile : uint8_t {
   /// compiler-created branches cannot initialize the host bounds bank.
   /// The explicit projection does not execute host MPX instructions.
   MpxNoFaultV11,
+  /// Active native SMM, code64, XCR0=7 and successful sequential RAM. Only
+  /// canonical RSM is admitted. CR2/CR8/KernelGSBase and x87/SSE/AVX are
+  /// restored immediately before native RSM; the compiler frame is abandoned.
+  /// SMRAM, other live MSRs/debug/device state, SMI entry, and CPU admission
+  /// belong to the native environment. CET, VMX/SVM, enclave execution,
+  /// asynchronous events and faults are outside this profile. State/image and
+  /// compiler storage remain mapped and disjoint from each other and SMRAM.
+  /// SegmentBaseMSRAddressBits binds the CPU's canonical MSR width.
+  NativeSmmNoFaultV12,
 };
 
 /// Bind the original processor's null FS/GS load behavior. No vendor-wide
@@ -362,7 +382,7 @@ struct X64ContinuationSourceOptions {
   X64ContinuationProfile Profile = X64ContinuationProfile::Unspecified;
   std::optional<uint32_t> MXCSRMask;
   /// V5..V9 require 48 or 57 according to active paging, independently of
-  /// the processor's MSR canonical width. V1..V4 and V10/V11 do not accept it.
+  /// the processor's MSR canonical width. V1..V4 and V10..V12 do not accept it.
   std::optional<unsigned> PagingAddressBits;
   /// V6 and later. Bind the actual original CPU's null LFS/LGS base transition.
   /// Without this declaration those loads reject before any state/RAM write

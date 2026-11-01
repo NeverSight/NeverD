@@ -67,6 +67,8 @@ enum class InterpreterProfileProjection : uint8_t {
   X64SnpV1,
   /// HLE requires a native memory/publication boundary outside external TSX.
   X64HleV1,
+  /// Canonical RSM requires active SMM and explicit software-owned banks.
+  X64SmmReturnV1,
 };
 
 } // namespace neverd::analysis

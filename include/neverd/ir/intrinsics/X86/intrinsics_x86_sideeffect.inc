@@ -306,3 +306,5 @@ SIDEEFFECT(Intrinsic::X86HyperVCall);
 SIDEEFFECT(Intrinsic::X86SevVmgexit);
 
 SIDEEFFECT(Intrinsic::X86HleState);
+
+SIDEEFFECT(Intrinsic::X86SmmReturnContext);

@@ -345,6 +345,11 @@ public:
         Result.ProfileProjection = InterpreterProfileProjection::X64HypercallV1;
         Result.UndefinedEffects.Diagnostic =
             "hypercall requires an explicit hypervisor register/state ABI";
+      } else if (ContinuationSnapshot && Insn.Id == X86_INS_RSM &&
+                 Result.NativeBytes == std::vector<uint8_t>({0x0f, 0xaa})) {
+        Result.ProfileProjection = InterpreterProfileProjection::X64SmmReturnV1;
+        Result.UndefinedEffects.Diagnostic =
+            "RSM requires active SMM and explicit software state ownership";
       } else if (ContinuationSnapshot &&
                  x64VmrunAddressWidth(Result.NativeBytes)) {
         Result.ProfileProjection = InterpreterProfileProjection::X64SvmRunV1;

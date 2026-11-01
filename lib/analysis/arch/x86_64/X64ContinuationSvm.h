@@ -10,6 +10,8 @@
 #ifndef NEVERD_LIB_ANALYSIS_ARCH_X86_64_X64CONTINUATIONSVM_H
 #define NEVERD_LIB_ANALYSIS_ARCH_X86_64_X64CONTINUATIONSVM_H
 
+#include "X64ContinuationAvxImage.h"
+
 #include "neverd/analysis/arch/x86_64/X64ContinuationSource.h"
 #include "neverd/ir/X86/X86SvmContext.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
@@ -17,7 +19,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <utility>
 
 namespace neverd::analysis::detail {
 
@@ -45,62 +46,24 @@ template <class Writer> class X64ContinuationSvm {
     return Value;
   }
 
-  void store(NdVar Base, uint64_t Offset, NdVar Value) {
-    W.emit(NdOp::STORE, {}, {address(Base, Offset), Value});
-  }
-
 public:
   explicit X64ContinuationSvm(Writer &W) : W(W) {}
 
   void execute(unsigned Width, va_t Fallthrough) {
     const auto Guest = W.load(Context + offsetof(X86SvmContext, GuestXState));
     const auto Host = W.load(Context + offsetof(X86SvmContext, HostXState));
-    // Validate the serialized exchange controls before any state/image write.
-    // Accessibility, buffer extents and guest disjointness are domain inputs.
-    for (auto Pointer : {Guest, Host}) {
-      const auto Low = W.temporary(), Misaligned = W.temporary(1);
-      const auto Null = W.temporary(1), Bad = W.temporary(1);
-      W.emit(NdOp::INT_AND, Low, {Pointer, k(63)});
-      W.emit(NdOp::INT_NOTEQUAL, Misaligned, {Low, k(0)});
-      W.emit(NdOp::INT_EQUAL, Null, {Pointer, k(0)});
-      W.emit(NdOp::BOOL_OR, Bad, {Null, Misaligned});
-      W.rejectIf(Bad);
-    }
-    const auto GuestEnd = address(Guest, 832), HostEnd = address(Host, 832);
-    for (auto Range : {std::pair{Guest, GuestEnd}, std::pair{Host, HostEnd}}) {
-      const auto Wrapped = W.temporary(1);
-      W.emit(NdOp::INT_LESS, Wrapped, {Range.second, Range.first});
-      W.rejectIf(Wrapped);
-    }
-    const auto StateBegin = W.address(0);
-    const auto StateEnd = W.address(sizeof(StateV10));
-    const auto Overlap = [&](NdVar A, NdVar AEnd, NdVar B, NdVar BEnd) {
-      const auto First = W.temporary(1), Second = W.temporary(1);
-      const auto Both = W.temporary(1);
-      W.emit(NdOp::INT_LESS, First, {A, BEnd});
-      W.emit(NdOp::INT_LESS, Second, {B, AEnd});
-      W.emit(NdOp::BOOL_AND, Both, {First, Second});
-      W.rejectIf(Both);
-    };
-    Overlap(Guest, GuestEnd, Host, HostEnd);
-    Overlap(Guest, GuestEnd, StateBegin, StateEnd);
-    Overlap(Host, HostEnd, StateBegin, StateEnd);
-    for (auto Pointer : {Guest, Host}) {
-      auto Reserved = load(Pointer, 520);
-      for (unsigned Offset = 528; Offset != 576; Offset += 8) {
-        const auto Combined = W.temporary();
-        W.emit(NdOp::INT_OR, Combined, {Reserved, load(Pointer, Offset)});
-        Reserved = Combined;
-      }
-      const auto Bad = W.temporary(1);
-      W.emit(NdOp::INT_NOTEQUAL, Bad, {Reserved, k(0)});
-      W.rejectIf(Bad);
-      const auto Unknown = W.temporary(), BadBits = W.temporary(1);
-      W.emit(NdOp::INT_AND, Unknown, {load(Pointer, 512), k(~uint64_t{7})});
-      W.emit(NdOp::INT_NOTEQUAL, BadBits, {Unknown, k(0)});
-      W.rejectIf(BadBits);
-    }
-    const auto XStateBV = load(Guest, 512);
+    X64ContinuationAvxImage<Writer> GuestImage(W, Guest), HostImage(W, Host);
+    const auto XStateBV = GuestImage.validate(sizeof(StateV10));
+    HostImage.validate(sizeof(StateV10));
+    const auto GuestEnd =
+        address(Guest, X64ContinuationAvxImage<Writer>::Bytes);
+    const auto HostEnd = address(Host, X64ContinuationAvxImage<Writer>::Bytes);
+    const auto First = W.temporary(1), Second = W.temporary(1);
+    const auto Overlap = W.temporary(1);
+    W.emit(NdOp::INT_LESS, First, {Guest, HostEnd});
+    W.emit(NdOp::INT_LESS, Second, {Host, GuestEnd});
+    W.emit(NdOp::BOOL_AND, Overlap, {First, Second});
+    W.rejectIf(Overlap);
 
     W.store(Context + offsetof(X86SvmContext, VMCB),
             W.read(NdVar::reg(x86reg::RAX, 8)));
@@ -108,17 +71,7 @@ public:
     for (unsigned I = 0; I != 14; ++I)
       W.store(Context + offsetof(X86SvmContext, GPR) + I * 8,
               W.load(offsetof(State, GPR) + X86SvmGPRs[I] * 8));
-    // The state cells own SIMD/MXCSR. Only the guest image owns x87. Mark the
-    // imported SIMD components present even when the prior XSAVE omitted them.
-    const auto Imported = W.temporary();
-    W.emit(NdOp::INT_OR, Imported, {XStateBV, k(6)});
-    store(Guest, 512, Imported);
-    store(Guest, 24, W.load(offsetof(StateV2, MXCSR), 4));
-    for (unsigned I = 0; I != 16; ++I) {
-      store(Guest, 160 + I * 16, W.load(offsetof(State, ZMM) + I * 64, 16));
-      store(Guest, 576 + I * 16,
-            W.load(offsetof(State, ZMM) + I * 64 + 16, 16));
-    }
+    GuestImage.importVectors(XStateBV);
     // Invalid VMCBs can exit before installing guest CR2. Transport the
     // original input first, so that path cannot leak the compiler host's CR2.
     W.emit(

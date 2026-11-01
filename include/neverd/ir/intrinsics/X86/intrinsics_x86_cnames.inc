@@ -316,3 +316,5 @@ C(Intrinsic::X86HyperVCall, "__builtin_ia32_hyperv_call");
 C(Intrinsic::X86SevVmgexit, "__builtin_ia32_vmgexit_sev");
 
 C(Intrinsic::X86HleState, "__neverd_x86_hle_state");
+
+C(Intrinsic::X86SmmReturnContext, "__builtin_ia32_rsm_context");

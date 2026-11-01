@@ -32,6 +32,7 @@ inline bool intrinsicNeverReturns(Intrinsic Id,
   case Intrinsic::Udf_A64:
   case Intrinsic::X86Skinit:
   case Intrinsic::X86Sysenter:
+  case Intrinsic::X86SmmReturnContext:
     return true;
   case Intrinsic::IntN:
     return Operand && isX86NoReturnInterrupt(*Operand);

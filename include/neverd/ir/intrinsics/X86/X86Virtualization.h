@@ -93,6 +93,10 @@ x86VirtualizationShapeIsValid(Intrinsic Id,
            Shape.InputSizes[2] == 8 && Shape.InputSizes[3] == 4 &&
            (Shape.VectorStride == 16 || Shape.VectorStride == 32 ||
             Shape.VectorStride == 64);
+  if (Id == Intrinsic::X86SmmReturnContext)
+    return Shape.TargetArch != Arch::X86 && !Shape.OutputSize &&
+           Shape.MemoryAddressSpace == NdMemoryAddressSpace::Default &&
+           Shape.ScalarInputs[0] && Shape.InputSizes[0] == 8;
   if (Id == Intrinsic::X86SvmRunContext)
     return Shape.TargetArch != Arch::X86 && !Shape.OutputSize &&
            Shape.MemoryAddressSpace == NdMemoryAddressSpace::Default &&
