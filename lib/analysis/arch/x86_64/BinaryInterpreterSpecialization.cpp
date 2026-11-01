@@ -20,6 +20,7 @@
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/lift/X86/X86HypercallEncoding.h"
 #include "neverd/lift/X86/X86MpxEncoding.h"
+#include "neverd/lift/X86/X86SnpEncoding.h"
 #include "neverd/lift/X86/X86SvmEncoding.h"
 #include "neverd/loader/COFF/PEFixedImage.h"
 
@@ -330,6 +331,10 @@ public:
         Result.ProfileProjection = InterpreterProfileProjection::X64MpxV1;
         Result.UndefinedEffects.Diagnostic =
             "MPX requires explicit bounds, enable and branch-state ownership";
+      } else if (ContinuationSnapshot && x86SnpEncoding(Result.NativeBytes)) {
+        Result.ProfileProjection = InterpreterProfileProjection::X64SnpV1;
+        Result.UndefinedEffects.Diagnostic =
+            "SNP/VMGEXIT requires an explicit native RMP or SEV-ES environment";
       } else if (ContinuationSnapshot &&
                  x86HypercallEncoding(Result.NativeBytes)) {
         Result.ProfileProjection = InterpreterProfileProjection::X64HypercallV1;

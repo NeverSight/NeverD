@@ -16,6 +16,7 @@
 #include "neverd/decode/Decoder.h"
 #include "neverd/lift/X86/X86HypercallEncoding.h"
 #include "neverd/lift/X86/X86MpxEncoding.h"
+#include "neverd/lift/X86/X86SnpEncoding.h"
 #include "neverd/lift/X86/X86SvmEncoding.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/pipeline/Pipeline.h"
@@ -209,6 +210,31 @@ llvm::Expected<X64SpecialRegionSelection> selectX64SpecialRegions(
         }
         if (!Resumes.empty())
           Region["vmexit_successors"] = std::move(Resumes);
+      }
+      if (SourceOptions.NativeSnpInstructions ||
+          SourceOptions.NativeSevGuestExit) {
+        llvm::json::Array Resumes;
+        for (va_t Address : Audit.UnsupportedInstructions) {
+          const auto Bytes = bytesAt(Image, Address);
+          for (unsigned Size : {4u, 5u}) {
+            if (Bytes.size() < Size)
+              continue;
+            const auto Snp = x86SnpEncoding(Bytes.take_front(Size));
+            if (!Snp || !(Snp->Id == Intrinsic::X86SevVmgexit
+                              ? SourceOptions.NativeSevGuestExit
+                              : SourceOptions.NativeSnpInstructions))
+              continue;
+            const va_t Resume = Address + Size;
+            if (Image.isCodeAddress(Resume)) {
+              if (auto Error = Enqueue(Resume, Depth))
+                return std::move(Error);
+              Resumes.push_back(hex(Resume));
+            }
+            break;
+          }
+        }
+        if (!Resumes.empty())
+          Region["snp_sev_successors"] = std::move(Resumes);
       }
       if (SourceOptions.NativeKvmHypercalls ||
           SourceOptions.NativeHyperVHypercallEntry) {

@@ -63,6 +63,8 @@ enum class InterpreterProfileProjection : uint8_t {
   X64MpxV1,
   /// Raw VMCALL/VMMCALL require an explicitly selected hypervisor ABI.
   X64HypercallV1,
+  /// SNP/VMGEXIT require the explicit native RMP or SEV-ES environment.
+  X64SnpV1,
 };
 
 } // namespace neverd::analysis

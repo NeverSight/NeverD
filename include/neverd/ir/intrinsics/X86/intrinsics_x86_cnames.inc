@@ -308,3 +308,9 @@ C(Intrinsic::X86KvmVmcall, "__builtin_ia32_vmcall_kvm");
 C(Intrinsic::X86KvmVmmcall, "__builtin_ia32_vmmcall_kvm");
 
 C(Intrinsic::X86HyperVCall, "__builtin_ia32_hyperv_call");
+
+#define NEVERD_X86_SNP(Id, Name, ...)                                          \
+  C(Intrinsic::Id, "__builtin_ia32_" #Name "_context");
+#include "neverd/ir/intrinsics/X86/X86Snp.def"
+#undef NEVERD_X86_SNP
+C(Intrinsic::X86SevVmgexit, "__builtin_ia32_vmgexit_sev");

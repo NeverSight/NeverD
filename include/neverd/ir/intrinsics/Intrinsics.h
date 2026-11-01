@@ -526,6 +526,12 @@ enum class Intrinsic : uint16_t {
   // Append-only: explicit returning Hyper-V page and complete output bank.
   X86HyperVCall,
 
+// Append-only: explicit SNP completion and returning SEV-ES/GHCB binding.
+#define NEVERD_X86_SNP(Id, ...) Id,
+#include "neverd/ir/intrinsics/X86/X86Snp.def"
+#undef NEVERD_X86_SNP
+  X86SevVmgexit,
+
   _Count = 16000
 };
 
@@ -614,7 +620,14 @@ constexpr bool isX86SystemStatePhysicalAddressArgument(Intrinsic Id,
          Index == 0;
 }
 
-enum class X86VirtualizationResult : uint8_t { None, Flags, Read, Value };
+enum class X86VirtualizationResult : uint8_t {
+  None,
+  Flags,
+  Read,
+  Value,
+  SnpContext,
+  SevExit
+};
 
 struct X86VirtualizationContract {
   const char *Mnemonic = nullptr;
@@ -628,6 +641,13 @@ struct X86VirtualizationContract {
 constexpr X86VirtualizationContract x86VirtualizationContract(Intrinsic Id) {
   using R = X86VirtualizationResult;
   switch (Id) {
+#define NEVERD_X86_SNP(Id, Name, ...)                                          \
+  case Intrinsic::Id:                                                          \
+    return {#Name ".context", R::SnpContext, 3, -1, 0, false};
+#include "neverd/ir/intrinsics/X86/X86Snp.def"
+#undef NEVERD_X86_SNP
+  case Intrinsic::X86SevVmgexit:
+    return {"vmgexit.sev", R::SevExit, 1, -1, 0, false};
   case Intrinsic::X86HyperVCall:
     return {"hyperv.call", R::None, 4, -1, 0, false};
   case Intrinsic::X86SvmRunContext:

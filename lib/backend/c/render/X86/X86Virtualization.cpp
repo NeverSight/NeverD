@@ -167,6 +167,10 @@ std::string renderInstruction(const X86VirtualizationAsm &Plan,
 
 bool resultMatches(const llvm::CallInst &Call, Intrinsic Id, uint16_t Word) {
   switch (x86VirtualizationContract(Id).Result) {
+  case X86VirtualizationResult::Value:
+  case X86VirtualizationResult::SnpContext:
+  case X86VirtualizationResult::SevExit:
+    return false;
   case X86VirtualizationResult::None:
     return Call.getType()->isVoidTy();
   case X86VirtualizationResult::Flags:
@@ -209,6 +213,8 @@ renderX86VirtualizationExpression(Arch TargetArch, const HighExpr &Expression,
     Shape.InputSizes[I] = E && E->Type ? E->Type->Size : 0;
     if (I == 1 && E && E->Kind == ExprKind::Const)
       Shape.AddressWidth = E->ConstVal;
+    if (I == 2 && E && E->Kind == ExprKind::Const)
+      Shape.SnpControl = E->ConstVal;
     if (I == 3 && E && E->Kind == ExprKind::Const)
       Shape.VectorStride = E->ConstVal;
     if (I == C.MemoryArgument && E && E->Type &&
@@ -231,6 +237,9 @@ renderX86VirtualizationExpression(Arch TargetArch, const HighExpr &Expression,
     }
     return Text + ")";
   }
+  if (C.Result == X86VirtualizationResult::SnpContext ||
+      C.Result == X86VirtualizationResult::SevExit)
+    return renderX86SnpExpression(Id, Arguments, Shape.SnpControl);
   if (Id == Intrinsic::X86HyperVCall)
     return "__builtin_ia32_hyperv_call((void *)(" + Arguments[0] +
            "), (void *)(" + Arguments[1] + "), (void *)(" + Arguments[2] +
@@ -356,7 +365,7 @@ bool isX86KvmHypercallNativeName(llvm::StringRef Name) {
 }
 
 bool isX86VirtualizationNativeName(llvm::StringRef Name) {
-  if (isX86KvmHypercallNativeName(Name))
+  if (isX86KvmHypercallNativeName(Name) || isX86SnpNativeName(Name))
     return true;
   if (Name == "llvm.x86.vmrun.context" || Name == "llvm.x86.hyperv.call")
     return true;
@@ -385,6 +394,8 @@ renderX86VirtualizationNativeCall(Arch TargetArch, const llvm::CallBase &Call,
       (TargetArch != Arch::X86 && TargetArch != Arch::X64))
     return {};
   const auto Name = Callee->getName();
+  if (isX86SnpNativeName(Name))
+    return renderX86SnpNativeCall(TargetArch, Call, ResultLive, Arguments);
   if (Name == "llvm.x86.hyperv.call") {
     bool Valid =
         TargetArch == Arch::X64 && Callee->isDeclaration() &&

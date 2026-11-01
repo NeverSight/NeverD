@@ -832,6 +832,10 @@ add_neverd_unittest(NeverDX86KvmSourceTests
   x86/X86KvmSourceTests.cpp
   LINK_COMPONENTS BackendC CodeGen)
 
+add_neverd_unittest(NeverDX86SnpSourceTests
+  x86/X86SnpSourceTests.cpp
+  LINK_COMPONENTS BackendC CodeGen)
+
 add_neverd_unittest(NeverDX86VirtualizationSourceTests
   NO_PRETTY_VALUES
   x86_64/X86VirtualizationSourceTests.cpp

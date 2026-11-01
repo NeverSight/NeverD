@@ -18046,3 +18046,21 @@ Independent RTM comparison may use Intel SDE with `-hsw -tsx -rtm_mode full`
 and `-rtm_mode abort -rtm_abort_reason N`; record emulator results separately
 from native hardware evidence. Use the full exporter suite to cover unchanged
 selection, physical transfers and other environment providers.
+
+## SNP and SEV-ES native completion
+
+`NeverDX86SnpSourceTests` checks exact native call effects, modes, pointer
+carriers, controls and raw encoding admission. `SnpAndSev*` and
+`SnpUnauditedPrefixes*` in `NeverDX64ContinuationExportTests` exercise independent
+native providers through HighC/LLVMC, switch/direct dispatch and O0/O2 with
+ASan/UBSan. They compare complete state and service memory, preserved flags,
+all GPR outputs, PVALIDATE address32, either VMGEXIT prefix, independent bindings
+and zero budgets. They export C plus authenticated manifests when
+`NEVERD_ISA_REGRESSION_ARTIFACT_DIR` is set. Pair them with the virtualization,
+KVM, continuation-source, pipeline-outcome and intrinsic-shape suites.
+
+NeverC's `tests/neverc/X86/verify_snp_context.py` compares raw-byte references
+with native builtins, direct LLVM IR and the exported C. It checks unaligned
+objects, integer/FP liveness and fault-before-publication. Its deterministic
+Linux signal service qualifies register/flags transport, not AMD RMP or actual
+SEV-ES service semantics. See [the explicit contract](x86-snp-state.md).

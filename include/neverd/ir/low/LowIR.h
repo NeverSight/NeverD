@@ -406,6 +406,8 @@ inline X86VirtualizationShape x86VirtualizationLowShape(const LowOp &Op,
     Shape.ScalarInputs[I] = Input.isConst() || Input.isReg() || Input.isTemp();
     if (I == 1 && Input.isConst())
       Shape.AddressWidth = Input.Offset;
+    if (I == 2 && Input.isConst())
+      Shape.SnpControl = Input.Offset;
     if (I == 3 && Input.isConst())
       Shape.VectorStride = Input.Offset;
   }

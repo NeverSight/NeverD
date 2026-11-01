@@ -4103,7 +4103,8 @@ bool LLVMCWriter::writeIntrinsicCall(llvm::CallBase &Call, int Indent) {
     return false;
   if (Callee->getName() == "llvm.x86.vmrun.context" ||
       Callee->getName() == "llvm.x86.hyperv.call" ||
-      isX86KvmHypercallNativeName(Callee->getName())) {
+      isX86KvmHypercallNativeName(Callee->getName()) ||
+      isX86SnpNativeName(Callee->getName())) {
     std::vector<std::string> Arguments;
     for (const auto &Argument : Call.args())
       Arguments.push_back(valueStr(Argument.get()));

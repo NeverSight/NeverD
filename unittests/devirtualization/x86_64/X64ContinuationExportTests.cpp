@@ -1394,6 +1394,7 @@ TEST_F(X64ContinuationExportTest,
 #include "X64MpxContinuationExportTests.inc"
 #include "X64NativeRegisterExportTests.inc"
 #include "X64RtmAbortExportTests.inc"
+#include "X64SnpContinuationExportTests.inc"
 #include "X64SparseFrameContinuationTests.inc"
 #include "X64SvmContinuationExportTests.inc"
 

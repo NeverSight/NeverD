@@ -14,6 +14,7 @@
 
 #include "llvm/ADT/StringRef.h"
 
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <vector>
@@ -44,6 +45,13 @@ inline constexpr const char X86VirtualizationCompilerDispatch[] =
 
 bool isX86VirtualizationNativeName(llvm::StringRef Name);
 bool isX86KvmHypercallNativeName(llvm::StringRef Name);
+bool isX86SnpNativeName(llvm::StringRef Name);
+std::string renderX86SnpExpression(Intrinsic Id,
+                                   const std::vector<std::string> &Arguments,
+                                   std::optional<uint64_t> Control);
+std::string renderX86SnpNativeCall(Arch TargetArch, const llvm::CallBase &Call,
+                                   bool ResultLive,
+                                   const std::vector<std::string> &Arguments);
 
 std::string
 renderX86VirtualizationExpression(Arch TargetArch, const HighExpr &Expression,

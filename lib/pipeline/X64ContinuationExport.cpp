@@ -100,6 +100,8 @@ llvm::Expected<Request> readRequest(llvm::StringRef Text) {
                                        "native_page_global_access",
                                        "native_rtm_abort_regions",
                                        "native_kvm_hypercalls",
+                                       "native_snp_instructions",
+                                       "native_sev_guest_exit",
                                        "native_hyperv_hypercall_entry",
                                        "follow_internal_calls",
                                        "follow_direct_jumps",
@@ -191,6 +193,8 @@ llvm::Expected<Request> readRequest(llvm::StringRef Text) {
       {"native_page_global_access", &Options.NativePageGlobalAccess},
       {"native_rtm_abort_regions", &Result.NativeRtmAbortRegions},
       {"native_kvm_hypercalls", &Options.NativeKvmHypercalls},
+      {"native_snp_instructions", &Options.NativeSnpInstructions},
+      {"native_sev_guest_exit", &Options.NativeSevGuestExit},
       {"follow_internal_calls", &Result.FollowInternalCalls},
       {"follow_direct_jumps", &Result.FollowDirectJumps}};
   if (const auto *Value = Object->get("uiret_restores_uif")) {
@@ -659,6 +663,19 @@ exportX64Continuation(const BinaryImage &Image, llvm::StringRef RequestJSON,
                              "and compiler environment preserved; "
                              "SetVpRegisters refused; service writes exclude "
                              "state, budget, code and compiler stack; "
+                           : "") +
+           std::string(Request->Options.NativeSnpInstructions
+                           ? "native SNP supervisor RMP/paging environment; "
+                             "nonfaulting completion; instruction memory, RMP "
+                             "and changed mappings exclude state, budget, "
+                             "generated code and compiler frame; "
+                           : "") +
+           std::string(Request->Options.NativeSevGuestExit
+                           ? "returning SEV-ES GHCB/MSR service and optional "
+                             "RAX VMGEXITParameter; private CPU state and "
+                             "compiler environment preserved; service memory "
+                             "excludes state, budget, code and compiler stack; "
+                             "non-SEV-ES VMMCALL fallback excluded; "
                            : "") +
            std::string(Request->Options.NativeKvmHypercalls
                            ? "returning KVM ABI with RAX number/result and "

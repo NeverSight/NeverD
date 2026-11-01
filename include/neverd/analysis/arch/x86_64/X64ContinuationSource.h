@@ -429,6 +429,17 @@ struct X64ContinuationSourceOptions {
   /// budget, code or compiler stack. The original instruction must have the
   /// same service/continuation behavior in the declared native environment.
   std::optional<uint64_t> NativeHyperVHypercallEntry;
+  /// Execute SNP instructions in the original nonfaulting supervisor RMP and
+  /// paging environment. Instruction memory, changed mappings and RMP pages
+  /// must exclude state, budget, generated code and the compiler frame. The
+  /// context publishes normal-completion GPR/flags, not exception state.
+  bool NativeSnpInstructions = false;
+  /// Bind SEV-ES VMGEXIT to a returning GHCB/MSR service, with optional RAX
+  /// VMGEXITParameter. Private CPU state and the compiler environment must be
+  /// preserved; service memory excludes state, budget, code and compiler stack.
+  /// This does not admit non-SEV-ES VMMCALL fallback or caller-state
+  /// replacement.
+  bool NativeSevGuestExit = false;
   uint64_t MaxInstructions = limits::analysis::kX64ContinuationMaxInstructions;
   uint64_t MaxOperations = limits::analysis::kX64ContinuationMaxOperations;
 };

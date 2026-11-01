@@ -15485,3 +15485,15 @@ Raw x64 regions admit strictly authenticated default-space PREFETCHNTA/T0/T1/T2 
 Authenticated raw x64 regions retain legacy MOVNTDQ as a native 128-bit streaming store with its 16-byte alignment guard. X86SystemState owns operand and assembly contracts. In the explicit nonfaulting domain, analysis uses an ordinary STORE view through the existing alias, frame and return-cell checks; emitted code retains MOVNTDQ and exact SFENCE operations. This finite memory projection does not model cache placement or concurrent observers.
 
 Automatic control discovery can split a finite live MOVS/STOS count into guarded cases. The instruction prefix must preserve the register; each predecessor independently proves an exhaustive domain within `MaxControlTuples`. Fallthrough cuts and guards have synthetic provenance. Each case still proves its count and memory effects under cumulative budgets. Incomplete domains, unbounded counts and missing entry constraints remain refused.
+
+## SNP and SEV-ES completion ownership
+
+`ir/intrinsics/X86/X86Snp.def` owns the appended SNP inventory and
+`lift/X86/X86SnpEncoding.h` owns exact original-byte source admission. The
+binary interpreter reader records an environment-dependent projection; only
+explicit continuation bindings can turn it into native register completion.
+LowIR/MedIR shapes, LLVM and C consume the shared virtualization contract.
+The SNP C renderer lives under `render/X86/`, separate from VMX assembly
+transport. RMP accesses, privilege, faults and GHCB service memory remain
+native environment effects. The [SNP contract](x86-snp-state.md) describes the
+normal-completion boundary and its disjoint compiler-state requirement.

@@ -32,6 +32,7 @@
 #include "neverd/ir/low/LowScalarConstant.h"
 #include "neverd/lift/X86/X86HypercallEncoding.h"
 #include "neverd/lift/X86/X86Regs.h"
+#include "neverd/lift/X86/X86SnpEncoding.h"
 #include "neverd/lift/X86/X86SvmEncoding.h"
 
 #include "llvm/ADT/StringExtras.h"
@@ -1221,6 +1222,14 @@ buildInstruction(SpecializationInstruction Instruction,
                              InterpreterProfileProjection::X64FredReturnV1
           ? detail::x64FredReturn(Instruction.NativeBytes)
           : std::nullopt;
+  auto Snp =
+      Instruction.ProfileProjection == InterpreterProfileProjection::X64SnpV1
+          ? x86SnpEncoding(Instruction.NativeBytes)
+          : std::nullopt;
+  if (Snp &&
+      !(Snp->Id == Intrinsic::X86SevVmgexit ? Options.NativeSevGuestExit
+                                            : Options.NativeSnpInstructions))
+    Snp.reset();
   const auto Hypercall =
       (Options.NativeKvmHypercalls || Options.NativeHyperVHypercallEntry) &&
               Instruction.ProfileProjection ==
@@ -1254,13 +1263,13 @@ buildInstruction(SpecializationInstruction Instruction,
       Instruction.UndefinedEffects.Coverage == LowUndefinedCoverage::Missing &&
       Instruction.UndefinedEffects.Effects.empty();
   if ((!FarPointer && !UserInterrupt && !FredReturn && !Vmrun && !Mpx &&
-       !Hypercall &&
+       !Hypercall && !Snp &&
        (Instruction.ProfileProjection != InterpreterProfileProjection::None ||
         (!OwnedFrameReturn && Instruction.UndefinedEffects.Coverage !=
                                   LowUndefinedCoverage::Complete))) ||
       (Instruction.Origin.Control == LowInstructionControl::Terminator &&
        !Sysret && !Sysenter && !Sysexit && !Iret && !FarReturn && !Interrupt &&
-       !UserInterrupt && !FredReturn && !Vmrun && !Hypercall))
+       !UserInterrupt && !FredReturn && !Vmrun && !Hypercall && !Snp))
     RequireNative("instruction requires an explicit native environment");
   if (Instruction.UndefinedEffects.Effects.size() >
       std::size(State{}.Undefined))
@@ -1511,6 +1520,16 @@ buildInstruction(SpecializationInstruction Instruction,
     detail::X64ContinuationMpx<Writer>(W).validate();
   if (Result.RequiresNativeExecution) {
     W.leave(Exit::NativeInstruction);
+  } else if (Snp) {
+    if (Snp->Id == Intrinsic::X86SevVmgexit)
+      W.emit(
+          NdOp::INTRINSIC, {},
+          {constant(uint64_t(Snp->Id), 2), W.read(NdVar::reg(x86reg::RAX, 8))});
+    else
+      W.emit(NdOp::INTRINSIC, {},
+             {constant(uint64_t(Snp->Id), 2), W.address(offsetof(State, GPR)),
+              W.address(offsetof(State, RFlags)), constant(Snp->Control, 4)});
+    W.leave(Exit::Continue, constant(Instruction.Fallthrough.Address, 8));
   } else if (Hypercall && Options.NativeHyperVHypercallEntry) {
     // SetVpRegisters can replace the caller's execution state. It is outside
     // this returning transport even when it would target a different VP.
@@ -1662,6 +1681,9 @@ buildX64ContinuationSource(const BinaryImage &Image,
        !Controls))
     return invalid("Hyper-V requires a nonzero native page, an x64 control "
                    "profile and no competing KVM ABI");
+  if ((Options.NativeSnpInstructions || Options.NativeSevGuestExit) &&
+      !Controls)
+    return invalid("native SNP/SEV-ES requires an x64 control profile");
   if (Options.NativeTimestampReads && !Controls)
     return invalid("native timestamp source requires an x64 host profile");
   if (Options.NativeWritePrefetch && !Controls)

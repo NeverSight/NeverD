@@ -299,3 +299,8 @@ SIDEEFFECT(Intrinsic::X86KvmVmcall);
 SIDEEFFECT(Intrinsic::X86KvmVmmcall);
 
 SIDEEFFECT(Intrinsic::X86HyperVCall);
+
+#define NEVERD_X86_SNP(Id, ...) SIDEEFFECT(Intrinsic::Id);
+#include "neverd/ir/intrinsics/X86/X86Snp.def"
+#undef NEVERD_X86_SNP
+SIDEEFFECT(Intrinsic::X86SevVmgexit);

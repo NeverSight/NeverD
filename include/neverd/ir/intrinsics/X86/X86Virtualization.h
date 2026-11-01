@@ -37,7 +37,28 @@ struct X86VirtualizationShape {
   std::array<bool, 5> ScalarInputs{};
   std::optional<uint64_t> AddressWidth;
   std::optional<uint64_t> VectorStride;
+  std::optional<uint64_t> SnpControl;
 };
+
+constexpr bool x86SnpControlIsValid(Intrinsic Id, uint64_t Control) {
+  if (x86VirtualizationContract(Id).Result !=
+          X86VirtualizationResult::SnpContext ||
+      (Control & ~uint64_t{0xff01}) ||
+      ((Control & 1) && Id != Intrinsic::X86SnpPvalidate))
+    return false;
+  switch (Control >> 8) {
+  case 0:
+  case 0x26:
+  case 0x2e:
+  case 0x36:
+  case 0x3e:
+  case 0x64:
+  case 0x65:
+    return true;
+  default:
+    return false;
+  }
+}
 
 constexpr bool
 x86VirtualizationShapeIsValid(Intrinsic Id,
@@ -52,6 +73,17 @@ x86VirtualizationShapeIsValid(Intrinsic Id,
        Shape.MemoryAddressSpace != NdMemoryAddressSpace::Default) ||
       Shape.Arguments != C.Arguments)
     return false;
+  if (C.Result == X86VirtualizationResult::SnpContext)
+    return Shape.TargetArch != Arch::X86 && !Shape.OutputSize &&
+           Shape.MemoryAddressSpace == NdMemoryAddressSpace::Default &&
+           Shape.ScalarInputs[0] && Shape.ScalarInputs[1] &&
+           Shape.ScalarInputs[2] && Shape.InputSizes[0] == 8 &&
+           Shape.InputSizes[1] == 8 && Shape.InputSizes[2] == 4 &&
+           Shape.SnpControl && x86SnpControlIsValid(Id, *Shape.SnpControl);
+  if (C.Result == X86VirtualizationResult::SevExit)
+    return Shape.TargetArch != Arch::X86 && !Shape.OutputSize &&
+           Shape.MemoryAddressSpace == NdMemoryAddressSpace::Default &&
+           Shape.ScalarInputs[0] && Shape.InputSizes[0] == 8;
   if (Id == Intrinsic::X86HyperVCall)
     return Shape.TargetArch != Arch::X86 && !Shape.OutputSize &&
            Shape.MemoryAddressSpace == NdMemoryAddressSpace::Default &&

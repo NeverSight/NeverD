@@ -783,6 +783,8 @@ x86VirtualizationMedShape(const MedOp &Op, Arch TargetArch = Arch::Unknown) {
         Input.Kind == MedVar::Stack || Input.Kind == MedVar::RetVal;
     if (I == 1 && Input.isConst())
       Shape.AddressWidth = Input.ConstVal;
+    if (I == 2 && Input.isConst())
+      Shape.SnpControl = Input.ConstVal;
     if (I == 3 && Input.isConst())
       Shape.VectorStride = Input.ConstVal;
     // TheArch names physical registers. EA/arithmetic temporaries are neutral
