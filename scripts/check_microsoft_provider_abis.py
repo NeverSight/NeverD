@@ -32,6 +32,9 @@ CASES = {
     "StreamClass": ("StreamClassRegisterAdapter", "StreamClassGetPhysicalAddress"),
     "AudioPort": ("PcAddAdapterDevice", "PcNewPort"),
     "GraphicsKernel": ("DxgkInitialize", "DlGetDeviceBase"),
+    "RDBSS": ("RxRegisterMinirdr", "RxStartMinirdr", "RxpUnregisterMinirdr",
+              "RxCreateRxContext", "RxInitializeDispatcher", "RxInitializeRxTimer",
+              "RxTearDownDispatcher"),
     "EventTracing": ("EventRegister", "EventWriteTransfer", "EventUnregister"),
     "Path": ("PathCchCombineEx", "PathCchCanonicalizeEx"),
     "WinRTStrings": ("WindowsCreateString", "WindowsDeleteString", "RoInitialize"),
@@ -105,8 +108,11 @@ def check(args: argparse.Namespace) -> dict:
                     if command[-2] != "-E":
                         raise ValueError(f"provider lacks its preprocessing command: {name}")
                     compiler = command[:-2]
-                    original = Path(command[-1])
+                    bridge = provider.get("metadata", {}).get("cpp_header_bridge")
+                    original = Path(bridge["source"] if bridge else command[-1])
                     row["original_source_sha256"] = digest(original)
+                    if bridge and row["original_source_sha256"] != bridge["source_sha256"]:
+                        raise ValueError("original C++ provider source changed")
                     row["generated_header_sha256"] = digest(header)
                     # Select the published prototypes and their full type closure.
                     # Unrelated compiler intrinsic declarations in the complete
@@ -133,9 +139,14 @@ def check(args: argparse.Namespace) -> dict:
                     contracts = []
                     for view, include in (("original", original), ("generated", selected)):
                         source = directory / (view + ".c")
-                        source.write_text('#include "' + include.as_posix() + '"\n' + references,
+                        cpp = view == "original" and bridge is not None
+                        body = 'extern "C" {\n' + references + '}\n' if cpp else references
+                        source.write_text('#include "' + include.as_posix() + '"\n' + body,
                                           encoding="utf-8")
-                        flags = compiler if view == "original" else generated_compiler(compiler)
+                        if view == "generated":
+                            flags = generated_compiler(compiler)
+                        else:
+                            flags = bridge["arguments"] if cpp else compiler
                         invocation = flags + ["-S", "-emit-llvm", "-O0", str(source), "-o", "-"]
                         row["commands"].append(invocation)
                         result = subprocess.run(invocation, capture_output=True, text=True,

@@ -204,6 +204,24 @@ With `--kernel`, the WDK fixtures cover SD Port's
 byte-width offset, PortCls's callback and fifth argument, and Stream Class's
 void result. Their synthetic imports retain the original compiler's x86
 decoration. This checks source reconstruction and ABI, not driver execution.
+`--kernel --rdbss` checks seven original WDK C++ callers through both C routes
+on x86, x64 and ARM64. The RDBSS generator first compares all imported routine types
+with the original C++ header and checks the imported record layouts. Its enum
+bridge refuses changed values or ambiguous typedefs, and its ABI proof retains
+calling convention and parameter/return attributes. See
+[the Microsoft provider guide](microsoft-windows-types.md) for the retained
+inputs and the distinction between a compiler check and native execution.
+
+The public [Windows ARM64 comparison harness](https://github.com/gmh5225/test_mac_intel/tree/codex/neverd-windows-arm64-20261101/arm64-windows)
+adds `rdbss.py` for the seven RDBSS callers. It links their original WDK objects
+and both recovered C routes at O0/O2 against the same observable API models,
+then checks three input seeds on native Windows ARM64 and x64. The original
+caller must first match independently expected arguments, results and output
+buffers. Preserve each payload manifest, source revision, core hash and raw
+receipt separately from earlier caller qualifications. These comparisons
+exercise user-process ABI models; they do not load a kernel driver or execute
+the Windows RDBSS implementation.
+
 `AAPCS64CallContract.AVectorStackCopyForwardsBothScalarArguments` executes
 both C routes from a compiler-style fourteen-argument forwarder whose Q0 load
 copies two scalar stack slots. COFF and ELF, source optimization on/off and
