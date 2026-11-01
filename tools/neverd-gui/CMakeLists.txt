@@ -284,7 +284,10 @@ if(BUILD_TESTING)
     set_tests_properties(NeverDGuiSourceVariableTypes PROPERTIES
       ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 180)
   endif()
-  target_link_libraries(neverd-gui-unit-tests PRIVATE neverd_gui_app Qt6::Test)
+  # The window system interface sets the application's active state, which
+  # the progress bar's animation follows.
+  target_link_libraries(neverd-gui-unit-tests PRIVATE neverd_gui_app Qt6::Test
+    Qt6::GuiPrivate)
   # A console program on Windows too, so CTest records what failed.
   set_target_properties(neverd-gui-unit-tests PROPERTIES WIN32_EXECUTABLE FALSE)
   add_test(NAME NeverDGuiUnits COMMAND neverd-gui-unit-tests

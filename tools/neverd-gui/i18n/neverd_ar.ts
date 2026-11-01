@@ -2531,18 +2531,6 @@ Double-click to go to the declaration.</source>
         <translation>السجل: عدد الإدخالات %1، المؤشر %2</translation>
     </message>
     <message>
-        <source>AU: idle</source>
-        <translation>AU: خامل</translation>
-    </message>
-    <message>
-        <source>AU: busy %1%</source>
-        <translation>AU: مشغول %1%</translation>
-    </message>
-    <message>
-        <source>AU: busy</source>
-        <translation>AU: مشغول</translation>
-    </message>
-    <message>
         <source>Down</source>
         <translation>لأسفل</translation>
     </message>
@@ -10324,6 +10312,76 @@ Your previous graph is still available.</source>
     <message>
         <source>Work limits</source>
         <translation>حدود العمل</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::AnalysisProgress</name>
+    <message>
+        <source>AU: idle</source>
+        <translation>AU: خامل</translation>
+    </message>
+    <message>
+        <source>AU: loading</source>
+        <translation>AU: جارٍ التحميل</translation>
+    </message>
+    <message>
+        <source>AU: loading %1%</source>
+        <translation>AU: جارٍ التحميل %1%</translation>
+    </message>
+    <message>
+        <source>AU: finding functions</source>
+        <translation>AU: جارٍ البحث عن الدوال</translation>
+    </message>
+    <message>
+        <source>AU: indexing references</source>
+        <translation>AU: جارٍ فهرسة المراجع</translation>
+    </message>
+    <message>
+        <source>AU: indexing references %1%</source>
+        <translation>AU: جارٍ فهرسة المراجع %1%</translation>
+    </message>
+    <message>
+        <source>AU: analysis finished</source>
+        <translation>AU: اكتمل التحليل</translation>
+    </message>
+    <message>
+        <source>Analysis finished in %1 s</source>
+        <translation>اكتمل التحليل في %1 ث</translation>
+    </message>
+    <message>
+        <source>Reading the file</source>
+        <translation>جارٍ قراءة الملف</translation>
+    </message>
+    <message>
+        <source>Parsing the format</source>
+        <translation>جارٍ تحليل التنسيق</translation>
+    </message>
+    <message>
+        <source>Finding code</source>
+        <translation>جارٍ البحث عن الشيفرة</translation>
+    </message>
+    <message>
+        <source>Loading debug information</source>
+        <translation>جارٍ تحميل معلومات التصحيح</translation>
+    </message>
+    <message>
+        <source>Opening the project</source>
+        <translation>جارٍ فتح المشروع</translation>
+    </message>
+    <message>
+        <source>Loading</source>
+        <translation>جارٍ التحميل</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::LoadProgressCard</name>
+    <message>
+        <source>Opening %1</source>
+        <translation>جارٍ فتح %1</translation>
+    </message>
+    <message>
+        <source>%1 s</source>
+        <translation>%1 ث</translation>
     </message>
 </context>
 </TS>

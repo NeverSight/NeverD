@@ -2501,18 +2501,6 @@ Double-click to go to the declaration.</source>
         <translation>履歴：%1 件、カーソル %2</translation>
     </message>
     <message>
-        <source>AU: idle</source>
-        <translation>AU: アイドル</translation>
-    </message>
-    <message>
-        <source>AU: busy %1%</source>
-        <translation>AU: 処理中 %1%</translation>
-    </message>
-    <message>
-        <source>AU: busy</source>
-        <translation>AU: 処理中</translation>
-    </message>
-    <message>
         <source>Down</source>
         <translation>下方向</translation>
     </message>
@@ -10144,6 +10132,76 @@ Your previous graph is still available.</source>
     <message>
         <source>Work limits</source>
         <translation>処理量の上限</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::AnalysisProgress</name>
+    <message>
+        <source>AU: idle</source>
+        <translation>AU: アイドル</translation>
+    </message>
+    <message>
+        <source>AU: loading</source>
+        <translation>AU: 読み込み中</translation>
+    </message>
+    <message>
+        <source>AU: loading %1%</source>
+        <translation>AU: 読み込み中 %1%</translation>
+    </message>
+    <message>
+        <source>AU: finding functions</source>
+        <translation>AU: 関数を検出中</translation>
+    </message>
+    <message>
+        <source>AU: indexing references</source>
+        <translation>AU: 参照を索引中</translation>
+    </message>
+    <message>
+        <source>AU: indexing references %1%</source>
+        <translation>AU: 参照を索引中 %1%</translation>
+    </message>
+    <message>
+        <source>AU: analysis finished</source>
+        <translation>AU: 解析完了</translation>
+    </message>
+    <message>
+        <source>Analysis finished in %1 s</source>
+        <translation>解析は %1 秒で完了しました</translation>
+    </message>
+    <message>
+        <source>Reading the file</source>
+        <translation>ファイルを読み込み中</translation>
+    </message>
+    <message>
+        <source>Parsing the format</source>
+        <translation>形式を解析中</translation>
+    </message>
+    <message>
+        <source>Finding code</source>
+        <translation>コードを検出中</translation>
+    </message>
+    <message>
+        <source>Loading debug information</source>
+        <translation>デバッグ情報を読み込み中</translation>
+    </message>
+    <message>
+        <source>Opening the project</source>
+        <translation>プロジェクトを開いています</translation>
+    </message>
+    <message>
+        <source>Loading</source>
+        <translation>読み込み中</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::LoadProgressCard</name>
+    <message>
+        <source>Opening %1</source>
+        <translation>%1 を開いています</translation>
+    </message>
+    <message>
+        <source>%1 s</source>
+        <translation>%1 秒</translation>
     </message>
 </context>
 </TS>
