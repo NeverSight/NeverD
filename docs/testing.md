@@ -18178,3 +18178,16 @@ NeverC's `tests/neverc/X86/verify_hle_context.py --source SOURCE --manifest JSON
 compares that actual export with raw prefixed CPU instructions. Omit the two
 source options for direct builtin/LLVM tests. A CPU without HLE qualifies the
 native fallback path, not physical transactional commit or rollback.
+
+### Explicit IA-32e event delivery
+
+Build `NeverDX64ContinuationExportTests` and `NeverDX64ContinuationSourceTests`
+with `scripts/build.py`. `X64ContinuationExportTest.EventDelivery*` checks
+shared fault/trap/IRQ/NMI delivery, inhibition without guest RAM access,
+metadata rejection and direct UD2/DIV fault production through both C routes
+at O0/O2. `EventDeliveryMatchesNativeFaultsNmiAndIrq` uses Linux x64 KVM and
+original DIV/UD2/MOV CR0/faulting load/INT bytes plus native IRQ/NMI injection;
+it skips explicitly when KVM is unavailable. See [the coverage matrix and
+remaining boundaries](x86-event-delivery.md). The all-vector INT/INT3 and
+accessed-bit/TSS/frame alias tests remain required because the same descriptor
+and frame owner is shared.

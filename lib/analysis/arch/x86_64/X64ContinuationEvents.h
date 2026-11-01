@@ -296,13 +296,25 @@ public:
   }
 
   void softwareInterrupt(uint8_t Vector, uint64_t NextPC) {
-    const uint64_t GateOffset = uint64_t{Vector} * 16;
-    const uint64_t LastByte = GateOffset + 15;
+    interrupt(k(Vector), k(NextPC),
+              masked(load(offsetof(State, RFlags)), ~uint64_t{0x10000}), k(0),
+              k(0), k(1), k(0), k(0), k(0));
+  }
+
+  /// Shared successful IA-32e delivery, including compatibility entry and
+  /// privilege changes. Error-code presence belongs to the event kind, never
+  /// merely to an IDT vector. The producer has already selected its saved PC
+  /// and flags and checked interruptibility.
+  void interrupt(NdVar Vector, NdVar SavedPC, NdVar SavedFlags, NdVar HasError,
+                 NdVar ErrorCode, NdVar Software, NdVar NMI, NdVar PageFault,
+                 NdVar FaultAddress) {
+    const auto GateOffset = op(NdOp::INT_LEFT, {Vector, k(4)});
+    const auto LastByte = op(NdOp::INT_ADD, {GateOffset, k(15)});
     const auto IDT = load(offsetof(V6, IDTR));
-    W.rejectIf(less(load(offsetof(V6, IDTR) + offsetof(Table, Limit), 2),
-                    k(LastByte)));
-    W.rejectIf(less(k(UINT64_MAX - LastByte), IDT));
-    const auto GateAddress = op(NdOp::INT_ADD, {IDT, k(GateOffset)});
+    W.rejectIf(
+        less(load(offsetof(V6, IDTR) + offsetof(Table, Limit), 2), LastByte));
+    W.rejectIf(less(op(NdOp::INT_SUB, {k(UINT64_MAX), LastByte}), IDT));
+    const auto GateAddress = op(NdOp::INT_ADD, {IDT, GateOffset});
     range(GateAddress, 15);
     const auto Low = readMemory(GateAddress);
     const auto High = readMemory(op(NdOp::INT_ADD, {GateAddress, k(8)}));
@@ -311,6 +323,10 @@ public:
     W.rejectIf(eq(masked(Low, uint64_t{1} << 47), k(0)));
     W.rejectIf(ne(masked(Low, uint64_t{31} << 35), k(0)));
     W.rejectIf(ne(shifted(High, 32), k(0)));
+    const auto OldCS = load(offsetof(V5, CS) + offsetof(Segment, Selector), 2);
+    const auto CPL = masked(OldCS, 3);
+    W.rejectIf(
+        both(ne(Software, k(0)), less(masked(shifted(Low, 45), 3), CPL)));
     const auto CS = masked(shifted(Low, 16), 0xffff);
     const auto PC =
         op(NdOp::INT_OR,
@@ -320,12 +336,19 @@ public:
     canonical(PC);
     W.rejectIf(eq(masked(CS, 0xfffc), k(0)));
     const auto Code = descriptor(CS);
-    W.rejectIf(ne(masked(shifted(Code.Value, 40), 0x60f8), k(0x2098)));
+    const auto Access = shifted(Code.Value, 40);
+    W.rejectIf(ne(masked(Access, 0x6098), k(0x2098)));
+    const auto DPL = masked(shifted(Access, 5), 3);
+    W.rejectIf(less(CPL, DPL));
+    const auto NewCPL = choose(ne(masked(Access, 4), k(0)), CPL, DPL);
+    const auto Inner = less(NewCPL, CPL);
     AccessedAddress = op(NdOp::INT_ADD, {Code.Address, k(5)});
     const auto IST = masked(shifted(Low, 32), 7);
     const auto UseIST = ne(IST, k(0));
-    const auto TssOffset =
-        op(NdOp::INT_ADD, {k(28), op(NdOp::INT_LEFT, {IST, k(3)})});
+    const auto Switch = either(UseIST, Inner);
+    const auto TssOffset = choose(
+        UseIST, op(NdOp::INT_ADD, {k(28), op(NdOp::INT_LEFT, {IST, k(3)})}),
+        op(NdOp::INT_ADD, {k(4), op(NdOp::INT_LEFT, {NewCPL, k(3)})}));
     const auto Last = op(NdOp::INT_ADD, {TssOffset, k(7)});
     const auto TR = load(offsetof(V6, TR));
     const auto BadTR = either(
@@ -333,35 +356,52 @@ public:
         ne(masked(load(offsetof(V6, TR) + offsetof(Segment, Attributes), 2),
                   0x9f),
            k(0x8b)));
-    W.rejectIf(both(UseIST, BadTR));
+    W.rejectIf(both(Switch, BadTR));
     W.rejectIf(
-        both(UseIST,
+        both(Switch,
              less(load(offsetof(V6, TR) + offsetof(Segment, Limit), 4), Last)));
     W.rejectIf(
-        both(UseIST, less(op(NdOp::INT_SUB, {k(UINT64_MAX), Last}), TR)));
+        both(Switch, less(op(NdOp::INT_SUB, {k(UINT64_MAX), Last}), TR)));
     const auto Address =
-        choose(UseIST, op(NdOp::INT_ADD, {TR, TssOffset}), Code.Address);
+        choose(Switch, op(NdOp::INT_ADD, {TR, TssOffset}), Code.Address);
     range(Address, 7);
     const auto OldSP = load(offsetof(State, GPR) + x86reg::RSP);
-    const auto Stack = choose(UseIST, readMemory(Address), OldSP);
+    const auto Stack = choose(Switch, readMemory(Address), OldSP);
     canonical(Stack);
     const auto Top = masked(Stack, ~uint64_t{15});
-    W.rejectIf(less(Top, k(40)));
-    const auto SP = op(NdOp::INT_SUB, {Top, k(40)});
-    range(SP, 39);
+    const auto FrameBytes = choose(ne(HasError, k(0)), k(48), k(40));
+    W.rejectIf(less(Top, FrameBytes));
+    const auto SP = op(NdOp::INT_SUB, {Top, FrameBytes});
+    range(SP, op(NdOp::INT_SUB, {FrameBytes, k(1)}));
+    const auto FrameSP = op(NdOp::INT_SUB, {Top, k(40)});
     const auto Flags = load(offsetof(State, RFlags));
     const NdVar Frame[] = {
-        k(NextPC), load(offsetof(V5, CS) + offsetof(Segment, Selector), 2),
-        masked(Flags, ~uint64_t{0x10000}), OldSP,
+        SavedPC, OldCS, SavedFlags, OldSP,
         load(offsetof(V5, SS) + offsetof(Segment, Selector), 2)};
     accessed(Code);
     for (unsigned I = 5; I--;) {
-      const auto Destination = op(NdOp::INT_ADD, {SP, k(I * 8)});
+      const auto Destination = op(NdOp::INT_ADD, {FrameSP, k(I * 8)});
       W.emit(NdOp::STORE, {}, {Destination, Frame[I]});
     }
-    segment(offsetof(V5, CS), masked(CS, 0xfffc), Code.Value);
-    W.store(offsetof(V6, Unusable),
-            narrow(masked(load(offsetof(V6, Unusable), 1), 0xfe), 1));
+    W.storeIf(ne(HasError, k(0)), SP, ErrorCode);
+    segment(offsetof(V5, CS), op(NdOp::INT_OR, {masked(CS, 0xfffc), NewCPL}),
+            Code.Value);
+    // The inter-privilege path installs null SS:RPL. Same-privilege IST
+    // retains SS (INT's INTRA-PRIVILEGE-LEVEL-INTERRUPT pseudocode).
+    W.store(offsetof(V5, SS) + offsetof(Segment, Selector),
+            narrow(choose(Inner, NewCPL, Frame[4]), 2));
+    W.store(
+        offsetof(V6, Unusable),
+        narrow(op(NdOp::INT_OR, {masked(load(offsetof(V6, Unusable), 1), 0xfe),
+                                 choose(Inner, k(2), k(0))}),
+               1));
+    W.store(
+        offsetof(V6, NMIBlocked),
+        narrow(choose(ne(NMI, k(0)), k(1), load(offsetof(V6, NMIBlocked), 1)),
+               1));
+    W.store(offsetof(X64ContinuationStateV4, CR2),
+            choose(ne(PageFault, k(0)), FaultAddress,
+                   load(offsetof(X64ContinuationStateV4, CR2))));
     W.store(offsetof(State, GPR) + x86reg::RSP, SP);
     const auto Clear = choose(eq(Type, k(14)), k(0x34300), k(0x34100));
     W.store(

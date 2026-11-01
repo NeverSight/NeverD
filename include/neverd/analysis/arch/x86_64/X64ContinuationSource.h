@@ -216,6 +216,8 @@ enum class X64ContinuationExitV1 : uint64_t {
   /// PC remains on the faulting instruction and no handler has executed.
   /// The bounded driver counts this attempted step once and stops.
   BoundsFault = 14,
+  /// An explicit event is inhibited. Neither state nor RAM has changed.
+  EventDeferred = 15,
 };
 
 enum class X64ContinuationProfile : uint8_t {
@@ -446,6 +448,11 @@ struct X64ContinuationSourceOptions {
   /// This does not admit non-SEV-ES VMMCALL fallback or caller-state
   /// replacement.
   bool NativeSevGuestExit = false;
+  /// V6 exports a separate event-delivery function through the same LowIR
+  /// owner as INT/INT3. Its event producer supplies architectural restart
+  /// state, shadows and priority. Canonical UD2 and admitted unsigned 64-bit
+  /// DIV directly deliver #UD/#DE; other instruction domains are unchanged.
+  bool EventDelivery = false;
   uint64_t MaxInstructions = limits::analysis::kX64ContinuationMaxInstructions;
   uint64_t MaxOperations = limits::analysis::kX64ContinuationMaxOperations;
 };
@@ -499,6 +506,11 @@ llvm::Expected<std::vector<X64ContinuationInstructionSource>>
 buildX64ContinuationSource(const BinaryImage &Image,
                            llvm::ArrayRef<va_t> Addresses,
                            const X64ContinuationSourceOptions &Options);
+
+/// Build the two-pointer (state, immutable event) delivery entry. This is not
+/// a decoded instruction and must not be counted as instruction coverage.
+llvm::Expected<X64ContinuationInstructionSource>
+buildX64ContinuationEventSource(const X64ContinuationSourceOptions &Options);
 
 } // namespace analysis
 } // namespace neverd

@@ -12,6 +12,7 @@
 #include "NativeStackControl.h"
 #include "StringTransfer.h"
 #include "X64ArchitecturalValues.h"
+#include "X64ContinuationDelivery.h"
 #include "X64ContinuationEvents.h"
 #include "X64ContinuationFredReturns.h"
 #include "X64ContinuationHle.h"
@@ -973,7 +974,10 @@ struct Writer {
       const NdVar High = temporary(), Bad = temporary(1);
       emit(NdOp::SUBBYTES, High, {Op.Inputs[1], constant(8)});
       emit(NdOp::INT_LESSEQUAL, Bad, {Op.Inputs[2], High});
-      rejectIf(Bad);
+      if (Options.EventDelivery)
+        exitIf(Bad, [&] { fault(0); });
+      else
+        rejectIf(Bad);
       Block->Ops.push_back(Op);
     } else if (alignmentIntrinsic(Op)) {
       // RequireAligned is a precondition, not an instruction to trap the
@@ -1046,6 +1050,16 @@ struct Writer {
     }
     if (NativeOutput.isReg())
       write(NativeOutput, Op.Output, LowSlice);
+  }
+
+  void fault(uint8_t Vector) {
+    const auto SavedFlags = temporary();
+    emit(NdOp::INT_OR, SavedFlags,
+         {load(offsetof(State, RFlags)), constant(0x10000)});
+    detail::X64ContinuationEvents<Writer>(*this, *Options.PagingAddressBits)
+        .interrupt(constant(Vector), load(offsetof(State, PC)), SavedFlags,
+                   constant(0), constant(0), constant(0), constant(0),
+                   constant(0), constant(0));
   }
 };
 
@@ -1196,12 +1210,18 @@ buildInstruction(SpecializationInstruction Instruction,
       Instruction.Ops.front().Inputs[2] ==
           NdVar::reg(x86reg::RCX, Instruction.Ops.front().Inputs[1].Size) &&
       Instruction.Origin.Control == LowInstructionControl::Terminator;
+  const bool UndefinedInstruction =
+      Options.EventDelivery && Instruction.NativeBytes.size() == 2 &&
+      Instruction.NativeBytes[0] == 0x0f &&
+      Instruction.NativeBytes[1] == 0x0b && Instruction.Ops.size() == 1 &&
+      eventIntrinsic(Instruction.Ops.front(), Intrinsic::Ud2, 1);
   // These unprefixed encodings have the same meaning in compatibility mode.
   // REX-prefixed forms cannot share that entry domain: there REX is an opcode.
   const bool CompatibilityFastEntry =
-      (Sysenter || Sysexit) && Instruction.NativeBytes.size() == 2 &&
-      Instruction.NativeBytes[0] == 0x0f &&
-      Instruction.NativeBytes[1] == (Sysenter ? 0x34 : 0x35);
+      UndefinedInstruction ||
+      ((Sysenter || Sysexit) && Instruction.NativeBytes.size() == 2 &&
+       Instruction.NativeBytes[0] == 0x0f &&
+       Instruction.NativeBytes[1] == (Sysenter ? 0x34 : 0x35));
   const auto Return =
       Events ? frameReturnInstruction(Instruction) : std::nullopt;
   const bool Iret = Return && Return->Interrupt;
@@ -1269,13 +1289,14 @@ buildInstruction(SpecializationInstruction Instruction,
       Instruction.UndefinedEffects.Coverage == LowUndefinedCoverage::Missing &&
       Instruction.UndefinedEffects.Effects.empty();
   if ((!FarPointer && !UserInterrupt && !FredReturn && !Vmrun && !Mpx &&
-       !Hypercall && !Snp && !Hle &&
+       !Hypercall && !Snp && !Hle && !UndefinedInstruction &&
        (Instruction.ProfileProjection != InterpreterProfileProjection::None ||
         (!OwnedFrameReturn && Instruction.UndefinedEffects.Coverage !=
                                   LowUndefinedCoverage::Complete))) ||
       (Instruction.Origin.Control == LowInstructionControl::Terminator &&
        !Sysret && !Sysenter && !Sysexit && !Iret && !FarReturn && !Interrupt &&
-       !UserInterrupt && !FredReturn && !Vmrun && !Hypercall && !Snp && !Hle))
+       !UserInterrupt && !FredReturn && !Vmrun && !Hypercall && !Snp && !Hle &&
+       !UndefinedInstruction))
     RequireNative("instruction requires an explicit native environment");
   if (Instruction.UndefinedEffects.Effects.size() >
       std::size(State{}.Undefined))
@@ -1310,7 +1331,8 @@ buildInstruction(SpecializationInstruction Instruction,
                      (Op.Opcode == NdOp::INTRINSIC && !Alignment) ||
                      Op.MemoryOrdering != NdMemoryOrdering::None;
     if (!Timestamp && !Sysret && !Sysenter && !Sysexit && !Iret && !FarReturn &&
-        !Interrupt && !supportedOperation(Op, Options, WideDivision)) {
+        !Interrupt && !UndefinedInstruction &&
+        !supportedOperation(Op, Options, WideDivision)) {
       std::string Detail = "unsupported continuation operation: ";
       Detail += ndOpName(Op.Opcode);
       if (Op.Opcode == NdOp::INTRINSIC && Op.NumInputs &&
@@ -1390,7 +1412,7 @@ buildInstruction(SpecializationInstruction Instruction,
              {Guard.load(offsetof(State, PC)), constant(Result.Address)});
   const NdVar Packed = Guard.load(offsetof(State, RFlags));
   const uint64_t EntryFlags =
-      (Interrupt || FredReturn ||
+      (Interrupt || FredReturn || UndefinedInstruction ||
        UserInterrupt == detail::X64UserInterrupt::Return)
           ? 0x3d7fd7
       : (UserInterrupt || Iret || FarReturn || Sysret || Sysenter || Sysexit ||
@@ -1427,7 +1449,7 @@ buildInstruction(SpecializationInstruction Instruction,
         NdOp::INT_AND, RPL,
         {Guard.load(offsetof(StateV5, CS) + offsetof(Segment, Selector), 2),
          constant(3, 2)});
-    if (Sysenter || UserInterrupt) {
+    if (Sysenter || UserInterrupt || UndefinedInstruction) {
       // Conforming code retains the caller's CPL even when CS.DPL is lower.
       const NdVar Shifted = Guard.temporary(2), DPL = Guard.temporary(2);
       const NdVar ConformingBits = Guard.temporary(2);
@@ -1446,9 +1468,12 @@ buildInstruction(SpecializationInstruction Instruction,
     } else {
       Guard.emit(NdOp::INT_NOTEQUAL, CPLBad, {RPL, constant(0, 2)});
     }
-    Guard.emit(NdOp::INT_AND, SegmentBits,
-               {Attributes,
-                constant((Sysenter || UserInterrupt) ? 0x6098 : 0x60f8, 2)});
+    Guard.emit(
+        NdOp::INT_AND, SegmentBits,
+        {Attributes,
+         constant((Sysenter || UserInterrupt || UndefinedInstruction) ? 0x6098
+                                                                      : 0x60f8,
+                  2)});
     const NdVar LongModeBad =
         CompatibilityFastEntry ? Guard.temporary(1) : ModeBad;
     Guard.emit(NdOp::INT_NOTEQUAL, LongModeBad,
@@ -1462,8 +1487,10 @@ buildInstruction(SpecializationInstruction Instruction,
       const auto BaseBad = Guard.temporary(1), Limit = Guard.temporary();
       const auto LimitBad = Guard.temporary(1), AddressBad = Guard.temporary(1);
       const auto CompatibilityBad = Guard.temporary(1);
-      Guard.emit(NdOp::INT_AND, LegacyBits,
-                 {Attributes, constant(Sysenter ? 0x2098 : 0x20f8, 2)});
+      Guard.emit(
+          NdOp::INT_AND, LegacyBits,
+          {Attributes,
+           constant((Sysenter || UndefinedInstruction) ? 0x2098 : 0x20f8, 2)});
       Guard.emit(NdOp::INT_NOTEQUAL, LegacyModeBad,
                  {LegacyBits, constant(0x98, 2)});
       Guard.emit(NdOp::INT_NOTEQUAL, BaseBad,
@@ -1543,6 +1570,8 @@ buildInstruction(SpecializationInstruction Instruction,
     detail::X64ContinuationMpx<Writer>(W).validate();
   if (Result.RequiresNativeExecution) {
     W.leave(Exit::NativeInstruction);
+  } else if (UndefinedInstruction) {
+    W.fault(6);
   } else if (Hle) {
     detail::emitX64HleStep(W, *Hle, Instruction.Fallthrough.Address);
   } else if (Snp) {
@@ -1670,6 +1699,9 @@ buildX64ContinuationSource(const BinaryImage &Image,
                            llvm::ArrayRef<va_t> Addresses,
                            const X64ContinuationSourceOptions &Options) {
   const bool Controls = hasControlState(Options);
+  if (Options.EventDelivery &&
+      Options.Profile != X64ContinuationProfile::KernelEventsNoFaultV6)
+    return invalid("event delivery requires kernel-events-v6");
   if (Options.Profile != X64ContinuationProfile::KernelNoFaultV1 && !Controls)
     return invalid("continuation source requires its explicit kernel domain");
   const bool Returns = hasReturnState(Options);
@@ -1762,6 +1794,53 @@ buildX64ContinuationSource(const BinaryImage &Image,
       Work += Block.Ops.size();
     }
     Result.push_back(std::move(*Unit));
+  }
+  return Result;
+}
+
+llvm::Expected<X64ContinuationInstructionSource>
+buildX64ContinuationEventSource(const X64ContinuationSourceOptions &Options) {
+  if (!Options.EventDelivery ||
+      Options.Profile != X64ContinuationProfile::KernelEventsNoFaultV6 ||
+      !Options.PagingAddressBits ||
+      (*Options.PagingAddressBits != 48 && *Options.PagingAddressBits != 57) ||
+      !Options.MXCSRMask)
+    return invalid("event delivery requires V6, paging width and MXCSR mask");
+  if (auto Error = x64::mxcsr::validateOptions(controlOptions(Options)))
+    return std::move(Error);
+  X64ContinuationInstructionSource Result;
+  Result.StateVersion = 6;
+  Result.StateBytes = sizeof(StateV6);
+  Result.SourceABI = sourceABI();
+  auto EventParameter = Result.SourceABI.Parameters.front();
+  EventParameter.Name = "event";
+  EventParameter.Location.RegisterOffset = x86reg::RSI;
+  Result.SourceABI.Parameters.push_back(std::move(EventParameter));
+  auto &Function = Result.Function;
+  Function.Entry = 0;
+  Function.Name = "neverd_x64_deliver_event_body_v6";
+  Function.Blocks.resize(3);
+  for (int I = 0; I != 3; ++I) {
+    Function.Blocks[I].Id = I;
+    Function.Blocks[I].StartAddr = I;
+  }
+  Function.Blocks[0].Succs = {1};
+  Function.Blocks[1].Preds = {0};
+  Writer Entry{Function, &Function.Blocks[0], Options};
+  Entry.emit(NdOp::COPY, NdVar::reg(StatePointer, 8),
+             {NdVar::reg(x86reg::RDI, 8)});
+  Entry.emit(NdOp::BRANCH, {}, {constant(1)});
+  Writer Reject{Function, &Function.Blocks[2], Options};
+  Reject.leave(Exit::InvalidState);
+  Writer W{Function, &Function.Blocks[1], Options};
+  detail::X64ContinuationDelivery<Writer>(W, *Options.PagingAddressBits)
+      .execute(NdVar::reg(x86reg::RSI, 8));
+  uint64_t Work = 0;
+  for (auto &Block : Function.Blocks) {
+    if (Block.Ops.size() > Options.MaxOperations - Work)
+      return invalid("event delivery operation budget exhausted");
+    Work += Block.Ops.size();
+    finishBlock(Block);
   }
   return Result;
 }

@@ -15578,3 +15578,14 @@ The SNP C renderer lives under `render/X86/`, separate from VMX assembly
 transport. RMP accesses, privilege, faults and GHCB service memory remain
 native environment effects. The [SNP contract](x86-snp-state.md) describes the
 normal-completion boundary and its disjoint compiler-state requirement.
+
+`X64ContinuationEvent.h` owns the immutable selected-event input.
+`X64ContinuationDelivery.h` validates cause and interruptibility; it delegates
+IDT/descriptor/TSS/frame transitions to the same `X64ContinuationEvents.h`
+owner as INT/INT3. The pipeline emits this LowIR through either C backend and
+only adds the typed public wrapper. Event selection, APIC/PIC priority,
+restart/partial-completion state and shadow lifetime remain explicit producer
+responsibilities. Canonical UD2 and admitted unsigned 64-bit DIV may deliver
+#UD/#DE directly under the V6 event binding. See
+[the event interface](x86-event-delivery.md); legacy non-IA-32e dispatch and
+SMM/SGX transitions do not acquire semantics from this interface.

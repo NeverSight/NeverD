@@ -14,6 +14,7 @@
 #include "X64RtmRegions.h"
 #include "X64SpecialRegions.h"
 
+#include "neverd/analysis/arch/x86_64/X64ContinuationEvent.h"
 #include "neverd/analysis/arch/x86_64/X64ContinuationSource.h"
 #include "neverd/backend/c/HighC/HighCEmitter.h"
 #include "neverd/backend/c/LLVMC/LLVMCEmitter.h"
@@ -106,6 +107,7 @@ llvm::Expected<Request> readRequest(llvm::StringRef Text) {
                                        "native_hle_steps",
                                        "native_snp_instructions",
                                        "native_sev_guest_exit",
+                                       "event_delivery",
                                        "native_hyperv_hypercall_entry",
                                        "follow_internal_calls",
                                        "follow_direct_jumps",
@@ -201,6 +203,7 @@ llvm::Expected<Request> readRequest(llvm::StringRef Text) {
       {"native_hle_steps", &Options.NativeHleSteps},
       {"native_snp_instructions", &Options.NativeSnpInstructions},
       {"native_sev_guest_exit", &Options.NativeSevGuestExit},
+      {"event_delivery", &Options.EventDelivery},
       {"follow_internal_calls", &Result.FollowInternalCalls},
       {"follow_direct_jumps", &Result.FollowDirectJumps}};
   if (const auto *Value = Object->get("uiret_restores_uif")) {
@@ -521,7 +524,14 @@ exportX64Continuation(const BinaryImage &Image, llvm::StringRef RequestJSON,
   std::vector<MedFunc> Functions;
   llvm::json::Array Manifest;
   size_t Native = 0;
-  for (const auto &Unit : *Units) {
+  uint64_t Work = Units->size();
+  const auto AddFunction =
+      [&](const X64ContinuationInstructionSource &Unit) -> llvm::Error {
+    for (const auto &Block : Unit.Function.Blocks) {
+      if (Block.Ops.size() > Request->Options.MaxOperations - Work)
+        return invalid("continuation source operation budget exhausted");
+      Work += Block.Ops.size();
+    }
     LowToMedConverter Converter;
     std::map<va_t, SourceFunctionTypeHint> Hints{
         {Unit.Address, Unit.SourceABI}};
@@ -533,6 +543,18 @@ exportX64Continuation(const BinaryImage &Image, llvm::StringRef RequestJSON,
     if (!verifyMedFunc(Function, "x64-continuation-export"))
       return invalid("x64 continuation source failed MedIR verification");
     Functions.push_back(std::move(Function));
+    return llvm::Error::success();
+  };
+  if (Request->Options.EventDelivery) {
+    auto Event = buildX64ContinuationEventSource(Request->Options);
+    if (!Event)
+      return Event.takeError();
+    if (auto Error = AddFunction(*Event))
+      return std::move(Error);
+  }
+  for (const auto &Unit : *Units) {
+    if (auto Error = AddFunction(Unit))
+      return std::move(Error);
     Native += Unit.RequiresNativeExecution;
     Manifest.push_back(
         llvm::json::Object{{"pc", hex(Unit.Address)},
@@ -580,6 +602,45 @@ exportX64Continuation(const BinaryImage &Image, llvm::StringRef RequestJSON,
   // declarations need not precede byte-pointer steps; inserting their headers
   // first would freeze libc feature selection before the emitter's macros.
   auto Fields = stateDeclaration(OS, Version, Units->front().StateBytes);
+  if (Request->Options.EventDelivery) {
+    OS << R"C(
+/* The producer selects the event and supplies architectural restart state.
+ * Delivery stops at handler entry: 7=delivered, 15=blocked, 5=invalid.
+ * No host exceptions are caught; all delivery RAM must be accessible. */
+enum neverd_x64_event_kind_v1 {
+    NEVERD_X64_EVENT_FAULT=0, NEVERD_X64_EVENT_TRAP=1,
+    NEVERD_X64_EVENT_INTERRUPT=2, NEVERD_X64_EVENT_NMI=3,
+    NEVERD_X64_EVENT_SOFTWARE=4, NEVERD_X64_EVENT_INSTRUCTION_BREAKPOINT=5,
+    NEVERD_X64_EVENT_ABORT=6
+};
+typedef struct neverd_x64_event_v1 {
+    uint64_t SavedPC, ErrorCode, FaultAddress;
+    uint8_t Vector, Kind, STIBlocked, SSBlocked, NMIBlockedBySTI,
+            RepeatedString, Reserved[2];
+} neverd_x64_event_v1;
+uint64_t neverd_x64_deliver_event_v6(neverd_x64_state_v6 *state,
+                                    const neverd_x64_event_v1 *event) {
+    return neverd_x64_deliver_event_body_v6((void *)state, (void *)event);
+}
+)C";
+    OS << "_Static_assert(sizeof(neverd_x64_event_v1) == "
+       << sizeof(X64ContinuationEventV1) << ", \"event input size\");\n";
+#define EVENT_FIELD(Member)                                                    \
+  OS << "_Static_assert(offsetof(neverd_x64_event_v1, " #Member ") == "        \
+     << offsetof(X64ContinuationEventV1, Member)                               \
+     << ", \"event input offset\");\n"
+    EVENT_FIELD(SavedPC);
+    EVENT_FIELD(ErrorCode);
+    EVENT_FIELD(FaultAddress);
+    EVENT_FIELD(Vector);
+    EVENT_FIELD(Kind);
+    EVENT_FIELD(STIBlocked);
+    EVENT_FIELD(SSBlocked);
+    EVENT_FIELD(NMIBlockedBySTI);
+    EVENT_FIELD(RepeatedString);
+    EVENT_FIELD(Reserved);
+#undef EVENT_FIELD
+  }
   if (Request->DirectDispatch)
     emitX64SpecialRegionDriver(OS, *Units, Request->FollowInternalCalls);
   else
@@ -608,6 +669,15 @@ exportX64Continuation(const BinaryImage &Image, llvm::StringRef RequestJSON,
       {"profile", Profile},
       {"interface", "explicit-machine-state"},
       {"environment_driver", "neverd_x64_run_v" + std::to_string(Version)},
+      {"event_delivery", Request->Options.EventDelivery},
+      {"event_delivery_domain",
+       Request->Options.EventDelivery
+           ? "separate IA-32e event entry: CPL0..3, 64-bit or compatibility "
+             "source; explicit selected event, saved PC, error code, CR2 and "
+             "shadows; successful descriptor/TSS/stack RAM; no nested delivery "
+             "faults, CET, FRED, SMM or enclave transitions; canonical UD2 "
+             "and admitted unsigned 64-bit DIV produce #UD/#DE"
+           : "disabled"},
       {"environment_binding",
        "explicit full-state callback; separately bounded"},
       {"call_return_policy",
@@ -626,6 +696,7 @@ exportX64Continuation(const BinaryImage &Image, llvm::StringRef RequestJSON,
       {"state_fields", std::move(Fields)},
       {"request", std::move(*Binding)},
       {"total", uint64_t(Units->size())},
+      {"lowered_operations", Work},
       {"modeled", uint64_t(Units->size() - Native)},
       {"native_requests", uint64_t(Native)},
       {"regions", std::move(Regions)},
