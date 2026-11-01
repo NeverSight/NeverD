@@ -15,11 +15,11 @@
   },
   "tools": {
     "neverd": {
-      "path": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86/bin/neverd",
+      "path": "<neverd-checkout>/build-x86/bin/neverd",
       "sha256": "7893d10fff38cf34815da65b93a607038871399f0e9bbb688c04a54ea80dcc58"
     },
     "neverd_sdk": {
-      "path": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86/bin/libneverd.so",
+      "path": "<neverd-checkout>/build-x86/bin/libneverd.so",
       "sha256": "7f701a183b31d56a3b43eb1151471de96e66a9765489157113724302b1dab1d2"
     }
   },
@@ -48,7 +48,7 @@
         ],
         "tools": {
           "clang": {
-            "path": "/home/ad/.local/bin/clang",
+            "path": "<toolchain>/bin/clang",
             "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
           },
           "as": {
@@ -64,7 +64,7 @@
             "sha256": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770"
           },
           "llc": {
-            "path": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc",
+            "path": "<llvm-checkout>/build-intrinsics/bin/llc",
             "sha256": "7aad6cd7f22b3a4797fce65e658c3743cbbe18143e2e980a2ab99ba9b7971def"
           }
         },
@@ -118,7 +118,7 @@
         ],
         "tools": {
           "clang": {
-            "path": "/home/ad/.local/bin/clang",
+            "path": "<toolchain>/bin/clang",
             "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
           },
           "as": {
@@ -134,7 +134,7 @@
             "sha256": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770"
           },
           "llc": {
-            "path": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc",
+            "path": "<llvm-checkout>/build-intrinsics/bin/llc",
             "sha256": "7aad6cd7f22b3a4797fce65e658c3743cbbe18143e2e980a2ab99ba9b7971def"
           }
         },
@@ -188,7 +188,7 @@
         ],
         "tools": {
           "clang": {
-            "path": "/home/ad/.local/bin/clang",
+            "path": "<toolchain>/bin/clang",
             "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
           },
           "as": {
@@ -204,7 +204,7 @@
             "sha256": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770"
           },
           "llc": {
-            "path": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc",
+            "path": "<llvm-checkout>/build-intrinsics/bin/llc",
             "sha256": "7aad6cd7f22b3a4797fce65e658c3743cbbe18143e2e980a2ab99ba9b7971def"
           }
         },
@@ -258,7 +258,7 @@
         ],
         "tools": {
           "clang": {
-            "path": "/home/ad/.local/bin/clang",
+            "path": "<toolchain>/bin/clang",
             "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
           },
           "as": {
@@ -274,7 +274,7 @@
             "sha256": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770"
           },
           "llc": {
-            "path": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc",
+            "path": "<llvm-checkout>/build-intrinsics/bin/llc",
             "sha256": "7aad6cd7f22b3a4797fce65e658c3743cbbe18143e2e980a2ab99ba9b7971def"
           }
         },
@@ -328,7 +328,7 @@
         ],
         "tools": {
           "clang": {
-            "path": "/home/ad/.local/bin/clang",
+            "path": "<toolchain>/bin/clang",
             "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
           },
           "as": {
@@ -344,7 +344,7 @@
             "sha256": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770"
           },
           "compiler": {
-            "path": "/mnt/data/neverd-native-system-returns-20261029/build-neverc/bin/neverc",
+            "path": "<native-system-returns-qualification>/build-neverc/bin/neverc",
             "sha256": "305f2ddd418613f0793d21a344ed639c3764f0b4e253a68e7d30feb4fdffc4e7"
           }
         },
@@ -395,7 +395,7 @@
         ],
         "tools": {
           "clang": {
-            "path": "/home/ad/.local/bin/clang",
+            "path": "<toolchain>/bin/clang",
             "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
           },
           "as": {
@@ -411,11 +411,11 @@
             "sha256": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770"
           },
           "compiler": {
-            "path": "/mnt/data/neverd-native-system-returns-20261029/build-neverc/bin/neverc",
+            "path": "<native-system-returns-qualification>/build-neverc/bin/neverc",
             "sha256": "305f2ddd418613f0793d21a344ed639c3764f0b4e253a68e7d30feb4fdffc4e7"
           },
           "llc": {
-            "path": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc",
+            "path": "<llvm-checkout>/build-intrinsics/bin/llc",
             "sha256": "7aad6cd7f22b3a4797fce65e658c3743cbbe18143e2e980a2ab99ba9b7971def"
           }
         },
@@ -468,7 +468,7 @@
         ],
         "tools": {
           "clang": {
-            "path": "/home/ad/.local/bin/clang",
+            "path": "<toolchain>/bin/clang",
             "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
           },
           "as": {
@@ -484,11 +484,11 @@
             "sha256": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770"
           },
           "compiler": {
-            "path": "/mnt/data/neverd-native-system-returns-20261029/build-neverc/bin/neverc",
+            "path": "<native-system-returns-qualification>/build-neverc/bin/neverc",
             "sha256": "305f2ddd418613f0793d21a344ed639c3764f0b4e253a68e7d30feb4fdffc4e7"
           },
           "llc": {
-            "path": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc",
+            "path": "<llvm-checkout>/build-intrinsics/bin/llc",
             "sha256": "7aad6cd7f22b3a4797fce65e658c3743cbbe18143e2e980a2ab99ba9b7971def"
           }
         },
@@ -541,7 +541,7 @@
         ],
         "tools": {
           "clang": {
-            "path": "/home/ad/.local/bin/clang",
+            "path": "<toolchain>/bin/clang",
             "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
           },
           "as": {
@@ -557,7 +557,7 @@
             "sha256": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770"
           },
           "compiler": {
-            "path": "/mnt/data/neverd-native-system-returns-20261029/build-neverc/bin/neverc",
+            "path": "<native-system-returns-qualification>/build-neverc/bin/neverc",
             "sha256": "305f2ddd418613f0793d21a344ed639c3764f0b4e253a68e7d30feb4fdffc4e7"
           }
         },
@@ -608,7 +608,7 @@
         ],
         "tools": {
           "clang": {
-            "path": "/home/ad/.local/bin/clang",
+            "path": "<toolchain>/bin/clang",
             "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
           },
           "as": {
@@ -624,7 +624,7 @@
             "sha256": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770"
           },
           "compiler": {
-            "path": "/mnt/data/neverd-native-system-returns-20261029/build-neverc/bin/neverc",
+            "path": "<native-system-returns-qualification>/build-neverc/bin/neverc",
             "sha256": "305f2ddd418613f0793d21a344ed639c3764f0b4e253a68e7d30feb4fdffc4e7"
           }
         },
@@ -675,7 +675,7 @@
         ],
         "tools": {
           "clang": {
-            "path": "/home/ad/.local/bin/clang",
+            "path": "<toolchain>/bin/clang",
             "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
           },
           "as": {
@@ -691,11 +691,11 @@
             "sha256": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770"
           },
           "compiler": {
-            "path": "/mnt/data/neverd-native-system-returns-20261029/build-neverc/bin/neverc",
+            "path": "<native-system-returns-qualification>/build-neverc/bin/neverc",
             "sha256": "305f2ddd418613f0793d21a344ed639c3764f0b4e253a68e7d30feb4fdffc4e7"
           },
           "llc": {
-            "path": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc",
+            "path": "<llvm-checkout>/build-intrinsics/bin/llc",
             "sha256": "7aad6cd7f22b3a4797fce65e658c3743cbbe18143e2e980a2ab99ba9b7971def"
           }
         },
@@ -748,7 +748,7 @@
         ],
         "tools": {
           "clang": {
-            "path": "/home/ad/.local/bin/clang",
+            "path": "<toolchain>/bin/clang",
             "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
           },
           "as": {
@@ -764,11 +764,11 @@
             "sha256": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770"
           },
           "compiler": {
-            "path": "/mnt/data/neverd-native-system-returns-20261029/build-neverc/bin/neverc",
+            "path": "<native-system-returns-qualification>/build-neverc/bin/neverc",
             "sha256": "305f2ddd418613f0793d21a344ed639c3764f0b4e253a68e7d30feb4fdffc4e7"
           },
           "llc": {
-            "path": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc",
+            "path": "<llvm-checkout>/build-intrinsics/bin/llc",
             "sha256": "7aad6cd7f22b3a4797fce65e658c3743cbbe18143e2e980a2ab99ba9b7971def"
           }
         },
@@ -821,7 +821,7 @@
         ],
         "tools": {
           "clang": {
-            "path": "/home/ad/.local/bin/clang",
+            "path": "<toolchain>/bin/clang",
             "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
           },
           "as": {
@@ -837,11 +837,11 @@
             "sha256": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770"
           },
           "compiler": {
-            "path": "/mnt/data/neverd-native-system-returns-20261029/build-neverc/bin/neverc",
+            "path": "<native-system-returns-qualification>/build-neverc/bin/neverc",
             "sha256": "305f2ddd418613f0793d21a344ed639c3764f0b4e253a68e7d30feb4fdffc4e7"
           },
           "llc": {
-            "path": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc",
+            "path": "<llvm-checkout>/build-intrinsics/bin/llc",
             "sha256": "7aad6cd7f22b3a4797fce65e658c3743cbbe18143e2e980a2ab99ba9b7971def"
           }
         },
@@ -894,7 +894,7 @@
         ],
         "tools": {
           "clang": {
-            "path": "/home/ad/.local/bin/clang",
+            "path": "<toolchain>/bin/clang",
             "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
           },
           "as": {
@@ -910,11 +910,11 @@
             "sha256": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770"
           },
           "compiler": {
-            "path": "/mnt/data/neverd-native-system-returns-20261029/build-neverc/bin/neverc",
+            "path": "<native-system-returns-qualification>/build-neverc/bin/neverc",
             "sha256": "305f2ddd418613f0793d21a344ed639c3764f0b4e253a68e7d30feb4fdffc4e7"
           },
           "llc": {
-            "path": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc",
+            "path": "<llvm-checkout>/build-intrinsics/bin/llc",
             "sha256": "7aad6cd7f22b3a4797fce65e658c3743cbbe18143e2e980a2ab99ba9b7971def"
           }
         },
@@ -1005,9 +1005,9 @@
           }
         ],
         "tools": {
-          "/mnt/data/neverd-native-system-returns-20261029/build-neverc/bin/neverc": "305f2ddd418613f0793d21a344ed639c3764f0b4e253a68e7d30feb4fdffc4e7",
-          "/home/ad/.local/bin/clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
-          "/home/ad/.local/bin/ld.lld": "fc1073aaaacfed055c0612dc5190cd19419c711cb8341c37d97fec2916891447",
+          "<native-system-returns-qualification>/build-neverc/bin/neverc": "305f2ddd418613f0793d21a344ed639c3764f0b4e253a68e7d30feb4fdffc4e7",
+          "<toolchain>/bin/clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+          "<toolchain>/bin/ld.lld": "fc1073aaaacfed055c0612dc5190cd19419c711cb8341c37d97fec2916891447",
           "/usr/bin/objcopy": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770",
           "/usr/local/bin/qemu-system-x86_64": "7dcf38a7fa3478a269fe6890854f9a4ce4f14d7600f023d03fa1a28cf23e04c0"
         },
@@ -1061,9 +1061,9 @@
           }
         ],
         "tools": {
-          "/mnt/data/neverd-native-system-returns-20261029/build-neverc/bin/neverc": "305f2ddd418613f0793d21a344ed639c3764f0b4e253a68e7d30feb4fdffc4e7",
-          "/home/ad/.local/bin/clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
-          "/home/ad/.local/bin/ld.lld": "fc1073aaaacfed055c0612dc5190cd19419c711cb8341c37d97fec2916891447",
+          "<native-system-returns-qualification>/build-neverc/bin/neverc": "305f2ddd418613f0793d21a344ed639c3764f0b4e253a68e7d30feb4fdffc4e7",
+          "<toolchain>/bin/clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+          "<toolchain>/bin/ld.lld": "fc1073aaaacfed055c0612dc5190cd19419c711cb8341c37d97fec2916891447",
           "/usr/bin/objcopy": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770",
           "/usr/local/bin/qemu-system-x86_64": "7dcf38a7fa3478a269fe6890854f9a4ce4f14d7600f023d03fa1a28cf23e04c0"
         },
@@ -1117,10 +1117,10 @@
           }
         ],
         "tools": {
-          "/mnt/data/neverd-native-system-returns-20261029/build-neverc/bin/neverc": "305f2ddd418613f0793d21a344ed639c3764f0b4e253a68e7d30feb4fdffc4e7",
-          "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc": "7aad6cd7f22b3a4797fce65e658c3743cbbe18143e2e980a2ab99ba9b7971def",
-          "/home/ad/.local/bin/clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
-          "/home/ad/.local/bin/ld.lld": "fc1073aaaacfed055c0612dc5190cd19419c711cb8341c37d97fec2916891447",
+          "<native-system-returns-qualification>/build-neverc/bin/neverc": "305f2ddd418613f0793d21a344ed639c3764f0b4e253a68e7d30feb4fdffc4e7",
+          "<llvm-checkout>/build-intrinsics/bin/llc": "7aad6cd7f22b3a4797fce65e658c3743cbbe18143e2e980a2ab99ba9b7971def",
+          "<toolchain>/bin/clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+          "<toolchain>/bin/ld.lld": "fc1073aaaacfed055c0612dc5190cd19419c711cb8341c37d97fec2916891447",
           "/usr/bin/objcopy": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770",
           "/usr/local/bin/qemu-system-x86_64": "7dcf38a7fa3478a269fe6890854f9a4ce4f14d7600f023d03fa1a28cf23e04c0"
         },
@@ -1176,10 +1176,10 @@
           }
         ],
         "tools": {
-          "/mnt/data/neverd-native-system-returns-20261029/build-neverc/bin/neverc": "305f2ddd418613f0793d21a344ed639c3764f0b4e253a68e7d30feb4fdffc4e7",
-          "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc": "7aad6cd7f22b3a4797fce65e658c3743cbbe18143e2e980a2ab99ba9b7971def",
-          "/home/ad/.local/bin/clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
-          "/home/ad/.local/bin/ld.lld": "fc1073aaaacfed055c0612dc5190cd19419c711cb8341c37d97fec2916891447",
+          "<native-system-returns-qualification>/build-neverc/bin/neverc": "305f2ddd418613f0793d21a344ed639c3764f0b4e253a68e7d30feb4fdffc4e7",
+          "<llvm-checkout>/build-intrinsics/bin/llc": "7aad6cd7f22b3a4797fce65e658c3743cbbe18143e2e980a2ab99ba9b7971def",
+          "<toolchain>/bin/clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+          "<toolchain>/bin/ld.lld": "fc1073aaaacfed055c0612dc5190cd19419c711cb8341c37d97fec2916891447",
           "/usr/bin/objcopy": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770",
           "/usr/local/bin/qemu-system-x86_64": "7dcf38a7fa3478a269fe6890854f9a4ce4f14d7600f023d03fa1a28cf23e04c0"
         },
@@ -1235,10 +1235,10 @@
           }
         ],
         "tools": {
-          "/mnt/data/neverd-native-system-returns-20261029/build-neverc/bin/neverc": "305f2ddd418613f0793d21a344ed639c3764f0b4e253a68e7d30feb4fdffc4e7",
-          "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc": "7aad6cd7f22b3a4797fce65e658c3743cbbe18143e2e980a2ab99ba9b7971def",
-          "/home/ad/.local/bin/clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
-          "/home/ad/.local/bin/ld.lld": "fc1073aaaacfed055c0612dc5190cd19419c711cb8341c37d97fec2916891447",
+          "<native-system-returns-qualification>/build-neverc/bin/neverc": "305f2ddd418613f0793d21a344ed639c3764f0b4e253a68e7d30feb4fdffc4e7",
+          "<llvm-checkout>/build-intrinsics/bin/llc": "7aad6cd7f22b3a4797fce65e658c3743cbbe18143e2e980a2ab99ba9b7971def",
+          "<toolchain>/bin/clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+          "<toolchain>/bin/ld.lld": "fc1073aaaacfed055c0612dc5190cd19419c711cb8341c37d97fec2916891447",
           "/usr/bin/objcopy": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770",
           "/usr/local/bin/qemu-system-x86_64": "7dcf38a7fa3478a269fe6890854f9a4ce4f14d7600f023d03fa1a28cf23e04c0"
         },
@@ -1294,10 +1294,10 @@
           }
         ],
         "tools": {
-          "/mnt/data/neverd-native-system-returns-20261029/build-neverc/bin/neverc": "305f2ddd418613f0793d21a344ed639c3764f0b4e253a68e7d30feb4fdffc4e7",
-          "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc": "7aad6cd7f22b3a4797fce65e658c3743cbbe18143e2e980a2ab99ba9b7971def",
-          "/home/ad/.local/bin/clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
-          "/home/ad/.local/bin/ld.lld": "fc1073aaaacfed055c0612dc5190cd19419c711cb8341c37d97fec2916891447",
+          "<native-system-returns-qualification>/build-neverc/bin/neverc": "305f2ddd418613f0793d21a344ed639c3764f0b4e253a68e7d30feb4fdffc4e7",
+          "<llvm-checkout>/build-intrinsics/bin/llc": "7aad6cd7f22b3a4797fce65e658c3743cbbe18143e2e980a2ab99ba9b7971def",
+          "<toolchain>/bin/clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+          "<toolchain>/bin/ld.lld": "fc1073aaaacfed055c0612dc5190cd19419c711cb8341c37d97fec2916891447",
           "/usr/bin/objcopy": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770",
           "/usr/local/bin/qemu-system-x86_64": "7dcf38a7fa3478a269fe6890854f9a4ce4f14d7600f023d03fa1a28cf23e04c0"
         },
@@ -1364,5 +1364,6 @@
     "No new exception, TF/RF, asynchronous-event, RTM or caller-context domain",
     "NeverC frontend and NeverD source are x64; code32 qualification belongs to the full LLVM fork",
     "Final LLVM SDK release and pin remain pending completion of the wider x86 task"
-  ]
+  ],
+  "published_paths": "Local checkout, toolchain and qualification roots are descriptive placeholders. Original revisions, test results and artifact/tool hashes are unchanged; these paths do not imply bundled artifacts."
 }
