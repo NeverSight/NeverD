@@ -86,6 +86,16 @@ add_neverd_unittest(NeverDLowScalarConstantTests
   LINK_COMPONENTS IRLow Lift
 )
 
+add_neverd_unittest(NeverDCallStackRangeTests
+  core/CallStackRangeTests.cpp
+  LINK_COMPONENTS IRLow Lift
+)
+
+add_neverd_unittest(NeverDCallStackRangeSourceTests
+  core/CallStackRangeSourceTests.cpp
+  LINK_COMPONENTS Pipeline BackendC
+)
+
 add_neverd_unittest(NeverDConstantBranchSourceTests
   core/ConstantBranchSourceTests.cpp
   LINK_COMPONENTS Pipeline BackendC

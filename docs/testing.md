@@ -6476,6 +6476,23 @@ also run with body retention enabled; cached blocks grant no larger proof
 allowance. Full pipeline checks still exercise format-derived arguments and
 register/stack summaries through their ordinary consumers.
 
+`NeverDCallStackRangeTests` checks finite indexed local, home and incoming
+stack reads under Win64 and System V layouts. Joins, loops, partial register
+and temporary writes, instruction boundaries, opaque effects, independent
+entries, arithmetic overflow and exhausted budgets must retain unknown facts
+unless the complete range is proved. Run it with the finite scalar branch,
+call-register unread, FP parameter mask and Med prologue-save suites when
+changing their shared dataflow.
+
+`NeverDCallStackRangeSourceTests` executes independent Win64 machine bytes
+beside both C routes on Linux x64. Fixed writes followed by indexed reads,
+and indexed writes followed by fixed reads, must share storage. The matrix
+uses default and NoOpt pipelines, optional analyst frame names, O0/O2 and
+UBSan, comparing 1,024 inputs in each of 32 configurations. Run
+`NeverDLLVMCFrameMemoryTests` and `NeverDCSourcePresentationTests` for the
+associated frame-alias and rendering changes. These checks establish local
+storage semantics, not Windows service execution or inferred alias exclusions.
+
 `CompleteFunctionCache` compares reconstructed default functions with cold
 builds, including address-taken roots, instruction coverage, relocation
 provenance, jump-table storage and exact selector/load occurrences. Exception
