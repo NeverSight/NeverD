@@ -294,6 +294,11 @@ if(BUILD_TESTING)
 
   qt_add_executable(neverd-gui-docking-tests tests/DockingTests.cpp)
   target_link_libraries(neverd-gui-docking-tests PRIVATE neverd_gui_app Qt6::Test)
+  if(TARGET neverd-worker-test-server)
+    target_compile_definitions(neverd-gui-docking-tests PRIVATE
+      TEST_WORKER="$<TARGET_FILE:neverd-worker-test-server>")
+    add_dependencies(neverd-gui-docking-tests neverd-worker-test-server)
+  endif()
   if(APPLE)
     target_sources(neverd-gui-docking-tests PRIVATE
       tests/platform/NativeWindowStateMac.mm)

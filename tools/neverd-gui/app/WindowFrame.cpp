@@ -27,6 +27,7 @@
 #include <QWidget>
 #include <QWindow>
 #include <algorithm>
+#include <utility>
 
 namespace neverd::gui {
 namespace {
@@ -148,6 +149,9 @@ WindowFrame::WindowFrame(QWidget &window, QWindow &handle, QWidget *titleBar)
       content_(window.contentsMargins()), states_(handle.windowStates()) {
   window.installEventFilter(this);
   handle.installEventFilter(this);
+  nativeResizeFilter_ = platform::createResizeFilter(
+      handle, [this](QPoint at) { return resizeEdgesAt(at); },
+      [this] { prepareResize(); });
   platform::configureFrame(handle);
   // Qt implements frameless Windows maximization by changing geometry, so
   // there need not be a native WindowStateChange event. Wayland and Cocoa
@@ -179,8 +183,35 @@ WindowFrame::WindowFrame(QWidget &window, QWindow &handle, QWidget *titleBar)
 }
 
 WindowFrame::~WindowFrame() {
+  nativeResizeFilter_.reset();
   finishResize();
   showEdges({});
+}
+
+bool WindowFrame::restoreWindowedGeometry(const QByteArray &geometry) {
+  if (!window_.restoreGeometry(geometry))
+    return false;
+  startupGeometry_.clear();
+  maximizeOnShow_ = window_.isMaximized();
+  if (window_.isFullScreen() || window_.isMaximized()) {
+    const QRect normal = window_.normalGeometry();
+    window_.setWindowState(Qt::WindowNoState);
+    window_.setGeometry(normal);
+    // Start a frameless window normally before maximizing. On Windows the
+    // hidden maximized path uses native maximization, whereas Qt's later
+    // frameless restore expects the rectangle saved by its visible path.
+    startupGeometry_ = geometry;
+  }
+  return true;
+}
+
+QByteArray WindowFrame::saveWindowedGeometry() const {
+  if (!startupGeometry_.isEmpty())
+    return startupGeometry_;
+  if ((window_.isFullScreen() || restoreMaximized_) &&
+      !geometryBeforeFullScreen_.isEmpty())
+    return geometryBeforeFullScreen_;
+  return window_.saveGeometry();
 }
 
 void WindowFrame::setWindowState(Qt::WindowStates states) {
@@ -188,6 +219,7 @@ void WindowFrame::setWindowState(Qt::WindowStates states) {
   restoreMaximized_ = false;
   restoreScreenTimedOut_ = false;
   if (states.testFlag(Qt::WindowFullScreen) && !window_.isFullScreen()) {
+    geometryBeforeFullScreen_ = window_.saveGeometry();
     beforeFullScreen_ = window_.windowState() & Qt::WindowMaximized;
     normalBeforeFullScreen_ = window_.normalGeometry();
     fullScreenScreen_ = handle_.screen();
@@ -279,12 +311,17 @@ Qt::Edges WindowFrame::edgesAt(QPoint at, QSize size, QMargins shadow) {
 bool WindowFrame::resizable() const {
   if (states_ & (Qt::WindowFullScreen | Qt::WindowMinimized))
     return false;
-  // AppKit also reports a manually sized window as zoomed when it reaches
-  // its size ceiling. Cocoa's zoomed windows can still be resized by an edge.
-  if ((states_ & Qt::WindowMaximized) &&
-      QGuiApplication::platformName() != QLatin1String("cocoa"))
-    return false;
   return window_.minimumSize() != window_.maximumSize();
+}
+
+Qt::Edges WindowFrame::resizeEdgesAt(QPoint at) const {
+  auto edges =
+      resizable() ? edgesAt(at, window_.size(), margins_) : Qt::Edges();
+  if (window_.minimumWidth() == window_.maximumWidth())
+    edges &= ~(Qt::LeftEdge | Qt::RightEdge);
+  if (window_.minimumHeight() == window_.maximumHeight())
+    edges &= ~(Qt::TopEdge | Qt::BottomEdge);
+  return edges;
 }
 
 void WindowFrame::syncWindowState() {
@@ -310,7 +347,13 @@ bool WindowFrame::eventFilter(QObject *object, QEvent *event) {
     // Some systems make the native window's frame only as it first shows.
     if (event->type() == QEvent::Show)
       platform::configureFrame(handle_);
-    else if (event->type() == QEvent::Resize)
+    else if (event->type() == QEvent::ShowToParent) {
+      // QWidget sends ShowToParent after its native window has been shown.
+      // Do not enter the hidden native-maximize path on the first Show.
+      startupGeometry_.clear();
+      if (std::exchange(maximizeOnShow_, false))
+        setWindowState(Qt::WindowMaximized);
+    } else if (event->type() == QEvent::Resize)
       placeTitleBar();
     else if (event->type() == QEvent::Paint)
       paint();
@@ -344,13 +387,7 @@ bool WindowFrame::eventFilter(QObject *object, QEvent *event) {
     }
     return true;
   }
-  Qt::Edges edges = resizable() ? edgesAt(mouse->position().toPoint(),
-                                          window_.size(), margins_)
-                                : Qt::Edges();
-  if (window_.minimumWidth() == window_.maximumWidth())
-    edges &= ~(Qt::LeftEdge | Qt::RightEdge);
-  if (window_.minimumHeight() == window_.maximumHeight())
-    edges &= ~(Qt::TopEdge | Qt::BottomEdge);
+  const auto edges = resizeEdgesAt(mouse->position().toPoint());
   if (event->type() == QEvent::MouseMove) {
     if (mouse->buttons() == Qt::NoButton)
       showEdges(edges);
@@ -359,7 +396,7 @@ bool WindowFrame::eventFilter(QObject *object, QEvent *event) {
   if (event->type() != QEvent::MouseButtonPress ||
       mouse->button() != Qt::LeftButton || !edges)
     return false;
-  showEdges({});
+  prepareResize();
   if (!handle_.startSystemResize(edges)) {
     // Cocoa does not implement QWindow::startSystemResize. Keep the same
     // visible frame and bounds with an ordinary mouse grab there.
@@ -369,6 +406,20 @@ bool WindowFrame::eventFilter(QObject *object, QEvent *event) {
     window_.grabMouse(shapeFor(edges));
   }
   return true;
+}
+
+void WindowFrame::prepareResize() {
+  showEdges({});
+  if (!(states_ & Qt::WindowMaximized))
+    return;
+  // Continue from the visible maximized rectangle, rather than jumping back
+  // to the earlier normal size. The restored shadow lies outside this area.
+  const QRect visible = window_.geometry().marginsRemoved(margins_);
+  platform::restoreForResize(handle_);
+  window_.showNormal();
+  syncWindowState();
+  platform::configureFrame(handle_);
+  window_.setGeometry(visible.marginsAdded(margins_));
 }
 
 void WindowFrame::resizeTo(QPoint globalPosition) {
