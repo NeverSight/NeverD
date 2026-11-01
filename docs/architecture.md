@@ -15175,6 +15175,21 @@ other hardware leaves retain the ordinary unavailable-state behavior. This is
 not a general machine-state calling convention or a proof of unresolved frame
 aliases.
 
+`X86/X64FillReturn.cpp` separately owns the normal-return RCX value of one
+complete scalar/SSE fill encoding. It checks all 233 bytes in a nonwritable
+executable mapping, including branch targets and padding; names, image addresses
+and library prototypes never admit a body. The original call retains every
+store and possible fault. Only a used full-width RCX clobber receives the
+checked cursor expression, bound to that occurrence's current source arguments.
+Calls with exceptional successors retain the unknown state of a partial fill.
+Shared post-recovery source preparation applies this once for HighC, LLVM C and
+SDK replay; native lifting retains its original state contract. Candidates are
+gated before scanning uses, each target is checked once per function, and only
+changed blocks are rebuilt in the existing caller workers. Literal count
+definitions avoid manufacturing conditional expressions; address constants do
+not become frozen numeric lengths. This narrow result proof grants no pointer
+noncapture, caller-frame or other dynamic call-return fact.
+
 The shared entry-stack offset proof follows the lifter's exact zero-extension
 of a native 32-bit address into its 64-bit memory-address container. It does
 not authenticate a wider incoming SP, a signed extension, a truncated 64-bit

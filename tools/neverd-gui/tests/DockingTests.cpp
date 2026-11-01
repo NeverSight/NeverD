@@ -676,6 +676,10 @@ private slots:
       previous.setGeometry(normal);
       previous.show();
       QVERIFY(QTest::qWaitForWindowExposed(&previous));
+      // X11 can quantize a requested size at fractional scale. Save the
+      // normal geometry accepted by the window manager.
+      QTest::qWait(250);
+      normal = previous.geometry();
       if (maximized) {
         previous.showMaximized();
         QTRY_VERIFY(previous.isMaximized());
@@ -733,9 +737,17 @@ private slots:
       QVERIFY(screen.contains(button->mapToGlobal(button->rect().center())));
     }
     if (maximized) {
+      if (!canPostPointerEvents())
+        QSKIP("Cocoa native restore-button input requires event-posting "
+              "permission; startup state and controls were checked above.");
       auto *restore = bar->findChild<QAbstractButton *>("maximizeButton");
-      window.raise();
-      window.activateWindow();
+      if (onWayland())
+        QVERIFY(shell(QStringLiteral("Main.activateWindow(%1);")
+                          .arg(nativeWindow(window))));
+      else {
+        window.raise();
+        window.activateWindow();
+      }
       QVERIFY(QTest::qWaitForWindowActive(&window));
       Pointer pointer;
       QVERIFY(pointer.click(*restore));
@@ -820,6 +832,7 @@ private slots:
       const QSize available = previous.screen()->availableSize();
       previous.resize(std::min(950, available.width() - 80),
                       std::min(620, available.height() - 80));
+      QTest::qWait(250);
       normal = previous.size();
       geometry = previous.saveWindowedGeometry();
       previous.actions().action(ActionId::ViewFullScreen)->trigger();
@@ -859,13 +872,17 @@ private slots:
   }
 
   void framedWindowEdgesResize() {
-    if (QGuiApplication::platformName() != QLatin1String("windows"))
-      QSKIP("Checks Windows native frame input.");
+    const auto platform = QGuiApplication::platformName();
+    if (platform != QLatin1String("windows") &&
+        platform != QLatin1String("xcb") && !onWayland())
+      QSKIP("Checks Windows and Linux native frame input.");
+    if (onWayland() && !qEnvironmentVariableIsSet("NEVERD_TEST_GNOME_POINTER"))
+      QSKIP("Wayland needs the isolated compositor's native pointer.");
     QFETCH(bool, quickStart);
     QFETCH(int, edges);
     QFETCH(bool, restored);
     QFETCH(bool, maximized);
-#if !defined(TEST_WORKER) || !defined(Q_OS_WIN)
+#if !defined(TEST_WORKER)
     QSKIP("Requires the fixture worker for a loaded production workbench.");
 #else
     QTemporaryDir project;
@@ -888,6 +905,9 @@ private slots:
       QVERIFY(file.open(QIODevice::WriteOnly));
       QCOMPARE(file.write("fixture"), 7);
       file.close();
+      // Opening the file shows the workbench. Set its initial size before
+      // Wayland starts configuring that first surface.
+      workbench->resize(950, 620);
       workbench->openFile(path);
       QTRY_VERIFY_WITH_TIMEOUT(session.loaded(), 7000);
       window = std::move(workbench);
@@ -895,19 +915,31 @@ private slots:
     window->resize(950, 620);
     window->show();
     QVERIFY(QTest::qWaitForWindowExposed(window.get()));
+    QTest::qWait(250);
+    const QSize normal = window->size();
+    test::NativeWindowStates applied(*window->windowHandle());
     if (restored) {
       window->showMaximized();
-      QTRY_VERIFY(window->isMaximized());
+      QTRY_VERIFY(applied.is(Qt::WindowMaximized));
       window->showNormal();
-      QTRY_VERIFY(!window->isMaximized());
+      QTRY_VERIFY(applied.is(Qt::WindowNoState));
+      QTRY_COMPARE(window->size(), normal);
     }
     if (maximized) {
       window->showMaximized();
-      QTRY_VERIFY(window->isMaximized());
-      QTRY_COMPARE(window->size(),
-                   window->screen()->availableGeometry().size());
+      QTRY_VERIFY(applied.is(Qt::WindowMaximized));
+      if (platform == QLatin1String("windows"))
+        QTRY_COMPARE(window->size(),
+                     window->screen()->availableGeometry().size());
+      if (onWayland())
+        QVERIFY(shell(QStringLiteral("Main.activateWindow(%1);")
+                          .arg(nativeWindow(*window))));
+      // The compositor can still animate its input surface after Qt has
+      // received the maximized size.
+      QTest::qWait(500);
     } else {
       QVERIFY(place(*window, QPoint(100, 100)));
+      QTest::qWait(100);
     }
     const QSize initial = window->size();
     const int shadow =
@@ -949,6 +981,7 @@ private slots:
     QVERIFY(pointer.move(*window, start, false));
     QTest::qWait(50);
     QVERIFY(pointer.button(*window, start, true));
+#ifdef Q_OS_WIN
     auto completion = pointer.finishWindowsDrag(*window, start + delta);
     QTRY_VERIFY_WITH_TIMEOUT(completion.wait_for(std::chrono::milliseconds(
                                  0)) == std::future_status::ready,
@@ -956,9 +989,32 @@ private slots:
     const auto [moved, released] = completion.get();
     QVERIFY(moved);
     QVERIFY(released);
+#else
+    QTest::qWait(100);
+    const bool moved = pointer.move(*window, start + delta, true);
+    QTest::qWait(200);
+    const bool released = pointer.button(*window, QPoint(), false);
+    QVERIFY(moved);
+    QVERIFY(released);
+#endif
+    if (maximized && platform != QLatin1String("windows")) {
+      QVERIFY(window->isMaximized());
+      QVERIFY(applied.is(Qt::WindowMaximized));
+      QCOMPARE(window->size(), initial);
+      QCOMPARE(window->contentsMargins().left(), 0);
+      QCOMPARE(window->contentsMargins().right(), 0);
+      return;
+    }
     if (maximized) {
       QTRY_VERIFY(!window->isMaximized());
-      QTRY_VERIFY_WITH_TIMEOUT(window->width() < initial.width(), 2000);
+      QTRY_VERIFY2_WITH_TIMEOUT(
+          window->width() < initial.width(),
+          qPrintable(QStringLiteral("Before %1x%2, after %3x%4")
+                         .arg(initial.width())
+                         .arg(initial.height())
+                         .arg(window->width())
+                         .arg(window->height())),
+          2000);
     } else if (delta.x())
       QTRY_VERIFY_WITH_TIMEOUT(window->width() > initial.width(), 2000);
     else
@@ -1475,12 +1531,14 @@ private slots:
       }
       auto *button = qobject_cast<QPushButton *>(desktop.Source.widget());
       QSignalSpy clicks(button, &QPushButton::clicked);
-      const QPoint center = button->rect().center();
-      QVERIFY(pointer.move(*button, center, false));
+      // The compositor can keep the target above a cancelled maximized
+      // source. Its center is covered at 150% scale; use exposed content.
+      const QPoint point(button->width() * 3 / 4, button->height() * 3 / 4);
+      QVERIFY(pointer.move(*button, point, false));
       QTest::qWait(50);
-      QVERIFY(pointer.button(*button, center, true));
+      QVERIFY(pointer.button(*button, point, true));
       QTest::qWait(50);
-      QVERIFY(pointer.button(*button, center, false));
+      QVERIFY(pointer.button(*button, point, false));
       QTRY_COMPARE(clicks.size(), 1);
     } else {
       QCOMPARE(desktop.Source.QWidget::window(), &desktop.Window);
