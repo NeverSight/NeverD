@@ -9656,6 +9656,14 @@ have separate acceptance gates.
 Unknown-address frame accesses still charge every potentially aliased cell.
 Their budget regression scales its load count with the configured limit and
 must withdraw all complete output when exhausted.
+`RegistrationFrameSnapshot` checks independent ordinary, entry and callback
+snapshots through partial writes, merges, stack release and callback reentry.
+Its deterministic mutation sequences compare shared branches with a bank of
+independently reconstructed cell maps, including hashes and logical work counts.
+Run these with the frame-memory tests, registration state/callee/EH suites,
+native and realigned registration fixtures, jump tables and instruction/exception
+boundaries when changing the snapshot storage. Sharing must not publish new
+stack, import-binding or frame-preservation facts.
 Memory extent tests continue to reject a borrow beyond 1 MiB and an oversized
 C++ throw object. Their shared source-call storage limit is independent of
 the registration propagation work cap.

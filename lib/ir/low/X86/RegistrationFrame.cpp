@@ -15,6 +15,8 @@
 #include "neverd/ir/low/X86ArithmeticFlags.h"
 #include "neverd/lift/X86Regs.h"
 
+#include <algorithm>
+
 namespace neverd::registration_state {
 
 bool hasX86ScalarCallOutput(const LowOp &Op) {
@@ -58,32 +60,42 @@ FrameValue join(FrameValue Left, const FrameValue &Right) {
 }
 
 namespace {
-bool mergeCells(std::map<int32_t, FrameValue> &Cells,
-                const std::map<int32_t, FrameValue> &Other) {
+bool mergeCells(FrameCells &Snapshot, const FrameCells &Other) {
+  if (Snapshot.empty() && Other.empty())
+    return false;
+  // Shared snapshots are already equal. Explicit empty cells still need the
+  // canonical erasure below; equality alone must not retain those dead facts.
+  if (Snapshot == Other &&
+      std::none_of(Snapshot.begin(), Snapshot.end(), [](const auto &Cell) {
+        return Cell.second == FrameValue{};
+      }))
+    return false;
   bool Changed = false;
-  for (auto Cell = Cells.begin(); Cell != Cells.end();) {
-    const auto It = Other.find(Cell->first);
-    const FrameValue Merged =
-        join(Cell->second, It == Other.end() ? FrameValue{} : It->second);
-    Changed |= Merged != Cell->second;
-    // An absent cell already means no exact value and no frame taint. Keep
-    // that canonical representation: dead local values must not accumulate
-    // in every subsequent CFG state or consume the proof work budget.
-    if (Merged == FrameValue{})
-      Cell = Cells.erase(Cell);
-    else {
-      Cell->second = Merged;
-      ++Cell;
-    }
-  }
-  for (const auto &[Offset, Value] : Other)
-    if (!Cells.count(Offset)) {
-      const FrameValue Merged = join({}, Value);
-      if (Merged != FrameValue{}) {
-        Cells.emplace(Offset, Merged);
-        Changed = true;
+  Snapshot.edit([&](FrameCells::Map &Cells) {
+    for (auto Cell = Cells.begin(); Cell != Cells.end();) {
+      const auto It = Other.find(Cell->first);
+      const FrameValue Merged =
+          join(Cell->second, It == Other.end() ? FrameValue{} : It->second);
+      Changed |= Merged != Cell->second;
+      // An absent cell already means no exact value and no frame taint. Keep
+      // that canonical representation: dead local values must not accumulate
+      // in every subsequent CFG state or consume the proof work budget.
+      if (Merged == FrameValue{})
+        Cell = Cells.erase(Cell);
+      else {
+        Cell->second = Merged;
+        ++Cell;
       }
     }
+    for (const auto &[Offset, Value] : Other)
+      if (!Cells.count(Offset)) {
+        const FrameValue Merged = join({}, Value);
+        if (Merged != FrameValue{}) {
+          Cells.emplace(Offset, Merged);
+          Changed = true;
+        }
+      }
+  });
   return Changed;
 }
 
@@ -144,15 +156,21 @@ bool FrameState::merge(const FrameState &Other) {
 
 void FrameState::forgetCellValues() {
   for (auto *Space : {&Cells, &EntryCells, &CallbackCells})
-    for (auto It = Space->begin(); It != Space->end();) {
-      const auto Value = join(It->second, {});
-      if (Value == FrameValue{})
-        It = Space->erase(It);
-      else {
-        It->second = Value;
-        ++It;
-      }
-    }
+    if (std::any_of(Space->begin(), Space->end(), [](const auto &Cell) {
+          return Cell.second == FrameValue{} ||
+                 join(Cell.second, {}) != Cell.second;
+        }))
+      Space->edit([](FrameCells::Map &Cells) {
+        for (auto It = Cells.begin(); It != Cells.end();) {
+          const auto Value = join(It->second, {});
+          if (Value == FrameValue{})
+            It = Cells.erase(It);
+          else {
+            It->second = Value;
+            ++It;
+          }
+        }
+      });
 }
 
 void FrameTransfer::beginInstruction(va_t Address) {

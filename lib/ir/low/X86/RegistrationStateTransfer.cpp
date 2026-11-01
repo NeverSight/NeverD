@@ -537,8 +537,9 @@ bool RegistrationStateSolver::transferBlock(size_t I, const Domain &Before,
           }
           if (Address.Offset == Chain.TryLevelOffset &&
               ProvenStores.count(Op.Addr) && After.Levels.size() == 1)
-            After.Frame.Cells[*Chain.TryLevelOffset] =
-                FrameValue::constant(uint32_t(*After.Levels.begin()));
+            After.Frame.Cells.set(
+                *Chain.TryLevelOffset,
+                FrameValue::constant(uint32_t(*After.Levels.begin())));
         } else if (Address.CallbackAddress) {
           if (!After.Frame.callbackMemoryIsPrivate(*Address.CallbackAddress,
                                                    Width) ||

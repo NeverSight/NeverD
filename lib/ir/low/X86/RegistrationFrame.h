@@ -14,6 +14,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <map>
+#include <memory>
 #include <optional>
 #include <set>
 #include <utility>
@@ -172,10 +173,77 @@ struct FrameValue {
 
 FrameValue join(FrameValue Left, const FrameValue &Right);
 
+/// Logical frame cells have value semantics. Snapshots share storage until an
+/// edit; const iteration never detaches. An edit must not retain references or
+/// copy its owning frame while the mutable map is borrowed.
+class FrameCells {
+public:
+  using Map = std::map<int32_t, FrameValue>;
+  using const_iterator = Map::const_iterator;
+
+  const Map &read() const {
+    static const Map Empty;
+    return Storage ? *Storage : Empty;
+  }
+  const_iterator begin() const { return read().begin(); }
+  const_iterator end() const { return read().end(); }
+  const_iterator find(int32_t Offset) const { return read().find(Offset); }
+  const_iterator lower_bound(int32_t Offset) const {
+    return read().lower_bound(Offset);
+  }
+  size_t count(int32_t Offset) const { return read().count(Offset); }
+  size_t size() const { return read().size(); }
+  bool empty() const { return read().empty(); }
+  void clear() { Storage.reset(); }
+
+  template <typename Edit> void edit(Edit &&Action) {
+    if (!Storage)
+      Storage = std::make_shared<Map>();
+    else if (!Storage.unique())
+      Storage = std::make_shared<Map>(*Storage);
+    Action(*Storage);
+  }
+
+  void set(int32_t Offset, const FrameValue &Value) {
+    const auto It = find(Offset);
+    if (It == end() || It->second != Value)
+      edit([&](Map &Cells) { Cells.insert_or_assign(Offset, Value); });
+  }
+  void erase(int32_t Offset) {
+    if (count(Offset))
+      edit([&](Map &Cells) { Cells.erase(Offset); });
+  }
+  const_iterator erase(const_iterator Position) {
+    const int32_t Offset = Position->first;
+    erase(Offset);
+    return lower_bound(Offset);
+  }
+  const_iterator erase(const_iterator First, const_iterator Last) {
+    if (First == Last)
+      return Last;
+    const int32_t Begin = First->first;
+    const auto End =
+        Last == end() ? std::nullopt : std::optional<int32_t>{Last->first};
+    edit([&](Map &Cells) {
+      Cells.erase(Cells.lower_bound(Begin),
+                  End ? Cells.lower_bound(*End) : Cells.end());
+    });
+    return End ? lower_bound(*End) : end();
+  }
+  bool operator==(const FrameCells &Other) const {
+    return Storage == Other.Storage || read() == Other.read();
+  }
+  auto operator<=>(const FrameCells &Other) const {
+    return read() <=> Other.read();
+  }
+
+private:
+  std::shared_ptr<Map> Storage;
+};
+
 /// Drop fully deallocated words. A word crossing the new stack boundary loses
 /// its exact identity but retains taint in the bytes that remain live.
-void discardFrameCellsBelow(std::map<int32_t, FrameValue> &Cells,
-                            int32_t Boundary);
+void discardFrameCellsBelow(FrameCells &Cells, int32_t Boundary);
 
 /// A checked PE32 scalar call defines either its instruction-local result or
 /// the complete physical EAX. Other register outputs carry no return authority.
@@ -201,9 +269,9 @@ struct FrameState {
   /// Calls may define any volatile flag/vector byte. Explicit subsequent
   /// writes override this default; a missing map entry is not a zero value.
   bool OtherRegistersMayBeFrame = false;
-  std::map<int32_t, FrameValue> Cells;
-  std::map<int32_t, FrameValue> EntryCells;
-  std::map<int32_t, FrameValue> CallbackCells;
+  FrameCells Cells;
+  FrameCells EntryCells;
+  FrameCells CallbackCells;
   std::set<int32_t> InitializedCallbackBytes;
   std::optional<va_t> CallbackEntry;
   std::optional<va_t> SEHFilterEntry;

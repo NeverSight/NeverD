@@ -142,28 +142,30 @@ TEST(RegistrationJumpCapture, BindsCurrentSourceAndBoundedCallerStorage) {
       Frame.Registers[x86reg::RBP / x86reg::GeneralRegStride] =
           FrameValue::frame(0);
       Frame.Registers[x86reg::RBX / x86reg::GeneralRegStride].MayBeFrame = true;
-      Frame.Cells[-316] = FrameValue::frame(-288);
-      Frame.Cells[-312] = FrameValue::constant(2);
-      Frame.Cells[-308] = FrameValue::constant(0x407c78);
-      Frame.Cells[-304] = FrameValue::constant(UINT32_MAX);
-      Frame.Cells[-16] = FrameValue::previousChain();
-      Frame.Cells[-12] = FrameValue::constant(uint32_t(EH->PersonalityVA));
-      Frame.Cells[-8] =
-          FrameValue::constant(uint32_t(EH->Registration->ScopeTableVA));
-      Frame.Cells[-4] = FrameValue::constant(UINT32_MAX);
+      Frame.Cells.set(-316, FrameValue::frame(-288));
+      Frame.Cells.set(-312, FrameValue::constant(2));
+      Frame.Cells.set(-308, FrameValue::constant(0x407c78));
+      Frame.Cells.set(-304, FrameValue::constant(UINT32_MAX));
+      Frame.Cells.set(-16, FrameValue::previousChain());
+      Frame.Cells.set(-12, FrameValue::constant(uint32_t(EH->PersonalityVA)));
+      Frame.Cells.set(
+          -8, FrameValue::constant(uint32_t(EH->Registration->ScopeTableVA)));
+      Frame.Cells.set(-4, FrameValue::constant(UINT32_MAX));
       if (EH4) {
         auto &Metadata = *Function.ExceptionMetadata;
         Metadata.Encoding = ExceptionEncoding::X86ScopeTableEH4;
         Metadata.Personality = ExceptionPersonality::ExceptHandler4;
         Metadata.Registration->SeededTryLevel = -2;
         Image->DynInfo.SecurityCookieRVA = 0x9000;
-        Frame.Cells[-312] = FrameValue::constant(3);
-        Frame.Cells[-304] = FrameValue::constant(uint32_t(-2));
-        Frame.Cells[-300] = FrameValue::constant(Image->Base + 0x9000);
-        Frame.Cells[-4] = FrameValue::constant(uint32_t(-2));
-        Frame.Cells[-8] = {};
-        Frame.Cells[-8].SecurityCookie = true;
-        Frame.Cells[-8].CookieXOR = uint32_t(EH->Registration->ScopeTableVA);
+        Frame.Cells.set(-312, FrameValue::constant(3));
+        Frame.Cells.set(-304, FrameValue::constant(uint32_t(-2)));
+        Frame.Cells.set(-300, FrameValue::constant(Image->Base + 0x9000));
+        Frame.Cells.set(-4, FrameValue::constant(uint32_t(-2)));
+        Frame.Cells.set(-8, {});
+        Frame.Cells.edit([&](auto &Cells) { Cells[-8].SecurityCookie = true; });
+        Frame.Cells.edit([&](auto &Cells) {
+          Cells[-8].CookieXOR = uint32_t(EH->Registration->ScopeTableVA);
+        });
         for (auto &Import : Image->Imports)
           if (Import.IATAddr == 0x40805c)
             Import.Name = "_seh_longjmp_unwind4";
@@ -176,23 +178,23 @@ TEST(RegistrationJumpCapture, BindsCurrentSourceAndBoundedCallerStorage) {
       if (Mutation == 1)
         Installed = false;
       if (Mutation == 2)
-        Frame.Cells[-316] = FrameValue::frame(-316);
+        Frame.Cells.set(-316, FrameValue::frame(-316));
       if (Mutation == 3)
-        Frame.Cells[-316] = FrameValue::frame(-84); // end crosses SavedESP.
+        Frame.Cells.set(-316, FrameValue::frame(-84)); // end crosses SavedESP.
       if (Mutation == 4)
-        Frame.Cells[-312] = FrameValue::constant(1);
+        Frame.Cells.set(-312, FrameValue::constant(1));
       if (Mutation == 5)
-        Frame.Cells[-308] = FrameValue::constant(0x407c66);
+        Frame.Cells.set(-308, FrameValue::constant(0x407c66));
       if (Mutation == 6)
-        Frame.Cells[-304] = FrameValue::constant(0);
+        Frame.Cells.set(-304, FrameValue::constant(0));
       if (Mutation == 7)
         Frame.Registers[x86reg::RBP / x86reg::GeneralRegStride] = {};
       if (Mutation == 8)
         Frame.enterCallback(0x401683);
       if (Mutation == 9)
-        Frame.Cells[-16] = FrameValue::constant(0);
+        Frame.Cells.set(-16, FrameValue::constant(0));
       if (Mutation == 10)
-        Frame.Cells[-8] = FrameValue::constant(0);
+        Frame.Cells.set(-8, FrameValue::constant(0));
       if (Mutation == 11)
         Insn.Immediate = 0x407c66;
       if (Mutation == 12)
@@ -213,7 +215,7 @@ TEST(RegistrationJumpCapture, BindsCurrentSourceAndBoundedCallerStorage) {
         *Byte = 0x90;
       }
       if (Mutation == 19)
-        Frame.Cells[-316].ReturnPC = true;
+        Frame.Cells.edit([&](auto &Cells) { Cells[-316].ReturnPC = true; });
       if (Mutation == 20)
         Op.MemoryAddressSpace = NdMemoryAddressSpace::X86FS;
       if (Mutation == 21)
@@ -221,15 +223,15 @@ TEST(RegistrationJumpCapture, BindsCurrentSourceAndBoundedCallerStorage) {
       if (Mutation == 22)
         Function.ExceptionMetadata->CodeRange.End = Op.Addr + 4;
       if (Mutation == 23)
-        Frame.Cells[-300] = {};
+        Frame.Cells.set(-300, {});
       if (Mutation == 24)
-        Frame.Cells[-300] = FrameValue::constant(Image->Base + 0x9004);
+        Frame.Cells.set(-300, FrameValue::constant(Image->Base + 0x9004));
       if (Mutation == 25)
         for (auto &Import : Image->Imports)
           if (Import.IATAddr == 0x40805c)
             Import.Name = "_seh_longjmp_unwind";
       if (Mutation == 26)
-        Frame.Cells[-8].CookieFrameOffset = 0;
+        Frame.Cells.edit([&](auto &Cells) { Cells[-8].CookieFrameOffset = 0; });
       if (Mutation == 27)
         Image->DynInfo.SecurityCookieRVA = 0;
       if (EH4 && Mutation == 0) {

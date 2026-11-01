@@ -9,6 +9,8 @@
 #include "neverd/Limits.h"
 #include "neverd/lift/X86Regs.h"
 
+#include <algorithm>
+
 namespace neverd::registration_state {
 
 void FrameState::enterCallback(va_t Entry) {
@@ -26,8 +28,13 @@ void FrameState::leaveCallback() {
   for (auto &Value : Registers)
     Forget(Value);
   for (auto *Space : {&Cells, &EntryCells})
-    for (auto &[Offset, Value] : *Space)
-      Forget(Value);
+    if (std::any_of(Space->begin(), Space->end(), [](const auto &Cell) {
+          return Cell.second.CallbackAddress || Cell.second.SEHException;
+        }))
+      Space->edit([&](FrameCells::Map &Cells) {
+        for (auto &[Offset, Value] : Cells)
+          Forget(Value);
+      });
   for (auto &[Offset, Value] : OtherRegisterBytes)
     Forget(Value);
   CallbackCells.clear();
@@ -68,8 +75,14 @@ void FrameState::trimCallbackCells() {
       Registers[x86reg::RSP / x86reg::GeneralRegStride].CallbackAddress;
   if (!SP || SP->Entry != CallbackEntry) {
     InitializedCallbackBytes.clear();
-    for (auto &[Offset, Value] : CallbackCells)
-      Value = join(Value, {});
+    if (std::any_of(CallbackCells.begin(), CallbackCells.end(),
+                    [](const auto &Cell) {
+                      return join(Cell.second, {}) != Cell.second;
+                    }))
+      CallbackCells.edit([](FrameCells::Map &Cells) {
+        for (auto &[Offset, Value] : Cells)
+          Value = join(Value, {});
+      });
     return;
   }
   // Deallocated bytes lose initialization. A partial pop also loses the

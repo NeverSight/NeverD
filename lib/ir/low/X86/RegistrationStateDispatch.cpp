@@ -234,8 +234,8 @@ void RegistrationStateSolver::dispatch(
   // their logical level. Distinct constants have no exact cell value; the
   // complete finite domain remains in Levels for subsequent state transfers.
   if (Root.Levels.size() == 1)
-    Root.Frame.Cells[*Chain.TryLevelOffset] =
-        FrameValue::constant(uint32_t(*Root.Levels.begin()));
+    Root.Frame.Cells.set(*Chain.TryLevelOffset,
+                         FrameValue::constant(uint32_t(*Root.Levels.begin())));
   else
     Root.Frame.Cells.erase(*Chain.TryLevelOffset);
   Root.Frame.Registers[x86reg::RBP / x86reg::GeneralRegStride] =
@@ -266,20 +266,22 @@ void RegistrationStateSolver::dispatch(
     // Unwinding and catch-object construction may change local objects.
     // Keep only frame taint until their write footprints establish that a
     // particular alias survives. Runtime administration has separate owners.
-    for (auto It = Root.Frame.Cells.begin(); It != Root.Frame.Cells.end();) {
-      const auto Offset = It->first;
-      if (Offset != *Chain.RegistrationOffset &&
-          int64_t(Offset) != int64_t(*Chain.RegistrationOffset) - 4 &&
-          Offset != *Chain.TryLevelOffset &&
-          (!Chain.RealignedFrame ||
-           !Chain.RealignedFrame->hasSavedParentFrame() ||
-           Offset != Chain.RealignedFrame->SavedParentFrameOffset))
-        It->second = registration_state::join(It->second, {});
-      if (It->second == FrameValue{})
-        It = Root.Frame.Cells.erase(It);
-      else
-        ++It;
-    }
+    Root.Frame.Cells.edit([&](FrameCells::Map &Cells) {
+      for (auto It = Cells.begin(); It != Cells.end();) {
+        const auto Offset = It->first;
+        if (Offset != *Chain.RegistrationOffset &&
+            int64_t(Offset) != int64_t(*Chain.RegistrationOffset) - 4 &&
+            Offset != *Chain.TryLevelOffset &&
+            (!Chain.RealignedFrame ||
+             !Chain.RealignedFrame->hasSavedParentFrame() ||
+             Offset != Chain.RealignedFrame->SavedParentFrameOffset))
+          It->second = registration_state::join(It->second, {});
+        if (It->second == FrameValue{})
+          It = Cells.erase(It);
+        else
+          ++It;
+      }
+    });
     preserveCxxFrameCells(Root, Source);
     if (CheckRuntimeObjects) {
       const auto Object = CatchObjects.find(*CxxCatch);
@@ -339,7 +341,7 @@ void RegistrationStateSolver::seedEntries() {
       Initial.Frame.Registers[Index].SavedRegister = uint8_t(Index + 1);
     FrameValue PC;
     PC.MayBeFrame = PC.ReturnPC = true;
-    Initial.Frame.Cells[4] = PC;
+    Initial.Frame.Cells.set(4, PC);
   }
   if (Conditional) {
     for (const auto &[Index, Value] : Conditional->Registers) {

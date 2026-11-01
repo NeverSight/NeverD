@@ -2040,8 +2040,8 @@ TEST(RegistrationTryLevel, CxxEAXHelperBindsAnActualCaller) {
           Value = FrameValue::taint(true);
         Parent.Registers[x86reg::RSP / x86reg::GeneralRegStride] =
             FrameValue::frame(-96);
-        Parent.Cells[-96] = FrameValue::frame(-28);
-        Parent.Cells[-28] = FrameValue::constant(7);
+        Parent.Cells.set(-96, FrameValue::frame(-28));
+        Parent.Cells.set(-28, FrameValue::constant(7));
         auto &Input = Parent.Registers[Register / x86reg::GeneralRegStride];
         if (Mode == 0)
           Input = FrameValue::constant(42);

@@ -279,8 +279,8 @@ struct BoundCxxFixture {
         FrameValue::frame(-96);
     Parent.Registers[x86reg::RCX / x86reg::GeneralRegStride] =
         FrameValue::constant(17);
-    Parent.Cells[-96] = FrameValue::frame(-28);
-    Parent.Cells[-28] = FrameValue::constant(1);
+    Parent.Cells.set(-96, FrameValue::frame(-28));
+    Parent.Cells.set(-28, FrameValue::constant(1));
     Call.Opcode = NdOp::CALL;
     Call.Addr = Caller;
     Call.Seq = 0;
@@ -474,7 +474,7 @@ TEST(RegistrationConditionalCxx, MissingBorrowDoesNotAnalyzeUnboundCalls) {
     size_t Limited = limits::kMaxRegistrationEHStateWork - Work;
     EXPECT_FALSE(F.prove(Limited));
     EXPECT_EQ(Limited, limits::kMaxRegistrationEHStateWork);
-    F.Parent.Cells[-28] = FrameValue::constant(1);
+    F.Parent.Cells.set(-28, FrameValue::constant(1));
     Work = 0;
     EXPECT_TRUE(F.prove(Work));
   }
@@ -509,10 +509,10 @@ TEST(RegistrationConditionalCxx, ComposesCheckedChildReadsAndMayWrites) {
   ASSERT_EQ(Effect->Returns.size(), 1u);
   EXPECT_EQ(Effect->Returns[0].Value.Offset, -28);
   // A failed query does not populate a target-only cache for the next inputs.
-  F.Parent.Cells[-28] = FrameValue::frame(-80);
+  F.Parent.Cells.set(-28, FrameValue::frame(-80));
   Work = 0;
   EXPECT_FALSE(F.prove(Work));
-  F.Parent.Cells[-28] = FrameValue::constant(2);
+  F.Parent.Cells.set(-28, FrameValue::constant(2));
   Work = 0;
   EXPECT_TRUE(F.prove(Work));
 }
@@ -921,7 +921,7 @@ TEST(RegistrationConditionalCxx, InitializedBytesDoNotEraseOverlappingTaint) {
   EXPECT_FALSE(Prove());
   Initialized.insert(-25);
   ASSERT_TRUE(Prove());
-  F.Parent.Cells[-29] = FrameValue::frame(-80);
+  F.Parent.Cells.set(-29, FrameValue::frame(-80));
   EXPECT_FALSE(Prove()); // Three bytes still contain a possible frame alias.
 }
 
@@ -1213,7 +1213,7 @@ TEST(RegistrationConditionalCxx, WordBorrowDoesNotInventAdjacentStorage) {
   BoundCxxFixture F(BoundCxxFixture::ReturnMode::Scalar, false, false, false,
                     false, std::nullopt,
                     BoundCxxFixture::OutputAccess::StoreTwoWordsThenReadSecond);
-  F.Parent.Cells[-24] = FrameValue::constant(0);
+  F.Parent.Cells.set(-24, FrameValue::constant(0));
   size_t Work = 0;
   EXPECT_FALSE(F.prove(Work));
 }
@@ -1233,7 +1233,7 @@ TEST(RegistrationConditionalCxx, DiscardingOpaqueReadDoesNotProveItsEffects) {
         // An opaque address can reach a frame pointer outside this borrow.
         // Even a discarded read still lacks mapped-storage and exception
         // resumption evidence: a fault callback can write before returning.
-        F.Parent.Cells[-48] = FrameValue::frame(-80);
+        F.Parent.Cells.set(-48, FrameValue::frame(-80));
         F.overwrite(F.StoreVA, {0x8b, uint8_t(Borrowed ? 0x10 : 0x12),
                                 uint8_t(Discard ? 0x31 : 0x90),
                                 uint8_t(Discard ? 0xd2 : 0x90), 0x89, 0x10,
@@ -1490,10 +1490,10 @@ TEST(RegistrationConditionalCxx, RejectsCaptureAndIncompleteCurrentEvidence) {
       F.Parent.Cells.erase(-28);
       break;
     case 2: // Borrow overlaps the incoming carrier.
-      F.Parent.Cells[-96] = FrameValue::frame(-96);
+      F.Parent.Cells.set(-96, FrameValue::frame(-96));
       break;
     case 3:
-      F.Parent.Cells[-28] = FrameValue::frame(-80);
+      F.Parent.Cells.set(-28, FrameValue::frame(-80));
       break;
     case 4:
       F.overwrite(F.ReturnVA, {0xc2, 8, 0});
@@ -1525,8 +1525,8 @@ TEST(RegistrationConditionalCxx, RejectsCaptureAndIncompleteCurrentEvidence) {
       F.overwrite(Child, {0x0f, 0x0b}); // Incomplete child.
       break;
     case 13:
-      F.Parent.Cells[-96] = FrameValue::frame(0); // Saved caller EBP.
-      F.Parent.Cells[0] = FrameValue::constant(1);
+      F.Parent.Cells.set(-96, FrameValue::frame(0)); // Saved caller EBP.
+      F.Parent.Cells.set(0, FrameValue::constant(1));
       break;
     case 14:
       F.Image.Format = BinaryFormat::ELF;

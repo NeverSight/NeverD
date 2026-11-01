@@ -704,18 +704,18 @@ TEST(RegistrationConditionalFrame,
     FrameState Parent;
     Parent.Registers[x86reg::RSP / x86reg::GeneralRegStride] =
         FrameValue::frame(-308);
-    Parent.Cells[-308] = FrameValue::constant(0xc0000005);
-    Parent.Cells[-304] = FrameValue::frame(-28);
-    Parent.Cells[-28] = FrameValue::constant(1);
+    Parent.Cells.set(-308, FrameValue::constant(0xc0000005));
+    Parent.Cells.set(-304, FrameValue::frame(-28));
+    Parent.Cells.set(-28, FrameValue::constant(1));
     size_t Work = 0;
     if (Mutation == 1)
       Parent.Cells.erase(-28);
     if (Mutation == 2)
-      Parent.Cells[-304] = FrameValue::frame(-20);
+      Parent.Cells.set(-304, FrameValue::frame(-20));
     if (Mutation == 3)
-      Parent.Cells[-28] = FrameValue::frame(-100);
+      Parent.Cells.set(-28, FrameValue::frame(-100));
     if (Mutation == 4)
-      Parent.Cells[-304] = FrameValue::frame(-304);
+      Parent.Cells.set(-304, FrameValue::frame(-304));
     if (Mutation == 5)
       Parent.Registers[x86reg::RSP / x86reg::GeneralRegStride] = {};
     if (Mutation == 6)

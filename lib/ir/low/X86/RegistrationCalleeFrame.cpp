@@ -143,7 +143,7 @@ bool hasPrivateCallerFrame(const LowFunc &Function, const BinaryImage &Image,
       FrameValue::frame(4);
   FrameValue CallerPC;
   CallerPC.MayBeFrame = CallerPC.ReturnPC = true;
-  Initial.Frame.Cells[4] = CallerPC;
+  Initial.Frame.Cells.set(4, CallerPC);
   if (ScalarRegisters)
     for (const auto &[Index, Value] : *ScalarRegisters) {
       if (!Charge(1) || !isX86VolatileFrameRegister(Index) || Value.MayBeFrame)
@@ -168,7 +168,7 @@ bool hasPrivateCallerFrame(const LowFunc &Function, const BinaryImage &Image,
         FrameValue::frame(0);
   }
   if (CopyObjectSize)
-    Initial.CopySourceSpills.Cells[8] = FrameValue::frame(0);
+    Initial.CopySourceSpills.Cells.set(8, FrameValue::frame(0));
   for (const auto &Block : Function.Blocks) {
     if (!Charge(1) || !Blocks.emplace(Block.Id, &Block).second ||
         !Entries.emplace(Block.StartAddr, Block.Id).second)

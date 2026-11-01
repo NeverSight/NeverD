@@ -2003,6 +2003,12 @@ The loader owns exact registration instruction widths and authenticated pointer
 roles, including SafeSEH table storage. Code discovery consumes those roles at the
 specific pointer slot so an independent reference retains its ordinary identity.
 `RegistrationFrameMemory` owns byte-cell overlap queries for the LowIR frame domain.
+Its ordinary, entry and callback cell maps use private `FrameCells` snapshots.
+Copies share unchanged storage; explicit edits detach before changing any cell.
+Iteration, equality, ordering and snapshot hashes still describe logical values,
+including every alias marker and callback identity. C++ suspended callbacks use
+the same storage owner. Work accounting continues to charge logical cell counts;
+sharing neither enlarges proof budgets nor supplies a semantic fact.
 The shared LLVM privacy proof indexes private reaching stores and tainted byte
 ranges in separate units, preserving the shared work limit and conservative
 alias checks. `WindowsRegistrationFrame` owns the complete use, initialized-byte,

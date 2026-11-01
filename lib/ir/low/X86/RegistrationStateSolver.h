@@ -41,7 +41,7 @@ struct CxxCatchContext {
   std::optional<CallbackFrameAddress> SavedCallback;
   std::optional<va_t> SuspendedCallback;
   std::optional<int32_t> SuspendedStackOffset;
-  std::map<int32_t, FrameValue> SuspendedCells;
+  FrameCells SuspendedCells;
   std::set<int32_t> SuspendedInitializedBytes;
   size_t cellCount() const {
     return 1 + SuspendedCells.size() + SuspendedInitializedBytes.size();
