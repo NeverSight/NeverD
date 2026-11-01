@@ -15475,6 +15475,14 @@ with adjacent data. Run `NeverDFunctionAdmissionTests`,
 `NeverDNativePointerRelocationBoundaryTests`,
 `NeverDMachOPointerRelocationBoundaryTests` and `NeverDSourcePatchLayoutTests`
 when changing this shared entry boundary.
+The bounded mixed-pointer walk and scalar index-cycle Mach-O fixtures also
+link with LLD on non-Apple hosts, without a target SDK. Their loader, MedIR and
+LLVM checks run there; the scalar case compiles the generated IR to AArch64
+Mach-O at O0/O2. Typed LLVM checks keep both register-offset load indices as
+numeric recurrences with zero/one seeds, separate from their table bases.
+Apple Silicon additionally executes the original fixtures
+and the rebuilt scalar program. Cross-target compilation does not establish
+native execution on an Apple host.
 `FunctionAdmission.NativeOutputRequiresEverySelectedEntry` checks mixed valid,
 truncated and unmapped selections for patch and lift output across COFF, ELF
 and Mach-O, with and without the shared analysis cache.
