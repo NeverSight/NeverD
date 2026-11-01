@@ -426,6 +426,62 @@ TEST(MedMutableSource, LargerBlockCeilingRetainsIndependentStorageBudgets) {
   EXPECT_NE(Error.find("storage matrix budget"), std::string::npos);
 }
 
+TEST(MedMutableSource, SharedExitsScaleToTheBlockCeilingWithExactEdges) {
+  const unsigned Stages = limits::ir::kMedMutableSourceMaxBlocks - 3;
+  auto F = base(Stages + 3);
+  parameter(F, x86reg::RDI);
+  const auto Input = reg(10, x86reg::RDI);
+  const auto Result = reg(11, x86reg::RAX);
+  const auto Reject = temp(12, 1);
+  F.Blocks.front().Ops.push_back(
+      op(NdOp::COPY, Result, {MedVar::makeConst(0, 8)}));
+  for (unsigned I = 0; I < Stages; ++I) {
+    const unsigned Failure = Stages + 1 + I % 2;
+    F.Blocks[I].Ops.push_back(
+        op(NdOp::INT_EQUAL, Reject, {Input, MedVar::makeConst(I, 8)}));
+    F.Blocks[I].Ops.push_back(
+        op(NdOp::COND_BR, {},
+           {MedVar::makeConst(F.Blocks[Failure].StartAddr, 8), Reject}));
+    connect(F, I, {int(I + 1), int(Failure)});
+  }
+  for (unsigned I = Stages; I < F.Blocks.size(); ++I) {
+    F.Blocks[I].Ops.push_back(op(NdOp::RETURN, {}));
+    std::reverse(F.Blocks[I].Preds.begin(), F.Blocks[I].Preds.end());
+  }
+  std::string Error;
+  auto Plan = analyzeMedMutableSource(F, Arch::X64, &Error);
+  ASSERT_TRUE(Plan) << Error;
+  EXPECT_EQ(Plan->EntryBytes,
+            (std::map<uint64_t, uint64_t>{{x86reg::RDI, 255}}));
+
+  auto &Preds = F.Blocks[Stages + 1].Preds;
+  const int Last = Preds.back();
+  Preds.pop_back();
+  EXPECT_FALSE(analyzeMedMutableSource(F, Arch::X64, &Error));
+  EXPECT_NE(Error.find("asymmetric CFG"), std::string::npos);
+  Preds.push_back(Last);
+  const int First = Preds.front();
+  // Equal list sizes cannot authorize duplicate, unrelated or invalid edges.
+  for (int Bad : {Preds[1], int(Stages), -1}) {
+    Preds.front() = Bad;
+    EXPECT_FALSE(analyzeMedMutableSource(F, Arch::X64, &Error));
+    Preds.front() = First;
+  }
+  F.Blocks.front().Succs.front() = F.Blocks.front().Succs.back();
+  EXPECT_FALSE(analyzeMedMutableSource(F, Arch::X64, &Error));
+}
+
+TEST(MedMutableSource, PredecessorMetadataHasAnAggregateEdgeBound) {
+  auto F = base(3);
+  for (auto &B : F.Blocks) {
+    B.Ops.push_back(op(NdOp::RETURN, {}));
+    B.Preds = {0, 1, 2};
+  }
+  std::string Error;
+  EXPECT_FALSE(analyzeMedMutableSource(F, Arch::X64, &Error));
+  EXPECT_NE(Error.find("CFG metadata exceeds its budget"), std::string::npos);
+}
+
 TEST(MedMutableSource, SharedRejectionChainsPreserveEveryCommittedPrefix) {
   constexpr unsigned Stages = 2048;
   for (bool ReverseBlocks : {false, true}) {
