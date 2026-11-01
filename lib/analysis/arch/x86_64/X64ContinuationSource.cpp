@@ -13,6 +13,7 @@
 #include "StringTransfer.h"
 #include "X64ArchitecturalValues.h"
 #include "X64ContinuationDelivery.h"
+#include "X64ContinuationDivision.h"
 #include "X64ContinuationEvents.h"
 #include "X64ContinuationFredReturns.h"
 #include "X64ContinuationHle.h"
@@ -488,29 +489,32 @@ bool msrIntrinsic(const LowOp &Op,
          Op.Inputs[2].Size == 8;
 }
 
-bool unsignedWideDivisionIntrinsic(const LowOp &Op) {
+bool divisionPreconditionIntrinsic(const LowOp &Op) {
   return Op.Opcode == NdOp::INTRINSIC && Op.NumInputs &&
          Op.Inputs[0].isConst() &&
          Op.Inputs[0].Offset ==
              uint64_t(Intrinsic::X86RequireDivPrecondition) &&
          intrinsicX86DivPreconditionShapeIsValid(
              Intrinsic::X86RequireDivPrecondition,
-             x86DivPreconditionLowShape(Op, Arch::X64)) &&
-         Op.Inputs[1].Size == 16 &&
-         Op.Inputs[3].Offset == uint64_t(X86DivKind::Unsigned);
+             x86DivPreconditionLowShape(Op, Arch::X64));
 }
 
-bool wideDivisionArithmetic(const LowOp &Op) {
+bool divisionArithmetic(const LowOp &Op) {
+  if (Op.Opcode == NdOp::INT_DIV || Op.Opcode == NdOp::INT_REM ||
+      Op.Opcode == NdOp::INT_SDIV || Op.Opcode == NdOp::INT_SREM)
+    return (Op.Output.Size == 2 || Op.Output.Size == 4 || Op.Output.Size == 8 ||
+            Op.Output.Size == 16) &&
+           Op.NumInputs == 2 && Op.Inputs[0].Size == Op.Output.Size &&
+           Op.Inputs[1].Size == Op.Output.Size;
   if (Op.Output.Size != 16)
     return false;
-  if (Op.Opcode == NdOp::INT_ZEXT)
+  if (Op.Opcode == NdOp::INT_ZEXT || Op.Opcode == NdOp::INT_SEXT)
     return Op.NumInputs == 1 && Op.Inputs[0].Size == 8;
   if (Op.NumInputs != 2 || Op.Inputs[0].Size != 16 || Op.Inputs[1].Size != 16)
     return false;
   if (Op.Opcode == NdOp::INT_LEFT)
     return Op.Inputs[1].isConst() && Op.Inputs[1].Offset == 64;
-  return Op.Opcode == NdOp::INT_OR || Op.Opcode == NdOp::INT_DIV ||
-         Op.Opcode == NdOp::INT_REM;
+  return Op.Opcode == NdOp::INT_OR;
 }
 
 // Integer widening is not specific to DIV: scalar vector loads and full-width
@@ -541,7 +545,7 @@ bool lockedMemoryIntrinsic(const LowOp &Op,
 
 bool supportedOperation(const LowOp &Op,
                         const X64ContinuationSourceOptions &Options,
-                        bool WideDivision) {
+                        bool Division) {
   if (Op.NumInputs > std::size(Op.Inputs))
     return false;
   const bool CompareExchange = Op.Opcode == NdOp::ATOMIC_CMPXCHG;
@@ -572,8 +576,7 @@ bool supportedOperation(const LowOp &Op,
     return false;
   if (AtomicScalar || Locked || wideIntegerOperation(Op))
     return true;
-  if (WideDivision &&
-      (unsignedWideDivisionIntrinsic(Op) || wideDivisionArithmetic(Op)))
+  if (Division && (divisionPreconditionIntrinsic(Op) || divisionArithmetic(Op)))
     return true;
   switch (Op.Opcode) {
   case NdOp::COPY:
@@ -983,14 +986,12 @@ struct Writer {
       Op.Inputs[AddressInput] = Linear;
       Op.MemoryAddressSpace = NdMemoryAddressSpace::Default;
     }
-    if (unsignedWideDivisionIntrinsic(Op)) {
-      // Reject a faulting invocation before any architectural write. For an
-      // unsigned 128/64 division, high < divisor implies both nonzero divisor
-      // and a representable quotient. Retain the original precondition below:
+    if (divisionPreconditionIntrinsic(Op)) {
+      // Reject a faulting invocation before any architectural write. Check the
+      // complete double-width dividend and signedness for both DIV and IDIV.
+      // Retain the original precondition below:
       // the native intrinsic remains the authority for division execution.
-      const NdVar High = temporary(), Bad = temporary(1);
-      emit(NdOp::SUBBYTES, High, {Op.Inputs[1], constant(8)});
-      emit(NdOp::INT_LESSEQUAL, Bad, {Op.Inputs[2], High});
+      const NdVar Bad = detail::x64DivisionError(*this, Op);
       if (Options.EventDelivery)
         exitIf(Bad, [&] { fault(0); });
       else
@@ -1347,9 +1348,9 @@ buildInstruction(SpecializationInstruction Instruction,
         E.AfterOp > Instruction.Ops.size() ||
         (E.When && !supportedValue(*E.When)))
       RequireNative("instruction has an unsupported arbitrary-value effect");
-  const bool WideDivision =
+  const bool Division =
       Controls && std::any_of(Instruction.Ops.begin(), Instruction.Ops.end(),
-                              unsignedWideDivisionIntrinsic);
+                              divisionPreconditionIntrinsic);
   const auto Timestamp =
       Options.NativeTimestampReads
           ? x64::runtimeTimestampRegisters(Instruction,
@@ -1372,7 +1373,7 @@ buildInstruction(SpecializationInstruction Instruction,
                      Op.MemoryOrdering != NdMemoryOrdering::None;
     if (!Timestamp && !Sysret && !Sysenter && !Sysexit && !Iret && !FarReturn &&
         !Interrupt && !SmmReturn && !SgxTransfer && !UndefinedInstruction &&
-        !supportedOperation(Op, Options, WideDivision)) {
+        !supportedOperation(Op, Options, Division)) {
       std::string Detail = "unsupported continuation operation: ";
       Detail += ndOpName(Op.Opcode);
       if (Op.Opcode == NdOp::INTRINSIC && Op.NumInputs &&

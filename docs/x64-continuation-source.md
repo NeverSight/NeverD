@@ -762,7 +762,9 @@ the shared INT owner delivers faults, traps, IRQs and NMIs through the live
 IDT, privilege stacks and IST. This entry accepts 16/32-bit compatibility or
 64-bit state at CPL0–3. It returns 7 after delivery, 15 while inhibited, or 5
 on invalid input/preconditions. The same option routes canonical UD2 and the
-admitted unsigned 64-bit DIV fault conditions through that owner. See the
+admitted register DIV/IDIV fault conditions at 8/16/32/64 bits through that
+owner. The same division range check returns status 5 without state writes
+when event delivery is not selected. See the
 [event contract and native qualification](x86-event-delivery.md) for the input
 layout, error-code/RF/CR2 rules, interruptibility and remaining memory/event
 boundaries. Older requests keep their original admission and state layout.

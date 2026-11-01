@@ -1087,43 +1087,7 @@ void X86Lifter::liftImpl(const cs_insn *Insn, std::vector<LowOp> &Ops,
   GetPcArmedThisInsn = GetPcPending && Insn->address == GetPcValue;
   GetPcPending = false;
 
-  // Track CQO/CDQ/CWD → IDIV/DIV pattern.
-  unsigned Id = Insn->id;
-  if (Id == X86_INS_CQO) {
-    LastRdxState = RdxState::SignExtRAX;
-    LastRdxSize = 8;
-  } else if (Id == X86_INS_CDQ) {
-    LastRdxState = RdxState::SignExtRAX;
-    LastRdxSize = 4;
-  } else if (Id == X86_INS_CWD) {
-    LastRdxState = RdxState::SignExtRAX;
-    LastRdxSize = 2;
-  } else if (Id != X86_INS_IDIV && Id != X86_INS_DIV) {
-    // Check for XOR RDX,RDX (zero) pattern before invalidating.
-    bool SetZero = false;
-    if (Id == X86_INS_XOR && X86.op_count == 2 &&
-        X86.operands[0].type == X86_OP_REG &&
-        X86.operands[1].type == X86_OP_REG) {
-      auto R0 = mapCapstoneReg(static_cast<x86_reg>(X86.operands[0].reg));
-      auto R1 = mapCapstoneReg(static_cast<x86_reg>(X86.operands[1].reg));
-      if (R0.Offset == x86reg::RDX && R1.Offset == x86reg::RDX) {
-        LastRdxState = RdxState::Zero;
-        // On x86-64, writing a 32-bit register implicitly zeros the upper 32
-        // bits, so XOR EDX,EDX effectively zeros all of RDX.
-        LastRdxSize = (TargetArch == Arch::X64 && R0.Size == 4) ? 8 : R0.Size;
-        SetZero = true;
-      }
-    }
-    if (!SetZero) {
-      for (uint8_t I = 0; I < X86.op_count; ++I) {
-        if (X86.operands[I].type == X86_OP_REG) {
-          auto RI = mapCapstoneReg(static_cast<x86_reg>(X86.operands[I].reg));
-          if (RI.Offset == x86reg::RDX)
-            LastRdxState = RdxState::Unknown;
-        }
-      }
-    }
-  }
+  const unsigned Id = Insn->id;
 
   bool Handled = liftCore(S, Insn, X86) || liftControl(S, Insn, X86) ||
                  liftAtomic(S, Insn, X86) || liftString(S, Insn, X86) ||

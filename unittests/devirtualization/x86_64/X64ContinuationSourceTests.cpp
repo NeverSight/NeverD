@@ -35,6 +35,8 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cstdlib>
+#include <filesystem>
 #include <fstream>
 #include <initializer_list>
 #include <map>
@@ -132,7 +134,8 @@ protected:
   void run(std::vector<uint8_t> Bytes, std::vector<va_t> Entries,
            llvm::StringRef Harness, bool NativeBoundary = false,
            X64ContinuationSourceOptions Options = options(),
-           llvm::StringRef RequiredSpelling = {}, bool NativeKernel = false) {
+           llvm::StringRef RequiredSpelling = {}, bool NativeKernel = false,
+           llvm::StringRef ArtifactStem = {}) {
     auto Image = image(std::move(Bytes));
     auto Units = buildX64ContinuationSource(Image, Entries, Options);
     ASSERT_TRUE(bool(Units)) << llvm::toString(Units.takeError());
@@ -223,6 +226,16 @@ protected:
                           << TEST_SOURCE_DIR
                           << "/fixtures/x64_continuation_event_state.h\"\n"
                           << Source << Harness.str();
+      if (!ArtifactStem.empty())
+        if (const char *Directory =
+                std::getenv("NEVERD_ISA_REGRESSION_ARTIFACT_DIR")) {
+          std::filesystem::create_directories(Directory);
+          std::filesystem::copy_file(
+              File,
+              std::filesystem::path(Directory) /
+                  (ArtifactStem.str() + (LLVM ? "-llvm.c" : "-high.c")),
+              std::filesystem::copy_options::overwrite_existing);
+        }
       for (const char *Optimization : {"-O0", "-O2"}) {
         SCOPED_TRACE(Optimization);
         if (NativeKernel) {
@@ -2447,6 +2460,7 @@ TEST(X64ContinuationSource, RequiresExplicitDomainAndBoundedDistinctAddresses) {
   CheckError({0x1000, 0x1001}, O);
 }
 
+#include "X64DivisionContinuationTests.inc"
 #include "X64FarPointerContinuationTests.inc"
 #include "X64FastSystemContinuationTests.inc"
 #include "X64FrameReturnContinuationTests.inc"

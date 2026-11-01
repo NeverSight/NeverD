@@ -14,10 +14,9 @@
 /// the instruction is not one of its cases, so the dispatchers can chain them
 /// with `||` and keep the original dispatch order.
 ///
-/// Handlers that need X86Lifter's private cross-instruction state (the
-/// CQO/CDQ + DIV tracking, the get-PC thunk state, the x87 stack top, the
-/// target architecture) could not be carved out and stay in the member
-/// function next to the chain.
+/// Handlers that need X86Lifter's private context (the get-PC thunk state,
+/// x87 stack top or target architecture) remain in member functions next to
+/// the chain.
 ///
 /// This header is an implementation detail of lib/lift/X86/ and must NOT be
 /// included by code outside that directory.

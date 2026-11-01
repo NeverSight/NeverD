@@ -18435,3 +18435,31 @@ CR0.AM is enabled with both AC values. Missing XRSTOR and wrong-target mutations
 must fail. The fixture executes zero enclave instructions and requires no SGX
 device; it qualifies transport, not EPC/SSA/AEX or successful enclave execution.
 See [the complete ownership contract](x86-sgx-transfer.md).
+
+### Register DIV/IDIV completion and divide errors
+
+`NeverDX86NativeStateAuditTests --gtest_filter='*Division*'` covers 192 original
+register encoding shapes across i386 and x64, the six post-success arbitrary
+flags, malformed decoder details and independent lifting after CWD/CDQ/CQO
+or an earlier high-register clear. The 180 register/memory high-half cases at
+16/32/64 bits must retain their actual input even when the same decoder
+previously lifted another span. The memory regression fails before removal
+of the old dividend cache, including a false success instead of #DE.
+
+`X64ContinuationSourceTest.DivisionWidthsAndAliasesMatchNativeFaults` compares
+60 original instructions and 12,000 input states per source/compiler profile
+with actual hardware DIV/IDIV. `EventDeliveryRoutesEveryRegisterDivisionWidth`
+adds 1,728 original-CPU comparisons per profile, including full state and stack
+on #DE. Both source routes compile at O0/O2 with ASan/UBSan. Set
+`NEVERD_ISA_REGRESSION_ARTIFACT_DIR` to retain their C and event manifests.
+
+Run `scripts/isa/x86/verify_division.py --sources CAPTURE --compiler NEVERC
+--llvm-bin LLVM_BIN --keep OUTPUT` to compile the captured source through
+NeverC and both full LLVM backends. It checks 24 profiles and 164,736 hardware
+comparisons, authenticates event sources against their manifests and verifies
+that a signal outside the active oracle fails deterministically.
+`NeverDX86DivisionRoundTripTests` provides the existing i386/x64 partial-register,
+CDQ/CQO and full double-width dividend roundtrips without rebuilding the large
+aggregate semantic target. The same tests remain in `NeverDSemanticTests`.
+These checks do not extend the profile to memory-divisor faults, nested #DF or
+a complete legacy i386 continuation dispatcher.

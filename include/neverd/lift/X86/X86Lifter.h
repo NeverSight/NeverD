@@ -81,14 +81,12 @@ public:
   int getFpuTop() const { return FPUTop; }
   /// Reset every instruction-sequence state item before lifting an independent
   /// function or translation block.  The historical name is retained for API
-  /// compatibility; this also clears get-PC and dividend idiom state because
-  /// neither may cross an independently cached unit.
+  /// compatibility; get-PC sequence state also cannot cross an independently
+  /// cached unit.
   void resetFpuState() {
     FPUTop = 0;
     FpuReset = false;
     FuncRetPopBytes = 0;
-    LastRdxState = RdxState::Unknown;
-    LastRdxSize = 0;
     GetPcPending = false;
     GetPcArmedThisInsn = false;
     GetPcValue = 0;
@@ -314,15 +312,6 @@ private:
   /// Accumulated `ret imm` pop bytes for the current function (see
   /// getRetPopBytes); reset per function in resetFpuState.
   int FuncRetPopBytes = 0;
-
-  /// Cross-instruction state for CQO/CDQ/CWD + IDIV/DIV pattern.
-  /// Set by CQO/CDQ/CWD, cleared after IDIV/DIV or any other RDX write.
-  enum class RdxState {
-    Unknown,
-    SignExtRAX,
-    Zero
-  } LastRdxState = RdxState::Unknown;
-  uint16_t LastRdxSize = 0;
 
   /// Cross-instruction state for the i386 PIC get-PC thunk `call $+5; pop reg`.
   /// The CALL handler arms \c GetPcPending with the next-instruction address;
