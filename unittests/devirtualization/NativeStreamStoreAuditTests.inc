@@ -50,7 +50,7 @@ TEST(NativeStateAudit, StreamingStoreRetainsAlignmentAndNativeMemoryEffect) {
         cs_detail Detail = *Raw.detail;
         Raw.detail = &Detail;
         if (!Mutation)
-          Detail.x86.operands[0].access = CS_AC_READ;
+          Detail.x86.operands[0].access = CS_AC_WRITE;
         else if (Mutation == 1)
           Detail.x86.operands[1].access = CS_AC_WRITE;
         else if (Mutation == 2)

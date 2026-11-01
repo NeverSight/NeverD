@@ -2366,6 +2366,7 @@ TEST(X64ContinuationSource, RequiresExplicitDomainAndBoundedDistinctAddresses) {
 #include "X64FastSystemContinuationTests.inc"
 #include "X64FrameReturnContinuationTests.inc"
 #include "X64FredContinuationTests.inc"
+#include "X64LockedScalarContinuationTests.inc"
 #include "X64MemoryJumpContinuationTests.inc"
 #include "X64RepeatedTransferContinuationTests.inc"
 #include "X64SysretContinuationTests.inc"
