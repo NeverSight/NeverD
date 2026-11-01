@@ -16,6 +16,7 @@
 
 #include <algorithm>
 #include <optional>
+#include <thread>
 #include <vector>
 
 using namespace neverd;
@@ -377,4 +378,203 @@ TEST(RegistrationCalleeRecursion, FullBudgetRefusalKeepsTheExactAllowance) {
     EXPECT_EQ(getCheckedX86CalleeStackPop(Image, Target, &Work), Fresh);
     EXPECT_EQ(Work, FreshWork);
   }
+}
+
+namespace {
+void expectSameStackContract(
+    const std::optional<RegistrationCalleeStackContract> &Actual,
+    const std::optional<RegistrationCalleeStackContract> &Expected) {
+  ASSERT_EQ(bool(Actual), bool(Expected));
+  if (!Expected)
+    return;
+  EXPECT_EQ(Actual->Target, Expected->Target);
+  EXPECT_EQ(Actual->StackPopBytes, Expected->StackPopBytes);
+  EXPECT_EQ(Actual->Indirect, Expected->Indirect);
+  EXPECT_EQ(Actual->Loads, Expected->Loads);
+  EXPECT_EQ(Actual->RequiredImports, Expected->RequiredImports);
+  EXPECT_EQ(Actual->ImportVeneer, Expected->ImportVeneer);
+  EXPECT_EQ(Actual->PreservesImportBindings, Expected->PreservesImportBindings);
+}
+} // namespace
+
+TEST(RegistrationCalleeRecursion, RawGraphsKeepInvocationImportsAndWork) {
+  for (bool Reached : {false, true})
+    for (bool Cached : {false, true}) {
+      SCOPED_TRACE(::testing::Message() << Reached << "/" << Cached);
+      const auto Image = makeSeparateStackEntryImage(Reached, Cached);
+      constexpr va_t Target = 0x401040;
+      size_t FreshWork = 0;
+      const auto Fresh =
+          RegistrationCallCalleeIndex(Image, &FreshWork).stackContract(Target);
+      ASSERT_TRUE(Fresh);
+      EXPECT_EQ(Fresh->RequiredImports,
+                Reached ? std::vector<va_t>{0x404010} : std::vector<va_t>{});
+      ASSERT_GT(FreshWork, 1u);
+      ASSERT_LT(FreshWork, limits::kMaxRegistrationEHStateWork);
+      RegistrationStackPopMemo Memo(Image);
+      for (unsigned Run = 0; Run < 3; ++Run) {
+        SCOPED_TRACE(Run);
+        RegistrationStackPopMemoScope Scope(Memo);
+        size_t Work = 0;
+        expectSameStackContract(
+            RegistrationCallCalleeIndex(Image, &Work).stackContract(Target),
+            Fresh);
+        EXPECT_EQ(Work, FreshWork);
+        ASSERT_TRUE(Memo.findGraph(Image, Target));
+        // A new invocation owner reads the raw graph but cannot borrow a
+        // completed proof from the standalone-answer memo.
+        EXPECT_FALSE(Memo.find(Image, Target, 0));
+      }
+      const auto Graph = Memo.findGraph(Image, Target);
+      for (size_t Before : {limits::kMaxRegistrationEHStateWork - FreshWork,
+                            limits::kMaxRegistrationEHStateWork - FreshWork + 1,
+                            limits::kMaxRegistrationEHStateWork - 1}) {
+        size_t ExpectedWork = Before;
+        const auto Expected = RegistrationCallCalleeIndex(Image, &ExpectedWork)
+                                  .stackContract(Target);
+        RegistrationStackPopMemoScope Scope(Memo);
+        size_t Work = Before;
+        expectSameStackContract(
+            RegistrationCallCalleeIndex(Image, &Work).stackContract(Target),
+            Expected);
+        EXPECT_EQ(Work, ExpectedWork);
+        EXPECT_EQ(Memo.findGraph(Image, Target), Graph);
+      }
+    }
+}
+
+TEST(RegistrationCalleeRecursion, RawGraphsCannotCertifyPendingCycles) {
+  for (bool Cycle : {false, true}) {
+    const auto Image = makeRecursiveSEHImage(Cycle);
+    RegistrationStackPopMemo Memo(Image);
+    for (va_t Target : {Image.Entry, Image.Entry + 0x100}) {
+      SCOPED_TRACE(::testing::Message() << Cycle << "/" << Target);
+      size_t FreshWork = 0;
+      const auto Fresh =
+          RegistrationCallCalleeIndex(Image, &FreshWork).stackContract(Target);
+      if (Target == Image.Entry || !Cycle)
+        ASSERT_TRUE(Fresh);
+      else
+        ASSERT_FALSE(Fresh);
+      for (unsigned Run = 0; Run < 2; ++Run) {
+        RegistrationStackPopMemoScope Scope(Memo);
+        size_t Work = 0;
+        expectSameStackContract(
+            RegistrationCallCalleeIndex(Image, &Work).stackContract(Target),
+            Fresh);
+        EXPECT_EQ(Work, FreshWork);
+      }
+    }
+    EXPECT_FALSE(Memo.findGraph(Image, Image.Entry));
+    EXPECT_TRUE(Memo.findGraph(Image, Image.Entry + 0x100));
+  }
+}
+
+TEST(RegistrationCalleeRecursion, RawGraphsFollowImageAndScopeLifetime) {
+  auto Image = makeScalarStackBudgetImage(1);
+  auto Other = makeScalarStackBudgetImage(1);
+  Other.Segments[0].Data[Other.Segments[0].Data.size() - 2] = 8;
+  const va_t Target = Image.Entry;
+  size_t FreshWork = 0;
+  ASSERT_EQ(getCheckedX86CalleeStackPop(Image, Target, &FreshWork), 4u);
+  // A disabled or insufficient storage allowance only changes retention.
+  for (size_t Bytes : {size_t{0}, size_t{1}, sizeof(LowFunc)}) {
+    RegistrationStackPopMemo Memo(Image, Bytes);
+    RegistrationStackPopMemoScope Scope(Memo);
+    for (unsigned Run = 0; Run < 2; ++Run) {
+      size_t Work = 0;
+      const auto Result =
+          RegistrationCallCalleeIndex(Image, &Work).stackContract(Target);
+      ASSERT_TRUE(Result);
+      EXPECT_EQ(Result->StackPopBytes, 4u);
+      EXPECT_EQ(Work, FreshWork);
+      EXPECT_FALSE(Memo.findGraph(Image, Target));
+    }
+  }
+  {
+    RegistrationStackPopMemo Memo(Image), OtherMemo(Other);
+    RegistrationStackPopMemoScope Scope(Memo);
+    ASSERT_EQ(getCheckedX86CalleeStackPop(Image, Target), 4u);
+    const auto Graph = Memo.findGraph(Image, Target);
+    ASSERT_TRUE(Graph);
+    EXPECT_EQ(getCheckedX86CalleeStackPop(Other, Target), 8u);
+    EXPECT_FALSE(Memo.findGraph(Other, Target));
+    {
+      RegistrationStackPopMemoScope OtherScope(OtherMemo);
+      EXPECT_EQ(getCheckedX86CalleeStackPop(Other, Target), 8u);
+      EXPECT_TRUE(OtherMemo.findGraph(Other, Target));
+      EXPECT_EQ(getCheckedX86CalleeStackPop(Image, Target), 4u);
+      EXPECT_FALSE(OtherMemo.findGraph(Image, Target));
+    }
+    size_t Work = 0;
+    ASSERT_TRUE(
+        RegistrationCallCalleeIndex(Image, &Work).stackContract(Target));
+    EXPECT_EQ(Work, FreshWork);
+    EXPECT_EQ(Memo.findGraph(Image, Target), Graph);
+  }
+  // Publication or editing retires the whole memo before the same image
+  // object can be reused. Address identity alone must not retain old bytes.
+  Image.Segments[0].Data[Image.Segments[0].Data.size() - 2] = 8;
+  RegistrationStackPopMemo Memo(Image);
+  RegistrationStackPopMemoScope Scope(Memo);
+  EXPECT_EQ(getCheckedX86CalleeStackPop(Image, Target), 8u);
+  EXPECT_TRUE(Memo.findGraph(Image, Target));
+}
+
+TEST(RegistrationCalleeRecursion, RawGraphsExcludeExceptionProofState) {
+  const auto Image = makeScalarStackBudgetImage(1);
+  Decoder Dec;
+  ASSERT_TRUE(Dec.init(Image));
+  const auto Plain =
+      CFGBuilder().buildIntegerFrameProof(Image, Dec, Image.Entry, "abi-stack");
+  ASSERT_FALSE(Plain.Blocks.empty());
+  ASSERT_TRUE(Plain.hasCompleteLiftCoverage());
+  for (unsigned Variant = 0; Variant < 6; ++Variant) {
+    SCOPED_TRACE(Variant);
+    auto Graph = Plain;
+    if (Variant == 0)
+      Graph.ExceptionMetadata.emplace();
+    else if (Variant == 1)
+      Graph.RegistrationStates.emplace();
+    else if (Variant == 2)
+      Graph.Blocks.front().ExceptionalSuccs.emplace_back();
+    else if (Variant == 3)
+      Graph.Blocks.front().ExceptionalPreds.emplace_back();
+    else if (Variant == 4)
+      ++Graph.Entry;
+    else
+      Graph.Blocks.clear();
+    RegistrationStackPopMemo Memo(Image);
+    Memo.recordGraph(Image, Image.Entry, Graph);
+    EXPECT_FALSE(Memo.findGraph(Image, Image.Entry));
+    Memo.recordGraph(Image, Image.Entry, Plain);
+    EXPECT_TRUE(Memo.findGraph(Image, Image.Entry));
+  }
+}
+
+TEST(RegistrationCalleeRecursion, SharedRawGraphsKeepWorkerBudgetsSeparate) {
+  const auto Image = makeSeparateStackEntryImage(true, true);
+  constexpr va_t Target = 0x401040;
+  size_t FreshWork = 0;
+  const auto Fresh =
+      RegistrationCallCalleeIndex(Image, &FreshWork).stackContract(Target);
+  ASSERT_TRUE(Fresh);
+  ASSERT_GT(FreshWork, 1u);
+  ASSERT_LT(FreshWork, limits::kMaxRegistrationEHStateWork);
+  RegistrationStackPopMemo Memo(Image);
+  const auto Query = [&](bool Short) {
+    RegistrationStackPopMemoScope Scope(Memo);
+    for (unsigned Run = 0; Run < 8; ++Run) {
+      size_t Work =
+          Short ? limits::kMaxRegistrationEHStateWork - FreshWork + 1 : 0;
+      const auto Actual =
+          RegistrationCallCalleeIndex(Image, &Work).stackContract(Target);
+      expectSameStackContract(Actual, Short ? std::nullopt : Fresh);
+      EXPECT_EQ(Work, Short ? limits::kMaxRegistrationEHStateWork : FreshWork);
+    }
+  };
+  std::thread Full(Query, false), Short(Query, true);
+  Full.join();
+  Short.join();
+  EXPECT_TRUE(Memo.findGraph(Image, Target));
 }

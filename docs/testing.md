@@ -6132,6 +6132,19 @@ against the shared PE fixture, changed effects and changed import providers.
 constructed-object paths, reverses traversal order, and rejects missing bytes
 at the same live state. Direct runtime-throw cases reject full and partial IAT
 writes while retaining an adjacent-store positive control.
+The callee-stack owner's `RawGraphsKeepInvocationImportsAndWork` and
+`FullBudgetRefusalKeepsTheExactAllowance` cover warm raw CFGs under fresh
+invocation owners, exact and exhausted budgets, full-allowance refusals and
+transitive import dependencies. `RawGraphsCannotCertifyPendingCycles` keeps
+recursive SEH refusals; `RawGraphsFollowImageAndScopeLifetime` checks disabled
+and insufficient storage, nested scopes, separate images at the same address,
+and changed bytes after scope retirement. `RawGraphsExcludeExceptionProofState`
+keeps EH metadata, states and exceptional edges outside this store.
+`SharedRawGraphsKeepWorkerBudgetsSeparate` shares a graph store across two
+workers with different proof allowances. Run the callee-stack, x87 call-graph,
+jump-table and registration-state owners when
+changing raw graph retention; whole-image timing and IR identity are separate
+integration checks.
 `PlainObjectQueriesRejectRecursiveCxxEntries` and
 `ReplaysNestedCallsAndTheirAdministration` check that initializer, object and
 stack queries cannot restart an unbounded recursive C++ graph.

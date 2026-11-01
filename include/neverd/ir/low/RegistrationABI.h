@@ -7,6 +7,7 @@
 #ifndef NEVERD_IR_LOW_REGISTRATIONABI_H
 #define NEVERD_IR_LOW_REGISTRATIONABI_H
 
+#include "neverd/ir/Limits.h"
 #include "neverd/ir/RegistrationCall.h"
 #include "neverd/loader/COFF/COFFRegistrationEH.h"
 #include "neverd/loader/ExceptionCommon.h"
@@ -97,7 +98,8 @@ std::optional<uint32_t> getCheckedX86IndependentIndexedCallStackPop(
 /// including its exhaustion, are those of a fresh computation. Completed
 /// computations and full-allowance refusals are kept; the latter replay only
 /// for the same starting allowance. The image must not change while a scope
-/// uses the memo.
+/// uses the memo. Raw graph storage has a separate bounded allowance and shares
+/// the same image lifetime.
 class RegistrationStackPopMemo {
 public:
   struct Answer {
@@ -106,7 +108,9 @@ public:
     bool HasImportDependencies = false;
   };
 
-  explicit RegistrationStackPopMemo(const BinaryImage &Image) : Image(Image) {}
+  explicit RegistrationStackPopMemo(
+      const BinaryImage &Image,
+      size_t MaxGraphBytes = limits::ir::kMaxRegistrationStackGraphBytes);
   RegistrationStackPopMemo(const RegistrationStackPopMemo &) = delete;
   RegistrationStackPopMemo &
   operator=(const RegistrationStackPopMemo &) = delete;
@@ -116,10 +120,20 @@ public:
   void record(const BinaryImage &Other, va_t Target, unsigned Level,
               const Answer &Value);
 
+  /// Plain PE32 integer CFGs from a fresh default builder, with no exception
+  /// metadata, registration states or exceptional edges. These retain only
+  /// immutable image facts; caller-dependent proofs and work run afresh.
+  std::shared_ptr<const LowFunc> findGraph(const BinaryImage &Other,
+                                           va_t Target);
+  void recordGraph(const BinaryImage &Other, va_t Target, const LowFunc &Graph);
+
 private:
   const BinaryImage &Image;
   std::mutex Mutex;
   std::map<std::pair<va_t, unsigned>, Answer> Answers;
+  std::map<va_t, std::shared_ptr<const LowFunc>> Graphs;
+  size_t GraphBytes = 0;
+  const size_t MaxGraphBytes;
 };
 
 /// Answer this thread's getCheckedX86CalleeStackPop queries from \p Memo

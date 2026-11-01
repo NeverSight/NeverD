@@ -31,9 +31,11 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/ScopeExit.h"
 
+#include <algorithm>
 #include <deque>
 #include <functional>
 #include <map>
+#include <new>
 #include <set>
 #include <vector>
 
@@ -983,6 +985,9 @@ stackPopForRegistration(StackBody &Body, const LowFunc &Function,
 using StackQuery = std::pair<const BinaryImage *, va_t>;
 thread_local std::set<StackQuery> ActiveStackProofs;
 
+LowFunc readStackGraph(CFGBuilder &Builder, const BinaryImage &Image,
+                       Decoder &Dec, va_t Target);
+
 class ReturningStackProof {
   const BinaryImage &Image;
   size_t &Work;
@@ -1104,8 +1109,7 @@ public:
                  stackPopForOrdinaryCxxRegistration(Body, Ordinary, Nested));
         }
         if (!Result && Work < limits::kMaxRegistrationEHStateWork) {
-          const LowFunc Callee =
-              Builder.buildIntegerFrameProof(Image, Dec, Target, "abi-stack");
+          const LowFunc Callee = readStackGraph(Builder, Image, Dec, Target);
           StackBody Body(Image, Callee, Work,
                          Callee.ExceptionMetadata ? InvalidVA : Target);
           Record(Body, Callee.ExceptionMetadata
@@ -1123,6 +1127,87 @@ public:
 
 namespace {
 thread_local RegistrationStackPopMemo *CurrentStackPopMemo = nullptr;
+
+std::optional<size_t> rawStackGraphBytes(const LowFunc &F, size_t Limit) {
+  if (F.ExceptionMetadata || F.RegistrationStates)
+    return std::nullopt;
+  constexpr size_t Overhead =
+      limits::ir::kRegistrationStackGraphAllocationOverhead;
+  // Include the shared allocation and map node, as well as nested storage.
+  size_t Bytes = sizeof(LowFunc) + 2 * Overhead;
+  if (Bytes > Limit)
+    return std::nullopt;
+  const auto Allocation = [&](size_t Count, size_t Width) {
+    if (!Count)
+      return true;
+    if (Overhead > Limit - Bytes)
+      return false;
+    Bytes += Overhead;
+    if (Count > (Limit - Bytes) / Width)
+      return false;
+    Bytes += Count * Width;
+    return true;
+  };
+  const auto Vector = [&](const auto &V) {
+    return Allocation(V.capacity(), sizeof(V.front()));
+  };
+  const auto String = [&](const std::string &V) {
+    return V.capacity() < Limit && Allocation(V.capacity() + 1, 1);
+  };
+  const auto Set = [&](const std::set<va_t> &V) {
+    return Allocation(V.size(), sizeof(va_t) + Overhead);
+  };
+  if (!Vector(F.Blocks) || !String(F.Name) || !String(F.DebugName) ||
+      !String(F.SourceFile) || !Vector(F.JumpTables) ||
+      !Vector(F.FunctionTemporaries) || !Set(F.ModuleAnalysisRoots) ||
+      !Set(F.OrdinaryModuleAnalysisRoots) || !Vector(F.CxxContinuationExits) ||
+      !Vector(F.CxxContinuationEntries) ||
+      !Vector(F.SEHLocalUnwindContinuations) ||
+      !Vector(F.RelocatedInstructionAddressOccurrences) ||
+      !Vector(F.I386GetPcOccurrences) ||
+      !Vector(F.RelocatedInstructionScalarModelOccurrences) ||
+      !Set(F.EverPublishedJumpTableBranchAddresses) ||
+      !Set(F.UnsafeIndirectBranchAddresses) ||
+      !Vector(F.DecodeFailureAddresses) ||
+      !Vector(F.UnsupportedInstructionAddresses) ||
+      !Vector(F.UnprovenReturnAddresses) || !Vector(F.TruncatedPathAddresses) ||
+      !Vector(F.CodeRefTargets))
+    return std::nullopt;
+  for (const auto &B : F.Blocks)
+    if (!B.ExceptionalSuccs.empty() || !B.ExceptionalPreds.empty() ||
+        !Vector(B.Ops) || !Vector(B.InstructionBoundaries) ||
+        !Vector(B.Succs) || !Vector(B.Preds) || !Vector(B.ExceptionalSuccs) ||
+        !Vector(B.ExceptionalPreds))
+      return std::nullopt;
+  for (const auto &T : F.JumpTables)
+    if (!Vector(T.StorageRanges) || !Vector(T.SuppressibleRelocationSlots) ||
+        !Vector(T.AuthenticatedTableLoads) || !Vector(T.SelectorUseRefs) ||
+        !Vector(T.Targets) || !Vector(T.SlotIndices) || !Vector(T.CaseLabels))
+      return std::nullopt;
+  for (const auto &E : F.CxxContinuationExits)
+    if (!Vector(E.Targets))
+      return std::nullopt;
+  for (const auto &U : F.SEHLocalUnwindContinuations)
+    if (!String(U.OperationDigest) || !Vector(U.CalleeDependencies))
+      return std::nullopt;
+  for (const auto &O : F.RelocatedInstructionAddressOccurrences)
+    if (!Vector(O.ArithmeticProof))
+      return std::nullopt;
+  return Bytes;
+}
+
+LowFunc readStackGraph(CFGBuilder &Builder, const BinaryImage &Image,
+                       Decoder &Dec, va_t Target) {
+  RegistrationStackPopMemo *Memo = CurrentStackPopMemo;
+  if (Memo)
+    if (const auto Graph = Memo->findGraph(Image, Target))
+      return *Graph;
+  LowFunc Graph =
+      Builder.buildIntegerFrameProof(Image, Dec, Target, "abi-stack");
+  if (Memo)
+    Memo->recordGraph(Image, Target, Graph);
+  return Graph;
+}
 } // namespace
 
 RegistrationStackPopMemoScope::RegistrationStackPopMemoScope(
@@ -1133,6 +1218,41 @@ RegistrationStackPopMemoScope::RegistrationStackPopMemoScope(
 
 RegistrationStackPopMemoScope::~RegistrationStackPopMemoScope() {
   CurrentStackPopMemo = Previous;
+}
+
+RegistrationStackPopMemo::RegistrationStackPopMemo(const BinaryImage &Image,
+                                                   size_t MaxGraphBytes)
+    : Image(Image),
+      MaxGraphBytes(std::min(MaxGraphBytes,
+                             limits::ir::kMaxRegistrationStackGraphBytes)) {}
+
+std::shared_ptr<const LowFunc>
+RegistrationStackPopMemo::findGraph(const BinaryImage &Other, va_t Target) {
+  if (&Other != &Image)
+    return nullptr;
+  std::lock_guard<std::mutex> Lock(Mutex);
+  const auto It = Graphs.find(Target);
+  return It == Graphs.end() ? nullptr : It->second;
+}
+
+void RegistrationStackPopMemo::recordGraph(const BinaryImage &Other,
+                                           va_t Target, const LowFunc &Graph) {
+  if (&Other != &Image || !MaxGraphBytes || Graph.Entry != Target ||
+      Graph.Blocks.empty() ||
+      !registration_abi::isPlainRegistrationCalleeEntry(Image, Target))
+    return;
+  const auto Bytes = rawStackGraphBytes(Graph, MaxGraphBytes);
+  if (!Bytes)
+    return;
+  std::lock_guard<std::mutex> Lock(Mutex);
+  if (*Bytes <= MaxGraphBytes - GraphBytes && !Graphs.count(Target)) {
+    try {
+      Graphs.emplace(Target, std::make_shared<const LowFunc>(Graph));
+      GraphBytes += *Bytes;
+    } catch (const std::bad_alloc &) {
+      // Retention is optional; the freshly built graph still owns this query.
+    }
+  }
 }
 
 std::optional<RegistrationStackPopMemo::Answer>

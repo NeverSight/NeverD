@@ -604,6 +604,11 @@ inline constexpr int
         256;
 
 // lib/ir/low/X86/RegistrationCalleeStack.cpp
+/// Retained plain integer CFGs per unchanged-image stack-proof operation.
+inline constexpr size_t kMaxRegistrationStackGraphBytes = 64u * 1024u * 1024u;
+/// Conservative node and allocator overhead in retained graph accounting.
+inline constexpr size_t kRegistrationStackGraphAllocationOverhead =
+    8 * sizeof(void *);
 inline constexpr int kRegistrationCalleeStackProveCacheSizeLimit = 256;
 inline constexpr int
     kRegistrationCalleeStackRegistrationCallCalleeIndexStackContractsTargetsSizeLimit =

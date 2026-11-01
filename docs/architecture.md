@@ -1124,6 +1124,15 @@ index from another image is ignored. A change of work account, SEH analysis
 level or C++ proof ancestry still starts a fresh proof; it retains only this
 image inventory from an active owner.
 
+The same scope retains plain PE32 integer CFGs from fresh default builders,
+subject to a bounded byte allowance. It excludes exception metadata,
+registration states and exceptional edges. Reuse copies the raw graph; every
+invocation still checks its own returning stack, recursion path, import
+dependencies and cumulative work. No caller-dependent answer enters the raw
+graph store. The scope belongs to one unchanged image and ends before image
+publication or edits; a nested scope restores its predecessor. Storage refusal
+falls back to the ordinary fresh builder without changing proof budgets.
+
 Leaf-prefix refusals have a separate bounded memo for the same unchanged-image
 operation. A key includes the entry, required return cleanup, closed-call-graph
 requirement and SEH analysis level. Only an integer CFG without EH can supply
