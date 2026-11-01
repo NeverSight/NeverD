@@ -38,12 +38,19 @@ It does not acquire a VMX/SVM or ordinary atomic-memory contract. The explicit
 source step uses a private native bank and aborts elision before publication;
 external transaction state and faults require a different owner.
 
-`pipeline/X64RtmAbortRegions` authenticates each immediate-abort RTM pair and
+`pipeline/X86/X64RtmAbortRegions` authenticates each immediate-abort RTM pair and
 its original fallback. The native `llvm.x86.rtm.abort.pair` operation owns the
 whole checkpoint and local abort label; the source provider owns CPUID admission
 and publication of the actual status. NeverC uses native pair and CPUID calls.
 The compatibility C route retains one assembly block with the same boundary.
 Neither route assigns general transaction ownership to individual source steps.
+
+`pipeline/X86/X64RtmRegions` separately owns complete selected RTM attempts.
+The analysis layer records transaction-body admission before state lowering.
+A live outer native checkpoint contains all translated state and RAM writes,
+nested controls and selected physical calls. Internal refusal uses an unused
+original XABORT code and rolls back before returning. Both source routes and
+dispatchers share this owner; see [the RTM contract](x86-rtm-regions.md).
 
 `X86DescriptorState.h` owns descriptor-state operand shapes; LowIR,
 Low-to-Med, Med verification and source output use that contract.

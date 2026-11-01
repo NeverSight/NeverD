@@ -18096,6 +18096,18 @@ the generated source and extends only its harness with exact EAX and CPUID
 expectations. Its report separates successful abort publication from refusal;
 see the [dated evidence](evidence/x86-rtm-abort-pair-2026-11-01.json).
 
+`X64ContinuationExportTest.RtmRegions*` exercises the complete selected RTM
+provider, its source-semantic admission, both XBEGIN exits and XEND resumption,
+and refusal when every XABORT immediate is occupied. Its 48 exports cover 12
+transaction scenarios through both C routes and dispatchers. Run
+`scripts/isa/x86/verify_rtm_regions.py --compiler NEVERC --sde SDE --sources DIR
+--keep RESULTS` after saving the test artifacts. Add `--backend-llc LLC` and
+optionally `--new-pm` for the full LLVM backend. The unmodified harness compares
+original machine code in SDE full mode, complete represented state, original
+RAM, guest-stack writes, standalone controls and private budget rollback at
+O0/O2. CPUID-disabled mode must decline. See the [domain and limits](x86-rtm-regions.md);
+processor-model results do not qualify physical hardware or fault delivery.
+
 ## SNP and SEV-ES native completion
 
 `NeverDX86SnpSourceTests` checks exact native call effects, modes, pointer

@@ -7,8 +7,8 @@
 /// Select and connect special source regions without inferring a function ABI.
 //===----------------------------------------------------------------------===//
 
-#ifndef NEVERD_PIPELINE_X64SPECIALREGIONS_H
-#define NEVERD_PIPELINE_X64SPECIALREGIONS_H
+#ifndef NEVERD_LIB_PIPELINE_X86_X64SPECIALREGIONS_H
+#define NEVERD_LIB_PIPELINE_X86_X64SPECIALREGIONS_H
 
 #include "neverd/Common.h"
 
@@ -51,11 +51,13 @@ struct X64SpecialRegionSelection {
 /// the same depth; bounds faults stop before exception delivery.
 /// NativeRtmAbortRegions follows the authenticated fallback of an immediate
 /// abort pair; only its explicit environment callback executes that pair.
+/// NativeRtmRegions follows canonical XBEGIN bodies/fallbacks and XEND/XTEST
+/// fallthroughs. Its callback owns the entire transaction, including rollback.
 llvm::Expected<X64SpecialRegionSelection> selectX64SpecialRegions(
     const BinaryImage &Image, llvm::ArrayRef<va_t> Entries,
     const analysis::X64ContinuationSourceOptions &SourceOptions,
     unsigned CalleeDepth, bool FollowDirectJumps, bool NativeRtmAbortRegions,
-    DebugContext *Debug);
+    bool NativeRtmRegions, DebugContext *Debug);
 
 /// Connect adjacent selected instructions after checking their actual next PC.
 /// All other transfers use the common indexed dispatch. Keep instruction exits,
@@ -67,4 +69,4 @@ void emitX64SpecialRegionDriver(
 
 } // namespace neverd
 
-#endif // NEVERD_PIPELINE_X64SPECIALREGIONS_H
+#endif // NEVERD_LIB_PIPELINE_X86_X64SPECIALREGIONS_H

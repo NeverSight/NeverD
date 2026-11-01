@@ -476,6 +476,11 @@ struct X64ContinuationInstructionSource {
   /// have no choice. No original instruction-local operation index is implied.
   std::vector<X64ContinuationCompatibilityChoice> CompatibilityChoices;
   bool RequiresNativeExecution = false;
+  /// This step changes only ordinary RAM, GPR/vector values and status flags
+  /// through the shared instruction semantics. A native RTM region may call
+  /// it while retaining its outer checkpoint. System-state projections and
+  /// changes to nonstatus flags require their own transaction contract.
+  bool SupportsRtmBody = false;
   std::string Diagnostic;
 };
 

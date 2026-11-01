@@ -1329,6 +1329,23 @@ buildInstruction(SpecializationInstruction Instruction,
         RequireNative("instruction requires a different flags domain");
     }
   }
+  // Admission belongs to the original semantic operations, before state
+  // rewriting hides a system-register update behind ordinary RAM stores.
+  // Alignment checks only validate the existing nonfaulting RAM domain.
+  // DF and other nonstatus flags have implementation-dependent RTM behavior;
+  // virtualizing their writes must not turn a native abort into a commit.
+  Result.SupportsRtmBody =
+      !Result.RequiresNativeExecution &&
+      Instruction.ProfileProjection == InterpreterProfileProjection::None &&
+      Kind <= Exit::Return &&
+      std::all_of(Instruction.Ops.begin(), Instruction.Ops.end(),
+                  [](const LowOp &Op) {
+                    if (Op.Opcode == NdOp::INTRINSIC && !alignmentIntrinsic(Op))
+                      return false;
+                    const auto Bit =
+                        Op.Output.isReg() ? flagBit(Op.Output) : std::nullopt;
+                    return !Bit || *Bit < 8 || *Bit == 11;
+                  });
   // Reserve before taking block references. Most operations need at most one
   // control-value guard; a modeled MSR write also checks each bound value
   // domain and may split state writes from native speculation effects.

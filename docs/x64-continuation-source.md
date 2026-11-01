@@ -65,7 +65,7 @@ changes its interface to state C.
 
 Keep the state translation in a separate C file and pass the original machine
 context explicitly when ordinary parameter or frame recovery cannot be proved.
-The special-region implementation lives in `lib/pipeline/X64SpecialRegions.cpp`;
+The special-region implementation lives in `lib/pipeline/X86/X64SpecialRegions.cpp`;
 it does not replace missing source arguments with constants.
 
 The ordinary Win64 borrow proof is isolated in
@@ -556,8 +556,19 @@ independent C calls to `_xbegin` and `_xabort`.
 Execution requires an RTM-capable host outside RTM/HLE, with no debug traps or
 faults. If CPUID does not advertise RTM, the provider declines without changing
 explicit state. It never substitutes a constant abort status. Other transaction
-bodies and noncanonical prefix combinations remain unsupported. The instruction
+bodies and noncanonical prefix combinations remain unsupported by this pair
+binding. The instruction
 behavior and abort status follow [Intel's instruction-set reference](https://cdrdv2-public.intel.com/671110/325383-sdm-vol-2abcd.pdf).
+
+## Complete selected RTM attempts
+
+`native_rtm_regions: true` separately binds complete transactions, nested
+commit/abort, original RAM rollback, selected CALL/RET and standalone
+XABORT/XTEST. Its native provider retains the outer checkpoint until completion
+and rolls back unsupported paths before declining. Pass a read-only
+`neverd_x64_rtm_context_v6` with an explicit `max_instructions` attempt budget.
+Do not combine this option with `native_rtm_abort_regions`. See the
+[RTM region contract and qualification procedure](x86-rtm-regions.md).
 
 ## SDK and verification
 

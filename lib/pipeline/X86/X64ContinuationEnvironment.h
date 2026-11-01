@@ -7,8 +7,8 @@
 /// Emit bounded environment resumption without inferring a native call ABI.
 //===----------------------------------------------------------------------===//
 
-#ifndef NEVERD_LIB_PIPELINE_X64CONTINUATIONENVIRONMENT_H
-#define NEVERD_LIB_PIPELINE_X64CONTINUATIONENVIRONMENT_H
+#ifndef NEVERD_LIB_PIPELINE_X86_X64CONTINUATIONENVIRONMENT_H
+#define NEVERD_LIB_PIPELINE_X86_X64CONTINUATIONENVIRONMENT_H
 
 namespace llvm {
 class raw_ostream;
@@ -24,4 +24,4 @@ void emitX64ContinuationEnvironment(llvm::raw_ostream &OS, unsigned Version);
 
 } // namespace neverd
 
-#endif // NEVERD_LIB_PIPELINE_X64CONTINUATIONENVIRONMENT_H
+#endif // NEVERD_LIB_PIPELINE_X86_X64CONTINUATIONENVIRONMENT_H
