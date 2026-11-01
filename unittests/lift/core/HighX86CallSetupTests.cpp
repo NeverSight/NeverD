@@ -10,6 +10,7 @@
 #include "gtest/gtest.h"
 
 #include "neverd/backend/c/HighC/HighCEmitter.h"
+#include "neverd/loader/BinaryImage.h"
 
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallVector.h"
@@ -101,7 +102,8 @@ std::string source(bool Live, bool Nested) {
   return Source;
 }
 
-void compileAndRun(const std::string &Source) {
+void compileAndRun(const std::string &Source,
+                   llvm::StringRef Optimization = "-O1") {
 #ifdef NEVERD_TEST_CLANG
   const std::string Compiler = NEVERD_TEST_CLANG;
 #else
@@ -129,7 +131,7 @@ void compileAndRun(const std::string &Source) {
       std::nullopt, std::nullopt, ErrorPath.str()};
   llvm::SmallVector<llvm::StringRef, 12> Arguments{Compiler,
                                                    "-std=c11",
-                                                   "-O1",
+                                                   Optimization,
                                                    "-Werror=uninitialized",
                                                    "-Werror=return-type",
                                                    SourcePath,
@@ -170,5 +172,107 @@ TEST(HighX86CallSetup, UnusedOutgoingSetupStillDisappears) {
   const std::string Source = source(false, false);
   EXPECT_EQ(Source.find("*("), std::string::npos) << Source;
   EXPECT_EQ(Source.find(" - 4"), std::string::npos) << Source;
+}
+
+TEST(HighX86CallSetup, AnImageLoadPassedToTheCallKeepsItsDefinition) {
+  for (BinaryFormat Format :
+       {BinaryFormat::COFF, BinaryFormat::ELF, BinaryFormat::MachO})
+    for (bool Nested : {false, true}) {
+      SCOPED_TRACE(static_cast<int>(Format));
+      SCOPED_TRACE(Nested);
+      constexpr va_t Word = 0x404000;
+      BinaryImage Image;
+      Image.Arch = Arch::X86;
+      Image.Bits = Bitness::Bits32;
+      Image.Format = Format;
+      Segment Data;
+      Data.VA = Word;
+      Data.Size = Data.FileSz = 4;
+      Data.Data.resize(4);
+      Data.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+      Image.Segments.push_back(std::move(Data));
+
+      HighFunc Setter;
+      Setter.Name = "set_image_word";
+      Setter.Entry = 0x401000;
+      Setter.ReturnType = NdType::makeVoid();
+      Setter.Params = {{"word", NdType::makeInt(4, false)}};
+      HighStmt Set;
+      Set.Kind = StmtKind::Store;
+      Set.StoreAddr = HighExpr::makeConst(Word, 4);
+      Set.StoreVal = scalar(0, true);
+      Setter.Body = {Set, result(nullptr)};
+
+      HighFunc Callee;
+      Callee.Name = "consume_loaded";
+      Callee.Entry = 0x402000;
+      Callee.ReturnType = NdType::makeInt(4, false);
+      Callee.Params = {{"loaded", Callee.ReturnType},
+                       {"word", Callee.ReturnType}};
+      Callee.Body = {result(HighExpr::makeBinop(
+          NdOp::INT_ADD,
+          HighExpr::makeBinop(NdOp::INT_MULT, scalar(0, true),
+                              HighExpr::makeConst(31, 4)),
+          scalar(1, true)))};
+
+      HighFunc Func;
+      Func.Name = "image_call";
+      Func.Entry = 0x403000;
+      Func.ReturnType = Callee.ReturnType;
+      Func.Params = {{"stack_base", Callee.ReturnType},
+                     {"choose", Callee.ReturnType}};
+      HighStmt Load;
+      Load.Kind = StmtKind::Assign;
+      Load.Dst = scalar(10);
+      Load.Val =
+          HighExpr::makeLoad(HighExpr::makeConst(Word, 4), Callee.ReturnType);
+      HighStmt Adjust;
+      Adjust.Kind = StmtKind::Assign;
+      Adjust.Dst = scalar(11);
+      Adjust.Val = offset(scalar(0, true), NdOp::INT_SUB, 4);
+      HighStmt Push;
+      Push.Kind = StmtKind::Store;
+      Push.StoreAddr = Adjust.Val;
+      Push.StoreVal = HighExpr::makeConst(7, 4);
+      HighStmt Call;
+      Call.Kind = StmtKind::Assign;
+      Call.Dst = scalar(12);
+      Call.Val = HighExpr::makeCall(Callee.Name, Callee.Entry,
+                                    {scalar(10), HighExpr::makeConst(7, 4)});
+      Call.Val->Type = Callee.ReturnType;
+      Func.Body = {Load, Adjust, Push, Call, result(scalar(12))};
+      if (Nested) {
+        HighStmt Branch;
+        Branch.Kind = StmtKind::IfElse;
+        Branch.Cond = scalar(1, true);
+        Branch.Body = std::move(Func.Body);
+        Branch.ElseBody = {result(HighExpr::makeConst(0, 4))};
+        Func.Body = {Branch};
+      }
+
+      std::string Source;
+      llvm::raw_string_ostream OS(Source);
+      CEmitterOptions Options;
+      Options.TheArch = Arch::X86;
+      Options.Format = Format;
+      Options.Image = &Image;
+      Options.EmitComments = false;
+      ASSERT_TRUE(HighCEmitter().emit({Setter, Callee, Func}, OS, Options));
+      // Changing the backing word between calls distinguishes a live load
+      // from an invented zero or a stale cached value. A zero stack base is
+      // safe only when the physical outgoing PUSH is correctly projected.
+      for (llvm::StringRef Optimization : {"-O0", "-O2"})
+        compileAndRun(Source + R"(
+int main(void) {
+    const uint32_t words[] = {0, 17, 0x80000001u, 0xffffffffu};
+    for (unsigned i = 0; i < sizeof(words) / sizeof(words[0]); ++i) {
+        set_image_word(words[i]);
+        if (image_call(0, 1) != words[i] * 31u + 7u) return 1;
+    }
+    return 0;
+}
+)",
+                      Optimization);
+    }
 }
 } // namespace

@@ -5154,6 +5154,9 @@ Unknown and variadic imports keep their existing setup recovery.
 The i386 stack summary also counts fixed imports without a published register
 count. When that known ABI consumes every slot of a wide outgoing store,
 MedIR splits the store into those lanes for both source routes.
+HighC's outgoing-push projection retains every setup definition read by a
+visible statement. This includes image-loaded call arguments as well as stack
+addresses used after the call; hiding a PUSH cannot erase its live producer.
 
 Additional callee CFGs are admitted in deterministic breadth-first order.
 Parallel batches retain at most 32 bodies and use at most four independent

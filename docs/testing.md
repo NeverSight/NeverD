@@ -5945,6 +5945,9 @@ one-argument MSVC import. `FixedZeroArgumentImportsDoNotAcquireScratchRegisters`
 also keeps unknown Windows imports eligible for register arguments.
 `AStoreWiderThanASlotFillsEachSlotItCovers` checks the same four-byte MedIR
 lanes and LLVM verification with optimization enabled and disabled.
+`HighX86CallSetup.AnImageLoadPassedToTheCallKeepsItsDefinition` compiles and
+executes flat and nested call setup for PE, ELF and Mach-O at O0/O2. Changing
+the backing word between calls checks that projection retains the live read.
 Run `NeverDI386CallContractTests`,
 `NeverDFPParameterMaskTests` and `NeverDLibCTests` together.
 Runtime stack-probe audits require the exact platform and stated name evidence.
