@@ -62,10 +62,11 @@ constexpr uint64_t kMaxObjectExternStatedReach = 0x10000;
 /// Exhaustion preserves the original indirect transfers.
 constexpr size_t kMaxScalarBranchEvidenceWork = 262144;
 
-/// Pure scalar computed-code dispatch domains and total per-function work,
-/// including revalidation after newly discovered targets add CFG edges.
-constexpr size_t kMaxComputedBranchValues = 32;
-constexpr size_t kMaxComputedBranchProduct = 256;
+/// Complete scalar dataflow covers shared by computed targets and stack
+/// offsets. Larger sets or Cartesian products lose their numeric fact.
+constexpr size_t kMaxScalarValueSet = 32;
+constexpr size_t kMaxScalarValueProduct = 256;
+/// Total computed-target work, including revalidation after CFG discovery.
 constexpr size_t kMaxComputedBranchEvidenceWork = 2000000;
 
 /// Optional symbolic fallback for unresolved straight-block scalar targets.
@@ -497,6 +498,9 @@ constexpr uint64_t kMaxNoReturnScreenBytes = 0x4000;
 /// Revisits of one block before a callee's incoming-stack-read summary widens
 /// a still-changing stack offset (a pointer stepped around a loop) to unknown.
 constexpr unsigned kMaxStackOffsetJoinVisits = 8;
+/// Optional finite scalar offsets for one incoming-stack summary. The cover
+/// is built lazily once; exhaustion keeps variable offsets unknown.
+constexpr size_t kMaxIncomingStackScalarWork = 65536;
 
 /// `--func` may attach out-of-line catch/unwind pdata, but a malformed or
 /// merged runtime-function range must not import that owner's entire EH

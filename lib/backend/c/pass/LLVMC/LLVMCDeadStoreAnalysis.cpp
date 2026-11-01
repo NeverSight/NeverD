@@ -199,6 +199,12 @@ void analyzeDeadFrameStores(LLVMCAnalysisState &State, llvm::Function &Fn) {
   };
   bool UncertainFrameRead = false;
   auto NoteAddress = [&](const llvm::Value *Ptr, const FrameAliases &Aliases) {
+    // An unresolved index can reach more than any one named slot. Keeping
+    // its stores live is insufficient: fixed and indexed accesses must also
+    // use the same allocation in generated C, for both reads and writes.
+    if (Aliases.Incomplete)
+      State.RawFrameAllocas.insert(Aliases.Frames.begin(),
+                                   Aliases.Frames.end());
     if (!Aliases.Incomplete && !Aliases.HasNonFrameAlternative &&
         !Aliases.UsesCarrierLoad && Aliases.Locations.size() == 1)
       State.FramePointerLocations.emplace(Ptr, *Aliases.Locations.begin());
