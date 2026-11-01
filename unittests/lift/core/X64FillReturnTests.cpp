@@ -204,7 +204,7 @@ TEST(X64FillReturn, ChangedBytesAndUntrustedCarriersRetainUnknowns) {
     EXPECT_EQ(F.CallClobbers.size(), 2u) << I;
     EXPECT_EQ(F.Blocks.front().Ops.size(), 2u) << I;
   }
-  for (unsigned Case = 0; Case != 11; ++Case) {
+  for (unsigned Case = 0; Case != 13; ++Case) {
     auto Image = image();
     auto F = caller();
     if (Case == 0)
@@ -230,6 +230,10 @@ TEST(X64FillReturn, ChangedBytesAndUntrustedCarriersRetainUnknowns) {
       F.CallInfos.front().TargetAddr += 1;
     if (Case == 10)
       F.CallInfos.front().Args[2].Size = 4;
+    if (Case == 11)
+      F.Blocks.front().ExceptionalSuccs.push_back({-1, 0});
+    if (Case == 12)
+      F.Blocks.front().Ops.front().Dead = true;
     recoverX64FillReturns(F, Image);
     EXPECT_EQ(F.CallClobbers.size(), 2u) << Case;
     EXPECT_EQ(F.Blocks.front().Ops.size(), 2u) << Case;

@@ -90,11 +90,15 @@ void recoverX64FillReturns(MedFunc &Function, const BinaryImage &Image) {
   for (const auto &Call : Function.CallInfos)
     Bound.emplace(std::pair{Call.BlockId, Call.OpIdx}, &Call);
   std::map<const MedOp *, std::pair<MedVar, MedVar>> Calls;
-  for (const auto &Block : Function.Blocks)
+  for (const auto &Block : Function.Blocks) {
+    // The cursor formula holds after a normal return. An exceptional edge
+    // can observe a partially completed fill instead of this exit value.
+    if (!Block.ExceptionalSuccs.empty())
+      continue;
     for (size_t I = 0; I < Block.Ops.size(); ++I) {
       const auto &Call = Block.Ops[I];
       if (!Outputs.count(Call.CallSiteId) || Call.Opcode != NdOp::CALL ||
-          Call.NumInputs != 4 || !Call.Inputs[0].isConst() ||
+          Call.Dead || Call.NumInputs != 4 || !Call.Inputs[0].isConst() ||
           Call.SourceCallHint || Call.ScalarCallSignature ||
           Call.IntegerCallSignature || Call.IsTailCall || Call.DoesNotReturn ||
           Call.Inputs[1].Size != 8 || Call.Inputs[3].Size != 8)
@@ -118,6 +122,7 @@ void recoverX64FillReturns(MedFunc &Function, const BinaryImage &Image) {
       if (Body->second)
         Calls.emplace(&Call, std::pair{Destination, Count});
     }
+  }
   if (Calls.empty())
     return;
   std::set<Key> Candidates, Used, Counts;

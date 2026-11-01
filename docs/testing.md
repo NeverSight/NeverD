@@ -16736,7 +16736,7 @@ expansion. Opaque and general dynamic machine-state returns remain separate.
 cursor through both source routes, retains its original call and other clobbers,
 and compares the pure result expression against independent cursor loops.
 Changing any of the 233 instruction bytes, a writable/truncated mapping, a stale
-call binding or a partial result retains unavailability. Current source operands,
+call binding, exceptional successor or a partial result retains unavailability. Current source operands,
 following call positions, unused results and fixed versus dynamic lengths have
 separate controls. `scripts/isa/x86/verify_fill_return.py --output REPORT.json`
 optionally uses Unicorn to single-step the public fixture in synthetic memory.

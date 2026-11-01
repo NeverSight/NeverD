@@ -15181,6 +15181,7 @@ executable mapping, including branch targets and padding; names, image addresses
 and library prototypes never admit a body. The original call retains every
 store and possible fault. Only a used full-width RCX clobber receives the
 checked cursor expression, bound to that occurrence's current source arguments.
+Calls with exceptional successors retain the unknown state of a partial fill.
 Shared post-recovery source preparation applies this once for HighC, LLVM C and
 SDK replay; native lifting retains its original state contract. Candidates are
 gated before scanning uses, each target is checked once per function, and only
