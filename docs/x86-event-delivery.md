@@ -120,3 +120,7 @@ Capture native sources and manifests by setting
 backends additionally pass 12 execution profiles and 80,640 original-CPU
 comparisons. The verifier checks that the delivery function contains no inline
 assembly; the independent harness alone uses its explicit KVM oracle request.
+
+The [recorded qualification](evidence/x86-event-delivery-2026-11-01.json)
+contains source/tool hashes, both 202-test SDK runs with no skips, and the
+12 NeverC/LLVM execution profiles.

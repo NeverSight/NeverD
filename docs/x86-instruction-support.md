@@ -3313,3 +3313,7 @@ instruction, complete legacy i386 execution, SMM/SGX transition support or a
 faulting descriptor/page-walk model. LLVM/NeverC already express the integer,
 memory and control-flow operations used by this projection; no new inline asm
 or compiler intrinsic is required for this change.
+
+The [event-delivery evidence](evidence/x86-event-delivery-2026-11-01.json)
+records both 202-test SDK suites without skips, byte-identical source artifacts,
+and 80,640 additional NeverC/full-LLVM native comparisons.
