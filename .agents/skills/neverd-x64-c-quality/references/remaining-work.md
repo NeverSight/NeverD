@@ -33,6 +33,17 @@ graphics calls, against the original SDK contracts. This extends API coverage;
 COM vtable dispatch, Windows API execution and general VM entry-state recovery
 remain separate obligations.
 
+The ARM64 fourteen-argument SDK caller exposed an additional value-flow gap:
+an LDR Q forwarding two eight-byte scalar stack slots was left as an
+uninitialized frame read despite recovering the correct argument count.
+The shared ABI owner now composes aligned wide loads from all covered slots
+and seeds every overlapping mutable home. Both C routes have a value oracle
+independent of the existing compiler-type checks. Native Windows ARM64
+caller-context, cross-page memory and exclusive-instruction oracles have also
+passed in the public comparison repository; native recovered-C API/driver-call
+qualification is separate from those original-code observations and from
+loading a kernel driver.
+
 Win64 positional stack-input proofs now track original byte overwrites on every
 path. Reusing a fully replaced slot after an opaque access no longer invents
 an incoming argument dependency. Partial writes, earlier reads and unmatched
