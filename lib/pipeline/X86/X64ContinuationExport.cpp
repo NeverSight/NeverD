@@ -692,7 +692,7 @@ uint64_t neverd_x64_deliver_event_v6(neverd_x64_state_v6 *state,
              "source; explicit selected event, saved PC, error code, CR2 and "
              "shadows; successful descriptor/TSS/stack RAM; no nested delivery "
              "faults, CET, FRED, SMM or enclave transitions; canonical UD2 "
-             "and admitted unsigned 64-bit DIV produce #UD/#DE"
+             "and register DIV/IDIV at 8/16/32/64 bits produce #UD/#DE"
            : "disabled"},
       {"environment_binding",
        "explicit full-state callback; separately bounded"},

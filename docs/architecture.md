@@ -15670,8 +15670,15 @@ IDT/descriptor/TSS/frame transitions to the same `X64ContinuationEvents.h`
 owner as INT/INT3. The pipeline emits this LowIR through either C backend and
 only adds the typed public wrapper. Event selection, APIC/PIC priority,
 restart/partial-completion state and shadow lifetime remain explicit producer
-responsibilities. Canonical UD2 and admitted unsigned 64-bit DIV may deliver
-#UD/#DE directly under the V6 event binding. See
+responsibilities. Canonical UD2 and register DIV/IDIV at 8/16/32/64 bits may
+deliver #UD/#DE directly under the V6 event binding.
+`X64ContinuationDivision.h` constructs the pre-publication quotient-range
+guard from the validated double-width precondition; both emitters consume
+that same LowIR. `X86DivisionUndefined.h` admits original register encodings
+in i386 and x64 and places arbitrary flags after successful arithmetic.
+All DIV/IDIV lifting reads the actual high dividend register independently of
+previous lift calls. The signed/unsigned operations share one lifter; narrowing
+belongs to subsequent dataflow, with no decoder-local dividend cache. See
 [the event interface](x86-event-delivery.md); legacy non-IA-32e dispatch and
 SMM/SGX transitions do not acquire semantics from this interface.
 

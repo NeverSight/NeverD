@@ -290,3 +290,106 @@ TEST_F(X64ContinuationExportTest,
     EXPECT_EQ(take(Report).empty(), Minus == 1);
   }
 }
+
+TEST_F(X64ContinuationExportTest,
+       EventDeliveryRoutesEveryRegisterDivisionWidth) {
+#if !defined(__linux__) || !defined(__x86_64__)
+  GTEST_SKIP() << "the independent DIV/IDIV oracle requires Linux x64";
+#else
+  std::vector<uint8_t> Bytes;
+  std::string Addresses,
+      Dispatch = "static uint64_t step(unsigned i,void *s) { switch(i) {\n";
+  std::string Cases =
+      "static const struct {unsigned width,sign,size;uint64_t pc;} cases[]={\n";
+  unsigned Index = 0;
+  for (bool Signed : {false, true})
+    for (unsigned Width : {1u, 2u, 4u, 8u}) {
+      const uint64_t PC = 0x1000 + Bytes.size();
+      const auto Before = Bytes.size();
+      if (Width == 2)
+        Bytes.push_back(0x66);
+      if (Width == 8)
+        Bytes.push_back(0x48);
+      Bytes.push_back(Width == 1 ? 0xf6 : 0xf7);
+      Bytes.push_back(Signed ? 0xf9 : 0xf1);
+      if (!Addresses.empty())
+        Addresses += ",";
+      Addresses += std::to_string(PC);
+      Dispatch += "case " + std::to_string(Index++) +
+                  ":return neverd_step_v6_" + llvm::utohexstr(PC) + "(s);\n";
+      Cases += "{" + std::to_string(Width) + "," + std::to_string(Signed) +
+               "," + std::to_string(Bytes.size() - Before) + "," +
+               std::to_string(PC) + "ULL},\n";
+    }
+  Dispatch += "default:abort();}}\n";
+  Cases += "};\n";
+  load(Bytes);
+  for (bool LLVM : {false, true}) {
+    auto [Source, Manifest] = source(
+        request("\"event_delivery\":true,\"instructions\":[" + Addresses + "]"),
+        LLVM);
+    EXPECT_NE(Manifest.find("\"native_requests\": 0"), std::string::npos);
+    const std::string Harness =
+        std::string(Seed) + "\n#include <stdio.h>\n#include \"" +
+        TEST_SOURCE_DIR + "/fixtures/x86_division_oracle.h\"\n" + Dispatch +
+        Cases + R"C(
+int main(void) {
+  division_install();unsigned comparisons=0;
+  uint64_t gdt[4]={0,0,0,0x00af9b000000ffffULL},idt[2]={0};
+  unsigned char stack[256],expected_stack[256];
+  idt[0]=0x1800|(24ULL<<16)|(0x8eULL<<40);
+  for(unsigned i=0;i<sizeof(cases)/sizeof(*cases);++i) {
+    const unsigned width=cases[i].width,n=width*8;
+    const uint64_t mask=width==8?UINT64_MAX:(1ULL<<n)-1,sign=1ULL<<(n-1);
+    const uint64_t values[]={0,1,3,mask,sign,sign-1};
+    for(unsigned low=0;low<6;++low)for(unsigned high=0;high<6;++high)
+      for(unsigned divisor=0;divisor<6;++divisor) {
+        neverd_x64_state_v6 s=seed();s.PC=cases[i].pc;
+        s.GPR[0]=(s.GPR[0]&~mask)|values[low];
+        s.GPR[2]=(s.GPR[2]&~mask)|values[high];s.GPR[1]=values[divisor];
+        if(width==1)s.GPR[0]=(s.GPR[0]&~0xff00ULL)|(values[high]<<8);
+        s.GPR[4]=(uintptr_t)(stack+239);
+        s.GDTR.Base=(uintptr_t)gdt;s.GDTR.Limit=sizeof(gdt)-1;
+        s.IDTR.Base=(uintptr_t)idt;s.IDTR.Limit=sizeof(idt)-1;
+        memset(stack,0xa5,sizeof(stack));memcpy(expected_stack,stack,sizeof(stack));
+        neverd_x64_state_v6 expected=s;uint64_t a=0,d=0;
+        const int fault=division_native(width,cases[i].sign,s.GPR[0],s.GPR[2],s.GPR[1],&a,&d);
+        const uint64_t status=step(i,&s);
+        CHECK(status==(fault?7:0));
+        if(fault) {
+          const uint64_t frame[]={expected.PC,expected.CS.Selector,expected.RFlags|0x10000,
+                                  expected.GPR[4],expected.SS.Selector};
+          expected.GPR[4]=(expected.GPR[4]&~15ULL)-sizeof(frame);
+          memcpy(expected_stack+expected.GPR[4]-(uintptr_t)stack,frame,sizeof(frame));
+          expected.PC=0x1800;expected.CS.Selector=24;expected.RFlags&=~0x200ULL;
+        } else {
+          expected.GPR[0]=a;expected.GPR[2]=d;expected.PC+=cases[i].size;
+          expected.RFlags&=~0x8d5ULL;
+        }
+        CHECK(!memcmp(&s,&expected,sizeof(s)));
+        CHECK(!memcmp(stack,expected_stack,sizeof(stack)));
+        ++comparisons;
+      }
+  }
+  printf("%u native DIV/IDIV event comparisons\n",comparisons);
+  return 0;
+}
+)C";
+    execute(Source, Harness);
+    if (const char *Directory =
+            std::getenv("NEVERD_ISA_REGRESSION_ARTIFACT_DIR")) {
+      fs::create_directories(Directory);
+      std::ofstream(fs::path(Directory) /
+                    (LLVM ? "division-event-llvm.c" : "division-event-high.c"))
+          << Source << Harness;
+      std::ofstream(fs::path(Directory) /
+                    (LLVM ? "division-event-llvm.source.c"
+                          : "division-event-high.source.c"))
+          << Source;
+      std::ofstream(fs::path(Directory) / (LLVM ? "division-event-llvm.json"
+                                                : "division-event-high.json"))
+          << Manifest;
+    }
+  }
+#endif
+}

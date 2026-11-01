@@ -3307,6 +3307,7 @@ RSP0–2, all IST choices, optional architectural error codes, RF classification
 CR2 and NMI blocking. It distinguishes inhibited events from invalid state and
 stops before executing the handler. Canonical UD2 and admitted unsigned 64-bit
 DIV now produce #UD/#DE through this entry when the binding is selected.
+The register-division extension below includes IDIV and every operand width.
 
 [The delivery contract](x86-event-delivery.md) and its original-instruction KVM
 matrix define this coverage. It is not automatic fault production for every
@@ -3353,3 +3354,30 @@ wrong-site mutations. The host lacks SGX, so all SGX observations stop before
 ENCLU. Actual enclave execution/AEX, full legacy i386 dispatch and general
 fault/restart/asynchronous ownership remain unqualified; the LLVM SDK pin and
 submodule revision are unchanged.
+
+## Register division and #DE at every operand width
+
+Canonical register DIV/IDIV now have complete undefined-output audits for
+8/16/32-bit i386 and 8/16/32/64-bit x64 forms, including legacy high bytes and
+REX low/extended registers. Lifting reads the actual high dividend register;
+a previous CWD/CDQ/CQO or XOR of that register cannot specialize a separate
+instruction span. This also fixes existing memory-divisor lifting and removes
+the decoder-local dividend cache; signed and unsigned forms share one lifter.
+Quotient and remainder writes retain byte/word merging and
+long-mode dword zero extension. The six undefined arithmetic flags are bound
+only after successful division.
+
+Explicit x64 control continuations check divisor zero and the full signed or
+unsigned quotient range before publishing state. Under V6 `event_delivery`,
+these cases deliver #DE through the shared descriptor/frame owner, with the
+original faulting PC; otherwise they return status 5 with unchanged state.
+Signed guards use unsigned magnitudes and a double-width exclusive bound, so
+neither divide-by-zero nor signed-minimum overflow reaches host division.
+
+Both C routes match original CPU DIV/IDIV at O0/O2, including divisor aliases,
+signed extrema and complete rejection/fault state. NeverC and the full LLVM
+legacy/new backends pass 24 execution profiles and 164,736 native comparisons.
+See [the qualification record](evidence/x86-division-2026-11-01.json) and
+[event contract](x86-event-delivery.md). Memory divisors and their access
+faults, redundant prefixes, recursive delivery faults, the legacy i386 source
+dispatcher and asynchronous scheduling retain their separate boundaries.

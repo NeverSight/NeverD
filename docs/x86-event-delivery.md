@@ -16,13 +16,17 @@ compatibility entry, including a non-flat compatibility CS.
 }
 ```
 
-The same option connects canonical `UD2` and the already admitted unsigned
-64-bit `DIV` to delivery. `UD2` delivers #UD. A zero divisor or unrepresentable
-quotient delivers #DE before quotient, remainder or arbitrary flags are
-published. Their saved PC is the original faulting instruction. The driver
-charges one attempted instruction and stops at handler entry. Successful DIV
-retains its existing completion and arbitrary-flag contract. Other instruction
-faults are not implicitly caught or inferred from a host signal.
+The same option connects canonical `UD2` and register `DIV`/`IDIV` at
+8/16/32/64-bit operand widths to delivery. `UD2` delivers #UD. A zero divisor
+or unrepresentable quotient delivers #DE before quotient, remainder or arbitrary
+flags are published. Their saved PC is the original faulting instruction. The
+driver charges one attempted instruction and stops at handler entry. Successful division
+retains its partial-register writes and six arbitrary status flags. The shared
+division owner checks the original double-width dividend, including when the
+divisor aliases AX/DX or uses AH/BH. Signed quotient bounds use unsigned
+magnitudes before any potentially undefined host division. Memory divisors,
+redundant prefixes and other instruction faults are not implicitly caught or
+inferred from a host signal.
 
 ## Event input and ownership
 
@@ -107,9 +111,9 @@ The existing all-256-software-vector and descriptor/frame alias regressions
 exercise the same refactored delivery owner.
 
 This adds event **delivery**, with direct instruction fault production for the
-two stated cases. It does not implement page translation, arbitrary restartable
-memory faults, recursive faults/#DF escalation, APIC scheduling, SMM entry/RSM,
-SGX EENTER/ERESUME/EEXIT/AEX, CET/FRED event routing, or legacy non-IA-32e task
+stated UD2 and division forms. It does not implement page translation, arbitrary
+restartable memory faults, recursive faults/#DF escalation, APIC scheduling,
+SMM/SGX event routing, CET/FRED event routing, or legacy non-IA-32e task
 gates. Compatibility entry here is not a complete i386 instruction dispatcher.
 Those boundaries must remain explicit in coverage claims and release decisions.
 
@@ -124,3 +128,12 @@ assembly; the independent harness alone uses its explicit KVM oracle request.
 The [recorded qualification](evidence/x86-event-delivery-2026-11-01.json)
 contains source/tool hashes, both 202-test SDK runs with no skips, and the
 12 NeverC/LLVM execution profiles.
+
+The subsequent [register-division qualification](evidence/x86-division-2026-11-01.json)
+adds native quotient/remainder/#DE comparisons for every operand width,
+partial-register writes, divisor aliases, zero and signed/unsigned overflow.
+The V6 matrix compares every represented state byte and stack byte on both
+success and #DE; the V2 matrix also checks that rejected inputs leave the
+entire state unchanged. The independent reference executes the original
+DIV/IDIV instruction and catches only its SIGFPE. An unexpected signal in
+generated code fails the process instead of reusing an expired oracle frame.

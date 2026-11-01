@@ -56,8 +56,8 @@ extern "C" {
 /// V6 event_delivery exports neverd_x64_deliver_event_v6 for an explicit
 /// selected fault/trap/IRQ/NMI, including compatibility entry and CPL0..3.
 /// It returns 7 after handler setup, 15 while inhibited, or 5 for invalid
-/// input/preconditions. It also routes canonical UD2 and admitted unsigned
-/// 64-bit DIV to #UD/#DE. The producer owns priority, restart state and
+/// input/preconditions. It also routes canonical UD2 and register DIV/IDIV
+/// at 8/16/32/64 bits to #UD/#DE. The producer owns priority, restart state and
 /// shadows; delivery RAM must succeed. See docs/x86-event-delivery.md for the
 /// contract.
 ///

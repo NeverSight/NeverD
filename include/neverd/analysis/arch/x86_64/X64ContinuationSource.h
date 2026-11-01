@@ -492,8 +492,8 @@ struct X64ContinuationSourceOptions {
   bool NativeSevGuestExit = false;
   /// V6 exports a separate event-delivery function through the same LowIR
   /// owner as INT/INT3. Its event producer supplies architectural restart
-  /// state, shadows and priority. Canonical UD2 and admitted unsigned 64-bit
-  /// DIV directly deliver #UD/#DE; other instruction domains are unchanged.
+  /// state, shadows and priority. Canonical UD2 and register DIV/IDIV at
+  /// 8/16/32/64 bits directly deliver #UD/#DE; other domains are unchanged.
   bool EventDelivery = false;
   uint64_t MaxInstructions = limits::analysis::kX64ContinuationMaxInstructions;
   uint64_t MaxOperations = limits::analysis::kX64ContinuationMaxOperations;

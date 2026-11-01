@@ -1,10 +1,10 @@
-//===- X86DivisionUndefined.h - Unsigned DIV flag audit -------*- C++ -*-===//
+//===- X86DivisionUndefined.h - DIV/IDIV flag audit ------------*- C++ -*-===//
 //
 // NeverD Decompiler
 //
 //===----------------------------------------------------------------------===//
 /// \file
-/// Bind legacy unsigned 64-bit register division to its arbitrary flags.
+/// Bind canonical register division in both x86 modes to its arbitrary flags.
 //===----------------------------------------------------------------------===//
 
 #ifndef NEVERD_LIB_LIFT_X86_X86DIVISIONUNDEFINED_H
@@ -18,7 +18,7 @@
 
 namespace neverd::divisionundefined {
 
-// Intel SDM 253666-093US, DIV, Flags Affected. These productions occur only
+// Intel SDM, DIV/IDIV, Flags Affected. These productions occur only
 // after successful division; neither a divide error nor an admission failure
 // may publish them. DF and all other flags retain their incoming values.
 inline constexpr std::array<unsigned, 6> Flags = {
@@ -30,26 +30,43 @@ inline void record(X86Lifter::LiftState &S) {
 }
 
 inline bool form(const cs_insn *Insn, Arch Target) {
-  if (!Insn || !Insn->detail || Target != Arch::X64 ||
-      Insn->id != X86_INS_DIV || Insn->size != 3)
+  if (!Insn || !Insn->detail || (Target != Arch::X64 && Target != Arch::X86) ||
+      (Insn->id != X86_INS_DIV && Insn->id != X86_INS_IDIV) || Insn->size < 2 ||
+      Insn->size > 4)
     return false;
   const auto &X = Insn->detail->x86;
-  const uint8_t Rex = Insn->bytes[0], ModRM = Insn->bytes[2];
-  if ((Rex != 0x48 && Rex != 0x49) || Insn->bytes[1] != 0xf7 ||
-      (ModRM & 0xf8) != 0xf0 || X.op_count != 1 || X.modrm != ModRM ||
-      X.encoding.modrm_offset != 2 || X.opcode[0] != 0xf7 || X.opcode[1] ||
-      X.opcode[2] || X.opcode[3] || X.rex != Rex || X.prefix[0] ||
-      X.prefix[1] || X.prefix[2] || X.prefix[3] || X.addr_size != 8 || X.sib ||
-      X.disp || X.encoding.disp_size || X.encoding.disp_offset ||
-      X.encoding.imm_size || X.encoding.imm_offset || X.avx_sae ||
-      X.avx_rm != X86_AVX_RM_INVALID || X.avx_cc != X86_AVX_CC_INVALID)
+  unsigned Pos = 0;
+  const uint8_t Prefix = Insn->bytes[Pos] == 0x66 ? Insn->bytes[Pos++] : 0;
+  uint8_t Rex = 0;
+  if (Target == Arch::X64 && Pos < Insn->size && Insn->bytes[Pos] >= 0x40 &&
+      Insn->bytes[Pos] <= 0x4f)
+    Rex = Insn->bytes[Pos++];
+  if (Pos + 2 != Insn->size || (Rex & 6) || (Prefix && (Rex & 8)))
+    return false;
+  const uint8_t Opcode = Insn->bytes[Pos], ModRM = Insn->bytes[Pos + 1];
+  const bool Byte = Opcode == 0xf6;
+  if ((!Byte && Opcode != 0xf7) || (Byte && (Prefix || (Rex & 8))))
+    return false;
+  const unsigned Width = Byte ? 1 : (Rex & 8) ? 8 : Prefix ? 2 : 4;
+  const unsigned Number = (ModRM & 7) + ((Rex & 1) ? 8 : 0);
+  const unsigned Offset =
+      Byte && !Rex && Number >= 4 ? (Number - 4) * 8 + 1 : Number * 8;
+  if ((ModRM & 0xf8) != (Insn->id == X86_INS_DIV ? 0xf0 : 0xf8) ||
+      X.op_count != 1 || X.modrm != ModRM ||
+      X.encoding.modrm_offset != Pos + 1 || X.opcode[0] != Opcode ||
+      X.opcode[1] || X.opcode[2] || X.opcode[3] || X.rex != Rex ||
+      X.prefix[0] || X.prefix[1] || X.prefix[2] != Prefix || X.prefix[3] ||
+      X.addr_size != (Target == Arch::X64 ? 8 : 4) || X.sib || X.disp ||
+      X.encoding.disp_size || X.encoding.disp_offset || X.encoding.imm_size ||
+      X.encoding.imm_offset || X.avx_sae || X.avx_rm != X86_AVX_RM_INVALID ||
+      X.avx_cc != X86_AVX_CC_INVALID)
     return false;
   const auto &Source = X.operands[0];
-  if (Source.type != X86_OP_REG || Source.size != 8 || Source.avx_zero_opmask ||
-      Source.avx_bcast != X86_AVX_BCAST_INVALID)
+  if (Source.type != X86_OP_REG || Source.size != Width ||
+      Source.avx_zero_opmask || Source.avx_bcast != X86_AVX_BCAST_INVALID)
     return false;
   const auto R = mapCapstoneReg(static_cast<x86_reg>(Source.reg));
-  return R.Size == 8 && R.Offset == ((ModRM & 7) + ((Rex & 1) ? 8 : 0)) * 8;
+  return R.Size == Width && R.Offset == Offset;
 }
 
 inline bool matches(llvm::ArrayRef<LowOp> Ops,
