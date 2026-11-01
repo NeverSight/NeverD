@@ -29,12 +29,13 @@ TEST_F(X64ContinuationExportTest, RtmAbortRegionsRequireExactAdjacentBytes) {
       ASSERT_NE(Binding, nullptr);
       const auto *Regions = Binding->getArray("regions");
       ASSERT_NE(Regions, nullptr);
-      EXPECT_EQ(Regions->size(), I == 0 ? 1u : 0u);
-      if (I == 0) {
+      EXPECT_EQ(Regions->size(), I == 0 || I == 4 ? 1u : 0u);
+      if (I == 0 || I == 4) {
         const auto *Region = (*Regions)[0].getAsObject();
         ASSERT_NE(Region, nullptr);
-        EXPECT_EQ(Region->getString("bytes"), "C7F803000000C6F8FF");
-        EXPECT_EQ(Region->getString("fallback"), "0x1009");
+        EXPECT_EQ(Region->getString("bytes"),
+                  I == 0 ? "C7F803000000C6F8FF" : "66C7F80300C6F8FF");
+        EXPECT_EQ(Region->getString("fallback"), I == 0 ? "0x1009" : "0x1008");
         EXPECT_EQ(Region->getInteger("abort_code"), 255);
       }
       execute(Source, std::string(Seed) + R"C(
@@ -106,12 +107,16 @@ int main(void) {
 }
 
 TEST_F(X64ContinuationExportTest, RtmAbortLoopConsumesEveryProviderAttempt) {
-  load({0xc7, 0xf8, 0xfa, 0xff, 0xff, 0xff, 0xc6, 0xf8, 0, 0xc3});
-  for (bool LLVM : {false, true}) {
-    auto [Source, Manifest] = source(
-        request(R"("instructions":[4096],"native_rtm_abort_regions":true)"),
-        LLVM);
-    execute(Source, std::string(Seed) + R"C(
+  for (const auto &Bytes : {std::vector<uint8_t>{0xc7, 0xf8, 0xfa, 0xff, 0xff,
+                                                 0xff, 0xc6, 0xf8, 0, 0xc3},
+                            std::vector<uint8_t>{0x66, 0xc7, 0xf8, 0xfb, 0xff,
+                                                 0xc6, 0xf8, 0, 0xc3}}) {
+    load(Bytes);
+    for (bool LLVM : {false, true}) {
+      auto [Source, Manifest] = source(
+          request(R"("instructions":[4096],"native_rtm_abort_regions":true)"),
+          LLVM);
+      execute(Source, std::string(Seed) + R"C(
 #include <cpuid.h>
 int main(void) {
   unsigned a,b,c,d;
@@ -126,5 +131,98 @@ int main(void) {
   CHECK(!memcmp(&s,&before,sizeof(s)));
   return 0;
 })C");
+    }
+  }
+}
+
+TEST_F(X64ContinuationExportTest,
+       RtmAbortNativeCompilerPreservesProviderState) {
+  const char *Compiler = std::getenv("NEVERD_TEST_NEVERC");
+  if (!Compiler || !*Compiler)
+    GTEST_SKIP() << "NEVERD_TEST_NEVERC is required for native RTM pair output";
+  const char Harness[] = R"C(
+#include <stdlib.h>
+int main(void) {
+  int info[4];__builtin_ia32_cpuidex(info,0,0);
+  int supported=(unsigned)info[0]>=7;
+  if(supported){__builtin_ia32_cpuidex(info,7,0);supported=((unsigned)info[1]>>11)&1;}
+  for(unsigned n=0;n<64;++n) {
+    neverd_x64_state_v6 s={0};
+    for(unsigned i=0;i<sizeof(s);++i)((unsigned char*)&s)[i]=n+i*17;
+    s.PC=4096;neverd_x64_state_v6 before=s,want=s;
+    if(neverd_x64_rtm_abort_environment_v6(&s,3,0)||memcmp(&s,&before,sizeof(s)))abort();
+    int handled=neverd_x64_rtm_abort_environment_v6(&s,4,0);
+    if(handled!=supported)abort();
+    if(supported) {
+      uint64_t status=s.GPR[0];
+      if(status>>32 || (status&0xffffc0u))abort();
+      if(status&1){if(status>>24!=167 || (status&2))abort();}
+      else if(status>>24)abort();
+      want.GPR[0]=status;want.PC=RTM_FALLBACK;
+    }
+    if(memcmp(&s,&want,sizeof(s)))abort();
+  }
+  return 0;
+}
+)C";
+  for (bool Short : {false, true}) {
+    if (Short)
+      load({0x66, 0xc7, 0xf8, 3, 0, 0xc6, 0xf8, 0xa7, 0xc3});
+    else
+      load({0xc7, 0xf8, 3, 0, 0, 0, 0xc6, 0xf8, 0xa7, 0xc3});
+    const auto TestHarness = std::string("\n#define RTM_FALLBACK ") +
+                             (Short ? "4104\n" : "4105\n") + Harness;
+    for (bool LLVM : {false, true})
+      for (const char *Dispatch : {"switch", "direct"}) {
+        auto [Code, Report] = source(
+            request(
+                std::string(
+                    R"("entries":[4096],"native_rtm_abort_regions":true,"dispatch":")") +
+                Dispatch + "\""),
+            LLVM);
+        const auto File = tmpFile("native-rtm.c");
+        std::ofstream(File) << Code << TestHarness;
+        for (const char *Level : {"-O0", "-O2"}) {
+          SCOPED_TRACE(Level);
+          const auto IR = tmpFile("native-rtm.ll");
+          const auto Object = tmpFile("native-rtm.o");
+          const auto Exe = tmpFile("native-rtm");
+          for (bool EmitIR : {true, false}) {
+            std::vector<std::string> Args{"--target=x86_64-unknown-linux-gnu",
+                                          "-std=c23",
+                                          Level,
+                                          "-ffreestanding",
+                                          "-fno-lto",
+                                          "-fno-builtin-mimalloc",
+                                          "-fno-pie",
+                                          EmitIR ? "-S" : "-c"};
+            if (EmitIR)
+              Args.push_back("-emit-llvm");
+            Args.insert(Args.end(),
+                        {File.string(), "-o", (EmitIR ? IR : Object).string()});
+            auto Built = exec(Compiler, Args);
+            ASSERT_TRUE(Built.ok()) << Built.err;
+          }
+          const auto Text = readOutput(IR);
+          EXPECT_NE(Text.find("@llvm.x86.rtm.abort.pair(i32 167)"),
+                    std::string::npos);
+          EXPECT_NE(Text.find("@llvm.x86.cpuidex("), std::string::npos);
+          EXPECT_EQ(Text.find("asm "), std::string::npos);
+          auto Linked = exec(NEVERD_TEST_CLANG,
+                             {"-no-pie", Object.string(), "-o", Exe.string()});
+          ASSERT_TRUE(Linked.ok()) << Linked.err;
+          auto Ran = exec(Exe.string(), {});
+          ASSERT_TRUE(Ran.ok()) << Ran.err;
+        }
+        if (const char *Directory =
+                std::getenv("NEVERD_ISA_REGRESSION_ARTIFACT_DIR")) {
+          const auto Base = std::string(Directory) +
+                            (Short ? "/rtm16-" : "/rtm32-") +
+                            (LLVM ? "llvm-" : "high-") + Dispatch;
+          std::ofstream(Base + ".c") << Code;
+          std::ofstream(Base + ".json") << Report;
+          std::ofstream(Base + ".test.c") << Code << TestHarness;
+        }
+      }
   }
 }

@@ -13,9 +13,9 @@
 #include "neverd/Common.h"
 
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/JSON.h"
 
-#include <array>
 #include <cstdint>
 #include <optional>
 
@@ -31,10 +31,10 @@ struct X64ContinuationInstructionSource;
 struct X64RtmAbortRegion {
   va_t Address;
   va_t Fallback;
-  std::array<uint8_t, 9> Bytes;
+  llvm::SmallVector<uint8_t, 9> Bytes;
 };
 
-/// Canonical x64 rel32 XBEGIN immediately followed by canonical XABORT imm8.
+/// Canonical x64 rel16/rel32 XBEGIN followed by canonical XABORT imm8.
 /// The existing transaction decoder owns signed fallback arithmetic. No other
 /// transactional body or nested transaction receives this native binding.
 std::optional<X64RtmAbortRegion> readX64RtmAbortRegion(const BinaryImage &Image,

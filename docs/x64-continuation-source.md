@@ -528,8 +528,9 @@ These are native bindings, not scalar simulations of the debug or paging banks.
 
 With `kernel-events-v6`, `native_rtm_abort_regions: true` emits the optional
 `neverd_x64_rtm_abort_environment_v6` callback. It accepts only an authenticated
-canonical rel32 XBEGIN immediately followed by XABORT imm8. The transaction
-runs in one native assembly block, so neither a C return nor a translated step
+canonical rel16 or rel32 XBEGIN immediately followed by XABORT imm8. The
+transaction runs in one native compiler operation, so neither a C return nor a
+translated step
 can split its checkpoint. On abort, the callback zero-extends the actual EAX
 status into RAX and resumes at the original signed fallback address. Other
 explicit state stays intact. Entry selection follows this fallback; an explicit
@@ -541,15 +542,22 @@ unit owns the pair, including an abort before XABORT; the translated-instruction
 budget counts only the subsequent translated steps. A fallback that returns to
 XBEGIN consumes another environment unit. The original XBEGIN remains a native
 request in the instruction manifest. The separate
-`native_rtm_abort_environment.regions` receipts bind all nine original bytes,
-the immediate and the fallback. They do not certify other native requests,
+`native_rtm_abort_environment.regions` receipts bind all eight or nine original
+bytes, the immediate and the fallback. They do not certify other native requests,
 including an independently entered XABORT.
+
+NeverC uses `__builtin_ia32_rtm_abort_pair` and the native
+`__builtin_ia32_cpuidex` availability query. The pair is one indivisible
+`llvm.x86.rtm.abort.pair` operation through optimization and code generation;
+it retains actual abort status and ordered memory effects. Older C compilers
+use the original single assembly block. Neither route splits the pair into
+independent C calls to `_xbegin` and `_xabort`.
 
 Execution requires an RTM-capable host outside RTM/HLE, with no debug traps or
 faults. If CPUID does not advertise RTM, the provider declines without changing
 explicit state. It never substitutes a constant abort status. Other transaction
-bodies and prefixed encodings remain unsupported. The instruction behavior and
-abort status follow [Intel's instruction-set reference](https://cdrdv2-public.intel.com/671110/325383-sdm-vol-2abcd.pdf).
+bodies and noncanonical prefix combinations remain unsupported. The instruction
+behavior and abort status follow [Intel's instruction-set reference](https://cdrdv2-public.intel.com/671110/325383-sdm-vol-2abcd.pdf).
 
 ## SDK and verification
 

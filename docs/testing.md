@@ -18058,12 +18058,21 @@ exception delivery, DR4/DR5 aliases or arbitrary CR4 changes.
 missing/truncated/different bodies, explicit opt-in, native-request retention,
 fallback selection, unsupported-host refusal, complete state and stack
 preservation, and separate instruction/environment budgets including loops.
-Both C routes compile and run at O0/O2 with sanitizers. The transaction branch
-executes only when CPUID advertises RTM; other hosts qualify refusal only.
-Independent RTM comparison may use Intel SDE with `-hsw -tsx -rtm_mode full`
-and `-rtm_mode abort -rtm_abort_reason N`; record emulator results separately
-from native hardware evidence. Use the full exporter suite to cover unchanged
-selection, physical transfers and other environment providers.
+Both C routes compile and run at O0/O2 with sanitizers. With
+`NEVERD_TEST_NEVERC`, `RtmAbortNativeCompilerPreservesProviderState` also
+compiles both dispatch styles through the native pair and CPUID intrinsics,
+checks that IR contains no inline assembly, and compares every represented
+state byte at O0/O2. The transaction branch executes only when CPUID advertises
+RTM; other hosts qualify refusal only.
+Independent RTM comparison may use Intel SDE with `-hsw -tsx -rtm_mode full`.
+With SDE 10.13.1, forced aborts require `-hsw -rtm_mode abort
+-rtm_abort_reason N` **without `-tsx`**, which otherwise overrides abort mode.
+That mode also clears CPUID.RTM. Only the independent raw/native intrinsic
+fixture can explicitly enter it; the production provider must still decline
+without changing state. Require the exact EAX status, rather than process
+success alone, when qualifying forced aborts. Record emulator results
+separately from native hardware evidence. Use the full exporter suite to cover
+unchanged selection, physical transfers and other environment providers.
 
 ## SNP and SEV-ES native completion
 

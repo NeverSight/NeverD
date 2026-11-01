@@ -718,6 +718,7 @@ exportX64Continuation(const BinaryImage &Image, llvm::StringRef RequestJSON,
   if (Request->NativeRtmAbortRegions)
     Report["native_rtm_abort_environment"] = llvm::json::Object{
         {"provider", "neverd_x64_rtm_abort_environment_v6"},
+        {"native_intrinsic", "llvm.x86.rtm.abort.pair"},
         {"regions", std::move(RtmAborts)},
         {"domain", "CPUID RTM; outside RTM/HLE; no debug traps or faults; "
                    "exact immutable pair; actual native abort status; one "
