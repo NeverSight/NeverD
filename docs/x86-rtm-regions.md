@@ -122,3 +122,27 @@ clears CPUID RTM in SDE 10.13.1, so that mode qualifies refusal only.
 [Intel SDE](https://www.intel.com/content/www/us/en/developer/articles/tool/software-development-emulator.html)
 is a processor model. These checks do not establish physical RTM execution or
 fault/event continuation. Keep those limits distinct in qualification records.
+
+## November 1 qualification
+
+The [qualification record](evidence/x86-rtm-regions-2026-11-01.json) retains
+source, tool, executable, command and test-report digests. NeverC and both full
+LLVM backend pass managers pass 576 execution profiles and 36,864 harness
+rounds. These include 13,824 independent original-code comparisons, 18,432
+additional two-instruction rollback attempts and 36,864 accepted standalone
+XTEST/XABORT checks. The full native-SDK and r6 regressions each pass 61 tests
+without skips. All 144 exported source, manifest and harness files are identical
+between the SDKs before and after remote integration.
+
+The comparison also found a public CPUID header defect: with other outputs
+dead, the temporary used to preserve RBX could overlap EAX and change the
+queried leaf. NeverC now uses its native CPUID intrinsic in that header; the
+LLVM header and NeverC compatibility path mark the assembly temporary as
+early-clobber. The unchanged minimal reproducer and failing RTM harness pass
+after the fix. NeverC passes 143 frontend and eight backend x86 tests, with the
+final CPUID/transaction subset rechecked. Three Clang header checks cover x64
+and i386 IR with the host compiler.
+
+Physical RTM, fault/event continuations and the remaining x86 contracts are
+not qualified by this record. The production r6 SDK and LLVM gitlink remain
+unchanged; no new release is claimed.

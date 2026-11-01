@@ -3260,3 +3260,22 @@ Consequently these results do not qualify early-abort publication through the
 provider's CPUID guard or physical RTM behavior. General transaction bodies,
 nesting, memory rollback and fault/event continuations remain open. The LLVM
 release, production SDK pin and submodule revision remain unchanged.
+
+## Selected native RTM transaction completion
+
+`native_rtm_regions` now keeps the outer native checkpoint live across
+translated body steps and selected guest calls. It commits state and original
+RAM at the outer XEND, restores both on explicit/nested/CPUID/PAUSE abort, and
+uses a separate private rollback channel for unsupported paths and exhausted
+budgets. Standalone XABORT/XTEST, both displacement widths and both source
+routes share the [explicit RTM contract](x86-rtm-regions.md). System effects and
+nonstatus-flag changes do not inherit admission merely because ordinary V6
+source can model them.
+
+[The dated evidence](evidence/x86-rtm-regions-2026-11-01.json) records 576
+compiler/emulator configurations, 36,864 harness rounds, identical native/r6
+exports and 61 passing regression tests per SDK. It also records the CPUID
+header counterexample and native-intrinsic correction in NeverC, plus the LLVM
+header constraint fix. This closes selected transactional body, nesting and
+rollback execution; physical RTM, other state domains, faults/events and the
+release/pinning gate remain separate.
