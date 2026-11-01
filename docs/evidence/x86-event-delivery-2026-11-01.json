@@ -13,7 +13,7 @@
       "passed": 202,
       "failed": 0,
       "skipped": 0,
-      "report": "/mnt/data/neverd-event-delivery-20261101/build-x86-native-verified-tests.log",
+      "report": "build-x86-native-verified-tests.log",
       "sha256": "33292a077c68c3d2294e837a290a71377f0f1f0025a934eeed8f829c6a74f86e"
     },
     {
@@ -21,7 +21,7 @@
       "passed": 202,
       "failed": 0,
       "skipped": 0,
-      "report": "/mnt/data/neverd-event-delivery-20261101/build-x86-verified-tests.log",
+      "report": "build-x86-verified-tests.log",
       "sha256": "1772fb185612bdbad3d50d55b3d544fa9e2210ad01cf1faaca627241e45f694e"
     }
   ],
@@ -138,23 +138,23 @@
     "schema_version": 1,
     "tools": {
       "neverc": {
-        "path": "/mnt/data/neverd-native-system-returns-20261029/build-neverc/bin/neverc",
+        "path": "neverc",
         "sha256": "e6addbe893af2a69bdaf0efcae383baa7f47663436d9a907834b0c156d0e273e"
       },
       "llc": {
-        "path": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc",
+        "path": "llc",
         "sha256": "42bba0d2cc437a152a5035dfbde446fb6913ba02b0ed87642169937b3eee5484"
       },
       "clang": {
-        "path": "/home/ad/.local/bin/clang",
+        "path": "clang",
         "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
       },
       "ld.lld": {
-        "path": "/home/ad/.local/bin/ld.lld",
+        "path": "ld.lld",
         "sha256": "fc1073aaaacfed055c0612dc5190cd19419c711cb8341c37d97fec2916891447"
       },
       "objcopy": {
-        "path": "/usr/bin/objcopy",
+        "path": "objcopy",
         "sha256": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770"
       }
     },
