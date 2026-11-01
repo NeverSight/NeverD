@@ -36,8 +36,11 @@ namespace web {
 class PackageReviewDialog;
 }
 
+class AnalysisIndicator;
+class AnalysisProgress;
 class ComparisonDialog;
 class LineageDialog;
+class LoadProgressCard;
 class CodeView;
 class DisassemblyView;
 class ExtensionsView;
@@ -431,8 +434,13 @@ private:
   bool startupQuickStartPending_ = false;
   /// Maximize the first workbench shown after accepting the startup greeting.
   bool maximizeWorkbenchOnShow_ = false;
-  QLabel *analysisLabel_ = nullptr, *directionLabel_ = nullptr,
-         *diskLabel_ = nullptr, *fileLabel_ = nullptr;
+  /// Opening and background analysis, in the status bar and, while a file
+  /// opens into the empty workbench, over its main view.
+  AnalysisProgress *progress_ = nullptr;
+  AnalysisIndicator *analysisIndicator_ = nullptr;
+  LoadProgressCard *loadCard_ = nullptr;
+  QLabel *directionLabel_ = nullptr, *diskLabel_ = nullptr,
+         *fileLabel_ = nullptr;
   QMenu *recentMenu_ = nullptr;
   QMenu *windowsMenu_ = nullptr;
   QString layoutPath_;

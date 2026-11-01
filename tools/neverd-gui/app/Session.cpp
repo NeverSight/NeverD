@@ -219,11 +219,14 @@ Session::Session(QString workerPath, QObject *parent)
   });
   connect(&queries_, &QueryService::loadProgress, this,
           [this](const QJsonObject &payload) {
+            // A step of one unit only begins and ends; its fraction is
+            // unknown in between.
             const double total = payload.value("total").toDouble();
             const double done = payload.value("done").toDouble();
             emit loadProgress(payload.value("phase").toString(),
-                              total > 0 ? std::clamp(done / total, 0.0, 1.0)
-                                        : -1.0);
+                              total > 1 ? std::clamp(done / total, 0.0, 1.0)
+                                        : -1.0,
+                              payload.value("detail").toString());
           });
   connect(&queries_, &QueryService::backgroundSnapshotReady, this,
           &Session::applyBackgroundSnapshot);
@@ -644,6 +647,7 @@ void Session::openPending() {
   const auto requested = std::exchange(pendingFile_, {});
   const auto options = std::exchange(pendingOptions_, {});
   opening_ = true;
+  openingFile_ = requested;
   error_.clear();
   emit message(tr("Loading %1…").arg(QFileInfo(requested).fileName()), 0);
   emit stateChanged();
