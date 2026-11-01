@@ -7491,6 +7491,14 @@ cookie, metadata, return-pop, input ownership and shared-budget mutations cannot
 reuse a successful invocation. These source-only tests do not authorize native
 calls or caller reloads; every negative input mutation starts from a successful
 fresh baseline.
+`PrivateRefusalStopsWithoutPartialReceipts` compares ordinary and private
+queries on the same authored read. An initialized borrow retains identical
+return values, byte initialization and work; an uninitialized borrow stops
+earlier and publishes no partial state/return receipts. Its diagnostic retains
+the failing instruction and operation. `AlreadyRefusedQueryRetainsPriorWork`
+checks entry refusal without refunding prior work or retaining earlier returns.
+Run the complete registration EH, state and callee-stack suites. These checks
+do not establish complete GOF2 lifting or whole-pipeline performance.
 `RootInvocationDoesNotGrantNativeCallABI` builds an actual root CFG that lends
 an uninitialized output word. Source effects must close only when every read
 follows initialization and the output avoids runtime administration and outgoing

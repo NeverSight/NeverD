@@ -154,6 +154,9 @@ struct ConditionalFrame {
   std::map<std::pair<va_t, int>, std::set<int32_t>> ReturnInitializedBytes;
   bool NativeFramePrivate = true;
   bool Complete = true;
+  /// A private all-or-nothing query can stop once Complete becomes false.
+  /// Ordinary analyses keep collecting independent facts and diagnostics.
+  bool StopOnRefusal = false;
   size_t Work = 0;
 };
 

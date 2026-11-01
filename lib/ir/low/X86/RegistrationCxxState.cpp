@@ -717,6 +717,7 @@ proveBoundCxxCallee(const BinaryImage &Image, const LowOp &Op,
     return std::nullopt;
   const int64_t Base = int64_t(*SP) - 8;
   ConditionalFrame Inputs;
+  Inputs.StopOnRefusal = true;
   std::map<std::pair<va_t, uint16_t>, bool> ImmutableReads;
   Inputs.ProveImageMemory = [&](va_t Address, uint16_t Width, bool Write,
                                 size_t &Used) {

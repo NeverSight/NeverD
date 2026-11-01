@@ -176,6 +176,8 @@ bool RegistrationStateSolver::transferBlock(size_t I, const Domain &Before,
                         !conditionalReturn(After, Op) ||
                         !conditionalCall(After, Op, CallResult)))
       Invalidate();
+    if (stopRefusedConditional(&Op))
+      return false;
     FrameValue RuntimeValue;
     if (CheckRuntimeObjects) {
       if (Op.Opcode == NdOp::LOAD && Op.NumInputs == 1) {

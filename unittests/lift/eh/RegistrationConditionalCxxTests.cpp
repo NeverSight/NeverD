@@ -25,9 +25,12 @@
 #include "neverd/loader/COFF/COFFRegistrationEH.h"
 #include "neverd/support/BinaryEncoding.h"
 
+#include "llvm/ADT/StringExtras.h"
+
 #include <algorithm>
 #include <cstdint>
 #include <initializer_list>
+#include <map>
 #include <optional>
 #include <set>
 #include <string>
@@ -1538,5 +1541,112 @@ TEST(RegistrationConditionalCxx, RejectsCaptureAndIncompleteCurrentEvidence) {
     size_t Work = 0;
     EXPECT_FALSE(F.prove(Work));
   }
+}
+TEST(RegistrationConditionalCxx, PrivateRefusalStopsWithoutPartialReceipts) {
+  for (bool Initialized : {false, true}) {
+    BoundCxxFixture F(BoundCxxFixture::ReturnMode::Alias, false, false, false,
+                      false, std::nullopt,
+                      BoundCxxFixture::OutputAccess::ReadWord);
+    Decoder Dec;
+    ASSERT_TRUE(Dec.init(F.Image));
+    size_t Work = 0;
+    RegistrationCallCalleeIndex Index(F.Image, &Work);
+    CFGBuilder Builder;
+    Builder.setRegistrationCalleeIndex(&Index);
+    auto Function =
+        Builder.buildIntegerFrameProof(F.Image, Dec, Entry, "private-refusal");
+    ASSERT_TRUE(Function.hasCompleteLiftCoverage());
+    ASSERT_TRUE(Function.ExceptionMetadata);
+    const auto HandlerABI = coff_loader::getCheckedX86CxxHandlerABI(
+        F.Image, *Function.ExceptionMetadata);
+    ASSERT_TRUE(HandlerABI);
+    const auto Callees = Index.contracts(Function);
+    const auto Cleanups = Index.cleanupContracts(Function);
+    const auto Stacks = Index.stackContracts(Function);
+    ASSERT_TRUE(Callees && Cleanups && Stacks);
+    size_t OrdinaryWork = 0;
+    std::map<std::pair<va_t, int>, FrameValue> OrdinaryReturns;
+    std::map<std::pair<va_t, int>, std::set<int32_t>> OrdinaryInitialized;
+    for (bool Stop : {false, true}) {
+      SCOPED_TRACE(::testing::Message() << Initialized << " " << Stop);
+      ConditionalFrame Inputs;
+      Inputs.Arguments.emplace(8, FrameValue::frame(76));
+      Inputs.Objects = {{76, 80}};
+      if (Initialized)
+        Inputs.ObjectCells.emplace(76, FrameValue::constant(1));
+      Inputs.Registers.emplace(x86reg::RCX / x86reg::GeneralRegStride,
+                               FrameValue::constant(17));
+      Inputs.StopOnRefusal = Stop;
+      RegistrationStateSolver Solver(Function, Data, 0, &*Callees, &*Cleanups,
+                                     &*Stacks, nullptr, nullptr, &Inputs,
+                                     nullptr, nullptr, &*HandlerABI);
+      const auto States = Solver.run(Work);
+      EXPECT_EQ(States.Complete && Inputs.Complete, Initialized);
+      if (!Stop) {
+        OrdinaryWork = Solver.workUsed();
+        OrdinaryReturns = Inputs.ReturnValues;
+        OrdinaryInitialized = Inputs.ReturnInitializedBytes;
+        continue;
+      }
+      if (Initialized) {
+        EXPECT_EQ(Solver.workUsed(), OrdinaryWork);
+        EXPECT_EQ(Inputs.ReturnValues, OrdinaryReturns);
+        EXPECT_EQ(Inputs.ReturnInitializedBytes, OrdinaryInitialized);
+        ASSERT_EQ(Inputs.ReturnValues.size(), 1u);
+        EXPECT_EQ(Inputs.ReturnValues.begin()->second, FrameValue::frame(76));
+      } else {
+        EXPECT_FALSE(Inputs.Complete);
+        EXPECT_LT(Solver.workUsed(), OrdinaryWork);
+        EXPECT_GE(Solver.workUsed(), Work);
+        EXPECT_FALSE(States.Complete);
+        EXPECT_FALSE(States.SourceCallFrameEffectsComplete);
+        EXPECT_FALSE(States.ChainOperationsComplete);
+        EXPECT_TRUE(States.Blocks.empty());
+        EXPECT_TRUE(States.CallFrameEffects.empty());
+        EXPECT_TRUE(States.ChainAccesses.empty());
+        EXPECT_TRUE(States.FrameValues.empty());
+        EXPECT_TRUE(States.CalleeContracts.empty());
+        EXPECT_TRUE(States.CleanupContracts.empty());
+        EXPECT_TRUE(States.CookieChecks.empty());
+        EXPECT_TRUE(Inputs.ReturnValues.empty());
+        EXPECT_TRUE(Inputs.ReturnInitializedBytes.empty());
+        ASSERT_EQ(States.Diagnostics.size(), 1u);
+        EXPECT_NE(States.Diagnostics.front().find(
+                      "conditional registration proof refused at 0x" +
+                      llvm::utohexstr(F.StoreVA)),
+                  std::string::npos);
+        EXPECT_NE(States.Diagnostics.front().find(" operation "),
+                  std::string::npos);
+      }
+    }
+  }
+}
+
+TEST(RegistrationConditionalCxx, AlreadyRefusedQueryRetainsPriorWork) {
+  BoundCxxFixture F;
+  Decoder Dec;
+  ASSERT_TRUE(Dec.init(F.Image));
+  CFGBuilder Builder;
+  auto Function =
+      Builder.buildIntegerFrameProof(F.Image, Dec, Entry, "prior-refusal");
+  ASSERT_TRUE(Function.ExceptionMetadata);
+  ConditionalFrame Inputs;
+  Inputs.StopOnRefusal = true;
+  Inputs.Complete = false;
+  Inputs.ReturnValues.emplace(std::make_pair(F.ReturnVA, 0),
+                              FrameValue::frame(76));
+  Inputs.ReturnInitializedBytes.emplace(std::make_pair(F.ReturnVA, 0),
+                                        std::set<int32_t>{76, 77, 78, 79});
+  RegistrationStateSolver Solver(Function, Data, 0, nullptr, nullptr, nullptr,
+                                 nullptr, nullptr, &Inputs);
+  const auto States = Solver.run(37);
+  EXPECT_EQ(Solver.workUsed(), 37u);
+  EXPECT_FALSE(States.Complete);
+  EXPECT_TRUE(States.Blocks.empty());
+  EXPECT_TRUE(Inputs.ReturnValues.empty());
+  EXPECT_TRUE(Inputs.ReturnInitializedBytes.empty());
+  ASSERT_EQ(States.Diagnostics.size(), 1u);
+  EXPECT_EQ(States.Diagnostics.front(),
+            "conditional registration proof refused");
 }
 } // namespace

@@ -11,11 +11,31 @@
 #include "neverd/lift/X86Regs.h"
 
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/StringExtras.h"
 
 #include <set>
+#include <string>
 #include <utility>
 
 namespace neverd::registration_state {
+
+bool RegistrationStateSolver::stopRefusedConditional(const LowOp *Op) {
+  if (!Conditional || !Conditional->StopOnRefusal || Conditional->Complete ||
+      Exhausted)
+    return false;
+  // Complete is monotone during an invocation. No remaining path can repair
+  // a rejected access, return or call. This owner requires the entire proof;
+  // withdraw partial receipts instead of spending its budget on later paths.
+  Result = {};
+  Conditional->ReturnValues.clear();
+  Conditional->ReturnInitializedBytes.clear();
+  std::string Message = "conditional registration proof refused";
+  if (Op)
+    Message += " at 0x" + llvm::utohexstr(Op->Addr) + " operation " +
+               std::to_string(Op->Seq);
+  Result.Diagnostics.push_back(std::move(Message));
+  return true;
+}
 
 std::optional<RegistrationStateSolver::CallTransfer>
 RegistrationStateSolver::transferConditionalCxxCall(Domain &After,

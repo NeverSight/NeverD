@@ -64,6 +64,8 @@ RegistrationStateSolver::RegistrationStateSolver(
 RegistrationStateAnalysis RegistrationStateSolver::run(size_t InitialWork) {
   if (!charge(InitialWork))
     return std::move(Result);
+  if (stopRefusedConditional())
+    return std::move(Result);
   if (!initialize())
     return std::move(Result);
   if (!initializeOrder()) {
@@ -87,6 +89,8 @@ RegistrationStateAnalysis RegistrationStateSolver::run(size_t InitialWork) {
   initializeCookies();
   collectOccurrences();
   seedEntries();
+  if (stopRefusedConditional())
+    return std::move(Result);
   while ((!Work.empty() || !PendingSEHFrames.empty()) && !Exhausted) {
     if (Work.empty()) {
       flushSEHScopes();
@@ -99,6 +103,8 @@ RegistrationStateAnalysis RegistrationStateSolver::run(size_t InitialWork) {
     // while ordinary and exceptional successors update their own activations.
     const Domain Before = State.Incoming;
     if (!transferBlock(I, Before, State.Facts))
+      return std::move(Result);
+    if (stopRefusedConditional())
       return std::move(Result);
   }
   return finish();

@@ -239,6 +239,7 @@ public:
   size_t workUsed() const { return WorkUsed; }
 
 private:
+  bool stopRefusedConditional(const LowOp *Op = nullptr);
   bool initialize();
   bool initializeOrder();
   bool extendSEHParentOwnership();

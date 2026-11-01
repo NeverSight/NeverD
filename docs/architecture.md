@@ -2369,6 +2369,11 @@ it does not substitute the constant or change memory/unwind attributes. COFF
 replays the same source receipt and rejects a new observation of a source result
 that was unused. This grants neither opaque memory access nor fixed differences
 between independently reconstructed image addresses.
+Private bound C++ queries require the complete invocation proof. They ask the
+shared state solver to stop after a monotone conditional refusal, retaining the
+consumed work and refusal location while withdrawing partial state and return
+receipts. Ordinary analyses still collect independent facts; loss of native
+frame privacy alone does not terminate a valid source-only query.
 An ordinary conditional plain-helper query must retain its image reads in an
 effect record. Without that owner it refuses the invocation, even if the caller
 ignores the result: original bytes may also select the paths used to prove the
