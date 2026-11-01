@@ -103,6 +103,13 @@ imports explicit SIMD. Omitting XRSTOR or corrupting the target address must
 fail. This verifies input transport and original-site preservation.
 CR0.AM is enabled throughout the KVM matrix, including inputs with AC set.
 
+The [recorded qualification](evidence/x86-sgx-transfer-2026-11-01.json)
+contains 412 passing continuation tests across the r6 and native SDKs with no
+skips, identical C/manifest artifacts, 331,776 compiler input-state observations
+and 110,592 actual exported-C observations. The adjacent SMM regression adds
+55,296 complete native state pairs. LLVM code64/x32 and the NeverC frontend
+also retain an original site above 4 GiB without truncation.
+
 The local host has no SGX capability or device. These tests stop before
 ENCLU and execute zero enclave instructions. Successful EENTER/ERESUME/EEXIT,
 SSA/AEX behavior and native enclave/runtime integration are therefore not

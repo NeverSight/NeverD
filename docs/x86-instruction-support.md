@@ -3336,3 +3336,20 @@ wrong RSM bytes and omitted XRSTOR are rejected. These are KVM-mediated SMM
 results. SMI entry, other software-managed banks, fault/event routing, SGX and
 legacy i386 state retain their documented boundaries; no release or pin change
 is inferred from this qualification.
+
+## Native SGX input state and original instruction address
+
+The [V13 profile](x86-sgx-transfer.md) imports explicit GPRs, flags and
+x87/SSE/AVX before terminal native EENTER/ERESUME/EEXIT. The native LLVM and
+NeverC interface jumps to the original ENCLU instead of relocating it, retaining
+EENTER's next-PC output and the native AEP/continuation. Entry selection stops
+at the requested instruction; prefixed forms remain explicit native requests.
+
+The [qualification record](evidence/x86-sgx-transfer-2026-11-01.json) includes
+412 passing continuation tests across both SDKs, 442,368 native input-state
+observations and 55,296 adjacent SMM state pairs. It checks aligned original-site
+target literals with CR0.AM enabled and AC set, and rejects missing-XRSTOR and
+wrong-site mutations. The host lacks SGX, so all SGX observations stop before
+ENCLU. Actual enclave execution/AEX, full legacy i386 dispatch and general
+fault/restart/asynchronous ownership remain unqualified; the LLVM SDK pin and
+submodule revision are unchanged.
