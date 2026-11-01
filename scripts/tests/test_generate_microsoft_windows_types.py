@@ -17,6 +17,57 @@ SPEC.loader.exec_module(windows)
 
 
 class MicrosoftWindowsTypes(unittest.TestCase):
+    def test_rdbss_merge_refuses_an_unproved_companion_without_replacing_primary(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            primary = root / "kernel.h"
+            primary.write_text("/* established declarations */\n")
+            candidate = "/* proposed declarations */\n"
+            imported = {"declaration": 1, "prefix": "RDBSS", "renamed": [],
+                        "dependencies": [], "prototypes": ["NewCompanion"]}
+            result = {"source": candidate, "types": [], "prototypes": ["NewCompanion"],
+                      "imports": [imported]}
+            unit = {"name": "RDBSS", "source": root / "provider.h", "metadata": {
+                "cpp_header_bridge": {"verified_functions": ["RxStartMinirdr"]}}}
+            with patch.dict(windows.ISOLATED_PROVIDERS, {
+                    "WindowsKernel": (windows.Provider("RDBSS", ("rxprocs", "mrx")),)}), \
+                    patch.object(windows, "prepare_provider", return_value=unit), \
+                    patch.object(windows, "run", return_value=json.dumps(result)), \
+                    patch.object(windows, "checked_types", return_value={
+                        "types": [], "prototypes": ["NewCompanion"]}), \
+                    patch.object(windows, "verify_layouts", return_value=1):
+                with self.assertRaisesRegex(ValueError, "lack an original C\\+\\+ ABI proof"):
+                    windows.merge_providers("WindowsKernel", primary, root, ["clang"],
+                                            ["clang"], "neverd", "LLP64", "layouts")
+            self.assertEqual(primary.read_text(), "/* established declarations */\n")
+
+    def test_rdbss_enum_bridge_precedes_the_type_parser(self):
+        create = "typedef enum { Create = 1 } RX_CONTEXT_CREATE_FLAGS;\n"
+        lowio = "typedef enum { LowIo = 2 } RX_CONTEXT_LOWIO_FLAGS;\n"
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "RDBSS.c"
+            source.write_text("#include <rxprocs.h>\n#include <mrx.h>\n")
+
+            def run(command, log, output=None):
+                if "-E" in command:
+                    output.write_text(create + (lowio if "c++" in command else lowio.replace(
+                        "RX_CONTEXT_LOWIO_FLAGS", "RX_CONTEXT_CREATE_FLAGS")))
+                return "fixture layouts"
+
+            def parsed(neverd, path, log, model):
+                self.assertEqual(path.read_text().count("} RX_CONTEXT_CREATE_FLAGS;"), 1)
+                self.assertIn("} RX_CONTEXT_LOWIO_FLAGS;", path.read_text())
+                # Stop before the independent compiler checks; this test owns
+                # the order of preprocessing repair and parser admission.
+                raise ValueError("fixture parser boundary reached")
+
+            with patch.object(windows, "run", side_effect=run), \
+                    patch.object(windows, "checked_types", side_effect=parsed):
+                with self.assertRaisesRegex(ValueError, "fixture parser boundary reached"):
+                    windows.prepare_provider("RDBSS", source, ["clang"], root,
+                                             "neverd", "LLP64")
+
     def test_dxgi_c_parameter_bridge_requires_the_original_cpp_contract(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

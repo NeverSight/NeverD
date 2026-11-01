@@ -21,6 +21,7 @@ from typing import NamedTuple
 import xml.etree.ElementTree as ET
 
 import build_wdk_driver_fixtures as wdk
+import microsoft_rdbss_types as rdbss
 import microsoft_ucrt_types as ucrt
 
 
@@ -76,6 +77,7 @@ ISOLATED_PROVIDERS = {
         Provider("StreamClass", ("ntddk", "minwindef", "ks", "strmini")),
         Provider("AudioPort", ("ntddk", "portcls")),
         Provider("GraphicsKernel", ("ntddk", "dispmprt")),
+        Provider("RDBSS", ("rxprocs", "mrx"), ("MINIRDR__NAME=neverd_rdbss",)),
     ),
     "WindowsUser": (
         Provider("WinHTTP", ("winsock2", "winhttp")),
@@ -255,8 +257,15 @@ def prepare_provider(name: str, source: Path, arguments: list[str], directory: P
     preprocessed = directory / (name + ".h")
     command = arguments + ["-E", str(source)]
     run(command, directory / (name + ".pre.log"), preprocessed)
+    cpp_bridge = (rdbss.prepare(source, preprocessed, arguments, directory, run)
+                  if name == "RDBSS" else None)
     parser_convention(preprocessed, convention)
     parsed = checked_types(neverd, preprocessed, directory / (name + ".parse.log"), model)
+    if cpp_bridge is not None:
+        rdbss.verify_abis(cpp_bridge, preprocessed, arguments, directory,
+                          parsed["prototypes"], run)
+        bridge_commands += cpp_bridge["commands"]
+        metadata = dict(metadata or {}, cpp_header_bridge=cpp_bridge)
     input_hash = wdk.digest(preprocessed)
     commands = [command, *bridge_commands]
     if prototypes:
@@ -276,7 +285,9 @@ def prepare_provider(name: str, source: Path, arguments: list[str], directory: P
             raise ValueError(f"official prototype selection failed for {name}")
         preprocessed.write_text(selected["source"], encoding="utf-8")
         commands.append(selection)
-    layouts = run(arguments + dump + [str(source)],
+    layout_arguments = cpp_bridge["arguments"] if cpp_bridge else arguments
+    layout_source = cpp_bridge["source"] if cpp_bridge else str(source)
+    layouts = run(layout_arguments + dump + [layout_source],
                   directory / (name + ".official-clang.log"),
                   directory / (name + ".official-layouts.log"))
     return {"name": name, "source": preprocessed, "headers": headers,
@@ -346,6 +357,9 @@ def merge_providers(base: str, primary: Path, output: Path,
         for index, (unit, report) in enumerate(zip(units, imported), 1):
             if report["declaration"] != index or report["prefix"] != unit["name"]:
                 raise ValueError("official provider provenance does not match its input")
+            bridge = unit["metadata"].get("cpp_header_bridge")
+            if bridge and not set(report["prototypes"]) <= set(bridge["verified_functions"]):
+                raise ValueError("imported RDBSS routines lack an original C++ ABI proof")
             renamed = {entry["original"]: entry["name"] for entry in report["renamed"]}
             count = verify_layouts(unit["layouts"], generated_layouts,
                                    renamed, report["dependencies"])
@@ -590,7 +604,8 @@ def generate(output: Path, cache: Path, neverd: str, clang: str,
         "packages": [{"file": name, "url": url, "sha256": digest}
                      for name, url, digest in inventory["DOWNLOAD"]] + runtime_packages,
         "target_packages": target_packages,
-        "profiles": {"ucrt": wdk.digest(ucrt.INPUTS)} if include_ucrt else {},
+        "profiles": dict({"ucrt": wdk.digest(ucrt.INPUTS)} if include_ucrt else {},
+                         rdbss=wdk.digest(Path(rdbss.__file__))),
         "inputs": inputs,
         "licenses": [{"file": path.name, "sha256": wdk.digest(path)}
                      for path in sorted(licenses.iterdir())],

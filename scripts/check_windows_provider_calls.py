@@ -21,6 +21,7 @@ from check_microsoft_provider_abis import compiler_contracts
 
 FIXTURE = Path(__file__).resolve().parents[1] / "unittests/types/fixtures/windows_provider_calls.c"
 DRIVER_FIXTURE = FIXTURE.with_name("windows_driver_provider_calls.c")
+RDBSS_FIXTURE = FIXTURE.with_name("windows_rdbss_provider_calls.cpp")
 FUNCTIONS = {"UseEventRegistration": "EventRegister", "UsePath": "PathCchCombineEx",
              "UseRuntimeString": "WindowsCreateString", "UseGraphicsDevice": "D3DKMTCreateDevice",
              "UseLogFile": "CreateLogFile", "UseTpmContext": "Tbsi_Context_Create",
@@ -37,15 +38,26 @@ LIBRARIES = ("advapi32.lib", "pathcch.lib", "runtimeobject.lib", "gdi32.lib", "c
 DRIVER_FUNCTIONS = {"UseSDConfig": "SdPortGetPciConfigSpace",
                     "UseAudioAdapter": "PcAddAdapterDevice",
                     "UseStreamClock": "StreamClassQueryMasterClockSync"}
-DRIVER_IMPORTS = {"sdport.sys": "SdPortGetPciConfigSpace",
-                  "portcls.sys": "PcAddAdapterDevice",
-                  "stream.sys": "StreamClassQueryMasterClockSync"}
+DRIVER_IMPORTS = {"sdport.sys": ("SdPortGetPciConfigSpace",),
+                  "portcls.sys": ("PcAddAdapterDevice",),
+                  "stream.sys": ("StreamClassQueryMasterClockSync",)}
+RDBSS_FUNCTIONS = {"UseRdbssRegister": "RxRegisterMinirdr",
+                   "UseRdbssStart": "RxStartMinirdr",
+                   "UseRdbssUnregister": "RxpUnregisterMinirdr",
+                   "UseRdbssCreateContext": "RxCreateRxContext",
+                   "UseRdbssInitializeDispatcher": "RxInitializeDispatcher",
+                   "UseRdbssInitializeTimer": "RxInitializeRxTimer",
+                   "UseRdbssTearDownDispatcher": "RxTearDownDispatcher"}
 
 
 def check(args: argparse.Namespace) -> dict:
     args.output.mkdir(parents=True, exist_ok=False)
-    fixture = DRIVER_FIXTURE if args.kernel else FIXTURE
-    functions = DRIVER_FUNCTIONS if args.kernel else FUNCTIONS
+    if args.rdbss:
+        fixture, functions, provider_name = RDBSS_FIXTURE, RDBSS_FUNCTIONS, "RDBSS"
+    elif args.kernel:
+        fixture, functions, provider_name = DRIVER_FIXTURE, DRIVER_FUNCTIONS, "AudioPort"
+    else:
+        fixture, functions, provider_name = FIXTURE, FUNCTIONS, "WinRTStrings"
     report = {"schema": 1, "scope": "source compilation and compiler ABI; no native execution",
               "imports": "synthetic from original compiler symbols" if args.kernel else "Microsoft SDK",
               "fixture_sha256": wdk.digest(fixture), "cases": [], "commands": []}
@@ -63,11 +75,13 @@ def check(args: argparse.Namespace) -> dict:
         manifest = json.loads((inputs / "manifest.json").read_text(encoding="utf-8"))
         provider = next(p for library in manifest["libraries"]
                         for p in library["providers"]
-                        if p["name"] == ("AudioPort" if args.kernel else "WinRTStrings"))
+                        if p["name"] == provider_name)
         preprocessing = provider["commands"][0]
         if preprocessing[-2] != "-E":
             raise ValueError("provider has no preprocessing command")
         compiler = preprocessing[:-2]
+        original_compiler = (provider["metadata"]["cpp_header_bridge"]["arguments"]
+                             if args.rdbss else compiler)
         libraries = []
         if args.kernel:
             # Import-only test images need no implementation of a driver API.
@@ -75,27 +89,35 @@ def check(args: argparse.Namespace) -> dict:
             # WDK default convention, rather than guessing a stack byte count.
             names = tuple(functions.values())
             source = directory / "imports.c"
-            source.write_text('#include "' + fixture.as_posix() + '"\n' + "".join(
+            references = "".join(
                 f"__typeof__(&{api}) neverd_ucrt_abi_{index} = &{api};\n"
-                for index, api in enumerate(names)), encoding="utf-8")
-            original = run(compiler + ["-S", "-emit-llvm", "-O0", str(source), "-o", "-"],
+                for index, api in enumerate(names))
+            if args.rdbss:
+                references = 'extern "C" {\n' + references + '}\n'
+            source.write_text('#include "' + fixture.as_posix() + '"\n' + references,
+                              encoding="utf-8")
+            original = run(original_compiler + ["-S", "-emit-llvm", "-O0", str(source), "-o", "-"],
                            directory / "imports.log")
             original.check_returncode()
             source.with_suffix(".ll").write_text(original.stdout, encoding="utf-8")
             contracts = compiler_contracts(original.stdout, names)
-            for module, api in DRIVER_IMPORTS.items():
-                symbol = contracts[api][0]
-                if arch == "x86":
-                    match = re.fullmatch(r'@"\\01_(' + re.escape(api) + r'@\d+)"', symbol)
-                    if not match:
-                        raise ValueError(f"unexpected original driver linkage: {symbol}")
-                    exported = match[1]
-                else:
-                    if symbol != "@" + api:
-                        raise ValueError(f"unexpected original driver linkage: {symbol}")
-                    exported = api
+            imports = {"rdbss.sys": tuple(functions.values())} if args.rdbss else DRIVER_IMPORTS
+            for module, apis in imports.items():
+                exports = []
+                for api in apis:
+                    symbol = contracts[api][0]
+                    if arch == "x86":
+                        match = re.fullmatch(r'@"\\01_(' + re.escape(api) + r'@\d+)"', symbol)
+                        if not match:
+                            raise ValueError(f"unexpected original driver linkage: {symbol}")
+                        exports.append(match[1])
+                    else:
+                        if symbol != "@" + api:
+                            raise ValueError(f"unexpected original driver linkage: {symbol}")
+                        exports.append(api)
                 definition = directory / (module + ".def")
-                definition.write_text(f"LIBRARY {module}\nEXPORTS\n{exported}\n", encoding="utf-8")
+                definition.write_text(f"LIBRARY {module}\nEXPORTS\n" + "\n".join(exports) + "\n",
+                                      encoding="utf-8")
                 library = definition.with_suffix(".lib")
                 machine = {"x86": "i386", "x64": "i386:x86-64", "arm64": "arm64"}[arch]
                 run([args.dlltool, "-m", machine, "-k", "-d", str(definition), "-l", str(library)],
@@ -113,17 +135,19 @@ def check(args: argparse.Namespace) -> dict:
                     libraries.append(str(destination))
         obj = directory / "calls.obj"
         binary = directory / ("calls.sys" if args.kernel else "calls.dll")
-        run(compiler + ["-O1", "-fno-stack-protector", "-fno-optimize-sibling-calls",
+        run(original_compiler + ["-O1", "-fno-stack-protector", "-fno-optimize-sibling-calls",
                         "-c", str(fixture), "-o", str(obj)], directory / "original.log").check_returncode()
         run([args.linker, "/dll", "/noentry", "/nodefaultlib", "/timestamp:0",
              *(["/driver", "/subsystem:native"] if args.kernel else []),
              "/out:" + str(binary), str(obj), *libraries], directory / "link.log").check_returncode()
         for function, api in functions.items():
             references = f"\n__typeof__(&{api}) neverd_ucrt_abi_0 = &{api};\n"
+            original_references = ('extern "C" {\n' + references + '}\n'
+                                   if args.rdbss else references)
             original = directory / (function + "-original.c")
-            original.write_text('#include "' + fixture.as_posix() + '"\n' + references,
+            original.write_text('#include "' + fixture.as_posix() + '"\n' + original_references,
                                 encoding="utf-8")
-            oracle = run(compiler + ["-S", "-emit-llvm", "-O0", str(original), "-o", "-"],
+            oracle = run(original_compiler + ["-S", "-emit-llvm", "-O0", str(original), "-o", "-"],
                          original.with_suffix(".log"))
             oracle.check_returncode()
             original.with_suffix(".ll").write_text(oracle.stdout, encoding="utf-8")
@@ -177,9 +201,13 @@ def main() -> None:
     parser.add_argument("--dlltool", default="llvm-dlltool")
     parser.add_argument("--kernel", action="store_true",
                         help="check original WDK callers with synthetic import libraries")
+    parser.add_argument("--rdbss", action="store_true",
+                        help="check the RDBSS C++ callers (requires --kernel)")
     parser.add_argument("--architecture", choices=("x86", "x64", "arm64"), action="append")
     parser.add_argument("--timeout", type=int, default=wdk.LIMITS["command_timeout"])
     args = parser.parse_args()
+    if args.rdbss and not args.kernel:
+        parser.error("--rdbss requires --kernel")
     args.generated = args.generated.resolve()
     args.output = args.output.resolve()
     if not check(args)["passed"]:
