@@ -18235,7 +18235,19 @@ source but do not qualify privileged execution.
 
 `InterpreterSpecialization.AlignmentProducersPrecedeWideGuardContexts` / `RuntimeValidityStillRefinesAnEnclosingGuard`: The alignment regressions compare an independent arithmetic oracle across both alignment paths, every low-bit residue, wide counts, threshold outcomes and unsigned wraparound. They also require refusal of a misaligned loop, continued enclosing-guard refinement when producers stall, and exact/one-short operation and query budgets. These checks establish neither ordinary source ABI recovery nor native fault behavior.
 
-ReadPrefetch regressions check exact bytes and operand metadata, separate undefined-output and opaque-bank receipts, malformed scalar contracts and modified raw receipts. Both C routes retain all four hints and repeated occurrences, then run at O0/O2 with sanitizers against independent full-state and memory expectations, including unmapped addresses, 32-bit address wrapping and physical returns. Cache placement and timing are outside these comparisons.
+ReadPrefetch regressions check exact bytes and operand metadata, separate
+undefined-output and opaque-bank receipts, malformed scalar contracts and
+modified raw receipts. Both C routes retain all four hints and repeated
+occurrences, then run at O0/O2 with sanitizers against independent full-state
+and memory expectations, including unmapped addresses, 32-bit address wrapping
+and physical returns. The instruction continuation tests
+`ReadPrefetchRetainsHintsAndPhysicalState` and
+`ReadPrefetchDoesNotAdmitOtherCacheOperations` cover all four hints in 64-bit
+and 32-bit address forms, the complete 2272-byte state, state-address aliases
+and rejection of segmented read hints and unrelated cache instructions under
+KernelNoFaultV1. Run `NeverDX64ContinuationSourceTests`,
+`NeverDX86NativeStateAuditTests` and `NeverDInterpreterMachineStateTests`.
+Cache placement and timing are outside these comparisons.
 
 StreamingStore regressions check instruction bytes, operand metadata, alignment, complete writable extents, malformed contracts and modified receipts. Independent expectations compare complete state and memory, including a store that overwrites the physical return word. Both C routes execute at O0/O2 with sanitizers under user and kernel state profiles. These checks do not certify native kernel, concurrent or faulting execution.
 

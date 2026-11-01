@@ -612,6 +612,7 @@ bool supportedOperation(const LowOp &Op,
     return (Transfer && Transfer->CompleteState) || flagIntrinsic(Op) ||
            alignmentIntrinsic(Op) || controlIntrinsic(Op, Options) ||
            faultAddressIntrinsic(Op, Options) || fenceIntrinsic(Op, Options) ||
+           x64::readprefetch::isOperation(Op) ||
            writePrefetchIntrinsic(Op, Options) || msrIntrinsic(Op, Options) ||
            descriptorQueryIntrinsic(Op, Options) ||
            pageTableIntrinsic(Op, Options) ||

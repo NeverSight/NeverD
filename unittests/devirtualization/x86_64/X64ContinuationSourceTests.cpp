@@ -15,6 +15,7 @@
 #include "neverd/backend/codegen/CodeGen.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/ir/high/MedToHigh.h"
+#include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/ir/med/MedIR.h"
 #include "neverd/ir/med/MedTypePass.h"
@@ -1611,6 +1612,84 @@ TEST_F(X64ContinuationSourceTest, TimestampEnvironmentRequiresExplicitOptIn) {
   auto Units = buildX64ContinuationSource(image({0x0f, 0x31}), {0x1000}, O);
   ASSERT_FALSE(bool(Units));
   llvm::consumeError(Units.takeError());
+}
+
+TEST_F(X64ContinuationSourceTest, ReadPrefetchRetainsHintsAndPhysicalState) {
+  std::vector<uint8_t> Bytes;
+  std::vector<va_t> Entries;
+  for (unsigned Hint = 0; Hint != 4; ++Hint)
+    for (bool Address32 : {false, true}) {
+      Entries.push_back(0x1000 + Bytes.size());
+      if (Address32)
+        Bytes.push_back(0x67);
+      Bytes.insert(Bytes.end(), {0x0f, 0x18, uint8_t(1 | (Hint << 3))});
+    }
+  auto Units = buildX64ContinuationSource(image(Bytes), Entries, options());
+  ASSERT_TRUE(bool(Units)) << llvm::toString(Units.takeError());
+  const Intrinsic Hints[] = {Intrinsic::PrefetchNta, Intrinsic::PrefetchT0,
+                             Intrinsic::PrefetchT1, Intrinsic::PrefetchT2};
+  ASSERT_EQ(Units->size(), Entries.size());
+  for (size_t I = 0; I < Units->size(); ++I) {
+    const auto &Unit = Units->at(I);
+    ASSERT_FALSE(Unit.RequiresNativeExecution) << Unit.Diagnostic;
+    unsigned Retained = 0;
+    for (const auto &Block : Unit.Function.Blocks)
+      for (const auto &Op : Block.Ops)
+        if (Op.Opcode == NdOp::INTRINSIC && Op.NumInputs &&
+            Op.Inputs[0].isConst() &&
+            Op.Inputs[0].Offset == uint64_t(Hints[I / 2])) {
+          ++Retained;
+          EXPECT_EQ(Op.NumInputs, 2u);
+          EXPECT_EQ(Op.Inputs[1].Size, 8u);
+          EXPECT_EQ(Op.Output.Size, 0u);
+          EXPECT_EQ(Op.MemoryAddressSpace, NdMemoryAddressSpace::Default);
+        }
+    EXPECT_EQ(Retained, 1u);
+  }
+  run(Bytes, Entries, R"C(
+int main(void) {
+  const uint64_t pcs[]={0x1000,0x1003,0x1007,0x100a,0x100e,0x1011,0x1015,0x1018};
+  const uint64_t addresses[]={0,1,UINT64_MAX,UINT64_C(0x8000000000000000),
+                             UINT64_C(0x1234567800000001)};
+  __typeof__(&neverd_step_1000) steps[]={neverd_step_1000,
+      neverd_step_1003,neverd_step_1007,neverd_step_100A,
+      neverd_step_100E,neverd_step_1011,neverd_step_1015,
+      neverd_step_1018};
+  for(unsigned n=0;n<8;++n)for(unsigned trial=0;trial<7;++trial)
+    for(unsigned pattern=0;pattern<16;++pattern) {
+      unsigned char memory[256],wanted[256];
+      struct {uint64_t before[2];state_t s;uint64_t after[2];} box,want;
+      memset(&box,0,sizeof(box));box.s=seed(pcs[n]);
+      box.before[0]=0xabcdef01;box.after[1]=0x87654321;
+      for(unsigned i=0;i<256;++i)memory[i]=(unsigned char)(i*29+trial);
+      box.s.gpr[1]=trial<5?addresses[trial]:
+        trial==5?(uintptr_t)(memory+pattern):(uintptr_t)&box.s;
+      box.s.flags=2|((pattern&1)?0x8d5:0)|((uint64_t)(pattern&6)<<8);
+      box.s.fs=0x11223344;box.s.gs=0x55667788;
+      for(unsigned i=0;i<8;++i)box.s.arbitrary[i]=0xfedcba9876543210ULL+i;
+      want=box;want.s.pc+=(n&1)?4:3;memcpy(wanted,memory,sizeof(memory));
+      CHECK(steps[n](ARG(&box.s))==0);
+      CHECK(memcmp(&box,&want,sizeof(box))==0);
+      CHECK(memcmp(memory,wanted,sizeof(memory))==0);
+    }
+  return 0;
+})C",
+      false, options(), "prefetch");
+}
+
+TEST_F(X64ContinuationSourceTest,
+       ReadPrefetchDoesNotAdmitOtherCacheOperations) {
+  for (const auto &Bytes :
+       std::vector<std::vector<uint8_t>>{{0x64, 0x0f, 0x18, 0x01},
+                                         {0x65, 0x0f, 0x18, 0x01},
+                                         {0x0f, 0x0d, 0x09},
+                                         {0x0f, 0x0d, 0x11},
+                                         {0x0f, 0xae, 0x39}}) {
+    auto Units = buildX64ContinuationSource(image(Bytes), {0x1000}, options());
+    ASSERT_TRUE(bool(Units)) << llvm::toString(Units.takeError());
+    ASSERT_EQ(Units->size(), 1u);
+    EXPECT_TRUE(Units->front().RequiresNativeExecution);
+  }
 }
 
 TEST_F(X64ContinuationSourceTest, WritePrefetchKeepsNativeHintAndLiveSegments) {
