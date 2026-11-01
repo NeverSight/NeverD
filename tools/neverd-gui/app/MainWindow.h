@@ -79,6 +79,10 @@ public:
   void initializeLayout();
   /// Show the workbench, laying out its desktop first if nothing did yet.
   void showWorkbench();
+  /// Restore startup geometry without resuming a previous F11 session.
+  bool restoreWindowedGeometry(const QByteArray &geometry);
+  /// Keep full screen local to this run when saving the startup geometry.
+  QByteArray saveWindowedGeometry() const;
   /// Before the workbench shows, the quick start greets alone and the
   /// workbench follows the user's choice; closing it quits. Returns immediately
   /// so minimizing never leaves an application-modal session running.
@@ -425,6 +429,8 @@ private:
   QPointer<ComparisonDialog> comparison_;
   QPointer<LineageDialog> lineage_;
   bool startupQuickStartPending_ = false;
+  /// Maximize the first workbench shown after accepting the startup greeting.
+  bool maximizeWorkbenchOnShow_ = false;
   QLabel *analysisLabel_ = nullptr, *directionLabel_ = nullptr,
          *diskLabel_ = nullptr, *fileLabel_ = nullptr;
   QMenu *recentMenu_ = nullptr;

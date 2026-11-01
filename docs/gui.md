@@ -130,8 +130,8 @@ explicit restoration verifies the whole chain against the same assessment.
 Analysis uses the shared C++ backend and never launches the input. See the
 [workflow and limits](web-package-review-journal.md).
 
-A start without a file shows the quick start alone, as IDA does: the workbench
-appears once you choose how to start, and closing the quick start quits. The
+A start without a file shows the quick start alone: the workbench appears
+maximized once you choose how to start, and closing the quick start quits. The
 questions asked before a file loads, **Load a new file**, **Symbol table
 found**, **Load PDB file** and **DWARF info found**, greet alone too while the
 workbench has not shown yet, after the quick start or for a file named on the
@@ -153,10 +153,14 @@ shows that a drop opens it. **Display at startup** decides whether the next
 start shows it again; **File → Quick start** shows it any time, over the
 workbench, restoring the existing Quick Start window if one is already open.
 Quick Start can be minimized and restored from the macOS Dock, and system Quit
-remains available while it is minimized.
+remains available while it is minimized. Reopening Quick Start over an already
+visible workbench preserves the workbench's size and window state.
 Application settings restore the main window's position, size and
-maximized state once at startup. Automatic desktop and project restoration
-arranges the panes within that window; it does not move, resize, show or
+maximized state once at startup. F11 full screen lasts for the current run;
+restarting returns to the normal or maximized state from before F11, with the
+title-bar buttons visible. Older settings saved in full screen also reopen
+windowed. Automatic desktop and project restoration arranges the panes within
+that window; it does not move, resize, show or
 unmaximize it. Detached panes keep their saved positions. **Windows → Load
 desktop** explicitly restores the saved window geometry as well.
 The workbench opens with the default desktop:
@@ -845,10 +849,9 @@ like the rest of the workbench, because GTK's are another toolkit's windows,
 which GNOME attaches. A modal dialog still blocks the workbench until it
 closes.
 
-Without a remembered size the window opens centered at three quarters of the
-screen's width and four fifths of its height. GNOME maximizes a window that
-opens at nearly the size of the screen, and a maximized window does not resize
-from its edges; IDA opens that way.
+Without a remembered size, a workbench opened directly uses three quarters of
+the screen's width and four fifths of its height, centered on the screen. A
+workbench opened from the startup Quick Start is maximized instead.
 
 The workbench draws its own title bar. Drag the title bar's empty part to
 move the window, and double-click it to maximize or restore the window (on
@@ -874,9 +877,10 @@ How the rest of the frame is drawn depends on the system:
   draws no shadow for such a window, so the window draws a ten-pixel shadow of
   its own, and that band resizes the window too, as GNOME's own windows allow;
   under X11 GNOME draws the shadow.
-- On Windows the window keeps the system frame without its caption, so
-  Windows still draws its edges and shadow, snaps and animates it and resizes
-  it from its sides and bottom; the top edge resizes it through the title bar.
+- On Windows native hit testing makes all edges and corners resizable, including
+  after a file loads. Dragging a maximized edge restores the window and resizes
+  it from its visible rectangle. The workbench paints its frame and shadow;
+  Windows handles the sizing gesture. Full-screen windows cannot be resized.
 - On macOS the window keeps its frame and traffic lights, and its title bar
   turns transparent with the workbench's own drawn under it.
 
