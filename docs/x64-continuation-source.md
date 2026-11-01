@@ -493,6 +493,8 @@ machine environment; enabling them is not an emulation implementation.
 | `native_speculation_control_msrs: true` | Real IA32_SPEC_CTRL and IA32_PRED_CMD writes; feature support and valid values are required |
 | `native_descriptor_queries: true` | Real SGDT, memory VERW and register LSL in the bound descriptor environment |
 | `native_page_table_access: true` | Real CR3 accesses, mapping changes and TLB invalidation |
+| `native_debug_register_access: true` | Real supervisor DR0–3, DR6 and DR7 transfers |
+| `native_page_global_access: true` | Real CR4 reads and writes restricted to changing PGE, including TLB invalidation |
 
 Native descriptor and paging bindings must agree with the declared architectural
 context. Both address spaces must retain accessible generated code, host stack
@@ -500,6 +502,17 @@ and state storage across native CR3 writes. Other MSRs and unsupported system
 effects retain status 4. A zero native-request count describes the selected
 instructions under these declarations; it is not evidence that a complete OS
 has run.
+
+The debug binding requires valid register values and a supervisor environment
+in which GD and enabled breakpoints do not trap the generated code, state or
+compiler stack. DR4/DR5 aliases remain native requests because their behavior
+depends on CR4.DE. The PGE binding compares each write against the live CR4 and
+rejects any non-PGE change with status 5 before committing explicit state or
+writing CR4. Successful writes execute MOV CR4, preserving its serializing and
+TLB effects. Generated code, stack and state mappings must remain accessible.
+Both bindings require a controls profile. Their six undefined arithmetic flags
+use independent caller-supplied slots; DF and other explicit state are preserved.
+These are native bindings, not scalar simulations of the debug or paging banks.
 
 ## SDK and verification
 

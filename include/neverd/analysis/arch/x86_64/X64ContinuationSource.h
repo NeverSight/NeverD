@@ -405,6 +405,15 @@ struct X64ContinuationSourceOptions {
   /// addresses use the actual mappings; writes and later accesses must be
   /// nonfaulting. This binds the native paging environment, not a CR3 cell.
   bool NativePageTableAccess = false;
+  /// Execute native DR0..3/DR6/DR7 accesses in the original supervisor debug
+  /// environment. Valid values and nonfaulting accesses are required; GD and
+  /// breakpoints must not trap translated code or its compiler stack/state.
+  /// Debug banks remain native environment state, not invented state cells.
+  bool NativeDebugRegisterAccess = false;
+  /// Execute native CR4 reads and PGE-only writes, retaining serialization and
+  /// TLB invalidation. Writes that change any other bit reject before state or
+  /// hardware changes. Mappings and the compiler environment remain valid.
+  bool NativePageGlobalAccess = false;
   /// Bind a returning KVM ABI: RAX number/result, RBX/RCX/RDX/RSI arguments.
   /// Calls preserve every other represented register and flags, retain the
   /// compiler execution environment, and access the same mapped guest RAM.

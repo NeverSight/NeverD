@@ -94,6 +94,8 @@ llvm::Expected<Request> readRequest(llvm::StringRef Text) {
                                        "native_speculation_control_msrs",
                                        "native_descriptor_queries",
                                        "native_page_table_access",
+                                       "native_debug_register_access",
+                                       "native_page_global_access",
                                        "native_kvm_hypercalls",
                                        "native_hyperv_hypercall_entry",
                                        "follow_internal_calls",
@@ -182,6 +184,8 @@ llvm::Expected<Request> readRequest(llvm::StringRef Text) {
        &Options.NativeSpeculationControlMsrs},
       {"native_descriptor_queries", &Options.NativeDescriptorQueries},
       {"native_page_table_access", &Options.NativePageTableAccess},
+      {"native_debug_register_access", &Options.NativeDebugRegisterAccess},
+      {"native_page_global_access", &Options.NativePageGlobalAccess},
       {"native_kvm_hypercalls", &Options.NativeKvmHypercalls},
       {"follow_internal_calls", &Result.FollowInternalCalls},
       {"follow_direct_jumps", &Result.FollowDirectJumps}};
@@ -652,6 +656,15 @@ exportX64Continuation(const BinaryImage &Image, llvm::StringRef RequestJSON,
                              "represented state and compiler environment "
                              "preserved; service writes exclude state, "
                              "budget, generated code and compiler stack; "
+                           : "") +
+           std::string(Request->Options.NativeDebugRegisterAccess
+                           ? "native supervisor DR0..3/DR6/DR7; valid values; "
+                             "GD and breakpoints do not trap generated code, "
+                             "state or compiler stack; "
+                           : "") +
+           std::string(Request->Options.NativePageGlobalAccess
+                           ? "native CR4 with PGE-only writes and actual TLB "
+                             "invalidation; stable compiler mappings; "
                            : "") +
            std::string(
                "successful sequential RAM; no MMIO, "
