@@ -18,6 +18,7 @@
 #include <mutex>
 #include <optional>
 #include <set>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -75,6 +76,10 @@ getCheckedX86CalleeStackPop(const BinaryImage &Image, va_t Target,
 /// from inside another callee or registration-state analysis. Neither success
 /// nor failure survives an image change. The consumer must independently bind
 /// its actual direct CALL; memory effects and native ABI remain separate.
+/// If the ordinary answer depends on imports, a plain body may instead prove
+/// explicit register restoration with every call's stack effect unknown. This
+/// projection charges the same remaining allowance and leaves the ordinary
+/// answer's memo and complete calling contract unchanged.
 /// Optional Roots shares only the unchanged image's relocation inventory.
 std::optional<uint32_t> getCheckedX86IndependentCalleeStackPop(
     const BinaryImage &Image, va_t Target, size_t &Work, size_t Limit,
@@ -93,15 +98,18 @@ std::optional<uint32_t> getCheckedX86IndependentIndexedCallStackPop(
 
 /// The returning-stack answers for one unchanged image, each with its import
 /// dependence and the work its computation charged, per callee and
-/// x86SEHStateAnalysisLevel. A repeated query replays the answer and charges
-/// the same work, so both the answer and the caller's cumulative budget,
-/// including its exhaustion, are those of a fresh computation. Completed
-/// computations and full-allowance refusals are kept; the latter replay only
-/// for the same starting allowance. The image must not change while a scope
-/// uses the memo. Raw graph storage has a separate bounded allowance and shares
-/// the same image lifetime.
+/// x86SEHStateAnalysisLevel and query kind. An opaque-call projection never
+/// replaces an ordinary contract. A repeated query replays the answer and
+/// charges the same work, so both the answer and the caller's cumulative
+/// budget, including its exhaustion, are those of a fresh computation.
+/// Completed computations and full-allowance refusals are kept; the latter
+/// replay only for the same starting allowance. The image must not change while
+/// a scope uses the memo. Raw graph storage has a separate bounded allowance
+/// and shares the same image lifetime.
 class RegistrationStackPopMemo {
 public:
+  enum class QueryKind { Ordinary, OpaqueProjection };
+
   struct Answer {
     std::optional<uint32_t> Pop;
     size_t Work = 0;
@@ -116,9 +124,10 @@ public:
   operator=(const RegistrationStackPopMemo &) = delete;
 
   std::optional<Answer> find(const BinaryImage &Other, va_t Target,
-                             unsigned Level);
+                             unsigned Level,
+                             QueryKind Kind = QueryKind::Ordinary);
   void record(const BinaryImage &Other, va_t Target, unsigned Level,
-              const Answer &Value);
+              const Answer &Value, QueryKind Kind = QueryKind::Ordinary);
 
   /// Plain PE32 integer CFGs from a fresh default builder, with no exception
   /// metadata, registration states or exceptional edges. These retain only
@@ -130,7 +139,7 @@ public:
 private:
   const BinaryImage &Image;
   std::mutex Mutex;
-  std::map<std::pair<va_t, unsigned>, Answer> Answers;
+  std::map<std::tuple<va_t, unsigned, QueryKind>, Answer> Answers;
   std::map<va_t, std::shared_ptr<const LowFunc>> Graphs;
   size_t GraphBytes = 0;
   const size_t MaxGraphBytes;

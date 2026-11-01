@@ -2544,6 +2544,23 @@ Only a completed ordinary returning-stack proof publishes it; dispatcher paths
 retain no such summary. This neither restores a lost binding nor grants frame,
 loaded-value, nonthrowing or native-rewrite authority.
 
+`RegistrationOpaqueStack` owns the independent-query fallback for plain PE32
+helpers whose explicit register restoration discards every nested call's stack
+effect. It starts without import bindings, treats call cleanup as unknown and
+uses the shared frame transfer to retain only ABI-preserved register anchors.
+Every physical successor and near return must prove the same restored entry
+ESP and cleanup immediate. No saved memory, callee summary, inferred branch
+result or exception-frame projection supplies an anchor. Current immutable
+instructions and the existing cumulative work allowance remain mandatory.
+The ordinary memo and full contracts retain their import dependencies and
+binding-preservation facts; the independent query charges its additional
+projection separately. It grants only returning ESP, including after a
+changed import cleanup, and supplies no memory or native EH authority.
+The image-scoped stack memo keeps ordinary and opaque-call queries under
+distinct keys. Both reuse the same exact-work replay and partial-budget
+refusal policy, so repeated projection queries avoid rebuilding or copying
+their graphs without acquiring extra proof allowance.
+
 A direct PE32 call can separately obtain an invocation-specific stack fact
 through `getCheckedX86IndependentIndexedCallStackPop`. Its current callee entry
 must be exactly an immutable `jmp [reg*4+table]` with a relocated table base.

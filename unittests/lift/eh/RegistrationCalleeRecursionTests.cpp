@@ -246,6 +246,12 @@ TEST(RegistrationCalleeRecursion, IndependentStackMemoKeepsImportsAndBudgets) {
       ASSERT_LT(FreshWork, limits::kMaxRegistrationEHStateWork);
       const auto Independent =
           Reached ? std::nullopt : std::optional<uint32_t>{4};
+      size_t IndependentWork = 0;
+      ASSERT_EQ(getCheckedX86IndependentCalleeStackPop(
+                    Image, Target, IndependentWork,
+                    limits::kMaxRegistrationEHStateWork),
+                Independent);
+      ASSERT_GE(IndependentWork, FreshWork);
       for (bool IndependentFirst : {false, true}) {
         SCOPED_TRACE(IndependentFirst);
         RegistrationStackPopMemo Memo(Image);
@@ -258,27 +264,28 @@ TEST(RegistrationCalleeRecursion, IndependentStackMemoKeepsImportsAndBudgets) {
               Independent);
         else
           EXPECT_EQ(getCheckedX86CalleeStackPop(Image, Target, &Work), 4u);
-        EXPECT_EQ(Work, FreshWork);
+        EXPECT_EQ(Work, IndependentFirst ? IndependentWork : FreshWork);
         const auto Known = Memo.find(Image, Target, 0);
         ASSERT_TRUE(Known);
         EXPECT_EQ(Known->Pop, 4u);
         EXPECT_EQ(Known->Work, FreshWork);
 
         // Import-dependent returning ESP remains useful to the ordinary
-        // caller, but cannot become an independent jump-table fact. Both
-        // entry points retain the exact cost of the same fresh proof.
+        // caller, but cannot become an independent jump-table fact. The
+        // optional opaque-call projection charges its own bounded work;
+        // neither entry point changes the ordinary memo's cost or premises.
         Work = 0;
         EXPECT_EQ(getCheckedX86CalleeStackPop(Image, Target, &Work), 4u);
         EXPECT_EQ(Work, FreshWork);
         for (size_t Before : {size_t{0}, size_t{17}})
-          for (size_t Remaining : {size_t{0}, size_t{1}, FreshWork - 1,
-                                   FreshWork, FreshWork + 1}) {
+          for (size_t Remaining : {size_t{0}, size_t{1}, IndependentWork - 1,
+                                   IndependentWork, IndependentWork + 1}) {
             Work = Before;
             const auto Actual = getCheckedX86IndependentCalleeStackPop(
                 Image, Target, Work, Before + Remaining);
-            EXPECT_EQ(Actual,
-                      Remaining >= FreshWork ? Independent : std::nullopt);
-            EXPECT_EQ(Work, Before + std::min(Remaining, FreshWork));
+            EXPECT_EQ(Actual, Remaining >= IndependentWork ? Independent
+                                                           : std::nullopt);
+            EXPECT_EQ(Work, Before + std::min(Remaining, IndependentWork));
           }
       }
       // A short attempt must not poison a later, adequately funded query.
@@ -291,9 +298,9 @@ TEST(RegistrationCalleeRecursion, IndependentStackMemoKeepsImportsAndBudgets) {
       EXPECT_FALSE(Memo.find(Image, Target, 0));
       Work = 0;
       EXPECT_EQ(getCheckedX86IndependentCalleeStackPop(Image, Target, Work,
-                                                       FreshWork + 1),
+                                                       IndependentWork + 1),
                 Independent);
-      EXPECT_EQ(Work, FreshWork);
+      EXPECT_EQ(Work, IndependentWork);
       EXPECT_TRUE(Memo.find(Image, Target, 0));
     }
 }

@@ -44,6 +44,7 @@ add_neverd_unittest(NeverDRegistrationCalleeStackTests
   eh/RegistrationImportABITests.cpp
   eh/RegistrationLeafBranchTests.cpp
   eh/RegistrationCalleeRecursionTests.cpp
+  eh/RegistrationOpaqueStackTests.cpp
   LINK_COMPONENTS Pipeline)
 
 add_neverd_unittest(NeverDHighCParamUsageTests
@@ -1664,6 +1665,7 @@ add_neverd_unittest(NeverDWindowsRegistrationNativeTests
   eh/RegistrationCallTests.cpp
   eh/RegistrationImportABITests.cpp
   eh/RegistrationCalleeRecursionTests.cpp
+  eh/RegistrationOpaqueStackTests.cpp
   eh/RegistrationCleanupABITests.cpp
   eh/RegistrationRealignedCleanupABITests.cpp
   eh/RegistrationEntryABITests.cpp

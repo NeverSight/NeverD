@@ -12,6 +12,7 @@
 #include "RegistrationFrameEffects.h"
 #include "RegistrationImportLoad.h"
 #include "RegistrationMemoryPermissions.h"
+#include "RegistrationOpaqueStack.h"
 #include "RegistrationOrdinaryGraph.h"
 #include "RegistrationPrecisionArguments.h"
 #include "RegistrationStackOwner.h"
@@ -113,22 +114,8 @@ bool hasImmutableCalleeInstruction(const BinaryImage &Image,
   return true;
 }
 
-} // namespace neverd::registration_abi
-
-namespace neverd {
-namespace {
-using registration_abi::chargeCalleeWork;
-using registration_state::FrameState;
-using registration_state::FrameTransfer;
-using registration_state::FrameValue;
-using NestedStackProof =
-    std::function<std::optional<RegistrationCalleeStackContract>(va_t)>;
-
-bool endsInReturn(const LowBlock &Block) {
-  return !Block.Ops.empty() && Block.Ops.back().Opcode == NdOp::RETURN;
-}
-
-std::optional<uint32_t> nearReturnPop(const BinaryImage &Image, va_t Address) {
+std::optional<uint32_t> checkedNearReturnStackPop(const BinaryImage &Image,
+                                                  va_t Address) {
   const auto Byte = readImmutableCodeBytes(Image, Address, 1);
   if (!Byte || ((*Byte)[0] != 0xc3 && (*Byte)[0] != 0xc2))
     return std::nullopt;
@@ -138,6 +125,22 @@ std::optional<uint32_t> nearReturnPop(const BinaryImage &Image, va_t Address) {
   if (!Encoding)
     return std::nullopt;
   return readLE<uint16_t>(Encoding->data() + 1);
+}
+
+} // namespace neverd::registration_abi
+
+namespace neverd {
+namespace {
+using registration_abi::chargeCalleeWork;
+using registration_abi::checkedNearReturnStackPop;
+using registration_state::FrameState;
+using registration_state::FrameTransfer;
+using registration_state::FrameValue;
+using NestedStackProof =
+    std::function<std::optional<RegistrationCalleeStackContract>(va_t)>;
+
+bool endsInReturn(const LowBlock &Block) {
+  return !Block.Ops.empty() && Block.Ops.back().Opcode == NdOp::RETURN;
 }
 
 struct StackBody {
@@ -364,7 +367,8 @@ struct StackBody {
         return 0;
       for (const auto &Boundary : Block->InstructionBoundaries)
         if (Boundary.Control == LowInstructionControl::Return) {
-          const auto Current = nearReturnPop(Image, Boundary.Address);
+          const auto Current =
+              checkedNearReturnStackPop(Image, Boundary.Address);
           if (!Current || (Pop && *Pop != *Current))
             return 0;
           Pop = Current;
@@ -664,7 +668,7 @@ stackPopForBody(StackBody &Body, va_t Entry, const NestedStackProof &NestedPop,
           return std::nullopt;
         // Authenticate each near return, including zero versus nonzero pop.
         // LowFunc::CalleePopBytes is only a maximum and cannot prove agreement.
-        const auto Bytes = nearReturnPop(Image, Op.Addr);
+        const auto Bytes = checkedNearReturnStackPop(Image, Op.Addr);
         if (!Bytes || (Pop && *Pop != *Bytes))
           return std::nullopt;
         Pop = Bytes;
@@ -1257,28 +1261,31 @@ void RegistrationStackPopMemo::recordGraph(const BinaryImage &Other,
 
 std::optional<RegistrationStackPopMemo::Answer>
 RegistrationStackPopMemo::find(const BinaryImage &Other, va_t Target,
-                               unsigned Level) {
+                               unsigned Level, QueryKind Kind) {
   if (&Other != &Image)
     return std::nullopt;
   std::lock_guard<std::mutex> Lock(Mutex);
-  const auto It = Answers.find({Target, Level});
+  const auto It = Answers.find({Target, Level, Kind});
   if (It == Answers.end())
     return std::nullopt;
   return It->second;
 }
 
 void RegistrationStackPopMemo::record(const BinaryImage &Other, va_t Target,
-                                      unsigned Level, const Answer &Value) {
+                                      unsigned Level, const Answer &Value,
+                                      QueryKind Kind) {
   if (&Other != &Image)
     return;
   std::lock_guard<std::mutex> Lock(Mutex);
-  Answers.emplace(std::make_pair(Target, Level), Value);
+  Answers.emplace(std::make_tuple(Target, Level, Kind), Value);
 }
 
 namespace {
+template <typename Compute>
 RegistrationStackPopMemo::Answer
-freshStackPopAnswer(const BinaryImage &Image, va_t Target, size_t &Work,
-                    const detail::AbsoluteRelocationRootIndex *Roots) {
+memoizedStackPopAnswer(const BinaryImage &Image, va_t Target, size_t &Work,
+                       RegistrationStackPopMemo::QueryKind Kind,
+                       Compute &&Build) {
   // A fresh index answers from the unchanged image and the SEH analysis
   // level alone, charging the same work every time; only the caller's
   // remaining budget decides whether that work fits. Every charge counts
@@ -1289,7 +1296,7 @@ freshStackPopAnswer(const BinaryImage &Image, va_t Target, size_t &Work,
           : CurrentStackPopMemo;
   const unsigned Level = x86SEHStateAnalysisLevel();
   if (Memo)
-    if (const auto Known = Memo->find(Image, Target, Level)) {
+    if (const auto Known = Memo->find(Image, Target, Level, Kind)) {
       // A full-budget refusal is replayed only from the identical starting
       // allowance. A smaller allowance still runs its own bounded query.
       if (Known->Work < limits::kMaxRegistrationEHStateWork || Work == 0) {
@@ -1299,11 +1306,8 @@ freshStackPopAnswer(const BinaryImage &Image, va_t Target, size_t &Work,
       }
     }
   const size_t Before = Work;
-  const auto Proof =
-      RegistrationCallCalleeIndex(Image, &Work, Roots).stackContract(Target);
-  const RegistrationStackPopMemo::Answer Answer{
-      Proof ? std::optional<uint32_t>{Proof->StackPopBytes} : std::nullopt,
-      Work - Before, Proof && !Proof->RequiredImports.empty()};
+  RegistrationStackPopMemo::Answer Answer = Build();
+  Answer.Work = Work - Before;
   // A failed charge leaves Work at the limit, so a smaller total proves the
   // computation never ran out. A full-allowance refusal can also be kept:
   // replay supplies no stack fact and still consumes that entire allowance.
@@ -1311,8 +1315,41 @@ freshStackPopAnswer(const BinaryImage &Image, va_t Target, size_t &Work,
   if (Memo && (Work < limits::kMaxRegistrationEHStateWork ||
                (Before == 0 && Work == limits::kMaxRegistrationEHStateWork &&
                 !Answer.Pop)))
-    Memo->record(Image, Target, Level, Answer);
+    Memo->record(Image, Target, Level, Answer, Kind);
   return Answer;
+}
+
+RegistrationStackPopMemo::Answer
+freshStackPopAnswer(const BinaryImage &Image, va_t Target, size_t &Work,
+                    const detail::AbsoluteRelocationRootIndex *Roots) {
+  return memoizedStackPopAnswer(
+      Image, Target, Work, RegistrationStackPopMemo::QueryKind::Ordinary, [&] {
+        const auto Proof = RegistrationCallCalleeIndex(Image, &Work, Roots)
+                               .stackContract(Target);
+        return RegistrationStackPopMemo::Answer{
+            Proof ? std::optional<uint32_t>{Proof->StackPopBytes}
+                  : std::nullopt,
+            0, Proof && !Proof->RequiredImports.empty()};
+      });
+}
+
+std::optional<uint32_t> freshOpaqueStackProjection(const BinaryImage &Image,
+                                                   va_t Target, size_t &Work) {
+  return memoizedStackPopAnswer(
+             Image, Target, Work,
+             RegistrationStackPopMemo::QueryKind::OpaqueProjection,
+             [&] {
+               Decoder Dec;
+               if (!Dec.init(Image))
+                 return RegistrationStackPopMemo::Answer{};
+               CFGBuilder Builder;
+               const LowFunc Callee =
+                   readStackGraph(Builder, Image, Dec, Target);
+               return RegistrationStackPopMemo::Answer{
+                   registration_abi::projectOpaqueCallReturnStack(Image, Callee,
+                                                                  Work)};
+             })
+      .Pop;
 }
 } // namespace
 
@@ -1366,10 +1403,20 @@ std::optional<uint32_t> getCheckedX86IndependentCalleeStackPop(
   const size_t Before = limits::kMaxRegistrationEHStateWork - Allowance;
   size_t CalleeWork = Before;
   const auto Answer = freshStackPopAnswer(Image, Target, CalleeWork, Roots);
+  std::optional<uint32_t> Pop =
+      Answer.HasImportDependencies ? std::nullopt : Answer.Pop;
+  if (Answer.HasImportDependencies && Answer.Pop &&
+      CalleeWork < limits::kMaxRegistrationEHStateWork &&
+      registration_abi::isPlainRegistrationCalleeEntry(Image, Target)) {
+    // This projection grants only returning ESP. Its separate memo key keeps
+    // ordinary contracts and their IAT-preservation premises intact.
+    const auto Independent =
+        freshOpaqueStackProjection(Image, Target, CalleeWork);
+    if (Independent == Answer.Pop)
+      Pop = Independent;
+  }
   Work += CalleeWork - Before;
-  if (Answer.HasImportDependencies)
-    return std::nullopt;
-  return Answer.Pop;
+  return Pop;
 }
 
 std::optional<std::vector<RegistrationCalleeStackContract>>

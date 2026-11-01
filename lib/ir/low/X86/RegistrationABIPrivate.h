@@ -78,6 +78,9 @@ bool isPlainRegistrationCalleeEntry(const BinaryImage &Image, va_t Target);
 bool hasImmutableCalleeInstruction(const BinaryImage &Image,
                                    const LowInstructionBoundary &Boundary,
                                    Decoder &Dec);
+/// Authenticate the current immutable near RET encoding, including zero pop.
+std::optional<uint32_t> checkedNearReturnStackPop(const BinaryImage &Image,
+                                                  va_t Address);
 bool collectCalleeCodeRanges(const LowFunc &Function, const BinaryImage &Image,
                              size_t &Work,
                              std::vector<ExceptionAddressRange> &Ranges);

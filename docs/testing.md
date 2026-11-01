@@ -27,6 +27,15 @@ checks both memo population orders, import-dependent refusals, exact and
 insufficient budgets, and recovery after a short attempt. Run the complete
 `NeverDRegistrationCalleeStackTests`, registration EH/state, jump-table and
 x87 call-graph suites after changing this shared proof path.
+`RegistrationOpaqueStack` checks independent ESP restoration through each
+nonvolatile anchor, agreed physical returns, loops, bypassed restoration,
+volatile/partial/loaded anchors, stack imbalance, current bytes and writable
+code. Its memo tests retain the ordinary answer's import premises and cost
+while separately charging the bounded independent projection in both query
+orders. Projection memo controls also retain complete negative results,
+reject partial-budget cache population, and separate image identities and
+analysis levels. This plain-body proof does not qualify C++ dispatch
+dependencies or the GOF2 selector domain.
 `NeverDReadOnlyBytesTests` compares ordinary, budgeted and indexed PE32 reads
 at relocation and malformed-field boundaries. GOF2 performance qualification
 requires a separate whole-image static lift with elapsed time, peak RSS and
