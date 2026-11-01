@@ -123,16 +123,18 @@ llvm::Expected<Request> readRequest(llvm::StringRef Text) {
   if (Profile != "kernel-events-v6" && Profile != "intel-fast-system-v7" &&
       Profile != "intel-user-interrupt-v8" &&
       Profile != "intel-fred-return-v9" && Profile != "amd-svm-v10" &&
-      Profile != "intel-mpx-v11" && Profile != "native-smm-v12")
+      Profile != "intel-mpx-v11" && Profile != "native-smm-v12" &&
+      Profile != "native-sgx-v13")
     return invalid(
         "an explicit kernel-events-v6, intel-fast-system-v7 or "
         "intel-user-interrupt-v8, intel-fred-return-v9, amd-svm-v10 or "
-        "intel-mpx-v11 or native-smm-v12 profile "
+        "intel-mpx-v11, native-smm-v12 or native-sgx-v13 profile "
         "is required");
   Request Result;
   auto &Options = Result.Options;
   Options.Profile =
-      Profile == "intel-mpx-v11" ? X64ContinuationProfile::MpxNoFaultV11
+      Profile == "native-sgx-v13"  ? X64ContinuationProfile::NativeSgxNoFaultV13
+      : Profile == "intel-mpx-v11" ? X64ContinuationProfile::MpxNoFaultV11
       : Profile == "native-smm-v12"
           ? X64ContinuationProfile::NativeSmmNoFaultV12
       : Profile == "amd-svm-v10" ? X64ContinuationProfile::NativeSvmNoFaultV10
@@ -157,7 +159,7 @@ llvm::Expected<Request> readRequest(llvm::StringRef Text) {
     return invalid("mxcsr_mask must fit in 32 bits");
   Options.MXCSRMask = uint32_t(*Mask);
   if ((Profile != "amd-svm-v10" && Profile != "intel-mpx-v11" &&
-       Profile != "native-smm-v12") ||
+       Profile != "native-smm-v12" && Profile != "native-sgx-v13") ||
       Object->get("paging_address_bits")) {
     auto Paging = RequiredInteger("paging_address_bits");
     if (!Paging)
@@ -336,7 +338,9 @@ typedef struct {
     uint32_t MXCSR, ReservedV2;
     uint64_t ReservedTailV2, CR2, ReservedV4;
 )C";
-  if (Version == 12)
+  if (Version == 13)
+    OS << "    struct { uint64_t GPR[16], RFlags, XState; } SGX;\n";
+  else if (Version == 12)
     OS << "    struct { uint64_t XState, XStateMask, CR2, CR8, KernelGSBase; } "
           "SMM;\n";
   else if (Version == 11)
@@ -392,7 +396,9 @@ typedef struct {
   FIELD(X64ContinuationStateV2, ReservedTailV2, ReservedTail);
   FIELD(X64ContinuationStateV4, CR2, CR2);
   FIELD(X64ContinuationStateV4, ReservedV4, Reserved);
-  if (Version == 12) {
+  if (Version == 13) {
+    FIELD(X64ContinuationStateV13, SGX, SGX);
+  } else if (Version == 12) {
     FIELD(X64ContinuationStateV12, SMM, SMM);
   } else if (Version == 11) {
     FIELD(X64ContinuationStateV11, Bounds, Bounds);
@@ -576,7 +582,8 @@ exportX64Continuation(const BinaryImage &Image, llvm::StringRef RequestJSON,
   X64ContinuationExport Result;
   llvm::raw_string_ostream OS(Result.Source);
   const auto Version = Units->front().StateVersion;
-  const auto Profile = Version == 11   ? "intel-mpx-v11"
+  const auto Profile = Version == 13   ? "native-sgx-v13"
+                       : Version == 11 ? "intel-mpx-v11"
                        : Version == 12 ? "native-smm-v12"
                        : Version == 10 ? "amd-svm-v10"
                        : Version == 9  ? "intel-fred-return-v9"
@@ -718,6 +725,17 @@ uint64_t neverd_x64_deliver_event_v6(neverd_x64_state_v6 *state,
               "BNDSTATUS and stops at the faulting PC with status 14 before "
               "exception delivery; host MPX disabled or BNDPRESERVE set; "
               "no host MPX instruction execution; CET/FRED disabled; "
+        : Version == 13
+            ? "native CPL3 code64 SGX, XCR0=7, IF=1, IOPL=0, CET disabled; "
+              "canonical ENCLU leaves 2/3/4 only; explicit GPR, flags and "
+              "x87/SSE/AVX transported to immutable original executable "
+              "ENCLU; original next-PC and native AEP/continuations retained; "
+              "compiler frame abandoned; native EPC/TCS/SSA, FS/GS caches "
+              "and other untransported state already match the original "
+              "environment; accessible disjoint state/image/compiler storage; "
+              "no faults or asynchronous delivery during input transport; "
+              "subsequent enclave execution and AEX/ERESUME belong to native "
+              "SGX hardware and the original runtime; "
         : Version == 12
             ? "native active SMM, code64, XCR0=7; canonical RSM only; "
               "software CR2/CR8/KernelGSBase and x87/SSE/AVX restored; "
@@ -811,6 +829,7 @@ uint64_t neverd_x64_deliver_event_v6(neverd_x64_state_v6 *state,
                            ? "native CR4 with PGE-only writes and actual TLB "
                              "invalidation; stable compiler mappings; "
                            : "") +
+           std::string(Version == 13 ? "during input transport: " : "") +
            std::string(
                "successful sequential RAM; no MMIO, "
                "concurrent writes, memory faults or asynchronous events; exact "

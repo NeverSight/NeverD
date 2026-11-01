@@ -809,8 +809,10 @@ x86VirtualizationMedShape(const MedOp &Op, Arch TargetArch = Arch::Unknown) {
     Shape.ScalarInputs[I] =
         isMedIntrinsicScalarInput(Input) || Input.Kind == MedVar::Param ||
         Input.Kind == MedVar::Stack || Input.Kind == MedVar::RetVal;
-    if (I == 1 && Input.isConst())
+    if (I == 1 && Input.isConst()) {
       Shape.AddressWidth = Input.ConstVal;
+      Shape.OriginalPC = Input.ConstVal;
+    }
     if (I == 2 && Input.isConst())
       Shape.SnpControl = Input.ConstVal;
     if (I == 3 && Input.isConst())

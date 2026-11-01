@@ -308,3 +308,4 @@ SIDEEFFECT(Intrinsic::X86SevVmgexit);
 SIDEEFFECT(Intrinsic::X86HleState);
 
 SIDEEFFECT(Intrinsic::X86SmmReturnContext);
+SIDEEFFECT(Intrinsic::X86SgxTransferAtContext);

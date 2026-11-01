@@ -538,6 +538,9 @@ enum class Intrinsic : uint16_t {
   // Append-only: software-managed SMM banks before terminal native RSM.
   X86SmmReturnContext,
 
+  // Append-only: terminal SGX state transport to the original ENCLU site.
+  X86SgxTransferAtContext,
+
   _Count = 16000
 };
 
@@ -660,6 +663,8 @@ constexpr X86VirtualizationContract x86VirtualizationContract(Intrinsic Id) {
     return {"vmrun.context", R::None, 2, 0, 144, false};
   case Intrinsic::X86SmmReturnContext:
     return {"rsm.context", R::None, 1, 0, 40, false};
+  case Intrinsic::X86SgxTransferAtContext:
+    return {"enclu.transfer.at.context", R::None, 2, 0, 144, false};
   case Intrinsic::X86KvmVmcall:
     return {"vmcall.kvm", R::Value, 5, -1, 0, false};
   case Intrinsic::X86KvmVmmcall:

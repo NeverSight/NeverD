@@ -161,6 +161,10 @@ std::string x86NativeFunctionPreamble(const HighFunc &Function,
       Required.insert("avx512f");
     }
     Sgx |= isX86SgxIntrinsic(E->IntrinsicId);
+    if (E->IntrinsicId == Intrinsic::X86SgxTransferAtContext) {
+      Required.insert("sgx");
+      Required.insert("xsave");
+    }
     if (isX86BoundedLeafIntrinsic(E->IntrinsicId)) {
       Bounded = true;
       BoundedEnclu |= isX86EncluLeaf(E->IntrinsicId);
@@ -223,6 +227,10 @@ std::string x86NativeFunctionPreamble(const llvm::Function &Function,
         Compare |= P->Contract.Compare;
       }
       if (const auto *Callee = Call->getCalledFunction()) {
+        if (Callee->getName() == "llvm.x86.enclu.transfer.at.context") {
+          Required.insert("sgx");
+          Required.insert("xsave");
+        }
         Sgx |= isX86SgxNativeName(Callee->getName().str());
         if (const auto *Feature =
                 x86SystemNativeTargetFeature(Callee->getName().str()))

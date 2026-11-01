@@ -15610,3 +15610,11 @@ The native SMM continuation projection owns canonical RSM admission in
 SIMD import in `X64ContinuationAvxImage.h`. The LLVM terminal context intrinsic
 owns the final control/MSR writes and inseparable XRSTOR/RSM sequence; neither
 source emitter models a vendor's private SMRAM layout.
+
+The native SGX continuation projection owns canonical ENCLU leaves 2/3/4 in
+`X64ContinuationSgx.h`, using that same XSAVE image authority. Its terminal
+LLVM/NeverC interface restores the explicit input bank and jumps to the
+immutable original instruction site. The original ENCLU therefore owns its
+PC-dependent outputs and native enclave/AEP continuation. Neither C emitter
+relocates EENTER and substitutes a guessed RCX value or models EPC/SSA/AEX.
+See [the SGX state and native-runtime contract](x86-sgx-transfer.md).

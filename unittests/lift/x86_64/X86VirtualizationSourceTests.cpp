@@ -1916,6 +1916,57 @@ TEST(X86ScalarSystemSource, NativeCallsRequireExactTypesAndEffects) {
   }
 }
 
+TEST(X86VirtualizationSource, SgxOriginalSiteCannotLoseItsTerminalContract) {
+  for (unsigned Mutation = 0; Mutation != 9; ++Mutation) {
+    llvm::LLVMContext Context;
+    llvm::Module Module("sgx_original_site", Context);
+    llvm::IRBuilder<> Builder(Context);
+    auto *Pointer = llvm::PointerType::get(Context, Mutation == 8 ? 1 : 0);
+    auto *Type = llvm::FunctionType::get(
+        Builder.getVoidTy(), {Pointer, Builder.getInt64Ty()}, false);
+    auto *Callee =
+        llvm::Function::Create(Type, llvm::Function::ExternalLinkage,
+                               "llvm.x86.enclu.transfer.at.context", Module);
+    Callee->addFnAttr(llvm::Attribute::NoReturn);
+    Callee->addFnAttr(llvm::Attribute::NoUnwind);
+    Callee->addFnAttr(llvm::Attribute::Convergent);
+    Callee->addFnAttr(llvm::Attribute::NoDuplicate);
+    if (Mutation == 1)
+      Callee->removeFnAttr(llvm::Attribute::NoReturn);
+    if (Mutation == 2)
+      Callee->removeFnAttr(llvm::Attribute::NoUnwind);
+    if (Mutation == 3)
+      Callee->removeFnAttr(llvm::Attribute::Convergent);
+    if (Mutation == 4)
+      Callee->removeFnAttr(llvm::Attribute::NoDuplicate);
+    if (Mutation == 5)
+      Callee->setMemoryEffects(llvm::MemoryEffects::readOnly());
+    auto *Function = llvm::Function::Create(
+        Type, llvm::Function::ExternalLinkage, "caller", Module);
+    Builder.SetInsertPoint(
+        llvm::BasicBlock::Create(Context, "entry", Function));
+    llvm::Value *Site = Mutation == 6
+                            ? static_cast<llvm::Value *>(Function->getArg(1))
+                            : Builder.getInt64(0xffff800012345678ULL);
+    auto *Call = Builder.CreateCall(Callee, {Function->getArg(0), Site});
+    Builder.CreateUnreachable();
+    const auto Render = [&] {
+      return renderX86VirtualizationNativeCall(
+          Mutation == 7 ? Arch::X86 : Arch::X64, *Call, "", false,
+          {"context", "0xffff800012345678ULL"});
+    };
+    if (Mutation) {
+      EXPECT_THROW((void)Render(), std::invalid_argument) << Mutation;
+    } else {
+      auto Text = Render();
+      ASSERT_TRUE(Text);
+      EXPECT_NE(Text->find("__builtin_ia32_enclu_transfer_at_context"),
+                std::string::npos);
+      EXPECT_NE(Text->find("0xffff800012345678ULL"), std::string::npos);
+    }
+  }
+}
+
 TEST(X86SystemRegisterSource, NativeCallsRequireExactRegisterModeAndEffects) {
   if (!llvm::Intrinsic::lookupIntrinsicID("llvm.x86.readcr"))
     GTEST_SKIP() << "requires the native control/debug register SDK";

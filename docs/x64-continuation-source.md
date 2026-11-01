@@ -767,3 +767,14 @@ boundaries. Older requests keep their original admission and state layout.
 [native SMM return contract](x86-smm-return.md) for state ownership, native
 execution requirements and verification. A successful RSM abandons the
 compiler frame; it does not return a dispatcher status.
+
+## Native SGX input transfer
+
+`native-sgx-v13` exports a 2464-byte state and canonical ENCLU leaves 2/3/4
+through `llvm.x86.enclu.transfer.at.context` and its NeverC builtin. It imports
+the complete represented input bank and jumps to the original executable
+instruction site, preserving EENTER's PC-dependent RCX result. Native
+enclave/AEP/continuation code owns execution thereafter; no ordinary C return
+survives. See [the SGX contract](x86-sgx-transfer.md) for admission, native
+environment requirements and the distinction between input-state validation
+and actual enclave execution.
