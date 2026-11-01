@@ -142,6 +142,10 @@ analyzeMedMutableSource(const MedFunc &F, Arch Architecture,
   }
   std::set<va_t> Addresses;
   size_t RemainingOps = ::neverd::limits::ir::kMedMutableSourceMaxOperations;
+  // Scalar branches have at most two successors, so a symmetric graph can
+  // contain at most twice its block count in predecessor entries.
+  size_t RemainingPredecessors = 2 * F.Blocks.size();
+  std::vector<size_t> IncomingEdges(F.Blocks.size(), 0);
   bool HasReturn = false;
   // Bound every adjacency list before any reverse-edge scan can visit it.
   for (const auto &B : F.Blocks) {
@@ -150,13 +154,19 @@ analyzeMedMutableSource(const MedFunc &F, Arch Architecture,
                   std::to_string(B.Id) + " needs " +
                   std::to_string(B.Ops.size()) + " operations with " +
                   std::to_string(RemainingOps) + " remaining");
-    if (B.Succs.size() > 2 ||
+    if (B.Succs.size() > 2 || B.Preds.size() > RemainingPredecessors ||
         B.Preds.size() > ::neverd::limits::ir::kMedMutableSourceMaxBlocks)
       return Fail("mutable source CFG metadata exceeds its budget: block " +
                   std::to_string(B.Id) + " has " +
                   std::to_string(B.Succs.size()) + " successors and " +
                   std::to_string(B.Preds.size()) + " predecessors");
     RemainingOps -= B.Ops.size();
+    RemainingPredecessors -= B.Preds.size();
+    for (int Successor : B.Succs) {
+      if (Successor < 0 || static_cast<size_t>(Successor) >= F.Blocks.size())
+        return Fail("mutable source has invalid CFG edges");
+      ++IncomingEdges[Successor];
+    }
   }
   for (size_t BI = 0; BI < F.Blocks.size(); ++BI) {
     const auto &B = F.Blocks[BI];
@@ -165,6 +175,8 @@ analyzeMedMutableSource(const MedFunc &F, Arch Architecture,
         !B.ExceptionalPreds.empty() || !B.ExceptionalSuccs.empty() ||
         B.Ops.empty())
       return Fail("mutable source has unsupported block metadata");
+    if (B.Preds.size() != IncomingEdges[BI])
+      return Fail("mutable source has asymmetric CFG edges");
     for (bool Successors : {false, true}) {
       const auto &Edges = Successors ? B.Succs : B.Preds;
       std::set<int> Seen;
@@ -172,10 +184,15 @@ analyzeMedMutableSource(const MedFunc &F, Arch Architecture,
         if (ID < 0 || static_cast<size_t>(ID) >= F.Blocks.size() ||
             !Seen.insert(ID).second)
           return Fail("mutable source has invalid CFG edges");
-        const auto &Reverse =
-            Successors ? F.Blocks[ID].Preds : F.Blocks[ID].Succs;
-        if (std::count(Reverse.begin(), Reverse.end(), B.Id) != 1)
-          return Fail("mutable source has asymmetric CFG edges");
+        // Each predecessor must name a real outgoing edge. Together with
+        // unique edges and the incoming count, this proves both directions
+        // without rescanning a shared exit's complete predecessor list for
+        // every incoming guard.
+        if (!Successors) {
+          const auto &Reverse = F.Blocks[ID].Succs;
+          if (std::count(Reverse.begin(), Reverse.end(), B.Id) != 1)
+            return Fail("mutable source has asymmetric CFG edges");
+        }
       }
     }
     for (size_t OI = 0; OI < B.Ops.size(); ++OI) {
