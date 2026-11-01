@@ -876,7 +876,8 @@ How the rest of the frame is drawn depends on the system:
   corner, starting four pixels inside its visible edge. Under Wayland GNOME
   draws no shadow for such a window, so the window draws a ten-pixel shadow of
   its own, and that band resizes the window too, as GNOME's own windows allow;
-  under X11 GNOME draws the shadow.
+  under X11 GNOME draws the shadow. Maximized edges remain inactive until
+  the window is restored.
 - On Windows native hit testing makes all edges and corners resizable, including
   after a file loads. Dragging a maximized edge restores the window and resizes
   it from its visible rectangle. The workbench paints its frame and shadow;

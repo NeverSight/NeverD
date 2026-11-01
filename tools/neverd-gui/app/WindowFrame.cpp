@@ -316,6 +316,15 @@ Qt::Edges WindowFrame::edgesAt(QPoint at, QSize size, QMargins shadow) {
 bool WindowFrame::resizable() const {
   if (states_ & (Qt::WindowFullScreen | Qt::WindowMinimized))
     return false;
+  // Linux window managers own maximized geometry and restore it
+  // asynchronously. Keep their maximized edges inactive; Windows has a
+  // native sizing loop, and Cocoa can infer zoom from a manual size limit.
+  if (states_ & Qt::WindowMaximized) {
+    const auto platform = QGuiApplication::platformName();
+    if (platform != QLatin1String("windows") &&
+        platform != QLatin1String("cocoa"))
+      return false;
+  }
   return window_.minimumSize() != window_.maximumSize();
 }
 

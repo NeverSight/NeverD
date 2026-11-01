@@ -4796,9 +4796,16 @@ checks saved normal/maximized geometry, F11 from either state and legacy
 full-screen settings before loading a file. `oldFullscreenLayoutsKeepStartupGeometry`
 checks that global and project pane layouts cannot restore full screen.
 `framedWindowEdgesResize` checks native Windows hit targets and edge/corner
-drags on Quick Start and a loaded workbench, including maximize/restore.
+drags on Quick Start and a loaded workbench on Windows, X11 and Wayland,
+including maximize/restore. Windows maximized edges restore and resize;
+Linux maximized edges stay inactive until the window is restored, leaving
+the maximized geometry under the window manager's control. The Wayland
+runner supplies trusted pointer input and activation for restore-button
+checks. Set the initial workbench size before opening its file, since that
+operation starts its first native show and asynchronous configure.
 These workbench cases use the fixture worker when it is built. Native drag
-coverage requires the Windows platform plugin; offscreen reports it as skipped.
+coverage requires a native platform plugin and window manager; offscreen
+reports it as skipped.
 `restoredGeometrySurvivesHiddenNativeEvents` in `NeverDGuiUnits` processes
 pending native events before the first show, then checks normal/maximized
 startup and the restored size without injecting mouse input. This covers a
@@ -4850,11 +4857,16 @@ checks moving the floating window through its blank caption and resizing its
 drawn edges. Unlocking enables caption and tab docking drags; a locked caption
 moves the window on the desktop. Pane names and icons remain in the tabs;
 the floating caption contains only window controls. No system caption is added.
-While a whole floating window is dragged, its native surface is minimized so
-it cannot obscure the target. Cancelled drags must restore its native position,
-size and window state, and accept another mouse click. No input is sent
-to the existing desktop. `NEVERD_SHORTCUT_CAPTURES` saves floating-window and
-drop-preview captures, including the actual compositor desktop on Wayland.
+While a whole floating window is dragged, its mapped surface becomes transparent
+to painting and input so it cannot obscure the target. Cancelled drags must
+restore its native position, size and window state, and accept another mouse
+click. No input is sent to the existing desktop. The source stays mapped without
+minimizing, so
+cancellation does not depend on a new activation grant from the compositor.
+The native restore checks record the window manager's accepted normal size,
+including X11 size-hint quantization at fractional scale.
+`NEVERD_SHORTCUT_CAPTURES` saves floating-window and drop-preview captures,
+including the actual compositor desktop on Wayland.
 The desktop CI runs native drag cases on X11, Windows
 and macOS; offscreen runs skip gestures requiring native windows.
 

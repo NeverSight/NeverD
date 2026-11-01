@@ -19,6 +19,7 @@
 #include <QCoreApplication>
 #include <QCursor>
 #include <QEnterEvent>
+#include <QGraphicsOpacityEffect>
 #include <QGuiApplication>
 #include <QHBoxLayout>
 #include <QHoverEvent>
@@ -78,7 +79,6 @@ constexpr int SeparatorFadeOutMs = 100;
 constexpr QMargins DockAreaMargins(0, 5, 0, 0);
 
 QPointer<KDDockWidgets::QtWidgets::FloatingWindow> DockDragSource;
-Qt::WindowStates DockDragWindowState;
 
 bool beginDockDrag(KDDockWidgets::Core::Draggable *draggable) {
   auto *view = KDDockWidgets::QtCommon::View_qt::asQWidget(draggable->asView());
@@ -90,18 +90,22 @@ bool beginDockDrag(KDDockWidgets::Core::Draggable *draggable) {
   if (!onWayland() || !floating || !draggable->isWindow())
     return true;
   DockDragSource = floating;
-  DockDragWindowState = floating->windowHandle()->windowStates();
   // Wayland leaves the source in place while QDrag moves its snapshot. It
-  // would cover both the workbench's drop targets and their preview. Minimize
-  // only after QDrag has its pointer serial and snapshot; unlike hide/show,
-  // this retains the surface and compositor-owned position.
+  // would cover both the workbench's drop targets and their preview. Make
+  // the mapped surface transparent to painting and input after QDrag has
+  // its pointer serial and snapshot. Minimizing requires a new activation
+  // to recover on cancellation, which the compositor can refuse; hide/show
+  // loses the compositor-owned position.
   // A pane dragged within a multi-group floating window still needs that
   // window's other groups as drop targets, so only whole-window drags do this.
   const auto source = DockDragSource;
   QTimer::singleShot(0, floating, [source] {
-    if (source && source == DockDragSource)
-      source->windowHandle()->setWindowStates(DockDragWindowState |
-                                              Qt::WindowMinimized);
+    if (!source || source != DockDragSource)
+      return;
+    auto *opacity = new QGraphicsOpacityEffect(source);
+    opacity->setOpacity(0);
+    source->setGraphicsEffect(opacity);
+    source->windowHandle()->setFlag(Qt::WindowTransparentForInput);
   });
   return true;
 }
@@ -110,9 +114,8 @@ void endDockDrag() {
   const auto source = DockDragSource;
   DockDragSource.clear();
   if (source && !source->floatingWindow()->beingDeleted()) {
-    source->windowHandle()->setWindowStates(DockDragWindowState);
-    // Removing WindowMinimized alone does not unminimize a Wayland toplevel.
-    source->windowHandle()->requestActivate();
+    source->windowHandle()->setFlag(Qt::WindowTransparentForInput, false);
+    source->setGraphicsEffect(nullptr);
   }
 }
 

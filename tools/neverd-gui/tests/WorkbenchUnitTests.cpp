@@ -2189,7 +2189,8 @@ private slots:
 
   void restoredGeometrySurvivesHiddenNativeEvents() {
     QFETCH(bool, maximized);
-    const QSize normal(700, 450);
+    // Keep the saved size on X11's resize grid at 150% scale as well.
+    const QSize normal(704, 448);
     QByteArray geometry;
     {
       QWidget previous;
