@@ -39,6 +39,14 @@ extern "C" {
 /// exception delivery. V10/V11 require mxcsr_mask but no paging/Intel-return
 /// bindings; neither inherits the V6/V7/V8/V9 state or return capabilities.
 ///
+/// V6 event_delivery exports neverd_x64_deliver_event_v6 for an explicit
+/// selected fault/trap/IRQ/NMI, including compatibility entry and CPL0..3.
+/// It returns 7 after handler setup, 15 while inhibited, or 5 for invalid
+/// input/preconditions. It also routes canonical UD2 and admitted unsigned
+/// 64-bit DIV to #UD/#DE. The producer owns priority, restart state and
+/// shadows; delivery RAM must succeed. See docs/x86-event-delivery.md for the
+/// contract.
+///
 /// The returned C includes its state layout and a bounded resume driver. It
 /// does not use an ordinary function ABI or execute the loaded image. CALL,
 /// RET, privilege return and exception entry stop at environment boundaries.

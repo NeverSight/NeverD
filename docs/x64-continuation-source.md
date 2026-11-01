@@ -746,3 +746,16 @@ These transitions follow Intel SDM 325462-090, ERETS/ERETU and Volume 3A
 sections 8.4.1-8.4.2. CET checks, faults, virtual-NMI
 controls, physical FRED execution and subsequent event delivery remain
 unqualified. Ordinary lifting refuses both forms without this state owner.
+
+## Explicit fault and asynchronous-event delivery
+
+V6 requests may set `event_delivery: true` to export
+`neverd_x64_deliver_event_v6`. The supplied event owns its cause and saved PC;
+the shared INT owner delivers faults, traps, IRQs and NMIs through the live
+IDT, privilege stacks and IST. This entry accepts 16/32-bit compatibility or
+64-bit state at CPL0–3. It returns 7 after delivery, 15 while inhibited, or 5
+on invalid input/preconditions. The same option routes canonical UD2 and the
+admitted unsigned 64-bit DIV fault conditions through that owner. See the
+[event contract and native qualification](x86-event-delivery.md) for the input
+layout, error-code/RF/CR2 rules, interruptibility and remaining memory/event
+boundaries. Older requests keep their original admission and state layout.

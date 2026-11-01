@@ -167,6 +167,7 @@ static int event_query(int cpu, struct kvm_run *run, uint8_t *memory,
                        const struct kvm_sregs *initial, event_state_t *q,
                        unsigned kind, unsigned immediate) {
   struct kvm_sregs before = *initial;
+  before.cr2 = q->cr2;
   event_segment_t fs = {q->fs_base, q->fs.limit, q->fs.selector,
                         q->fs.attributes};
   event_segment_t gs = {q->gs_base, q->gs.limit, q->gs.selector,
@@ -232,6 +233,34 @@ static int event_query(int cpu, struct kvm_run *run, uint8_t *memory,
     memcpy(memory + registers.rip, code + (kind == 11 ? 0 : 1),
            kind == 11 ? 3 : 2);
   }
+  if (kind >= 13) {
+    // Faults execute original instructions. In particular KVM's event setter
+    // is not used to synthesize #PF/#DE or their saved RF/error-code values.
+    static const uint8_t code[][3] = {
+        {0xf7, 0xf1, 0x90}, // DIV ECX, zero divisor supplied by caller.
+        {0x0f, 0x0b, 0x90}, // UD2.
+        {0x0f, 0x22, 0xc0}, // MOV CR0,RAX, PG=1 and PE=0 (or CPL>0).
+        {0x8b, 0x01, 0x90}, // MOV EAX,[RCX], unmapped original address.
+        {0x90, 0x90, 0x90}, {0x90, 0x90, 0x90}, {0xcd, 0, 0x90}};
+    REQUIRE(kind <= 19);
+    uint8_t *original = memory + registers.rip + before.cs.base;
+    memcpy(original, code[kind - 13], 3);
+    if (kind == 16 && !before.cs.l && !before.cs.db) {
+      const uint8_t addr32[] = {0x67, 0x8b, 0x01};
+      memcpy(original, addr32, sizeof(addr32));
+    }
+    if (kind == 19) {
+      REQUIRE(immediate <= UINT8_MAX);
+      original[1] = immediate;
+    }
+    if (kind == 17) {
+      REQUIRE(immediate <= UINT8_MAX);
+      struct kvm_interrupt irq = {.irq = immediate};
+      REQUIRE(ioctl(cpu, KVM_INTERRUPT, &irq) == 0);
+    } else if (kind == 18) {
+      REQUIRE(ioctl(cpu, KVM_NMI, 0) == 0);
+    }
+  }
   memory[stop] = 0x90;
   memory[0x1800] = memory[0x1801] = 0x90;
   // With a userspace IRQ chip, KVM_RUN reloads CR8 from this field.
@@ -248,6 +277,10 @@ static int event_query(int cpu, struct kvm_run *run, uint8_t *memory,
   REQUIRE(registers.rip == stop);
   struct kvm_sregs after;
   REQUIRE(ioctl(cpu, KVM_GET_SREGS, &after) == 0);
+  if (kind == 16) {
+    q->cr2 = after.cr2;
+    before.cr2 = after.cr2;
+  }
   const struct kvm_segment values[] = {after.cs, after.ss, after.ds,  after.es,
                                        after.fs, after.gs, after.ldt, after.tr};
   for (unsigned i = 0; i != 8; ++i) {
@@ -471,7 +504,7 @@ int main(int argc, char **argv) {
     REQUIRE(run->io.direction == KVM_EXIT_IO_OUT && run->io.port == 0xe9 &&
             run->io.size == 1 && run->io.count == 1);
     const unsigned kind = *((uint8_t *)run + run->io.data_offset);
-    REQUIRE(kind >= 1 && kind <= 12);
+    REQUIRE(kind >= 1 && kind <= 19);
     const int fast_system = kind >= 9 && kind <= 11;
     if (fast_system) {
       int intel = 0, sep = 0;

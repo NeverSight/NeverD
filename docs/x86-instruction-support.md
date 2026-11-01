@@ -3297,3 +3297,23 @@ now reject those bytes. The [qualification record](evidence/x86-rtm-prefixes-202
 records the counterexample and native compiler/source comparisons. The other
 context, fault and physical-execution gaps above remain; the r6 SDK pin is
 unchanged.
+
+## Explicit IA-32e fault and event delivery
+
+The V6 `event_delivery` binding now supplies a shared exception/IRQ/NMI entry,
+including CPL0–3, non-flat 16/32-bit compatibility sources, conforming handlers,
+RSP0–2, all IST choices, optional architectural error codes, RF classification,
+CR2 and NMI blocking. It distinguishes inhibited events from invalid state and
+stops before executing the handler. Canonical UD2 and admitted unsigned 64-bit
+DIV now produce #UD/#DE through this entry when the binding is selected.
+
+[The delivery contract](x86-event-delivery.md) and its original-instruction KVM
+matrix define this coverage. It is not automatic fault production for every
+instruction, complete legacy i386 execution, SMM/SGX transition support or a
+faulting descriptor/page-walk model. LLVM/NeverC already express the integer,
+memory and control-flow operations used by this projection; no new inline asm
+or compiler intrinsic is required for this change.
+
+The [event-delivery evidence](evidence/x86-event-delivery-2026-11-01.json)
+records both 202-test SDK suites without skips, byte-identical source artifacts,
+and 80,640 additional NeverC/full-LLVM native comparisons.
