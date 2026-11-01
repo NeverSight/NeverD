@@ -1899,6 +1899,15 @@ target_include_directories(NeverDSourceCallIntegerViewTests PRIVATE
 target_compile_definitions(NeverDSourceCallIntegerViewTests PRIVATE
   NEVERD_TEST_CLANG="${NEVERD_TEST_CLANG_EXECUTABLE}")
 
+add_neverd_unittest(NeverDSourceStackSpillObserverTests
+  core/SourceStackSpillObserverTests.cpp
+  LINK_COMPONENTS BackendC BackendLLVM Loader Pipeline
+)
+target_include_directories(NeverDSourceStackSpillObserverTests PRIVATE
+  ${CMAKE_SOURCE_DIR}/include ${LLVM_INCLUDE_DIRS})
+target_compile_definitions(NeverDSourceStackSpillObserverTests PRIVATE
+  NEVERD_TEST_CLANG="${NEVERD_TEST_CLANG_EXECUTABLE}")
+
 add_neverd_unittest(NeverDNoReturnTests
   core/MedNoReturnTests.cpp
   core/InternalNoReturnTests.cpp

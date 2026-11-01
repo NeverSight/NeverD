@@ -17,6 +17,7 @@
 #include "neverd/ir/med/MedIntegerReturnRange.h"
 
 #include <cstddef>
+#include <cstdint>
 #include <map>
 #include <string>
 #include <vector>
@@ -26,6 +27,15 @@ struct BinaryImage;
 struct LowFunc;
 struct MedCallReturnRead;
 struct MedFunc;
+struct TargetRegInfo;
+
+/// Whether the settled source return contract observes any bytes in a
+/// physical register view. Primary results, preserved state and explicit
+/// multi-register results remain live. On a 64-bit target, merely being an
+/// architectural secondary result register does not make it a scalar result.
+bool sourceReturnReadsRegister(const MedFunc &Func, const TargetRegInfo &TRI,
+                               BinaryFormat Format, uint64_t RegOff,
+                               uint16_t Size);
 
 /// Check exact entry-relative loads against reaching physical x86 CALL
 /// return slots before source cleanup. An ordinary C call does not write the
