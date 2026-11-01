@@ -51,6 +51,12 @@ A live outer native checkpoint contains all translated state and RAM writes,
 nested controls and selected physical calls. Internal refusal uses an unused
 original XABORT code and rolls back before returning. Both source routes and
 dispatchers share this owner; see [the RTM contract](x86-rtm-regions.md).
+`decode/X86/X86TransactionEncoding` owns the byte grammar shared by lifting,
+entry discovery and both native providers. It authenticates prefix ordering,
+lengths, XABORT immediates and signed XBEGIN targets. XEND/XTEST reject their
+forbidden NP prefixes before emitting effects, even when the decoder names a
+transaction instruction. No source-layer copy of that grammar may silently
+canonicalize a faulting instruction.
 
 `X86DescriptorState.h` owns descriptor-state operand shapes; LowIR,
 Low-to-Med, Med verification and source output use that contract.

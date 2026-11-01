@@ -278,7 +278,7 @@ test resumes through a coupled SS/RSP switch and uses the new stack.
 | SYSENTER, SYSEXIT/SYSEXITQ, SYSRET/SYSRETQ, RSM | Ordinary source still lacks complete register, privilege, segment and SMM continuation state. The separate explicit x64 continuation V5/V6 profiles own canonical SYSRET/SYSRETQ with live STAR and CS/SS caches, flags and compatibility/64-bit target state. SYSRET explicitly consumes eight arbitrary values for the legacy GPR high halves; all defined bits are preserved or assigned as specified. The Intel V7 profile additionally owns canonical SYSENTER from CPL0–3 and SYSEXIT/SYSEXITQ from CPL0, with live CS/ESP/EIP MSRs, complete target caches, state and explicit stops. Unprefixed SYSENTER/SYSEXIT also accept flat compatibility entry with either CS.D and a complete in-limit instruction. RF, all IOPL values and VIF/VIP are admitted on entry; TF still requires debug-trap delivery. Nonflat compatibility entry, legacy modes and faulting transitions remain unqualified; SYSRET is architecturally invalid in compatibility mode, and RSM still requires a full SMM state owner. |
 | MPX outside explicit V11 | The [V11 source profile](x86-mpx-source.md) owns all seven qualified long-mode families, bounds, enable state, tables, BNDSTATUS, original branch initialization and a pending-#BR stop through both C routes. Ordinary function ABI, i386/compatibility source entry, memory faults, handler delivery, transactions and physical MPX remain unqualified. |
 | XACQUIRE/XRELEASE outside explicit native steps | The [HLE source binding](x86-hle-state.md) retains 19 memory-operation families through native LLVM/NeverC contexts and both C routes. PAUSE forces a native abort/retry before publishing state; original registers, widths, bit indexes and addr32/FS/GS addressing remain explicit. Ordinary ABI lifting, external active transactions, full RTM checkpoints, native fault continuation and physical HLE commit/rollback remain unqualified. |
-| RTM outside selected native regions | The [native RTM region provider](x86-rtm-regions.md) owns selected x64 transactions through a live outer checkpoint, including memory/state rollback, nesting, selected CALL/RET, loops and actual abort status. Standalone XABORT/XTEST are bound separately within that provider. Unsupported paths and attempt-budget exhaustion roll back and decline. Other state effects, noncanonical prefixes, i386 state providers, faults/events and physical RTM qualification remain open. |
+| RTM outside selected native regions | The [native RTM region provider](x86-rtm-regions.md) owns selected x64 transactions through a live outer checkpoint, including memory/state rollback, nesting, selected CALL/RET, loops and actual abort status. Standalone XABORT/XTEST are bound separately within that provider. Unsupported paths and attempt-budget exhaustion roll back and decline. The shared prefix reader now owns valid prefixed forms and rejects forbidden NP XEND/XTEST encodings. Other state effects, i386 state providers, faults/events and physical RTM qualification remain open. |
 | Remaining compact-memory descriptor/fault execution | Native LLVM and both C routes retain long-mode stack references and i386 CS/ES/SS offsets, including implicit SS for SP/BP bases, alongside DS/FS/GS. Concrete i386 CS/ES/SS accesses still require a descriptor environment; zero-mask suppression remains available. Physical AVX-512 and descriptor-fault execution remain unqualified. |
 | Remaining four-source descriptor/fault execution | Native lowering retains explicit SSA sources, long-mode stack references and i386 CS/ES/SS offsets, including implicit SS. Concrete active CS/ES/SS accesses still require a descriptor environment. Physical AVX512_4FMAPS/AVX512_4VNNIW execution and faults remain unqualified. Legacy implicit-bank IDs remain guarded at native output. |
 | Remaining RAO-INT/CMPccXADD descriptor/fault execution | Legacy and EVEX AADD/AAND/AOR/AXOR, and VEX/EVEX CMPccXADD, have distinct native encoding contracts. Legacy RAO includes i386 CS/ES/SS and implicit SS offsets; long-mode default-stack memory retains its independent provenance control. Concrete i386 CS/ES/SS accesses still require a descriptor environment. Physical atomicity, memory-type behavior and CPU faults remain unqualified. |
@@ -3279,3 +3279,21 @@ header counterexample and native-intrinsic correction in NeverC, plus the LLVM
 header constraint fix. This closes selected transactional body, nesting and
 rollback execution; physical RTM, other state domains, faults/events and the
 release/pinning gate remain separate.
+
+
+## Native RTM prefix completion and NP correction
+
+The two explicit RTM providers now share the instruction byte grammar with
+ordinary lifting. Valid ignored prefixes and XBEGIN width/REX ordering retain
+the complete original lengths and signed fallback. Prefixed XABORT immediates
+participate in the private-refusal collision check. Immediate-abort pairs
+independently admit prefixes on both original instructions.
+
+The same work fixed an existing semantic error: 66/F2/F3 XEND/XTEST were lifted
+as valid transactions although their NP encodings forbid those prefixes.
+SDE original-byte execution rolls back the preceding store; the previous
+canonicalized source committed it. Both lifting modes and both source routes
+now reject those bytes. The [qualification record](evidence/x86-rtm-prefixes-2026-11-01.json)
+records the counterexample and native compiler/source comparisons. The other
+context, fault and physical-execution gaps above remain; the r6 SDK pin is
+unchanged.

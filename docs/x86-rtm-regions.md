@@ -35,8 +35,8 @@ the outer XBEGIN, nested controls, ordinary steps and XEND. The context is
 read-only. One outer environment-budget unit covers each invocation;
 translated-instruction budgets count steps outside that invocation.
 
-Entry discovery follows canonical XBEGIN bodies and fallbacks and XEND/XTEST
-fallthroughs. Calls require `follow_internal_calls` and selected targets;
+Entry discovery follows authenticated XBEGIN bodies and fallbacks and
+transaction-control fallthroughs. Calls require `follow_internal_calls` and selected targets;
 `callee_depth` bounds automatic direct-callee discovery. Explicit instruction
 lists select exactly those addresses. Both outer dispatch styles use the same
 transaction provider.
@@ -45,6 +45,14 @@ The generated function uses the standard native XBEGIN, XEND, XABORT and
 XTEST builtins and a native CPUID availability query in NeverC. A compatible
 Clang uses its RTM builtins and the CPUID assembly fallback. The RTM target
 attribute belongs to the provider; callers need not enable RTM globally.
+
+The common transaction byte reader owns ignored segment/address prefixes,
+REX ordering and the XBEGIN operand-size override. Both providers use the full
+original instruction lengths for their PCs. XEND/XTEST use **NP** encodings:
+66/F2/F3 are forbidden even if Capstone supplies a transaction mnemonic, and
+REX.W does not make those prefixes legal. Such bytes fail lifting and source
+export; they are never replaced by unprefixed instructions. LOCK, truncated
+instructions and encodings longer than 15 bytes also fail admission.
 
 ## Completion and rollback
 
@@ -67,7 +75,7 @@ original XABORT, export reserves an immediate absent from the selected bytes.
 A selection containing all 256 original immediates fails with a diagnostic;
 it must be split into selections with an available code.
 
-Standalone canonical XABORT and XTEST are also bound outside a transaction.
+Standalone authenticated XABORT and XTEST are also bound outside a transaction.
 XABORT preserves state apart from PC; XTEST sets ZF, clears CF/PF/AF/SF/OF and
 preserves other flags. Standalone XEND requires fault delivery and stays a
 native boundary in this nonfaulting profile. CPUID and PAUSE inside a
@@ -146,3 +154,25 @@ and i386 IR with the host compiler.
 Physical RTM, fault/event continuations and the remaining x86 contracts are
 not qualified by this record. The production r6 SDK and LLVM gitlink remain
 unchanged; no new release is claimed.
+
+## Prefix qualification and invalid-control correction
+
+The [prefix qualification record](evidence/x86-rtm-prefixes-2026-11-01.json)
+covers 37 original entry/pair prefix patterns, both C routes and dispatchers,
+O0/O2, NeverC and both full LLVM backend pass managers: 96 execution profiles,
+340,992 harness rounds and 170,496 independent original-code comparisons.
+Each SDK passes 99 owning regressions. The five additional native-source
+checks all pass with the native SDK; r6 passes four and retains one existing
+SDK-capability skip. The original-byte oracle exercises commits, aborts,
+standalone controls and unchanged state when
+RTM is unavailable. The immediate-pair oracle varies both instruction prefixes
+independently. The all-256-immediates refusal includes prefixed XABORTs.
+
+An independent SDE experiment isolated a previous unsound lifting rule:
+`66 0f 01 d5` and `66 0f 01 d6` abort the original transaction and roll back its
+RAM, while discarding the prefix produced a successful commit. F2/F3 and REX
+ordering variants expose the same NP violation. The shared reader now rejects
+these forms before LowIR effects, including permissive lifting. This follows
+the NP opcode notation in the [Intel instruction-set reference](https://cdrdv2-public.intel.com/671110/325383-sdm-vol-2abcd.pdf),
+not an inference from the disassembler mnemonic. SDE evidence does not qualify
+physical RTM or fault delivery.

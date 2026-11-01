@@ -18135,6 +18135,18 @@ RAM, guest-stack writes, standalone controls and private budget rollback at
 O0/O2. CPUID-disabled mode must decline. See the [domain and limits](x86-rtm-regions.md);
 processor-model results do not qualify physical hardware or fault delivery.
 
+`X86TransactionEncoding.ControlsShareExactPrefixAndImmediateOwnership` covers
+all XABORT codes, 15-byte controls, prefix ordering, forbidden NP forms and
+truncation on x86/x64 through all three decode routes and both lifting modes.
+`RtmRegionsRetainPrefixedControlsAndDiscovery` and
+`RtmAbortRegionsRetainBothInstructionPrefixes` each export 37 original prefix
+patterns in both C routes and dispatchers. Run the same verifier with
+`--suite prefixes` or `--suite prefix-pairs` against their saved artifacts.
+`RtmRegionsRejectForbiddenControlPrefixes` checks both public source routes
+reject 66/F2/F3 XEND/XTEST instead of generating a valid unprefixed instruction.
+See the [prefix record](evidence/x86-rtm-prefixes-2026-11-01.json) for the
+independent original-byte counterexample and qualified compiler matrices.
+
 ## SNP and SEV-ES native completion
 
 `NeverDX86SnpSourceTests` checks exact native call effects, modes, pointer

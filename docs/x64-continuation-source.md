@@ -528,7 +528,8 @@ These are native bindings, not scalar simulations of the debug or paging banks.
 
 With `kernel-events-v6`, `native_rtm_abort_regions: true` emits the optional
 `neverd_x64_rtm_abort_environment_v6` callback. It accepts only an authenticated
-canonical rel16 or rel32 XBEGIN immediately followed by XABORT imm8. The
+rel16 or rel32 XBEGIN immediately followed by XABORT imm8, with both
+instructions authenticated by the shared prefix reader. The
 transaction runs in one native compiler operation, so neither a C return nor a
 translated step
 can split its checkpoint. On abort, the callback zero-extends the actual EAX
@@ -542,8 +543,8 @@ unit owns the pair, including an abort before XABORT; the translated-instruction
 budget counts only the subsequent translated steps. A fallback that returns to
 XBEGIN consumes another environment unit. The original XBEGIN remains a native
 request in the instruction manifest. The separate
-`native_rtm_abort_environment.regions` receipts bind all eight or nine original
-bytes, the immediate and the fallback. They do not certify other native requests,
+`native_rtm_abort_environment.regions` receipts bind every original byte,
+including admitted prefixes, the immediate and the fallback. They do not certify other native requests,
 including an independently entered XABORT.
 
 NeverC uses `__builtin_ia32_rtm_abort_pair` and the native
@@ -556,8 +557,8 @@ independent C calls to `_xbegin` and `_xabort`.
 Execution requires an RTM-capable host outside RTM/HLE, with no debug traps or
 faults. If CPUID does not advertise RTM, the provider declines without changing
 explicit state. It never substitutes a constant abort status. Other transaction
-bodies and noncanonical prefix combinations remain unsupported by this pair
-binding. The instruction
+bodies require the complete-region binding below. Invalid encodings remain
+unsupported. The instruction
 behavior and abort status follow [Intel's instruction-set reference](https://cdrdv2-public.intel.com/671110/325383-sdm-vol-2abcd.pdf).
 
 ## Complete selected RTM attempts
