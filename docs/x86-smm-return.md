@@ -82,6 +82,12 @@ both captured C routes through NeverC and the full LLVM legacy/new backends
 at O0/O2. Each profile exercises four compiler frames, including live integer
 pressure and a dynamically sized, aligned local array.
 
+The [qualification record](evidence/x86-smm-return-2026-11-01.json) retains
+both SDK source hashes, two complete 204-test continuation runs with no skips,
+six compiler profiles (18,432 native state pairs), and twelve source-export
+profiles (36,864 pairs). LLVM's compiler tests also cover x32 pointer widening,
+ELF/COFF/Mach-O, both backend pass managers and rejected modes/features.
+
 SMI selection/entry, CET, VMX/SVM interactions, enclave transitions, faults,
 asynchronous interruption and bare-metal SMM remain outside this projection.
 They must not be inferred from successful RSM transport or counted as qualified

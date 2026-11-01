@@ -3318,3 +3318,21 @@ or compiler intrinsic is required for this change.
 The [event-delivery evidence](evidence/x86-event-delivery-2026-11-01.json)
 records both 202-test SDK suites without skips, byte-identical source artifacts,
 and 80,640 additional NeverC/full-LLVM native comparisons.
+
+## Native SMM software-state restoration
+
+The [native SMM V12 profile](x86-smm-return.md) now imports explicit SIMD/MXCSR
+and transports x87, CR2, CR8 and KernelGSBase before canonical RSM. The new
+`llvm.x86.rsm.context(ptr)` and NeverC builtin keep XRSTOR64/RSM adjacent after
+register allocation and scheduling, with no compiler memory or stack access
+between them. Hardware consumes the actual ambient SMI save image. SVM and
+SMM share XSAVE admission and explicit SIMD import in one owner.
+
+[The recorded qualification](evidence/x86-smm-return-2026-11-01.json) contains
+408 passing continuation tests across both SDKs, identical C/manifest artifacts,
+18,432 native compiler state pairs and 36,864 native exported-source pairs.
+The oracle retains the original image independently of the source projection;
+wrong RSM bytes and omitted XRSTOR are rejected. These are KVM-mediated SMM
+results. SMI entry, other software-managed banks, fault/event routing, SGX and
+legacy i386 state retain their documented boundaries; no release or pin change
+is inferred from this qualification.
