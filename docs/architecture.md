@@ -15484,4 +15484,9 @@ Raw x64 regions admit strictly authenticated default-space PREFETCHNTA/T0/T1/T2 
 
 Authenticated raw x64 regions retain legacy MOVNTDQ as a native 128-bit streaming store with its 16-byte alignment guard. X86SystemState owns operand and assembly contracts. In the explicit nonfaulting domain, analysis uses an ordinary STORE view through the existing alias, frame and return-cell checks; emitted code retains MOVNTDQ and exact SFENCE operations. This finite memory projection does not model cache placement or concurrent observers.
 
+The shared legacy vector form audit requires the decoded destination's write
+role to agree with the MOVNTDQ store encoding. Native instruction-flow queries
+and comparison capture consume that same admission decision, so a valid
+streaming store remains ordinary fallthrough in each surface.
+
 Automatic control discovery can split a finite live MOVS/STOS count into guarded cases. The instruction prefix must preserve the register; each predecessor independently proves an exhaustive domain within `MaxControlTuples`. Fallthrough cuts and guards have synthetic provenance. Each case still proves its count and memory effects under cumulative budgets. Incomplete domains, unbounded counts and missing entry constraints remain refused.
