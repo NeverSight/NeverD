@@ -15,7 +15,6 @@
 #include "neverd/decode/X86/X86TransactionEncoding.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/lift/X86/X86Lifter.h"
-#include "neverd/support/ISAEncoding.h"
 
 #include <cstdint>
 
@@ -24,66 +23,28 @@ namespace {
 
 bool validTransactionEncoding(const cs_insn *Insn, const cs_x86 &X,
                               bool Mode64) {
-  if (Insn->id == X86_INS_XBEGIN) {
-    const auto E = x86TransactionBeginEncoding({Insn->bytes, Insn->size},
-                                               Insn->address, Mode64);
-    return Insn->detail && E &&
+  if (!Insn->detail)
+    return false;
+  const auto E =
+      x86TransactionEncoding({Insn->bytes, Insn->size}, Insn->address, Mode64);
+  if (!E)
+    return false;
+  switch (E->Kind) {
+  case X86TransactionKind::Begin:
+    return Insn->id == X86_INS_XBEGIN &&
            x86TransactionBeginDetailMatches(X, *E, Mode64) &&
            uint64_t(X.operands[0].imm) == E->Target;
+  case X86TransactionKind::Abort:
+    return Insn->id == X86_INS_XABORT &&
+           x86TransactionControlDetailMatches(X, *E, Mode64);
+  case X86TransactionKind::End:
+    return Insn->id == X86_INS_XEND &&
+           x86TransactionControlDetailMatches(X, *E, Mode64);
+  case X86TransactionKind::Test:
+    return Insn->id == X86_INS_XTEST &&
+           x86TransactionControlDetailMatches(X, *E, Mode64);
   }
-  const unsigned Body = 3;
-  if (!Insn->detail || Insn->size < Body ||
-      Insn->size > x86::kMaxInstructionLen)
-    return false;
-  const unsigned Offset = Insn->size - Body;
-  uint8_t Prefix[4]{}, Rex = 0;
-  for (unsigned I = 0; I < Offset; ++I) {
-    const auto Byte = Insn->bytes[I];
-    if (Mode64 && Byte >= 0x40 && Byte <= 0x4f) {
-      Rex = Byte;
-      continue;
-    }
-    Rex = 0;
-    if (Byte == 0xf2 || Byte == 0xf3)
-      Prefix[0] = Byte;
-    else if (Byte == 0x66)
-      Prefix[2] = Byte;
-    else if (Byte == 0x67)
-      Prefix[3] = Byte;
-    else if (Byte == 0x26 || Byte == 0x2e || Byte == 0x36 || Byte == 0x3e ||
-             Byte == 0x64 || Byte == 0x65)
-      Prefix[1] = Byte;
-    else
-      return false;
-  }
-  // Capstone drops ignored repeat prefixes from its normalized prefix slot.
-  if ((X.prefix[0] && X.prefix[0] != Prefix[0]) || X.rex != Rex ||
-      X.prefix[1] != Prefix[1] || X.prefix[2] != Prefix[2] ||
-      X.prefix[3] != Prefix[3] || X.opcode[2] || X.opcode[3] ||
-      X.encoding.disp_size || X.encoding.disp_offset ||
-      X.addr_size != (Mode64 ? (Prefix[3] ? 4 : 8) : (Prefix[3] ? 2 : 4)))
-    return false;
-  if (Insn->id == X86_INS_XABORT) {
-    if (X.op_count != 1 || X.operands[0].type != X86_OP_IMM ||
-        (X.operands[0].size != 1 && X.operands[0].size != 2 &&
-         X.operands[0].size != 4 && X.operands[0].size != 8) ||
-        X.opcode[0] != 0xc6 || X.opcode[1] || X.modrm != 0xf8 ||
-        X.encoding.modrm_offset != Offset + 1 || X.encoding.imm_size != 1 ||
-        X.encoding.imm_offset != Offset + 2 || Insn->bytes[Offset] != 0xc6 ||
-        Insn->bytes[Offset + 1] != 0xf8)
-      return false;
-    const auto Code = Insn->bytes[Offset + 2];
-    // Capstone may sign-extend the encoded byte to its mode-sized operand.
-    return X.operands[0].imm == Code ||
-           X.operands[0].imm == static_cast<int8_t>(Code);
-  }
-  const uint8_t ModRM = Insn->id == X86_INS_XEND ? 0xd5 : 0xd6;
-  return (Insn->id == X86_INS_XEND || Insn->id == X86_INS_XTEST) &&
-         !X.op_count && X.opcode[0] == 0x0f && X.opcode[1] == 0x01 &&
-         X.modrm == ModRM && X.encoding.modrm_offset == Offset + 2 &&
-         !X.encoding.imm_size && !X.encoding.imm_offset &&
-         Insn->bytes[Offset] == 0x0f && Insn->bytes[Offset + 1] == 0x01 &&
-         Insn->bytes[Offset + 2] == ModRM;
+  llvm_unreachable("invalid transaction kind");
 }
 } // namespace
 

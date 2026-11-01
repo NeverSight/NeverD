@@ -18,6 +18,7 @@ def digest(path):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--suite", choices=("regions", "prefixes", "prefix-pairs"), default="regions")
     parser.add_argument("--compiler", type=Path, required=True)
     parser.add_argument("--backend-llc", type=Path)
     parser.add_argument("--new-pm", action="store_true")
@@ -57,8 +58,16 @@ def main():
         if result.returncode:
             raise RuntimeError(f"{command}\n{result.stdout}\n{result.stderr}")
 
-    inputs = sorted(args.sources.resolve().glob("rtm-region-*.test.c"))
-    assert len(inputs) == 48, "expected 12 scenarios, two C routes and two dispatchers"
+    pair = args.suite == "prefix-pairs"
+    provider_name = "neverd_x64_rtm_abort_environment_v6" if pair else "neverd_x64_rtm_environment_v6"
+    binding_name = "native_rtm_abort_environment" if pair else "native_rtm_environment"
+    pattern = ("rtm-prefix-pair-*.test.c" if pair else
+               "rtm-prefix-*.test.c" if args.suite == "prefixes" else "rtm-region-*.test.c")
+    inputs = sorted(path for path in args.sources.resolve().glob(pattern)
+                    if pair or not path.name.startswith("rtm-prefix-pair-"))
+    expected = 48 if args.suite == "regions" else 4
+    assert len(inputs) == expected, f"expected {expected} inputs for {args.suite}"
+    checks = {}
     for path in inputs:
         stem = path.name.removesuffix(".test.c")
         source = path.with_name(stem + ".c")
@@ -66,7 +75,10 @@ def main():
         assert path.read_bytes().startswith(code)
         manifest = json.loads(path.with_name(stem + ".json").read_text())
         assert manifest["source_sha256"] == digest(source)
-        assert manifest["native_rtm_environment"]["provider"] == "neverd_x64_rtm_environment_v6"
+        binding = manifest[binding_name]
+        assert binding["provider"] == provider_name
+        checks[stem] = (64 * len(binding["regions"]) if pair else
+                        128 * len(binding["begins"]) if args.suite == "prefixes" else 64)
         sources[stem] = {"source_sha256": digest(source),
                          "manifest_sha256": digest(path.with_name(stem + ".json")),
                          "test_sha256": digest(path),
@@ -82,10 +94,12 @@ def main():
                  "-fno-pie", "-fno-stack-protector"]
         run([paths["compiler"], *flags, "-S", "-emit-llvm", path, "-o", ir])
         text = ir.read_text()
-        provider = re.search(r"^define[^\n]*@neverd_x64_rtm_environment_v6\b.*?^}",
+        provider = re.search(r"^define[^\n]*@" + provider_name + r"\b.*?^}",
                              text, re.MULTILINE | re.DOTALL)
         assert provider and "asm " not in provider[0], "provider must use native intrinsics"
-        for intrinsic in ("xbegin", "xend", "xabort", "xtest", "cpuidex"):
+        intrinsics = (("rtm.abort.pair", "cpuidex") if pair else
+                      ("xbegin", "xend", "xabort", "xtest", "cpuidex"))
+        for intrinsic in intrinsics:
             assert "@llvm.x86." + intrinsic + "(" in provider[0], intrinsic
         if args.backend_llc:
             run([paths["llc"], "-mtriple=x86_64-unknown-linux-gnu",
@@ -102,7 +116,7 @@ def main():
                 ("cpuid-disabled", ["-rtm_mode", "abort", "-rtm_abort_reason", "0"], "0")):
             run([paths["sde"], "-hsw", *flags, "--", exe, supported])
             profiles.append({"source": stem, "optimization": opt, "mode": mode,
-                             "checks": 64, "executable_sha256": digest(exe)})
+                             "checks": checks[stem], "executable_sha256": digest(exe)})
         return profiles
 
     profiles = []
@@ -113,7 +127,7 @@ def main():
             if index % 16 == 0:
                 print(f"qualified {index}/{len(jobs)} compiler profiles", flush=True)
     assert all(digest(tool["path"]) == tool["sha256"] for tool in tools.values())
-    report = {"passed": True, "physical_rtm_qualified": False,
+    report = {"passed": True, "suite": args.suite, "physical_rtm_qualified": False,
               "tools": tools, "new_pass_manager": args.new_pm,
               "sources": sources, "profiles": profiles,
               "commands_sha256": digest(directory / "commands.json"),

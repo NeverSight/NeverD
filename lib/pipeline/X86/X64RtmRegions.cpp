@@ -24,9 +24,7 @@ namespace neverd {
 
 std::optional<va_t> x64RtmFallback(llvm::ArrayRef<uint8_t> Bytes, va_t Address,
                                    unsigned AddressBits) {
-  if ((AddressBits != 48 && AddressBits != 57) ||
-      !((Bytes.size() == 6 && Bytes[0] == 0xc7) ||
-        (Bytes.size() == 5 && Bytes[0] == 0x66 && Bytes[1] == 0xc7)))
+  if (AddressBits != 48 && AddressBits != 57)
     return std::nullopt;
   const auto Begin = x86TransactionBeginEncoding(Bytes, Address, true);
   if (!Begin)
@@ -45,16 +43,15 @@ llvm::Expected<llvm::json::Object> emitX64RtmEnvironment(
     unsigned AddressBits, bool FollowInternalCalls) {
   using Exit = analysis::X64ContinuationExitV1;
   const auto Hex = [](va_t PC) { return "0x" + llvm::utohexstr(PC); };
-  const auto IsAbort = [](llvm::ArrayRef<uint8_t> Bytes) {
-    return Bytes.size() == 3 && Bytes[0] == 0xc6 && Bytes[1] == 0xf8;
-  };
+  using Transaction = X86TransactionKind;
   // A native XABORT is the rollback channel. Its immediate must be disjoint
   // from every selected original XABORT, including overlapping code streams.
   // Never consume an original status as a provider refusal.
   std::array<bool, 256> AbortCodes{};
   for (const auto &Unit : Units)
-    if (IsAbort(Unit.Bytes))
-      AbortCodes[Unit.Bytes[2]] = true;
+    if (const auto E = x86TransactionEncoding(Unit.Bytes, Unit.Address, true);
+        E && E->Kind == Transaction::Abort)
+      AbortCodes[E->AbortCode] = true;
   const auto Spare = std::find(AbortCodes.begin(), AbortCodes.end(), false);
   if (Spare == AbortCodes.end())
     return llvm::createStringError(
@@ -89,9 +86,9 @@ int neverd_x64_rtm_environment_v6(neverd_x64_state_v6 *state,
     if (!Unit.RequiresNativeExecution)
       continue;
     const auto Fallback = x64RtmFallback(Unit.Bytes, Unit.Address, AddressBits);
-    const bool Test = llvm::ArrayRef(Unit.Bytes) ==
-                      llvm::ArrayRef<uint8_t>({0x0f, 0x01, 0xd6});
-    if (Fallback || Test || IsAbort(Unit.Bytes)) {
+    const auto E = x86TransactionEncoding(Unit.Bytes, Unit.Address, true);
+    if (Fallback || (E && (E->Kind == Transaction::Test ||
+                           E->Kind == Transaction::Abort))) {
       OS << "    case " << Hex(Unit.Address) << "ULL:\n"
          << "        if (" << Unit.Function.Name
          << "((uint8_t *)state) != " << unsigned(Exit::NativeInstruction)
@@ -132,17 +129,16 @@ int neverd_x64_rtm_environment_v6(neverd_x64_state_v6 *state,
   for (const auto &Unit : Units) {
     if (!Unit.RequiresNativeExecution)
       continue;
-    const bool Test = llvm::ArrayRef(Unit.Bytes) ==
-                      llvm::ArrayRef<uint8_t>({0x0f, 0x01, 0xd6});
-    if (!Test && !IsAbort(Unit.Bytes))
+    const auto E = x86TransactionEncoding(Unit.Bytes, Unit.Address, true);
+    if (!E || (E->Kind != Transaction::Test && E->Kind != Transaction::Abort))
       continue;
     OS << "    case " << Hex(Unit.Address) << "ULL: {\n";
-    if (Test)
+    if (E->Kind == Transaction::Test)
       OS << "        unsigned active=__builtin_ia32_xtest();\n"
             "        state->RFlags=(state->RFlags&~0x8d5ULL)|"
             "(active ? 0 : 0x40);\n";
     else
-      OS << "        __builtin_ia32_xabort(" << unsigned(Unit.Bytes[2])
+      OS << "        __builtin_ia32_xabort(" << unsigned(E->AbortCode)
          << ");\n";
     OS << "        state->PC=next; return 1;\n    }\n";
   }
@@ -167,11 +163,12 @@ int neverd_x64_rtm_environment_v6(neverd_x64_state_v6 *state,
     const bool Begin =
         Unit.RequiresNativeExecution &&
         x64RtmFallback(Bytes, Unit.Address, AddressBits).has_value();
-    const bool End = Bytes == llvm::ArrayRef<uint8_t>({0x0f, 0x01, 0xd5});
-    const bool Test = Bytes == llvm::ArrayRef<uint8_t>({0x0f, 0x01, 0xd6});
+    const auto E = x86TransactionEncoding(Bytes, Unit.Address, true);
+    const bool End = E && E->Kind == Transaction::End;
+    const bool Test = E && E->Kind == Transaction::Test;
     const bool Cpuid = Bytes == llvm::ArrayRef<uint8_t>({0x0f, 0xa2});
     const bool Pause = Bytes == llvm::ArrayRef<uint8_t>({0xf3, 0x90});
-    const bool ExplicitAbort = IsAbort(Bytes);
+    const bool ExplicitAbort = E && E->Kind == Transaction::Abort;
     if (!Begin && !End && !Test && !Cpuid && !Pause && !ExplicitAbort &&
         !Unit.SupportsRtmBody)
       continue;
@@ -194,7 +191,7 @@ int neverd_x64_rtm_environment_v6(neverd_x64_state_v6 *state,
             "(active ? 0 : 0x40);\n"
          << Advance;
     } else if (ExplicitAbort) {
-      OS << "            __builtin_ia32_xabort(" << unsigned(Bytes[2])
+      OS << "            __builtin_ia32_xabort(" << unsigned(E->AbortCode)
          << ");\n";
     } else if (Cpuid || Pause) {
       // Intel SDM: CPUID and PAUSE always abort RTM. Execute the actual

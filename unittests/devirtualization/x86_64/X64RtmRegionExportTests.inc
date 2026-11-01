@@ -94,21 +94,7 @@ TEST_F(X64ContinuationExportTest, RtmRegionsOwnStateMemoryAndNestedControl) {
     for (size_t I = 0; I < Bytes.size(); ++I)
       D << (I ? "," : "") << unsigned(Bytes[I]);
     D << "};\n";
-    const auto Harness = std::string(Seed) + Defines + R"C(
-#include <cpuid.h>
-#include <sys/mman.h>
-/* Execute the original relative machine code, independent of the lifted
- * instructions. Protect the compiler's red zone and restore its ABI DF. */
-static void original(neverd_x64_state_v6 *s, void *code, uint64_t *ram) {
-  uint64_t a=s->GPR[0],b=s->GPR[3],c=s->GPR[1],d=s->GPR[2],f=s->RFlags;
-  __asm__ volatile("lea -128(%%rsp),%%rsp; push %[flags]; popfq;"
-                   "call *%[code]; pushfq; pop %[flags]; cld;"
-                   "lea 128(%%rsp),%%rsp"
-                   : "+a"(a),"+b"(b),"+c"(c),"+d"(d),[flags]"+r"(f)
-                   : [code]"r"(code),"D"(ram)
-                   : "r8","r9","r10","r11","memory","cc");
-  s->GPR[0]=a;s->GPR[3]=b;s->GPR[1]=c;s->GPR[2]=d;s->RFlags=f;
-}
+    const auto Harness = std::string(Seed) + Defines + RtmOriginalOracle + R"C(
 int main(int argc, char **argv) {
   const int strict=argc==2, expected=strict ? atoi(argv[1]) : -1;
   unsigned a,b,c,d;
@@ -257,6 +243,8 @@ TEST_F(X64ContinuationExportTest,
     if (Code)
       Addresses += ",";
     Addresses += std::to_string(0x1000 + Bytes.size());
+    if (Code & 1)
+      Bytes.push_back(0x66);
     Bytes.insert(Bytes.end(), {0xc6, 0xf8, uint8_t(Code)});
   }
   load(Bytes);

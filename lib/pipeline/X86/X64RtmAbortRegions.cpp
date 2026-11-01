@@ -13,6 +13,7 @@
 #include "X64RtmRegions.h"
 
 #include "neverd/analysis/arch/x86_64/X64ContinuationSource.h"
+#include "neverd/decode/X86/X86TransactionEncoding.h"
 #include "neverd/loader/BinaryImage.h"
 
 #include "llvm/ADT/StringExtras.h"
@@ -29,24 +30,33 @@ std::optional<X64RtmAbortRegion> readX64RtmAbortRegion(const BinaryImage &Image,
                                                        unsigned AddressBits) {
   if (Image.Arch != Arch::X64 || (AddressBits != 48 && AddressBits != 57))
     return std::nullopt;
-  const auto *First = Image.readVA(Address, 1);
-  if (!First || (*First != 0xc7 && *First != 0x66))
+  const auto Read =
+      [&](va_t PC,
+          X86TransactionKind Kind) -> std::optional<llvm::ArrayRef<uint8_t>> {
+    for (unsigned Size = 3; Size <= x86::kMaxInstructionLen; ++Size) {
+      if (PC > std::numeric_limits<va_t>::max() - (Size - 1))
+        return std::nullopt;
+      const auto *Bytes = Image.readVA(PC, Size);
+      if (!Bytes || !Image.isCodeAddress(PC) ||
+          !Image.isCodeAddress(PC + Size - 1))
+        return std::nullopt;
+      const auto E = x86TransactionEncoding({Bytes, Size}, PC, true);
+      if (E)
+        return E->Kind == Kind ? std::optional(llvm::ArrayRef(Bytes, Size))
+                               : std::nullopt;
+    }
     return std::nullopt;
-  const unsigned BeginBytes = *First == 0x66 ? 5 : 6;
-  const unsigned PairBytes = BeginBytes + 3;
-  if (Address > std::numeric_limits<va_t>::max() - (PairBytes - 1))
+  };
+  const auto Begin = Read(Address, X86TransactionKind::Begin);
+  if (!Begin || Address > std::numeric_limits<va_t>::max() - Begin->size())
     return std::nullopt;
-  const auto *Bytes = Image.readVA(Address, PairBytes);
-  if (!Bytes || Bytes[BeginBytes] != 0xc6 || Bytes[BeginBytes + 1] != 0xf8 ||
-      !Image.isCodeAddress(Address) ||
-      !Image.isCodeAddress(Address + PairBytes - 1))
-    return std::nullopt;
-  const auto Fallback =
-      x64RtmFallback({Bytes, BeginBytes}, Address, AddressBits);
-  if (!Fallback)
+  const auto Fallback = x64RtmFallback(*Begin, Address, AddressBits);
+  const auto Abort = Read(Address + Begin->size(), X86TransactionKind::Abort);
+  if (!Fallback || !Abort)
     return std::nullopt;
   X64RtmAbortRegion Region{Address, *Fallback, {}};
-  Region.Bytes.append(Bytes, Bytes + PairBytes);
+  Region.Bytes.append(Begin->begin(), Begin->end());
+  Region.Bytes.append(Abort->begin(), Abort->end());
   return Region;
 }
 
@@ -57,9 +67,8 @@ llvm::json::Array emitX64RtmAbortEnvironment(
   std::vector<X64RtmAbortRegion> Regions;
   for (const auto &Unit : Units)
     if (Unit.RequiresNativeExecution &&
-        (Unit.Bytes.size() == 5 || Unit.Bytes.size() == 6))
-      if (auto Region = readX64RtmAbortRegion(Image, Unit.Address, AddressBits);
-          Region && Region->Bytes.size() == Unit.Bytes.size() + 3)
+        x86TransactionBeginEncoding(Unit.Bytes, Unit.Address, true))
+      if (auto Region = readX64RtmAbortRegion(Image, Unit.Address, AddressBits))
         Regions.push_back(*Region);
   llvm::json::Array Receipts;
   OS << R"C(

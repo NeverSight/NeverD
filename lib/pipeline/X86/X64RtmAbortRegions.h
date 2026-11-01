@@ -34,7 +34,8 @@ struct X64RtmAbortRegion {
   llvm::SmallVector<uint8_t, 9> Bytes;
 };
 
-/// Canonical x64 rel16/rel32 XBEGIN followed by canonical XABORT imm8.
+/// x64 rel16/rel32 XBEGIN immediately followed by XABORT imm8, including
+/// the ignored prefixes authenticated by the transaction byte reader.
 /// The existing transaction decoder owns signed fallback arithmetic. No other
 /// transactional body or nested transaction receives this native binding.
 std::optional<X64RtmAbortRegion> readX64RtmAbortRegion(const BinaryImage &Image,

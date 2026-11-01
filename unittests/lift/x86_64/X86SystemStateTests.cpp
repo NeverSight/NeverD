@@ -151,6 +151,15 @@ TEST(X86SystemState, TransactionCompletionEncodingsAreValidated) {
                                                 0x1000, Instruction);
           ASSERT_EQ(Size, Bytes.size());
           std::vector<LowOp> Ops;
+          // XEND/XTEST use NP encodings. A disassembler mnemonic does not
+          // authorize discarding 66/F2/F3: the original aborts inside RTM.
+          if (std::any_of(Prefix.begin(), Prefix.end(), [](uint8_t Byte) {
+                return Byte == 0x66 || Byte == 0xf2 || Byte == 0xf3;
+              })) {
+            EXPECT_THROW(D.liftToLow(Instruction, Ops), UnliftedInstruction);
+            EXPECT_TRUE(Ops.empty());
+            continue;
+          }
           ASSERT_NO_THROW(D.liftToLow(Instruction, Ops));
           ASSERT_FALSE(Ops.empty());
           EXPECT_EQ(Ops.front().Inputs[0].Offset, static_cast<uint64_t>(Id));
@@ -762,11 +771,11 @@ TEST(X86SystemState, SyscallReturnsLiftToTerminalStateTransfers) {
     ASSERT_TRUE(D.init(A));
     D.setStrict(true);
     std::vector<Case> Cases = {
-        {{0x0f, 0x07}, Intrinsic::Sysretq}, // sysret
+        {{0x0f, 0x07}, Intrinsic::Sysretq},  // sysret
         {{0x0f, 0x35}, Intrinsic::Sysexitq}, // sysexit
     };
     if (A == Arch::X64) {
-      Cases.push_back({{0x48, 0x0f, 0x07}, Intrinsic::Sysretq}); // sysretq
+      Cases.push_back({{0x48, 0x0f, 0x07}, Intrinsic::Sysretq});  // sysretq
       Cases.push_back({{0x48, 0x0f, 0x35}, Intrinsic::Sysexitq}); // sysexitq
     }
     for (const auto &C : Cases) {
@@ -795,7 +804,7 @@ TEST(X86SystemState, SysenterNamesItsEnvironmentAndResumeStaysRefused) {
     Decoder D;
     ASSERT_TRUE(D.init(A));
     D.setStrict(true);
-    for (const auto &Bytes : {std::vector<uint8_t>{0x0f, 0x34},   // sysenter
+    for (const auto &Bytes : {std::vector<uint8_t>{0x0f, 0x34},    // sysenter
                               std::vector<uint8_t>{0x0f, 0xaa}}) { // rsm
       DecodedInsn I{};
       ASSERT_EQ(D.decodeOneForLift(Bytes.data(), Bytes.size(), 0x1000, I),

@@ -15,6 +15,7 @@
 
 #include "neverd/analysis/arch/x86_64/X64ContinuationSource.h"
 #include "neverd/decode/Decoder.h"
+#include "neverd/decode/X86/X86TransactionEncoding.h"
 #include "neverd/lift/X86/X86HleEncoding.h"
 #include "neverd/lift/X86/X86HypercallEncoding.h"
 #include "neverd/lift/X86/X86MpxEncoding.h"
@@ -201,22 +202,26 @@ llvm::Expected<X64SpecialRegionSelection> selectX64SpecialRegions(
         };
         for (va_t Address : Audit.NativeInstructionAddresses) {
           const auto Bytes = bytesAt(Image, Address);
-          for (unsigned Size : {5u, 6u}) {
-            if (Bytes.size() < Size)
+          for (unsigned Size = 3;
+               Size <= std::min<size_t>(Bytes.size(), x86::kMaxInstructionLen);
+               ++Size) {
+            const auto E =
+                x86TransactionEncoding(Bytes.take_front(Size), Address, true);
+            if (!E)
               continue;
-            if (const auto Fallback =
-                    x64RtmFallback(Bytes.take_front(Size), Address,
-                                   *SourceOptions.PagingAddressBits)) {
+            if (E->Kind == X86TransactionKind::Begin) {
+              const auto Fallback =
+                  x64RtmFallback(Bytes.take_front(Size), Address,
+                                 *SourceOptions.PagingAddressBits);
+              if (!Fallback)
+                break;
               if (auto Error = Resume(*Fallback))
                 return std::move(Error);
-              if (auto Error = Resume(Address + Size))
-                return std::move(Error);
             }
-          }
-          if (Bytes.size() >= 3 && Bytes[0] == 0x0f && Bytes[1] == 0x01 &&
-              (Bytes[2] == 0xd5 || Bytes[2] == 0xd6))
-            if (auto Error = Resume(Address + 3))
+            if (auto Error = Resume(Address + Size))
               return std::move(Error);
+            break;
+          }
         }
         if (!Resumes.empty())
           Region["rtm_successors"] = std::move(Resumes);

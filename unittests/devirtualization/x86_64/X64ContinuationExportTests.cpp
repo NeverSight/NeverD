@@ -9,6 +9,7 @@
 
 #include "../../lift/NeverDLiftFixture.h"
 #include "../../lift/x86/X86HleTestCases.h"
+#include "../../lift/x86/X86TransactionTestCases.h"
 
 #include "neverd/sdk/NeverDCAPI.h"
 
@@ -1387,6 +1388,23 @@ TEST_F(X64ContinuationExportTest,
     EXPECT_EQ(readOutput(Output), Source);
   }
 }
+const char RtmOriginalOracle[] = R"C(
+#include <cpuid.h>
+#include <sys/mman.h>
+/* Execute the original relative machine code, independent of the lifted
+ * instructions. Protect the compiler's red zone and restore its ABI DF. */
+static void original(neverd_x64_state_v6 *s, void *code, uint64_t *ram) {
+  uint64_t a=s->GPR[0],b=s->GPR[3],c=s->GPR[1],d=s->GPR[2],f=s->RFlags;
+  __asm__ volatile("lea -128(%%rsp),%%rsp; push %[flags]; popfq;"
+                   "call *%[code]; pushfq; pop %[flags]; cld;"
+                   "lea 128(%%rsp),%%rsp"
+                   : "+a"(a),"+b"(b),"+c"(c),"+d"(d),[flags]"+r"(f)
+                   : [code]"r"(code),"D"(ram)
+                   : "r8","r9","r10","r11","memory","cc");
+  s->GPR[0]=a;s->GPR[3]=b;s->GPR[1]=c;s->GPR[2]=d;s->RFlags=f;
+}
+)C";
+
 #include "X64AlignmentContinuationTests.inc"
 #include "X64ContinuationEnvironmentTests.inc"
 #include "X64HleContinuationExportTests.inc"
@@ -1396,6 +1414,7 @@ TEST_F(X64ContinuationExportTest,
 #include "X64MpxContinuationExportTests.inc"
 #include "X64NativeRegisterExportTests.inc"
 #include "X64RtmAbortExportTests.inc"
+#include "X64RtmPrefixExportTests.inc"
 #include "X64RtmRegionExportTests.inc"
 #include "X64SnpContinuationExportTests.inc"
 #include "X64SparseFrameContinuationTests.inc"
