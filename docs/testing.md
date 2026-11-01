@@ -18031,6 +18031,13 @@ ReadPrefetch regressions check exact bytes and operand metadata, separate undefi
 
 StreamingStore regressions check instruction bytes, operand metadata, alignment, complete writable extents, malformed contracts and modified receipts. Independent expectations compare complete state and memory, including a store that overwrites the physical return word. Both C routes execute at O0/O2 with sanitizers under user and kernel state profiles. These checks do not certify native kernel, concurrent or faulting execution.
 
+The shared MOVNTDQ form audit requires decoded write access on its memory
+destination and read access on its vector source. Both x86 modes cover indexed
+store forms from a retained FFmpeg function alongside malformed metadata
+controls. `InstructionFlowStreamingStoresRetainOriginalNativeRows` repeats
+public SDK disassembly reads of those stores and their return, retaining
+ordinary fallthrough instead of introducing an unlifted boundary.
+
 `InterpreterSpecialization.RepeatedCounts*`; `InterpreterMachineRegionSourceTest.FiniteRepeatedCountsPreserveFullState`; `InterpreterMachineRegionSourceTest.FiniteCopyAndPaddingPreserveLoopState`.
 These tests check exhaustive partitions, differing predecessor domains, prefix writes, discovery opt-out, incomplete domains and exact/short budgets. Both C routes execute at O0/O2 with ASan/UBSan. Independent full-state and byte oracles cover clipped counts, both directions, overlap, zero-count invalid pointers, early terminators and loop padding. They do not establish ordinary ABI recovery.
 
