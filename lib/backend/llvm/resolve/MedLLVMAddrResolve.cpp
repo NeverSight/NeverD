@@ -6983,12 +6983,9 @@ bool MedLLVMEmitter::collectIndexedGlobalBaseUncached(
     // all-arms audit, while the caller still rejects mixed/multiple bases.
     const bool LoaderOwnedPointerTable =
         Seg && !Seg->isExecutable() && segHasPtrRelocSlots(Seg);
-    // An executable segment that holds loader-proven pointer slots is the
-    // tables-among-code domain (MinGW's CRT tables, MSVC's jump tables in
-    // .text): the relocation mirror owns those bytes exactly as it owns a
-    // data segment's tables, so a constant base there is a table base.
-    const bool ExecutableTableDomain =
-        Seg && Seg->isExecutable() && segHasPtrRelocSlots(Seg);
+    // A table grants data identity only to its own object/slots, never
+    // to every address sharing the executable mapping.
+    const bool ExecutableTableDomain = isInCodePointerTableAddress(V.ConstVal);
     bool HasOwnedBytes = false;
     if (Owner && Seg) {
       const Section *OwnerSec = Img->getSectionFor(*Owner);
@@ -7001,7 +6998,9 @@ bool MedLLVMEmitter::collectIndexedGlobalBaseUncached(
         (Img->hasExecutableCodeOwnerAt(Owner.value_or(V.ConstVal)) &&
          !ExecutableTableDomain) ||
         (Seg->isWritable() && !LoaderOwnedPointerTable) ||
-        !(Owner ? HasOwnedBytes : hasObjectDataProvenance(V.ConstVal)) ||
+        !(Owner ? HasOwnedBytes
+                : (hasObjectDataProvenance(V.ConstVal) ||
+                   ExecutableTableDomain)) ||
         (HaveBase && Base != V.ConstVal))
       return false;
     Base = V.ConstVal;
@@ -7220,20 +7219,12 @@ bool MedLLVMEmitter::collectIndexedGlobalBaseUncached(
         uniqueDataAddressOwner(Occurrence, *C, OwnerConflict);
     if (OwnerConflict || (*C == 0 && !Owner))
       return false;
-    const auto inExecutableTableDomain = [&](uint64_t VA) {
-      const Segment *Seg = Img ? Img->getSegmentFor(VA) : nullptr;
-      // An executable segment holding loader-proven pointer slots is the
-      // tables-among-code domain (MinGW CRT tables, MSVC jump tables in
-      // .text): the relocation mirror owns it, so a constant there can be a
-      // table base like any in a data segment.
-      return Seg && Seg->isExecutable() && segHasPtrRelocSlots(Seg);
-    };
     if (!Owner)
-      return hasObjectDataProvenance(*C) || inExecutableTableDomain(*C);
+      return hasObjectDataProvenance(*C) || isInCodePointerTableAddress(*C);
     const Segment *Seg = Img ? Img->getSegmentFor(*Owner) : nullptr;
     if (!Seg || !Seg->isReadable() ||
         (Img->hasExecutableCodeOwnerAt(*Owner) &&
-         !inExecutableTableDomain(*Owner)))
+         !isInCodePointerTableAddress(*C)))
       return false;
     const Section *OwnerSec = Img->getSectionFor(*Owner);
     const uint64_t Begin = OwnerSec ? OwnerSec->VA : Seg->VA;

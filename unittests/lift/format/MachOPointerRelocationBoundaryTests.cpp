@@ -15477,6 +15477,35 @@ TEST(LLVMCodePointerInvariantBoundary,
       }
 }
 
+TEST(LLVMCodePointerInvariantBoundary,
+     WidenedIndexDoesNotAuthorizeMixedCallableAndScalarSlots) {
+  for (Arch TargetArch : {Arch::X64, Arch::AArch64})
+    for (BinaryFormat Format :
+         {BinaryFormat::MachO, BinaryFormat::ELF, BinaryFormat::COFF})
+      for (bool DirectBase : {false, true}) {
+        SCOPED_TRACE(std::string(formatTraceName(Format)) + "/" +
+                     std::to_string(static_cast<int>(TargetArch)) + "/" +
+                     std::to_string(DirectBase));
+        BinaryImage Image = makeMixedPointerRecordImage(TargetArch, Format);
+        // An eight-byte stride can select the record's scalar, function or data
+        // fields. Zero-extending the index changes none of those slot roles.
+        MedFunc Caller = makeIndexedPointerTableIndirectCaller(
+            TargetArch, DataVA, /*ElementStride=*/8,
+            /*RoundTripNarrowIndex=*/true);
+        if (DirectBase)
+          for (auto &Op : Caller.Blocks.front().Ops)
+            if (Op.Opcode == NdOp::INT_ADD)
+              Op.Inputs[0] = MedVar::makeConst(
+                  DataVA, 8, ConstantAddressProvenance::DataAddress);
+        MedFunc Callee = makeReturnFunction("mixed_index_target", CodeVA);
+        llvm::LLVMContext Context;
+        auto Module = MedLLVMEmitter().emit({Caller, Callee}, Context,
+                                            "mixed-widened-index", TargetArch,
+                                            {}, &Image, Format);
+        EXPECT_EQ(Module.get(), nullptr);
+      }
+}
+
 TEST(LLVMDataPointerInvariantBoundary, ScalarTableBoundsBelongToTheLoadSite) {
   enum class Case {
     Less,

@@ -1268,6 +1268,7 @@ TEST(X86_32_FunctionDiscovery, DataSegmentDispatchKeepsIndependentCallbacks) {
                    SegmentFlags::Readable);
       recordAbsolutePointerRelocations(Img, {{0x405000, 0x401019, InvalidVA}});
     }
+    coff_loader::recordIndexedTableBasesInCode(Img);
     Decoder Dec;
     ASSERT_TRUE(Dec.init(Img));
     const auto Functions = FuncDetector().detect(Img, Dec);

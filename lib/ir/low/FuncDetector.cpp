@@ -407,10 +407,10 @@ FuncDetector::detectImpl(const BinaryImage &Img, Decoder &Dec,
       Img.Arch == Arch::X64 && !Img.IsRelocatable &&
       (Img.Format == BinaryFormat::COFF || Img.Format == BinaryFormat::ELF);
   std::set<va_t> RelocationCodeTargets;
-  // Targets promoted directly because a CALL reads their table: they must
-  // still pass decode verification before publication, so the emitter's
-  // entry checks (VerifiedFunctionEntries) accept them.
-  std::set<va_t> CallDispatchPromoted;
+  // CALL-table targets and ordinary out-of-line callbacks still undergo the
+  // relocated-entry decode probe before publication. Keep its existing
+  // inconclusive-budget policy for candidates awaiting the pipeline audit.
+  std::set<va_t> RelocationCallableCandidates;
   // Targets the code-named label analysis promoted to entries; they verify
   // below for the same reason.
   std::set<va_t> CodeNamedTargets;
@@ -419,30 +419,9 @@ FuncDetector::detectImpl(const BinaryImage &Img, Decoder &Dec,
   std::vector<std::pair<va_t, va_t>> CodeNamedByCode;
   const uint32_t PointerSize = Img.getPointerSize();
   std::vector<std::pair<va_t, va_t>> CodeImmediates;
-  std::map<va_t, std::vector<va_t>> JumpReaders, JumpSlotReaders;
   if (IsX86LinkedCOFF && Img.Entry != 0 && !RelocationsOnly)
     func_detect_detail::scanCodeAddressImmediatesX86(Img, Dec, CodeImmediates,
-                                                     JumpReaders, Cancellation);
-  // A table in ordinary data is owned by its decoded dispatch, never by the
-  // last function preceding the data segment. Reuse the relocation run and
-  // next loader anchor as its bounds; independent pointer slots still supply
-  // callable evidence, even when another table names the same target.
-  for (const auto &[Base, Readers] : JumpReaders) {
-    const auto NextAnchor = Img.RelCodeTableAnchors.upper_bound(Base);
-    va_t Expected = Base;
-    for (auto Slot = Img.CodePtrRelocSlots.find(Base);
-         Slot != Img.CodePtrRelocSlots.end() && *Slot == Expected &&
-         (NextAnchor == Img.RelCodeTableAnchors.end() || *Slot < *NextAnchor) &&
-         Img.getSegmentFor(*Slot) == Img.getSegmentFor(Base) &&
-         Img.getSectionFor(*Slot) == Img.getSectionFor(Base);
-         ++Slot) {
-      func_detect_detail::checkCancellation(Cancellation);
-      JumpSlotReaders[*Slot] = Readers;
-      if (Expected > InvalidVA - PointerSize)
-        break;
-      Expected += PointerSize;
-    }
-  }
+                                                     Cancellation);
   if (PointerSize != 0)
     for (va_t Slot : Img.CodePtrRelocSlots) {
       func_detect_detail::checkCancellation(Cancellation);
@@ -460,34 +439,26 @@ FuncDetector::detectImpl(const BinaryImage &Img, Decoder &Dec,
           !Img.isFunctionEntryCandidateAt(Target) || IsMachOLocalLabel(Target))
         continue;
       if (IsX86LinkedCOFF) {
-        if (const auto Reader = JumpSlotReaders.find(Slot);
-            Reader != JumpSlotReaders.end()) {
-          RelocationCodeTargets.insert(Target);
-          for (va_t Instruction : Reader->second)
-            CodeNamedByCode.emplace_back(Instruction, Target);
+        RelocationCodeTargets.insert(Target);
+        if (Img.CallDispatchRelocSlots.count(Slot)) {
+          Entries.insert(Target);
+          RelocationCallableCandidates.insert(Target);
           continue;
         }
-      }
-      if (IsX86LinkedCOFF && Img.hasExecutableCodeOwnerAt(Slot)) {
-        // A table a CALL reads through (`call [base+idx*s]`, recorded in
-        // CallDispatchTableBases) holds callable entries — a callback or
-        // constructor dispatch, MinGW's CRT list among the code — not
-        // another function's case labels. Promote its targets directly.
-        if (!Img.CallDispatchTableBases.empty()) {
-          auto CallTable = Img.CallDispatchTableBases.upper_bound(Slot);
-          if (CallTable != Img.CallDispatchTableBases.begin() &&
-              Slot - *std::prev(CallTable) <= 8 * PointerSize) {
-            Entries.insert(Target);
-            RelocationCodeTargets.insert(Target);
-            CallDispatchPromoted.insert(Target);
-            continue;
-          }
+        if (auto Uses = Img.JumpDispatchTableSources.find(Slot);
+            Uses != Img.JumpDispatchTableSources.end()) {
+          for (va_t Source : Uses->second)
+            CodeNamedByCode.emplace_back(Source, Target);
+          continue;
         }
-        // Still a relocation-proven target for the relocated-entry verifier
-        // (RelocatedCandidates below); only the direct candidacy moves to
-        // the label analysis.
-        RelocationCodeTargets.insert(Target);
-        CodeNamedByCode.emplace_back(Slot, Target);
+        if (Img.hasExecutableCodeOwnerAt(Slot)) {
+          CodeNamedByCode.emplace_back(Slot, Target);
+          continue;
+        }
+        // An out-of-line callback without a proved JMP reader cannot become
+        // a label of whichever function happens to precede its data section.
+        Entries.insert(Target);
+        RelocationCallableCandidates.insert(Target);
         continue;
       }
       Entries.insert(Target);
@@ -809,9 +780,11 @@ FuncDetector::detectImpl(const BinaryImage &Img, Decoder &Dec,
               normalizeCodeAddress(Addr, Img.Arch, Img.Mode)) ||
           Trusted.count(Addr) || UnsymbolizedX86Entries.count(Addr) ||
           (!RelocationsOnly && IsX86LinkedCallOrRelocTarget(Addr) &&
-           !CallDispatchPromoted.count(Addr) && !CodeNamedTargets.count(Addr)))
+           !RelocationCallableCandidates.count(Addr) &&
+           !CodeNamedTargets.count(Addr)))
         Keep[I] = 1;
       else if ((RelocationsOnly && IsX86LinkedCallOrRelocTarget(Addr)) ||
+               RelocationCallableCandidates.count(Addr) ||
                UntypedCOFFExports.count(Addr) ||
                IsCoveredMachODirectCallTarget(Addr) ||
                IsCoveredImportCallTarget(Addr) ||
