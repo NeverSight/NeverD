@@ -75,7 +75,7 @@ TEST(LinuxSyscallArguments, Linux72IncrementalMetadata) {
       SCOPED_TRACE(451 + I);
       EXPECT_EQ(linuxSyscallArgumentCount(Target, 451 + I), Counts[I]);
     }
-    EXPECT_EQ(linuxSyscallArgumentCount(Target, 472), std::nullopt);
+    EXPECT_EQ(linuxSyscallArgumentCount(Target, 473), std::nullopt);
     EXPECT_EQ(linuxSyscallArgumentCount(Target, 100000), std::nullopt);
   }
   // The syscall is SYSCALL_DEFINE5(bpf), not the three-argument internal
@@ -87,6 +87,16 @@ TEST(LinuxSyscallArguments, Linux72IncrementalMetadata) {
   EXPECT_EQ(linuxSyscallArgumentCount(Arch::ARM, 447), std::nullopt);
   // Native x86-64 metadata must not silently adopt x32 entries.
   EXPECT_EQ(linuxSyscallArgumentCount(Arch::X64, 512), std::nullopt);
+}
+
+// fchroot(int fd, unsigned int flags) has two word-sized arguments on all
+// three ABIs. Linux cbbddb6b08cc9900a87cccaa9b22bbe06aa4f50a assigns 472.
+TEST(LinuxSyscallArguments, FchrootMetadata) {
+  for (const neverd::Arch Target :
+       {neverd::Arch::X64, neverd::Arch::AArch64, neverd::Arch::ARM}) {
+    EXPECT_EQ(neverd::linuxSyscallArgumentCount(Target, 472), 2u);
+    EXPECT_EQ(neverd::linuxSyscallArgumentCount(Target, 473), std::nullopt);
+  }
 }
 
 TEST(LinuxSyscallArguments, AArch64NativeNotCompat) {
