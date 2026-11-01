@@ -514,6 +514,33 @@ Both bindings require a controls profile. Their six undefined arithmetic flags
 use independent caller-supplied slots; DF and other explicit state are preserved.
 These are native bindings, not scalar simulations of the debug or paging banks.
 
+## Immediate-abort RTM regions
+
+With `kernel-events-v6`, `native_rtm_abort_regions: true` emits the optional
+`neverd_x64_rtm_abort_environment_v6` callback. It accepts only an authenticated
+canonical rel32 XBEGIN immediately followed by XABORT imm8. The transaction
+runs in one native assembly block, so neither a C return nor a translated step
+can split its checkpoint. On abort, the callback zero-extends the actual EAX
+status into RAX and resumes at the original signed fallback address. Other
+explicit state stays intact. Entry selection follows this fallback; an explicit
+instruction list still selects exactly its requested PCs.
+
+Pass this callback as the provider to `neverd_x64_run_v6`, or call it from an
+existing provider before handling other boundaries. One environment-budget
+unit owns the pair, including an abort before XABORT; the translated-instruction
+budget counts only the subsequent translated steps. A fallback that returns to
+XBEGIN consumes another environment unit. The original XBEGIN remains a native
+request in the instruction manifest. The separate
+`native_rtm_abort_environment.regions` receipts bind all nine original bytes,
+the immediate and the fallback. They do not certify other native requests,
+including an independently entered XABORT.
+
+Execution requires an RTM-capable host outside RTM/HLE, with no debug traps or
+faults. If CPUID does not advertise RTM, the provider declines without changing
+explicit state. It never substitutes a constant abort status. Other transaction
+bodies and prefixed encodings remain unsupported. The instruction behavior and
+abort status follow [Intel's instruction-set reference](https://cdrdv2-public.intel.com/671110/325383-sdm-vol-2abcd.pdf).
+
 ## SDK and verification
 
 `neverd_x64_continuation_source_v1` takes a size-delimited request, route 0 or 1,

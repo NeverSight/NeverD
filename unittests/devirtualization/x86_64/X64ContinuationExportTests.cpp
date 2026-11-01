@@ -1066,6 +1066,9 @@ TEST_F(X64ContinuationExportTest,
           request(R"("instructions":[4096],"native_timestamp_reads":1)"),
           request(R"("instructions":[4096],"native_debug_register_access":1)"),
           request(R"("instructions":[4096],"native_page_global_access":null)"),
+          request(R"("instructions":[4096],"native_rtm_abort_regions":1)"),
+          request(R"("instructions":[4096],"native_rtm_abort_regions":null)"),
+          R"({"profile":"intel-fast-system-v7","mxcsr_mask":"0xffbf","paging_address_bits":48,"sysenter_msr_address_bits":48,"instructions":[4096],"native_rtm_abort_regions":true})",
           request(R"("instructions":[4096],"follow_internal_calls":1)"),
           request(R"("instructions":[4096],"follow_internal_calls":null)"),
           request(R"("entries":[4096],"follow_direct_jumps":1)"),
@@ -1390,6 +1393,7 @@ TEST_F(X64ContinuationExportTest,
 #include "X64KvmContinuationExportTests.inc"
 #include "X64MpxContinuationExportTests.inc"
 #include "X64NativeRegisterExportTests.inc"
+#include "X64RtmAbortExportTests.inc"
 #include "X64SparseFrameContinuationTests.inc"
 #include "X64SvmContinuationExportTests.inc"
 

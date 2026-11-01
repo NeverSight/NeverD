@@ -18018,3 +18018,14 @@ privileged execution evidence. `NativeRegisterBindingsRemainIndependent` in
 `NeverDX64ContinuationExportTests` checks independent opt-ins and generated
 source compilation. These bounded no-fault bindings do not qualify debug
 exception delivery, DR4/DR5 aliases or arbitrary CR4 changes.
+
+`X64ContinuationExportTest.RtmAbort*` checks exact adjacent instruction bytes,
+missing/truncated/different bodies, explicit opt-in, native-request retention,
+fallback selection, unsupported-host refusal, complete state and stack
+preservation, and separate instruction/environment budgets including loops.
+Both C routes compile and run at O0/O2 with sanitizers. The transaction branch
+executes only when CPUID advertises RTM; other hosts qualify refusal only.
+Independent RTM comparison may use Intel SDE with `-hsw -tsx -rtm_mode full`
+and `-rtm_mode abort -rtm_abort_reason N`; record emulator results separately
+from native hardware evidence. Use the full exporter suite to cover unchanged
+selection, physical transfers and other environment providers.
