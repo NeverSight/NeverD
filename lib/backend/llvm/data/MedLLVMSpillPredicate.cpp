@@ -1658,6 +1658,65 @@ bool MedLLVMEmitter::collectFrameReloadSourcesUncached(
       }
     }
   }
+  if (Mode == FrameReloadSourceMode::Exact) {
+    // Exact transfer is identity until a full STORE or a kill replaces every
+    // incoming state. Follow every structural predecessor only while that
+    // suffix is transparent, keeping the same outgoing-edge equality facts.
+    // Edge identities distinguish the facts of two exits from one block.
+    if (!LoadBlock.EntryReachable)
+      return false;
+    std::vector<MedVar> Found;
+    std::vector<std::pair<int, int>> PendingEdges;
+    std::set<std::pair<int, int>> VisitedEdges;
+    auto visit = [&](int BlockId, std::size_t Boundary,
+                     const ControlValueBindings *Bindings) {
+      const auto &Block = FrameReloadIndex.Blocks.at(BlockId);
+      if (!Block.EntryReachable)
+        return true;
+      ReachingState Unknown;
+      Unknown.Reachable = true;
+      Unknown.Uninitialized = true;
+      const auto Local =
+          transfer(Block, Boundary, std::move(Unknown), Bindings);
+      if (Local.Invalid)
+        return false;
+      if (!Local.Uninitialized && !Local.Values.empty()) {
+        for (const auto &Value : Local.Values)
+          addUnique(Found, Value);
+        return true;
+      }
+      // Entry contributes the first invocation even when a loop also enters
+      // that block. Backedges can contribute different initialized sources.
+      if (BlockId == FrameReloadIndex.EntryBlockId) {
+        if (Entry.Uninitialized || Entry.Invalid || Entry.Values.empty())
+          return false;
+        for (const auto &Value : Entry.Values)
+          addUnique(Found, Value);
+      }
+      for (int Pred : Block.StructuralPreds)
+        PendingEdges.emplace_back(Pred, BlockId);
+      return true;
+    };
+    if (!visit(Site.BlockId, Site.Index, nullptr))
+      return false;
+    while (!PendingEdges.empty()) {
+      const auto Edge = PendingEdges.back();
+      PendingEdges.pop_back();
+      if (!VisitedEdges.insert(Edge).second)
+        continue;
+      const auto &Block = FrameReloadIndex.Blocks.at(Edge.first);
+      const auto Facts = Block.EqualityFacts.find(Edge.second);
+      const ControlValueBindings *Bindings =
+          Facts == Block.EqualityFacts.end() ? nullptr : &Facts->second;
+      if (!visit(Edge.first, std::numeric_limits<std::size_t>::max(), Bindings))
+        return false;
+    }
+    if (Found.empty())
+      return false;
+    Sources = std::move(Found);
+    return true;
+  }
+
   // Only predecessors of this exact LOAD can contribute a reaching source.
   // Structural predecessors include backedges and exceptional edges, so
   // later writes remain visible whenever control can return to the LOAD.

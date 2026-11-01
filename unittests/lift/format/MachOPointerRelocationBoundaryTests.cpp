@@ -11939,7 +11939,9 @@ TEST(MachOLLVMDataPointerBoundary, LocalOverwriteCutsOffReachingStoreHistory) {
     Loop
   };
   for (Arch A : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64})
-    for (unsigned Count : {32u, 512u})
+    for (const auto &[Count, Suffix] :
+         {std::pair{32u, 0u}, std::pair{32u, 1u}, std::pair{32u, 8u},
+          std::pair{512u, 0u}, std::pair{512u, 1u}, std::pair{512u, 8u}})
       for (bool Reverse : {false, true})
         for (Scenario Case :
              {Scenario::Full, Scenario::Partial, Scenario::UnknownAfter,
@@ -11948,6 +11950,7 @@ TEST(MachOLLVMDataPointerBoundary, LocalOverwriteCutsOffReachingStoreHistory) {
           SCOPED_TRACE(unsigned(A));
           SCOPED_TRACE(Count);
           SCOPED_TRACE(Reverse);
+          SCOPED_TRACE(Suffix);
           SCOPED_TRACE(unsigned(Case));
           const auto &TRI = getTargetRegInfo(A);
           const uint16_t Width = TRI.PointerSize;
@@ -11975,7 +11978,8 @@ TEST(MachOLLVMDataPointerBoundary, LocalOverwriteCutsOffReachingStoreHistory) {
           F.Entry = 0x1000;
           F.FrameSize = 64;
           F.Params = {value(MedVar::Param, 0)};
-          F.Blocks.resize(Count + 1);
+          const unsigned LoadBlock = Count + Suffix;
+          F.Blocks.resize(LoadBlock + 1);
           for (unsigned I = 0; I < F.Blocks.size(); ++I) {
             auto &B = F.Blocks[I];
             B.Id = I;
@@ -11983,7 +11987,7 @@ TEST(MachOLLVMDataPointerBoundary, LocalOverwriteCutsOffReachingStoreHistory) {
             B.EndAddr = B.StartAddr + 64;
             if (I)
               B.Preds = {int(I - 1)};
-            if (I < Count)
+            if (I < LoadBlock)
               B.Succs = {int(I + 1)};
           }
           auto append = [&](unsigned B, NdOp Code, MedVar Out,
@@ -12017,14 +12021,20 @@ TEST(MachOLLVMDataPointerBoundary, LocalOverwriteCutsOffReachingStoreHistory) {
           if (Case == Scenario::AtomicAfter)
             append(Count, NdOp::ATOMIC_XCHG, value(MedVar::Temp, 105),
                    {Slot, scalar(0x66)});
-          const size_t LoadIndex = F.Blocks[Count].Ops.size();
-          append(Count, NdOp::LOAD, Reload, {Slot});
+          for (unsigned I = Count; I < LoadBlock; ++I) {
+            append(I, NdOp::BRANCH, {}, {scalar(F.Blocks[I + 1].StartAddr)});
+            // The suffix can write another slot while preserving this one.
+            append(I + 1, NdOp::STORE, {}, {Other, scalar(0x77)});
+          }
+          const size_t LoadIndex = F.Blocks[LoadBlock].Ops.size();
+          append(LoadBlock, NdOp::LOAD, Reload, {Slot});
           if (Case == Scenario::Loop) {
-            F.Blocks[Count].Succs = {1};
-            F.Blocks[1].Preds.push_back(Count);
-            append(Count, NdOp::BRANCH, {}, {scalar(F.Blocks[1].StartAddr)});
+            F.Blocks[LoadBlock].Succs = {1};
+            F.Blocks[1].Preds.push_back(LoadBlock);
+            append(LoadBlock, NdOp::BRANCH, {},
+                   {scalar(F.Blocks[1].StartAddr)});
           } else {
-            append(Count, NdOp::RETURN, {}, {Reload});
+            append(LoadBlock, NdOp::RETURN, {}, {Reload});
           }
           if (Case == Scenario::Unreachable) {
             F.Blocks[Count - 1].Succs.clear();
@@ -12036,7 +12046,7 @@ TEST(MachOLLVMDataPointerBoundary, LocalOverwriteCutsOffReachingStoreHistory) {
             std::reverse(F.Blocks.begin(), F.Blocks.end());
           const auto Site = std::find_if(
               F.Blocks.begin(), F.Blocks.end(),
-              [&](const MedBlock &B) { return B.Id == int(Count); });
+              [&](const MedBlock &B) { return B.Id == int(LoadBlock); });
           ASSERT_NE(Site, F.Blocks.end());
           MedLLVMEmitter E;
           std::vector<MedVar> Sources;
@@ -12057,6 +12067,77 @@ TEST(MachOLLVMDataPointerBoundary, LocalOverwriteCutsOffReachingStoreHistory) {
             EXPECT_LE(Nodes + Hits, 48u);
           }
         }
+}
+
+TEST(MachOLLVMDataPointerBoundary,
+     UniquePredecessorWalkRetainsEntryHomesAndBackedges) {
+  for (Arch A : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64})
+    for (bool Backedge : {false, true})
+      for (bool Reverse : {false, true}) {
+        SCOPED_TRACE(unsigned(A));
+        SCOPED_TRACE(Backedge);
+        SCOPED_TRACE(Reverse);
+        MedFunc F = makeIncomingParameterHomeReload(A);
+        const MedOp Load = F.Blocks.front().Ops[2];
+        const MedVar Slot = Load.Inputs[0];
+        const uint16_t Width = getTargetRegInfo(A).PointerSize;
+        auto scalar = [&](uint64_t V) {
+          return MedVar::makeConst(V, Width, ConstantAddressProvenance::Scalar);
+        };
+        F.Blocks.front().Ops.resize(2);
+        F.Blocks.resize(4);
+        for (int I = 1; I < 4; ++I) {
+          F.Blocks[I].Id = I;
+          F.Blocks[I].StartAddr = F.Entry + 16 * I;
+          F.Blocks[I].EndAddr = F.Blocks[I].StartAddr + 16;
+        }
+        auto append = [&](unsigned B, NdOp Code,
+                          std::initializer_list<MedVar> Inputs) {
+          MedOp Op;
+          Op.Opcode = Code;
+          for (const auto &Input : Inputs)
+            Op.addInput(Input);
+          F.Blocks[B].Ops.push_back(std::move(Op));
+        };
+        F.Blocks[0].Succs = {1};
+        F.Blocks[1].Preds = {0};
+        append(0, NdOp::BRANCH, {scalar(F.Blocks[1].StartAddr)});
+        F.Blocks[1].Ops.push_back(Load);
+        if (Backedge) {
+          // Entry has a predecessor, but its implicit home is also an input.
+          // Following that predecessor alone would lose the first iteration.
+          F.Blocks[0].Preds = {2};
+          F.Blocks[1].Succs = {2, 3};
+          F.Blocks[2].Preds = F.Blocks[3].Preds = {1};
+          F.Blocks[2].Succs = {0};
+          append(1, NdOp::COND_BR,
+                 {scalar(F.Blocks[2].StartAddr), F.Params[1]});
+          append(2, NdOp::STORE, {Slot, scalar(42)});
+          append(2, NdOp::BRANCH, {scalar(F.Blocks[0].StartAddr)});
+        } else {
+          F.Blocks[1].Succs = {3};
+          F.Blocks[3].Preds = {1};
+          append(1, NdOp::BRANCH, {scalar(F.Blocks[3].StartAddr)});
+          append(2, NdOp::RETURN, {});
+        }
+        append(3, NdOp::RETURN, {Load.Output});
+        if (Reverse)
+          std::reverse(F.Blocks.begin(), F.Blocks.end());
+        const auto Site =
+            std::find_if(F.Blocks.begin(), F.Blocks.end(),
+                         [](const MedBlock &B) { return B.Id == 1; });
+        ASSERT_NE(Site, F.Blocks.end());
+        MedLLVMEmitter E;
+        std::vector<MedVar> Sources;
+        ASSERT_TRUE(MedLLVMProvenanceTestPeer::collectFrameReloadSources(
+            E, F, A, Site->Ops.front(), Sources));
+        ASSERT_EQ(Sources.size(), Backedge ? 2u : 1u);
+        EXPECT_NE(std::find(Sources.begin(), Sources.end(), F.Params[0]),
+                  Sources.end());
+        if (Backedge)
+          EXPECT_NE(std::find(Sources.begin(), Sources.end(), scalar(42)),
+                    Sources.end());
+      }
 }
 
 TEST(LLVMFrameSlotProof, CompletedFrameAddressWalksRetainClosedDependencies) {
@@ -27346,6 +27427,111 @@ TEST(LLVMFrameSlotProof, NarrowArithmeticCannotRetainFullPointerCoordinates) {
                 !Narrow);
     }
   }
+}
+
+TEST(LLVMFrameSlotProof, ReachingSourcesStopEachJoinArmAtItsNearestWrite) {
+  enum class Scenario { Full, Partial, Unknown, Empty, Loop, Unreachable };
+  for (Arch A : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64})
+    for (unsigned Count : {32u, 512u})
+      for (bool Reverse : {false, true})
+        for (Scenario Case :
+             {Scenario::Full, Scenario::Partial, Scenario::Unknown,
+              Scenario::Empty, Scenario::Loop, Scenario::Unreachable}) {
+          SCOPED_TRACE(unsigned(A));
+          SCOPED_TRACE(Count);
+          SCOPED_TRACE(Reverse);
+          SCOPED_TRACE(unsigned(Case));
+          FrameSlotProofFixture F(A);
+          F.SP.SSAVer = 0;
+          MedVar Condition = F.temp();
+          Condition.Kind = MedVar::Param;
+          Condition.RegOff = kNoParamReg;
+          F.Func.Params = {Condition};
+          const MedVar Slot = F.temp(), Dynamic = F.temp(), Loaded = F.temp();
+          auto scalar = [&](uint64_t V) {
+            return MedVar::makeConst(V, F.Width,
+                                     ConstantAddressProvenance::Scalar);
+          };
+          auto target = [&](int Id) {
+            return scalar(F.Func.Blocks[Id].StartAddr);
+          };
+          F.op(0, NdOp::COPY, F.SP, {F.SP});
+          F.op(0, NdOp::INT_ADD, Slot, {F.SP, scalar(uint64_t(-16))});
+          F.op(0, NdOp::INT_ADD, Dynamic, {F.SP, Condition});
+          int Fork = 0;
+          for (unsigned I = 0; I < Count; ++I) {
+            F.op(Fork, NdOp::STORE, {}, {Slot, scalar(0x100 + I)});
+            const int Next = F.addBlock();
+            F.edge(Fork, Next);
+            F.op(Fork, NdOp::BRANCH, {}, {target(Next)});
+            Fork = Next;
+          }
+          const int Left = F.addBlock(), Right = F.addBlock(),
+                    Join = F.addBlock();
+          F.edge(Fork, Left);
+          F.edge(Fork, Right);
+          F.edge(Left, Join);
+          F.edge(Right, Join);
+          F.op(Fork, NdOp::COND_BR, {}, {target(Left), Condition});
+          F.op(Left, NdOp::STORE, {}, {Slot, scalar(1)});
+          F.op(Left, NdOp::BRANCH, {}, {target(Join)});
+          MedVar Written = scalar(2);
+          if (Case == Scenario::Partial)
+            Written.Size = F.Width / 2;
+          if (Case != Scenario::Empty && Case != Scenario::Loop)
+            F.op(Right, NdOp::STORE, {},
+                 {Case == Scenario::Unknown ? Dynamic : Slot, Written});
+          F.op(Right, NdOp::BRANCH, {}, {target(Join)});
+          F.op(Join, NdOp::LOAD, Loaded, {Slot});
+          if (Case == Scenario::Loop) {
+            const int Exit = F.addBlock();
+            F.edge(Join, Fork);
+            F.edge(Join, Exit);
+            // A later write matters only because this edge returns to LOAD.
+            F.op(Join, NdOp::STORE, {}, {Slot, scalar(3)});
+            F.op(Join, NdOp::COND_BR, {}, {target(Fork), Condition});
+            F.op(Exit, NdOp::RETURN, {}, {Loaded});
+          } else
+            F.op(Join, NdOp::RETURN, {}, {Loaded});
+          if (Case == Scenario::Unreachable) {
+            const int Detached = F.addBlock();
+            F.edge(Detached, Join);
+            F.op(Detached, NdOp::STORE, {}, {Dynamic, scalar(4)});
+            F.op(Detached, NdOp::BRANCH, {}, {target(Join)});
+          }
+          if (Reverse)
+            std::reverse(F.Func.Blocks.begin(), F.Func.Blocks.end());
+          const auto Site =
+              std::find_if(F.Func.Blocks.begin(), F.Func.Blocks.end(),
+                           [&](const MedBlock &B) { return B.Id == Join; });
+          ASSERT_NE(Site, F.Func.Blocks.end());
+          MedLLVMEmitter E;
+          std::vector<MedVar> Sources;
+          const bool Expected =
+              Case != Scenario::Partial && Case != Scenario::Unknown;
+          ASSERT_EQ(MedLLVMProvenanceTestPeer::collectFrameReloadSources(
+                        E, F.Func, A, Site->Ops.front(), Sources),
+                    Expected);
+          if (!Expected)
+            EXPECT_TRUE(Sources.empty());
+          else {
+            ASSERT_EQ(Sources.size(), Case == Scenario::Loop ? 3u : 2u);
+            EXPECT_NE(std::find(Sources.begin(), Sources.end(), scalar(1)),
+                      Sources.end());
+            const MedVar Other =
+                Case == Scenario::Empty || Case == Scenario::Loop
+                    ? scalar(0x100 + Count - 1)
+                    : scalar(2);
+            EXPECT_NE(std::find(Sources.begin(), Sources.end(), Other),
+                      Sources.end());
+            if (Case == Scenario::Loop)
+              EXPECT_NE(std::find(Sources.begin(), Sources.end(), scalar(3)),
+                        Sources.end());
+          }
+          const auto [Nodes, Hits] =
+              MedLLVMProvenanceTestPeer::frameSlotWork(E);
+          EXPECT_LE(Nodes + Hits, 64u);
+        }
 }
 
 TEST(LLVMFrameSlotProof, ReachingStoreIterationsReuseOnlyIdenticalFootprints) {

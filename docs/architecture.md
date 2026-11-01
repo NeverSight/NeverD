@@ -3954,24 +3954,29 @@ When the block count alone exceeds their existing node budget, the shared
 query refuses immediately rather than repeatedly allocating doomed indexes.
 This does not change which constraints the bounded proof can establish.
 
-Frame reload dataflow records source-set additions while merging, preserving
-MedIR value equality and insertion order. Uninitialized or invalid states keep
-their flags but need no reaching-source set: a successful reload cannot consume
-them, and the only recovering transfer is a full-width exact STORE that
-replaces all prior sources. This avoids propagating irrelevant source unions
-through poisoned paths while retaining later overwrite recovery.
-A deduplicated worklist visits the structural CFG in reverse postorder, so an
-acyclic join receives its predecessors before propagating downstream. Loops
-still iterate until their edge states stabilize; scheduling drops no edge or
-source and introduces no new proof assumption.
-The query restricts propagation to structural predecessors of the reload.
-Writes after the reload remain relevant when an ordinary or exceptional
-backedge can return to it; non-returning suffixes cannot supply its value.
-An exact reload first applies the same transfer to its local prefix with an
-uninitialized incoming state. A full-width overwrite can then establish its
-source without propagating older values. The immutable CFG index separately
-requires structural reachability from the function entry. Unclosed prefixes
-and runtime-source queries retain the complete predecessor analysis.
+Exact frame reload proofs use the shared write transfer to walk backward from
+one LOAD. Every path stops at its nearest full-width STORE or invalidating
+write; earlier values cannot change that result. Transparent blocks continue
+to all structural predecessors reachable from the function entry. The result
+unions every nearest source and refuses any path with a kill or uninitialized
+entry. Entry parameter homes also contribute when a loop enters the entry
+block. Visited edge identities close transparent cycles and retain each
+outgoing edge's separate equality facts. No iteration count or guessed source
+replaces this traversal.
+
+The immutable CFG index includes ordinary and exceptional predecessors.
+Writes after the LOAD remain relevant when a backedge can return to it;
+non-returning suffixes cannot supply its value. A local overwrite or kill uses
+the same transfer before the predecessor walk and preserves the entry
+reachability requirement.
+
+Runtime-source queries retain their bounded forward dataflow, including partial
+writes and possible aliases. Source-set additions preserve MedIR value equality
+and insertion order. Uninitialized or invalid states need no source union:
+only a later exact full-width STORE can recover them. A deduplicated worklist
+visits structural predecessors of the LOAD in reverse postorder; loops iterate
+until their edge states stabilize. The backward Exact proof changes neither
+this runtime traversal nor its work charges.
 
 Frame-address reachability retains witnessed paths to frame roots. Only a
 completed top-level failure can mark all visited dependencies as rootless;

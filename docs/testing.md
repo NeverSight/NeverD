@@ -3848,12 +3848,17 @@ propagation of incomplete source sets through a chain of joins.
 `ReloadSourcesIgnoreNonReturningSuffixes` checks that later writes are ignored
 only when neither ordinary nor exceptional control flow can return to the
 reload, including partial writes and reversed block storage.
-`LocalOverwriteCutsOffReachingStoreHistory` checks that an exact local store
-avoids revisiting preceding stores across all four architectures, reversed
-block storage and loops. Partial, unknown-address and atomic local writes
-also bound proof work: earlier stores cannot repair a later local kill. A
-subsequent full-width overwrite still restores the source, while a disconnected
-block cannot supply a local source proof.
+`LocalOverwriteCutsOffReachingStoreHistory` checks local writes and writes
+before one or eight transparent blocks across all four architectures, reversed
+block storage and loops. Partial, unknown-address and atomic writes also bound
+proof work: earlier stores cannot repair a later kill. A subsequent full-width
+overwrite restores the source; a disconnected block cannot supply a proof.
+`UniquePredecessorWalkRetainsEntryHomesAndBackedges` retains the implicit entry
+parameter home even when a loop also enters the entry block.
+`ReachingSourcesStopEachJoinArmAtItsNearestWrite` checks all nearest sources
+across joins, partial and unknown writes, an arm without a write, a returning
+suffix and an unreachable poison path. Its work bound is independent of the
+number of older overwritten stores.
 `CompletedFrameAddressWalksRetainClosedDependencies` checks shared positive
 and negative prefixes, cyclic roots in both query orders, and retirement of
 all retained answers when the feasible-edge generation changes.
