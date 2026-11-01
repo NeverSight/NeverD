@@ -1,4 +1,5 @@
 {
+  "published_path_normalization": "Private checkout and host-tool prefixes are rendered as <repository>/, <llvm-checkout>/, <neverc-checkout>/ and <host-tools>/. All other arguments, outcomes, timings and original artifact digests are retained.",
   "schema_version": 1,
   "scope": "HLE native operation contexts and explicit x64 source publication",
   "physical_transaction_commit_qualified": false,
@@ -339,7 +340,7 @@
       "manifest_sha256": null,
       "tools": {
         "host": {
-          "path": "/home/ad/.local/bin/clang",
+          "path": "<host-tools>/bin/clang",
           "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
         },
         "compiler": {
@@ -347,7 +348,7 @@
           "sha256": "ff2f0d7bd4e203321abf41a4c91be355db75b7379c09a2aa102f63f515ebfee2"
         },
         "llc": {
-          "path": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc",
+          "path": "<llvm-checkout>/build-intrinsics/bin/llc",
           "sha256": "d8e7979c12407ba53d106050359817ccc32be0dd27a697e475ff360dd2cf6551"
         }
       },
@@ -400,11 +401,11 @@
       "manifest_sha256": null,
       "tools": {
         "host": {
-          "path": "/home/ad/.local/bin/clang",
+          "path": "<host-tools>/bin/clang",
           "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
         },
         "llc": {
-          "path": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc",
+          "path": "<llvm-checkout>/build-intrinsics/bin/llc",
           "sha256": "d8e7979c12407ba53d106050359817ccc32be0dd27a697e475ff360dd2cf6551"
         }
       },
@@ -457,7 +458,7 @@
       "manifest_sha256": null,
       "tools": {
         "host": {
-          "path": "/home/ad/.local/bin/clang",
+          "path": "<host-tools>/bin/clang",
           "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
         },
         "compiler": {
@@ -465,7 +466,7 @@
           "sha256": "ff2f0d7bd4e203321abf41a4c91be355db75b7379c09a2aa102f63f515ebfee2"
         },
         "llc": {
-          "path": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc",
+          "path": "<llvm-checkout>/build-intrinsics/bin/llc",
           "sha256": "d8e7979c12407ba53d106050359817ccc32be0dd27a697e475ff360dd2cf6551"
         }
       },
@@ -518,11 +519,11 @@
       "manifest_sha256": null,
       "tools": {
         "host": {
-          "path": "/home/ad/.local/bin/clang",
+          "path": "<host-tools>/bin/clang",
           "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
         },
         "llc": {
-          "path": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc",
+          "path": "<llvm-checkout>/build-intrinsics/bin/llc",
           "sha256": "d8e7979c12407ba53d106050359817ccc32be0dd27a697e475ff360dd2cf6551"
         }
       },
@@ -575,7 +576,7 @@
       "manifest_sha256": null,
       "tools": {
         "host": {
-          "path": "/home/ad/.local/bin/clang",
+          "path": "<host-tools>/bin/clang",
           "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
         },
         "compiler": {
@@ -630,7 +631,7 @@
       "manifest_sha256": "4b7fab1299ae7c7048142e4bfa548fbe3a98abb2246507dd852fb08bb1cac79b",
       "tools": {
         "host": {
-          "path": "/home/ad/.local/bin/clang",
+          "path": "<host-tools>/bin/clang",
           "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
         },
         "compiler": {
@@ -638,7 +639,7 @@
           "sha256": "ff2f0d7bd4e203321abf41a4c91be355db75b7379c09a2aa102f63f515ebfee2"
         },
         "llc": {
-          "path": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc",
+          "path": "<llvm-checkout>/build-intrinsics/bin/llc",
           "sha256": "d8e7979c12407ba53d106050359817ccc32be0dd27a697e475ff360dd2cf6551"
         }
       },
@@ -691,7 +692,7 @@
       "manifest_sha256": "4b7fab1299ae7c7048142e4bfa548fbe3a98abb2246507dd852fb08bb1cac79b",
       "tools": {
         "host": {
-          "path": "/home/ad/.local/bin/clang",
+          "path": "<host-tools>/bin/clang",
           "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
         },
         "compiler": {
@@ -699,7 +700,7 @@
           "sha256": "ff2f0d7bd4e203321abf41a4c91be355db75b7379c09a2aa102f63f515ebfee2"
         },
         "llc": {
-          "path": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc",
+          "path": "<llvm-checkout>/build-intrinsics/bin/llc",
           "sha256": "d8e7979c12407ba53d106050359817ccc32be0dd27a697e475ff360dd2cf6551"
         }
       },
@@ -752,7 +753,7 @@
       "manifest_sha256": "4b7fab1299ae7c7048142e4bfa548fbe3a98abb2246507dd852fb08bb1cac79b",
       "tools": {
         "host": {
-          "path": "/home/ad/.local/bin/clang",
+          "path": "<host-tools>/bin/clang",
           "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
         },
         "compiler": {
@@ -807,7 +808,7 @@
       "manifest_sha256": "13162a0059e0706ecdc13944ba81383ebc5f580e6caf4893b0e29e6dbf7b848d",
       "tools": {
         "host": {
-          "path": "/home/ad/.local/bin/clang",
+          "path": "<host-tools>/bin/clang",
           "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
         },
         "compiler": {
@@ -815,7 +816,7 @@
           "sha256": "ff2f0d7bd4e203321abf41a4c91be355db75b7379c09a2aa102f63f515ebfee2"
         },
         "llc": {
-          "path": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc",
+          "path": "<llvm-checkout>/build-intrinsics/bin/llc",
           "sha256": "d8e7979c12407ba53d106050359817ccc32be0dd27a697e475ff360dd2cf6551"
         }
       },
@@ -868,7 +869,7 @@
       "manifest_sha256": "13162a0059e0706ecdc13944ba81383ebc5f580e6caf4893b0e29e6dbf7b848d",
       "tools": {
         "host": {
-          "path": "/home/ad/.local/bin/clang",
+          "path": "<host-tools>/bin/clang",
           "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
         },
         "compiler": {
@@ -876,7 +877,7 @@
           "sha256": "ff2f0d7bd4e203321abf41a4c91be355db75b7379c09a2aa102f63f515ebfee2"
         },
         "llc": {
-          "path": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc",
+          "path": "<llvm-checkout>/build-intrinsics/bin/llc",
           "sha256": "d8e7979c12407ba53d106050359817ccc32be0dd27a697e475ff360dd2cf6551"
         }
       },
@@ -929,7 +930,7 @@
       "manifest_sha256": "13162a0059e0706ecdc13944ba81383ebc5f580e6caf4893b0e29e6dbf7b848d",
       "tools": {
         "host": {
-          "path": "/home/ad/.local/bin/clang",
+          "path": "<host-tools>/bin/clang",
           "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
         },
         "compiler": {
@@ -984,7 +985,7 @@
       "manifest_sha256": "7351996c6763fb52a617afea1b8e702a6cd0658bde4d93154732d9300a6fb225",
       "tools": {
         "host": {
-          "path": "/home/ad/.local/bin/clang",
+          "path": "<host-tools>/bin/clang",
           "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
         },
         "compiler": {
@@ -992,7 +993,7 @@
           "sha256": "ff2f0d7bd4e203321abf41a4c91be355db75b7379c09a2aa102f63f515ebfee2"
         },
         "llc": {
-          "path": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc",
+          "path": "<llvm-checkout>/build-intrinsics/bin/llc",
           "sha256": "d8e7979c12407ba53d106050359817ccc32be0dd27a697e475ff360dd2cf6551"
         }
       },
@@ -1045,7 +1046,7 @@
       "manifest_sha256": "7351996c6763fb52a617afea1b8e702a6cd0658bde4d93154732d9300a6fb225",
       "tools": {
         "host": {
-          "path": "/home/ad/.local/bin/clang",
+          "path": "<host-tools>/bin/clang",
           "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
         },
         "compiler": {
@@ -1053,7 +1054,7 @@
           "sha256": "ff2f0d7bd4e203321abf41a4c91be355db75b7379c09a2aa102f63f515ebfee2"
         },
         "llc": {
-          "path": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc",
+          "path": "<llvm-checkout>/build-intrinsics/bin/llc",
           "sha256": "d8e7979c12407ba53d106050359817ccc32be0dd27a697e475ff360dd2cf6551"
         }
       },
@@ -1106,7 +1107,7 @@
       "manifest_sha256": "7351996c6763fb52a617afea1b8e702a6cd0658bde4d93154732d9300a6fb225",
       "tools": {
         "host": {
-          "path": "/home/ad/.local/bin/clang",
+          "path": "<host-tools>/bin/clang",
           "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
         },
         "compiler": {
@@ -1161,7 +1162,7 @@
       "manifest_sha256": "ab1595448bbb706f7c59bdfd5f0f4404af7fe42b5b30b1aa19d85dabb9cbe09e",
       "tools": {
         "host": {
-          "path": "/home/ad/.local/bin/clang",
+          "path": "<host-tools>/bin/clang",
           "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
         },
         "compiler": {
@@ -1169,7 +1170,7 @@
           "sha256": "ff2f0d7bd4e203321abf41a4c91be355db75b7379c09a2aa102f63f515ebfee2"
         },
         "llc": {
-          "path": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc",
+          "path": "<llvm-checkout>/build-intrinsics/bin/llc",
           "sha256": "d8e7979c12407ba53d106050359817ccc32be0dd27a697e475ff360dd2cf6551"
         }
       },
@@ -1222,7 +1223,7 @@
       "manifest_sha256": "ab1595448bbb706f7c59bdfd5f0f4404af7fe42b5b30b1aa19d85dabb9cbe09e",
       "tools": {
         "host": {
-          "path": "/home/ad/.local/bin/clang",
+          "path": "<host-tools>/bin/clang",
           "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
         },
         "compiler": {
@@ -1230,7 +1231,7 @@
           "sha256": "ff2f0d7bd4e203321abf41a4c91be355db75b7379c09a2aa102f63f515ebfee2"
         },
         "llc": {
-          "path": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc",
+          "path": "<llvm-checkout>/build-intrinsics/bin/llc",
           "sha256": "d8e7979c12407ba53d106050359817ccc32be0dd27a697e475ff360dd2cf6551"
         }
       },
@@ -1283,7 +1284,7 @@
       "manifest_sha256": "ab1595448bbb706f7c59bdfd5f0f4404af7fe42b5b30b1aa19d85dabb9cbe09e",
       "tools": {
         "host": {
-          "path": "/home/ad/.local/bin/clang",
+          "path": "<host-tools>/bin/clang",
           "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
         },
         "compiler": {
@@ -1339,7 +1340,7 @@
       "llvm_only": false,
       "tools": {
         "host": {
-          "path": "/home/ad/.local/bin/clang",
+          "path": "<host-tools>/bin/clang",
           "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
         },
         "compiler": {
@@ -1347,7 +1348,7 @@
           "sha256": "ff2f0d7bd4e203321abf41a4c91be355db75b7379c09a2aa102f63f515ebfee2"
         },
         "llc": {
-          "path": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc",
+          "path": "<llvm-checkout>/build-intrinsics/bin/llc",
           "sha256": "d8e7979c12407ba53d106050359817ccc32be0dd27a697e475ff360dd2cf6551"
         }
       },
@@ -1400,7 +1401,7 @@
       "llvm_only": false,
       "tools": {
         "host": {
-          "path": "/home/ad/.local/bin/clang",
+          "path": "<host-tools>/bin/clang",
           "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
         },
         "compiler": {
@@ -1408,7 +1409,7 @@
           "sha256": "ff2f0d7bd4e203321abf41a4c91be355db75b7379c09a2aa102f63f515ebfee2"
         },
         "llc": {
-          "path": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc",
+          "path": "<llvm-checkout>/build-intrinsics/bin/llc",
           "sha256": "d8e7979c12407ba53d106050359817ccc32be0dd27a697e475ff360dd2cf6551"
         }
       },
@@ -1461,7 +1462,7 @@
       "llvm_only": false,
       "tools": {
         "host": {
-          "path": "/home/ad/.local/bin/clang",
+          "path": "<host-tools>/bin/clang",
           "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
         },
         "compiler": {
