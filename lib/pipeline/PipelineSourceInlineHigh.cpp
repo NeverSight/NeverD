@@ -120,8 +120,15 @@ specializeHighSourceBodies(const BinaryImage &Image, PipelineResult &Recovered,
                            const PipelineOptions &Options, DebugContext *Debug,
                            const std::map<va_t, SourceInlineBody> &Bodies,
                            const SourceInlineHighView &Original) {
-  if (Bodies.empty() ||
-      !Pipeline().resumeHighIR(Image, Options, Recovered, Debug))
+  if (Bodies.empty())
+    return std::nullopt;
+  // The original structured callers are reused below. Their joint MedIR
+  // already supplied the ABI proof; only the admitted helper bodies need
+  // another HighIR conversion. Keep the shared LowIR/name/signature facts.
+  std::erase_if(Recovered.MedFuncs, [&](const MedFunc &Function) {
+    return !Bodies.contains(Function.Entry);
+  });
+  if (!Pipeline().resumeHighIR(Image, Options, Recovered, Debug))
     return std::nullopt;
 
   struct Helper {
