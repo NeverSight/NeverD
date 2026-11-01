@@ -2343,6 +2343,12 @@ TEST(X64ContinuationSource, RequiresExplicitDomainAndBoundedDistinctAddresses) {
   MSRs = options();
   MSRs.NativePageTableAccess = true;
   CheckError({0x1000}, MSRs);
+  MSRs = options();
+  MSRs.NativeDebugRegisterAccess = true;
+  CheckError({0x1000}, MSRs);
+  MSRs = options();
+  MSRs.NativePageGlobalAccess = true;
+  CheckError({0x1000}, MSRs);
   auto Returns = smapOptions();
   Returns.Profile = X64ContinuationProfile::KernelReturnNoFaultV5;
   CheckError({0x1000}, Returns);
@@ -2366,7 +2372,9 @@ TEST(X64ContinuationSource, RequiresExplicitDomainAndBoundedDistinctAddresses) {
 #include "X64FastSystemContinuationTests.inc"
 #include "X64FrameReturnContinuationTests.inc"
 #include "X64FredContinuationTests.inc"
+#include "X64LockedScalarContinuationTests.inc"
 #include "X64MemoryJumpContinuationTests.inc"
+#include "X64NativeRegisterContinuationTests.inc"
 #include "X64RepeatedTransferContinuationTests.inc"
 #include "X64SysretContinuationTests.inc"
 #include "X64UserInterruptContinuationTests.inc"

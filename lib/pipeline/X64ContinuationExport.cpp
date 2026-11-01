@@ -9,6 +9,8 @@
 
 #include "neverd/pipeline/X64ContinuationExport.h"
 
+#include "X64ContinuationEnvironment.h"
+#include "X64RtmAbortRegions.h"
 #include "X64SpecialRegions.h"
 
 #include "neverd/analysis/arch/x86_64/X64ContinuationSource.h"
@@ -64,6 +66,7 @@ struct Request {
   bool Entries = false;
   bool FollowInternalCalls = false;
   bool FollowDirectJumps = false;
+  bool NativeRtmAbortRegions = false;
   unsigned CalleeDepth = 0;
   bool DirectDispatch = false;
 };
@@ -93,6 +96,9 @@ llvm::Expected<Request> readRequest(llvm::StringRef Text) {
                                        "native_speculation_control_msrs",
                                        "native_descriptor_queries",
                                        "native_page_table_access",
+                                       "native_debug_register_access",
+                                       "native_page_global_access",
+                                       "native_rtm_abort_regions",
                                        "native_kvm_hypercalls",
                                        "native_hyperv_hypercall_entry",
                                        "follow_internal_calls",
@@ -181,6 +187,9 @@ llvm::Expected<Request> readRequest(llvm::StringRef Text) {
        &Options.NativeSpeculationControlMsrs},
       {"native_descriptor_queries", &Options.NativeDescriptorQueries},
       {"native_page_table_access", &Options.NativePageTableAccess},
+      {"native_debug_register_access", &Options.NativeDebugRegisterAccess},
+      {"native_page_global_access", &Options.NativePageGlobalAccess},
+      {"native_rtm_abort_regions", &Result.NativeRtmAbortRegions},
       {"native_kvm_hypercalls", &Options.NativeKvmHypercalls},
       {"follow_internal_calls", &Result.FollowInternalCalls},
       {"follow_direct_jumps", &Result.FollowDirectJumps}};
@@ -197,6 +206,9 @@ llvm::Expected<Request> readRequest(llvm::StringRef Text) {
         return invalid(Key + " must be a boolean");
       *Destination = *Flag;
     }
+  if (Result.NativeRtmAbortRegions &&
+      Options.Profile != X64ContinuationProfile::KernelEventsNoFaultV6)
+    return invalid("native RTM abort regions require kernel-events-v6");
   if (const auto *Value = Object->get("native_hyperv_hypercall_entry")) {
     auto Entry = integer(*Value);
     if (!Entry)
@@ -479,9 +491,9 @@ exportX64Continuation(const BinaryImage &Image, llvm::StringRef RequestJSON,
   llvm::json::Array Regions;
   std::vector<va_t> Addresses = Request->Addresses;
   if (Request->Entries) {
-    auto Selection = selectX64SpecialRegions(Image, Addresses, Request->Options,
-                                             Request->CalleeDepth,
-                                             Request->FollowDirectJumps, Debug);
+    auto Selection = selectX64SpecialRegions(
+        Image, Addresses, Request->Options, Request->CalleeDepth,
+        Request->FollowDirectJumps, Request->NativeRtmAbortRegions, Debug);
     if (!Selection)
       return Selection.takeError();
     Addresses = std::move(Selection->Addresses);
@@ -555,6 +567,11 @@ exportX64Continuation(const BinaryImage &Image, llvm::StringRef RequestJSON,
     emitX64SpecialRegionDriver(OS, *Units, Request->FollowInternalCalls);
   else
     driver(OS, *Units, Request->FollowInternalCalls);
+  emitX64ContinuationEnvironment(OS, Version);
+  llvm::json::Array RtmAborts;
+  if (Request->NativeRtmAbortRegions)
+    RtmAborts = emitX64RtmAbortEnvironment(OS, Image, *Units,
+                                           *Request->Options.PagingAddressBits);
   if (Result.Source.size() > limits::pipeline::kX64ContinuationSourceBytes)
     return invalid("x64 continuation source exceeds the output size limit");
   auto Binding = llvm::json::parse(RequestJSON);
@@ -564,6 +581,9 @@ exportX64Continuation(const BinaryImage &Image, llvm::StringRef RequestJSON,
       {"schema_version", 2},
       {"profile", Profile},
       {"interface", "explicit-machine-state"},
+      {"environment_driver", "neverd_x64_run_v" + std::to_string(Version)},
+      {"environment_binding",
+       "explicit full-state callback; separately bounded"},
       {"call_return_policy",
        Request->FollowInternalCalls ? "follow-selected-targets" : "stop"},
       {"coverage",
@@ -648,6 +668,15 @@ exportX64Continuation(const BinaryImage &Image, llvm::StringRef RequestJSON,
                              "preserved; service writes exclude state, "
                              "budget, generated code and compiler stack; "
                            : "") +
+           std::string(Request->Options.NativeDebugRegisterAccess
+                           ? "native supervisor DR0..3/DR6/DR7; valid values; "
+                             "GD and breakpoints do not trap generated code, "
+                             "state or compiler stack; "
+                           : "") +
+           std::string(Request->Options.NativePageGlobalAccess
+                           ? "native CR4 with PGE-only writes and actual TLB "
+                             "invalidation; stable compiler mappings; "
+                           : "") +
            std::string(
                "successful sequential RAM; no MMIO, "
                "concurrent writes, memory faults or asynchronous events; exact "
@@ -658,6 +687,13 @@ exportX64Continuation(const BinaryImage &Image, llvm::StringRef RequestJSON,
       {"ordinary_source_abi", false},
       {"ordinary_source_validation", "not-run"},
       {"whole_function_coverage", false}};
+  if (Request->NativeRtmAbortRegions)
+    Report["native_rtm_abort_environment"] = llvm::json::Object{
+        {"provider", "neverd_x64_rtm_abort_environment_v6"},
+        {"regions", std::move(RtmAborts)},
+        {"domain", "CPUID RTM; outside RTM/HLE; no debug traps or faults; "
+                   "exact immutable pair; actual native abort status; one "
+                   "environment invocation per pair"}};
   llvm::raw_string_ostream(Result.Manifest)
       << llvm::formatv("{0:2}\n", llvm::json::Value(std::move(Report)));
   return Result;

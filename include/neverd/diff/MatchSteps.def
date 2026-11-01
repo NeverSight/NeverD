@@ -60,8 +60,8 @@ NEVERD_DIFF_FUNCTION_STEP(CallGraphPosition, "call_graph_position", 0.70,
 NEVERD_DIFF_FUNCTION_STEP(CallSite, "call_site", 0.80,
                           "Called from the same call site of matched callers")
 NEVERD_DIFF_FUNCTION_STEP(Neighborhood, "neighborhood", 0.75,
-                          "The only remaining caller or callee of matched "
-                          "functions on both sides")
+                          "Corresponding observed caller or callee roles of "
+                          "matched functions")
 NEVERD_DIFF_FUNCTION_STEP(Similarity, "similarity", 0.60,
                           "The most similar remaining body by a clear margin")
 NEVERD_DIFF_FUNCTION_STEP(DataReference, "data_reference", 0.80,

@@ -1937,6 +1937,29 @@ the structural candidate alignment recipe in parallel batches. Cancellation
 publishes no partially reviewed deferrals. The pass visits each caller adjacency
 once instead of comparing all functions that share initialization calls.
 
+Matcher version 25 separates unanimous whole-caller roles from split roles and
+local block observations. Only unanimous roles retain the earlier review rule.
+Split/local roles need a preserved complete prior CFG or a competing body above
+the existing threshold with greater known instruction coverage. Local review
+may inspect complete observed blocks of partial callers; unknown instructions,
+data and transfers still reject a block. This never supplies automatic identity
+or completes an incomplete function.
+
+The same frozen review indexes independent observed caller/callee neighborhoods
+once in parallel. Ordered calls require distinct mapped complete callee anchors
+and no overlap with the prior body's mapped callees. Caller alternatives need
+two additional witnesses and must cover every observed mapped source caller;
+two shared callee anchors or greater known instruction coverage must also
+support them. Candidate retrieval intersects the rarest caller's adjacency and
+uses the existing informative-bucket bound. Sorted publication preserves
+direction/layout/thread determinism, and cancellation publishes no deferrals.
+CFG-only weak identities with changed calls and zero mapped-context agreement
+also require the configured minimum instruction-only coverage. Otherwise their
+original structural evidence remains a candidate. Names, exact/normalized
+bodies, context-supported pairs and explicit analyst decisions remain protected.
+None of these reviews changes normalized native evidence or the saved per-pair
+alignment recipe.
+
 Each `FunctionMatch` and `FunctionDelta` retains an `InstructionAlignmentProfile`.
 `CurrentInstructionAlignmentProfile` owns the default for new pairs, currently
 `ordered-block-spans-v1`. Matcher-22 `single-block-spans-v1` measurements retain
@@ -7928,6 +7951,17 @@ and reused bodies. Format-derived call reads are still collected at ordered
 publication, so overlapping call sites cannot inherit a different contract
 because a worker completed earlier.
 
+Incoming-stack summaries lazily query `CallStackOffsets` when an address uses
+a variable scalar offset. It reuses the complete finite dataflow in
+`LowScalarTargets`, including CFG joins, loops, instruction-local temporaries
+and overlapping byte writes. Signed hulls compose with entry-relative stack
+ranges only when both address arithmetic and the final accessed byte fit.
+The optional per-function work budget is separate from computed-target
+discovery; exhaustion or incomplete entry coverage keeps the offset unknown.
+Memory values and opaque effects supply no scalar facts. This proves bounded
+private accesses without granting an alias exclusion or suppressing escapes
+into incoming argument storage.
+
 Constant printf formats may reach a shared call from several blocks. A bounded
 fixed point retains at most four constants per register and publishes only
 after convergence. Every possible format must assign the same argument
@@ -10098,6 +10132,13 @@ callable and registration-owned storage keep their original-image contracts.
 `LLVMCStorage` shares explicit over-alignment across local and global objects and their declarations. String definitions retain the complete LLVM array extent, including trailing zero bytes. LLVM global values denote addresses in expressions and initializers; only object declarations and direct loads/stores use bare C names. Imported data bindings retain their existing address representation.
 
 The lifted stack frame prints as the byte array `frame0`. Its named slots become separate C locals only while a type bounds every frame address the function passes to a call or stores to memory: the callee's prototype, a debug-typed local passed in the same position of the same callee, or the debug type of the local at that offset. `analyzeDeadFrameStores` records those escapes, and a frame store stays live while a call that may read memory can still run after it. A frame with an unbounded escape, or one that must stay whole for another reason, keeps one object, and its named slots become members of one record laid out exactly like the frame bytes. Such a member prints as `frame0.var_m10`, and the gaps are named `gapXX`, as IDA names structure gaps. Members are integers or arrays of integers at aligned offsets, and only integer accesses use them: a floating-point, vector or pointer access stays on the frame bytes, where C does not convert the value. A record type keeps its bytes raw, because its layout comes from the reader's headers. A member is read into a temporary where the load is, because a call can change escaped bytes before a later use.
+
+An unresolved indexed read or write also keeps its possible backing frames
+whole. Retaining stores alone cannot connect a separate scalar local with an
+indexed access through the original byte array. Analyst frame names retain
+these alias and storage facts even when dead-store elimination is disabled;
+compatible named slots become members of the same frame record, subject to
+the existing access-width and layout checks.
 
 ## Cross-architecture translation contract
 
@@ -15297,6 +15338,16 @@ preventing large selections from reconstructing one expensive compiler graph.
 Every step still checks its domain and budget; external CALL/RET retain priority
 over exhaustion, while context transitions always stop. Both C routes share
 this owner, and default requests retain their existing switch driver.
+
+`X64ContinuationEnvironment` emits the companion `neverd_x64_run_vN` entry
+without adding work to either selected-instruction driver. An explicit provider
+receives the stopping status and complete represented state, and may request
+resumption at its updated PC. The driver neither marshals ordinary parameters
+nor restores stack/register state after the provider. Provider attempts consume
+a separate caller-owned budget, including declined and nonprogressing attempts;
+invalid state and exhausted translated-instruction budgets remain final stops.
+The provider owns native effects and profile reentry. This is an execution
+interface, not an inferred Windows service contract or an ordinary ABI proof.
 
 Continuation source lowers `RequireAligned` through the shared
 `X64Alignment` predicate after projecting a live FS/GS base. A failed predicate

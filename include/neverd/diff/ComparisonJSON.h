@@ -46,7 +46,7 @@ inline constexpr unsigned AlignmentProfileMatcherVersion = 22;
 /// The version of the matcher, the features and the delta; part of a
 /// comparison's identity.  Raise it whenever a change could pair functions
 /// differently, measure a pair differently or retain different candidates.
-inline constexpr unsigned MatcherVersion = 24;
+inline constexpr unsigned MatcherVersion = 25;
 
 /// Writes \p Result of \p Primary and \p Secondary as a saved comparison.
 /// SummaryOnly emits bounded metadata and counts without inventories or pairs.

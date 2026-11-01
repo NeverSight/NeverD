@@ -15,6 +15,7 @@
 #include "X64ContinuationEvents.h"
 #include "X64ContinuationFredReturns.h"
 #include "X64ContinuationMpx.h"
+#include "X64ContinuationNativeRegisters.h"
 #include "X64ContinuationSvm.h"
 #include "X64ContinuationSystemTransfers.h"
 #include "X64ContinuationUserInterrupts.h"
@@ -524,13 +525,16 @@ bool supportedOperation(const LowOp &Op,
                         bool WideDivision) {
   if (Op.NumInputs > std::size(Op.Inputs))
     return false;
+  const bool CompareExchange = Op.Opcode == NdOp::ATOMIC_CMPXCHG;
   const bool AtomicScalar =
       hasControlState(Options) &&
-      (Op.Opcode == NdOp::ATOMIC_ADD || Op.Opcode == NdOp::ATOMIC_XCHG) &&
-      Op.NumInputs == 2 && Op.Output.isTemp() &&
+      (Op.Opcode == NdOp::ATOMIC_ADD || Op.Opcode == NdOp::ATOMIC_XCHG ||
+       CompareExchange) &&
+      Op.NumInputs == (CompareExchange ? 3 : 2) && Op.Output.isTemp() &&
       (Op.Output.Size == 1 || Op.Output.Size == 2 || Op.Output.Size == 4 ||
        Op.Output.Size == 8) &&
       Op.Inputs[0].Size == 8 && Op.Inputs[1].Size == Op.Output.Size &&
+      (!CompareExchange || Op.Inputs[2].Size == Op.Output.Size) &&
       Op.MemoryOrdering == NdMemoryOrdering::SequentiallyConsistent;
   const bool Locked = lockedMemoryIntrinsic(Op, Options);
   if (!supportedValue(Op.Output) ||
@@ -591,7 +595,9 @@ bool supportedOperation(const LowOp &Op,
            faultAddressIntrinsic(Op, Options) || fenceIntrinsic(Op, Options) ||
            writePrefetchIntrinsic(Op, Options) || msrIntrinsic(Op, Options) ||
            descriptorQueryIntrinsic(Op, Options) ||
-           pageTableIntrinsic(Op, Options);
+           pageTableIntrinsic(Op, Options) ||
+           detail::nativeDebugRegisterOperation(Op, Options) ||
+           detail::nativePageGlobalOperation(Op, Options);
   }
   default:
     // Admission and arithmetic widths use the scalar owner. The operation
@@ -992,6 +998,9 @@ struct Writer {
       store(offsetof(State, RFlags), Packed);
     } else if (msrIntrinsic(Op, Options)) {
       msr(Op);
+    } else if (detail::nativePageGlobalOperation(Op, Options)) {
+      detail::guardNativePageGlobalWrite(*this, Op);
+      Block->Ops.push_back(Op);
     } else if (faultAddressIntrinsic(Op, Options)) {
       if (Op.Inputs[0].Offset == uint64_t(Intrinsic::ReadCr2))
         emit(NdOp::COPY, Op.Output, {load(offsetof(StateV4, CR2))});
@@ -1659,6 +1668,9 @@ buildX64ContinuationSource(const BinaryImage &Image,
     return invalid("native write prefetch source requires an x64 host profile");
   if (Options.NativePageTableAccess && !Controls)
     return invalid("native paging requires a controls profile");
+  if ((Options.NativeDebugRegisterAccess || Options.NativePageGlobalAccess) &&
+      !Controls)
+    return invalid("native debug and CR4 access require a controls profile");
   if (Options.NativeDescriptorQueries && !Controls)
     return invalid("native descriptor queries require an x64 control profile");
   if ((Options.SegmentBaseMSRAddressBits ||

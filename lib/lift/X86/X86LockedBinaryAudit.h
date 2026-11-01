@@ -1,24 +1,31 @@
-//===- X86LockedLogicAudit.h - Locked logical effect audit ----*- C++ -*-===//
+//===- X86LockedBinaryAudit.h - Locked binary effect audit ----*- C++ -*-===//
 //
 // NeverD Decompiler
 //
 //===----------------------------------------------------------------------===//
 /// \file
-/// Authenticate one legacy locked logical memory transaction.
+/// Authenticate one legacy locked ADD or logical memory transaction.
 //===----------------------------------------------------------------------===//
 
-#ifndef NEVERD_LIB_LIFT_X86_X86LOCKEDLOGICAUDIT_H
-#define NEVERD_LIB_LIFT_X86_X86LOCKEDLOGICAUDIT_H
+#ifndef NEVERD_LIB_LIFT_X86_X86LOCKEDBINARYAUDIT_H
+#define NEVERD_LIB_LIFT_X86_X86LOCKEDBINARYAUDIT_H
 
 #include "X86LegacyMemoryAudit.h"
 
-namespace neverd::lockedlogicaudit {
+#include "neverd/support/ISAEncoding.h"
+
+#include "llvm/ADT/ArrayRef.h"
+
+#include <cstddef>
+#include <cstdint>
+
+namespace neverd::lockedbinaryaudit {
 
 inline bool form(const cs_insn *Insn, Arch Target) {
   if (!Insn || !Insn->detail || Target != Arch::X64 || !Insn->size ||
-      Insn->size > 15 ||
+      Insn->size > x86::kMaxInstructionLen ||
       (Insn->id != X86_INS_AND && Insn->id != X86_INS_OR &&
-       Insn->id != X86_INS_XOR))
+       Insn->id != X86_INS_XOR && Insn->id != X86_INS_ADD))
     return false;
   const auto &X = Insn->detail->x86;
   uint8_t Lock = 0, Operand = 0, Address = 0, Segment = 0, Rex = 0;
@@ -41,9 +48,10 @@ inline bool form(const cs_insn *Insn, Arch Target) {
   if (!Lock || Pos + 2 > Insn->size || X.op_count != 2)
     return false;
   const auto Opcode = Insn->bytes[Pos], ModRM = Insn->bytes[Pos + 1];
-  const unsigned Group = Insn->id == X86_INS_AND  ? 4
-                         : Insn->id == X86_INS_OR ? 1
-                                                  : 6;
+  const unsigned Group = Insn->id == X86_INS_ADD   ? 0
+                         : Insn->id == X86_INS_AND ? 4
+                         : Insn->id == X86_INS_OR  ? 1
+                                                   : 6;
   const unsigned RegisterOpcode = Group * 8;
   const bool Immediate = Opcode == 0x80 || Opcode == 0x81 || Opcode == 0x83;
   const bool Byte = Opcode == 0x80 || Opcode == RegisterOpcode;
@@ -65,6 +73,13 @@ inline bool form(const cs_insn *Insn, Arch Target) {
           (ImmediateBytes ? Insn->size - ImmediateBytes : 0) ||
       X.avx_sae || X.avx_rm != X86_AVX_RM_INVALID ||
       X.avx_cc != X86_AVX_CC_INVALID)
+    return false;
+  if (Insn->id == X86_INS_ADD &&
+      (X.operands[0].access != (CS_AC_READ | CS_AC_WRITE) ||
+       X.operands[1].access != (Immediate ? 0 : CS_AC_READ) ||
+       X.eflags != (X86_EFLAGS_MODIFY_AF | X86_EFLAGS_MODIFY_CF |
+                    X86_EFLAGS_MODIFY_SF | X86_EFLAGS_MODIFY_ZF |
+                    X86_EFLAGS_MODIFY_PF | X86_EFLAGS_MODIFY_OF)))
     return false;
   for (const auto &Value : llvm::ArrayRef(X.operands, X.op_count))
     if (Value.avx_bcast != X86_AVX_BCAST_INVALID || Value.avx_zero_opmask)
@@ -98,5 +113,5 @@ inline bool form(const cs_insn *Insn, Arch Target) {
   return (uint64_t(Source.imm) & Mask) == (Raw & Mask);
 }
 
-} // namespace neverd::lockedlogicaudit
-#endif
+} // namespace neverd::lockedbinaryaudit
+#endif // NEVERD_LIB_LIFT_X86_X86LOCKEDBINARYAUDIT_H

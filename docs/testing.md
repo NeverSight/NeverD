@@ -4210,6 +4210,16 @@ anchors, call order, incomplete bodies, unresolved/indirect calls, protected
 identity, both directions, reordering, cancellation and saved-report binding.
 The caller boundary is a review alternative, not an
 automatic identity or a semantic-equivalence claim.
+`SplitAndLocalCallRolesRetainIndependentReviewEvidence` checks split callers,
+local roles surviving edits elsewhere, partial callers, changed scalars,
+unresolved data, unknown/indirect flow, reordering, both directions and cancellation.
+`OrderedCallReviewRequiresDistinctIndependentTargets` and
+`CallerReviewCountsIndependentObservedWitnesses` check distinct mapped anchors,
+call order, missing witnesses, partial caller observations, conflicting prior
+roles and complete source-caller coverage. `ContradictoryCFGMatchesRequireKnownInstructionEvidence`
+separates sufficient composite graph similarity from insufficient known
+instruction coverage, preserves positive call context and analyst authority,
+and checks reverse direction, configured thresholds and saved binding.
 Dataflow checks cover SSA renaming, PHI edge changes, control/data slices,
 parameter/clobber identity, unobserved effects and bounded neighborhoods.
 Call-argument projection checks backward/forward dependencies missing from raw
@@ -6465,6 +6475,23 @@ parallel readers and retained-entry eviction. Existing x87 proof-budget sweeps
 also run with body retention enabled; cached blocks grant no larger proof
 allowance. Full pipeline checks still exercise format-derived arguments and
 register/stack summaries through their ordinary consumers.
+
+`NeverDCallStackRangeTests` checks finite indexed local, home and incoming
+stack reads under Win64 and System V layouts. Joins, loops, partial register
+and temporary writes, instruction boundaries, opaque effects, independent
+entries, arithmetic overflow and exhausted budgets must retain unknown facts
+unless the complete range is proved. Run it with the finite scalar branch,
+call-register unread, FP parameter mask and Med prologue-save suites when
+changing their shared dataflow.
+
+`NeverDCallStackRangeSourceTests` executes independent Win64 machine bytes
+beside both C routes on Linux x64. Fixed writes followed by indexed reads,
+and indexed writes followed by fixed reads, must share storage. The matrix
+uses default and NoOpt pipelines, optional analyst frame names, O0/O2 and
+UBSan, comparing 1,024 inputs in each of 32 configurations. Run
+`NeverDLLVMCFrameMemoryTests` and `NeverDCSourcePresentationTests` for the
+associated frame-alias and rendering changes. These checks establish local
+storage semantics, not Windows service execution or inferred alias exclusions.
 
 `CompleteFunctionCache` compares reconstructed default functions with cold
 builds, including address-taken roots, instruction coverage, relocation
@@ -16100,7 +16127,7 @@ The native Linux qualification also runs the complete `HighSwiftEmitter` owner, 
 
 ### Sequential raw compare-and-exchange
 
-`SymAtomicCmpxchg.*` and `InterpreterSpecialization.AtomicCmpxchg*` cover complete byte effects, both byte orders, old-value provenance, input/output aliases, native return cells, affine-spill invalidation across joins, retained ordered occurrences, strict admission and exact/short budgets. The independent byte oracle models sequential values only. Source-wrapping controls require ordered-memory refusal for initialized, structurally valid graphs. Independent LowIR controls also bind complete sidecars and require no certificate. Native binary proofs may refuse earlier because LOCK CMPXCHG lacks a complete architecture-undefined-output audit. Raw-receipt checks bind ordering, address space and desired operands. Run the owning suites before claiming support; test definitions alone are not execution evidence.
+`SymAtomicCmpxchg.*` and `InterpreterSpecialization.AtomicCmpxchg*` cover complete byte effects, both byte orders, old-value provenance, input/output aliases, native return cells, affine-spill invalidation across joins, retained ordered occurrences, strict admission and exact/short budgets. The independent byte oracle models sequential values only. Source-wrapping controls require ordered-memory refusal for initialized, structurally valid graphs. Independent LowIR controls also bind complete sidecars and require no certificate. Canonical x64 scalar LOCK CMPXCHG now has a complete undefined-output audit; that receipt does not authorize the separate ordinary binary-proof or machine-region source contracts. Raw-receipt checks bind ordering, address space and desired operands. Run the owning suites before claiming support; test definitions alone are not execution evidence.
 
 `InterpreterSpecialization.AtomicUpdates*` covers ADD/XCHG byte effects at every scalar width and both byte orders, overlapping old-value outputs, native return footprints, retained no-change operations, old/new memory provenance across nodes, explicit-domain refusal and exact/short frame-preservation budgets. Run with all interpreter-specialization, conditional-store and atomic symbolic tests; the byte oracle supplies sequential values only.
 
@@ -17785,6 +17812,17 @@ strict request rejection, source/manifest hash binding and SDK/CLI parity.
 Run `NeverDX64ContinuationSourceTests` for the independent privileged-instruction
 KVM comparisons; source export alone does not extend that native qualification.
 
+`EnvironmentResumesTheActualPhysicalContext`,
+`EnvironmentBudgetsBoundEveryProviderAttempt` and
+`EnvironmentReceivesCompletedPrivilegeState` execute the companion run driver
+through both C routes and both dispatch strategies at O0/O2 with ASan/UBSan.
+Independent full-state and memory oracles check native stack words, replacement
+stacks, arbitrary register clobbers, completed privilege contexts, provider
+declines, unchanged native requests and nonprogressing providers. Invalid
+state, null providers, zero attempt budgets and a CALL consuming the last
+instruction unit retain their stopping semantics. These providers are explicit
+test implementations; they do not qualify native Windows service execution.
+
 `DirectJumpDiscovery*` uses sized ELF symbols to retain real function extents.
 It checks jump chains at the same call depth, deeper CALL frontiers, physical
 stack arguments, cycle deduplication, indirect exits and budget rejection
@@ -17974,6 +18012,8 @@ source but do not qualify privileged execution.
 
 `AtomicSourceRequiresAnUnmodifiedSupportedReceipt` rejects missing or modified atomic receipts and unsupported CMPXCHG. `ScalarAtomicsRetainTransactionsAndPhysicalState` checks 1/2/4/8-byte XCHG and LOCK XADD with independent full-state, flag and byte oracles, unaligned memory and return-word aliases. Both C routes run at O0/O2 with ASan/UBSan under user and kernel state profiles. Run `NeverDInterpreterMachineStateTests` plus the raw-environment, specialization, continuation-source and source-backend suites. These completion tests do not certify contention or fault behavior.
 
+`NativeStateAudit.LockedCompareExchange*` and `LockedAdd*` authenticate scalar widths, high-byte/extended registers, addressing, prefixes and exact decoder details. They require one ordered memory transaction, all six defined arithmetic flags and no opaque-bank certificate. `X64ContinuationSourceTest.LockedScalars*` compares original x64 CMPXCHG/ADD against both C routes at O0/O2 with ASan/UBSan, including success/failure, width boundaries, unaligned addresses, live GS bases and complete state/RAM. V1 and unaudited CMPXCHG8B/16B remain closed. This does not certify concurrency, MMIO or faulting execution.
+
 `InterpreterSpecialization.AlignmentProducersPrecedeWideGuardContexts` / `RuntimeValidityStillRefinesAnEnclosingGuard`: The alignment regressions compare an independent arithmetic oracle across both alignment paths, every low-bit residue, wide counts, threshold outcomes and unsigned wraparound. They also require refusal of a misaligned loop, continued enclosing-guard refinement when producers stall, and exact/one-short operation and query budgets. These checks establish neither ordinary source ABI recovery nor native fault behavior.
 
 ReadPrefetch regressions check exact bytes and operand metadata, separate undefined-output and opaque-bank receipts, malformed scalar contracts and modified raw receipts. Both C routes retain all four hints and repeated occurrences, then run at O0/O2 with sanitizers against independent full-state and memory expectations, including unmapped addresses, 32-bit address wrapping and physical returns. Cache placement and timing are outside these comparisons.
@@ -17982,3 +18022,27 @@ StreamingStore regressions check instruction bytes, operand metadata, alignment,
 
 `InterpreterSpecialization.RepeatedCounts*`; `InterpreterMachineRegionSourceTest.FiniteRepeatedCountsPreserveFullState`; `InterpreterMachineRegionSourceTest.FiniteCopyAndPaddingPreserveLoopState`.
 These tests check exhaustive partitions, differing predecessor domains, prefix writes, discovery opt-out, incomplete domains and exact/short budgets. Both C routes execute at O0/O2 with ASan/UBSan. Independent full-state and byte oracles cover clipped counts, both directions, overlap, zero-count invalid pointers, early terminators and loop padding. They do not establish ordinary ABI recovery.
+
+`X86NativeStateAudit.Debug*` checks 480 canonical debug-register transfers,
+six independent undefined arithmetic flags, unchanged native operations,
+DR4/DR5 refusal and raw/detail disagreement. `NativeRegisters*`,
+`NativePageGlobalWritesInvalidateGlobalTlb` and `NativeDebugAliases*` in
+`NeverDX64ContinuationSourceTests` execute both C routes at O0/O2 on native
+x64 KVM. They check all GPRs, all six admitted debug banks and CR4, all 64
+arbitrary-flag combinations, every forbidden non-PGE control-bit change and
+a stale global translation that must be flushed. Missing KVM is a skip, not
+privileged execution evidence. `NativeRegisterBindingsRemainIndependent` in
+`NeverDX64ContinuationExportTests` checks independent opt-ins and generated
+source compilation. These bounded no-fault bindings do not qualify debug
+exception delivery, DR4/DR5 aliases or arbitrary CR4 changes.
+
+`X64ContinuationExportTest.RtmAbort*` checks exact adjacent instruction bytes,
+missing/truncated/different bodies, explicit opt-in, native-request retention,
+fallback selection, unsupported-host refusal, complete state and stack
+preservation, and separate instruction/environment budgets including loops.
+Both C routes compile and run at O0/O2 with sanitizers. The transaction branch
+executes only when CPUID advertises RTM; other hosts qualify refusal only.
+Independent RTM comparison may use Intel SDE with `-hsw -tsx -rtm_mode full`
+and `-rtm_mode abort -rtm_abort_reason N`; record emulator results separately
+from native hardware evidence. Use the full exporter suite to cover unchanged
+selection, physical transfers and other environment providers.

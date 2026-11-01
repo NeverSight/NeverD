@@ -361,6 +361,8 @@ private:
   void retainCallAlternatives();
   void retainStackAlternatives();
   void retainInlineCallerAlternatives();
+  void retainNeighborhoodAlternatives();
+  void retainGraphAlternatives();
   void finish();
 };
 
@@ -1250,17 +1252,46 @@ void Matcher::retainCallAlternatives() {
   }
   if (!HasWeak)
     return;
-  const auto Candidates = conflictingCallCandidates(P, PF, PMatch, WeakA, S, SF,
-                                                    SMatch, WeakB, Control);
+  std::vector<std::pair<uint32_t, uint32_t>> Expanded;
+  auto Candidates = conflictingCallCandidates(
+      P, PF, PMatch, WeakA, S, SF, SMatch, WeakB, Control, &Expanded);
+  std::vector<uint8_t> WitnessA(P.Functions.size(), 0),
+      WitnessB(S.Functions.size(), 0);
+  for (const auto &F : Order) {
+    WitnessA[F.Primary] =
+        llvm::any_of(PF.Callees.of(F.Primary), [&](uint32_t C) {
+          return PMatch[C] == NoIndex || WeakA[C] != NoIndex;
+        });
+    WitnessB[F.Secondary] =
+        llvm::any_of(SF.Callees.of(F.Secondary), [&](uint32_t C) {
+          return SMatch[C] == NoIndex || WeakB[C] != NoIndex;
+        });
+  }
+  const auto Blocks = blockCallCandidates(P, PMatch, WitnessA, S, SMatch,
+                                          WitnessB, Control, WeakA, WeakB);
+  Expanded.insert(Expanded.end(), Blocks.begin(), Blocks.end());
   if (stopNow())
     return;
   std::vector<uint8_t> Deferred(Order.size(), 0);
-  for (const auto &[A, B] : Candidates) {
+  std::vector<uint8_t> ExpandedOnly(Order.size(), 1);
+  std::vector<uint32_t> StructuralEqual(Order.size(), NoIndex);
+  for (const auto &[A, B] : Expanded) {
     if (Rejected.contains(pairKey(A, B)) || namesConflict(A, B))
       continue;
     const uint32_t Prior = PMatch[A] == NoIndex ? WeakB[B] : WeakA[A];
     Deferred[Prior] = 1;
   }
+  for (const auto &[A, B] : Candidates) {
+    if (Rejected.contains(pairKey(A, B)) || namesConflict(A, B))
+      continue;
+    const uint32_t Prior = PMatch[A] == NoIndex ? WeakB[B] : WeakA[A];
+    Deferred[Prior] = 1;
+    ExpandedOnly[Prior] = 0;
+  }
+  Candidates.insert(Candidates.end(), Expanded.begin(), Expanded.end());
+  llvm::sort(Candidates);
+  Candidates.erase(std::unique(Candidates.begin(), Candidates.end()),
+                   Candidates.end());
   // A caller can deliberately switch to a newly extracted helper while the
   // original body survives with insertions. Preserve that complete body/CFG
   // evidence; a call role alone cannot displace it.
@@ -1272,6 +1303,16 @@ void Matcher::retainCallAlternatives() {
         continue;
       const auto &F = Order[I];
       const auto D = delta(F.Primary, F.Secondary);
+      // A preserved body/CFG can have been copied into a new helper while
+      // callers split between that helper and a guarded public entry. A local
+      // block or split role alone cannot reopen an arbitrarily edited body.
+      if (ExpandedOnly[I] && (!D.ComputationComplete || !D.AnalysisComplete ||
+                              (D.Changes & (ChangeBlocks | ChangeEdges)))) {
+        Deferred[I] = 0;
+        if (D.ComputationComplete && D.AnalysisComplete)
+          StructuralEqual[I] = D.EqualInstructions;
+        continue;
+      }
       const uint32_t AEntry = P.Functions[F.Primary].EntryBlock;
       const uint32_t BEntry = S.Functions[F.Secondary].EntryBlock;
       if (D.ComputationComplete && D.AnalysisComplete &&
@@ -1287,6 +1328,31 @@ void Matcher::retainCallAlternatives() {
   });
   if (stopNow())
     return;
+  std::vector<uint8_t> MoreCoverage(Candidates.size(), 0);
+  parallelForEach(Candidates.size(), [&](auto Claim, size_t Count) {
+    for (size_t I = Claim(); I < Count; I = Claim()) {
+      if (Control.stop())
+        return;
+      const auto [A, B] = Candidates[I];
+      const uint32_t Prior = PMatch[A] == NoIndex ? WeakB[B] : WeakA[A];
+      if (StructuralEqual[Prior] == NoIndex ||
+          std::min(PF.Functions[A].Instructions,
+                   SF.Functions[B].Instructions) <= StructuralEqual[Prior] ||
+          Rejected.contains(pairKey(A, B)) || namesConflict(A, B))
+        continue;
+      const auto D = delta(A, B);
+      MoreCoverage[I] = D.ComputationComplete &&
+                        D.Similarity >= Settings.MinimumSimilarity &&
+                        D.EqualInstructions > StructuralEqual[Prior];
+    }
+  });
+  if (stopNow())
+    return;
+  for (size_t I = 0; I < Candidates.size(); ++I)
+    if (MoreCoverage[I]) {
+      const auto [A, B] = Candidates[I];
+      Deferred[PMatch[A] == NoIndex ? WeakB[B] : WeakA[A]] = 1;
+    }
   for (const auto &[A, B] : Candidates) {
     const uint32_t Prior = PMatch[A] == NoIndex ? WeakB[B] : WeakA[A];
     if (Deferred[Prior] && !Rejected.contains(pairKey(A, B)) &&
@@ -1478,6 +1544,140 @@ void Matcher::retainInlineCallerAlternatives() {
   for (uint32_t I = 0; I < Order.size(); ++I)
     if (Deferred[I]) {
       const auto &F = Order[I];
+      PMatch[F.Primary] = SMatch[F.Secondary] = NoIndex;
+      NearTies.push_back({F.Step, {F.Primary}, {F.Secondary}});
+    }
+  llvm::erase_if(Order,
+                 [&](const Formed &F) { return PMatch[F.Primary] == NoIndex; });
+}
+
+void Matcher::retainNeighborhoodAlternatives() {
+  if (stopNow())
+    return;
+  std::vector<uint32_t> WeakA(P.Functions.size(), NoIndex),
+      WeakB(S.Functions.size(), NoIndex);
+  std::vector<uint8_t> MappedA(P.Functions.size(), 0),
+      MappedB(S.Functions.size(), 0);
+  bool HasWeak = false;
+  for (uint32_t I = 0; I < Order.size(); ++I) {
+    const auto &F = Order[I];
+    MappedA[F.Primary] = MappedB[F.Secondary] = 1;
+    if (!protectedMatch(F)) {
+      WeakA[F.Primary] = WeakB[F.Secondary] = I;
+      HasWeak = true;
+    }
+  }
+  if (!HasWeak)
+    return;
+  const auto Proposals = neighborhoodReviewCandidates(
+      P, PF, PMatch, WeakA, MappedA, S, SF, SMatch, WeakB, MappedB, Control);
+  if (stopNow() || Proposals.empty())
+    return;
+  struct Candidate {
+    uint32_t A, B, Prior;
+    bool IndependentRoles, Retain = false;
+  };
+  std::vector<Candidate> Candidates;
+  std::vector<uint8_t> Measure(Order.size(), 0);
+  for (const auto &C : Proposals)
+    if (!Rejected.contains(pairKey(C.Primary, C.Secondary)) &&
+        !namesConflict(C.Primary, C.Secondary)) {
+      const uint32_t Prior =
+          PMatch[C.Primary] == NoIndex ? WeakB[C.Secondary] : WeakA[C.Primary];
+      Candidates.push_back({C.Primary, C.Secondary, Prior,
+                            C.OrderedCallees || C.BothDirections});
+      Measure[Prior] = 1;
+    }
+  std::vector<uint32_t> Priors;
+  for (uint32_t I = 0; I < Order.size(); ++I)
+    if (Measure[I])
+      Priors.push_back(I);
+  std::vector<uint32_t> PriorEqual(Order.size(), NoIndex);
+  parallelForEach(Priors.size(), [&](auto Claim, size_t Count) {
+    for (size_t I = Claim(); I < Count; I = Claim()) {
+      if (Control.stop())
+        return;
+      const uint32_t At = Priors[I];
+      const auto &F = Order[At];
+      const auto D = delta(F.Primary, F.Secondary);
+      if (!D.ComputationComplete || !(D.Changes & ChangeCalls))
+        continue;
+      if (D.AnalysisComplete && D.ReferenceComparisonComplete &&
+          D.EqualInstructions ==
+              std::min(PF.Functions[F.Primary].Instructions,
+                       SF.Functions[F.Secondary].Instructions) &&
+          !(D.Changes & (ChangeBlocks | ChangeEdges)))
+        continue;
+      PriorEqual[At] = D.EqualInstructions;
+    }
+  });
+  parallelForEach(Candidates.size(), [&](auto Claim, size_t Count) {
+    for (size_t I = Claim(); I < Count; I = Claim()) {
+      if (Control.stop())
+        return;
+      auto &C = Candidates[I];
+      if (PriorEqual[C.Prior] == NoIndex)
+        continue;
+      const auto D = delta(C.A, C.B);
+      C.Retain =
+          D.ComputationComplete &&
+          (C.IndependentRoles || D.EqualInstructions > PriorEqual[C.Prior]);
+    }
+  });
+  if (stopNow())
+    return;
+  std::vector<uint8_t> Deferred(Order.size(), 0);
+  for (const auto &C : Candidates)
+    if (C.Retain) {
+      Deferred[C.Prior] = 1;
+      NearTies.push_back({FunctionStep::Neighborhood, {C.A}, {C.B}});
+    }
+  for (uint32_t I = 0; I < Order.size(); ++I)
+    if (Deferred[I]) {
+      const auto &F = Order[I];
+      PMatch[F.Primary] = SMatch[F.Secondary] = NoIndex;
+      NearTies.push_back({F.Step, {F.Primary}, {F.Secondary}});
+    }
+  llvm::erase_if(Order,
+                 [&](const Formed &F) { return PMatch[F.Primary] == NoIndex; });
+}
+
+void Matcher::retainGraphAlternatives() {
+  if (stopNow())
+    return;
+  std::vector<uint32_t> Review;
+  for (uint32_t I = 0; I < Order.size(); ++I) {
+    const auto &F = Order[I];
+    if (!protectedMatch(F) &&
+        (F.Step == FunctionStep::GraphTopDown ||
+         F.Step == FunctionStep::GraphBottomUp ||
+         F.Step == FunctionStep::GraphNeighborhood) &&
+        contextAgreement(F.Primary, F.Secondary) == 0)
+      Review.push_back(I);
+  }
+  std::vector<uint8_t> Deferred(Review.size(), 0);
+  parallelForEach(Review.size(), [&](auto Claim, size_t Count) {
+    for (size_t I = Claim(); I < Count; I = Claim()) {
+      if (Control.stop())
+        return;
+      const auto &F = Order[Review[I]];
+      const auto D = delta(F.Primary, F.Secondary);
+      // Matching CFGs contribute half the composite similarity. When all
+      // mapped context contradicts a changed call, that graph score cannot
+      // substitute for the requested amount of known instruction evidence.
+      const uint64_t Instructions =
+          uint64_t(PF.Functions[F.Primary].Instructions) +
+          SF.Functions[F.Secondary].Instructions;
+      Deferred[I] = D.ComputationComplete && (D.Changes & ChangeCalls) &&
+                    2.0 * D.EqualInstructions / double(Instructions) <
+                        Settings.MinimumSimilarity;
+    }
+  });
+  if (stopNow())
+    return;
+  for (size_t I = 0; I < Review.size(); ++I)
+    if (Deferred[I]) {
+      const auto &F = Order[Review[I]];
       PMatch[F.Primary] = SMatch[F.Secondary] = NoIndex;
       NearTies.push_back({F.Step, {F.Primary}, {F.Secondary}});
     }
@@ -1855,6 +2055,8 @@ void Matcher::run(llvm::ArrayRef<Override> Overrides) {
   retainCallAlternatives();
   retainStackAlternatives();
   retainInlineCallerAlternatives();
+  retainNeighborhoodAlternatives();
+  retainGraphAlternatives();
   collectAmbiguities();
   endPhase();
   finish();

@@ -2782,9 +2782,14 @@ void LLVMCWriter::setupFunction(llvm::Function &Fn) {
         Entry->second = std::move(Name);
       }
   markInlinable(Fn);
+  // Analyst names still describe views of the original frame. Preserve its
+  // alias/storage facts even when retaining every named store for display.
+  analyzeDeadFrameStores(Analysis, Fn);
   if (!Opts.FrameVariables || Opts.FrameVariables->empty()) {
-    analyzeDeadFrameStores(Analysis, Fn);
     analyzeStoreForwarding(Analysis, Fn);
+  } else {
+    Analysis.DeadFrameAllocas.clear();
+    Analysis.DeadFrameStores.clear();
   }
 
   // A frame address passed on can reach any byte of the frame, unless a type
