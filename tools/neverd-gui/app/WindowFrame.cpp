@@ -202,6 +202,11 @@ bool WindowFrame::restoreWindowedGeometry(const QByteArray &geometry) {
     // frameless restore expects the rectangle saved by its visible path.
     startupGeometry_ = geometry;
   }
+  // QWidget defers hidden geometry changes until Show. This native window
+  // already exists, and its pending resize events can arrive while startup
+  // waits for Quick Start or the worker. Keep both rectangles in sync so an
+  // old native size cannot replace the restored widget geometry.
+  handle_.setGeometry(window_.geometry());
   return true;
 }
 
@@ -410,7 +415,11 @@ bool WindowFrame::eventFilter(QObject *object, QEvent *event) {
 
 void WindowFrame::prepareResize() {
   showEdges({});
-  if (!(states_ & Qt::WindowMaximized))
+  // AppKit also calls a manually sized window zoomed at its size ceiling.
+  // The client resize path can shrink it directly, preserving the opposite
+  // edges; restoring first would add shadow margins and move those edges.
+  if (!(states_ & Qt::WindowMaximized) ||
+      QGuiApplication::platformName() == QLatin1String("cocoa"))
     return;
   // Continue from the visible maximized rectangle, rather than jumping back
   // to the earlier normal size. The restored shadow lies outside this area.

@@ -2181,6 +2181,48 @@ private slots:
     }
   }
 
+  void restoredGeometrySurvivesHiddenNativeEvents_data() {
+    QTest::addColumn<bool>("maximized");
+    QTest::newRow("normal") << false;
+    QTest::newRow("maximized") << true;
+  }
+
+  void restoredGeometrySurvivesHiddenNativeEvents() {
+    QFETCH(bool, maximized);
+    const QSize normal(700, 450);
+    QByteArray geometry;
+    {
+      QWidget previous;
+      previous.setGeometry(QRect(QPoint(60, 60), normal));
+      if (maximized)
+        previous.setWindowState(Qt::WindowMaximized);
+      geometry = previous.saveGeometry();
+    }
+
+    QWidget window;
+    auto *frame = WindowFrame::attach(window);
+    QVERIFY(frame);
+    QVERIFY(frame->restoreWindowedGeometry(geometry));
+    // Startup can run the event loop for Quick Start or the worker before
+    // showing this already-created native window. Its old size must not win.
+    QCoreApplication::processEvents();
+    QVERIFY(!window.isVisible());
+    QCOMPARE(window.size(), normal);
+    test::NativeWindowStates applied(*window.windowHandle());
+    window.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&window));
+    QTRY_COMPARE(window.isMaximized(), maximized);
+    if (maximized) {
+      QTRY_VERIFY(applied.is(Qt::WindowMaximized));
+      frame->setWindowState(Qt::WindowNoState);
+      QTRY_VERIFY(applied.is(Qt::WindowNoState));
+      if (QGuiApplication::platformName() == QLatin1String("offscreen"))
+        QSKIP("Restored native geometry needs a window manager; hidden "
+              "geometry and window states were checked above.");
+    }
+    QTRY_COMPARE(window.size(), normal);
+  }
+
   void fullScreenRetainsTheRestoreState_data() {
     QTest::addColumn<bool>("maximized");
     QTest::newRow("normal") << false;

@@ -4799,6 +4799,16 @@ checks that global and project pane layouts cannot restore full screen.
 drags on Quick Start and a loaded workbench, including maximize/restore.
 These workbench cases use the fixture worker when it is built. Native drag
 coverage requires the Windows platform plugin; offscreen reports it as skipped.
+`restoredGeometrySurvivesHiddenNativeEvents` in `NeverDGuiUnits` processes
+pending native events before the first show, then checks normal/maximized
+startup and the restored size without injecting mouse input. This covers a
+hidden workbench waiting for Quick Start or a worker: the native window's old
+size must not overwrite the saved geometry. Cocoa restore-button input in
+`workbenchReopensWindowed` explicitly skips without event-posting permission;
+its startup state and controls are still checked before that boundary.
+`clientResizeKeepsOppositeEdgesAndBounds` in `NeverDGuiAppearance` checks
+resizing through the size ceiling and starting another drag there. Cocoa's
+inferred maximization must not move the edges opposite the held edge.
 `floatingEdgesResizeWithoutDocking` resizes all four edges and all four corners
 with the lock both enabled and disabled, without opening a docking preview.
 Offscreen pointer actions send Qt events to their widgets instead of native

@@ -733,6 +733,9 @@ private slots:
       QVERIFY(screen.contains(button->mapToGlobal(button->rect().center())));
     }
     if (maximized) {
+      if (!canPostPointerEvents())
+        QSKIP("Cocoa native restore-button input requires event-posting "
+              "permission; startup state and controls were checked above.");
       auto *restore = bar->findChild<QAbstractButton *>("maximizeButton");
       window.raise();
       window.activateWindow();
