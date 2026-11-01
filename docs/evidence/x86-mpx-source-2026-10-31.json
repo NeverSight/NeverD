@@ -12,21 +12,21 @@
   "source_exports": {
     "high": {
       "c": {
-        "path": "/mnt/data/neverd-mpx-source-20261031/source-integrated/mpx-high.c",
+        "path": "<mpx-qualification>/source-integrated/mpx-high.c",
         "sha256": "dfe101509f8eb4ce14cd8ecdb145ac78d01a805f396a23112ce129a851afa2c2"
       },
       "manifest": {
-        "path": "/mnt/data/neverd-mpx-source-20261031/source-integrated/mpx-high.json",
+        "path": "<mpx-qualification>/source-integrated/mpx-high.json",
         "sha256": "8535486fab22986789b71336c4b9cfd21d7cbdceefd31695ae7085899c96ffdf"
       }
     },
     "llvm": {
       "c": {
-        "path": "/mnt/data/neverd-mpx-source-20261031/source-integrated/mpx-llvm.c",
+        "path": "<mpx-qualification>/source-integrated/mpx-llvm.c",
         "sha256": "f5f52d6d095c4a6346a0b56a487ad6910ee0bbff5a48c4a86df8f8899b2a063a"
       },
       "manifest": {
-        "path": "/mnt/data/neverd-mpx-source-20261031/source-integrated/mpx-llvm.json",
+        "path": "<mpx-qualification>/source-integrated/mpx-llvm.json",
         "sha256": "302ed9a11926fe5b4b9dbb116c902ed53d9755bb226e710c80299db378d334a1"
       }
     }
@@ -46,7 +46,7 @@
   "routes": {
     "high-neverc": {
       "record": {
-        "path": "/mnt/data/neverd-mpx-source-20261031/integrated-high-neverc/qualification.json",
+        "path": "<mpx-qualification>/integrated-high-neverc/qualification.json",
         "sha256": "47c2c020117d35a5532e8b8d57e86b8ba4a1b9d324d3786b019b5eeb9a64401f"
       },
       "passed": true,
@@ -61,12 +61,12 @@
         }
       ],
       "tools": {
-        "/home/ad/.local/bin/clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+        "<toolchain>/bin/clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
         "/usr/bin/as": "4e5fcaa3cdc160173cb5cfe7aa35dc39d7aa1f06ba8d75b8d923bbae5473991b",
         "/usr/bin/ld": "97f48d93b8b076a92d2809ec29dcb17f0f37c8827358f832255e2ed22fef6075",
         "/usr/bin/objcopy": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770",
         "/usr/local/bin/qemu-system-x86_64": "7dcf38a7fa3478a269fe6890854f9a4ce4f14d7600f023d03fa1a28cf23e04c0",
-        "/mnt/data/neverd-native-system-returns-20261029/build-neverc/bin/neverc": "93ff450f93be5a87f62f0ca6f7cf6f970337e165a8947dba4440b8d9fc4eefc6"
+        "<native-system-returns-qualification>/build-neverc/bin/neverc": "93ff450f93be5a87f62f0ca6f7cf6f970337e165a8947dba4440b8d9fc4eefc6"
       },
       "excluded": {
         "LOCK BNDMOV rejected by QEMU": 12,
@@ -77,7 +77,7 @@
     },
     "high-llvm": {
       "record": {
-        "path": "/mnt/data/neverd-mpx-source-20261031/integrated-high-llvm/qualification.json",
+        "path": "<mpx-qualification>/integrated-high-llvm/qualification.json",
         "sha256": "82d34615b1a7d6569028f5f455770ca2bf72c9169072c8fcdd19fec85666979c"
       },
       "passed": true,
@@ -92,13 +92,13 @@
         }
       ],
       "tools": {
-        "/home/ad/.local/bin/clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+        "<toolchain>/bin/clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
         "/usr/bin/as": "4e5fcaa3cdc160173cb5cfe7aa35dc39d7aa1f06ba8d75b8d923bbae5473991b",
         "/usr/bin/ld": "97f48d93b8b076a92d2809ec29dcb17f0f37c8827358f832255e2ed22fef6075",
         "/usr/bin/objcopy": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770",
         "/usr/local/bin/qemu-system-x86_64": "7dcf38a7fa3478a269fe6890854f9a4ce4f14d7600f023d03fa1a28cf23e04c0",
-        "/mnt/data/neverd-native-system-returns-20261029/build-neverc/bin/neverc": "93ff450f93be5a87f62f0ca6f7cf6f970337e165a8947dba4440b8d9fc4eefc6",
-        "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc": "a97c26786bb5f79a331dfa210432b1d98f70452da00ba964ada8986ec61ef192"
+        "<native-system-returns-qualification>/build-neverc/bin/neverc": "93ff450f93be5a87f62f0ca6f7cf6f970337e165a8947dba4440b8d9fc4eefc6",
+        "<llvm-checkout>/build-intrinsics/bin/llc": "a97c26786bb5f79a331dfa210432b1d98f70452da00ba964ada8986ec61ef192"
       },
       "excluded": {
         "LOCK BNDMOV rejected by QEMU": 12,
@@ -109,7 +109,7 @@
     },
     "high-llvm-new-pm": {
       "record": {
-        "path": "/mnt/data/neverd-mpx-source-20261031/integrated-high-llvm-new-pm/qualification.json",
+        "path": "<mpx-qualification>/integrated-high-llvm-new-pm/qualification.json",
         "sha256": "5c85006914d4ebd9d9a1e6a50fc557108f8302cef5397b50c63e90453afc757e"
       },
       "passed": true,
@@ -124,13 +124,13 @@
         }
       ],
       "tools": {
-        "/home/ad/.local/bin/clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+        "<toolchain>/bin/clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
         "/usr/bin/as": "4e5fcaa3cdc160173cb5cfe7aa35dc39d7aa1f06ba8d75b8d923bbae5473991b",
         "/usr/bin/ld": "97f48d93b8b076a92d2809ec29dcb17f0f37c8827358f832255e2ed22fef6075",
         "/usr/bin/objcopy": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770",
         "/usr/local/bin/qemu-system-x86_64": "7dcf38a7fa3478a269fe6890854f9a4ce4f14d7600f023d03fa1a28cf23e04c0",
-        "/mnt/data/neverd-native-system-returns-20261029/build-neverc/bin/neverc": "93ff450f93be5a87f62f0ca6f7cf6f970337e165a8947dba4440b8d9fc4eefc6",
-        "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc": "a97c26786bb5f79a331dfa210432b1d98f70452da00ba964ada8986ec61ef192"
+        "<native-system-returns-qualification>/build-neverc/bin/neverc": "93ff450f93be5a87f62f0ca6f7cf6f970337e165a8947dba4440b8d9fc4eefc6",
+        "<llvm-checkout>/build-intrinsics/bin/llc": "a97c26786bb5f79a331dfa210432b1d98f70452da00ba964ada8986ec61ef192"
       },
       "excluded": {
         "LOCK BNDMOV rejected by QEMU": 12,
@@ -141,7 +141,7 @@
     },
     "llvm-neverc": {
       "record": {
-        "path": "/mnt/data/neverd-mpx-source-20261031/integrated-llvm-neverc/qualification.json",
+        "path": "<mpx-qualification>/integrated-llvm-neverc/qualification.json",
         "sha256": "f456bf5b944a5e0a9c2f6e6a06ab9cc1492d125834819f5f2d1e6e02f49a198e"
       },
       "passed": true,
@@ -156,12 +156,12 @@
         }
       ],
       "tools": {
-        "/home/ad/.local/bin/clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+        "<toolchain>/bin/clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
         "/usr/bin/as": "4e5fcaa3cdc160173cb5cfe7aa35dc39d7aa1f06ba8d75b8d923bbae5473991b",
         "/usr/bin/ld": "97f48d93b8b076a92d2809ec29dcb17f0f37c8827358f832255e2ed22fef6075",
         "/usr/bin/objcopy": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770",
         "/usr/local/bin/qemu-system-x86_64": "7dcf38a7fa3478a269fe6890854f9a4ce4f14d7600f023d03fa1a28cf23e04c0",
-        "/mnt/data/neverd-native-system-returns-20261029/build-neverc/bin/neverc": "93ff450f93be5a87f62f0ca6f7cf6f970337e165a8947dba4440b8d9fc4eefc6"
+        "<native-system-returns-qualification>/build-neverc/bin/neverc": "93ff450f93be5a87f62f0ca6f7cf6f970337e165a8947dba4440b8d9fc4eefc6"
       },
       "excluded": {
         "LOCK BNDMOV rejected by QEMU": 12,
@@ -172,7 +172,7 @@
     },
     "llvm-llvm": {
       "record": {
-        "path": "/mnt/data/neverd-mpx-source-20261031/integrated-llvm-llvm/qualification.json",
+        "path": "<mpx-qualification>/integrated-llvm-llvm/qualification.json",
         "sha256": "21afdaa87699ec53a5c9ad74806733961210ff4d786e440069729b9b3d9979db"
       },
       "passed": true,
@@ -187,13 +187,13 @@
         }
       ],
       "tools": {
-        "/home/ad/.local/bin/clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+        "<toolchain>/bin/clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
         "/usr/bin/as": "4e5fcaa3cdc160173cb5cfe7aa35dc39d7aa1f06ba8d75b8d923bbae5473991b",
         "/usr/bin/ld": "97f48d93b8b076a92d2809ec29dcb17f0f37c8827358f832255e2ed22fef6075",
         "/usr/bin/objcopy": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770",
         "/usr/local/bin/qemu-system-x86_64": "7dcf38a7fa3478a269fe6890854f9a4ce4f14d7600f023d03fa1a28cf23e04c0",
-        "/mnt/data/neverd-native-system-returns-20261029/build-neverc/bin/neverc": "93ff450f93be5a87f62f0ca6f7cf6f970337e165a8947dba4440b8d9fc4eefc6",
-        "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc": "a97c26786bb5f79a331dfa210432b1d98f70452da00ba964ada8986ec61ef192"
+        "<native-system-returns-qualification>/build-neverc/bin/neverc": "93ff450f93be5a87f62f0ca6f7cf6f970337e165a8947dba4440b8d9fc4eefc6",
+        "<llvm-checkout>/build-intrinsics/bin/llc": "a97c26786bb5f79a331dfa210432b1d98f70452da00ba964ada8986ec61ef192"
       },
       "excluded": {
         "LOCK BNDMOV rejected by QEMU": 12,
@@ -204,7 +204,7 @@
     },
     "llvm-llvm-new-pm": {
       "record": {
-        "path": "/mnt/data/neverd-mpx-source-20261031/integrated-llvm-llvm-new-pm/qualification.json",
+        "path": "<mpx-qualification>/integrated-llvm-llvm-new-pm/qualification.json",
         "sha256": "2d2e3eb7965c5b82c12f6ebf2f014f74cf5553c82d7625e6758355ccfda99b58"
       },
       "passed": true,
@@ -219,13 +219,13 @@
         }
       ],
       "tools": {
-        "/home/ad/.local/bin/clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+        "<toolchain>/bin/clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
         "/usr/bin/as": "4e5fcaa3cdc160173cb5cfe7aa35dc39d7aa1f06ba8d75b8d923bbae5473991b",
         "/usr/bin/ld": "97f48d93b8b076a92d2809ec29dcb17f0f37c8827358f832255e2ed22fef6075",
         "/usr/bin/objcopy": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770",
         "/usr/local/bin/qemu-system-x86_64": "7dcf38a7fa3478a269fe6890854f9a4ce4f14d7600f023d03fa1a28cf23e04c0",
-        "/mnt/data/neverd-native-system-returns-20261029/build-neverc/bin/neverc": "93ff450f93be5a87f62f0ca6f7cf6f970337e165a8947dba4440b8d9fc4eefc6",
-        "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc": "a97c26786bb5f79a331dfa210432b1d98f70452da00ba964ada8986ec61ef192"
+        "<native-system-returns-qualification>/build-neverc/bin/neverc": "93ff450f93be5a87f62f0ca6f7cf6f970337e165a8947dba4440b8d9fc4eefc6",
+        "<llvm-checkout>/build-intrinsics/bin/llc": "a97c26786bb5f79a331dfa210432b1d98f70452da00ba964ada8986ec61ef192"
       },
       "excluded": {
         "LOCK BNDMOV rejected by QEMU": 12,
@@ -237,37 +237,37 @@
   },
   "checks": {
     "integrated-regression.xml": {
-      "path": "/mnt/data/neverd-mpx-source-20261031/integrated-regression.xml",
+      "path": "<mpx-qualification>/integrated-regression.xml",
       "sha256": "81478c504406701319119ec3452a69b10865b873346d7a13cca4d438da6819ea"
     },
     "integrated-regression.log": {
-      "path": "/mnt/data/neverd-mpx-source-20261031/integrated-regression.log",
+      "path": "<mpx-qualification>/integrated-regression.log",
       "sha256": "537304a79f652257eb6a520419530227bd6ecd9c31bb966cc4085a26465b038e"
     },
     "contract.xml": {
-      "path": "/mnt/data/neverd-mpx-source-20261031/contract.xml",
+      "path": "<mpx-qualification>/contract.xml",
       "sha256": "a4c8845cf970c885df01cca4a6bd06b7c867642c027668fc41aa9288afd80ca9"
     },
     "build-integrated.log": {
-      "path": "/mnt/data/neverd-mpx-source-20261031/build-integrated.log",
+      "path": "<mpx-qualification>/build-integrated.log",
       "sha256": "0324219683eda6c13f0194ea5b81e8d998d7943bc7ada9306a90b8e92f75c46c"
     },
     "docs-final.log": {
-      "path": "/mnt/data/neverd-mpx-source-20261031/docs-final.log",
+      "path": "<mpx-qualification>/docs-final.log",
       "sha256": "891c1f2a9e40d3952b23e9e79b35ac05e77427ad91de98357bc3829b3ed7ab14"
     }
   },
   "build": {
     "binary": {
-      "path": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86/bin/neverd",
+      "path": "<neverd-checkout>/build-x86/bin/neverd",
       "sha256": "7893d10fff38cf34815da65b93a607038871399f0e9bbb688c04a54ea80dcc58"
     },
     "receipt": {
-      "path": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86/neverd-build-receipt.json",
+      "path": "<neverd-checkout>/build-x86/neverd-build-receipt.json",
       "sha256": "35337dfee1afd418aa2c5d2c551ee35ee1bfc14ebf7add3f538a9c4ecfacd882"
     },
     "inputs": {
-      "path": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86/neverd-dependency-inputs.json",
+      "path": "<neverd-checkout>/build-x86/neverd-dependency-inputs.json",
       "sha256": "0d185e80e033e56c739f8efa6c9652c56f7005bd399558403138262879bfc48c"
     }
   },
@@ -295,5 +295,6 @@
     "QEMU register-check, LOCK BNDMOV and addr32-memory defects exclude 96 forms; four absent-base table forms are outside the native fixture",
     "All 156 forms, including nonzero directory bases and absent MIB inputs, pass the portable sanitizer oracle",
     "Production SDK release and LLVM pin remain pending remaining ISA/environment contracts"
-  ]
+  ],
+  "published_paths": "Local checkout, toolchain and qualification roots are descriptive placeholders. Original revisions, test results and artifact/tool hashes are unchanged; these paths do not imply bundled artifacts."
 }

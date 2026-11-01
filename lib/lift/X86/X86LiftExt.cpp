@@ -351,15 +351,15 @@ bool X86Lifter::liftExt(LiftState &S, const cs_insn *Insn, const cs_x86 &X86) {
   // --- SYSEXIT / SYSRET (compat-mode syscall returns) ---
   case X86_INS_SYSEXIT:
     // SYSEXIT transfers to EDX with stack ECX; terminal, never resumes here.
-    S.emitVoidIntrinsic(Intrinsic::Sysexitq,
-                        {NdVar::reg(x86reg::RDX, 4), NdVar::reg(x86reg::RCX, 4)});
+    S.emitVoidIntrinsic(Intrinsic::Sysexitq, {NdVar::reg(x86reg::RDX, 4),
+                                              NdVar::reg(x86reg::RCX, 4)});
     if (TargetArch == Arch::X64)
       compatibilityreturn::record(S);
     break;
   case X86_INS_SYSRET:
     // SYSRET transfers to ECX with EFLAGS from R11D; terminal.
-    S.emitVoidIntrinsic(Intrinsic::Sysretq,
-                        {NdVar::reg(x86reg::RCX, 4), NdVar::reg(x86reg::R11, 4)});
+    S.emitVoidIntrinsic(Intrinsic::Sysretq, {NdVar::reg(x86reg::RCX, 4),
+                                             NdVar::reg(x86reg::R11, 4)});
     if (TargetArch == Arch::X64)
       compatibilityreturn::record(S);
     break;
