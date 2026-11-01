@@ -28,6 +28,7 @@ class LLVMSourceMap;
 struct PipelineResult;
 struct PipelineOptions;
 struct SourceViewOptions;
+struct SourceInlineHighPreparation;
 
 struct SourceInlineHighView {
   std::vector<HighFunc> Functions;
@@ -39,10 +40,25 @@ struct SourceInlineResult {
   std::unique_ptr<llvm::Module> Module;
   std::shared_ptr<LLVMSourceMap> Sources;
   std::optional<SourceInlineHighView> High;
+  /// Bounded helper preparation retained with the optimized source module.
+  std::shared_ptr<SourceInlineHighPreparation> PreparedHigh;
 };
 
+/// Common source-view admission, checked before optional LLVM preparation.
+bool supportsSourceCallSpecialization(const BinaryImage &Image,
+                                      const PipelineResult &Original,
+                                      const SourceViewOptions &View);
+
 /// Cheap HighIR gate before asking for an LLVM source proof.
-bool hasUnavailableSourceStackCall(const std::vector<HighFunc> &Functions);
+bool hasUnavailableSourceStackCall(const std::vector<HighFunc> &Functions,
+                                   const PipelineResult *Original = nullptr);
+
+/// Project the already validated helper bodies without repeating ABI recovery
+/// or LLVM emission. The session module cache owns the preparation lifetime.
+std::optional<SourceInlineHighView> projectSpecializedHighSourceCalls(
+    const BinaryImage &Image, SourceInlineHighPreparation &Prepared,
+    const PipelineOptions &Options, DebugContext *Debug,
+    const SourceInlineHighView &Original);
 
 /// A request-local original-image C view only. The initial module is never
 /// changed. Complete source bodies are recovered together, verified, and

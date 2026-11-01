@@ -305,6 +305,7 @@ struct Session {
     SourceViewOptions Options;
     std::unique_ptr<llvm::Module> Module;
     std::shared_ptr<LLVMSourceMap> Sources;
+    std::shared_ptr<SourceInlineHighPreparation> PreparedHigh;
     /// The LLVM IR view of an inspection module's function, made when first
     /// shown (functionLlvmView).  Its comments read the user's names.
     mutable std::shared_ptr<const LLVMFunctionView> View;
@@ -1191,7 +1192,9 @@ struct Session {
   std::unique_ptr<llvm::Module>
   emitNativeLlvm(bool NoOpt, const std::vector<char> *BodyMask,
                  std::shared_ptr<LLVMSourceMap> &Sources,
-                 bool OriginalImageStorage = false) try {
+                 bool OriginalImageStorage = false,
+                 std::shared_ptr<SourceInlineHighPreparation> *PreparedHigh =
+                     nullptr) try {
     // HighIR decompile does not run recoverCallAbi. --func --llvm still emits
     // from that MedIR, so populate CallInfos here; otherwise MedLLVM emits
     // 0-arg calls for unwritten live-in rcx.  A body-masked module declares
@@ -1263,20 +1266,13 @@ struct Session {
     if (UsingAnalystCallContracts &&
         !SourceOptions.StackFrame.Variables.empty())
       preserveAnalystStackObjects(*Candidate);
-    if (NoOpt) {
+    bool SpecializedSource = false;
+    if (!NoOpt && OriginalImageStorage && !UsingAnalystCallContracts &&
+        supportsSourceCallSpecialization(Img, PipeResult, SourceOptions)) {
+      // Match HighC's proof input and avoid optimizing a caller which the
+      // validated joint source module will replace. The full optimizer still
+      // runs exactly once for either successful or refused specialization.
       Pipeline::promoteScaffoldingAllocas(*Candidate);
-      if (Sources)
-        Sources->refreshExpressionOrigins();
-    } else {
-      const OptimizationResult Optimization = Pipeline::optimizeOrPromoteModule(
-          *Candidate, Sources.get(), SourceOptions);
-      if (Optimization.Stop == OptimizationStopReason::VerificationFailed) {
-        setError(std::string("native LLVM optimization failed: ") +
-                 optimizationStopReasonName(Optimization.Stop));
-        return nullptr;
-      }
-    }
-    if (!NoOpt && OriginalImageStorage && !UsingAnalystCallContracts) {
       PipelineOptions AnalysisOptions;
       applyAnalysisOptions(AnalysisOptions);
       AnalysisOptions.AnalysisCache = &AnalysisCache;
@@ -1286,6 +1282,22 @@ struct Session {
       if (Specialized.Module) {
         Candidate = std::move(Specialized.Module);
         Sources = std::move(Specialized.Sources);
+        if (PreparedHigh)
+          *PreparedHigh = std::move(Specialized.PreparedHigh);
+        SpecializedSource = true;
+      }
+    }
+    if (NoOpt) {
+      Pipeline::promoteScaffoldingAllocas(*Candidate);
+      if (Sources)
+        Sources->refreshExpressionOrigins();
+    } else if (!SpecializedSource) {
+      const OptimizationResult Optimization = Pipeline::optimizeOrPromoteModule(
+          *Candidate, Sources.get(), SourceOptions);
+      if (Optimization.Stop == OptimizationStopReason::VerificationFailed) {
+        setError(std::string("native LLVM optimization failed: ") +
+                 optimizationStopReasonName(Optimization.Stop));
+        return nullptr;
       }
     }
     std::string FinalVerifyError;
@@ -1345,8 +1357,8 @@ struct Session {
     Built.NoOpt = NoOpt;
     Built.OriginalImageStorage = OriginalImageStorage;
     Built.Options = std::move(NativeOptions);
-    Built.Module =
-        emitNativeLlvm(NoOpt, &Mask, Built.Sources, OriginalImageStorage);
+    Built.Module = emitNativeLlvm(NoOpt, &Mask, Built.Sources,
+                                  OriginalImageStorage, &Built.PreparedHigh);
     if (!Built.Module)
       return nullptr;
     FunctionLlvmModules.push_front(std::move(Built));

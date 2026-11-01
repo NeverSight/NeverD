@@ -480,6 +480,12 @@ native addresses or editable native-variable identities. Their parameters do
 not describe a callable native ABI.
 This path is lazy, budgeted and included in the session's source-view cache.
 It retains analysis options and reuses the existing image analysis cache.
+The optimized source module owns the admitted helper preparation within the
+existing bounded module cache. HighC projects those bodies on demand and releases
+their temporary LowIR/MedIR after conversion; switching between C routes does
+not repeat the joint proof. Both routes start that proof after register alloca
+promotion, before full optimization, so a replaced caller is not optimized twice.
+HighC checks the same bounded callee candidates before requesting an LLVM module.
 Explicit call, frame and variable edits, unresolved helper inputs, exceptions
 inside a helper, changed entry carriers and exhausted bounds keep the original
 view. Native LLVM, patch/lift and unoptimized LLVM queries keep their existing

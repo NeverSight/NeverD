@@ -159,11 +159,17 @@ TEST(SourceInlineCalls, KeepsActualPointerReadsWritesAndOutgoingAliases) {
     SourceInlineHighView High{
         HighOriginal.HighFuncs, HighOriginal.HighSources, {}};
     ASSERT_TRUE(hasUnavailableSourceStackCall(High.Functions));
+    ASSERT_TRUE(hasUnavailableSourceStackCall(High.Functions, &Original));
     const auto BeforeHigh = source(High, Image);
     auto Specialized = specializeUnavailableSourceCalls(
         Image, Original, *Original.LlvmModule, nullptr, {}, {}, &High);
     ASSERT_TRUE(Specialized.Module);
     ASSERT_TRUE(Specialized.High);
+    ASSERT_TRUE(Specialized.PreparedHigh);
+    auto Replayed = projectSpecializedHighSourceCalls(
+        Image, *Specialized.PreparedHigh, HighOptions, nullptr, High);
+    ASSERT_TRUE(Replayed);
+    EXPECT_EQ(source(*Replayed, Image), source(*Specialized.High, Image));
     ASSERT_EQ(Specialized.High->BodyOrigins.size(), 1u);
     if (Mode == 1)
       EXPECT_NE(Specialized.High->BodyOrigins.begin()->first,

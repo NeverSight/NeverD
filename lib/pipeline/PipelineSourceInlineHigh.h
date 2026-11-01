@@ -21,6 +21,20 @@ struct SourceInlineBody {
   std::set<unsigned> Unused;
 };
 
+struct SourceInlineHighPreparation {
+  std::shared_ptr<PipelineResult> Recovered;
+  std::map<va_t, SourceInlineBody> Bodies;
+};
+
+using SourceInlineRequests = std::map<va_t, std::set<unsigned>>;
+std::set<va_t> sourceInlineSupports(const PipelineResult &Original,
+                                    const SourceInlineRequests &Requests,
+                                    const std::set<va_t> &Roots);
+
+std::shared_ptr<SourceInlineHighPreparation>
+prepareSpecializedHighSourceCalls(PipelineResult &Recovered,
+                                  std::map<va_t, SourceInlineBody> Bodies);
+
 std::optional<SourceInlineHighView>
 specializeHighSourceBodies(const BinaryImage &Image, PipelineResult &Recovered,
                            const PipelineOptions &Options, DebugContext *Debug,
