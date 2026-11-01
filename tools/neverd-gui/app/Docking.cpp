@@ -116,6 +116,8 @@ void endDockDrag() {
   if (source && !source->floatingWindow()->beingDeleted()) {
     source->windowHandle()->setFlag(Qt::WindowTransparentForInput, false);
     source->setGraphicsEffect(nullptr);
+    // The compositor may have raised the drop target during the drag.
+    source->windowHandle()->requestActivate();
   }
 }
 

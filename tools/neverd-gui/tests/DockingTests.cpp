@@ -1531,12 +1531,14 @@ private slots:
       }
       auto *button = qobject_cast<QPushButton *>(desktop.Source.widget());
       QSignalSpy clicks(button, &QPushButton::clicked);
-      const QPoint center = button->rect().center();
-      QVERIFY(pointer.move(*button, center, false));
+      // The compositor can keep the target above a cancelled maximized
+      // source. Its center is covered at 150% scale; use exposed content.
+      const QPoint point(button->width() * 3 / 4, button->height() * 3 / 4);
+      QVERIFY(pointer.move(*button, point, false));
       QTest::qWait(50);
-      QVERIFY(pointer.button(*button, center, true));
+      QVERIFY(pointer.button(*button, point, true));
       QTest::qWait(50);
-      QVERIFY(pointer.button(*button, center, false));
+      QVERIFY(pointer.button(*button, point, false));
       QTRY_COMPARE(clicks.size(), 1);
     } else {
       QCOMPARE(desktop.Source.QWidget::window(), &desktop.Window);

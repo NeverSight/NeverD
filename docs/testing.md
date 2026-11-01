@@ -4861,8 +4861,9 @@ While a whole floating window is dragged, its mapped surface becomes transparent
 to painting and input so it cannot obscure the target. Cancelled drags must
 restore its native position, size and window state, and accept another mouse
 click. No input is sent to the existing desktop. The source stays mapped without
-minimizing, so
-cancellation does not depend on a new activation grant from the compositor.
+minimizing, so restoring visibility does not depend on a new activation grant
+from the compositor. The click assertion uses exposed source content: a drag
+can raise its target over the center of a maximized source at fractional scale.
 The native restore checks record the window manager's accepted normal size,
 including X11 size-hint quantization at fractional scale.
 `NEVERD_SHORTCUT_CAPTURES` saves floating-window and drop-preview captures,
