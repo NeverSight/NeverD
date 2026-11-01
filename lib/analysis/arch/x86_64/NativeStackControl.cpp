@@ -416,10 +416,7 @@ expandX64MachineExit(const SpecializationInstruction &Instruction,
   case Kind::Return:
     if (Insn.Id != X86_INS_RET || Instruction.IsNativeCall ||
         Native != SpecializationNativeStackControl::Return ||
-        !((Instruction.NativeBytes.size() == 1 &&
-           Instruction.NativeBytes[0] == 0xc3) ||
-          (Instruction.NativeBytes.size() == 3 &&
-           Instruction.NativeBytes[0] == 0xc2)) ||
+        !isX64PhysicalNearReturn(Instruction.NativeBytes) ||
         B.Immediate != Decode.returnImmediate(Insn))
       return invalid("machine RET exit requires its canonical near return");
     break;

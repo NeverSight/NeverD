@@ -4101,14 +4101,20 @@ bool LLVMCWriter::writeIntrinsicCall(llvm::CallBase &Call, int Indent) {
   const llvm::Function *Callee = Call.getCalledFunction();
   if (!Callee)
     return false;
-  if (Callee->getName() == "llvm.x86.vmrun.context") {
+  if (Callee->getName() == "llvm.x86.vmrun.context" ||
+      Callee->getName() == "llvm.x86.hyperv.call" ||
+      isX86KvmHypercallNativeName(Callee->getName())) {
     std::vector<std::string> Arguments;
     for (const auto &Argument : Call.args())
       Arguments.push_back(valueStr(Argument.get()));
+    const bool ResultLive =
+        !Call.getType()->isVoidTy() && valueFeedsPrintedUse(&Call);
     const auto Code = renderX86VirtualizationNativeCall(
-        Opts.TheArch, Call, "", !Call.getType()->isVoidTy(), Arguments);
+        Opts.TheArch, Call, ResultLive ? getName(&Call) : "", ResultLive,
+        Arguments);
     if (!Code)
-      throw std::invalid_argument("VMRUN context requires x86-64 source");
+      throw std::invalid_argument(
+          "native virtualization context has an unsupported source contract");
     emitIndent(Indent);
     OS << *Code;
     return true;

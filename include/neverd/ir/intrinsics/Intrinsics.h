@@ -519,6 +519,13 @@ enum class Intrinsic : uint16_t {
   // Append-only: one legacy MOVNTDQ owns its aligned non-temporal write.
   X86StreamStore128,
 
+  // Append-only: explicitly bound returning KVM hypercall ABI.
+  X86KvmVmcall,
+  X86KvmVmmcall,
+
+  // Append-only: explicit returning Hyper-V page and complete output bank.
+  X86HyperVCall,
+
   _Count = 16000
 };
 
@@ -607,7 +614,7 @@ constexpr bool isX86SystemStatePhysicalAddressArgument(Intrinsic Id,
          Index == 0;
 }
 
-enum class X86VirtualizationResult : uint8_t { None, Flags, Read };
+enum class X86VirtualizationResult : uint8_t { None, Flags, Read, Value };
 
 struct X86VirtualizationContract {
   const char *Mnemonic = nullptr;
@@ -621,8 +628,14 @@ struct X86VirtualizationContract {
 constexpr X86VirtualizationContract x86VirtualizationContract(Intrinsic Id) {
   using R = X86VirtualizationResult;
   switch (Id) {
+  case Intrinsic::X86HyperVCall:
+    return {"hyperv.call", R::None, 4, -1, 0, false};
   case Intrinsic::X86SvmRunContext:
     return {"vmrun.context", R::None, 2, 0, 144, false};
+  case Intrinsic::X86KvmVmcall:
+    return {"vmcall.kvm", R::Value, 5, -1, 0, false};
+  case Intrinsic::X86KvmVmmcall:
+    return {"vmmcall.kvm", R::Value, 5, -1, 0, false};
 #define NEVERD_X86_VIRTUALIZATION(Id, Mnemonic, Result, Arguments,             \
                                   MemoryArgument, MemoryBytes,                 \
                                   PhysicalAddress)                             \

@@ -3,6 +3,17 @@
 Use public fixtures and emitter tests as the durable contract. Private binary
 analysis and comparison output belong outside the repository.
 
+HighC integer call results now keep their lifted carrier in both expressions
+and local declarations. Direct and indirect MedIR calls use the same result
+type authority, including provisional expressions. A signed 32-bit API result
+cannot acquire sign-filled upper bytes merely because C widens it; explicit
+truncations and extensions
+also survive conditions and returns. `NeverDSourceCallIntegerViewTests` compares
+both C routes with independent bit oracles and original Linux x64 callers.
+ARM64 machine fixtures and all four native architecture source models retain
+separate coverage from native Windows ARM64 driver execution. This repairs
+result transport, not unresolved VM inputs or ordinary entry interfaces.
+
 The official SDK catalog now selects Direct3D 11/12, DXGI and D3DCompiler C
 exports with their checked type closures on x86, x64 and ARM64. Both source
 routes compile import-only callers, including twelve- and fourteen-argument
@@ -27,6 +38,17 @@ folds. x86/x64/ARM/ARM64 model checks cover page-crossing reads; native ARM page
 configurations remain separate coverage.
 
 ## Open
+
+Guarded scalar index ranges now preserve the comparison/selected-value
+relationship through machine-width wrapping, low-byte transport and
+complementary masks. The stack proof and LLVM pointer projection share the
+mask shape owner. Public regressions cover all native architectures/formats
+and conservative refusals. A private Windows snapshot comparison executes one
+complete calculation function and its original security-cookie callee through
+both C routes at O0/O2 over nine input cases. This establishes that bounded
+function comparison, not complete execution of the five remaining roots.
+Their 56 ordinary argument occurrences and automatic ordinary/state composition
+remain open; range facts alone do not exclude GS/callee or alias observers.
 
 Explicit machine-region C now accepts authenticated entry-object exclusions through a shared entry guard. Both C routes check whole-range nonwrapping and frame separation before guest/state/tape effects; object aliases and equal roots with disjoint ranges remain valid. Owned execution tests cover all four state layouts, optional alignment, full-width endpoints and exact wrapper budgets. This closes the source-contract gap; ordinary ABI inference, accessibility and other caller memory premises remain separate.
 
@@ -102,6 +124,22 @@ instructions across 86 regions; the seven original sites also match CPL0 KVM
 execution at O0/O2. Zero native requests in this selection does not prove that
 external calls, incomplete CFGs or complete Windows entries execute correctly.
 The five ordinary callers still contain 56 unproved argument occurrences.
+
+Opt-in direct-JMP discovery now extends that bounded selection to 10,317
+instructions in 88 regions, retaining all previous instruction bytes and zero
+native requests in both routes. Its 20 alignment preconditions now refuse
+before state, RAM or budget effects instead of trapping the source caller.
+Those 20 original sites match 5,120 native CPL0 executions through both routes
+at O0/O2, plus 10,240 unchanged-state refusals for unaligned and inaccessible
+addresses. Both complete translations compile at O0/O2 within the existing
+five-minute per-translation bound.
+Public regressions cover physical jump/call depth, cycles, sparse conditional
+stack observers and segmented alignment. Two additional private selected-call
+experiments compare 31,840 original instruction executions over 115 distinct
+PCs and 640 paths with both C routes at O0/O2. External services use explicit
+controlled native test callbacks; these results do not implement the Windows
+services or prove complete live kernel execution. The ordinary 56 occurrences
+remain unproved, and automatic ordinary/state interface composition stays open.
 
 Explicit x64 kernel continuation source carries GPRs, flags, vector bytes,
 segment bases, the physical stack and native-boundary requests. Its V4 layout

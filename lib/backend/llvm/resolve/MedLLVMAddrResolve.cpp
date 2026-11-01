@@ -19,6 +19,7 @@
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/X86/X86FPState.h"
+#include "neverd/ir/med/MedScalarSelection.h"
 #include "neverd/ir/med/X86/I386PicAddress.h"
 #include "neverd/ir/med/X86/X86RepAddresses.h"
 #include "neverd/loader/ReadOnlyBytes.h"
@@ -4776,16 +4777,8 @@ bool MedLLVMEmitter::selectPreservesPointerValues(const MedOp &Op) const {
 
 bool MedLLVMEmitter::isMaskedSelectOr(const MedOp &Or, MedVar &Cond,
                                       MedVar &ArmT, MedVar &ArmF) const {
-  if (Or.Opcode != NdOp::INT_OR || Or.NumInputs < 2)
+  if (Or.Opcode != NdOp::INT_OR)
     return false;
-  const MedOp *A = lookupDef(Or.Inputs[0]);
-  const MedOp *B = lookupDef(Or.Inputs[1]);
-  if (!A || !B || A->Opcode != NdOp::INT_AND || B->Opcode != NdOp::INT_AND ||
-      A->NumInputs < 2 || B->NumInputs < 2)
-    return false;
-  auto sameVar = [](const MedVar &Left, const MedVar &Right) {
-    return sameIndexValue(Left, Right);
-  };
   std::function<bool(const MedVar &, int)> isBooleanValue = [&](const MedVar &V,
                                                                 int Depth) {
     if (Depth >
@@ -4818,54 +4811,15 @@ bool MedLLVMEmitter::isMaskedSelectOr(const MedOp &Or, MedVar &Cond,
       return false;
     }
   };
-  // Every operation in the blend must execute at one exact width. The emitter
-  // zero-extends narrower AND operands before applying the mask; an i32
-  // `-cond` therefore is not an all-ones mask for an i64 pointer.
-  uint16_t BlendSize = Or.Output.Size;
-  if (BlendSize == 0 || Or.Inputs[0].Size != BlendSize ||
-      Or.Inputs[1].Size != BlendSize || A->Output.Size != BlendSize ||
-      B->Output.Size != BlendSize)
+  const auto Selection = matchMaskedScalarSelection(
+      Or, [&](const MedVar &V) { return lookupDef(V); }, sameIndexValue,
+      [&](const MedVar &V) { return isBooleanValue(V, 0); });
+  if (!Selection)
     return false;
-
-  auto maskCond = [&](const MedVar &Mask,
-                      bool &Positive) -> std::optional<MedVar> {
-    if (Mask.Size != BlendSize)
-      return std::nullopt;
-    const MedOp *Def = lookupDef(Mask);
-    Positive = true;
-    if (Def && Def->Opcode == NdOp::INT_NOT && Def->NumInputs >= 1) {
-      if (Def->Output.Size != BlendSize || Def->Inputs[0].Size != BlendSize)
-        return std::nullopt;
-      Positive = false;
-      Def = lookupDef(Def->Inputs[0]);
-    }
-    if (!Def || Def->Opcode != NdOp::INT_NEG2 || Def->NumInputs < 1 ||
-        Def->Output.Size != BlendSize || Def->Inputs[0].Size != BlendSize)
-      return std::nullopt;
-    Def = lookupDef(Def->Inputs[0]);
-    if (!Def || Def->Opcode != NdOp::INT_ZEXT || Def->NumInputs < 1 ||
-        Def->Output.Size != BlendSize || !isBooleanValue(Def->Inputs[0], 0))
-      return std::nullopt;
-    return Def->Inputs[0];
-  };
-  for (int Ai = 0; Ai < 2; ++Ai)
-    for (int Bi = 0; Bi < 2; ++Bi) {
-      bool APositive = false;
-      bool BPositive = false;
-      auto ACond = maskCond(A->Inputs[Ai], APositive);
-      auto BCond = maskCond(B->Inputs[Bi], BPositive);
-      const MedVar &AValue = A->Inputs[1 - Ai];
-      const MedVar &BValue = B->Inputs[1 - Bi];
-      if (AValue.Size != BlendSize || BValue.Size != BlendSize)
-        continue;
-      if (ACond && BCond && sameVar(*ACond, *BCond) && APositive != BPositive) {
-        Cond = *ACond;
-        ArmT = APositive ? AValue : BValue;
-        ArmF = APositive ? BValue : AValue;
-        return true;
-      }
-    }
-  return false;
+  Cond = Selection->Condition;
+  ArmT = Selection->TrueValue;
+  ArmF = Selection->FalseValue;
+  return true;
 }
 
 void MedLLVMEmitter::failAmbiguousDataPointerPhi(const PhiNode &Phi) const {

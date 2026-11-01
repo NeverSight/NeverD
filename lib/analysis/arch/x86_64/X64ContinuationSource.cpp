@@ -10,9 +10,11 @@
 
 #include "BinaryContinuationInstructions.h"
 #include "NativeStackControl.h"
+#include "StringTransfer.h"
 #include "X64ArchitecturalValues.h"
 #include "X64ContinuationEvents.h"
 #include "X64ContinuationFredReturns.h"
+#include "X64ContinuationMpx.h"
 #include "X64ContinuationSvm.h"
 #include "X64ContinuationSystemTransfers.h"
 #include "X64ContinuationUserInterrupts.h"
@@ -27,6 +29,7 @@
 #include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/ir/intrinsics/X86/X86SystemState.h"
 #include "neverd/ir/low/LowScalarConstant.h"
+#include "neverd/lift/X86/X86HypercallEncoding.h"
 #include "neverd/lift/X86/X86Regs.h"
 #include "neverd/lift/X86/X86SvmEncoding.h"
 
@@ -58,6 +61,7 @@ using StateV7 = X64ContinuationStateV7;
 using StateV8 = X64ContinuationStateV8;
 using StateV9 = X64ContinuationStateV9;
 using StateV10 = X64ContinuationStateV10;
+using StateV11 = X64ContinuationStateV11;
 using Segment = X64ContinuationSegment;
 using Exit = X64ContinuationExitV1;
 using Flags = detail::X64MachineFlags;
@@ -66,6 +70,10 @@ constexpr uint64_t ScratchBase = uint64_t{1} << 61;
 
 bool hasSvmState(const X64ContinuationSourceOptions &Options) {
   return Options.Profile == X64ContinuationProfile::NativeSvmNoFaultV10;
+}
+
+bool hasMpxState(const X64ContinuationSourceOptions &Options) {
+  return Options.Profile == X64ContinuationProfile::MpxNoFaultV11;
 }
 
 bool hasFredReturnState(const X64ContinuationSourceOptions &Options) {
@@ -94,7 +102,8 @@ bool hasReturnState(const X64ContinuationSourceOptions &Options) {
 bool hasFaultAddressState(const X64ContinuationSourceOptions &Options) {
   return Options.Profile ==
              X64ContinuationProfile::KernelFaultAddressNoFaultV4 ||
-         hasReturnState(Options) || hasSvmState(Options);
+         hasReturnState(Options) || hasSvmState(Options) ||
+         hasMpxState(Options);
 }
 
 bool hasSmapState(const X64ContinuationSourceOptions &Options) {
@@ -172,6 +181,13 @@ static_assert(sizeof(StateV9) == 2560);
 static_assert(std::is_standard_layout_v<StateV10>);
 static_assert(offsetof(StateV10, SVM) == 2320);
 static_assert(sizeof(StateV10) == 2464);
+static_assert(std::is_standard_layout_v<StateV11>);
+static_assert(offsetof(StateV11, Bounds) == 2320);
+static_assert(offsetof(StateV11, BNDCFGS) == 2384);
+static_assert(offsetof(StateV11, BNDSTATUS) == 2392);
+static_assert(offsetof(StateV11, XCR0) == 2400);
+static_assert(offsetof(StateV11, MPXSupported) == 2408);
+static_assert(sizeof(StateV11) == 2416);
 
 llvm::Error invalid(const llvm::Twine &Text) {
   return llvm::createStringError(llvm::errc::invalid_argument, "%s",
@@ -565,13 +581,18 @@ bool supportedOperation(const LowOp &Op,
     return Op.NumInputs == 2 && Op.Output.Size && Op.Output.Size <= 16 &&
            Op.Inputs[0].Size == Op.Output.Size &&
            Op.Inputs[1].Size == Op.Output.Size;
-  case NdOp::INTRINSIC:
-    return flagIntrinsic(Op) || alignmentIntrinsic(Op) ||
-           controlIntrinsic(Op, Options) ||
+  case NdOp::INTRINSIC: {
+    // The complete-state intrinsic owns runtime count, direction and pointer
+    // completion. Reuse flat native-width admission without specializing its
+    // count or weakening the caller's successful ordinary-RAM contract.
+    const auto Transfer = detail::stringTransferShape(Op);
+    return (Transfer && Transfer->CompleteState) || flagIntrinsic(Op) ||
+           alignmentIntrinsic(Op) || controlIntrinsic(Op, Options) ||
            faultAddressIntrinsic(Op, Options) || fenceIntrinsic(Op, Options) ||
            writePrefetchIntrinsic(Op, Options) || msrIntrinsic(Op, Options) ||
            descriptorQueryIntrinsic(Op, Options) ||
            pageTableIntrinsic(Op, Options);
+  }
   default:
     // Admission and arithmetic widths use the scalar owner. The operation
     // itself is still emitted through LowToMed and the existing backends.
@@ -946,6 +967,15 @@ struct Writer {
       emit(NdOp::INT_LESSEQUAL, Bad, {Op.Inputs[2], High});
       rejectIf(Bad);
       Block->Ops.push_back(Op);
+    } else if (alignmentIntrinsic(Op)) {
+      // RequireAligned is a precondition, not an instruction to trap the
+      // source caller. Check the final linear address after FS/GS and
+      // address-width projection, before any architectural or RAM effect.
+      const auto Transition = x64::alignment::lowerOperation(
+          Op, controlOptions(Options),
+          [&](uint16_t Bytes) { return temporary(Bytes); });
+      append(Transition->Ops);
+      rejectIf(*Transition->Rejected);
     } else if (flagIntrinsic(Op)) {
       const NdVar System = temporary();
       emit(NdOp::INT_AND, System,
@@ -1066,7 +1096,9 @@ buildInstruction(SpecializationInstruction Instruction,
   const bool UserInterruptState = hasUserInterruptState(Options);
   const bool FredReturnState = hasFredReturnState(Options);
   const bool SvmState = hasSvmState(Options);
-  Result.StateVersion = SvmState             ? 10
+  const bool MpxState = hasMpxState(Options);
+  Result.StateVersion = MpxState             ? 11
+                        : SvmState           ? 10
                         : FredReturnState    ? 9
                         : UserInterruptState ? 8
                         : FastSystem         ? 7
@@ -1076,7 +1108,8 @@ buildInstruction(SpecializationInstruction Instruction,
                         : Smap               ? 3
                         : Controls           ? 2
                                              : 1;
-  Result.StateBytes = SvmState             ? sizeof(StateV10)
+  Result.StateBytes = MpxState             ? sizeof(StateV11)
+                      : SvmState           ? sizeof(StateV10)
                       : FredReturnState    ? sizeof(StateV9)
                       : UserInterruptState ? sizeof(StateV8)
                       : FastSystem         ? sizeof(StateV7)
@@ -1085,7 +1118,8 @@ buildInstruction(SpecializationInstruction Instruction,
                       : FaultAddress       ? sizeof(StateV4)
                       : Controls           ? sizeof(StateV2)
                                            : sizeof(State);
-  Function.Name = (SvmState             ? "neverd_step_v10_"
+  Function.Name = (MpxState             ? "neverd_step_v11_"
+                   : SvmState           ? "neverd_step_v10_"
                    : FredReturnState    ? "neverd_step_v9_"
                    : UserInterruptState ? "neverd_step_v8_"
                    : FastSystem         ? "neverd_step_v7_"
@@ -1114,6 +1148,20 @@ buildInstruction(SpecializationInstruction Instruction,
     Kind = Call ? Exit::Call : Exit::Return;
   } else if (Instruction.Origin.Control == LowInstructionControl::Branch) {
     Kind = Exit::Jump;
+    if (!Instruction.Ops.empty() &&
+        Instruction.Ops.back().Opcode == NdOp::INDIR_BR &&
+        Instruction.Ops.back().Inputs[0].isConst()) {
+      // Ordinary LowIR names a constant memory slot. Reuse the authenticated
+      // machine-exit projection to obtain its live target, as raw regions do.
+      auto Expanded = expandX64MachineExit(
+          Instruction,
+          {1, Result.Address, SpecializationX64MachineExitKind::Jump},
+          NdVar::tmp(ScratchBase - 16, 8));
+      if (!Expanded)
+        return Expanded.takeError();
+      Instruction.Ops = std::move(Expanded->Ops);
+      Instruction.UndefinedEffects = std::move(Expanded->UndefinedEffects);
+    }
   }
   auto RequireNative = [&](llvm::StringRef Reason) {
     Result.RequiresNativeExecution = true;
@@ -1164,10 +1212,28 @@ buildInstruction(SpecializationInstruction Instruction,
                              InterpreterProfileProjection::X64FredReturnV1
           ? detail::x64FredReturn(Instruction.NativeBytes)
           : std::nullopt;
+  const auto Hypercall =
+      (Options.NativeKvmHypercalls || Options.NativeHyperVHypercallEntry) &&
+              Instruction.ProfileProjection ==
+                  InterpreterProfileProjection::X64HypercallV1
+          ? x86HypercallEncoding(Instruction.NativeBytes)
+          : std::nullopt;
   const auto Vmrun = SvmState && Instruction.ProfileProjection ==
                                      InterpreterProfileProjection::X64SvmRunV1
                          ? x64VmrunAddressWidth(Instruction.NativeBytes)
                          : std::nullopt;
+  const auto Mpx =
+      MpxState && Instruction.ProfileProjection ==
+                      InterpreterProfileProjection::X64MpxV1
+          ? decodeX86MpxEncoding(Instruction.NativeBytes, Arch::X64)
+          : std::nullopt;
+  const auto MpxBranch =
+      MpxState &&
+              (Kind == Exit::Call || Kind == Exit::Return || Kind == Exit::Jump)
+          ? x86MpxBranchEffect(Instruction.NativeBytes, Arch::X64)
+          : std::nullopt;
+  if (MpxState && Kind != Exit::Continue && !MpxBranch)
+    RequireNative("MPX control transfer requires its original bank effect");
   if (FredReturnState && !FredReturn)
     RequireNative("the FRED return profile only owns canonical ERETS/ERETU");
   // These exact frame shapes have no unconditional empty undefined-output
@@ -1178,13 +1244,14 @@ buildInstruction(SpecializationInstruction Instruction,
       (Iret || FarReturn) &&
       Instruction.UndefinedEffects.Coverage == LowUndefinedCoverage::Missing &&
       Instruction.UndefinedEffects.Effects.empty();
-  if ((!FarPointer && !UserInterrupt && !FredReturn && !Vmrun &&
+  if ((!FarPointer && !UserInterrupt && !FredReturn && !Vmrun && !Mpx &&
+       !Hypercall &&
        (Instruction.ProfileProjection != InterpreterProfileProjection::None ||
         (!OwnedFrameReturn && Instruction.UndefinedEffects.Coverage !=
                                   LowUndefinedCoverage::Complete))) ||
       (Instruction.Origin.Control == LowInstructionControl::Terminator &&
        !Sysret && !Sysenter && !Sysexit && !Iret && !FarReturn && !Interrupt &&
-       !UserInterrupt && !FredReturn && !Vmrun))
+       !UserInterrupt && !FredReturn && !Vmrun && !Hypercall))
     RequireNative("instruction requires an explicit native environment");
   if (Instruction.UndefinedEffects.Effects.size() >
       std::size(State{}.Undefined))
@@ -1203,7 +1270,21 @@ buildInstruction(SpecializationInstruction Instruction,
           ? x64::runtimeTimestampRegisters(Instruction,
                                            NdVar::tmp(ScratchBase - 16, 16))
           : std::nullopt;
-  for (const LowOp &Op : Instruction.Ops) {
+  bool EarlierEffect = false;
+  for (size_t I = 0; I < Instruction.Ops.size(); ++I) {
+    const LowOp &Op = Instruction.Ops[I];
+    const bool Alignment = alignmentIntrinsic(Op);
+    if (Alignment && (EarlierEffect ||
+                      std::any_of(Instruction.UndefinedEffects.Effects.begin(),
+                                  Instruction.UndefinedEffects.Effects.end(),
+                                  [&](const LowUndefinedEffect &E) {
+                                    return E.AfterOp <= I;
+                                  })))
+      RequireNative("alignment precondition follows an observable effect");
+    EarlierEffect |= Op.Output.isReg() || Op.Opcode == NdOp::LOAD ||
+                     Op.Opcode == NdOp::STORE ||
+                     (Op.Opcode == NdOp::INTRINSIC && !Alignment) ||
+                     Op.MemoryOrdering != NdMemoryOrdering::None;
     if (!Timestamp && !Sysret && !Sysenter && !Sysexit && !Iret && !FarReturn &&
         !Interrupt && !supportedOperation(Op, Options, WideDivision)) {
       std::string Detail = "unsupported continuation operation: ";
@@ -1417,8 +1498,40 @@ buildInstruction(SpecializationInstruction Instruction,
   Writer Reject{Function, &Rejected, Options};
   Reject.leave(Exit::InvalidState);
   Writer W{Function, &Body, Options};
+  if (MpxState)
+    detail::X64ContinuationMpx<Writer>(W).validate();
   if (Result.RequiresNativeExecution) {
     W.leave(Exit::NativeInstruction);
+  } else if (Hypercall && Options.NativeHyperVHypercallEntry) {
+    // SetVpRegisters can replace the caller's execution state. It is outside
+    // this returning transport even when it would target a different VP.
+    const auto Number = W.temporary(), ReplacesState = W.temporary(1);
+    W.emit(NdOp::INT_AND, Number,
+           {W.read(NdVar::reg(x86reg::RCX, 8)), constant(0xffff)});
+    W.emit(NdOp::INT_EQUAL, ReplacesState, {Number, constant(0x51)});
+    W.rejectIf(ReplacesState);
+    W.emit(NdOp::INTRINSIC, {},
+           {constant(uint64_t(Intrinsic::X86HyperVCall), 2),
+            constant(*Options.NativeHyperVHypercallEntry),
+            W.address(offsetof(State, GPR)), W.address(offsetof(State, ZMM)),
+            constant(sizeof(State{}.ZMM[0]), 4)});
+    W.leave(Exit::Continue, constant(Instruction.Fallthrough.Address, 8));
+  } else if (Hypercall) {
+    const auto Status = W.temporary();
+    W.emit(
+        NdOp::INTRINSIC, Status,
+        {constant(uint64_t(*Hypercall == X86HypercallKind::Vmcall
+                               ? Intrinsic::X86KvmVmcall
+                               : Intrinsic::X86KvmVmmcall),
+                  2),
+         W.read(NdVar::reg(x86reg::RAX, 8)), W.read(NdVar::reg(x86reg::RBX, 8)),
+         W.read(NdVar::reg(x86reg::RCX, 8)), W.read(NdVar::reg(x86reg::RDX, 8)),
+         W.read(NdVar::reg(x86reg::RSI, 8))});
+    W.store(offsetof(State, GPR), Status);
+    W.leave(Exit::Continue, constant(Instruction.Fallthrough.Address, 8));
+  } else if (Mpx) {
+    detail::X64ContinuationMpx<Writer>(W).execute(
+        *Mpx, Instruction.Fallthrough.Address);
   } else if (Vmrun) {
     detail::X64ContinuationSvm<Writer>(W).execute(
         *Vmrun, Instruction.Fallthrough.Address);
@@ -1483,6 +1596,8 @@ buildInstruction(SpecializationInstruction Instruction,
       }
       Effects(I + 1);
     }
+    if (MpxBranch)
+      detail::X64ContinuationMpx<Writer>(W).completeBranch(*MpxBranch);
     W.leave(Kind, NextPC);
   }
   if (Function.Blocks.size() > Options.MaxOperations ||
@@ -1533,6 +1648,11 @@ buildX64ContinuationSource(const BinaryImage &Image,
         *Options.NullSegmentBasePolicy != X64NullSegmentBasePolicy::Preserve)))
     return invalid(
         "null segment base policy requires V6 or later and a valid policy");
+  if (Options.NativeHyperVHypercallEntry &&
+      (!*Options.NativeHyperVHypercallEntry || Options.NativeKvmHypercalls ||
+       !Controls))
+    return invalid("Hyper-V requires a nonzero native page, an x64 control "
+                   "profile and no competing KVM ABI");
   if (Options.NativeTimestampReads && !Controls)
     return invalid("native timestamp source requires an x64 host profile");
   if (Options.NativeWritePrefetch && !Controls)

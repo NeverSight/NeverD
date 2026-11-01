@@ -18,6 +18,8 @@
 
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/TargetRegInfo.h"
+#include "neverd/lift/X86/X86HypercallEncoding.h"
+#include "neverd/lift/X86/X86MpxEncoding.h"
 #include "neverd/lift/X86/X86SvmEncoding.h"
 #include "neverd/loader/COFF/PEFixedImage.h"
 
@@ -319,6 +321,20 @@ public:
             lowUndefinedOperationDigest(Result.Ops);
         Result.UndefinedEffects.Diagnostic =
             "CET-disabled RDSSP requires explicit profile evidence";
+      } else if (const auto Mpx =
+                     ContinuationSnapshot
+                         ? decodeX86MpxEncoding(Result.NativeBytes, Arch::X64)
+                         : std::nullopt;
+                 Mpx && Mpx->Id != X86_INS_NOP &&
+                 Mpx->Size == Result.NativeBytes.size()) {
+        Result.ProfileProjection = InterpreterProfileProjection::X64MpxV1;
+        Result.UndefinedEffects.Diagnostic =
+            "MPX requires explicit bounds, enable and branch-state ownership";
+      } else if (ContinuationSnapshot &&
+                 x86HypercallEncoding(Result.NativeBytes)) {
+        Result.ProfileProjection = InterpreterProfileProjection::X64HypercallV1;
+        Result.UndefinedEffects.Diagnostic =
+            "hypercall requires an explicit hypervisor register/state ABI";
       } else if (ContinuationSnapshot &&
                  x64VmrunAddressWidth(Result.NativeBytes)) {
         Result.ProfileProjection = InterpreterProfileProjection::X64SvmRunV1;
@@ -417,10 +433,7 @@ public:
         // that width from the mnemonic when operand-size or other prefixes
         // may change the instruction's contract.
         if (Options.ExplicitMachineState && Options.X64CetDisabled &&
-            !((Result.NativeBytes.size() == 1 &&
-               Result.NativeBytes[0] == 0xc3) ||
-              (Result.NativeBytes.size() == 3 &&
-               Result.NativeBytes[0] == 0xc2)))
+            !isX64PhysicalNearReturn(Result.NativeBytes))
           return llvm::createStringError(llvm::errc::not_supported,
                                          "native stack projection requires a "
                                          "canonical 64-bit near return");

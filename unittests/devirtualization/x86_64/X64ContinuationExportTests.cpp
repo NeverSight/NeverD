@@ -51,7 +51,8 @@ protected:
     neverd_session_destroy(Session);
     NeverDLiftTest::TearDown();
   }
-  void load(const std::vector<uint8_t> &Code) {
+  void load(const std::vector<uint8_t> &Code,
+            const std::vector<std::pair<uint64_t, uint64_t>> &Functions = {}) {
     // A real linked ELF mapping, not a raw-image format override. The shared
     // native byte provider deliberately retains its linked-image admission.
     std::vector<uint8_t> Bytes(0x1000 + Code.size());
@@ -77,6 +78,45 @@ protected:
     Put(96, Code.size(), 8);
     Put(104, Code.size(), 8);
     Put(112, 0x1000, 8);
+    if (!Functions.empty()) {
+      // Sized ELF function symbols give native discovery real entry extents;
+      // session-only analyst edits are deliberately separate from this image.
+      ASSERT_LE(0x400 + (Functions.size() + 1) * 24, 0x800u);
+      Put(40, 0x200, 8);
+      Put(58, 64, 2);
+      Put(60, 4, 2);
+      Put(0x240 + 4, 1, 4); // SHT_PROGBITS.
+      Put(0x240 + 8, 6, 8); // SHF_ALLOC | SHF_EXECINSTR.
+      Put(0x240 + 16, 0x1000, 8);
+      Put(0x240 + 24, 0x1000, 8);
+      Put(0x240 + 32, Code.size(), 8);
+      Put(0x240 + 48, 16, 8);
+      Put(0x280 + 4, 2, 4); // SHT_SYMTAB.
+      Put(0x280 + 24, 0x400, 8);
+      Put(0x280 + 32, (Functions.size() + 1) * 24, 8);
+      Put(0x280 + 40, 3, 4); // String-table section.
+      Put(0x280 + 44, 1, 4); // First global symbol.
+      Put(0x280 + 48, 8, 8);
+      Put(0x280 + 56, 24, 8);
+      std::string Names(1, '\0');
+      for (size_t I = 0; I < Functions.size(); ++I) {
+        const auto [Entry, Size] = Functions[I];
+        const size_t Symbol = 0x400 + (I + 1) * 24;
+        Put(Symbol, Names.size(), 4);
+        Put(Symbol + 4, 0x12, 1); // STB_GLOBAL | STT_FUNC.
+        Put(Symbol + 6, 1, 2);
+        Put(Symbol + 8, Entry, 8);
+        Put(Symbol + 16, Size, 8);
+        Names += "fixture_" + std::to_string(Entry);
+        Names.push_back('\0');
+      }
+      ASSERT_LE(0x800 + Names.size(), 0x1000u);
+      Put(0x2c0 + 4, 3, 4); // SHT_STRTAB.
+      Put(0x2c0 + 24, 0x800, 8);
+      Put(0x2c0 + 32, Names.size(), 8);
+      Put(0x2c0 + 48, 1, 8);
+      std::copy(Names.begin(), Names.end(), Bytes.begin() + 0x800);
+    }
     std::copy(Code.begin(), Code.end(), Bytes.begin() + 0x1000);
     std::ofstream File(tmpFile("input.elf"), std::ios::binary);
     File.write(reinterpret_cast<const char *>(Bytes.data()), Bytes.size());
@@ -106,11 +146,12 @@ protected:
     } else if (const auto *Object = Parsed->getAsObject()) {
       EXPECT_EQ(Object->getInteger("schema_version"), 2);
       EXPECT_EQ(Object->getInteger("state_version"), Version);
-      EXPECT_EQ(Object->getInteger("state_bytes"), Version == 10  ? 2464
-                                                   : Version == 9 ? 2560
-                                                   : Version == 8 ? 2544
-                                                   : Version == 7 ? 2528
-                                                                  : 2496);
+      EXPECT_EQ(Object->getInteger("state_bytes"), Version == 11   ? 2416
+                                                   : Version == 10 ? 2464
+                                                   : Version == 9  ? 2560
+                                                   : Version == 8  ? 2544
+                                                   : Version == 7  ? 2528
+                                                                   : 2496);
       EXPECT_EQ(Object->getInteger("state_alignment"), 16);
       EXPECT_EQ(Object->getBoolean("ordinary_source_abi"), false);
       EXPECT_EQ(Object->getString("ordinary_source_validation"), "not-run");
@@ -1023,6 +1064,10 @@ TEST_F(X64ContinuationExportTest,
           request(R"("instructions":[4096],"native_timestamp_reads":1)"),
           request(R"("instructions":[4096],"follow_internal_calls":1)"),
           request(R"("instructions":[4096],"follow_internal_calls":null)"),
+          request(R"("entries":[4096],"follow_direct_jumps":1)"),
+          request(R"("entries":[4096],"follow_direct_jumps":null)"),
+          request(R"("instructions":[4096],"follow_direct_jumps":true)"),
+          request(R"("instructions":[4096],"follow_direct_jumps":false)"),
           request(R"("instructions":[4096],"dispatch":true)"),
           request(R"("instructions":[4096],"dispatch":null)"),
           request(R"("instructions":[4096],"dispatch":"unchecked")"),
@@ -1330,6 +1375,12 @@ TEST_F(X64ContinuationExportTest,
     EXPECT_EQ(readOutput(Output), Source);
   }
 }
+#include "X64AlignmentContinuationTests.inc"
+#include "X64HyperVContinuationExportTests.inc"
+#include "X64JumpRegionContinuationTests.inc"
+#include "X64KvmContinuationExportTests.inc"
+#include "X64MpxContinuationExportTests.inc"
+#include "X64SparseFrameContinuationTests.inc"
 #include "X64SvmContinuationExportTests.inc"
 
 } // namespace

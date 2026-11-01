@@ -52,13 +52,19 @@
 
 namespace neverd {
 
-static bool supportsSvmContext(const llvm::Module &Mod) {
-  const auto *Function = Mod.getFunction("llvm.x86.vmrun.context");
-  if (!Function || Function->use_empty() || Function->getIntrinsicID())
-    return true;
-  llvm::WithColor::error() << "native VMRUN context requires an LLVM SDK with "
-                              "llvm.x86.vmrun.context support\n";
-  return false;
+static bool supportsX86NativeExtensions(const llvm::Module &Mod) {
+  for (const auto *Name : {"llvm.x86.vmrun.context", "llvm.x86.vmcall.kvm",
+                           "llvm.x86.vmmcall.kvm", "llvm.x86.vmcall.kvm32",
+                           "llvm.x86.vmmcall.kvm32", "llvm.x86.hyperv.call"}) {
+    const auto *Function = Mod.getFunction(Name);
+    if (Function && !Function->use_empty() && !Function->getIntrinsicID()) {
+      llvm::WithColor::error()
+          << "native virtualization requires an LLVM SDK with " << Name
+          << " support\n";
+      return false;
+    }
+  }
+  return true;
 }
 
 /// Reapply the frame requirement after optimization, including inlining into
@@ -343,7 +349,7 @@ CodegenResult Codegen::compile(llvm::Module &Mod, Arch TargetArch,
                                llvm::StringRef TargetTriple) {
   CodegenResult Result;
   ensureTargets();
-  if (!supportsSvmContext(Mod))
+  if (!supportsX86NativeExtensions(Mod))
     return Result;
   if (Mod.getModuleFlag(macho_loader::cache_load::kAnalysisFlag)) {
     llvm::WithColor::error() << macho_loader::cache_load::kRebuildUnsupported;
@@ -576,7 +582,7 @@ llvm::mc_rewrite::RewriteResult Codegen::compileForRewrite(
     llvm::StringRef TargetTriple, RewriteInputKind InputKind) {
   llvm::mc_rewrite::RewriteResult Result;
   ensureTargets();
-  if (!supportsSvmContext(Mod)) {
+  if (!supportsX86NativeExtensions(Mod)) {
     Result.ImageValid = false;
     return Result;
   }

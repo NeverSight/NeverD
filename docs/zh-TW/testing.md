@@ -2259,3 +2259,6 @@ LLVM C 的合成堆疊槽保留完整的 128 位元整數寫入，再由執行�
 ReadPrefetch 回歸檢查原始位元組與運算元中繼資料、獨立的未定義輸出和不透明狀態憑據、畸形純量契約及被修改的原始憑據。兩條 C 路徑保留四種提示及重複出現，並在 O0/O2 和消毒器下比較獨立的完整狀態與記憶體預期，涵蓋未映射位址、32 位元位址回繞和實體返回。不比較快取位置或時序。
 
 StreamingStore 回歸檢查指令位元組、運算元中繼資料、對齊、完整可寫範圍、畸形契約與修改過的憑據。獨立預期比較完整狀態與記憶體，包括覆寫實體返回位址的儲存。兩條 C 路徑均在使用者與核心狀態設定下，以 O0/O2 和消毒器執行。這些檢查不認證原生核心、並行或故障執行。
+
+`InterpreterSpecialization.RepeatedCounts*`; `InterpreterMachineRegionSourceTest.FiniteRepeatedCountsPreserveFullState`; `InterpreterMachineRegionSourceTest.FiniteCopyAndPaddingPreserveLoopState`.
+這些測試檢查完整分派、不同前驅值域、前綴寫入、停用自動探索、不完整值域及精確/少一預算。兩種 C 輸出在 O0/O2 下透過 ASan/UBSan 執行。獨立完整狀態與逐位元組預期涵蓋截斷計數、雙向存取、重疊、零計數無效指標、提前終止和迴圈補零；不構成一般 ABI 恢復證明。

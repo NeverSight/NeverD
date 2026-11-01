@@ -1,5 +1,16 @@
 # Explicit x64 continuation C
 
+The alternative [Hyper-V page binding](x86-hyperv-hypercalls.md) publishes
+ordinary, fast and rep result registers through a native page call.
+
+The [`native_kvm_hypercalls` binding](x86-kvm-hypercalls.md) explicitly owns
+returning VMCALL/VMMCALL with the KVM five-register input ABI. Unbound raw
+hypercalls remain native boundaries; an opcode never selects a hypervisor ABI.
+
+The [`intel-mpx-v11` profile](x86-mpx-source.md) extends V4 with the complete
+long-mode bounds bank, enable state, bounds tables, original branch effects and
+a pending-`#BR` stop (status 14), through both C routes.
+
 The `amd-svm-v10` profile extends V4 with native VMRUN exchange state and a
 VMEXIT stop (status 13). Its distinct 2464-byte layout requires unchanged
 XCR0=7 and the declared native SVM environment. Canonical addr64/addr32 original
@@ -82,6 +93,16 @@ the discovery depth and the same original bytes, native requests and incomplete
 CFG diagnostics as explicit entry selection. A failed discovery or exceeded
 budget publishes no partial translation.
 
+Set `"follow_direct_jumps": true` on an `entries` request to include original
+direct JMP targets outside each recovered body. This is useful when native
+function extents split a physical continuation into separate regions. Jumps
+keep the caller's discovery depth; only CALL consumes a depth level. Cycles and
+targets also reached by calls are deduplicated, and the existing budgets bound
+the complete selection. The architecture lifter owns target arithmetic.
+Imports and indirect targets are not added by this option. Each region records
+its added edges in `direct_jump_successors`. The default is `false`; selection
+does not convert a jump into a source call or alter its physical stack.
+
 `"dispatch": "direct"` connects adjacent selected instructions with C labels.
 Connections are partitioned into at most 64 steps per helper, with inlining
 disabled between helpers so large selections keep bounded compiler graphs.
@@ -95,6 +116,17 @@ remain explicit, and successful compilation is not whole-function execution
 qualification.
 
 ## Invocation
+
+Flat 64-bit-address REP MOVS/STOS use the existing complete-state intrinsic
+for 1-, 2-, 4- and 8-byte elements. Their count and direction remain runtime
+inputs; overlapping copies retain ordered element semantics and zero count
+accesses no memory. This requires an x64 host and the existing successful
+ordinary-RAM domain. Reduced address widths, segmented sources and other REP
+families remain explicit native requests. This admission does not prove a
+bounded count or relax the ordinary recovery route's memory and frame proofs.
+`X64ContinuationSourceTest.RepeatedTransfersPreserveRuntimeState` checks both
+C routes at O0/O2 with ASan/UBSan against independent ordered-element oracles,
+including full state preservation in V1 and V2.
 
 The generated translation unit defines `neverd_x64_state_v6`, its checked field
 layout, instruction steps, and:
@@ -117,9 +149,22 @@ byte before resuming. No source parameter count or callee preservation is
 assumed. Arbitrary-value slots represent caller-selected choices
 for each dynamic instruction; reusing them selects a subset of allowed runs.
 
+Memory-indirect jumps read their target from the live guest memory, including
+RIP-relative slots. Changing a slot between invocations changes the completed
+PC; register jumps use the register value directly. These transfers preserve
+the guest stack and do not invoke the target as a host function.
+
 The driver continues ordinary instructions and jumps to listed addresses. Each
 successful instruction consumes one budget unit, including a stopping transfer.
 A native request or invalid-state refusal executes nothing and consumes none.
+
+Aligned memory instructions use the shared alignment predicate and return
+status 5 before a guest access or architectural write when it fails. The
+predicate checks the linear address after address-width wrapping and addition
+of the live FS/GS base. Canonical x64 legacy MOVAPS, MOVAPD and MOVDQA memory
+forms retain their original segment in the byte audit. A precondition after an
+observable instruction effect cannot use this unchanged-state contract and
+remains a native request. Refusal does not deliver a guest exception.
 
 Set `"follow_internal_calls": true` to compose CALL and RET inside the selected
 region. The default is `false`, which stops at every CALL and RET. The composed

@@ -2376,7 +2376,9 @@ void LLVMCWriter::writeForwardDecls(llvm::Module &Mod) {
         continue;
     }
     if (Fn.isIntrinsic() || llvm_source_unknown::isFunction(Fn) ||
-        Fn.getName() == "llvm.x86.vmrun.context")
+        Fn.getName() == "llvm.x86.vmrun.context" ||
+        Fn.getName() == "llvm.x86.hyperv.call" ||
+        isX86KvmHypercallNativeName(Fn.getName()))
       continue;
     if (llvmc::isCStackAllocationFunction(Fn))
       continue;

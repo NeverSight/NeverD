@@ -1914,3 +1914,5 @@ TEST(MedStackAlignment, BalancedPushGroupsKeepEveryLoopStackCoordinate) {
 }
 
 } // namespace
+
+#include "MedScalarSelectRangeTests.inc"

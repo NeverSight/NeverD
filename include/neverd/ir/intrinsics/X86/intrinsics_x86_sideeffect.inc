@@ -295,3 +295,7 @@ SIDEEFFECT(Intrinsic::X87Fnstenv16);
 SIDEEFFECT(Intrinsic::X87Frstor16);
 SIDEEFFECT(Intrinsic::X87Fnsave16);
 SIDEEFFECT(Intrinsic::X86SvmRunContext);
+SIDEEFFECT(Intrinsic::X86KvmVmcall);
+SIDEEFFECT(Intrinsic::X86KvmVmmcall);
+
+SIDEEFFECT(Intrinsic::X86HyperVCall);

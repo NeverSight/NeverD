@@ -77,7 +77,11 @@ std::vector<LowOp> lift(Arch Target, const std::vector<uint8_t> &Bytes) {
   for (unsigned I = 0; I != X.op_count; ++I)
     Segmented |= X.operands[I].type == X86_OP_MEM &&
                  X.operands[I].mem.segment != X86_REG_INVALID;
-  if (!Segmented) {
+  const bool AuditedSegment =
+      Target == Arch::X64 &&
+      (Insn.Raw->id == X86_INS_MOVAPS || Insn.Raw->id == X86_INS_MOVAPD ||
+       Insn.Raw->id == X86_INS_MOVDQA);
+  if (!Segmented || AuditedSegment) {
     EXPECT_EQ(Effects.Coverage, LowUndefinedCoverage::Complete);
     EXPECT_TRUE(Effects.Effects.empty());
     EXPECT_EQ(Effects.OpCount, Ops.size());

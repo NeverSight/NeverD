@@ -33,6 +33,7 @@
 
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/intrinsics/X86/X86Interrupts.h"
+#include "neverd/lift/X86/X86MpxEncoding.h"
 #include "neverd/support/ISAEncoding.h"
 
 #include "llvm/ADT/ScopeExit.h"
@@ -584,15 +585,49 @@ bool hasAuditedLegacyIntegerForm(const cs_insn *Insn, Arch TargetArch) {
                : X86.addr_size != 2 && X86.addr_size != 4))
     return false;
   size_t OpcodeOffset = 0;
+  bool Bnd = false;
   while (OpcodeOffset < Insn->size &&
          isLegacyEncodingPrefix(Insn->bytes[OpcodeOffset], Is64Bit)) {
     const uint8_t Prefix = Insn->bytes[OpcodeOffset++];
-    if (Prefix == 0xf0 || Prefix == 0xf2 || Prefix == 0xf3)
+    if (Prefix == 0xf0 || Prefix == 0xf3 || (Prefix == 0xf2 && Bnd))
       return false;
+    Bnd |= Prefix == 0xf2;
   }
   if (OpcodeOffset == Insn->size || hasVexOrEvexEncoding(Insn, Is64Bit) ||
       (Is64Bit && Insn->bytes[OpcodeOffset] == 0xd5))
     return false;
+
+  if (Bnd) {
+    // F2 on these original transfers preserves bounds; it adds no arbitrary
+    // output. Do not admit F2 arithmetic, HLE memory or repeated prefixes.
+    if (x86MpxBranchEffect({Insn->bytes, Insn->size}, TargetArch) !=
+        X86MpxBranch::Preserve)
+      return false;
+    switch (Insn->id) {
+    case X86_INS_CALL:
+    case X86_INS_RET:
+    case X86_INS_JMP:
+    case X86_INS_JE:
+    case X86_INS_JNE:
+    case X86_INS_JA:
+    case X86_INS_JAE:
+    case X86_INS_JB:
+    case X86_INS_JBE:
+    case X86_INS_JG:
+    case X86_INS_JGE:
+    case X86_INS_JL:
+    case X86_INS_JLE:
+    case X86_INS_JS:
+    case X86_INS_JNS:
+    case X86_INS_JO:
+    case X86_INS_JNO:
+    case X86_INS_JP:
+    case X86_INS_JNP:
+      break;
+    default:
+      return false;
+    }
+  }
 
   const uint64_t GeneralRegisterEnd = Is64Bit ? x86reg::RIP : x86reg::R8;
   auto GeneralRegister = [&](x86_reg Reg, unsigned Size) {

@@ -33,9 +33,10 @@ struct X86VirtualizationShape {
   bool WritableOutput = false;
   uint16_t OutputSize = 0;
   uint8_t Arguments = 0;
-  std::array<uint16_t, 2> InputSizes{};
-  std::array<bool, 2> ScalarInputs{};
+  std::array<uint16_t, 5> InputSizes{};
+  std::array<bool, 5> ScalarInputs{};
   std::optional<uint64_t> AddressWidth;
+  std::optional<uint64_t> VectorStride;
 };
 
 constexpr bool
@@ -51,6 +52,15 @@ x86VirtualizationShapeIsValid(Intrinsic Id,
        Shape.MemoryAddressSpace != NdMemoryAddressSpace::Default) ||
       Shape.Arguments != C.Arguments)
     return false;
+  if (Id == Intrinsic::X86HyperVCall)
+    return Shape.TargetArch != Arch::X86 && !Shape.OutputSize &&
+           Shape.MemoryAddressSpace == NdMemoryAddressSpace::Default &&
+           Shape.ScalarInputs[0] && Shape.ScalarInputs[1] &&
+           Shape.ScalarInputs[2] && Shape.ScalarInputs[3] &&
+           Shape.InputSizes[0] == 8 && Shape.InputSizes[1] == 8 &&
+           Shape.InputSizes[2] == 8 && Shape.InputSizes[3] == 4 &&
+           (Shape.VectorStride == 16 || Shape.VectorStride == 32 ||
+            Shape.VectorStride == 64);
   if (Id == Intrinsic::X86SvmRunContext)
     return Shape.TargetArch != Arch::X86 && !Shape.OutputSize &&
            Shape.MemoryAddressSpace == NdMemoryAddressSpace::Default &&
@@ -67,6 +77,7 @@ x86VirtualizationShapeIsValid(Intrinsic Id,
   const uint16_t ExpectedOutput =
       C.Result == X86VirtualizationResult::Read    ? 2 * Word
       : C.Result == X86VirtualizationResult::Flags ? 2
+      : C.Result == X86VirtualizationResult::Value ? Word
                                                    : 0;
   if (Shape.OutputSize != ExpectedOutput ||
       (ExpectedOutput && !Shape.WritableOutput))

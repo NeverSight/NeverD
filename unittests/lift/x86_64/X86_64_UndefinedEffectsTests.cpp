@@ -131,6 +131,44 @@ TEST_F(X86UndefinedEffects, DefinedAndPreservedFlagsCreateNoArbitraryProducer) {
   }
 }
 
+TEST_F(X86UndefinedEffects, BndTransfersHaveExactEmptyArbitraryOutputCoverage) {
+  for (Arch Target : {Arch::X86, Arch::X64}) {
+    ASSERT_TRUE(Dec.init(Target));
+    for (const auto &Bytes :
+         std::vector<std::vector<uint8_t>>{{0xf2, 0xe8, 0, 0, 0, 0},
+                                           {0xf2, 0xe9, 0, 0, 0, 0},
+                                           {0xf2, 0xeb, 0},
+                                           {0xf2, 0xff, 0xd0},
+                                           {0xf2, 0xff, 0xe0},
+                                           {0xf2, 0xc3},
+                                           {0xf2, 0xc2, 8, 0},
+                                           {0xf2, 0x74, 0},
+                                           {0xf2, 0x0f, 0x85, 0, 0, 0, 0}}) {
+      DecodedInsn Insn{};
+      ASSERT_TRUE(decode(Bytes, Insn));
+      std::vector<LowOp> Ops;
+      LowInstructionUndefinedEffects Effects;
+      Dec.liftToLow(Insn, Ops, {}, {}, &Effects);
+      EXPECT_EQ(Effects.Coverage, LowUndefinedCoverage::Complete);
+      EXPECT_TRUE(Effects.Effects.empty());
+      EXPECT_EQ(Effects.OpCount, Ops.size());
+      EXPECT_EQ(Effects.OperationDigest, lowUndefinedOperationDigest(Ops));
+    }
+    for (const auto &Bytes :
+         std::vector<std::vector<uint8_t>>{{0xf2, 0x01, 0xc8},
+                                           {0xf2, 0xf2, 0xc3},
+                                           {0xf3, 0xf2, 0xc3},
+                                           {0xf2, 0xf3, 0xc3}}) {
+      DecodedInsn Insn{};
+      ASSERT_TRUE(decode(Bytes, Insn));
+      std::vector<LowOp> Ops;
+      auto Effects = staleEffects();
+      Dec.liftToLow(Insn, Ops, {}, {}, &Effects);
+      expectCleared(Effects);
+    }
+  }
+}
+
 TEST_F(X86UndefinedEffects,
        BoundariesExcludePrefixOpsAndIncludeFinalZeroExtend) {
   DecodedInsn Insn{};

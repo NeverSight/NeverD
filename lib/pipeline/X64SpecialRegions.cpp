@@ -12,10 +12,13 @@
 
 #include "neverd/analysis/arch/x86_64/X64ContinuationSource.h"
 #include "neverd/decode/Decoder.h"
+#include "neverd/lift/X86/X86HypercallEncoding.h"
+#include "neverd/lift/X86/X86MpxEncoding.h"
 #include "neverd/lift/X86/X86SvmEncoding.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/pipeline/Pipeline.h"
 #include "neverd/pipeline/X64ContinuationExport.h"
+#include "neverd/support/SortedSearch.h"
 
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/IR/LLVMContext.h"
@@ -47,11 +50,11 @@ llvm::ArrayRef<uint8_t> bytesAt(const BinaryImage &Image, va_t Address) {
 llvm::Expected<X64SpecialRegionSelection> selectX64SpecialRegions(
     const BinaryImage &Image, llvm::ArrayRef<va_t> Entries,
     const analysis::X64ContinuationSourceOptions &SourceOptions,
-    unsigned CalleeDepth, DebugContext *Debug) {
+    unsigned CalleeDepth, bool FollowDirectJumps, DebugContext *Debug) {
   X64SpecialRegionSelection Selection;
   Decoder Decode;
-  if (CalleeDepth && !Decode.init(Image))
-    return invalid("selected CFG call decoder initialization failed");
+  if ((CalleeDepth || FollowDirectJumps) && !Decode.init(Image))
+    return invalid("selected CFG transfer decoder initialization failed");
   const uint64_t MaxInstructions = SourceOptions.MaxInstructions;
   std::map<unsigned, std::set<va_t>> Frontier;
   std::map<va_t, unsigned> Requested;
@@ -102,12 +105,18 @@ llvm::Expected<X64SpecialRegionSelection> selectX64SpecialRegions(
                        pipelineFunctionDispositionName(Audit.Disposition));
       Found.insert(Audit.Entry);
       llvm::json::Array PCs;
+      llvm::json::Array DirectJumps;
+      std::vector<va_t> RegionAddresses;
+      if (FollowDirectJumps) {
+        RegionAddresses = Audit.NativeInstructionAddresses;
+        std::sort(RegionAddresses.begin(), RegionAddresses.end());
+      }
       for (va_t Address : Audit.NativeInstructionAddresses) {
         Unique.insert(Address);
         PCs.push_back(hex(Address));
         if (Unique.size() > MaxInstructions)
           return invalid("selected CFG instruction budget exceeded");
-        if (Depth < CalleeDepth) {
+        if (Depth < CalleeDepth || FollowDirectJumps) {
           // Rejected bodies retain audited instruction starts but no LowFunc.
           // Use the decoder's original direct-call classification, never an
           // optimized CALL or a register constant propagated across VMEXIT.
@@ -115,14 +124,37 @@ llvm::Expected<X64SpecialRegionSelection> selectX64SpecialRegions(
           DecodedInsn Instruction;
           if (!Decode.selectMode(Image, Address) ||
               !Decode.decodeOneForLift(Bytes.data(), Bytes.size(), Address,
-                                      Instruction))
-            return invalid("selected call-site decoding failed at " +
+                                       Instruction))
+            return invalid("selected transfer decoding failed at " +
                            hex(Address));
-          const va_t Target = Decode.directCallTarget(Instruction);
-          if (Target != InvalidVA && !Image.findImportAt(Target) &&
-              Image.isCodeAddress(Target))
-            if (auto Error = Enqueue(Target, Depth + 1))
-              return std::move(Error);
+          if (Depth < CalleeDepth) {
+            const va_t Target = Decode.directCallTarget(Instruction);
+            if (Target != InvalidVA && !Image.findImportAt(Target) &&
+                Image.isCodeAddress(Target))
+              if (auto Error = Enqueue(Target, Depth + 1))
+                return std::move(Error);
+          }
+          if (FollowDirectJumps && Instruction.Id == X86_INS_JMP) {
+            // The architecture lifter owns the target, including displacement
+            // width and PC arithmetic. Never inherit an ordinary tail-call
+            // rewrite or propagate an indirect register/slot target here.
+            std::vector<LowOp> Operations;
+            Decode.liftToLow(Instruction, Operations);
+            for (const LowOp &Op : Operations)
+              if (Op.Opcode == NdOp::BRANCH && Op.NumInputs == 1 &&
+                  Op.Inputs[0].isConst()) {
+                const va_t Target = Op.Inputs[0].Offset;
+                if (!sorted::contains64(RegionAddresses.data(),
+                                        RegionAddresses.size(), Target) &&
+                    !Image.findImportAt(Target) &&
+                    Image.isCodeAddress(Target)) {
+                  if (auto Error = Enqueue(Target, Depth))
+                    return std::move(Error);
+                  DirectJumps.push_back(llvm::json::Object{
+                      {"instruction", hex(Address)}, {"target", hex(Target)}});
+                }
+              }
+          }
         }
       }
       llvm::json::Object Region{
@@ -136,6 +168,8 @@ llvm::Expected<X64SpecialRegionSelection> selectX64SpecialRegions(
           {"truncated_paths", uint64_t(Audit.TruncatedPaths.size())}};
       if (CalleeDepth)
         Region["callee_depth"] = Depth;
+      if (!DirectJumps.empty())
+        Region["direct_jump_successors"] = std::move(DirectJumps);
       if (SourceOptions.Profile ==
           analysis::X64ContinuationProfile::NativeSvmNoFaultV10) {
         llvm::json::Array Resumes;
@@ -159,6 +193,41 @@ llvm::Expected<X64SpecialRegionSelection> selectX64SpecialRegions(
         }
         if (!Resumes.empty())
           Region["vmexit_successors"] = std::move(Resumes);
+      }
+      if (SourceOptions.NativeKvmHypercalls ||
+          SourceOptions.NativeHyperVHypercallEntry) {
+        llvm::json::Array Resumes;
+        for (va_t Address : Audit.UnsupportedInstructions) {
+          const auto Bytes = bytesAt(Image, Address);
+          if (Bytes.size() < 3 || !x86HypercallEncoding(Bytes.take_front(3)))
+            continue;
+          const va_t Resume = Address + 3;
+          if (Image.isCodeAddress(Resume)) {
+            if (auto Error = Enqueue(Resume, Depth))
+              return std::move(Error);
+            Resumes.push_back(hex(Resume));
+          }
+        }
+        if (!Resumes.empty())
+          Region["hypercall_successors"] = std::move(Resumes);
+      }
+      if (SourceOptions.Profile ==
+          analysis::X64ContinuationProfile::MpxNoFaultV11) {
+        llvm::json::Array Resumes;
+        for (va_t Address : Audit.UnsupportedInstructions) {
+          const auto Mpx =
+              decodeX86MpxEncoding(bytesAt(Image, Address), Arch::X64);
+          if (!Mpx || Mpx->Id == X86_INS_NOP)
+            continue;
+          const va_t Resume = Address + Mpx->Size;
+          if (Image.isCodeAddress(Resume)) {
+            if (auto Error = Enqueue(Resume, Depth))
+              return std::move(Error);
+            Resumes.push_back(hex(Resume));
+          }
+        }
+        if (!Resumes.empty())
+          Region["mpx_successors"] = std::move(Resumes);
       }
       Selection.Regions.push_back(std::move(Region));
     }

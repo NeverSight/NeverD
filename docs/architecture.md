@@ -62,6 +62,13 @@ before rendering it; neither a mnemonic nor an intrinsic declaration alone
 authorizes an architectural register access. Both forms retain unknown memory
 effects, undefined arithmetic flags and native faults, including dead reads.
 
+`X86MpxSemantics.h` shares comparison and directory/table value recipes between
+the concrete owner and `X64ContinuationMpx.h` source lowering. The independent
+V11 layout carries bounds/configuration through both C routes; the raw MPX
+reader also owns original branch initialization classification. Neither source
+CFG optimization nor host MPX availability determines that original effect.
+Pending #BR publishes status and stops at the original PC before delivery.
+
 `ir/X86/X86MpxContext.h` owns concrete MPX enable evidence, the four bounds
 registers, BNDSTATUS and BDE/BTE address calculations. Unknown prerequisites
 remain unknown; a proven disabled prerequisite suppresses MPX effects without
@@ -86,9 +93,9 @@ Enabled operations require a known nontransactional context; an RTM/HLE
 checkpoint and abort continuation are not supplied by this state component.
 Original branch completion takes an explicit preserve/initialize effect;
 it does not infer an architectural branch from a transformed CFG edge.
-This component is a tested foundation, not yet a lifting/emission contract:
-strict MPX admission remains closed until original-transfer effects and
-memory completion are connected throughout the pipeline.
+The V11 continuation supplies a separate source contract for successful
+long-mode RAM and pending #BR, including original-transfer effects. Ordinary
+function-ABI lifting and transactional/faulting memory completion remain closed.
 
 The LLVM/NeverC native MPX APIs independently retain the ambient bounds bank.
 Their operands use allocated legacy-encodable carriers, preserving reserved
@@ -483,8 +490,18 @@ These facts do not alter native argument summaries or physical stores.
 `MedStackAlignment` also owns signed entry-relative offset bounds for dynamic
 allocations. Machine-width scalar ranges, complete PHI components and checked
 offset arithmetic can separate their CALL return slots from fixed frame loads
-without inventing an exact stack address. Identity copies join the same PHI
-component. Every component needs an outside origin; an unrelated unseeded cycle
+without inventing an exact stack address. `MedScalarSelectRange` retains the
+relationship between a scalar selection and its selecting comparison. It
+normalizes low-bit affine comparisons with modular arithmetic, constrains only
+the selected arm, and unions both results. Byte slices can follow their own
+CONCAT component without evaluating unrelated upper bytes. Constraints use
+exact SSA occurrences and never survive their arm or query; ambiguous,
+ordered, segmented, stale and non-Boolean mask evidence supplies no bound.
+The proof shares the existing depth/work limits and immutable definition index.
+`MedScalarSelection` owns the exact-width complementary-mask shape shared with
+LLVM pointer projection. These ranges do not prove pointer noncapture, remove
+exceptional observers or supply missing source arguments.
+Identity copies join the same PHI component. Every component needs an outside origin; an unrelated unseeded cycle
 remains unknown. The return-slot reader
 splits the observed bytes wherever a store, a CALL slot or a load begins or
 ends, and moves every such interval backward together, one 64-interval word at
@@ -8572,9 +8589,17 @@ state transport.
 operand roles. LowIR, MedIR verification, LLVM and both C routes consume its
 checked shape. The supported set is VMREAD/VMWRITE (register and memory),
 VMXON/OFF, VMCLEAR, VMPTRLD/ST, INVEPT, INVVPID, VMLAUNCH/RESUME, VMFUNC,
-VMLOAD/SAVE, STGI/CLGI and INVLPGA. Existing VMCALL/VMMCALL retain their separate
-hypercall contract. This inventory does not imply coverage of every newer
-SEV/SNP instruction.
+VMLOAD/SAVE, STGI/CLGI and INVLPGA. Canonical VMCALL/VMMCALL bytes do not select
+a hypervisor ABI. Ordinary lifting refuses them; the optional
+`NativeKvmHypercalls` continuation binding authenticates the raw receipt and
+owns the KVM RAX/RBX/RCX/RDX/RSI input and RAX output contract. Its distinct
+intrinsic IDs share five-value shape validation across HighC, LLVM C and native
+codegen. The alternative Hyper-V page binding transports RCX/RDX/R8 and XMM0..5,
+publishes all TLFS result registers, and rejects caller-state replacement. Its
+native intrinsic owns a real call to the registered page.
+Legacy typed hypercall spellings do not establish full machine-state
+support. See [the KVM domain](x86-kvm-hypercalls.md). This inventory does not
+imply coverage of every newer SEV/SNP instruction.
 
 VMX completion carries CF/ZF and clears OF/SF/AF/PF. Failed register VMREAD
 preserves its destination; memory VMREAD/VMWRITE retain their address inside
@@ -8583,8 +8608,8 @@ loads/stores. SVM operands retain address width and INVLPGA's ASID. These are
 opaque processor-state effects, never assumed-success values. Generated code
 emits the actual instruction with its compiler memory/flag constraints; host
 execution still requires its architectural privilege and machine state.
-VMLAUNCH/VMRESUME model the ordinary fallthrough on failed entry. VMRUN
-remains explicitly rejected because it requires unsaved guest GPR/FPU state
+VMLAUNCH/VMRESUME model the ordinary fallthrough on failed entry. Ordinary
+VMRUN lifting remains explicitly rejected because it requires guest GPR/FPU state
 ownership and a VM-exit continuation. SKINIT instead uses an explicit
 nonreturning secure-loader launch: its original EAX bits are a physical i32
 address, and no old register/flag/stack ABI continuation is invented. The strict
@@ -15254,7 +15279,11 @@ or ordinary call ABI is inferred.
 projection and paired C/manifest generation. SDK and CLI adapters call this
 pipeline owner. It reuses `buildX64ContinuationSource` and the shared source ABI
 for each step; ordinary function arity, source frame promotion and callee-save
-assumptions do not enter this route. Selected CFG entries reuse deferred LowIR
+assumptions do not enter this route. Constant-slot indirect jumps reuse
+`expandX64MachineExit` to authenticate the instruction and load the live target;
+ordinary LowIR's slot address is never used as the completed PC. Computed-memory
+and register targets retain their existing value semantics.
+Selected CFG entries reuse deferred LowIR
 recovery and retain original instruction boundaries, including overlaps. Deferred
 LowIR audits preserve instruction selection for rejected functions separately
 from admitted LowFuncs. Unsupported sites remain in that selection and decode
@@ -15275,6 +15304,12 @@ interface remains separate. See [the invocation contract](x64-continuation-sourc
 dispatch from ordinary source proofs. An explicit `callee_depth` traverses
 original direct CALL targets in breadth-first batches, deduplicating entries
 before each pipeline invocation and instruction addresses before state lifting.
+An explicit `follow_direct_jumps` adds original direct JMP targets outside each
+audited body at the same depth. The architecture lifter owns target arithmetic;
+one sorted instruction-address index per body excludes its internal edges.
+Depth-ordered worklists promote targets also discovered through a shallower
+jump chain before processing deeper calls. No ordinary tail-call classification
+or indirect-target propagation supplies these edges.
 Each wave uses the pipeline's existing parallel function scheduler; dependent
 waves stay ordered, and all retained discovery state expires with the export.
 Imports, indirect targets and the depth frontier do not acquire inferred bodies
@@ -15285,6 +15320,14 @@ preventing large selections from reconstructing one expensive compiler graph.
 Every step still checks its domain and budget; external CALL/RET retain priority
 over exhaustion, while context transitions always stop. Both C routes share
 this owner, and default requests retain their existing switch driver.
+
+Continuation source lowers `RequireAligned` through the shared
+`X64Alignment` predicate after projecting a live FS/GS base. A failed predicate
+returns unchanged-state refusal before guest memory, architectural writes or
+budget consumption, rather than trapping the source caller. Admission refuses
+guards following an observable instruction effect. The original-byte vector
+move audit binds canonical x64 MOVAPS/MOVAPD/MOVDQA segment prefixes to both
+the guard and access; this adds no opaque-state preservation certificate.
 
 `X64ContinuationSystemTransfers` owns the complete explicit SYSRET and Intel
 SYSENTER/SYSEXIT target contexts, including their shared flat segment-cache
@@ -15412,3 +15455,5 @@ For runtime validity failures, core first refines the rejected value’s immedia
 Raw x64 regions admit strictly authenticated default-space PREFETCHNTA/T0/T1/T2 forms. X86ReadPrefetchAudit and the independent opaque-bank list own native effects; readprefetch owns the exact scalar shape without a guest RAM read or register update. Residual and source retain every hint and effective address through the existing C emitters. Segment overrides, write/code hints, other cache operations and unauthenticated machine-source inputs remain refused.
 
 Authenticated raw x64 regions retain legacy MOVNTDQ as a native 128-bit streaming store with its 16-byte alignment guard. X86SystemState owns operand and assembly contracts. In the explicit nonfaulting domain, analysis uses an ordinary STORE view through the existing alias, frame and return-cell checks; emitted code retains MOVNTDQ and exact SFENCE operations. This finite memory projection does not model cache placement or concurrent observers.
+
+Automatic control discovery can split a finite live MOVS/STOS count into guarded cases. The instruction prefix must preserve the register; each predecessor independently proves an exhaustive domain within `MaxControlTuples`. Fallthrough cuts and guards have synthetic provenance. Each case still proves its count and memory effects under cumulative budgets. Incomplete domains, unbounded counts and missing entry constraints remain refused.

@@ -304,3 +304,7 @@ C(Intrinsic::X86LegacyRaoOr, "neverd_x86_legacy_aor");
 C(Intrinsic::X86LegacyRaoXor, "neverd_x86_legacy_axor");
 C(Intrinsic::X86LegacyCmpccXadd, "neverd_x86_legacy_cmpccxadd");
 C(Intrinsic::X86SvmRunContext, "__builtin_ia32_vmrun_context");
+C(Intrinsic::X86KvmVmcall, "__builtin_ia32_vmcall_kvm");
+C(Intrinsic::X86KvmVmmcall, "__builtin_ia32_vmmcall_kvm");
+
+C(Intrinsic::X86HyperVCall, "__builtin_ia32_hyperv_call");

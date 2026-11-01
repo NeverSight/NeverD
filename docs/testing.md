@@ -1,5 +1,30 @@
 **Languages**: [English](testing.md) | [简体中文](zh-CN/testing.md) | [繁體中文](zh-TW/testing.md) | [日本語](ja/testing.md) | [한국어](ko/testing.md) | [Français](fr/testing.md) | [Deutsch](de/testing.md) | [Español](es/testing.md) | [Italiano](it/testing.md) | [Русский](ru/testing.md) | [العربية](ar/testing.md)
 
+Hyper-V page transport uses the same two source targets below. Filter
+`^(X64ContinuationExportTest\.HyperV|X86KvmSource\.HyperV)` for explicit binding,
+full state, rep/fast outputs, upper-lane preservation and invalid contracts.
+Preserve C/manifests with `NEVERD_ISA_REGRESSION_ARTIFACT_DIR`. NeverC's
+`verify_hyperv_context.py` separately executes the native page ABI at O0/O2,
+including SysV/Win64 callers, three strides, unaligned banks and live frames.
+See [the Hyper-V domain](x86-hyperv-hypercalls.md).
+
+The KVM hypercall targets are `NeverDX64ContinuationExportTests`,
+`NeverDX86KvmSourceTests`, `NeverDX86VirtualizationTests` and
+`NeverDX86SystemSideeffectTests`; build them with `scripts/build.py`.
+Use the focused CTest expression
+`^(X86KvmSource\.|X64ContinuationExportTest\.Kvm|X86Virtualization\.|X86SystemSideeffect\.)`.
+It checks explicit binding versus refusal, all five inputs, result/memory
+effects, full state, both C routes and dispatch styles, malformed native IR,
+canonical bytes and the old-SDK object-emission boundary. Source executions
+use O0/O2 with ASan/UBSan and do not execute a host hypercall. The
+[native qualification](x86-kvm-hypercalls.md#reproducing-qualification) uses
+independent original bytes in an isolated KVM guest. Preserve actual exported
+C and manifests with `NEVERD_ISA_REGRESSION_ARTIFACT_DIR`, then pass them to
+NeverC's `verify_kvm_hypercalls.py`. Unavailable KVM fails explicitly. The full
+LLVM fork qualifies code32/code64; NeverC and the continuation remain x64.
+Shared continuation/shape changes also run complete x64 continuation, VMX/SVM
+source and MPX context/encoding targets.
+
 `InterpreterMachineRegionSourceTest.EntryObjects*` executes all four region state interfaces through HighC and LLVMC at O0/O2 with ASan/UBSan. Complete state, guest writes and query tapes cover optional alignment, object aliases, equal roots with disjoint relative ranges, one-byte overlaps and rejected inputs before any effects. An independent 128-bit arithmetic oracle covers signed displacement extremes, address wraparound and UINT64_MAX endpoints. Exact/short source budgets and changed authenticated declarations remain checked; ordinary source consumers still refuse the raw domain.
 
 `HighSwiftEmitter.StackScalarBindingsDoNotInventPhysicalStackWrites` runs x64/ARM64 Mach-O integer, floating and mixed stack carriers through the source pipeline. `IncomingHomeSource.StackInitializationRequiresAbsenceOfAllObservers` keeps entry storage for memory reads, calls, escaping stack addresses and opaque or memory intrinsics. Pure value paths use declared parameters without inventing physical SP writes; register FP state effects remain. The macOS mobile matrix independently compiles and executes recovered Swift; successful emission alone is not execution evidence.
@@ -421,6 +446,13 @@ checking every byte-sized count against an independent multiplication oracle
 and refusing unconstrained machine-width products. Copy edges in stack PHI
 cycles preserve exact or bounded outside origins on all four architectures;
 unseeded cycles and changing backedges remain unknown.
+The guarded scalar-index cases cover SELECT and complementary masks across
+all four architectures and three native formats, commuted operands, unsigned
+wrap, byte truncation, signed and inverted predicates, and independent query
+state. Independent enumeration checks accepted and adjacent rejected inputs;
+stale SSA, malformed masks, unrelated conditions and unknown byte slices must
+retain their wider bounds. The LLVM mask consumer is also covered by
+`NeverDLowInstructionBoundaryTests` and `NeverDMedLLVMDirectDataTests`.
 `MedSEHEstablisherFrame.SourceHandlerCallRetainsEveryProtectedStackPosition`
 checks protected allocations and shared ordinary/exceptional handler entries.
 A handler CALL may precede an RBP-based SP restoration only when all possible
@@ -1460,6 +1492,26 @@ bytes through both assembly dialects. The processor-model test accepts the
 same flags; skipped QEMU behaviors remain separate from successful execution.
 These compiler tests do not open NeverD's strict MPX admission boundary.
 
+`X64ContinuationExportTest.Mpx*` in `NeverDX64ContinuationExportTests` exercises
+the [V11 source contract](x86-mpx-source.md) through HighC and LLVMC at O0/O2
+with address/undefined sanitizers. The forms matrix includes all bounds banks,
+ignored 67H, FS effects, unaligned BNDMOV, LOCK stores, enable combinations,
+unsigned checks, table-pointer mismatches, invalid BDE status and absent MIB
+base/index. Full state and RAM are compared with independent oracles. Separate
+tests cover original near CALL/RET/JMP/Jcc with BND/BNDPRESERVE, both Jcc
+outcomes, switch/direct dispatch, invalid-state refusal, entry selection and
+repair/resumption after pending #BR. These are explicit-state tests, not an
+ordinary function-ABI certificate.
+
+The forms test exports `mpx-{high,llvm}.c/.json` when
+`NEVERD_ISA_REGRESSION_ARTIFACT_DIR` is set. NeverC's
+`tests/neverc/X86/verify_mpx_continuation.py` accepts those files and runs actual
+exported source against independently assembled original bytes in QEMU TCG.
+It compares every bounds register, BNDSTATUS and RAM at successful and #BR
+boundaries, including disabled execution. Its qualification JSON lists QEMU
+limitations explicitly. `--backend-llc` and `--new-pm` exercise both full LLVM
+codegen pass managers in addition to NeverC's embedded backend.
+
 `NeverDX86MpxContextTests` checks the shared state foundation independently of
 host MPX availability: 324 enable-evidence combinations, 864 unsigned bounds
 comparisons, all 4,352 single-bit MAWA/CPL address cases, nonzero directory
@@ -1499,8 +1551,8 @@ load. A byte-RAM sequence checks BNDMK, spill/reload, table store/load, pointer
 mismatch initialization and boundary faults together. These provider tests
 qualify the portable single-instruction contract; they do not certify native
 fault delivery, original CALL/RET completion, IR state preservation or physical
-MPX hardware. Strict lifting remains closed until those integration boundaries
-are supplied.
+MPX hardware. V11 source integration has its own tests above; ordinary
+function-ABI lifting remains closed.
 
 `NeverDX86TBMTests` exercises all nine trailing-bit operations through full,
 lightweight and lift decoding, with 32/64-bit values, register aliases,
@@ -9522,6 +9574,12 @@ cleanup, changed saved-SP cells, FS/GS-to-stack aliases, partial registers,
 upper vector preservation, packed flags and fresh arbitrary values. The
 conditional wide-read fixture retains physical bytes from an earlier CALL
 under partial callback writes; it does not assume full output initialization.
+`MemoryJumpsReadLiveTargetsExactlyOnce` checks mutable RIP-relative slots,
+computed memory and register targets, FS/GS addressing and address32 jumps in
+V1/V2. Both C routes preserve the whole state and memory while returning each
+loaded target, including values that cannot themselves be dereferenced. The
+constant-slot fixture requires Linux mmap; direct and conditional jumps remain
+independent controls.
 Profiles without an MSR or event binding must request native execution for
 RDMSR or IRETQ before changing state or touching the guest stack.
 Invalid profile/PC/flags, missing/duplicate addresses and
@@ -10162,6 +10220,18 @@ Small negative values must preserve all upper integer limbs; unsigned inputs
 remain nonnegative and the floating oracle stays finite.
 
 ## Structured C control and call checks
+
+`NeverDSourceCallIntegerViewTests` executes narrow integer call-result views
+through conditions, returns and full-width arithmetic. Header declarations,
+direct/indirect call lowering, expression carriers and local storage must agree
+without losing truncation or inventing sign extension. x64/AArch64 machine
+fixtures cover COFF/ELF/Mach-O,
+both C routes, source optimization on/off and O0/O2 with UBSan; source-only
+rendering cases also cover x86 and ARM32. Original callers run independently on
+matching Linux x64 hosts, including Win64 argument placement and home storage.
+Generated C execution on another host does not qualify native Windows ARM64
+driver execution. Run the integer-width, pointer-projection and call-contract
+owners with this suite after changing call-result projection.
 
 `NeverDX86NonlocalControlTests` checks privileged return and SMM transition
 admission through both decoder modes, LowIR, MedIR, native LLVM and C rendering.
@@ -17725,6 +17795,23 @@ strict request rejection, source/manifest hash binding and SDK/CLI parity.
 Run `NeverDX64ContinuationSourceTests` for the independent privileged-instruction
 KVM comparisons; source export alone does not extend that native qualification.
 
+`DirectJumpDiscovery*` uses sized ELF symbols to retain real function extents.
+It checks jump chains at the same call depth, deeper CALL frontiers, physical
+stack arguments, cycle deduplication, indirect exits and budget rejection
+through both C routes and drivers. `SparseArgumentPointerAliases*` exercises
+all five exits of a conditional observer, null/disjoint/stack-slot pointers and
+partial argument writes. On Linux x64 it compares original machine bytes with
+both C routes at O0/O2 on the same stack and pointee addresses.
+
+`AlignedMemoryRefusesBeforeAccessAndPreservesTheWholeState` checks every
+alignment residue, loads/stores, FS/GS, address32 and wrapped linear addresses.
+Both routes at O0/O2 with ASan/UBSan preserve the entire state, neighboring
+memory and budget on refusal, including inaccessible unaligned addresses.
+Pair it with `NeverDX86LegacyAlignedMoveTests` and
+`X86LegacyVectorMoveAudit.*` in `NeverDX86UndefinedEffectsTests` for the
+independent byte oracle and raw/detail mismatch boundaries. These refusal
+checks do not establish guest fault delivery.
+
 `OwnInteriorCall.RejectedReturnsRetainOnlyTheirNativeInstructionSelection` checks
 a rejected physical return remains rejected in ordinary source while explicit
 state selection retains its original instructions. The unsupported-body matrix
@@ -17902,3 +17989,6 @@ source but do not qualify privileged execution.
 ReadPrefetch regressions check exact bytes and operand metadata, separate undefined-output and opaque-bank receipts, malformed scalar contracts and modified raw receipts. Both C routes retain all four hints and repeated occurrences, then run at O0/O2 with sanitizers against independent full-state and memory expectations, including unmapped addresses, 32-bit address wrapping and physical returns. Cache placement and timing are outside these comparisons.
 
 StreamingStore regressions check instruction bytes, operand metadata, alignment, complete writable extents, malformed contracts and modified receipts. Independent expectations compare complete state and memory, including a store that overwrites the physical return word. Both C routes execute at O0/O2 with sanitizers under user and kernel state profiles. These checks do not certify native kernel, concurrent or faulting execution.
+
+`InterpreterSpecialization.RepeatedCounts*`; `InterpreterMachineRegionSourceTest.FiniteRepeatedCountsPreserveFullState`; `InterpreterMachineRegionSourceTest.FiniteCopyAndPaddingPreserveLoopState`.
+These tests check exhaustive partitions, differing predecessor domains, prefix writes, discovery opt-out, incomplete domains and exact/short budgets. Both C routes execute at O0/O2 with ASan/UBSan. Independent full-state and byte oracles cover clipped counts, both directions, overlap, zero-count invalid pointers, early terminators and loop padding. They do not establish ordinary ABI recovery.

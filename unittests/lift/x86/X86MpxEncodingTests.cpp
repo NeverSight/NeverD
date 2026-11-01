@@ -22,6 +22,49 @@ using namespace neverd;
 
 namespace {
 
+TEST(X86MpxEncoding, OriginalControlTransfersOwnBoundsInitialization) {
+  using Effect = X86MpxBranch;
+  for (Arch Target : {Arch::X86, Arch::X64}) {
+    for (const auto &Bytes :
+         std::vector<std::vector<uint8_t>>{{0xe8, 0, 0, 0, 0},
+                                           {0xe9, 0, 0, 0, 0},
+                                           {0xc3},
+                                           {0xc2, 8, 0},
+                                           {0xff, 0xd0},
+                                           {0xff, 0x20},
+                                           {0x74, 0},
+                                           {0x0f, 0x85, 0, 0, 0, 0}}) {
+      EXPECT_EQ(x86MpxBranchEffect(Bytes, Target), Effect::Initialize);
+      auto Bnd = Bytes;
+      Bnd.insert(Bnd.begin(), 0xf2);
+      EXPECT_EQ(x86MpxBranchEffect(Bnd, Target), Effect::Preserve);
+      Bnd.insert(Bnd.begin(), 0xf3);
+      EXPECT_FALSE(x86MpxBranchEffect(Bnd, Target));
+    }
+    for (const auto &Bytes : std::vector<std::vector<uint8_t>>{{0xeb, 0},
+                                                               {0xe0, 0},
+                                                               {0xe1, 0},
+                                                               {0xe2, 0},
+                                                               {0xe3, 0},
+                                                               {0xcb},
+                                                               {0xca, 0, 0},
+                                                               {0xcf},
+                                                               {0xff, 0x18},
+                                                               {0xff, 0x28}})
+      EXPECT_EQ(x86MpxBranchEffect(Bytes, Target), Effect::Preserve);
+    EXPECT_FALSE(x86MpxBranchEffect({}, Target));
+    EXPECT_FALSE(x86MpxBranchEffect({0xf0, 0xff, 0xd0}, Target));
+    EXPECT_FALSE(x86MpxBranchEffect({0x90}, Target));
+    for (unsigned CC = 0; CC != 16; ++CC) {
+      EXPECT_EQ(x86MpxBranchEffect({uint8_t(0x70 + CC), 0}, Target),
+                Effect::Initialize);
+      EXPECT_EQ(
+          x86MpxBranchEffect({0x0f, uint8_t(0x80 + CC), 0, 0, 0, 0}, Target),
+          Effect::Initialize);
+    }
+  }
+}
+
 constexpr va_t Entry = 0x1234567800001000;
 
 struct Fixture {
