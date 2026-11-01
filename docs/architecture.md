@@ -9791,6 +9791,14 @@ returned manifest bind the runtime code snapshot; this is not a PE loader
 proof. The shared binary provider retains its strict default PE/fixup proofs
 for all existing users, and this explicit snapshot mode never folds data reads.
 
+POPFQ continuation steps reuse `X64MachineFlags` for packed system flags and
+the original lifter's status-bit scatter. The real eight-byte stack load runs
+once; its profile guard precedes every architectural write. A rejected popped
+TF/IOPL value, or AC in V1/V2, leaves state and RAM unchanged. Admitted values
+advance the physical stack and retain the instruction's ordinary fallthrough.
+The SMAP profiles also restore AC. Word POPF remains an explicit native boundary,
+and POPFQ remains outside the continuation's RTM body contract.
+
 `KernelControlsNoFaultV2` uses a distinct 2,304-byte layout and generated symbol
 prefix, preserving the 2,272-byte V1 layout. Its extra contract requires an x64
 host, legacy GS switching with CR4.FRED clear, no APIC/TPR memory aliases and
